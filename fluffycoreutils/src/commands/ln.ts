@@ -12,17 +12,15 @@ export const ln: FluffyCommand = {
       return { stdout: "", stderr: "ln: missing operand\n", exitCode: 1 };
     }
 
-    // In a virtual filesystem, symlinks may not be supported.
-    // We implement a simple copy-based "link" as a fallback.
     const src = io.fs.resolvePath(positional[0], io.cwd);
     const dst = io.fs.resolvePath(positional[1], io.cwd);
 
     try {
-      if (symbolic) {
-        // Try symlink if available, otherwise copy
-        const content = await io.fs.readFile(src);
-        await io.fs.writeFile(dst, content);
+      if (symbolic && io.fs.symlink) {
+        // Use real symlink if the host supports it
+        await io.fs.symlink(src, dst);
       } else {
+        // Fall back to copy (virtual FS may not support symlinks)
         const content = await io.fs.readFile(src);
         await io.fs.writeFile(dst, content);
       }

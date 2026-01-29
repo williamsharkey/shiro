@@ -23,7 +23,7 @@ export const rm: FluffyCommand = {
           await io.fs.unlink(child);
         }
       }
-      await io.fs.unlink(path);
+      await io.fs.rmdir(path);
     }
 
     try {

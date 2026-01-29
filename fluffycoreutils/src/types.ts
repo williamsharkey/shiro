@@ -13,6 +13,8 @@ export interface FluffyFS {
   unlink(path: string): Promise<void>;
   rename(oldPath: string, newPath: string): Promise<void>;
   rmdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
+  /** Create a symbolic link. If not supported, ln will fall back to copy. */
+  symlink?(target: string, path: string): Promise<void>;
   resolvePath(path: string, cwd: string): string;
 }
 

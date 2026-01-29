@@ -36,22 +36,29 @@ export function parseArgs(args: string[], valueFlags: string[] = []): ParsedArgs
         flags[name] = true;
       }
     } else if (arg.startsWith("-") && arg.length > 1 && !/^-\d/.test(arg)) {
-      // Combined short flags: -rf → r=true, f=true
-      // Value flag: -n 10 → n="10"
       const chars = arg.slice(1);
-      for (let j = 0; j < chars.length; j++) {
-        const ch = chars[j];
-        if (valueFlagSet.has(ch)) {
-          // Rest of chars or next arg is the value
-          const rest = chars.slice(j + 1);
-          if (rest) {
-            values[ch] = rest;
-          } else if (i + 1 < args.length) {
-            values[ch] = args[++i];
+
+      // Check if the entire string after - matches a long-form value flag
+      // (e.g., -name matches value flag "name", -type matches "type")
+      if (valueFlagSet.has(chars) && i + 1 < args.length) {
+        values[chars] = args[++i];
+      } else {
+        // Combined short flags: -rf → r=true, f=true
+        // Value flag: -n 10 → n="10"
+        for (let j = 0; j < chars.length; j++) {
+          const ch = chars[j];
+          if (valueFlagSet.has(ch)) {
+            // Rest of chars or next arg is the value
+            const rest = chars.slice(j + 1);
+            if (rest) {
+              values[ch] = rest;
+            } else if (i + 1 < args.length) {
+              values[ch] = args[++i];
+            }
+            break;
           }
-          break;
+          flags[ch] = true;
         }
-        flags[ch] = true;
       }
     } else {
       positional.push(arg);
