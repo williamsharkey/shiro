@@ -20,4 +20,7 @@ export type {
   ToolDefinition,
   CreateMessageParams,
   MessageResponse,
+  StreamEvent,
+  SpiritStats,
+  SpiritTask,
 } from "./types.js";
