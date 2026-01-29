@@ -1,0 +1,161 @@
+# 🐰 FluffyCoreutils
+
+**Shared Unix coreutils for browser-based virtual operating systems**
+
+A TypeScript library providing 37 essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
+
+## ✨ Features
+
+- 🌐 **Browser-Native**: Pure TypeScript implementation with no Node.js dependencies
+- 🔧 **37 Commands**: From `cat` and `ls` to `grep`, `sed`, and `xargs`
+- 🎯 **Filesystem Agnostic**: Works with any virtual filesystem implementing the `FluffyFS` interface
+- 📦 **Tree-Shakeable**: Import only the commands you need
+- 🔒 **Type-Safe**: Full TypeScript definitions included
+
+## 📦 Installation
+
+```bash
+npm install fluffycoreutils
+```
+
+## 🚀 Quick Start
+
+```typescript
+import { ls, cat, grep } from 'fluffycoreutils';
+
+// Use individual commands
+const result = await ls.exec(['-la'], { stdin: '', env: {}, cwd: '/', fs: myFS });
+console.log(result.stdout);
+
+// Or import all commands
+import { allCommands } from 'fluffycoreutils';
+const shell = Object.fromEntries(
+  Object.entries(allCommands).map(([name, cmd]) => [name, cmd.exec])
+);
+```
+
+## 📚 Available Commands
+
+### File Operations
+- **cat** - Concatenate and print files
+- **cp** - Copy files and directories
+- **mv** - Move/rename files
+- **rm** - Remove files and directories
+- **touch** - Create or update file timestamps
+- **ln** - Create symbolic links
+- **mkdir** - Create directories
+
+### File Inspection
+- **ls** - List directory contents
+- **head** - Output first part of files
+- **tail** - Output last part of files
+- **wc** - Word, line, and byte count
+- **stat** (via `ls -l`)
+
+### Text Processing
+- **grep** - Search text using patterns
+- **sed** - Stream editor
+- **cut** - Cut out selected portions of lines
+- **sort** - Sort lines of text
+- **uniq** - Report or filter repeated lines
+- **tr** - Translate or delete characters
+- **diff** - Compare files line by line
+
+### Path Utilities
+- **basename** - Strip directory from filename
+- **dirname** - Extract directory from path
+- **pwd** - Print working directory
+- **readlink** - Display symbolic link target
+
+### System Info
+- **date** - Display date and time
+- **echo** - Display text
+- **env** - Display environment variables
+- **hostname** - Show system hostname
+- **uname** - Print system information
+- **whoami** - Print current user
+
+### Utilities
+- **find** - Search for files
+- **xargs** - Build and execute commands
+- **tee** - Read stdin and write to stdout and files
+- **printf** - Format and print data
+- **test** - Evaluate conditions
+- **true** / **false** - Return success/failure
+- **clear** - Clear the terminal
+- **chmod** - Change file permissions
+
+## 🏗️ Architecture
+
+FluffyCoreutils uses a minimal filesystem abstraction (`FluffyFS`) that your virtual filesystem must implement:
+
+```typescript
+interface FluffyFS {
+  readFile(path: string): Promise<string>;
+  writeFile(path: string, content: string): Promise<void>;
+  mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
+  readdir(path: string): Promise<FluffyEntry[]>;
+  stat(path: string): Promise<FluffyStat>;
+  exists(path: string): Promise<boolean>;
+  unlink(path: string): Promise<void>;
+  rename(oldPath: string, newPath: string): Promise<void>;
+  rmdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
+  symlink?(target: string, path: string): Promise<void>;
+  resolvePath(path: string, cwd: string): string;
+}
+```
+
+Each command follows the same interface:
+
+```typescript
+interface FluffyCommand {
+  name: string;
+  description: string;
+  exec(args: string[], io: CommandIO): Promise<CommandResult>;
+}
+```
+
+## 🔧 Usage Example
+
+```typescript
+import { grep, cat, allCommands } from 'fluffycoreutils';
+import type { FluffyFS, CommandIO } from 'fluffycoreutils';
+
+// Implement your virtual filesystem
+const myFS: FluffyFS = {
+  // ... your filesystem implementation
+};
+
+// Execute a command
+const io: CommandIO = {
+  stdin: '',
+  env: { USER: 'alice', HOME: '/home/alice' },
+  cwd: '/home/alice',
+  fs: myFS
+};
+
+const result = await grep.exec(['-r', 'TODO', '.'], io);
+console.log(result.stdout);
+console.log(`Exit code: ${result.exitCode}`);
+```
+
+## 🎯 Use Cases
+
+- **Browser-based IDEs**: Provide shell commands in web-based development environments
+- **Educational Tools**: Teach Unix commands in an interactive browser environment
+- **Virtual Operating Systems**: Power command-line interfaces in browser-based OS simulations
+- **Testing & Simulation**: Simulate Unix environments for testing without actual filesystem access
+
+## 📄 License
+
+MIT
+
+## 🤝 Contributing
+
+Contributions are welcome! This library is designed to be shared across multiple browser-based virtual operating systems.
+
+## 🔗 Related Projects
+
+- **Foam** - Browser-based virtual operating system
+- **Shiro** - Browser-based virtual operating system
+- **Spirit** - Browser-based virtual operating system
