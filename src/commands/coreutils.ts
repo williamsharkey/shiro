@@ -737,6 +737,184 @@ function parseFieldSpec(spec: string): number[] {
   return fields.filter(n => !isNaN(n) && n > 0);
 }
 
+export const sleepCmd: Command = {
+  name: 'sleep',
+  description: 'Delay for a specified time',
+  async exec(ctx) {
+    const secs = parseFloat(ctx.args[0] || '0');
+    if (isNaN(secs) || secs < 0) {
+      ctx.stderr = `sleep: invalid time interval '${ctx.args[0]}'\n`;
+      return 1;
+    }
+    await new Promise(resolve => setTimeout(resolve, secs * 1000));
+    return 0;
+  },
+};
+
+export const seqCmd: Command = {
+  name: 'seq',
+  description: 'Print a sequence of numbers',
+  async exec(ctx) {
+    let first = 1, increment = 1, last = 1;
+    if (ctx.args.length === 1) {
+      last = parseInt(ctx.args[0]);
+    } else if (ctx.args.length === 2) {
+      first = parseInt(ctx.args[0]);
+      last = parseInt(ctx.args[1]);
+    } else if (ctx.args.length >= 3) {
+      first = parseInt(ctx.args[0]);
+      increment = parseInt(ctx.args[1]);
+      last = parseInt(ctx.args[2]);
+    }
+    if (increment === 0) { ctx.stderr = 'seq: zero increment\n'; return 1; }
+    const lines: string[] = [];
+    if (increment > 0) {
+      for (let i = first; i <= last; i += increment) lines.push(String(i));
+    } else {
+      for (let i = first; i >= last; i += increment) lines.push(String(i));
+    }
+    ctx.stdout = lines.join('\n') + '\n';
+    return 0;
+  },
+};
+
+export const whichCmd: Command = {
+  name: 'which',
+  description: 'Locate a command',
+  async exec(ctx) {
+    if (ctx.args.length === 0) {
+      ctx.stderr = 'which: missing argument\n';
+      return 1;
+    }
+    const cmd = ctx.shell.commands.get(ctx.args[0]);
+    if (cmd) {
+      ctx.stdout = `${ctx.args[0]}: shell built-in\n`;
+      return 0;
+    }
+    ctx.stderr = `which: no ${ctx.args[0]} in (built-in commands)\n`;
+    return 1;
+  },
+};
+
+export const chmodCmd: Command = {
+  name: 'chmod',
+  description: 'Change file mode',
+  async exec(ctx) {
+    if (ctx.args.length < 2) {
+      ctx.stderr = 'chmod: missing operand\n';
+      return 1;
+    }
+    const modeStr = ctx.args[0];
+    const mode = parseInt(modeStr, 8);
+    if (isNaN(mode)) {
+      ctx.stderr = `chmod: invalid mode: '${modeStr}'\n`;
+      return 1;
+    }
+    for (let i = 1; i < ctx.args.length; i++) {
+      const path = ctx.fs.resolvePath(ctx.args[i], ctx.cwd);
+      try {
+        await ctx.fs.chmod(path, mode);
+      } catch (e: any) {
+        ctx.stderr += `chmod: ${ctx.args[i]}: ${e.message}\n`;
+        return 1;
+      }
+    }
+    return 0;
+  },
+};
+
+export const readlinkCmd: Command = {
+  name: 'readlink',
+  description: 'Print resolved symlink target',
+  async exec(ctx) {
+    if (ctx.args.length === 0) {
+      ctx.stderr = 'readlink: missing operand\n';
+      return 1;
+    }
+    const path = ctx.fs.resolvePath(ctx.args[0], ctx.cwd);
+    try {
+      const target = await ctx.fs.readlink(path);
+      ctx.stdout = target + '\n';
+      return 0;
+    } catch (e: any) {
+      ctx.stderr = `readlink: ${ctx.args[0]}: ${e.message}\n`;
+      return 1;
+    }
+  },
+};
+
+export const lnCmd: Command = {
+  name: 'ln',
+  description: 'Create links between files',
+  async exec(ctx) {
+    let symbolic = false;
+    const args: string[] = [];
+    for (const arg of ctx.args) {
+      if (arg === '-s') symbolic = true;
+      else args.push(arg);
+    }
+    if (args.length < 2) {
+      ctx.stderr = 'ln: missing file operand\n';
+      return 1;
+    }
+    if (!symbolic) {
+      ctx.stderr = 'ln: hard links not supported, use -s for symbolic\n';
+      return 1;
+    }
+    const target = args[0];
+    const linkPath = ctx.fs.resolvePath(args[1], ctx.cwd);
+    try {
+      await ctx.fs.symlink(target, linkPath);
+      return 0;
+    } catch (e: any) {
+      ctx.stderr = `ln: ${e.message}\n`;
+      return 1;
+    }
+  },
+};
+
+export const testCmd: Command = {
+  name: 'test',
+  description: 'Evaluate conditional expression',
+  async exec(ctx) {
+    // Support: test -f file, test -d dir, test -e path, test str = str, test str != str
+    if (ctx.args.length === 0) return 1;
+
+    if (ctx.args.length === 2) {
+      const flag = ctx.args[0];
+      const path = ctx.fs.resolvePath(ctx.args[1], ctx.cwd);
+      if (flag === '-f') {
+        const stat = await ctx.fs.stat(path).catch(() => null);
+        return stat?.isFile() ? 0 : 1;
+      }
+      if (flag === '-d') {
+        const stat = await ctx.fs.stat(path).catch(() => null);
+        return stat?.isDirectory() ? 0 : 1;
+      }
+      if (flag === '-e') {
+        return (await ctx.fs.exists(path)) ? 0 : 1;
+      }
+      if (flag === '-n') return ctx.args[1].length > 0 ? 0 : 1;
+      if (flag === '-z') return ctx.args[1].length === 0 ? 0 : 1;
+    }
+
+    if (ctx.args.length === 3) {
+      const [a, op, b] = ctx.args;
+      if (op === '=') return a === b ? 0 : 1;
+      if (op === '!=') return a !== b ? 0 : 1;
+      if (op === '-eq') return parseInt(a) === parseInt(b) ? 0 : 1;
+      if (op === '-ne') return parseInt(a) !== parseInt(b) ? 0 : 1;
+      if (op === '-gt') return parseInt(a) > parseInt(b) ? 0 : 1;
+      if (op === '-lt') return parseInt(a) < parseInt(b) ? 0 : 1;
+      if (op === '-ge') return parseInt(a) >= parseInt(b) ? 0 : 1;
+      if (op === '-le') return parseInt(a) <= parseInt(b) ? 0 : 1;
+    }
+
+    // Single arg: true if non-empty
+    return ctx.args[0] ? 0 : 1;
+  },
+};
+
 export const allCoreutils: Command[] = [
   cdCmd, pwdCmd, echoCmd, printfCmd, lsCmd, catCmd, headCmd, tailCmd,
   mkdirCmd, rmdirCmd, rmCmd, cpCmd, mvCmd, touchCmd,
@@ -745,4 +923,5 @@ export const allCoreutils: Command[] = [
   trueCmd, falseCmd, dateCmd, whoamiCmd, hostnameCmd, unameCmd,
   teeCmd, xargsCmd,
   basenameCmd, dirnameCmd, trCmd, cutCmd,
+  sleepCmd, seqCmd, whichCmd, chmodCmd, readlinkCmd, lnCmd, testCmd,
 ];

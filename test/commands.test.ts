@@ -311,6 +311,65 @@ describe('Commands', () => {
     });
   });
 
+  describe('seq', () => {
+    it('should generate a sequence', async () => {
+      const { output } = await run(shell, 'seq 5');
+      const lines = output.replace(/\r/g, '').trim().split('\n');
+      expect(lines).toEqual(['1', '2', '3', '4', '5']);
+    });
+
+    it('should support start and end', async () => {
+      const { output } = await run(shell, 'seq 3 6');
+      const lines = output.replace(/\r/g, '').trim().split('\n');
+      expect(lines).toEqual(['3', '4', '5', '6']);
+    });
+  });
+
+  describe('which', () => {
+    it('should find built-in commands', async () => {
+      const { output, exitCode } = await run(shell, 'which echo');
+      expect(exitCode).toBe(0);
+      expect(output).toContain('shell built-in');
+    });
+
+    it('should report missing commands', async () => {
+      const { exitCode } = await run(shell, 'which nonexistent');
+      expect(exitCode).toBe(1);
+    });
+  });
+
+  describe('test', () => {
+    it('should test file existence', async () => {
+      await fs.writeFile('/home/user/exists.txt', 'data');
+      const { exitCode: e1 } = await run(shell, 'test -e exists.txt');
+      expect(e1).toBe(0);
+      const { exitCode: e2 } = await run(shell, 'test -e nofile.txt');
+      expect(e2).toBe(1);
+    });
+
+    it('should test directory', async () => {
+      await fs.mkdir('/home/user/testdir2');
+      const { exitCode } = await run(shell, 'test -d testdir2');
+      expect(exitCode).toBe(0);
+    });
+
+    it('should compare strings', async () => {
+      const { exitCode: e1 } = await run(shell, 'test foo = foo');
+      expect(e1).toBe(0);
+      const { exitCode: e2 } = await run(shell, 'test foo = bar');
+      expect(e2).toBe(1);
+    });
+  });
+
+  describe('ln', () => {
+    it('should create symbolic links', async () => {
+      await fs.writeFile('/home/user/linktest.txt', 'linked data');
+      await run(shell, 'ln -s /home/user/linktest.txt /home/user/mylink');
+      const target = await fs.readlink('/home/user/mylink');
+      expect(target).toBe('/home/user/linktest.txt');
+    });
+  });
+
   describe('system commands', () => {
     it('whoami returns user', async () => {
       const { output } = await run(shell, 'whoami');
