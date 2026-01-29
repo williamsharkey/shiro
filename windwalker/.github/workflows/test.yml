@@ -11,7 +11,7 @@ on:
 jobs:
   test-foam:
     name: Test on Foam
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout windwalker
         uses: actions/checkout@v4
@@ -27,6 +27,14 @@ jobs:
         with:
           node-version: 22
 
+      - name: Install Chrome system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libnss3 libatk-bridge2.0-0 libdrm2 libxcomposite1 \
+            libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
+            libpangocairo-1.0-0 libgtk-3-0 libcups2 libxshmfence1
+
       - name: Install windwalker dependencies
         run: npm ci
 
@@ -41,7 +49,7 @@ jobs:
 
   test-shiro:
     name: Test on Shiro
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout windwalker
         uses: actions/checkout@v4
@@ -56,6 +64,14 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      - name: Install Chrome system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libnss3 libatk-bridge2.0-0 libdrm2 libxcomposite1 \
+            libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
+            libpangocairo-1.0-0 libgtk-3-0 libcups2 libxshmfence1
 
       - name: Install windwalker dependencies
         run: npm ci
