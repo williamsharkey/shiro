@@ -10,6 +10,9 @@ const SLASH_COMMANDS: Record<string, string> = {
   "/model": "Switch model (e.g., /model opus, /model sonnet)",
   "/stats": "Show token usage and timing",
   "/tasks": "Show task checklist",
+  "/thinking": "Toggle extended thinking (e.g., /thinking 10000)",
+  "/cost": "Show estimated API cost",
+  "/history": "Show conversation turn count",
   "/abort": "Cancel current run",
 };
 
@@ -19,12 +22,21 @@ const MODEL_ALIASES: Record<string, string> = {
   haiku: "claude-haiku-3-5-20241022",
 };
 
+// Approximate pricing per million tokens (USD)
+const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+  "claude-opus-4-5-20251101": { input: 15, output: 75 },
+  "claude-sonnet-4-20250514": { input: 3, output: 15 },
+  "claude-haiku-3-5-20241022": { input: 0.8, output: 4 },
+};
+
 export class SpiritAgent {
   private loop: AgentLoop;
   private provider: OSProvider;
+  private config: AgentConfig;
 
   constructor(provider: OSProvider, config: AgentConfig) {
     this.provider = provider;
+    this.config = config;
     this.loop = new AgentLoop(provider, config);
   }
 
@@ -113,6 +125,62 @@ export class SpiritAgent {
           )
           .join("\n");
         return { handled: true, output: lines };
+      }
+
+      case "/thinking": {
+        const budget = parseInt(parts[1], 10);
+        if (!parts[1]) {
+          const current = this.config.thinkingBudget ?? 0;
+          return {
+            handled: true,
+            output: current > 0
+              ? `Extended thinking: enabled (budget: ${current.toLocaleString()} tokens)`
+              : "Extended thinking: disabled\nUsage: /thinking <budget> (e.g., /thinking 10000)",
+          };
+        }
+        if (isNaN(budget) || budget < 0) {
+          return { handled: true, output: "Invalid budget. Use a positive number or 0 to disable." };
+        }
+        this.config.thinkingBudget = budget;
+        return {
+          handled: true,
+          output: budget > 0
+            ? `Extended thinking enabled: ${budget.toLocaleString()} token budget`
+            : "Extended thinking disabled.",
+        };
+      }
+
+      case "/cost": {
+        const s = this.loop.getStats();
+        const model = this.loop.getApiClient().model;
+        const pricing = MODEL_PRICING[model];
+        if (pricing) {
+          const inputCost = (s.inputTokens / 1_000_000) * pricing.input;
+          const outputCost = (s.outputTokens / 1_000_000) * pricing.output;
+          const totalCost = inputCost + outputCost;
+          return {
+            handled: true,
+            output: [
+              `Model: ${model}`,
+              `Input:  ${s.inputTokens.toLocaleString()} tokens × $${pricing.input}/M = $${inputCost.toFixed(4)}`,
+              `Output: ${s.outputTokens.toLocaleString()} tokens × $${pricing.output}/M = $${outputCost.toFixed(4)}`,
+              `Total:  $${totalCost.toFixed(4)}`,
+            ].join("\n"),
+          };
+        }
+        return {
+          handled: true,
+          output: `Model: ${model}\nTokens: ${s.totalTokens.toLocaleString()} (pricing unknown for this model)`,
+        };
+      }
+
+      case "/history": {
+        const msgCount = this.loop.getMessages().length;
+        const s = this.loop.getStats();
+        return {
+          handled: true,
+          output: `Messages: ${msgCount}  Turns: ${s.turns}  Tool calls: ${s.toolCalls}`,
+        };
       }
 
       case "/abort":

@@ -4,6 +4,7 @@ import type {
   StreamEvent,
   ContentBlock,
   TextBlock,
+  ThinkingBlock,
   ToolUseBlock,
 } from "./types.js";
 
@@ -62,13 +63,33 @@ export class ApiClient {
   /**
    * Stream a message response via SSE.
    * Calls onTextDelta for each text chunk as it arrives.
+   * Calls onThinkingDelta for thinking/reasoning blocks.
    * Returns the fully assembled response when complete.
    */
   async createMessageStream(
-    params: Omit<CreateMessageParams, "model">,
+    params: Omit<CreateMessageParams, "model"> & { thinkingBudget?: number },
     onTextDelta: (text: string) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onThinkingDelta?: (text: string) => void
   ): Promise<StreamedResponse> {
+    // Build request body
+    const body: Record<string, unknown> = {
+      model: this.model,
+      stream: true,
+      ...params,
+    };
+
+    // Add extended thinking if budget is set
+    if (params.thinkingBudget && params.thinkingBudget > 0) {
+      body.thinking = {
+        type: "enabled",
+        budget_tokens: params.thinkingBudget,
+      };
+      // Extended thinking doesn't support system as top-level string
+      // It needs to be in the messages or as system blocks
+    }
+    delete body.thinkingBudget;
+
     const response = await fetch(`${this.baseUrl}/v1/messages`, {
       method: "POST",
       headers: {
@@ -77,11 +98,7 @@ export class ApiClient {
         "anthropic-version": API_VERSION,
         "anthropic-dangerous-direct-browser-access": "true",
       },
-      body: JSON.stringify({
-        model: this.model,
-        stream: true,
-        ...params,
-      }),
+      body: JSON.stringify(body),
       signal,
     });
 
@@ -98,6 +115,7 @@ export class ApiClient {
 
     // Track in-progress blocks
     const blockTexts: Map<number, string> = new Map();
+    const blockThinking: Map<number, string> = new Map();
     const blockToolJsons: Map<number, string> = new Map();
     const blockToolMeta: Map<number, { id: string; name: string }> =
       new Map();
@@ -136,6 +154,8 @@ export class ApiClient {
           case "content_block_start":
             if (event.content_block.type === "text") {
               blockTexts.set(event.index, event.content_block.text);
+            } else if (event.content_block.type === "thinking") {
+              blockThinking.set(event.index, event.content_block.thinking ?? "");
             } else if (event.content_block.type === "tool_use") {
               blockToolMeta.set(event.index, {
                 id: event.content_block.id,
@@ -150,6 +170,10 @@ export class ApiClient {
               const prev = blockTexts.get(event.index) ?? "";
               blockTexts.set(event.index, prev + event.delta.text);
               onTextDelta(event.delta.text);
+            } else if (event.delta.type === "thinking_delta") {
+              const prev = blockThinking.get(event.index) ?? "";
+              blockThinking.set(event.index, prev + event.delta.thinking);
+              onThinkingDelta?.(event.delta.thinking);
             } else if (event.delta.type === "input_json_delta") {
               const prev = blockToolJsons.get(event.index) ?? "";
               blockToolJsons.set(
@@ -165,6 +189,10 @@ export class ApiClient {
               const text = blockTexts.get(event.index)!;
               contentBlocks.push({ type: "text", text } as TextBlock);
               blockTexts.delete(event.index);
+            } else if (blockThinking.has(event.index)) {
+              const thinking = blockThinking.get(event.index)!;
+              contentBlocks.push({ type: "thinking", thinking } as ThinkingBlock);
+              blockThinking.delete(event.index);
             } else if (blockToolMeta.has(event.index)) {
               const meta = blockToolMeta.get(event.index)!;
               const json = blockToolJsons.get(event.index) ?? "{}";

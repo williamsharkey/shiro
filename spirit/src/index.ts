@@ -5,6 +5,8 @@ export { ApiClient } from "./api-client.js";
 export { ToolRegistry } from "./tools/index.js";
 export { buildSystemPrompt } from "./system-prompt.js";
 export { browserTools } from "./browser-tools.js";
+export { SubAgentManager } from "./sub-agent.js";
+export type { SubAgentResult } from "./sub-agent.js";
 export { ShiroProvider } from "./providers/shiro-provider.js";
 export { FoamProvider } from "./providers/foam-provider.js";
 
@@ -15,6 +17,7 @@ export type {
   Message,
   ContentBlock,
   TextBlock,
+  ThinkingBlock,
   ToolUseBlock,
   ToolResultBlock,
   ToolDefinition,
@@ -23,4 +26,5 @@ export type {
   StreamEvent,
   SpiritStats,
   SpiritTask,
+  PermissionRequest,
 } from "./types.js";
