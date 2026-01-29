@@ -20,7 +20,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: williamsharkey/foam
-          path: ../foam
+          path: foam
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -44,7 +44,7 @@ jobs:
       - name: Run tests against Foam
         env:
           OS_TARGET: foam
-          FOAM_PATH: ${{ github.workspace }}/../foam
+          FOAM_PATH: ${{ github.workspace }}/foam
         run: npm run test:foam
 
       - name: Upload Foam test results
@@ -65,7 +65,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: williamsharkey/shiro
-          path: ../shiro
+          path: shiro
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -87,15 +87,15 @@ jobs:
         run: npx puppeteer browsers install chrome
 
       - name: Install Shiro dependencies
-        run: cd ${{ github.workspace }}/../shiro && npm ci
+        run: cd ${{ github.workspace }}/shiro && npm ci
 
       - name: Build Shiro
-        run: cd ${{ github.workspace }}/../shiro && npm run build
+        run: cd ${{ github.workspace }}/shiro && npm run build
 
       - name: Run tests against Shiro
         env:
           OS_TARGET: shiro
-          SHIRO_PATH: ${{ github.workspace }}/../shiro/dist
+          SHIRO_PATH: ${{ github.workspace }}/shiro/dist
         run: npm run test:shiro
 
       - name: Upload Shiro test results

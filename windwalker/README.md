@@ -36,7 +36,8 @@ windwalker/
 │   ├── level-5-git/          # Git: init, add, commit, status, log, diff
 │   ├── level-6-spirit/       # Spirit agent: tool execution, multi-turn loops
 │   ├── level-7-workflows/    # End-to-end: create project, edit, test, commit
-│   └── level-8-fluffycoreutils/ # FluffyCoreutils shared library integration
+│   ├── level-8-fluffycoreutils/ # Extended coreutils: tr, cut, seq, test, ln, etc.
+│   └── level-9-selfbuild/      # Self-build: git clone own repo, inspect, commit
 ```
 
 ### Test Levels
@@ -53,7 +54,8 @@ Tests are organized from simple to complex. Each level builds on the previous.
 | 5 | Git | init, add, commit, status, log, diff, branch (via JS git implementations) |
 | 6 | Spirit Tools | Each Spirit tool (bash, read, write, edit, glob) runs correctly on the OS |
 | 7 | Workflows | Multi-step development scenarios: scaffold project, edit files, run commands |
-| 8 | FluffyCoreutils | Shared coreutils library integration: tr, cut, printf, test, uname, etc. |
+| 8 | Extended Coreutils | tr, cut, printf, test, seq, which, ln, readlink, mkdir -p, rm -r, ls -la |
+| 9 | Self-Build | git clone own repo, verify source files, grep source, commit changes |
 
 ### OS Abstraction Layer
 
@@ -61,10 +63,10 @@ Each OS exposes its internals differently:
 
 | Capability | Foam | Shiro |
 |------------|------|-------|
-| Filesystem | `window.__foam.vfs` | `window.__shiro.fs` (TBD) |
-| Shell | `window.__foam.shell` | `window.__shiro.shell` (TBD) |
-| Terminal | `window.__foam.terminal` | `window.__shiro.terminal` (TBD) |
-| Provider | `window.__foam.provider` | `window.__shiro.provider` (TBD) |
+| Filesystem | `window.__foam.vfs` | `window.__shiro.fs` |
+| Shell | `window.__foam.shell` | `window.__shiro.shell` |
+| Terminal | `window.__foam.terminal` | `window.__shiro.terminal` |
+| Provider | `window.__foam.provider` | `window.__shiro.provider` |
 
 The test helpers abstract over these differences so each test file is OS-agnostic.
 

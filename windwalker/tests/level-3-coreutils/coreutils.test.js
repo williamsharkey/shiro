@@ -95,10 +95,9 @@ export default async function run(page, osTarget) {
 
   // Test: grep -v (invert)
   try {
-    const r = await os.exec('grep -v "a" /tmp/ww-core-a.txt');
-    assertIncludes(r.stdout, 'bravo', 'grep -v should include bravo (has a?)');
-    // Actually bravo has 'a' in it... let me use a better pattern
-    // Let's just check the invert works
+    const r = await os.exec('grep -v "alpha" /tmp/ww-core-a.txt');
+    assertIncludes(r.stdout, 'bravo', 'grep -v should include bravo');
+    assertIncludes(r.stdout, 'echo', 'grep -v should include echo');
     assert(!r.stdout.includes('alpha'), 'grep -v should exclude alpha');
     results.pass('grep -v');
   } catch (e) {

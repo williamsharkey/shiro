@@ -61,6 +61,7 @@ const SUITES = [
   { name: 'level-6-spirit',     path: './level-6-spirit/spirit.test.js' },
   { name: 'level-7-workflows',  path: './level-7-workflows/workflows.test.js' },
   { name: 'level-8-fluffycoreutils', path: './level-8-fluffycoreutils/fluffycoreutils.test.js' },
+  { name: 'level-9-selfbuild', path: './level-9-selfbuild/selfbuild.test.js' },
 ];
 
 // Port assignments
