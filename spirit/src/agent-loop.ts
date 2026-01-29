@@ -8,10 +8,16 @@ import type {
 } from "./types.js";
 import { ApiClient } from "./api-client.js";
 import { ToolRegistry } from "./tools/index.js";
+import type { ToolDefinition } from "./types.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 
 const DEFAULT_MAX_TURNS = 50;
 const DEFAULT_MAX_TOKENS = 16384;
+
+export type ToolExecutor = (
+  input: Record<string, unknown>,
+  provider: OSProvider
+) => Promise<string>;
 
 export class AgentLoop {
   private messages: Message[] = [];
@@ -26,6 +32,13 @@ export class AgentLoop {
     this.config = config;
     this.apiClient = new ApiClient(config.apiKey, config.model);
     this.tools = new ToolRegistry();
+  }
+
+  registerTool(
+    definition: ToolDefinition,
+    execute: ToolExecutor
+  ): void {
+    this.tools.register(definition, execute);
   }
 
   async run(userMessage: string): Promise<string> {

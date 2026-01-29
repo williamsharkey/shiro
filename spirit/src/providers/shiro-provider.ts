@@ -45,7 +45,11 @@ interface ShiroFileSystem {
 interface ShiroShell {
   cwd: string;
   env: Record<string, string>;
-  execute(line: string, write: (s: string) => void): Promise<number>;
+  execute(
+    line: string,
+    write: (s: string) => void,
+    writeStderr?: (s: string) => void
+  ): Promise<number>;
 }
 
 interface ShiroTerminal {
@@ -164,12 +168,18 @@ export class ShiroProvider implements OSProvider {
   // -- Shell --
 
   async exec(command: string): Promise<ShellResult> {
-    let output = "";
-    const exitCode = await this.shell.execute(command, (s: string) => {
-      output += s;
-    });
-    // Shiro mixes stdout/stderr through the single write callback
-    return { stdout: output, stderr: "", exitCode };
+    let stdout = "";
+    let stderr = "";
+    const exitCode = await this.shell.execute(
+      command,
+      (s: string) => {
+        stdout += s;
+      },
+      (s: string) => {
+        stderr += s;
+      }
+    );
+    return { stdout, stderr, exitCode };
   }
 
   // -- Terminal I/O --
