@@ -156,3 +156,14 @@ spirit "fix the bug in main.ts"
 - Test multi-turn: `spirit "read the file you just created and add a comment"`
 - Test Bash tool: `spirit "list all files in the current directory"`
 - Test Edit tool: `spirit "change 'hello' to 'goodbye' in hello.js"`
+
+## Git Clone Support
+
+Spirit includes git command execution through the Bash tool. For comprehensive documentation on enabling and troubleshooting git clone operations in browser-based operating systems:
+
+- **[GIT_CLONE_SUMMARY.md](./GIT_CLONE_SUMMARY.md)** - Executive summary and quick start
+- **[GIT_CLONE_ISSUES.md](./GIT_CLONE_ISSUES.md)** - Detailed issue tracker with 6 critical hurdles
+- **[GIT_CLONE_ACTION_PLAN.md](./GIT_CLONE_ACTION_PLAN.md)** - 4-phase implementation plan
+- **[GIT_TROUBLESHOOTING.md](./GIT_TROUBLESHOOTING.md)** - Quick reference for common problems
+
+These documents provide a complete framework for diagnosing and resolving git cloning challenges in Shiro and Foam.
