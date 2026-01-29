@@ -1,7 +1,7 @@
 {
   "name": "shiro",
   "version": "0.1.0",
-  "description": "Browser-native cloud OS - Unix environment running entirely in the browser",
+  "description": "Browser-native Unix shell with Git, pipes, and IndexedDB filesystem - no servers, runs entirely in JavaScript",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -62,8 +62,8 @@ export class ShiroTerminal {
 
   async start() {
     this.term.writeln('\x1b[36m╔═══════════════════════════════════════╗\x1b[0m');
-    this.term.writeln('\x1b[36m║\x1b[0m   \x1b[1;97mShiro OS\x1b[0m v0.1.0                    \x1b[36m║\x1b[0m');
-    this.term.writeln('\x1b[36m║\x1b[0m   Browser-Native Cloud Operating System\x1b[36m║\x1b[0m');
+    this.term.writeln('\x1b[36m║\x1b[0m   \x1b[1;97mShiro OS\x1b[0m v0.1.0                   \x1b[36m║\x1b[0m');
+    this.term.writeln('\x1b[36m║\x1b[0m   Browser-Native Cloud Operating System \x1b[36m║\x1b[0m');
     this.term.writeln('\x1b[36m║\x1b[0m   Type \x1b[33mhelp\x1b[0m for available commands      \x1b[36m║\x1b[0m');
     this.term.writeln('\x1b[36m╚═══════════════════════════════════════╝\x1b[0m');
     this.term.writeln('');
@@ -102,9 +102,16 @@ export class ShiroTerminal {
       // Backspace
       if (ch === '\x7f' || ch === '\b') {
         if (this.cursorPos > 0) {
+          const deletingAtEnd = this.cursorPos === this.lineBuffer.length;
           this.lineBuffer = this.lineBuffer.slice(0, this.cursorPos - 1) + this.lineBuffer.slice(this.cursorPos);
           this.cursorPos--;
-          this.redrawLine();
+
+          // Optimization: if deleting at end, just backspace and clear
+          if (deletingAtEnd) {
+            this.term.write('\b \b'); // Move back, write space, move back again
+          } else {
+            this.redrawLine();
+          }
         }
         continue;
       }
@@ -239,22 +246,39 @@ export class ShiroTerminal {
 
       // Regular character
       if (ch >= ' ') {
+        const insertingAtEnd = this.cursorPos === this.lineBuffer.length;
         this.lineBuffer = this.lineBuffer.slice(0, this.cursorPos) + ch + this.lineBuffer.slice(this.cursorPos);
         this.cursorPos++;
-        this.redrawLine();
+
+        // Optimization: if inserting at end, just write the character
+        if (insertingAtEnd) {
+          this.term.write(ch);
+        } else {
+          // Otherwise redraw the rest of the line
+          this.redrawLine();
+        }
       }
     }
   }
 
   private redrawLine() {
-    this.term.write('\r\x1b[K');
-    this.showPrompt();
-    this.term.write(this.lineBuffer);
+    // Build the entire update as a single string to minimize rendering flicker
+    let output = '\r\x1b[K'; // Clear line
+
+    // Add prompt
+    output += `\x1b[32muser\x1b[0m@\x1b[34mshiro\x1b[0m:\x1b[36m${this.shell.cwd}\x1b[0m$ `;
+
+    // Add input buffer
+    output += this.lineBuffer;
+
     // Move cursor to correct position
     const diff = this.lineBuffer.length - this.cursorPos;
     if (diff > 0) {
-      this.term.write(`\x1b[${diff}D`);
+      output += `\x1b[${diff}D`;
     }
+
+    // Write everything at once
+    this.term.write(output);
   }
 
   private async tabComplete() {

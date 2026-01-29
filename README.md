@@ -1,6 +1,8 @@
-# Shiro - Browser-Native Cloud OS
+# Shiro - Browser-Native Unix Shell
 
-A browser-based Unix environment backed by IndexedDB. No servers, no tunnels - everything runs in the browser's JavaScript VM. The end goal is running Claude Code directly in the browser with first-class access to the DOM/JS VM.
+A complete Unix shell environment running entirely in your browser. Built with TypeScript and backed by IndexedDB, Shiro provides a POSIX-like filesystem, pipes, redirects, Git integration, and dozens of Unix utilities—all without servers or backend dependencies.
+
+**End Goal:** Run Claude Code directly in the browser with first-class access to the DOM and JavaScript VM.
 
 ## Try It
 
