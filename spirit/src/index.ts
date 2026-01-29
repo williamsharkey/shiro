@@ -6,6 +6,7 @@ export { ToolRegistry } from "./tools/index.js";
 export { buildSystemPrompt } from "./system-prompt.js";
 export { browserTools } from "./browser-tools.js";
 export { ShiroProvider } from "./providers/shiro-provider.js";
+export { FoamProvider } from "./providers/foam-provider.js";
 
 export type { OSProvider, FileInfo, StatResult, ShellResult, HostInfo } from "./providers/types.js";
 export type { SpiritCommand } from "./command.js";

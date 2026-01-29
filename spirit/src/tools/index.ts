@@ -5,6 +5,7 @@ import { readTool, executeRead } from "./read.js";
 import { writeTool, executeWrite } from "./write.js";
 import { editTool, executeEdit } from "./edit.js";
 import { globTool, executeGlob } from "./glob.js";
+import { grepTool, executeGrep } from "./grep.js";
 import { askUserTool, executeAskUser } from "./ask-user.js";
 
 type ToolExecutor = (
@@ -26,6 +27,7 @@ export class ToolRegistry {
     this.register(writeTool, executeWrite as ToolExecutor);
     this.register(editTool, executeEdit as ToolExecutor);
     this.register(globTool, executeGlob as ToolExecutor);
+    this.register(grepTool, executeGrep as ToolExecutor);
     this.register(askUserTool, executeAskUser as ToolExecutor);
   }
 
