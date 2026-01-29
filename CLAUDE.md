@@ -23,15 +23,19 @@ src/
 ├── terminal.ts          # xterm.js integration, line editing, tab completion, key handling
 ├── shell.ts             # Command parser: pipes, redirects, env vars, quoting, history
 ├── filesystem.ts        # IndexedDB-backed POSIX filesystem (the foundation everything uses)
+├── spirit-provider.ts   # OSProvider adapter for Spirit (Claude Code agent)
 └── commands/            # One file per command or group of related commands
     ├── index.ts          # Command/CommandContext interfaces, CommandRegistry class
-    ├── coreutils.ts      # ls, cat, head, tail, mkdir, rm, cp, mv, echo, sort, etc.
+    ├── coreutils.ts      # 41 commands: ls, cat, mkdir, rm, cp, mv, echo, sort, seq, test, ln, etc.
     ├── grep.ts           # grep with -i, -v, -n, -c, -l, -r flags
     ├── sed.ts            # sed with s/pattern/replace/flags and /pattern/d
     ├── git.ts            # isomorphic-git: init, add, commit, status, log, diff, clone
     ├── find.ts           # find with -name, -type filters
     ├── fetch.ts          # fetch/curl - HTTP requests from the shell
-    └── diff.ts           # diff between two files
+    ├── diff.ts           # diff between two files
+    ├── glob.ts           # glob pattern matching
+    ├── jseval.ts         # js-eval (browser JS VM) and node (JS file execution)
+    └── spirit.ts         # Spirit AI agent (interim Anthropic API loop)
 ```
 
 ## How to Add a New Command
@@ -76,6 +80,29 @@ npx tsc --noEmit     # Type-check without building
 ## Testing
 
 Tests use vitest with a fake-indexeddb polyfill. Tests can create a real FileSystem instance and run commands against it. Keep tests focused - one test file per command file.
+
+## Shell Features
+
+The shell supports:
+- **Pipes**: `echo hello | grep hello`
+- **Redirects**: `>`, `>>`, `<`, `2>`, `2>>`
+- **Compound commands**: `&&`, `||`, `;`
+- **Environment variables**: `$VAR`, `${VAR}`, `$?` (last exit code)
+- **Quoting**: single quotes (literal), double quotes (with var expansion), backslash escapes
+- **Comments**: lines starting with `#`
+
+## Filesystem
+
+- IndexedDB-backed with in-memory cache for performance
+- POSIX-like API: stat, readdir, readFile, writeFile, mkdir, unlink, rename, symlink, chmod, glob
+- Path resolution handles `.`, `..`, and `~`
+- `clearCache()` method available if external DB modifications occur
+
+## Cross-Project Integration
+
+- **Spirit** (williamsharkey/spirit): Claude Code agent loop. Shiro provides `ShiroProvider` (OSProvider interface) in `src/spirit-provider.ts`
+- **Foam** (williamsharkey/foam): Sister browser OS project in plain JS. Compatible shell semantics
+- **Windwalker** (williamsharkey/windwalker): Test automation. Access via `window.__shiro` global
 
 ## Keep It Manageable
 
