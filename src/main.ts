@@ -48,6 +48,15 @@ async function main() {
   });
   (shell as any)._spiritProvider = provider;
 
+  // Expose global for test automation (windwalker) and programmatic access
+  (window as any).__shiro = {
+    fs,
+    shell,
+    terminal,
+    provider,
+    commands,
+  };
+
   await terminal.start();
 }
 
