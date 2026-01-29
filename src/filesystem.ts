@@ -473,8 +473,24 @@ export class FileSystem {
         readdir: (p: string) => self.readdir(p),
         mkdir: (p: string, opts?: any) => self.mkdir(p, typeof opts === 'number' ? undefined : opts),
         rmdir: (p: string) => self.rmdir(p),
-        stat: (p: string) => self.stat(p),
-        lstat: (p: string) => self.lstat(p),
+        stat: async (p: string) => {
+          try {
+            return await self.stat(p);
+          } catch (err: any) {
+            // Re-throw with proper error structure for isomorphic-git
+            if (err.code === 'ENOENT') throw err;
+            throw fsError('ENOENT', `ENOENT: no such file or directory, stat '${p}'`);
+          }
+        },
+        lstat: async (p: string) => {
+          try {
+            return await self.lstat(p);
+          } catch (err: any) {
+            // Re-throw with proper error structure for isomorphic-git
+            if (err.code === 'ENOENT') throw err;
+            throw fsError('ENOENT', `ENOENT: no such file or directory, lstat '${p}'`);
+          }
+        },
         rename: (o: string, n: string) => self.rename(o, n),
         symlink: (t: string, p: string) => self.symlink(t, p),
         readlink: (p: string) => self.readlink(p),
