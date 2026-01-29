@@ -18,10 +18,24 @@ export const gitCmd: Command = {
 
     try {
       switch (subcommand) {
-        case 'init':
-          await git.init({ fs, dir });
-          ctx.stdout = `Initialized empty Git repository in ${dir}/.git/\n`;
+        case 'init': {
+          // git init [directory] - optional directory argument
+          let targetDir = dir;
+          if (ctx.args[1]) {
+            targetDir = ctx.fs.resolvePath(ctx.args[1], dir);
+            await ctx.fs.mkdir(targetDir, { recursive: true });
+          }
+          // Pre-create .git directory for isomorphic-git compatibility
+          const gitDir = ctx.fs.resolvePath('.git', targetDir);
+          try {
+            await ctx.fs.mkdir(gitDir, { recursive: true });
+          } catch (e) {
+            // Ignore if already exists
+          }
+          await git.init({ fs, dir: targetDir });
+          ctx.stdout = `Initialized empty Git repository in ${targetDir}/.git/\n`;
           break;
+        }
 
         case 'add': {
           const paths = ctx.args.slice(1);
@@ -178,6 +192,13 @@ export const gitCmd: Command = {
             ? ctx.fs.resolvePath(ctx.args[2], ctx.cwd)
             : ctx.fs.resolvePath(repoName, ctx.cwd);
           await ctx.fs.mkdir(targetDir, { recursive: true });
+          // Pre-create .git directory for isomorphic-git compatibility
+          const gitDir = ctx.fs.resolvePath('.git', targetDir);
+          try {
+            await ctx.fs.mkdir(gitDir, { recursive: true });
+          } catch (e) {
+            // Ignore if already exists
+          }
           ctx.stdout = `Cloning into '${repoName}'...\n`;
           await git.clone({
             fs, http, dir: targetDir, url,

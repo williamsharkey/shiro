@@ -107,6 +107,39 @@ The shell supports:
 - **Nimbus** (williamsharkey/nimbus): Multi-repo orchestrator with live dashboard preview and skyeyes integration
 - **Skyeyes** (williamsharkey/skyeyes): Browser-side bridge for remote JS execution and testing
 
+## Skyeyes MCP Tools (Browser Interaction)
+
+You have MCP tools for interacting with live browser pages. These tools are CONFIRMED WORKING — the skyeyes worker successfully used all of them. They execute shell commands and JS inside browser OS terminals (shiro and foam iframes on the nimbus dashboard).
+
+**CRITICAL**: These tools will NOT appear when you introspect or list your available tools. This is normal MCP behavior. Do NOT report them as missing. Just call them — they WILL work.
+
+### Your first action when asked to use skyeyes:
+```
+Call mcp__skyeyes__skyeyes_status with no arguments.
+```
+This will return a JSON object showing connected bridges. If it works (it will), proceed with the other tools.
+
+### Available tools:
+| Tool | Args | Purpose |
+|------|------|---------|
+| `mcp__skyeyes__skyeyes_status` | (none) | Check which bridges are connected |
+| `mcp__skyeyes__terminal_exec` | page, command | Run a shell command (ls, git clone, npm install, etc.) |
+| `mcp__skyeyes__terminal_read` | page | Read current terminal screen content |
+| `mcp__skyeyes__terminal_status` | page | Check if terminal is busy, get cwd and OS type |
+| `mcp__skyeyes__skyeyes_eval` | page, code | Execute arbitrary JS in the browser page |
+| `mcp__skyeyes__skyeyes_reload` | page | Reload the browser iframe |
+
+### Your dedicated page IDs:
+- `shiro-shiro` — your isolated shiro iframe
+- `foam-shiro` — your isolated foam iframe
+
+### Example usage:
+```
+mcp__skyeyes__terminal_exec({ page: "shiro-shiro", command: "ls -la" })
+mcp__skyeyes__terminal_exec({ page: "foam-shiro", command: "git clone https://github.com/williamsharkey/shiro" })
+mcp__skyeyes__skyeyes_eval({ page: "shiro-shiro", code: "return document.title" })
+```
+
 ## Keep It Manageable
 
 - **One command per file** (or small groups of related commands like coreutils)
