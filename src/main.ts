@@ -11,7 +11,7 @@ import { jsEvalCmd, nodeCmd } from './commands/jseval';
 import { allCommands } from '../fluffycoreutils/src/index';
 import { wrapFluffyCommand } from './fluffy-adapter';
 import { ShiroTerminal } from './terminal';
-import { ShiroProvider } from './spirit-provider';
+import { ShiroProvider } from '../spirit/src/providers/shiro-provider';
 
 async function main() {
   // Initialize filesystem
@@ -46,9 +46,7 @@ async function main() {
   const terminal = new ShiroTerminal(container, shell);
 
   // Create Spirit provider and attach to shell for the spirit command to use
-  const provider = new ShiroProvider(fs, shell, (text: string) => {
-    terminal.writeOutput(text);
-  });
+  const provider = new ShiroProvider(fs, shell, terminal);
   (shell as any)._spiritProvider = provider;
 
   // Expose global for test automation (windwalker) and programmatic access
