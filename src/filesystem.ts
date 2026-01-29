@@ -98,6 +98,7 @@ function fsError(code: string, message: string): Error {
     EISDIR: -21,
     ENOTDIR: -20,
     EEXIST: -17,
+    ENOTEMPTY: -39,
   };
   err.errno = errnos[code] || -1;
   return err;
