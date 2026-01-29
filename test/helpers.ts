@@ -7,6 +7,7 @@ import { sedCmd } from '../src/commands/sed';
 import { gitCmd } from '../src/commands/git';
 import { findCmd } from '../src/commands/find';
 import { diffCmd } from '../src/commands/diff';
+import { globCmd } from '../src/commands/glob';
 
 export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell }> {
   const fs = new FileSystem();
@@ -19,6 +20,7 @@ export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell 
   commands.register(gitCmd);
   commands.register(findCmd);
   commands.register(diffCmd);
+  commands.register(globCmd);
 
   const shell = new Shell(fs, commands);
   return { fs, shell };

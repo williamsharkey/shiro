@@ -246,6 +246,29 @@ describe('Commands', () => {
     });
   });
 
+  describe('glob', () => {
+    it('should match files by pattern', async () => {
+      await fs.mkdir('/home/user/globtest', { recursive: true });
+      await fs.writeFile('/home/user/globtest/app.ts', 'code');
+      await fs.writeFile('/home/user/globtest/util.ts', 'code');
+      await fs.writeFile('/home/user/globtest/readme.md', 'docs');
+      await run(shell, 'cd /home/user/globtest');
+      const { output } = await run(shell, 'glob *.ts');
+      expect(output).toContain('app.ts');
+      expect(output).toContain('util.ts');
+      expect(output).not.toContain('readme.md');
+    });
+
+    it('should match with ** pattern', async () => {
+      await fs.mkdir('/home/user/globdeep/sub', { recursive: true });
+      await fs.writeFile('/home/user/globdeep/a.ts', 'a');
+      await fs.writeFile('/home/user/globdeep/sub/b.ts', 'b');
+      await run(shell, 'cd /home/user/globdeep');
+      const { output } = await run(shell, 'glob **/*.ts');
+      expect(output).toContain('b.ts');
+    });
+  });
+
   describe('system commands', () => {
     it('whoami returns user', async () => {
       const { output } = await run(shell, 'whoami');

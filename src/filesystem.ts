@@ -1,3 +1,53 @@
+function globPatternToRegex(pattern: string, base: string): RegExp {
+  // Resolve the pattern relative to base
+  let fullPattern: string;
+  if (pattern.startsWith('/')) {
+    fullPattern = pattern;
+  } else {
+    fullPattern = (base === '/' ? '/' : base + '/') + pattern;
+  }
+
+  let regex = '^';
+  let i = 0;
+  while (i < fullPattern.length) {
+    const ch = fullPattern[i];
+    if (ch === '*' && fullPattern[i + 1] === '*') {
+      if (fullPattern[i + 2] === '/') {
+        regex += '(?:.*/)?';
+        i += 3;
+      } else {
+        regex += '.*';
+        i += 2;
+      }
+    } else if (ch === '*') {
+      regex += '[^/]*';
+      i++;
+    } else if (ch === '?') {
+      regex += '[^/]';
+      i++;
+    } else if (ch === '.') {
+      regex += '\\.';
+      i++;
+    } else if (ch === '{') {
+      // Handle brace expansion like {ts,tsx}
+      const close = fullPattern.indexOf('}', i);
+      if (close > i) {
+        const options = fullPattern.slice(i + 1, close).split(',');
+        regex += '(?:' + options.map(o => o.replace(/\./g, '\\.')).join('|') + ')';
+        i = close + 1;
+      } else {
+        regex += '\\{';
+        i++;
+      }
+    } else {
+      regex += ch.replace(/[[\]()\\^$|+]/g, '\\$&');
+      i++;
+    }
+  }
+  regex += '$';
+  return new RegExp(regex);
+}
+
 const DB_NAME = 'shiro-fs';
 const DB_VERSION = 1;
 const STORE_NAME = 'files';
@@ -338,6 +388,26 @@ export class FileSystem {
     if (!node) throw new Error(`ENOENT: no such file or directory, readlink '${path}'`);
     if (node.type !== 'symlink') throw new Error(`EINVAL: not a symlink '${path}'`);
     return node.symlinkTarget || new TextDecoder().decode(node.content!);
+  }
+
+  async glob(pattern: string, base?: string): Promise<string[]> {
+    const root = base || '/';
+    const allKeys = await this._getAllKeys();
+    const regex = globPatternToRegex(pattern, root);
+    const results: string[] = [];
+    for (const key of allKeys) {
+      const node = await this._get(key);
+      if (node && node.type === 'file' && regex.test(key)) {
+        // Return relative to base
+        if (base && key.startsWith(base)) {
+          const rel = key.slice(base.length);
+          results.push(rel.startsWith('/') ? rel.slice(1) : rel);
+        } else {
+          results.push(key);
+        }
+      }
+    }
+    return results.sort();
   }
 
   // Build an fs-like API object for isomorphic-git

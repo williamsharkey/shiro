@@ -56,6 +56,10 @@ export class ShiroTerminal {
     this.term.onData((data: string) => this.handleInput(data));
   }
 
+  writeOutput(text: string): void {
+    this.term.write(text);
+  }
+
   async start() {
     this.term.writeln('\x1b[36m╔═══════════════════════════════════════╗\x1b[0m');
     this.term.writeln('\x1b[36m║\x1b[0m   \x1b[1;97mShiro OS\x1b[0m v0.1.0                    \x1b[36m║\x1b[0m');
