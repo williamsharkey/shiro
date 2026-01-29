@@ -64,4 +64,54 @@ describe('Shell', () => {
     const { output } = await run(shell, 'echo $FOO');
     expect(output).toContain('bar');
   });
+
+  it('should handle && operator (success)', async () => {
+    const { output } = await run(shell, 'echo first && echo second');
+    expect(output).toContain('first');
+    expect(output).toContain('second');
+  });
+
+  it('should handle && operator (failure stops)', async () => {
+    const { output } = await run(shell, 'false && echo should-not-appear');
+    expect(output).not.toContain('should-not-appear');
+  });
+
+  it('should handle || operator (success skips)', async () => {
+    const { output } = await run(shell, 'true || echo should-not-appear');
+    expect(output).not.toContain('should-not-appear');
+  });
+
+  it('should handle || operator (failure runs)', async () => {
+    const { output } = await run(shell, 'false || echo fallback');
+    expect(output).toContain('fallback');
+  });
+
+  it('should handle ; operator', async () => {
+    const { output } = await run(shell, 'echo one; echo two; echo three');
+    expect(output).toContain('one');
+    expect(output).toContain('two');
+    expect(output).toContain('three');
+  });
+
+  it('should track $? exit code', async () => {
+    await run(shell, 'true');
+    const { output: out1 } = await run(shell, 'echo $?');
+    expect(out1.replace(/\r/g, '').trim()).toBe('0');
+
+    await run(shell, 'false');
+    const { output: out2 } = await run(shell, 'echo $?');
+    expect(out2.replace(/\r/g, '').trim()).toBe('1');
+  });
+
+  it('should handle ${VAR} syntax', async () => {
+    await run(shell, 'export NAME=world');
+    const { output } = await run(shell, 'echo hello ${NAME}');
+    expect(output).toContain('hello world');
+  });
+
+  it('should handle combined && and ||', async () => {
+    const { output } = await run(shell, 'mkdir /home/user/testcond && echo created || echo failed');
+    expect(output).toContain('created');
+    expect(output).not.toContain('failed');
+  });
 });

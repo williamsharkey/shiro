@@ -156,11 +156,12 @@ export class ShiroProvider implements OSProvider {
     let stdout = '';
     let stderr = '';
 
-    // Capture output instead of writing to terminal
-    const exitCode = await this.shell.execute(command, (s: string) => {
-      // Shell output has \r\n, normalize back to \n for tool results
-      stdout += s.replace(/\r\n/g, '\n');
-    });
+    // Capture stdout and stderr separately
+    const exitCode = await this.shell.execute(
+      command,
+      (s: string) => { stdout += s.replace(/\r\n/g, '\n'); },
+      (s: string) => { stderr += s.replace(/\r\n/g, '\n'); },
+    );
 
     return { stdout, stderr, exitCode };
   }
