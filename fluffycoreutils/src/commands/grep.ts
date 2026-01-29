@@ -6,12 +6,12 @@ export const grep: FluffyCommand = {
   description: "Search for patterns in files",
   async exec(args, io) {
     const { flags, values, positional } = parseArgs(args, ["e"]);
-    const ignoreCase = flags.i;
-    const invertMatch = flags.v;
-    const countOnly = flags.c;
-    const filesOnly = flags.l;
-    const lineNumbers = flags.n;
-    const recursive = flags.r || flags.R;
+    const ignoreCase = !!flags.i;
+    const invertMatch = !!flags.v;
+    const countOnly = !!flags.c;
+    const filesOnly = !!flags.l;
+    const lineNumbers = !!flags.n;
+    const recursive = !!(flags.r || flags.R);
 
     // Pattern is first positional arg (or -e value)
     const pattern = values.e ?? positional.shift();
