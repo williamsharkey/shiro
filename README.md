@@ -1,7 +1,15 @@
 # Shiro - Browser-Native Cloud OS
 
-## Goal
-A browser-based Unix environment backed by IndexedDB/OPFS that can eventually run Claude Code natively with direct DOM/JS VM access. No servers, no tunnels - everything runs in the browser's JavaScript VM.
+A browser-based Unix environment backed by IndexedDB. No servers, no tunnels - everything runs in the browser's JavaScript VM. The end goal is running Claude Code directly in the browser with first-class access to the DOM/JS VM.
+
+## Try It
+
+**Live:** [williamsharkey.github.io/shiro](https://williamsharkey.github.io/shiro)
+
+**Local:**
+```bash
+npm install && npm run dev
+```
 
 ## Architecture
 
@@ -9,102 +17,82 @@ A browser-based Unix environment backed by IndexedDB/OPFS that can eventually ru
 ┌─────────────────────────────────────────┐
 │  xterm.js Terminal UI                   │
 ├─────────────────────────────────────────┤
-│  Shell Layer (command dispatch)         │
+│  Shell Layer (pipes, redirects, env)    │
 ├──────────┬──────────┬───────────────────┤
-│ BusyBox  │ JS-native│ Future WASM       │
-│ WASM     │ tools    │ tools             │
-│ (core    │ (git,    │ (npm, node,       │
-│  utils)  │  fetch)  │  tcc, etc.)       │
+│ Coreutils│ JS-native│ Future WASM       │
+│ ls,cat,  │ git,     │ npm, node,        │
+│ grep,sed │ fetch    │ tcc, etc.         │
 ├──────────┴──────────┴───────────────────┤
-│  Virtual Filesystem (OPFS + IndexedDB)  │
+│  Virtual Filesystem (IndexedDB)         │
 ├─────────────────────────────────────────┤
 │  Browser APIs (DOM, Fetch, Workers)     │
 └─────────────────────────────────────────┘
 ```
 
-## Phase 1: Repo Init + Minimal Shell
+## Why This Structure?
 
-### Step 1: Create GitHub repo
-- `gh repo create williamsharkey/shiro --public --clone`
-- Initialize with package.json, tsconfig, basic structure
+- **TypeScript with separate files** - catches bugs before runtime, and lets LLMs (like Claude) read/edit one command at a time without loading thousands of lines of context
+- **Vite builds to a static bundle** - `dist/` after `npx vite build` is a plain static site. Deploy it anywhere (GitHub Pages, S3, just open it). No backend needed.
+- **Adding a command = one file** - create a `.ts` in `src/commands/`, register it in `main.ts`, done
+- **`npm run dev` is just for live-reload** during development, not a runtime dependency
 
-### Step 2: Project scaffold
+## Available Commands
+
+| Category | Commands |
+|----------|---------|
+| **Files** | `ls`, `cat`, `head`, `tail`, `touch`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `find` |
+| **Text** | `grep`, `sed`, `sort`, `uniq`, `wc`, `tr`, `cut`, `diff`, `tee`, `xargs` |
+| **Shell** | `cd`, `pwd`, `echo`, `printf`, `env`, `export`, `clear`, `help` |
+| **Network** | `fetch` (curl-like HTTP client) |
+| **Git** | `git init/add/commit/status/log/diff/branch/clone` |
+| **System** | `date`, `whoami`, `hostname`, `uname`, `true`, `false`, `basename`, `dirname` |
+
+## Project Structure
+
 ```
-shiro/
-├── package.json
-├── tsconfig.json
-├── index.html           # Entry point
-├── src/
-│   ├── main.ts          # Bootstrap
-│   ├── terminal.ts      # xterm.js integration
-│   ├── shell.ts         # Command parser & dispatcher
-│   ├── filesystem.ts    # IndexedDB-backed virtual FS
-│   ├── process.ts       # Process abstraction (Web Workers)
-│   └── commands/        # Built-in commands
-│       ├── index.ts
-│       ├── coreutils.ts # ls, cat, echo, mkdir, rm, cp, mv, pwd, cd
-│       ├── grep.ts      # grep implementation
-│       ├── sed.ts       # sed (basic)
-│       └── git.ts       # isomorphic-git wrapper
-├── wasm/                # WASM binaries (busybox, etc.)
-│   └── README.md
-└── vite.config.ts       # Vite bundler config
+src/
+├── main.ts              # Bootstrap & command registration
+├── terminal.ts          # xterm.js terminal with line editing & tab completion
+├── shell.ts             # Command parser (pipes, redirects, env vars, quoting)
+├── filesystem.ts        # IndexedDB-backed POSIX filesystem
+└── commands/
+    ├── index.ts          # Command interface & registry
+    ├── coreutils.ts      # Core Unix utilities
+    ├── grep.ts           # Pattern searching
+    ├── sed.ts            # Stream editing
+    ├── git.ts            # Git via isomorphic-git
+    ├── find.ts           # File finding
+    ├── fetch.ts          # HTTP client
+    └── diff.ts           # File diffing
 ```
 
-### Step 3: Implement core filesystem
-- IndexedDB-backed filesystem with POSIX-like API
-- Directory tree structure stored in IndexedDB
-- Support: stat, readdir, readFile, writeFile, mkdir, unlink, rename
-- Path resolution with `.` and `..`
+## Development
 
-### Step 4: Implement shell + terminal
-- xterm.js for terminal rendering
-- Line editor with history (up/down arrows)
-- Command parsing (pipes `|`, redirects `>` `>>`, env vars `$`)
-- Built-in commands: cd, pwd, echo, env, export, clear, help
+```bash
+npm install              # Install dependencies
+npm run dev              # Dev server with hot reload
+npm run build            # Build static site to dist/
+npm test                 # Run tests
+npx tsc --noEmit         # Type-check only
+```
 
-### Step 5: Implement JS-native coreutils
-- `ls` (with -l, -a flags)
-- `cat`, `head`, `tail`
-- `mkdir`, `rmdir`, `rm` (-r)
-- `cp`, `mv`, `touch`
-- `grep` (basic regex)
-- `wc`, `sort`, `uniq`
-- `echo`, `printf`
+## Roadmap
 
-### Step 6: Git via isomorphic-git
-- `git init`, `git add`, `git commit`, `git status`, `git log`, `git diff`
-- Clone from CORS-enabled repos
-- All backed by the virtual filesystem
-
-### Step 7: Dev server + build
-- Vite for dev server and bundling
-- Deploy to GitHub Pages or similar
-
-## Future Phases
-- **Phase 2**: BusyBox WASM compilation for complete coreutils
-- **Phase 3**: Node.js/npm via WebContainers or custom WASI runtime
-- **Phase 4**: TCC (Tiny C Compiler) compiled to WASM
-- **Phase 5**: Claude Code integration - tool implementations that operate on virtual FS and have DOM access
-- **Phase 6**: Package manager (brew-like) that fetches pre-compiled WASM binaries
-
-## Key Dependencies
-- `xterm.js` + `@xterm/addon-fit` - Terminal emulator
-- `isomorphic-git` - Git in JS
-- `vite` - Build tool
-- `typescript` - Type safety
-- `idb` - IndexedDB wrapper (or raw IndexedDB)
-
-## Verification
-1. `npm install && npm run dev` starts local dev server
-2. Terminal renders and accepts input
-3. Can run: `ls`, `mkdir test`, `cd test`, `echo "hello" > file.txt`, `cat file.txt`
-4. Files persist across page reloads (IndexedDB)
-5. `git init && git add . && git commit -m "init"` works
-6. `grep` finds patterns in files
+- [x] IndexedDB virtual filesystem with POSIX API
+- [x] Shell with pipes, redirects, env vars, quoting
+- [x] Core Unix utilities (ls, cat, grep, sed, etc.)
+- [x] Git via isomorphic-git
+- [x] GitHub Pages deployment
+- [x] Automated tests
+- [ ] BusyBox WASM for complete coreutils
+- [ ] Node.js/npm via WebContainers or WASI
+- [ ] TCC (Tiny C Compiler) compiled to WASM
+- [ ] Claude Code integration with direct DOM/JS VM access
+- [ ] Package manager (brew-like) for pre-compiled WASM binaries
 
 ## Inspiration
-- [functionserver.com](https://functionserver.com) - but instead of communicating into the browser via WebSockets or a server on Digital Ocean, Shiro runs directly in the JavaScript VM
+
+- [functionserver.com](https://functionserver.com) - but instead of communicating into the browser via WebSockets or a server, Shiro runs directly in the JavaScript VM
 - [WebContainers](https://webcontainers.io/) by StackBlitz
 - [Browsix](https://browsix.org/) - Unix in the browser tab
 - [v86](https://github.com/copy/v86) - x86 emulator in browser

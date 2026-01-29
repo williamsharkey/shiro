@@ -587,6 +587,156 @@ export const xargsCmd: Command = {
   },
 };
 
+export const basenameCmd: Command = {
+  name: 'basename',
+  description: 'Strip directory and suffix from filenames',
+  async exec(ctx) {
+    if (ctx.args.length === 0) { ctx.stderr = 'basename: missing operand\n'; return 1; }
+    let name = ctx.args[0].split('/').pop() || '';
+    if (ctx.args[1] && name.endsWith(ctx.args[1])) {
+      name = name.slice(0, -ctx.args[1].length);
+    }
+    ctx.stdout = name + '\n';
+    return 0;
+  },
+};
+
+export const dirnameCmd: Command = {
+  name: 'dirname',
+  description: 'Strip last component from file name',
+  async exec(ctx) {
+    if (ctx.args.length === 0) { ctx.stderr = 'dirname: missing operand\n'; return 1; }
+    const path = ctx.args[0];
+    const lastSlash = path.lastIndexOf('/');
+    ctx.stdout = (lastSlash <= 0 ? (lastSlash === 0 ? '/' : '.') : path.slice(0, lastSlash)) + '\n';
+    return 0;
+  },
+};
+
+export const trCmd: Command = {
+  name: 'tr',
+  description: 'Translate or delete characters',
+  async exec(ctx) {
+    let deleteMode = false;
+    const args: string[] = [];
+    for (const arg of ctx.args) {
+      if (arg === '-d') deleteMode = true;
+      else args.push(arg);
+    }
+
+    let input = ctx.stdin;
+    if (!input) { ctx.stdout = ''; return 0; }
+
+    if (deleteMode) {
+      const chars = expandTrSet(args[0] || '');
+      for (const ch of chars) {
+        input = input.split(ch).join('');
+      }
+      ctx.stdout = input;
+      return 0;
+    }
+
+    if (args.length < 2) { ctx.stderr = 'tr: missing operand\n'; return 1; }
+    const set1 = expandTrSet(args[0]);
+    const set2 = expandTrSet(args[1]);
+    let result = '';
+    for (const ch of input) {
+      const idx = set1.indexOf(ch);
+      if (idx >= 0) {
+        result += set2[Math.min(idx, set2.length - 1)] || '';
+      } else {
+        result += ch;
+      }
+    }
+    ctx.stdout = result;
+    return 0;
+  },
+};
+
+function expandTrSet(s: string): string {
+  let result = '';
+  let i = 0;
+  while (i < s.length) {
+    if (i + 2 < s.length && s[i + 1] === '-') {
+      const start = s.charCodeAt(i);
+      const end = s.charCodeAt(i + 2);
+      for (let c = start; c <= end; c++) result += String.fromCharCode(c);
+      i += 3;
+    } else if (s[i] === '\\') {
+      i++;
+      if (s[i] === 'n') { result += '\n'; i++; }
+      else if (s[i] === 't') { result += '\t'; i++; }
+      else { result += s[i] || ''; i++; }
+    } else {
+      result += s[i];
+      i++;
+    }
+  }
+  return result;
+}
+
+export const cutCmd: Command = {
+  name: 'cut',
+  description: 'Remove sections from each line of files',
+  async exec(ctx) {
+    let delimiter = '\t';
+    let fields = '';
+    let charMode = '';
+    const files: string[] = [];
+
+    let i = 0;
+    while (i < ctx.args.length) {
+      const arg = ctx.args[i];
+      if (arg === '-d' && ctx.args[i + 1]) { delimiter = ctx.args[++i]; }
+      else if (arg === '-f' && ctx.args[i + 1]) { fields = ctx.args[++i]; }
+      else if (arg === '-c' && ctx.args[i + 1]) { charMode = ctx.args[++i]; }
+      else if (arg.startsWith('-d')) { delimiter = arg.slice(2); }
+      else if (arg.startsWith('-f')) { fields = arg.slice(2); }
+      else if (arg.startsWith('-c')) { charMode = arg.slice(2); }
+      else files.push(arg);
+      i++;
+    }
+
+    let input = ctx.stdin;
+    if (files.length > 0) {
+      input = '';
+      for (const f of files) {
+        const resolved = ctx.fs.resolvePath(f, ctx.cwd);
+        input += await ctx.fs.readFile(resolved, 'utf8') as string;
+      }
+    }
+
+    const fieldNums = parseFieldSpec(fields || charMode);
+    const lines = input.split('\n');
+
+    for (const line of lines) {
+      if (line === '' && lines.indexOf(line) === lines.length - 1) continue;
+      if (charMode) {
+        const chars = fieldNums.map(n => line[n - 1] || '').join('');
+        ctx.stdout += chars + '\n';
+      } else {
+        const parts = line.split(delimiter);
+        const selected = fieldNums.map(n => parts[n - 1] || '').filter(Boolean);
+        ctx.stdout += selected.join(delimiter) + '\n';
+      }
+    }
+    return 0;
+  },
+};
+
+function parseFieldSpec(spec: string): number[] {
+  const fields: number[] = [];
+  for (const part of spec.split(',')) {
+    if (part.includes('-')) {
+      const [start, end] = part.split('-').map(Number);
+      for (let i = start; i <= (end || start); i++) fields.push(i);
+    } else {
+      fields.push(parseInt(part));
+    }
+  }
+  return fields.filter(n => !isNaN(n) && n > 0);
+}
+
 export const allCoreutils: Command[] = [
   cdCmd, pwdCmd, echoCmd, printfCmd, lsCmd, catCmd, headCmd, tailCmd,
   mkdirCmd, rmdirCmd, rmCmd, cpCmd, mvCmd, touchCmd,
@@ -594,4 +744,5 @@ export const allCoreutils: Command[] = [
   clearCmd, envCmd, exportCmd, helpCmd,
   trueCmd, falseCmd, dateCmd, whoamiCmd, hostnameCmd, unameCmd,
   teeCmd, xargsCmd,
+  basenameCmd, dirnameCmd, trCmd, cutCmd,
 ];
