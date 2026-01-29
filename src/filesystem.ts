@@ -87,6 +87,13 @@ function makeStat(node: FSNode): StatResult {
   };
 }
 
+/** Create an Error with a .code property for Node.js/isomorphic-git compatibility */
+function fsError(code: string, message: string): Error {
+  const err = new Error(message) as Error & { code: string };
+  err.code = code;
+  return err;
+}
+
 export class FileSystem {
   private db: IDBDatabase | null = null;
   private cache: Map<string, FSNode | undefined> = new Map();
@@ -223,7 +230,7 @@ export class FileSystem {
 
   async stat(path: string): Promise<StatResult> {
     const node = await this._get(path);
-    if (!node) throw new Error(`ENOENT: no such file or directory, stat '${path}'`);
+    if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, stat '${path}'`);
     return makeStat(node);
   }
 
@@ -238,8 +245,8 @@ export class FileSystem {
 
   async readFile(path: string, encoding?: 'utf8'): Promise<Uint8Array | string> {
     const node = await this._get(path);
-    if (!node) throw new Error(`ENOENT: no such file or directory, open '${path}'`);
-    if (node.type === 'dir') throw new Error(`EISDIR: illegal operation on a directory, read '${path}'`);
+    if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, open '${path}'`);
+    if (node.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, read '${path}'`);
     const data = node.content || new Uint8Array(0);
     if (encoding === 'utf8') {
       return new TextDecoder().decode(data);
@@ -250,8 +257,8 @@ export class FileSystem {
   async writeFile(path: string, data: Uint8Array | string, options?: { mode?: number }): Promise<void> {
     const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
     const parent = await this._get(parentPath);
-    if (!parent) throw new Error(`ENOENT: no such file or directory, open '${path}'`);
-    if (parent.type !== 'dir') throw new Error(`ENOTDIR: not a directory '${parentPath}'`);
+    if (!parent) throw fsError('ENOENT', `ENOENT: no such file or directory, open '${path}'`);
+    if (parent.type !== 'dir') throw fsError('ENOTDIR', `ENOTDIR: not a directory '${parentPath}'`);
 
     const content = typeof data === 'string' ? new TextEncoder().encode(data) : data;
     const existing = await this._get(path);
@@ -292,27 +299,27 @@ export class FileSystem {
         if (!existing) {
           await this._put(this._makeNode(current, 'dir'));
         } else if (existing.type !== 'dir') {
-          throw new Error(`ENOTDIR: not a directory '${current}'`);
+          throw fsError('ENOTDIR', `ENOTDIR: not a directory '${current}'`);
         }
       }
       return;
     }
 
     const existing = await this._get(path);
-    if (existing) throw new Error(`EEXIST: file already exists, mkdir '${path}'`);
+    if (existing) throw fsError('EEXIST', `EEXIST: file already exists, mkdir '${path}'`);
 
     const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
     const parent = await this._get(parentPath);
-    if (!parent) throw new Error(`ENOENT: no such file or directory, mkdir '${path}'`);
-    if (parent.type !== 'dir') throw new Error(`ENOTDIR: not a directory '${parentPath}'`);
+    if (!parent) throw fsError('ENOENT', `ENOENT: no such file or directory, mkdir '${path}'`);
+    if (parent.type !== 'dir') throw fsError('ENOTDIR', `ENOTDIR: not a directory '${parentPath}'`);
 
     await this._put(this._makeNode(path, 'dir'));
   }
 
   async readdir(path: string): Promise<string[]> {
     const node = await this._get(path);
-    if (!node) throw new Error(`ENOENT: no such file or directory, readdir '${path}'`);
-    if (node.type !== 'dir') throw new Error(`ENOTDIR: not a directory '${path}'`);
+    if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, readdir '${path}'`);
+    if (node.type !== 'dir') throw fsError('ENOTDIR', `ENOTDIR: not a directory '${path}'`);
 
     const allKeys = await this._getAllKeys();
     const prefix = path === '/' ? '/' : path + '/';
@@ -332,24 +339,24 @@ export class FileSystem {
 
   async unlink(path: string): Promise<void> {
     const node = await this._get(path);
-    if (!node) throw new Error(`ENOENT: no such file or directory, unlink '${path}'`);
-    if (node.type === 'dir') throw new Error(`EISDIR: illegal operation on a directory, unlink '${path}'`);
+    if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, unlink '${path}'`);
+    if (node.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, unlink '${path}'`);
     await this._delete(path);
   }
 
   async rmdir(path: string): Promise<void> {
     const node = await this._get(path);
-    if (!node) throw new Error(`ENOENT: no such file or directory, rmdir '${path}'`);
-    if (node.type !== 'dir') throw new Error(`ENOTDIR: not a directory '${path}'`);
+    if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, rmdir '${path}'`);
+    if (node.type !== 'dir') throw fsError('ENOTDIR', `ENOTDIR: not a directory '${path}'`);
 
     const entries = await this.readdir(path);
-    if (entries.length > 0) throw new Error(`ENOTEMPTY: directory not empty, rmdir '${path}'`);
+    if (entries.length > 0) throw fsError('ENOTEMPTY', `ENOTEMPTY: directory not empty, rmdir '${path}'`);
     await this._delete(path);
   }
 
   async rm(path: string, options?: { recursive?: boolean }): Promise<void> {
     const node = await this._get(path);
-    if (!node) throw new Error(`ENOENT: no such file or directory, rm '${path}'`);
+    if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, rm '${path}'`);
 
     if (node.type === 'dir' && options?.recursive) {
       const allKeys = await this._getAllKeys();
@@ -361,7 +368,7 @@ export class FileSystem {
         await this._delete(key);
       }
     } else if (node.type === 'dir') {
-      throw new Error(`EISDIR: is a directory, rm '${path}'`);
+      throw fsError('EISDIR', `EISDIR: is a directory, rm '${path}'`);
     } else {
       await this._delete(path);
     }
@@ -369,7 +376,7 @@ export class FileSystem {
 
   async rename(oldPath: string, newPath: string): Promise<void> {
     const node = await this._get(oldPath);
-    if (!node) throw new Error(`ENOENT: no such file or directory, rename '${oldPath}'`);
+    if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, rename '${oldPath}'`);
 
     if (node.type === 'dir') {
       // Move directory and all children
@@ -393,7 +400,7 @@ export class FileSystem {
 
   async chmod(path: string, mode: number): Promise<void> {
     const node = await this._get(path);
-    if (!node) throw new Error(`ENOENT: no such file or directory, chmod '${path}'`);
+    if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, chmod '${path}'`);
     await this._put({ ...node, mode });
   }
 
@@ -401,7 +408,7 @@ export class FileSystem {
   async symlink(target: string, path: string): Promise<void> {
     const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
     const parent = await this._get(parentPath);
-    if (!parent) throw new Error(`ENOENT: no such file or directory '${parentPath}'`);
+    if (!parent) throw fsError('ENOENT', `ENOENT: no such file or directory '${parentPath}'`);
 
     const now = Date.now();
     await this._put({
@@ -418,8 +425,8 @@ export class FileSystem {
 
   async readlink(path: string): Promise<string> {
     const node = await this._get(path);
-    if (!node) throw new Error(`ENOENT: no such file or directory, readlink '${path}'`);
-    if (node.type !== 'symlink') throw new Error(`EINVAL: not a symlink '${path}'`);
+    if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, readlink '${path}'`);
+    if (node.type !== 'symlink') throw fsError('EINVAL', `EINVAL: not a symlink '${path}'`);
     return node.symlinkTarget || new TextDecoder().decode(node.content!);
   }
 

@@ -167,15 +167,25 @@ export const gitCmd: Command = {
         }
 
         case 'clone': {
-          const url = ctx.args[1];
+          let url = ctx.args[1];
           if (!url) { ctx.stderr = 'error: must specify repository URL\n'; return 1; }
-          const targetDir = ctx.args[2] ? ctx.fs.resolvePath(ctx.args[2], ctx.cwd) : ctx.cwd + '/' + url.split('/').pop()?.replace('.git', '');
+          // Normalize URL: add https:// if no protocol
+          if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('git://')) {
+            url = 'https://' + url;
+          }
+          const repoName = url.split('/').pop()?.replace(/\.git$/, '') || 'repo';
+          const targetDir = ctx.args[2]
+            ? ctx.fs.resolvePath(ctx.args[2], ctx.cwd)
+            : ctx.fs.resolvePath(repoName, ctx.cwd);
           await ctx.fs.mkdir(targetDir, { recursive: true });
+          ctx.stdout = `Cloning into '${repoName}'...\n`;
           await git.clone({
             fs, http, dir: targetDir, url,
             corsProxy: 'https://cors.isomorphic-git.org',
+            singleBranch: true,
+            depth: 1,
           });
-          ctx.stdout = `Cloning into '${targetDir}'...\n`;
+          ctx.stdout += `done.\n`;
           break;
         }
 
