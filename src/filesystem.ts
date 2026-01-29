@@ -89,8 +89,17 @@ function makeStat(node: FSNode): StatResult {
 
 /** Create an Error with a .code property for Node.js/isomorphic-git compatibility */
 function fsError(code: string, message: string): Error {
-  const err = new Error(message) as Error & { code: string };
+  const err = new Error(message) as Error & { code: string; errno: number };
   err.code = code;
+  // Add errno for isomorphic-git compatibility
+  // Common errno values: ENOENT=-2, EISDIR=-21, ENOTDIR=-20, EEXIST=-17
+  const errnos: Record<string, number> = {
+    ENOENT: -2,
+    EISDIR: -21,
+    ENOTDIR: -20,
+    EEXIST: -17,
+  };
+  err.errno = errnos[code] || -1;
   return err;
 }
 
