@@ -1,0 +1,97 @@
+name: Windwalker Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Allow manual triggering
+  workflow_dispatch:
+
+jobs:
+  test-foam:
+    name: Test on Foam
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout windwalker
+        uses: actions/checkout@v4
+
+      - name: Checkout Foam
+        uses: actions/checkout@v4
+        with:
+          repository: williamsharkey/foam
+          path: ../foam
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install windwalker dependencies
+        run: npm ci
+
+      - name: Install Puppeteer browser
+        run: npx puppeteer browsers install chrome
+
+      - name: Run tests against Foam
+        env:
+          OS_TARGET: foam
+          FOAM_PATH: ${{ github.workspace }}/../foam
+        run: npm run test:foam
+
+  test-shiro:
+    name: Test on Shiro
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout windwalker
+        uses: actions/checkout@v4
+
+      - name: Checkout Shiro
+        uses: actions/checkout@v4
+        with:
+          repository: williamsharkey/shiro
+          path: ../shiro
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install windwalker dependencies
+        run: npm ci
+
+      - name: Install Puppeteer browser
+        run: npx puppeteer browsers install chrome
+
+      - name: Install Shiro dependencies
+        run: cd ${{ github.workspace }}/../shiro && npm ci
+
+      - name: Build Shiro
+        run: cd ${{ github.workspace }}/../shiro && npm run build
+
+      - name: Run tests against Shiro
+        env:
+          OS_TARGET: shiro
+          SHIRO_PATH: ${{ github.workspace }}/../shiro/dist
+        run: npm run test:shiro
+
+  compare:
+    name: Cross-platform comparison
+    needs: [test-foam, test-shiro]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Summary
+        run: |
+          echo "## Windwalker Cross-Platform Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.test-foam.result }}" = "success" ]; then
+            echo "- ✅ **Foam**: All tests passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ❌ **Foam**: Tests failed" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ needs.test-shiro.result }}" = "success" ]; then
+            echo "- ✅ **Shiro**: All tests passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ❌ **Shiro**: Tests failed" >> $GITHUB_STEP_SUMMARY
+          fi

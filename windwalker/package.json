@@ -1,0 +1,15 @@
+{
+  "name": "windwalker",
+  "version": "0.1.0",
+  "description": "Unified test suite for Spirit on Foam and Shiro cloud OS environments",
+  "type": "module",
+  "scripts": {
+    "test": "node tests/runner.js",
+    "test:foam": "OS_TARGET=foam node tests/runner.js",
+    "test:shiro": "OS_TARGET=shiro node tests/runner.js"
+  },
+  "devDependencies": {
+    "puppeteer": "^24.0.0"
+  },
+  "license": "MIT"
+}
