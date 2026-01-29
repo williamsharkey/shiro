@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20, 22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify bundle exists
+        run: |
+          test -f dist/spirit.js || (echo "dist/spirit.js not found" && exit 1)
+          echo "Bundle size: $(wc -c < dist/spirit.js) bytes"
+
+      - name: Verify type declarations
+        run: |
+          test -f dist/index.d.ts || (echo "dist/index.d.ts not found" && exit 1)
+          test -f dist/spirit.d.ts || (echo "dist/spirit.d.ts not found" && exit 1)
+          test -f dist/providers/types.d.ts || (echo "dist/providers/types.d.ts not found" && exit 1)
+
+      - name: Test bundle is valid ES module
+        run: node -e "import('./dist/spirit.js').then(m => { const keys = Object.keys(m); console.log('Exports:', keys.join(', ')); if (!keys.includes('SpiritAgent')) { process.exit(1); } })"
