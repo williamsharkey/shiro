@@ -8,7 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "deploy": "git submodule update --init --recursive && npm run build && cd dist && git init && git add -A && git commit -m 'Deploy to GitHub Pages' && git push -f https://github.com/williamsharkey/shiro.git main:gh-pages && cd .."
+    "deploy": "node increment-build.js && git submodule update --init --recursive && npm run build && cd dist && git init && git add -A && git commit -m 'Deploy to GitHub Pages' && git push -f https://github.com/williamsharkey/shiro.git main:gh-pages && cd .."
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
