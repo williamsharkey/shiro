@@ -214,6 +214,130 @@ export default async function run(page, osTarget) {
     results.fail('diff', e);
   }
 
+  // Test: diff with identical files
+  try {
+    await os.writeFile('/tmp/ww-diff-same1.txt', 'identical');
+    await os.writeFile('/tmp/ww-diff-same2.txt', 'identical');
+    const r = await os.exec('diff /tmp/ww-diff-same1.txt /tmp/ww-diff-same2.txt');
+    assertEqual(r.exitCode, 0, 'diff identical files should exit 0');
+    results.pass('diff (identical files)');
+  } catch (e) {
+    results.fail('diff (identical files)', e);
+  }
+
+  // Test: sort -r (reverse)
+  try {
+    await os.writeFile('/tmp/ww-sortr.txt', 'a\nb\nc');
+    const r = await os.exec('sort -r /tmp/ww-sortr.txt');
+    const lines = r.stdout.trim().split(/\r?\n/);
+    assertEqual(lines[0], 'c', 'reverse sort first');
+    assertEqual(lines[2], 'a', 'reverse sort last');
+    results.pass('sort -r');
+  } catch (e) {
+    results.fail('sort -r', e);
+  }
+
+  // Test: sort -n (numeric)
+  try {
+    await os.writeFile('/tmp/ww-sortn.txt', '10\n2\n30\n1');
+    const r = await os.exec('sort -n /tmp/ww-sortn.txt');
+    const lines = r.stdout.trim().split(/\r?\n/);
+    assertEqual(lines[0], '1', 'numeric sort first');
+    assertEqual(lines[3], '30', 'numeric sort last');
+    results.pass('sort -n');
+  } catch (e) {
+    results.fail('sort -n', e);
+  }
+
+  // Test: uniq -c (count)
+  try {
+    await os.writeFile('/tmp/ww-uniqc.txt', 'a\na\na\nb\nc\nc');
+    const r = await os.exec('uniq -c /tmp/ww-uniqc.txt');
+    assertIncludes(r.stdout, '3', 'uniq -c should show count 3 for a');
+    results.pass('uniq -c');
+  } catch (e) {
+    results.fail('uniq -c', e);
+  }
+
+  // Test: head (default 10 lines)
+  try {
+    const lines = Array.from({length: 20}, (_, i) => `line${i+1}`).join('\n');
+    await os.writeFile('/tmp/ww-head20.txt', lines);
+    const r = await os.exec('head /tmp/ww-head20.txt');
+    assertIncludes(r.stdout, 'line1', 'head default should include line1');
+    assertIncludes(r.stdout, 'line10', 'head default should include line10');
+    assert(!r.stdout.includes('line11'), 'head default should not include line11');
+    results.pass('head (default 10)');
+  } catch (e) {
+    results.fail('head (default 10)', e);
+  }
+
+  // Test: wc (all counts)
+  try {
+    await os.writeFile('/tmp/ww-wcall.txt', 'hello world\nfoo bar baz\n');
+    const r = await os.exec('wc /tmp/ww-wcall.txt');
+    assertIncludes(r.stdout, '2', 'wc should show 2 lines');
+    assertIncludes(r.stdout, '5', 'wc should show 5 words');
+    results.pass('wc (all counts)');
+  } catch (e) {
+    results.fail('wc (all counts)', e);
+  }
+
+  // Test: grep -n (line numbers)
+  try {
+    await os.writeFile('/tmp/ww-grepn.txt', 'alpha\nbravo\ncharlie');
+    const r = await os.exec('grep -n "bravo" /tmp/ww-grepn.txt');
+    assertIncludes(r.stdout, '2', 'grep -n should show line number 2');
+    results.pass('grep -n');
+  } catch (e) {
+    results.fail('grep -n', e);
+  }
+
+  // Test: echo -n (no newline)
+  try {
+    const r = await os.exec('echo -n hello');
+    assertEqual(r.stdout, 'hello', 'echo -n should omit trailing newline');
+    results.pass('echo -n');
+  } catch (e) {
+    results.fail('echo -n', e);
+  }
+
+  // Test: date
+  try {
+    const r = await os.exec('date');
+    assert(r.stdout.length > 0, 'date should produce output');
+    results.pass('date');
+  } catch (e) {
+    results.fail('date', e);
+  }
+
+  // Test: whoami
+  try {
+    const r = await os.exec('whoami');
+    assert(r.stdout.trim().length > 0, 'whoami should return a username');
+    results.pass('whoami');
+  } catch (e) {
+    results.fail('whoami', e);
+  }
+
+  // Test: basename
+  try {
+    const r = await os.exec('basename /home/user/file.txt');
+    assertIncludes(r.stdout, 'file.txt', 'basename should extract filename');
+    results.pass('basename');
+  } catch (e) {
+    results.fail('basename', e);
+  }
+
+  // Test: dirname
+  try {
+    const r = await os.exec('dirname /home/user/file.txt');
+    assertIncludes(r.stdout, '/home/user', 'dirname should extract directory');
+    results.pass('dirname');
+  } catch (e) {
+    results.fail('dirname', e);
+  }
+
   results.summary();
   return results;
 }

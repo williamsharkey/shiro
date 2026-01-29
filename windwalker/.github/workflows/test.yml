@@ -47,6 +47,13 @@ jobs:
           FOAM_PATH: ${{ github.workspace }}/../foam
         run: npm run test:foam
 
+      - name: Upload Foam test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: foam-test-results
+          path: test-results/results.json
+
   test-shiro:
     name: Test on Shiro
     runs-on: ubuntu-22.04
@@ -90,6 +97,13 @@ jobs:
           OS_TARGET: shiro
           SHIRO_PATH: ${{ github.workspace }}/../shiro/dist
         run: npm run test:shiro
+
+      - name: Upload Shiro test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shiro-test-results
+          path: test-results/results.json
 
   compare:
     name: Cross-platform comparison

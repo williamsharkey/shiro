@@ -216,7 +216,7 @@ export function collectConsoleErrors(page) {
 }
 
 /**
- * Simple test result tracking.
+ * Test result tracking with timing and JSON export.
  */
 export class TestResults {
   constructor(suiteName) {
@@ -225,31 +225,63 @@ export class TestResults {
     this.failed = 0;
     this.skipped = 0;
     this.failures = [];
+    this.details = []; // { name, status, duration?, error? }
+    this._startTime = Date.now();
+    this._testStart = null;
+  }
+
+  /** Call before running a test to track timing. */
+  startTest() {
+    this._testStart = Date.now();
   }
 
   pass(name) {
+    const duration = this._testStart ? Date.now() - this._testStart : 0;
     this.passed++;
-    console.log(`  ✓ ${name}`);
+    this.details.push({ name, status: 'pass', duration });
+    const ms = duration > 0 ? ` (${duration}ms)` : '';
+    console.log(`  ✓ ${name}${ms}`);
+    this._testStart = null;
   }
 
   fail(name, error) {
+    const duration = this._testStart ? Date.now() - this._testStart : 0;
     this.failed++;
-    this.failures.push({ name, error: String(error) });
+    const errorStr = String(error);
+    this.failures.push({ name, error: errorStr });
+    this.details.push({ name, status: 'fail', duration, error: errorStr });
     console.log(`  ✗ ${name}`);
     console.log(`    ${error}`);
+    this._testStart = null;
   }
 
   skip(name, reason) {
     this.skipped++;
+    this.details.push({ name, status: 'skip', reason });
     console.log(`  - ${name} (skipped: ${reason})`);
   }
 
   summary() {
     const total = this.passed + this.failed + this.skipped;
+    const elapsed = Date.now() - this._startTime;
     console.log(`\n  ${this.suite}: ${this.passed}/${total} passed` +
       (this.failed ? `, ${this.failed} failed` : '') +
-      (this.skipped ? `, ${this.skipped} skipped` : ''));
+      (this.skipped ? `, ${this.skipped} skipped` : '') +
+      ` [${elapsed}ms]`);
     return this.failed === 0;
+  }
+
+  /** Export results as a JSON-serializable object. */
+  toJSON() {
+    return {
+      suite: this.suite,
+      passed: this.passed,
+      failed: this.failed,
+      skipped: this.skipped,
+      elapsed: Date.now() - this._startTime,
+      tests: this.details,
+      failures: this.failures,
+    };
   }
 }
 
@@ -285,6 +317,36 @@ export function assertMatch(str, pattern, message) {
     throw new Error(
       (message ? message + ': ' : '') +
       `expected ${JSON.stringify(str)} to match ${pattern}`
+    );
+  }
+}
+
+export function assertNotIncludes(haystack, needle, message) {
+  if (haystack?.includes(needle)) {
+    throw new Error(
+      (message ? message + ': ' : '') +
+      `expected ${JSON.stringify(haystack)} to NOT include ${JSON.stringify(needle)}`
+    );
+  }
+}
+
+export async function assertThrows(fn, message) {
+  try {
+    await fn();
+    throw new Error(
+      (message ? message + ': ' : '') + 'expected function to throw'
+    );
+  } catch (e) {
+    if (e.message?.includes('expected function to throw')) throw e;
+    // Threw as expected
+  }
+}
+
+export function assertGreater(actual, expected, message) {
+  if (!(actual > expected)) {
+    throw new Error(
+      (message ? message + ': ' : '') +
+      `expected ${actual} > ${expected}`
     );
   }
 }

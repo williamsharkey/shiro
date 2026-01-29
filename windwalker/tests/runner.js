@@ -4,7 +4,7 @@
 
 import puppeteer from 'puppeteer';
 import { createServer } from 'http';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, extname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -60,6 +60,7 @@ const SUITES = [
   { name: 'level-5-git',        path: './level-5-git/git.test.js' },
   { name: 'level-6-spirit',     path: './level-6-spirit/spirit.test.js' },
   { name: 'level-7-workflows',  path: './level-7-workflows/workflows.test.js' },
+  { name: 'level-8-fluffycoreutils', path: './level-8-fluffycoreutils/fluffycoreutils.test.js' },
 ];
 
 // Port assignments
@@ -103,6 +104,7 @@ async function runTarget(osTarget) {
   let totalFailed = 0;
   let totalSkipped = 0;
   const allFailures = [];
+  const suiteResults = [];
 
   for (const suite of SUITES) {
     const suitePath = join(__dirname, suite.path);
@@ -128,6 +130,7 @@ async function runTarget(osTarget) {
       totalPassed += results.passed;
       totalFailed += results.failed;
       totalSkipped += results.skipped;
+      if (results.toJSON) suiteResults.push(results.toJSON());
       allFailures.push(...results.failures.map(f => ({
         ...f,
         suite: suite.name,
@@ -157,7 +160,7 @@ async function runTarget(osTarget) {
     }
   }
 
-  return { target: osTarget, ok: totalFailed === 0, totalPassed, totalFailed, totalSkipped, allFailures };
+  return { target: osTarget, ok: totalFailed === 0, totalPassed, totalFailed, totalSkipped, allFailures, suiteResults };
 }
 
 async function main() {
@@ -179,6 +182,27 @@ async function main() {
       console.log(`  ${status} ${r.target}: ${r.totalPassed || 0} passed, ${r.totalFailed || 0} failed`);
     }
   }
+
+  // Write JSON results for CI artifacts
+  const resultsDir = join(ROOT, 'test-results');
+  if (!existsSync(resultsDir)) mkdirSync(resultsDir, { recursive: true });
+  const jsonReport = {
+    timestamp: new Date().toISOString(),
+    targets: results.map(r => ({
+      target: r.target,
+      ok: r.ok,
+      passed: r.totalPassed || 0,
+      failed: r.totalFailed || 0,
+      skipped: r.totalSkipped || 0,
+      suites: r.suiteResults || [],
+      failures: r.allFailures || [],
+    })),
+  };
+  writeFileSync(
+    join(resultsDir, 'results.json'),
+    JSON.stringify(jsonReport, null, 2)
+  );
+  console.log(`\nResults written to test-results/results.json`);
 
   const anyFailed = results.some(r => !r.ok);
   process.exit(anyFailed ? 1 : 0);

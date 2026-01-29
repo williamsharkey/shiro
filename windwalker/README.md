@@ -35,7 +35,8 @@ windwalker/
 │   ├── level-4-pipes/        # Pipes, redirects, && / || / ; operators
 │   ├── level-5-git/          # Git: init, add, commit, status, log, diff
 │   ├── level-6-spirit/       # Spirit agent: tool execution, multi-turn loops
-│   └── level-7-workflows/    # End-to-end: create project, edit, test, commit
+│   ├── level-7-workflows/    # End-to-end: create project, edit, test, commit
+│   └── level-8-fluffycoreutils/ # FluffyCoreutils shared library integration
 ```
 
 ### Test Levels
@@ -52,6 +53,7 @@ Tests are organized from simple to complex. Each level builds on the previous.
 | 5 | Git | init, add, commit, status, log, diff, branch (via JS git implementations) |
 | 6 | Spirit Tools | Each Spirit tool (bash, read, write, edit, glob) runs correctly on the OS |
 | 7 | Workflows | Multi-step development scenarios: scaffold project, edit files, run commands |
+| 8 | FluffyCoreutils | Shared coreutils library integration: tr, cut, printf, test, uname, etc. |
 
 ### OS Abstraction Layer
 
