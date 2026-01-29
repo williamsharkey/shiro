@@ -110,3 +110,85 @@ The shell supports:
 - **No over-engineering** - commands should be simple and direct
 - **No monolithic files** - if a file grows past ~300 lines, split it
 - **Register new commands in main.ts** - that's the single wiring point
+
+## Next Task: npm install + build system for self-hosting
+
+### Goal
+Inside Shiro's browser terminal, run:
+```
+git clone https://github.com/williamsharkey/shiro
+cd shiro
+npm install
+npm run build
+```
+
+### New Files to Create (4)
+
+#### 1. `src/commands/tar-utils.ts` (~80 lines)
+Utility module for npm install. No command export.
+- `decompressGzip(data: Uint8Array): Promise<Uint8Array>` — uses browser-native `DecompressionStream('gzip')`
+- `extractTar(data: Uint8Array): TarEntry[]` — parses POSIX tar format (512-byte headers), strips npm's `package/` prefix
+- TarEntry: `{ path: string, type: 'file' | 'dir', content: Uint8Array, mode: number }`
+
+#### 2. `src/commands/semver-utils.ts` (~60 lines)
+Minimal semver resolver for `^x.y.z` ranges (all Shiro deps use this).
+- `parseSemver(v)` — parse "1.27.1" → { major, minor, patch }
+- `satisfies(version, range)` — check if version matches `^x.y.z`
+- `maxSatisfying(versions[], range)` — pick highest matching version
+
+#### 3. `src/commands/npm.ts` (~250 lines)
+Main npm command. Exports `npmCmd: Command`.
+
+**`npm install` flow:**
+1. Read `package.json` from cwd, merge dependencies + devDependencies
+2. BFS resolve dependency tree: fetch `https://registry.npmjs.org/{pkg}` (CORS-enabled), pick version with `maxSatisfying()`, read transitive deps
+3. Download tarballs: `https://registry.npmjs.org/{pkg}/-/{name}-{version}.tgz`
+4. Decompress + extract each tarball into `node_modules/{pkg}/`
+5. Scoped packages (e.g. `@xterm/xterm`): URL-encode scope, directory is `node_modules/@xterm/xterm/`
+6. Flat node_modules (npm v3+ style), first version wins on conflicts
+
+**`npm run <script>` flow:**
+1. Read `package.json` scripts
+2. Execute script string via `ctx.shell.execute(script, ...)`
+
+#### 4. `src/commands/build.ts` (~150 lines)
+esbuild-wasm integration. Exports `buildCmd`, `tscCmd`, `viteCmd`.
+
+**`build` command:**
+- Initialize esbuild-wasm (lazy, on first use)
+- Custom esbuild plugin `shiro-virtual-fs`:
+  - `onResolve`: resolve relative imports against virtual FS, bare specifiers against `node_modules/` (read package.json main/module field)
+  - `onLoad`: read file contents from virtual FS, pick loader by extension (.ts → 'ts', .css → 'css', .js → 'js')
+  - Extension resolution: try exact, .ts, .tsx, .js, /index.ts, /index.js
+- Call `esbuild.build()` with `write: false`, then write outputFiles to virtual FS `dist/`
+
+**`tsc` stub:** Returns 0 with "Type checking skipped (browser environment)" — Shiro's tsconfig has `noEmit: true` so tsc only type-checks, which we skip for MVP
+
+**`vite` stub:** `vite build` delegates to `buildCmd.exec()`. Other subcommands return error.
+
+### Files to Modify (2)
+
+**`src/main.ts`** — Add imports and register: `npmCmd`, `buildCmd`, `tscCmd`, `viteCmd`
+
+**`package.json`** — Add `esbuild-wasm` to dependencies, then `npm install` on host
+
+### Implementation Order
+1. `tar-utils.ts` — standalone, no deps on new code
+2. `semver-utils.ts` — standalone, no deps on new code
+3. `npm.ts` — depends on tar-utils and semver-utils
+4. `build.ts` — depends on esbuild-wasm package
+5. Register in `main.ts`, add esbuild-wasm to `package.json`
+6. Run tests, type-check, push
+
+### Technical Notes
+- `registry.npmjs.org` supports CORS for both JSON metadata and tarballs
+- Browser-native `DecompressionStream('gzip')` handles tarball decompression (all modern browsers)
+- npm tarballs wrap files under a `package/` directory prefix — must strip it during extraction
+- esbuild-wasm WASM binary is ~8MB, lazy-loaded on first `build` invocation
+- Vite's `?url` import suffix provides the URL to bundled WASM files
+- For scoped packages (`@scope/name`), the registry URL is `https://registry.npmjs.org/@scope%2Fname`
+
+### Verification
+1. `npx tsc --noEmit` — types pass
+2. `npx vitest run` — existing 78 tests still pass
+3. Deploy to GitHub Pages, open browser, run: `git clone ... && cd shiro && npm install && npm run build && ls dist/`
