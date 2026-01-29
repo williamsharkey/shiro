@@ -16,19 +16,19 @@ npm install && npm run dev
 ## Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│  xterm.js Terminal UI                   │
-├─────────────────────────────────────────┤
-│  Shell Layer (pipes, redirects, env)    │
-├──────────┬──────────┬───────────────────┤
-│ Coreutils│ JS-native│ Future WASM       │
-│ ls,cat,  │ git,     │ npm, node,        │
-│ grep,sed │ fetch    │ tcc, etc.         │
-├──────────┴──────────┴───────────────────┤
-│  Virtual Filesystem (IndexedDB)         │
-├─────────────────────────────────────────┤
-│  Browser APIs (DOM, Fetch, Workers)     │
-└─────────────────────────────────────────┘
+┌───────────────────────────────────────────┐
+│  xterm.js Terminal UI                     │
+├───────────────────────────────────────────┤
+│  Shell Layer (pipes, redirects, env)      │
+├────────────┬──────────┬───────────────────┤
+│ Coreutils│JS-native│Future WASM       │
+│ ls,cat,  │git,     │npm, node,        │
+│ grep,sed │fetch    │tcc, etc.         │
+├────────────┴──────────┴───────────────────┤
+│  Virtual Filesystem (IndexedDB)           │
+├───────────────────────────────────────────┤
+│  Browser APIs (DOM, Fetch, Workers)       │
+└───────────────────────────────────────────┘
 ```
 
 ## Why This Structure?
