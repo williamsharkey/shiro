@@ -102,7 +102,10 @@ The shell supports:
 
 - **Spirit** (williamsharkey/spirit): Claude Code agent loop. Shiro provides `ShiroProvider` (OSProvider interface) in `src/spirit-provider.ts`
 - **Foam** (williamsharkey/foam): Sister browser OS project in plain JS. Compatible shell semantics
+- **FluffyCoreutils** (williamsharkey/fluffycoreutils): Shared Unix commands, consumed as git submodule
 - **Windwalker** (williamsharkey/windwalker): Test automation. Access via `window.__shiro` global
+- **Nimbus** (williamsharkey/nimbus): Multi-repo orchestrator with live dashboard preview and skyeyes integration
+- **Skyeyes** (williamsharkey/skyeyes): Browser-side bridge for remote JS execution and testing
 
 ## Keep It Manageable
 
