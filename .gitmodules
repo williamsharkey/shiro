@@ -1,0 +1,3 @@
+[submodule "fluffycoreutils"]
+	path = fluffycoreutils
+	url = https://github.com/williamsharkey/fluffycoreutils

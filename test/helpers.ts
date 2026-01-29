@@ -1,26 +1,29 @@
 import { FileSystem } from '../src/filesystem';
 import { Shell } from '../src/shell';
-import { CommandRegistry, CommandContext } from '../src/commands/index';
-import { allCoreutils } from '../src/commands/coreutils';
-import { grepCmd } from '../src/commands/grep';
-import { sedCmd } from '../src/commands/sed';
+import { CommandRegistry } from '../src/commands/index';
+import { shiroOnlyCommands } from '../src/commands/coreutils';
 import { gitCmd } from '../src/commands/git';
-import { findCmd } from '../src/commands/find';
-import { diffCmd } from '../src/commands/diff';
 import { globCmd } from '../src/commands/glob';
 import { jsEvalCmd, nodeCmd } from '../src/commands/jseval';
+import { allCommands } from '../fluffycoreutils/src/index';
+import { wrapFluffyCommand } from '../src/fluffy-adapter';
 
 export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell }> {
   const fs = new FileSystem();
   await fs.init();
 
   const commands = new CommandRegistry();
-  commands.registerAll(allCoreutils);
-  commands.register(grepCmd);
-  commands.register(sedCmd);
+
+  // Register shared fluffycoreutils
+  for (const fluffy of Object.values(allCommands)) {
+    commands.register(wrapFluffyCommand(fluffy));
+  }
+
+  // Register Shiro-only commands (override fluffy where needed)
+  commands.registerAll(shiroOnlyCommands);
+
+  // Register additional Shiro commands
   commands.register(gitCmd);
-  commands.register(findCmd);
-  commands.register(diffCmd);
   commands.register(globCmd);
   commands.register(jsEvalCmd);
   commands.register(nodeCmd);
