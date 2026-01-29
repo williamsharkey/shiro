@@ -11,6 +11,7 @@ import { findCmd } from './commands/find';
 import { diffCmd } from './commands/diff';
 import { globCmd } from './commands/glob';
 import { spiritCmd } from './commands/spirit';
+import { jsEvalCmd, nodeCmd } from './commands/jseval';
 import { ShiroTerminal } from './terminal';
 import { ShiroProvider } from './spirit-provider';
 
@@ -31,6 +32,8 @@ async function main() {
   commands.register(diffCmd);
   commands.register(globCmd);
   commands.register(spiritCmd);
+  commands.register(jsEvalCmd);
+  commands.register(nodeCmd);
 
   // Create shell
   const shell = new Shell(fs, commands);

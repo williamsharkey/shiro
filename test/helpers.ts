@@ -8,6 +8,7 @@ import { gitCmd } from '../src/commands/git';
 import { findCmd } from '../src/commands/find';
 import { diffCmd } from '../src/commands/diff';
 import { globCmd } from '../src/commands/glob';
+import { jsEvalCmd, nodeCmd } from '../src/commands/jseval';
 
 export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell }> {
   const fs = new FileSystem();
@@ -21,6 +22,8 @@ export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell 
   commands.register(findCmd);
   commands.register(diffCmd);
   commands.register(globCmd);
+  commands.register(jsEvalCmd);
+  commands.register(nodeCmd);
 
   const shell = new Shell(fs, commands);
   return { fs, shell };

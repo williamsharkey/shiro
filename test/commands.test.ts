@@ -269,6 +269,48 @@ describe('Commands', () => {
     });
   });
 
+  describe('js-eval', () => {
+    it('should evaluate expressions', async () => {
+      const { output } = await run(shell, 'js-eval 1 + 2');
+      expect(output.replace(/\r/g, '').trim()).toBe('3');
+    });
+
+    it('should evaluate string expressions', async () => {
+      const { output } = await run(shell, "js-eval '\"hello\".toUpperCase()'");
+      expect(output).toContain('HELLO');
+    });
+
+    it('should return error for invalid code', async () => {
+      const { exitCode } = await run(shell, 'js-eval throw new Error("fail")');
+      expect(exitCode).toBe(1);
+    });
+  });
+
+  describe('node', () => {
+    it('should execute JS file', async () => {
+      await fs.writeFile('/home/user/test.js', 'console.log("from file")');
+      const { output } = await run(shell, 'node test.js');
+      expect(output).toContain('from file');
+    });
+
+    it('should execute -e code', async () => {
+      const { output } = await run(shell, "node -e 'console.log(2 + 3)'");
+      expect(output).toContain('5');
+    });
+
+    it('should print with -p', async () => {
+      const { output } = await run(shell, "node -p '42 * 2'");
+      expect(output).toContain('84');
+    });
+
+    it('should have process.env', async () => {
+      await run(shell, 'export MY_VAR=testing');
+      await fs.writeFile('/home/user/envtest.js', 'console.log(process.env.MY_VAR)');
+      const { output } = await run(shell, 'node envtest.js');
+      expect(output).toContain('testing');
+    });
+  });
+
   describe('system commands', () => {
     it('whoami returns user', async () => {
       const { output } = await run(shell, 'whoami');

@@ -89,6 +89,8 @@ function makeStat(node: FSNode): StatResult {
 
 export class FileSystem {
   private db: IDBDatabase | null = null;
+  private cache: Map<string, FSNode | undefined> = new Map();
+  private cacheEnabled = true;
 
   async init(): Promise<void> {
     this.db = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -135,36 +137,67 @@ export class FileSystem {
     return this.db!.transaction(STORE_NAME, mode).objectStore(STORE_NAME);
   }
 
-  private _get(path: string): Promise<FSNode | undefined> {
-    return new Promise((resolve, reject) => {
+  private async _get(path: string): Promise<FSNode | undefined> {
+    if (this.cacheEnabled && this.cache.has(path)) {
+      return this.cache.get(path);
+    }
+    const result = await new Promise<FSNode | undefined>((resolve, reject) => {
       const req = this._store('readonly').get(path);
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
+    if (this.cacheEnabled) {
+      this.cache.set(path, result);
+    }
+    return result;
   }
 
-  private _put(node: FSNode): Promise<void> {
-    return new Promise((resolve, reject) => {
+  private async _put(node: FSNode): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
       const req = this._store('readwrite').put(node);
       req.onsuccess = () => resolve();
       req.onerror = () => reject(req.error);
     });
+    if (this.cacheEnabled) {
+      this.cache.set(node.path, node);
+      // Invalidate allKeys cache
+      this._allKeysCache = null;
+    }
   }
 
-  private _delete(path: string): Promise<void> {
-    return new Promise((resolve, reject) => {
+  private async _delete(path: string): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
       const req = this._store('readwrite').delete(path);
       req.onsuccess = () => resolve();
       req.onerror = () => reject(req.error);
     });
+    if (this.cacheEnabled) {
+      this.cache.delete(path);
+      this._allKeysCache = null;
+    }
   }
 
-  private _getAllKeys(): Promise<string[]> {
-    return new Promise((resolve, reject) => {
+  private _allKeysCache: string[] | null = null;
+
+  private async _getAllKeys(): Promise<string[]> {
+    if (this.cacheEnabled && this._allKeysCache) {
+      return this._allKeysCache;
+    }
+    const result = await new Promise<string[]>((resolve, reject) => {
       const req = this._store('readonly').getAllKeys();
       req.onsuccess = () => resolve(req.result as string[]);
       req.onerror = () => reject(req.error);
     });
+    if (this.cacheEnabled) {
+      this._allKeysCache = result;
+    }
+    return result;
+  }
+
+  /** Clear the in-memory cache (useful after external DB modifications) */
+  clearCache(): void {
+    this.cache.clear();
+    this._allKeysCache = null;
   }
 
   resolvePath(path: string, cwd: string): string {
