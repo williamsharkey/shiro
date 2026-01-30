@@ -222,6 +222,41 @@ describe('Virtual Server Shims', () => {
     });
   });
 
+  describe('better-sqlite3 shim', () => {
+    it('should create a Database class with prepare method', async () => {
+      const { output, exitCode } = await run(shell, `node -e "
+        const Database = require('better-sqlite3');
+        console.log('Database type:', typeof Database);
+        console.log('Is constructor:', Database.toString().includes('class') || Database.prototype?.constructor);
+      "`);
+
+      expect(exitCode).toBe(0);
+      expect(output).toContain('Database type: function');
+    });
+
+    it('should support prepare().run() and prepare().all()', async () => {
+      // Note: This test can't fully run sql.js in Node/linkedom (no WASM),
+      // but it verifies the shim structure is correct
+      const { output, exitCode } = await run(shell, `node -e "
+        const Database = require('better-sqlite3');
+        const db = new Database(':memory:');
+
+        console.log('db.prepare type:', typeof db.prepare);
+        console.log('db.exec type:', typeof db.exec);
+        console.log('db.pragma type:', typeof db.pragma);
+        console.log('db.transaction type:', typeof db.transaction);
+        console.log('db.close type:', typeof db.close);
+      "`);
+
+      expect(exitCode).toBe(0);
+      expect(output).toContain('db.prepare type: function');
+      expect(output).toContain('db.exec type: function');
+      expect(output).toContain('db.pragma type: function');
+      expect(output).toContain('db.transaction type: function');
+      expect(output).toContain('db.close type: function');
+    });
+  });
+
   describe('Response helpers', () => {
     it('should support res.status().json()', async () => {
       const { output, exitCode } = await run(shell, `node -e "

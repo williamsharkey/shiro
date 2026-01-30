@@ -969,10 +969,254 @@ export const nodeCmd: Command = {
         return router;
       };
 
+      // Cache for sql.js initialization
+      let sqlJsPromise: Promise<any> | null = null;
+      const sqliteDatabases = new Map<string, any>(); // path -> sql.js Database
+
+      // better-sqlite3 shim using sql.js
+      function createBetterSqlite3Shim() {
+        // Load sql.js from CDN (lazy, once)
+        async function loadSqlJs(): Promise<any> {
+          // Check if we're in a browser environment
+          if (typeof window === 'undefined') {
+            throw new Error('better-sqlite3 shim requires browser environment (sql.js WASM)');
+          }
+
+          if (!sqlJsPromise) {
+            sqlJsPromise = (async () => {
+              const initSqlJs = (window as any).initSqlJs;
+              if (initSqlJs) {
+                return await initSqlJs({
+                  locateFile: (file: string) => `https://sql.js.org/dist/${file}`
+                });
+              }
+              // Load the script if not already loaded
+              await new Promise<void>((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = 'https://sql.js.org/dist/sql-wasm.js';
+                script.onload = () => resolve();
+                script.onerror = reject;
+                document.head.appendChild(script);
+              });
+              return await (window as any).initSqlJs({
+                locateFile: (file: string) => `https://sql.js.org/dist/${file}`
+              });
+            })();
+          }
+          return sqlJsPromise;
+        }
+
+        // Database class mimicking better-sqlite3
+        class Database {
+          private db: any = null;
+          private dbPath: string;
+          private SQL: any = null;
+          private initPromise: Promise<void> | null = null;
+          private _isReady = false;
+
+          constructor(path: string, options?: any) {
+            this.dbPath = ctx.fs.resolvePath(path, ctx.cwd);
+            // Don't auto-init - wait until first use (allows structure tests in Node)
+          }
+
+          private async _init(): Promise<void> {
+            if (this._isReady) return;
+
+            this.SQL = await loadSqlJs();
+
+            // Check if we have this database cached
+            if (sqliteDatabases.has(this.dbPath)) {
+              this.db = sqliteDatabases.get(this.dbPath);
+              this._isReady = true;
+              return;
+            }
+
+            // Try to load from virtual filesystem
+            try {
+              const data = await ctx.fs.readFile(this.dbPath);
+              if (data instanceof Uint8Array) {
+                this.db = new this.SQL.Database(data);
+              } else {
+                // File exists but is empty or text - create new
+                this.db = new this.SQL.Database();
+              }
+            } catch {
+              // File doesn't exist - create new database
+              this.db = new this.SQL.Database();
+            }
+
+            sqliteDatabases.set(this.dbPath, this.db);
+            this._isReady = true;
+          }
+
+          private ensureReady(): void {
+            if (!this._isReady) {
+              // Trigger init synchronously for the error message, but it won't block
+              if (!this.initPromise) {
+                this.initPromise = this._init();
+              }
+              throw new Error('Database not initialized. Call await db.ready first, or use async patterns.');
+            }
+          }
+
+          prepare(sql: string): Statement {
+            this.ensureReady();
+            return new Statement(this.db, sql);
+          }
+
+          exec(sql: string): this {
+            this.ensureReady();
+            this.db.run(sql);
+            this._save();
+            return this;
+          }
+
+          pragma(pragma: string, options?: any): any {
+            this.ensureReady();
+            const result = this.db.exec(`PRAGMA ${pragma}`);
+            if (result.length === 0) return options?.simple ? undefined : [];
+            if (options?.simple) {
+              return result[0].values[0]?.[0];
+            }
+            return result[0].values.map((row: any[]) => {
+              const obj: any = {};
+              result[0].columns.forEach((col: string, i: number) => {
+                obj[col] = row[i];
+              });
+              return obj;
+            });
+          }
+
+          transaction<T>(fn: () => T): () => T {
+            return () => {
+              this.exec('BEGIN');
+              try {
+                const result = fn();
+                this.exec('COMMIT');
+                return result;
+              } catch (err) {
+                this.exec('ROLLBACK');
+                throw err;
+              }
+            };
+          }
+
+          close(): void {
+            this._save();
+            if (this.db) {
+              this.db.close();
+              sqliteDatabases.delete(this.dbPath);
+              this.db = null;
+            }
+          }
+
+          private _save(): void {
+            if (!this.db) return;
+            const data = this.db.export();
+            ctx.fs.writeFile(this.dbPath, data).catch(() => {});
+          }
+
+          // Expose the init promise for async usage
+          get ready(): Promise<void> {
+            if (!this.initPromise) {
+              this.initPromise = this._init();
+            }
+            return this.initPromise;
+          }
+        }
+
+        // Statement class mimicking better-sqlite3
+        class Statement {
+          private db: any;
+          private sql: string;
+
+          constructor(db: any, sql: string) {
+            this.db = db;
+            this.sql = sql;
+          }
+
+          run(...params: any[]): { changes: number; lastInsertRowid: number } {
+            const flatParams = params.length === 1 && typeof params[0] === 'object' && !Array.isArray(params[0])
+              ? params[0]  // Named parameters
+              : params.flat();
+
+            this.db.run(this.sql, flatParams);
+
+            // Get changes and lastInsertRowid
+            const changesResult = this.db.exec('SELECT changes()');
+            const lastIdResult = this.db.exec('SELECT last_insert_rowid()');
+
+            return {
+              changes: changesResult[0]?.values[0]?.[0] ?? 0,
+              lastInsertRowid: lastIdResult[0]?.values[0]?.[0] ?? 0,
+            };
+          }
+
+          get(...params: any[]): any {
+            const flatParams = params.length === 1 && typeof params[0] === 'object' && !Array.isArray(params[0])
+              ? params[0]
+              : params.flat();
+
+            const stmt = this.db.prepare(this.sql);
+            stmt.bind(flatParams);
+
+            if (stmt.step()) {
+              const columns = stmt.getColumnNames();
+              const values = stmt.get();
+              stmt.free();
+
+              const row: any = {};
+              columns.forEach((col: string, i: number) => {
+                row[col] = values[i];
+              });
+              return row;
+            }
+
+            stmt.free();
+            return undefined;
+          }
+
+          all(...params: any[]): any[] {
+            const flatParams = params.length === 1 && typeof params[0] === 'object' && !Array.isArray(params[0])
+              ? params[0]
+              : params.flat();
+
+            const result = this.db.exec(this.sql, flatParams);
+            if (result.length === 0) return [];
+
+            const columns = result[0].columns;
+            return result[0].values.map((row: any[]) => {
+              const obj: any = {};
+              columns.forEach((col: string, i: number) => {
+                obj[col] = row[i];
+              });
+              return obj;
+            });
+          }
+
+          iterate(...params: any[]): IterableIterator<any> {
+            const rows = this.all(...params);
+            return rows[Symbol.iterator]();
+          }
+
+          bind(...params: any[]): this {
+            // For chaining - params will be used in next run/get/all
+            return this;
+          }
+        }
+
+        return Database;
+      }
+
       function requireModule(modPath: string, fromDir: string): any {
         // Check for Express shim
         if (modPath === 'express') {
           return createExpressShim;
+        }
+
+        // Check for better-sqlite3 shim
+        if (modPath === 'better-sqlite3') {
+          return createBetterSqlite3Shim();
         }
 
         // Check built-in modules first
