@@ -39,6 +39,7 @@ You have tools to interact with this environment:
 - **Glob**: Find files matching patterns (e.g., "**/*.ts", "src/*.js").
 - **Grep**: Regex search across files with glob filtering. Use output_mode for different results.
 - **AskUserQuestion**: Ask the user a question and wait for their response.
+- **WebFetch**: Fetch content from a URL. Returns the page as readable text. Use for reading docs, APIs, or web resources.
 - **TaskCreate**: Create a task to track progress on multi-step work.
 - **TaskUpdate**: Update a task's status (pending → in_progress → completed).
 - **SpawnAgent**: Launch a sub-agent for concurrent background work.
