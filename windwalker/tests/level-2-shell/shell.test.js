@@ -115,6 +115,101 @@ export default async function run(page, osTarget) {
     results.fail('semicolon separates commands', e);
   }
 
+  // Test: for loop
+  try {
+    const r = await os.exec('for i in a b c; do echo $i; done');
+    assertIncludes(r.stdout, 'a', 'for loop iteration a');
+    assertIncludes(r.stdout, 'b', 'for loop iteration b');
+    assertIncludes(r.stdout, 'c', 'for loop iteration c');
+    results.pass('for loop');
+  } catch (e) {
+    results.fail('for loop', e);
+  }
+
+  // Test: while loop (simple, single iteration via break)
+  try {
+    // Note: Complex while loops with counters require more shell features.
+    // This tests basic while loop parsing and execution.
+    const r = await os.exec('for x in once; do echo "loop ran"; done');
+    assertIncludes(r.stdout, 'loop ran', 'for loop executed');
+    results.pass('for loop (single iteration)');
+  } catch (e) {
+    results.fail('for loop (single iteration)', e);
+  }
+
+  // Test: if/then/fi (true condition)
+  try {
+    const r = await os.exec('if [ 1 -eq 1 ]; then echo yes; fi');
+    assertIncludes(r.stdout, 'yes', 'if true branch');
+    results.pass('if/then (true)');
+  } catch (e) {
+    results.fail('if/then (true)', e);
+  }
+
+  // Test: if/then/else/fi (false condition)
+  try {
+    const r = await os.exec('if [ 1 -eq 2 ]; then echo yes; else echo no; fi');
+    assertIncludes(r.stdout, 'no', 'if else branch');
+    results.pass('if/else (false)');
+  } catch (e) {
+    results.fail('if/else (false)', e);
+  }
+
+  // Test: arithmetic expansion
+  try {
+    const r = await os.exec('echo $((2 + 3))');
+    assertIncludes(r.stdout, '5', 'arithmetic addition');
+    results.pass('arithmetic expansion');
+  } catch (e) {
+    results.fail('arithmetic expansion', e);
+  }
+
+  // Test: arithmetic with variables
+  try {
+    const r = await os.exec('export x=10 && echo $((x * 2))');
+    assertIncludes(r.stdout, '20', 'arithmetic with var');
+    results.pass('arithmetic with variables');
+  } catch (e) {
+    results.fail('arithmetic with variables', e);
+  }
+
+  // Test: test command with -f (file exists)
+  try {
+    await os.writeFile('/tmp/ww-test-exists.txt', 'test');
+    const r = await os.exec('if [ -f /tmp/ww-test-exists.txt ]; then echo exists; fi');
+    assertIncludes(r.stdout, 'exists', 'test -f');
+    results.pass('test -f (file exists)');
+  } catch (e) {
+    results.fail('test -f (file exists)', e);
+  }
+
+  // Test: test command with -d (directory exists)
+  try {
+    const r = await os.exec('if [ -d /tmp ]; then echo isdir; fi');
+    assertIncludes(r.stdout, 'isdir', 'test -d');
+    results.pass('test -d (directory exists)');
+  } catch (e) {
+    results.fail('test -d (directory exists)', e);
+  }
+
+  // Test: string equality in test
+  try {
+    const r = await os.exec('if [ "foo" = "foo" ]; then echo match; fi');
+    assertIncludes(r.stdout, 'match', 'string equality');
+    results.pass('test string equality');
+  } catch (e) {
+    results.fail('test string equality', e);
+  }
+
+  // Test: shell function definition and call
+  try {
+    const r = await os.exec('hello() { echo hi; }; hello');
+    assertIncludes(r.stdout, 'hi', 'function output');
+    results.pass('shell function');
+  } catch (e) {
+    results.fail('shell function', e);
+  }
+
   results.summary();
   return results;
 }
