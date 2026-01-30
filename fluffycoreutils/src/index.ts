@@ -1,6 +1,7 @@
 export type { FluffyCommand, FluffyFS, FluffyEntry, FluffyStat, CommandIO, CommandResult } from "./types.js";
 
 // Command imports
+import { awk } from "./commands/awk.js";
 import { basename } from "./commands/basename.js";
 import { cat } from "./commands/cat.js";
 import { chmod } from "./commands/chmod.js";
@@ -27,6 +28,7 @@ import { mv } from "./commands/mv.js";
 import { printf } from "./commands/printf.js";
 import { pwd } from "./commands/pwd.js";
 import { readlink } from "./commands/readlink.js";
+import { realpath } from "./commands/realpath.js";
 import { rm } from "./commands/rm.js";
 import { sed } from "./commands/sed.js";
 import { seq } from "./commands/seq.js";
@@ -49,9 +51,9 @@ import type { FluffyCommand } from "./types.js";
 
 // Re-export individual commands
 export {
-  basename, cat, chmod, clear, cp, curl, cut, date, diff, dirname,
+  awk, basename, cat, chmod, clear, cp, curl, cut, date, diff, dirname,
   echo, env, exportCmd, find, grep, head, hostname, less, ln, ls, mkdir, mv,
-  printf, pwd, readlink, rm, sed, seq, sort, tail, tar, tee, test, touch,
+  printf, pwd, readlink, realpath, rm, sed, seq, sort, tail, tar, tee, test, touch,
   tr, uniq, uname, wc, which, whoami, xargs,
   falseCmd as false,
   trueCmd as true,
@@ -59,9 +61,9 @@ export {
 
 /** All commands as a name→command map for easy registration in a shell. */
 export const allCommands: Record<string, FluffyCommand> = {
-  basename, cat, chmod, clear, cp, curl, cut, date, diff, dirname,
+  awk, basename, cat, chmod, clear, cp, curl, cut, date, diff, dirname,
   echo, env, export: exportCmd, false: falseCmd, find, grep, head, hostname, less, ln,
-  ls, mkdir, mv, printf, pwd, readlink, rm, sed, seq, sort, tail, tar,
+  ls, mkdir, mv, printf, pwd, readlink, realpath, rm, sed, seq, sort, tail, tar,
   tee, test, touch, tr, true: trueCmd, uniq, uname, wc, which, whoami, xargs,
 };
 

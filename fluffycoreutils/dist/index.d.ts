@@ -1,4 +1,5 @@
 export type { FluffyCommand, FluffyFS, FluffyEntry, FluffyStat, CommandIO, CommandResult } from "./types.js";
+import { awk } from "./commands/awk.js";
 import { basename } from "./commands/basename.js";
 import { cat } from "./commands/cat.js";
 import { chmod } from "./commands/chmod.js";
@@ -25,6 +26,7 @@ import { mv } from "./commands/mv.js";
 import { printf } from "./commands/printf.js";
 import { pwd } from "./commands/pwd.js";
 import { readlink } from "./commands/readlink.js";
+import { realpath } from "./commands/realpath.js";
 import { rm } from "./commands/rm.js";
 import { sed } from "./commands/sed.js";
 import { seq } from "./commands/seq.js";
@@ -43,7 +45,7 @@ import { which } from "./commands/which.js";
 import { whoami } from "./commands/whoami.js";
 import { xargs } from "./commands/xargs.js";
 import type { FluffyCommand } from "./types.js";
-export { basename, cat, chmod, clear, cp, curl, cut, date, diff, dirname, echo, env, exportCmd, find, grep, head, hostname, less, ln, ls, mkdir, mv, printf, pwd, readlink, rm, sed, seq, sort, tail, tar, tee, test, touch, tr, uniq, uname, wc, which, whoami, xargs, falseCmd as false, trueCmd as true, };
+export { awk, basename, cat, chmod, clear, cp, curl, cut, date, diff, dirname, echo, env, exportCmd, find, grep, head, hostname, less, ln, ls, mkdir, mv, printf, pwd, readlink, realpath, rm, sed, seq, sort, tail, tar, tee, test, touch, tr, uniq, uname, wc, which, whoami, xargs, falseCmd as false, trueCmd as true, };
 /** All commands as a name→command map for easy registration in a shell. */
 export declare const allCommands: Record<string, FluffyCommand>;
 /** Array of all commands for iteration. */
