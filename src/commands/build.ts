@@ -16,10 +16,71 @@ import * as esbuild from 'esbuild-wasm';
  *   - Tree shaking and minification
  *   - Source maps
  *   - Custom virtual FS plugin for browser filesystem
+ *   - WASM binary cached in IndexedDB for fast subsequent loads
  */
+
+const ESBUILD_WASM_URL = 'https://unpkg.com/esbuild-wasm@0.27.2/esbuild.wasm';
+const WASM_CACHE_DB = 'shiro-wasm-cache';
+const WASM_CACHE_STORE = 'wasm-binaries';
+const WASM_CACHE_KEY = 'esbuild-0.27.2';
 
 let esbuildInitialized = false;
 let initPromise: Promise<void> | null = null;
+
+/**
+ * Open/create the IndexedDB database for WASM binary caching
+ */
+function openWasmCacheDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(WASM_CACHE_DB, 1);
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(WASM_CACHE_STORE)) {
+        db.createObjectStore(WASM_CACHE_STORE);
+      }
+    };
+  });
+}
+
+/**
+ * Get cached WASM binary from IndexedDB
+ */
+async function getCachedWasm(): Promise<ArrayBuffer | null> {
+  try {
+    const db = await openWasmCacheDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(WASM_CACHE_STORE, 'readonly');
+      const store = tx.objectStore(WASM_CACHE_STORE);
+      const request = store.get(WASM_CACHE_KEY);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => resolve(null);
+      tx.oncomplete = () => db.close();
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Store WASM binary in IndexedDB for future sessions
+ */
+async function cacheWasm(wasmBinary: ArrayBuffer): Promise<void> {
+  try {
+    const db = await openWasmCacheDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(WASM_CACHE_STORE, 'readwrite');
+      const store = tx.objectStore(WASM_CACHE_STORE);
+      const request = store.put(wasmBinary, WASM_CACHE_KEY);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+      tx.oncomplete = () => db.close();
+    });
+  } catch {
+    // Caching failure is non-fatal, just means next session will re-download
+  }
+}
 
 async function ensureEsbuildInitialized(): Promise<void> {
   if (esbuildInitialized) return;
@@ -31,13 +92,30 @@ async function ensureEsbuildInitialized(): Promise<void> {
 
   initPromise = (async () => {
     try {
-      // Initialize esbuild-wasm — use worker:false to avoid web worker
-      // issues in browser OS context, and a modern version with fixed
-      // WASM initialization (0.20.0 had Go WASM runtime bugs)
-      await esbuild.initialize({
-        wasmURL: 'https://unpkg.com/esbuild-wasm@0.27.2/esbuild.wasm',
-        worker: false,
-      });
+      // Try to load WASM from cache first
+      let wasmBinary = await getCachedWasm();
+
+      if (wasmBinary) {
+        // Use cached WASM binary
+        await esbuild.initialize({
+          wasmModule: await WebAssembly.compile(wasmBinary),
+          worker: false,
+        });
+      } else {
+        // Download and cache for future sessions
+        const response = await fetch(ESBUILD_WASM_URL);
+        wasmBinary = await response.arrayBuffer();
+
+        // Initialize with downloaded WASM
+        await esbuild.initialize({
+          wasmModule: await WebAssembly.compile(wasmBinary),
+          worker: false,
+        });
+
+        // Cache for next time (fire and forget)
+        cacheWasm(wasmBinary);
+      }
+
       esbuildInitialized = true;
     } catch (e: any) {
       initPromise = null;

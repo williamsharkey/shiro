@@ -14,7 +14,18 @@ import { maxSatisfying, satisfiesRange } from '../utils/semver-utils';
  * Downloads real tarballs from registry.npmjs.org (CORS-enabled)
  * Extracts to node_modules/ using browser-native DecompressionStream
  * Resolves dependency trees with semver
+ *
+ * Performance optimizations:
+ *   - Package metadata cached in memory with 1-hour TTL
+ *   - In-flight request deduplication prevents duplicate fetches
  */
+
+// Metadata cache: maps package name -> { data, timestamp }
+const metadataCache = new Map<string, { data: NpmPackageMetadata; timestamp: number }>();
+const METADATA_CACHE_TTL = 60 * 60 * 1000; // 1 hour in milliseconds
+
+// In-flight request deduplication: maps package name -> pending promise
+const pendingMetadataRequests = new Map<string, Promise<NpmPackageMetadata>>();
 
 interface PackageJson {
   name?: string;
@@ -73,8 +84,11 @@ export const npmCmd: Command = {
       ctx.stdout += '  ls                Alias for list\n';
       ctx.stdout += '  run <script>      Run a script from package.json\n';
       ctx.stdout += '  uninstall [pkg]   Remove a package\n';
+      ctx.stdout += '  cache clean       Clear the metadata cache\n';
+      ctx.stdout += '  cache status      Show cache statistics\n';
       ctx.stdout += '  --version         Show npm version\n';
       ctx.stdout += '\nNote: Downloads real tarballs from registry.npmjs.org\n';
+      ctx.stdout += 'Package metadata is cached for 1 hour to speed up installs.\n';
       return 0;
     }
 
@@ -98,6 +112,8 @@ export const npmCmd: Command = {
       case 'remove':
       case 'rm':
         return await npmUninstall(ctx);
+      case 'cache':
+        return await npmCache(ctx);
       default:
         ctx.stderr += `npm: unknown command '${subcommand}'\n`;
         ctx.stderr += "Run 'npm --help' for usage.\n";
@@ -139,25 +155,55 @@ async function npmInit(ctx: CommandContext): Promise<number> {
 }
 
 /**
- * Fetch package metadata from npm registry
+ * Fetch package metadata from npm registry with caching and deduplication
  */
 async function fetchPackageMetadata(packageName: string): Promise<NpmPackageMetadata> {
-  const registryUrl = `https://registry.npmjs.org/${packageName}`;
-
-  const response = await fetch(registryUrl, {
-    headers: {
-      'Accept': 'application/json',
-    },
-  });
-
-  if (!response.ok) {
-    if (response.status === 404) {
-      throw new Error(`Package '${packageName}' not found in npm registry`);
-    }
-    throw new Error(`Failed to fetch package metadata: ${response.statusText}`);
+  // Check in-memory cache first
+  const cached = metadataCache.get(packageName);
+  if (cached && (Date.now() - cached.timestamp) < METADATA_CACHE_TTL) {
+    return cached.data;
   }
 
-  return await response.json();
+  // Check if there's already a pending request for this package
+  const pending = pendingMetadataRequests.get(packageName);
+  if (pending) {
+    return pending;
+  }
+
+  // Create new request with deduplication
+  const requestPromise = (async () => {
+    const registryUrl = `https://registry.npmjs.org/${packageName}`;
+
+    const response = await fetch(registryUrl, {
+      headers: {
+        'Accept': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        throw new Error(`Package '${packageName}' not found in npm registry`);
+      }
+      throw new Error(`Failed to fetch package metadata: ${response.statusText}`);
+    }
+
+    const data: NpmPackageMetadata = await response.json();
+
+    // Cache the result
+    metadataCache.set(packageName, { data, timestamp: Date.now() });
+
+    return data;
+  })();
+
+  // Register the pending request
+  pendingMetadataRequests.set(packageName, requestPromise);
+
+  try {
+    return await requestPromise;
+  } finally {
+    // Clean up pending request
+    pendingMetadataRequests.delete(packageName);
+  }
 }
 
 /**
@@ -585,4 +631,46 @@ async function npmUninstall(ctx: CommandContext): Promise<number> {
   await ctx.fs.writeFile(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
 
   return 0;
+}
+
+async function npmCache(ctx: CommandContext): Promise<number> {
+  const action = ctx.args[1];
+
+  if (!action || action === '--help') {
+    ctx.stdout += 'Usage: npm cache <command>\n\n';
+    ctx.stdout += 'Commands:\n';
+    ctx.stdout += '  clean     Clear the metadata cache\n';
+    ctx.stdout += '  status    Show cache statistics\n';
+    return 0;
+  }
+
+  switch (action) {
+    case 'clean':
+    case 'clear':
+      const size = metadataCache.size;
+      metadataCache.clear();
+      ctx.stdout += `Cleared ${size} cached package metadata entries.\n`;
+      return 0;
+
+    case 'status':
+    case 'ls':
+      ctx.stdout += 'npm metadata cache:\n';
+      ctx.stdout += `  Cached packages: ${metadataCache.size}\n`;
+      ctx.stdout += `  TTL: ${METADATA_CACHE_TTL / 1000 / 60} minutes\n`;
+      if (metadataCache.size > 0) {
+        ctx.stdout += '\n  Cached entries:\n';
+        const now = Date.now();
+        for (const [name, { timestamp }] of metadataCache) {
+          const ageSeconds = Math.floor((now - timestamp) / 1000);
+          const ageMinutes = Math.floor(ageSeconds / 60);
+          const remaining = Math.floor((METADATA_CACHE_TTL - (now - timestamp)) / 1000 / 60);
+          ctx.stdout += `    ${name} (age: ${ageMinutes}m, expires in: ${remaining}m)\n`;
+        }
+      }
+      return 0;
+
+    default:
+      ctx.stderr += `npm cache: unknown command '${action}'\n`;
+      return 1;
+  }
 }
