@@ -171,9 +171,10 @@ Shell implementers: Parse array syntax at the variable expansion level.
         e.fs,
         e.cwd,
         e.fs.resolvePath
-      ), c = a.split(`
-`).filter((p) => p !== "" || a.endsWith(`
-`)), l = [], d = o.match(/BEGIN\s*\{\s*([^}]*)\s*\}/), u = o.match(/END\s*\{\s*([^}]*)\s*\}/), f = o.match(/(?:\/([^/]*)\/\s*)?\{\s*([^}]*)\s*\}/);
+      ), c = a.endsWith(`
+`) ? a.slice(0, -1).split(`
+`) : a.split(`
+`), l = [], d = o.match(/BEGIN\s*\{\s*([^}]*)\s*\}/), u = o.match(/END\s*\{\s*([^}]*)\s*\}/), f = o.match(/(?:\/([^/]*)\/\s*)?\{\s*([^}]*)\s*\}/);
       if (d) {
         const p = executeAction(d[1], [], i);
         p && l.push(p);
@@ -2319,21 +2320,24 @@ const fold = {
   name: "head",
   description: "Output the first part of files",
   async exec(n, e) {
-    const { values: t, positional: s } = parseArgs(n, ["n"]), o = parseInt(t.n ?? "10", 10);
+    const t = n.flatMap((i) => {
+      const a = i.match(/^-(\d+)$/);
+      return a ? ["-n", a[1]] : [i];
+    }), { values: s, positional: o } = parseArgs(t, ["n"]), r = parseInt(s.n ?? "10", 10);
     try {
-      const { content: r } = await readInput(
-        s,
+      const { content: i } = await readInput(
+        o,
         e.stdin,
         e.fs,
         e.cwd,
         e.fs.resolvePath
       );
-      return { stdout: r.split(`
-`).slice(0, o).join(`
+      return { stdout: i.split(`
+`).slice(0, r).join(`
 `) + `
 `, stderr: "", exitCode: 0 };
-    } catch (r) {
-      return { stdout: "", stderr: `head: ${r instanceof Error ? r.message : r}
+    } catch (i) {
+      return { stdout: "", stderr: `head: ${i instanceof Error ? i.message : i}
 `, exitCode: 1 };
     }
   }
@@ -4264,21 +4268,24 @@ const tail = {
   name: "tail",
   description: "Output the last part of files",
   async exec(n, e) {
-    const { values: t, positional: s } = parseArgs(n, ["n"]), o = parseInt(t.n ?? "10", 10);
+    const t = n.flatMap((i) => {
+      const a = i.match(/^-(\d+)$/);
+      return a ? ["-n", a[1]] : [i];
+    }), { values: s, positional: o } = parseArgs(t, ["n"]), r = parseInt(s.n ?? "10", 10);
     try {
-      const { content: r } = await readInput(
-        s,
+      const { content: i } = await readInput(
+        o,
         e.stdin,
         e.fs,
         e.cwd,
         e.fs.resolvePath
       );
-      return { stdout: r.split(`
-`).slice(-o).join(`
+      return { stdout: i.split(`
+`).slice(-r).join(`
 `) + `
 `, stderr: "", exitCode: 0 };
-    } catch (r) {
-      return { stdout: "", stderr: `tail: ${r instanceof Error ? r.message : r}
+    } catch (i) {
+      return { stdout: "", stderr: `tail: ${i instanceof Error ? i.message : i}
 `, exitCode: 1 };
     }
   }

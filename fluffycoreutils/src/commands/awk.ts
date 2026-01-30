@@ -44,7 +44,7 @@ export const awk: FluffyCommand = {
         io.fs.resolvePath
       );
 
-      const lines = content.split("\n").filter(line => line !== "" || content.endsWith("\n"));
+      const lines = content.endsWith("\n") ? content.slice(0, -1).split("\n") : content.split("\n");
       const output: string[] = [];
 
       // Parse the AWK program (simplified - supports basic patterns and actions)

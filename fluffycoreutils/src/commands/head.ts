@@ -5,7 +5,12 @@ export const head: FluffyCommand = {
   name: "head",
   description: "Output the first part of files",
   async exec(args, io) {
-    const { values, positional } = parseArgs(args, ["n"]);
+    // Rewrite POSIX shorthand -N to -n N
+    const rewritten = args.flatMap(a => {
+      const m = a.match(/^-(\d+)$/);
+      return m ? ["-n", m[1]] : [a];
+    });
+    const { values, positional } = parseArgs(rewritten, ["n"]);
     const n = parseInt(values.n ?? "10", 10);
     try {
       const { content } = await readInput(
