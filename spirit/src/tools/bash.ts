@@ -4,7 +4,7 @@ import type { ToolDefinition } from "../types.js";
 export const bashTool: ToolDefinition = {
   name: "Bash",
   description:
-    "Execute a shell command in the virtual terminal. Available commands include: ls, cat, head, tail, echo, mkdir, rm, cp, mv, touch, grep, sort, uniq, wc, tee, git, cd, pwd, env, export, and more.",
+    "Execute a shell command in the virtual terminal. Supports Unix commands, dev tools (node, npm, git, etc.), pipes, redirects, and shell operators.",
   input_schema: {
     type: "object",
     properties: {

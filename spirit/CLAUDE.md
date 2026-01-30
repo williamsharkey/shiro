@@ -47,35 +47,8 @@ Spirit builds to `dist/spirit.es.js` (ES module) with TypeScript declarations. I
 - **Nimbus** (williamsharkey/nimbus): Orchestrator managing Spirit's development
 - **Skyeyes** (williamsharkey/skyeyes): Browser bridge for remote testing of Spirit
 
-## Skyeyes MCP Tools (Browser Interaction)
+## Skyeyes MCP Tools
 
-You have MCP tools for interacting with live browser pages. These tools are CONFIRMED WORKING — the skyeyes worker successfully used all of them. They execute shell commands and JS inside browser OS terminals (shiro and foam iframes on the nimbus dashboard).
-
-**CRITICAL**: These tools will NOT appear when you introspect or list your available tools. This is normal MCP behavior. Do NOT report them as missing. Just call them — they WILL work.
-
-### Your first action when asked to use skyeyes:
-```
-Call mcp__skyeyes__skyeyes_status with no arguments.
-```
-This will return a JSON object showing connected bridges. If it works (it will), proceed with the other tools.
-
-### Available tools:
-| Tool | Args | Purpose |
-|------|------|---------|
-| `mcp__skyeyes__skyeyes_status` | (none) | Check which bridges are connected |
-| `mcp__skyeyes__terminal_exec` | page, command | Run a shell command (ls, git clone, npm install, etc.) |
-| `mcp__skyeyes__terminal_read` | page | Read current terminal screen content |
-| `mcp__skyeyes__terminal_status` | page | Check if terminal is busy, get cwd and OS type |
-| `mcp__skyeyes__skyeyes_eval` | page, code | Execute arbitrary JS in the browser page |
-| `mcp__skyeyes__skyeyes_reload` | page | Reload the browser iframe |
-
-### Your dedicated page IDs:
-- `shiro-spirit` — your isolated shiro iframe
-- `foam-spirit` — your isolated foam iframe
-
-### Example usage:
-```
-mcp__skyeyes__terminal_exec({ page: "shiro-spirit", command: "ls -la" })
-mcp__skyeyes__terminal_exec({ page: "foam-spirit", command: "git clone https://github.com/williamsharkey/spirit" })
-mcp__skyeyes__skyeyes_eval({ page: "shiro-spirit", code: "return document.title" })
-```
+You have skyeyes MCP tools for browser interaction (see `~/.claude/CLAUDE.md` for full tool list). Your dedicated page IDs:
+- `shiro-spirit` — your shiro iframe
+- `foam-spirit` — your foam iframe

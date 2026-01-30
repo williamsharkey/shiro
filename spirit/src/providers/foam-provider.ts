@@ -192,6 +192,20 @@ export class FoamProvider implements OSProvider {
   // -- Host info --
 
   getHostInfo(): HostInfo {
-    return { name: "Foam", version: "0.1.0" };
+    return {
+      name: "Foam",
+      version: "0.1.0",
+      capabilities: {
+        runtimes: ["node", "python"],
+        buildTools: [],
+        packageManagers: ["npm", "pip"],
+        git: true,
+        extraCommands: ["npx"],
+        fsRoots: ["/"],
+        notes: [
+          "Node.js, Python, npm, and pip are available for development.",
+        ],
+      },
+    };
   }
 }

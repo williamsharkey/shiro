@@ -6,6 +6,20 @@
  *   FileSystem — readFile(path, 'utf8'), writeFile(path, string), mkdir, readdir (string[]), stat, etc.
  *   Shell      — execute(line, write: (s: string) => void): Promise<number>, cwd, env
  *   Terminal   — writeOutput(text: string)
+ *
+ * IMPORTANT INTEGRATION REQUIREMENT:
+ * The readFromUser() method creates a pending promise that must be resolved
+ * by the parent application. When initializing ShiroProvider in your app:
+ *
+ * 1. Store a reference to the provider instance
+ * 2. In your terminal's input handler, check if Spirit is waiting for input
+ * 3. Call provider.resolveUserInput(inputText) to resolve the promise
+ *
+ * Example:
+ *   const provider = new ShiroProvider(fs, shell, terminal);
+ *   terminal.onInput = (input) => {
+ *     provider.resolveUserInput(input);  // Resolve any pending readFromUser()
+ *   };
  */
 
 import type {
@@ -210,6 +224,20 @@ export class ShiroProvider implements OSProvider {
   // -- Host info --
 
   getHostInfo(): HostInfo {
-    return { name: "Shiro", version: "0.1.0" };
+    return {
+      name: "Shiro",
+      version: "0.1.0",
+      capabilities: {
+        runtimes: ["node"],
+        buildTools: ["build", "make"],
+        packageManagers: ["npm"],
+        git: true,
+        extraCommands: ["curl", "fetch", "tar", "vi", "awk", "sed", "gcc"],
+        fsRoots: ["/"],
+        notes: [
+          "Node.js and npm are available — use them for running scripts and installing packages.",
+        ],
+      },
+    };
   }
 }

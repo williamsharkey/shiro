@@ -13,6 +13,7 @@ const SLASH_COMMANDS: Record<string, string> = {
   "/thinking": "Toggle extended thinking (e.g., /thinking 10000)",
   "/cost": "Show estimated API cost",
   "/history": "Show conversation turn count",
+  "/env": "Show dev environment capabilities",
   "/abort": "Cancel current run",
 };
 
@@ -181,6 +182,26 @@ export class SpiritAgent {
           handled: true,
           output: `Messages: ${msgCount}  Turns: ${s.turns}  Tool calls: ${s.toolCalls}`,
         };
+      }
+
+      case "/env": {
+        const hostInfo = this.provider.getHostInfo();
+        const caps = hostInfo.capabilities;
+        if (!caps) {
+          return { handled: true, output: `${hostInfo.name} v${hostInfo.version}\nNo dev capabilities declared.` };
+        }
+        const envLines = [`${hostInfo.name} v${hostInfo.version} — Dev Environment`];
+        if (caps.runtimes.length) envLines.push(`Runtimes:         ${caps.runtimes.join(", ")}`);
+        if (caps.packageManagers.length) envLines.push(`Package managers:  ${caps.packageManagers.join(", ")}`);
+        if (caps.buildTools.length) envLines.push(`Build tools:       ${caps.buildTools.join(", ")}`);
+        envLines.push(`Git:               ${caps.git ? "yes" : "no"}`);
+        if (caps.extraCommands.length) envLines.push(`Extra commands:    ${caps.extraCommands.join(", ")}`);
+        if (caps.fsRoots.length) envLines.push(`FS roots:          ${caps.fsRoots.join(", ")}`);
+        if (caps.notes.length) {
+          envLines.push("");
+          for (const note of caps.notes) envLines.push(`  ${note}`);
+        }
+        return { handled: true, output: envLines.join("\n") };
       }
 
       case "/abort":

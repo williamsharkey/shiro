@@ -20,9 +20,20 @@ export interface ShellResult {
   exitCode: number;
 }
 
+export interface DevCapabilities {
+  runtimes: string[];
+  buildTools: string[];
+  packageManagers: string[];
+  git: boolean;
+  extraCommands: string[];
+  fsRoots: string[];
+  notes: string[];
+}
+
 export interface HostInfo {
   name: string;
   version: string;
+  capabilities?: DevCapabilities;
 }
 
 export interface OSProvider {
