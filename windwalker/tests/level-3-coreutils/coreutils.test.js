@@ -538,6 +538,75 @@ export default async function run(page, osTarget) {
     results.fail('tail -n 1', e);
   }
 
+  // Test: grep -c (count matches)
+  try {
+    const r = await os.exec('grep -c "a" /tmp/ww-core-a.txt');
+    // alpha, bravo, charlie, delta all contain 'a'
+    assertIncludes(r.stdout, '4', 'grep -c count');
+    results.pass('grep -c');
+  } catch (e) {
+    results.fail('grep -c', e);
+  }
+
+  // Test: head with pipe
+  try {
+    await os.writeFile('/tmp/ww-headp.txt', '1\n2\n3\n4\n5');
+    const r = await os.exec('cat /tmp/ww-headp.txt | head -n 2');
+    assertIncludes(r.stdout, '1', 'head pipe 1');
+    assertIncludes(r.stdout, '2', 'head pipe 2');
+    assert(!r.stdout.includes('3'), 'head pipe no 3');
+    results.pass('head with pipe');
+  } catch (e) {
+    results.fail('head with pipe', e);
+  }
+
+  // Test: sort -u (unique)
+  try {
+    await os.writeFile('/tmp/ww-sortu.txt', 'a\nb\na\nc\nb');
+    const r = await os.exec('sort -u /tmp/ww-sortu.txt');
+    const lines = r.stdout.trim().split(/\r?\n/);
+    assertEqual(lines.length, 3, 'sort -u unique count');
+    results.pass('sort -u');
+  } catch (e) {
+    results.fail('sort -u', e);
+  }
+
+  // Test: cp -r (recursive)
+  try {
+    await os.exec('mkdir -p /tmp/ww-cp-src/sub');
+    await os.writeFile('/tmp/ww-cp-src/top.txt', 'top');
+    await os.writeFile('/tmp/ww-cp-src/sub/bot.txt', 'bot');
+    await os.exec('cp -r /tmp/ww-cp-src /tmp/ww-cp-dst');
+    const top = await os.readFile('/tmp/ww-cp-dst/top.txt');
+    const bot = await os.readFile('/tmp/ww-cp-dst/sub/bot.txt');
+    assertEqual(top, 'top', 'cp -r top');
+    assertEqual(bot, 'bot', 'cp -r bot');
+    results.pass('cp -r');
+  } catch (e) {
+    results.fail('cp -r', e);
+  }
+
+  // Test: echo with -e (escape sequences)
+  try {
+    const r = await os.exec('echo -e "line1\\nline2"');
+    assertIncludes(r.stdout, 'line1', 'echo -e line1');
+    assertIncludes(r.stdout, 'line2', 'echo -e line2');
+    results.pass('echo -e');
+  } catch (e) {
+    results.fail('echo -e', e);
+  }
+
+  // Test: touch existing file
+  try {
+    await os.writeFile('/tmp/ww-touch-existing.txt', 'original');
+    await os.exec('touch /tmp/ww-touch-existing.txt');
+    const content = await os.readFile('/tmp/ww-touch-existing.txt');
+    assertEqual(content, 'original', 'touch preserves content');
+    results.pass('touch existing file');
+  } catch (e) {
+    results.fail('touch existing file', e);
+  }
+
   results.summary();
   return results;
 }

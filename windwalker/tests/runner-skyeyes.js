@@ -27,6 +27,7 @@ const SUITES = [
   { name: 'level-7-workflows',  path: './level-7-workflows/workflows.test.js' },
   { name: 'level-8-fluffycoreutils', path: './level-8-fluffycoreutils/fluffycoreutils.test.js' },
   { name: 'level-9-selfbuild', path: './level-9-selfbuild/selfbuild.test.js' },
+  { name: 'level-10-hypercompact', path: './level-10-hypercompact/hypercompact.test.js' },
 ];
 
 // Skyeyes page names for each OS (must match what's configured in skyeyes)
