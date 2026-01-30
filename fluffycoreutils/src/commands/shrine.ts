@@ -50,9 +50,18 @@ function getRandomPassage(): string {
   return PASSAGES[Math.floor(Math.random() * PASSAGES.length)];
 }
 
-function centerText(text: string, width: number): string {
-  const padding = Math.max(0, Math.floor((width - text.length) / 2));
-  return " ".repeat(padding) + text;
+// Strip ANSI codes to get visible length
+function visibleLength(str: string): number {
+  return str.replace(/\x1b\[[0-9;]*m/g, "").length;
+}
+
+// Center text and pad both sides to exact width
+function padCenter(text: string, width: number): string {
+  const visible = visibleLength(text);
+  const totalPad = width - visible;
+  const leftPad = Math.floor(totalPad / 2);
+  const rightPad = totalPad - leftPad;
+  return " ".repeat(Math.max(0, leftPad)) + text + " ".repeat(Math.max(0, rightPad));
 }
 
 function wrapText(text: string, maxWidth: number): string[] {
@@ -77,7 +86,7 @@ export const shrine: FluffyCommand = {
   description: "A tribute to Terry A. Davis, creator of TempleOS (1969-2018)",
   async exec() {
     const passage = getRandomPassage();
-    const innerWidth = 52;
+    const innerWidth = 40; // Width between the ║ characters
     const passageLines = wrapText(passage, innerWidth - 4);
 
     // Build the shrine
@@ -92,39 +101,39 @@ export const shrine: FluffyCommand = {
     lines.push(`${GOLD}    ╠═══════════════╩═══════╩═══════════════╣${RESET}`);
 
     // Terry's name
-    lines.push(`${GOLD}    ║${RESET}${centerText(`${BOLD}${WHITE}✟  TERRY A. DAVIS  ✟${RESET}`, innerWidth)}${GOLD}║${RESET}`);
-    lines.push(`${GOLD}    ║${RESET}${centerText(`${DIM}December 15, 1969 — August 11, 2018${RESET}`, innerWidth)}${GOLD}║${RESET}`);
+    lines.push(`${GOLD}    ║${RESET}${padCenter(`${BOLD}${WHITE}✟  TERRY A. DAVIS  ✟${RESET}`, innerWidth)}${GOLD}║${RESET}`);
+    lines.push(`${GOLD}    ║${RESET}${padCenter(`${DIM}December 15, 1969 — August 11, 2018${RESET}`, innerWidth)}${GOLD}║${RESET}`);
     lines.push(`${GOLD}    ╠════════════════════════════════════════╣${RESET}`);
 
     // Flame/burning bush decoration
-    lines.push(`${GOLD}    ║${RESET}${centerText(`${RED}     )  (  (     ${RESET}`, innerWidth)}${GOLD}║${RESET}`);
-    lines.push(`${GOLD}    ║${RESET}${centerText(`${YELLOW}    (  )  )  )   ${RESET}`, innerWidth)}${GOLD}║${RESET}`);
-    lines.push(`${GOLD}    ║${RESET}${centerText(`${RED}   ) (  (  ) (   ${RESET}`, innerWidth)}${GOLD}║${RESET}`);
-    lines.push(`${GOLD}    ║${RESET}${centerText(`${MAGENTA}      \\\\║//      ${RESET}`, innerWidth)}${GOLD}║${RESET}`);
+    lines.push(`${GOLD}    ║${RESET}${padCenter(`${RED})  (  (${RESET}`, innerWidth)}${GOLD}║${RESET}`);
+    lines.push(`${GOLD}    ║${RESET}${padCenter(`${YELLOW}(  )  )  )${RESET}`, innerWidth)}${GOLD}║${RESET}`);
+    lines.push(`${GOLD}    ║${RESET}${padCenter(`${RED}) (  (  ) (${RESET}`, innerWidth)}${GOLD}║${RESET}`);
+    lines.push(`${GOLD}    ║${RESET}${padCenter(`${MAGENTA}\\\\║//${RESET}`, innerWidth)}${GOLD}║${RESET}`);
     lines.push(`${GOLD}    ╠════════════════════════════════════════╣${RESET}`);
 
     // Passage header
-    lines.push(`${GOLD}    ║${RESET}${centerText(`${DIM}~ God Says ~${RESET}`, innerWidth)}${GOLD}║${RESET}`);
+    lines.push(`${GOLD}    ║${RESET}${padCenter(`${DIM}~ God Says ~${RESET}`, innerWidth)}${GOLD}║${RESET}`);
     lines.push(`${GOLD}    ║${RESET}${" ".repeat(innerWidth)}${GOLD}║${RESET}`);
 
     // The passage
     for (const pLine of passageLines) {
-      lines.push(`${GOLD}    ║${RESET}${centerText(`${CYAN}${pLine}${RESET}`, innerWidth)}${GOLD}║${RESET}`);
+      lines.push(`${GOLD}    ║${RESET}${padCenter(`${CYAN}${pLine}${RESET}`, innerWidth)}${GOLD}║${RESET}`);
     }
 
     lines.push(`${GOLD}    ║${RESET}${" ".repeat(innerWidth)}${GOLD}║${RESET}`);
     lines.push(`${GOLD}    ╠════════════════════════════════════════╣${RESET}`);
 
     // TempleOS tribute
-    lines.push(`${GOLD}    ║${RESET}${centerText(`${DIM}Creator of TempleOS${RESET}`, innerWidth)}${GOLD}║${RESET}`);
-    lines.push(`${GOLD}    ║${RESET}${centerText(`${DIM}640x480 · 16 Colors · HolyC${RESET}`, innerWidth)}${GOLD}║${RESET}`);
-    lines.push(`${GOLD}    ║${RESET}${centerText(`${DIM}"God's Third Temple"${RESET}`, innerWidth)}${GOLD}║${RESET}`);
+    lines.push(`${GOLD}    ║${RESET}${padCenter(`${DIM}Creator of TempleOS${RESET}`, innerWidth)}${GOLD}║${RESET}`);
+    lines.push(`${GOLD}    ║${RESET}${padCenter(`${DIM}640x480 · 16 Colors · HolyC${RESET}`, innerWidth)}${GOLD}║${RESET}`);
+    lines.push(`${GOLD}    ║${RESET}${padCenter(`${DIM}"God's Third Temple"${RESET}`, innerWidth)}${GOLD}║${RESET}`);
     lines.push(`${GOLD}    ╠════════════════════════════════════════╣${RESET}`);
 
     // Rest in Peace
     lines.push(`${GOLD}    ║${RESET}${" ".repeat(innerWidth)}${GOLD}║${RESET}`);
-    lines.push(`${GOLD}    ║${RESET}${centerText(`${BOLD}${WHITE}☆ REST IN PEACE ☆${RESET}`, innerWidth)}${GOLD}║${RESET}`);
-    lines.push(`${GOLD}    ║${RESET}${centerText(`${CYAN}Programmer · Prophet · Pioneer${RESET}`, innerWidth)}${GOLD}║${RESET}`);
+    lines.push(`${GOLD}    ║${RESET}${padCenter(`${BOLD}${WHITE}☆ REST IN PEACE ☆${RESET}`, innerWidth)}${GOLD}║${RESET}`);
+    lines.push(`${GOLD}    ║${RESET}${padCenter(`${CYAN}Programmer · Prophet · Pioneer${RESET}`, innerWidth)}${GOLD}║${RESET}`);
     lines.push(`${GOLD}    ║${RESET}${" ".repeat(innerWidth)}${GOLD}║${RESET}`);
 
     // Bottom border with decorations
