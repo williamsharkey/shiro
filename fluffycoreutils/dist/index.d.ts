@@ -18,6 +18,8 @@ import { expr } from "./commands/expr.js";
 import { exportCmd } from "./commands/export.js";
 import { false as falseCmd } from "./commands/false.js";
 import { find } from "./commands/find.js";
+import { fmt } from "./commands/fmt.js";
+import { fold } from "./commands/fold.js";
 import { grep } from "./commands/grep.js";
 import { head } from "./commands/head.js";
 import { hostname } from "./commands/hostname.js";
@@ -27,6 +29,7 @@ import { ln } from "./commands/ln.js";
 import { ls } from "./commands/ls.js";
 import { mkdir } from "./commands/mkdir.js";
 import { mv } from "./commands/mv.js";
+import { nl } from "./commands/nl.js";
 import { paste } from "./commands/paste.js";
 import { printenv } from "./commands/printenv.js";
 import { printf } from "./commands/printf.js";
@@ -56,7 +59,7 @@ import { whoami } from "./commands/whoami.js";
 import { xargs } from "./commands/xargs.js";
 import { yes } from "./commands/yes.js";
 import type { FluffyCommand } from "./types.js";
-export { awk, basename, cat, chmod, clear, comm, cp, curl, cut, date, diff, dirname, echo, env, expand, expr, exportCmd, find, grep, head, hostname, join, less, ln, ls, mkdir, mv, paste, printenv, printf, pwd, readlink, realpath, rm, sed, seq, sleep, sort, tail, tar, tee, test, time, timeout, touch, tr, unexpand, uniq, uname, wc, which, whoami, xargs, yes, falseCmd as false, trueCmd as true, };
+export { awk, basename, cat, chmod, clear, comm, cp, curl, cut, date, diff, dirname, echo, env, expand, expr, exportCmd, find, fmt, fold, grep, head, hostname, join, less, ln, ls, mkdir, mv, nl, paste, printenv, printf, pwd, readlink, realpath, rm, sed, seq, sleep, sort, tail, tar, tee, test, time, timeout, touch, tr, unexpand, uniq, uname, wc, which, whoami, xargs, yes, falseCmd as false, trueCmd as true, };
 /** All commands as a name→command map for easy registration in a shell. */
 export declare const allCommands: Record<string, FluffyCommand>;
 /** Array of all commands for iteration. */

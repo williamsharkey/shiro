@@ -2,12 +2,12 @@
 
 **Shared Unix coreutils for browser-based virtual operating systems**
 
-A TypeScript library providing 56 essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
+A TypeScript library providing 59 essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
 
 ## ✨ Features
 
 - 🌐 **Browser-Native**: Pure TypeScript implementation with no Node.js dependencies
-- 🔧 **56 Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `xargs`
+- 🔧 **59 Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `xargs`
 - 🎯 **Filesystem Agnostic**: Works with any virtual filesystem implementing the `FluffyFS` interface
 - 📦 **Tree-Shakeable**: Import only the commands you need
 - 🔒 **Type-Safe**: Full TypeScript definitions included
@@ -57,7 +57,7 @@ const shell = Object.fromEntries(
 - **awk** - Pattern scanning and text processing
 - **grep** - Search text using patterns
 - **sed** - Stream editor
-- **cut** - Cut out selected portions of lines
+- **cut** - Cut out selected portions of lines (-d delimiter, -f fields)
 - **paste** - Merge lines of files
 - **join** - Join lines based on common field
 - **comm** - Compare sorted files line by line
@@ -65,6 +65,9 @@ const shell = Object.fromEntries(
 - **uniq** - Report or filter repeated lines (enhanced with -i, -f, -s, -w, -u flags)
 - **tr** - Translate or delete characters
 - **diff** - Compare files line by line
+- **fold** - Wrap lines to specified width
+- **fmt** - Format text into paragraphs
+- **nl** - Number lines of files
 
 ### Path Utilities
 - **basename** - Strip directory from filename
