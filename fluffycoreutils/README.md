@@ -2,12 +2,12 @@
 
 **Shared Unix coreutils for browser-based virtual operating systems**
 
-A TypeScript library providing 79 essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
+A TypeScript library providing 88 essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
 
 ## ✨ Features
 
 - 🌐 **Browser-Native**: Pure TypeScript implementation with no Node.js dependencies
-- 🔧 **79 Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `make`
+- 🔧 **88 Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `make`
 - 🎯 **Filesystem Agnostic**: Works with any virtual filesystem implementing the `FluffyFS` interface
 - 📦 **Tree-Shakeable**: Import only the commands you need
 - 🔒 **Type-Safe**: Full TypeScript definitions included
@@ -110,6 +110,17 @@ const shell = Object.fromEntries(
 
 ### Shell Script Support
 - **source** / **.** - Execute commands from a file in the current shell context
+- **alias** - Define or display command aliases
+- **unalias** - Remove alias definitions
+- **exit** - Exit the shell with a status code
+- **return** - Return from a shell function
+- **break** - Exit from for, while, or until loop
+- **continue** - Continue to next iteration of loop
+- **shift** - Shift positional parameters
+- **read** - Read a line from stdin
+- **eval** - Evaluate and execute arguments as a command
+
+**Note**: Control flow structures (if/then/else, while/do/done, for/do/done, case/esac, function definitions) are shell language constructs that must be implemented at the shell interpreter level, not as individual commands. The commands above provide supporting functionality for shell scripts.
 
 ### Build & Package Tools
 - **make** - Build automation with basic Makefile support
