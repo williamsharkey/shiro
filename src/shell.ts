@@ -6,6 +6,14 @@ interface Redirect {
   target: string;
 }
 
+export interface BackgroundJob {
+  id: number;
+  command: string;
+  promise: Promise<number>;
+  status: 'running' | 'done' | 'failed';
+  exitCode: number;
+}
+
 export class Shell {
   fs: FileSystem;
   cwd: string = '/home/user';
@@ -14,6 +22,8 @@ export class Shell {
   commands: CommandRegistry;
   lastExitCode: number = 0;
   functions: Record<string, { body: string }> = {};
+  backgroundJobs: Map<number, BackgroundJob> = new Map();
+  private nextJobId = 1;
 
   constructor(fs: FileSystem, commands: CommandRegistry) {
     this.fs = fs;
@@ -40,6 +50,36 @@ export class Shell {
     return { stdout, stderr, exitCode };
   }
 
+  private executeBackground(
+    command: string,
+    writeStdout: (s: string) => void,
+    writeStderr?: (s: string) => void,
+  ): number {
+    const jobId = this.nextJobId++;
+    const stderrWriter = writeStderr || writeStdout;
+    const job: BackgroundJob = {
+      id: jobId,
+      command,
+      status: 'running',
+      exitCode: 0,
+      promise: this.execute(command, () => {}, stderrWriter).then(
+        (code) => {
+          job.status = code === 0 ? 'done' : 'failed';
+          job.exitCode = code;
+          return code;
+        },
+        (err) => {
+          job.status = 'failed';
+          job.exitCode = 1;
+          return 1;
+        },
+      ),
+    };
+    this.backgroundJobs.set(jobId, job);
+    writeStdout(`[${jobId}] started\n`);
+    return 0;
+  }
+
   async execute(
     line: string,
     writeStdout: (s: string) => void,
@@ -47,6 +87,14 @@ export class Shell {
   ): Promise<number> {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) return 0;
+
+    // Check for background execution (&)
+    if (trimmed.endsWith('&') && !trimmed.endsWith('&&')) {
+      const bgCmd = trimmed.slice(0, -1).trim();
+      if (bgCmd) {
+        return this.executeBackground(bgCmd, writeStdout, writeStderr);
+      }
+    }
 
     // Handle heredocs before anything else
     const heredoc = this.parseHeredoc(trimmed);

@@ -174,7 +174,7 @@ export const nodeCmd: Command = {
               const st = await ctx.fs.stat(fp);
               if (st.isDirectory()) {
                 await preloadDir(fp, depth + 1, maxDepth);
-              } else if (st.size < 500000) {
+              } else if (st.size < 1048576) { // 1MB limit
                 const content = await ctx.fs.readFile(fp, 'utf8');
                 fileCache.set(fp, content as string);
               }

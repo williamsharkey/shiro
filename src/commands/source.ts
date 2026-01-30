@@ -22,21 +22,48 @@ export const sourceCmd: Command = {
       return 1;
     }
 
-    // Execute each line in the current shell context
-    const lines = content.split(/\r?\n/);
+    // Group lines into logical blocks (heredocs, multi-line constructs)
+    const rawLines = content.split(/\r?\n/);
+    const blocks: string[] = [];
+    let i = 0;
+    while (i < rawLines.length) {
+      const line = rawLines[i];
+      const trimmed = line.trim();
+
+      // Check if this line starts a heredoc
+      const heredocMatch = trimmed.match(/<<-?\s*(?:'([^']+)'|"([^"]+)"|(\S+))/);
+      if (heredocMatch) {
+        const delimiter = heredocMatch[1] || heredocMatch[2] || heredocMatch[3];
+        // Collect all lines until the delimiter
+        const blockLines = [line];
+        i++;
+        while (i < rawLines.length) {
+          blockLines.push(rawLines[i]);
+          if (rawLines[i].trim() === delimiter) break;
+          i++;
+        }
+        blocks.push(blockLines.join('\n'));
+        i++;
+        continue;
+      }
+
+      blocks.push(line);
+      i++;
+    }
+
+    // Execute each block in the current shell context
     let exitCode = 0;
     let stdout = '';
     let stderr = '';
 
-    for (const line of lines) {
-      const trimmed = line.trim();
+    for (const block of blocks) {
+      const trimmed = block.trim();
       if (!trimmed || trimmed.startsWith('#')) continue;
 
       // Handle export VAR=value
       const exportMatch = trimmed.match(/^export\s+([A-Za-z_][A-Za-z0-9_]*)=(.*)/);
       if (exportMatch) {
         let val = exportMatch[2];
-        // Strip quotes
         if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
           val = val.slice(1, -1);
         }
@@ -57,8 +84,8 @@ export const sourceCmd: Command = {
         continue;
       }
 
-      // Execute as shell command
-      const result = await ctx.shell.exec(trimmed);
+      // Execute as shell command (block may be multi-line for heredocs)
+      const result = await ctx.shell.exec(block);
       stdout += result.stdout;
       stderr += result.stderr;
       exitCode = result.exitCode;

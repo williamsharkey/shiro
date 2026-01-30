@@ -13,6 +13,7 @@ import { buildCmd } from './commands/build';
 import { viCmd } from './commands/vi';
 import { uploadCmd, downloadCmd, shiroConfigCmd } from './commands/upload';
 import { sourceCmd } from './commands/source';
+import { jobsCmd, fgCmd, bgCmd, waitCmd } from './commands/jobs';
 import { allCommands } from '../fluffycoreutils/src/index';
 import { wrapFluffyCommand } from './fluffy-adapter';
 import { ShiroTerminal } from './terminal';
@@ -49,6 +50,10 @@ async function main() {
   commands.register(downloadCmd);
   commands.register(shiroConfigCmd);
   commands.register(sourceCmd);
+  commands.register(jobsCmd);
+  commands.register(fgCmd);
+  commands.register(bgCmd);
+  commands.register(waitCmd);
 
   // Create shell
   const shell = new Shell(fs, commands);
