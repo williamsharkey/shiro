@@ -6,7 +6,10 @@
   "scripts": {
     "test": "node tests/runner.js",
     "test:foam": "OS_TARGET=foam node tests/runner.js",
-    "test:shiro": "OS_TARGET=shiro node tests/runner.js"
+    "test:shiro": "OS_TARGET=shiro node tests/runner.js",
+    "test:skyeyes": "node tests/runner-skyeyes.js",
+    "test:skyeyes:foam": "OS_TARGET=foam node tests/runner-skyeyes.js",
+    "test:skyeyes:shiro": "OS_TARGET=shiro node tests/runner-skyeyes.js"
   },
   "devDependencies": {
     "puppeteer": "^24.0.0"
