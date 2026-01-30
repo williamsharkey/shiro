@@ -9,7 +9,7 @@ export const gitCmd: Command = {
   async exec(ctx: CommandContext) {
     const subcommand = ctx.args[0];
     if (!subcommand) {
-      ctx.stdout = 'usage: git <command> [<args>]\n\nAvailable commands:\n  init, add, commit, status, log, diff, branch, checkout, clone\n';
+      ctx.stdout = 'usage: git <command> [<args>]\n\nAvailable commands:\n  init, add, commit, status, log, diff, branch, checkout, clone\n  push, pull, fetch, remote, merge\n';
       return 0;
     }
 
@@ -324,6 +324,126 @@ export const gitCmd: Command = {
           break;
         }
 
+        case 'remote': {
+          const remoteCmd = ctx.args[1];
+          if (!remoteCmd || remoteCmd === '-v') {
+            // List remotes
+            const remotes = await git.listRemotes({ fs, dir });
+            if (remotes.length === 0) {
+              ctx.stdout = '';
+            } else {
+              for (const r of remotes) {
+                if (remoteCmd === '-v') {
+                  ctx.stdout += `${r.remote}\t${r.url} (fetch)\n`;
+                  ctx.stdout += `${r.remote}\t${r.url} (push)\n`;
+                } else {
+                  ctx.stdout += `${r.remote}\n`;
+                }
+              }
+            }
+          } else if (remoteCmd === 'add') {
+            const name = ctx.args[2];
+            const url = ctx.args[3];
+            if (!name || !url) {
+              ctx.stderr = 'usage: git remote add <name> <url>\n';
+              return 1;
+            }
+            await git.addRemote({ fs, dir, remote: name, url });
+            ctx.stdout = '';
+          } else if (remoteCmd === 'remove' || remoteCmd === 'rm') {
+            const name = ctx.args[2];
+            if (!name) {
+              ctx.stderr = 'usage: git remote remove <name>\n';
+              return 1;
+            }
+            await git.deleteRemote({ fs, dir, remote: name });
+            ctx.stdout = '';
+          } else {
+            ctx.stderr = `git remote: '${remoteCmd}' is not a valid subcommand\n`;
+            return 1;
+          }
+          break;
+        }
+
+        case 'push': {
+          const { remote, ref, token, corsProxy } = parseRemoteArgs(ctx);
+          if (!token) {
+            ctx.stderr = 'error: authentication required\nSet GITHUB_TOKEN or run: export GITHUB_TOKEN=ghp_...\n';
+            return 1;
+          }
+          const currentBranch = ref || await git.currentBranch({ fs, dir }) || 'main';
+          ctx.stdout = `Pushing to ${remote}/${currentBranch}...\n`;
+          await git.push({
+            fs, http, dir,
+            remote,
+            ref: currentBranch,
+            corsProxy,
+            onAuth: () => ({ username: token }),
+          });
+          ctx.stdout += `done.\n`;
+          break;
+        }
+
+        case 'fetch': {
+          const { remote, token, corsProxy } = parseRemoteArgs(ctx);
+          if (!token) {
+            ctx.stderr = 'error: authentication required\nSet GITHUB_TOKEN or run: export GITHUB_TOKEN=ghp_...\n';
+            return 1;
+          }
+          ctx.stdout = `Fetching from ${remote}...\n`;
+          await git.fetch({
+            fs, http, dir,
+            remote,
+            corsProxy,
+            onAuth: () => ({ username: token }),
+          });
+          ctx.stdout += `done.\n`;
+          break;
+        }
+
+        case 'pull': {
+          const { remote, ref, token, corsProxy } = parseRemoteArgs(ctx);
+          if (!token) {
+            ctx.stderr = 'error: authentication required\nSet GITHUB_TOKEN or run: export GITHUB_TOKEN=ghp_...\n';
+            return 1;
+          }
+          const currentBranch = ref || await git.currentBranch({ fs, dir }) || 'main';
+          ctx.stdout = `Pulling from ${remote}/${currentBranch}...\n`;
+          await git.pull({
+            fs, http, dir,
+            remote,
+            ref: currentBranch,
+            corsProxy,
+            singleBranch: true,
+            author: { name: ctx.env['USER'] || 'user', email: 'user@shiro.local' },
+            onAuth: () => ({ username: token }),
+          });
+          ctx.stdout += `done.\n`;
+          break;
+        }
+
+        case 'merge': {
+          const theirs = ctx.args[1];
+          if (!theirs) {
+            ctx.stderr = 'usage: git merge <branch>\n';
+            return 1;
+          }
+          const mergeResult = await git.merge({
+            fs, dir,
+            ours: await git.currentBranch({ fs, dir }) || 'main',
+            theirs,
+            author: { name: ctx.env['USER'] || 'user', email: 'user@shiro.local' },
+          });
+          if (mergeResult.alreadyMerged) {
+            ctx.stdout = 'Already up to date.\n';
+          } else if (mergeResult.fastForward) {
+            ctx.stdout = `Fast-forward merge to ${mergeResult.oid?.slice(0, 7)}\n`;
+          } else {
+            ctx.stdout = `Merge made by the 'recursive' strategy. ${mergeResult.oid?.slice(0, 7)}\n`;
+          }
+          break;
+        }
+
         default:
           ctx.stderr = `git: '${subcommand}' is not a git command\n`;
           return 1;
@@ -336,6 +456,25 @@ export const gitCmd: Command = {
     return 0;
   },
 };
+
+function parseRemoteArgs(ctx: CommandContext): { remote: string; ref: string; token: string; corsProxy: string } {
+  let remote = 'origin';
+  let ref = '';
+  const positional: string[] = [];
+  for (let i = 1; i < ctx.args.length; i++) {
+    if (!ctx.args[i].startsWith('-')) {
+      positional.push(ctx.args[i]);
+    }
+  }
+  if (positional.length >= 1) remote = positional[0];
+  if (positional.length >= 2) ref = positional[1];
+
+  const token = ctx.env['GITHUB_TOKEN']
+    || (typeof localStorage !== 'undefined' ? localStorage.getItem('shiro_github_token') || '' : '');
+  const corsProxy = ctx.env['GIT_CORS_PROXY'] || 'https://cors.isomorphic-git.org';
+
+  return { remote, ref, token, corsProxy };
+}
 
 async function listAllFiles(fs: any, dir: string, base: string): Promise<string[]> {
   const entries = await fs.readdir(dir);
