@@ -20,6 +20,8 @@ import { hcCmd } from './commands/hc';
 import { testCmd } from './commands/test';
 import { reloadCmd } from './commands/reload';
 import { termcastCmd } from './commands/termcast';
+import { serveCmd, serversCmd } from './commands/serve';
+import { virtualServer } from './virtual-server';
 import { allCommands } from '../fluffycoreutils/src/index';
 import { wrapFluffyCommand } from './fluffy-adapter';
 import { ShiroTerminal } from './terminal';
@@ -75,6 +77,13 @@ async function main() {
   registerCommand(commands, testCmd, 'src/commands/test.ts');
   registerCommand(commands, reloadCmd, 'src/commands/reload.ts');
   registerCommand(commands, termcastCmd, 'src/commands/termcast.ts');
+  registerCommand(commands, serveCmd, 'src/commands/serve.ts');
+  registerCommand(commands, serversCmd, 'src/commands/serve.ts');
+
+  // Initialize virtual server (for browser-based HTTP serving)
+  virtualServer.init().catch(err => {
+    console.warn('[VirtualServer] Failed to initialize:', err);
+  });
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {
@@ -107,7 +116,13 @@ async function main() {
     provider,
     commands,
     registry, // ModuleRegistry for hot-reload
+    virtualServer, // Virtual HTTP server manager
   };
+
+  // Cleanup virtual servers on page unload (hot reload)
+  window.addEventListener('beforeunload', () => {
+    virtualServer.cleanup();
+  });
 
   await terminal.start();
 }
