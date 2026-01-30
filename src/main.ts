@@ -14,6 +14,7 @@ import { viCmd } from './commands/vi';
 import { uploadCmd, downloadCmd, shiroConfigCmd } from './commands/upload';
 import { sourceCmd } from './commands/source';
 import { jobsCmd, fgCmd, bgCmd, waitCmd } from './commands/jobs';
+import { hcCmd } from './commands/hc';
 import { allCommands } from '../fluffycoreutils/src/index';
 import { wrapFluffyCommand } from './fluffy-adapter';
 import { ShiroTerminal } from './terminal';
@@ -54,6 +55,7 @@ async function main() {
   commands.register(fgCmd);
   commands.register(bgCmd);
   commands.register(waitCmd);
+  commands.register(hcCmd);
 
   // Create shell
   const shell = new Shell(fs, commands);
@@ -61,6 +63,9 @@ async function main() {
   // Create terminal
   const container = document.getElementById('terminal')!;
   const terminal = new ShiroTerminal(container, shell);
+
+  // Connect terminal to shell for interactive commands (vi, etc.)
+  shell.setTerminal(terminal);
 
   // Create Spirit provider and attach to shell for the spirit command to use
   const provider = new ShiroProvider(fs, shell, terminal);

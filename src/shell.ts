@@ -1,5 +1,6 @@
 import { FileSystem } from './filesystem';
 import { CommandRegistry, CommandContext } from './commands/index';
+import type { ShiroTerminal } from './terminal';
 
 interface Redirect {
   type: '>' | '>>' | '<' | '2>' | '2>>' | '2>&1';
@@ -24,6 +25,7 @@ export class Shell {
   functions: Record<string, { body: string }> = {};
   backgroundJobs: Map<number, BackgroundJob> = new Map();
   private nextJobId = 1;
+  private terminal?: ShiroTerminal;
 
   constructor(fs: FileSystem, commands: CommandRegistry) {
     this.fs = fs;
@@ -36,6 +38,13 @@ export class Shell {
       PWD: '/home/user',
       TERM: 'xterm-256color',
     };
+  }
+
+  /**
+   * Set the terminal reference for interactive commands like vi.
+   */
+  setTerminal(terminal: ShiroTerminal): void {
+    this.terminal = terminal;
   }
 
   // Execute a command string and return { stdout, stderr, exitCode }
@@ -193,6 +202,7 @@ export class Shell {
           stdout: '',
           stderr: '',
           shell: this,
+          terminal: this.terminal,
         };
 
         // Check shell functions first

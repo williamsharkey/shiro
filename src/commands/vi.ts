@@ -65,6 +65,13 @@ export const viCmd: Command = {
       return 1;
     }
 
+    // Check if terminal is available for interactive mode
+    if (!ctx.terminal) {
+      ctx.stderr += 'vi: terminal not available for interactive editing\n';
+      ctx.stderr += 'Use ed for line-based editing, or cat > file << EOF for file creation.\n';
+      return 1;
+    }
+
     const filename = ctx.args[0];
     const filepath = ctx.fs.resolvePath(filename, ctx.cwd);
 
@@ -93,48 +100,63 @@ export const viCmd: Command = {
       searchBuffer: '',
     };
 
+    const terminal = ctx.terminal!;
+    const { rows: termHeight, cols: termWidth } = terminal.getSize();
+
     // Run the editor in an interactive loop
     return new Promise<number>((resolve) => {
       let running = true;
 
+      const write = (text: string) => {
+        terminal.writeOutput(text);
+      };
+
       const render = () => {
         // Clear screen and render editor
-        ctx.stdout += '\x1b[2J\x1b[H'; // Clear screen, move cursor to home
+        write('\x1b[2J\x1b[H'); // Clear screen, move cursor to home
 
-        const termHeight = 24; // Assume 24 lines for now
         const contentHeight = termHeight - 2; // Leave room for status and command line
+
+        // Adjust scroll offset to keep cursor visible
+        if (state.cursorRow < state.scrollOffset) {
+          state.scrollOffset = state.cursorRow;
+        } else if (state.cursorRow >= state.scrollOffset + contentHeight) {
+          state.scrollOffset = state.cursorRow - contentHeight + 1;
+        }
 
         // Render lines
         for (let i = 0; i < contentHeight; i++) {
           const lineIdx = i + state.scrollOffset;
           if (lineIdx < state.lines.length) {
             const line = state.lines[lineIdx];
-            ctx.stdout += line;
+            // Truncate line to terminal width
+            write(line.slice(0, termWidth - 1));
           } else {
-            ctx.stdout += '~'; // Empty line indicator
+            write('\x1b[34m~\x1b[0m'); // Empty line indicator in blue
           }
-          ctx.stdout += '\x1b[K\n'; // Clear to end of line and newline
+          write('\x1b[K\r\n'); // Clear to end of line and newline
         }
 
         // Render status line
         const modeStr = state.mode === 'insert' ? '-- INSERT --' : state.mode === 'command' ? '' : '';
         const modifiedStr = state.modified ? '[+]' : '';
         const posStr = `${state.cursorRow + 1},${state.cursorCol + 1}`;
-        const statusLine = `${modeStr} ${modifiedStr} ${filename} ${posStr}`.padEnd(80);
-        ctx.stdout += `\x1b[7m${statusLine}\x1b[0m\n`; // Reverse video
+        const statusLine = ` ${modeStr} ${modifiedStr} ${filename} ${posStr}`.padEnd(termWidth);
+        write(`\x1b[7m${statusLine.slice(0, termWidth)}\x1b[0m\r\n`); // Reverse video
 
         // Render command line or message
         if (state.mode === 'command') {
-          ctx.stdout += `:${state.commandBuffer}`;
+          write(`:${state.commandBuffer}`);
         } else if (state.mode === 'search') {
-          ctx.stdout += `/${state.searchBuffer}`;
+          write(`/${state.searchBuffer}`);
         } else {
-          ctx.stdout += state.message;
+          write(state.message);
         }
+        write('\x1b[K'); // Clear to end of line
 
         // Move cursor to editing position
         const screenRow = state.cursorRow - state.scrollOffset;
-        ctx.stdout += `\x1b[${screenRow + 1};${state.cursorCol + 1}H`;
+        write(`\x1b[${screenRow + 1};${state.cursorCol + 1}H`);
       };
 
       const handleKey = async (key: string) => {
@@ -442,20 +464,22 @@ export const viCmd: Command = {
               state.message = 'No write since last change (use :q! to override)';
             } else {
               running = false;
+              cleanup();
               resolve(0);
               return;
             }
           } else if (cmd === 'q!') {
             // Quit without saving
             running = false;
+            cleanup();
             resolve(0);
             return;
-          } else if (cmd === 'wq') {
+          } else if (cmd === 'wq' || cmd === 'x') {
             // Write and quit
             const content = state.lines.join('\n');
             await ctx.fs.writeFile(filepath, content);
-            state.message = `"${filename}" ${state.lines.length} lines written`;
             running = false;
+            cleanup();
             resolve(0);
             return;
           } else {
@@ -476,15 +500,49 @@ export const viCmd: Command = {
         }
       };
 
+      // Cleanup function to exit raw mode and restore terminal
+      const cleanup = () => {
+        terminal.exitRawMode();
+        write('\x1b[2J\x1b[H'); // Clear screen
+      };
+
+      // Handle keystroke from raw mode
+      const onKey = async (key: string) => {
+        if (!running) return;
+
+        // Ctrl+C always exits (emergency escape)
+        if (key === 'Ctrl+C') {
+          running = false;
+          cleanup();
+          resolve(1);
+          return;
+        }
+
+        state.message = ''; // Clear message
+
+        if (state.mode === 'normal') {
+          await handleNormalMode(key);
+        } else if (state.mode === 'insert') {
+          await handleInsertMode(key);
+        } else if (state.mode === 'command') {
+          await handleCommandMode(key);
+        } else if (state.mode === 'search') {
+          await handleSearchMode(key);
+        }
+
+        if (running) {
+          render();
+        }
+      };
+
+      // Enter raw mode to capture all keystrokes
+      terminal.enterRawMode(onKey);
+
       // Initial render
       render();
 
-      // Note: This is a simplified version. In a real implementation, we'd need
-      // to hook into the terminal's input handling. For now, this demonstrates
-      // the structure. The actual input handling would need to be integrated
-      // with the ShiroTerminal class.
-      ctx.stdout += '\n[vi editor not fully interactive in this version - use built-in editor or echo/cat]\n';
-      resolve(0);
+      // The promise resolves when :q, :q!, or :wq is executed
+      // The handleCommandMode function calls cleanup() and resolve() when quitting
     });
   },
 };

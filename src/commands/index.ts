@@ -1,5 +1,6 @@
 import type { FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
+import type { ShiroTerminal } from '../terminal';
 
 export interface CommandContext {
   args: string[];
@@ -10,6 +11,7 @@ export interface CommandContext {
   stdout: string;
   stderr: string;
   shell: Shell;
+  terminal?: ShiroTerminal;
 }
 
 export interface Command {

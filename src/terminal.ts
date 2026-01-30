@@ -14,6 +14,7 @@ export class ShiroTerminal {
   private userInputCallback: ((input: string) => void) | null = null;
   private userInputBuffer = '';
   private userInputCursorPos = 0;
+  private rawModeCallback: ((key: string) => void) | null = null;
 
   constructor(container: HTMLElement, shell: Shell) {
     this.shell = shell;
@@ -64,6 +65,35 @@ export class ShiroTerminal {
   }
 
   /**
+   * Enter raw mode - all keystrokes go directly to the callback.
+   * Used by interactive commands like vi that need character-by-character input.
+   */
+  enterRawMode(callback: (key: string) => void): void {
+    this.rawModeCallback = callback;
+  }
+
+  /**
+   * Exit raw mode - return to normal line-editing mode.
+   */
+  exitRawMode(): void {
+    this.rawModeCallback = null;
+  }
+
+  /**
+   * Check if terminal is in raw mode.
+   */
+  isRawMode(): boolean {
+    return this.rawModeCallback !== null;
+  }
+
+  /**
+   * Get terminal dimensions (rows and cols).
+   */
+  getSize(): { rows: number; cols: number } {
+    return { rows: this.term.rows, cols: this.term.cols };
+  }
+
+  /**
    * Called by ShiroProvider.readFromUser() to collect a line of input
    * from the user while a command (e.g. Spirit) is running.
    */
@@ -98,6 +128,40 @@ export class ShiroTerminal {
   }
 
   private async handleInput(data: string) {
+    // Raw mode: send all keystrokes directly to the callback (e.g., vi editor)
+    if (this.rawModeCallback) {
+      // Parse escape sequences for raw mode
+      for (let i = 0; i < data.length; i++) {
+        const ch = data[i];
+
+        // Handle escape sequences
+        if (ch === '\x1b' && data[i + 1] === '[') {
+          const code = data[i + 2];
+          if (code === 'A') { this.rawModeCallback('ArrowUp'); i += 2; continue; }
+          if (code === 'B') { this.rawModeCallback('ArrowDown'); i += 2; continue; }
+          if (code === 'C') { this.rawModeCallback('ArrowRight'); i += 2; continue; }
+          if (code === 'D') { this.rawModeCallback('ArrowLeft'); i += 2; continue; }
+          if (code === 'H') { this.rawModeCallback('Home'); i += 2; continue; }
+          if (code === 'F') { this.rawModeCallback('End'); i += 2; continue; }
+          if (code === '3' && data[i + 3] === '~') { this.rawModeCallback('Delete'); i += 3; continue; }
+          // Unknown escape sequence - skip
+          i += 2;
+          continue;
+        }
+
+        // Handle special characters
+        if (ch === '\x1b') { this.rawModeCallback('Escape'); continue; }
+        if (ch === '\r' || ch === '\n') { this.rawModeCallback('Enter'); continue; }
+        if (ch === '\x7f' || ch === '\b') { this.rawModeCallback('Backspace'); continue; }
+        if (ch === '\t') { this.rawModeCallback('Tab'); continue; }
+        if (ch === '\x03') { this.rawModeCallback('Ctrl+C'); continue; }
+
+        // Regular character
+        this.rawModeCallback(ch);
+      }
+      return;
+    }
+
     // When a command is running and Spirit is waiting for user input,
     // route keystrokes to the user-input buffer instead of the shell.
     if (this.running) {
