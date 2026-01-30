@@ -249,7 +249,8 @@ export default async function run(page, osTarget) {
   // Test: hc >$var (store)
   try {
     await os.exec('hc q1 .description');
-    const r = await os.exec('hc >$desc');
+    // Use single quotes to prevent shell from interpreting > and $
+    const r = await os.exec("hc '>$desc'");
     assertIncludes(r.stdout, '✓', 'store should succeed');
     assertIncludes(r.stdout, '$desc', 'should show variable name');
     assertIncludes(r.stdout, 'chars', 'should show character count');
@@ -260,7 +261,8 @@ export default async function run(page, osTarget) {
 
   // Test: hc $var (recall)
   try {
-    const r = await os.exec('hc $desc');
+    // Use single quotes to prevent shell from interpreting $
+    const r = await os.exec("hc '$desc'");
     assertIncludes(r.stdout, 'fantastic widget', 'should recall stored content');
     results.pass('hc $var (recall)');
   } catch (e) {

@@ -11,20 +11,28 @@ import { fileURLToPath } from 'url';
 import 'fake-indexeddb/auto';
 
 // Set up linkedom for DOM APIs
-import { parseHTML } from 'linkedom';
+import { parseHTML, DOMParser } from 'linkedom';
+
+// Set up global.window with DOMParser BEFORE importing Foam modules
+// This is needed for hypercompact (hc command) which checks window at module load
+global.window = global.window || {};
+global.window.DOMParser = DOMParser;
+global.DOMParser = DOMParser;
+// Note: Let commands.js initialize window.__hc with HCSession class
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const ROOT = join(__dirname, '..');
 // FOAM_PATH can be overridden via env var (useful for CI)
 const FOAM_PATH = process.env.FOAM_PATH || join(ROOT, '..', 'foam', 'src');
 
-// Test suite modules (only levels 0-4 for linkedom -- higher levels need real browser)
+// Test suite modules for linkedom
 const LINKEDOM_SUITES = [
   { name: 'level-0-boot',       path: './level-0-boot/boot.test.js' },
   { name: 'level-1-filesystem', path: './level-1-filesystem/filesystem.test.js' },
   { name: 'level-2-shell',      path: './level-2-shell/shell.test.js' },
   { name: 'level-3-coreutils',  path: './level-3-coreutils/coreutils.test.js' },
   { name: 'level-4-pipes',      path: './level-4-pipes/pipes.test.js' },
+  { name: 'level-10-hypercompact', path: './level-10-hypercompact/hypercompact.test.js' },
 ];
 
 // Higher-level suites that need real browser (skip in linkedom mode)
@@ -34,7 +42,6 @@ const BROWSER_ONLY_SUITES = [
   'level-7-workflows',
   'level-8-fluffycoreutils',
   'level-9-selfbuild',
-  'level-10-hypercompact',
 ];
 
 /**
@@ -42,31 +49,20 @@ const BROWSER_ONLY_SUITES = [
  * but executes code directly against Foam modules
  */
 async function createMockPage(vfs, shell) {
-  // Set up globals that Foam expects
-  const mockGlobals = {
-    __foam: {
-      vfs,
-      shell,
-      terminal: null,
-      provider: null,
-    },
+  // Add __foam to global.window (preserving __hc, DOMParser, etc.)
+  global.window.__foam = {
+    vfs,
+    shell,
+    terminal: null,
+    provider: null,
   };
 
   return {
     // Mock page.evaluate() to execute functions directly
     async evaluate(fn, ...args) {
       if (typeof fn === 'function') {
-        // Create a mock window object with our globals
-        const window = { ...mockGlobals };
-
-        // Execute the function with the mock window
-        const originalWindow = global.window;
-        global.window = window;
-        try {
-          return await fn(...args);
-        } finally {
-          global.window = originalWindow;
-        }
+        // Use the global.window which has __foam, __hc, DOMParser, etc.
+        return await fn(...args);
       }
       // For string expressions
       return eval(fn);
@@ -84,13 +80,8 @@ async function createMockPage(vfs, shell) {
 
     // Mock page.waitForFunction() - just run immediately
     async waitForFunction(fn, options = {}) {
-      const window = { ...mockGlobals };
-      global.window = window;
-      try {
-        return await fn();
-      } finally {
-        global.window = undefined;
-      }
+      // Use the global.window which has all our globals
+      return await fn();
     },
   };
 }
