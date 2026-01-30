@@ -98,8 +98,11 @@ export class Shell {
         const cmdName = args[0];
         const cmdArgs = args.slice(1);
 
+        // Handle . as alias for source
+        const effectiveCmdName = cmdName === '.' ? 'source' : cmdName;
+
         // Handle built-in variable assignment: FOO=bar
-        if (cmdName.includes('=') && !cmdName.startsWith('=')) {
+        if (effectiveCmdName.includes('=') && !effectiveCmdName.startsWith('=')) {
           const eqIdx = cmdName.indexOf('=');
           const key = cmdName.substring(0, eqIdx);
           const val = cmdName.substring(eqIdx + 1);
@@ -145,17 +148,17 @@ export class Shell {
         };
 
         // Check shell functions first
-        if (this.functions[cmdName]) {
-          exitCode = await this.execFunction(cmdName, cmdArgs, writeStdout, stderrWriter);
+        if (this.functions[effectiveCmdName]) {
+          exitCode = await this.execFunction(effectiveCmdName, cmdArgs, writeStdout, stderrWriter);
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
           lastOutput = '';
           continue;
         }
 
-        const cmd = this.commands.get(cmdName);
+        const cmd = this.commands.get(effectiveCmdName);
         if (!cmd) {
-          stderrWriter(`shiro: command not found: ${cmdName}\r\n`);
+          stderrWriter(`shiro: command not found: ${effectiveCmdName}\r\n`);
           exitCode = 127;
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
