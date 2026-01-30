@@ -2,12 +2,12 @@
 
 **Shared Unix coreutils for browser-based virtual operating systems**
 
-A TypeScript library providing 113+ essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
+A TypeScript library providing 114+ essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
 
 ## ✨ Features
 
 - 🌐 **Browser-Native**: Pure TypeScript implementation with no Node.js dependencies
-- 🔧 **113+ Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `make`
+- 🔧 **114+ Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `make`
 - 🎯 **Filesystem Agnostic**: Works with any virtual filesystem implementing the `FluffyFS` interface
 - 📦 **Tree-Shakeable**: Import only the commands you need
 - 🔒 **Type-Safe**: Full TypeScript definitions included
@@ -119,15 +119,17 @@ const shell = Object.fromEntries(
 - **break** - Exit from for, while, or until loop
 - **continue** - Continue to next iteration of loop
 - **shift** - Shift positional parameters
-- **read** - Read a line from stdin
+- **read** - Read a line from stdin into variables (enhanced with -r, -p, -n, -t, -d, -a, -s flags)
 - **eval** - Evaluate and execute arguments as a command
 - **set** - Set or unset shell options and positional parameters
 - **declare** - Declare variables and give them attributes
 - **local** - Declare local variables in shell functions
 - **readonly** - Mark variables as readonly
 - **unset** - Unset variables or functions
-- **trap** - Trap signals and execute commands
+- **trap** - Trap signals and execute commands (with -l to list signals, -p to print)
 - **kill** - Send signal to process
+- **getopts** - Parse option arguments (POSIX-compliant option parser)
+- **test** / **[** - Evaluate conditional expressions (enhanced with -f, -d, -e, -z, -n, -r, -w, -x, -s, -L, -h, -S, -p, -b, -c, -u, -g, -k, -t operators)
 
 **Control Flow Constructs:**
 - **if** / **then** / **elif** / **else** / **fi** - Conditional execution

@@ -39,6 +39,7 @@ import { find } from "./commands/find.js";
 import { fmt } from "./commands/fmt.js";
 import { fold } from "./commands/fold.js";
 import { free } from "./commands/free.js";
+import { getopts } from "./commands/getopts.js";
 import { grep } from "./commands/grep.js";
 import { head } from "./commands/head.js";
 import { hexdump } from "./commands/hexdump.js";
@@ -98,7 +99,7 @@ import { whoami } from "./commands/whoami.js";
 import { xargs } from "./commands/xargs.js";
 import { yes } from "./commands/yes.js";
 import type { FluffyCommand } from "./types.js";
-export { alias, awk, base64, basename, cc, cat, chmod, chown, clear, column, comm, cp, curl, cut, date, declare, df, diff, dirname, done, dot, du, echo, elif, env, esac, exit, expand, expr, exportCmd, fi, file, find, fmt, fold, free, gcc, grep, head, hexdump, hostname, id, install, join, kill, less, ln, local, ls, make, md5sum, mkdir, mv, nl, od, paste, patch, pkgConfig, printenv, printf, pwd, read, readlink, readonly, realpath, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings, tail, tar, tee, test, then, time, timeout, touch, tr, trap, type, unalias, unexpand, uniq, unset, uname, until, uptime, wc, which, whoami, xargs, yes, breakCmd as break, caseCmd as case, continueCmd as continue, doCmd as do, elseCmd as else, evalCmd as eval, falseCmd as false, forCmd as for, functionCmd as function, ifCmd as if, inCmd as in, returnCmd as return, trueCmd as true, whileCmd as while, };
+export { alias, awk, base64, basename, cc, cat, chmod, chown, clear, column, comm, cp, curl, cut, date, declare, df, diff, dirname, done, dot, du, echo, elif, env, esac, exit, expand, expr, exportCmd, fi, file, find, fmt, fold, free, gcc, getopts, grep, head, hexdump, hostname, id, install, join, kill, less, ln, local, ls, make, md5sum, mkdir, mv, nl, od, paste, patch, pkgConfig, printenv, printf, pwd, read, readlink, readonly, realpath, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings, tail, tar, tee, test, then, time, timeout, touch, tr, trap, type, unalias, unexpand, uniq, unset, uname, until, uptime, wc, which, whoami, xargs, yes, breakCmd as break, caseCmd as case, continueCmd as continue, doCmd as do, elseCmd as else, evalCmd as eval, falseCmd as false, forCmd as for, functionCmd as function, ifCmd as if, inCmd as in, returnCmd as return, trueCmd as true, whileCmd as while, };
 /** All commands as a name→command map for easy registration in a shell. */
 export declare const allCommands: Record<string, FluffyCommand>;
 /** Array of all commands for iteration. */

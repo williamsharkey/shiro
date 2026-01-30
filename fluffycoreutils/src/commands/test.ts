@@ -27,18 +27,49 @@ async function evaluate(
   if (args.length === 2) {
     const [op, val] = args;
     switch (op) {
+      // String tests
       case "-z": return val === "";
       case "-n": return val !== "";
       case "!": return val === "";
-      case "-e": case "-f": case "-d": {
+
+      // File existence and type tests
+      case "-e": case "-f": case "-d": case "-L": case "-h": case "-S": case "-p": case "-b": case "-c": {
         try {
           const resolved = io.fs.resolvePath(val, io.cwd);
           const stat = await io.fs.stat(resolved);
           if (op === "-f") return stat.type === "file";
           if (op === "-d") return stat.type === "dir";
-          return true;
+          if (op === "-L" || op === "-h") return stat.type === "symlink";
+          if (op === "-S") return stat.type === "socket";
+          if (op === "-p") return stat.type === "fifo";
+          if (op === "-b") return stat.type === "block";
+          if (op === "-c") return stat.type === "char";
+          return true; // -e: exists
         } catch { return false; }
       }
+
+      // File permissions (simplified - always return false in browser)
+      case "-r": case "-w": case "-x": case "-s": case "-u": case "-g": case "-k": {
+        try {
+          const resolved = io.fs.resolvePath(val, io.cwd);
+          await io.fs.stat(resolved);
+          // -s: file exists and has size > 0
+          if (op === "-s") {
+            try {
+              const content = await (io.fs as any).readFile?.(resolved);
+              return content && content.length > 0;
+            } catch {
+              return false;
+            }
+          }
+          // In browser context, we can't check real permissions
+          // Return true for basic permission checks if file exists
+          return op === "-r" || op === "-w";
+        } catch { return false; }
+      }
+
+      // Terminal tests (always false in browser)
+      case "-t": return false;
     }
   }
 

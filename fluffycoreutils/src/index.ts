@@ -41,6 +41,7 @@ import { find } from "./commands/find.js";
 import { fmt } from "./commands/fmt.js";
 import { fold } from "./commands/fold.js";
 import { free } from "./commands/free.js";
+import { getopts } from "./commands/getopts.js";
 import { grep } from "./commands/grep.js";
 import { head } from "./commands/head.js";
 import { hexdump } from "./commands/hexdump.js";
@@ -105,7 +106,7 @@ import type { FluffyCommand } from "./types.js";
 // Re-export individual commands
 export {
   alias, awk, base64, basename, cc, cat, chmod, chown, clear, column, comm, cp, curl, cut, date, declare, df, diff, dirname, done, dot, du,
-  echo, elif, env, esac, exit, expand, expr, exportCmd, fi, file, find, fmt, fold, free, gcc, grep, head, hexdump, hostname, id, install, join, kill, less, ln, local, ls,
+  echo, elif, env, esac, exit, expand, expr, exportCmd, fi, file, find, fmt, fold, free, gcc, getopts, grep, head, hexdump, hostname, id, install, join, kill, less, ln, local, ls,
   make, md5sum, mkdir, mv, nl, od, paste, patch, pkgConfig, printenv, printf, pwd, read, readlink, readonly, realpath, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings,
   tail, tar, tee, test, then, time, timeout, touch, tr, trap, type, unalias, unexpand, uniq, unset, uname, until, uptime, wc, which, whoami, xargs, yes,
   breakCmd as break,
@@ -127,7 +128,7 @@ export {
 /** All commands as a name→command map for easy registration in a shell. */
 export const allCommands: Record<string, FluffyCommand> = {
   ".": dot, alias, awk, base64, basename, break: breakCmd, case: caseCmd, cc, cat, chmod, chown, clear, column, comm, continue: continueCmd, cp, curl, cut, date, declare, df, diff, dirname, do: doCmd, done, du,
-  echo, elif, else: elseCmd, env, esac, eval: evalCmd, exit, expand, expr, export: exportCmd, false: falseCmd, fi, file, find, fmt, fold, for: forCmd, free, function: functionCmd, gcc, grep, head, hexdump, hostname, id, if: ifCmd, in: inCmd, install, join, kill, less, ln, local, ls,
+  echo, elif, else: elseCmd, env, esac, eval: evalCmd, exit, expand, expr, export: exportCmd, false: falseCmd, fi, file, find, fmt, fold, for: forCmd, free, function: functionCmd, gcc, getopts, grep, head, hexdump, hostname, id, if: ifCmd, in: inCmd, install, join, kill, less, ln, local, ls,
   make, md5sum, mkdir, mv, nl, od, paste, patch, "pkg-config": pkgConfig, printenv, printf, pwd, read, readlink, readonly, realpath, return: returnCmd, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings,
   tail, tar, tee, test, then, time, timeout, touch, tr, trap, true: trueCmd, type, unalias, unexpand, uniq, unset, uname, until, uptime, wc, which, while: whileCmd, whoami, xargs, yes,
 };
