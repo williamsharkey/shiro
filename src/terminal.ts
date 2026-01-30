@@ -430,26 +430,175 @@ export class ShiroTerminal {
     this.term.write(output);
   }
 
+  /**
+   * Find the longest common prefix among strings
+   */
+  private findCommonPrefix(strings: string[]): string {
+    if (strings.length === 0) return '';
+    if (strings.length === 1) return strings[0];
+
+    let prefix = strings[0];
+    for (let i = 1; i < strings.length; i++) {
+      while (!strings[i].startsWith(prefix)) {
+        prefix = prefix.slice(0, -1);
+        if (prefix === '') return '';
+      }
+    }
+    return prefix;
+  }
+
+  /**
+   * Get available executables from node_modules/.bin
+   */
+  private async getBinExecutables(): Promise<string[]> {
+    const bins: string[] = [];
+
+    // Walk up from cwd looking for node_modules/.bin
+    let dir = this.shell.cwd;
+    while (dir !== '/') {
+      const binDir = `${dir}/node_modules/.bin`;
+      try {
+        const entries = await this.shell.fs.readdir(binDir);
+        bins.push(...entries);
+      } catch {
+        // No bin directory at this level
+      }
+      const parent = dir.substring(0, dir.lastIndexOf('/')) || '/';
+      if (parent === dir) break;
+      dir = parent;
+    }
+
+    // Also check root node_modules/.bin
+    try {
+      const entries = await this.shell.fs.readdir('/node_modules/.bin');
+      bins.push(...entries);
+    } catch {
+      // No root bin directory
+    }
+
+    return [...new Set(bins)]; // Deduplicate
+  }
+
+  // Subcommands for common tools
+  private static readonly GIT_SUBCOMMANDS = [
+    'add', 'branch', 'checkout', 'clone', 'commit', 'diff', 'fetch',
+    'init', 'log', 'merge', 'pull', 'push', 'rebase', 'remote',
+    'reset', 'restore', 'rm', 'show', 'stash', 'status', 'switch', 'tag'
+  ];
+
+  private static readonly NPM_SUBCOMMANDS = [
+    'cache', 'i', 'init', 'install', 'list', 'ls', 'remove', 'rm',
+    'run', 'test', 'uninstall', '--version'
+  ];
+
+  private static readonly SHIRO_SUBCOMMANDS = [
+    'config'
+  ];
+
+  private static readonly SHIRO_CONFIG_SUBCOMMANDS = [
+    'get', 'list', 'set'
+  ];
+
   private async tabComplete() {
     const before = this.lineBuffer.slice(0, this.cursorPos);
-    const parts = before.split(/\s+/);
-    const partial = parts[parts.length - 1];
+    const parts = before.split(/\s+/).filter(p => p.length > 0);
+    const partial = parts[parts.length - 1] || '';
+    const isFirstWord = parts.length <= 1;
 
-    if (parts.length <= 1) {
-      // Command completion
-      const cmds = this.shell.commands.list().map(c => c.name);
-      const matches = cmds.filter(c => c.startsWith(partial));
+    // Helper to apply completion
+    const applyCompletion = (completion: string, suffix = ' ') => {
+      const toAdd = completion + suffix;
+      this.lineBuffer = this.lineBuffer.slice(0, this.cursorPos) + toAdd + this.lineBuffer.slice(this.cursorPos);
+      this.cursorPos += toAdd.length;
+      this.redrawLine();
+    };
+
+    // Helper to show matches and apply common prefix
+    const showMatches = (matches: string[]) => {
+      if (matches.length === 0) return;
+
       if (matches.length === 1) {
-        const completion = matches[0].slice(partial.length) + ' ';
-        this.lineBuffer = this.lineBuffer.slice(0, this.cursorPos) + completion + this.lineBuffer.slice(this.cursorPos);
-        this.cursorPos += completion.length;
-        this.redrawLine();
-      } else if (matches.length > 1) {
-        this.term.writeln('');
-        this.term.writeln(matches.join('  '));
-        this.showPrompt();
-        this.term.write(this.lineBuffer);
+        applyCompletion(matches[0].slice(partial.length));
+      } else {
+        // Complete to common prefix if longer than current partial
+        const commonPrefix = this.findCommonPrefix(matches);
+        if (commonPrefix.length > partial.length) {
+          applyCompletion(commonPrefix.slice(partial.length), '');
+        } else {
+          // Show all matches
+          this.term.writeln('');
+          this.term.writeln(matches.join('  '));
+          this.showPrompt();
+          this.term.write(this.lineBuffer);
+        }
       }
+    };
+
+    // Check for subcommand completion
+    if (!isFirstWord) {
+      const command = parts[0];
+
+      // Git subcommand completion
+      if (command === 'git' && parts.length === 2) {
+        const matches = ShiroTerminal.GIT_SUBCOMMANDS.filter(s => s.startsWith(partial));
+        if (matches.length > 0) {
+          showMatches(matches);
+          return;
+        }
+      }
+
+      // npm subcommand completion
+      if (command === 'npm' && parts.length === 2) {
+        const matches = ShiroTerminal.NPM_SUBCOMMANDS.filter(s => s.startsWith(partial));
+        if (matches.length > 0) {
+          showMatches(matches);
+          return;
+        }
+      }
+
+      // shiro config subcommand completion
+      if (command === 'shiro') {
+        if (parts.length === 2) {
+          const matches = ShiroTerminal.SHIRO_SUBCOMMANDS.filter(s => s.startsWith(partial));
+          if (matches.length > 0) {
+            showMatches(matches);
+            return;
+          }
+        } else if (parts.length === 3 && parts[1] === 'config') {
+          const matches = ShiroTerminal.SHIRO_CONFIG_SUBCOMMANDS.filter(s => s.startsWith(partial));
+          if (matches.length > 0) {
+            showMatches(matches);
+            return;
+          }
+        } else if (parts.length === 4 && parts[1] === 'config' && (parts[2] === 'get' || parts[2] === 'set')) {
+          const configKeys = ['api_key', 'github_token'];
+          const matches = configKeys.filter(s => s.startsWith(partial));
+          if (matches.length > 0) {
+            showMatches(matches);
+            return;
+          }
+        }
+      }
+
+      // Environment variable completion ($VAR)
+      if (partial.startsWith('$')) {
+        const varPrefix = partial.slice(1);
+        const envVars = Object.keys(this.shell.env).filter(v => v.startsWith(varPrefix));
+        if (envVars.length > 0) {
+          const matches = envVars.map(v => '$' + v);
+          showMatches(matches);
+          return;
+        }
+      }
+    }
+
+    if (isFirstWord) {
+      // Command completion - include both built-in commands and npm bin executables
+      const cmds = this.shell.commands.list().map(c => c.name);
+      const bins = await this.getBinExecutables();
+      const allCommands = [...new Set([...cmds, ...bins])].sort();
+      const matches = allCommands.filter(c => c.startsWith(partial));
+      showMatches(matches);
     } else {
       // File path completion
       let dir: string, prefix: string;
@@ -473,14 +622,18 @@ export class ShiroTerminal {
           );
           const stat = await this.shell.fs.stat(fullPath).catch(() => null);
           const suffix = stat?.isDirectory() ? '/' : ' ';
-          this.lineBuffer = this.lineBuffer.slice(0, this.cursorPos) + completion + suffix + this.lineBuffer.slice(this.cursorPos);
-          this.cursorPos += completion.length + suffix.length;
-          this.redrawLine();
+          applyCompletion(completion, suffix);
         } else if (matches.length > 1) {
-          this.term.writeln('');
-          this.term.writeln(matches.join('  '));
-          this.showPrompt();
-          this.term.write(this.lineBuffer);
+          // Complete to common prefix
+          const commonPrefix = this.findCommonPrefix(matches);
+          if (commonPrefix.length > prefix.length) {
+            applyCompletion(commonPrefix.slice(prefix.length), '');
+          } else {
+            this.term.writeln('');
+            this.term.writeln(matches.join('  '));
+            this.showPrompt();
+            this.term.write(this.lineBuffer);
+          }
         }
       } catch {
         // No completions available
