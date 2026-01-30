@@ -82,6 +82,7 @@ import { seq } from "./commands/seq.js";
 import { set } from "./commands/set.js";
 import { sha256sum } from "./commands/sha256sum.js";
 import { shift } from "./commands/shift.js";
+import { shrine } from "./commands/shrine.js";
 import { sleep } from "./commands/sleep.js";
 import { sort } from "./commands/sort.js";
 import { source, dot } from "./commands/source.js";
@@ -119,7 +120,7 @@ import type { FluffyCommand } from "./types.js";
 export {
   alias, arrayHelper, awk, base64, basename, bc, cc, cat, chmod, chown, clear, column, comm, cp, curl, cut, date, declare, df, diff, dirname, done, dot, du,
   echo, elif, env, esac, exit, expand, expr, exportCmd, fi, file, find, fmt, fold, free, gcc, getopts, grep, hash, head, heredoc, hexdump, hostname, id, install, join, kill, less, letCmd, ln, local, ls,
-  make, md5sum, mkdir, mv, nl, nohup, od, paste, patch, pkgConfig, pr, printenv, printf, processSubstitution, pwd, read, readlink, readonly, realpath, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings,
+  make, md5sum, mkdir, mv, nl, nohup, od, paste, patch, pkgConfig, pr, printenv, printf, processSubstitution, pwd, read, readlink, readonly, realpath, rm, sed, seq, set, sha256sum, shift, shrine, sleep, sort, source, stat, strings,
   tail, tar, tee, test, then, time, timeout, touch, tr, trap, tsort, type, ulimit, umask, unalias, unexpand, uniq, unset, uname, until, uptime, watch, wc, which, whoami, xargs, yes,
   breakCmd as break,
   caseCmd as case,
@@ -142,7 +143,7 @@ export {
 export const allCommands: Record<string, FluffyCommand> = {
   ".": dot, alias, array: arrayHelper, awk, base64, basename, bc, break: breakCmd, case: caseCmd, cc, cat, chmod, chown, clear, column, comm, continue: continueCmd, cp, curl, cut, date, declare, df, diff, dirname, do: doCmd, done, du,
   echo, elif, else: elseCmd, env, esac, eval: evalCmd, exit, expand, expr, export: exportCmd, false: falseCmd, fi, file, find, fmt, fold, for: forCmd, free, function: functionCmd, gcc, getopts, grep, hash, head, heredoc, hexdump, hostname, id, if: ifCmd, in: inCmd, install, join, kill, less, let: letCmd, ln, local, ls,
-  make, md5sum, mkdir, mv, nl, nohup, od, paste, patch, "pkg-config": pkgConfig, pr, "process-substitution": processSubstitution, printenv, printf, pwd, read, readlink, readonly, realpath, return: returnCmd, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings,
+  make, md5sum, mkdir, mv, nl, nohup, od, paste, patch, "pkg-config": pkgConfig, pr, "process-substitution": processSubstitution, printenv, printf, pwd, read, readlink, readonly, realpath, return: returnCmd, rm, sed, seq, set, sha256sum, shift, shrine, sleep, sort, source, stat, strings,
   tail, tar, tee, test, then, time, timeout, touch, tr, trap, true: trueCmd, tsort, type, ulimit, umask, unalias, unexpand, uniq, unset, uname, until, uptime, watch, wc, which, while: whileCmd, whoami, xargs, yes,
 };
 
