@@ -46,6 +46,14 @@ class VirtualServerManager {
       return;
     }
 
+    // Service workers don't work on file:// protocol
+    if (window.location.protocol === 'file:') {
+      console.warn('[VirtualServer] Service workers not available on file:// protocol. Virtual servers disabled.');
+      console.warn('[VirtualServer] To use virtual servers, serve the page over http:// or https://');
+      this.initialized = true; // Mark as initialized to prevent further attempts
+      return;
+    }
+
     try {
       // Register the service worker
       const swPath = new URL('./sw.js', window.location.href).pathname;

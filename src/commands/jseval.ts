@@ -210,6 +210,26 @@ export const nodeCmd: Command = {
         nmSearch = parent;
       }
 
+      // If running a script file, ensure its project directory is fully loaded
+      if (scriptPath) {
+        // Find project root (directory containing package.json, or script's parent dir)
+        let projectRoot = scriptPath.substring(0, scriptPath.lastIndexOf('/')) || ctx.cwd;
+        let searchDir = projectRoot;
+        while (searchDir && searchDir !== homeDir && searchDir !== '/') {
+          try {
+            await ctx.fs.stat(searchDir + '/package.json');
+            projectRoot = searchDir;
+            break;
+          } catch {
+            const parentDir = searchDir.substring(0, searchDir.lastIndexOf('/')) || '';
+            if (parentDir === searchDir || !parentDir) break;
+            searchDir = parentDir;
+          }
+        }
+        // Preload the entire project with deeper recursion
+        await preloadDir(projectRoot, 0, 10);
+      }
+
       // Buffer shim — provides from(), alloc(), isBuffer(), toString()
       const FakeBuffer: any = {
         from: (input: any, _encoding?: string): any => {
@@ -670,6 +690,163 @@ export const nodeCmd: Command = {
               request: () => { throw new Error('http.request not implemented - use fetch()'); },
               get: () => { throw new Error('http.get not implemented - use fetch()'); },
             };
+          }
+          case 'dotenv':
+          case 'dotenv/config': {
+            // dotenv shim - reads .env file and populates process.env
+            const config = (options?: { path?: string }) => {
+              const envPath = options?.path || '.env';
+              const resolved = ctx.fs.resolvePath(envPath, ctx.cwd);
+              const content = fileCache.get(resolved);
+              if (content) {
+                for (const line of content.split('\n')) {
+                  const trimmed = line.trim();
+                  if (!trimmed || trimmed.startsWith('#')) continue;
+                  const eqIdx = trimmed.indexOf('=');
+                  if (eqIdx > 0) {
+                    const key = trimmed.slice(0, eqIdx).trim();
+                    let value = trimmed.slice(eqIdx + 1).trim();
+                    // Remove quotes
+                    if ((value.startsWith('"') && value.endsWith('"')) ||
+                        (value.startsWith("'") && value.endsWith("'"))) {
+                      value = value.slice(1, -1);
+                    }
+                    ctx.env[key] = value;
+                    fakeProcess.env[key] = value;
+                  }
+                }
+              }
+              return { parsed: ctx.env };
+            };
+            // Auto-run config when imported as 'dotenv/config'
+            if (name === 'dotenv/config') {
+              config();
+            }
+            return { config, parse: (src: string) => {
+              const result: Record<string, string> = {};
+              for (const line of src.split('\n')) {
+                const trimmed = line.trim();
+                if (!trimmed || trimmed.startsWith('#')) continue;
+                const eqIdx = trimmed.indexOf('=');
+                if (eqIdx > 0) {
+                  const key = trimmed.slice(0, eqIdx).trim();
+                  let value = trimmed.slice(eqIdx + 1).trim();
+                  if ((value.startsWith('"') && value.endsWith('"')) ||
+                      (value.startsWith("'") && value.endsWith("'"))) {
+                    value = value.slice(1, -1);
+                  }
+                  result[key] = value;
+                }
+              }
+              return result;
+            }};
+          }
+          case 'cookie-parser': {
+            // cookie-parser middleware shim
+            const cookieParser = (secret?: string) => {
+              return (req: any, res: any, next: Function) => {
+                req.cookies = {};
+                req.signedCookies = {};
+                const cookieHeader = req.headers?.cookie || req.get?.('cookie') || '';
+                if (cookieHeader) {
+                  for (const part of cookieHeader.split(';')) {
+                    const [key, ...rest] = part.trim().split('=');
+                    if (key) {
+                      const value = rest.join('=');
+                      req.cookies[key.trim()] = decodeURIComponent(value || '');
+                    }
+                  }
+                }
+                next?.();
+              };
+            };
+            return Object.assign(cookieParser, { default: cookieParser });
+          }
+          case 'cors': {
+            // cors middleware shim
+            const cors = (options?: any) => {
+              return (req: any, res: any, next: Function) => {
+                const origin = options?.origin || '*';
+                res.setHeader?.('Access-Control-Allow-Origin', origin);
+                res.setHeader?.('Access-Control-Allow-Methods', options?.methods || 'GET,HEAD,PUT,PATCH,POST,DELETE');
+                res.setHeader?.('Access-Control-Allow-Headers', options?.allowedHeaders || 'Content-Type,Authorization');
+                if (options?.credentials) {
+                  res.setHeader?.('Access-Control-Allow-Credentials', 'true');
+                }
+                if (req.method === 'OPTIONS') {
+                  res.status?.(204).end?.();
+                  return;
+                }
+                next?.();
+              };
+            };
+            return Object.assign(cors, { default: cors });
+          }
+          case 'sharp': {
+            // sharp image processing stub - native module can't run in browser
+            // Returns a chainable API that passes through or returns placeholder data
+            const sharp = (input?: any) => {
+              const instance: any = {
+                resize: () => instance,
+                rotate: () => instance,
+                flip: () => instance,
+                flop: () => instance,
+                sharpen: () => instance,
+                median: () => instance,
+                blur: () => instance,
+                flatten: () => instance,
+                gamma: () => instance,
+                negate: () => instance,
+                normalise: () => instance,
+                normalize: () => instance,
+                clahe: () => instance,
+                convolve: () => instance,
+                threshold: () => instance,
+                linear: () => instance,
+                recomb: () => instance,
+                modulate: () => instance,
+                tint: () => instance,
+                greyscale: () => instance,
+                grayscale: () => instance,
+                toColourspace: () => instance,
+                toColorspace: () => instance,
+                removeAlpha: () => instance,
+                ensureAlpha: () => instance,
+                extractChannel: () => instance,
+                joinChannel: () => instance,
+                bandbool: () => instance,
+                extract: () => instance,
+                trim: () => instance,
+                extend: () => instance,
+                composite: () => instance,
+                jpeg: () => instance,
+                png: () => instance,
+                webp: () => instance,
+                avif: () => instance,
+                heif: () => instance,
+                tiff: () => instance,
+                gif: () => instance,
+                jp2: () => instance,
+                raw: () => instance,
+                tile: () => instance,
+                timeout: () => instance,
+                withMetadata: () => instance,
+                clone: () => sharp(input),
+                metadata: async () => ({ width: 100, height: 100, format: 'png' }),
+                stats: async () => ({ channels: [] }),
+                toBuffer: async () => input || new Uint8Array(0),
+                toFile: async (path: string) => ({ size: 0, width: 100, height: 100 }),
+                pipe: (dest: any) => dest,
+              };
+              return instance;
+            };
+            sharp.cache = () => {};
+            sharp.concurrency = () => 1;
+            sharp.counters = () => ({});
+            sharp.simd = () => false;
+            sharp.format = { jpeg: {}, png: {}, webp: {} };
+            sharp.versions = { sharp: '0.0.0-shiro-stub' };
+            return Object.assign(sharp, { default: sharp });
           }
           default: return null;
         }
@@ -1233,28 +1410,59 @@ export const nodeCmd: Command = {
             else if (fileCache.has(resolved + '/index.js')) resolved += '/index.js';
           }
         } else {
+          // Handle subpath imports like 'semver/functions/coerce'
+          // Split into package name and subpath
+          const parts = modPath.split('/');
+          const isScoped = modPath.startsWith('@');
+          const pkgName = isScoped ? parts.slice(0, 2).join('/') : parts[0];
+          const subpath = isScoped ? parts.slice(2).join('/') : parts.slice(1).join('/');
+
           // Walk up directories to find node_modules (npm resolution)
           let searchDir = fromDir.startsWith('/') ? fromDir : ctx.cwd;
           let found = false;
           while (searchDir) {
-            const nmPath = `${searchDir}/node_modules/${modPath}`;
-            const pkgPath = `${nmPath}/package.json`;
+            const pkgDir = `${searchDir}/node_modules/${pkgName}`;
+            const pkgPath = `${pkgDir}/package.json`;
 
             if (fileCache.has(pkgPath)) {
-              try {
-                const pkg = JSON.parse(fileCache.get(pkgPath)!);
-                let main = pkg.main || 'index.js';
-                main = main.replace(/^\.\//, '');
-                if (!main.endsWith('.js') && !main.endsWith('.json')) main += '.js';
-                resolved = `${nmPath}/${main}`;
-              } catch {
-                resolved = `${nmPath}/index.js`;
+              if (subpath) {
+                // Subpath import - look for the file directly
+                const subpathFull = `${pkgDir}/${subpath}`;
+                if (fileCache.has(subpathFull + '.js')) {
+                  resolved = subpathFull + '.js';
+                } else if (fileCache.has(subpathFull)) {
+                  resolved = subpathFull;
+                } else if (fileCache.has(subpathFull + '/index.js')) {
+                  resolved = subpathFull + '/index.js';
+                } else {
+                  resolved = subpathFull + '.js'; // Will fail with helpful error
+                }
+              } else {
+                // Main package import - use package.json main field
+                try {
+                  const pkg = JSON.parse(fileCache.get(pkgPath)!);
+                  let main = pkg.main || 'index.js';
+                  main = main.replace(/^\.\//, '');
+                  // Don't add .js if already has valid extension
+                  if (!/\.(js|cjs|mjs|json)$/.test(main)) main += '.js';
+                  resolved = `${pkgDir}/${main}`;
+                } catch {
+                  resolved = `${pkgDir}/index.js`;
+                }
               }
               found = true;
               break;
             }
-            if (fileCache.has(`${nmPath}/index.js`)) {
-              resolved = `${nmPath}/index.js`;
+            // Also check if package exists without package.json
+            if (fileCache.has(`${pkgDir}/index.js`)) {
+              if (subpath) {
+                const subpathFull = `${pkgDir}/${subpath}`;
+                if (fileCache.has(subpathFull + '.js')) resolved = subpathFull + '.js';
+                else if (fileCache.has(subpathFull)) resolved = subpathFull;
+                else resolved = subpathFull + '/index.js';
+              } else {
+                resolved = `${pkgDir}/index.js`;
+              }
               found = true;
               break;
             }
@@ -1272,7 +1480,12 @@ export const nodeCmd: Command = {
 
         const content = fileCache.get(resolved);
         if (content === undefined) {
-          throw new Error(`Cannot find module '${modPath}'`);
+          // Show helpful debug info
+          const nearby = [...fileCache.keys()]
+            .filter(k => k.includes(modPath.replace(/^\.\.?\//g, '').replace(/\.js$/, '')))
+            .slice(0, 5);
+          const hint = nearby.length ? `\nSimilar files in cache: ${nearby.join(', ')}` : '';
+          throw new Error(`Cannot find module '${modPath}' (resolved: ${resolved})${hint}`);
         }
 
         if (resolved.endsWith('.json')) {
@@ -1322,8 +1535,12 @@ export const nodeCmd: Command = {
           'const $1 = require("$2");');
 
         // import { a, b } from 'y' → const { a, b } = require('y')
+        // Also handles: import { a as b } → const { a: b }
         src = src.replace(/import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]\s*;?/g,
-          'const {$1} = require("$2");');
+          (_, imports, mod) => {
+            const fixed = imports.replace(/(\w+)\s+as\s+(\w+)/g, '$1: $2');
+            return `const {${fixed}} = require("${mod}");`;
+          });
 
         // import * as x from 'y' → const x = require('y')
         src = src.replace(/import\s+\*\s+as\s+(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?/g,
@@ -1336,12 +1553,38 @@ export const nodeCmd: Command = {
         // export default x → module.exports = x
         src = src.replace(/export\s+default\s+/g, 'module.exports = ');
 
+        // export { x, y } from 'z' → Object.assign(module.exports, require('z'))
+        src = src.replace(/export\s+\{[^}]+\}\s+from\s+['"]([^'"]+)['"]\s*;?/g,
+          'Object.assign(module.exports, require("$1"));');
+
+        // export * from 'z' → Object.assign(module.exports, require('z'))
+        src = src.replace(/export\s+\*\s+from\s+['"]([^'"]+)['"]\s*;?/g,
+          'Object.assign(module.exports, require("$1"));');
+
         // export { x, y } → module.exports = { x, y }
         src = src.replace(/export\s+\{([^}]+)\}\s*;?/g, 'module.exports = {$1};');
 
-        // export const x = ... → const x = ...; module.exports.x = x;
+        // export const/let/var x = ... → const x = ...; module.exports.x = x;
         src = src.replace(/export\s+(const|let|var)\s+(\w+)\s*=/g,
           '$1 $2 =');
+
+        // export function name() → function name(); module.exports.name = name;
+        src = src.replace(/export\s+function\s+(\w+)/g,
+          'function $1');
+
+        // export class Name → class Name; module.exports.Name = Name;
+        src = src.replace(/export\s+class\s+(\w+)/g,
+          'class $1');
+
+        // export async function name() → async function name()
+        src = src.replace(/export\s+async\s+function\s+(\w+)/g,
+          'async function $1');
+
+        // Remove __filename/__dirname declarations (we provide these)
+        // Handles: const __filename = fileURLToPath(import.meta.url);
+        //          const __dirname = dirname(__filename);
+        src = src.replace(/(?:const|let|var)\s+__filename\s*=\s*[^;]+;?/g, '/* __filename provided */');
+        src = src.replace(/(?:const|let|var)\s+__dirname\s*=\s*[^;]+;?/g, '/* __dirname provided */');
 
         return src;
       }
