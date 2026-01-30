@@ -161,37 +161,91 @@ export const nodeCmd: Command = {
       const moduleCache = new Map<string, { exports: any }>();
 
       // Pre-load node_modules (Shiro readdir returns string[])
-      async function preloadPkg(dir: string) {
+      async function preloadDir(dir: string, depth = 0, maxDepth = 5) {
+        if (depth > maxDepth) return;
         try {
           const entries = await ctx.fs.readdir(dir);
           for (const name of entries) {
+            if (name === '.git') continue;
+            // Skip node_modules inside project dirs (handled separately)
+            if (name === 'node_modules' && depth > 0) continue;
             const fp = dir + '/' + name;
-            if (name.endsWith('.js') || name.endsWith('.json')) {
-              try {
+            try {
+              const st = await ctx.fs.stat(fp);
+              if (st.isDirectory()) {
+                await preloadDir(fp, depth + 1, maxDepth);
+              } else if (st.size < 500000) {
                 const content = await ctx.fs.readFile(fp, 'utf8');
                 fileCache.set(fp, content as string);
-              } catch { /* skip */ }
-            } else if (name !== 'node_modules' && !name.includes('.')) {
-              // Likely a directory - try to recurse
-              try {
-                await ctx.fs.stat(fp);
-                await preloadPkg(fp);
-              } catch { /* not a dir or doesn't exist */ }
-            }
+              }
+            } catch { /* skip */ }
           }
         } catch { /* skip */ }
       }
 
-      // Pre-load project .js/.json files from cwd
-      await preloadPkg(ctx.cwd);
-      // Pre-load node_modules
-      const nmDir = ctx.fs.resolvePath('node_modules', ctx.cwd);
-      try {
-        const entries = await ctx.fs.readdir(nmDir);
-        for (const name of entries) {
-          await preloadPkg(nmDir + '/' + name);
-        }
-      } catch { /* no node_modules */ }
+      // Pre-load files from common locations
+      const preloadDirs = [ctx.cwd];
+      const homeDir = ctx.env['HOME'] || '/home/user';
+      if (homeDir !== ctx.cwd) preloadDirs.push(homeDir);
+      preloadDirs.push('/tmp');
+
+      for (const dir of preloadDirs) {
+        await preloadDir(dir, 0, 5);
+      }
+
+      // Pre-load node_modules — walk up from cwd, with deeper recursion
+      let nmSearch = ctx.cwd;
+      while (nmSearch) {
+        const nmDir = nmSearch === '/' ? '/node_modules' : nmSearch + '/node_modules';
+        try {
+          const entries = await ctx.fs.readdir(nmDir);
+          for (const name of entries) {
+            await preloadDir(nmDir + '/' + name, 0, 10);
+          }
+        } catch { /* no node_modules at this level */ }
+        const parent = nmSearch.substring(0, nmSearch.lastIndexOf('/')) || '';
+        if (parent === nmSearch || !parent) break;
+        nmSearch = parent;
+      }
+
+      // Buffer shim — provides from(), alloc(), isBuffer(), toString()
+      const FakeBuffer: any = {
+        from: (input: any, _encoding?: string): any => {
+          if (typeof input === 'string') {
+            const bytes = new TextEncoder().encode(input);
+            return Object.assign(bytes, {
+              toString: (_enc?: string) => input,
+              toJSON: () => ({ type: 'Buffer', data: Array.from(bytes) }),
+            });
+          }
+          if (input instanceof Uint8Array) {
+            return Object.assign(new Uint8Array(input), {
+              toString: (_enc?: string) => new TextDecoder().decode(input),
+              toJSON: () => ({ type: 'Buffer', data: Array.from(input) }),
+            });
+          }
+          if (Array.isArray(input)) {
+            const bytes = new Uint8Array(input);
+            return Object.assign(bytes, {
+              toString: (_enc?: string) => new TextDecoder().decode(bytes),
+              toJSON: () => ({ type: 'Buffer', data: input }),
+            });
+          }
+          return new Uint8Array(0);
+        },
+        alloc: (size: number) => {
+          const bytes = new Uint8Array(size);
+          return Object.assign(bytes, { toString: () => new TextDecoder().decode(bytes) });
+        },
+        isBuffer: (obj: any) => obj instanceof Uint8Array,
+        concat: (list: Uint8Array[]) => {
+          const total = list.reduce((n: number, b: Uint8Array) => n + b.length, 0);
+          const result = new Uint8Array(total);
+          let offset = 0;
+          for (const buf of list) { result.set(buf, offset); offset += buf.length; }
+          return Object.assign(result, { toString: () => new TextDecoder().decode(result) });
+        },
+      };
 
       // Built-in Node.js module shims (maps to Shiro VFS/shell)
       function getBuiltinModule(name: string): any | null {
@@ -336,7 +390,7 @@ export const nodeCmd: Command = {
                 // Create a thenable Buffer-like that resolves when awaited
                 const buf: any = {
                   toString: () => result,
-                  then: (resolve: any, reject: any) => p.then(() => resolve(Buffer.from(result))).catch(reject),
+                  then: (resolve: any, reject: any) => p.then(() => resolve(FakeBuffer.from(result))).catch(reject),
                   [Symbol.toPrimitive]: () => result,
                 };
                 return buf;
@@ -348,8 +402,8 @@ export const nodeCmd: Command = {
                 let status = 0;
                 execAsync(fullCmd).then(r => { stdout = r.stdout; stderr = r.stderr; status = r.exitCode; });
                 return {
-                  get stdout() { return Buffer.from(stdout); },
-                  get stderr() { return Buffer.from(stderr); },
+                  get stdout() { return FakeBuffer.from(stdout); },
+                  get stderr() { return FakeBuffer.from(stderr); },
                   get status() { return status; },
                 };
               },
@@ -550,49 +604,6 @@ export const nodeCmd: Command = {
 
         return mod.exports;
       }
-
-      // Buffer shim — provides from(), alloc(), isBuffer(), toString()
-      const FakeBuffer = {
-        from: (input: any, encoding?: string): any => {
-          if (typeof input === 'string') {
-            const bytes = new TextEncoder().encode(input);
-            return Object.assign(bytes, {
-              toString: (enc?: string) => input,
-              toJSON: () => ({ type: 'Buffer', data: Array.from(bytes) }),
-            });
-          }
-          if (input instanceof Uint8Array) {
-            return Object.assign(new Uint8Array(input), {
-              toString: (enc?: string) => new TextDecoder().decode(input),
-              toJSON: () => ({ type: 'Buffer', data: Array.from(input) }),
-            });
-          }
-          if (Array.isArray(input)) {
-            const bytes = new Uint8Array(input);
-            return Object.assign(bytes, {
-              toString: (enc?: string) => new TextDecoder().decode(bytes),
-              toJSON: () => ({ type: 'Buffer', data: input }),
-            });
-          }
-          return new Uint8Array(0);
-        },
-        alloc: (size: number) => {
-          const bytes = new Uint8Array(size);
-          return Object.assign(bytes, {
-            toString: () => new TextDecoder().decode(bytes),
-          });
-        },
-        isBuffer: (obj: any) => obj instanceof Uint8Array,
-        concat: (list: Uint8Array[]) => {
-          const total = list.reduce((n, b) => n + b.length, 0);
-          const result = new Uint8Array(total);
-          let offset = 0;
-          for (const buf of list) { result.set(buf, offset); offset += buf.length; }
-          return Object.assign(result, {
-            toString: () => new TextDecoder().decode(result),
-          });
-        },
-      };
 
       const fakeRequire = (moduleName: string) => requireModule(moduleName, ctx.cwd);
 
