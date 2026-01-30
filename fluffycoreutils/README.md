@@ -2,12 +2,12 @@
 
 **Shared Unix coreutils for browser-based virtual operating systems**
 
-A TypeScript library providing 120+ essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
+A TypeScript library providing 126+ essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
 
 ## ✨ Features
 
 - 🌐 **Browser-Native**: Pure TypeScript implementation with no Node.js dependencies
-- 🔧 **120+ Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `make`
+- 🔧 **126+ Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `make`
 - 🎯 **Filesystem Agnostic**: Works with any virtual filesystem implementing the `FluffyFS` interface
 - 📦 **Tree-Shakeable**: Import only the commands you need
 - 🔒 **Type-Safe**: Full TypeScript definitions included
@@ -55,7 +55,15 @@ const shell = Object.fromEntries(
 - **file** - Determine file type
 
 ### Text Processing
-- **awk** - Pattern scanning and text processing (with -F field separator, -v variables, BEGIN/END blocks, field extraction with $1, $2, $NF, NR, NF)
+- **awk** - Full AWK interpreter with:
+  - Field splitting: `-F` separator, `$1`, `$2`, `$NF`, `$0`
+  - Built-in variables: `NR`, `NF`, `FS`, `OFS`, `RS`, `ORS`, `FILENAME`
+  - Pattern-action rules: `/pattern/ { action }`
+  - BEGIN/END blocks
+  - User variables: `-v var=value`
+  - printf formatting
+  - Arithmetic operations: `+`, `-`, `*`, `/`
+  - String functions: `length()`, `substr()`, `index()`, `tolower()`, `toupper()`, `split()`, `sub()`, `gsub()`, `match()`
 - **grep** - Search text using patterns
 - **sed** - Stream editor
 - **cut** - Cut out selected portions of lines (-d delimiter, -f fields)
@@ -64,12 +72,14 @@ const shell = Object.fromEntries(
 - **comm** - Compare sorted files line by line
 - **sort** - Sort lines of text
 - **uniq** - Report or filter repeated lines (enhanced with -i, -f, -s, -w, -u flags)
-- **tr** - Translate or delete characters
+- **tr** - Translate or delete characters (enhanced with -c complement, -d delete, -s squeeze, character classes)
 - **diff** - Compare files line by line
 - **fold** - Wrap lines to specified width
 - **fmt** - Format text into paragraphs
 - **nl** - Number lines of files
+- **pr** - Convert text files for printing with headers and page breaks
 - **column** - Format input into columns (-t for tables, -s separator)
+- **tsort** - Perform topological sort
 
 ### Path Utilities
 - **basename** - Strip directory from filename
@@ -133,6 +143,9 @@ const shell = Object.fromEntries(
 - **getopts** - Parse option arguments (POSIX-compliant option parser)
 - **test** / **[** - Evaluate conditional expressions (enhanced with -f, -d, -e, -z, -n, -r, -w, -x, -s, -L, -h, -S, -p, -b, -c, -u, -g, -k, -t operators)
 - **let** - Evaluate arithmetic expressions (supports =, +=, -=, *=, /=, %, +, -, *, /, <, >, <=, >=, ==, !=, &&, ||)
+- **hash** - Remember or report command locations
+- **ulimit** - Control user resource limits
+- **umask** - Set or display file creation mask
 
 **Control Flow Constructs:**
 - **if** / **then** / **elif** / **else** / **fi** - Conditional execution
@@ -152,6 +165,7 @@ const shell = Object.fromEntries(
 ### Development Tools
 - **gcc** / **cc** - GNU C Compiler stub (recognizes flags, can compile simple programs)
 - **pkg-config** - Return metainformation about installed libraries (stub with common packages)
+- **bc** - Arbitrary precision calculator language (supports arithmetic, variables, scale, math library functions)
 
 ### Build & Package Tools
 - **make** - Build automation with Makefile parsing (supports targets, prerequisites, dependencies, -f, -C, -n flags)

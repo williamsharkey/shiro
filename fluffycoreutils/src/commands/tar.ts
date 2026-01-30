@@ -84,7 +84,7 @@ export const tar: FluffyCommand = {
         const lines: string[] = ["FLUFFY-TAR-V1"];
         for (const entry of entries) {
           if (verbose) {
-            io.stderr || console.error(entry.path);
+            console.error(entry.path);
           }
           lines.push(`FILE:${entry.path}`);
           lines.push(`SIZE:${entry.content.length}`);
@@ -162,7 +162,7 @@ export const tar: FluffyCommand = {
 
           extracted.push(filePath);
           if (verbose) {
-            io.stderr || console.error(filePath);
+            console.error(filePath);
           }
         }
 
