@@ -4681,7 +4681,7 @@ const touch = {
   name: "tr",
   description: "Translate or delete characters",
   async exec(n, e) {
-    const { flags: t, positional: s } = parseArgs(n, ["d", "s", "c", "C", "t"]), o = t.d, r = t.s, i = t.c || t.C, a = t.t;
+    const { flags: t, positional: s } = parseArgs(n, []), o = t.d, r = t.s, i = t.c || t.C, a = t.t;
     let c = expandSet(s[0] ?? ""), l = expandSet(s[1] ?? "");
     const d = e.stdin;
     i && c && (c = getComplement(c)), a && l && (c = c.slice(0, l.length));

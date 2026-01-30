@@ -5,7 +5,7 @@ export const tr: FluffyCommand = {
   name: "tr",
   description: "Translate or delete characters",
   async exec(args, io) {
-    const { flags, positional } = parseArgs(args, ["d", "s", "c", "C", "t"]);
+    const { flags, positional } = parseArgs(args, []);
     const deleteMode = flags.d;
     const squeeze = flags.s;
     const complement = flags.c || flags.C;
