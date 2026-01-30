@@ -2,6 +2,7 @@ export type { FluffyCommand, FluffyFS, FluffyEntry, FluffyStat, CommandIO, Comma
 
 // Command imports
 import { alias } from "./commands/alias.js";
+import { arrayHelper } from "./commands/array.js";
 import { awk } from "./commands/awk.js";
 import { base64 } from "./commands/base64.js";
 import { basename } from "./commands/basename.js";
@@ -44,12 +45,14 @@ import { free } from "./commands/free.js";
 import { getopts } from "./commands/getopts.js";
 import { grep } from "./commands/grep.js";
 import { head } from "./commands/head.js";
+import { heredoc } from "./commands/heredoc.js";
 import { hexdump } from "./commands/hexdump.js";
 import { hostname } from "./commands/hostname.js";
 import { id } from "./commands/id.js";
 import { install } from "./commands/install.js";
 import { join } from "./commands/join.js";
 import { less } from "./commands/less.js";
+import { letCmd, arithmeticExpansion } from "./commands/let.js";
 import { ln } from "./commands/ln.js";
 import { ls } from "./commands/ls.js";
 import { make } from "./commands/make.js";
@@ -64,6 +67,7 @@ import { patch } from "./commands/patch.js";
 import { pkgConfig } from "./commands/pkg-config.js";
 import { printenv } from "./commands/printenv.js";
 import { printf } from "./commands/printf.js";
+import { processSubstitution } from "./commands/process-substitution.js";
 import { pwd } from "./commands/pwd.js";
 import { read } from "./commands/read.js";
 import { readlink } from "./commands/readlink.js";
@@ -107,9 +111,9 @@ import type { FluffyCommand } from "./types.js";
 
 // Re-export individual commands
 export {
-  alias, awk, base64, basename, cc, cat, chmod, chown, clear, column, comm, cp, curl, cut, date, declare, df, diff, dirname, done, dot, du,
-  echo, elif, env, esac, exit, expand, expr, exportCmd, fi, file, find, fmt, fold, free, gcc, getopts, grep, head, hexdump, hostname, id, install, join, kill, less, ln, local, ls,
-  make, md5sum, mkdir, mv, nl, nohup, od, paste, patch, pkgConfig, printenv, printf, pwd, read, readlink, readonly, realpath, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings,
+  alias, arrayHelper, awk, base64, basename, cc, cat, chmod, chown, clear, column, comm, cp, curl, cut, date, declare, df, diff, dirname, done, dot, du,
+  echo, elif, env, esac, exit, expand, expr, exportCmd, fi, file, find, fmt, fold, free, gcc, getopts, grep, head, heredoc, hexdump, hostname, id, install, join, kill, less, letCmd, ln, local, ls,
+  make, md5sum, mkdir, mv, nl, nohup, od, paste, patch, pkgConfig, printenv, printf, processSubstitution, pwd, read, readlink, readonly, realpath, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings,
   tail, tar, tee, test, then, time, timeout, touch, tr, trap, type, unalias, unexpand, uniq, unset, uname, until, uptime, watch, wc, which, whoami, xargs, yes,
   breakCmd as break,
   caseCmd as case,
@@ -122,6 +126,7 @@ export {
   functionCmd as function,
   ifCmd as if,
   inCmd as in,
+  letCmd as let,
   returnCmd as return,
   trueCmd as true,
   whileCmd as while,
@@ -129,11 +134,14 @@ export {
 
 /** All commands as a name→command map for easy registration in a shell. */
 export const allCommands: Record<string, FluffyCommand> = {
-  ".": dot, alias, awk, base64, basename, break: breakCmd, case: caseCmd, cc, cat, chmod, chown, clear, column, comm, continue: continueCmd, cp, curl, cut, date, declare, df, diff, dirname, do: doCmd, done, du,
-  echo, elif, else: elseCmd, env, esac, eval: evalCmd, exit, expand, expr, export: exportCmd, false: falseCmd, fi, file, find, fmt, fold, for: forCmd, free, function: functionCmd, gcc, getopts, grep, head, hexdump, hostname, id, if: ifCmd, in: inCmd, install, join, kill, less, ln, local, ls,
-  make, md5sum, mkdir, mv, nl, nohup, od, paste, patch, "pkg-config": pkgConfig, printenv, printf, pwd, read, readlink, readonly, realpath, return: returnCmd, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings,
+  ".": dot, alias, array: arrayHelper, awk, base64, basename, break: breakCmd, case: caseCmd, cc, cat, chmod, chown, clear, column, comm, continue: continueCmd, cp, curl, cut, date, declare, df, diff, dirname, do: doCmd, done, du,
+  echo, elif, else: elseCmd, env, esac, eval: evalCmd, exit, expand, expr, export: exportCmd, false: falseCmd, fi, file, find, fmt, fold, for: forCmd, free, function: functionCmd, gcc, getopts, grep, head, heredoc, hexdump, hostname, id, if: ifCmd, in: inCmd, install, join, kill, less, let: letCmd, ln, local, ls,
+  make, md5sum, mkdir, mv, nl, nohup, od, paste, patch, "pkg-config": pkgConfig, "process-substitution": processSubstitution, printenv, printf, pwd, read, readlink, readonly, realpath, return: returnCmd, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings,
   tail, tar, tee, test, then, time, timeout, touch, tr, trap, true: trueCmd, type, unalias, unexpand, uniq, unset, uname, until, uptime, watch, wc, which, while: whileCmd, whoami, xargs, yes,
 };
 
 /** Array of all commands for iteration. */
 export const commandList: FluffyCommand[] = Object.values(allCommands);
+
+/** Arithmetic expansion helper for $(( )) syntax */
+export { arithmeticExpansion };

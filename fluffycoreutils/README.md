@@ -2,12 +2,12 @@
 
 **Shared Unix coreutils for browser-based virtual operating systems**
 
-A TypeScript library providing 116+ essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
+A TypeScript library providing 120+ essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
 
 ## ✨ Features
 
 - 🌐 **Browser-Native**: Pure TypeScript implementation with no Node.js dependencies
-- 🔧 **116+ Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `make`
+- 🔧 **120+ Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `make`
 - 🎯 **Filesystem Agnostic**: Works with any virtual filesystem implementing the `FluffyFS` interface
 - 📦 **Tree-Shakeable**: Import only the commands you need
 - 🔒 **Type-Safe**: Full TypeScript definitions included
@@ -132,6 +132,7 @@ const shell = Object.fromEntries(
 - **kill** - Send signal to process
 - **getopts** - Parse option arguments (POSIX-compliant option parser)
 - **test** / **[** - Evaluate conditional expressions (enhanced with -f, -d, -e, -z, -n, -r, -w, -x, -s, -L, -h, -S, -p, -b, -c, -u, -g, -k, -t operators)
+- **let** - Evaluate arithmetic expressions (supports =, +=, -=, *=, /=, %, +, -, *, /, <, >, <=, >=, ==, !=, &&, ||)
 
 **Control Flow Constructs:**
 - **if** / **then** / **elif** / **else** / **fi** - Conditional execution
@@ -140,7 +141,13 @@ const shell = Object.fromEntries(
 - **case** / **in** / **esac** - Pattern matching
 - **function** - Define shell functions
 
-**Important Note**: Control flow keywords (if/then/else/fi, while/do/done, for/in/do/done, case/esac, function) are shell language constructs that must be parsed and interpreted at the shell level. These commands are provided as placeholders that return helpful error messages, allowing shell parsers to recognize and handle them appropriately. The shell built-ins above provide supporting functionality that can be executed as regular commands.
+**Advanced Shell Features (Implementation Guidance):**
+- **heredoc** - Here-document processing guide (`<< EOF`)
+- **process-substitution** - Process substitution guide (`<(cmd)`, `>(cmd)`)
+- **array** - Array variable operations guide (`arr=(a b c)`, `${arr[0]}`, `${arr[@]}`)
+- **arithmeticExpansion** - Exported helper for `$(( ))` syntax evaluation
+
+**Important Note**: Control flow keywords (if/then/else/fi, while/do/done, for/in/do/done, case/esac, function) and advanced features (heredoc, process substitution, arrays, arithmetic expansion) are shell language constructs that must be parsed and interpreted at the shell level. The helper commands provide comprehensive implementation guidance for shell developers. The shell built-ins above provide supporting functionality that can be executed as regular commands.
 
 ### Development Tools
 - **gcc** / **cc** - GNU C Compiler stub (recognizes flags, can compile simple programs)

@@ -1,88 +1,162 @@
-function y(n, t = []) {
-  const e = {}, s = {}, o = [], r = new Set(t);
+function y(n, e = []) {
+  const t = {}, s = {}, r = [], o = new Set(e);
   for (let a = 0; a < n.length; a++) {
     const i = n[a];
     if (i === "--") {
-      o.push(...n.slice(a + 1));
+      r.push(...n.slice(a + 1));
       break;
     }
     if (i.startsWith("--")) {
       const c = i.slice(2);
-      r.has(c) && a + 1 < n.length ? s[c] = n[++a] : e[c] = !0;
+      o.has(c) && a + 1 < n.length ? s[c] = n[++a] : t[c] = !0;
     } else if (i.startsWith("-") && i.length > 1 && !/^-\d/.test(i)) {
       const c = i.slice(1);
-      if (r.has(c) && a + 1 < n.length)
+      if (o.has(c) && a + 1 < n.length)
         s[c] = n[++a];
       else
         for (let l = 0; l < c.length; l++) {
           const u = c[l];
-          if (r.has(u)) {
+          if (o.has(u)) {
             const d = c.slice(l + 1);
             d ? s[u] = d : a + 1 < n.length && (s[u] = n[++a]);
             break;
           }
-          e[u] = !0;
+          t[u] = !0;
         }
     } else
-      o.push(i);
+      r.push(i);
   }
-  return { flags: e, values: s, positional: o };
+  return { flags: t, values: s, positional: r };
 }
-async function N(n, t, e, s, o) {
+async function j(n, e, t, s, r) {
   if (n.length === 0)
-    return { content: t, files: [] };
-  const r = [], a = [];
+    return { content: e, files: [] };
+  const o = [], a = [];
   for (const i of n) {
-    const c = o(i, s);
-    r.push(c), a.push(await e.readFile(c));
+    const c = r(i, s);
+    o.push(c), a.push(await t.readFile(c));
   }
-  return { content: a.join(""), files: r };
+  return { content: a.join(""), files: o };
 }
 const X = {
   name: "alias",
   description: "Define or display aliases",
-  async exec(n, t) {
-    const { positional: e, flags: s } = y(n);
-    if (e.length === 0)
+  async exec(n, e) {
+    const { positional: t, flags: s } = y(n);
+    if (t.length === 0)
       return {
         stdout: "",
         stderr: "",
         exitCode: 0
       };
-    const o = [];
-    for (const r of e)
-      s.p && o.push(`alias ${r}`);
+    const r = [];
+    for (const o of t)
+      s.p && r.push(`alias ${o}`);
     return {
-      stdout: o.join(`
-`) + (o.length > 0 ? `
+      stdout: r.join(`
+`) + (r.length > 0 ? `
 ` : ""),
       stderr: "",
       exitCode: 0
     };
   }
-}, Z = {
+}, Q = {
+  name: "array",
+  description: "Helper for array variable operations (shell feature)",
+  async exec(n, e) {
+    return n.length > 0 && n[0] === "--help" ? {
+      stdout: `array: This is a shell language feature, not a command.
+
+Array syntax must be implemented at the shell variable level:
+
+Declaration:
+  arr=(value1 value2 value3)
+  arr=()  # empty array
+  arr[0]=value1
+  arr[5]=value5  # sparse array
+
+Access:
+  \${arr[0]}      # First element (0-indexed)
+  \${arr[1]}      # Second element
+  \${arr[-1]}     # Last element (bash 4.3+)
+  \${arr[@]}      # All elements as separate words
+  \${arr[*]}      # All elements as single word
+  \${#arr[@]}     # Array length
+  \${!arr[@]}     # Array indices
+
+Operations:
+  arr+=(value4 value5)           # Append elements
+  unset arr[2]                   # Remove element
+  \${arr[@]:start}               # Slice from start
+  \${arr[@]:start:length}        # Slice with length
+  \${arr[@]/pattern/replacement} # Replace in all elements
+
+Iteration:
+  for item in "\${arr[@]}"; do
+    echo "$item"
+  done
+
+  for i in "\${!arr[@]}"; do
+    echo "arr[$i] = \${arr[$i]}"
+  done
+
+Implementation guidance for shells:
+1. Store arrays as objects/maps with numeric keys
+2. Implement expansion patterns for \${arr[...]} syntax
+3. Handle @ vs * difference (word splitting)
+4. Support sparse arrays (missing indices)
+5. Implement array-specific operations (length, slice, etc.)
+
+Example shell pseudo-code:
+  arrays = {}  // Map of variable name to array
+
+  // Assignment: arr=(a b c)
+  arrays['arr'] = ['a', 'b', 'c']
+
+  // Access: \${arr[1]}
+  value = arrays['arr'][1]  // 'b'
+
+  // All elements: \${arr[@]}
+  values = arrays['arr'].join(' ')  // 'a b c'
+
+  // Length: \${#arr[@]}
+  length = arrays['arr'].length  // 3
+
+Shell implementers: Parse array syntax at the variable expansion level.
+
+`,
+      stderr: "",
+      exitCode: 0
+    } : {
+      stdout: "",
+      stderr: `array: This is a shell feature. Use --help for implementation guidance.
+`,
+      exitCode: 1
+    };
+  }
+}, ee = {
   name: "awk",
   description: "Pattern scanning and processing language",
-  async exec(n, t) {
-    const { values: e, positional: s } = y(n, ["F", "v"]);
+  async exec(n, e) {
+    const { values: t, positional: s } = y(n, ["F", "v"]);
     if (s.length === 0)
       return { stdout: "", stderr: `awk: missing program
 `, exitCode: 1 };
-    const o = s[0], r = s.slice(1), a = e.F || /\s+/, i = typeof a == "string" ? new RegExp(a) : a, c = {};
-    if (e.v) {
-      const l = e.v.split("=");
+    const r = s[0], o = s.slice(1), a = t.F || /\s+/, i = typeof a == "string" ? new RegExp(a) : a, c = {};
+    if (t.v) {
+      const l = t.v.split("=");
       l.length === 2 && (c[l[0]] = l[1]);
     }
     try {
-      const { content: l } = await N(
-        r,
-        t.stdin,
-        t.fs,
-        t.cwd,
-        t.fs.resolvePath
+      const { content: l } = await j(
+        o,
+        e.stdin,
+        e.fs,
+        e.cwd,
+        e.fs.resolvePath
       ), u = l.split(`
 `).filter((x) => x !== "" || l.endsWith(`
-`)), d = [], p = o.match(/BEGIN\s*\{\s*([^}]*)\s*\}/), f = o.match(/END\s*\{\s*([^}]*)\s*\}/), h = o.match(/(?:\/([^/]*)\/\s*)?\{\s*([^}]*)\s*\}/);
+`)), d = [], p = r.match(/BEGIN\s*\{\s*([^}]*)\s*\}/), f = r.match(/END\s*\{\s*([^}]*)\s*\}/), h = r.match(/(?:\/([^/]*)\/\s*)?\{\s*([^}]*)\s*\}/);
       let m = 0, g = 0;
       if (p) {
         const x = D(p[1], [], 0, 0, c);
@@ -92,21 +166,21 @@ const X = {
         m++;
         const w = x.split(i).filter((b) => b !== "");
         g = w.length;
-        let v = !0;
+        let C = !0;
         if (h) {
-          const b = h[1], C = h[2];
+          const b = h[1], v = h[2];
           if (b)
             try {
-              v = new RegExp(b).test(x);
+              C = new RegExp(b).test(x);
             } catch {
-              v = !1;
+              C = !1;
             }
-          if (v) {
-            const $ = D(C, w, m, g, c);
+          if (C) {
+            const $ = D(v, w, m, g, c);
             $ !== null && d.push($);
           }
         } else if (!p && !f) {
-          const b = D(o, w, m, g, c);
+          const b = D(r, w, m, g, c);
           b !== null && d.push(b);
         }
       }
@@ -131,38 +205,38 @@ const X = {
     }
   }
 };
-function D(n, t, e, s, o) {
-  let r = n.trim();
-  if (r.startsWith("print")) {
-    const a = r.substring(5).trim();
+function D(n, e, t, s, r) {
+  let o = n.trim();
+  if (o.startsWith("print")) {
+    const a = o.substring(5).trim();
     if (!a || a === "")
-      return t.join(" ");
+      return e.join(" ");
     let i = a;
-    i = i.replace(/\$0/g, t.join(" ")), i = i.replace(/\$NF/g, t[t.length - 1] || "");
-    for (let c = 1; c <= t.length; c++)
-      i = i.replace(new RegExp(`\\$${c}`, "g"), t[c - 1] || "");
-    i = i.replace(/\bNR\b/g, String(e)), i = i.replace(/\bNF\b/g, String(s));
-    for (const [c, l] of Object.entries(o))
+    i = i.replace(/\$0/g, e.join(" ")), i = i.replace(/\$NF/g, e[e.length - 1] || "");
+    for (let c = 1; c <= e.length; c++)
+      i = i.replace(new RegExp(`\\$${c}`, "g"), e[c - 1] || "");
+    i = i.replace(/\bNR\b/g, String(t)), i = i.replace(/\bNF\b/g, String(s));
+    for (const [c, l] of Object.entries(r))
       i = i.replace(new RegExp(`\\b${c}\\b`, "g"), l);
     return i = i.replace(/^["'](.*)["']$/, "$1"), i = i.replace(/\s+/g, " ").trim(), i;
   }
   return null;
 }
-const Q = {
+const te = {
   name: "base64",
   description: "Base64 encode or decode",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n), o = e.d || e.decode, r = e.w ? parseInt(e.w) : 76, a = e.i || e["ignore-garbage"];
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n), r = t.d || t.decode, o = t.w ? parseInt(t.w) : 76, a = t.i || t["ignore-garbage"];
     try {
-      const { content: i } = await N(
+      const { content: i } = await j(
         s,
-        t.stdin,
-        t.fs,
-        t.cwd,
-        t.fs.resolvePath
+        e.stdin,
+        e.fs,
+        e.cwd,
+        e.fs.resolvePath
       );
       let c;
-      if (o) {
+      if (r) {
         const l = a ? i.replace(/[^A-Za-z0-9+/=]/g, "") : i.replace(/\s/g, "");
         try {
           c = globalThis.atob(l);
@@ -176,10 +250,10 @@ const Q = {
         }
       } else {
         const l = globalThis.btoa(i);
-        if (r > 0) {
+        if (o > 0) {
           const u = [];
-          for (let d = 0; d < l.length; d += r)
-            u.push(l.substring(d, d + r));
+          for (let d = 0; d < l.length; d += o)
+            u.push(l.substring(d, d + o));
           c = u.join(`
 `);
         } else
@@ -200,22 +274,22 @@ const Q = {
       };
     }
   }
-}, tt = {
+}, se = {
   name: "basename",
   description: "Strip directory and suffix from filenames",
   async exec(n) {
     if (n.length === 0)
       return { stdout: "", stderr: `basename: missing operand
 `, exitCode: 1 };
-    let t = n[0].replace(/\/+$/, "").split("/").pop() || "/";
-    return n.length > 1 && t.endsWith(n[1]) && (t = t.slice(0, -n[1].length)), { stdout: t + `
+    let e = n[0].replace(/\/+$/, "").split("/").pop() || "/";
+    return n.length > 1 && e.endsWith(n[1]) && (e = e.slice(0, -n[1].length)), { stdout: e + `
 `, stderr: "", exitCode: 0 };
   }
-}, et = {
+}, ne = {
   name: "break",
   description: "Exit from a for, while, or until loop",
-  async exec(n, t) {
-    const { positional: e } = y(n), s = e.length > 0 ? parseInt(e[0]) : 1;
+  async exec(n, e) {
+    const { positional: t } = y(n), s = t.length > 0 ? parseInt(t[0]) : 1;
     return isNaN(s) || s < 1 ? {
       stdout: "",
       stderr: `break: numeric argument required
@@ -227,10 +301,10 @@ const Q = {
       exitCode: 0
     };
   }
-}, st = {
+}, re = {
   name: "case",
   description: "Pattern matching (shell language construct)",
-  async exec(n, t) {
+  async exec(n, e) {
     return {
       stdout: "",
       stderr: `case: this is a shell language construct that must be interpreted by the shell
@@ -239,10 +313,10 @@ Usage: case WORD in PATTERN) COMMANDS ;; esac
       exitCode: 2
     };
   }
-}, nt = {
+}, oe = {
   name: "esac",
   description: "End case statement (shell language construct)",
-  async exec(n, t) {
+  async exec(n, e) {
     return {
       stdout: "",
       stderr: `esac: can only be used to close a case statement
@@ -250,32 +324,32 @@ Usage: case WORD in PATTERN) COMMANDS ;; esac
       exitCode: 2
     };
   }
-}, rt = {
+}, ie = {
   name: "cat",
   description: "Concatenate and display files",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n);
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n);
     try {
-      const { content: o } = await N(
+      const { content: r } = await j(
         s,
-        t.stdin,
-        t.fs,
-        t.cwd,
-        t.fs.resolvePath
+        e.stdin,
+        e.fs,
+        e.cwd,
+        e.fs.resolvePath
       );
-      return e.n ? { stdout: o.split(`
+      return t.n ? { stdout: r.split(`
 `).map((i, c) => `${String(c + 1).padStart(6)}	${i}`).join(`
-`), stderr: "", exitCode: 0 } : { stdout: o, stderr: "", exitCode: 0 };
-    } catch (o) {
-      return { stdout: "", stderr: `cat: ${o instanceof Error ? o.message : o}
+`), stderr: "", exitCode: 0 } : { stdout: r, stderr: "", exitCode: 0 };
+    } catch (r) {
+      return { stdout: "", stderr: `cat: ${r instanceof Error ? r.message : r}
 `, exitCode: 1 };
     }
   }
 }, Y = {
   name: "gcc",
   description: "GNU C Compiler (stub)",
-  async exec(n, t) {
-    const { flags: e, values: s, positional: o } = y(n, [
+  async exec(n, e) {
+    const { flags: t, values: s, positional: r } = y(n, [
       "c",
       "S",
       "E",
@@ -309,7 +383,7 @@ Usage: case WORD in PATTERN) COMMANDS ;; esac
       "MT",
       "MQ"
     ]);
-    if (e.version || e.v)
+    if (t.version || t.v)
       return {
         stdout: `gcc (GCC) 9.3.0 (stub)
 Copyright (C) 2019 Free Software Foundation, Inc.
@@ -320,7 +394,7 @@ To enable real C compilation, integrate WASM-based tcc or Emscripten.
         stderr: "",
         exitCode: 0
       };
-    if (o.length === 0)
+    if (r.length === 0)
       return {
         stdout: "",
         stderr: `gcc: fatal error: no input files
@@ -328,10 +402,10 @@ compilation terminated.
 `,
         exitCode: 1
       };
-    const r = o, a = s.o || "a.out";
-    for (const p of r) {
-      const f = t.fs.resolvePath(p, t.cwd);
-      if (!await t.fs.exists(f))
+    const o = r, a = s.o || "a.out";
+    for (const p of o) {
+      const f = e.fs.resolvePath(p, e.cwd);
+      if (!await e.fs.exists(f))
         return {
           stdout: "",
           stderr: `gcc: error: ${p}: No such file or directory
@@ -342,10 +416,10 @@ compilation terminated.
         };
     }
     let i = !1, c = "";
-    for (const p of r)
+    for (const p of o)
       if (p.endsWith(".c") || p.endsWith(".cc") || p.endsWith(".cpp"))
         try {
-          const f = t.fs.resolvePath(p, t.cwd), h = await t.fs.readFile(f);
+          const f = e.fs.resolvePath(p, e.cwd), h = await e.fs.readFile(f);
           c += h + `
 `, (/int\s+main\s*\(/.test(h) || /void\s+main\s*\(/.test(h)) && (i = !0);
         } catch (f) {
@@ -356,7 +430,7 @@ compilation terminated.
             exitCode: 1
           };
         }
-    if (e.E)
+    if (t.E)
       return {
         stdout: c.split(`
 `).filter((f) => !f.trim().startsWith("#")).join(`
@@ -364,11 +438,11 @@ compilation terminated.
         stderr: "",
         exitCode: 0
       };
-    if (e.c) {
-      for (const p of r)
+    if (t.c) {
+      for (const p of o)
         if (p.endsWith(".c") || p.endsWith(".cc") || p.endsWith(".cpp")) {
-          const f = p.replace(/\.(c|cc|cpp)$/, ".o"), h = t.fs.resolvePath(f, t.cwd);
-          await t.fs.writeFile(h, `# Object file stub for ${p}
+          const f = p.replace(/\.(c|cc|cpp)$/, ".o"), h = e.fs.resolvePath(f, e.cwd);
+          await e.fs.writeFile(h, `# Object file stub for ${p}
 `);
         }
       return {
@@ -377,11 +451,11 @@ compilation terminated.
         exitCode: 0
       };
     }
-    if (e.S) {
-      for (const p of r)
+    if (t.S) {
+      for (const p of o)
         if (p.endsWith(".c") || p.endsWith(".cc") || p.endsWith(".cpp")) {
-          const f = p.replace(/\.(c|cc|cpp)$/, ".s"), h = t.fs.resolvePath(f, t.cwd);
-          await t.fs.writeFile(h, `# Assembly stub for ${p}
+          const f = p.replace(/\.(c|cc|cpp)$/, ".s"), h = e.fs.resolvePath(f, e.cwd);
+          await e.fs.writeFile(h, `# Assembly stub for ${p}
 .text
 .globl main
 main:
@@ -394,7 +468,7 @@ main:
         exitCode: 0
       };
     }
-    if (!i && !e.shared && !e.c)
+    if (!i && !t.shared && !t.c)
       return {
         stdout: "",
         stderr: `gcc: error: undefined reference to 'main'
@@ -402,41 +476,41 @@ collect2: error: ld returned 1 exit status
 `,
         exitCode: 1
       };
-    const l = t.fs.resolvePath(a, t.cwd), u = /printf\s*\(\s*["'].*[Hh]ello.*["']/.test(c) || /puts\s*\(\s*["'].*[Hh]ello.*["']/.test(c);
+    const l = e.fs.resolvePath(a, e.cwd), u = /printf\s*\(\s*["'].*[Hh]ello.*["']/.test(c) || /puts\s*\(\s*["'].*[Hh]ello.*["']/.test(c);
     let d = `#!/bin/sh
 `;
     return u ? d += `echo 'Hello, World!'
 ` : d += `# Compiled binary stub
-`, await t.fs.writeFile(l, d), {
+`, await e.fs.writeFile(l, d), {
       stdout: "",
       stderr: "",
       exitCode: 0
     };
   }
-}, ot = {
+}, ae = {
   name: "cc",
   description: "C Compiler (alias for gcc)",
-  async exec(n, t) {
-    return Y.exec(n, t);
+  async exec(n, e) {
+    return Y.exec(n, e);
   }
-}, it = {
+}, ce = {
   name: "chmod",
   description: "Change file mode bits",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n), o = e.R;
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n), r = t.R;
     if (s.length < 2)
       return { stdout: "", stderr: `chmod: missing operand
 `, exitCode: 1 };
-    const r = s[0], a = s.slice(1), i = parseInt(r, 8);
+    const o = s[0], a = s.slice(1), i = parseInt(o, 8);
     if (isNaN(i))
-      return { stdout: "", stderr: `chmod: invalid mode: '${r}'
+      return { stdout: "", stderr: `chmod: invalid mode: '${o}'
 `, exitCode: 1 };
     async function c(l) {
-      const u = t.fs.resolvePath(l, t.cwd);
-      if (o)
+      const u = e.fs.resolvePath(l, e.cwd);
+      if (r)
         try {
-          if ((await t.fs.stat(u)).type === "dir") {
-            const p = await t.fs.readdir(u);
+          if ((await e.fs.stat(u)).type === "dir") {
+            const p = await e.fs.readdir(u);
             for (const f of p)
               await c(u + "/" + f.name);
           }
@@ -452,22 +526,22 @@ collect2: error: ld returned 1 exit status
 `, exitCode: 1 };
     }
   }
-}, at = {
+}, le = {
   name: "chown",
   description: "Change file owner and group",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n);
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n);
     if (s.length < 2)
       return { stdout: "", stderr: `chown: missing operand
 `, exitCode: 1 };
-    const o = s[0], r = s.slice(1);
-    e.R;
-    const a = e.v, i = o.split(":");
+    const r = s[0], o = s.slice(1);
+    t.R;
+    const a = t.v, i = r.split(":");
     i[0], i[1];
     const c = [];
     try {
-      for (const l of r)
-        a && c.push(`ownership of '${l}' retained as ${o}`);
+      for (const l of o)
+        a && c.push(`ownership of '${l}' retained as ${r}`);
       return {
         stdout: c.join(`
 `) + (c.length > 0 ? `
@@ -484,34 +558,34 @@ collect2: error: ld returned 1 exit status
       };
     }
   }
-}, ct = {
+}, de = {
   name: "clear",
   description: "Clear the terminal screen",
   async exec() {
     return { stdout: "\x1B[2J\x1B[H", stderr: "", exitCode: 0 };
   }
-}, lt = {
+}, ue = {
   name: "column",
   description: "Format input into columns",
-  async exec(n, t) {
-    const { flags: e, values: s, positional: o } = y(n, ["t", "s", "c", "x", "n"]);
+  async exec(n, e) {
+    const { flags: t, values: s, positional: r } = y(n, ["t", "s", "c", "x", "n"]);
     try {
-      const { content: r } = await N(
-        o,
-        t.stdin,
-        t.fs,
-        t.cwd,
-        t.fs.resolvePath
-      ), a = r.split(`
+      const { content: o } = await j(
+        r,
+        e.stdin,
+        e.fs,
+        e.cwd,
+        e.fs.resolvePath
+      ), a = o.split(`
 `);
-      if (a.length > 0 && a[a.length - 1] === "" && a.pop(), e.t) {
+      if (a.length > 0 && a[a.length - 1] === "" && a.pop(), t.t) {
         const p = s.s || "	", f = new RegExp(p), h = a.map((w) => w.split(f)), m = Math.max(...h.map((w) => w.length)), g = new Array(m).fill(0);
         for (const w of h)
-          for (let v = 0; v < w.length; v++)
-            g[v] = Math.max(g[v] || 0, w[v].length);
-        const x = h.map((w) => w.map((v, b) => {
-          const C = g[b];
-          return v.padEnd(C);
+          for (let C = 0; C < w.length; C++)
+            g[C] = Math.max(g[C] || 0, w[C].length);
+        const x = h.map((w) => w.map((C, b) => {
+          const v = g[b];
+          return C.padEnd(v);
         }).join("  ")).join(`
 `);
         return {
@@ -525,7 +599,7 @@ collect2: error: ld returned 1 exit status
       if (c.length === 0)
         return { stdout: "", stderr: "", exitCode: 0 };
       const u = Math.max(...c.map((p) => p.length)) + 2, d = Math.max(1, Math.floor(i / u));
-      if (e.x) {
+      if (t.x) {
         const p = Math.ceil(c.length / d), f = Array(p).fill(null).map(() => []);
         for (let m = 0; m < c.length; m++) {
           const g = m % p;
@@ -553,20 +627,20 @@ collect2: error: ld returned 1 exit status
           exitCode: 0
         };
       }
-    } catch (r) {
+    } catch (o) {
       return {
         stdout: "",
-        stderr: `column: ${r.message}
+        stderr: `column: ${o.message}
 `,
         exitCode: 1
       };
     }
   }
-}, dt = {
+}, fe = {
   name: "comm",
   description: "Compare two sorted files line by line",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n);
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n);
     if (s.length < 2)
       return {
         stdout: "",
@@ -574,9 +648,9 @@ collect2: error: ld returned 1 exit status
 `,
         exitCode: 1
       };
-    const o = e[1], r = e[2], a = e[3];
+    const r = t[1], o = t[2], a = t[3];
     try {
-      const i = t.fs.resolvePath(s[0], t.cwd), c = t.fs.resolvePath(s[1], t.cwd), l = await t.fs.readFile(i), u = await t.fs.readFile(c), d = l.split(`
+      const i = e.fs.resolvePath(s[0], e.cwd), c = e.fs.resolvePath(s[1], e.cwd), l = await e.fs.readFile(i), u = await e.fs.readFile(c), d = l.split(`
 `).filter((g) => g !== "" || l.endsWith(`
 `)), p = u.split(`
 `).filter((g) => g !== "" || u.endsWith(`
@@ -587,25 +661,25 @@ collect2: error: ld returned 1 exit status
       for (; h < d.length || m < p.length; ) {
         const g = h < d.length ? d[h] : null, x = m < p.length ? p[m] : null;
         if (g === null) {
-          if (!r) {
-            const w = o ? "" : "	";
+          if (!o) {
+            const w = r ? "" : "	";
             f.push(w + x);
           }
           m++;
         } else if (x === null)
-          o || f.push(g), h++;
+          r || f.push(g), h++;
         else if (g < x)
-          o || f.push(g), h++;
+          r || f.push(g), h++;
         else if (g > x) {
-          if (!r) {
-            const w = o ? "" : "	";
+          if (!o) {
+            const w = r ? "" : "	";
             f.push(w + x);
           }
           m++;
         } else {
           if (!a) {
             let w = "";
-            o || (w += "	"), r || (w += "	"), f.push(w + g);
+            r || (w += "	"), o || (w += "	"), f.push(w + g);
           }
           h++, m++;
         }
@@ -626,11 +700,11 @@ collect2: error: ld returned 1 exit status
       };
     }
   }
-}, ut = {
+}, pe = {
   name: "continue",
   description: "Continue to next iteration of a for, while, or until loop",
-  async exec(n, t) {
-    const { positional: e } = y(n), s = e.length > 0 ? parseInt(e[0]) : 1;
+  async exec(n, e) {
+    const { positional: t } = y(n), s = t.length > 0 ? parseInt(t[0]) : 1;
     return isNaN(s) || s < 1 ? {
       stdout: "",
       stderr: `continue: numeric argument required
@@ -642,30 +716,30 @@ collect2: error: ld returned 1 exit status
       exitCode: 0
     };
   }
-}, ft = {
+}, he = {
   name: "cp",
   description: "Copy files and directories",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n), o = e.r || e.R;
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n), r = t.r || t.R;
     if (s.length < 2)
       return { stdout: "", stderr: `cp: missing operand
 `, exitCode: 1 };
-    const r = t.fs.resolvePath(s[s.length - 1], t.cwd), a = s.slice(0, -1);
+    const o = e.fs.resolvePath(s[s.length - 1], e.cwd), a = s.slice(0, -1);
     let i = !1;
     try {
-      i = (await t.fs.stat(r)).type === "dir";
+      i = (await e.fs.stat(o)).type === "dir";
     } catch {
     }
     if (a.length > 1 && !i)
       return { stdout: "", stderr: `cp: target is not a directory
 `, exitCode: 1 };
     async function c(u, d) {
-      const p = await t.fs.readFile(u);
-      await t.fs.writeFile(d, p);
+      const p = await e.fs.readFile(u);
+      await e.fs.writeFile(d, p);
     }
     async function l(u, d) {
-      await t.fs.mkdir(d, { recursive: !0 });
-      const p = await t.fs.readdir(u);
+      await e.fs.mkdir(d, { recursive: !0 });
+      const p = await e.fs.readdir(u);
       for (const f of p) {
         const h = u + "/" + f.name, m = d + "/" + f.name;
         f.type === "dir" ? await l(h, m) : await c(h, m);
@@ -673,9 +747,9 @@ collect2: error: ld returned 1 exit status
     }
     try {
       for (const u of a) {
-        const d = t.fs.resolvePath(u, t.cwd), p = await t.fs.stat(d), f = u.split("/").pop(), h = i ? r + "/" + f : r;
+        const d = e.fs.resolvePath(u, e.cwd), p = await e.fs.stat(d), f = u.split("/").pop(), h = i ? o + "/" + f : o;
         if (p.type === "dir") {
-          if (!o)
+          if (!r)
             return { stdout: "", stderr: `cp: -r not specified; omitting directory '${u}'
 `, exitCode: 1 };
           await l(d, h);
@@ -688,15 +762,15 @@ collect2: error: ld returned 1 exit status
 `, exitCode: 1 };
     }
   }
-}, pt = {
+}, me = {
   name: "curl",
   description: "Transfer data from or to a server",
-  async exec(n, t) {
-    const { flags: e, values: s, positional: o } = y(n, ["X", "H", "d", "o", "user-agent", "header", "data", "request", "output"]);
-    if (o.length === 0)
+  async exec(n, e) {
+    const { flags: t, values: s, positional: r } = y(n, ["X", "H", "d", "o", "user-agent", "header", "data", "request", "output"]);
+    if (r.length === 0)
       return { stdout: "", stderr: `curl: no URL specified!
 `, exitCode: 1 };
-    const r = o[0], a = s.X || s.request || (s.d || s.data ? "POST" : "GET"), i = s.o || s.output, c = e.s || e.silent, l = e.i || e.include, u = e.I || e.head, d = e.L || e.location, p = {}, f = s.H || s.header;
+    const o = r[0], a = s.X || s.request || (s.d || s.data ? "POST" : "GET"), i = s.o || s.output, c = t.s || t.silent, l = t.i || t.include, u = t.I || t.head, d = t.L || t.location, p = {}, f = s.H || s.header;
     if (f) {
       const g = f.split(":");
       g.length >= 2 && (p[g[0].trim()] = g.slice(1).join(":").trim());
@@ -712,20 +786,20 @@ collect2: error: ld returned 1 exit status
         redirect: d ? "follow" : "manual"
       };
       m && a !== "GET" && a !== "HEAD" && (g.body = m);
-      const x = await fetch(r, g);
+      const x = await fetch(o, g);
       let w = "";
       if ((l || u) && (w += `HTTP/1.1 ${x.status} ${x.statusText}
-`, x.headers.forEach((v, b) => {
-        w += `${b}: ${v}
+`, x.headers.forEach((C, b) => {
+        w += `${b}: ${C}
 `;
       }), w += `
 `), !u) {
-        const v = await x.text();
-        w += v;
+        const C = await x.text();
+        w += C;
       }
       if (i) {
-        const v = t.fs.resolvePath(i, t.cwd);
-        return await t.fs.writeFile(v, u ? "" : await x.text()), c ? { stdout: "", stderr: "", exitCode: 0 } : {
+        const C = e.fs.resolvePath(i, e.cwd);
+        return await e.fs.writeFile(C, u ? "" : await x.text()), c ? { stdout: "", stderr: "", exitCode: 0 } : {
           stdout: "",
           stderr: `  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
                                  Dload  Upload   Total   Spent    Left  Speed
@@ -749,29 +823,29 @@ collect2: error: ld returned 1 exit status
       };
     }
   }
-}, ht = {
+}, ge = {
   name: "cut",
   description: "Remove sections from each line of files",
-  async exec(n, t) {
-    const { values: e, positional: s } = y(n, ["d", "f", "c"]), o = e.d ?? "	", r = e.f, a = e.c;
-    if (!r && !a)
+  async exec(n, e) {
+    const { values: t, positional: s } = y(n, ["d", "f", "c"]), r = t.d ?? "	", o = t.f, a = t.c;
+    if (!o && !a)
       return { stdout: "", stderr: `cut: you must specify -f or -c
 `, exitCode: 1 };
     try {
-      const { content: i } = await N(
+      const { content: i } = await j(
         s,
-        t.stdin,
-        t.fs,
-        t.cwd,
-        t.fs.resolvePath
-      ), c = mt(r ?? a), l = i.split(`
+        e.stdin,
+        e.fs,
+        e.cwd,
+        e.fs.resolvePath
+      ), c = xe(o ?? a), l = i.split(`
 `);
       l.length > 0 && l[l.length - 1] === "" && l.pop();
       const u = [];
       for (const d of l)
-        if (r) {
-          const p = d.split(o), f = c.flatMap((h) => p.slice(h.start - 1, h.end)).filter((h) => h !== void 0);
-          u.push(f.join(o));
+        if (o) {
+          const p = d.split(r), f = c.flatMap((h) => p.slice(h.start - 1, h.end)).filter((h) => h !== void 0);
+          u.push(f.join(r));
         } else {
           const p = d.split(""), f = c.flatMap((h) => p.slice(h.start - 1, h.end)).filter((h) => h !== void 0);
           u.push(f.join(""));
@@ -785,28 +859,28 @@ collect2: error: ld returned 1 exit status
     }
   }
 };
-function mt(n) {
-  return n.split(",").map((t) => {
-    if (t.includes("-")) {
-      const [s, o] = t.split("-");
+function xe(n) {
+  return n.split(",").map((e) => {
+    if (e.includes("-")) {
+      const [s, r] = e.split("-");
       return {
         start: s ? parseInt(s, 10) : 1,
-        end: o ? parseInt(o, 10) : 1 / 0
+        end: r ? parseInt(r, 10) : 1 / 0
       };
     }
-    const e = parseInt(t, 10);
-    return { start: e, end: e };
+    const t = parseInt(e, 10);
+    return { start: t, end: t };
   });
 }
-const gt = {
+const ye = {
   name: "date",
   description: "Display date and time",
-  async exec(n, t) {
-    const { flags: e, positional: s, values: o } = y(n, ["d", "date", "r", "reference", "u"]);
-    let r;
-    if (o.d || o.date) {
-      const c = o.d || o.date;
-      if (r = new Date(c), isNaN(r.getTime()))
+  async exec(n, e) {
+    const { flags: t, positional: s, values: r } = y(n, ["d", "date", "r", "reference", "u"]);
+    let o;
+    if (r.d || r.date) {
+      const c = r.d || r.date;
+      if (o = new Date(c), isNaN(o.getTime()))
         return {
           stdout: "",
           stderr: `date: invalid date '${c}'
@@ -814,72 +888,72 @@ const gt = {
           exitCode: 1
         };
     } else {
-      if (o.r || o.reference)
+      if (r.r || r.reference)
         return {
           stdout: "",
           stderr: `date: -r/--reference not supported in browser environment
 `,
           exitCode: 1
         };
-      r = /* @__PURE__ */ new Date();
+      o = /* @__PURE__ */ new Date();
     }
-    const a = e.u || e.utc;
+    const a = t.u || t.utc;
     if (s.length > 0 && s[0].startsWith("+")) {
       const c = s[0].slice(1);
-      return { stdout: xt(r, c, a) + `
+      return { stdout: we(o, c, a) + `
 `, stderr: "", exitCode: 0 };
     }
-    return { stdout: (a ? r.toUTCString() : r.toString()) + `
+    return { stdout: (a ? o.toUTCString() : o.toString()) + `
 `, stderr: "", exitCode: 0 };
   }
 };
-function xt(n, t, e = !1) {
-  const s = (w) => String(w).padStart(2, "0"), o = (w) => String(w).padStart(3, "0"), r = (w) => e ? n[`getUTC${w}`]() : n[`get${w}`](), a = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"], i = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], c = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"], l = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], u = r("FullYear"), d = r("Month"), p = r("Date"), f = r("Hours"), h = r("Minutes"), m = r("Seconds"), g = r("Milliseconds"), x = r("Day");
-  return t.replace(/%Y/g, String(u)).replace(/%y/g, String(u).slice(-2)).replace(/%m/g, s(d + 1)).replace(/%d/g, s(p)).replace(/%e/g, String(p).padStart(2, " ")).replace(/%H/g, s(f)).replace(/%I/g, s(f % 12 || 12)).replace(/%M/g, s(h)).replace(/%S/g, s(m)).replace(/%N/g, o(g) + "000000").replace(/%p/g, f >= 12 ? "PM" : "AM").replace(/%P/g, f >= 12 ? "pm" : "am").replace(/%s/g, String(Math.floor(n.getTime() / 1e3))).replace(/%A/g, a[x]).replace(/%a/g, i[x]).replace(/%w/g, String(x)).replace(/%u/g, String(x || 7)).replace(/%B/g, c[d]).replace(/%b/g, l[d]).replace(/%h/g, l[d]).replace(/%F/g, `${u}-${s(d + 1)}-${s(p)}`).replace(/%T/g, `${s(f)}:${s(h)}:${s(m)}`).replace(/%R/g, `${s(f)}:${s(h)}`).replace(/%n/g, `
+function we(n, e, t = !1) {
+  const s = (w) => String(w).padStart(2, "0"), r = (w) => String(w).padStart(3, "0"), o = (w) => t ? n[`getUTC${w}`]() : n[`get${w}`](), a = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"], i = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], c = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"], l = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], u = o("FullYear"), d = o("Month"), p = o("Date"), f = o("Hours"), h = o("Minutes"), m = o("Seconds"), g = o("Milliseconds"), x = o("Day");
+  return e.replace(/%Y/g, String(u)).replace(/%y/g, String(u).slice(-2)).replace(/%m/g, s(d + 1)).replace(/%d/g, s(p)).replace(/%e/g, String(p).padStart(2, " ")).replace(/%H/g, s(f)).replace(/%I/g, s(f % 12 || 12)).replace(/%M/g, s(h)).replace(/%S/g, s(m)).replace(/%N/g, r(g) + "000000").replace(/%p/g, f >= 12 ? "PM" : "AM").replace(/%P/g, f >= 12 ? "pm" : "am").replace(/%s/g, String(Math.floor(n.getTime() / 1e3))).replace(/%A/g, a[x]).replace(/%a/g, i[x]).replace(/%w/g, String(x)).replace(/%u/g, String(x || 7)).replace(/%B/g, c[d]).replace(/%b/g, l[d]).replace(/%h/g, l[d]).replace(/%F/g, `${u}-${s(d + 1)}-${s(p)}`).replace(/%T/g, `${s(f)}:${s(h)}:${s(m)}`).replace(/%R/g, `${s(f)}:${s(h)}`).replace(/%n/g, `
 `).replace(/%t/g, "	").replace(/%%/g, "%");
 }
-const yt = {
+const ve = {
   name: "local",
   description: "Declare local variables in shell functions",
-  async exec(n, t) {
-    const { positional: e } = y(n, ["r", "a", "i", "x"]);
-    return e.length === 0 ? {
+  async exec(n, e) {
+    const { positional: t } = y(n, ["r", "a", "i", "x"]);
+    return t.length === 0 ? {
       stdout: "",
       stderr: `local: usage: local [-r] [-a] [-i] [-x] [name[=value] ...]
 `,
       exitCode: 1
-    } : (e.map((s) => {
-      const [o, r] = s.split("=", 2);
-      return r !== void 0 ? `${o}=${r}` : o;
+    } : (t.map((s) => {
+      const [r, o] = s.split("=", 2);
+      return o !== void 0 ? `${r}=${o}` : r;
     }), {
       stdout: "",
       stderr: "",
       exitCode: 0
     });
   }
-}, wt = {
+}, Ce = {
   name: "declare",
   description: "Declare variables and give them attributes",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n, ["r", "a", "A", "i", "x", "p", "f", "g"]);
-    if (e.p)
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n, ["r", "a", "A", "i", "x", "p", "f", "g"]);
+    if (t.p)
       return s.length === 0 ? {
         stdout: `# Shell variables would be listed here
 `,
         stderr: "",
         exitCode: 0
       } : {
-        stdout: s.map((r) => {
-          const a = t.env[r];
-          return a !== void 0 ? `declare -- ${r}="${a}"
+        stdout: s.map((o) => {
+          const a = e.env[o];
+          return a !== void 0 ? `declare -- ${o}="${a}"
 ` : "";
         }).join(""),
         stderr: "",
         exitCode: 0
       };
-    for (const o of s) {
-      const [r, a] = o.split("=", 2);
-      a !== void 0 && t.env && (t.env[r] = a);
+    for (const r of s) {
+      const [o, a] = r.split("=", 2);
+      a !== void 0 && e.env && (e.env[o] = a);
     }
     return {
       stdout: "",
@@ -887,12 +961,12 @@ const yt = {
       exitCode: 0
     };
   }
-}, Ct = {
+}, $e = {
   name: "readonly",
   description: "Mark variables as readonly",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n, ["p", "f"]);
-    if (e.p)
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n, ["p", "f"]);
+    if (t.p)
       return {
         stdout: `# Readonly variables would be listed here
 `,
@@ -906,9 +980,9 @@ const yt = {
 `,
         exitCode: 1
       };
-    for (const o of s) {
-      const [r, a] = o.split("=", 2);
-      a !== void 0 && t.env && (t.env[r] = a);
+    for (const r of s) {
+      const [o, a] = r.split("=", 2);
+      a !== void 0 && e.env && (e.env[o] = a);
     }
     return {
       stdout: "",
@@ -916,11 +990,11 @@ const yt = {
       exitCode: 0
     };
   }
-}, vt = {
+}, be = {
   name: "unset",
   description: "Unset variables or functions",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n, ["v", "f"]);
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n, ["v", "f"]);
     if (s.length === 0)
       return {
         stdout: "",
@@ -928,49 +1002,49 @@ const yt = {
 `,
         exitCode: 1
       };
-    if (!e.f && t.env)
-      for (const o of s)
-        delete t.env[o];
+    if (!t.f && e.env)
+      for (const r of s)
+        delete e.env[r];
     return {
       stdout: "",
       stderr: "",
       exitCode: 0
     };
   }
-}, $t = {
+}, Se = {
   name: "df",
   description: "Report file system disk space usage",
-  async exec(n, t) {
-    const { flags: e } = y(n), s = e.h, o = e.i, r = [];
-    return o ? (r.push("Filesystem      Inodes  IUsed   IFree IUse% Mounted on"), r.push("virtual             0      0       0    0% /")) : s ? (r.push("Filesystem      Size  Used Avail Use% Mounted on"), r.push("virtual         100G   10G   90G  10% /")) : (r.push("Filesystem     1K-blocks    Used Available Use% Mounted on"), r.push("virtual        104857600 10485760  94371840  10% /")), {
-      stdout: r.join(`
+  async exec(n, e) {
+    const { flags: t } = y(n), s = t.h, r = t.i, o = [];
+    return r ? (o.push("Filesystem      Inodes  IUsed   IFree IUse% Mounted on"), o.push("virtual             0      0       0    0% /")) : s ? (o.push("Filesystem      Size  Used Avail Use% Mounted on"), o.push("virtual         100G   10G   90G  10% /")) : (o.push("Filesystem     1K-blocks    Used Available Use% Mounted on"), o.push("virtual        104857600 10485760  94371840  10% /")), {
+      stdout: o.join(`
 `) + `
 `,
       stderr: "",
       exitCode: 0
     };
   }
-}, bt = {
+}, Pe = {
   name: "diff",
   description: "Compare files line by line",
-  async exec(n, t) {
+  async exec(n, e) {
     var p, f;
-    const { flags: e, positional: s, values: o } = y(n, ["U", "context", "C"]), r = e.u || o.U !== void 0, a = o.U || o.context || o.C || (e.u ? 3 : 0), i = typeof a == "string" ? parseInt(a) : 3, c = e.q || e.brief, l = e.i, u = e.w || e["ignore-all-space"], d = e.y || e["side-by-side"];
+    const { flags: t, positional: s, values: r } = y(n, ["U", "context", "C"]), o = t.u || r.U !== void 0, a = r.U || r.context || r.C || (t.u ? 3 : 0), i = typeof a == "string" ? parseInt(a) : 3, c = t.q || t.brief, l = t.i, u = t.w || t["ignore-all-space"], d = t.y || t["side-by-side"];
     if (s.length < 2)
       return { stdout: "", stderr: `diff: missing operand
 `, exitCode: 2 };
     try {
-      const h = t.fs.resolvePath(s[0], t.cwd), m = t.fs.resolvePath(s[1], t.cwd), g = await t.fs.readFile(h), x = await t.fs.readFile(m);
+      const h = e.fs.resolvePath(s[0], e.cwd), m = e.fs.resolvePath(s[1], e.cwd), g = await e.fs.readFile(h), x = await e.fs.readFile(m);
       if (g === x)
         return { stdout: "", stderr: "", exitCode: 0 };
       if (c)
         return { stdout: `Files ${s[0]} and ${s[1]} differ
 `, stderr: "", exitCode: 1 };
       const w = g.split(`
-`), v = x.split(`
-`), b = St(w, v, { ignoreCase: l, ignoreWhitespace: u }), C = [];
-      if (r) {
-        C.push(`--- ${s[0]}`), C.push(`+++ ${s[1]}`);
+`), C = x.split(`
+`), b = Ee(w, C, { ignoreCase: l, ignoreWhitespace: u }), v = [];
+      if (o) {
+        v.push(`--- ${s[0]}`), v.push(`+++ ${s[1]}`);
         let $ = 0;
         for (; $ < b.length; ) {
           if (b[$].type === "equal") {
@@ -988,14 +1062,14 @@ const yt = {
             else
               break;
           }
-          const j = (((p = b[P]) == null ? void 0 : p.line1) ?? 0) + 1, R = (((f = b[P]) == null ? void 0 : f.line2) ?? 0) + 1;
-          let T = 0, M = 0;
+          const F = (((p = b[P]) == null ? void 0 : p.line1) ?? 0) + 1, k = (((f = b[P]) == null ? void 0 : f.line2) ?? 0) + 1;
+          let N = 0, M = 0;
           for (let I = P; I < E; I++)
-            (b[I].type === "equal" || b[I].type === "delete") && (T += b[I].lines.length), (b[I].type === "equal" || b[I].type === "add") && (M += b[I].lines.length);
-          C.push(`@@ -${j},${T} +${R},${M} @@`);
+            (b[I].type === "equal" || b[I].type === "delete") && (N += b[I].lines.length), (b[I].type === "equal" || b[I].type === "add") && (M += b[I].lines.length);
+          v.push(`@@ -${F},${N} +${k},${M} @@`);
           for (let I = P; I < E; I++) {
-            const F = b[I];
-            F.type === "equal" ? F.lines.forEach((k) => C.push(` ${k}`)) : F.type === "delete" ? F.lines.forEach((k) => C.push(`-${k}`)) : F.type === "add" && F.lines.forEach((k) => C.push(`+${k}`));
+            const T = b[I];
+            T.type === "equal" ? T.lines.forEach((R) => v.push(` ${R}`)) : T.type === "delete" ? T.lines.forEach((R) => v.push(`-${R}`)) : T.type === "add" && T.lines.forEach((R) => v.push(`+${R}`));
           }
           $ = E;
         }
@@ -1003,21 +1077,21 @@ const yt = {
         for (const S of b)
           S.type === "equal" ? S.lines.forEach((P) => {
             const E = P.substring(0, 40).padEnd(40);
-            C.push(`${E} | ${P}`);
+            v.push(`${E} | ${P}`);
           }) : S.type === "delete" ? S.lines.forEach((P) => {
             const E = P.substring(0, 40).padEnd(40);
-            C.push(`${E} <`);
+            v.push(`${E} <`);
           }) : S.type === "add" && S.lines.forEach((P) => {
-            C.push(`${" ".repeat(40)} > ${P}`);
+            v.push(`${" ".repeat(40)} > ${P}`);
           });
       else
         for (const $ of b) {
           if ($.type === "equal") continue;
           const S = ($.line1 ?? 0) + 1, P = ($.line2 ?? 0) + 1;
-          $.type === "delete" ? (C.push(`${S},${S + $.lines.length - 1}d${P - 1}`), $.lines.forEach((E) => C.push(`< ${E}`))) : $.type === "add" && (C.push(`${S - 1}a${P},${P + $.lines.length - 1}`), $.lines.forEach((E) => C.push(`> ${E}`)));
+          $.type === "delete" ? (v.push(`${S},${S + $.lines.length - 1}d${P - 1}`), $.lines.forEach((E) => v.push(`< ${E}`))) : $.type === "add" && (v.push(`${S - 1}a${P},${P + $.lines.length - 1}`), $.lines.forEach((E) => v.push(`> ${E}`)));
         }
-      return { stdout: C.join(`
-`) + (C.length > 0 ? `
+      return { stdout: v.join(`
+`) + (v.length > 0 ? `
 ` : ""), stderr: "", exitCode: 1 };
     } catch (h) {
       return { stdout: "", stderr: `diff: ${h instanceof Error ? h.message : h}
@@ -1025,35 +1099,35 @@ const yt = {
     }
   }
 };
-function St(n, t, e = {}) {
-  const s = n.length, o = t.length, r = (u) => {
+function Ee(n, e, t = {}) {
+  const s = n.length, r = e.length, o = (u) => {
     let d = u;
-    return e.ignoreWhitespace && (d = d.replace(/\s+/g, "")), e.ignoreCase && (d = d.toLowerCase()), d;
-  }, a = Array(s + 1).fill(0).map(() => Array(o + 1).fill(0));
+    return t.ignoreWhitespace && (d = d.replace(/\s+/g, "")), t.ignoreCase && (d = d.toLowerCase()), d;
+  }, a = Array(s + 1).fill(0).map(() => Array(r + 1).fill(0));
   for (let u = 1; u <= s; u++)
-    for (let d = 1; d <= o; d++)
-      r(n[u - 1]) === r(t[d - 1]) ? a[u][d] = a[u - 1][d - 1] + 1 : a[u][d] = Math.max(a[u - 1][d], a[u][d - 1]);
+    for (let d = 1; d <= r; d++)
+      o(n[u - 1]) === o(e[d - 1]) ? a[u][d] = a[u - 1][d - 1] + 1 : a[u][d] = Math.max(a[u - 1][d], a[u][d - 1]);
   const i = [];
-  let c = s, l = o;
+  let c = s, l = r;
   for (; c > 0 || l > 0; )
-    c > 0 && l > 0 && r(n[c - 1]) === r(t[l - 1]) ? (i.length > 0 && i[i.length - 1].type === "equal" ? i[i.length - 1].lines.unshift(n[c - 1]) : i.push({ type: "equal", lines: [n[c - 1]], line1: c - 1, line2: l - 1 }), c--, l--) : l > 0 && (c === 0 || a[c][l - 1] >= a[c - 1][l]) ? (i.length > 0 && i[i.length - 1].type === "add" ? i[i.length - 1].lines.unshift(t[l - 1]) : i.push({ type: "add", lines: [t[l - 1]], line1: c, line2: l - 1 }), l--) : (i.length > 0 && i[i.length - 1].type === "delete" ? i[i.length - 1].lines.unshift(n[c - 1]) : i.push({ type: "delete", lines: [n[c - 1]], line1: c - 1, line2: l }), c--);
+    c > 0 && l > 0 && o(n[c - 1]) === o(e[l - 1]) ? (i.length > 0 && i[i.length - 1].type === "equal" ? i[i.length - 1].lines.unshift(n[c - 1]) : i.push({ type: "equal", lines: [n[c - 1]], line1: c - 1, line2: l - 1 }), c--, l--) : l > 0 && (c === 0 || a[c][l - 1] >= a[c - 1][l]) ? (i.length > 0 && i[i.length - 1].type === "add" ? i[i.length - 1].lines.unshift(e[l - 1]) : i.push({ type: "add", lines: [e[l - 1]], line1: c, line2: l - 1 }), l--) : (i.length > 0 && i[i.length - 1].type === "delete" ? i[i.length - 1].lines.unshift(n[c - 1]) : i.push({ type: "delete", lines: [n[c - 1]], line1: c - 1, line2: l }), c--);
   return i.reverse();
 }
-const Pt = {
+const Ie = {
   name: "dirname",
   description: "Strip last component from file name",
   async exec(n) {
     if (n.length === 0)
       return { stdout: "", stderr: `dirname: missing operand
 `, exitCode: 1 };
-    const t = n[0].replace(/\/+$/, ""), e = t.lastIndexOf("/");
-    return { stdout: (e === -1 ? "." : e === 0 ? "/" : t.slice(0, e)) + `
+    const e = n[0].replace(/\/+$/, ""), t = e.lastIndexOf("/");
+    return { stdout: (t === -1 ? "." : t === 0 ? "/" : e.slice(0, t)) + `
 `, stderr: "", exitCode: 0 };
   }
-}, Et = {
+}, Fe = {
   name: "while",
   description: "Loop while condition is true (shell language construct)",
-  async exec(n, t) {
+  async exec(n, e) {
     return {
       stdout: "",
       stderr: `while: this is a shell language construct that must be interpreted by the shell
@@ -1062,10 +1136,10 @@ Usage: while CONDITION; do COMMANDS; done
       exitCode: 2
     };
   }
-}, It = {
+}, Te = {
   name: "until",
   description: "Loop until condition is true (shell language construct)",
-  async exec(n, t) {
+  async exec(n, e) {
     return {
       stdout: "",
       stderr: `until: this is a shell language construct that must be interpreted by the shell
@@ -1074,10 +1148,10 @@ Usage: until CONDITION; do COMMANDS; done
       exitCode: 2
     };
   }
-}, jt = {
+}, je = {
   name: "do",
   description: "Start loop body (shell language construct)",
-  async exec(n, t) {
+  async exec(n, e) {
     return {
       stdout: "",
       stderr: `do: can only be used as part of a for/while/until loop
@@ -1085,10 +1159,10 @@ Usage: until CONDITION; do COMMANDS; done
       exitCode: 2
     };
   }
-}, Ft = {
+}, Ne = {
   name: "done",
   description: "End loop (shell language construct)",
-  async exec(n, t) {
+  async exec(n, e) {
     return {
       stdout: "",
       stderr: `done: can only be used to close a for/while/until loop
@@ -1096,14 +1170,14 @@ Usage: until CONDITION; do COMMANDS; done
       exitCode: 2
     };
   }
-}, Nt = {
+}, Me = {
   name: "du",
   description: "Estimate file space usage",
-  async exec(n, t) {
-    const { flags: e, positional: s, values: o } = y(n, ["max-depth", "d"]), r = s.length > 0 ? s : ["."], a = e.s, i = e.a, c = e.h, l = o["max-depth"] || o.d, u = l ? parseInt(l) : 1 / 0, d = [];
+  async exec(n, e) {
+    const { flags: t, positional: s, values: r } = y(n, ["max-depth", "d"]), o = s.length > 0 ? s : ["."], a = t.s, i = t.a, c = t.h, l = r["max-depth"] || r.d, u = l ? parseInt(l) : 1 / 0, d = [];
     try {
-      for (const p of r) {
-        const f = t.fs.resolvePath(p, t.cwd), h = await _(f, t.fs, 0, u, i, !a, d, c), m = c ? W(h) : String(Math.ceil(h / 1024));
+      for (const p of o) {
+        const f = e.fs.resolvePath(p, e.cwd), h = await Z(f, e.fs, 0, u, i, !a, d, c), m = c ? W(h) : String(Math.ceil(h / 1024));
         d.push(`${m}	${p}`);
       }
       return {
@@ -1123,21 +1197,21 @@ Usage: until CONDITION; do COMMANDS; done
     }
   }
 };
-async function _(n, t, e, s, o, r, a, i) {
+async function Z(n, e, t, s, r, o, a, i) {
   try {
-    const c = await t.stat(n);
+    const c = await e.stat(n);
     if (c.type === "file")
       return c.size;
-    if (c.type === "dir" && e < s) {
-      const l = await t.readdir(n);
+    if (c.type === "dir" && t < s) {
+      const l = await e.readdir(n);
       let u = 0;
       for (const d of l) {
-        const p = n + "/" + d.name, f = await _(p, t, e + 1, s, o, r, a, i);
-        if (u += f, o && d.type === "file") {
+        const p = n + "/" + d.name, f = await Z(p, e, t + 1, s, r, o, a, i);
+        if (u += f, r && d.type === "file") {
           const h = i ? W(f) : String(Math.ceil(f / 1024));
           a.push(`${h}	${p}`);
         }
-        if (r && d.type === "dir" && e + 1 < s) {
+        if (o && d.type === "dir" && t + 1 < s) {
           const h = i ? W(f) : String(Math.ceil(f / 1024));
           a.push(`${h}	${p}`);
         }
@@ -1150,26 +1224,26 @@ async function _(n, t, e, s, o, r, a, i) {
   }
 }
 function W(n) {
-  const t = ["", "K", "M", "G", "T"];
-  let e = n, s = 0;
-  for (; e >= 1024 && s < t.length - 1; )
-    e /= 1024, s++;
-  return Math.ceil(e) + t[s];
+  const e = ["", "K", "M", "G", "T"];
+  let t = n, s = 0;
+  for (; t >= 1024 && s < e.length - 1; )
+    t /= 1024, s++;
+  return Math.ceil(t) + e[s];
 }
-const Tt = {
+const Ae = {
   name: "echo",
   description: "Display text",
   async exec(n) {
-    const { flags: t } = y(n), e = t.n, s = n.filter((r) => r !== "-n" && r !== "-e").join(" ");
-    let o = t.e ? s.replace(/\\n/g, `
+    const { flags: e } = y(n), t = e.n, s = n.filter((o) => o !== "-n" && o !== "-e").join(" ");
+    let r = e.e ? s.replace(/\\n/g, `
 `).replace(/\\t/g, "	").replace(/\\\\/g, "\\") : s;
-    return e || (o += `
-`), { stdout: o, stderr: "", exitCode: 0 };
+    return t || (r += `
+`), { stdout: r, stderr: "", exitCode: 0 };
   }
-}, Mt = {
+}, Re = {
   name: "if",
   description: "Conditional execution (shell language construct)",
-  async exec(n, t) {
+  async exec(n, e) {
     return {
       stdout: "",
       stderr: `if: this is a shell language construct that must be interpreted by the shell
@@ -1178,10 +1252,10 @@ Usage: if CONDITION; then COMMANDS; [elif CONDITION; then COMMANDS;] [else COMMA
       exitCode: 2
     };
   }
-}, At = {
+}, ke = {
   name: "then",
   description: "Part of if/elif statement (shell language construct)",
-  async exec(n, t) {
+  async exec(n, e) {
     return {
       stdout: "",
       stderr: `then: can only be used as part of an if/elif statement
@@ -1189,10 +1263,10 @@ Usage: if CONDITION; then COMMANDS; [elif CONDITION; then COMMANDS;] [else COMMA
       exitCode: 2
     };
   }
-}, kt = {
+}, Oe = {
   name: "elif",
   description: "Else-if branch (shell language construct)",
-  async exec(n, t) {
+  async exec(n, e) {
     return {
       stdout: "",
       stderr: `elif: can only be used as part of an if statement
@@ -1200,10 +1274,10 @@ Usage: if CONDITION; then COMMANDS; [elif CONDITION; then COMMANDS;] [else COMMA
       exitCode: 2
     };
   }
-}, Rt = {
+}, De = {
   name: "else",
   description: "Else branch (shell language construct)",
-  async exec(n, t) {
+  async exec(n, e) {
     return {
       stdout: "",
       stderr: `else: can only be used as part of an if statement
@@ -1211,10 +1285,10 @@ Usage: if CONDITION; then COMMANDS; [elif CONDITION; then COMMANDS;] [else COMMA
       exitCode: 2
     };
   }
-}, Ot = {
+}, Le = {
   name: "fi",
   description: "End if statement (shell language construct)",
-  async exec(n, t) {
+  async exec(n, e) {
     return {
       stdout: "",
       stderr: `fi: can only be used to close an if statement
@@ -1222,56 +1296,56 @@ Usage: if CONDITION; then COMMANDS; [elif CONDITION; then COMMANDS;] [else COMMA
       exitCode: 2
     };
   }
-}, Dt = {
+}, We = {
   name: "env",
   description: "Print environment variables",
-  async exec(n, t) {
-    return { stdout: Object.entries(t.env).map(([s, o]) => `${s}=${o}`).sort().join(`
+  async exec(n, e) {
+    return { stdout: Object.entries(e.env).map(([s, r]) => `${s}=${r}`).sort().join(`
 `) + `
 `, stderr: "", exitCode: 0 };
   }
-}, Lt = {
+}, Ue = {
   name: "eval",
   description: "Evaluate and execute arguments as a shell command",
-  async exec(n, t) {
-    const { positional: e } = y(n);
-    return e.join(" "), {
+  async exec(n, e) {
+    const { positional: t } = y(n);
+    return t.join(" "), {
       stdout: "",
       stderr: "",
       exitCode: 0
     };
   }
-}, Wt = {
+}, qe = {
   name: "exit",
   description: "Exit the shell with a status code",
-  async exec(n, t) {
-    const { positional: e } = y(n), s = e.length > 0 ? parseInt(e[0]) : 0;
+  async exec(n, e) {
+    const { positional: t } = y(n), s = t.length > 0 ? parseInt(t[0]) : 0;
     return {
       stdout: "",
       stderr: "",
       exitCode: isNaN(s) ? 2 : s
     };
   }
-}, Ut = {
+}, ze = {
   name: "expand",
   description: "Convert tabs to spaces",
-  async exec(n, t) {
-    const { values: e, positional: s, flags: o } = y(n, ["t", "tabs"]), r = e.t || e.tabs || "8", a = parseInt(r, 10);
+  async exec(n, e) {
+    const { values: t, positional: s, flags: r } = y(n, ["t", "tabs"]), o = t.t || t.tabs || "8", a = parseInt(o, 10);
     if (isNaN(a) || a <= 0)
       return {
         stdout: "",
-        stderr: `expand: invalid tab size: '${r}'
+        stderr: `expand: invalid tab size: '${o}'
 `,
         exitCode: 1
       };
-    const i = o.i || o.initial;
+    const i = r.i || r.initial;
     try {
-      const { content: c } = await N(
+      const { content: c } = await j(
         s,
-        t.stdin,
-        t.fs,
-        t.cwd,
-        t.fs.resolvePath
+        e.stdin,
+        e.fs,
+        e.cwd,
+        e.fs.resolvePath
       ), l = c.split(`
 `), u = [];
       for (const d of l) {
@@ -1306,16 +1380,16 @@ Usage: if CONDITION; then COMMANDS; [elif CONDITION; then COMMANDS;] [else COMMA
       };
     }
   }
-}, qt = {
+}, He = {
   name: "expr",
   description: "Evaluate expressions",
-  async exec(n, t) {
-    const { positional: e } = y(n);
-    if (e.length === 0)
+  async exec(n, e) {
+    const { positional: t } = y(n);
+    if (t.length === 0)
       return { stdout: "", stderr: `expr: missing operand
 `, exitCode: 1 };
     try {
-      const s = A(e);
+      const s = A(t);
       return {
         stdout: String(s) + `
 `,
@@ -1337,90 +1411,90 @@ function A(n) {
     throw new Error("syntax error");
   if (n.length === 1)
     return n[0];
-  for (let t = 0; t < n.length; t++)
-    if (n[t] === "|") {
-      const e = A(n.slice(0, t)), s = A(n.slice(t + 1));
-      return e && e !== "0" && e !== "" ? e : s;
+  for (let e = 0; e < n.length; e++)
+    if (n[e] === "|") {
+      const t = A(n.slice(0, e)), s = A(n.slice(e + 1));
+      return t && t !== "0" && t !== "" ? t : s;
     }
-  for (let t = 0; t < n.length; t++)
-    if (n[t] === "&") {
-      const e = A(n.slice(0, t)), s = A(n.slice(t + 1));
-      return e && e !== "0" && e !== "" && s && s !== "0" && s !== "" ? e : 0;
+  for (let e = 0; e < n.length; e++)
+    if (n[e] === "&") {
+      const t = A(n.slice(0, e)), s = A(n.slice(e + 1));
+      return t && t !== "0" && t !== "" && s && s !== "0" && s !== "" ? t : 0;
     }
-  for (let t = 0; t < n.length; t++) {
-    const e = n[t];
-    if (["=", "!=", "<", ">", "<=", ">="].includes(e)) {
-      const s = String(A(n.slice(0, t))), o = String(A(n.slice(t + 1))), r = parseFloat(s), a = parseFloat(o), i = !isNaN(r) && !isNaN(a);
+  for (let e = 0; e < n.length; e++) {
+    const t = n[e];
+    if (["=", "!=", "<", ">", "<=", ">="].includes(t)) {
+      const s = String(A(n.slice(0, e))), r = String(A(n.slice(e + 1))), o = parseFloat(s), a = parseFloat(r), i = !isNaN(o) && !isNaN(a);
       let c = !1;
       if (i)
-        switch (e) {
+        switch (t) {
           case "=":
-            c = r === a;
+            c = o === a;
             break;
           case "!=":
-            c = r !== a;
+            c = o !== a;
             break;
           case "<":
-            c = r < a;
+            c = o < a;
             break;
           case ">":
-            c = r > a;
+            c = o > a;
             break;
           case "<=":
-            c = r <= a;
+            c = o <= a;
             break;
           case ">=":
-            c = r >= a;
+            c = o >= a;
             break;
         }
       else
-        switch (e) {
+        switch (t) {
           case "=":
-            c = s === o;
+            c = s === r;
             break;
           case "!=":
-            c = s !== o;
+            c = s !== r;
             break;
           case "<":
-            c = s < o;
+            c = s < r;
             break;
           case ">":
-            c = s > o;
+            c = s > r;
             break;
           case "<=":
-            c = s <= o;
+            c = s <= r;
             break;
           case ">=":
-            c = s >= o;
+            c = s >= r;
             break;
         }
       return c ? 1 : 0;
     }
   }
-  for (let t = n.length - 1; t >= 0; t--)
-    if (n[t] === "+" || n[t] === "-") {
-      const e = Number(A(n.slice(0, t))), s = Number(A(n.slice(t + 1)));
-      return n[t] === "+" ? e + s : e - s;
+  for (let e = n.length - 1; e >= 0; e--)
+    if (n[e] === "+" || n[e] === "-") {
+      const t = Number(A(n.slice(0, e))), s = Number(A(n.slice(e + 1)));
+      return n[e] === "+" ? t + s : t - s;
     }
-  for (let t = n.length - 1; t >= 0; t--)
-    if (["*", "/", "%"].includes(n[t])) {
-      const e = Number(A(n.slice(0, t))), s = Number(A(n.slice(t + 1)));
-      if (n[t] === "*") return e * s;
-      if (n[t] === "/") {
+  for (let e = n.length - 1; e >= 0; e--)
+    if (["*", "/", "%"].includes(n[e])) {
+      const t = Number(A(n.slice(0, e))), s = Number(A(n.slice(e + 1)));
+      if (n[e] === "*") return t * s;
+      if (n[e] === "/") {
         if (s === 0) throw new Error("division by zero");
-        return Math.floor(e / s);
+        return Math.floor(t / s);
       }
-      if (n[t] === "%") {
+      if (n[e] === "%") {
         if (s === 0) throw new Error("division by zero");
-        return e % s;
+        return t % s;
       }
     }
   if (n.length === 3) {
     if (n[1] === ":") {
-      const t = n[0], e = n[2];
+      const e = n[0], t = n[2];
       try {
-        const s = new RegExp("^" + e), o = t.match(s);
-        return o ? o[0].length : 0;
+        const s = new RegExp("^" + t), r = e.match(s);
+        return r ? r[0].length : 0;
       } catch {
         throw new Error("invalid regular expression");
       }
@@ -1428,49 +1502,49 @@ function A(n) {
     if (n[0] === "length")
       return String(n[1]).length;
     if (n[0] === "index") {
-      const t = n[1], e = n[2];
-      for (let s = 0; s < t.length; s++)
-        if (e.includes(t[s]))
+      const e = n[1], t = n[2];
+      for (let s = 0; s < e.length; s++)
+        if (t.includes(e[s]))
           return s + 1;
       return 0;
     }
   }
   if (n.length === 4 && n[0] === "substr") {
-    const t = n[1], e = Number(n[2]) - 1, s = Number(n[3]);
-    return t.substring(e, e + s);
+    const e = n[1], t = Number(n[2]) - 1, s = Number(n[3]);
+    return e.substring(t, t + s);
   }
   if (n.length === 1) {
-    const t = parseFloat(n[0]);
-    return isNaN(t) ? n[0] : t;
+    const e = parseFloat(n[0]);
+    return isNaN(e) ? n[0] : e;
   }
   throw new Error("syntax error");
 }
-const zt = {
+const Ge = {
   name: "export",
   description: "Set environment variables (note: in a real shell, this modifies parent environment)",
-  async exec(n, t) {
+  async exec(n, e) {
     if (n.length === 0)
-      return { stdout: Object.entries(t.env).map(([r, a]) => `export ${r}="${a}"`).sort().join(`
+      return { stdout: Object.entries(e.env).map(([o, a]) => `export ${o}="${a}"`).sort().join(`
 `) + `
 `, stderr: "", exitCode: 0 };
-    const e = [], s = [];
-    for (const o of n) {
-      const r = o.indexOf("=");
-      if (r === -1) {
-        const a = o;
+    const t = [], s = [];
+    for (const r of n) {
+      const o = r.indexOf("=");
+      if (o === -1) {
+        const a = r;
         if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(a)) {
           s.push(`export: \`${a}': not a valid identifier`);
           continue;
         }
-        a in t.env ? e.push(`export ${a}="${t.env[a]}"`) : e.push(`export ${a}=""`);
+        a in e.env ? t.push(`export ${a}="${e.env[a]}"`) : t.push(`export ${a}=""`);
       } else {
-        const a = o.slice(0, r);
-        let i = o.slice(r + 1);
+        const a = r.slice(0, o);
+        let i = r.slice(o + 1);
         if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(a)) {
           s.push(`export: \`${a}': not a valid identifier`);
           continue;
         }
-        (i.startsWith('"') && i.endsWith('"') || i.startsWith("'") && i.endsWith("'")) && (i = i.slice(1, -1)), t.env[a] = i, e.push(`export ${a}="${i}"`);
+        (i.startsWith('"') && i.endsWith('"') || i.startsWith("'") && i.endsWith("'")) && (i = i.slice(1, -1)), e.env[a] = i, t.push(`export ${a}="${i}"`);
       }
     }
     return s.length > 0 ? {
@@ -1481,16 +1555,16 @@ const zt = {
       exitCode: 1
     } : { stdout: "", stderr: "", exitCode: 0 };
   }
-}, Gt = {
+}, Be = {
   name: "false",
   description: "Return failure",
   async exec() {
     return { stdout: "", stderr: "", exitCode: 1 };
   }
-}, Ht = {
+}, _e = {
   name: "for",
   description: "Iterate over list (shell language construct)",
-  async exec(n, t) {
+  async exec(n, e) {
     return {
       stdout: "",
       stderr: `for: this is a shell language construct that must be interpreted by the shell
@@ -1499,10 +1573,10 @@ Usage: for VAR in LIST; do COMMANDS; done
       exitCode: 2
     };
   }
-}, Bt = {
+}, Je = {
   name: "in",
   description: "Part of for loop (shell language construct)",
-  async exec(n, t) {
+  async exec(n, e) {
     return {
       stdout: "",
       stderr: `in: can only be used as part of a for loop or case statement
@@ -1510,10 +1584,10 @@ Usage: for VAR in LIST; do COMMANDS; done
       exitCode: 2
     };
   }
-}, Jt = {
+}, Ye = {
   name: "function",
   description: "Define shell function (shell language construct)",
-  async exec(n, t) {
+  async exec(n, e) {
     return {
       stdout: "",
       stderr: `function: this is a shell language construct that must be interpreted by the shell
@@ -1522,27 +1596,27 @@ Usage: function NAME { COMMANDS; } or NAME() { COMMANDS; }
       exitCode: 2
     };
   }
-}, Yt = {
+}, Ze = {
   name: "file",
   description: "Determine file type",
-  async exec(n, t) {
-    const { positional: e, flags: s } = y(n);
-    if (e.length === 0)
+  async exec(n, e) {
+    const { positional: t, flags: s } = y(n);
+    if (t.length === 0)
       return { stdout: "", stderr: `file: missing operand
 `, exitCode: 1 };
-    const o = s.b, r = s.i || s.mime, a = s["mime-type"], i = s["mime-encoding"], c = [];
+    const r = s.b, o = s.i || s.mime, a = s["mime-type"], i = s["mime-encoding"], c = [];
     try {
-      for (const l of e) {
-        const u = t.fs.resolvePath(l, t.cwd);
+      for (const l of t) {
+        const u = e.fs.resolvePath(l, e.cwd);
         try {
-          if ((await t.fs.stat(u)).type === "dir") {
-            const m = o ? "directory" : `${l}: directory`;
+          if ((await e.fs.stat(u)).type === "dir") {
+            const m = r ? "directory" : `${l}: directory`;
             c.push(m);
             continue;
           }
-          const p = await t.fs.readFile(u), f = _t(p, l);
+          const p = await e.fs.readFile(u), f = Ve(p, l);
           let h;
-          a ? h = o ? f.mimeType : `${l}: ${f.mimeType}` : i ? h = o ? f.encoding : `${l}: ${f.encoding}` : r ? h = o ? `${f.mimeType}; charset=${f.encoding}` : `${l}: ${f.mimeType}; charset=${f.encoding}` : h = o ? f.description : `${l}: ${f.description}`, c.push(h);
+          a ? h = r ? f.mimeType : `${l}: ${f.mimeType}` : i ? h = r ? f.encoding : `${l}: ${f.encoding}` : o ? h = r ? `${f.mimeType}; charset=${f.encoding}` : `${l}: ${f.mimeType}; charset=${f.encoding}` : h = r ? f.description : `${l}: ${f.description}`, c.push(h);
         } catch (d) {
           c.push(`${l}: cannot open (${d instanceof Error ? d.message : d})`);
         }
@@ -1564,66 +1638,66 @@ Usage: function NAME { COMMANDS; } or NAME() { COMMANDS; }
     }
   }
 };
-function _t(n, t) {
+function Ve(n, e) {
   var a;
-  let e = "text/plain", s = "us-ascii", o = "ASCII text";
-  if (/[^\x00-\x7F]/.test(n) && (s = "utf-8", o = "UTF-8 Unicode text"), n.length === 0)
-    return e = "application/x-empty", o = "empty", { mimeType: e, encoding: s, description: o };
-  const r = (a = t.split(".").pop()) == null ? void 0 : a.toLowerCase();
-  if (r)
-    switch (r) {
+  let t = "text/plain", s = "us-ascii", r = "ASCII text";
+  if (/[^\x00-\x7F]/.test(n) && (s = "utf-8", r = "UTF-8 Unicode text"), n.length === 0)
+    return t = "application/x-empty", r = "empty", { mimeType: t, encoding: s, description: r };
+  const o = (a = e.split(".").pop()) == null ? void 0 : a.toLowerCase();
+  if (o)
+    switch (o) {
       case "js":
       case "mjs":
-        e = "text/javascript", o = "JavaScript source";
+        t = "text/javascript", r = "JavaScript source";
         break;
       case "ts":
-        e = "text/x-typescript", o = "TypeScript source";
+        t = "text/x-typescript", r = "TypeScript source";
         break;
       case "json":
-        e = "application/json", o = "JSON data";
+        t = "application/json", r = "JSON data";
         break;
       case "html":
       case "htm":
-        e = "text/html", o = "HTML document";
+        t = "text/html", r = "HTML document";
         break;
       case "css":
-        e = "text/css", o = "CSS stylesheet";
+        t = "text/css", r = "CSS stylesheet";
         break;
       case "xml":
-        e = "text/xml", o = "XML document";
+        t = "text/xml", r = "XML document";
         break;
       case "md":
-        e = "text/markdown", o = "Markdown text";
+        t = "text/markdown", r = "Markdown text";
         break;
       case "sh":
-        e = "text/x-shellscript", o = "shell script";
+        t = "text/x-shellscript", r = "shell script";
         break;
       case "py":
-        e = "text/x-python", o = "Python script";
+        t = "text/x-python", r = "Python script";
         break;
       case "txt":
-        e = "text/plain", o = "ASCII text";
+        t = "text/plain", r = "ASCII text";
         break;
     }
   if (n.startsWith("#!/bin/sh") || n.startsWith("#!/bin/bash"))
-    e = "text/x-shellscript", o = "Bourne-Again shell script";
+    t = "text/x-shellscript", r = "Bourne-Again shell script";
   else if (n.startsWith("#!/usr/bin/env node"))
-    e = "text/javascript", o = "Node.js script";
+    t = "text/javascript", r = "Node.js script";
   else if (n.startsWith("#!/usr/bin/env python"))
-    e = "text/x-python", o = "Python script";
+    t = "text/x-python", r = "Python script";
   else if (n.startsWith("{") && n.trim().endsWith("}"))
     try {
-      JSON.parse(n), e = "application/json", o = "JSON data";
+      JSON.parse(n), t = "application/json", r = "JSON data";
     } catch {
     }
-  else n.startsWith("<?xml") ? (e = "text/xml", o = "XML document") : (n.startsWith("<!DOCTYPE html") || n.startsWith("<html")) && (e = "text/html", o = "HTML document");
-  return { mimeType: e, encoding: s, description: o };
+  else n.startsWith("<?xml") ? (t = "text/xml", r = "XML document") : (n.startsWith("<!DOCTYPE html") || n.startsWith("<html")) && (t = "text/html", r = "HTML document");
+  return { mimeType: t, encoding: s, description: r };
 }
-const Kt = {
+const Ke = {
   name: "find",
   description: "Search for files in a directory hierarchy",
-  async exec(n, t) {
-    const { values: e, positional: s, flags: o } = y(n, ["name", "type", "exec", "maxdepth", "mindepth", "path", "iname"]), r = s[0] ?? ".", a = e.name, i = e.iname, c = e.path, l = e.type, u = e.maxdepth ? parseInt(e.maxdepth) : 1 / 0, d = e.mindepth ? parseInt(e.mindepth) : 0, p = e.exec, f = o.print !== !1, h = t.fs.resolvePath(r, t.cwd), m = [], g = [];
+  async exec(n, e) {
+    const { values: t, positional: s, flags: r } = y(n, ["name", "type", "exec", "maxdepth", "mindepth", "path", "iname"]), o = s[0] ?? ".", a = t.name, i = t.iname, c = t.path, l = t.type, u = t.maxdepth ? parseInt(t.maxdepth) : 1 / 0, d = t.mindepth ? parseInt(t.mindepth) : 0, p = t.exec, f = r.print !== !1, h = e.fs.resolvePath(o, e.cwd), m = [], g = [];
     let x;
     if (a) {
       const $ = a.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
@@ -1634,59 +1708,59 @@ const Kt = {
       const $ = i.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
       w = new RegExp(`^${$}$`, "i");
     }
-    let v;
+    let C;
     if (c) {
       const $ = c.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
-      v = new RegExp($);
+      C = new RegExp($);
     }
     async function b($, S, P) {
       let E;
       try {
-        E = await t.fs.readdir($);
+        E = await e.fs.readdir($);
       } catch {
         return;
       }
-      for (const j of E) {
-        const R = $ + "/" + j.name, T = S ? S + "/" + j.name : j.name, M = r === "." ? "./" + T : r + "/" + T, I = P + 1;
-        let F = !0;
+      for (const F of E) {
+        const k = $ + "/" + F.name, N = S ? S + "/" + F.name : F.name, M = o === "." ? "./" + N : o + "/" + N, I = P + 1;
+        let T = !0;
         if (!(I > u)) {
-          if (I < d && (F = !1), x && !x.test(j.name) && (F = !1), w && !w.test(j.name) && (F = !1), v && !v.test(M) && (F = !1), l === "f" && j.type !== "file" && (F = !1), l === "d" && j.type !== "dir" && (F = !1), F && (f && m.push(M), p)) {
-            const k = p.replace(/\{\}/g, M);
-            g.push(`Executing: ${k}`);
+          if (I < d && (T = !1), x && !x.test(F.name) && (T = !1), w && !w.test(F.name) && (T = !1), C && !C.test(M) && (T = !1), l === "f" && F.type !== "file" && (T = !1), l === "d" && F.type !== "dir" && (T = !1), T && (f && m.push(M), p)) {
+            const R = p.replace(/\{\}/g, M);
+            g.push(`Executing: ${R}`);
           }
-          j.type === "dir" && I < u && await b(R, T, I);
+          F.type === "dir" && I < u && await b(k, N, I);
         }
       }
     }
-    0 >= d && (!l || l === "d") && !x && !w && !v && f && m.push(r === "." ? "." : r), await b(h, "", 0);
-    let C = "";
-    return m.length > 0 && (C = m.join(`
+    0 >= d && (!l || l === "d") && !x && !w && !C && f && m.push(o === "." ? "." : o), await b(h, "", 0);
+    let v = "";
+    return m.length > 0 && (v = m.join(`
 `) + `
-`), g.length > 0 && (C += g.join(`
+`), g.length > 0 && (v += g.join(`
 `) + `
-`), { stdout: C, stderr: "", exitCode: 0 };
+`), { stdout: v, stderr: "", exitCode: 0 };
   }
-}, Vt = {
+}, Xe = {
   name: "fmt",
   description: "Simple optimal text formatter",
-  async exec(n, t) {
-    const { values: e, positional: s, flags: o } = y(n, ["w", "width"]), r = parseInt(e.w || e.width || "75", 10);
-    o.u;
-    const a = o.s;
-    if (isNaN(r) || r <= 0)
+  async exec(n, e) {
+    const { values: t, positional: s, flags: r } = y(n, ["w", "width"]), o = parseInt(t.w || t.width || "75", 10);
+    r.u;
+    const a = r.s;
+    if (isNaN(o) || o <= 0)
       return {
         stdout: "",
-        stderr: `fmt: invalid width: '${e.w || e.width}'
+        stderr: `fmt: invalid width: '${t.w || t.width}'
 `,
         exitCode: 1
       };
     try {
-      const { content: i } = await N(
+      const { content: i } = await j(
         s,
-        t.stdin,
-        t.fs,
-        t.cwd,
-        t.fs.resolvePath
+        e.stdin,
+        e.fs,
+        e.cwd,
+        e.fs.resolvePath
       ), c = i.split(`
 `), l = [];
       let u = [];
@@ -1694,10 +1768,10 @@ const Kt = {
         if (u.length !== 0) {
           if (a)
             for (const p of u)
-              l.push(...U(p, r));
+              l.push(...q(p, o));
           else {
             const p = u.join(" ").trim();
-            p && l.push(...U(p, r));
+            p && l.push(...q(p, o));
           }
           u = [];
         }
@@ -1723,46 +1797,46 @@ const Kt = {
     }
   }
 };
-function U(n, t) {
-  const e = [], s = n.split(/\s+/);
-  let o = "";
-  for (const r of s)
-    o.length === 0 ? o = r : o.length + 1 + r.length <= t ? o += " " + r : (e.push(o), o = r);
-  return o.length > 0 && e.push(o), e;
+function q(n, e) {
+  const t = [], s = n.split(/\s+/);
+  let r = "";
+  for (const o of s)
+    r.length === 0 ? r = o : r.length + 1 + o.length <= e ? r += " " + o : (t.push(r), r = o);
+  return r.length > 0 && t.push(r), t;
 }
-const Xt = {
+const Qe = {
   name: "fold",
   description: "Wrap each input line to fit in specified width",
-  async exec(n, t) {
-    const { values: e, positional: s, flags: o } = y(n, ["w", "width"]), r = parseInt(e.w || e.width || "80", 10);
-    o.b;
-    const a = o.s;
-    if (isNaN(r) || r <= 0)
+  async exec(n, e) {
+    const { values: t, positional: s, flags: r } = y(n, ["w", "width"]), o = parseInt(t.w || t.width || "80", 10);
+    r.b;
+    const a = r.s;
+    if (isNaN(o) || o <= 0)
       return {
         stdout: "",
-        stderr: `fold: invalid width: '${e.w || e.width}'
+        stderr: `fold: invalid width: '${t.w || t.width}'
 `,
         exitCode: 1
       };
     try {
-      const { content: i } = await N(
+      const { content: i } = await j(
         s,
-        t.stdin,
-        t.fs,
-        t.cwd,
-        t.fs.resolvePath
+        e.stdin,
+        e.fs,
+        e.cwd,
+        e.fs.resolvePath
       ), c = i.split(`
 `), l = [];
       for (const u of c) {
-        if (u.length <= r) {
+        if (u.length <= o) {
           l.push(u);
           continue;
         }
         let d = u;
-        for (; d.length > r; ) {
-          let p = r;
+        for (; d.length > o; ) {
+          let p = o;
           if (a) {
-            const f = d.substring(0, r).lastIndexOf(" ");
+            const f = d.substring(0, o).lastIndexOf(" ");
             f > 0 && (p = f + 1);
           }
           l.push(d.substring(0, p)), d = d.substring(p);
@@ -1786,12 +1860,12 @@ const Xt = {
       };
     }
   }
-}, Zt = {
+}, et = {
   name: "free",
   description: "Display amount of free and used memory",
-  async exec(n, t) {
-    const { flags: e } = y(n), s = e.h, o = e.b, r = e.m, a = e.g, i = [], c = 8388608, l = 4194304, u = 4194304, d = 524288, p = 1048576, f = 5242880;
-    return s ? (i.push("               total        used        free      shared  buff/cache   available"), i.push("Mem:            8.0G        4.0G        4.0G       512M        1.0G        5.0G"), i.push("Swap:           2.0G          0B        2.0G")) : o ? (i.push("               total        used        free      shared  buff/cache   available"), i.push(`Mem:    ${c * 1024} ${l * 1024} ${u * 1024} ${d * 1024} ${p * 1024} ${f * 1024}`), i.push(`Swap:   ${2097152 * 1024}           0 ${2097152 * 1024}`)) : r ? (i.push("               total        used        free      shared  buff/cache   available"), i.push(`Mem:           ${Math.floor(c / 1024)}        ${Math.floor(l / 1024)}        ${Math.floor(u / 1024)}         ${Math.floor(d / 1024)}        ${Math.floor(p / 1024)}        ${Math.floor(f / 1024)}`), i.push("Swap:          2048           0        2048")) : a ? (i.push("               total        used        free      shared  buff/cache   available"), i.push("Mem:               8           4           4           0           1           5"), i.push("Swap:              2           0           2")) : (i.push("               total        used        free      shared  buff/cache   available"), i.push(`Mem:        ${c}     ${l}     ${u}      ${d}     ${p}     ${f}`), i.push("Swap:       2097152           0     2097152")), {
+  async exec(n, e) {
+    const { flags: t } = y(n), s = t.h, r = t.b, o = t.m, a = t.g, i = [], c = 8388608, l = 4194304, u = 4194304, d = 524288, p = 1048576, f = 5242880;
+    return s ? (i.push("               total        used        free      shared  buff/cache   available"), i.push("Mem:            8.0G        4.0G        4.0G       512M        1.0G        5.0G"), i.push("Swap:           2.0G          0B        2.0G")) : r ? (i.push("               total        used        free      shared  buff/cache   available"), i.push(`Mem:    ${c * 1024} ${l * 1024} ${u * 1024} ${d * 1024} ${p * 1024} ${f * 1024}`), i.push(`Swap:   ${2097152 * 1024}           0 ${2097152 * 1024}`)) : o ? (i.push("               total        used        free      shared  buff/cache   available"), i.push(`Mem:           ${Math.floor(c / 1024)}        ${Math.floor(l / 1024)}        ${Math.floor(u / 1024)}         ${Math.floor(d / 1024)}        ${Math.floor(p / 1024)}        ${Math.floor(f / 1024)}`), i.push("Swap:          2048           0        2048")) : a ? (i.push("               total        used        free      shared  buff/cache   available"), i.push("Mem:               8           4           4           0           1           5"), i.push("Swap:              2           0           2")) : (i.push("               total        used        free      shared  buff/cache   available"), i.push(`Mem:        ${c}     ${l}     ${u}      ${d}     ${p}     ${f}`), i.push("Swap:       2097152           0     2097152")), {
       stdout: i.join(`
 `) + `
 `,
@@ -1799,10 +1873,10 @@ const Xt = {
       exitCode: 0
     };
   }
-}, Qt = {
+}, tt = {
   name: "getopts",
   description: "Parse option arguments (shell built-in)",
-  async exec(n, t) {
+  async exec(n, e) {
     var f, h;
     if (n.length < 2)
       return {
@@ -1811,32 +1885,32 @@ const Xt = {
 `,
         exitCode: 1
       };
-    const e = n[0], s = n[1], o = n.slice(2);
-    let r = parseInt(((f = t.env) == null ? void 0 : f.OPTIND) || "1");
-    const a = e.startsWith(":"), i = a ? e.slice(1) : e, c = /* @__PURE__ */ new Map();
+    const t = n[0], s = n[1], r = n.slice(2);
+    let o = parseInt(((f = e.env) == null ? void 0 : f.OPTIND) || "1");
+    const a = t.startsWith(":"), i = a ? t.slice(1) : t, c = /* @__PURE__ */ new Map();
     for (let m = 0; m < i.length; m++) {
       const g = i[m];
       if (g === ":") continue;
       const x = i[m + 1] === ":";
       c.set(g, x);
     }
-    const l = o.length > 0 ? o : (h = t.env) != null && h.$1 ? [t.env.$1, t.env.$2, t.env.$3].filter(Boolean) : [];
-    if (l.length === 0 || r > l.length)
-      return t.env && (t.env.OPTIND = "1"), {
+    const l = r.length > 0 ? r : (h = e.env) != null && h.$1 ? [e.env.$1, e.env.$2, e.env.$3].filter(Boolean) : [];
+    if (l.length === 0 || o > l.length)
+      return e.env && (e.env.OPTIND = "1"), {
         stdout: "",
         stderr: "",
         exitCode: 1
       };
-    const u = l[r - 1];
+    const u = l[o - 1];
     if (!u || !u.startsWith("-") || u === "-" || u === "--")
-      return t.env && (t.env.OPTIND = "1"), {
+      return e.env && (e.env.OPTIND = "1"), {
         stdout: "",
         stderr: "",
         exitCode: 1
       };
     const d = u[1];
     if (!c.has(d))
-      return t.env && (t.env[s] = "?", t.env.OPTARG = d, t.env.OPTIND = String(r + 1)), a ? {
+      return e.env && (e.env[s] = "?", e.env.OPTARG = d, e.env.OPTIND = String(o + 1)), a ? {
         stdout: "",
         stderr: "",
         exitCode: 0
@@ -1850,10 +1924,10 @@ const Xt = {
       let m;
       if (u.length > 2)
         m = u.slice(2);
-      else if (r < l.length)
-        m = l[r], t.env && (t.env.OPTIND = String(r + 2));
+      else if (o < l.length)
+        m = l[o], e.env && (e.env.OPTIND = String(o + 2));
       else
-        return t.env && (t.env[s] = "?", t.env.OPTARG = d, t.env.OPTIND = String(r + 1)), a ? {
+        return e.env && (e.env[s] = "?", e.env.OPTARG = d, e.env.OPTIND = String(o + 1)), a ? {
           stdout: "",
           stderr: "",
           exitCode: 0
@@ -1863,24 +1937,24 @@ const Xt = {
 `,
           exitCode: 0
         };
-      t.env && (t.env[s] = d, t.env.OPTARG = m, t.env.OPTIND || (t.env.OPTIND = String(r + 1)));
+      e.env && (e.env[s] = d, e.env.OPTARG = m, e.env.OPTIND || (e.env.OPTIND = String(o + 1)));
     } else
-      t.env && (t.env[s] = d, t.env.OPTIND = String(r + 1), delete t.env.OPTARG);
+      e.env && (e.env[s] = d, e.env.OPTIND = String(o + 1), delete e.env.OPTARG);
     return {
       stdout: "",
       stderr: "",
       exitCode: 0
     };
   }
-}, te = {
+}, st = {
   name: "grep",
   description: "Search for patterns in files",
-  async exec(n, t) {
-    const { flags: e, values: s, positional: o } = y(n, ["e"]), r = !!e.i, a = !!e.v, i = !!e.c, c = !!e.l, l = !!e.n, u = !!(e.r || e.R), d = s.e ?? o.shift();
+  async exec(n, e) {
+    const { flags: t, values: s, positional: r } = y(n, ["e"]), o = !!t.i, a = !!t.v, i = !!t.c, c = !!t.l, l = !!t.n, u = !!(t.r || t.R), d = s.e ?? r.shift();
     if (!d)
       return { stdout: "", stderr: `grep: missing pattern
 `, exitCode: 2 };
-    const p = r ? "i" : "";
+    const p = o ? "i" : "";
     let f;
     try {
       f = new RegExp(d, p);
@@ -1888,103 +1962,151 @@ const Xt = {
       return { stdout: "", stderr: `grep: invalid pattern: ${d}
 `, exitCode: 2 };
     }
-    const h = o.length > 0 ? o : ["-"], m = h.length > 1 || u, g = [];
+    const h = r.length > 0 ? r : ["-"], m = h.length > 1 || u, g = [];
     let x = !1;
-    async function w(C, $) {
+    async function w(v, $) {
       let S;
       try {
-        if (C === "-")
-          S = t.stdin;
+        if (v === "-")
+          S = e.stdin;
         else {
-          const j = t.fs.resolvePath(C, t.cwd);
-          S = await t.fs.readFile(j);
+          const F = e.fs.resolvePath(v, e.cwd);
+          S = await e.fs.readFile(F);
         }
       } catch {
-        g.push(`grep: ${C}: No such file or directory`);
+        g.push(`grep: ${v}: No such file or directory`);
         return;
       }
       const P = S.split(`
 `);
       P.length > 0 && P[P.length - 1] === "" && P.pop();
       let E = 0;
-      for (let j = 0; j < P.length; j++)
-        if (f.test(P[j]) !== a && (x = !0, E++, !i && !c)) {
-          const T = m ? `${$}:` : "", M = l ? `${j + 1}:` : "";
-          g.push(`${T}${M}${P[j]}`);
+      for (let F = 0; F < P.length; F++)
+        if (f.test(P[F]) !== a && (x = !0, E++, !i && !c)) {
+          const N = m ? `${$}:` : "", M = l ? `${F + 1}:` : "";
+          g.push(`${N}${M}${P[F]}`);
         }
       i && g.push(m ? `${$}:${E}` : String(E)), c && E > 0 && g.push($);
     }
-    async function v(C) {
-      const $ = t.fs.resolvePath(C, t.cwd);
+    async function C(v) {
+      const $ = e.fs.resolvePath(v, e.cwd);
       let S;
       try {
-        S = await t.fs.readdir($);
+        S = await e.fs.readdir($);
       } catch {
         return;
       }
       for (const P of S) {
         const E = $ + "/" + P.name;
-        P.type === "dir" ? await v(E) : await w(E, E);
+        P.type === "dir" ? await C(E) : await w(E, E);
       }
     }
-    for (const C of h)
-      if (C === "-")
+    for (const v of h)
+      if (v === "-")
         await w("-", "(standard input)");
       else if (u) {
-        const $ = t.fs.resolvePath(C, t.cwd);
+        const $ = e.fs.resolvePath(v, e.cwd);
         let S;
         try {
-          S = await t.fs.stat($);
+          S = await e.fs.stat($);
         } catch {
           continue;
         }
-        S.type === "dir" ? await v($) : await w(C, C);
+        S.type === "dir" ? await C($) : await w(v, v);
       } else
-        await w(C, C);
+        await w(v, v);
     return { stdout: g.length > 0 ? g.join(`
 `) + `
 ` : "", stderr: "", exitCode: x ? 0 : 1 };
   }
-}, ee = {
+}, nt = {
   name: "head",
   description: "Output the first part of files",
-  async exec(n, t) {
-    const { values: e, positional: s } = y(n, ["n"]), o = parseInt(e.n ?? "10", 10);
+  async exec(n, e) {
+    const { values: t, positional: s } = y(n, ["n"]), r = parseInt(t.n ?? "10", 10);
     try {
-      const { content: r } = await N(
+      const { content: o } = await j(
         s,
-        t.stdin,
-        t.fs,
-        t.cwd,
-        t.fs.resolvePath
+        e.stdin,
+        e.fs,
+        e.cwd,
+        e.fs.resolvePath
       );
-      return { stdout: r.split(`
-`).slice(0, o).join(`
+      return { stdout: o.split(`
+`).slice(0, r).join(`
 `) + `
 `, stderr: "", exitCode: 0 };
-    } catch (r) {
-      return { stdout: "", stderr: `head: ${r instanceof Error ? r.message : r}
+    } catch (o) {
+      return { stdout: "", stderr: `head: ${o instanceof Error ? o.message : o}
 `, exitCode: 1 };
     }
   }
-}, se = {
+}, rt = {
+  name: "heredoc",
+  description: "Helper for here-document processing (shell feature)",
+  async exec(n, e) {
+    return {
+      stdout: `heredoc: This is a shell language feature, not a command.
+
+Here-document syntax must be implemented at the shell parser level:
+
+Syntax:
+  command << DELIMITER
+  content line 1
+  content line 2
+  DELIMITER
+
+Variants:
+  <<  DELIMITER  - Normal mode (variable expansion enabled)
+  << 'DELIMITER' - Literal mode (no expansion)
+  <<- DELIMITER  - Strip leading tabs from content lines
+
+Implementation guidance for shell parsers:
+1. When encountering <<, capture the delimiter (next token)
+2. Read subsequent lines until line exactly matches delimiter
+3. Apply expansions ($var, $(cmd), \`cmd\`) unless in literal mode
+4. If <<-, strip leading tabs from each line
+5. Pass the collected content as stdin to the command
+
+Examples:
+  cat << EOF
+  Hello, \${USER}!
+  The date is $(date)
+  EOF
+
+  cat << 'EOF'
+  Literal \${USER} - no expansion
+  EOF
+
+  cat <<- EOF
+  \\tThis line had a leading tab that was stripped
+  EOF
+
+Shell implementers: Parse heredoc at the token/syntax level before command execution.
+
+`,
+      stderr: "",
+      exitCode: 0
+    };
+  }
+}, ot = {
   name: "hexdump",
   description: "Display file contents in hexadecimal",
-  async exec(n, t) {
-    const { values: e, positional: s, flags: o } = y(n, ["n", "s", "C"]), r = o.C, a = e.n ? parseInt(e.n) : void 0, i = e.s ? parseInt(e.s) : 0;
+  async exec(n, e) {
+    const { values: t, positional: s, flags: r } = y(n, ["n", "s", "C"]), o = r.C, a = t.n ? parseInt(t.n) : void 0, i = t.s ? parseInt(t.s) : 0;
     try {
-      const { content: c } = await N(
+      const { content: c } = await j(
         s,
-        t.stdin,
-        t.fs,
-        t.cwd,
-        t.fs.resolvePath
+        e.stdin,
+        e.fs,
+        e.cwd,
+        e.fs.resolvePath
       );
       let l = c.substring(i, a ? i + a : void 0);
       const u = [];
-      if (r) {
+      if (o) {
         for (let p = 0; p < l.length; p += 16) {
-          const f = l.substring(p, p + 16), h = (i + p).toString(16).padStart(8, "0"), m = q(f.substring(0, 8)), g = q(f.substring(8, 16)), x = ne(f);
+          const f = l.substring(p, p + 16), h = (i + p).toString(16).padStart(8, "0"), m = z(f.substring(0, 8)), g = z(f.substring(8, 16)), x = it(f);
           u.push(`${h}  ${m}  ${g}  |${x}|`);
         }
         const d = (i + l.length).toString(16).padStart(8, "0");
@@ -1993,8 +2115,8 @@ const Xt = {
         for (let p = 0; p < l.length; p += 16) {
           const f = l.substring(p, p + 16), h = (i + p).toString(16).padStart(7, "0"), m = [];
           for (let g = 0; g < f.length; g += 2) {
-            const x = f.charCodeAt(g), w = g + 1 < f.length ? f.charCodeAt(g + 1) : 0, v = (x << 8 | w).toString(16).padStart(4, "0");
-            m.push(v);
+            const x = f.charCodeAt(g), w = g + 1 < f.length ? f.charCodeAt(g + 1) : 0, C = (x << 8 | w).toString(16).padStart(4, "0");
+            m.push(C);
           }
           u.push(`${h} ${m.join(" ")}`);
         }
@@ -2018,37 +2140,37 @@ const Xt = {
     }
   }
 };
-function q(n) {
-  const t = [];
-  for (let e = 0; e < 8; e++)
-    e < n.length ? t.push(n.charCodeAt(e).toString(16).padStart(2, "0")) : t.push("  ");
-  return t.join(" ");
+function z(n) {
+  const e = [];
+  for (let t = 0; t < 8; t++)
+    t < n.length ? e.push(n.charCodeAt(t).toString(16).padStart(2, "0")) : e.push("  ");
+  return e.join(" ");
 }
-function ne(n) {
-  let t = "";
-  for (let e = 0; e < 16; e++)
-    if (e < n.length) {
-      const s = n.charCodeAt(e);
-      t += s >= 32 && s < 127 ? n[e] : ".";
+function it(n) {
+  let e = "";
+  for (let t = 0; t < 16; t++)
+    if (t < n.length) {
+      const s = n.charCodeAt(t);
+      e += s >= 32 && s < 127 ? n[t] : ".";
     } else
-      t += " ";
-  return t;
+      e += " ";
+  return e;
 }
-const re = {
+const at = {
   name: "hostname",
   description: "Print system hostname",
-  async exec(n, t) {
-    return { stdout: (t.env.HOSTNAME ?? "localhost") + `
+  async exec(n, e) {
+    return { stdout: (e.env.HOSTNAME ?? "localhost") + `
 `, stderr: "", exitCode: 0 };
   }
-}, oe = {
+}, ct = {
   name: "id",
   description: "Print user identity",
-  async exec(n, t) {
-    const { positional: e, flags: s } = y(n), o = e[0] || t.env.USER || "user", r = s.u || s.user, a = s.g || s.group, i = s.G || s.groups, c = s.n || s.name;
+  async exec(n, e) {
+    const { positional: t, flags: s } = y(n), r = t[0] || e.env.USER || "user", o = s.u || s.user, a = s.g || s.group, i = s.G || s.groups, c = s.n || s.name;
     s.r || s.real;
-    const l = 1e3, u = 1e3, d = [1e3], p = o, f = "users", h = [];
-    if (r)
+    const l = 1e3, u = 1e3, d = [1e3], p = r, f = "users", h = [];
+    if (o)
       c ? h.push(p) : h.push(String(l));
     else if (a)
       c ? h.push(f) : h.push(String(u));
@@ -2066,13 +2188,13 @@ const re = {
       exitCode: 0
     };
   }
-}, ie = {
+}, lt = {
   name: "install",
   description: "Copy files and set attributes",
-  async exec(n, t) {
-    const { values: e, positional: s, flags: o } = y(n, ["m", "mode", "o", "owner", "g", "group", "t", "target-directory"]);
-    e.m || e.mode;
-    const r = e.t || e["target-directory"], a = o.d || o.directory, i = o.v || o.verbose;
+  async exec(n, e) {
+    const { values: t, positional: s, flags: r } = y(n, ["m", "mode", "o", "owner", "g", "group", "t", "target-directory"]);
+    t.m || t.mode;
+    const o = t.t || t["target-directory"], a = r.d || r.directory, i = r.v || r.verbose;
     if (s.length === 0)
       return { stdout: "", stderr: `install: missing operand
 `, exitCode: 1 };
@@ -2080,34 +2202,34 @@ const re = {
     try {
       if (a)
         for (const l of s) {
-          const u = t.fs.resolvePath(l, t.cwd);
-          await t.fs.mkdir(u, { recursive: !0 }), i && c.push(`install: creating directory '${l}'`);
+          const u = e.fs.resolvePath(l, e.cwd);
+          await e.fs.mkdir(u, { recursive: !0 }), i && c.push(`install: creating directory '${l}'`);
         }
-      else if (r) {
-        const l = t.fs.resolvePath(r, t.cwd);
+      else if (o) {
+        const l = e.fs.resolvePath(o, e.cwd);
         for (const u of s) {
-          const d = t.fs.resolvePath(u, t.cwd), p = u.split("/").pop() || u, f = l + "/" + p, h = await t.fs.readFile(d);
-          await t.fs.writeFile(f, h), i && c.push(`'${u}' -> '${r}/${p}'`);
+          const d = e.fs.resolvePath(u, e.cwd), p = u.split("/").pop() || u, f = l + "/" + p, h = await e.fs.readFile(d);
+          await e.fs.writeFile(f, h), i && c.push(`'${u}' -> '${o}/${p}'`);
         }
       } else {
         if (s.length < 2)
           return { stdout: "", stderr: `install: missing destination
 `, exitCode: 1 };
-        const l = s[s.length - 1], u = s.slice(0, -1), d = t.fs.resolvePath(l, t.cwd);
+        const l = s[s.length - 1], u = s.slice(0, -1), d = e.fs.resolvePath(l, e.cwd);
         let p = !1;
         try {
-          p = (await t.fs.stat(d)).type === "dir";
+          p = (await e.fs.stat(d)).type === "dir";
         } catch {
           p = u.length > 1;
         }
         if (p && u.length > 1)
           for (const f of u) {
-            const h = t.fs.resolvePath(f, t.cwd), m = f.split("/").pop() || f, g = d + "/" + m, x = await t.fs.readFile(h);
-            await t.fs.writeFile(g, x), i && c.push(`'${f}' -> '${l}/${m}'`);
+            const h = e.fs.resolvePath(f, e.cwd), m = f.split("/").pop() || f, g = d + "/" + m, x = await e.fs.readFile(h);
+            await e.fs.writeFile(g, x), i && c.push(`'${f}' -> '${l}/${m}'`);
           }
         else {
-          const f = t.fs.resolvePath(u[0], t.cwd), h = await t.fs.readFile(f);
-          await t.fs.writeFile(d, h), i && c.push(`'${u[0]}' -> '${l}'`);
+          const f = e.fs.resolvePath(u[0], e.cwd), h = await e.fs.readFile(f);
+          await e.fs.writeFile(d, h), i && c.push(`'${u[0]}' -> '${l}'`);
         }
       }
       return {
@@ -2126,11 +2248,11 @@ const re = {
       };
     }
   }
-}, ae = {
+}, dt = {
   name: "join",
   description: "Join lines of two files on a common field",
-  async exec(n, t) {
-    const { values: e, positional: s, flags: o } = y(n, ["1", "2", "t", "o"]);
+  async exec(n, e) {
+    const { values: t, positional: s, flags: r } = y(n, ["1", "2", "t", "o"]);
     if (s.length < 2)
       return {
         stdout: "",
@@ -2138,30 +2260,30 @@ const re = {
 `,
         exitCode: 1
       };
-    const r = e[1] ? parseInt(e[1]) - 1 : 0, a = e[2] ? parseInt(e[2]) - 1 : 0, i = e.t || /\s+/, c = e.o, l = o.i;
+    const o = t[1] ? parseInt(t[1]) - 1 : 0, a = t[2] ? parseInt(t[2]) - 1 : 0, i = t.t || /\s+/, c = t.o, l = r.i;
     try {
-      const u = t.fs.resolvePath(s[0], t.cwd), d = t.fs.resolvePath(s[1], t.cwd), p = await t.fs.readFile(u), f = await t.fs.readFile(d), h = p.split(`
-`).filter((C) => C.trim() !== ""), m = f.split(`
-`).filter((C) => C.trim() !== ""), g = (C) => C.map(($) => $.split(i)), x = g(h), w = g(m), v = /* @__PURE__ */ new Map();
-      for (const C of w) {
-        const $ = (C[a] || "").trim(), S = l ? $.toLowerCase() : $;
-        v.has(S) || v.set(S, []), v.get(S).push(C);
+      const u = e.fs.resolvePath(s[0], e.cwd), d = e.fs.resolvePath(s[1], e.cwd), p = await e.fs.readFile(u), f = await e.fs.readFile(d), h = p.split(`
+`).filter((v) => v.trim() !== ""), m = f.split(`
+`).filter((v) => v.trim() !== ""), g = (v) => v.map(($) => $.split(i)), x = g(h), w = g(m), C = /* @__PURE__ */ new Map();
+      for (const v of w) {
+        const $ = (v[a] || "").trim(), S = l ? $.toLowerCase() : $;
+        C.has(S) || C.set(S, []), C.get(S).push(v);
       }
       const b = [];
-      for (const C of x) {
-        const $ = (C[r] || "").trim(), S = l ? $.toLowerCase() : $, P = v.get(S) || [];
+      for (const v of x) {
+        const $ = (v[o] || "").trim(), S = l ? $.toLowerCase() : $, P = C.get(S) || [];
         for (const E of P) {
-          let j;
+          let F;
           if (c)
-            j = c.split(",").map((T) => {
-              const [M, I] = T.split(".").map((k) => parseInt(k));
-              return (M === 1 ? C : E)[I - 1] || "";
+            F = c.split(",").map((N) => {
+              const [M, I] = N.split(".").map((R) => parseInt(R));
+              return (M === 1 ? v : E)[I - 1] || "";
             }).join(" ");
           else {
-            const R = C[r] || "", T = C.filter((I, F) => F !== r), M = E.filter((I, F) => F !== a);
-            j = [R, ...T, ...M].join(" ");
+            const k = v[o] || "", N = v.filter((I, T) => T !== o), M = E.filter((I, T) => T !== a);
+            F = [k, ...N, ...M].join(" ");
           }
-          b.push(j);
+          b.push(F);
         }
       }
       return {
@@ -2180,48 +2302,106 @@ const re = {
       };
     }
   }
-}, ce = {
+}, ut = {
   name: "less",
   description: "View file contents with pagination",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n);
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n);
     try {
-      const { content: o } = await N(
+      const { content: r } = await j(
         s,
-        t.stdin,
-        t.fs,
-        t.cwd,
-        t.fs.resolvePath
-      ), r = o.split(`
-`), a = e.N || e.n;
+        e.stdin,
+        e.fs,
+        e.cwd,
+        e.fs.resolvePath
+      ), o = r.split(`
+`), a = t.N || t.n;
       let i = "";
-      return a ? i = r.map((c, l) => `${String(l + 1).padStart(6)}  ${c}`).join(`
-`) : i = o, i && !i.endsWith(`
+      return a ? i = o.map((c, l) => `${String(l + 1).padStart(6)}  ${c}`).join(`
+`) : i = r, i && !i.endsWith(`
 `) && (i += `
 `), { stdout: i, stderr: "", exitCode: 0 };
-    } catch (o) {
+    } catch (r) {
       return {
         stdout: "",
-        stderr: `less: ${o instanceof Error ? o.message : o}
+        stderr: `less: ${r instanceof Error ? r.message : r}
 `,
         exitCode: 1
       };
     }
   }
-}, le = {
+}, ft = {
+  name: "let",
+  description: "Evaluate arithmetic expressions",
+  async exec(n, e) {
+    if (n.length === 0)
+      return {
+        stdout: "",
+        stderr: `let: usage: let arg [arg ...]
+`,
+        exitCode: 1
+      };
+    try {
+      const t = n.join(" "), s = t.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(.+)$/);
+      if (s) {
+        const o = s[1], a = s[2], i = U(a, e.env || {});
+        return e.env && (e.env[o] = String(i)), {
+          stdout: "",
+          stderr: "",
+          exitCode: i === 0 ? 1 : 0
+        };
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        exitCode: U(t, e.env || {}) === 0 ? 1 : 0
+      };
+    } catch (t) {
+      return {
+        stdout: "",
+        stderr: `let: ${t.message}
+`,
+        exitCode: 1
+      };
+    }
+  }
+};
+function U(n, e) {
+  let t = n.trim();
+  t = t.replace(/\$\{?([a-zA-Z_][a-zA-Z0-9_]*)\}?/g, (s, r) => e[r] || "0");
+  try {
+    if (t = t.replace(/\s+/g, ""), /^[\d+\-*/%()]+$/.test(t)) {
+      const r = new Function(`return (${t})`)();
+      return Math.floor(r);
+    }
+    if (t.includes("==") || t.includes("!=") || t.includes("<=") || t.includes(">=") || t.includes("<") || t.includes(">"))
+      return new Function(`return (${t}) ? 1 : 0`)();
+    if (t.includes("&&") || t.includes("||"))
+      return new Function(`return (${t}) ? 1 : 0`)();
+    const s = parseFloat(t);
+    if (!isNaN(s))
+      return Math.floor(s);
+    throw new Error(`invalid arithmetic expression: ${n}`);
+  } catch {
+    throw new Error(`invalid arithmetic expression: ${n}`);
+  }
+}
+const Ns = {
+  evaluate: U
+}, pt = {
   name: "ln",
   description: "Make links between files",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n), o = e.s, r = e.f, a = e.v;
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n), r = t.s, o = t.f, a = t.v;
     if (s.length < 2)
       return { stdout: "", stderr: `ln: missing operand
 `, exitCode: 1 };
-    const i = t.fs.resolvePath(s[0], t.cwd), c = t.fs.resolvePath(s[1], t.cwd), l = [];
+    const i = e.fs.resolvePath(s[0], e.cwd), c = e.fs.resolvePath(s[1], e.cwd), l = [];
     try {
-      if (await t.fs.exists(c))
-        if (r)
+      if (await e.fs.exists(c))
+        if (o)
           try {
-            await t.fs.unlink(c);
+            await e.fs.unlink(c);
           } catch {
           }
         else
@@ -2231,11 +2411,11 @@ const re = {
 `,
             exitCode: 1
           };
-      if (o && t.fs.symlink)
-        await t.fs.symlink(i, c), a && l.push(`'${c}' -> '${i}'`);
+      if (r && e.fs.symlink)
+        await e.fs.symlink(i, c), a && l.push(`'${c}' -> '${i}'`);
       else {
-        const u = await t.fs.readFile(i);
-        await t.fs.writeFile(c, u), a && l.push(`'${c}' => '${i}'`);
+        const u = await e.fs.readFile(i);
+        await e.fs.writeFile(c, u), a && l.push(`'${c}' => '${i}'`);
       }
       return {
         stdout: l.join(`
@@ -2249,23 +2429,23 @@ const re = {
 `, exitCode: 1 };
     }
   }
-}, de = {
+}, ht = {
   name: "ls",
   description: "List directory contents",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n), o = s.length > 0 ? s : ["."], r = e.a, a = e.l, i = e.h, c = [];
-    for (const l of o) {
-      const u = t.fs.resolvePath(l, t.cwd), d = await t.fs.stat(u);
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n), r = s.length > 0 ? s : ["."], o = t.a, a = t.l, i = t.h, c = [];
+    for (const l of r) {
+      const u = e.fs.resolvePath(l, e.cwd), d = await e.fs.stat(u);
       if (d.type === "file") {
-        c.push(a ? z(u.split("/").pop(), d, i) : u.split("/").pop());
+        c.push(a ? H(u.split("/").pop(), d, i) : u.split("/").pop());
         continue;
       }
-      o.length > 1 && c.push(`${l}:`);
-      const p = await t.fs.readdir(u), f = r ? p : p.filter((h) => !h.name.startsWith("."));
+      r.length > 1 && c.push(`${l}:`);
+      const p = await e.fs.readdir(u), f = o ? p : p.filter((h) => !h.name.startsWith("."));
       if (f.sort((h, m) => h.name.localeCompare(m.name)), a) {
         c.push(`total ${f.length}`);
         for (const h of f)
-          c.push(z(h.name, h, i));
+          c.push(H(h.name, h, i));
       } else
         c.push(f.map((h) => h.type === "dir" ? h.name + "/" : h.name).join("  "));
     }
@@ -2274,47 +2454,47 @@ const re = {
 `, stderr: "", exitCode: 0 };
   }
 };
-function z(n, t, e) {
-  const s = t.type === "dir" ? "d" : "-", o = t.mode ?? (t.type === "dir" ? 493 : 420), r = ue(o), a = e ? pe(t.size) : String(t.size).padStart(8), i = new Date(t.mtime), c = fe(i);
-  return `${s}${r}  1 user user ${a} ${c} ${n}`;
+function H(n, e, t) {
+  const s = e.type === "dir" ? "d" : "-", r = e.mode ?? (e.type === "dir" ? 493 : 420), o = mt(r), a = t ? xt(e.size) : String(e.size).padStart(8), i = new Date(e.mtime), c = gt(i);
+  return `${s}${o}  1 user user ${a} ${c} ${n}`;
 }
-function ue(n) {
-  let e = "";
+function mt(n) {
+  let t = "";
   for (let s = 2; s >= 0; s--) {
-    const o = n >> s * 3 & 7;
-    for (let r = 2; r >= 0; r--)
-      e += o & 1 << r ? "rwx"[2 - r] : "-";
+    const r = n >> s * 3 & 7;
+    for (let o = 2; o >= 0; o--)
+      t += r & 1 << o ? "rwx"[2 - o] : "-";
   }
-  return e;
+  return t;
 }
-function fe(n) {
-  const e = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][n.getMonth()], s = String(n.getDate()).padStart(2), o = String(n.getHours()).padStart(2, "0"), r = String(n.getMinutes()).padStart(2, "0");
-  return `${e} ${s} ${o}:${r}`;
+function gt(n) {
+  const t = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][n.getMonth()], s = String(n.getDate()).padStart(2), r = String(n.getHours()).padStart(2, "0"), o = String(n.getMinutes()).padStart(2, "0");
+  return `${t} ${s} ${r}:${o}`;
 }
-function pe(n) {
+function xt(n) {
   return n < 1024 ? String(n).padStart(5) : n < 1024 * 1024 ? (n / 1024).toFixed(1) + "K" : (n / (1024 * 1024)).toFixed(1) + "M";
 }
-const he = {
+const yt = {
   name: "make",
   description: "Build automation (basic Makefile support)",
-  async exec(n, t) {
-    const { values: e, positional: s, flags: o } = y(n, ["f", "file", "C", "j"]), r = e.f || e.file || "Makefile", a = e.C;
-    e.j;
-    const i = o.n || o["dry-run"], c = o.p || o.print, l = s.length > 0 ? s : ["all"];
+  async exec(n, e) {
+    const { values: t, positional: s, flags: r } = y(n, ["f", "file", "C", "j"]), o = t.f || t.file || "Makefile", a = t.C;
+    t.j;
+    const i = r.n || r["dry-run"], c = r.p || r.print, l = s.length > 0 ? s : ["all"];
     try {
-      const u = a ? t.fs.resolvePath(a, t.cwd) : t.cwd, d = t.fs.resolvePath(r, u);
+      const u = a ? e.fs.resolvePath(a, e.cwd) : e.cwd, d = e.fs.resolvePath(o, u);
       let p;
       try {
-        p = await t.fs.readFile(d);
+        p = await e.fs.readFile(d);
       } catch {
         return {
           stdout: "",
-          stderr: `make: ${r}: No such file or directory
+          stderr: `make: ${o}: No such file or directory
 `,
           exitCode: 2
         };
       }
-      const f = me(p), h = [];
+      const f = wt(p), h = [];
       for (const m of l) {
         const g = f.get(m);
         if (!g)
@@ -2327,8 +2507,8 @@ const he = {
         for (const x of g.prerequisites) {
           const w = f.get(x);
           if (w)
-            for (const v of w.commands)
-              c || i ? h.push(v) : h.push(`# ${v}`);
+            for (const C of w.commands)
+              c || i ? h.push(C) : h.push(`# ${C}`);
         }
         for (const x of g.commands)
           c || i ? h.push(x) : h.push(`# ${x}`);
@@ -2350,26 +2530,26 @@ const he = {
     }
   }
 };
-function me(n) {
-  const t = /* @__PURE__ */ new Map(), e = n.split(`
+function wt(n) {
+  const e = /* @__PURE__ */ new Map(), t = n.split(`
 `);
   let s = null;
-  for (let o = 0; o < e.length; o++) {
-    const r = e[o];
-    if (!(r.trim().startsWith("#") || r.trim() === ""))
-      if (r.includes(":") && !r.startsWith("	")) {
-        const a = r.indexOf(":"), i = r.substring(0, a).trim(), c = r.substring(a + 1).trim(), l = c ? c.split(/\s+/) : [];
-        s = { target: i, prerequisites: l, commands: [] }, t.set(i, s);
-      } else r.startsWith("	") && s && s.commands.push(r.substring(1));
+  for (let r = 0; r < t.length; r++) {
+    const o = t[r];
+    if (!(o.trim().startsWith("#") || o.trim() === ""))
+      if (o.includes(":") && !o.startsWith("	")) {
+        const a = o.indexOf(":"), i = o.substring(0, a).trim(), c = o.substring(a + 1).trim(), l = c ? c.split(/\s+/) : [];
+        s = { target: i, prerequisites: l, commands: [] }, e.set(i, s);
+      } else o.startsWith("	") && s && s.commands.push(o.substring(1));
   }
-  return t;
+  return e;
 }
-const ge = {
+const vt = {
   name: "md5sum",
   description: "Compute MD5 message digest",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n), o = e.c || e.check, r = e.b || e.binary;
-    if (o)
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n), r = t.c || t.check, o = t.b || t.binary;
+    if (r)
       return {
         stdout: "",
         stderr: `md5sum: --check not implemented in browser environment
@@ -2381,12 +2561,12 @@ const ge = {
       for (const c of a) {
         let l;
         if (c === "-")
-          l = t.stdin;
+          l = e.stdin;
         else {
-          const p = t.fs.resolvePath(c, t.cwd);
-          l = await t.fs.readFile(p);
+          const p = e.fs.resolvePath(c, e.cwd);
+          l = await e.fs.readFile(p);
         }
-        const u = await xe(l), d = r ? "*" : " ";
+        const u = await Ct(l), d = o ? "*" : " ";
         i.push(`${u}${d}${c === "-" ? "-" : c}`);
       }
       return {
@@ -2406,54 +2586,54 @@ const ge = {
     }
   }
 };
-async function xe(n) {
-  let t = 0;
+async function Ct(n) {
+  let e = 0;
   for (let s = 0; s < n.length; s++) {
-    const o = n.charCodeAt(s);
-    t = (t << 5) - t + o, t = t & t;
+    const r = n.charCodeAt(s);
+    e = (e << 5) - e + r, e = e & e;
   }
-  return Math.abs(t).toString(16).padStart(32, "0");
+  return Math.abs(e).toString(16).padStart(32, "0");
 }
-const ye = {
+const $t = {
   name: "mkdir",
   description: "Make directories",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n), o = e.p;
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n), r = t.p;
     if (s.length === 0)
       return { stdout: "", stderr: `mkdir: missing operand
 `, exitCode: 1 };
     try {
-      for (const r of s) {
-        const a = t.fs.resolvePath(r, t.cwd);
-        await t.fs.mkdir(a, { recursive: o });
+      for (const o of s) {
+        const a = e.fs.resolvePath(o, e.cwd);
+        await e.fs.mkdir(a, { recursive: r });
       }
       return { stdout: "", stderr: "", exitCode: 0 };
-    } catch (r) {
-      return { stdout: "", stderr: `mkdir: ${r instanceof Error ? r.message : r}
+    } catch (o) {
+      return { stdout: "", stderr: `mkdir: ${o instanceof Error ? o.message : o}
 `, exitCode: 1 };
     }
   }
-}, we = {
+}, bt = {
   name: "mv",
   description: "Move or rename files",
-  async exec(n, t) {
-    const { positional: e } = y(n);
-    if (e.length < 2)
+  async exec(n, e) {
+    const { positional: t } = y(n);
+    if (t.length < 2)
       return { stdout: "", stderr: `mv: missing operand
 `, exitCode: 1 };
-    const s = t.fs.resolvePath(e[e.length - 1], t.cwd), o = e.slice(0, -1);
-    let r = !1;
+    const s = e.fs.resolvePath(t[t.length - 1], e.cwd), r = t.slice(0, -1);
+    let o = !1;
     try {
-      r = (await t.fs.stat(s)).type === "dir";
+      o = (await e.fs.stat(s)).type === "dir";
     } catch {
     }
-    if (o.length > 1 && !r)
+    if (r.length > 1 && !o)
       return { stdout: "", stderr: `mv: target is not a directory
 `, exitCode: 1 };
     try {
-      for (const a of o) {
-        const i = t.fs.resolvePath(a, t.cwd), c = a.split("/").pop(), l = r ? s + "/" + c : s;
-        await t.fs.rename(i, l);
+      for (const a of r) {
+        const i = e.fs.resolvePath(a, e.cwd), c = a.split("/").pop(), l = o ? s + "/" + c : s;
+        await e.fs.rename(i, l);
       }
       return { stdout: "", stderr: "", exitCode: 0 };
     } catch (a) {
@@ -2461,26 +2641,26 @@ const ye = {
 `, exitCode: 1 };
     }
   }
-}, Ce = {
+}, St = {
   name: "nl",
   description: "Number lines of files",
-  async exec(n, t) {
-    const { values: e, positional: s, flags: o } = y(n, ["b", "s", "w", "n", "v"]), r = e.b || "t", a = e.s || "	", i = parseInt(e.w || "6", 10), c = e.n || "rn", l = parseInt(e.v || "1", 10);
-    o.p;
-    const u = o.ba;
+  async exec(n, e) {
+    const { values: t, positional: s, flags: r } = y(n, ["b", "s", "w", "n", "v"]), o = t.b || "t", a = t.s || "	", i = parseInt(t.w || "6", 10), c = t.n || "rn", l = parseInt(t.v || "1", 10);
+    r.p;
+    const u = r.ba;
     try {
-      const { content: d } = await N(
+      const { content: d } = await j(
         s,
-        t.stdin,
-        t.fs,
-        t.cwd,
-        t.fs.resolvePath
+        e.stdin,
+        e.fs,
+        e.cwd,
+        e.fs.resolvePath
       ), p = d.split(`
 `), f = [];
       let h = l;
       for (const m of p) {
         let g = !1;
-        const x = u ? "a" : r;
+        const x = u ? "a" : o;
         switch (x) {
           case "a":
             g = !0;
@@ -2502,7 +2682,7 @@ const ye = {
             }
         }
         if (g) {
-          const w = ve(h, i, c);
+          const w = Pt(h, i, c);
           f.push(w + a + m), h++;
         } else
           f.push(" ".repeat(i) + a + m);
@@ -2525,23 +2705,23 @@ const ye = {
     }
   }
 };
-function ve(n, t, e) {
+function Pt(n, e, t) {
   const s = String(n);
-  switch (e) {
+  switch (t) {
     case "ln":
-      return s.padEnd(t, " ");
+      return s.padEnd(e, " ");
     case "rn":
-      return s.padStart(t, " ");
+      return s.padStart(e, " ");
     case "rz":
-      return s.padStart(t, "0");
+      return s.padStart(e, "0");
     default:
-      return s.padStart(t, " ");
+      return s.padStart(e, " ");
   }
 }
-const $e = {
+const Et = {
   name: "nohup",
   description: "Run a command immune to hangups",
-  async exec(n, t) {
+  async exec(n, e) {
     if (n.length === 0)
       return {
         stdout: "",
@@ -2550,52 +2730,52 @@ Try 'nohup --help' for more information.
 `,
         exitCode: 125
       };
-    const e = n[0], s = n.slice(1), o = `nohup: ignoring input and appending output to 'nohup.out'
+    const t = n[0], s = n.slice(1), r = `nohup: ignoring input and appending output to 'nohup.out'
 `;
     try {
-      const r = t.fs.resolvePath("nohup.out", t.cwd), i = `[${(/* @__PURE__ */ new Date()).toISOString()}] Command: ${e} ${s.join(" ")}
+      const o = e.fs.resolvePath("nohup.out", e.cwd), i = `[${(/* @__PURE__ */ new Date()).toISOString()}] Command: ${t} ${s.join(" ")}
 `;
       let c = "";
       try {
-        c = await t.fs.readFile(r);
+        c = await e.fs.readFile(o);
       } catch {
       }
-      await t.fs.writeFile(r, c + i);
-    } catch (r) {
+      await e.fs.writeFile(o, c + i);
+    } catch (o) {
       return {
         stdout: "",
-        stderr: `nohup: cannot create nohup.out: ${r.message}
+        stderr: `nohup: cannot create nohup.out: ${o.message}
 `,
         exitCode: 125
       };
     }
     return {
       stdout: "",
-      stderr: o,
+      stderr: r,
       exitCode: 0
     };
   }
-}, be = {
+}, It = {
   name: "od",
   description: "Dump files in octal and other formats",
-  async exec(n, t) {
-    const { values: e, positional: s, flags: o } = y(n, ["t", "N", "j", "w", "A"]), r = e.t || "o2", a = e.N ? parseInt(e.N) : void 0, i = e.j ? parseInt(e.j) : 0, c = e.w ? parseInt(e.w) : 16, l = e.A || "o", u = o.b || o.c || o.d || o.o || o.s || o.x;
+  async exec(n, e) {
+    const { values: t, positional: s, flags: r } = y(n, ["t", "N", "j", "w", "A"]), o = t.t || "o2", a = t.N ? parseInt(t.N) : void 0, i = t.j ? parseInt(t.j) : 0, c = t.w ? parseInt(t.w) : 16, l = t.A || "o", u = r.b || r.c || r.d || r.o || r.s || r.x;
     try {
-      const { content: d } = await N(
+      const { content: d } = await j(
         s,
-        t.stdin,
-        t.fs,
-        t.cwd,
-        t.fs.resolvePath
+        e.stdin,
+        e.fs,
+        e.cwd,
+        e.fs.resolvePath
       );
       let p = d.substring(i, a ? i + a : void 0);
       const f = [];
       let h = "o", m = 2;
-      u ? o.b ? (h = "o", m = 1) : o.c ? (h = "c", m = 1) : o.d || o.s ? (h = "d", m = 2) : o.o ? (h = "o", m = 2) : o.x && (h = "x", m = 2) : r && (h = r[0] || "o", m = parseInt(r.substring(1)) || 2);
+      u ? r.b ? (h = "o", m = 1) : r.c ? (h = "c", m = 1) : r.d || r.s ? (h = "d", m = 2) : r.o ? (h = "o", m = 2) : r.x && (h = "x", m = 2) : o && (h = o[0] || "o", m = parseInt(o.substring(1)) || 2);
       let g = i;
       for (let x = 0; x < p.length; x += c) {
-        const w = p.substring(x, x + c), v = G(g, l), b = Se(w, h, m);
-        f.push(`${v} ${b}`), g += w.length;
+        const w = p.substring(x, x + c), C = G(g, l), b = Ft(w, h, m);
+        f.push(`${C} ${b}`), g += w.length;
       }
       return l !== "n" && f.push(G(g, l)), {
         stdout: f.join(`
@@ -2614,8 +2794,8 @@ Try 'nohup --help' for more information.
     }
   }
 };
-function G(n, t) {
-  switch (t) {
+function G(n, e) {
+  switch (e) {
     case "o":
       return n.toString(8).padStart(7, "0");
     case "d":
@@ -2628,39 +2808,39 @@ function G(n, t) {
       return n.toString(8).padStart(7, "0");
   }
 }
-function Se(n, t, e) {
+function Ft(n, e, t) {
   const s = [];
-  for (let o = 0; o < n.length; o += e) {
-    const r = n.substring(o, o + e);
+  for (let r = 0; r < n.length; r += t) {
+    const o = n.substring(r, r + t);
     let a = 0;
-    for (let i = 0; i < r.length; i++)
-      a = a << 8 | r.charCodeAt(i);
-    switch (t) {
+    for (let i = 0; i < o.length; i++)
+      a = a << 8 | o.charCodeAt(i);
+    switch (e) {
       case "o":
-        s.push(a.toString(8).padStart(e * 3, "0"));
+        s.push(a.toString(8).padStart(t * 3, "0"));
         break;
       case "x":
-        s.push(a.toString(16).padStart(e * 2, "0"));
+        s.push(a.toString(16).padStart(t * 2, "0"));
         break;
       case "d":
-        s.push(a.toString(10).padStart(e * 3, " "));
+        s.push(a.toString(10).padStart(t * 3, " "));
         break;
       case "c":
-        s.push(Pe(r.charCodeAt(0)));
+        s.push(Tt(o.charCodeAt(0)));
         break;
       case "a":
-        s.push(Ee(r.charCodeAt(0)));
+        s.push(jt(o.charCodeAt(0)));
         break;
       default:
-        s.push(a.toString(8).padStart(e * 3, "0"));
+        s.push(a.toString(8).padStart(t * 3, "0"));
     }
   }
   return s.join(" ");
 }
-function Pe(n) {
+function Tt(n) {
   return n >= 32 && n < 127 ? `  ${String.fromCharCode(n)}` : n === 0 ? " \\0" : n === 7 ? " \\a" : n === 8 ? " \\b" : n === 9 ? " \\t" : n === 10 ? " \\n" : n === 11 ? " \\v" : n === 12 ? " \\f" : n === 13 ? " \\r" : n.toString(8).padStart(3, "0");
 }
-function Ee(n) {
+function jt(n) {
   return {
     0: "nul",
     7: "bel",
@@ -2674,21 +2854,21 @@ function Ee(n) {
     127: "del"
   }[n] || String.fromCharCode(n);
 }
-const Ie = {
+const Nt = {
   name: "paste",
   description: "Merge lines of files",
-  async exec(n, t) {
-    const { values: e, positional: s, flags: o } = y(n, ["d", "delimiters"]), r = e.d || e.delimiters || "	", a = o.s;
+  async exec(n, e) {
+    const { values: t, positional: s, flags: r } = y(n, ["d", "delimiters"]), o = t.d || t.delimiters || "	", a = r.s;
     s.length === 0 && s.push("-");
     try {
       const i = [];
       for (const l of s) {
         let u;
         if (l === "-")
-          u = t.stdin;
+          u = e.stdin;
         else {
-          const d = t.fs.resolvePath(l, t.cwd);
-          u = await t.fs.readFile(d);
+          const d = e.fs.resolvePath(l, e.cwd);
+          u = await e.fs.readFile(d);
         }
         i.push(u.split(`
 `).filter((d, p, f) => p < f.length - 1 || d !== ""));
@@ -2696,13 +2876,13 @@ const Ie = {
       const c = [];
       if (a)
         for (const l of i) {
-          const u = r.split(""), d = [];
+          const u = o.split(""), d = [];
           for (let p = 0; p < l.length; p++)
             d.push(l[p]), p < l.length - 1 && d.push(u[p % u.length]);
           c.push(d.join(""));
         }
       else {
-        const l = Math.max(...i.map((d) => d.length)), u = r.split("");
+        const l = Math.max(...i.map((d) => d.length)), u = o.split("");
         for (let d = 0; d < l; d++) {
           const p = [];
           for (let f = 0; f < i.length; f++) {
@@ -2728,39 +2908,39 @@ const Ie = {
       };
     }
   }
-}, je = {
+}, Mt = {
   name: "patch",
   description: "Apply a diff file to an original",
-  async exec(n, t) {
-    const { values: e, positional: s, flags: o } = y(n, ["p", "i", "input", "o", "output"]), r = e.p ? parseInt(e.p) : 0, a = e.i || e.input, i = e.o || e.output, c = o.R || o.reverse, l = o["dry-run"];
+  async exec(n, e) {
+    const { values: t, positional: s, flags: r } = y(n, ["p", "i", "input", "o", "output"]), o = t.p ? parseInt(t.p) : 0, a = t.i || t.input, i = t.o || t.output, c = r.R || r.reverse, l = r["dry-run"];
     try {
       let u;
       if (a) {
-        const f = t.fs.resolvePath(a, t.cwd);
-        u = await t.fs.readFile(f);
+        const f = e.fs.resolvePath(a, e.cwd);
+        u = await e.fs.readFile(f);
       } else if (s.length > 0) {
-        const f = t.fs.resolvePath(s[0], t.cwd);
-        u = await t.fs.readFile(f);
+        const f = e.fs.resolvePath(s[0], e.cwd);
+        u = await e.fs.readFile(f);
       } else
-        u = t.stdin;
-      const d = Fe(u), p = [];
+        u = e.stdin;
+      const d = At(u), p = [];
       for (const f of d) {
-        const h = H(f.newFile, r), m = H(f.oldFile, r);
+        const h = B(f.newFile, o), m = B(f.oldFile, o);
         if (p.push(`patching file ${h}`), !l) {
           let g;
           try {
-            const w = t.fs.resolvePath(h, t.cwd);
-            g = await t.fs.readFile(w);
+            const w = e.fs.resolvePath(h, e.cwd);
+            g = await e.fs.readFile(w);
           } catch {
             g = "";
           }
-          const x = Ne(g, f.hunks, c);
+          const x = Rt(g, f.hunks, c);
           if (i) {
-            const w = t.fs.resolvePath(i, t.cwd);
-            await t.fs.writeFile(w, x);
+            const w = e.fs.resolvePath(i, e.cwd);
+            await e.fs.writeFile(w, x);
           } else {
-            const w = t.fs.resolvePath(h, t.cwd);
-            await t.fs.writeFile(w, x);
+            const w = e.fs.resolvePath(h, e.cwd);
+            await e.fs.writeFile(w, x);
           }
         }
       }
@@ -2781,54 +2961,54 @@ const Ie = {
     }
   }
 };
-function Fe(n) {
-  const t = [], e = n.split(`
+function At(n) {
+  const e = [], t = n.split(`
 `);
-  let s = null, o = null;
-  for (const r of e)
-    if (r.startsWith("--- "))
-      s = { oldFile: r.substring(4).split("	")[0], newFile: "", hunks: [] };
-    else if (r.startsWith("+++ ") && s)
-      s.newFile = r.substring(4).split("	")[0], t.push(s);
-    else if (r.startsWith("@@ ") && s) {
-      const a = r.match(/@@ -(\d+),(\d+) \+(\d+),(\d+) @@/);
-      a && (o = {
+  let s = null, r = null;
+  for (const o of t)
+    if (o.startsWith("--- "))
+      s = { oldFile: o.substring(4).split("	")[0], newFile: "", hunks: [] };
+    else if (o.startsWith("+++ ") && s)
+      s.newFile = o.substring(4).split("	")[0], e.push(s);
+    else if (o.startsWith("@@ ") && s) {
+      const a = o.match(/@@ -(\d+),(\d+) \+(\d+),(\d+) @@/);
+      a && (r = {
         oldStart: parseInt(a[1]),
         oldLines: parseInt(a[2]),
         newStart: parseInt(a[3]),
         newLines: parseInt(a[4]),
         lines: []
-      }, s.hunks.push(o));
-    } else o && (r.startsWith(" ") || r.startsWith("+") || r.startsWith("-")) && o.lines.push(r);
-  return t;
+      }, s.hunks.push(r));
+    } else r && (o.startsWith(" ") || o.startsWith("+") || o.startsWith("-")) && r.lines.push(o);
+  return e;
 }
-function H(n, t) {
-  return n.split("/").slice(t).join("/");
+function B(n, e) {
+  return n.split("/").slice(e).join("/");
 }
-function Ne(n, t, e) {
+function Rt(n, e, t) {
   const s = n.split(`
 `);
-  for (const o of t) {
-    const r = o.oldStart - 1, a = o.oldLines, i = [];
-    for (const c of o.lines) {
+  for (const r of e) {
+    const o = r.oldStart - 1, a = r.oldLines, i = [];
+    for (const c of r.lines) {
       const l = c[0], u = c.substring(1);
-      if (e) {
+      if (t) {
         if (l === "+")
           continue;
         i.push(u);
       } else
         (l === "+" || l === " ") && i.push(u);
     }
-    s.splice(r, a, ...i);
+    s.splice(o, a, ...i);
   }
   return s.join(`
 `);
 }
-const Te = {
+const kt = {
   name: "pkg-config",
   description: "Return metainformation about installed libraries",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n, [
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n, [
       "cflags",
       "libs",
       "modversion",
@@ -2845,14 +3025,14 @@ const Te = {
       "print-provides",
       "print-requires"
     ]);
-    if (e.version)
+    if (t.version)
       return {
         stdout: `0.29.2
 `,
         stderr: "",
         exitCode: 0
       };
-    if (e["list-all"])
+    if (t["list-all"])
       return {
         stdout: [
           "zlib                    zlib - zlib compression library",
@@ -2871,14 +3051,14 @@ const Te = {
 `,
         exitCode: 1
       };
-    const o = s[0];
-    if (e.exists)
+    const r = s[0];
+    if (t.exists)
       return {
         stdout: "",
         stderr: "",
         exitCode: 0
       };
-    if (e.modversion)
+    if (t.modversion)
       return {
         stdout: ({
           zlib: "1.2.11",
@@ -2889,19 +3069,19 @@ const Te = {
           libjpeg: "9c",
           "libxml-2.0": "2.9.10",
           "glib-2.0": "2.64.0"
-        }[o] || "1.0.0") + `
+        }[r] || "1.0.0") + `
 `,
         stderr: "",
         exitCode: 0
       };
-    if (e.cflags) {
+    if (t.cflags) {
       const a = {
         zlib: "-I/usr/include",
         openssl: "-I/usr/include/openssl",
         libcurl: "-I/usr/include/curl",
         sqlite3: "-I/usr/include",
         "glib-2.0": "-I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include"
-      }[o] || "";
+      }[r] || "";
       return {
         stdout: a ? a + `
 ` : `
@@ -2910,7 +3090,7 @@ const Te = {
         exitCode: 0
       };
     }
-    if (e.libs) {
+    if (t.libs) {
       const a = {
         zlib: "-lz",
         openssl: "-lssl -lcrypto",
@@ -2920,7 +3100,7 @@ const Te = {
         libjpeg: "-ljpeg",
         "libxml-2.0": "-lxml2",
         "glib-2.0": "-lglib-2.0"
-      }[o] || "";
+      }[r] || "";
       return {
         stdout: a ? a + `
 ` : `
@@ -2929,12 +3109,12 @@ const Te = {
         exitCode: 0
       };
     }
-    return e["print-provides"] ? {
-      stdout: `${o} = 1.0.0
+    return t["print-provides"] ? {
+      stdout: `${r} = 1.0.0
 `,
       stderr: "",
       exitCode: 0
-    } : e["print-requires"] ? {
+    } : t["print-requires"] ? {
       stdout: "",
       stderr: "",
       exitCode: 0
@@ -2945,134 +3125,219 @@ const Te = {
       exitCode: 1
     };
   }
-}, Me = {
+}, Ot = {
   name: "printenv",
   description: "Print all or part of environment",
-  async exec(n, t) {
-    const { positional: e, flags: s } = y(n), o = s[0] || s.null;
-    if (e.length === 0) {
-      const r = [];
-      for (const [i, c] of Object.entries(t.env))
-        r.push(`${i}=${c}`);
-      const a = o ? "\0" : `
+  async exec(n, e) {
+    const { positional: t, flags: s } = y(n), r = s[0] || s.null;
+    if (t.length === 0) {
+      const o = [];
+      for (const [i, c] of Object.entries(e.env))
+        o.push(`${i}=${c}`);
+      const a = r ? "\0" : `
 `;
       return {
-        stdout: r.join(a) + (r.length > 0 ? a : ""),
+        stdout: o.join(a) + (o.length > 0 ? a : ""),
         stderr: "",
         exitCode: 0
       };
     } else {
-      const r = [];
-      for (const i of e)
-        if (i in t.env)
-          r.push(t.env[i]);
+      const o = [];
+      for (const i of t)
+        if (i in e.env)
+          o.push(e.env[i]);
         else
           return {
             stdout: "",
             stderr: "",
             exitCode: 1
           };
-      const a = o ? "\0" : `
+      const a = r ? "\0" : `
 `;
       return {
-        stdout: r.join(a) + (r.length > 0 ? a : ""),
+        stdout: o.join(a) + (o.length > 0 ? a : ""),
         stderr: "",
         exitCode: 0
       };
     }
   }
-}, Ae = {
+}, Dt = {
   name: "printf",
   description: "Format and print data",
   async exec(n) {
     if (n.length === 0)
       return { stdout: "", stderr: "", exitCode: 0 };
-    const t = n[0], e = n.slice(1);
-    let s = 0, o = "", r = 0;
-    for (; r < t.length; )
-      if (t[r] === "\\") {
-        switch (r++, t[r]) {
+    const e = n[0], t = n.slice(1);
+    let s = 0, r = "", o = 0;
+    for (; o < e.length; )
+      if (e[o] === "\\") {
+        switch (o++, e[o]) {
           case "n":
-            o += `
+            r += `
 `;
             break;
           case "t":
-            o += "	";
+            r += "	";
             break;
           case "\\":
-            o += "\\";
+            r += "\\";
             break;
           case '"':
-            o += '"';
+            r += '"';
             break;
           default:
-            o += "\\" + (t[r] ?? "");
+            r += "\\" + (e[o] ?? "");
             break;
         }
-        r++;
-      } else if (t[r] === "%")
-        if (r++, t[r] === "%")
-          o += "%", r++;
+        o++;
+      } else if (e[o] === "%")
+        if (o++, e[o] === "%")
+          r += "%", o++;
         else {
           let a = "";
-          for (; r < t.length && !/[sdf]/.test(t[r]); )
-            a += t[r], r++;
-          const i = t[r] ?? "s";
-          r++;
-          const c = e[s++] ?? "";
+          for (; o < e.length && !/[sdf]/.test(e[o]); )
+            a += e[o], o++;
+          const i = e[o] ?? "s";
+          o++;
+          const c = t[s++] ?? "";
           switch (i) {
             case "s":
-              o += c;
+              r += c;
               break;
             case "d":
-              o += String(parseInt(c, 10) || 0);
+              r += String(parseInt(c, 10) || 0);
               break;
             case "f": {
               const l = a.includes(".") ? parseInt(a.split(".")[1], 10) : 6;
-              o += (parseFloat(c) || 0).toFixed(l);
+              r += (parseFloat(c) || 0).toFixed(l);
               break;
             }
           }
         }
       else
-        o += t[r], r++;
-    return { stdout: o, stderr: "", exitCode: 0 };
+        r += e[o], o++;
+    return { stdout: r, stderr: "", exitCode: 0 };
   }
-}, ke = {
+}, Lt = {
+  name: "process-substitution",
+  description: "Helper for process substitution (shell feature)",
+  async exec(n, e) {
+    return {
+      stdout: `process-substitution: This is a shell language feature, not a command.
+
+Process substitution must be implemented at the shell parser level:
+
+Syntax:
+  <(command)  # Input substitution - command output as input file
+  >(command)  # Output substitution - command input as output file
+
+Input Substitution <(command):
+  diff <(sort file1.txt) <(sort file2.txt)
+
+  Shell implementation:
+  1. Execute "sort file1.txt" in subshell
+  2. Capture output to temporary file or named pipe
+  3. Replace <(sort file1.txt) with the temp file path
+  4. Run: diff /tmp/subst123 /tmp/subst124
+  5. Clean up temp files after diff completes
+
+Output Substitution >(command):
+  echo "data" | tee >(process1) >(process2) > output.txt
+
+  Shell implementation:
+  1. Create named pipes or temporary files
+  2. Start "process1" and "process2" in background reading from pipes
+  3. Replace >(process1) with pipe paths
+  4. Connect tee output to the pipes
+  5. Wait for processes and clean up
+
+Common Use Cases:
+  # Compare outputs of two commands
+  diff <(ls dir1) <(ls dir2)
+
+  # Multiple outputs
+  command | tee >(grep error > errors.log) >(grep warning > warnings.log)
+
+  # Input from multiple sources
+  paste <(cut -f1 file1) <(cut -f2 file2)
+
+  # Avoid temporary files
+  while read line; do
+    echo "$line"
+  done < <(find . -type f)
+
+Implementation Steps for Shells:
+1. Lexer: Recognize <( and >( as special tokens
+2. Parser: Extract command from parentheses
+3. Executor:
+   a. For <(cmd):
+      - Execute cmd, capture stdout
+      - Write to temp file (or create named pipe)
+      - Return path to temp file
+   b. For >(cmd):
+      - Create named pipe or temp file
+      - Start cmd with stdin from the pipe
+      - Return path to the pipe
+4. Substitution: Replace in command line with file path
+5. Cleanup: Remove temp files/pipes after main command exits
+
+Browser Implementation Notes:
+- Named pipes (FIFOs) aren't available in browser
+- Use temporary files in virtual filesystem
+- For >(cmd), write to temp file then pass to command
+- Ensure proper ordering of operations
+
+Example Pseudo-code:
+  if (token matches /<\\((.+)\\)/) {
+    const cmd = extractCommand(token);
+    const output = await executeCommand(cmd);
+    const tempPath = createTempFile(output);
+    replaceToken(token, tempPath);
+    scheduleCleanup(tempPath);
+  }
+
+Shell implementers: Parse at lexer/parser level, execute before main command.
+
+`,
+      stderr: "",
+      exitCode: 0
+    };
+  }
+}, Wt = {
   name: "pwd",
   description: "Print working directory",
-  async exec(n, t) {
-    return { stdout: t.cwd + `
+  async exec(n, e) {
+    return { stdout: e.cwd + `
 `, stderr: "", exitCode: 0 };
   }
-}, Re = {
+}, Ut = {
   name: "read",
   description: "Read a line from stdin into variables",
-  async exec(n, t) {
+  async exec(n, e) {
     var l;
-    const { positional: e, flags: s, values: o } = y(n, ["r", "p", "n", "t", "d", "a", "s"]);
-    let r = t.stdin || "";
-    o.p;
-    const a = o.d || `
-`, i = o.n ? parseInt(o.n) : void 0;
+    const { positional: t, flags: s, values: r } = y(n, ["r", "p", "n", "t", "d", "a", "s"]);
+    let o = e.stdin || "";
+    r.p;
+    const a = r.d || `
+`, i = r.n ? parseInt(r.n) : void 0;
     let c;
     if (i !== void 0)
-      c = r.slice(0, i);
+      c = o.slice(0, i);
     else {
-      const u = r.indexOf(a);
-      u >= 0 ? c = r.slice(0, u) : c = r;
+      const u = o.indexOf(a);
+      u >= 0 ? c = o.slice(0, u) : c = o;
     }
     if (s.r || (c = c.replace(/\\n/g, `
-`).replace(/\\t/g, "	").replace(/\\\\/g, "\\")), e.length === 0)
-      t.env && (t.env.REPLY = c);
-    else if (e.length === 1)
-      t.env && (t.env[e[0]] = c);
+`).replace(/\\t/g, "	").replace(/\\\\/g, "\\")), t.length === 0)
+      e.env && (e.env.REPLY = c);
+    else if (t.length === 1)
+      e.env && (e.env[t[0]] = c);
     else {
-      const u = ((l = t.env) == null ? void 0 : l.IFS) || ` 	
+      const u = ((l = e.env) == null ? void 0 : l.IFS) || ` 	
 `, d = new RegExp(`[${u.replace(/[-\\^$*+?.()|[\]{}]/g, "\\$&")}]+`), p = c.split(d).filter((f) => f);
-      for (let f = 0; f < e.length; f++) {
-        const h = e[f];
-        f < e.length - 1 ? t.env && (t.env[h] = p[f] || "") : t.env && (t.env[h] = p.slice(f).join(" "));
+      for (let f = 0; f < t.length; f++) {
+        const h = t[f];
+        f < t.length - 1 ? e.env && (e.env[h] = p[f] || "") : e.env && (e.env[h] = p.slice(f).join(" "));
       }
     }
     return {
@@ -3081,42 +3346,42 @@ const Te = {
       exitCode: 0
     };
   }
-}, Oe = {
+}, qt = {
   name: "readlink",
   description: "Print resolved symbolic links or canonical file names",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n), o = e.f;
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n), r = t.f;
     if (s.length === 0)
       return { stdout: "", stderr: `readlink: missing operand
 `, exitCode: 1 };
-    const r = t.fs.resolvePath(s[0], t.cwd);
-    return o ? { stdout: r + `
-`, stderr: "", exitCode: 0 } : { stdout: r + `
+    const o = e.fs.resolvePath(s[0], e.cwd);
+    return r ? { stdout: o + `
+`, stderr: "", exitCode: 0 } : { stdout: o + `
 `, stderr: "", exitCode: 0 };
   }
-}, De = {
+}, zt = {
   name: "realpath",
   description: "Print the resolved absolute path",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n);
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n);
     if (s.length === 0)
       return { stdout: "", stderr: `realpath: missing operand
 `, exitCode: 1 };
-    const o = e.q || e.quiet, r = !e.s;
-    e.s;
+    const r = t.q || t.quiet, o = !t.s;
+    t.s;
     const a = [], i = [];
     for (const u of s)
       try {
-        let d = t.fs.resolvePath(u, t.cwd);
-        if (r) {
+        let d = e.fs.resolvePath(u, e.cwd);
+        if (o) {
           const p = d.split("/").filter((h) => h !== "" && h !== "."), f = [];
           for (const h of p)
             h === ".." ? f.length > 0 && f.pop() : f.push(h);
           d = "/" + f.join("/");
         }
-        await t.fs.exists(d) ? a.push(d) : o || i.push(`realpath: ${u}: No such file or directory`);
+        await e.fs.exists(d) ? a.push(d) : r || i.push(`realpath: ${u}: No such file or directory`);
       } catch (d) {
-        o || i.push(`realpath: ${u}: ${d instanceof Error ? d.message : d}`);
+        r || i.push(`realpath: ${u}: ${d instanceof Error ? d.message : d}`);
       }
     const c = i.length > 0 ? i.join(`
 `) + `
@@ -3129,69 +3394,69 @@ const Te = {
       exitCode: l
     };
   }
-}, Le = {
+}, Ht = {
   name: "return",
   description: "Return from a shell function",
-  async exec(n, t) {
-    const { positional: e } = y(n), s = e.length > 0 ? parseInt(e[0]) : 0;
+  async exec(n, e) {
+    const { positional: t } = y(n), s = t.length > 0 ? parseInt(t[0]) : 0;
     return {
       stdout: "",
       stderr: "",
       exitCode: isNaN(s) ? 2 : s
     };
   }
-}, We = {
+}, Gt = {
   name: "rm",
   description: "Remove files or directories",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n), o = e.r || e.R, r = e.f;
-    if (s.length === 0 && !r)
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n), r = t.r || t.R, o = t.f;
+    if (s.length === 0 && !o)
       return { stdout: "", stderr: `rm: missing operand
 `, exitCode: 1 };
     async function a(i) {
-      const c = await t.fs.readdir(i);
+      const c = await e.fs.readdir(i);
       for (const l of c) {
         const u = i + "/" + l.name;
-        l.type === "dir" ? await a(u) : await t.fs.unlink(u);
+        l.type === "dir" ? await a(u) : await e.fs.unlink(u);
       }
-      await t.fs.rmdir(i);
+      await e.fs.rmdir(i);
     }
     try {
       for (const i of s) {
-        const c = t.fs.resolvePath(i, t.cwd);
+        const c = e.fs.resolvePath(i, e.cwd);
         let l;
         try {
-          l = await t.fs.stat(c);
+          l = await e.fs.stat(c);
         } catch {
-          if (r) continue;
+          if (o) continue;
           return { stdout: "", stderr: `rm: cannot remove '${i}': No such file or directory
 `, exitCode: 1 };
         }
         if (l.type === "dir") {
-          if (!o)
+          if (!r)
             return { stdout: "", stderr: `rm: cannot remove '${i}': Is a directory
 `, exitCode: 1 };
           await a(c);
         } else
-          await t.fs.unlink(c);
+          await e.fs.unlink(c);
       }
       return { stdout: "", stderr: "", exitCode: 0 };
     } catch (i) {
-      return r ? { stdout: "", stderr: "", exitCode: 0 } : { stdout: "", stderr: `rm: ${i instanceof Error ? i.message : i}
+      return o ? { stdout: "", stderr: "", exitCode: 0 } : { stdout: "", stderr: `rm: ${i instanceof Error ? i.message : i}
 `, exitCode: 1 };
     }
   }
-}, Ue = {
+}, Bt = {
   name: "sed",
   description: "Stream editor for filtering and transforming text",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n), o = e.i, r = s.shift();
-    if (!r)
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n), r = t.i, o = s.shift();
+    if (!o)
       return { stdout: "", stderr: `sed: no expression provided
 `, exitCode: 1 };
-    const a = r.match(/^s(.)(.+?)\1(.*?)\1([gi]*)$/);
+    const a = o.match(/^s(.)(.+?)\1(.*?)\1([gi]*)$/);
     if (!a)
-      return { stdout: "", stderr: `sed: unsupported expression: ${r}
+      return { stdout: "", stderr: `sed: unsupported expression: ${o}
 `, exitCode: 1 };
     const [, , i, c, l] = a, u = l.includes("g"), d = l.includes("i");
     let p;
@@ -3203,21 +3468,21 @@ const Te = {
 `, exitCode: 2 };
     }
     try {
-      const { content: f, files: h } = await N(
+      const { content: f, files: h } = await j(
         s,
-        t.stdin,
-        t.fs,
-        t.cwd,
-        t.fs.resolvePath
+        e.stdin,
+        e.fs,
+        e.cwd,
+        e.fs.resolvePath
       ), m = f.split(`
 `).map((g) => g.replace(p, c)).join(`
 `);
-      if (o && h.length > 0) {
+      if (r && h.length > 0) {
         for (const g of h) {
-          const x = t.fs.resolvePath(g, t.cwd), v = (await t.fs.readFile(x)).split(`
+          const x = e.fs.resolvePath(g, e.cwd), C = (await e.fs.readFile(x)).split(`
 `).map((b) => b.replace(p, c)).join(`
 `);
-          await t.fs.writeFile(x, v);
+          await e.fs.writeFile(x, C);
         }
         return { stdout: "", stderr: "", exitCode: 0 };
       }
@@ -3227,16 +3492,16 @@ const Te = {
 `, exitCode: 1 };
     }
   }
-}, qe = {
+}, _t = {
   name: "seq",
   description: "Generate sequences of numbers",
-  async exec(n, t) {
-    const { flags: e, values: s, positional: o } = y(n, ["separator", "s", "format", "f"]);
-    if (o.length === 0)
+  async exec(n, e) {
+    const { flags: t, values: s, positional: r } = y(n, ["separator", "s", "format", "f"]);
+    if (r.length === 0)
       return { stdout: "", stderr: `seq: missing operand
 `, exitCode: 1 };
-    let r = 1, a = 1, i;
-    if (o.length === 1 ? i = parseFloat(o[0]) : o.length === 2 ? (r = parseFloat(o[0]), i = parseFloat(o[1])) : o.length >= 3 ? (r = parseFloat(o[0]), a = parseFloat(o[1]), i = parseFloat(o[2])) : i = 1, isNaN(r) || isNaN(a) || isNaN(i))
+    let o = 1, a = 1, i;
+    if (r.length === 1 ? i = parseFloat(r[0]) : r.length === 2 ? (o = parseFloat(r[0]), i = parseFloat(r[1])) : r.length >= 3 ? (o = parseFloat(r[0]), a = parseFloat(r[1]), i = parseFloat(r[2])) : i = 1, isNaN(o) || isNaN(a) || isNaN(i))
       return {
         stdout: "",
         stderr: `seq: invalid number
@@ -3251,12 +3516,12 @@ const Te = {
         exitCode: 1
       };
     const c = s.s || s.separator || `
-`, l = s.f || s.format, u = e.w, d = [];
+`, l = s.f || s.format, u = t.w, d = [];
     if (a > 0)
-      for (let h = r; h <= i; h += a)
+      for (let h = o; h <= i; h += a)
         d.push(String(h));
     else
-      for (let h = r; h >= i; h += a)
+      for (let h = o; h >= i; h += a)
         d.push(String(h));
     if (u) {
       const h = Math.max(...d.map((m) => m.length));
@@ -3277,23 +3542,23 @@ const Te = {
       exitCode: 0
     };
   }
-}, ze = {
+}, Jt = {
   name: "set",
   description: "Set or unset shell options and positional parameters",
-  async exec(n, t) {
-    const { flags: e, values: s, positional: o } = y(n, ["e", "u", "x", "v", "n", "o"]);
+  async exec(n, e) {
+    const { flags: t, values: s, positional: r } = y(n, ["e", "u", "x", "v", "n", "o"]);
     if (n.length === 0) {
-      const r = Object.entries(t.env || {}).map(([a, i]) => `${a}=${i}`).join(`
+      const o = Object.entries(e.env || {}).map(([a, i]) => `${a}=${i}`).join(`
 `);
       return {
-        stdout: r ? r + `
+        stdout: o ? o + `
 ` : "",
         stderr: "",
         exitCode: 0
       };
     }
-    if (e.o || s.o) {
-      const r = s.o || o[0], a = [
+    if (t.o || s.o) {
+      const o = s.o || r[0], a = [
         "pipefail",
         "errexit",
         "nounset",
@@ -3305,13 +3570,13 @@ const Te = {
         "monitor",
         "posix"
       ];
-      return r ? a.includes(r) ? {
+      return o ? a.includes(o) ? {
         stdout: "",
         stderr: "",
         exitCode: 0
       } : {
         stdout: "",
-        stderr: `set: ${r}: invalid option name
+        stderr: `set: ${o}: invalid option name
 `,
         exitCode: 1
       } : {
@@ -3322,18 +3587,18 @@ const Te = {
         exitCode: 0
       };
     }
-    return e.e, e.u, e.x, e.v, e.n, {
+    return t.e, t.u, t.x, t.v, t.n, {
       stdout: "",
       stderr: "",
       exitCode: 0
     };
   }
-}, Ge = {
+}, Yt = {
   name: "sha256sum",
   description: "Compute SHA256 message digest",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n), o = e.c || e.check, r = e.b || e.binary;
-    if (o)
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n), r = t.c || t.check, o = t.b || t.binary;
+    if (r)
       return {
         stdout: "",
         stderr: `sha256sum: --check not implemented in browser environment
@@ -3345,12 +3610,12 @@ const Te = {
       for (const c of a) {
         let l;
         if (c === "-")
-          l = t.stdin;
+          l = e.stdin;
         else {
-          const p = t.fs.resolvePath(c, t.cwd);
-          l = await t.fs.readFile(p);
+          const p = e.fs.resolvePath(c, e.cwd);
+          l = await e.fs.readFile(p);
         }
-        const u = await He(l), d = r ? "*" : " ";
+        const u = await Zt(l), d = o ? "*" : " ";
         i.push(`${u}${d}${c === "-" ? "-" : c}`);
       }
       return {
@@ -3370,24 +3635,24 @@ const Te = {
     }
   }
 };
-async function He(n) {
-  const t = globalThis;
-  if (typeof t.crypto < "u" && t.crypto.subtle) {
-    const o = new t.TextEncoder().encode(n), r = await t.crypto.subtle.digest("SHA-256", o);
-    return Array.from(new t.Uint8Array(r)).map((c) => c.toString(16).padStart(2, "0")).join("");
+async function Zt(n) {
+  const e = globalThis;
+  if (typeof e.crypto < "u" && e.crypto.subtle) {
+    const r = new e.TextEncoder().encode(n), o = await e.crypto.subtle.digest("SHA-256", r);
+    return Array.from(new e.Uint8Array(o)).map((c) => c.toString(16).padStart(2, "0")).join("");
   }
-  let e = 0;
+  let t = 0;
   for (let s = 0; s < n.length; s++) {
-    const o = n.charCodeAt(s);
-    e = (e << 5) - e + o, e = e & e;
+    const r = n.charCodeAt(s);
+    t = (t << 5) - t + r, t = t & t;
   }
-  return Math.abs(e).toString(16).padStart(64, "0");
+  return Math.abs(t).toString(16).padStart(64, "0");
 }
-const Be = {
+const Vt = {
   name: "shift",
   description: "Shift positional parameters",
-  async exec(n, t) {
-    const { positional: e } = y(n), s = e.length > 0 ? parseInt(e[0]) : 1;
+  async exec(n, e) {
+    const { positional: t } = y(n), s = t.length > 0 ? parseInt(t[0]) : 1;
     return isNaN(s) || s < 0 ? {
       stdout: "",
       stderr: `shift: numeric argument required
@@ -3399,122 +3664,122 @@ const Be = {
       exitCode: 0
     };
   }
-}, Je = {
+}, Kt = {
   name: "sleep",
   description: "Delay for a specified amount of time",
-  async exec(n, t) {
-    const { positional: e } = y(n);
-    if (e.length === 0)
+  async exec(n, e) {
+    const { positional: t } = y(n);
+    if (t.length === 0)
       return { stdout: "", stderr: `sleep: missing operand
 `, exitCode: 1 };
-    const s = e[0];
-    let o = 0;
-    const r = s.match(/^(\d+(?:\.\d+)?)(s|m|h|d)?$/);
-    if (!r)
+    const s = t[0];
+    let r = 0;
+    const o = s.match(/^(\d+(?:\.\d+)?)(s|m|h|d)?$/);
+    if (!o)
       return {
         stdout: "",
         stderr: `sleep: invalid time interval '${s}'
 `,
         exitCode: 1
       };
-    const a = parseFloat(r[1]);
-    switch (r[2] || "s") {
+    const a = parseFloat(o[1]);
+    switch (o[2] || "s") {
       case "s":
-        o = a;
+        r = a;
         break;
       case "m":
-        o = a * 60;
+        r = a * 60;
         break;
       case "h":
-        o = a * 3600;
+        r = a * 3600;
         break;
       case "d":
-        o = a * 86400;
+        r = a * 86400;
         break;
     }
-    return await new Promise((c) => globalThis.setTimeout(c, o * 1e3)), { stdout: "", stderr: "", exitCode: 0 };
+    return await new Promise((c) => globalThis.setTimeout(c, r * 1e3)), { stdout: "", stderr: "", exitCode: 0 };
   }
-}, Ye = {
+}, Xt = {
   name: "sort",
   description: "Sort lines of text",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n);
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n);
     try {
-      const { content: o } = await N(
+      const { content: r } = await j(
         s,
-        t.stdin,
-        t.fs,
-        t.cwd,
-        t.fs.resolvePath
+        e.stdin,
+        e.fs,
+        e.cwd,
+        e.fs.resolvePath
       );
-      let r = o.split(`
+      let o = r.split(`
 `).filter(Boolean);
-      return e.n ? r.sort((a, i) => parseFloat(a) - parseFloat(i)) : r.sort(), e.u && (r = [...new Set(r)]), e.r && r.reverse(), { stdout: r.join(`
+      return t.n ? o.sort((a, i) => parseFloat(a) - parseFloat(i)) : o.sort(), t.u && (o = [...new Set(o)]), t.r && o.reverse(), { stdout: o.join(`
 `) + `
 `, stderr: "", exitCode: 0 };
-    } catch (o) {
-      return { stdout: "", stderr: `sort: ${o instanceof Error ? o.message : o}
+    } catch (r) {
+      return { stdout: "", stderr: `sort: ${r instanceof Error ? r.message : r}
 `, exitCode: 1 };
     }
   }
-}, K = {
+}, V = {
   name: "source",
   description: "Execute commands from a file in the current shell",
-  async exec(n, t) {
-    const { positional: e } = y(n);
-    if (e.length === 0)
+  async exec(n, e) {
+    const { positional: t } = y(n);
+    if (t.length === 0)
       return {
         stdout: "",
         stderr: `source: filename argument required
 `,
         exitCode: 1
       };
-    const s = e[0];
+    const s = t[0];
     try {
-      const o = t.fs.resolvePath(s, t.cwd), r = await t.fs.readFile(o);
+      const r = e.fs.resolvePath(s, e.cwd), o = await e.fs.readFile(r);
       return {
         stdout: "",
         stderr: "",
         exitCode: 0
       };
-    } catch (o) {
+    } catch (r) {
       return {
         stdout: "",
-        stderr: `source: ${s}: ${o instanceof Error ? o.message : o}
+        stderr: `source: ${s}: ${r instanceof Error ? r.message : r}
 `,
         exitCode: 1
       };
     }
   }
-}, _e = {
+}, Qt = {
   name: ".",
   description: "Execute commands from a file in the current shell (alias for source)",
-  async exec(n, t) {
-    return K.exec(n, t);
+  async exec(n, e) {
+    return V.exec(n, e);
   }
-}, Ke = {
+}, es = {
   name: "stat",
   description: "Display file status",
-  async exec(n, t) {
-    const { positional: e, flags: s, values: o } = y(n, ["c", "format"]);
-    if (e.length === 0)
+  async exec(n, e) {
+    const { positional: t, flags: s, values: r } = y(n, ["c", "format"]);
+    if (t.length === 0)
       return { stdout: "", stderr: `stat: missing operand
 `, exitCode: 1 };
-    const r = o.c || o.format, a = s.t;
+    const o = r.c || r.format, a = s.t;
     s.f;
     const i = [];
     try {
-      for (const c of e) {
-        const l = t.fs.resolvePath(c, t.cwd);
+      for (const c of t) {
+        const l = e.fs.resolvePath(c, e.cwd);
         try {
-          const u = await t.fs.stat(l);
-          if (r) {
-            const d = Ve(c, u, r);
+          const u = await e.fs.stat(l);
+          if (o) {
+            const d = ts(c, u, o);
             i.push(d);
           } else if (a)
             i.push(`${c} ${u.size} 0 ${u.mode} 0 0 0 0 0 0 ${u.mtime}`);
           else {
-            const d = u.type === "dir" ? "directory" : "regular file", p = V(u.mode), f = new Date(u.mtime).toISOString();
+            const d = u.type === "dir" ? "directory" : "regular file", p = K(u.mode), f = new Date(u.mtime).toISOString();
             i.push(`  File: ${c}`), i.push(`  Size: ${u.size}	Blocks: 0	IO Block: 4096	${d}`), i.push("Device: 0	Inode: 0	Links: 1"), i.push(`Access: (${p})	Uid: (0/root)	Gid: (0/root)`), i.push(`Access: ${f}`), i.push(`Modify: ${f}`), i.push(`Change: ${f}`);
           }
         } catch (u) {
@@ -3538,8 +3803,8 @@ const Be = {
     }
   }
 };
-function V(n) {
-  const t = [
+function K(n) {
+  const e = [
     n & 256 ? "r" : "-",
     n & 128 ? "w" : "-",
     n & 64 ? "x" : "-",
@@ -3550,28 +3815,28 @@ function V(n) {
     n & 2 ? "w" : "-",
     n & 1 ? "x" : "-"
   ].join("");
-  return `0${n.toString(8)}/${t}`;
+  return `0${n.toString(8)}/${e}`;
 }
-function Ve(n, t, e) {
-  return e.replace(/%n/g, n).replace(/%N/g, `'${n}'`).replace(/%s/g, String(t.size)).replace(/%b/g, "0").replace(/%f/g, t.mode.toString(16)).replace(/%a/g, t.mode.toString(8)).replace(/%A/g, V(t.mode).split("/")[1]).replace(/%F/g, t.type === "dir" ? "directory" : "regular file").replace(/%u/g, "0").replace(/%g/g, "0").replace(/%U/g, "root").replace(/%G/g, "root").replace(/%i/g, "0").replace(/%h/g, "1").replace(/%W/g, String(Math.floor(t.mtime / 1e3))).replace(/%X/g, String(Math.floor(t.mtime / 1e3))).replace(/%Y/g, String(Math.floor(t.mtime / 1e3))).replace(/%y/g, new Date(t.mtime).toISOString()).replace(/%%/g, "%");
+function ts(n, e, t) {
+  return t.replace(/%n/g, n).replace(/%N/g, `'${n}'`).replace(/%s/g, String(e.size)).replace(/%b/g, "0").replace(/%f/g, e.mode.toString(16)).replace(/%a/g, e.mode.toString(8)).replace(/%A/g, K(e.mode).split("/")[1]).replace(/%F/g, e.type === "dir" ? "directory" : "regular file").replace(/%u/g, "0").replace(/%g/g, "0").replace(/%U/g, "root").replace(/%G/g, "root").replace(/%i/g, "0").replace(/%h/g, "1").replace(/%W/g, String(Math.floor(e.mtime / 1e3))).replace(/%X/g, String(Math.floor(e.mtime / 1e3))).replace(/%Y/g, String(Math.floor(e.mtime / 1e3))).replace(/%y/g, new Date(e.mtime).toISOString()).replace(/%%/g, "%");
 }
-const Xe = {
+const ss = {
   name: "strings",
   description: "Find printable strings in files",
-  async exec(n, t) {
-    const { values: e, positional: s, flags: o } = y(n, ["n", "bytes"]), r = parseInt(e.n || e.bytes || "4", 10), a = o.f;
-    o.a;
+  async exec(n, e) {
+    const { values: t, positional: s, flags: r } = y(n, ["n", "bytes"]), o = parseInt(t.n || t.bytes || "4", 10), a = r.f;
+    r.a;
     try {
       const i = s.length > 0 ? s : ["-"], c = [];
       for (const l of i) {
         let u, d = l;
         if (l === "-")
-          u = t.stdin, d = "(standard input)";
+          u = e.stdin, d = "(standard input)";
         else {
-          const f = t.fs.resolvePath(l, t.cwd);
-          u = await t.fs.readFile(f);
+          const f = e.fs.resolvePath(l, e.cwd);
+          u = await e.fs.readFile(f);
         }
-        const p = Ze(u, r);
+        const p = ns(u, o);
         for (const f of p)
           a ? c.push(`${d}: ${f}`) : c.push(f);
       }
@@ -3592,45 +3857,45 @@ const Xe = {
     }
   }
 };
-function Ze(n, t) {
-  const e = [], s = /[ -~]/;
-  let o = "";
-  for (let r = 0; r < n.length; r++) {
-    const a = n[r];
-    s.test(a) ? o += a : (o.length >= t && e.push(o), o = "");
+function ns(n, e) {
+  const t = [], s = /[ -~]/;
+  let r = "";
+  for (let o = 0; o < n.length; o++) {
+    const a = n[o];
+    s.test(a) ? r += a : (r.length >= e && t.push(r), r = "");
   }
-  return o.length >= t && e.push(o), e;
+  return r.length >= e && t.push(r), t;
 }
-const Qe = {
+const rs = {
   name: "tail",
   description: "Output the last part of files",
-  async exec(n, t) {
-    const { values: e, positional: s } = y(n, ["n"]), o = parseInt(e.n ?? "10", 10);
+  async exec(n, e) {
+    const { values: t, positional: s } = y(n, ["n"]), r = parseInt(t.n ?? "10", 10);
     try {
-      const { content: r } = await N(
+      const { content: o } = await j(
         s,
-        t.stdin,
-        t.fs,
-        t.cwd,
-        t.fs.resolvePath
+        e.stdin,
+        e.fs,
+        e.cwd,
+        e.fs.resolvePath
       );
-      return { stdout: r.split(`
-`).slice(-o).join(`
+      return { stdout: o.split(`
+`).slice(-r).join(`
 `) + `
 `, stderr: "", exitCode: 0 };
-    } catch (r) {
-      return { stdout: "", stderr: `tail: ${r instanceof Error ? r.message : r}
+    } catch (o) {
+      return { stdout: "", stderr: `tail: ${o instanceof Error ? o.message : o}
 `, exitCode: 1 };
     }
   }
-}, ts = {
+}, os = {
   name: "tar",
   description: "Archive utility (simplified tar format)",
-  async exec(n, t) {
-    const { flags: e, values: s, positional: o } = y(n, ["f", "C"]), r = e.c || e.create, a = e.x || e.extract, i = e.t || e.list, c = e.v || e.verbose, l = s.f, u = s.C;
-    let d = t.cwd;
-    u && (d = t.fs.resolvePath(u, t.cwd));
-    const p = [r, a, i].filter(Boolean).length;
+  async exec(n, e) {
+    const { flags: t, values: s, positional: r } = y(n, ["f", "C"]), o = t.c || t.create, a = t.x || t.extract, i = t.t || t.list, c = t.v || t.verbose, l = s.f, u = s.C;
+    let d = e.cwd;
+    u && (d = e.fs.resolvePath(u, e.cwd));
+    const p = [o, a, i].filter(Boolean).length;
     if (p === 0)
       return { stdout: "", stderr: `tar: You must specify one of -c, -x, or -t
 `, exitCode: 1 };
@@ -3638,36 +3903,36 @@ const Qe = {
       return { stdout: "", stderr: `tar: You may not specify more than one -c, -x, or -t
 `, exitCode: 1 };
     try {
-      if (r) {
+      if (o) {
         if (!l)
           return { stdout: "", stderr: `tar: Refusing to write archive to terminal (missing -f option?)
 `, exitCode: 1 };
-        const f = o;
+        const f = r;
         if (f.length === 0)
           return { stdout: "", stderr: `tar: Cowardly refusing to create an empty archive
 `, exitCode: 1 };
         const h = [];
-        async function m(v, b) {
-          const C = t.fs.resolvePath(v, d);
-          if ((await t.fs.stat(C)).type === "dir") {
+        async function m(C, b) {
+          const v = e.fs.resolvePath(C, d);
+          if ((await e.fs.stat(v)).type === "dir") {
             h.push({ path: b + "/", content: "", isDir: !0 });
-            const S = await t.fs.readdir(C);
+            const S = await e.fs.readdir(v);
             for (const P of S)
-              await m(C + "/" + P.name, b + "/" + P.name);
+              await m(v + "/" + P.name, b + "/" + P.name);
           } else {
-            const S = await t.fs.readFile(C);
+            const S = await e.fs.readFile(v);
             h.push({ path: b, content: S, isDir: !1 });
           }
         }
-        for (const v of f)
-          await m(v, v);
+        for (const C of f)
+          await m(C, C);
         const g = ["FLUFFY-TAR-V1"];
-        for (const v of h)
-          c && (t.stderr || console.error(v.path)), g.push(`FILE:${v.path}`), g.push(`SIZE:${v.content.length}`), g.push(`TYPE:${v.isDir ? "dir" : "file"}`), g.push("DATA-START"), g.push(v.content), g.push("DATA-END");
+        for (const C of h)
+          c && (e.stderr || console.error(C.path)), g.push(`FILE:${C.path}`), g.push(`SIZE:${C.content.length}`), g.push(`TYPE:${C.isDir ? "dir" : "file"}`), g.push("DATA-START"), g.push(C.content), g.push("DATA-END");
         const x = g.join(`
-`), w = t.fs.resolvePath(l, t.cwd);
-        return await t.fs.writeFile(w, x), {
-          stdout: c ? h.map((v) => v.path).join(`
+`), w = e.fs.resolvePath(l, e.cwd);
+        return await e.fs.writeFile(w, x), {
+          stdout: c ? h.map((C) => C.path).join(`
 `) + `
 ` : "",
           stderr: "",
@@ -3678,7 +3943,7 @@ const Qe = {
         if (!l)
           return { stdout: "", stderr: `tar: Refusing to read archive from terminal (missing -f option?)
 `, exitCode: 1 };
-        const f = t.fs.resolvePath(l, t.cwd), m = (await t.fs.readFile(f)).split(`
+        const f = e.fs.resolvePath(l, e.cwd), m = (await e.fs.readFile(f)).split(`
 `);
         if (m[0] !== "FLUFFY-TAR-V1")
           return { stdout: "", stderr: `tar: This does not look like a tar archive
@@ -3686,29 +3951,29 @@ const Qe = {
         let g = 1;
         const x = [];
         for (; g < m.length && m[g].startsWith("FILE:"); ) {
-          const w = m[g].slice(5), v = parseInt(m[g + 1].slice(5), 10), b = m[g + 2].slice(5);
+          const w = m[g].slice(5), C = parseInt(m[g + 1].slice(5), 10), b = m[g + 2].slice(5);
           g += 4;
-          const C = [];
+          const v = [];
           for (; g < m.length && m[g] !== "DATA-END"; )
-            C.push(m[g]), g++;
-          const $ = C.join(`
+            v.push(m[g]), g++;
+          const $ = v.join(`
 `);
           g++;
-          const S = t.fs.resolvePath(w, d);
+          const S = e.fs.resolvePath(w, d);
           if (b === "dir")
-            await t.fs.mkdir(S, { recursive: !0 });
+            await e.fs.mkdir(S, { recursive: !0 });
           else {
             const P = S.lastIndexOf("/");
             if (P > 0) {
               const E = S.slice(0, P);
               try {
-                await t.fs.mkdir(E, { recursive: !0 });
+                await e.fs.mkdir(E, { recursive: !0 });
               } catch {
               }
             }
-            await t.fs.writeFile(S, $);
+            await e.fs.writeFile(S, $);
           }
-          x.push(w), c && (t.stderr || console.error(w));
+          x.push(w), c && (e.stderr || console.error(w));
         }
         return {
           stdout: c ? x.join(`
@@ -3722,7 +3987,7 @@ const Qe = {
         if (!l)
           return { stdout: "", stderr: `tar: Refusing to read archive from terminal (missing -f option?)
 `, exitCode: 1 };
-        const f = t.fs.resolvePath(l, t.cwd), m = (await t.fs.readFile(f)).split(`
+        const f = e.fs.resolvePath(l, e.cwd), m = (await e.fs.readFile(f)).split(`
 `);
         if (m[0] !== "FLUFFY-TAR-V1")
           return { stdout: "", stderr: `tar: This does not look like a tar archive
@@ -3745,45 +4010,45 @@ const Qe = {
       };
     }
   }
-}, es = {
+}, is = {
   name: "tee",
   description: "Read from stdin and write to stdout and files",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n), o = e.a, r = t.stdin;
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n), r = t.a, o = e.stdin;
     try {
       for (const a of s) {
-        const i = t.fs.resolvePath(a, t.cwd);
-        if (o) {
+        const i = e.fs.resolvePath(a, e.cwd);
+        if (r) {
           let c = "";
           try {
-            c = await t.fs.readFile(i);
+            c = await e.fs.readFile(i);
           } catch {
           }
-          await t.fs.writeFile(i, c + r);
+          await e.fs.writeFile(i, c + o);
         } else
-          await t.fs.writeFile(i, r);
+          await e.fs.writeFile(i, o);
       }
-      return { stdout: r, stderr: "", exitCode: 0 };
+      return { stdout: o, stderr: "", exitCode: 0 };
     } catch (a) {
-      return { stdout: r, stderr: `tee: ${a instanceof Error ? a.message : a}
+      return { stdout: o, stderr: `tee: ${a instanceof Error ? a.message : a}
 `, exitCode: 1 };
     }
   }
-}, ss = {
+}, as = {
   name: "test",
   description: "Evaluate conditional expression",
-  async exec(n, t) {
-    const e = n[n.length - 1] === "]" ? n.slice(0, -1) : [...n];
+  async exec(n, e) {
+    const t = n[n.length - 1] === "]" ? n.slice(0, -1) : [...n];
     try {
-      return { stdout: "", stderr: "", exitCode: await O(e, t) ? 0 : 1 };
+      return { stdout: "", stderr: "", exitCode: await O(t, e) ? 0 : 1 };
     } catch (s) {
       return { stdout: "", stderr: `test: ${s instanceof Error ? s.message : s}
 `, exitCode: 2 };
     }
   }
 };
-async function O(n, t) {
-  var o, r;
+async function O(n, e) {
+  var r, o;
   if (n.length === 0) return !1;
   if (n.length === 1) return n[0] !== "";
   if (n.length === 2) {
@@ -3807,7 +4072,7 @@ async function O(n, t) {
       case "-b":
       case "-c":
         try {
-          const c = t.fs.resolvePath(i, t.cwd), l = await t.fs.stat(c);
+          const c = e.fs.resolvePath(i, e.cwd), l = await e.fs.stat(c);
           return a === "-f" ? l.type === "file" : a === "-d" ? l.type === "dir" : a === "-L" || a === "-h" ? l.type === "symlink" : a === "-S" ? l.type === "socket" : a === "-p" ? l.type === "fifo" : a === "-b" ? l.type === "block" : a === "-c" ? l.type === "char" : !0;
         } catch {
           return !1;
@@ -3821,10 +4086,10 @@ async function O(n, t) {
       case "-g":
       case "-k":
         try {
-          const c = t.fs.resolvePath(i, t.cwd);
-          if (await t.fs.stat(c), a === "-s")
+          const c = e.fs.resolvePath(i, e.cwd);
+          if (await e.fs.stat(c), a === "-s")
             try {
-              const l = await ((r = (o = t.fs).readFile) == null ? void 0 : r.call(o, c));
+              const l = await ((o = (r = e.fs).readFile) == null ? void 0 : o.call(r, c));
               return l && l.length > 0;
             } catch {
               return !1;
@@ -3839,7 +4104,7 @@ async function O(n, t) {
     }
   }
   if (n[0] === "!" && n.length > 1)
-    return !await O(n.slice(1), t);
+    return !await O(n.slice(1), e);
   if (n.length === 3) {
     const [a, i, c] = n;
     switch (i) {
@@ -3862,28 +4127,28 @@ async function O(n, t) {
         return parseInt(a) >= parseInt(c);
     }
   }
-  const e = n.indexOf("-a");
-  if (e > 0)
-    return await O(n.slice(0, e), t) && await O(n.slice(e + 1), t);
+  const t = n.indexOf("-a");
+  if (t > 0)
+    return await O(n.slice(0, t), e) && await O(n.slice(t + 1), e);
   const s = n.indexOf("-o");
-  return s > 0 ? await O(n.slice(0, s), t) || await O(n.slice(s + 1), t) : !1;
+  return s > 0 ? await O(n.slice(0, s), e) || await O(n.slice(s + 1), e) : !1;
 }
-const ns = {
+const cs = {
   name: "time",
   description: "Time a command execution",
-  async exec(n, t) {
-    const { positional: e, flags: s } = y(n);
-    if (e.length === 0)
+  async exec(n, e) {
+    const { positional: t, flags: s } = y(n);
+    if (t.length === 0)
       return { stdout: "", stderr: `time: missing command
 `, exitCode: 1 };
-    const o = s.v || s.verbose, r = s.p, a = e.join(" "), i = globalThis.performance, c = i ? i.now() : Date.now();
+    const r = s.v || s.verbose, o = s.p, a = t.join(" "), i = globalThis.performance, c = i ? i.now() : Date.now();
     await new Promise((m) => globalThis.setTimeout(m, 0));
     const d = ((i ? i.now() : Date.now()) - c) / 1e3, p = Math.floor(d / 60), f = d % 60;
     let h;
-    return r ? h = `real ${d.toFixed(2)}
+    return o ? h = `real ${d.toFixed(2)}
 user 0.00
 sys 0.00
-` : o ? h = `        ${d.toFixed(3)} real         0.000 user         0.000 sys
+` : r ? h = `        ${d.toFixed(3)} real         0.000 user         0.000 sys
 ` : h = `
 real    ${p}m${f.toFixed(3)}s
 user    0m0.000s
@@ -3895,19 +4160,19 @@ ${h}`,
       exitCode: 0
     };
   }
-}, rs = {
+}, ls = {
   name: "timeout",
   description: "Run a command with a time limit",
-  async exec(n, t) {
-    const { positional: e, flags: s, values: o } = y(n, ["k", "kill-after", "s", "signal"]);
-    if (e.length === 0)
+  async exec(n, e) {
+    const { positional: t, flags: s, values: r } = y(n, ["k", "kill-after", "s", "signal"]);
+    if (t.length === 0)
       return {
         stdout: "",
         stderr: `timeout: missing duration
 `,
         exitCode: 1
       };
-    const r = e[0], a = e.slice(1);
+    const o = t[0], a = t.slice(1);
     if (a.length === 0)
       return {
         stdout: "",
@@ -3915,16 +4180,16 @@ ${h}`,
 `,
         exitCode: 1
       };
-    let i = os(r);
+    let i = ds(o);
     if (i === null)
       return {
         stdout: "",
-        stderr: `timeout: invalid time interval '${r}'
+        stderr: `timeout: invalid time interval '${o}'
 `,
         exitCode: 1
       };
-    o.k || o["kill-after"];
-    const c = o.s || o.signal || "TERM", l = s["preserve-status"];
+    r.k || r["kill-after"];
+    const c = r.s || r.signal || "TERM", l = s["preserve-status"];
     s.foreground;
     const u = s.v || s.verbose;
     try {
@@ -3968,63 +4233,63 @@ ${h}`,
     }
   }
 };
-function os(n) {
-  const t = n.match(/^(\d+(?:\.\d+)?)(s|m|h|d)?$/);
-  if (!t) return null;
-  const e = parseFloat(t[1]);
-  switch (t[2] || "s") {
+function ds(n) {
+  const e = n.match(/^(\d+(?:\.\d+)?)(s|m|h|d)?$/);
+  if (!e) return null;
+  const t = parseFloat(e[1]);
+  switch (e[2] || "s") {
     case "s":
-      return e;
+      return t;
     case "m":
-      return e * 60;
+      return t * 60;
     case "h":
-      return e * 3600;
+      return t * 3600;
     case "d":
-      return e * 86400;
+      return t * 86400;
     default:
       return null;
   }
 }
-const is = {
+const us = {
   name: "touch",
   description: "Change file timestamps or create empty files",
-  async exec(n, t) {
-    const { positional: e, flags: s } = y(n);
-    if (e.length === 0)
+  async exec(n, e) {
+    const { positional: t, flags: s } = y(n);
+    if (t.length === 0)
       return { stdout: "", stderr: `touch: missing operand
 `, exitCode: 1 };
-    const o = s.c;
+    const r = s.c;
     try {
-      for (const r of e) {
-        const a = t.fs.resolvePath(r, t.cwd);
+      for (const o of t) {
+        const a = e.fs.resolvePath(o, e.cwd);
         let i = !1;
         try {
-          await t.fs.stat(a), i = !0;
+          await e.fs.stat(a), i = !0;
         } catch {
           i = !1;
         }
         if (i) {
-          const c = await t.fs.readFile(a);
-          await t.fs.writeFile(a, c);
+          const c = await e.fs.readFile(a);
+          await e.fs.writeFile(a, c);
         } else {
-          if (o)
+          if (r)
             continue;
-          await t.fs.writeFile(a, "");
+          await e.fs.writeFile(a, "");
         }
       }
       return { stdout: "", stderr: "", exitCode: 0 };
-    } catch (r) {
-      return { stdout: "", stderr: `touch: ${r instanceof Error ? r.message : r}
+    } catch (o) {
+      return { stdout: "", stderr: `touch: ${o instanceof Error ? o.message : o}
 `, exitCode: 1 };
     }
   }
-}, as = {
+}, fs = {
   name: "tr",
   description: "Translate or delete characters",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n), o = e.d, r = e.s, a = B(s[0] ?? ""), i = B(s[1] ?? ""), c = t.stdin;
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n), r = t.d, o = t.s, a = _(s[0] ?? ""), i = _(s[1] ?? ""), c = e.stdin;
     let l;
-    if (o) {
+    if (r) {
       const u = new Set(a.split(""));
       l = c.split("").filter((d) => !u.has(d)).join("");
     } else if (a && i) {
@@ -4034,7 +4299,7 @@ const is = {
       l = c.split("").map((d) => u.get(d) ?? d).join("");
     } else
       l = c;
-    if (r && i) {
+    if (o && i) {
       const u = new Set(i.split(""));
       let d = "", p = "";
       for (const f of l)
@@ -4044,27 +4309,27 @@ const is = {
     return { stdout: l, stderr: "", exitCode: 0 };
   }
 };
-function B(n) {
-  let t = n;
-  t = t.replace(/\[:upper:\]/g, "ABCDEFGHIJKLMNOPQRSTUVWXYZ"), t = t.replace(/\[:lower:\]/g, "abcdefghijklmnopqrstuvwxyz"), t = t.replace(/\[:digit:\]/g, "0123456789"), t = t.replace(/\[:space:\]/g, ` 	
-\r`), t = t.replace(/\[:alpha:\]/g, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"), t = t.replace(/\[:alnum:\]/g, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789");
-  let e = "", s = 0;
-  for (; s < t.length; )
-    if (s + 2 < t.length && t[s + 1] === "-") {
-      const o = t.charCodeAt(s), r = t.charCodeAt(s + 2);
-      for (let a = o; a <= r; a++)
-        e += String.fromCharCode(a);
+function _(n) {
+  let e = n;
+  e = e.replace(/\[:upper:\]/g, "ABCDEFGHIJKLMNOPQRSTUVWXYZ"), e = e.replace(/\[:lower:\]/g, "abcdefghijklmnopqrstuvwxyz"), e = e.replace(/\[:digit:\]/g, "0123456789"), e = e.replace(/\[:space:\]/g, ` 	
+\r`), e = e.replace(/\[:alpha:\]/g, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"), e = e.replace(/\[:alnum:\]/g, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789");
+  let t = "", s = 0;
+  for (; s < e.length; )
+    if (s + 2 < e.length && e[s + 1] === "-") {
+      const r = e.charCodeAt(s), o = e.charCodeAt(s + 2);
+      for (let a = r; a <= o; a++)
+        t += String.fromCharCode(a);
       s += 3;
     } else
-      e += t[s], s++;
-  return e;
+      t += e[s], s++;
+  return t;
 }
-const cs = {
+const ps = {
   name: "trap",
   description: "Trap signals and execute commands",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n, ["l", "p"]);
-    return e.l ? {
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n, ["l", "p"]);
+    return t.l ? {
       stdout: [
         "EXIT",
         "HUP",
@@ -4106,13 +4371,13 @@ const cs = {
 `,
       stderr: "",
       exitCode: 0
-    } : e.p ? s.length === 0 ? {
+    } : t.p ? s.length === 0 ? {
       stdout: `# Trap handlers would be listed here
 `,
       stderr: "",
       exitCode: 0
     } : {
-      stdout: s.map((r) => `# trap for ${r} would be shown here`).join(`
+      stdout: s.map((o) => `# trap for ${o} would be shown here`).join(`
 `) + `
 `,
       stderr: "",
@@ -4133,12 +4398,12 @@ const cs = {
       exitCode: 0
     });
   }
-}, ls = {
+}, hs = {
   name: "kill",
   description: "Send signal to process",
-  async exec(n, t) {
-    const { flags: e, values: s, positional: o } = y(n, ["l", "L", "s"]);
-    if (e.l || e.L) {
+  async exec(n, e) {
+    const { flags: t, values: s, positional: r } = y(n, ["l", "L", "s"]);
+    if (t.l || t.L) {
       const a = [
         "HUP",
         "INT",
@@ -4172,7 +4437,7 @@ const cs = {
         "PWR",
         "SYS"
       ];
-      return e.L ? {
+      return t.L ? {
         stdout: a.map((i, c) => `${c + 1}) SIG${i}`).join(`
 `) + `
 `,
@@ -4185,47 +4450,47 @@ const cs = {
         exitCode: 0
       };
     }
-    const r = s.s || "TERM";
-    return o.length === 0 ? {
+    const o = s.s || "TERM";
+    return r.length === 0 ? {
       stdout: "",
       stderr: `kill: usage: kill [-s SIGNAL] PID...
 `,
       exitCode: 1
     } : {
       stdout: "",
-      stderr: `kill: sending signal ${r} to processes: ${o.join(", ")}
+      stderr: `kill: sending signal ${o} to processes: ${r.join(", ")}
 `,
       exitCode: 0
     };
   }
-}, ds = {
+}, ms = {
   name: "true",
   description: "Return success",
   async exec() {
     return { stdout: "", stderr: "", exitCode: 0 };
   }
-}, us = {
+}, gs = {
   name: "type",
   description: "Display information about command type",
-  async exec(n, t) {
-    const { positional: e, flags: s } = y(n);
-    if (e.length === 0)
+  async exec(n, e) {
+    const { positional: t, flags: s } = y(n);
+    if (t.length === 0)
       return { stdout: "", stderr: `type: missing operand
 `, exitCode: 1 };
-    const o = s.a, r = s.t, a = s.p, i = [];
+    const r = s.a, o = s.t, a = s.p, i = [];
     let c = 0;
-    for (const l of e) {
-      const u = (t.env.PATH || "/bin:/usr/bin").split(":");
+    for (const l of t) {
+      const u = (e.env.PATH || "/bin:/usr/bin").split(":");
       let d = !1;
       for (const p of u) {
         const f = p + "/" + l;
         try {
-          if (await t.fs.exists(f) && (d = !0, r ? i.push("file") : a ? i.push(f) : i.push(`${l} is ${f}`), !o))
+          if (await e.fs.exists(f) && (d = !0, o ? i.push("file") : a ? i.push(f) : i.push(`${l} is ${f}`), !r))
             break;
         } catch {
         }
       }
-      d || (!r && !a && i.push(`type: ${l}: not found`), c = 1);
+      d || (!o && !a && i.push(`type: ${l}: not found`), c = 1);
     }
     return {
       stdout: i.join(`
@@ -4235,12 +4500,12 @@ const cs = {
       exitCode: c
     };
   }
-}, fs = {
+}, xs = {
   name: "unalias",
   description: "Remove alias definitions",
-  async exec(n, t) {
-    const { positional: e, flags: s } = y(n);
-    return e.length === 0 && !s.a ? {
+  async exec(n, e) {
+    const { positional: t, flags: s } = y(n);
+    return t.length === 0 && !s.a ? {
       stdout: "",
       stderr: `unalias: usage: unalias [-a] name [name ...]
 `,
@@ -4251,26 +4516,26 @@ const cs = {
       exitCode: 0
     };
   }
-}, ps = {
+}, ys = {
   name: "unexpand",
   description: "Convert spaces to tabs",
-  async exec(n, t) {
-    const { values: e, positional: s, flags: o } = y(n, ["t", "tabs"]), r = e.t || e.tabs || "8", a = parseInt(r, 10);
+  async exec(n, e) {
+    const { values: t, positional: s, flags: r } = y(n, ["t", "tabs"]), o = t.t || t.tabs || "8", a = parseInt(o, 10);
     if (isNaN(a) || a <= 0)
       return {
         stdout: "",
-        stderr: `unexpand: invalid tab size: '${r}'
+        stderr: `unexpand: invalid tab size: '${o}'
 `,
         exitCode: 1
       };
-    const i = o.a || o.all;
+    const i = r.a || r.all;
     try {
-      const { content: c } = await N(
+      const { content: c } = await j(
         s,
-        t.stdin,
-        t.fs,
-        t.cwd,
-        t.fs.resolvePath
+        e.stdin,
+        e.fs,
+        e.cwd,
+        e.fs.resolvePath
       ), l = c.split(`
 `), u = [];
       for (const d of l) {
@@ -4298,28 +4563,28 @@ const cs = {
       };
     }
   }
-}, hs = {
+}, ws = {
   name: "uniq",
   description: "Report or omit repeated lines",
-  async exec(n, t) {
-    const { flags: e, positional: s, values: o } = y(n, ["f", "s", "w"]), r = o.f ? parseInt(o.f) : 0, a = o.s ? parseInt(o.s) : 0, i = o.w ? parseInt(o.w) : void 0, c = e.i;
+  async exec(n, e) {
+    const { flags: t, positional: s, values: r } = y(n, ["f", "s", "w"]), o = r.f ? parseInt(r.f) : 0, a = r.s ? parseInt(r.s) : 0, i = r.w ? parseInt(r.w) : void 0, c = t.i;
     try {
-      const { content: l } = await N(
+      const { content: l } = await j(
         s,
-        t.stdin,
-        t.fs,
-        t.cwd,
-        t.fs.resolvePath
+        e.stdin,
+        e.fs,
+        e.cwd,
+        e.fs.resolvePath
       ), u = l.split(`
 `);
       u.length > 0 && u[u.length - 1] === "" && u.pop();
       const d = [];
       let p = "", f = "", h = 0;
       for (const m of u) {
-        const g = ms(m, r, a, i, c);
-        g === f ? h++ : (h > 0 && J(p, h, e, d), p = m, f = g, h = 1);
+        const g = vs(m, o, a, i, c);
+        g === f ? h++ : (h > 0 && J(p, h, t, d), p = m, f = g, h = 1);
       }
-      return h > 0 && J(p, h, e, d), { stdout: d.join(`
+      return h > 0 && J(p, h, t, d), { stdout: d.join(`
 `) + (d.length > 0 ? `
 ` : ""), stderr: "", exitCode: 0 };
     } catch (l) {
@@ -4328,34 +4593,34 @@ const cs = {
     }
   }
 };
-function ms(n, t, e, s, o) {
-  let r = n;
-  return t > 0 && (r = n.split(/\s+/).slice(t).join(" ")), e > 0 && (r = r.substring(e)), s !== void 0 && (r = r.substring(0, s)), o && (r = r.toLowerCase()), r;
+function vs(n, e, t, s, r) {
+  let o = n;
+  return e > 0 && (o = n.split(/\s+/).slice(e).join(" ")), t > 0 && (o = o.substring(t)), s !== void 0 && (o = o.substring(0, s)), r && (o = o.toLowerCase()), o;
 }
-function J(n, t, e, s) {
-  e.d && t < 2 || e.u && t > 1 || (e.c ? s.push(`${String(t).padStart(7)} ${n}`) : s.push(n));
+function J(n, e, t, s) {
+  t.d && e < 2 || t.u && e > 1 || (t.c ? s.push(`${String(e).padStart(7)} ${n}`) : s.push(n));
 }
-const gs = {
+const Cs = {
   name: "uname",
   description: "Print system information",
-  async exec(n, t) {
-    const { flags: e } = y(n), s = e.a, o = t.env.UNAME_SYSNAME ?? "FluffyOS", r = t.env.HOSTNAME ?? "localhost", a = t.env.UNAME_RELEASE ?? "1.0.0", i = t.env.UNAME_VERSION ?? "#1", c = t.env.UNAME_MACHINE ?? "wasm64";
+  async exec(n, e) {
+    const { flags: t } = y(n), s = t.a, r = e.env.UNAME_SYSNAME ?? "FluffyOS", o = e.env.HOSTNAME ?? "localhost", a = e.env.UNAME_RELEASE ?? "1.0.0", i = e.env.UNAME_VERSION ?? "#1", c = e.env.UNAME_MACHINE ?? "wasm64";
     if (s)
-      return { stdout: `${o} ${r} ${a} ${i} ${c}
+      return { stdout: `${r} ${o} ${a} ${i} ${c}
 `, stderr: "", exitCode: 0 };
-    if (e.s || !e.n && !e.r && !e.v && !e.m)
-      return { stdout: o + `
+    if (t.s || !t.n && !t.r && !t.v && !t.m)
+      return { stdout: r + `
 `, stderr: "", exitCode: 0 };
     const l = [];
-    return e.s && l.push(o), e.n && l.push(r), e.r && l.push(a), e.v && l.push(i), e.m && l.push(c), { stdout: l.join(" ") + `
+    return t.s && l.push(r), t.n && l.push(o), t.r && l.push(a), t.v && l.push(i), t.m && l.push(c), { stdout: l.join(" ") + `
 `, stderr: "", exitCode: 0 };
   }
-}, xs = {
+}, $s = {
   name: "uptime",
   description: "Tell how long the system has been running",
-  async exec(n, t) {
-    const { flags: e } = y(n), s = e.p || e.pretty, o = e.s || e.since, r = 86400 + 3600 * 5 + 1380, a = Math.floor(r / 86400), i = Math.floor(r % 86400 / 3600), c = Math.floor(r % 3600 / 60), l = /* @__PURE__ */ new Date(), u = new Date(l.getTime() - r * 1e3), d = [];
-    if (o)
+  async exec(n, e) {
+    const { flags: t } = y(n), s = t.p || t.pretty, r = t.s || t.since, o = 86400 + 3600 * 5 + 1380, a = Math.floor(o / 86400), i = Math.floor(o % 86400 / 3600), c = Math.floor(o % 3600 / 60), l = /* @__PURE__ */ new Date(), u = new Date(l.getTime() - o * 1e3), d = [];
+    if (r)
       d.push(u.toISOString());
     else if (s) {
       const p = [];
@@ -4372,11 +4637,11 @@ const gs = {
       exitCode: 0
     };
   }
-}, ys = {
+}, bs = {
   name: "watch",
   description: "Execute a program periodically, showing output",
-  async exec(n, t) {
-    const { values: e, positional: s, flags: o } = y(n, [
+  async exec(n, e) {
+    const { values: t, positional: s, flags: r } = y(n, [
       "n",
       "interval",
       "d",
@@ -4391,7 +4656,7 @@ const gs = {
       "chgexit",
       "help"
     ]);
-    if (o.help)
+    if (r.help)
       return {
         stdout: `Usage: watch [options] command
 Execute a program periodically, showing output fullscreen.
@@ -4422,12 +4687,12 @@ Try 'watch --help' for more information.
 `,
         exitCode: 1
       };
-    const r = parseFloat(e.n || e.interval || "2"), a = s.join(" ");
+    const o = parseFloat(t.n || t.interval || "2"), a = s.join(" ");
     return {
-      stdout: (o.t || o["no-title"] ? "" : `Every ${r}s: ${a}
+      stdout: (r.t || r["no-title"] ? "" : `Every ${o}s: ${a}
 
 `) + `watch: This is a stub implementation.
-In a real shell, this would execute '${a}' every ${r} seconds.
+In a real shell, this would execute '${a}' every ${o} seconds.
 
 To implement watch in a browser environment:
 1. Use setInterval to run command periodically
@@ -4442,41 +4707,41 @@ Browser shells should implement watch at the shell level for proper integration.
       exitCode: 0
     };
   }
-}, ws = {
+}, Ss = {
   name: "wc",
   description: "Word, line, and byte count",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n), o = e.l, r = e.w, a = e.c, i = !o && !r && !a;
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n), r = t.l, o = t.w, a = t.c, i = !r && !o && !a;
     try {
-      const { content: c, files: l } = await N(
+      const { content: c, files: l } = await j(
         s,
-        t.stdin,
-        t.fs,
-        t.cwd,
-        t.fs.resolvePath
+        e.stdin,
+        e.fs,
+        e.cwd,
+        e.fs.resolvePath
       ), u = c.split(`
 `).length - (c.endsWith(`
 `) ? 1 : 0), d = c.split(/\s+/).filter(Boolean).length, p = c.length, f = [];
-      return (i || o) && f.push(String(u).padStart(6)), (i || r) && f.push(String(d).padStart(6)), (i || a) && f.push(String(p).padStart(6)), l.length === 1 && f.push(" " + s[0]), { stdout: f.join(" ") + `
+      return (i || r) && f.push(String(u).padStart(6)), (i || o) && f.push(String(d).padStart(6)), (i || a) && f.push(String(p).padStart(6)), l.length === 1 && f.push(" " + s[0]), { stdout: f.join(" ") + `
 `, stderr: "", exitCode: 0 };
     } catch (c) {
       return { stdout: "", stderr: `wc: ${c instanceof Error ? c.message : c}
 `, exitCode: 1 };
     }
   }
-}, Cs = {
+}, Ps = {
   name: "which",
   description: "Locate a command in PATH",
-  async exec(n, t) {
-    const { flags: e, positional: s } = y(n), o = e.a;
+  async exec(n, e) {
+    const { flags: t, positional: s } = y(n), r = t.a;
     if (s.length === 0)
       return { stdout: "", stderr: `which: missing argument
 `, exitCode: 1 };
-    const r = s[0], a = t.env.PATH || "/bin:/usr/bin:/usr/local/bin", i = a.split(":"), c = [];
+    const o = s[0], a = e.env.PATH || "/bin:/usr/bin:/usr/local/bin", i = a.split(":"), c = [];
     for (const l of i) {
-      const u = `${l}/${r}`;
+      const u = `${l}/${o}`;
       try {
-        if (await t.fs.exists(u) && (await t.fs.stat(u)).type === "file" && (c.push(u), !o))
+        if (await e.fs.exists(u) && (await e.fs.stat(u)).type === "file" && (c.push(u), !r))
           break;
       } catch {
         continue;
@@ -4484,7 +4749,7 @@ Browser shells should implement watch at the shell level for proper integration.
     }
     return c.length === 0 ? {
       stdout: "",
-      stderr: `which: no ${r} in (${a})
+      stderr: `which: no ${o} in (${a})
 `,
       exitCode: 1
     } : {
@@ -4495,20 +4760,20 @@ Browser shells should implement watch at the shell level for proper integration.
       exitCode: 0
     };
   }
-}, vs = {
+}, Es = {
   name: "whoami",
   description: "Print current user name",
-  async exec(n, t) {
-    return { stdout: (t.env.USER ?? t.env.USERNAME ?? "user") + `
+  async exec(n, e) {
+    return { stdout: (e.env.USER ?? e.env.USERNAME ?? "user") + `
 `, stderr: "", exitCode: 0 };
   }
-}, $s = {
+}, Is = {
   name: "xargs",
   description: "Build and execute command lines from stdin",
-  async exec(n, t) {
-    const { flags: e, positional: s, values: o } = y(n, ["n", "I", "i", "d", "delimiter"]), r = e.I || e.L || e.l, a = o.I || o.i, i = o.n ? parseInt(o.n) : void 0, c = o.d || o.delimiter || /\s+/, l = e.t || e.verbose, u = e.r, d = s.length > 0 ? s.join(" ") : "echo";
+  async exec(n, e) {
+    const { flags: t, positional: s, values: r } = y(n, ["n", "I", "i", "d", "delimiter"]), o = t.I || t.L || t.l, a = r.I || r.i, i = r.n ? parseInt(r.n) : void 0, c = r.d || r.delimiter || /\s+/, l = t.t || t.verbose, u = t.r, d = s.length > 0 ? s.join(" ") : "echo";
     let p;
-    if (typeof c == "string" ? p = t.stdin.split(c).filter(Boolean) : p = t.stdin.trim().split(c).filter(Boolean), p.length === 0) {
+    if (typeof c == "string" ? p = e.stdin.split(c).filter(Boolean) : p = e.stdin.trim().split(c).filter(Boolean), p.length === 0) {
       if (u)
         return { stdout: "", stderr: "", exitCode: 0 };
       p = [""];
@@ -4517,7 +4782,7 @@ Browser shells should implement watch at the shell level for proper integration.
     if (a) {
       const m = typeof a == "string" ? a : "{}";
       for (const g of p) {
-        const x = d.replace(new RegExp(bs(m), "g"), g);
+        const x = d.replace(new RegExp(Fs(m), "g"), g);
         h.push(x), l && f.push(`+ ${x}`);
       }
     } else if (i)
@@ -4525,7 +4790,7 @@ Browser shells should implement watch at the shell level for proper integration.
         const g = p.slice(m, m + i), x = `${d} ${g.map(L).join(" ")}`;
         h.push(x), l && f.push(`+ ${x}`);
       }
-    else if (r)
+    else if (o)
       for (const m of p) {
         const g = `${d} ${L(m)}`;
         h.push(g), l && f.push(`+ ${g}`);
@@ -4546,259 +4811,269 @@ Browser shells should implement watch at the shell level for proper integration.
 function L(n) {
   return /[^a-zA-Z0-9._\-/=]/.test(n) ? `'${n.replace(/'/g, "'\\''")}'` : n;
 }
-function bs(n) {
+function Fs(n) {
   return n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-const Ss = {
+const Ts = {
   name: "yes",
   description: "Output a string repeatedly until killed",
-  async exec(n, t) {
-    const { positional: e } = y(n), s = e.length > 0 ? e.join(" ") : "y", o = [], r = 1e3;
-    for (let a = 0; a < r; a++)
-      o.push(s);
+  async exec(n, e) {
+    const { positional: t } = y(n), s = t.length > 0 ? t.join(" ") : "y", r = [], o = 1e3;
+    for (let a = 0; a < o; a++)
+      r.push(s);
     return {
-      stdout: o.join(`
+      stdout: r.join(`
 `) + `
 `,
       stderr: "",
       exitCode: 0
     };
   }
-}, Ps = {
-  ".": _e,
+}, js = {
+  ".": Qt,
   alias: X,
-  awk: Z,
-  base64: Q,
-  basename: tt,
-  break: et,
-  case: st,
-  cc: ot,
-  cat: rt,
-  chmod: it,
-  chown: at,
-  clear: ct,
-  column: lt,
-  comm: dt,
-  continue: ut,
-  cp: ft,
-  curl: pt,
-  cut: ht,
-  date: gt,
-  declare: wt,
-  df: $t,
-  diff: bt,
-  dirname: Pt,
-  do: jt,
-  done: Ft,
-  du: Nt,
-  echo: Tt,
-  elif: kt,
-  else: Rt,
-  env: Dt,
-  esac: nt,
-  eval: Lt,
-  exit: Wt,
-  expand: Ut,
-  expr: qt,
-  export: zt,
-  false: Gt,
-  fi: Ot,
-  file: Yt,
-  find: Kt,
-  fmt: Vt,
-  fold: Xt,
-  for: Ht,
-  free: Zt,
-  function: Jt,
+  array: Q,
+  awk: ee,
+  base64: te,
+  basename: se,
+  break: ne,
+  case: re,
+  cc: ae,
+  cat: ie,
+  chmod: ce,
+  chown: le,
+  clear: de,
+  column: ue,
+  comm: fe,
+  continue: pe,
+  cp: he,
+  curl: me,
+  cut: ge,
+  date: ye,
+  declare: Ce,
+  df: Se,
+  diff: Pe,
+  dirname: Ie,
+  do: je,
+  done: Ne,
+  du: Me,
+  echo: Ae,
+  elif: Oe,
+  else: De,
+  env: We,
+  esac: oe,
+  eval: Ue,
+  exit: qe,
+  expand: ze,
+  expr: He,
+  export: Ge,
+  false: Be,
+  fi: Le,
+  file: Ze,
+  find: Ke,
+  fmt: Xe,
+  fold: Qe,
+  for: _e,
+  free: et,
+  function: Ye,
   gcc: Y,
-  getopts: Qt,
-  grep: te,
-  head: ee,
-  hexdump: se,
-  hostname: re,
-  id: oe,
-  if: Mt,
-  in: Bt,
-  install: ie,
-  join: ae,
-  kill: ls,
-  less: ce,
-  ln: le,
-  local: yt,
-  ls: de,
-  make: he,
-  md5sum: ge,
-  mkdir: ye,
-  mv: we,
-  nl: Ce,
-  nohup: $e,
-  od: be,
-  paste: Ie,
-  patch: je,
-  "pkg-config": Te,
-  printenv: Me,
-  printf: Ae,
-  pwd: ke,
-  read: Re,
-  readlink: Oe,
-  readonly: Ct,
-  realpath: De,
-  return: Le,
-  rm: We,
-  sed: Ue,
-  seq: qe,
-  set: ze,
-  sha256sum: Ge,
-  shift: Be,
-  sleep: Je,
-  sort: Ye,
-  source: K,
-  stat: Ke,
-  strings: Xe,
-  tail: Qe,
-  tar: ts,
-  tee: es,
-  test: ss,
-  then: At,
-  time: ns,
-  timeout: rs,
-  touch: is,
-  tr: as,
-  trap: cs,
-  true: ds,
-  type: us,
-  unalias: fs,
-  unexpand: ps,
-  uniq: hs,
-  unset: vt,
-  uname: gs,
-  until: It,
-  uptime: xs,
-  watch: ys,
-  wc: ws,
-  which: Cs,
-  while: Et,
-  whoami: vs,
-  xargs: $s,
-  yes: Ss
-}, Es = Object.values(Ps);
+  getopts: tt,
+  grep: st,
+  head: nt,
+  heredoc: rt,
+  hexdump: ot,
+  hostname: at,
+  id: ct,
+  if: Re,
+  in: Je,
+  install: lt,
+  join: dt,
+  kill: hs,
+  less: ut,
+  let: ft,
+  ln: pt,
+  local: ve,
+  ls: ht,
+  make: yt,
+  md5sum: vt,
+  mkdir: $t,
+  mv: bt,
+  nl: St,
+  nohup: Et,
+  od: It,
+  paste: Nt,
+  patch: Mt,
+  "pkg-config": kt,
+  "process-substitution": Lt,
+  printenv: Ot,
+  printf: Dt,
+  pwd: Wt,
+  read: Ut,
+  readlink: qt,
+  readonly: $e,
+  realpath: zt,
+  return: Ht,
+  rm: Gt,
+  sed: Bt,
+  seq: _t,
+  set: Jt,
+  sha256sum: Yt,
+  shift: Vt,
+  sleep: Kt,
+  sort: Xt,
+  source: V,
+  stat: es,
+  strings: ss,
+  tail: rs,
+  tar: os,
+  tee: is,
+  test: as,
+  then: ke,
+  time: cs,
+  timeout: ls,
+  touch: us,
+  tr: fs,
+  trap: ps,
+  true: ms,
+  type: gs,
+  unalias: xs,
+  unexpand: ys,
+  uniq: ws,
+  unset: be,
+  uname: Cs,
+  until: Te,
+  uptime: $s,
+  watch: bs,
+  wc: Ss,
+  which: Ps,
+  while: Fe,
+  whoami: Es,
+  xargs: Is,
+  yes: Ts
+}, Ms = Object.values(js);
 export {
   X as alias,
-  Ps as allCommands,
-  Z as awk,
-  Q as base64,
-  tt as basename,
-  et as break,
-  st as case,
-  rt as cat,
-  ot as cc,
-  it as chmod,
-  at as chown,
-  ct as clear,
-  lt as column,
-  dt as comm,
-  Es as commandList,
-  ut as continue,
-  ft as cp,
-  pt as curl,
-  ht as cut,
-  gt as date,
-  wt as declare,
-  $t as df,
-  bt as diff,
-  Pt as dirname,
-  jt as do,
-  Ft as done,
-  _e as dot,
-  Nt as du,
-  Tt as echo,
-  kt as elif,
-  Rt as else,
-  Dt as env,
-  nt as esac,
-  Lt as eval,
-  Wt as exit,
-  Ut as expand,
-  zt as exportCmd,
-  qt as expr,
-  Gt as false,
-  Ot as fi,
-  Yt as file,
-  Kt as find,
-  Vt as fmt,
-  Xt as fold,
-  Ht as for,
-  Zt as free,
-  Jt as function,
+  js as allCommands,
+  Ns as arithmeticExpansion,
+  Q as arrayHelper,
+  ee as awk,
+  te as base64,
+  se as basename,
+  ne as break,
+  re as case,
+  ie as cat,
+  ae as cc,
+  ce as chmod,
+  le as chown,
+  de as clear,
+  ue as column,
+  fe as comm,
+  Ms as commandList,
+  pe as continue,
+  he as cp,
+  me as curl,
+  ge as cut,
+  ye as date,
+  Ce as declare,
+  Se as df,
+  Pe as diff,
+  Ie as dirname,
+  je as do,
+  Ne as done,
+  Qt as dot,
+  Me as du,
+  Ae as echo,
+  Oe as elif,
+  De as else,
+  We as env,
+  oe as esac,
+  Ue as eval,
+  qe as exit,
+  ze as expand,
+  Ge as exportCmd,
+  He as expr,
+  Be as false,
+  Le as fi,
+  Ze as file,
+  Ke as find,
+  Xe as fmt,
+  Qe as fold,
+  _e as for,
+  et as free,
+  Ye as function,
   Y as gcc,
-  Qt as getopts,
-  te as grep,
-  ee as head,
-  se as hexdump,
-  re as hostname,
-  oe as id,
-  Mt as if,
-  Bt as in,
-  ie as install,
-  ae as join,
-  ls as kill,
-  ce as less,
-  le as ln,
-  yt as local,
-  de as ls,
-  he as make,
-  ge as md5sum,
-  ye as mkdir,
-  we as mv,
-  Ce as nl,
-  $e as nohup,
-  be as od,
-  Ie as paste,
-  je as patch,
-  Te as pkgConfig,
-  Me as printenv,
-  Ae as printf,
-  ke as pwd,
-  Re as read,
-  Oe as readlink,
-  Ct as readonly,
-  De as realpath,
-  Le as return,
-  We as rm,
-  Ue as sed,
-  qe as seq,
-  ze as set,
-  Ge as sha256sum,
-  Be as shift,
-  Je as sleep,
-  Ye as sort,
-  K as source,
-  Ke as stat,
-  Xe as strings,
-  Qe as tail,
-  ts as tar,
-  es as tee,
-  ss as test,
-  At as then,
-  ns as time,
-  rs as timeout,
-  is as touch,
-  as as tr,
-  cs as trap,
-  ds as true,
-  us as type,
-  fs as unalias,
-  gs as uname,
-  ps as unexpand,
-  hs as uniq,
-  vt as unset,
-  It as until,
-  xs as uptime,
-  ys as watch,
-  ws as wc,
-  Cs as which,
-  Et as while,
-  vs as whoami,
-  $s as xargs,
-  Ss as yes
+  tt as getopts,
+  st as grep,
+  nt as head,
+  rt as heredoc,
+  ot as hexdump,
+  at as hostname,
+  ct as id,
+  Re as if,
+  Je as in,
+  lt as install,
+  dt as join,
+  hs as kill,
+  ut as less,
+  ft as let,
+  ft as letCmd,
+  pt as ln,
+  ve as local,
+  ht as ls,
+  yt as make,
+  vt as md5sum,
+  $t as mkdir,
+  bt as mv,
+  St as nl,
+  Et as nohup,
+  It as od,
+  Nt as paste,
+  Mt as patch,
+  kt as pkgConfig,
+  Ot as printenv,
+  Dt as printf,
+  Lt as processSubstitution,
+  Wt as pwd,
+  Ut as read,
+  qt as readlink,
+  $e as readonly,
+  zt as realpath,
+  Ht as return,
+  Gt as rm,
+  Bt as sed,
+  _t as seq,
+  Jt as set,
+  Yt as sha256sum,
+  Vt as shift,
+  Kt as sleep,
+  Xt as sort,
+  V as source,
+  es as stat,
+  ss as strings,
+  rs as tail,
+  os as tar,
+  is as tee,
+  as as test,
+  ke as then,
+  cs as time,
+  ls as timeout,
+  us as touch,
+  fs as tr,
+  ps as trap,
+  ms as true,
+  gs as type,
+  xs as unalias,
+  Cs as uname,
+  ys as unexpand,
+  ws as uniq,
+  be as unset,
+  Te as until,
+  $s as uptime,
+  bs as watch,
+  Ss as wc,
+  Ps as which,
+  Fe as while,
+  Es as whoami,
+  Is as xargs,
+  Ts as yes
 };
