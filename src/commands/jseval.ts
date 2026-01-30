@@ -193,7 +193,285 @@ export const nodeCmd: Command = {
         }
       } catch { /* no node_modules */ }
 
+      // Built-in Node.js module shims (maps to Shiro VFS/shell)
+      function getBuiltinModule(name: string): any | null {
+        switch (name) {
+          case 'path':
+          case 'node:path': return {
+            join: (...parts: string[]) => parts.join('/').replace(/\/+/g, '/'),
+            resolve: (...parts: string[]) => {
+              let p = parts.reduce((a, b) => b.startsWith('/') ? b : a + '/' + b);
+              return ctx.fs.resolvePath(p, ctx.cwd);
+            },
+            dirname: (p: string) => p.substring(0, p.lastIndexOf('/')) || '/',
+            basename: (p: string, ext?: string) => {
+              const base = p.split('/').pop() || '';
+              return ext && base.endsWith(ext) ? base.slice(0, -ext.length) : base;
+            },
+            extname: (p: string) => { const m = p.match(/\.[^./]+$/); return m ? m[0] : ''; },
+            isAbsolute: (p: string) => p.startsWith('/'),
+            normalize: (p: string) => ctx.fs.resolvePath(p, '/'),
+            relative: (from: string, to: string) => {
+              const f = from.split('/').filter(Boolean);
+              const t = to.split('/').filter(Boolean);
+              let i = 0; while (i < f.length && i < t.length && f[i] === t[i]) i++;
+              return [...Array(f.length - i).fill('..'), ...t.slice(i)].join('/') || '.';
+            },
+            sep: '/',
+            delimiter: ':',
+            parse: (p: string) => ({
+              root: p.startsWith('/') ? '/' : '',
+              dir: p.substring(0, p.lastIndexOf('/')),
+              base: p.split('/').pop() || '',
+              ext: (p.match(/\.[^./]+$/) || [''])[0],
+              name: (p.split('/').pop() || '').replace(/\.[^.]+$/, ''),
+            }),
+            format: (obj: any) => (obj.dir ? obj.dir + '/' : '') + (obj.base || obj.name + (obj.ext || '')),
+          };
+          case 'fs':
+          case 'node:fs': {
+            // Synchronous shims that use cached data or throw
+            const fsShim: any = {
+              readFileSync: (p: string, opts?: any) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                const cached = fileCache.get(resolved) ?? fileCache.get(resolved + '.js');
+                if (cached !== undefined) return cached;
+                throw new Error(`ENOENT: no such file or directory, open '${p}'`);
+              },
+              writeFileSync: (p: string, data: string | Uint8Array) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                const strData = typeof data === 'string' ? data : new TextDecoder().decode(data);
+                fileCache.set(resolved, strData);
+                // Queue actual VFS write (fire-and-forget)
+                ctx.fs.writeFile(resolved, strData).catch(() => {});
+              },
+              existsSync: (p: string) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                return fileCache.has(resolved) || fileCache.has(resolved + '.js') || fileCache.has(resolved + '/index.js');
+              },
+              statSync: (p: string) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                // Check if it's a known file or directory prefix
+                const isFile = fileCache.has(resolved);
+                const isDir = [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
+                if (!isFile && !isDir) throw new Error(`ENOENT: no such file or directory, stat '${p}'`);
+                return {
+                  isFile: () => isFile,
+                  isDirectory: () => isDir && !isFile,
+                  isSymbolicLink: () => false,
+                  size: isFile ? (fileCache.get(resolved) || '').length : 0,
+                  mtime: new Date(),
+                };
+              },
+              readdirSync: (p: string) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                const prefix = resolved === '/' ? '/' : resolved + '/';
+                const entries = new Set<string>();
+                for (const key of fileCache.keys()) {
+                  if (key.startsWith(prefix)) {
+                    const rest = key.slice(prefix.length);
+                    const first = rest.split('/')[0];
+                    if (first) entries.add(first);
+                  }
+                }
+                return [...entries].sort();
+              },
+              mkdirSync: (p: string, opts?: any) => {
+                ctx.fs.mkdir(ctx.fs.resolvePath(p, ctx.cwd), opts).catch(() => {});
+              },
+              unlinkSync: (p: string) => {
+                ctx.fs.unlink(ctx.fs.resolvePath(p, ctx.cwd)).catch(() => {});
+              },
+              copyFileSync: (src: string, dst: string) => {
+                const srcRes = ctx.fs.resolvePath(src, ctx.cwd);
+                const dstRes = ctx.fs.resolvePath(dst, ctx.cwd);
+                const cached = fileCache.get(srcRes);
+                if (cached !== undefined) {
+                  fileCache.set(dstRes, cached);
+                  ctx.fs.writeFile(dstRes, cached).catch(() => {});
+                } else {
+                  ctx.fs.readFile(srcRes, 'utf8').then((data: any) => ctx.fs.writeFile(dstRes, data)).catch(() => {});
+                }
+              },
+              renameSync: (oldP: string, newP: string) => {
+                ctx.fs.rename(ctx.fs.resolvePath(oldP, ctx.cwd), ctx.fs.resolvePath(newP, ctx.cwd)).catch(() => {});
+              },
+              // Async promises API
+              promises: {
+                readFile: async (p: string, opts?: any) => {
+                  const encoding = typeof opts === 'string' ? opts : opts?.encoding;
+                  return await ctx.fs.readFile(ctx.fs.resolvePath(p, ctx.cwd), encoding || 'utf8');
+                },
+                writeFile: async (p: string, data: string) => {
+                  await ctx.fs.writeFile(ctx.fs.resolvePath(p, ctx.cwd), data);
+                },
+                readdir: async (p: string) => ctx.fs.readdir(ctx.fs.resolvePath(p, ctx.cwd)),
+                stat: async (p: string) => ctx.fs.stat(ctx.fs.resolvePath(p, ctx.cwd)),
+                mkdir: async (p: string, opts?: any) => ctx.fs.mkdir(ctx.fs.resolvePath(p, ctx.cwd), opts),
+                unlink: async (p: string) => ctx.fs.unlink(ctx.fs.resolvePath(p, ctx.cwd)),
+                access: async (p: string) => {
+                  const exists = await ctx.fs.exists(ctx.fs.resolvePath(p, ctx.cwd));
+                  if (!exists) throw new Error(`ENOENT: no such file or directory, access '${p}'`);
+                },
+              },
+            };
+            return fsShim;
+          }
+          case 'child_process':
+          case 'node:child_process': {
+            // execAsync is the underlying impl — returns a Promise
+            const execAsync = async (cmd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
+              let stdout = '';
+              let stderr = '';
+              const exitCode = await ctx.shell.execute(cmd, (s) => { stdout += s; }, (s) => { stderr += s; });
+              return { stdout, stderr, exitCode };
+            };
+            return {
+              execSync: (cmd: string, opts?: any) => {
+                // In browser, execSync cannot truly block. We return a placeholder
+                // Buffer and queue the actual execution. Works correctly when the
+                // result is used at top-level of an async script (node -e).
+                let result = '';
+                const p = execAsync(cmd).then(r => { result = r.stdout; });
+                // Create a thenable Buffer-like that resolves when awaited
+                const buf: any = {
+                  toString: () => result,
+                  then: (resolve: any, reject: any) => p.then(() => resolve(Buffer.from(result))).catch(reject),
+                  [Symbol.toPrimitive]: () => result,
+                };
+                return buf;
+              },
+              spawnSync: (cmd: string, args?: string[]) => {
+                const fullCmd = args ? `${cmd} ${args.join(' ')}` : cmd;
+                let stdout = '';
+                let stderr = '';
+                let status = 0;
+                execAsync(fullCmd).then(r => { stdout = r.stdout; stderr = r.stderr; status = r.exitCode; });
+                return {
+                  get stdout() { return Buffer.from(stdout); },
+                  get stderr() { return Buffer.from(stderr); },
+                  get status() { return status; },
+                };
+              },
+              exec: (cmd: string, opts: any, cb?: any) => {
+                const callback = typeof opts === 'function' ? opts : cb;
+                execAsync(cmd)
+                  .then(r => callback?.(r.exitCode !== 0 ? new Error(`Exit code ${r.exitCode}`) : null, r.stdout, r.stderr))
+                  .catch(e => callback?.(e, '', ''));
+              },
+              execFile: (file: string, args: string[], opts: any, cb?: any) => {
+                const callback = typeof opts === 'function' ? opts : cb;
+                const cmd = `${file} ${(args || []).join(' ')}`;
+                execAsync(cmd)
+                  .then(r => callback?.(r.exitCode !== 0 ? new Error(`Exit code ${r.exitCode}`) : null, r.stdout, r.stderr))
+                  .catch(e => callback?.(e, '', ''));
+              },
+            };
+          }
+          case 'os':
+          case 'node:os': return {
+            platform: () => 'browser',
+            arch: () => 'wasm',
+            homedir: () => ctx.env['HOME'] || '/home/user',
+            tmpdir: () => '/tmp',
+            hostname: () => 'shiro',
+            type: () => 'Shiro',
+            release: () => '0.1.0',
+            cpus: () => [{ model: 'Browser', speed: 0 }],
+            totalmem: () => 0,
+            freemem: () => 0,
+            EOL: '\n',
+          };
+          case 'util':
+          case 'node:util': return {
+            promisify: (fn: Function) => (...args: any[]) => new Promise((resolve, reject) => {
+              fn(...args, (err: any, result: any) => err ? reject(err) : resolve(result));
+            }),
+            inspect: (obj: any) => JSON.stringify(obj, null, 2),
+            format: (...args: any[]) => args.map(String).join(' '),
+            types: { isDate: (v: any) => v instanceof Date, isRegExp: (v: any) => v instanceof RegExp },
+          };
+          case 'events':
+          case 'node:events': {
+            class EventEmitter {
+              private _events: Record<string, Function[]> = {};
+              on(event: string, fn: Function) { (this._events[event] ??= []).push(fn); return this; }
+              off(event: string, fn: Function) { this._events[event] = (this._events[event] || []).filter(f => f !== fn); return this; }
+              emit(event: string, ...args: any[]) { (this._events[event] || []).forEach(fn => fn(...args)); return true; }
+              once(event: string, fn: Function) {
+                const wrapper = (...args: any[]) => { this.off(event, wrapper); fn(...args); };
+                return this.on(event, wrapper);
+              }
+              removeAllListeners(event?: string) { if (event) delete this._events[event]; else this._events = {}; return this; }
+            }
+            return { EventEmitter, default: EventEmitter };
+          }
+          case 'url':
+          case 'node:url': return {
+            URL: globalThis.URL,
+            URLSearchParams: globalThis.URLSearchParams,
+            parse: (urlStr: string) => new URL(urlStr),
+            format: (urlObj: any) => urlObj.toString ? urlObj.toString() : String(urlObj),
+          };
+          case 'assert':
+          case 'node:assert': {
+            const assert: any = (val: any, msg?: string) => { if (!val) throw new Error(msg || `AssertionError: ${val}`); };
+            assert.ok = assert;
+            assert.equal = (a: any, b: any, msg?: string) => { if (a != b) throw new Error(msg || `AssertionError: ${a} != ${b}`); };
+            assert.strictEqual = (a: any, b: any, msg?: string) => { if (a !== b) throw new Error(msg || `AssertionError: ${a} !== ${b}`); };
+            assert.deepEqual = assert.deepStrictEqual = (a: any, b: any, msg?: string) => {
+              if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(msg || `AssertionError: deep equal failed`);
+            };
+            assert.throws = (fn: Function, msg?: string) => {
+              try { fn(); throw new Error(msg || 'Expected function to throw'); } catch(e: any) { if (e.message === (msg || 'Expected function to throw')) throw e; }
+            };
+            assert.notEqual = (a: any, b: any, msg?: string) => { if (a == b) throw new Error(msg || `AssertionError: ${a} == ${b}`); };
+            return assert;
+          }
+          case 'buffer':
+          case 'node:buffer': return { Buffer: FakeBuffer };
+          case 'stream':
+          case 'node:stream': {
+            // Minimal stream shim — just enough for common usage
+            class Readable {
+              _read() {}
+              pipe(dest: any) { return dest; }
+              on(_event: string, _cb: Function) { return this; }
+            }
+            class Writable {
+              write(_chunk: any) { return true; }
+              end() {}
+              on(_event: string, _cb: Function) { return this; }
+            }
+            return { Readable, Writable };
+          }
+          case 'crypto':
+          case 'node:crypto': return {
+            randomBytes: (n: number) => {
+              const bytes = new Uint8Array(n);
+              crypto.getRandomValues(bytes);
+              return Object.assign(bytes, { toString: (enc: string) => {
+                if (enc === 'hex') return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+                return new TextDecoder().decode(bytes);
+              }});
+            },
+            createHash: (algo: string) => {
+              let data = '';
+              return {
+                update: (d: string) => { data += d; return { digest: (enc: string) => `${algo}:${data.length}` }; },
+              };
+            },
+            randomUUID: () => crypto.randomUUID(),
+          };
+          default: return null;
+        }
+      }
+
       function requireModule(modPath: string, fromDir: string): any {
+        // Check built-in modules first
+        const builtin = getBuiltinModule(modPath);
+        if (builtin !== null) return builtin;
+
         let resolved = modPath;
 
         if (modPath.startsWith('./') || modPath.startsWith('../') || modPath.startsWith('/')) {
@@ -203,22 +481,38 @@ export const nodeCmd: Command = {
             else if (fileCache.has(resolved + '/index.js')) resolved += '/index.js';
           }
         } else {
-          const base = fromDir.startsWith('/') ? fromDir : ctx.cwd;
-          const nmPath = `${base}/node_modules/${modPath}`;
-          const pkgPath = `${nmPath}/package.json`;
+          // Walk up directories to find node_modules (npm resolution)
+          let searchDir = fromDir.startsWith('/') ? fromDir : ctx.cwd;
+          let found = false;
+          while (searchDir) {
+            const nmPath = `${searchDir}/node_modules/${modPath}`;
+            const pkgPath = `${nmPath}/package.json`;
 
-          if (fileCache.has(pkgPath)) {
-            try {
-              const pkg = JSON.parse(fileCache.get(pkgPath)!);
-              let main = pkg.main || 'index.js';
-              main = main.replace(/^\.\//, '');
-              if (!main.endsWith('.js') && !main.endsWith('.json')) main += '.js';
-              resolved = `${nmPath}/${main}`;
-            } catch {
-              resolved = `${nmPath}/index.js`;
+            if (fileCache.has(pkgPath)) {
+              try {
+                const pkg = JSON.parse(fileCache.get(pkgPath)!);
+                let main = pkg.main || 'index.js';
+                main = main.replace(/^\.\//, '');
+                if (!main.endsWith('.js') && !main.endsWith('.json')) main += '.js';
+                resolved = `${nmPath}/${main}`;
+              } catch {
+                resolved = `${nmPath}/index.js`;
+              }
+              found = true;
+              break;
             }
-          } else {
-            resolved = `${nmPath}/index.js`;
+            if (fileCache.has(`${nmPath}/index.js`)) {
+              resolved = `${nmPath}/index.js`;
+              found = true;
+              break;
+            }
+            // Move up one directory
+            const parent = searchDir.substring(0, searchDir.lastIndexOf('/')) || '';
+            if (parent === searchDir || !parent) break;
+            searchDir = parent;
+          }
+          if (!found) {
+            resolved = `${ctx.cwd}/node_modules/${modPath}/index.js`;
           }
         }
 
@@ -247,8 +541,7 @@ export const nodeCmd: Command = {
             content
           );
           wrapped(mod, mod.exports, nestedRequire, resolved, modDir,
-            fakeConsole, fakeProcess, globalThis,
-            { from: (s: string) => new TextEncoder().encode(s) }
+            fakeConsole, fakeProcess, globalThis, FakeBuffer
           );
         } catch (err) {
           moduleCache.delete(resolved);
@@ -258,18 +551,61 @@ export const nodeCmd: Command = {
         return mod.exports;
       }
 
+      // Buffer shim — provides from(), alloc(), isBuffer(), toString()
+      const FakeBuffer = {
+        from: (input: any, encoding?: string): any => {
+          if (typeof input === 'string') {
+            const bytes = new TextEncoder().encode(input);
+            return Object.assign(bytes, {
+              toString: (enc?: string) => input,
+              toJSON: () => ({ type: 'Buffer', data: Array.from(bytes) }),
+            });
+          }
+          if (input instanceof Uint8Array) {
+            return Object.assign(new Uint8Array(input), {
+              toString: (enc?: string) => new TextDecoder().decode(input),
+              toJSON: () => ({ type: 'Buffer', data: Array.from(input) }),
+            });
+          }
+          if (Array.isArray(input)) {
+            const bytes = new Uint8Array(input);
+            return Object.assign(bytes, {
+              toString: (enc?: string) => new TextDecoder().decode(bytes),
+              toJSON: () => ({ type: 'Buffer', data: input }),
+            });
+          }
+          return new Uint8Array(0);
+        },
+        alloc: (size: number) => {
+          const bytes = new Uint8Array(size);
+          return Object.assign(bytes, {
+            toString: () => new TextDecoder().decode(bytes),
+          });
+        },
+        isBuffer: (obj: any) => obj instanceof Uint8Array,
+        concat: (list: Uint8Array[]) => {
+          const total = list.reduce((n, b) => n + b.length, 0);
+          const result = new Uint8Array(total);
+          let offset = 0;
+          for (const buf of list) { result.set(buf, offset); offset += buf.length; }
+          return Object.assign(result, {
+            toString: () => new TextDecoder().decode(result),
+          });
+        },
+      };
+
       const fakeRequire = (moduleName: string) => requireModule(moduleName, ctx.cwd);
 
       const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
       // When printing (-p), wrap in return to capture expression value
       const wrappedCode = printResult ? `return (${code})` : code;
-      const fn = new AsyncFunction('console', 'process', 'require', 'shiro', `
+      const fn = new AsyncFunction('console', 'process', 'require', 'Buffer', 'shiro', `
         ${wrappedCode}
       `);
 
       let result;
       try {
-        result = await fn(fakeConsole, fakeProcess, fakeRequire, {
+        result = await fn(fakeConsole, fakeProcess, fakeRequire, FakeBuffer, {
           fs: ctx.fs,
           shell: ctx.shell,
           env: ctx.env,

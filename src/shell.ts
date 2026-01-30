@@ -48,24 +48,29 @@ export class Shell {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) return 0;
 
+    // Handle heredocs before anything else
+    const heredoc = this.parseHeredoc(trimmed);
+    const effectiveLine = heredoc ? heredoc.command : trimmed;
+    const heredocStdin = heredoc ? heredoc.body : '';
+
     this.history.push(trimmed);
 
     const stderrWriter = writeStderr || writeStdout;
 
     // Check for function definition: name() { ... } or function name { ... }
-    const funcDef = this.parseFunctionDef(trimmed);
+    const funcDef = this.parseFunctionDef(effectiveLine);
     if (funcDef) {
       this.functions[funcDef.name] = { body: funcDef.body };
       return 0;
     }
 
     // Check for control structures (if/while/for/case)
-    if (this.isControlStructure(trimmed)) {
-      return this.execControlStructure(trimmed, writeStdout, stderrWriter);
+    if (this.isControlStructure(effectiveLine)) {
+      return this.execControlStructure(effectiveLine, writeStdout, stderrWriter);
     }
 
     // Split into compound commands: &&, ||, ;
-    const compounds = this.parseCompound(trimmed);
+    const compounds = this.parseCompound(effectiveLine);
     let exitCode = 0;
 
     for (const compound of compounds) {
@@ -107,6 +112,10 @@ export class Shell {
         let stdin = i > 0 ? lastOutput : '';
         for (const redir of redirects) {
           if (redir.type === '<') {
+            if (redir.target === '/dev/null') {
+              stdin = '';
+              continue;
+            }
             const targetPath = this.fs.resolvePath(redir.target, this.cwd);
             try {
               stdin = await this.fs.readFile(targetPath, 'utf8') as string;
@@ -118,6 +127,11 @@ export class Shell {
           }
         }
         if (exitCode !== 0 && i === 0) break;
+
+        // Inject heredoc content as stdin if present and this is the first pipeline segment
+        if (heredocStdin && i === 0 && !stdin) {
+          stdin = heredocStdin;
+        }
 
         const ctx: CommandContext = {
           args: cmdArgs,
@@ -161,13 +175,17 @@ export class Shell {
         // Handle stderr output and redirects
         let stderrOutput = ctx.stderr;
         for (const redir of redirects) {
-          if (redir.type === '2>') {
+          if (redir.type === '2>' || redir.type === '2>>') {
+            if (redir.target === '/dev/null') {
+              stderrOutput = '';
+              continue;
+            }
             const targetPath = this.fs.resolvePath(redir.target, this.cwd);
-            await this.fs.writeFile(targetPath, stderrOutput);
-            stderrOutput = '';
-          } else if (redir.type === '2>>') {
-            const targetPath = this.fs.resolvePath(redir.target, this.cwd);
-            await this.fs.appendFile(targetPath, stderrOutput);
+            if (redir.type === '2>') {
+              await this.fs.writeFile(targetPath, stderrOutput);
+            } else {
+              await this.fs.appendFile(targetPath, stderrOutput);
+            }
             stderrOutput = '';
           }
         }
@@ -186,13 +204,17 @@ export class Shell {
           stderrWriter(stderrOutput.replace(/\n/g, '\r\n'));
         }
         for (const redir of redirects) {
-          if (redir.type === '>') {
+          if (redir.type === '>' || redir.type === '>>') {
+            if (redir.target === '/dev/null') {
+              output = '';
+              continue;
+            }
             const targetPath = this.fs.resolvePath(redir.target, this.cwd);
-            await this.fs.writeFile(targetPath, output);
-            output = '';
-          } else if (redir.type === '>>') {
-            const targetPath = this.fs.resolvePath(redir.target, this.cwd);
-            await this.fs.appendFile(targetPath, output);
+            if (redir.type === '>') {
+              await this.fs.writeFile(targetPath, output);
+            } else {
+              await this.fs.appendFile(targetPath, output);
+            }
             output = '';
           }
         }
@@ -225,6 +247,47 @@ export class Shell {
       return this.env[name] ?? '';
     });
     return result;
+  }
+
+  private parseHeredoc(input: string): { command: string; body: string } | null {
+    // Match <<DELIM, <<'DELIM', <<"DELIM", or <<-DELIM patterns
+    const lines = input.split(/\r?\n/);
+    if (lines.length < 2) return null;
+
+    // Find <<DELIM on the first line (could be anywhere in the command)
+    const heredocMatch = lines[0].match(/<<-?\s*(?:'([^']+)'|"([^"]+)"|(\S+))/);
+    if (!heredocMatch) return null;
+
+    const delimiter = heredocMatch[1] || heredocMatch[2] || heredocMatch[3];
+    const quoted = !!(heredocMatch[1] || heredocMatch[2]);
+    const stripTabs = lines[0].match(/<<-/) !== null;
+
+    // Remove the <<DELIM token from the command line
+    const command = lines[0].replace(/<<-?\s*(?:'[^']+'|"[^"]+"|(\S+))/, '').trim();
+
+    // Collect body lines until we find the delimiter on its own line
+    const bodyLines: string[] = [];
+    let found = false;
+    for (let i = 1; i < lines.length; i++) {
+      const line = stripTabs ? lines[i].replace(/^\t+/, '') : lines[i];
+      if (line.trim() === delimiter) {
+        found = true;
+        break;
+      }
+      bodyLines.push(line);
+    }
+
+    if (!found) return null;
+
+    let body = bodyLines.join('\n');
+    // If delimiter was not quoted, expand variables
+    if (!quoted) {
+      body = this.expandVars(body);
+    }
+    // Add trailing newline (standard heredoc behavior)
+    body += '\n';
+
+    return { command, body };
   }
 
   private parseCompound(line: string): { operator: '' | '&&' | '||' | ';'; command: string }[] {
