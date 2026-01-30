@@ -1,4 +1,5 @@
 import { Command, CommandContext } from './index';
+import { virtualServer, VirtualRequest, VirtualResponse } from '../virtual-server';
 
 /**
  * js-eval: Execute JavaScript in the browser's JS VM.
@@ -517,11 +518,448 @@ export const nodeCmd: Command = {
             },
             randomUUID: () => crypto.randomUUID(),
           };
+          case 'http':
+          case 'node:http':
+          case 'https':
+          case 'node:https': {
+            // HTTP server shim using Shiro's virtual server
+            const createServer = (handler?: (req: any, res: any) => void) => {
+              let requestHandler = handler;
+              let cleanupFn: (() => void) | null = null;
+              let listeningPort: number | null = null;
+
+              const server: any = {
+                _events: {} as Record<string, Function[]>,
+                on(event: string, cb: Function) {
+                  if (event === 'request' && !requestHandler) {
+                    requestHandler = cb as any;
+                  }
+                  (this._events[event] ??= []).push(cb);
+                  return this;
+                },
+                emit(event: string, ...args: any[]) {
+                  (this._events[event] || []).forEach((fn: Function) => fn(...args));
+                },
+                listen(port: number, hostOrCallback?: string | (() => void), callback?: () => void) {
+                  const cb = typeof hostOrCallback === 'function' ? hostOrCallback : callback;
+                  listeningPort = port;
+
+                  // Ensure virtual server is initialized
+                  virtualServer.init().then(() => {
+                    cleanupFn = virtualServer.listen(port, async (vReq: VirtualRequest): Promise<VirtualResponse> => {
+                      return new Promise((resolve) => {
+                        // Build Node-like request object
+                        const req: any = {
+                          method: vReq.method,
+                          url: vReq.path + (Object.keys(vReq.query).length ? '?' + new URLSearchParams(vReq.query).toString() : ''),
+                          headers: vReq.headers,
+                          query: vReq.query,
+                          body: vReq.body,
+                          on(event: string, handler: Function) {
+                            if (event === 'data' && vReq.body) {
+                              setTimeout(() => handler(vReq.body), 0);
+                            }
+                            if (event === 'end') {
+                              setTimeout(() => handler(), 0);
+                            }
+                            return this;
+                          },
+                        };
+
+                        // Build Node-like response object
+                        let statusCode = 200;
+                        let responseHeaders: Record<string, string> = {};
+                        let responseBody = '';
+
+                        const res: any = {
+                          statusCode: 200,
+                          setHeader(name: string, value: string) {
+                            responseHeaders[name.toLowerCase()] = value;
+                          },
+                          getHeader(name: string) {
+                            return responseHeaders[name.toLowerCase()];
+                          },
+                          writeHead(code: number, headers?: Record<string, string>) {
+                            statusCode = code;
+                            if (headers) {
+                              for (const [k, v] of Object.entries(headers)) {
+                                responseHeaders[k.toLowerCase()] = v;
+                              }
+                            }
+                            return this;
+                          },
+                          write(chunk: string) {
+                            responseBody += chunk;
+                            return true;
+                          },
+                          end(data?: string) {
+                            if (data) responseBody += data;
+                            resolve({
+                              status: statusCode,
+                              headers: responseHeaders,
+                              body: responseBody,
+                            });
+                          },
+                          // Express-style helpers
+                          status(code: number) {
+                            statusCode = code;
+                            return this;
+                          },
+                          json(data: any) {
+                            responseHeaders['content-type'] = 'application/json';
+                            this.end(JSON.stringify(data));
+                          },
+                          send(data: any) {
+                            if (typeof data === 'object') {
+                              this.json(data);
+                            } else {
+                              this.end(String(data));
+                            }
+                          },
+                        };
+
+                        // Call the request handler
+                        if (requestHandler) {
+                          try {
+                            requestHandler(req, res);
+                          } catch (err: any) {
+                            resolve({
+                              status: 500,
+                              body: `Server error: ${err.message}`,
+                            });
+                          }
+                        } else {
+                          resolve({ status: 404, body: 'No handler' });
+                        }
+                      });
+                    }, `http:${port}`);
+
+                    const url = virtualServer.getUrl(port);
+                    fakeConsole.log(`Server listening on port ${port}`);
+                    fakeConsole.log(`Access at: ${url}`);
+                    server.emit('listening');
+                    cb?.();
+                  });
+
+                  return this;
+                },
+                close(cb?: () => void) {
+                  if (cleanupFn) {
+                    cleanupFn();
+                    cleanupFn = null;
+                  }
+                  if (listeningPort) {
+                    fakeConsole.log(`Server on port ${listeningPort} closed`);
+                    listeningPort = null;
+                  }
+                  server.emit('close');
+                  cb?.();
+                  return this;
+                },
+                address() {
+                  return listeningPort ? { port: listeningPort, address: '0.0.0.0' } : null;
+                },
+              };
+              return server;
+            };
+
+            return {
+              createServer,
+              Server: function(handler?: any) { return createServer(handler); },
+              request: () => { throw new Error('http.request not implemented - use fetch()'); },
+              get: () => { throw new Error('http.get not implemented - use fetch()'); },
+            };
+          }
           default: return null;
         }
       }
 
+      // Express-like framework shim that uses virtual server
+      function createExpressShim() {
+        const app: any = function(req: any, res: any, next?: any) {
+          // Middleware function - pass through
+          next?.();
+        };
+
+        const middlewares: Array<{ path: string; handler: Function }> = [];
+        const routes: Array<{ method: string; path: string; handlers: Function[] }> = [];
+
+        // Helper to match Express-style paths
+        function matchPath(pattern: string, path: string): Record<string, string> | null {
+          if (pattern === '*' || pattern === '/*') return {};
+
+          const patternParts = pattern.split('/').filter(Boolean);
+          const pathParts = path.split('/').filter(Boolean);
+
+          if (patternParts.length > pathParts.length) return null;
+
+          const params: Record<string, string> = {};
+          for (let i = 0; i < patternParts.length; i++) {
+            const pp = patternParts[i];
+            if (pp.startsWith(':')) {
+              params[pp.slice(1)] = pathParts[i];
+            } else if (pp !== pathParts[i]) {
+              return null;
+            }
+          }
+          return params;
+        }
+
+        // Handle an incoming request
+        app._handleRequest = async (vReq: VirtualRequest): Promise<VirtualResponse> => {
+          return new Promise((resolve) => {
+            let statusCode = 200;
+            let responseHeaders: Record<string, string> = {};
+            let responseBody = '';
+            let ended = false;
+
+            // Parse body if JSON
+            let parsedBody = vReq.body;
+            try {
+              if (vReq.headers['content-type']?.includes('application/json') && vReq.body) {
+                parsedBody = JSON.parse(vReq.body);
+              }
+            } catch {}
+
+            // Build request object
+            const req: any = {
+              method: vReq.method,
+              url: vReq.path,
+              path: vReq.path,
+              headers: vReq.headers,
+              query: vReq.query,
+              body: parsedBody,
+              params: {},
+              get(name: string) { return vReq.headers[name.toLowerCase()]; },
+              on(event: string, handler: Function) {
+                if (event === 'data' && vReq.body) setTimeout(() => handler(vReq.body), 0);
+                if (event === 'end') setTimeout(() => handler(), 0);
+                return this;
+              },
+            };
+
+            // Build response object
+            const res: any = {
+              statusCode: 200,
+              locals: {},
+              setHeader(name: string, value: string) { responseHeaders[name.toLowerCase()] = value; return this; },
+              getHeader(name: string) { return responseHeaders[name.toLowerCase()]; },
+              set(name: string | Record<string, string>, value?: string) {
+                if (typeof name === 'object') {
+                  for (const [k, v] of Object.entries(name)) responseHeaders[k.toLowerCase()] = v;
+                } else {
+                  responseHeaders[name.toLowerCase()] = value!;
+                }
+                return this;
+              },
+              header(name: string, value: string) { return this.set(name, value); },
+              writeHead(code: number, headers?: Record<string, string>) {
+                statusCode = code;
+                if (headers) for (const [k, v] of Object.entries(headers)) responseHeaders[k.toLowerCase()] = v;
+                return this;
+              },
+              status(code: number) { statusCode = code; return this; },
+              sendStatus(code: number) { statusCode = code; this.end(String(code)); },
+              write(chunk: string) { responseBody += chunk; return true; },
+              end(data?: string) {
+                if (ended) return;
+                ended = true;
+                if (data) responseBody += data;
+                resolve({ status: statusCode, headers: responseHeaders, body: responseBody });
+              },
+              json(data: any) {
+                responseHeaders['content-type'] = 'application/json';
+                this.end(JSON.stringify(data));
+              },
+              send(data: any) {
+                if (typeof data === 'object') {
+                  this.json(data);
+                } else {
+                  if (!responseHeaders['content-type']) responseHeaders['content-type'] = 'text/html';
+                  this.end(String(data));
+                }
+              },
+              redirect(urlOrStatus: string | number, url?: string) {
+                const redirectUrl = typeof urlOrStatus === 'string' ? urlOrStatus : url!;
+                statusCode = typeof urlOrStatus === 'number' ? urlOrStatus : 302;
+                responseHeaders['location'] = redirectUrl;
+                this.end();
+              },
+              type(t: string) { responseHeaders['content-type'] = t; return this; },
+              cookie(name: string, value: string, opts?: any) {
+                let cookie = `${name}=${value}`;
+                if (opts?.httpOnly) cookie += '; HttpOnly';
+                if (opts?.secure) cookie += '; Secure';
+                if (opts?.maxAge) cookie += `; Max-Age=${opts.maxAge}`;
+                responseHeaders['set-cookie'] = cookie;
+                return this;
+              },
+              clearCookie(name: string) { return this.cookie(name, '', { maxAge: 0 }); },
+            };
+
+            // Run middleware chain then routes
+            let middlewareIndex = 0;
+            const runNext = () => {
+              // First run global middleware
+              while (middlewareIndex < middlewares.length) {
+                const mw = middlewares[middlewareIndex++];
+                const params = matchPath(mw.path, req.path);
+                if (params !== null) {
+                  req.params = { ...req.params, ...params };
+                  try {
+                    mw.handler(req, res, runNext);
+                    return; // Wait for next() to be called
+                  } catch (err: any) {
+                    resolve({ status: 500, body: `Middleware error: ${err.message}` });
+                    return;
+                  }
+                }
+              }
+
+              // Then match routes
+              for (const route of routes) {
+                if (route.method !== req.method && route.method !== 'ALL') continue;
+                const params = matchPath(route.path, req.path);
+                if (params !== null) {
+                  req.params = { ...req.params, ...params };
+                  // Run route handlers in sequence
+                  let handlerIndex = 0;
+                  const runHandler = () => {
+                    if (handlerIndex < route.handlers.length) {
+                      try {
+                        route.handlers[handlerIndex++](req, res, runHandler);
+                      } catch (err: any) {
+                        resolve({ status: 500, body: `Handler error: ${err.message}` });
+                      }
+                    }
+                  };
+                  runHandler();
+                  return;
+                }
+              }
+
+              // No route matched
+              if (!ended) {
+                resolve({ status: 404, body: `Cannot ${req.method} ${req.path}` });
+              }
+            };
+
+            runNext();
+          });
+        };
+
+        // Middleware registration
+        app.use = (pathOrHandler: string | Function, ...handlers: Function[]) => {
+          const path = typeof pathOrHandler === 'string' ? pathOrHandler : '/';
+          const fns = typeof pathOrHandler === 'function' ? [pathOrHandler, ...handlers] : handlers;
+          for (const fn of fns) {
+            middlewares.push({ path, handler: fn });
+          }
+          return app;
+        };
+
+        // Route methods
+        const addRoute = (method: string) => (path: string, ...handlers: Function[]) => {
+          routes.push({ method, path, handlers });
+          return app;
+        };
+        app.get = addRoute('GET');
+        app.post = addRoute('POST');
+        app.put = addRoute('PUT');
+        app.delete = addRoute('DELETE');
+        app.patch = addRoute('PATCH');
+        app.options = addRoute('OPTIONS');
+        app.head = addRoute('HEAD');
+        app.all = addRoute('ALL');
+
+        // Static file serving
+        app.static = (root: string) => {
+          return async (req: any, res: any, next: Function) => {
+            if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+            const filePath = ctx.fs.resolvePath(root + req.path, ctx.cwd);
+            try {
+              const stat = await ctx.fs.stat(filePath);
+              if (!stat || stat.type !== 'file') return next();
+              const content = await ctx.fs.readFile(filePath, 'utf8');
+              const ext = filePath.split('.').pop() || '';
+              const types: Record<string, string> = {
+                html: 'text/html', css: 'text/css', js: 'application/javascript',
+                json: 'application/json', png: 'image/png', jpg: 'image/jpeg',
+                svg: 'image/svg+xml', txt: 'text/plain',
+              };
+              res.type(types[ext] || 'application/octet-stream');
+              res.send(content);
+            } catch {
+              next();
+            }
+          };
+        };
+
+        // Listen method
+        app.listen = (port: number, hostOrCb?: string | (() => void), cb?: () => void) => {
+          const callback = typeof hostOrCb === 'function' ? hostOrCb : cb;
+
+          virtualServer.init().then(() => {
+            virtualServer.listen(port, app._handleRequest, `express:${port}`);
+            const url = virtualServer.getUrl(port);
+            fakeConsole.log(`Express app listening on port ${port}`);
+            fakeConsole.log(`Access at: ${url}`);
+            callback?.();
+          });
+
+          return { close: () => virtualServer.close(port) };
+        };
+
+        // Settings
+        const settings: Record<string, any> = {};
+        app.set = (key: string, value: any) => { settings[key] = value; return app; };
+        app.get = ((pathOrKey: string, ...handlers: Function[]) => {
+          if (handlers.length === 0 && !pathOrKey.startsWith('/')) {
+            return settings[pathOrKey];
+          }
+          return addRoute('GET')(pathOrKey, ...handlers);
+        }) as any;
+        app.enable = (key: string) => { settings[key] = true; return app; };
+        app.disable = (key: string) => { settings[key] = false; return app; };
+        app.enabled = (key: string) => !!settings[key];
+        app.disabled = (key: string) => !settings[key];
+
+        // Router factory
+        app.Router = () => {
+          const router: any = (req: any, res: any, next: Function) => {
+            // Router as middleware - todo: implement
+            next();
+          };
+          router.routes = [] as typeof routes;
+          router.get = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'GET', path, handlers }); return router; };
+          router.post = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'POST', path, handlers }); return router; };
+          router.put = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'PUT', path, handlers }); return router; };
+          router.delete = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'DELETE', path, handlers }); return router; };
+          router.use = app.use;
+          return router;
+        };
+
+        // Common middleware factories
+        app.json = () => (req: any, res: any, next: Function) => {
+          // Already parsed in _handleRequest
+          next();
+        };
+        app.urlencoded = () => (req: any, res: any, next: Function) => {
+          if (typeof req.body === 'string' && req.headers['content-type']?.includes('urlencoded')) {
+            req.body = Object.fromEntries(new URLSearchParams(req.body));
+          }
+          next();
+        };
+
+        return app;
+      }
+
       function requireModule(modPath: string, fromDir: string): any {
+        // Check for Express shim
+        if (modPath === 'express') {
+          return createExpressShim;
+        }
+
         // Check built-in modules first
         const builtin = getBuiltinModule(modPath);
         if (builtin !== null) return builtin;
