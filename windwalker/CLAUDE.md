@@ -2,16 +2,17 @@
 
 ## What is Windwalker?
 
-Windwalker is a unified test suite for Spirit running on Foam and Shiro browser OS environments. It provides leveled test progression from basic boot tests through complex workflow and self-build tests, runnable via both Puppeteer and skyeyes.
+Windwalker is a unified test suite for Spirit running on Foam and Shiro browser OS environments. It provides leveled test progression from basic boot tests through complex workflow and self-build tests, runnable via **linkedom** (fast, in-process) and **skyeyes** (real browser integration).
 
 ## Project Structure
 
 ```
 tests/
-├── runner.js               # Puppeteer-based test runner
+├── runner-linkedom.js      # Fast linkedom-based test runner (default)
 ├── runner-skyeyes.js       # Skyeyes-based test runner (uses nimbus bridge)
 ├── skyeyes-adapter.js      # Adapter for running tests through skyeyes API
-├── helpers.js              # Shared test utilities
+├── helpers.js              # Shared test utilities (page.evaluate style)
+├── helpers-linkedom.js     # Direct module access helpers
 ├── level-0-boot/           # Basic page load and boot tests
 ├── level-1-filesystem/     # Virtual filesystem operations
 ├── level-2-shell/          # Shell command parsing and execution
@@ -27,22 +28,39 @@ tests/
 ## Common Tasks
 
 ```bash
-npm test                     # Run all tests (default target)
-npm run test:foam            # Run tests against Foam
-npm run test:shiro           # Run tests against Shiro
-npm run test:skyeyes         # Run tests via skyeyes bridge
+npm test                     # Run fast linkedom tests (levels 0-4)
+npm run test:linkedom        # Same as above
+npm run test:skyeyes         # Run all tests via skyeyes (real browser)
 npm run test:skyeyes:foam    # Skyeyes tests targeting Foam
 npm run test:skyeyes:shiro   # Skyeyes tests targeting Shiro
+npm run test:all             # Run both linkedom and skyeyes tests
 ```
 
-Set `OS_TARGET=foam` or `OS_TARGET=shiro` to select the target OS.
+## Test Runner Strategy
+
+| Runner | Startup | Levels | Use Case |
+|--------|---------|--------|----------|
+| **linkedom** | ~10ms | 0-4 | Fast CI, unit tests, VFS/shell logic |
+| **skyeyes** | ~1s | 0-9 | Full integration, real browser APIs |
+
+### linkedom Runner (Default)
+- Imports Foam's VFS/Shell modules directly into Node.js
+- Uses `fake-indexeddb` for VFS storage
+- No browser overhead, tests run in-process
+- Perfect for: filesystem, shell, coreutils, pipes
+
+### skyeyes Runner
+- Uses real browser via nimbus dashboard
+- Required for: git operations, Spirit AI, workflows
+- Tests actual browser behavior and DOM rendering
 
 ## Key Design Decisions
 
-- **Leveled progression** — tests go from basic (level 0) to complex (level 9), each level builds on the previous
-- **Dual runners** — Puppeteer for CI/headless, skyeyes for nimbus-integrated testing
+- **Leveled progression** — tests go from basic (level 0) to complex (level 9)
+- **Dual runners** — linkedom for speed, skyeyes for integration
+- **No Puppeteer** — removed in favor of lighter alternatives
 - **OS-agnostic** — same tests run against both Foam and Shiro
-- **Plain JavaScript** — no build step, Node.js scripts
+- **Plain JavaScript** — no build step, Node.js ES modules
 
 ## Cross-Project Integration
 
@@ -59,48 +77,15 @@ You have skyeyes MCP tools for browser interaction (see `~/.claude/CLAUDE.md` fo
 - `shiro-windwalker` — your shiro iframe
 - `foam-windwalker` — your foam iframe
 
-## Fast Headless Testing with linkedom
+## Dependencies
 
-For rapid unit testing without browser overhead, consider using **linkedom** - a fast DOM implementation for Node.js.
-
-### Why linkedom?
-
-| Approach | Startup | DOM Fidelity | Use Case |
-|----------|---------|--------------|----------|
-| Puppeteer | ~2s | Full browser | E2E, visual, real browser APIs |
-| Skyeyes | ~1s | Full browser | Integration with nimbus dashboard |
-| **linkedom** | ~10ms | Synthetic DOM | Fast unit tests, CI, DOM manipulation |
-
-### Usage Pattern
-
-```javascript
-const { parseHTML } = require('linkedom');
-
-// Parse HTML into a fast synthetic DOM
-const { document, window } = parseHTML(`
-  <!DOCTYPE html>
-  <html><body><div id="app"></div></body></html>
-`);
-
-// Test DOM operations directly
-document.querySelector('#app').innerHTML = '<span>test</span>';
-assert(document.querySelector('span').textContent === 'test');
+```json
+{
+  "dependencies": {
+    "linkedom": "^0.18.0",
+    "fake-indexeddb": "^6.0.0"
+  }
+}
 ```
 
-### Potential for Windwalker
-
-linkedom could enable a third test runner (`runner-linkedom.js`) for:
-- **Level 0-4 tests**: Boot, filesystem, shell, coreutils, pipes (no real browser needed)
-- **CI speed**: Run hundreds of DOM tests in seconds
-- **Hypercompact testing**: The `hc` DSL works with any Document object
-
-See also: [hypercompact](https://github.com/williamsharkey/hypercompact) - uses linkedom for token-efficient DOM navigation testing.
-
-### Limitations
-
-linkedom is NOT a full browser:
-- No `fetch`, `WebSocket`, `IndexedDB` (need polyfills)
-- No CSS rendering or layout
-- No JavaScript execution context (no `<script>` tags)
-
-For tests requiring real browser APIs, continue using Puppeteer or skyeyes.
+No puppeteer, no heavy browser binaries. Fast and lightweight.

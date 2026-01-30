@@ -4,15 +4,16 @@
   "description": "Unified test suite for Spirit on Foam and Shiro cloud OS environments",
   "type": "module",
   "scripts": {
-    "test": "node tests/runner.js",
-    "test:foam": "OS_TARGET=foam node tests/runner.js",
-    "test:shiro": "OS_TARGET=shiro node tests/runner.js",
+    "test": "node tests/runner-linkedom.js",
+    "test:linkedom": "node tests/runner-linkedom.js",
     "test:skyeyes": "node tests/runner-skyeyes.js",
     "test:skyeyes:foam": "OS_TARGET=foam node tests/runner-skyeyes.js",
-    "test:skyeyes:shiro": "OS_TARGET=shiro node tests/runner-skyeyes.js"
+    "test:skyeyes:shiro": "OS_TARGET=shiro node tests/runner-skyeyes.js",
+    "test:all": "node tests/runner-linkedom.js && node tests/runner-skyeyes.js"
   },
-  "devDependencies": {
-    "puppeteer": "^24.0.0"
+  "dependencies": {
+    "linkedom": "^0.18.0",
+    "fake-indexeddb": "^6.0.0"
   },
   "license": "MIT"
 }
