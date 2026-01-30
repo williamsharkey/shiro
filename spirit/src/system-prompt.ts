@@ -76,7 +76,7 @@ function buildDevEnvironmentSection(caps?: DevCapabilities): string {
     lines.push(`- **Build tools**: ${caps.buildTools.join(", ")}`);
   }
   if (caps.git) {
-    lines.push("- **Git**: available (init, clone, commit, branch, push, pull)");
+    lines.push("- **Git**: available (init, add, commit, status, log, diff, branch, checkout, clone)");
   }
   if (caps.fsRoots.length) {
     lines.push(`- **Filesystem roots**: ${caps.fsRoots.join(", ")}`);

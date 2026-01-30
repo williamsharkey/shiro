@@ -68,6 +68,7 @@ interface ShiroShell {
 
 interface ShiroTerminal {
   writeOutput(text: string): void;
+  waitForUserInput(): Promise<string>;
 }
 
 export class ShiroProvider implements OSProvider {
@@ -204,14 +205,13 @@ export class ShiroProvider implements OSProvider {
 
   readFromUser(prompt: string): Promise<string> {
     this.terminal.writeOutput(prompt + " ");
-    return new Promise<string>((resolve) => {
-      this.userInputResolver = resolve;
-    });
+    return this.terminal.waitForUserInput();
   }
 
   /**
    * Call this from the terminal's input handler when the user
    * submits a line while Spirit is waiting for input.
+   * @deprecated Use terminal.waitForUserInput() directly — kept for API compat.
    */
   resolveUserInput(input: string): void {
     if (this.userInputResolver) {
