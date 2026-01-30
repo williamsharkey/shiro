@@ -12,7 +12,7 @@
  *   - readdir() returns full inode objects (not just names)
  *   - Shell.exec() returns {stdout, stderr, exitCode} directly
  *   - Terminal is plain HTML (not xterm.js)
- *   - glob() returns absolute paths (we strip the base prefix)
+ *   - glob() returns relative paths from basePath
  */
 
 import type {
@@ -26,6 +26,7 @@ import type {
 // Minimal type shapes for Foam objects (avoids import coupling)
 
 interface FoamInode {
+  name: string;
   path: string;
   type: "file" | "dir";
   mode: number;
@@ -52,6 +53,7 @@ interface FoamVFS {
   unlink(path: string): Promise<void>;
   rename(oldPath: string, newPath: string): Promise<void>;
   rmdir(path: string, options?: { recursive?: boolean }): Promise<void>;
+  chdir(path: string): string;
   glob(pattern: string, basePath?: string): Promise<string[]>;
   resolvePath(path: string): string;
 }
@@ -105,7 +107,7 @@ export class FoamProvider implements OSProvider {
     const resolved = this.resolvePath(path);
     const inodes = await this.vfs.readdir(resolved);
     return inodes.map((inode) => ({
-      name: inode.path.split("/").pop()!,
+      name: inode.name,
       path: inode.path,
       type: inode.type as "file" | "dir" | "symlink",
       size: inode.size,
@@ -152,8 +154,7 @@ export class FoamProvider implements OSProvider {
   }
 
   setCwd(path: string): void {
-    this.vfs.cwd = this.resolvePath(path);
-    this.vfs.env.PWD = this.vfs.cwd;
+    this.vfs.chdir(path);
   }
 
   getEnv(): Record<string, string> {
@@ -164,12 +165,7 @@ export class FoamProvider implements OSProvider {
 
   async glob(pattern: string, base?: string): Promise<string[]> {
     const basePath = base ?? this.vfs.cwd;
-    const results = await this.vfs.glob(pattern, basePath);
-    // Foam returns absolute paths — strip base prefix for consistency
-    const prefix = basePath === "/" ? "/" : basePath + "/";
-    return results.map((p) =>
-      p.startsWith(prefix) ? p.slice(prefix.length) : p
-    );
+    return this.vfs.glob(pattern, basePath);
   }
 
   // -- Shell --
