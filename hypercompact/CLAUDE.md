@@ -360,3 +360,88 @@ class=item data-id=123
 **Every command returns terse output.** No JSON, no verbose confirmations. Just the data you need.
 
 Token savings: **99%+** vs reading full HTML.
+
+---
+
+## Integration with Foam/Shiro (Browser OS)
+
+Hypercompact is being integrated into the nimbus-land ecosystem to provide token-efficient DOM navigation across multiple contexts.
+
+### The Philosophy: "One DSL, Many Contexts"
+
+The same HC command syntax works regardless of:
+- Where the AI runs (external Claude Code, or inside Foam/Shiro)
+- What DOM it navigates (external HTML file, live page, iframe)
+- How it got there (skyeyes, shell command, JS API)
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     NAVIGATION CONTEXTS                              │
+├─────────────────────────────────────────────────────────────────────┤
+│  CONTEXT A: External AI → Browser (via skyeyes)                     │
+│  CONTEXT B: AI inside browser → External HTML file (detached DOM)   │
+│  CONTEXT C: AI inside browser → Same page DOM (dangerous!)          │
+│  CONTEXT D: AI inside browser → iframe/sandbox (isolated)           │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Target Architecture
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│                    APPLICATION LAYER                           │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
+│  │   Skyeyes   │  │ Foam Shell  │  │ Shiro Shell │            │
+│  │  (remote)   │  │  (local)    │  │  (local)    │            │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘            │
+└─────────┼────────────────┼────────────────┼───────────────────┘
+          │                │                │
+          ▼                ▼                ▼
+┌───────────────────────────────────────────────────────────────┐
+│                    HYPERCOMPACT LAYER                          │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │  hc/core.js - Context-agnostic DSL implementation       │  │
+│  │  • Command parser (s, t, q, n, look, @, etc.)           │  │
+│  │  • Session state (current element, results, vars)       │  │
+│  │  • Works with any Document object                       │  │
+│  └─────────────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────────────┘
+          │                │                │
+          ▼                ▼                ▼
+┌───────────────────────────────────────────────────────────────┐
+│                      DOM LAYER                                 │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
+│  │  linkedom   │  │  DOMParser  │  │   Native    │            │
+│  │  (Node.js)  │  │  (browser)  │  │  (browser)  │            │
+│  │             │  │  for files  │  │  live DOM   │            │
+│  └─────────────┘  └─────────────┘  └─────────────┘            │
+└───────────────────────────────────────────────────────────────┘
+```
+
+### Shell Command Interface (Target)
+
+```bash
+# In Foam/Shiro shell:
+hc open /home/user/page.html    # Parse file into detached DOM
+hc q .price                      # Query prices
+hc n0                            # Select first result
+hc a                             # Get attributes
+
+hc live                          # Attach to live page DOM (careful!)
+hc iframe #preview               # Attach to iframe
+```
+
+### Related Repos
+
+- **nimbus** - Orchestrator, see issue #6 for full RFC
+- **foam** - Browser OS (plain JS) - will get `hc` command
+- **shiro** - Browser OS (TypeScript) - will get `hc` command
+- **fluffycoreutils** - Shared Unix commands, may consume HC
+- **skyeyes** - Remote JS execution bridge
+
+### Implementation Phases
+
+1. **Phase 1**: Extract core.js - context-agnostic HC implementation
+2. **Phase 2**: Add `hc` command to Foam/Shiro shells
+3. **Phase 3**: Skyeyes bridge (`__hc` global)
+4. **Phase 4**: Documentation unification
