@@ -1286,10 +1286,12 @@ export const nodeCmd: Command = {
         const nestedRequire = (p: string) => requireModule(p, modDir);
 
         try {
+          // Transform ES module syntax to CommonJS
+          const transformedContent = transformESModules(content);
           const wrapped = new Function(
             'module', 'exports', 'require', '__filename', '__dirname',
             'console', 'process', 'global', 'Buffer',
-            content
+            transformedContent
           );
           wrapped(mod, mod.exports, nestedRequire, resolved, modDir,
             fakeConsole, fakeProcess, globalThis, FakeBuffer
@@ -1304,9 +1306,41 @@ export const nodeCmd: Command = {
 
       const fakeRequire = (moduleName: string) => requireModule(moduleName, ctx.cwd);
 
+      // Transform ES module syntax to CommonJS
+      function transformESModules(src: string): string {
+        // import x from 'y' → const x = require('y')
+        src = src.replace(/import\s+(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?/g,
+          'const $1 = require("$2");');
+
+        // import { a, b } from 'y' → const { a, b } = require('y')
+        src = src.replace(/import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]\s*;?/g,
+          'const {$1} = require("$2");');
+
+        // import * as x from 'y' → const x = require('y')
+        src = src.replace(/import\s+\*\s+as\s+(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?/g,
+          'const $1 = require("$2");');
+
+        // import 'y' → require('y')
+        src = src.replace(/import\s+['"]([^'"]+)['"]\s*;?/g,
+          'require("$1");');
+
+        // export default x → module.exports = x
+        src = src.replace(/export\s+default\s+/g, 'module.exports = ');
+
+        // export { x, y } → module.exports = { x, y }
+        src = src.replace(/export\s+\{([^}]+)\}\s*;?/g, 'module.exports = {$1};');
+
+        // export const x = ... → const x = ...; module.exports.x = x;
+        src = src.replace(/export\s+(const|let|var)\s+(\w+)\s*=/g,
+          '$1 $2 =');
+
+        return src;
+      }
+
       const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-      // When printing (-p), wrap in return to capture expression value
-      const wrappedCode = printResult ? `return (${code})` : code;
+      // Transform ES modules and wrap for execution
+      const transformedCode = transformESModules(code);
+      const wrappedCode = printResult ? `return (${transformedCode})` : transformedCode;
       const fn = new AsyncFunction('console', 'process', 'require', 'Buffer', 'shiro', `
         ${wrappedCode}
       `);
