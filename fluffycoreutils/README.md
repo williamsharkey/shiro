@@ -2,12 +2,12 @@
 
 **Shared Unix coreutils for browser-based virtual operating systems**
 
-A TypeScript library providing 114+ essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
+A TypeScript library providing 116+ essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
 
 ## ✨ Features
 
 - 🌐 **Browser-Native**: Pure TypeScript implementation with no Node.js dependencies
-- 🔧 **114+ Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `make`
+- 🔧 **116+ Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `make`
 - 🎯 **Filesystem Agnostic**: Works with any virtual filesystem implementing the `FluffyFS` interface
 - 📦 **Tree-Shakeable**: Import only the commands you need
 - 🔒 **Type-Safe**: Full TypeScript definitions included
@@ -55,7 +55,7 @@ const shell = Object.fromEntries(
 - **file** - Determine file type
 
 ### Text Processing
-- **awk** - Pattern scanning and text processing (with -F field separator, -v variables)
+- **awk** - Pattern scanning and text processing (with -F field separator, -v variables, BEGIN/END blocks, field extraction with $1, $2, $NF, NR, NF)
 - **grep** - Search text using patterns
 - **sed** - Stream editor
 - **cut** - Cut out selected portions of lines (-d delimiter, -f fields)
@@ -105,6 +105,8 @@ const shell = Object.fromEntries(
 - **sleep** - Delay for specified time
 - **time** - Measure command execution time
 - **timeout** - Run command with time limit
+- **nohup** - Run command immune to hangups (writes to nohup.out)
+- **watch** - Execute a program periodically (stub for shell-level implementation)
 - **yes** - Output string repeatedly
 - **expand** - Convert tabs to spaces
 - **unexpand** - Convert spaces to tabs
@@ -145,7 +147,7 @@ const shell = Object.fromEntries(
 - **pkg-config** - Return metainformation about installed libraries (stub with common packages)
 
 ### Build & Package Tools
-- **make** - Build automation with basic Makefile support
+- **make** - Build automation with Makefile parsing (supports targets, prerequisites, dependencies, -f, -C, -n flags)
 - **patch** - Apply unified diff patches to files
 - **install** - Copy files and set attributes
 - **base64** - Encode/decode Base64 data

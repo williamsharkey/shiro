@@ -28,7 +28,7 @@ function y(n, t = []) {
   }
   return { flags: e, values: s, positional: o };
 }
-async function F(n, t, e, s, o) {
+async function N(n, t, e, s, o) {
   if (n.length === 0)
     return { content: t, files: [] };
   const r = [], a = [];
@@ -74,7 +74,7 @@ const X = {
       l.length === 2 && (c[l[0]] = l[1]);
     }
     try {
-      const { content: l } = await F(
+      const { content: l } = await N(
         r,
         t.stdin,
         t.fs,
@@ -154,7 +154,7 @@ const Q = {
   async exec(n, t) {
     const { flags: e, positional: s } = y(n), o = e.d || e.decode, r = e.w ? parseInt(e.w) : 76, a = e.i || e["ignore-garbage"];
     try {
-      const { content: i } = await F(
+      const { content: i } = await N(
         s,
         t.stdin,
         t.fs,
@@ -256,7 +256,7 @@ Usage: case WORD in PATTERN) COMMANDS ;; esac
   async exec(n, t) {
     const { flags: e, positional: s } = y(n);
     try {
-      const { content: o } = await F(
+      const { content: o } = await N(
         s,
         t.stdin,
         t.fs,
@@ -496,7 +496,7 @@ collect2: error: ld returned 1 exit status
   async exec(n, t) {
     const { flags: e, values: s, positional: o } = y(n, ["t", "s", "c", "x", "n"]);
     try {
-      const { content: r } = await F(
+      const { content: r } = await N(
         o,
         t.stdin,
         t.fs,
@@ -758,7 +758,7 @@ collect2: error: ld returned 1 exit status
       return { stdout: "", stderr: `cut: you must specify -f or -c
 `, exitCode: 1 };
     try {
-      const { content: i } = await F(
+      const { content: i } = await N(
         s,
         t.stdin,
         t.fs,
@@ -978,35 +978,35 @@ const yt = {
             continue;
           }
           const P = Math.max(0, $ - 1);
-          let I = $;
-          for (; I < b.length; ) {
-            const E = b[I];
-            if (E.type !== "equal")
-              I++;
-            else if (E.lines.length <= i * 2)
-              I++;
+          let E = $;
+          for (; E < b.length; ) {
+            const I = b[E];
+            if (I.type !== "equal")
+              E++;
+            else if (I.lines.length <= i * 2)
+              E++;
             else
               break;
           }
           const j = (((p = b[P]) == null ? void 0 : p.line1) ?? 0) + 1, R = (((f = b[P]) == null ? void 0 : f.line2) ?? 0) + 1;
           let T = 0, M = 0;
-          for (let E = P; E < I; E++)
-            (b[E].type === "equal" || b[E].type === "delete") && (T += b[E].lines.length), (b[E].type === "equal" || b[E].type === "add") && (M += b[E].lines.length);
+          for (let I = P; I < E; I++)
+            (b[I].type === "equal" || b[I].type === "delete") && (T += b[I].lines.length), (b[I].type === "equal" || b[I].type === "add") && (M += b[I].lines.length);
           C.push(`@@ -${j},${T} +${R},${M} @@`);
-          for (let E = P; E < I; E++) {
-            const N = b[E];
-            N.type === "equal" ? N.lines.forEach((k) => C.push(` ${k}`)) : N.type === "delete" ? N.lines.forEach((k) => C.push(`-${k}`)) : N.type === "add" && N.lines.forEach((k) => C.push(`+${k}`));
+          for (let I = P; I < E; I++) {
+            const F = b[I];
+            F.type === "equal" ? F.lines.forEach((k) => C.push(` ${k}`)) : F.type === "delete" ? F.lines.forEach((k) => C.push(`-${k}`)) : F.type === "add" && F.lines.forEach((k) => C.push(`+${k}`));
           }
-          $ = I;
+          $ = E;
         }
       } else if (d)
         for (const S of b)
           S.type === "equal" ? S.lines.forEach((P) => {
-            const I = P.substring(0, 40).padEnd(40);
-            C.push(`${I} | ${P}`);
+            const E = P.substring(0, 40).padEnd(40);
+            C.push(`${E} | ${P}`);
           }) : S.type === "delete" ? S.lines.forEach((P) => {
-            const I = P.substring(0, 40).padEnd(40);
-            C.push(`${I} <`);
+            const E = P.substring(0, 40).padEnd(40);
+            C.push(`${E} <`);
           }) : S.type === "add" && S.lines.forEach((P) => {
             C.push(`${" ".repeat(40)} > ${P}`);
           });
@@ -1014,7 +1014,7 @@ const yt = {
         for (const $ of b) {
           if ($.type === "equal") continue;
           const S = ($.line1 ?? 0) + 1, P = ($.line2 ?? 0) + 1;
-          $.type === "delete" ? (C.push(`${S},${S + $.lines.length - 1}d${P - 1}`), $.lines.forEach((I) => C.push(`< ${I}`))) : $.type === "add" && (C.push(`${S - 1}a${P},${P + $.lines.length - 1}`), $.lines.forEach((I) => C.push(`> ${I}`)));
+          $.type === "delete" ? (C.push(`${S},${S + $.lines.length - 1}d${P - 1}`), $.lines.forEach((E) => C.push(`< ${E}`))) : $.type === "add" && (C.push(`${S - 1}a${P},${P + $.lines.length - 1}`), $.lines.forEach((E) => C.push(`> ${E}`)));
         }
       return { stdout: C.join(`
 `) + (C.length > 0 ? `
@@ -1050,7 +1050,7 @@ const Pt = {
     return { stdout: (e === -1 ? "." : e === 0 ? "/" : t.slice(0, e)) + `
 `, stderr: "", exitCode: 0 };
   }
-}, It = {
+}, Et = {
   name: "while",
   description: "Loop while condition is true (shell language construct)",
   async exec(n, t) {
@@ -1062,7 +1062,7 @@ Usage: while CONDITION; do COMMANDS; done
       exitCode: 2
     };
   }
-}, Et = {
+}, It = {
   name: "until",
   description: "Loop until condition is true (shell language construct)",
   async exec(n, t) {
@@ -1085,7 +1085,7 @@ Usage: until CONDITION; do COMMANDS; done
       exitCode: 2
     };
   }
-}, Nt = {
+}, Ft = {
   name: "done",
   description: "End loop (shell language construct)",
   async exec(n, t) {
@@ -1096,7 +1096,7 @@ Usage: until CONDITION; do COMMANDS; done
       exitCode: 2
     };
   }
-}, Ft = {
+}, Nt = {
   name: "du",
   description: "Estimate file space usage",
   async exec(n, t) {
@@ -1266,7 +1266,7 @@ Usage: if CONDITION; then COMMANDS; [elif CONDITION; then COMMANDS;] [else COMMA
       };
     const i = o.i || o.initial;
     try {
-      const { content: c } = await F(
+      const { content: c } = await N(
         s,
         t.stdin,
         t.fs,
@@ -1640,21 +1640,21 @@ const Kt = {
       v = new RegExp($);
     }
     async function b($, S, P) {
-      let I;
+      let E;
       try {
-        I = await t.fs.readdir($);
+        E = await t.fs.readdir($);
       } catch {
         return;
       }
-      for (const j of I) {
-        const R = $ + "/" + j.name, T = S ? S + "/" + j.name : j.name, M = r === "." ? "./" + T : r + "/" + T, E = P + 1;
-        let N = !0;
-        if (!(E > u)) {
-          if (E < d && (N = !1), x && !x.test(j.name) && (N = !1), w && !w.test(j.name) && (N = !1), v && !v.test(M) && (N = !1), l === "f" && j.type !== "file" && (N = !1), l === "d" && j.type !== "dir" && (N = !1), N && (f && m.push(M), p)) {
+      for (const j of E) {
+        const R = $ + "/" + j.name, T = S ? S + "/" + j.name : j.name, M = r === "." ? "./" + T : r + "/" + T, I = P + 1;
+        let F = !0;
+        if (!(I > u)) {
+          if (I < d && (F = !1), x && !x.test(j.name) && (F = !1), w && !w.test(j.name) && (F = !1), v && !v.test(M) && (F = !1), l === "f" && j.type !== "file" && (F = !1), l === "d" && j.type !== "dir" && (F = !1), F && (f && m.push(M), p)) {
             const k = p.replace(/\{\}/g, M);
             g.push(`Executing: ${k}`);
           }
-          j.type === "dir" && E < u && await b(R, T, E);
+          j.type === "dir" && I < u && await b(R, T, I);
         }
       }
     }
@@ -1681,7 +1681,7 @@ const Kt = {
         exitCode: 1
       };
     try {
-      const { content: i } = await F(
+      const { content: i } = await N(
         s,
         t.stdin,
         t.fs,
@@ -1745,7 +1745,7 @@ const Xt = {
         exitCode: 1
       };
     try {
-      const { content: i } = await F(
+      const { content: i } = await N(
         s,
         t.stdin,
         t.fs,
@@ -1906,13 +1906,13 @@ const Xt = {
       const P = S.split(`
 `);
       P.length > 0 && P[P.length - 1] === "" && P.pop();
-      let I = 0;
+      let E = 0;
       for (let j = 0; j < P.length; j++)
-        if (f.test(P[j]) !== a && (x = !0, I++, !i && !c)) {
+        if (f.test(P[j]) !== a && (x = !0, E++, !i && !c)) {
           const T = m ? `${$}:` : "", M = l ? `${j + 1}:` : "";
           g.push(`${T}${M}${P[j]}`);
         }
-      i && g.push(m ? `${$}:${I}` : String(I)), c && I > 0 && g.push($);
+      i && g.push(m ? `${$}:${E}` : String(E)), c && E > 0 && g.push($);
     }
     async function v(C) {
       const $ = t.fs.resolvePath(C, t.cwd);
@@ -1923,8 +1923,8 @@ const Xt = {
         return;
       }
       for (const P of S) {
-        const I = $ + "/" + P.name;
-        P.type === "dir" ? await v(I) : await w(I, I);
+        const E = $ + "/" + P.name;
+        P.type === "dir" ? await v(E) : await w(E, E);
       }
     }
     for (const C of h)
@@ -1951,7 +1951,7 @@ const Xt = {
   async exec(n, t) {
     const { values: e, positional: s } = y(n, ["n"]), o = parseInt(e.n ?? "10", 10);
     try {
-      const { content: r } = await F(
+      const { content: r } = await N(
         s,
         t.stdin,
         t.fs,
@@ -1973,7 +1973,7 @@ const Xt = {
   async exec(n, t) {
     const { values: e, positional: s, flags: o } = y(n, ["n", "s", "C"]), r = o.C, a = e.n ? parseInt(e.n) : void 0, i = e.s ? parseInt(e.s) : 0;
     try {
-      const { content: c } = await F(
+      const { content: c } = await N(
         s,
         t.stdin,
         t.fs,
@@ -2150,15 +2150,15 @@ const re = {
       const b = [];
       for (const C of x) {
         const $ = (C[r] || "").trim(), S = l ? $.toLowerCase() : $, P = v.get(S) || [];
-        for (const I of P) {
+        for (const E of P) {
           let j;
           if (c)
             j = c.split(",").map((T) => {
-              const [M, E] = T.split(".").map((k) => parseInt(k));
-              return (M === 1 ? C : I)[E - 1] || "";
+              const [M, I] = T.split(".").map((k) => parseInt(k));
+              return (M === 1 ? C : E)[I - 1] || "";
             }).join(" ");
           else {
-            const R = C[r] || "", T = C.filter((E, N) => N !== r), M = I.filter((E, N) => N !== a);
+            const R = C[r] || "", T = C.filter((I, F) => F !== r), M = E.filter((I, F) => F !== a);
             j = [R, ...T, ...M].join(" ");
           }
           b.push(j);
@@ -2186,7 +2186,7 @@ const re = {
   async exec(n, t) {
     const { flags: e, positional: s } = y(n);
     try {
-      const { content: o } = await F(
+      const { content: o } = await N(
         s,
         t.stdin,
         t.fs,
@@ -2469,7 +2469,7 @@ const ye = {
     o.p;
     const u = o.ba;
     try {
-      const { content: d } = await F(
+      const { content: d } = await N(
         s,
         t.stdin,
         t.fs,
@@ -2539,12 +2539,49 @@ function ve(n, t, e) {
   }
 }
 const $e = {
+  name: "nohup",
+  description: "Run a command immune to hangups",
+  async exec(n, t) {
+    if (n.length === 0)
+      return {
+        stdout: "",
+        stderr: `nohup: missing operand
+Try 'nohup --help' for more information.
+`,
+        exitCode: 125
+      };
+    const e = n[0], s = n.slice(1), o = `nohup: ignoring input and appending output to 'nohup.out'
+`;
+    try {
+      const r = t.fs.resolvePath("nohup.out", t.cwd), i = `[${(/* @__PURE__ */ new Date()).toISOString()}] Command: ${e} ${s.join(" ")}
+`;
+      let c = "";
+      try {
+        c = await t.fs.readFile(r);
+      } catch {
+      }
+      await t.fs.writeFile(r, c + i);
+    } catch (r) {
+      return {
+        stdout: "",
+        stderr: `nohup: cannot create nohup.out: ${r.message}
+`,
+        exitCode: 125
+      };
+    }
+    return {
+      stdout: "",
+      stderr: o,
+      exitCode: 0
+    };
+  }
+}, be = {
   name: "od",
   description: "Dump files in octal and other formats",
   async exec(n, t) {
     const { values: e, positional: s, flags: o } = y(n, ["t", "N", "j", "w", "A"]), r = e.t || "o2", a = e.N ? parseInt(e.N) : void 0, i = e.j ? parseInt(e.j) : 0, c = e.w ? parseInt(e.w) : 16, l = e.A || "o", u = o.b || o.c || o.d || o.o || o.s || o.x;
     try {
-      const { content: d } = await F(
+      const { content: d } = await N(
         s,
         t.stdin,
         t.fs,
@@ -2557,7 +2594,7 @@ const $e = {
       u ? o.b ? (h = "o", m = 1) : o.c ? (h = "c", m = 1) : o.d || o.s ? (h = "d", m = 2) : o.o ? (h = "o", m = 2) : o.x && (h = "x", m = 2) : r && (h = r[0] || "o", m = parseInt(r.substring(1)) || 2);
       let g = i;
       for (let x = 0; x < p.length; x += c) {
-        const w = p.substring(x, x + c), v = G(g, l), b = be(w, h, m);
+        const w = p.substring(x, x + c), v = G(g, l), b = Se(w, h, m);
         f.push(`${v} ${b}`), g += w.length;
       }
       return l !== "n" && f.push(G(g, l)), {
@@ -2591,7 +2628,7 @@ function G(n, t) {
       return n.toString(8).padStart(7, "0");
   }
 }
-function be(n, t, e) {
+function Se(n, t, e) {
   const s = [];
   for (let o = 0; o < n.length; o += e) {
     const r = n.substring(o, o + e);
@@ -2609,10 +2646,10 @@ function be(n, t, e) {
         s.push(a.toString(10).padStart(e * 3, " "));
         break;
       case "c":
-        s.push(Se(r.charCodeAt(0)));
+        s.push(Pe(r.charCodeAt(0)));
         break;
       case "a":
-        s.push(Pe(r.charCodeAt(0)));
+        s.push(Ee(r.charCodeAt(0)));
         break;
       default:
         s.push(a.toString(8).padStart(e * 3, "0"));
@@ -2620,10 +2657,10 @@ function be(n, t, e) {
   }
   return s.join(" ");
 }
-function Se(n) {
+function Pe(n) {
   return n >= 32 && n < 127 ? `  ${String.fromCharCode(n)}` : n === 0 ? " \\0" : n === 7 ? " \\a" : n === 8 ? " \\b" : n === 9 ? " \\t" : n === 10 ? " \\n" : n === 11 ? " \\v" : n === 12 ? " \\f" : n === 13 ? " \\r" : n.toString(8).padStart(3, "0");
 }
-function Pe(n) {
+function Ee(n) {
   return {
     0: "nul",
     7: "bel",
@@ -2691,7 +2728,7 @@ const Ie = {
       };
     }
   }
-}, Ee = {
+}, je = {
   name: "patch",
   description: "Apply a diff file to an original",
   async exec(n, t) {
@@ -2706,7 +2743,7 @@ const Ie = {
         u = await t.fs.readFile(f);
       } else
         u = t.stdin;
-      const d = je(u), p = [];
+      const d = Fe(u), p = [];
       for (const f of d) {
         const h = H(f.newFile, r), m = H(f.oldFile, r);
         if (p.push(`patching file ${h}`), !l) {
@@ -2744,7 +2781,7 @@ const Ie = {
     }
   }
 };
-function je(n) {
+function Fe(n) {
   const t = [], e = n.split(`
 `);
   let s = null, o = null;
@@ -2787,7 +2824,7 @@ function Ne(n, t, e) {
   return s.join(`
 `);
 }
-const Fe = {
+const Te = {
   name: "pkg-config",
   description: "Return metainformation about installed libraries",
   async exec(n, t) {
@@ -2908,7 +2945,7 @@ const Fe = {
       exitCode: 1
     };
   }
-}, Te = {
+}, Me = {
   name: "printenv",
   description: "Print all or part of environment",
   async exec(n, t) {
@@ -2944,7 +2981,7 @@ const Fe = {
       };
     }
   }
-}, Me = {
+}, Ae = {
   name: "printf",
   description: "Format and print data",
   async exec(n) {
@@ -3001,14 +3038,14 @@ const Fe = {
         o += t[r], r++;
     return { stdout: o, stderr: "", exitCode: 0 };
   }
-}, Ae = {
+}, ke = {
   name: "pwd",
   description: "Print working directory",
   async exec(n, t) {
     return { stdout: t.cwd + `
 `, stderr: "", exitCode: 0 };
   }
-}, ke = {
+}, Re = {
   name: "read",
   description: "Read a line from stdin into variables",
   async exec(n, t) {
@@ -3044,7 +3081,7 @@ const Fe = {
       exitCode: 0
     };
   }
-}, Re = {
+}, Oe = {
   name: "readlink",
   description: "Print resolved symbolic links or canonical file names",
   async exec(n, t) {
@@ -3057,7 +3094,7 @@ const Fe = {
 `, stderr: "", exitCode: 0 } : { stdout: r + `
 `, stderr: "", exitCode: 0 };
   }
-}, Oe = {
+}, De = {
   name: "realpath",
   description: "Print the resolved absolute path",
   async exec(n, t) {
@@ -3092,7 +3129,7 @@ const Fe = {
       exitCode: l
     };
   }
-}, De = {
+}, Le = {
   name: "return",
   description: "Return from a shell function",
   async exec(n, t) {
@@ -3103,7 +3140,7 @@ const Fe = {
       exitCode: isNaN(s) ? 2 : s
     };
   }
-}, Le = {
+}, We = {
   name: "rm",
   description: "Remove files or directories",
   async exec(n, t) {
@@ -3144,7 +3181,7 @@ const Fe = {
 `, exitCode: 1 };
     }
   }
-}, We = {
+}, Ue = {
   name: "sed",
   description: "Stream editor for filtering and transforming text",
   async exec(n, t) {
@@ -3166,7 +3203,7 @@ const Fe = {
 `, exitCode: 2 };
     }
     try {
-      const { content: f, files: h } = await F(
+      const { content: f, files: h } = await N(
         s,
         t.stdin,
         t.fs,
@@ -3190,7 +3227,7 @@ const Fe = {
 `, exitCode: 1 };
     }
   }
-}, Ue = {
+}, qe = {
   name: "seq",
   description: "Generate sequences of numbers",
   async exec(n, t) {
@@ -3240,7 +3277,7 @@ const Fe = {
       exitCode: 0
     };
   }
-}, qe = {
+}, ze = {
   name: "set",
   description: "Set or unset shell options and positional parameters",
   async exec(n, t) {
@@ -3291,7 +3328,7 @@ const Fe = {
       exitCode: 0
     };
   }
-}, ze = {
+}, Ge = {
   name: "sha256sum",
   description: "Compute SHA256 message digest",
   async exec(n, t) {
@@ -3313,7 +3350,7 @@ const Fe = {
           const p = t.fs.resolvePath(c, t.cwd);
           l = await t.fs.readFile(p);
         }
-        const u = await Ge(l), d = r ? "*" : " ";
+        const u = await He(l), d = r ? "*" : " ";
         i.push(`${u}${d}${c === "-" ? "-" : c}`);
       }
       return {
@@ -3333,7 +3370,7 @@ const Fe = {
     }
   }
 };
-async function Ge(n) {
+async function He(n) {
   const t = globalThis;
   if (typeof t.crypto < "u" && t.crypto.subtle) {
     const o = new t.TextEncoder().encode(n), r = await t.crypto.subtle.digest("SHA-256", o);
@@ -3346,7 +3383,7 @@ async function Ge(n) {
   }
   return Math.abs(e).toString(16).padStart(64, "0");
 }
-const He = {
+const Be = {
   name: "shift",
   description: "Shift positional parameters",
   async exec(n, t) {
@@ -3362,7 +3399,7 @@ const He = {
       exitCode: 0
     };
   }
-}, Be = {
+}, Je = {
   name: "sleep",
   description: "Delay for a specified amount of time",
   async exec(n, t) {
@@ -3397,13 +3434,13 @@ const He = {
     }
     return await new Promise((c) => globalThis.setTimeout(c, o * 1e3)), { stdout: "", stderr: "", exitCode: 0 };
   }
-}, Je = {
+}, Ye = {
   name: "sort",
   description: "Sort lines of text",
   async exec(n, t) {
     const { flags: e, positional: s } = y(n);
     try {
-      const { content: o } = await F(
+      const { content: o } = await N(
         s,
         t.stdin,
         t.fs,
@@ -3449,13 +3486,13 @@ const He = {
       };
     }
   }
-}, Ye = {
+}, _e = {
   name: ".",
   description: "Execute commands from a file in the current shell (alias for source)",
   async exec(n, t) {
     return K.exec(n, t);
   }
-}, _e = {
+}, Ke = {
   name: "stat",
   description: "Display file status",
   async exec(n, t) {
@@ -3472,7 +3509,7 @@ const He = {
         try {
           const u = await t.fs.stat(l);
           if (r) {
-            const d = Ke(c, u, r);
+            const d = Ve(c, u, r);
             i.push(d);
           } else if (a)
             i.push(`${c} ${u.size} 0 ${u.mode} 0 0 0 0 0 0 ${u.mtime}`);
@@ -3515,10 +3552,10 @@ function V(n) {
   ].join("");
   return `0${n.toString(8)}/${t}`;
 }
-function Ke(n, t, e) {
+function Ve(n, t, e) {
   return e.replace(/%n/g, n).replace(/%N/g, `'${n}'`).replace(/%s/g, String(t.size)).replace(/%b/g, "0").replace(/%f/g, t.mode.toString(16)).replace(/%a/g, t.mode.toString(8)).replace(/%A/g, V(t.mode).split("/")[1]).replace(/%F/g, t.type === "dir" ? "directory" : "regular file").replace(/%u/g, "0").replace(/%g/g, "0").replace(/%U/g, "root").replace(/%G/g, "root").replace(/%i/g, "0").replace(/%h/g, "1").replace(/%W/g, String(Math.floor(t.mtime / 1e3))).replace(/%X/g, String(Math.floor(t.mtime / 1e3))).replace(/%Y/g, String(Math.floor(t.mtime / 1e3))).replace(/%y/g, new Date(t.mtime).toISOString()).replace(/%%/g, "%");
 }
-const Ve = {
+const Xe = {
   name: "strings",
   description: "Find printable strings in files",
   async exec(n, t) {
@@ -3534,7 +3571,7 @@ const Ve = {
           const f = t.fs.resolvePath(l, t.cwd);
           u = await t.fs.readFile(f);
         }
-        const p = Xe(u, r);
+        const p = Ze(u, r);
         for (const f of p)
           a ? c.push(`${d}: ${f}`) : c.push(f);
       }
@@ -3555,7 +3592,7 @@ const Ve = {
     }
   }
 };
-function Xe(n, t) {
+function Ze(n, t) {
   const e = [], s = /[ -~]/;
   let o = "";
   for (let r = 0; r < n.length; r++) {
@@ -3564,13 +3601,13 @@ function Xe(n, t) {
   }
   return o.length >= t && e.push(o), e;
 }
-const Ze = {
+const Qe = {
   name: "tail",
   description: "Output the last part of files",
   async exec(n, t) {
     const { values: e, positional: s } = y(n, ["n"]), o = parseInt(e.n ?? "10", 10);
     try {
-      const { content: r } = await F(
+      const { content: r } = await N(
         s,
         t.stdin,
         t.fs,
@@ -3586,7 +3623,7 @@ const Ze = {
 `, exitCode: 1 };
     }
   }
-}, Qe = {
+}, ts = {
   name: "tar",
   description: "Archive utility (simplified tar format)",
   async exec(n, t) {
@@ -3663,9 +3700,9 @@ const Ze = {
           else {
             const P = S.lastIndexOf("/");
             if (P > 0) {
-              const I = S.slice(0, P);
+              const E = S.slice(0, P);
               try {
-                await t.fs.mkdir(I, { recursive: !0 });
+                await t.fs.mkdir(E, { recursive: !0 });
               } catch {
               }
             }
@@ -3708,7 +3745,7 @@ const Ze = {
       };
     }
   }
-}, ts = {
+}, es = {
   name: "tee",
   description: "Read from stdin and write to stdout and files",
   async exec(n, t) {
@@ -3732,7 +3769,7 @@ const Ze = {
 `, exitCode: 1 };
     }
   }
-}, es = {
+}, ss = {
   name: "test",
   description: "Evaluate conditional expression",
   async exec(n, t) {
@@ -3831,7 +3868,7 @@ async function O(n, t) {
   const s = n.indexOf("-o");
   return s > 0 ? await O(n.slice(0, s), t) || await O(n.slice(s + 1), t) : !1;
 }
-const ss = {
+const ns = {
   name: "time",
   description: "Time a command execution",
   async exec(n, t) {
@@ -3858,7 +3895,7 @@ ${h}`,
       exitCode: 0
     };
   }
-}, ns = {
+}, rs = {
   name: "timeout",
   description: "Run a command with a time limit",
   async exec(n, t) {
@@ -3878,7 +3915,7 @@ ${h}`,
 `,
         exitCode: 1
       };
-    let i = rs(r);
+    let i = os(r);
     if (i === null)
       return {
         stdout: "",
@@ -3931,7 +3968,7 @@ ${h}`,
     }
   }
 };
-function rs(n) {
+function os(n) {
   const t = n.match(/^(\d+(?:\.\d+)?)(s|m|h|d)?$/);
   if (!t) return null;
   const e = parseFloat(t[1]);
@@ -3948,7 +3985,7 @@ function rs(n) {
       return null;
   }
 }
-const os = {
+const is = {
   name: "touch",
   description: "Change file timestamps or create empty files",
   async exec(n, t) {
@@ -3981,7 +4018,7 @@ const os = {
 `, exitCode: 1 };
     }
   }
-}, is = {
+}, as = {
   name: "tr",
   description: "Translate or delete characters",
   async exec(n, t) {
@@ -4022,7 +4059,7 @@ function B(n) {
       e += t[s], s++;
   return e;
 }
-const as = {
+const cs = {
   name: "trap",
   description: "Trap signals and execute commands",
   async exec(n, t) {
@@ -4096,7 +4133,7 @@ const as = {
       exitCode: 0
     });
   }
-}, cs = {
+}, ls = {
   name: "kill",
   description: "Send signal to process",
   async exec(n, t) {
@@ -4161,13 +4198,13 @@ const as = {
       exitCode: 0
     };
   }
-}, ls = {
+}, ds = {
   name: "true",
   description: "Return success",
   async exec() {
     return { stdout: "", stderr: "", exitCode: 0 };
   }
-}, ds = {
+}, us = {
   name: "type",
   description: "Display information about command type",
   async exec(n, t) {
@@ -4198,7 +4235,7 @@ const as = {
       exitCode: c
     };
   }
-}, us = {
+}, fs = {
   name: "unalias",
   description: "Remove alias definitions",
   async exec(n, t) {
@@ -4214,7 +4251,7 @@ const as = {
       exitCode: 0
     };
   }
-}, fs = {
+}, ps = {
   name: "unexpand",
   description: "Convert spaces to tabs",
   async exec(n, t) {
@@ -4228,7 +4265,7 @@ const as = {
       };
     const i = o.a || o.all;
     try {
-      const { content: c } = await F(
+      const { content: c } = await N(
         s,
         t.stdin,
         t.fs,
@@ -4261,13 +4298,13 @@ const as = {
       };
     }
   }
-}, ps = {
+}, hs = {
   name: "uniq",
   description: "Report or omit repeated lines",
   async exec(n, t) {
     const { flags: e, positional: s, values: o } = y(n, ["f", "s", "w"]), r = o.f ? parseInt(o.f) : 0, a = o.s ? parseInt(o.s) : 0, i = o.w ? parseInt(o.w) : void 0, c = e.i;
     try {
-      const { content: l } = await F(
+      const { content: l } = await N(
         s,
         t.stdin,
         t.fs,
@@ -4279,7 +4316,7 @@ const as = {
       const d = [];
       let p = "", f = "", h = 0;
       for (const m of u) {
-        const g = hs(m, r, a, i, c);
+        const g = ms(m, r, a, i, c);
         g === f ? h++ : (h > 0 && J(p, h, e, d), p = m, f = g, h = 1);
       }
       return h > 0 && J(p, h, e, d), { stdout: d.join(`
@@ -4291,14 +4328,14 @@ const as = {
     }
   }
 };
-function hs(n, t, e, s, o) {
+function ms(n, t, e, s, o) {
   let r = n;
   return t > 0 && (r = n.split(/\s+/).slice(t).join(" ")), e > 0 && (r = r.substring(e)), s !== void 0 && (r = r.substring(0, s)), o && (r = r.toLowerCase()), r;
 }
 function J(n, t, e, s) {
   e.d && t < 2 || e.u && t > 1 || (e.c ? s.push(`${String(t).padStart(7)} ${n}`) : s.push(n));
 }
-const ms = {
+const gs = {
   name: "uname",
   description: "Print system information",
   async exec(n, t) {
@@ -4313,7 +4350,7 @@ const ms = {
     return e.s && l.push(o), e.n && l.push(r), e.r && l.push(a), e.v && l.push(i), e.m && l.push(c), { stdout: l.join(" ") + `
 `, stderr: "", exitCode: 0 };
   }
-}, gs = {
+}, xs = {
   name: "uptime",
   description: "Tell how long the system has been running",
   async exec(n, t) {
@@ -4335,13 +4372,83 @@ const ms = {
       exitCode: 0
     };
   }
-}, xs = {
+}, ys = {
+  name: "watch",
+  description: "Execute a program periodically, showing output",
+  async exec(n, t) {
+    const { values: e, positional: s, flags: o } = y(n, [
+      "n",
+      "interval",
+      "d",
+      "differences",
+      "t",
+      "no-title",
+      "b",
+      "beep",
+      "e",
+      "errexit",
+      "g",
+      "chgexit",
+      "help"
+    ]);
+    if (o.help)
+      return {
+        stdout: `Usage: watch [options] command
+Execute a program periodically, showing output fullscreen.
+
+Options:
+  -n, --interval <secs>  Seconds to wait between updates (default: 2)
+  -d, --differences      Highlight changes between updates
+  -t, --no-title        Turn off header showing interval, command, and time
+  -b, --beep            Beep if command has a non-zero exit status
+  -e, --errexit         Exit if command has a non-zero exit status
+  -g, --chgexit         Exit when output from command changes
+  -h, --help            Display this help and exit
+
+Examples:
+  watch -n 5 ls -l       # Update every 5 seconds
+  watch -d df -h         # Highlight differences in disk usage
+  watch date             # Show current time, updating every 2 seconds
+
+`,
+        stderr: "",
+        exitCode: 0
+      };
+    if (s.length === 0)
+      return {
+        stdout: "",
+        stderr: `watch: missing command
+Try 'watch --help' for more information.
+`,
+        exitCode: 1
+      };
+    const r = parseFloat(e.n || e.interval || "2"), a = s.join(" ");
+    return {
+      stdout: (o.t || o["no-title"] ? "" : `Every ${r}s: ${a}
+
+`) + `watch: This is a stub implementation.
+In a real shell, this would execute '${a}' every ${r} seconds.
+
+To implement watch in a browser environment:
+1. Use setInterval to run command periodically
+2. Update a dedicated output area
+3. Handle options like -d (differences), -e (errexit), -g (chgexit)
+4. Provide a way to stop watching (Ctrl+C)
+
+Browser shells should implement watch at the shell level for proper integration.
+
+`,
+      stderr: "",
+      exitCode: 0
+    };
+  }
+}, ws = {
   name: "wc",
   description: "Word, line, and byte count",
   async exec(n, t) {
     const { flags: e, positional: s } = y(n), o = e.l, r = e.w, a = e.c, i = !o && !r && !a;
     try {
-      const { content: c, files: l } = await F(
+      const { content: c, files: l } = await N(
         s,
         t.stdin,
         t.fs,
@@ -4357,7 +4464,7 @@ const ms = {
 `, exitCode: 1 };
     }
   }
-}, ys = {
+}, Cs = {
   name: "which",
   description: "Locate a command in PATH",
   async exec(n, t) {
@@ -4388,14 +4495,14 @@ const ms = {
       exitCode: 0
     };
   }
-}, ws = {
+}, vs = {
   name: "whoami",
   description: "Print current user name",
   async exec(n, t) {
     return { stdout: (t.env.USER ?? t.env.USERNAME ?? "user") + `
 `, stderr: "", exitCode: 0 };
   }
-}, Cs = {
+}, $s = {
   name: "xargs",
   description: "Build and execute command lines from stdin",
   async exec(n, t) {
@@ -4410,7 +4517,7 @@ const ms = {
     if (a) {
       const m = typeof a == "string" ? a : "{}";
       for (const g of p) {
-        const x = d.replace(new RegExp(vs(m), "g"), g);
+        const x = d.replace(new RegExp(bs(m), "g"), g);
         h.push(x), l && f.push(`+ ${x}`);
       }
     } else if (i)
@@ -4439,10 +4546,10 @@ const ms = {
 function L(n) {
   return /[^a-zA-Z0-9._\-/=]/.test(n) ? `'${n.replace(/'/g, "'\\''")}'` : n;
 }
-function vs(n) {
+function bs(n) {
   return n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-const $s = {
+const Ss = {
   name: "yes",
   description: "Output a string repeatedly until killed",
   async exec(n, t) {
@@ -4457,8 +4564,8 @@ const $s = {
       exitCode: 0
     };
   }
-}, bs = {
-  ".": Ye,
+}, Ps = {
+  ".": _e,
   alias: X,
   awk: Z,
   base64: Q,
@@ -4482,8 +4589,8 @@ const $s = {
   diff: bt,
   dirname: Pt,
   do: jt,
-  done: Nt,
-  du: Ft,
+  done: Ft,
+  du: Nt,
   echo: Tt,
   elif: kt,
   else: Rt,
@@ -4514,7 +4621,7 @@ const $s = {
   in: Bt,
   install: ie,
   join: ae,
-  kill: cs,
+  kill: ls,
   less: ce,
   ln: le,
   local: yt,
@@ -4524,58 +4631,60 @@ const $s = {
   mkdir: ye,
   mv: we,
   nl: Ce,
-  od: $e,
+  nohup: $e,
+  od: be,
   paste: Ie,
-  patch: Ee,
-  "pkg-config": Fe,
-  printenv: Te,
-  printf: Me,
-  pwd: Ae,
-  read: ke,
-  readlink: Re,
+  patch: je,
+  "pkg-config": Te,
+  printenv: Me,
+  printf: Ae,
+  pwd: ke,
+  read: Re,
+  readlink: Oe,
   readonly: Ct,
-  realpath: Oe,
-  return: De,
-  rm: Le,
-  sed: We,
-  seq: Ue,
-  set: qe,
-  sha256sum: ze,
-  shift: He,
-  sleep: Be,
-  sort: Je,
+  realpath: De,
+  return: Le,
+  rm: We,
+  sed: Ue,
+  seq: qe,
+  set: ze,
+  sha256sum: Ge,
+  shift: Be,
+  sleep: Je,
+  sort: Ye,
   source: K,
-  stat: _e,
-  strings: Ve,
-  tail: Ze,
-  tar: Qe,
-  tee: ts,
-  test: es,
+  stat: Ke,
+  strings: Xe,
+  tail: Qe,
+  tar: ts,
+  tee: es,
+  test: ss,
   then: At,
-  time: ss,
-  timeout: ns,
-  touch: os,
-  tr: is,
-  trap: as,
-  true: ls,
-  type: ds,
-  unalias: us,
-  unexpand: fs,
-  uniq: ps,
+  time: ns,
+  timeout: rs,
+  touch: is,
+  tr: as,
+  trap: cs,
+  true: ds,
+  type: us,
+  unalias: fs,
+  unexpand: ps,
+  uniq: hs,
   unset: vt,
-  uname: ms,
-  until: Et,
-  uptime: gs,
-  wc: xs,
-  which: ys,
-  while: It,
-  whoami: ws,
-  xargs: Cs,
-  yes: $s
-}, Ss = Object.values(bs);
+  uname: gs,
+  until: It,
+  uptime: xs,
+  watch: ys,
+  wc: ws,
+  which: Cs,
+  while: Et,
+  whoami: vs,
+  xargs: $s,
+  yes: Ss
+}, Es = Object.values(Ps);
 export {
   X as alias,
-  bs as allCommands,
+  Ps as allCommands,
   Z as awk,
   Q as base64,
   tt as basename,
@@ -4588,7 +4697,7 @@ export {
   ct as clear,
   lt as column,
   dt as comm,
-  Ss as commandList,
+  Es as commandList,
   ut as continue,
   ft as cp,
   pt as curl,
@@ -4599,9 +4708,9 @@ export {
   bt as diff,
   Pt as dirname,
   jt as do,
-  Nt as done,
-  Ye as dot,
-  Ft as du,
+  Ft as done,
+  _e as dot,
+  Nt as du,
   Tt as echo,
   kt as elif,
   Rt as else,
@@ -4632,7 +4741,7 @@ export {
   Bt as in,
   ie as install,
   ae as join,
-  cs as kill,
+  ls as kill,
   ce as less,
   le as ln,
   yt as local,
@@ -4642,52 +4751,54 @@ export {
   ye as mkdir,
   we as mv,
   Ce as nl,
-  $e as od,
+  $e as nohup,
+  be as od,
   Ie as paste,
-  Ee as patch,
-  Fe as pkgConfig,
-  Te as printenv,
-  Me as printf,
-  Ae as pwd,
-  ke as read,
-  Re as readlink,
+  je as patch,
+  Te as pkgConfig,
+  Me as printenv,
+  Ae as printf,
+  ke as pwd,
+  Re as read,
+  Oe as readlink,
   Ct as readonly,
-  Oe as realpath,
-  De as return,
-  Le as rm,
-  We as sed,
-  Ue as seq,
-  qe as set,
-  ze as sha256sum,
-  He as shift,
-  Be as sleep,
-  Je as sort,
+  De as realpath,
+  Le as return,
+  We as rm,
+  Ue as sed,
+  qe as seq,
+  ze as set,
+  Ge as sha256sum,
+  Be as shift,
+  Je as sleep,
+  Ye as sort,
   K as source,
-  _e as stat,
-  Ve as strings,
-  Ze as tail,
-  Qe as tar,
-  ts as tee,
-  es as test,
+  Ke as stat,
+  Xe as strings,
+  Qe as tail,
+  ts as tar,
+  es as tee,
+  ss as test,
   At as then,
-  ss as time,
-  ns as timeout,
-  os as touch,
-  is as tr,
-  as as trap,
-  ls as true,
-  ds as type,
-  us as unalias,
-  ms as uname,
-  fs as unexpand,
-  ps as uniq,
+  ns as time,
+  rs as timeout,
+  is as touch,
+  as as tr,
+  cs as trap,
+  ds as true,
+  us as type,
+  fs as unalias,
+  gs as uname,
+  ps as unexpand,
+  hs as uniq,
   vt as unset,
-  Et as until,
-  gs as uptime,
-  xs as wc,
-  ys as which,
-  It as while,
-  ws as whoami,
-  Cs as xargs,
-  $s as yes
+  It as until,
+  xs as uptime,
+  ys as watch,
+  ws as wc,
+  Cs as which,
+  Et as while,
+  vs as whoami,
+  $s as xargs,
+  Ss as yes
 };

@@ -55,6 +55,7 @@ import { md5sum } from "./commands/md5sum.js";
 import { mkdir } from "./commands/mkdir.js";
 import { mv } from "./commands/mv.js";
 import { nl } from "./commands/nl.js";
+import { nohup } from "./commands/nohup.js";
 import { od } from "./commands/od.js";
 import { paste } from "./commands/paste.js";
 import { patch } from "./commands/patch.js";
@@ -93,13 +94,14 @@ import { unexpand } from "./commands/unexpand.js";
 import { uniq } from "./commands/uniq.js";
 import { uname } from "./commands/uname.js";
 import { uptime } from "./commands/uptime.js";
+import { watch } from "./commands/watch.js";
 import { wc } from "./commands/wc.js";
 import { which } from "./commands/which.js";
 import { whoami } from "./commands/whoami.js";
 import { xargs } from "./commands/xargs.js";
 import { yes } from "./commands/yes.js";
 import type { FluffyCommand } from "./types.js";
-export { alias, awk, base64, basename, cc, cat, chmod, chown, clear, column, comm, cp, curl, cut, date, declare, df, diff, dirname, done, dot, du, echo, elif, env, esac, exit, expand, expr, exportCmd, fi, file, find, fmt, fold, free, gcc, getopts, grep, head, hexdump, hostname, id, install, join, kill, less, ln, local, ls, make, md5sum, mkdir, mv, nl, od, paste, patch, pkgConfig, printenv, printf, pwd, read, readlink, readonly, realpath, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings, tail, tar, tee, test, then, time, timeout, touch, tr, trap, type, unalias, unexpand, uniq, unset, uname, until, uptime, wc, which, whoami, xargs, yes, breakCmd as break, caseCmd as case, continueCmd as continue, doCmd as do, elseCmd as else, evalCmd as eval, falseCmd as false, forCmd as for, functionCmd as function, ifCmd as if, inCmd as in, returnCmd as return, trueCmd as true, whileCmd as while, };
+export { alias, awk, base64, basename, cc, cat, chmod, chown, clear, column, comm, cp, curl, cut, date, declare, df, diff, dirname, done, dot, du, echo, elif, env, esac, exit, expand, expr, exportCmd, fi, file, find, fmt, fold, free, gcc, getopts, grep, head, hexdump, hostname, id, install, join, kill, less, ln, local, ls, make, md5sum, mkdir, mv, nl, nohup, od, paste, patch, pkgConfig, printenv, printf, pwd, read, readlink, readonly, realpath, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings, tail, tar, tee, test, then, time, timeout, touch, tr, trap, type, unalias, unexpand, uniq, unset, uname, until, uptime, watch, wc, which, whoami, xargs, yes, breakCmd as break, caseCmd as case, continueCmd as continue, doCmd as do, elseCmd as else, evalCmd as eval, falseCmd as false, forCmd as for, functionCmd as function, ifCmd as if, inCmd as in, returnCmd as return, trueCmd as true, whileCmd as while, };
 /** All commands as a name→command map for easy registration in a shell. */
 export declare const allCommands: Record<string, FluffyCommand>;
 /** Array of all commands for iteration. */

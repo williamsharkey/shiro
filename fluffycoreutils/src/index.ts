@@ -57,6 +57,7 @@ import { md5sum } from "./commands/md5sum.js";
 import { mkdir } from "./commands/mkdir.js";
 import { mv } from "./commands/mv.js";
 import { nl } from "./commands/nl.js";
+import { nohup } from "./commands/nohup.js";
 import { od } from "./commands/od.js";
 import { paste } from "./commands/paste.js";
 import { patch } from "./commands/patch.js";
@@ -95,6 +96,7 @@ import { unexpand } from "./commands/unexpand.js";
 import { uniq } from "./commands/uniq.js";
 import { uname } from "./commands/uname.js";
 import { uptime } from "./commands/uptime.js";
+import { watch } from "./commands/watch.js";
 import { wc } from "./commands/wc.js";
 import { which } from "./commands/which.js";
 import { whoami } from "./commands/whoami.js";
@@ -107,8 +109,8 @@ import type { FluffyCommand } from "./types.js";
 export {
   alias, awk, base64, basename, cc, cat, chmod, chown, clear, column, comm, cp, curl, cut, date, declare, df, diff, dirname, done, dot, du,
   echo, elif, env, esac, exit, expand, expr, exportCmd, fi, file, find, fmt, fold, free, gcc, getopts, grep, head, hexdump, hostname, id, install, join, kill, less, ln, local, ls,
-  make, md5sum, mkdir, mv, nl, od, paste, patch, pkgConfig, printenv, printf, pwd, read, readlink, readonly, realpath, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings,
-  tail, tar, tee, test, then, time, timeout, touch, tr, trap, type, unalias, unexpand, uniq, unset, uname, until, uptime, wc, which, whoami, xargs, yes,
+  make, md5sum, mkdir, mv, nl, nohup, od, paste, patch, pkgConfig, printenv, printf, pwd, read, readlink, readonly, realpath, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings,
+  tail, tar, tee, test, then, time, timeout, touch, tr, trap, type, unalias, unexpand, uniq, unset, uname, until, uptime, watch, wc, which, whoami, xargs, yes,
   breakCmd as break,
   caseCmd as case,
   continueCmd as continue,
@@ -129,8 +131,8 @@ export {
 export const allCommands: Record<string, FluffyCommand> = {
   ".": dot, alias, awk, base64, basename, break: breakCmd, case: caseCmd, cc, cat, chmod, chown, clear, column, comm, continue: continueCmd, cp, curl, cut, date, declare, df, diff, dirname, do: doCmd, done, du,
   echo, elif, else: elseCmd, env, esac, eval: evalCmd, exit, expand, expr, export: exportCmd, false: falseCmd, fi, file, find, fmt, fold, for: forCmd, free, function: functionCmd, gcc, getopts, grep, head, hexdump, hostname, id, if: ifCmd, in: inCmd, install, join, kill, less, ln, local, ls,
-  make, md5sum, mkdir, mv, nl, od, paste, patch, "pkg-config": pkgConfig, printenv, printf, pwd, read, readlink, readonly, realpath, return: returnCmd, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings,
-  tail, tar, tee, test, then, time, timeout, touch, tr, trap, true: trueCmd, type, unalias, unexpand, uniq, unset, uname, until, uptime, wc, which, while: whileCmd, whoami, xargs, yes,
+  make, md5sum, mkdir, mv, nl, nohup, od, paste, patch, "pkg-config": pkgConfig, printenv, printf, pwd, read, readlink, readonly, realpath, return: returnCmd, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings,
+  tail, tar, tee, test, then, time, timeout, touch, tr, trap, true: trueCmd, type, unalias, unexpand, uniq, unset, uname, until, uptime, watch, wc, which, while: whileCmd, whoami, xargs, yes,
 };
 
 /** Array of all commands for iteration. */
