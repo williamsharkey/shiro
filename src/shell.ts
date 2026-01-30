@@ -215,19 +215,30 @@ export class Shell {
         }
 
         const cmd = this.commands.get(effectiveCmdName);
-        if (!cmd) {
-          stderrWriter(`shiro: command not found: ${effectiveCmdName}\r\n`);
-          exitCode = 127;
-          this.lastExitCode = exitCode;
-          this.env['?'] = String(exitCode);
-          break;
-        }
-
-        try {
-          exitCode = await cmd.exec(ctx);
-        } catch (e: any) {
-          ctx.stderr += e.message + '\n';
-          exitCode = 1;
+        if (cmd) {
+          try {
+            exitCode = await cmd.exec(ctx);
+          } catch (e: any) {
+            ctx.stderr += e.message + '\n';
+            exitCode = 1;
+          }
+        } else {
+          // Try to find executable in PATH
+          const executable = await this.findExecutableInPath(effectiveCmdName);
+          if (executable) {
+            try {
+              exitCode = await this.executeScript(executable, cmdArgs, ctx, writeStdout, stderrWriter);
+            } catch (e: any) {
+              ctx.stderr += e.message + '\n';
+              exitCode = 1;
+            }
+          } else {
+            stderrWriter(`shiro: command not found: ${effectiveCmdName}\r\n`);
+            exitCode = 127;
+            this.lastExitCode = exitCode;
+            this.env['?'] = String(exitCode);
+            break;
+          }
         }
 
         // Check if stderr should be redirected to stdout (2>&1)
@@ -959,5 +970,221 @@ export class Shell {
       }
     }
     return 0;
+  }
+
+  // ─── PATH EXECUTION ─────────────────────────────────────────────────────────
+
+  /**
+   * Search PATH directories for an executable file.
+   * Also checks node_modules/.bin relative to cwd.
+   */
+  private async findExecutableInPath(name: string): Promise<string | null> {
+    // If name contains '/', treat it as a path
+    if (name.includes('/')) {
+      const resolved = this.fs.resolvePath(name, this.cwd);
+      try {
+        const stat = await this.fs.stat(resolved);
+        if (stat.type === 'file') return resolved;
+      } catch {
+        return null;
+      }
+      return null;
+    }
+
+    // Build search path: node_modules/.bin first, then PATH
+    const pathDirs: string[] = [];
+
+    // Add node_modules/.bin from cwd (most specific first)
+    let dir = this.cwd;
+    while (dir !== '/') {
+      pathDirs.push(`${dir}/node_modules/.bin`);
+      const parent = dir.substring(0, dir.lastIndexOf('/')) || '/';
+      if (parent === dir) break;
+      dir = parent;
+    }
+    pathDirs.push('/node_modules/.bin');
+
+    // Add PATH directories
+    const envPath = this.env['PATH'] || '';
+    if (envPath) {
+      pathDirs.push(...envPath.split(':').filter(Boolean));
+    }
+
+    // Search each directory
+    for (const pathDir of pathDirs) {
+      const candidate = `${pathDir}/${name}`;
+      try {
+        const stat = await this.fs.stat(candidate);
+        if (stat.type === 'file' || stat.type === 'symlink') {
+          return candidate;
+        }
+      } catch {
+        // Not found in this directory, continue
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Execute a script file, following symlinks and handling shebangs.
+   */
+  private async executeScript(
+    filePath: string,
+    args: string[],
+    ctx: CommandContext,
+    writeStdout: (s: string) => void,
+    writeStderr: (s: string) => void,
+  ): Promise<number> {
+    // Resolve symlinks
+    let resolvedPath = filePath;
+    try {
+      const stat = await this.fs.stat(filePath);
+      if (stat.type === 'symlink') {
+        const linkTarget = await this.fs.readlink(filePath);
+        // Resolve relative symlink targets
+        if (!linkTarget.startsWith('/')) {
+          const linkDir = filePath.substring(0, filePath.lastIndexOf('/')) || '/';
+          resolvedPath = this.fs.resolvePath(linkTarget, linkDir);
+        } else {
+          resolvedPath = linkTarget;
+        }
+      }
+    } catch (e: any) {
+      writeStderr(`shiro: ${filePath}: ${e.message}\r\n`);
+      return 1;
+    }
+
+    // Read script content
+    let content: string;
+    try {
+      content = await this.fs.readFile(resolvedPath, 'utf8') as string;
+    } catch (e: any) {
+      writeStderr(`shiro: ${resolvedPath}: ${e.message}\r\n`);
+      return 1;
+    }
+
+    // Check for shebang
+    const firstLine = content.split('\n')[0];
+    if (firstLine.startsWith('#!')) {
+      const shebang = firstLine.substring(2).trim();
+      const [interpreter, ...interpArgs] = shebang.split(/\s+/);
+
+      // Handle common interpreters
+      if (interpreter === '/usr/bin/env' || interpreter === '/bin/env') {
+        // env node script.js -> node script.js
+        const realInterp = interpArgs[0];
+        if (realInterp === 'node' || realInterp === 'nodejs') {
+          return this.executeNodeScript(resolvedPath, content, args, ctx, writeStdout, writeStderr);
+        } else if (realInterp === 'sh' || realInterp === 'bash') {
+          return this.executeShellScript(content, args, ctx, writeStdout, writeStderr);
+        }
+        // Unknown interpreter via env
+        writeStderr(`shiro: cannot execute ${realInterp} scripts\r\n`);
+        return 126;
+      } else if (interpreter.endsWith('/node') || interpreter.endsWith('/nodejs')) {
+        return this.executeNodeScript(resolvedPath, content, args, ctx, writeStdout, writeStderr);
+      } else if (interpreter.endsWith('/sh') || interpreter.endsWith('/bash')) {
+        return this.executeShellScript(content, args, ctx, writeStdout, writeStderr);
+      }
+
+      // Unknown shebang interpreter
+      writeStderr(`shiro: cannot execute ${interpreter} scripts\r\n`);
+      return 126;
+    }
+
+    // No shebang - try to detect file type
+    // If it looks like JavaScript, run with node
+    if (resolvedPath.endsWith('.js') || resolvedPath.endsWith('.mjs') ||
+        content.trimStart().startsWith('const ') ||
+        content.trimStart().startsWith('import ') ||
+        content.trimStart().startsWith('var ') ||
+        content.trimStart().startsWith('let ')) {
+      return this.executeNodeScript(resolvedPath, content, args, ctx, writeStdout, writeStderr);
+    }
+
+    // Default to shell script
+    return this.executeShellScript(content, args, ctx, writeStdout, writeStderr);
+  }
+
+  /**
+   * Execute content as a Node.js script using the 'node' command.
+   */
+  private async executeNodeScript(
+    filePath: string,
+    content: string,
+    args: string[],
+    ctx: CommandContext,
+    writeStdout: (s: string) => void,
+    writeStderr: (s: string) => void,
+  ): Promise<number> {
+    // Use the existing 'node' command with the script path
+    const nodeCmd = this.commands.get('node');
+    if (!nodeCmd) {
+      writeStderr('shiro: node command not available\r\n');
+      return 127;
+    }
+
+    const nodeCtx: CommandContext = {
+      args: [filePath, ...args],
+      fs: ctx.fs,
+      cwd: ctx.cwd,
+      env: ctx.env,
+      stdin: ctx.stdin,
+      stdout: '',
+      stderr: '',
+      shell: ctx.shell,
+      terminal: ctx.terminal,
+    };
+
+    const exitCode = await nodeCmd.exec(nodeCtx);
+    if (nodeCtx.stdout) writeStdout(nodeCtx.stdout.replace(/\n/g, '\r\n'));
+    if (nodeCtx.stderr) writeStderr(nodeCtx.stderr.replace(/\n/g, '\r\n'));
+    return exitCode;
+  }
+
+  /**
+   * Execute content as a shell script.
+   */
+  private async executeShellScript(
+    content: string,
+    args: string[],
+    ctx: CommandContext,
+    writeStdout: (s: string) => void,
+    writeStderr: (s: string) => void,
+  ): Promise<number> {
+    // Set positional parameters
+    const savedParams: Record<string, string | undefined> = {};
+    for (let i = 0; i <= args.length; i++) {
+      savedParams[String(i)] = this.env[String(i)];
+    }
+    savedParams['#'] = this.env['#'];
+    savedParams['@'] = this.env['@'];
+
+    for (let i = 0; i < args.length; i++) {
+      this.env[String(i + 1)] = args[i];
+    }
+    this.env['#'] = String(args.length);
+    this.env['@'] = args.join(' ');
+
+    // Execute script line by line
+    const lines = content.split('\n');
+    let exitCode = 0;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      exitCode = await this.execute(trimmed, writeStdout, writeStderr);
+    }
+
+    // Restore positional parameters
+    for (const key of Object.keys(savedParams)) {
+      if (savedParams[key] === undefined) {
+        delete this.env[key];
+      } else {
+        this.env[key] = savedParams[key]!;
+      }
+    }
+
+    return exitCode;
   }
 }

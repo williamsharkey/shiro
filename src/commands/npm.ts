@@ -25,6 +25,7 @@ interface PackageJson {
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   type?: 'module' | 'commonjs';
+  bin?: string | Record<string, string>;
 }
 
 interface NpmPackageMetadata {
@@ -279,6 +280,69 @@ async function installPackage(
   ctx.stdout += `  ${filesWritten} files extracted\n`;
 }
 
+/**
+ * Create symlinks in node_modules/.bin for packages with bin entries
+ */
+async function createBinSymlinks(
+  ctx: CommandContext,
+  packages: Map<string, ResolvedPackage>
+): Promise<void> {
+  const binDir = ctx.fs.resolvePath('node_modules/.bin', ctx.cwd);
+
+  // Ensure .bin directory exists
+  try {
+    await ctx.fs.mkdir(binDir, { recursive: true });
+  } catch {
+    // Already exists
+  }
+
+  let binCount = 0;
+
+  for (const pkg of packages.values()) {
+    try {
+      // Read package.json from installed package
+      const pkgJsonPath = ctx.fs.resolvePath(
+        `node_modules/${pkg.name}/package.json`,
+        ctx.cwd
+      );
+
+      const content = await ctx.fs.readFile(pkgJsonPath, 'utf8') as string;
+      const pkgData = JSON.parse(content) as PackageJson;
+
+      if (!pkgData.bin) continue;
+
+      // Handle bin as string or object
+      const bins: Record<string, string> = typeof pkgData.bin === 'string'
+        ? { [pkg.name]: pkgData.bin }
+        : pkgData.bin;
+
+      // Create symlink for each bin entry
+      for (const [binName, binPath] of Object.entries(bins)) {
+        const symlinkPath = ctx.fs.resolvePath(`node_modules/.bin/${binName}`, ctx.cwd);
+        // Target is relative from .bin to the actual script
+        const cleanBinPath = binPath.replace(/^\.\//, '');
+        const targetPath = `../${pkg.name}/${cleanBinPath}`;
+
+        try {
+          // Remove existing symlink if any
+          await ctx.fs.unlink(symlinkPath);
+        } catch {
+          // Doesn't exist, that's fine
+        }
+
+        await ctx.fs.symlink(targetPath, symlinkPath);
+        binCount++;
+      }
+    } catch {
+      // Package doesn't have valid package.json or bin entries, skip
+    }
+  }
+
+  if (binCount > 0) {
+    ctx.stdout += `Created ${binCount} bin symlink(s) in node_modules/.bin\n`;
+  }
+}
+
 async function npmInstall(ctx: CommandContext): Promise<number> {
   const pkgPath = ctx.fs.resolvePath('package.json', ctx.cwd);
 
@@ -354,6 +418,9 @@ async function npmInstall(ctx: CommandContext): Promise<number> {
       return 1;
     }
   }
+
+  // Create .bin symlinks for packages with bin entries
+  await createBinSymlinks(ctx, allResolved);
 
   ctx.stdout += '\nPackages installed successfully.\n';
   return 0;
