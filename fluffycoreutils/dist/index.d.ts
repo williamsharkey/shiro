@@ -80,6 +80,7 @@ import { seq } from "./commands/seq.js";
 import { set } from "./commands/set.js";
 import { sha256sum } from "./commands/sha256sum.js";
 import { shift } from "./commands/shift.js";
+import { shrine } from "./commands/shrine.js";
 import { sleep } from "./commands/sleep.js";
 import { sort } from "./commands/sort.js";
 import { source, dot } from "./commands/source.js";
@@ -111,7 +112,7 @@ import { whoami } from "./commands/whoami.js";
 import { xargs } from "./commands/xargs.js";
 import { yes } from "./commands/yes.js";
 import type { FluffyCommand } from "./types.js";
-export { alias, arrayHelper, awk, base64, basename, bc, cc, cat, chmod, chown, clear, column, comm, cp, curl, cut, date, declare, df, diff, dirname, done, dot, du, echo, elif, env, esac, exit, expand, expr, exportCmd, fi, file, find, fmt, fold, free, gcc, getopts, grep, hash, head, heredoc, hexdump, hostname, id, install, join, kill, less, letCmd, ln, local, ls, make, md5sum, mkdir, mv, nl, nohup, od, paste, patch, pkgConfig, pr, printenv, printf, processSubstitution, pwd, read, readlink, readonly, realpath, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings, tail, tar, tee, test, then, time, timeout, touch, tr, trap, tsort, type, ulimit, umask, unalias, unexpand, uniq, unset, uname, until, uptime, watch, wc, which, whoami, xargs, yes, breakCmd as break, caseCmd as case, continueCmd as continue, doCmd as do, elseCmd as else, evalCmd as eval, falseCmd as false, forCmd as for, functionCmd as function, ifCmd as if, inCmd as in, letCmd as let, returnCmd as return, trueCmd as true, whileCmd as while, };
+export { alias, arrayHelper, awk, base64, basename, bc, cc, cat, chmod, chown, clear, column, comm, cp, curl, cut, date, declare, df, diff, dirname, done, dot, du, echo, elif, env, esac, exit, expand, expr, exportCmd, fi, file, find, fmt, fold, free, gcc, getopts, grep, hash, head, heredoc, hexdump, hostname, id, install, join, kill, less, letCmd, ln, local, ls, make, md5sum, mkdir, mv, nl, nohup, od, paste, patch, pkgConfig, pr, printenv, printf, processSubstitution, pwd, read, readlink, readonly, realpath, rm, sed, seq, set, sha256sum, shift, shrine, sleep, sort, source, stat, strings, tail, tar, tee, test, then, time, timeout, touch, tr, trap, tsort, type, ulimit, umask, unalias, unexpand, uniq, unset, uname, until, uptime, watch, wc, which, whoami, xargs, yes, breakCmd as break, caseCmd as case, continueCmd as continue, doCmd as do, elseCmd as else, evalCmd as eval, falseCmd as false, forCmd as for, functionCmd as function, ifCmd as if, inCmd as in, letCmd as let, returnCmd as return, trueCmd as true, whileCmd as while, };
 /** All commands as a name→command map for easy registration in a shell. */
 export declare const allCommands: Record<string, FluffyCommand>;
 /** Array of all commands for iteration. */
