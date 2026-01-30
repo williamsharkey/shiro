@@ -20,6 +20,7 @@ jobs:
         with:
           repository: williamsharkey/foam
           path: foam
+          submodules: recursive
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -29,15 +30,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Debug Foam checkout
-        run: |
-          echo "Workspace: ${{ github.workspace }}"
-          echo "Foam commit:"
-          cd foam && git log --oneline -1
-          ls -la src/ | head -10
-          echo "Shell.js _splitStatements method (should exist):"
-          grep -n "_splitStatements" src/shell.js | head -3 || echo "NOT FOUND"
 
       - name: Run linkedom tests (levels 0-4)
         run: npm test
