@@ -441,7 +441,124 @@ hc iframe #preview               # Attach to iframe
 
 ### Implementation Phases
 
-1. **Phase 1**: Extract core.js - context-agnostic HC implementation
-2. **Phase 2**: Add `hc` command to Foam/Shiro shells
-3. **Phase 3**: Skyeyes bridge (`__hc` global)
+1. **Phase 1**: Extract core.js - context-agnostic HC implementation ✓
+2. **Phase 2**: Add `hc` command to Foam/Shiro shells ✓
+3. **Phase 3**: Skyeyes bridge (`__hc` global + MCP tools) ✓
 4. **Phase 4**: Documentation unification
+
+---
+
+## API Reference
+
+### Node.js Usage
+
+```javascript
+const { createSession, fromHTML } = require('hypercompact');
+const { parseHTML } = require('linkedom');
+
+// From HTML string
+const session = fromHTML(htmlString, 'page.html', { parseHTML });
+console.log(session.exec('q .price'));
+
+// From Document object
+const { document } = parseHTML(htmlString);
+const session2 = createSession(document, 'page.html');
+```
+
+### Browser Usage (Foam/Shiro Shell)
+
+```bash
+# In Foam or Shiro terminal:
+hc open /home/user/page.html
+✓ opened page.html (12345 chars)
+
+hc t100
+Welcome to the store...
+
+hc q .price
+[0]$29.99
+[1]$49.99
+
+hc n0
+✓ [0] $29.99
+
+hc a
+class=price data-sku=ABC123
+```
+
+### Skyeyes MCP Tools
+
+Four dedicated MCP tools for token-efficient remote navigation:
+
+```
+hc_open   - Load HTML file from browser OS filesystem
+hc_live   - Attach to live page DOM
+hc_exec   - Execute HC command (returns terse output)
+hc_status - Check session state
+```
+
+**Example workflow via MCP:**
+
+```javascript
+// 1. Open a file
+hc_open(page="foam", file="/home/user/page.html")
+// → "✓ opened page.html (12345 chars)"
+
+// 2. Query elements
+hc_exec(page="foam", cmd="q .price")
+// → "[0]$29.99\n[1]$49.99\n[2]$12.99"
+
+// 3. Select and inspect
+hc_exec(page="foam", cmd="n1")
+// → "✓ [1] $49.99"
+
+hc_exec(page="foam", cmd="a")
+// → "class=price data-sku=XYZ789"
+```
+
+### Direct JS Access (via skyeyes_eval)
+
+The `window.hc()` function is also available for ad-hoc queries:
+
+```javascript
+skyeyes_eval(page="foam", code="hc('q .price')")
+// → "[0]$29.99\n[1]$49.99"
+```
+
+### Global Objects
+
+Both Foam and Shiro expose:
+- `window.__hc.session` - Current HCSession instance
+- `window.__hc.HCSession` - HCSession class
+- `window.hc(cmd)` - Shorthand for `__hc.session.exec(cmd)`
+
+### CLI Usage
+
+```bash
+# Single command
+hc page.html "q .price"
+
+# Interactive REPL
+hc page.html -i
+```
+
+---
+
+## File Structure
+
+```
+hypercompact/
+├── src/
+│   ├── index.js      # Main entry (Node.js)
+│   ├── core.js       # HCSession class
+│   ├── parser.js     # Command parser
+│   ├── browser.js    # Browser bundle
+│   ├── cli.js        # CLI tool
+│   └── test.js       # Tests
+├── study/
+│   ├── pages/        # Test HTML files
+│   ├── run_study_v2.js
+│   └── hc_tool_v2.js # Legacy (uses jsdom)
+├── CLAUDE.md         # This file
+└── package.json
+```
