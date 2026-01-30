@@ -95,6 +95,7 @@ export const shiroConfigCmd: Command = {
   name: 'shiro',
   description: 'Shiro OS configuration',
   async exec(ctx) {
+    // API key (for Claude/Spirit)
     if (ctx.args[0] === 'config' && ctx.args[1] === 'set' && ctx.args[2] === 'api_key' && ctx.args[3]) {
       localStorage.setItem('shiro_api_key', ctx.args[3]);
       // Also set in current env so spirit picks it up immediately
@@ -107,10 +108,41 @@ export const shiroConfigCmd: Command = {
       ctx.stdout = key ? `sk-ant-...${key.slice(-8)}\n` : '(not set)\n';
       return 0;
     }
+
+    // GitHub token (for git push/pull)
+    if (ctx.args[0] === 'config' && ctx.args[1] === 'set' && ctx.args[2] === 'github_token' && ctx.args[3]) {
+      localStorage.setItem('shiro_github_token', ctx.args[3]);
+      // Also set in current env for immediate use
+      ctx.env['GITHUB_TOKEN'] = ctx.args[3];
+      ctx.stdout = 'GitHub token saved. You can now use git push/pull.\n';
+      return 0;
+    }
+    if (ctx.args[0] === 'config' && ctx.args[1] === 'get' && ctx.args[2] === 'github_token') {
+      const token = localStorage.getItem('shiro_github_token') || '';
+      ctx.stdout = token ? `ghp_...${token.slice(-8)}\n` : '(not set)\n';
+      return 0;
+    }
+
+    // List all config
+    if (ctx.args[0] === 'config' && ctx.args[1] === 'list') {
+      const apiKey = localStorage.getItem('shiro_api_key') || '';
+      const ghToken = localStorage.getItem('shiro_github_token') || '';
+      ctx.stdout = 'Configuration:\n';
+      ctx.stdout += `  api_key:      ${apiKey ? `sk-ant-...${apiKey.slice(-8)}` : '(not set)'}\n`;
+      ctx.stdout += `  github_token: ${ghToken ? `ghp_...${ghToken.slice(-8)}` : '(not set)'}\n`;
+      return 0;
+    }
+
     ctx.stdout = [
       'Usage:',
-      '  shiro config set api_key <key>',
-      '  shiro config get api_key',
+      '  shiro config set api_key <key>      Set Claude API key for Spirit',
+      '  shiro config get api_key            Show Claude API key',
+      '  shiro config set github_token <tok> Set GitHub token for git push/pull',
+      '  shiro config get github_token       Show GitHub token',
+      '  shiro config list                   Show all configuration',
+      '',
+      'Get a GitHub token at: https://github.com/settings/tokens',
+      'Required scopes: repo (for private repos) or public_repo (for public only)',
       '',
     ].join('\n');
     return 0;
