@@ -155,6 +155,161 @@ export default async function run(page, osTarget) {
     results.fail('xargs', e);
   }
 
+  // Test: head in pipeline
+  try {
+    const r = await os.exec('cat /tmp/ww-pipe-data.txt | head -n 2');
+    const lines = r.stdout.trim().split(/\r?\n/);
+    assertEqual(lines.length, 2, 'head -n 2 should return 2 lines');
+    assertEqual(lines[0], 'cherry', 'first line');
+    results.pass('head in pipeline');
+  } catch (e) {
+    results.fail('head in pipeline', e);
+  }
+
+  // Test: tail in pipeline
+  try {
+    const r = await os.exec('cat /tmp/ww-pipe-data.txt | tail -n 2');
+    const lines = r.stdout.trim().split(/\r?\n/);
+    assertEqual(lines.length, 2, 'tail -n 2 should return 2 lines');
+    results.pass('tail in pipeline');
+  } catch (e) {
+    results.fail('tail in pipeline', e);
+  }
+
+  // Test: wc -w (word count)
+  try {
+    const r = await os.exec('echo "one two three" | wc -w');
+    assertIncludes(r.stdout, '3', 'word count');
+    results.pass('wc -w in pipeline');
+  } catch (e) {
+    results.fail('wc -w in pipeline', e);
+  }
+
+  // Test: wc -c (byte count)
+  try {
+    const r = await os.exec('echo "hello" | wc -c');
+    // "hello\n" = 6 chars
+    assert(r.stdout.trim().length > 0, 'wc -c should output count');
+    results.pass('wc -c in pipeline');
+  } catch (e) {
+    results.fail('wc -c in pipeline', e);
+  }
+
+  // Test: nested command substitution
+  try {
+    const r = await os.exec('echo "result: $(echo $(echo nested))"');
+    assertIncludes(r.stdout, 'result: nested', 'nested command substitution');
+    results.pass('nested command substitution');
+  } catch (e) {
+    results.fail('nested command substitution', e);
+  }
+
+  // Test: backtick command substitution
+  try {
+    const r = await os.exec('echo "value is `echo 42`"');
+    assertIncludes(r.stdout, 'value is 42', 'backtick substitution');
+    results.pass('backtick command substitution');
+  } catch (e) {
+    results.fail('backtick command substitution', e);
+  }
+
+  // Test: multiple pipes with wc
+  try {
+    const r = await os.exec('cat /tmp/ww-pipe-data.txt | grep apple | wc -l');
+    assertIncludes(r.stdout, '2', 'multi-pipe with wc');
+    results.pass('multiple pipes (grep | wc)');
+  } catch (e) {
+    results.fail('multiple pipes (grep | wc)', e);
+  }
+
+  // Test: sort -r (reverse)
+  try {
+    const r = await os.exec('cat /tmp/ww-pipe-data.txt | sort -r | head -n 1');
+    assertIncludes(r.stdout, 'date', 'reverse sort first');
+    results.pass('sort -r in pipeline');
+  } catch (e) {
+    results.fail('sort -r in pipeline', e);
+  }
+
+  // Test: uniq -c (count)
+  try {
+    const r = await os.exec('cat /tmp/ww-pipe-data.txt | sort | uniq -c');
+    assertIncludes(r.stdout, '2', 'uniq -c should show counts');
+    results.pass('uniq -c in pipeline');
+  } catch (e) {
+    results.fail('uniq -c in pipeline', e);
+  }
+
+  // Test: tr in pipeline (lowercase)
+  try {
+    const r = await os.exec('echo "HELLO" | tr "A-Z" "a-z"');
+    assertIncludes(r.stdout, 'hello', 'tr should lowercase');
+    results.pass('tr lowercase in pipeline');
+  } catch (e) {
+    results.fail('tr lowercase in pipeline', e);
+  }
+
+  // Test: cut in pipeline
+  try {
+    await os.writeFile('/tmp/ww-csv.txt', 'a,b,c\n1,2,3');
+    const r = await os.exec('cat /tmp/ww-csv.txt | cut -d "," -f 2');
+    assertIncludes(r.stdout, 'b', 'cut should extract field 2');
+    results.pass('cut in pipeline');
+  } catch (e) {
+    results.fail('cut in pipeline', e);
+  }
+
+  // Test: grep -v (invert match)
+  try {
+    const r = await os.exec('cat /tmp/ww-pipe-data.txt | grep -v apple');
+    assert(!r.stdout.includes('apple'), 'grep -v should exclude apple');
+    assertIncludes(r.stdout, 'cherry', 'grep -v should include cherry');
+    results.pass('grep -v in pipeline');
+  } catch (e) {
+    results.fail('grep -v in pipeline', e);
+  }
+
+  // Test: grep -i (case insensitive)
+  try {
+    await os.writeFile('/tmp/ww-mixed.txt', 'Apple\napple\nAPPLE');
+    const r = await os.exec('cat /tmp/ww-mixed.txt | grep -i apple');
+    const lines = r.stdout.trim().split(/\r?\n/);
+    assertEqual(lines.length, 3, 'grep -i should match all cases');
+    results.pass('grep -i in pipeline');
+  } catch (e) {
+    results.fail('grep -i in pipeline', e);
+  }
+
+  // Test: redirect with && operator
+  try {
+    await os.exec('echo "step1" > /tmp/ww-step.txt && echo "step2" >> /tmp/ww-step.txt');
+    const content = await os.readFile('/tmp/ww-step.txt');
+    assertIncludes(content, 'step1', 'step1 present');
+    assertIncludes(content, 'step2', 'step2 present');
+    results.pass('redirect with && operator');
+  } catch (e) {
+    results.fail('redirect with && operator', e);
+  }
+
+  // Test: pipe exit code propagation
+  try {
+    const r = await os.exec('false | echo "ran"');
+    // The echo should still run; pipe exit code is from last command
+    assertIncludes(r.stdout, 'ran', 'second command in pipe runs');
+    results.pass('pipe command independence');
+  } catch (e) {
+    results.fail('pipe command independence', e);
+  }
+
+  // Test: printf in pipeline
+  try {
+    const r = await os.exec('printf "a\\nb\\nc" | wc -l');
+    assertIncludes(r.stdout, '3', 'printf piped to wc');
+    results.pass('printf in pipeline');
+  } catch (e) {
+    results.fail('printf in pipeline', e);
+  }
+
   results.summary();
   return results;
 }
