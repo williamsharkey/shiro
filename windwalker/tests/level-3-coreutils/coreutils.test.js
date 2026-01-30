@@ -432,6 +432,112 @@ export default async function run(page, osTarget) {
     results.fail('uname', e);
   }
 
+  // Test: rm -r (recursive delete)
+  try {
+    await os.exec('mkdir -p /tmp/ww-rmr-test/sub');
+    await os.writeFile('/tmp/ww-rmr-test/sub/file.txt', 'data');
+    await os.exec('rm -r /tmp/ww-rmr-test');
+    const exists = await os.exists('/tmp/ww-rmr-test');
+    assert(!exists, 'rm -r should remove directory tree');
+    results.pass('rm -r');
+  } catch (e) {
+    results.fail('rm -r', e);
+  }
+
+  // Test: cat -n (line numbers)
+  try {
+    await os.writeFile('/tmp/ww-catn.txt', 'one\ntwo\nthree');
+    const r = await os.exec('cat -n /tmp/ww-catn.txt');
+    assertIncludes(r.stdout, '1', 'cat -n should show line 1');
+    assertIncludes(r.stdout, 'one', 'cat -n should show content');
+    results.pass('cat -n');
+  } catch (e) {
+    results.fail('cat -n', e);
+  }
+
+  // Test: ls -l (long format)
+  try {
+    const r = await os.exec('ls -l /tmp/ww-core-dir');
+    assertIncludes(r.stdout, 'x.txt', 'ls -l should show file');
+    results.pass('ls -l');
+  } catch (e) {
+    results.fail('ls -l', e);
+  }
+
+  // Test: ls -a (show hidden)
+  try {
+    await os.exec('mkdir -p /tmp/ww-hidden-dir');
+    await os.writeFile('/tmp/ww-hidden-dir/.hidden', 'secret');
+    const r = await os.exec('ls -a /tmp/ww-hidden-dir');
+    assertIncludes(r.stdout, '.hidden', 'ls -a should show hidden files');
+    results.pass('ls -a');
+  } catch (e) {
+    results.fail('ls -a', e);
+  }
+
+  // Test: test command (standalone)
+  try {
+    const r = await os.exec('test 1 -eq 1 && echo yes');
+    assertIncludes(r.stdout, 'yes', 'test command');
+    results.pass('test command');
+  } catch (e) {
+    results.fail('test command', e);
+  }
+
+  // Test: sleep (brief)
+  try {
+    const start = Date.now();
+    await os.exec('sleep 0.1');
+    const elapsed = Date.now() - start;
+    assert(elapsed >= 50, 'sleep should pause execution');
+    results.pass('sleep');
+  } catch (e) {
+    results.fail('sleep', e);
+  }
+
+  // Test: seq with range
+  try {
+    const r = await os.exec('seq 2 5');
+    assertIncludes(r.stdout, '2', 'seq range start');
+    assertIncludes(r.stdout, '5', 'seq range end');
+    assert(!r.stdout.includes('1'), 'seq range should not include 1');
+    results.pass('seq (range)');
+  } catch (e) {
+    results.fail('seq (range)', e);
+  }
+
+  // Test: seq with step
+  try {
+    const r = await os.exec('seq 1 2 7');
+    assertIncludes(r.stdout, '1', 'seq step');
+    assertIncludes(r.stdout, '3', 'seq step');
+    assertIncludes(r.stdout, '5', 'seq step');
+    assertIncludes(r.stdout, '7', 'seq step');
+    assert(!r.stdout.includes('2'), 'seq step should skip 2');
+    results.pass('seq (step)');
+  } catch (e) {
+    results.fail('seq (step)', e);
+  }
+
+  // Test: sed with g flag (global)
+  try {
+    const r = await os.exec('echo "aaa" | sed "s/a/b/g"');
+    assertIncludes(r.stdout, 'bbb', 'sed g flag');
+    results.pass('sed g flag');
+  } catch (e) {
+    results.fail('sed g flag', e);
+  }
+
+  // Test: tail -f exit
+  try {
+    // Just verify tail doesn't hang with a regular file
+    const r = await os.exec('tail -n 1 /tmp/ww-core-a.txt');
+    assertIncludes(r.stdout, 'echo', 'tail -n 1 should get last line');
+    results.pass('tail -n 1');
+  } catch (e) {
+    results.fail('tail -n 1', e);
+  }
+
   results.summary();
   return results;
 }
