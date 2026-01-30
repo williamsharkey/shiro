@@ -58,6 +58,7 @@ const SUITES = [
   { name: 'level-3-coreutils',  path: './level-3-coreutils/coreutils.test.js' },
   { name: 'level-4-pipes',      path: './level-4-pipes/pipes.test.js' },
   { name: 'level-5-git',        path: './level-5-git/git.test.js' },
+  { name: 'level-5-git-clone',  path: './level-5-git/git-clone.test.js' },
   { name: 'level-6-spirit',     path: './level-6-spirit/spirit.test.js' },
   { name: 'level-7-workflows',  path: './level-7-workflows/workflows.test.js' },
   { name: 'level-8-fluffycoreutils', path: './level-8-fluffycoreutils/fluffycoreutils.test.js' },
