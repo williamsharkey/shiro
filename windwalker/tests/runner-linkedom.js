@@ -15,7 +15,8 @@ import { parseHTML } from 'linkedom';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const ROOT = join(__dirname, '..');
-const FOAM_PATH = join(ROOT, '..', 'foam', 'src');
+// FOAM_PATH can be overridden via env var (useful for CI)
+const FOAM_PATH = process.env.FOAM_PATH || join(ROOT, '..', 'foam', 'src');
 
 // Test suite modules (only levels 0-4 for linkedom -- higher levels need real browser)
 const LINKEDOM_SUITES = [
