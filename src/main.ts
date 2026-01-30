@@ -11,6 +11,7 @@ import { jsEvalCmd, nodeCmd } from './commands/jseval';
 import { npmCmd } from './commands/npm';
 import { buildCmd } from './commands/build';
 import { viCmd } from './commands/vi';
+import { nanoCmd } from './commands/nano';
 import { uploadCmd, downloadCmd, shiroConfigCmd } from './commands/upload';
 import { sourceCmd } from './commands/source';
 import { jobsCmd, fgCmd, bgCmd, waitCmd } from './commands/jobs';
@@ -47,6 +48,7 @@ async function main() {
   commands.register(npmCmd);
   commands.register(buildCmd);
   commands.register(viCmd);
+  commands.register(nanoCmd);
   commands.register(uploadCmd);
   commands.register(downloadCmd);
   commands.register(shiroConfigCmd);
