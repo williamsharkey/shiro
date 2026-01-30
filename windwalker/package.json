@@ -6,10 +6,12 @@
   "scripts": {
     "test": "node tests/runner-linkedom.js",
     "test:linkedom": "node tests/runner-linkedom.js",
+    "test:hotreload": "npx tsx tests/level-12-hotreload/hotreload-node.test.js",
+    "test:selfbuild": "ENABLE_NETWORK_TESTS=1 node tests/runner-linkedom.js",
     "test:skyeyes": "node tests/runner-skyeyes.js",
     "test:skyeyes:foam": "OS_TARGET=foam node tests/runner-skyeyes.js",
     "test:skyeyes:shiro": "OS_TARGET=shiro node tests/runner-skyeyes.js",
-    "test:all": "node tests/runner-linkedom.js && node tests/runner-skyeyes.js"
+    "test:all": "node tests/runner-linkedom.js && npx tsx tests/level-12-hotreload/hotreload-node.test.js"
   },
   "dependencies": {
     "fake-indexeddb": "^6.0.0",
