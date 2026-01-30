@@ -9,6 +9,7 @@ import { Command, CommandContext } from './index';
  *   - Normal mode: Navigate and execute commands
  *   - Insert mode: Type text (i, a, o to enter)
  *   - Command mode: Execute commands (:w, :q, :wq)
+ *   - Search mode: Search for text (/ to enter, n/N to navigate)
  *
  * Normal mode commands:
  *   h,j,k,l  - Move cursor left, down, up, right
@@ -22,6 +23,9 @@ import { Command, CommandContext } from './index';
  *   $        - Move to end of line
  *   gg       - Move to first line
  *   G        - Move to last line
+ *   /        - Enter search mode
+ *   n        - Next search result
+ *   N        - Previous search result
  *   :        - Enter command mode
  *
  * Command mode:
@@ -35,7 +39,7 @@ import { Command, CommandContext } from './index';
  *   Any text - Insert at cursor
  */
 
-type Mode = 'normal' | 'insert' | 'command';
+type Mode = 'normal' | 'insert' | 'command' | 'search';
 
 interface EditorState {
   lines: string[];
@@ -47,6 +51,8 @@ interface EditorState {
   modified: boolean;
   scrollOffset: number;
   message: string;
+  searchPattern: string;
+  searchBuffer: string;
 }
 
 export const viCmd: Command = {
@@ -83,6 +89,8 @@ export const viCmd: Command = {
       modified: false,
       scrollOffset: 0,
       message: fileExists ? `"${filename}" ${initialContent.split('\n').length} lines` : `"${filename}" [New File]`,
+      searchPattern: '',
+      searchBuffer: '',
     };
 
     // Run the editor in an interactive loop
@@ -118,6 +126,8 @@ export const viCmd: Command = {
         // Render command line or message
         if (state.mode === 'command') {
           ctx.stdout += `:${state.commandBuffer}`;
+        } else if (state.mode === 'search') {
+          ctx.stdout += `/${state.searchBuffer}`;
         } else {
           ctx.stdout += state.message;
         }
@@ -136,6 +146,8 @@ export const viCmd: Command = {
           await handleInsertMode(key);
         } else if (state.mode === 'command') {
           await handleCommandMode(key);
+        } else if (state.mode === 'search') {
+          await handleSearchMode(key);
         }
 
         if (running) {
@@ -229,6 +241,24 @@ export const viCmd: Command = {
             state.mode = 'command';
             state.commandBuffer = '';
             break;
+          case '/': // Search mode
+            state.mode = 'search';
+            state.searchBuffer = '';
+            break;
+          case 'n': // Next search result
+            if (state.searchPattern) {
+              searchNext(state);
+            } else {
+              state.message = 'No previous search pattern';
+            }
+            break;
+          case 'N': // Previous search result
+            if (state.searchPattern) {
+              searchPrevious(state);
+            } else {
+              state.message = 'No previous search pattern';
+            }
+            break;
         }
 
         state.lastKey = key;
@@ -275,6 +305,116 @@ export const viCmd: Command = {
             currentLine.slice(0, state.cursorCol) + key + currentLine.slice(state.cursorCol);
           state.cursorCol++;
           state.modified = true;
+        }
+      };
+
+      const searchNext = (state: EditorState) => {
+        if (!state.searchPattern) return;
+
+        const startRow = state.cursorRow;
+        const startCol = state.cursorCol + 1;
+
+        // Search from current position to end of file
+        for (let row = startRow; row < state.lines.length; row++) {
+          const line = state.lines[row];
+          const searchStart = row === startRow ? startCol : 0;
+          const index = line.indexOf(state.searchPattern, searchStart);
+
+          if (index !== -1) {
+            state.cursorRow = row;
+            state.cursorCol = index;
+            state.message = `Found: ${state.searchPattern}`;
+            return;
+          }
+        }
+
+        // Wrap to beginning of file
+        for (let row = 0; row <= startRow; row++) {
+          const line = state.lines[row];
+          const searchEnd = row === startRow ? startCol - 1 : line.length;
+          const index = line.indexOf(state.searchPattern);
+
+          if (index !== -1 && index < searchEnd) {
+            state.cursorRow = row;
+            state.cursorCol = index;
+            state.message = `Found: ${state.searchPattern} (wrapped)`;
+            return;
+          }
+        }
+
+        state.message = `Pattern not found: ${state.searchPattern}`;
+      };
+
+      const searchPrevious = (state: EditorState) => {
+        if (!state.searchPattern) return;
+
+        const startRow = state.cursorRow;
+        const startCol = state.cursorCol - 1;
+
+        // Search from current position backward to start of file
+        for (let row = startRow; row >= 0; row--) {
+          const line = state.lines[row];
+          const searchEnd = row === startRow ? startCol : line.length - 1;
+
+          // Search backward in the line
+          for (let col = searchEnd; col >= 0; col--) {
+            if (line.slice(col, col + state.searchPattern.length) === state.searchPattern) {
+              state.cursorRow = row;
+              state.cursorCol = col;
+              state.message = `Found: ${state.searchPattern}`;
+              return;
+            }
+          }
+        }
+
+        // Wrap to end of file
+        for (let row = state.lines.length - 1; row >= startRow; row--) {
+          const line = state.lines[row];
+          const searchEnd = row === startRow ? line.length - 1 : line.length - 1;
+
+          for (let col = searchEnd; col >= 0; col--) {
+            if (line.slice(col, col + state.searchPattern.length) === state.searchPattern) {
+              state.cursorRow = row;
+              state.cursorCol = col;
+              state.message = `Found: ${state.searchPattern} (wrapped)`;
+              return;
+            }
+          }
+        }
+
+        state.message = `Pattern not found: ${state.searchPattern}`;
+      };
+
+      const handleSearchMode = async (key: string) => {
+        if (key === '\x1b' || key === 'Escape') {
+          // ESC - cancel search
+          state.mode = 'normal';
+          state.searchBuffer = '';
+          return;
+        }
+
+        if (key === 'Enter' || key === '\r' || key === '\n') {
+          // Execute search
+          state.searchPattern = state.searchBuffer;
+          state.mode = 'normal';
+
+          if (state.searchPattern) {
+            searchNext(state);
+          }
+
+          state.searchBuffer = '';
+          return;
+        }
+
+        if (key === 'Backspace' || key === '\x7f') {
+          // Delete character from search buffer
+          state.searchBuffer = state.searchBuffer.slice(0, -1);
+          if (state.searchBuffer.length === 0) {
+            state.mode = 'normal';
+          }
+        } else if (key.length === 1 && key >= ' ') {
+          // Add to search buffer
+          state.searchBuffer += key;
         }
       };
 
