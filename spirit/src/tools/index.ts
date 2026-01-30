@@ -7,6 +7,7 @@ import { editTool, executeEdit } from "./edit.js";
 import { globTool, executeGlob } from "./glob.js";
 import { grepTool, executeGrep } from "./grep.js";
 import { askUserTool, executeAskUser } from "./ask-user.js";
+import { webFetchTool, executeWebFetch } from "./web-fetch.js";
 
 type ToolExecutor = (
   input: Record<string, unknown>,
@@ -29,6 +30,7 @@ export class ToolRegistry {
     this.register(globTool, executeGlob as ToolExecutor);
     this.register(grepTool, executeGrep as ToolExecutor);
     this.register(askUserTool, executeAskUser as ToolExecutor);
+    this.register(webFetchTool, executeWebFetch as ToolExecutor);
   }
 
   register(definition: ToolDefinition, execute: ToolExecutor): void {
