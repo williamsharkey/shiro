@@ -99,8 +99,12 @@ async function createMockPage(vfs, shell) {
  */
 async function initFoam() {
   // Import Foam modules
+  console.log(`  FOAM_PATH: ${FOAM_PATH}`);
   const VFS = (await import(join(FOAM_PATH, 'vfs.js'))).default;
   const Shell = (await import(join(FOAM_PATH, 'shell.js'))).default;
+
+  // Debug: verify shell has exec method
+  console.log(`  Shell.prototype.exec exists: ${typeof Shell.prototype.exec === 'function'}`);
 
   // Initialize VFS
   const vfs = new VFS();
@@ -108,6 +112,14 @@ async function initFoam() {
 
   // Initialize Shell
   const shell = new Shell(vfs);
+
+  // Debug: test shell directly
+  try {
+    const testResult = await shell.exec('echo hello');
+    console.log(`  Direct shell.exec('echo hello') = ${JSON.stringify(testResult)}`);
+  } catch (e) {
+    console.log(`  Direct shell.exec error: ${e.message}`);
+  }
 
   // Try to load fluffycoreutils commands
   try {
