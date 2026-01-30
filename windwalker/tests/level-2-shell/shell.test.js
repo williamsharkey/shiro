@@ -210,6 +210,107 @@ export default async function run(page, osTarget) {
     results.fail('shell function', e);
   }
 
+  // Test: function with argument
+  try {
+    const r = await os.exec('greet() { echo "Hello $1"; }; greet World');
+    assertIncludes(r.stdout, 'Hello World', 'function with arg');
+    results.pass('function with argument');
+  } catch (e) {
+    results.fail('function with argument', e);
+  }
+
+  // Test: test ! (negation)
+  try {
+    const r = await os.exec('if [ ! 1 -eq 2 ]; then echo negated; fi');
+    assertIncludes(r.stdout, 'negated', 'test !');
+    results.pass('test negation (!)');
+  } catch (e) {
+    results.fail('test negation (!)', e);
+  }
+
+  // Test: test -n (non-empty string)
+  try {
+    const r = await os.exec('if [ -n "abc" ]; then echo nonempty; fi');
+    assertIncludes(r.stdout, 'nonempty', 'test -n');
+    results.pass('test -n (non-empty string)');
+  } catch (e) {
+    results.fail('test -n (non-empty string)', e);
+  }
+
+  // Test: test != (string inequality)
+  try {
+    const r = await os.exec('if [ "foo" != "bar" ]; then echo different; fi');
+    assertIncludes(r.stdout, 'different', 'test !=');
+    results.pass('test string inequality');
+  } catch (e) {
+    results.fail('test string inequality', e);
+  }
+
+  // Test: test -gt (greater than)
+  try {
+    const r = await os.exec('if [ 5 -gt 3 ]; then echo bigger; fi');
+    assertIncludes(r.stdout, 'bigger', 'test -gt');
+    results.pass('test -gt (greater than)');
+  } catch (e) {
+    results.fail('test -gt (greater than)', e);
+  }
+
+  // Test: test -lt (less than)
+  try {
+    const r = await os.exec('if [ 2 -lt 5 ]; then echo smaller; fi');
+    assertIncludes(r.stdout, 'smaller', 'test -lt');
+    results.pass('test -lt (less than)');
+  } catch (e) {
+    results.fail('test -lt (less than)', e);
+  }
+
+  // Test: arithmetic subtraction
+  try {
+    const r = await os.exec('echo $((10 - 3))');
+    assertIncludes(r.stdout, '7', 'arithmetic subtraction');
+    results.pass('arithmetic subtraction');
+  } catch (e) {
+    results.fail('arithmetic subtraction', e);
+  }
+
+  // Test: arithmetic division
+  try {
+    const r = await os.exec('echo $((20 / 4))');
+    assertIncludes(r.stdout, '5', 'arithmetic division');
+    results.pass('arithmetic division');
+  } catch (e) {
+    results.fail('arithmetic division', e);
+  }
+
+  // Test: arithmetic modulo
+  try {
+    const r = await os.exec('echo $((17 % 5))');
+    assertIncludes(r.stdout, '2', 'arithmetic modulo');
+    results.pass('arithmetic modulo');
+  } catch (e) {
+    results.fail('arithmetic modulo', e);
+  }
+
+  // Test: for loop with numbers
+  try {
+    const r = await os.exec('for n in 1 2 3; do echo "num$n"; done');
+    assertIncludes(r.stdout, 'num1', 'for loop num1');
+    assertIncludes(r.stdout, 'num2', 'for loop num2');
+    assertIncludes(r.stdout, 'num3', 'for loop num3');
+    results.pass('for loop with numbers');
+  } catch (e) {
+    results.fail('for loop with numbers', e);
+  }
+
+  // Test: command output in variable
+  try {
+    const r = await os.exec('export x=$(echo hello) && echo "value: $x"');
+    assertIncludes(r.stdout, 'value: hello', 'command in var');
+    results.pass('command substitution in variable');
+  } catch (e) {
+    results.fail('command substitution in variable', e);
+  }
+
   results.summary();
   return results;
 }
