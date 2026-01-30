@@ -2,12 +2,12 @@
 
 **Shared Unix coreutils for browser-based virtual operating systems**
 
-A TypeScript library providing 45+ essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
+A TypeScript library providing 50 essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
 
 ## ✨ Features
 
 - 🌐 **Browser-Native**: Pure TypeScript implementation with no Node.js dependencies
-- 🔧 **45+ Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `xargs`
+- 🔧 **50 Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `xargs`
 - 🎯 **Filesystem Agnostic**: Works with any virtual filesystem implementing the `FluffyFS` interface
 - 📦 **Tree-Shakeable**: Import only the commands you need
 - 🔒 **Type-Safe**: Full TypeScript definitions included
@@ -89,6 +89,11 @@ const shell = Object.fromEntries(
 - **true** / **false** - Return success/failure
 - **clear** - Clear the terminal
 - **chmod** - Change file permissions
+- **sleep** - Delay for specified time
+- **time** - Measure command execution time
+- **yes** - Output string repeatedly
+- **expand** - Convert tabs to spaces
+- **unexpand** - Convert spaces to tabs
 
 ## 🏗️ Architecture
 

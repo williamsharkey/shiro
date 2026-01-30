@@ -1,95 +1,95 @@
-function P(i, t = []) {
-  const e = {}, r = {}, n = [], o = new Set(t);
+function C(i, t = []) {
+  const e = {}, o = {}, s = [], n = new Set(t);
   for (let a = 0; a < i.length; a++) {
-    const s = i[a];
-    if (s === "--") {
-      n.push(...i.slice(a + 1));
+    const r = i[a];
+    if (r === "--") {
+      s.push(...i.slice(a + 1));
       break;
     }
-    if (s.startsWith("--")) {
-      const c = s.slice(2);
-      o.has(c) && a + 1 < i.length ? r[c] = i[++a] : e[c] = !0;
-    } else if (s.startsWith("-") && s.length > 1 && !/^-\d/.test(s)) {
-      const c = s.slice(1);
-      if (o.has(c) && a + 1 < i.length)
-        r[c] = i[++a];
+    if (r.startsWith("--")) {
+      const c = r.slice(2);
+      n.has(c) && a + 1 < i.length ? o[c] = i[++a] : e[c] = !0;
+    } else if (r.startsWith("-") && r.length > 1 && !/^-\d/.test(r)) {
+      const c = r.slice(1);
+      if (n.has(c) && a + 1 < i.length)
+        o[c] = i[++a];
       else
         for (let l = 0; l < c.length; l++) {
-          const f = c[l];
-          if (o.has(f)) {
+          const u = c[l];
+          if (n.has(u)) {
             const d = c.slice(l + 1);
-            d ? r[f] = d : a + 1 < i.length && (r[f] = i[++a]);
+            d ? o[u] = d : a + 1 < i.length && (o[u] = i[++a]);
             break;
           }
-          e[f] = !0;
+          e[u] = !0;
         }
     } else
-      n.push(s);
+      s.push(r);
   }
-  return { flags: e, values: r, positional: n };
+  return { flags: e, values: o, positional: s };
 }
-async function R(i, t, e, r, n) {
+async function k(i, t, e, o, s) {
   if (i.length === 0)
     return { content: t, files: [] };
-  const o = [], a = [];
-  for (const s of i) {
-    const c = n(s, r);
-    o.push(c), a.push(await e.readFile(c));
+  const n = [], a = [];
+  for (const r of i) {
+    const c = s(r, o);
+    n.push(c), a.push(await e.readFile(c));
   }
-  return { content: a.join(""), files: o };
+  return { content: a.join(""), files: n };
 }
 const z = {
   name: "awk",
   description: "Pattern scanning and processing language",
   async exec(i, t) {
-    const { values: e, positional: r } = P(i, ["F", "v"]);
-    if (r.length === 0)
+    const { values: e, positional: o } = C(i, ["F", "v"]);
+    if (o.length === 0)
       return { stdout: "", stderr: `awk: missing program
 `, exitCode: 1 };
-    const n = r[0], o = r.slice(1), a = e.F || /\s+/, s = typeof a == "string" ? new RegExp(a) : a, c = {};
+    const s = o[0], n = o.slice(1), a = e.F || /\s+/, r = typeof a == "string" ? new RegExp(a) : a, c = {};
     if (e.v) {
       const l = e.v.split("=");
       l.length === 2 && (c[l[0]] = l[1]);
     }
     try {
-      const { content: l } = await R(
-        o,
+      const { content: l } = await k(
+        n,
         t.stdin,
         t.fs,
         t.cwd,
         t.fs.resolvePath
-      ), f = l.split(`
+      ), u = l.split(`
 `).filter((x) => x !== "" || l.endsWith(`
-`)), d = [], g = n.match(/BEGIN\s*\{\s*([^}]*)\s*\}/), p = n.match(/END\s*\{\s*([^}]*)\s*\}/), u = n.match(/(?:\/([^/]*)\/\s*)?\{\s*([^}]*)\s*\}/);
-      let h = 0, m = 0;
-      if (g) {
-        const x = T(g[1], [], 0, 0, c);
+`)), d = [], h = s.match(/BEGIN\s*\{\s*([^}]*)\s*\}/), p = s.match(/END\s*\{\s*([^}]*)\s*\}/), f = s.match(/(?:\/([^/]*)\/\s*)?\{\s*([^}]*)\s*\}/);
+      let m = 0, g = 0;
+      if (h) {
+        const x = D(h[1], [], 0, 0, c);
         x && d.push(x);
       }
-      for (const x of f) {
-        h++;
-        const S = x.split(s).filter((v) => v !== "");
-        m = S.length;
-        let C = !0;
-        if (u) {
-          const v = u[1], y = u[2];
+      for (const x of u) {
+        m++;
+        const b = x.split(r).filter((v) => v !== "");
+        g = b.length;
+        let $ = !0;
+        if (f) {
+          const v = f[1], y = f[2];
           if (v)
             try {
-              C = new RegExp(v).test(x);
+              $ = new RegExp(v).test(x);
             } catch {
-              C = !1;
+              $ = !1;
             }
-          if (C) {
-            const w = T(y, S, h, m, c);
+          if ($) {
+            const w = D(y, b, m, g, c);
             w !== null && d.push(w);
           }
-        } else if (!g && !p) {
-          const v = T(n, S, h, m, c);
+        } else if (!h && !p) {
+          const v = D(s, b, m, g, c);
           v !== null && d.push(v);
         }
       }
       if (p) {
-        const x = T(p[1], [], h, 0, c);
+        const x = D(p[1], [], m, 0, c);
         x && d.push(x);
       }
       return {
@@ -109,20 +109,20 @@ const z = {
     }
   }
 };
-function T(i, t, e, r, n) {
-  let o = i.trim();
-  if (o.startsWith("print")) {
-    const a = o.substring(5).trim();
+function D(i, t, e, o, s) {
+  let n = i.trim();
+  if (n.startsWith("print")) {
+    const a = n.substring(5).trim();
     if (!a || a === "")
       return t.join(" ");
-    let s = a;
-    s = s.replace(/\$0/g, t.join(" ")), s = s.replace(/\$NF/g, t[t.length - 1] || "");
+    let r = a;
+    r = r.replace(/\$0/g, t.join(" ")), r = r.replace(/\$NF/g, t[t.length - 1] || "");
     for (let c = 1; c <= t.length; c++)
-      s = s.replace(new RegExp(`\\$${c}`, "g"), t[c - 1] || "");
-    s = s.replace(/\bNR\b/g, String(e)), s = s.replace(/\bNF\b/g, String(r));
-    for (const [c, l] of Object.entries(n))
-      s = s.replace(new RegExp(`\\b${c}\\b`, "g"), l);
-    return s = s.replace(/^["'](.*)["']$/, "$1"), s = s.replace(/\s+/g, " ").trim(), s;
+      r = r.replace(new RegExp(`\\$${c}`, "g"), t[c - 1] || "");
+    r = r.replace(/\bNR\b/g, String(e)), r = r.replace(/\bNF\b/g, String(o));
+    for (const [c, l] of Object.entries(s))
+      r = r.replace(new RegExp(`\\b${c}\\b`, "g"), l);
+    return r = r.replace(/^["'](.*)["']$/, "$1"), r = r.replace(/\s+/g, " ").trim(), r;
   }
   return null;
 }
@@ -141,20 +141,20 @@ const U = {
   name: "cat",
   description: "Concatenate and display files",
   async exec(i, t) {
-    const { flags: e, positional: r } = P(i);
+    const { flags: e, positional: o } = C(i);
     try {
-      const { content: n } = await R(
-        r,
+      const { content: s } = await k(
+        o,
         t.stdin,
         t.fs,
         t.cwd,
         t.fs.resolvePath
       );
-      return e.n ? { stdout: n.split(`
-`).map((s, c) => `${String(c + 1).padStart(6)}	${s}`).join(`
-`), stderr: "", exitCode: 0 } : { stdout: n, stderr: "", exitCode: 0 };
-    } catch (n) {
-      return { stdout: "", stderr: `cat: ${n instanceof Error ? n.message : n}
+      return e.n ? { stdout: s.split(`
+`).map((r, c) => `${String(c + 1).padStart(6)}	${r}`).join(`
+`), stderr: "", exitCode: 0 } : { stdout: s, stderr: "", exitCode: 0 };
+    } catch (s) {
+      return { stdout: "", stderr: `cat: ${s instanceof Error ? s.message : s}
 `, exitCode: 1 };
     }
   }
@@ -162,22 +162,22 @@ const U = {
   name: "chmod",
   description: "Change file mode bits",
   async exec(i, t) {
-    const { flags: e, positional: r } = P(i), n = e.R;
-    if (r.length < 2)
+    const { flags: e, positional: o } = C(i), s = e.R;
+    if (o.length < 2)
       return { stdout: "", stderr: `chmod: missing operand
 `, exitCode: 1 };
-    const o = r[0], a = r.slice(1), s = parseInt(o, 8);
-    if (isNaN(s))
-      return { stdout: "", stderr: `chmod: invalid mode: '${o}'
+    const n = o[0], a = o.slice(1), r = parseInt(n, 8);
+    if (isNaN(r))
+      return { stdout: "", stderr: `chmod: invalid mode: '${n}'
 `, exitCode: 1 };
     async function c(l) {
-      const f = t.fs.resolvePath(l, t.cwd);
-      if (n)
+      const u = t.fs.resolvePath(l, t.cwd);
+      if (s)
         try {
-          if ((await t.fs.stat(f)).type === "dir") {
-            const g = await t.fs.readdir(f);
-            for (const p of g)
-              await c(f + "/" + p.name);
+          if ((await t.fs.stat(u)).type === "dir") {
+            const h = await t.fs.readdir(u);
+            for (const p of h)
+              await c(u + "/" + p.name);
           }
         } catch {
         }
@@ -201,45 +201,45 @@ const U = {
   name: "cp",
   description: "Copy files and directories",
   async exec(i, t) {
-    const { flags: e, positional: r } = P(i), n = e.r || e.R;
-    if (r.length < 2)
+    const { flags: e, positional: o } = C(i), s = e.r || e.R;
+    if (o.length < 2)
       return { stdout: "", stderr: `cp: missing operand
 `, exitCode: 1 };
-    const o = t.fs.resolvePath(r[r.length - 1], t.cwd), a = r.slice(0, -1);
-    let s = !1;
+    const n = t.fs.resolvePath(o[o.length - 1], t.cwd), a = o.slice(0, -1);
+    let r = !1;
     try {
-      s = (await t.fs.stat(o)).type === "dir";
+      r = (await t.fs.stat(n)).type === "dir";
     } catch {
     }
-    if (a.length > 1 && !s)
+    if (a.length > 1 && !r)
       return { stdout: "", stderr: `cp: target is not a directory
 `, exitCode: 1 };
-    async function c(f, d) {
-      const g = await t.fs.readFile(f);
-      await t.fs.writeFile(d, g);
+    async function c(u, d) {
+      const h = await t.fs.readFile(u);
+      await t.fs.writeFile(d, h);
     }
-    async function l(f, d) {
+    async function l(u, d) {
       await t.fs.mkdir(d, { recursive: !0 });
-      const g = await t.fs.readdir(f);
-      for (const p of g) {
-        const u = f + "/" + p.name, h = d + "/" + p.name;
-        p.type === "dir" ? await l(u, h) : await c(u, h);
+      const h = await t.fs.readdir(u);
+      for (const p of h) {
+        const f = u + "/" + p.name, m = d + "/" + p.name;
+        p.type === "dir" ? await l(f, m) : await c(f, m);
       }
     }
     try {
-      for (const f of a) {
-        const d = t.fs.resolvePath(f, t.cwd), g = await t.fs.stat(d), p = f.split("/").pop(), u = s ? o + "/" + p : o;
-        if (g.type === "dir") {
-          if (!n)
-            return { stdout: "", stderr: `cp: -r not specified; omitting directory '${f}'
+      for (const u of a) {
+        const d = t.fs.resolvePath(u, t.cwd), h = await t.fs.stat(d), p = u.split("/").pop(), f = r ? n + "/" + p : n;
+        if (h.type === "dir") {
+          if (!s)
+            return { stdout: "", stderr: `cp: -r not specified; omitting directory '${u}'
 `, exitCode: 1 };
-          await l(d, u);
+          await l(d, f);
         } else
-          await c(d, u);
+          await c(d, f);
       }
       return { stdout: "", stderr: "", exitCode: 0 };
-    } catch (f) {
-      return { stdout: "", stderr: `cp: ${f instanceof Error ? f.message : f}
+    } catch (u) {
+      return { stdout: "", stderr: `cp: ${u instanceof Error ? u.message : u}
 `, exitCode: 1 };
     }
   }
@@ -247,58 +247,58 @@ const U = {
   name: "curl",
   description: "Transfer data from or to a server",
   async exec(i, t) {
-    const { flags: e, values: r, positional: n } = P(i, ["X", "H", "d", "o", "user-agent", "header", "data", "request", "output"]);
-    if (n.length === 0)
+    const { flags: e, values: o, positional: s } = C(i, ["X", "H", "d", "o", "user-agent", "header", "data", "request", "output"]);
+    if (s.length === 0)
       return { stdout: "", stderr: `curl: no URL specified!
 `, exitCode: 1 };
-    const o = n[0], a = r.X || r.request || (r.d || r.data ? "POST" : "GET"), s = r.o || r.output, c = e.s || e.silent, l = e.i || e.include, f = e.I || e.head, d = e.L || e.location, g = {}, p = r.H || r.header;
+    const n = s[0], a = o.X || o.request || (o.d || o.data ? "POST" : "GET"), r = o.o || o.output, c = e.s || e.silent, l = e.i || e.include, u = e.I || e.head, d = e.L || e.location, h = {}, p = o.H || o.header;
     if (p) {
-      const m = p.split(":");
-      m.length >= 2 && (g[m[0].trim()] = m.slice(1).join(":").trim());
+      const g = p.split(":");
+      g.length >= 2 && (h[g[0].trim()] = g.slice(1).join(":").trim());
     }
-    const u = r["user-agent"] || "fluffycoreutils-curl/0.1.0";
-    g["User-Agent"] = u;
-    let h;
-    (r.d || r.data) && (h = r.d || r.data, g["Content-Type"] || (g["Content-Type"] = "application/x-www-form-urlencoded"));
+    const f = o["user-agent"] || "fluffycoreutils-curl/0.1.0";
+    h["User-Agent"] = f;
+    let m;
+    (o.d || o.data) && (m = o.d || o.data, h["Content-Type"] || (h["Content-Type"] = "application/x-www-form-urlencoded"));
     try {
-      const m = {
-        method: f ? "HEAD" : a,
-        headers: g,
+      const g = {
+        method: u ? "HEAD" : a,
+        headers: h,
         redirect: d ? "follow" : "manual"
       };
-      h && a !== "GET" && a !== "HEAD" && (m.body = h);
-      const x = await fetch(o, m);
-      let S = "";
-      if ((l || f) && (S += `HTTP/1.1 ${x.status} ${x.statusText}
-`, x.headers.forEach((C, v) => {
-        S += `${v}: ${C}
+      m && a !== "GET" && a !== "HEAD" && (g.body = m);
+      const x = await fetch(n, g);
+      let b = "";
+      if ((l || u) && (b += `HTTP/1.1 ${x.status} ${x.statusText}
+`, x.headers.forEach(($, v) => {
+        b += `${v}: ${$}
 `;
-      }), S += `
-`), !f) {
-        const C = await x.text();
-        S += C;
+      }), b += `
+`), !u) {
+        const $ = await x.text();
+        b += $;
       }
-      if (s) {
-        const C = t.fs.resolvePath(s, t.cwd);
-        return await t.fs.writeFile(C, f ? "" : await x.text()), c ? { stdout: "", stderr: "", exitCode: 0 } : {
+      if (r) {
+        const $ = t.fs.resolvePath(r, t.cwd);
+        return await t.fs.writeFile($, u ? "" : await x.text()), c ? { stdout: "", stderr: "", exitCode: 0 } : {
           stdout: "",
           stderr: `  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
                                  Dload  Upload   Total   Spent    Left  Speed
-100  ${S.length}  100  ${S.length}    0     0   ${S.length}      0 --:--:-- --:--:-- --:--:--  ${S.length}
+100  ${b.length}  100  ${b.length}    0     0   ${b.length}      0 --:--:-- --:--:-- --:--:--  ${b.length}
 `,
           exitCode: 0
         };
       }
       return !c && !x.ok ? {
-        stdout: S,
+        stdout: b,
         stderr: `curl: (22) The requested URL returned error: ${x.status}
 `,
         exitCode: 22
-      } : { stdout: S, stderr: "", exitCode: 0 };
-    } catch (m) {
+      } : { stdout: b, stderr: "", exitCode: 0 };
+    } catch (g) {
       return {
         stdout: "",
-        stderr: `curl: (6) Could not resolve host: ${m instanceof Error ? m.message : String(m)}
+        stderr: `curl: (6) Could not resolve host: ${g instanceof Error ? g.message : String(g)}
 `,
         exitCode: 6
       };
@@ -308,34 +308,34 @@ const U = {
   name: "cut",
   description: "Remove sections from each line of files",
   async exec(i, t) {
-    const { values: e, positional: r } = P(i, ["d", "f", "c"]), n = e.d ?? "	", o = e.f, a = e.c;
-    if (!o && !a)
+    const { values: e, positional: o } = C(i, ["d", "f", "c"]), s = e.d ?? "	", n = e.f, a = e.c;
+    if (!n && !a)
       return { stdout: "", stderr: `cut: you must specify -f or -c
 `, exitCode: 1 };
     try {
-      const { content: s } = await R(
-        r,
+      const { content: r } = await k(
+        o,
         t.stdin,
         t.fs,
         t.cwd,
         t.fs.resolvePath
-      ), c = G(o ?? a), l = s.split(`
+      ), c = G(n ?? a), l = r.split(`
 `);
       l.length > 0 && l[l.length - 1] === "" && l.pop();
-      const f = [];
+      const u = [];
       for (const d of l)
-        if (o) {
-          const g = d.split(n), p = c.flatMap((u) => g.slice(u.start - 1, u.end)).filter((u) => u !== void 0);
-          f.push(p.join(n));
+        if (n) {
+          const h = d.split(s), p = c.flatMap((f) => h.slice(f.start - 1, f.end)).filter((f) => f !== void 0);
+          u.push(p.join(s));
         } else {
-          const g = d.split(""), p = c.flatMap((u) => g.slice(u.start - 1, u.end)).filter((u) => u !== void 0);
-          f.push(p.join(""));
+          const h = d.split(""), p = c.flatMap((f) => h.slice(f.start - 1, f.end)).filter((f) => f !== void 0);
+          u.push(p.join(""));
         }
-      return { stdout: f.join(`
+      return { stdout: u.join(`
 `) + `
 `, stderr: "", exitCode: 0 };
-    } catch (s) {
-      return { stdout: "", stderr: `cut: ${s instanceof Error ? s.message : s}
+    } catch (r) {
+      return { stdout: "", stderr: `cut: ${r instanceof Error ? r.message : r}
 `, exitCode: 1 };
     }
   }
@@ -343,10 +343,10 @@ const U = {
 function G(i) {
   return i.split(",").map((t) => {
     if (t.includes("-")) {
-      const [r, n] = t.split("-");
+      const [o, s] = t.split("-");
       return {
-        start: r ? parseInt(r, 10) : 1,
-        end: n ? parseInt(n, 10) : 1 / 0
+        start: o ? parseInt(o, 10) : 1,
+        end: s ? parseInt(s, 10) : 1 / 0
       };
     }
     const e = parseInt(t, 10);
@@ -368,7 +368,7 @@ const J = {
   }
 };
 function X(i, t) {
-  const e = (r) => String(r).padStart(2, "0");
+  const e = (o) => String(o).padStart(2, "0");
   return t.replace(/%Y/g, String(i.getFullYear())).replace(/%m/g, e(i.getMonth() + 1)).replace(/%d/g, e(i.getDate())).replace(/%H/g, e(i.getHours())).replace(/%M/g, e(i.getMinutes())).replace(/%S/g, e(i.getSeconds())).replace(/%s/g, String(Math.floor(i.getTime() / 1e3))).replace(/%n/g, `
 `).replace(/%t/g, "	").replace(/%%/g, "%");
 }
@@ -376,90 +376,90 @@ const K = {
   name: "diff",
   description: "Compare files line by line",
   async exec(i, t) {
-    var g, p;
-    const { flags: e, positional: r, values: n } = P(i, ["U", "context", "C"]), o = e.u || n.U !== void 0, a = n.U || n.context || n.C || (e.u ? 3 : 0), s = typeof a == "string" ? parseInt(a) : 3, c = e.q || e.brief, l = e.i, f = e.w || e["ignore-all-space"], d = e.y || e["side-by-side"];
-    if (r.length < 2)
+    var h, p;
+    const { flags: e, positional: o, values: s } = C(i, ["U", "context", "C"]), n = e.u || s.U !== void 0, a = s.U || s.context || s.C || (e.u ? 3 : 0), r = typeof a == "string" ? parseInt(a) : 3, c = e.q || e.brief, l = e.i, u = e.w || e["ignore-all-space"], d = e.y || e["side-by-side"];
+    if (o.length < 2)
       return { stdout: "", stderr: `diff: missing operand
 `, exitCode: 2 };
     try {
-      const u = t.fs.resolvePath(r[0], t.cwd), h = t.fs.resolvePath(r[1], t.cwd), m = await t.fs.readFile(u), x = await t.fs.readFile(h);
-      if (m === x)
+      const f = t.fs.resolvePath(o[0], t.cwd), m = t.fs.resolvePath(o[1], t.cwd), g = await t.fs.readFile(f), x = await t.fs.readFile(m);
+      if (g === x)
         return { stdout: "", stderr: "", exitCode: 0 };
       if (c)
-        return { stdout: `Files ${r[0]} and ${r[1]} differ
+        return { stdout: `Files ${o[0]} and ${o[1]} differ
 `, stderr: "", exitCode: 1 };
-      const S = m.split(`
-`), C = x.split(`
-`), v = Q(S, C, { ignoreCase: l, ignoreWhitespace: f }), y = [];
-      if (o) {
-        y.push(`--- ${r[0]}`), y.push(`+++ ${r[1]}`);
+      const b = g.split(`
+`), $ = x.split(`
+`), v = Q(b, $, { ignoreCase: l, ignoreWhitespace: u }), y = [];
+      if (n) {
+        y.push(`--- ${o[0]}`), y.push(`+++ ${o[1]}`);
         let w = 0;
         for (; w < v.length; ) {
           if (v[w].type === "equal") {
             w++;
             continue;
           }
-          const $ = Math.max(0, w - 1);
+          const S = Math.max(0, w - 1);
           let F = w;
           for (; F < v.length; ) {
-            const b = v[F];
-            if (b.type !== "equal")
+            const P = v[F];
+            if (P.type !== "equal")
               F++;
-            else if (b.lines.length <= s * 2)
+            else if (P.lines.length <= r * 2)
               F++;
             else
               break;
           }
-          const j = (((g = v[$]) == null ? void 0 : g.line1) ?? 0) + 1, M = (((p = v[$]) == null ? void 0 : p.line2) ?? 0) + 1;
-          let k = 0, A = 0;
-          for (let b = $; b < F; b++)
-            (v[b].type === "equal" || v[b].type === "delete") && (k += v[b].lines.length), (v[b].type === "equal" || v[b].type === "add") && (A += v[b].lines.length);
-          y.push(`@@ -${j},${k} +${M},${A} @@`);
-          for (let b = $; b < F; b++) {
-            const I = v[b];
-            I.type === "equal" ? I.lines.forEach((N) => y.push(` ${N}`)) : I.type === "delete" ? I.lines.forEach((N) => y.push(`-${N}`)) : I.type === "add" && I.lines.forEach((N) => y.push(`+${N}`));
+          const j = (((h = v[S]) == null ? void 0 : h.line1) ?? 0) + 1, M = (((p = v[S]) == null ? void 0 : p.line2) ?? 0) + 1;
+          let R = 0, A = 0;
+          for (let P = S; P < F; P++)
+            (v[P].type === "equal" || v[P].type === "delete") && (R += v[P].lines.length), (v[P].type === "equal" || v[P].type === "add") && (A += v[P].lines.length);
+          y.push(`@@ -${j},${R} +${M},${A} @@`);
+          for (let P = S; P < F; P++) {
+            const I = v[P];
+            I.type === "equal" ? I.lines.forEach((T) => y.push(` ${T}`)) : I.type === "delete" ? I.lines.forEach((T) => y.push(`-${T}`)) : I.type === "add" && I.lines.forEach((T) => y.push(`+${T}`));
           }
           w = F;
         }
       } else if (d)
         for (const E of v)
-          E.type === "equal" ? E.lines.forEach(($) => {
-            const F = $.substring(0, 40).padEnd(40);
-            y.push(`${F} | ${$}`);
-          }) : E.type === "delete" ? E.lines.forEach(($) => {
-            const F = $.substring(0, 40).padEnd(40);
+          E.type === "equal" ? E.lines.forEach((S) => {
+            const F = S.substring(0, 40).padEnd(40);
+            y.push(`${F} | ${S}`);
+          }) : E.type === "delete" ? E.lines.forEach((S) => {
+            const F = S.substring(0, 40).padEnd(40);
             y.push(`${F} <`);
-          }) : E.type === "add" && E.lines.forEach(($) => {
-            y.push(`${" ".repeat(40)} > ${$}`);
+          }) : E.type === "add" && E.lines.forEach((S) => {
+            y.push(`${" ".repeat(40)} > ${S}`);
           });
       else
         for (const w of v) {
           if (w.type === "equal") continue;
-          const E = (w.line1 ?? 0) + 1, $ = (w.line2 ?? 0) + 1;
-          w.type === "delete" ? (y.push(`${E},${E + w.lines.length - 1}d${$ - 1}`), w.lines.forEach((F) => y.push(`< ${F}`))) : w.type === "add" && (y.push(`${E - 1}a${$},${$ + w.lines.length - 1}`), w.lines.forEach((F) => y.push(`> ${F}`)));
+          const E = (w.line1 ?? 0) + 1, S = (w.line2 ?? 0) + 1;
+          w.type === "delete" ? (y.push(`${E},${E + w.lines.length - 1}d${S - 1}`), w.lines.forEach((F) => y.push(`< ${F}`))) : w.type === "add" && (y.push(`${E - 1}a${S},${S + w.lines.length - 1}`), w.lines.forEach((F) => y.push(`> ${F}`)));
         }
       return { stdout: y.join(`
 `) + (y.length > 0 ? `
 ` : ""), stderr: "", exitCode: 1 };
-    } catch (u) {
-      return { stdout: "", stderr: `diff: ${u instanceof Error ? u.message : u}
+    } catch (f) {
+      return { stdout: "", stderr: `diff: ${f instanceof Error ? f.message : f}
 `, exitCode: 2 };
     }
   }
 };
 function Q(i, t, e = {}) {
-  const r = i.length, n = t.length, o = (f) => {
-    let d = f;
+  const o = i.length, s = t.length, n = (u) => {
+    let d = u;
     return e.ignoreWhitespace && (d = d.replace(/\s+/g, "")), e.ignoreCase && (d = d.toLowerCase()), d;
-  }, a = Array(r + 1).fill(0).map(() => Array(n + 1).fill(0));
-  for (let f = 1; f <= r; f++)
-    for (let d = 1; d <= n; d++)
-      o(i[f - 1]) === o(t[d - 1]) ? a[f][d] = a[f - 1][d - 1] + 1 : a[f][d] = Math.max(a[f - 1][d], a[f][d - 1]);
-  const s = [];
-  let c = r, l = n;
+  }, a = Array(o + 1).fill(0).map(() => Array(s + 1).fill(0));
+  for (let u = 1; u <= o; u++)
+    for (let d = 1; d <= s; d++)
+      n(i[u - 1]) === n(t[d - 1]) ? a[u][d] = a[u - 1][d - 1] + 1 : a[u][d] = Math.max(a[u - 1][d], a[u][d - 1]);
+  const r = [];
+  let c = o, l = s;
   for (; c > 0 || l > 0; )
-    c > 0 && l > 0 && o(i[c - 1]) === o(t[l - 1]) ? (s.length > 0 && s[s.length - 1].type === "equal" ? s[s.length - 1].lines.unshift(i[c - 1]) : s.push({ type: "equal", lines: [i[c - 1]], line1: c - 1, line2: l - 1 }), c--, l--) : l > 0 && (c === 0 || a[c][l - 1] >= a[c - 1][l]) ? (s.length > 0 && s[s.length - 1].type === "add" ? s[s.length - 1].lines.unshift(t[l - 1]) : s.push({ type: "add", lines: [t[l - 1]], line1: c, line2: l - 1 }), l--) : (s.length > 0 && s[s.length - 1].type === "delete" ? s[s.length - 1].lines.unshift(i[c - 1]) : s.push({ type: "delete", lines: [i[c - 1]], line1: c - 1, line2: l }), c--);
-  return s.reverse();
+    c > 0 && l > 0 && n(i[c - 1]) === n(t[l - 1]) ? (r.length > 0 && r[r.length - 1].type === "equal" ? r[r.length - 1].lines.unshift(i[c - 1]) : r.push({ type: "equal", lines: [i[c - 1]], line1: c - 1, line2: l - 1 }), c--, l--) : l > 0 && (c === 0 || a[c][l - 1] >= a[c - 1][l]) ? (r.length > 0 && r[r.length - 1].type === "add" ? r[r.length - 1].lines.unshift(t[l - 1]) : r.push({ type: "add", lines: [t[l - 1]], line1: c, line2: l - 1 }), l--) : (r.length > 0 && r[r.length - 1].type === "delete" ? r[r.length - 1].lines.unshift(i[c - 1]) : r.push({ type: "delete", lines: [i[c - 1]], line1: c - 1, line2: l }), c--);
+  return r.reverse();
 }
 const tt = {
   name: "dirname",
@@ -476,83 +476,137 @@ const tt = {
   name: "echo",
   description: "Display text",
   async exec(i) {
-    const { flags: t } = P(i), e = t.n, r = i.filter((o) => o !== "-n" && o !== "-e").join(" ");
-    let n = t.e ? r.replace(/\\n/g, `
-`).replace(/\\t/g, "	").replace(/\\\\/g, "\\") : r;
-    return e || (n += `
-`), { stdout: n, stderr: "", exitCode: 0 };
+    const { flags: t } = C(i), e = t.n, o = i.filter((n) => n !== "-n" && n !== "-e").join(" ");
+    let s = t.e ? o.replace(/\\n/g, `
+`).replace(/\\t/g, "	").replace(/\\\\/g, "\\") : o;
+    return e || (s += `
+`), { stdout: s, stderr: "", exitCode: 0 };
   }
 }, st = {
   name: "env",
   description: "Print environment variables",
   async exec(i, t) {
-    return { stdout: Object.entries(t.env).map(([r, n]) => `${r}=${n}`).sort().join(`
+    return { stdout: Object.entries(t.env).map(([o, s]) => `${o}=${s}`).sort().join(`
 `) + `
 `, stderr: "", exitCode: 0 };
   }
 }, nt = {
+  name: "expand",
+  description: "Convert tabs to spaces",
+  async exec(i, t) {
+    const { values: e, positional: o, flags: s } = C(i, ["t", "tabs"]), n = e.t || e.tabs || "8", a = parseInt(n, 10);
+    if (isNaN(a) || a <= 0)
+      return {
+        stdout: "",
+        stderr: `expand: invalid tab size: '${n}'
+`,
+        exitCode: 1
+      };
+    const r = s.i || s.initial;
+    try {
+      const { content: c } = await k(
+        o,
+        t.stdin,
+        t.fs,
+        t.cwd,
+        t.fs.resolvePath
+      ), l = c.split(`
+`), u = [];
+      for (const d of l) {
+        let h = "", p = 0;
+        for (let f = 0; f < d.length; f++) {
+          const m = d[f];
+          if (m === "	")
+            if (!r || r && h.trim() === "") {
+              const g = a - p % a;
+              h += " ".repeat(g), p += g;
+            } else
+              h += m, p++;
+          else
+            h += m, p++;
+        }
+        u.push(h);
+      }
+      return {
+        stdout: u.join(`
+`) + (c.endsWith(`
+`) ? `
+` : ""),
+        stderr: "",
+        exitCode: 0
+      };
+    } catch (c) {
+      return {
+        stdout: "",
+        stderr: `expand: ${c instanceof Error ? c.message : c}
+`,
+        exitCode: 1
+      };
+    }
+  }
+}, rt = {
   name: "export",
   description: "Set environment variables (note: in a real shell, this modifies parent environment)",
   async exec(i, t) {
     if (i.length === 0)
-      return { stdout: Object.entries(t.env).map(([o, a]) => `export ${o}="${a}"`).sort().join(`
+      return { stdout: Object.entries(t.env).map(([n, a]) => `export ${n}="${a}"`).sort().join(`
 `) + `
 `, stderr: "", exitCode: 0 };
-    const e = [], r = [];
-    for (const n of i) {
-      const o = n.indexOf("=");
-      if (o === -1) {
-        const a = n;
+    const e = [], o = [];
+    for (const s of i) {
+      const n = s.indexOf("=");
+      if (n === -1) {
+        const a = s;
         if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(a)) {
-          r.push(`export: \`${a}': not a valid identifier`);
+          o.push(`export: \`${a}': not a valid identifier`);
           continue;
         }
         a in t.env ? e.push(`export ${a}="${t.env[a]}"`) : e.push(`export ${a}=""`);
       } else {
-        const a = n.slice(0, o);
-        let s = n.slice(o + 1);
+        const a = s.slice(0, n);
+        let r = s.slice(n + 1);
         if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(a)) {
-          r.push(`export: \`${a}': not a valid identifier`);
+          o.push(`export: \`${a}': not a valid identifier`);
           continue;
         }
-        (s.startsWith('"') && s.endsWith('"') || s.startsWith("'") && s.endsWith("'")) && (s = s.slice(1, -1)), t.env[a] = s, e.push(`export ${a}="${s}"`);
+        (r.startsWith('"') && r.endsWith('"') || r.startsWith("'") && r.endsWith("'")) && (r = r.slice(1, -1)), t.env[a] = r, e.push(`export ${a}="${r}"`);
       }
     }
-    return r.length > 0 ? {
+    return o.length > 0 ? {
       stdout: "",
-      stderr: r.join(`
+      stderr: o.join(`
 `) + `
 `,
       exitCode: 1
     } : { stdout: "", stderr: "", exitCode: 0 };
   }
-}, rt = {
+}, ot = {
   name: "false",
   description: "Return failure",
   async exec() {
     return { stdout: "", stderr: "", exitCode: 1 };
   }
-}, ot = {
+}, it = {
   name: "find",
   description: "Search for files in a directory hierarchy",
   async exec(i, t) {
-    const { values: e, positional: r, flags: n } = P(i, ["name", "type", "exec", "maxdepth", "mindepth", "path", "iname"]), o = r[0] ?? ".", a = e.name, s = e.iname, c = e.path, l = e.type, f = e.maxdepth ? parseInt(e.maxdepth) : 1 / 0, d = e.mindepth ? parseInt(e.mindepth) : 0, g = e.exec, p = n.print !== !1, u = t.fs.resolvePath(o, t.cwd), h = [], m = [];
+    const { values: e, positional: o, flags: s } = C(i, ["name", "type", "exec", "maxdepth", "mindepth", "path", "iname"]), n = o[0] ?? ".", a = e.name, r = e.iname, c = e.path, l = e.type, u = e.maxdepth ? parseInt(e.maxdepth) : 1 / 0, d = e.mindepth ? parseInt(e.mindepth) : 0, h = e.exec, p = s.print !== !1, f = t.fs.resolvePath(n, t.cwd), m = [], g = [];
     let x;
     if (a) {
       const w = a.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
       x = new RegExp(`^${w}$`);
     }
-    let S;
-    if (s) {
-      const w = s.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
-      S = new RegExp(`^${w}$`, "i");
+    let b;
+    if (r) {
+      const w = r.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+      b = new RegExp(`^${w}$`, "i");
     }
-    let C;
+    let $;
     if (c) {
       const w = c.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
-      C = new RegExp(w);
+      $ = new RegExp(w);
     }
-    async function v(w, E, $) {
+    async function v(w, E, S) {
       let F;
       try {
         F = await t.fs.readdir(w);
@@ -560,44 +614,44 @@ const tt = {
         return;
       }
       for (const j of F) {
-        const M = w + "/" + j.name, k = E ? E + "/" + j.name : j.name, A = o === "." ? "./" + k : o + "/" + k, b = $ + 1;
+        const M = w + "/" + j.name, R = E ? E + "/" + j.name : j.name, A = n === "." ? "./" + R : n + "/" + R, P = S + 1;
         let I = !0;
-        if (!(b > f)) {
-          if (b < d && (I = !1), x && !x.test(j.name) && (I = !1), S && !S.test(j.name) && (I = !1), C && !C.test(A) && (I = !1), l === "f" && j.type !== "file" && (I = !1), l === "d" && j.type !== "dir" && (I = !1), I && (p && h.push(A), g)) {
-            const N = g.replace(/\{\}/g, A);
-            m.push(`Executing: ${N}`);
+        if (!(P > u)) {
+          if (P < d && (I = !1), x && !x.test(j.name) && (I = !1), b && !b.test(j.name) && (I = !1), $ && !$.test(A) && (I = !1), l === "f" && j.type !== "file" && (I = !1), l === "d" && j.type !== "dir" && (I = !1), I && (p && m.push(A), h)) {
+            const T = h.replace(/\{\}/g, A);
+            g.push(`Executing: ${T}`);
           }
-          j.type === "dir" && b < f && await v(M, k, b);
+          j.type === "dir" && P < u && await v(M, R, P);
         }
       }
     }
-    0 >= d && (!l || l === "d") && !x && !S && !C && p && h.push(o === "." ? "." : o), await v(u, "", 0);
+    0 >= d && (!l || l === "d") && !x && !b && !$ && p && m.push(n === "." ? "." : n), await v(f, "", 0);
     let y = "";
-    return h.length > 0 && (y = h.join(`
+    return m.length > 0 && (y = m.join(`
 `) + `
-`), m.length > 0 && (y += m.join(`
+`), g.length > 0 && (y += g.join(`
 `) + `
 `), { stdout: y, stderr: "", exitCode: 0 };
   }
-}, it = {
+}, at = {
   name: "grep",
   description: "Search for patterns in files",
   async exec(i, t) {
-    const { flags: e, values: r, positional: n } = P(i, ["e"]), o = !!e.i, a = !!e.v, s = !!e.c, c = !!e.l, l = !!e.n, f = !!(e.r || e.R), d = r.e ?? n.shift();
+    const { flags: e, values: o, positional: s } = C(i, ["e"]), n = !!e.i, a = !!e.v, r = !!e.c, c = !!e.l, l = !!e.n, u = !!(e.r || e.R), d = o.e ?? s.shift();
     if (!d)
       return { stdout: "", stderr: `grep: missing pattern
 `, exitCode: 2 };
-    const g = o ? "i" : "";
+    const h = n ? "i" : "";
     let p;
     try {
-      p = new RegExp(d, g);
+      p = new RegExp(d, h);
     } catch {
       return { stdout: "", stderr: `grep: invalid pattern: ${d}
 `, exitCode: 2 };
     }
-    const u = n.length > 0 ? n : ["-"], h = u.length > 1 || f, m = [];
+    const f = s.length > 0 ? s : ["-"], m = f.length > 1 || u, g = [];
     let x = !1;
-    async function S(y, w) {
+    async function b(y, w) {
       let E;
       try {
         if (y === "-")
@@ -607,21 +661,21 @@ const tt = {
           E = await t.fs.readFile(j);
         }
       } catch {
-        m.push(`grep: ${y}: No such file or directory`);
+        g.push(`grep: ${y}: No such file or directory`);
         return;
       }
-      const $ = E.split(`
+      const S = E.split(`
 `);
-      $.length > 0 && $[$.length - 1] === "" && $.pop();
+      S.length > 0 && S[S.length - 1] === "" && S.pop();
       let F = 0;
-      for (let j = 0; j < $.length; j++)
-        if (p.test($[j]) !== a && (x = !0, F++, !s && !c)) {
-          const k = h ? `${w}:` : "", A = l ? `${j + 1}:` : "";
-          m.push(`${k}${A}${$[j]}`);
+      for (let j = 0; j < S.length; j++)
+        if (p.test(S[j]) !== a && (x = !0, F++, !r && !c)) {
+          const R = m ? `${w}:` : "", A = l ? `${j + 1}:` : "";
+          g.push(`${R}${A}${S[j]}`);
         }
-      s && m.push(h ? `${w}:${F}` : String(F)), c && F > 0 && m.push(w);
+      r && g.push(m ? `${w}:${F}` : String(F)), c && F > 0 && g.push(w);
     }
-    async function C(y) {
+    async function $(y) {
       const w = t.fs.resolvePath(y, t.cwd);
       let E;
       try {
@@ -629,15 +683,15 @@ const tt = {
       } catch {
         return;
       }
-      for (const $ of E) {
-        const F = w + "/" + $.name;
-        $.type === "dir" ? await C(F) : await S(F, F);
+      for (const S of E) {
+        const F = w + "/" + S.name;
+        S.type === "dir" ? await $(F) : await b(F, F);
       }
     }
-    for (const y of u)
+    for (const y of f)
       if (y === "-")
-        await S("-", "(standard input)");
-      else if (f) {
+        await b("-", "(standard input)");
+      else if (u) {
         const w = t.fs.resolvePath(y, t.cwd);
         let E;
         try {
@@ -645,111 +699,111 @@ const tt = {
         } catch {
           continue;
         }
-        E.type === "dir" ? await C(w) : await S(y, y);
+        E.type === "dir" ? await $(w) : await b(y, y);
       } else
-        await S(y, y);
-    return { stdout: m.length > 0 ? m.join(`
+        await b(y, y);
+    return { stdout: g.length > 0 ? g.join(`
 `) + `
 ` : "", stderr: "", exitCode: x ? 0 : 1 };
   }
-}, at = {
+}, ct = {
   name: "head",
   description: "Output the first part of files",
   async exec(i, t) {
-    const { values: e, positional: r } = P(i, ["n"]), n = parseInt(e.n ?? "10", 10);
+    const { values: e, positional: o } = C(i, ["n"]), s = parseInt(e.n ?? "10", 10);
     try {
-      const { content: o } = await R(
-        r,
+      const { content: n } = await k(
+        o,
         t.stdin,
         t.fs,
         t.cwd,
         t.fs.resolvePath
       );
-      return { stdout: o.split(`
-`).slice(0, n).join(`
+      return { stdout: n.split(`
+`).slice(0, s).join(`
 `) + `
 `, stderr: "", exitCode: 0 };
-    } catch (o) {
-      return { stdout: "", stderr: `head: ${o instanceof Error ? o.message : o}
+    } catch (n) {
+      return { stdout: "", stderr: `head: ${n instanceof Error ? n.message : n}
 `, exitCode: 1 };
     }
   }
-}, ct = {
+}, lt = {
   name: "hostname",
   description: "Print system hostname",
   async exec(i, t) {
     return { stdout: (t.env.HOSTNAME ?? "localhost") + `
 `, stderr: "", exitCode: 0 };
   }
-}, lt = {
+}, dt = {
   name: "less",
   description: "View file contents with pagination",
   async exec(i, t) {
-    const { flags: e, positional: r } = P(i);
+    const { flags: e, positional: o } = C(i);
     try {
-      const { content: n } = await R(
-        r,
+      const { content: s } = await k(
+        o,
         t.stdin,
         t.fs,
         t.cwd,
         t.fs.resolvePath
-      ), o = n.split(`
+      ), n = s.split(`
 `), a = e.N || e.n;
-      let s = "";
-      return a ? s = o.map((c, l) => `${String(l + 1).padStart(6)}  ${c}`).join(`
-`) : s = n, s && !s.endsWith(`
-`) && (s += `
-`), { stdout: s, stderr: "", exitCode: 0 };
-    } catch (n) {
+      let r = "";
+      return a ? r = n.map((c, l) => `${String(l + 1).padStart(6)}  ${c}`).join(`
+`) : r = s, r && !r.endsWith(`
+`) && (r += `
+`), { stdout: r, stderr: "", exitCode: 0 };
+    } catch (s) {
       return {
         stdout: "",
-        stderr: `less: ${n instanceof Error ? n.message : n}
+        stderr: `less: ${s instanceof Error ? s.message : s}
 `,
         exitCode: 1
       };
     }
   }
-}, dt = {
+}, ft = {
   name: "ln",
   description: "Make links between files",
   async exec(i, t) {
-    const { flags: e, positional: r } = P(i), n = e.s;
-    if (r.length < 2)
+    const { flags: e, positional: o } = C(i), s = e.s;
+    if (o.length < 2)
       return { stdout: "", stderr: `ln: missing operand
 `, exitCode: 1 };
-    const o = t.fs.resolvePath(r[0], t.cwd), a = t.fs.resolvePath(r[1], t.cwd);
+    const n = t.fs.resolvePath(o[0], t.cwd), a = t.fs.resolvePath(o[1], t.cwd);
     try {
-      if (n && t.fs.symlink)
-        await t.fs.symlink(o, a);
+      if (s && t.fs.symlink)
+        await t.fs.symlink(n, a);
       else {
-        const s = await t.fs.readFile(o);
-        await t.fs.writeFile(a, s);
+        const r = await t.fs.readFile(n);
+        await t.fs.writeFile(a, r);
       }
       return { stdout: "", stderr: "", exitCode: 0 };
-    } catch (s) {
-      return { stdout: "", stderr: `ln: ${s instanceof Error ? s.message : s}
+    } catch (r) {
+      return { stdout: "", stderr: `ln: ${r instanceof Error ? r.message : r}
 `, exitCode: 1 };
     }
   }
-}, ft = {
+}, ut = {
   name: "ls",
   description: "List directory contents",
   async exec(i, t) {
-    const { flags: e, positional: r } = P(i), n = r.length > 0 ? r : ["."], o = e.a, a = e.l, s = e.h, c = [];
-    for (const l of n) {
-      const f = t.fs.resolvePath(l, t.cwd), d = await t.fs.stat(f);
+    const { flags: e, positional: o } = C(i), s = o.length > 0 ? o : ["."], n = e.a, a = e.l, r = e.h, c = [];
+    for (const l of s) {
+      const u = t.fs.resolvePath(l, t.cwd), d = await t.fs.stat(u);
       if (d.type === "file") {
-        c.push(a ? L(f.split("/").pop(), d, s) : f.split("/").pop());
+        c.push(a ? L(u.split("/").pop(), d, r) : u.split("/").pop());
         continue;
       }
-      n.length > 1 && c.push(`${l}:`);
-      const g = await t.fs.readdir(f), p = o ? g : g.filter((u) => !u.name.startsWith("."));
-      if (p.sort((u, h) => u.name.localeCompare(h.name)), a) {
+      s.length > 1 && c.push(`${l}:`);
+      const h = await t.fs.readdir(u), p = n ? h : h.filter((f) => !f.name.startsWith("."));
+      if (p.sort((f, m) => f.name.localeCompare(m.name)), a) {
         c.push(`total ${p.length}`);
-        for (const u of p)
-          c.push(L(u.name, u, s));
+        for (const f of p)
+          c.push(L(f.name, f, r));
       } else
-        c.push(p.map((u) => u.type === "dir" ? u.name + "/" : u.name).join("  "));
+        c.push(p.map((f) => f.type === "dir" ? f.name + "/" : f.name).join("  "));
     }
     return { stdout: c.join(`
 `) + `
@@ -757,65 +811,65 @@ const tt = {
   }
 };
 function L(i, t, e) {
-  const r = t.type === "dir" ? "d" : "-", n = t.mode ?? (t.type === "dir" ? 493 : 420), o = ut(n), a = e ? ht(t.size) : String(t.size).padStart(8), s = new Date(t.mtime), c = pt(s);
-  return `${r}${o}  1 user user ${a} ${c} ${i}`;
+  const o = t.type === "dir" ? "d" : "-", s = t.mode ?? (t.type === "dir" ? 493 : 420), n = pt(s), a = e ? mt(t.size) : String(t.size).padStart(8), r = new Date(t.mtime), c = ht(r);
+  return `${o}${n}  1 user user ${a} ${c} ${i}`;
 }
-function ut(i) {
+function pt(i) {
   let e = "";
-  for (let r = 2; r >= 0; r--) {
-    const n = i >> r * 3 & 7;
-    for (let o = 2; o >= 0; o--)
-      e += n & 1 << o ? "rwx"[2 - o] : "-";
+  for (let o = 2; o >= 0; o--) {
+    const s = i >> o * 3 & 7;
+    for (let n = 2; n >= 0; n--)
+      e += s & 1 << n ? "rwx"[2 - n] : "-";
   }
   return e;
 }
-function pt(i) {
-  const e = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][i.getMonth()], r = String(i.getDate()).padStart(2), n = String(i.getHours()).padStart(2, "0"), o = String(i.getMinutes()).padStart(2, "0");
-  return `${e} ${r} ${n}:${o}`;
-}
 function ht(i) {
+  const e = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][i.getMonth()], o = String(i.getDate()).padStart(2), s = String(i.getHours()).padStart(2, "0"), n = String(i.getMinutes()).padStart(2, "0");
+  return `${e} ${o} ${s}:${n}`;
+}
+function mt(i) {
   return i < 1024 ? String(i).padStart(5) : i < 1024 * 1024 ? (i / 1024).toFixed(1) + "K" : (i / (1024 * 1024)).toFixed(1) + "M";
 }
-const mt = {
+const gt = {
   name: "mkdir",
   description: "Make directories",
   async exec(i, t) {
-    const { flags: e, positional: r } = P(i), n = e.p;
-    if (r.length === 0)
+    const { flags: e, positional: o } = C(i), s = e.p;
+    if (o.length === 0)
       return { stdout: "", stderr: `mkdir: missing operand
 `, exitCode: 1 };
     try {
-      for (const o of r) {
-        const a = t.fs.resolvePath(o, t.cwd);
-        await t.fs.mkdir(a, { recursive: n });
+      for (const n of o) {
+        const a = t.fs.resolvePath(n, t.cwd);
+        await t.fs.mkdir(a, { recursive: s });
       }
       return { stdout: "", stderr: "", exitCode: 0 };
-    } catch (o) {
-      return { stdout: "", stderr: `mkdir: ${o instanceof Error ? o.message : o}
+    } catch (n) {
+      return { stdout: "", stderr: `mkdir: ${n instanceof Error ? n.message : n}
 `, exitCode: 1 };
     }
   }
-}, gt = {
+}, xt = {
   name: "mv",
   description: "Move or rename files",
   async exec(i, t) {
-    const { positional: e } = P(i);
+    const { positional: e } = C(i);
     if (e.length < 2)
       return { stdout: "", stderr: `mv: missing operand
 `, exitCode: 1 };
-    const r = t.fs.resolvePath(e[e.length - 1], t.cwd), n = e.slice(0, -1);
-    let o = !1;
+    const o = t.fs.resolvePath(e[e.length - 1], t.cwd), s = e.slice(0, -1);
+    let n = !1;
     try {
-      o = (await t.fs.stat(r)).type === "dir";
+      n = (await t.fs.stat(o)).type === "dir";
     } catch {
     }
-    if (n.length > 1 && !o)
+    if (s.length > 1 && !n)
       return { stdout: "", stderr: `mv: target is not a directory
 `, exitCode: 1 };
     try {
-      for (const a of n) {
-        const s = t.fs.resolvePath(a, t.cwd), c = a.split("/").pop(), l = o ? r + "/" + c : r;
-        await t.fs.rename(s, l);
+      for (const a of s) {
+        const r = t.fs.resolvePath(a, t.cwd), c = a.split("/").pop(), l = n ? o + "/" + c : o;
+        await t.fs.rename(r, l);
       }
       return { stdout: "", stderr: "", exitCode: 0 };
     } catch (a) {
@@ -823,110 +877,110 @@ const mt = {
 `, exitCode: 1 };
     }
   }
-}, xt = {
+}, wt = {
   name: "printf",
   description: "Format and print data",
   async exec(i) {
     if (i.length === 0)
       return { stdout: "", stderr: "", exitCode: 0 };
     const t = i[0], e = i.slice(1);
-    let r = 0, n = "", o = 0;
-    for (; o < t.length; )
-      if (t[o] === "\\") {
-        switch (o++, t[o]) {
+    let o = 0, s = "", n = 0;
+    for (; n < t.length; )
+      if (t[n] === "\\") {
+        switch (n++, t[n]) {
           case "n":
-            n += `
+            s += `
 `;
             break;
           case "t":
-            n += "	";
+            s += "	";
             break;
           case "\\":
-            n += "\\";
+            s += "\\";
             break;
           case '"':
-            n += '"';
+            s += '"';
             break;
           default:
-            n += "\\" + (t[o] ?? "");
+            s += "\\" + (t[n] ?? "");
             break;
         }
-        o++;
-      } else if (t[o] === "%")
-        if (o++, t[o] === "%")
-          n += "%", o++;
+        n++;
+      } else if (t[n] === "%")
+        if (n++, t[n] === "%")
+          s += "%", n++;
         else {
           let a = "";
-          for (; o < t.length && !/[sdf]/.test(t[o]); )
-            a += t[o], o++;
-          const s = t[o] ?? "s";
-          o++;
-          const c = e[r++] ?? "";
-          switch (s) {
+          for (; n < t.length && !/[sdf]/.test(t[n]); )
+            a += t[n], n++;
+          const r = t[n] ?? "s";
+          n++;
+          const c = e[o++] ?? "";
+          switch (r) {
             case "s":
-              n += c;
+              s += c;
               break;
             case "d":
-              n += String(parseInt(c, 10) || 0);
+              s += String(parseInt(c, 10) || 0);
               break;
             case "f": {
               const l = a.includes(".") ? parseInt(a.split(".")[1], 10) : 6;
-              n += (parseFloat(c) || 0).toFixed(l);
+              s += (parseFloat(c) || 0).toFixed(l);
               break;
             }
           }
         }
       else
-        n += t[o], o++;
-    return { stdout: n, stderr: "", exitCode: 0 };
+        s += t[n], n++;
+    return { stdout: s, stderr: "", exitCode: 0 };
   }
-}, wt = {
+}, yt = {
   name: "pwd",
   description: "Print working directory",
   async exec(i, t) {
     return { stdout: t.cwd + `
 `, stderr: "", exitCode: 0 };
   }
-}, yt = {
+}, vt = {
   name: "readlink",
   description: "Print resolved symbolic links or canonical file names",
   async exec(i, t) {
-    const { flags: e, positional: r } = P(i), n = e.f;
-    if (r.length === 0)
+    const { flags: e, positional: o } = C(i), s = e.f;
+    if (o.length === 0)
       return { stdout: "", stderr: `readlink: missing operand
 `, exitCode: 1 };
-    const o = t.fs.resolvePath(r[0], t.cwd);
-    return n ? { stdout: o + `
-`, stderr: "", exitCode: 0 } : { stdout: o + `
+    const n = t.fs.resolvePath(o[0], t.cwd);
+    return s ? { stdout: n + `
+`, stderr: "", exitCode: 0 } : { stdout: n + `
 `, stderr: "", exitCode: 0 };
   }
-}, vt = {
+}, Ct = {
   name: "realpath",
   description: "Print the resolved absolute path",
   async exec(i, t) {
-    const { flags: e, positional: r } = P(i);
-    if (r.length === 0)
+    const { flags: e, positional: o } = C(i);
+    if (o.length === 0)
       return { stdout: "", stderr: `realpath: missing operand
 `, exitCode: 1 };
-    const n = e.q || e.quiet, o = !e.s;
+    const s = e.q || e.quiet, n = !e.s;
     e.s;
-    const a = [], s = [];
-    for (const f of r)
+    const a = [], r = [];
+    for (const u of o)
       try {
-        let d = t.fs.resolvePath(f, t.cwd);
-        if (o) {
-          const g = d.split("/").filter((u) => u !== "" && u !== "."), p = [];
-          for (const u of g)
-            u === ".." ? p.length > 0 && p.pop() : p.push(u);
+        let d = t.fs.resolvePath(u, t.cwd);
+        if (n) {
+          const h = d.split("/").filter((f) => f !== "" && f !== "."), p = [];
+          for (const f of h)
+            f === ".." ? p.length > 0 && p.pop() : p.push(f);
           d = "/" + p.join("/");
         }
-        await t.fs.exists(d) ? a.push(d) : n || s.push(`realpath: ${f}: No such file or directory`);
+        await t.fs.exists(d) ? a.push(d) : s || r.push(`realpath: ${u}: No such file or directory`);
       } catch (d) {
-        n || s.push(`realpath: ${f}: ${d instanceof Error ? d.message : d}`);
+        s || r.push(`realpath: ${u}: ${d instanceof Error ? d.message : d}`);
       }
-    const c = s.length > 0 ? s.join(`
+    const c = r.length > 0 ? r.join(`
 `) + `
-` : "", l = s.length > 0 ? 1 : 0;
+` : "", l = r.length > 0 ? 1 : 0;
     return {
       stdout: a.join(`
 `) + (a.length > 0 ? `
@@ -935,103 +989,103 @@ const mt = {
       exitCode: l
     };
   }
-}, Ct = {
+}, $t = {
   name: "rm",
   description: "Remove files or directories",
   async exec(i, t) {
-    const { flags: e, positional: r } = P(i), n = e.r || e.R, o = e.f;
-    if (r.length === 0 && !o)
+    const { flags: e, positional: o } = C(i), s = e.r || e.R, n = e.f;
+    if (o.length === 0 && !n)
       return { stdout: "", stderr: `rm: missing operand
 `, exitCode: 1 };
-    async function a(s) {
-      const c = await t.fs.readdir(s);
+    async function a(r) {
+      const c = await t.fs.readdir(r);
       for (const l of c) {
-        const f = s + "/" + l.name;
-        l.type === "dir" ? await a(f) : await t.fs.unlink(f);
+        const u = r + "/" + l.name;
+        l.type === "dir" ? await a(u) : await t.fs.unlink(u);
       }
-      await t.fs.rmdir(s);
+      await t.fs.rmdir(r);
     }
     try {
-      for (const s of r) {
-        const c = t.fs.resolvePath(s, t.cwd);
+      for (const r of o) {
+        const c = t.fs.resolvePath(r, t.cwd);
         let l;
         try {
           l = await t.fs.stat(c);
         } catch {
-          if (o) continue;
-          return { stdout: "", stderr: `rm: cannot remove '${s}': No such file or directory
+          if (n) continue;
+          return { stdout: "", stderr: `rm: cannot remove '${r}': No such file or directory
 `, exitCode: 1 };
         }
         if (l.type === "dir") {
-          if (!n)
-            return { stdout: "", stderr: `rm: cannot remove '${s}': Is a directory
+          if (!s)
+            return { stdout: "", stderr: `rm: cannot remove '${r}': Is a directory
 `, exitCode: 1 };
           await a(c);
         } else
           await t.fs.unlink(c);
       }
       return { stdout: "", stderr: "", exitCode: 0 };
-    } catch (s) {
-      return o ? { stdout: "", stderr: "", exitCode: 0 } : { stdout: "", stderr: `rm: ${s instanceof Error ? s.message : s}
+    } catch (r) {
+      return n ? { stdout: "", stderr: "", exitCode: 0 } : { stdout: "", stderr: `rm: ${r instanceof Error ? r.message : r}
 `, exitCode: 1 };
     }
   }
-}, $t = {
+}, St = {
   name: "sed",
   description: "Stream editor for filtering and transforming text",
   async exec(i, t) {
-    const { flags: e, positional: r } = P(i), n = e.i, o = r.shift();
-    if (!o)
+    const { flags: e, positional: o } = C(i), s = e.i, n = o.shift();
+    if (!n)
       return { stdout: "", stderr: `sed: no expression provided
 `, exitCode: 1 };
-    const a = o.match(/^s(.)(.+?)\1(.*?)\1([gi]*)$/);
+    const a = n.match(/^s(.)(.+?)\1(.*?)\1([gi]*)$/);
     if (!a)
-      return { stdout: "", stderr: `sed: unsupported expression: ${o}
+      return { stdout: "", stderr: `sed: unsupported expression: ${n}
 `, exitCode: 1 };
-    const [, , s, c, l] = a, f = l.includes("g"), d = l.includes("i");
-    let g;
+    const [, , r, c, l] = a, u = l.includes("g"), d = l.includes("i");
+    let h;
     try {
-      const p = (f ? "g" : "") + (d ? "i" : "");
-      g = new RegExp(s, p);
+      const p = (u ? "g" : "") + (d ? "i" : "");
+      h = new RegExp(r, p);
     } catch {
-      return { stdout: "", stderr: `sed: invalid regex: ${s}
+      return { stdout: "", stderr: `sed: invalid regex: ${r}
 `, exitCode: 2 };
     }
     try {
-      const { content: p, files: u } = await R(
-        r,
+      const { content: p, files: f } = await k(
+        o,
         t.stdin,
         t.fs,
         t.cwd,
         t.fs.resolvePath
-      ), h = p.split(`
-`).map((m) => m.replace(g, c)).join(`
+      ), m = p.split(`
+`).map((g) => g.replace(h, c)).join(`
 `);
-      if (n && u.length > 0) {
-        for (const m of u) {
-          const x = t.fs.resolvePath(m, t.cwd), C = (await t.fs.readFile(x)).split(`
-`).map((v) => v.replace(g, c)).join(`
+      if (s && f.length > 0) {
+        for (const g of f) {
+          const x = t.fs.resolvePath(g, t.cwd), $ = (await t.fs.readFile(x)).split(`
+`).map((v) => v.replace(h, c)).join(`
 `);
-          await t.fs.writeFile(x, C);
+          await t.fs.writeFile(x, $);
         }
         return { stdout: "", stderr: "", exitCode: 0 };
       }
-      return { stdout: h, stderr: "", exitCode: 0 };
+      return { stdout: m, stderr: "", exitCode: 0 };
     } catch (p) {
       return { stdout: "", stderr: `sed: ${p instanceof Error ? p.message : p}
 `, exitCode: 1 };
     }
   }
-}, St = {
+}, bt = {
   name: "seq",
   description: "Generate sequences of numbers",
   async exec(i, t) {
-    const { flags: e, values: r, positional: n } = P(i, ["separator", "s", "format", "f"]);
-    if (n.length === 0)
+    const { flags: e, values: o, positional: s } = C(i, ["separator", "s", "format", "f"]);
+    if (s.length === 0)
       return { stdout: "", stderr: `seq: missing operand
 `, exitCode: 1 };
-    let o = 1, a = 1, s;
-    if (n.length === 1 ? s = parseFloat(n[0]) : n.length === 2 ? (o = parseFloat(n[0]), s = parseFloat(n[1])) : n.length >= 3 ? (o = parseFloat(n[0]), a = parseFloat(n[1]), s = parseFloat(n[2])) : s = 1, isNaN(o) || isNaN(a) || isNaN(s))
+    let n = 1, a = 1, r;
+    if (s.length === 1 ? r = parseFloat(s[0]) : s.length === 2 ? (n = parseFloat(s[0]), r = parseFloat(s[1])) : s.length >= 3 ? (n = parseFloat(s[0]), a = parseFloat(s[1]), r = parseFloat(s[2])) : r = 1, isNaN(n) || isNaN(a) || isNaN(r))
       return {
         stdout: "",
         stderr: `seq: invalid number
@@ -1045,23 +1099,23 @@ const mt = {
 `,
         exitCode: 1
       };
-    const c = r.s || r.separator || `
-`, l = r.f || r.format, f = e.w, d = [];
+    const c = o.s || o.separator || `
+`, l = o.f || o.format, u = e.w, d = [];
     if (a > 0)
-      for (let u = o; u <= s; u += a)
-        d.push(String(u));
+      for (let f = n; f <= r; f += a)
+        d.push(String(f));
     else
-      for (let u = o; u >= s; u += a)
-        d.push(String(u));
-    if (f) {
-      const u = Math.max(...d.map((h) => h.length));
-      for (let h = 0; h < d.length; h++)
-        d[h] = d[h].padStart(u, "0");
+      for (let f = n; f >= r; f += a)
+        d.push(String(f));
+    if (u) {
+      const f = Math.max(...d.map((m) => m.length));
+      for (let m = 0; m < d.length; m++)
+        d[m] = d[m].padStart(f, "0");
     }
     if (l && typeof l == "string")
-      for (let u = 0; u < d.length; u++) {
-        const h = parseFloat(d[u]);
-        l.includes("%g") || l.includes("%d") || l.includes("%i") ? d[u] = l.replace(/%[gdi]/, String(h)) : l.includes("%f") ? d[u] = l.replace(/%f/, h.toFixed(6)) : l.includes("%e") && (d[u] = l.replace(/%e/, h.toExponential()));
+      for (let f = 0; f < d.length; f++) {
+        const m = parseFloat(d[f]);
+        l.includes("%g") || l.includes("%d") || l.includes("%i") ? d[f] = l.replace(/%[gdi]/, String(m)) : l.includes("%f") ? d[f] = l.replace(/%f/, m.toFixed(6)) : l.includes("%e") && (d[f] = l.replace(/%e/, m.toExponential()));
       }
     return {
       stdout: d.join(c) + ((typeof c == "string" ? c : `
@@ -1073,25 +1127,60 @@ const mt = {
     };
   }
 }, Et = {
+  name: "sleep",
+  description: "Delay for a specified amount of time",
+  async exec(i, t) {
+    const { positional: e } = C(i);
+    if (e.length === 0)
+      return { stdout: "", stderr: `sleep: missing operand
+`, exitCode: 1 };
+    const o = e[0];
+    let s = 0;
+    const n = o.match(/^(\d+(?:\.\d+)?)(s|m|h|d)?$/);
+    if (!n)
+      return {
+        stdout: "",
+        stderr: `sleep: invalid time interval '${o}'
+`,
+        exitCode: 1
+      };
+    const a = parseFloat(n[1]);
+    switch (n[2] || "s") {
+      case "s":
+        s = a;
+        break;
+      case "m":
+        s = a * 60;
+        break;
+      case "h":
+        s = a * 3600;
+        break;
+      case "d":
+        s = a * 86400;
+        break;
+    }
+    return await new Promise((c) => globalThis.setTimeout(c, s * 1e3)), { stdout: "", stderr: "", exitCode: 0 };
+  }
+}, Ft = {
   name: "sort",
   description: "Sort lines of text",
   async exec(i, t) {
-    const { flags: e, positional: r } = P(i);
+    const { flags: e, positional: o } = C(i);
     try {
-      const { content: n } = await R(
-        r,
+      const { content: s } = await k(
+        o,
         t.stdin,
         t.fs,
         t.cwd,
         t.fs.resolvePath
       );
-      let o = n.split(`
+      let n = s.split(`
 `).filter(Boolean);
-      return e.n ? o.sort((a, s) => parseFloat(a) - parseFloat(s)) : o.sort(), e.u && (o = [...new Set(o)]), e.r && o.reverse(), { stdout: o.join(`
+      return e.n ? n.sort((a, r) => parseFloat(a) - parseFloat(r)) : n.sort(), e.u && (n = [...new Set(n)]), e.r && n.reverse(), { stdout: n.join(`
 `) + `
 `, stderr: "", exitCode: 0 };
-    } catch (n) {
-      return { stdout: "", stderr: `sort: ${n instanceof Error ? n.message : n}
+    } catch (s) {
+      return { stdout: "", stderr: `sort: ${s instanceof Error ? s.message : s}
 `, exitCode: 1 };
     }
   }
@@ -1099,69 +1188,69 @@ const mt = {
   name: "tail",
   description: "Output the last part of files",
   async exec(i, t) {
-    const { values: e, positional: r } = P(i, ["n"]), n = parseInt(e.n ?? "10", 10);
+    const { values: e, positional: o } = C(i, ["n"]), s = parseInt(e.n ?? "10", 10);
     try {
-      const { content: o } = await R(
-        r,
+      const { content: n } = await k(
+        o,
         t.stdin,
         t.fs,
         t.cwd,
         t.fs.resolvePath
       );
-      return { stdout: o.split(`
-`).slice(-n).join(`
+      return { stdout: n.split(`
+`).slice(-s).join(`
 `) + `
 `, stderr: "", exitCode: 0 };
-    } catch (o) {
-      return { stdout: "", stderr: `tail: ${o instanceof Error ? o.message : o}
+    } catch (n) {
+      return { stdout: "", stderr: `tail: ${n instanceof Error ? n.message : n}
 `, exitCode: 1 };
     }
   }
-}, Ft = {
+}, jt = {
   name: "tar",
   description: "Archive utility (simplified tar format)",
   async exec(i, t) {
-    const { flags: e, values: r, positional: n } = P(i, ["f", "C"]), o = e.c || e.create, a = e.x || e.extract, s = e.t || e.list, c = e.v || e.verbose, l = r.f, f = r.C;
+    const { flags: e, values: o, positional: s } = C(i, ["f", "C"]), n = e.c || e.create, a = e.x || e.extract, r = e.t || e.list, c = e.v || e.verbose, l = o.f, u = o.C;
     let d = t.cwd;
-    f && (d = t.fs.resolvePath(f, t.cwd));
-    const g = [o, a, s].filter(Boolean).length;
-    if (g === 0)
+    u && (d = t.fs.resolvePath(u, t.cwd));
+    const h = [n, a, r].filter(Boolean).length;
+    if (h === 0)
       return { stdout: "", stderr: `tar: You must specify one of -c, -x, or -t
 `, exitCode: 1 };
-    if (g > 1)
+    if (h > 1)
       return { stdout: "", stderr: `tar: You may not specify more than one -c, -x, or -t
 `, exitCode: 1 };
     try {
-      if (o) {
+      if (n) {
         if (!l)
           return { stdout: "", stderr: `tar: Refusing to write archive to terminal (missing -f option?)
 `, exitCode: 1 };
-        const p = n;
+        const p = s;
         if (p.length === 0)
           return { stdout: "", stderr: `tar: Cowardly refusing to create an empty archive
 `, exitCode: 1 };
-        const u = [];
-        async function h(C, v) {
-          const y = t.fs.resolvePath(C, d);
+        const f = [];
+        async function m($, v) {
+          const y = t.fs.resolvePath($, d);
           if ((await t.fs.stat(y)).type === "dir") {
-            u.push({ path: v + "/", content: "", isDir: !0 });
+            f.push({ path: v + "/", content: "", isDir: !0 });
             const E = await t.fs.readdir(y);
-            for (const $ of E)
-              await h(y + "/" + $.name, v + "/" + $.name);
+            for (const S of E)
+              await m(y + "/" + S.name, v + "/" + S.name);
           } else {
             const E = await t.fs.readFile(y);
-            u.push({ path: v, content: E, isDir: !1 });
+            f.push({ path: v, content: E, isDir: !1 });
           }
         }
-        for (const C of p)
-          await h(C, C);
-        const m = ["FLUFFY-TAR-V1"];
-        for (const C of u)
-          c && (t.stderr || console.error(C.path)), m.push(`FILE:${C.path}`), m.push(`SIZE:${C.content.length}`), m.push(`TYPE:${C.isDir ? "dir" : "file"}`), m.push("DATA-START"), m.push(C.content), m.push("DATA-END");
-        const x = m.join(`
-`), S = t.fs.resolvePath(l, t.cwd);
-        return await t.fs.writeFile(S, x), {
-          stdout: c ? u.map((C) => C.path).join(`
+        for (const $ of p)
+          await m($, $);
+        const g = ["FLUFFY-TAR-V1"];
+        for (const $ of f)
+          c && (t.stderr || console.error($.path)), g.push(`FILE:${$.path}`), g.push(`SIZE:${$.content.length}`), g.push(`TYPE:${$.isDir ? "dir" : "file"}`), g.push("DATA-START"), g.push($.content), g.push("DATA-END");
+        const x = g.join(`
+`), b = t.fs.resolvePath(l, t.cwd);
+        return await t.fs.writeFile(b, x), {
+          stdout: c ? f.map(($) => $.path).join(`
 `) + `
 ` : "",
           stderr: "",
@@ -1172,29 +1261,29 @@ const mt = {
         if (!l)
           return { stdout: "", stderr: `tar: Refusing to read archive from terminal (missing -f option?)
 `, exitCode: 1 };
-        const p = t.fs.resolvePath(l, t.cwd), h = (await t.fs.readFile(p)).split(`
+        const p = t.fs.resolvePath(l, t.cwd), m = (await t.fs.readFile(p)).split(`
 `);
-        if (h[0] !== "FLUFFY-TAR-V1")
+        if (m[0] !== "FLUFFY-TAR-V1")
           return { stdout: "", stderr: `tar: This does not look like a tar archive
 `, exitCode: 1 };
-        let m = 1;
+        let g = 1;
         const x = [];
-        for (; m < h.length && h[m].startsWith("FILE:"); ) {
-          const S = h[m].slice(5), C = parseInt(h[m + 1].slice(5), 10), v = h[m + 2].slice(5);
-          m += 4;
+        for (; g < m.length && m[g].startsWith("FILE:"); ) {
+          const b = m[g].slice(5), $ = parseInt(m[g + 1].slice(5), 10), v = m[g + 2].slice(5);
+          g += 4;
           const y = [];
-          for (; m < h.length && h[m] !== "DATA-END"; )
-            y.push(h[m]), m++;
+          for (; g < m.length && m[g] !== "DATA-END"; )
+            y.push(m[g]), g++;
           const w = y.join(`
 `);
-          m++;
-          const E = t.fs.resolvePath(S, d);
+          g++;
+          const E = t.fs.resolvePath(b, d);
           if (v === "dir")
             await t.fs.mkdir(E, { recursive: !0 });
           else {
-            const $ = E.lastIndexOf("/");
-            if ($ > 0) {
-              const F = E.slice(0, $);
+            const S = E.lastIndexOf("/");
+            if (S > 0) {
+              const F = E.slice(0, S);
               try {
                 await t.fs.mkdir(F, { recursive: !0 });
               } catch {
@@ -1202,7 +1291,7 @@ const mt = {
             }
             await t.fs.writeFile(E, w);
           }
-          x.push(S), c && (t.stderr || console.error(S));
+          x.push(b), c && (t.stderr || console.error(b));
         }
         return {
           stdout: c ? x.join(`
@@ -1212,19 +1301,19 @@ const mt = {
           exitCode: 0
         };
       }
-      if (s) {
+      if (r) {
         if (!l)
           return { stdout: "", stderr: `tar: Refusing to read archive from terminal (missing -f option?)
 `, exitCode: 1 };
-        const p = t.fs.resolvePath(l, t.cwd), h = (await t.fs.readFile(p)).split(`
+        const p = t.fs.resolvePath(l, t.cwd), m = (await t.fs.readFile(p)).split(`
 `);
-        if (h[0] !== "FLUFFY-TAR-V1")
+        if (m[0] !== "FLUFFY-TAR-V1")
           return { stdout: "", stderr: `tar: This does not look like a tar archive
 `, exitCode: 1 };
-        const m = [];
-        for (let x = 1; x < h.length; x++)
-          h[x].startsWith("FILE:") && m.push(h[x].slice(5));
-        return { stdout: m.join(`
+        const g = [];
+        for (let x = 1; x < m.length; x++)
+          m[x].startsWith("FILE:") && g.push(m[x].slice(5));
+        return { stdout: g.join(`
 `) + `
 `, stderr: "", exitCode: 0 };
       }
@@ -1239,142 +1328,169 @@ const mt = {
       };
     }
   }
-}, bt = {
+}, It = {
   name: "tee",
   description: "Read from stdin and write to stdout and files",
   async exec(i, t) {
-    const { flags: e, positional: r } = P(i), n = e.a, o = t.stdin;
+    const { flags: e, positional: o } = C(i), s = e.a, n = t.stdin;
     try {
-      for (const a of r) {
-        const s = t.fs.resolvePath(a, t.cwd);
-        if (n) {
+      for (const a of o) {
+        const r = t.fs.resolvePath(a, t.cwd);
+        if (s) {
           let c = "";
           try {
-            c = await t.fs.readFile(s);
+            c = await t.fs.readFile(r);
           } catch {
           }
-          await t.fs.writeFile(s, c + o);
+          await t.fs.writeFile(r, c + n);
         } else
-          await t.fs.writeFile(s, o);
+          await t.fs.writeFile(r, n);
       }
-      return { stdout: o, stderr: "", exitCode: 0 };
+      return { stdout: n, stderr: "", exitCode: 0 };
     } catch (a) {
-      return { stdout: o, stderr: `tee: ${a instanceof Error ? a.message : a}
+      return { stdout: n, stderr: `tee: ${a instanceof Error ? a.message : a}
 `, exitCode: 1 };
     }
   }
-}, jt = {
+}, kt = {
   name: "test",
   description: "Evaluate conditional expression",
   async exec(i, t) {
     const e = i[i.length - 1] === "]" ? i.slice(0, -1) : [...i];
     try {
-      return { stdout: "", stderr: "", exitCode: await D(e, t) ? 0 : 1 };
-    } catch (r) {
-      return { stdout: "", stderr: `test: ${r instanceof Error ? r.message : r}
+      return { stdout: "", stderr: "", exitCode: await N(e, t) ? 0 : 1 };
+    } catch (o) {
+      return { stdout: "", stderr: `test: ${o instanceof Error ? o.message : o}
 `, exitCode: 2 };
     }
   }
 };
-async function D(i, t) {
+async function N(i, t) {
   if (i.length === 0) return !1;
   if (i.length === 1) return i[0] !== "";
   if (i.length === 2) {
-    const [n, o] = i;
-    switch (n) {
+    const [s, n] = i;
+    switch (s) {
       case "-z":
-        return o === "";
+        return n === "";
       case "-n":
-        return o !== "";
+        return n !== "";
       case "!":
-        return o === "";
+        return n === "";
       case "-e":
       case "-f":
       case "-d":
         try {
-          const a = t.fs.resolvePath(o, t.cwd), s = await t.fs.stat(a);
-          return n === "-f" ? s.type === "file" : n === "-d" ? s.type === "dir" : !0;
+          const a = t.fs.resolvePath(n, t.cwd), r = await t.fs.stat(a);
+          return s === "-f" ? r.type === "file" : s === "-d" ? r.type === "dir" : !0;
         } catch {
           return !1;
         }
     }
   }
   if (i[0] === "!" && i.length > 1)
-    return !await D(i.slice(1), t);
+    return !await N(i.slice(1), t);
   if (i.length === 3) {
-    const [n, o, a] = i;
-    switch (o) {
+    const [s, n, a] = i;
+    switch (n) {
       case "=":
       case "==":
-        return n === a;
+        return s === a;
       case "!=":
-        return n !== a;
+        return s !== a;
       case "-eq":
-        return parseInt(n) === parseInt(a);
+        return parseInt(s) === parseInt(a);
       case "-ne":
-        return parseInt(n) !== parseInt(a);
+        return parseInt(s) !== parseInt(a);
       case "-lt":
-        return parseInt(n) < parseInt(a);
+        return parseInt(s) < parseInt(a);
       case "-le":
-        return parseInt(n) <= parseInt(a);
+        return parseInt(s) <= parseInt(a);
       case "-gt":
-        return parseInt(n) > parseInt(a);
+        return parseInt(s) > parseInt(a);
       case "-ge":
-        return parseInt(n) >= parseInt(a);
+        return parseInt(s) >= parseInt(a);
     }
   }
   const e = i.indexOf("-a");
   if (e > 0)
-    return await D(i.slice(0, e), t) && await D(i.slice(e + 1), t);
-  const r = i.indexOf("-o");
-  return r > 0 ? await D(i.slice(0, r), t) || await D(i.slice(r + 1), t) : !1;
+    return await N(i.slice(0, e), t) && await N(i.slice(e + 1), t);
+  const o = i.indexOf("-o");
+  return o > 0 ? await N(i.slice(0, o), t) || await N(i.slice(o + 1), t) : !1;
 }
-const It = {
+const Rt = {
+  name: "time",
+  description: "Time a command execution",
+  async exec(i, t) {
+    const { positional: e, flags: o } = C(i);
+    if (e.length === 0)
+      return { stdout: "", stderr: `time: missing command
+`, exitCode: 1 };
+    const s = o.v || o.verbose, n = o.p, a = e.join(" "), r = globalThis.performance, c = r ? r.now() : Date.now();
+    await new Promise((m) => globalThis.setTimeout(m, 0));
+    const d = ((r ? r.now() : Date.now()) - c) / 1e3, h = Math.floor(d / 60), p = d % 60;
+    let f;
+    return n ? f = `real ${d.toFixed(2)}
+user 0.00
+sys 0.00
+` : s ? f = `        ${d.toFixed(3)} real         0.000 user         0.000 sys
+` : f = `
+real    ${h}m${p.toFixed(3)}s
+user    0m0.000s
+sys     0m0.000s
+`, {
+      stdout: "",
+      stderr: `Command: ${a}
+${f}`,
+      exitCode: 0
+    };
+  }
+}, At = {
   name: "touch",
   description: "Change file timestamps or create empty files",
   async exec(i, t) {
-    const { positional: e } = P(i);
+    const { positional: e } = C(i);
     if (e.length === 0)
       return { stdout: "", stderr: `touch: missing operand
 `, exitCode: 1 };
     try {
-      for (const r of e) {
-        const n = t.fs.resolvePath(r, t.cwd);
+      for (const o of e) {
+        const s = t.fs.resolvePath(o, t.cwd);
         try {
-          await t.fs.stat(n);
-          const o = await t.fs.readFile(n);
-          await t.fs.writeFile(n, o);
+          await t.fs.stat(s);
+          const n = await t.fs.readFile(s);
+          await t.fs.writeFile(s, n);
         } catch {
-          await t.fs.writeFile(n, "");
+          await t.fs.writeFile(s, "");
         }
       }
       return { stdout: "", stderr: "", exitCode: 0 };
-    } catch (r) {
-      return { stdout: "", stderr: `touch: ${r instanceof Error ? r.message : r}
+    } catch (o) {
+      return { stdout: "", stderr: `touch: ${o instanceof Error ? o.message : o}
 `, exitCode: 1 };
     }
   }
-}, Rt = {
+}, Tt = {
   name: "tr",
   description: "Translate or delete characters",
   async exec(i, t) {
-    const { flags: e, positional: r } = P(i), n = e.d, o = e.s, a = O(r[0] ?? ""), s = O(r[1] ?? ""), c = t.stdin;
+    const { flags: e, positional: o } = C(i), s = e.d, n = e.s, a = O(o[0] ?? ""), r = O(o[1] ?? ""), c = t.stdin;
     let l;
-    if (n) {
-      const f = new Set(a.split(""));
-      l = c.split("").filter((d) => !f.has(d)).join("");
-    } else if (a && s) {
-      const f = /* @__PURE__ */ new Map();
+    if (s) {
+      const u = new Set(a.split(""));
+      l = c.split("").filter((d) => !u.has(d)).join("");
+    } else if (a && r) {
+      const u = /* @__PURE__ */ new Map();
       for (let d = 0; d < a.length; d++)
-        f.set(a[d], s[Math.min(d, s.length - 1)]);
-      l = c.split("").map((d) => f.get(d) ?? d).join("");
+        u.set(a[d], r[Math.min(d, r.length - 1)]);
+      l = c.split("").map((d) => u.get(d) ?? d).join("");
     } else
       l = c;
-    if (o && s) {
-      const f = new Set(s.split(""));
-      let d = "", g = "";
+    if (n && r) {
+      const u = new Set(r.split(""));
+      let d = "", h = "";
       for (const p of l)
-        f.has(p) && p === g || (d += p, g = p);
+        u.has(p) && p === h || (d += p, h = p);
       l = d;
     }
     return { stdout: l, stderr: "", exitCode: 0 };
@@ -1384,104 +1500,151 @@ function O(i) {
   let t = i;
   t = t.replace(/\[:upper:\]/g, "ABCDEFGHIJKLMNOPQRSTUVWXYZ"), t = t.replace(/\[:lower:\]/g, "abcdefghijklmnopqrstuvwxyz"), t = t.replace(/\[:digit:\]/g, "0123456789"), t = t.replace(/\[:space:\]/g, ` 	
 \r`), t = t.replace(/\[:alpha:\]/g, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"), t = t.replace(/\[:alnum:\]/g, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789");
-  let e = "", r = 0;
-  for (; r < t.length; )
-    if (r + 2 < t.length && t[r + 1] === "-") {
-      const n = t.charCodeAt(r), o = t.charCodeAt(r + 2);
-      for (let a = n; a <= o; a++)
+  let e = "", o = 0;
+  for (; o < t.length; )
+    if (o + 2 < t.length && t[o + 1] === "-") {
+      const s = t.charCodeAt(o), n = t.charCodeAt(o + 2);
+      for (let a = s; a <= n; a++)
         e += String.fromCharCode(a);
-      r += 3;
+      o += 3;
     } else
-      e += t[r], r++;
+      e += t[o], o++;
   return e;
 }
-const kt = {
+const Nt = {
   name: "true",
   description: "Return success",
   async exec() {
     return { stdout: "", stderr: "", exitCode: 0 };
   }
-}, At = {
-  name: "uniq",
-  description: "Report or omit repeated lines",
+}, Mt = {
+  name: "unexpand",
+  description: "Convert spaces to tabs",
   async exec(i, t) {
-    const { flags: e, positional: r } = P(i);
+    const { values: e, positional: o, flags: s } = C(i, ["t", "tabs"]), n = e.t || e.tabs || "8", a = parseInt(n, 10);
+    if (isNaN(a) || a <= 0)
+      return {
+        stdout: "",
+        stderr: `unexpand: invalid tab size: '${n}'
+`,
+        exitCode: 1
+      };
+    const r = s.a || s.all;
     try {
-      const { content: n } = await R(
-        r,
+      const { content: c } = await k(
+        o,
         t.stdin,
         t.fs,
         t.cwd,
         t.fs.resolvePath
-      ), o = n.split(`
+      ), l = c.split(`
+`), u = [];
+      for (const d of l) {
+        let h = "", p = 0, f = 0;
+        for (let m = 0; m < d.length; m++) {
+          const g = d[m];
+          g === " " ? (f++, p++, p % a === 0 && (r || h.trim() === "" ? (f >= a && (h += "	".repeat(Math.floor(f / a)), f = f % a), f > 0 && (h += " ".repeat(f), f = 0)) : (h += " ".repeat(f), f = 0))) : (f > 0 && (h += " ".repeat(f), f = 0), h += g, p++);
+        }
+        f > 0 && (h += " ".repeat(f)), u.push(h);
+      }
+      return {
+        stdout: u.join(`
+`) + (c.endsWith(`
+`) ? `
+` : ""),
+        stderr: "",
+        exitCode: 0
+      };
+    } catch (c) {
+      return {
+        stdout: "",
+        stderr: `unexpand: ${c instanceof Error ? c.message : c}
+`,
+        exitCode: 1
+      };
+    }
+  }
+}, Dt = {
+  name: "uniq",
+  description: "Report or omit repeated lines",
+  async exec(i, t) {
+    const { flags: e, positional: o } = C(i);
+    try {
+      const { content: s } = await k(
+        o,
+        t.stdin,
+        t.fs,
+        t.cwd,
+        t.fs.resolvePath
+      ), n = s.split(`
 `);
-      o.length > 0 && o[o.length - 1] === "" && o.pop();
+      n.length > 0 && n[n.length - 1] === "" && n.pop();
       const a = [];
-      let s = "", c = 0;
-      for (const l of o)
-        l === s ? c++ : (c > 0 && W(s, c, e, a), s = l, c = 1);
-      return c > 0 && W(s, c, e, a), { stdout: a.join(`
+      let r = "", c = 0;
+      for (const l of n)
+        l === r ? c++ : (c > 0 && W(r, c, e, a), r = l, c = 1);
+      return c > 0 && W(r, c, e, a), { stdout: a.join(`
 `) + `
 `, stderr: "", exitCode: 0 };
-    } catch (n) {
-      return { stdout: "", stderr: `uniq: ${n instanceof Error ? n.message : n}
+    } catch (s) {
+      return { stdout: "", stderr: `uniq: ${s instanceof Error ? s.message : s}
 `, exitCode: 1 };
     }
   }
 };
-function W(i, t, e, r) {
-  e.d && t < 2 || (e.c ? r.push(`${String(t).padStart(7)} ${i}`) : r.push(i));
+function W(i, t, e, o) {
+  e.d && t < 2 || (e.c ? o.push(`${String(t).padStart(7)} ${i}`) : o.push(i));
 }
-const Nt = {
+const qt = {
   name: "uname",
   description: "Print system information",
   async exec(i, t) {
-    const { flags: e } = P(i), r = e.a, n = t.env.UNAME_SYSNAME ?? "FluffyOS", o = t.env.HOSTNAME ?? "localhost", a = t.env.UNAME_RELEASE ?? "1.0.0", s = t.env.UNAME_VERSION ?? "#1", c = t.env.UNAME_MACHINE ?? "wasm64";
-    if (r)
-      return { stdout: `${n} ${o} ${a} ${s} ${c}
+    const { flags: e } = C(i), o = e.a, s = t.env.UNAME_SYSNAME ?? "FluffyOS", n = t.env.HOSTNAME ?? "localhost", a = t.env.UNAME_RELEASE ?? "1.0.0", r = t.env.UNAME_VERSION ?? "#1", c = t.env.UNAME_MACHINE ?? "wasm64";
+    if (o)
+      return { stdout: `${s} ${n} ${a} ${r} ${c}
 `, stderr: "", exitCode: 0 };
     if (e.s || !e.n && !e.r && !e.v && !e.m)
-      return { stdout: n + `
+      return { stdout: s + `
 `, stderr: "", exitCode: 0 };
     const l = [];
-    return e.s && l.push(n), e.n && l.push(o), e.r && l.push(a), e.v && l.push(s), e.m && l.push(c), { stdout: l.join(" ") + `
+    return e.s && l.push(s), e.n && l.push(n), e.r && l.push(a), e.v && l.push(r), e.m && l.push(c), { stdout: l.join(" ") + `
 `, stderr: "", exitCode: 0 };
   }
-}, Dt = {
+}, Lt = {
   name: "wc",
   description: "Word, line, and byte count",
   async exec(i, t) {
-    const { flags: e, positional: r } = P(i), n = e.l, o = e.w, a = e.c, s = !n && !o && !a;
+    const { flags: e, positional: o } = C(i), s = e.l, n = e.w, a = e.c, r = !s && !n && !a;
     try {
-      const { content: c, files: l } = await R(
-        r,
+      const { content: c, files: l } = await k(
+        o,
         t.stdin,
         t.fs,
         t.cwd,
         t.fs.resolvePath
-      ), f = c.split(`
+      ), u = c.split(`
 `).length - (c.endsWith(`
-`) ? 1 : 0), d = c.split(/\s+/).filter(Boolean).length, g = c.length, p = [];
-      return (s || n) && p.push(String(f).padStart(6)), (s || o) && p.push(String(d).padStart(6)), (s || a) && p.push(String(g).padStart(6)), l.length === 1 && p.push(" " + r[0]), { stdout: p.join(" ") + `
+`) ? 1 : 0), d = c.split(/\s+/).filter(Boolean).length, h = c.length, p = [];
+      return (r || s) && p.push(String(u).padStart(6)), (r || n) && p.push(String(d).padStart(6)), (r || a) && p.push(String(h).padStart(6)), l.length === 1 && p.push(" " + o[0]), { stdout: p.join(" ") + `
 `, stderr: "", exitCode: 0 };
     } catch (c) {
       return { stdout: "", stderr: `wc: ${c instanceof Error ? c.message : c}
 `, exitCode: 1 };
     }
   }
-}, Mt = {
+}, Ot = {
   name: "which",
   description: "Locate a command in PATH",
   async exec(i, t) {
-    const { flags: e, positional: r } = P(i), n = e.a;
-    if (r.length === 0)
+    const { flags: e, positional: o } = C(i), s = e.a;
+    if (o.length === 0)
       return { stdout: "", stderr: `which: missing argument
 `, exitCode: 1 };
-    const o = r[0], a = t.env.PATH || "/bin:/usr/bin:/usr/local/bin", s = a.split(":"), c = [];
-    for (const l of s) {
-      const f = `${l}/${o}`;
+    const n = o[0], a = t.env.PATH || "/bin:/usr/bin:/usr/local/bin", r = a.split(":"), c = [];
+    for (const l of r) {
+      const u = `${l}/${n}`;
       try {
-        if (await t.fs.exists(f) && (await t.fs.stat(f)).type === "file" && (c.push(f), !n))
+        if (await t.fs.exists(u) && (await t.fs.stat(u)).type === "file" && (c.push(u), !s))
           break;
       } catch {
         continue;
@@ -1489,7 +1652,7 @@ const Nt = {
     }
     return c.length === 0 ? {
       stdout: "",
-      stderr: `which: no ${o} in (${a})
+      stderr: `which: no ${n} in (${a})
 `,
       exitCode: 1
     } : {
@@ -1500,46 +1663,46 @@ const Nt = {
       exitCode: 0
     };
   }
-}, Tt = {
+}, Wt = {
   name: "whoami",
   description: "Print current user name",
   async exec(i, t) {
     return { stdout: (t.env.USER ?? t.env.USERNAME ?? "user") + `
 `, stderr: "", exitCode: 0 };
   }
-}, qt = {
+}, zt = {
   name: "xargs",
   description: "Build and execute command lines from stdin",
   async exec(i, t) {
-    const { flags: e, positional: r, values: n } = P(i, ["n", "I", "i", "d", "delimiter"]), o = e.I || e.L || e.l, a = n.I || n.i, s = n.n ? parseInt(n.n) : void 0, c = n.d || n.delimiter || /\s+/, l = e.t || e.verbose, f = e.r, d = r.length > 0 ? r.join(" ") : "echo";
-    let g;
-    if (typeof c == "string" ? g = t.stdin.split(c).filter(Boolean) : g = t.stdin.trim().split(c).filter(Boolean), g.length === 0) {
-      if (f)
+    const { flags: e, positional: o, values: s } = C(i, ["n", "I", "i", "d", "delimiter"]), n = e.I || e.L || e.l, a = s.I || s.i, r = s.n ? parseInt(s.n) : void 0, c = s.d || s.delimiter || /\s+/, l = e.t || e.verbose, u = e.r, d = o.length > 0 ? o.join(" ") : "echo";
+    let h;
+    if (typeof c == "string" ? h = t.stdin.split(c).filter(Boolean) : h = t.stdin.trim().split(c).filter(Boolean), h.length === 0) {
+      if (u)
         return { stdout: "", stderr: "", exitCode: 0 };
-      g = [""];
+      h = [""];
     }
-    const p = [], u = [];
+    const p = [], f = [];
     if (a) {
-      const h = typeof a == "string" ? a : "{}";
-      for (const m of g) {
-        const x = d.replace(new RegExp(Lt(h), "g"), m);
-        u.push(x), l && p.push(`+ ${x}`);
+      const m = typeof a == "string" ? a : "{}";
+      for (const g of h) {
+        const x = d.replace(new RegExp(Ut(m), "g"), g);
+        f.push(x), l && p.push(`+ ${x}`);
       }
-    } else if (s)
-      for (let h = 0; h < g.length; h += s) {
-        const m = g.slice(h, h + s), x = `${d} ${m.map(q).join(" ")}`;
-        u.push(x), l && p.push(`+ ${x}`);
+    } else if (r)
+      for (let m = 0; m < h.length; m += r) {
+        const g = h.slice(m, m + r), x = `${d} ${g.map(q).join(" ")}`;
+        f.push(x), l && p.push(`+ ${x}`);
       }
-    else if (o)
-      for (const h of g) {
-        const m = `${d} ${q(h)}`;
-        u.push(m), l && p.push(`+ ${m}`);
+    else if (n)
+      for (const m of h) {
+        const g = `${d} ${q(m)}`;
+        f.push(g), l && p.push(`+ ${g}`);
       }
     else {
-      const h = d === "echo" ? g.join(" ") : `${d} ${g.map(q).join(" ")}`;
-      u.push(h), l && p.push(`+ ${h}`);
+      const m = d === "echo" ? h.join(" ") : `${d} ${h.map(q).join(" ")}`;
+      f.push(m), l && p.push(`+ ${m}`);
     }
-    return d === "echo" && !a && !s ? p.push(...g) : p.push(...u), {
+    return d === "echo" && !a && !r ? p.push(...h) : p.push(...f), {
       stdout: p.join(`
 `) + (p.length > 0 ? `
 ` : ""),
@@ -1551,10 +1714,25 @@ const Nt = {
 function q(i) {
   return /[^a-zA-Z0-9._\-/=]/.test(i) ? `'${i.replace(/'/g, "'\\''")}'` : i;
 }
-function Lt(i) {
+function Ut(i) {
   return i.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
-const Ot = {
+const Ht = {
+  name: "yes",
+  description: "Output a string repeatedly until killed",
+  async exec(i, t) {
+    const { positional: e } = C(i), o = e.length > 0 ? e.join(" ") : "y", s = [], n = 1e3;
+    for (let a = 0; a < n; a++)
+      s.push(o);
+    return {
+      stdout: s.join(`
+`) + `
+`,
+      stderr: "",
+      exitCode: 0
+    };
+  }
+}, Bt = {
   awk: z,
   basename: U,
   cat: H,
@@ -1568,47 +1746,52 @@ const Ot = {
   dirname: tt,
   echo: et,
   env: st,
-  export: nt,
-  false: rt,
-  find: ot,
-  grep: it,
-  head: at,
-  hostname: ct,
-  less: lt,
-  ln: dt,
-  ls: ft,
-  mkdir: mt,
-  mv: gt,
-  printf: xt,
-  pwd: wt,
-  readlink: yt,
-  realpath: vt,
-  rm: Ct,
-  sed: $t,
-  seq: St,
-  sort: Et,
+  expand: nt,
+  export: rt,
+  false: ot,
+  find: it,
+  grep: at,
+  head: ct,
+  hostname: lt,
+  less: dt,
+  ln: ft,
+  ls: ut,
+  mkdir: gt,
+  mv: xt,
+  printf: wt,
+  pwd: yt,
+  readlink: vt,
+  realpath: Ct,
+  rm: $t,
+  sed: St,
+  seq: bt,
+  sleep: Et,
+  sort: Ft,
   tail: Pt,
-  tar: Ft,
-  tee: bt,
-  test: jt,
-  touch: It,
-  tr: Rt,
-  true: kt,
-  uniq: At,
-  uname: Nt,
-  wc: Dt,
-  which: Mt,
-  whoami: Tt,
-  xargs: qt
-}, Wt = Object.values(Ot);
+  tar: jt,
+  tee: It,
+  test: kt,
+  time: Rt,
+  touch: At,
+  tr: Tt,
+  true: Nt,
+  unexpand: Mt,
+  uniq: Dt,
+  uname: qt,
+  wc: Lt,
+  which: Ot,
+  whoami: Wt,
+  xargs: zt,
+  yes: Ht
+}, _t = Object.values(Bt);
 export {
-  Ot as allCommands,
+  Bt as allCommands,
   z as awk,
   U as basename,
   H as cat,
   B as chmod,
   _ as clear,
-  Wt as commandList,
+  _t as commandList,
   Y as cp,
   V as curl,
   Z as cut,
@@ -1617,36 +1800,41 @@ export {
   tt as dirname,
   et as echo,
   st as env,
-  nt as exportCmd,
-  rt as false,
-  ot as find,
-  it as grep,
-  at as head,
-  ct as hostname,
-  lt as less,
-  dt as ln,
-  ft as ls,
-  mt as mkdir,
-  gt as mv,
-  xt as printf,
-  wt as pwd,
-  yt as readlink,
-  vt as realpath,
-  Ct as rm,
-  $t as sed,
-  St as seq,
-  Et as sort,
+  nt as expand,
+  rt as exportCmd,
+  ot as false,
+  it as find,
+  at as grep,
+  ct as head,
+  lt as hostname,
+  dt as less,
+  ft as ln,
+  ut as ls,
+  gt as mkdir,
+  xt as mv,
+  wt as printf,
+  yt as pwd,
+  vt as readlink,
+  Ct as realpath,
+  $t as rm,
+  St as sed,
+  bt as seq,
+  Et as sleep,
+  Ft as sort,
   Pt as tail,
-  Ft as tar,
-  bt as tee,
-  jt as test,
-  It as touch,
-  Rt as tr,
-  kt as true,
-  Nt as uname,
-  At as uniq,
-  Dt as wc,
-  Mt as which,
-  Tt as whoami,
-  qt as xargs
+  jt as tar,
+  It as tee,
+  kt as test,
+  Rt as time,
+  At as touch,
+  Tt as tr,
+  Nt as true,
+  qt as uname,
+  Mt as unexpand,
+  Dt as uniq,
+  Lt as wc,
+  Ot as which,
+  Wt as whoami,
+  zt as xargs,
+  Ht as yes
 };
