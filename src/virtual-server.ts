@@ -123,6 +123,15 @@ class VirtualServerManager {
     }
 
     this.servers.set(port, { port, handler, name });
+
+    // Tell service worker this tab owns this port
+    if (navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({
+        type: 'REGISTER_PORT',
+        port
+      });
+    }
+
     console.log(`[VirtualServer] Server "${name || 'unnamed'}" listening on port ${port}`);
     console.log(`[VirtualServer] Access at: ${this.getUrl(port)}`);
 
@@ -137,6 +146,15 @@ class VirtualServerManager {
     const server = this.servers.get(port);
     if (server) {
       this.servers.delete(port);
+
+      // Tell service worker this port is no longer owned
+      if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({
+          type: 'UNREGISTER_PORT',
+          port
+        });
+      }
+
       console.log(`[VirtualServer] Server on port ${port} closed`);
     }
   }

@@ -4,35 +4,64 @@
 const DEBUG = true;
 const log = (...args) => DEBUG && console.log('[SW]', ...args);
 
-// Track active connections to main thread
-let mainThreadPort = null;
+// Track connections per client (tab) - Map<clientId, MessagePort>
+const clientPorts = new Map();
+// Track which client owns which port - Map<serverPort, clientId>
+const portOwners = new Map();
+
 let pendingRequests = new Map(); // requestId -> { resolve, reject, timeout }
 let requestIdCounter = 0;
 
 // Handle messages from main thread
 self.addEventListener('message', (event) => {
-  const { type, data } = event.data;
+  const { type } = event.data;
+  const clientId = event.source?.id;
 
-  if (type === 'INIT') {
+  if (type === 'INIT' && clientId) {
     // Main thread is setting up the MessageChannel
-    mainThreadPort = event.ports[0];
-    mainThreadPort.onmessage = handleMainThreadResponse;
-    log('Connected to main thread');
+    const port = event.ports[0];
+    clientPorts.set(clientId, port);
+    port.onmessage = (e) => handleMainThreadResponse(e, clientId);
+    log('Client connected:', clientId);
   }
 
-  if (type === 'CLEANUP') {
-    // Hot reload or shutdown - clear pending requests
-    log('Cleanup requested');
-    for (const [id, pending] of pendingRequests) {
-      clearTimeout(pending.timeout);
-      pending.reject(new Error('Server reloading'));
+  if (type === 'REGISTER_PORT' && clientId) {
+    // A client is registering that it owns a server port
+    const serverPort = event.data.port;
+    portOwners.set(serverPort, clientId);
+    log('Port', serverPort, 'registered to client', clientId);
+  }
+
+  if (type === 'UNREGISTER_PORT') {
+    const serverPort = event.data.port;
+    portOwners.delete(serverPort);
+    log('Port', serverPort, 'unregistered');
+  }
+
+  if (type === 'CLEANUP' && clientId) {
+    // Hot reload or shutdown - clean up this client
+    log('Cleanup for client:', clientId);
+    clientPorts.delete(clientId);
+
+    // Remove any ports owned by this client
+    for (const [serverPort, ownerId] of portOwners) {
+      if (ownerId === clientId) {
+        portOwners.delete(serverPort);
+      }
     }
-    pendingRequests.clear();
-    mainThreadPort = null;
+
+    // Reject pending requests from this client
+    for (const [id, pending] of pendingRequests) {
+      if (pending.clientId === clientId) {
+        clearTimeout(pending.timeout);
+        pending.reject(new Error('Server reloading'));
+        pendingRequests.delete(id);
+      }
+    }
   }
 });
 
-function handleMainThreadResponse(event) {
+function handleMainThreadResponse(event, clientId) {
   const { requestId, response, error } = event.data;
   const pending = pendingRequests.get(requestId);
 
@@ -66,8 +95,20 @@ self.addEventListener('fetch', (event) => {
 });
 
 async function handleVirtualServerRequest(request, port) {
-  if (!mainThreadPort) {
-    return new Response('Shiro not connected - refresh the page', {
+  // Find which client owns this port
+  const clientId = portOwners.get(port);
+
+  if (!clientId) {
+    return new Response(`No server registered on port ${port}`, {
+      status: 502,
+      headers: { 'Content-Type': 'text/plain' }
+    });
+  }
+
+  const clientPort = clientPorts.get(clientId);
+
+  if (!clientPort) {
+    return new Response('Server tab disconnected - refresh the server tab', {
       status: 503,
       headers: { 'Content-Type': 'text/plain' }
     });
@@ -103,10 +144,11 @@ async function handleVirtualServerRequest(request, port) {
     pendingRequests.set(requestId, {
       resolve: (resp) => resolve(buildResponse(resp)),
       reject,
-      timeout
+      timeout,
+      clientId
     });
 
-    mainThreadPort.postMessage(serializedRequest);
+    clientPort.postMessage(serializedRequest);
   });
 }
 
