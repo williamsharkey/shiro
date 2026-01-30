@@ -6,9 +6,11 @@ import { basename } from "./commands/basename.js";
 import { breakCmd } from "./commands/break.js";
 import { caseCmd, esac } from "./commands/case.js";
 import { cat } from "./commands/cat.js";
+import { cc, gcc } from "./commands/gcc.js";
 import { chmod } from "./commands/chmod.js";
 import { chown } from "./commands/chown.js";
 import { clear } from "./commands/clear.js";
+import { column } from "./commands/column.js";
 import { comm } from "./commands/comm.js";
 import { continueCmd } from "./commands/continue.js";
 import { cp } from "./commands/cp.js";
@@ -55,6 +57,7 @@ import { nl } from "./commands/nl.js";
 import { od } from "./commands/od.js";
 import { paste } from "./commands/paste.js";
 import { patch } from "./commands/patch.js";
+import { pkgConfig } from "./commands/pkg-config.js";
 import { printenv } from "./commands/printenv.js";
 import { printf } from "./commands/printf.js";
 import { pwd } from "./commands/pwd.js";
@@ -95,7 +98,7 @@ import { whoami } from "./commands/whoami.js";
 import { xargs } from "./commands/xargs.js";
 import { yes } from "./commands/yes.js";
 import type { FluffyCommand } from "./types.js";
-export { alias, awk, base64, basename, cat, chmod, chown, clear, comm, cp, curl, cut, date, declare, df, diff, dirname, done, dot, du, echo, elif, env, esac, exit, expand, expr, exportCmd, fi, file, find, fmt, fold, free, grep, head, hexdump, hostname, id, install, join, kill, less, ln, local, ls, make, md5sum, mkdir, mv, nl, od, paste, patch, printenv, printf, pwd, read, readlink, readonly, realpath, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings, tail, tar, tee, test, then, time, timeout, touch, tr, trap, type, unalias, unexpand, uniq, unset, uname, until, uptime, wc, which, whoami, xargs, yes, breakCmd as break, caseCmd as case, continueCmd as continue, doCmd as do, elseCmd as else, evalCmd as eval, falseCmd as false, forCmd as for, functionCmd as function, ifCmd as if, inCmd as in, returnCmd as return, trueCmd as true, whileCmd as while, };
+export { alias, awk, base64, basename, cc, cat, chmod, chown, clear, column, comm, cp, curl, cut, date, declare, df, diff, dirname, done, dot, du, echo, elif, env, esac, exit, expand, expr, exportCmd, fi, file, find, fmt, fold, free, gcc, grep, head, hexdump, hostname, id, install, join, kill, less, ln, local, ls, make, md5sum, mkdir, mv, nl, od, paste, patch, pkgConfig, printenv, printf, pwd, read, readlink, readonly, realpath, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings, tail, tar, tee, test, then, time, timeout, touch, tr, trap, type, unalias, unexpand, uniq, unset, uname, until, uptime, wc, which, whoami, xargs, yes, breakCmd as break, caseCmd as case, continueCmd as continue, doCmd as do, elseCmd as else, evalCmd as eval, falseCmd as false, forCmd as for, functionCmd as function, ifCmd as if, inCmd as in, returnCmd as return, trueCmd as true, whileCmd as while, };
 /** All commands as a name→command map for easy registration in a shell. */
 export declare const allCommands: Record<string, FluffyCommand>;
 /** Array of all commands for iteration. */

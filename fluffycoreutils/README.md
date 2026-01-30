@@ -2,12 +2,12 @@
 
 **Shared Unix coreutils for browser-based virtual operating systems**
 
-A TypeScript library providing 110+ essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
+A TypeScript library providing 113+ essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
 
 ## ✨ Features
 
 - 🌐 **Browser-Native**: Pure TypeScript implementation with no Node.js dependencies
-- 🔧 **110+ Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `make`
+- 🔧 **113+ Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `make`
 - 🎯 **Filesystem Agnostic**: Works with any virtual filesystem implementing the `FluffyFS` interface
 - 📦 **Tree-Shakeable**: Import only the commands you need
 - 🔒 **Type-Safe**: Full TypeScript definitions included
@@ -55,7 +55,7 @@ const shell = Object.fromEntries(
 - **file** - Determine file type
 
 ### Text Processing
-- **awk** - Pattern scanning and text processing
+- **awk** - Pattern scanning and text processing (with -F field separator, -v variables)
 - **grep** - Search text using patterns
 - **sed** - Stream editor
 - **cut** - Cut out selected portions of lines (-d delimiter, -f fields)
@@ -69,6 +69,7 @@ const shell = Object.fromEntries(
 - **fold** - Wrap lines to specified width
 - **fmt** - Format text into paragraphs
 - **nl** - Number lines of files
+- **column** - Format input into columns (-t for tables, -s separator)
 
 ### Path Utilities
 - **basename** - Strip directory from filename
@@ -136,6 +137,10 @@ const shell = Object.fromEntries(
 - **function** - Define shell functions
 
 **Important Note**: Control flow keywords (if/then/else/fi, while/do/done, for/in/do/done, case/esac, function) are shell language constructs that must be parsed and interpreted at the shell level. These commands are provided as placeholders that return helpful error messages, allowing shell parsers to recognize and handle them appropriately. The shell built-ins above provide supporting functionality that can be executed as regular commands.
+
+### Development Tools
+- **gcc** / **cc** - GNU C Compiler stub (recognizes flags, can compile simple programs)
+- **pkg-config** - Return metainformation about installed libraries (stub with common packages)
 
 ### Build & Package Tools
 - **make** - Build automation with basic Makefile support
