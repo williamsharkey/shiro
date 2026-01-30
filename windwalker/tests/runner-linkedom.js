@@ -34,6 +34,7 @@ const BROWSER_ONLY_SUITES = [
   'level-7-workflows',
   'level-8-fluffycoreutils',
   'level-9-selfbuild',
+  'level-10-hypercompact',
 ];
 
 /**
