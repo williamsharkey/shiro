@@ -2,12 +2,12 @@
 
 **Shared Unix coreutils for browser-based virtual operating systems**
 
-A TypeScript library providing 71 essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
+A TypeScript library providing 77 essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
 
 ## ✨ Features
 
 - 🌐 **Browser-Native**: Pure TypeScript implementation with no Node.js dependencies
-- 🔧 **71 Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `make`
+- 🔧 **77 Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `make`
 - 🎯 **Filesystem Agnostic**: Works with any virtual filesystem implementing the `FluffyFS` interface
 - 📦 **Tree-Shakeable**: Import only the commands you need
 - 🔒 **Type-Safe**: Full TypeScript definitions included
@@ -111,12 +111,20 @@ const shell = Object.fromEntries(
 ### Build & Package Tools
 - **make** - Build automation with basic Makefile support
 - **patch** - Apply unified diff patches to files
+- **install** - Copy files and set attributes
 - **base64** - Encode/decode Base64 data
 - **md5sum** - Compute MD5 checksums
 - **sha256sum** - Compute SHA-256 checksums (uses Web Crypto API)
 - **strings** - Extract printable strings from files
 - **od** - Octal/hex dump of files
 - **hexdump** - Hexadecimal file viewer
+
+### System Management
+- **chown** - Change file owner and group (stub for compatibility)
+- **du** - Estimate file space usage
+- **df** - Report filesystem disk space (stub with mock values)
+- **free** - Display memory usage (stub with mock values)
+- **uptime** - Show system uptime (mock values for browser)
 
 ## 🏗️ Architecture
 
