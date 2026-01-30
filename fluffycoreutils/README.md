@@ -2,12 +2,12 @@
 
 **Shared Unix coreutils for browser-based virtual operating systems**
 
-A TypeScript library providing 88 essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
+A TypeScript library providing 110+ essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
 
 ## ✨ Features
 
 - 🌐 **Browser-Native**: Pure TypeScript implementation with no Node.js dependencies
-- 🔧 **88 Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `make`
+- 🔧 **110+ Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `make`
 - 🎯 **Filesystem Agnostic**: Works with any virtual filesystem implementing the `FluffyFS` interface
 - 📦 **Tree-Shakeable**: Import only the commands you need
 - 🔒 **Type-Safe**: Full TypeScript definitions included
@@ -109,9 +109,10 @@ const shell = Object.fromEntries(
 - **unexpand** - Convert spaces to tabs
 
 ### Shell Script Support
+
+**Shell Built-ins:**
 - **source** / **.** - Execute commands from a file in the current shell context
-- **alias** - Define or display command aliases
-- **unalias** - Remove alias definitions
+- **alias** / **unalias** - Define and remove command aliases
 - **exit** - Exit the shell with a status code
 - **return** - Return from a shell function
 - **break** - Exit from for, while, or until loop
@@ -119,8 +120,22 @@ const shell = Object.fromEntries(
 - **shift** - Shift positional parameters
 - **read** - Read a line from stdin
 - **eval** - Evaluate and execute arguments as a command
+- **set** - Set or unset shell options and positional parameters
+- **declare** - Declare variables and give them attributes
+- **local** - Declare local variables in shell functions
+- **readonly** - Mark variables as readonly
+- **unset** - Unset variables or functions
+- **trap** - Trap signals and execute commands
+- **kill** - Send signal to process
 
-**Note**: Control flow structures (if/then/else, while/do/done, for/do/done, case/esac, function definitions) are shell language constructs that must be implemented at the shell interpreter level, not as individual commands. The commands above provide supporting functionality for shell scripts.
+**Control Flow Constructs:**
+- **if** / **then** / **elif** / **else** / **fi** - Conditional execution
+- **while** / **until** / **do** / **done** - Loop constructs
+- **for** / **in** / **do** / **done** - Iteration construct
+- **case** / **in** / **esac** - Pattern matching
+- **function** - Define shell functions
+
+**Important Note**: Control flow keywords (if/then/else/fi, while/do/done, for/in/do/done, case/esac, function) are shell language constructs that must be parsed and interpreted at the shell level. These commands are provided as placeholders that return helpful error messages, allowing shell parsers to recognize and handle them appropriately. The shell built-ins above provide supporting functionality that can be executed as regular commands.
 
 ### Build & Package Tools
 - **make** - Build automation with basic Makefile support

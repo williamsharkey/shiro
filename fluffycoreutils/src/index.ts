@@ -6,6 +6,7 @@ import { awk } from "./commands/awk.js";
 import { base64 } from "./commands/base64.js";
 import { basename } from "./commands/basename.js";
 import { breakCmd } from "./commands/break.js";
+import { caseCmd, esac } from "./commands/case.js";
 import { cat } from "./commands/cat.js";
 import { chmod } from "./commands/chmod.js";
 import { chown } from "./commands/chown.js";
@@ -16,11 +17,14 @@ import { cp } from "./commands/cp.js";
 import { curl } from "./commands/curl.js";
 import { cut } from "./commands/cut.js";
 import { date } from "./commands/date.js";
+import { declare, local, readonly, unset } from "./commands/local.js";
 import { df } from "./commands/df.js";
 import { diff } from "./commands/diff.js";
 import { dirname } from "./commands/dirname.js";
+import { doCmd, done, until, whileCmd } from "./commands/while.js";
 import { du } from "./commands/du.js";
 import { echo } from "./commands/echo.js";
+import { elif, elseCmd, fi, ifCmd, then } from "./commands/if.js";
 import { env } from "./commands/env.js";
 import { evalCmd } from "./commands/eval.js";
 import { exit } from "./commands/exit.js";
@@ -28,6 +32,8 @@ import { expand } from "./commands/expand.js";
 import { expr } from "./commands/expr.js";
 import { exportCmd } from "./commands/export.js";
 import { false as falseCmd } from "./commands/false.js";
+import { forCmd, inCmd } from "./commands/for.js";
+import { functionCmd } from "./commands/function.js";
 import { file } from "./commands/file.js";
 import { find } from "./commands/find.js";
 import { fmt } from "./commands/fmt.js";
@@ -61,6 +67,7 @@ import { returnCmd } from "./commands/return.js";
 import { rm } from "./commands/rm.js";
 import { sed } from "./commands/sed.js";
 import { seq } from "./commands/seq.js";
+import { set } from "./commands/set.js";
 import { sha256sum } from "./commands/sha256sum.js";
 import { shift } from "./commands/shift.js";
 import { sleep } from "./commands/sleep.js";
@@ -76,6 +83,7 @@ import { time } from "./commands/time.js";
 import { timeout } from "./commands/timeout.js";
 import { touch } from "./commands/touch.js";
 import { tr } from "./commands/tr.js";
+import { kill, trap } from "./commands/trap.js";
 import { true as trueCmd } from "./commands/true.js";
 import { type } from "./commands/type.js";
 import { unalias } from "./commands/unalias.js";
@@ -93,24 +101,32 @@ import type { FluffyCommand } from "./types.js";
 
 // Re-export individual commands
 export {
-  alias, awk, base64, basename, cat, chmod, chown, clear, comm, cp, curl, cut, date, df, diff, dirname, dot, du,
-  echo, env, exit, expand, expr, exportCmd, file, find, fmt, fold, free, grep, head, hexdump, hostname, id, install, join, less, ln, ls,
-  make, md5sum, mkdir, mv, nl, od, paste, patch, printenv, printf, pwd, read, readlink, realpath, rm, sed, seq, sha256sum, shift, sleep, sort, source, stat, strings,
-  tail, tar, tee, test, time, timeout, touch, tr, type, unalias, unexpand, uniq, uname, uptime, wc, which, whoami, xargs, yes,
+  alias, awk, base64, basename, cat, chmod, chown, clear, comm, cp, curl, cut, date, declare, df, diff, dirname, done, dot, du,
+  echo, elif, env, esac, exit, expand, expr, exportCmd, fi, file, find, fmt, fold, free, grep, head, hexdump, hostname, id, install, join, kill, less, ln, local, ls,
+  make, md5sum, mkdir, mv, nl, od, paste, patch, printenv, printf, pwd, read, readlink, readonly, realpath, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings,
+  tail, tar, tee, test, then, time, timeout, touch, tr, trap, type, unalias, unexpand, uniq, unset, uname, until, uptime, wc, which, whoami, xargs, yes,
   breakCmd as break,
+  caseCmd as case,
   continueCmd as continue,
+  doCmd as do,
+  elseCmd as else,
   evalCmd as eval,
   falseCmd as false,
+  forCmd as for,
+  functionCmd as function,
+  ifCmd as if,
+  inCmd as in,
   returnCmd as return,
   trueCmd as true,
+  whileCmd as while,
 };
 
 /** All commands as a name→command map for easy registration in a shell. */
 export const allCommands: Record<string, FluffyCommand> = {
-  ".": dot, alias, awk, base64, basename, break: breakCmd, cat, chmod, chown, clear, comm, continue: continueCmd, cp, curl, cut, date, df, diff, dirname, du,
-  echo, env, eval: evalCmd, exit, expand, expr, export: exportCmd, false: falseCmd, file, find, fmt, fold, free, grep, head, hexdump, hostname, id, install, join, less, ln,
-  ls, make, md5sum, mkdir, mv, nl, od, paste, patch, printenv, printf, pwd, read, readlink, realpath, return: returnCmd, rm, sed, seq, sha256sum, shift, sleep, sort, source, stat, strings,
-  tail, tar, tee, test, time, timeout, touch, tr, true: trueCmd, type, unalias, unexpand, uniq, uname, uptime, wc, which, whoami, xargs, yes,
+  ".": dot, alias, awk, base64, basename, break: breakCmd, case: caseCmd, cat, chmod, chown, clear, comm, continue: continueCmd, cp, curl, cut, date, declare, df, diff, dirname, do: doCmd, done, du,
+  echo, elif, else: elseCmd, env, esac, eval: evalCmd, exit, expand, expr, export: exportCmd, false: falseCmd, fi, file, find, fmt, fold, for: forCmd, free, function: functionCmd, grep, head, hexdump, hostname, id, if: ifCmd, in: inCmd, install, join, kill, less, ln, local, ls,
+  make, md5sum, mkdir, mv, nl, od, paste, patch, printenv, printf, pwd, read, readlink, readonly, realpath, return: returnCmd, rm, sed, seq, set, sha256sum, shift, sleep, sort, source, stat, strings,
+  tail, tar, tee, test, then, time, timeout, touch, tr, trap, true: trueCmd, type, unalias, unexpand, uniq, unset, uname, until, uptime, wc, which, while: whileCmd, whoami, xargs, yes,
 };
 
 /** Array of all commands for iteration. */
