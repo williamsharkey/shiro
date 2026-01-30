@@ -44,6 +44,7 @@ const LINKEDOM_SUITES = [
   { name: 'level-8-fluffycoreutils', path: './level-8-fluffycoreutils/fluffycoreutils.test.js' },
   { name: 'level-9-selfbuild',    path: './level-9-selfbuild/selfbuild.test.js', needsNetwork: true },
   { name: 'level-10-hypercompact', path: './level-10-hypercompact/hypercompact.test.js' },
+  { name: 'level-11-advanced',    path: './level-11-advanced/advanced.test.js' },
 ];
 
 // Suites that need network access (git clone over HTTPS)
