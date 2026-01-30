@@ -1,104 +1,362 @@
-# CLAUDE.md - Hypercompact Navigation Protocol
+# Hypercompact: Token-Efficient Web Navigation
 
-## Philosophy
+You have access to `hc`, a REPL for navigating web pages with minimal tokens.
 
-**Every token is precious.** This project exists because reading raw HTML is wasteful. A 50KB page becomes ~15K tokens. But the *information* Claude needs is often 50-200 tokens.
+**Why this matters**: Reading a 50KB page costs ~12,500 tokens. The same information via `hc` costs ~100 tokens. That's **99% savings**.
 
-The solution: A JavaScript agent ("man on the inside") that transforms pages into minimal representations, with a REPL DSL for zooming/enhancing without tool call overhead.
-
-## Core Principle: Single REPL Session
-
-**There is ONE tool: the REPL.** No dithering over which tool to use. Enter the REPL, navigate, close when done.
+## Quick Start
 
 ```
-hc> t                    # textContent, whitespace-normalized
-"Shop Cart Login Search Featured Products Apple $5 Banana $3..."
+hc> s                    # Where am I?
+p:amazon.html c:0 d:0 @body
 
-hc> z.Apple              # zoom to first "Apple"
-3(Apple) $5 [Add to Cart]
+hc> t100                 # What's on the page? (first 100 chars)
+Shop Electronics Books Fashion Home... Add to Cart $29.99...
 
-hc> z2                   # zoom to 2nd result from last query
-7(Banana) $3 [Add to Cart]
+hc> q .price             # Find all prices
+[0]$29.99
+[1]$49.99
+[2]$12.99
 
-hc> q [Add to Cart]      # querySelectorAll buttons
-[0]Add to Cart [1]Add to Cart [2]Checkout
+hc> n1                   # Select the 2nd one
+✓ [1] $49.99 Prime delivery...
 
-hc> click 2              # click Checkout
-navigated: /checkout
-
-hc> close                # explicit close, always required
+hc> a                    # What are its attributes?
+class=price data-item=B08X...
 ```
 
-## DSL Quick Reference
+**That's it.** Five commands, ~200 tokens total, vs ~12,500 to read the HTML.
 
-### Navigation
-| Command | Description |
-|---------|-------------|
-| `t` | textContent, normalized whitespace |
-| `z.word` | zoom to first occurrence of "word" |
-| `z.word2` | zoom to 2nd occurrence |
-| `z3` | zoom to 3rd result from last query |
-| `q selector` | querySelectorAll, returns indexed list |
-| `q1 selector` | querySelector, single result |
-| `up` | parent element |
-| `up3` | 3 ancestors up |
-| `ch` | children summary |
+## Command Reference
 
-### Output Modes
-| Command | Description |
-|---------|-------------|
-| `t` | text only |
-| `s` | structural: `([btn] (div (span)))` |
-| `h` | outerHTML |
-| `h200` | outerHTML, ~200 token limit |
-| `more` | continue from limit |
-| `more500` | continue ~500 tokens |
+### State & Overview
 
-### Blind Operations (Claude doesn't see intermediate)
-| Command | Description |
-|---------|-------------|
-| `>$x` | store result in variable x |
-| `$x` | recall variable (only then see it) |
-| `>file.txt` | save to file, no output |
-| `\|grep pattern` | pipe through grep |
-| `\|wc` | pipe through wc |
-| `silent h >$full` | get full HTML into var, see nothing |
+| Command | Output | Use When |
+|---------|--------|----------|
+| `s` | `p:file c:3 d:5 @div` | Check where you are |
+| `t` | Full text content | Need all text |
+| `t100` | First ~100 chars | Quick peek |
 
-### Actions
-| Command | Description |
-|---------|-------------|
-| `click N` | click Nth element from last query |
-| `type N "text"` | type into Nth input |
-| `scroll N` | scroll N pixels |
-| `wait N` | wait N ms |
-
-### Depth Notation
-Elements show nesting depth: `3(Hello)` means "Hello" is 3 levels deep.
+**Example:**
 ```
-s
-"2([Shop] [Cart]) 4(Featured: 5(Apple) 5(Banana))"
+hc> s
+p:hn.html c:30 d:2 @table    # In hn.html, 30 results cached, depth 2, at <table>
 ```
 
-## Token Budget Targets
+### Query Elements
 
-| Operation | Target Tokens |
-|-----------|---------------|
-| Initial page summary | <100 |
-| Zoom result | <50 |
-| Query result list | <30 + 5/item |
-| Full element HTML | actual + 10% overhead max |
+| Command | Output | Use When |
+|---------|--------|----------|
+| `q .class` | `[0]text [1]text...` | Find multiple elements |
+| `q1 .class` | Element text | Find one, make it current |
+
+**Selectors work like CSS:**
+- `q button` - all buttons
+- `q .price` - elements with class "price"
+- `q #main` - element with id "main"
+- `q article h3 a` - links inside h3 inside article
+
+**Example - Find products:**
+```
+hc> q article.product
+[0]iPhone 15 Pro $999 Add to Cart
+[1]Samsung Galaxy $899 Add to Cart
+[2]Pixel 8 $699 Add to Cart
+
+hc> q .price
+[0]$999
+[1]$899
+[2]$699
+```
+
+### Navigate Results
+
+| Command | Output | Use When |
+|---------|--------|----------|
+| `n2` | `✓ [2] content...` | Select 3rd result |
+| `up` | `✓ @parent-tag` | Go to parent |
+| `up3` | `✓ @ancestor` | Go up 3 levels |
+| `ch` | `[0]<div>... [1]<span>...` | See children |
+
+**Example - Drill into a product:**
+```
+hc> q article.product
+[0]iPhone 15 Pro...
+[1]Samsung Galaxy...
+
+hc> n0                    # Select first product
+✓ [0] iPhone 15 Pro $999 Add to Cart
+
+hc> ch                    # What's inside?
+[0]<img>
+[1]<h3>iPhone 15 Pro
+[2]<span.price>$999
+[3]<button>Add to Cart
+
+hc> a                     # Attributes of current
+class=product data-sku=IP15PRO
+```
+
+### Find Text (Grep)
+
+| Command | Output | Use When |
+|---------|--------|----------|
+| `g pattern` | `L23: matching line...` | Find text with line numbers |
+
+**Example:**
+```
+hc> g price
+L45: price: $29.99
+L67: price: $49.99
+L89: price: $12.99
+
+hc> g Einstein
+L24: by Albert Einstein
+L60: by Albert Einstein
+```
+
+### Interactive Elements
+
+| Command | Output | Use When |
+|---------|--------|----------|
+| `look` | `@0 <a> "Home"...` | List clickable things |
+| `@3` | `✓ clicked "Submit"` | Click element #3 |
+
+**Example - Find and click:**
+```
+hc> look
+12 elements
+@0 <a> "Home" →/
+@1 <a> "Products" →/products
+@2 <a> "Cart" →/cart
+@3 <button> "Sign In"
+@4 <button> "Search"
+
+hc> @3
+✓ clicked "Sign In"
+```
+
+### Attributes & HTML
+
+| Command | Output | Use When |
+|---------|--------|----------|
+| `a` | `href=/page class=btn` | Get attributes |
+| `h` | `<div class="x">...</div>` | Get full HTML |
+| `h200` | First ~200 chars of HTML | Peek at structure |
+
+### Variables (Blind Operations)
+
+| Command | Output | Use When |
+|---------|--------|----------|
+| `>$name` | `✓ $name (1234 chars)` | Save without seeing |
+| `$name` | Content of variable | Retrieve later |
+
+**Example - Capture now, filter later:**
+```
+hc> q1 .product-description
+[huge amount of text you don't want to see yet]
+
+hc> >$desc              # Save it blindly
+✓ $desc (4523 chars)
+
+hc> $desc |grep warranty
+30-day money-back warranty included
+```
+
+## Real-World Examples
+
+### Example 1: Hacker News - Get Top Story
+
+**Task:** Find the #1 story's title, points, and author.
+
+```
+hc> s
+p:hn.html c:0 d:0 @body
+
+hc> q .titleline
+[0]Show HN: AI-powered code review
+[1]Why Rust is taking over...
+[2]The future of web browsers
+
+hc> q .score
+[0]423 points
+[1]256 points
+[2]189 points
+
+hc> q .hnuser
+[0]pg
+[1]tptacek
+[2]dang
+```
+
+**Result:** "Show HN: AI-powered code review" by pg, 423 points.
+**Tokens:** ~150 total vs ~8,600 reading full HTML.
+
+### Example 2: E-commerce - Find Product Price
+
+**Task:** Find the 3rd product's name and price.
+
+```
+hc> q article h3
+[0]Wireless Mouse
+[1]Mechanical Keyboard
+[2]USB-C Hub
+[3]Monitor Stand
+
+hc> q .price
+[0]$29.99
+[1]$89.99
+[2]$45.99
+[3]$34.99
+```
+
+**Result:** USB-C Hub, $45.99 (index 2).
+**Tokens:** ~80 total.
+
+### Example 3: Wikipedia - Get Summary
+
+**Task:** Get the article title and first paragraph.
+
+```
+hc> q1 #firstHeading
+Claude (language model)
+
+hc> q1 .mw-parser-output > p
+Claude is a family of large language models developed by Anthropic...
+```
+
+**Result:** Title and summary in 2 commands.
+**Tokens:** ~100 total vs ~59,000 reading full HTML.
+
+### Example 4: Form - Find Inputs
+
+**Task:** List all form fields.
+
+```
+hc> q input, select, textarea
+[0]<input> name
+[1]<input> email
+[2]<select> country
+[3]<textarea> message
+[4]<button> Submit
+
+hc> look
+5 elements
+@0 <input> "name"
+@1 <input> "email"
+@2 <select> "country"
+@3 <textarea> "message"
+@4 <button> "Submit"
+```
+
+### Example 5: Navigation - Find Links
+
+**Task:** List main navigation links.
+
+```
+hc> q nav a
+[0]Home
+[1]Products
+[2]About
+[3]Contact
+
+hc> n1
+✓ [1] Products
+
+hc> a
+href=/products class=nav-link
+```
+
+## Patterns for Common Tasks
+
+### Pattern: Explore → Query → Select → Inspect
+
+```
+s              # 1. Where am I?
+t100           # 2. What's here?
+q .relevant    # 3. Find what I need
+n0             # 4. Select one
+a              # 5. Get details
+```
+
+### Pattern: Find and Click
+
+```
+look           # 1. List clickable elements
+@N             # 2. Click the one you want
+```
+
+### Pattern: Blind Capture
+
+```
+q1 .huge-content
+>$data         # Save without seeing (just "✓ $data (N chars)")
+$data |grep keyword    # See only matching lines
+```
+
+### Pattern: Structural Discovery
+
+```
+q1 main        # Go to main content
+ch             # See children
+n2             # Select interesting child
+ch             # Go deeper
+```
+
+## Token Budget
+
+| Operation | Tokens |
+|-----------|--------|
+| Simple command (`s`, `t100`) | ~50 |
+| Query (`q .class`) | ~50 + results |
+| Full page read (traditional) | 5,000-60,000 |
+
+**Rule of thumb:** 5-10 `hc` commands = same info as reading entire HTML, at 1% of the cost.
 
 ## Anti-Patterns
 
-- Reading full HTML first
-- Multiple tool calls when REPL suffices
-- Seeing intermediate results you'll pipe/grep anyway
-- Forgetting to `close` (wastes connection resources)
-
-## Development Commands
-
-```bash
-npm test              # run test suite
-npm run compress-test # test compression on sample pages
-npm run repl          # interactive REPL for testing DSL
+**DON'T** read full HTML first:
 ```
+# Bad - 12,000 tokens
+Read entire page, then search for price
+
+# Good - 100 tokens
+hc> q .price
+[0]$29.99
+```
+
+**DON'T** use complex selectors when simple ones work:
+```
+# Unnecessary
+q div.container > section.products > article.item > span.price
+
+# Better
+q .price
+```
+
+**DON'T** forget to use `n` to select:
+```
+# After q, results are indexed but not selected
+hc> q .item
+[0]First [1]Second [2]Third
+
+# Now select one to inspect further
+hc> n1
+✓ [1] Second
+hc> a
+class=item data-id=123
+```
+
+## Summary
+
+1. **Start with `s`** - know where you are
+2. **Use `t100`** - quick text peek
+3. **Use `q`** - find elements by CSS selector
+4. **Use `n`** - select from results
+5. **Use `look`/`@`** - for clicking
+6. **Use `g`** - for text search
+7. **Use `>$var`** - to capture without seeing
+
+**Every command returns terse output.** No JSON, no verbose confirmations. Just the data you need.
+
+Token savings: **99%+** vs reading full HTML.
