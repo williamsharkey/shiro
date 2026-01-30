@@ -32,11 +32,8 @@ const LINKEDOM_SUITES = [
   { name: 'level-2-shell',      path: './level-2-shell/shell.test.js' },
   { name: 'level-3-coreutils',  path: './level-3-coreutils/coreutils.test.js' },
   { name: 'level-4-pipes',      path: './level-4-pipes/pipes.test.js' },
+  { name: 'level-10-hypercompact', path: './level-10-hypercompact/hypercompact.test.js' },
 ];
-
-// Conditionally add hypercompact if hc command is available
-// (Works locally but needs investigation for CI)
-const HYPERCOMPACT_SUITE = { name: 'level-10-hypercompact', path: './level-10-hypercompact/hypercompact.test.js' };
 
 // Higher-level suites that need real browser (skip in linkedom mode)
 const BROWSER_ONLY_SUITES = [
@@ -45,7 +42,6 @@ const BROWSER_ONLY_SUITES = [
   'level-7-workflows',
   'level-8-fluffycoreutils',
   'level-9-selfbuild',
-  'level-10-hypercompact',  // Works locally, needs more work for CI
 ];
 
 /**
