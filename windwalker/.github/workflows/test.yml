@@ -5,13 +5,12 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  # Allow manual triggering
   workflow_dispatch:
 
 jobs:
-  test-foam:
-    name: Test on Foam
-    runs-on: ubuntu-22.04
+  test-linkedom:
+    name: Fast Unit Tests (linkedom)
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout windwalker
         uses: actions/checkout@v4
@@ -20,115 +19,44 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: williamsharkey/foam
-          path: foam
+          path: ../foam
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22'
+          cache: 'npm'
 
-      - name: Install Chrome system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libnss3 libatk-bridge2.0-0 libdrm2 libxcomposite1 \
-            libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
-            libpangocairo-1.0-0 libgtk-3-0 libcups2 libxshmfence1
-
-      - name: Install windwalker dependencies
+      - name: Install dependencies
         run: npm ci
 
-      - name: Install Puppeteer browser
-        run: npx puppeteer browsers install chrome
+      - name: Run linkedom tests (levels 0-4)
+        run: npm test
 
-      - name: Run tests against Foam
-        env:
-          OS_TARGET: foam
-          FOAM_PATH: ${{ github.workspace }}/foam
-        run: npm run test:foam
-
-      - name: Upload Foam test results
+      - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: foam-test-results
-          path: test-results/results.json
+          name: linkedom-test-results
+          path: test-results/results-linkedom.json
+          retention-days: 30
 
-  test-shiro:
-    name: Test on Shiro
-    runs-on: ubuntu-22.04
-    steps:
-      - name: Checkout windwalker
-        uses: actions/checkout@v4
-
-      - name: Checkout Shiro (with submodules)
-        uses: actions/checkout@v4
-        with:
-          repository: williamsharkey/shiro
-          path: shiro
-          submodules: recursive
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install Chrome system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libnss3 libatk-bridge2.0-0 libdrm2 libxcomposite1 \
-            libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
-            libpangocairo-1.0-0 libgtk-3-0 libcups2 libxshmfence1
-
-      - name: Install windwalker dependencies
-        run: npm ci
-
-      - name: Install Puppeteer browser
-        run: npx puppeteer browsers install chrome
-
-      - name: Install fluffycoreutils dependencies
-        run: cd ${{ github.workspace }}/shiro/fluffycoreutils && npm ci
-
-      - name: Build fluffycoreutils
-        run: cd ${{ github.workspace }}/shiro/fluffycoreutils && npm run build
-
-      - name: Install Shiro dependencies
-        run: cd ${{ github.workspace }}/shiro && npm ci
-
-      - name: Build Shiro
-        run: cd ${{ github.workspace }}/shiro && npm run build
-
-      - name: Run tests against Shiro
-        env:
-          OS_TARGET: shiro
-          SHIRO_PATH: ${{ github.workspace }}/shiro/dist
-        run: npm run test:shiro
-
-      - name: Upload Shiro test results
+      - name: Test Summary
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: shiro-test-results
-          path: test-results/results.json
-
-  compare:
-    name: Cross-platform comparison
-    needs: [test-foam, test-shiro]
-    runs-on: ubuntu-latest
-    if: always()
-    steps:
-      - name: Summary
         run: |
-          echo "## Windwalker Cross-Platform Results" >> $GITHUB_STEP_SUMMARY
+          echo "## Windwalker Test Results (linkedom)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ needs.test-foam.result }}" = "success" ]; then
-            echo "- ✅ **Foam**: All tests passed" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "- ❌ **Foam**: Tests failed" >> $GITHUB_STEP_SUMMARY
-          fi
-          if [ "${{ needs.test-shiro.result }}" = "success" ]; then
-            echo "- ✅ **Shiro**: All tests passed" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "- ❌ **Shiro**: Tests failed" >> $GITHUB_STEP_SUMMARY
+          if [ -f test-results/results-linkedom.json ]; then
+            PASSED=$(jq '.targets[0].passed' test-results/results-linkedom.json)
+            FAILED=$(jq '.targets[0].failed' test-results/results-linkedom.json)
+            SKIPPED=$(jq '.targets[0].skipped' test-results/results-linkedom.json)
+            echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| ✅ Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
+            echo "| ❌ Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
+            echo "| ⏭️ Skipped | $SKIPPED |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Levels tested:** 0-4 (boot, filesystem, shell, coreutils, pipes)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "_Levels 5-9 require skyeyes (real browser integration)_" >> $GITHUB_STEP_SUMMARY
           fi
