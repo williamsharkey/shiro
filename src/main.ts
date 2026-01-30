@@ -1,7 +1,8 @@
 import '@xterm/xterm/css/xterm.css';
 import { FileSystem } from './filesystem';
 import { Shell } from './shell';
-import { CommandRegistry } from './commands/index';
+import { CommandRegistry, Command } from './commands/index';
+import { registry } from './registry';
 import { shiroOnlyCommands } from './commands/coreutils';
 import { gitCmd } from './commands/git';
 import { fetchCmd, curlCmd } from './commands/fetch';
@@ -17,10 +18,20 @@ import { sourceCmd } from './commands/source';
 import { jobsCmd, fgCmd, bgCmd, waitCmd } from './commands/jobs';
 import { hcCmd } from './commands/hc';
 import { testCmd } from './commands/test';
+import { reloadCmd } from './commands/reload';
 import { allCommands } from '../fluffycoreutils/src/index';
 import { wrapFluffyCommand } from './fluffy-adapter';
 import { ShiroTerminal } from './terminal';
 import { ShiroProvider } from '../spirit/src/providers/shiro-provider';
+
+/**
+ * Register a command in both the CommandRegistry (for execution) and
+ * the ModuleRegistry (for hot-reload capability).
+ */
+function registerCommand(commands: CommandRegistry, cmd: Command, sourcePath?: string): void {
+  commands.register(cmd);
+  registry.register(`commands/${cmd.name}`, cmd, sourcePath);
+}
 
 async function main() {
   // Initialize filesystem
@@ -39,27 +50,38 @@ async function main() {
   commands.registerAll(shiroOnlyCommands);
 
   // Register additional Shiro commands not in fluffycoreutils
-  commands.register(gitCmd);
-  commands.register(fetchCmd);
-  commands.register(curlCmd);
-  commands.register(globCmd);
-  commands.register(spiritCmd);
-  commands.register(jsEvalCmd);
-  commands.register(nodeCmd);
-  commands.register(npmCmd);
-  commands.register(buildCmd);
-  commands.register(viCmd);
-  commands.register(nanoCmd);
-  commands.register(uploadCmd);
-  commands.register(downloadCmd);
-  commands.register(shiroConfigCmd);
-  commands.register(sourceCmd);
-  commands.register(jobsCmd);
-  commands.register(fgCmd);
-  commands.register(bgCmd);
-  commands.register(waitCmd);
-  commands.register(hcCmd);
-  commands.register(testCmd);
+  // These are registered in both CommandRegistry and ModuleRegistry for hot-reload
+  registerCommand(commands, gitCmd, 'src/commands/git.ts');
+  registerCommand(commands, fetchCmd, 'src/commands/fetch.ts');
+  registerCommand(commands, curlCmd, 'src/commands/fetch.ts');
+  registerCommand(commands, globCmd, 'src/commands/glob.ts');
+  registerCommand(commands, spiritCmd, 'src/commands/spirit.ts');
+  registerCommand(commands, jsEvalCmd, 'src/commands/jseval.ts');
+  registerCommand(commands, nodeCmd, 'src/commands/jseval.ts');
+  registerCommand(commands, npmCmd, 'src/commands/npm.ts');
+  registerCommand(commands, buildCmd, 'src/commands/build.ts');
+  registerCommand(commands, viCmd, 'src/commands/vi.ts');
+  registerCommand(commands, nanoCmd, 'src/commands/nano.ts');
+  registerCommand(commands, uploadCmd, 'src/commands/upload.ts');
+  registerCommand(commands, downloadCmd, 'src/commands/upload.ts');
+  registerCommand(commands, shiroConfigCmd, 'src/commands/upload.ts');
+  registerCommand(commands, sourceCmd, 'src/commands/source.ts');
+  registerCommand(commands, jobsCmd, 'src/commands/jobs.ts');
+  registerCommand(commands, fgCmd, 'src/commands/jobs.ts');
+  registerCommand(commands, bgCmd, 'src/commands/jobs.ts');
+  registerCommand(commands, waitCmd, 'src/commands/jobs.ts');
+  registerCommand(commands, hcCmd, 'src/commands/hc.ts');
+  registerCommand(commands, testCmd, 'src/commands/test.ts');
+  registerCommand(commands, reloadCmd, 'src/commands/reload.ts');
+
+  // Subscribe to hot-reload events to update CommandRegistry
+  registry.subscribe((name, newModule, oldModule) => {
+    if (name.startsWith('commands/') && newModule) {
+      const cmd = newModule as Command;
+      commands.register(cmd); // Re-register updates the command
+      console.log(`[HotReload] Updated command: ${cmd.name}`);
+    }
+  });
 
   // Create shell
   const shell = new Shell(fs, commands);
@@ -82,6 +104,7 @@ async function main() {
     terminal,
     provider,
     commands,
+    registry, // ModuleRegistry for hot-reload
   };
 
   await terminal.start();
