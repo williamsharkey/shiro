@@ -262,7 +262,7 @@ Example:
       }
       try {
         const path = ctx.fs.resolvePath(file, ctx.cwd);
-        const html = await ctx.fs.readFile(path);
+        const html = await ctx.fs.readFile(path, 'utf8') as string;
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
         window.__hc.session = new HCSession(doc, file);

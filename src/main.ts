@@ -19,6 +19,7 @@ import { jobsCmd, fgCmd, bgCmd, waitCmd } from './commands/jobs';
 import { hcCmd } from './commands/hc';
 import { testCmd } from './commands/test';
 import { reloadCmd } from './commands/reload';
+import { termcastCmd } from './commands/termcast';
 import { allCommands } from '../fluffycoreutils/src/index';
 import { wrapFluffyCommand } from './fluffy-adapter';
 import { ShiroTerminal } from './terminal';
@@ -73,6 +74,7 @@ async function main() {
   registerCommand(commands, hcCmd, 'src/commands/hc.ts');
   registerCommand(commands, testCmd, 'src/commands/test.ts');
   registerCommand(commands, reloadCmd, 'src/commands/reload.ts');
+  registerCommand(commands, termcastCmd, 'src/commands/termcast.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {
