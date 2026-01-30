@@ -2,12 +2,12 @@
 
 **Shared Unix coreutils for browser-based virtual operating systems**
 
-A TypeScript library providing 59 essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
+A TypeScript library providing 63 essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
 
 ## ✨ Features
 
 - 🌐 **Browser-Native**: Pure TypeScript implementation with no Node.js dependencies
-- 🔧 **59 Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `xargs`
+- 🔧 **63 Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `xargs`
 - 🎯 **Filesystem Agnostic**: Works with any virtual filesystem implementing the `FluffyFS` interface
 - 📦 **Tree-Shakeable**: Import only the commands you need
 - 🔒 **Type-Safe**: Full TypeScript definitions included
@@ -51,7 +51,8 @@ const shell = Object.fromEntries(
 - **head** - Output first part of files
 - **tail** - Output last part of files
 - **wc** - Word, line, and byte count
-- **stat** (via `ls -l`)
+- **stat** - Display detailed file status
+- **file** - Determine file type
 
 ### Text Processing
 - **awk** - Pattern scanning and text processing
@@ -77,17 +78,19 @@ const shell = Object.fromEntries(
 - **realpath** - Print resolved absolute path
 
 ### System Info
-- **date** - Display date and time
+- **date** - Display date and time (enhanced with format strings, -d, -u)
 - **echo** - Display text
 - **env** - Display environment variables
 - **printenv** - Print all or part of environment
 - **hostname** - Show system hostname
 - **uname** - Print system information
 - **whoami** - Print current user
+- **id** - Print user identity
 
 ### Utilities
 - **find** - Search for files
 - **which** - Locate a command in PATH
+- **type** - Display command type information
 - **seq** - Generate sequences of numbers
 - **xargs** - Build and execute commands
 - **tee** - Read stdin and write to stdout and files
@@ -97,6 +100,7 @@ const shell = Object.fromEntries(
 - **true** / **false** - Return success/failure
 - **clear** - Clear the terminal
 - **chmod** - Change file permissions
+- **touch** - Change file timestamps (enhanced with -c flag)
 - **sleep** - Delay for specified time
 - **time** - Measure command execution time
 - **timeout** - Run command with time limit
