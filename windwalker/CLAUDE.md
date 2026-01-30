@@ -22,7 +22,10 @@ tests/
 ├── level-6-spirit/         # Spirit AI agent integration
 ├── level-7-workflows/      # Multi-step workflow tests
 ├── level-8-fluffycoreutils/ # Shared coreutils library tests
-└── level-9-selfbuild/      # Self-compilation tests
+├── level-9-selfbuild/      # Self-compilation tests
+├── level-10-hypercompact/  # Hypercompact command tests
+├── level-11-advanced/      # Advanced features
+└── level-12-hotreload/     # Hot-reload and self-modification tests
 ```
 
 ## Common Tasks

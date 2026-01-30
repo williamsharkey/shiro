@@ -28,6 +28,8 @@ const SUITES = [
   { name: 'level-8-fluffycoreutils', path: './level-8-fluffycoreutils/fluffycoreutils.test.js' },
   { name: 'level-9-selfbuild', path: './level-9-selfbuild/selfbuild.test.js' },
   { name: 'level-10-hypercompact', path: './level-10-hypercompact/hypercompact.test.js' },
+  { name: 'level-11-advanced', path: './level-11-advanced/advanced.test.js' },
+  { name: 'level-12-hotreload', path: './level-12-hotreload/hotreload.test.js' },
 ];
 
 // Skyeyes page names for each OS (must match what's configured in skyeyes)
