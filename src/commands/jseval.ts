@@ -110,10 +110,11 @@ export const nodeCmd: Command = {
     }
 
     // If no -e flag, read from file
+    let scriptPath = '';
     if (!code && fileArgs.length > 0) {
-      const filePath = ctx.fs.resolvePath(fileArgs[0], ctx.cwd);
+      scriptPath = ctx.fs.resolvePath(fileArgs[0], ctx.cwd);
       try {
-        code = await ctx.fs.readFile(filePath, 'utf8') as string;
+        code = await ctx.fs.readFile(scriptPath, 'utf8') as string;
       } catch (e: any) {
         ctx.stderr += `node: ${e.message}\n`;
         return 1;
@@ -1288,13 +1289,18 @@ export const nodeCmd: Command = {
         try {
           // Transform ES module syntax to CommonJS
           const transformedContent = transformESModules(content);
+          const modImportMeta = {
+            url: `file://${resolved}`,
+            dirname: modDir,
+            filename: resolved,
+          };
           const wrapped = new Function(
             'module', 'exports', 'require', '__filename', '__dirname',
-            'console', 'process', 'global', 'Buffer',
+            'console', 'process', 'global', 'Buffer', '__import_meta',
             transformedContent
           );
           wrapped(mod, mod.exports, nestedRequire, resolved, modDir,
-            fakeConsole, fakeProcess, globalThis, FakeBuffer
+            fakeConsole, fakeProcess, globalThis, FakeBuffer, modImportMeta
           );
         } catch (err) {
           moduleCache.delete(resolved);
@@ -1308,6 +1314,9 @@ export const nodeCmd: Command = {
 
       // Transform ES module syntax to CommonJS
       function transformESModules(src: string): string {
+        // import.meta → __import_meta (must be before import statement transforms)
+        src = src.replace(/import\.meta/g, '__import_meta');
+
         // import x from 'y' → const x = require('y')
         src = src.replace(/import\s+(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?/g,
           'const $1 = require("$2");');
@@ -1341,9 +1350,16 @@ export const nodeCmd: Command = {
       // Transform ES modules and wrap for execution
       const transformedCode = transformESModules(code);
       const wrappedCode = printResult ? `return (${transformedCode})` : transformedCode;
-      const fn = new AsyncFunction('console', 'process', 'require', 'Buffer', 'shiro', `
+      const fn = new AsyncFunction('console', 'process', 'require', 'Buffer', 'shiro', '__import_meta', `
         ${wrappedCode}
       `);
+
+      // Fake import.meta for ES modules
+      const fakeImportMeta = {
+        url: `file://${scriptPath || ctx.cwd + '/repl.js'}`,
+        dirname: scriptPath ? scriptPath.substring(0, scriptPath.lastIndexOf('/')) : ctx.cwd,
+        filename: scriptPath || ctx.cwd + '/repl.js',
+      };
 
       let result;
       try {
@@ -1352,7 +1368,7 @@ export const nodeCmd: Command = {
           shell: ctx.shell,
           env: ctx.env,
           cwd: ctx.cwd,
-        });
+        }, fakeImportMeta);
       } catch (e: any) {
         if (e instanceof ProcessExitError) {
           exitCode = e.code;

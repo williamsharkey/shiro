@@ -3,45 +3,71 @@ import { SpiritAgent } from '../../spirit/src/spirit.js';
 import type { ShiroProvider } from '../spirit-provider';
 
 /**
- * Spirit command - invokes the full Spirit agent (Claude Code for browser).
+ * Spirit command - invokes the full Spirit agent for browser.
  *
  * Usage:
- *   export ANTHROPIC_API_KEY=sk-ant-...
+ *   export ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_API_KEY, GOOGLE_API_KEY
  *   spirit                          # interactive REPL mode
  *   spirit "create a hello world"   # one-shot mode
  *
- * Spirit is a git submodule providing the complete Claude Code agent loop
+ * Spirit is a git submodule providing the complete AI agent loop
  * with streaming, extended thinking, permissions, sub-agents, and all tools
  * (Bash, Read, Write, Edit, Glob, AskUser).
  */
 export const spiritCmd: Command = {
   name: 'spirit',
-  description: 'AI coding agent (Claude Code for browser)',
+  description: 'AI coding agent',
   async exec(ctx) {
-    const apiKey = ctx.env['ANTHROPIC_API_KEY']
-      || (typeof localStorage !== 'undefined' ? localStorage.getItem('shiro_api_key') || '' : '');
+    // Check for API keys from multiple providers
+    const anthropicKey = ctx.env['ANTHROPIC_API_KEY']
+      || (typeof localStorage !== 'undefined' ? localStorage.getItem('shiro_anthropic_key') || '' : '');
+    const openaiKey = ctx.env['OPENAI_API_KEY']
+      || (typeof localStorage !== 'undefined' ? localStorage.getItem('shiro_openai_key') || '' : '');
+    const googleKey = ctx.env['GOOGLE_API_KEY']
+      || (typeof localStorage !== 'undefined' ? localStorage.getItem('shiro_google_key') || '' : '');
+
+    // Also check legacy key storage
+    const legacyKey = typeof localStorage !== 'undefined' ? localStorage.getItem('shiro_api_key') || '' : '';
+
+    // Use first available key (priority: Anthropic > OpenAI > Google > legacy)
+    const apiKey = anthropicKey || openaiKey || googleKey || legacyKey;
+    const provider_type = anthropicKey ? 'anthropic'
+      : openaiKey ? 'openai'
+      : googleKey ? 'google'
+      : legacyKey ? 'anthropic' : '';
 
     if (!apiKey) {
       ctx.stdout = [
         'Spirit - AI Coding Agent for Shiro OS',
         '',
-        'Spirit is not configured. To set up:',
+        'Spirit is not configured. Set an API key for your preferred provider:',
         '',
-        '  export ANTHROPIC_API_KEY=sk-ant-your-key-here',
+        '  Anthropic (Claude):',
+        '    export ANTHROPIC_API_KEY=sk-ant-your-key-here',
+        '',
+        '  OpenAI (GPT):',
+        '    export OPENAI_API_KEY=sk-your-key-here',
+        '',
+        '  Google (Gemini):',
+        '    export GOOGLE_API_KEY=your-key-here',
+        '',
+        'Or persist keys across sessions:',
+        '  shiro config set anthropic_key sk-ant-...',
+        '  shiro config set openai_key sk-...',
+        '  shiro config set google_key ...',
+        '',
+        'Then run:',
         '  spirit                          # interactive mode',
         '  spirit "your prompt here"       # one-shot mode',
-        '',
-        'Or persist the key across sessions:',
-        '  shiro config set api_key sk-ant-your-key-here',
-        '',
-        'Spirit uses Claude to read, write, and edit files',
-        'in your Shiro filesystem with access to all shell commands.',
         '',
         'Slash commands: /help, /clear, /model, /stats, /thinking, /cost, /exit',
         '',
       ].join('\n');
       return 1;
     }
+
+    // Store provider type for potential future multi-provider support
+    ctx.env['SPIRIT_PROVIDER'] = provider_type;
 
     const provider = (ctx.shell as any)._spiritProvider as ShiroProvider | undefined;
     if (!provider) {
