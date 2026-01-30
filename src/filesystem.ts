@@ -463,19 +463,22 @@ export class FileSystem {
   // Build an fs-like API object for isomorphic-git
   toIsomorphicGitFS() {
     const self = this;
-    // Normalize paths from isomorphic-git (e.g. '/foo/bar/.' → '/foo/bar')
-    const norm = (p: string): string => self.resolvePath(p, '/');
+    // Normalize paths that contain '.' or '..' segments (isomorphic-git passes e.g. '/dir/.')
+    const norm = (p: string): string => {
+      if (p.includes('/.') || p.endsWith('.')) return self.resolvePath(p, '/');
+      return p;
+    };
     return {
       promises: {
         readFile: (p: string, opts?: any) => {
-          if (opts?.encoding === 'utf8' || opts === 'utf8') return self.readFile(norm(p), 'utf8');
-          return self.readFile(norm(p));
+          if (opts?.encoding === 'utf8' || opts === 'utf8') return self.readFile(p, 'utf8');
+          return self.readFile(p);
         },
-        writeFile: (p: string, data: any, opts?: any) => self.writeFile(norm(p), data, typeof opts === 'object' ? opts : undefined),
-        unlink: (p: string) => self.unlink(norm(p)),
+        writeFile: (p: string, data: any, opts?: any) => self.writeFile(p, data, typeof opts === 'object' ? opts : undefined),
+        unlink: (p: string) => self.unlink(p),
         readdir: (p: string) => self.readdir(norm(p)),
-        mkdir: (p: string, opts?: any) => self.mkdir(norm(p), typeof opts === 'number' ? undefined : opts),
-        rmdir: (p: string) => self.rmdir(norm(p)),
+        mkdir: (p: string, opts?: any) => self.mkdir(p, typeof opts === 'number' ? undefined : opts),
+        rmdir: (p: string) => self.rmdir(p),
         stat: async (p: string) => {
           try {
             return await self.stat(norm(p));
@@ -492,10 +495,10 @@ export class FileSystem {
             throw fsError('ENOENT', `ENOENT: no such file or directory, lstat '${p}'`);
           }
         },
-        rename: (o: string, n: string) => self.rename(norm(o), norm(n)),
-        symlink: (t: string, p: string) => self.symlink(t, norm(p)),
-        readlink: (p: string) => self.readlink(norm(p)),
-        chmod: (p: string, m: number) => self.chmod(norm(p), m),
+        rename: (o: string, n: string) => self.rename(o, n),
+        symlink: (t: string, p: string) => self.symlink(t, p),
+        readlink: (p: string) => self.readlink(p),
+        chmod: (p: string, m: number) => self.chmod(p, m),
       },
     };
   }
