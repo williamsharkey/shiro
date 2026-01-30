@@ -1,6 +1,13 @@
 #!/bin/sh
 # virtual-server.sh - Interactive test for virtual server + Express shim
 #
+# VERIFIED WORKING: 2025-01-30
+#   - Tested on williamsharkey.github.io/shiro/
+#   - Express server started on port 9999
+#   - Opened ?PORT=9999&PATH=/api/hello in new browser tab
+#   - Received {"message":"Hello!"} with browser's JSON pretty-print
+#   - Service worker successfully routed cross-tab request!
+#
 # Run this in Shiro's terminal (via windwalker or manually):
 #   source test/interactive/virtual-server.sh
 #
