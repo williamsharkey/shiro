@@ -128,17 +128,23 @@ export const gitCmd: Command = {
 
         case 'log': {
           let maxCount = 10;
+          let oneline = false;
           for (let i = 1; i < ctx.args.length; i++) {
             if (ctx.args[i] === '-n' && ctx.args[i + 1]) maxCount = parseInt(ctx.args[++i]);
             if (ctx.args[i]?.startsWith('--max-count=')) maxCount = parseInt(ctx.args[i].split('=')[1]);
+            if (ctx.args[i] === '--oneline') oneline = true;
           }
           const commits = await git.log({ fs, dir, depth: maxCount });
           for (const c of commits) {
-            ctx.stdout += `commit ${c.oid}\n`;
-            ctx.stdout += `Author: ${c.commit.author.name} <${c.commit.author.email}>\n`;
-            const date = new Date(c.commit.author.timestamp * 1000);
-            ctx.stdout += `Date:   ${date.toISOString()}\n`;
-            ctx.stdout += `\n    ${c.commit.message.trim()}\n\n`;
+            if (oneline) {
+              ctx.stdout += `${c.oid.slice(0, 7)} ${c.commit.message.trim()}\n`;
+            } else {
+              ctx.stdout += `commit ${c.oid}\n`;
+              ctx.stdout += `Author: ${c.commit.author.name} <${c.commit.author.email}>\n`;
+              const date = new Date(c.commit.author.timestamp * 1000);
+              ctx.stdout += `Date:   ${date.toISOString()}\n`;
+              ctx.stdout += `\n    ${c.commit.message.trim()}\n\n`;
+            }
           }
           break;
         }
@@ -176,6 +182,41 @@ export const gitCmd: Command = {
           const current = await git.currentBranch({ fs, dir });
           for (const b of branches) {
             ctx.stdout += (b === current ? '* ' : '  ') + b + '\n';
+          }
+          break;
+        }
+
+        case 'checkout': {
+          const target = ctx.args[1];
+          if (!target) {
+            ctx.stderr = 'error: must specify branch or path\n';
+            return 1;
+          }
+          // Check if -b flag (create new branch)
+          if (target === '-b') {
+            const newBranch = ctx.args[2];
+            if (!newBranch) {
+              ctx.stderr = 'error: must specify new branch name\n';
+              return 1;
+            }
+            await git.branch({ fs, dir, ref: newBranch, checkout: true });
+            ctx.stdout = `Switched to a new branch '${newBranch}'\n`;
+          } else {
+            // Try as branch first
+            const branches = await git.listBranches({ fs, dir });
+            if (branches.includes(target)) {
+              await git.checkout({ fs, dir, ref: target });
+              ctx.stdout = `Switched to branch '${target}'\n`;
+            } else {
+              // Try as file restore (checkout -- file)
+              const filepath = target === '--' ? ctx.args[2] : target;
+              if (!filepath) {
+                ctx.stderr = `error: pathspec '${target}' did not match any branch or file\n`;
+                return 1;
+              }
+              await git.checkout({ fs, dir, ref: 'HEAD', filepaths: [filepath], force: true });
+              ctx.stdout = `Updated 1 path from HEAD\n`;
+            }
           }
           break;
         }
