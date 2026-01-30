@@ -16,6 +16,11 @@ export class ShiroTerminal {
   private userInputCursorPos = 0;
   private rawModeCallback: ((key: string) => void) | null = null;
 
+  // Reverse history search state (Ctrl+R)
+  private reverseSearchMode = false;
+  private reverseSearchQuery = '';
+  private reverseSearchIndex = -1;
+
   constructor(container: HTMLElement, shell: Shell) {
     this.shell = shell;
     this.term = new Terminal({
@@ -168,6 +173,12 @@ export class ShiroTerminal {
       if (this.userInputCallback) {
         this.handleUserInput(data);
       }
+      return;
+    }
+
+    // Handle reverse history search mode (Ctrl+R)
+    if (this.reverseSearchMode) {
+      this.handleReverseSearchInput(data);
       return;
     }
 
@@ -329,6 +340,12 @@ export class ShiroTerminal {
         continue;
       }
 
+      // Ctrl+R (reverse history search)
+      if (ch === '\x12') {
+        this.startReverseSearch();
+        continue;
+      }
+
       // Tab (basic completion)
       if (ch === '\t') {
         await this.tabComplete();
@@ -428,6 +445,158 @@ export class ShiroTerminal {
 
     // Write everything at once
     this.term.write(output);
+  }
+
+  /**
+   * Start reverse history search mode (Ctrl+R)
+   */
+  private startReverseSearch(): void {
+    this.reverseSearchMode = true;
+    this.reverseSearchQuery = '';
+    this.reverseSearchIndex = this.shell.history.length; // Start searching from most recent
+    this.redrawReverseSearchLine();
+  }
+
+  /**
+   * Exit reverse search mode
+   */
+  private exitReverseSearch(accept: boolean): void {
+    this.reverseSearchMode = false;
+    if (accept && this.reverseSearchIndex >= 0 && this.reverseSearchIndex < this.shell.history.length) {
+      this.lineBuffer = this.shell.history[this.reverseSearchIndex];
+      this.cursorPos = this.lineBuffer.length;
+    }
+    this.reverseSearchQuery = '';
+    this.reverseSearchIndex = -1;
+    this.redrawLine();
+  }
+
+  /**
+   * Search history backwards for the query
+   */
+  private findPreviousMatch(): void {
+    if (this.reverseSearchQuery === '') return;
+
+    const query = this.reverseSearchQuery.toLowerCase();
+    for (let i = this.reverseSearchIndex - 1; i >= 0; i--) {
+      if (this.shell.history[i].toLowerCase().includes(query)) {
+        this.reverseSearchIndex = i;
+        return;
+      }
+    }
+    // No match found, don't change index
+  }
+
+  /**
+   * Find the most recent match from the current search position
+   */
+  private findLatestMatch(): void {
+    if (this.reverseSearchQuery === '') {
+      this.reverseSearchIndex = this.shell.history.length;
+      return;
+    }
+
+    const query = this.reverseSearchQuery.toLowerCase();
+    for (let i = Math.min(this.reverseSearchIndex, this.shell.history.length - 1); i >= 0; i--) {
+      if (this.shell.history[i].toLowerCase().includes(query)) {
+        this.reverseSearchIndex = i;
+        return;
+      }
+    }
+    this.reverseSearchIndex = -1; // No match
+  }
+
+  /**
+   * Redraw the reverse search prompt and match
+   */
+  private redrawReverseSearchLine(): void {
+    const cols = this.term.cols;
+    const matchText = this.reverseSearchIndex >= 0 && this.reverseSearchIndex < this.shell.history.length
+      ? this.shell.history[this.reverseSearchIndex]
+      : '';
+
+    // Build the search line: (reverse-i-search)`query': match
+    const prefix = this.reverseSearchIndex >= 0 ? '(reverse-i-search)' : '(failing reverse-i-search)';
+    const display = `${prefix}\`${this.reverseSearchQuery}': ${matchText}`;
+
+    // Clear line and show search
+    let output = '\r';
+    output += ' '.repeat(cols); // Clear line
+    output += '\r';
+    output += display.slice(0, cols - 1);
+
+    this.term.write(output);
+  }
+
+  /**
+   * Handle input while in reverse search mode
+   */
+  private handleReverseSearchInput(data: string): void {
+    for (let i = 0; i < data.length; i++) {
+      const ch = data[i];
+
+      // Enter - accept current match
+      if (ch === '\r' || ch === '\n') {
+        this.exitReverseSearch(true);
+        this.term.writeln('');
+        if (this.lineBuffer.trim()) {
+          this.running = true;
+          this.shell.execute(this.lineBuffer, (s: string) => this.term.write(s)).then(() => {
+            this.running = false;
+            this.lineBuffer = '';
+            this.cursorPos = 0;
+            this.showPrompt();
+          });
+        } else {
+          this.lineBuffer = '';
+          this.cursorPos = 0;
+          this.showPrompt();
+        }
+        return;
+      }
+
+      // Escape or Ctrl+G - cancel search
+      if (ch === '\x1b' || ch === '\x07') {
+        this.exitReverseSearch(false);
+        return;
+      }
+
+      // Ctrl+C - cancel and clear
+      if (ch === '\x03') {
+        this.exitReverseSearch(false);
+        this.term.writeln('^C');
+        this.lineBuffer = '';
+        this.cursorPos = 0;
+        this.showPrompt();
+        return;
+      }
+
+      // Ctrl+R - search backwards for next match
+      if (ch === '\x12') {
+        this.findPreviousMatch();
+        this.redrawReverseSearchLine();
+        continue;
+      }
+
+      // Backspace - remove last char from query
+      if (ch === '\x7f' || ch === '\b') {
+        if (this.reverseSearchQuery.length > 0) {
+          this.reverseSearchQuery = this.reverseSearchQuery.slice(0, -1);
+          this.reverseSearchIndex = this.shell.history.length;
+          this.findLatestMatch();
+        }
+        this.redrawReverseSearchLine();
+        continue;
+      }
+
+      // Regular character - add to search query
+      if (ch >= ' ') {
+        this.reverseSearchQuery += ch;
+        this.findLatestMatch();
+        this.redrawReverseSearchLine();
+        continue;
+      }
+    }
   }
 
   /**
