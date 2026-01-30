@@ -337,6 +337,101 @@ export default async function run(page, osTarget) {
     results.fail('dirname', e);
   }
 
+  // Test: tr (translate characters)
+  try {
+    const r = await os.exec('echo "hello" | tr "a-z" "A-Z"');
+    assertIncludes(r.stdout, 'HELLO', 'tr should uppercase');
+    results.pass('tr');
+  } catch (e) {
+    results.fail('tr', e);
+  }
+
+  // Test: cut -d -f (field extraction)
+  try {
+    const r = await os.exec('echo "a:b:c" | cut -d: -f2');
+    assertIncludes(r.stdout, 'b', 'cut should extract field 2');
+    results.pass('cut -d -f');
+  } catch (e) {
+    results.fail('cut -d -f', e);
+  }
+
+  // Test: env (show environment)
+  try {
+    const r = await os.exec('env');
+    assertIncludes(r.stdout, 'HOME', 'env should show HOME');
+    results.pass('env');
+  } catch (e) {
+    results.fail('env', e);
+  }
+
+  // Test: printenv (print specific variable)
+  try {
+    const r = await os.exec('printenv HOME');
+    assertIncludes(r.stdout, '/home', 'printenv HOME should show home path');
+    results.pass('printenv');
+  } catch (e) {
+    results.fail('printenv', e);
+  }
+
+  // Test: printf (formatted output)
+  try {
+    const r = await os.exec('printf "%s-%d" hello 42');
+    assertIncludes(r.stdout, 'hello-42', 'printf should format');
+    results.pass('printf');
+  } catch (e) {
+    results.fail('printf', e);
+  }
+
+  // Test: cat with multiple files
+  try {
+    await os.writeFile('/tmp/ww-cat1.txt', 'first');
+    await os.writeFile('/tmp/ww-cat2.txt', 'second');
+    const r = await os.exec('cat /tmp/ww-cat1.txt /tmp/ww-cat2.txt');
+    assertIncludes(r.stdout, 'first', 'cat multi should include first');
+    assertIncludes(r.stdout, 'second', 'cat multi should include second');
+    results.pass('cat (multiple files)');
+  } catch (e) {
+    results.fail('cat (multiple files)', e);
+  }
+
+  // Test: seq (sequence)
+  try {
+    const r = await os.exec('seq 3');
+    assertIncludes(r.stdout, '1', 'seq should include 1');
+    assertIncludes(r.stdout, '2', 'seq should include 2');
+    assertIncludes(r.stdout, '3', 'seq should include 3');
+    results.pass('seq');
+  } catch (e) {
+    results.fail('seq', e);
+  }
+
+  // Test: realpath
+  try {
+    const r = await os.exec('realpath /tmp/../tmp/ww-core-a.txt');
+    assertIncludes(r.stdout, '/tmp/ww-core-a.txt', 'realpath should resolve path');
+    results.pass('realpath');
+  } catch (e) {
+    results.fail('realpath', e);
+  }
+
+  // Test: hostname
+  try {
+    const r = await os.exec('hostname');
+    assert(r.stdout.trim().length > 0, 'hostname should return something');
+    results.pass('hostname');
+  } catch (e) {
+    results.fail('hostname', e);
+  }
+
+  // Test: uname
+  try {
+    const r = await os.exec('uname');
+    assert(r.stdout.trim().length > 0, 'uname should return something');
+    results.pass('uname');
+  } catch (e) {
+    results.fail('uname', e);
+  }
+
   results.summary();
   return results;
 }
