@@ -108,6 +108,58 @@ export default async function run(page, osTarget) {
     results.fail('default directories exist', e);
   }
 
+  // Test: Environment variables are set
+  try {
+    const os = createOSHelpers(page, osTarget);
+    const r = await os.exec('echo $HOME');
+    if (r.stdout.includes('/home')) {
+      results.pass('HOME environment variable set');
+    } else {
+      results.fail('HOME environment variable set', `HOME=${r.stdout}`);
+    }
+  } catch (e) {
+    results.fail('HOME environment variable set', e);
+  }
+
+  // Test: PWD is set
+  try {
+    const os = createOSHelpers(page, osTarget);
+    const r = await os.exec('echo $PWD');
+    if (r.stdout.trim().length > 0) {
+      results.pass('PWD environment variable set');
+    } else {
+      results.fail('PWD environment variable set', 'PWD is empty');
+    }
+  } catch (e) {
+    results.fail('PWD environment variable set', e);
+  }
+
+  // Test: PATH is set
+  try {
+    const os = createOSHelpers(page, osTarget);
+    const r = await os.exec('echo $PATH');
+    if (r.stdout.trim().length > 0) {
+      results.pass('PATH environment variable set');
+    } else {
+      results.fail('PATH environment variable set', 'PATH is empty');
+    }
+  } catch (e) {
+    results.fail('PATH environment variable set', e);
+  }
+
+  // Test: Can execute basic command
+  try {
+    const os = createOSHelpers(page, osTarget);
+    const r = await os.exec('echo test');
+    if (r.stdout.includes('test')) {
+      results.pass('basic command execution');
+    } else {
+      results.fail('basic command execution', 'echo did not work');
+    }
+  } catch (e) {
+    results.fail('basic command execution', e);
+  }
+
   results.summary();
   return results;
 }
