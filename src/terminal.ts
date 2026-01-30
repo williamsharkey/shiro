@@ -43,7 +43,7 @@ export class ShiroTerminal {
       },
       fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", monospace',
       fontSize: 14,
-      lineHeight: 1.2,
+      lineHeight: 1.3,
       cursorBlink: true,
       cursorStyle: 'block',
       scrollback: 10000,
@@ -77,7 +77,7 @@ export class ShiroTerminal {
 
   async start() {
     this.term.writeln('\x1b[36m╔═════════════════════════════════════════════╗\x1b[0m');
-    this.term.writeln('\x1b[36m║\x1b[0m   \x1b[1;97mShiro OS\x1b[0m \x1b[95mv0.1.0\x1b[0m                          \x1b[36m║\x1b[0m');
+    this.term.writeln('\x1b[36m║\x1b[0m   \x1b[1;97mShiro OS\x1b[0m \x1b[95mv0.1.0\x1b[0m                           \x1b[36m║\x1b[0m');
     this.term.writeln('\x1b[36m║\x1b[0m   \x1b[92mBrowser-Native Cloud Operating System\x1b[0m     \x1b[36m║\x1b[0m');
     this.term.writeln('\x1b[36m║\x1b[0m                                             \x1b[36m║\x1b[0m');
     this.term.writeln('\x1b[36m║\x1b[0m   \x1b[33mhelp\x1b[0m        \x1b[90m—\x1b[0m list all commands           \x1b[36m║\x1b[0m');
