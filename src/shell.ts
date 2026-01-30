@@ -2,7 +2,7 @@ import { FileSystem } from './filesystem';
 import { CommandRegistry, CommandContext } from './commands/index';
 
 interface Redirect {
-  type: '>' | '>>' | '<' | '2>' | '2>>';
+  type: '>' | '>>' | '<' | '2>' | '2>>' | '2>&1';
   target: string;
 }
 
@@ -119,6 +119,9 @@ export class Shell {
           exitCode = 1;
         }
 
+        // Check if stderr should be redirected to stdout (2>&1)
+        const redirectStderrToStdout = redirects.some(r => r.type === '2>&1');
+
         // Handle stderr output and redirects
         let stderrOutput = ctx.stderr;
         for (const redir of redirects) {
@@ -132,12 +135,20 @@ export class Shell {
             stderrOutput = '';
           }
         }
-        if (stderrOutput) {
-          stderrWriter(stderrOutput.replace(/\n/g, '\r\n'));
-        }
 
         // Handle stdout redirects
         let output = ctx.stdout;
+
+        // If 2>&1, merge stderr into stdout BEFORE processing stdout redirects
+        if (redirectStderrToStdout && stderrOutput) {
+          output += stderrOutput;
+          stderrOutput = '';
+        }
+
+        // Now write any remaining stderr to the error stream
+        if (stderrOutput) {
+          stderrWriter(stderrOutput.replace(/\n/g, '\r\n'));
+        }
         for (const redir of redirects) {
           if (redir.type === '>') {
             const targetPath = this.fs.resolvePath(redir.target, this.cwd);
@@ -260,7 +271,10 @@ export class Shell {
     const redirects: Redirect[] = [];
 
     for (let i = 0; i < tokens.length; i++) {
-      if ((tokens[i] === '>' || tokens[i] === '>>' || tokens[i] === '<' || tokens[i] === '2>' || tokens[i] === '2>>') && i + 1 < tokens.length) {
+      if (tokens[i] === '2>&1') {
+        // 2>&1 doesn't need a target - it redirects stderr to stdout
+        redirects.push({ type: '2>&1', target: '' });
+      } else if ((tokens[i] === '>' || tokens[i] === '>>' || tokens[i] === '<' || tokens[i] === '2>' || tokens[i] === '2>>') && i + 1 < tokens.length) {
         redirects.push({ type: tokens[i] as Redirect['type'], target: tokens[i + 1] });
         i++;
       } else {
@@ -308,10 +322,13 @@ export class Shell {
         continue;
       }
 
-      // Handle 2> and 2>> stderr redirects
+      // Handle 2>&1, 2>>, and 2> stderr redirects
       if (ch === '2' && !inSingle && !inDouble && (input[i + 1] === '>')) {
         if (current) { tokens.push(current); current = ''; }
-        if (input[i + 2] === '>') {
+        if (input[i + 2] === '&' && input[i + 3] === '1') {
+          tokens.push('2>&1');
+          i += 4;
+        } else if (input[i + 2] === '>') {
           tokens.push('2>>');
           i += 3;
         } else {

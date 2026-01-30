@@ -156,16 +156,47 @@ export const nodeCmd: Command = {
         stderr: { write: (s: string) => { stderrBuf.push(s); } },
       };
 
+      // Create require() function for npm packages
+      // Note: This is a best-effort implementation. In browser, use dynamic import() instead.
+      const fakeRequire = (moduleName: string) => {
+        // Try to use global import map
+        let importMap: any = {};
+        if (typeof window !== 'undefined' && (window as any).__shiro?.importMap) {
+          importMap = (window as any).__shiro.importMap;
+        }
+
+        // Check if module is in import map
+        const moduleUrl = importMap[moduleName];
+        if (!moduleUrl) {
+          throw new Error(
+            `Cannot find module '${moduleName}'.\n` +
+            `Run 'npm install ${moduleName}' first, then use:\n` +
+            `  import { ... } from '${moduleName}'  (ESM syntax)\n` +
+            `  await import('${moduleName}')  (dynamic import)\n`
+          );
+        }
+
+        // For browser ESM, require() cannot be truly synchronous
+        // Throw a helpful error directing to use import instead
+        throw new Error(
+          `require('${moduleName}') is not supported in browser.\n` +
+          `Use ESM syntax instead:\n` +
+          `  import { ... } from '${moduleName}'  or\n` +
+          `  const mod = await import('${moduleName}')\n` +
+          `Package URL: ${moduleUrl}`
+        );
+      };
+
       const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
       // When printing (-p), wrap in return to capture expression value
       const wrappedCode = printResult ? `return (${code})` : code;
-      const fn = new AsyncFunction('console', 'process', 'shiro', `
+      const fn = new AsyncFunction('console', 'process', 'require', 'shiro', `
         ${wrappedCode}
       `);
 
       let result;
       try {
-        result = await fn(fakeConsole, fakeProcess, {
+        result = await fn(fakeConsole, fakeProcess, fakeRequire, {
           fs: ctx.fs,
           shell: ctx.shell,
           env: ctx.env,
