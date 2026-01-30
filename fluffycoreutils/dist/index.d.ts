@@ -55,6 +55,7 @@ import { seq } from "./commands/seq.js";
 import { sha256sum } from "./commands/sha256sum.js";
 import { sleep } from "./commands/sleep.js";
 import { sort } from "./commands/sort.js";
+import { source, dot } from "./commands/source.js";
 import { stat } from "./commands/stat.js";
 import { strings } from "./commands/strings.js";
 import { tail } from "./commands/tail.js";
@@ -77,7 +78,7 @@ import { whoami } from "./commands/whoami.js";
 import { xargs } from "./commands/xargs.js";
 import { yes } from "./commands/yes.js";
 import type { FluffyCommand } from "./types.js";
-export { awk, base64, basename, cat, chmod, chown, clear, comm, cp, curl, cut, date, df, diff, dirname, du, echo, env, expand, expr, exportCmd, file, find, fmt, fold, free, grep, head, hexdump, hostname, id, install, join, less, ln, ls, make, md5sum, mkdir, mv, nl, od, paste, patch, printenv, printf, pwd, readlink, realpath, rm, sed, seq, sha256sum, sleep, sort, stat, strings, tail, tar, tee, test, time, timeout, touch, tr, type, unexpand, uniq, uname, uptime, wc, which, whoami, xargs, yes, falseCmd as false, trueCmd as true, };
+export { awk, base64, basename, cat, chmod, chown, clear, comm, cp, curl, cut, date, df, diff, dirname, dot, du, echo, env, expand, expr, exportCmd, file, find, fmt, fold, free, grep, head, hexdump, hostname, id, install, join, less, ln, ls, make, md5sum, mkdir, mv, nl, od, paste, patch, printenv, printf, pwd, readlink, realpath, rm, sed, seq, sha256sum, sleep, sort, source, stat, strings, tail, tar, tee, test, time, timeout, touch, tr, type, unexpand, uniq, uname, uptime, wc, which, whoami, xargs, yes, falseCmd as false, trueCmd as true, };
 /** All commands as a name→command map for easy registration in a shell. */
 export declare const allCommands: Record<string, FluffyCommand>;
 /** Array of all commands for iteration. */
