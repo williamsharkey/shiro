@@ -222,6 +222,22 @@ export interface FileSystemWriter {
   symlink?(target: string, path: string): Promise<void>;
 }
 
+/**
+ * Recursively create directories (like mkdir -p)
+ */
+async function ensureDirRecursive(path: string, fs: FileSystemWriter): Promise<void> {
+  const parts = path.split('/').filter(Boolean);
+  let current = '';
+  for (const part of parts) {
+    current += '/' + part;
+    try {
+      await fs.mkdir(current);
+    } catch (e: any) {
+      if (!e.message?.includes('EEXIST')) throw e;
+    }
+  }
+}
+
 export async function extractTarGzToFS(
   compressedData: Uint8Array,
   baseDir: string,
@@ -248,6 +264,15 @@ export async function extractTarGzToFS(
         // Directory might already exist, that's ok
       }
     } else if (entry.type === 'file' && entry.data) {
+      // Ensure parent directory exists before writing file
+      const parentDir = fullPath.substring(0, fullPath.lastIndexOf('/'));
+      if (parentDir && parentDir !== baseDir) {
+        try {
+          await ensureDirRecursive(parentDir, fs);
+        } catch (e) {
+          // Ignore if already exists
+        }
+      }
       await fs.writeFile(fullPath, entry.data);
     } else if (entry.type === 'symlink' && entry.linkname && fs.symlink) {
       await fs.symlink(entry.linkname, fullPath);

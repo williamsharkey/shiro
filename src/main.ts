@@ -11,6 +11,7 @@ import { jsEvalCmd, nodeCmd } from './commands/jseval';
 import { npmCmd } from './commands/npm';
 import { buildCmd } from './commands/build';
 import { viCmd } from './commands/vi';
+import { uploadCmd, downloadCmd, shiroConfigCmd } from './commands/upload';
 import { allCommands } from '../fluffycoreutils/src/index';
 import { wrapFluffyCommand } from './fluffy-adapter';
 import { ShiroTerminal } from './terminal';
@@ -43,6 +44,9 @@ async function main() {
   commands.register(npmCmd);
   commands.register(buildCmd);
   commands.register(viCmd);
+  commands.register(uploadCmd);
+  commands.register(downloadCmd);
+  commands.register(shiroConfigCmd);
 
   // Create shell
   const shell = new Shell(fs, commands);

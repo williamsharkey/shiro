@@ -200,12 +200,35 @@ export const gitCmd: Command = {
             // Ignore if already exists
           }
           ctx.stdout = `Cloning into '${repoName}'...\n`;
-          await git.clone({
-            fs, http, dir: targetDir, url,
-            corsProxy: 'https://cors.isomorphic-git.org',
-            singleBranch: true,
-            depth: 1,
-          });
+
+          // Configurable CORS proxy with fallback chain
+          const corsProxy = ctx.env['GIT_CORS_PROXY'] || 'https://cors.isomorphic-git.org';
+          const cloneWithTimeout = (proxy: string) => {
+            return Promise.race([
+              git.clone({
+                fs, http, dir: targetDir, url,
+                corsProxy: proxy,
+                singleBranch: true,
+                depth: 1,
+              }),
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error('clone timed out')), 30000)
+              ),
+            ]);
+          };
+
+          try {
+            await cloneWithTimeout(corsProxy);
+          } catch (firstErr: any) {
+            // If the configured proxy failed and it's not the default, try without proxy
+            if (corsProxy !== 'https://cors.isomorphic-git.org') {
+              ctx.stdout += `Proxy failed (${firstErr.message}), retrying with fallback...\n`;
+              await cloneWithTimeout('https://cors.isomorphic-git.org');
+            } else {
+              throw firstErr;
+            }
+          }
+
           ctx.stdout += `done.\n`;
           break;
         }

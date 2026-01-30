@@ -17,7 +17,8 @@ export const spiritCmd: Command = {
   name: 'spirit',
   description: 'AI coding agent (Claude Code for browser)',
   async exec(ctx) {
-    const apiKey = ctx.env['ANTHROPIC_API_KEY'];
+    const apiKey = ctx.env['ANTHROPIC_API_KEY']
+      || (typeof localStorage !== 'undefined' ? localStorage.getItem('shiro_api_key') || '' : '');
 
     if (!apiKey) {
       ctx.stdout = [
@@ -27,6 +28,9 @@ export const spiritCmd: Command = {
         '',
         '  export ANTHROPIC_API_KEY=sk-ant-your-key-here',
         '  spirit "your prompt here"',
+        '',
+        'Or persist the key across sessions:',
+        '  shiro config set api_key sk-ant-your-key-here',
         '',
         'Spirit uses Claude to read, write, and edit files',
         'in your Shiro filesystem with access to all shell commands.',

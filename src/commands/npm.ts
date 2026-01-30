@@ -257,15 +257,18 @@ async function installPackage(
 
   // Create package directory
   const packageDir = ctx.fs.resolvePath(`node_modules/${pkg.name}`, ctx.cwd);
+  await ctx.fs.mkdir(packageDir, { recursive: true });
 
   // Extract tarball to package directory
+  let filesWritten = 0;
   const fsWriter: FileSystemWriter = {
     writeFile: async (path: string, data: Uint8Array) => {
       await ctx.fs.writeFile(path, data);
+      filesWritten++;
     },
     mkdir: async (path: string) => {
       try {
-        await ctx.fs.mkdir(path);
+        await ctx.fs.mkdir(path, { recursive: true });
       } catch {
         // Directory might exist
       }
@@ -273,6 +276,7 @@ async function installPackage(
   };
 
   await extractTarGzToFS(tarballData, packageDir, fsWriter);
+  ctx.stdout += `  ${filesWritten} files extracted\n`;
 }
 
 async function npmInstall(ctx: CommandContext): Promise<number> {

@@ -76,11 +76,15 @@ export class ShiroTerminal {
   }
 
   async start() {
-    this.term.writeln('\x1b[36m╔═══════════════════════════════════════╗\x1b[0m');
-    this.term.writeln('\x1b[36m║\x1b[0m   \x1b[1;97mShiro OS\x1b[0m v0.1.0 (build 4)      \x1b[36m║\x1b[0m');
-    this.term.writeln('\x1b[36m║\x1b[0m   Browser-Native Cloud Operating System \x1b[36m║\x1b[0m');
-    this.term.writeln('\x1b[36m║\x1b[0m   Type \x1b[33mhelp\x1b[0m for available commands      \x1b[36m║\x1b[0m');
-    this.term.writeln('\x1b[36m╚═══════════════════════════════════════╝\x1b[0m');
+    this.term.writeln('\x1b[36m╔═════════════════════════════════════════════╗\x1b[0m');
+    this.term.writeln('\x1b[36m║\x1b[0m   \x1b[1;97mShiro OS\x1b[0m \x1b[95mv0.1.0\x1b[0m                          \x1b[36m║\x1b[0m');
+    this.term.writeln('\x1b[36m║\x1b[0m   \x1b[92mBrowser-Native Cloud Operating System\x1b[0m     \x1b[36m║\x1b[0m');
+    this.term.writeln('\x1b[36m║\x1b[0m                                             \x1b[36m║\x1b[0m');
+    this.term.writeln('\x1b[36m║\x1b[0m   \x1b[33mhelp\x1b[0m        \x1b[90m—\x1b[0m list all commands           \x1b[36m║\x1b[0m');
+    this.term.writeln('\x1b[36m║\x1b[0m   \x1b[33mspirit\x1b[0m      \x1b[90m—\x1b[0m AI coding agent (Claude)    \x1b[36m║\x1b[0m');
+    this.term.writeln('\x1b[36m║\x1b[0m   \x1b[33mupload\x1b[0m      \x1b[90m—\x1b[0m upload files from host      \x1b[36m║\x1b[0m');
+    this.term.writeln('\x1b[36m║\x1b[0m   \x1b[33mdownload\x1b[0m    \x1b[90m—\x1b[0m download files to host      \x1b[36m║\x1b[0m');
+    this.term.writeln('\x1b[36m╚═════════════════════════════════════════════╝\x1b[0m');
     this.term.writeln('');
     this.showPrompt();
   }

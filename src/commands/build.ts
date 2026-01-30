@@ -31,9 +31,12 @@ async function ensureEsbuildInitialized(): Promise<void> {
 
   initPromise = (async () => {
     try {
-      // Initialize esbuild-wasm
+      // Initialize esbuild-wasm — use worker:false to avoid web worker
+      // issues in browser OS context, and a modern version with fixed
+      // WASM initialization (0.20.0 had Go WASM runtime bugs)
       await esbuild.initialize({
-        wasmURL: 'https://unpkg.com/esbuild-wasm@0.20.0/esbuild.wasm',
+        wasmURL: 'https://unpkg.com/esbuild-wasm@0.27.2/esbuild.wasm',
+        worker: false,
       });
       esbuildInitialized = true;
     } catch (e: any) {

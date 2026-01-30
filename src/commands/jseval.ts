@@ -156,36 +156,109 @@ export const nodeCmd: Command = {
         stderr: { write: (s: string) => { stderrBuf.push(s); } },
       };
 
-      // Create require() function for npm packages
-      // Note: This is a best-effort implementation. In browser, use dynamic import() instead.
-      const fakeRequire = (moduleName: string) => {
-        // Try to use global import map
-        let importMap: any = {};
-        if (typeof window !== 'undefined' && (window as any).__shiro?.importMap) {
-          importMap = (window as any).__shiro.importMap;
+      // CommonJS require() with pre-loaded file cache
+      const fileCache = new Map<string, string>();
+      const moduleCache = new Map<string, { exports: any }>();
+
+      // Pre-load node_modules (Shiro readdir returns string[])
+      async function preloadPkg(dir: string) {
+        try {
+          const entries = await ctx.fs.readdir(dir);
+          for (const name of entries) {
+            const fp = dir + '/' + name;
+            if (name.endsWith('.js') || name.endsWith('.json')) {
+              try {
+                const content = await ctx.fs.readFile(fp, 'utf8');
+                fileCache.set(fp, content as string);
+              } catch { /* skip */ }
+            } else if (name !== 'node_modules' && !name.includes('.')) {
+              // Likely a directory - try to recurse
+              try {
+                await ctx.fs.stat(fp);
+                await preloadPkg(fp);
+              } catch { /* not a dir or doesn't exist */ }
+            }
+          }
+        } catch { /* skip */ }
+      }
+
+      // Pre-load project .js/.json files from cwd
+      await preloadPkg(ctx.cwd);
+      // Pre-load node_modules
+      const nmDir = ctx.fs.resolvePath('node_modules', ctx.cwd);
+      try {
+        const entries = await ctx.fs.readdir(nmDir);
+        for (const name of entries) {
+          await preloadPkg(nmDir + '/' + name);
+        }
+      } catch { /* no node_modules */ }
+
+      function requireModule(modPath: string, fromDir: string): any {
+        let resolved = modPath;
+
+        if (modPath.startsWith('./') || modPath.startsWith('../') || modPath.startsWith('/')) {
+          resolved = ctx.fs.resolvePath(modPath, fromDir);
+          if (!resolved.endsWith('.js') && !resolved.endsWith('.json')) {
+            if (fileCache.has(resolved + '.js')) resolved += '.js';
+            else if (fileCache.has(resolved + '/index.js')) resolved += '/index.js';
+          }
+        } else {
+          const base = fromDir.startsWith('/') ? fromDir : ctx.cwd;
+          const nmPath = `${base}/node_modules/${modPath}`;
+          const pkgPath = `${nmPath}/package.json`;
+
+          if (fileCache.has(pkgPath)) {
+            try {
+              const pkg = JSON.parse(fileCache.get(pkgPath)!);
+              let main = pkg.main || 'index.js';
+              main = main.replace(/^\.\//, '');
+              if (!main.endsWith('.js') && !main.endsWith('.json')) main += '.js';
+              resolved = `${nmPath}/${main}`;
+            } catch {
+              resolved = `${nmPath}/index.js`;
+            }
+          } else {
+            resolved = `${nmPath}/index.js`;
+          }
         }
 
-        // Check if module is in import map
-        const moduleUrl = importMap[moduleName];
-        if (!moduleUrl) {
-          throw new Error(
-            `Cannot find module '${moduleName}'.\n` +
-            `Run 'npm install ${moduleName}' first, then use:\n` +
-            `  import { ... } from '${moduleName}'  (ESM syntax)\n` +
-            `  await import('${moduleName}')  (dynamic import)\n`
+        if (moduleCache.has(resolved)) return moduleCache.get(resolved)!.exports;
+
+        const content = fileCache.get(resolved);
+        if (content === undefined) {
+          throw new Error(`Cannot find module '${modPath}'`);
+        }
+
+        if (resolved.endsWith('.json')) {
+          const exp = JSON.parse(content);
+          moduleCache.set(resolved, { exports: exp });
+          return exp;
+        }
+
+        const mod = { exports: {} as any };
+        moduleCache.set(resolved, mod);
+        const modDir = resolved.substring(0, resolved.lastIndexOf('/')) || ctx.cwd;
+        const nestedRequire = (p: string) => requireModule(p, modDir);
+
+        try {
+          const wrapped = new Function(
+            'module', 'exports', 'require', '__filename', '__dirname',
+            'console', 'process', 'global', 'Buffer',
+            content
           );
+          wrapped(mod, mod.exports, nestedRequire, resolved, modDir,
+            fakeConsole, fakeProcess, globalThis,
+            { from: (s: string) => new TextEncoder().encode(s) }
+          );
+        } catch (err) {
+          moduleCache.delete(resolved);
+          throw err;
         }
 
-        // For browser ESM, require() cannot be truly synchronous
-        // Throw a helpful error directing to use import instead
-        throw new Error(
-          `require('${moduleName}') is not supported in browser.\n` +
-          `Use ESM syntax instead:\n` +
-          `  import { ... } from '${moduleName}'  or\n` +
-          `  const mod = await import('${moduleName}')\n` +
-          `Package URL: ${moduleUrl}`
-        );
-      };
+        return mod.exports;
+      }
+
+      const fakeRequire = (moduleName: string) => requireModule(moduleName, ctx.cwd);
 
       const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
       // When printing (-p), wrap in return to capture expression value
