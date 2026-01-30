@@ -8,6 +8,9 @@ import { fetchCmd, curlCmd } from './commands/fetch';
 import { globCmd } from './commands/glob';
 import { spiritCmd } from './commands/spirit';
 import { jsEvalCmd, nodeCmd } from './commands/jseval';
+import { npmCmd } from './commands/npm';
+import { buildCmd } from './commands/build';
+import { viCmd } from './commands/vi';
 import { allCommands } from '../fluffycoreutils/src/index';
 import { wrapFluffyCommand } from './fluffy-adapter';
 import { ShiroTerminal } from './terminal';
@@ -37,6 +40,9 @@ async function main() {
   commands.register(spiritCmd);
   commands.register(jsEvalCmd);
   commands.register(nodeCmd);
+  commands.register(npmCmd);
+  commands.register(buildCmd);
+  commands.register(viCmd);
 
   // Create shell
   const shell = new Shell(fs, commands);
