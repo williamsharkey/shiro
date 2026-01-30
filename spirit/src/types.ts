@@ -93,13 +93,19 @@ export interface StreamEventMessageStop {
   type: "message_stop";
 }
 
+export interface StreamEventError {
+  type: "error";
+  error: { type: string; message: string };
+}
+
 export type StreamEvent =
   | StreamEventMessageStart
   | StreamEventContentBlockStart
   | StreamEventContentBlockDelta
   | StreamEventContentBlockStop
   | StreamEventMessageDelta
-  | StreamEventMessageStop;
+  | StreamEventMessageStop
+  | StreamEventError;
 
 // Stats
 
@@ -152,4 +158,7 @@ export interface AgentConfig {
 
   // Extended thinking budget (0 = disabled)
   thinkingBudget?: number;
+
+  // Per-tool execution timeout in ms (default 30000)
+  toolTimeoutMs?: number;
 }

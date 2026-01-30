@@ -113,17 +113,34 @@ async function searchFile(
   }
 }
 
+const MAX_COLLECT_DEPTH = 20;
+
 async function collectFiles(
   dirPath: string,
-  provider: OSProvider
+  provider: OSProvider,
+  depth = 0,
+  visited: Set<string> = new Set()
 ): Promise<string[]> {
+  if (depth > MAX_COLLECT_DEPTH || visited.has(dirPath)) return [];
+  visited.add(dirPath);
+
   const files: string[] = [];
-  const entries = await provider.readdir(dirPath);
+  let entries;
+  try {
+    entries = await provider.readdir(dirPath);
+  } catch {
+    return []; // skip unreadable directories
+  }
   for (const entry of entries) {
     if (entry.type === "file") {
       files.push(entry.path);
     } else if (entry.type === "dir") {
-      const subFiles = await collectFiles(entry.path, provider);
+      const subFiles = await collectFiles(
+        entry.path,
+        provider,
+        depth + 1,
+        visited
+      );
       files.push(...subFiles);
     }
   }

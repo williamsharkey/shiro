@@ -120,108 +120,148 @@ export class ApiClient {
     const blockToolMeta: Map<number, { id: string; name: string }> =
       new Map();
 
-    const reader = response.body!.getReader();
+    if (!response.body) {
+      throw new Error("Anthropic API error: empty response body (no stream)");
+    }
+
+    const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-
-      // Process complete SSE lines
-      const lines = buffer.split("\n");
-      buffer = lines.pop()!; // keep incomplete line
-
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        const data = line.slice(6).trim();
-        if (data === "[DONE]") continue;
-
-        let event: StreamEvent;
+    try {
+      while (true) {
+        let readResult;
         try {
-          event = JSON.parse(data);
-        } catch {
-          continue;
+          readResult = await reader.read();
+        } catch (readError: unknown) {
+          const msg =
+            readError instanceof Error ? readError.message : String(readError);
+          throw new Error(`Stream interrupted: ${msg}`);
         }
 
-        switch (event.type) {
-          case "message_start":
-            inputTokens = event.message.usage.input_tokens;
-            break;
+        const { done, value } = readResult;
+        if (done) break;
 
-          case "content_block_start":
-            if (event.content_block.type === "text") {
-              blockTexts.set(event.index, event.content_block.text);
-            } else if (event.content_block.type === "thinking") {
-              blockThinking.set(event.index, event.content_block.thinking ?? "");
-            } else if (event.content_block.type === "tool_use") {
-              blockToolMeta.set(event.index, {
-                id: event.content_block.id,
-                name: event.content_block.name,
-              });
-              blockToolJsons.set(event.index, "");
-            }
-            break;
+        buffer += decoder.decode(value, { stream: true });
 
-          case "content_block_delta":
-            if (event.delta.type === "text_delta") {
-              const prev = blockTexts.get(event.index) ?? "";
-              blockTexts.set(event.index, prev + event.delta.text);
-              onTextDelta(event.delta.text);
-            } else if (event.delta.type === "thinking_delta") {
-              const prev = blockThinking.get(event.index) ?? "";
-              blockThinking.set(event.index, prev + event.delta.thinking);
-              onThinkingDelta?.(event.delta.thinking);
-            } else if (event.delta.type === "input_json_delta") {
-              const prev = blockToolJsons.get(event.index) ?? "";
-              blockToolJsons.set(
-                event.index,
-                prev + event.delta.partial_json
-              );
-            }
-            break;
+        // Process complete SSE lines
+        const lines = buffer.split("\n");
+        buffer = lines.pop()!; // keep incomplete line
 
-          case "content_block_stop": {
-            // Finalize the block
-            if (blockTexts.has(event.index)) {
-              const text = blockTexts.get(event.index)!;
-              contentBlocks.push({ type: "text", text } as TextBlock);
-              blockTexts.delete(event.index);
-            } else if (blockThinking.has(event.index)) {
-              const thinking = blockThinking.get(event.index)!;
-              contentBlocks.push({ type: "thinking", thinking } as ThinkingBlock);
-              blockThinking.delete(event.index);
-            } else if (blockToolMeta.has(event.index)) {
-              const meta = blockToolMeta.get(event.index)!;
-              const json = blockToolJsons.get(event.index) ?? "{}";
-              let input: Record<string, unknown>;
-              try {
-                input = JSON.parse(json);
-              } catch {
-                input = {};
-              }
-              contentBlocks.push({
-                type: "tool_use",
-                id: meta.id,
-                name: meta.name,
-                input,
-              } as ToolUseBlock);
-              blockToolMeta.delete(event.index);
-              blockToolJsons.delete(event.index);
-            }
-            break;
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const data = line.slice(6).trim();
+          if (data === "[DONE]") continue;
+
+          let event: StreamEvent;
+          try {
+            event = JSON.parse(data);
+          } catch {
+            continue;
           }
 
-          case "message_delta":
-            stopReason = event.delta.stop_reason;
-            outputTokens = event.usage.output_tokens;
-            break;
+          switch (event.type) {
+            case "error":
+              throw new Error(
+                `Anthropic API stream error (${event.error.type}): ${event.error.message}`
+              );
+
+            case "message_start":
+              inputTokens = event.message.usage.input_tokens;
+              break;
+
+            case "content_block_start":
+              if (event.content_block.type === "text") {
+                blockTexts.set(event.index, event.content_block.text);
+              } else if (event.content_block.type === "thinking") {
+                blockThinking.set(
+                  event.index,
+                  event.content_block.thinking ?? ""
+                );
+              } else if (event.content_block.type === "tool_use") {
+                blockToolMeta.set(event.index, {
+                  id: event.content_block.id,
+                  name: event.content_block.name,
+                });
+                blockToolJsons.set(event.index, "");
+              }
+              break;
+
+            case "content_block_delta":
+              if (event.delta.type === "text_delta") {
+                const prev = blockTexts.get(event.index) ?? "";
+                blockTexts.set(event.index, prev + event.delta.text);
+                onTextDelta(event.delta.text);
+              } else if (event.delta.type === "thinking_delta") {
+                const prev = blockThinking.get(event.index) ?? "";
+                blockThinking.set(
+                  event.index,
+                  prev + event.delta.thinking
+                );
+                onThinkingDelta?.(event.delta.thinking);
+              } else if (event.delta.type === "input_json_delta") {
+                const prev = blockToolJsons.get(event.index) ?? "";
+                blockToolJsons.set(
+                  event.index,
+                  prev + event.delta.partial_json
+                );
+              }
+              break;
+
+            case "content_block_stop": {
+              // Finalize the block
+              if (blockTexts.has(event.index)) {
+                const text = blockTexts.get(event.index)!;
+                contentBlocks.push({ type: "text", text } as TextBlock);
+                blockTexts.delete(event.index);
+              } else if (blockThinking.has(event.index)) {
+                const thinking = blockThinking.get(event.index)!;
+                contentBlocks.push({
+                  type: "thinking",
+                  thinking,
+                } as ThinkingBlock);
+                blockThinking.delete(event.index);
+              } else if (blockToolMeta.has(event.index)) {
+                const meta = blockToolMeta.get(event.index)!;
+                const json = blockToolJsons.get(event.index) ?? "{}";
+                let input: Record<string, unknown>;
+                try {
+                  input = JSON.parse(json);
+                } catch {
+                  input = {};
+                }
+                contentBlocks.push({
+                  type: "tool_use",
+                  id: meta.id,
+                  name: meta.name,
+                  input,
+                } as ToolUseBlock);
+                blockToolMeta.delete(event.index);
+                blockToolJsons.delete(event.index);
+              }
+              break;
+            }
+
+            case "message_delta":
+              stopReason = event.delta.stop_reason;
+              outputTokens = event.usage.output_tokens;
+              break;
+          }
         }
+      }
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {
+        // reader may already be released
       }
     }
 
-    return { content: contentBlocks, stop_reason: stopReason, inputTokens, outputTokens };
+    return {
+      content: contentBlocks,
+      stop_reason: stopReason,
+      inputTokens,
+      outputTokens,
+    };
   }
 }

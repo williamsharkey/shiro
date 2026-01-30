@@ -17,8 +17,26 @@ import { buildSystemPrompt } from "./system-prompt.js";
 import { SubAgentManager } from "./sub-agent.js";
 import type { SubAgentResult } from "./sub-agent.js";
 
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); }
+    );
+  });
+}
+
 const DEFAULT_MAX_TURNS = 50;
 const DEFAULT_MAX_TOKENS = 16384;
+const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
+const MAX_API_RETRIES = 3;
+const RETRY_BASE_DELAY_MS = 1000;
+const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 529]);
 
 export type ToolExecutor = (
   input: Record<string, unknown>,
@@ -194,25 +212,22 @@ export class AgentLoop {
     const maxTokens = this.config.maxTokens ?? DEFAULT_MAX_TOKENS;
 
     while (this.stats.turns < maxTurns) {
-      // Use streaming API with thinking support
-      const streamed = await this.apiClient.createMessageStream(
-        {
-          system: systemPrompt,
-          messages: this.messages,
-          tools: this.tools.getDefinitions(),
-          max_tokens: maxTokens,
-          thinkingBudget: this.config.thinkingBudget,
-        },
-        (delta) => {
-          // Real-time text streaming to host
-          this.config.onText?.(delta);
-        },
-        this.abortController.signal,
-        (thinkingDelta) => {
-          // Real-time thinking streaming
-          this.config.onThinking?.(thinkingDelta);
-        }
-      );
+      // Call API with retry logic for transient errors
+      let streamed;
+      try {
+        streamed = await this.callApiWithRetry(
+          systemPrompt,
+          maxTokens,
+          this.abortController.signal
+        );
+      } catch (error: unknown) {
+        const message =
+          error instanceof Error ? error.message : String(error);
+        this.config.onError?.(
+          error instanceof Error ? error : new Error(message)
+        );
+        return `[Spirit error: ${message}]`;
+      }
 
       // Update stats
       this.stats.inputTokens += streamed.inputTokens;
@@ -274,10 +289,11 @@ export class AgentLoop {
         this.config.onToolStart?.(toolUse.name, toolUse.input);
 
         try {
-          const result = await this.tools.execute(
-            toolUse.name,
-            toolUse.input,
-            this.provider
+          const timeoutMs = this.config.toolTimeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS;
+          const result = await withTimeout(
+            this.tools.execute(toolUse.name, toolUse.input, this.provider),
+            timeoutMs,
+            `Tool "${toolUse.name}" timed out after ${timeoutMs}ms`
           );
           this.config.onToolEnd?.(toolUse.name, result);
           toolResults.push({
@@ -307,6 +323,64 @@ export class AgentLoop {
     }
 
     return "[Spirit: max turns reached]";
+  }
+
+  /**
+   * Call the streaming API with retry logic for transient errors.
+   * Retries on 429/500/502/503/529 with exponential backoff.
+   * Throws immediately on 401/400/403 or after max retries exhausted.
+   */
+  private async callApiWithRetry(
+    systemPrompt: string,
+    maxTokens: number,
+    signal: AbortSignal
+  ): Promise<import("./api-client.js").StreamedResponse> {
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt <= MAX_API_RETRIES; attempt++) {
+      if (attempt > 0) {
+        const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        this.config.onText?.(
+          `\n[Retrying API call (attempt ${attempt + 1}/${MAX_API_RETRIES + 1}) after ${delay}ms...]\n`
+        );
+        await new Promise((r) => setTimeout(r, delay));
+      }
+
+      try {
+        return await this.apiClient.createMessageStream(
+          {
+            system: systemPrompt,
+            messages: this.messages,
+            tools: this.tools.getDefinitions(),
+            max_tokens: maxTokens,
+            thinkingBudget: this.config.thinkingBudget,
+          },
+          (delta) => {
+            this.config.onText?.(delta);
+          },
+          signal,
+          (thinkingDelta) => {
+            this.config.onThinking?.(thinkingDelta);
+          }
+        );
+      } catch (error: unknown) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+
+        // Check if retryable by parsing status code from error message
+        const statusMatch = lastError.message.match(
+          /API error (\d+)/
+        );
+        const status = statusMatch ? parseInt(statusMatch[1], 10) : 0;
+
+        if (status > 0 && !RETRYABLE_STATUS_CODES.has(status)) {
+          throw lastError; // non-retryable (401, 400, 403, etc.)
+        }
+
+        // Network errors and retryable status codes continue the loop
+      }
+    }
+
+    throw lastError ?? new Error("API call failed after retries");
   }
 
   /**
