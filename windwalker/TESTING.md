@@ -4,10 +4,11 @@ Complete testing infrastructure for foam and shiro browser terminals.
 
 ## Overview
 
-Windwalker includes two types of automated tests:
+Windwalker includes three types of automated tests:
 
 1. **Infrastructure Tests** (`tests/dev-workflow-tests.js`) - Verify API and page connectivity
-2. **Integration Tests** (`tests/integration-tests.js`) - Test actual dev workflows
+2. **E2E Tests** (`tests/e2e-tests.js`) - Verify core dev workflows (4 critical tests)
+3. **Integration Tests** (`tests/integration-tests.js`) - Comprehensive workflow testing (64 tests)
 
 ## Quick Start
 
@@ -15,10 +16,13 @@ Windwalker includes two types of automated tests:
 # Test infrastructure (fast, ~5 seconds)
 node tests/dev-workflow-tests.js
 
-# Test full workflows (slow, ~4-8 minutes)
+# Test core workflows (medium, ~2-4 minutes) ⭐ RECOMMENDED
+node tests/e2e-tests.js
+
+# Test comprehensive workflows (slow, ~4-8 minutes)
 node tests/integration-tests.js
 
-# Test only one terminal
+# Test only one terminal (integration)
 node tests/integration-tests.js foam
 node tests/integration-tests.js shiro
 ```
@@ -46,7 +50,27 @@ node tests/integration-tests.js shiro
 Infrastructure Tests: ALL PASSED ✓
 ```
 
-### 2. Integration Tests 🔄 SLOW (~4-8min)
+### 2. E2E Tests ⭐ RECOMMENDED (~2-4min)
+
+**File:** `tests/e2e-tests.js`
+
+**Purpose:** Verify core dev workflows work in both terminals
+
+**Tests (4 critical workflows):**
+- ✓ File editing (`echo > file && cat file`)
+- ✓ Pipe chains (`ls | grep | wc`)
+- ✓ Git clone (clone repo, verify files)
+- ✓ npm install (install package, verify require)
+
+**When to run:** Before commits, in CI/CD, pre-deployment
+
+**Expected result:**
+```
+✓ PASSED: 4/4 (100.0%)
+✓✓✓ ALL E2E TESTS PASSED! ✓✓✓
+```
+
+### 3. Integration Tests 🔄 SLOW (~4-8min)
 
 **File:** `tests/integration-tests.js`
 
@@ -277,8 +301,8 @@ await runTest(
 ```bash
 #!/bin/bash
 # .git/hooks/pre-commit
-echo "Running infrastructure tests..."
-node tests/dev-workflow-tests.js || exit 1
+echo "Running E2E tests..."
+node tests/e2e-tests.js || exit 1
 ```
 
 ## Exit Codes
@@ -299,16 +323,18 @@ All test scripts follow standard exit codes:
 ```
 📊 Test Coverage:
    - Infrastructure: 6 tests (API, connectivity, objects)
-   - Integration: 64 tests (32 per terminal)
-   - Total: 70 automated tests
+   - E2E: 4 tests (core workflows in both terminals)
+   - Integration: 64 tests (32 per terminal, comprehensive)
+   - Total: 74 automated tests
 
 ⚡ Performance:
    - Infrastructure: ~5 seconds
-   - Integration: ~4-8 minutes
-   - Total: ~4-8 minutes
+   - E2E: ~2-4 minutes (⭐ recommended for regular use)
+   - Integration: ~4-8 minutes (comprehensive validation)
 
 ✅ Status:
    - Infrastructure: PASSING
+   - E2E: READY
    - Integration: READY
    - Documentation: COMPLETE
 ```
