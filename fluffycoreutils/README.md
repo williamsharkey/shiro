@@ -2,12 +2,12 @@
 
 **Shared Unix coreutils for browser-based virtual operating systems**
 
-A TypeScript library providing 50 essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
+A TypeScript library providing 56 essential Unix command-line utilities designed for browser-based virtual filesystems like Foam, Shiro, and Spirit.
 
 ## ✨ Features
 
 - 🌐 **Browser-Native**: Pure TypeScript implementation with no Node.js dependencies
-- 🔧 **50 Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `xargs`
+- 🔧 **56 Commands**: From `cat` and `ls` to `grep`, `sed`, `awk`, and `xargs`
 - 🎯 **Filesystem Agnostic**: Works with any virtual filesystem implementing the `FluffyFS` interface
 - 📦 **Tree-Shakeable**: Import only the commands you need
 - 🔒 **Type-Safe**: Full TypeScript definitions included
@@ -58,8 +58,11 @@ const shell = Object.fromEntries(
 - **grep** - Search text using patterns
 - **sed** - Stream editor
 - **cut** - Cut out selected portions of lines
+- **paste** - Merge lines of files
+- **join** - Join lines based on common field
+- **comm** - Compare sorted files line by line
 - **sort** - Sort lines of text
-- **uniq** - Report or filter repeated lines
+- **uniq** - Report or filter repeated lines (enhanced with -i, -f, -s, -w, -u flags)
 - **tr** - Translate or delete characters
 - **diff** - Compare files line by line
 
@@ -74,6 +77,7 @@ const shell = Object.fromEntries(
 - **date** - Display date and time
 - **echo** - Display text
 - **env** - Display environment variables
+- **printenv** - Print all or part of environment
 - **hostname** - Show system hostname
 - **uname** - Print system information
 - **whoami** - Print current user
@@ -85,12 +89,14 @@ const shell = Object.fromEntries(
 - **xargs** - Build and execute commands
 - **tee** - Read stdin and write to stdout and files
 - **printf** - Format and print data
+- **expr** - Evaluate expressions (arithmetic, string, comparison)
 - **test** - Evaluate conditions
 - **true** / **false** - Return success/failure
 - **clear** - Clear the terminal
 - **chmod** - Change file permissions
 - **sleep** - Delay for specified time
 - **time** - Measure command execution time
+- **timeout** - Run command with time limit
 - **yes** - Output string repeatedly
 - **expand** - Convert tabs to spaces
 - **unexpand** - Convert spaces to tabs
