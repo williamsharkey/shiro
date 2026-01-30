@@ -1,0 +1,96 @@
+{
+  "results": [
+    {
+      "task": "Task 1: HN Top Story",
+      "normal": {
+        "name": "Task 1 Normal",
+        "toolCalls": 1,
+        "inputTokens": 8653,
+        "outputTokens": 25,
+        "totalTokens": 8678
+      },
+      "hc": {
+        "name": "Task 1 Hypercompact",
+        "toolCalls": 3,
+        "contentTokens": 34,
+        "overheadTokens": 135,
+        "totalTokens": 169
+      }
+    },
+    {
+      "task": "Task 2: Wikipedia Summary",
+      "normal": {
+        "name": "Task 2 Normal",
+        "toolCalls": 1,
+        "inputTokens": 59111,
+        "outputTokens": 18,
+        "totalTokens": 59129
+      },
+      "hc": {
+        "name": "Task 2 Hypercompact",
+        "toolCalls": 2,
+        "contentTokens": 57,
+        "overheadTokens": 90,
+        "totalTokens": 147
+      }
+    },
+    {
+      "task": "Task 3: Bookstore 3rd Book",
+      "normal": {
+        "name": "Task 3 Normal",
+        "toolCalls": 1,
+        "inputTokens": 12849,
+        "outputTokens": 12,
+        "totalTokens": 12861
+      },
+      "hc": {
+        "name": "Task 3 Hypercompact",
+        "toolCalls": 2,
+        "contentTokens": 18,
+        "overheadTokens": 90,
+        "totalTokens": 108
+      }
+    },
+    {
+      "task": "Task 4: Article Heading",
+      "normal": {
+        "name": "Task 4 Normal",
+        "toolCalls": 1,
+        "inputTokens": 11170,
+        "outputTokens": 14,
+        "totalTokens": 11184
+      },
+      "hc": {
+        "name": "Task 4 Hypercompact",
+        "toolCalls": 3,
+        "contentTokens": 56,
+        "overheadTokens": 135,
+        "totalTokens": 191
+      }
+    },
+    {
+      "task": "Task 5: Code Blocks",
+      "normal": {
+        "name": "Task 5 Normal",
+        "toolCalls": 1,
+        "inputTokens": 5470,
+        "outputTokens": 9,
+        "totalTokens": 5479
+      },
+      "hc": {
+        "name": "Task 5 Hypercompact",
+        "toolCalls": 1,
+        "contentTokens": 3,
+        "overheadTokens": 45,
+        "totalTokens": 48
+      }
+    }
+  ],
+  "totals": {
+    "normal": 97331,
+    "hcContent": 168,
+    "hcTotal": 663,
+    "batchedTotal": 393
+  },
+  "mcpOverhead": 45
+}
