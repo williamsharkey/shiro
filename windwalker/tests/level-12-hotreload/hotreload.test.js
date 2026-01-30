@@ -318,6 +318,21 @@ export default {
   }
 
   // =========================================================================
+  // Test 14: termcast command exists (for recording demos)
+  // =========================================================================
+  results.startTest();
+  try {
+    const r = await os.exec('termcast --help');
+    assertEqual(r.exitCode, 0, 'termcast --help should succeed');
+    assertIncludes(r.stdout, 'asciicast', 'should mention asciicast format');
+    assertIncludes(r.stdout, 'start', 'should have start subcommand');
+    assertIncludes(r.stdout, 'stop', 'should have stop subcommand');
+    results.pass('termcast command exists');
+  } catch (e) {
+    results.fail('termcast command exists', e);
+  }
+
+  // =========================================================================
   // Cleanup
   // =========================================================================
   try {
