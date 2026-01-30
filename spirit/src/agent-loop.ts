@@ -16,6 +16,8 @@ import { ToolRegistry } from "./tools/index.js";
 import { buildSystemPrompt } from "./system-prompt.js";
 import { SubAgentManager } from "./sub-agent.js";
 import type { SubAgentResult } from "./sub-agent.js";
+import type { LLMProvider } from "./llm/types.js";
+import { createProvider } from "./llm/index.js";
 
 function withTimeout<T>(
   promise: Promise<T>,
@@ -45,9 +47,10 @@ export type ToolExecutor = (
 
 export class AgentLoop {
   private messages: Message[] = [];
-  private provider: OSProvider;
+  private osProvider: OSProvider;
   private tools: ToolRegistry;
-  private apiClient: ApiClient;
+  private apiClient: ApiClient;  // Legacy, for backwards compat
+  private llmProvider: LLMProvider | null = null;  // New multi-provider
   private config: AgentConfig;
   private abortController: AbortController | null = null;
 
@@ -70,9 +73,24 @@ export class AgentLoop {
   private subAgentManager: SubAgentManager;
 
   constructor(provider: OSProvider, config: AgentConfig) {
-    this.provider = provider;
+    this.osProvider = provider;
     this.config = config;
-    this.apiClient = new ApiClient(config.apiKey, config.model);
+
+    // Initialize LLM provider (new multi-provider system)
+    if (config.provider) {
+      this.llmProvider = createProvider({
+        provider: config.provider.type,
+        apiKey: config.provider.apiKey ?? "",
+        model: config.provider.model ?? config.model,
+        baseUrl: config.provider.baseUrl,
+      });
+      // Legacy compatibility - create a dummy ApiClient for getApiClient()
+      this.apiClient = new ApiClient(config.provider.apiKey ?? "", config.provider.model ?? config.model);
+    } else {
+      // Legacy: use ApiClient directly with apiKey
+      this.apiClient = new ApiClient(config.apiKey ?? "", config.model);
+    }
+
     this.tools = new ToolRegistry();
     this.subAgentManager = new SubAgentManager(provider, config);
 
@@ -207,7 +225,7 @@ export class AgentLoop {
     this.messages.push({ role: "user", content: userMessage });
 
     const systemPrompt =
-      this.config.systemPrompt ?? buildSystemPrompt(this.provider);
+      this.config.systemPrompt ?? buildSystemPrompt(this.osProvider);
     const maxTurns = this.config.maxTurns ?? DEFAULT_MAX_TURNS;
     const maxTokens = this.config.maxTokens ?? DEFAULT_MAX_TOKENS;
 
@@ -291,7 +309,7 @@ export class AgentLoop {
         try {
           const timeoutMs = this.config.toolTimeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS;
           const result = await withTimeout(
-            this.tools.execute(toolUse.name, toolUse.input, this.provider),
+            this.tools.execute(toolUse.name, toolUse.input, this.osProvider),
             timeoutMs,
             `Tool "${toolUse.name}" timed out after ${timeoutMs}ms`
           );
@@ -347,6 +365,32 @@ export class AgentLoop {
       }
 
       try {
+        // Use new LLMProvider if available, otherwise fall back to legacy ApiClient
+        if (this.llmProvider) {
+          const response = await this.llmProvider.createMessageStream(
+            {
+              system: systemPrompt,
+              messages: this.messages as any,  // Type compatible
+              tools: this.tools.getDefinitions(),
+              max_tokens: maxTokens,
+              thinkingBudget: this.config.thinkingBudget,
+            },
+            {
+              onText: (delta) => this.config.onText?.(delta),
+              onThinking: (delta) => this.config.onThinking?.(delta),
+            },
+            signal
+          );
+          // Convert LLMStreamedResponse to legacy StreamedResponse format
+          return {
+            content: response.content as any,
+            stop_reason: response.stop_reason as any,
+            inputTokens: response.inputTokens,
+            outputTokens: response.outputTokens,
+          };
+        }
+
+        // Legacy path: use ApiClient directly
         return await this.apiClient.createMessageStream(
           {
             system: systemPrompt,

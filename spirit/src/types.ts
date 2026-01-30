@@ -137,7 +137,25 @@ export interface PermissionRequest {
 // Agent config
 
 export interface AgentConfig {
-  apiKey: string;
+  /**
+   * API key for authentication.
+   * For Anthropic/OpenAI: required (unless using `provider`)
+   * For Gemini with OAuth: not needed (use `provider` instead)
+   * @deprecated Use `provider` for multi-provider support
+   */
+  apiKey?: string;
+
+  /**
+   * LLM provider configuration for multi-provider support.
+   * If not set, defaults to Anthropic with apiKey.
+   */
+  provider?: {
+    type: "anthropic" | "openai" | "gemini";
+    apiKey: string;
+    model?: string;
+    baseUrl?: string;  // For proxies like OpenRouter
+  };
+
   model?: string;
   maxTurns?: number;
   maxTokens?: number;
