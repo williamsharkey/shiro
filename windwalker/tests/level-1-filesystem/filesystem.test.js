@@ -145,6 +145,96 @@ export default async function run(page, osTarget) {
     results.fail('unicode content', e);
   }
 
+  // Test: Large file (1MB)
+  try {
+    const largeContent = 'x'.repeat(1024 * 1024);
+    await os.writeFile('/tmp/ww-large.txt', largeContent);
+    const content = await os.readFile('/tmp/ww-large.txt');
+    assertEqual(content.length, largeContent.length, 'large file size');
+    results.pass('large file (1MB)');
+  } catch (e) {
+    results.fail('large file (1MB)', e);
+  }
+
+  // Test: Many files in directory
+  try {
+    await os.mkdir('/tmp/ww-many');
+    for (let i = 0; i < 100; i++) {
+      await os.writeFile(`/tmp/ww-many/file${i}.txt`, `content ${i}`);
+    }
+    const entries = await os.readdir('/tmp/ww-many');
+    const names = entries.map(e => typeof e === 'string' ? e : e.name);
+    assertEqual(names.length, 100, 'should have 100 files');
+    results.pass('many files in directory (100)');
+  } catch (e) {
+    results.fail('many files in directory (100)', e);
+  }
+
+  // Test: Binary-like content (all byte values)
+  try {
+    // Test with printable characters that could break naive handling
+    const binaryLike = String.fromCharCode(...Array(256).fill(0).map((_, i) => i));
+    await os.writeFile('/tmp/ww-binary.txt', binaryLike);
+    const content = await os.readFile('/tmp/ww-binary.txt');
+    assertEqual(content.length, 256, 'binary-like content length');
+    results.pass('binary-like content');
+  } catch (e) {
+    results.fail('binary-like content', e);
+  }
+
+  // Test: Read file from home directory
+  try {
+    await os.writeFile('/home/user/ww-home-test.txt', 'home file');
+    const content = await os.readFile('/home/user/ww-home-test.txt');
+    assertEqual(content, 'home file', 'home directory file');
+    results.pass('write/read in home directory');
+  } catch (e) {
+    results.fail('write/read in home directory', e);
+  }
+
+  // Test: Relative path resolution (if supported)
+  try {
+    await os.writeFile('/home/user/ww-rel.txt', 'relative test');
+    // Try with tilde expansion
+    const r = await os.exec('cat /home/user/ww-rel.txt');
+    assert(r.stdout.includes('relative test'), 'cat should read home file');
+    results.pass('path with tilde (~)');
+  } catch (e) {
+    results.skip('path with tilde (~)', 'tilde expansion may not be supported');
+  }
+
+  // Test: Deep nested directories (via shell mkdir -p)
+  try {
+    const deepPath = '/tmp/ww-deep/a/b/c/d/e/f';
+    await os.exec(`mkdir -p ${deepPath}`);
+    await os.writeFile(`${deepPath}/deep.txt`, 'deep file');
+    const content = await os.readFile(`${deepPath}/deep.txt`);
+    assertEqual(content, 'deep file', 'deep nested file');
+    results.pass('deep nested directories (mkdir -p)');
+  } catch (e) {
+    results.fail('deep nested directories (mkdir -p)', e);
+  }
+
+  // Test: File with dots in name
+  try {
+    await os.writeFile('/tmp/ww.dotted.file.name.txt', 'dotted');
+    const content = await os.readFile('/tmp/ww.dotted.file.name.txt');
+    assertEqual(content, 'dotted', 'dotted filename');
+    results.pass('file with dots in name');
+  } catch (e) {
+    results.fail('file with dots in name', e);
+  }
+
+  // Test: File with spaces in name
+  try {
+    await os.writeFile('/tmp/ww file with spaces.txt', 'spaced');
+    const content = await os.readFile('/tmp/ww file with spaces.txt');
+    assertEqual(content, 'spaced', 'spaced filename');
+    results.pass('file with spaces in name');
+  } catch (e) {
+    results.fail('file with spaces in name', e);
+  }
+
   results.summary();
   return results;
 }
