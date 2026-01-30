@@ -11,6 +11,9 @@ export class ShiroTerminal {
   private historyIndex = -1;
   private savedLine = '';
   private running = false;
+  private userInputCallback: ((input: string) => void) | null = null;
+  private userInputBuffer = '';
+  private userInputCursorPos = 0;
 
   constructor(container: HTMLElement, shell: Shell) {
     this.shell = shell;
@@ -60,6 +63,18 @@ export class ShiroTerminal {
     this.term.write(text);
   }
 
+  /**
+   * Called by ShiroProvider.readFromUser() to collect a line of input
+   * from the user while a command (e.g. Spirit) is running.
+   */
+  waitForUserInput(): Promise<string> {
+    return new Promise<string>((resolve) => {
+      this.userInputBuffer = '';
+      this.userInputCursorPos = 0;
+      this.userInputCallback = resolve;
+    });
+  }
+
   async start() {
     this.term.writeln('\x1b[36m╔═══════════════════════════════════════╗\x1b[0m');
     this.term.writeln('\x1b[36m║\x1b[0m   \x1b[1;97mShiro OS\x1b[0m v0.1.0 (build 4)      \x1b[36m║\x1b[0m');
@@ -74,11 +89,19 @@ export class ShiroTerminal {
     const cwd = this.shell.cwd;
     const home = this.shell.env['HOME'] || '/home/user';
     const displayCwd = cwd.startsWith(home) ? '~' + cwd.slice(home.length) : cwd;
-    this.term.write(`\x1b[32muser@shiro\x1b[0m:\x1b[34m${displayCwd}\x1b[0m$ `);
+    const user = this.shell.env['USER'] || 'user';
+    this.term.write(`\x1b[32m${user}@shiro\x1b[0m:\x1b[34m${displayCwd}\x1b[0m$ `);
   }
 
   private async handleInput(data: string) {
-    if (this.running) return;
+    // When a command is running and Spirit is waiting for user input,
+    // route keystrokes to the user-input buffer instead of the shell.
+    if (this.running) {
+      if (this.userInputCallback) {
+        this.handleUserInput(data);
+      }
+      return;
+    }
 
     for (let i = 0; i < data.length; i++) {
       const ch = data[i];
@@ -261,12 +284,70 @@ export class ShiroTerminal {
     }
   }
 
+  /**
+   * Handle keystrokes while Spirit is waiting for user input.
+   * Supports basic line editing (backspace, enter, Ctrl+C).
+   */
+  private handleUserInput(data: string) {
+    for (let i = 0; i < data.length; i++) {
+      const ch = data[i];
+
+      if (ch === '\r' || ch === '\n') {
+        this.term.writeln('');
+        const cb = this.userInputCallback!;
+        const input = this.userInputBuffer;
+        this.userInputCallback = null;
+        this.userInputBuffer = '';
+        this.userInputCursorPos = 0;
+        cb(input);
+        return;
+      }
+
+      // Ctrl+C — cancel input with empty string
+      if (ch === '\x03') {
+        this.term.writeln('^C');
+        const cb = this.userInputCallback!;
+        this.userInputCallback = null;
+        this.userInputBuffer = '';
+        this.userInputCursorPos = 0;
+        cb('');
+        return;
+      }
+
+      // Backspace
+      if (ch === '\x7f' || ch === '\b') {
+        if (this.userInputCursorPos > 0) {
+          this.userInputBuffer = this.userInputBuffer.slice(0, this.userInputCursorPos - 1) + this.userInputBuffer.slice(this.userInputCursorPos);
+          this.userInputCursorPos--;
+          this.term.write('\b \b');
+        }
+        continue;
+      }
+
+      // Skip escape sequences
+      if (ch === '\x1b' && data[i + 1] === '[') {
+        i += 2;
+        continue;
+      }
+
+      // Regular character
+      if (ch >= ' ') {
+        this.userInputBuffer = this.userInputBuffer.slice(0, this.userInputCursorPos) + ch + this.userInputBuffer.slice(this.userInputCursorPos);
+        this.userInputCursorPos++;
+        this.term.write(ch);
+      }
+    }
+  }
+
   private redrawLine() {
     // Build the entire update as a single string to minimize rendering flicker
     let output = '\r\x1b[K'; // Clear line
 
     // Add prompt
-    output += `\x1b[32muser\x1b[0m@\x1b[34mshiro\x1b[0m:\x1b[36m${this.shell.cwd}\x1b[0m$ `;
+    const user = this.shell.env['USER'] || 'user';
+    const home = this.shell.env['HOME'] || '/home/user';
+    const displayCwd = this.shell.cwd.startsWith(home) ? '~' + this.shell.cwd.slice(home.length) : this.shell.cwd;
+    output += `\x1b[32m${user}@shiro\x1b[0m:\x1b[34m${displayCwd}\x1b[0m$ `;
 
     // Add input buffer
     output += this.lineBuffer;
