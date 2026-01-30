@@ -20,7 +20,12 @@ jobs:
         with:
           repository: williamsharkey/foam
           path: foam
-          submodules: recursive
+
+      - name: Initialize Foam submodules
+        run: |
+          cd foam
+          git submodule update --init --recursive
+          ls -la fluffycoreutils/
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
