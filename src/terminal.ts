@@ -1,6 +1,7 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { Shell } from './shell';
+import buildNumber from '../build-number.txt?raw';
 
 export class ShiroTerminal {
   private term: Terminal;
@@ -111,8 +112,9 @@ export class ShiroTerminal {
   }
 
   async start() {
+    const build = buildNumber.trim().padStart(4, '0');
     this.term.writeln('\x1b[36m╔═════════════════════════════════════════════╗\x1b[0m');
-    this.term.writeln('\x1b[36m║\x1b[0m   \x1b[1;97mShiro OS\x1b[0m \x1b[95mv0.1.0\x1b[0m                           \x1b[36m║\x1b[0m');
+    this.term.writeln(`\x1b[36m║\x1b[0m   \x1b[1;97mShiro OS\x1b[0m \x1b[95mv0.1.0\x1b[0m                  \x1b[90m#${build}\x1b[0m \x1b[36m║\x1b[0m`);
     this.term.writeln('\x1b[36m║\x1b[0m   \x1b[92mBrowser-Native Cloud Operating System\x1b[0m     \x1b[36m║\x1b[0m');
     this.term.writeln('\x1b[36m║\x1b[0m                                             \x1b[36m║\x1b[0m');
     this.term.writeln('\x1b[36m║\x1b[0m   \x1b[33mhelp\x1b[0m        \x1b[90m—\x1b[0m list all commands           \x1b[36m║\x1b[0m');

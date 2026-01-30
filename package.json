@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "node increment-build.js && tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "deploy": "node increment-build.js && git submodule update --init --recursive && npm run build && cd dist && git init && git add -A && git commit -m 'Deploy to GitHub Pages' && git push -f https://github.com/williamsharkey/shiro.git main:gh-pages && cd .."
