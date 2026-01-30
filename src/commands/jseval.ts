@@ -924,35 +924,50 @@ export const nodeCmd: Command = {
         app.enabled = (key: string) => !!settings[key];
         app.disabled = (key: string) => !settings[key];
 
-        // Router factory
-        app.Router = () => {
-          const router: any = (req: any, res: any, next: Function) => {
-            // Router as middleware - todo: implement
-            next();
-          };
-          router.routes = [] as typeof routes;
-          router.get = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'GET', path, handlers }); return router; };
-          router.post = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'POST', path, handlers }); return router; };
-          router.put = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'PUT', path, handlers }); return router; };
-          router.delete = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'DELETE', path, handlers }); return router; };
-          router.use = app.use;
-          return router;
-        };
-
-        // Common middleware factories
-        app.json = () => (req: any, res: any, next: Function) => {
-          // Already parsed in _handleRequest
-          next();
-        };
-        app.urlencoded = () => (req: any, res: any, next: Function) => {
-          if (typeof req.body === 'string' && req.headers['content-type']?.includes('urlencoded')) {
-            req.body = Object.fromEntries(new URLSearchParams(req.body));
-          }
-          next();
-        };
-
         return app;
       }
+
+      // Add static methods to the express factory function (express.json(), express.urlencoded(), etc.)
+      (createExpressShim as any).json = () => (req: any, res: any, next: Function) => {
+        // Already parsed in _handleRequest
+        next();
+      };
+      (createExpressShim as any).urlencoded = (opts?: any) => (req: any, res: any, next: Function) => {
+        if (typeof req.body === 'string' && req.headers['content-type']?.includes('urlencoded')) {
+          req.body = Object.fromEntries(new URLSearchParams(req.body));
+        }
+        next();
+      };
+      (createExpressShim as any).static = (root: string) => {
+        return async (req: any, res: any, next: Function) => {
+          if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+          const filePath = ctx.fs.resolvePath(root + req.path, ctx.cwd);
+          try {
+            const stat = await ctx.fs.stat(filePath);
+            if (!stat || stat.type !== 'file') return next();
+            const content = await ctx.fs.readFile(filePath, 'utf8');
+            const ext = filePath.split('.').pop() || '';
+            const types: Record<string, string> = {
+              html: 'text/html', css: 'text/css', js: 'application/javascript',
+              json: 'application/json', png: 'image/png', jpg: 'image/jpeg',
+              svg: 'image/svg+xml', txt: 'text/plain',
+            };
+            res.type(types[ext] || 'application/octet-stream');
+            res.send(content);
+          } catch {
+            next();
+          }
+        };
+      };
+      (createExpressShim as any).Router = () => {
+        const router: any = (req: any, res: any, next: Function) => next();
+        router.routes = [] as Array<{ method: string; path: string; handlers: Function[] }>;
+        router.get = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'GET', path, handlers }); return router; };
+        router.post = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'POST', path, handlers }); return router; };
+        router.put = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'PUT', path, handlers }); return router; };
+        router.delete = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'DELETE', path, handlers }); return router; };
+        return router;
+      };
 
       function requireModule(modPath: string, fromDir: string): any {
         // Check for Express shim
