@@ -20,41 +20,47 @@ global.window.DOMParser = DOMParser;
 global.DOMParser = DOMParser;
 // Note: Let commands.js initialize window.__hc with HCSession class
 
+// Pre-load isomorphic-git for Node.js (Foam's devtools.js checks for this)
+import git from 'isomorphic-git';
+globalThis.__isomorphicGit = git;
+// Note: http transport not needed for local-only tests (init, add, commit, etc.)
+
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const ROOT = join(__dirname, '..');
 // FOAM_PATH can be overridden via env var (useful for CI)
 const FOAM_PATH = process.env.FOAM_PATH || join(ROOT, '..', 'foam', 'src');
 
 // Test suite modules for linkedom
+// All these work without a real browser - isomorphic-git, VFS, and shell all run in Node.js
 const LINKEDOM_SUITES = [
-  { name: 'level-0-boot',       path: './level-0-boot/boot.test.js' },
-  { name: 'level-1-filesystem', path: './level-1-filesystem/filesystem.test.js' },
-  { name: 'level-2-shell',      path: './level-2-shell/shell.test.js' },
-  { name: 'level-3-coreutils',  path: './level-3-coreutils/coreutils.test.js' },
-  { name: 'level-4-pipes',      path: './level-4-pipes/pipes.test.js' },
+  { name: 'level-0-boot',         path: './level-0-boot/boot.test.js' },
+  { name: 'level-1-filesystem',   path: './level-1-filesystem/filesystem.test.js' },
+  { name: 'level-2-shell',        path: './level-2-shell/shell.test.js' },
+  { name: 'level-3-coreutils',    path: './level-3-coreutils/coreutils.test.js' },
+  { name: 'level-4-pipes',        path: './level-4-pipes/pipes.test.js' },
+  { name: 'level-5-git',          path: './level-5-git/git.test.js' },
+  { name: 'level-6-spirit',       path: './level-6-spirit/spirit.test.js' },
+  { name: 'level-7-workflows',    path: './level-7-workflows/workflows.test.js' },
+  { name: 'level-8-fluffycoreutils', path: './level-8-fluffycoreutils/fluffycoreutils.test.js' },
+  { name: 'level-9-selfbuild',    path: './level-9-selfbuild/selfbuild.test.js', needsNetwork: true },
   { name: 'level-10-hypercompact', path: './level-10-hypercompact/hypercompact.test.js' },
 ];
 
-// Higher-level suites that need real browser (skip in linkedom mode)
-const BROWSER_ONLY_SUITES = [
-  'level-5-git',
-  'level-6-spirit',
-  'level-7-workflows',
-  'level-8-fluffycoreutils',
-  'level-9-selfbuild',
-];
+// Suites that need network access (git clone over HTTPS)
+// These are skipped in CI unless ENABLE_NETWORK_TESTS=1
+const NETWORK_SUITES = ['level-9-selfbuild'];
 
 /**
  * Create a mock page object that provides the same interface as Puppeteer/Skyeyes
  * but executes code directly against Foam modules
  */
-async function createMockPage(vfs, shell) {
+async function createMockPage(vfs, shell, provider) {
   // Add __foam to global.window (preserving __hc, DOMParser, etc.)
   global.window.__foam = {
     vfs,
     shell,
     terminal: null,
-    provider: null,
+    provider,
   };
 
   return {
@@ -87,7 +93,7 @@ async function createMockPage(vfs, shell) {
 }
 
 /**
- * Initialize Foam VFS and Shell for testing
+ * Initialize Foam VFS, Shell, and Provider for testing
  */
 async function initFoam() {
   // Import Foam modules
@@ -109,7 +115,23 @@ async function initFoam() {
     console.log('  Note: fluffycoreutils not available, using built-in commands only');
   }
 
-  return { vfs, shell };
+  // Initialize FoamProvider for Spirit tests (level-6)
+  let provider = null;
+  try {
+    const FoamProvider = (await import(join(FOAM_PATH, 'foam-provider.js'))).default;
+    provider = new FoamProvider(vfs, shell, null);
+  } catch (e) {
+    console.log('  Note: FoamProvider not available, level-6 tests may fail');
+  }
+
+  // Load devtools.js to register git, npm, node commands
+  try {
+    await import(join(FOAM_PATH, 'devtools.js'));
+  } catch (e) {
+    console.log('  Note: devtools not available, git tests may fail');
+  }
+
+  return { vfs, shell, provider };
 }
 
 async function runLinkedomTests() {
@@ -125,9 +147,9 @@ async function runLinkedomTests() {
 
   // Initialize Foam once for all tests
   console.log('Initializing Foam modules...');
-  let vfs, shell;
+  let vfs, shell, provider;
   try {
-    ({ vfs, shell } = await initFoam());
+    ({ vfs, shell, provider } = await initFoam());
     console.log('✓ Foam initialized\n');
   } catch (err) {
     console.error('✗ Failed to initialize Foam:', err.message);
@@ -136,12 +158,25 @@ async function runLinkedomTests() {
   }
 
   // Create mock page
-  const page = await createMockPage(vfs, shell);
+  const page = await createMockPage(vfs, shell, provider);
+
+  // Check if network tests should run
+  const enableNetworkTests = process.env.ENABLE_NETWORK_TESTS === '1';
+
+  const skippedNetworkSuites = [];
 
   for (const suite of LINKEDOM_SUITES) {
     const suitePath = join(__dirname, suite.path);
     if (!existsSync(suitePath)) {
       console.log(`\n⊘ ${suite.name} (no test file yet)`);
+      continue;
+    }
+
+    // Skip network tests unless explicitly enabled
+    if (suite.needsNetwork && !enableNetworkTests) {
+      console.log(`\n⊘ ${suite.name} (needs network, set ENABLE_NETWORK_TESTS=1)`);
+      skippedNetworkSuites.push(suite.name);
+      totalSkipped++;
       continue;
     }
 
@@ -168,12 +203,13 @@ async function runLinkedomTests() {
     }
   }
 
-  // Note skipped browser-only suites
-  console.log(`\n${'─'.repeat(60)}`);
-  console.log('Browser-only suites (use runner-skyeyes.js):');
-  for (const name of BROWSER_ONLY_SUITES) {
-    console.log(`  ⊘ ${name}`);
-    totalSkipped++;
+  // Note skipped network suites
+  if (skippedNetworkSuites.length > 0) {
+    console.log(`\n${'─'.repeat(60)}`);
+    console.log('Network suites (skipped, set ENABLE_NETWORK_TESTS=1 to run):');
+    for (const name of skippedNetworkSuites) {
+      console.log(`  ⊘ ${name}`);
+    }
   }
 
   console.log(`\n${'─'.repeat(60)}`);
