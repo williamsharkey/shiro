@@ -22,8 +22,9 @@ global.DOMParser = DOMParser;
 
 // Pre-load isomorphic-git for Node.js (Foam's devtools.js checks for this)
 import git from 'isomorphic-git';
+import http from 'isomorphic-git/http/node';
 globalThis.__isomorphicGit = git;
-// Note: http transport not needed for local-only tests (init, add, commit, etc.)
+globalThis.__isomorphicGitHttp = http;
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -42,7 +43,9 @@ const LINKEDOM_SUITES = [
   { name: 'level-6-spirit',       path: './level-6-spirit/spirit.test.js' },
   { name: 'level-7-workflows',    path: './level-7-workflows/workflows.test.js' },
   { name: 'level-8-fluffycoreutils', path: './level-8-fluffycoreutils/fluffycoreutils.test.js' },
-  { name: 'level-9-selfbuild',    path: './level-9-selfbuild/selfbuild.test.js', needsNetwork: true },
+  // Level 9 requires network AND authentication (foam repo is private)
+  // Run with ENABLE_NETWORK_TESTS=1 and GITHUB_TOKEN set
+  { name: 'level-9-selfbuild',    path: './level-9-selfbuild/selfbuild.test.js', needsNetwork: true, needsAuth: true },
   { name: 'level-10-hypercompact', path: './level-10-hypercompact/hypercompact.test.js' },
   { name: 'level-11-advanced',    path: './level-11-advanced/advanced.test.js' },
 ];
