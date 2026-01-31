@@ -242,83 +242,19 @@ export const gitCmd: Command = {
           }
           ctx.stdout = `Cloning into '${repoName}'...\n`;
 
-          // For GitHub repos, use tarball API (CORS-friendly) as primary strategy
-          const ghMatch = url.match(/github\.com\/([^/]+)\/([^/.]+)/);
-          let cloned = false;
-          if (ghMatch) {
-            const [, ghOwner, ghRepo] = ghMatch;
-            try {
-              ctx.stdout += 'Downloading via GitHub API...\n';
-              const tarResp = await fetch(`https://api.github.com/repos/${ghOwner}/${ghRepo}/tarball`, {
-                headers: { 'Accept': 'application/vnd.github+json' },
-                redirect: 'follow',
-              });
-              if (!tarResp.ok) throw new Error(`GitHub API: ${tarResp.status}`);
-              const tarBuf = await tarResp.arrayBuffer();
-              const ds = new DecompressionStream('gzip');
-              const dsWriter = ds.writable.getWriter();
-              dsWriter.write(new Uint8Array(tarBuf));
-              dsWriter.close();
-              const decompressed = new Uint8Array(await new Response(ds.readable).arrayBuffer());
-              // Extract tar entries
-              let tOff = 0;
-              while (tOff + 512 <= decompressed.length) {
-                const hdr = decompressed.slice(tOff, tOff + 512);
-                if (hdr.every((b: number) => b === 0)) break;
-                let tName = '';
-                for (let i = 0; i < 100 && hdr[i] !== 0; i++) tName += String.fromCharCode(hdr[i]);
-                let tPrefix = '';
-                for (let i = 345; i < 500 && hdr[i] !== 0; i++) tPrefix += String.fromCharCode(hdr[i]);
-                if (tPrefix) tName = tPrefix + '/' + tName;
-                let tSizeStr = '';
-                for (let i = 124; i < 136 && hdr[i] !== 0; i++) tSizeStr += String.fromCharCode(hdr[i]);
-                const tSize = parseInt(tSizeStr.trim(), 8) || 0;
-                const tType = String.fromCharCode(hdr[156]);
-                tOff += 512;
-                const tParts = tName.split('/');
-                const tRel = tParts.slice(1).join('/');
-                if (tRel && (tType === '0' || (tType === '\0' && tSize > 0))) {
-                  const fPath = ctx.fs.resolvePath(tRel, targetDir);
-                  const fDir = fPath.substring(0, fPath.lastIndexOf('/'));
-                  if (fDir) await ctx.fs.mkdir(fDir, { recursive: true });
-                  const content = new TextDecoder().decode(decompressed.slice(tOff, tOff + tSize));
-                  await ctx.fs.writeFile(fPath, content);
-                } else if (tRel && tType === '5') {
-                  await ctx.fs.mkdir(ctx.fs.resolvePath(tRel, targetDir), { recursive: true });
-                }
-                tOff += Math.ceil(tSize / 512) * 512;
-              }
-              await git.init({ fs, dir: targetDir, defaultBranch: 'main' });
-              const clFiles = await listAllFiles(ctx.fs, targetDir, targetDir);
-              for (const cf of clFiles) await git.add({ fs, dir: targetDir, filepath: cf });
-              await git.commit({
-                fs, dir: targetDir,
-                message: `Clone of ${ghOwner}/${ghRepo}`,
-                author: { name: ctx.env['USER'] || 'user', email: 'user@shiro.local' },
-              });
-              cloned = true;
-            } catch (ghErr: any) {
-              ctx.stdout += `GitHub API failed (${ghErr.message}), trying git protocol...\n`;
-            }
-          }
-
-          if (!cloned) {
-            const corsProxy = ctx.env['GIT_CORS_PROXY'] || 'https://cors.isomorphic-git.org';
-            const cloneWithTimeout = (proxy: string) => {
-              return Promise.race([
-                git.clone({
-                  fs, http, dir: targetDir, url,
-                  corsProxy: proxy,
-                  singleBranch: true,
-                  depth: 1,
-                }),
-                new Promise<never>((_, reject) =>
-                  setTimeout(() => reject(new Error('clone timed out')), 30000)
-                ),
-              ]);
-            };
-            await cloneWithTimeout(corsProxy);
-          }
+          // Use git protocol via CORS proxy (GitHub API tarball fails due to CORS)
+          const corsProxy = ctx.env['GIT_CORS_PROXY'] || 'https://cors.isomorphic-git.org';
+          await Promise.race([
+            git.clone({
+              fs, http, dir: targetDir, url,
+              corsProxy,
+              singleBranch: true,
+              depth: 1,
+            }),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('clone timed out')), 30000)
+            ),
+          ]);
 
           ctx.stdout += `done.\n`;
           break;
