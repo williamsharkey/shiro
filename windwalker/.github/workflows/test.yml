@@ -20,10 +20,12 @@ jobs:
         with:
           repository: williamsharkey/foam
           path: foam
+          token: ${{ secrets.GH_PAT }}
 
       - name: Initialize Foam submodules
         run: |
           cd foam
+          git config --global url."https://${{ secrets.GH_PAT }}@github.com/".insteadOf "https://github.com/"
           git submodule update --init --recursive
 
       - name: Setup Node.js
