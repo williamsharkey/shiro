@@ -1011,7 +1011,7 @@ export class Shell {
    * Search PATH directories for an executable file.
    * Also checks node_modules/.bin relative to cwd.
    */
-  private async findExecutableInPath(name: string): Promise<string | null> {
+  async findExecutableInPath(name: string): Promise<string | null> {
     // If name contains '/', treat it as a path
     if (name.includes('/')) {
       const resolved = this.fs.resolvePath(name, this.cwd);

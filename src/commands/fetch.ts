@@ -10,6 +10,10 @@ export const fetchCmd: Command = {
     let headersOnly = false;
     let showHeaders = false;
     let outputFile = '';
+    let silent = false;
+    let showErrors = false;
+    let failOnError = false;
+    let followRedirects = true; // fetch follows by default, but we track for -L
     const headers: Record<string, string> = {};
 
     let i = 0;
@@ -32,6 +36,24 @@ export const fetchCmd: Command = {
         showHeaders = true;
       } else if (arg === '-o' && ctx.args[i + 1]) {
         outputFile = ctx.args[++i];
+      } else if (arg === '-s' || arg === '--silent') {
+        silent = true;
+      } else if (arg === '-S' || arg === '--show-error') {
+        showErrors = true;
+      } else if (arg === '-f' || arg === '--fail') {
+        failOnError = true;
+      } else if (arg === '-L' || arg === '--location') {
+        followRedirects = true;
+      } else if (arg.startsWith('-') && !arg.startsWith('--')) {
+        // Handle combined flags like -fsSL
+        for (const flag of arg.slice(1)) {
+          if (flag === 'f') failOnError = true;
+          else if (flag === 's') silent = true;
+          else if (flag === 'S') showErrors = true;
+          else if (flag === 'L') followRedirects = true;
+          else if (flag === 'i') showHeaders = true;
+          else if (flag === 'I') headersOnly = true;
+        }
       } else if (!arg.startsWith('-')) {
         url = arg;
       }
@@ -49,7 +71,11 @@ export const fetchCmd: Command = {
     }
 
     try {
-      const fetchOpts: RequestInit = { method, headers };
+      const fetchOpts: RequestInit = {
+        method,
+        headers,
+        redirect: followRedirects ? 'follow' : 'manual',
+      };
       if (body && method !== 'GET' && method !== 'HEAD') {
         fetchOpts.body = body;
         if (!headers['Content-Type']) {
@@ -58,6 +84,14 @@ export const fetchCmd: Command = {
       }
 
       const response = await fetch(url, fetchOpts);
+
+      // Handle -f (fail silently on HTTP errors)
+      if (failOnError && !response.ok) {
+        if (showErrors) {
+          ctx.stderr = `curl: (22) The requested URL returned error: ${response.status}\n`;
+        }
+        return 22; // curl exit code for HTTP error
+      }
 
       let output = '';
 
@@ -85,7 +119,9 @@ export const fetchCmd: Command = {
 
       return response.ok ? 0 : 1;
     } catch (e: any) {
-      ctx.stderr = `fetch: ${e.message}\n`;
+      if (!silent || showErrors) {
+        ctx.stderr = `curl: ${e.message}\n`;
+      }
       return 1;
     }
   },

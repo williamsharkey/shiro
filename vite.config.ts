@@ -6,8 +6,11 @@ import { nodePolyfills } from 'vite-plugin-node-polyfills';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Use './' for relative paths (works with file:// and hosted)
+const base = process.env.VITE_BASE_PATH || './';
+
 export default defineConfig({
-  base: '/shiro/',
+  base,
   plugins: [
     nodePolyfills({
       // Enable Buffer polyfill for isomorphic-git

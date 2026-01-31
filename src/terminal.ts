@@ -50,7 +50,7 @@ export class ShiroTerminal {
       },
       fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", monospace',
       fontSize: 14,
-      lineHeight: 1.2,
+      lineHeight: 1.12,
       cursorBlink: true,
       cursorStyle: 'block',
       scrollback: 10000,

@@ -1,0 +1,12 @@
+# Cloudflare Pages configuration for Shiro
+# Deploy with: npx wrangler pages deploy dist --project-name=shiro
+
+name = "shiro"
+compatibility_date = "2024-01-01"
+
+# Pages will serve from dist/ directory after build
+# Build command: npm run build
+# Output directory: dist
+
+[site]
+bucket = "./dist"
