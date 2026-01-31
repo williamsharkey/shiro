@@ -38,6 +38,38 @@ export class Shell {
       PWD: '/home/user',
       TERM: 'xterm-256color',
     };
+    // Load history async (don't block construction)
+    this.loadHistory();
+  }
+
+  private historyFile = '/home/user/.bash_history';
+  private maxHistorySize = 1000;
+
+  /** Load command history from ~/.bash_history */
+  async loadHistory(): Promise<void> {
+    try {
+      const raw = await this.fs.readFile(this.historyFile);
+      const content = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+      this.history = content.split('\n').filter((line: string) => line.trim());
+      // Keep only the most recent entries
+      if (this.history.length > this.maxHistorySize) {
+        this.history = this.history.slice(-this.maxHistorySize);
+      }
+    } catch {
+      // File doesn't exist yet, that's fine
+      this.history = [];
+    }
+  }
+
+  /** Save command history to ~/.bash_history */
+  async saveHistory(): Promise<void> {
+    try {
+      // Keep only the most recent entries
+      const toSave = this.history.slice(-this.maxHistorySize);
+      await this.fs.writeFile(this.historyFile, toSave.join('\n') + '\n');
+    } catch (err) {
+      // Silently fail - history is nice to have but not critical
+    }
   }
 
   /**
@@ -111,6 +143,7 @@ export class Shell {
     const heredocStdin = heredoc ? heredoc.body : '';
 
     this.history.push(trimmed);
+    this.saveHistory(); // Persist to disk (async, don't await)
 
     const stderrWriter = writeStderr || writeStdout;
 

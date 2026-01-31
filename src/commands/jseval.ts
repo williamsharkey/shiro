@@ -138,6 +138,7 @@ export const nodeCmd: Command = {
 
       const stdoutBuf: string[] = [];
       const stderrBuf: string[] = [];
+      const pendingPromises: Promise<any>[] = []; // Track async operations like app.listen()
 
       const fakeConsole = {
         log: (...args: any[]) => { stdoutBuf.push(args.map(formatArg).join(' ')); },
@@ -147,6 +148,7 @@ export const nodeCmd: Command = {
         dir: (obj: any) => { stdoutBuf.push(JSON.stringify(obj, null, 2)); },
       };
 
+      const processEvents: Record<string, Function[]> = {};
       const fakeProcess = {
         env: { ...ctx.env },
         cwd: () => ctx.cwd,
@@ -154,8 +156,18 @@ export const nodeCmd: Command = {
         argv: ['node', ...fileArgs],
         platform: 'browser',
         version: 'v0.1.0-shiro',
+        versions: { node: '20.0.0' },
         stdout: { write: (s: string) => { stdoutBuf.push(s); } },
         stderr: { write: (s: string) => { stderrBuf.push(s); } },
+        on: (event: string, fn: Function) => { (processEvents[event] ??= []).push(fn); return fakeProcess; },
+        off: (event: string, fn: Function) => { processEvents[event] = (processEvents[event] || []).filter(f => f !== fn); return fakeProcess; },
+        once: (event: string, fn: Function) => {
+          const wrapper = (...args: any[]) => { fakeProcess.off(event, wrapper); fn(...args); };
+          return fakeProcess.on(event, wrapper);
+        },
+        emit: (event: string, ...args: any[]) => { (processEvents[event] || []).forEach(fn => fn(...args)); },
+        nextTick: (fn: Function, ...args: any[]) => { queueMicrotask(() => fn(...args)); },
+        hrtime: { bigint: () => BigInt(Date.now()) * BigInt(1000000) },
       };
 
       // CommonJS require() with pre-loaded file cache
@@ -230,43 +242,63 @@ export const nodeCmd: Command = {
         await preloadDir(projectRoot, 0, 10);
       }
 
-      // Buffer shim — provides from(), alloc(), isBuffer(), toString()
-      const FakeBuffer: any = {
-        from: (input: any, _encoding?: string): any => {
-          if (typeof input === 'string') {
-            const bytes = new TextEncoder().encode(input);
-            return Object.assign(bytes, {
-              toString: (_enc?: string) => input,
-              toJSON: () => ({ type: 'Buffer', data: Array.from(bytes) }),
-            });
+      // Buffer shim — must be a constructor with prototype for safe-buffer compatibility
+      function FakeBuffer(arg?: any, encodingOrOffset?: any, length?: any): any {
+        if (typeof arg === 'number') {
+          return FakeBuffer.alloc(arg);
+        }
+        return FakeBuffer.from(arg, encodingOrOffset);
+      }
+      FakeBuffer.prototype = Object.create(Uint8Array.prototype);
+      FakeBuffer.prototype.constructor = FakeBuffer;
+      FakeBuffer.prototype.toString = function(encoding?: string) {
+        return new TextDecoder().decode(this);
+      };
+      FakeBuffer.prototype.toJSON = function() {
+        return { type: 'Buffer', data: Array.from(this) };
+      };
+      FakeBuffer.from = (input: any, encoding?: string): any => {
+        let bytes: Uint8Array;
+        if (typeof input === 'string') {
+          if (encoding === 'base64') {
+            const binary = atob(input);
+            bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          } else if (encoding === 'hex') {
+            const hex = input.replace(/[^0-9a-fA-F]/g, '');
+            bytes = new Uint8Array(hex.length / 2);
+            for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+          } else {
+            bytes = new TextEncoder().encode(input);
           }
-          if (input instanceof Uint8Array) {
-            return Object.assign(new Uint8Array(input), {
-              toString: (_enc?: string) => new TextDecoder().decode(input),
-              toJSON: () => ({ type: 'Buffer', data: Array.from(input) }),
-            });
-          }
-          if (Array.isArray(input)) {
-            const bytes = new Uint8Array(input);
-            return Object.assign(bytes, {
-              toString: (_enc?: string) => new TextDecoder().decode(bytes),
-              toJSON: () => ({ type: 'Buffer', data: input }),
-            });
-          }
-          return new Uint8Array(0);
-        },
-        alloc: (size: number) => {
-          const bytes = new Uint8Array(size);
-          return Object.assign(bytes, { toString: () => new TextDecoder().decode(bytes) });
-        },
-        isBuffer: (obj: any) => obj instanceof Uint8Array,
-        concat: (list: Uint8Array[]) => {
-          const total = list.reduce((n: number, b: Uint8Array) => n + b.length, 0);
-          const result = new Uint8Array(total);
-          let offset = 0;
-          for (const buf of list) { result.set(buf, offset); offset += buf.length; }
-          return Object.assign(result, { toString: () => new TextDecoder().decode(result) });
-        },
+        } else if (input instanceof Uint8Array) {
+          bytes = new Uint8Array(input);
+        } else if (Array.isArray(input)) {
+          bytes = new Uint8Array(input);
+        } else {
+          bytes = new Uint8Array(0);
+        }
+        Object.setPrototypeOf(bytes, FakeBuffer.prototype);
+        return bytes;
+      };
+      FakeBuffer.alloc = (size: number, fill?: any) => {
+        const bytes = new Uint8Array(size);
+        if (fill !== undefined) bytes.fill(typeof fill === 'number' ? fill : 0);
+        Object.setPrototypeOf(bytes, FakeBuffer.prototype);
+        return bytes;
+      };
+      FakeBuffer.allocUnsafe = (size: number) => FakeBuffer.alloc(size);
+      FakeBuffer.allocUnsafeSlow = (size: number) => FakeBuffer.alloc(size);
+      FakeBuffer.isBuffer = (obj: any) => obj instanceof Uint8Array;
+      FakeBuffer.isEncoding = (enc: string) => ['utf8', 'utf-8', 'ascii', 'base64', 'hex', 'binary'].includes(enc?.toLowerCase());
+      FakeBuffer.byteLength = (str: string, encoding?: string) => FakeBuffer.from(str, encoding).length;
+      FakeBuffer.concat = (list: Uint8Array[], totalLength?: number) => {
+        const total = totalLength ?? list.reduce((n: number, b: Uint8Array) => n + b.length, 0);
+        const result = new Uint8Array(total);
+        let offset = 0;
+        for (const buf of list) { result.set(buf, offset); offset += buf.length; }
+        Object.setPrototypeOf(result, FakeBuffer.prototype);
+        return result;
       };
 
       // Built-in Node.js module shims (maps to Shiro VFS/shell)
@@ -393,6 +425,51 @@ export const nodeCmd: Command = {
             };
             return fsShim;
           }
+          case 'fs/promises':
+          case 'node:fs/promises': {
+            // Async fs promises API
+            return {
+              readFile: async (p: string, opts?: any) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                const data = await ctx.fs.readFile(resolved);
+                const encoding = typeof opts === 'string' ? opts : opts?.encoding;
+                if (encoding === 'utf8' || encoding === 'utf-8') {
+                  return typeof data === 'string' ? data : new TextDecoder().decode(data);
+                }
+                return typeof data === 'string' ? FakeBuffer.from(data) : FakeBuffer.from(data);
+              },
+              writeFile: async (p: string, data: any) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                const content = typeof data === 'string' ? data : new TextDecoder().decode(data);
+                await ctx.fs.writeFile(resolved, content);
+              },
+              readdir: async (p: string) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                return await ctx.fs.readdir(resolved);
+              },
+              stat: async (p: string) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                return await ctx.fs.stat(resolved);
+              },
+              mkdir: async (p: string, opts?: any) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                await ctx.fs.mkdir(resolved, opts?.recursive);
+              },
+              unlink: async (p: string) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                await ctx.fs.unlink(resolved);
+              },
+              rm: async (p: string, opts?: any) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                await ctx.fs.unlink(resolved);
+              },
+              access: async (p: string) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                const exists = await ctx.fs.exists(resolved);
+                if (!exists) throw new Error(`ENOENT: no such file or directory, access '${p}'`);
+              },
+            };
+          }
           case 'child_process':
           case 'node:child_process': {
             // execAsync is the underlying impl — returns a Promise
@@ -466,6 +543,18 @@ export const nodeCmd: Command = {
             inspect: (obj: any) => JSON.stringify(obj, null, 2),
             format: (...args: any[]) => args.map(String).join(' '),
             types: { isDate: (v: any) => v instanceof Date, isRegExp: (v: any) => v instanceof RegExp },
+            deprecate: (fn: Function, _msg: string) => fn, // Return function unchanged, skip warning
+            inherits: (ctor: any, superCtor: any) => {
+              if (superCtor && superCtor.prototype) {
+                ctor.super_ = superCtor;
+                ctor.prototype = Object.create(superCtor.prototype, {
+                  constructor: { value: ctor, writable: true, configurable: true }
+                });
+              }
+            },
+            isArray: Array.isArray,
+            isBuffer: (obj: any) => obj instanceof Uint8Array,
+            debuglog: () => () => {}, // No-op debug logger
           };
           case 'events':
           case 'node:events': {
@@ -508,18 +597,35 @@ export const nodeCmd: Command = {
           case 'node:buffer': return { Buffer: FakeBuffer };
           case 'stream':
           case 'node:stream': {
-            // Minimal stream shim — just enough for common usage
-            class Readable {
-              _read() {}
+            // Stream shim with Transform for libraries like libbase64
+            class Stream {
               pipe(dest: any) { return dest; }
               on(_event: string, _cb: Function) { return this; }
+              once(_event: string, _cb: Function) { return this; }
+              emit(_event: string, ..._args: any[]) { return true; }
+              removeListener(_event: string, _cb: Function) { return this; }
             }
-            class Writable {
-              write(_chunk: any) { return true; }
-              end() {}
-              on(_event: string, _cb: Function) { return this; }
+            class Readable extends Stream {
+              _read() {}
+              push(_chunk: any) { return true; }
+              read() { return null; }
             }
-            return { Readable, Writable };
+            class Writable extends Stream {
+              _write(_chunk: any, _encoding: string, callback: Function) { callback(); }
+              write(_chunk: any, _encoding?: any, _cb?: any) { return true; }
+              end(_chunk?: any, _encoding?: any, _cb?: any) {}
+            }
+            class Duplex extends Readable {
+              _write(_chunk: any, _encoding: string, callback: Function) { callback(); }
+              write(_chunk: any, _encoding?: any, _cb?: any) { return true; }
+              end(_chunk?: any, _encoding?: any, _cb?: any) {}
+            }
+            class Transform extends Duplex {
+              _transform(_chunk: any, _encoding: string, callback: Function) { callback(); }
+              _flush(callback: Function) { callback(); }
+            }
+            class PassThrough extends Transform {}
+            return { Stream, Readable, Writable, Duplex, Transform, PassThrough };
           }
           case 'crypto':
           case 'node:crypto': return {
@@ -741,6 +847,114 @@ export const nodeCmd: Command = {
               return result;
             }};
           }
+          case 'tslib': {
+            // tslib shim - TypeScript helper library used by many packages
+            const __importDefault = (mod: any) => (mod && mod.__esModule) ? mod : { default: mod };
+            const __importStar = (mod: any) => {
+              if (mod && mod.__esModule) return mod;
+              const result: any = {};
+              if (mod != null) for (const k in mod) if (Object.hasOwnProperty.call(mod, k)) result[k] = mod[k];
+              result.default = mod;
+              return result;
+            };
+            const __awaiter = (_this: any, _args: any, _P: any, generator: any) => {
+              return new Promise((resolve, reject) => {
+                function fulfilled(value: any) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+                function rejected(value: any) { try { step(generator.throw(value)); } catch (e) { reject(e); } }
+                function step(result: any) { result.done ? resolve(result.value) : Promise.resolve(result.value).then(fulfilled, rejected); }
+                step((generator = generator.apply(_this, _args || [])).next());
+              });
+            };
+            const __generator = (_this: any, body: any) => {
+              // Simplified generator - just return the body function result
+              let f: any, y: any, t: any, g: any;
+              return g = { next: verb(0), throw: verb(1), return: verb(2) }, typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+              function verb(n: any) { return function(v: any) { return step([n, v]); }; }
+              function step(op: any) {
+                if (f) throw new TypeError("Generator is already executing.");
+                while (g && (g = 0, op[0] && (_ = 0)), _) try {
+                  if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
+                  if (y = 0, t) op = [op[0] & 2, t.value];
+                  switch (op[0]) {
+                    case 0: case 1: t = op; break;
+                    case 4: _.label++; return { value: op[1], done: false };
+                    case 5: _.label++; y = op[1]; op = [0]; continue;
+                    case 7: op = _.ops.pop(); _.trys.pop(); continue;
+                    default:
+                      if (!(t = _.trys, t = t.length > 0 && t[t.length - 1]) && (op[0] === 6 || op[0] === 2)) { _ = 0; continue; }
+                      if (op[0] === 3 && (!t || (op[1] > t[0] && op[1] < t[3]))) { _.label = op[1]; break; }
+                      if (op[0] === 6 && _.label < t[1]) { _.label = t[1]; t = op; break; }
+                      if (t && _.label < t[2]) { _.label = t[2]; _.ops.push(op); break; }
+                      if (t[2]) _.ops.pop();
+                      _.trys.pop(); continue;
+                  }
+                  op = body.call(_this, _);
+                } catch (e) { op = [6, e]; y = 0; } finally { f = t = 0; }
+                if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
+              }
+              let _: any = { label: 0, sent: () => t[0] & 1 ? t[1] : t[1], trys: [] as any[], ops: [] as any[] };
+            };
+            const __spreadArray = (to: any[], from: any[], _pack?: any) => {
+              return to.concat(Array.prototype.slice.call(from));
+            };
+            const __assign = Object.assign;
+            const __rest = (s: any, e: any) => {
+              const t: any = {};
+              for (const p in s) if (Object.prototype.hasOwnProperty.call(s, p) && e.indexOf(p) < 0) t[p] = s[p];
+              return t;
+            };
+            const __extends = (d: any, b: any) => {
+              if (typeof b !== "function" && b !== null)
+                throw new TypeError("Class extends value " + String(b) + " is not a constructor or null");
+              Object.setPrototypeOf(d, b);
+              d.prototype = b === null ? Object.create(b) : Object.create(b.prototype);
+              d.prototype.constructor = d;
+            };
+            const __exportStar = (m: any, o: any) => {
+              for (const p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(o, p)) o[p] = m[p];
+            };
+            const __createBinding = (o: any, m: any, k: any, k2?: any) => {
+              if (k2 === undefined) k2 = k;
+              Object.defineProperty(o, k2, { enumerable: true, get: () => m[k] });
+            };
+            const __values = (o: any) => {
+              const s = typeof Symbol === "function" && Symbol.iterator, m = s && o[s];
+              let i = 0;
+              if (m) return m.call(o);
+              if (o && typeof o.length === "number") return {
+                next: () => ({ value: o && o[i++], done: !o || i >= o.length })
+              };
+              throw new TypeError(s ? "Object is not iterable." : "Symbol.iterator is not defined.");
+            };
+            const __read = (o: any, n?: number) => {
+              const ar: any[] = [];
+              for (let i = 0, r: any; i < (n === undefined ? o.length : n); i++) {
+                r = o[i];
+                ar.push(r);
+              }
+              return ar;
+            };
+            const __spread = (...args: any[]) => {
+              const ar: any[] = [];
+              for (const a of args) ar.push(...a);
+              return ar;
+            };
+            const __decorate = (decorators: any[], target: any, key?: any, desc?: any) => {
+              let c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+              for (let i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+              if (c > 3 && r) Object.defineProperty(target, key, r);
+              return r;
+            };
+            const __param = (paramIndex: number, decorator: any) => (target: any, key: any) => decorator(target, key, paramIndex);
+            const __metadata = (_metadataKey: any, _metadataValue: any) => (_target: any, _key: any) => {};
+            return {
+              __importDefault, __importStar, __awaiter, __generator,
+              __spreadArray, __assign, __rest, __extends,
+              __exportStar, __createBinding, __values, __read, __spread,
+              __decorate, __param, __metadata,
+              __esModule: true,
+            };
+          }
           case 'cookie-parser': {
             // cookie-parser middleware shim
             const cookieParser = (secret?: string) => {
@@ -858,6 +1072,9 @@ export const nodeCmd: Command = {
           // Middleware function - pass through
           next?.();
         };
+
+        // app.locals is shared across all requests (like a global store)
+        app.locals = {};
 
         const middlewares: Array<{ path: string; handler: Function }> = [];
         const routes: Array<{ method: string; path: string; handlers: Function[] }> = [];
@@ -1077,13 +1294,14 @@ export const nodeCmd: Command = {
         app.listen = (port: number, hostOrCb?: string | (() => void), cb?: () => void) => {
           const callback = typeof hostOrCb === 'function' ? hostOrCb : cb;
 
-          virtualServer.init().then(() => {
+          const listenPromise = virtualServer.init().then(() => {
             virtualServer.listen(port, app._handleRequest, `express:${port}`);
             const url = virtualServer.getUrl(port);
             fakeConsole.log(`Express app listening on port ${port}`);
             fakeConsole.log(`Access at: ${url}`);
             callback?.();
           });
+          pendingPromises.push(listenPromise);
 
           return { close: () => virtualServer.close(port) };
         };
@@ -1137,13 +1355,33 @@ export const nodeCmd: Command = {
           }
         };
       };
+      (createExpressShim as any).raw = (opts?: any) => (req: any, res: any, next: Function) => {
+        // Keep body as raw buffer/string
+        next();
+      };
+      (createExpressShim as any).text = (opts?: any) => (req: any, res: any, next: Function) => {
+        // Keep body as text string
+        next();
+      };
       (createExpressShim as any).Router = () => {
         const router: any = (req: any, res: any, next: Function) => next();
         router.routes = [] as Array<{ method: string; path: string; handlers: Function[] }>;
+        router.middlewares = [] as Array<{ path: string; handler: Function }>;
         router.get = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'GET', path, handlers }); return router; };
         router.post = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'POST', path, handlers }); return router; };
         router.put = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'PUT', path, handlers }); return router; };
         router.delete = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'DELETE', path, handlers }); return router; };
+        router.patch = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'PATCH', path, handlers }); return router; };
+        router.all = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'ALL', path, handlers }); return router; };
+        router.use = (pathOrHandler: string | Function, ...handlers: Function[]) => {
+          if (typeof pathOrHandler === 'function') {
+            router.middlewares.push({ path: '/', handler: pathOrHandler });
+            handlers.forEach(h => router.middlewares.push({ path: '/', handler: h }));
+          } else {
+            handlers.forEach(h => router.middlewares.push({ path: pathOrHandler, handler: h }));
+          }
+          return router;
+        };
         return router;
       };
 
@@ -1386,6 +1624,8 @@ export const nodeCmd: Command = {
         return Database;
       }
 
+      // Sync require for CommonJS compatibility - returns module directly, not a Promise
+      // For modules with top-level await, caller must await the result
       function requireModule(modPath: string, fromDir: string): any {
         // Check for Express shim
         if (modPath === 'express') {
@@ -1421,8 +1661,20 @@ export const nodeCmd: Command = {
           let searchDir = fromDir.startsWith('/') ? fromDir : ctx.cwd;
           let found = false;
           while (searchDir) {
-            const pkgDir = `${searchDir}/node_modules/${pkgName}`;
-            const pkgPath = `${pkgDir}/package.json`;
+            let pkgDir = `${searchDir}/node_modules/${pkgName}`;
+            let pkgPath = `${pkgDir}/package.json`;
+
+            // Handle npm GitHub tarball extraction which creates nested structure
+            // e.g., node_modules/busboy/mscdex-busboy-9aadb7a/package.json
+            if (!fileCache.has(pkgPath)) {
+              const nestedPkg = [...fileCache.keys()].find(
+                k => k.startsWith(pkgDir + '/') && k.endsWith('/package.json') && k.split('/').length === pkgDir.split('/').length + 2
+              );
+              if (nestedPkg) {
+                pkgDir = nestedPkg.replace('/package.json', '');
+                pkgPath = nestedPkg;
+              }
+            }
 
             if (fileCache.has(pkgPath)) {
               if (subpath) {
@@ -1507,17 +1759,30 @@ export const nodeCmd: Command = {
             dirname: modDir,
             filename: resolved,
           };
-          const wrapped = new Function(
+          // Use AsyncFunction but don't await - allows top-level await in modules
+          // The async execution will continue and populate module.exports
+          const AsyncFn = Object.getPrototypeOf(async function(){}).constructor;
+          const wrapped = new AsyncFn(
             'module', 'exports', 'require', '__filename', '__dirname',
             'console', 'process', 'global', 'Buffer', '__import_meta',
             transformedContent
           );
-          wrapped(mod, mod.exports, nestedRequire, resolved, modDir,
+          // Execute async but track the promise for later awaiting
+          const execPromise = wrapped(mod, mod.exports, nestedRequire, resolved, modDir,
             fakeConsole, fakeProcess, globalThis, FakeBuffer, modImportMeta
           );
+          // For modules with top-level await, add promise to pending
+          pendingPromises.push(execPromise.catch((e: any) => {
+            console.error(`Error in module ${resolved}:`, e);
+          }));
         } catch (err) {
           moduleCache.delete(resolved);
-          throw err;
+          const errMsg = err instanceof Error ? err.message : String(err);
+          const enhancedErr = new Error(`Error loading module '${resolved}': ${errMsg}`);
+          if (err instanceof Error && err.stack) {
+            enhancedErr.stack = `Error loading module '${resolved}':\n${err.stack}`;
+          }
+          throw enhancedErr;
         }
 
         return mod.exports;
@@ -1527,6 +1792,10 @@ export const nodeCmd: Command = {
 
       // Transform ES module syntax to CommonJS
       function transformESModules(src: string): string {
+        // Dynamic import() → Promise.resolve(require()) - must be before other import transforms
+        // Handles: await import("./path") or import("./path").then(...)
+        src = src.replace(/\bimport\s*\(\s*(['"`])([^'"`]+)\1\s*\)/g, 'Promise.resolve(require($1$2$1))');
+
         // import.meta → __import_meta (must be before import statement transforms)
         src = src.replace(/import\.meta/g, '__import_meta');
 
@@ -1564,27 +1833,52 @@ export const nodeCmd: Command = {
         // export { x, y } → module.exports = { x, y }
         src = src.replace(/export\s+\{([^}]+)\}\s*;?/g, 'module.exports = {$1};');
 
-        // export const/let/var x = ... → const x = ...; module.exports.x = x;
-        src = src.replace(/export\s+(const|let|var)\s+(\w+)\s*=/g,
-          '$1 $2 =');
+        // Track named exports to add module.exports at the end
+        const namedExports: string[] = [];
 
-        // export function name() → function name(); module.exports.name = name;
-        src = src.replace(/export\s+function\s+(\w+)/g,
-          'function $1');
+        // export const/let/var x = ... → const x = ...; (track x)
+        src = src.replace(/export\s+(const|let|var)\s+(\w+)\s*=/g, (_, decl, name) => {
+          namedExports.push(name);
+          return `${decl} ${name} =`;
+        });
 
-        // export class Name → class Name; module.exports.Name = Name;
-        src = src.replace(/export\s+class\s+(\w+)/g,
-          'class $1');
+        // export function name() → function name(); (track name)
+        src = src.replace(/export\s+function\s+(\w+)/g, (_, name) => {
+          namedExports.push(name);
+          return `function ${name}`;
+        });
 
-        // export async function name() → async function name()
-        src = src.replace(/export\s+async\s+function\s+(\w+)/g,
-          'async function $1');
+        // export class Name → class Name; (track Name)
+        src = src.replace(/export\s+class\s+(\w+)/g, (_, name) => {
+          namedExports.push(name);
+          return `class ${name}`;
+        });
 
-        // Remove __filename/__dirname declarations (we provide these)
+        // export async function name() → async function name(); (track name)
+        src = src.replace(/export\s+async\s+function\s+(\w+)/g, (_, name) => {
+          namedExports.push(name);
+          return `async function ${name}`;
+        });
+
+        // Add module.exports for all tracked named exports at the end
+        if (namedExports.length > 0) {
+          src += '\n' + namedExports.map(n => `module.exports.${n} = ${n};`).join('\n');
+        }
+
+        // Remove __filename/__dirname/Buffer declarations (we provide these as parameters)
         // Handles: const __filename = fileURLToPath(import.meta.url);
         //          const __dirname = dirname(__filename);
+        //          const Buffer = require('buffer').Buffer;
         src = src.replace(/(?:const|let|var)\s+__filename\s*=\s*[^;]+;?/g, '/* __filename provided */');
         src = src.replace(/(?:const|let|var)\s+__dirname\s*=\s*[^;]+;?/g, '/* __dirname provided */');
+        // Handle: const Buffer = require('buffer').Buffer; or var Buffer = ...
+        src = src.replace(/(?:const|let|var)\s+Buffer\s*=\s*[^;]+;?/g, '/* Buffer provided */');
+        // Handle: const { Buffer } = require('buffer'); (destructuring)
+        src = src.replace(/(?:const|let|var)\s*\{\s*Buffer\s*\}\s*=\s*[^;]+;?/g, '/* Buffer provided */');
+        // Handle: const { Buffer, ... } = require('buffer'); (Buffer in destructuring with others)
+        src = src.replace(/(\{\s*)Buffer(\s*,)/g, '$1/* Buffer */$2');
+        src = src.replace(/(,\s*)Buffer(\s*\})/g, '$1/* Buffer */$2');
+        src = src.replace(/(,\s*)Buffer(\s*,)/g, '$1/* Buffer */$2');
 
         return src;
       }
@@ -1593,20 +1887,23 @@ export const nodeCmd: Command = {
       // Transform ES modules and wrap for execution
       const transformedCode = transformESModules(code);
       const wrappedCode = printResult ? `return (${transformedCode})` : transformedCode;
-      const fn = new AsyncFunction('console', 'process', 'require', 'Buffer', 'shiro', '__import_meta', `
-        ${wrappedCode}
-      `);
+      const fn = new AsyncFunction(
+        'console', 'process', 'require', 'Buffer', '__filename', '__dirname', 'shiro', '__import_meta',
+        wrappedCode
+      );
 
       // Fake import.meta for ES modules
+      const entryFilename = scriptPath || ctx.cwd + '/repl.js';
+      const entryDirname = scriptPath ? scriptPath.substring(0, scriptPath.lastIndexOf('/')) : ctx.cwd;
       const fakeImportMeta = {
-        url: `file://${scriptPath || ctx.cwd + '/repl.js'}`,
-        dirname: scriptPath ? scriptPath.substring(0, scriptPath.lastIndexOf('/')) : ctx.cwd,
-        filename: scriptPath || ctx.cwd + '/repl.js',
+        url: `file://${entryFilename}`,
+        dirname: entryDirname,
+        filename: entryFilename,
       };
 
       let result;
       try {
-        result = await fn(fakeConsole, fakeProcess, fakeRequire, FakeBuffer, {
+        result = await fn(fakeConsole, fakeProcess, fakeRequire, FakeBuffer, entryFilename, entryDirname, {
           fs: ctx.fs,
           shell: ctx.shell,
           env: ctx.env,
@@ -1618,6 +1915,11 @@ export const nodeCmd: Command = {
         } else {
           throw e;
         }
+      }
+
+      // Wait for any pending async operations (like app.listen())
+      if (pendingPromises.length > 0) {
+        await Promise.all(pendingPromises);
       }
 
       // Flush output
