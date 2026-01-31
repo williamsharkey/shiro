@@ -14,6 +14,7 @@ export const xargs: FluffyCommand = {
     const noRunIfEmpty = flags.r;
 
     const command = positional.length > 0 ? positional.join(" ") : "echo";
+    const cmdTemplate = positional.length > 0 ? positional : ["echo"];
 
     // Parse input items
     let inputItems: string[];
@@ -27,10 +28,66 @@ export const xargs: FluffyCommand = {
       if (noRunIfEmpty) {
         return { stdout: "", stderr: "", exitCode: 0 };
       }
-      // Run command with no arguments if not using -r
-      inputItems = [""];
+      return { stdout: "", stderr: "", exitCode: 0 };
     }
 
+    // If we have an exec function (provided by the host shell), use it to actually run commands
+    if (io.exec) {
+      let stdout = "";
+      let stderr = "";
+      let lastExit = 0;
+
+      // Handle -I (replace string) mode
+      if (replaceStr) {
+        const placeholder = typeof replaceStr === "string" ? replaceStr : "{}";
+        for (const item of inputItems) {
+          const cmd = command.replace(new RegExp(escapeRegex(placeholder), "g"), item);
+          if (verbose) stdout += `+ ${cmd}\n`;
+          const result = await io.exec(cmd);
+          if (result.stdout) stdout += result.stdout;
+          if (result.stderr) stderr += result.stderr;
+          lastExit = result.exitCode;
+        }
+      }
+      // Handle -n (max args per command) mode
+      else if (maxArgs) {
+        for (let i = 0; i < inputItems.length; i += maxArgs) {
+          const batch = inputItems.slice(i, i + maxArgs);
+          const cmd = `${command} ${batch.map(escapeArg).join(" ")}`;
+          if (verbose) stdout += `+ ${cmd}\n`;
+          const result = await io.exec(cmd);
+          if (result.stdout) stdout += result.stdout;
+          if (result.stderr) stderr += result.stderr;
+          lastExit = result.exitCode;
+        }
+      }
+      // Handle one-per-line mode
+      else if (onePerLine) {
+        for (const item of inputItems) {
+          const cmd = `${command} ${escapeArg(item)}`;
+          if (verbose) stdout += `+ ${cmd}\n`;
+          const result = await io.exec(cmd);
+          if (result.stdout) stdout += result.stdout;
+          if (result.stderr) stderr += result.stderr;
+          lastExit = result.exitCode;
+        }
+      }
+      // Default: all items in one command
+      else {
+        const cmd = command === "echo"
+          ? `echo ${inputItems.map(escapeArg).join(" ")}`
+          : `${command} ${inputItems.map(escapeArg).join(" ")}`;
+        if (verbose) stdout += `+ ${cmd}\n`;
+        const result = await io.exec(cmd);
+        if (result.stdout) stdout += result.stdout;
+        if (result.stderr) stderr += result.stderr;
+        lastExit = result.exitCode;
+      }
+
+      return { stdout, stderr, exitCode: lastExit };
+    }
+
+    // Fallback: no exec function available, output constructed command lines
     const outputs: string[] = [];
     const commands: string[] = [];
 
@@ -77,13 +134,11 @@ export const xargs: FluffyCommand = {
       }
     }
 
-    // In browser environment, we output the commands
-    // A shell integration would execute these
-    if (command === "echo" && !replaceStr && !maxArgs) {
+    // Output constructed command lines for execution
+    if (command === "echo" && !replaceStr && !maxArgs && !onePerLine) {
       // Special case: echo just outputs the items
       outputs.push(...inputItems);
     } else {
-      // Output constructed command lines for execution
       outputs.push(...commands);
     }
 

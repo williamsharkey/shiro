@@ -37,6 +37,8 @@ export interface CommandIO {
   env: Record<string, string>;
   cwd: string;
   fs: FluffyFS;
+  /** Optional: execute a command (provided by host shell for xargs, etc.) */
+  exec?(cmd: string): Promise<CommandResult>;
 }
 
 export interface CommandResult {
