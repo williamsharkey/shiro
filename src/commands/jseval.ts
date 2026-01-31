@@ -996,6 +996,57 @@ export const nodeCmd: Command = {
             };
             return Object.assign(cors, { default: cors });
           }
+          case 'express-jwt': {
+            // express-jwt middleware shim
+            const expressjwt = (options: any) => {
+              const { secret, algorithms, credentialsRequired = true, requestProperty = 'auth', getToken } = options;
+              return (req: any, res: any, next: Function) => {
+                try {
+                  // Get token from custom function or Authorization header
+                  let token = getToken ? getToken(req) : null;
+                  if (!token) {
+                    const authHeader = req.headers?.authorization || req.get?.('authorization');
+                    if (authHeader?.startsWith('Bearer ')) {
+                      token = authHeader.slice(7);
+                    }
+                  }
+
+                  if (!token) {
+                    // No token present
+                    if (credentialsRequired) {
+                      const err: any = new Error('No authorization token was found');
+                      err.name = 'UnauthorizedError';
+                      err.status = 401;
+                      return next(err);
+                    }
+                    // credentialsRequired: false - just continue without setting auth
+                    return next();
+                  }
+
+                  // Decode JWT (without verification for now - simplified shim)
+                  // In browser we can't easily verify HS256 signatures
+                  const parts = token.split('.');
+                  if (parts.length === 3) {
+                    try {
+                      const payload = JSON.parse(atob(parts[1]));
+                      req[requestProperty] = payload;
+                    } catch {
+                      if (credentialsRequired) {
+                        const err: any = new Error('Invalid token');
+                        err.name = 'UnauthorizedError';
+                        err.status = 401;
+                        return next(err);
+                      }
+                    }
+                  }
+                  next();
+                } catch (err) {
+                  next(err);
+                }
+              };
+            };
+            return { expressjwt, default: expressjwt };
+          }
           case 'sharp': {
             // sharp image processing stub - native module can't run in browser
             // Returns a chainable API that passes through or returns placeholder data
@@ -1081,6 +1132,8 @@ export const nodeCmd: Command = {
 
         // Helper to match Express-style paths
         function matchPath(pattern: string, path: string): Record<string, string> | null {
+          // Safety check - ensure both are strings
+          if (typeof pattern !== 'string' || typeof path !== 'string') return null;
           if (pattern === '*' || pattern === '/*') return {};
 
           const patternParts = pattern.split('/').filter(Boolean);
@@ -1178,6 +1231,7 @@ export const nodeCmd: Command = {
                 const redirectUrl = typeof urlOrStatus === 'string' ? urlOrStatus : url!;
                 statusCode = typeof urlOrStatus === 'number' ? urlOrStatus : 302;
                 responseHeaders['location'] = redirectUrl;
+                console.log(`[Express] REDIRECT ${statusCode} -> ${redirectUrl}`);
                 this.end();
               },
               type(t: string) { responseHeaders['content-type'] = t; return this; },
@@ -1190,23 +1244,84 @@ export const nodeCmd: Command = {
                 return this;
               },
               clearCookie(name: string) { return this.cookie(name, '', { maxAge: 0 }); },
+              async sendFile(filePath: string, options?: any) {
+                try {
+                  const resolved = ctx.fs.resolvePath(filePath, ctx.cwd);
+                  const content = await ctx.fs.readFile(resolved, 'utf8');
+                  // Determine content type from extension
+                  const ext = filePath.split('.').pop()?.toLowerCase() || '';
+                  const mimeTypes: Record<string, string> = {
+                    'html': 'text/html',
+                    'css': 'text/css',
+                    'js': 'application/javascript',
+                    'json': 'application/json',
+                    'png': 'image/png',
+                    'jpg': 'image/jpeg',
+                    'jpeg': 'image/jpeg',
+                    'gif': 'image/gif',
+                    'svg': 'image/svg+xml',
+                    'ico': 'image/x-icon',
+                  };
+                  if (!responseHeaders['content-type']) {
+                    responseHeaders['content-type'] = mimeTypes[ext] || 'application/octet-stream';
+                  }
+                  this.end(content as string);
+                } catch (err: any) {
+                  statusCode = 404;
+                  this.end(`File not found: ${filePath}`);
+                }
+              },
             };
 
-            // Run middleware chain then routes
+            // Run middleware chain then routes (with async support)
+            console.log(`[Express] ${req.method} ${req.path} - ${middlewares.length} middlewares, ${routes.length} routes`);
             let middlewareIndex = 0;
-            const runNext = () => {
+            let lastError: any = null; // Track errors for error handlers
+            const runNext = async (err?: any): Promise<void> => {
+              if (err) lastError = err;
+
               // First run global middleware
               while (middlewareIndex < middlewares.length) {
                 const mw = middlewares[middlewareIndex++];
+                const isErrorHandler = mw.handler.length === 4; // (err, req, res, next)
+
+                // Skip error handlers if no error, skip regular middleware if error
+                if (lastError && !isErrorHandler) continue;
+                if (!lastError && isErrorHandler) continue;
+
                 const params = matchPath(mw.path, req.path);
                 if (params !== null) {
                   req.params = { ...req.params, ...params };
                   try {
-                    mw.handler(req, res, runNext);
-                    return; // Wait for next() to be called
+                    // Create a promise that resolves when next() is called
+                    let nextCalled = false;
+                    let nextError: any = null;
+                    const nextPromise = new Promise<void>((resolveNext) => {
+                      const wrappedNext = (e?: any) => { nextCalled = true; nextError = e; resolveNext(); };
+                      // Call with 4 args for error handlers, 3 for regular middleware
+                      const result = isErrorHandler
+                        ? mw.handler(lastError, req, res, wrappedNext)
+                        : mw.handler(req, res, wrappedNext);
+                      // If handler returns a Promise, wait for it
+                      if (result && typeof result.then === 'function') {
+                        result.then(() => {
+                          // If response ended or next was called, we're done
+                          if (ended || nextCalled) resolveNext();
+                        }).catch((e: any) => {
+                          nextError = e;
+                          resolveNext();
+                        });
+                      }
+                    });
+                    await nextPromise;
+                    if (ended) return;
+                    // Clear error if error handler handled it without passing to next
+                    if (isErrorHandler && !nextError) lastError = null;
+                    if (nextError) lastError = nextError;
+                    if (!nextCalled) return; // Handler didn't call next, stop chain
                   } catch (err: any) {
-                    resolve({ status: 500, body: `Middleware error: ${err.message}` });
-                    return;
+                    lastError = err;
+                    // Continue to find error handler
                   }
                 }
               }
@@ -1217,18 +1332,33 @@ export const nodeCmd: Command = {
                 const params = matchPath(route.path, req.path);
                 if (params !== null) {
                   req.params = { ...req.params, ...params };
-                  // Run route handlers in sequence
-                  let handlerIndex = 0;
-                  const runHandler = () => {
-                    if (handlerIndex < route.handlers.length) {
-                      try {
-                        route.handlers[handlerIndex++](req, res, runHandler);
-                      } catch (err: any) {
-                        resolve({ status: 500, body: `Handler error: ${err.message}` });
-                      }
+                  // Run route handlers in sequence with async support
+                  for (let i = 0; i < route.handlers.length; i++) {
+                    if (ended) return;
+                    const handler = route.handlers[i];
+                    const isLast = i === route.handlers.length - 1;
+                    try {
+                      let nextCalled = false;
+                      const handlerPromise = new Promise<void>((resolveHandler) => {
+                        const nextFn = () => { nextCalled = true; resolveHandler(); };
+                        const result = handler(req, res, isLast ? () => {} : nextFn);
+                        // If handler returns a Promise, wait for it
+                        if (result && typeof result.then === 'function') {
+                          result.then(() => resolveHandler()).catch((err: any) => {
+                            resolve({ status: 500, body: `Handler error: ${err.message}` });
+                          });
+                        } else if (isLast || ended) {
+                          resolveHandler();
+                        }
+                      });
+                      await handlerPromise;
+                      if (ended) return;
+                      if (!nextCalled && !isLast) return; // Handler didn't call next
+                    } catch (err: any) {
+                      resolve({ status: 500, body: `Handler error: ${err.message}` });
+                      return;
                     }
-                  };
-                  runHandler();
+                  }
                   return;
                 }
               }
@@ -1253,9 +1383,12 @@ export const nodeCmd: Command = {
           return app;
         };
 
-        // Route methods
-        const addRoute = (method: string) => (path: string, ...handlers: Function[]) => {
-          routes.push({ method, path, handlers });
+        // Route methods - handles array paths like ["/", "/index.html"]
+        const addRoute = (method: string) => (pathOrPaths: string | string[], ...handlers: Function[]) => {
+          const paths = Array.isArray(pathOrPaths) ? pathOrPaths : [pathOrPaths];
+          for (const path of paths) {
+            routes.push({ method, path, handlers });
+          }
           return app;
         };
         app.get = addRoute('GET');
@@ -1290,20 +1423,31 @@ export const nodeCmd: Command = {
           };
         };
 
-        // Listen method
+        // Listen method - keeps running until server is closed (like real Node.js)
         app.listen = (port: number, hostOrCb?: string | (() => void), cb?: () => void) => {
           const callback = typeof hostOrCb === 'function' ? hostOrCb : cb;
+          let closeServer: () => void;
 
-          const listenPromise = virtualServer.init().then(() => {
-            virtualServer.listen(port, app._handleRequest, `express:${port}`);
-            const url = virtualServer.getUrl(port);
-            fakeConsole.log(`Express app listening on port ${port}`);
-            fakeConsole.log(`Access at: ${url}`);
-            callback?.();
+          // This promise keeps the "process" alive until server is closed
+          const listenPromise = new Promise<void>((resolve) => {
+            closeServer = () => {
+              virtualServer.close(port);
+              fakeConsole.log(`Server on port ${port} closed`);
+              resolve();
+            };
+
+            virtualServer.init().then(() => {
+              virtualServer.listen(port, app._handleRequest, `express:${port}`);
+              const url = virtualServer.getUrl(port);
+              fakeConsole.log(`Express app listening on port ${port}`);
+              fakeConsole.log(`Access at: ${url}`);
+              callback?.();
+              // Note: promise does NOT resolve here - server keeps running
+            });
           });
           pendingPromises.push(listenPromise);
 
-          return { close: () => virtualServer.close(port) };
+          return { close: () => closeServer?.() };
         };
 
         // Settings
@@ -1364,15 +1508,92 @@ export const nodeCmd: Command = {
         next();
       };
       (createExpressShim as any).Router = () => {
-        const router: any = (req: any, res: any, next: Function) => next();
+        const router: any = (req: any, res: any, next: Function) => {
+          // Router acts as middleware - process its own routes/middleware
+          const safeNext = next || (() => {});
+
+          // Helper to match paths (simplified)
+          const matchPath = (pattern: string, path: string): Record<string, string> | null => {
+            // Safety check - ensure both are strings
+            if (typeof pattern !== 'string' || typeof path !== 'string') return null;
+            if (pattern === '/' || pattern === '*' || pattern === '/*') return {};
+            const patternParts = pattern.split('/').filter(Boolean);
+            const pathParts = path.split('/').filter(Boolean);
+            if (patternParts.length > pathParts.length) return null;
+            const params: Record<string, string> = {};
+            for (let i = 0; i < patternParts.length; i++) {
+              if (patternParts[i].startsWith(':')) {
+                params[patternParts[i].slice(1)] = pathParts[i];
+              } else if (patternParts[i] !== pathParts[i]) {
+                return null;
+              }
+            }
+            return params;
+          };
+
+          // Run router middlewares first
+          let mwIdx = 0;
+          const runRouterNext = () => {
+            while (mwIdx < router.middlewares.length) {
+              const mw = router.middlewares[mwIdx++];
+              const params = matchPath(mw.path, req.path);
+              if (params !== null) {
+                req.params = { ...req.params, ...params };
+                try {
+                  mw.handler(req, res, runRouterNext);
+                  return;
+                } catch (err) {
+                  safeNext(err);
+                  return;
+                }
+              }
+            }
+
+            // Then match routes
+            for (const route of router.routes) {
+              if (route.method !== req.method && route.method !== 'ALL') continue;
+              const params = matchPath(route.path, req.path);
+              if (params !== null) {
+                req.params = { ...req.params, ...params };
+                let handlerIdx = 0;
+                const noop = () => {};
+                const runHandler = () => {
+                  if (handlerIdx < route.handlers.length) {
+                    const handler = route.handlers[handlerIdx++];
+                    const nextFn = handlerIdx < route.handlers.length ? runHandler : noop;
+                    try {
+                      handler(req, res, nextFn);
+                    } catch (err) {
+                      safeNext(err);
+                    }
+                  }
+                };
+                runHandler();
+                return;
+              }
+            }
+
+            // No match in this router - continue to next middleware
+            safeNext();
+          };
+          runRouterNext();
+        };
         router.routes = [] as Array<{ method: string; path: string; handlers: Function[] }>;
         router.middlewares = [] as Array<{ path: string; handler: Function }>;
-        router.get = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'GET', path, handlers }); return router; };
-        router.post = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'POST', path, handlers }); return router; };
-        router.put = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'PUT', path, handlers }); return router; };
-        router.delete = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'DELETE', path, handlers }); return router; };
-        router.patch = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'PATCH', path, handlers }); return router; };
-        router.all = (path: string, ...handlers: Function[]) => { router.routes.push({ method: 'ALL', path, handlers }); return router; };
+        // Helper to add routes - handles array paths like ["/", "/index.html"]
+        const addRouterRoute = (method: string) => (pathOrPaths: string | string[], ...handlers: Function[]) => {
+          const paths = Array.isArray(pathOrPaths) ? pathOrPaths : [pathOrPaths];
+          for (const path of paths) {
+            router.routes.push({ method, path, handlers });
+          }
+          return router;
+        };
+        router.get = addRouterRoute('GET');
+        router.post = addRouterRoute('POST');
+        router.put = addRouterRoute('PUT');
+        router.delete = addRouterRoute('DELETE');
+        router.patch = addRouterRoute('PATCH');
+        router.all = addRouterRoute('ALL');
         router.use = (pathOrHandler: string | Function, ...handlers: Function[]) => {
           if (typeof pathOrHandler === 'function') {
             router.middlewares.push({ path: '/', handler: pathOrHandler });
@@ -1918,8 +2139,11 @@ export const nodeCmd: Command = {
       }
 
       // Wait for any pending async operations (like app.listen())
-      if (pendingPromises.length > 0) {
-        await Promise.all(pendingPromises);
+      // Loop because new promises may be added during module execution (e.g., app.listen in top-level await)
+      while (pendingPromises.length > 0) {
+        const current = [...pendingPromises]; // Snapshot current promises
+        pendingPromises.length = 0; // Clear array so new ones can be detected
+        await Promise.all(current);
       }
 
       // Flush output

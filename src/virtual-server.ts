@@ -69,6 +69,14 @@ class VirtualServerManager {
       // Set up MessageChannel
       this.setupMessageChannel();
 
+      // Listen for SW messages (like RE_REGISTER after SW restart)
+      navigator.serviceWorker.addEventListener('message', (event) => {
+        if (event.data?.type === 'RE_REGISTER') {
+          console.log('[VirtualServer] SW requested re-registration');
+          this.reRegisterAll();
+        }
+      });
+
       this.initialized = true;
       console.log('[VirtualServer] Initialized');
     } catch (err) {
@@ -185,6 +193,26 @@ class VirtualServerManager {
       params.set('PATH', path);
     }
     return `${base}?${params.toString()}`;
+  }
+
+  /**
+   * Re-register all servers with the service worker
+   * Called when SW restarts and loses its in-memory state
+   */
+  private reRegisterAll(): void {
+    if (!navigator.serviceWorker.controller) return;
+
+    // Re-setup the MessageChannel
+    this.setupMessageChannel();
+
+    // Re-register all active servers
+    for (const [port] of this.servers) {
+      navigator.serviceWorker.controller.postMessage({
+        type: 'REGISTER_PORT',
+        port
+      });
+      console.log(`[VirtualServer] Re-registered port ${port}`);
+    }
   }
 
   /**

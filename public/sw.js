@@ -1,6 +1,7 @@
 // Shiro Virtual Server - Service Worker
 // Intercepts ?PORT=N requests and routes them to virtual servers via MessageChannel
 
+const SW_VERSION = 75;
 const DEBUG = true;
 const log = (...args) => DEBUG && console.log('[SW]', ...args);
 
@@ -8,6 +9,11 @@ const log = (...args) => DEBUG && console.log('[SW]', ...args);
 const clientPorts = new Map();
 // Track which client owns which port - Map<serverPort, clientId>
 const portOwners = new Map();
+// Track which clients are VIEWING which port (for routing subresources) - Map<clientId, serverPort>
+const clientViewingPort = new Map();
+// Track which URLs were served for which port - Map<urlPath, serverPort>
+// This allows dynamic imports to be traced back to their originating port
+const urlToPort = new Map();
 
 let pendingRequests = new Map(); // requestId -> { resolve, reject, timeout }
 let requestIdCounter = 0;
@@ -83,23 +89,81 @@ function handleMainThreadResponse(event, clientId) {
 // Intercept fetch requests
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-  const port = url.searchParams.get('PORT');
+  let port = url.searchParams.get('PORT');
+  let path = url.searchParams.get('PATH') || url.pathname;
+  const clientId = event.clientId || event.resultingClientId;
+
+  // Debug: log ALL requests to see what's not being caught
+  if (url.pathname.includes('components')) {
+    log('DEBUG components request:', url.pathname, 'clientId:', clientId, 'referer:', event.request.referrer);
+  }
+
+  // If navigation request with PORT, track this client as viewing that port
+  if (port && event.request.mode === 'navigate') {
+    if (clientId) {
+      clientViewingPort.set(clientId, parseInt(port));
+      log('Client', clientId, 'now viewing port', port);
+    }
+  }
+
+  // If no PORT in URL, check if this client is viewing a virtual server page
+  if (!port && clientId) {
+    const viewingPort = clientViewingPort.get(clientId);
+    if (viewingPort) {
+      port = String(viewingPort);
+      path = url.pathname;
+      log('Subresource from viewing client:', path, 'port:', port);
+    }
+  }
+
+  // Also check referer as fallback (for when clientId isn't available)
+  if (!port) {
+    const referer = event.request.referrer;
+    if (referer) {
+      try {
+        const refererUrl = new URL(referer);
+        const refPort = refererUrl.searchParams.get('PORT');
+        if (refPort) {
+          port = refPort;
+          path = url.pathname;
+          log('Subresource from PORT referer:', path, 'port:', port);
+        } else {
+          // Check if the referer path was served for a virtual server
+          const refererPort = urlToPort.get(refererUrl.pathname);
+          if (refererPort) {
+            port = String(refererPort);
+            path = url.pathname;
+            log('Subresource traced via urlToPort:', path, 'referer:', refererUrl.pathname, 'port:', port);
+          }
+        }
+      } catch {}
+    }
+  }
 
   if (!port) {
     // Not a virtual server request, let it through
     return;
   }
 
-  log('Intercepted request for port', port, url.searchParams.get('PATH') || '/');
-  event.respondWith(handleVirtualServerRequest(event.request, parseInt(port)));
+  // Remember that this URL is being served for this port
+  // This allows dynamic imports to be traced back
+  urlToPort.set(url.pathname, parseInt(port));
+  log('Tracking URL', url.pathname, 'for port', port);
+
+  log('Intercepted request for port', port, path, 'mode:', event.request.mode);
+  event.respondWith(handleVirtualServerRequest(event.request, parseInt(port), path));
 });
 
-async function handleVirtualServerRequest(request, port) {
+async function handleVirtualServerRequest(request, port, overridePath) {
+  // Debug: show all registered ports
+  log('Looking up port', port, '(type:', typeof port, ')');
+  log('Registered ports:', [...portOwners.entries()].map(([k, v]) => `${k}(${typeof k})->${v}`).join(', ') || 'none');
+
   // Find which client owns this port
   const clientId = portOwners.get(port);
 
   if (!clientId) {
-    return new Response(`No server registered on port ${port}`, {
+    return new Response(`No server registered on port ${port}. Registered: ${[...portOwners.keys()].join(', ') || 'none'}`, {
       status: 502,
       headers: { 'Content-Type': 'text/plain' }
     });
@@ -115,7 +179,7 @@ async function handleVirtualServerRequest(request, port) {
   }
 
   const url = new URL(request.url);
-  const path = url.searchParams.get('PATH') || '/';
+  const path = overridePath || url.searchParams.get('PATH') || '/';
   const requestId = ++requestIdCounter;
 
   // Serialize the request
@@ -178,11 +242,21 @@ function buildResponse(resp) {
 
 // Install and activate immediately
 self.addEventListener('install', (event) => {
-  log('Installing...');
+  log('Installing SW version', SW_VERSION);
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
   log('Activating...');
-  event.waitUntil(clients.claim());
+  event.waitUntil(
+    clients.claim().then(() => {
+      // Ask all clients to re-register their servers
+      return clients.matchAll().then(allClients => {
+        log('Asking', allClients.length, 'clients to re-register');
+        allClients.forEach(client => {
+          client.postMessage({ type: 'RE_REGISTER' });
+        });
+      });
+    })
+  );
 });
