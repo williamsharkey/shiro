@@ -153,20 +153,39 @@ export const nodeCmd: Command = {
       const fakeProcess = {
         env: { ...ctx.env },
         cwd: () => ctx.cwd,
-        exit: (c?: number) => { exitCode = c || 0; exitCalled = true; throw new ProcessExitError(exitCode); },
+        exit: (c?: number) => {
+          exitCode = c || 0;
+          exitCalled = true;
+          console.log('[node] process.exit(' + exitCode + ') called');
+          console.log('[node] stdout buffer:', stdoutBuf.join('\n').slice(-500));
+          console.log('[node] stderr buffer:', stderrBuf.join('\n').slice(-500));
+          console.trace('[node] process.exit stack trace');
+          throw new ProcessExitError(exitCode);
+        },
         argv: ['node', ...fileArgs],
         platform: 'browser',
         version: 'v0.1.0-shiro',
         versions: { node: '20.0.0' },
         stdout: { write: (s: string) => { stdoutBuf.push(s); } },
         stderr: { write: (s: string) => { stderrBuf.push(s); } },
-        on: (event: string, fn: Function) => { (processEvents[event] ??= []).push(fn); return fakeProcess; },
+        on: (event: string, fn: Function) => {
+          if (event === 'uncaughtException' || event === 'unhandledRejection') {
+            console.log('[node] process.on(' + event + ') registered');
+          }
+          (processEvents[event] ??= []).push(fn);
+          return fakeProcess;
+        },
         off: (event: string, fn: Function) => { processEvents[event] = (processEvents[event] || []).filter(f => f !== fn); return fakeProcess; },
         once: (event: string, fn: Function) => {
           const wrapper = (...args: any[]) => { fakeProcess.off(event, wrapper); fn(...args); };
           return fakeProcess.on(event, wrapper);
         },
-        emit: (event: string, ...args: any[]) => { (processEvents[event] || []).forEach(fn => fn(...args)); },
+        emit: (event: string, ...args: any[]) => {
+          if (event === 'uncaughtException' || event === 'unhandledRejection') {
+            console.log('[node] process.emit(' + event + '):', args[0]?.message || args[0], args[0]?.stack?.slice(0, 500));
+          }
+          (processEvents[event] || []).forEach(fn => fn(...args));
+        },
         nextTick: (fn: Function, ...args: any[]) => { queueMicrotask(() => fn(...args)); },
         hrtime: { bigint: () => BigInt(Date.now()) * BigInt(1000000) },
       };
@@ -2145,7 +2164,13 @@ export const nodeCmd: Command = {
           );
           // For modules with top-level await, add promise to pending
           pendingPromises.push(execPromise.catch((e: any) => {
-            console.error(`Error in module ${resolved}:`, e);
+            if (!(e instanceof ProcessExitError)) {
+              console.error(`Error in module ${resolved}:`, e.message, e.stack?.slice(0, 300));
+              // Emit as uncaughtException if handlers are registered
+              if (processEvents['uncaughtException']?.length) {
+                fakeProcess.emit('uncaughtException', e);
+              }
+            }
           }));
 
           // Debug for iconv-lite streams
@@ -2368,6 +2393,7 @@ export const nodeCmd: Command = {
       };
 
       let result;
+      console.log('[node] Starting main script execution...');
       try {
         result = await fn(fakeConsole, fakeProcess, fakeRequire, FakeBuffer, entryFilename, entryDirname, {
           fs: ctx.fs,
@@ -2375,7 +2401,9 @@ export const nodeCmd: Command = {
           env: ctx.env,
           cwd: ctx.cwd,
         }, fakeImportMeta);
+        console.log('[node] Main script execution completed');
       } catch (e: any) {
+        console.log('[node] Main script threw error:', e.message);
         if (e instanceof ProcessExitError) {
           exitCode = e.code;
         } else {
@@ -2385,11 +2413,15 @@ export const nodeCmd: Command = {
 
       // Wait for any pending async operations (like app.listen())
       // Loop because new promises may be added during module execution (e.g., app.listen in top-level await)
+      console.log('[node] Pending promises:', pendingPromises.length);
       while (pendingPromises.length > 0) {
         const current = [...pendingPromises]; // Snapshot current promises
         pendingPromises.length = 0; // Clear array so new ones can be detected
+        console.log('[node] Waiting for', current.length, 'promises...');
         await Promise.all(current);
+        console.log('[node] Promises resolved, checking for more...');
       }
+      console.log('[node] All promises resolved, exiting');
 
       // Flush output
       if (stdoutBuf.length > 0) {
