@@ -88,6 +88,18 @@ npm test             # Run tests
 npx tsc --noEmit     # Type-check without building
 ```
 
+## Deployment
+
+Shiro deploys to **Cloudflare Pages** at https://shiro.computer
+
+```bash
+# Build and deploy to production
+npm run build
+npx wrangler pages deploy dist --project-name=shiro
+```
+
+The `wrangler.toml` configures the Cloudflare Pages project. Deployment takes ~3 seconds.
+
 ## Testing
 
 Tests use vitest with a fake-indexeddb polyfill. Tests can create a real FileSystem instance and run commands against it. Keep tests focused - one test file per command file.
