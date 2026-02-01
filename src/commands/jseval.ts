@@ -2307,9 +2307,12 @@ export const nodeCmd: Command = {
         src = src.replace(/(?:const|let|var)\s+__filename\s*=\s*[^;]+;?/g, '/* __filename provided */');
         src = src.replace(/(?:const|let|var)\s+__dirname\s*=\s*[^;]+;?/g, '/* __dirname provided */');
         // Handle: const Buffer = require('buffer').Buffer; or var Buffer = ...
-        src = src.replace(/(?:const|let|var)\s+Buffer\s*=\s*[^;]+;?/g, '/* Buffer provided */');
+        // Use [^;,]+ to stop at comma (multi-line declarations) or semicolon
+        src = src.replace(/(?:const|let|var)\s+Buffer\s*=\s*[^;,]+;/g, '/* Buffer provided */');
+        // Handle multi-line: var Buffer = ...,\n    OtherVar = ...; -> var OtherVar = ...;
+        src = src.replace(/(const|let|var)\s+Buffer\s*=\s*[^,]+,\s*/g, '$1 ');
         // Handle: const { Buffer } = require('buffer'); (destructuring)
-        src = src.replace(/(?:const|let|var)\s*\{\s*Buffer\s*\}\s*=\s*[^;]+;?/g, '/* Buffer provided */');
+        src = src.replace(/(?:const|let|var)\s*\{\s*Buffer\s*\}\s*=\s*[^;]+;/g, '/* Buffer provided */');
         // Handle: const { Buffer, ... } = require('buffer'); (Buffer in destructuring with others)
         src = src.replace(/(\{\s*)Buffer(\s*,)/g, '$1/* Buffer */$2');
         src = src.replace(/(,\s*)Buffer(\s*\})/g, '$1/* Buffer */$2');
