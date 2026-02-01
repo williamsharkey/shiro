@@ -45,11 +45,17 @@ export const helpCmd: Command = {
   name: 'help',
   description: 'Show available commands',
   async exec(ctx) {
-    ctx.stdout = 'Shiro OS - Available commands:\n\n';
+    ctx.stdout = 'shiro - available commands:\n\n';
     const cmds = ctx.shell.commands.list();
-    const maxLen = Math.max(...cmds.map(c => c.name.length));
+    const nameCol = 10; // max name length before wrapping description to next line
     for (const cmd of cmds.sort((a, b) => a.name.localeCompare(b.name))) {
-      ctx.stdout += `  ${cmd.name.padEnd(maxLen + 2)} ${cmd.description}\n`;
+      if (cmd.name.length > nameCol) {
+        // Long command name: description on next line
+        ctx.stdout += ` ${cmd.name}\n`;
+        ctx.stdout += `${''.padEnd(nameCol + 5)}${cmd.description}\n`;
+      } else {
+        ctx.stdout += ` ${cmd.name.padEnd(nameCol + 4)}${cmd.description}\n`;
+      }
     }
     ctx.stdout += '\n';
     return 0;

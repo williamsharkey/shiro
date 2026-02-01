@@ -1904,6 +1904,7 @@ export const nodeCmd: Command = {
                 try {
                   const pkg = JSON.parse(fileCache.get(pkgPath)!);
                   if (pkg.exports) {
+                    // Check for subpath in exports: { "./*": "./dist/*.js" } or { "./foo": "./dist/foo.js" }
                     const subpathKey = `./${subpath}`;
                     const exp = pkg.exports[subpathKey];
                     if (exp) {
@@ -1957,6 +1958,7 @@ export const nodeCmd: Command = {
                   // Modern packages use "exports" field
                   if (pkg.exports) {
                     const exp = pkg.exports;
+                    // exports can be string, object with "." entry, or conditional exports
                     if (typeof exp === 'string') {
                       main = exp;
                     } else if (exp['.']) {

@@ -31,10 +31,10 @@ export const spiritCmd: Command = {
 
     // Use first available key (priority: Anthropic > OpenAI > Google > legacy)
     const apiKey = anthropicKey || openaiKey || googleKey || legacyKey;
-    const provider_type = anthropicKey ? 'anthropic'
+    const providerType: 'anthropic' | 'openai' | 'gemini' = anthropicKey ? 'anthropic'
       : openaiKey ? 'openai'
-      : googleKey ? 'google'
-      : legacyKey ? 'anthropic' : '';
+      : googleKey ? 'gemini'
+      : 'anthropic';  // legacy key defaults to anthropic
 
     if (!apiKey) {
       ctx.stdout = [
@@ -66,8 +66,8 @@ export const spiritCmd: Command = {
       return 1;
     }
 
-    // Store provider type for potential future multi-provider support
-    ctx.env['SPIRIT_PROVIDER'] = provider_type;
+    // Store provider type for debugging
+    ctx.env['SPIRIT_PROVIDER'] = providerType;
 
     const provider = (ctx.shell as any)._spiritProvider as ShiroProvider | undefined;
     if (!provider) {
@@ -75,7 +75,7 @@ export const spiritCmd: Command = {
       return 1;
     }
 
-    const agent = createAgent(ctx, provider, apiKey);
+    const agent = createAgent(ctx, provider, apiKey, providerType);
 
     const prompt = ctx.args.join(' ');
     if (prompt) {
@@ -92,20 +92,33 @@ function createAgent(
   ctx: { env: Record<string, string> },
   provider: ShiroProvider,
   apiKey: string,
+  providerType: 'anthropic' | 'openai' | 'gemini',
 ): SpiritAgent {
+  // Default models per provider
+  const defaultModels: Record<string, string> = {
+    anthropic: 'claude-sonnet-4-20250514',
+    openai: 'gpt-4o',
+    gemini: 'gemini-2.0-flash',
+  };
+
   return new SpiritAgent(provider, {
-    apiKey,
-    model: ctx.env['SPIRIT_MODEL'] || 'claude-sonnet-4-20250514',
+    provider: {
+      type: providerType,
+      apiKey,
+      model: ctx.env['SPIRIT_MODEL'] || defaultModels[providerType],
+    },
+    model: ctx.env['SPIRIT_MODEL'] || defaultModels[providerType],
     maxTurns: parseInt(ctx.env['SPIRIT_MAX_TURNS'] || '30', 10),
     maxTokens: parseInt(ctx.env['SPIRIT_MAX_TOKENS'] || '8192', 10),
     thinkingBudget: ctx.env['SPIRIT_THINKING']
       ? parseInt(ctx.env['SPIRIT_THINKING'], 10)
       : undefined,
     onText: (text: string) => {
-      provider.writeToTerminal(text);
+      // Convert \n to \r\n for proper terminal line breaks
+      provider.writeToTerminal(text.replace(/\n/g, '\r\n'));
     },
     onThinking: (thinking: string) => {
-      provider.writeToTerminal(`\x1b[2m${thinking}\x1b[0m`);
+      provider.writeToTerminal(`\x1b[2m${thinking.replace(/\n/g, '\r\n')}\x1b[0m`);
     },
     onToolStart: (name: string, input: Record<string, unknown>) => {
       const summary = name === 'Bash'
@@ -119,13 +132,13 @@ function createAgent(
               : name === 'Glob'
                 ? `Glob ${input.pattern}`
                 : `${name}`;
-      provider.writeToTerminal(`\x1b[36m⟫ ${summary}\x1b[0m\n`);
+      provider.writeToTerminal(`\x1b[36m⟫ ${summary}\x1b[0m\r\n`);
     },
     onToolEnd: (_name: string, _result: string) => {
       // Tool results are shown by the agent's text output
     },
     onError: (error: Error) => {
-      provider.writeToTerminal(`\x1b[31mError: ${error.message}\x1b[0m\n`);
+      provider.writeToTerminal(`\x1b[31mError: ${error.message.replace(/\n/g, '\r\n')}\x1b[0m\r\n`);
     },
   });
 }
@@ -140,7 +153,8 @@ async function runOneShot(
     if (prompt.startsWith('/')) {
       const { handled, output } = await agent.handleSlashCommand(prompt);
       if (handled) {
-        ctx.stdout = output + '\n';
+        // Convert \n to \r\n for proper terminal line breaks
+        ctx.stdout = output.replace(/\n/g, '\r\n') + '\r\n';
         return 0;
       }
     }
@@ -177,7 +191,9 @@ async function runRepl(
       try {
         const { handled, output } = await agent.handleSlashCommand(trimmed);
         if (handled) {
-          provider.writeToTerminal(output + '\r\n\r\n');
+          // Convert \n to \r\n for proper terminal line breaks
+          const termOutput = output.replace(/\n/g, '\r\n');
+          provider.writeToTerminal(termOutput + '\r\n\r\n');
           continue;
         }
       } catch (e: any) {

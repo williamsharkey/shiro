@@ -223,7 +223,7 @@ function resolveVersion(metadata: NpmPackageMetadata, versionRange: string): str
 }
 
 /**
- * Resolve dependency tree (simplified, no deduplication yet)
+ * Resolve dependency tree with parallel metadata fetching
  */
 async function resolveDependencyTree(
   packageName: string,
@@ -231,20 +231,47 @@ async function resolveDependencyTree(
   ctx: CommandContext
 ): Promise<Map<string, ResolvedPackage>> {
   const resolved = new Map<string, ResolvedPackage>();
-  const queue: Array<{ name: string; range: string }> = [{ name: packageName, range: versionRange }];
+  let queue: Array<{ name: string; range: string }> = [{ name: packageName, range: versionRange }];
   const seen = new Set<string>();
+  const BATCH_SIZE = 24;
+  const STAGGER_MS = 25; // 25ms offset between each metadata fetch
 
   while (queue.length > 0) {
-    const { name, range } = queue.shift()!;
-    const key = `${name}@${range}`;
+    // Filter out already-seen packages
+    const toProcess = queue.filter(({ name, range }) => {
+      const key = `${name}@${range}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 
-    if (seen.has(key)) continue;
-    seen.add(key);
+    if (toProcess.length === 0) break;
 
-    try {
-      const metadata = await fetchPackageMetadata(name);
+    // Take a batch
+    const batch = toProcess.slice(0, BATCH_SIZE);
+    queue = toProcess.slice(BATCH_SIZE);
+
+    // Fetch metadata in parallel with staggered starts
+    const staggeredPromises = batch.map(({ name, range }, index) => {
+      return new Promise<{ name: string; range: string; metadata: NpmPackageMetadata | null }>(async (resolve) => {
+        await new Promise(r => setTimeout(r, index * STAGGER_MS));
+        try {
+          const metadata = await fetchPackageMetadata(name);
+          resolve({ name, range, metadata });
+        } catch (error: any) {
+          ctx.stderr += `Error resolving ${name}@${range}: ${error.message}\n`;
+          resolve({ name, range, metadata: null });
+        }
+      });
+    });
+
+    const results = await Promise.all(staggeredPromises);
+
+    // Process results and queue new dependencies
+    for (const { name, range, metadata } of results) {
+      if (!metadata) continue;
+
       const version = resolveVersion(metadata, range);
-
       if (!version) {
         ctx.stderr += `Warning: No version found for ${name}@${range}\n`;
         continue;
@@ -268,8 +295,6 @@ async function resolveDependencyTree(
       for (const [depName, depRange] of Object.entries(versionData.dependencies || {})) {
         queue.push({ name: depName, range: depRange });
       }
-    } catch (error: any) {
-      ctx.stderr += `Error resolving ${name}@${range}: ${error.message}\n`;
     }
   }
 
@@ -453,14 +478,35 @@ async function npmInstall(ctx: CommandContext): Promise<number> {
     }
   }
 
-  // Install all resolved packages
+  // Install all resolved packages in parallel batches with staggered starts
   ctx.stdout += `\nResolved ${allResolved.size} package(s):\n`;
 
-  for (const pkg of allResolved.values()) {
+  const packages = Array.from(allResolved.values());
+  const BATCH_SIZE = 24;
+  const STAGGER_MS = 50; // 50ms offset between each fetch start
+
+  for (let i = 0; i < packages.length; i += BATCH_SIZE) {
+    const batch = packages.slice(i, i + BATCH_SIZE);
+
+    // Create staggered promises for this batch
+    const staggeredPromises = batch.map((pkg, index) => {
+      return new Promise<void>(async (resolve, reject) => {
+        // Stagger the start time
+        await new Promise(r => setTimeout(r, index * STAGGER_MS));
+        try {
+          await installPackage(pkg, ctx);
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+
+    // Wait for all in this batch to complete
     try {
-      await installPackage(pkg, ctx);
+      await Promise.all(staggeredPromises);
     } catch (error: any) {
-      ctx.stderr += `Error installing ${pkg.name}@${pkg.version}: ${error.message}\n`;
+      ctx.stderr += `Error installing package: ${error.message}\n`;
       return 1;
     }
   }
