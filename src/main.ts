@@ -1,3 +1,58 @@
+// Error/warning capture - must be first before any other code runs
+interface CapturedMessage {
+  type: 'error' | 'warn';
+  message: string;
+  timestamp: number;
+}
+const capturedMessages: CapturedMessage[] = [];
+const seenMessages = new Set<string>();
+
+// Intercept console.error and console.warn
+const originalError = console.error;
+const originalWarn = console.warn;
+
+console.error = (...args: any[]) => {
+  const msg = args.map(a => typeof a === 'string' ? a : (a?.message || String(a))).join(' ').slice(0, 200);
+  if (!seenMessages.has(msg)) {
+    seenMessages.add(msg);
+    capturedMessages.push({ type: 'error', message: msg, timestamp: Date.now() });
+  }
+  originalError.apply(console, args);
+};
+
+console.warn = (...args: any[]) => {
+  const msg = args.map(a => typeof a === 'string' ? a : (a?.message || String(a))).slice(0, 200).join(' ');
+  if (!seenMessages.has(msg)) {
+    seenMessages.add(msg);
+    capturedMessages.push({ type: 'warn', message: msg, timestamp: Date.now() });
+  }
+  originalWarn.apply(console, args);
+};
+
+// Also capture unhandled errors
+window.addEventListener('error', (event) => {
+  const msg = `${event.message} at ${event.filename}:${event.lineno}`.slice(0, 200);
+  if (!seenMessages.has(msg)) {
+    seenMessages.add(msg);
+    capturedMessages.push({ type: 'error', message: msg, timestamp: Date.now() });
+  }
+});
+
+window.addEventListener('unhandledrejection', (event) => {
+  const msg = `Unhandled rejection: ${event.reason?.message || event.reason}`.slice(0, 200);
+  if (!seenMessages.has(msg)) {
+    seenMessages.add(msg);
+    capturedMessages.push({ type: 'error', message: msg, timestamp: Date.now() });
+  }
+});
+
+// Export for clip-report command
+(window as any).__shiroCapturedMessages = capturedMessages;
+(window as any).__shiroClearMessages = () => {
+  capturedMessages.length = 0;
+  seenMessages.clear();
+};
+
 import '@xterm/xterm/css/xterm.css';
 import { FileSystem } from './filesystem';
 import { Shell } from './shell';
@@ -22,6 +77,7 @@ import { reloadCmd } from './commands/reload';
 import { termcastCmd } from './commands/termcast';
 import { serveCmd, serversCmd } from './commands/serve';
 import { imageCmd } from './commands/image';
+import { clipReportCmd } from './commands/clip-report';
 import { iframeServer } from './iframe-server';
 import { allCommands } from '../fluffycoreutils/src/index';
 import { wrapFluffyCommand } from './fluffy-adapter';
@@ -81,6 +137,7 @@ async function main() {
   registerCommand(commands, serveCmd, 'src/commands/serve.ts');
   registerCommand(commands, serversCmd, 'src/commands/serve.ts');
   registerCommand(commands, imageCmd, 'src/commands/image.ts');
+  registerCommand(commands, clipReportCmd, 'src/commands/clip-report.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {

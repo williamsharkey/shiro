@@ -16,6 +16,7 @@ export class ShiroTerminal {
   private userInputBuffer = '';
   private userInputCursorPos = 0;
   private rawModeCallback: ((key: string) => void) | null = null;
+  private iframeContainer: HTMLElement | null = null;
 
   // Reverse history search state (Ctrl+R)
   private reverseSearchMode = false;
@@ -61,6 +62,21 @@ export class ShiroTerminal {
     this.term.open(container);
     this.fitAddon.fit();
 
+    // Create iframe container for virtual servers
+    this.iframeContainer = document.createElement('div');
+    this.iframeContainer.id = 'shiro-iframes';
+    this.iframeContainer.style.cssText = `
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      z-index: 1000;
+      background: #1a1a2e;
+      border-top: 2px solid #3d3d5c;
+      display: none;
+    `;
+    document.body.appendChild(this.iframeContainer);
+
     window.addEventListener('resize', () => this.fitAddon.fit());
 
     this.term.onData((data: string) => this.handleInput(data));
@@ -68,6 +84,47 @@ export class ShiroTerminal {
 
   writeOutput(text: string): void {
     this.term.write(text);
+  }
+
+  /**
+   * Get the iframe container for virtual servers.
+   * Shows the container when called.
+   */
+  getIframeContainer(): HTMLElement | null {
+    if (this.iframeContainer) {
+      this.iframeContainer.style.display = 'block';
+    }
+    return this.iframeContainer;
+  }
+
+  /**
+   * Hide the iframe container
+   */
+  hideIframeContainer(): void {
+    if (this.iframeContainer) {
+      this.iframeContainer.style.display = 'none';
+      this.iframeContainer.innerHTML = '';
+    }
+  }
+
+  /**
+   * Get the terminal buffer content as a string.
+   * Used by clip-report to copy terminal history.
+   */
+  getBufferContent(): string {
+    const buffer = this.term.buffer.active;
+    const lines: string[] = [];
+    for (let i = 0; i < buffer.length; i++) {
+      const line = buffer.getLine(i);
+      if (line) {
+        lines.push(line.translateToString(true));
+      }
+    }
+    // Trim empty lines from end
+    while (lines.length > 0 && lines[lines.length - 1].trim() === '') {
+      lines.pop();
+    }
+    return lines.join('\n');
   }
 
   /**

@@ -1,5 +1,6 @@
 import { Command, CommandContext } from './index';
 import { virtualServer, VirtualRequest, VirtualResponse } from '../virtual-server';
+import { iframeServer } from '../iframe-server';
 
 /**
  * js-eval: Execute JavaScript in the browser's JS VM.
@@ -542,7 +543,12 @@ export const nodeCmd: Command = {
             }),
             inspect: (obj: any) => JSON.stringify(obj, null, 2),
             format: (...args: any[]) => args.map(String).join(' '),
-            types: { isDate: (v: any) => v instanceof Date, isRegExp: (v: any) => v instanceof RegExp },
+            types: {
+              isDate: (v: any) => v instanceof Date,
+              isRegExp: (v: any) => v instanceof RegExp,
+              isCryptoKey: (key: any) => typeof CryptoKey !== 'undefined' && key instanceof CryptoKey,
+              isTypedArray: (v: any) => ArrayBuffer.isView(v) && !(v instanceof DataView),
+            },
             deprecate: (fn: Function, _msg: string) => fn, // Return function unchanged, skip warning
             inherits: (ctor: any, superCtor: any) => {
               if (superCtor && superCtor.prototype) {
@@ -555,6 +561,8 @@ export const nodeCmd: Command = {
             isArray: Array.isArray,
             isBuffer: (obj: any) => obj instanceof Uint8Array,
             debuglog: () => () => {}, // No-op debug logger
+            TextEncoder,
+            TextDecoder,
           };
           case 'events':
           case 'node:events': {
@@ -597,35 +605,61 @@ export const nodeCmd: Command = {
           case 'node:buffer': return { Buffer: FakeBuffer };
           case 'stream':
           case 'node:stream': {
-            // Stream shim with Transform for libraries like libbase64
-            class Stream {
-              pipe(dest: any) { return dest; }
-              on(_event: string, _cb: Function) { return this; }
-              once(_event: string, _cb: Function) { return this; }
-              emit(_event: string, ..._args: any[]) { return true; }
-              removeListener(_event: string, _cb: Function) { return this; }
-            }
-            class Readable extends Stream {
-              _read() {}
-              push(_chunk: any) { return true; }
-              read() { return null; }
-            }
-            class Writable extends Stream {
-              _write(_chunk: any, _encoding: string, callback: Function) { callback(); }
-              write(_chunk: any, _encoding?: any, _cb?: any) { return true; }
-              end(_chunk?: any, _encoding?: any, _cb?: any) {}
-            }
-            class Duplex extends Readable {
-              _write(_chunk: any, _encoding: string, callback: Function) { callback(); }
-              write(_chunk: any, _encoding?: any, _cb?: any) { return true; }
-              end(_chunk?: any, _encoding?: any, _cb?: any) {}
-            }
-            class Transform extends Duplex {
-              _transform(_chunk: any, _encoding: string, callback: Function) { callback(); }
-              _flush(callback: Function) { callback(); }
-            }
-            class PassThrough extends Transform {}
-            return { Stream, Readable, Writable, Duplex, Transform, PassThrough };
+            // Stream shim with Transform for libraries like iconv-lite
+            console.log('[stream shim] Creating stream module with Transform');
+            const streamModule: any = {};
+
+            // Debug flag to trace Transform usage
+            (globalThis as any).__streamShimDebug = true;
+
+            const Stream = function(this: any) {} as any;
+            Stream.prototype.pipe = function(dest: any) { return dest; };
+            Stream.prototype.on = function(_event: string, _cb: Function) { return this; };
+            Stream.prototype.once = function(_event: string, _cb: Function) { return this; };
+            Stream.prototype.emit = function(_event: string, ..._args: any[]) { return true; };
+            Stream.prototype.removeListener = function(_event: string, _cb: Function) { return this; };
+            Stream.prototype.addListener = function(_event: string, _cb: Function) { return this; };
+            streamModule.Stream = Stream;
+
+            const Readable = function(this: any, opts?: any) { Stream.call(this); } as any;
+            Readable.prototype = Object.create(Stream.prototype);
+            Readable.prototype.constructor = Readable;
+            Readable.prototype._read = function() {};
+            Readable.prototype.push = function(_chunk: any) { return true; };
+            Readable.prototype.read = function() { return null; };
+            streamModule.Readable = Readable;
+
+            const Writable = function(this: any, opts?: any) { Stream.call(this); } as any;
+            Writable.prototype = Object.create(Stream.prototype);
+            Writable.prototype.constructor = Writable;
+            Writable.prototype._write = function(_chunk: any, _encoding: string, callback: Function) { callback(); };
+            Writable.prototype.write = function(_chunk: any, _encoding?: any, _cb?: any) { return true; };
+            Writable.prototype.end = function(_chunk?: any, _encoding?: any, _cb?: any) {};
+            streamModule.Writable = Writable;
+
+            const Duplex = function(this: any, opts?: any) { Readable.call(this, opts); } as any;
+            Duplex.prototype = Object.create(Readable.prototype);
+            Duplex.prototype.constructor = Duplex;
+            Duplex.prototype._write = function(_chunk: any, _encoding: string, callback: Function) { callback(); };
+            Duplex.prototype.write = function(_chunk: any, _encoding?: any, _cb?: any) { return true; };
+            Duplex.prototype.end = function(_chunk?: any, _encoding?: any, _cb?: any) {};
+            streamModule.Duplex = Duplex;
+
+            const Transform = function(this: any, opts?: any) { Duplex.call(this, opts); } as any;
+            Transform.prototype = Object.create(Duplex.prototype);
+            Transform.prototype.constructor = Transform;
+            Transform.prototype._transform = function(_chunk: any, _encoding: string, callback: Function) { callback(); };
+            Transform.prototype._flush = function(callback: Function) { callback(); };
+            streamModule.Transform = Transform;
+
+            const PassThrough = function(this: any, opts?: any) { Transform.call(this, opts); } as any;
+            PassThrough.prototype = Object.create(Transform.prototype);
+            PassThrough.prototype.constructor = PassThrough;
+            streamModule.PassThrough = PassThrough;
+
+            console.log('[stream shim] Module ready, Transform:', typeof Transform, Transform?.name);
+            console.log('[stream shim] Returning:', Object.keys(streamModule));
+            return streamModule;
           }
           case 'crypto':
           case 'node:crypto': return {
@@ -644,6 +678,9 @@ export const nodeCmd: Command = {
               };
             },
             randomUUID: () => crypto.randomUUID(),
+            // Web Crypto API for jose and other crypto libraries
+            webcrypto: crypto,
+            subtle: crypto.subtle,
           };
           case 'http':
           case 'node:http':
@@ -671,102 +708,110 @@ export const nodeCmd: Command = {
                   const cb = typeof hostOrCallback === 'function' ? hostOrCallback : callback;
                   listeningPort = port;
 
-                  // Ensure virtual server is initialized
-                  virtualServer.init().then(() => {
-                    cleanupFn = virtualServer.listen(port, async (vReq: VirtualRequest): Promise<VirtualResponse> => {
-                      return new Promise((resolve) => {
-                        // Build Node-like request object
-                        const req: any = {
-                          method: vReq.method,
-                          url: vReq.path + (Object.keys(vReq.query).length ? '?' + new URLSearchParams(vReq.query).toString() : ''),
-                          headers: vReq.headers,
-                          query: vReq.query,
-                          body: vReq.body,
-                          on(event: string, handler: Function) {
-                            if (event === 'data' && vReq.body) {
-                              setTimeout(() => handler(vReq.body), 0);
-                            }
-                            if (event === 'end') {
-                              setTimeout(() => handler(), 0);
-                            }
-                            return this;
-                          },
-                        };
-
-                        // Build Node-like response object
-                        let statusCode = 200;
-                        let responseHeaders: Record<string, string> = {};
-                        let responseBody = '';
-
-                        const res: any = {
-                          statusCode: 200,
-                          setHeader(name: string, value: string) {
-                            responseHeaders[name.toLowerCase()] = value;
-                          },
-                          getHeader(name: string) {
-                            return responseHeaders[name.toLowerCase()];
-                          },
-                          writeHead(code: number, headers?: Record<string, string>) {
-                            statusCode = code;
-                            if (headers) {
-                              for (const [k, v] of Object.entries(headers)) {
-                                responseHeaders[k.toLowerCase()] = v;
-                              }
-                            }
-                            return this;
-                          },
-                          write(chunk: string) {
-                            responseBody += chunk;
-                            return true;
-                          },
-                          end(data?: string) {
-                            if (data) responseBody += data;
-                            resolve({
-                              status: statusCode,
-                              headers: responseHeaders,
-                              body: responseBody,
-                            });
-                          },
-                          // Express-style helpers
-                          status(code: number) {
-                            statusCode = code;
-                            return this;
-                          },
-                          json(data: any) {
-                            responseHeaders['content-type'] = 'application/json';
-                            this.end(JSON.stringify(data));
-                          },
-                          send(data: any) {
-                            if (typeof data === 'object') {
-                              this.json(data);
-                            } else {
-                              this.end(String(data));
-                            }
-                          },
-                        };
-
-                        // Call the request handler
-                        if (requestHandler) {
-                          try {
-                            requestHandler(req, res);
-                          } catch (err: any) {
-                            resolve({
-                              status: 500,
-                              body: `Server error: ${err.message}`,
-                            });
+                  // Use iframe-based server for visibility
+                  const handler = async (vReq: any) => {
+                    return new Promise<any>((resolve) => {
+                      // Build Node-like request object
+                      const req: any = {
+                        method: vReq.method,
+                        url: vReq.path + (Object.keys(vReq.query || {}).length ? '?' + new URLSearchParams(vReq.query).toString() : ''),
+                        headers: vReq.headers || {},
+                        query: vReq.query || {},
+                        body: vReq.body,
+                        on(event: string, handler: Function) {
+                          if (event === 'data' && vReq.body) {
+                            setTimeout(() => handler(vReq.body), 0);
                           }
-                        } else {
-                          resolve({ status: 404, body: 'No handler' });
-                        }
-                      });
-                    }, `http:${port}`);
+                          if (event === 'end') {
+                            setTimeout(() => handler(), 0);
+                          }
+                          return this;
+                        },
+                      };
 
-                    const url = virtualServer.getUrl(port);
-                    fakeConsole.log(`Server listening on port ${port}`);
-                    fakeConsole.log(`Access at: ${url}`);
-                    server.emit('listening');
-                    cb?.();
-                  });
+                      // Build Node-like response object
+                      let statusCode = 200;
+                      let responseHeaders: Record<string, string> = {};
+                      let responseBody = '';
+
+                      const res: any = {
+                        statusCode: 200,
+                        setHeader(name: string, value: string) {
+                          responseHeaders[name.toLowerCase()] = value;
+                        },
+                        getHeader(name: string) {
+                          return responseHeaders[name.toLowerCase()];
+                        },
+                        writeHead(code: number, headers?: Record<string, string>) {
+                          statusCode = code;
+                          if (headers) {
+                            for (const [k, v] of Object.entries(headers)) {
+                              responseHeaders[k.toLowerCase()] = v;
+                            }
+                          }
+                          return this;
+                        },
+                        write(chunk: string) {
+                          responseBody += chunk;
+                          return true;
+                        },
+                        end(data?: string) {
+                          if (data) responseBody += data;
+                          resolve({
+                            status: statusCode,
+                            headers: responseHeaders,
+                            body: responseBody,
+                          });
+                        },
+                        // Express-style helpers
+                        status(code: number) {
+                          statusCode = code;
+                          return this;
+                        },
+                        json(data: any) {
+                          responseHeaders['content-type'] = 'application/json';
+                          this.end(JSON.stringify(data));
+                        },
+                        send(data: any) {
+                          if (typeof data === 'object') {
+                            this.json(data);
+                          } else {
+                            this.end(String(data));
+                          }
+                        },
+                      };
+
+                      // Call the request handler
+                      if (requestHandler) {
+                        try {
+                          requestHandler(req, res);
+                        } catch (err: any) {
+                          resolve({
+                            status: 500,
+                            body: `Server error: ${err.message}`,
+                          });
+                        }
+                      } else {
+                        resolve({ status: 404, body: 'No handler' });
+                      }
+                    });
+                  };
+
+                  // Register with iframe server
+                  cleanupFn = iframeServer.serve(port, handler, `http:${port}`);
+                  fakeConsole.log(`Server listening on port ${port}`);
+
+                  // Show iframe if terminal supports it
+                  const terminal = (ctx.shell as any)._terminal;
+                  if (terminal && typeof terminal.getIframeContainer === 'function') {
+                    const container = terminal.getIframeContainer();
+                    iframeServer.createIframe(port, container, { height: '300px' })
+                      .then(() => fakeConsole.log('Browser window opened'))
+                      .catch((err: Error) => fakeConsole.warn('Could not open browser:', err.message));
+                  }
+
+                  server.emit('listening');
+                  cb?.();
 
                   return this;
                 },
@@ -1426,24 +1471,36 @@ export const nodeCmd: Command = {
         // Listen method - keeps running until server is closed (like real Node.js)
         app.listen = (port: number, hostOrCb?: string | (() => void), cb?: () => void) => {
           const callback = typeof hostOrCb === 'function' ? hostOrCb : cb;
-          let closeServer: () => void;
+          let closeServer: (() => void) | null = null;
 
           // This promise keeps the "process" alive until server is closed
           const listenPromise = new Promise<void>((resolve) => {
+            // Register with iframe server
+            const cleanup = iframeServer.serve(port, app._handleRequest, `express:${port}`);
             closeServer = () => {
-              virtualServer.close(port);
+              cleanup();
               fakeConsole.log(`Server on port ${port} closed`);
+              // Hide iframe container
+              const terminal = (ctx.shell as any)._terminal;
+              if (terminal && typeof terminal.hideIframeContainer === 'function') {
+                terminal.hideIframeContainer();
+              }
               resolve();
             };
 
-            virtualServer.init().then(() => {
-              virtualServer.listen(port, app._handleRequest, `express:${port}`);
-              const url = virtualServer.getUrl(port);
-              fakeConsole.log(`Express app listening on port ${port}`);
-              fakeConsole.log(`Access at: ${url}`);
-              callback?.();
-              // Note: promise does NOT resolve here - server keeps running
-            });
+            fakeConsole.log(`Express app listening on port ${port}`);
+
+            // Show iframe if terminal supports it
+            const terminal = (ctx.shell as any)._terminal;
+            if (terminal && typeof terminal.getIframeContainer === 'function') {
+              const container = terminal.getIframeContainer();
+              iframeServer.createIframe(port, container, { height: '300px' })
+                .then(() => fakeConsole.log('Browser window opened'))
+                .catch((err: Error) => fakeConsole.warn('Could not open browser:', err.message));
+            }
+
+            callback?.();
+            // Note: promise does NOT resolve here - server keeps running
           });
           pendingPromises.push(listenPromise);
 
@@ -1848,6 +1905,10 @@ export const nodeCmd: Command = {
       // Sync require for CommonJS compatibility - returns module directly, not a Promise
       // For modules with top-level await, caller must await the result
       function requireModule(modPath: string, fromDir: string): any {
+        // Debug logging for iconv-lite and stream modules
+        if (modPath === 'stream' || modPath.includes('iconv') || modPath.includes('streams')) {
+          console.log(`[require] Called for '${modPath}' from '${fromDir}'`);
+        }
         // Check for Express shim
         if (modPath === 'express') {
           return createExpressShim;
@@ -1860,7 +1921,12 @@ export const nodeCmd: Command = {
 
         // Check built-in modules first
         const builtin = getBuiltinModule(modPath);
-        if (builtin !== null) return builtin;
+        if (builtin !== null) {
+          if (modPath === 'stream' || modPath === 'node:stream') {
+            console.log(`[require] Returning stream builtin with Transform:`, typeof builtin.Transform, builtin.Transform?.name);
+          }
+          return builtin;
+        }
 
         let resolved = modPath;
 
@@ -2045,9 +2111,21 @@ export const nodeCmd: Command = {
         const modDir = resolved.substring(0, resolved.lastIndexOf('/')) || ctx.cwd;
         const nestedRequire = (p: string) => requireModule(p, modDir);
 
+        // Debug for iconv-lite streams
+        if (resolved.includes('streams.js') && resolved.includes('iconv')) {
+          console.log(`[module] Loading: ${resolved}`);
+          console.log(`[module] Original content first 500 chars:`, content.slice(0, 500));
+        }
+
         try {
           // Transform ES module syntax to CommonJS
           const transformedContent = transformESModules(content);
+
+          // Debug for iconv-lite streams transformed content
+          if (resolved.includes('streams.js') && resolved.includes('iconv')) {
+            console.log(`[module] Transformed content first 800 chars:`, transformedContent.slice(0, 800));
+          }
+
           const modImportMeta = {
             url: `file://${resolved}`,
             dirname: modDir,
@@ -2069,6 +2147,11 @@ export const nodeCmd: Command = {
           pendingPromises.push(execPromise.catch((e: any) => {
             console.error(`Error in module ${resolved}:`, e);
           }));
+
+          // Debug for iconv-lite streams
+          if (resolved.includes('streams.js') || resolved.includes('iconv')) {
+            console.log(`[module] ${resolved} exports:`, typeof mod.exports, mod.exports?.name || Object.keys(mod.exports || {}).slice(0, 5));
+          }
         } catch (err) {
           moduleCache.delete(resolved);
           const errMsg = err instanceof Error ? err.message : String(err);
@@ -2086,12 +2169,31 @@ export const nodeCmd: Command = {
 
       // Transform ES module syntax to CommonJS
       function transformESModules(src: string): string {
+        // Normalize line endings to LF
+        src = src.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+        // Preserve block comments to avoid transforming export/import keywords inside them
+        // Note: We don't preserve line comments (//) as they can appear in strings (URLs)
+        const comments: string[] = [];
+        src = src.replace(/\/\*[\s\S]*?\*\//g, (match) => {
+          comments.push(match);
+          return `___COMMENT_${comments.length - 1}___`;
+        });
+
         // Dynamic import() → Promise.resolve(require()) - must be before other import transforms
         // Handles: await import("./path") or import("./path").then(...)
         src = src.replace(/\bimport\s*\(\s*(['"`])([^'"`]+)\1\s*\)/g, 'Promise.resolve(require($1$2$1))');
 
         // import.meta → __import_meta (must be before import statement transforms)
         src = src.replace(/import\.meta/g, '__import_meta');
+
+        // import Default, { named } from 'y' → combined default + named import
+        src = src.replace(/import\s+(\w+)\s*,\s*\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]\s*;?/g,
+          (_, defaultName, namedImports, mod) => {
+            const cleanImports = namedImports.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+            const fixed = cleanImports.replace(/(\w+)\s+as\s+(\w+)/g, '$1: $2');
+            return `const ${defaultName} = require("${mod}"); const {${fixed}} = require("${mod}");`;
+          });
 
         // import x from 'y' → const x = require('y')
         src = src.replace(/import\s+(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?/g,
@@ -2101,7 +2203,9 @@ export const nodeCmd: Command = {
         // Also handles: import { a as b } → const { a: b }
         src = src.replace(/import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]\s*;?/g,
           (_, imports, mod) => {
-            const fixed = imports.replace(/(\w+)\s+as\s+(\w+)/g, '$1: $2');
+            // Strip comments and fix 'as' syntax
+            const cleanImports = imports.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+            const fixed = cleanImports.replace(/(\w+)\s+as\s+(\w+)/g, '$1: $2');
             return `const {${fixed}} = require("${mod}");`;
           });
 
@@ -2116,16 +2220,47 @@ export const nodeCmd: Command = {
         // export default x → module.exports = x
         src = src.replace(/export\s+default\s+/g, 'module.exports = ');
 
-        // export { x, y } from 'z' → Object.assign(module.exports, require('z'))
-        src = src.replace(/export\s+\{[^}]+\}\s+from\s+['"]([^'"]+)['"]\s*;?/g,
-          'Object.assign(module.exports, require("$1"));');
+        // export { x, y } from 'z' or export { x as y } from 'z' (handles multiline and comments)
+        // Note: \s* allows no space between export and { (e.g., export{x})
+        src = src.replace(/export\s*\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]\s*;?/g,
+          (_, exports, mod) => {
+            // Strip comments from exports
+            const cleanExports = exports.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+            const items = cleanExports.split(',').map((s: string) => s.trim()).filter((s: string) => s && /^\w/.test(s));
+            const assigns = items.map((item: string) => {
+              const asMatch = item.match(/^(\w+)\s+as\s+(\w+)$/);
+              if (asMatch) {
+                return `module.exports.${asMatch[2]} = require("${mod}").${asMatch[1]};`;
+              }
+              return `module.exports.${item} = require("${mod}").${item};`;
+            }).join(' ');
+            return assigns;
+          });
+
+        // export * as name from 'z' → module.exports.name = require('z')
+        src = src.replace(/export\s+\*\s+as\s+(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?/g,
+          'module.exports.$1 = require("$2");');
 
         // export * from 'z' → Object.assign(module.exports, require('z'))
         src = src.replace(/export\s+\*\s+from\s+['"]([^'"]+)['"]\s*;?/g,
           'Object.assign(module.exports, require("$1"));');
 
-        // export { x, y } → module.exports = { x, y }
-        src = src.replace(/export\s+\{([^}]+)\}\s*;?/g, 'module.exports = {$1};');
+        // export { x, y } or export { x as y } → module.exports.x = x; module.exports.y = y;
+        // Note: \s* allows no space between export and { (e.g., export{x as y})
+        src = src.replace(/export\s*\{([^}]+)\}\s*;?/g, (_, exports) => {
+          // Strip comments and parse exports like "x, y as z, foo"
+          const cleanExports = exports.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+          const items = cleanExports.split(',').map((s: string) => s.trim()).filter((s: string) => s && /^\w/.test(s));
+          return items.map((item: string) => {
+            const asMatch = item.match(/^(\w+)\s+as\s+(\w+)$/);
+            if (asMatch) {
+              // export { local as exported }
+              return `module.exports.${asMatch[2]} = ${asMatch[1]};`;
+            }
+            // export { x }
+            return `module.exports.${item} = ${item};`;
+          }).join(' ');
+        });
 
         // Track named exports to add module.exports at the end
         const namedExports: string[] = [];
@@ -2134,6 +2269,12 @@ export const nodeCmd: Command = {
         src = src.replace(/export\s+(const|let|var)\s+(\w+)\s*=/g, (_, decl, name) => {
           namedExports.push(name);
           return `${decl} ${name} =`;
+        });
+
+        // export var/let x; (declaration without initialization) → var x; (track x)
+        src = src.replace(/export\s+(var|let)\s+(\w+)\s*;/g, (_, decl, name) => {
+          namedExports.push(name);
+          return `${decl} ${name};`;
         });
 
         // export function name() → function name(); (track name)
@@ -2173,6 +2314,34 @@ export const nodeCmd: Command = {
         src = src.replace(/(\{\s*)Buffer(\s*,)/g, '$1/* Buffer */$2');
         src = src.replace(/(,\s*)Buffer(\s*\})/g, '$1/* Buffer */$2');
         src = src.replace(/(,\s*)Buffer(\s*,)/g, '$1/* Buffer */$2');
+
+        // Catch-all: remove any remaining export keywords that weren't handled
+        // This handles edge cases like TypeScript 'export type' that might slip through
+        src = src.replace(/\bexport\s+type\s+/g, '/* export type */ ');
+        src = src.replace(/\bimport\s+type\s+[^;]+;?/g, '/* import type */');
+
+        // Final safety: if any export/import statements remain, handle them aggressively
+        // This prevents "Unexpected token 'export'" errors
+
+        // Catch any remaining export { name } patterns (including no-space like export{x})
+        while (/\bexport\s*\{/.test(src)) {
+          src = src.replace(/\bexport\s*\{([^}]*)\}\s*;?/g, (_, names) => {
+            const cleanNames = names.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+            const items = cleanNames.split(',').map((s: string) => s.trim()).filter((s: string) => s && /^\w/.test(s));
+            return items.map((item: string) => {
+              const asMatch = item.match(/^(\w+)\s+as\s+(\w+)$/);
+              if (asMatch) return `module.exports.${asMatch[2]} = ${asMatch[1]};`;
+              return `module.exports.${item} = ${item};`;
+            }).join(' ');
+          });
+        }
+
+        // Note: We removed aggressive catch-all transforms for import/export
+        // as they were corrupting URLs in strings (//example.com) and other code.
+        // If ES module syntax slips through, we'll get a clear "Unexpected token" error.
+
+        // Restore preserved comments
+        src = src.replace(/___COMMENT_(\d+)___/g, (_, idx) => comments[parseInt(idx)]);
 
         return src;
       }
