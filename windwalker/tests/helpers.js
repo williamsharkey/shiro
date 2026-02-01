@@ -1,8 +1,8 @@
 // helpers.js -- OS abstraction layer for windwalker tests
-// Provides a unified API to interact with Foam or Shiro through Puppeteer
+// Provides a unified API to interact with Foam or Shiro through linkedom or skyeyes
 
 /**
- * Returns an object with helper functions bound to the given Puppeteer page
+ * Returns an object with helper functions bound to the given page
  * and OS target ('foam' or 'shiro').
  */
 export function createOSHelpers(page, osTarget) {

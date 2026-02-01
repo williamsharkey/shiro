@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // runner-skyeyes.js -- Skyeyes-based test runner for windwalker
-// Runs test suites against Foam and/or Shiro using skyeyes instead of Puppeteer
+// Runs test suites against Foam and/or Shiro using skyeyes
 
 import { launch } from './skyeyes-adapter.js';
 import { writeFileSync, existsSync, mkdirSync } from 'fs';

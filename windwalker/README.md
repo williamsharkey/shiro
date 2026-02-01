@@ -17,7 +17,7 @@ Spirit is an adapted Claude Code agent loop designed for browser-based JavaScrip
 
 ## Test Architecture
 
-All tests run via **Puppeteer** in headless Chrome. Each OS is loaded as a web page, and tests interact through the browser console by calling the OS's exposed JavaScript APIs directly. This tests the real runtime, not mocks.
+Tests run via **linkedom** (fast, in-process) or **skyeyes** (real browser integration). Linkedom imports Foam's modules directly into Node.js with fake-indexeddb, so tests execute in milliseconds with no browser overhead. Skyeyes tests use the nimbus dashboard's browser bridge for full integration testing against real browser APIs.
 
 ```
 windwalker/
@@ -26,7 +26,8 @@ windwalker/
 ├── .github/workflows/
 │   └── test.yml              # CI: runs all tests against both Foam and Shiro
 ├── tests/
-│   ├── runner.js             # Puppeteer test harness
+│   ├── runner-linkedom.js     # Fast linkedom test runner (default)
+│   ├── runner-skyeyes.js     # Skyeyes-based test runner
 │   ├── helpers.js            # Shared utilities for interacting with each OS
 │   ├── level-0-boot/         # OS boots without errors
 │   ├── level-1-filesystem/   # VFS: read, write, mkdir, stat, exists, unlink
@@ -81,7 +82,7 @@ npm run test:shiro          # Test Shiro only
 
 ## CI
 
-GitHub Actions runs the full test suite on every push and PR. Both Foam and Shiro are checked out as sibling directories and served locally for Puppeteer to load.
+GitHub Actions runs the linkedom test suite on every push and PR. Foam modules are imported directly into Node.js -- no browser binary needed.
 
 ## Filing Issues
 

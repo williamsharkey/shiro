@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // skyeyes-adapter.js -- Skyeyes-based page adapter for windwalker tests
-// Provides a Puppeteer-compatible API using skyeyes HTTP interface
+// Provides a page API using skyeyes HTTP interface
 
 const SKYEYES_API = 'http://localhost:7777/api/skyeyes';
 
 /**
- * Minimal Puppeteer-compatible Page object backed by skyeyes
+ * Minimal Page object backed by skyeyes
  */
 export class SkyeyesPage {
   constructor(pageName) {
@@ -149,7 +149,7 @@ export class SkyeyesPage {
 }
 
 /**
- * Minimal Puppeteer-compatible Browser object for skyeyes
+ * Minimal Browser object for skyeyes
  */
 export class SkyeyesBrowser {
   constructor() {

@@ -55,7 +55,7 @@ const LINKEDOM_SUITES = [
 const NETWORK_SUITES = ['level-9-selfbuild'];
 
 /**
- * Create a mock page object that provides the same interface as Puppeteer/Skyeyes
+ * Create a mock page object that provides the same interface as Skyeyes
  * but executes code directly against Foam modules
  */
 async function createMockPage(vfs, shell, provider) {
