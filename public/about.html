@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shiro &mdash; A Unix in Your Browser</title>
+  <meta name="description" content="Shiro is a browser-native Unix development environment. 152 commands, git, npm, esbuild, vi &mdash; no server required.">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0a;
+      --surface: #111;
+      --border: #222;
+      --text: #e8e8e8;
+      --muted: #666;
+      --accent: #00d4ff;
+      --accent-dim: #00d4ff22;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Navigation */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      padding: 16px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      background: rgba(10, 10, 10, 0.8);
+      border-bottom: 1px solid var(--border);
+    }
+
+    nav .logo {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text);
+      text-decoration: none;
+    }
+
+    nav .logo span {
+      color: var(--accent);
+    }
+
+    nav .links {
+      display: flex;
+      gap: 28px;
+      align-items: center;
+    }
+
+    nav .links a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+
+    nav .links a:hover {
+      color: var(--text);
+    }
+
+    /* Hero */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 0 max(32px, 8vw);
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .hero h1 {
+      font-size: clamp(3rem, 7vw, 5.5rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.05;
+      margin-bottom: 24px;
+    }
+
+    .hero h1 em {
+      font-style: normal;
+      color: var(--accent);
+    }
+
+    .hero .tagline {
+      font-size: clamp(1.1rem, 2vw, 1.35rem);
+      color: var(--muted);
+      line-height: 1.7;
+      max-width: 640px;
+      margin-bottom: 40px;
+    }
+
+    .hero .ctas {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 28px;
+      background: var(--text);
+      color: var(--bg);
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    .btn-primary:hover { opacity: 0.88; }
+
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 28px;
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: 500;
+      text-decoration: none;
+      cursor: pointer;
+      transition: border-color 0.2s;
+    }
+
+    .btn-secondary:hover { border-color: var(--muted); }
+
+    .scroll-hint {
+      position: absolute;
+      bottom: 32px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 24px;
+      height: 40px;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      display: flex;
+      justify-content: center;
+    }
+
+    .scroll-hint::after {
+      content: '';
+      width: 4px;
+      height: 8px;
+      background: var(--muted);
+      border-radius: 2px;
+      margin-top: 8px;
+      animation: scroll-bounce 2s infinite;
+    }
+
+    @keyframes scroll-bounce {
+      0%, 100% { transform: translateY(0); opacity: 1; }
+      50% { transform: translateY(10px); opacity: 0.3; }
+    }
+
+    /* Terminal Preview */
+    .terminal-section {
+      padding: 80px max(32px, 8vw);
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .terminal-window {
+      background: #111;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+
+    .terminal-titlebar {
+      display: flex;
+      align-items: center;
+      padding: 12px 16px;
+      background: #1a1a1a;
+      border-bottom: 1px solid var(--border);
+      gap: 8px;
+    }
+
+    .terminal-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+    }
+
+    .terminal-dot.red { background: #ff5f57; }
+    .terminal-dot.yellow { background: #febc2e; }
+    .terminal-dot.green { background: #28c840; }
+
+    .terminal-title {
+      flex: 1;
+      text-align: center;
+      font-size: 12px;
+      color: var(--muted);
+      font-family: "SF Mono", "Fira Code", Menlo, monospace;
+    }
+
+    .terminal-body {
+      padding: 20px 24px;
+      font-family: "SF Mono", "Fira Code", "Cascadia Code", Menlo, monospace;
+      font-size: 14px;
+      line-height: 1.7;
+      color: #e0e0e0;
+      min-height: 280px;
+    }
+
+    .terminal-body .prompt {
+      color: var(--accent);
+    }
+
+    .terminal-body .cmd {
+      color: #e0e0e0;
+    }
+
+    .terminal-body .output {
+      color: #888;
+    }
+
+    .terminal-body .green { color: #3fb950; }
+    .terminal-body .yellow { color: #d29922; }
+    .terminal-body .dim { color: #555; }
+
+    /* Stats */
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      background: var(--border);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      margin-top: 48px;
+    }
+
+    .stat {
+      background: var(--surface);
+      padding: 32px 24px;
+      text-align: center;
+    }
+
+    .stat .number {
+      font-size: 2.4rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--text);
+    }
+
+    .stat .label {
+      font-size: 13px;
+      color: var(--muted);
+      margin-top: 4px;
+      font-weight: 500;
+    }
+
+    /* Ecosystem */
+    .ecosystem {
+      padding: 120px max(32px, 8vw) 80px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .ecosystem h2 {
+      font-size: clamp(2rem, 4vw, 3rem);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 16px;
+    }
+
+    .ecosystem .subtitle {
+      font-size: 1.15rem;
+      color: var(--muted);
+      margin-bottom: 48px;
+      max-width: 560px;
+      line-height: 1.6;
+    }
+
+    .repo-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 16px;
+    }
+
+    .repo-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 24px;
+      text-decoration: none;
+      color: var(--text);
+      transition: border-color 0.2s, transform 0.2s;
+    }
+
+    .repo-card:hover {
+      border-color: #333;
+      transform: translateY(-2px);
+    }
+
+    .repo-card h3 {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .repo-card h3 .tag {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: var(--accent-dim);
+      color: var(--accent);
+    }
+
+    .repo-card p {
+      font-size: 14px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .repo-card .detail {
+      font-size: 12px;
+      color: #444;
+      margin-top: 12px;
+      font-family: "SF Mono", Menlo, monospace;
+    }
+
+    /* Article CTA */
+    .article-cta {
+      padding: 120px max(32px, 8vw);
+      max-width: 1200px;
+      margin: 0 auto;
+      text-align: center;
+    }
+
+    .article-cta h2 {
+      font-size: clamp(2rem, 4vw, 3rem);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 16px;
+    }
+
+    .article-cta p {
+      font-size: 1.15rem;
+      color: var(--muted);
+      margin-bottom: 32px;
+      line-height: 1.6;
+    }
+
+    /* Footer */
+    footer {
+      padding: 48px max(32px, 8vw);
+      max-width: 1200px;
+      margin: 0 auto;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    footer .copy {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    footer .footer-links {
+      display: flex;
+      gap: 24px;
+    }
+
+    footer .footer-links a {
+      font-size: 13px;
+      color: var(--muted);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    footer .footer-links a:hover { color: var(--text); }
+
+    @media (max-width: 768px) {
+      nav { padding: 12px 20px; }
+      .hero { padding: 0 20px; }
+      .stats { grid-template-columns: repeat(2, 1fr); }
+      .terminal-section { padding: 40px 20px; }
+      .ecosystem { padding: 60px 20px 40px; }
+      .article-cta { padding: 60px 20px; }
+      footer { flex-direction: column; gap: 16px; text-align: center; }
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <a href="/" class="logo"><span>shiro</span>.computer</a>
+    <div class="links">
+      <a href="/article">Article</a>
+      <a href="https://shiro.computer" target="_blank">Try It</a>
+      <a href="https://github.com/williamsharkey/shiro" target="_blank">GitHub</a>
+    </div>
+  </nav>
+
+  <section class="hero">
+    <h1>A Unix in<br>your <em>browser tab</em>.</h1>
+    <p class="tagline">
+      152 commands. Git. npm. A TypeScript compiler. vi. All running in IndexedDB,
+      with zero backend. Open a tab and start building.
+    </p>
+    <div class="ctas">
+      <a href="https://shiro.computer" class="btn-primary" target="_blank">Open Shiro &rarr;</a>
+      <a href="/article" class="btn-secondary">Read the deep dive</a>
+    </div>
+    <div class="scroll-hint"></div>
+  </section>
+
+  <section class="terminal-section">
+    <div class="terminal-window">
+      <div class="terminal-titlebar">
+        <div class="terminal-dot red"></div>
+        <div class="terminal-dot yellow"></div>
+        <div class="terminal-dot green"></div>
+        <span class="terminal-title">shiro &mdash; ~/projects</span>
+      </div>
+      <div class="terminal-body" id="terminal-demo">
+        <div><span class="prompt">~ $</span> <span class="cmd">npm init -y && npm install leftpad</span></div>
+        <div class="output">Wrote to /home/user/package.json</div>
+        <div class="output">+ leftpad@0.0.1 (1 dependency)</div>
+        <div></div>
+        <div><span class="prompt">~ $</span> <span class="cmd">cat &gt; index.ts &lt;&lt;'EOF'</span></div>
+        <div class="dim">import leftpad from "leftpad";</div>
+        <div class="dim">console.log(leftpad("hello", 10));</div>
+        <div class="dim">EOF</div>
+        <div></div>
+        <div><span class="prompt">~ $</span> <span class="cmd">build index.ts -o bundle.js && node bundle.js</span></div>
+        <div class="output green">     hello</div>
+        <div></div>
+        <div><span class="prompt">~ $</span> <span class="cmd">git init && git add -A && git commit -m "first"</span></div>
+        <div class="output yellow">[main (root-commit) a3f1c2d] first</div>
+        <div class="output"> 3 files changed, 42 insertions(+)</div>
+        <div></div>
+        <div><span class="prompt">~ $</span> <span class="cmd" id="cursor-line">ls | wc -l<span id="cursor" style="display:inline-block;width:8px;height:16px;background:var(--accent);vertical-align:text-bottom;animation:blink 1s step-end infinite;margin-left:1px;"></span></span></div>
+        <div class="output">4</div>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat">
+        <div class="number">152</div>
+        <div class="label">Unix commands</div>
+      </div>
+      <div class="stat">
+        <div class="number">~1MB</div>
+        <div class="label">Bundle size</div>
+      </div>
+      <div class="stat">
+        <div class="number">0</div>
+        <div class="label">Backend servers</div>
+      </div>
+      <div class="stat">
+        <div class="number">7</div>
+        <div class="label">Repos in ecosystem</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="ecosystem">
+    <h2>The ecosystem</h2>
+    <p class="subtitle">
+      One person, seven repositories, a complete browser-native development platform
+      with AI agents that can self-modify their own environment.
+    </p>
+    <div class="repo-grid">
+      <a href="https://github.com/williamsharkey/shiro" class="repo-card" target="_blank">
+        <h3>shiro <span class="tag">core</span></h3>
+        <p>TypeScript browser OS with Vite build. 78+ built-in commands, npm, git, vi/nano, esbuild-wasm bundler.</p>
+        <div class="detail">TypeScript &middot; ~7,400 LOC</div>
+      </a>
+      <a href="https://github.com/williamsharkey/foam" class="repo-card" target="_blank">
+        <h3>foam</h3>
+        <p>Plain JS sister project. Zero build step &mdash; just open index.html. Proves the concept works without a bundler.</p>
+        <div class="detail">JavaScript &middot; ES modules</div>
+      </a>
+      <a href="https://github.com/williamsharkey/spirit" class="repo-card" target="_blank">
+        <h3>spirit <span class="tag">AI</span></h3>
+        <p>Claude Code agent library. OSProvider abstraction makes AI agents portable across browser OS environments.</p>
+        <div class="detail">TypeScript &middot; Multi-provider</div>
+      </a>
+      <a href="https://github.com/williamsharkey/fluffycoreutils" class="repo-card" target="_blank">
+        <h3>fluffycoreutils</h3>
+        <p>126 Unix commands in pure TypeScript. FluffyFS interface &mdash; 10 methods to abstract any filesystem.</p>
+        <div class="detail">TypeScript &middot; 0 dependencies</div>
+      </a>
+      <a href="https://github.com/williamsharkey/nimbus" class="repo-card" target="_blank">
+        <h3>nimbus</h3>
+        <p>Multi-agent orchestrator dashboard. Manages concurrent Claude Code workers with live browser previews.</p>
+        <div class="detail">TypeScript &middot; node-pty + xterm.js</div>
+      </a>
+      <a href="https://github.com/williamsharkey/windwalker" class="repo-card" target="_blank">
+        <h3>windwalker</h3>
+        <p>Puppeteer-based test suite. 10 test levels from boot to self-build. Ensures Foam and Shiro behave identically.</p>
+        <div class="detail">JavaScript &middot; Puppeteer</div>
+      </a>
+      <a href="https://github.com/williamsharkey/skyeyes" class="repo-card" target="_blank">
+        <h3>skyeyes</h3>
+        <p>Remote browser inspection bridge. Execute JS in any browser tab from the command line.</p>
+        <div class="detail">JavaScript &middot; WebSocket</div>
+      </a>
+    </div>
+  </section>
+
+  <section class="article-cta">
+    <h2>How browsers became<br>powerful enough</h2>
+    <p>
+      WebAssembly, IndexedDB, ES modules. The deep technical story of building<br>
+      a self-compiling Unix that runs entirely in a browser tab.
+    </p>
+    <a href="/article" class="btn-primary">Read the article &rarr;</a>
+  </section>
+
+  <footer>
+    <span class="copy">William Sharkey &middot; 2026</span>
+    <div class="footer-links">
+      <a href="https://williamsharkey.com">williamsharkey.com</a>
+      <a href="https://github.com/williamsharkey">GitHub</a>
+    </div>
+  </footer>
+
+  <style>
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+  </style>
+</body>
+</html>

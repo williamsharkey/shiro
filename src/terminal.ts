@@ -17,6 +17,7 @@ export class ShiroTerminal {
   private userInputCursorPos = 0;
   private rawModeCallback: ((key: string) => void) | null = null;
   private iframeContainer: HTMLElement | null = null;
+  private displayedRows = 1; // track how many terminal rows the current prompt+input spans
 
   // Reverse history search state (Ctrl+R)
   private reverseSearchMode = false;
@@ -189,6 +190,7 @@ export class ShiroTerminal {
     const displayCwd = cwd.startsWith(home) ? '~' + cwd.slice(home.length) : cwd;
     const user = this.shell.env['USER'] || 'user';
     this.term.write(`\x1b[32m${user}@shiro\x1b[0m:\x1b[34m${displayCwd}\x1b[0m$ `);
+    this.displayedRows = 1;
   }
 
   private async handleInput(data: string) {
@@ -356,6 +358,8 @@ export class ShiroTerminal {
         this.term.write('\x1b[2J\x1b[H');
         this.showPrompt();
         this.term.write(this.lineBuffer);
+        const totalChars = this.promptVisualLength() + this.lineBuffer.length;
+        this.displayedRows = Math.max(1, Math.ceil(totalChars / this.term.cols));
         continue;
       }
 
@@ -420,6 +424,9 @@ export class ShiroTerminal {
         // Optimization: if inserting at end, just write the character
         if (insertingAtEnd) {
           this.term.write(ch);
+          // Update displayed row count when content may have wrapped to a new row
+          const totalChars = this.promptVisualLength() + this.lineBuffer.length;
+          this.displayedRows = Math.max(1, Math.ceil(totalChars / this.term.cols));
         } else {
           // Otherwise redraw the rest of the line
           this.redrawLine();
@@ -483,9 +490,23 @@ export class ShiroTerminal {
     }
   }
 
+  private promptVisualLength(): number {
+    const user = this.shell.env['USER'] || 'user';
+    const home = this.shell.env['HOME'] || '/home/user';
+    const displayCwd = this.shell.cwd.startsWith(home) ? '~' + this.shell.cwd.slice(home.length) : this.shell.cwd;
+    // "user@shiro:cwd$ "
+    return user.length + '@shiro:'.length + displayCwd.length + '$ '.length;
+  }
+
   private redrawLine() {
-    // Build the entire update as a single string to minimize rendering flicker
-    let output = '\r\x1b[K'; // Clear line
+    const cols = this.term.cols;
+
+    // Move cursor to the start of the first row of the old content
+    let output = '';
+    if (this.displayedRows > 1) {
+      output += `\x1b[${this.displayedRows - 1}A`; // move up
+    }
+    output += '\r\x1b[J'; // carriage return + erase from cursor to end of screen
 
     // Add prompt
     const user = this.shell.env['USER'] || 'user';
@@ -495,6 +516,10 @@ export class ShiroTerminal {
 
     // Add input buffer
     output += this.lineBuffer;
+
+    // Calculate how many rows the new content occupies
+    const totalChars = this.promptVisualLength() + this.lineBuffer.length;
+    this.displayedRows = Math.max(1, Math.ceil(totalChars / cols));
 
     // Move cursor to correct position
     const diff = this.lineBuffer.length - this.cursorPos;
