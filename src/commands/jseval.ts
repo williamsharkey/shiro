@@ -1899,22 +1899,93 @@ export const nodeCmd: Command = {
 
             if (fileCache.has(pkgPath)) {
               if (subpath) {
-                // Subpath import - look for the file directly
-                const subpathFull = `${pkgDir}/${subpath}`;
-                if (fileCache.has(subpathFull + '.js')) {
-                  resolved = subpathFull + '.js';
-                } else if (fileCache.has(subpathFull)) {
-                  resolved = subpathFull;
-                } else if (fileCache.has(subpathFull + '/index.js')) {
-                  resolved = subpathFull + '/index.js';
-                } else {
-                  resolved = subpathFull + '.js'; // Will fail with helpful error
-                }
-              } else {
-                // Main package import - use package.json main field
+                // Subpath import - check exports field first, then look for file directly
+                let subpathResolved: string | undefined;
                 try {
                   const pkg = JSON.parse(fileCache.get(pkgPath)!);
-                  let main = pkg.main || 'index.js';
+                  if (pkg.exports) {
+                    const subpathKey = `./${subpath}`;
+                    const exp = pkg.exports[subpathKey];
+                    if (exp) {
+                      const target = typeof exp === 'string' ? exp
+                        : (exp.import || exp.require || exp.default);
+                      if (target) {
+                        subpathResolved = `${pkgDir}/${target.replace(/^\.\//, '')}`;
+                      }
+                    } else {
+                      // Try wildcard exports: "./*" -> "./dist/*"
+                      for (const [key, value] of Object.entries(pkg.exports)) {
+                        if (key.includes('*')) {
+                          const pattern = key.replace('./', '').replace('*', '(.*)');
+                          const regex = new RegExp(`^${pattern}$`);
+                          const match = subpath.match(regex);
+                          if (match) {
+                            const target = typeof value === 'string' ? value
+                              : ((value as any).import || (value as any).require || (value as any).default);
+                            if (target) {
+                              subpathResolved = `${pkgDir}/${target.replace(/^\.\//, '').replace('*', match[1])}`;
+                              break;
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                } catch { /* ignore parse errors */ }
+
+                if (subpathResolved && fileCache.has(subpathResolved)) {
+                  resolved = subpathResolved;
+                } else {
+                  // Fall back to direct file lookup
+                  const subpathFull = `${pkgDir}/${subpath}`;
+                  if (fileCache.has(subpathFull + '.js')) {
+                    resolved = subpathFull + '.js';
+                  } else if (fileCache.has(subpathFull)) {
+                    resolved = subpathFull;
+                  } else if (fileCache.has(subpathFull + '/index.js')) {
+                    resolved = subpathFull + '/index.js';
+                  } else {
+                    resolved = subpathResolved || subpathFull + '.js'; // Will fail with helpful error
+                  }
+                }
+              } else {
+                // Main package import - use package.json exports or main field
+                try {
+                  const pkg = JSON.parse(fileCache.get(pkgPath)!);
+                  let main: string | undefined;
+
+                  // Modern packages use "exports" field
+                  if (pkg.exports) {
+                    const exp = pkg.exports;
+                    if (typeof exp === 'string') {
+                      main = exp;
+                    } else if (exp['.']) {
+                      const dotExport = exp['.'];
+                      if (typeof dotExport === 'string') {
+                        main = dotExport;
+                      } else {
+                        // Conditional exports: prefer import > require > default > node
+                        main = dotExport.import || dotExport.require || dotExport.default || dotExport.node;
+                        // Handle nested conditional (e.g., { default: { import: "..." } })
+                        if (typeof main === 'object') {
+                          main = (main as any).import || (main as any).require || (main as any).default;
+                        }
+                      }
+                    } else if (exp.import || exp.require || exp.default) {
+                      main = exp.import || exp.require || exp.default;
+                    }
+                  }
+
+                  // Fall back to main field or index.js
+                  if (!main) {
+                    main = pkg.main || pkg.module || 'index.js';
+                  }
+
+                  // Ensure main is a string
+                  if (typeof main !== 'string') {
+                    main = 'index.js';
+                  }
+
                   main = main.replace(/^\.\//, '');
                   // Don't add .js if already has valid extension
                   if (!/\.(js|cjs|mjs|json)$/.test(main)) main += '.js';
