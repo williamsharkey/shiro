@@ -43,7 +43,9 @@ src/
     ├── build.ts          # esbuild-wasm bundler for TypeScript/JavaScript
     ├── vi.ts             # minimal vi-like modal text editor
     ├── spirit.ts         # Spirit AI agent (interim Anthropic API loop)
-    └── index.ts          # Command/CommandContext interfaces, CommandRegistry class
+    ├── remote.ts         # WebRTC remote connection for Claude Code MCP
+    ├── seed.ts           # Export state as paste-able snippet (normal or blob)
+    └── hud.ts            # HUD redraw command
 └── utils/
     ├── tar-utils.ts      # gzip decompression and tar extraction
     └── semver-utils.ts   # semantic versioning and range resolution
@@ -129,6 +131,51 @@ The shell supports:
 - **Windwalker** (williamsharkey/windwalker): Test automation. Access via `window.__shiro` global
 - **Nimbus** (williamsharkey/nimbus): Multi-repo orchestrator with live dashboard preview and skyeyes integration
 - **Skyeyes** (williamsharkey/skyeyes): Browser-side bridge for remote JS execution and testing
+
+## Remote Connection (shiro-mcp)
+
+Shiro can be controlled remotely from Claude Code via WebRTC peer-to-peer connection.
+
+**In Shiro browser:**
+```bash
+remote start    # Generate connection code, copy to clipboard
+remote stop     # End remote session
+remote status   # Check connection status
+```
+
+**In Claude Code:** Add to `~/.claude.json`:
+```json
+{
+  "mcpServers": {
+    "shiro": {
+      "command": "shiro-mcp"
+    }
+  }
+}
+```
+
+Then use tools: `shiro:connect`, `shiro:exec`, `shiro:read`, `shiro:write`, `shiro:list`, `shiro:eval`
+
+**Architecture:**
+- Signaling server at `remote.shiro.computer` (Cloudflare Worker + KV)
+- WebRTC DataChannel for direct P2P after signaling
+- Connection codes have ~46 bits entropy, expire in 5 minutes
+
+**Key files:**
+- `src/commands/remote.ts` — remote command, WebRTC setup, message handlers
+- `remote-worker/` — Cloudflare Worker signaling server
+- `shirocode/shiro-mcp/` — MCP server package for Claude Code
+
+## Seed Command
+
+Export Shiro state as a paste-able snippet:
+```bash
+seed            # Normal seed (iframe loads from shiro.computer)
+seed blob       # Self-contained blob URL (works on CSP-restricted sites like X)
+seed yolo       # Target yolo.shiro.computer subdomain
+```
+
+The blob mode inlines all JS/CSS, gzips (~70% reduction), and creates a blob URL at runtime.
 
 ## Skyeyes MCP Tools
 
