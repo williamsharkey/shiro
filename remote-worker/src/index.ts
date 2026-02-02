@@ -81,13 +81,11 @@ export default {
           return errorResponse('Invalid code format');
         }
 
-        // Check if code already exists
-        const existing = await env.REMOTE_KV.get(`offer:${code}`);
-        if (existing) {
-          return errorResponse('Code already in use', 409);
-        }
+        // Allow re-registration with same code (for reconnect after page reload)
+        // Delete any existing answer so MCP client knows to reconnect
+        await env.REMOTE_KV.delete(`answer:${code}`);
 
-        // Store the offer with 5-minute TTL
+        // Store the offer with 5-minute TTL (TTL is for initial connection only)
         const offerData: Offer = {
           offer,
           candidates: candidates || [],

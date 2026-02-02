@@ -1,5 +1,8 @@
 import { Command, CommandContext } from './index';
 
+// LocalStorage key for persisting remote session code across page reloads
+const REMOTE_CODE_KEY = 'shiro-remote-code';
+
 // Word lists for generating memorable codes
 // ~200 adjectives × ~200 nouns × 64^4 syllables = ~46 bits of entropy
 const ADJECTIVES = [
@@ -283,6 +286,9 @@ async function startRemote(ctx: CommandContext): Promise<number> {
 
     session.status = 'waiting';
 
+    // Persist code for auto-reconnect after page reload
+    localStorage.setItem(REMOTE_CODE_KEY, code);
+
     // Report clipboard status (copy happened earlier, before async work)
     if (clipboardCopied) {
       ctx.stdout += `\x1b[32mConnection code copied to clipboard!\x1b[0m\n`;
@@ -379,6 +385,10 @@ function stopRemote(ctx: CommandContext): number {
   }
 
   cleanupSession();
+
+  // Clear persisted code so it won't auto-reconnect
+  localStorage.removeItem(REMOTE_CODE_KEY);
+
   ctx.stdout += 'Remote session stopped.\n';
 
   // Clear the remote code from HUD (if visible)
@@ -447,3 +457,126 @@ export const remoteCmd: Command = {
     }
   },
 };
+
+/**
+ * Check for persisted remote code and return it if present.
+ * Used by main.ts to auto-reconnect after page reload.
+ */
+export function getPersistedRemoteCode(): string | null {
+  return localStorage.getItem(REMOTE_CODE_KEY);
+}
+
+/**
+ * Start a remote session with a specific code (for auto-reconnect).
+ * Silently starts without command-line output.
+ */
+export async function startRemoteWithCode(code: string, terminal?: any): Promise<boolean> {
+  if (window.__shiroRemoteSession) {
+    console.log('[remote] Session already active');
+    return true;
+  }
+
+  const displayCode = code.split('-').slice(0, 2).join('-');
+  console.log(`[remote] Auto-reconnecting with code: ${displayCode}`);
+
+  // Create peer connection
+  const pc = new RTCPeerConnection({
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
+    ],
+  });
+
+  const session: RemoteSession = {
+    code,
+    displayCode,
+    pc,
+    dc: null,
+    status: 'connecting',
+  };
+
+  window.__shiroRemoteSession = session;
+
+  // Create data channel
+  const dc = pc.createDataChannel('shiro-remote', { ordered: true });
+  session.dc = dc;
+
+  dc.onopen = () => {
+    session.status = 'connected';
+    console.log('[remote] Peer connected');
+  };
+
+  dc.onclose = () => {
+    console.log('[remote] Peer disconnected');
+    cleanupSession();
+  };
+
+  dc.onmessage = async (event) => {
+    const response = await handleRemoteCommand(session, event.data);
+    if (dc.readyState === 'open') {
+      dc.send(response);
+    }
+  };
+
+  // Gather ICE candidates
+  const iceCandidates: RTCIceCandidate[] = [];
+  pc.onicecandidate = (event) => {
+    if (event.candidate) {
+      iceCandidates.push(event.candidate);
+    }
+  };
+
+  // Create offer
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+
+  // Wait for ICE gathering
+  await new Promise<void>((resolve) => {
+    if (pc.iceGatheringState === 'complete') {
+      resolve();
+    } else {
+      pc.onicegatheringstatechange = () => {
+        if (pc.iceGatheringState === 'complete') {
+          resolve();
+        }
+      };
+      setTimeout(resolve, 5000);
+    }
+  });
+
+  // Register with signaling server
+  try {
+    const res = await fetch(`${SIGNALING_URL}/offer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code,
+        offer: pc.localDescription,
+        candidates: iceCandidates,
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Signaling server error: ${res.status}`);
+    }
+
+    session.status = 'waiting';
+
+    // Update HUD if terminal available
+    if (terminal) {
+      terminal.updateHudRemoteCode(displayCode);
+    }
+
+    // Start polling for answer
+    pollForAnswer(session);
+
+    console.log('[remote] Auto-reconnect successful, waiting for peer');
+    return true;
+  } catch (err: any) {
+    console.error(`[remote] Auto-reconnect failed: ${err.message}`);
+    // Clear persisted code on failure
+    localStorage.removeItem(REMOTE_CODE_KEY);
+    cleanupSession();
+    return false;
+  }
+}

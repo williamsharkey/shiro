@@ -79,7 +79,7 @@ import { serveCmd, serversCmd } from './commands/serve';
 import { imageCmd } from './commands/image';
 import { clipReportCmd } from './commands/clip-report';
 import { seedCmd } from './commands/seed';
-import { remoteCmd } from './commands/remote';
+import { remoteCmd, getPersistedRemoteCode, startRemoteWithCode } from './commands/remote';
 import { hudCmd } from './commands/hud';
 import { iframeServer } from './iframe-server';
 import { allCommands } from '../fluffycoreutils/src/index';
@@ -264,6 +264,12 @@ async function main() {
   });
 
   await terminal.start();
+
+  // Auto-reconnect remote session if one was active before page reload
+  const persistedCode = getPersistedRemoteCode();
+  if (persistedCode) {
+    startRemoteWithCode(persistedCode, terminal);
+  }
 }
 
 main().catch(console.error);
