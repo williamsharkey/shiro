@@ -195,33 +195,15 @@
       <h2>Quick Start</h2>
 
       <div class="step">
-        <p><span class="step-number">1</span> <strong>In Shiro (browser)</strong> &mdash; Start a remote session:</p>
-        <pre><code>remote start</code></pre>
-        <p>This generates a connection code like <code>fluffy-cloud-shimutako</code> and copies it to your clipboard.</p>
+        <p><span class="step-number">1</span> <strong>Install</strong> &mdash; Run this once to add Shiro to Claude Code:</p>
+        <pre><code>npx shiro-mcp --install</code></pre>
+        <p>Then restart Claude Code.</p>
       </div>
 
       <div class="step">
-        <p><span class="step-number">2</span> <strong>On your computer</strong> &mdash; Add the MCP server to Claude Code:</p>
-        <pre><code># Add to ~/.claude/claude_desktop_config.json
-{
-  "mcpServers": {
-    "shiro": {
-      "command": "npx",
-      "args": ["-y", "shiro-mcp"]
-    }
-  }
-}</code></pre>
-      </div>
-
-      <div class="step">
-        <p><span class="step-number">3</span> <strong>In Claude Code</strong> &mdash; Connect using the code:</p>
-        <pre><code>Use the shiro:connect tool with code "fluffy-cloud-shimutako"</code></pre>
-      </div>
-
-      <div class="step">
-        <p><span class="step-number">4</span> <strong>Done!</strong> Now you can use Shiro tools:</p>
-        <pre><code>Use shiro:exec to run "ls -la"
-Use shiro:read to read "/home/user/.bashrc"</code></pre>
+        <p><span class="step-number">2</span> <strong>Connect</strong> &mdash; In <a href="/">Shiro</a>, run <code>remote start</code> to get a connection code, then tell Claude:</p>
+        <pre><code>"Connect to Shiro with code fluffy-cloud-shimutako"</code></pre>
+        <p>Done! Claude can now execute commands, read/write files, and run JavaScript in your browser.</p>
       </div>
     </section>
 
@@ -289,21 +271,23 @@ Use shiro:read to read "/home/user/.bashrc"</code></pre>
     </section>
 
     <section>
-      <h2>Manual Installation</h2>
-      <p>If you prefer to install manually:</p>
-      <pre><code># Install globally
-npm install -g shiro-mcp
-
-# Or clone and run from source
-git clone https://github.com/williamsharkey/shirocode
-cd shirocode/shiro-mcp
-npm install && npm run build</code></pre>
+      <h2>Manual Configuration</h2>
+      <p>If <code>npx shiro-mcp --install</code> doesn't work, add this to your Claude config manually:</p>
+      <pre><code>// ~/.claude.json (Claude Code CLI)
+// or ~/Library/Application Support/Claude/claude_desktop_config.json (Desktop)
+{
+  "mcpServers": {
+    "shiro": {
+      "command": "npx",
+      "args": ["-y", "shiro-mcp"]
+    }
+  }
+}</code></pre>
 
       <div class="note">
-        <div class="note-title">Note</div>
+        <div class="note-title">Requirements</div>
         <p>
-          The MCP server uses <code>node-datachannel</code> for WebRTC support in Node.js.
-          This requires Node.js 18+ and should install automatically.
+          Node.js 18+ required. The <code>node-datachannel</code> package provides WebRTC support.
         </p>
       </div>
     </section>
