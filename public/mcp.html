@@ -215,13 +215,13 @@
 
       <div class="step">
         <p><span class="step-number">3</span> <strong>In Claude Code</strong> &mdash; Connect using the code:</p>
-        <pre><code>Use the connect_shiro tool with code "fluffy-cloud-shimutako"</code></pre>
+        <pre><code>Use the shiro:connect tool with code "fluffy-cloud-shimutako"</code></pre>
       </div>
 
       <div class="step">
         <p><span class="step-number">4</span> <strong>Done!</strong> Now you can use Shiro tools:</p>
-        <pre><code>Use shiro_exec to run "ls -la"
-Use shiro_read to read "/home/user/.bashrc"</code></pre>
+        <pre><code>Use shiro:exec to run "ls -la"
+Use shiro:read to read "/home/user/.bashrc"</code></pre>
       </div>
     </section>
 
@@ -231,23 +231,27 @@ Use shiro_read to read "/home/user/.bashrc"</code></pre>
       <div class="tools-list">
         <div class="tool">
           <div class="tool-name">connect</div>
-          <div class="tool-desc">Connect to a Shiro instance using a connection code</div>
+          <div class="tool-desc">Connect to a Shiro instance using a connection code from <code>remote start</code></div>
+        </div>
+        <div class="tool">
+          <div class="tool-name">reconnect</div>
+          <div class="tool-desc">Reconnect after browser page reload (uses saved code, browser must run <code>remote start</code> again)</div>
         </div>
         <div class="tool">
           <div class="tool-name">disconnect</div>
-          <div class="tool-desc">Disconnect from the current Shiro instance</div>
+          <div class="tool-desc">Disconnect and clear the saved connection code</div>
         </div>
         <div class="tool">
           <div class="tool-name">status</div>
-          <div class="tool-desc">Check the current connection status</div>
+          <div class="tool-desc">Check connection status: connected, code, status</div>
         </div>
         <div class="tool">
           <div class="tool-name">exec</div>
-          <div class="tool-desc">Execute a shell command (ls, cat, git, npm, etc.)</div>
+          <div class="tool-desc">Execute shell commands &mdash; 140+ commands including hc, serve, image, npm, node</div>
         </div>
         <div class="tool">
           <div class="tool-name">read</div>
-          <div class="tool-desc">Read a file from the virtual filesystem</div>
+          <div class="tool-desc">Read a file from /home/user (persistent) or /tmp</div>
         </div>
         <div class="tool">
           <div class="tool-name">write</div>
@@ -259,7 +263,7 @@ Use shiro_read to read "/home/user/.bashrc"</code></pre>
         </div>
         <div class="tool">
           <div class="tool-name">eval</div>
-          <div class="tool-desc">Execute JavaScript in the browser context</div>
+          <div class="tool-desc">Execute JavaScript in browser (use JSON.stringify for objects)</div>
         </div>
       </div>
     </section>
@@ -292,15 +296,14 @@ npm install -g shiro-mcp
 
 # Or clone and run from source
 git clone https://github.com/williamsharkey/shirocode
-cd shirocode
-npm install
-npm run mcp:remote</code></pre>
+cd shirocode/shiro-mcp
+npm install && npm run build</code></pre>
 
       <div class="note">
         <div class="note-title">Note</div>
         <p>
-          The MCP server requires the <code>wrtc</code> package for WebRTC support in Node.js.
-          This is included as a dependency and should install automatically.
+          The MCP server uses <code>node-datachannel</code> for WebRTC support in Node.js.
+          This requires Node.js 18+ and should install automatically.
         </p>
       </div>
     </section>
@@ -315,6 +318,44 @@ clear           # Refresh the banner to show/hide connection code</code></pre>
     </section>
 
     <section>
+      <h2>For AI Assistants</h2>
+      <p>This section helps AI assistants (Claude, etc.) use Shiro MCP effectively.</p>
+
+      <h3>Shell Commands (exec)</h3>
+      <p>Shiro provides 140+ commands. Run <code>help</code> for full list. Key Shiro-specific commands:</p>
+      <pre><code>hc              # Hypercompact DOM navigation (see below)
+serve &lt;dir&gt;     # Start virtual HTTP server
+servers         # List active servers
+serve stop &lt;p&gt;  # Stop server on port
+image save/load # Filesystem snapshots
+spirit          # AI coding agent (requires API key)
+npm install     # Install npm packages
+node file.js    # Run JavaScript files</code></pre>
+
+      <h3>Hypercompact (hc) &mdash; Token-Efficient DOM Navigation</h3>
+      <pre><code>hc live           # Attach to live page DOM
+hc look           # List interactive elements (@0, @1, ...)
+hc @N             # Click element N
+hc q &lt;selector&gt;   # Query elements (CSS selector)
+hc t100           # Get text content (100 char limit)
+hc h50            # Get HTML (50 char limit)
+hc a              # Show attributes
+hc close          # Detach from DOM</code></pre>
+
+      <h3>eval Tool &mdash; Important</h3>
+      <p>Objects return <code>"[object Object]"</code>. Always wrap in <code>JSON.stringify()</code>:</p>
+      <pre><code>// Wrong - returns "[object Object]"
+{ width: innerWidth }
+
+// Correct - returns actual values
+JSON.stringify({ width: innerWidth })</code></pre>
+
+      <h3>Filesystem Layout</h3>
+      <pre><code>/home/user    # User files (persistent, IndexedDB)
+/tmp          # Temporary files</code></pre>
+    </section>
+
+    <section>
       <h2>Troubleshooting</h2>
 
       <h3>Connection fails immediately</h3>
@@ -323,16 +364,16 @@ clear           # Refresh the banner to show/hide connection code</code></pre>
       <h3>WebRTC connection times out</h3>
       <p>Some corporate networks block WebRTC. Try from a different network or use a VPN.</p>
 
-      <h3>"wrtc not installed" error</h3>
-      <p>The wrtc package requires native compilation. On some systems you may need build tools:</p>
+      <h3>Connection lost after browser reload</h3>
+      <p>When the Shiro browser page reloads, run <code>remote start</code> in Shiro again, then use the <code>reconnect</code> tool (it remembers the last code).</p>
+
+      <h3>node-datachannel build errors</h3>
+      <p>The package requires Node.js 18+ and a C++ compiler. On most systems it installs pre-built binaries. If compilation is needed:</p>
       <pre><code># macOS
 xcode-select --install
 
 # Ubuntu/Debian
-sudo apt install build-essential python3
-
-# Then reinstall
-npm install wrtc</code></pre>
+sudo apt install build-essential cmake</code></pre>
     </section>
 
     <footer>
