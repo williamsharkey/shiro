@@ -82,6 +82,8 @@ import { seedCmd } from './commands/seed';
 import { remoteCmd, getPersistedRemoteCode, startRemoteWithCode } from './commands/remote';
 import { hudCmd } from './commands/hud';
 import { faviconCmd } from './commands/favicon';
+import { historyCmd } from './commands/history';
+import { consoleCmd } from './commands/console';
 import { iframeServer } from './iframe-server';
 import { allCommands } from '../fluffycoreutils/src/index';
 import { wrapFluffyCommand } from './fluffy-adapter';
@@ -218,6 +220,8 @@ async function main() {
   registerCommand(commands, remoteCmd, 'src/commands/remote.ts');
   registerCommand(commands, hudCmd, 'src/commands/hud.ts');
   registerCommand(commands, faviconCmd, 'src/commands/favicon.ts');
+  registerCommand(commands, historyCmd, 'src/commands/history.ts');
+  registerCommand(commands, consoleCmd, 'src/commands/console.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {

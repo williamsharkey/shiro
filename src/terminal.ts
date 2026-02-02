@@ -232,6 +232,7 @@ export class ShiroTerminal {
     // Build URLs preserving subdomain
     const baseUrl = `https://${hostname}`;
     const aboutUrl = `${baseUrl}/about`;
+    const mcpUrl = `${baseUrl}/mcp.html`;
     const githubUrl = 'https://github.com/williamsharkey/shiro';
     const discordUrl = 'https://discord.gg/Wkw4SZ2V';
 
@@ -265,8 +266,8 @@ export class ShiroTerminal {
     this.term.writeln('\x1b[36m║\x1b[0m                \x1b[92mcloud operating system\x1b[0m   \x1b[36m║\x1b[0m');
     // Row 3: Empty
     this.term.writeln('\x1b[36m║\x1b[0m                                         \x1b[36m║\x1b[0m');
-    // Row 4: help / rec
-    this.term.writeln(`\x1b[36m║\x1b[0m  \x1b[33mhelp\x1b[0m                             ${link('shiro://rec', 'rec', '90')}   \x1b[36m║\x1b[0m`);
+    // Row 4: help / mcp
+    this.term.writeln(`\x1b[36m║\x1b[0m  \x1b[33mhelp\x1b[0m                             ${link(mcpUrl, 'mcp', '94')}   \x1b[36m║\x1b[0m`);
     // Row 5: spirit / about
     this.term.writeln(`\x1b[36m║\x1b[0m  \x1b[33mspirit\x1b[0m                         ${link(aboutUrl, 'about', '94')}   \x1b[36m║\x1b[0m`);
     // Row 6: upload / github

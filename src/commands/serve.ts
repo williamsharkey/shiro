@@ -3,6 +3,7 @@
 
 import { Command, CommandContext } from './index';
 import { iframeServer, createStaticServer, VirtualRequest, VirtualResponse } from '../iframe-server';
+import { createServerWindow, findServerWindow, ServerWindow } from '../server-window';
 
 // Track active servers and their cleanup functions
 const activeServers = new Map<number, {
@@ -53,31 +54,11 @@ async function serveStatic(ctx: CommandContext, port: number, directory: string,
 
   ctx.stdout = `Serving ${directory} on port ${port}\n`;
 
-  // Optionally open an iframe
+  // Optionally open in windowed iframe
   if (openIframe) {
-    // Get the terminal's iframe container (if available), fall back to document.body
-    const terminal = (ctx.shell as any).terminal;
-    let container: HTMLElement;
-    if (terminal && typeof terminal.getIframeContainer === 'function') {
-      container = terminal.getIframeContainer();
-    } else {
-      container = document.body;
-    }
-    try {
-      const iframe = await iframeServer.createIframe(port, container, {
-        height: '400px',
-        style: {
-          position: 'fixed',
-          bottom: '0',
-          left: '0',
-          right: '0',
-          zIndex: '1000',
-          borderTop: '2px solid #3d3d5c',
-        },
-      });
-      ctx.stdout += `Iframe opened (${iframe.style.width} x ${iframe.style.height})\n`;
-    } catch (err) {
-      ctx.stdout += `Note: Could not open iframe: ${err instanceof Error ? err.message : 'unknown error'}\n`;
+    const openResult = await openInIframe(ctx, port, '/');
+    if (openResult !== 0) {
+      ctx.stdout += `Note: Could not open window\n`;
     }
   }
 
@@ -88,7 +69,7 @@ async function serveStatic(ctx: CommandContext, port: number, directory: string,
 }
 
 /**
- * Open a server's content in an iframe
+ * Open a server's content in a windowed iframe (macOS-style)
  */
 async function openInIframe(ctx: CommandContext, port: number, path: string = '/'): Promise<number> {
   if (!iframeServer.isPortInUse(port)) {
@@ -96,36 +77,200 @@ async function openInIframe(ctx: CommandContext, port: number, path: string = '/
     return 1;
   }
 
-  // Get terminal's iframe container, or fall back to document.body
-  const terminal = (ctx.shell as any).terminal;
-  let container: HTMLElement;
-  if (terminal && typeof terminal.getIframeContainer === 'function') {
-    container = terminal.getIframeContainer();
-  } else {
-    // Fall back to document.body
-    container = document.body;
+  // Check if window already exists for this port
+  const existing = findServerWindow(port);
+  if (existing) {
+    // Update the existing window's iframe
+    try {
+      await iframeServer.navigateIframe(port, path);
+      ctx.stdout = `Navigated to ${path}\n`;
+      return 0;
+    } catch {
+      // Window exists but iframe not tracked - close and reopen
+      existing.close();
+    }
   }
 
+  // Get directory info for title
+  const serverInfo = activeServers.get(port);
+  const directory = serverInfo?.directory;
+
   try {
-    const iframe = await iframeServer.createIframe(port, container, {
+    // Create the windowed UI
+    const serverWindow = createServerWindow({
+      port,
       path,
-      height: '400px',
-      style: {
-        position: 'fixed',
-        bottom: '0',
-        left: '0',
-        right: '0',
-        zIndex: '1000',
-        borderTop: '2px solid #3d3d5c',
-      },
+      directory,
+      width: '36em',
+      height: '24em',
+      container: document.body,
     });
-    ctx.stdout = `Opened port ${port} in iframe\n`;
+
+    // Fetch content and set up iframe
+    const response = await iframeServer.fetch(port, path);
+    let html: string;
+
+    if (typeof response.body === 'string') {
+      html = response.body;
+    } else if (response.body instanceof Uint8Array) {
+      html = new TextDecoder().decode(response.body);
+    } else if (response.body && typeof response.body === 'object') {
+      html = `<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>JSON</title></head>
+<body><pre>${JSON.stringify(response.body, null, 2)}</pre></body>
+</html>`;
+    } else {
+      html = '<!DOCTYPE html><html><body></body></html>';
+    }
+
+    // Inject resource interceptor and navigation scripts
+    html = injectIframeScripts(html, port);
+
+    // Set iframe content
+    serverWindow.iframe.srcdoc = html;
+
+    // Track the iframe in iframeServer for navigation
+    const server = iframeServer.getServer(port);
+    if (server) {
+      (server as any).iframe = serverWindow.iframe;
+    }
+
+    // Set up message listener for navigation
+    const messageHandler = async (event: MessageEvent) => {
+      if (event.source !== serverWindow.iframe.contentWindow) return;
+
+      if (event.data?.type === 'virtual-navigate' && event.data?.port === port) {
+        // Navigate and update window
+        const newPath = event.data.path;
+        const navResponse = await iframeServer.fetch(port, newPath);
+        let navHtml = typeof navResponse.body === 'string'
+          ? navResponse.body
+          : navResponse.body instanceof Uint8Array
+            ? new TextDecoder().decode(navResponse.body)
+            : '';
+        navHtml = injectIframeScripts(navHtml, port);
+        serverWindow.iframe.srcdoc = navHtml;
+        serverWindow.iframe.setAttribute('data-virtual-path', newPath);
+        serverWindow.setTitle(directory ? `${directory}:${port}${newPath}` : `localhost:${port}${newPath}`);
+      }
+    };
+
+    window.addEventListener('message', messageHandler);
+
+    // Store cleanup handler
+    const origClose = serverWindow.close;
+    serverWindow.close = () => {
+      window.removeEventListener('message', messageHandler);
+      origClose();
+    };
+
+    ctx.stdout = `Opened port ${port} in window\n`;
     ctx.stdout += `Path: ${path}\n`;
     return 0;
   } catch (err) {
-    ctx.stderr = `serve: failed to open iframe: ${err instanceof Error ? err.message : 'unknown error'}\n`;
+    ctx.stderr = `serve: failed to open window: ${err instanceof Error ? err.message : 'unknown error'}\n`;
     return 1;
   }
+}
+
+/**
+ * Inject resource interceptor and navigation scripts into HTML
+ */
+function injectIframeScripts(html: string, port: number): string {
+  const resourceInterceptorScript = `
+<script>
+(function() {
+  var PORT = ${port};
+  var pendingResources = new Map();
+  var resourceId = 0;
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'vfs-resource-response' && e.data.id) {
+      var pending = pendingResources.get(e.data.id);
+      if (pending) {
+        pendingResources.delete(e.data.id);
+        pending.resolve(e.data);
+      }
+    }
+  });
+
+  function fetchFromParent(url, options) {
+    return new Promise(function(resolve, reject) {
+      var id = 'res_' + (++resourceId);
+      pendingResources.set(id, { resolve: resolve, reject: reject });
+      window.parent.postMessage({
+        type: 'vfs-fetch',
+        id: id,
+        port: PORT,
+        url: url,
+        method: (options && options.method) || 'GET',
+        headers: options && options.headers,
+        body: options && options.body
+      }, '*');
+      setTimeout(function() {
+        if (pendingResources.has(id)) {
+          pendingResources.delete(id);
+          reject(new Error('Resource fetch timeout: ' + url));
+        }
+      }, 30000);
+    });
+  }
+
+  var originalFetch = window.fetch;
+  window.fetch = function(url, options) {
+    var urlStr = typeof url === 'string' ? url : url.toString();
+    if (urlStr.startsWith('/') || urlStr.startsWith('./') || urlStr.startsWith('../')) {
+      return fetchFromParent(urlStr, options).then(function(data) {
+        return new Response(data.body, {
+          status: data.status || 200,
+          headers: data.headers || {}
+        });
+      });
+    }
+    return originalFetch.apply(this, arguments);
+  };
+})();
+</script>`;
+
+  const navigationScript = `
+<script>
+(function() {
+  document.addEventListener('click', function(e) {
+    const link = e.target.closest('a[href]');
+    if (link && link.href) {
+      const href = link.getAttribute('href');
+      if (href && !href.startsWith('http://') && !href.startsWith('https://') && !href.startsWith('//')) {
+        e.preventDefault();
+        window.parent.postMessage({
+          type: 'virtual-navigate',
+          port: ${port},
+          path: href
+        }, '*');
+      }
+    }
+  });
+})();
+</script>`;
+
+  // Inject scripts
+  if (html.includes('<head>')) {
+    html = html.replace('<head>', '<head>' + resourceInterceptorScript);
+  } else if (html.includes('<html>')) {
+    html = html.replace('<html>', '<html><head>' + resourceInterceptorScript + '</head>');
+  } else {
+    html = resourceInterceptorScript + html;
+  }
+
+  if (html.includes('</body>')) {
+    html = html.replace('</body>', navigationScript + '</body>');
+  } else if (html.includes('</html>')) {
+    html = html.replace('</html>', navigationScript + '</html>');
+  } else {
+    html += navigationScript;
+  }
+
+  return html;
 }
 
 /**
@@ -275,6 +420,12 @@ function listServers(ctx: CommandContext): number {
 }
 
 function stopServer(ctx: CommandContext, port: number): number {
+  // Close server window if exists
+  const serverWindow = findServerWindow(port);
+  if (serverWindow) {
+    serverWindow.close();
+  }
+
   // Check if we have local info (server started via serve command)
   const info = activeServers.get(port);
   if (info) {

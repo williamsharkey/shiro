@@ -9,9 +9,13 @@
  * - GET /offer/:code - Retrieve an offer by code (for connecting peer)
  * - POST /answer/:code - Submit an answer for a connection
  * - GET /answer/:code - Retrieve the answer (for the offering peer)
+ * - GET /check/:code - Check if a code is still valid (for cleanup)
  *
- * Offers expire after 5 minutes.
+ * Codes last 1 week to support long-running sessions.
  */
+
+// 1 week TTL for signaling data
+const SIGNALING_TTL = 604800;
 
 interface Env {
   // KV namespace for storing offers/answers
@@ -93,10 +97,10 @@ export default {
         };
 
         await env.REMOTE_KV.put(`offer:${code}`, JSON.stringify(offerData), {
-          expirationTtl: 300, // 5 minutes
+          expirationTtl: SIGNALING_TTL,
         });
 
-        return jsonResponse({ success: true, code, expiresIn: 300 });
+        return jsonResponse({ success: true, code, expiresIn: SIGNALING_TTL });
       } catch (err: any) {
         return errorResponse(`Failed to register offer: ${err.message}`);
       }
@@ -149,9 +153,9 @@ export default {
           candidates: candidates || [],
         };
 
-        // Store the answer with 5-minute TTL
+        // Store the answer with same TTL as offer
         await env.REMOTE_KV.put(`answer:${code}`, JSON.stringify(answerData), {
-          expirationTtl: 300,
+          expirationTtl: SIGNALING_TTL,
         });
 
         return jsonResponse({ success: true });
@@ -176,6 +180,18 @@ export default {
 
       const answer: Answer = JSON.parse(answerData);
       return jsonResponse(answer);
+    }
+
+    // GET /check/:code - Check if a code is still valid (for cleanup)
+    if (request.method === 'GET' && path.startsWith('/check/')) {
+      const code = path.slice('/check/'.length);
+
+      if (!code) {
+        return errorResponse('Missing code');
+      }
+
+      const offerData = await env.REMOTE_KV.get(`offer:${code}`);
+      return jsonResponse({ valid: !!offerData, code });
     }
 
     // Unknown route

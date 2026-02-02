@@ -144,6 +144,10 @@ class IframeServerManager {
     iframe.style.border = 'none';
     iframe.style.width = options?.width || '100%';
     iframe.style.height = options?.height || '400px';
+    // iOS Safari requires explicit visibility styles for iframes to render
+    iframe.style.visibility = 'visible';
+    iframe.style.opacity = '1';
+    iframe.style.display = 'block';
     if (options?.style) {
       Object.assign(iframe.style, options.style);
     }

@@ -177,9 +177,15 @@ async function handleRemoteCommand(session: RemoteSession, message: string): Pro
  * Start a remote session - create WebRTC offer and register with signaling server
  */
 async function startRemote(ctx: CommandContext): Promise<number> {
+  // Auto-cleanup existing session if any
   if (window.__shiroRemoteSession) {
-    ctx.stdout += 'Remote session already active. Use "remote stop" first.\n';
-    return 1;
+    ctx.stdout += 'Cleaning up existing session...\n';
+    cleanupSession();
+    localStorage.removeItem(REMOTE_CODE_KEY);
+    // Clear HUD if terminal available
+    if (ctx.terminal) {
+      ctx.terminal.updateHudRemoteCode(null);
+    }
   }
 
   const { full: code, display: displayCode } = generateCode();
