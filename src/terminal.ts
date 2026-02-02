@@ -377,9 +377,20 @@ export class ShiroTerminal {
    * as if the user typed it. Returns { stdout, stderr, exitCode }.
    */
   async executeRemoteCommand(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    // Show the command as if typed (with a marker to indicate it's remote)
-    this.term.write(`\x1b[90m[remote]\x1b[0m `);
-    this.showPrompt();
+    // Clear existing prompt line before showing remote command
+    this.term.write('\r\x1b[K');
+
+    // Show remote prompt: orange user@host, blue cwd, orange ℝ (instead of $)
+    const cwd = this.shell.cwd;
+    const home = this.shell.env['HOME'] || '/home/user';
+    const displayCwd = cwd.startsWith(home) ? '~' + cwd.slice(home.length) : cwd;
+    const user = this.shell.env['USER'] || 'user';
+    const hostname = typeof window !== 'undefined' ? window.location.hostname : 'shiro.computer';
+    const subdomainMatch = hostname.match(/^([^.]+)\.shiro\.computer$/);
+    const hostDisplay = subdomainMatch ? subdomainMatch[1] : 'shiro';
+
+    // Orange (208) for remote indicator, ℝ (U+211D) as remote symbol
+    this.term.write(`\x1b[38;5;208m${user}@${hostDisplay}\x1b[0m:\x1b[34m${displayCwd}\x1b[38;5;208mℝ\x1b[0m `);
     this.term.writeln(command);
 
     let stdout = '';
