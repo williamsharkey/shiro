@@ -78,7 +78,7 @@ import { termcastCmd } from './commands/termcast';
 import { serveCmd, serversCmd } from './commands/serve';
 import { imageCmd } from './commands/image';
 import { clipReportCmd } from './commands/clip-report';
-import { seedCmd } from './commands/inject';
+import { seedCmd } from './commands/seed';
 import { remoteCmd } from './commands/remote';
 import { hudCmd } from './commands/hud';
 import { iframeServer } from './iframe-server';
@@ -212,7 +212,7 @@ async function main() {
   registerCommand(commands, serversCmd, 'src/commands/serve.ts');
   registerCommand(commands, imageCmd, 'src/commands/image.ts');
   registerCommand(commands, clipReportCmd, 'src/commands/clip-report.ts');
-  registerCommand(commands, seedCmd, 'src/commands/inject.ts');
+  registerCommand(commands, seedCmd, 'src/commands/seed.ts');
   registerCommand(commands, remoteCmd, 'src/commands/remote.ts');
   registerCommand(commands, hudCmd, 'src/commands/hud.ts');
 
