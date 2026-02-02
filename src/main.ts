@@ -87,7 +87,7 @@ import { allCommands } from '../fluffycoreutils/src/index';
 import { wrapFluffyCommand } from './fluffy-adapter';
 import { ShiroTerminal } from './terminal';
 import { ShiroProvider } from '../spirit/src/providers/shiro-provider';
-import { initFaviconUpdater } from './favicon';
+import { initFaviconUpdater, initTitle } from './favicon';
 
 /**
  * Register a command in both the CommandRegistry (for execution) and
@@ -270,6 +270,9 @@ async function main() {
 
   // Initialize dynamic favicon (32x32 minimap of terminal content)
   initFaviconUpdater(terminal.term);
+
+  // Initialize dynamic title (shows recent commands)
+  initTitle();
 
   // Auto-reconnect remote session if one was active before page reload
   const persistedCode = getPersistedRemoteCode();

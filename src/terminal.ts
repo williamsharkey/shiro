@@ -405,7 +405,8 @@ export class ShiroTerminal {
       (s: string) => {
         stderr += s;
         this.term.write(`\x1b[31m${s}\x1b[0m`);
-      }
+      },
+      true, // remote command
     );
 
     this.showPrompt();

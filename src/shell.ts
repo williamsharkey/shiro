@@ -1,6 +1,7 @@
 import { FileSystem } from './filesystem';
 import { CommandRegistry, CommandContext } from './commands/index';
 import type { ShiroTerminal } from './terminal';
+import { recordCommand } from './favicon';
 
 interface Redirect {
   type: '>' | '>>' | '<' | '2>' | '2>>' | '2>&1';
@@ -80,13 +81,14 @@ export class Shell {
   }
 
   // Execute a command string and return { stdout, stderr, exitCode }
-  async exec(input: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  async exec(input: string, remote: boolean = false): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     let stdout = '';
     let stderr = '';
     const exitCode = await this.execute(
       input,
       (s) => { stdout += s; },
       (s) => { stderr += s; },
+      remote,
     );
     return { stdout, stderr, exitCode };
   }
@@ -125,9 +127,13 @@ export class Shell {
     line: string,
     writeStdout: (s: string) => void,
     writeStderr?: (s: string) => void,
+    remote: boolean = false,
   ): Promise<number> {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) return 0;
+
+    // Record command for title display
+    recordCommand(trimmed, remote);
 
     // Check for background execution (&)
     if (trimmed.endsWith('&') && !trimmed.endsWith('&&')) {

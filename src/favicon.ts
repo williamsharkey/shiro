@@ -1,17 +1,30 @@
 /**
- * Dynamic Favicon Generator
+ * Dynamic Favicon & Title Manager
  *
- * Renders a 32x32 pixel visualization of the terminal content.
- * Each pixel represents one character cell, colored by its foreground color.
- * Useful as a minimap when many tabs are open, and shows agent activity.
+ * Favicon: 32x32 pixel visualization of terminal content.
+ * Title: Shows recent commands with source indicators.
+ *   ● = local command (user typed)
+ *   ◇ = remote command (from MCP/Claude)
+ *
+ * Format: "newest ◇ older ● oldest ● domain.com"
  */
 
 import type { Terminal, IBufferCell } from '@xterm/xterm';
 
+// === Favicon state ===
 let lastUpdate = 0;
 let updateScheduled = false;
 let enabled = true;
 let originalFavicon: string | null = null;
+
+// === Title state ===
+interface CommandEntry {
+  cmd: string;
+  remote: boolean;
+}
+const recentCommands: CommandEntry[] = [];
+const MAX_TITLE_LENGTH = 50;
+let hostname: string = '';
 
 // 16-color palette names in order
 const PALETTE_16 = [
@@ -209,4 +222,83 @@ function getCellFgColor(cell: IBufferCell, theme: any, defaultFg: string): strin
 
   // Unknown mode, use default
   return defaultFg;
+}
+
+// === Title Management ===
+
+/**
+ * Initialize title with hostname. Call once on startup.
+ */
+export function initTitle(): void {
+  // Get hostname (e.g., "yolo.shiro.computer" or "localhost:5173")
+  hostname = window.location.host;
+  updateTitle();
+}
+
+/**
+ * Record a command execution and update the title.
+ * @param cmd - The command that was executed
+ * @param remote - Whether this was a remote/MCP command
+ */
+export function recordCommand(cmd: string, remote: boolean = false): void {
+  // Extract just the command name (first word), ignore args
+  const cmdName = cmd.trim().split(/\s+/)[0];
+  if (!cmdName) return;
+
+  // Add to front of list
+  recentCommands.unshift({ cmd: cmdName, remote });
+
+  // Keep list reasonable (we'll trim in updateTitle based on length)
+  if (recentCommands.length > 10) {
+    recentCommands.pop();
+  }
+
+  updateTitle();
+}
+
+/**
+ * Clear command history (e.g., on `clear` command)
+ */
+export function clearCommandHistory(): void {
+  recentCommands.length = 0;
+  updateTitle();
+}
+
+/**
+ * Update document.title with recent commands and hostname
+ */
+function updateTitle(): void {
+  if (!hostname) {
+    hostname = window.location.host;
+  }
+
+  if (recentCommands.length === 0) {
+    document.title = hostname;
+    return;
+  }
+
+  // Build title from newest to oldest, respecting max length
+  // Format: "cmd1 ◇ cmd2 ● cmd3 ● hostname"
+  const LOCAL = ' ● ';
+  const REMOTE = ' ◇ ';
+
+  let title = '';
+  let hostnameWithSep = '';
+
+  // Always include hostname at end
+  // We'll build backwards and check length
+  for (let i = 0; i < recentCommands.length; i++) {
+    const entry = recentCommands[i];
+    const sep = entry.remote ? REMOTE : LOCAL;
+    const addition = entry.cmd + sep;
+
+    // Check if adding this would exceed limit
+    if ((title + addition + hostname).length > MAX_TITLE_LENGTH) {
+      break;
+    }
+
+    title += addition;
+  }
+
+  document.title = title + hostname;
 }
