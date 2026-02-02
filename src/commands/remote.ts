@@ -185,6 +185,22 @@ async function startRemote(ctx: CommandContext): Promise<number> {
 
   const { full: code, display: displayCode } = generateCode();
 
+  // Copy to clipboard immediately (before async work breaks user gesture chain)
+  // Save old clipboard value so we can restore on failure
+  let oldClipboard: string | null = null;
+  let clipboardCopied = false;
+  try {
+    oldClipboard = await navigator.clipboard.readText();
+  } catch {
+    // Can't read clipboard, that's fine
+  }
+  try {
+    await navigator.clipboard.writeText(code);
+    clipboardCopied = true;
+  } catch {
+    // Will report failure later
+  }
+
   ctx.stdout += 'Starting remote session...\n';
 
   // Create peer connection
@@ -271,11 +287,10 @@ async function startRemote(ctx: CommandContext): Promise<number> {
 
     session.status = 'waiting';
 
-    // Copy full code to clipboard
-    try {
-      await navigator.clipboard.writeText(code);
+    // Report clipboard status (copy happened earlier, before async work)
+    if (clipboardCopied) {
       ctx.stdout += `\x1b[32mConnection code copied to clipboard!\x1b[0m\n`;
-    } catch {
+    } else {
       ctx.stdout += `\x1b[33mCouldn't copy to clipboard. Code: ${code}\x1b[0m\n`;
     }
 
@@ -293,6 +308,14 @@ async function startRemote(ctx: CommandContext): Promise<number> {
 
     return 0;
   } catch (err: any) {
+    // Restore old clipboard if we overwrote it
+    if (clipboardCopied && oldClipboard !== null) {
+      try {
+        await navigator.clipboard.writeText(oldClipboard);
+      } catch {
+        // Best effort
+      }
+    }
     ctx.stderr += `Failed to start remote: ${err.message}\n`;
     cleanupSession();
     return 1;
