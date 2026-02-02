@@ -107,16 +107,17 @@ declare global {
 async function handleRemoteCommand(session: RemoteSession, message: string): Promise<string> {
   try {
     const cmd = JSON.parse(message);
+    const requestId = cmd.requestId; // Echo back for request/response matching
 
     switch (cmd.type) {
       case 'ping':
-        return JSON.stringify({ type: 'pong', ts: Date.now() });
+        return JSON.stringify({ type: 'pong', ts: Date.now(), requestId });
 
       case 'exec': {
         // Execute shell command
         const shell = window.__shiro?.shell;
         if (!shell) {
-          return JSON.stringify({ type: 'error', error: 'Shell not available' });
+          return JSON.stringify({ type: 'error', error: 'Shell not available', requestId });
         }
         let stdout = '';
         let stderr = '';
@@ -125,51 +126,52 @@ async function handleRemoteCommand(session: RemoteSession, message: string): Pro
           (s: string) => { stdout += s; },
           (s: string) => { stderr += s; }
         );
-        return JSON.stringify({ type: 'exec_result', stdout, stderr, exitCode });
+        return JSON.stringify({ type: 'exec_result', stdout, stderr, exitCode, requestId });
       }
 
       case 'read': {
         // Read file
         const fs = window.__shiro?.fs;
         if (!fs) {
-          return JSON.stringify({ type: 'error', error: 'Filesystem not available' });
+          return JSON.stringify({ type: 'error', error: 'Filesystem not available', requestId });
         }
         const content = await fs.readFile(cmd.path);
         const base64 = btoa(String.fromCharCode(...content));
-        return JSON.stringify({ type: 'read_result', path: cmd.path, content: base64 });
+        return JSON.stringify({ type: 'read_result', path: cmd.path, content: base64, requestId });
       }
 
       case 'write': {
         // Write file
         const fs = window.__shiro?.fs;
         if (!fs) {
-          return JSON.stringify({ type: 'error', error: 'Filesystem not available' });
+          return JSON.stringify({ type: 'error', error: 'Filesystem not available', requestId });
         }
         const content = Uint8Array.from(atob(cmd.content), c => c.charCodeAt(0));
         await fs.writeFile(cmd.path, content);
-        return JSON.stringify({ type: 'write_result', path: cmd.path, ok: true });
+        return JSON.stringify({ type: 'write_result', path: cmd.path, ok: true, requestId });
       }
 
       case 'list': {
         // List directory
         const fs = window.__shiro?.fs;
         if (!fs) {
-          return JSON.stringify({ type: 'error', error: 'Filesystem not available' });
+          return JSON.stringify({ type: 'error', error: 'Filesystem not available', requestId });
         }
         const entries = await fs.readdir(cmd.path);
-        return JSON.stringify({ type: 'list_result', path: cmd.path, entries });
+        return JSON.stringify({ type: 'list_result', path: cmd.path, entries, requestId });
       }
 
       case 'eval': {
         // Evaluate JavaScript
         const result = await eval(cmd.code);
-        return JSON.stringify({ type: 'eval_result', result: String(result) });
+        return JSON.stringify({ type: 'eval_result', result: String(result), requestId });
       }
 
       default:
-        return JSON.stringify({ type: 'error', error: `Unknown command type: ${cmd.type}` });
+        return JSON.stringify({ type: 'error', error: `Unknown command type: ${cmd.type}`, requestId });
     }
   } catch (err: any) {
+    // Note: requestId may not be available if JSON parsing failed
     return JSON.stringify({ type: 'error', error: err.message || String(err) });
   }
 }
