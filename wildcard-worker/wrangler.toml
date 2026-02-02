@@ -1,0 +1,9 @@
+name = "shiro-wildcard"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# Only catches subdomains like dev.shiro.computer, a.shiro.computer
+# Does NOT match bare shiro.computer (so /about, /article are unaffected)
+routes = [
+  { pattern = "*.shiro.computer/*", zone_name = "shiro.computer" }
+]

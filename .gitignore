@@ -3,3 +3,4 @@ dist/
 .vite/
 *.local
 .DS_Store
+claude-code-pkg/
