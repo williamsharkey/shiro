@@ -55,20 +55,29 @@ async function serveStatic(ctx: CommandContext, port: number, directory: string,
 
   // Optionally open an iframe
   if (openIframe) {
-    // Get the terminal's iframe container (if available)
-    const terminal = (ctx.shell as any)._terminal;
+    // Get the terminal's iframe container (if available), fall back to document.body
+    const terminal = (ctx.shell as any).terminal;
+    let container: HTMLElement;
     if (terminal && typeof terminal.getIframeContainer === 'function') {
-      const container = terminal.getIframeContainer();
-      try {
-        const iframe = await iframeServer.createIframe(port, container, {
-          height: '300px',
-        });
-        ctx.stdout += `Iframe opened (${iframe.style.width} x ${iframe.style.height})\n`;
-      } catch (err) {
-        ctx.stdout += `Note: Could not open iframe: ${err instanceof Error ? err.message : 'unknown error'}\n`;
-      }
+      container = terminal.getIframeContainer();
     } else {
-      ctx.stdout += `To view in iframe, run: serve open ${port}\n`;
+      container = document.body;
+    }
+    try {
+      const iframe = await iframeServer.createIframe(port, container, {
+        height: '400px',
+        style: {
+          position: 'fixed',
+          bottom: '0',
+          left: '0',
+          right: '0',
+          zIndex: '1000',
+          borderTop: '2px solid #3d3d5c',
+        },
+      });
+      ctx.stdout += `Iframe opened (${iframe.style.width} x ${iframe.style.height})\n`;
+    } catch (err) {
+      ctx.stdout += `Note: Could not open iframe: ${err instanceof Error ? err.message : 'unknown error'}\n`;
     }
   }
 
@@ -87,19 +96,28 @@ async function openInIframe(ctx: CommandContext, port: number, path: string = '/
     return 1;
   }
 
-  // Get terminal's iframe container
-  const terminal = (ctx.shell as any)._terminal;
-  if (!terminal || typeof terminal.getIframeContainer !== 'function') {
-    ctx.stderr = `serve: terminal does not support iframes\n`;
-    ctx.stderr += `You can use __iframeServer.createIframe(${port}, document.body) in the browser console\n`;
-    return 1;
+  // Get terminal's iframe container, or fall back to document.body
+  const terminal = (ctx.shell as any).terminal;
+  let container: HTMLElement;
+  if (terminal && typeof terminal.getIframeContainer === 'function') {
+    container = terminal.getIframeContainer();
+  } else {
+    // Fall back to document.body
+    container = document.body;
   }
 
-  const container = terminal.getIframeContainer();
   try {
     const iframe = await iframeServer.createIframe(port, container, {
       path,
-      height: '300px',
+      height: '400px',
+      style: {
+        position: 'fixed',
+        bottom: '0',
+        left: '0',
+        right: '0',
+        zIndex: '1000',
+        borderTop: '2px solid #3d3d5c',
+      },
     });
     ctx.stdout = `Opened port ${port} in iframe\n`;
     ctx.stdout += `Path: ${path}\n`;

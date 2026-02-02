@@ -3,9 +3,23 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Shell } from './shell';
 import buildNumber from '../build-number.txt?raw';
 
+/**
+ * HUD (Heads-Up Display) state for dynamic banner updates.
+ * Tracks where the banner was drawn and allows in-place updates.
+ */
+interface HudState {
+  startRow: number;      // Absolute row in buffer where HUD starts
+  lineCount: number;     // Number of lines in the HUD
+  // Positions of updatable elements (row offset from startRow, column)
+  slots: {
+    remoteCode: { row: number; col: number; width: number };
+    recStatus: { row: number; col: number; width: number };
+  };
+}
+
 export class ShiroTerminal {
-  private term: Terminal;
-  private fitAddon: FitAddon;
+  term: Terminal;
+  fitAddon: FitAddon;
   private shell: Shell;
   private lineBuffer = '';
   private cursorPos = 0;
@@ -18,6 +32,9 @@ export class ShiroTerminal {
   private rawModeCallback: ((key: string) => void) | null = null;
   private iframeContainer: HTMLElement | null = null;
   private displayedRows = 1; // track how many terminal rows the current prompt+input spans
+
+  // HUD state for dynamic updates
+  private hud: HudState | null = null;
 
   // Reverse history search state (Ctrl+R)
   private reverseSearchMode = false;
@@ -56,6 +73,28 @@ export class ShiroTerminal {
       cursorBlink: true,
       cursorStyle: 'block',
       scrollback: 10000,
+      linkHandler: {
+        activate: (_event: MouseEvent, uri: string) => {
+          // Handle special shiro:// URLs for banner actions
+          if (uri === 'shiro://rec') {
+            // Toggle termcast recording
+            const session = (window as any).__termcastSession;
+            const cmd = session ? 'termcast stop' : 'termcast start';
+            // Execute through shell and display output
+            this.term.writeln('');
+            this.shell.execute(
+              cmd,
+              (s) => this.term.write(s),
+              (s) => this.term.write(`\x1b[31m${s}\x1b[0m`)
+            ).then(() => {
+              this.showPrompt();
+            });
+            return;
+          }
+          // Open regular links directly without confirmation popup
+          window.open(uri, '_blank', 'noopener');
+        },
+      },
     });
 
     this.fitAddon = new FitAddon();
@@ -170,18 +209,154 @@ export class ShiroTerminal {
   }
 
   async start() {
-    const build = buildNumber.trim().padStart(4, '0');
-    this.term.writeln('\x1b[36m╔═══════════════════════════════════════════╗\x1b[0m');
-    this.term.writeln(`\x1b[36m║\x1b[0m  \x1b[1;97mshiro\x1b[0m \x1b[95mv0.1.0\x1b[0m                   \x1b[95m#${build}\x1b[0m     \x1b[36m║\x1b[0m`);
-    this.term.writeln('\x1b[36m║\x1b[0m  \x1b[92mbrowser-native cloud operating system\x1b[0m    \x1b[36m║\x1b[0m');
-    this.term.writeln('\x1b[36m║\x1b[0m                                           \x1b[36m║\x1b[0m');
-    this.term.writeln('\x1b[36m║\x1b[0m  \x1b[33mhelp\x1b[0m        \x1b[90m—\x1b[0m list all commands          \x1b[36m║\x1b[0m');
-    this.term.writeln('\x1b[36m║\x1b[0m  \x1b[33mspirit\x1b[0m      \x1b[90m—\x1b[0m AI coding agent            \x1b[36m║\x1b[0m');
-    this.term.writeln('\x1b[36m║\x1b[0m  \x1b[33mupload\x1b[0m      \x1b[90m—\x1b[0m upload files from host     \x1b[36m║\x1b[0m');
-    this.term.writeln('\x1b[36m║\x1b[0m  \x1b[33mdownload\x1b[0m    \x1b[90m—\x1b[0m download files to host     \x1b[36m║\x1b[0m');
-    this.term.writeln('\x1b[36m╚═══════════════════════════════════════════╝\x1b[0m');
-    this.term.writeln('');
+    this.drawBanner();
     this.showPrompt();
+  }
+
+  /**
+   * Draw the HUD (heads-up display) banner and track its position for dynamic updates.
+   * Can be called anytime to draw a fresh HUD at the current cursor position.
+   */
+  drawHud() {
+    const build = buildNumber.trim().padStart(4, '0');
+
+    // Detect subdomain
+    const hostname = typeof window !== 'undefined' ? window.location.hostname : 'shiro.computer';
+    const subdomainMatch = hostname.match(/^([^.]+)\.shiro\.computer$/);
+    const displayHost = subdomainMatch ? `${subdomainMatch[1]}.shiro.computer` : 'shiro.computer';
+
+    // OSC 8 hyperlink helper: \x1b]8;;URL\x07text\x1b]8;;\x07
+    const link = (url: string, text: string, color: string = '33') =>
+      `\x1b]8;;${url}\x07\x1b[${color}m${text}\x1b[0m\x1b]8;;\x07`;
+
+    // Build URLs preserving subdomain
+    const baseUrl = `https://${hostname}`;
+    const aboutUrl = `${baseUrl}/about`;
+    const githubUrl = 'https://github.com/nicweke';
+    const discordUrl = 'https://discord.gg/Wkw4SZ2V';
+
+    // Pad hostname to fit layout (max ~20 chars for subdomain display)
+    const hostDisplay = displayHost.length <= 20 ? displayHost : displayHost.slice(0, 17) + '...';
+    const hostPad = ' '.repeat(Math.max(0, 22 - hostDisplay.length));
+
+    // Record HUD start position (absolute row in buffer)
+    const buffer = this.term.buffer.active;
+    const startRow = buffer.baseY + buffer.cursorY;
+
+    // Check for active remote session
+    const remoteSession = (window as any).__shiroRemoteSession;
+    const remoteCode = remoteSession?.displayCode; // e.g., "chibi-gray"
+
+    // Row 0: Top border - with or without remote code
+    // Box is 43 chars wide. Right end is always ╒══╗ (4 chars) for alignment.
+    // Format: ╔ + ═padding + ╛ + code + ╒══╗ = 43
+    // So: 1 + padding + 1 + codeLen + 4 = 43 → padding = 37 - codeLen
+    if (remoteCode) {
+      const codeLen = remoteCode.length;
+      const leftPad = Math.max(1, 37 - codeLen);
+      this.term.writeln(`\x1b[36m╔${'═'.repeat(leftPad)}╛\x1b[93m${remoteCode}\x1b[36m╒══╗\x1b[0m`);
+    } else {
+      this.term.writeln('\x1b[36m╔═════════════════════════════════════════╗\x1b[0m');
+    }
+
+    // Row 1: Host and version
+    this.term.writeln(`\x1b[36m║\x1b[0m  \x1b[1;97m${hostDisplay}\x1b[0m${hostPad}\x1b[95mv0.1.0\x1b[0m   \x1b[95m#${build}\x1b[0m   \x1b[36m║\x1b[0m`);
+    // Row 2: Tagline
+    this.term.writeln('\x1b[36m║\x1b[0m                \x1b[92mcloud operating system\x1b[0m   \x1b[36m║\x1b[0m');
+    // Row 3: Empty
+    this.term.writeln('\x1b[36m║\x1b[0m                                         \x1b[36m║\x1b[0m');
+    // Row 4: help / rec
+    this.term.writeln(`\x1b[36m║\x1b[0m  \x1b[33mhelp\x1b[0m                             ${link('shiro://rec', 'rec', '90')}   \x1b[36m║\x1b[0m`);
+    // Row 5: spirit / about
+    this.term.writeln(`\x1b[36m║\x1b[0m  \x1b[33mspirit\x1b[0m                         ${link(aboutUrl, 'about', '94')}   \x1b[36m║\x1b[0m`);
+    // Row 6: upload / github
+    this.term.writeln(`\x1b[36m║\x1b[0m  \x1b[33mupload\x1b[0m                        ${link(githubUrl, 'github', '94')}   \x1b[36m║\x1b[0m`);
+    // Row 7: download / discord
+    this.term.writeln(`\x1b[36m║\x1b[0m  \x1b[33mdownload\x1b[0m                     ${link(discordUrl, 'discord', '94')}   \x1b[36m║\x1b[0m`);
+    // Row 8: Bottom border
+    this.term.writeln('\x1b[36m╚═══════════════════╛\x1b[97m白\x1b[36m╒══════════════════╝\x1b[0m');
+    // Row 9: Empty line
+    this.term.writeln('');
+
+    // Store HUD state for dynamic updates
+    this.hud = {
+      startRow,
+      lineCount: 10,
+      slots: {
+        // Remote code appears in top border, centered around column 28
+        remoteCode: { row: 0, col: 28, width: 20 },
+        // Rec status appears on row 4, around column 36
+        recStatus: { row: 4, col: 34, width: 8 },
+      },
+    };
+  }
+
+  /**
+   * Check if the HUD is still visible (hasn't scrolled out of buffer).
+   */
+  isHudVisible(): boolean {
+    if (!this.hud) return false;
+    const buffer = this.term.buffer.active;
+    const scrollback = this.term.options.scrollback || 1000;
+    return this.hud.startRow >= buffer.baseY - scrollback;
+  }
+
+  /**
+   * Update a specific position in the HUD without disturbing terminal content.
+   * Does nothing if HUD has scrolled out of view.
+   */
+  updateHudAt(rowOffset: number, col: number, text: string) {
+    if (!this.isHudVisible()) return;
+
+    const targetRow = this.hud!.startRow + rowOffset + 1; // +1 because terminal rows are 1-indexed
+    this.term.write('\x1b7');                          // Save cursor
+    this.term.write(`\x1b[${targetRow};${col}H`);      // Move to position
+    this.term.write(text);                             // Write text
+    this.term.write('\x1b8');                          // Restore cursor
+  }
+
+  /**
+   * Update the remote code display in the HUD top border.
+   */
+  updateHudRemoteCode(code: string | null) {
+    if (!this.isHudVisible()) return;
+
+    // Calculate viewport-relative row position
+    const buffer = this.term.buffer.active;
+    const viewportRow = this.hud!.startRow - buffer.baseY + 1; // Convert to 1-indexed viewport position
+
+    // Only update if the HUD row is actually in the viewport
+    if (viewportRow < 1 || viewportRow > this.term.rows) return;
+
+    this.term.write('\x1b7'); // Save cursor (DECSC)
+    this.term.write(`\x1b[${viewportRow};1H`); // Move to start of row (viewport-relative)
+
+    // Box is 43 chars wide. Right end is always ╒══╗ (4 chars) for alignment.
+    if (code) {
+      const codeLen = code.length;
+      const leftPad = Math.max(1, 37 - codeLen);
+      this.term.write(`\x1b[36m╔${'═'.repeat(leftPad)}╛\x1b[93m${code}\x1b[36m╒══╗\x1b[0m`);
+    } else {
+      this.term.write('\x1b[36m╔═════════════════════════════════════════╗\x1b[0m');
+    }
+
+    this.term.write('\x1b8'); // Restore cursor (DECRC)
+  }
+
+  /**
+   * Update the rec status display in the HUD.
+   */
+  updateHudRecStatus(status: string) {
+    if (!this.isHudVisible()) return;
+
+    const slot = this.hud!.slots.recStatus;
+    const padded = status.padEnd(slot.width);
+    this.updateHudAt(slot.row, slot.col, padded);
+  }
+
+  // Keep old name as alias for backwards compatibility
+  drawBanner() {
+    this.drawHud();
   }
 
   private showPrompt() {
@@ -189,7 +364,11 @@ export class ShiroTerminal {
     const home = this.shell.env['HOME'] || '/home/user';
     const displayCwd = cwd.startsWith(home) ? '~' + cwd.slice(home.length) : cwd;
     const user = this.shell.env['USER'] || 'user';
-    this.term.write(`\x1b[32m${user}@shiro\x1b[0m:\x1b[34m${displayCwd}\x1b[0m$ `);
+    // Show subdomain in prompt if on one
+    const hostname = typeof window !== 'undefined' ? window.location.hostname : 'shiro.computer';
+    const subdomainMatch = hostname.match(/^([^.]+)\.shiro\.computer$/);
+    const hostDisplay = subdomainMatch ? subdomainMatch[1] : 'shiro';
+    this.term.write(`\x1b[32m${user}@${hostDisplay}\x1b[0m:\x1b[34m${displayCwd}\x1b[0m$ `);
     this.displayedRows = 1;
   }
 

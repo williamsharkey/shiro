@@ -79,6 +79,8 @@ import { serveCmd, serversCmd } from './commands/serve';
 import { imageCmd } from './commands/image';
 import { clipReportCmd } from './commands/clip-report';
 import { seedCmd } from './commands/inject';
+import { remoteCmd } from './commands/remote';
+import { hudCmd } from './commands/hud';
 import { iframeServer } from './iframe-server';
 import { allCommands } from '../fluffycoreutils/src/index';
 import { wrapFluffyCommand } from './fluffy-adapter';
@@ -104,6 +106,7 @@ async function main() {
 
   // Listen for seed hydration from parent (when loaded via seed snippet)
   window.addEventListener('message', async (e) => {
+    // Legacy format (v1): single JSON blob
     if (e.data && e.data.type === 'shiro-seed') {
       try {
         const { fs: nodes, localStorage: storage } = e.data.data;
@@ -123,6 +126,48 @@ async function main() {
         location.reload();
       } catch (err) {
         console.error('Seed hydration failed:', err);
+      }
+    }
+
+    // New format (v2): NDJSON for incremental parsing
+    if (e.data && e.data.type === 'shiro-seed-v2') {
+      try {
+        const { ndjson, storage } = e.data;
+        const lines = ndjson.split('\n');
+        const nodes: any[] = [];
+        const BATCH_SIZE = 100;
+
+        // Parse NDJSON incrementally
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (!line) continue;
+
+          const node = JSON.parse(line);
+          nodes.push({
+            ...node,
+            content: node.content ? Uint8Array.from(atob(node.content), (c: string) => c.charCodeAt(0)) : null,
+          });
+
+          // Yield to browser every BATCH_SIZE entries
+          if (nodes.length % BATCH_SIZE === 0) {
+            await new Promise(r => setTimeout(r, 0));
+          }
+        }
+
+        await fs.importAll(nodes);
+
+        // Restore localStorage
+        if (storage) {
+          const storageObj = typeof storage === 'string' ? JSON.parse(storage) : storage;
+          for (const [key, value] of Object.entries(storageObj)) {
+            localStorage.setItem(key, value as string);
+          }
+        }
+
+        // Reload to boot with imported state
+        location.reload();
+      } catch (err) {
+        console.error('Seed v2 hydration failed:', err);
       }
     }
   });
@@ -168,6 +213,8 @@ async function main() {
   registerCommand(commands, imageCmd, 'src/commands/image.ts');
   registerCommand(commands, clipReportCmd, 'src/commands/clip-report.ts');
   registerCommand(commands, seedCmd, 'src/commands/inject.ts');
+  registerCommand(commands, remoteCmd, 'src/commands/remote.ts');
+  registerCommand(commands, hudCmd, 'src/commands/hud.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {
@@ -191,6 +238,14 @@ async function main() {
   // Create Spirit provider and attach to shell for the spirit command to use
   const provider = new ShiroProvider(fs, shell, terminal);
   (shell as any)._spiritProvider = provider;
+
+  // Listen for font size changes from parent (seed snippet)
+  window.addEventListener('message', (e) => {
+    if (e.data && e.data.type === 'shiro-fontsize') {
+      terminal.term.options.fontSize = e.data.size;
+      terminal.fitAddon.fit();
+    }
+  });
 
   // Expose global for test automation (windwalker) and programmatic access
   (window as any).__shiro = {

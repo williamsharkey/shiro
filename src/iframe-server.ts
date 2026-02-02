@@ -323,14 +323,93 @@ class IframeServerManager {
       });
     });
 
-    // Load deferred ES module scripts using blob URLs
+    // Recursively resolve ES module imports and convert to blob URLs
+    var blobCache = {};  // Cache: original path -> blob URL
+    var pendingModules = {};  // Prevent circular dependency infinite loops
+
+    function resolveModulePath(base, relative) {
+      if (relative.startsWith('/')) return relative;
+      var baseParts = base.split('/').slice(0, -1);
+      var relParts = relative.split('/');
+      for (var i = 0; i < relParts.length; i++) {
+        if (relParts[i] === '..') baseParts.pop();
+        else if (relParts[i] !== '.') baseParts.push(relParts[i]);
+      }
+      return '/' + baseParts.filter(Boolean).join('/');
+    }
+
+    function extractImports(code) {
+      var imports = [];
+      // Match: import ... from "..." or import ... from '...'
+      // Also match: import "..." or import '...' (side-effect imports)
+      // Also match: export ... from "..."
+      // Capture paths starting with ./ ../ or / (but not http:// https://)
+      var regex = /(?:import|export)\\s+(?:[^'"]*\\s+from\\s+)?['"]([^'"]+)['"]|import\\s*\\(\\s*['"]([^'"]+)['"]\\s*\\)/g;
+      var match;
+      while ((match = regex.exec(code)) !== null) {
+        var path = match[1] || match[2];
+        if (path && (path.startsWith('./') || path.startsWith('../') || (path.startsWith('/') && !path.startsWith('//')))) {
+          imports.push(path);
+        }
+      }
+      return imports;
+    }
+
+    function loadModuleRecursive(modulePath) {
+      // Return cached blob URL if available
+      if (blobCache[modulePath]) {
+        return Promise.resolve(blobCache[modulePath]);
+      }
+      // Prevent circular dependencies
+      if (pendingModules[modulePath]) {
+        return pendingModules[modulePath];
+      }
+
+      var promise = fetchFromParent(modulePath, { method: 'GET' }).then(function(data) {
+        var code = data.body || '';
+        var imports = extractImports(code);
+
+        if (imports.length === 0) {
+          // No imports - just create blob URL
+          var blob = new Blob([code], { type: 'application/javascript' });
+          var blobUrl = URL.createObjectURL(blob);
+          blobCache[modulePath] = blobUrl;
+          return blobUrl;
+        }
+
+        // Recursively resolve all imports
+        var importPromises = imports.map(function(imp) {
+          var resolvedPath = resolveModulePath(modulePath, imp);
+          return loadModuleRecursive(resolvedPath).then(function(blobUrl) {
+            return { original: imp, blobUrl: blobUrl };
+          });
+        });
+
+        return Promise.all(importPromises).then(function(resolved) {
+          // Rewrite imports to use blob URLs via simple string replacement
+          var rewrittenCode = code;
+          resolved.forEach(function(r) {
+            // Replace both single and double quoted versions
+            rewrittenCode = rewrittenCode.split('"' + r.original + '"').join('"' + r.blobUrl + '"');
+            rewrittenCode = rewrittenCode.split("'" + r.original + "'").join("'" + r.blobUrl + "'");
+          });
+
+          var blob = new Blob([rewrittenCode], { type: 'application/javascript' });
+          var blobUrl = URL.createObjectURL(blob);
+          blobCache[modulePath] = blobUrl;
+          return blobUrl;
+        });
+      });
+
+      pendingModules[modulePath] = promise;
+      return promise;
+    }
+
+    // Load deferred ES module scripts using recursive blob URL resolution
     document.querySelectorAll('script[data-vfs-module-src]').forEach(function(script) {
       var src = script.getAttribute('data-vfs-module-src');
       script.removeAttribute('data-vfs-module-src');
-      fetchFromParent(src, { method: 'GET' }).then(function(data) {
-        // Create blob URL with correct MIME type for ES modules
-        var blob = new Blob([data.body || ''], { type: 'application/javascript' });
-        var blobUrl = URL.createObjectURL(blob);
+      loadModuleRecursive(src).then(function(blobUrl) {
         var newScript = document.createElement('script');
         newScript.type = 'module';
         newScript.src = blobUrl;

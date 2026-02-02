@@ -18,6 +18,15 @@
       margin-left: clamp(0px, calc(100vw - 30em), 1em);
     }
     .xterm { height: 100%; }
+    /* Remove underline decoration from xterm.js OSC 8 links */
+    .xterm .xterm-screen .xterm-decoration-container .xterm-decoration {
+      text-decoration: none !important;
+      border-bottom: none !important;
+    }
+    /* Alternative: target the link layer directly */
+    .xterm-link-layer {
+      text-decoration: none !important;
+    }
   </style>
 </head>
 <body>

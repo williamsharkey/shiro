@@ -1,0 +1,13 @@
+name = "shiro-remote"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# Route: remote.shiro.computer
+routes = [
+  { pattern = "remote.shiro.computer/*", zone_name = "shiro.computer" }
+]
+
+# KV namespace for storing offers/answers
+[[kv_namespaces]]
+binding = "REMOTE_KV"
+id = "195a3519b89c44278e945b7054dfe824"
