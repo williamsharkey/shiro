@@ -217,6 +217,30 @@ export class FileSystem {
     this._allKeysCache = null;
   }
 
+  /** Export all filesystem nodes from IndexedDB */
+  async exportAll(): Promise<FSNode[]> {
+    return new Promise<FSNode[]>((resolve, reject) => {
+      const req = this._store('readonly').getAll();
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  /** Import filesystem nodes, replacing all existing data */
+  async importAll(nodes: FSNode[]): Promise<void> {
+    const tx = this.db!.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    store.clear();
+    for (const node of nodes) {
+      store.put(node);
+    }
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    this.clearCache();
+  }
+
   resolvePath(path: string, cwd: string): string {
     let resolved: string;
     if (path.startsWith('/')) {
