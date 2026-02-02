@@ -372,6 +372,35 @@ export class ShiroTerminal {
     this.displayedRows = 1;
   }
 
+  /**
+   * Execute a command from a remote source (e.g., MCP) and display it in the terminal
+   * as if the user typed it. Returns { stdout, stderr, exitCode }.
+   */
+  async executeRemoteCommand(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    // Show the command as if typed (with a marker to indicate it's remote)
+    this.term.write(`\x1b[90m[remote]\x1b[0m `);
+    this.showPrompt();
+    this.term.writeln(command);
+
+    let stdout = '';
+    let stderr = '';
+
+    const exitCode = await this.shell.execute(
+      command,
+      (s: string) => {
+        stdout += s;
+        this.term.write(s);
+      },
+      (s: string) => {
+        stderr += s;
+        this.term.write(`\x1b[31m${s}\x1b[0m`);
+      }
+    );
+
+    this.showPrompt();
+    return { stdout, stderr, exitCode };
+  }
+
   private async handleInput(data: string) {
     // Raw mode: send all keystrokes directly to the callback (e.g., vi editor)
     if (this.rawModeCallback) {

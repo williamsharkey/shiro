@@ -114,18 +114,12 @@ async function handleRemoteCommand(session: RemoteSession, message: string): Pro
         return JSON.stringify({ type: 'pong', ts: Date.now(), requestId });
 
       case 'exec': {
-        // Execute shell command
-        const shell = window.__shiro?.shell;
-        if (!shell) {
-          return JSON.stringify({ type: 'error', error: 'Shell not available', requestId });
+        // Execute shell command and display in terminal
+        const terminal = window.__shiro?.terminal;
+        if (!terminal) {
+          return JSON.stringify({ type: 'error', error: 'Terminal not available', requestId });
         }
-        let stdout = '';
-        let stderr = '';
-        const exitCode = await shell.execute(
-          cmd.command,
-          (s: string) => { stdout += s; },
-          (s: string) => { stderr += s; }
-        );
+        const { stdout, stderr, exitCode } = await terminal.executeRemoteCommand(cmd.command);
         return JSON.stringify({ type: 'exec_result', stdout, stderr, exitCode, requestId });
       }
 
