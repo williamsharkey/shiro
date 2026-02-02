@@ -78,6 +78,7 @@ import { termcastCmd } from './commands/termcast';
 import { serveCmd, serversCmd } from './commands/serve';
 import { imageCmd } from './commands/image';
 import { clipReportCmd } from './commands/clip-report';
+import { seedCmd } from './commands/inject';
 import { iframeServer } from './iframe-server';
 import { allCommands } from '../fluffycoreutils/src/index';
 import { wrapFluffyCommand } from './fluffy-adapter';
@@ -100,6 +101,31 @@ async function main() {
   const fs = new FileSystem();
   await fs.init();
   console.log('[shiro] Filesystem initialized');
+
+  // Listen for seed hydration from parent (when loaded via seed snippet)
+  window.addEventListener('message', async (e) => {
+    if (e.data && e.data.type === 'shiro-seed') {
+      try {
+        const { fs: nodes, localStorage: storage } = e.data.data;
+        // Decode base64 content back to Uint8Array
+        const decoded = nodes.map((n: any) => ({
+          ...n,
+          content: n.content ? Uint8Array.from(atob(n.content), (c: string) => c.charCodeAt(0)) : null,
+        }));
+        await fs.importAll(decoded);
+        // Restore localStorage
+        if (storage) {
+          for (const [key, value] of Object.entries(storage)) {
+            localStorage.setItem(key, value as string);
+          }
+        }
+        // Reload to boot with imported state
+        location.reload();
+      } catch (err) {
+        console.error('Seed hydration failed:', err);
+      }
+    }
+  });
 
   // Set up command registry
   const commands = new CommandRegistry();
@@ -141,6 +167,7 @@ async function main() {
   registerCommand(commands, serversCmd, 'src/commands/serve.ts');
   registerCommand(commands, imageCmd, 'src/commands/image.ts');
   registerCommand(commands, clipReportCmd, 'src/commands/clip-report.ts');
+  registerCommand(commands, seedCmd, 'src/commands/inject.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {

@@ -199,11 +199,55 @@ class HCSession {
   }
 }
 
+// Proxy session that sends commands to the host page via postMessage bridge
+class HCOuterSession {
+  source = 'outer';
+  private _listener: ((e: MessageEvent) => void) | null = null;
+  private _pending = new Map<string, { resolve: (v: string) => void; timer: ReturnType<typeof setTimeout> }>();
+
+  constructor() {
+    this._listener = (e: MessageEvent) => {
+      if (e.data && e.data.type === 'shiro-hc-result') {
+        const entry = this._pending.get(e.data.id);
+        if (entry) {
+          clearTimeout(entry.timer);
+          this._pending.delete(e.data.id);
+          entry.resolve(e.data.result);
+        }
+      }
+    };
+    window.addEventListener('message', this._listener);
+  }
+
+  exec(cmd: string): Promise<string> {
+    const id = Math.random().toString(36).slice(2, 10);
+    return new Promise<string>((resolve) => {
+      const timer = setTimeout(() => {
+        this._pending.delete(id);
+        resolve('✗ timeout: no response from host page (is Shiro injected?)');
+      }, 5000);
+      this._pending.set(id, { resolve, timer });
+      window.parent.postMessage({ type: 'shiro-hc', id, cmd }, '*');
+    });
+  }
+
+  close() {
+    if (this._listener) {
+      window.removeEventListener('message', this._listener);
+      this._listener = null;
+    }
+    for (const [, entry] of this._pending) {
+      clearTimeout(entry.timer);
+    }
+    this._pending.clear();
+  }
+}
+
 // Global HC state
 declare global {
   interface Window {
-    __hc: { session: HCSession | null; HCSession: typeof HCSession };
-    hc: (cmd: string) => string;
+    __hc: { session: HCSession | HCOuterSession | null; HCSession: typeof HCSession };
+    hc: (cmd: string) => string | Promise<string>;
   }
 }
 
@@ -225,6 +269,8 @@ export const hcCmd: Command = {
 Usage:
   hc open <file>     Load HTML file from filesystem
   hc live            Attach to live page DOM
+  hc outer           Bridge to host page DOM (when injected)
+  hc close           Close current session
   hc <cmd>           Run HC command
 
 Commands:
@@ -281,8 +327,31 @@ Example:
       return 0;
     }
 
+    // Bridge to host page DOM via postMessage
+    if (sub === 'outer') {
+      if (window.parent === window) {
+        ctx.stderr = 'hc outer: not running inside an iframe. Use "seed" first.\n';
+        return 1;
+      }
+      const outer = new HCOuterSession();
+      window.__hc.session = outer;
+      // Verify the bridge is alive with a quick 's' command
+      const probe = await outer.exec('s');
+      if (probe.startsWith('✗ timeout')) {
+        outer.close();
+        window.__hc.session = null;
+        ctx.stderr = 'hc outer: ' + probe + '\n';
+        return 1;
+      }
+      ctx.stdout = '✓ connected to host page DOM\n' + probe + '\n';
+      return 0;
+    }
+
     // Close session
     if (sub === 'close') {
+      if (window.__hc.session && window.__hc.session instanceof HCOuterSession) {
+        (window.__hc.session as HCOuterSession).close();
+      }
       window.__hc.session = null;
       ctx.stdout = '✓ session closed\n';
       return 0;
@@ -290,12 +359,12 @@ Example:
 
     // Run HC command
     if (!window.__hc.session) {
-      ctx.stderr = 'hc: no session. Use "hc open <file>" or "hc live" first.\n';
+      ctx.stderr = 'hc: no session. Use "hc open <file>", "hc live", or "hc outer" first.\n';
       return 1;
     }
 
     const cmd = args.join(' ');
-    const result = window.__hc.session.exec(cmd);
+    const result = await window.__hc.session.exec(cmd);
     ctx.stdout = result + '\n';
     return 0;
   },

@@ -1,0 +1,4 @@
+# Cloudflare Pages _redirects
+# Static pages served first (Cloudflare checks static files before redirects)
+# Everything else falls through to the SPA terminal
+/*  /index.html  200

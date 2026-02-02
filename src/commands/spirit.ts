@@ -102,11 +102,7 @@ function createAgent(
   };
 
   return new SpiritAgent(provider, {
-    provider: {
-      type: providerType,
-      apiKey,
-      model: ctx.env['SPIRIT_MODEL'] || defaultModels[providerType],
-    },
+    apiKey,
     model: ctx.env['SPIRIT_MODEL'] || defaultModels[providerType],
     maxTurns: parseInt(ctx.env['SPIRIT_MAX_TURNS'] || '30', 10),
     maxTokens: parseInt(ctx.env['SPIRIT_MAX_TOKENS'] || '8192', 10),
