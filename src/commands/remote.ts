@@ -231,7 +231,15 @@ async function startRemote(ctx: CommandContext): Promise<number> {
 
   dc.onclose = () => {
     console.log('[remote] Peer disconnected');
+    const savedCode = session.code;
     cleanupSession();
+    // Re-register with same code so MCP can reconnect
+    setTimeout(() => {
+      if (!window.__shiroRemoteSession) {
+        console.log('[remote] Re-registering for reconnection...');
+        startRemoteWithCode(savedCode);
+      }
+    }, 1000);
   };
 
   dc.onmessage = async (event) => {
@@ -508,7 +516,15 @@ export async function startRemoteWithCode(code: string, terminal?: any): Promise
 
   dc.onclose = () => {
     console.log('[remote] Peer disconnected');
+    const savedCode = session.code;
     cleanupSession();
+    // Re-register with same code so MCP can reconnect
+    setTimeout(() => {
+      if (!window.__shiroRemoteSession) {
+        console.log('[remote] Re-registering for reconnection...');
+        startRemoteWithCode(savedCode);
+      }
+    }, 1000);
   };
 
   dc.onmessage = async (event) => {
