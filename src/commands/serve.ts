@@ -167,7 +167,7 @@ export const serveCmd: Command = {
   description: 'Start a virtual HTTP server (iframe-based)',
 
   async exec(ctx: CommandContext): Promise<number> {
-    const args = ctx.args.slice(1); // Remove 'serve'
+    const args = ctx.args; // ctx.args doesn't include command name
 
     if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
       ctx.stdout = SERVE_USAGE + '\n';
@@ -257,16 +257,24 @@ function listServers(ctx: CommandContext): number {
 }
 
 function stopServer(ctx: CommandContext, port: number): number {
+  // Check if we have local info (server started via serve command)
   const info = activeServers.get(port);
-  if (!info) {
-    ctx.stderr = `serve: no server on port ${port}\n`;
-    return 1;
+  if (info) {
+    info.cleanup();
+    activeServers.delete(port);
+    ctx.stdout = `Stopped server on port ${port}\n`;
+    return 0;
   }
 
-  info.cleanup();
-  activeServers.delete(port);
-  ctx.stdout = `Stopped server on port ${port}\n`;
-  return 0;
+  // Also handle servers started via node/express (not tracked in activeServers)
+  if (iframeServer.isPortInUse(port)) {
+    iframeServer.close(port);
+    ctx.stdout = `Stopped server on port ${port}\n`;
+    return 0;
+  }
+
+  ctx.stderr = `serve: no server on port ${port}\n`;
+  return 1;
 }
 
 // servers command - alias for serve list

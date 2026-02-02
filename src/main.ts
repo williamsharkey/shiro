@@ -94,9 +94,12 @@ function registerCommand(commands: CommandRegistry, cmd: Command, sourcePath?: s
 }
 
 async function main() {
+  console.log('[shiro] Starting...');
+
   // Initialize filesystem
   const fs = new FileSystem();
   await fs.init();
+  console.log('[shiro] Filesystem initialized');
 
   // Set up command registry
   const commands = new CommandRegistry();

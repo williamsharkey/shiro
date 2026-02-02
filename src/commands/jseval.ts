@@ -87,6 +87,9 @@ export const nodeCmd: Command = {
   name: 'node',
   description: 'Execute JavaScript files (browser JS VM)',
   async exec(ctx: CommandContext): Promise<number> {
+    console.log('[node] Command invoked with args:', ctx.args);
+    console.log('[node] cwd:', ctx.cwd);
+
     let code = '';
     let printResult = false;
 
@@ -131,6 +134,8 @@ export const nodeCmd: Command = {
       ctx.stderr += 'node: no input provided\n';
       return 1;
     }
+
+    console.log('[node] Code loaded, length:', code.length, 'first 100 chars:', code.slice(0, 100));
 
     try {
       // Build a minimal Node-like environment
@@ -260,7 +265,9 @@ export const nodeCmd: Command = {
         }
         // Preload the entire project with deeper recursion
         await preloadDir(projectRoot, 0, 10);
+        console.log('[node] Preloaded project root:', projectRoot);
       }
+      console.log('[node] Files in cache:', fileCache.size);
 
       // Buffer shim — must be a constructor with prototype for safe-buffer compatibility
       function FakeBuffer(arg?: any, encodingOrOffset?: any, length?: any): any {
@@ -1488,7 +1495,9 @@ export const nodeCmd: Command = {
         };
 
         // Listen method - keeps running until server is closed (like real Node.js)
-        app.listen = (port: number, hostOrCb?: string | (() => void), cb?: () => void) => {
+        app.listen = (portArg: number | string, hostOrCb?: string | (() => void), cb?: () => void) => {
+          // Convert port to number (env vars come in as strings)
+          const port = typeof portArg === 'string' ? parseInt(portArg, 10) : portArg;
           const callback = typeof hostOrCb === 'function' ? hostOrCb : cb;
           let closeServer: (() => void) | null = null;
 
@@ -1555,22 +1564,29 @@ export const nodeCmd: Command = {
         next();
       };
       (createExpressShim as any).static = (root: string) => {
+        console.log('[express.static] Registered for root:', root);
         return async (req: any, res: any, next: Function) => {
           if (req.method !== 'GET' && req.method !== 'HEAD') return next();
           const filePath = ctx.fs.resolvePath(root + req.path, ctx.cwd);
+          console.log('[express.static] Checking:', filePath, 'for request:', req.path);
           try {
             const stat = await ctx.fs.stat(filePath);
-            if (!stat || stat.type !== 'file') return next();
+            if (!stat || stat.type !== 'file') {
+              console.log('[express.static] Not a file or not found:', filePath);
+              return next();
+            }
+            console.log('[express.static] Serving:', filePath);
             const content = await ctx.fs.readFile(filePath, 'utf8');
             const ext = filePath.split('.').pop() || '';
             const types: Record<string, string> = {
               html: 'text/html', css: 'text/css', js: 'application/javascript',
               json: 'application/json', png: 'image/png', jpg: 'image/jpeg',
-              svg: 'image/svg+xml', txt: 'text/plain',
+              svg: 'image/svg+xml', txt: 'text/plain', webmanifest: 'application/manifest+json',
             };
             res.type(types[ext] || 'application/octet-stream');
             res.send(content);
-          } catch {
+          } catch (err: any) {
+            console.log('[express.static] Error:', filePath, err.message);
             next();
           }
         };
@@ -1688,7 +1704,9 @@ export const nodeCmd: Command = {
 
       // better-sqlite3 shim using sql.js
       function createBetterSqlite3Shim() {
-        // Load sql.js from CDN (lazy, once)
+        console.log('[better-sqlite3 shim] Creating shim');
+
+        // Load sql.js from CDN - START LOADING IMMEDIATELY when shim is created
         async function loadSqlJs(): Promise<any> {
           // Check if we're in a browser environment
           if (typeof window === 'undefined') {
@@ -1696,30 +1714,55 @@ export const nodeCmd: Command = {
           }
 
           if (!sqlJsPromise) {
+            console.log('[better-sqlite3 shim] Starting sql.js load...');
             sqlJsPromise = (async () => {
-              const initSqlJs = (window as any).initSqlJs;
-              if (initSqlJs) {
-                return await initSqlJs({
+              try {
+                const initSqlJs = (window as any).initSqlJs;
+                if (initSqlJs) {
+                  console.log('[better-sqlite3 shim] initSqlJs already available, initializing...');
+                  const SQL = await initSqlJs({
+                    locateFile: (file: string) => `https://sql.js.org/dist/${file}`
+                  });
+                  console.log('[better-sqlite3 shim] sql.js initialized successfully');
+                  return SQL;
+                }
+                // Load the script if not already loaded
+                console.log('[better-sqlite3 shim] Loading sql-wasm.js script...');
+                await new Promise<void>((resolve, reject) => {
+                  const script = document.createElement('script');
+                  script.src = 'https://sql.js.org/dist/sql-wasm.js';
+                  script.onload = () => {
+                    console.log('[better-sqlite3 shim] sql-wasm.js script loaded');
+                    resolve();
+                  };
+                  script.onerror = (e) => {
+                    console.error('[better-sqlite3 shim] Failed to load sql-wasm.js:', e);
+                    reject(e);
+                  };
+                  document.head.appendChild(script);
+                });
+                console.log('[better-sqlite3 shim] Initializing sql.js WASM...');
+                const SQL = await (window as any).initSqlJs({
                   locateFile: (file: string) => `https://sql.js.org/dist/${file}`
                 });
+                console.log('[better-sqlite3 shim] sql.js WASM initialized successfully');
+                return SQL;
+              } catch (err) {
+                console.error('[better-sqlite3 shim] sql.js loading failed:', err);
+                throw err;
               }
-              // Load the script if not already loaded
-              await new Promise<void>((resolve, reject) => {
-                const script = document.createElement('script');
-                script.src = 'https://sql.js.org/dist/sql-wasm.js';
-                script.onload = () => resolve();
-                script.onerror = reject;
-                document.head.appendChild(script);
-              });
-              return await (window as any).initSqlJs({
-                locateFile: (file: string) => `https://sql.js.org/dist/${file}`
-              });
             })();
           }
           return sqlJsPromise;
         }
 
+        // START LOADING SQL.JS IMMEDIATELY when shim is created (when require('better-sqlite3') is called)
+        // This gives sql.js a head start before any Database is constructed
+        const earlyLoadPromise = loadSqlJs();
+
         // Database class mimicking better-sqlite3
+        // NOTE: Methods are async because sql.js requires async initialization
+        // Code using this shim should use await with all Database methods
         class Database {
           private db: any = null;
           private dbPath: string;
@@ -1728,64 +1771,75 @@ export const nodeCmd: Command = {
           private _isReady = false;
 
           constructor(path: string, options?: any) {
+            console.log('[better-sqlite3 shim] new Database(' + path + ')');
             this.dbPath = ctx.fs.resolvePath(path, ctx.cwd);
-            // Don't auto-init - wait until first use (allows structure tests in Node)
+            // Start initialization immediately in constructor
+            // This allows sql.js loading to happen while other code runs
+            this.initPromise = this._init();
           }
 
           private async _init(): Promise<void> {
+            console.log('[better-sqlite3 shim] _init() called for', this.dbPath);
             if (this._isReady) return;
 
-            this.SQL = await loadSqlJs();
-
-            // Check if we have this database cached
-            if (sqliteDatabases.has(this.dbPath)) {
-              this.db = sqliteDatabases.get(this.dbPath);
-              this._isReady = true;
-              return;
-            }
-
-            // Try to load from virtual filesystem
             try {
-              const data = await ctx.fs.readFile(this.dbPath);
-              if (data instanceof Uint8Array) {
-                this.db = new this.SQL.Database(data);
-              } else {
-                // File exists but is empty or text - create new
+              console.log('[better-sqlite3 shim] Waiting for sql.js...');
+              // Use the early-loaded promise so sql.js may already be ready
+              this.SQL = await earlyLoadPromise;
+              console.log('[better-sqlite3 shim] sql.js ready');
+
+              // Check if we have this database cached
+              if (sqliteDatabases.has(this.dbPath)) {
+                this.db = sqliteDatabases.get(this.dbPath);
+                this._isReady = true;
+                console.log('[better-sqlite3 shim] Using cached database');
+                return;
+              }
+
+              // Try to load from virtual filesystem
+              try {
+                console.log('[better-sqlite3 shim] Loading database from:', this.dbPath);
+                const data = await ctx.fs.readFile(this.dbPath);
+                if (data instanceof Uint8Array) {
+                  this.db = new this.SQL.Database(data);
+                  console.log('[better-sqlite3 shim] Loaded existing database');
+                } else {
+                  // File exists but is empty or text - create new
+                  this.db = new this.SQL.Database();
+                  console.log('[better-sqlite3 shim] Created new database (file was empty/text)');
+                }
+              } catch {
+                // File doesn't exist - create new database
                 this.db = new this.SQL.Database();
+                console.log('[better-sqlite3 shim] Created new database (file not found)');
               }
-            } catch {
-              // File doesn't exist - create new database
-              this.db = new this.SQL.Database();
-            }
 
-            sqliteDatabases.set(this.dbPath, this.db);
-            this._isReady = true;
-          }
-
-          private ensureReady(): void {
-            if (!this._isReady) {
-              // Trigger init synchronously for the error message, but it won't block
-              if (!this.initPromise) {
-                this.initPromise = this._init();
-              }
-              throw new Error('Database not initialized. Call await db.ready first, or use async patterns.');
+              sqliteDatabases.set(this.dbPath, this.db);
+              this._isReady = true;
+              console.log('[better-sqlite3 shim] Database ready:', this.dbPath);
+            } catch (err) {
+              console.error('[better-sqlite3 shim] _init failed:', err);
+              throw err;
             }
           }
 
-          prepare(sql: string): Statement {
-            this.ensureReady();
+
+          // All methods are now async to properly await sql.js initialization
+          // This is necessary because sql.js requires WASM loading which is inherently async
+          async prepare(sql: string): Promise<Statement> {
+            await this.ready;
             return new Statement(this.db, sql);
           }
 
-          exec(sql: string): this {
-            this.ensureReady();
+          async exec(sql: string): Promise<this> {
+            await this.ready;
             this.db.run(sql);
-            this._save();
+            await this._save();
             return this;
           }
 
-          pragma(pragma: string, options?: any): any {
-            this.ensureReady();
+          async pragma(pragma: string, options?: any): Promise<any> {
+            await this.ready;
             const result = this.db.exec(`PRAGMA ${pragma}`);
             if (result.length === 0) return options?.simple ? undefined : [];
             if (options?.simple) {
@@ -1801,21 +1855,28 @@ export const nodeCmd: Command = {
           }
 
           transaction<T>(fn: () => T): () => T {
+            // Transaction returns a sync function, but the function itself can be async
             return () => {
-              this.exec('BEGIN');
+              // Note: This won't work properly with async - transactions need special handling
+              // For now, throw if db not ready
+              if (!this._isReady) {
+                throw new Error('Database must be initialized before using transactions. Call await db.ready first.');
+              }
+              this.db.run('BEGIN');
               try {
                 const result = fn();
-                this.exec('COMMIT');
+                this.db.run('COMMIT');
+                this._save();
                 return result;
               } catch (err) {
-                this.exec('ROLLBACK');
+                this.db.run('ROLLBACK');
                 throw err;
               }
             };
           }
 
-          close(): void {
-            this._save();
+          async close(): Promise<void> {
+            await this._save();
             if (this.db) {
               this.db.close();
               sqliteDatabases.delete(this.dbPath);
@@ -1823,10 +1884,10 @@ export const nodeCmd: Command = {
             }
           }
 
-          private _save(): void {
+          private async _save(): Promise<void> {
             if (!this.db) return;
             const data = this.db.export();
-            ctx.fs.writeFile(this.dbPath, data).catch(() => {});
+            await ctx.fs.writeFile(this.dbPath, data);
           }
 
           // Expose the init promise for async usage
@@ -1835,6 +1896,11 @@ export const nodeCmd: Command = {
               this.initPromise = this._init();
             }
             return this.initPromise;
+          }
+
+          // For compatibility - some code checks if db is open
+          get open(): boolean {
+            return this._isReady && this.db !== null;
           }
         }
 
@@ -1918,7 +1984,12 @@ export const nodeCmd: Command = {
           }
         }
 
-        return Database;
+        // Return with both CommonJS and ES module compatibility
+        // CommonJS: const Database = require('better-sqlite3')
+        // ES Module: const { default: Database } = await import('better-sqlite3')
+        const module = Database as any;
+        module.default = Database;
+        return module;
       }
 
       // Sync require for CommonJS compatibility - returns module directly, not a Promise
@@ -2379,7 +2450,7 @@ export const nodeCmd: Command = {
       const transformedCode = transformESModules(code);
       const wrappedCode = printResult ? `return (${transformedCode})` : transformedCode;
       const fn = new AsyncFunction(
-        'console', 'process', 'require', 'Buffer', '__filename', '__dirname', 'shiro', '__import_meta',
+        'console', 'process', 'require', 'Buffer', '__filename', '__dirname', 'shiro', '__import_meta', 'module', 'exports',
         wrappedCode
       );
 
@@ -2392,15 +2463,26 @@ export const nodeCmd: Command = {
         filename: entryFilename,
       };
 
+      // Create module/exports for CommonJS compatibility
+      const fakeModule: { exports: any } = { exports: {} };
+      const fakeExports = fakeModule.exports;
+
+      // Create require function for the entry script - must use entryDirname, not ctx.cwd
+      const entryRequire = (moduleName: string) => requireModule(moduleName, entryDirname);
+
       let result;
       console.log('[node] Starting main script execution...');
+      console.log('[node] Entry script dirname:', entryDirname);
+      // Log lines around the try-catch to see the error source
+      const codeLines = wrappedCode.split('\n');
+      console.log('[node] Main script lines 50-90:\n' + codeLines.slice(49, 90).map((l, i) => `${50+i}: ${l.slice(0, 120)}`).join('\n'));
       try {
-        result = await fn(fakeConsole, fakeProcess, fakeRequire, FakeBuffer, entryFilename, entryDirname, {
+        result = await fn(fakeConsole, fakeProcess, entryRequire, FakeBuffer, entryFilename, entryDirname, {
           fs: ctx.fs,
           shell: ctx.shell,
           env: ctx.env,
           cwd: ctx.cwd,
-        }, fakeImportMeta);
+        }, fakeImportMeta, fakeModule, fakeExports);
         console.log('[node] Main script execution completed');
       } catch (e: any) {
         console.log('[node] Main script threw error:', e.message);

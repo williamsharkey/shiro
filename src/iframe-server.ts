@@ -41,6 +41,7 @@ interface RegisteredServer {
 class IframeServerManager {
   private servers: Map<number, RegisteredServer> = new Map();
   private defaultContainer: HTMLElement | null = null;
+  private resourceProxySetup = false;
 
   /**
    * Set the default container where iframes will be spawned
@@ -164,7 +165,192 @@ class IframeServerManager {
       html = '<!DOCTYPE html><html><body></body></html>';
     }
 
-    // Inject navigation helper script
+    // Setup resource proxy listener (once per page)
+    this.setupResourceProxy();
+
+    // Resource interceptor script - MUST run first to catch resource loads
+    // This intercepts fetch, XHR, and dynamically added script/link/img tags
+    const resourceInterceptorScript = `
+<script>
+(function() {
+  var PORT = ${port};
+  var pendingResources = new Map();
+  var resourceId = 0;
+
+  // Listen for resource responses from parent
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'vfs-resource-response' && e.data.id) {
+      var pending = pendingResources.get(e.data.id);
+      if (pending) {
+        pendingResources.delete(e.data.id);
+        pending.resolve(e.data);
+      }
+    }
+  });
+
+  // Request resource from parent
+  function fetchFromParent(url, options) {
+    return new Promise(function(resolve, reject) {
+      var id = 'res_' + (++resourceId);
+      pendingResources.set(id, { resolve: resolve, reject: reject });
+      window.parent.postMessage({
+        type: 'vfs-fetch',
+        id: id,
+        port: PORT,
+        url: url,
+        method: (options && options.method) || 'GET',
+        headers: options && options.headers,
+        body: options && options.body
+      }, '*');
+      // Timeout after 30s
+      setTimeout(function() {
+        if (pendingResources.has(id)) {
+          pendingResources.delete(id);
+          reject(new Error('Resource fetch timeout: ' + url));
+        }
+      }, 30000);
+    });
+  }
+
+  // Override fetch
+  var originalFetch = window.fetch;
+  window.fetch = function(url, options) {
+    var urlStr = typeof url === 'string' ? url : url.toString();
+    if (urlStr.startsWith('/') || urlStr.startsWith('./') || urlStr.startsWith('../')) {
+      return fetchFromParent(urlStr, options).then(function(data) {
+        return new Response(data.body, {
+          status: data.status || 200,
+          headers: data.headers || {}
+        });
+      });
+    }
+    return originalFetch.apply(this, arguments);
+  };
+
+  // Override XMLHttpRequest
+  var OrigXHR = window.XMLHttpRequest;
+  window.XMLHttpRequest = function() {
+    var xhr = new OrigXHR();
+    var openArgs = null;
+    var origOpen = xhr.open;
+    xhr.open = function(method, url) {
+      openArgs = { method: method, url: url };
+      if (url.startsWith('/') || url.startsWith('./') || url.startsWith('../')) {
+        // Will intercept in send()
+      }
+      return origOpen.apply(xhr, arguments);
+    };
+    var origSend = xhr.send;
+    xhr.send = function(body) {
+      if (openArgs && (openArgs.url.startsWith('/') || openArgs.url.startsWith('./') || openArgs.url.startsWith('../'))) {
+        fetchFromParent(openArgs.url, { method: openArgs.method, body: body }).then(function(data) {
+          Object.defineProperty(xhr, 'status', { value: data.status || 200 });
+          Object.defineProperty(xhr, 'responseText', { value: data.body || '' });
+          Object.defineProperty(xhr, 'response', { value: data.body || '' });
+          Object.defineProperty(xhr, 'readyState', { value: 4 });
+          if (xhr.onload) xhr.onload();
+          if (xhr.onreadystatechange) xhr.onreadystatechange();
+        }).catch(function(err) {
+          if (xhr.onerror) xhr.onerror(err);
+        });
+        return;
+      }
+      return origSend.apply(xhr, arguments);
+    };
+    return xhr;
+  };
+
+  // Intercept dynamically added elements
+  function loadResourceViaParent(el, attr, type) {
+    var url = el.getAttribute(attr);
+    if (!url || url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('http://') || url.startsWith('https://')) {
+      return;
+    }
+    el.removeAttribute(attr);
+    fetchFromParent(url, { method: 'GET' }).then(function(data) {
+      if (type === 'css') {
+        var style = document.createElement('style');
+        style.textContent = data.body || '';
+        el.parentNode.replaceChild(style, el);
+      } else if (type === 'js') {
+        el.textContent = data.body || '';
+      } else if (type === 'img') {
+        el.src = 'data:image/png;base64,' + btoa(data.body || '');
+      }
+    }).catch(function(err) {
+      console.error('Failed to load resource:', url, err);
+    });
+  }
+
+  // MutationObserver for dynamic elements
+  var observer = new MutationObserver(function(mutations) {
+    mutations.forEach(function(m) {
+      m.addedNodes.forEach(function(node) {
+        if (node.nodeType !== 1) return;
+        if (node.tagName === 'SCRIPT' && node.src) loadResourceViaParent(node, 'src', 'js');
+        if (node.tagName === 'LINK' && node.rel === 'stylesheet') loadResourceViaParent(node, 'href', 'css');
+        if (node.tagName === 'IMG' && node.src) loadResourceViaParent(node, 'src', 'img');
+      });
+    });
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+
+  // Load deferred resources (converted from href/src to data-vfs-href/data-vfs-src)
+  function loadDeferredResources() {
+    // Load deferred stylesheets
+    document.querySelectorAll('link[data-vfs-href]').forEach(function(link) {
+      var href = link.getAttribute('data-vfs-href');
+      link.removeAttribute('data-vfs-href');
+      fetchFromParent(href, { method: 'GET' }).then(function(data) {
+        var style = document.createElement('style');
+        style.textContent = data.body || '';
+        link.parentNode.replaceChild(style, link);
+      }).catch(function(err) {
+        console.error('Failed to load stylesheet:', href, err);
+      });
+    });
+
+    // Load deferred scripts
+    document.querySelectorAll('script[data-vfs-src]').forEach(function(script) {
+      var src = script.getAttribute('data-vfs-src');
+      script.removeAttribute('data-vfs-src');
+      fetchFromParent(src, { method: 'GET' }).then(function(data) {
+        var newScript = document.createElement('script');
+        newScript.textContent = data.body || '';
+        script.parentNode.replaceChild(newScript, script);
+      }).catch(function(err) {
+        console.error('Failed to load script:', src, err);
+      });
+    });
+
+    // Load deferred ES module scripts using blob URLs
+    document.querySelectorAll('script[data-vfs-module-src]').forEach(function(script) {
+      var src = script.getAttribute('data-vfs-module-src');
+      script.removeAttribute('data-vfs-module-src');
+      fetchFromParent(src, { method: 'GET' }).then(function(data) {
+        // Create blob URL with correct MIME type for ES modules
+        var blob = new Blob([data.body || ''], { type: 'application/javascript' });
+        var blobUrl = URL.createObjectURL(blob);
+        var newScript = document.createElement('script');
+        newScript.type = 'module';
+        newScript.src = blobUrl;
+        script.parentNode.replaceChild(newScript, script);
+      }).catch(function(err) {
+        console.error('Failed to load module:', src, err);
+      });
+    });
+  }
+
+  // Run when DOM is ready
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', loadDeferredResources);
+  } else {
+    loadDeferredResources();
+  }
+})();
+</script>`;
+
+    // Navigation helper script (end of body)
     const navigationScript = `
 <script>
 (function() {
@@ -206,7 +392,38 @@ class IframeServerManager {
 </script>
 `;
 
-    // Inject script before closing body/html tag
+    // Pre-process HTML to defer initial resource loading
+    // Convert <link href="/..."> to <link data-vfs-href="/..."> so our interceptor can load them
+    // Convert <script src="/..."> to <script data-vfs-src="/..."> for the same reason
+    html = html.replace(/<link([^>]*)\shref=(["'])([^"']+)\2/gi, (match, attrs, quote, href) => {
+      // Only defer relative URLs
+      if (href.startsWith('/') || href.startsWith('./') || href.startsWith('../')) {
+        return `<link${attrs} data-vfs-href=${quote}${href}${quote}`;
+      }
+      return match;
+    });
+    html = html.replace(/<script([^>]*)\ssrc=(["'])([^"']+)\2/gi, (match, attrs, quote, src) => {
+      // Defer relative URLs (including type="module" scripts)
+      if (src.startsWith('/') || src.startsWith('./') || src.startsWith('../')) {
+        // Mark module scripts with data-vfs-module for special handling
+        if (attrs.includes('type="module"') || attrs.includes("type='module'")) {
+          return `<script${attrs} data-vfs-module-src=${quote}${src}${quote}`;
+        }
+        return `<script${attrs} data-vfs-src=${quote}${src}${quote}`;
+      }
+      return match;
+    });
+
+    // Inject resource interceptor at START of head (before any resources load)
+    if (html.includes('<head>')) {
+      html = html.replace('<head>', '<head>' + resourceInterceptorScript);
+    } else if (html.includes('<html>')) {
+      html = html.replace('<html>', '<html><head>' + resourceInterceptorScript + '</head>');
+    } else {
+      html = resourceInterceptorScript + html;
+    }
+
+    // Inject navigation script before closing body/html tag
     if (html.includes('</body>')) {
       html = html.replace('</body>', navigationScript + '</body>');
     } else if (html.includes('</html>')) {
@@ -316,6 +533,63 @@ class IframeServerManager {
    */
   isPortInUse(port: number): boolean {
     return this.servers.has(port);
+  }
+
+  /**
+   * Setup the resource proxy message listener (called once)
+   * This handles vfs-fetch messages from iframes and serves resources from the virtual server
+   */
+  private setupResourceProxy(): void {
+    if (this.resourceProxySetup) return;
+    this.resourceProxySetup = true;
+
+    window.addEventListener('message', async (event: MessageEvent) => {
+      if (event.data?.type !== 'vfs-fetch') return;
+
+      const { id, port, url, method, headers, body } = event.data;
+      const source = event.source as Window;
+
+      try {
+        // Fetch from the virtual server
+        const response = await this.fetch(port, url, {
+          method: method || 'GET',
+          headers: headers || {},
+          body: body || null,
+        });
+
+        // Convert response body to string
+        let responseBody: string;
+        if (typeof response.body === 'string') {
+          responseBody = response.body;
+        } else if (response.body instanceof Uint8Array) {
+          responseBody = new TextDecoder().decode(response.body);
+        } else if (response.body) {
+          responseBody = JSON.stringify(response.body);
+        } else {
+          responseBody = '';
+        }
+
+        // Send response back to iframe
+        source.postMessage({
+          type: 'vfs-resource-response',
+          id: id,
+          status: response.status || 200,
+          headers: response.headers || {},
+          body: responseBody,
+        }, '*');
+
+      } catch (err) {
+        // Send error response
+        source.postMessage({
+          type: 'vfs-resource-response',
+          id: id,
+          status: 500,
+          body: `Error fetching resource: ${err}`,
+        }, '*');
+      }
+    });
+
+    console.log('[IframeServer] Resource proxy enabled');
   }
 
   /**

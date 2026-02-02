@@ -423,8 +423,9 @@ async function npmInstall(ctx: CommandContext): Promise<number> {
     return 1;
   }
 
-  // Get packages to install from args
-  const packagesToInstall = ctx.args.slice(1);
+  // Get packages to install from args, filtering out flags
+  // Supported flags: --ignore-scripts (ignored, scripts not supported anyway)
+  const packagesToInstall = ctx.args.slice(1).filter(arg => !arg.startsWith('--'));
 
   let depsToResolve: Record<string, string> = {};
 
