@@ -81,11 +81,13 @@ import { clipReportCmd } from './commands/clip-report';
 import { seedCmd } from './commands/seed';
 import { remoteCmd, getPersistedRemoteCode, startRemoteWithCode } from './commands/remote';
 import { hudCmd } from './commands/hud';
+import { faviconCmd } from './commands/favicon';
 import { iframeServer } from './iframe-server';
 import { allCommands } from '../fluffycoreutils/src/index';
 import { wrapFluffyCommand } from './fluffy-adapter';
 import { ShiroTerminal } from './terminal';
 import { ShiroProvider } from '../spirit/src/providers/shiro-provider';
+import { initFaviconUpdater } from './favicon';
 
 /**
  * Register a command in both the CommandRegistry (for execution) and
@@ -215,6 +217,7 @@ async function main() {
   registerCommand(commands, seedCmd, 'src/commands/seed.ts');
   registerCommand(commands, remoteCmd, 'src/commands/remote.ts');
   registerCommand(commands, hudCmd, 'src/commands/hud.ts');
+  registerCommand(commands, faviconCmd, 'src/commands/favicon.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {
@@ -264,6 +267,9 @@ async function main() {
   });
 
   await terminal.start();
+
+  // Initialize dynamic favicon (32x32 minimap of terminal content)
+  initFaviconUpdater(terminal.term);
 
   // Auto-reconnect remote session if one was active before page reload
   const persistedCode = getPersistedRemoteCode();
