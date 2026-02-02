@@ -232,7 +232,7 @@ export class ShiroTerminal {
     // Build URLs preserving subdomain
     const baseUrl = `https://${hostname}`;
     const aboutUrl = `${baseUrl}/about`;
-    const githubUrl = 'https://github.com/nicweke';
+    const githubUrl = 'https://github.com/williamsharkey/shiro';
     const discordUrl = 'https://discord.gg/Wkw4SZ2V';
 
     // Pad hostname to fit layout (max ~20 chars for subdomain display)
