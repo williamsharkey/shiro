@@ -673,10 +673,12 @@ export const nodeCmd: Command = {
         const slice = (start !== undefined || end !== undefined)
           ? this.subarray(start ?? 0, end ?? this.length)
           : this;
-        if (encoding === 'base64') {
+        if (encoding === 'base64' || encoding === 'base64url') {
           let str = '';
           for (let i = 0; i < slice.length; i++) str += String.fromCharCode(slice[i]);
-          return btoa(str);
+          const b64 = btoa(str);
+          if (encoding === 'base64url') return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+          return b64;
         }
         if (encoding === 'hex') {
           return Array.from(slice as Uint8Array).map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -1886,7 +1888,7 @@ export const nodeCmd: Command = {
                   dv.setUint32(8, h0 ^ 0xa5a5a5a5); dv.setUint32(12, h1 ^ 0x5a5a5a5a);
                   if (result.length > 16) { dv.setUint32(16, h0 ^ h1); if (result.length > 20) { for (let i = 20; i < result.length; i += 4) dv.setUint32(i, h0 + i); } }
                   if (enc === 'hex') return Array.from(result).map(b => b.toString(16).padStart(2, '0')).join('');
-                  if (enc === 'base64') { let s = ''; for (let i = 0; i < result.length; i++) s += String.fromCharCode(result[i]); return btoa(s); }
+                  if (enc === 'base64' || enc === 'base64url') { let s = ''; for (let i = 0; i < result.length; i++) s += String.fromCharCode(result[i]); const b64 = btoa(s); return enc === 'base64url' ? b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') : b64; }
                   Object.setPrototypeOf(result, FakeBuffer.prototype);
                   return result;
                 },
@@ -1917,6 +1919,7 @@ export const nodeCmd: Command = {
 
               const server: any = {
                 _events: {} as Record<string, Function[]>,
+                listening: false,
                 on(event: string, cb: Function) {
                   if (event === 'request' && !requestHandler) {
                     requestHandler = cb as any;
@@ -2063,12 +2066,17 @@ export const nodeCmd: Command = {
                       .catch((err: Error) => fakeConsole.warn('Could not open browser:', err.message));
                   }
 
-                  server.emit('listening');
-                  cb?.();
+                  server.listening = true;
+                  // Fire callback async (like real Node.js nextTick)
+                  setTimeout(() => {
+                    server.emit('listening');
+                    cb?.();
+                  }, 0);
 
                   return this;
                 },
                 close(cb?: () => void) {
+                  server.listening = false;
                   if (cleanupFn) {
                     cleanupFn();
                     cleanupFn = null;
