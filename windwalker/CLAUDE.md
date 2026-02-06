@@ -8,24 +8,35 @@ Windwalker is a unified test suite for Spirit running on Foam and Shiro browser 
 
 ```
 tests/
-├── runner-linkedom.js      # Fast linkedom-based test runner (default)
-├── runner-skyeyes.js       # Skyeyes-based test runner (uses nimbus bridge)
-├── skyeyes-adapter.js      # Adapter for running tests through skyeyes API
-├── helpers.js              # Shared test utilities (page.evaluate style)
-├── helpers-linkedom.js     # Direct module access helpers
-├── level-0-boot/           # Basic page load and boot tests
-├── level-1-filesystem/     # Virtual filesystem operations
-├── level-2-shell/          # Shell command parsing and execution
-├── level-3-coreutils/      # Core Unix commands (ls, cat, mkdir, etc.)
-├── level-4-pipes/          # Pipe and redirect functionality
-├── level-5-git/            # Git operations (isomorphic-git)
-├── level-6-spirit/         # Spirit AI agent integration
-├── level-7-workflows/      # Multi-step workflow tests
-├── level-8-fluffycoreutils/ # Shared coreutils library tests
-├── level-9-selfbuild/      # Self-compilation tests
-├── level-10-hypercompact/  # Hypercompact command tests
-├── level-11-advanced/      # Advanced features
-└── level-12-hotreload/     # Hot-reload and self-modification tests
+├── runner-linkedom.js        # Fast linkedom-based test runner (default)
+├── runner-skyeyes.js         # Skyeyes-based test runner (uses nimbus bridge)
+├── skyeyes-adapter.js        # Adapter for running tests through skyeyes API
+├── helpers.js                # Shared test utilities (page.evaluate style)
+├── helpers-linkedom.js       # Direct module access helpers
+├── shiro-vitest/             # Shiro-specific vitest tests (linkedom + fake-indexeddb)
+│   ├── setup.ts              # DOM/IndexedDB polyfills for Node.js
+│   ├── helpers.ts            # createTestShell(), run() helpers
+│   ├── filesystem.test.ts    # VFS operations
+│   ├── shell.test.ts         # Shell parsing, pipes, env vars
+│   ├── commands.test.ts      # Coreutils (ls, cat, mkdir, etc.)
+│   ├── git.test.ts           # isomorphic-git operations
+│   ├── terminal-history.test.ts # Terminal history navigation
+│   ├── virtual-server.test.ts   # Express shim / service worker
+│   ├── node-runtime.test.ts  # Node.js runtime shim (jseval.ts)
+│   └── claude-code-install.test.ts # Full Claude Code install + run
+├── level-0-boot/             # Basic page load and boot tests
+├── level-1-filesystem/       # Virtual filesystem operations
+├── level-2-shell/            # Shell command parsing and execution
+├── level-3-coreutils/        # Core Unix commands (ls, cat, mkdir, etc.)
+├── level-4-pipes/            # Pipe and redirect functionality
+├── level-5-git/              # Git operations (isomorphic-git)
+├── level-6-spirit/           # Spirit AI agent integration
+├── level-7-workflows/        # Multi-step workflow tests
+├── level-8-fluffycoreutils/  # Shared coreutils library tests
+├── level-9-selfbuild/        # Self-compilation tests
+├── level-10-hypercompact/    # Hypercompact command tests
+├── level-11-advanced/        # Advanced features
+└── level-12-hotreload/       # Hot-reload and self-modification tests
 ```
 
 ## Common Tasks
@@ -33,10 +44,11 @@ tests/
 ```bash
 npm test                     # Run fast linkedom tests (levels 0-4)
 npm run test:linkedom        # Same as above
+npm run test:shiro           # Shiro vitest suite (145 tests, ~70s)
 npm run test:skyeyes         # Run all tests via skyeyes (real browser)
 npm run test:skyeyes:foam    # Skyeyes tests targeting Foam
 npm run test:skyeyes:shiro   # Skyeyes tests targeting Shiro
-npm run test:all             # Run both linkedom and skyeyes tests
+npm run test:all             # Run linkedom + shiro-vitest + hotreload
 ```
 
 ## Test Runner Strategy
@@ -44,6 +56,7 @@ npm run test:all             # Run both linkedom and skyeyes tests
 | Runner | Startup | Levels | Use Case |
 |--------|---------|--------|----------|
 | **linkedom** | ~10ms | 0-4 | Fast CI, unit tests, VFS/shell logic |
+| **shiro-vitest** | ~3s | N/A | Shiro TypeScript tests via vitest |
 | **skyeyes** | ~1s | 0-9 | Full integration, real browser APIs |
 
 ### linkedom Runner (Default)
@@ -51,6 +64,12 @@ npm run test:all             # Run both linkedom and skyeyes tests
 - Uses `fake-indexeddb` for VFS storage
 - No browser overhead, tests run in-process
 - Perfect for: filesystem, shell, coreutils, pipes
+
+### shiro-vitest Runner
+- Imports Shiro's TypeScript modules via `@shiro` path alias
+- Uses linkedom + fake-indexeddb for DOM/VFS polyfills
+- Tests Node.js runtime shim (jseval.ts), Claude Code install, Express shim
+- 145 tests including real `npm install -g @anthropic-ai/claude-code` E2E
 
 ### skyeyes Runner
 - Uses real browser via nimbus dashboard
