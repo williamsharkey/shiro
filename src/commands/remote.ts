@@ -361,8 +361,12 @@ async function pollForAnswer(session: RemoteSession) {
       const res = await fetch(`${SIGNALING_URL}/answer/${session.code}`);
       if (res.ok) {
         const data = await res.json();
-        // Check if still waiting for answer
-        if (data.waiting) {
+        if (data.expired) {
+          // Offer expired on signaling server - stop polling
+          console.log('[remote] Session expired on signaling server');
+          cleanupSession();
+          return;
+        } else if (data.waiting) {
           // No answer yet, continue polling
         } else if (data.answer) {
           await session.pc.setRemoteDescription(data.answer);
@@ -377,9 +381,14 @@ async function pollForAnswer(session: RemoteSession) {
           console.log('[remote] Received answer, establishing connection...');
           return;
         }
+      } else if (res.status === 404) {
+        // Code no longer exists on signaling server - stop polling
+        console.log('[remote] Session no longer valid (404), stopping poll');
+        cleanupSession();
+        return;
       }
     } catch {
-      // Ignore polling errors
+      // Network error - continue polling (transient failure)
     }
 
     // Continue polling

@@ -174,7 +174,12 @@ export default {
 
       const answerData = await env.REMOTE_KV.get(`answer:${code}`);
       if (!answerData) {
-        // No answer yet - return 200 with waiting status (client should poll)
+        // Check if the offer still exists - if not, the session has expired
+        const offerData = await env.REMOTE_KV.get(`offer:${code}`);
+        if (!offerData) {
+          return jsonResponse({ expired: true });
+        }
+        // Offer exists but no answer yet - client should keep polling
         return jsonResponse({ waiting: true });
       }
 

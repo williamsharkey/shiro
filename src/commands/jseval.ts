@@ -201,9 +201,9 @@ export const nodeCmd: Command = {
             this._stderr = stderr || stdoutOrOpts || fakeProcess?.stderr;
           }
         }
-        log(...args: any[]) { const s = args.map(formatArg).join(' ') + '\n'; if (this._stdout?.write) this._stdout.write(s); else fakeConsole.log(...args); }
+        log(...args: any[]) { const s = args.map(formatArg).join(' ') + '\n'; if (this._stdout?.write) this._stdout.write(s); else { stdoutBuf.push(s.replace(/\n$/, '')); if (ctx.terminal) { streamedToTerminal = true; ctx.terminal.writeOutput(s.replace(/\n/g, '\r\n')); } } }
         info(...args: any[]) { this.log(...args); }
-        warn(...args: any[]) { const s = args.map(formatArg).join(' ') + '\n'; if (this._stderr?.write) this._stderr.write(s); else fakeConsole.warn(...args); }
+        warn(...args: any[]) { const s = args.map(formatArg).join(' ') + '\n'; if (this._stderr?.write) this._stderr.write(s); else { stderrBuf.push(s.replace(/\n$/, '')); } }
         error(...args: any[]) { this.warn(...args); }
         dir(obj: any) { this.log(obj); }
         debug(...args: any[]) { this.log(...args); }
@@ -794,7 +794,16 @@ export const nodeCmd: Command = {
       };
 
       // Built-in Node.js module shims (maps to Shiro VFS/shell)
+      const _builtinCache = new Map<string, any>();
       function getBuiltinModule(name: string): any | null {
+        // Normalize node: prefix for caching
+        const cacheKey = name.startsWith('node:') ? name.slice(5) : name;
+        if (_builtinCache.has(cacheKey)) return _builtinCache.get(cacheKey);
+        const mod = _getBuiltinModuleImpl(name);
+        if (mod !== null) _builtinCache.set(cacheKey, mod);
+        return mod;
+      }
+      function _getBuiltinModuleImpl(name: string): any | null {
         switch (name) {
           case 'path':
           case 'node:path': {
@@ -979,6 +988,75 @@ export const nodeCmd: Command = {
               },
               chmodSync: () => {},
               chownSync: () => {},
+              // File descriptor based sync operations (minimal stubs for CLI compatibility)
+              openSync: (p: string, flags?: string) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                const fd = 100 + Math.floor(Math.random() * 9900);
+                // Store mapping for writeSync/readSync/closeSync
+                (globalThis as any).__shiroFds = (globalThis as any).__shiroFds || {};
+                (globalThis as any).__shiroFds[fd] = { path: resolved, flags: flags || 'r', offset: 0 };
+                return fd;
+              },
+              writeSync: (fd: number, data: string | Uint8Array) => {
+                const fdInfo = (globalThis as any).__shiroFds?.[fd];
+                if (fdInfo) {
+                  const existing = fileCache.get(fdInfo.path) || '';
+                  const str = typeof data === 'string' ? data : new TextDecoder().decode(data);
+                  fileCache.set(fdInfo.path, existing + str);
+                  ctx.fs.writeFile(fdInfo.path, existing + str).catch(() => {});
+                }
+                return typeof data === 'string' ? data.length : data.length;
+              },
+              readSync: (fd: number, buf: Uint8Array, offset?: number, length?: number, position?: number) => {
+                const fdInfo = (globalThis as any).__shiroFds?.[fd];
+                if (!fdInfo) return 0;
+                const content = fileCache.get(fdInfo.path) || '';
+                const bytes = new TextEncoder().encode(content);
+                const pos = position ?? fdInfo.offset;
+                const len = Math.min(length ?? buf.length, bytes.length - pos);
+                for (let i = 0; i < len; i++) buf[(offset ?? 0) + i] = bytes[pos + i];
+                fdInfo.offset = pos + len;
+                return len;
+              },
+              closeSync: (fd: number) => {
+                if ((globalThis as any).__shiroFds?.[fd]) delete (globalThis as any).__shiroFds[fd];
+              },
+              fsyncSync: () => {},
+              fdatasyncSync: () => {},
+              rmSync: (p: string, opts?: any) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                if (opts?.recursive) {
+                  // Remove directory and all contents
+                  const prefix = resolved + '/';
+                  for (const key of [...fileCache.keys()]) {
+                    if (key === resolved || key.startsWith(prefix)) {
+                      fileCache.delete(key);
+                      ctx.fs.unlink(key).catch(() => {});
+                    }
+                  }
+                } else {
+                  fileCache.delete(resolved);
+                  ctx.fs.unlink(resolved).catch(() => {});
+                }
+              },
+              rmdirSync: (p: string) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                ctx.fs.rmdir(resolved).catch(() => {});
+              },
+              appendFileSync: (p: string, data: string | Uint8Array) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                const existing = fileCache.get(resolved) || '';
+                const str = typeof data === 'string' ? data : new TextDecoder().decode(data);
+                fileCache.set(resolved, existing + str);
+                ctx.fs.writeFile(resolved, existing + str).catch(() => {});
+              },
+              symlinkSync: (target: string, path: string) => {
+                const resolved = ctx.fs.resolvePath(path, ctx.cwd);
+                const targetResolved = ctx.fs.resolvePath(target, ctx.cwd);
+                // Symlinks in VFS: just copy the target reference
+                const content = fileCache.get(targetResolved);
+                if (content !== undefined) fileCache.set(resolved, content);
+              },
               createReadStream: (p: string, opts?: any) => {
                 const s = getBuiltinModule('stream');
                 const rs = new s.Readable();
@@ -1741,6 +1819,8 @@ export const nodeCmd: Command = {
             constants: { MAX_LENGTH: 2147483647, MAX_STRING_LENGTH: 536870888 },
             kMaxLength: 2147483647,
             SlowBuffer: FakeBuffer,
+            isUtf8: (buf: Uint8Array) => { try { new TextDecoder('utf-8', { fatal: true }).decode(buf); return true; } catch { return false; } },
+            isAscii: (buf: Uint8Array) => { for (let i = 0; i < buf.length; i++) if (buf[i] > 127) return false; return true; },
           };
           case 'stream':
           case 'node:stream': {
@@ -1840,17 +1920,22 @@ export const nodeCmd: Command = {
             };
             // Make the module itself a constructor (for `const Stream = require('stream')`)
             streamModule.default = Stream;
+            // Node.js stream module is itself a constructor with a prototype
+            streamModule.prototype = Stream.prototype;
+            streamModule.isErrored = (s: any) => !!s?.destroyed;
+            streamModule.isDisturbed = (s: any) => !!s?._readableState?.reading;
+            streamModule.isReadable = (s: any) => s instanceof Readable;
+            streamModule.isWritable = (s: any) => s instanceof Writable;
             return streamModule;
           }
           case 'crypto':
           case 'node:crypto': return {
-            randomBytes: (n: number) => {
+            randomBytes: (n: number, cb?: Function) => {
               const bytes = new Uint8Array(n);
               crypto.getRandomValues(bytes);
-              return Object.assign(bytes, { toString: (enc: string) => {
-                if (enc === 'hex') return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
-                return new TextDecoder().decode(bytes);
-              }});
+              Object.setPrototypeOf(bytes, FakeBuffer.prototype);
+              if (cb) { setTimeout(() => cb(null, bytes), 0); return; }
+              return bytes;
             },
             createHash: (algo: string) => {
               const chunks: Uint8Array[] = [];
@@ -1903,6 +1988,19 @@ export const nodeCmd: Command = {
               return hash;
             },
             randomUUID: () => crypto.randomUUID(),
+            randomFillSync: (buf: Uint8Array) => { crypto.getRandomValues(buf); return buf; },
+            timingSafeEqual: (a: Uint8Array, b: Uint8Array) => {
+              if (a.length !== b.length) throw new RangeError('Input buffers must have the same byte length');
+              let result = 0;
+              for (let i = 0; i < a.length; i++) result |= a[i] ^ b[i];
+              return result === 0;
+            },
+            getHashes: () => ['sha1', 'sha256', 'sha384', 'sha512', 'md5'],
+            getCiphers: () => ['aes-256-cbc', 'aes-128-cbc', 'aes-256-gcm'],
+            createPrivateKey: (key: any) => ({ type: 'private', export: () => key }),
+            createPublicKey: (key: any) => ({ type: 'public', export: () => key }),
+            createSecretKey: (key: any) => ({ type: 'secret', export: () => key }),
+            KeyObject: class KeyObject { type = 'secret'; constructor(type?: string) { if (type) this.type = type; } export() { return new Uint8Array(0); } },
             // Web Crypto API for jose and other crypto libraries
             webcrypto: crypto,
             subtle: crypto.subtle,
@@ -2092,6 +2190,9 @@ export const nodeCmd: Command = {
                 address() {
                   return listeningPort ? { port: listeningPort, address: '0.0.0.0' } : null;
                 },
+                closeAllConnections() { /* no-op stub */ },
+                closeIdleConnections() { /* no-op stub */ },
+                getConnections(cb?: Function) { cb?.(null, 0); },
               };
               return server;
             };
@@ -2692,9 +2793,19 @@ export const nodeCmd: Command = {
               inflateSync: (data: any) => data,
               brotliCompressSync: (data: any) => data,
               brotliDecompressSync: (data: any) => data,
+              createInflateRaw: () => ({ pipe: (d: any) => d, on: () => {}, once: () => {}, end: () => {} }),
+              createDeflateRaw: () => ({ pipe: (d: any) => d, on: () => {}, once: () => {}, end: () => {} }),
+              createBrotliCompress: () => ({ pipe: (d: any) => d, on: () => {}, once: () => {}, end: () => {} }),
+              createBrotliDecompress: () => ({ pipe: (d: any) => d, on: () => {}, once: () => {}, end: () => {} }),
+              deflateRawSync: (data: any) => data,
+              inflateRawSync: (data: any) => data,
+              Z_DEFAULT_WINDOWBITS: 15,
+              Z_NO_FLUSH: 0,
+              Z_PARTIAL_FLUSH: 1,
               constants: {
                 Z_NO_COMPRESSION: 0, Z_BEST_SPEED: 1, Z_BEST_COMPRESSION: 9,
                 Z_DEFAULT_COMPRESSION: -1, Z_SYNC_FLUSH: 2, Z_FULL_FLUSH: 3,
+                Z_NO_FLUSH: 0, Z_PARTIAL_FLUSH: 1, Z_DEFAULT_WINDOWBITS: 15,
                 BROTLI_OPERATION_PROCESS: 0, BROTLI_OPERATION_FLUSH: 1, BROTLI_OPERATION_FINISH: 2,
               },
             };
@@ -3156,21 +3267,7 @@ export const nodeCmd: Command = {
           }
 
           case 'util/types':
-          case 'node:util/types': return {
-            isDate: (v: any) => v instanceof Date,
-            isRegExp: (v: any) => v instanceof RegExp,
-            isTypedArray: (v: any) => ArrayBuffer.isView(v) && !(v instanceof DataView),
-            isArrayBuffer: (v: any) => v instanceof ArrayBuffer,
-            isSharedArrayBuffer: (v: any) => typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer,
-            isPromise: (v: any) => v instanceof Promise,
-            isMap: (v: any) => v instanceof Map,
-            isSet: (v: any) => v instanceof Set,
-            isProxy: () => false,
-            isNativeError: (v: any) => v instanceof Error,
-            isNumberObject: (v: any) => typeof v === 'object' && v instanceof Number,
-            isStringObject: (v: any) => typeof v === 'object' && v instanceof String,
-            isBooleanObject: (v: any) => typeof v === 'object' && v instanceof Boolean,
-          };
+          case 'node:util/types': return (getBuiltinModule('util') as any).types;
 
           case 'inspector':
           case 'node:inspector': return {
@@ -3997,13 +4094,24 @@ export const nodeCmd: Command = {
       // For modules with top-level await, caller must await the result
       // Auto-stub: for missing properties on builtin modules, return smart stubs
       // This prevents "Class extends undefined" and "Cannot read properties of undefined" errors
+      let _autoStubDepth = 0;
       function createAutoStub(modPath: string, target: any): any {
         const stubCache = new Map<string, any>();
         return new Proxy(target, {
           get(t, prop, receiver) {
             if (typeof prop === 'symbol') return Reflect.get(t, prop, receiver);
-            const val = Reflect.get(t, prop, receiver);
-            if (val !== undefined) return val;
+            _autoStubDepth++;
+            if (_autoStubDepth > 500) {
+              _autoStubDepth--;
+              console.error(`[AutoStub] DEPTH OVERFLOW on ${modPath}.${String(prop)} depth=${_autoStubDepth}`);
+              return undefined;
+            }
+            try {
+              const val = Reflect.get(t, prop, receiver);
+              if (val !== undefined) return val;
+            } finally {
+              _autoStubDepth--;
+            }
             // Don't stub internal/common props
             if (prop === 'then' || prop === 'toJSON' || prop === '__esModule' || prop === 'default' || prop.startsWith('_')) return undefined;
             // Return cached stub
@@ -4014,7 +4122,10 @@ export const nodeCmd: Command = {
               static [Symbol.hasInstance](_inst: any) { return false; }
             };
             // Make it callable as a function too
+            let _stubCallCount = 0;
             const stub: any = function(...args: any[]) {
+              _stubCallCount++;
+              if (_stubCallCount > 50) return undefined; // Safety bail for infinite recursion
               // For sync functions that return values, return sensible defaults
               if (prop.endsWith('Sync')) return '';
               if (prop === 'constants') return {};
@@ -4031,9 +4142,6 @@ export const nodeCmd: Command = {
 
       function requireModule(modPath: string, fromDir: string): any {
         const result = _requireModule(modPath, fromDir);
-        if (result === undefined || result === null) {
-          console.log(`[require] WARNING: '${modPath}' returned ${result}`);
-        }
         // For Node.js builtins, wrap in auto-stub Proxy
         if (result && typeof result === 'object' && (modPath.startsWith('node:') || getBuiltinModule(modPath) !== null)) {
           return createAutoStub(modPath, result);
