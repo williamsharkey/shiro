@@ -30,8 +30,10 @@ export class ShiroTerminal {
   private userInputBuffer = '';
   private userInputCursorPos = 0;
   private rawModeCallback: ((key: string) => void) | null = null;
+  private stdinPassthrough: ((data: string) => void) | null = null;
   private iframeContainer: HTMLElement | null = null;
   private displayedRows = 1; // track how many terminal rows the current prompt+input spans
+  private resizeCallbacks: ((cols: number, rows: number) => void)[] = [];
 
   // HUD state for dynamic updates
   private hud: HudState | null = null;
@@ -117,7 +119,11 @@ export class ShiroTerminal {
     `;
     document.body.appendChild(this.iframeContainer);
 
-    window.addEventListener('resize', () => this.fitAddon.fit());
+    window.addEventListener('resize', () => {
+      this.fitAddon.fit();
+      // Notify resize listeners (used by ink for layout recalculation)
+      this.resizeCallbacks.forEach(cb => cb(this.term.cols, this.term.rows));
+    });
 
     this.term.onData((data: string) => this.handleInput(data));
   }
@@ -187,6 +193,30 @@ export class ShiroTerminal {
    */
   isRawMode(): boolean {
     return this.rawModeCallback !== null;
+  }
+
+  /**
+   * Enter stdin passthrough mode — raw xterm.js data is forwarded to the callback
+   * without any key parsing. Used by Node.js scripts that need real stdin (e.g., ink).
+   * Takes precedence over rawModeCallback.
+   */
+  enterStdinPassthrough(callback: (data: string) => void): void {
+    this.stdinPassthrough = callback;
+  }
+
+  /**
+   * Exit stdin passthrough mode.
+   */
+  exitStdinPassthrough(): void {
+    this.stdinPassthrough = null;
+  }
+
+  /**
+   * Register a callback for terminal resize events (used by ink for layout).
+   */
+  onResize(callback: (cols: number, rows: number) => void): () => void {
+    this.resizeCallbacks.push(callback);
+    return () => { this.resizeCallbacks = this.resizeCallbacks.filter(cb => cb !== callback); };
   }
 
   /**
@@ -365,10 +395,7 @@ export class ShiroTerminal {
     const home = this.shell.env['HOME'] || '/home/user';
     const displayCwd = cwd.startsWith(home) ? '~' + cwd.slice(home.length) : cwd;
     const user = this.shell.env['USER'] || 'user';
-    // Show subdomain in prompt if on one
-    const hostname = typeof window !== 'undefined' ? window.location.hostname : 'shiro.computer';
-    const subdomainMatch = hostname.match(/^([^.]+)\.shiro\.computer$/);
-    const hostDisplay = subdomainMatch ? subdomainMatch[1] : 'shiro';
+    const hostDisplay = this.getHostDisplay();
     this.term.write(`\x1b[32m${user}@${hostDisplay}\x1b[0m:\x1b[34m${displayCwd}\x1b[0m$ `);
     this.displayedRows = 1;
   }
@@ -386,9 +413,7 @@ export class ShiroTerminal {
     const home = this.shell.env['HOME'] || '/home/user';
     const displayCwd = cwd.startsWith(home) ? '~' + cwd.slice(home.length) : cwd;
     const user = this.shell.env['USER'] || 'user';
-    const hostname = typeof window !== 'undefined' ? window.location.hostname : 'shiro.computer';
-    const subdomainMatch = hostname.match(/^([^.]+)\.shiro\.computer$/);
-    const hostDisplay = subdomainMatch ? subdomainMatch[1] : 'shiro';
+    const hostDisplay = this.getHostDisplay();
 
     // Orange (208) for remote indicator, ℝ (U+211D) as remote symbol
     this.term.write(`\x1b[38;5;208m${user}@${hostDisplay}\x1b[0m:\x1b[34m${displayCwd}\x1b[38;5;208mℝ\x1b[0m `);
@@ -415,6 +440,12 @@ export class ShiroTerminal {
   }
 
   private async handleInput(data: string) {
+    // Stdin passthrough: forward raw data without parsing (e.g., ink/React terminal apps)
+    if (this.stdinPassthrough) {
+      this.stdinPassthrough(data);
+      return;
+    }
+
     // Raw mode: send all keystrokes directly to the callback (e.g., vi editor)
     if (this.rawModeCallback) {
       // Parse escape sequences for raw mode
@@ -711,12 +742,19 @@ export class ShiroTerminal {
     }
   }
 
+  private getHostDisplay(): string {
+    const hostname = typeof window !== 'undefined' ? window.location.hostname : 'shiro.computer';
+    const subdomainMatch = hostname.match(/^([^.]+)\.shiro\.computer$/);
+    return subdomainMatch ? subdomainMatch[1] : 'shiro';
+  }
+
   private promptVisualLength(): number {
     const user = this.shell.env['USER'] || 'user';
     const home = this.shell.env['HOME'] || '/home/user';
     const displayCwd = this.shell.cwd.startsWith(home) ? '~' + this.shell.cwd.slice(home.length) : this.shell.cwd;
-    // "user@shiro:cwd$ "
-    return user.length + '@shiro:'.length + displayCwd.length + '$ '.length;
+    const hostDisplay = this.getHostDisplay();
+    // "user@host:cwd$ "
+    return user.length + '@'.length + hostDisplay.length + ':'.length + displayCwd.length + '$ '.length;
   }
 
   private redrawLine() {
@@ -733,7 +771,8 @@ export class ShiroTerminal {
     const user = this.shell.env['USER'] || 'user';
     const home = this.shell.env['HOME'] || '/home/user';
     const displayCwd = this.shell.cwd.startsWith(home) ? '~' + this.shell.cwd.slice(home.length) : this.shell.cwd;
-    output += `\x1b[32m${user}@shiro\x1b[0m:\x1b[34m${displayCwd}\x1b[0m$ `;
+    const hostDisplay = this.getHostDisplay();
+    output += `\x1b[32m${user}@${hostDisplay}\x1b[0m:\x1b[34m${displayCwd}\x1b[0m$ `;
 
     // Add input buffer
     output += this.lineBuffer;

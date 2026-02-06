@@ -87,16 +87,17 @@ export const nodeCmd: Command = {
   name: 'node',
   description: 'Execute JavaScript files (browser JS VM)',
   async exec(ctx: CommandContext): Promise<number> {
-    console.log('[node] Command invoked with args:', ctx.args);
-    console.log('[node] cwd:', ctx.cwd);
-
     let code = '';
     let printResult = false;
 
-    // Parse args
+    // Parse args — once we see a script file, everything after is script args
     const fileArgs: string[] = [];
+    let foundScript = false;
     for (let i = 0; i < ctx.args.length; i++) {
-      if (ctx.args[i] === '-e' || ctx.args[i] === '--eval') {
+      if (foundScript) {
+        // After script path, everything is a script argument
+        fileArgs.push(ctx.args[i]);
+      } else if (ctx.args[i] === '-e' || ctx.args[i] === '--eval') {
         code = ctx.args[++i] || '';
       } else if (ctx.args[i] === '-p' || ctx.args[i] === '--print') {
         code = ctx.args[++i] || '';
@@ -110,6 +111,7 @@ export const nodeCmd: Command = {
         return 0;
       } else {
         fileArgs.push(ctx.args[i]);
+        foundScript = true; // First non-flag arg is the script path
       }
     }
 
@@ -135,7 +137,14 @@ export const nodeCmd: Command = {
       return 1;
     }
 
-    console.log('[node] Code loaded, length:', code.length, 'first 100 chars:', code.slice(0, 100));
+    // Suppress unhandled rejections from CLI force-exit patterns
+    // (process.exit → catch → process.kill → catch → throw "unreachable")
+    // These fire in deferred async callbacks after fn() has already resolved.
+    const suppressRejection = (event: PromiseRejectionEvent) => {
+      if (event.reason?._isProcessExit || event.reason?.message === 'unreachable') {
+        event.preventDefault();
+      }
+    };
 
     try {
       // Build a minimal Node-like environment
@@ -145,38 +154,262 @@ export const nodeCmd: Command = {
       const stdoutBuf: string[] = [];
       const stderrBuf: string[] = [];
       const pendingPromises: Promise<any>[] = []; // Track async operations like app.listen()
+      let streamedToTerminal = false; // True if output was streamed directly to terminal
+      let isInteractiveMode = false;        // Set when stdin.setRawMode(true) called (ink)
+      let scriptTimeoutId: any = null;       // Handle for cancelling SCRIPT_TIMEOUT
 
       const fakeConsole = {
-        log: (...args: any[]) => { stdoutBuf.push(args.map(formatArg).join(' ')); },
-        info: (...args: any[]) => { stdoutBuf.push(args.map(formatArg).join(' ')); },
+        log: (...args: any[]) => {
+          const s = args.map(formatArg).join(' ');
+          stdoutBuf.push(s);
+          if (ctx.terminal) { streamedToTerminal = true; ctx.terminal.writeOutput(s.replace(/\n/g, '\r\n') + '\r\n'); }
+        },
+        info: (...args: any[]) => {
+          const s = args.map(formatArg).join(' ');
+          stdoutBuf.push(s);
+          if (ctx.terminal) { streamedToTerminal = true; ctx.terminal.writeOutput(s.replace(/\n/g, '\r\n') + '\r\n'); }
+        },
         warn: (...args: any[]) => { stderrBuf.push(args.map(formatArg).join(' ')); },
         error: (...args: any[]) => { stderrBuf.push(args.map(formatArg).join(' ')); },
-        dir: (obj: any) => { stdoutBuf.push(JSON.stringify(obj, null, 2)); },
+        dir: (obj: any) => {
+          const s = JSON.stringify(obj, null, 2);
+          stdoutBuf.push(s);
+          if (ctx.terminal) { streamedToTerminal = true; ctx.terminal.writeOutput(s.replace(/\n/g, '\r\n') + '\r\n'); }
+        },
       };
 
       const processEvents: Record<string, Function[]> = {};
+      // Deferred exit: resolves when process.exit is called from async code
+      let deferredExitResolve: ((code: number) => void) | null = null;
+      const deferredExitPromise = new Promise<number>((resolve) => { deferredExitResolve = resolve; });
       const fakeProcess = {
-        env: { ...ctx.env },
+        env: {
+          ...ctx.env,
+          MCP_CONNECTION_NONBLOCKING: '1',
+          // Route API calls through CORS proxy when in browser
+          ...(typeof window !== 'undefined' && !ctx.env['ANTHROPIC_BASE_URL'] ? {
+            ANTHROPIC_BASE_URL: `${window.location.origin}/api/anthropic`,
+          } : {}),
+        } as Record<string, string>,
         cwd: () => ctx.cwd,
         exit: (c?: number) => {
-          exitCode = c || 0;
+          if (exitCalled) throw new ProcessExitError(exitCode); // Prevent re-entrant exit
+          exitCode = c ?? 0;
           exitCalled = true;
-          console.log('[node] process.exit(' + exitCode + ') called');
-          console.log('[node] stdout buffer:', stdoutBuf.join('\n').slice(-500));
-          console.log('[node] stderr buffer:', stderrBuf.join('\n').slice(-500));
-          console.trace('[node] process.exit stack trace');
+          // Fire 'exit' event handlers (CLI registers cleanup here)
+          try { (processEvents['exit'] || []).forEach(fn => fn(exitCode)); } catch (_) {}
+          deferredExitResolve?.(exitCode);
           throw new ProcessExitError(exitCode);
         },
         argv: ['node', ...fileArgs],
-        platform: 'browser',
-        version: 'v0.1.0-shiro',
-        versions: { node: '20.0.0' },
-        stdout: { write: (s: string) => { stdoutBuf.push(s); } },
-        stderr: { write: (s: string) => { stderrBuf.push(s); } },
+        argv0: 'node',
+        execArgv: [],
+        execPath: '/usr/local/bin/node',
+        platform: 'linux',
+        arch: 'x64',
+        version: 'v20.0.0',
+        versions: { node: '20.0.0', v8: '11.3.244.8', modules: '115' },
+        stdout: (() => {
+          const stdoutEvents: Record<string, Function[]> = {};
+          const stdoutObj: any = {
+            write: (s: string | Uint8Array, encodingOrCb?: string | Function, cb?: Function) => {
+              const str = typeof s === 'string' ? s : new TextDecoder().decode(s);
+              stdoutBuf.push(str);
+              // Stream to terminal in real-time if available (enables streaming for claude -p, etc.)
+              if (ctx.terminal) {
+                streamedToTerminal = true;
+                // Convert bare \n to \r\n for xterm.js (but don't double-convert \r\n)
+                ctx.terminal.writeOutput(str.replace(/\r?\n/g, '\r\n'));
+              }
+              const callback = typeof encodingOrCb === 'function' ? encodingOrCb : cb;
+              if (callback) queueMicrotask(() => (callback as Function)());
+              return true;
+            },
+            isTTY: !!ctx.terminal,
+            get columns() { return ctx.terminal ? ctx.terminal.getSize().cols : 80; },
+            get rows() { return ctx.terminal ? ctx.terminal.getSize().rows : 24; },
+            on: (ev: string, fn: Function) => {
+              (stdoutEvents[ev] ??= []).push(fn);
+              // Hook resize events to terminal's resize callback
+              if (ev === 'resize' && ctx.terminal) {
+                const cleanup = ctx.terminal.onResize(() => fn());
+                (stdoutObj._resizeCleanups ??= []).push(cleanup);
+              }
+              return stdoutObj;
+            },
+            once: (ev: string, fn: Function) => { (stdoutEvents[ev] ??= []).push(fn); return stdoutObj; },
+            off: (ev: string, fn: Function) => { stdoutEvents[ev] = (stdoutEvents[ev] || []).filter(f => f !== fn); return stdoutObj; },
+            removeListener: (ev: string, fn: Function) => stdoutObj.off(ev, fn),
+            removeAllListeners: (ev?: string) => {
+              if (ev) delete stdoutEvents[ev]; else Object.keys(stdoutEvents).forEach(k => delete stdoutEvents[k]);
+              // Clean up resize hooks
+              if (!ev || ev === 'resize') { (stdoutObj._resizeCleanups || []).forEach((c: Function) => c()); stdoutObj._resizeCleanups = []; }
+              return stdoutObj;
+            },
+            emit: (ev: string, ...args: any[]) => { (stdoutEvents[ev] || []).forEach(f => f(...args)); return false; },
+            end: () => {},
+            getColorDepth: () => ctx.terminal ? 24 : 1,
+            hasColors: (count?: number) => ctx.terminal ? (count ? count <= 16777216 : true) : false,
+            cursorTo: (x: number, y?: number | Function, cb?: Function) => {
+              let seq = `\x1b[${x + 1}G`;
+              if (typeof y === 'number') seq = `\x1b[${y + 1};${x + 1}H`;
+              else if (typeof y === 'function') { stdoutObj.write(seq); y(); return true; }
+              stdoutObj.write(seq);
+              if (cb) cb();
+              return true;
+            },
+            clearLine: (dir: number, cb?: Function) => {
+              stdoutObj.write(dir === -1 ? '\x1b[1K' : dir === 1 ? '\x1b[0K' : '\x1b[2K');
+              if (cb) cb();
+              return true;
+            },
+            moveCursor: (dx: number, dy: number, cb?: Function) => {
+              let seq = '';
+              if (dx > 0) seq += `\x1b[${dx}C`;
+              else if (dx < 0) seq += `\x1b[${-dx}D`;
+              if (dy > 0) seq += `\x1b[${dy}B`;
+              else if (dy < 0) seq += `\x1b[${-dy}A`;
+              if (seq) stdoutObj.write(seq);
+              if (cb) cb();
+              return true;
+            },
+            clearScreenDown: (cb?: Function) => { stdoutObj.write('\x1b[J'); if (cb) cb(); return true; },
+            writable: true,
+            fd: 1,
+            getWindowSize: () => [ctx.terminal ? ctx.terminal.getSize().cols : 80, ctx.terminal ? ctx.terminal.getSize().rows : 24],
+            listeners: (ev: string) => [...(stdoutEvents[ev] || [])],
+            listenerCount: (ev: string) => (stdoutEvents[ev] || []).length,
+            eventNames: () => Object.keys(stdoutEvents),
+            setMaxListeners: () => stdoutObj,
+            cork: () => {},
+            uncork: () => {},
+          };
+          return stdoutObj;
+        })(),
+        stderr: (() => {
+          const stderrEvts: Record<string, Function[]> = {};
+          const stderrObj: any = {
+            write: (s: string | Uint8Array, encodingOrCb?: string | Function, cb?: Function) => {
+              const str = typeof s === 'string' ? s : new TextDecoder().decode(s);
+              stderrBuf.push(str);
+              if (ctx.terminal) {
+                streamedToTerminal = true;
+                ctx.terminal.writeOutput(str.replace(/\r?\n/g, '\r\n'));
+              }
+              const callback = typeof encodingOrCb === 'function' ? encodingOrCb : cb;
+              if (callback) queueMicrotask(() => (callback as Function)());
+              return true;
+            },
+            isTTY: !!ctx.terminal,
+            get columns() { return ctx.terminal ? ctx.terminal.getSize().cols : 80; },
+            get rows() { return ctx.terminal ? ctx.terminal.getSize().rows : 24; },
+            on: (ev: string, fn: Function) => { (stderrEvts[ev] ??= []).push(fn); return stderrObj; },
+            once: (ev: string, fn: Function) => { (stderrEvts[ev] ??= []).push(fn); return stderrObj; },
+            off: (ev: string, fn: Function) => { stderrEvts[ev] = (stderrEvts[ev] || []).filter(f => f !== fn); return stderrObj; },
+            removeListener: (ev: string, fn: Function) => stderrObj.off(ev, fn),
+            removeAllListeners: (ev?: string) => { if (ev) delete stderrEvts[ev]; else Object.keys(stderrEvts).forEach(k => delete stderrEvts[k]); return stderrObj; },
+            emit: (ev: string, ...args: any[]) => { (stderrEvts[ev] || []).forEach(f => f(...args)); return false; },
+            end: () => {},
+            getColorDepth: () => ctx.terminal ? 24 : 1,
+            hasColors: (count?: number) => ctx.terminal ? (count ? count <= 16777216 : true) : false,
+            cursorTo: (x: number, y?: number, cb?: Function) => { if (cb) cb(); return true; },
+            clearLine: (dir: number, cb?: Function) => { if (cb) cb(); return true; },
+            moveCursor: (dx: number, dy: number, cb?: Function) => { if (cb) cb(); return true; },
+            clearScreenDown: (cb?: Function) => { if (cb) cb(); return true; },
+            writable: true,
+            fd: 2,
+            getWindowSize: () => [ctx.terminal ? ctx.terminal.getSize().cols : 80, ctx.terminal ? ctx.terminal.getSize().rows : 24],
+            listeners: (ev: string) => [...(stderrEvts[ev] || [])],
+            listenerCount: (ev: string) => (stderrEvts[ev] || []).length,
+            setMaxListeners: () => stderrObj,
+          };
+          return stderrObj;
+        })(),
+        stdin: (() => {
+          const stdinEvents: Record<string, Function[]> = {};
+          let stdinEnded = false;
+          let stdinRawMode = false;
+          const stdinObj: any = {
+            isTTY: !!ctx.terminal,
+            fd: 0,
+            on: (event: string, fn: Function) => {
+              (stdinEvents[event] ??= []).push(fn);
+              // When terminal is available (interactive), don't auto-close stdin.
+              // Instead, bridge terminal input to stdin data events.
+              if (!ctx.terminal && event === 'end' && !stdinEnded) {
+                // Non-interactive: auto-close stdin (no piped data)
+                stdinEnded = true;
+                queueMicrotask(() => {
+                  (stdinEvents['end'] || []).forEach(f => f());
+                  (stdinEvents['close'] || []).forEach(f => f());
+                });
+              }
+              return stdinObj;
+            },
+            once: (event: string, fn: Function) => {
+              const wrapper = (...args: any[]) => {
+                stdinEvents[event] = (stdinEvents[event] || []).filter(f => f !== wrapper);
+                fn(...args);
+              };
+              return stdinObj.on(event, wrapper);
+            },
+            off: (event: string, fn: Function) => { stdinEvents[event] = (stdinEvents[event] || []).filter(f => f !== fn); return stdinObj; },
+            removeListener: (event: string, fn: Function) => stdinObj.off(event, fn),
+            removeAllListeners: (event?: string) => {
+              if (event) delete stdinEvents[event];
+              else Object.keys(stdinEvents).forEach(k => delete stdinEvents[k]);
+              return stdinObj;
+            },
+            emit: (event: string, ...args: any[]) => { (stdinEvents[event] || []).forEach(f => f(...args)); return false; },
+            resume: () => {
+              // When resumed with terminal available, start bridging terminal input
+              if (ctx.terminal && !stdinEnded) {
+                ctx.terminal.enterStdinPassthrough((data: string) => {
+                  (stdinEvents['data'] || []).forEach(f => f(data));
+                });
+              }
+              return stdinObj;
+            },
+            pause: () => stdinObj,
+            read: () => null,
+            setRawMode: (mode: boolean) => {
+              stdinRawMode = mode;
+              // ink calls setRawMode(true) — activate stdin passthrough for raw keypresses
+              if (mode && ctx.terminal && !stdinEnded) {
+                isInteractiveMode = true;
+                // Cancel script timeout — interactive apps run indefinitely
+                if (scriptTimeoutId) { clearTimeout(scriptTimeoutId); scriptTimeoutId = null; }
+                ctx.terminal.enterStdinPassthrough((data: string) => {
+                  (stdinEvents['data'] || []).forEach(f => f(data));
+                });
+              } else if (!mode && ctx.terminal) {
+                ctx.terminal.exitStdinPassthrough();
+              }
+              return stdinObj;
+            },
+            get isRaw() { return stdinRawMode; },
+            setEncoding: () => stdinObj,
+            destroy: () => {
+              if (ctx.terminal) ctx.terminal.exitStdinPassthrough();
+              stdinEnded = true;
+              return stdinObj;
+            },
+            pipe: () => stdinObj,
+            unpipe: () => stdinObj,
+            readable: !!ctx.terminal,
+            ref: () => stdinObj,
+            unref: () => stdinObj,
+            listeners: (event: string) => [...(stdinEvents[event] || [])],
+            listenerCount: (event: string) => (stdinEvents[event] || []).length,
+            eventNames: () => Object.keys(stdinEvents),
+            prependListener: (event: string, fn: Function) => { (stdinEvents[event] ??= []).unshift(fn); return stdinObj; },
+            setMaxListeners: () => stdinObj,
+            getMaxListeners: () => 10,
+            addListener: (event: string, fn: Function) => stdinObj.on(event, fn),
+          };
+          return stdinObj;
+        })(),
         on: (event: string, fn: Function) => {
-          if (event === 'uncaughtException' || event === 'unhandledRejection') {
-            console.log('[node] process.on(' + event + ') registered');
-          }
           (processEvents[event] ??= []).push(fn);
           return fakeProcess;
         },
@@ -186,14 +419,85 @@ export const nodeCmd: Command = {
           return fakeProcess.on(event, wrapper);
         },
         emit: (event: string, ...args: any[]) => {
-          if (event === 'uncaughtException' || event === 'unhandledRejection') {
-            console.log('[node] process.emit(' + event + '):', args[0]?.message || args[0], args[0]?.stack?.slice(0, 500));
-          }
           (processEvents[event] || []).forEach(fn => fn(...args));
         },
         nextTick: (fn: Function, ...args: any[]) => { queueMicrotask(() => fn(...args)); },
-        hrtime: { bigint: () => BigInt(Date.now()) * BigInt(1000000) },
+        hrtime: Object.assign(
+          (prev?: [number, number]) => {
+            const now = performance.now();
+            const sec = Math.floor(now / 1000);
+            const nsec = Math.floor((now % 1000) * 1e6);
+            if (prev) {
+              let ds = sec - prev[0];
+              let dn = nsec - prev[1];
+              if (dn < 0) { ds--; dn += 1e9; }
+              return [ds, dn];
+            }
+            return [sec, nsec];
+          },
+          { bigint: () => BigInt(Math.floor(performance.now() * 1e6)) }
+        ),
+        listeners: (event: string) => [...(processEvents[event] || [])],
+        listenerCount: (event: string) => (processEvents[event] || []).length,
+        removeListener: (event: string, fn: Function) => { processEvents[event] = (processEvents[event] || []).filter((f: Function) => f !== fn); return fakeProcess; },
+        removeAllListeners: (event?: string) => { if (event) { delete processEvents[event]; } else { Object.keys(processEvents).forEach(k => delete processEvents[k]); } return fakeProcess; },
+        addListener: (event: string, fn: Function) => fakeProcess.on(event, fn),
+        prependListener: (event: string, fn: Function) => { (processEvents[event] ??= []).unshift(fn); return fakeProcess; },
+        eventNames: () => Object.keys(processEvents),
+        setMaxListeners: () => fakeProcess,
+        getMaxListeners: () => 10,
+        rawListeners: (event: string) => [...(processEvents[event] || [])],
+        pid: 1,
+        ppid: 0,
+        kill: (pid: number, signal?: string) => {
+          // If killing our own process, treat as exit (CLI does this as fallback after process.exit fails)
+          // Don't throw — kill() is called asynchronously from force-exit paths (e.g. CLI's _J6)
+          // where the throw would escape as an unhandled rejection
+          if (pid === 1) {
+            const code = 128 + (signal === 'SIGKILL' ? 9 : signal === 'SIGTERM' ? 15 : 0);
+            if (!exitCalled) {
+              exitCode = code;
+              exitCalled = true;
+              try { (processEvents['exit'] || []).forEach(fn => fn(exitCode)); } catch (_) {}
+            }
+            deferredExitResolve?.(exitCode);
+          }
+          return true;
+        },
+        title: 'node',
+        connected: false,
+        channel: undefined,
+        config: { variables: {} },
+        cpuUsage: () => ({ user: 0, system: 0 }),
+        memoryUsage: () => ({ rss: 0, heapTotal: 0, heapUsed: 0, external: 0, arrayBuffers: 0 }),
+        resourceUsage: () => ({ userCPUTime: 0, systemCPUTime: 0, maxRSS: 0, sharedMemorySize: 0, unsharedDataSize: 0, unsharedStackSize: 0, minorPageFault: 0, majorPageFault: 0, swappedOut: 0, fsRead: 0, fsWrite: 0, ipcSent: 0, ipcReceived: 0, signalsCount: 0, voluntaryContextSwitches: 0, involuntaryContextSwitches: 0 }),
+        uptime: () => performance.now() / 1000,
+        umask: () => 0o22,
+        getuid: () => 1000,
+        getgid: () => 1000,
+        geteuid: () => 1000,
+        getegid: () => 1000,
+        setuid: () => {},
+        setgid: () => {},
+        features: { inspector: false, debug: false, uv: true, ipv6: true, tls_alpn: true, tls_sni: true, tls_ocsp: true, tls: true },
+        release: { name: 'node', sourceUrl: '', headersUrl: '', libUrl: '' },
+        report: { getReport: () => ({}), directory: '', filename: '' },
+        binding: (_name: string) => { throw new Error(`process.binding is not supported`); },
+        _linkedBinding: (_name: string) => { throw new Error(`process._linkedBinding is not supported`); },
+        allowedNodeEnvironmentFlags: new Set<string>(),
+        debugPort: 9229,
+        domain: null,
+        throwDeprecation: false,
+        noDeprecation: false,
       };
+
+      // Add exitCode as a getter/setter (CLI reads and writes process.exitCode)
+      Object.defineProperty(fakeProcess, 'exitCode', {
+        get: () => exitCalled ? exitCode : undefined,
+        set: (v: number | undefined) => { if (v !== undefined) exitCode = v; },
+        configurable: true,
+        enumerable: true,
+      });
 
       // CommonJS require() with pre-loaded file cache
       const fileCache = new Map<string, string>();
@@ -222,14 +526,44 @@ export const nodeCmd: Command = {
         } catch { /* skip */ }
       }
 
+      // Ensure home directory and common config dirs exist
+      const homeDir = ctx.env['HOME'] || '/home/user';
+      try { await ctx.fs.mkdir(homeDir, { recursive: true }); } catch {}
+      try { await ctx.fs.mkdir('/tmp', { recursive: true }); } catch {}
+      try { await ctx.fs.mkdir(homeDir + '/.claude', { recursive: true }); } catch {}
+      try { await ctx.fs.mkdir(homeDir + '/.claude/projects', { recursive: true }); } catch {}
+      try { await ctx.fs.mkdir(homeDir + '/.claude/statsig', { recursive: true }); } catch {}
+      try { await ctx.fs.mkdir(homeDir + '/.config', { recursive: true }); } catch {}
+      // Create minimal Claude Code settings if not present
+      try {
+        await ctx.fs.stat(homeDir + '/.claude/settings.json');
+      } catch {
+        try { await ctx.fs.writeFile(homeDir + '/.claude/settings.json', '{}'); } catch {}
+      }
+      // Create empty statsig cache to prevent network calls
+      try {
+        await ctx.fs.stat(homeDir + '/.claude/statsig/cache.json');
+      } catch {
+        try { await ctx.fs.writeFile(homeDir + '/.claude/statsig/cache.json', '{}'); } catch {}
+      }
+
       // Pre-load files from common locations
       const preloadDirs = [ctx.cwd];
-      const homeDir = ctx.env['HOME'] || '/home/user';
       if (homeDir !== ctx.cwd) preloadDirs.push(homeDir);
       preloadDirs.push('/tmp');
+      preloadDirs.push(homeDir + '/.claude');
+      preloadDirs.push(homeDir + '/.config');
 
       for (const dir of preloadDirs) {
         await preloadDir(dir, 0, 5);
+        // Ensure directory markers exist in fileCache so statSync/existsSync sees them
+        // Even empty directories need to be recognized (e.g., CWD and HOME)
+        try {
+          const st = await ctx.fs.stat(dir);
+          if (st.isDirectory()) {
+            fileCache.set(dir + '/.', ''); // marker for directory existence
+          }
+        } catch { /* skip if dir doesn't exist */ }
       }
 
       // Pre-load node_modules — walk up from cwd, with deeper recursion
@@ -274,9 +608,7 @@ export const nodeCmd: Command = {
         }
         // Preload the entire project with deeper recursion
         await preloadDir(projectRoot, 0, 10);
-        console.log('[node] Preloaded project root:', projectRoot);
       }
-      console.log('[node] Files in cache:', fileCache.size);
 
       // Buffer shim — must be a constructor with prototype for safe-buffer compatibility
       function FakeBuffer(arg?: any, encodingOrOffset?: any, length?: any): any {
@@ -287,8 +619,69 @@ export const nodeCmd: Command = {
       }
       FakeBuffer.prototype = Object.create(Uint8Array.prototype);
       FakeBuffer.prototype.constructor = FakeBuffer;
-      FakeBuffer.prototype.toString = function(encoding?: string) {
-        return new TextDecoder().decode(this);
+      FakeBuffer.prototype.toString = function(encoding?: string, start?: number, end?: number) {
+        const slice = (start !== undefined || end !== undefined)
+          ? this.subarray(start ?? 0, end ?? this.length)
+          : this;
+        if (encoding === 'base64') {
+          let str = '';
+          for (let i = 0; i < slice.length; i++) str += String.fromCharCode(slice[i]);
+          return btoa(str);
+        }
+        if (encoding === 'hex') {
+          return Array.from(slice as Uint8Array).map((b) => b.toString(16).padStart(2, '0')).join('');
+        }
+        if (encoding === 'latin1' || encoding === 'binary') {
+          let str = '';
+          for (let i = 0; i < slice.length; i++) str += String.fromCharCode(slice[i]);
+          return str;
+        }
+        return new TextDecoder().decode(slice);
+      };
+      FakeBuffer.prototype.write = function(str: string, offset?: number, length?: number, encoding?: string) {
+        const bytes = new TextEncoder().encode(str);
+        const off = offset ?? 0;
+        const len = Math.min(length ?? bytes.length, bytes.length, this.length - off);
+        for (let i = 0; i < len; i++) this[off + i] = bytes[i];
+        return len;
+      };
+      FakeBuffer.prototype.copy = function(target: Uint8Array, targetStart?: number, sourceStart?: number, sourceEnd?: number) {
+        const tStart = targetStart ?? 0;
+        const sStart = sourceStart ?? 0;
+        const sEnd = sourceEnd ?? this.length;
+        for (let i = 0; i < sEnd - sStart && tStart + i < target.length; i++) {
+          target[tStart + i] = this[sStart + i];
+        }
+        return Math.min(sEnd - sStart, target.length - tStart);
+      };
+      FakeBuffer.prototype.equals = function(other: Uint8Array) {
+        if (this.length !== other.length) return false;
+        for (let i = 0; i < this.length; i++) if (this[i] !== other[i]) return false;
+        return true;
+      };
+      FakeBuffer.prototype.compare = function(other: Uint8Array) {
+        const len = Math.min(this.length, other.length);
+        for (let i = 0; i < len; i++) {
+          if (this[i] < other[i]) return -1;
+          if (this[i] > other[i]) return 1;
+        }
+        return this.length < other.length ? -1 : this.length > other.length ? 1 : 0;
+      };
+      FakeBuffer.prototype.readUInt8 = function(offset: number) { return this[offset]; };
+      FakeBuffer.prototype.readUInt16BE = function(offset: number) { return (this[offset] << 8) | this[offset + 1]; };
+      FakeBuffer.prototype.readUInt16LE = function(offset: number) { return this[offset] | (this[offset + 1] << 8); };
+      FakeBuffer.prototype.readUInt32BE = function(offset: number) { return ((this[offset] << 24) | (this[offset+1] << 16) | (this[offset+2] << 8) | this[offset+3]) >>> 0; };
+      FakeBuffer.prototype.readUInt32LE = function(offset: number) { return (this[offset] | (this[offset+1] << 8) | (this[offset+2] << 16) | (this[offset+3] << 24)) >>> 0; };
+      FakeBuffer.prototype.readInt8 = function(offset: number) { return this[offset] > 127 ? this[offset] - 256 : this[offset]; };
+      FakeBuffer.prototype.readInt16BE = function(offset: number) { const v = (this[offset] << 8) | this[offset + 1]; return v > 32767 ? v - 65536 : v; };
+      FakeBuffer.prototype.readInt32BE = function(offset: number) { return (this[offset] << 24) | (this[offset+1] << 16) | (this[offset+2] << 8) | this[offset+3]; };
+      FakeBuffer.prototype.writeUInt8 = function(value: number, offset: number) { this[offset] = value & 0xff; return offset + 1; };
+      FakeBuffer.prototype.writeUInt16BE = function(value: number, offset: number) { this[offset] = (value >> 8) & 0xff; this[offset+1] = value & 0xff; return offset + 2; };
+      FakeBuffer.prototype.writeUInt32BE = function(value: number, offset: number) { this[offset] = (value >> 24) & 0xff; this[offset+1] = (value >> 16) & 0xff; this[offset+2] = (value >> 8) & 0xff; this[offset+3] = value & 0xff; return offset + 4; };
+      FakeBuffer.prototype.slice = function(start?: number, end?: number) {
+        const sliced = this.subarray(start, end);
+        Object.setPrototypeOf(sliced, FakeBuffer.prototype);
+        return sliced;
       };
       FakeBuffer.prototype.toJSON = function() {
         return { type: 'Buffer', data: Array.from(this) };
@@ -296,14 +689,17 @@ export const nodeCmd: Command = {
       FakeBuffer.from = (input: any, encoding?: string): any => {
         let bytes: Uint8Array;
         if (typeof input === 'string') {
-          if (encoding === 'base64') {
-            const binary = atob(input);
+          if (encoding === 'base64' || encoding === 'base64url') {
+            const binary = atob(encoding === 'base64url' ? input.replace(/-/g, '+').replace(/_/g, '/') : input);
             bytes = new Uint8Array(binary.length);
             for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
           } else if (encoding === 'hex') {
             const hex = input.replace(/[^0-9a-fA-F]/g, '');
             bytes = new Uint8Array(hex.length / 2);
             for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+          } else if (encoding === 'latin1' || encoding === 'binary' || encoding === 'ascii') {
+            bytes = new Uint8Array(input.length);
+            for (let i = 0; i < input.length; i++) bytes[i] = input.charCodeAt(i) & 0xff;
           } else {
             bytes = new TextEncoder().encode(input);
           }
@@ -325,8 +721,16 @@ export const nodeCmd: Command = {
       };
       FakeBuffer.allocUnsafe = (size: number) => FakeBuffer.alloc(size);
       FakeBuffer.allocUnsafeSlow = (size: number) => FakeBuffer.alloc(size);
+      FakeBuffer.compare = (a: Uint8Array, b: Uint8Array) => {
+        const len = Math.min(a.length, b.length);
+        for (let i = 0; i < len; i++) {
+          if (a[i] < b[i]) return -1;
+          if (a[i] > b[i]) return 1;
+        }
+        return a.length < b.length ? -1 : a.length > b.length ? 1 : 0;
+      };
       FakeBuffer.isBuffer = (obj: any) => obj instanceof Uint8Array;
-      FakeBuffer.isEncoding = (enc: string) => ['utf8', 'utf-8', 'ascii', 'base64', 'hex', 'binary'].includes(enc?.toLowerCase());
+      FakeBuffer.isEncoding = (enc: string) => ['utf8', 'utf-8', 'ascii', 'base64', 'base64url', 'hex', 'binary', 'latin1', 'ucs2', 'ucs-2', 'utf16le', 'utf-16le'].includes(enc?.toLowerCase());
       FakeBuffer.byteLength = (str: string, encoding?: string) => FakeBuffer.from(str, encoding).length;
       FakeBuffer.concat = (list: Uint8Array[], totalLength?: number) => {
         const total = totalLength ?? list.reduce((n: number, b: Uint8Array) => n + b.length, 0);
@@ -341,37 +745,44 @@ export const nodeCmd: Command = {
       function getBuiltinModule(name: string): any | null {
         switch (name) {
           case 'path':
-          case 'node:path': return {
-            join: (...parts: string[]) => parts.join('/').replace(/\/+/g, '/'),
-            resolve: (...parts: string[]) => {
-              let p = parts.reduce((a, b) => b.startsWith('/') ? b : a + '/' + b);
-              return ctx.fs.resolvePath(p, ctx.cwd);
-            },
-            dirname: (p: string) => p.substring(0, p.lastIndexOf('/')) || '/',
-            basename: (p: string, ext?: string) => {
-              const base = p.split('/').pop() || '';
-              return ext && base.endsWith(ext) ? base.slice(0, -ext.length) : base;
-            },
-            extname: (p: string) => { const m = p.match(/\.[^./]+$/); return m ? m[0] : ''; },
-            isAbsolute: (p: string) => p.startsWith('/'),
-            normalize: (p: string) => ctx.fs.resolvePath(p, '/'),
-            relative: (from: string, to: string) => {
-              const f = from.split('/').filter(Boolean);
-              const t = to.split('/').filter(Boolean);
-              let i = 0; while (i < f.length && i < t.length && f[i] === t[i]) i++;
-              return [...Array(f.length - i).fill('..'), ...t.slice(i)].join('/') || '.';
-            },
-            sep: '/',
-            delimiter: ':',
-            parse: (p: string) => ({
-              root: p.startsWith('/') ? '/' : '',
-              dir: p.substring(0, p.lastIndexOf('/')),
-              base: p.split('/').pop() || '',
-              ext: (p.match(/\.[^./]+$/) || [''])[0],
-              name: (p.split('/').pop() || '').replace(/\.[^.]+$/, ''),
-            }),
-            format: (obj: any) => (obj.dir ? obj.dir + '/' : '') + (obj.base || obj.name + (obj.ext || '')),
-          };
+          case 'node:path': {
+            const pathMod: any = {
+              join: (...parts: string[]) => parts.join('/').replace(/\/+/g, '/'),
+              resolve: (...parts: string[]) => {
+                let p = parts.reduce((a, b) => b.startsWith('/') ? b : a + '/' + b);
+                return ctx.fs.resolvePath(p, ctx.cwd);
+              },
+              dirname: (p: string) => p.substring(0, p.lastIndexOf('/')) || '/',
+              basename: (p: string, ext?: string) => {
+                const base = p.split('/').pop() || '';
+                return ext && base.endsWith(ext) ? base.slice(0, -ext.length) : base;
+              },
+              extname: (p: string) => { const m = p.match(/\.[^./]+$/); return m ? m[0] : ''; },
+              isAbsolute: (p: string) => p.startsWith('/'),
+              normalize: (p: string) => ctx.fs.resolvePath(p, '/'),
+              relative: (from: string, to: string) => {
+                const f = from.split('/').filter(Boolean);
+                const t = to.split('/').filter(Boolean);
+                let i = 0; while (i < f.length && i < t.length && f[i] === t[i]) i++;
+                return [...Array(f.length - i).fill('..'), ...t.slice(i)].join('/') || '.';
+              },
+              sep: '/',
+              delimiter: ':',
+              parse: (p: string) => ({
+                root: p.startsWith('/') ? '/' : '',
+                dir: p.substring(0, p.lastIndexOf('/')),
+                base: p.split('/').pop() || '',
+                ext: (p.match(/\.[^./]+$/) || [''])[0],
+                name: (p.split('/').pop() || '').replace(/\.[^.]+$/, ''),
+              }),
+              format: (obj: any) => (obj.dir ? obj.dir + '/' : '') + (obj.base || obj.name + (obj.ext || '')),
+              toNamespacedPath: (p: string) => p,
+            };
+            pathMod.posix = pathMod;
+            pathMod.win32 = pathMod;
+            pathMod.default = pathMod;
+            return pathMod;
+          }
           case 'fs':
           case 'node:fs': {
             // Synchronous shims that use cached data or throw
@@ -379,8 +790,11 @@ export const nodeCmd: Command = {
               readFileSync: (p: string, opts?: any) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
                 const cached = fileCache.get(resolved) ?? fileCache.get(resolved + '.js');
-                if (cached !== undefined) return cached;
-                throw new Error(`ENOENT: no such file or directory, open '${p}'`);
+                if (cached === undefined) throw new Error(`ENOENT: no such file or directory, open '${p}'`);
+                const encoding = typeof opts === 'string' ? opts : opts?.encoding;
+                if (encoding === 'utf8' || encoding === 'utf-8' || encoding === 'utf8') return cached;
+                if (!encoding) return FakeBuffer.from(cached);
+                return cached;
               },
               writeFileSync: (p: string, data: string | Uint8Array) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
@@ -391,34 +805,65 @@ export const nodeCmd: Command = {
               },
               existsSync: (p: string) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-                return fileCache.has(resolved) || fileCache.has(resolved + '.js') || fileCache.has(resolved + '/index.js');
+                if (fileCache.has(resolved) || fileCache.has(resolved + '.js') || fileCache.has(resolved + '/index.js')) return true;
+                // Check if path is a directory (has files under it)
+                return [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
               },
-              statSync: (p: string) => {
+              statSync: (p: string, opts?: any) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-                // Check if it's a known file or directory prefix
                 const isFile = fileCache.has(resolved);
                 const isDir = [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
-                if (!isFile && !isDir) throw new Error(`ENOENT: no such file or directory, stat '${p}'`);
+                if (!isFile && !isDir) {
+                  if (opts?.throwIfNoEntry === false) return undefined;
+                  throw new Error(`ENOENT: no such file or directory, stat '${p}'`);
+                }
+                const now = new Date();
+                const size = isFile ? (fileCache.get(resolved) || '').length : 0;
                 return {
                   isFile: () => isFile,
                   isDirectory: () => isDir && !isFile,
                   isSymbolicLink: () => false,
-                  size: isFile ? (fileCache.get(resolved) || '').length : 0,
-                  mtime: new Date(),
+                  isBlockDevice: () => false,
+                  isCharacterDevice: () => false,
+                  isFIFO: () => false,
+                  isSocket: () => false,
+                  size,
+                  mtime: now, ctime: now, atime: now, birthtime: now,
+                  mtimeMs: now.getTime(), ctimeMs: now.getTime(), atimeMs: now.getTime(), birthtimeMs: now.getTime(),
+                  dev: 0, ino: 0, nlink: 1, uid: 1000, gid: 1000, rdev: 0,
+                  blksize: 4096, blocks: Math.ceil(size / 512),
+                  mode: isFile ? 0o100644 : 0o40755,
                 };
               },
-              readdirSync: (p: string) => {
+              readdirSync: (p: string, opts?: any) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
                 const prefix = resolved === '/' ? '/' : resolved + '/';
                 const entries = new Set<string>();
+                const dirSet = new Set<string>();
                 for (const key of fileCache.keys()) {
                   if (key.startsWith(prefix)) {
                     const rest = key.slice(prefix.length);
                     const first = rest.split('/')[0];
-                    if (first) entries.add(first);
+                    if (first) {
+                      entries.add(first);
+                      if (rest.includes('/')) dirSet.add(first);
+                    }
                   }
                 }
-                return [...entries].sort();
+                const sorted = [...entries].sort();
+                if (opts?.withFileTypes) {
+                  return sorted.map(name => ({
+                    name,
+                    isFile: () => !dirSet.has(name),
+                    isDirectory: () => dirSet.has(name),
+                    isSymbolicLink: () => false,
+                    isBlockDevice: () => false,
+                    isCharacterDevice: () => false,
+                    isFIFO: () => false,
+                    isSocket: () => false,
+                  }));
+                }
+                return sorted;
               },
               mkdirSync: (p: string, opts?: any) => {
                 ctx.fs.mkdir(ctx.fs.resolvePath(p, ctx.cwd), opts).catch(() => {});
@@ -440,6 +885,248 @@ export const nodeCmd: Command = {
               renameSync: (oldP: string, newP: string) => {
                 ctx.fs.rename(ctx.fs.resolvePath(oldP, ctx.cwd), ctx.fs.resolvePath(newP, ctx.cwd)).catch(() => {});
               },
+              realpathSync: (p: string) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                // Verify path exists (file or directory)
+                const isFile = fileCache.has(resolved);
+                const isDir = [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
+                if (!isFile && !isDir) throw new Error(`ENOENT: no such file or directory, realpath '${p}'`);
+                return resolved;
+              },
+              accessSync: (p: string) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                const isFile = fileCache.has(resolved);
+                const isDir = [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
+                if (!isFile && !isDir) throw new Error(`ENOENT: no such file or directory, access '${p}'`);
+              },
+              lstatSync: (p: string, opts?: any) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                const isFile = fileCache.has(resolved);
+                const isDir = [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
+                if (!isFile && !isDir) {
+                  if (opts?.throwIfNoEntry === false) return undefined;
+                  throw new Error(`ENOENT: no such file or directory, lstat '${p}'`);
+                }
+                const now = new Date();
+                const size = isFile ? (fileCache.get(resolved) || '').length : 0;
+                return {
+                  isFile: () => isFile,
+                  isDirectory: () => isDir && !isFile,
+                  isSymbolicLink: () => false,
+                  isBlockDevice: () => false,
+                  isCharacterDevice: () => false,
+                  isFIFO: () => false,
+                  isSocket: () => false,
+                  size,
+                  mtime: now, ctime: now, atime: now, birthtime: now,
+                  mtimeMs: now.getTime(), ctimeMs: now.getTime(), atimeMs: now.getTime(), birthtimeMs: now.getTime(),
+                  dev: 0, ino: 0, nlink: 1, uid: 1000, gid: 1000, rdev: 0,
+                  blksize: 4096, blocks: Math.ceil(size / 512),
+                  mode: isFile ? 0o100644 : 0o40755,
+                };
+              },
+              chmodSync: () => {},
+              chownSync: () => {},
+              createReadStream: (p: string, opts?: any) => {
+                const s = getBuiltinModule('stream');
+                const rs = new s.Readable();
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                const encoding = opts?.encoding || (typeof opts === 'string' ? opts : null);
+                ctx.fs.readFile(resolved, encoding || 'utf8').then((data: any) => {
+                  if (typeof data === 'string') {
+                    rs.emit('data', encoding ? data : FakeBuffer.from(data));
+                  } else {
+                    rs.emit('data', data);
+                  }
+                  rs.emit('end');
+                  rs.emit('close');
+                }).catch((e: any) => {
+                  rs.emit('error', e);
+                });
+                return rs;
+              },
+              createWriteStream: (p: string, _opts?: any) => {
+                const s = getBuiltinModule('stream');
+                const chunks: string[] = [];
+                const ws = new s.Writable();
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                ws.write = function(chunk: any, enc?: any, cb?: any) {
+                  const callback = typeof enc === 'function' ? enc : cb;
+                  chunks.push(typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk));
+                  if (callback) callback();
+                  return true;
+                };
+                ws.end = function(chunk?: any, enc?: any, cb?: any) {
+                  const callback = typeof chunk === 'function' ? chunk : typeof enc === 'function' ? enc : cb;
+                  if (chunk && typeof chunk !== 'function') {
+                    chunks.push(typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk));
+                  }
+                  ctx.fs.writeFile(resolved, chunks.join('')).then(() => {
+                    ws.emit('finish');
+                    ws.emit('close');
+                    if (callback) callback();
+                  }).catch((e: any) => ws.emit('error', e));
+                };
+                return ws;
+              },
+              constants: { F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1 },
+              // Callback-style async fs methods (used by graceful-fs, fs-extra)
+              readFile: (p: string, optsOrCb?: any, cb?: any) => {
+                const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+                const encoding = typeof optsOrCb === 'string' ? optsOrCb : optsOrCb?.encoding || 'utf8';
+                ctx.fs.readFile(ctx.fs.resolvePath(p, ctx.cwd), encoding)
+                  .then((data: any) => callback?.(null, data))
+                  .catch((e: any) => callback?.(e));
+              },
+              writeFile: (p: string, data: any, optsOrCb?: any, cb?: any) => {
+                const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+                ctx.fs.writeFile(ctx.fs.resolvePath(p, ctx.cwd), typeof data === 'string' ? data : new TextDecoder().decode(data))
+                  .then(() => callback?.(null))
+                  .catch((e: any) => callback?.(e));
+              },
+              stat: (p: string, optsOrCb?: any, cb?: any) => {
+                const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+                ctx.fs.stat(ctx.fs.resolvePath(p, ctx.cwd))
+                  .then((s: any) => callback?.(null, s))
+                  .catch((e: any) => callback?.(e));
+              },
+              lstat: (p: string, optsOrCb?: any, cb?: any) => {
+                const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+                ctx.fs.stat(ctx.fs.resolvePath(p, ctx.cwd))
+                  .then((s: any) => callback?.(null, s))
+                  .catch((e: any) => callback?.(e));
+              },
+              readdir: (p: string, optsOrCb?: any, cb?: any) => {
+                const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+                const opts = typeof optsOrCb === 'object' ? optsOrCb : {};
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                ctx.fs.readdir(resolved)
+                  .then(async (entries: any) => {
+                    if (opts?.withFileTypes) {
+                      const dirents = [];
+                      for (const name of entries) {
+                        try {
+                          const st = await ctx.fs.stat(resolved + '/' + name);
+                          dirents.push({ name, isFile: () => st.isFile(), isDirectory: () => st.isDirectory(), isSymbolicLink: () => st.isSymbolicLink?.() || false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false });
+                        } catch { dirents.push({ name, isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false }); }
+                      }
+                      callback?.(null, dirents);
+                    } else { callback?.(null, entries); }
+                  })
+                  .catch((e: any) => callback?.(e));
+              },
+              mkdir: (p: string, optsOrCb?: any, cb?: any) => {
+                const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+                ctx.fs.mkdir(ctx.fs.resolvePath(p, ctx.cwd), typeof optsOrCb === 'object' ? optsOrCb : undefined)
+                  .then(() => callback?.(null))
+                  .catch((e: any) => callback?.(e));
+              },
+              unlink: (p: string, cb?: any) => {
+                ctx.fs.unlink(ctx.fs.resolvePath(p, ctx.cwd))
+                  .then(() => cb?.(null))
+                  .catch((e: any) => cb?.(e));
+              },
+              rmdir: (p: string, cb?: any) => {
+                ctx.fs.unlink(ctx.fs.resolvePath(p, ctx.cwd))
+                  .then(() => cb?.(null))
+                  .catch((e: any) => cb?.(e));
+              },
+              rename: (oldP: string, newP: string, cb?: any) => {
+                ctx.fs.rename(ctx.fs.resolvePath(oldP, ctx.cwd), ctx.fs.resolvePath(newP, ctx.cwd))
+                  .then(() => cb?.(null))
+                  .catch((e: any) => cb?.(e));
+              },
+              access: (p: string, modeOrCb?: any, cb?: any) => {
+                const callback = typeof modeOrCb === 'function' ? modeOrCb : cb;
+                ctx.fs.exists(ctx.fs.resolvePath(p, ctx.cwd))
+                  .then((exists: boolean) => exists ? callback?.(null) : callback?.(new Error(`ENOENT: no such file or directory, access '${p}'`)))
+                  .catch((e: any) => callback?.(e));
+              },
+              chmod: (_p: string, _m: any, cb?: any) => { cb?.(null); },
+              chown: (_p: string, _u: any, _g: any, cb?: any) => { cb?.(null); },
+              link: (src: string, dst: string, cb?: any) => {
+                ctx.fs.symlink(ctx.fs.resolvePath(src, ctx.cwd), ctx.fs.resolvePath(dst, ctx.cwd))
+                  .then(() => cb?.(null))
+                  .catch((e: any) => cb?.(e));
+              },
+              symlink: (target: string, path: string, typeOrCb?: any, cb?: any) => {
+                const callback = typeof typeOrCb === 'function' ? typeOrCb : cb;
+                ctx.fs.symlink(ctx.fs.resolvePath(target, ctx.cwd), ctx.fs.resolvePath(path, ctx.cwd))
+                  .then(() => callback?.(null))
+                  .catch((e: any) => callback?.(e));
+              },
+              readlink: (p: string, optsOrCb?: any, cb?: any) => {
+                const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+                callback?.(null, ctx.fs.resolvePath(p, ctx.cwd));
+              },
+              close: (_fd: number, cb?: any) => { cb?.(null); },
+              open: (p: string, _flags: any, modeOrCb?: any, cb?: any) => {
+                const callback = typeof modeOrCb === 'function' ? modeOrCb : cb;
+                callback?.(null, 0); // fake fd
+              },
+              read: (_fd: number, buf: any, off: number, len: number, pos: any, cb?: any) => {
+                cb?.(null, 0, buf);
+              },
+              write: (_fd: number, buf: any, off: number, len: number, pos: any, cb?: any) => {
+                cb?.(null, len, buf);
+              },
+              copyFile: (src: string, dst: string, flagsOrCb?: any, cb?: any) => {
+                const callback = typeof flagsOrCb === 'function' ? flagsOrCb : cb;
+                ctx.fs.readFile(ctx.fs.resolvePath(src, ctx.cwd), 'utf8')
+                  .then((data: any) => ctx.fs.writeFile(ctx.fs.resolvePath(dst, ctx.cwd), data))
+                  .then(() => callback?.(null))
+                  .catch((e: any) => callback?.(e));
+              },
+              appendFile: (p: string, data: any, optsOrCb?: any, cb?: any) => {
+                const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                ctx.fs.readFile(resolved, 'utf8').catch(() => '')
+                  .then((existing: any) => ctx.fs.writeFile(resolved, (existing || '') + data))
+                  .then(() => callback?.(null))
+                  .catch((e: any) => callback?.(e));
+              },
+              truncate: (p: string, lenOrCb?: any, cb?: any) => {
+                const callback = typeof lenOrCb === 'function' ? lenOrCb : cb;
+                ctx.fs.writeFile(ctx.fs.resolvePath(p, ctx.cwd), '')
+                  .then(() => callback?.(null))
+                  .catch((e: any) => callback?.(e));
+              },
+              utimes: (_p: string, _a: any, _m: any, cb?: any) => { cb?.(null); },
+              futimes: (_fd: number, _a: any, _m: any, cb?: any) => { cb?.(null); },
+              fstat: (_fd: number, cb?: any) => { cb?.(null, { isFile: () => true, isDirectory: () => false, size: 0, mtime: new Date() }); },
+              fsync: (_fd: number, cb?: any) => { cb?.(null); },
+              fdatasync: (_fd: number, cb?: any) => { cb?.(null); },
+              fchmod: (_fd: number, _m: any, cb?: any) => { cb?.(null); },
+              fchown: (_fd: number, _u: any, _g: any, cb?: any) => { cb?.(null); },
+              ftruncate: (_fd: number, _l: any, cb?: any) => { cb?.(null); },
+              lchmod: (_p: string, _m: any, cb?: any) => { cb?.(null); },
+              lchown: (_p: string, _u: any, _g: any, cb?: any) => { cb?.(null); },
+              mkdtemp: (prefix: string, optsOrCb?: any, cb?: any) => {
+                const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+                const dir = `${prefix}${Math.random().toString(36).slice(2)}`;
+                ctx.fs.mkdir(dir, { recursive: true }).then(() => callback?.(null, dir)).catch((e: any) => callback?.(e));
+              },
+              rm: (p: string, optsOrCb?: any, cb?: any) => {
+                const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+                ctx.fs.unlink(ctx.fs.resolvePath(p, ctx.cwd))
+                  .then(() => callback?.(null))
+                  .catch((e: any) => callback?.(e));
+              },
+              opendir: (p: string, optsOrCb?: any, cb?: any) => {
+                const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+                callback?.(null, { read: (readCb: any) => { readCb(null, null); }, close: (closeCb: any) => { closeCb?.(null); } });
+              },
+              exists: (p: string, cb?: any) => {
+                ctx.fs.exists(ctx.fs.resolvePath(p, ctx.cwd))
+                  .then((exists: boolean) => cb?.(exists))
+                  .catch(() => cb?.(false));
+              },
+              watch: (_p: string, _opts?: any, _listener?: any) => {
+                const watcher: any = { close: () => {}, on: () => watcher, once: () => watcher, ref: () => watcher, unref: () => watcher };
+                return watcher;
+              },
+              watchFile: (_p: string, _opts?: any, _listener?: any) => {},
+              unwatchFile: (_p: string, _listener?: any) => {},
               // Async promises API
               promises: {
                 readFile: async (p: string, opts?: any) => {
@@ -449,7 +1136,21 @@ export const nodeCmd: Command = {
                 writeFile: async (p: string, data: string) => {
                   await ctx.fs.writeFile(ctx.fs.resolvePath(p, ctx.cwd), data);
                 },
-                readdir: async (p: string) => ctx.fs.readdir(ctx.fs.resolvePath(p, ctx.cwd)),
+                readdir: async (p: string, opts?: any) => {
+                  const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                  const entries = await ctx.fs.readdir(resolved);
+                  if (opts?.withFileTypes) {
+                    const dirents = [];
+                    for (const name of entries) {
+                      try {
+                        const st = await ctx.fs.stat(resolved + '/' + name);
+                        dirents.push({ name, isFile: () => st.isFile(), isDirectory: () => st.isDirectory(), isSymbolicLink: () => st.isSymbolicLink?.() || false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false });
+                      } catch { dirents.push({ name, isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false }); }
+                    }
+                    return dirents;
+                  }
+                  return entries;
+                },
                 stat: async (p: string) => ctx.fs.stat(ctx.fs.resolvePath(p, ctx.cwd)),
                 mkdir: async (p: string, opts?: any) => ctx.fs.mkdir(ctx.fs.resolvePath(p, ctx.cwd), opts),
                 unlink: async (p: string) => ctx.fs.unlink(ctx.fs.resolvePath(p, ctx.cwd)),
@@ -459,6 +1160,21 @@ export const nodeCmd: Command = {
                 },
               },
             };
+            // realpath and realpath.native need special handling (function with properties)
+            const realpathFn: any = (p: string, optsOrCb?: any, cb?: any) => {
+              const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+              const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+              callback?.(null, resolved);
+            };
+            realpathFn.native = (p: string, optsOrCb?: any, cb?: any) => {
+              const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+              const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+              callback?.(null, resolved);
+            };
+            fsShim.realpath = realpathFn;
+            // Also add realpathSync.native
+            const origRealpathSync = fsShim.realpathSync;
+            origRealpathSync.native = origRealpathSync;
             return fsShim;
           }
           case 'fs/promises':
@@ -479,9 +1195,20 @@ export const nodeCmd: Command = {
                 const content = typeof data === 'string' ? data : new TextDecoder().decode(data);
                 await ctx.fs.writeFile(resolved, content);
               },
-              readdir: async (p: string) => {
+              readdir: async (p: string, opts?: any) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-                return await ctx.fs.readdir(resolved);
+                const entries = await ctx.fs.readdir(resolved);
+                if (opts?.withFileTypes) {
+                  const dirents = [];
+                  for (const name of entries) {
+                    try {
+                      const st = await ctx.fs.stat(resolved + '/' + name);
+                      dirents.push({ name, isFile: () => st.isFile(), isDirectory: () => st.isDirectory(), isSymbolicLink: () => st.isSymbolicLink?.() || false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false, parentPath: resolved, path: resolved });
+                    } catch { dirents.push({ name, isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false, parentPath: resolved, path: resolved }); }
+                  }
+                  return dirents;
+                }
+                return entries;
               },
               stat: async (p: string) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
@@ -504,6 +1231,58 @@ export const nodeCmd: Command = {
                 const exists = await ctx.fs.exists(resolved);
                 if (!exists) throw new Error(`ENOENT: no such file or directory, access '${p}'`);
               },
+              lstat: async (p: string) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                return await ctx.fs.stat(resolved);
+              },
+              chmod: async () => {},
+              rename: async (oldP: string, newP: string) => {
+                await ctx.fs.rename(ctx.fs.resolvePath(oldP, ctx.cwd), ctx.fs.resolvePath(newP, ctx.cwd));
+              },
+              copyFile: async (src: string, dst: string) => {
+                const data = await ctx.fs.readFile(ctx.fs.resolvePath(src, ctx.cwd));
+                const content = typeof data === 'string' ? data : new TextDecoder().decode(data);
+                await ctx.fs.writeFile(ctx.fs.resolvePath(dst, ctx.cwd), content);
+              },
+              appendFile: async (p: string, data: any) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                let existing = '';
+                try { const d = await ctx.fs.readFile(resolved); existing = typeof d === 'string' ? d : new TextDecoder().decode(d); } catch {}
+                const append = typeof data === 'string' ? data : new TextDecoder().decode(data);
+                await ctx.fs.writeFile(resolved, existing + append);
+              },
+              symlink: async (target: string, path: string) => {
+                await ctx.fs.symlink(ctx.fs.resolvePath(target, ctx.cwd), ctx.fs.resolvePath(path, ctx.cwd));
+              },
+              readlink: async (p: string) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                return await ctx.fs.readlink(resolved);
+              },
+              realpath: async (p: string) => {
+                return ctx.fs.resolvePath(p, ctx.cwd);
+              },
+              rmdir: async (p: string) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                await ctx.fs.unlink(resolved);
+              },
+              utimes: async () => {},
+              mkdtemp: async (prefix: string) => {
+                const dir = `${prefix}${Math.random().toString(36).slice(2)}`;
+                await ctx.fs.mkdir(dir, { recursive: true });
+                return dir;
+              },
+              open: async (p: string, _flags?: any) => {
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                return {
+                  fd: 0,
+                  readFile: async (opts?: any) => ctx.fs.readFile(resolved, opts?.encoding || 'utf8'),
+                  writeFile: async (data: any) => ctx.fs.writeFile(resolved, typeof data === 'string' ? data : new TextDecoder().decode(data)),
+                  close: async () => {},
+                  stat: async () => ctx.fs.stat(resolved),
+                };
+              },
+              watch: async function*(_p: string, _opts?: any) { /* no-op async generator */ },
+              constants: { F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1 },
             };
           }
           case 'child_process':
@@ -515,7 +1294,7 @@ export const nodeCmd: Command = {
               const exitCode = await ctx.shell.execute(cmd, (s) => { stdout += s; }, (s) => { stderr += s; });
               return { stdout, stderr, exitCode };
             };
-            return {
+            const cpModule: any = {
               execSync: (cmd: string, opts?: any) => {
                 // In browser, execSync cannot truly block. We return a placeholder
                 // Buffer and queue the actual execution. Works correctly when the
@@ -544,23 +1323,134 @@ export const nodeCmd: Command = {
               },
               exec: (cmd: string, opts: any, cb?: any) => {
                 const callback = typeof opts === 'function' ? opts : cb;
-                execAsync(cmd)
-                  .then(r => callback?.(r.exitCode !== 0 ? new Error(`Exit code ${r.exitCode}`) : null, r.stdout, r.stderr))
-                  .catch(e => callback?.(e, '', ''));
+                const childEvents: Record<string, Function[]> = {};
+                const child: any = {
+                  pid: Math.floor(Math.random() * 10000) + 1000,
+                  stdout: { on: (ev: string, fn: Function) => { (childEvents['stdout_' + ev] ??= []).push(fn); return child.stdout; }, pipe: (d: any) => d },
+                  stderr: { on: (ev: string, fn: Function) => { (childEvents['stderr_' + ev] ??= []).push(fn); return child.stderr; }, pipe: (d: any) => d },
+                  stdin: { write: () => true, end: () => {}, on: () => child.stdin },
+                  on: (ev: string, fn: Function) => { (childEvents[ev] ??= []).push(fn); return child; },
+                  once: (ev: string, fn: Function) => child.on(ev, fn),
+                  kill: () => true,
+                };
+                execAsync(cmd).then(r => {
+                  if (r.stdout) (childEvents['stdout_data'] || []).forEach(fn => fn(FakeBuffer.from(r.stdout)));
+                  (childEvents['stdout_end'] || []).forEach(fn => fn());
+                  if (r.stderr) (childEvents['stderr_data'] || []).forEach(fn => fn(FakeBuffer.from(r.stderr)));
+                  (childEvents['stderr_end'] || []).forEach(fn => fn());
+                  (childEvents['close'] || []).forEach(fn => fn(r.exitCode, null));
+                  callback?.(r.exitCode !== 0 ? Object.assign(new Error(`Exit code ${r.exitCode}`), { code: r.exitCode }) : null, r.stdout, r.stderr);
+                }).catch(e => callback?.(e, '', ''));
+                return child;
               },
               execFile: (file: string, args: string[], opts: any, cb?: any) => {
                 const callback = typeof opts === 'function' ? opts : cb;
                 const cmd = `${file} ${(args || []).join(' ')}`;
-                execAsync(cmd)
-                  .then(r => callback?.(r.exitCode !== 0 ? new Error(`Exit code ${r.exitCode}`) : null, r.stdout, r.stderr))
-                  .catch(e => callback?.(e, '', ''));
+                const childEvents: Record<string, Function[]> = {};
+                const child: any = {
+                  pid: Math.floor(Math.random() * 10000) + 1000,
+                  stdout: { on: (ev: string, fn: Function) => { (childEvents['stdout_' + ev] ??= []).push(fn); return child.stdout; }, pipe: (d: any) => d },
+                  stderr: { on: (ev: string, fn: Function) => { (childEvents['stderr_' + ev] ??= []).push(fn); return child.stderr; }, pipe: (d: any) => d },
+                  stdin: { write: () => true, end: () => {}, on: () => child.stdin },
+                  on: (ev: string, fn: Function) => { (childEvents[ev] ??= []).push(fn); return child; },
+                  once: (ev: string, fn: Function) => child.on(ev, fn),
+                  kill: () => true,
+                };
+                execAsync(cmd).then(r => {
+                  if (r.stdout) (childEvents['stdout_data'] || []).forEach(fn => fn(FakeBuffer.from(r.stdout)));
+                  (childEvents['stdout_end'] || []).forEach(fn => fn());
+                  if (r.stderr) (childEvents['stderr_data'] || []).forEach(fn => fn(FakeBuffer.from(r.stderr)));
+                  (childEvents['stderr_end'] || []).forEach(fn => fn());
+                  (childEvents['close'] || []).forEach(fn => fn(r.exitCode, null));
+                  callback?.(r.exitCode !== 0 ? Object.assign(new Error(`Exit code ${r.exitCode}`), { code: r.exitCode }) : null, r.stdout, r.stderr);
+                }).catch(e => callback?.(e, '', ''));
+                return child;
+              },
+              spawn: (cmd: string, args?: string[], opts?: any) => {
+                const fullCmd = args ? `${cmd} ${args.join(' ')}` : cmd;
+                const events: Record<string, Function[]> = {};
+                const stdoutEvents: Record<string, Function[]> = {};
+                const stderrEvents: Record<string, Function[]> = {};
+                const child: any = {
+                  pid: Math.floor(Math.random() * 10000) + 1000,
+                  stdin: { write: () => true, end: () => {}, on: () => child.stdin, destroy: () => {} },
+                  stdout: {
+                    on: (ev: string, fn: Function) => { (stdoutEvents[ev] ??= []).push(fn); return child.stdout; },
+                    once: (ev: string, fn: Function) => { (stdoutEvents[ev] ??= []).push(fn); return child.stdout; },
+                    off: (ev: string, fn: Function) => { stdoutEvents[ev] = (stdoutEvents[ev] || []).filter(f => f !== fn); return child.stdout; },
+                    removeListener: (ev: string, fn: Function) => child.stdout.off(ev, fn),
+                    removeAllListeners: (ev?: string) => { if (ev) delete stdoutEvents[ev]; else Object.keys(stdoutEvents).forEach(k => delete stdoutEvents[k]); return child.stdout; },
+                    pipe: (dest: any) => dest,
+                    setEncoding: () => child.stdout,
+                    destroy: () => child.stdout,
+                  },
+                  stderr: {
+                    on: (ev: string, fn: Function) => { (stderrEvents[ev] ??= []).push(fn); return child.stderr; },
+                    once: (ev: string, fn: Function) => { (stderrEvents[ev] ??= []).push(fn); return child.stderr; },
+                    off: (ev: string, fn: Function) => { stderrEvents[ev] = (stderrEvents[ev] || []).filter(f => f !== fn); return child.stderr; },
+                    removeListener: (ev: string, fn: Function) => child.stderr.off(ev, fn),
+                    removeAllListeners: (ev?: string) => { if (ev) delete stderrEvents[ev]; else Object.keys(stderrEvents).forEach(k => delete stderrEvents[k]); return child.stderr; },
+                    pipe: (dest: any) => dest,
+                    setEncoding: () => child.stderr,
+                    destroy: () => child.stderr,
+                  },
+                  on: (ev: string, fn: Function) => { (events[ev] ??= []).push(fn); return child; },
+                  once: (ev: string, fn: Function) => { const w = (...a: any[]) => { child.off(ev, w); fn(...a); }; return child.on(ev, w); },
+                  off: (ev: string, fn: Function) => { events[ev] = (events[ev] || []).filter(f => f !== fn); return child; },
+                  removeListener: (ev: string, fn: Function) => child.off(ev, fn),
+                  removeAllListeners: (ev?: string) => { if (ev) delete events[ev]; else Object.keys(events).forEach(k => delete events[k]); return child; },
+                  emit: (ev: string, ...args: any[]) => { (events[ev] || []).forEach(fn => fn(...args)); },
+                  kill: () => true,
+                  killed: false,
+                  exitCode: null as number | null,
+                  signalCode: null,
+                  connected: false,
+                  ref: () => child,
+                  unref: () => child,
+                };
+                execAsync(fullCmd).then(r => {
+                  if (r.stdout) (stdoutEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(r.stdout)));
+                  (stdoutEvents['end'] || []).forEach(fn => fn());
+                  (stdoutEvents['close'] || []).forEach(fn => fn());
+                  if (r.stderr) (stderrEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(r.stderr)));
+                  (stderrEvents['end'] || []).forEach(fn => fn());
+                  (stderrEvents['close'] || []).forEach(fn => fn());
+                  child.exitCode = r.exitCode;
+                  (events['close'] || []).forEach(fn => fn(r.exitCode, null));
+                  (events['exit'] || []).forEach(fn => fn(r.exitCode, null));
+                }).catch(() => {
+                  (events['error'] || []).forEach(fn => fn(new Error(`spawn ${cmd} failed`)));
+                  (events['close'] || []).forEach(fn => fn(1, null));
+                });
+                return child;
+              },
+              execFileSync: (file: string, args?: string[], opts?: any) => {
+                const fullCmd = args ? `${file} ${args.join(' ')}` : file;
+                let result = '';
+                execAsync(fullCmd).then(r => { result = r.stdout; });
+                return FakeBuffer.from(result);
               },
             };
+            // Add util.promisify.custom for exec/execFile to return { stdout, stderr }
+            const customSym = Symbol.for('nodejs.util.promisify.custom');
+            cpModule.exec[customSym] = (cmd: string, opts?: any) =>
+              execAsync(cmd).then(r => {
+                if (r.exitCode !== 0) throw Object.assign(new Error(`Command failed: ${cmd}`), { code: r.exitCode, stdout: r.stdout, stderr: r.stderr });
+                return { stdout: r.stdout, stderr: r.stderr };
+              });
+            cpModule.execFile[customSym] = (file: string, args?: string[], opts?: any) => {
+              const cmd = `${file} ${(args || []).join(' ')}`;
+              return execAsync(cmd).then(r => {
+                if (r.exitCode !== 0) throw Object.assign(new Error(`Command failed: ${cmd}`), { code: r.exitCode, stdout: r.stdout, stderr: r.stderr });
+                return { stdout: r.stdout, stderr: r.stderr };
+              });
+            };
+            return cpModule;
           }
           case 'os':
           case 'node:os': return {
-            platform: () => 'browser',
-            arch: () => 'wasm',
+            platform: () => 'linux',
+            arch: () => 'x64',
             homedir: () => ctx.env['HOME'] || '/home/user',
             tmpdir: () => '/tmp',
             hostname: () => 'shiro',
@@ -570,19 +1460,112 @@ export const nodeCmd: Command = {
             totalmem: () => 0,
             freemem: () => 0,
             EOL: '\n',
+            userInfo: () => ({ username: 'user', homedir: ctx.env['HOME'] || '/home/user', shell: '/bin/sh', uid: 1000, gid: 1000 }),
+            networkInterfaces: () => ({}),
+            endianness: () => 'LE',
+            loadavg: () => [0, 0, 0],
+            uptime: () => performance.now() / 1000,
+            machine: () => 'x86_64',
+            availableParallelism: () => (navigator?.hardwareConcurrency || 4),
+            version: () => 'Shiro 0.1.0',
+            devNull: '/dev/null',
+            constants: {
+              signals: {
+                SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGILL: 4, SIGTRAP: 5, SIGABRT: 6,
+                SIGBUS: 7, SIGFPE: 8, SIGKILL: 9, SIGUSR1: 10, SIGSEGV: 11, SIGUSR2: 12,
+                SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15, SIGCHLD: 17, SIGCONT: 18, SIGSTOP: 19,
+                SIGTSTP: 20, SIGTTIN: 21, SIGTTOU: 22, SIGURG: 23, SIGXCPU: 24, SIGXFSZ: 25,
+                SIGVTALRM: 26, SIGPROF: 27, SIGWINCH: 28, SIGIO: 29, SIGINFO: 29, SIGSYS: 31,
+              },
+              errno: {},
+              priority: { PRIORITY_LOW: 19, PRIORITY_BELOW_NORMAL: 10, PRIORITY_NORMAL: 0, PRIORITY_ABOVE_NORMAL: -7, PRIORITY_HIGH: -14, PRIORITY_HIGHEST: -20 },
+            },
           };
           case 'util':
-          case 'node:util': return {
-            promisify: (fn: Function) => (...args: any[]) => new Promise((resolve, reject) => {
-              fn(...args, (err: any, result: any) => err ? reject(err) : resolve(result));
-            }),
-            inspect: (obj: any) => JSON.stringify(obj, null, 2),
-            format: (...args: any[]) => args.map(String).join(' '),
+          case 'node:util': {
+            const _inspect = (obj: any, opts?: any): string => {
+              if (obj === null) return 'null';
+              if (obj === undefined) return 'undefined';
+              if (typeof obj === 'string') return opts?.stylize ? opts.stylize(`'${obj}'`, 'string') : `'${obj}'`;
+              if (typeof obj === 'number' || typeof obj === 'boolean' || typeof obj === 'bigint') return String(obj);
+              if (typeof obj === 'function') return `[Function: ${obj.name || 'anonymous'}]`;
+              if (typeof obj === 'symbol') return obj.toString();
+              if (obj instanceof Date) return obj.toISOString();
+              if (obj instanceof RegExp) return obj.toString();
+              if (obj instanceof Error) return `${obj.name}: ${obj.message}`;
+              if (ArrayBuffer.isView(obj)) return `<Buffer ${Array.from(obj as Uint8Array).slice(0, 50).map(b => b.toString(16).padStart(2, '0')).join(' ')}${(obj as Uint8Array).length > 50 ? ' ...' : ''}>`;
+              try { return JSON.stringify(obj, null, 2); } catch { return '[Circular]'; }
+            };
+            _inspect.custom = Symbol.for('nodejs.util.inspect.custom');
+            _inspect.styles = {};
+            _inspect.colors = {};
+            _inspect.defaultOptions = { depth: 2, colors: false };
+            const _format = (fmt: any, ...args: any[]): string => {
+              if (typeof fmt !== 'string') return [fmt, ...args].map(a => typeof a === 'object' ? _inspect(a) : String(a)).join(' ');
+              let i = 0;
+              const str = fmt.replace(/%[sdjifoO%]/g, (m: string) => {
+                if (m === '%%') return '%';
+                if (i >= args.length) return m;
+                const a = args[i++];
+                switch (m) {
+                  case '%s': return String(a);
+                  case '%d': case '%i': return parseInt(a, 10).toString();
+                  case '%f': return parseFloat(a).toString();
+                  case '%j': try { return JSON.stringify(a); } catch { return '[Circular]'; }
+                  case '%o': case '%O': return _inspect(a);
+                  default: return m;
+                }
+              });
+              const rest = args.slice(i).map(a => typeof a === 'object' ? _inspect(a) : String(a));
+              return rest.length ? str + ' ' + rest.join(' ') : str;
+            };
+            return {
+            promisify: (fn: any) => {
+              // Check for custom promisify implementation (e.g., child_process.exec)
+              const customSym = Symbol.for('nodejs.util.promisify.custom');
+              if (fn[customSym]) return fn[customSym];
+              return (...args: any[]) => new Promise((resolve, reject) => {
+                fn(...args, (err: any, result: any) => err ? reject(err) : resolve(result));
+              });
+            },
+            callbackify: (fn: Function) => (...args: any[]) => {
+              const cb = args.pop();
+              fn(...args).then((r: any) => cb(null, r)).catch((e: any) => cb(e));
+            },
+            inspect: _inspect,
+            format: _format,
             types: {
               isDate: (v: any) => v instanceof Date,
               isRegExp: (v: any) => v instanceof RegExp,
               isCryptoKey: (key: any) => typeof CryptoKey !== 'undefined' && key instanceof CryptoKey,
               isTypedArray: (v: any) => ArrayBuffer.isView(v) && !(v instanceof DataView),
+              isNativeError: (v: any) => v instanceof Error,
+              isPromise: (v: any) => v instanceof Promise,
+              isProxy: (_v: any) => false,
+              isAnyArrayBuffer: (v: any) => v instanceof ArrayBuffer || v instanceof SharedArrayBuffer,
+              isArrayBuffer: (v: any) => v instanceof ArrayBuffer,
+              isSharedArrayBuffer: (v: any) => typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer,
+              isDataView: (v: any) => v instanceof DataView,
+              isMap: (v: any) => v instanceof Map,
+              isSet: (v: any) => v instanceof Set,
+              isWeakMap: (v: any) => v instanceof WeakMap,
+              isWeakSet: (v: any) => v instanceof WeakSet,
+              isUint8Array: (v: any) => v instanceof Uint8Array,
+              isUint16Array: (v: any) => v instanceof Uint16Array,
+              isUint32Array: (v: any) => v instanceof Uint32Array,
+              isInt8Array: (v: any) => v instanceof Int8Array,
+              isInt16Array: (v: any) => v instanceof Int16Array,
+              isInt32Array: (v: any) => v instanceof Int32Array,
+              isFloat32Array: (v: any) => v instanceof Float32Array,
+              isFloat64Array: (v: any) => v instanceof Float64Array,
+              isBigInt64Array: (v: any) => typeof BigInt64Array !== 'undefined' && v instanceof BigInt64Array,
+              isBigUint64Array: (v: any) => typeof BigUint64Array !== 'undefined' && v instanceof BigUint64Array,
+              isGeneratorFunction: (v: any) => v?.constructor?.name === 'GeneratorFunction',
+              isAsyncFunction: (v: any) => v?.constructor?.name === 'AsyncFunction',
+              isStringObject: (v: any) => typeof v === 'object' && v instanceof String,
+              isNumberObject: (v: any) => typeof v === 'object' && v instanceof Number,
+              isBooleanObject: (v: any) => typeof v === 'object' && v instanceof Boolean,
+              isSymbolObject: (v: any) => typeof v === 'object' && Object.prototype.toString.call(v) === '[object Symbol]',
             },
             deprecate: (fn: Function, _msg: string) => fn, // Return function unchanged, skip warning
             inherits: (ctor: any, superCtor: any) => {
@@ -595,89 +1578,184 @@ export const nodeCmd: Command = {
             },
             isArray: Array.isArray,
             isBuffer: (obj: any) => obj instanceof Uint8Array,
-            debuglog: () => () => {}, // No-op debug logger
+            isString: (obj: any) => typeof obj === 'string',
+            isNumber: (obj: any) => typeof obj === 'number',
+            isBoolean: (obj: any) => typeof obj === 'boolean',
+            isObject: (obj: any) => obj !== null && typeof obj === 'object',
+            isFunction: (obj: any) => typeof obj === 'function',
+            isNull: (obj: any) => obj === null,
+            isUndefined: (obj: any) => obj === undefined,
+            isNullOrUndefined: (obj: any) => obj == null,
+            isPrimitive: (obj: any) => obj === null || (typeof obj !== 'object' && typeof obj !== 'function'),
+            isDeepStrictEqual: (a: any, b: any) => JSON.stringify(a) === JSON.stringify(b),
+            debuglog: (_section: string) => Object.assign((..._args: any[]) => {}, { enabled: false }),
+            debug: (_section: string) => Object.assign((..._args: any[]) => {}, { enabled: false }),
+            getSystemErrorName: (err: number) => `ERRNO_${err}`,
+            toUSVString: (s: string) => s,
+            stripVTControlCharacters: (s: string) => s.replace(/\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07/g, ''),
+            styleText: (_style: string, text: string) => text,
             TextEncoder,
             TextDecoder,
           };
+          }
           case 'events':
           case 'node:events': {
             class EventEmitter {
-              private _events: Record<string, Function[]> = {};
+              _events: Record<string, Function[]> = {};
+              _maxListeners: number = 10;
               on(event: string, fn: Function) { (this._events[event] ??= []).push(fn); return this; }
+              addListener(event: string, fn: Function) { return this.on(event, fn); }
               off(event: string, fn: Function) { this._events[event] = (this._events[event] || []).filter(f => f !== fn); return this; }
+              removeListener(event: string, fn: Function) { return this.off(event, fn); }
               emit(event: string, ...args: any[]) { (this._events[event] || []).forEach(fn => fn(...args)); return true; }
               once(event: string, fn: Function) {
                 const wrapper = (...args: any[]) => { this.off(event, wrapper); fn(...args); };
                 return this.on(event, wrapper);
               }
+              prependListener(event: string, fn: Function) { (this._events[event] ??= []).unshift(fn); return this; }
               removeAllListeners(event?: string) { if (event) delete this._events[event]; else this._events = {}; return this; }
+              listeners(event: string) { return [...(this._events[event] || [])]; }
+              listenerCount(event: string) { return (this._events[event] || []).length; }
+              eventNames() { return Object.keys(this._events); }
+              setMaxListeners(n: number) { this._maxListeners = n; return this; }
+              getMaxListeners() { return this._maxListeners; }
             }
-            return { EventEmitter, default: EventEmitter };
+            // The events module default export IS EventEmitter (allows `class Foo extends require('events')`)
+            const mod: any = EventEmitter;
+            mod.EventEmitter = EventEmitter;
+            mod.default = EventEmitter;
+            // Static helpers used by some libraries
+            mod.once = async (emitter: any, event: string) => {
+              return new Promise<any[]>((resolve) => {
+                emitter.once(event, (...args: any[]) => resolve(args));
+              });
+            };
+            mod.on = (emitter: any, event: string) => {
+              const events: any[] = [];
+              emitter.on(event, (...args: any[]) => events.push(args));
+              return { [Symbol.asyncIterator]: async function*() { while (true) { if (events.length) yield events.shift(); else await new Promise(r => setTimeout(r, 10)); } } };
+            };
+            mod.getEventListeners = (emitter: any, event: string) => emitter.listeners?.(event) || [];
+            mod.getMaxListeners = (emitter: any) => emitter.getMaxListeners?.() || 10;
+            mod.setMaxListeners = (n: number, ...emitters: any[]) => { emitters.forEach(e => e.setMaxListeners?.(n)); };
+            mod.defaultMaxListeners = 10;
+            mod.listenerCount = (emitter: any, event: string) => emitter.listenerCount?.(event) || 0;
+            return mod;
           }
           case 'url':
           case 'node:url': return {
             URL: globalThis.URL,
             URLSearchParams: globalThis.URLSearchParams,
-            parse: (urlStr: string) => new URL(urlStr),
-            format: (urlObj: any) => urlObj.toString ? urlObj.toString() : String(urlObj),
+            parse: (urlStr: string) => {
+              try {
+                const u = new URL(urlStr);
+                return {
+                  protocol: u.protocol,
+                  slashes: u.protocol.endsWith(':'),
+                  auth: u.username ? (u.password ? `${u.username}:${u.password}` : u.username) : null,
+                  host: u.host,
+                  hostname: u.hostname,
+                  port: u.port || null,
+                  pathname: u.pathname,
+                  search: u.search || null,
+                  query: u.search ? u.search.slice(1) : null,
+                  hash: u.hash || null,
+                  path: u.pathname + (u.search || ''),
+                  href: u.href,
+                };
+              } catch { return { protocol: null, hostname: null, pathname: urlStr, path: urlStr, href: urlStr }; }
+            },
+            format: (urlObj: any) => {
+              if (urlObj instanceof URL || urlObj.toString) return urlObj.toString();
+              const { protocol, hostname, port, pathname, search, hash } = urlObj;
+              return `${protocol || ''}//${hostname || ''}${port ? ':' + port : ''}${pathname || '/'}${search || ''}${hash || ''}`;
+            },
+            resolve: (from: string, to: string) => new URL(to, from).href,
+            fileURLToPath: (url: string | URL) => {
+              const u = typeof url === 'string' ? url : url.href;
+              if (u.startsWith('file://')) return decodeURIComponent(u.slice(7));
+              return u;
+            },
+            pathToFileURL: (path: string) => new URL('file://' + encodeURI(path)),
           };
-          case 'assert':
-          case 'node:assert': {
-            const assert: any = (val: any, msg?: string) => { if (!val) throw new Error(msg || `AssertionError: ${val}`); };
-            assert.ok = assert;
-            assert.equal = (a: any, b: any, msg?: string) => { if (a != b) throw new Error(msg || `AssertionError: ${a} != ${b}`); };
-            assert.strictEqual = (a: any, b: any, msg?: string) => { if (a !== b) throw new Error(msg || `AssertionError: ${a} !== ${b}`); };
-            assert.deepEqual = assert.deepStrictEqual = (a: any, b: any, msg?: string) => {
-              if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(msg || `AssertionError: deep equal failed`);
-            };
-            assert.throws = (fn: Function, msg?: string) => {
-              try { fn(); throw new Error(msg || 'Expected function to throw'); } catch(e: any) { if (e.message === (msg || 'Expected function to throw')) throw e; }
-            };
-            assert.notEqual = (a: any, b: any, msg?: string) => { if (a == b) throw new Error(msg || `AssertionError: ${a} == ${b}`); };
-            return assert;
-          }
           case 'buffer':
-          case 'node:buffer': return { Buffer: FakeBuffer };
+          case 'node:buffer': return {
+            Buffer: FakeBuffer,
+            Blob: typeof globalThis.Blob !== 'undefined' ? globalThis.Blob : class Blob { constructor(parts?: any[], opts?: any) {} text() { return Promise.resolve(''); } arrayBuffer() { return Promise.resolve(new ArrayBuffer(0)); } },
+            File: typeof globalThis.File !== 'undefined' ? globalThis.File : class File { name = ''; constructor(parts: any[], name: string, opts?: any) { this.name = name; } },
+            btoa: typeof globalThis.btoa !== 'undefined' ? globalThis.btoa : (s: string) => s,
+            atob: typeof globalThis.atob !== 'undefined' ? globalThis.atob : (s: string) => s,
+            constants: { MAX_LENGTH: 2147483647, MAX_STRING_LENGTH: 536870888 },
+            kMaxLength: 2147483647,
+            SlowBuffer: FakeBuffer,
+          };
           case 'stream':
           case 'node:stream': {
             // Stream shim with Transform for libraries like iconv-lite
-            console.log('[stream shim] Creating stream module with Transform');
             const streamModule: any = {};
 
-            // Debug flag to trace Transform usage
-            (globalThis as any).__streamShimDebug = true;
-
-            const Stream = function(this: any) {} as any;
+            const Stream = function(this: any) { this._events = {}; this.destroyed = false; } as any;
             Stream.prototype.pipe = function(dest: any) { return dest; };
-            Stream.prototype.on = function(_event: string, _cb: Function) { return this; };
-            Stream.prototype.once = function(_event: string, _cb: Function) { return this; };
-            Stream.prototype.emit = function(_event: string, ..._args: any[]) { return true; };
-            Stream.prototype.removeListener = function(_event: string, _cb: Function) { return this; };
-            Stream.prototype.addListener = function(_event: string, _cb: Function) { return this; };
+            Stream.prototype.on = function(event: string, cb: Function) { (this._events[event] ??= []).push(cb); return this; };
+            Stream.prototype.once = function(event: string, cb: Function) { const w = (...a: any[]) => { this.off(event, w); cb(...a); }; return this.on(event, w); };
+            Stream.prototype.emit = function(event: string, ...args: any[]) { (this._events[event] || []).forEach((fn: Function) => fn(...args)); return (this._events[event] || []).length > 0; };
+            Stream.prototype.off = function(event: string, cb: Function) { this._events[event] = (this._events[event] || []).filter((f: Function) => f !== cb); return this; };
+            Stream.prototype.removeListener = function(event: string, cb: Function) { return this.off(event, cb); };
+            Stream.prototype.addListener = function(event: string, cb: Function) { return this.on(event, cb); };
+            Stream.prototype.removeAllListeners = function(event?: string) { if (event) delete this._events[event]; else this._events = {}; return this; };
+            Stream.prototype.listeners = function(event: string) { return [...(this._events[event] || [])]; };
+            Stream.prototype.listenerCount = function(event: string) { return (this._events[event] || []).length; };
+            Stream.prototype.setMaxListeners = function() { return this; };
+            Stream.prototype.prependListener = function(event: string, cb: Function) { (this._events[event] ??= []).unshift(cb); return this; };
+            Stream.prototype.eventNames = function() { return Object.keys(this._events); };
             streamModule.Stream = Stream;
 
-            const Readable = function(this: any, opts?: any) { Stream.call(this); } as any;
+            const Readable = function(this: any, opts?: any) { Stream.call(this); this.readable = true; this._readableState = { flowing: null, ended: false, objectMode: opts?.objectMode || false }; } as any;
             Readable.prototype = Object.create(Stream.prototype);
             Readable.prototype.constructor = Readable;
             Readable.prototype._read = function() {};
             Readable.prototype.push = function(_chunk: any) { return true; };
             Readable.prototype.read = function() { return null; };
+            Readable.prototype.setEncoding = function(_enc: string) { return this; };
+            Readable.prototype.pause = function() { if (this._readableState) this._readableState.flowing = false; return this; };
+            Readable.prototype.resume = function() { if (this._readableState) this._readableState.flowing = true; return this; };
+            Readable.prototype.isPaused = function() { return this._readableState ? this._readableState.flowing === false : false; };
+            Readable.prototype.unshift = function(_chunk: any) {};
+            Readable.prototype.wrap = function(_stream: any) { return this; };
+            Readable.prototype.destroy = function(err?: any) { this.destroyed = true; if (err) this.emit('error', err); this.emit('close'); return this; };
+            Readable.prototype[Symbol.asyncIterator] = async function*() {};
+            Readable.from = (iterable: any) => {
+              const stream = new Readable();
+              (async () => {
+                try {
+                  for await (const chunk of iterable) {
+                    stream.push(chunk);
+                  }
+                  stream.push(null);
+                } catch (e) {
+                  stream.emit('error', e);
+                }
+              })();
+              return stream;
+            };
             streamModule.Readable = Readable;
 
-            const Writable = function(this: any, opts?: any) { Stream.call(this); } as any;
+            const Writable = function(this: any, opts?: any) { Stream.call(this); this.writable = true; this._writableState = { ended: false, objectMode: opts?.objectMode || false }; } as any;
             Writable.prototype = Object.create(Stream.prototype);
             Writable.prototype.constructor = Writable;
             Writable.prototype._write = function(_chunk: any, _encoding: string, callback: Function) { callback(); };
-            Writable.prototype.write = function(_chunk: any, _encoding?: any, _cb?: any) { return true; };
-            Writable.prototype.end = function(_chunk?: any, _encoding?: any, _cb?: any) {};
+            Writable.prototype.write = function(_chunk: any, _encoding?: any, _cb?: any) { const cb = typeof _encoding === 'function' ? _encoding : _cb; if (cb) cb(); return true; };
+            Writable.prototype.end = function(_chunk?: any, _encoding?: any, _cb?: any) { const cb = typeof _chunk === 'function' ? _chunk : typeof _encoding === 'function' ? _encoding : _cb; if (cb) cb(); this.emit('finish'); };
+            Writable.prototype.destroy = function(err?: any) { this.destroyed = true; if (err) this.emit('error', err); this.emit('close'); return this; };
+            Writable.prototype.cork = function() {};
+            Writable.prototype.uncork = function() {};
+            Writable.prototype.setDefaultEncoding = function() { return this; };
             streamModule.Writable = Writable;
 
-            const Duplex = function(this: any, opts?: any) { Readable.call(this, opts); } as any;
+            const Duplex = function(this: any, opts?: any) { Readable.call(this, opts); this.writable = true; this._writableState = { ended: false, objectMode: opts?.objectMode || false }; } as any;
             Duplex.prototype = Object.create(Readable.prototype);
+            Object.assign(Duplex.prototype, Writable.prototype);
             Duplex.prototype.constructor = Duplex;
-            Duplex.prototype._write = function(_chunk: any, _encoding: string, callback: Function) { callback(); };
-            Duplex.prototype.write = function(_chunk: any, _encoding?: any, _cb?: any) { return true; };
-            Duplex.prototype.end = function(_chunk?: any, _encoding?: any, _cb?: any) {};
             streamModule.Duplex = Duplex;
 
             const Transform = function(this: any, opts?: any) { Duplex.call(this, opts); } as any;
@@ -692,8 +1770,23 @@ export const nodeCmd: Command = {
             PassThrough.prototype.constructor = PassThrough;
             streamModule.PassThrough = PassThrough;
 
-            console.log('[stream shim] Module ready, Transform:', typeof Transform, Transform?.name);
-            console.log('[stream shim] Returning:', Object.keys(streamModule));
+            // pipeline/finished — used by many Node.js libraries
+            streamModule.pipeline = (...args: any[]) => {
+              const cb = typeof args[args.length - 1] === 'function' ? args.pop() : null;
+              if (cb) setTimeout(() => cb(null), 0);
+              return args[args.length - 1]; // Return last stream
+            };
+            streamModule.finished = (stream: any, opts: any, cb?: Function) => {
+              const callback = typeof opts === 'function' ? opts : cb;
+              if (callback) setTimeout(() => callback(null), 0);
+              return () => {}; // cleanup function
+            };
+            streamModule.promises = {
+              pipeline: async (...streams: any[]) => streams[streams.length - 1],
+              finished: async () => {},
+            };
+            // Make the module itself a constructor (for `const Stream = require('stream')`)
+            streamModule.default = Stream;
             return streamModule;
           }
           case 'crypto':
@@ -707,10 +1800,54 @@ export const nodeCmd: Command = {
               }});
             },
             createHash: (algo: string) => {
-              let data = '';
-              return {
-                update: (d: string) => { data += d; return { digest: (enc: string) => `${algo}:${data.length}` }; },
+              const chunks: Uint8Array[] = [];
+              const hashObj: any = {
+                update: (d: string | Uint8Array, encoding?: string) => {
+                  if (typeof d === 'string') {
+                    if (encoding === 'hex') {
+                      const hex = d.replace(/[^0-9a-fA-F]/g, '');
+                      const bytes = new Uint8Array(hex.length / 2);
+                      for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+                      chunks.push(bytes);
+                    } else {
+                      chunks.push(new TextEncoder().encode(d));
+                    }
+                  } else {
+                    chunks.push(d instanceof Uint8Array ? d : new Uint8Array(d));
+                  }
+                  return hashObj;
+                },
+                digest: (enc?: string) => {
+                  // Synchronous hash: use simple FNV-1a for sync path (Web Crypto is async)
+                  const total = chunks.reduce((n, c) => n + c.length, 0);
+                  const all = new Uint8Array(total);
+                  let off = 0;
+                  for (const c of chunks) { all.set(c, off); off += c.length; }
+                  // FNV-1a 128-bit hash (emulates 16 bytes for md5/sha-like output)
+                  let h0 = 0x811c9dc5 >>> 0, h1 = 0x6c62272e >>> 0;
+                  for (let i = 0; i < all.length; i++) {
+                    h0 = (h0 ^ all[i]) >>> 0; h0 = Math.imul(h0, 0x01000193) >>> 0;
+                    h1 = (h1 ^ all[i]) >>> 0; h1 = Math.imul(h1, 0x01000193) >>> 0;
+                  }
+                  const result = new Uint8Array(algo === 'md5' ? 16 : algo === 'sha1' ? 20 : 32);
+                  const dv = new DataView(result.buffer);
+                  dv.setUint32(0, h0); dv.setUint32(4, h1);
+                  dv.setUint32(8, h0 ^ 0xa5a5a5a5); dv.setUint32(12, h1 ^ 0x5a5a5a5a);
+                  if (result.length > 16) { dv.setUint32(16, h0 ^ h1); if (result.length > 20) { for (let i = 20; i < result.length; i += 4) dv.setUint32(i, h0 + i); } }
+                  if (enc === 'hex') return Array.from(result).map(b => b.toString(16).padStart(2, '0')).join('');
+                  if (enc === 'base64') { let s = ''; for (let i = 0; i < result.length; i++) s += String.fromCharCode(result[i]); return btoa(s); }
+                  Object.setPrototypeOf(result, FakeBuffer.prototype);
+                  return result;
+                },
               };
+              return hashObj;
+            },
+            createHmac: (algo: string, key: string | Uint8Array) => {
+              // Simple HMAC shim — same as createHash but XOR key into data
+              const hash = (getBuiltinModule('crypto') as any).createHash(algo);
+              const keyBytes = typeof key === 'string' ? new TextEncoder().encode(key) : key;
+              hash.update(keyBytes);
+              return hash;
             },
             randomUUID: () => crypto.randomUUID(),
             // Web Crypto API for jose and other crypto libraries
@@ -870,11 +2007,197 @@ export const nodeCmd: Command = {
               return server;
             };
 
+            // IncomingMessage — needed for class extends
+            class IncomingMessage {
+              headers: Record<string, string> = {};
+              method = 'GET';
+              url = '/';
+              statusCode = 200;
+              httpVersion = '1.1';
+              on(_e: string, _fn: Function) { return this; }
+              once(_e: string, _fn: Function) { return this; }
+              pipe(dest: any) { return dest; }
+            }
+
+            // Agent — used as base class by AWS SDK, gRPC, etc.
+            class Agent {
+              maxSockets = Infinity;
+              maxFreeSockets = 256;
+              options: any = {};
+              requests: any = {};
+              sockets: any = {};
+              freeSockets: any = {};
+              constructor(opts?: any) { if (opts) this.options = opts; }
+              destroy() {}
+              createConnection(opts: any, cb: Function) { cb(null, new (getBuiltinModule('net') as any).Socket()); }
+            }
+
+            // ClientRequest — uses browser fetch to make real HTTP requests
+            class FetchClientRequest {
+              _events: Record<string, Function[]> = {};
+              _headers: Record<string, string> = {};
+              _body: string[] = [];
+              _opts: any;
+              _ended = false;
+              _aborted = false;
+              _timeout = 0;
+
+              constructor(opts: any) {
+                this._opts = opts;
+                if (opts.headers) {
+                  for (const [k, v] of Object.entries(opts.headers)) {
+                    this._headers[k.toLowerCase()] = String(v);
+                  }
+                }
+              }
+              on(ev: string, fn: Function) { (this._events[ev] ??= []).push(fn); return this; }
+              once(ev: string, fn: Function) {
+                const wrapper = (...args: any[]) => {
+                  this._events[ev] = (this._events[ev] || []).filter(f => f !== wrapper);
+                  fn(...args);
+                };
+                return this.on(ev, wrapper);
+              }
+              emit(ev: string, ...args: any[]) { (this._events[ev] || []).forEach(f => f(...args)); }
+              setHeader(name: string, value: string) { this._headers[name.toLowerCase()] = String(value); }
+              getHeader(name: string) { return this._headers[name.toLowerCase()]; }
+              removeHeader(name: string) { delete this._headers[name.toLowerCase()]; }
+              write(chunk: string | Uint8Array) {
+                this._body.push(typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk));
+                return true;
+              }
+              end(data?: string | Uint8Array) {
+                if (this._ended) return;
+                this._ended = true;
+                if (data) this.write(data);
+                if (this._aborted) return;
+
+                // Build URL from opts
+                const o = this._opts;
+                const isHttps = name === 'https' || name === 'node:https';
+                const protocol = o.protocol || (isHttps ? 'https:' : 'http:');
+                const host = o.hostname || o.host || 'localhost';
+                const port = o.port ? `:${o.port}` : '';
+                const path = o.path || '/';
+                const url = `${protocol}//${host}${port}${path}`;
+
+                const fetchOpts: RequestInit = {
+                  method: o.method || 'GET',
+                  headers: this._headers,
+                };
+                if (this._body.length > 0 && o.method !== 'GET' && o.method !== 'HEAD') {
+                  fetchOpts.body = this._body.join('');
+                }
+
+                globalThis.fetch(url, fetchOpts).then(async (resp) => {
+                  // Build IncomingMessage-like response
+                  const resHeaders: Record<string, string> = {};
+                  resp.headers.forEach((v, k) => { resHeaders[k] = v; });
+                  const body = resp.body;
+
+                  const res: any = new IncomingMessage();
+                  res.statusCode = resp.status;
+                  res.statusMessage = resp.statusText;
+                  res.headers = resHeaders;
+                  res.httpVersion = '1.1';
+
+                  const resEvents: Record<string, Function[]> = {};
+                  res.on = (ev: string, fn: Function) => { (resEvents[ev] ??= []).push(fn); return res; };
+                  res.once = (ev: string, fn: Function) => { return res.on(ev, fn); };
+                  res.removeListener = (ev: string, fn: Function) => { resEvents[ev] = (resEvents[ev] || []).filter(f => f !== fn); return res; };
+                  res.removeAllListeners = (ev?: string) => { if (ev) delete resEvents[ev]; else Object.keys(resEvents).forEach(k => delete resEvents[k]); return res; };
+                  res.pipe = (dest: any) => {
+                    res.on('data', (chunk: any) => dest.write(chunk));
+                    res.on('end', () => { if (dest.end) dest.end(); });
+                    return dest;
+                  };
+                  res.resume = () => res;
+                  res.destroy = () => res;
+                  res.setEncoding = (_enc: string) => res;
+
+                  // Emit response callback
+                  this.emit('response', res);
+
+                  // Stream body data
+                  if (body) {
+                    const reader = body.getReader();
+                    const pump = async () => {
+                      while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        (resEvents['data'] || []).forEach(fn => fn(value));
+                      }
+                      (resEvents['end'] || []).forEach(fn => fn());
+                      (resEvents['close'] || []).forEach(fn => fn());
+                    };
+                    pump().catch(err => {
+                      (resEvents['error'] || []).forEach(fn => fn(err));
+                    });
+                  } else {
+                    queueMicrotask(() => {
+                      (resEvents['end'] || []).forEach(fn => fn());
+                      (resEvents['close'] || []).forEach(fn => fn());
+                    });
+                  }
+                }).catch(err => {
+                  this.emit('error', err);
+                });
+              }
+              abort() { this._aborted = true; this.emit('abort'); }
+              destroy(err?: Error) { this._aborted = true; if (err) this.emit('error', err); }
+              setTimeout(ms: number, cb?: Function) { this._timeout = ms; if (cb) this.on('timeout', cb); return this; }
+              flushHeaders() {}
+              setNoDelay() {}
+              setSocketKeepAlive() {}
+            }
+
+            const makeRequest = (optsOrUrl: any, cbOrOpts?: any, cb?: Function) => {
+              let opts: any;
+              let callback: Function | undefined;
+              if (typeof optsOrUrl === 'string') {
+                const u = new URL(optsOrUrl);
+                opts = { protocol: u.protocol, hostname: u.hostname, port: u.port, path: u.pathname + u.search, method: 'GET' };
+                callback = typeof cbOrOpts === 'function' ? cbOrOpts : cb;
+                if (typeof cbOrOpts === 'object') Object.assign(opts, cbOrOpts);
+              } else if (optsOrUrl instanceof URL) {
+                opts = { protocol: optsOrUrl.protocol, hostname: optsOrUrl.hostname, port: optsOrUrl.port, path: optsOrUrl.pathname + optsOrUrl.search, method: 'GET' };
+                callback = typeof cbOrOpts === 'function' ? cbOrOpts : cb;
+              } else {
+                opts = optsOrUrl;
+                callback = typeof cbOrOpts === 'function' ? cbOrOpts : cb;
+              }
+              const req = new FetchClientRequest(opts);
+              if (callback) req.on('response', callback);
+              return req;
+            };
+
+            const makeGet = (optsOrUrl: any, cbOrOpts?: any, cb?: Function) => {
+              const req = makeRequest(optsOrUrl, cbOrOpts, cb);
+              req.end();
+              return req;
+            };
+
+            const STATUS_CODES: Record<number, string> = {
+              200: 'OK', 201: 'Created', 204: 'No Content', 301: 'Moved Permanently',
+              302: 'Found', 304: 'Not Modified', 400: 'Bad Request', 401: 'Unauthorized',
+              403: 'Forbidden', 404: 'Not Found', 405: 'Method Not Allowed',
+              500: 'Internal Server Error', 502: 'Bad Gateway', 503: 'Service Unavailable',
+            };
+
+            const METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'DELETE', 'CONNECT', 'OPTIONS', 'TRACE', 'PATCH'];
+
             return {
               createServer,
               Server: function(handler?: any) { return createServer(handler); },
-              request: () => { throw new Error('http.request not implemented - use fetch()'); },
-              get: () => { throw new Error('http.get not implemented - use fetch()'); },
+              request: makeRequest,
+              get: makeGet,
+              IncomingMessage,
+              ServerResponse: class ServerResponse {},
+              ClientRequest: FetchClientRequest,
+              Agent,
+              globalAgent: new Agent(),
+              STATUS_CODES,
+              METHODS,
             };
           }
           case 'dotenv':
@@ -1241,20 +2564,20 @@ export const nodeCmd: Command = {
 
           case 'tty':
           case 'node:tty': return {
-            isatty: (_fd?: number) => true,
-            ReadStream: class ReadStream { constructor() {} setRawMode() { return this; } isTTY = true; },
+            isatty: (fd?: number) => !!ctx.terminal,
+            ReadStream: class ReadStream { constructor() {} setRawMode() { return this; } isTTY = !!ctx.terminal; },
             WriteStream: class WriteStream {
-              isTTY = true;
-              columns = 80;
-              rows = 24;
-              getColorDepth() { return 24; }
-              hasColors(count?: number) { return (count || 0) <= 16777216; }
+              isTTY = !!ctx.terminal;
+              get columns() { return ctx.terminal ? ctx.terminal.getSize().cols : 80; }
+              get rows() { return ctx.terminal ? ctx.terminal.getSize().rows : 24; }
+              getColorDepth() { return ctx.terminal ? 24 : 1; }
+              hasColors(count?: number) { return ctx.terminal ? (count ? count <= 16777216 : true) : false; }
               getWindowSize() { return [this.columns, this.rows]; }
               cursorTo() {}
               moveCursor() {}
               clearLine() {}
               clearScreenDown() {}
-              write(data: any) {}
+              write(data: any) { fakeProcess.stdout.write(typeof data === 'string' ? data : String(data)); }
             },
           };
 
@@ -1480,7 +2803,8 @@ export const nodeCmd: Command = {
           }
 
           case 'process':
-          case 'node:process': return fakeProcess;
+          case 'node:process':
+            return fakeProcess;
 
           case 'path/posix':
           case 'node:path/posix': return getBuiltinModule('path');
@@ -1532,14 +2856,157 @@ export const nodeCmd: Command = {
 
           case 'readline':
           case 'node:readline': return {
-            createInterface: (opts: any) => ({
-              on: () => ({}),
-              close: () => {},
-              question: (q: string, cb: Function) => cb(''),
-              [Symbol.asyncIterator]: async function*() {},
-            }),
+            cursorTo: (stream: any, x: number, y?: number | Function, cb?: Function) => {
+              if (stream?.write) {
+                let seq = `\x1b[${x + 1}G`;
+                if (typeof y === 'number') seq = `\x1b[${y + 1};${x + 1}H`;
+                stream.write(seq);
+              }
+              if (typeof y === 'function') y(); else if (cb) cb();
+              return true;
+            },
+            clearLine: (stream: any, dir: number, cb?: Function) => {
+              if (stream?.write) {
+                stream.write(dir === -1 ? '\x1b[1K' : dir === 1 ? '\x1b[0K' : '\x1b[2K');
+              }
+              if (cb) cb();
+              return true;
+            },
+            moveCursor: (stream: any, dx: number, dy: number, cb?: Function) => {
+              if (stream?.write) {
+                let seq = '';
+                if (dx > 0) seq += `\x1b[${dx}C`;
+                else if (dx < 0) seq += `\x1b[${-dx}D`;
+                if (dy > 0) seq += `\x1b[${dy}B`;
+                else if (dy < 0) seq += `\x1b[${-dy}A`;
+                if (seq) stream.write(seq);
+              }
+              if (cb) cb();
+              return true;
+            },
+            clearScreenDown: (stream: any, cb?: Function) => {
+              if (stream?.write) stream.write('\x1b[J');
+              if (cb) cb();
+              return true;
+            },
+            createInterface: (opts: any) => {
+              const events: Record<string, Function[]> = {};
+              const iface: any = {
+                on: (ev: string, fn: Function) => { (events[ev] ??= []).push(fn); return iface; },
+                once: (ev: string, fn: Function) => iface.on(ev, fn),
+                off: (ev: string, fn: Function) => { events[ev] = (events[ev] || []).filter(f => f !== fn); return iface; },
+                removeListener: (ev: string, fn: Function) => iface.off(ev, fn),
+                removeAllListeners: () => { Object.keys(events).forEach(k => delete events[k]); return iface; },
+                close: () => { (events['close'] || []).forEach(f => f()); },
+                question: (q: string, cb: Function) => cb(''),
+                write: () => {},
+                setPrompt: () => {},
+                prompt: () => {},
+                [Symbol.asyncIterator]: async function*() {},
+              };
+              return iface;
+            },
             Interface: class Interface {},
+            emitKeypressEvents: (stream: any) => {
+              // ink calls this to enable keypress events on stdin
+              // Parse raw input into keypress events, handling ANSI escape sequences
+              if (stream && stream.on && !stream._keypressListenerAdded) {
+                stream._keypressListenerAdded = true;
+                let escBuf = '';
+                stream.on('data', (data: any) => {
+                  const str = typeof data === 'string' ? data : new TextDecoder().decode(data);
+                  let i = 0;
+                  while (i < str.length) {
+                    const ch = str[i];
+                    const code = ch.charCodeAt(0);
+                    const key: any = { sequence: '', name: '', ctrl: false, meta: false, shift: false };
+                    if (code === 0x1b && i + 1 < str.length) {
+                      // Escape sequence
+                      const next = str[i + 1];
+                      if (next === '[') {
+                        // CSI sequence: \x1b[...
+                        let seq = '\x1b[';
+                        i += 2;
+                        while (i < str.length && str.charCodeAt(i) >= 0x20 && str.charCodeAt(i) <= 0x3f) { seq += str[i]; i++; }
+                        if (i < str.length) { seq += str[i]; i++; }
+                        key.sequence = seq;
+                        const final = seq[seq.length - 1];
+                        const params = seq.slice(2, -1);
+                        if (final === 'A') key.name = 'up';
+                        else if (final === 'B') key.name = 'down';
+                        else if (final === 'C') key.name = 'right';
+                        else if (final === 'D') key.name = 'left';
+                        else if (final === 'H') key.name = 'home';
+                        else if (final === 'F') key.name = 'end';
+                        else if (final === 'Z') { key.name = 'tab'; key.shift = true; }
+                        else if (final === '~') {
+                          if (params === '3') key.name = 'delete';
+                          else if (params === '5') key.name = 'pageup';
+                          else if (params === '6') key.name = 'pagedown';
+                          else if (params === '2') key.name = 'insert';
+                          else key.name = 'undefined';
+                        }
+                        else key.name = 'undefined';
+                        if (params.includes(';')) {
+                          const mod = parseInt(params.split(';')[1]) - 1;
+                          if (mod & 1) key.shift = true;
+                          if (mod & 2) key.meta = true;
+                          if (mod & 4) key.ctrl = true;
+                        }
+                      } else if (next === 'O') {
+                        // SS3 sequence: \x1bO... (function keys)
+                        i += 2;
+                        const fk = i < str.length ? str[i++] : '';
+                        key.sequence = '\x1bO' + fk;
+                        if (fk === 'P') key.name = 'f1';
+                        else if (fk === 'Q') key.name = 'f2';
+                        else if (fk === 'R') key.name = 'f3';
+                        else if (fk === 'S') key.name = 'f4';
+                        else key.name = 'undefined';
+                      } else {
+                        // Alt+key
+                        key.sequence = '\x1b' + next;
+                        key.name = next.toLowerCase();
+                        key.meta = true;
+                        i += 2;
+                      }
+                    } else {
+                      key.sequence = ch;
+                      i++;
+                      if (code === 13) key.name = 'return';
+                      else if (code === 10) key.name = 'return';
+                      else if (code === 127) key.name = 'backspace';
+                      else if (code === 8) key.name = 'backspace';
+                      else if (code === 9) key.name = 'tab';
+                      else if (code === 32) key.name = 'space';
+                      else if (code < 27) { key.name = String.fromCharCode(code + 96); key.ctrl = true; }
+                      else key.name = ch.toLowerCase();
+                    }
+                    stream.emit('keypress', key.sequence, key);
+                  }
+                });
+              }
+            },
           };
+
+          case 'readline/promises':
+          case 'node:readline/promises': {
+            const rlp: any = {
+              createInterface: (opts: any) => {
+                const events: Record<string, Function[]> = {};
+                const iface: any = {
+                  on: (ev: string, fn: Function) => { (events[ev] ??= []).push(fn); return iface; },
+                  once: (ev: string, fn: Function) => iface.on(ev, fn),
+                  off: (ev: string, fn: Function) => { events[ev] = (events[ev] || []).filter(f => f !== fn); return iface; },
+                  close: () => { (events['close'] || []).forEach(f => f()); },
+                  question: async (_q: string) => '',
+                  [Symbol.asyncIterator]: async function*() {},
+                };
+                return iface;
+              },
+            };
+            return rlp;
+          }
 
           case 'diagnostics_channel':
           case 'node:diagnostics_channel': return {
@@ -1573,6 +3040,83 @@ export const nodeCmd: Command = {
             assert.AssertionError = class extends Error {};
             return assert;
           }
+
+          case 'http2':
+          case 'node:http2': {
+            const createSecureClient = () => {
+              const ee: any = { on: () => ee, once: () => ee, off: () => ee, emit: () => {}, close: () => {}, destroy: () => {} };
+              return ee;
+            };
+            return {
+              connect: createSecureClient,
+              createServer: () => createSecureClient(),
+              createSecureServer: () => createSecureClient(),
+              constants: {
+                HTTP2_HEADER_PATH: ':path',
+                HTTP2_HEADER_METHOD: ':method',
+                HTTP2_HEADER_STATUS: ':status',
+                HTTP2_HEADER_CONTENT_TYPE: 'content-type',
+                NGHTTP2_CANCEL: 0x8,
+              },
+            };
+          }
+
+          case 'console':
+          case 'node:console': {
+            // Console class constructor for cli.js Commander output
+            class Console {
+              _stdout: any;
+              _stderr: any;
+              constructor(opts?: any) {
+                if (opts && opts.stdout) {
+                  this._stdout = opts.stdout;
+                  this._stderr = opts.stderr || opts.stdout;
+                } else {
+                  this._stdout = fakeProcess.stdout;
+                  this._stderr = fakeProcess.stderr;
+                }
+              }
+              log(...args: any[]) { fakeConsole.log(...args); }
+              info(...args: any[]) { fakeConsole.info(...args); }
+              warn(...args: any[]) { fakeConsole.warn(...args); }
+              error(...args: any[]) { fakeConsole.error(...args); }
+              dir(obj: any) { fakeConsole.dir(obj); }
+              debug(...args: any[]) { fakeConsole.log(...args); }
+              trace(...args: any[]) { fakeConsole.log(...args); }
+              assert(val: any, ...args: any[]) { if (!val) fakeConsole.error('Assertion failed:', ...args); }
+            }
+            return { Console, default: Console };
+          }
+
+          case 'util/types':
+          case 'node:util/types': return {
+            isDate: (v: any) => v instanceof Date,
+            isRegExp: (v: any) => v instanceof RegExp,
+            isTypedArray: (v: any) => ArrayBuffer.isView(v) && !(v instanceof DataView),
+            isArrayBuffer: (v: any) => v instanceof ArrayBuffer,
+            isSharedArrayBuffer: (v: any) => typeof SharedArrayBuffer !== 'undefined' && v instanceof SharedArrayBuffer,
+            isPromise: (v: any) => v instanceof Promise,
+            isMap: (v: any) => v instanceof Map,
+            isSet: (v: any) => v instanceof Set,
+            isProxy: () => false,
+            isNativeError: (v: any) => v instanceof Error,
+            isNumberObject: (v: any) => typeof v === 'object' && v instanceof Number,
+            isStringObject: (v: any) => typeof v === 'object' && v instanceof String,
+            isBooleanObject: (v: any) => typeof v === 'object' && v instanceof Boolean,
+          };
+
+          case 'inspector':
+          case 'node:inspector': return {
+            open: () => {},
+            close: () => {},
+            url: () => undefined,
+            Session: class InspectorSession {
+              connect() {}
+              disconnect() {}
+              post(_method: string, _params: any, cb?: Function) { cb?.(null); }
+              on() { return this; }
+            },
+          };
 
           default: return null;
         }
@@ -2384,11 +3928,52 @@ export const nodeCmd: Command = {
 
       // Sync require for CommonJS compatibility - returns module directly, not a Promise
       // For modules with top-level await, caller must await the result
+      // Auto-stub: for missing properties on builtin modules, return smart stubs
+      // This prevents "Class extends undefined" and "Cannot read properties of undefined" errors
+      function createAutoStub(modPath: string, target: any): any {
+        const stubCache = new Map<string, any>();
+        return new Proxy(target, {
+          get(t, prop, receiver) {
+            if (typeof prop === 'symbol') return Reflect.get(t, prop, receiver);
+            const val = Reflect.get(t, prop, receiver);
+            if (val !== undefined) return val;
+            // Don't stub internal/common props
+            if (prop === 'then' || prop === 'toJSON' || prop === '__esModule' || prop === 'default' || prop.startsWith('_')) return undefined;
+            // Return cached stub
+            if (stubCache.has(prop)) return stubCache.get(prop);
+            // Create a stub class/function that can be extended and called
+            const stubClass = class StubClass {
+              constructor(..._args: any[]) {}
+              static [Symbol.hasInstance](_inst: any) { return false; }
+            };
+            // Make it callable as a function too
+            const stub: any = function(...args: any[]) {
+              // For sync functions that return values, return sensible defaults
+              if (prop.endsWith('Sync')) return '';
+              if (prop === 'constants') return {};
+              return stub;
+            };
+            // Copy class prototype so it works with extends
+            Object.setPrototypeOf(stub, stubClass);
+            stub.prototype = stubClass.prototype;
+            stubCache.set(prop, stub);
+            return stub;
+          }
+        });
+      }
+
       function requireModule(modPath: string, fromDir: string): any {
-        // Debug logging for iconv-lite and stream modules
-        if (modPath === 'stream' || modPath.includes('iconv') || modPath.includes('streams')) {
-          console.log(`[require] Called for '${modPath}' from '${fromDir}'`);
+        const result = _requireModule(modPath, fromDir);
+        if (result === undefined || result === null) {
+          console.log(`[require] WARNING: '${modPath}' returned ${result}`);
         }
+        // For Node.js builtins, wrap in auto-stub Proxy
+        if (result && typeof result === 'object' && (modPath.startsWith('node:') || getBuiltinModule(modPath) !== null)) {
+          return createAutoStub(modPath, result);
+        }
+        return result;
+      }
+      function _requireModule(modPath: string, fromDir: string): any {
         // Check for Express shim
         if (modPath === 'express') {
           return createExpressShim;
@@ -2402,9 +3987,6 @@ export const nodeCmd: Command = {
         // Check built-in modules first
         const builtin = getBuiltinModule(modPath);
         if (builtin !== null) {
-          if (modPath === 'stream' || modPath === 'node:stream') {
-            console.log(`[require] Returning stream builtin with Transform:`, typeof builtin.Transform, builtin.Transform?.name);
-          }
           return builtin;
         }
 
@@ -2897,6 +4479,45 @@ export const nodeCmd: Command = {
         src = src.replace(/\bimport\s+type\s+[^;]+;?/g, '/* import type */');
         src = src.replace(/\bexport\s+type\s+/g, '/* export type */ ');
 
+        // 8. Patch lazy module factory to handle initialization failures gracefully.
+        //    The bundled code uses R=(A,q)=>()=>(q||A((q={exports:{}}).exports,q),q.exports)
+        //    as a lazy CJS module factory. If factory A throws (missing Node.js API), subsequent
+        //    code accessing exports gets {}. We wrap in try-catch and auto-stub missing properties
+        //    so that `class X extends FailedModule.SomeClass` doesn't crash.
+        const rOld = 'R=(A,q)=>()=>(q||A((q={exports:{}}).exports,q),q.exports)';
+        const rNew = 'R=(A,q)=>()=>{if(!q){q={exports:{}};try{A(q.exports,q)}catch(e){if(e&&e._isProcessExit)throw e;q.exports=__stubProxy(q.exports)}}return q.exports}';
+        if (src.includes(rOld)) {
+          src = src.replace(rOld, rNew);
+          // Inject __stubProxy helper and Node.js-compatible setTimeout/setInterval at the very start
+          src = [
+            'function __stubProxy(o){return new Proxy(o,{get(t,p,r){if(typeof p==="symbol"||p in t)return Reflect.get(t,p,r);var _s=function(){};_s.prototype={};_s.default=_s;t[p]=_s;return _s}})}',
+            // Hide browser globals from SDK browser detection (typeof window/navigator checks)
+            // Must be void 0 so typeof navigator === "undefined" — SDK and CLI both guard with typeof before access
+            'var navigator=void 0;',
+            // Override setTimeout/setInterval to return Timer-like objects with .unref()/.ref()
+            'var _origSetTimeout=setTimeout,_origSetInterval=setInterval,_origClearTimeout=clearTimeout,_origClearInterval=clearInterval;',
+            'function _wrapTimer(id){return{_id:id,ref(){return this},unref(){return this},hasRef(){return true},refresh(){return this},[Symbol.toPrimitive](){return id}}}',
+            'setTimeout=function(fn,ms,...args){return _wrapTimer(_origSetTimeout(fn,ms,...args))};',
+            'setInterval=function(fn,ms,...args){return _wrapTimer(_origSetInterval(fn,ms,...args))};',
+            'clearTimeout=function(t){_origClearTimeout(t&&t._id!==void 0?t._id:t)};',
+            'clearInterval=function(t){_origClearInterval(t&&t._id!==void 0?t._id:t)};',
+            // Suppress unhandled rejections from ProcessExitError and CLI's "unreachable" throws
+            'if(typeof globalThis.addEventListener==="function"){var _rejHandler=function(e){if(e&&e.reason&&(e.reason._isProcessExit||e.reason==="unreachable"||e.reason.message==="unreachable"))e.preventDefault()};globalThis.addEventListener("unhandledrejection",_rejHandler)}',
+          ].join('\n') + '\n' + src;
+        }
+
+        // Patch lazy side-effect runner: v=(A,q)=>()=>(A&&(q=A(A=0)),q)
+        // If the side-effect factory throws, cache undefined rather than re-throwing on every access.
+        const vOld = 'v=(A,q)=>()=>(A&&(q=A(A=0)),q)';
+        const vNew = 'v=(A,q)=>()=>{try{A&&(q=A(A=0))}catch(e){if(e&&e._isProcessExit)throw e;if(!q)q=__stubProxy({})}return q}';
+        if (src.includes(vOld)) {
+          src = src.replace(vOld, vNew);
+        }
+
+        // 9. Detect trailing unawaited async function call (e.g., `cMz();`)
+        // In real Node.js, the event loop keeps running. In our AsyncFunction, we need to await it.
+        src = src.replace(/([\w$]+)\(\)\s*;?\s*$/, 'await $1();');
+
         return src;
       }
 
@@ -3084,6 +4705,8 @@ export const nodeCmd: Command = {
         // Restore preserved comments
         src = src.replace(/___COMMENT_(\d+)___/g, (_, idx) => comments[parseInt(idx)]);
 
+        // Note: trailing await transform is in transformBundledESM, not here
+
         return src;
       }
 
@@ -3103,6 +4726,12 @@ export const nodeCmd: Command = {
         url: `file://${entryFilename}`,
         dirname: entryDirname,
         filename: entryFilename,
+        resolve: (specifier: string) => {
+          if (specifier.startsWith('./') || specifier.startsWith('../')) {
+            return `file://${ctx.fs.resolvePath(specifier, entryDirname)}`;
+          }
+          return specifier;
+        },
       };
 
       // Create module/exports for CommonJS compatibility
@@ -3118,54 +4747,109 @@ export const nodeCmd: Command = {
       };
 
       let result;
-      console.log('[node] Starting main script execution...');
-      console.log('[node] Entry script dirname:', entryDirname);
-      // Log lines around the try-catch to see the error source
-      const codeLines = wrappedCode.split('\n');
-      console.log('[node] Main script lines 50-90:\n' + codeLines.slice(49, 90).map((l, i) => `${50+i}: ${l.slice(0, 120)}`).join('\n'));
+
+      if (typeof window !== 'undefined') {
+        window.addEventListener('unhandledrejection', suppressRejection);
+      }
+
+      // Timeout for the main script execution. If the script's main function hangs
+      // (e.g., CLI async setup), this kills it. The deferred exit wait (below) handles
+      // scripts that return quickly but have async work (like streaming API responses).
+      const SCRIPT_TIMEOUT = 15000;
+      let scriptTimedOut = false;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        scriptTimeoutId = setTimeout(() => {
+          scriptTimedOut = true;
+          reject(new ProcessExitError(124));
+        }, SCRIPT_TIMEOUT);
+      });
+
       try {
-        result = await fn(fakeConsole, fakeProcess, entryRequire, FakeBuffer, entryFilename, entryDirname, {
-          fs: ctx.fs,
-          shell: ctx.shell,
-          env: ctx.env,
-          cwd: ctx.cwd,
-        }, fakeImportMeta, fakeModule, fakeExports, dynamicImport);
-        console.log('[node] Main script execution completed');
+        result = await Promise.race([
+          fn(fakeConsole, fakeProcess, entryRequire, FakeBuffer, entryFilename, entryDirname, {
+            fs: ctx.fs,
+            shell: ctx.shell,
+            env: ctx.env,
+            cwd: ctx.cwd,
+          }, fakeImportMeta, fakeModule, fakeExports, dynamicImport),
+          timeoutPromise,
+        ]);
       } catch (e: any) {
-        console.log('[node] Main script threw error:', e.message);
         if (e instanceof ProcessExitError) {
           exitCode = e.code;
+        } else if (e.message?.includes('extends value') || e.message?.includes('is not a constructor') || e.message?.includes('prototype')) {
+          stderrBuf.push(e.message);
+          exitCode = 1;
         } else {
           throw e;
         }
       }
 
+      // Clean up SCRIPT_TIMEOUT if it hasn't fired — prevents leaked timer/rejection
+      if (scriptTimeoutId) { clearTimeout(scriptTimeoutId); scriptTimeoutId = null; }
+
       // Wait for any pending async operations (like app.listen())
       // Loop because new promises may be added during module execution (e.g., app.listen in top-level await)
-      console.log('[node] Pending promises:', pendingPromises.length);
       while (pendingPromises.length > 0) {
         const current = [...pendingPromises]; // Snapshot current promises
         pendingPromises.length = 0; // Clear array so new ones can be detected
-        console.log('[node] Waiting for', current.length, 'promises...');
         await Promise.all(current);
-        console.log('[node] Promises resolved, checking for more...');
       }
-      console.log('[node] All promises resolved, exiting');
 
-      // Flush output
-      if (stdoutBuf.length > 0) {
+      // If the script returned without calling process.exit AND produced no visible output,
+      // there may be unawaited async work (e.g., CLI print mode fires Hvq without await).
+      // Wait for process.exit to be called or timeout.
+      // Skip for: scripts that produced output (--version), printResult mode (always has result),
+      // scripts that already exited, streamed to terminal, or wrote to stderr.
+      const hasFinishedOutput = exitCalled || scriptTimedOut
+        || stdoutBuf.length > 0 || stderrBuf.length > 0 || streamedToTerminal
+        || printResult;
+      if (isInteractiveMode || !hasFinishedOutput) {
+        // Longer timeout for deferred wait — allows streaming API responses to complete
+        // Interactive mode (ink) gets 24h; non-interactive gets 5min
+        const DEFERRED_TIMEOUT = isInteractiveMode ? 86400000 : 300000;
+        const deferredTimeout = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new ProcessExitError(124)), DEFERRED_TIMEOUT);
+        });
+        try {
+          const waitCode = await Promise.race([deferredExitPromise, deferredTimeout]);
+          exitCode = waitCode;
+        } catch (e: any) {
+          if (e instanceof ProcessExitError) {
+            exitCode = e.code;
+          }
+          // Timeout is fine — just means the async work finished without process.exit
+        }
+      }
+
+      // Flush output — skip stdout if it was already streamed to terminal
+      if (stdoutBuf.length > 0 && !streamedToTerminal) {
         ctx.stdout += stdoutBuf.join('\n') + '\n';
       }
       if (stderrBuf.length > 0) {
         ctx.stderr += stderrBuf.join('\n') + '\n';
       }
 
-      if (printResult && result !== undefined && !exitCalled) {
+      if (printResult && !exitCalled) {
         ctx.stdout += formatArg(result) + '\n';
+      }
+
+      // Clean up stdin passthrough when script exits
+      if (ctx.terminal) ctx.terminal.exitStdinPassthrough();
+
+      // Deferred cleanup of rejection handler — CLI force-exit callbacks fire after fn() returns
+      if (typeof window !== 'undefined') {
+        setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
       }
 
       return exitCode;
     } catch (e: any) {
+      // Clean up stdin passthrough on error
+      if (ctx.terminal) ctx.terminal.exitStdinPassthrough();
+      // Clean up rejection handler on error too
+      if (typeof window !== 'undefined') {
+        setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
+      }
       ctx.stderr += `${e.stack || e.message}\n`;
       return 1;
     }
@@ -3174,6 +4858,7 @@ export const nodeCmd: Command = {
 
 class ProcessExitError extends Error {
   code: number;
+  _isProcessExit = true;
   constructor(code: number) {
     super(`process.exit(${code})`);
     this.code = code;

@@ -235,6 +235,14 @@ async function main() {
   // Create shell
   const shell = new Shell(fs, commands);
 
+  // Populate API keys from localStorage so `claude` CLI picks them up
+  const storedAnthropicKey = localStorage.getItem('shiro_anthropic_key') || localStorage.getItem('shiro_api_key');
+  if (storedAnthropicKey) shell.env['ANTHROPIC_API_KEY'] = storedAnthropicKey;
+  const storedOpenaiKey = localStorage.getItem('shiro_openai_key');
+  if (storedOpenaiKey) shell.env['OPENAI_API_KEY'] = storedOpenaiKey;
+  const storedGoogleKey = localStorage.getItem('shiro_google_key');
+  if (storedGoogleKey) shell.env['GOOGLE_API_KEY'] = storedGoogleKey;
+
   // Create terminal
   const container = document.getElementById('terminal')!;
   const terminal = new ShiroTerminal(container, shell);

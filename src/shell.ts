@@ -38,6 +38,8 @@ export class Shell {
       PATH: '/usr/local/bin:/usr/bin:/bin',
       PWD: '/home/user',
       TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+      FORCE_COLOR: '3',
     };
     // Load history async (don't block construction)
     this.loadHistory();
@@ -204,6 +206,15 @@ export class Shell {
           const val = cmdName.substring(eqIdx + 1);
           this.env[key] = val;
           if (key === 'PWD') this.cwd = val;
+          // Persist API keys to localStorage
+          const persistKeys: Record<string, string> = {
+            ANTHROPIC_API_KEY: 'shiro_anthropic_key',
+            OPENAI_API_KEY: 'shiro_openai_key',
+            GOOGLE_API_KEY: 'shiro_google_key',
+          };
+          if (persistKeys[key] && typeof localStorage !== 'undefined') {
+            localStorage.setItem(persistKeys[key], val);
+          }
           continue;
         }
 

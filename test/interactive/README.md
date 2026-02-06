@@ -34,4 +34,4 @@ source test/interactive/virtual-server.sh
 ## Skipped by Default
 
 These tests are NOT run by `npm test` - they require a live browser.
-The regular vitest suite tests the shim logic in isolation.
+The vitest unit tests live in `../windwalker/tests/shiro-vitest/` — run with `cd ../windwalker && npm run test:shiro`.

@@ -230,6 +230,137 @@ function injectIframeScripts(html: string, port: number): string {
     }
     return originalFetch.apply(this, arguments);
   };
+
+  // Intercept dynamically added elements
+  function loadResourceViaParent(el, attr, type) {
+    var url = el.getAttribute(attr);
+    if (!url || url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('http://') || url.startsWith('https://')) return;
+    el.removeAttribute(attr);
+    fetchFromParent(url, { method: 'GET' }).then(function(data) {
+      if (type === 'css') {
+        var style = document.createElement('style');
+        style.textContent = data.body || '';
+        el.parentNode.replaceChild(style, el);
+      } else if (type === 'js') {
+        el.textContent = data.body || '';
+      }
+    }).catch(function(err) { console.error('Failed to load resource:', url, err); });
+  }
+
+  var observer = new MutationObserver(function(mutations) {
+    mutations.forEach(function(m) {
+      m.addedNodes.forEach(function(node) {
+        if (node.nodeType !== 1) return;
+        if (node.tagName === 'SCRIPT' && node.src) loadResourceViaParent(node, 'src', 'js');
+        if (node.tagName === 'LINK' && node.rel === 'stylesheet') loadResourceViaParent(node, 'href', 'css');
+      });
+    });
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+
+  function loadDeferredResources() {
+    document.querySelectorAll('link[data-vfs-href]').forEach(function(link) {
+      var href = link.getAttribute('data-vfs-href');
+      link.removeAttribute('data-vfs-href');
+      fetchFromParent(href, { method: 'GET' }).then(function(data) {
+        var style = document.createElement('style');
+        style.textContent = data.body || '';
+        link.parentNode.replaceChild(style, link);
+      }).catch(function(err) { console.error('Failed to load stylesheet:', href, err); });
+    });
+
+    document.querySelectorAll('script[data-vfs-src]').forEach(function(script) {
+      var src = script.getAttribute('data-vfs-src');
+      script.removeAttribute('data-vfs-src');
+      fetchFromParent(src, { method: 'GET' }).then(function(data) {
+        var newScript = document.createElement('script');
+        newScript.textContent = data.body || '';
+        script.parentNode.replaceChild(newScript, script);
+      }).catch(function(err) { console.error('Failed to load script:', src, err); });
+    });
+
+    // Recursive ES module loader
+    var blobCache = {};
+    var pendingModules = {};
+
+    function resolveModulePath(base, relative) {
+      if (relative.startsWith('/')) return relative;
+      var baseParts = base.split('/').slice(0, -1);
+      var relParts = relative.split('/');
+      for (var i = 0; i < relParts.length; i++) {
+        if (relParts[i] === '..') baseParts.pop();
+        else if (relParts[i] !== '.') baseParts.push(relParts[i]);
+      }
+      return '/' + baseParts.filter(Boolean).join('/');
+    }
+
+    function extractImports(code) {
+      var imports = [];
+      var regex = /(?:import|export)\\s+(?:[^'"]*\\s+from\\s+)?['"]([^'"]+)['"]|import\\s*\\(\\s*['"]([^'"]+)['"]\\s*\\)/g;
+      var match;
+      while ((match = regex.exec(code)) !== null) {
+        var path = match[1] || match[2];
+        if (path && (path.startsWith('./') || path.startsWith('../') || (path.startsWith('/') && !path.startsWith('//')))) {
+          imports.push(path);
+        }
+      }
+      return imports;
+    }
+
+    function loadModuleRecursive(modulePath) {
+      if (blobCache[modulePath]) return Promise.resolve(blobCache[modulePath]);
+      if (pendingModules[modulePath]) return pendingModules[modulePath];
+
+      var promise = fetchFromParent(modulePath, { method: 'GET' }).then(function(data) {
+        var code = data.body || '';
+        var imports = extractImports(code);
+
+        if (imports.length === 0) {
+          var blob = new Blob([code], { type: 'application/javascript' });
+          var blobUrl = URL.createObjectURL(blob);
+          blobCache[modulePath] = blobUrl;
+          return blobUrl;
+        }
+
+        return Promise.all(imports.map(function(imp) {
+          var resolvedPath = resolveModulePath(modulePath, imp);
+          return loadModuleRecursive(resolvedPath).then(function(blobUrl) {
+            return { original: imp, blobUrl: blobUrl };
+          });
+        })).then(function(resolved) {
+          var rewrittenCode = code;
+          resolved.forEach(function(r) {
+            rewrittenCode = rewrittenCode.split('"' + r.original + '"').join('"' + r.blobUrl + '"');
+            rewrittenCode = rewrittenCode.split("'" + r.original + "'").join("'" + r.blobUrl + "'");
+          });
+          var blob = new Blob([rewrittenCode], { type: 'application/javascript' });
+          var blobUrl = URL.createObjectURL(blob);
+          blobCache[modulePath] = blobUrl;
+          return blobUrl;
+        });
+      });
+
+      pendingModules[modulePath] = promise;
+      return promise;
+    }
+
+    document.querySelectorAll('script[data-vfs-module-src]').forEach(function(script) {
+      var src = script.getAttribute('data-vfs-module-src');
+      script.removeAttribute('data-vfs-module-src');
+      loadModuleRecursive(src).then(function(blobUrl) {
+        var newScript = document.createElement('script');
+        newScript.type = 'module';
+        newScript.src = blobUrl;
+        script.parentNode.replaceChild(newScript, script);
+      }).catch(function(err) { console.error('Failed to load module:', src, err); });
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', loadDeferredResources);
+  } else {
+    loadDeferredResources();
+  }
 })();
 </script>`;
 
@@ -252,6 +383,23 @@ function injectIframeScripts(html: string, port: number): string {
   });
 })();
 </script>`;
+
+  // Rewrite <link href="/..."> and <script src="/..."> to deferred loading
+  html = html.replace(/<link([^>]*)\shref=(["'])([^"']+)\2/gi, (match, attrs, quote, href) => {
+    if (href.startsWith('/') || href.startsWith('./') || href.startsWith('../')) {
+      return `<link${attrs} data-vfs-href=${quote}${href}${quote}`;
+    }
+    return match;
+  });
+  html = html.replace(/<script([^>]*)\ssrc=(["'])([^"']+)\2/gi, (match, attrs, quote, src) => {
+    if (src.startsWith('/') || src.startsWith('./') || src.startsWith('../')) {
+      if (attrs.includes('type="module"') || attrs.includes("type='module'")) {
+        return `<script${attrs} data-vfs-module-src=${quote}${src}${quote}`;
+      }
+      return `<script${attrs} data-vfs-src=${quote}${src}${quote}`;
+    }
+    return match;
+  });
 
   // Inject scripts
   if (html.includes('<head>')) {

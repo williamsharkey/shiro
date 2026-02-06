@@ -104,7 +104,17 @@ The `wrangler.toml` configures the Cloudflare Pages project. Deployment takes ~3
 
 ## Testing
 
-Tests use vitest with a fake-indexeddb polyfill. Tests can create a real FileSystem instance and run commands against it. Keep tests focused - one test file per command file.
+Tests live in the **windwalker** repo (`../windwalker/tests/shiro-vitest/`).
+Windwalker uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
+
+```bash
+cd ../windwalker
+npm install
+npm run test:shiro        # vitest unit/integration tests
+npm run test:skyeyes:shiro # browser tests via skyeyes
+```
+
+Running `npm test` in shiro will print these instructions as a reminder.
 
 ## Shell Features
 

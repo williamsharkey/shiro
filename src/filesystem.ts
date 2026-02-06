@@ -75,16 +75,36 @@ export interface StatResult {
 }
 
 function makeStat(node: FSNode): StatResult {
+  const mtime = new Date(node.mtime);
+  const ctime = new Date(node.ctime);
   return {
     type: node.type,
     mode: node.mode,
     size: node.size,
-    mtime: new Date(node.mtime),
-    ctime: new Date(node.ctime),
+    mtime,
+    ctime,
+    atime: mtime,
+    birthtime: ctime,
+    mtimeMs: mtime.getTime(),
+    ctimeMs: ctime.getTime(),
+    atimeMs: mtime.getTime(),
+    birthtimeMs: ctime.getTime(),
+    dev: 0,
+    ino: 0,
+    nlink: 1,
+    uid: 1000,
+    gid: 1000,
+    rdev: 0,
+    blksize: 4096,
+    blocks: Math.ceil(node.size / 512),
     isFile() { return node.type === 'file'; },
     isDirectory() { return node.type === 'dir'; },
     isSymbolicLink() { return node.type === 'symlink'; },
-  };
+    isBlockDevice() { return false; },
+    isCharacterDevice() { return false; },
+    isFIFO() { return false; },
+    isSocket() { return false; },
+  } as any;
 }
 
 /** Create an Error with a .code property for Node.js/isomorphic-git compatibility */

@@ -26,6 +26,13 @@ export const cdCmd: Command = {
   },
 };
 
+// Map of env vars to localStorage keys for persistence across sessions
+const PERSIST_ENV: Record<string, string> = {
+  ANTHROPIC_API_KEY: 'shiro_anthropic_key',
+  OPENAI_API_KEY: 'shiro_openai_key',
+  GOOGLE_API_KEY: 'shiro_google_key',
+};
+
 export const exportCmd: Command = {
   name: 'export',
   description: 'Set environment variables',
@@ -36,6 +43,10 @@ export const exportCmd: Command = {
       const key = arg.substring(0, eqIdx);
       const val = arg.substring(eqIdx + 1);
       ctx.shell.env[key] = val;
+      // Persist API keys to localStorage so they survive page refreshes
+      if (PERSIST_ENV[key] && typeof localStorage !== 'undefined') {
+        localStorage.setItem(PERSIST_ENV[key], val);
+      }
     }
     return 0;
   },
@@ -502,6 +513,83 @@ export const sha256sumCmd: Command = {
   },
 };
 
+// sh/bash: execute shell commands from stdin or -c flag
+export const shCmd: Command = {
+  name: 'sh',
+  description: 'Execute shell commands',
+  async exec(ctx) {
+    // sh -c "command" — execute inline command
+    const cIdx = ctx.args.indexOf('-c');
+    if (cIdx !== -1 && ctx.args[cIdx + 1]) {
+      const cmd = ctx.args[cIdx + 1];
+      let stdout = '';
+      let stderr = '';
+      const code = await ctx.shell.execute(cmd, (s) => { stdout += s; }, (s) => { stderr += s; });
+      ctx.stdout += stdout;
+      ctx.stderr += stderr;
+      return code;
+    }
+
+    // sh script.sh — execute a script file
+    if (ctx.args.length > 0 && !ctx.args[0].startsWith('-')) {
+      const scriptPath = ctx.fs.resolvePath(ctx.args[0], ctx.cwd);
+      try {
+        const content = await ctx.fs.readFile(scriptPath, 'utf8');
+        const script = typeof content === 'string' ? content : new TextDecoder().decode(content as any);
+        let stdout = '';
+        let stderr = '';
+        // Execute each line of the script
+        for (const line of script.split('\n')) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith('#')) continue;
+          const code = await ctx.shell.execute(trimmed, (s) => { stdout += s; }, (s) => { stderr += s; });
+          if (code !== 0) {
+            ctx.stdout += stdout;
+            ctx.stderr += stderr;
+            return code;
+          }
+        }
+        ctx.stdout += stdout;
+        ctx.stderr += stderr;
+        return 0;
+      } catch (e: any) {
+        ctx.stderr += `sh: ${ctx.args[0]}: ${e.message}\n`;
+        return 1;
+      }
+    }
+
+    // Piped input: echo "command" | sh
+    if (ctx.stdin) {
+      let stdout = '';
+      let stderr = '';
+      for (const line of ctx.stdin.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const code = await ctx.shell.execute(trimmed, (s) => { stdout += s; }, (s) => { stderr += s; });
+        if (code !== 0) {
+          ctx.stdout += stdout;
+          ctx.stderr += stderr;
+          return code;
+        }
+      }
+      ctx.stdout += stdout;
+      ctx.stderr += stderr;
+      return 0;
+    }
+
+    // No input — nothing to do
+    return 0;
+  },
+};
+
+export const bashCmd: Command = {
+  name: 'bash',
+  description: 'Execute shell commands',
+  async exec(ctx) {
+    return shCmd.exec(ctx);
+  },
+};
+
 /**
  * Commands that need shell access or override fluffycoreutils bugs.
  * Registered AFTER fluffy commands so they take precedence.
@@ -513,4 +601,6 @@ export const shiroOnlyCommands: Command[] = [
   grepCmd, sedCmd, diffCmd,
   // Install script support:
   commandCmd, cutCmd, shasumCmd, sha256sumCmd,
+  // Shell interpreters:
+  shCmd, bashCmd,
 ];
