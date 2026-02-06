@@ -146,6 +146,10 @@ export const nodeCmd: Command = {
       }
     };
 
+    // Save originals for CORS proxy interception (must be in outer scope for catch block)
+    const _origFetch = globalThis.fetch;
+    const _origXHR = typeof XMLHttpRequest !== 'undefined' ? XMLHttpRequest : undefined;
+
     try {
       // Build a minimal Node-like environment
       let exitCode = 0;
@@ -158,7 +162,7 @@ export const nodeCmd: Command = {
       let isInteractiveMode = false;        // Set when stdin.setRawMode(true) called (ink)
       let scriptTimeoutId: any = null;       // Handle for cancelling SCRIPT_TIMEOUT
 
-      const fakeConsole = {
+      const fakeConsole: any = {
         log: (...args: any[]) => {
           const s = args.map(formatArg).join(' ');
           stdoutBuf.push(s);
@@ -176,7 +180,42 @@ export const nodeCmd: Command = {
           stdoutBuf.push(s);
           if (ctx.terminal) { streamedToTerminal = true; ctx.terminal.writeOutput(s.replace(/\n/g, '\r\n') + '\r\n'); }
         },
+        debug: (...args: any[]) => { fakeConsole.log(...args); },
+        trace: (...args: any[]) => { fakeConsole.log(...args); },
+        assert: (val: any, ...args: any[]) => { if (!val) fakeConsole.error('Assertion failed:', ...args); },
+        time: () => {}, timeEnd: () => {}, timeLog: () => {},
+        count: () => {}, countReset: () => {},
+        group: () => {}, groupEnd: () => {}, groupCollapsed: () => {},
+        clear: () => { if (ctx.terminal) ctx.terminal.writeOutput('\x1b[2J\x1b[H'); },
+        table: (...args: any[]) => { fakeConsole.log(...args); },
       };
+      // Console constructor — Node.js API: new console.Console(stdout, stderr)
+      class FakeConsoleClass {
+        _stdout: any; _stderr: any;
+        constructor(stdoutOrOpts?: any, stderr?: any) {
+          if (stdoutOrOpts && typeof stdoutOrOpts === 'object' && stdoutOrOpts.stdout) {
+            this._stdout = stdoutOrOpts.stdout;
+            this._stderr = stdoutOrOpts.stderr || stdoutOrOpts.stdout;
+          } else {
+            this._stdout = stdoutOrOpts || fakeProcess?.stdout;
+            this._stderr = stderr || stdoutOrOpts || fakeProcess?.stderr;
+          }
+        }
+        log(...args: any[]) { const s = args.map(formatArg).join(' ') + '\n'; if (this._stdout?.write) this._stdout.write(s); else fakeConsole.log(...args); }
+        info(...args: any[]) { this.log(...args); }
+        warn(...args: any[]) { const s = args.map(formatArg).join(' ') + '\n'; if (this._stderr?.write) this._stderr.write(s); else fakeConsole.warn(...args); }
+        error(...args: any[]) { this.warn(...args); }
+        dir(obj: any) { this.log(obj); }
+        debug(...args: any[]) { this.log(...args); }
+        trace(...args: any[]) { this.log(...args); }
+        assert(val: any, ...args: any[]) { if (!val) this.error('Assertion failed:', ...args); }
+        time() {} timeEnd() {} timeLog() {}
+        count() {} countReset() {}
+        group() {} groupEnd() {} groupCollapsed() {}
+        clear() { fakeConsole.clear(); }
+        table(...args: any[]) { this.log(...args); }
+      }
+      fakeConsole.Console = FakeConsoleClass;
 
       const processEvents: Record<string, Function[]> = {};
       // Deferred exit: resolves when process.exit is called from async code
@@ -329,6 +368,7 @@ export const nodeCmd: Command = {
           const stdinEvents: Record<string, Function[]> = {};
           let stdinEnded = false;
           let stdinRawMode = false;
+          const stdinReadBuffer: string[] = []; // Buffer for readable stream interface
           const stdinObj: any = {
             isTTY: !!ctx.terminal,
             fd: 0,
@@ -353,7 +393,9 @@ export const nodeCmd: Command = {
               };
               return stdinObj.on(event, wrapper);
             },
-            off: (event: string, fn: Function) => { stdinEvents[event] = (stdinEvents[event] || []).filter(f => f !== fn); return stdinObj; },
+            off: (event: string, fn: Function) => {
+              stdinEvents[event] = (stdinEvents[event] || []).filter(f => f !== fn); return stdinObj;
+            },
             removeListener: (event: string, fn: Function) => stdinObj.off(event, fn),
             removeAllListeners: (event?: string) => {
               if (event) delete stdinEvents[event];
@@ -365,13 +407,18 @@ export const nodeCmd: Command = {
               // When resumed with terminal available, start bridging terminal input
               if (ctx.terminal && !stdinEnded) {
                 ctx.terminal.enterStdinPassthrough((data: string) => {
+                  stdinReadBuffer.push(data);
                   (stdinEvents['data'] || []).forEach(f => f(data));
+                  (stdinEvents['readable'] || []).forEach(f => f());
                 });
               }
               return stdinObj;
             },
             pause: () => stdinObj,
-            read: () => null,
+            read: (_size?: number) => {
+              if (stdinReadBuffer.length === 0) return null;
+              return stdinReadBuffer.shift()!;
+            },
             setRawMode: (mode: boolean) => {
               stdinRawMode = mode;
               // ink calls setRawMode(true) — activate stdin passthrough for raw keypresses
@@ -380,7 +427,10 @@ export const nodeCmd: Command = {
                 // Cancel script timeout — interactive apps run indefinitely
                 if (scriptTimeoutId) { clearTimeout(scriptTimeoutId); scriptTimeoutId = null; }
                 ctx.terminal.enterStdinPassthrough((data: string) => {
+                  // Support both push (data events) and pull (readable + read()) interfaces
+                  stdinReadBuffer.push(data);
                   (stdinEvents['data'] || []).forEach(f => f(data));
+                  (stdinEvents['readable'] || []).forEach(f => f());
                 });
               } else if (!mode && ctx.terminal) {
                 ctx.terminal.exitStdinPassthrough();
@@ -1615,6 +1665,7 @@ export const nodeCmd: Command = {
               prependListener(event: string, fn: Function) { (this._events[event] ??= []).unshift(fn); return this; }
               removeAllListeners(event?: string) { if (event) delete this._events[event]; else this._events = {}; return this; }
               listeners(event: string) { return [...(this._events[event] || [])]; }
+              rawListeners(event: string) { return [...(this._events[event] || [])]; }
               listenerCount(event: string) { return (this._events[event] || []).length; }
               eventNames() { return Object.keys(this._events); }
               setMaxListeners(n: number) { this._maxListeners = n; return this; }
@@ -1873,11 +1924,41 @@ export const nodeCmd: Command = {
                   (this._events[event] ??= []).push(cb);
                   return this;
                 },
+                once(event: string, cb: Function) {
+                  const wrapper = (...args: any[]) => {
+                    this.off(event, wrapper);
+                    cb(...args);
+                  };
+                  return this.on(event, wrapper);
+                },
+                off(event: string, cb: Function) {
+                  if (this._events[event]) {
+                    this._events[event] = this._events[event].filter((f: Function) => f !== cb);
+                  }
+                  return this;
+                },
+                removeListener(event: string, cb: Function) { return this.off(event, cb); },
+                removeAllListeners(event?: string) {
+                  if (event) delete this._events[event];
+                  else this._events = {};
+                  return this;
+                },
+                addListener(event: string, cb: Function) { return this.on(event, cb); },
+                listeners(event: string) { return [...(this._events[event] || [])]; },
+                listenerCount(event: string) { return (this._events[event] || []).length; },
                 emit(event: string, ...args: any[]) {
                   (this._events[event] || []).forEach((fn: Function) => fn(...args));
+                  return (this._events[event] || []).length > 0;
                 },
+                ref() { return this; },
+                unref() { return this; },
+                setTimeout() { return this; },
+                maxConnections: Infinity,
+                connections: 0,
                 listen(port: number, hostOrCallback?: string | (() => void), callback?: () => void) {
                   const cb = typeof hostOrCallback === 'function' ? hostOrCallback : callback;
+                  // Port 0 means "pick a random available port"
+                  if (port === 0) port = 30000 + Math.floor(Math.random() * 10000);
                   listeningPort = port;
 
                   // Use iframe-based server for visibility
@@ -3063,29 +3144,7 @@ export const nodeCmd: Command = {
 
           case 'console':
           case 'node:console': {
-            // Console class constructor for cli.js Commander output
-            class Console {
-              _stdout: any;
-              _stderr: any;
-              constructor(opts?: any) {
-                if (opts && opts.stdout) {
-                  this._stdout = opts.stdout;
-                  this._stderr = opts.stderr || opts.stdout;
-                } else {
-                  this._stdout = fakeProcess.stdout;
-                  this._stderr = fakeProcess.stderr;
-                }
-              }
-              log(...args: any[]) { fakeConsole.log(...args); }
-              info(...args: any[]) { fakeConsole.info(...args); }
-              warn(...args: any[]) { fakeConsole.warn(...args); }
-              error(...args: any[]) { fakeConsole.error(...args); }
-              dir(obj: any) { fakeConsole.dir(obj); }
-              debug(...args: any[]) { fakeConsole.log(...args); }
-              trace(...args: any[]) { fakeConsole.log(...args); }
-              assert(val: any, ...args: any[]) { if (!val) fakeConsole.error('Assertion failed:', ...args); }
-            }
-            return { Console, default: Console };
+            return { Console: FakeConsoleClass, default: FakeConsoleClass };
           }
 
           case 'util/types':
@@ -4752,6 +4811,47 @@ export const nodeCmd: Command = {
         window.addEventListener('unhandledrejection', suppressRejection);
       }
 
+      // Intercept globalThis.fetch and XMLHttpRequest to route external API
+      // requests through the CORS proxy. The CLI's telemetry/statsig/auth endpoints
+      // bypass ANTHROPIC_BASE_URL and go directly to these hosts.
+      const corsProxyOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+      const corsProxyMap: [string, string][] = [
+        ['https://api.anthropic.com/', '/api/anthropic/'],
+        ['https://platform.claude.com/', '/api/platform/'],
+        ['https://mcp-proxy.anthropic.com/', '/api/mcp-proxy/'],
+      ];
+      const rewriteUrl = (u: string): string => {
+        for (const [prefix, proxy] of corsProxyMap) {
+          if (u.startsWith(prefix)) return corsProxyOrigin + proxy + u.slice(prefix.length);
+        }
+        return u;
+      };
+      if (corsProxyOrigin) {
+        globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+          let url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+          const rewritten = rewriteUrl(url);
+          if (rewritten !== url) {
+            if (typeof input === 'string') input = rewritten;
+            else if (input instanceof URL) input = new URL(rewritten);
+            else input = new Request(rewritten, input);
+          }
+          return _origFetch(input, init);
+        };
+        if (_origXHR) {
+          const unsafeHeaders = new Set(['user-agent','host','content-length','connection','accept-encoding','accept-charset','referer','origin','cookie','te','upgrade','via','transfer-encoding','proxy-authorization','proxy-connection','sec-fetch-dest','sec-fetch-mode','sec-fetch-site','sec-fetch-user']);
+          (globalThis as any).XMLHttpRequest = class ProxiedXHR extends _origXHR {
+            open(method: string, url: string | URL, ...rest: any[]) {
+              const u = typeof url === 'string' ? url : url.toString();
+              return super.open(method, rewriteUrl(u), ...(rest as [boolean, string?, string?]));
+            }
+            setRequestHeader(name: string, value: string) {
+              if (unsafeHeaders.has(name.toLowerCase())) return; // silently drop
+              return super.setRequestHeader(name, value);
+            }
+          };
+        }
+      }
+
       // Timeout for the main script execution. If the script's main function hangs
       // (e.g., CLI async setup), this kills it. The deferred exit wait (below) handles
       // scripts that return quickly but have async work (like streaming API responses).
@@ -4841,6 +4941,9 @@ export const nodeCmd: Command = {
       if (typeof window !== 'undefined') {
         setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
       }
+      // Restore original fetch/XHR
+      globalThis.fetch = _origFetch;
+      if (_origXHR) (globalThis as any).XMLHttpRequest = _origXHR;
 
       return exitCode;
     } catch (e: any) {
@@ -4850,6 +4953,9 @@ export const nodeCmd: Command = {
       if (typeof window !== 'undefined') {
         setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
       }
+      // Restore original fetch/XHR
+      globalThis.fetch = _origFetch;
+      if (_origXHR) (globalThis as any).XMLHttpRequest = _origXHR;
       ctx.stderr += `${e.stack || e.message}\n`;
       return 1;
     }

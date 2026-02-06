@@ -590,6 +590,41 @@ export const bashCmd: Command = {
   },
 };
 
+export const openCmd: Command = {
+  name: 'open',
+  description: 'Open a URL in the browser',
+  async exec(ctx) {
+    const url = ctx.args[0];
+    if (!url) {
+      ctx.stderr = 'Usage: open <url>\n';
+      return 1;
+    }
+    if (typeof window !== 'undefined') {
+      try {
+        const parsed = new URL(url);
+        // OAuth interception: rewrite redirect_uri from localhost to shiro.computer
+        if (parsed.searchParams.has('redirect_uri')) {
+          const redirectUri = parsed.searchParams.get('redirect_uri')!;
+          try {
+            const redir = new URL(redirectUri);
+            if (redir.hostname === 'localhost' || redir.hostname === '127.0.0.1') {
+              const port = redir.port;
+              const newRedirectUri = `${window.location.origin}/oauth/callback?port=${port}`;
+              parsed.searchParams.set('redirect_uri', newRedirectUri);
+              window.open(parsed.toString(), '_blank', 'width=600,height=700');
+              return 0;
+            }
+          } catch {}
+        }
+        window.open(url, '_blank');
+      } catch {
+        window.open(url, '_blank');
+      }
+    }
+    return 0;
+  },
+};
+
 /**
  * Commands that need shell access or override fluffycoreutils bugs.
  * Registered AFTER fluffy commands so they take precedence.
@@ -603,4 +638,6 @@ export const shiroOnlyCommands: Command[] = [
   commandCmd, cutCmd, shasumCmd, sha256sumCmd,
   // Shell interpreters:
   shCmd, bashCmd,
+  // Browser helpers:
+  openCmd, { name: 'xdg-open', description: 'Open a URL in the browser', exec: (ctx) => openCmd.exec(ctx) },
 ];

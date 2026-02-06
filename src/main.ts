@@ -273,6 +273,26 @@ async function main() {
     iframeServer, // Iframe-based virtual HTTP server
   };
 
+  // OAuth callback bridge: receive auth codes from /oauth/callback popup
+  window.addEventListener('message', (event) => {
+    if (event.origin !== window.location.origin) return;
+    if (event.data?.type !== 'shiro-oauth-callback') return;
+    const { code, state, port, params } = event.data;
+    if (!port) return;
+    // Reconstruct the original callback URL path with query params
+    const callbackParams = new URLSearchParams();
+    if (code) callbackParams.set('code', code);
+    if (state) callbackParams.set('state', state);
+    // Forward any extra params the provider sent
+    if (params) {
+      for (const [k, v] of Object.entries(params)) {
+        if (k !== 'port' && !callbackParams.has(k)) callbackParams.set(k, v as string);
+      }
+    }
+    const path = '/oauth/callback?' + callbackParams.toString();
+    iframeServer.fetch(parseInt(port, 10), path).catch(() => {});
+  });
+
   // Cleanup iframe servers on page unload (hot reload)
   window.addEventListener('beforeunload', () => {
     iframeServer.cleanup();
