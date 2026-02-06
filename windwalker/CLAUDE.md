@@ -15,7 +15,7 @@ tests/
 ├── helpers-linkedom.js       # Direct module access helpers
 ├── shiro-vitest/             # Shiro-specific vitest tests (linkedom + fake-indexeddb)
 │   ├── setup.ts              # DOM/IndexedDB polyfills for Node.js
-│   ├── helpers.ts            # createTestShell(), run() helpers
+│   ├── helpers.ts            # createTestShell(), createTestOS(), run() helpers
 │   ├── filesystem.test.ts    # VFS operations
 │   ├── shell.test.ts         # Shell parsing, pipes, env vars
 │   ├── commands.test.ts      # Coreutils (ls, cat, mkdir, etc.)
@@ -44,7 +44,7 @@ tests/
 ```bash
 npm test                     # Run fast linkedom tests (levels 0-4)
 npm run test:linkedom        # Same as above
-npm run test:shiro           # Shiro vitest suite (145 tests, ~70s)
+npm run test:shiro           # Shiro vitest suite (152 tests, ~30s)
 npm run test:skyeyes         # Run all tests via skyeyes (real browser)
 npm run test:skyeyes:foam    # Skyeyes tests targeting Foam
 npm run test:skyeyes:shiro   # Skyeyes tests targeting Shiro
@@ -68,8 +68,10 @@ npm run test:all             # Run linkedom + shiro-vitest + hotreload
 ### shiro-vitest Runner
 - Imports Shiro's TypeScript modules via `@shiro` path alias
 - Uses linkedom + fake-indexeddb for DOM/VFS polyfills
+- Real xterm.js terminal (not headless) with DOM polyfills for full interactive testing
 - Tests Node.js runtime shim (jseval.ts), Claude Code install, Express shim
-- 145 tests including real `npm install -g @anthropic-ai/claude-code` E2E
+- 152 tests including real `npm install -g @anthropic-ai/claude-code` E2E
+- `createTestOS()` boots full Shiro with real xterm.js for stdin/stdout/TTY testing
 
 ### skyeyes Runner
 - Uses real browser via nimbus dashboard

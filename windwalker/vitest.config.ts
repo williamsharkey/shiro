@@ -27,6 +27,8 @@ export default defineConfig({
       '../fluffycoreutils': path.resolve(shiroRoot, 'fluffycoreutils'),
       '../spirit': path.resolve(shiroRoot, 'spirit'),
       '../../spirit': path.resolve(shiroRoot, 'spirit'),
+      // CSS import is a no-op in Node.js tests
+      '@xterm/xterm/css/xterm.css': path.resolve(__dirname, 'tests/shiro-vitest/stubs/xterm.css.ts'),
     },
   },
   server: {

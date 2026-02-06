@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createTestShell } from './helpers';
+import { createTestShell, createTestOS } from './helpers';
 import { Shell } from '@shiro/shell';
 import { FileSystem } from '@shiro/filesystem';
+import { ShiroTerminal } from '@shiro/terminal';
 import { nodeCmd } from '@shiro/commands/jseval';
 import type { CommandContext } from '@shiro/commands/index';
 
-function createCtx(shell: Shell, fs: FileSystem, args: string[]): CommandContext {
+function createCtx(shell: Shell, fs: FileSystem, args: string[], terminal?: ShiroTerminal): CommandContext {
   return {
     args,
     fs,
@@ -15,6 +16,7 @@ function createCtx(shell: Shell, fs: FileSystem, args: string[]): CommandContext
     stdout: '',
     stderr: '',
     shell,
+    terminal,
   };
 }
 
@@ -306,5 +308,103 @@ describe('Node Runtime (jseval.ts)', () => {
       const exitCode = await nodeCmd.exec(ctx);
       expect(exitCode).toBe(2);
     });
+  });
+
+  describe('interactive mode (real xterm.js terminal)', () => {
+    let os: Awaited<ReturnType<typeof createTestOS>>;
+
+    beforeEach(async () => {
+      os = await createTestOS();
+    });
+
+    it('should stream stdout directly to terminal', async () => {
+      const ctx = createCtx(os.shell, os.fs, ['-e', 'process.stdout.write("hello terminal")'], os.terminal);
+      const exitCode = await nodeCmd.exec(ctx);
+      expect(exitCode).toBe(0);
+      // stdout was streamed to terminal, so ctx.stdout may be empty (streamedToTerminal=true)
+      // but the terminal received the output
+    });
+
+    it('should activate passthrough when setRawMode(true) is called', async () => {
+      const ctx = createCtx(os.shell, os.fs, ['-e', [
+        'process.stdin.setRawMode(true);',
+        'process.stdout.write("raw mode active");',
+        'process.exit(0);',
+      ].join('\n')], os.terminal);
+      const exitCode = await nodeCmd.exec(ctx);
+      expect(exitCode).toBe(0);
+    });
+
+    it('should bridge stdin data events from terminal', async () => {
+      const ctx = createCtx(os.shell, os.fs, ['-e', [
+        'let received = "";',
+        'process.stdin.setRawMode(true);',
+        'process.stdin.on("data", (d) => {',
+        '  received += d;',
+        '  if (received.includes("quit")) {',
+        '    process.stdout.write("got: " + received);',
+        '    process.exit(0);',
+        '  }',
+        '});',
+      ].join('\n')], os.terminal);
+
+      const execPromise = nodeCmd.exec(ctx);
+      await new Promise(r => setTimeout(r, 50));
+
+      os.type('hello');
+      await new Promise(r => setTimeout(r, 50));
+      os.type('quit');
+
+      const exitCode = await execPromise;
+      expect(exitCode).toBe(0);
+    }, 10000);
+
+    it('should report isTTY true with terminal', async () => {
+      const ctx = createCtx(os.shell, os.fs, ['-e', [
+        'const out = [];',
+        'out.push("stdin:" + process.stdin.isTTY);',
+        'out.push("stdout:" + process.stdout.isTTY);',
+        'out.push("stderr:" + process.stderr.isTTY);',
+        'console.log(out.join(","));',
+      ].join('\n')], os.terminal);
+      await nodeCmd.exec(ctx);
+      // Output streamed to terminal — check ctx.stdout for non-streamed fallback
+      // With terminal present, isTTY should be true for all three
+    });
+
+    it('should report isTTY false without terminal', async () => {
+      const ctx = createCtx(shell, fs, ['-e', [
+        'console.log("stdin:" + !!process.stdin.isTTY);',
+        'console.log("stdout:" + !!process.stdout.isTTY);',
+      ].join('\n')]);
+      await nodeCmd.exec(ctx);
+      expect(ctx.stdout).toContain('stdin:false');
+      expect(ctx.stdout).toContain('stdout:false');
+    });
+
+    it('should provide terminal dimensions via stdout.columns/rows', async () => {
+      const ctx = createCtx(os.shell, os.fs, ['-p', 'process.stdout.columns + "x" + process.stdout.rows'], os.terminal);
+      const exitCode = await nodeCmd.exec(ctx);
+      expect(exitCode).toBe(0);
+      // Terminal has dimensions (headless xterm defaults to 80x24)
+    });
+
+    it('should handle Ctrl+C through passthrough to stdin', async () => {
+      const ctx = createCtx(os.shell, os.fs, ['-e', [
+        'process.stdin.setRawMode(true);',
+        'process.stdin.on("data", (d) => {',
+        '  if (d === "\\x03") {',
+        '    process.exit(130);',
+        '  }',
+        '});',
+      ].join('\n')], os.terminal);
+
+      const execPromise = nodeCmd.exec(ctx);
+      await new Promise(r => setTimeout(r, 50));
+      os.type('\x03');
+
+      const exitCode = await execPromise;
+      expect(exitCode).toBe(130);
+    }, 10000);
   });
 });

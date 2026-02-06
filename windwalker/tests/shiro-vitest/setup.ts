@@ -26,5 +26,26 @@ Object.defineProperty(window, 'location', {
   writable: true,
 });
 
+// Polyfill browser APIs that linkedom doesn't provide but xterm.js needs
+(window as any).matchMedia = (query: string) => ({
+  matches: false, media: query, onchange: null,
+  addListener: () => {}, removeListener: () => {},
+  addEventListener: () => {}, removeEventListener: () => {},
+  dispatchEvent: () => false,
+});
+(window as any).requestAnimationFrame = (cb: Function) => setTimeout(cb, 16);
+(window as any).cancelAnimationFrame = (id: number) => clearTimeout(id);
+(window as any).ResizeObserver = class ResizeObserver {
+  observe() {} unobserve() {} disconnect() {}
+};
+(window as any).IntersectionObserver = class IntersectionObserver {
+  observe() {} unobserve() {} disconnect() {}
+};
+(window as any).getComputedStyle = () => new Proxy({}, {
+  get: (_t, prop) => prop === 'getPropertyValue' ? () => '' : '',
+});
+(window as any).queueMicrotask = (cb: Function) => Promise.resolve().then(() => cb());
+
 globalThis.window = window as any;
 globalThis.document = document as any;
+globalThis.self = globalThis; // xterm.js uses `self` (browser global)
