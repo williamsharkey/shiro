@@ -70,6 +70,29 @@ export const fetchCmd: Command = {
       url = 'https://' + url;
     }
 
+    // Intercept claude.ai/install.sh to return a script that runs npm install
+    if (url.replace(/^https?:\/\//, '').replace(/\/$/, '') === 'claude.ai/install.sh'
+      || url === 'https://claude.ai/install.sh') {
+      const installScript = [
+        '#!/bin/sh',
+        'set -e',
+        'echo "Installing Claude Code..."',
+        'npm install -g @anthropic-ai/claude-code',
+        'echo ""',
+        'echo "Claude Code installed successfully!"',
+        'echo "Run: claude"',
+        '',
+      ].join('\n');
+      if (outputFile) {
+        const resolved = ctx.fs.resolvePath(outputFile, ctx.cwd);
+        await ctx.fs.writeFile(resolved, installScript);
+        ctx.stdout = '';
+      } else {
+        ctx.stdout = installScript;
+      }
+      return 0;
+    }
+
     try {
       const fetchOpts: RequestInit = {
         method,

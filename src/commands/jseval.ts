@@ -213,7 +213,7 @@ export const nodeCmd: Command = {
               const st = await ctx.fs.stat(fp);
               if (st.isDirectory()) {
                 await preloadDir(fp, depth + 1, maxDepth);
-              } else if (st.size < 1048576) { // 1MB limit
+              } else if (st.size < 16777216) { // 16MB limit (for large bundled packages like claude-code)
                 const content = await ctx.fs.readFile(fp, 'utf8');
                 fileCache.set(fp, content as string);
               }
@@ -246,6 +246,15 @@ export const nodeCmd: Command = {
         if (parent === nmSearch || !parent) break;
         nmSearch = parent;
       }
+
+      // Pre-load global node_modules (/usr/local/lib/node_modules)
+      try {
+        const globalNmDir = '/usr/local/lib/node_modules';
+        const globalEntries = await ctx.fs.readdir(globalNmDir);
+        for (const name of globalEntries) {
+          await preloadDir(globalNmDir + '/' + name, 0, 10);
+        }
+      } catch { /* no global node_modules */ }
 
       // If running a script file, ensure its project directory is fully loaded
       if (scriptPath) {
@@ -1184,6 +1193,301 @@ export const nodeCmd: Command = {
             sharp.versions = { sharp: '0.0.0-shiro-stub' };
             return Object.assign(sharp, { default: sharp });
           }
+          case 'querystring':
+          case 'node:querystring': return {
+            parse: (str: string) => {
+              const obj: Record<string, string> = {};
+              for (const pair of str.split('&')) {
+                const [k, v] = pair.split('=');
+                if (k) obj[decodeURIComponent(k)] = v ? decodeURIComponent(v) : '';
+              }
+              return obj;
+            },
+            stringify: (obj: Record<string, any>) => Object.entries(obj).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&'),
+            encode: (obj: Record<string, any>) => Object.entries(obj).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&'),
+            decode: (str: string) => {
+              const obj: Record<string, string> = {};
+              for (const pair of str.split('&')) {
+                const [k, v] = pair.split('=');
+                if (k) obj[decodeURIComponent(k)] = v ? decodeURIComponent(v) : '';
+              }
+              return obj;
+            },
+            escape: encodeURIComponent,
+            unescape: decodeURIComponent,
+          };
+
+          case 'string_decoder':
+          case 'node:string_decoder': {
+            class StringDecoder {
+              encoding: string;
+              constructor(encoding = 'utf8') { this.encoding = encoding; }
+              write(buf: any): string { return new TextDecoder(this.encoding).decode(buf instanceof Uint8Array ? buf : new Uint8Array(buf)); }
+              end(buf?: any): string { return buf ? this.write(buf) : ''; }
+            }
+            return { StringDecoder };
+          }
+
+          case 'constants':
+          case 'node:constants': return {
+            O_RDONLY: 0, O_WRONLY: 1, O_RDWR: 2, O_CREAT: 64, O_EXCL: 128,
+            O_TRUNC: 512, O_APPEND: 1024, O_DIRECTORY: 65536, O_NOFOLLOW: 131072,
+            S_IFMT: 61440, S_IFREG: 32768, S_IFDIR: 16384, S_IFLNK: 40960,
+            S_IRWXU: 448, S_IRUSR: 256, S_IWUSR: 128, S_IXUSR: 64,
+            S_IRWXG: 56, S_IRGRP: 32, S_IWGRP: 16, S_IXGRP: 8,
+            S_IRWXO: 7, S_IROTH: 4, S_IWOTH: 2, S_IXOTH: 1,
+            SIGINT: 2, SIGTERM: 15, SIGKILL: 9,
+          };
+
+          case 'tty':
+          case 'node:tty': return {
+            isatty: (_fd?: number) => true,
+            ReadStream: class ReadStream { constructor() {} setRawMode() { return this; } isTTY = true; },
+            WriteStream: class WriteStream {
+              isTTY = true;
+              columns = 80;
+              rows = 24;
+              getColorDepth() { return 24; }
+              hasColors(count?: number) { return (count || 0) <= 16777216; }
+              getWindowSize() { return [this.columns, this.rows]; }
+              cursorTo() {}
+              moveCursor() {}
+              clearLine() {}
+              clearScreenDown() {}
+              write(data: any) {}
+            },
+          };
+
+          case 'zlib':
+          case 'node:zlib': {
+            // Stub zlib using DecompressionStream/CompressionStream when possible
+            const passthrough = (data: any, cb?: Function) => {
+              if (cb) cb(null, data);
+              return data;
+            };
+            return {
+              createGunzip: () => ({ pipe: (d: any) => d, on: () => {}, once: () => {}, end: () => {} }),
+              createGzip: () => ({ pipe: (d: any) => d, on: () => {}, once: () => {}, end: () => {} }),
+              createDeflate: () => ({ pipe: (d: any) => d, on: () => {}, once: () => {}, end: () => {} }),
+              createInflate: () => ({ pipe: (d: any) => d, on: () => {}, once: () => {}, end: () => {} }),
+              gzip: passthrough,
+              gunzip: passthrough,
+              deflate: passthrough,
+              inflate: passthrough,
+              gzipSync: (data: any) => data,
+              gunzipSync: (data: any) => data,
+              deflateSync: (data: any) => data,
+              inflateSync: (data: any) => data,
+              brotliCompressSync: (data: any) => data,
+              brotliDecompressSync: (data: any) => data,
+              constants: {
+                Z_NO_COMPRESSION: 0, Z_BEST_SPEED: 1, Z_BEST_COMPRESSION: 9,
+                Z_DEFAULT_COMPRESSION: -1, Z_SYNC_FLUSH: 2, Z_FULL_FLUSH: 3,
+                BROTLI_OPERATION_PROCESS: 0, BROTLI_OPERATION_FLUSH: 1, BROTLI_OPERATION_FINISH: 2,
+              },
+            };
+          }
+
+          case 'dns':
+          case 'node:dns': {
+            const dnsModule: any = {
+              lookup: (hostname: string, opts: any, cb?: Function) => {
+                if (typeof opts === 'function') { cb = opts; opts = {}; }
+                cb?.(null, '127.0.0.1', 4);
+              },
+              resolve: (hostname: string, rrtype: any, cb?: Function) => {
+                if (typeof rrtype === 'function') { cb = rrtype; rrtype = 'A'; }
+                cb?.(null, ['127.0.0.1']);
+              },
+              resolve4: (hostname: string, cb: Function) => cb(null, ['127.0.0.1']),
+              resolve6: (hostname: string, cb: Function) => cb(null, ['::1']),
+              setServers: () => {},
+              getServers: () => ['8.8.8.8'],
+            };
+            dnsModule.promises = {
+              lookup: async (hostname: string) => ({ address: '127.0.0.1', family: 4 }),
+              resolve: async (hostname: string) => ['127.0.0.1'],
+              resolve4: async (hostname: string) => ['127.0.0.1'],
+              resolve6: async (hostname: string) => ['::1'],
+            };
+            return dnsModule;
+          }
+
+          case 'net':
+          case 'node:net': {
+            class FakeSocket {
+              writable = true;
+              readable = true;
+              destroyed = false;
+              _events: Record<string, Function[]> = {};
+              on(ev: string, fn: Function) { (this._events[ev] ||= []).push(fn); return this; }
+              once(ev: string, fn: Function) { return this.on(ev, fn); }
+              off() { return this; }
+              emit(ev: string, ...args: any[]) { (this._events[ev] || []).forEach(f => f(...args)); }
+              write(data: any, encoding?: any, cb?: Function) { if (typeof encoding === 'function') cb = encoding; cb?.(); return true; }
+              end(data?: any, encoding?: any, cb?: Function) { if (typeof data === 'function') cb = data; cb?.(); this.destroyed = true; }
+              destroy() { this.destroyed = true; return this; }
+              setEncoding() { return this; }
+              setKeepAlive() { return this; }
+              setNoDelay() { return this; }
+              setTimeout() { return this; }
+              ref() { return this; }
+              unref() { return this; }
+              address() { return { address: '127.0.0.1', family: 'IPv4', port: 0 }; }
+              get remoteAddress() { return '127.0.0.1'; }
+              get remotePort() { return 0; }
+              get localAddress() { return '127.0.0.1'; }
+              get localPort() { return 0; }
+              pipe(dest: any) { return dest; }
+            }
+            class FakeServer {
+              _events: Record<string, Function[]> = {};
+              on(ev: string, fn: Function) { (this._events[ev] ||= []).push(fn); return this; }
+              once(ev: string, fn: Function) { return this.on(ev, fn); }
+              listen(port?: any, host?: any, cb?: Function) {
+                if (typeof port === 'function') cb = port;
+                else if (typeof host === 'function') cb = host;
+                setTimeout(() => cb?.(), 0);
+                return this;
+              }
+              close(cb?: Function) { cb?.(); return this; }
+              address() { return { address: '127.0.0.1', family: 'IPv4', port: 0 }; }
+              ref() { return this; }
+              unref() { return this; }
+            }
+            return {
+              Socket: FakeSocket,
+              Server: FakeServer,
+              createServer: (opts?: any, handler?: Function) => {
+                if (typeof opts === 'function') { handler = opts; }
+                return new FakeServer();
+              },
+              createConnection: (opts?: any, cb?: Function) => {
+                const sock = new FakeSocket();
+                if (cb) setTimeout(() => cb(), 0);
+                return sock;
+              },
+              connect: (opts?: any, cb?: Function) => {
+                const sock = new FakeSocket();
+                if (cb) setTimeout(() => cb(), 0);
+                return sock;
+              },
+              isIP: (input: string) => /^\d+\.\d+\.\d+\.\d+$/.test(input) ? 4 : (input.includes(':') ? 6 : 0),
+              isIPv4: (input: string) => /^\d+\.\d+\.\d+\.\d+$/.test(input),
+              isIPv6: (input: string) => input.includes(':'),
+            };
+          }
+
+          case 'tls':
+          case 'node:tls': {
+            const netMod = getBuiltinModule('net');
+            return {
+              ...netMod,
+              TLSSocket: netMod.Socket,
+              createSecureContext: () => ({}),
+              getCiphers: () => ['TLS_AES_256_GCM_SHA384'],
+              DEFAULT_MIN_VERSION: 'TLSv1.2',
+              DEFAULT_MAX_VERSION: 'TLSv1.3',
+              connect: (opts: any, cb?: Function) => netMod.connect(opts, cb),
+            };
+          }
+
+          case 'perf_hooks':
+          case 'node:perf_hooks': return {
+            performance: typeof performance !== 'undefined' ? performance : {
+              now: () => Date.now(),
+              timeOrigin: Date.now(),
+              mark: () => {},
+              measure: () => {},
+              getEntries: () => [],
+              getEntriesByName: () => [],
+              getEntriesByType: () => [],
+              clearMarks: () => {},
+              clearMeasures: () => {},
+            },
+            PerformanceObserver: class PerformanceObserver {
+              constructor(cb: Function) {}
+              observe() {}
+              disconnect() {}
+            },
+            monitorEventLoopDelay: () => ({
+              enable: () => {},
+              disable: () => {},
+              percentile: () => 0,
+              min: 0, max: 0, mean: 0, stddev: 0,
+            }),
+          };
+
+          case 'timers':
+          case 'node:timers': return {
+            setTimeout, setInterval, setImmediate: (fn: Function, ...args: any[]) => setTimeout(fn, 0, ...args),
+            clearTimeout, clearInterval, clearImmediate: clearTimeout,
+          };
+
+          case 'timers/promises':
+          case 'node:timers/promises': return {
+            setTimeout: (ms: number, value?: any) => new Promise(resolve => setTimeout(() => resolve(value), ms)),
+            setInterval: async function*(ms: number, value?: any) { while (true) { await new Promise(r => setTimeout(r, ms)); yield value; } },
+            setImmediate: (value?: any) => new Promise(resolve => setTimeout(() => resolve(value), 0)),
+            scheduler: { wait: (ms: number) => new Promise(r => setTimeout(r, ms)), yield: () => new Promise(r => setTimeout(r, 0)) },
+          };
+
+          case 'module':
+          case 'node:module': {
+            // Provide createRequire that delegates to our require system
+            const modExport: any = {
+              createRequire: (_url: string) => {
+                // Return a require function that uses our module resolution
+                const fakeReq: any = (id: string) => requireModule(id, ctx.cwd);
+                fakeReq.resolve = (id: string) => {
+                  // Simple resolve: check builtins first, then file paths
+                  if (getBuiltinModule(id) || getBuiltinModule('node:' + id)) return id;
+                  // Try to find the file in cache
+                  const tryPaths = [
+                    id,
+                    id + '.js',
+                    id + '/index.js',
+                  ];
+                  for (const p of tryPaths) {
+                    if (fileCache.has(p)) return p;
+                  }
+                  return id;
+                };
+                fakeReq.resolve.paths = () => [ctx.cwd + '/node_modules', '/usr/local/lib/node_modules'];
+                fakeReq.cache = moduleCache;
+                return fakeReq;
+              },
+              builtinModules: [
+                'assert', 'buffer', 'child_process', 'constants', 'crypto', 'dns',
+                'events', 'fs', 'fs/promises', 'http', 'https', 'module', 'net',
+                'os', 'path', 'perf_hooks', 'process', 'querystring', 'stream',
+                'string_decoder', 'timers', 'timers/promises', 'tls', 'tty', 'url',
+                'util', 'zlib',
+              ],
+              isBuiltin: (name: string) => {
+                const clean = name.startsWith('node:') ? name.slice(5) : name;
+                return modExport.builtinModules.includes(clean);
+              },
+              _resolveFilename: (request: string) => request,
+              _cache: moduleCache,
+              Module: class Module {
+                id: string;
+                exports: any = {};
+                constructor(id = '') { this.id = id; }
+              },
+            };
+            return modExport;
+          }
+
+          case 'process':
+          case 'node:process': return fakeProcess;
+
+          case 'path/posix':
+          case 'node:path/posix': return getBuiltinModule('path');
+
+          case 'path/win32':
+          case 'node:path/win32': return getBuiltinModule('path');
+
           default: return null;
         }
       }
@@ -2172,6 +2476,43 @@ export const nodeCmd: Command = {
             const parent = searchDir.substring(0, searchDir.lastIndexOf('/')) || '';
             if (parent === searchDir || !parent) break;
             searchDir = parent;
+          }
+          // Also check global node_modules (/usr/local/lib/node_modules)
+          if (!found) {
+            const globalPkgDir = `/usr/local/lib/node_modules/${pkgName}`;
+            const globalPkgPath = `${globalPkgDir}/package.json`;
+            if (fileCache.has(globalPkgPath)) {
+              if (subpath) {
+                const subpathFull = `${globalPkgDir}/${subpath}`;
+                if (fileCache.has(subpathFull + '.js')) resolved = subpathFull + '.js';
+                else if (fileCache.has(subpathFull)) resolved = subpathFull;
+                else resolved = subpathFull + '/index.js';
+              } else {
+                try {
+                  const pkg = JSON.parse(fileCache.get(globalPkgPath)!);
+                  let main: string | undefined;
+                  if (pkg.exports) {
+                    const exp = pkg.exports;
+                    if (typeof exp === 'string') main = exp;
+                    else if (exp['.']) {
+                      const dotExport = exp['.'];
+                      main = typeof dotExport === 'string' ? dotExport
+                        : (dotExport.import || dotExport.require || dotExport.default);
+                    } else if (exp.import || exp.require || exp.default) {
+                      main = exp.import || exp.require || exp.default;
+                    }
+                  }
+                  if (!main) main = pkg.main || pkg.module || 'index.js';
+                  if (typeof main !== 'string') main = 'index.js';
+                  main = main.replace(/^\.\//, '');
+                  if (!/\.(js|cjs|mjs|json)$/.test(main)) main += '.js';
+                  resolved = `${globalPkgDir}/${main}`;
+                } catch {
+                  resolved = `${globalPkgDir}/index.js`;
+                }
+              }
+              found = true;
+            }
           }
           if (!found) {
             resolved = `${ctx.cwd}/node_modules/${modPath}/index.js`;

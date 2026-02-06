@@ -5,6 +5,8 @@ import { shiroOnlyCommands } from '../src/commands/coreutils';
 import { gitCmd } from '../src/commands/git';
 import { globCmd } from '../src/commands/glob';
 import { jsEvalCmd, nodeCmd } from '../src/commands/jseval';
+import { npmCmd } from '../src/commands/npm';
+import { fetchCmd, curlCmd } from '../src/commands/fetch';
 import { allCommands } from '../fluffycoreutils/src/index';
 import { wrapFluffyCommand } from '../src/fluffy-adapter';
 
@@ -27,6 +29,9 @@ export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell 
   commands.register(globCmd);
   commands.register(jsEvalCmd);
   commands.register(nodeCmd);
+  commands.register(npmCmd);
+  commands.register(fetchCmd);
+  commands.register(curlCmd);
 
   const shell = new Shell(fs, commands);
   return { fs, shell };

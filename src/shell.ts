@@ -35,7 +35,7 @@ export class Shell {
       HOME: '/home/user',
       USER: 'user',
       SHELL: '/bin/sh',
-      PATH: '/usr/bin:/bin',
+      PATH: '/usr/local/bin:/usr/bin:/bin',
       PWD: '/home/user',
       TERM: 'xterm-256color',
     };

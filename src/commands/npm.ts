@@ -407,6 +407,18 @@ async function createBinSymlinks(
 }
 
 async function npmInstall(ctx: CommandContext): Promise<number> {
+  // Check for global flag
+  const isGlobal = ctx.args.includes('-g') || ctx.args.includes('--global');
+
+  // Filter out flags, including -g/--global
+  const packagesToInstall = ctx.args.slice(1).filter(arg =>
+    !arg.startsWith('--') && arg !== '-g'
+  );
+
+  if (isGlobal) {
+    return await npmInstallGlobal(ctx, packagesToInstall);
+  }
+
   const pkgPath = ctx.fs.resolvePath('package.json', ctx.cwd);
 
   // Read package.json
@@ -422,10 +434,6 @@ async function npmInstall(ctx: CommandContext): Promise<number> {
     ctx.stderr += `npm: failed to parse package.json: ${e.message}\n`;
     return 1;
   }
-
-  // Get packages to install from args, filtering out flags
-  // Supported flags: --ignore-scripts (ignored, scripts not supported anyway)
-  const packagesToInstall = ctx.args.slice(1).filter(arg => !arg.startsWith('--'));
 
   let depsToResolve: Record<string, string> = {};
 
@@ -488,6 +496,158 @@ async function npmInstall(ctx: CommandContext): Promise<number> {
 
   ctx.stdout += '\nPackages installed successfully.\n';
   return 0;
+}
+
+/**
+ * Global install: install packages to /usr/local/lib/node_modules/
+ * and create bin symlinks in /usr/local/bin/
+ */
+async function npmInstallGlobal(
+  ctx: CommandContext,
+  packagesToInstall: string[]
+): Promise<number> {
+  if (packagesToInstall.length === 0) {
+    ctx.stderr += 'npm: please specify packages to install globally\n';
+    return 1;
+  }
+
+  const globalModulesDir = '/usr/local/lib/node_modules';
+  const globalBinDir = '/usr/local/bin';
+
+  // Ensure global directories exist
+  for (const dir of ['/usr/local/lib', globalModulesDir, globalBinDir]) {
+    try {
+      await ctx.fs.mkdir(dir, { recursive: true });
+    } catch {
+      // Already exists
+    }
+  }
+
+  const depsToResolve: Record<string, string> = {};
+  for (const spec of packagesToInstall) {
+    const [name, version] = spec.includes('@') && !spec.startsWith('@')
+      ? spec.split('@')
+      : [spec, 'latest'];
+    depsToResolve[name] = version;
+  }
+
+  ctx.stdout += 'Installing packages globally...\n';
+
+  // Resolve dependency tree
+  const allResolved = new Map<string, ResolvedPackage>();
+  for (const [name, range] of Object.entries(depsToResolve)) {
+    try {
+      const resolved = await resolveDependencyTree(name, range, ctx);
+      for (const [key, value] of resolved) {
+        allResolved.set(key, value);
+      }
+    } catch (error: any) {
+      ctx.stderr += `Error installing ${name}: ${error.message}\n`;
+      return 1;
+    }
+  }
+
+  ctx.stdout += `\nResolved ${allResolved.size} package(s):\n`;
+
+  // Install packages to global node_modules
+  const packages = Array.from(allResolved.values());
+  const installPromises = packages.map(pkg => installPackageToDir(pkg, ctx, globalModulesDir).catch(err => {
+    ctx.stderr += `Error installing ${pkg.name}: ${err.message}\n`;
+  }));
+  await Promise.all(installPromises);
+
+  // Create bin symlinks in /usr/local/bin/
+  await createGlobalBinSymlinks(ctx, allResolved, globalModulesDir, globalBinDir);
+
+  ctx.stdout += '\nPackages installed globally.\n';
+  return 0;
+}
+
+/**
+ * Install a package to a specific directory (used for global installs)
+ */
+async function installPackageToDir(
+  pkg: ResolvedPackage,
+  ctx: CommandContext,
+  baseDir: string
+): Promise<void> {
+  ctx.stdout += `  + ${pkg.name}@${pkg.version}\n`;
+
+  const response = await fetch(pkg.tarballUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to download ${pkg.name}: ${response.statusText}`);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  const tarballData = new Uint8Array(arrayBuffer);
+
+  const packageDir = `${baseDir}/${pkg.name}`;
+  await ctx.fs.mkdir(packageDir, { recursive: true });
+
+  let filesWritten = 0;
+  const fsWriter: FileSystemWriter = {
+    writeFile: async (path: string, data: Uint8Array) => {
+      await ctx.fs.writeFile(path, data);
+      filesWritten++;
+    },
+    mkdir: async (path: string) => {
+      try {
+        await ctx.fs.mkdir(path, { recursive: true });
+      } catch {
+        // Directory might exist
+      }
+    },
+  };
+
+  await extractTarGzToFS(tarballData, packageDir, fsWriter);
+  ctx.stdout += `  ${filesWritten} files extracted\n`;
+}
+
+/**
+ * Create bin symlinks in a global bin directory
+ */
+async function createGlobalBinSymlinks(
+  ctx: CommandContext,
+  packages: Map<string, ResolvedPackage>,
+  modulesDir: string,
+  binDir: string
+): Promise<void> {
+  let binCount = 0;
+
+  for (const pkg of packages.values()) {
+    try {
+      const pkgJsonPath = `${modulesDir}/${pkg.name}/package.json`;
+      const content = await ctx.fs.readFile(pkgJsonPath, 'utf8') as string;
+      const pkgData = JSON.parse(content) as PackageJson;
+
+      if (!pkgData.bin) continue;
+
+      const bins: Record<string, string> = typeof pkgData.bin === 'string'
+        ? { [pkg.name.replace(/^@.*\//, '')]: pkgData.bin }
+        : pkgData.bin;
+
+      for (const [binName, binPath] of Object.entries(bins)) {
+        const symlinkPath = `${binDir}/${binName}`;
+        const cleanBinPath = binPath.replace(/^\.\//, '');
+        const targetPath = `${modulesDir}/${pkg.name}/${cleanBinPath}`;
+
+        try {
+          await ctx.fs.unlink(symlinkPath);
+        } catch {
+          // Doesn't exist
+        }
+
+        await ctx.fs.symlink(targetPath, symlinkPath);
+        binCount++;
+      }
+    } catch {
+      // Package doesn't have valid package.json or bin entries
+    }
+  }
+
+  if (binCount > 0) {
+    ctx.stdout += `Created ${binCount} bin symlink(s) in ${binDir}\n`;
+  }
 }
 
 async function npmList(ctx: CommandContext): Promise<number> {
