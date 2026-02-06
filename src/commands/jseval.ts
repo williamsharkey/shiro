@@ -1458,11 +1458,11 @@ export const nodeCmd: Command = {
                 return fakeReq;
               },
               builtinModules: [
-                'assert', 'buffer', 'child_process', 'constants', 'crypto', 'dns',
-                'events', 'fs', 'fs/promises', 'http', 'https', 'module', 'net',
-                'os', 'path', 'perf_hooks', 'process', 'querystring', 'stream',
-                'string_decoder', 'timers', 'timers/promises', 'tls', 'tty', 'url',
-                'util', 'zlib',
+                'assert', 'async_hooks', 'buffer', 'child_process', 'constants', 'crypto',
+                'diagnostics_channel', 'dns', 'events', 'fs', 'fs/promises', 'http', 'https',
+                'module', 'net', 'os', 'path', 'perf_hooks', 'process', 'querystring',
+                'readline', 'stream', 'string_decoder', 'timers', 'timers/promises', 'tls',
+                'tty', 'url', 'util', 'v8', 'worker_threads', 'zlib',
               ],
               isBuiltin: (name: string) => {
                 const clean = name.startsWith('node:') ? name.slice(5) : name;
@@ -1487,6 +1487,92 @@ export const nodeCmd: Command = {
 
           case 'path/win32':
           case 'node:path/win32': return getBuiltinModule('path');
+
+          case 'async_hooks':
+          case 'node:async_hooks': {
+            // AsyncLocalStorage: context propagation for async operations
+            class AsyncLocalStorage {
+              private _store: any = undefined;
+              getStore() { return this._store; }
+              run(store: any, fn: Function, ...args: any[]) { const prev = this._store; this._store = store; try { return fn(...args); } finally { this._store = prev; } }
+              enterWith(store: any) { this._store = store; }
+              disable() { this._store = undefined; }
+              exit(fn: Function, ...args: any[]) { const prev = this._store; this._store = undefined; try { return fn(...args); } finally { this._store = prev; } }
+            }
+            class AsyncResource {
+              type: string;
+              constructor(type: string) { this.type = type; }
+              runInAsyncScope(fn: Function, thisArg?: any, ...args: any[]) { return fn.apply(thisArg, args); }
+              emitDestroy() { return this; }
+              asyncId() { return 0; }
+              triggerAsyncId() { return 0; }
+              bind(fn: Function) { return fn; }
+              static bind(fn: Function) { return fn; }
+            }
+            return {
+              AsyncLocalStorage,
+              AsyncResource,
+              createHook: () => ({ enable: () => {}, disable: () => {} }),
+              executionAsyncId: () => 0,
+              triggerAsyncId: () => 0,
+              executionAsyncResource: () => ({}),
+            };
+          }
+
+          case 'worker_threads':
+          case 'node:worker_threads': return {
+            isMainThread: true,
+            parentPort: null,
+            workerData: null,
+            threadId: 0,
+            Worker: class Worker { constructor() { throw new Error('Workers not supported'); } },
+            MessageChannel: class MessageChannel { port1 = {}; port2 = {}; },
+            MessagePort: class MessagePort {},
+          };
+
+          case 'readline':
+          case 'node:readline': return {
+            createInterface: (opts: any) => ({
+              on: () => ({}),
+              close: () => {},
+              question: (q: string, cb: Function) => cb(''),
+              [Symbol.asyncIterator]: async function*() {},
+            }),
+            Interface: class Interface {},
+          };
+
+          case 'diagnostics_channel':
+          case 'node:diagnostics_channel': return {
+            channel: (name: string) => ({ subscribe: () => {}, unsubscribe: () => {}, hasSubscribers: false }),
+            hasSubscribers: () => false,
+            subscribe: () => {},
+            unsubscribe: () => {},
+            Channel: class Channel { subscribe() {} unsubscribe() {} hasSubscribers = false; },
+          };
+
+          case 'v8':
+          case 'node:v8': return {
+            serialize: (v: any) => new Uint8Array(new TextEncoder().encode(JSON.stringify(v))),
+            deserialize: (b: any) => JSON.parse(new TextDecoder().decode(b)),
+            getHeapStatistics: () => ({ total_heap_size: 0, used_heap_size: 0, heap_size_limit: 0 }),
+            setFlagsFromString: () => {},
+          };
+
+          case 'assert':
+          case 'node:assert': {
+            const assert: any = (value: any, msg?: string) => { if (!value) throw new Error(msg || 'Assertion failed'); };
+            assert.ok = assert;
+            assert.equal = (a: any, b: any, msg?: string) => { if (a != b) throw new Error(msg || `${a} != ${b}`); };
+            assert.strictEqual = (a: any, b: any, msg?: string) => { if (a !== b) throw new Error(msg || `${a} !== ${b}`); };
+            assert.deepEqual = assert.deepStrictEqual = (a: any, b: any, msg?: string) => { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(msg || 'Deep equal failed'); };
+            assert.notEqual = (a: any, b: any, msg?: string) => { if (a == b) throw new Error(msg || `${a} == ${b}`); };
+            assert.notStrictEqual = (a: any, b: any, msg?: string) => { if (a === b) throw new Error(msg || `${a} === ${b}`); };
+            assert.throws = (fn: Function, msg?: any) => { try { fn(); throw new Error(typeof msg === 'string' ? msg : 'Expected throw'); } catch(e) { /* ok */ } };
+            assert.doesNotThrow = (fn: Function) => { fn(); };
+            assert.fail = (msg?: string) => { throw new Error(msg || 'Assert.fail'); };
+            assert.AssertionError = class extends Error {};
+            return assert;
+          }
 
           default: return null;
         }
@@ -2605,7 +2691,222 @@ export const nodeCmd: Command = {
       const fakeRequire = (moduleName: string) => requireModule(moduleName, ctx.cwd);
 
       // Transform ES module syntax to CommonJS
+      // Strip shebang line (#!/usr/bin/env node) — not valid in AsyncFunction
+      function stripShebang(src: string): string {
+        if (src.startsWith('#!')) {
+          const nl = src.indexOf('\n');
+          return nl >= 0 ? src.substring(nl + 1) : '';
+        }
+        return src;
+      }
+
+      function transformBundledESM(src: string): string {
+        // Fast path for large bundled files (>500KB).
+        // Bundled ESM files have thousands of string/template literals.
+        // The full regex-based transform introduces quote characters in
+        // replacements (e.g. require("mod")) that break enclosing string
+        // delimiters, causing SyntaxError: Invalid or unexpected token.
+        //
+        // This fast path only does safe transforms:
+        // - Leading imports at file start (not inside strings)
+        // - import.meta → __import_meta (no quotes introduced)
+        // - import( → __dynamic_import( (no quotes introduced)
+        // - Strip 'export' keyword (no quotes introduced)
+
+        src = stripShebang(src);
+        src = src.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+
+        // 1. Transform leading import statements at the file start.
+        //    In bundled ESM, real imports are at position 0, NOT inside strings.
+        let pos = 0;
+        const parts: string[] = [];
+
+        // Skip whitespace, semicolons, and comments before/between imports
+        function skipNonCode() {
+          while (pos < src.length) {
+            if (/[\s;]/.test(src[pos])) { parts.push(src[pos]); pos++; continue; }
+            // Single-line comment
+            if (src[pos] === '/' && pos + 1 < src.length && src[pos + 1] === '/') {
+              const nl = src.indexOf('\n', pos);
+              const end = nl >= 0 ? nl + 1 : src.length;
+              parts.push(src.substring(pos, end));
+              pos = end;
+              continue;
+            }
+            // Block comment
+            if (src[pos] === '/' && pos + 1 < src.length && src[pos + 1] === '*') {
+              const end = src.indexOf('*/', pos + 2);
+              const commentEnd = end >= 0 ? end + 2 : src.length;
+              parts.push(src.substring(pos, commentEnd));
+              pos = commentEnd;
+              continue;
+            }
+            break;
+          }
+        }
+        skipNonCode();
+
+        // Process consecutive import statements
+        while (pos < src.length) {
+          const rest = src.substring(pos);
+          if (!rest.startsWith('import')) break;
+
+          // Don't transform import.meta or import() here — handled globally below
+          const afterImport = rest[6];
+          if (afterImport === '.' || afterImport === '(') break;
+
+          let matched = false;
+
+          // import { x as y } from "module" (handles minified: import{x}from"m")
+          const namedMatch = rest.match(/^import\s*\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]\s*;?\s*/);
+          if (namedMatch) {
+            const fixed = namedMatch[1].replace(/([\w$]+)\s+as\s+([\w$]+)/g, '$1: $2');
+            parts.push(`const {${fixed}} = require("${namedMatch[2]}");`);
+            pos += namedMatch[0].length;
+            matched = true;
+          }
+
+          if (!matched) {
+            // import x, { y } from "module"
+            const combinedMatch = rest.match(/^import\s+([\w$]+)\s*,\s*\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]\s*;?\s*/);
+            if (combinedMatch) {
+              const fixed = combinedMatch[2].replace(/([\w$]+)\s+as\s+([\w$]+)/g, '$1: $2');
+              parts.push(`const ${combinedMatch[1]} = require("${combinedMatch[3]}"); const {${fixed}} = require("${combinedMatch[3]}");`);
+              pos += combinedMatch[0].length;
+              matched = true;
+            }
+          }
+
+          if (!matched) {
+            // import x from "module"
+            const defaultMatch = rest.match(/^import\s+([\w$]+)\s+from\s*['"]([^'"]+)['"]\s*;?\s*/);
+            if (defaultMatch) {
+              parts.push(`const ${defaultMatch[1]} = require("${defaultMatch[2]}");`);
+              pos += defaultMatch[0].length;
+              matched = true;
+            }
+          }
+
+          if (!matched) {
+            // import * as x from "module"
+            const starMatch = rest.match(/^import\s*\*\s*as\s+([\w$]+)\s*from\s*['"]([^'"]+)['"]\s*;?\s*/);
+            if (starMatch) {
+              parts.push(`const ${starMatch[1]} = require("${starMatch[2]}");`);
+              pos += starMatch[0].length;
+              matched = true;
+            }
+          }
+
+          if (!matched) {
+            // import "module" (side-effect)
+            const sideEffectMatch = rest.match(/^import\s+['"]([^'"]+)['"]\s*;?\s*/);
+            if (sideEffectMatch) {
+              parts.push(`require("${sideEffectMatch[1]}");`);
+              pos += sideEffectMatch[0].length;
+              matched = true;
+            }
+          }
+
+          if (!matched) break;
+          skipNonCode(); // Skip whitespace/comments between imports
+        }
+
+        parts.push(src.substring(pos));
+        src = parts.join('');
+
+        // 2. import.meta → __import_meta (safe everywhere, no quotes introduced)
+        src = src.replace(/import\.meta/g, '__import_meta');
+
+        // 3. Dynamic import() → __dynamic_import()
+        //    Safe: just replaces the keyword with a function name, no quotes.
+        src = src.replace(/\bimport\s*\(/g, '__dynamic_import(');
+
+        // 4. Transform remaining static imports globally.
+        //    Minified bundles have imports scattered throughout (not just at the top)
+        //    for externalized Node.js builtins (fs, path, os, crypto, etc.).
+        //    Uses \s* instead of \s+ to handle minified import{x}from"y" patterns.
+
+        // Note: JS identifiers can contain $ (common in minified code: Z$, M$6)
+        // so we use [\w$]+ instead of \w+ for identifier matching.
+
+        // import Default, { named } from "module"
+        src = src.replace(/\bimport\s+([\w$]+)\s*,\s*\{([^}]+)\}\s*from\s*(['"])([^'"]+)\3\s*;?/g,
+          (_, defaultName, namedImports, q, mod) => {
+            const fixed = namedImports.replace(/([\w$]+)\s+as\s+([\w$]+)/g, '$1: $2');
+            return `const ${defaultName} = require(${q}${mod}${q}); const {${fixed}} = require(${q}${mod}${q});`;
+          });
+
+        // import { x as y } from "module"  (handles minified: import{x}from"m")
+        src = src.replace(/\bimport\s*\{([^}]+)\}\s*from\s*(['"])([^'"]+)\2\s*;?/g,
+          (_, imports, q, mod) => {
+            const fixed = imports.replace(/([\w$]+)\s+as\s+([\w$]+)/g, '$1: $2');
+            return `const {${fixed}} = require(${q}${mod}${q});`;
+          });
+
+        // import x from "module"
+        src = src.replace(/\bimport\s+([\w$]+)\s+from\s*(['"])([^'"]+)\2\s*;?/g,
+          (_, name, q, mod) => `const ${name} = require(${q}${mod}${q});`);
+
+        // import * as x from "module"  (handles minified: import*as x from"m")
+        src = src.replace(/\bimport\s*\*\s*as\s+([\w$]+)\s*from\s*(['"])([^'"]+)\2\s*;?/g,
+          (_, name, q, mod) => `const ${name} = require(${q}${mod}${q});`);
+
+        // import "module" (side-effect only)
+        src = src.replace(/\bimport\s*(['"])([^'"]+)\1\s*;?/g,
+          (_, q, mod) => `require(${q}${mod}${q});`);
+
+        // 5. Strip 'export' keyword from declarations (safe, no quotes introduced).
+        src = src.replace(/\bexport\s+default\s+/g, 'module.exports = ');
+        src = src.replace(/\bexport\s+async\s+function\s+/g, 'async function ');
+        src = src.replace(/\bexport\s+function\s+/g, 'function ');
+        src = src.replace(/\bexport\s+class\s+/g, 'class ');
+        src = src.replace(/\bexport\s+(const|let|var)\s+/g, '$1 ');
+
+        // 6. Handle export { x as y } and export { x } from "y" patterns
+        //    These appear in minified bundles as export{x as y} or export{x}from"y"
+        src = src.replace(/\bexport\s*\{([^}]+)\}\s*from\s*(['"])([^'"]+)\2\s*;?/g,
+          (_, exports, q, mod) => {
+            const items = exports.split(',').map((s: string) => s.trim()).filter((s: string) => s);
+            return items.map((item: string) => {
+              const asMatch = item.match(/^([\w$]+)\s+as\s+([\w$]+)$/);
+              if (asMatch) return `module.exports.${asMatch[2]} = require(${q}${mod}${q}).${asMatch[1]};`;
+              return `module.exports.${item} = require(${q}${mod}${q}).${item};`;
+            }).join(' ');
+          });
+
+        // export * as name from "module"
+        src = src.replace(/\bexport\s*\*\s*as\s+([\w$]+)\s*from\s*(['"])([^'"]+)\2\s*;?/g,
+          (_, name, q, mod) => `module.exports.${name} = require(${q}${mod}${q});`);
+
+        // export * from "module"
+        src = src.replace(/\bexport\s*\*\s*from\s*(['"])([^'"]+)\1\s*;?/g,
+          (_, q, mod) => `Object.assign(module.exports, require(${q}${mod}${q}));`);
+
+        // export { x as y } (local re-exports, no from)
+        src = src.replace(/\bexport\s*\{([^}]+)\}\s*;?/g, (_, exports) => {
+          const items = exports.split(',').map((s: string) => s.trim()).filter((s: string) => s && /^[\w$]/.test(s));
+          return items.map((item: string) => {
+            const asMatch = item.match(/^([\w$]+)\s+as\s+([\w$]+)$/);
+            if (asMatch) return `module.exports.${asMatch[2]} = ${asMatch[1]};`;
+            return `module.exports.${item} = ${item};`;
+          }).join(' ');
+        });
+
+        // 7. Remove TypeScript type-only imports/exports
+        src = src.replace(/\bimport\s+type\s+[^;]+;?/g, '/* import type */');
+        src = src.replace(/\bexport\s+type\s+/g, '/* export type */ ');
+
+        return src;
+      }
+
       function transformESModules(src: string): string {
+        // Fast path for large bundled files (>500KB)
+        if (src.length > 500000) {
+          return transformBundledESM(src);
+        }
+
+        src = stripShebang(src);
         // Normalize line endings to LF
         src = src.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
@@ -2791,7 +3092,7 @@ export const nodeCmd: Command = {
       const transformedCode = transformESModules(code);
       const wrappedCode = printResult ? `return (${transformedCode})` : transformedCode;
       const fn = new AsyncFunction(
-        'console', 'process', 'require', 'Buffer', '__filename', '__dirname', 'shiro', '__import_meta', 'module', 'exports',
+        'console', 'process', 'require', 'Buffer', '__filename', '__dirname', 'shiro', '__import_meta', 'module', 'exports', '__dynamic_import',
         wrappedCode
       );
 
@@ -2811,6 +3112,11 @@ export const nodeCmd: Command = {
       // Create require function for the entry script - must use entryDirname, not ctx.cwd
       const entryRequire = (moduleName: string) => requireModule(moduleName, entryDirname);
 
+      // Dynamic import() shim — used by transformBundledESM's import( → __dynamic_import( transform
+      const dynamicImport = async (moduleName: string) => {
+        return requireModule(moduleName, entryDirname);
+      };
+
       let result;
       console.log('[node] Starting main script execution...');
       console.log('[node] Entry script dirname:', entryDirname);
@@ -2823,7 +3129,7 @@ export const nodeCmd: Command = {
           shell: ctx.shell,
           env: ctx.env,
           cwd: ctx.cwd,
-        }, fakeImportMeta, fakeModule, fakeExports);
+        }, fakeImportMeta, fakeModule, fakeExports, dynamicImport);
         console.log('[node] Main script execution completed');
       } catch (e: any) {
         console.log('[node] Main script threw error:', e.message);
