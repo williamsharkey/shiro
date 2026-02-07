@@ -119,11 +119,19 @@ export class ShiroTerminal {
     `;
     document.body.appendChild(this.iframeContainer);
 
+    // Refit on window resize
     window.addEventListener('resize', () => {
       this.fitAddon.fit();
-      // Notify resize listeners (used by ink for layout recalculation)
       this.resizeCallbacks.forEach(cb => cb(this.term.cols, this.term.rows));
     });
+
+    // ResizeObserver catches container size changes that don't trigger window resize
+    // (e.g., dev tools opening/closing, CSS layout changes)
+    const resizeObserver = new ResizeObserver(() => {
+      this.fitAddon.fit();
+      this.resizeCallbacks.forEach(cb => cb(this.term.cols, this.term.rows));
+    });
+    resizeObserver.observe(container);
 
     this.term.onData((data: string) => this.handleInput(data));
   }

@@ -12,12 +12,16 @@ interface Env {
   ALLOWED_ORIGINS?: string;
 }
 
-// Headers to skip when proxying
+// Headers to skip when proxying (strip browser-specific headers so upstream
+// sees this as a server-to-server request, not a CORS browser request)
 const SKIP_HEADERS = new Set([
   'host', 'connection', 'keep-alive', 'proxy-connection',
   'transfer-encoding', 'upgrade', 'cf-connecting-ip',
   'cf-ipcountry', 'cf-ray', 'cf-visitor', 'x-forwarded-proto',
-  'x-real-ip', 'accept-encoding'
+  'x-real-ip', 'accept-encoding',
+  'origin', 'referer',
+  'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site', 'sec-fetch-user',
+  'anthropic-dangerous-direct-browser-access',
 ]);
 
 // Proxy targets

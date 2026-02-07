@@ -2,6 +2,104 @@ import { Command, CommandContext } from './index';
 import { virtualServer, VirtualRequest, VirtualResponse } from '../virtual-server';
 import { iframeServer } from '../iframe-server';
 
+// Synchronous SHA-256 implementation (Web Crypto is async-only, but Node's createHash is sync)
+function sha256sync(data: Uint8Array): Uint8Array {
+  const K: number[] = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+  ];
+  const rr = (v: number, n: number) => (v >>> n) | (v << (32 - n));
+  // Pre-processing: padding
+  const bitLen = data.length * 8;
+  const padLen = (((data.length + 8) >>> 6) + 1) << 6;
+  const padded = new Uint8Array(padLen);
+  padded.set(data);
+  padded[data.length] = 0x80;
+  const dv = new DataView(padded.buffer);
+  dv.setUint32(padLen - 4, bitLen, false);
+  // Process blocks
+  let [h0, h1, h2, h3, h4, h5, h6, h7] = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+  const w = new Int32Array(64);
+  for (let i = 0; i < padLen; i += 64) {
+    for (let j = 0; j < 16; j++) w[j] = dv.getInt32(i + j * 4, false);
+    for (let j = 16; j < 64; j++) {
+      const s0 = rr(w[j-15], 7) ^ rr(w[j-15], 18) ^ (w[j-15] >>> 3);
+      const s1 = rr(w[j-2], 17) ^ rr(w[j-2], 19) ^ (w[j-2] >>> 10);
+      w[j] = (w[j-16] + s0 + w[j-7] + s1) | 0;
+    }
+    let [a, b, c, d, e, f, g, h] = [h0, h1, h2, h3, h4, h5, h6, h7];
+    for (let j = 0; j < 64; j++) {
+      const S1 = rr(e, 6) ^ rr(e, 11) ^ rr(e, 25);
+      const ch = (e & f) ^ (~e & g);
+      const t1 = (h + S1 + ch + K[j] + w[j]) | 0;
+      const S0 = rr(a, 2) ^ rr(a, 13) ^ rr(a, 22);
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const t2 = (S0 + maj) | 0;
+      h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+    }
+    h0 = (h0 + a) | 0; h1 = (h1 + b) | 0; h2 = (h2 + c) | 0; h3 = (h3 + d) | 0;
+    h4 = (h4 + e) | 0; h5 = (h5 + f) | 0; h6 = (h6 + g) | 0; h7 = (h7 + h) | 0;
+  }
+  const out = new Uint8Array(32);
+  const odv = new DataView(out.buffer);
+  [h0, h1, h2, h3, h4, h5, h6, h7].forEach((v, i) => odv.setUint32(i * 4, v, false));
+  return out;
+}
+
+// Synchronous SHA-1 implementation
+function sha1sync(data: Uint8Array): Uint8Array {
+  const bitLen = data.length * 8;
+  const padLen = (((data.length + 8) >>> 6) + 1) << 6;
+  const padded = new Uint8Array(padLen);
+  padded.set(data);
+  padded[data.length] = 0x80;
+  const dv = new DataView(padded.buffer);
+  dv.setUint32(padLen - 4, bitLen, false);
+  let [h0, h1, h2, h3, h4] = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0];
+  const rl = (v: number, n: number) => (v << n) | (v >>> (32 - n));
+  const w = new Int32Array(80);
+  for (let i = 0; i < padLen; i += 64) {
+    for (let j = 0; j < 16; j++) w[j] = dv.getInt32(i + j * 4, false);
+    for (let j = 16; j < 80; j++) w[j] = rl(w[j-3] ^ w[j-8] ^ w[j-14] ^ w[j-16], 1);
+    let [a, b, c, d, e] = [h0, h1, h2, h3, h4];
+    for (let j = 0; j < 80; j++) {
+      let f: number, k: number;
+      if (j < 20) { f = (b & c) | (~b & d); k = 0x5A827999; }
+      else if (j < 40) { f = b ^ c ^ d; k = 0x6ED9EBA1; }
+      else if (j < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDC; }
+      else { f = b ^ c ^ d; k = 0xCA62C1D6; }
+      const t = (rl(a, 5) + f + e + k + w[j]) | 0;
+      e = d; d = c; c = rl(b, 30); b = a; a = t;
+    }
+    h0 = (h0 + a) | 0; h1 = (h1 + b) | 0; h2 = (h2 + c) | 0; h3 = (h3 + d) | 0; h4 = (h4 + e) | 0;
+  }
+  const out = new Uint8Array(20);
+  const odv = new DataView(out.buffer);
+  [h0, h1, h2, h3, h4].forEach((v, i) => odv.setUint32(i * 4, v, false));
+  return out;
+}
+
+// FNV-1a fallback for non-critical hashes (md5 etc.)
+function fnvHash(data: Uint8Array, len: number): Uint8Array {
+  let h0 = 0x811c9dc5 >>> 0, h1 = 0x6c62272e >>> 0;
+  for (let i = 0; i < data.length; i++) {
+    h0 = (h0 ^ data[i]) >>> 0; h0 = Math.imul(h0, 0x01000193) >>> 0;
+    h1 = (h1 ^ data[i]) >>> 0; h1 = Math.imul(h1, 0x01000193) >>> 0;
+  }
+  const result = new Uint8Array(len);
+  const dv = new DataView(result.buffer);
+  dv.setUint32(0, h0); dv.setUint32(4, h1);
+  dv.setUint32(8, h0 ^ 0xa5a5a5a5); dv.setUint32(12, h1 ^ 0x5a5a5a5a);
+  if (len > 16) { dv.setUint32(16, h0 ^ h1); for (let i = 20; i < len; i += 4) if (i + 3 < len) dv.setUint32(i, h0 + i); }
+  return result;
+}
+
 /**
  * js-eval: Execute JavaScript in the browser's JS VM.
  * This gives Claude Code (via Spirit) and users direct access to the DOM,
@@ -944,7 +1042,15 @@ export const nodeCmd: Command = {
                 }
               },
               renameSync: (oldP: string, newP: string) => {
-                ctx.fs.rename(ctx.fs.resolvePath(oldP, ctx.cwd), ctx.fs.resolvePath(newP, ctx.cwd)).catch(() => {});
+                const oldRes = ctx.fs.resolvePath(oldP, ctx.cwd);
+                const newRes = ctx.fs.resolvePath(newP, ctx.cwd);
+                // Update fileCache: move content from old path to new path
+                const content = fileCache.get(oldRes);
+                if (content !== undefined) {
+                  fileCache.set(newRes, content);
+                  fileCache.delete(oldRes);
+                }
+                ctx.fs.rename(oldRes, newRes).catch(() => {});
               },
               realpathSync: (p: string) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
@@ -1956,22 +2062,14 @@ export const nodeCmd: Command = {
                   return hashObj;
                 },
                 digest: (enc?: string) => {
-                  // Synchronous hash: use simple FNV-1a for sync path (Web Crypto is async)
                   const total = chunks.reduce((n, c) => n + c.length, 0);
                   const all = new Uint8Array(total);
                   let off = 0;
                   for (const c of chunks) { all.set(c, off); off += c.length; }
-                  // FNV-1a 128-bit hash (emulates 16 bytes for md5/sha-like output)
-                  let h0 = 0x811c9dc5 >>> 0, h1 = 0x6c62272e >>> 0;
-                  for (let i = 0; i < all.length; i++) {
-                    h0 = (h0 ^ all[i]) >>> 0; h0 = Math.imul(h0, 0x01000193) >>> 0;
-                    h1 = (h1 ^ all[i]) >>> 0; h1 = Math.imul(h1, 0x01000193) >>> 0;
-                  }
-                  const result = new Uint8Array(algo === 'md5' ? 16 : algo === 'sha1' ? 20 : 32);
-                  const dv = new DataView(result.buffer);
-                  dv.setUint32(0, h0); dv.setUint32(4, h1);
-                  dv.setUint32(8, h0 ^ 0xa5a5a5a5); dv.setUint32(12, h1 ^ 0x5a5a5a5a);
-                  if (result.length > 16) { dv.setUint32(16, h0 ^ h1); if (result.length > 20) { for (let i = 20; i < result.length; i += 4) dv.setUint32(i, h0 + i); } }
+                  // Real SHA-256 (synchronous implementation for PKCE etc.)
+                  const result = (algo === 'sha256' || algo === 'sha-256') ? sha256sync(all)
+                    : algo === 'sha1' || algo === 'sha-1' ? sha1sync(all)
+                    : fnvHash(all, algo === 'md5' ? 16 : 32);
                   if (enc === 'hex') return Array.from(result).map(b => b.toString(16).padStart(2, '0')).join('');
                   if (enc === 'base64' || enc === 'base64url') { let s = ''; for (let i = 0; i < result.length; i++) s += String.fromCharCode(result[i]); const b64 = btoa(s); return enc === 'base64url' ? b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') : b64; }
                   Object.setPrototypeOf(result, FakeBuffer.prototype);
@@ -3662,18 +3760,14 @@ export const nodeCmd: Command = {
         next();
       };
       (createExpressShim as any).static = (root: string) => {
-        console.log('[express.static] Registered for root:', root);
         return async (req: any, res: any, next: Function) => {
           if (req.method !== 'GET' && req.method !== 'HEAD') return next();
           const filePath = ctx.fs.resolvePath(root + req.path, ctx.cwd);
-          console.log('[express.static] Checking:', filePath, 'for request:', req.path);
           try {
             const stat = await ctx.fs.stat(filePath);
             if (!stat || stat.type !== 'file') {
-              console.log('[express.static] Not a file or not found:', filePath);
               return next();
             }
-            console.log('[express.static] Serving:', filePath);
             const content = await ctx.fs.readFile(filePath, 'utf8');
             const ext = filePath.split('.').pop() || '';
             const types: Record<string, string> = {
@@ -3684,7 +3778,6 @@ export const nodeCmd: Command = {
             res.type(types[ext] || 'application/octet-stream');
             res.send(content);
           } catch (err: any) {
-            console.log('[express.static] Error:', filePath, err.message);
             next();
           }
         };
@@ -3802,51 +3895,34 @@ export const nodeCmd: Command = {
 
       // better-sqlite3 shim using sql.js
       function createBetterSqlite3Shim() {
-        console.log('[better-sqlite3 shim] Creating shim');
-
         // Load sql.js from CDN - START LOADING IMMEDIATELY when shim is created
         async function loadSqlJs(): Promise<any> {
-          // Check if we're in a browser environment
           if (typeof window === 'undefined') {
             throw new Error('better-sqlite3 shim requires browser environment (sql.js WASM)');
           }
 
           if (!sqlJsPromise) {
-            console.log('[better-sqlite3 shim] Starting sql.js load...');
             sqlJsPromise = (async () => {
               try {
                 const initSqlJs = (window as any).initSqlJs;
                 if (initSqlJs) {
-                  console.log('[better-sqlite3 shim] initSqlJs already available, initializing...');
                   const SQL = await initSqlJs({
                     locateFile: (file: string) => `https://sql.js.org/dist/${file}`
                   });
-                  console.log('[better-sqlite3 shim] sql.js initialized successfully');
                   return SQL;
                 }
-                // Load the script if not already loaded
-                console.log('[better-sqlite3 shim] Loading sql-wasm.js script...');
                 await new Promise<void>((resolve, reject) => {
                   const script = document.createElement('script');
                   script.src = 'https://sql.js.org/dist/sql-wasm.js';
-                  script.onload = () => {
-                    console.log('[better-sqlite3 shim] sql-wasm.js script loaded');
-                    resolve();
-                  };
-                  script.onerror = (e) => {
-                    console.error('[better-sqlite3 shim] Failed to load sql-wasm.js:', e);
-                    reject(e);
-                  };
+                  script.onload = () => resolve();
+                  script.onerror = (e) => reject(e);
                   document.head.appendChild(script);
                 });
-                console.log('[better-sqlite3 shim] Initializing sql.js WASM...');
                 const SQL = await (window as any).initSqlJs({
                   locateFile: (file: string) => `https://sql.js.org/dist/${file}`
                 });
-                console.log('[better-sqlite3 shim] sql.js WASM initialized successfully');
                 return SQL;
               } catch (err) {
-                console.error('[better-sqlite3 shim] sql.js loading failed:', err);
                 throw err;
               }
             })();
@@ -3869,7 +3945,6 @@ export const nodeCmd: Command = {
           private _isReady = false;
 
           constructor(path: string, options?: any) {
-            console.log('[better-sqlite3 shim] new Database(' + path + ')');
             this.dbPath = ctx.fs.resolvePath(path, ctx.cwd);
             // Start initialization immediately in constructor
             // This allows sql.js loading to happen while other code runs
@@ -3877,46 +3952,31 @@ export const nodeCmd: Command = {
           }
 
           private async _init(): Promise<void> {
-            console.log('[better-sqlite3 shim] _init() called for', this.dbPath);
             if (this._isReady) return;
 
             try {
-              console.log('[better-sqlite3 shim] Waiting for sql.js...');
-              // Use the early-loaded promise so sql.js may already be ready
               this.SQL = await earlyLoadPromise;
-              console.log('[better-sqlite3 shim] sql.js ready');
 
-              // Check if we have this database cached
               if (sqliteDatabases.has(this.dbPath)) {
                 this.db = sqliteDatabases.get(this.dbPath);
                 this._isReady = true;
-                console.log('[better-sqlite3 shim] Using cached database');
                 return;
               }
 
-              // Try to load from virtual filesystem
               try {
-                console.log('[better-sqlite3 shim] Loading database from:', this.dbPath);
                 const data = await ctx.fs.readFile(this.dbPath);
                 if (data instanceof Uint8Array) {
                   this.db = new this.SQL.Database(data);
-                  console.log('[better-sqlite3 shim] Loaded existing database');
                 } else {
-                  // File exists but is empty or text - create new
                   this.db = new this.SQL.Database();
-                  console.log('[better-sqlite3 shim] Created new database (file was empty/text)');
                 }
               } catch {
-                // File doesn't exist - create new database
                 this.db = new this.SQL.Database();
-                console.log('[better-sqlite3 shim] Created new database (file not found)');
               }
 
               sqliteDatabases.set(this.dbPath, this.db);
               this._isReady = true;
-              console.log('[better-sqlite3 shim] Database ready:', this.dbPath);
             } catch (err) {
-              console.error('[better-sqlite3 shim] _init failed:', err);
               throw err;
             }
           }
@@ -4942,9 +5002,14 @@ export const nodeCmd: Command = {
         }
         return u;
       };
+      // Block telemetry/analytics URLs that cause CORS errors
+      const blockedUrls = ['datadoghq.com', 'sentry.io', '/api/event_logging'];
+      const isBlocked = (u: string) => blockedUrls.some(b => u.includes(b));
+
       if (corsProxyOrigin) {
         globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
           let url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+          if (isBlocked(url)) return Promise.resolve(new Response('{}', { status: 200 }));
           const rewritten = rewriteUrl(url);
           if (rewritten !== url) {
             if (typeof input === 'string') input = rewritten;
@@ -4956,17 +5021,37 @@ export const nodeCmd: Command = {
         if (_origXHR) {
           const unsafeHeaders = new Set(['user-agent','host','content-length','connection','accept-encoding','accept-charset','referer','origin','cookie','te','upgrade','via','transfer-encoding','proxy-authorization','proxy-connection','sec-fetch-dest','sec-fetch-mode','sec-fetch-site','sec-fetch-user']);
           (globalThis as any).XMLHttpRequest = class ProxiedXHR extends _origXHR {
+            _blocked = false;
             open(method: string, url: string | URL, ...rest: any[]) {
               const u = typeof url === 'string' ? url : url.toString();
+              if (isBlocked(u)) { this._blocked = true; return; }
               return super.open(method, rewriteUrl(u), ...(rest as [boolean, string?, string?]));
             }
             setRequestHeader(name: string, value: string) {
-              if (unsafeHeaders.has(name.toLowerCase())) return; // silently drop
+              if (this._blocked) return;
+              if (unsafeHeaders.has(name.toLowerCase())) return;
               return super.setRequestHeader(name, value);
+            }
+            send(body?: any) {
+              if (this._blocked) {
+                // Simulate successful empty response
+                Object.defineProperty(this, 'status', { value: 200 });
+                Object.defineProperty(this, 'responseText', { value: '{}' });
+                Object.defineProperty(this, 'readyState', { value: 4 });
+                setTimeout(() => this.dispatchEvent(new Event('load')), 0);
+                return;
+              }
+              return super.send(body);
             }
           };
         }
       }
+
+      // Polyfill setImmediate/clearImmediate (Node.js globals not available in browsers)
+      const _origSetImmediate = (globalThis as any).setImmediate;
+      const _origClearImmediate = (globalThis as any).clearImmediate;
+      (globalThis as any).setImmediate = (fn: Function, ...args: any[]) => setTimeout(fn, 0, ...args);
+      (globalThis as any).clearImmediate = (id: any) => clearTimeout(id);
 
       // Timeout for the main script execution. If the script's main function hangs
       // (e.g., CLI async setup), this kills it. The deferred exit wait (below) handles
@@ -5057,9 +5142,11 @@ export const nodeCmd: Command = {
       if (typeof window !== 'undefined') {
         setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
       }
-      // Restore original fetch/XHR
+      // Restore original fetch/XHR/globals
       globalThis.fetch = _origFetch;
       if (_origXHR) (globalThis as any).XMLHttpRequest = _origXHR;
+      if (_origSetImmediate) (globalThis as any).setImmediate = _origSetImmediate; else delete (globalThis as any).setImmediate;
+      if (_origClearImmediate) (globalThis as any).clearImmediate = _origClearImmediate; else delete (globalThis as any).clearImmediate;
 
       return exitCode;
     } catch (e: any) {
@@ -5069,9 +5156,11 @@ export const nodeCmd: Command = {
       if (typeof window !== 'undefined') {
         setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
       }
-      // Restore original fetch/XHR
+      // Restore original fetch/XHR/globals
       globalThis.fetch = _origFetch;
       if (_origXHR) (globalThis as any).XMLHttpRequest = _origXHR;
+      delete (globalThis as any).setImmediate;
+      delete (globalThis as any).clearImmediate;
       ctx.stderr += `${e.stack || e.message}\n`;
       return 1;
     }

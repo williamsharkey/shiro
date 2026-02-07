@@ -600,26 +600,7 @@ export const openCmd: Command = {
       return 1;
     }
     if (typeof window !== 'undefined') {
-      try {
-        const parsed = new URL(url);
-        // OAuth interception: rewrite redirect_uri from localhost to shiro.computer
-        if (parsed.searchParams.has('redirect_uri')) {
-          const redirectUri = parsed.searchParams.get('redirect_uri')!;
-          try {
-            const redir = new URL(redirectUri);
-            if (redir.hostname === 'localhost' || redir.hostname === '127.0.0.1') {
-              const port = redir.port;
-              const newRedirectUri = `${window.location.origin}/oauth/callback?port=${port}`;
-              parsed.searchParams.set('redirect_uri', newRedirectUri);
-              window.open(parsed.toString(), '_blank', 'width=600,height=700');
-              return 0;
-            }
-          } catch {}
-        }
-        window.open(url, '_blank');
-      } catch {
-        window.open(url, '_blank');
-      }
+      window.open(url, '_blank');
     }
     return 0;
   },
