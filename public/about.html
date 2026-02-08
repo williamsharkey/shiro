@@ -3,556 +3,756 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Shiro &mdash; A Unix in Your Browser</title>
-  <meta name="description" content="Shiro is a browser-native Unix development environment. 152 commands, git, npm, esbuild, vi &mdash; no server required.">
+  <title>What Shiro Is &mdash; shiro.computer</title>
+  <meta name="description" content="Shiro is a browser-native Unix shell with about 150 commands, persistent files, and pipes that work. Here is what it actually does, with demos you can run.">
+  <link rel="stylesheet" href="tufte.css">
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-
-    :root {
-      --bg: #0a0a0a;
-      --surface: #111;
-      --border: #222;
-      --text: #e8e8e8;
-      --muted: #666;
-      --accent: #00d4ff;
-      --accent-dim: #00d4ff22;
-    }
-
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      -webkit-font-smoothing: antialiased;
+      background: #0a0a0a;
+      color: #ddd;
     }
 
-    /* Navigation */
-    nav {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      z-index: 100;
-      padding: 16px 32px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      background: rgba(10, 10, 10, 0.8);
-      border-bottom: 1px solid var(--border);
+    a:link, a:visited {
+      color: #7eb8c9;
+      text-decoration-color: #7eb8c944;
     }
 
-    nav .logo {
-      font-size: 18px;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-      color: var(--text);
-      text-decoration: none;
+    a:hover {
+      text-decoration-color: #7eb8c9;
     }
 
-    nav .logo span {
-      color: var(--accent);
+    h1, h2, h3 {
+      color: #f0f0f0;
     }
 
-    nav .links {
-      display: flex;
-      gap: 28px;
-      align-items: center;
-    }
-
-    nav .links a {
-      color: var(--muted);
-      text-decoration: none;
-      font-size: 14px;
-      font-weight: 500;
-      transition: color 0.2s;
-    }
-
-    nav .links a:hover {
-      color: var(--text);
-    }
-
-    /* Hero */
-    .hero {
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      padding: 0 max(32px, 8vw);
-      max-width: 1200px;
-      margin: 0 auto;
-    }
-
-    .hero h1 {
-      font-size: clamp(3rem, 7vw, 5.5rem);
-      font-weight: 700;
-      letter-spacing: -0.03em;
-      line-height: 1.05;
-      margin-bottom: 24px;
-    }
-
-    .hero h1 em {
-      font-style: normal;
-      color: var(--accent);
-    }
-
-    .hero .tagline {
-      font-size: clamp(1.1rem, 2vw, 1.35rem);
-      color: var(--muted);
-      line-height: 1.7;
-      max-width: 640px;
-      margin-bottom: 40px;
-    }
-
-    .hero .ctas {
-      display: flex;
-      gap: 16px;
-      flex-wrap: wrap;
-    }
-
-    .btn-primary {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 12px 28px;
-      background: var(--text);
-      color: var(--bg);
-      border: none;
-      border-radius: 8px;
-      font-size: 15px;
-      font-weight: 600;
-      text-decoration: none;
-      cursor: pointer;
-      transition: opacity 0.2s;
-    }
-
-    .btn-primary:hover { opacity: 0.88; }
-
-    .btn-secondary {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 12px 28px;
-      background: transparent;
-      color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      font-size: 15px;
-      font-weight: 500;
-      text-decoration: none;
-      cursor: pointer;
-      transition: border-color 0.2s;
-    }
-
-    .btn-secondary:hover { border-color: var(--muted); }
-
-    .scroll-hint {
-      position: absolute;
-      bottom: 32px;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 24px;
-      height: 40px;
-      border: 2px solid var(--border);
-      border-radius: 12px;
-      display: flex;
-      justify-content: center;
-    }
-
-    .scroll-hint::after {
-      content: '';
-      width: 4px;
-      height: 8px;
-      background: var(--muted);
-      border-radius: 2px;
-      margin-top: 8px;
-      animation: scroll-bounce 2s infinite;
-    }
-
-    @keyframes scroll-bounce {
-      0%, 100% { transform: translateY(0); opacity: 1; }
-      50% { transform: translateY(10px); opacity: 0.3; }
-    }
-
-    /* Terminal Preview */
-    .terminal-section {
-      padding: 80px max(32px, 8vw);
-      max-width: 1200px;
-      margin: 0 auto;
-    }
-
-    .terminal-window {
-      background: #111;
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      overflow: hidden;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-    }
-
-    .terminal-titlebar {
-      display: flex;
-      align-items: center;
-      padding: 12px 16px;
-      background: #1a1a1a;
-      border-bottom: 1px solid var(--border);
-      gap: 8px;
-    }
-
-    .terminal-dot {
-      width: 12px;
-      height: 12px;
-      border-radius: 50%;
-    }
-
-    .terminal-dot.red { background: #ff5f57; }
-    .terminal-dot.yellow { background: #febc2e; }
-    .terminal-dot.green { background: #28c840; }
-
-    .terminal-title {
-      flex: 1;
-      text-align: center;
-      font-size: 12px;
-      color: var(--muted);
-      font-family: "SF Mono", "Fira Code", Menlo, monospace;
-    }
-
-    .terminal-body {
-      padding: 20px 24px;
-      font-family: "SF Mono", "Fira Code", "Cascadia Code", Menlo, monospace;
-      font-size: 14px;
-      line-height: 1.7;
-      color: #e0e0e0;
-      min-height: 280px;
-    }
-
-    .terminal-body .prompt {
-      color: var(--accent);
-    }
-
-    .terminal-body .cmd {
-      color: #e0e0e0;
-    }
-
-    .terminal-body .output {
+    .sidenote, .marginnote {
       color: #888;
     }
 
-    .terminal-body .green { color: #3fb950; }
-    .terminal-body .yellow { color: #d29922; }
-    .terminal-body .dim { color: #555; }
-
-    /* Stats */
-    .stats {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 1px;
-      background: var(--border);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      overflow: hidden;
-      margin-top: 48px;
+    .sidenote a, .marginnote a {
+      color: #888;
     }
 
-    .stat {
-      background: var(--surface);
-      padding: 32px 24px;
-      text-align: center;
+    code, pre > code {
+      font-family: "SF Mono", "Fira Code", Consolas, "Liberation Mono", Menlo, monospace;
+      color: #ccc;
+      background: #161616;
+      padding: 1px 4px;
+      border-radius: 3px;
     }
 
-    .stat .number {
-      font-size: 2.4rem;
-      font-weight: 700;
-      letter-spacing: -0.02em;
-      color: var(--text);
+    pre > code {
+      padding: 16px 20px;
+      border-radius: 8px;
+      border: 1px solid #222;
+      background: #111;
     }
 
-    .stat .label {
-      font-size: 13px;
-      color: var(--muted);
-      margin-top: 4px;
-      font-weight: 500;
+    hr {
+      border-top-color: #333;
     }
 
-    /* Ecosystem */
-    .ecosystem {
-      padding: 120px max(32px, 8vw) 80px;
-      max-width: 1200px;
-      margin: 0 auto;
-    }
-
-    .ecosystem h2 {
-      font-size: clamp(2rem, 4vw, 3rem);
-      font-weight: 700;
-      letter-spacing: -0.02em;
-      margin-bottom: 16px;
-    }
-
-    .ecosystem .subtitle {
-      font-size: 1.15rem;
-      color: var(--muted);
-      margin-bottom: 48px;
-      max-width: 560px;
-      line-height: 1.6;
-    }
-
-    .repo-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-      gap: 16px;
-    }
-
-    .repo-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 24px;
+    .back-link {
+      display: inline-block;
+      margin-top: 2rem;
+      font-size: 0.9rem;
+      color: #666;
       text-decoration: none;
-      color: var(--text);
-      transition: border-color 0.2s, transform 0.2s;
+    }
+    .back-link:hover { color: #999; }
+
+    .byline {
+      font-size: 1.1rem;
+      color: #666;
+      margin-top: 0.5rem;
     }
 
-    .repo-card:hover {
-      border-color: #333;
-      transform: translateY(-2px);
+    span.newthought {
+      color: #f0f0f0;
     }
 
-    .repo-card h3 {
-      font-size: 16px;
-      font-weight: 600;
-      margin-bottom: 8px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
+    figcaption {
+      color: #666;
     }
 
-    .repo-card h3 .tag {
-      font-size: 10px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      padding: 2px 8px;
-      border-radius: 4px;
-      background: var(--accent-dim);
-      color: var(--accent);
+    div.epigraph > blockquote > p {
+      color: #999;
     }
 
-    .repo-card p {
-      font-size: 14px;
-      color: var(--muted);
+    div.epigraph > blockquote > footer {
+      color: #666;
+    }
+
+    /* Demo terminal blocks */
+    .shiro-demo {
+      width: 55%;
+      margin: 2em 0;
+      border: 1px solid #222;
+      border-radius: 6px;
+      overflow: hidden;
+      background: #0d1117;
+      font-family: "SF Mono", "Fira Code", Consolas, monospace;
+      font-size: 0.85rem;
       line-height: 1.5;
     }
 
-    .repo-card .detail {
-      font-size: 12px;
-      color: #444;
-      margin-top: 12px;
-      font-family: "SF Mono", Menlo, monospace;
-    }
-
-    /* Article CTA */
-    .article-cta {
-      padding: 120px max(32px, 8vw);
-      max-width: 1200px;
-      margin: 0 auto;
-      text-align: center;
-    }
-
-    .article-cta h2 {
-      font-size: clamp(2rem, 4vw, 3rem);
-      font-weight: 700;
-      letter-spacing: -0.02em;
-      margin-bottom: 16px;
-    }
-
-    .article-cta p {
-      font-size: 1.15rem;
-      color: var(--muted);
-      margin-bottom: 32px;
-      line-height: 1.6;
-    }
-
-    /* Footer */
-    footer {
-      padding: 48px max(32px, 8vw);
-      max-width: 1200px;
-      margin: 0 auto;
-      border-top: 1px solid var(--border);
+    .demo-chrome {
       display: flex;
-      justify-content: space-between;
       align-items: center;
+      padding: 6px 12px;
+      background: #161b22;
+      border-bottom: 1px solid #222;
+      gap: 8px;
     }
 
-    footer .copy {
-      font-size: 13px;
-      color: var(--muted);
+    .demo-chrome .demo-title {
+      flex: 1;
+      font-size: 0.7rem;
+      color: #484f58;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
     }
 
-    footer .footer-links {
-      display: flex;
-      gap: 24px;
+    .demo-chrome .demo-btn {
+      padding: 3px 12px;
+      font-size: 0.7rem;
+      font-family: inherit;
+      background: #21262d;
+      color: #8b949e;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
     }
 
-    footer .footer-links a {
-      font-size: 13px;
-      color: var(--muted);
-      text-decoration: none;
-      transition: color 0.2s;
+    .demo-chrome .demo-btn:hover {
+      background: #30363d;
+      color: #c9d1d9;
     }
 
-    footer .footer-links a:hover { color: var(--text); }
+    .demo-chrome .demo-btn.running {
+      color: #58a6ff;
+      border-color: #58a6ff44;
+    }
 
-    @media (max-width: 768px) {
-      nav { padding: 12px 20px; }
-      .hero { padding: 0 20px; }
-      .stats { grid-template-columns: repeat(2, 1fr); }
-      .terminal-section { padding: 40px 20px; }
-      .ecosystem { padding: 60px 20px 40px; }
-      .article-cta { padding: 60px 20px; }
-      footer { flex-direction: column; gap: 16px; text-align: center; }
+    .demo-chrome .demo-btn.done {
+      color: #3fb950;
+      border-color: #3fb95044;
+    }
+
+    .demo-static {
+      padding: 12px 16px;
+      color: #8b949e;
+    }
+
+    .demo-static .prompt {
+      color: #58a6ff;
+    }
+
+    .demo-static .output {
+      color: #c9d1d9;
+    }
+
+    .demo-frame {
+      width: 100%;
+      height: 320px;
+      border: none;
+      display: none;
+    }
+
+    /* Test badge */
+    .test-badge {
+      display: inline-block;
+      font-size: 0.65rem;
+      font-family: "SF Mono", monospace;
+      padding: 1px 6px;
+      border-radius: 3px;
+      background: #1a2e1a;
+      color: #3fb950;
+      border: 1px solid #3fb95033;
+      vertical-align: middle;
+      margin-left: 6px;
+      letter-spacing: 0.03em;
+    }
+
+    /* Limitation list */
+    .limitations {
+      width: 55%;
+    }
+
+    .limitations li {
+      color: #999;
+      margin-bottom: 0.5rem;
+    }
+
+    /* Stats table */
+    .stats-table {
+      width: 55%;
+      border-collapse: collapse;
+      margin: 1.4rem 0;
+      font-size: 1.1rem;
+    }
+
+    .stats-table td {
+      padding: 6px 0;
+      border-bottom: 1px solid #222;
+      color: #aaa;
+    }
+
+    .stats-table td:first-child {
+      font-variant: tabular-nums;
+      color: #f0f0f0;
+      padding-right: 1.5em;
+      font-weight: 400;
+    }
+
+    @media (max-width: 760px) {
+      .shiro-demo { width: 100%; }
+      .limitations { width: 100%; }
+      .stats-table { width: 100%; }
     }
   </style>
 </head>
 <body>
-  <nav>
-    <a href="/" class="logo"><span>shiro</span>.computer</a>
-    <div class="links">
-      <a href="/article">Article</a>
-      <a href="https://shiro.computer" target="_blank">Try It</a>
-      <a href="https://github.com/williamsharkey/shiro" target="_blank">GitHub</a>
-    </div>
-  </nav>
-
-  <section class="hero">
-    <h1>A Unix in<br>your <em>browser tab</em>.</h1>
-    <p class="tagline">
-      152 commands. Git. npm. A TypeScript compiler. vi. All running in IndexedDB,
-      with zero backend. Open a tab and start building.
-    </p>
-    <div class="ctas">
-      <a href="https://shiro.computer" class="btn-primary" target="_blank">Open Shiro &rarr;</a>
-      <a href="/article" class="btn-secondary">Read the deep dive</a>
-    </div>
-    <div class="scroll-hint"></div>
-  </section>
-
-  <section class="terminal-section">
-    <div class="terminal-window">
-      <div class="terminal-titlebar">
-        <div class="terminal-dot red"></div>
-        <div class="terminal-dot yellow"></div>
-        <div class="terminal-dot green"></div>
-        <span class="terminal-title">shiro &mdash; ~/projects</span>
-      </div>
-      <div class="terminal-body" id="terminal-demo">
-        <div><span class="prompt">~ $</span> <span class="cmd">npm init -y && npm install leftpad</span></div>
-        <div class="output">Wrote to /home/user/package.json</div>
-        <div class="output">+ leftpad@0.0.1 (1 dependency)</div>
-        <div></div>
-        <div><span class="prompt">~ $</span> <span class="cmd">cat &gt; index.ts &lt;&lt;'EOF'</span></div>
-        <div class="dim">import leftpad from "leftpad";</div>
-        <div class="dim">console.log(leftpad("hello", 10));</div>
-        <div class="dim">EOF</div>
-        <div></div>
-        <div><span class="prompt">~ $</span> <span class="cmd">build index.ts -o bundle.js && node bundle.js</span></div>
-        <div class="output green">     hello</div>
-        <div></div>
-        <div><span class="prompt">~ $</span> <span class="cmd">git init && git add -A && git commit -m "first"</span></div>
-        <div class="output yellow">[main (root-commit) a3f1c2d] first</div>
-        <div class="output"> 3 files changed, 42 insertions(+)</div>
-        <div></div>
-        <div><span class="prompt">~ $</span> <span class="cmd" id="cursor-line">ls | wc -l<span id="cursor" style="display:inline-block;width:8px;height:16px;background:var(--accent);vertical-align:text-bottom;animation:blink 1s step-end infinite;margin-left:1px;"></span></span></div>
-        <div class="output">4</div>
-      </div>
-    </div>
-
-    <div class="stats">
-      <div class="stat">
-        <div class="number">152</div>
-        <div class="label">Unix commands</div>
-      </div>
-      <div class="stat">
-        <div class="number">~1MB</div>
-        <div class="label">Bundle size</div>
-      </div>
-      <div class="stat">
-        <div class="number">0</div>
-        <div class="label">Backend servers</div>
-      </div>
-      <div class="stat">
-        <div class="number">7</div>
-        <div class="label">Repos in ecosystem</div>
-      </div>
-    </div>
-  </section>
-
-  <section class="ecosystem">
-    <h2>The ecosystem</h2>
+  <a href="/" class="back-link">&larr; shiro.computer</a>
+  <article>
+    <h1>What Shiro Is</h1>
     <p class="subtitle">
-      One person, seven repositories, a complete browser-native development platform
-      with AI agents that can self-modify their own environment.
+      A browser-native Unix shell. About 150 commands, persistent files, pipes that work.
+      Some things are polished. Many things are not.
     </p>
-    <div class="repo-grid">
-      <a href="https://github.com/williamsharkey/shiro" class="repo-card" target="_blank">
-        <h3>shiro <span class="tag">core</span></h3>
-        <p>TypeScript browser OS with Vite build. 78+ built-in commands, npm, git, vi/nano, esbuild-wasm bundler.</p>
-        <div class="detail">TypeScript &middot; ~7,400 LOC</div>
-      </a>
-      <a href="https://github.com/williamsharkey/foam" class="repo-card" target="_blank">
-        <h3>foam</h3>
-        <p>Plain JS sister project. Zero build step &mdash; just open index.html. Proves the concept works without a bundler.</p>
-        <div class="detail">JavaScript &middot; ES modules</div>
-      </a>
-      <a href="https://github.com/williamsharkey/spirit" class="repo-card" target="_blank">
-        <h3>spirit <span class="tag">AI</span></h3>
-        <p>Claude Code agent library. OSProvider abstraction makes AI agents portable across browser OS environments.</p>
-        <div class="detail">TypeScript &middot; Multi-provider</div>
-      </a>
-      <a href="https://github.com/williamsharkey/fluffycoreutils" class="repo-card" target="_blank">
-        <h3>fluffycoreutils</h3>
-        <p>126 Unix commands in pure TypeScript. FluffyFS interface &mdash; 10 methods to abstract any filesystem.</p>
-        <div class="detail">TypeScript &middot; 0 dependencies</div>
-      </a>
-      <a href="https://github.com/williamsharkey/nimbus" class="repo-card" target="_blank">
-        <h3>nimbus</h3>
-        <p>Multi-agent orchestrator dashboard. Manages concurrent Claude Code workers with live browser previews.</p>
-        <div class="detail">TypeScript &middot; node-pty + xterm.js</div>
-      </a>
-      <a href="https://github.com/williamsharkey/windwalker" class="repo-card" target="_blank">
-        <h3>windwalker</h3>
-        <p>Puppeteer-based test suite. 10 test levels from boot to self-build. Ensures Foam and Shiro behave identically.</p>
-        <div class="detail">JavaScript &middot; Puppeteer</div>
-      </a>
-      <a href="https://github.com/williamsharkey/skyeyes" class="repo-card" target="_blank">
-        <h3>skyeyes</h3>
-        <p>Remote browser inspection bridge. Execute JS in any browser tab from the command line.</p>
-        <div class="detail">JavaScript &middot; WebSocket</div>
-      </a>
-    </div>
-  </section>
+    <p class="byline">William Sharkey &middot; February 2026</p>
 
-  <section class="article-cta">
-    <h2>How browsers became<br>powerful enough</h2>
-    <p>
-      WebAssembly, IndexedDB, ES modules. The deep technical story of building<br>
-      a self-compiling Unix that runs entirely in a browser tab.
-    </p>
-    <a href="/article" class="btn-primary">Read the article &rarr;</a>
-  </section>
+    <section>
+      <p>
+        <span class="newthought">Shiro is a Unix-like shell</span> that runs in a browser tab.
+        It stores files in IndexedDB, parses commands in JavaScript, and implements about 150
+        Unix utilities in TypeScript. There is no backend server for computation &mdash; the
+        browser's JavaScript engine does all the work.
+      </p>
 
-  <footer>
-    <span class="copy">William Sharkey &middot; 2026</span>
-    <div class="footer-links">
-      <a href="https://williamsharkey.com">williamsharkey.com</a>
-      <a href="https://github.com/williamsharkey">GitHub</a>
-    </div>
-  </footer>
+      <p>
+        The honest summary: basic file operations, pipes, text processing, and a JavaScript runtime
+        work well. Git and npm work but depend on network proxies. Many things a real Unix can do,
+        Shiro cannot. What follows is a precise accounting of what works, demonstrated with
+        commands you can run yourself.
+        <label for="sn-verify" class="margin-toggle sidenote-number"></label>
+        <input type="checkbox" id="sn-verify" class="margin-toggle">
+        <span class="sidenote">
+          Every demo on this page has a corresponding test in
+          <a href="https://github.com/williamsharkey/fluffycoreutils">fluffycoreutils</a>
+          that runs the same commands and verifies the output. Click &ldquo;Run&rdquo; on
+          any demo to execute it in a live Shiro instance.
+        </span>
+      </p>
 
-  <style>
-    @keyframes blink {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0; }
+      <table class="stats-table">
+        <tr><td>~127</td><td>commands from fluffycoreutils (shared library, pure TypeScript)</td></tr>
+        <tr><td>~25</td><td>Shiro-specific commands (git, npm, node, build, vi, serve, &hellip;)</td></tr>
+        <tr><td>~21,000</td><td>lines of TypeScript across the project</td></tr>
+        <tr><td>~338 KB</td><td>gzipped bundle size (single HTML file, all JS/CSS inlined)</td></tr>
+        <tr><td>0</td><td>runtime server dependencies (CORS proxy needed for git only)</td></tr>
+      </table>
+    </section>
+
+    <section>
+      <h2>Files persist in IndexedDB</h2>
+
+      <p>
+        <span class="newthought">The filesystem</span> stores every file as a record in an
+        IndexedDB object store, keyed by absolute path. Each record holds the content as a
+        <code>Uint8Array</code>, the type (file, directory, or symlink), Unix permissions, and
+        timestamps. An in-memory <code>Map</code> cache sits in front of IndexedDB for fast reads.
+      </p>
+
+      <div class="shiro-demo" id="demo-fs">
+        <div class="demo-chrome">
+          <span class="demo-title">demo &mdash; filesystem</span>
+          <span class="test-badge">tested</span>
+          <button class="demo-btn" onclick="runDemo('demo-fs')">Run</button>
+        </div>
+        <div class="demo-static">
+          <div><span class="prompt">~ $</span> mkdir -p /tmp/about-demo</div>
+          <div><span class="prompt">~ $</span> echo "persistent data" > /tmp/about-demo/file.txt</div>
+          <div><span class="prompt">~ $</span> cat /tmp/about-demo/file.txt</div>
+          <div class="output">persistent data</div>
+          <div><span class="prompt">~ $</span> wc -c /tmp/about-demo/file.txt</div>
+          <div class="output">16 /tmp/about-demo/file.txt</div>
+        </div>
+        <iframe class="demo-frame" data-src="/"></iframe>
+      </div>
+
+      <p>
+        Files survive page reloads and browser restarts. The cost: IndexedDB writes take 1&ndash;5ms
+        each (fast enough for interactive use, slow for bulk operations). There is no multi-tab
+        coordination &mdash; one tab owns the database. Browser storage quotas apply, typically a few
+        hundred megabytes before the browser asks permission.
+        <label for="sn-idb" class="margin-toggle sidenote-number"></label>
+        <input type="checkbox" id="sn-idb" class="margin-toggle">
+        <span class="sidenote">
+          The design draws from <a href="https://github.com/nicolo-ribaudo/idb-keyval">idb-keyval</a>
+          and <a href="https://github.com/nicolo-ribaudo/lightning-fs">lightning-fs</a>.
+          Lightning-fs uses a 500ms mutex for multi-tab safety. Shiro simplifies this by assuming
+          a single-tab model.
+        </span>
+      </p>
+    </section>
+
+    <section>
+      <h2>Pipes and redirects work</h2>
+
+      <p>
+        <span class="newthought">The shell parser</span> is about 1,200 lines of hand-written TypeScript.
+        It handles pipes (<code>|</code>), redirects (<code>&gt;</code>, <code>&gt;&gt;</code>,
+        <code>&lt;</code>), compound commands (<code>&amp;&amp;</code>, <code>||</code>, <code>;</code>),
+        environment variables (<code>$VAR</code>, <code>${VAR}</code>, <code>$?</code>),
+        quoting, heredocs, and basic control structures (<code>if</code>/<code>while</code>/<code>for</code>/<code>case</code>).
+      </p>
+
+      <div class="shiro-demo" id="demo-pipes">
+        <div class="demo-chrome">
+          <span class="demo-title">demo &mdash; pipes</span>
+          <span class="test-badge">tested</span>
+          <button class="demo-btn" onclick="runDemo('demo-pipes')">Run</button>
+        </div>
+        <div class="demo-static">
+          <div><span class="prompt">~ $</span> printf 'cherry\napple\nbanana\n' | sort</div>
+          <div class="output">apple</div>
+          <div class="output">banana</div>
+          <div class="output">cherry</div>
+        </div>
+        <iframe class="demo-frame" data-src="/"></iframe>
+      </div>
+
+      <p>
+        The parser handles the common 80% well. It does not handle all of bash's edge cases:
+        process substitution is incomplete, job control (<code>&amp;</code>, <code>fg</code>, <code>bg</code>)
+        is minimal, there is no signal handling, and some quoting interactions with nested expansion
+        can produce wrong results.
+      </p>
+    </section>
+
+    <section>
+      <h2>Text processing</h2>
+
+      <p>
+        <span class="newthought">grep, sed, awk, sort, uniq, cut, wc, head, tail, tr</span> and about
+        a hundred other commands come from
+        <a href="https://github.com/williamsharkey/fluffycoreutils">fluffycoreutils</a>,
+        a shared TypeScript library with zero dependencies. Every command is implemented against a
+        10-method filesystem interface called <code>FluffyFS</code>. The same library runs in both
+        Shiro and its sister project <a href="https://github.com/williamsharkey/foam">Foam</a>.
+      </p>
+
+      <div class="shiro-demo" id="demo-grep">
+        <div class="demo-chrome">
+          <span class="demo-title">demo &mdash; grep &amp; wc</span>
+          <span class="test-badge">tested</span>
+          <button class="demo-btn" onclick="runDemo('demo-grep')">Run</button>
+        </div>
+        <div class="demo-static">
+          <div><span class="prompt">~ $</span> printf 'error: disk full\ninfo: started\nerror: timeout\ninfo: stopped\n' | grep error | wc -l</div>
+          <div class="output">2</div>
+        </div>
+        <iframe class="demo-frame" data-src="/"></iframe>
+      </div>
+
+      <div class="shiro-demo" id="demo-awk">
+        <div class="demo-chrome">
+          <span class="demo-title">demo &mdash; awk</span>
+          <span class="test-badge">tested</span>
+          <button class="demo-btn" onclick="runDemo('demo-awk')">Run</button>
+        </div>
+        <div class="demo-static">
+          <div><span class="prompt">~ $</span> printf 'alice 90\nbob 85\ncarol 95\n' | awk '{s+=$2} END {printf "avg: %.0f\n", s/NR}'</div>
+          <div class="output">avg: 90</div>
+        </div>
+        <iframe class="demo-frame" data-src="/"></iframe>
+      </div>
+
+      <div class="shiro-demo" id="demo-sed">
+        <div class="demo-chrome">
+          <span class="demo-title">demo &mdash; sed</span>
+          <span class="test-badge">tested</span>
+          <button class="demo-btn" onclick="runDemo('demo-sed')">Run</button>
+        </div>
+        <div class="demo-static">
+          <div><span class="prompt">~ $</span> echo "Hello World" | sed 's/World/Browser/'</div>
+          <div class="output">Hello Browser</div>
+        </div>
+        <iframe class="demo-frame" data-src="/"></iframe>
+      </div>
+
+      <div class="shiro-demo" id="demo-uniq">
+        <div class="demo-chrome">
+          <span class="demo-title">demo &mdash; sort | uniq</span>
+          <span class="test-badge">tested</span>
+          <button class="demo-btn" onclick="runDemo('demo-uniq')">Run</button>
+        </div>
+        <div class="demo-static">
+          <div><span class="prompt">~ $</span> printf 'banana\napple\napple\ncherry\nbanana\n' | sort | uniq</div>
+          <div class="output">apple</div>
+          <div class="output">banana</div>
+          <div class="output">cherry</div>
+        </div>
+        <iframe class="demo-frame" data-src="/"></iframe>
+      </div>
+
+      <p>
+        These are not complete GNU implementations. <code>awk</code> has field splitting,
+        pattern-action rules, BEGIN/END blocks, and built-in string functions, but does not implement
+        all of POSIX awk. <code>sed</code> handles <code>s/pattern/replacement/flags</code> but
+        does not handle hold space or multi-address ranges.
+        <code>grep</code> supports <code>-i</code>, <code>-v</code>, <code>-n</code>,
+        <code>-c</code>, <code>-l</code>, <code>-r</code>. They handle the common cases.
+        <label for="sn-fluffyfs" class="margin-toggle sidenote-number"></label>
+        <input type="checkbox" id="sn-fluffyfs" class="margin-toggle">
+        <span class="sidenote">
+          The FluffyFS interface has 10 methods: <code>readFile</code>, <code>writeFile</code>,
+          <code>mkdir</code>, <code>readdir</code>, <code>stat</code>, <code>exists</code>,
+          <code>unlink</code>, <code>rename</code>, <code>rmdir</code>, and an optional
+          <code>symlink</code>. Implement those 10 methods against any storage backend and you get
+          all ~127 commands for free.
+        </span>
+      </p>
+    </section>
+
+    <section>
+      <h2>JavaScript runs</h2>
+
+      <p>
+        <span class="newthought">The <code>node</code> command</span> executes JavaScript files and
+        inline expressions. It provides <code>require()</code> with Node-style module resolution,
+        a partial <code>fs</code> module mapped to the virtual filesystem, <code>path</code>,
+        <code>Buffer</code>, <code>process</code>, <code>child_process.spawn()</code>, and other
+        Node.js-like globals.
+      </p>
+
+      <div class="shiro-demo" id="demo-node">
+        <div class="demo-chrome">
+          <span class="demo-title">demo &mdash; node</span>
+          <span class="test-badge">tested</span>
+          <button class="demo-btn" onclick="runDemo('demo-node')">Run</button>
+        </div>
+        <div class="demo-static">
+          <div><span class="prompt">~ $</span> node -e "console.log(JSON.stringify({pi: Math.PI.toFixed(4), e: Math.E.toFixed(4)}))"</div>
+          <div class="output">{"pi":"3.1416","e":"2.7183"}</div>
+        </div>
+        <iframe class="demo-frame" data-src="/"></iframe>
+      </div>
+
+      <p>
+        This is not V8 or Node.js. It is the browser's JavaScript engine with compatibility shims.
+        Many npm packages work if they do not depend on native modules (<code>.node</code> bindings)
+        or Node-specific APIs that are not shimmed. Some packages that do work: lodash, leftpad,
+        chalk (basic), and pure-JS utility libraries.
+      </p>
+    </section>
+
+    <section>
+      <h2>Git works, with a CORS proxy</h2>
+
+      <p>
+        <span class="newthought">Via isomorphic-git:</span> init, add, commit, status, log, diff,
+        clone, push, pull, fetch, branch, checkout, merge. Clone and push require a CORS proxy
+        because GitHub's git HTTP protocol does not send CORS headers. The default proxy is
+        <code>cors.isomorphic-git.org</code>.
+        <label for="sn-cors" class="margin-toggle sidenote-number"></label>
+        <input type="checkbox" id="sn-cors" class="margin-toggle">
+        <span class="sidenote">
+          The CORS proxy is stateless &mdash; it relays bytes and adds
+          <code>Access-Control-Allow-Origin</code> headers. It does not store your code. You
+          can set your own with <code>export GIT_CORS_PROXY=https://your-proxy.com</code>.
+          Push/pull need a GitHub personal access token via
+          <code>shiro config set github_token TOKEN</code>.
+        </span>
+      </p>
+
+      <p>
+        This is a genuine limitation. Shiro is not truly &ldquo;serverless&rdquo; for git
+        operations. npm registry fetches work directly because npmjs.org sends CORS headers,
+        but GitHub's git protocol does not.
+      </p>
+    </section>
+
+    <section>
+      <h2>What also works</h2>
+
+      <p>
+        <span class="newthought">A partial list</span> of things implemented and functional:
+      </p>
+
+      <ul class="limitations">
+        <li><strong>TypeScript compilation</strong> via esbuild-wasm. The <code>build</code> command bundles TypeScript/JavaScript with tree-shaking and minification. The WASM binary (~15MB) is cached in IndexedDB after first download.</li>
+        <li><strong>npm install</strong> fetches real package tarballs from the npm registry, resolves dependencies, and writes to the virtual filesystem. Slow (10&ndash;30s for packages with many dependencies) but functional.</li>
+        <li><strong>Text editors:</strong> <code>vi</code> (modal, hjkl, insert/normal/command mode, search, save) and <code>nano</code> (simpler). Terminal raw mode enables interactive editing.</li>
+        <li><strong>Virtual HTTP servers</strong> via the <code>serve</code> command. Serves files from the virtual filesystem in iframes.</li>
+        <li><strong>Tab completion</strong> for files, commands, git subcommands, npm subcommands, and environment variables.</li>
+        <li><strong>Reverse history search</strong> (Ctrl+R), like bash.</li>
+        <li><strong>Hot-reload:</strong> edit a command's source file, run <code>reload</code>, and the module is replaced at runtime without a page refresh.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>What does not work</h2>
+
+      <p>
+        <span class="newthought">An honest list</span> of things that are missing, broken, or inadequate:
+      </p>
+
+      <ul class="limitations">
+        <li>No native modules (<code>.node</code> bindings). Packages that compile C/C++ will not work.</li>
+        <li>No multi-process. Everything runs on the browser's main thread. There is no <code>fork</code>, no <code>exec</code>, no signals.</li>
+        <li>No TCP sockets. The browser sandbox does not allow raw network access.</li>
+        <li>No file watchers. IndexedDB does not notify on change.</li>
+        <li>Large files (&gt;10MB) are slow. IndexedDB serialization is the bottleneck.</li>
+        <li>Interactive programs are limited. Terminal raw mode works for vi/nano but many programs expect features Shiro does not implement.</li>
+        <li>The shell does not handle all bash edge cases. Complex quoting, process substitution, and job control are incomplete.</li>
+        <li>No debugger, no breakpoints, no source maps in the virtual filesystem.</li>
+        <li>Performance is adequate for small projects. It will not handle a 10,000-file codebase gracefully.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>How it is built</h2>
+
+      <p>
+        <span class="newthought">About 21,000 lines</span> of TypeScript, built with Vite into a
+        single HTML file. The build plugin (<code>vite-plugin-inline.ts</code>) inlines all
+        JavaScript, CSS, and the favicon into one <code>index.html</code> &mdash; no separate asset
+        files. The gzipped bundle is about 338KB.
+      </p>
+
+      <p>
+        Runtime dependencies: <a href="https://xtermjs.org/">xterm.js</a> (terminal emulator),
+        <a href="https://isomorphic-git.org/">isomorphic-git</a> (git implementation),
+        <a href="https://esbuild.github.io/">esbuild-wasm</a> (TypeScript compilation, lazy-loaded).
+        Everything else is from scratch.
+      </p>
+
+      <p>
+        The command library, <a href="https://github.com/williamsharkey/fluffycoreutils">fluffycoreutils</a>,
+        is a separate repository consumed as a git submodule. It exports every command as a function
+        that takes arguments and a <code>FluffyFS</code> filesystem interface. This makes the commands
+        testable in isolation and portable to any host that implements the interface.
+        <label for="sn-foam" class="margin-toggle sidenote-number"></label>
+        <input type="checkbox" id="sn-foam" class="margin-toggle">
+        <span class="sidenote">
+          <a href="https://github.com/williamsharkey/foam">Foam</a>, Shiro's sister project,
+          proves the portability claim. Foam is plain JavaScript with no build step &mdash;
+          just open index.html. It uses the same fluffycoreutils library against its own
+          IndexedDB filesystem and the same commands produce the same output.
+        </span>
+      </p>
+
+      <pre><code>interface FluffyFS {
+  readFile(path: string): Promise&lt;string&gt;;
+  writeFile(path: string, content: string): Promise&lt;void&gt;;
+  mkdir(path: string, opts?: { recursive?: boolean }): Promise&lt;void&gt;;
+  readdir(path: string): Promise&lt;FluffyEntry[]&gt;;
+  stat(path: string): Promise&lt;FluffyStat&gt;;
+  exists(path: string): Promise&lt;boolean&gt;;
+  unlink(path: string): Promise&lt;void&gt;;
+  rename(old: string, new_: string): Promise&lt;void&gt;;
+  rmdir(path: string, opts?: { recursive?: boolean }): Promise&lt;void&gt;;
+  symlink?(target: string, path: string): Promise&lt;void&gt;;
+  resolvePath(path: string, cwd: string): string;
+}</code></pre>
+
+      <p>
+        Ten methods and a path resolver. Implement those against any storage backend and you get
+        the full command library.
+      </p>
+    </section>
+
+    <section>
+      <h2>Source</h2>
+
+      <p>
+        Everything is MIT-licensed and on GitHub:
+      </p>
+
+      <ul class="limitations">
+        <li><a href="https://github.com/williamsharkey/shiro">shiro</a> &mdash; the browser OS (TypeScript, Vite)</li>
+        <li><a href="https://github.com/williamsharkey/foam">foam</a> &mdash; plain JS sister project (no build step)</li>
+        <li><a href="https://github.com/williamsharkey/fluffycoreutils">fluffycoreutils</a> &mdash; 127 Unix commands, zero dependencies</li>
+        <li><a href="https://github.com/williamsharkey/spirit">spirit</a> &mdash; Claude Code agent loop for browser OSes</li>
+        <li><a href="https://github.com/williamsharkey/windwalker">windwalker</a> &mdash; test suite (12 levels, 152+ tests)</li>
+        <li><a href="https://github.com/williamsharkey/skyeyes">skyeyes</a> &mdash; browser inspection bridge</li>
+        <li><a href="https://github.com/williamsharkey/nimbus">nimbus</a> &mdash; multi-agent orchestrator dashboard</li>
+      </ul>
+
+      <p style="font-size: 1.1rem; color: #666; margin-top: 2rem;">
+        <a href="https://shiro.computer">Open Shiro</a> and try
+        <code>echo "hello" | wc -c</code>.
+      </p>
+    </section>
+
+    <hr>
+
+    <section>
+      <p style="font-size: 1rem; color: #555;">
+        William Sharkey &middot; 2026
+      </p>
+    </section>
+  </article>
+
+  <script>
+  // ===== Demo Framework =====
+  // Each demo loads a real Shiro instance in an iframe and executes commands live.
+
+  const DEMOS = {
+    'demo-fs': {
+      commands: [
+        'mkdir -p /tmp/about-demo',
+        'echo "persistent data" > /tmp/about-demo/file.txt',
+        'cat /tmp/about-demo/file.txt',
+        'wc -c /tmp/about-demo/file.txt'
+      ]
+    },
+    'demo-pipes': {
+      commands: [
+        "printf 'cherry\\napple\\nbanana\\n' | sort"
+      ]
+    },
+    'demo-grep': {
+      commands: [
+        "printf 'error: disk full\\ninfo: started\\nerror: timeout\\ninfo: stopped\\n' | grep error | wc -l"
+      ]
+    },
+    'demo-awk': {
+      commands: [
+        "printf 'alice 90\\nbob 85\\ncarol 95\\n' | awk '{s+=$2} END {printf \"avg: %.0f\\n\", s/NR}'"
+      ]
+    },
+    'demo-sed': {
+      commands: [
+        "echo \"Hello World\" | sed 's/World/Browser/'"
+      ]
+    },
+    'demo-uniq': {
+      commands: [
+        "printf 'banana\\napple\\napple\\ncherry\\nbanana\\n' | sort | uniq"
+      ]
+    },
+    'demo-node': {
+      commands: [
+        'node -e "console.log(JSON.stringify({pi: Math.PI.toFixed(4), e: Math.E.toFixed(4)}))"'
+      ]
     }
-  </style>
+  };
+
+  // Track running state per demo
+  const demoState = {};
+
+  async function runDemo(demoId) {
+    if (demoState[demoId]?.running) return;
+
+    const demo = DEMOS[demoId];
+    if (!demo) return;
+
+    const el = document.getElementById(demoId);
+    if (!el) return;
+
+    const btn = el.querySelector('.demo-btn');
+    const staticEl = el.querySelector('.demo-static');
+    const iframe = el.querySelector('.demo-frame');
+
+    demoState[demoId] = { running: true };
+
+    // Update button state
+    btn.textContent = 'Loading\u2026';
+    btn.classList.add('running');
+
+    // Show iframe, hide static
+    staticEl.style.display = 'none';
+    iframe.style.display = 'block';
+
+    // Load Shiro in iframe if not loaded
+    if (!iframe.src || iframe.src === 'about:blank') {
+      iframe.src = iframe.dataset.src || '/';
+    }
+
+    // Wait for Shiro to boot
+    try {
+      await waitForShiro(iframe, 15000);
+    } catch (e) {
+      btn.textContent = 'Error';
+      btn.classList.remove('running');
+      staticEl.style.display = 'block';
+      iframe.style.display = 'none';
+      demoState[demoId].running = false;
+      return;
+    }
+
+    // Small delay for terminal to settle
+    await sleep(800);
+
+    btn.textContent = 'Running\u2026';
+
+    // Execute commands with visible typing
+    const shiro = iframe.contentWindow.__shiro;
+    for (let i = 0; i < demo.commands.length; i++) {
+      const cmd = demo.commands[i];
+      try {
+        // Write the prompt and command to terminal for visual effect
+        if (shiro.terminal?.term) {
+          shiro.terminal.term.write('\r\n\x1b[36m~ $\x1b[0m ' + cmd + '\r\n');
+        }
+        // Execute the command
+        const result = await shiro.shell.exec(cmd);
+        // Write output to terminal
+        if (result && result.stdout && shiro.terminal?.term) {
+          shiro.terminal.term.write(result.stdout.replace(/\n/g, '\r\n'));
+        }
+        if (result && result.stderr && shiro.terminal?.term) {
+          shiro.terminal.term.write('\x1b[31m' + result.stderr.replace(/\n/g, '\r\n') + '\x1b[0m');
+        }
+      } catch (e) {
+        // Command execution failed - still continue
+      }
+      if (i < demo.commands.length - 1) {
+        await sleep(400);
+      }
+    }
+
+    // Done
+    btn.textContent = 'Done';
+    btn.classList.remove('running');
+    btn.classList.add('done');
+    demoState[demoId].running = false;
+
+    // Allow re-running after a delay
+    setTimeout(() => {
+      btn.textContent = 'Run again';
+      btn.classList.remove('done');
+    }, 2000);
+  }
+
+  function waitForShiro(iframe, timeout) {
+    return new Promise((resolve, reject) => {
+      const start = Date.now();
+      const check = setInterval(() => {
+        try {
+          if (iframe.contentWindow?.__shiro?.shell?.exec) {
+            clearInterval(check);
+            resolve();
+          }
+        } catch (e) {
+          // Cross-origin or not ready yet
+        }
+        if (Date.now() - start > timeout) {
+          clearInterval(check);
+          reject(new Error('Shiro boot timeout'));
+        }
+      }, 200);
+    });
+  }
+
+  function sleep(ms) {
+    return new Promise(r => setTimeout(r, ms));
+  }
+  </script>
 </body>
 </html>

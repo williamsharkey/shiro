@@ -2,6 +2,8 @@
 # Case-insensitive routes for static pages
 /MCP      /mcp.html   200
 /Mcp      /mcp.html   200
+/about    /about.html 200
+/About    /about.html 200
 
 # Static pages served first (Cloudflare checks static files before redirects)
 # Everything else falls through to the SPA terminal
