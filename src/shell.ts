@@ -218,6 +218,23 @@ export class Shell {
           continue;
         }
 
+        // Shell builtins: eval, setopt, shopt
+        if (effectiveCmdName === 'eval') {
+          // Execute remaining args as a shell command
+          const evalCmd = cmdArgs.join(' ');
+          if (evalCmd) {
+            exitCode = await this.execute(evalCmd, writeStdout, stderrWriter);
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+        if (effectiveCmdName === 'setopt' || effectiveCmdName === 'shopt') {
+          // zsh/bash shell options — no-op in Shiro
+          continue;
+        }
+
         // Handle stdin redirect (<)
         let stdin = i > 0 ? lastOutput : '';
         for (const redir of redirects) {
@@ -474,8 +491,8 @@ export class Shell {
       const ch = line[i];
       if (ch === "'" && !inDouble) { inSingle = !inSingle; current += ch; continue; }
       if (ch === '"' && !inSingle) { inDouble = !inDouble; current += ch; continue; }
-      // Single | but not ||
-      if (ch === '|' && line[i + 1] !== '|' && !inSingle && !inDouble) {
+      // Single | but not || and not >| (clobber redirect)
+      if (ch === '|' && line[i + 1] !== '|' && line[i - 1] !== '>' && !inSingle && !inDouble) {
         segments.push(current);
         current = '';
         continue;
@@ -559,11 +576,14 @@ export class Shell {
         continue;
       }
 
-      // Handle >> and > redirects
+      // Handle >>, >| and > redirects (>| is zsh clobber, treated as >)
       if (ch === '>' && !inSingle && !inDouble) {
         if (current) { tokens.push(current); current = ''; }
         if (input[i + 1] === '>') {
           tokens.push('>>');
+          i += 2;
+        } else if (input[i + 1] === '|') {
+          tokens.push('>');
           i += 2;
         } else {
           tokens.push('>');

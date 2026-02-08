@@ -959,8 +959,8 @@ export const nodeCmd: Command = {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
                 const strData = typeof data === 'string' ? data : new TextDecoder().decode(data);
                 fileCache.set(resolved, strData);
-                // Queue actual VFS write (fire-and-forget)
-                ctx.fs.writeFile(resolved, strData).catch(() => {});
+                // Track VFS write so it completes before script exit
+                pendingPromises.push(ctx.fs.writeFile(resolved, strData).catch(() => {}));
               },
               existsSync: (p: string) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
@@ -1036,9 +1036,9 @@ export const nodeCmd: Command = {
                 const cached = fileCache.get(srcRes);
                 if (cached !== undefined) {
                   fileCache.set(dstRes, cached);
-                  ctx.fs.writeFile(dstRes, cached).catch(() => {});
+                  pendingPromises.push(ctx.fs.writeFile(dstRes, cached).catch(() => {}));
                 } else {
-                  ctx.fs.readFile(srcRes, 'utf8').then((data: any) => ctx.fs.writeFile(dstRes, data)).catch(() => {});
+                  pendingPromises.push(ctx.fs.readFile(srcRes, 'utf8').then((data: any) => ctx.fs.writeFile(dstRes, data)).catch(() => {}));
                 }
               },
               renameSync: (oldP: string, newP: string) => {
@@ -1050,7 +1050,7 @@ export const nodeCmd: Command = {
                   fileCache.set(newRes, content);
                   fileCache.delete(oldRes);
                 }
-                ctx.fs.rename(oldRes, newRes).catch(() => {});
+                pendingPromises.push(ctx.fs.rename(oldRes, newRes).catch(() => {}));
               },
               realpathSync: (p: string) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
@@ -1109,7 +1109,7 @@ export const nodeCmd: Command = {
                   const existing = fileCache.get(fdInfo.path) || '';
                   const str = typeof data === 'string' ? data : new TextDecoder().decode(data);
                   fileCache.set(fdInfo.path, existing + str);
-                  ctx.fs.writeFile(fdInfo.path, existing + str).catch(() => {});
+                  pendingPromises.push(ctx.fs.writeFile(fdInfo.path, existing + str).catch(() => {}));
                 }
                 return typeof data === 'string' ? data.length : data.length;
               },
@@ -1154,7 +1154,7 @@ export const nodeCmd: Command = {
                 const existing = fileCache.get(resolved) || '';
                 const str = typeof data === 'string' ? data : new TextDecoder().decode(data);
                 fileCache.set(resolved, existing + str);
-                ctx.fs.writeFile(resolved, existing + str).catch(() => {});
+                pendingPromises.push(ctx.fs.writeFile(resolved, existing + str).catch(() => {}));
               },
               symlinkSync: (target: string, path: string) => {
                 const resolved = ctx.fs.resolvePath(path, ctx.cwd);
@@ -1523,11 +1523,60 @@ export const nodeCmd: Command = {
           }
           case 'child_process':
           case 'node:child_process': {
+            // Shim /bin/sh, /bin/bash, /bin/zsh — Shiro has no real shell binaries.
+            // Claude Code's Bash tool calls patterns like:
+            //   spawn('/bin/sh', ['-l', '-c', 'echo hello'])  → extract 'echo hello'
+            //   spawn('/bin/sh', ['-l'])                       → no-op (login shell init)
+            //   spawn('/bin/sh', ['/tmp/claude-XXX-cwd'])      → source file as script
+            //   exec('/bin/sh -l -c "echo hello"')             → extract 'echo hello'
+            const isShellBin = (s: string) => /^\/bin\/(?:sh|bash|zsh)$/.test(s);
+            const stripShellPrefix = (cmd: string): string => {
+              if (!/^\/bin\/(?:sh|bash|zsh)\b/.test(cmd)) return cmd;
+              const rest = cmd.replace(/^\/bin\/(?:sh|bash|zsh)\s*/, '').trim();
+              if (!rest) return 'true'; // bare /bin/sh → no-op
+              // Find -c flag (possibly combined: -lc, -ilc, or separate: -l -c)
+              const idx = rest.search(/(^|\s)-\w*c\s/);
+              if (idx >= 0) return rest.slice(idx).replace(/^\s*-\w*c\s+/, '');
+              // No -c: separate flags from file args
+              const parts = rest.split(/\s+/);
+              const scripts = parts.filter(p => !p.startsWith('-'));
+              if (scripts.length > 0) {
+                // File arg: read and execute as shell script
+                const resolved = ctx.fs.resolvePath(scripts[0], ctx.cwd);
+                const content = fileCache.get(resolved);
+                return content ? content.trim() : 'true';
+              }
+              return 'true'; // only flags like -l, -i → no-op
+            };
+            // Extract command from spawn-style args array for shell binaries
+            const extractShellArgs = (args: string[]): string => {
+              const cIdx = args.findIndex(a => /^-\w*c$/.test(a));
+              if (cIdx >= 0 && cIdx + 1 < args.length) return args.slice(cIdx + 1).join(' ');
+              // No -c: find non-flag args (file paths to source)
+              const scripts = args.filter(a => !a.startsWith('-'));
+              if (scripts.length > 0) {
+                const resolved = ctx.fs.resolvePath(scripts[0], ctx.cwd);
+                const content = fileCache.get(resolved);
+                return content ? content.trim() : 'true';
+              }
+              return 'true'; // only flags → no-op
+            };
             // execAsync is the underlying impl — returns a Promise
+            // Shell natively handles setopt (no-op), eval (builtin), >| (clobber), /dev/null (virtual file)
             const execAsync = async (cmd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
+              let normalized = stripShellPrefix(cmd);
+              // Strip leading shell flags (-l, -i, -e) that leak through from spawn args
+              normalized = normalized.replace(/^(-[a-zA-Z]+\s+)+/, '');
+              if (!normalized || /^-[a-zA-Z]+$/.test(normalized)) normalized = 'true';
+              // Debug trace
+              try {
+                const log = fileCache.get('/tmp/exec-debug.log') || '';
+                fileCache.set('/tmp/exec-debug.log', log + `raw=${JSON.stringify(cmd).slice(0,200)} norm=${JSON.stringify(normalized).slice(0,200)}\n`);
+                ctx.fs.writeFile('/tmp/exec-debug.log', fileCache.get('/tmp/exec-debug.log')!).catch(() => {});
+              } catch {}
               let stdout = '';
               let stderr = '';
-              const exitCode = await ctx.shell.execute(cmd, (s) => { stdout += s; }, (s) => { stderr += s; });
+              const exitCode = await ctx.shell.execute(normalized, (s) => { stdout += s; }, (s) => { stderr += s; });
               return { stdout, stderr, exitCode };
             };
             const cpModule: any = {
@@ -1546,7 +1595,12 @@ export const nodeCmd: Command = {
                 return buf;
               },
               spawnSync: (cmd: string, args?: string[]) => {
-                const fullCmd = args ? `${cmd} ${args.join(' ')}` : cmd;
+                let fullCmd: string;
+                if (isShellBin(cmd) && args) {
+                  fullCmd = extractShellArgs(args);
+                } else {
+                  fullCmd = args ? `${cmd} ${args.join(' ')}` : cmd;
+                }
                 let stdout = '';
                 let stderr = '';
                 let status = 0;
@@ -1581,7 +1635,12 @@ export const nodeCmd: Command = {
               },
               execFile: (file: string, args: string[], opts: any, cb?: any) => {
                 const callback = typeof opts === 'function' ? opts : cb;
-                const cmd = `${file} ${(args || []).join(' ')}`;
+                let cmd: string;
+                if (isShellBin(file) && args) {
+                  cmd = extractShellArgs(args);
+                } else {
+                  cmd = `${file} ${(args || []).join(' ')}`;
+                }
                 const childEvents: Record<string, Function[]> = {};
                 const child: any = {
                   pid: Math.floor(Math.random() * 10000) + 1000,
@@ -1603,7 +1662,12 @@ export const nodeCmd: Command = {
                 return child;
               },
               spawn: (cmd: string, args?: string[], opts?: any) => {
-                const fullCmd = args ? `${cmd} ${args.join(' ')}` : cmd;
+                let fullCmd: string;
+                if (isShellBin(cmd) && args) {
+                  fullCmd = extractShellArgs(args);
+                } else {
+                  fullCmd = args ? `${cmd} ${args.join(' ')}` : cmd;
+                }
                 const events: Record<string, Function[]> = {};
                 const stdoutEvents: Record<string, Function[]> = {};
                 const stderrEvents: Record<string, Function[]> = {};
@@ -1661,7 +1725,12 @@ export const nodeCmd: Command = {
                 return child;
               },
               execFileSync: (file: string, args?: string[], opts?: any) => {
-                const fullCmd = args ? `${file} ${args.join(' ')}` : file;
+                let fullCmd: string;
+                if (isShellBin(file) && args) {
+                  fullCmd = extractShellArgs(args);
+                } else {
+                  fullCmd = args ? `${file} ${args.join(' ')}` : file;
+                }
                 let result = '';
                 execAsync(fullCmd).then(r => { result = r.stdout; });
                 return FakeBuffer.from(result);
@@ -1675,7 +1744,12 @@ export const nodeCmd: Command = {
                 return { stdout: r.stdout, stderr: r.stderr };
               });
             cpModule.execFile[customSym] = (file: string, args?: string[], opts?: any) => {
-              const cmd = `${file} ${(args || []).join(' ')}`;
+              let cmd: string;
+              if (isShellBin(file) && args) {
+                cmd = extractShellArgs(args);
+              } else {
+                cmd = `${file} ${(args || []).join(' ')}`;
+              }
               return execAsync(cmd).then(r => {
                 if (r.exitCode !== 0) throw Object.assign(new Error(`Command failed: ${cmd}`), { code: r.exitCode, stdout: r.stdout, stderr: r.stderr });
                 return { stdout: r.stdout, stderr: r.stderr };
@@ -5003,7 +5077,10 @@ export const nodeCmd: Command = {
         return u;
       };
       // Block telemetry/analytics URLs that cause CORS errors
-      const blockedUrls = ['datadoghq.com', 'sentry.io', '/api/event_logging'];
+      const blockedUrls = [
+        'datadoghq.com', 'sentry.io', '/api/event_logging',
+        'claude_code_first_token_date', 'claude_code_grove',
+      ];
       const isBlocked = (u: string) => blockedUrls.some(b => u.includes(b));
 
       if (corsProxyOrigin) {

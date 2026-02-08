@@ -28,6 +28,7 @@ src/
 ├── shell.ts             # Command parser: pipes, redirects, env vars, quoting, history
 ├── filesystem.ts        # IndexedDB-backed POSIX filesystem (the foundation everything uses)
 ├── spirit-provider.ts   # OSProvider adapter for Spirit (Claude Code agent)
+├── remote-panel.ts      # Draggable floating panel UI (used by remote, group)
 └── commands/            # One file per command or group of related commands
     ├── index.ts          # Command/CommandContext interfaces, CommandRegistry class
     ├── coreutils.ts      # 41 commands: ls, cat, mkdir, rm, cp, mv, echo, sort, seq, test, ln, etc.
@@ -51,6 +52,9 @@ src/
 └── utils/
     ├── tar-utils.ts      # gzip decompression and tar extraction
     └── semver-utils.ts   # semantic versioning and range resolution
+server.mjs                   # Unified Node.js server (proxy, signaling, relay, static)
+vite-plugin-inline.ts        # Build plugin: inlines JS/CSS/favicon into single HTML
+deploy.sh                    # Build + scp + restart on DO droplet
 ```
 
 ## How to Add a New Command
@@ -96,7 +100,9 @@ npx tsc --noEmit     # Type-check without building
 
 Shiro deploys to a **DigitalOcean droplet** at https://shiro.computer (`161.35.13.177`).
 
-A single Node.js server (`server.mjs`) handles everything: static files, API proxy, OAuth callback, and WebSocket relay. Nginx sits in front with SSL (certbot).
+A single Node.js server (`server.mjs`) handles everything: static files, API proxy, OAuth callback, WebRTC signaling, and WebSocket relay. Nginx sits in front with SSL (wildcard cert for `*.shiro.computer` via certbot-dns-porkbun).
+
+**Build output is a single self-contained HTML file** — all JS/CSS/favicon inlined by `vite-plugin-inline.ts`. No separate asset files. ~338KB gzipped.
 
 ```bash
 # Build and deploy to production

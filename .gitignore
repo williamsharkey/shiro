@@ -4,3 +4,4 @@ dist/
 *.local
 .DS_Store
 claude-code-pkg/
+.vercel

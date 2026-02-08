@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
+import { inlineAssets } from './vite-plugin-inline';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,6 +20,7 @@ export default defineConfig({
         process: true,
       },
     }),
+    inlineAssets(),
   ],
   build: {
     target: 'es2022',

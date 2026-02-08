@@ -130,7 +130,7 @@ function cleanupGroup(): void {
     state.ws.close();
   }
   state.panel.setStatus('disconnected');
-  state.panel.deactivate();
+  state.panel.close();
   window.__shiroGroup = undefined;
 }
 
@@ -230,8 +230,14 @@ export const groupCmd: Command = {
               sendAnnouncement(state);
             }
           }
-        } catch {
-          // Decryption failure = wrong key or corrupt message, ignore
+        } catch (err: any) {
+          // Decryption failure — likely wrong password or corrupt message
+          const msg = err?.message || String(err);
+          if (msg.includes('decrypt')) {
+            panel.log('info', 'Received message with wrong key (different password?)');
+          } else {
+            panel.log('error', `Failed to process message: ${msg.slice(0, 80)}`);
+          }
         }
       };
 

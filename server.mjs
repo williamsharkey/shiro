@@ -26,10 +26,15 @@ const PROXY_TARGETS = {
   'mcp-proxy': 'https://mcp-proxy.anthropic.com',
 };
 
-const SKIP_HEADERS = new Set([
+const SKIP_REQUEST_HEADERS = new Set([
   'host', 'connection', 'keep-alive', 'transfer-encoding', 'accept-encoding',
   'origin', 'referer', 'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site',
   'sec-fetch-user', 'anthropic-dangerous-direct-browser-access',
+]);
+
+// Node fetch auto-decompresses, so strip encoding headers from upstream responses
+const SKIP_RESPONSE_HEADERS = new Set([
+  'content-encoding', 'content-length', 'transfer-encoding', 'connection',
 ]);
 
 function corsHeaders(origin) {
@@ -69,7 +74,7 @@ async function handleProxy(req, res, pathAfterApi) {
   // Build upstream headers
   const headers = {};
   for (const [k, v] of Object.entries(req.headers)) {
-    if (!SKIP_HEADERS.has(k.toLowerCase())) headers[k] = v;
+    if (!SKIP_REQUEST_HEADERS.has(k.toLowerCase())) headers[k] = v;
   }
   headers['host'] = new URL(base).host;
   if (body.length) headers['content-length'] = String(body.length);
@@ -89,7 +94,7 @@ async function handleProxy(req, res, pathAfterApi) {
 
     const respHeaders = { ...cors };
     for (const [k, v] of upstream.headers) {
-      if (!SKIP_HEADERS.has(k.toLowerCase())) respHeaders[k] = v;
+      if (!SKIP_RESPONSE_HEADERS.has(k.toLowerCase())) respHeaders[k] = v;
     }
 
     res.writeHead(upstream.status, respHeaders);
@@ -165,6 +170,104 @@ async function handleStatic(req, res) {
   }
 }
 
+// --- WebRTC signaling ---
+const offers = new Map(); // code -> { offer, candidates, answer, answerCandidates, created }
+const OFFER_TTL = 5 * 60 * 1000; // 5 minutes
+
+// Prune expired offers every minute
+setInterval(() => {
+  const now = Date.now();
+  for (const [code, entry] of offers) {
+    if (now - entry.created > OFFER_TTL) offers.delete(code);
+  }
+}, 60_000);
+
+async function handleSignaling(req, res, pathname) {
+  const origin = req.headers['origin'];
+  const cors = corsHeaders(origin);
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, cors);
+    return res.end();
+  }
+
+  // POST /offer — register a new offer
+  if (pathname === '/offer' && req.method === 'POST') {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const data = JSON.parse(Buffer.concat(chunks).toString());
+
+    if (!data.code || !data.offer) {
+      res.writeHead(400, { 'content-type': 'application/json', ...cors });
+      return res.end(JSON.stringify({ error: 'Missing code or offer' }));
+    }
+
+    offers.set(data.code, {
+      offer: data.offer,
+      candidates: data.candidates || [],
+      answer: null,
+      answerCandidates: null,
+      created: Date.now(),
+    });
+
+    res.writeHead(200, { 'content-type': 'application/json', ...cors });
+    return res.end(JSON.stringify({ ok: true }));
+  }
+
+  // GET /offer/:code — retrieve an offer (for MCP client connecting)
+  const offerMatch = pathname.match(/^\/offer\/(.+)$/);
+  if (offerMatch && req.method === 'GET') {
+    const entry = offers.get(offerMatch[1]);
+    if (!entry) {
+      res.writeHead(404, { 'content-type': 'application/json', ...cors });
+      return res.end(JSON.stringify({ error: 'Not found' }));
+    }
+    res.writeHead(200, { 'content-type': 'application/json', ...cors });
+    return res.end(JSON.stringify({ offer: entry.offer, candidates: entry.candidates }));
+  }
+
+  // /answer/:code
+  const answerMatch = pathname.match(/^\/answer\/(.+)$/);
+  if (answerMatch) {
+    const code = answerMatch[1];
+
+    // POST /answer/:code — store an answer
+    if (req.method === 'POST') {
+      const entry = offers.get(code);
+      if (!entry) {
+        res.writeHead(404, { 'content-type': 'application/json', ...cors });
+        return res.end(JSON.stringify({ error: 'Not found' }));
+      }
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const data = JSON.parse(Buffer.concat(chunks).toString());
+      entry.answer = data.answer;
+      entry.answerCandidates = data.candidates || [];
+
+      res.writeHead(200, { 'content-type': 'application/json', ...cors });
+      return res.end(JSON.stringify({ ok: true }));
+    }
+
+    // GET /answer/:code — poll for answer
+    if (req.method === 'GET') {
+      const entry = offers.get(code);
+      if (!entry) {
+        res.writeHead(200, { 'content-type': 'application/json', ...cors });
+        return res.end(JSON.stringify({ expired: true }));
+      }
+      if (entry.answer) {
+        res.writeHead(200, { 'content-type': 'application/json', ...cors });
+        return res.end(JSON.stringify({ answer: entry.answer, candidates: entry.answerCandidates }));
+      }
+      res.writeHead(200, { 'content-type': 'application/json', ...cors });
+      return res.end(JSON.stringify({ waiting: true }));
+    }
+  }
+
+  res.writeHead(404, { 'content-type': 'application/json', ...cors });
+  return res.end(JSON.stringify({ error: 'Unknown signaling endpoint' }));
+}
+
 // --- HTTP server ---
 const server = createServer(async (req, res) => {
   const pathname = new URL(req.url, 'http://localhost').pathname;
@@ -178,6 +281,9 @@ const server = createServer(async (req, res) => {
   if (pathname === '/health') {
     res.writeHead(200);
     return res.end('ok');
+  }
+  if (pathname === '/offer' || pathname.startsWith('/offer/') || pathname.startsWith('/answer/')) {
+    return handleSignaling(req, res, pathname);
   }
   return handleStatic(req, res);
 });

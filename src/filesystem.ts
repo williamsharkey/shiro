@@ -283,6 +283,8 @@ export class FileSystem {
   }
 
   async stat(path: string): Promise<StatResult> {
+    // Virtual /dev/null
+    if (path === '/dev/null') return makeStat({ path, type: 'file', content: new Uint8Array(0), mode: 0o666, mtime: 0, ctime: 0, size: 0 });
     const node = await this._get(path);
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, stat '${path}'`);
     return makeStat(node);
@@ -293,11 +295,14 @@ export class FileSystem {
   }
 
   async exists(path: string): Promise<boolean> {
+    if (path === '/dev/null') return true;
     const node = await this._get(path);
     return !!node;
   }
 
   async readFile(path: string, encoding?: 'utf8'): Promise<Uint8Array | string> {
+    // Virtual /dev/null — always reads empty
+    if (path === '/dev/null') return encoding === 'utf8' ? '' : new Uint8Array(0);
     const node = await this._get(path);
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, open '${path}'`);
     if (node.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, read '${path}'`);
@@ -309,6 +314,8 @@ export class FileSystem {
   }
 
   async writeFile(path: string, data: Uint8Array | string, options?: { mode?: number }): Promise<void> {
+    // Virtual /dev/null — silently discard writes
+    if (path === '/dev/null') return;
     const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
     const parent = await this._get(parentPath);
     if (!parent) throw fsError('ENOENT', `ENOENT: no such file or directory, open '${path}'`);

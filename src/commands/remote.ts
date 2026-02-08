@@ -1,4 +1,6 @@
 import { Command, CommandContext } from './index';
+import { Shell } from '../shell';
+import { createRemotePanel, type RemotePanel } from '../remote-panel';
 
 // LocalStorage key for persisting remote session code across page reloads
 const REMOTE_CODE_KEY = 'shiro-remote-code';
@@ -85,8 +87,8 @@ function generateCode(): { full: string; display: string } {
   };
 }
 
-// Signaling server URL
-const SIGNALING_URL = 'https://remote.shiro.computer';
+// Signaling server URL — same origin, server.mjs handles /offer and /answer routes
+const SIGNALING_URL = location.origin;
 
 interface RemoteSession {
   code: string;
@@ -94,6 +96,8 @@ interface RemoteSession {
   pc: RTCPeerConnection;
   dc: RTCDataChannel | null;
   status: 'connecting' | 'waiting' | 'connected' | 'error';
+  shadowShell: Shell | null;
+  panel: RemotePanel | null;
 }
 
 // Store session on window for global access
@@ -105,7 +109,17 @@ declare global {
 }
 
 /**
- * Handle incoming commands from the remote peer
+ * Create a shadow shell for headless command execution.
+ * Shares the same filesystem and commands as the main shell.
+ */
+function createShadowShell(): Shell {
+  const { fs, commands } = window.__shiro;
+  return new Shell(fs, commands);
+}
+
+/**
+ * Handle incoming commands from the remote peer.
+ * Uses shadow shell for exec (headless, no terminal corruption).
  */
 async function handleRemoteCommand(session: RemoteSession, message: string): Promise<string> {
   try {
@@ -116,60 +130,138 @@ async function handleRemoteCommand(session: RemoteSession, message: string): Pro
       case 'ping':
         return JSON.stringify({ type: 'pong', ts: Date.now(), requestId });
 
+      case 'hello': {
+        // MCP client identifies itself — update panel title
+        const name = cmd.name || 'remote';
+        session.panel?.setTitle(`${name} \u2194 ${session.displayCode}`);
+        session.panel?.log('info', `${name} connected`);
+        return JSON.stringify({ type: 'hello_ack', requestId });
+      }
+
       case 'exec': {
-        // Execute shell command and display in terminal
-        const terminal = window.__shiro?.terminal;
-        if (!terminal) {
-          return JSON.stringify({ type: 'error', error: 'Terminal not available', requestId });
+        const shell = session.shadowShell;
+        if (!shell) {
+          return JSON.stringify({ type: 'error', error: 'Shell not available', requestId });
         }
-        const { stdout, stderr, exitCode } = await terminal.executeRemoteCommand(cmd.command);
+        session.panel?.log('exec', `$ ${cmd.command}`);
+
+        let stdout = '';
+        let stderr = '';
+        const exitCode = await shell.execute(
+          cmd.command,
+          (s: string) => { stdout += s; },
+          (s: string) => { stderr += s; },
+        );
+
+        if (stdout) session.panel?.log('info', stdout.trimEnd());
+        if (stderr) session.panel?.log('error', stderr.trimEnd());
+
         return JSON.stringify({ type: 'exec_result', stdout, stderr, exitCode, requestId });
       }
 
       case 'read': {
-        // Read file
         const fs = window.__shiro?.fs;
         if (!fs) {
           return JSON.stringify({ type: 'error', error: 'Filesystem not available', requestId });
         }
+        session.panel?.log('read', cmd.path);
         const content = await fs.readFile(cmd.path);
         const base64 = btoa(String.fromCharCode(...content));
         return JSON.stringify({ type: 'read_result', path: cmd.path, content: base64, requestId });
       }
 
       case 'write': {
-        // Write file
         const fs = window.__shiro?.fs;
         if (!fs) {
           return JSON.stringify({ type: 'error', error: 'Filesystem not available', requestId });
         }
+        session.panel?.log('write', cmd.path);
         const content = Uint8Array.from(atob(cmd.content), c => c.charCodeAt(0));
         await fs.writeFile(cmd.path, content);
         return JSON.stringify({ type: 'write_result', path: cmd.path, ok: true, requestId });
       }
 
       case 'list': {
-        // List directory
         const fs = window.__shiro?.fs;
         if (!fs) {
           return JSON.stringify({ type: 'error', error: 'Filesystem not available', requestId });
         }
+        session.panel?.log('read', `ls ${cmd.path}`);
         const entries = await fs.readdir(cmd.path);
         return JSON.stringify({ type: 'list_result', path: cmd.path, entries, requestId });
       }
 
       case 'eval': {
-        // Evaluate JavaScript
+        session.panel?.log('eval', cmd.code);
         const result = await eval(cmd.code);
-        return JSON.stringify({ type: 'eval_result', result: String(result), requestId });
+        const resultStr = String(result);
+        session.panel?.log('info', resultStr);
+        return JSON.stringify({ type: 'eval_result', result: resultStr, requestId });
       }
 
       default:
         return JSON.stringify({ type: 'error', error: `Unknown command type: ${cmd.type}`, requestId });
     }
   } catch (err: any) {
+    session.panel?.log('error', err.message || String(err));
     // Note: requestId may not be available if JSON parsing failed
     return JSON.stringify({ type: 'error', error: err.message || String(err) });
+  }
+}
+
+/**
+ * Wire up a session with shadow shell, panel, and data channel handlers.
+ */
+function wireSession(session: RemoteSession, dc: RTCDataChannel) {
+  session.dc = dc;
+  let closeFired = false;
+
+  dc.onopen = () => {
+    session.status = 'connected';
+    session.panel?.setStatus('connected');
+    session.panel?.log('info', 'Peer connected');
+    console.log('[remote] Peer connected');
+  };
+
+  dc.onclose = () => {
+    // Guard against re-entrant/duplicate onclose fires
+    if (closeFired) return;
+    closeFired = true;
+
+    console.log('[remote] Peer disconnected');
+    session.panel?.setStatus('disconnected');
+    session.panel?.log('info', 'Peer disconnected — waiting for reconnect...');
+    const savedCode = session.code;
+    // Keep panel alive across reconnect
+    const savedPanel = session.panel;
+    const savedShell = session.shadowShell;
+    // Null out dc before cleanup to prevent re-entrant close
+    session.dc = null;
+    cleanupSession(true); // keepPanel=true
+    // Re-register with same code so MCP can reconnect
+    setTimeout(() => {
+      if (!window.__shiroRemoteSession) {
+        console.log('[remote] Re-registering for reconnection...');
+        startRemoteWithCode(savedCode, undefined, savedPanel, savedShell);
+      }
+    }, 1000);
+  };
+
+  dc.onmessage = async (event) => {
+    const response = await handleRemoteCommand(session, event.data);
+    if (dc.readyState === 'open') {
+      dc.send(response);
+    }
+  };
+
+  // Wire panel input → data channel
+  if (session.panel) {
+    session.panel.onUserMessage = (text: string) => {
+      if (dc.readyState === 'open') {
+        dc.send(JSON.stringify({ type: 'user_message', message: text }));
+        session.panel?.log('user', text);
+      }
+    };
   }
 }
 
@@ -180,6 +272,9 @@ async function startRemote(ctx: CommandContext): Promise<number> {
   // Auto-cleanup existing session if any
   if (window.__shiroRemoteSession) {
     ctx.stdout += 'Cleaning up existing session...\n';
+    // Deactivate old panel (dim it, keep log visible) instead of closing
+    window.__shiroRemoteSession.panel?.deactivate();
+    window.__shiroRemoteSession.panel = null; // detach so cleanupSession won't close it
     cleanupSession();
     localStorage.removeItem(REMOTE_CODE_KEY);
     // Clear HUD if terminal available
@@ -208,6 +303,12 @@ async function startRemote(ctx: CommandContext): Promise<number> {
 
   ctx.stdout += 'Starting remote session...\n';
 
+  // Create shadow shell and panel
+  const shadowShell = createShadowShell();
+  const panel = createRemotePanel(code, `remote \u2194 ${displayCode}`);
+  panel.log('info', `Waiting for connection...`);
+  panel.setStatus('connecting');
+
   // Create peer connection
   const pc = new RTCPeerConnection({
     iceServers: [
@@ -222,38 +323,15 @@ async function startRemote(ctx: CommandContext): Promise<number> {
     pc,
     dc: null,
     status: 'connecting',
+    shadowShell,
+    panel,
   };
 
   window.__shiroRemoteSession = session;
 
-  // Create data channel
+  // Create data channel and wire up handlers
   const dc = pc.createDataChannel('shiro-remote', { ordered: true });
-  session.dc = dc;
-
-  dc.onopen = () => {
-    session.status = 'connected';
-    console.log('[remote] Peer connected');
-  };
-
-  dc.onclose = () => {
-    console.log('[remote] Peer disconnected');
-    const savedCode = session.code;
-    cleanupSession();
-    // Re-register with same code so MCP can reconnect
-    setTimeout(() => {
-      if (!window.__shiroRemoteSession) {
-        console.log('[remote] Re-registering for reconnection...');
-        startRemoteWithCode(savedCode);
-      }
-    }, 1000);
-  };
-
-  dc.onmessage = async (event) => {
-    const response = await handleRemoteCommand(session, event.data);
-    if (dc.readyState === 'open') {
-      dc.send(response);
-    }
-  };
+  wireSession(session, dc);
 
   // Gather ICE candidates
   const iceCandidates: RTCIceCandidate[] = [];
@@ -423,15 +501,20 @@ function stopRemote(ctx: CommandContext): number {
 }
 
 /**
- * Clean up the remote session
+ * Clean up the remote session.
+ * @param keepPanel If true, don't close the panel (used during reconnect)
  */
-function cleanupSession() {
+function cleanupSession(keepPanel = false) {
   const session = window.__shiroRemoteSession;
   if (session) {
     if (session.dc) {
       session.dc.close();
     }
     session.pc.close();
+    if (!keepPanel && session.panel) {
+      session.panel.close();
+    }
+    session.shadowShell = null;
     delete window.__shiroRemoteSession;
   }
 }
@@ -492,8 +575,14 @@ export function getPersistedRemoteCode(): string | null {
 /**
  * Start a remote session with a specific code (for auto-reconnect).
  * Silently starts without command-line output.
+ * Optionally reuses an existing panel and shell (for reconnect after disconnect).
  */
-export async function startRemoteWithCode(code: string, terminal?: any): Promise<boolean> {
+export async function startRemoteWithCode(
+  code: string,
+  terminal?: any,
+  existingPanel?: RemotePanel | null,
+  existingShell?: Shell | null,
+): Promise<boolean> {
   if (window.__shiroRemoteSession) {
     console.log('[remote] Session already active');
     return true;
@@ -501,6 +590,14 @@ export async function startRemoteWithCode(code: string, terminal?: any): Promise
 
   const displayCode = code.split('-').slice(0, 2).join('-');
   console.log(`[remote] Auto-reconnecting with code: ${displayCode}`);
+
+  // Create or reuse shadow shell and panel
+  const shadowShell = existingShell || createShadowShell();
+  const panel = existingPanel || createRemotePanel(code, `remote \u2194 ${displayCode}`);
+  if (!existingPanel) {
+    panel.log('info', `Session resumed: ${displayCode}`);
+  }
+  panel.setStatus('connecting');
 
   // Create peer connection
   const pc = new RTCPeerConnection({
@@ -516,38 +613,15 @@ export async function startRemoteWithCode(code: string, terminal?: any): Promise
     pc,
     dc: null,
     status: 'connecting',
+    shadowShell,
+    panel,
   };
 
   window.__shiroRemoteSession = session;
 
-  // Create data channel
+  // Create data channel and wire up handlers
   const dc = pc.createDataChannel('shiro-remote', { ordered: true });
-  session.dc = dc;
-
-  dc.onopen = () => {
-    session.status = 'connected';
-    console.log('[remote] Peer connected');
-  };
-
-  dc.onclose = () => {
-    console.log('[remote] Peer disconnected');
-    const savedCode = session.code;
-    cleanupSession();
-    // Re-register with same code so MCP can reconnect
-    setTimeout(() => {
-      if (!window.__shiroRemoteSession) {
-        console.log('[remote] Re-registering for reconnection...');
-        startRemoteWithCode(savedCode);
-      }
-    }, 1000);
-  };
-
-  dc.onmessage = async (event) => {
-    const response = await handleRemoteCommand(session, event.data);
-    if (dc.readyState === 'open') {
-      dc.send(response);
-    }
-  };
+  wireSession(session, dc);
 
   // Gather ICE candidates
   const iceCandidates: RTCIceCandidate[] = [];

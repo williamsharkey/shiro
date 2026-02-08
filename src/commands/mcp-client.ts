@@ -61,7 +61,17 @@ async function jsonRpcRequest(
     ...(params !== undefined ? { params } : {}),
   });
 
-  const resp = await fetch(url, { method: 'POST', headers, body });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  let resp: Response;
+  try {
+    resp = await fetch(url, { method: 'POST', headers, body, signal: controller.signal });
+  } catch (err: any) {
+    clearTimeout(timeout);
+    if (err.name === 'AbortError') throw new Error('Request timed out (30s)');
+    throw err;
+  }
+  clearTimeout(timeout);
 
   if (!resp.ok) {
     const text = await resp.text().catch(() => '');
@@ -72,21 +82,30 @@ async function jsonRpcRequest(
 
   const contentType = resp.headers.get('content-type') || '';
   if (contentType.includes('text/event-stream')) {
-    // Parse SSE — collect all JSON-RPC responses
+    // Parse SSE — collect all JSON-RPC messages, return the response (has id)
     const text = await resp.text();
     const lines = text.split('\n');
-    let lastData: unknown = null;
+    const messages: Record<string, unknown>[] = [];
     for (const line of lines) {
       if (line.startsWith('data: ')) {
         try {
-          lastData = JSON.parse(line.slice(6));
+          messages.push(JSON.parse(line.slice(6)));
         } catch { /* skip non-JSON lines */ }
       }
     }
-    if (lastData && typeof lastData === 'object' && 'result' in (lastData as Record<string, unknown>)) {
-      return { result: (lastData as Record<string, unknown>).result, sessionId: newSessionId };
+    // Find the JSON-RPC response (has 'id' field matching our request)
+    const response = messages.find(m => 'id' in m && 'result' in m) as Record<string, unknown> | undefined;
+    if (response) {
+      return { result: response.result, sessionId: newSessionId };
     }
-    return { result: lastData, sessionId: newSessionId };
+    // Check for error response
+    const errResp = messages.find(m => 'id' in m && 'error' in m) as Record<string, unknown> | undefined;
+    if (errResp) {
+      const err = errResp.error as Record<string, unknown>;
+      throw new Error(`MCP error ${err.code}: ${err.message}`);
+    }
+    // Fallback: return last message
+    return { result: messages[messages.length - 1] ?? null, sessionId: newSessionId };
   }
 
   const json = await resp.json() as Record<string, unknown>;
