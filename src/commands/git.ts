@@ -8,8 +8,12 @@ export const gitCmd: Command = {
   description: 'Version control system',
   async exec(ctx: CommandContext) {
     const subcommand = ctx.args[0];
-    if (!subcommand) {
+    if (!subcommand || subcommand === '--help' || subcommand === '-h') {
       ctx.stdout = 'usage: git <command> [<args>]\n\nAvailable commands:\n  init, add, commit, status, log, diff, branch, checkout, clone\n  push, pull, fetch, remote, merge\n';
+      return 0;
+    }
+    if (subcommand === '--version' || subcommand === '-v') {
+      ctx.stdout = 'git version 2.47.0 (isomorphic-git/shiro)\n';
       return 0;
     }
 
@@ -150,13 +154,104 @@ export const gitCmd: Command = {
         }
 
         case 'diff': {
+          // Simple unified diff helper
+          const unifiedDiff = (oldLines: string[], newLines: string[]): string => {
+            let out = '';
+            const ctx_lines = 3; // context lines around changes
+            // Find changed regions using LCS-based approach
+            // Simple O(nm) diff: mark matching lines, output hunks
+            const n = oldLines.length, m = newLines.length;
+            // Build edit script: 0=context, -1=removed, +1=added
+            const edits: { type: number; old?: string; new?: string; oldIdx?: number; newIdx?: number }[] = [];
+            let oi = 0, ni = 0;
+            // Simple greedy diff (works well for small files)
+            while (oi < n || ni < m) {
+              if (oi < n && ni < m && oldLines[oi] === newLines[ni]) {
+                edits.push({ type: 0, old: oldLines[oi], oldIdx: oi, newIdx: ni });
+                oi++; ni++;
+              } else {
+                // Look ahead for resync point
+                let bestOld = -1, bestNew = -1, bestDist = Infinity;
+                const maxLook = Math.min(50, Math.max(n - oi, m - ni));
+                for (let look = 0; look < maxLook && bestDist > 0; look++) {
+                  // Check if advancing old by 'look' finds a match
+                  if (oi + look < n) {
+                    for (let j = ni; j < Math.min(ni + maxLook, m); j++) {
+                      if (oldLines[oi + look] === newLines[j] && look + (j - ni) < bestDist) {
+                        bestDist = look + (j - ni); bestOld = oi + look; bestNew = j;
+                      }
+                    }
+                  }
+                }
+                if (bestOld === -1) {
+                  // No resync — consume remaining
+                  while (oi < n) { edits.push({ type: -1, old: oldLines[oi], oldIdx: oi }); oi++; }
+                  while (ni < m) { edits.push({ type: 1, new: newLines[ni], newIdx: ni }); ni++; }
+                } else {
+                  while (oi < bestOld) { edits.push({ type: -1, old: oldLines[oi], oldIdx: oi }); oi++; }
+                  while (ni < bestNew) { edits.push({ type: 1, new: newLines[ni], newIdx: ni }); ni++; }
+                }
+              }
+            }
+            // Group edits into hunks with context
+            let i = 0;
+            while (i < edits.length) {
+              // Skip context-only regions to find next change
+              if (edits[i].type === 0) { i++; continue; }
+              // Found a change — build hunk with context
+              const hunkStart = Math.max(0, i - ctx_lines);
+              let hunkEnd = i;
+              // Extend hunk to include all nearby changes (within ctx_lines gap)
+              while (hunkEnd < edits.length) {
+                if (edits[hunkEnd].type !== 0) { hunkEnd++; continue; }
+                // Check if another change is within ctx_lines
+                let nextChange = hunkEnd;
+                while (nextChange < edits.length && edits[nextChange].type === 0) nextChange++;
+                if (nextChange < edits.length && nextChange - hunkEnd <= ctx_lines * 2) {
+                  hunkEnd = nextChange + 1;
+                } else {
+                  hunkEnd = Math.min(hunkEnd + ctx_lines, edits.length);
+                  break;
+                }
+              }
+              // Compute line numbers for hunk header
+              let oldStart = 1, newStart = 1, oldCount = 0, newCount = 0;
+              let first = true;
+              for (let j = hunkStart; j < hunkEnd; j++) {
+                if (first && edits[j].oldIdx != null) { oldStart = edits[j].oldIdx! + 1; first = false; }
+                if (first && edits[j].newIdx != null) { newStart = edits[j].newIdx! + 1; first = false; }
+                if (edits[j].type <= 0 && edits[j].oldIdx != null) oldCount++;
+                if (edits[j].type >= 0 && edits[j].newIdx != null) newCount++;
+              }
+              if (first) { oldStart = 1; newStart = 1; }
+              out += `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@\n`;
+              for (let j = hunkStart; j < hunkEnd; j++) {
+                const e = edits[j];
+                if (e.type === 0) out += ` ${e.old}\n`;
+                else if (e.type === -1) out += `-${e.old}\n`;
+                else if (e.type === 1) out += `+${e.new}\n`;
+              }
+              i = hunkEnd;
+            }
+            return out;
+          };
+
+          // Read file content from HEAD commit
+          const readHeadFile = async (filepath: string): Promise<string | null> => {
+            try {
+              const oid = await git.resolveRef({ fs, dir, ref: 'HEAD' });
+              const { blob } = await git.readBlob({ fs, dir, oid, filepath });
+              return new TextDecoder().decode(blob);
+            } catch { return null; }
+          };
+
           const matrix = await git.statusMatrix({ fs, dir });
           for (const [filepath, head, workdir, _stage] of matrix) {
             if (head === workdir) continue;
+            ctx.stdout += `diff --git a/${filepath} b/${filepath}\n`;
             if (head === 0 && workdir === 2) {
               // New file
               const content = await ctx.fs.readFile(ctx.fs.resolvePath(filepath as string, dir), 'utf8');
-              ctx.stdout += `diff --git a/${filepath} b/${filepath}\n`;
               ctx.stdout += `new file\n`;
               ctx.stdout += `--- /dev/null\n`;
               ctx.stdout += `+++ b/${filepath}\n`;
@@ -164,13 +259,29 @@ export const gitCmd: Command = {
               ctx.stdout += `@@ -0,0 +1,${lines.length} @@\n`;
               for (const line of lines) ctx.stdout += `+${line}\n`;
             } else if (workdir === 0) {
-              ctx.stdout += `diff --git a/${filepath} b/${filepath}\n`;
+              // Deleted file
+              const oldContent = await readHeadFile(filepath as string);
               ctx.stdout += `deleted file\n`;
+              ctx.stdout += `--- a/${filepath}\n`;
+              ctx.stdout += `+++ /dev/null\n`;
+              if (oldContent != null) {
+                const lines = oldContent.split('\n');
+                ctx.stdout += `@@ -1,${lines.length} +0,0 @@\n`;
+                for (const line of lines) ctx.stdout += `-${line}\n`;
+              }
             } else {
-              ctx.stdout += `diff --git a/${filepath} b/${filepath}\n`;
+              // Modified file — compute real diff
+              const oldContent = await readHeadFile(filepath as string);
+              const newContent = await ctx.fs.readFile(ctx.fs.resolvePath(filepath as string, dir), 'utf8');
               ctx.stdout += `--- a/${filepath}\n`;
               ctx.stdout += `+++ b/${filepath}\n`;
-              ctx.stdout += `(binary diff not shown)\n`;
+              if (oldContent != null && newContent != null) {
+                const oldLines = (oldContent as string).split('\n');
+                const newLines = (newContent as string).split('\n');
+                ctx.stdout += unifiedDiff(oldLines, newLines);
+              } else {
+                ctx.stdout += `(could not read file contents)\n`;
+              }
             }
           }
           if (!ctx.stdout) ctx.stdout = '';
@@ -243,7 +354,7 @@ export const gitCmd: Command = {
           ctx.stdout = `Cloning into '${repoName}'...\n`;
 
           // Use git protocol via CORS proxy (GitHub API tarball fails due to CORS)
-          const corsProxy = ctx.env['GIT_CORS_PROXY'] || 'https://cors.isomorphic-git.org';
+          const corsProxy = ctx.env['GIT_CORS_PROXY'] || (typeof location !== 'undefined' ? location.origin + '/git-proxy' : 'https://cors.isomorphic-git.org');
           await Promise.race([
             git.clone({
               fs, http, dir: targetDir, url,

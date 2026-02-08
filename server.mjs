@@ -56,6 +56,9 @@ async function handleProxy(req, res, pathAfterApi) {
     return res.end();
   }
 
+  // Log all proxy requests for debugging
+  console.log(`[proxy] ${req.method} /api/${pathAfterApi}`);
+
   const slashIdx = pathAfterApi.indexOf('/');
   const target = slashIdx === -1 ? pathAfterApi : pathAfterApi.slice(0, slashIdx);
   const rest = slashIdx === -1 ? '/' : pathAfterApi.slice(slashIdx);
@@ -97,6 +100,7 @@ async function handleProxy(req, res, pathAfterApi) {
       if (!SKIP_RESPONSE_HEADERS.has(k.toLowerCase())) respHeaders[k] = v;
     }
 
+    console.log(`[proxy] ${req.method} /api/${pathAfterApi} → ${upstream.status}`);
     res.writeHead(upstream.status, respHeaders);
     if (upstream.body) {
       const reader = upstream.body.getReader();
@@ -113,6 +117,7 @@ async function handleProxy(req, res, pathAfterApi) {
       res.end();
     }
   } catch (err) {
+    console.error(`Proxy error [${req.method} ${req.url}]:`, err.message || err);
     res.writeHead(502, { 'content-type': 'application/json', ...cors });
     res.end(JSON.stringify({ error: err.message }));
   }
@@ -155,8 +160,14 @@ async function handleStatic(req, res) {
     const s = await stat(filePath);
     if (s.isDirectory()) filePath = join(filePath, 'index.html');
   } catch {
-    // Fall through to index.html for SPA routing
-    filePath = join(STATIC_DIR, 'index.html');
+    // Try .html extension (e.g. /about → about.html)
+    try {
+      await stat(filePath + '.html');
+      filePath = filePath + '.html';
+    } catch {
+      // Fall through to index.html for SPA routing
+      filePath = join(STATIC_DIR, 'index.html');
+    }
   }
 
   try {
@@ -268,12 +279,74 @@ async function handleSignaling(req, res, pathname) {
   return res.end(JSON.stringify({ error: 'Unknown signaling endpoint' }));
 }
 
+// --- Git CORS proxy (for isomorphic-git clone) ---
+async function handleGitProxy(req, res, targetUrl) {
+  const origin = req.headers['origin'];
+  const cors = corsHeaders(origin);
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, cors);
+    return res.end();
+  }
+
+  // Collect body
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  const body = Buffer.concat(chunks);
+
+  // Forward headers (strip browser-specific ones)
+  const headers = {};
+  for (const [k, v] of Object.entries(req.headers)) {
+    if (!SKIP_REQUEST_HEADERS.has(k.toLowerCase())) headers[k] = v;
+  }
+  headers['host'] = new URL(targetUrl).host;
+  if (body.length) headers['content-length'] = String(body.length);
+
+  try {
+    const upstream = await fetch(targetUrl, {
+      method: req.method,
+      headers,
+      body: body.length ? body : undefined,
+      duplex: 'half',
+    });
+
+    const respHeaders = { ...cors };
+    for (const [k, v] of upstream.headers) {
+      if (!SKIP_RESPONSE_HEADERS.has(k.toLowerCase())) respHeaders[k] = v;
+    }
+
+    res.writeHead(upstream.status, respHeaders);
+    if (upstream.body) {
+      const reader = upstream.body.getReader();
+      const pump = async () => {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          res.write(value);
+        }
+        res.end();
+      };
+      pump().catch(() => res.end());
+    } else {
+      res.end();
+    }
+  } catch (err) {
+    res.writeHead(502, { 'content-type': 'application/json', ...cors });
+    res.end(JSON.stringify({ error: err.message }));
+  }
+}
+
 // --- HTTP server ---
 const server = createServer(async (req, res) => {
   const pathname = new URL(req.url, 'http://localhost').pathname;
 
   if (pathname.startsWith('/api/')) {
     return handleProxy(req, res, pathname.slice(5));
+  }
+  // Git CORS proxy: /git-proxy/https://github.com/...
+  if (pathname.startsWith('/git-proxy/')) {
+    const targetUrl = req.url.slice('/git-proxy/'.length);
+    return handleGitProxy(req, res, targetUrl);
   }
   if (pathname === '/oauth/callback') {
     return handleOAuthCallback(req, res);

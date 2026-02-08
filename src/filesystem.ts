@@ -323,6 +323,8 @@ export class FileSystem {
 
     const content = typeof data === 'string' ? new TextEncoder().encode(data) : data;
     const existing = await this._get(path);
+    // Prevent overwriting a directory with a file
+    if (existing?.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, write '${path}'`);
     const now = Date.now();
 
     await this._put({
@@ -454,6 +456,9 @@ export class FileSystem {
         }
       }
     } else {
+      // Prevent renaming a file over a directory
+      const existing = await this._get(newPath);
+      if (existing?.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, rename '${newPath}'`);
       await this._put({ ...node, path: newPath, mtime: Date.now() });
       await this._delete(oldPath);
     }

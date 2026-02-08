@@ -80,6 +80,7 @@ import { hudCmd } from './commands/hud';
 import { faviconCmd } from './commands/favicon';
 import { historyCmd } from './commands/history';
 import { consoleCmd } from './commands/console';
+import { rgCmd } from './commands/rg';
 import { mcpCmd } from './commands/mcp-client';
 import { groupCmd } from './commands/group';
 import { iframeServer } from './iframe-server';
@@ -89,6 +90,7 @@ import { ShiroTerminal } from './terminal';
 import { ShiroProvider } from '../spirit/src/providers/shiro-provider';
 import { initFaviconUpdater, initTitle } from './favicon';
 import buildNumber from '../build-number.txt?raw';
+import { CLAUDE_MD } from './claude-md-seed';
 
 /**
  * Register a command in both the CommandRegistry (for execution) and
@@ -102,9 +104,19 @@ function registerCommand(commands: CommandRegistry, cmd: Command, sourcePath?: s
 async function main() {
   console.log(`[shiro] Starting... (build #${buildNumber.trim()})`);
 
+  // Request persistent storage so browser never evicts IndexedDB data (credentials, etc.)
+  navigator.storage?.persist?.().then(granted => {
+    if (granted) console.log('[shiro] Persistent storage granted');
+  }).catch(() => {});
+
   // Initialize filesystem
   const fs = new FileSystem();
   await fs.init();
+  // Seed CLAUDE.md for internal Claude Code (always update to latest version)
+  try {
+    await fs.mkdir('/home/user', { recursive: true });
+    await fs.writeFile('/home/user/CLAUDE.md', CLAUDE_MD);
+  } catch {}
   console.log('[shiro] Filesystem initialized');
 
   // Listen for seed hydration from parent (when loaded via seed snippet)
@@ -221,6 +233,7 @@ async function main() {
   registerCommand(commands, faviconCmd, 'src/commands/favicon.ts');
   registerCommand(commands, historyCmd, 'src/commands/history.ts');
   registerCommand(commands, consoleCmd, 'src/commands/console.ts');
+  registerCommand(commands, rgCmd, 'src/commands/rg.ts');
   registerCommand(commands, mcpCmd, 'src/commands/mcp-client.ts');
   registerCommand(commands, groupCmd, 'src/commands/group.ts');
 

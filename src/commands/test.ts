@@ -28,7 +28,7 @@ interface SuiteResult {
 }
 
 export const testCmd: Command = {
-  name: 'test',
+  name: 'jest',
   description: 'Run JavaScript test files with Jest-like syntax',
 
   async exec(ctx: CommandContext): Promise<number> {

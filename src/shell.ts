@@ -53,7 +53,9 @@ export class Shell {
     try {
       const raw = await this.fs.readFile(this.historyFile);
       const content = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-      this.history = content.split('\n').filter((line: string) => line.trim());
+      this.history = content.split('\n')
+        .map((line: string) => line.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '').replace(/\x1b\[[0-9;]*[a-zA-Z]/g, ''))
+        .filter((line: string) => line.trim());
       // Keep only the most recent entries
       if (this.history.length > this.maxHistorySize) {
         this.history = this.history.slice(-this.maxHistorySize);
@@ -150,8 +152,12 @@ export class Shell {
     const effectiveLine = heredoc ? heredoc.command : trimmed;
     const heredocStdin = heredoc ? heredoc.body : '';
 
-    this.history.push(trimmed);
-    this.saveHistory(); // Persist to disk (async, don't await)
+    // Strip control characters from history entries (ink UI can leak ANSI/DEL chars)
+    const sanitized = trimmed.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '').replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+    if (sanitized.trim()) {
+      this.history.push(sanitized);
+      this.saveHistory(); // Persist to disk (async, don't await)
+    }
 
     const stderrWriter = writeStderr || writeStdout;
 
@@ -193,8 +199,11 @@ export class Shell {
 
         if (args.length === 0) continue;
 
-        const cmdName = args[0];
-        const cmdArgs = args.slice(1);
+        // Expand glob patterns in args (but not quoted ones marked with \x01)
+        const expandedArgs = await this.expandGlobs(args);
+
+        const cmdName = expandedArgs[0];
+        const cmdArgs = expandedArgs.slice(1);
 
         // Handle . as alias for source
         const effectiveCmdName = cmdName === '.' ? 'source' : cmdName;
@@ -513,7 +522,7 @@ export class Shell {
         // 2>&1 doesn't need a target - it redirects stderr to stdout
         redirects.push({ type: '2>&1', target: '' });
       } else if ((tokens[i] === '>' || tokens[i] === '>>' || tokens[i] === '<' || tokens[i] === '2>' || tokens[i] === '2>>') && i + 1 < tokens.length) {
-        redirects.push({ type: tokens[i] as Redirect['type'], target: tokens[i + 1] });
+        redirects.push({ type: tokens[i] as Redirect['type'], target: tokens[i + 1].replace(/\x01/g, '') });
         i++;
       } else {
         args.push(tokens[i]);
@@ -534,7 +543,13 @@ export class Shell {
       const ch = input[i];
 
       if (ch === '\\' && !inSingle && i + 1 < input.length) {
-        current += input[i + 1];
+        // Escape glob chars so they won't be expanded
+        const next = input[i + 1];
+        if (next === '*' || next === '?' || next === '[') {
+          current += '\x01' + next; // sentinel: quoted glob char
+        } else {
+          current += next;
+        }
         i += 2;
         continue;
       }
@@ -556,6 +571,13 @@ export class Shell {
           tokens.push(current);
           current = '';
         }
+        i++;
+        continue;
+      }
+
+      // Mark glob chars inside quotes so they won't be expanded
+      if ((inSingle || inDouble) && (ch === '*' || ch === '?' || ch === '[')) {
+        current += '\x01' + ch;
         i++;
         continue;
       }
@@ -645,6 +667,41 @@ export class Shell {
       }
     }
     return result.join('');
+  }
+
+  // ─── GLOB EXPANSION ──────────────────────────────────────────────────────
+
+  /**
+   * Expand glob patterns in args. Tokens containing \x01-prefixed glob chars
+   * (from quoted strings) are NOT expanded — the sentinel is stripped instead.
+   * Follows bash behavior: no matches = keep the literal pattern.
+   */
+  private async expandGlobs(args: string[]): Promise<string[]> {
+    const result: string[] = [];
+    for (const arg of args) {
+      // Check for sentinel-marked (quoted) glob chars
+      const hasSentinel = arg.includes('\x01');
+      // Check for real (unquoted) glob chars
+      const hasGlob = !hasSentinel && /[*?[]/.test(arg);
+
+      if (hasGlob) {
+        try {
+          const matches = await this.fs.glob(arg, this.cwd);
+          if (matches.length > 0) {
+            result.push(...matches);
+          } else {
+            // No matches: keep literal (bash behavior)
+            result.push(arg);
+          }
+        } catch {
+          result.push(arg);
+        }
+      } else {
+        // Strip sentinel markers and keep literal
+        result.push(arg.replace(/\x01/g, ''));
+      }
+    }
+    return result;
   }
 
   // ─── ARITHMETIC EXPANSION ─────────────────────────────────────────────────

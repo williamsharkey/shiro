@@ -81,12 +81,53 @@ export const whichCmd: Command = {
       ctx.stderr = 'which: missing argument\n';
       return 1;
     }
-    const cmd = ctx.shell.commands.get(ctx.args[0]);
+    const name = ctx.args[0];
+    // Check builtins first
+    const cmd = ctx.shell.commands.get(name);
     if (cmd) {
-      ctx.stdout = `${ctx.args[0]}: shell built-in\n`;
+      ctx.stdout = `${name}\n`;
       return 0;
     }
-    ctx.stderr = `which: no ${ctx.args[0]} in (built-in commands)\n`;
+    // Check shell functions
+    if (ctx.shell.functions?.[name]) {
+      ctx.stdout = `${name}: shell function\n`;
+      return 0;
+    }
+    // Check PATH executables
+    const execPath = await ctx.shell.findExecutableInPath(name);
+    if (execPath) {
+      ctx.stdout = `${execPath}\n`;
+      return 0;
+    }
+    ctx.stderr = `${name} not found\n`;
+    return 1;
+  },
+};
+
+export const typeCmd: Command = {
+  name: 'type',
+  description: 'Describe a command',
+  async exec(ctx) {
+    if (ctx.args.length === 0) {
+      ctx.stderr = 'type: missing argument\n';
+      return 1;
+    }
+    const name = ctx.args[0];
+    const cmd = ctx.shell.commands.get(name);
+    if (cmd) {
+      ctx.stdout = `${name} is a shell builtin\n`;
+      return 0;
+    }
+    if (ctx.shell.functions?.[name]) {
+      ctx.stdout = `${name} is a shell function\n`;
+      return 0;
+    }
+    const execPath = await ctx.shell.findExecutableInPath(name);
+    if (execPath) {
+      ctx.stdout = `${name} is ${execPath}\n`;
+      return 0;
+    }
+    ctx.stderr = `type: ${name}: not found\n`;
     return 1;
   },
 };
@@ -611,7 +652,7 @@ export const openCmd: Command = {
  * Registered AFTER fluffy commands so they take precedence.
  */
 export const shiroOnlyCommands: Command[] = [
-  cdCmd, exportCmd, helpCmd, whichCmd, xargsCmd, rmdirCmd, sleepCmd, seqCmd,
+  cdCmd, exportCmd, helpCmd, whichCmd, typeCmd, xargsCmd, rmdirCmd, sleepCmd, seqCmd,
   // Overrides for fluffy bugs or Shiro-specific behavior:
   rmCmd, findCmd, lnCmd, hostnameCmd, unameCmd,
   grepCmd, sedCmd, diffCmd,
@@ -621,4 +662,12 @@ export const shiroOnlyCommands: Command[] = [
   shCmd, bashCmd,
   // Browser helpers:
   openCmd, { name: 'xdg-open', description: 'Open a URL in the browser', exec: (ctx) => openCmd.exec(ctx) },
+  // POSIX test bracket alias (delegates to fluffycoreutils test)
+  { name: '[', description: 'Evaluate conditional expression', async exec(ctx) {
+    // The fluffycoreutils test command already handles trailing ]
+    const testCmd = ctx.shell.commands.get('test');
+    if (testCmd) return testCmd.exec(ctx);
+    ctx.stderr = '[: test command not found\n';
+    return 2;
+  }},
 ];

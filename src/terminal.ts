@@ -136,8 +136,16 @@ export class ShiroTerminal {
     this.term.onData((data: string) => this.handleInput(data));
   }
 
+  private _writeCount = 0;
   writeOutput(text: string): void {
-    this.term.write(text);
+    const n = ++this._writeCount;
+    this.term.write(text, () => {
+      // Diagnostic: log first 5 writes and check xterm.js buffer after processing
+      if (n <= 20) {
+        const line0 = this.term.buffer.active.getLine(0)?.translateToString(true) || '';
+        console.warn(`[xterm] write #${n} (${text.length}b) line0="${line0.slice(0,60)}"`);
+      }
+    });
   }
 
   /**
@@ -782,8 +790,9 @@ export class ShiroTerminal {
     const hostDisplay = this.getHostDisplay();
     output += `\x1b[32m${user}@${hostDisplay}\x1b[0m:\x1b[34m${displayCwd}\x1b[0m$ `;
 
-    // Add input buffer
-    output += this.lineBuffer;
+    // Add input buffer (strip any control chars that leaked from interactive programs)
+    const safeBuffer = this.lineBuffer.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '').replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+    output += safeBuffer;
 
     // Calculate how many rows the new content occupies
     const totalChars = this.promptVisualLength() + this.lineBuffer.length;

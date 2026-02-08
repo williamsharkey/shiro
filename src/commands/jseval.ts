@@ -333,6 +333,7 @@ export const nodeCmd: Command = {
           if (exitCalled) throw new ProcessExitError(exitCode); // Prevent re-entrant exit
           exitCode = c ?? 0;
           exitCalled = true;
+          // Fire 'beforeExit' if present
           // Fire 'exit' event handlers (CLI registers cleanup here)
           try { (processEvents['exit'] || []).forEach(fn => fn(exitCode)); } catch (_) {}
           deferredExitResolve?.(exitCode);
@@ -355,8 +356,14 @@ export const nodeCmd: Command = {
               // Stream to terminal in real-time if available (enables streaming for claude -p, etc.)
               if (ctx.terminal) {
                 streamedToTerminal = true;
-                // Convert bare \n to \r\n for xterm.js (but don't double-convert \r\n)
-                ctx.terminal.writeOutput(str.replace(/\r?\n/g, '\r\n'));
+                // If output contains ANSI escape sequences, pass through unchanged —
+                // programs using ANSI cursor control handle their own line endings.
+                // Only convert bare \n to \r\n for simple text output.
+                if (str.includes('\x1b[')) {
+                  ctx.terminal.writeOutput(str);
+                } else {
+                  ctx.terminal.writeOutput(str.replace(/\r?\n/g, '\r\n'));
+                }
               }
               const callback = typeof encodingOrCb === 'function' ? encodingOrCb : cb;
               if (callback) queueMicrotask(() => (callback as Function)());
@@ -431,7 +438,11 @@ export const nodeCmd: Command = {
               stderrBuf.push(str);
               if (ctx.terminal) {
                 streamedToTerminal = true;
-                ctx.terminal.writeOutput(str.replace(/\r?\n/g, '\r\n'));
+                if (str.includes('\x1b[')) {
+                  ctx.terminal.writeOutput(str);
+                } else {
+                  ctx.terminal.writeOutput(str.replace(/\r?\n/g, '\r\n'));
+                }
               }
               const callback = typeof encodingOrCb === 'function' ? encodingOrCb : cb;
               if (callback) queueMicrotask(() => (callback as Function)());
@@ -532,6 +543,18 @@ export const nodeCmd: Command = {
                 });
               } else if (!mode && ctx.terminal) {
                 ctx.terminal.exitStdinPassthrough();
+                // Ink calls setRawMode(false) when unmounting (e.g., /exit).
+                // In real Node.js the event loop drains and process exits naturally.
+                // In our VM we must explicitly resolve the deferred exit promise.
+                if (isInteractiveMode) {
+                  setTimeout(() => {
+                    if (!exitCalled) {
+                      exitCode = 0;
+                      exitCalled = true;
+                      deferredExitResolve?.(0);
+                    }
+                  }, 500);
+                }
               }
               return stdinObj;
             },
@@ -656,6 +679,7 @@ export const nodeCmd: Command = {
         if (depth > maxDepth) return;
         try {
           const entries = await ctx.fs.readdir(dir);
+          // no-op: depth-0 logging removed
           for (const name of entries) {
             if (name === '.git') continue;
             // Skip node_modules inside project dirs (handled separately)
@@ -671,13 +695,74 @@ export const nodeCmd: Command = {
               }
             } catch { /* skip */ }
           }
-        } catch { /* skip */ }
+        } catch (e: any) {
+          if (depth === 0) console.warn(`[preload] readdir('${dir}') FAILED: ${e.message}`);
+        }
       }
 
       // Ensure home directory and common config dirs exist
       const homeDir = ctx.env['HOME'] || '/home/user';
+      // Repair corrupted directory nodes (can happen if writeFile/rename overwrites a dir)
+      for (const dirPath of ['/', '/home', homeDir, '/tmp']) {
+        try {
+          const st = await ctx.fs.stat(dirPath);
+          if (!st.isDirectory()) {
+            console.warn(`[init] Repairing corrupted dir node: ${dirPath}`);
+            // Force-recreate as directory by deleting the bad file node first
+            try { await ctx.fs.unlink(dirPath); } catch {}
+            await ctx.fs.mkdir(dirPath, { recursive: true });
+          }
+        } catch {
+          // Doesn't exist, create it
+          try { await ctx.fs.mkdir(dirPath, { recursive: true }); } catch {}
+        }
+      }
       try { await ctx.fs.mkdir(homeDir, { recursive: true }); } catch {}
       try { await ctx.fs.mkdir('/tmp', { recursive: true }); } catch {}
+
+      // Replay localStorage WAL — recover config files that didn't flush to IndexedDB before page close
+      try {
+        const walKeys = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key?.startsWith('wal:')) walKeys.push(key);
+        }
+        let walReplayed = 0, walSkipped = 0;
+        for (const key of walKeys) {
+          const path = key.slice(4); // strip 'wal:' prefix
+          // Skip .tmp files — they're transient atomic write artifacts
+          if (path.includes('.tmp.')) {
+            localStorage.removeItem(key);
+            walSkipped++;
+            continue;
+          }
+          const data = localStorage.getItem(key);
+          if (data !== null) {
+            // Ensure parent dir exists
+            const parentDir = path.substring(0, path.lastIndexOf('/'));
+            try { await ctx.fs.mkdir(parentDir, { recursive: true }); } catch {}
+            await ctx.fs.writeFile(path, data);
+            walReplayed++;
+          }
+          localStorage.removeItem(key); // Clean up after successful replay
+        }
+        if (walReplayed || walSkipped) {
+          console.warn(`[wal] Replayed ${walReplayed} files, skipped ${walSkipped} .tmp files`);
+        }
+      } catch (e: any) {
+        console.warn(`[wal] Replay error: ${e.message}`);
+      }
+      // Clean up stale .tmp files from atomic writes (they pollute readdir)
+      try {
+        const homeEntries = await ctx.fs.readdir(homeDir);
+        let tmpCleaned = 0;
+        for (const name of homeEntries) {
+          if (name.includes('.tmp.')) {
+            try { await ctx.fs.unlink(homeDir + '/' + name); tmpCleaned++; } catch {}
+          }
+        }
+        if (tmpCleaned) console.warn(`[init] Cleaned ${tmpCleaned} stale .tmp files from ${homeDir}`);
+      } catch {}
       try { await ctx.fs.mkdir(homeDir + '/.claude', { recursive: true }); } catch {}
       try { await ctx.fs.mkdir(homeDir + '/.claude/projects', { recursive: true }); } catch {}
       try { await ctx.fs.mkdir(homeDir + '/.claude/statsig', { recursive: true }); } catch {}
@@ -701,6 +786,7 @@ export const nodeCmd: Command = {
       preloadDirs.push('/tmp');
       preloadDirs.push(homeDir + '/.claude');
       preloadDirs.push(homeDir + '/.config');
+      // preload dirs: cwd, home, /tmp, ~/.claude, ~/.config
 
       for (const dir of preloadDirs) {
         await preloadDir(dir, 0, 5);
@@ -713,6 +799,25 @@ export const nodeCmd: Command = {
           }
         } catch { /* skip if dir doesn't exist */ }
       }
+
+      // Explicitly preload critical CLI config files (safety net if preloadDir missed them)
+      const criticalFiles = [
+        homeDir + '/.claude.json',
+        homeDir + '/.claude/.credentials.json',
+        homeDir + '/.claude/.config.json',
+        homeDir + '/.claude/settings.json',
+        homeDir + '/.claude/settings.local.json',
+      ];
+      for (const fp of criticalFiles) {
+        if (!fileCache.has(fp)) {
+          try {
+            const content = await ctx.fs.readFile(fp, 'utf8');
+            fileCache.set(fp, content as string);
+          } catch { /* file doesn't exist yet, that's OK */ }
+        }
+      }
+
+      console.log(`[node] ${fileCache.size} files preloaded`);
 
       // Pre-load node_modules — walk up from cwd, with deeper recursion
       let nmSearch = ctx.cwd;
@@ -949,7 +1054,9 @@ export const nodeCmd: Command = {
               readFileSync: (p: string, opts?: any) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
                 const cached = fileCache.get(resolved) ?? fileCache.get(resolved + '.js');
-                if (cached === undefined) throw new Error(`ENOENT: no such file or directory, open '${p}'`);
+                if (cached === undefined) {
+                    throw new Error(`ENOENT: no such file or directory, open '${p}'`);
+                }
                 const encoding = typeof opts === 'string' ? opts : opts?.encoding;
                 if (encoding === 'utf8' || encoding === 'utf-8' || encoding === 'utf8') return cached;
                 if (!encoding) return FakeBuffer.from(cached);
@@ -961,6 +1068,11 @@ export const nodeCmd: Command = {
                 fileCache.set(resolved, strData);
                 // Track VFS write so it completes before script exit
                 pendingPromises.push(ctx.fs.writeFile(resolved, strData).catch(() => {}));
+                // localStorage WAL for critical config files (survives page close before IndexedDB flushes)
+                // Skip .tmp files — they'll be WAL'd when renamed to their final name
+                if ((resolved.startsWith(homeDir + '/.claude') || resolved === homeDir + '/.claude.json') && !resolved.includes('.tmp.')) {
+                  try { localStorage.setItem('wal:' + resolved, strData); } catch {}
+                }
               },
               existsSync: (p: string) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
@@ -1049,8 +1161,23 @@ export const nodeCmd: Command = {
                 if (content !== undefined) {
                   fileCache.set(newRes, content);
                   fileCache.delete(oldRes);
+                  // Write directly to new path — avoids race where IDB write for
+                  // the source hasn't completed yet (atomic write pattern: write .tmp → rename)
+                  pendingPromises.push(
+                    ctx.fs.writeFile(newRes, content)
+                      .then(() => ctx.fs.unlink(oldRes).catch(() => {}))
+                      .catch(() => {})
+                  );
+                  // Update WAL: remove .tmp entry, add final file
+                  if (newRes.startsWith(homeDir + '/.claude') || newRes === homeDir + '/.claude.json') {
+                    try {
+                      localStorage.removeItem('wal:' + oldRes);
+                      localStorage.setItem('wal:' + newRes, content);
+                    } catch {}
+                  }
+                } else {
+                  pendingPromises.push(ctx.fs.rename(oldRes, newRes).catch(() => {}));
                 }
-                pendingPromises.push(ctx.fs.rename(oldRes, newRes).catch(() => {}));
               },
               realpathSync: (p: string) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
@@ -1419,8 +1546,14 @@ export const nodeCmd: Command = {
             return {
               readFile: async (p: string, opts?: any) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-                const data = await ctx.fs.readFile(resolved);
+                // Check fileCache first (may have data from writeFileSync not yet flushed)
+                const cached = fileCache.get(resolved);
                 const encoding = typeof opts === 'string' ? opts : opts?.encoding;
+                if (cached !== undefined) {
+                  if (encoding === 'utf8' || encoding === 'utf-8') return cached;
+                  return FakeBuffer.from(cached);
+                }
+                const data = await ctx.fs.readFile(resolved);
                 if (encoding === 'utf8' || encoding === 'utf-8') {
                   return typeof data === 'string' ? data : new TextDecoder().decode(data);
                 }
@@ -1429,7 +1562,12 @@ export const nodeCmd: Command = {
               writeFile: async (p: string, data: any) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
                 const content = typeof data === 'string' ? data : new TextDecoder().decode(data);
+                fileCache.set(resolved, content); // Keep fileCache in sync for readFileSync
                 await ctx.fs.writeFile(resolved, content);
+                // localStorage WAL for critical config files
+                if (resolved.startsWith(homeDir + '/.claude') || resolved === homeDir + '/.claude.json') {
+                  try { localStorage.setItem('wal:' + resolved, content); } catch {}
+                }
               },
               readdir: async (p: string, opts?: any) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
@@ -1452,7 +1590,7 @@ export const nodeCmd: Command = {
               },
               mkdir: async (p: string, opts?: any) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-                await ctx.fs.mkdir(resolved, opts?.recursive);
+                await ctx.fs.mkdir(resolved, opts);
               },
               unlink: async (p: string) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
@@ -1530,13 +1668,28 @@ export const nodeCmd: Command = {
             //   spawn('/bin/sh', ['/tmp/claude-XXX-cwd'])      → source file as script
             //   exec('/bin/sh -l -c "echo hello"')             → extract 'echo hello'
             const isShellBin = (s: string) => /^\/bin\/(?:sh|bash|zsh)$/.test(s);
+            const stripOuterQuotes = (s: string): string => {
+              // Strip matching outer quotes like a shell would: "cmd" → cmd, 'cmd' → cmd
+              // Also unescape inner escaped quotes: \" → "
+              const t = s.trim();
+              if (t.length >= 2) {
+                if (t[0] === "'" && t[t.length - 1] === "'") return t.slice(1, -1);
+                if (t[0] === '"' && t[t.length - 1] === '"') {
+                  return t.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+                }
+              }
+              return t;
+            };
             const stripShellPrefix = (cmd: string): string => {
               if (!/^\/bin\/(?:sh|bash|zsh)\b/.test(cmd)) return cmd;
               const rest = cmd.replace(/^\/bin\/(?:sh|bash|zsh)\s*/, '').trim();
               if (!rest) return 'true'; // bare /bin/sh → no-op
               // Find -c flag (possibly combined: -lc, -ilc, or separate: -l -c)
               const idx = rest.search(/(^|\s)-\w*c\s/);
-              if (idx >= 0) return rest.slice(idx).replace(/^\s*-\w*c\s+/, '');
+              if (idx >= 0) {
+                const extracted = rest.slice(idx).replace(/^\s*-\w*c\s+/, '');
+                return stripOuterQuotes(extracted);
+              }
               // No -c: separate flags from file args
               const parts = rest.split(/\s+/);
               const scripts = parts.filter(p => !p.startsWith('-'));
@@ -1568,12 +1721,6 @@ export const nodeCmd: Command = {
               // Strip leading shell flags (-l, -i, -e) that leak through from spawn args
               normalized = normalized.replace(/^(-[a-zA-Z]+\s+)+/, '');
               if (!normalized || /^-[a-zA-Z]+$/.test(normalized)) normalized = 'true';
-              // Debug trace
-              try {
-                const log = fileCache.get('/tmp/exec-debug.log') || '';
-                fileCache.set('/tmp/exec-debug.log', log + `raw=${JSON.stringify(cmd).slice(0,200)} norm=${JSON.stringify(normalized).slice(0,200)}\n`);
-                ctx.fs.writeFile('/tmp/exec-debug.log', fileCache.get('/tmp/exec-debug.log')!).catch(() => {});
-              } catch {}
               let stdout = '';
               let stderr = '';
               const exitCode = await ctx.shell.execute(normalized, (s) => { stdout += s; }, (s) => { stderr += s; });
@@ -3572,7 +3719,7 @@ export const nodeCmd: Command = {
                 const redirectUrl = typeof urlOrStatus === 'string' ? urlOrStatus : url!;
                 statusCode = typeof urlOrStatus === 'number' ? urlOrStatus : 302;
                 responseHeaders['location'] = redirectUrl;
-                console.log(`[Express] REDIRECT ${statusCode} -> ${redirectUrl}`);
+                // redirect response
                 this.end();
               },
               type(t: string) { responseHeaders['content-type'] = t; return this; },
@@ -3615,7 +3762,6 @@ export const nodeCmd: Command = {
             };
 
             // Run middleware chain then routes (with async support)
-            console.log(`[Express] ${req.method} ${req.path} - ${middlewares.length} middlewares, ${routes.length} routes`);
             let middlewareIndex = 0;
             let lastError: any = null; // Track errors for error handlers
             const runNext = async (err?: any): Promise<void> => {
@@ -4519,20 +4665,9 @@ export const nodeCmd: Command = {
         const modDir = resolved.substring(0, resolved.lastIndexOf('/')) || ctx.cwd;
         const nestedRequire = (p: string) => requireModule(p, modDir);
 
-        // Debug for iconv-lite streams
-        if (resolved.includes('streams.js') && resolved.includes('iconv')) {
-          console.log(`[module] Loading: ${resolved}`);
-          console.log(`[module] Original content first 500 chars:`, content.slice(0, 500));
-        }
-
         try {
           // Transform ES module syntax to CommonJS
           const transformedContent = transformESModules(content);
-
-          // Debug for iconv-lite streams transformed content
-          if (resolved.includes('streams.js') && resolved.includes('iconv')) {
-            console.log(`[module] Transformed content first 800 chars:`, transformedContent.slice(0, 800));
-          }
 
           const modImportMeta = {
             url: `file://${resolved}`,
@@ -4562,10 +4697,6 @@ export const nodeCmd: Command = {
             }
           }));
 
-          // Debug for iconv-lite streams
-          if (resolved.includes('streams.js') || resolved.includes('iconv')) {
-            console.log(`[module] ${resolved} exports:`, typeof mod.exports, mod.exports?.name || Object.keys(mod.exports || {}).slice(0, 5));
-          }
         } catch (err) {
           moduleCache.delete(resolved);
           const errMsg = err instanceof Error ? err.message : String(err);
@@ -5095,32 +5226,50 @@ export const nodeCmd: Command = {
           }
           return _origFetch(input, init);
         };
-        if (_origXHR) {
+        // Patch XMLHttpRequest prototype directly — more robust than replacing the
+        // constructor, as it catches ALL XHR instances regardless of how they were
+        // created (cached references, subclasses, etc.).
+        if (_origXHR && !(XMLHttpRequest.prototype as any)._shiroProxied) {
           const unsafeHeaders = new Set(['user-agent','host','content-length','connection','accept-encoding','accept-charset','referer','origin','cookie','te','upgrade','via','transfer-encoding','proxy-authorization','proxy-connection','sec-fetch-dest','sec-fetch-mode','sec-fetch-site','sec-fetch-user']);
-          (globalThis as any).XMLHttpRequest = class ProxiedXHR extends _origXHR {
-            _blocked = false;
-            open(method: string, url: string | URL, ...rest: any[]) {
-              const u = typeof url === 'string' ? url : url.toString();
-              if (isBlocked(u)) { this._blocked = true; return; }
-              return super.open(method, rewriteUrl(u), ...(rest as [boolean, string?, string?]));
-            }
-            setRequestHeader(name: string, value: string) {
-              if (this._blocked) return;
-              if (unsafeHeaders.has(name.toLowerCase())) return;
-              return super.setRequestHeader(name, value);
-            }
-            send(body?: any) {
-              if (this._blocked) {
-                // Simulate successful empty response
-                Object.defineProperty(this, 'status', { value: 200 });
-                Object.defineProperty(this, 'responseText', { value: '{}' });
-                Object.defineProperty(this, 'readyState', { value: 4 });
-                setTimeout(() => this.dispatchEvent(new Event('load')), 0);
-                return;
-              }
-              return super.send(body);
-            }
+          const origOpen = XMLHttpRequest.prototype.open;
+          const origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+          const origSend = XMLHttpRequest.prototype.send;
+          XMLHttpRequest.prototype.open = function(this: XMLHttpRequest, method: string, url: string | URL, ...rest: any[]) {
+            const u = typeof url === 'string' ? url : url.toString();
+            if (isBlocked(u)) { (this as any)._blocked = true; return; }
+            return origOpen.call(this, method, rewriteUrl(u), ...(rest as [boolean, string?, string?]));
+          } as any;
+          XMLHttpRequest.prototype.setRequestHeader = function(this: XMLHttpRequest, name: string, value: string) {
+            if ((this as any)._blocked) return;
+            if (unsafeHeaders.has(name.toLowerCase())) return;
+            return origSetHeader.call(this, name, value);
           };
+          XMLHttpRequest.prototype.send = function(this: XMLHttpRequest, body?: any) {
+            if ((this as any)._blocked) {
+              // Simulate a complete successful response for blocked URLs.
+              // Must trigger both onreadystatechange AND onload — axios uses the former.
+              Object.defineProperty(this, 'status', { value: 200 });
+              Object.defineProperty(this, 'statusText', { value: 'OK' });
+              Object.defineProperty(this, 'responseText', { value: '{}' });
+              Object.defineProperty(this, 'response', { value: '{}' });
+              Object.defineProperty(this, 'readyState', { value: 4 });
+              Object.defineProperty(this, 'responseURL', { value: '' });
+              setTimeout(() => {
+                const rsEvt = new Event('readystatechange');
+                if (typeof (this as any).onreadystatechange === 'function') (this as any).onreadystatechange(rsEvt);
+                try { this.dispatchEvent(rsEvt); } catch {}
+                const loadEvt = new ProgressEvent('load');
+                if (typeof (this as any).onload === 'function') (this as any).onload(loadEvt);
+                try { this.dispatchEvent(loadEvt); } catch {}
+                const endEvt = new ProgressEvent('loadend');
+                if (typeof (this as any).onloadend === 'function') (this as any).onloadend(endEvt);
+                try { this.dispatchEvent(endEvt); } catch {}
+              }, 0);
+              return;
+            }
+            return origSend.call(this, body);
+          };
+          (XMLHttpRequest.prototype as any)._shiroProxied = true;
         }
       }
 
@@ -5189,8 +5338,19 @@ export const nodeCmd: Command = {
         const deferredTimeout = new Promise<never>((_, reject) => {
           setTimeout(() => reject(new ProcessExitError(124)), DEFERRED_TIMEOUT);
         });
+        // Create a FRESH deferred promise — the original may already be resolved if
+        // process.exit was called during initialization (e.g., background workers).
+        // We want to wait for a NEW process.exit call (user quitting the interactive app).
+        let freshExitPromise = deferredExitPromise;
+        if (exitCalled && isInteractiveMode) {
+          freshExitPromise = new Promise<number>(resolve => {
+            deferredExitResolve = resolve;
+          });
+          // Reset exitCalled so future process.exit calls will resolve the fresh promise
+          exitCalled = false;
+        }
         try {
-          const waitCode = await Promise.race([deferredExitPromise, deferredTimeout]);
+          const waitCode = await Promise.race([freshExitPromise, deferredTimeout]);
           exitCode = waitCode;
         } catch (e: any) {
           if (e instanceof ProcessExitError) {
@@ -5200,8 +5360,8 @@ export const nodeCmd: Command = {
         }
       }
 
-      // Flush output — skip stdout if it was already streamed to terminal
-      if (stdoutBuf.length > 0 && !streamedToTerminal) {
+      // Flush output to ctx.stdout so callers (child_process.exec, pipes) can capture it
+      if (stdoutBuf.length > 0) {
         ctx.stdout += stdoutBuf.join('\n') + '\n';
       }
       if (stderrBuf.length > 0) {
@@ -5219,9 +5379,8 @@ export const nodeCmd: Command = {
       if (typeof window !== 'undefined') {
         setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
       }
-      // Restore original fetch/XHR/globals
+      // Restore original fetch/globals (XHR prototype patch is idempotent, no restore needed)
       globalThis.fetch = _origFetch;
-      if (_origXHR) (globalThis as any).XMLHttpRequest = _origXHR;
       if (_origSetImmediate) (globalThis as any).setImmediate = _origSetImmediate; else delete (globalThis as any).setImmediate;
       if (_origClearImmediate) (globalThis as any).clearImmediate = _origClearImmediate; else delete (globalThis as any).clearImmediate;
 
@@ -5233,9 +5392,8 @@ export const nodeCmd: Command = {
       if (typeof window !== 'undefined') {
         setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
       }
-      // Restore original fetch/XHR/globals
+      // Restore original fetch/globals (XHR prototype patch is idempotent, no restore needed)
       globalThis.fetch = _origFetch;
-      if (_origXHR) (globalThis as any).XMLHttpRequest = _origXHR;
       delete (globalThis as any).setImmediate;
       delete (globalThis as any).clearImmediate;
       ctx.stderr += `${e.stack || e.message}\n`;
