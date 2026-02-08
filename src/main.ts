@@ -80,6 +80,8 @@ import { hudCmd } from './commands/hud';
 import { faviconCmd } from './commands/favicon';
 import { historyCmd } from './commands/history';
 import { consoleCmd } from './commands/console';
+import { mcpCmd } from './commands/mcp-client';
+import { groupCmd } from './commands/group';
 import { iframeServer } from './iframe-server';
 import { allCommands } from '../fluffycoreutils/src/index';
 import { wrapFluffyCommand } from './fluffy-adapter';
@@ -219,6 +221,8 @@ async function main() {
   registerCommand(commands, faviconCmd, 'src/commands/favicon.ts');
   registerCommand(commands, historyCmd, 'src/commands/history.ts');
   registerCommand(commands, consoleCmd, 'src/commands/console.ts');
+  registerCommand(commands, mcpCmd, 'src/commands/mcp-client.ts');
+  registerCommand(commands, groupCmd, 'src/commands/group.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {

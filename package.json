@@ -8,7 +8,7 @@
     "build": "node increment-build.js && tsc && vite build",
     "preview": "vite preview",
     "test": "echo 'Tests have moved to the windwalker repo.' && echo '' && echo 'To run Shiro tests:' && echo '  cd ../windwalker' && echo '  npm install' && echo '  npm run test:shiro' && echo '' && echo 'Windwalker uses linkedom for proper DOM polyfills (no window errors).' && exit 1",
-    "deploy": "node increment-build.js && git submodule update --init --recursive && npm run build && cd dist && git init && git add -A && git commit -m 'Deploy to GitHub Pages' && git push -f https://github.com/williamsharkey/shiro.git main:gh-pages && cd .."
+    "deploy": "bash deploy.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",

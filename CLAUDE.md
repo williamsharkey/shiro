@@ -44,6 +44,8 @@ src/
     ├── vi.ts             # minimal vi-like modal text editor
     ├── spirit.ts         # Spirit AI agent (interim Anthropic API loop)
     ├── remote.ts         # WebRTC remote connection for Claude Code MCP
+    ├── mcp-client.ts     # MCP Streamable HTTP client (connect to external MCP servers)
+    ├── group.ts          # Encrypted group networking (peer discovery via relay)
     ├── seed.ts           # Export state as paste-able snippet (normal or blob)
     └── hud.ts            # HUD redraw command
 └── utils/
@@ -92,15 +94,14 @@ npx tsc --noEmit     # Type-check without building
 
 ## Deployment
 
-Shiro deploys to **Cloudflare Pages** at https://shiro.computer
+Shiro deploys to a **DigitalOcean droplet** at https://shiro.computer (`161.35.13.177`).
+
+A single Node.js server (`server.mjs`) handles everything: static files, API proxy, OAuth callback, and WebSocket relay. Nginx sits in front with SSL (certbot).
 
 ```bash
 # Build and deploy to production
-npm run build
-npx wrangler pages deploy dist --project-name=shiro
+npm run deploy    # builds + uploads via scp + restarts server
 ```
-
-The `wrangler.toml` configures the Cloudflare Pages project. Deployment takes ~3 seconds.
 
 ## Testing
 
@@ -175,6 +176,36 @@ Then use tools: `shiro:connect`, `shiro:exec`, `shiro:read`, `shiro:write`, `shi
 - `src/commands/remote.ts` — remote command, WebRTC setup, message handlers
 - `remote-worker/` — Cloudflare Worker signaling server
 - `shirocode/shiro-mcp/` — MCP server package for Claude Code
+
+## MCP Client
+
+Shiro can connect to external MCP servers as a client using the Streamable HTTP protocol:
+```bash
+mcp connect <url>        # Initialize session, list available tools
+mcp disconnect [url]     # Close session (or all sessions)
+mcp tools [url]          # List tools
+mcp call <tool> [json]   # Call a tool with JSON arguments
+mcp status               # Show active connections
+```
+
+Same-origin MCP servers work without CORS issues. External servers need CORS headers.
+
+## Group Networking
+
+Encrypted peer discovery via WebSocket relay. Multiple Shiro instances can find each other:
+```bash
+group join <name> <password>   # Join an encrypted group
+group leave                    # Leave current group
+group peers                    # List discovered peers
+group status                   # Show group info
+```
+
+Uses PBKDF2 key derivation + AES-GCM encryption. The WebSocket relay (built into `server.mjs`) never sees plaintext — it only forwards encrypted blobs.
+
+**Key files:**
+- `src/commands/mcp-client.ts` — MCP client command
+- `src/commands/group.ts` — Group networking command
+- `server.mjs` — Server with built-in WebSocket relay at `/channel/:id`
 
 ## Seed Command
 
