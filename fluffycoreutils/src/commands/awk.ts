@@ -140,54 +140,78 @@ function executeAction(
   // Process string functions
   code = processStringFunctions(code, fields, ctx);
 
-  // Handle printf statement
-  if (code.startsWith("printf")) {
-    const printfMatch = code.match(/printf\s+(.+)/);
-    if (printfMatch) {
-      return formatPrintf(printfMatch[1], fields, ctx);
+  // Handle multiple statements separated by ;
+  // Split on ; but not inside quotes
+  const statements = code.split(/;\s*/);
+  let printResult: string | null = null;
+
+  for (const rawStmt of statements) {
+    const stmt = rawStmt.trim();
+    if (!stmt) continue;
+
+    // Handle printf statement
+    if (stmt.startsWith("printf")) {
+      const printfMatch = stmt.match(/printf\s+(.+)/);
+      if (printfMatch) {
+        printResult = formatPrintf(printfMatch[1], fields, ctx);
+      }
+      continue;
     }
-  }
 
-  // Handle print statement
-  if (code.startsWith("print")) {
-    const printExpr = code.substring(5).trim();
+    // Handle print statement
+    if (stmt.startsWith("print")) {
+      const printExpr = stmt.substring(5).trim();
 
-    if (!printExpr || printExpr === "") {
-      // print with no args prints the whole line
-      return fields.join(ctx.OFS);
-    }
-
-    // Handle comma-separated print arguments (use OFS)
-    if (printExpr.includes(",")) {
-      const parts = printExpr.split(/\s*,\s*/);
-      const outputs = parts.map(part => {
-        let output = substituteVariables(part.trim(), fields, ctx);
+      if (!printExpr || printExpr === "") {
+        printResult = fields.join(ctx.OFS);
+      } else if (printExpr.includes(",")) {
+        const parts = printExpr.split(/\s*,\s*/);
+        const outputs = parts.map(part => {
+          let output = substituteVariables(part.trim(), fields, ctx);
+          output = evaluateArithmetic(output);
+          return output.replace(/^["'](.*)["']$/, "$1");
+        });
+        printResult = outputs.join(ctx.OFS);
+      } else {
+        let output = substituteVariables(printExpr, fields, ctx);
         output = evaluateArithmetic(output);
-        return output.replace(/^["'](.*)["']$/, "$1");
-      });
-      return outputs.join(ctx.OFS);
+        output = output.replace(/^["'](.*)["']$/, "$1");
+        output = output.replace(/\s+/g, " ").trim();
+        printResult = output;
+      }
+      continue;
     }
 
-    // Replace field references $1, $2, etc.
-    let output = printExpr;
+    // Handle increment/decrement: var++ or var--
+    const incrMatch = stmt.match(/^(\w+)(\+\+|--)$/);
+    if (incrMatch) {
+      const [, varName, op] = incrMatch;
+      const current = parseFloat(ctx.variables[varName]) || 0;
+      ctx.variables[varName] = String(op === "++" ? current + 1 : current - 1);
+      continue;
+    }
 
-    // Substitute variables and fields
-    output = substituteVariables(output, fields, ctx);
+    // Handle assignment: var op= expr
+    const assignMatch = stmt.match(/^(\w+)\s*([\+\-\*\/]?)=\s*(.+)$/);
+    if (assignMatch) {
+      const [, varName, op, exprStr] = assignMatch;
+      let value = substituteVariables(exprStr, fields, ctx);
+      value = evaluateArithmetic(value);
+      const numVal = parseFloat(value) || 0;
+      const current = parseFloat(ctx.variables[varName]) || 0;
 
-    // Evaluate arithmetic expressions if present
-    output = evaluateArithmetic(output);
-
-    // Remove quotes if present
-    output = output.replace(/^["'](.*)["']$/, "$1");
-
-    // Handle string concatenation (space-separated items)
-    output = output.replace(/\s+/g, " ").trim();
-
-    return output;
+      switch (op) {
+        case "+": ctx.variables[varName] = String(current + numVal); break;
+        case "-": ctx.variables[varName] = String(current - numVal); break;
+        case "*": ctx.variables[varName] = String(current * numVal); break;
+        case "/": ctx.variables[varName] = String(current / numVal); break;
+        default: ctx.variables[varName] = String(numVal); break;
+      }
+      continue;
+    }
   }
 
-  // If no print statement, return null (no output)
-  return null;
+  return printResult;
 }
 
 function substituteVariables(
@@ -266,7 +290,8 @@ function formatPrintf(
   // Get arguments
   const args: string[] = [];
   for (let i = 1; i < parts.length; i++) {
-    const arg = substituteVariables(parts[i].trim(), fields, ctx);
+    let arg = substituteVariables(parts[i].trim(), fields, ctx);
+    arg = evaluateArithmetic(arg);
     args.push(arg);
   }
 
