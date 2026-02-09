@@ -33,6 +33,7 @@ export class ShiroTerminal {
   private stdinPassthrough: ((data: string) => void) | null = null;
   private stdinForceExitCallback: (() => void) | null = null;
   private lastCtrlCTime = 0;
+  private pendingStdinInput: string[] = [];
   private iframeContainer: HTMLElement | null = null;
   private displayedRows = 1; // track how many terminal rows the current prompt+input spans
   private resizeCallbacks: ((cols: number, rows: number) => void)[] = [];
@@ -223,6 +224,14 @@ export class ShiroTerminal {
     this.stdinPassthrough = callback;
     this.stdinForceExitCallback = forceExitCallback || null;
     this.lastCtrlCTime = 0;
+    // Flush any input that arrived while passthrough was null
+    if (this.pendingStdinInput.length > 0) {
+      const pending = this.pendingStdinInput;
+      this.pendingStdinInput = [];
+      for (const data of pending) {
+        callback(data);
+      }
+    }
   }
 
   /**
@@ -232,6 +241,7 @@ export class ShiroTerminal {
     this.stdinPassthrough = null;
     this.stdinForceExitCallback = null;
     this.lastCtrlCTime = 0;
+    this.pendingStdinInput = [];
   }
 
   /**
@@ -535,6 +545,10 @@ export class ShiroTerminal {
       }
       if (this.userInputCallback) {
         this.handleUserInput(data);
+      } else {
+        // Queue input for delivery when stdinPassthrough is re-enabled
+        // (ink briefly disables raw mode between render cycles)
+        this.pendingStdinInput.push(data);
       }
       return;
     }
