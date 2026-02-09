@@ -241,6 +241,10 @@ The real `@anthropic-ai/claude-code` CLI (v2.1.37, 11MB bundled ESM) runs inside
 - Telemetry blocked: datadoghq.com, sentry.io, event_logging → fake 200 responses
 - Stdin piping works: `echo "text" | claude -p "analyze this"`
 - Interactive mode uses ink (React for terminal) with stdin passthrough bridging
+- Tree-sitter WASM gracefully degraded (syntax highlighting disabled; browser can't compile the emscripten binary)
+- Vendored ripgrep (ELF binary) shimmed to `find`/`grep` builtins
+- `fileCache` keeps sync/async fs operations coherent — FileHandle and `fs.promises` both update it
+- Binary files (ELF, Mach-O) rejected at shell level with "cannot execute binary file"
 
 ## Skyeyes MCP Tools
 

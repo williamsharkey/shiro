@@ -1279,6 +1279,12 @@ export class Shell {
       return 1;
     }
 
+    // Reject binary files (ELF, Mach-O, etc.) that can't be interpreted
+    if (content.charCodeAt(0) === 0x7f || content.includes('\0')) {
+      writeStderr(`shiro: ${resolvedPath}: cannot execute binary file\n`);
+      return 126;
+    }
+
     // Check for shebang
     const firstLine = content.split('\n')[0];
     if (firstLine.startsWith('#!')) {

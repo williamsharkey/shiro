@@ -237,9 +237,10 @@ export const nodeCmd: Command = {
 
     // Suppress unhandled rejections from CLI force-exit patterns
     // (process.exit → catch → process.kill → catch → throw "unreachable")
-    // These fire in deferred async callbacks after fn() has already resolved.
+    // and WASM compile errors (tree-sitter uses WASM features not supported in all browsers).
     const suppressRejection = (event: PromiseRejectionEvent) => {
-      if (event.reason?._isProcessExit || event.reason?.message === 'unreachable') {
+      const msg = event.reason?.message || String(event.reason || '');
+      if (event.reason?._isProcessExit || msg === 'unreachable' || msg.startsWith('Aborted(') || msg === 'need dylink section') {
         event.preventDefault();
       }
     };
@@ -1583,11 +1584,21 @@ export const nodeCmd: Command = {
               // Async promises API
               promises: {
                 readFile: async (p: string, opts?: any) => {
+                  const resolved = ctx.fs.resolvePath(p, ctx.cwd);
                   const encoding = typeof opts === 'string' ? opts : opts?.encoding;
-                  return await ctx.fs.readFile(ctx.fs.resolvePath(p, ctx.cwd), encoding || 'utf8');
+                  // Check fileCache first (may have data from writeFileSync not yet flushed)
+                  const cached = fileCache.get(resolved);
+                  if (cached !== undefined) {
+                    if (encoding === 'utf8' || encoding === 'utf-8') return cached;
+                    return FakeBuffer.from(cached);
+                  }
+                  return await ctx.fs.readFile(resolved, encoding || 'utf8');
                 },
-                writeFile: async (p: string, data: string) => {
-                  await ctx.fs.writeFile(ctx.fs.resolvePath(p, ctx.cwd), data);
+                writeFile: async (p: string, data: any) => {
+                  const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                  const content = typeof data === 'string' ? data : new TextDecoder().decode(data);
+                  fileCache.set(resolved, content); // Keep fileCache in sync for readFileSync/renameSync
+                  await ctx.fs.writeFile(resolved, content);
                 },
                 readdir: async (p: string, opts?: any) => {
                   const resolved = ctx.fs.resolvePath(p, ctx.cwd);
@@ -1739,10 +1750,24 @@ export const nodeCmd: Command = {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
                 return {
                   fd: 0,
-                  readFile: async (opts?: any) => ctx.fs.readFile(resolved, opts?.encoding || 'utf8'),
-                  writeFile: async (data: any) => ctx.fs.writeFile(resolved, typeof data === 'string' ? data : new TextDecoder().decode(data)),
+                  readFile: async (opts?: any) => {
+                    const encoding = typeof opts === 'string' ? opts : opts?.encoding;
+                    // Check fileCache first (consistent with readFileSync)
+                    const cached = fileCache.get(resolved);
+                    if (cached !== undefined) {
+                      if (!encoding || encoding === 'utf8' || encoding === 'utf-8') return cached;
+                      return FakeBuffer.from(cached);
+                    }
+                    return ctx.fs.readFile(resolved, encoding || 'utf8');
+                  },
+                  writeFile: async (data: any) => {
+                    const content = typeof data === 'string' ? data : new TextDecoder().decode(data);
+                    fileCache.set(resolved, content); // Keep fileCache in sync for readFileSync/renameSync
+                    await ctx.fs.writeFile(resolved, content);
+                  },
                   close: async () => {},
                   stat: async () => ctx.fs.stat(resolved),
+                  chmod: async () => {},
                 };
               },
               watch: async function*(_p: string, _opts?: any) { /* no-op async generator */ },
@@ -1811,6 +1836,32 @@ export const nodeCmd: Command = {
               // Strip leading shell flags (-l, -i, -e) that leak through from spawn args
               normalized = normalized.replace(/^(-[a-zA-Z]+\s+)+/, '');
               if (!normalized || /^-[a-zA-Z]+$/.test(normalized)) normalized = 'true';
+
+              // Intercept vendored ripgrep binary — it's an ELF/Mach-O binary that can't
+              // run in browser. Map common rg invocations to Shiro's builtin commands.
+              const rgMatch = normalized.match(/^(\/[^\s]*\/rg|rg)\s+(.*)/);
+              if (rgMatch) {
+                const rgArgs = rgMatch[2];
+                // rg --files [--hidden] <dir> → find <dir> -type f
+                const filesMatch = rgArgs.match(/--files\s+(.*)/);
+                if (filesMatch) {
+                  const rest = filesMatch[1].replace(/--hidden\s*/g, '').replace(/--glob\s+\S+\s*/g, '').trim();
+                  const dir = rest || '.';
+                  normalized = `find ${dir} -type f`;
+                }
+                // rg --version → fake version string
+                else if (rgArgs.includes('--version')) {
+                  return { stdout: 'ripgrep 14.0.0 (shiro shim)\n', stderr: '', exitCode: 0 };
+                }
+                // rg <pattern> [dir] → grep -rn <pattern> [dir]
+                else {
+                  const parts = rgArgs.replace(/--[a-z-]+=?\S*\s*/g, '').trim().split(/\s+/);
+                  if (parts[0]) {
+                    normalized = `grep -rn ${parts[0]} ${parts[1] || '.'}`;
+                  }
+                }
+              }
+
               let stdout = '';
               let stderr = '';
               const exitCode = await ctx.shell.execute(normalized, (s) => { stdout += s; }, (s) => { stderr += s; });
@@ -1895,7 +1946,15 @@ export const nodeCmd: Command = {
                   (childEvents['stderr_end'] || []).forEach(fn => fn());
                   (childEvents['close'] || []).forEach(fn => fn(r.exitCode, null));
                   callback?.(r.exitCode !== 0 ? Object.assign(new Error(`Exit code ${r.exitCode}`), { code: r.exitCode }) : null, r.stdout, r.stderr);
-                }).catch(e => callback?.(e, '', ''));
+                }).catch(e => {
+                  // CRITICAL: Always emit error+close events even when callback is null.
+                  // Without this, the CLI hangs forever waiting for the child process.
+                  (childEvents['error'] || []).forEach(fn => fn(e));
+                  (childEvents['stdout_end'] || []).forEach(fn => fn());
+                  (childEvents['stderr_end'] || []).forEach(fn => fn());
+                  (childEvents['close'] || []).forEach(fn => fn(1, null));
+                  callback?.(e, '', '');
+                });
                 return child;
               },
               spawn: (cmd: string, args?: string[], opts?: any) => {
@@ -1955,7 +2014,7 @@ export const nodeCmd: Command = {
                   child.exitCode = r.exitCode;
                   (events['close'] || []).forEach(fn => fn(r.exitCode, null));
                   (events['exit'] || []).forEach(fn => fn(r.exitCode, null));
-                }).catch(() => {
+                }).catch((err) => {
                   (events['error'] || []).forEach(fn => fn(new Error(`spawn ${cmd} failed`)));
                   (events['close'] || []).forEach(fn => fn(1, null));
                 });
@@ -5335,6 +5394,41 @@ export const nodeCmd: Command = {
             else if (input instanceof URL) input = new URL(rewritten);
             else input = new Request(rewritten, input);
           }
+          // Track SSE stream lifecycle for /v1/messages to debug streaming hangs
+          const isMessages = url.includes('/v1/messages');
+          if (isMessages) {
+            const t0 = Date.now();
+            return _origFetch(input, init).then(resp => {
+              const ct = resp.headers.get('content-type') || '';
+              const isSSE = ct.includes('text/event-stream');
+              console.log(`[fetch] /v1/messages ${resp.status} ${ct.split(';')[0]} (${Date.now() - t0}ms)`);
+              if (isSSE && resp.body) {
+                // Wrap the ReadableStream to log when it ends
+                const origBody = resp.body;
+                const reader = origBody.getReader();
+                let totalBytes = 0;
+                const wrappedStream = new ReadableStream({
+                  async pull(controller) {
+                    const { done, value } = await reader.read();
+                    if (done) {
+                      console.log(`[fetch] SSE stream ended (${totalBytes} bytes, ${Date.now() - t0}ms total)`);
+                      controller.close();
+                      return;
+                    }
+                    totalBytes += value.byteLength;
+                    controller.enqueue(value);
+                  },
+                  cancel() { reader.cancel(); }
+                });
+                return new Response(wrappedStream, {
+                  status: resp.status,
+                  statusText: resp.statusText,
+                  headers: resp.headers,
+                });
+              }
+              return resp;
+            });
+          }
           return _origFetch(input, init);
         };
         // Patch XMLHttpRequest prototype directly — more robust than replacing the
@@ -5389,6 +5483,16 @@ export const nodeCmd: Command = {
       const _origClearImmediate = (globalThis as any).clearImmediate;
       (globalThis as any).setImmediate = (fn: Function, ...args: any[]) => setTimeout(fn, 0, ...args);
       (globalThis as any).clearImmediate = (id: any) => clearTimeout(id);
+
+      // Wrap WebAssembly.instantiate to gracefully handle unsupported WASM binaries.
+      // Tree-sitter's emscripten code calls abort() on CompileError, which throws a
+      // RuntimeError("Aborted(...)") that breaks async init chains. By catching
+      // CompileError at the WebAssembly level, tree-sitter's createWasm returns null
+      // and the parser gracefully degrades (no syntax highlighting).
+      // Tree-sitter WASM uses features not supported in all browsers (unknown section
+      // codes, dylink sections). We don't intercept WebAssembly.instantiate/compile —
+      // tree-sitter's own error handler calls abort(), which throws RuntimeError("Aborted(...)"),
+      // and our suppressRejection handler catches that pattern above.
 
       // Timeout for the main script execution. If the script's main function hangs
       // (e.g., CLI async setup), this kills it. The deferred exit wait (below) handles
