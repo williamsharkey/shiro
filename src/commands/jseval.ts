@@ -486,9 +486,14 @@ export const nodeCmd: Command = {
               // When terminal is available (interactive), don't auto-close stdin.
               // Instead, bridge terminal input to stdin data events.
               if (!ctx.terminal && event === 'end' && !stdinEnded) {
-                // Non-interactive: auto-close stdin (no piped data)
+                // Non-interactive: deliver any piped data then close stdin
                 stdinEnded = true;
                 queueMicrotask(() => {
+                  if (ctx.stdin) {
+                    stdinReadBuffer.push(ctx.stdin);
+                    (stdinEvents['data'] || []).forEach(f => f(ctx.stdin));
+                    (stdinEvents['readable'] || []).forEach(f => f());
+                  }
                   (stdinEvents['end'] || []).forEach(f => f());
                   (stdinEvents['close'] || []).forEach(f => f());
                 });
@@ -835,6 +840,53 @@ export const nodeCmd: Command = {
             const content = await ctx.fs.readFile(fp, 'utf8');
             fileCache.set(fp, content as string);
           } catch { /* file doesn't exist yet, that's OK */ }
+        }
+      }
+
+      // Pre-flight OAuth token refresh for Claude Code CLI
+      // The CLI checks expiresAt before making API calls and tries to refresh via
+      // platform.claude.com — but the fetch interceptor isn't installed yet at that point,
+      // so the refresh fails (CORS). We refresh here before the CLI starts.
+      if (scriptPath?.includes('claude-code')) {
+        const credsPath = homeDir + '/.claude/.credentials.json';
+        const credsStr = fileCache.get(credsPath);
+        if (credsStr) {
+          try {
+            const creds = JSON.parse(credsStr);
+            const oauth = creds.claudeAiOauth;
+            // Refresh if token expires within 5 minutes
+            if (oauth?.refreshToken && oauth.expiresAt && (oauth.expiresAt - Date.now() < 300000)) {
+              console.log(`[node] OAuth token expires in ${Math.round((oauth.expiresAt - Date.now()) / 1000)}s, refreshing...`);
+              const proxyOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+              const tokenUrl = proxyOrigin + '/api/platform/v1/oauth/token';
+              const body = new URLSearchParams({
+                grant_type: 'refresh_token',
+                refresh_token: oauth.refreshToken,
+                client_id: '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
+              });
+              const resp = await fetch(tokenUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: body.toString(),
+              });
+              if (resp.ok) {
+                const data = await resp.json();
+                oauth.accessToken = data.access_token;
+                oauth.refreshToken = data.refresh_token || oauth.refreshToken;
+                oauth.expiresAt = Date.now() + (data.expires_in || 28800) * 1000;
+                if (data.scope) oauth.scopes = data.scope.split(' ');
+                const newCredsStr = JSON.stringify(creds);
+                fileCache.set(credsPath, newCredsStr);
+                // Persist to filesystem so it survives page reloads
+                await ctx.fs.writeFile(credsPath, newCredsStr);
+                console.log(`[node] OAuth token refreshed, expires in ${data.expires_in || 28800}s`);
+              } else {
+                console.warn(`[node] OAuth token refresh failed: ${resp.status} ${await resp.text().catch(() => '')}`);
+              }
+            }
+          } catch (e: any) {
+            console.warn(`[node] OAuth token refresh error: ${e.message}`);
+          }
         }
       }
 
