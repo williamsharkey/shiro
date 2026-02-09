@@ -69,7 +69,7 @@ export function createServerWindow(options: ServerWindowOptions): ServerWindow {
   S.zIndex = '2147483647';
   S.borderRadius = '8px';
   S.overflow = 'hidden';
-  S.boxShadow = 'rgb(206,170,227) 0px 5px 11px -3px';
+  S.boxShadow = 'rgb(255 255 255 / 15%) 0px 0px 20px 6px';
   S.fontFamily = '-apple-system,BlinkMacSystemFont,sans-serif';
   S.display = 'flex';
   S.flexDirection = 'column';
