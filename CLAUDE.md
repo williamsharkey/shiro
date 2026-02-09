@@ -147,13 +147,19 @@ The shell supports:
 - Path resolution handles `.`, `..`, and `~`
 - `clearCache()` method available if external DB modifications occur
 
-## Cross-Project Integration
+## Monorepo Subdirectories
 
-- **Spirit** (williamsharkey/spirit): Claude Code agent loop. Shiro provides `ShiroProvider` (OSProvider interface) in `src/spirit-provider.ts`
-- **Foam** (williamsharkey/foam): Sister browser OS project in plain JS. Compatible shell semantics
-- **FluffyCoreutils** (williamsharkey/fluffycoreutils): Shared Unix commands, consumed as git submodule
-- **Windwalker** (williamsharkey/windwalker): Test automation. Access via `window.__shiro` global
-- **Nimbus** (williamsharkey/nimbus): Multi-repo orchestrator with live dashboard preview and skyeyes integration
+These were merged from separate repos with full commit history preserved (`git log -- subdir/` works):
+
+- **`fluffycoreutils/`**: Shared Unix commands library (ls, cat, grep, sed, etc.) — ES module consumed by Shiro and Foam
+- **`spirit/`**: Claude Code agent loop with multi-LLM support — Shiro provides `ShiroProvider` (OSProvider interface)
+- **`windwalker/`**: Test automation suite — vitest unit tests + skyeyes browser tests. Run: `cd windwalker && npm run test:shiro`
+- **`hypercompact/`**: HTML compression utilities for compact DOM representations
+
+## Related Projects (separate repos)
+
+- **Foam** (williamsharkey/foam): Sister browser OS in plain JS. Compatible shell semantics
+- **Nimbus** (williamsharkey/nimbus): Multi-repo orchestrator with live dashboard preview
 - **Skyeyes** (williamsharkey/skyeyes): Browser-side bridge for remote JS execution and testing
 
 ## Remote Connection (shiro-mcp)
