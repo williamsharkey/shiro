@@ -10,12 +10,18 @@ export const tail: FluffyCommand = {
       const m = a.match(/^-(\d+)$/);
       return m ? ["-n", m[1]] : [a];
     });
-    const { values, positional } = parseArgs(rewritten, ["n"]);
-    const nStr = values.n ?? "10";
+    const { values, positional } = parseArgs(rewritten, ["n", "c"]);
+    const byteMode = values.c !== undefined;
+    const nStr = byteMode ? values.c : (values.n ?? "10");
     try {
       const { content } = await readInput(
         positional, io.stdin, io.fs, io.cwd, io.fs.resolvePath
       );
+      if (byteMode) {
+        // -c: output last N bytes (characters)
+        const count = parseInt(nStr, 10);
+        return { stdout: content.slice(-count), stderr: "", exitCode: 0 };
+      }
       const lines = content.split("\n");
       // Remove trailing empty line from split (files ending with \n)
       if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
