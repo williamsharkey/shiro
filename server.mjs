@@ -346,10 +346,16 @@ const server = createServer(async (req, res) => {
   if (pathname.startsWith('/api/')) {
     return handleProxy(req, res, pathname.slice(5));
   }
-  // Git CORS proxy: /git-proxy/https://github.com/...
-  // nginx merge_slashes collapses "https://" to "https:/" — fix it
+  // Git CORS proxy: /git-proxy/github.com/... or /git-proxy/https://github.com/...
+  // isomorphic-git strips the protocol, sending just "github.com/..." as the path.
+  // nginx merge_slashes may also collapse "https://" to "https:/".
   if (pathname.startsWith('/git-proxy/')) {
     let targetUrl = req.url.slice('/git-proxy/'.length);
+    // Restore protocol if missing (isomorphic-git strips it)
+    if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://') && !targetUrl.startsWith('https:/')) {
+      targetUrl = 'https://' + targetUrl;
+    }
+    // Fix nginx merge_slashes: https:/ → https://
     targetUrl = targetUrl.replace(/^(https?:\/)([^/])/, '$1/$2');
     return handleGitProxy(req, res, targetUrl);
   }
