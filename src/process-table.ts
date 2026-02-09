@@ -64,6 +64,8 @@ class ProcessTable {
     if (proc && proc.status === 'running') {
       proc.status = 'exited';
       proc.exitCode = exitCode;
+      // Auto-remove after 30 seconds
+      setTimeout(() => this.processes.delete(pid), 30_000);
     }
   }
 }

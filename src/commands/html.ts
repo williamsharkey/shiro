@@ -20,17 +20,23 @@ export const htmlCmd: Command = {
       // Piped input
       html = ctx.stdin;
     } else if (ctx.args.length > 0) {
-      // File argument
-      const path = ctx.fs.resolvePath(ctx.args[0], ctx.cwd);
-      try {
-        const content = await ctx.fs.readFile(path, 'utf8');
-        html = typeof content === 'string' ? content : new TextDecoder().decode(content as Uint8Array);
-      } catch (e: any) {
-        ctx.stderr = `html: ${e.message}\n`;
-        return 1;
+      const arg = ctx.args.join(' ');
+      // Detect inline HTML (starts with < or contains common tags)
+      if (arg.trimStart().startsWith('<')) {
+        html = arg;
+      } else {
+        // File argument
+        const path = ctx.fs.resolvePath(ctx.args[0], ctx.cwd);
+        try {
+          const content = await ctx.fs.readFile(path, 'utf8');
+          html = typeof content === 'string' ? content : new TextDecoder().decode(content as Uint8Array);
+        } catch (e: any) {
+          ctx.stderr = `html: ${e.message}\n`;
+          return 1;
+        }
       }
     } else {
-      ctx.stderr = 'Usage: html <file> or echo "..." | html\n';
+      ctx.stderr = 'Usage: html <file>, html "<html>...", or echo "..." | html\n';
       return 1;
     }
 

@@ -385,7 +385,7 @@ export const imageCmd: Command = {
   description: 'Manage shiro images (filesystem snapshots)',
 
   async exec(ctx: CommandContext): Promise<number> {
-    const args = ctx.args.slice(1); // Remove 'image'
+    const args = ctx.args;
 
     if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
       ctx.stdout = IMAGE_USAGE + '\n';
