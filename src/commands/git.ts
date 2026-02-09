@@ -372,12 +372,14 @@ export const gitCmd: Command = {
 
           // Use git protocol via CORS proxy (GitHub API tarball fails due to CORS)
           const corsProxy = ctx.env['GIT_CORS_PROXY'] || (typeof location !== 'undefined' ? location.origin + '/git-proxy' : 'https://cors.isomorphic-git.org');
+          const token = ctx.env['GITHUB_TOKEN'] || (typeof localStorage !== 'undefined' ? localStorage.getItem('shiro_github_token') || '' : '');
           await Promise.race([
             git.clone({
               fs, http, dir: targetDir, url,
               corsProxy,
               singleBranch: true,
               depth: 1,
+              ...(token ? { onAuth: () => ({ username: token }) } : {}),
             }),
             new Promise<never>((_, reject) =>
               setTimeout(() => reject(new Error('clone timed out')), 30000)

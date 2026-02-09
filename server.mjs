@@ -347,8 +347,10 @@ const server = createServer(async (req, res) => {
     return handleProxy(req, res, pathname.slice(5));
   }
   // Git CORS proxy: /git-proxy/https://github.com/...
+  // nginx merge_slashes collapses "https://" to "https:/" — fix it
   if (pathname.startsWith('/git-proxy/')) {
-    const targetUrl = req.url.slice('/git-proxy/'.length);
+    let targetUrl = req.url.slice('/git-proxy/'.length);
+    targetUrl = targetUrl.replace(/^(https?:\/)([^/])/, '$1/$2');
     return handleGitProxy(req, res, targetUrl);
   }
   if (pathname === '/oauth/callback') {
