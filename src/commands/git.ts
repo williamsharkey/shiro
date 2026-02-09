@@ -350,15 +350,27 @@ export const gitCmd: Command = {
         }
 
         case 'clone': {
-          let url = ctx.args[1];
+          // Parse flags: skip --depth, --branch, --single-branch, etc.
+          const cloneArgs = ctx.args.slice(1);
+          let url = '';
+          let cloneTarget = '';
+          let cloneDepth = 1;
+          for (let i = 0; i < cloneArgs.length; i++) {
+            const a = cloneArgs[i];
+            if (a === '--depth' && i + 1 < cloneArgs.length) { cloneDepth = parseInt(cloneArgs[++i], 10) || 1; continue; }
+            if (a === '--branch' || a === '-b') { i++; continue; } // skip branch value
+            if (a === '--single-branch' || a === '--no-tags' || a === '--quiet' || a === '-q') continue;
+            if (a.startsWith('-')) continue; // skip unknown flags
+            if (!url) { url = a; } else if (!cloneTarget) { cloneTarget = a; }
+          }
           if (!url) { ctx.stderr = 'error: must specify repository URL\n'; return 1; }
           // Normalize URL: add https:// if no protocol
           if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('git://')) {
             url = 'https://' + url;
           }
           const repoName = url.split('/').pop()?.replace(/\.git$/, '') || 'repo';
-          const targetDir = ctx.args[2]
-            ? ctx.fs.resolvePath(ctx.args[2], ctx.cwd)
+          const targetDir = cloneTarget
+            ? ctx.fs.resolvePath(cloneTarget, ctx.cwd)
             : ctx.fs.resolvePath(repoName, ctx.cwd);
           await ctx.fs.mkdir(targetDir, { recursive: true });
           // Pre-create .git directory for isomorphic-git compatibility
@@ -378,13 +390,19 @@ export const gitCmd: Command = {
               fs, http, dir: targetDir, url,
               corsProxy,
               singleBranch: true,
-              depth: 1,
+              depth: cloneDepth,
               ...(token ? { onAuth: () => ({ username: token }) } : {}),
             }),
             new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('clone timed out')), 30000)
+              setTimeout(() => reject(new Error('clone timed out')), 60000)
             ),
           ]);
+
+          // Ensure working tree is fully populated (clone can leave subdirs empty)
+          try {
+            const branch = await git.currentBranch({ fs, dir: targetDir }) || 'main';
+            await git.checkout({ fs, dir: targetDir, ref: branch, force: true });
+          } catch { /* checkout best-effort */ }
 
           ctx.stdout += `done.\n`;
           break;

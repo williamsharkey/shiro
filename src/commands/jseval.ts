@@ -329,6 +329,10 @@ export const nodeCmd: Command = {
           ...(typeof window !== 'undefined' && !ctx.env['ANTHROPIC_BASE_URL'] ? {
             ANTHROPIC_BASE_URL: `${window.location.origin}/api/anthropic`,
           } : {}),
+          // Suppress npm-to-native-installer warning (only relevant for Claude Code)
+          ...(scriptPath?.includes('claude-code') ? {
+            DISABLE_INSTALLATION_CHECKS: '1',
+          } : {}),
         } as Record<string, string>,
         cwd: () => ctx.cwd,
         exit: (c?: number) => {
@@ -1893,7 +1897,23 @@ export const nodeCmd: Command = {
                 // Buffer and queue the actual execution. Works correctly when the
                 // result is used at top-level of an async script (node -e).
                 let result = '';
+                const wantString = opts?.encoding && opts.encoding !== 'buffer';
                 const p = execAsync(cmd).then(r => { result = r.stdout; });
+                if (wantString) {
+                  // Return a string-like thenable (has .split, .trim, etc.)
+                  const str: any = new String('');
+                  str.then = (resolve: any, reject: any) => p.then(() => resolve(result)).catch(reject);
+                  // Proxy to make property access return from resolved result
+                  return new Proxy(str, {
+                    get(target, prop) {
+                      if (prop === 'then') return str.then;
+                      // Delegate to the result string once resolved
+                      const val = (result as any)[prop];
+                      if (typeof val === 'function') return val.bind(result);
+                      return val;
+                    },
+                  });
+                }
                 // Create a thenable Buffer-like that resolves when awaited
                 const buf: any = {
                   toString: () => result,
