@@ -279,7 +279,7 @@ async function startRemote(ctx: CommandContext): Promise<number> {
     localStorage.removeItem(REMOTE_CODE_KEY);
     // Clear HUD if terminal available
     if (ctx.terminal) {
-      ctx.terminal.updateHudRemoteCode(null);
+      (ctx.terminal as any).updateHudRemoteCode?.(null);
     }
   }
 
@@ -394,7 +394,7 @@ async function startRemote(ctx: CommandContext): Promise<number> {
 
     // Update HUD to show the code (if visible)
     if (ctx.terminal) {
-      ctx.terminal.updateHudRemoteCode(displayCode);
+      (ctx.terminal as any).updateHudRemoteCode?.(displayCode);
     }
 
     // Start polling for answer in background
@@ -494,7 +494,7 @@ function stopRemote(ctx: CommandContext): number {
 
   // Clear the remote code from HUD (if visible)
   if (ctx.terminal) {
-    ctx.terminal.updateHudRemoteCode(null);
+    (ctx.terminal as any).updateHudRemoteCode?.(null);
   }
 
   return 0;

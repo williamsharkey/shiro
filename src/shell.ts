@@ -132,6 +132,7 @@ export class Shell {
     writeStdout: (s: string) => void,
     writeStderr?: (s: string) => void,
     remote: boolean = false,
+    terminalOverride?: any,
   ): Promise<number> {
     // Handle backslash line continuations: \<newline> joins lines
     const joined = line.replace(/\\\n/g, '');
@@ -280,7 +281,7 @@ export class Shell {
           stdout: '',
           stderr: '',
           shell: this,
-          terminal: this.terminal,
+          terminal: terminalOverride || this.terminal,
         };
 
         // Check shell functions first
@@ -1409,7 +1410,7 @@ export class Shell {
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith('#')) continue;
-      exitCode = await this.execute(trimmed, writeStdout, writeStderr);
+      exitCode = await this.execute(trimmed, writeStdout, writeStderr, false, ctx.terminal);
     }
 
     // Restore positional parameters

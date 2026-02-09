@@ -8,7 +8,7 @@ export const hudCmd: Command = {
       ctx.stderr = 'Terminal not available\n';
       return 1;
     }
-    ctx.terminal.drawHud();
+    (ctx.terminal as any).drawHud?.();
     return 0;
   },
 };

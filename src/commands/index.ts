@@ -1,6 +1,17 @@
 import type { FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
-import type { ShiroTerminal } from '../terminal';
+
+export interface TerminalLike {
+  writeOutput(text: string): void;
+  enterStdinPassthrough(cb: (data: string) => void, forceExitCb?: () => void): void;
+  exitStdinPassthrough(): void;
+  enterRawMode(cb: (key: string) => void): void;
+  exitRawMode(): void;
+  isRawMode(): boolean;
+  onResize(cb: (cols: number, rows: number) => void): () => void;
+  getSize(): { rows: number; cols: number };
+  term: any; // xterm.js Terminal instance
+}
 
 export interface CommandContext {
   args: string[];
@@ -11,7 +22,7 @@ export interface CommandContext {
   stdout: string;
   stderr: string;
   shell: Shell;
-  terminal?: ShiroTerminal;
+  terminal?: TerminalLike;
 }
 
 export interface Command {

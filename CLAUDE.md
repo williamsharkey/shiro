@@ -29,8 +29,11 @@ src/
 ├── filesystem.ts        # IndexedDB-backed POSIX filesystem (the foundation everything uses)
 ├── spirit-provider.ts   # OSProvider adapter for Spirit (Claude Code agent)
 ├── remote-panel.ts      # Draggable floating panel UI (used by remote, group)
+├── server-window.ts     # macOS-style window wrapper (iframe + terminal modes)
+├── window-terminal.ts   # Lightweight xterm.js wrapper for windowed processes
+├── process-table.ts     # Global process registry with PID allocation
 └── commands/            # One file per command or group of related commands
-    ├── index.ts          # Command/CommandContext interfaces, CommandRegistry class
+    ├── index.ts          # Command/CommandContext/TerminalLike interfaces, CommandRegistry class
     ├── coreutils.ts      # 41 commands: ls, cat, mkdir, rm, cp, mv, echo, sort, seq, test, ln, etc.
     ├── grep.ts           # grep with -i, -v, -n, -c, -l, -r flags
     ├── sed.ts            # sed with s/pattern/replace/flags and /pattern/d
@@ -48,7 +51,10 @@ src/
     ├── mcp-client.ts     # MCP Streamable HTTP client (connect to external MCP servers)
     ├── group.ts          # Encrypted group networking (peer discovery via relay)
     ├── seed.ts           # Export state as paste-able snippet (normal or blob)
-    └── hud.ts            # HUD redraw command
+    ├── hud.ts            # HUD redraw command
+    ├── spawn.ts          # Run commands in windowed terminals
+    ├── ps.ts             # ps (list processes) and kill (terminate by PID)
+    └── html.ts           # html (render HTML in window) and img (display image)
 └── utils/
     ├── tar-utils.ts      # gzip decompression and tar extraction
     └── semver-utils.ts   # semantic versioning and range resolution

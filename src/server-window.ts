@@ -6,17 +6,21 @@
  */
 
 export interface ServerWindowOptions {
-  port: number;
+  port?: number;
   path?: string;
   directory?: string;
   width?: string;
   height?: string;
   container?: HTMLElement;
+  mode?: 'iframe' | 'terminal';
+  title?: string;
+  onClose?: () => void;
 }
 
 export interface ServerWindow {
   element: HTMLDivElement;
   iframe: HTMLIFrameElement;
+  contentDiv: HTMLDivElement | null;
   close: () => void;
   minimize: () => void;
   maximize: () => void;
@@ -25,12 +29,14 @@ export interface ServerWindow {
 }
 
 export function createServerWindow(options: ServerWindowOptions): ServerWindow {
-  const { port, path = '/', directory, width = '32em', height = '22em', container = document.body } = options;
+  const { port, path = '/', directory, width = '32em', height = '22em', container = document.body, mode = 'iframe', onClose } = options;
 
-  // Build title - format: "localhost:8080/" or "/home/user/www:8080/"
-  const titleText = directory
-    ? `${directory}:${port}${path}`
-    : `localhost:${port}${path}`;
+  // Build title
+  const titleText = options.title
+    ? options.title
+    : directory
+      ? `${directory}:${port}${path}`
+      : port != null ? `localhost:${port}${path}` : 'terminal';
 
   // Calculate responsive positioning
   // If viewport can't contain the window with 10% margin on each side, constrain it
@@ -52,7 +58,7 @@ export function createServerWindow(options: ServerWindowOptions): ServerWindow {
 
   // Main wrapper
   const wrapper = document.createElement('div');
-  wrapper.setAttribute('data-server-window', String(port));
+  wrapper.setAttribute('data-server-window', port != null ? String(port) : (options.title || 'terminal'));
   const S = wrapper.style;
   S.position = 'fixed';
   S.bottom = '20px';
@@ -109,17 +115,21 @@ export function createServerWindow(options: ServerWindowOptions): ServerWindow {
   let savedState = { width: '', height: '', top: '', left: '', bottom: '', right: '', borderRadius: '' };
 
   // Wire up button handlers with touch support
-  onTap(closeBtn, () => wrapper.remove());
+  onTap(closeBtn, () => {
+    onClose?.();
+    (wrapper as any)._cleanup?.();
+    wrapper.remove();
+  });
 
   onTap(miniBtn, () => {
     minimized = !minimized;
     if (minimized) {
       savedH = wrapper.offsetHeight;
-      iframe.style.display = 'none';
+      contentElement.style.display = 'none';
       resizeHandle.style.display = 'none';
       wrapper.style.height = '32px';
     } else {
-      iframe.style.display = 'block';
+      contentElement.style.display = mode === 'terminal' ? 'flex' : 'block';
       resizeHandle.style.display = 'block';
       wrapper.style.height = savedH + 'px';
     }
@@ -171,19 +181,36 @@ export function createServerWindow(options: ServerWindowOptions): ServerWindow {
   titleBar.appendChild(dots);
   titleBar.appendChild(title);
 
-  // Iframe
-  const iframe = document.createElement('iframe');
-  iframe.style.cssText = 'border:none;width:100%;flex:1;background:#0a0a1a;visibility:visible;opacity:1;display:block';
-  iframe.setAttribute('data-virtual-port', String(port));
-  iframe.setAttribute('data-virtual-path', path);
+  // Content area: iframe or terminal div
+  let iframe: HTMLIFrameElement;
+  let contentDiv: HTMLDivElement | null = null;
+  let contentElement: HTMLElement;
+
+  if (mode === 'terminal') {
+    contentDiv = document.createElement('div');
+    contentDiv.style.cssText = 'flex:1;overflow:hidden;display:flex;background:#1a1a2e';
+    contentElement = contentDiv;
+    // Create a dummy iframe for the interface
+    iframe = document.createElement('iframe');
+    iframe.style.display = 'none';
+  } else {
+    iframe = document.createElement('iframe');
+    iframe.style.cssText = 'border:none;width:100%;flex:1;background:#0a0a1a;visibility:visible;opacity:1;display:block';
+    if (port != null) iframe.setAttribute('data-virtual-port', String(port));
+    iframe.setAttribute('data-virtual-path', path);
+    contentElement = iframe;
+  }
 
   // Resize handle
   const resizeHandle = document.createElement('div');
   resizeHandle.style.cssText = 'position:absolute;bottom:0;right:0;width:16px;height:16px;cursor:nwse-resize;background:linear-gradient(135deg,transparent 50%,#555 50%)';
 
   wrapper.appendChild(titleBar);
-  wrapper.appendChild(iframe);
+  wrapper.appendChild(contentElement);
   wrapper.appendChild(resizeHandle);
+
+  // Click-to-focus: bring window to front
+  wrapper.onmousedown = () => { wrapper.style.zIndex = String(Date.now() % 2147483647); };
 
   // Dragging
   let dx = 0, dy = 0, sx = 0, sy = 0, dragging = false;
@@ -285,7 +312,9 @@ export function createServerWindow(options: ServerWindowOptions): ServerWindow {
   return {
     element: wrapper,
     iframe,
+    contentDiv,
     close: () => {
+      onClose?.();
       (wrapper as any)._cleanup?.();
       wrapper.remove();
     },
@@ -311,6 +340,7 @@ export function findServerWindow(port: number): ServerWindow | null {
   return {
     element: el,
     iframe,
+    contentDiv: null,
     close: () => {
       (el as any)._cleanup?.();
       el.remove();

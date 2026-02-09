@@ -83,6 +83,10 @@ import { consoleCmd } from './commands/console';
 import { rgCmd } from './commands/rg';
 import { mcpCmd } from './commands/mcp-client';
 import { groupCmd } from './commands/group';
+import { spawnCmd } from './commands/spawn';
+import { psCmd, killCmd } from './commands/ps';
+import { htmlCmd, imgCmd } from './commands/html';
+import { processTable } from './process-table';
 import { iframeServer } from './iframe-server';
 import { allCommands } from '../fluffycoreutils/src/index';
 import { wrapFluffyCommand } from './fluffy-adapter';
@@ -236,6 +240,11 @@ async function main() {
   registerCommand(commands, rgCmd, 'src/commands/rg.ts');
   registerCommand(commands, mcpCmd, 'src/commands/mcp-client.ts');
   registerCommand(commands, groupCmd, 'src/commands/group.ts');
+  registerCommand(commands, spawnCmd, 'src/commands/spawn.ts');
+  registerCommand(commands, psCmd, 'src/commands/ps.ts');
+  registerCommand(commands, killCmd, 'src/commands/ps.ts');
+  registerCommand(commands, htmlCmd, 'src/commands/html.ts');
+  registerCommand(commands, imgCmd, 'src/commands/html.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {
@@ -287,6 +296,7 @@ async function main() {
     commands,
     registry, // ModuleRegistry for hot-reload
     iframeServer, // Iframe-based virtual HTTP server
+    processTable, // Windowed process registry
   };
 
   // OAuth callback bridge: receive auth codes from /oauth/callback popup
