@@ -1,0 +1,24 @@
+{
+  "name": "fluffycoreutils",
+  "version": "0.1.0",
+  "description": "Shared Unix coreutils for browser-based virtual operating systems (Foam, Shiro, Spirit)",
+  "type": "module",
+  "main": "dist/fluffycoreutils.es.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "vite build && tsc --emitDeclarationOnly",
+    "dev": "vite build --watch",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0",
+    "vitest": "^3.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/williamsharkey/fluffycoreutils.git"
+  },
+  "license": "MIT"
+}
