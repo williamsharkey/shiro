@@ -1,0 +1,51 @@
+{
+  "name": "hypercompact",
+  "version": "2.0.0",
+  "description": "Token-efficient DOM navigation DSL for LLM agents",
+  "main": "src/index.js",
+  "browser": "src/browser.js",
+  "bin": {
+    "hc": "src/cli.js"
+  },
+  "scripts": {
+    "test": "node src/test.js",
+    "study": "node study/run_study_v2.js"
+  },
+  "keywords": [
+    "dom",
+    "navigation",
+    "llm",
+    "token-efficient",
+    "web-scraping",
+    "ai-agent"
+  ],
+  "author": "William Sharkey",
+  "license": "MIT",
+  "dependencies": {
+    "linkedom": "^0.18.0"
+  },
+  "devDependencies": {
+    "jsdom": "^27.4.0"
+  },
+  "peerDependencies": {
+    "linkedom": ">=0.16.0"
+  },
+  "peerDependenciesMeta": {
+    "linkedom": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/williamsharkey/nimbus.git",
+    "directory": "packages/hypercompact"
+  },
+  "files": [
+    "src/",
+    "CLAUDE.md",
+    "README.md"
+  ]
+}

@@ -1,0 +1,77 @@
+[
+  {
+    "task": "Task 1: HN Top Story",
+    "normal": {
+      "name": "Task 1 Normal",
+      "inputTokens": 8623,
+      "outputTokens": 25,
+      "totalTokens": 8648
+    },
+    "hc": {
+      "name": "Task 1 Hypercompact",
+      "inputTokens": 26,
+      "outputTokens": 8,
+      "totalTokens": 34
+    }
+  },
+  {
+    "task": "Task 2: Wikipedia Summary",
+    "normal": {
+      "name": "Task 2 Normal",
+      "inputTokens": 59081,
+      "outputTokens": 18,
+      "totalTokens": 59099
+    },
+    "hc": {
+      "name": "Task 2 Hypercompact",
+      "inputTokens": 51,
+      "outputTokens": 7,
+      "totalTokens": 58
+    }
+  },
+  {
+    "task": "Task 3: Bookstore 3rd Book",
+    "normal": {
+      "name": "Task 3 Normal",
+      "inputTokens": 12819,
+      "outputTokens": 10,
+      "totalTokens": 12829
+    },
+    "hc": {
+      "name": "Task 3 Hypercompact",
+      "inputTokens": 71,
+      "outputTokens": 17,
+      "totalTokens": 88
+    }
+  },
+  {
+    "task": "Task 4: Article Heading",
+    "normal": {
+      "name": "Task 4 Normal",
+      "inputTokens": 11140,
+      "outputTokens": 13,
+      "totalTokens": 11153
+    },
+    "hc": {
+      "name": "Task 4 Hypercompact",
+      "inputTokens": 7,
+      "outputTokens": 5,
+      "totalTokens": 12
+    }
+  },
+  {
+    "task": "Task 5: Code Blocks",
+    "normal": {
+      "name": "Task 5 Normal",
+      "inputTokens": 5440,
+      "outputTokens": 12,
+      "totalTokens": 5452
+    },
+    "hc": {
+      "name": "Task 5 Hypercompact",
+      "inputTokens": 0,
+      "outputTokens": 3,
+      "totalTokens": 3
+    }
+  }
+]

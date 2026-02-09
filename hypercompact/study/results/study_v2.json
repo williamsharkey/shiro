@@ -1,0 +1,36 @@
+{
+  "results": [
+    {
+      "task": "HN Top Story",
+      "commands": 4,
+      "contentTokens": 36,
+      "totalTokens": 216
+    },
+    {
+      "task": "Book 3rd Price",
+      "commands": 2,
+      "contentTokens": 15,
+      "totalTokens": 105
+    },
+    {
+      "task": "Wiki Summary",
+      "commands": 2,
+      "contentTokens": 62,
+      "totalTokens": 152
+    },
+    {
+      "task": "Article Nav",
+      "commands": 2,
+      "contentTokens": 16,
+      "totalTokens": 106
+    },
+    {
+      "task": "Quotes Grep",
+      "commands": 1,
+      "contentTokens": 21,
+      "totalTokens": 66
+    }
+  ],
+  "totalNormal": 94419,
+  "totalTotal": 645
+}

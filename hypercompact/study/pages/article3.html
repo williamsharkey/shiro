@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta http-equiv="x-ua-compatible" content="ie=edge" />
+    <meta http-equiv="content-type" content="text/html; charset=utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+
+    <!-- <style>
+      :root {
+        --accent-color: #05a081;
+        --accent-color-light: #82d0c0;
+        --accent-overlay-color: #fff;
+        --body-bg: #fff;
+        --body-color: #000;
+        --heading-color: #000;
+        --table-bg-even: #f3f3f3;
+        --table-border-bottom: #dddddd;
+      }
+      
+        @media (prefers-color-scheme: dark) {
+          :root {
+            --accent-overlay-color: #dee2e6;
+            --body-bg: #212529;
+            --body-color: #abb2bf;
+            --heading-color: #dee2e6;
+            --table-bg-even: #2d3237;
+            --table-border-bottom: #697077;
+          }
+          img {
+            opacity: .75;
+            transition: opacity .5s ease-in-out;
+          }
+          img:hover {
+            opacity: 1;
+          }
+        }
+      
+    </style> -->
+
+    <!-- <meta name="theme-color" content="#05a081" /> -->
+
+    
+      <link rel="icon" href="https:&#x2F;&#x2F;predr.ag&#x2F;processed_images&#x2F;icon.41438b42377d932d.jpg" />
+      <link rel="apple-touch-icon" sizes="48x48" href="https:&#x2F;&#x2F;predr.ag&#x2F;processed_images&#x2F;icon.41438b42377d932d.jpg" />
+      <link rel="apple-touch-icon" sizes="72x72" href="https:&#x2F;&#x2F;predr.ag&#x2F;processed_images&#x2F;icon.bbf913884fdb039f.jpg" />
+      <link rel="apple-touch-icon" sizes="96x96" href="https:&#x2F;&#x2F;predr.ag&#x2F;processed_images&#x2F;icon.e2467266f36cc9b3.jpg" />
+      <link rel="apple-touch-icon" sizes="144x144" href="https:&#x2F;&#x2F;predr.ag&#x2F;processed_images&#x2F;icon.2032d52d9c051642.jpg" />
+      <link rel="apple-touch-icon" sizes="192x192" href="https:&#x2F;&#x2F;predr.ag&#x2F;processed_images&#x2F;icon.26ae697501444a59.jpg" />
+      <link rel="apple-touch-icon" sizes="256x256" href="https:&#x2F;&#x2F;predr.ag&#x2F;processed_images&#x2F;icon.17fb1ab85d91f414.jpg" />
+      <link rel="apple-touch-icon" sizes="384x384" href="https:&#x2F;&#x2F;predr.ag&#x2F;processed_images&#x2F;icon.d6df9ad11eb3bfd3.jpg" />
+      <link rel="apple-touch-icon" sizes="512x512" href="https:&#x2F;&#x2F;predr.ag&#x2F;processed_images&#x2F;icon.ac267e73c7d9d105.jpg" />
+      
+    
+
+    
+
+    <script defer data-domain="predr.ag" data-api="/footprints/api/event" src="/footprints/js/script.js"></script>
+
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://predr.ag/blog/wifi-only-works-when-its-raining">
+
+    
+      <meta name="twitter:card" content="summary">
+    
+
+    
+      <meta name="twitter:creator" content="@PredragGruevski">
+      <meta name="twitter:site" content="@PredragGruevski">
+    
+
+    
+      
+        <meta name="twitter:image" content="https:&#x2F;&#x2F;predr.ag&#x2F;processed_images&#x2F;wifi-router-on-balcony.7957eb70ffe9a1ac.jpg">
+        <meta property="og:image" content="https:&#x2F;&#x2F;predr.ag&#x2F;processed_images&#x2F;wifi-router-on-balcony.7957eb70ffe9a1ac.jpg">
+      
+
+      
+        <meta name="twitter:image:alt" content="Illustration of a Wi-Fi antenna attached to the exterior of an upper floor of an apartment building. It&#x27;s currently raining, and the Wi-Fi is working flawlessly.">
+      
+    
+
+    
+      
+        <meta name="description" content="The strangest hardware problem I&#x27;ve ever had to debug." />
+        <meta name="twitter:description" content="The strangest hardware problem I&#x27;ve ever had to debug.">
+        <meta property="og:description" content="The strangest hardware problem I&#x27;ve ever had to debug." />
+      
+    
+
+    
+      <meta name="twitter:title" content="The Wi-Fi only works when it&#x27;s raining">
+      <meta property="og:title" content="The Wi-Fi only works when it&#x27;s raining">
+    
+
+    
+      <link rel="prerender" href="&#x2F;about" />
+    
+      <link rel="prerender" href="&#x2F;blog" />
+    
+      <link rel="prerender" href="&#x2F;talks" />
+    
+      <link rel="prerender" href="&#x2F;subscribe" />
+    
+
+    <link rel="prefetch" href="https:&#x2F;&#x2F;predr.ag&#x2F;processed_images&#x2F;icon.70799cdc77a39eaf.jpg" />
+
+    <title>
+      
+        
+          The Wi-Fi only works when it&#x27;s raining
+        
+      
+    </title>
+
+    
+    
+      <link rel="stylesheet" href="https://predr.ag/tufte.css">
+    
+    
+  
+
+  
+
+  
+    <link rel="prerender"  href="https://predr.ag/tags/april-cools/">
+  
+    <link rel="prerender"  href="https://predr.ag/tags/debugging/">
+  
+    <link rel="prerender"  href="https://predr.ag/tags/hardware/">
+  
+    <link rel="prerender"  href="https://predr.ag/tags/personal/">
+  
+
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "NewsArticle",
+      "mainEntityOfPage": {
+        "@type": "WebPage",
+        "@id": "https://google.com/article"
+      },
+      "headline": "The Wi-Fi only works when it&#x27;s raining",
+      "image": [],
+      "datePublished": "2024-04-01T00:00:00+00:00",
+      "dateModified": "2024-04-01T00:00:00+00:00",
+      "author": {
+        "@type": "Person",
+        "name": "Predrag Gruevski"
+      },
+       "publisher": {
+        "@type": "Organization",
+        "name": "Predrag Gruevski",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://predr.ag/rustacean-flat-gesture.png"
+        }
+        
+      }
+      
+    }
+  </script>
+
+  <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        
+
+        
+        {
+          
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Predrag&#x27;s Playground",
+          "item": "https://predr.ag/"
+        },
+        
+        {
+          
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Predrag&#x27;s blog",
+          "item": "https://predr.ag/blog/"
+        },
+        
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "The Wi-Fi only works when it&#x27;s raining",
+          "item": "https://predr.ag/blog/wifi-only-works-when-its-raining/"
+        }
+      ]
+    }
+  </script>
+
+    
+      <link rel="alternate" type="application/atom+xml" title="Predrag's blog" href="https://predr.ag/atom.xml">
+    
+  </head>
+  <body>
+    
+<header>
+  <a href="/blog">Predrag's blog</a>
+  <nav>
+    <a href="/">Home</a>
+    
+      
+        <a href="&#x2F;about">About</a>
+      
+    
+      
+    
+      
+        <a href="&#x2F;talks">Talks</a>
+      
+    
+      
+        <a href="&#x2F;subscribe">Follow &amp; Subscribe</a>
+      
+    
+  </nav>
+</header>
+
+    <main>
+    
+  <div class="post-title">
+    <h1>The Wi-Fi only works when it's raining</h1>
+    <small>
+      April 01, 2024
+      
+        <span class="tags">
+          
+            <a href="https://predr.ag/tags/april-cools/">april cools</a>
+          
+            <a href="https://predr.ag/tags/debugging/">debugging</a>
+          
+            <a href="https://predr.ag/tags/hardware/">hardware</a>
+          
+            <a href="https://predr.ag/tags/personal/">personal</a>
+          
+        </span>
+      
+    </small>
+  </div>
+
+  <div class="main-content">
+    <p><em>Happy April 1st! This post is part of <a href="https://aprilcools.club/">April Cools Club</a>: an April 1st effort to publish genuine essays on unexpected topics. Please enjoy this true story, and rest assured that the tech content will be back soon!</em></p>
+<p>That's what my dad said when I asked what was wrong with our home internet connection. "The Wi-Fi only works when it's raining."</p>
+<figure>
+  
+
+  
+
+  
+
+  
+  <img src="https:&#x2F;&#x2F;predr.ag&#x2F;processed_images&#x2F;wifi-router-on-balcony-cropped.e7d44f4b1754784b.jpg" alt="Illustration of a Wi-Fi antenna attached to the exterior of an upper floor of an apartment building. It&#x27;s currently raining, and the Wi-Fi is working flawlessly.">
+</figure>
+<p>Let's back up a few steps, so we're all on the same page about the <em>utter ridiculousness</em> of this situation.</p>
+<p>At the time, I was still a college student — this was over 10 years ago. I had come back home to spend a couple of weeks with my parents before the fall semester kicked off. I hadn't been back home in almost a full year, because home and school were on different continents.</p>
+<p>My dad is an engineer who had already been tinkering with networking gear longer than I'd been alive. Through the company he started, he had designed and deployed all sorts of complex network systems at institutions across the country — everything from gigabit Ethernet for an office building, to inter-city connections over <a href="https://en.wikipedia.org/wiki/Line-of-sight_propagation">line-of-sight</a> microwave links.</p>
+<p>He is <em>the last person on Earth</em> who would say a <a href="https://en.wikipedia.org/wiki/Magical_thinking">"magical thinking"</a> phrase like that.</p>
+<p>"What?" I uttered, stunned. "The Wi-Fi only works while it's raining," he repeated patiently. "It started a couple of weeks ago, and I haven't had a chance to look into it yet."</p>
+<p>"No way," I said. If anything, <a href="https://www.microwave-link.com/microwave/rain-fade-on-microwave-links/">rain makes wireless signal quality <em>worse</em></a>, not <em>better</em>. Never <em>better</em>!</p>
+<p>Two weeks without reliable internet? I started a speed-run through the stages of grief...</p>
+<h2 id="denial">Denial</h2>
+<p>I pulled open my laptop and started poking at the network.</p>
+<p>Pinging any website had a 98% packet loss rate. The internet connection was still up, but only in the most annoying "technically accurate" sense. Nothing loads when you have a 98% packet loss rate! The network may as well have been dead.</p>
+<p>I was upset. I had just started dating someone a few months prior, and she was currently on the other side of the planet! How was I to explain that I couldn't stay in touch because it wasn't raining?<label for="sn-mobile-internet" class="margin-toggle sidenote-number"></label>
+<input type="checkbox" id="sn-mobile-internet" class="margin-toggle"/>
+<span class="sidenote">Mobile data at the time was <em>exorbitantly</em> expensive, so much so that I didn't have a data plan at all for my cell service at home. I couldn't just use my phone's data plan to work around the problem, like one might do today in a similar situation.</span>
+</p>
+<p>I was pacing around the house, fuming. Grief, stage two!</p>
+<p>That's when the rain started.</p>
+<h2 id="bargaining">Bargaining</h2>
+<p>Like a miracle, within 5 minutes of the rain starting, the packet loss rate was down to 0%!</p>
+<p>I couldn't believe my eyes! I was ready for the connection to die at any second, so I opened a million tabs at once — as if I don't normally do that anyway...</p>
+<p>The rain held up for about an hour, and so did the internet connection.</p>
+<p>Then, 15 minutes or so after the rain stopped, the packet loss rate shot back up to 90%+. The internet connection went back to being unusable.</p>
+<p>I was ready to do just about anything to get more rain.</p>
+<p>Thankfully, the weather stayed grey and murky for the next few days. Each time, the pattern stayed the same:</p>
+<ul>
+<li>The rain starts, and not even a few minutes later the internet connection is crisp and fast.</li>
+<li>The rain stops, and within 15 minutes the internet connection is unusable again.</li>
+</ul>
+<p>As much as I hated to admit it, the evidence was solid. The Wi-Fi only works when it's raining!</p>
+<p>At this point, I had a choice to make.</p>
+<p>I could keep going through the stages of grief: I could sulk and plan my calls with my girlfriend around the weather forecast.</p>
+<p>Or, I could break out of that downward spiral and get to the bottom of what was going on.</p>
+<p>"<a href="https://en.wikipedia.org/wiki/Magical_thinking">Magical thinking</a> be damned! Am I an engineer or what?" I told myself.</p>
+<p>That settled it. I wasn't going to take this lying down.</p>
+<h2 id="determination">Determination</h2>
+<p>Some context on our home networking setup is in order.</p>
+<p>Remember how my dad's company had extensive experience with networking solutions? Well, we had a fancy networking setup at home too — and it had worked flawlessly for the best part of 10 years!</p>
+<p>My dad's office had a very expensive, very fast<label for="sn-contemporaneous" class="margin-toggle sidenote-number"></label>
+<input type="checkbox" id="sn-contemporaneous" class="margin-toggle"/>
+<span class="sidenote">For the time, of course.</span>
+ commercial internet connection. The home internet options, meanwhile, weren't great! In my family, we are often stubbornly against settling for less unless there's absolutely no other choice.</p>
+<p>The office and our apartment were a few blocks away from each other along a small hill, with our second-floor apartment holding the higher ground. With a bit of work, my dad set up a line-of-sight Wi-Fi bridge — <a href="https://en.wikipedia.org/wiki/Long-range_Wi-Fi">a couple of high-gain directional Wi-Fi antennas pointed at each other</a> — between the office and our apartment. This let us enjoy the faster commercial internet connection at home!</p>
+<p>I started poking around the network to figure out where the connection was breaking down.</p>
+<p>The local Wi-Fi router at home was working well — no packets lost. The local end of the Wi-Fi bridge was fine too.</p>
+<p>But pinging the remote end of the Wi-Fi bridge was showing a 90%+ packet loss rate — and so did pinging any other network device behind it. Aha, there's something wrong with the Wi-Fi bridge!</p>
+<p>But <em>what</em>? And why <em>now</em>, when the system had been working fine for almost 10 years, rain or shine?<label for="sn-work-experience" class="margin-toggle sidenote-number"></label>
+<input type="checkbox" id="sn-work-experience" class="margin-toggle"/>
+<span class="sidenote">Maybe <a href="https://predr.ag/blog/mediocrity-can-be-a-sign-of-excellence/#years-of-experience-vs-experience-in-those-years">years of work experience isn't a good metric</a> here either 😄</span>
+</p>
+<p><em>How</em> can a rain storm <em>fix</em> a Wi-Fi bridge, anyway?</p>
+<p>So many confusing questions. Time to get some answers!</p>
+<h2 id="debugging">Debugging</h2>
+<p>Like any experienced engineer, the first thing I tried was turning everything off and then on again. It didn't work.</p>
+<p>Then I checked all the devices on the network individually:</p>
+<ul>
+<li>Maybe one of the devices has gone bad with age? Nope.<label for="sn-diagnostics" class="margin-toggle sidenote-number"></label>
+<input type="checkbox" id="sn-diagnostics" class="margin-toggle"/>
+<span class="sidenote">I physically connected my laptop to each device's local Ethernet, then ran diagnostics, pinged the devices over the wired connection, etc.</span>
+</li>
+<li>Maybe a cable got unseated or came loose? Nope.</li>
+<li>Maybe a power brick has become faulty over time? Nope.</li>
+<li>Maybe an automatic firmware update failed and broke something? Nope.</li>
+<li>Maybe an antenna connector has corroded from spending years outdoors? Nope.</li>
+</ul>
+<p>Unlike debugging software, a lot of this hardware debugging was annoyingly <em>physical</em>. I had to climb up ladders, trace cables that hadn't been touched in 10 years, and do a lot of walking back and forth between our home and my dad's office.</p>
+<p>On my umpteenth back-and-forth walk, as I was bored and exasperated, I started noticing how much our neighborhood had changed in the many years I hadn't been living at home full-time.<label for="sn-boarding-school" class="margin-toggle sidenote-number"></label>
+<input type="checkbox" id="sn-boarding-school" class="margin-toggle"/>
+<span class="sidenote">Before college, I spent four years at a boarding high school. I was on our national math and programming teams for the <a href="https://www.imo-official.org/">IMO</a> and <a href="https://ioinformatics.org/">IOI</a>), so I even spent most of each summer away from home at prep camps and at the competitions themselves.</span>
+ Many of the little neighborhood shops were new. Many houses had gotten a fresh coat of paint. Trees that used to be barely more than saplings had grown tall and strong.</p>
+<p>Then it hit me.</p>
+<h2 id="realization">Realization</h2>
+<p>I ran home and climbed up onto the scaffolding holding up the Wi-Fi bridge's antenna. I was hanging precariously off the side of our apartment building, two stories up in the air.<label for="sn-safety-harness" class="margin-toggle sidenote-number"></label>
+<input type="checkbox" id="sn-safety-harness" class="margin-toggle"/>
+<span class="sidenote">In retrospect, a safety harness would have been a good idea... Things people do for internet! Don't forget, a girl was involved too — I wasn't doing this merely for Netflix or Twitter.</span>
+</p>
+<p>Then I looked downhill, at the antenna that formed the second half of the Wi-Fi bridge.</p>
+<p>Or at least, <em>toward</em> the antenna, because I couldn't see it — a tree in a neighbor's yard was in the way! Its topmost branches were swaying back and forth in the line-of-sight between the antenna pair.</p>
+<p><em>Bingo!</em></p>
+<h2 id="the-problem-and-the-fix">The Problem and the Fix</h2>
+<p>Here's what was going on.</p>
+<p>Many years ago, we installed the Wi-Fi bridge. For a long time, everything was great!</p>
+<p>But every year, our neighbor's tree grew taller and taller. Shortly before when I came back home that summer, its topmost branches had managed to reach high enough to interfere with our Wi-Fi signal.</p>
+<p>It was <em>only barely</em> tall enough to interfere with the signal, though!</p>
+<p>Every time it rained, the rain collected on its leaves and branches and <em>weighed them down</em>. The extra weight bent them out of the way of the Wi-Fi line-of-sight!<label for="sn-fresnel" class="margin-toggle sidenote-number"></label>
+<input type="checkbox" id="sn-fresnel" class="margin-toggle"/>
+<span class="sidenote">Interestingly, <a href="https://en.wikipedia.org/wiki/Line-of-sight_propagation#Impairments_to_line-of-sight_propagation">objects <em>outside</em> the straight line between antennas can still cause interference</a>! For best signal quality, the <a href="https://en.wikipedia.org/wiki/Fresnel_zone">Fresnel zone</a> between the antennas should be clear of obstructions. But perfection isn't achievable in practice, so RF equipment like Wi-Fi uses techniques like error-correcting codes so that it can still work without a perfectly clear Fresnel zone.</span>
+</p>
+<p>Each time the rain stopped, the rainwater would continue to drip off the tree. Slowly, over the course of 15ish minutes, that would unburden the tree — letting it rise back up into the path of our bits and bytes. That's when the Wi-Fi would stop working.</p>
+<p>The fix was easy: upgrade our hardware. We replaced <a href="https://en.wikipedia.org/wiki/IEEE_802.11g-2003">our old 802.11g devices</a> with <a href="https://en.wikipedia.org/wiki/IEEE_802.11n-2009">new 802.11n ones</a>, which took advantage of new <del>magic</del> math and physics to make signals more resistant to interference.<label for="sn-beamforming" class="margin-toggle sidenote-number"></label>
+<input type="checkbox" id="sn-beamforming" class="margin-toggle"/>
+<span class="sidenote">One such piece of magic new to 802.11n Wi-Fi is called "<a href="https://www.oreilly.com/library/view/80211ac-a-survival/9781449357702/ch04.html">beamforming</a>" — it's when a transmitter can use multiple antennas transmitting on the same frequency to shape and steer the signal in a way that improves the effective range and signal quality. Modern Wi-Fi does beamforming with only a few antenna elements, but if we scale that number way up we get <a href="https://en.wikipedia.org/wiki/Phased_array">a phased array antenna</a>. Ever wondered how come <a href="https://www.pcmag.com/news/spacex-reveals-next-gen-starlink-dish-for-residential-users">Starlink antennas are flat</a> and not a <a href="https://en.wikipedia.org/wiki/Satellite_dish#Gallery">"dish" like old satellite TV antennas</a>? They use phased arrays to aim their signal at <a href="https://www.space.com/starlink-satellite-train-how-to-see-and-track-it">the Starlink satellites streaking across the sky</a> — without any moving parts. <del>Magic!</del> Physics!</span>
+</p>
+<p>A few days later, the new gear arrived and I eagerly climbed back up the scaffolding to install the new antennas.</p>
+<p>A few screws, zip ties, and cable connections later, the Wi-Fi's "link established" lights flashed green once again.</p>
+<p>This time, <em>it wasn't raining.</em></p>
+<p>All was well once again.</p>
+<p><em>Hope you enjoyed this true story! <a href="https://aprilcools.club/">April Cools</a> is about surprising our readers with fun posts on topics outside our usual beat. Check out the other April Cools posts on <a href="https://aprilcools.club/">our website</a>, and consider making your own blog part of April Cools Club next year!</em></p>
+<p><em>If you liked this post, consider <a href="https://predr.ag/subscribe/">subscribing or following me on social media</a>.</em></p>
+<p><em>Thanks to <a href="https://hillelwayne.com/">Hillel Wayne</a> and <a href="https://jeremykun.com/">Jeremy Kun</a> for reading drafts of this post. All mistakes are my own.</em></p>
+
+  </div>
+
+  <hr class="footer-rule" />
+
+  
+
+  <div class="related-container">
+
+    
+
+    
+
+  </div>
+
+
+    </main>
+    <footer class="footer-page">
+    
+      
+    
+    </footer>
+  </body>
+</html>
