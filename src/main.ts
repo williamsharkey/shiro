@@ -256,6 +256,8 @@ async function main() {
   if (storedOpenaiKey) shell.env['OPENAI_API_KEY'] = storedOpenaiKey;
   const storedGoogleKey = localStorage.getItem('shiro_google_key');
   if (storedGoogleKey) shell.env['GOOGLE_API_KEY'] = storedGoogleKey;
+  const storedGithubToken = localStorage.getItem('shiro_github_token');
+  if (storedGithubToken) shell.env['GITHUB_TOKEN'] = storedGithubToken;
 
   // Create terminal
   const container = document.getElementById('terminal')!;

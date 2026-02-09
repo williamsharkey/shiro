@@ -31,6 +31,8 @@ export class ShiroTerminal {
   private userInputCursorPos = 0;
   private rawModeCallback: ((key: string) => void) | null = null;
   private stdinPassthrough: ((data: string) => void) | null = null;
+  private stdinForceExitCallback: (() => void) | null = null;
+  private lastCtrlCTime = 0;
   private iframeContainer: HTMLElement | null = null;
   private displayedRows = 1; // track how many terminal rows the current prompt+input spans
   private resizeCallbacks: ((cols: number, rows: number) => void)[] = [];
@@ -215,9 +217,12 @@ export class ShiroTerminal {
    * Enter stdin passthrough mode — raw xterm.js data is forwarded to the callback
    * without any key parsing. Used by Node.js scripts that need real stdin (e.g., ink).
    * Takes precedence over rawModeCallback.
+   * @param forceExitCallback Optional callback for double Ctrl+C force kill
    */
-  enterStdinPassthrough(callback: (data: string) => void): void {
+  enterStdinPassthrough(callback: (data: string) => void, forceExitCallback?: () => void): void {
     this.stdinPassthrough = callback;
+    this.stdinForceExitCallback = forceExitCallback || null;
+    this.lastCtrlCTime = 0;
   }
 
   /**
@@ -225,6 +230,8 @@ export class ShiroTerminal {
    */
   exitStdinPassthrough(): void {
     this.stdinPassthrough = null;
+    this.stdinForceExitCallback = null;
+    this.lastCtrlCTime = 0;
   }
 
   /**
@@ -256,6 +263,14 @@ export class ShiroTerminal {
 
   async start() {
     this.drawBanner();
+    // Source ~/.profile if it exists (env vars, aliases, etc. — persisted in IndexedDB)
+    try {
+      const profile = await this.shell.fs.readFile('/home/user/.profile');
+      const text = typeof profile === 'string' ? profile : new TextDecoder().decode(profile);
+      if (text.trim()) {
+        await this.shell.execute(text, () => {}, () => {});
+      }
+    } catch {}
     this.showPrompt();
   }
 
@@ -458,6 +473,15 @@ export class ShiroTerminal {
   private async handleInput(data: string) {
     // Stdin passthrough: forward raw data without parsing (e.g., ink/React terminal apps)
     if (this.stdinPassthrough) {
+      // Double Ctrl+C force kill: if pressed twice within 1s, force exit
+      if (data.includes('\x03') && this.stdinForceExitCallback) {
+        const now = Date.now();
+        if (now - this.lastCtrlCTime < 1000) {
+          this.stdinForceExitCallback();
+          return;
+        }
+        this.lastCtrlCTime = now;
+      }
       this.stdinPassthrough(data);
       return;
     }
@@ -499,6 +523,16 @@ export class ShiroTerminal {
     // When a command is running and Spirit is waiting for user input,
     // route keystrokes to the user-input buffer instead of the shell.
     if (this.running) {
+      // Allow Ctrl+C to force-kill even without stdinPassthrough
+      // (ink may have disabled raw mode while "thinking")
+      if (data.includes('\x03') && this.stdinForceExitCallback) {
+        const now = Date.now();
+        if (now - this.lastCtrlCTime < 1000) {
+          this.stdinForceExitCallback();
+          return;
+        }
+        this.lastCtrlCTime = now;
+      }
       if (this.userInputCallback) {
         this.handleUserInput(data);
       }

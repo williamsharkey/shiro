@@ -394,6 +394,9 @@ export class Shell {
     result = result.replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (_, name) => {
       return this.env[name] ?? '';
     });
+    // Tilde expansion: ~ or ~/path at word boundaries (not inside quotes)
+    const home = this.env['HOME'] || '/home/user';
+    result = result.replace(/(^|[\s=])~(?=\/|[\s;|&>]|$)/g, `$1${home}`);
     return result;
   }
 
@@ -543,12 +546,23 @@ export class Shell {
       const ch = input[i];
 
       if (ch === '\\' && !inSingle && i + 1 < input.length) {
-        // Escape glob chars so they won't be expanded
         const next = input[i + 1];
-        if (next === '*' || next === '?' || next === '[') {
-          current += '\x01' + next; // sentinel: quoted glob char
+        if (inDouble) {
+          // Inside double quotes: only \$ \" \\ \` are escapes; keep backslash for others
+          if (next === '$' || next === '"' || next === '\\' || next === '`') {
+            current += next;
+          } else if (next === '*' || next === '?' || next === '[') {
+            current += '\x01' + next; // sentinel: quoted glob char
+          } else {
+            current += '\\' + next; // keep backslash literally
+          }
         } else {
-          current += next;
+          // Outside quotes: backslash escapes the next character
+          if (next === '*' || next === '?' || next === '[') {
+            current += '\x01' + next; // sentinel: quoted glob char
+          } else {
+            current += next;
+          }
         }
         i += 2;
         continue;

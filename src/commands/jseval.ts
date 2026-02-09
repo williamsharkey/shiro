@@ -515,11 +515,19 @@ export const nodeCmd: Command = {
             resume: () => {
               // When resumed with terminal available, start bridging terminal input
               if (ctx.terminal && !stdinEnded) {
+                const forceExit = () => {
+                  if (!exitCalled) { exitCode = 130; exitCalled = true; }
+                  deferredExitResolve?.(exitCode);
+                };
                 ctx.terminal.enterStdinPassthrough((data: string) => {
+                  // Emit SIGINT when Ctrl+C received (like real TTY driver)
+                  if (data.includes('\x03')) {
+                    try { (processEvents['SIGINT'] || []).forEach(fn => fn('SIGINT')); } catch (_) {}
+                  }
                   stdinReadBuffer.push(data);
                   (stdinEvents['data'] || []).forEach(f => f(data));
                   (stdinEvents['readable'] || []).forEach(f => f());
-                });
+                }, forceExit);
               }
               return stdinObj;
             },
@@ -535,12 +543,20 @@ export const nodeCmd: Command = {
                 isInteractiveMode = true;
                 // Cancel script timeout — interactive apps run indefinitely
                 if (scriptTimeoutId) { clearTimeout(scriptTimeoutId); scriptTimeoutId = null; }
+                const forceExit = () => {
+                  if (!exitCalled) { exitCode = 130; exitCalled = true; }
+                  deferredExitResolve?.(exitCode);
+                };
                 ctx.terminal.enterStdinPassthrough((data: string) => {
+                  // Emit SIGINT when Ctrl+C received (like real TTY driver)
+                  if (data.includes('\x03')) {
+                    try { (processEvents['SIGINT'] || []).forEach(fn => fn('SIGINT')); } catch (_) {}
+                  }
                   // Support both push (data events) and pull (readable + read()) interfaces
                   stdinReadBuffer.push(data);
                   (stdinEvents['data'] || []).forEach(f => f(data));
                   (stdinEvents['readable'] || []).forEach(f => f());
-                });
+                }, forceExit);
               } else if (!mode && ctx.terminal) {
                 ctx.terminal.exitStdinPassthrough();
                 // Ink calls setRawMode(false) when unmounting (e.g., /exit).
@@ -625,7 +641,12 @@ export const nodeCmd: Command = {
           // Don't throw — kill() is called asynchronously from force-exit paths (e.g. CLI's _J6)
           // where the throw would escape as an unhandled rejection
           if (pid === 1) {
-            const code = 128 + (signal === 'SIGKILL' ? 9 : signal === 'SIGTERM' ? 15 : 0);
+            // For SIGINT: emit event and let handlers decide (like real Node.js)
+            if (signal === 'SIGINT' && processEvents['SIGINT']?.length) {
+              try { (processEvents['SIGINT'] || []).forEach(fn => fn('SIGINT')); } catch (_) {}
+              return true;
+            }
+            const code = 128 + (signal === 'SIGKILL' ? 9 : signal === 'SIGTERM' ? 15 : signal === 'SIGINT' ? 2 : 0);
             if (!exitCalled) {
               exitCode = code;
               exitCalled = true;
@@ -1077,13 +1098,15 @@ export const nodeCmd: Command = {
               existsSync: (p: string) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
                 if (fileCache.has(resolved) || fileCache.has(resolved + '.js') || fileCache.has(resolved + '/index.js')) return true;
+                // Check for directory sentinel (from mkdirSync)
+                if (fileCache.has(resolved + '/.')) return true;
                 // Check if path is a directory (has files under it)
                 return [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
               },
               statSync: (p: string, opts?: any) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
                 const isFile = fileCache.has(resolved);
-                const isDir = [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
+                const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
                 if (!isFile && !isDir) {
                   if (opts?.throwIfNoEntry === false) return undefined;
                   throw new Error(`ENOENT: no such file or directory, stat '${p}'`);
@@ -1137,7 +1160,21 @@ export const nodeCmd: Command = {
                 return sorted;
               },
               mkdirSync: (p: string, opts?: any) => {
-                ctx.fs.mkdir(ctx.fs.resolvePath(p, ctx.cwd), opts).catch(() => {});
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                // Mark directory in fileCache so existsSync/statSync can find it
+                // Use a sentinel value to distinguish from files
+                if (opts?.recursive) {
+                  // Create all intermediate directories in cache
+                  const parts = resolved.split('/').filter(Boolean);
+                  let cur = '';
+                  for (const part of parts) {
+                    cur += '/' + part;
+                    if (!fileCache.has(cur + '/.')) fileCache.set(cur + '/.', '');
+                  }
+                } else {
+                  fileCache.set(resolved + '/.', '');
+                }
+                pendingPromises.push(ctx.fs.mkdir(resolved, opts).catch(() => {}));
               },
               unlinkSync: (p: string) => {
                 ctx.fs.unlink(ctx.fs.resolvePath(p, ctx.cwd)).catch(() => {});

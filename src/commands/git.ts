@@ -289,6 +289,23 @@ export const gitCmd: Command = {
         }
 
         case 'branch': {
+          // git branch <name> — create a new branch
+          // git branch -d <name> — delete a branch
+          // git branch (no args) — list branches
+          const branchArgs = ctx.args.slice(1);
+          if (branchArgs.length > 0 && !branchArgs[0].startsWith('-')) {
+            // Create branch
+            const newBranch = branchArgs[0];
+            await git.branch({ fs, dir, ref: newBranch });
+            break;
+          }
+          if (branchArgs[0] === '-d' || branchArgs[0] === '-D') {
+            const delBranch = branchArgs[1];
+            if (!delBranch) { ctx.stderr = 'fatal: branch name required\n'; return 1; }
+            await git.deleteBranch({ fs, dir, ref: delBranch });
+            ctx.stdout += `Deleted branch ${delBranch}.\n`;
+            break;
+          }
           const branches = await git.listBranches({ fs, dir });
           const current = await git.currentBranch({ fs, dir });
           for (const b of branches) {
@@ -518,7 +535,7 @@ function parseRemoteArgs(ctx: CommandContext): { remote: string; ref: string; to
 
   const token = ctx.env['GITHUB_TOKEN']
     || (typeof localStorage !== 'undefined' ? localStorage.getItem('shiro_github_token') || '' : '');
-  const corsProxy = ctx.env['GIT_CORS_PROXY'] || 'https://cors.isomorphic-git.org';
+  const corsProxy = ctx.env['GIT_CORS_PROXY'] || (typeof location !== 'undefined' ? location.origin + '/git-proxy' : 'https://cors.isomorphic-git.org');
 
   return { remote, ref, token, corsProxy };
 }

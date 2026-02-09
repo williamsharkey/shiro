@@ -119,16 +119,27 @@ Build output is a single self-contained HTML file (~338KB gzipped). Deploy targe
 - The filesystem persists across page reloads (IndexedDB + localStorage backup)
 - Use \`jest\` (not \`test\`) to run JavaScript test files. \`test\` is the POSIX conditional.
 - \`rg\` (ripgrep) is available for fast recursive code search
+- \`~/.profile\` is sourced on every boot — use it to persist env vars in IndexedDB
+- \`shiro config set github_token <tok>\` persists GitHub token (also available as \`$GITHUB_TOKEN\`)
+
+## Persisting Environment Variables
+
+Write exports to \`~/.profile\` — it's sourced on every boot and stored in IndexedDB:
+
+\\\`\\\`\\\`bash
+echo 'export GITHUB_TOKEN=ghp_...' >> ~/.profile
+echo 'export MY_VAR=value' >> ~/.profile
+\\\`\\\`\\\`
+
+Or use \`shiro config set github_token <token>\` for GitHub tokens specifically.
 
 ## Filing Bugs
 
 If you find a bug in Shiro, file it as a GitHub issue:
 
 \\\`\\\`\\\`bash
-export GITHUB_TOKEN=<token>
 curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" -H "Content-Type: application/json" \\\\
   https://api.github.com/repos/williamsharkey/shiro/issues \\\\
   -d '{"title":"Bug: ...","body":"## Reproduction\\\\n...\\\\n## Expected\\\\n...\\\\n## Impact\\\\n..."}'
 \\\`\\\`\\\`
-- Set \`GITHUB_TOKEN\` before git push: \`export GITHUB_TOKEN=ghp_...\`
 `;
