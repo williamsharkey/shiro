@@ -231,6 +231,30 @@ export class FileSystem {
     return result;
   }
 
+  /** Synchronously read file content from the in-memory cache (no IndexedDB round-trip).
+   *  Returns the string content if cached, or undefined if not in cache / not a file. */
+  readCached(path: string): string | undefined {
+    const node = this.cache.get(path);
+    if (!node || node.type !== 'file' || !node.content) return undefined;
+    return new TextDecoder().decode(node.content);
+  }
+
+  /** Synchronously list directory entries from the in-memory cache. */
+  readdirCached(path: string): string[] | undefined {
+    const node = this.cache.get(path);
+    if (!node || node.type !== 'dir') return undefined;
+    const prefix = path === '/' ? '/' : path + '/';
+    const entries = new Set<string>();
+    for (const key of this.cache.keys()) {
+      if (key.startsWith(prefix)) {
+        const rest = key.slice(prefix.length);
+        const first = rest.split('/')[0];
+        if (first) entries.add(first);
+      }
+    }
+    return entries.size > 0 ? [...entries].sort() : undefined;
+  }
+
   /** Clear the in-memory cache (useful after external DB modifications) */
   clearCache(): void {
     this.cache.clear();

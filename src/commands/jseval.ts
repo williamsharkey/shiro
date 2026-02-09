@@ -1129,7 +1129,13 @@ export const nodeCmd: Command = {
             const fsShim: any = {
               readFileSync: (p: string, opts?: any) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-                const cached = fileCache.get(resolved) ?? fileCache.get(resolved + '.js');
+                let cached = fileCache.get(resolved) ?? fileCache.get(resolved + '.js');
+                // Fallback: check Shiro's FS in-memory cache for files created by
+                // shell commands (git clone, echo, sed) that bypass nodeCmd's fileCache
+                if (cached === undefined) {
+                  cached = ctx.fs.readCached(resolved) ?? ctx.fs.readCached(resolved + '.js');
+                  if (cached !== undefined) fileCache.set(resolved, cached); // promote to fileCache
+                }
                 if (cached === undefined) {
                     throw new Error(`ENOENT: no such file or directory, open '${p}'`);
                 }
@@ -1156,12 +1162,19 @@ export const nodeCmd: Command = {
                 // Check for directory sentinel (from mkdirSync)
                 if (fileCache.has(resolved + '/.')) return true;
                 // Check if path is a directory (has files under it)
-                const exists = [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
-                return exists;
+                if ([...fileCache.keys()].some(k => k.startsWith(resolved + '/'))) return true;
+                // Fallback: check Shiro FS cache for files created by shell commands
+                if (ctx.fs.readCached(resolved) !== undefined) return true;
+                return false;
               },
               statSync: (p: string, opts?: any) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-                const isFile = fileCache.has(resolved);
+                let isFile = fileCache.has(resolved);
+                // Fallback: check Shiro FS cache for files created by shell commands
+                if (!isFile && ctx.fs.readCached(resolved) !== undefined) {
+                  isFile = true;
+                  fileCache.set(resolved, ctx.fs.readCached(resolved)!); // promote
+                }
                 const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
                 if (!isFile && !isDir) {
                   if (opts?.throwIfNoEntry === false) return undefined;
@@ -1199,6 +1212,11 @@ export const nodeCmd: Command = {
                       if (rest.includes('/')) dirSet.add(first);
                     }
                   }
+                }
+                // Fallback: merge entries from Shiro FS cache (files from shell commands)
+                const fsCached = ctx.fs.readdirCached(resolved);
+                if (fsCached) {
+                  for (const name of fsCached) entries.add(name);
                 }
                 const sorted = [...entries].sort();
                 if (opts?.withFileTypes) {
@@ -5550,8 +5568,10 @@ export const nodeCmd: Command = {
         || printResult;
       if (isInteractiveMode || !hasFinishedOutput) {
         // Longer timeout for deferred wait — allows streaming API responses to complete
-        // Interactive mode (ink) gets 24h; non-interactive gets 5min
-        const DEFERRED_TIMEOUT = isInteractiveMode ? 86400000 : 300000;
+        // Interactive mode (ink) gets 24h; large bundles (CLI) get 5min; regular scripts get 10s
+        // Regular scripts (node -e, small files) rarely need deferred exit — 10s catches
+        // legitimate async work while preventing 5-minute hangs for simple read/write scripts.
+        const DEFERRED_TIMEOUT = isInteractiveMode ? 86400000 : code.length > 500000 ? 300000 : 10000;
         const deferredTimeout = new Promise<never>((_, reject) => {
           setTimeout(() => reject(new ProcessExitError(124)), DEFERRED_TIMEOUT);
         });
