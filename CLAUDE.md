@@ -130,6 +130,7 @@ The shell supports:
 - **Redirects**: `>`, `>>`, `<`, `2>`, `2>>`
 - **Compound commands**: `&&`, `||`, `;`
 - **Environment variables**: `$VAR`, `${VAR}`, `$?` (last exit code)
+- **Positional parameters**: `$@`, `$*`, `$#`, `$0`-`$9`
 - **Quoting**: single quotes (literal), double quotes (with var expansion), backslash escapes
 - **Comments**: lines starting with `#`
 
@@ -223,6 +224,23 @@ seed yolo       # Target yolo.shiro.computer subdomain
 ```
 
 The blob mode inlines all JS/CSS, gzips (~70% reduction), and creates a blob URL at runtime.
+
+## Claude Code (Inner Claude)
+
+The real `@anthropic-ai/claude-code` CLI (v2.1.37, 11MB bundled ESM) runs inside Shiro's Node.js runtime (`jseval.ts`). Both print mode (`claude -p "..."`) and interactive mode (`claude`) work.
+
+**How it works:**
+- Shell finds `claude` → bin stub at `/usr/local/bin/claude` → follows to `cli.js`
+- `jseval.ts` transforms the ESM bundle, wraps in AsyncFunction, provides ~50 Node.js module shims
+- API calls go through CORS proxy: `globalThis.fetch` → rewrite URLs → `/api/anthropic/*` → `api.anthropic.com`
+- OAuth tokens auto-refresh before CLI runs (pre-flight check in jseval.ts)
+
+**Key details:**
+- OAuth credentials: `/home/user/.claude/.credentials.json` (persisted in IndexedDB)
+- Token refresh: `POST /api/platform/v1/oauth/token` with `grant_type=refresh_token`
+- Telemetry blocked: datadoghq.com, sentry.io, event_logging → fake 200 responses
+- Stdin piping works: `echo "text" | claude -p "analyze this"`
+- Interactive mode uses ink (React for terminal) with stdin passthrough bridging
 
 ## Skyeyes MCP Tools
 
