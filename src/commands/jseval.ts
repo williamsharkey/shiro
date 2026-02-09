@@ -2587,6 +2587,7 @@ export const nodeCmd: Command = {
               _ended = false;
               _aborted = false;
               _timeout = 0;
+              _abortController: AbortController | null = null;
 
               constructor(opts: any) {
                 this._opts = opts;
@@ -2595,6 +2596,7 @@ export const nodeCmd: Command = {
                     this._headers[k.toLowerCase()] = String(v);
                   }
                 }
+                if (opts.timeout) this._timeout = opts.timeout;
               }
               on(ev: string, fn: Function) { (this._events[ev] ??= []).push(fn); return this; }
               once(ev: string, fn: Function) {
@@ -2627,15 +2629,25 @@ export const nodeCmd: Command = {
                 const path = o.path || '/';
                 const url = `${protocol}//${host}${port}${path}`;
 
+                // Use AbortController for timeout support
+                this._abortController = new AbortController();
+                const timeoutMs = this._timeout || 30000; // default 30s timeout
+                const timeoutId = setTimeout(() => {
+                  this._abortController?.abort();
+                  this.emit('timeout');
+                }, timeoutMs);
+
                 const fetchOpts: RequestInit = {
                   method: o.method || 'GET',
                   headers: this._headers,
+                  signal: this._abortController.signal,
                 };
                 if (this._body.length > 0 && o.method !== 'GET' && o.method !== 'HEAD') {
                   fetchOpts.body = this._body.join('');
                 }
 
                 globalThis.fetch(url, fetchOpts).then(async (resp) => {
+                  clearTimeout(timeoutId);
                   // Build IncomingMessage-like response
                   const resHeaders: Record<string, string> = {};
                   resp.headers.forEach((v, k) => { resHeaders[k] = v; });
@@ -2686,11 +2698,12 @@ export const nodeCmd: Command = {
                     });
                   }
                 }).catch(err => {
+                  clearTimeout(timeoutId);
                   this.emit('error', err);
                 });
               }
-              abort() { this._aborted = true; this.emit('abort'); }
-              destroy(err?: Error) { this._aborted = true; if (err) this.emit('error', err); }
+              abort() { this._aborted = true; this._abortController?.abort(); this.emit('abort'); }
+              destroy(err?: Error) { this._aborted = true; this._abortController?.abort(); if (err) this.emit('error', err); }
               setTimeout(ms: number, cb?: Function) { this._timeout = ms; if (cb) this.on('timeout', cb); return this; }
               flushHeaders() {}
               setNoDelay() {}

@@ -133,7 +133,9 @@ export class Shell {
     writeStderr?: (s: string) => void,
     remote: boolean = false,
   ): Promise<number> {
-    const trimmed = line.trim();
+    // Handle backslash line continuations: \<newline> joins lines
+    const joined = line.replace(/\\\n/g, '');
+    const trimmed = joined.trim();
     if (!trimmed || trimmed.startsWith('#')) return 0;
 
     // Record command for title display
@@ -385,18 +387,69 @@ export class Shell {
   }
 
   private expandVars(line: string): string {
-    // Handle $? specially
-    let result = line.replace(/\$\?/g, String(this.lastExitCode));
-    // Handle $VAR and ${VAR}
-    result = result.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name) => {
-      return this.env[name] ?? '';
-    });
-    result = result.replace(/\$([A-Za-z_][A-Za-z0-9_]*)/g, (_, name) => {
-      return this.env[name] ?? '';
-    });
-    // Tilde expansion: ~ or ~/path at word boundaries (not inside quotes)
-    const home = this.env['HOME'] || '/home/user';
-    result = result.replace(/(^|[\s=])~(?=\/|[\s;|&>]|$)/g, `$1${home}`);
+    // Walk through the string character by character, respecting quote context.
+    // In single quotes: no expansion at all (bash behavior).
+    // In double quotes: expand $VAR and ${VAR} but NOT ~ or $?.
+    // Unquoted: expand everything.
+    let result = '';
+    let inSingle = false;
+    let inDouble = false;
+    let i = 0;
+    while (i < line.length) {
+      const ch = line[i];
+
+      // Track quotes
+      if (ch === "'" && !inDouble) { inSingle = !inSingle; result += ch; i++; continue; }
+      if (ch === '"' && !inSingle) { inDouble = !inDouble; result += ch; i++; continue; }
+
+      // Inside single quotes: everything is literal
+      if (inSingle) { result += ch; i++; continue; }
+
+      // Handle backslash (skip next char)
+      if (ch === '\\' && i + 1 < line.length) { result += ch + line[i + 1]; i += 2; continue; }
+
+      // Expand $? (last exit code)
+      if (ch === '$' && line[i + 1] === '?') {
+        result += String(this.lastExitCode);
+        i += 2;
+        continue;
+      }
+
+      // Expand ${VAR}
+      if (ch === '$' && line[i + 1] === '{') {
+        const m = line.slice(i).match(/^\$\{([A-Za-z_][A-Za-z0-9_]*)\}/);
+        if (m) {
+          result += this.env[m[1]] ?? '';
+          i += m[0].length;
+          continue;
+        }
+      }
+
+      // Expand $VAR
+      if (ch === '$') {
+        const m = line.slice(i).match(/^\$([A-Za-z_][A-Za-z0-9_]*)/);
+        if (m) {
+          result += this.env[m[1]] ?? '';
+          i += m[0].length;
+          continue;
+        }
+      }
+
+      // Tilde expansion (only unquoted)
+      if (ch === '~' && !inDouble) {
+        const before = i === 0 ? '' : line[i - 1];
+        const after = line[i + 1] || '';
+        if ((i === 0 || /[\s=]/.test(before)) && (/[\/\s;|&>]/.test(after) || i + 1 >= line.length)) {
+          const home = this.env['HOME'] || '/home/user';
+          result += home;
+          i++;
+          continue;
+        }
+      }
+
+      result += ch;
+      i++;
+    }
     return result;
   }
 
