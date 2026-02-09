@@ -21,26 +21,14 @@ npm run build       # Build library with Vite + emit type declarations
 npm run dev         # Watch mode build
 ```
 
-Builds to `dist/fluffycoreutils.es.js` (ES module) with TypeScript declarations. Consumed as a git submodule by Shiro and Foam.
+Builds to `dist/fluffycoreutils.js` (ES module) with TypeScript declarations.
+
+**This is a subdirectory of the shiro monorepo** — not a separate git repo. After making changes, rebuild with `cd fluffycoreutils && npm run build`, then rebuild shiro from the root.
 
 ## Key Design Decisions
 
 - **Library, not an app** — imported by host OSes, not run standalone
 - **Vite library build** — outputs ES module for browser consumption
 - **TypeScript** — type-safe command implementations
-- **Git submodule** — consumed by Shiro (`fluffycoreutils/`) and Foam (`fluffycoreutils/`)
+- **Monorepo subdirectory** — lives at `fluffycoreutils/` inside shiro, imported directly
 - **Shared interface** — commands follow the same `Command` pattern as Shiro/Foam built-in commands
-
-## Cross-Project Integration
-
-- **Shiro** (williamsharkey/shiro): Consumes as submodule, bridges via command registry
-- **Foam** (williamsharkey/foam): Consumes as submodule, bridges via `src/fluffy-bridge.js`
-- **Spirit** (williamsharkey/spirit): Commands available to the agent loop
-- **Windwalker** (williamsharkey/windwalker): Tests at level 8
-- **Nimbus** (williamsharkey/nimbus): Orchestrator managing development
-
-## Skyeyes MCP Tools
-
-You have skyeyes MCP tools for browser interaction (see `~/.claude/CLAUDE.md` for full tool list). Your dedicated page IDs:
-- `shiro-fluffycoreutils` — your shiro iframe
-- `foam-fluffycoreutils` — your foam iframe

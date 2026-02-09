@@ -28,7 +28,9 @@ npm run build       # Build library with Vite + emit type declarations
 npm run dev         # Watch mode build
 ```
 
-Spirit builds to `dist/spirit.es.js` (ES module) with TypeScript declarations. It's consumed as a git submodule by Shiro and Foam.
+Spirit builds to `dist/spirit.es.js` (ES module) with TypeScript declarations.
+
+**This is a subdirectory of the shiro monorepo** — not a separate git repo. Shiro imports Spirit directly via relative path.
 
 ## Key Design Decisions
 
@@ -36,19 +38,4 @@ Spirit builds to `dist/spirit.es.js` (ES module) with TypeScript declarations. I
 - **OSProvider interface** — host OS implements this to give Spirit filesystem, shell, and terminal access
 - **Vite library build** — outputs ES module for browser consumption
 - **Browser-native fetch** — no Node.js dependencies, works in any modern browser
-- **Git submodule** — consumed by Shiro and Foam as `spirit/` submodule
-
-## Cross-Project Integration
-
-- **Shiro** (williamsharkey/shiro): Implements `ShiroProvider` in `src/spirit-provider.ts`
-- **Foam** (williamsharkey/foam): Implements `FoamProvider` in `src/foam-provider.js`
-- **FluffyCoreutils** (williamsharkey/fluffycoreutils): Shared commands available to Spirit
-- **Windwalker** (williamsharkey/windwalker): Tests Spirit at levels 6+
-- **Nimbus** (williamsharkey/nimbus): Orchestrator managing Spirit's development
-- **Skyeyes** (williamsharkey/skyeyes): Browser bridge for remote testing of Spirit
-
-## Skyeyes MCP Tools
-
-You have skyeyes MCP tools for browser interaction (see `~/.claude/CLAUDE.md` for full tool list). Your dedicated page IDs:
-- `shiro-spirit` — your shiro iframe
-- `foam-spirit` — your foam iframe
+- **Monorepo subdirectory** — lives at `spirit/` inside shiro, imported directly

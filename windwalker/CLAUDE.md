@@ -86,20 +86,7 @@ npm run test:all             # Run linkedom + shiro-vitest + hotreload
 - **OS-agnostic** — same tests run against both Foam and Shiro
 - **Plain JavaScript** — no build step, Node.js ES modules
 
-## Cross-Project Integration
-
-- **Shiro** (williamsharkey/shiro): TypeScript browser OS — primary test target
-- **Foam** (williamsharkey/foam): Plain JS browser OS — primary test target
-- **Spirit** (williamsharkey/spirit): Claude Code agent tested at level 6+
-- **Nimbus** (williamsharkey/nimbus): Orchestrator with skyeyes bridge for test execution
-- **Skyeyes** (williamsharkey/skyeyes): Browser-side bridge enabling remote test execution
-- **FluffyCoreutils** (williamsharkey/fluffycoreutils): Shared commands tested at level 8
-
-## Skyeyes MCP Tools
-
-You have skyeyes MCP tools for browser interaction (see `~/.claude/CLAUDE.md` for full tool list). Your dedicated page IDs:
-- `shiro-windwalker` — your shiro iframe
-- `foam-windwalker` — your foam iframe
+**This is a subdirectory of the shiro monorepo** — not a separate git repo. Run tests from `windwalker/` directory.
 
 ## Dependencies
 
