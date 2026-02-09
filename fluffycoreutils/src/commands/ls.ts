@@ -10,7 +10,36 @@ export const ls: FluffyCommand = {
     const showAll = flags.a;
     const longFormat = flags.l;
     const humanReadable = flags.h;
+    const recursive = flags.R;
     const results: string[] = [];
+
+    async function listDir(dirPath: string, label: string, showLabel: boolean) {
+      const entries = await io.fs.readdir(dirPath);
+      const filtered = showAll ? entries : entries.filter((e) => !e.name.startsWith("."));
+      filtered.sort((a, b) => a.name.localeCompare(b.name));
+
+      if (showLabel) results.push(`${label}:`);
+
+      if (longFormat) {
+        results.push(`total ${filtered.length}`);
+        for (const entry of filtered) {
+          results.push(formatLong(entry.name, entry, humanReadable));
+        }
+      } else {
+        results.push(filtered.map((e) => e.type === "dir" ? e.name + "/" : e.name).join("  "));
+      }
+
+      if (recursive) {
+        for (const entry of filtered) {
+          if (entry.type === "dir") {
+            results.push("");
+            const subPath = dirPath === "/" ? "/" + entry.name : dirPath + "/" + entry.name;
+            const subLabel = label === "." ? entry.name : label + "/" + entry.name;
+            await listDir(subPath, subLabel, true);
+          }
+        }
+      }
+    }
 
     for (const p of paths) {
       const resolved = io.fs.resolvePath(p, io.cwd);
@@ -21,19 +50,8 @@ export const ls: FluffyCommand = {
         continue;
       }
 
-      if (paths.length > 1) results.push(`${p}:`);
-      const entries = await io.fs.readdir(resolved);
-      const filtered = showAll ? entries : entries.filter((e) => !e.name.startsWith("."));
-      filtered.sort((a, b) => a.name.localeCompare(b.name));
-
-      if (longFormat) {
-        results.push(`total ${filtered.length}`);
-        for (const entry of filtered) {
-          results.push(formatLong(entry.name, entry, humanReadable));
-        }
-      } else {
-        results.push(filtered.map((e) => e.type === "dir" ? e.name + "/" : e.name).join("  "));
-      }
+      const showLabel = paths.length > 1 || recursive;
+      await listDir(resolved, p, showLabel);
     }
 
     return { stdout: results.join("\n") + "\n", stderr: "", exitCode: 0 };
