@@ -248,6 +248,7 @@ export const nodeCmd: Command = {
     // Save originals for CORS proxy interception (must be in outer scope for catch block)
     const _origFetch = globalThis.fetch;
     const _origXHR = typeof XMLHttpRequest !== 'undefined' ? XMLHttpRequest : undefined;
+    let _ownsStdinPassthrough = false; // Track if THIS invocation set up stdin passthrough
 
     try {
       // Build a minimal Node-like environment
@@ -547,6 +548,7 @@ export const nodeCmd: Command = {
               // ink calls setRawMode(true) — activate stdin passthrough for raw keypresses
               if (mode && ctx.terminal && !stdinEnded) {
                 isInteractiveMode = true;
+                _ownsStdinPassthrough = true;
                 // Cancel script timeout — interactive apps run indefinitely
                 if (scriptTimeoutId) { clearTimeout(scriptTimeoutId); scriptTimeoutId = null; }
                 const forceExit = () => {
@@ -5587,8 +5589,10 @@ export const nodeCmd: Command = {
         ctx.stdout += formatArg(result) + '\n';
       }
 
-      // Clean up stdin passthrough when script exits
-      if (ctx.terminal) ctx.terminal.exitStdinPassthrough();
+      // Clean up stdin passthrough when script exits — but ONLY if this invocation
+      // set it up. Nested node/exec calls (e.g., CLI's Bash tool running `node script.js`)
+      // share the same terminal reference and would otherwise clear the outer CLI's passthrough.
+      if (ctx.terminal && _ownsStdinPassthrough) ctx.terminal.exitStdinPassthrough();
 
       // Deferred cleanup of rejection handler — CLI force-exit callbacks fire after fn() returns
       if (typeof window !== 'undefined') {
@@ -5601,8 +5605,8 @@ export const nodeCmd: Command = {
 
       return exitCode;
     } catch (e: any) {
-      // Clean up stdin passthrough on error
-      if (ctx.terminal) ctx.terminal.exitStdinPassthrough();
+      // Clean up stdin passthrough on error — only if this invocation owns it
+      if (ctx.terminal && _ownsStdinPassthrough) ctx.terminal.exitStdinPassthrough();
       // Clean up rejection handler on error too
       if (typeof window !== 'undefined') {
         setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
