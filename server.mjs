@@ -30,6 +30,7 @@ const SKIP_REQUEST_HEADERS = new Set([
   'host', 'connection', 'keep-alive', 'transfer-encoding', 'accept-encoding',
   'origin', 'referer', 'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site',
   'sec-fetch-user', 'anthropic-dangerous-direct-browser-access',
+  'user-agent',  // Browser UA causes API to reject OAuth tokens
 ]);
 
 // Node fetch auto-decompresses, so strip encoding headers from upstream responses
@@ -80,6 +81,8 @@ async function handleProxy(req, res, pathAfterApi) {
     if (!SKIP_REQUEST_HEADERS.has(k.toLowerCase())) headers[k] = v;
   }
   headers['host'] = new URL(base).host;
+  // Replace browser UA with Node.js-like UA to avoid API rejecting OAuth from browsers
+  headers['user-agent'] = 'node-fetch/1.0 (+https://github.com/node-fetch/node-fetch)';
   if (body.length) headers['content-length'] = String(body.length);
 
   try {

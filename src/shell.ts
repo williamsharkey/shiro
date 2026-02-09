@@ -415,6 +415,27 @@ export class Shell {
         continue;
       }
 
+      // Expand $@ and $* (all positional parameters)
+      if (ch === '$' && (line[i + 1] === '@' || line[i + 1] === '*')) {
+        result += this.env['@'] ?? '';
+        i += 2;
+        continue;
+      }
+
+      // Expand $# (number of positional parameters)
+      if (ch === '$' && line[i + 1] === '#') {
+        result += this.env['#'] ?? '0';
+        i += 2;
+        continue;
+      }
+
+      // Expand $0-$9 (positional parameters)
+      if (ch === '$' && line[i + 1] >= '0' && line[i + 1] <= '9') {
+        result += this.env[line[i + 1]] ?? '';
+        i += 2;
+        continue;
+      }
+
       // Expand ${VAR}
       if (ch === '$' && line[i + 1] === '{') {
         const m = line.slice(i).match(/^\$\{([A-Za-z_][A-Za-z0-9_]*)\}/);
@@ -1288,6 +1309,21 @@ export class Shell {
     }
 
     // No shebang - try to detect file type
+    // Check if content is just a path to another file (npm bin stubs)
+    const trimmedContent = content.trim();
+    if (!trimmedContent.includes('\n') && !trimmedContent.includes(' ') &&
+        (trimmedContent.endsWith('.js') || trimmedContent.endsWith('.mjs') || trimmedContent.endsWith('.ts'))) {
+      console.log(`[executeScript] bin stub detected → following to ${trimmedContent}`);
+      try {
+        const targetContent = await this.fs.readFile(trimmedContent, 'utf8') as string;
+        console.log(`[executeScript] bin stub target loaded (${targetContent.length} bytes), passing args: ${JSON.stringify(args)}`);
+        return this.executeNodeScript(trimmedContent, targetContent, args, ctx, writeStdout, writeStderr);
+      } catch (e: any) {
+        console.log(`[executeScript] bin stub target not found: ${e.message}`);
+        // Target doesn't exist, fall through
+      }
+    }
+
     // If it looks like JavaScript, run with node
     if (resolvedPath.endsWith('.js') || resolvedPath.endsWith('.mjs') ||
         content.trimStart().startsWith('const ') ||

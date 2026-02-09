@@ -1101,7 +1101,8 @@ export const nodeCmd: Command = {
                 // Check for directory sentinel (from mkdirSync)
                 if (fileCache.has(resolved + '/.')) return true;
                 // Check if path is a directory (has files under it)
-                return [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
+                const exists = [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
+                return exists;
               },
               statSync: (p: string, opts?: any) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
@@ -5202,7 +5203,15 @@ export const nodeCmd: Command = {
 
       const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
       // Transform ES modules and wrap for execution
-      const transformedCode = transformESModules(code);
+      let transformedCode = transformESModules(code);
+
+      // Stash real browser console on globalThis so injected code can use it
+      // (inside the AsyncFunction, `console` is the fakeConsole)
+      if (code.length > 500000) {
+        (globalThis as any).__realConsole = console;
+
+      }
+
       const wrappedCode = printResult ? `return (${transformedCode})` : transformedCode;
       const fn = new AsyncFunction(
         'console', 'process', 'require', 'Buffer', '__filename', '__dirname', 'shiro', '__import_meta', 'module', 'exports', '__dynamic_import',
