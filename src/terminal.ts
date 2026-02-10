@@ -81,6 +81,7 @@ export class ShiroTerminal {
       cursorStyle: 'block',
       scrollback: 10000,
       linkHandler: {
+        allowNonHttpProtocols: true,
         activate: (_event: MouseEvent, uri: string) => {
           // Handle special shiro:// URLs for banner actions
           if (uri === 'shiro://rec') {

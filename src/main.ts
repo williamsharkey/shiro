@@ -99,6 +99,7 @@ import { ShiroTerminal } from './terminal';
 import { initFaviconUpdater, initTitle } from './favicon';
 import { initMobileInput } from './mobile-input';
 import { initDropHandler } from './drop-handler';
+import { closeSplitView } from './split-view';
 import buildNumber from '../build-number.txt?raw';
 import { CLAUDE_MD } from './claude-md-seed';
 
@@ -328,6 +329,7 @@ async function main() {
     iframeServer, // Iframe-based virtual HTTP server
     processTable, // Windowed process registry
     unbecome: deactivateBecomeMode, // Exit app mode from browser console
+    closeSplit: closeSplitView, // Close split pane from browser console
   };
 
   // OAuth callback bridge: receive auth codes from /oauth/callback popup

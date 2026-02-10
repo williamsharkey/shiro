@@ -4,6 +4,7 @@
 import { Command, CommandContext } from './index';
 import { iframeServer, createStaticServer, VirtualRequest, VirtualResponse } from '../iframe-server';
 import { createServerWindow, findServerWindow, ServerWindow } from '../server-window';
+import { createSplitView, closeSplitView, getActiveSplit } from '../split-view';
 
 // Track active servers and their cleanup functions
 const activeServers = new Map<number, {
@@ -18,7 +19,7 @@ export function getActiveServers() { return activeServers; }
 /**
  * Serve static files from a directory
  */
-async function serveStatic(ctx: CommandContext, port: number, directory: string, openIframe: boolean): Promise<number> {
+async function serveStatic(ctx: CommandContext, port: number, directory: string, openIframe: boolean, splitDir?: 'right' | 'bottom'): Promise<number> {
   const fs = ctx.fs;
   const absDir = fs.resolvePath(directory, ctx.cwd);
 
@@ -57,8 +58,13 @@ async function serveStatic(ctx: CommandContext, port: number, directory: string,
 
   ctx.stdout = `Serving ${directory} on port ${port}\n`;
 
-  // Optionally open in windowed iframe
-  if (openIframe) {
+  // Optionally open in windowed iframe or split
+  if (splitDir) {
+    const openResult = await openInSplit(ctx, port, '/', splitDir);
+    if (openResult !== 0) {
+      ctx.stdout += `Note: Could not open split\n`;
+    }
+  } else if (openIframe) {
     const openResult = await openInIframe(ctx, port, '/');
     if (openResult !== 0) {
       ctx.stdout += `Note: Could not open window\n`;
@@ -182,6 +188,80 @@ async function openInIframe(ctx: CommandContext, port: number, path: string = '/
     return 0;
   } catch (err) {
     ctx.stderr = `serve: failed to open window: ${err instanceof Error ? err.message : 'unknown error'}\n`;
+    return 1;
+  }
+}
+
+/**
+ * Open a server's content in a split pane (docked beside/below terminal)
+ */
+async function openInSplit(ctx: CommandContext, port: number, path: string = '/', direction: 'right' | 'bottom' = 'right'): Promise<number> {
+  if (!iframeServer.isPortInUse(port)) {
+    ctx.stderr = `serve: no server on port ${port}\n`;
+    return 1;
+  }
+
+  const serverInfo = activeServers.get(port);
+  const directory = serverInfo?.directory;
+  const title = directory ? `${directory}:${port}` : `localhost:${port}`;
+
+  const split = createSplitView({ port, direction, title });
+
+  try {
+    const response = await iframeServer.fetch(port, path);
+    let html: string;
+
+    if (typeof response.body === 'string') {
+      html = response.body;
+    } else if (response.body instanceof Uint8Array) {
+      html = new TextDecoder().decode(response.body);
+    } else if (response.body && typeof response.body === 'object') {
+      html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>JSON</title></head><body><pre>${JSON.stringify(response.body, null, 2)}</pre></body></html>`;
+    } else {
+      html = '<!DOCTYPE html><html><body></body></html>';
+    }
+
+    html = injectIframeScripts(html, port);
+    split.iframe.srcdoc = html;
+    split.iframe.setAttribute('data-virtual-path', path);
+
+    // Track iframe in iframeServer for navigation
+    const server = iframeServer.getServer(port);
+    if (server) {
+      (server as any).iframe = split.iframe;
+    }
+
+    // Navigation handler
+    const messageHandler = async (event: MessageEvent) => {
+      if (event.source !== split.iframe.contentWindow) return;
+      if (event.data?.type === 'virtual-navigate' && event.data?.port === port) {
+        const newPath = event.data.path;
+        const navResponse = await iframeServer.fetch(port, newPath);
+        let navHtml = typeof navResponse.body === 'string'
+          ? navResponse.body
+          : navResponse.body instanceof Uint8Array
+            ? new TextDecoder().decode(navResponse.body)
+            : '';
+        navHtml = injectIframeScripts(navHtml, port);
+        split.iframe.srcdoc = navHtml;
+        split.iframe.setAttribute('data-virtual-path', newPath);
+      }
+    };
+
+    window.addEventListener('message', messageHandler);
+
+    // Patch close to remove listener
+    const origClose = split.close;
+    split.close = () => {
+      window.removeEventListener('message', messageHandler);
+      origClose();
+    };
+
+    ctx.stdout = `Opened port ${port} in split (${direction})\n`;
+    return 0;
+  } catch (err) {
+    closeSplitView();
+    ctx.stderr = `serve: failed to open split: ${err instanceof Error ? err.message : 'unknown error'}\n`;
     return 1;
   }
 }
@@ -470,19 +550,21 @@ const SERVE_USAGE = `serve [options] [directory]
   serve stop <port>           Stop server on port
   serve list                  List active servers
   serve open <port> [path]    Open server content in iframe
+  serve unsplit               Close split pane
   serve fetch <port> <path>   Fetch content from server (for debugging)
 
 Options:
-  -p, --port <n>    Port number (default: 8080)
-  -i, --iframe      Immediately open in iframe after starting
+  -p, --port <n>              Port number (default: 8080)
+  -i, --iframe                Immediately open in iframe after starting
+  --split [right|bottom]      Open in split pane (default: right)
 
 Examples:
   serve .                     Serve current directory on port 8080
   serve ./dist 3000           Serve ./dist on port 3000
-  serve -p 9000 /var/www      Serve /var/www on port 9000
   serve -i . 8080             Serve and open iframe
-  serve open 8080             Open existing server in iframe
-  serve fetch 8080 /          Fetch root from server
+  serve . 3000 --split right  Serve and open in split pane
+  serve open 8080 --split     Open existing server in split pane
+  serve unsplit               Close split pane
   serve stop 8080             Stop the server on port 8080`;
 
 export const serveCmd: Command = {
@@ -511,14 +593,35 @@ export const serveCmd: Command = {
       return stopServer(ctx, parseInt(args[1]));
     }
 
-    // serve open <port> [path]
+    // serve unsplit
+    if (args[0] === 'unsplit') {
+      if (closeSplitView()) {
+        ctx.stdout = 'Split pane closed\n';
+        return 0;
+      }
+      ctx.stderr = 'serve: no split pane open\n';
+      return 1;
+    }
+
+    // serve open <port> [path] [--split [right|bottom]]
     if (args[0] === 'open') {
       if (args.length < 2) {
         ctx.stderr = 'serve open: missing port number\n';
         return 1;
       }
       const port = parseInt(args[1]);
-      const path = args[2] || '/';
+      let path = '/';
+      let splitDir: 'right' | 'bottom' | undefined;
+      for (let j = 2; j < args.length; j++) {
+        if (args[j] === '--split') {
+          const next = args[j + 1];
+          splitDir = (next === 'bottom') ? 'bottom' : 'right';
+          if (next === 'right' || next === 'bottom') j++;
+        } else if (!args[j].startsWith('-')) {
+          path = args[j];
+        }
+      }
+      if (splitDir) return openInSplit(ctx, port, path, splitDir);
       return openInIframe(ctx, port, path);
     }
 
@@ -537,6 +640,7 @@ export const serveCmd: Command = {
     let port = 8080;
     let directory = '.';
     let openIframe = false;
+    let splitDir: 'right' | 'bottom' | undefined;
     let i = 0;
 
     while (i < args.length) {
@@ -545,6 +649,11 @@ export const serveCmd: Command = {
         i++;
       } else if (args[i] === '-i' || args[i] === '--iframe') {
         openIframe = true;
+        i++;
+      } else if (args[i] === '--split') {
+        const next = args[i + 1];
+        splitDir = (next === 'bottom') ? 'bottom' : 'right';
+        if (next === 'right' || next === 'bottom') i++;
         i++;
       } else if (!args[i].startsWith('-')) {
         directory = args[i];
@@ -559,7 +668,7 @@ export const serveCmd: Command = {
       }
     }
 
-    return serveStatic(ctx, port, directory, openIframe);
+    return serveStatic(ctx, port, directory, openIframe, splitDir);
   }
 };
 
@@ -580,6 +689,12 @@ function listServers(ctx: CommandContext): number {
 }
 
 function stopServer(ctx: CommandContext, port: number): number {
+  // Close split pane if showing this port
+  const split = getActiveSplit();
+  if (split && split.port === port) {
+    closeSplitView();
+  }
+
   // Close server window if exists
   const serverWindow = findServerWindow(port);
   if (serverWindow) {

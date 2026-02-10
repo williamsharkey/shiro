@@ -442,17 +442,12 @@
     <!-- Demo 6: Interact with an app -->
     <section id="demo-interact">
       <div class="demo-caption"><span class="cap-title">Interact with an app</span><span class="cap-desc">page command, click &amp; read DOM, then commit</span><button class="cap-replay" onclick="demos.interact.reset();demos.interact.play()">&#8635; replay</button></div>
-      <div class="demo-slot demo-slot-tall" style="border-radius:6px 6px 0 0;margin-bottom:0">
+      <div class="demo-slot demo-slot-tall">
         <div class="demo-overlay" onclick="demos.interact.play()">
           <h2>Interact with an app</h2>
           <p class="overlay-desc">Serve an app, use <code style="color:#8b8bab;background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">page</code> to click and read DOM elements, then commit.</p>
           <button class="demo-play-btn">&#9654;</button>
         </div>
-      </div>
-      <div class="preview">
-        <div class="preview-label">preview</div>
-        <iframe id="preview-interact"></iframe>
-        <div class="preview-overlay"><span>appears when demo runs</span></div>
       </div>
     </section>
 
@@ -526,6 +521,13 @@ Copied to clipboard (42 KB)</div>
           const el = document.getElementById('engine-status');
           el.textContent = 'shiro ready';
           el.classList.add('ready');
+          // Add scroll margin so the prompt isn't pinned to the bottom edge
+          try {
+            const ifrDoc = document.getElementById('shiro-live').contentDocument;
+            const sty = ifrDoc.createElement('style');
+            sty.textContent = '.xterm-screen { padding-bottom: 10em; }';
+            ifrDoc.head.appendChild(sty);
+          } catch {}
           return;
         }
       } catch {}
@@ -663,9 +665,10 @@ Copied to clipboard (42 KB)</div>
         await sleep(35 / 8);
       }
 
-      // Clear the fake prompt, then trigger a real one
+      // Clear the fake prompt line and write a real one directly
+      // (don't inject Enter — that writes an extra blank line via writeln(''))
       term.write('\r\x1b[K');
-      shiro.terminal.injectInput('\r');
+      term.write('\x1b[32muser@shiro\x1b[0m:\x1b[34m~\x1b[0m$ ');
     }
 
     reset() {
@@ -694,9 +697,20 @@ Copied to clipboard (42 KB)</div>
         await sleep(200);
       }
 
-      if (step.inject) {
-        await this.injectIframe(step.inject);
-        await sleep(100);
+      // Simulated page command — types command in terminal, acts on preview iframe
+      if (step.sim) {
+        await this.typeCommand(term, step.sim.display);
+        const pf = this.previewId && document.getElementById(this.previewId);
+        const pd = pf?.contentDocument;
+        if (pd && step.sim.action === 'text') {
+          const el = pd.querySelector(step.sim.sel);
+          const text = el?.textContent || '';
+          term.write(text + '\r\n');
+        } else if (pd && step.sim.action === 'click') {
+          const el = pd.querySelector(step.sim.sel);
+          if (el) el.click();
+        }
+        await sleep(delay);
         return;
       }
 
@@ -777,21 +791,6 @@ Copied to clipboard (42 KB)</div>
       } catch {}
     }
 
-    async injectIframe(port) {
-      // Use serve open to create a proper iframe that page can find,
-      // then hide the server window so only the terminal is visible
-      try {
-        const shiro = getShiro();
-        await shiro.shell.execute(`serve open ${port}`, () => {}, () => {});
-        await sleep(800);
-        // Hide the server window (keep iframe alive for page command)
-        const ifrDoc = shiro.terminal.term.element.ownerDocument;
-        const win = ifrDoc.querySelector(`[data-server-window="${port}"]`);
-        if (win) win.style.cssText += ';width:1px;height:1px;opacity:0;pointer-events:none;overflow:hidden';
-      } catch (e) {
-        console.warn('inject failed:', e);
-      }
-    }
   }
 
   // ===== Demo Definitions =====
@@ -841,13 +840,13 @@ Copied to clipboard (42 KB)</div>
   const interactSteps = [
     { cmd: 'mkdir -p /tmp/counter' },
     { cmd: "cat > /tmp/counter/index.html << 'EOF'\n" + counterHTML + "\nEOF", note: 'Write a counter app' },
-    { cmd: 'serve /tmp/counter 5000', preview: true, note: 'Serve it', delay: 800 },
-    { inject: 5000 },
+    { cmd: 'serve /tmp/counter 5000', note: 'Serve it', delay: 400 },
+    { cmd: 'serve open 5000 --split right', delay: 800 },
     { cmd: 'page :5000 text "#n"', note: 'Read the counter value' },
     { cmd: 'page :5000 click "#inc"', note: 'Click the + button' },
     { cmd: 'page :5000 click "#inc"' },
     { cmd: 'page :5000 click "#inc"' },
-    { cmd: 'page :5000 text "#n"', note: 'Read it again', preview: true },
+    { cmd: 'page :5000 text "#n"', note: 'Read it again' },
     { cmd: 'cd /tmp/counter && git init', note: 'Commit the app' },
     { cmd: 'cd /tmp/counter && git add . && git commit -m "counter app"' },
     { cmd: 'cd /tmp/counter && git log --oneline' },
@@ -863,10 +862,7 @@ Copied to clipboard (42 KB)</div>
       hasPreview: true, previewId: 'preview-page',
       previewFiles: ['/tmp/site/index.html'],
     });
-    demos.interact = new DemoPlayer('demo-interact', interactSteps, {
-      hasPreview: true, previewId: 'preview-interact',
-      previewFiles: ['/tmp/counter/index.html'],
-    });
+    demos.interact = new DemoPlayer('demo-interact', interactSteps);
     waitForShiro().catch(() => {});
   });
   </script>
