@@ -1,4 +1,5 @@
 import type { ShiroTerminal } from './terminal';
+import { smartCopyProcess } from './utils/copy-utils';
 
 // Web Speech API types (not in default lib)
 interface SpeechRecognitionEvent extends Event {
@@ -10,170 +11,215 @@ interface SpeechRecognitionErrorEvent extends Event {
   message: string;
 }
 
-/** Key definitions for the virtual key toolbar */
-const VKEYS: { label: string; data: string; mod?: boolean }[] = [
+/**
+ * Row 1: [Esc] [Tab] [Ctrl] [[] []] [{] [}]  ···spacer···  [Paste] [Speak]     [ ↑ ]
+ * Row 2: [ - ] [ | ] [ / ]  [~] [`] [$] [&]  ···spacer···  [ Copy] [  ;  ]  [←] [↓] [→]
+ */
+const ROW1_KEYS: { label: string; data: string; mod?: boolean; id?: string }[] = [
   { label: 'Esc', data: '\x1b', mod: true },
   { label: 'Tab', data: '\t', mod: true },
-  { label: 'Ctrl', data: '', mod: true }, // sticky toggle, handled specially
-  { label: '\u2191', data: '\x1b[A' },
-  { label: '\u2193', data: '\x1b[B' },
-  { label: '\u2190', data: '\x1b[D' },
-  { label: '\u2192', data: '\x1b[C' },
+  { label: 'Ctrl', data: '', mod: true, id: 'ctrl' },
+  { label: '[', data: '[' },
+  { label: ']', data: ']' },
+  { label: '{', data: '{' },
+  { label: '}', data: '}' },
+];
+
+const ROW2_KEYS: { label: string; data: string }[] = [
   { label: '-', data: '-' },
   { label: '|', data: '|' },
   { label: '/', data: '/' },
   { label: '~', data: '~' },
   { label: '`', data: '`' },
-  { label: '[', data: '[' },
-  { label: ']', data: ']' },
+  { label: '$', data: '$' },
+  { label: '&', data: '&' },
 ];
 
 /**
- * Initialize mobile input features: virtual key toolbar and voice input.
- * Only active on touch devices (pointer: coarse).
+ * Initialize mobile input: unified 2-row toolbar with virtual keys, arrows,
+ * copy/paste, and voice input. Only active on touch devices.
  */
 export function initMobileInput(terminal: ShiroTerminal): void {
-  // Only run on touch devices
   if (!window.matchMedia('(pointer: coarse)').matches) return;
 
-  const vkeys = createVirtualKeys(terminal);
-  const micBtn = createMicButton(terminal);
+  const bar = createUnifiedToolbar(terminal);
 
-  // Add mic button to the mobile toolbar (next to Paste/Copy)
-  const toolbar = document.getElementById('shiro-mobile-toolbar');
-  if (toolbar && micBtn) {
-    toolbar.appendChild(micBtn);
-  }
-
-  // Reposition both toolbars above the iOS keyboard
   if (window.visualViewport) {
-    const reposition = () => repositionToolbars(vkeys, toolbar);
+    const reposition = () => repositionToolbar(bar);
     window.visualViewport.addEventListener('resize', reposition);
     window.visualViewport.addEventListener('scroll', reposition);
   }
 }
 
-/** Create the virtual key toolbar and attach it to the DOM */
-function createVirtualKeys(terminal: ShiroTerminal): HTMLElement {
+function createUnifiedToolbar(terminal: ShiroTerminal): HTMLElement {
   const bar = document.createElement('div');
   bar.id = 'shiro-vkeys';
 
   let ctrlActive = false;
   let ctrlBtn: HTMLButtonElement | null = null;
 
-  for (const key of VKEYS) {
-    const btn = document.createElement('button');
-    btn.className = 'shiro-vkey' + (key.mod ? ' mod' : '');
-    btn.textContent = key.label;
+  // All key buttons (for event delegation)
+  const keyMap = new Map<HTMLElement, { data: string; label: string }>();
 
-    if (key.label === 'Ctrl') {
-      ctrlBtn = btn;
+  function handleKey(btn: HTMLElement) {
+    const entry = keyMap.get(btn);
+    if (!entry) return;
+
+    if (entry.label === 'Ctrl') {
+      ctrlActive = !ctrlActive;
+      btn.classList.toggle('active', ctrlActive);
+      return;
     }
 
-    bar.appendChild(btn);
+    if (ctrlActive) {
+      ctrlActive = false;
+      ctrlBtn?.classList.remove('active');
+      if (entry.data.length === 1 && entry.data >= 'A' && entry.data <= 'z') {
+        const code = entry.data.toUpperCase().charCodeAt(0) - 64;
+        terminal.injectInput(String.fromCharCode(code));
+      } else {
+        terminal.injectInput(entry.data);
+      }
+    } else {
+      terminal.injectInput(entry.data);
+    }
   }
 
-  // Use touchstart with preventDefault to keep the iOS keyboard open
+  function makeKey(label: string, data: string, classes: string = ''): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.className = 'shiro-vkey' + (classes ? ' ' + classes : '');
+    btn.textContent = label;
+    keyMap.set(btn, { data, label });
+    return btn;
+  }
+
+  function makeSpacer(): HTMLDivElement {
+    const s = document.createElement('div');
+    s.className = 'vkey-spacer';
+    return s;
+  }
+
+  // Track action buttons so we can exclude them from key delegation
+  const actionBtns: HTMLElement[] = [];
+
+  // === Row 1: [Esc] [Tab] [Ctrl] [[] []] [{] [}]  ···spacer···  [Paste] [Speak]  [ ↑ ] ===
+  const row1 = document.createElement('div');
+  row1.className = 'vkey-row';
+
+  for (const key of ROW1_KEYS) {
+    const btn = makeKey(key.label, key.data, key.mod ? 'mod' : '');
+    if (key.id === 'ctrl') ctrlBtn = btn;
+    row1.appendChild(btn);
+  }
+
+  row1.appendChild(makeSpacer());
+
+  // Paste
+  const pasteBtn = document.createElement('button');
+  pasteBtn.className = 'shiro-vkey action';
+  pasteBtn.textContent = 'Paste';
+  pasteBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) terminal.term.paste(text);
+    } catch {
+      const text = prompt('Paste text:');
+      if (text) terminal.term.paste(text);
+    }
+  });
+  row1.appendChild(pasteBtn);
+  actionBtns.push(pasteBtn);
+
+  // Speak
+  const speakBtn = createSpeakButton(terminal);
+  if (speakBtn) {
+    row1.appendChild(speakBtn);
+    actionBtns.push(speakBtn);
+  }
+
+  // Arrow cluster: invisible placeholder, ↑, invisible placeholder
+  // so ↑ lines up exactly above ↓ between ← and →
+  const phantom1 = document.createElement('button');
+  phantom1.className = 'shiro-vkey';
+  phantom1.style.visibility = 'hidden';
+  row1.appendChild(phantom1);
+
+  row1.appendChild(makeKey('\u2191', '\x1b[A'));
+
+  const phantom2 = document.createElement('button');
+  phantom2.className = 'shiro-vkey';
+  phantom2.style.visibility = 'hidden';
+  row1.appendChild(phantom2);
+
+  bar.appendChild(row1);
+
+  // === Row 2: [-] [|] [/] [~] [`] [$] [&]  ···spacer···  [Copy] [;]  [←] [↓] [→] ===
+  const row2 = document.createElement('div');
+  row2.className = 'vkey-row';
+
+  for (const key of ROW2_KEYS) {
+    row2.appendChild(makeKey(key.label, key.data));
+  }
+
+  row2.appendChild(makeSpacer());
+
+  // Copy (lines up under Paste)
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'shiro-vkey action';
+  copyBtn.textContent = 'Copy';
+  copyBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const selection = terminal.term.getSelection();
+    if (selection) {
+      try { await navigator.clipboard.writeText(selection); } catch {}
+    } else {
+      const content = smartCopyProcess(terminal.getLastCommandOutput());
+      try { await navigator.clipboard.writeText(content); } catch {}
+    }
+  });
+  row2.appendChild(copyBtn);
+  actionBtns.push(copyBtn);
+
+  // ; (lines up under Speak)
+  row2.appendChild(makeKey(';', ';'));
+
+  // ← ↓ → (inverted-T: ↑ above ↓, ← and → flanking)
+  row2.appendChild(makeKey('\u2190', '\x1b[D'));
+  row2.appendChild(makeKey('\u2193', '\x1b[B'));
+  row2.appendChild(makeKey('\u2192', '\x1b[C'));
+
+  bar.appendChild(row2);
+
+  // === Event delegation for virtual keys ===
   bar.addEventListener('touchstart', (e) => {
     const btn = (e.target as HTMLElement).closest('.shiro-vkey') as HTMLElement | null;
-    if (!btn) return;
-    e.preventDefault(); // Keep keyboard open!
-
-    const label = btn.textContent || '';
-
-    if (label === 'Ctrl') {
-      // Toggle sticky Ctrl
-      ctrlActive = !ctrlActive;
-      btn.classList.toggle('active', ctrlActive);
-      return;
-    }
-
-    const keyDef = VKEYS.find(k => k.label === label);
-    if (!keyDef) return;
-
-    if (ctrlActive) {
-      // Send Ctrl+key: for single printable chars, compute control code
-      ctrlActive = false;
-      ctrlBtn?.classList.remove('active');
-
-      if (keyDef.data.length === 1 && keyDef.data >= 'A' && keyDef.data <= 'z') {
-        const code = keyDef.data.toUpperCase().charCodeAt(0) - 64;
-        terminal.injectInput(String.fromCharCode(code));
-      } else {
-        // For non-letter keys, just send the data as-is
-        terminal.injectInput(keyDef.data);
-      }
-    } else {
-      terminal.injectInput(keyDef.data);
-    }
+    if (!btn || actionBtns.includes(btn)) return;
+    e.preventDefault(); // Keep keyboard open
+    handleKey(btn);
   }, { passive: false });
 
-  // Also handle click for non-touch scenarios (desktop emulation)
   bar.addEventListener('click', (e) => {
-    // Only handle if not already handled by touchstart
-    if (e.target === bar) return;
     const btn = (e.target as HTMLElement).closest('.shiro-vkey') as HTMLElement | null;
-    if (!btn) return;
-
-    const label = btn.textContent || '';
-    if (label === 'Ctrl') {
-      ctrlActive = !ctrlActive;
-      btn.classList.toggle('active', ctrlActive);
-      return;
-    }
-
-    const keyDef = VKEYS.find(k => k.label === label);
-    if (!keyDef) return;
-
-    if (ctrlActive) {
-      ctrlActive = false;
-      ctrlBtn?.classList.remove('active');
-      if (keyDef.data.length === 1 && keyDef.data >= 'A' && keyDef.data <= 'z') {
-        const code = keyDef.data.toUpperCase().charCodeAt(0) - 64;
-        terminal.injectInput(String.fromCharCode(code));
-      } else {
-        terminal.injectInput(keyDef.data);
-      }
-    } else {
-      terminal.injectInput(keyDef.data);
-    }
+    if (!btn || actionBtns.includes(btn)) return;
+    handleKey(btn);
   });
 
   document.body.appendChild(bar);
   return bar;
 }
 
-/** Create a mic button for voice input. Returns null if Speech API unavailable. */
-function createMicButton(terminal: ShiroTerminal): HTMLButtonElement | null {
+/** Create the Speak button for voice input. Returns null if Speech API unavailable. */
+function createSpeakButton(terminal: ShiroTerminal): HTMLButtonElement | null {
   const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
   if (!SR) return null;
 
   const btn = document.createElement('button');
-  btn.className = 'shiro-mic-btn';
-  btn.textContent = '\uD83C\uDF99'; // microphone emoji
-  btn.title = 'Voice input';
-  // Match existing mobile toolbar button styles
-  btn.style.cssText = `
-    height: 36px;
-    padding: 0 14px;
-    border-radius: 18px;
-    border: 1px solid #3d3d5c;
-    background: #1a1a2e;
-    color: #e0e0e0;
-    font-size: 16px;
-    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-    cursor: pointer;
-    touch-action: manipulation;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    user-select: none;
-    -webkit-user-select: none;
-    transition: background 0.1s, transform 0.1s;
-  `;
+  btn.className = 'shiro-vkey action';
+  btn.textContent = 'Mic';
 
-  let mode: 'off' | 'dictate' | 'wake' = 'off';
-  let rec: any = null; // SpeechRecognition instance
+  let mode: 'off' | 'dictate' = 'off';
+  let rec: any = null;
 
   function startRecognition() {
     if (rec) return;
@@ -189,46 +235,11 @@ function createMicButton(terminal: ShiroTerminal): HTMLButtonElement | null {
       const raw = last[0].transcript.trim().toLowerCase();
       const original = last[0].transcript.trim();
 
-      if (mode === 'dictate') {
-        if (raw === 'send' || raw === 'enter') {
-          terminal.injectInput('\r');
-        } else {
-          for (const ch of original) {
-            terminal.injectInput(ch);
-          }
-        }
-        return;
-      }
-
-      if (mode === 'wake') {
-        const WAKE = 'shiro';
-        if (!raw.startsWith(WAKE)) return;
-
-        const cmd = raw.slice(WAKE.length).replace(/^[,\s]+/, '').trim();
-        if (!cmd) return;
-
-        const voiceCommands: Record<string, string> = {
-          'send': '\r',
-          'enter': '\r',
-          'cancel': '\x03',
-          'escape': '\x1b',
-          'tab': '\t',
-          'up': '\x1b[A',
-          'down': '\x1b[B',
-          'left': '\x1b[D',
-          'right': '\x1b[C',
-        };
-
-        if (voiceCommands[cmd]) {
-          terminal.injectInput(voiceCommands[cmd]);
-        } else {
-          // Type the command text preserving original case
-          const originalCmd = original
-            .slice(original.toLowerCase().indexOf(WAKE) + WAKE.length)
-            .replace(/^[,\s]+/, '');
-          for (const ch of originalCmd) {
-            terminal.injectInput(ch);
-          }
+      if (raw === 'send' || raw === 'enter') {
+        terminal.injectInput('\r');
+      } else {
+        for (const ch of original) {
+          terminal.injectInput(ch);
         }
       }
     };
@@ -245,7 +256,6 @@ function createMicButton(terminal: ShiroTerminal): HTMLButtonElement | null {
         console.warn('[voice] Microphone permission denied');
         stopRecognition();
       }
-      // 'no-speech' is normal silence
     };
 
     rec.start();
@@ -254,20 +264,21 @@ function createMicButton(terminal: ShiroTerminal): HTMLButtonElement | null {
   function stopRecognition() {
     mode = 'off';
     btn.classList.remove('dictating');
+    btn.textContent = 'Mic';
     if (rec) {
       try { rec.stop(); } catch { /* ignore */ }
       rec = null;
     }
   }
 
-  btn.addEventListener('click', () => {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
     if (mode === 'dictate') {
-      // Stop dictation
       stopRecognition();
     } else {
-      // Start dictation
       mode = 'dictate';
       btn.classList.add('dictating');
+      btn.textContent = 'Stop';
       startRecognition();
     }
   });
@@ -275,19 +286,11 @@ function createMicButton(terminal: ShiroTerminal): HTMLButtonElement | null {
   return btn;
 }
 
-/** Reposition virtual keys and mobile toolbar above the iOS keyboard */
-function repositionToolbars(vkeys: HTMLElement, toolbar: HTMLElement | null): void {
+/** Reposition the toolbar above the iOS keyboard */
+function repositionToolbar(bar: HTMLElement): void {
   const vv = window.visualViewport;
   if (!vv) return;
 
   const keyboardOffset = window.innerHeight - vv.height - vv.offsetTop;
-  const bottom = Math.max(0, keyboardOffset);
-
-  // Virtual keys sit at the bottom (above keyboard)
-  vkeys.style.bottom = bottom + 'px';
-
-  // Mobile toolbar sits above the virtual keys
-  if (toolbar) {
-    toolbar.style.bottom = (bottom + 44) + 'px'; // 40px vkeys height + 4px gap
-  }
+  bar.style.bottom = Math.max(0, keyboardOffset) + 'px';
 }

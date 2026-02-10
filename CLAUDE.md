@@ -28,6 +28,7 @@ src/
 ├── shell.ts             # Command parser: pipes, redirects, env vars, quoting, history
 ├── filesystem.ts        # IndexedDB-backed POSIX filesystem (the foundation everything uses)
 ├── spirit-provider.ts   # OSProvider adapter for Spirit (Claude Code agent)
+├── mobile-input.ts      # Unified mobile toolbar: virtual keys, copy/paste, voice input
 ├── remote-panel.ts      # Draggable floating panel UI (used by remote, group)
 ├── server-window.ts     # macOS-style window wrapper (iframe + terminal modes)
 ├── window-terminal.ts   # Lightweight xterm.js wrapper for windowed processes
@@ -116,6 +117,21 @@ A single Node.js server (`server.mjs`) handles everything: static files, API pro
 npm run deploy    # builds + uploads via scp + restarts server
 ```
 
+### SSH Setup (required for deploy)
+
+`deploy.sh` uses `~/.ssh/id_ed25519` to SSH/SCP to the droplet. If deploy fails with `Permission denied (publickey)`:
+
+1. **Generate a key** (if you don't have one): `ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519`
+2. **Add your public key to the droplet** — you need an existing authorized machine or the DO web console (cloud.digitalocean.com → Droplets → shiro → Console):
+   ```bash
+   # On the droplet:
+   echo 'YOUR_PUBLIC_KEY_HERE' >> /root/.ssh/authorized_keys
+   ```
+3. **Test**: `ssh root@161.35.13.177 "echo connected"`
+4. **Save credentials to Claude memory** — store the droplet IP, root password, and SSH key path in your auto memory directory (`~/.claude/projects/<project>/memory/MEMORY.md`) so future sessions can deploy without re-setup.
+
+**Droplet credentials**: Root password and droplet ID are stored in Claude's auto memory file, not in the repo. If you're a new Claude instance, ask the user or check `~/.claude/projects/*/memory/MEMORY.md` for credentials. The DigitalOcean CLI (`doctl`) is also authenticated and can reset the root password if needed: `doctl compute droplet-action password-reset 550124232`.
+
 ## Testing
 
 Tests live in the **windwalker** repo (`../windwalker/tests/shiro-vitest/`).
@@ -147,6 +163,23 @@ The shell supports:
 - POSIX-like API: stat, readdir, readFile, writeFile, mkdir, unlink, rename, symlink, chmod, glob
 - Path resolution handles `.`, `..`, and `~`
 - `clearCache()` method available if external DB modifications occur
+
+## Mobile Input
+
+On touch devices (`pointer: coarse`), a unified 2-row toolbar appears at the bottom of the screen. Implemented in `src/mobile-input.ts`, styled in `index.html`.
+
+**Layout:**
+```
+Row 1: [Esc] [Tab] [Ctrl] [[] []] [{] [}]  ···spacer···  [Paste] [Mic]      [ ↑ ]
+Row 2: [ - ] [ | ] [ / ]  [~] [`] [$] [&]  ···spacer···  [ Copy] [ ; ]   [←] [↓] [→]
+```
+
+- **Arrows**: Inverted-T layout — `↑` centered above `↓`, `←` and `→` flanking
+- **Ctrl**: Sticky toggle (turns blue when active, next key sends Ctrl+key)
+- **Paste/Copy**: Clipboard API with prompt() fallback; Copy grabs selection or last command output
+- **Mic**: Voice dictation via Web Speech API; says "send"/"enter" to submit. Button changes to "Stop" while recording
+- **z-index**: `2147483647` — stays above spawned windows and remote panels
+- **Keyboard repositioning**: Uses `visualViewport` API to sit above the iOS keyboard
 
 ## Monorepo Subdirectories
 
@@ -188,13 +221,12 @@ remote status   # Check connection status
 Then use tools: `shiro:connect`, `shiro:exec`, `shiro:read`, `shiro:write`, `shiro:list`, `shiro:eval`
 
 **Architecture:**
-- Signaling server at `remote.shiro.computer` (Cloudflare Worker + KV)
+- Signaling handled by `server.mjs` on the DigitalOcean droplet
 - WebRTC DataChannel for direct P2P after signaling
 - Connection codes have ~46 bits entropy, expire in 5 minutes
 
 **Key files:**
 - `src/commands/remote.ts` — remote command, WebRTC setup, message handlers
-- `remote-worker/` — Cloudflare Worker signaling server
 - `shirocode/shiro-mcp/` — MCP server package for Claude Code
 
 ## MCP Client

@@ -2,7 +2,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { Shell } from './shell';
 import buildNumber from '../build-number.txt?raw';
-import { bufferToString, smartCopyProcess } from './utils/copy-utils';
+import { bufferToString } from './utils/copy-utils';
 
 /**
  * HUD (Heads-Up Display) state for dynamic banner updates.
@@ -139,27 +139,7 @@ export class ShiroTerminal {
 
     this.term.onData((data: string) => this.handleInput(data));
 
-    // Mobile copy/paste button handlers
-    const pasteBtn = document.getElementById('shiro-paste-btn');
-    const copyBtn = document.getElementById('shiro-copy-btn');
-    pasteBtn?.addEventListener('click', async () => {
-      try {
-        const text = await navigator.clipboard.readText();
-        if (text) this.term.paste(text);
-      } catch {
-        const text = prompt('Paste text:');
-        if (text) this.term.paste(text);
-      }
-    });
-    copyBtn?.addEventListener('click', async () => {
-      const selection = this.term.getSelection();
-      if (selection) {
-        try { await navigator.clipboard.writeText(selection); } catch {}
-      } else {
-        const content = smartCopyProcess(this.getLastCommandOutput());
-        try { await navigator.clipboard.writeText(content); } catch {}
-      }
-    });
+    // Mobile copy/paste is now handled by the unified toolbar in mobile-input.ts
   }
 
   private _writeCount = 0;
