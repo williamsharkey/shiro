@@ -758,7 +758,8 @@ async function npmRun(ctx: CommandContext): Promise<number> {
   // Execute the script via the shell
   const exitCode = await ctx.shell.execute(script,
     (s) => ctx.stdout += s,
-    (s) => ctx.stderr += s
+    (s) => ctx.stderr += s,
+    false, undefined, true
   );
 
   return exitCode;

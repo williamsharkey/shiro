@@ -18,6 +18,8 @@ export class WindowTerminal implements TerminalLike {
   private resizeCallbacks: ((cols: number, rows: number) => void)[] = [];
   private resizeObserver: ResizeObserver;
   private disposed = false;
+  /** Optional callback to mask secrets in output (set by spawn) */
+  secretMasker: ((text: string) => string) | null = null;
 
   constructor(container: HTMLDivElement) {
     this.container = container;
@@ -76,7 +78,9 @@ export class WindowTerminal implements TerminalLike {
   }
 
   writeOutput(text: string): void {
-    if (!this.disposed) this.term.write(text);
+    if (this.disposed) return;
+    if (this.secretMasker) text = this.secretMasker(text);
+    this.term.write(text);
   }
 
   enterStdinPassthrough(cb: (data: string) => void, forceExitCb?: () => void): void {

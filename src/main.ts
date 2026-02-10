@@ -255,6 +255,26 @@ async function main() {
     }
   });
 
+  // Create PATH shims for builtins so programs can discover them via `which`, `execFile`, etc.
+  // This is how an OS advertises its commands — the PATH mechanism, not the builtin registry.
+  const shimCommands = [
+    'git', 'node', 'npm', 'npx', 'ls', 'cat', 'grep', 'sed', 'find', 'curl',
+    'mkdir', 'rm', 'cp', 'mv', 'echo', 'touch', 'chmod', 'head', 'tail',
+    'sort', 'uniq', 'wc', 'tr', 'tee', 'diff', 'env', 'which', 'test',
+    'sh', 'bash', 'vi', 'nano', 'rg', 'esbuild',
+  ];
+  (async () => {
+    try {
+      await fs.mkdir('/usr/local/bin', { recursive: true });
+      for (const cmd of shimCommands) {
+        const shimPath = `/usr/local/bin/${cmd}`;
+        // Don't overwrite real scripts (like claude bin stub)
+        if (await fs.exists(shimPath)) continue;
+        await fs.writeFile(shimPath, `#!/bin/sh\n${cmd} "$@"\n`);
+      }
+    } catch {}
+  })();
+
   // Create shell
   const shell = new Shell(fs, commands);
 

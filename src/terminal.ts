@@ -141,6 +141,8 @@ export class ShiroTerminal {
 
   private _writeCount = 0;
   writeOutput(text: string): void {
+    // Mask any secret env values (tokens, API keys) before rendering
+    text = this.shell.maskSecrets(text);
     const n = ++this._writeCount;
     this.term.write(text, () => {
       // Diagnostic: log first 5 writes and check xterm.js buffer after processing

@@ -238,9 +238,16 @@ export const nodeCmd: Command = {
     // Suppress unhandled rejections from CLI force-exit patterns
     // (process.exit → catch → process.kill → catch → throw "unreachable")
     // and WASM compile errors (tree-sitter uses WASM features not supported in all browsers).
+    let _nodeStderrBuf: string[] | null = null; // Set once stderrBuf is available
     const suppressRejection = (event: PromiseRejectionEvent) => {
       const msg = event.reason?.message || String(event.reason || '');
       if (event.reason?._isProcessExit || msg === 'unreachable' || msg.startsWith('Aborted(') || msg === 'need dylink section') {
+        event.preventDefault();
+      } else {
+        // Log non-suppressed rejections to stderr so they're visible in tool output
+        const errStr = msg || 'Unknown error';
+        _nodeStderrBuf?.push(`UnhandledPromiseRejection: ${errStr}`);
+        if (ctx.terminal) ctx.terminal.writeOutput(`\x1b[31mUnhandledPromiseRejection: ${errStr}\x1b[0m\r\n`);
         event.preventDefault();
       }
     };
@@ -257,6 +264,7 @@ export const nodeCmd: Command = {
 
       const stdoutBuf: string[] = [];
       const stderrBuf: string[] = [];
+      _nodeStderrBuf = stderrBuf; // Wire up for unhandled rejection logging
       const pendingPromises: Promise<any>[] = []; // Track async operations like app.listen()
       let streamedToTerminal = false; // True if output was streamed directly to terminal
       let isInteractiveMode = false;        // Set when stdin.setRawMode(true) called (ink)
@@ -705,7 +713,27 @@ export const nodeCmd: Command = {
 
       // CommonJS require() with pre-loaded file cache
       const fileCache = new Map<string, string>();
+      const fileMtimes = new Map<string, number>(); // path → mtime ms (from preload or writeFileSync)
       const moduleCache = new Map<string, { exports: any }>();
+
+      // Sync operation watchdog — detects runaway sync loops that would freeze the tab.
+      // Resets on each microtask boundary so normal async code is unaffected.
+      let syncOpCount = 0;
+      const SYNC_OP_LIMIT = 50_000; // ~50k sync FS calls without yielding
+      let syncResetScheduled = false;
+      function tickSyncOps() {
+        if (++syncOpCount > SYNC_OP_LIMIT) {
+          syncOpCount = 0;
+          throw new Error(
+            `ENOMEM: too many synchronous filesystem operations without yielding (${SYNC_OP_LIMIT}). ` +
+            `Use async fs methods (fs.promises.readdir, etc.) for recursive directory traversal.`
+          );
+        }
+        if (!syncResetScheduled) {
+          syncResetScheduled = true;
+          Promise.resolve().then(() => { syncOpCount = 0; syncResetScheduled = false; });
+        }
+      }
 
       // Pre-load node_modules (Shiro readdir returns string[])
       async function preloadDir(dir: string, depth = 0, maxDepth = 5) {
@@ -721,10 +749,12 @@ export const nodeCmd: Command = {
             try {
               const st = await ctx.fs.stat(fp);
               if (st.isDirectory()) {
+                fileMtimes.set(fp, st.mtime?.getTime?.() || Date.now());
                 await preloadDir(fp, depth + 1, maxDepth);
               } else if (st.size < 16777216) { // 16MB limit (for large bundled packages like claude-code)
                 const content = await ctx.fs.readFile(fp, 'utf8');
                 fileCache.set(fp, content as string);
+                fileMtimes.set(fp, st.mtime?.getTime?.() || Date.now());
               }
             } catch { /* skip */ }
           }
@@ -1132,6 +1162,7 @@ export const nodeCmd: Command = {
             // Synchronous shims that use cached data or throw
             const fsShim: any = {
               readFileSync: (p: string, opts?: any) => {
+                tickSyncOps();
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
                 let cached = fileCache.get(resolved) ?? fileCache.get(resolved + '.js');
                 // Fallback: check Shiro's FS in-memory cache for files created by
@@ -1149,9 +1180,11 @@ export const nodeCmd: Command = {
                 return cached;
               },
               writeFileSync: (p: string, data: string | Uint8Array) => {
+                tickSyncOps();
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
                 const strData = typeof data === 'string' ? data : new TextDecoder().decode(data);
                 fileCache.set(resolved, strData);
+                fileMtimes.set(resolved, Date.now());
                 // Track VFS write so it completes before script exit
                 pendingPromises.push(ctx.fs.writeFile(resolved, strData).catch(() => {}));
                 // localStorage WAL for critical config files (survives page close before IndexedDB flushes)
@@ -1161,6 +1194,7 @@ export const nodeCmd: Command = {
                 }
               },
               existsSync: (p: string) => {
+                tickSyncOps();
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
                 if (fileCache.has(resolved) || fileCache.has(resolved + '.js') || fileCache.has(resolved + '/index.js')) return true;
                 // Check for directory sentinel (from mkdirSync)
@@ -1172,6 +1206,7 @@ export const nodeCmd: Command = {
                 return false;
               },
               statSync: (p: string, opts?: any) => {
+                tickSyncOps();
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
                 let isFile = fileCache.has(resolved);
                 // Fallback: check Shiro FS cache for files created by shell commands
@@ -1184,7 +1219,7 @@ export const nodeCmd: Command = {
                   if (opts?.throwIfNoEntry === false) return undefined;
                   throw new Error(`ENOENT: no such file or directory, stat '${p}'`);
                 }
-                const now = new Date();
+                const mtime = new Date(fileMtimes.get(resolved) || Date.now());
                 const size = isFile ? (fileCache.get(resolved) || '').length : 0;
                 return {
                   isFile: () => isFile,
@@ -1195,14 +1230,15 @@ export const nodeCmd: Command = {
                   isFIFO: () => false,
                   isSocket: () => false,
                   size,
-                  mtime: now, ctime: now, atime: now, birthtime: now,
-                  mtimeMs: now.getTime(), ctimeMs: now.getTime(), atimeMs: now.getTime(), birthtimeMs: now.getTime(),
+                  mtime, ctime: mtime, atime: mtime, birthtime: mtime,
+                  mtimeMs: mtime.getTime(), ctimeMs: mtime.getTime(), atimeMs: mtime.getTime(), birthtimeMs: mtime.getTime(),
                   dev: 0, ino: 0, nlink: 1, uid: 1000, gid: 1000, rdev: 0,
                   blksize: 4096, blocks: Math.ceil(size / 512),
                   mode: isFile ? 0o100644 : 0o40755,
                 };
               },
               readdirSync: (p: string, opts?: any) => {
+                tickSyncOps();
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
                 const prefix = resolved === '/' ? '/' : resolved + '/';
                 const entries = new Set<string>();
@@ -1276,6 +1312,8 @@ export const nodeCmd: Command = {
                 if (content !== undefined) {
                   fileCache.set(newRes, content);
                   fileCache.delete(oldRes);
+                  fileMtimes.set(newRes, Date.now());
+                  fileMtimes.delete(oldRes);
                   // Write directly to new path — avoids race where IDB write for
                   // the source hasn't completed yet (atomic write pattern: write .tmp → rename)
                   pendingPromises.push(
@@ -1295,6 +1333,7 @@ export const nodeCmd: Command = {
                 }
               },
               realpathSync: (p: string) => {
+                tickSyncOps();
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
                 // Verify path exists (file or directory)
                 const isFile = fileCache.has(resolved);
@@ -1303,12 +1342,14 @@ export const nodeCmd: Command = {
                 return resolved;
               },
               accessSync: (p: string) => {
+                tickSyncOps();
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
                 const isFile = fileCache.has(resolved);
                 const isDir = [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
                 if (!isFile && !isDir) throw new Error(`ENOENT: no such file or directory, access '${p}'`);
               },
               lstatSync: (p: string, opts?: any) => {
+                tickSyncOps();
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
                 const isFile = fileCache.has(resolved);
                 const isDir = [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
@@ -1316,7 +1357,7 @@ export const nodeCmd: Command = {
                   if (opts?.throwIfNoEntry === false) return undefined;
                   throw new Error(`ENOENT: no such file or directory, lstat '${p}'`);
                 }
-                const now = new Date();
+                const mtime = new Date(fileMtimes.get(resolved) || Date.now());
                 const size = isFile ? (fileCache.get(resolved) || '').length : 0;
                 return {
                   isFile: () => isFile,
@@ -1327,8 +1368,8 @@ export const nodeCmd: Command = {
                   isFIFO: () => false,
                   isSocket: () => false,
                   size,
-                  mtime: now, ctime: now, atime: now, birthtime: now,
-                  mtimeMs: now.getTime(), ctimeMs: now.getTime(), atimeMs: now.getTime(), birthtimeMs: now.getTime(),
+                  mtime, ctime: mtime, atime: mtime, birthtime: mtime,
+                  mtimeMs: mtime.getTime(), ctimeMs: mtime.getTime(), atimeMs: mtime.getTime(), birthtimeMs: mtime.getTime(),
                   dev: 0, ino: 0, nlink: 1, uid: 1000, gid: 1000, rdev: 0,
                   blksize: 4096, blocks: Math.ceil(size / 512),
                   mode: isFile ? 0o100644 : 0o40755,
@@ -1622,6 +1663,7 @@ export const nodeCmd: Command = {
                   const resolved = ctx.fs.resolvePath(p, ctx.cwd);
                   const content = typeof data === 'string' ? data : new TextDecoder().decode(data);
                   fileCache.set(resolved, content); // Keep fileCache in sync for readFileSync/renameSync
+                  fileMtimes.set(resolved, Date.now());
                   await ctx.fs.writeFile(resolved, content);
                 },
                 readdir: async (p: string, opts?: any) => {
@@ -1888,7 +1930,7 @@ export const nodeCmd: Command = {
 
               let stdout = '';
               let stderr = '';
-              const exitCode = await ctx.shell.execute(normalized, (s) => { stdout += s; }, (s) => { stderr += s; });
+              const exitCode = await ctx.shell.execute(normalized, (s) => { stdout += s; }, (s) => { stderr += s; }, false, ctx.terminal, true);
               return { stdout, stderr, exitCode };
             };
             const cpModule: any = {
@@ -5393,7 +5435,12 @@ export const nodeCmd: Command = {
 
       // Dynamic import() shim — used by transformBundledESM's import( → __dynamic_import( transform
       const dynamicImport = async (moduleName: string) => {
-        return requireModule(moduleName, entryDirname);
+        try {
+          return requireModule(moduleName, entryDirname);
+        } catch (e: any) {
+          const msg = e?.message || String(e);
+          throw new Error(`Failed to dynamically import '${moduleName}': ${msg}`);
+        }
       };
 
       let result;

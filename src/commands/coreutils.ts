@@ -82,7 +82,13 @@ export const whichCmd: Command = {
       return 1;
     }
     const name = ctx.args[0];
-    // Check builtins first
+    // Check PATH executables first (like real Unix `which`)
+    const execPath = await ctx.shell.findExecutableInPath(name);
+    if (execPath) {
+      ctx.stdout = `${execPath}\n`;
+      return 0;
+    }
+    // Fall back to builtins (not on PATH but still callable)
     const cmd = ctx.shell.commands.get(name);
     if (cmd) {
       ctx.stdout = `${name}\n`;
@@ -91,12 +97,6 @@ export const whichCmd: Command = {
     // Check shell functions
     if (ctx.shell.functions?.[name]) {
       ctx.stdout = `${name}: shell function\n`;
-      return 0;
-    }
-    // Check PATH executables
-    const execPath = await ctx.shell.findExecutableInPath(name);
-    if (execPath) {
-      ctx.stdout = `${execPath}\n`;
       return 0;
     }
     ctx.stderr = `${name} not found\n`;
@@ -565,34 +565,55 @@ export const shCmd: Command = {
       const cmd = ctx.args[cIdx + 1];
       let stdout = '';
       let stderr = '';
-      const code = await ctx.shell.execute(cmd, (s) => { stdout += s; }, (s) => { stderr += s; });
+      const code = await ctx.shell.execute(cmd, (s) => { stdout += s; }, (s) => { stderr += s; }, false, undefined, true);
       ctx.stdout += stdout;
       ctx.stderr += stderr;
       return code;
     }
 
-    // sh script.sh — execute a script file
+    // sh script.sh [args...] — execute a script file
     if (ctx.args.length > 0 && !ctx.args[0].startsWith('-')) {
       const scriptPath = ctx.fs.resolvePath(ctx.args[0], ctx.cwd);
+      const scriptArgs = ctx.args.slice(1);
       try {
         const content = await ctx.fs.readFile(scriptPath, 'utf8');
         const script = typeof content === 'string' ? content : new TextDecoder().decode(content as any);
         let stdout = '';
         let stderr = '';
+        // Set up positional parameters ($@, $1, $2, etc.)
+        const savedParams: Record<string, string | undefined> = {};
+        for (let i = 0; i <= scriptArgs.length; i++) {
+          savedParams[String(i)] = ctx.shell.env[String(i)];
+        }
+        savedParams['@'] = ctx.shell.env['@'];
+        savedParams['*'] = ctx.shell.env['*'];
+        savedParams['#'] = ctx.shell.env['#'];
+        ctx.shell.env['0'] = scriptPath;
+        for (let i = 0; i < scriptArgs.length; i++) {
+          ctx.shell.env[String(i + 1)] = scriptArgs[i];
+        }
+        ctx.shell.env['@'] = scriptArgs.join(' ');
+        ctx.shell.env['*'] = scriptArgs.join(' ');
+        ctx.shell.env['#'] = String(scriptArgs.length);
         // Execute each line of the script
+        let exitCode = 0;
         for (const line of script.split('\n')) {
           const trimmed = line.trim();
           if (!trimmed || trimmed.startsWith('#')) continue;
-          const code = await ctx.shell.execute(trimmed, (s) => { stdout += s; }, (s) => { stderr += s; });
-          if (code !== 0) {
-            ctx.stdout += stdout;
-            ctx.stderr += stderr;
-            return code;
+          exitCode = await ctx.shell.execute(trimmed, (s) => { stdout += s; }, (s) => { stderr += s; }, false, undefined, true);
+          if (exitCode !== 0) break;
+        }
+        // Restore positional parameters
+        for (const key of Object.keys(savedParams)) {
+          if (savedParams[key] === undefined) {
+            delete ctx.shell.env[key];
+          } else {
+            ctx.shell.env[key] = savedParams[key]!;
           }
         }
         ctx.stdout += stdout;
         ctx.stderr += stderr;
-        return 0;
+        return exitCode;
       } catch (e: any) {
         ctx.stderr += `sh: ${ctx.args[0]}: ${e.message}\n`;
         return 1;
@@ -606,7 +627,7 @@ export const shCmd: Command = {
       for (const line of ctx.stdin.split('\n')) {
         const trimmed = line.trim();
         if (!trimmed || trimmed.startsWith('#')) continue;
-        const code = await ctx.shell.execute(trimmed, (s) => { stdout += s; }, (s) => { stderr += s; });
+        const code = await ctx.shell.execute(trimmed, (s) => { stdout += s; }, (s) => { stderr += s; }, false, undefined, true);
         if (code !== 0) {
           ctx.stdout += stdout;
           ctx.stderr += stderr;

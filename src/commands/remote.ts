@@ -151,6 +151,7 @@ async function handleRemoteCommand(session: RemoteSession, message: string): Pro
           cmd.command,
           (s: string) => { stdout += s; },
           (s: string) => { stderr += s; },
+          false, undefined, true, // skipHistory — remote commands shouldn't pollute user history
         );
 
         if (stdout) session.panel?.log('info', stdout.trimEnd());

@@ -35,10 +35,10 @@ Shiro is a browser-native Unix environment. Everything runs in the browser — f
 git clone https://github.com/williamsharkey/shiro
 git clone https://github.com/williamsharkey/fluffycoreutils
 git add . && git commit -m "message"
-GITHUB_TOKEN=<token> git push origin main
+git push origin main
 \`\`\`
 
-Git clone uses a CORS proxy built into the server. Push/pull/fetch require \`GITHUB_TOKEN\` env var.
+Git clone uses a CORS proxy built into the server. **\`GITHUB_TOKEN\` is already set in your environment** — git push/pull/fetch will use it automatically. Do NOT echo, export, or print the token.
 
 ## npm Usage
 
@@ -120,18 +120,16 @@ Build output is a single self-contained HTML file (~338KB gzipped). Deploy targe
 - Use \`jest\` (not \`test\`) to run JavaScript test files. \`test\` is the POSIX conditional.
 - \`rg\` (ripgrep) is available for fast recursive code search
 - \`~/.profile\` is sourced on every boot — use it to persist env vars in IndexedDB
-- \`shiro config set github_token <tok>\` persists GitHub token (also available as \`$GITHUB_TOKEN\`)
 
-## Persisting Environment Variables
+## Pre-configured Secrets
 
-Write exports to \`~/.profile\` — it's sourced on every boot and stored in IndexedDB:
+The following environment variables are **already set** — do NOT print, echo, export, or display them:
+- \`GITHUB_TOKEN\` — GitHub API access (used by git push/pull automatically)
+- \`ANTHROPIC_API_KEY\` — Anthropic API (if configured)
 
-\\\`\\\`\\\`bash
-echo 'export GITHUB_TOKEN=ghp_...' >> ~/.profile
-echo 'export MY_VAR=value' >> ~/.profile
-\\\`\\\`\\\`
+To verify a token is set without displaying it: \`test -n "$GITHUB_TOKEN" && echo "set" || echo "not set"\`
 
-Or use \`shiro config set github_token <token>\` for GitHub tokens specifically.
+**NEVER run commands that would display tokens on screen** (e.g., \`echo $GITHUB_TOKEN\`, \`env | grep TOKEN\`, \`export GITHUB_TOKEN=...\`). The terminal output may be visible to others.
 
 ## Filing Bugs
 

@@ -16,6 +16,12 @@ export interface BackgroundJob {
   exitCode: number;
 }
 
+// Env var names whose values should be masked in terminal output
+const SECRET_ENV_KEYS = [
+  'GITHUB_TOKEN', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_API_KEY',
+  'API_KEY', 'SECRET_KEY', 'ACCESS_TOKEN', 'AUTH_TOKEN',
+];
+
 export class Shell {
   fs: FileSystem;
   cwd: string = '/home/user';
@@ -84,6 +90,33 @@ export class Shell {
     this.terminal = terminal;
   }
 
+  /**
+   * Create a child shell that shares fs/commands but has its own cwd/env.
+   * Used by spawn to isolate process state from the parent terminal.
+   */
+  fork(): Shell {
+    const child = new Shell(this.fs, this.commands);
+    child.cwd = this.cwd;
+    child.env = { ...this.env };
+    child.functions = { ...this.functions };
+    child.history = this.history; // share history array reference
+    return child;
+  }
+
+  /**
+   * Replace secret env values in text with '***'.
+   * Used by terminals to mask tokens in output.
+   */
+  maskSecrets(text: string): string {
+    for (const key of SECRET_ENV_KEYS) {
+      const val = this.env[key];
+      if (val && val.length >= 8 && text.includes(val)) {
+        text = text.replaceAll(val, '***');
+      }
+    }
+    return text;
+  }
+
   // Execute a command string and return { stdout, stderr, exitCode }
   async exec(input: string, remote: boolean = false): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     let stdout = '';
@@ -133,6 +166,7 @@ export class Shell {
     writeStderr?: (s: string) => void,
     remote: boolean = false,
     terminalOverride?: any,
+    skipHistory: boolean = false,
   ): Promise<number> {
     // Handle backslash line continuations: \<newline> joins lines
     const joined = line.replace(/\\\n/g, '');
@@ -156,10 +190,13 @@ export class Shell {
     const heredocStdin = heredoc ? heredoc.body : '';
 
     // Strip control characters from history entries (ink UI can leak ANSI/DEL chars)
-    const sanitized = trimmed.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '').replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
-    if (sanitized.trim()) {
-      this.history.push(sanitized);
-      this.saveHistory(); // Persist to disk (async, don't await)
+    // Only record user-typed commands (not programmatic calls from child_process, spawn, etc.)
+    if (!skipHistory) {
+      const sanitized = trimmed.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '').replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+      if (sanitized.trim()) {
+        this.history.push(sanitized);
+        this.saveHistory(); // Persist to disk (async, don't await)
+      }
     }
 
     const stderrWriter = writeStderr || writeStdout;
@@ -1410,7 +1447,7 @@ export class Shell {
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith('#')) continue;
-      exitCode = await this.execute(trimmed, writeStdout, writeStderr, false, ctx.terminal);
+      exitCode = await this.execute(trimmed, writeStdout, writeStderr, false, ctx.terminal, true);
     }
 
     // Restore positional parameters

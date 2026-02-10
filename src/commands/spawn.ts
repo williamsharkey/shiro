@@ -23,6 +23,9 @@ export const spawnCmd: Command = {
     const fullCommand = ctx.args.join(' ');
     const shortName = ctx.args[0];
 
+    // Fork the shell so spawned process gets its own cwd/env (no leaking to parent)
+    const childShell = ctx.shell.fork();
+
     // Allocate PID
     const proc = processTable.allocate(fullCommand);
 
@@ -43,6 +46,8 @@ export const spawnCmd: Command = {
 
     // Create terminal inside the window
     const winTerm = new WindowTerminal(win.contentDiv!);
+    // Wire up secret masking so tokens never appear on screen
+    winTerm.secretMasker = (text: string) => childShell.maskSecrets(text);
 
     // Wire up process
     proc.windowTerminal = winTerm;
@@ -54,15 +59,16 @@ export const spawnCmd: Command = {
       winTerm.writeOutput('\r\n\x1b[31m[Process killed]\x1b[0m\r\n');
     };
 
-    // Run command async — don't await
+    // Run command async on the CHILD shell — don't await
     proc.promise = (async () => {
       try {
-        const exitCode = await ctx.shell.execute(
+        const exitCode = await childShell.execute(
           fullCommand,
           (s: string) => winTerm.writeOutput(s),
           (s: string) => winTerm.writeOutput(`\x1b[31m${s}\x1b[0m`),
           false,
           winTerm,
+          true, // skipHistory — spawn already records the parent command
         );
         if (proc.status === 'running') {
           processTable.markExited(proc.pid, exitCode);

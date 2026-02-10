@@ -137,10 +137,17 @@ export function satisfiesRange(versionStr: string, rangeStr: string): boolean {
   const version = parseSemVer(versionStr);
   if (!version) return false;
 
-  // Exact version
+  // Exact version or partial version (e.g. "4" → "^4.0.0", "4.2" → "^4.2.0")
   if (!rangeStr.match(/[\^~><]/)) {
     const target = parseSemVer(rangeStr);
-    return target ? compareSemVer(version, target) === 0 : false;
+    if (target) return compareSemVer(version, target) === 0;
+    // Partial version: "4" or "4.2" — treat as caret range
+    const partialMatch = rangeStr.match(/^(\d+)(?:\.(\d+))?$/);
+    if (partialMatch) {
+      const coerced = parseSemVer(`${partialMatch[1]}.${partialMatch[2] || '0'}.0`);
+      return coerced ? satisfiesCaret(version, coerced) : false;
+    }
+    return false;
   }
 
   // Caret range: ^1.2.3
