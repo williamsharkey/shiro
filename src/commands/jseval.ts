@@ -342,7 +342,8 @@ export const nodeCmd: Command = {
             DISABLE_INSTALLATION_CHECKS: '1',
           } : {}),
         } as Record<string, string>,
-        cwd: () => ctx.cwd,
+        cwd: () => ctx.shell.cwd,
+        chdir: (dir: string) => { ctx.shell.cwd = ctx.fs.resolvePath(dir, ctx.shell.cwd); ctx.shell.env['PWD'] = ctx.shell.cwd; },
         exit: (c?: number) => {
           if (exitCalled) throw new ProcessExitError(exitCode); // Prevent re-entrant exit
           exitCode = c ?? 0;
@@ -4817,7 +4818,16 @@ export const nodeCmd: Command = {
 
                   main = main.replace(/^\.\//, '');
                   // Don't add .js if already has valid extension
-                  if (!/\.(js|cjs|mjs|json)$/.test(main)) main += '.js';
+                  if (!/\.(js|cjs|mjs|json)$/.test(main)) {
+                    // Check if main points to a directory (e.g., chalk@4 "main": "source")
+                    const asDir = `${pkgDir}/${main}/index.js`;
+                    const asFile = `${pkgDir}/${main}.js`;
+                    if (fileCache.has(asDir) && !fileCache.has(asFile)) {
+                      main += '/index.js';
+                    } else {
+                      main += '.js';
+                    }
+                  }
                   resolved = `${pkgDir}/${main}`;
                 } catch {
                   resolved = `${pkgDir}/index.js`;
