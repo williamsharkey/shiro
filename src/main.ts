@@ -87,6 +87,7 @@ import { spawnCmd } from './commands/spawn';
 import { psCmd, killCmd } from './commands/ps';
 import { htmlCmd, imgCmd } from './commands/html';
 import { dougCmd } from './commands/doug';
+import { becomeCmd, unbecomeCmd, getBecomeConfig, activateBecomeMode, deactivateBecomeMode } from './commands/become';
 import { processTable } from './process-table';
 import { iframeServer } from './iframe-server';
 import { allCommands } from '../fluffycoreutils/src/index';
@@ -248,6 +249,8 @@ async function main() {
   registerCommand(commands, htmlCmd, 'src/commands/html.ts');
   registerCommand(commands, imgCmd, 'src/commands/html.ts');
   registerCommand(commands, dougCmd, 'src/commands/doug.ts');
+  registerCommand(commands, becomeCmd, 'src/commands/become.ts');
+  registerCommand(commands, unbecomeCmd, 'src/commands/become.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {
@@ -320,6 +323,7 @@ async function main() {
     registry, // ModuleRegistry for hot-reload
     iframeServer, // Iframe-based virtual HTTP server
     processTable, // Windowed process registry
+    unbecome: deactivateBecomeMode, // Exit app mode from browser console
   };
 
   // OAuth callback bridge: receive auth codes from /oauth/callback popup
@@ -348,6 +352,26 @@ async function main() {
   });
 
   await terminal.start();
+
+  // Check for become mode (app mode) — restore full-screen app if configured
+  const becomeConfig = getBecomeConfig();
+  if (becomeConfig) {
+    const pathname = location.pathname.replace(/\/$/, '');
+    if (pathname === '/' + becomeConfig.slug || pathname === '' || pathname === '/') {
+      // Start the server for the app directory, then activate become mode
+      const startResult = await shell.execute(
+        `serve "${becomeConfig.directory}" ${becomeConfig.port}`,
+        () => {}, () => {},
+      );
+      if (startResult === 0) {
+        await activateBecomeMode(becomeConfig);
+      } else {
+        // Server failed to start — clear become config and show terminal
+        localStorage.removeItem('shiro-become');
+        console.warn('[shiro] Become mode: server failed to start, falling back to terminal');
+      }
+    }
+  }
 
   // Initialize mobile virtual keys and voice input
   initMobileInput(terminal);

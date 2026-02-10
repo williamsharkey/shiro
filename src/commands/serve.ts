@@ -12,6 +12,9 @@ const activeServers = new Map<number, {
   type: 'static' | 'custom';
 }>();
 
+/** Get the active servers map (for become command) */
+export function getActiveServers() { return activeServers; }
+
 /**
  * Serve static files from a directory
  */
@@ -104,6 +107,15 @@ async function openInIframe(ctx: CommandContext, port: number, path: string = '/
       width: '36em',
       height: '24em',
       container: document.body,
+      onBecome: (p) => {
+        const info = activeServers.get(p);
+        const dir = info?.directory || '/tmp';
+        const slug = dir.split('/').filter(Boolean).pop() || 'app';
+        // Dynamic import to avoid circular dependency
+        import('./become').then(({ activateBecomeMode }) => {
+          activateBecomeMode({ directory: dir, port: p, slug, title: slug.charAt(0).toUpperCase() + slug.slice(1) });
+        });
+      },
     });
 
     // Fetch content and set up iframe
@@ -177,7 +189,7 @@ async function openInIframe(ctx: CommandContext, port: number, path: string = '/
 /**
  * Inject resource interceptor and navigation scripts into HTML
  */
-function injectIframeScripts(html: string, port: number): string {
+export function injectIframeScripts(html: string, port: number): string {
   const resourceInterceptorScript = `
 <script>
 (function() {

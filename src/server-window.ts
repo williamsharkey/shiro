@@ -17,6 +17,7 @@ export interface ServerWindowOptions {
   mode?: 'iframe' | 'terminal';
   title?: string;
   onClose?: () => void;
+  onBecome?: (port: number) => void;
 }
 
 export interface ServerWindow {
@@ -175,6 +176,15 @@ export function createServerWindow(options: ServerWindowOptions): ServerWindow {
   dots.appendChild(closeBtn);
   dots.appendChild(miniBtn);
   dots.appendChild(maxBtn);
+
+  // Become button (only for iframe-mode windows with a port and onBecome callback)
+  if (mode === 'iframe' && port != null && options.onBecome) {
+    const becomeBtn = document.createElement('div');
+    becomeBtn.title = 'Become — full-screen app mode';
+    becomeBtn.style.cssText = 'width:20px;height:20px;border-radius:50%;background:#af52de;cursor:pointer';
+    onTap(becomeBtn, () => options.onBecome!(port!));
+    dots.appendChild(becomeBtn);
+  }
 
   // Title
   const title = document.createElement('span');

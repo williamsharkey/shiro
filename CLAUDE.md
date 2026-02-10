@@ -55,7 +55,8 @@ src/
     ├── hud.ts            # HUD redraw command
     ├── spawn.ts          # Run commands in windowed terminals
     ├── ps.ts             # ps (list processes) and kill (terminate by PID)
-    └── html.ts           # html (render HTML in window) and img (display image)
+    ├── html.ts           # html (render HTML in window) and img (display image)
+    └── become.ts         # become/unbecome: full-screen app mode with shareable URLs
 └── utils/
     ├── copy-utils.ts     # bufferToString (isWrapped-aware), smartCopyProcess (indent strip)
     ├── tar-utils.ts      # gzip decompression and tar extraction
@@ -269,6 +270,26 @@ seed yolo       # Target yolo.shiro.computer subdomain
 ```
 
 The blob mode inlines all JS/CSS, gzips (~70% reduction), and creates a blob URL at runtime.
+
+## Become (App Mode)
+
+Make Shiro "become" a served app — full-screen with no terminal, accessible via path-based URLs like `shiro.computer/myapp`:
+```bash
+serve /tmp/myapp 3000       # Start serving an app
+become 3000 myapp           # Full-screen app mode, URL → /myapp
+become                      # Auto-detect if only one server running
+unbecome                    # Return to terminal (also: __shiro.unbecome() in console)
+```
+
+**How it works:**
+- `become` saves config to `localStorage['shiro-become']` (synchronous — no flash on reload)
+- Hides terminal via `.become-active` CSS class, creates a full-screen iframe with app content
+- On page reload, `main.ts` detects become config, starts the server, and re-enters app mode
+- `server.mjs` SPA fallback means `shiro.computer/myapp` loads index.html which boots into become mode
+- Server windows have a purple "Become" button (4th traffic light) for one-click activation
+- `unbecome` clears config, removes iframe, shows terminal, resets URL to `/`
+
+**Key files:** `src/commands/become.ts`, boot logic in `src/main.ts`, button in `src/server-window.ts`
 
 ## Claude Code (Inner Claude)
 
