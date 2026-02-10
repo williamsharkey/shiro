@@ -4,22 +4,27 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Shiro — Browser OS</title>
-  <meta name="description" content="A Unix shell that runs in a browser tab. 150+ commands, persistent files, git, npm, web servers — all in one HTML file.">
+  <meta name="description" content="A static HTML file that emulates a Unix environment in the browser. Shell, filesystem, git, npm, and Claude Code — all in one page.">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { font-size: 15px; }
 
     body {
       background: #fffff8;
       color: #111;
-      font-family: 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif;
-      line-height: 1.7;
+      font-family: et-book, Palatino, 'Palatino Linotype', 'Palatino LT STD',
+                   'Book Antiqua', Georgia, serif;
+      line-height: 1.8;
       -webkit-font-smoothing: antialiased;
+      counter-reset: sidenote-counter;
     }
 
     article {
-      max-width: 740px;
+      width: 87.5%;
+      max-width: 1000px;
       margin: 0 auto;
-      padding: 48px 24px 80px;
+      padding: 48px 0 80px;
     }
 
     a { color: #3b6e8f; text-decoration: none; }
@@ -30,83 +35,99 @@
       margin-bottom: 32px;
       font-size: 0.85rem;
       color: #999;
-      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
     .back:hover { color: #666; text-decoration: none; }
 
     h1 {
-      font-size: 2.2rem;
+      font-size: 2.4rem;
       font-weight: 400;
-      margin-bottom: 6px;
-      line-height: 1.2;
+      margin-bottom: 8px;
+      line-height: 1.15;
     }
 
     .subtitle {
-      font-size: 1.05rem;
-      color: #555;
-      max-width: 540px;
+      font-size: 1.1rem;
+      line-height: 1.7;
+      color: #333;
+      width: 55%;
       margin-bottom: 6px;
     }
 
     .status {
       font-size: 0.72rem;
-      font-family: 'SF Mono', Consolas, monospace;
+      font-family: 'SF Mono', Consolas, 'Liberation Mono', monospace;
       color: #bbb;
       margin-bottom: 48px;
     }
     .status.ready { color: #3fb950; }
     .status.error { color: #d32f2f; }
 
-    /* Tooltips */
-    .noted {
-      text-decoration-line: underline;
-      text-decoration-style: dotted;
-      text-decoration-color: #aaa;
-      text-underline-offset: 3px;
-      cursor: help;
+    /* Body text — Tufte 55% column */
+    p { margin-bottom: 1.4rem; }
+    section > p, .info-section > p { width: 55%; }
+
+    /* Sidenotes */
+    .sidenote-number {
+      counter-increment: sidenote-counter;
+    }
+    .sidenote-number:after {
+      content: counter(sidenote-counter);
+      font-size: 0.55rem;
+      top: -0.5rem;
+      position: relative;
+      vertical-align: baseline;
+    }
+    .sidenote:before {
+      content: counter(sidenote-counter) "\00a0 ";
+      font-size: 0.55rem;
+      top: -0.5rem;
       position: relative;
     }
-    .noted .tip {
-      display: none;
-      position: absolute;
-      bottom: calc(100% + 8px);
-      left: 50%;
-      transform: translateX(-50%);
-      width: max-content;
-      max-width: 320px;
-      padding: 8px 12px;
-      background: #333;
-      color: #eee;
-      font-size: 0.76rem;
-      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-      border-radius: 4px;
-      line-height: 1.45;
-      z-index: 100;
-      white-space: normal;
-      pointer-events: none;
-      font-style: normal;
+    .sidenote {
+      float: right;
+      clear: right;
+      margin-right: -60%;
+      width: 50%;
+      margin-top: 0.3rem;
+      margin-bottom: 1rem;
+      font-size: 0.8rem;
+      line-height: 1.4;
+      color: #666;
+      vertical-align: baseline;
+      position: relative;
     }
-    .noted .tip::after {
-      content: '';
-      position: absolute;
-      top: 100%;
-      left: 50%;
-      transform: translateX(-50%);
-      border: 6px solid transparent;
-      border-top-color: #333;
-    }
-    .noted:hover .tip { display: block; }
+    input.margin-toggle { display: none; }
+    label.sidenote-number { cursor: default; }
+    label.margin-toggle:not(.sidenote-number) { display: none; }
 
-    /* Sections */
-    section { margin-bottom: 48px; }
-
-    section h2 {
-      font-size: 1.15rem;
+    /* Section headings */
+    section h2, .info-section h2 {
+      font-size: 1.3rem;
       font-weight: 400;
       font-style: italic;
+      margin-top: 2.5rem;
+      margin-bottom: 0.5rem;
     }
 
-    /* Caption bar — fades in above slot after demo completes */
+    code {
+      font-family: 'SF Mono', Consolas, 'Liberation Mono', monospace;
+      font-size: 0.85em;
+      background: #f0f0e8;
+      padding: 1px 5px;
+      border-radius: 2px;
+    }
+
+    /* Sections */
+    section { margin-bottom: 36px; }
+    .info-section { margin-top: 48px; margin-bottom: 36px; }
+    .info-section p {
+      font-size: 0.95rem;
+      color: #333;
+    }
+    .info-section code { font-size: 0.84em; }
+
+    /* Caption bar */
     .demo-caption {
       display: flex;
       align-items: center;
@@ -116,10 +137,7 @@
       pointer-events: none;
       margin-bottom: 4px;
     }
-    .demo-caption.visible {
-      opacity: 1;
-      pointer-events: auto;
-    }
+    .demo-caption.visible { opacity: 1; pointer-events: auto; }
     .demo-caption .cap-title {
       font-size: 0.78rem;
       font-family: -apple-system, BlinkMacSystemFont, sans-serif;
@@ -146,7 +164,7 @@
     }
     .demo-caption .cap-replay:hover { border-color: #999; color: #666; }
 
-    /* Demo slot — holds the shared real terminal iframe */
+    /* Demo slot */
     .demo-slot {
       height: 320px;
       border-radius: 6px;
@@ -154,15 +172,10 @@
       background: #1a1a2e;
       position: relative;
     }
-    .demo-slot iframe {
-      width: 100%;
-      height: 100%;
-      border: none;
-      display: block;
-    }
+    .demo-slot iframe { width: 100%; height: 100%; border: none; display: block; }
     .demo-slot-tall { height: 560px; }
 
-    /* YouTube-style overlay */
+    /* Overlay */
     .demo-overlay {
       position: absolute;
       inset: 0;
@@ -175,16 +188,13 @@
       cursor: pointer;
       transition: opacity 0.35s ease;
     }
-    .demo-overlay.hidden {
-      opacity: 0;
-      pointer-events: none;
-    }
+    .demo-overlay.hidden { opacity: 0; pointer-events: none; }
     .demo-overlay h2 {
       font-size: 1.5rem;
       font-weight: 400;
       color: #c8c8e0;
       font-style: normal;
-      font-family: 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif;
+      font-family: et-book, Palatino, 'Palatino Linotype', 'Book Antiqua', Georgia, serif;
       margin-bottom: 6px;
       letter-spacing: 0.01em;
     }
@@ -223,7 +233,7 @@
       padding-left: 0;
     }
 
-    /* Preview */
+    /* Preview pane (serve demo) */
     .preview {
       border: 1px solid #ddd;
       border-radius: 0 0 6px 6px;
@@ -246,7 +256,7 @@
     .preview-overlay {
       position: absolute;
       inset: 0;
-      top: 22px; /* below label bar */
+      top: 22px;
       display: flex;
       justify-content: center;
       align-items: center;
@@ -254,85 +264,23 @@
       z-index: 2;
       transition: opacity 0.35s ease;
     }
-    .preview-overlay.hidden {
-      opacity: 0;
-      pointer-events: none;
-    }
+    .preview-overlay.hidden { opacity: 0; pointer-events: none; }
     .preview-overlay span {
       font-size: 0.82rem;
       font-family: -apple-system, BlinkMacSystemFont, sans-serif;
       color: #bbb;
     }
 
-    /* Info sections */
-    .info-section { margin-top: 64px; margin-bottom: 48px; }
-    .info-section h2 {
-      font-size: 1.15rem;
-      font-weight: 400;
-      font-style: italic;
-      margin-bottom: 8px;
+    /* Proxy list */
+    .proxy-list { width: 55%; margin-bottom: 1.4rem; padding-left: 0; list-style: none; }
+    .proxy-list li {
+      margin-bottom: 0.8rem;
+      font-size: 0.95rem;
+      color: #333;
     }
-    .info-section p {
+    .proxy-list li strong {
+      font-weight: 600;
       font-size: 0.9rem;
-      color: #444;
-      margin-bottom: 8px;
-    }
-    .info-section code {
-      font-family: 'SF Mono', Consolas, monospace;
-      font-size: 0.84em;
-      background: #f0f0e8;
-      padding: 1px 4px;
-      border-radius: 2px;
-    }
-
-    /* Isolation diagram */
-    .iso-table {
-      font-family: 'SF Mono', Consolas, monospace;
-      font-size: 0.76rem;
-      margin: 14px 0;
-      border-collapse: collapse;
-    }
-    .iso-table td {
-      padding: 5px 10px;
-      border-bottom: 1px solid #e8e8e0;
-      color: #555;
-    }
-    .iso-table .url { color: #3b6e8f; }
-    .iso-table .arrow { color: #ccc; text-align: center; width: 28px; }
-    .iso-table .db { color: #999; }
-
-    /* Seed mockup */
-    .mockup { margin: 16px 0; }
-    .mockup-step { margin-bottom: 10px; }
-    .mockup-label {
-      font-size: 0.75rem;
-      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-      color: #999;
-      margin-bottom: 3px;
-    }
-    .mockup-terminal {
-      background: #111;
-      border-radius: 4px;
-      padding: 10px 14px;
-      font-family: 'SF Mono', Consolas, monospace;
-      font-size: 0.78rem;
-      line-height: 1.5;
-    }
-    .mockup-console {
-      background: #f5f5f0;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      padding: 10px 14px;
-      font-family: 'SF Mono', Consolas, monospace;
-      font-size: 0.78rem;
-      line-height: 1.5;
-      color: #444;
-    }
-    .mockup-arrow {
-      text-align: center;
-      color: #ccc;
-      font-size: 1.1rem;
-      margin: 2px 0;
     }
 
     /* Footer */
@@ -348,9 +296,27 @@
     footer a { color: #999; }
     footer a:hover { color: #666; }
 
-    @media (max-width: 600px) {
-      article { padding: 28px 16px 60px; }
+    @media (max-width: 760px) {
+      article { width: 92%; padding: 28px 0 60px; }
       h1 { font-size: 1.8rem; }
+      .subtitle, section > p, .info-section > p, .proxy-list { width: 100%; }
+      .sidenote {
+        display: none;
+      }
+      .margin-toggle:checked + .sidenote {
+        display: block;
+        float: left;
+        clear: both;
+        width: 95%;
+        margin: 0.5rem 2.5% 0.5rem 2.5%;
+        padding: 8px 0;
+        border-top: 1px solid #e8e8e0;
+      }
+      label.margin-toggle:not(.sidenote-number) {
+        display: inline;
+        color: #3b6e8f;
+        cursor: pointer;
+      }
       .demo-slot { height: 280px; }
       .demo-overlay h2 { font-size: 1.25rem; }
       .demo-play-btn { width: 48px; height: 48px; font-size: 1.1rem; }
@@ -363,7 +329,18 @@
 
     <h1>Shiro</h1>
     <p class="subtitle">
-      A self-contained static webpage that emulates a Unix environment in the browser. It runs <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a> with shimmed versions of the tools Claude commonly uses. Not a real Linux &mdash; but trying to be complete enough for npm, web development, and interacting with served apps in place. Still buggy, still being refined.
+      A static HTML file that boots into something resembling a Unix
+      shell.<label for="sn-size" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-size" class="margin-toggle"/><span class="sidenote">~350 KB gzipped. All JavaScript and CSS are inlined into a single document&thinsp;&mdash;&thinsp;no external assets, no CDN, no build artifacts to coordinate.</span>
+      It has pipes, redirects, a persistent filesystem, and about 150 commands&thinsp;&mdash;&thinsp;just
+      enough to be useful, not enough to fool anyone into thinking it's a real
+      operating system.
+    </p>
+    <p class="subtitle" style="margin-bottom: 6px">
+      It exists primarily as a host for
+      <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a>.
+      The idea was to shim enough of Node.js and enough of the standard
+      tools that an AI coding agent could work inside a browser tab: reading files, making edits,
+      searching code, serving apps. It mostly works.
     </p>
 
     <div id="engine-status" class="status">loading shiro&hellip;</div>
@@ -392,6 +369,15 @@
       </div>
     </section>
 
+    <section class="info-section" style="margin-top: 24px">
+      <p>The commands above are JavaScript reimplementations. The filesystem is
+      IndexedDB wearing a POSIX
+      costume.<label for="sn-posix" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-posix" class="margin-toggle"/><span class="sidenote">stat, readdir, readFile, writeFile, mkdir, symlink, chmod, glob&thinsp;&mdash;&thinsp;enough of the POSIX surface that isomorphic-git and npm can work against it without modification.</span>
+      Files survive page reloads, and each subdomain
+      (<code>app.shiro.computer</code>, <code>game.shiro.computer</code>)
+      gets its own isolated storage courtesy of the browser's same-origin policy.</p>
+    </section>
+
     <!-- Demo 3: Text tools -->
     <section id="demo-text">
       <div class="demo-caption"><span class="cap-title">Text tools</span><span class="cap-desc">grep, sort, cut, awk</span><button class="cap-replay" onclick="demos.text.reset();demos.text.play()">&#8635; replay</button></div>
@@ -416,6 +402,15 @@
       </div>
     </section>
 
+    <section class="info-section" style="margin-top: 24px">
+      <p>Git operations use
+      <a href="https://isomorphic-git.org/">isomorphic-git</a>,
+      a pure-JavaScript implementation. Local operations&thinsp;&mdash;&thinsp;init, add, commit,
+      diff, log, branch&thinsp;&mdash;&thinsp;need no server at all. Cloning from GitHub requires a CORS proxy,
+      since browsers can't make cross-origin git HTTP requests
+      directly.<label for="sn-proxy" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-proxy" class="margin-toggle"/><span class="sidenote">The production server at shiro.computer is about 200 lines of Node.js. It serves the static file and proxies three routes: the Anthropic API, git HTTPS, and WebRTC signaling. That's the entire backend.</span></p>
+    </section>
+
     <!-- Demo 5: Serve a page -->
     <section id="demo-page">
       <div class="demo-caption"><span class="cap-title">Serve a page</span><span class="cap-desc">write HTML, serve it, edit in place</span><button class="cap-replay" onclick="demos.page.reset();demos.page.play()">&#8635; replay</button></div>
@@ -433,6 +428,14 @@
       </div>
     </section>
 
+    <section class="info-section" style="margin-top: 24px">
+      <p>Web applications are served inside the browser using virtual servers
+      that intercept fetch requests. No actual HTTP server is involved.
+      The <code>page</code> command lets you interact with served apps
+      programmatically&thinsp;&mdash;&thinsp;clicking buttons, reading text, evaluating
+      JavaScript&thinsp;&mdash;&thinsp;which is how Claude Code tests the things it builds.</p>
+    </section>
+
     <!-- Demo 6: Interact with an app -->
     <section id="demo-interact">
       <div class="demo-caption"><span class="cap-title">Interact with an app</span><span class="cap-desc">page command, click &amp; read DOM, then commit</span><button class="cap-replay" onclick="demos.interact.reset();demos.interact.play()">&#8635; replay</button></div>
@@ -445,68 +448,62 @@
       </div>
     </section>
 
-    <!-- Isolated filesystems -->
+    <!-- Claude Code -->
     <section class="info-section">
-      <h2>Isolated filesystems</h2>
-      <p>Each subdomain is a separate <span class="noted">web origin<span class="tip">The browser's same-origin policy gives each origin its own IndexedDB, localStorage, cookies, and service worker scope.</span></span>. The browser keeps their storage completely separate.</p>
-      <table class="iso-table">
-        <tr><td class="url">shiro.computer</td><td class="arrow">&rarr;</td><td class="db">its own IndexedDB</td></tr>
-        <tr><td class="url">tictactoe.shiro.computer</td><td class="arrow">&rarr;</td><td class="db">its own IndexedDB</td></tr>
-        <tr><td class="url">game.shiro.computer</td><td class="arrow">&rarr;</td><td class="db">its own IndexedDB</td></tr>
-      </table>
-      <p>Visit <code>app.shiro.computer</code> and you get a clean filesystem. Your files at <code>shiro.computer</code> are untouched.</p>
-    </section>
-
-    <!-- Seed -->
-    <section class="info-section">
-      <h2>Seed</h2>
-      <p>Export your entire filesystem to the clipboard with one command. Paste it into any browser's dev console to load it.</p>
-      <div class="mockup">
-        <div class="mockup-step">
-          <div class="mockup-label">1. In Shiro</div>
-          <div class="mockup-terminal">
-            <div style="white-space:pre;color:#8b949e"><span style="color:#58a6ff">~ $ </span><span style="color:#e0e0e0">seed</span>
-Copied to clipboard (42 KB)</div>
-          </div>
-        </div>
-        <div class="mockup-arrow">&darr;</div>
-        <div class="mockup-step">
-          <div class="mockup-label">2. Any browser &mdash; open dev console (F12)</div>
-          <div class="mockup-console">
-            <div><span style="color:#3b6e8f">&gt;</span> <span style="color:#aaa">[paste]</span></div>
-            <div style="color:#666">Loading shiro with 147 files&hellip;</div>
-          </div>
-        </div>
-      </div>
-      <p style="font-size:0.82rem;color:#999">The snippet creates an iframe, loads Shiro, and hydrates the filesystem. Works on any page.</p>
-    </section>
-
-    <!-- What it is -->
-    <section class="info-section">
-      <h2>What this is</h2>
-      <p>Shiro builds to a single HTML file (~350 KB gzipped). All JavaScript and CSS are inlined &mdash; no external assets. Files are stored in IndexedDB and persist across page reloads. The shell supports pipes, redirects, environment variables, and 150+ commands (cat, ls, grep, sed, find, sort, git, npm, node, vi, curl, etc.).</p>
-      <p>Claude Code runs inside Shiro's Node.js runtime shim. The tools it relies on &mdash; file reads, edits, grep, glob, bash &mdash; are shimmed to use Shiro's virtual filesystem. Many work, some don't yet. The goal is a browser-native development environment where an AI agent can read, write, build, and serve code without leaving the tab.</p>
+      <h2>Claude Code</h2>
+      <p>The real
+      <a href="https://docs.anthropic.com/en/docs/claude-code">@anthropic-ai/claude-code</a>
+      npm package runs inside a Node.js runtime
+      shim.<label for="sn-shim" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-shim" class="margin-toggle"/><span class="sidenote">The CLI is about 11 MB of bundled ESM. The runtime shim provides roughly 50 Node.js module stubs&thinsp;&mdash;&thinsp;fs, path, process, child_process, crypto, and so on. API calls route through a CORS proxy to api.anthropic.com since the browser can't reach it directly.</span>
+      Not a reimplementation&thinsp;&mdash;&thinsp;the actual CLI, loaded and executed
+      in the browser's JavaScript VM. The tools Claude Code depends
+      on&thinsp;&mdash;&thinsp;file reads, edits, grep, glob, bash&thinsp;&mdash;&thinsp;are wired to
+      the virtual filesystem. Both interactive mode and print mode work.</p>
+      <p>It's good enough for reading, editing, and searching code. Building and
+      testing work for simple projects. Complex workflows occasionally find
+      the seams.</p>
     </section>
 
     <!-- Remote -->
     <section class="info-section">
       <h2>Remote control</h2>
-      <p>An outer Claude Code instance (running on your machine) can control Shiro via <a href="https://modelcontextprotocol.io/">MCP</a> tools over a WebRTC connection. Run <code>remote start</code> in Shiro to get a connection code, then use the <code>shiro-mcp</code> package to exec commands, read/write files, and eval JS in the browser &mdash; all peer-to-peer after the initial signaling.</p>
+      <p>An outer Claude Code instance&thinsp;&mdash;&thinsp;running on your actual
+      machine&thinsp;&mdash;&thinsp;can control Shiro via
+      <a href="https://modelcontextprotocol.io/">MCP</a> tools over
+      WebRTC.<label for="sn-rtc" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-rtc" class="margin-toggle"/><span class="sidenote">The server handles the initial WebRTC signaling handshake. After that, all data flows peer-to-peer between the browser and the outer Claude Code process. Connection codes have ~46 bits of entropy and expire in 5 minutes.</span>
+      Run <code>remote start</code> in Shiro to get a connection code,
+      then use the <code>shiro-mcp</code> package to exec commands, read
+      and write files, and evaluate JavaScript in the browser.</p>
     </section>
 
-    <!-- Seed & GIF -->
+    <!-- Snapshots -->
     <section class="info-section">
-      <h2>Seed &amp; snapshots</h2>
-      <p><code>seed</code> exports the entire filesystem to the clipboard as a JS snippet. Paste it into any browser's dev console to load Shiro with your files on that page. <code>seed blob</code> does the same but self-contained (no external fetch). <code>seed html</code> produces a standalone HTML file.</p>
-      <p><code>seed gif</code> captures a terminal screenshot as a GIF with the filesystem embedded in a custom extension block. Drag the GIF back onto Shiro to restore it. The GIF is a real image &mdash; it looks like a screenshot but carries the full state.</p>
+      <h2>Snapshots</h2>
+      <p><code>seed gif</code> is perhaps the most unusual
+      feature.<label for="sn-gif" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-gif" class="margin-toggle"/><span class="sidenote">The GIF encoder is handwritten TypeScript&thinsp;&mdash;&thinsp;LZW compression, extension blocks, the whole format&thinsp;&mdash;&thinsp;with zero npm dependencies. The filesystem data is gzipped and stored in a SHIRO1.0 Application Extension block.</span>
+      It captures a terminal screenshot, encodes it as a real GIF image,
+      and embeds the entire filesystem in a custom extension block. The
+      result looks like a screenshot but carries the complete state. Drag
+      it back onto Shiro to restore everything.</p>
+      <p>There are simpler variants: <code>seed</code> copies a JS snippet to the
+      clipboard (paste it in any browser console to load your files there),
+      and <code>seed html</code> produces a standalone page.</p>
+    </section>
+
+    <!-- Rough edges -->
+    <section class="info-section">
+      <h2>Rough edges</h2>
+      <p>Editors like vi and nano are registered as commands but haven't been
+      seriously tested. Shell scripting handles basic constructs, not the
+      full POSIX specification. npm installs real packages from the registry,
+      but anything requiring native compilation won't work. There's no process
+      isolation&thinsp;&mdash;&thinsp;everything runs in the main
+      thread.<label for="sn-pretense" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-pretense" class="margin-toggle"/><span class="sidenote">It's a browser pretending to be a computer. The pretense is good enough to be useful, not good enough to be invisible.</span></p>
     </section>
 
     <footer>
       <div class="links">
         <a href="https://github.com/williamsharkey/shiro">source</a>
-        <a href="https://github.com/williamsharkey/fluffycoreutils">fluffycoreutils</a>
-        <a href="https://github.com/williamsharkey/foam">foam</a>
-        <a href="https://github.com/williamsharkey/spirit">spirit</a>
       </div>
       <p>William Sharkey &middot; 2026</p>
     </footer>
@@ -692,7 +689,6 @@ Copied to clipboard (42 KB)</div>
       }
 
       // Clear the fake prompt line and write a real one directly
-      // (don't inject Enter — that writes an extra blank line via writeln(''))
       term.write('\r\x1b[K');
       term.write('\x1b[32muser@shiro\x1b[0m:\x1b[34m~\x1b[0m$ ');
     }
@@ -856,7 +852,7 @@ Copied to clipboard (42 KB)</div>
     { cmd: 'mkdir -p /tmp/site' },
     { cmd: "cat > /tmp/site/index.html << 'EOF'\n<!DOCTYPE html>\n<html><head><title>My Site</title>\n<style>\nbody { font-family: system-ui; background: #1a1a2e; color: #eee;\n  display: flex; justify-content: center; align-items: center;\n  min-height: 100vh; margin: 0; text-align: center; }\nh1 { color: #e94560; }\np { color: #aaa; }\n</style></head>\n<body>\n<div><h1>My Site</h1><p>Built inside a browser.</p></div>\n</body></html>\nEOF", note: 'Write HTML' },
     { cmd: 'serve /tmp/site 3000', preview: true, note: 'Serve it', delay: 800 },
-    { cmd: "sed -i 's/My Site/My Site ✨/' /tmp/site/index.html", note: 'Edit in place' },
+    { cmd: "sed -i 's/My Site/My Site \u2728/' /tmp/site/index.html", note: 'Edit in place' },
     { cmd: 'cat /tmp/site/index.html', preview: true },
     { cmd: 'serve stop 3000', delay: 200 },
   ];
