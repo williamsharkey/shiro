@@ -285,56 +285,6 @@
       border-radius: 2px;
     }
 
-    /* Isolation diagram */
-    .iso-table {
-      font-family: 'SF Mono', Consolas, monospace;
-      font-size: 0.76rem;
-      margin: 14px 0;
-      border-collapse: collapse;
-    }
-    .iso-table td {
-      padding: 5px 10px;
-      border-bottom: 1px solid #e8e8e0;
-      color: #555;
-    }
-    .iso-table .url { color: #3b6e8f; }
-    .iso-table .arrow { color: #ccc; text-align: center; width: 28px; }
-    .iso-table .db { color: #999; }
-
-    /* Seed mockup */
-    .mockup { margin: 16px 0; }
-    .mockup-step { margin-bottom: 10px; }
-    .mockup-label {
-      font-size: 0.75rem;
-      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-      color: #999;
-      margin-bottom: 3px;
-    }
-    .mockup-terminal {
-      background: #111;
-      border-radius: 4px;
-      padding: 10px 14px;
-      font-family: 'SF Mono', Consolas, monospace;
-      font-size: 0.78rem;
-      line-height: 1.5;
-    }
-    .mockup-console {
-      background: #f5f5f0;
-      border: 1px solid #ddd;
-      border-radius: 4px;
-      padding: 10px 14px;
-      font-family: 'SF Mono', Consolas, monospace;
-      font-size: 0.78rem;
-      line-height: 1.5;
-      color: #444;
-    }
-    .mockup-arrow {
-      text-align: center;
-      color: #ccc;
-      font-size: 1.1rem;
-      margin: 2px 0;
-    }
-
     /* Footer */
     footer {
       margin-top: 72px;
@@ -445,68 +395,34 @@
       </div>
     </section>
 
-    <!-- Isolated filesystems -->
-    <section class="info-section">
-      <h2>Isolated filesystems</h2>
-      <p>Each subdomain is a separate <span class="noted">web origin<span class="tip">The browser's same-origin policy gives each origin its own IndexedDB, localStorage, cookies, and service worker scope.</span></span>. The browser keeps their storage completely separate.</p>
-      <table class="iso-table">
-        <tr><td class="url">shiro.computer</td><td class="arrow">&rarr;</td><td class="db">its own IndexedDB</td></tr>
-        <tr><td class="url">tictactoe.shiro.computer</td><td class="arrow">&rarr;</td><td class="db">its own IndexedDB</td></tr>
-        <tr><td class="url">game.shiro.computer</td><td class="arrow">&rarr;</td><td class="db">its own IndexedDB</td></tr>
-      </table>
-      <p>Visit <code>app.shiro.computer</code> and you get a clean filesystem. Your files at <code>shiro.computer</code> are untouched.</p>
-    </section>
-
-    <!-- Seed -->
-    <section class="info-section">
-      <h2>Seed</h2>
-      <p>Export your entire filesystem to the clipboard with one command. Paste it into any browser's dev console to load it.</p>
-      <div class="mockup">
-        <div class="mockup-step">
-          <div class="mockup-label">1. In Shiro</div>
-          <div class="mockup-terminal">
-            <div style="white-space:pre;color:#8b949e"><span style="color:#58a6ff">~ $ </span><span style="color:#e0e0e0">seed</span>
-Copied to clipboard (42 KB)</div>
-          </div>
-        </div>
-        <div class="mockup-arrow">&darr;</div>
-        <div class="mockup-step">
-          <div class="mockup-label">2. Any browser &mdash; open dev console (F12)</div>
-          <div class="mockup-console">
-            <div><span style="color:#3b6e8f">&gt;</span> <span style="color:#aaa">[paste]</span></div>
-            <div style="color:#666">Loading shiro with 147 files&hellip;</div>
-          </div>
-        </div>
-      </div>
-      <p style="font-size:0.82rem;color:#999">The snippet creates an iframe, loads Shiro, and hydrates the filesystem. Works on any page.</p>
-    </section>
-
     <!-- What it is -->
     <section class="info-section">
       <h2>What this is</h2>
-      <p>Shiro builds to a single HTML file (~350 KB gzipped). All JavaScript and CSS are inlined &mdash; no external assets. Files are stored in IndexedDB and persist across page reloads. The shell supports pipes, redirects, environment variables, and 150+ commands (cat, ls, grep, sed, find, sort, git, npm, node, vi, curl, etc.).</p>
-      <p>Claude Code runs inside Shiro's Node.js runtime shim. The tools it relies on &mdash; file reads, edits, grep, glob, bash &mdash; are shimmed to use Shiro's virtual filesystem. Many work, some don't yet. The goal is a browser-native development environment where an AI agent can read, write, build, and serve code without leaving the tab.</p>
+      <p>A single HTML file (~350 KB gzipped) with all JS and CSS inlined. Files persist in IndexedDB across reloads. The shell has pipes, redirects, environment variables, and 150+ commands.</p>
+      <p><a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a> runs inside a Node.js runtime shim. The tools it uses &mdash; file reads, edits, grep, glob, bash &mdash; are shimmed to use the virtual filesystem. Many work, some don't yet. The goal is a browser-native dev environment where an AI agent can read, write, build, and serve code without leaving the tab.</p>
+    </section>
+
+    <!-- Isolated filesystems -->
+    <section class="info-section">
+      <h2>Isolated filesystems</h2>
+      <p>Each subdomain is a separate <span class="noted">web origin<span class="tip">The browser's same-origin policy gives each origin its own IndexedDB, localStorage, cookies, and service worker scope.</span></span> with its own storage. Visit <code>app.shiro.computer</code> and you get a clean filesystem. Your files at <code>shiro.computer</code> are untouched.</p>
     </section>
 
     <!-- Remote -->
     <section class="info-section">
       <h2>Remote control</h2>
-      <p>An outer Claude Code instance (running on your machine) can control Shiro via <a href="https://modelcontextprotocol.io/">MCP</a> tools over a WebRTC connection. Run <code>remote start</code> in Shiro to get a connection code, then use the <code>shiro-mcp</code> package to exec commands, read/write files, and eval JS in the browser &mdash; all peer-to-peer after the initial signaling.</p>
+      <p>An outer Claude Code instance can control Shiro via <a href="https://modelcontextprotocol.io/">MCP</a> tools over a WebRTC peer-to-peer connection. Run <code>remote start</code> to get a connection code, then use <code>shiro-mcp</code> to exec commands, read/write files, and eval JS in the browser.</p>
     </section>
 
-    <!-- Seed & GIF -->
+    <!-- Seed -->
     <section class="info-section">
-      <h2>Seed &amp; snapshots</h2>
-      <p><code>seed</code> exports the entire filesystem to the clipboard as a JS snippet. Paste it into any browser's dev console to load Shiro with your files on that page. <code>seed blob</code> does the same but self-contained (no external fetch). <code>seed html</code> produces a standalone HTML file.</p>
-      <p><code>seed gif</code> captures a terminal screenshot as a GIF with the filesystem embedded in a custom extension block. Drag the GIF back onto Shiro to restore it. The GIF is a real image &mdash; it looks like a screenshot but carries the full state.</p>
+      <h2>Snapshots</h2>
+      <p><code>seed</code> exports the filesystem to the clipboard. Paste it into any browser console to load your files there. <code>seed gif</code> captures a terminal screenshot as a GIF with the filesystem embedded &mdash; drag it back onto Shiro to restore. <code>seed html</code> produces a standalone file you can open anywhere.</p>
     </section>
 
     <footer>
       <div class="links">
         <a href="https://github.com/williamsharkey/shiro">source</a>
-        <a href="https://github.com/williamsharkey/fluffycoreutils">fluffycoreutils</a>
-        <a href="https://github.com/williamsharkey/foam">foam</a>
-        <a href="https://github.com/williamsharkey/spirit">spirit</a>
       </div>
       <p>William Sharkey &middot; 2026</p>
     </footer>
