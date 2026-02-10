@@ -1515,11 +1515,14 @@ export const nodeCmd: Command = {
                   if (chunk && typeof chunk !== 'function') {
                     chunks.push(typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk));
                   }
-                  ctx.fs.writeFile(resolved, chunks.join('')).then(() => {
+                  const content = chunks.join('');
+                  fileCache.set(resolved, content);
+                  fileMtimes.set(resolved, Date.now());
+                  pendingPromises.push(ctx.fs.writeFile(resolved, content).then(() => {
                     ws.emit('finish');
                     ws.emit('close');
                     if (callback) callback();
-                  }).catch((e: any) => ws.emit('error', e));
+                  }).catch((e: any) => ws.emit('error', e)));
                 };
                 return ws;
               },
@@ -1527,26 +1530,71 @@ export const nodeCmd: Command = {
               // Callback-style async fs methods (used by graceful-fs, fs-extra)
               readFile: (p: string, optsOrCb?: any, cb?: any) => {
                 const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
-                const encoding = typeof optsOrCb === 'string' ? optsOrCb : optsOrCb?.encoding || 'utf8';
-                ctx.fs.readFile(ctx.fs.resolvePath(p, ctx.cwd), encoding)
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                // Check fileCache first — sync writes may have updated it
+                const cached = fileCache.get(resolved);
+                if (cached !== undefined) {
+                  // Use queueMicrotask for consistent async behavior
+                  queueMicrotask(() => callback?.(null, cached));
+                  return;
+                }
+                ctx.fs.readFile(resolved, 'utf8')
                   .then((data: any) => callback?.(null, data))
                   .catch((e: any) => callback?.(e));
               },
               writeFile: (p: string, data: any, optsOrCb?: any, cb?: any) => {
                 const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
-                ctx.fs.writeFile(ctx.fs.resolvePath(p, ctx.cwd), typeof data === 'string' ? data : new TextDecoder().decode(data))
-                  .then(() => callback?.(null))
-                  .catch((e: any) => callback?.(e));
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                const strData = typeof data === 'string' ? data : new TextDecoder().decode(data);
+                // Update fileCache so subsequent sync reads see the new data
+                fileCache.set(resolved, strData);
+                fileMtimes.set(resolved, Date.now());
+                pendingPromises.push(ctx.fs.writeFile(resolved, strData).catch(() => {}));
+                queueMicrotask(() => callback?.(null));
               },
               stat: (p: string, optsOrCb?: any, cb?: any) => {
                 const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
-                ctx.fs.stat(ctx.fs.resolvePath(p, ctx.cwd))
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                // Check fileCache first (matches statSync behavior) — avoids IDB round-trip
+                const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
+                const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readdirCached(resolved) !== undefined;
+                if (isFile || isDir) {
+                  const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+                  const size = isFile ? (fileCache.get(resolved) || '').length : 0;
+                  queueMicrotask(() => callback?.(null, {
+                    isFile: () => isFile && !isDir, isDirectory: () => isDir,
+                    isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false,
+                    size, mtime, ctime: mtime, atime: mtime, birthtime: mtime,
+                    mtimeMs: mtime.getTime(), ctimeMs: mtime.getTime(), atimeMs: mtime.getTime(), birthtimeMs: mtime.getTime(),
+                    dev: 0, ino: 0, nlink: 1, uid: 1000, gid: 1000, rdev: 0, blksize: 4096, blocks: Math.ceil(size / 512),
+                    mode: (isDir) ? 0o40755 : 0o100644,
+                  }));
+                  return;
+                }
+                ctx.fs.stat(resolved)
                   .then((s: any) => callback?.(null, s))
                   .catch((e: any) => callback?.(e));
               },
               lstat: (p: string, optsOrCb?: any, cb?: any) => {
                 const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
-                ctx.fs.stat(ctx.fs.resolvePath(p, ctx.cwd))
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                // Check fileCache first (same as stat — no real symlinks in Shiro)
+                const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
+                const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readdirCached(resolved) !== undefined;
+                if (isFile || isDir) {
+                  const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+                  const size = isFile ? (fileCache.get(resolved) || '').length : 0;
+                  queueMicrotask(() => callback?.(null, {
+                    isFile: () => isFile && !isDir, isDirectory: () => isDir,
+                    isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false,
+                    size, mtime, ctime: mtime, atime: mtime, birthtime: mtime,
+                    mtimeMs: mtime.getTime(), ctimeMs: mtime.getTime(), atimeMs: mtime.getTime(), birthtimeMs: mtime.getTime(),
+                    dev: 0, ino: 0, nlink: 1, uid: 1000, gid: 1000, rdev: 0, blksize: 4096, blocks: Math.ceil(size / 512),
+                    mode: (isDir) ? 0o40755 : 0o100644,
+                  }));
+                  return;
+                }
+                ctx.fs.stat(resolved)
                   .then((s: any) => callback?.(null, s))
                   .catch((e: any) => callback?.(e));
               },
@@ -1554,6 +1602,39 @@ export const nodeCmd: Command = {
                 const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
                 const opts = typeof optsOrCb === 'object' ? optsOrCb : {};
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                // Check fileCache first (matches readdirSync behavior)
+                const prefix = resolved === '/' ? '/' : resolved + '/';
+                const cacheEntries = new Set<string>();
+                const cacheDirSet = new Set<string>();
+                for (const key of fileCache.keys()) {
+                  if (key.startsWith(prefix)) {
+                    const rest = key.slice(prefix.length);
+                    const first = rest.split('/')[0];
+                    if (first && first !== '.') {
+                      cacheEntries.add(first);
+                      if (rest.includes('/')) cacheDirSet.add(first);
+                    }
+                  }
+                }
+                // Also check Shiro FS cache
+                const fsCachedEntries = ctx.fs.readdirCached(resolved);
+                if (fsCachedEntries) {
+                  for (const e of fsCachedEntries) cacheEntries.add(e);
+                }
+                if (cacheEntries.size > 0) {
+                  const entries = [...cacheEntries].sort();
+                  if (opts?.withFileTypes) {
+                    const dirents = entries.map(name => {
+                      const childPath = resolved + '/' + name;
+                      const childIsDir = cacheDirSet.has(name) || fileCache.has(childPath + '/.') || ctx.fs.readdirCached(childPath) !== undefined;
+                      return { name, isFile: () => !childIsDir, isDirectory: () => childIsDir, isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false };
+                    });
+                    queueMicrotask(() => callback?.(null, dirents));
+                  } else {
+                    queueMicrotask(() => callback?.(null, entries));
+                  }
+                  return;
+                }
                 ctx.fs.readdir(resolved)
                   .then(async (entries: any) => {
                     if (opts?.withFileTypes) {
@@ -1740,24 +1821,47 @@ export const nodeCmd: Command = {
                 },
                 readdir: async (p: string, opts?: any) => {
                   const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-                  const entries = await ctx.fs.readdir(resolved);
-                  if (opts?.withFileTypes) {
-                    const dirents = [];
-                    for (const name of entries) {
-                      try {
-                        const st = await ctx.fs.stat(resolved + '/' + name);
-                        dirents.push({ name, isFile: () => st.isFile(), isDirectory: () => st.isDirectory(), isSymbolicLink: () => st.isSymbolicLink?.() || false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false });
-                      } catch { dirents.push({ name, isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false }); }
+                  // Merge fileCache + Shiro FS cache + IDB entries
+                  const prefix = resolved === '/' ? '/' : resolved + '/';
+                  const cacheEntries = new Set<string>();
+                  const cacheDirSet = new Set<string>();
+                  for (const key of fileCache.keys()) {
+                    if (key.startsWith(prefix)) {
+                      const rest = key.slice(prefix.length);
+                      const first = rest.split('/')[0];
+                      if (first && first !== '.') { cacheEntries.add(first); if (rest.includes('/')) cacheDirSet.add(first); }
                     }
-                    return dirents;
+                  }
+                  const fsCached = ctx.fs.readdirCached(resolved);
+                  if (fsCached) for (const e of fsCached) cacheEntries.add(e);
+                  try { const idb = await ctx.fs.readdir(resolved); for (const e of idb) cacheEntries.add(e); } catch {}
+                  const entries = [...cacheEntries].sort();
+                  if (opts?.withFileTypes) {
+                    return entries.map(name => {
+                      const childPath = resolved + '/' + name;
+                      const childIsDir = cacheDirSet.has(name) || fileCache.has(childPath + '/.') || [...fileCache.keys()].some(k => k.startsWith(childPath + '/')) || ctx.fs.readdirCached(childPath) !== undefined;
+                      return { name, isFile: () => !childIsDir, isDirectory: () => childIsDir, isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false };
+                    });
                   }
                   return entries;
                 },
-                stat: async (p: string) => ctx.fs.stat(ctx.fs.resolvePath(p, ctx.cwd)),
+                stat: async (p: string) => {
+                  const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                  const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
+                  const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readdirCached(resolved) !== undefined;
+                  if (isFile || isDir) {
+                    const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+                    const size = isFile ? (fileCache.get(resolved) || '').length : 0;
+                    return { isFile: () => isFile && !isDir, isDirectory: () => isDir, isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false, size, mtime, ctime: mtime, atime: mtime, birthtime: mtime, mtimeMs: mtime.getTime(), ctimeMs: mtime.getTime(), atimeMs: mtime.getTime(), birthtimeMs: mtime.getTime(), dev: 0, ino: 0, nlink: 1, uid: 1000, gid: 1000, rdev: 0, blksize: 4096, blocks: Math.ceil(size / 512), mode: isDir ? 0o40755 : 0o100644 };
+                  }
+                  return ctx.fs.stat(resolved);
+                },
                 mkdir: async (p: string, opts?: any) => ctx.fs.mkdir(ctx.fs.resolvePath(p, ctx.cwd), opts),
                 unlink: async (p: string) => ctx.fs.unlink(ctx.fs.resolvePath(p, ctx.cwd)),
                 access: async (p: string) => {
-                  const exists = await ctx.fs.exists(ctx.fs.resolvePath(p, ctx.cwd));
+                  const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                  if (fileCache.has(resolved) || fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readCached(resolved) !== undefined || ctx.fs.readdirCached(resolved) !== undefined) return;
+                  const exists = await ctx.fs.exists(resolved);
                   if (!exists) throw new Error(`ENOENT: no such file or directory, access '${p}'`);
                 },
               },
@@ -1810,21 +1914,55 @@ export const nodeCmd: Command = {
               },
               readdir: async (p: string, opts?: any) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-                const entries = await ctx.fs.readdir(resolved);
-                if (opts?.withFileTypes) {
-                  const dirents = [];
-                  for (const name of entries) {
-                    try {
-                      const st = await ctx.fs.stat(resolved + '/' + name);
-                      dirents.push({ name, isFile: () => st.isFile(), isDirectory: () => st.isDirectory(), isSymbolicLink: () => st.isSymbolicLink?.() || false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false, parentPath: resolved, path: resolved });
-                    } catch { dirents.push({ name, isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false, parentPath: resolved, path: resolved }); }
+                // Check fileCache first (matches readdirSync)
+                const prefix = resolved === '/' ? '/' : resolved + '/';
+                const cacheEntries = new Set<string>();
+                const cacheDirSet = new Set<string>();
+                for (const key of fileCache.keys()) {
+                  if (key.startsWith(prefix)) {
+                    const rest = key.slice(prefix.length);
+                    const first = rest.split('/')[0];
+                    if (first && first !== '.') {
+                      cacheEntries.add(first);
+                      if (rest.includes('/')) cacheDirSet.add(first);
+                    }
                   }
+                }
+                const fsCachedEntries = ctx.fs.readdirCached(resolved);
+                if (fsCachedEntries) for (const e of fsCachedEntries) cacheEntries.add(e);
+                // Also merge IDB entries
+                try {
+                  const idbEntries = await ctx.fs.readdir(resolved);
+                  for (const e of idbEntries) cacheEntries.add(e);
+                } catch {}
+                const entries = [...cacheEntries].sort();
+                if (opts?.withFileTypes) {
+                  const dirents = entries.map(name => {
+                    const childPath = resolved + '/' + name;
+                    const childIsDir = cacheDirSet.has(name) || fileCache.has(childPath + '/.') || [...fileCache.keys()].some(k => k.startsWith(childPath + '/')) || ctx.fs.readdirCached(childPath) !== undefined;
+                    return { name, isFile: () => !childIsDir, isDirectory: () => childIsDir, isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false, parentPath: resolved, path: resolved };
+                  });
                   return dirents;
                 }
                 return entries;
               },
               stat: async (p: string) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                // Check fileCache first (matches statSync behavior)
+                const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
+                const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readdirCached(resolved) !== undefined;
+                if (isFile || isDir) {
+                  const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+                  const size = isFile ? (fileCache.get(resolved) || '').length : 0;
+                  return {
+                    isFile: () => isFile && !isDir, isDirectory: () => isDir,
+                    isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false,
+                    size, mtime, ctime: mtime, atime: mtime, birthtime: mtime,
+                    mtimeMs: mtime.getTime(), ctimeMs: mtime.getTime(), atimeMs: mtime.getTime(), birthtimeMs: mtime.getTime(),
+                    dev: 0, ino: 0, nlink: 1, uid: 1000, gid: 1000, rdev: 0, blksize: 4096, blocks: Math.ceil(size / 512),
+                    mode: isDir ? 0o40755 : 0o100644,
+                  };
+                }
                 return await ctx.fs.stat(resolved);
               },
               mkdir: async (p: string, opts?: any) => {
@@ -1841,11 +1979,28 @@ export const nodeCmd: Command = {
               },
               access: async (p: string) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                // Check fileCache/dirs before going to IDB
+                if (fileCache.has(resolved) || fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readCached(resolved) !== undefined || ctx.fs.readdirCached(resolved) !== undefined) return;
                 const exists = await ctx.fs.exists(resolved);
                 if (!exists) throw new Error(`ENOENT: no such file or directory, access '${p}'`);
               },
               lstat: async (p: string) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                // Check fileCache first (same as stat)
+                const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
+                const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readdirCached(resolved) !== undefined;
+                if (isFile || isDir) {
+                  const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+                  const size = isFile ? (fileCache.get(resolved) || '').length : 0;
+                  return {
+                    isFile: () => isFile && !isDir, isDirectory: () => isDir,
+                    isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false,
+                    size, mtime, ctime: mtime, atime: mtime, birthtime: mtime,
+                    mtimeMs: mtime.getTime(), ctimeMs: mtime.getTime(), atimeMs: mtime.getTime(), birthtimeMs: mtime.getTime(),
+                    dev: 0, ino: 0, nlink: 1, uid: 1000, gid: 1000, rdev: 0, blksize: 4096, blocks: Math.ceil(size / 512),
+                    mode: isDir ? 0o40755 : 0o100644,
+                  };
+                }
                 return await ctx.fs.stat(resolved);
               },
               chmod: async () => {},
@@ -1931,6 +2086,12 @@ export const nodeCmd: Command = {
             //   spawn('/bin/sh', ['/tmp/claude-XXX-cwd'])      → source file as script
             //   exec('/bin/sh -l -c "echo hello"')             → extract 'echo hello'
             const isShellBin = (s: string) => /^\/bin\/(?:sh|bash|zsh)$/.test(s);
+            // Shell-quote a single argument: wrap in single quotes, escape internal single quotes
+            const shellQuoteArg = (s: string): string => {
+              if (/^[A-Za-z0-9_\-.,/:=@]+$/.test(s)) return s; // safe chars, no quoting needed
+              return "'" + s.replace(/'/g, "'\\''") + "'";
+            };
+            const shellQuoteArgs = (args: string[]): string => args.map(shellQuoteArg).join(' ');
             const stripOuterQuotes = (s: string): string => {
               // Strip matching outer quotes like a shell would: "cmd" → cmd, 'cmd' → cmd
               // Also unescape inner escaped quotes: \" → "
@@ -2045,16 +2206,18 @@ export const nodeCmd: Command = {
                 if (isShellBin(cmd) && args) {
                   fullCmd = extractShellArgs(args);
                 } else {
-                  fullCmd = args ? `${cmd} ${args.join(' ')}` : cmd;
+                  fullCmd = args ? `${cmd} ${shellQuoteArgs(args)}` : cmd;
                 }
                 let stdout = '';
                 let stderr = '';
                 let status = 0;
-                execAsync(fullCmd).then(r => { stdout = r.stdout; stderr = r.stderr; status = r.exitCode; });
+                const p = execAsync(fullCmd).then(r => { stdout = r.stdout; stderr = r.stderr; status = r.exitCode; });
+                pendingPromises.push(p);
                 return {
                   get stdout() { return FakeBuffer.from(stdout); },
                   get stderr() { return FakeBuffer.from(stderr); },
                   get status() { return status; },
+                  then: (resolve: any, reject: any) => p.then(() => resolve({ stdout: FakeBuffer.from(stdout), stderr: FakeBuffer.from(stderr), status })).catch(reject),
                 };
               },
               exec: (cmd: string, opts: any, cb?: any) => {
@@ -2069,7 +2232,7 @@ export const nodeCmd: Command = {
                   once: (ev: string, fn: Function) => child.on(ev, fn),
                   kill: () => true,
                 };
-                execAsync(cmd).then(r => {
+                const p = execAsync(cmd).then(r => {
                   if (r.stdout) (childEvents['stdout_data'] || []).forEach(fn => fn(FakeBuffer.from(r.stdout)));
                   (childEvents['stdout_end'] || []).forEach(fn => fn());
                   if (r.stderr) (childEvents['stderr_data'] || []).forEach(fn => fn(FakeBuffer.from(r.stderr)));
@@ -2077,6 +2240,7 @@ export const nodeCmd: Command = {
                   (childEvents['close'] || []).forEach(fn => fn(r.exitCode, null));
                   callback?.(r.exitCode !== 0 ? Object.assign(new Error(`Exit code ${r.exitCode}`), { code: r.exitCode }) : null, r.stdout, r.stderr);
                 }).catch(e => callback?.(e, '', ''));
+                pendingPromises.push(p);
                 return child;
               },
               execFile: (file: string, args: string[], opts: any, cb?: any) => {
@@ -2085,7 +2249,7 @@ export const nodeCmd: Command = {
                 if (isShellBin(file) && args) {
                   cmd = extractShellArgs(args);
                 } else {
-                  cmd = `${file} ${(args || []).join(' ')}`;
+                  cmd = `${file} ${shellQuoteArgs(args || [])}`;
                 }
                 const childEvents: Record<string, Function[]> = {};
                 const child: any = {
@@ -2097,7 +2261,7 @@ export const nodeCmd: Command = {
                   once: (ev: string, fn: Function) => child.on(ev, fn),
                   kill: () => true,
                 };
-                execAsync(cmd).then(r => {
+                const p = execAsync(cmd).then(r => {
                   if (r.stdout) (childEvents['stdout_data'] || []).forEach(fn => fn(FakeBuffer.from(r.stdout)));
                   (childEvents['stdout_end'] || []).forEach(fn => fn());
                   if (r.stderr) (childEvents['stderr_data'] || []).forEach(fn => fn(FakeBuffer.from(r.stderr)));
@@ -2113,6 +2277,7 @@ export const nodeCmd: Command = {
                   (childEvents['close'] || []).forEach(fn => fn(1, null));
                   callback?.(e, '', '');
                 });
+                pendingPromises.push(p);
                 return child;
               },
               spawn: (cmd: string, args?: string[], opts?: any) => {
@@ -2120,7 +2285,7 @@ export const nodeCmd: Command = {
                 if (isShellBin(cmd) && args) {
                   fullCmd = extractShellArgs(args);
                 } else {
-                  fullCmd = args ? `${cmd} ${args.join(' ')}` : cmd;
+                  fullCmd = args ? `${cmd} ${shellQuoteArgs(args)}` : cmd;
                 }
                 const events: Record<string, Function[]> = {};
                 const stdoutEvents: Record<string, Function[]> = {};
@@ -2162,7 +2327,7 @@ export const nodeCmd: Command = {
                   ref: () => child,
                   unref: () => child,
                 };
-                execAsync(fullCmd).then(r => {
+                const p = execAsync(fullCmd).then(r => {
                   if (r.stdout) (stdoutEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(r.stdout)));
                   (stdoutEvents['end'] || []).forEach(fn => fn());
                   (stdoutEvents['close'] || []).forEach(fn => fn());
@@ -2176,6 +2341,7 @@ export const nodeCmd: Command = {
                   (events['error'] || []).forEach(fn => fn(new Error(`spawn ${cmd} failed`)));
                   (events['close'] || []).forEach(fn => fn(1, null));
                 });
+                pendingPromises.push(p);
                 return child;
               },
               execFileSync: (file: string, args?: string[], opts?: any) => {
@@ -2183,31 +2349,40 @@ export const nodeCmd: Command = {
                 if (isShellBin(file) && args) {
                   fullCmd = extractShellArgs(args);
                 } else {
-                  fullCmd = args ? `${file} ${args.join(' ')}` : file;
+                  fullCmd = args ? `${file} ${shellQuoteArgs(args)}` : file;
                 }
                 let result = '';
-                execAsync(fullCmd).then(r => { result = r.stdout; });
-                return FakeBuffer.from(result);
+                const p = execAsync(fullCmd).then(r => { result = r.stdout; });
+                pendingPromises.push(p);
+                // Return thenable Buffer so await resolves to actual result
+                const buf: any = FakeBuffer.from('');
+                buf.then = (resolve: any, reject: any) => p.then(() => resolve(FakeBuffer.from(result))).catch(reject);
+                return buf;
               },
             };
             // Add util.promisify.custom for exec/execFile to return { stdout, stderr }
             const customSym = Symbol.for('nodejs.util.promisify.custom');
-            cpModule.exec[customSym] = (cmd: string, opts?: any) =>
-              execAsync(cmd).then(r => {
+            cpModule.exec[customSym] = (cmd: string, opts?: any) => {
+              const p = execAsync(cmd).then(r => {
                 if (r.exitCode !== 0) throw Object.assign(new Error(`Command failed: ${cmd}`), { code: r.exitCode, stdout: r.stdout, stderr: r.stderr });
                 return { stdout: r.stdout, stderr: r.stderr };
               });
+              pendingPromises.push(p.catch(() => {}));
+              return p;
+            };
             cpModule.execFile[customSym] = (file: string, args?: string[], opts?: any) => {
               let cmd: string;
               if (isShellBin(file) && args) {
                 cmd = extractShellArgs(args);
               } else {
-                cmd = `${file} ${(args || []).join(' ')}`;
+                cmd = `${file} ${shellQuoteArgs(args || [])}`;
               }
-              return execAsync(cmd).then(r => {
+              const p = execAsync(cmd).then(r => {
                 if (r.exitCode !== 0) throw Object.assign(new Error(`Command failed: ${cmd}`), { code: r.exitCode, stdout: r.stdout, stderr: r.stderr });
                 return { stdout: r.stdout, stderr: r.stderr };
               });
+              pendingPromises.push(p.catch(() => {}));
+              return p;
             };
             return cpModule;
           }
