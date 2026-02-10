@@ -39,7 +39,7 @@ src/
     ├── coreutils.ts      # 41 commands: ls, cat, mkdir, rm, cp, mv, echo, sort, seq, test, ln, etc.
     ├── grep.ts           # grep with -i, -v, -n, -c, -l, -r flags
     ├── sed.ts            # sed with s/pattern/replace/flags and /pattern/d
-    ├── git.ts            # isomorphic-git: init, add, commit, status, log, diff, clone
+    ├── git.ts            # isomorphic-git: init, add, commit, status, log, diff, clone, remote set-url
     ├── find.ts           # find with -name, -type filters
     ├── fetch.ts          # fetch/curl - HTTP requests from the shell
     ├── diff.ts           # diff between two files
@@ -117,7 +117,7 @@ Shiro deploys to a **DigitalOcean droplet** at https://shiro.computer (`161.35.1
 
 A single Node.js server (`server.mjs`) handles everything: static files, API proxy, OAuth callback, WebRTC signaling, and WebSocket relay. Nginx sits in front with SSL (wildcard cert for `*.shiro.computer` via certbot-dns-porkbun).
 
-**Build output is a single self-contained HTML file** — all JS/CSS/favicon inlined by `vite-plugin-inline.ts`. No separate asset files. ~338KB gzipped.
+**Build output is a single self-contained HTML file** — all JS/CSS/favicon inlined by `vite-plugin-inline.ts`. No separate asset files. ~352KB gzipped.
 
 ```bash
 # Build and deploy to production
@@ -141,17 +141,49 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 ## Testing
 
-Tests live in the **windwalker** repo (`../windwalker/tests/shiro-vitest/`).
+Tests live in `windwalker/tests/shiro-vitest/` (monorepo subdirectory).
 Windwalker uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
+**300 tests across 15 test files** — all passing.
 
 ```bash
-cd ../windwalker
+cd windwalker
 npm install
-npm run test:shiro        # vitest unit/integration tests
+npm run test:shiro        # vitest unit/integration tests (300 tests, ~45s)
 npm run test:skyeyes:shiro # browser tests via skyeyes
 ```
 
 Running `npm test` in shiro will print these instructions as a reminder.
+
+### Test Files
+
+| File | Tests | What it covers |
+|------|-------|----------------|
+| `filesystem.test.ts` | VFS | IndexedDB-backed filesystem operations |
+| `shell.test.ts` | Shell | Parsing, pipes, env vars, quoting |
+| `commands.test.ts` | Coreutils | ls, cat, mkdir, rm, cp, mv, find, glob, which |
+| `git.test.ts` | Git | init, add, commit, remote add/set-url/remove |
+| `terminal-history.test.ts` | Terminal | History navigation, recall |
+| `virtual-server.test.ts` | Express | Express shim, service worker routing |
+| `node-runtime.test.ts` | Node.js | Runtime shim, interactive mode, setRawMode |
+| `page.test.ts` | Page | iframe interaction (click, text, eval) |
+| `claude-tools.test.ts` | **37 tests** | All Claude Code tool shim bugs (see below) |
+| `claude-code-install.test.ts` | E2E | Full `npm install -g @anthropic-ai/claude-code` + run |
+
+### Claude Code Tool Shim Tests (`claude-tools.test.ts`)
+
+Covers all 9 known bugs plus regression tests:
+- **Bug 1**: Write tool — `writeFileSync` + `readFileSync` coherence
+- **Bug 2**: Grep tool — `rg` command available and flag support
+- **Bug 3**: Edit tool — `readFileSync`/`writeFileSync` round-trip for partial edits
+- **Bug 4**: Glob tool — `statSync`/`readdirSync` recognize `fileCache` directories
+- **Bug 5**: Shell parser — `||` inside quoted strings not split as shell operator
+- **Bug 6**: Bash tool — `child_process.exec` sees files written by `writeFileSync`
+- **Bug 7**: TaskCreate — `utimesSync` shim for proper-lockfile's sync adapter
+- **Bug 8**: Git remote set-url — `deleteRemote` + `addRemote` pattern
+- **Bug 9**: Env secrets — `SECRET_PATTERNS` masking in `env` output
+- **Cache invalidation**: `fileCache` refresh after `execAsync` (shell → sync read coherence)
+- **xargs -I**: Fluffycoreutils xargs with `-I{}` placeholder substitution
+- **Overwrite coherence**: Multiple shell writes → sync reads always see latest
 
 ## Shell Features
 
@@ -192,7 +224,7 @@ Row 2: [ - ] [ | ] [ / ]  [~] [`] [$] [&]  ···spacer···  [ Copy] [ ; ]   [
 
 These were merged from separate repos with full commit history preserved (`git log -- subdir/` works):
 
-- **`fluffycoreutils/`**: Shared Unix commands library (ls, cat, grep, sed, etc.) — ES module consumed by Shiro and Foam
+- **`fluffycoreutils/`**: Shared Unix commands library (ls, cat, grep, sed, xargs with -I/-n/-d, etc.) — ES module consumed by Shiro and Foam via `src/fluffy-adapter.ts`
 - **`spirit/`**: *(removed)* — replaced by Claude Code (inner claude) running directly in Shiro
 - **`windwalker/`**: Test automation suite — vitest unit tests + skyeyes browser tests. Run: `cd windwalker && npm run test:shiro`
 - **`hypercompact/`**: HTML compression utilities for compact DOM representations
@@ -327,7 +359,7 @@ unbecome                    # Return to terminal (also: __shiro.unbecome() in co
 
 ## Claude Code (Inner Claude)
 
-The real `@anthropic-ai/claude-code` CLI (v2.1.37, 11MB bundled ESM) runs inside Shiro's Node.js runtime (`jseval.ts`). Both print mode (`claude -p "..."`) and interactive mode (`claude`) work.
+The real `@anthropic-ai/claude-code` CLI (v2.1.38, 11MB bundled ESM) runs inside Shiro's Node.js runtime (`jseval.ts`). Both print mode (`claude -p "..."`) and interactive mode (`claude`) work.
 
 **How it works:**
 - Shell finds `claude` → bin stub at `/usr/local/bin/claude` → follows to `cli.js`
@@ -347,8 +379,20 @@ The real `@anthropic-ai/claude-code` CLI (v2.1.37, 11MB bundled ESM) runs inside
 - `openSync` with 'w' flags truncates in fileCache (POSIX behavior); `writeSync` appends to that
 - `fs.promises.rename` updates fileCache so subsequent sync reads see moved content
 - Callback-style `fs.open/read/write` use real fd tracking (same as `openSync/writeSync`)
-- `pendingPromises` array tracks all async IDB writes; drained before script exit
+- `pendingPromises` array tracks all async IDB writes; drained before `execAsync` and script exit
 - Binary files (ELF, Mach-O) rejected at shell level with "cannot execute binary file"
+
+**Dual-layer cache coherence (`execAsync`):**
+- `writeFileSync` updates `fileCache` and queues an async IDB write in `pendingPromises`
+- Before `shell.execute()`, `pendingPromises` is drained so child processes see written files
+- After `shell.execute()`, `fileCache` is refreshed from Shiro FS cache so `readFileSync` sees shell-modified files
+- This two-phase drain/refresh keeps sync and async fs views coherent across `child_process.exec` calls
+
+**Bundled library compatibility:**
+- `__stubProxy` wraps failed module factories in Proxy that auto-stubs missing properties
+- `transformBundledESM` patches the lazy factory (`R=`) to catch init failures gracefully
+- `proper-lockfile` (bundled in CLI for TaskCreate file locking) uses a `toSync` wrapper that requires: `mkdirSync`, `realpathSync`, `statSync`, `rmdirSync`, `utimesSync` — all shimmed
+- `fluffycoreutils` xargs with `-I`, `-n`, `-d` flags works via `exec` function passed from `fluffy-adapter.ts`
 
 ## Skyeyes MCP Tools
 
