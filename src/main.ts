@@ -94,6 +94,7 @@ import { wrapFluffyCommand } from './fluffy-adapter';
 import { ShiroTerminal } from './terminal';
 import { ShiroProvider } from '../spirit/src/providers/shiro-provider';
 import { initFaviconUpdater, initTitle } from './favicon';
+import { initMobileInput } from './mobile-input';
 import buildNumber from '../build-number.txt?raw';
 import { CLAUDE_MD } from './claude-md-seed';
 
@@ -347,6 +348,9 @@ async function main() {
   });
 
   await terminal.start();
+
+  // Initialize mobile virtual keys and voice input
+  initMobileInput(terminal);
 
   // Initialize dynamic favicon (32x32 minimap of terminal content)
   initFaviconUpdater(terminal.term);

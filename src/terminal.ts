@@ -237,6 +237,11 @@ export class ShiroTerminal {
     return lines.slice(-50).join('\n');
   }
 
+  /** Inject raw input as if typed. Used by virtual keys and voice input. */
+  injectInput(data: string): void {
+    this.handleInput(data);
+  }
+
   /**
    * Enter raw mode - all keystrokes go directly to the callback.
    * Used by interactive commands like vi that need character-by-character input.

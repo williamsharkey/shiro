@@ -77,6 +77,55 @@
     @media (pointer: coarse) {
       #shiro-mobile-toolbar { display: flex; }
     }
+    /* Virtual key toolbar (mobile only) */
+    #shiro-vkeys {
+      display: none;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: 40px;
+      background: #2a2a3e;
+      border-top: 1px solid #3d3d5c;
+      overflow-x: auto;
+      overflow-y: hidden;
+      white-space: nowrap;
+      z-index: 999998;
+      -webkit-overflow-scrolling: auto;
+      padding: 3px 4px;
+    }
+    @media (pointer: coarse) {
+      #shiro-vkeys { display: flex; gap: 4px; align-items: center; }
+    }
+    .shiro-vkey {
+      flex-shrink: 0;
+      min-width: 38px;
+      height: 32px;
+      background: #3d3d5c;
+      color: #e0e0e0;
+      border: none;
+      border-radius: 5px;
+      font-family: monospace;
+      font-size: 13px;
+      padding: 0 8px;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .shiro-vkey:active { background: #5a5a7a; }
+    .shiro-vkey.mod { font-size: 11px; }
+    .shiro-vkey.active { background: #0a84ff; color: #fff; }
+    /* Mic button states */
+    .shiro-mic-btn.dictating {
+      color: #ff3b30 !important;
+      border-color: #ff3b30 !important;
+      animation: mic-pulse 1.5s ease-in-out infinite;
+    }
+    @keyframes mic-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
   </style>
 </head>
 <body>
