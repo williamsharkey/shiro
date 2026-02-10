@@ -6,6 +6,7 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import type { TerminalLike } from './commands/index';
+import { bufferToString } from './utils/copy-utils';
 
 export class WindowTerminal implements TerminalLike {
   term: Terminal;
@@ -137,6 +138,10 @@ export class WindowTerminal implements TerminalLike {
       this.rawModeCallback(data);
       return;
     }
+  }
+
+  getBufferContent(): string {
+    return bufferToString(this.term);
   }
 
   forceKill(): void {

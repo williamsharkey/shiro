@@ -2,6 +2,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { Shell } from './shell';
 import buildNumber from '../build-number.txt?raw';
+import { bufferToString, smartCopyProcess } from './utils/copy-utils';
 
 /**
  * HUD (Heads-Up Display) state for dynamic banner updates.
@@ -155,7 +156,7 @@ export class ShiroTerminal {
       if (selection) {
         try { await navigator.clipboard.writeText(selection); } catch {}
       } else {
-        const content = this.getBufferContent().split('\n').slice(-50).join('\n');
+        const content = smartCopyProcess(this.getLastCommandOutput());
         try { await navigator.clipboard.writeText(content); } catch {}
       }
     });
@@ -198,22 +199,42 @@ export class ShiroTerminal {
 
   /**
    * Get the terminal buffer content as a string.
+   * Respects xterm.js isWrapped flag to avoid spurious newlines on soft-wrapped lines.
    * Used by clip-report to copy terminal history.
    */
   getBufferContent(): string {
-    const buffer = this.term.buffer.active;
-    const lines: string[] = [];
-    for (let i = 0; i < buffer.length; i++) {
-      const line = buffer.getLine(i);
-      if (line) {
-        lines.push(line.translateToString(true));
+    return bufferToString(this.term);
+  }
+
+  /**
+   * Get the output of the last command by scanning backward for prompt patterns.
+   * Extracts text between the two most recent prompts. Falls back to last 50
+   * logical lines if fewer than 2 prompts are found.
+   */
+  getLastCommandOutput(): string {
+    const content = bufferToString(this.term);
+    const lines = content.split('\n');
+
+    // Match prompt patterns: user@host:path$ or user@host:pathℝ
+    const promptRe = /^.+@.+:.+[$ℝ] /;
+
+    // Find the last two prompt lines (scanning backward)
+    const promptIndices: number[] = [];
+    for (let i = lines.length - 1; i >= 0 && promptIndices.length < 2; i--) {
+      if (promptRe.test(lines[i])) {
+        promptIndices.unshift(i);
       }
     }
-    // Trim empty lines from end
-    while (lines.length > 0 && lines[lines.length - 1].trim() === '') {
-      lines.pop();
+
+    if (promptIndices.length >= 2) {
+      // Extract between 2nd-to-last prompt and last prompt
+      const start = promptIndices[0] + 1;
+      const end = promptIndices[1];
+      return lines.slice(start, end).join('\n');
     }
-    return lines.join('\n');
+
+    // Fallback: last 50 logical lines
+    return lines.slice(-50).join('\n');
   }
 
   /**

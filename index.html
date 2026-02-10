@@ -53,21 +53,26 @@
       gap: 8px;
     }
     #shiro-mobile-toolbar button {
-      width: 44px;
-      height: 44px;
-      border-radius: 50%;
+      height: 36px;
+      padding: 0 14px;
+      border-radius: 18px;
       border: 1px solid #3d3d5c;
       background: #1a1a2e;
       color: #e0e0e0;
-      font-size: 18px;
+      font-size: 13px;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
       cursor: pointer;
       touch-action: manipulation;
       display: flex;
       align-items: center;
       justify-content: center;
+      user-select: none;
+      -webkit-user-select: none;
+      transition: background 0.1s, transform 0.1s;
     }
     #shiro-mobile-toolbar button:active {
       background: #3d3d5c;
+      transform: scale(0.95);
     }
     @media (pointer: coarse) {
       #shiro-mobile-toolbar { display: flex; }
@@ -77,8 +82,8 @@
 <body>
   <div id="terminal"></div>
   <div id="shiro-mobile-toolbar">
-    <button id="shiro-paste-btn" title="Paste">&#x1F4CB;</button>
-    <button id="shiro-copy-btn" title="Copy">&#x1F4C4;</button>
+    <button id="shiro-paste-btn" title="Paste">Paste</button>
+    <button id="shiro-copy-btn" title="Copy">Copy</button>
   </div>
   <script type="module" src="/src/main.ts"></script>
 </body>

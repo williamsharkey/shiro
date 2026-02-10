@@ -56,6 +56,7 @@ src/
     ├── ps.ts             # ps (list processes) and kill (terminate by PID)
     └── html.ts           # html (render HTML in window) and img (display image)
 └── utils/
+    ├── copy-utils.ts     # bufferToString (isWrapped-aware), smartCopyProcess (indent strip)
     ├── tar-utils.ts      # gzip decompression and tar extraction
     └── semver-utils.ts   # semantic versioning and range resolution
 server.mjs                   # Unified Node.js server (proxy, signaling, relay, static)

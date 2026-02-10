@@ -48,6 +48,8 @@ export const spawnCmd: Command = {
     const winTerm = new WindowTerminal(win.contentDiv!);
     // Wire up secret masking so tokens never appear on screen
     winTerm.secretMasker = (text: string) => childShell.maskSecrets(text);
+    // Wire copy/paste buttons to this terminal
+    win.setTerminal?.(winTerm);
 
     // Wire up process
     proc.windowTerminal = winTerm;

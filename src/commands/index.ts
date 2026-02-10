@@ -10,6 +10,7 @@ export interface TerminalLike {
   isRawMode(): boolean;
   onResize(cb: (cols: number, rows: number) => void): () => void;
   getSize(): { rows: number; cols: number };
+  getBufferContent?(): string;
   term: any; // xterm.js Terminal instance
 }
 

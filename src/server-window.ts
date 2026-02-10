@@ -5,6 +5,8 @@
  * and a title bar showing the server info.
  */
 
+import { smartCopyProcess } from './utils/copy-utils';
+
 export interface ServerWindowOptions {
   port?: number;
   path?: string;
@@ -26,6 +28,7 @@ export interface ServerWindow {
   maximize: () => void;
   setTitle: (title: string) => void;
   updateIframe: (html: string) => void;
+  setTerminal?: (wt: import('./window-terminal').WindowTerminal) => void;
 }
 
 export function createServerWindow(options: ServerWindowOptions): ServerWindow {
@@ -181,6 +184,37 @@ export function createServerWindow(options: ServerWindowOptions): ServerWindow {
   titleBar.appendChild(dots);
   titleBar.appendChild(title);
 
+  // Copy/Paste buttons for terminal-mode windows
+  let copyBtn: HTMLButtonElement | null = null;
+  let pasteBtn: HTMLButtonElement | null = null;
+  if (mode === 'terminal') {
+    const btnStyle = `
+      height:22px;padding:0 8px;border-radius:11px;border:1px solid #3d3d5c;
+      background:#1a1a2e;color:#8888cc;font-size:11px;cursor:pointer;
+      font-family:-apple-system,BlinkMacSystemFont,sans-serif;
+      user-select:none;-webkit-user-select:none;
+      transition:background 0.1s,transform 0.1s;margin-left:4px;
+    `.replace(/\n\s*/g, '');
+
+    pasteBtn = document.createElement('button');
+    pasteBtn.textContent = 'Paste';
+    pasteBtn.style.cssText = btnStyle;
+
+    copyBtn = document.createElement('button');
+    copyBtn.textContent = 'Copy';
+    copyBtn.style.cssText = btnStyle;
+
+    // Active press feedback
+    for (const btn of [pasteBtn, copyBtn]) {
+      btn.addEventListener('pointerdown', () => { btn.style.transform = 'scale(0.95)'; });
+      btn.addEventListener('pointerup', () => { btn.style.transform = ''; });
+      btn.addEventListener('pointerleave', () => { btn.style.transform = ''; });
+    }
+
+    titleBar.appendChild(pasteBtn);
+    titleBar.appendChild(copyBtn);
+  }
+
   // Content area: iframe or terminal div
   let iframe: HTMLIFrameElement;
   let contentDiv: HTMLDivElement | null = null;
@@ -326,6 +360,26 @@ export function createServerWindow(options: ServerWindowOptions): ServerWindow {
     updateIframe: (html: string) => {
       iframe.srcdoc = html;
     },
+    setTerminal: mode === 'terminal' ? (wt) => {
+      if (copyBtn) {
+        onTap(copyBtn, async () => {
+          const selection = wt.term.getSelection?.();
+          const content = selection || smartCopyProcess(wt.getBufferContent());
+          try { await navigator.clipboard.writeText(content); } catch {}
+        });
+      }
+      if (pasteBtn) {
+        onTap(pasteBtn, async () => {
+          try {
+            const text = await navigator.clipboard.readText();
+            if (text) wt.term.paste(text);
+          } catch {
+            const text = prompt('Paste text:');
+            if (text) wt.term.paste(text);
+          }
+        });
+      }
+    } : undefined,
   };
 }
 
