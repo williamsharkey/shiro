@@ -59,7 +59,8 @@ src/
     ├── ps.ts             # ps (list processes) and kill (terminate by PID)
     ├── html.ts           # html (render HTML in window) and img (display image)
     ├── page.ts           # page: interact with served app iframes (click, input, text, eval, etc.)
-    └── become.ts         # become/unbecome: full-screen app mode with shareable URLs
+    ├── become.ts         # become/unbecome: full-screen app mode with shareable URLs
+    └── sc.ts             # sc: spawn Claude Code in a new terminal window
 ├── gif-encoder.ts       # Zero-dep GIF89a encoder + SHIRO1.0 seed extractor
 ├── drop-handler.ts      # Drag-and-drop seed GIF import onto terminal
 └── utils/

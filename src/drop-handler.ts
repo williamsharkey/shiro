@@ -58,14 +58,25 @@ async function promptSeedRestore(terminal: ShiroTerminal, seed: SeedData): Promi
 
   term.writeln('');
   term.writeln('\x1b[36m\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557\x1b[0m');
-  term.writeln('\x1b[36m\u2551\x1b[0m  \x1b[1;97mShiro Snapshot Detected\x1b[0m                 \x1b[36m\u2551\x1b[0m');
-  term.writeln('\x1b[36m\u2551\x1b[0m                                          \x1b[36m\u2551\x1b[0m');
-  term.writeln(`\x1b[36m\u2551\x1b[0m  Files: ${String(seed.files).padEnd(8)} Size: ${sizeMB.padEnd(8)} MB   \x1b[36m\u2551\x1b[0m`);
-  term.writeln(`\x1b[36m\u2551\x1b[0m  From:  ${seed.hostname.slice(0, 30).padEnd(30)}  \x1b[36m\u2551\x1b[0m`);
-  term.writeln(`\x1b[36m\u2551\x1b[0m  Date:  ${date.slice(0, 30).padEnd(30)}  \x1b[36m\u2551\x1b[0m`);
-  term.writeln('\x1b[36m\u2551\x1b[0m                                          \x1b[36m\u2551\x1b[0m');
-  term.writeln('\x1b[36m\u2551\x1b[0m  \x1b[33mThis will replace all current files.\x1b[0m     \x1b[36m\u2551\x1b[0m');
-  term.writeln('\x1b[36m\u2551\x1b[0m  Type \x1b[1;97mrestore\x1b[0m to confirm.                \x1b[36m\u2551\x1b[0m');
+  // Box interior is 42 chars wide (matching 42 ═ in top/bottom borders)
+  // Helper: pad a string with ANSI codes to exactly W visible chars
+  const W = 42;
+  const visLen = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '').length;
+  const rpad = (s: string) => s + ' '.repeat(Math.max(0, W - visLen(s)));
+  const blank = ' '.repeat(W);
+  const L = '\x1b[36m\u2551\x1b[0m'; // left border
+  const R = '\x1b[36m\u2551\x1b[0m'; // right border
+  term.writeln(`${L}${rpad('  \x1b[1;97mShiro Snapshot Detected\x1b[0m')}${R}`);
+  term.writeln(`${L}${blank}${R}`);
+  const filesLine = `  Files: ${String(seed.files).padEnd(8)}Size: ${sizeMB.padStart(7)} MB  `;
+  term.writeln(`${L}${rpad(filesLine)}${R}`);
+  const fromLine = `  From:  ${seed.hostname.slice(0, 32)}`;
+  term.writeln(`${L}${rpad(fromLine)}${R}`);
+  const dateLine = `  Date:  ${date.slice(0, 32)}`;
+  term.writeln(`${L}${rpad(dateLine)}${R}`);
+  term.writeln(`${L}${blank}${R}`);
+  term.writeln(`${L}${rpad('  \x1b[33mThis will replace all current files.\x1b[0m')}${R}`);
+  term.writeln(`${L}${rpad('  Type \x1b[1;97mrestore\x1b[0m to confirm.')}${R}`);
   term.writeln('\x1b[36m\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d\x1b[0m');
   term.write('\x1b[33m> \x1b[0m');
 
