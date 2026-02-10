@@ -4,409 +4,413 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Shiro — Browser OS</title>
-  <meta name="description" content="A Unix shell that runs in a browser tab. 150 commands, persistent files, git, npm, live web servers — all in one HTML file.">
+  <meta name="description" content="A Unix shell that runs in a browser tab. 150+ commands, persistent files, git, npm, web servers — all in one HTML file.">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
-      background: #0a0a0a;
-      color: #999;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      line-height: 1.6;
+      background: #fffff8;
+      color: #111;
+      font-family: 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif;
+      line-height: 1.7;
       -webkit-font-smoothing: antialiased;
     }
 
-    a { color: #7eb8c9; text-decoration: none; }
-    a:hover { text-decoration: underline; }
-
-    .page {
+    article {
       max-width: 740px;
       margin: 0 auto;
-      padding: 60px 24px 80px;
+      padding: 48px 24px 80px;
     }
 
-    /* Header */
-    .header {
-      margin-bottom: 64px;
-    }
+    a { color: #3b6e8f; text-decoration: none; }
+    a:hover { text-decoration: underline; }
 
-    .header h1 {
-      font-size: 2.4rem;
-      font-weight: 600;
-      color: #f0f0f0;
-      letter-spacing: -0.02em;
-      margin-bottom: 8px;
-    }
-
-    .header .subtitle {
-      font-size: 1.1rem;
-      color: #666;
-      max-width: 520px;
-    }
-
-    .back-link {
+    .back {
       display: inline-block;
       margin-bottom: 32px;
       font-size: 0.85rem;
+      color: #999;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    .back:hover { color: #666; text-decoration: none; }
+
+    h1 {
+      font-size: 2.2rem;
+      font-weight: 400;
+      margin-bottom: 6px;
+      line-height: 1.2;
+    }
+
+    .subtitle {
+      font-size: 1.05rem;
       color: #555;
-    }
-    .back-link:hover { color: #888; text-decoration: none; }
-
-    /* Demo cards */
-    .demo-card {
-      margin-bottom: 56px;
-    }
-
-    .demo-card h2 {
-      font-size: 1.15rem;
-      font-weight: 500;
-      color: #ccc;
-      margin-bottom: 12px;
-    }
-
-    .demo-card .card-desc {
-      font-size: 0.9rem;
-      color: #666;
-      margin-bottom: 12px;
-    }
-
-    /* Terminal */
-    .demo-terminal {
-      background: #111;
-      border: 1px solid #222;
-      border-radius: 8px;
-      font-family: "SF Mono", "Fira Code", Consolas, "Liberation Mono", Menlo, monospace;
-      font-size: 0.82rem;
-      line-height: 1.55;
-      overflow: hidden;
-      position: relative;
-    }
-
-    .demo-terminal .term-body {
-      padding: 14px 16px;
-      max-height: 400px;
-      overflow-y: auto;
-      scroll-behavior: smooth;
-    }
-
-    .demo-terminal .term-body::-webkit-scrollbar { width: 6px; }
-    .demo-terminal .term-body::-webkit-scrollbar-track { background: transparent; }
-    .demo-terminal .term-body::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
-
-    .term-line { white-space: pre-wrap; word-break: break-all; }
-    .term-prompt { color: #58a6ff; }
-    .term-cmd { color: #e6e6e6; }
-    .term-output { color: #8b949e; }
-    .term-note {
-      color: #58a6ff;
-      font-style: italic;
-      opacity: 0.7;
-      display: block;
-      margin: 4px 0 2px;
-    }
-
-    .term-cursor {
-      display: inline-block;
-      width: 7px;
-      height: 14px;
-      background: #58a6ff;
-      vertical-align: text-bottom;
-      animation: blink 1s step-end infinite;
-    }
-
-    @keyframes blink {
-      50% { opacity: 0; }
-    }
-
-    /* Controls */
-    .demo-controls {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 16px;
-      background: #0d0d0d;
-      border-top: 1px solid #1a1a1a;
-    }
-
-    .demo-controls button {
-      padding: 4px 14px;
-      font-size: 0.72rem;
-      font-family: "SF Mono", monospace;
-      background: #1a1a1a;
-      color: #888;
-      border: 1px solid #2a2a2a;
-      border-radius: 4px;
-      cursor: pointer;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      transition: all 0.15s;
-    }
-
-    .demo-controls button:hover {
-      background: #252525;
-      color: #bbb;
-    }
-
-    .demo-controls button.playing {
-      color: #58a6ff;
-      border-color: #58a6ff44;
-    }
-
-    .demo-controls .step-counter {
-      font-size: 0.7rem;
-      font-family: "SF Mono", monospace;
-      color: #444;
-      margin-left: auto;
-    }
-
-    .demo-controls .speed-btn {
-      padding: 4px 8px;
-      font-size: 0.68rem;
-    }
-
-    .demo-controls .speed-btn.active {
-      color: #58a6ff;
-      border-color: #58a6ff44;
-    }
-
-    /* Preview panel */
-    .demo-preview {
-      border: 1px solid #222;
-      border-top: none;
-      border-radius: 0 0 8px 8px;
-      overflow: hidden;
-      background: #fff;
-    }
-
-    .demo-preview iframe {
-      width: 100%;
-      height: 280px;
-      border: none;
-      display: block;
-    }
-
-    .demo-preview .preview-label {
-      font-size: 0.65rem;
-      font-family: "SF Mono", monospace;
-      color: #444;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      padding: 4px 12px;
-      background: #0d0d0d;
-      border-bottom: 1px solid #1a1a1a;
-    }
-
-    /* Opus hero section */
-    .opus-card {
-      margin-top: 80px;
-      margin-bottom: 56px;
-    }
-
-    .opus-card h2 {
-      font-size: 1.5rem;
-      font-weight: 600;
-      color: #f0f0f0;
+      max-width: 540px;
       margin-bottom: 6px;
     }
 
-    .opus-card .opus-sub {
-      font-size: 0.95rem;
-      color: #555;
-      margin-bottom: 16px;
+    .status {
+      font-size: 0.72rem;
+      font-family: 'SF Mono', Consolas, monospace;
+      color: #bbb;
+      margin-bottom: 48px;
+    }
+    .status.ready { color: #3fb950; }
+    .status.error { color: #d32f2f; }
+
+    /* Tooltips */
+    .noted {
+      text-decoration-line: underline;
+      text-decoration-style: dotted;
+      text-decoration-color: #aaa;
+      text-underline-offset: 3px;
+      cursor: help;
+      position: relative;
+    }
+    .noted .tip {
+      display: none;
+      position: absolute;
+      bottom: calc(100% + 8px);
+      left: 50%;
+      transform: translateX(-50%);
+      width: max-content;
+      max-width: 320px;
+      padding: 8px 12px;
+      background: #333;
+      color: #eee;
+      font-size: 0.76rem;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      border-radius: 4px;
+      line-height: 1.45;
+      z-index: 100;
+      white-space: normal;
+      pointer-events: none;
+      font-style: normal;
+    }
+    .noted .tip::after {
+      content: '';
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      border: 6px solid transparent;
+      border-top-color: #333;
+    }
+    .noted:hover .tip { display: block; }
+
+    /* Sections */
+    section { margin-bottom: 48px; }
+
+    .demo-header {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      margin-bottom: 4px;
     }
 
-    .opus-card .demo-terminal .term-body {
-      max-height: 520px;
+    section h2 {
+      font-size: 1.15rem;
+      font-weight: 400;
+      font-style: italic;
+    }
+
+    section p.desc {
+      font-size: 0.9rem;
+      color: #555;
+      margin-bottom: 8px;
+    }
+
+    /* Buttons */
+    .demo-btn {
+      background: none;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      padding: 2px 10px;
+      font-size: 0.7rem;
+      color: #777;
+      cursor: pointer;
+      font-family: 'SF Mono', Consolas, monospace;
+      letter-spacing: 0.03em;
+      transition: all 0.15s;
+    }
+    .demo-btn:hover { border-color: #888; color: #444; }
+    .demo-btn.playing { color: #3b6e8f; border-color: #3b6e8f; }
+
+    .reset-btn {
+      background: none;
+      border: none;
+      padding: 2px 4px;
+      font-size: 0.65rem;
+      color: #bbb;
+      cursor: pointer;
+      font-family: 'SF Mono', Consolas, monospace;
+    }
+    .reset-btn:hover { color: #888; }
+
+    /* Demo slot — holds the shared real terminal iframe */
+    .demo-slot {
+      height: 320px;
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 8px 0;
+      background: #1a1a2e;
+      position: relative;
+    }
+    .demo-slot iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+      display: block;
+    }
+    .demo-slot:empty::after {
+      content: 'click play';
+      position: absolute;
+      top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      color: #3d3d5c;
+      font-family: 'SF Mono', Consolas, monospace;
+      font-size: 0.75rem;
+    }
+    .demo-slot-tall { height: 400px; }
+
+    /* Preview */
+    .preview {
+      border: 1px solid #ddd;
+      border-radius: 0 0 6px 6px;
+      margin-top: -8px;
+      overflow: hidden;
+      background: #fff;
+    }
+    .preview iframe { width: 100%; height: 260px; border: none; display: block; }
+    .preview-label {
+      font-size: 0.62rem;
+      font-family: 'SF Mono', monospace;
+      color: #bbb;
+      padding: 3px 12px;
+      background: #f8f8f2;
+      border-bottom: 1px solid #eee;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    /* Info sections */
+    .info-section { margin-top: 64px; margin-bottom: 48px; }
+    .info-section h2 {
+      font-size: 1.15rem;
+      font-weight: 400;
+      font-style: italic;
+      margin-bottom: 8px;
+    }
+    .info-section p {
+      font-size: 0.9rem;
+      color: #444;
+      margin-bottom: 8px;
+    }
+    .info-section code {
+      font-family: 'SF Mono', Consolas, monospace;
+      font-size: 0.84em;
+      background: #f0f0e8;
+      padding: 1px 4px;
+      border-radius: 2px;
+    }
+
+    /* Isolation diagram */
+    .iso-table {
+      font-family: 'SF Mono', Consolas, monospace;
+      font-size: 0.76rem;
+      margin: 14px 0;
+      border-collapse: collapse;
+    }
+    .iso-table td {
+      padding: 5px 10px;
+      border-bottom: 1px solid #e8e8e0;
+      color: #555;
+    }
+    .iso-table .url { color: #3b6e8f; }
+    .iso-table .arrow { color: #ccc; text-align: center; width: 28px; }
+    .iso-table .db { color: #999; }
+
+    /* Seed mockup */
+    .mockup { margin: 16px 0; }
+    .mockup-step { margin-bottom: 10px; }
+    .mockup-label {
+      font-size: 0.75rem;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      color: #999;
+      margin-bottom: 3px;
+    }
+    .mockup-terminal {
+      background: #111;
+      border-radius: 4px;
+      padding: 10px 14px;
+      font-family: 'SF Mono', Consolas, monospace;
+      font-size: 0.78rem;
+      line-height: 1.5;
+    }
+    .mockup-console {
+      background: #f5f5f0;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 10px 14px;
+      font-family: 'SF Mono', Consolas, monospace;
+      font-size: 0.78rem;
+      line-height: 1.5;
+      color: #444;
+    }
+    .mockup-arrow {
+      text-align: center;
+      color: #ccc;
+      font-size: 1.1rem;
+      margin: 2px 0;
     }
 
     /* Footer */
-    .footer {
-      margin-top: 80px;
-      padding-top: 24px;
-      border-top: 1px solid #1a1a1a;
-      font-size: 0.85rem;
-      color: #444;
+    footer {
+      margin-top: 72px;
+      padding-top: 20px;
+      border-top: 1px solid #e0e0d8;
+      font-size: 0.82rem;
+      color: #999;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
     }
+    footer .links { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 10px; }
+    footer a { color: #999; }
+    footer a:hover { color: #666; }
 
-    .footer a { color: #666; }
-    .footer a:hover { color: #999; }
-
-    .footer .links {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 16px;
-      margin-bottom: 16px;
-    }
-
-    /* Responsive */
     @media (max-width: 600px) {
-      .page { padding: 32px 16px 60px; }
-      .header h1 { font-size: 1.8rem; }
-      .demo-terminal .term-body { font-size: 0.75rem; padding: 10px 12px; }
+      article { padding: 28px 16px 60px; }
+      h1 { font-size: 1.8rem; }
+      .demo-slot { height: 280px; }
     }
-
-    /* Hidden shiro iframe */
-    #shiro-engine {
-      position: fixed;
-      width: 1px;
-      height: 1px;
-      top: -9999px;
-      left: -9999px;
-      opacity: 0;
-      pointer-events: none;
-    }
-
-    /* Loading indicator */
-    .engine-status {
-      font-size: 0.72rem;
-      font-family: "SF Mono", monospace;
-      color: #333;
-      margin-bottom: 48px;
-    }
-    .engine-status.ready { color: #3fb950; }
-    .engine-status.error { color: #f85149; }
   </style>
 </head>
 <body>
-  <div class="page">
-    <a href="/" class="back-link">&larr; shiro.computer</a>
+  <article>
+    <a href="/" class="back">&larr; shiro.computer</a>
 
-    <div class="header">
-      <h1>Shiro</h1>
-      <p class="subtitle">A Unix shell in a browser tab. Files, pipes, git, npm, live web servers — all in one HTML file. Watch it work.</p>
-    </div>
+    <h1>Shiro</h1>
+    <p class="subtitle">
+      A Unix shell in a browser tab.
+      <span class="noted">150+ commands<span class="tip">cat, ls, grep, sed, find, sort, cut, awk, diff, head, tail, wc, tr, tee, uniq, mkdir, rm, cp, mv, echo, touch, chmod, ln, env, which, git, npm, node, vi, nano, curl, and more.</span></span>,
+      <span class="noted">persistent files<span class="tip">Stored in IndexedDB. Survives page reloads and browser restarts. Clear via dev tools or the rm command.</span></span>,
+      <span class="noted">git<span class="tip">Powered by isomorphic-git. Supports init, add, commit, status, log, diff, clone, branch, checkout. Not available: merge, rebase, stash, push, pull.</span></span>,
+      <span class="noted">npm<span class="tip">Installs packages from the npm registry via a server-side proxy. Supports install, uninstall, list, run.</span></span>,
+      <span class="noted">web servers<span class="tip">Virtual servers using iframes with srcdoc. HTML, CSS, and JS served from the virtual filesystem. No real HTTP — stays in the browser.</span></span>
+      — all in <span class="noted">one HTML file<span class="tip">~358 KB gzipped. All JavaScript and CSS inlined by Vite. No external assets.</span></span>.
+    </p>
 
-    <div id="engine-status" class="engine-status">loading shiro...</div>
+    <div id="engine-status" class="status">loading shiro&hellip;</div>
 
-    <!-- Demo 1: Hello -->
-    <div class="demo-card" id="demo-hello">
-      <h2>Pipes work</h2>
-      <div class="demo-terminal">
-        <div class="term-body"></div>
-        <div class="demo-controls">
-          <button class="play-btn" onclick="demos.hello.play()">Play</button>
-          <button onclick="demos.hello.reset()">Reset</button>
-          <span class="step-counter"></span>
-          <button class="speed-btn active" onclick="setSpeed('hello',1)">1x</button>
-          <button class="speed-btn" onclick="setSpeed('hello',2)">2x</button>
-          <button class="speed-btn" onclick="setSpeed('hello',3)">3x</button>
-        </div>
+    <!-- Demo 1: Pipes -->
+    <section id="demo-pipes">
+      <div class="demo-header">
+        <h2>Pipes</h2>
+        <button class="demo-btn" onclick="demos.pipes.play()">&#9654; Play</button>
+        <button class="reset-btn" onclick="demos.pipes.reset()">Reset</button>
       </div>
-    </div>
+      <p class="desc">Pipes, redirects, and the usual shell plumbing.</p>
+      <div class="demo-slot"></div>
+    </section>
 
     <!-- Demo 2: Files -->
-    <div class="demo-card" id="demo-files">
-      <h2>Files persist in the browser</h2>
-      <div class="demo-terminal">
-        <div class="term-body"></div>
-        <div class="demo-controls">
-          <button class="play-btn" onclick="demos.files.play()">Play</button>
-          <button onclick="demos.files.reset()">Reset</button>
-          <span class="step-counter"></span>
-          <button class="speed-btn active" onclick="setSpeed('files',1)">1x</button>
-          <button class="speed-btn" onclick="setSpeed('files',2)">2x</button>
-          <button class="speed-btn" onclick="setSpeed('files',3)">3x</button>
-        </div>
+    <section id="demo-files">
+      <div class="demo-header">
+        <h2>Files persist</h2>
+        <button class="demo-btn" onclick="demos.files.play()">&#9654; Play</button>
+        <button class="reset-btn" onclick="demos.files.reset()">Reset</button>
       </div>
-    </div>
+      <p class="desc"><span class="noted">Stored in IndexedDB<span class="tip">Each file is an IndexedDB record with path, content, and metadata. An in-memory cache makes reads fast; writes flush async to IndexedDB.</span></span>. Survives page reloads.</p>
+      <div class="demo-slot"></div>
+    </section>
 
-    <!-- Demo 3: Text Processing -->
-    <div class="demo-card" id="demo-text">
-      <h2>grep, sort, cut, awk</h2>
-      <div class="demo-terminal">
-        <div class="term-body"></div>
-        <div class="demo-controls">
-          <button class="play-btn" onclick="demos.text.play()">Play</button>
-          <button onclick="demos.text.reset()">Reset</button>
-          <span class="step-counter"></span>
-          <button class="speed-btn active" onclick="setSpeed('text',1)">1x</button>
-          <button class="speed-btn" onclick="setSpeed('text',2)">2x</button>
-          <button class="speed-btn" onclick="setSpeed('text',3)">3x</button>
-        </div>
+    <!-- Demo 3: Text tools -->
+    <section id="demo-text">
+      <div class="demo-header">
+        <h2>Text tools</h2>
+        <button class="demo-btn" onclick="demos.text.play()">&#9654; Play</button>
+        <button class="reset-btn" onclick="demos.text.reset()">Reset</button>
       </div>
-    </div>
+      <p class="desc"><span class="noted">grep, sort, cut, awk<span class="tip">JavaScript implementations of standard Unix text tools. Most common flags supported. Part of the fluffycoreutils shared library.</span></span> — the standard toolkit.</p>
+      <div class="demo-slot"></div>
+    </section>
 
     <!-- Demo 4: Git -->
-    <div class="demo-card" id="demo-git">
-      <h2>Git works</h2>
-      <div class="demo-terminal">
-        <div class="term-body"></div>
-        <div class="demo-controls">
-          <button class="play-btn" onclick="demos.git.play()">Play</button>
-          <button onclick="demos.git.reset()">Reset</button>
-          <span class="step-counter"></span>
-          <button class="speed-btn active" onclick="setSpeed('git',1)">1x</button>
-          <button class="speed-btn" onclick="setSpeed('git',2)">2x</button>
-          <button class="speed-btn" onclick="setSpeed('git',3)">3x</button>
-        </div>
+    <section id="demo-git">
+      <div class="demo-header">
+        <h2><span class="noted">Git works<span class="tip"><strong>Included:</strong> init, add, commit, status, log, diff, clone, branch, checkout, rm, tag.<br><strong>Not available:</strong> merge, rebase, stash, cherry-pick, push, pull, remote operations, submodules.</span></span></h2>
+        <button class="demo-btn" onclick="demos.git.play()">&#9654; Play</button>
+        <button class="reset-btn" onclick="demos.git.reset()">Reset</button>
       </div>
-    </div>
+      <p class="desc">Local repository operations via <span class="noted">isomorphic-git<span class="tip">A pure JavaScript git implementation. Runs entirely in the browser with no native binaries. Stores objects in IndexedDB.</span></span>.</p>
+      <div class="demo-slot"></div>
+    </section>
 
-    <!-- Demo 5: Build a Web Page -->
-    <div class="demo-card" id="demo-web">
-      <h2>Build a web page</h2>
-      <p class="card-desc">Write HTML and CSS, serve it live, edit it in place.</p>
-      <div class="demo-terminal" style="border-radius: 8px 8px 0 0;">
-        <div class="term-body"></div>
-        <div class="demo-controls">
-          <button class="play-btn" onclick="demos.web.play()">Play</button>
-          <button onclick="demos.web.reset()">Reset</button>
-          <span class="step-counter"></span>
-          <button class="speed-btn active" onclick="setSpeed('web',1)">1x</button>
-          <button class="speed-btn" onclick="setSpeed('web',2)">2x</button>
-          <button class="speed-btn" onclick="setSpeed('web',3)">3x</button>
-        </div>
+    <!-- Demo 5: Serve a page -->
+    <section id="demo-page">
+      <div class="demo-header">
+        <h2>Serve a page</h2>
+        <button class="demo-btn" onclick="demos.page.play()">&#9654; Play</button>
+        <button class="reset-btn" onclick="demos.page.reset()">Reset</button>
       </div>
-      <div class="demo-preview">
+      <p class="desc">Write HTML, <span class="noted">serve it<span class="tip">The serve command creates a virtual HTTP server. Content is loaded into an iframe via srcdoc with injected scripts for link and fetch interception.</span></span>, edit in place.</p>
+      <div class="demo-slot" style="border-radius:6px 6px 0 0;margin-bottom:0"></div>
+      <div class="preview">
         <div class="preview-label">preview</div>
-        <iframe id="preview-web"></iframe>
+        <iframe id="preview-page"></iframe>
       </div>
-    </div>
+    </section>
 
-    <!-- Demo 6: Todo App -->
-    <div class="demo-card" id="demo-todo">
-      <h2>Build a todo app</h2>
-      <p class="card-desc">Write an interactive app, serve it, interact with it, add features live.</p>
-      <div class="demo-terminal" style="border-radius: 8px 8px 0 0;">
-        <div class="term-body"></div>
-        <div class="demo-controls">
-          <button class="play-btn" onclick="demos.todo.play()">Play</button>
-          <button onclick="demos.todo.reset()">Reset</button>
-          <span class="step-counter"></span>
-          <button class="speed-btn active" onclick="setSpeed('todo',1)">1x</button>
-          <button class="speed-btn" onclick="setSpeed('todo',2)">2x</button>
-          <button class="speed-btn" onclick="setSpeed('todo',3)">3x</button>
+    <!-- Demo 6: Interact with an app -->
+    <section id="demo-interact">
+      <div class="demo-header">
+        <h2>Interact with an app</h2>
+        <button class="demo-btn" onclick="demos.interact.play()">&#9654; Play</button>
+        <button class="reset-btn" onclick="demos.interact.reset()">Reset</button>
+      </div>
+      <p class="desc">Serve an app, use <code>page</code> to click and read DOM elements, then commit.</p>
+      <div class="demo-slot demo-slot-tall" style="border-radius:6px 6px 0 0;margin-bottom:0"></div>
+      <div class="preview">
+        <div class="preview-label">preview</div>
+        <iframe id="preview-interact"></iframe>
+      </div>
+    </section>
+
+    <!-- Isolated filesystems -->
+    <section class="info-section">
+      <h2>Isolated filesystems</h2>
+      <p>Each subdomain is a separate <span class="noted">web origin<span class="tip">The browser's same-origin policy gives each origin its own IndexedDB, localStorage, cookies, and service worker scope.</span></span>. The browser keeps their storage completely separate.</p>
+      <table class="iso-table">
+        <tr><td class="url">shiro.computer</td><td class="arrow">&rarr;</td><td class="db">its own IndexedDB</td></tr>
+        <tr><td class="url">tictactoe.shiro.computer</td><td class="arrow">&rarr;</td><td class="db">its own IndexedDB</td></tr>
+        <tr><td class="url">game.shiro.computer</td><td class="arrow">&rarr;</td><td class="db">its own IndexedDB</td></tr>
+      </table>
+      <p>Visit <code>app.shiro.computer</code> and you get a clean filesystem. Your files at <code>shiro.computer</code> are untouched.</p>
+    </section>
+
+    <!-- Seed -->
+    <section class="info-section">
+      <h2>Seed</h2>
+      <p>Export your entire filesystem to the clipboard with one command. Paste it into any browser's dev console to load it.</p>
+      <div class="mockup">
+        <div class="mockup-step">
+          <div class="mockup-label">1. In Shiro</div>
+          <div class="mockup-terminal">
+            <div style="white-space:pre;color:#8b949e"><span style="color:#58a6ff">~ $ </span><span style="color:#e0e0e0">seed</span>
+Copied to clipboard (42 KB)</div>
+          </div>
+        </div>
+        <div class="mockup-arrow">&darr;</div>
+        <div class="mockup-step">
+          <div class="mockup-label">2. Any browser &mdash; open dev console (F12)</div>
+          <div class="mockup-console">
+            <div><span style="color:#3b6e8f">&gt;</span> <span style="color:#aaa">[paste]</span></div>
+            <div style="color:#666">Loading shiro with 147 files&hellip;</div>
+          </div>
         </div>
       </div>
-      <div class="demo-preview">
-        <div class="preview-label">preview</div>
-        <iframe id="preview-todo"></iframe>
-      </div>
-    </div>
+      <p style="font-size:0.82rem;color:#999">The snippet creates an iframe, loads Shiro, and hydrates the filesystem. Works on any page.</p>
+    </section>
 
-    <!-- Demo 7: The Opus -->
-    <div class="demo-card opus-card" id="demo-opus">
-      <h2>The Opus</h2>
-      <p class="opus-sub">Full dev cycle — scaffold, serve, interact, git commit, add features, ship.</p>
-      <div class="demo-terminal" style="border-radius: 8px 8px 0 0;">
-        <div class="term-body"></div>
-        <div class="demo-controls">
-          <button class="play-btn" onclick="demos.opus.play()">Play</button>
-          <button onclick="demos.opus.reset()">Reset</button>
-          <span class="step-counter"></span>
-          <button class="speed-btn active" onclick="setSpeed('opus',1)">1x</button>
-          <button class="speed-btn" onclick="setSpeed('opus',2)">2x</button>
-          <button class="speed-btn" onclick="setSpeed('opus',3)">3x</button>
-        </div>
-      </div>
-      <div class="demo-preview">
-        <div class="preview-label">preview</div>
-        <iframe id="preview-opus"></iframe>
-      </div>
-    </div>
-
-    <!-- Footer -->
-    <div class="footer">
+    <footer>
       <div class="links">
         <a href="https://github.com/williamsharkey/shiro">source</a>
         <a href="https://github.com/williamsharkey/fluffycoreutils">fluffycoreutils</a>
@@ -414,28 +418,28 @@
         <a href="https://github.com/williamsharkey/spirit">spirit</a>
       </div>
       <p>William Sharkey &middot; 2026</p>
-    </div>
-  </div>
+    </footer>
+  </article>
 
-  <!-- Hidden Shiro engine -->
-  <iframe id="shiro-engine" src="/"></iframe>
+  <!-- Single shared shiro iframe — moves between demo slots -->
+  <iframe id="shiro-live" src="/?demo=1" style="position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0"></iframe>
 
   <script>
-  // ===== Helpers =====
   const sleep = ms => new Promise(r => setTimeout(r, ms));
-
   let shiroReady = false;
+  let activeDemo = null;
 
   function getShiro() {
-    const iframe = document.getElementById('shiro-engine');
-    return iframe?.contentWindow?.__shiro;
+    const f = document.getElementById('shiro-live');
+    return f?.contentWindow?.__shiro;
   }
 
   async function waitForShiro(timeout = 20000) {
     const start = Date.now();
     while (Date.now() - start < timeout) {
       try {
-        if (getShiro()?.shell?.exec) {
+        const s = getShiro();
+        if (s?.shell?.execute && s?.terminal?.term) {
           shiroReady = true;
           const el = document.getElementById('engine-status');
           el.textContent = 'shiro ready';
@@ -446,78 +450,84 @@
       await sleep(200);
     }
     const el = document.getElementById('engine-status');
-    el.textContent = 'shiro failed to load';
+    el.textContent = 'failed to load';
     el.classList.add('error');
     throw new Error('Shiro boot timeout');
   }
 
   // ===== DemoPlayer =====
   class DemoPlayer {
-    constructor(cardId, steps, options = {}) {
-      this.cardId = cardId;
+    constructor(id, steps, opts = {}) {
+      this.id = id;
       this.steps = steps;
-      this.hasPreview = options.hasPreview || false;
-      this.previewId = options.previewId || null;
-      this.previewFiles = options.previewFiles || [];
-
-      this.el = document.getElementById(cardId);
-      this.termBody = this.el.querySelector('.term-body');
-      this.playBtn = this.el.querySelector('.play-btn');
-      this.stepCounter = this.el.querySelector('.step-counter');
-
-      this.currentStep = 0;
+      this.hasPreview = opts.hasPreview || false;
+      this.previewId = opts.previewId || null;
+      this.previewFiles = opts.previewFiles || [];
+      this.el = document.getElementById(id);
+      this.slot = this.el.querySelector('.demo-slot');
+      this.playBtn = this.el.querySelector('.demo-btn');
       this.playing = false;
       this.paused = false;
-      this.speed = 1;
       this.aborted = false;
     }
 
     async play() {
       if (this.playing && !this.paused) {
-        // Pause
         this.paused = true;
-        this.playBtn.textContent = 'Resume';
+        this.playBtn.textContent = '\u25b6 Resume';
         this.playBtn.classList.remove('playing');
         return;
       }
-
       if (this.paused) {
-        // Resume
         this.paused = false;
-        this.playBtn.textContent = 'Pause';
+        this.playBtn.textContent = '\u23f8 Pause';
         this.playBtn.classList.add('playing');
         return;
       }
 
+      // Stop any other playing demo
+      if (activeDemo && activeDemo !== this && activeDemo.playing) {
+        activeDemo.aborted = true;
+        activeDemo.playing = false;
+        activeDemo.paused = false;
+        activeDemo.playBtn.textContent = '\u25b6 Play';
+        activeDemo.playBtn.classList.remove('playing');
+      }
+
+      // Boot shiro if needed
       if (!shiroReady) {
-        this.playBtn.textContent = 'Waiting...';
+        this.playBtn.textContent = 'Loading\u2026';
         try { await waitForShiro(); } catch { this.playBtn.textContent = 'Error'; return; }
       }
 
-      // Start fresh
+      // Move iframe to this demo's slot
+      const iframe = document.getElementById('shiro-live');
+      iframe.style.cssText = 'width:100%;height:100%;border:none;display:block';
+      this.slot.appendChild(iframe);
+      activeDemo = this;
+
       this.playing = true;
       this.paused = false;
       this.aborted = false;
-      this.currentStep = 0;
-      this.termBody.innerHTML = '';
-      this.playBtn.textContent = 'Pause';
+      this.playBtn.textContent = '\u23f8 Pause';
       this.playBtn.classList.add('playing');
 
-      for (let i = 0; i < this.steps.length; i++) {
-        if (this.aborted) break;
+      // Clear terminal
+      const shiro = getShiro();
+      const term = shiro.terminal.term;
+      term.write('\x1b[2J\x1b[H');
+      shiro.terminal.fitAddon.fit();
 
-        // Wait while paused
+      for (const step of this.steps) {
+        if (this.aborted) break;
         while (this.paused && !this.aborted) await sleep(100);
         if (this.aborted) break;
-
-        this.currentStep = i + 1;
-        this.updateCounter();
-        await this.runStep(this.steps[i]);
+        await this.runStep(step);
       }
 
       this.playing = false;
       this.paused = false;
-      this.playBtn.textContent = 'Replay';
+      this.playBtn.textContent = '\u21ba Replay';
       this.playBtn.classList.remove('playing');
     }
 
@@ -525,436 +535,213 @@
       this.aborted = true;
       this.playing = false;
       this.paused = false;
-      this.currentStep = 0;
-      this.termBody.innerHTML = '';
-      this.playBtn.textContent = 'Play';
+      this.playBtn.textContent = '\u25b6 Play';
       this.playBtn.classList.remove('playing');
-      this.updateCounter();
-      if (this.hasPreview && this.previewId) {
-        document.getElementById(this.previewId).srcdoc = '';
-      }
-    }
-
-    updateCounter() {
-      if (this.currentStep === 0) {
-        this.stepCounter.textContent = '';
-      } else {
-        this.stepCounter.textContent = `Step ${this.currentStep}/${this.steps.length}`;
+      if (this.previewId) document.getElementById(this.previewId).srcdoc = '';
+      // Clear terminal if we own it
+      if (activeDemo === this) {
+        try {
+          const term = getShiro().terminal.term;
+          term.write('\x1b[2J\x1b[H');
+        } catch {}
       }
     }
 
     async runStep(step) {
-      const delay = (step.delay ?? 600) / this.speed;
+      const delay = step.delay ?? 300;
+      const shiro = getShiro();
+      const term = shiro.terminal.term;
 
-      // Show note if present
       if (step.note) {
-        const noteEl = document.createElement('span');
-        noteEl.className = 'term-note';
-        noteEl.textContent = '# ' + step.note;
-        this.termBody.appendChild(noteEl);
-        this.scrollToBottom();
-        await sleep(Math.min(400, delay) / this.speed);
+        term.write(`\x1b[38;5;75m\x1b[3m# ${step.note}\x1b[0m\r\n`);
+        await sleep(200);
       }
 
-      if (step.js) {
-        // Execute JS in preview iframe
-        await this.runPreviewJS(step.js);
-        if (step.preview) await this.updatePreview();
-        await sleep(delay);
+      if (step.inject) {
+        await this.injectIframe(step.inject);
+        await sleep(100);
         return;
       }
 
       if (!step.cmd) {
+        if (step.preview && this.hasPreview) await this.updatePreview();
         await sleep(delay);
         return;
       }
 
-      // Type the command
-      await this.typeCommand(step.cmd);
+      // Type command with animation
+      await this.typeCommand(term, step.cmd);
 
-      // Execute in Shiro
-      const output = await this.execInShiro(step.cmd);
-
-      // Show output
-      if (output.trim()) {
-        await this.showOutput(output);
+      // Execute command
+      let out = '';
+      try {
+        await shiro.shell.execute(step.cmd, s => { out += s; }, s => { out += s; });
+      } catch {}
+      if (out.trim()) {
+        term.write(out.replace(/\n/g, '\r\n'));
+        if (!out.endsWith('\n')) term.write('\r\n');
       }
 
-      // Update preview if needed
-      if (step.preview && this.hasPreview) {
-        await this.updatePreview();
-      }
-
+      if (step.preview && this.hasPreview) await this.updatePreview();
       await sleep(delay);
     }
 
-    async typeCommand(cmd) {
-      const lineEl = document.createElement('div');
-      lineEl.className = 'term-line';
+    async typeCommand(term, cmd) {
+      const lines = cmd.split('\n');
+      let charPos = 0;
 
-      const promptSpan = document.createElement('span');
-      promptSpan.className = 'term-prompt';
-      promptSpan.textContent = '~ $ ';
-      lineEl.appendChild(promptSpan);
+      for (let li = 0; li < lines.length; li++) {
+        if (this.aborted) return;
+        const line = lines[li];
 
-      const cmdSpan = document.createElement('span');
-      cmdSpan.className = 'term-cmd';
-      lineEl.appendChild(cmdSpan);
+        if (li === 0) {
+          term.write('\x1b[32muser@shiro\x1b[0m:\x1b[34m~\x1b[0m$ ');
+        }
 
-      const cursor = document.createElement('span');
-      cursor.className = 'term-cursor';
-      lineEl.appendChild(cursor);
+        // For heredoc body lines (after first), type fast
+        if (li > 0) {
+          term.write(line);
+          if (li < lines.length - 1) term.write('\r\n');
+          await sleep(3);
+          continue;
+        }
 
-      this.termBody.appendChild(lineEl);
-      this.scrollToBottom();
-
-      // Type char by char
-      const charDelay = 35 / this.speed;
-      for (let i = 0; i < cmd.length; i++) {
-        if (this.aborted) break;
-        while (this.paused && !this.aborted) await sleep(50);
-        cmdSpan.textContent += cmd[i];
-        this.scrollToBottom();
-        await sleep(charDelay);
+        for (let i = 0; i < line.length; i++) {
+          if (this.aborted) return;
+          while (this.paused && !this.aborted) await sleep(50);
+          const speed = 4 + 12 * Math.min(charPos / 20, 1);
+          term.write(line[i]);
+          charPos++;
+          await sleep(35 / speed);
+        }
+        if (li < lines.length - 1) term.write('\r\n');
       }
-
-      // Remove cursor after typing
-      cursor.remove();
-    }
-
-    async showOutput(text) {
-      const lines = text.replace(/\n$/, '').split('\n');
-      const lineDelay = 30 / this.speed;
-
-      for (const line of lines) {
-        if (this.aborted) break;
-        const lineEl = document.createElement('div');
-        lineEl.className = 'term-line term-output';
-        lineEl.textContent = line;
-        this.termBody.appendChild(lineEl);
-        this.scrollToBottom();
-        await sleep(lineDelay);
-      }
-    }
-
-    async execInShiro(cmd) {
-      try {
-        const shiro = getShiro();
-        const result = await shiro.shell.exec(cmd);
-        let out = '';
-        if (result?.stdout) out += result.stdout;
-        if (result?.stderr) out += result.stderr;
-        return out;
-      } catch (e) {
-        return '';
-      }
+      term.write('\r\n');
     }
 
     async updatePreview() {
       if (!this.previewId || !this.previewFiles.length) return;
       try {
         const shiro = getShiro();
-        let html = '';
-        let css = '';
-        let js = '';
-
+        let html = '', css = '', js = '';
         for (const f of this.previewFiles) {
           try {
-            const content = await shiro.shell.exec('cat ' + f);
-            const text = content?.stdout || '';
-            if (f.endsWith('.html')) html = text;
-            else if (f.endsWith('.css')) css = text;
-            else if (f.endsWith('.js')) js = text;
+            let c = '';
+            await shiro.shell.execute('cat ' + f, x => c += x, () => {});
+            if (f.endsWith('.html')) html = c;
+            else if (f.endsWith('.css')) css = c;
+            else if (f.endsWith('.js')) js = c;
           } catch {}
         }
-
-        // Inline CSS and JS into HTML for srcdoc
-        if (css && html.includes('</head>')) {
+        if (css && html.includes('</head>'))
           html = html.replace('</head>', '<style>' + css + '</style></head>');
-        }
-        if (js && html.includes('</body>')) {
+        if (js && html.includes('</body>'))
           html = html.replace('</body>', '<script>' + js + '<\/script></body>');
-        }
-
-        const iframe = document.getElementById(this.previewId);
-        iframe.srcdoc = html;
+        document.getElementById(this.previewId).srcdoc = html;
       } catch {}
     }
 
-    async runPreviewJS(code) {
+    async injectIframe(port) {
+      // Create a hidden iframe inside the demo iframe's document
+      // so the `page` command can find it by data-virtual-port
       try {
-        const iframe = document.getElementById(this.previewId);
-        if (iframe?.contentWindow) {
-          iframe.contentWindow.eval(code);
-        }
-      } catch {}
-      // Small pause for DOM update
-      await sleep(200 / this.speed);
+        const shiro = getShiro();
+        const resp = await shiro.iframeServer.fetch(port, '/');
+        const body = typeof resp.body === 'string'
+          ? resp.body
+          : resp.body instanceof Uint8Array
+            ? new TextDecoder().decode(resp.body)
+            : '';
+        const ifrDoc = shiro.terminal.term.element.ownerDocument;
+        // Remove old inject if exists
+        const old = ifrDoc.querySelector(`[data-virtual-port="${port}"]`);
+        if (old) old.remove();
+        const inj = ifrDoc.createElement('iframe');
+        inj.setAttribute('data-virtual-port', String(port));
+        inj.srcdoc = body;
+        inj.style.cssText = 'position:fixed;bottom:0;right:0;width:1px;height:1px;opacity:0;pointer-events:none';
+        ifrDoc.body.appendChild(inj);
+        // Wait for srcdoc to parse
+        await new Promise(r => { inj.onload = r; setTimeout(r, 500); });
+      } catch (e) {
+        console.warn('inject failed:', e);
+      }
     }
-
-    scrollToBottom() {
-      this.termBody.scrollTop = this.termBody.scrollHeight;
-    }
-  }
-
-  // ===== Speed Control =====
-  const demos = {};
-
-  function setSpeed(demoKey, speed) {
-    const player = demos[demoKey];
-    if (!player) return;
-    player.speed = speed;
-
-    // Update button states
-    const card = player.el;
-    card.querySelectorAll('.speed-btn').forEach(btn => {
-      btn.classList.toggle('active', btn.textContent === speed + 'x');
-    });
   }
 
   // ===== Demo Definitions =====
+  const demos = {};
 
-  // Demo 1: Hello
-  const helloSteps = [
+  const pipesSteps = [
     { cmd: 'echo "hello world"', note: 'Print text' },
     { cmd: 'echo "hello world" | wc -c', note: 'Pipe to word count' },
     { cmd: 'echo "hello world" | sed \'s/world/browser/\'', note: 'Transform with sed' },
   ];
 
-  // Demo 2: Files
   const filesSteps = [
-    { cmd: 'mkdir -p /tmp/demo-fs/src /tmp/demo-fs/docs', note: 'Create a project structure' },
-    { cmd: 'echo \'console.log("hi")\' > /tmp/demo-fs/src/app.js' },
-    { cmd: 'echo \'# My Project\' > /tmp/demo-fs/docs/README.md' },
-    { cmd: 'find /tmp/demo-fs -type f', note: 'Find all files' },
-    { cmd: 'cat /tmp/demo-fs/src/app.js' },
+    { cmd: 'mkdir -p /tmp/project/src /tmp/project/docs', note: 'Create directories' },
+    { cmd: 'echo \'console.log("hi")\' > /tmp/project/src/app.js' },
+    { cmd: 'echo \'# My Project\' > /tmp/project/docs/README.md' },
+    { cmd: 'find /tmp/project -type f', note: 'Find all files' },
+    { cmd: 'cat /tmp/project/src/app.js' },
   ];
 
-  // Demo 3: Text Processing
   const textSteps = [
-    { cmd: "printf 'alice,95\\nbob,87\\ncarol,92\\nalice,88\\nbob,91\\n' > /tmp/grades.csv", note: 'Create a CSV file' },
+    { cmd: "printf 'alice,95\\nbob,87\\ncarol,92\\nalice,88\\nbob,91\\n' > /tmp/grades.csv", note: 'Create a CSV' },
     { cmd: 'cat /tmp/grades.csv' },
     { cmd: 'grep alice /tmp/grades.csv', note: 'Filter rows' },
     { cmd: 'sort /tmp/grades.csv', note: 'Sort' },
-    { cmd: 'cut -d, -f2 /tmp/grades.csv | sort -n', note: 'Extract and sort scores' },
-    { cmd: "awk -F, '{s[$1]+=$2;n[$1]++} END {for(k in s) printf \"%s: %.0f\\n\",k,s[k]/n[k]}' /tmp/grades.csv", note: 'Compute averages with awk' },
   ];
 
-  // Demo 4: Git Workflow
   const gitSteps = [
-    { cmd: 'rm -rf /tmp/myrepo; mkdir -p /tmp/myrepo', note: 'Create a project' },
-    { cmd: 'cd /tmp/myrepo && git init' },
-    { cmd: 'echo "# Todo App" > /tmp/myrepo/README.md' },
-    { cmd: 'echo \'console.log("v1")\' > /tmp/myrepo/app.js' },
-    { cmd: 'cd /tmp/myrepo && git add .' },
-    { cmd: 'cd /tmp/myrepo && git commit -m "initial commit"', note: 'First commit' },
-    { cmd: 'echo \'console.log("v2 — added features")\' > /tmp/myrepo/app.js', note: 'Edit a file' },
-    { cmd: 'cd /tmp/myrepo && git diff' },
+    { cmd: 'rm -rf /tmp/repo; mkdir /tmp/repo', note: 'Create a project' },
+    { cmd: 'cd /tmp/repo && git init' },
+    { cmd: 'echo "# My App" > /tmp/repo/README.md' },
+    { cmd: 'cd /tmp/repo && git add . && git commit -m "initial"', note: 'First commit' },
+    { cmd: 'echo "v2" >> /tmp/repo/README.md', note: 'Edit a file' },
+    { cmd: 'cd /tmp/repo && git diff' },
   ];
 
-  // Demo 5: Build a Web Page
-  const webSteps = [
+  const pageSteps = [
     { cmd: 'mkdir -p /tmp/site' },
-    { cmd: "cat > /tmp/site/index.html << 'HEREDOC'\n<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>My Website</title>\n<link rel=\"stylesheet\" href=\"style.css\"></head>\n<body>\n<h1>My Website</h1>\n<p>Built inside a browser.</p>\n<ul><li>No server</li><li>No build tools</li><li>Just a shell</li></ul>\n</body></html>\nHEREDOC", note: 'Write HTML' },
-    { cmd: "cat > /tmp/site/style.css << 'HEREDOC'\nbody { font-family: system-ui; background: #1a1a2e; color: #eee;\n  display: flex; justify-content: center; align-items: center;\n  min-height: 100vh; margin: 0; }\nbody > * { text-align: center; }\nh1 { color: #e94560; margin-bottom: 0.5em; }\nul { list-style: none; padding: 0; }\nli { padding: 4px 0; color: #aaa; }\nHEREDOC", note: 'Write CSS' },
-    { cmd: 'cat /tmp/site/index.html' },
-    { cmd: 'serve /tmp/site 3000', preview: true, note: 'Serve it', delay: 1000 },
-    { note: 'Modify it live' },
-    { cmd: "sed -i 's/My Website/My Website ✨/' /tmp/site/index.html" },
+    { cmd: "cat > /tmp/site/index.html << 'EOF'\n<!DOCTYPE html>\n<html><head><title>My Site</title>\n<style>\nbody { font-family: system-ui; background: #1a1a2e; color: #eee;\n  display: flex; justify-content: center; align-items: center;\n  min-height: 100vh; margin: 0; text-align: center; }\nh1 { color: #e94560; }\np { color: #aaa; }\n</style></head>\n<body>\n<div><h1>My Site</h1><p>Built inside a browser.</p></div>\n</body></html>\nEOF", note: 'Write HTML' },
+    { cmd: 'serve /tmp/site 3000', preview: true, note: 'Serve it', delay: 800 },
+    { cmd: "sed -i 's/My Site/My Site ✨/' /tmp/site/index.html", note: 'Edit in place' },
     { cmd: 'cat /tmp/site/index.html', preview: true },
-    { cmd: 'serve stop 3000', delay: 300 },
+    { cmd: 'serve stop 3000', delay: 200 },
   ];
 
-  // Demo 6: Todo App
-  const todoHTML = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Todo</title>
-<style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: system-ui; background: #16213e; color: #eee;
-  display: flex; justify-content: center; padding-top: 60px; }
-.app { width: 340px; }
-h1 { font-size: 1.5rem; margin-bottom: 16px; color: #e94560; }
-form { display: flex; gap: 8px; margin-bottom: 16px; }
-input { flex: 1; padding: 8px; border-radius: 6px; border: 1px solid #333;
-  background: #0f3460; color: #eee; font-size: 0.9rem; }
-button { padding: 8px 16px; border-radius: 6px; border: none;
-  background: #e94560; color: #fff; cursor: pointer; font-size: 0.9rem; }
-button:hover { background: #c73e54; }
-ul { list-style: none; }
-li { padding: 10px; margin-bottom: 6px; background: #0f3460;
-  border-radius: 6px; display: flex; justify-content: space-between;
-  align-items: center; cursor: pointer; }
-li.done span { text-decoration: line-through; color: #666; }
-li .del { color: #e94560; cursor: pointer; font-weight: bold; }
-#clear-btn { display: none; margin-top: 12px; background: #333; font-size: 0.8rem; }
-</style></head>
-<body><div class="app">
-<h1>Todo</h1>
-<form onsubmit="addTodo(event)">
-  <input id="inp" placeholder="What needs to be done?">
-  <button type="submit">Add</button>
-</form>
-<ul id="list"></ul>
-<button id="clear-btn" onclick="clearDone()">Clear completed</button>
-</div>
-<script>
-let todos = [];
-function render() {
-  const ul = document.getElementById('list');
-  ul.innerHTML = '';
-  todos.forEach((t, i) => {
-    const li = document.createElement('li');
-    if (t.done) li.className = 'done';
-    li.innerHTML = '<span>' + t.text + '</span><span class="del" onclick="del(event,' + i + ')">×</span>';
-    li.onclick = () => { todos[i].done = !todos[i].done; render(); };
-    ul.appendChild(li);
-  });
-  const btn = document.getElementById('clear-btn');
-  if (btn) btn.style.display = todos.some(t => t.done) ? 'block' : 'none';
-}
-function addTodo(e) {
-  e.preventDefault();
-  const inp = document.getElementById('inp');
-  if (inp.value.trim()) { todos.push({ text: inp.value.trim(), done: false }); inp.value = ''; render(); }
-}
-function del(e, i) { e.stopPropagation(); todos.splice(i, 1); render(); }
-function clearDone() { todos = todos.filter(t => !t.done); render(); }
-</script></body></html>`;
+  const counterHTML = '<!DOCTYPE html>\n<html><head><title>Counter</title>\n<style>\nbody { font-family: system-ui; background: #0f0f23; color: #eee;\n  display: flex; justify-content: center; align-items: center;\n  min-height: 100vh; margin: 0; }\n.app { text-align: center; }\nh1 { font-size: 1.2rem; color: #7eb8c9; margin-bottom: 20px; }\n.n { font-size: 4rem; font-weight: 700; margin-bottom: 20px;\n  font-variant-numeric: tabular-nums; }\nbutton { width: 56px; height: 56px; font-size: 1.5rem; border-radius: 12px;\n  border: 2px solid #333; background: #1a1a2e; color: #eee;\n  cursor: pointer; margin: 0 6px; }\nbutton:hover { border-color: #7eb8c9; }\n</style></head>\n<body><div class="app">\n  <h1>Counter</h1>\n  <div class="n" id="n">0</div>\n  <button id="dec" onclick="c(-1)">\u2212</button>\n  <button id="inc" onclick="c(1)">+</button>\n</div>\n<' + 'script>\nlet n=0;\nfunction c(d){n+=d;document.getElementById("n").textContent=n}\n<' + '/script>\n</body></html>';
 
-  const todoSteps = [
-    { cmd: 'mkdir -p /tmp/todo' },
-    { cmd: "cat > /tmp/todo/index.html << 'ENDDOC'\n" + todoHTML + "\nENDDOC", note: 'Write a todo app' },
-    { cmd: 'wc -l /tmp/todo/index.html' },
-    { cmd: 'serve /tmp/todo 4000', preview: true, note: 'Serve it', delay: 1000 },
-    { js: "document.getElementById('inp').value='Buy groceries';document.querySelector('form').dispatchEvent(new Event('submit',{bubbles:true}))", note: 'Add items' },
-    { js: "document.getElementById('inp').value='Write code';document.querySelector('form').dispatchEvent(new Event('submit',{bubbles:true}))" },
-    { js: "document.getElementById('inp').value='Deploy app';document.querySelector('form').dispatchEvent(new Event('submit',{bubbles:true}))", preview: true },
-    { js: "document.querySelector('li').click()", note: 'Complete a task', preview: true, delay: 800 },
-    { js: "document.getElementById('clear-btn').click()", note: 'Clear completed', preview: true, delay: 800 },
-    { cmd: 'serve stop 4000', delay: 300 },
+  const interactSteps = [
+    { cmd: 'mkdir -p /tmp/counter' },
+    { cmd: "cat > /tmp/counter/index.html << 'EOF'\n" + counterHTML + "\nEOF", note: 'Write a counter app' },
+    { cmd: 'serve /tmp/counter 5000', preview: true, note: 'Serve it', delay: 800 },
+    { inject: 5000 },
+    { cmd: 'page :5000 text "#n"', note: 'Read the counter value' },
+    { cmd: 'page :5000 click "#inc"', note: 'Click the + button' },
+    { cmd: 'page :5000 click "#inc"' },
+    { cmd: 'page :5000 click "#inc"' },
+    { cmd: 'page :5000 text "#n"', note: 'Read it again', preview: true },
+    { cmd: 'cd /tmp/counter && git init', note: 'Commit the app' },
+    { cmd: 'cd /tmp/counter && git add . && git commit -m "counter app"' },
+    { cmd: 'cd /tmp/counter && git log --oneline' },
+    { cmd: 'serve stop 5000', delay: 200 },
   ];
 
-  // Demo 7: The Opus
-  const opusHTML = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Counter</title>
-<link rel="stylesheet" href="style.css">
-</head><body>
-<div class="app">
-  <h1>Counter</h1>
-  <div class="display" id="display">0</div>
-  <div class="buttons">
-    <button id="dec" onclick="dec()">-</button>
-    <button id="inc" onclick="inc()">+</button>
-  </div>
-</div>
-<script src="src/app.js"></script>
-</body></html>`;
-
-  const opusCSS = `* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: system-ui; background: #0f0f23; color: #eee;
-  display: flex; justify-content: center; align-items: center;
-  min-height: 100vh; }
-.app { text-align: center; }
-h1 { font-size: 1.3rem; color: #7eb8c9; margin-bottom: 20px; }
-.display { font-size: 4rem; font-weight: 700; margin-bottom: 24px;
-  font-variant-numeric: tabular-nums; }
-.buttons { display: flex; gap: 12px; justify-content: center; }
-button { width: 64px; height: 64px; font-size: 1.5rem; border-radius: 12px;
-  border: 2px solid #333; background: #1a1a2e; color: #eee; cursor: pointer;
-  transition: all 0.1s; }
-button:hover { border-color: #7eb8c9; }
-button:active { transform: scale(0.95); }
-#reset { width: auto; padding: 0 20px; height: 48px; font-size: 1rem;
-  margin-top: 16px; border-color: #444; color: #888; }
-#reset:hover { border-color: #e94560; color: #e94560; }`;
-
-  const opusJS = `let count = 0;
-function update() { document.getElementById('display').textContent = count; }
-function inc() { count++; update(); }
-function dec() { count--; update(); }`;
-
-  const opusJSWithReset = `let count = 0;
-function update() { document.getElementById('display').textContent = count; }
-function inc() { count++; update(); }
-function dec() { count--; update(); }
-function reset() { count = 0; update(); }`;
-
-  const opusJSWithKeys = `let count = 0;
-function update() { document.getElementById('display').textContent = count; }
-function inc() { count++; update(); }
-function dec() { count--; update(); }
-function reset() { count = 0; update(); }
-document.addEventListener('keydown', e => {
-  if (e.key === '+' || e.key === '=') inc();
-  else if (e.key === '-') dec();
-  else if (e.key === '0') reset();
-});`;
-
-  const opusSteps = [
-    // Phase 1: Scaffold
-    { cmd: 'rm -rf /tmp/opus; mkdir -p /tmp/opus/src /tmp/opus/public', note: 'Scaffold the project' },
-    { cmd: "cat > /tmp/opus/public/index.html << 'EOF'\n" + opusHTML + "\nEOF" },
-    { cmd: "cat > /tmp/opus/public/style.css << 'EOF'\n" + opusCSS + "\nEOF" },
-    { cmd: "cat > /tmp/opus/src/app.js << 'EOF'\n" + opusJS + "\nEOF" },
-    { cmd: 'ls -la /tmp/opus/public /tmp/opus/src' },
-
-    // Phase 2: Serve & Interact
-    { cmd: 'serve /tmp/opus/public 5000', preview: true, note: 'Serve it', delay: 1000 },
-    { js: "inc(); inc(); inc()", note: 'Click increment 3x', preview: true },
-    { js: "dec()", note: 'Click decrement', preview: true },
-    { cmd: 'echo "Counter works."' },
-
-    // Phase 3: Git
-    { cmd: 'cd /tmp/opus && git init', note: 'Initialize git' },
-    { cmd: 'cd /tmp/opus && git add .' },
-    { cmd: 'cd /tmp/opus && git commit -m "feat: counter app"' },
-    { cmd: 'cd /tmp/opus && git log --oneline' },
-
-    // Phase 4: Edit & Enhance
-    { note: 'Adding a reset button' },
-    { cmd: "sed -i 's|</div>\\n</div>|</div>\\n  <button id=\"reset\" onclick=\"reset()\">Reset</button>\\n</div>|' /tmp/opus/public/index.html" },
-    { cmd: "cat > /tmp/opus/src/app.js << 'EOF'\n" + opusJSWithReset + "\nEOF", note: 'Update app.js with reset' },
-    { cmd: 'cat /tmp/opus/src/app.js' },
-    { preview: true, note: 'Preview updates', delay: 400 },
-    { js: "inc(); inc(); inc(); inc(); inc(); setTimeout(() => reset(), 300)", note: 'Increment 5x, then reset', preview: true, delay: 1200 },
-    { cmd: 'cd /tmp/opus && git diff', note: 'See the changes' },
-    { cmd: 'cd /tmp/opus && git add . && git commit -m "feat: reset button"' },
-
-    // Phase 5: Keyboard shortcuts
-    { note: 'Adding keyboard shortcuts' },
-    { cmd: "cat > /tmp/opus/src/app.js << 'EOF'\n" + opusJSWithKeys + "\nEOF" },
-    { cmd: 'cat /tmp/opus/src/app.js', preview: true },
-    { cmd: 'cd /tmp/opus && git add . && git commit -m "feat: keyboard shortcuts"' },
-
-    // Phase 6: Ship
-    { cmd: 'cd /tmp/opus && git log --oneline', note: 'Three commits' },
-    { cmd: 'find /tmp/opus -type f | sort' },
-    { cmd: 'echo "Scaffolded, served, edited, committed — all in one browser tab."', delay: 1500 },
-  ];
-
-  // ===== Initialize =====
   document.addEventListener('DOMContentLoaded', () => {
-    demos.hello = new DemoPlayer('demo-hello', helloSteps);
+    demos.pipes = new DemoPlayer('demo-pipes', pipesSteps);
     demos.files = new DemoPlayer('demo-files', filesSteps);
     demos.text = new DemoPlayer('demo-text', textSteps);
     demos.git = new DemoPlayer('demo-git', gitSteps);
-    demos.web = new DemoPlayer('demo-web', webSteps, {
-      hasPreview: true,
-      previewId: 'preview-web',
-      previewFiles: ['/tmp/site/index.html', '/tmp/site/style.css'],
+    demos.page = new DemoPlayer('demo-page', pageSteps, {
+      hasPreview: true, previewId: 'preview-page',
+      previewFiles: ['/tmp/site/index.html'],
     });
-    demos.todo = new DemoPlayer('demo-todo', todoSteps, {
-      hasPreview: true,
-      previewId: 'preview-todo',
-      previewFiles: ['/tmp/todo/index.html'],
+    demos.interact = new DemoPlayer('demo-interact', interactSteps, {
+      hasPreview: true, previewId: 'preview-interact',
+      previewFiles: ['/tmp/counter/index.html'],
     });
-    demos.opus = new DemoPlayer('demo-opus', opusSteps, {
-      hasPreview: true,
-      previewId: 'preview-opus',
-      previewFiles: ['/tmp/opus/public/index.html', '/tmp/opus/public/style.css', '/tmp/opus/src/app.js'],
-    });
-
-    // Boot Shiro engine
     waitForShiro().catch(() => {});
   });
   </script>

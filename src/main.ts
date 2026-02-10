@@ -88,6 +88,7 @@ import { psCmd, killCmd } from './commands/ps';
 import { htmlCmd, imgCmd } from './commands/html';
 import { dougCmd } from './commands/doug';
 import { becomeCmd, unbecomeCmd, getBecomeConfig, activateBecomeMode, deactivateBecomeMode } from './commands/become';
+import { pageCmd } from './commands/page';
 import { processTable } from './process-table';
 import { iframeServer } from './iframe-server';
 import { allCommands } from '../fluffycoreutils/src/index';
@@ -251,6 +252,7 @@ async function main() {
   registerCommand(commands, dougCmd, 'src/commands/doug.ts');
   registerCommand(commands, becomeCmd, 'src/commands/become.ts');
   registerCommand(commands, unbecomeCmd, 'src/commands/become.ts');
+  registerCommand(commands, pageCmd, 'src/commands/page.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {
@@ -350,6 +352,18 @@ async function main() {
   window.addEventListener('beforeunload', () => {
     iframeServer.cleanup();
   });
+
+  // Demo mode: lightweight boot for about page iframes
+  const isDemo = new URLSearchParams(location.search).get('demo') === '1';
+
+  if (isDemo) {
+    // Skip banner, HUD, mobile input, favicon — just show a clean prompt
+    terminal.term.options.fontSize = 13;
+    terminal.fitAddon.fit();
+    // Signal ready
+    (window as any).__shiroDemo = true;
+    return;
+  }
 
   await terminal.start();
 

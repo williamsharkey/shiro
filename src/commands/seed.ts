@@ -11,15 +11,34 @@ import { Command, CommandContext } from './index';
 
 const SHIRO_VERSION = '0.1.0';
 
-// Minimal pako deflate for gzip compression (will be loaded dynamically)
-declare const pako: { gzip: (data: Uint8Array) => Uint8Array };
-
 function uint8ToBase64(data: Uint8Array): string {
   let binary = '';
   for (let i = 0; i < data.length; i++) {
     binary += String.fromCharCode(data[i]);
   }
   return btoa(binary);
+}
+
+async function gzipCompress(data: Uint8Array): Promise<Uint8Array> {
+  const cs = new CompressionStream('gzip');
+  const writer = cs.writable.getWriter();
+  writer.write(data as unknown as BufferSource);
+  writer.close();
+  const chunks: Uint8Array[] = [];
+  const reader = cs.readable.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
 }
 
 interface SeedStats {
@@ -261,27 +280,22 @@ async function inlineDocument(): Promise<string> {
 
 /**
  * Build a self-contained blob seed snippet.
- * The snippet decompresses and creates a blob URL for the iframe.
+ * Uses DecompressionStream (browser built-in) instead of a custom inflate.
+ * All data (HTML, filesystem NDJSON, localStorage) is gzip-compressed and base64-encoded.
  */
-function buildBlobSnippet(compressedB64: string, ndjson: string, storage: string, stats: SeedStats & { htmlSize: number; compressedSize: number }): string {
-  const escapeForTemplate = (s: string) => s.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$/g, '\\$');
-  const escapedNdjson = escapeForTemplate(ndjson);
-  const escapedStorage = escapeForTemplate(storage);
-
+function buildBlobSnippet(compressedHtmlB64: string, compressedFsB64: string, compressedStorageB64: string, stats: SeedStats & { htmlSize: number; compressedSize: number }): string {
   const header = `// shiro blob seed v${stats.version} | ${stats.files} files | ${(stats.compressedSize / 1024).toFixed(0)}KB compressed`;
 
-  // Minimal pako inflate (gunzip) - ~3KB minified
-  const pakoInflate = `var pako=(function(){var Z=256,L=286,D=30,B=15,M=32768;function a(e){for(var t=new Uint16Array(16),n=0;n<16;n++)t[n]=0;for(n=0;n<e.length;n++)t[e[n]]++;t[0]=0;for(var r=new Uint16Array(16),i=0,n=1;n<16;n++)r[n]=i=i+t[n-1]<<1;var o=new Uint16Array(e.length);for(n=0;n<e.length;n++)e[n]&&(o[n]=r[e[n]]++);return{c:t,s:o}}function d(e,t,n){for(var r=new Uint16Array(n),i=0;i<n;i++)r[i]=0;for(i=0;i<e;i++)t[i]&&(r[t[i]]|=1<<B-t[i],r[t[i]]++);return r}function h(e,t){for(var n=0,r=0;r<t;r++)n=n<<1|e&1,e>>=1;return n}function u(e,t,n,r){for(var i=1<<n,o=0;o<i;o++){var s=h(o,n);if(s<e.length&&e[s]){var f=e[s]>>>4,c=e[s]&15;t[o]=f<<8|c}}}function f(e,t){var n=new Uint8Array(320);for(var r=0;r<144;r++)n[r]=8;for(;r<256;r++)n[r]=9;for(;r<280;r++)n[r]=7;for(;r<288;r++)n[r]=8;var i=a(n),o=new Uint16Array(512);u(i.s.subarray(0,288),o,9,288);var s=new Uint8Array(32);for(r=0;r<32;r++)s[r]=5;var c=a(s),l=new Uint16Array(32);u(c.s,l,5,32);return{lit:o,dst:l}}function g(e,t,n,r,i,o){var s=0,c=0,l=0,p=0,v=0,b=0,y=0,w=0,k=f(),x=k.lit,E=k.dst,T=new Uint8Array(M),A=0;while(1){if(l<3){s|=e[n++]<<l;l+=8}var C=s&7;s>>>=3;l-=3;if(C&1)break;if((C&6)===0){if(l<32){s|=e[n++]<<l;l+=8;s|=e[n++]<<l;l+=8;s|=e[n++]<<l;l+=8;s|=e[n++]<<l;l+=8}var S=s&65535;s>>>=16;l-=16;var O=s&65535;s>>>=16;l-=16;for(var j=0;j<S;j++)T[A++]=e[n++];continue}while(1){while(l<15){s|=e[n++]<<l;l+=8}var R=x[s&511];if(!R){s>>>=9;l-=9;continue}var _=R&15,N=R>>>8;s>>>=_;l-=_;if(N<256){T[A++]=N}else if(N===256){break}else{var I=N-257,P=0;if(I<8)P=I;else{while(l<5){s|=e[n++]<<l;l+=8}P=(I-8<<5)+(s&31)+8;s>>>=5;l-=5}var F=[3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258][I],q=F+P;while(l<15){s|=e[n++]<<l;l+=8}var z=E[s&31];if(!z)continue;var W=z&15,H=z>>>8;s>>>=W;l-=W;var V=0;if(H<4)V=H;else{while(l<13){s|=e[n++]<<l;l+=8}V=(H-4<<13)+(s&8191)+4;s>>>=13;l-=13}var G=[1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577][H],Y=G+V;for(var X=0;X<q;X++)T[A++]=T[A-Y]}}}}return T.subarray(0,A)}return{inflate:g}})();`;
-
+  // Note: base64 strings are safe in single-quoted JS (no ', \, or newlines)
   return `${header}
-(function(){
+(async function(){
   if(document.getElementById('shiro-seed')){console.log('Shiro already seeded');return}
-  ${pakoInflate}
-  var b64='${compressedB64}';
-  var bin=atob(b64);var u8=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);
-  var html=new TextDecoder().decode(pako.inflate(u8.subarray(10)));
+  async function _dc(b){var a=atob(b),u=new Uint8Array(a.length),i=0;for(;i<a.length;)u[i]=a.charCodeAt(i++);var s=new DecompressionStream('gzip'),w=s.writable.getWriter();w.write(u);w.close();var r=s.readable.getReader(),c=[],v;while(!(v=await r.read()).done)c.push(v.value);var t=0,x;for(x of c)t+=x.length;var o=new Uint8Array(t),p=0;for(x of c){o.set(x,p);p+=x.length}return new TextDecoder().decode(o)}
+  var html=await _dc('${compressedHtmlB64}');
   var blob=new Blob([html],{type:'text/html'});
   var blobUrl=URL.createObjectURL(blob);
+  var _fsP=_dc('${compressedFsB64}');
+  var _lsP=_dc('${compressedStorageB64}');
   var w=document.createElement('div');w.id='shiro-seed';
   var S=w.style;S.position='fixed';S.bottom='20px';S.right='20px';S.width='32em';S.height='22em';
   S.zIndex='2147483647';S.borderRadius='8px';S.overflow='hidden';
@@ -308,7 +322,7 @@ function buildBlobSnippet(compressedB64: string, ndjson: string, storage: string
   var ts=title.style;ts.color='#8888cc';ts.fontSize='13px';ts.fontWeight='600';ts.marginLeft='10px';ts.flex='1';
   var fontSize=14;
   var zoomWrap=document.createElement('div');zoomWrap.style.cssText='display:flex;gap:4px;opacity:0;transition:opacity 0.15s';
-  var zoomOut=document.createElement('div');zoomOut.textContent='−';
+  var zoomOut=document.createElement('div');zoomOut.textContent='\\u2212';
   zoomOut.style.cssText='width:14px;height:14px;border-radius:50%;background:#555;color:#fff;font-size:12px;line-height:14px;text-align:center;cursor:pointer';
   var zoomIn=document.createElement('div');zoomIn.textContent='+';
   zoomIn.style.cssText='width:14px;height:14px;border-radius:50%;background:#555;color:#fff;font-size:12px;line-height:14px;text-align:center;cursor:pointer';
@@ -340,16 +354,14 @@ function buildBlobSnippet(compressedB64: string, ndjson: string, storage: string
   document.addEventListener('mouseup',function(){dragging=false;resizing=false;tb.style.cursor='grab'});
   var resizing=false,savedH=w.offsetHeight||352;
   rh.onmousedown=function(e){resizing=true;e.preventDefault();e.stopPropagation()};
-  var SEED_FS=\`${escapedNdjson}\`;
-  var SEED_STORAGE=\`${escapedStorage}\`;
   var seeded=false;
-  iframe.onload=function(){
+  iframe.onload=async function(){
     if(seeded)return;seeded=true;
-    iframe.contentWindow.postMessage({type:'shiro-seed-v2',ndjson:SEED_FS,storage:SEED_STORAGE},'*');
+    iframe.contentWindow.postMessage({type:'shiro-seed-v2',ndjson:await _fsP,storage:await _lsP},'*');
   };
   (function(){
     var cur=document.body,lastR=[],lastG=null;
-    function _t(el,lim){var t=(el.textContent||'').replace(/\\s+/g,' ').trim();return lim&&t.length>lim?t.slice(0,lim)+'…':t}
+    function _t(el,lim){var t=(el.textContent||'').replace(/\\s+/g,' ').trim();return lim&&t.length>lim?t.slice(0,lim)+'\\u2026':t}
     function _d(el){var d=0;while(el&&el!==document.body&&el!==document.documentElement){d++;el=el.parentElement}return d}
     function exec(cmd){
       cmd=cmd.trim();var m;
@@ -357,23 +369,23 @@ function buildBlobSnippet(compressedB64: string, ndjson: string, storage: string
       if(cmd==='s')return 'p:outer c:'+lastR.length+' d:'+_d(cur)+' @'+(cur.tagName||'doc').toLowerCase();
       if(cmd==='t')return _t(cur);
       if((m=cmd.match(/^t(\\d+)$/)))return _t(cur,parseInt(m[1]));
-      if(cmd.startsWith('q1 ')){try{var el=document.querySelector(cmd.slice(3).trim());if(!el)return '∅';cur=el;lastR=[el];return _t(el).slice(0,200)}catch(e){return '✗ '+e.message}}
-      if(cmd.startsWith('q ')){try{var els=Array.from(document.querySelectorAll(cmd.slice(2).trim()));lastR=els;if(!els.length)return '∅';return els.slice(0,10).map(function(el,i){return '['+i+']'+_t(el).slice(0,60)}).join('\\n')}catch(e){return '✗ '+e.message}}
-      if((m=cmd.match(/^n(\\d+)$/))){var idx=parseInt(m[1]);if(idx>=lastR.length)return '✗ out of range';cur=lastR[idx];return '✓ ['+idx+'] '+_t(cur).slice(0,100)}
-      if(cmd==='up'){if(cur.parentElement)cur=cur.parentElement;return '✓ @'+(cur.tagName||'').toLowerCase()}
-      if((m=cmd.match(/^up(\\d+)$/))){for(var i=0;i<parseInt(m[1]);i++)if(cur.parentElement)cur=cur.parentElement;return '✓ @'+(cur.tagName||'').toLowerCase()}
-      if(cmd==='ch'){var ch=Array.from(cur.children);if(!ch.length)return '∅ no children';return ch.slice(0,15).map(function(c,i){var tag=c.tagName.toLowerCase();var cls=c.className?'.'+String(c.className).split(' ')[0]:'';return '['+i+']<'+tag+cls+'>'+_t(c).slice(0,30)}).join('\\n')}
-      if(cmd.startsWith('g ')){var lines=(cur.textContent||'').split('\\n');var re=new RegExp(cmd.slice(2).trim(),'gi');var matches=[];lines.forEach(function(line,i){if(re.test(line)){var clean=line.replace(/\\s+/g,' ').trim();if(clean)matches.push('L'+(i+1)+': '+clean.slice(0,60))}});return matches.length?matches.slice(0,10).join('\\n'):'∅ no matches'}
-      if(cmd==='look'){var inter=cur.querySelectorAll('a,button,input,select,textarea,[onclick],[href],.btn,[role=button]');var items=[];inter.forEach(function(el,idx){var text=(el.textContent||el.value||el.placeholder||el.getAttribute('title')||el.getAttribute('aria-label')||'').replace(/\\s+/g,' ').trim().slice(0,20);if(text||el.tagName.toLowerCase()==='input')items.push({text:text||'['+(el.type||'input')+']',el:el,idx:idx})});lastG=items;if(!items.length)return '∅ no interactive elements';var out=items.length+' elements\\n';items.slice(0,20).forEach(function(item,i){var tag=item.el.tagName.toLowerCase();var href=item.el.getAttribute('href');out+='@'+i+' <'+tag+'> "'+item.text+'"'+(href?' →'+href.slice(0,25):'')+' \\n'});return out.trim()}
-      if((m=cmd.match(/^@(\\d+)$/))){if(!lastG||parseInt(m[1])>=lastG.length)return '✗ call look first or index out of range';var it=lastG[parseInt(m[1])];try{it.el.click()}catch(e){}return '✓ clicked "'+it.text+'"'}
-      if(cmd==='a'){if(!cur.attributes)return '∅';var attrs=[];for(var j=0;j<cur.attributes.length;j++){var at=cur.attributes[j];attrs.push(at.name+'='+at.value.slice(0,30))}return attrs.length?attrs.join(' '):'∅ no attrs'}
+      if(cmd.startsWith('q1 ')){try{var el=document.querySelector(cmd.slice(3).trim());if(!el)return '\\u2205';cur=el;lastR=[el];return _t(el).slice(0,200)}catch(e){return '\\u2717 '+e.message}}
+      if(cmd.startsWith('q ')){try{var els=Array.from(document.querySelectorAll(cmd.slice(2).trim()));lastR=els;if(!els.length)return '\\u2205';return els.slice(0,10).map(function(el,i){return '['+i+']'+_t(el).slice(0,60)}).join('\\n')}catch(e){return '\\u2717 '+e.message}}
+      if((m=cmd.match(/^n(\\d+)$/))){var idx=parseInt(m[1]);if(idx>=lastR.length)return '\\u2717 out of range';cur=lastR[idx];return '\\u2713 ['+idx+'] '+_t(cur).slice(0,100)}
+      if(cmd==='up'){if(cur.parentElement)cur=cur.parentElement;return '\\u2713 @'+(cur.tagName||'').toLowerCase()}
+      if((m=cmd.match(/^up(\\d+)$/))){for(var i=0;i<parseInt(m[1]);i++)if(cur.parentElement)cur=cur.parentElement;return '\\u2713 @'+(cur.tagName||'').toLowerCase()}
+      if(cmd==='ch'){var ch=Array.from(cur.children);if(!ch.length)return '\\u2205 no children';return ch.slice(0,15).map(function(c,i){var tag=c.tagName.toLowerCase();var cls=c.className?'.'+String(c.className).split(' ')[0]:'';return '['+i+']<'+tag+cls+'>'+_t(c).slice(0,30)}).join('\\n')}
+      if(cmd.startsWith('g ')){var lines=(cur.textContent||'').split('\\n');var re=new RegExp(cmd.slice(2).trim(),'gi');var matches=[];lines.forEach(function(line,i){if(re.test(line)){var clean=line.replace(/\\s+/g,' ').trim();if(clean)matches.push('L'+(i+1)+': '+clean.slice(0,60))}});return matches.length?matches.slice(0,10).join('\\n'):'\\u2205 no matches'}
+      if(cmd==='look'){var inter=cur.querySelectorAll('a,button,input,select,textarea,[onclick],[href],.btn,[role=button]');var items=[];inter.forEach(function(el,idx){var text=(el.textContent||el.value||el.placeholder||el.getAttribute('title')||el.getAttribute('aria-label')||'').replace(/\\s+/g,' ').trim().slice(0,20);if(text||el.tagName.toLowerCase()==='input')items.push({text:text||'['+(el.type||'input')+']',el:el,idx:idx})});lastG=items;if(!items.length)return '\\u2205 no interactive elements';var out=items.length+' elements\\n';items.slice(0,20).forEach(function(item,i){var tag=item.el.tagName.toLowerCase();var href=item.el.getAttribute('href');out+='@'+i+' <'+tag+'> "'+item.text+'"'+(href?' \\u2192'+href.slice(0,25):'')+' \\n'});return out.trim()}
+      if((m=cmd.match(/^@(\\d+)$/))){if(!lastG||parseInt(m[1])>=lastG.length)return '\\u2717 call look first or index out of range';var it=lastG[parseInt(m[1])];try{it.el.click()}catch(e){}return '\\u2713 clicked "'+it.text+'"'}
+      if(cmd==='a'){if(!cur.attributes)return '\\u2205';var attrs=[];for(var j=0;j<cur.attributes.length;j++){var at=cur.attributes[j];attrs.push(at.name+'='+at.value.slice(0,30))}return attrs.length?attrs.join(' '):'\\u2205 no attrs'}
       if(cmd==='h')return cur.outerHTML;
-      if((m=cmd.match(/^h(\\d+)$/))){var html=cur.outerHTML;var lim=parseInt(m[1]);return html.length>lim?html.slice(0,lim)+'…[truncated]':html}
-      return '✗ unknown: '+cmd;
+      if((m=cmd.match(/^h(\\d+)$/))){var html2=cur.outerHTML;var lim=parseInt(m[1]);return html2.length>lim?html2.slice(0,lim)+'\\u2026[truncated]':html2}
+      return '\\u2717 unknown: '+cmd;
     }
     window.addEventListener('message',function(e){
       if(e.data&&e.data.type==='shiro-hc'){
-        var result;try{result=exec(e.data.cmd)}catch(err){result='✗ '+err.message}
+        var result;try{result=exec(e.data.cmd)}catch(err){result='\\u2717 '+err.message}
         e.source.postMessage({type:'shiro-hc-result',id:e.data.id,result:result},'*');
       }
     });
@@ -407,32 +419,9 @@ export const seedCmd: Command = {
         ctx.stdout += `  HTML size: ${(htmlSize / 1024).toFixed(0)} KB\n`;
         ctx.stdout += 'Compressing...\n';
 
-        // Compress with gzip
-        const encoder = new TextEncoder();
-        const htmlBytes = encoder.encode(inlinedHtml);
-
-        // Use CompressionStream API (available in modern browsers)
-        const cs = new CompressionStream('gzip');
-        const writer = cs.writable.getWriter();
-        writer.write(htmlBytes);
-        writer.close();
-
-        const compressedChunks: Uint8Array[] = [];
-        const reader = cs.readable.getReader();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          compressedChunks.push(value);
-        }
-
-        // Concatenate chunks
-        const totalLength = compressedChunks.reduce((sum, chunk) => sum + chunk.length, 0);
-        const compressed = new Uint8Array(totalLength);
-        let offset = 0;
-        for (const chunk of compressedChunks) {
-          compressed.set(chunk, offset);
-          offset += chunk.length;
-        }
+        // Compress HTML with gzip
+        const htmlBytes = new TextEncoder().encode(inlinedHtml);
+        const compressed = await gzipCompress(htmlBytes);
 
         compressedSize = compressed.length;
         compressedB64 = uint8ToBase64(compressed);
@@ -495,9 +484,19 @@ export const seedCmd: Command = {
       };
 
       // Build the appropriate snippet
-      const snippet = isBlob
-        ? buildBlobSnippet(compressedB64, ndjson, storageJson, { ...stats, htmlSize, compressedSize })
-        : buildSnippet(url, ndjson, storageJson, stats);
+      let snippet: string;
+      if (isBlob) {
+        // Compress NDJSON and storage for blob mode (huge size reduction)
+        ctx.stdout += 'Compressing filesystem data...\n';
+        const compressedFs = await gzipCompress(new TextEncoder().encode(ndjson));
+        const compressedFsB64 = uint8ToBase64(compressedFs);
+        const compressedStorage = await gzipCompress(new TextEncoder().encode(storageJson));
+        const compressedStorageB64 = uint8ToBase64(compressedStorage);
+        ctx.stdout += `  FS compressed: ${(compressedFs.length / 1024).toFixed(0)} KB (was ${(ndjson.length / 1024).toFixed(0)} KB)\n`;
+        snippet = buildBlobSnippet(compressedB64, compressedFsB64, compressedStorageB64, { ...stats, htmlSize, compressedSize });
+      } else {
+        snippet = buildSnippet(url, ndjson, storageJson, stats);
+      }
 
       const snippetSizeKBNum = snippet.length / 1024;
       const snippetSizeKB = snippetSizeKBNum.toFixed(0);

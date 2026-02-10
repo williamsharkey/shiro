@@ -56,6 +56,7 @@ src/
     ├── spawn.ts          # Run commands in windowed terminals
     ├── ps.ts             # ps (list processes) and kill (terminate by PID)
     ├── html.ts           # html (render HTML in window) and img (display image)
+    ├── page.ts           # page: interact with served app iframes (click, input, text, eval, etc.)
     └── become.ts         # become/unbecome: full-screen app mode with shareable URLs
 └── utils/
     ├── copy-utils.ts     # bufferToString (isWrapped-aware), smartCopyProcess (indent strip)

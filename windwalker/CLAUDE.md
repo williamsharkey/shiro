@@ -23,6 +23,7 @@ tests/
 │   ├── terminal-history.test.ts # Terminal history navigation
 │   ├── virtual-server.test.ts   # Express shim / service worker
 │   ├── node-runtime.test.ts  # Node.js runtime shim (jseval.ts)
+│   ├── page.test.ts          # page command: iframe interaction (click, text, eval, etc.)
 │   └── claude-code-install.test.ts # Full Claude Code install + run
 ├── level-0-boot/             # Basic page load and boot tests
 ├── level-1-filesystem/       # Virtual filesystem operations
