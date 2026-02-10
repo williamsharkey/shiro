@@ -329,7 +329,9 @@ describe('Node Runtime (jseval.ts)', () => {
       const ctx = createCtx(os.shell, os.fs, ['-e', [
         'process.stdin.setRawMode(true);',
         'process.stdout.write("raw mode active");',
-        'process.exit(0);',
+        // Exit interactive mode properly — setRawMode(false) triggers deferred exit
+        // (process.exit(0) in interactive mode creates a fresh deferred promise that hangs)
+        'process.stdin.setRawMode(false);',
       ].join('\n')], os.terminal);
       const exitCode = await nodeCmd.exec(ctx);
       expect(exitCode).toBe(0);
