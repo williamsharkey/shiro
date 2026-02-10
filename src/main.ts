@@ -373,8 +373,14 @@ async function main() {
   const becomeConfig = getBecomeConfig();
   if (becomeConfig) {
     const pathname = location.pathname.replace(/\/$/, '');
-    if (pathname === '/' + becomeConfig.slug || pathname === '' || pathname === '/') {
-      // Start the server for the app directory, then activate become mode
+    const params = new URLSearchParams(location.search);
+
+    // ?unbecome escape hatch — clear become config and show terminal
+    if (params.has('unbecome')) {
+      localStorage.removeItem('shiro-become');
+      history.replaceState({}, '', '/');
+    } else if (pathname === '/' + becomeConfig.slug) {
+      // Only re-enter become mode on the slug path, NOT on root /
       const startResult = await shell.execute(
         `serve "${becomeConfig.directory}" ${becomeConfig.port}`,
         () => {}, () => {},
@@ -402,9 +408,12 @@ async function main() {
   initTitle();
 
   // Auto-reconnect remote session if one was active before page reload
-  const persistedCode = getPersistedRemoteCode();
-  if (persistedCode) {
-    startRemoteWithCode(persistedCode, terminal);
+  // Skip in become mode — no terminal/HUD visible, remote panel would float over app
+  if (!becomeConfig || !localStorage.getItem('shiro-become')) {
+    const persistedCode = getPersistedRemoteCode();
+    if (persistedCode) {
+      startRemoteWithCode(persistedCode, terminal);
+    }
   }
 }
 

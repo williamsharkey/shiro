@@ -102,19 +102,29 @@ export function createServerWindow(options: ServerWindowOptions): ServerWindow {
     el.ontouchend = (e) => { e.preventDefault(); e.stopPropagation(); handler(); };
   };
 
-  // Close button (red)
-  const closeBtn = document.createElement('div');
-  closeBtn.style.cssText = 'width:20px;height:20px;border-radius:50%;background:#ff5f57;cursor:pointer';
+  // Traffic light dot factory
+  const makeDot = (color: string, hoverIcon: string) => {
+    const dot = document.createElement('div');
+    dot.style.cssText = `width:14px;height:14px;border-radius:50%;background:${color};cursor:pointer;position:relative;margin:auto 0`;
+    const icon = document.createElement('span');
+    icon.textContent = hoverIcon;
+    icon.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:9px;line-height:1;color:#333;opacity:0;pointer-events:none;transition:opacity 0.12s';
+    dot.appendChild(icon);
+    dot.onmouseenter = () => { icon.style.opacity = '0.8'; };
+    dot.onmouseleave = () => { icon.style.opacity = '0'; };
+    return dot;
+  };
 
-  // Minimize button (yellow)
-  const miniBtn = document.createElement('div');
-  miniBtn.style.cssText = 'width:20px;height:20px;border-radius:50%;background:#febc2e;cursor:pointer';
+  // Close button (red) — dot icon
+  const closeBtn = makeDot('#ff5f57', '\u00b7');
+
+  // Minimize button (yellow) — minus icon
+  const miniBtn = makeDot('#febc2e', '\u2013');
   let minimized = false;
   let savedH = 0;
 
-  // Maximize button (green)
-  const maxBtn = document.createElement('div');
-  maxBtn.style.cssText = 'width:20px;height:20px;border-radius:50%;background:#27c93f;cursor:pointer';
+  // Maximize button (green) — expand icon
+  const maxBtn = makeDot('#27c93f', '\u25e3');
   let maximized = false;
   let savedState = { width: '', height: '', top: '', left: '', bottom: '', right: '', borderRadius: '' };
 
@@ -179,9 +189,8 @@ export function createServerWindow(options: ServerWindowOptions): ServerWindow {
 
   // Become button (only for iframe-mode windows with a port and onBecome callback)
   if (mode === 'iframe' && port != null && options.onBecome) {
-    const becomeBtn = document.createElement('div');
+    const becomeBtn = makeDot('#af52de', '\u2b1a');
     becomeBtn.title = 'Become — full-screen app mode';
-    becomeBtn.style.cssText = 'width:20px;height:20px;border-radius:50%;background:#af52de;cursor:pointer';
     onTap(becomeBtn, () => options.onBecome!(port!));
     dots.appendChild(becomeBtn);
   }

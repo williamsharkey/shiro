@@ -100,58 +100,57 @@
     /* Sections */
     section { margin-bottom: 48px; }
 
-    .demo-header {
-      display: flex;
-      align-items: baseline;
-      gap: 10px;
-      margin-bottom: 4px;
-    }
-
     section h2 {
       font-size: 1.15rem;
       font-weight: 400;
       font-style: italic;
     }
 
-    section p.desc {
-      font-size: 0.9rem;
-      color: #555;
-      margin-bottom: 8px;
+    /* Caption bar — fades in above slot after demo completes */
+    .demo-caption {
+      display: flex;
+      align-items: center;
+      height: 24px;
+      opacity: 0;
+      transition: opacity 0.4s ease;
+      pointer-events: none;
+      margin-bottom: 4px;
     }
-
-    /* Buttons */
-    .demo-btn {
+    .demo-caption.visible {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .demo-caption .cap-title {
+      font-size: 0.78rem;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      color: #888;
+      font-weight: 600;
+    }
+    .demo-caption .cap-desc {
+      font-size: 0.74rem;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      color: #bbb;
+      margin-left: 6px;
+    }
+    .demo-caption .cap-replay {
+      margin-left: auto;
       background: none;
-      border: 1px solid #ccc;
+      border: 1px solid #ddd;
       border-radius: 3px;
-      padding: 2px 10px;
-      font-size: 0.7rem;
-      color: #777;
+      padding: 1px 8px;
+      font-size: 0.65rem;
+      color: #aaa;
       cursor: pointer;
       font-family: 'SF Mono', Consolas, monospace;
-      letter-spacing: 0.03em;
       transition: all 0.15s;
     }
-    .demo-btn:hover { border-color: #888; color: #444; }
-    .demo-btn.playing { color: #3b6e8f; border-color: #3b6e8f; }
-
-    .reset-btn {
-      background: none;
-      border: none;
-      padding: 2px 4px;
-      font-size: 0.65rem;
-      color: #bbb;
-      cursor: pointer;
-      font-family: 'SF Mono', Consolas, monospace;
-    }
-    .reset-btn:hover { color: #888; }
+    .demo-caption .cap-replay:hover { border-color: #999; color: #666; }
 
     /* Demo slot — holds the shared real terminal iframe */
     .demo-slot {
       height: 320px;
       border-radius: 6px;
       overflow: hidden;
-      margin: 8px 0;
       background: #1a1a2e;
       position: relative;
     }
@@ -161,16 +160,68 @@
       border: none;
       display: block;
     }
-    .demo-slot:empty::after {
-      content: 'click play';
-      position: absolute;
-      top: 50%; left: 50%;
-      transform: translate(-50%, -50%);
-      color: #3d3d5c;
-      font-family: 'SF Mono', Consolas, monospace;
-      font-size: 0.75rem;
-    }
     .demo-slot-tall { height: 400px; }
+
+    /* YouTube-style overlay */
+    .demo-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      background: rgba(15, 15, 30, 0.88);
+      z-index: 2;
+      cursor: pointer;
+      transition: opacity 0.35s ease;
+    }
+    .demo-overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .demo-overlay h2 {
+      font-size: 1.5rem;
+      font-weight: 400;
+      color: #c8c8e0;
+      font-style: normal;
+      font-family: 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif;
+      margin-bottom: 6px;
+      letter-spacing: 0.01em;
+    }
+    .demo-overlay .overlay-desc {
+      font-size: 0.82rem;
+      color: #6b6b8a;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      margin-bottom: 20px;
+      text-align: center;
+      max-width: 320px;
+      line-height: 1.4;
+    }
+    .demo-play-btn {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      border: 2px solid rgba(200, 200, 224, 0.3);
+      background: rgba(200, 200, 224, 0.08);
+      color: #c8c8e0;
+      font-size: 1.3rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+      padding-left: 3px;
+    }
+    .demo-play-btn:hover {
+      background: rgba(200, 200, 224, 0.18);
+      border-color: rgba(200, 200, 224, 0.5);
+      transform: scale(1.08);
+    }
+    .demo-play-btn.loading {
+      font-size: 0.65rem;
+      font-family: 'SF Mono', Consolas, monospace;
+      padding-left: 0;
+    }
 
     /* Preview */
     .preview {
@@ -179,6 +230,7 @@
       margin-top: -8px;
       overflow: hidden;
       background: #fff;
+      position: relative;
     }
     .preview iframe { width: 100%; height: 260px; border: none; display: block; }
     .preview-label {
@@ -190,6 +242,26 @@
       border-bottom: 1px solid #eee;
       text-transform: uppercase;
       letter-spacing: 0.08em;
+    }
+    .preview-overlay {
+      position: absolute;
+      inset: 0;
+      top: 22px; /* below label bar */
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.85);
+      z-index: 2;
+      transition: opacity 0.35s ease;
+    }
+    .preview-overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .preview-overlay span {
+      font-size: 0.82rem;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      color: #bbb;
     }
 
     /* Info sections */
@@ -280,6 +352,8 @@
       article { padding: 28px 16px 60px; }
       h1 { font-size: 1.8rem; }
       .demo-slot { height: 280px; }
+      .demo-overlay h2 { font-size: 1.25rem; }
+      .demo-play-btn { width: 48px; height: 48px; font-size: 1.1rem; }
     }
   </style>
 </head>
@@ -302,75 +376,83 @@
 
     <!-- Demo 1: Pipes -->
     <section id="demo-pipes">
-      <div class="demo-header">
-        <h2>Pipes</h2>
-        <button class="demo-btn" onclick="demos.pipes.play()">&#9654; Play</button>
-        <button class="reset-btn" onclick="demos.pipes.reset()">Reset</button>
+      <div class="demo-caption"><span class="cap-title">Pipes</span><span class="cap-desc">pipes, redirects, and shell plumbing</span><button class="cap-replay" onclick="demos.pipes.reset();demos.pipes.play()">&#8635; replay</button></div>
+      <div class="demo-slot">
+        <div class="demo-overlay" onclick="demos.pipes.play()">
+          <h2>Pipes</h2>
+          <p class="overlay-desc">Pipes, redirects, and the usual shell plumbing.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
       </div>
-      <p class="desc">Pipes, redirects, and the usual shell plumbing.</p>
-      <div class="demo-slot"></div>
     </section>
 
     <!-- Demo 2: Files -->
     <section id="demo-files">
-      <div class="demo-header">
-        <h2>Files persist</h2>
-        <button class="demo-btn" onclick="demos.files.play()">&#9654; Play</button>
-        <button class="reset-btn" onclick="demos.files.reset()">Reset</button>
+      <div class="demo-caption"><span class="cap-title">Files persist</span><span class="cap-desc">stored in IndexedDB, survives reloads</span><button class="cap-replay" onclick="demos.files.reset();demos.files.play()">&#8635; replay</button></div>
+      <div class="demo-slot">
+        <div class="demo-overlay" onclick="demos.files.play()">
+          <h2>Files persist</h2>
+          <p class="overlay-desc">Stored in IndexedDB. Survives page reloads.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
       </div>
-      <p class="desc"><span class="noted">Stored in IndexedDB<span class="tip">Each file is an IndexedDB record with path, content, and metadata. An in-memory cache makes reads fast; writes flush async to IndexedDB.</span></span>. Survives page reloads.</p>
-      <div class="demo-slot"></div>
     </section>
 
     <!-- Demo 3: Text tools -->
     <section id="demo-text">
-      <div class="demo-header">
-        <h2>Text tools</h2>
-        <button class="demo-btn" onclick="demos.text.play()">&#9654; Play</button>
-        <button class="reset-btn" onclick="demos.text.reset()">Reset</button>
+      <div class="demo-caption"><span class="cap-title">Text tools</span><span class="cap-desc">grep, sort, cut, awk</span><button class="cap-replay" onclick="demos.text.reset();demos.text.play()">&#8635; replay</button></div>
+      <div class="demo-slot">
+        <div class="demo-overlay" onclick="demos.text.play()">
+          <h2>Text tools</h2>
+          <p class="overlay-desc">grep, sort, cut, awk &mdash; the standard toolkit.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
       </div>
-      <p class="desc"><span class="noted">grep, sort, cut, awk<span class="tip">JavaScript implementations of standard Unix text tools. Most common flags supported. Part of the fluffycoreutils shared library.</span></span> — the standard toolkit.</p>
-      <div class="demo-slot"></div>
     </section>
 
     <!-- Demo 4: Git -->
     <section id="demo-git">
-      <div class="demo-header">
-        <h2><span class="noted">Git works<span class="tip"><strong>Included:</strong> init, add, commit, status, log, diff, clone, branch, checkout, rm, tag.<br><strong>Not available:</strong> merge, rebase, stash, cherry-pick, push, pull, remote operations, submodules.</span></span></h2>
-        <button class="demo-btn" onclick="demos.git.play()">&#9654; Play</button>
-        <button class="reset-btn" onclick="demos.git.reset()">Reset</button>
+      <div class="demo-caption"><span class="cap-title">Git</span><span class="cap-desc">local repository operations via isomorphic-git</span><button class="cap-replay" onclick="demos.git.reset();demos.git.play()">&#8635; replay</button></div>
+      <div class="demo-slot">
+        <div class="demo-overlay" onclick="demos.git.play()">
+          <h2>Git</h2>
+          <p class="overlay-desc">Local repository operations via isomorphic-git.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
       </div>
-      <p class="desc">Local repository operations via <span class="noted">isomorphic-git<span class="tip">A pure JavaScript git implementation. Runs entirely in the browser with no native binaries. Stores objects in IndexedDB.</span></span>.</p>
-      <div class="demo-slot"></div>
     </section>
 
     <!-- Demo 5: Serve a page -->
     <section id="demo-page">
-      <div class="demo-header">
-        <h2>Serve a page</h2>
-        <button class="demo-btn" onclick="demos.page.play()">&#9654; Play</button>
-        <button class="reset-btn" onclick="demos.page.reset()">Reset</button>
+      <div class="demo-caption"><span class="cap-title">Serve a page</span><span class="cap-desc">write HTML, serve it, edit in place</span><button class="cap-replay" onclick="demos.page.reset();demos.page.play()">&#8635; replay</button></div>
+      <div class="demo-slot" style="border-radius:6px 6px 0 0;margin-bottom:0">
+        <div class="demo-overlay" onclick="demos.page.play()">
+          <h2>Serve a page</h2>
+          <p class="overlay-desc">Write HTML, serve it, edit in place.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
       </div>
-      <p class="desc">Write HTML, <span class="noted">serve it<span class="tip">The serve command creates a virtual HTTP server. Content is loaded into an iframe via srcdoc with injected scripts for link and fetch interception.</span></span>, edit in place.</p>
-      <div class="demo-slot" style="border-radius:6px 6px 0 0;margin-bottom:0"></div>
       <div class="preview">
         <div class="preview-label">preview</div>
         <iframe id="preview-page"></iframe>
+        <div class="preview-overlay"><span>appears when demo runs</span></div>
       </div>
     </section>
 
     <!-- Demo 6: Interact with an app -->
     <section id="demo-interact">
-      <div class="demo-header">
-        <h2>Interact with an app</h2>
-        <button class="demo-btn" onclick="demos.interact.play()">&#9654; Play</button>
-        <button class="reset-btn" onclick="demos.interact.reset()">Reset</button>
+      <div class="demo-caption"><span class="cap-title">Interact with an app</span><span class="cap-desc">page command, click &amp; read DOM, then commit</span><button class="cap-replay" onclick="demos.interact.reset();demos.interact.play()">&#8635; replay</button></div>
+      <div class="demo-slot demo-slot-tall" style="border-radius:6px 6px 0 0;margin-bottom:0">
+        <div class="demo-overlay" onclick="demos.interact.play()">
+          <h2>Interact with an app</h2>
+          <p class="overlay-desc">Serve an app, use <code style="color:#8b8bab;background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">page</code> to click and read DOM elements, then commit.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
       </div>
-      <p class="desc">Serve an app, use <code>page</code> to click and read DOM elements, then commit.</p>
-      <div class="demo-slot demo-slot-tall" style="border-radius:6px 6px 0 0;margin-bottom:0"></div>
       <div class="preview">
         <div class="preview-label">preview</div>
         <iframe id="preview-interact"></iframe>
+        <div class="preview-overlay"><span>appears when demo runs</span></div>
       </div>
     </section>
 
@@ -465,84 +547,139 @@ Copied to clipboard (42 KB)</div>
       this.previewFiles = opts.previewFiles || [];
       this.el = document.getElementById(id);
       this.slot = this.el.querySelector('.demo-slot');
-      this.playBtn = this.el.querySelector('.demo-btn');
+      this.overlay = this.el.querySelector('.demo-overlay');
+      this.playBtn = this.overlay.querySelector('.demo-play-btn');
+      this.caption = this.el.querySelector('.demo-caption');
+      this.previewOverlay = this.el.querySelector('.preview-overlay');
       this.playing = false;
-      this.paused = false;
       this.aborted = false;
     }
 
     async play() {
-      if (this.playing && !this.paused) {
-        this.paused = true;
-        this.playBtn.textContent = '\u25b6 Resume';
-        this.playBtn.classList.remove('playing');
-        return;
-      }
-      if (this.paused) {
-        this.paused = false;
-        this.playBtn.textContent = '\u23f8 Pause';
-        this.playBtn.classList.add('playing');
-        return;
-      }
+      if (this.playing) return; // already running
 
       // Stop any other playing demo
       if (activeDemo && activeDemo !== this && activeDemo.playing) {
         activeDemo.aborted = true;
         activeDemo.playing = false;
-        activeDemo.paused = false;
-        activeDemo.playBtn.textContent = '\u25b6 Play';
-        activeDemo.playBtn.classList.remove('playing');
+      }
+      // If taking iframe from another demo, restore that demo's overlay
+      if (activeDemo && activeDemo !== this) {
+        activeDemo.showOverlay();
+        activeDemo.caption.classList.remove('visible');
       }
 
-      // Boot shiro if needed
-      if (!shiroReady) {
-        this.playBtn.textContent = 'Loading\u2026';
-        try { await waitForShiro(); } catch { this.playBtn.textContent = 'Error'; return; }
-      }
-
-      // Move iframe to this demo's slot
+      // Move iframe to this demo's slot (appendChild triggers iframe reload!)
       const iframe = document.getElementById('shiro-live');
+      const needsMove = iframe.parentElement !== this.slot;
       iframe.style.cssText = 'width:100%;height:100%;border:none;display:block';
-      this.slot.appendChild(iframe);
+      if (needsMove) {
+        this.slot.appendChild(iframe);
+        shiroReady = false; // iframe reloaded — must re-wait
+      }
       activeDemo = this;
 
+      // Wait for shiro to boot (or re-boot after move)
+      if (!shiroReady) {
+        this.playBtn.textContent = '\u2026';
+        this.playBtn.classList.add('loading');
+        try { await waitForShiro(); } catch {
+          this.playBtn.textContent = '!';
+          this.playBtn.classList.remove('loading');
+          return;
+        }
+        this.playBtn.classList.remove('loading');
+      }
+
+      // Hide overlay + caption, start playing
+      this.overlay.classList.add('hidden');
+      this.caption.classList.remove('visible');
+      if (this.previewOverlay) this.previewOverlay.classList.add('hidden');
       this.playing = true;
-      this.paused = false;
       this.aborted = false;
-      this.playBtn.textContent = '\u23f8 Pause';
-      this.playBtn.classList.add('playing');
 
       // Clear terminal
       const shiro = getShiro();
       const term = shiro.terminal.term;
-      term.write('\x1b[2J\x1b[H');
+      term.clear();
       shiro.terminal.fitAddon.fit();
 
       for (const step of this.steps) {
         if (this.aborted) break;
-        while (this.paused && !this.aborted) await sleep(100);
-        if (this.aborted) break;
         await this.runStep(step);
       }
 
+      // Hint animation — show the terminal is interactive, then hand over
+      if (!this.aborted) await this.showHint();
+
       this.playing = false;
-      this.paused = false;
-      this.playBtn.textContent = '\u21ba Replay';
-      this.playBtn.classList.remove('playing');
+      // Show caption bar (not overlay) — leave terminal exposed for interaction
+      this.caption.classList.add('visible');
+    }
+
+    showOverlay() {
+      this.overlay.classList.remove('hidden');
+      this.playBtn.textContent = '\u25b6';
+      this.playBtn.classList.remove('loading');
+    }
+
+    async showHint() {
+      const shiro = getShiro();
+      const term = shiro.terminal.term;
+      const hints = [
+        '// try something yourself',
+        '// the terminal is yours now',
+        '// go ahead, type a command',
+        '// your turn — try anything',
+        '// feel free to explore',
+        "// try: echo hello | sed 's/hello/world/'",
+        '// end of demo — poke around',
+        '// this is a real shell',
+        '// try: ls /usr/local/bin',
+        '// try: help',
+      ];
+      const hint = hints[Math.floor(Math.random() * hints.length)];
+
+      // Show prompt
+      term.write('\x1b[32muser@shiro\x1b[0m:\x1b[34m~\x1b[0m$ ');
+      await sleep(500);
+      if (this.aborted) return;
+
+      // Type hint at 4x speed (dim color)
+      term.write('\x1b[38;5;242m');
+      for (let i = 0; i < hint.length; i++) {
+        if (this.aborted) return;
+        term.write(hint[i]);
+        await sleep(35 / 4);
+      }
+      term.write('\x1b[0m');
+      await sleep(1000);
+      if (this.aborted) return;
+
+      // Delete hint at 8x speed
+      for (let i = 0; i < hint.length; i++) {
+        if (this.aborted) return;
+        term.write('\b \b');
+        await sleep(35 / 8);
+      }
+
+      // Clear the fake prompt, then trigger a real one
+      term.write('\r\x1b[K');
+      shiro.terminal.injectInput('\r');
     }
 
     reset() {
       this.aborted = true;
       this.playing = false;
-      this.paused = false;
-      this.playBtn.textContent = '\u25b6 Play';
-      this.playBtn.classList.remove('playing');
+      this.showOverlay();
+      this.caption.classList.remove('visible');
       if (this.previewId) document.getElementById(this.previewId).srcdoc = '';
+      if (this.previewOverlay) this.previewOverlay.classList.remove('hidden');
       // Clear terminal if we own it
       if (activeDemo === this) {
         try {
           const term = getShiro().terminal.term;
-          term.write('\x1b[2J\x1b[H');
+          term.clear();
         } catch {}
       }
     }
@@ -608,7 +745,6 @@ Copied to clipboard (42 KB)</div>
 
         for (let i = 0; i < line.length; i++) {
           if (this.aborted) return;
-          while (this.paused && !this.aborted) await sleep(50);
           const speed = 4 + 12 * Math.min(charPos / 20, 1);
           term.write(line[i]);
           charPos++;
@@ -642,27 +778,16 @@ Copied to clipboard (42 KB)</div>
     }
 
     async injectIframe(port) {
-      // Create a hidden iframe inside the demo iframe's document
-      // so the `page` command can find it by data-virtual-port
+      // Use serve open to create a proper iframe that page can find,
+      // then hide the server window so only the terminal is visible
       try {
         const shiro = getShiro();
-        const resp = await shiro.iframeServer.fetch(port, '/');
-        const body = typeof resp.body === 'string'
-          ? resp.body
-          : resp.body instanceof Uint8Array
-            ? new TextDecoder().decode(resp.body)
-            : '';
+        await shiro.shell.execute(`serve open ${port}`, () => {}, () => {});
+        await sleep(800);
+        // Hide the server window (keep iframe alive for page command)
         const ifrDoc = shiro.terminal.term.element.ownerDocument;
-        // Remove old inject if exists
-        const old = ifrDoc.querySelector(`[data-virtual-port="${port}"]`);
-        if (old) old.remove();
-        const inj = ifrDoc.createElement('iframe');
-        inj.setAttribute('data-virtual-port', String(port));
-        inj.srcdoc = body;
-        inj.style.cssText = 'position:fixed;bottom:0;right:0;width:1px;height:1px;opacity:0;pointer-events:none';
-        ifrDoc.body.appendChild(inj);
-        // Wait for srcdoc to parse
-        await new Promise(r => { inj.onload = r; setTimeout(r, 500); });
+        const win = ifrDoc.querySelector(`[data-server-window="${port}"]`);
+        if (win) win.style.cssText += ';width:1px;height:1px;opacity:0;pointer-events:none;overflow:hidden';
       } catch (e) {
         console.warn('inject failed:', e);
       }

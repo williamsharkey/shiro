@@ -1,6 +1,6 @@
 import { Command, CommandContext } from './index';
 import { Shell } from '../shell';
-import { createRemotePanel, type RemotePanel } from '../remote-panel';
+import { createRemotePanel, type RemotePanel, type LogType } from '../remote-panel';
 
 // LocalStorage key for persisting remote session code across page reloads
 const REMOTE_CODE_KEY = 'shiro-remote-code';
@@ -98,6 +98,8 @@ interface RemoteSession {
   status: 'connecting' | 'waiting' | 'connected' | 'error';
   shadowShell: Shell | null;
   panel: RemotePanel | null;
+  activityBuffer: Array<{ type: LogType; message: string }>;
+  panelOpen: boolean;
 }
 
 // Store session on window for global access
@@ -118,6 +120,86 @@ function createShadowShell(): Shell {
 }
 
 /**
+ * Log activity to the panel if open, or buffer it for later.
+ * When buffering, flips the HUD activity dot to green.
+ */
+function logActivity(session: RemoteSession, type: LogType, message: string) {
+  if (session.panelOpen && session.panel) {
+    session.panel.log(type, message);
+  } else {
+    session.activityBuffer.push({ type, message });
+    // Notify HUD of activity
+    const terminal = (window as any).__shiro?.terminal;
+    terminal?.updateHudRemoteActivity?.(true);
+  }
+}
+
+/**
+ * Open (or focus) the remote panel. Called from HUD link click.
+ * Creates the panel if needed, replays buffered activity, resets the HUD dot.
+ */
+export function openRemotePanel(): void {
+  const session = window.__shiroRemoteSession;
+  if (!session) return;
+
+  if (session.panelOpen && session.panel) {
+    // Panel already open — just bring to front
+    session.panel.element.style.zIndex = '2147483647';
+    return;
+  }
+
+  // Create panel
+  const panel = createRemotePanel(session.code, `remote \u2194 ${session.displayCode}`);
+  session.panel = panel;
+  session.panelOpen = true;
+
+  // Set status based on current session state
+  panel.setStatus(session.status === 'connected' ? 'connected' : session.status === 'error' ? 'disconnected' : 'connecting');
+
+  // Replay buffered activity
+  for (const entry of session.activityBuffer) {
+    panel.log(entry.type, entry.message);
+  }
+  session.activityBuffer = [];
+
+  // Reset HUD activity dot
+  const terminal = (window as any).__shiro?.terminal;
+  terminal?.updateHudRemoteActivity?.(false);
+
+  // Wire panel input → data channel
+  panel.onUserMessage = (text: string) => {
+    if (session.dc?.readyState === 'open') {
+      session.dc.send(JSON.stringify({ type: 'user_message', message: text }));
+      panel.log('user', text);
+    }
+  };
+
+  // Wire close button to mark panel as closed (so future activity buffers again)
+  const origClose = panel.close.bind(panel);
+  panel.close = () => {
+    session.panelOpen = false;
+    session.panel = null;
+    origClose();
+  };
+  // Also intercept the close button click on the DOM element
+  const closeBtn = panel.element.querySelector('[style*="ff5f57"]') as HTMLElement | null;
+  if (closeBtn) {
+    const origClick = closeBtn.onclick;
+    closeBtn.onclick = (e) => {
+      session.panelOpen = false;
+      session.panel = null;
+      if (origClick) origClick.call(closeBtn, e);
+    };
+    const origTouch = closeBtn.ontouchend;
+    closeBtn.ontouchend = (e) => {
+      session.panelOpen = false;
+      session.panel = null;
+      if (origTouch) origTouch.call(closeBtn, e);
+    };
+  }
+}
+
+/**
  * Handle incoming commands from the remote peer.
  * Uses shadow shell for exec (headless, no terminal corruption).
  */
@@ -133,8 +215,8 @@ async function handleRemoteCommand(session: RemoteSession, message: string): Pro
       case 'hello': {
         // MCP client identifies itself — update panel title
         const name = cmd.name || 'remote';
-        session.panel?.setTitle(`${name} \u2194 ${session.displayCode}`);
-        session.panel?.log('info', `${name} connected`);
+        if (session.panel) session.panel.setTitle(`${name} \u2194 ${session.displayCode}`);
+        logActivity(session, 'info', `${name} connected`);
         return JSON.stringify({ type: 'hello_ack', requestId });
       }
 
@@ -143,7 +225,7 @@ async function handleRemoteCommand(session: RemoteSession, message: string): Pro
         if (!shell) {
           return JSON.stringify({ type: 'error', error: 'Shell not available', requestId });
         }
-        session.panel?.log('exec', `$ ${cmd.command}`);
+        logActivity(session, 'exec', `$ ${cmd.command}`);
 
         let stdout = '';
         let stderr = '';
@@ -154,8 +236,8 @@ async function handleRemoteCommand(session: RemoteSession, message: string): Pro
           false, undefined, true, // skipHistory — remote commands shouldn't pollute user history
         );
 
-        if (stdout) session.panel?.log('info', stdout.trimEnd());
-        if (stderr) session.panel?.log('error', stderr.trimEnd());
+        if (stdout) logActivity(session, 'info', stdout.trimEnd());
+        if (stderr) logActivity(session, 'error', stderr.trimEnd());
 
         return JSON.stringify({ type: 'exec_result', stdout, stderr, exitCode, requestId });
       }
@@ -165,7 +247,7 @@ async function handleRemoteCommand(session: RemoteSession, message: string): Pro
         if (!fs) {
           return JSON.stringify({ type: 'error', error: 'Filesystem not available', requestId });
         }
-        session.panel?.log('read', cmd.path);
+        logActivity(session, 'read', cmd.path);
         const content = await fs.readFile(cmd.path);
         const base64 = btoa(String.fromCharCode(...content));
         return JSON.stringify({ type: 'read_result', path: cmd.path, content: base64, requestId });
@@ -176,7 +258,7 @@ async function handleRemoteCommand(session: RemoteSession, message: string): Pro
         if (!fs) {
           return JSON.stringify({ type: 'error', error: 'Filesystem not available', requestId });
         }
-        session.panel?.log('write', cmd.path);
+        logActivity(session, 'write', cmd.path);
         const content = Uint8Array.from(atob(cmd.content), c => c.charCodeAt(0));
         await fs.writeFile(cmd.path, content);
         return JSON.stringify({ type: 'write_result', path: cmd.path, ok: true, requestId });
@@ -187,16 +269,16 @@ async function handleRemoteCommand(session: RemoteSession, message: string): Pro
         if (!fs) {
           return JSON.stringify({ type: 'error', error: 'Filesystem not available', requestId });
         }
-        session.panel?.log('read', `ls ${cmd.path}`);
+        logActivity(session, 'read', `ls ${cmd.path}`);
         const entries = await fs.readdir(cmd.path);
         return JSON.stringify({ type: 'list_result', path: cmd.path, entries, requestId });
       }
 
       case 'eval': {
-        session.panel?.log('eval', cmd.code);
+        logActivity(session, 'eval', cmd.code);
         const result = await eval(cmd.code);
         const resultStr = String(result);
-        session.panel?.log('info', resultStr);
+        logActivity(session, 'info', resultStr);
         return JSON.stringify({ type: 'eval_result', result: resultStr, requestId });
       }
 
@@ -204,7 +286,7 @@ async function handleRemoteCommand(session: RemoteSession, message: string): Pro
         return JSON.stringify({ type: 'error', error: `Unknown command type: ${cmd.type}`, requestId });
     }
   } catch (err: any) {
-    session.panel?.log('error', err.message || String(err));
+    logActivity(session, 'error', err.message || String(err));
     // Note: requestId may not be available if JSON parsing failed
     return JSON.stringify({ type: 'error', error: err.message || String(err) });
   }
@@ -219,8 +301,8 @@ function wireSession(session: RemoteSession, dc: RTCDataChannel) {
 
   dc.onopen = () => {
     session.status = 'connected';
-    session.panel?.setStatus('connected');
-    session.panel?.log('info', 'Peer connected');
+    if (session.panel) session.panel.setStatus('connected');
+    logActivity(session, 'info', 'Peer connected');
     console.log('[remote] Peer connected');
   };
 
@@ -230,11 +312,13 @@ function wireSession(session: RemoteSession, dc: RTCDataChannel) {
     closeFired = true;
 
     console.log('[remote] Peer disconnected');
-    session.panel?.setStatus('disconnected');
-    session.panel?.log('info', 'Peer disconnected — waiting for reconnect...');
+    if (session.panel) session.panel.setStatus('disconnected');
+    logActivity(session, 'info', 'Peer disconnected — waiting for reconnect...');
     const savedCode = session.code;
     // Keep panel alive across reconnect
     const savedPanel = session.panel;
+    const savedPanelOpen = session.panelOpen;
+    const savedBuffer = session.activityBuffer;
     const savedShell = session.shadowShell;
     // Null out dc before cleanup to prevent re-entrant close
     session.dc = null;
@@ -243,7 +327,7 @@ function wireSession(session: RemoteSession, dc: RTCDataChannel) {
     setTimeout(() => {
       if (!window.__shiroRemoteSession) {
         console.log('[remote] Re-registering for reconnection...');
-        startRemoteWithCode(savedCode, undefined, savedPanel, savedShell);
+        startRemoteWithCode(savedCode, undefined, savedPanel, savedShell, savedPanelOpen, savedBuffer);
       }
     }, 1000);
   };
@@ -254,16 +338,6 @@ function wireSession(session: RemoteSession, dc: RTCDataChannel) {
       dc.send(response);
     }
   };
-
-  // Wire panel input → data channel
-  if (session.panel) {
-    session.panel.onUserMessage = (text: string) => {
-      if (dc.readyState === 'open') {
-        dc.send(JSON.stringify({ type: 'user_message', message: text }));
-        session.panel?.log('user', text);
-      }
-    };
-  }
 }
 
 /**
@@ -304,11 +378,8 @@ async function startRemote(ctx: CommandContext): Promise<number> {
 
   ctx.stdout += 'Starting remote session...\n';
 
-  // Create shadow shell and panel
+  // Create shadow shell (panel is created lazily on demand)
   const shadowShell = createShadowShell();
-  const panel = createRemotePanel(code, `remote \u2194 ${displayCode}`);
-  panel.log('info', `Waiting for connection...`);
-  panel.setStatus('connecting');
 
   // Create peer connection
   const pc = new RTCPeerConnection({
@@ -325,7 +396,9 @@ async function startRemote(ctx: CommandContext): Promise<number> {
     dc: null,
     status: 'connecting',
     shadowShell,
-    panel,
+    panel: null,
+    activityBuffer: [{ type: 'info', message: 'Waiting for connection...' }],
+    panelOpen: false,
   };
 
   window.__shiroRemoteSession = session;
@@ -493,9 +566,10 @@ function stopRemote(ctx: CommandContext): number {
 
   ctx.stdout += 'Remote session stopped.\n';
 
-  // Clear the remote code from HUD (if visible)
+  // Clear the remote code and activity dot from HUD (if visible)
   if (ctx.terminal) {
     (ctx.terminal as any).updateHudRemoteCode?.(null);
+    (ctx.terminal as any).updateHudRemoteActivity?.(false);
   }
 
   return 0;
@@ -583,6 +657,8 @@ export async function startRemoteWithCode(
   terminal?: any,
   existingPanel?: RemotePanel | null,
   existingShell?: Shell | null,
+  existingPanelOpen?: boolean,
+  existingBuffer?: Array<{ type: LogType; message: string }>,
 ): Promise<boolean> {
   if (window.__shiroRemoteSession) {
     console.log('[remote] Session already active');
@@ -592,13 +668,17 @@ export async function startRemoteWithCode(
   const displayCode = code.split('-').slice(0, 2).join('-');
   console.log(`[remote] Auto-reconnecting with code: ${displayCode}`);
 
-  // Create or reuse shadow shell and panel
+  // Create or reuse shadow shell (panel is lazy — only created on demand)
   const shadowShell = existingShell || createShadowShell();
-  const panel = existingPanel || createRemotePanel(code, `remote \u2194 ${displayCode}`);
-  if (!existingPanel) {
-    panel.log('info', `Session resumed: ${displayCode}`);
+  const panel = existingPanel || null;
+  const panelOpen = existingPanel ? (existingPanelOpen ?? true) : false;
+  const activityBuffer = existingBuffer || [];
+  if (panel) {
+    panel.setStatus('connecting');
   }
-  panel.setStatus('connecting');
+  if (!existingPanel) {
+    activityBuffer.push({ type: 'info', message: `Session resumed: ${displayCode}` });
+  }
 
   // Create peer connection
   const pc = new RTCPeerConnection({
@@ -616,6 +696,8 @@ export async function startRemoteWithCode(
     status: 'connecting',
     shadowShell,
     panel,
+    activityBuffer,
+    panelOpen,
   };
 
   window.__shiroRemoteSession = session;

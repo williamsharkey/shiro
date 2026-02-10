@@ -3,6 +3,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { Shell } from './shell';
 import buildNumber from '../build-number.txt?raw';
 import { bufferToString } from './utils/copy-utils';
+import { openRemotePanel } from './commands/remote';
 
 /**
  * HUD (Heads-Up Display) state for dynamic banner updates.
@@ -95,6 +96,10 @@ export class ShiroTerminal {
             ).then(() => {
               this.showPrompt();
             });
+            return;
+          }
+          if (uri === 'shiro://remote') {
+            openRemotePanel();
             return;
           }
           // Open regular links directly without confirmation popup
@@ -351,12 +356,15 @@ export class ShiroTerminal {
 
     // Row 0: Top border - with or without remote code
     // Box is 43 chars wide. Right end is always ╒══╗ (4 chars) for alignment.
-    // Format: ╔ + ═padding + ╛ + code + ╒══╗ = 43
-    // So: 1 + padding + 1 + codeLen + 4 = 43 → padding = 37 - codeLen
+    // Format: ╔ + ═padding + ╛ + code + " ○" + ╒══╗ = 43 (with link wrapping name+dot)
+    // So: 1 + padding + 1 + codeLen + 2 + 4 = 43 → padding = 35 - codeLen
     if (remoteCode) {
       const codeLen = remoteCode.length;
-      const leftPad = Math.max(1, 37 - codeLen);
-      this.term.writeln(`\x1b[36m╔${'═'.repeat(leftPad)}╛\x1b[93m${remoteCode}\x1b[36m╒══╗\x1b[0m`);
+      const leftPad = Math.max(1, 35 - codeLen);
+      // OSC 8 link wraps name + activity dot — clicking opens remote panel
+      const linkStart = '\x1b]8;;shiro://remote\x07';
+      const linkEnd = '\x1b]8;;\x07';
+      this.term.writeln(`\x1b[36m╔${'═'.repeat(leftPad)}╛${linkStart}\x1b[93m${remoteCode} \x1b[90m○\x1b[0m${linkEnd}\x1b[36m╒══╗\x1b[0m`);
     } else {
       this.term.writeln('\x1b[36m╔═════════════════════════════════════════╗\x1b[0m');
     }
@@ -434,15 +442,51 @@ export class ShiroTerminal {
     this.term.write(`\x1b[${viewportRow};1H`); // Move to start of row (viewport-relative)
 
     // Box is 43 chars wide. Right end is always ╒══╗ (4 chars) for alignment.
+    // With code: includes OSC 8 link + activity dot (2 extra visible chars: " ○")
     if (code) {
       const codeLen = code.length;
-      const leftPad = Math.max(1, 37 - codeLen);
-      this.term.write(`\x1b[36m╔${'═'.repeat(leftPad)}╛\x1b[93m${code}\x1b[36m╒══╗\x1b[0m`);
+      const leftPad = Math.max(1, 35 - codeLen);
+      const linkStart = '\x1b]8;;shiro://remote\x07';
+      const linkEnd = '\x1b]8;;\x07';
+      this.term.write(`\x1b[36m╔${'═'.repeat(leftPad)}╛${linkStart}\x1b[93m${code} \x1b[90m○\x1b[0m${linkEnd}\x1b[36m╒══╗\x1b[0m`);
     } else {
       this.term.write('\x1b[36m╔═════════════════════════════════════════╗\x1b[0m');
     }
 
     this.term.write('\x1b8'); // Restore cursor (DECRC)
+  }
+
+  /**
+   * Update the remote activity dot in the HUD top border.
+   * active=true: green filled ●, active=false: dim empty ○
+   */
+  updateHudRemoteActivity(active: boolean) {
+    if (!this.isHudVisible()) return;
+
+    // The dot is the last visible character before ╒══╗ on row 0
+    // Position depends on the remote code length — find it dynamically
+    const remoteSession = (window as any).__shiroRemoteSession;
+    if (!remoteSession?.displayCode) return;
+
+    const codeLen = remoteSession.displayCode.length;
+    const leftPad = Math.max(1, 35 - codeLen);
+    // Dot column: ╔(1) + padding + ╛(1) + code + space(1) + dot position
+    const dotCol = 1 + leftPad + 1 + codeLen + 1 + 1; // 1-indexed
+
+    const buffer = this.term.buffer.active;
+    const viewportRow = this.hud!.startRow - buffer.baseY + 1;
+    if (viewportRow < 1 || viewportRow > this.term.rows) return;
+
+    const linkStart = '\x1b]8;;shiro://remote\x07';
+    const linkEnd = '\x1b]8;;\x07';
+    const dot = active
+      ? `${linkStart}\x1b[32m●\x1b[0m${linkEnd}`   // green filled
+      : `${linkStart}\x1b[90m○\x1b[0m${linkEnd}`;   // dim empty
+
+    this.term.write('\x1b7'); // Save cursor
+    this.term.write(`\x1b[${viewportRow};${dotCol}H`); // Move to dot position
+    this.term.write(dot);
+    this.term.write('\x1b8'); // Restore cursor
   }
 
   /**
