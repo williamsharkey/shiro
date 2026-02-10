@@ -58,6 +58,8 @@ src/
     ├── html.ts           # html (render HTML in window) and img (display image)
     ├── page.ts           # page: interact with served app iframes (click, input, text, eval, etc.)
     └── become.ts         # become/unbecome: full-screen app mode with shareable URLs
+├── gif-encoder.ts       # Zero-dep GIF89a encoder + SHIRO1.0 seed extractor
+├── drop-handler.ts      # Drag-and-drop seed GIF import onto terminal
 └── utils/
     ├── copy-utils.ts     # bufferToString (isWrapped-aware), smartCopyProcess (indent strip)
     ├── tar-utils.ts      # gzip decompression and tar extraction
@@ -263,14 +265,22 @@ Uses PBKDF2 key derivation + AES-GCM encryption. The WebSocket relay (built into
 
 ## Seed Command
 
-Export Shiro state as a paste-able snippet:
+Export Shiro state in four modes:
 ```bash
-seed            # Normal seed (iframe loads from shiro.computer)
-seed blob       # Self-contained blob URL (works on CSP-restricted sites like X)
+seed            # Clipboard JS snippet (paste in DevTools console)
+seed blob       # Clipboard snippet, self-contained (CSP-safe blob URL)
+seed gif        # Download .gif with embedded SHIRO1.0 seed data
+seed html       # Download self-contained .html (open in any browser)
 seed yolo       # Target yolo.shiro.computer subdomain
 ```
 
 The blob mode inlines all JS/CSS, gzips (~70% reduction), and creates a blob URL at runtime.
+
+**GIF mode** captures a terminal screenshot, encodes it as GIF89a with a `SHIRO1.0` Application Extension containing gzipped filesystem + localStorage. The overlay shows stats and "Drag this GIF to restore". Zero npm dependencies — pure TypeScript LZW encoder in `src/gif-encoder.ts`.
+
+**HTML mode** inlines all resources and injects a `<script>` that decompresses and posts `shiro-seed-v2` on load.
+
+**Drag-to-import**: Drop a seed GIF onto the terminal to detect the SHIRO1.0 extension, show a confirmation prompt, and restore state. Handled by `src/drop-handler.ts`, initialized in `main.ts`.
 
 ## Become (App Mode)
 

@@ -1,4 +1,5 @@
 import { Command, CommandContext } from './index';
+import { captureTerminal, addOverlay, encodeGIF } from '../gif-encoder';
 
 /**
  * seed: Copy a Shiro seed to clipboard — full state snapshot
@@ -108,11 +109,14 @@ function buildSnippet(url: string, ndjson: string, storage: string, stats: SeedS
   var T=tb.style;T.background='#1a1a2e';T.height='32px';T.display='flex';T.alignItems='center';
   T.padding='0 10px';T.cursor='grab';T.userSelect='none';T.flexShrink='0';
   var dots=document.createElement('div');dots.style.display='flex';dots.style.gap='6px';
-  var close=document.createElement('div');var cs=close.style;
-  cs.width='12px';cs.height='12px';cs.borderRadius='50%';cs.background='#ff5f57';cs.cursor='pointer';
+  function mkDot(col,icon){
+    var d=document.createElement('div');d.style.cssText='width:14px;height:14px;border-radius:50%;background:'+col+';cursor:pointer;position:relative;margin:auto 0';
+    var ic=document.createElement('span');ic.textContent=icon;ic.style.cssText='position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:9px;line-height:1;color:#333;opacity:0;pointer-events:none;transition:opacity 0.12s';
+    d.appendChild(ic);d.onmouseenter=function(){ic.style.opacity='0.8'};d.onmouseleave=function(){ic.style.opacity='0'};return d;
+  }
+  var close=mkDot('#ff5f57','\\u00b7');
   close.onclick=function(){w.remove()};
-  var mini=document.createElement('div');var ms=mini.style;
-  ms.width='12px';ms.height='12px';ms.borderRadius='50%';ms.background='#febc2e';ms.cursor='pointer';
+  var mini=mkDot('#febc2e','\\u2013');
   var minimized=false;
   mini.onclick=function(){
     minimized=!minimized;
@@ -126,7 +130,7 @@ function buildSnippet(url: string, ndjson: string, storage: string, stats: SeedS
   /* Font size controls - hidden until hover */
   var fontSize=14;
   var zoomWrap=document.createElement('div');zoomWrap.style.cssText='display:flex;gap:4px;opacity:0;transition:opacity 0.15s';
-  var zoomOut=document.createElement('div');zoomOut.textContent='−';
+  var zoomOut=document.createElement('div');zoomOut.textContent='\\u2212';
   zoomOut.style.cssText='width:14px;height:14px;border-radius:50%;background:#555;color:#fff;font-size:12px;line-height:14px;text-align:center;cursor:pointer';
   var zoomIn=document.createElement('div');zoomIn.textContent='+';
   zoomIn.style.cssText='width:14px;height:14px;border-radius:50%;background:#555;color:#fff;font-size:12px;line-height:14px;text-align:center;cursor:pointer';
@@ -305,11 +309,14 @@ function buildBlobSnippet(compressedHtmlB64: string, compressedFsB64: string, co
   var T=tb.style;T.background='#1a1a2e';T.height='32px';T.display='flex';T.alignItems='center';
   T.padding='0 10px';T.cursor='grab';T.userSelect='none';T.flexShrink='0';
   var dots=document.createElement('div');dots.style.display='flex';dots.style.gap='6px';
-  var close=document.createElement('div');var cs=close.style;
-  cs.width='12px';cs.height='12px';cs.borderRadius='50%';cs.background='#ff5f57';cs.cursor='pointer';
+  function mkDot(col,icon){
+    var d=document.createElement('div');d.style.cssText='width:14px;height:14px;border-radius:50%;background:'+col+';cursor:pointer;position:relative;margin:auto 0';
+    var ic=document.createElement('span');ic.textContent=icon;ic.style.cssText='position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:9px;line-height:1;color:#333;opacity:0;pointer-events:none;transition:opacity 0.12s';
+    d.appendChild(ic);d.onmouseenter=function(){ic.style.opacity='0.8'};d.onmouseleave=function(){ic.style.opacity='0'};return d;
+  }
+  var close=mkDot('#ff5f57','\\u00b7');
   close.onclick=function(){URL.revokeObjectURL(blobUrl);w.remove()};
-  var mini=document.createElement('div');var ms=mini.style;
-  ms.width='12px';ms.height='12px';ms.borderRadius='50%';ms.background='#febc2e';ms.cursor='pointer';
+  var mini=mkDot('#febc2e','\\u2013');
   var minimized=false;
   mini.onclick=function(){
     minimized=!minimized;
@@ -395,9 +402,19 @@ function buildBlobSnippet(compressedHtmlB64: string, compressedFsB64: string, co
 
 export const seedCmd: Command = {
   name: 'seed',
-  description: 'Copy Shiro seed to clipboard (seed [blob] [subdomain])',
+  description: 'Export Shiro state (seed [blob|gif|html] [subdomain])',
 
   async exec(ctx: CommandContext): Promise<number> {
+    // ─── seed gif ────────────────────────────────────────
+    if (ctx.args[0] === 'gif') {
+      return execSeedGif(ctx);
+    }
+
+    // ─── seed html ───────────────────────────────────────
+    if (ctx.args[0] === 'html') {
+      return execSeedHtml(ctx);
+    }
+
     // Check for blob mode: seed blob
     const isBlob = ctx.args[0] === 'blob';
     const targetArg = isBlob ? ctx.args[1] : ctx.args[0];
@@ -543,3 +560,194 @@ export const seedCmd: Command = {
     }
   },
 };
+
+// ─── seed gif implementation ─────────────────────────────────
+
+async function serializeState(ctx: CommandContext) {
+  const nodes = await ctx.fs.exportAll();
+  let fileCount = 0;
+  let dirCount = 0;
+  let totalBytes = 0;
+  const ndjsonLines: string[] = [];
+
+  for (const node of nodes) {
+    if (node.type === 'file') { fileCount++; totalBytes += node.size || 0; }
+    else if (node.type === 'dir') { dirCount++; }
+    ndjsonLines.push(JSON.stringify({
+      path: node.path, type: node.type,
+      content: node.content ? uint8ToBase64(node.content) : null,
+      mode: node.mode, mtime: node.mtime, ctime: node.ctime,
+      size: node.size, symlinkTarget: node.symlinkTarget,
+    }));
+  }
+  const ndjson = ndjsonLines.join('\n');
+
+  const storage: Record<string, string> = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i)!;
+    storage[key] = localStorage.getItem(key)!;
+  }
+  const storageJson = JSON.stringify(storage);
+  const detectedKeys = detectApiKeys(storage);
+
+  const stats: SeedStats = {
+    version: SHIRO_VERSION, files: fileCount, dirs: dirCount,
+    totalBytes, sizeKB: Math.round(totalBytes / 1024),
+    sizeMB: (totalBytes / (1024 * 1024)).toFixed(2), detectedKeys,
+  };
+
+  return { ndjson, storageJson, stats };
+}
+
+function triggerDownload(data: Uint8Array | string, type: string, filename: string) {
+  const blob = new Blob([data as BlobPart], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+async function execSeedGif(ctx: CommandContext): Promise<number> {
+  try {
+    ctx.stdout = 'Capturing terminal...\n';
+    const { ndjson, storageJson, stats } = await serializeState(ctx);
+
+    const hostname = typeof window !== 'undefined' ? window.location.hostname : 'shiro.computer';
+
+    // Build seed envelope and compress
+    const seedEnvelope = JSON.stringify({
+      version: SHIRO_VERSION, hostname, timestamp: Date.now(),
+      files: stats.files, dirs: stats.dirs, totalBytes: stats.totalBytes,
+      ndjson, storage: storageJson,
+    });
+    const compressed = await gzipCompress(new TextEncoder().encode(seedEnvelope));
+
+    // Capture terminal and add overlay
+    const term = (window as any).__shiro?.terminal?.term;
+    if (!term) {
+      ctx.stderr = 'seed gif: terminal not available\n';
+      return 1;
+    }
+    const canvas = captureTerminal(term);
+    addOverlay(canvas, { files: stats.files, sizeMB: stats.sizeMB }, hostname);
+
+    // Encode GIF with embedded seed
+    ctx.stdout += 'Encoding GIF...\n';
+    const gifBytes = encodeGIF(canvas, compressed);
+
+    // Download
+    const subdomain = getCurrentSubdomain();
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = `${subdomain || 'shiro'}-${date}.gif`;
+    triggerDownload(gifBytes, 'image/gif', filename);
+
+    // Stats output
+    const imageApprox = gifBytes.length - compressed.length;
+    let output = '\n';
+    output += `  Shiro GIF Seed v${SHIRO_VERSION}\n`;
+    output += `  ${'─'.repeat(30)}\n`;
+    output += `  Files:       ${stats.files}\n`;
+    output += `  Directories: ${stats.dirs}\n`;
+    output += `  Data size:   ${stats.sizeMB} MB\n`;
+    output += `  GIF size:    ${(gifBytes.length / 1024).toFixed(0)} KB (seed: ${(compressed.length / 1024).toFixed(0)} KB + image: ${(imageApprox / 1024).toFixed(0)} KB)\n`;
+
+    if (stats.detectedKeys.length > 0) {
+      output += `\n  API keys detected:\n`;
+      for (const key of stats.detectedKeys) output += `    - ${key}\n`;
+      output += `\n  Warning: This GIF contains your API keys.\n`;
+    }
+
+    output += `\n  Downloaded: ${filename}\n`;
+    output += `  To restore: drag this GIF onto any shiro.computer tab.\n\n`;
+    ctx.stdout = output;
+    return 0;
+  } catch (e: any) {
+    ctx.stderr = `seed gif: ${e.message}\n`;
+    return 1;
+  }
+}
+
+// ─── seed html implementation ────────────────────────────────
+
+async function execSeedHtml(ctx: CommandContext): Promise<number> {
+  try {
+    ctx.stdout = 'Inlining document resources...\n';
+    const html = await inlineDocument();
+    ctx.stdout += `  HTML size: ${(html.length / 1024).toFixed(0)} KB\n`;
+
+    ctx.stdout += 'Serializing filesystem...\n';
+    const { ndjson, storageJson, stats } = await serializeState(ctx);
+
+    // Compress NDJSON + storage for smaller file
+    ctx.stdout += 'Compressing state...\n';
+    const compressedFs = await gzipCompress(new TextEncoder().encode(ndjson));
+    const compressedFsB64 = uint8ToBase64(compressedFs);
+    const compressedStorage = await gzipCompress(new TextEncoder().encode(storageJson));
+    const compressedStorageB64 = uint8ToBase64(compressedStorage);
+
+    ctx.stdout += `  FS compressed: ${(compressedFs.length / 1024).toFixed(0)} KB (was ${(ndjson.length / 1024).toFixed(0)} KB)\n`;
+
+    // Inject seed script before </body>
+    const seedScript = `<script>
+(async function(){
+  async function _dc(b){
+    var a=atob(b),u=new Uint8Array(a.length);
+    for(var i=0;i<a.length;i++)u[i]=a.charCodeAt(i);
+    var s=new DecompressionStream('gzip'),w=s.writable.getWriter();
+    w.write(u);w.close();
+    var r=s.readable.getReader(),c=[],v;
+    while(!(v=await r.read()).done)c.push(v.value);
+    var t=0;for(var x of c)t+=x.length;
+    var o=new Uint8Array(t),p=0;for(var x of c){o.set(x,p);p+=x.length}
+    return new TextDecoder().decode(o);
+  }
+  var attempts=0;
+  var timer=setInterval(async function(){
+    if(window.__shiro||attempts++>50){
+      clearInterval(timer);
+      if(window.__shiro){
+        window.postMessage({
+          type:'shiro-seed-v2',
+          ndjson:await _dc('${compressedFsB64}'),
+          storage:await _dc('${compressedStorageB64}')
+        },'*');
+      }
+    }
+  },100);
+})();
+</script>`;
+
+    const fullHtml = html.replace('</body>', seedScript + '\n</body>');
+
+    // Download
+    const subdomain = getCurrentSubdomain();
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = `${subdomain || 'shiro'}-${date}.html`;
+    triggerDownload(fullHtml, 'text/html', filename);
+
+    let output = '\n';
+    output += `  Shiro HTML Seed v${SHIRO_VERSION}\n`;
+    output += `  ${'─'.repeat(30)}\n`;
+    output += `  Files:       ${stats.files}\n`;
+    output += `  Directories: ${stats.dirs}\n`;
+    output += `  Data size:   ${stats.sizeMB} MB\n`;
+    output += `  HTML size:   ${(fullHtml.length / 1024).toFixed(0)} KB\n`;
+
+    if (stats.detectedKeys.length > 0) {
+      output += `\n  API keys detected:\n`;
+      for (const key of stats.detectedKeys) output += `    - ${key}\n`;
+    }
+
+    output += `\n  Downloaded: ${filename}\n`;
+    output += `  Open in any browser to boot with your filesystem.\n\n`;
+    ctx.stdout = output;
+    return 0;
+  } catch (e: any) {
+    ctx.stderr = `seed html: ${e.message}\n`;
+    return 1;
+  }
+}

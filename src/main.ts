@@ -97,6 +97,7 @@ import { ShiroTerminal } from './terminal';
 import { ShiroProvider } from '../spirit/src/providers/shiro-provider';
 import { initFaviconUpdater, initTitle } from './favicon';
 import { initMobileInput } from './mobile-input';
+import { initDropHandler } from './drop-handler';
 import buildNumber from '../build-number.txt?raw';
 import { CLAUDE_MD } from './claude-md-seed';
 
@@ -386,6 +387,9 @@ async function main() {
       }
     }
   }
+
+  // Initialize drag-and-drop seed GIF import
+  initDropHandler(terminal, fs);
 
   // Initialize mobile virtual keys and voice input
   initMobileInput(terminal);
