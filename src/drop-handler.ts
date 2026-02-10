@@ -94,6 +94,9 @@ async function promptSeedRestore(terminal: ShiroTerminal, seed: SeedData): Promi
       }, '*');
     } else {
       term.writeln('Cancelled.');
+      (terminal as any).running = false;
+      (terminal as any).showPrompt();
+      return;
     }
   } finally {
     (terminal as any).running = false;
