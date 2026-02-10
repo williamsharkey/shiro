@@ -137,6 +137,28 @@ export class ShiroTerminal {
     resizeObserver.observe(container);
 
     this.term.onData((data: string) => this.handleInput(data));
+
+    // Mobile copy/paste button handlers
+    const pasteBtn = document.getElementById('shiro-paste-btn');
+    const copyBtn = document.getElementById('shiro-copy-btn');
+    pasteBtn?.addEventListener('click', async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text) this.term.paste(text);
+      } catch {
+        const text = prompt('Paste text:');
+        if (text) this.term.paste(text);
+      }
+    });
+    copyBtn?.addEventListener('click', async () => {
+      const selection = this.term.getSelection();
+      if (selection) {
+        try { await navigator.clipboard.writeText(selection); } catch {}
+      } else {
+        const content = this.getBufferContent().split('\n').slice(-50).join('\n');
+        try { await navigator.clipboard.writeText(content); } catch {}
+      }
+    });
   }
 
   private _writeCount = 0;

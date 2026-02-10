@@ -86,6 +86,7 @@ import { groupCmd } from './commands/group';
 import { spawnCmd } from './commands/spawn';
 import { psCmd, killCmd } from './commands/ps';
 import { htmlCmd, imgCmd } from './commands/html';
+import { dougCmd } from './commands/doug';
 import { processTable } from './process-table';
 import { iframeServer } from './iframe-server';
 import { allCommands } from '../fluffycoreutils/src/index';
@@ -245,6 +246,7 @@ async function main() {
   registerCommand(commands, killCmd, 'src/commands/ps.ts');
   registerCommand(commands, htmlCmd, 'src/commands/html.ts');
   registerCommand(commands, imgCmd, 'src/commands/html.ts');
+  registerCommand(commands, dougCmd, 'src/commands/doug.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {
