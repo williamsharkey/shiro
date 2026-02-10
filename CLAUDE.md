@@ -33,6 +33,7 @@ src/
 ├── server-window.ts     # macOS-style window wrapper (iframe + terminal modes)
 ├── window-terminal.ts   # Lightweight xterm.js wrapper for windowed processes
 ├── process-table.ts     # Global process registry with PID allocation
+├── split-view.ts        # Docked split pane (right/bottom) for serve --split
 └── commands/            # One file per command or group of related commands
     ├── index.ts          # Command/CommandContext/TerminalLike interfaces, CommandRegistry class
     ├── coreutils.ts      # 41 commands: ls, cat, mkdir, rm, cp, mv, echo, sort, seq, test, ln, etc.
@@ -282,6 +283,26 @@ The blob mode inlines all JS/CSS, gzips (~70% reduction), and creates a blob URL
 **HTML mode** inlines all resources and injects a `<script>` that decompresses and posts `shiro-seed-v2` on load.
 
 **Drag-to-import**: Drop a seed GIF onto the terminal to detect the SHIRO1.0 extension, show a confirmation prompt, and restore state. Handled by `src/drop-handler.ts`, initialized in `main.ts`.
+
+## Split View
+
+Dock a served app beside or below the terminal instead of a floating window:
+```bash
+serve /tmp/app 3000 --split right    # Start server + open split pane
+serve /tmp/app 3000 --split bottom   # Split below terminal
+serve open 3000 --split right        # Open existing server in split
+serve unsplit                         # Close split pane
+```
+
+- Only one split at a time (opening a new one closes the old)
+- `serve stop <port>` also closes the split if it's showing that port
+- The split iframe gets `data-virtual-port` so `page` command finds it
+- `#shiro-layout` is a flex container wrapping `#terminal` + `#split-pane`
+- CSS classes `split-right` / `split-bottom` control layout direction
+- Hidden in become mode (`.become-active #split-pane { display: none }`)
+- `window.__shiro.closeSplit()` available from browser console
+
+**Key files:** `src/split-view.ts`, `src/commands/serve.ts` (`openInSplit`, `unsplit`), CSS in `index.html`
 
 ## Become (App Mode)
 

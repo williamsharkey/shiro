@@ -160,7 +160,7 @@
       border: none;
       display: block;
     }
-    .demo-slot-tall { height: 400px; }
+    .demo-slot-tall { height: 560px; }
 
     /* YouTube-style overlay */
     .demo-overlay {
@@ -521,12 +521,11 @@ Copied to clipboard (42 KB)</div>
           const el = document.getElementById('engine-status');
           el.textContent = 'shiro ready';
           el.classList.add('ready');
-          // Add scroll margin + always-visible scrollbars for demo terminals
+          // Always-visible scrollbars for demo terminals
           try {
             const ifrDoc = document.getElementById('shiro-live').contentDocument;
             const sty = ifrDoc.createElement('style');
             sty.textContent = [
-              '.xterm-screen { padding-bottom: 14em; }',
               '.xterm .xterm-viewport { overflow-y: scroll !important; }',
               '.xterm .xterm-viewport::-webkit-scrollbar { width: 8px; background: #1a1a2e; }',
               '.xterm .xterm-viewport::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; min-height: 30px; }',
@@ -615,6 +614,13 @@ Copied to clipboard (42 KB)</div>
       for (const step of this.steps) {
         if (this.aborted) break;
         await this.runStep(step);
+      }
+
+      // Add scroll margin — write blank lines so last command can scroll up
+      if (!this.aborted) {
+        const halfRows = Math.floor(term.rows / 2);
+        term.write('\r\n'.repeat(halfRows));
+        term.scrollLines(-halfRows);
       }
 
       // Hint animation — show the terminal is interactive, then hand over
@@ -850,13 +856,13 @@ Copied to clipboard (42 KB)</div>
 'body{font-family:system-ui;background:#0f0f23;color:#eee;display:flex;justify-content:center;align-items:center;min-height:100vh}',
 '.app{display:flex;flex-direction:column;align-items:center;gap:12px;padding:16px}',
 'h1{font-size:1rem;color:#7eb8c9}',
-'.controls{display:flex;gap:16px;align-items:center}',
+'.controls{display:flex;flex-direction:column;gap:8px;align-items:center}',
 '.axis{display:flex;align-items:center;gap:4px}',
 '.axis label{font-size:.75rem;color:#888;width:12px}',
 '.axis .val{font-size:1.4rem;font-weight:700;width:3ch;text-align:center;font-variant-numeric:tabular-nums}',
 '.axis button{width:32px;height:32px;font-size:1rem;border-radius:8px;border:2px solid #333;background:#1a1a2e;color:#eee;cursor:pointer}',
 '.axis button:hover{border-color:#7eb8c9}',
-'#plot{width:44px;height:32px;font-size:.75rem;border-radius:8px;border:2px solid #555;background:#2a1a3e;color:#c8b6ff;cursor:pointer;font-weight:600}',
+'#plot{width:80px;height:32px;font-size:.75rem;border-radius:8px;border:2px solid #555;background:#2a1a3e;color:#c8b6ff;cursor:pointer;font-weight:600}',
 '#plot:hover{border-color:#c8b6ff;background:#3a2a4e}',
 '#graph{background:#12122a;border-radius:8px;border:1px solid #222}',
 '#pts{font-size:.7rem;color:#555}',
@@ -866,7 +872,7 @@ Copied to clipboard (42 KB)</div>
 '<div class="controls">',
 '  <div class="axis"><label>x</label><button id="xd" onclick="adj(\'x\',-1)">\u2212</button><span class="val" id="xv">0</span><button id="xu" onclick="adj(\'x\',1)">+</button></div>',
 '  <div class="axis"><label>y</label><button id="yd" onclick="adj(\'y\',-1)">\u2212</button><span class="val" id="yv">0</span><button id="yu" onclick="adj(\'y\',1)">+</button></div>',
-'  <button id="plot" onclick="plot()">Graph</button>',
+'  <button id="plot" onclick="plot()">Plot Point</button>',
 '</div>',
 '<svg id="graph" width="280" height="200"></svg>',
 '<div id="pts"></div>',
