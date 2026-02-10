@@ -2165,9 +2165,29 @@ export const nodeCmd: Command = {
                 }
               }
 
+              // Drain pending IDB writes so shell commands can see files written by
+              // writeFileSync (which only updates fileCache + queues async IDB write).
+              if (pendingPromises.length > 0) {
+                await Promise.all(pendingPromises.splice(0));
+              }
+
               let stdout = '';
               let stderr = '';
               const exitCode = await ctx.shell.execute(normalized, (s) => { stdout += s; }, (s) => { stderr += s; }, false, ctx.terminal, true);
+
+              // Refresh fileCache from Shiro FS cache — shell commands may have created,
+              // modified, or deleted files that fileCache still has stale entries for.
+              for (const [path] of fileCache) {
+                if (path.endsWith('/.')) continue; // skip dir markers
+                const fresh = ctx.fs.readCached(path);
+                if (fresh === undefined) {
+                  fileCache.delete(path); // file was deleted by shell
+                } else if (fresh !== fileCache.get(path)) {
+                  fileCache.set(path, fresh);
+                  fileMtimes.set(path, Date.now());
+                }
+              }
+
               return { stdout, stderr, exitCode };
             };
             const cpModule: any = {

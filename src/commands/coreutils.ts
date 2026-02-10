@@ -673,7 +673,7 @@ export const openCmd: Command = {
  * Registered AFTER fluffy commands so they take precedence.
  */
 export const shiroOnlyCommands: Command[] = [
-  cdCmd, exportCmd, helpCmd, whichCmd, typeCmd, xargsCmd, rmdirCmd, sleepCmd, seqCmd,
+  cdCmd, exportCmd, helpCmd, whichCmd, typeCmd, rmdirCmd, sleepCmd, seqCmd,
   // Overrides for fluffy bugs or Shiro-specific behavior:
   rmCmd, findCmd, lnCmd, hostnameCmd, unameCmd,
   grepCmd, sedCmd, diffCmd,

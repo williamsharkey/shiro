@@ -85,6 +85,12 @@ export function wrapFluffyCommand(fluffy: FluffyCommand): Command {
         env: ctx.env,
         cwd: ctx.cwd,
         fs: fluffyFS,
+        exec: async (cmd: string) => {
+          let stdout = '';
+          let stderr = '';
+          const exitCode = await ctx.shell.execute(cmd, (s: string) => { stdout += s; }, (s: string) => { stderr += s; });
+          return { stdout, stderr, exitCode };
+        },
       });
       ctx.stdout += result.stdout;
       ctx.stderr += result.stderr;
