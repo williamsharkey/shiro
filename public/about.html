@@ -363,13 +363,7 @@
 
     <h1>Shiro</h1>
     <p class="subtitle">
-      A Unix shell in a browser tab.
-      <span class="noted">150+ commands<span class="tip">cat, ls, grep, sed, find, sort, cut, awk, diff, head, tail, wc, tr, tee, uniq, mkdir, rm, cp, mv, echo, touch, chmod, ln, env, which, git, npm, node, vi, nano, curl, and more.</span></span>,
-      <span class="noted">persistent files<span class="tip">Stored in IndexedDB. Survives page reloads and browser restarts. Clear via dev tools or the rm command.</span></span>,
-      <span class="noted">git<span class="tip">Powered by isomorphic-git. Supports init, add, commit, status, log, diff, clone, branch, checkout. Not available: merge, rebase, stash, push, pull.</span></span>,
-      <span class="noted">npm<span class="tip">Installs packages from the npm registry via a server-side proxy. Supports install, uninstall, list, run.</span></span>,
-      <span class="noted">web servers<span class="tip">Virtual servers using iframes with srcdoc. HTML, CSS, and JS served from the virtual filesystem. No real HTTP — stays in the browser.</span></span>
-      — all in <span class="noted">one HTML file<span class="tip">~358 KB gzipped. All JavaScript and CSS inlined by Vite. No external assets.</span></span>.
+      A self-contained static webpage that emulates a Unix environment in the browser. It runs <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a> with shimmed versions of the tools Claude commonly uses. Not a real Linux &mdash; but trying to be complete enough for npm, web development, and interacting with served apps in place. Still buggy, still being refined.
     </p>
 
     <div id="engine-status" class="status">loading shiro&hellip;</div>
@@ -485,6 +479,26 @@ Copied to clipboard (42 KB)</div>
         </div>
       </div>
       <p style="font-size:0.82rem;color:#999">The snippet creates an iframe, loads Shiro, and hydrates the filesystem. Works on any page.</p>
+    </section>
+
+    <!-- What it is -->
+    <section class="info-section">
+      <h2>What this is</h2>
+      <p>Shiro builds to a single HTML file (~350 KB gzipped). All JavaScript and CSS are inlined &mdash; no external assets. Files are stored in IndexedDB and persist across page reloads. The shell supports pipes, redirects, environment variables, and 150+ commands (cat, ls, grep, sed, find, sort, git, npm, node, vi, curl, etc.).</p>
+      <p>Claude Code runs inside Shiro's Node.js runtime shim. The tools it relies on &mdash; file reads, edits, grep, glob, bash &mdash; are shimmed to use Shiro's virtual filesystem. Many work, some don't yet. The goal is a browser-native development environment where an AI agent can read, write, build, and serve code without leaving the tab.</p>
+    </section>
+
+    <!-- Remote -->
+    <section class="info-section">
+      <h2>Remote control</h2>
+      <p>An outer Claude Code instance (running on your machine) can control Shiro via <a href="https://modelcontextprotocol.io/">MCP</a> tools over a WebRTC connection. Run <code>remote start</code> in Shiro to get a connection code, then use the <code>shiro-mcp</code> package to exec commands, read/write files, and eval JS in the browser &mdash; all peer-to-peer after the initial signaling.</p>
+    </section>
+
+    <!-- Seed & GIF -->
+    <section class="info-section">
+      <h2>Seed &amp; snapshots</h2>
+      <p><code>seed</code> exports the entire filesystem to the clipboard as a JS snippet. Paste it into any browser's dev console to load Shiro with your files on that page. <code>seed blob</code> does the same but self-contained (no external fetch). <code>seed html</code> produces a standalone HTML file.</p>
+      <p><code>seed gif</code> captures a terminal screenshot as a GIF with the filesystem embedded in a custom extension block. Drag the GIF back onto Shiro to restore it. The GIF is a real image &mdash; it looks like a screenshot but carries the full state.</p>
     </section>
 
     <footer>
