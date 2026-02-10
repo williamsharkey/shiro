@@ -54,6 +54,37 @@ describe('git commands', () => {
     expect(configExists).toBe(true);
   });
 
+  it('should support git remote set-url', async () => {
+    let stdout = '';
+    let stderr = '';
+
+    // Init repo in default cwd
+    await shell.execute('git init', (s) => { stdout += s; }, (e) => { stderr += e; });
+    expect(stderr).toBe('');
+
+    // Add a remote
+    stdout = ''; stderr = '';
+    await shell.execute('git remote add origin https://github.com/old/repo.git', (s) => { stdout += s; }, (e) => { stderr += e; });
+    expect(stderr).toBe('');
+
+    // Verify remote exists
+    stdout = ''; stderr = '';
+    await shell.execute('git remote -v', (s) => { stdout += s; }, (e) => { stderr += e; });
+    expect(stdout).toContain('https://github.com/old/repo.git');
+
+    // Set new URL
+    stdout = ''; stderr = '';
+    const exitCode = await shell.execute('git remote set-url origin https://github.com/new/repo.git', (s) => { stdout += s; }, (e) => { stderr += e; });
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe('');
+
+    // Verify URL changed
+    stdout = ''; stderr = '';
+    await shell.execute('git remote -v', (s) => { stdout += s; }, (e) => { stderr += e; });
+    expect(stdout).toContain('https://github.com/new/repo.git');
+    expect(stdout).not.toContain('https://github.com/old/repo.git');
+  });
+
   it.skip('should clone a repository', async () => {
     let stdout = '';
     let stderr = '';

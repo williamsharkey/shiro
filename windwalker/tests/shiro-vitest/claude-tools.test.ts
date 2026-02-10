@@ -475,6 +475,72 @@ describe('Claude Code Tool Shims', () => {
       expect(ctx.stdout).toContain('V2:version-B');
     });
 
+    it('utimesSync should be available on fs shim', async () => {
+      const ctx = createCtx(shell, fs, ['-e', [
+        'const fs = require("fs");',
+        'fs.mkdirSync("/tmp/utimes-test", { recursive: true });',
+        'fs.writeFileSync("/tmp/utimes-test/file.txt", "hello");',
+        'fs.utimesSync("/tmp/utimes-test/file.txt", new Date(), new Date());',
+        'console.log("utimesSync:ok");',
+      ].join('\n')]);
+      const exitCode = await nodeCmd.exec(ctx);
+      expect(exitCode).toBe(0);
+      expect(ctx.stdout).toContain('utimesSync:ok');
+    });
+
+    it('lockSync-style pattern should work (toSync wrapper)', async () => {
+      // Simulates proper-lockfile's toSync pattern that wraps an async-callback
+      // function into a synchronous one by injecting a callback
+      const ctx = createCtx(shell, fs, ['-e', [
+        'const fs = require("fs");',
+        'fs.mkdirSync("/tmp/lock-test", { recursive: true });',
+        'fs.writeFileSync("/tmp/lock-test/data.json", "{}");',
+        '// Simulate toSync wrapper',
+        'function toSync(fn) {',
+        '  return (...args) => {',
+        '    let err, result;',
+        '    args.push((e, r) => { err = e; result = r; });',
+        '    fn(...args);',
+        '    if (err) throw err;',
+        '    return result;',
+        '  };',
+        '}',
+        '// Simulate C2K sync-fs adapter',
+        'function makeSyncFs(fsObj) {',
+        '  const methods = ["mkdir", "realpath", "stat", "rmdir", "utimes"];',
+        '  const copy = {...fsObj};',
+        '  methods.forEach(m => {',
+        '    copy[m] = (...args) => {',
+        '      const cb = args.pop();',
+        '      let result;',
+        '      try { result = fsObj[m + "Sync"](...args); }',
+        '      catch(e) { return cb(e); }',
+        '      cb(null, result);',
+        '    };',
+        '  });',
+        '  return copy;',
+        '}',
+        'const syncFs = makeSyncFs(fs);',
+        '// Test that all 5 methods work through the sync adapter',
+        'const mkdirSync = toSync(syncFs.mkdir);',
+        'const realpathSync = toSync(syncFs.realpath);',
+        'const statSync = toSync(syncFs.stat);',
+        'const utimesSync = toSync(syncFs.utimes);',
+        'mkdirSync("/tmp/lock-test/sub", { recursive: true });',
+        'const rp = realpathSync("/tmp/lock-test/data.json");',
+        'const st = statSync("/tmp/lock-test/data.json");',
+        'utimesSync("/tmp/lock-test/data.json", new Date(), new Date());',
+        'console.log("realpath:" + rp);',
+        'console.log("isFile:" + st.isFile());',
+        'console.log("lockSync-pattern:ok");',
+      ].join('\n')]);
+      const exitCode = await nodeCmd.exec(ctx);
+      expect(exitCode).toBe(0);
+      expect(ctx.stdout).toContain('realpath:/tmp/lock-test/data.json');
+      expect(ctx.stdout).toContain('isFile:true');
+      expect(ctx.stdout).toContain('lockSync-pattern:ok');
+    });
+
     it('multiple overwrites via shell should always show latest', async () => {
       const ctx = createCtx(shell, fs, ['-e', [
         'const fs = require("fs");',

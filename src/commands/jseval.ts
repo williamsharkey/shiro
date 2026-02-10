@@ -1447,6 +1447,7 @@ export const nodeCmd: Command = {
               },
               fsyncSync: () => {},
               fdatasyncSync: () => {},
+              utimesSync: () => {},
               rmSync: (p: string, opts?: any) => {
                 const resolved = ctx.fs.resolvePath(p, ctx.cwd);
                 if (opts?.recursive) {

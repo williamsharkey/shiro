@@ -434,6 +434,16 @@ export const gitCmd: Command = {
             }
             await git.addRemote({ fs, dir, remote: name, url });
             ctx.stdout = '';
+          } else if (remoteCmd === 'set-url') {
+            const name = ctx.args[2];
+            const url = ctx.args[3];
+            if (!name || !url) {
+              ctx.stderr = 'usage: git remote set-url <name> <url>\n';
+              return 1;
+            }
+            await git.deleteRemote({ fs, dir, remote: name });
+            await git.addRemote({ fs, dir, remote: name, url });
+            ctx.stdout = '';
           } else if (remoteCmd === 'remove' || remoteCmd === 'rm') {
             const name = ctx.args[2];
             if (!name) {
