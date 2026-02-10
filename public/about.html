@@ -521,11 +521,17 @@ Copied to clipboard (42 KB)</div>
           const el = document.getElementById('engine-status');
           el.textContent = 'shiro ready';
           el.classList.add('ready');
-          // Add scroll margin so the prompt isn't pinned to the bottom edge
+          // Add scroll margin + always-visible scrollbars for demo terminals
           try {
             const ifrDoc = document.getElementById('shiro-live').contentDocument;
             const sty = ifrDoc.createElement('style');
-            sty.textContent = '.xterm-screen { padding-bottom: 10em; }';
+            sty.textContent = [
+              '.xterm-screen { padding-bottom: 14em; }',
+              '.xterm .xterm-viewport { overflow-y: scroll !important; }',
+              '.xterm .xterm-viewport::-webkit-scrollbar { width: 8px; background: #1a1a2e; }',
+              '.xterm .xterm-viewport::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; min-height: 30px; }',
+              '.xterm .xterm-viewport::-webkit-scrollbar-thumb:hover { background: #777; }',
+            ].join('\n');
             ifrDoc.head.appendChild(sty);
           } catch {}
           return;
@@ -837,6 +843,61 @@ Copied to clipboard (42 KB)</div>
 
   const counterHTML = '<!DOCTYPE html>\n<html><head><title>Counter</title>\n<style>\nbody { font-family: system-ui; background: #0f0f23; color: #eee;\n  display: flex; justify-content: center; align-items: center;\n  min-height: 100vh; margin: 0; }\n.app { text-align: center; }\nh1 { font-size: 1.2rem; color: #7eb8c9; margin-bottom: 20px; }\n.n { font-size: 4rem; font-weight: 700; margin-bottom: 20px;\n  font-variant-numeric: tabular-nums; }\nbutton { width: 56px; height: 56px; font-size: 1.5rem; border-radius: 12px;\n  border: 2px solid #333; background: #1a1a2e; color: #eee;\n  cursor: pointer; margin: 0 6px; }\nbutton:hover { border-color: #7eb8c9; }\n</style></head>\n<body><div class="app">\n  <h1>Counter</h1>\n  <div class="n" id="n">0</div>\n  <button id="dec" onclick="c(-1)">\u2212</button>\n  <button id="inc" onclick="c(1)">+</button>\n</div>\n<' + 'script>\nlet n=0;\nfunction c(d){n+=d;document.getElementById("n").textContent=n}\n<' + '/script>\n</body></html>';
 
+  const grapherHTML = ['<!DOCTYPE html>',
+'<html><head><title>Grapher</title>',
+'<style>',
+'*{box-sizing:border-box;margin:0;padding:0}',
+'body{font-family:system-ui;background:#0f0f23;color:#eee;display:flex;justify-content:center;align-items:center;min-height:100vh}',
+'.app{display:flex;flex-direction:column;align-items:center;gap:12px;padding:16px}',
+'h1{font-size:1rem;color:#7eb8c9}',
+'.controls{display:flex;gap:16px;align-items:center}',
+'.axis{display:flex;align-items:center;gap:4px}',
+'.axis label{font-size:.75rem;color:#888;width:12px}',
+'.axis .val{font-size:1.4rem;font-weight:700;width:3ch;text-align:center;font-variant-numeric:tabular-nums}',
+'.axis button{width:32px;height:32px;font-size:1rem;border-radius:8px;border:2px solid #333;background:#1a1a2e;color:#eee;cursor:pointer}',
+'.axis button:hover{border-color:#7eb8c9}',
+'#plot{width:44px;height:32px;font-size:.75rem;border-radius:8px;border:2px solid #555;background:#2a1a3e;color:#c8b6ff;cursor:pointer;font-weight:600}',
+'#plot:hover{border-color:#c8b6ff;background:#3a2a4e}',
+'#graph{background:#12122a;border-radius:8px;border:1px solid #222}',
+'#pts{font-size:.7rem;color:#555}',
+'</style></head>',
+'<body><div class="app">',
+'<h1>Grapher</h1>',
+'<div class="controls">',
+'  <div class="axis"><label>x</label><button id="xd" onclick="adj(\'x\',-1)">\u2212</button><span class="val" id="xv">0</span><button id="xu" onclick="adj(\'x\',1)">+</button></div>',
+'  <div class="axis"><label>y</label><button id="yd" onclick="adj(\'y\',-1)">\u2212</button><span class="val" id="yv">0</span><button id="yu" onclick="adj(\'y\',1)">+</button></div>',
+'  <button id="plot" onclick="plot()">Graph</button>',
+'</div>',
+'<svg id="graph" width="280" height="200"></svg>',
+'<div id="pts"></div>',
+'</div>',
+'<' + 'script>',
+'let x=0,y=0,pts=[];',
+'function adj(a,d){if(a==="x"){x+=d;document.getElementById("xv").textContent=x}else{y+=d;document.getElementById("yv").textContent=y}}',
+'function plot(){pts.push({x,y});draw()}',
+'function ticks(mn,mx){let r=mx-mn;if(r<=0)r=1;let s=Math.pow(10,Math.floor(Math.log10(r)));if(r/s<2)s/=5;else if(r/s<5)s/=2;let t=[];for(let v=Math.ceil(mn/s)*s;v<=mx+s*0.001;v+=s)t.push(+v.toFixed(10));return t}',
+'function draw(){',
+'let svg=document.getElementById("graph"),W=280,H=200,pad={t:12,r:12,b:28,l:34};',
+'let xs=pts.map(p=>p.x),ys=pts.map(p=>p.y);',
+'let x0=Math.min(0,...xs),x1=Math.max(0,...xs),y0=Math.min(0,...ys),y1=Math.max(0,...ys);',
+'if(x0===x1){x0-=1;x1+=1}if(y0===y1){y0-=1;y1+=1}',
+'let dx=(x1-x0)*0.08,dy=(y1-y0)*0.08;x0-=dx;x1+=dx;y0-=dy;y1+=dy;',
+'let pw=W-pad.l-pad.r,ph=H-pad.t-pad.b;',
+'let sx=v=>(v-x0)/(x1-x0)*pw+pad.l,sy=v=>H-pad.b-(v-y0)/(y1-y0)*ph;',
+'let h="";',
+'h+=\'<line x1="\'+pad.l+\'" y1="\'+sy(0)+\'" x2="\'+(W-pad.r)+\'" y2="\'+sy(0)+\'" stroke="#444"/>\';',
+'h+=\'<line x1="\'+sx(0)+\'" y1="\'+pad.t+\'" x2="\'+sx(0)+\'" y2="\'+(H-pad.b)+\'" stroke="#444"/>\';',
+'h+=\'<polygon points="\'+(W-pad.r)+","+sy(0)+" "+(W-pad.r-6)+","+(sy(0)-3)+" "+(W-pad.r-6)+","+(sy(0)+3)+\'" fill="#444"/>\';',
+'h+=\'<polygon points="\'+sx(0)+","+pad.t+" "+(sx(0)-3)+","+(pad.t+6)+" "+(sx(0)+3)+","+(pad.t+6)+\'" fill="#444"/>\';',
+'ticks(x0,x1).forEach(v=>{let px=sx(v);h+=\'<line x1="\'+px+\'" y1="\'+(H-pad.b)+\'" x2="\'+px+\'" y2="\'+(H-pad.b+4)+\'" stroke="#555"/><text x="\'+px+\'" y="\'+(H-pad.b+14)+\'" text-anchor="middle" fill="#666" font-size="9">\'+v+"</text>"});',
+'ticks(y0,y1).forEach(v=>{let py=sy(v);h+=\'<line x1="\'+(pad.l-4)+\'" y1="\'+py+\'" x2="\'+pad.l+\'" y2="\'+py+\'" stroke="#555"/><text x="\'+(pad.l-6)+\'" y="\'+(py+3)+\'" text-anchor="end" fill="#666" font-size="9">\'+v+"</text>"});',
+'pts.forEach((p,i)=>{h+=\'<circle cx="\'+sx(p.x)+\'" cy="\'+sy(p.y)+\'" r="4" fill="\'+["#ff6b6b","#ffd93d","#6bcb77","#4d96ff","#c8b6ff","#ff922b"][i%6]+\'"/>\';});',
+'svg.innerHTML=h;',
+'document.getElementById("pts").textContent=pts.length+" point"+(pts.length===1?"":"s");',
+'}',
+'<' + '/script>',
+'</body></html>'].join('\n');
+
   const interactSteps = [
     { cmd: 'mkdir -p /tmp/counter' },
     { cmd: "cat > /tmp/counter/index.html << 'EOF'\n" + counterHTML + "\nEOF", note: 'Write a counter app' },
@@ -849,8 +910,31 @@ Copied to clipboard (42 KB)</div>
     { cmd: 'page :5000 text "#n"', note: 'Read it again' },
     { cmd: 'cd /tmp/counter && git init', note: 'Commit the app' },
     { cmd: 'cd /tmp/counter && git add . && git commit -m "counter app"' },
+    { cmd: 'serve stop 5000', delay: 400, note: 'Now upgrade it' },
+    { cmd: "cat > /tmp/counter/index.html << 'EOF'\n" + grapherHTML + "\nEOF", note: 'Rewrite as a grapher' },
+    { cmd: 'serve /tmp/counter 5000', delay: 400 },
+    { cmd: 'serve open 5000 --split right', delay: 800 },
+    { cmd: 'page :5000 click "#plot"', note: 'Plot the origin' },
+    { cmd: 'page :5000 text "#pts"' },
+    // x=3, y=2
+    { cmd: 'page :5000 click "#xu"', note: 'Set x to 3' },
+    { cmd: 'page :5000 click "#xu"' },
+    { cmd: 'page :5000 click "#xu"' },
+    { cmd: 'page :5000 click "#yu"', note: 'Set y to 2' },
+    { cmd: 'page :5000 click "#yu"' },
+    { cmd: 'page :5000 click "#plot"', note: 'Plot (3, 2)', delay: 500 },
+    // x=7, y=5
+    { cmd: 'page :5000 click "#xu"', note: 'Set x to 7' },
+    { cmd: 'page :5000 click "#xu"' },
+    { cmd: 'page :5000 click "#xu"' },
+    { cmd: 'page :5000 click "#xu"' },
+    { cmd: 'page :5000 click "#yu"', note: 'Set y to 5' },
+    { cmd: 'page :5000 click "#yu"' },
+    { cmd: 'page :5000 click "#yu"' },
+    { cmd: 'page :5000 click "#plot"', note: 'Plot (7, 5)', delay: 500 },
+    { cmd: 'page :5000 text "#pts"' },
+    { cmd: 'cd /tmp/counter && git add . && git commit -m "upgrade to grapher"', note: 'Commit the upgrade' },
     { cmd: 'cd /tmp/counter && git log --oneline' },
-    { cmd: 'serve stop 5000', delay: 200 },
   ];
 
   document.addEventListener('DOMContentLoaded', () => {
