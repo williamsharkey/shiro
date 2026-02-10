@@ -3,756 +3,960 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>What Shiro Is &mdash; shiro.computer</title>
-  <meta name="description" content="Shiro is a browser-native Unix shell with about 150 commands, persistent files, and pipes that work. Here is what it actually does, with demos you can run.">
-  <link rel="stylesheet" href="tufte.css">
+  <title>Shiro — Browser OS</title>
+  <meta name="description" content="A Unix shell that runs in a browser tab. 150 commands, persistent files, git, npm, live web servers — all in one HTML file.">
   <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
     body {
       background: #0a0a0a;
-      color: #ddd;
+      color: #999;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
     }
 
-    a:link, a:visited {
-      color: #7eb8c9;
-      text-decoration-color: #7eb8c944;
+    a { color: #7eb8c9; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .page {
+      max-width: 740px;
+      margin: 0 auto;
+      padding: 60px 24px 80px;
     }
 
-    a:hover {
-      text-decoration-color: #7eb8c9;
+    /* Header */
+    .header {
+      margin-bottom: 64px;
     }
 
-    h1, h2, h3 {
+    .header h1 {
+      font-size: 2.4rem;
+      font-weight: 600;
       color: #f0f0f0;
+      letter-spacing: -0.02em;
+      margin-bottom: 8px;
     }
 
-    .sidenote, .marginnote {
-      color: #888;
-    }
-
-    .sidenote a, .marginnote a {
-      color: #888;
-    }
-
-    code, pre > code {
-      font-family: "SF Mono", "Fira Code", Consolas, "Liberation Mono", Menlo, monospace;
-      color: #ccc;
-      background: #161616;
-      padding: 1px 4px;
-      border-radius: 3px;
-    }
-
-    pre > code {
-      padding: 16px 20px;
-      border-radius: 8px;
-      border: 1px solid #222;
-      background: #111;
-    }
-
-    hr {
-      border-top-color: #333;
+    .header .subtitle {
+      font-size: 1.1rem;
+      color: #666;
+      max-width: 520px;
     }
 
     .back-link {
       display: inline-block;
-      margin-top: 2rem;
+      margin-bottom: 32px;
+      font-size: 0.85rem;
+      color: #555;
+    }
+    .back-link:hover { color: #888; text-decoration: none; }
+
+    /* Demo cards */
+    .demo-card {
+      margin-bottom: 56px;
+    }
+
+    .demo-card h2 {
+      font-size: 1.15rem;
+      font-weight: 500;
+      color: #ccc;
+      margin-bottom: 12px;
+    }
+
+    .demo-card .card-desc {
       font-size: 0.9rem;
       color: #666;
-      text-decoration: none;
-    }
-    .back-link:hover { color: #999; }
-
-    .byline {
-      font-size: 1.1rem;
-      color: #666;
-      margin-top: 0.5rem;
+      margin-bottom: 12px;
     }
 
-    span.newthought {
-      color: #f0f0f0;
-    }
-
-    figcaption {
-      color: #666;
-    }
-
-    div.epigraph > blockquote > p {
-      color: #999;
-    }
-
-    div.epigraph > blockquote > footer {
-      color: #666;
-    }
-
-    /* Demo terminal blocks */
-    .shiro-demo {
-      width: 55%;
-      margin: 2em 0;
+    /* Terminal */
+    .demo-terminal {
+      background: #111;
       border: 1px solid #222;
-      border-radius: 6px;
+      border-radius: 8px;
+      font-family: "SF Mono", "Fira Code", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 0.82rem;
+      line-height: 1.55;
       overflow: hidden;
-      background: #0d1117;
-      font-family: "SF Mono", "Fira Code", Consolas, monospace;
-      font-size: 0.85rem;
-      line-height: 1.5;
+      position: relative;
     }
 
-    .demo-chrome {
+    .demo-terminal .term-body {
+      padding: 14px 16px;
+      max-height: 400px;
+      overflow-y: auto;
+      scroll-behavior: smooth;
+    }
+
+    .demo-terminal .term-body::-webkit-scrollbar { width: 6px; }
+    .demo-terminal .term-body::-webkit-scrollbar-track { background: transparent; }
+    .demo-terminal .term-body::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+
+    .term-line { white-space: pre-wrap; word-break: break-all; }
+    .term-prompt { color: #58a6ff; }
+    .term-cmd { color: #e6e6e6; }
+    .term-output { color: #8b949e; }
+    .term-note {
+      color: #58a6ff;
+      font-style: italic;
+      opacity: 0.7;
+      display: block;
+      margin: 4px 0 2px;
+    }
+
+    .term-cursor {
+      display: inline-block;
+      width: 7px;
+      height: 14px;
+      background: #58a6ff;
+      vertical-align: text-bottom;
+      animation: blink 1s step-end infinite;
+    }
+
+    @keyframes blink {
+      50% { opacity: 0; }
+    }
+
+    /* Controls */
+    .demo-controls {
       display: flex;
       align-items: center;
-      padding: 6px 12px;
-      background: #161b22;
-      border-bottom: 1px solid #222;
       gap: 8px;
+      padding: 8px 16px;
+      background: #0d0d0d;
+      border-top: 1px solid #1a1a1a;
     }
 
-    .demo-chrome .demo-title {
-      flex: 1;
-      font-size: 0.7rem;
-      color: #484f58;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-    }
-
-    .demo-chrome .demo-btn {
-      padding: 3px 12px;
-      font-size: 0.7rem;
-      font-family: inherit;
-      background: #21262d;
-      color: #8b949e;
-      border: 1px solid #30363d;
+    .demo-controls button {
+      padding: 4px 14px;
+      font-size: 0.72rem;
+      font-family: "SF Mono", monospace;
+      background: #1a1a1a;
+      color: #888;
+      border: 1px solid #2a2a2a;
       border-radius: 4px;
       cursor: pointer;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
+      letter-spacing: 0.06em;
+      transition: all 0.15s;
     }
 
-    .demo-chrome .demo-btn:hover {
-      background: #30363d;
-      color: #c9d1d9;
+    .demo-controls button:hover {
+      background: #252525;
+      color: #bbb;
     }
 
-    .demo-chrome .demo-btn.running {
+    .demo-controls button.playing {
       color: #58a6ff;
       border-color: #58a6ff44;
     }
 
-    .demo-chrome .demo-btn.done {
-      color: #3fb950;
-      border-color: #3fb95044;
+    .demo-controls .step-counter {
+      font-size: 0.7rem;
+      font-family: "SF Mono", monospace;
+      color: #444;
+      margin-left: auto;
     }
 
-    .demo-static {
-      padding: 12px 16px;
-      color: #8b949e;
+    .demo-controls .speed-btn {
+      padding: 4px 8px;
+      font-size: 0.68rem;
     }
 
-    .demo-static .prompt {
+    .demo-controls .speed-btn.active {
       color: #58a6ff;
+      border-color: #58a6ff44;
     }
 
-    .demo-static .output {
-      color: #c9d1d9;
+    /* Preview panel */
+    .demo-preview {
+      border: 1px solid #222;
+      border-top: none;
+      border-radius: 0 0 8px 8px;
+      overflow: hidden;
+      background: #fff;
     }
 
-    .demo-frame {
+    .demo-preview iframe {
       width: 100%;
-      height: 320px;
+      height: 280px;
       border: none;
-      display: none;
+      display: block;
     }
 
-    /* Test badge */
-    .test-badge {
-      display: inline-block;
+    .demo-preview .preview-label {
       font-size: 0.65rem;
       font-family: "SF Mono", monospace;
-      padding: 1px 6px;
-      border-radius: 3px;
-      background: #1a2e1a;
-      color: #3fb950;
-      border: 1px solid #3fb95033;
-      vertical-align: middle;
-      margin-left: 6px;
-      letter-spacing: 0.03em;
+      color: #444;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 4px 12px;
+      background: #0d0d0d;
+      border-bottom: 1px solid #1a1a1a;
     }
 
-    /* Limitation list */
-    .limitations {
-      width: 55%;
+    /* Opus hero section */
+    .opus-card {
+      margin-top: 80px;
+      margin-bottom: 56px;
     }
 
-    .limitations li {
-      color: #999;
-      margin-bottom: 0.5rem;
-    }
-
-    /* Stats table */
-    .stats-table {
-      width: 55%;
-      border-collapse: collapse;
-      margin: 1.4rem 0;
-      font-size: 1.1rem;
-    }
-
-    .stats-table td {
-      padding: 6px 0;
-      border-bottom: 1px solid #222;
-      color: #aaa;
-    }
-
-    .stats-table td:first-child {
-      font-variant: tabular-nums;
+    .opus-card h2 {
+      font-size: 1.5rem;
+      font-weight: 600;
       color: #f0f0f0;
-      padding-right: 1.5em;
-      font-weight: 400;
+      margin-bottom: 6px;
     }
 
-    @media (max-width: 760px) {
-      .shiro-demo { width: 100%; }
-      .limitations { width: 100%; }
-      .stats-table { width: 100%; }
+    .opus-card .opus-sub {
+      font-size: 0.95rem;
+      color: #555;
+      margin-bottom: 16px;
     }
+
+    .opus-card .demo-terminal .term-body {
+      max-height: 520px;
+    }
+
+    /* Footer */
+    .footer {
+      margin-top: 80px;
+      padding-top: 24px;
+      border-top: 1px solid #1a1a1a;
+      font-size: 0.85rem;
+      color: #444;
+    }
+
+    .footer a { color: #666; }
+    .footer a:hover { color: #999; }
+
+    .footer .links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    /* Responsive */
+    @media (max-width: 600px) {
+      .page { padding: 32px 16px 60px; }
+      .header h1 { font-size: 1.8rem; }
+      .demo-terminal .term-body { font-size: 0.75rem; padding: 10px 12px; }
+    }
+
+    /* Hidden shiro iframe */
+    #shiro-engine {
+      position: fixed;
+      width: 1px;
+      height: 1px;
+      top: -9999px;
+      left: -9999px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* Loading indicator */
+    .engine-status {
+      font-size: 0.72rem;
+      font-family: "SF Mono", monospace;
+      color: #333;
+      margin-bottom: 48px;
+    }
+    .engine-status.ready { color: #3fb950; }
+    .engine-status.error { color: #f85149; }
   </style>
 </head>
 <body>
-  <a href="/" class="back-link">&larr; shiro.computer</a>
-  <article>
-    <h1>What Shiro Is</h1>
-    <p class="subtitle">
-      A browser-native Unix shell. About 150 commands, persistent files, pipes that work.
-      Some things are polished. Many things are not.
-    </p>
-    <p class="byline">William Sharkey &middot; February 2026</p>
+  <div class="page">
+    <a href="/" class="back-link">&larr; shiro.computer</a>
 
-    <section>
-      <p>
-        <span class="newthought">Shiro is a Unix-like shell</span> that runs in a browser tab.
-        It stores files in IndexedDB, parses commands in JavaScript, and implements about 150
-        Unix utilities in TypeScript. There is no backend server for computation &mdash; the
-        browser's JavaScript engine does all the work.
-      </p>
+    <div class="header">
+      <h1>Shiro</h1>
+      <p class="subtitle">A Unix shell in a browser tab. Files, pipes, git, npm, live web servers — all in one HTML file. Watch it work.</p>
+    </div>
 
-      <p>
-        The honest summary: basic file operations, pipes, text processing, and a JavaScript runtime
-        work well. Git and npm work but depend on network proxies. Many things a real Unix can do,
-        Shiro cannot. What follows is a precise accounting of what works, demonstrated with
-        commands you can run yourself.
-        <label for="sn-verify" class="margin-toggle sidenote-number"></label>
-        <input type="checkbox" id="sn-verify" class="margin-toggle">
-        <span class="sidenote">
-          Every demo on this page has a corresponding test in
-          <a href="https://github.com/williamsharkey/fluffycoreutils">fluffycoreutils</a>
-          that runs the same commands and verifies the output. Click &ldquo;Run&rdquo; on
-          any demo to execute it in a live Shiro instance.
-        </span>
-      </p>
+    <div id="engine-status" class="engine-status">loading shiro...</div>
 
-      <table class="stats-table">
-        <tr><td>~127</td><td>commands from fluffycoreutils (shared library, pure TypeScript)</td></tr>
-        <tr><td>~25</td><td>Shiro-specific commands (git, npm, node, build, vi, serve, &hellip;)</td></tr>
-        <tr><td>~21,000</td><td>lines of TypeScript across the project</td></tr>
-        <tr><td>~338 KB</td><td>gzipped bundle size (single HTML file, all JS/CSS inlined)</td></tr>
-        <tr><td>0</td><td>runtime server dependencies (CORS proxy needed for git only)</td></tr>
-      </table>
-    </section>
-
-    <section>
-      <h2>Files persist in IndexedDB</h2>
-
-      <p>
-        <span class="newthought">The filesystem</span> stores every file as a record in an
-        IndexedDB object store, keyed by absolute path. Each record holds the content as a
-        <code>Uint8Array</code>, the type (file, directory, or symlink), Unix permissions, and
-        timestamps. An in-memory <code>Map</code> cache sits in front of IndexedDB for fast reads.
-      </p>
-
-      <div class="shiro-demo" id="demo-fs">
-        <div class="demo-chrome">
-          <span class="demo-title">demo &mdash; filesystem</span>
-          <span class="test-badge">tested</span>
-          <button class="demo-btn" onclick="runDemo('demo-fs')">Run</button>
+    <!-- Demo 1: Hello -->
+    <div class="demo-card" id="demo-hello">
+      <h2>Pipes work</h2>
+      <div class="demo-terminal">
+        <div class="term-body"></div>
+        <div class="demo-controls">
+          <button class="play-btn" onclick="demos.hello.play()">Play</button>
+          <button onclick="demos.hello.reset()">Reset</button>
+          <span class="step-counter"></span>
+          <button class="speed-btn active" onclick="setSpeed('hello',1)">1x</button>
+          <button class="speed-btn" onclick="setSpeed('hello',2)">2x</button>
+          <button class="speed-btn" onclick="setSpeed('hello',3)">3x</button>
         </div>
-        <div class="demo-static">
-          <div><span class="prompt">~ $</span> mkdir -p /tmp/about-demo</div>
-          <div><span class="prompt">~ $</span> echo "persistent data" > /tmp/about-demo/file.txt</div>
-          <div><span class="prompt">~ $</span> cat /tmp/about-demo/file.txt</div>
-          <div class="output">persistent data</div>
-          <div><span class="prompt">~ $</span> wc -c /tmp/about-demo/file.txt</div>
-          <div class="output">16 /tmp/about-demo/file.txt</div>
-        </div>
-        <iframe class="demo-frame" data-src="/"></iframe>
       </div>
+    </div>
 
-      <p>
-        Files survive page reloads and browser restarts. The cost: IndexedDB writes take 1&ndash;5ms
-        each (fast enough for interactive use, slow for bulk operations). There is no multi-tab
-        coordination &mdash; one tab owns the database. Browser storage quotas apply, typically a few
-        hundred megabytes before the browser asks permission.
-        <label for="sn-idb" class="margin-toggle sidenote-number"></label>
-        <input type="checkbox" id="sn-idb" class="margin-toggle">
-        <span class="sidenote">
-          The design draws from <a href="https://github.com/nicolo-ribaudo/idb-keyval">idb-keyval</a>
-          and <a href="https://github.com/nicolo-ribaudo/lightning-fs">lightning-fs</a>.
-          Lightning-fs uses a 500ms mutex for multi-tab safety. Shiro simplifies this by assuming
-          a single-tab model.
-        </span>
-      </p>
-    </section>
-
-    <section>
-      <h2>Pipes and redirects work</h2>
-
-      <p>
-        <span class="newthought">The shell parser</span> is about 1,200 lines of hand-written TypeScript.
-        It handles pipes (<code>|</code>), redirects (<code>&gt;</code>, <code>&gt;&gt;</code>,
-        <code>&lt;</code>), compound commands (<code>&amp;&amp;</code>, <code>||</code>, <code>;</code>),
-        environment variables (<code>$VAR</code>, <code>${VAR}</code>, <code>$?</code>),
-        quoting, heredocs, and basic control structures (<code>if</code>/<code>while</code>/<code>for</code>/<code>case</code>).
-      </p>
-
-      <div class="shiro-demo" id="demo-pipes">
-        <div class="demo-chrome">
-          <span class="demo-title">demo &mdash; pipes</span>
-          <span class="test-badge">tested</span>
-          <button class="demo-btn" onclick="runDemo('demo-pipes')">Run</button>
+    <!-- Demo 2: Files -->
+    <div class="demo-card" id="demo-files">
+      <h2>Files persist in the browser</h2>
+      <div class="demo-terminal">
+        <div class="term-body"></div>
+        <div class="demo-controls">
+          <button class="play-btn" onclick="demos.files.play()">Play</button>
+          <button onclick="demos.files.reset()">Reset</button>
+          <span class="step-counter"></span>
+          <button class="speed-btn active" onclick="setSpeed('files',1)">1x</button>
+          <button class="speed-btn" onclick="setSpeed('files',2)">2x</button>
+          <button class="speed-btn" onclick="setSpeed('files',3)">3x</button>
         </div>
-        <div class="demo-static">
-          <div><span class="prompt">~ $</span> printf 'cherry\napple\nbanana\n' | sort</div>
-          <div class="output">apple</div>
-          <div class="output">banana</div>
-          <div class="output">cherry</div>
-        </div>
-        <iframe class="demo-frame" data-src="/"></iframe>
       </div>
+    </div>
 
-      <p>
-        The parser handles the common 80% well. It does not handle all of bash's edge cases:
-        process substitution is incomplete, job control (<code>&amp;</code>, <code>fg</code>, <code>bg</code>)
-        is minimal, there is no signal handling, and some quoting interactions with nested expansion
-        can produce wrong results.
-      </p>
-    </section>
-
-    <section>
-      <h2>Text processing</h2>
-
-      <p>
-        <span class="newthought">grep, sed, awk, sort, uniq, cut, wc, head, tail, tr</span> and about
-        a hundred other commands come from
-        <a href="https://github.com/williamsharkey/fluffycoreutils">fluffycoreutils</a>,
-        a shared TypeScript library with zero dependencies. Every command is implemented against a
-        10-method filesystem interface called <code>FluffyFS</code>. The same library runs in both
-        Shiro and its sister project <a href="https://github.com/williamsharkey/foam">Foam</a>.
-      </p>
-
-      <div class="shiro-demo" id="demo-grep">
-        <div class="demo-chrome">
-          <span class="demo-title">demo &mdash; grep &amp; wc</span>
-          <span class="test-badge">tested</span>
-          <button class="demo-btn" onclick="runDemo('demo-grep')">Run</button>
+    <!-- Demo 3: Text Processing -->
+    <div class="demo-card" id="demo-text">
+      <h2>grep, sort, cut, awk</h2>
+      <div class="demo-terminal">
+        <div class="term-body"></div>
+        <div class="demo-controls">
+          <button class="play-btn" onclick="demos.text.play()">Play</button>
+          <button onclick="demos.text.reset()">Reset</button>
+          <span class="step-counter"></span>
+          <button class="speed-btn active" onclick="setSpeed('text',1)">1x</button>
+          <button class="speed-btn" onclick="setSpeed('text',2)">2x</button>
+          <button class="speed-btn" onclick="setSpeed('text',3)">3x</button>
         </div>
-        <div class="demo-static">
-          <div><span class="prompt">~ $</span> printf 'error: disk full\ninfo: started\nerror: timeout\ninfo: stopped\n' | grep error | wc -l</div>
-          <div class="output">2</div>
-        </div>
-        <iframe class="demo-frame" data-src="/"></iframe>
       </div>
+    </div>
 
-      <div class="shiro-demo" id="demo-awk">
-        <div class="demo-chrome">
-          <span class="demo-title">demo &mdash; awk</span>
-          <span class="test-badge">tested</span>
-          <button class="demo-btn" onclick="runDemo('demo-awk')">Run</button>
+    <!-- Demo 4: Git -->
+    <div class="demo-card" id="demo-git">
+      <h2>Git works</h2>
+      <div class="demo-terminal">
+        <div class="term-body"></div>
+        <div class="demo-controls">
+          <button class="play-btn" onclick="demos.git.play()">Play</button>
+          <button onclick="demos.git.reset()">Reset</button>
+          <span class="step-counter"></span>
+          <button class="speed-btn active" onclick="setSpeed('git',1)">1x</button>
+          <button class="speed-btn" onclick="setSpeed('git',2)">2x</button>
+          <button class="speed-btn" onclick="setSpeed('git',3)">3x</button>
         </div>
-        <div class="demo-static">
-          <div><span class="prompt">~ $</span> printf 'alice 90\nbob 85\ncarol 95\n' | awk '{s+=$2} END {printf "avg: %.0f\n", s/NR}'</div>
-          <div class="output">avg: 90</div>
-        </div>
-        <iframe class="demo-frame" data-src="/"></iframe>
       </div>
+    </div>
 
-      <div class="shiro-demo" id="demo-sed">
-        <div class="demo-chrome">
-          <span class="demo-title">demo &mdash; sed</span>
-          <span class="test-badge">tested</span>
-          <button class="demo-btn" onclick="runDemo('demo-sed')">Run</button>
+    <!-- Demo 5: Build a Web Page -->
+    <div class="demo-card" id="demo-web">
+      <h2>Build a web page</h2>
+      <p class="card-desc">Write HTML and CSS, serve it live, edit it in place.</p>
+      <div class="demo-terminal" style="border-radius: 8px 8px 0 0;">
+        <div class="term-body"></div>
+        <div class="demo-controls">
+          <button class="play-btn" onclick="demos.web.play()">Play</button>
+          <button onclick="demos.web.reset()">Reset</button>
+          <span class="step-counter"></span>
+          <button class="speed-btn active" onclick="setSpeed('web',1)">1x</button>
+          <button class="speed-btn" onclick="setSpeed('web',2)">2x</button>
+          <button class="speed-btn" onclick="setSpeed('web',3)">3x</button>
         </div>
-        <div class="demo-static">
-          <div><span class="prompt">~ $</span> echo "Hello World" | sed 's/World/Browser/'</div>
-          <div class="output">Hello Browser</div>
-        </div>
-        <iframe class="demo-frame" data-src="/"></iframe>
       </div>
-
-      <div class="shiro-demo" id="demo-uniq">
-        <div class="demo-chrome">
-          <span class="demo-title">demo &mdash; sort | uniq</span>
-          <span class="test-badge">tested</span>
-          <button class="demo-btn" onclick="runDemo('demo-uniq')">Run</button>
-        </div>
-        <div class="demo-static">
-          <div><span class="prompt">~ $</span> printf 'banana\napple\napple\ncherry\nbanana\n' | sort | uniq</div>
-          <div class="output">apple</div>
-          <div class="output">banana</div>
-          <div class="output">cherry</div>
-        </div>
-        <iframe class="demo-frame" data-src="/"></iframe>
+      <div class="demo-preview">
+        <div class="preview-label">preview</div>
+        <iframe id="preview-web"></iframe>
       </div>
+    </div>
 
-      <p>
-        These are not complete GNU implementations. <code>awk</code> has field splitting,
-        pattern-action rules, BEGIN/END blocks, and built-in string functions, but does not implement
-        all of POSIX awk. <code>sed</code> handles <code>s/pattern/replacement/flags</code> but
-        does not handle hold space or multi-address ranges.
-        <code>grep</code> supports <code>-i</code>, <code>-v</code>, <code>-n</code>,
-        <code>-c</code>, <code>-l</code>, <code>-r</code>. They handle the common cases.
-        <label for="sn-fluffyfs" class="margin-toggle sidenote-number"></label>
-        <input type="checkbox" id="sn-fluffyfs" class="margin-toggle">
-        <span class="sidenote">
-          The FluffyFS interface has 10 methods: <code>readFile</code>, <code>writeFile</code>,
-          <code>mkdir</code>, <code>readdir</code>, <code>stat</code>, <code>exists</code>,
-          <code>unlink</code>, <code>rename</code>, <code>rmdir</code>, and an optional
-          <code>symlink</code>. Implement those 10 methods against any storage backend and you get
-          all ~127 commands for free.
-        </span>
-      </p>
-    </section>
-
-    <section>
-      <h2>JavaScript runs</h2>
-
-      <p>
-        <span class="newthought">The <code>node</code> command</span> executes JavaScript files and
-        inline expressions. It provides <code>require()</code> with Node-style module resolution,
-        a partial <code>fs</code> module mapped to the virtual filesystem, <code>path</code>,
-        <code>Buffer</code>, <code>process</code>, <code>child_process.spawn()</code>, and other
-        Node.js-like globals.
-      </p>
-
-      <div class="shiro-demo" id="demo-node">
-        <div class="demo-chrome">
-          <span class="demo-title">demo &mdash; node</span>
-          <span class="test-badge">tested</span>
-          <button class="demo-btn" onclick="runDemo('demo-node')">Run</button>
+    <!-- Demo 6: Todo App -->
+    <div class="demo-card" id="demo-todo">
+      <h2>Build a todo app</h2>
+      <p class="card-desc">Write an interactive app, serve it, interact with it, add features live.</p>
+      <div class="demo-terminal" style="border-radius: 8px 8px 0 0;">
+        <div class="term-body"></div>
+        <div class="demo-controls">
+          <button class="play-btn" onclick="demos.todo.play()">Play</button>
+          <button onclick="demos.todo.reset()">Reset</button>
+          <span class="step-counter"></span>
+          <button class="speed-btn active" onclick="setSpeed('todo',1)">1x</button>
+          <button class="speed-btn" onclick="setSpeed('todo',2)">2x</button>
+          <button class="speed-btn" onclick="setSpeed('todo',3)">3x</button>
         </div>
-        <div class="demo-static">
-          <div><span class="prompt">~ $</span> node -e "console.log(JSON.stringify({pi: Math.PI.toFixed(4), e: Math.E.toFixed(4)}))"</div>
-          <div class="output">{"pi":"3.1416","e":"2.7183"}</div>
-        </div>
-        <iframe class="demo-frame" data-src="/"></iframe>
       </div>
+      <div class="demo-preview">
+        <div class="preview-label">preview</div>
+        <iframe id="preview-todo"></iframe>
+      </div>
+    </div>
 
-      <p>
-        This is not V8 or Node.js. It is the browser's JavaScript engine with compatibility shims.
-        Many npm packages work if they do not depend on native modules (<code>.node</code> bindings)
-        or Node-specific APIs that are not shimmed. Some packages that do work: lodash, leftpad,
-        chalk (basic), and pure-JS utility libraries.
-      </p>
-    </section>
+    <!-- Demo 7: The Opus -->
+    <div class="demo-card opus-card" id="demo-opus">
+      <h2>The Opus</h2>
+      <p class="opus-sub">Full dev cycle — scaffold, serve, interact, git commit, add features, ship.</p>
+      <div class="demo-terminal" style="border-radius: 8px 8px 0 0;">
+        <div class="term-body"></div>
+        <div class="demo-controls">
+          <button class="play-btn" onclick="demos.opus.play()">Play</button>
+          <button onclick="demos.opus.reset()">Reset</button>
+          <span class="step-counter"></span>
+          <button class="speed-btn active" onclick="setSpeed('opus',1)">1x</button>
+          <button class="speed-btn" onclick="setSpeed('opus',2)">2x</button>
+          <button class="speed-btn" onclick="setSpeed('opus',3)">3x</button>
+        </div>
+      </div>
+      <div class="demo-preview">
+        <div class="preview-label">preview</div>
+        <iframe id="preview-opus"></iframe>
+      </div>
+    </div>
 
-    <section>
-      <h2>Git works, with a CORS proxy</h2>
+    <!-- Footer -->
+    <div class="footer">
+      <div class="links">
+        <a href="https://github.com/williamsharkey/shiro">source</a>
+        <a href="https://github.com/williamsharkey/fluffycoreutils">fluffycoreutils</a>
+        <a href="https://github.com/williamsharkey/foam">foam</a>
+        <a href="https://github.com/williamsharkey/spirit">spirit</a>
+      </div>
+      <p>William Sharkey &middot; 2026</p>
+    </div>
+  </div>
 
-      <p>
-        <span class="newthought">Via isomorphic-git:</span> init, add, commit, status, log, diff,
-        clone, push, pull, fetch, branch, checkout, merge. Clone and push require a CORS proxy
-        because GitHub's git HTTP protocol does not send CORS headers. The default proxy is
-        <code>cors.isomorphic-git.org</code>.
-        <label for="sn-cors" class="margin-toggle sidenote-number"></label>
-        <input type="checkbox" id="sn-cors" class="margin-toggle">
-        <span class="sidenote">
-          The CORS proxy is stateless &mdash; it relays bytes and adds
-          <code>Access-Control-Allow-Origin</code> headers. It does not store your code. You
-          can set your own with <code>export GIT_CORS_PROXY=https://your-proxy.com</code>.
-          Push/pull need a GitHub personal access token via
-          <code>shiro config set github_token TOKEN</code>.
-        </span>
-      </p>
-
-      <p>
-        This is a genuine limitation. Shiro is not truly &ldquo;serverless&rdquo; for git
-        operations. npm registry fetches work directly because npmjs.org sends CORS headers,
-        but GitHub's git protocol does not.
-      </p>
-    </section>
-
-    <section>
-      <h2>What also works</h2>
-
-      <p>
-        <span class="newthought">A partial list</span> of things implemented and functional:
-      </p>
-
-      <ul class="limitations">
-        <li><strong>TypeScript compilation</strong> via esbuild-wasm. The <code>build</code> command bundles TypeScript/JavaScript with tree-shaking and minification. The WASM binary (~15MB) is cached in IndexedDB after first download.</li>
-        <li><strong>npm install</strong> fetches real package tarballs from the npm registry, resolves dependencies, and writes to the virtual filesystem. Slow (10&ndash;30s for packages with many dependencies) but functional.</li>
-        <li><strong>Text editors:</strong> <code>vi</code> (modal, hjkl, insert/normal/command mode, search, save) and <code>nano</code> (simpler). Terminal raw mode enables interactive editing.</li>
-        <li><strong>Virtual HTTP servers</strong> via the <code>serve</code> command. Serves files from the virtual filesystem in iframes.</li>
-        <li><strong>Tab completion</strong> for files, commands, git subcommands, npm subcommands, and environment variables.</li>
-        <li><strong>Reverse history search</strong> (Ctrl+R), like bash.</li>
-        <li><strong>Hot-reload:</strong> edit a command's source file, run <code>reload</code>, and the module is replaced at runtime without a page refresh.</li>
-      </ul>
-    </section>
-
-    <section>
-      <h2>What does not work</h2>
-
-      <p>
-        <span class="newthought">An honest list</span> of things that are missing, broken, or inadequate:
-      </p>
-
-      <ul class="limitations">
-        <li>No native modules (<code>.node</code> bindings). Packages that compile C/C++ will not work.</li>
-        <li>No multi-process. Everything runs on the browser's main thread. There is no <code>fork</code>, no <code>exec</code>, no signals.</li>
-        <li>No TCP sockets. The browser sandbox does not allow raw network access.</li>
-        <li>No file watchers. IndexedDB does not notify on change.</li>
-        <li>Large files (&gt;10MB) are slow. IndexedDB serialization is the bottleneck.</li>
-        <li>Interactive programs are limited. Terminal raw mode works for vi/nano but many programs expect features Shiro does not implement.</li>
-        <li>The shell does not handle all bash edge cases. Complex quoting, process substitution, and job control are incomplete.</li>
-        <li>No debugger, no breakpoints, no source maps in the virtual filesystem.</li>
-        <li>Performance is adequate for small projects. It will not handle a 10,000-file codebase gracefully.</li>
-      </ul>
-    </section>
-
-    <section>
-      <h2>How it is built</h2>
-
-      <p>
-        <span class="newthought">About 21,000 lines</span> of TypeScript, built with Vite into a
-        single HTML file. The build plugin (<code>vite-plugin-inline.ts</code>) inlines all
-        JavaScript, CSS, and the favicon into one <code>index.html</code> &mdash; no separate asset
-        files. The gzipped bundle is about 338KB.
-      </p>
-
-      <p>
-        Runtime dependencies: <a href="https://xtermjs.org/">xterm.js</a> (terminal emulator),
-        <a href="https://isomorphic-git.org/">isomorphic-git</a> (git implementation),
-        <a href="https://esbuild.github.io/">esbuild-wasm</a> (TypeScript compilation, lazy-loaded).
-        Everything else is from scratch.
-      </p>
-
-      <p>
-        The command library, <a href="https://github.com/williamsharkey/fluffycoreutils">fluffycoreutils</a>,
-        is a separate repository consumed as a git submodule. It exports every command as a function
-        that takes arguments and a <code>FluffyFS</code> filesystem interface. This makes the commands
-        testable in isolation and portable to any host that implements the interface.
-        <label for="sn-foam" class="margin-toggle sidenote-number"></label>
-        <input type="checkbox" id="sn-foam" class="margin-toggle">
-        <span class="sidenote">
-          <a href="https://github.com/williamsharkey/foam">Foam</a>, Shiro's sister project,
-          proves the portability claim. Foam is plain JavaScript with no build step &mdash;
-          just open index.html. It uses the same fluffycoreutils library against its own
-          IndexedDB filesystem and the same commands produce the same output.
-        </span>
-      </p>
-
-      <pre><code>interface FluffyFS {
-  readFile(path: string): Promise&lt;string&gt;;
-  writeFile(path: string, content: string): Promise&lt;void&gt;;
-  mkdir(path: string, opts?: { recursive?: boolean }): Promise&lt;void&gt;;
-  readdir(path: string): Promise&lt;FluffyEntry[]&gt;;
-  stat(path: string): Promise&lt;FluffyStat&gt;;
-  exists(path: string): Promise&lt;boolean&gt;;
-  unlink(path: string): Promise&lt;void&gt;;
-  rename(old: string, new_: string): Promise&lt;void&gt;;
-  rmdir(path: string, opts?: { recursive?: boolean }): Promise&lt;void&gt;;
-  symlink?(target: string, path: string): Promise&lt;void&gt;;
-  resolvePath(path: string, cwd: string): string;
-}</code></pre>
-
-      <p>
-        Ten methods and a path resolver. Implement those against any storage backend and you get
-        the full command library.
-      </p>
-    </section>
-
-    <section>
-      <h2>Source</h2>
-
-      <p>
-        Everything is MIT-licensed and on GitHub:
-      </p>
-
-      <ul class="limitations">
-        <li><a href="https://github.com/williamsharkey/shiro">shiro</a> &mdash; the browser OS (TypeScript, Vite)</li>
-        <li><a href="https://github.com/williamsharkey/foam">foam</a> &mdash; plain JS sister project (no build step)</li>
-        <li><a href="https://github.com/williamsharkey/fluffycoreutils">fluffycoreutils</a> &mdash; 127 Unix commands, zero dependencies</li>
-        <li><a href="https://github.com/williamsharkey/spirit">spirit</a> &mdash; Claude Code agent loop for browser OSes</li>
-        <li><a href="https://github.com/williamsharkey/windwalker">windwalker</a> &mdash; test suite (12 levels, 152+ tests)</li>
-        <li><a href="https://github.com/williamsharkey/skyeyes">skyeyes</a> &mdash; browser inspection bridge</li>
-        <li><a href="https://github.com/williamsharkey/nimbus">nimbus</a> &mdash; multi-agent orchestrator dashboard</li>
-      </ul>
-
-      <p style="font-size: 1.1rem; color: #666; margin-top: 2rem;">
-        <a href="https://shiro.computer">Open Shiro</a> and try
-        <code>echo "hello" | wc -c</code>.
-      </p>
-    </section>
-
-    <hr>
-
-    <section>
-      <p style="font-size: 1rem; color: #555;">
-        William Sharkey &middot; 2026
-      </p>
-    </section>
-  </article>
+  <!-- Hidden Shiro engine -->
+  <iframe id="shiro-engine" src="/"></iframe>
 
   <script>
-  // ===== Demo Framework =====
-  // Each demo loads a real Shiro instance in an iframe and executes commands live.
+  // ===== Helpers =====
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-  const DEMOS = {
-    'demo-fs': {
-      commands: [
-        'mkdir -p /tmp/about-demo',
-        'echo "persistent data" > /tmp/about-demo/file.txt',
-        'cat /tmp/about-demo/file.txt',
-        'wc -c /tmp/about-demo/file.txt'
-      ]
-    },
-    'demo-pipes': {
-      commands: [
-        "printf 'cherry\\napple\\nbanana\\n' | sort"
-      ]
-    },
-    'demo-grep': {
-      commands: [
-        "printf 'error: disk full\\ninfo: started\\nerror: timeout\\ninfo: stopped\\n' | grep error | wc -l"
-      ]
-    },
-    'demo-awk': {
-      commands: [
-        "printf 'alice 90\\nbob 85\\ncarol 95\\n' | awk '{s+=$2} END {printf \"avg: %.0f\\n\", s/NR}'"
-      ]
-    },
-    'demo-sed': {
-      commands: [
-        "echo \"Hello World\" | sed 's/World/Browser/'"
-      ]
-    },
-    'demo-uniq': {
-      commands: [
-        "printf 'banana\\napple\\napple\\ncherry\\nbanana\\n' | sort | uniq"
-      ]
-    },
-    'demo-node': {
-      commands: [
-        'node -e "console.log(JSON.stringify({pi: Math.PI.toFixed(4), e: Math.E.toFixed(4)}))"'
-      ]
-    }
-  };
+  let shiroReady = false;
 
-  // Track running state per demo
-  const demoState = {};
-
-  async function runDemo(demoId) {
-    if (demoState[demoId]?.running) return;
-
-    const demo = DEMOS[demoId];
-    if (!demo) return;
-
-    const el = document.getElementById(demoId);
-    if (!el) return;
-
-    const btn = el.querySelector('.demo-btn');
-    const staticEl = el.querySelector('.demo-static');
-    const iframe = el.querySelector('.demo-frame');
-
-    demoState[demoId] = { running: true };
-
-    // Update button state
-    btn.textContent = 'Loading\u2026';
-    btn.classList.add('running');
-
-    // Show iframe, hide static
-    staticEl.style.display = 'none';
-    iframe.style.display = 'block';
-
-    // Load Shiro in iframe if not loaded
-    if (!iframe.src || iframe.src === 'about:blank') {
-      iframe.src = iframe.dataset.src || '/';
-    }
-
-    // Wait for Shiro to boot
-    try {
-      await waitForShiro(iframe, 15000);
-    } catch (e) {
-      btn.textContent = 'Error';
-      btn.classList.remove('running');
-      staticEl.style.display = 'block';
-      iframe.style.display = 'none';
-      demoState[demoId].running = false;
-      return;
-    }
-
-    // Small delay for terminal to settle
-    await sleep(800);
-
-    btn.textContent = 'Running\u2026';
-
-    // Execute commands with visible typing
-    const shiro = iframe.contentWindow.__shiro;
-    for (let i = 0; i < demo.commands.length; i++) {
-      const cmd = demo.commands[i];
-      try {
-        // Write the prompt and command to terminal for visual effect
-        if (shiro.terminal?.term) {
-          shiro.terminal.term.write('\r\n\x1b[36m~ $\x1b[0m ' + cmd + '\r\n');
-        }
-        // Execute the command
-        const result = await shiro.shell.exec(cmd);
-        // Write output to terminal
-        if (result && result.stdout && shiro.terminal?.term) {
-          shiro.terminal.term.write(result.stdout.replace(/\n/g, '\r\n'));
-        }
-        if (result && result.stderr && shiro.terminal?.term) {
-          shiro.terminal.term.write('\x1b[31m' + result.stderr.replace(/\n/g, '\r\n') + '\x1b[0m');
-        }
-      } catch (e) {
-        // Command execution failed - still continue
-      }
-      if (i < demo.commands.length - 1) {
-        await sleep(400);
-      }
-    }
-
-    // Done
-    btn.textContent = 'Done';
-    btn.classList.remove('running');
-    btn.classList.add('done');
-    demoState[demoId].running = false;
-
-    // Allow re-running after a delay
-    setTimeout(() => {
-      btn.textContent = 'Run again';
-      btn.classList.remove('done');
-    }, 2000);
+  function getShiro() {
+    const iframe = document.getElementById('shiro-engine');
+    return iframe?.contentWindow?.__shiro;
   }
 
-  function waitForShiro(iframe, timeout) {
-    return new Promise((resolve, reject) => {
-      const start = Date.now();
-      const check = setInterval(() => {
-        try {
-          if (iframe.contentWindow?.__shiro?.shell?.exec) {
-            clearInterval(check);
-            resolve();
-          }
-        } catch (e) {
-          // Cross-origin or not ready yet
+  async function waitForShiro(timeout = 20000) {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      try {
+        if (getShiro()?.shell?.exec) {
+          shiroReady = true;
+          const el = document.getElementById('engine-status');
+          el.textContent = 'shiro ready';
+          el.classList.add('ready');
+          return;
         }
-        if (Date.now() - start > timeout) {
-          clearInterval(check);
-          reject(new Error('Shiro boot timeout'));
+      } catch {}
+      await sleep(200);
+    }
+    const el = document.getElementById('engine-status');
+    el.textContent = 'shiro failed to load';
+    el.classList.add('error');
+    throw new Error('Shiro boot timeout');
+  }
+
+  // ===== DemoPlayer =====
+  class DemoPlayer {
+    constructor(cardId, steps, options = {}) {
+      this.cardId = cardId;
+      this.steps = steps;
+      this.hasPreview = options.hasPreview || false;
+      this.previewId = options.previewId || null;
+      this.previewFiles = options.previewFiles || [];
+
+      this.el = document.getElementById(cardId);
+      this.termBody = this.el.querySelector('.term-body');
+      this.playBtn = this.el.querySelector('.play-btn');
+      this.stepCounter = this.el.querySelector('.step-counter');
+
+      this.currentStep = 0;
+      this.playing = false;
+      this.paused = false;
+      this.speed = 1;
+      this.aborted = false;
+    }
+
+    async play() {
+      if (this.playing && !this.paused) {
+        // Pause
+        this.paused = true;
+        this.playBtn.textContent = 'Resume';
+        this.playBtn.classList.remove('playing');
+        return;
+      }
+
+      if (this.paused) {
+        // Resume
+        this.paused = false;
+        this.playBtn.textContent = 'Pause';
+        this.playBtn.classList.add('playing');
+        return;
+      }
+
+      if (!shiroReady) {
+        this.playBtn.textContent = 'Waiting...';
+        try { await waitForShiro(); } catch { this.playBtn.textContent = 'Error'; return; }
+      }
+
+      // Start fresh
+      this.playing = true;
+      this.paused = false;
+      this.aborted = false;
+      this.currentStep = 0;
+      this.termBody.innerHTML = '';
+      this.playBtn.textContent = 'Pause';
+      this.playBtn.classList.add('playing');
+
+      for (let i = 0; i < this.steps.length; i++) {
+        if (this.aborted) break;
+
+        // Wait while paused
+        while (this.paused && !this.aborted) await sleep(100);
+        if (this.aborted) break;
+
+        this.currentStep = i + 1;
+        this.updateCounter();
+        await this.runStep(this.steps[i]);
+      }
+
+      this.playing = false;
+      this.paused = false;
+      this.playBtn.textContent = 'Replay';
+      this.playBtn.classList.remove('playing');
+    }
+
+    reset() {
+      this.aborted = true;
+      this.playing = false;
+      this.paused = false;
+      this.currentStep = 0;
+      this.termBody.innerHTML = '';
+      this.playBtn.textContent = 'Play';
+      this.playBtn.classList.remove('playing');
+      this.updateCounter();
+      if (this.hasPreview && this.previewId) {
+        document.getElementById(this.previewId).srcdoc = '';
+      }
+    }
+
+    updateCounter() {
+      if (this.currentStep === 0) {
+        this.stepCounter.textContent = '';
+      } else {
+        this.stepCounter.textContent = `Step ${this.currentStep}/${this.steps.length}`;
+      }
+    }
+
+    async runStep(step) {
+      const delay = (step.delay ?? 600) / this.speed;
+
+      // Show note if present
+      if (step.note) {
+        const noteEl = document.createElement('span');
+        noteEl.className = 'term-note';
+        noteEl.textContent = '# ' + step.note;
+        this.termBody.appendChild(noteEl);
+        this.scrollToBottom();
+        await sleep(Math.min(400, delay) / this.speed);
+      }
+
+      if (step.js) {
+        // Execute JS in preview iframe
+        await this.runPreviewJS(step.js);
+        if (step.preview) await this.updatePreview();
+        await sleep(delay);
+        return;
+      }
+
+      if (!step.cmd) {
+        await sleep(delay);
+        return;
+      }
+
+      // Type the command
+      await this.typeCommand(step.cmd);
+
+      // Execute in Shiro
+      const output = await this.execInShiro(step.cmd);
+
+      // Show output
+      if (output.trim()) {
+        await this.showOutput(output);
+      }
+
+      // Update preview if needed
+      if (step.preview && this.hasPreview) {
+        await this.updatePreview();
+      }
+
+      await sleep(delay);
+    }
+
+    async typeCommand(cmd) {
+      const lineEl = document.createElement('div');
+      lineEl.className = 'term-line';
+
+      const promptSpan = document.createElement('span');
+      promptSpan.className = 'term-prompt';
+      promptSpan.textContent = '~ $ ';
+      lineEl.appendChild(promptSpan);
+
+      const cmdSpan = document.createElement('span');
+      cmdSpan.className = 'term-cmd';
+      lineEl.appendChild(cmdSpan);
+
+      const cursor = document.createElement('span');
+      cursor.className = 'term-cursor';
+      lineEl.appendChild(cursor);
+
+      this.termBody.appendChild(lineEl);
+      this.scrollToBottom();
+
+      // Type char by char
+      const charDelay = 35 / this.speed;
+      for (let i = 0; i < cmd.length; i++) {
+        if (this.aborted) break;
+        while (this.paused && !this.aborted) await sleep(50);
+        cmdSpan.textContent += cmd[i];
+        this.scrollToBottom();
+        await sleep(charDelay);
+      }
+
+      // Remove cursor after typing
+      cursor.remove();
+    }
+
+    async showOutput(text) {
+      const lines = text.replace(/\n$/, '').split('\n');
+      const lineDelay = 30 / this.speed;
+
+      for (const line of lines) {
+        if (this.aborted) break;
+        const lineEl = document.createElement('div');
+        lineEl.className = 'term-line term-output';
+        lineEl.textContent = line;
+        this.termBody.appendChild(lineEl);
+        this.scrollToBottom();
+        await sleep(lineDelay);
+      }
+    }
+
+    async execInShiro(cmd) {
+      try {
+        const shiro = getShiro();
+        const result = await shiro.shell.exec(cmd);
+        let out = '';
+        if (result?.stdout) out += result.stdout;
+        if (result?.stderr) out += result.stderr;
+        return out;
+      } catch (e) {
+        return '';
+      }
+    }
+
+    async updatePreview() {
+      if (!this.previewId || !this.previewFiles.length) return;
+      try {
+        const shiro = getShiro();
+        let html = '';
+        let css = '';
+        let js = '';
+
+        for (const f of this.previewFiles) {
+          try {
+            const content = await shiro.shell.exec('cat ' + f);
+            const text = content?.stdout || '';
+            if (f.endsWith('.html')) html = text;
+            else if (f.endsWith('.css')) css = text;
+            else if (f.endsWith('.js')) js = text;
+          } catch {}
         }
-      }, 200);
+
+        // Inline CSS and JS into HTML for srcdoc
+        if (css && html.includes('</head>')) {
+          html = html.replace('</head>', '<style>' + css + '</style></head>');
+        }
+        if (js && html.includes('</body>')) {
+          html = html.replace('</body>', '<script>' + js + '<\/script></body>');
+        }
+
+        const iframe = document.getElementById(this.previewId);
+        iframe.srcdoc = html;
+      } catch {}
+    }
+
+    async runPreviewJS(code) {
+      try {
+        const iframe = document.getElementById(this.previewId);
+        if (iframe?.contentWindow) {
+          iframe.contentWindow.eval(code);
+        }
+      } catch {}
+      // Small pause for DOM update
+      await sleep(200 / this.speed);
+    }
+
+    scrollToBottom() {
+      this.termBody.scrollTop = this.termBody.scrollHeight;
+    }
+  }
+
+  // ===== Speed Control =====
+  const demos = {};
+
+  function setSpeed(demoKey, speed) {
+    const player = demos[demoKey];
+    if (!player) return;
+    player.speed = speed;
+
+    // Update button states
+    const card = player.el;
+    card.querySelectorAll('.speed-btn').forEach(btn => {
+      btn.classList.toggle('active', btn.textContent === speed + 'x');
     });
   }
 
-  function sleep(ms) {
-    return new Promise(r => setTimeout(r, ms));
-  }
+  // ===== Demo Definitions =====
+
+  // Demo 1: Hello
+  const helloSteps = [
+    { cmd: 'echo "hello world"', note: 'Print text' },
+    { cmd: 'echo "hello world" | wc -c', note: 'Pipe to word count' },
+    { cmd: 'echo "hello world" | sed \'s/world/browser/\'', note: 'Transform with sed' },
+  ];
+
+  // Demo 2: Files
+  const filesSteps = [
+    { cmd: 'mkdir -p /tmp/demo-fs/src /tmp/demo-fs/docs', note: 'Create a project structure' },
+    { cmd: 'echo \'console.log("hi")\' > /tmp/demo-fs/src/app.js' },
+    { cmd: 'echo \'# My Project\' > /tmp/demo-fs/docs/README.md' },
+    { cmd: 'find /tmp/demo-fs -type f', note: 'Find all files' },
+    { cmd: 'cat /tmp/demo-fs/src/app.js' },
+  ];
+
+  // Demo 3: Text Processing
+  const textSteps = [
+    { cmd: "printf 'alice,95\\nbob,87\\ncarol,92\\nalice,88\\nbob,91\\n' > /tmp/grades.csv", note: 'Create a CSV file' },
+    { cmd: 'cat /tmp/grades.csv' },
+    { cmd: 'grep alice /tmp/grades.csv', note: 'Filter rows' },
+    { cmd: 'sort /tmp/grades.csv', note: 'Sort' },
+    { cmd: 'cut -d, -f2 /tmp/grades.csv | sort -n', note: 'Extract and sort scores' },
+    { cmd: "awk -F, '{s[$1]+=$2;n[$1]++} END {for(k in s) printf \"%s: %.0f\\n\",k,s[k]/n[k]}' /tmp/grades.csv", note: 'Compute averages with awk' },
+  ];
+
+  // Demo 4: Git Workflow
+  const gitSteps = [
+    { cmd: 'rm -rf /tmp/myrepo; mkdir -p /tmp/myrepo', note: 'Create a project' },
+    { cmd: 'cd /tmp/myrepo && git init' },
+    { cmd: 'echo "# Todo App" > /tmp/myrepo/README.md' },
+    { cmd: 'echo \'console.log("v1")\' > /tmp/myrepo/app.js' },
+    { cmd: 'cd /tmp/myrepo && git add .' },
+    { cmd: 'cd /tmp/myrepo && git commit -m "initial commit"', note: 'First commit' },
+    { cmd: 'echo \'console.log("v2 — added features")\' > /tmp/myrepo/app.js', note: 'Edit a file' },
+    { cmd: 'cd /tmp/myrepo && git diff' },
+  ];
+
+  // Demo 5: Build a Web Page
+  const webSteps = [
+    { cmd: 'mkdir -p /tmp/site' },
+    { cmd: "cat > /tmp/site/index.html << 'HEREDOC'\n<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>My Website</title>\n<link rel=\"stylesheet\" href=\"style.css\"></head>\n<body>\n<h1>My Website</h1>\n<p>Built inside a browser.</p>\n<ul><li>No server</li><li>No build tools</li><li>Just a shell</li></ul>\n</body></html>\nHEREDOC", note: 'Write HTML' },
+    { cmd: "cat > /tmp/site/style.css << 'HEREDOC'\nbody { font-family: system-ui; background: #1a1a2e; color: #eee;\n  display: flex; justify-content: center; align-items: center;\n  min-height: 100vh; margin: 0; }\nbody > * { text-align: center; }\nh1 { color: #e94560; margin-bottom: 0.5em; }\nul { list-style: none; padding: 0; }\nli { padding: 4px 0; color: #aaa; }\nHEREDOC", note: 'Write CSS' },
+    { cmd: 'cat /tmp/site/index.html' },
+    { cmd: 'serve /tmp/site 3000', preview: true, note: 'Serve it', delay: 1000 },
+    { note: 'Modify it live' },
+    { cmd: "sed -i 's/My Website/My Website ✨/' /tmp/site/index.html" },
+    { cmd: 'cat /tmp/site/index.html', preview: true },
+    { cmd: 'serve stop 3000', delay: 300 },
+  ];
+
+  // Demo 6: Todo App
+  const todoHTML = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Todo</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui; background: #16213e; color: #eee;
+  display: flex; justify-content: center; padding-top: 60px; }
+.app { width: 340px; }
+h1 { font-size: 1.5rem; margin-bottom: 16px; color: #e94560; }
+form { display: flex; gap: 8px; margin-bottom: 16px; }
+input { flex: 1; padding: 8px; border-radius: 6px; border: 1px solid #333;
+  background: #0f3460; color: #eee; font-size: 0.9rem; }
+button { padding: 8px 16px; border-radius: 6px; border: none;
+  background: #e94560; color: #fff; cursor: pointer; font-size: 0.9rem; }
+button:hover { background: #c73e54; }
+ul { list-style: none; }
+li { padding: 10px; margin-bottom: 6px; background: #0f3460;
+  border-radius: 6px; display: flex; justify-content: space-between;
+  align-items: center; cursor: pointer; }
+li.done span { text-decoration: line-through; color: #666; }
+li .del { color: #e94560; cursor: pointer; font-weight: bold; }
+#clear-btn { display: none; margin-top: 12px; background: #333; font-size: 0.8rem; }
+</style></head>
+<body><div class="app">
+<h1>Todo</h1>
+<form onsubmit="addTodo(event)">
+  <input id="inp" placeholder="What needs to be done?">
+  <button type="submit">Add</button>
+</form>
+<ul id="list"></ul>
+<button id="clear-btn" onclick="clearDone()">Clear completed</button>
+</div>
+<script>
+let todos = [];
+function render() {
+  const ul = document.getElementById('list');
+  ul.innerHTML = '';
+  todos.forEach((t, i) => {
+    const li = document.createElement('li');
+    if (t.done) li.className = 'done';
+    li.innerHTML = '<span>' + t.text + '</span><span class="del" onclick="del(event,' + i + ')">×</span>';
+    li.onclick = () => { todos[i].done = !todos[i].done; render(); };
+    ul.appendChild(li);
+  });
+  const btn = document.getElementById('clear-btn');
+  if (btn) btn.style.display = todos.some(t => t.done) ? 'block' : 'none';
+}
+function addTodo(e) {
+  e.preventDefault();
+  const inp = document.getElementById('inp');
+  if (inp.value.trim()) { todos.push({ text: inp.value.trim(), done: false }); inp.value = ''; render(); }
+}
+function del(e, i) { e.stopPropagation(); todos.splice(i, 1); render(); }
+function clearDone() { todos = todos.filter(t => !t.done); render(); }
+</script></body></html>`;
+
+  const todoSteps = [
+    { cmd: 'mkdir -p /tmp/todo' },
+    { cmd: "cat > /tmp/todo/index.html << 'ENDDOC'\n" + todoHTML + "\nENDDOC", note: 'Write a todo app' },
+    { cmd: 'wc -l /tmp/todo/index.html' },
+    { cmd: 'serve /tmp/todo 4000', preview: true, note: 'Serve it', delay: 1000 },
+    { js: "document.getElementById('inp').value='Buy groceries';document.querySelector('form').dispatchEvent(new Event('submit',{bubbles:true}))", note: 'Add items' },
+    { js: "document.getElementById('inp').value='Write code';document.querySelector('form').dispatchEvent(new Event('submit',{bubbles:true}))" },
+    { js: "document.getElementById('inp').value='Deploy app';document.querySelector('form').dispatchEvent(new Event('submit',{bubbles:true}))", preview: true },
+    { js: "document.querySelector('li').click()", note: 'Complete a task', preview: true, delay: 800 },
+    { js: "document.getElementById('clear-btn').click()", note: 'Clear completed', preview: true, delay: 800 },
+    { cmd: 'serve stop 4000', delay: 300 },
+  ];
+
+  // Demo 7: The Opus
+  const opusHTML = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Counter</title>
+<link rel="stylesheet" href="style.css">
+</head><body>
+<div class="app">
+  <h1>Counter</h1>
+  <div class="display" id="display">0</div>
+  <div class="buttons">
+    <button id="dec" onclick="dec()">-</button>
+    <button id="inc" onclick="inc()">+</button>
+  </div>
+</div>
+<script src="src/app.js"></script>
+</body></html>`;
+
+  const opusCSS = `* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui; background: #0f0f23; color: #eee;
+  display: flex; justify-content: center; align-items: center;
+  min-height: 100vh; }
+.app { text-align: center; }
+h1 { font-size: 1.3rem; color: #7eb8c9; margin-bottom: 20px; }
+.display { font-size: 4rem; font-weight: 700; margin-bottom: 24px;
+  font-variant-numeric: tabular-nums; }
+.buttons { display: flex; gap: 12px; justify-content: center; }
+button { width: 64px; height: 64px; font-size: 1.5rem; border-radius: 12px;
+  border: 2px solid #333; background: #1a1a2e; color: #eee; cursor: pointer;
+  transition: all 0.1s; }
+button:hover { border-color: #7eb8c9; }
+button:active { transform: scale(0.95); }
+#reset { width: auto; padding: 0 20px; height: 48px; font-size: 1rem;
+  margin-top: 16px; border-color: #444; color: #888; }
+#reset:hover { border-color: #e94560; color: #e94560; }`;
+
+  const opusJS = `let count = 0;
+function update() { document.getElementById('display').textContent = count; }
+function inc() { count++; update(); }
+function dec() { count--; update(); }`;
+
+  const opusJSWithReset = `let count = 0;
+function update() { document.getElementById('display').textContent = count; }
+function inc() { count++; update(); }
+function dec() { count--; update(); }
+function reset() { count = 0; update(); }`;
+
+  const opusJSWithKeys = `let count = 0;
+function update() { document.getElementById('display').textContent = count; }
+function inc() { count++; update(); }
+function dec() { count--; update(); }
+function reset() { count = 0; update(); }
+document.addEventListener('keydown', e => {
+  if (e.key === '+' || e.key === '=') inc();
+  else if (e.key === '-') dec();
+  else if (e.key === '0') reset();
+});`;
+
+  const opusSteps = [
+    // Phase 1: Scaffold
+    { cmd: 'rm -rf /tmp/opus; mkdir -p /tmp/opus/src /tmp/opus/public', note: 'Scaffold the project' },
+    { cmd: "cat > /tmp/opus/public/index.html << 'EOF'\n" + opusHTML + "\nEOF" },
+    { cmd: "cat > /tmp/opus/public/style.css << 'EOF'\n" + opusCSS + "\nEOF" },
+    { cmd: "cat > /tmp/opus/src/app.js << 'EOF'\n" + opusJS + "\nEOF" },
+    { cmd: 'ls -la /tmp/opus/public /tmp/opus/src' },
+
+    // Phase 2: Serve & Interact
+    { cmd: 'serve /tmp/opus/public 5000', preview: true, note: 'Serve it', delay: 1000 },
+    { js: "inc(); inc(); inc()", note: 'Click increment 3x', preview: true },
+    { js: "dec()", note: 'Click decrement', preview: true },
+    { cmd: 'echo "Counter works."' },
+
+    // Phase 3: Git
+    { cmd: 'cd /tmp/opus && git init', note: 'Initialize git' },
+    { cmd: 'cd /tmp/opus && git add .' },
+    { cmd: 'cd /tmp/opus && git commit -m "feat: counter app"' },
+    { cmd: 'cd /tmp/opus && git log --oneline' },
+
+    // Phase 4: Edit & Enhance
+    { note: 'Adding a reset button' },
+    { cmd: "sed -i 's|</div>\\n</div>|</div>\\n  <button id=\"reset\" onclick=\"reset()\">Reset</button>\\n</div>|' /tmp/opus/public/index.html" },
+    { cmd: "cat > /tmp/opus/src/app.js << 'EOF'\n" + opusJSWithReset + "\nEOF", note: 'Update app.js with reset' },
+    { cmd: 'cat /tmp/opus/src/app.js' },
+    { preview: true, note: 'Preview updates', delay: 400 },
+    { js: "inc(); inc(); inc(); inc(); inc(); setTimeout(() => reset(), 300)", note: 'Increment 5x, then reset', preview: true, delay: 1200 },
+    { cmd: 'cd /tmp/opus && git diff', note: 'See the changes' },
+    { cmd: 'cd /tmp/opus && git add . && git commit -m "feat: reset button"' },
+
+    // Phase 5: Keyboard shortcuts
+    { note: 'Adding keyboard shortcuts' },
+    { cmd: "cat > /tmp/opus/src/app.js << 'EOF'\n" + opusJSWithKeys + "\nEOF" },
+    { cmd: 'cat /tmp/opus/src/app.js', preview: true },
+    { cmd: 'cd /tmp/opus && git add . && git commit -m "feat: keyboard shortcuts"' },
+
+    // Phase 6: Ship
+    { cmd: 'cd /tmp/opus && git log --oneline', note: 'Three commits' },
+    { cmd: 'find /tmp/opus -type f | sort' },
+    { cmd: 'echo "Scaffolded, served, edited, committed — all in one browser tab."', delay: 1500 },
+  ];
+
+  // ===== Initialize =====
+  document.addEventListener('DOMContentLoaded', () => {
+    demos.hello = new DemoPlayer('demo-hello', helloSteps);
+    demos.files = new DemoPlayer('demo-files', filesSteps);
+    demos.text = new DemoPlayer('demo-text', textSteps);
+    demos.git = new DemoPlayer('demo-git', gitSteps);
+    demos.web = new DemoPlayer('demo-web', webSteps, {
+      hasPreview: true,
+      previewId: 'preview-web',
+      previewFiles: ['/tmp/site/index.html', '/tmp/site/style.css'],
+    });
+    demos.todo = new DemoPlayer('demo-todo', todoSteps, {
+      hasPreview: true,
+      previewId: 'preview-todo',
+      previewFiles: ['/tmp/todo/index.html'],
+    });
+    demos.opus = new DemoPlayer('demo-opus', opusSteps, {
+      hasPreview: true,
+      previewId: 'preview-opus',
+      previewFiles: ['/tmp/opus/public/index.html', '/tmp/opus/public/style.css', '/tmp/opus/src/app.js'],
+    });
+
+    // Boot Shiro engine
+    waitForShiro().catch(() => {});
+  });
   </script>
 </body>
 </html>
