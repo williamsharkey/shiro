@@ -1,9 +1,10 @@
 /**
- * Re-export ShiroProvider from the Spirit submodule.
- *
- * Spirit provides its own ShiroProvider that implements OSProvider
- * by wrapping Shiro's FileSystem, Shell, and Terminal interfaces.
- * No need to maintain a duplicate adapter here.
+ * Spirit provider stub — Spirit has been replaced by Claude Code (inner claude).
+ * This file exists only for type compatibility with any remaining imports.
  */
-export { ShiroProvider } from '../spirit/src/providers/shiro-provider.js';
-export type { OSProvider, FileInfo, StatResult, ShellResult, HostInfo } from '../spirit/src/providers/types.js';
+export type ShiroProvider = any;
+export type OSProvider = any;
+export type FileInfo = any;
+export type StatResult = any;
+export type ShellResult = any;
+export type HostInfo = any;

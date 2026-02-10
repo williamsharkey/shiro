@@ -47,11 +47,12 @@ src/
     ├── npm.ts            # npm package manager: install, list, run, uninstall
     ├── build.ts          # esbuild-wasm bundler for TypeScript/JavaScript
     ├── vi.ts             # minimal vi-like modal text editor
-    ├── spirit.ts         # Spirit AI agent (interim Anthropic API loop)
+    ├── spirit.ts         # Spirit AI agent (deprecated — use claude instead)
+    ├── rg.ts             # ripgrep-compatible search (used by Claude Code Grep tool)
     ├── remote.ts         # WebRTC remote connection for Claude Code MCP
     ├── mcp-client.ts     # MCP Streamable HTTP client (connect to external MCP servers)
     ├── group.ts          # Encrypted group networking (peer discovery via relay)
-    ├── seed.ts           # Export state as paste-able snippet (normal or blob)
+    ├── seed.ts           # Export state as snippet, blob, gif, or html
     ├── hud.ts            # HUD redraw command
     ├── spawn.ts          # Run commands in windowed terminals
     ├── ps.ts             # ps (list processes) and kill (terminate by PID)
@@ -190,7 +191,7 @@ Row 2: [ - ] [ | ] [ / ]  [~] [`] [$] [&]  ···spacer···  [ Copy] [ ; ]   [
 These were merged from separate repos with full commit history preserved (`git log -- subdir/` works):
 
 - **`fluffycoreutils/`**: Shared Unix commands library (ls, cat, grep, sed, etc.) — ES module consumed by Shiro and Foam
-- **`spirit/`**: Claude Code agent loop with multi-LLM support — Shiro provides `ShiroProvider` (OSProvider interface)
+- **`spirit/`**: *(removed)* — replaced by Claude Code (inner claude) running directly in Shiro
 - **`windwalker/`**: Test automation suite — vitest unit tests + skyeyes browser tests. Run: `cd windwalker && npm run test:shiro`
 - **`hypercompact/`**: HTML compression utilities for compact DOM representations
 
@@ -319,8 +320,12 @@ The real `@anthropic-ai/claude-code` CLI (v2.1.37, 11MB bundled ESM) runs inside
 - Stdin piping works: `echo "text" | claude -p "analyze this"`
 - Interactive mode uses ink (React for terminal) with stdin passthrough bridging
 - Tree-sitter WASM gracefully degraded (syntax highlighting disabled; browser can't compile the emscripten binary)
-- Vendored ripgrep (ELF binary) shimmed to `find`/`grep` builtins
-- `fileCache` keeps sync/async fs operations coherent — FileHandle and `fs.promises` both update it
+- Vendored ripgrep (ELF binary) shimmed to Shiro's builtin `rg` command (full flag support)
+- `fileCache` keeps sync/async fs operations coherent — FileHandle, `fs.promises`, and sync all update it
+- `openSync` with 'w' flags truncates in fileCache (POSIX behavior); `writeSync` appends to that
+- `fs.promises.rename` updates fileCache so subsequent sync reads see moved content
+- Callback-style `fs.open/read/write` use real fd tracking (same as `openSync/writeSync`)
+- `pendingPromises` array tracks all async IDB writes; drained before script exit
 - Binary files (ELF, Mach-O) rejected at shell level with "cannot execute binary file"
 
 ## Skyeyes MCP Tools

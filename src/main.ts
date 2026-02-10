@@ -94,7 +94,8 @@ import { iframeServer } from './iframe-server';
 import { allCommands } from '../fluffycoreutils/src/index';
 import { wrapFluffyCommand } from './fluffy-adapter';
 import { ShiroTerminal } from './terminal';
-import { ShiroProvider } from '../spirit/src/providers/shiro-provider';
+// Spirit removed — Claude Code (inner claude) replaces it
+// import { ShiroProvider } from '../spirit/src/providers/shiro-provider';
 import { initFaviconUpdater, initTitle } from './favicon';
 import { initMobileInput } from './mobile-input';
 import { initDropHandler } from './drop-handler';
@@ -304,9 +305,9 @@ async function main() {
   // Connect terminal to shell for interactive commands (vi, etc.)
   shell.setTerminal(terminal);
 
-  // Create Spirit provider and attach to shell for the spirit command to use
-  const provider = new ShiroProvider(fs, shell, terminal);
-  (shell as any)._spiritProvider = provider;
+  // Spirit removed — Claude Code (inner claude) replaces it
+  // const provider = new ShiroProvider(fs, shell, terminal);
+  // (shell as any)._spiritProvider = provider;
 
   // Listen for font size changes from parent (seed snippet)
   window.addEventListener('message', (e) => {
@@ -321,7 +322,7 @@ async function main() {
     fs,
     shell,
     terminal,
-    provider,
+    provider: null, // Spirit removed — use claude instead
     commands,
     registry, // ModuleRegistry for hot-reload
     iframeServer, // Iframe-based virtual HTTP server

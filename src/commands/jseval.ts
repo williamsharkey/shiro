@@ -1204,6 +1204,8 @@ export const nodeCmd: Command = {
                 if ([...fileCache.keys()].some(k => k.startsWith(resolved + '/'))) return true;
                 // Fallback: check Shiro FS cache for files created by shell commands
                 if (ctx.fs.readCached(resolved) !== undefined) return true;
+                // Fallback: check Shiro FS cache for directories
+                if (ctx.fs.readdirCached(resolved) !== undefined) return true;
                 return false;
               },
               statSync: (p: string, opts?: any) => {
@@ -1215,7 +1217,11 @@ export const nodeCmd: Command = {
                   isFile = true;
                   fileCache.set(resolved, ctx.fs.readCached(resolved)!); // promote
                 }
-                const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
+                let isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
+                // Fallback: check Shiro FS cache for directories
+                if (!isDir && ctx.fs.readdirCached(resolved) !== undefined) {
+                  isDir = true;
+                }
                 if (!isFile && !isDir) {
                   if (opts?.throwIfNoEntry === false) return undefined;
                   throw new Error(`ENOENT: no such file or directory, stat '${p}'`);
@@ -1257,7 +1263,21 @@ export const nodeCmd: Command = {
                 // Fallback: merge entries from Shiro FS cache (files from shell commands)
                 const fsCached = ctx.fs.readdirCached(resolved);
                 if (fsCached) {
-                  for (const name of fsCached) entries.add(name);
+                  for (const name of fsCached) {
+                    entries.add(name);
+                    // Detect directories from Shiro FS cache (readdirCached returns entries for dirs)
+                    if (!dirSet.has(name)) {
+                      const childPath = resolved === '/' ? '/' + name : resolved + '/' + name;
+                      // If it has sub-entries in FS cache, it's a directory
+                      if (ctx.fs.readdirCached(childPath) !== undefined) {
+                        dirSet.add(name);
+                      }
+                      // Also check fileCache for directory sentinel
+                      if (fileCache.has(childPath + '/.')) {
+                        dirSet.add(name);
+                      }
+                    }
+                  }
                 }
                 const sorted = [...entries].sort();
                 if (opts?.withFileTypes) {
@@ -1330,6 +1350,12 @@ export const nodeCmd: Command = {
                     } catch {}
                   }
                 } else {
+                  // Content not in fileCache — read from Shiro FS cache or IDB will handle it
+                  const fsCached = ctx.fs.readCached(oldRes);
+                  if (fsCached !== undefined) {
+                    fileCache.set(newRes, fsCached);
+                    fileMtimes.set(newRes, Date.now());
+                  }
                   pendingPromises.push(ctx.fs.rename(oldRes, newRes).catch(() => {}));
                 }
               },
@@ -1384,7 +1410,13 @@ export const nodeCmd: Command = {
                 const fd = 100 + Math.floor(Math.random() * 9900);
                 // Store mapping for writeSync/readSync/closeSync
                 (globalThis as any).__shiroFds = (globalThis as any).__shiroFds || {};
-                (globalThis as any).__shiroFds[fd] = { path: resolved, flags: flags || 'r', offset: 0 };
+                const f = flags || 'r';
+                (globalThis as any).__shiroFds[fd] = { path: resolved, flags: f, offset: 0 };
+                // 'w' / 'w+' / 'wx' flags truncate the file on open (POSIX behavior)
+                if (f.includes('w')) {
+                  fileCache.set(resolved, '');
+                  fileMtimes.set(resolved, Date.now());
+                }
                 return fd;
               },
               writeSync: (fd: number, data: string | Uint8Array) => {
@@ -1392,8 +1424,10 @@ export const nodeCmd: Command = {
                 if (fdInfo) {
                   const existing = fileCache.get(fdInfo.path) || '';
                   const str = typeof data === 'string' ? data : new TextDecoder().decode(data);
-                  fileCache.set(fdInfo.path, existing + str);
-                  pendingPromises.push(ctx.fs.writeFile(fdInfo.path, existing + str).catch(() => {}));
+                  const newContent = existing + str;
+                  fileCache.set(fdInfo.path, newContent);
+                  fileMtimes.set(fdInfo.path, Date.now());
+                  pendingPromises.push(ctx.fs.writeFile(fdInfo.path, newContent).catch(() => {}));
                 }
                 return typeof data === 'string' ? data.length : data.length;
               },
@@ -1580,14 +1614,40 @@ export const nodeCmd: Command = {
                 callback?.(null, ctx.fs.resolvePath(p, ctx.cwd));
               },
               close: (_fd: number, cb?: any) => { cb?.(null); },
-              open: (p: string, _flags: any, modeOrCb?: any, cb?: any) => {
+              open: (p: string, flags: any, modeOrCb?: any, cb?: any) => {
                 const callback = typeof modeOrCb === 'function' ? modeOrCb : cb;
-                callback?.(null, 0); // fake fd
+                const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+                const fd = 100 + Math.floor(Math.random() * 9900);
+                (globalThis as any).__shiroFds = (globalThis as any).__shiroFds || {};
+                const f = typeof flags === 'string' ? flags : 'r';
+                (globalThis as any).__shiroFds[fd] = { path: resolved, flags: f, offset: 0 };
+                if (f.includes('w')) {
+                  fileCache.set(resolved, '');
+                  fileMtimes.set(resolved, Date.now());
+                }
+                callback?.(null, fd);
               },
-              read: (_fd: number, buf: any, off: number, len: number, pos: any, cb?: any) => {
-                cb?.(null, 0, buf);
+              read: (fd: number, buf: any, off: number, len: number, pos: any, cb?: any) => {
+                const fdInfo = (globalThis as any).__shiroFds?.[fd];
+                if (!fdInfo) { cb?.(null, 0, buf); return; }
+                const content = fileCache.get(fdInfo.path) || '';
+                const bytes = new TextEncoder().encode(content);
+                const p2 = pos ?? fdInfo.offset;
+                const n = Math.min(len, bytes.length - p2);
+                for (let i = 0; i < n; i++) buf[(off ?? 0) + i] = bytes[p2 + i];
+                fdInfo.offset = p2 + n;
+                cb?.(null, n, buf);
               },
-              write: (_fd: number, buf: any, off: number, len: number, pos: any, cb?: any) => {
+              write: (fd: number, buf: any, off: number, len: number, pos: any, cb?: any) => {
+                const fdInfo = (globalThis as any).__shiroFds?.[fd];
+                if (fdInfo) {
+                  const existing = fileCache.get(fdInfo.path) || '';
+                  const str = typeof buf === 'string' ? buf : new TextDecoder().decode(buf instanceof Uint8Array ? buf.slice(off, off + len) : buf);
+                  const newContent = existing + str;
+                  fileCache.set(fdInfo.path, newContent);
+                  fileMtimes.set(fdInfo.path, Date.now());
+                  pendingPromises.push(ctx.fs.writeFile(fdInfo.path, newContent).catch(() => {}));
+                }
                 cb?.(null, len, buf);
               },
               copyFile: (src: string, dst: string, flagsOrCb?: any, cb?: any) => {
@@ -1618,7 +1678,18 @@ export const nodeCmd: Command = {
               fdatasync: (_fd: number, cb?: any) => { cb?.(null); },
               fchmod: (_fd: number, _m: any, cb?: any) => { cb?.(null); },
               fchown: (_fd: number, _u: any, _g: any, cb?: any) => { cb?.(null); },
-              ftruncate: (_fd: number, _l: any, cb?: any) => { cb?.(null); },
+              ftruncate: (fd: number, lenOrCb?: any, cb?: any) => {
+                const callback = typeof lenOrCb === 'function' ? lenOrCb : cb;
+                const fdInfo = (globalThis as any).__shiroFds?.[fd];
+                if (fdInfo) {
+                  const len = typeof lenOrCb === 'number' ? lenOrCb : 0;
+                  const existing = fileCache.get(fdInfo.path) || '';
+                  const truncated = existing.slice(0, len);
+                  fileCache.set(fdInfo.path, truncated);
+                  pendingPromises.push(ctx.fs.writeFile(fdInfo.path, truncated).catch(() => {}));
+                }
+                callback?.(null);
+              },
               lchmod: (_p: string, _m: any, cb?: any) => { cb?.(null); },
               lchown: (_p: string, _u: any, _g: any, cb?: any) => { cb?.(null); },
               mkdtemp: (prefix: string, optsOrCb?: any, cb?: any) => {
@@ -1779,7 +1850,17 @@ export const nodeCmd: Command = {
               },
               chmod: async () => {},
               rename: async (oldP: string, newP: string) => {
-                await ctx.fs.rename(ctx.fs.resolvePath(oldP, ctx.cwd), ctx.fs.resolvePath(newP, ctx.cwd));
+                const oldRes = ctx.fs.resolvePath(oldP, ctx.cwd);
+                const newRes = ctx.fs.resolvePath(newP, ctx.cwd);
+                // Update fileCache so subsequent sync reads see the moved content
+                const content = fileCache.get(oldRes);
+                if (content !== undefined) {
+                  fileCache.set(newRes, content);
+                  fileCache.delete(oldRes);
+                  fileMtimes.set(newRes, Date.now());
+                  fileMtimes.delete(oldRes);
+                }
+                await ctx.fs.rename(oldRes, newRes);
               },
               copyFile: async (src: string, dst: string) => {
                 const data = await ctx.fs.readFile(ctx.fs.resolvePath(src, ctx.cwd));
@@ -1905,27 +1986,21 @@ export const nodeCmd: Command = {
               if (!normalized || /^-[a-zA-Z]+$/.test(normalized)) normalized = 'true';
 
               // Intercept vendored ripgrep binary — it's an ELF/Mach-O binary that can't
-              // run in browser. Map common rg invocations to Shiro's builtin commands.
-              const rgMatch = normalized.match(/^(\/[^\s]*\/rg|rg)\s+(.*)/);
+              // run in browser. Route to Shiro's builtin `rg` command which handles all flags.
+              const rgMatch = normalized.match(/^(\/[^\s]*\/rg|rg)\s+(.*)/s);
               if (rgMatch) {
                 const rgArgs = rgMatch[2];
-                // rg --files [--hidden] <dir> → find <dir> -type f
-                const filesMatch = rgArgs.match(/--files\s+(.*)/);
-                if (filesMatch) {
-                  const rest = filesMatch[1].replace(/--hidden\s*/g, '').replace(/--glob\s+\S+\s*/g, '').trim();
-                  const dir = rest || '.';
-                  normalized = `find ${dir} -type f`;
-                }
-                // rg --version → fake version string
-                else if (rgArgs.includes('--version')) {
+                if (rgArgs.includes('--version')) {
                   return { stdout: 'ripgrep 14.0.0 (shiro shim)\n', stderr: '', exitCode: 0 };
                 }
-                // rg <pattern> [dir] → grep -rn <pattern> [dir]
-                else {
-                  const parts = rgArgs.replace(/--[a-z-]+=?\S*\s*/g, '').trim().split(/\s+/);
-                  if (parts[0]) {
-                    normalized = `grep -rn ${parts[0]} ${parts[1] || '.'}`;
-                  }
+                // rg --files → find (rg --files is a file listing mode, not search)
+                if (rgArgs.match(/--files\b/)) {
+                  const rest = rgArgs.replace(/--files\s*/g, '').replace(/--hidden\s*/g, '').replace(/--glob\s+\S+\s*/g, '').trim();
+                  const dir = rest || '.';
+                  normalized = `find ${dir} -type f`;
+                } else {
+                  // Pass through to Shiro's builtin rg command (preserves all flags)
+                  normalized = `rg ${rgArgs}`;
                 }
               }
 
