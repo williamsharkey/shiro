@@ -54,6 +54,19 @@ export class WindowTerminal implements TerminalLike {
       cursorBlink: true,
       cursorStyle: 'block',
       scrollback: 5000,
+      linkHandler: {
+        allowNonHttpProtocols: true,
+        activate: (_event: MouseEvent, uri: string) => {
+          if (uri.startsWith('shiro://copy?text=')) {
+            const text = decodeURIComponent(uri.slice('shiro://copy?text='.length));
+            navigator.clipboard.writeText(text).then(() => {
+              this.term.writeln('\r\n\x1b[32m  URL copied to clipboard\x1b[0m');
+            }).catch(() => { prompt('Copy this URL:', text); });
+            return;
+          }
+          window.open(uri, '_blank', 'noopener');
+        },
+      },
     });
 
     this.fitAddon = new FitAddon();

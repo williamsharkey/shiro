@@ -103,6 +103,17 @@ export class ShiroTerminal {
             openRemotePanel();
             return;
           }
+          // Handle shiro://copy?text=... — copy text to clipboard
+          if (uri.startsWith('shiro://copy?text=')) {
+            const text = decodeURIComponent(uri.slice('shiro://copy?text='.length));
+            navigator.clipboard.writeText(text).then(() => {
+              this.term.writeln('\r\n\x1b[32m  URL copied to clipboard\x1b[0m');
+            }).catch(() => {
+              // Fallback: select text in a prompt
+              prompt('Copy this URL:', text);
+            });
+            return;
+          }
           // Open regular links directly without confirmation popup
           window.open(uri, '_blank', 'noopener');
         },
