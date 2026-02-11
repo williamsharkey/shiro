@@ -237,7 +237,7 @@ describe('Commands', () => {
   });
 
   describe('cut', () => {
-    it.skip('should cut fields', async () => {
+    it('should cut fields', async () => {
       await fs.writeFile('/home/user/cut.txt', 'a:b:c\n1:2:3\n');
       const { output } = await run(shell, 'cut -d: -f2 cut.txt');
       expect(output).toContain('b');

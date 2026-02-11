@@ -84,16 +84,14 @@ describe('About page demos', () => {
       expect(output).toContain('alice,95');
     });
 
-    // cut -d, parsing is known-broken in fluffycoreutils test env
-    it.skip('cut | sort -n extracts and sorts scores', async () => {
+    it('cut | sort -n extracts and sorts scores', async () => {
       const { output } = await run(shell, 'cut -d, -f2 /tmp/grades.csv | sort -n');
-      const lines = output.trim().split('\n');
+      const lines = output.replace(/\r/g, '').trim().split('\n');
       expect(lines[0]).toBe('87');
       expect(lines[lines.length - 1]).toBe('95');
     });
 
-    // awk -F, parsing is known-broken in fluffycoreutils test env
-    it.skip('awk computes averages', async () => {
+    it('awk computes averages', async () => {
       const { output } = await run(shell, "awk -F, '{s[$1]+=$2;n[$1]++} END {for(k in s) printf \"%s: %.0f\\n\",k,s[k]/n[k]}' /tmp/grades.csv");
       expect(output).toContain('alice: 92');
       expect(output).toContain('bob: 89');

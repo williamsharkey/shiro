@@ -421,6 +421,7 @@ export const cutCmd: Command = {
     let fields: number[] = [];
     let bytes: number[] = [];
     let chars: number[] = [];
+    const files: string[] = [];
 
     for (let i = 0; i < ctx.args.length; i++) {
       const arg = ctx.args[i];
@@ -442,10 +443,31 @@ export const cutCmd: Command = {
         chars = parseRange(ctx.args[++i]);
       } else if (arg.startsWith('-c')) {
         chars = parseRange(arg.slice(2));
+      } else if (!arg.startsWith('-')) {
+        files.push(arg);
       }
     }
 
-    const lines = ctx.stdin.split('\n');
+    // Read from files if provided, otherwise stdin
+    let input = ctx.stdin;
+    if (files.length > 0) {
+      const parts: string[] = [];
+      for (const f of files) {
+        const path = ctx.fs.resolvePath(f, ctx.cwd);
+        try {
+          parts.push(await ctx.fs.readFile(path, 'utf8') as string);
+        } catch (e: any) {
+          ctx.stderr += `cut: ${f}: ${e.message}\n`;
+          return 1;
+        }
+      }
+      input = parts.join('');
+    }
+
+    // Normalize line endings (files from shell redirects may have \r\n)
+    input = input.replace(/\r\n/g, '\n');
+
+    const lines = input.split('\n');
     const output: string[] = [];
 
     for (const line of lines) {
