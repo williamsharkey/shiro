@@ -2173,7 +2173,13 @@ export const nodeCmd: Command = {
               // The URL may be wrapped in single quotes by shellQuoteArgs, so strip them.
               const oauthOpenMatch = normalized.match(/^(open|xdg-open)\s+['"]*?(https:\/\/claude\.ai\/oauth\/\S+?)['"]*$/);
               if (oauthOpenMatch) {
-                const oauthUrl = oauthOpenMatch[2];
+                // The `open` URL has redirect_uri=http://localhost:PORT/callback (local server).
+                // On Shiro this doesn't work — replace with the manual-flow redirect that
+                // shows a code the user can paste back into the terminal.
+                const oauthUrl = oauthOpenMatch[2].replace(
+                  /redirect_uri=http%3A%2F%2Flocalhost%3A\d+%2F[^&]*/,
+                  'redirect_uri=' + encodeURIComponent('https://platform.claude.com/oauth/code/callback')
+                );
                 // Write clickable sign-in buttons to terminal
                 if (ctx.terminal) {
                   const copyUri = `shiro://copy?text=${encodeURIComponent(oauthUrl)}`;
