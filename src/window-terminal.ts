@@ -7,6 +7,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import type { TerminalLike } from './commands/index';
 import { bufferToString } from './utils/copy-utils';
+import { setActiveTerminal } from './active-terminal';
 
 export class WindowTerminal implements TerminalLike {
   term: Terminal;
@@ -19,6 +20,9 @@ export class WindowTerminal implements TerminalLike {
   private resizeCallbacks: ((cols: number, rows: number) => void)[] = [];
   private resizeObserver: ResizeObserver;
   private disposed = false;
+  private menuDebounce: ReturnType<typeof setTimeout> | null = null;
+  private menuBar: HTMLDivElement | null = null;
+  private outputBuffer = '';
   /** Optional callback to mask secrets in output (set by spawn) */
   secretMasker: ((text: string) => string) | null = null;
 
@@ -81,6 +85,11 @@ export class WindowTerminal implements TerminalLike {
     // Route input
     this.term.onData((data) => this.handleInput(data));
 
+    // Register as active terminal on focus (for mobile toolbar routing)
+    this.term.textarea?.addEventListener('focus', () => {
+      setActiveTerminal(this);
+    });
+
     // ResizeObserver to refit on window resize/drag
     this.resizeObserver = new ResizeObserver(() => {
       if (this.disposed) return;
@@ -95,6 +104,21 @@ export class WindowTerminal implements TerminalLike {
     if (this.disposed) return;
     if (this.secretMasker) text = this.secretMasker(text);
     this.term.write(text);
+
+    // Buffer output for menu detection (keep last 2KB, strip ANSI)
+    this.outputBuffer += text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\]8;;[^\x07]*\x07/g, '');
+    if (this.outputBuffer.length > 2048) {
+      this.outputBuffer = this.outputBuffer.slice(-2048);
+    }
+    // Debounce menu scan
+    if (this.menuDebounce) clearTimeout(this.menuDebounce);
+    this.menuDebounce = setTimeout(() => this.scanForMenu(), 150);
+  }
+
+  /** Inject raw input as if typed. Used by mobile toolbar and menu buttons. */
+  injectInput(data: string): void {
+    this.hideMenu();
+    this.handleInput(data);
   }
 
   enterStdinPassthrough(cb: (data: string) => void, forceExitCb?: () => void): void {
@@ -163,8 +187,92 @@ export class WindowTerminal implements TerminalLike {
     this.exitRawMode();
   }
 
+  /** Scan buffered output for numbered menu items and show tappable buttons. */
+  private scanForMenu(): void {
+    const lines = this.outputBuffer.split('\n');
+    const menuRe = /^\s*(\d+)[.)]\s+(.+?)$/;
+    const items: { num: string; label: string }[] = [];
+
+    // Scan last lines for consecutive numbered items
+    let streak: { num: string; label: string }[] = [];
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const m = lines[i].match(menuRe);
+      if (m) {
+        streak.unshift({ num: m[1], label: m[2].trim() });
+      } else if (streak.length >= 2) {
+        break;
+      } else {
+        streak = [];
+      }
+    }
+    if (streak.length >= 2) {
+      items.push(...streak);
+    }
+
+    if (items.length >= 2) {
+      this.showMenu(items);
+    } else {
+      this.hideMenu();
+    }
+  }
+
+  /** Show a floating bar of tappable number buttons at the bottom of the terminal container. */
+  private showMenu(items: { num: string; label: string }[]): void {
+    this.hideMenu();
+
+    const bar = document.createElement('div');
+    bar.style.cssText = `
+      position: absolute; bottom: 4px; left: 4px; right: 4px;
+      display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 8px;
+      background: rgba(20, 20, 40, 0.92); border-radius: 8px;
+      z-index: 10; justify-content: center;
+    `;
+
+    for (const item of items) {
+      const btn = document.createElement('button');
+      // Truncate label to keep buttons compact
+      const shortLabel = item.label.length > 18 ? item.label.slice(0, 16) + '\u2026' : item.label;
+      btn.textContent = `${item.num}: ${shortLabel}`;
+      btn.style.cssText = `
+        background: #2a2a4a; color: #e0e0e0; border: 1px solid #4a4a6a;
+        border-radius: 12px; padding: 4px 12px; font-size: 13px;
+        font-family: inherit; cursor: pointer; white-space: nowrap;
+      `;
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.hideMenu();
+        this.handleInput(item.num + '\r');
+      });
+      btn.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.hideMenu();
+        this.handleInput(item.num + '\r');
+      }, { passive: false });
+      bar.appendChild(btn);
+    }
+
+    this.menuBar = bar;
+    this.container.appendChild(bar);
+
+    // Auto-hide after 15 seconds
+    setTimeout(() => {
+      if (this.menuBar === bar) this.hideMenu();
+    }, 15000);
+  }
+
+  /** Remove the menu button bar. */
+  private hideMenu(): void {
+    if (this.menuBar) {
+      this.menuBar.remove();
+      this.menuBar = null;
+    }
+  }
+
   dispose(): void {
     this.disposed = true;
+    this.hideMenu();
+    if (this.menuDebounce) clearTimeout(this.menuDebounce);
     this.resizeObserver.disconnect();
     this.resizeCallbacks = [];
     this.stdinPassthrough = null;

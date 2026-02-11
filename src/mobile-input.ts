@@ -1,5 +1,6 @@
 import type { ShiroTerminal } from './terminal';
 import { smartCopyProcess } from './utils/copy-utils';
+import { getActiveTerminal } from './active-terminal';
 
 // Web Speech API types (not in default lib)
 interface SpeechRecognitionEvent extends Event {
@@ -61,6 +62,16 @@ function createUnifiedToolbar(terminal: ShiroTerminal): HTMLElement {
   // All key buttons (for event delegation)
   const keyMap = new Map<HTMLElement, { data: string; label: string }>();
 
+  /** Route input to the active terminal (spawned window or main). */
+  function inject(data: string) {
+    const active = getActiveTerminal();
+    if (active?.injectInput) {
+      active.injectInput(data);
+    } else {
+      terminal.injectInput(data);
+    }
+  }
+
   function handleKey(btn: HTMLElement) {
     const entry = keyMap.get(btn);
     if (!entry) return;
@@ -76,12 +87,12 @@ function createUnifiedToolbar(terminal: ShiroTerminal): HTMLElement {
       ctrlBtn?.classList.remove('active');
       if (entry.data.length === 1 && entry.data >= 'A' && entry.data <= 'z') {
         const code = entry.data.toUpperCase().charCodeAt(0) - 64;
-        terminal.injectInput(String.fromCharCode(code));
+        inject(String.fromCharCode(code));
       } else {
-        terminal.injectInput(entry.data);
+        inject(entry.data);
       }
     } else {
-      terminal.injectInput(entry.data);
+      inject(entry.data);
     }
   }
 
@@ -120,19 +131,20 @@ function createUnifiedToolbar(terminal: ShiroTerminal): HTMLElement {
   pasteBtn.textContent = 'Paste';
   pasteBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
+    const target = getActiveTerminal()?.term || terminal.term;
     try {
       const text = await navigator.clipboard.readText();
-      if (text) terminal.term.paste(text);
+      if (text) target.paste(text);
     } catch {
       const text = prompt('Paste text:');
-      if (text) terminal.term.paste(text);
+      if (text) target.paste(text);
     }
   });
   row1.appendChild(pasteBtn);
   actionBtns.push(pasteBtn);
 
   // Speak
-  const speakBtn = createSpeakButton(terminal);
+  const speakBtn = createSpeakButton(terminal, inject);
   if (speakBtn) {
     row1.appendChild(speakBtn);
     actionBtns.push(speakBtn);
@@ -210,7 +222,7 @@ function createUnifiedToolbar(terminal: ShiroTerminal): HTMLElement {
 }
 
 /** Create the Speak button for voice input. Returns null if Speech API unavailable. */
-function createSpeakButton(terminal: ShiroTerminal): HTMLButtonElement | null {
+function createSpeakButton(terminal: ShiroTerminal, inject: (data: string) => void): HTMLButtonElement | null {
   const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
   if (!SR) return null;
 
@@ -236,10 +248,10 @@ function createSpeakButton(terminal: ShiroTerminal): HTMLButtonElement | null {
       const original = last[0].transcript.trim();
 
       if (raw === 'send' || raw === 'enter') {
-        terminal.injectInput('\r');
+        inject('\r');
       } else {
         for (const ch of original) {
-          terminal.injectInput(ch);
+          inject(ch);
         }
       }
     };

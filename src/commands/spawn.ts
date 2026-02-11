@@ -61,6 +61,9 @@ export const spawnCmd: Command = {
       winTerm.writeOutput('\r\n\x1b[31m[Process killed]\x1b[0m\r\n');
     };
 
+    // Auto-focus the new terminal after a frame so xterm has rendered
+    requestAnimationFrame(() => winTerm.term.focus());
+
     // Run command async on the CHILD shell — don't await
     proc.promise = (async () => {
       try {

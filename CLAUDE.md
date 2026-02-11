@@ -28,10 +28,11 @@ src/
 ├── shell.ts             # Command parser: pipes, redirects, env vars, quoting, history
 ├── filesystem.ts        # IndexedDB-backed POSIX filesystem (the foundation everything uses)
 ├── spirit-provider.ts   # OSProvider adapter for Spirit (Claude Code agent)
+├── active-terminal.ts   # Global active terminal tracking (routes mobile input to focused terminal)
 ├── mobile-input.ts      # Unified mobile toolbar: virtual keys, copy/paste, voice input
 ├── remote-panel.ts      # Draggable floating panel UI (used by remote, group)
 ├── server-window.ts     # macOS-style window wrapper (iframe + terminal modes)
-├── window-terminal.ts   # Lightweight xterm.js wrapper for windowed processes
+├── window-terminal.ts   # Lightweight xterm.js wrapper for windowed processes (+ number menu detection)
 ├── process-table.ts     # Global process registry with PID allocation
 ├── split-view.ts        # Docked split pane (right/bottom) for serve --split
 └── commands/            # One file per command or group of related commands
@@ -216,6 +217,8 @@ Row 2: [ - ] [ | ] [ / ]  [~] [`] [$] [&]  ···spacer···  [ Copy] [ ; ]   [
 - **Mic**: Voice dictation via Web Speech API; says "send"/"enter" to submit. Button changes to "Stop" while recording
 - **z-index**: `2147483647` — stays above spawned windows and remote panels
 - **Keyboard repositioning**: Uses `visualViewport` API to sit above the iOS keyboard
+- **Active terminal routing**: Input routes to whichever terminal last received focus (main or spawned window) via `src/active-terminal.ts`. Spawned windows auto-focus on creation.
+- **Number menu detection**: `WindowTerminal` scans output for numbered menu items (e.g., Claude Code theme picker) and shows tappable pill buttons at the bottom of the spawned window. Buttons send the digit + Enter. Auto-hides after 15s or on input.
 
 ## Monorepo Subdirectories
 

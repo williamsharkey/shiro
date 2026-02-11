@@ -4,6 +4,7 @@ import { Shell } from './shell';
 import buildNumber from '../build-number.txt?raw';
 import { bufferToString } from './utils/copy-utils';
 import { openRemotePanel } from './commands/remote';
+import { setActiveTerminal } from './active-terminal';
 
 /**
  * HUD (Heads-Up Display) state for dynamic banner updates.
@@ -155,6 +156,12 @@ export class ShiroTerminal {
     resizeObserver.observe(container);
 
     this.term.onData((data: string) => this.handleInput(data));
+
+    // Register as active terminal (default on startup)
+    setActiveTerminal(this);
+    this.term.textarea?.addEventListener('focus', () => {
+      setActiveTerminal(this);
+    });
 
     // Mobile copy/paste is now handled by the unified toolbar in mobile-input.ts
   }
