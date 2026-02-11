@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Browser Became a Computer &mdash; Shiro</title>
+  <meta name="description" content="How WebAssembly, IndexedDB, and ES modules converged to let a browser tab run 152 Unix commands, a TypeScript compiler, git, and npm &mdash; with no server.">
+  <link rel="stylesheet" href="tufte.css">
+  <style>
+    /* Article overrides on Tufte base */
+    body {
+      background: #0a0a0a;
+      color: #ddd;
+    }
+
+    a:link, a:visited {
+      color: #00d4ff;
+      text-decoration-color: #00d4ff44;
+    }
+
+    a:hover {
+      text-decoration-color: #00d4ff;
+    }
+
+    h1, h2, h3 {
+      color: #f0f0f0;
+    }
+
+    .sidenote, .marginnote {
+      color: #888;
+    }
+
+    .sidenote a, .marginnote a {
+      color: #888;
+    }
+
+    code, pre > code {
+      font-family: "SF Mono", "Fira Code", Consolas, "Liberation Mono", Menlo, monospace;
+      color: #ccc;
+      background: #161616;
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+
+    pre > code {
+      padding: 16px 20px;
+      border-radius: 8px;
+      border: 1px solid #222;
+      background: #111;
+    }
+
+    hr {
+      border-top-color: #333;
+    }
+
+    /* Back link */
+    .back-link {
+      display: inline-block;
+      margin-top: 2rem;
+      font-size: 0.9rem;
+      color: #666;
+      text-decoration: none;
+    }
+    .back-link:hover { color: #999; }
+
+    /* Byline */
+    .byline {
+      font-size: 1.1rem;
+      color: #666;
+      margin-top: 0.5rem;
+    }
+
+    /* Interactive containers */
+    .interactive {
+      width: 100%;
+      margin: 2em 0;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid #222;
+      background: #111;
+    }
+
+    .interactive-header {
+      padding: 8px 16px;
+      font-size: 11px;
+      font-family: "SF Mono", monospace;
+      color: #555;
+      border-bottom: 1px solid #222;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .interactive svg {
+      display: block;
+    }
+
+    .interactive svg text {
+      font-family: "SF Mono", "Fira Code", monospace;
+    }
+
+    /* Terminal embed */
+    .terminal-embed {
+      width: 55%;
+      border: 1px solid #222;
+      border-radius: 8px;
+      overflow: hidden;
+      margin: 2em 0;
+      background: #0d1117;
+    }
+
+    .terminal-embed .bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      background: #161b22;
+      border-bottom: 1px solid #222;
+    }
+
+    .terminal-embed .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+    }
+
+    .terminal-embed .dot.r { background: #ff5f57; }
+    .terminal-embed .dot.y { background: #febc2e; }
+    .terminal-embed .dot.g { background: #28c840; }
+
+    .terminal-embed iframe {
+      width: 100%;
+      height: 420px;
+      border: none;
+    }
+
+    .terminal-embed .fallback {
+      padding: 20px;
+      font-family: "SF Mono", monospace;
+      font-size: 13px;
+      line-height: 1.6;
+      color: #8b949e;
+    }
+
+    .terminal-embed .fallback .p { color: #00d4ff; }
+    .terminal-embed .fallback .c { color: #e6edf3; }
+    .terminal-embed .fallback .o { color: #8b949e; }
+
+    /* Layer diagram */
+    #layer-diagram {
+      padding: 24px;
+      min-height: 360px;
+    }
+
+    #layer-diagram .layer-box {
+      cursor: pointer;
+      transition: opacity 0.3s;
+    }
+
+    #layer-diagram .layer-box:hover rect {
+      stroke: #00d4ff;
+      stroke-width: 2;
+    }
+
+    /* Comparison */
+    #comparison-container {
+      padding: 24px;
+      min-height: 240px;
+    }
+
+    /* Self-build */
+    #selfbuild-container {
+      padding: 24px;
+      min-height: 200px;
+    }
+
+    /* FluffyFS diagram */
+    #fluffyfs-container {
+      padding: 24px;
+      min-height: 300px;
+    }
+
+    /* Details tooltip */
+    .layer-detail {
+      position: absolute;
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: #ccc;
+      max-width: 300px;
+      line-height: 1.5;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s;
+      z-index: 10;
+    }
+
+    .layer-detail.visible { opacity: 1; }
+
+    /* Epigraph */
+    div.epigraph > blockquote > p {
+      color: #999;
+    }
+
+    div.epigraph > blockquote > footer {
+      color: #666;
+    }
+
+    /* Newthought */
+    span.newthought {
+      color: #f0f0f0;
+    }
+
+    /* Figure caption */
+    figcaption {
+      color: #666;
+    }
+
+    @media (max-width: 760px) {
+      .terminal-embed { width: 100%; }
+      .interactive { width: 100%; }
+    }
+
+    /* noscript fallback */
+    noscript .fallback-text {
+      font-style: italic;
+      color: #666;
+      padding: 20px;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <a href="/" class="back-link">&larr; shiro.computer</a>
+  <article>
+    <h1>The Browser Became a Computer</h1>
+    <p class="subtitle">How one browser tab learned to run 152 Unix commands, compile TypeScript, manage packages, and host AI agents &mdash; with no server at all.</p>
+    <p class="byline">William Sharkey &middot; February 2026</p>
+
+    <section>
+      <div class="epigraph">
+        <blockquote>
+          <p>The best way to predict the future is to invent it.</p>
+          <footer>Alan Kay</footer>
+        </blockquote>
+      </div>
+
+      <p>
+        <span class="newthought">Open a new browser tab.</span> Right now, that tab has access to a persistent filesystem that survives restarts. It can compile WebAssembly at near-native speed. It can fetch data from the network, render a full terminal emulator, and run ES modules without a build step. It has a garbage collector, an optimizing JIT compiler, and hardware-accelerated graphics.
+      </p>
+
+      <p>
+        When did a browser tab become this powerful? The answer is: gradually, then all at once. Over the last decade, a series of individually modest web standards &mdash; IndexedDB, WebAssembly, ES modules, the Streams API, Web Workers &mdash; accumulated enough capability that a browser tab crossed an invisible threshold. It became a computer.
+      </p>
+
+      <p>
+        <a href="https://shiro.computer">Shiro</a> is proof of the crossing. It is a Unix development environment that runs entirely in a browser tab: 152 commands, a shell with pipes and redirects, git, npm, a TypeScript compiler, text editors, and an AI coding agent. No backend server. No WebSocket to a cloud VM. Every byte lives in IndexedDB. Every process runs in your browser's JavaScript engine.
+        <label for="sn-foam" class="margin-toggle sidenote-number"></label>
+        <input type="checkbox" id="sn-foam" class="margin-toggle">
+        <span class="sidenote">
+          Shiro's sister project, <a href="https://github.com/williamsharkey/foam">Foam</a>, pushes this further: it has no build step at all. Plain JavaScript, ES modules loaded directly by the browser. Open index.html and start coding. Foam proves the concept doesn't even need a bundler.
+        </span>
+      </p>
+
+      <p>
+        This is not a toy. Shiro can clone its own source code from GitHub, edit it, compile it with esbuild-wasm, and reload &mdash; modifying itself while running. That loop &mdash; self-hosting, self-compilation, self-modification &mdash; is the traditional litmus test for whether something is a "real" development environment. Shiro passes it from a browser tab.
+      </p>
+    </section>
+
+    <!-- Live Terminal Embed -->
+    <section>
+      <div class="terminal-embed">
+        <div class="bar">
+          <div class="dot r"></div>
+          <div class="dot y"></div>
+          <div class="dot g"></div>
+        </div>
+        <iframe src="https://shiro.computer" loading="lazy" sandbox="allow-scripts allow-same-origin allow-popups" title="Live Shiro terminal"></iframe>
+        <noscript>
+          <div class="fallback">
+            <div><span class="p">~ $</span> <span class="c">echo "Hello from Shiro" | wc -c</span></div>
+            <div><span class="o">17</span></div>
+            <div><span class="p">~ $</span> <span class="c">git clone https://github.com/user/repo</span></div>
+            <div><span class="o">Cloning into 'repo'...</span></div>
+          </div>
+        </noscript>
+      </div>
+      <p>
+        That is a live Shiro terminal. Type <code>ls</code>, <code>git init</code>, or <code>npm install leftpad</code>. Everything you do persists in your browser's IndexedDB. Close the tab, reopen it &mdash; your files are still there.
+      </p>
+    </section>
+
+    <section>
+      <h2>The stack, in layers</h2>
+
+      <p>
+        <span class="newthought">Shiro's architecture</span> is a clean layer cake. At the bottom, the browser provides raw primitives: IndexedDB for storage, JavaScript for compute, xterm.js for display. Shiro builds a virtual filesystem on top of IndexedDB, a shell interpreter on top of the filesystem, and 152 commands on top of the shell. Each layer only talks to the one below it.
+      </p>
+
+      <figure class="fullwidth">
+        <div class="interactive">
+          <div class="interactive-header">Interactive &mdash; click a layer to explore</div>
+          <div id="layer-diagram"></div>
+        </div>
+      </figure>
+
+      <p>
+        The filesystem layer deserves particular attention. Shiro stores every file as a record in an IndexedDB object store keyed by absolute path. Each record holds the path, type (file, directory, or symlink), content as a <code>Uint8Array</code>, Unix permissions, timestamps, and byte size. An in-memory <code>Map</code> cache sits in front of IndexedDB, turning what would be asynchronous lookups into instant reads for hot paths.
+        <label for="sn-lfs" class="margin-toggle sidenote-number"></label>
+        <input type="checkbox" id="sn-lfs" class="margin-toggle">
+        <span class="sidenote">
+          This approach draws from <a href="https://github.com/isomorphic-git/lightning-fs">lightning-fs</a>, the IndexedDB filesystem library created for isomorphic-git. Lightning-fs uses a 500ms mutex to handle concurrent writes from multiple tabs. Shiro simplifies this by assuming a single-tab model: one tab owns the filesystem, full stop.
+        </span>
+      </p>
+
+      <p>
+        The shell parser is hand-written &mdash; no parser generator, no grammar file. It handles pipes, redirects (<code>&gt;</code>, <code>&gt;&gt;</code>, <code>&lt;</code>, <code>2&gt;&amp;1</code>), variables (<code>$VAR</code>, <code>${VAR}</code>, <code>$?</code>), heredocs, quoting (single, double, backslash escapes), arithmetic expansion (<code>$(( ))</code>), command substitution (<code>$( )</code>), and control structures (if/while/for/case). It fits in 1,223 lines. The design is deliberately simple: tokenize respecting quotes, split on operators, expand variables, dispatch to commands.
+      </p>
+    </section>
+
+    <section>
+      <h2>Ten methods to rule them all</h2>
+
+      <p>
+        <span class="newthought">The most elegant piece</span> of Shiro's ecosystem is not Shiro itself &mdash; it is <a href="https://github.com/williamsharkey/fluffycoreutils">FluffyCoreutils</a>, a library of 126 Unix commands written in pure TypeScript with zero dependencies. Every command is implemented against a single interface called <code>FluffyFS</code>:
+      </p>
+
+      <pre><code>interface FluffyFS {
+  readFile(path: string): Promise&lt;string&gt;;
+  writeFile(path: string, content: string): Promise&lt;void&gt;;
+  mkdir(path: string, opts?: { recursive?: boolean }): Promise&lt;void&gt;;
+  readdir(path: string): Promise&lt;FluffyEntry[]&gt;;
+  stat(path: string): Promise&lt;FluffyStat&gt;;
+  exists(path: string): Promise&lt;boolean&gt;;
+  unlink(path: string): Promise&lt;void&gt;;
+  rename(old: string, new_: string): Promise&lt;void&gt;;
+  rmdir(path: string, opts?: { recursive?: boolean }): Promise&lt;void&gt;;
+  symlink?(target: string, path: string): Promise&lt;void&gt;;
+
+  resolvePath(path: string, cwd: string): string;
+}</code></pre>
+
+      <p>
+        Ten methods and a path resolver. That is the entire contract. If you can implement these ten methods against any storage backend &mdash; IndexedDB, an in-memory tree, a remote API, a service worker cache &mdash; you immediately get 126 Unix commands for free.
+        <label for="sn-symlink" class="margin-toggle sidenote-number"></label>
+        <input type="checkbox" id="sn-symlink" class="margin-toggle">
+        <span class="sidenote">
+          The <code>symlink</code> method is optional (note the <code>?</code>). Commands like <code>ln</code> gracefully fall back to a copy when symlinks are not supported by the backend. This kind of pragmatic optional contract is a hallmark of the project's design philosophy: make it work everywhere, degrade gracefully.
+        </span>
+      </p>
+
+      <figure class="fullwidth">
+        <div class="interactive">
+          <div class="interactive-header">Interactive &mdash; FluffyFS portability</div>
+          <div id="fluffyfs-container"></div>
+        </div>
+      </figure>
+
+      <p>
+        These are not stub implementations. The <code>awk</code> command is a full interpreter with field splitting, pattern-action rules, BEGIN/END blocks, and built-in string functions. The <code>make</code> command parses Makefiles with dependency resolution. The <code>bc</code> command does arbitrary-precision arithmetic. The <code>sed</code> command handles <code>s/pattern/replacement/flags</code> with regex support. All of this in pure TypeScript, no WASM, no native code.
+      </p>
+    </section>
+
+    <section>
+      <h2>The self-build loop</h2>
+
+      <p>
+        <span class="newthought">Here is the party trick.</span> Shiro includes a <code>build</code> command that wraps <a href="https://esbuild.github.io/">esbuild-wasm</a>, the WebAssembly port of the esbuild bundler. The first time you run <code>build</code>, it fetches the 15MB esbuild WASM binary from unpkg, compiles it via <code>WebAssembly.compile()</code>, and caches the result in a dedicated IndexedDB store. Subsequent builds skip the download entirely.
+      </p>
+
+      <figure class="fullwidth">
+        <div class="interactive">
+          <div class="interactive-header">Interactive &mdash; the self-build cycle</div>
+          <div id="selfbuild-container"></div>
+        </div>
+      </figure>
+
+      <p>
+        The build command uses a custom esbuild plugin that resolves imports from the virtual filesystem. When esbuild encounters <code>import { foo } from "./bar.ts"</code>, the plugin reads <code>bar.ts</code> from IndexedDB, hands it to esbuild for compilation, and writes the bundled output back to IndexedDB. The result is a standard ES module that the browser can execute directly.
+      </p>
+
+      <p>
+        This is what makes self-compilation possible. You can <code>git clone</code> Shiro's own source into its own filesystem, edit a file with <code>vi</code>, run <code>build</code>, and the output overwrites the running code. Reload the page and your changes take effect. The hot-reload system goes further: it can swap individual modules at runtime without a page refresh, using dynamic <code>import()</code> with Blob URLs and an optional <code>migrateFrom()</code> protocol for state preservation.
+        <label for="sn-hotreload" class="margin-toggle sidenote-number"></label>
+        <input type="checkbox" id="sn-hotreload" class="margin-toggle">
+        <span class="sidenote">
+          The reload system tracks which source file produced each command module. When you edit and rebuild a single file, <code>reload</code> compiles just that file, creates a Blob URL from the result, dynamically imports it, and calls <code>registry.replace()</code> to hot-swap the module. The old Blob URL is revoked to free memory.
+        </span>
+      </p>
+    </section>
+
+    <section>
+      <h2>Why not WebContainers?</h2>
+
+      <p>
+        <span class="newthought">The obvious comparison</span> is <a href="https://webcontainers.io">WebContainers</a> by StackBlitz, which also runs Node.js in the browser. The approaches are fundamentally different.
+      </p>
+
+      <figure class="fullwidth">
+        <div class="interactive">
+          <div class="interactive-header">Interactive &mdash; Shiro vs. WebContainers</div>
+          <div id="comparison-container"></div>
+        </div>
+      </figure>
+
+      <p>
+        WebContainers is a proprietary WASM-based Node.js runtime. It requires SharedArrayBuffer (which means cross-origin isolation headers), weighs roughly 50MB, and is closed-source. It is an engineering marvel &mdash; a real Node.js running in your browser &mdash; but it brings Node's full weight and constraints along with it.
+      </p>
+
+      <p>
+        Shiro takes the opposite approach: pure JavaScript and TypeScript, about 1MB bundled, open source, no SharedArrayBuffer requirement. Every command is a native browser function, not a WASM translation of a C binary. This means Shiro works in more browsers, loads faster, and is fully inspectable and modifiable. The tradeoff is Node.js API compatibility &mdash; Shiro reimplements only what it needs, not the entire Node runtime.
+        <label for="sn-tradeoff" class="margin-toggle sidenote-number"></label>
+        <input type="checkbox" id="sn-tradeoff" class="margin-toggle">
+        <span class="sidenote">
+          There is a philosophical point here. WebContainers asks: "Can we bring Node.js to the browser?" Shiro asks: "What if we built for the browser from scratch?" The first approach carries legacy. The second discovers what a browser-native OS actually looks like when you do not try to emulate something else.
+        </span>
+      </p>
+    </section>
+
+    <section>
+      <h2>AI agents need a home</h2>
+
+      <p>
+        <span class="newthought">There is a reason</span> Shiro exists beyond technical curiosity. The project includes <a href="https://github.com/williamsharkey/spirit">Spirit</a>, a Claude Code agent library that can read files, write files, execute shell commands, search with glob and grep, and edit code in place. Spirit works through an abstraction called <code>OSProvider</code> &mdash; an interface that bridges the agent to whatever operating system it is running on.
+      </p>
+
+      <p>
+        The <code>OSProvider</code> interface is small: filesystem operations (read, write, mkdir, readdir, stat, exists, unlink, rename), path resolution, environment variables, shell execution, terminal I/O, and a <code>getHostInfo()</code> method that tells the agent what tools are available. Shiro implements this interface. So does Foam. Any future browser OS can implement it and immediately get a Claude Code agent that understands its environment.
+        <label for="sn-osprovider" class="margin-toggle sidenote-number"></label>
+        <input type="checkbox" id="sn-osprovider" class="margin-toggle">
+        <span class="sidenote">
+          The <code>getHostInfo()</code> return value includes a <code>capabilities</code> object listing available runtimes, build tools, package managers, and extra commands. Spirit uses this to construct an accurate system prompt, so the agent knows it can run <code>npm install</code> but should not try <code>apt-get</code>.
+        </span>
+      </p>
+
+      <p>
+        This is the strategic vision. An AI coding agent needs a sandboxed environment where it can operate freely without affecting the user's real machine. Browser tabs are the perfect sandbox &mdash; isolated by design, persistent via IndexedDB, inspectable via DevTools, and disposable. Spirit running inside Shiro is an AI agent that can build, test, and iterate on code in a completely contained browser environment. No Docker containers. No cloud VMs. Just a tab.
+      </p>
+    </section>
+
+    <section>
+      <h2>The CORS problem, honestly</h2>
+
+      <p>
+        <span class="newthought">Not everything is elegant.</span> Browser security policies mean that Shiro cannot make HTTP requests to arbitrary servers. When you run <code>git clone https://github.com/user/repo</code>, the request must go through a CORS proxy &mdash; a small server that adds the necessary <code>Access-Control-Allow-Origin</code> headers. By default, Shiro uses the public proxy at <code>cors.isomorphic-git.org</code>.
+        <label for="sn-cors" class="margin-toggle sidenote-number"></label>
+        <input type="checkbox" id="sn-cors" class="margin-toggle">
+        <span class="sidenote">
+          You can set your own proxy with <code>export GIT_CORS_PROXY=https://your-proxy.com</code>. Authentication also requires a <code>GITHUB_TOKEN</code> for push/pull/fetch. Clone is shallow by default (<code>depth: 1</code>) to reduce bandwidth.
+        </span>
+      </p>
+
+      <p>
+        This is the one place where "no server" is not entirely true. Git operations depend on a CORS proxy. npm registry fetches work because npmjs.org already sends CORS headers, but GitHub's git HTTP protocol does not. It is a genuine limitation, and an honest accounting of the system demands mentioning it.
+      </p>
+
+      <p>
+        The mitigation is practical: shallow clones, configurable proxy, token-based auth. And the proxy is stateless &mdash; it just relays bytes. It does not store your code, does not require authentication itself, and could be replaced with a Cloudflare Worker in thirty lines. But it is there, a small crack in the "zero server" story.
+      </p>
+    </section>
+
+    <section>
+      <h2>Testing across two worlds</h2>
+
+      <p>
+        <span class="newthought">Shiro and Foam</span> must behave identically. The same shell commands, the same filesystem semantics, the same pipe behavior. <a href="https://github.com/williamsharkey/windwalker">Windwalker</a> enforces this with a 10-level test suite that runs against both environments.
+      </p>
+
+      <p>
+        The test levels progress from trivial to extreme: Level 0 checks that the page boots and global objects exist. Level 1 tests filesystem CRUD. Level 2 exercises the shell. Level 3 runs individual coreutils. Level 4 tests pipes and redirects. Level 5 does git operations. Level 6 verifies Spirit's tools. Level 7 runs multi-step workflows. Level 8 tests all 126 FluffyCoreutils commands. Level 9 &mdash; the final boss &mdash; clones Shiro's own repo, verifies the source, and commits changes. If Level 9 passes, the system is self-hosting.
+        <label for="sn-windwalker" class="margin-toggle sidenote-number"></label>
+        <input type="checkbox" id="sn-windwalker" class="margin-toggle">
+        <span class="sidenote">
+          Windwalker has two runners: a fast <code>linkedom</code> runner that loads the JS modules directly into Node.js with <code>fake-indexeddb</code>, and a full <code>skyeyes</code> runner that tests in real browsers via Nimbus. The fast runner handles levels 0&ndash;4 in seconds. The real browser runner is needed for levels 5+ because git and Spirit require actual browser APIs.
+        </span>
+      </p>
+
+      <p>
+        The result of this testing: zero compatibility issues between Foam and Shiro. The same commands produce the same output. The FluffyFS abstraction works &mdash; commands genuinely do not know or care which host they are running on.
+      </p>
+    </section>
+
+    <section>
+      <h2>The orchestrator</h2>
+
+      <p>
+        <span class="newthought">Pull the camera back</span> and the full picture emerges. <a href="https://github.com/williamsharkey/nimbus">Nimbus</a> is a multi-agent orchestrator dashboard that manages concurrent Claude Code workers, each running in its own tmux session with live terminal streaming via node-pty and xterm.js. Each worker can spawn named browser iframes &mdash; Shiro instances, Foam instances, any web application &mdash; and inspect them remotely via <a href="https://github.com/williamsharkey/skyeyes">Skyeyes</a>, a WebSocket bridge that lets you execute JavaScript in any connected browser tab from the command line.
+      </p>
+
+      <p>
+        The data flow is: user input enters the Nimbus dashboard, travels via WebSocket to the server, which sends it to a tmux session via node-pty, where Claude CLI processes it, uses Spirit's tools to manipulate files and run commands, and the results stream back through pty output to xterm.js in the dashboard. Meanwhile, Skyeyes bridges connect each iframe to the server, allowing workers to inspect and manipulate live browser applications.
+      </p>
+
+      <p>
+        Seven repositories. One person. A browser-native development platform where AI agents can read code, write code, run tests, clone repos, install packages, compile TypeScript, and inspect running web applications &mdash; all from browser tabs, orchestrated from a single dashboard.
+      </p>
+    </section>
+
+    <section>
+      <h2>What this means</h2>
+
+      <p>
+        <span class="newthought">The interesting claim</span> is not that Shiro is useful (it is) or that it is complete (it is not). The interesting claim is that the browser crossed a threshold without anyone noticing.
+      </p>
+
+      <p>
+        IndexedDB gave us persistence. WebAssembly gave us compilation speed. ES modules gave us a native module system. The Streams API gave us pipes. Fetch gave us network access. xterm.js gave us a terminal. isomorphic-git gave us version control. The Web Crypto API gave us hashing. Each of these existed for years before Shiro, solving their own small problems. Together, they constitute an operating system's worth of primitives.
+      </p>
+
+      <p>
+        Shiro is what happens when someone takes that accumulation seriously. Not as a proof of concept. Not as a demo. As a working development environment where you can write code, install packages, run tests, commit to git, and ship &mdash; all from the same browser tab you use to read email.
+      </p>
+
+      <p>
+        <a href="https://shiro.computer">Open it</a> and try <code>npm init -y && echo 'console.log("hi")' > index.js && node index.js</code>.
+      </p>
+    </section>
+
+    <hr>
+
+    <section>
+      <p style="font-size: 1.1rem; color: #666;">
+        Shiro is open source at <a href="https://github.com/williamsharkey/shiro">github.com/williamsharkey/shiro</a>.
+        The full ecosystem &mdash; Foam, Spirit, FluffyCoreutils, Nimbus, Windwalker, Skyeyes &mdash; is at
+        <a href="https://github.com/williamsharkey">github.com/williamsharkey</a>.
+      </p>
+    </section>
+
+  </article>
+
+  <!-- D3.js for interactives -->
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+
+  <!-- Layer detail tooltip -->
+  <div class="layer-detail" id="layer-tooltip"></div>
+
+  <script>
+  // ===== INTERACTIVE 1: Architecture Layer Diagram =====
+  (function() {
+    const container = document.getElementById('layer-diagram');
+    if (!container) return;
+
+    const w = container.clientWidth || 700;
+    const h = 380;
+    const svg = d3.select(container).append('svg')
+      .attr('viewBox', `0 0 ${w} ${h}`)
+      .attr('width', '100%');
+
+    const layers = [
+      { label: 'Browser', sub: 'IndexedDB  ·  WebAssembly  ·  ES Modules  ·  Fetch  ·  Web Crypto', color: '#1a1a2e', y: 0, detail: 'Raw browser APIs that Shiro builds on. IndexedDB provides persistent storage (survives restarts). WebAssembly runs esbuild at near-native speed. ES modules enable the command system. No polyfills needed.' },
+      { label: 'Virtual Filesystem', sub: 'FSNode records in IndexedDB  ·  In-memory cache  ·  isomorphic-git adapter', color: '#16213e', y: 1, detail: 'Every file is an FSNode: path, type, Uint8Array content, Unix permissions, timestamps. An in-memory Map cache makes hot reads instant. The toIsomorphicGitFS() adapter lets git work against the same storage.' },
+      { label: 'Shell Interpreter', sub: 'Pipes  ·  Redirects  ·  Variables  ·  Heredocs  ·  Control flow  ·  1,223 lines', color: '#0f3460', y: 2, detail: 'Hand-written parser: tokenize respecting quotes, split on compound operators (&&, ||, ;), parse pipes and redirects, expand variables ($VAR, ${VAR}, $?), dispatch to command registry. Supports if/while/for/case, functions, background jobs.' },
+      { label: 'Command Layer', sub: '152 commands  ·  FluffyCoreutils (126)  ·  Built-ins (26+)  ·  Hot-reloadable', color: '#533483', y: 3, detail: '126 commands from FluffyCoreutils (ls, grep, awk, sed, make, bc...) plus 26+ Shiro-specific commands (git, npm, build, vi, nano, fetch, spirit...). Each command is a module with { name, description, exec(ctx) }. Hot-reload swaps modules without page refresh.' },
+      { label: 'Terminal + Spirit', sub: 'xterm.js  ·  FitAddon  ·  Raw mode for editors  ·  AI agent via OSProvider', color: '#e94560', y: 4, detail: 'xterm.js renders the terminal with themes and raw mode for vi/nano. Spirit (Claude Code agent) connects via OSProvider interface: same read/write/exec/glob tools as CLI Claude Code, but running entirely in the browser.' },
+    ];
+
+    const layerH = 60;
+    const gap = 8;
+    const pad = 20;
+    const totalH = layers.length * (layerH + gap) - gap;
+    const startY = (h - totalH) / 2;
+
+    const tooltip = document.getElementById('layer-tooltip');
+
+    layers.forEach((l, i) => {
+      const y = startY + i * (layerH + gap);
+      const g = svg.append('g')
+        .attr('class', 'layer-box')
+        .attr('transform', `translate(${pad}, ${y})`);
+
+      g.append('rect')
+        .attr('width', w - pad * 2)
+        .attr('height', layerH)
+        .attr('rx', 6)
+        .attr('fill', l.color)
+        .attr('stroke', '#333')
+        .attr('stroke-width', 1);
+
+      g.append('text')
+        .attr('x', 16)
+        .attr('y', 24)
+        .attr('fill', '#f0f0f0')
+        .attr('font-size', '15px')
+        .attr('font-weight', '600')
+        .text(l.label);
+
+      g.append('text')
+        .attr('x', 16)
+        .attr('y', 44)
+        .attr('fill', '#888')
+        .attr('font-size', '11px')
+        .text(l.sub);
+
+      // Arrow between layers
+      if (i < layers.length - 1) {
+        const arrowY = y + layerH + gap / 2;
+        svg.append('line')
+          .attr('x1', w / 2)
+          .attr('y1', arrowY - 3)
+          .attr('x2', w / 2)
+          .attr('y2', arrowY + 3)
+          .attr('stroke', '#444')
+          .attr('stroke-width', 1);
+      }
+
+      // Tooltip on click
+      g.on('click', function(event) {
+        const rect = container.getBoundingClientRect();
+        tooltip.textContent = l.detail;
+        tooltip.style.left = (event.clientX - rect.left + 10) + 'px';
+        tooltip.style.top = (event.clientY - rect.top - 60) + 'px';
+        tooltip.classList.add('visible');
+        setTimeout(() => tooltip.classList.remove('visible'), 4000);
+      });
+    });
+  })();
+
+  // ===== INTERACTIVE 2: FluffyFS Portability Diagram =====
+  (function() {
+    const container = document.getElementById('fluffyfs-container');
+    if (!container) return;
+
+    const w = container.clientWidth || 700;
+    const h = 320;
+    const svg = d3.select(container).append('svg')
+      .attr('viewBox', `0 0 ${w} ${h}`)
+      .attr('width', '100%');
+
+    const centerX = w / 2;
+
+    // FluffyFS interface (center)
+    const ifaceW = 200;
+    const ifaceH = 140;
+    svg.append('rect')
+      .attr('x', centerX - ifaceW / 2)
+      .attr('y', 90)
+      .attr('width', ifaceW)
+      .attr('height', ifaceH)
+      .attr('rx', 8)
+      .attr('fill', '#1a2744')
+      .attr('stroke', '#00d4ff')
+      .attr('stroke-width', 2);
+
+    svg.append('text')
+      .attr('x', centerX)
+      .attr('y', 116)
+      .attr('text-anchor', 'middle')
+      .attr('fill', '#00d4ff')
+      .attr('font-size', '14px')
+      .attr('font-weight', '600')
+      .text('FluffyFS');
+
+    const methods = ['readFile', 'writeFile', 'mkdir', 'readdir', 'stat', 'exists', 'unlink', 'rename', 'rmdir', 'symlink?'];
+    methods.forEach((m, i) => {
+      svg.append('text')
+        .attr('x', centerX)
+        .attr('y', 134 + i * 10)
+        .attr('text-anchor', 'middle')
+        .attr('fill', '#666')
+        .attr('font-size', '8px')
+        .text(m);
+    });
+
+    // Commands (top)
+    svg.append('rect')
+      .attr('x', centerX - 120)
+      .attr('y', 10)
+      .attr('width', 240)
+      .attr('height', 50)
+      .attr('rx', 6)
+      .attr('fill', '#2a1a3e')
+      .attr('stroke', '#533483')
+      .attr('stroke-width', 1);
+
+    svg.append('text')
+      .attr('x', centerX)
+      .attr('y', 32)
+      .attr('text-anchor', 'middle')
+      .attr('fill', '#bc8cff')
+      .attr('font-size', '13px')
+      .attr('font-weight', '600')
+      .text('126 FluffyCoreutils Commands');
+
+    svg.append('text')
+      .attr('x', centerX)
+      .attr('y', 50)
+      .attr('text-anchor', 'middle')
+      .attr('fill', '#666')
+      .attr('font-size', '10px')
+      .text('ls  grep  awk  sed  make  bc  find  sort  ...');
+
+    // Arrow: commands → interface
+    svg.append('line').attr('x1', centerX).attr('y1', 60).attr('x2', centerX).attr('y2', 90)
+      .attr('stroke', '#444').attr('stroke-width', 1).attr('marker-end', 'url(#arrow)');
+
+    // Backends (bottom)
+    const backends = [
+      { label: 'Shiro (IndexedDB)', x: centerX - 200, color: '#0f3460' },
+      { label: 'Foam (IndexedDB)', x: centerX, color: '#1a3a2e' },
+      { label: 'Any backend...', x: centerX + 200, color: '#333' },
+    ];
+
+    backends.forEach(b => {
+      svg.append('rect')
+        .attr('x', b.x - 80)
+        .attr('y', 260)
+        .attr('width', 160)
+        .attr('height', 40)
+        .attr('rx', 6)
+        .attr('fill', b.color)
+        .attr('stroke', '#444')
+        .attr('stroke-width', 1);
+
+      svg.append('text')
+        .attr('x', b.x)
+        .attr('y', 284)
+        .attr('text-anchor', 'middle')
+        .attr('fill', '#aaa')
+        .attr('font-size', '11px')
+        .text(b.label);
+
+      // Arrow: interface → backend
+      svg.append('line').attr('x1', centerX).attr('y1', 230).attr('x2', b.x).attr('y2', 260)
+        .attr('stroke', '#444').attr('stroke-width', 1);
+    });
+
+    // Arrow marker
+    svg.append('defs').append('marker')
+      .attr('id', 'arrow')
+      .attr('viewBox', '0 0 10 10')
+      .attr('refX', 9).attr('refY', 5)
+      .attr('markerWidth', 6).attr('markerHeight', 6)
+      .attr('orient', 'auto')
+      .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('fill', '#444');
+  })();
+
+  // ===== INTERACTIVE 3: Self-Build Cycle =====
+  (function() {
+    const container = document.getElementById('selfbuild-container');
+    if (!container) return;
+
+    const w = container.clientWidth || 700;
+    const h = 200;
+    const svg = d3.select(container).append('svg')
+      .attr('viewBox', `0 0 ${w} ${h}`)
+      .attr('width', '100%');
+
+    const steps = [
+      { label: 'git clone', sub: 'fetch source', icon: '1', color: '#0f3460' },
+      { label: 'vi src/cmd.ts', sub: 'edit code', icon: '2', color: '#1a2744' },
+      { label: 'build', sub: 'esbuild-wasm', icon: '3', color: '#533483' },
+      { label: 'reload', sub: 'hot-swap', icon: '4', color: '#e94560' },
+    ];
+
+    const stepW = 140;
+    const gap = 24;
+    const totalW = steps.length * stepW + (steps.length - 1) * gap;
+    const startX = (w - totalW) / 2;
+
+    let activeStep = -1;
+
+    function render() {
+      svg.selectAll('*').remove();
+
+      // Arrow marker
+      svg.append('defs').append('marker')
+        .attr('id', 'sarrow')
+        .attr('viewBox', '0 0 10 10')
+        .attr('refX', 9).attr('refY', 5)
+        .attr('markerWidth', 6).attr('markerHeight', 6)
+        .attr('orient', 'auto')
+        .append('path').attr('d', 'M 0 0 L 10 5 L 0 10 z').attr('fill', '#555');
+
+      steps.forEach((s, i) => {
+        const x = startX + i * (stepW + gap);
+        const y = 40;
+        const isActive = i <= activeStep;
+
+        const g = svg.append('g')
+          .style('cursor', 'pointer')
+          .on('click', () => { activeStep = i; render(); });
+
+        g.append('rect')
+          .attr('x', x).attr('y', y)
+          .attr('width', stepW).attr('height', 80)
+          .attr('rx', 8)
+          .attr('fill', isActive ? s.color : '#1a1a1a')
+          .attr('stroke', isActive ? '#00d4ff' : '#333')
+          .attr('stroke-width', isActive ? 2 : 1)
+          .transition().duration(300);
+
+        g.append('text')
+          .attr('x', x + stepW / 2).attr('y', y + 24)
+          .attr('text-anchor', 'middle')
+          .attr('fill', isActive ? '#00d4ff' : '#666')
+          .attr('font-size', '11px')
+          .attr('font-weight', '700')
+          .text(`STEP ${s.icon}`);
+
+        g.append('text')
+          .attr('x', x + stepW / 2).attr('y', y + 46)
+          .attr('text-anchor', 'middle')
+          .attr('fill', isActive ? '#f0f0f0' : '#888')
+          .attr('font-size', '14px')
+          .attr('font-weight', '600')
+          .text(s.label);
+
+        g.append('text')
+          .attr('x', x + stepW / 2).attr('y', y + 66)
+          .attr('text-anchor', 'middle')
+          .attr('fill', isActive ? '#888' : '#555')
+          .attr('font-size', '10px')
+          .text(s.sub);
+
+        // Arrow to next
+        if (i < steps.length - 1) {
+          svg.append('line')
+            .attr('x1', x + stepW + 2)
+            .attr('y1', y + 40)
+            .attr('x2', x + stepW + gap - 2)
+            .attr('y2', y + 40)
+            .attr('stroke', i < activeStep ? '#00d4ff' : '#333')
+            .attr('stroke-width', 1)
+            .attr('marker-end', 'url(#sarrow)');
+        }
+      });
+
+      // Cycle arrow (step 4 back to step 1)
+      if (activeStep >= 3) {
+        const x1 = startX + 3 * (stepW + gap) + stepW;
+        const x0 = startX;
+        svg.append('path')
+          .attr('d', `M ${x1} 140 Q ${w/2} 180 ${x0} 140`)
+          .attr('fill', 'none')
+          .attr('stroke', '#00d4ff')
+          .attr('stroke-width', 1)
+          .attr('stroke-dasharray', '4,4')
+          .attr('opacity', 0.5);
+
+        svg.append('text')
+          .attr('x', w / 2).attr('y', 178)
+          .attr('text-anchor', 'middle')
+          .attr('fill', '#00d4ff')
+          .attr('font-size', '10px')
+          .attr('opacity', 0.6)
+          .text('self-modification loop');
+      }
+
+      // Instruction
+      svg.append('text')
+        .attr('x', w / 2).attr('y', 24)
+        .attr('text-anchor', 'middle')
+        .attr('fill', '#555')
+        .attr('font-size', '10px')
+        .text('Click each step to advance');
+    }
+
+    render();
+  })();
+
+  // ===== INTERACTIVE 4: Comparison Bars =====
+  (function() {
+    const container = document.getElementById('comparison-container');
+    if (!container) return;
+
+    const w = container.clientWidth || 700;
+    const h = 260;
+    const svg = d3.select(container).append('svg')
+      .attr('viewBox', `0 0 ${w} ${h}`)
+      .attr('width', '100%');
+
+    const metrics = [
+      { label: 'Bundle size', shiro: 1, wc: 50, unit: 'MB', shiroLabel: '~1 MB', wcLabel: '~50 MB' },
+      { label: 'SharedArrayBuffer', shiro: 0, wc: 1, unit: '', shiroLabel: 'Not needed', wcLabel: 'Required' },
+      { label: 'Open source', shiro: 1, wc: 0, unit: '', shiroLabel: 'Yes (MIT)', wcLabel: 'Proprietary' },
+      { label: 'Full Node.js API', shiro: 0, wc: 1, unit: '', shiroLabel: 'No (reimplemented)', wcLabel: 'Yes' },
+    ];
+
+    const rowH = 52;
+    const startY = 20;
+    const labelW = 160;
+    const colW = (w - labelW - 40) / 2;
+
+    // Headers
+    svg.append('text').attr('x', labelW + colW / 2).attr('y', 14)
+      .attr('text-anchor', 'middle').attr('fill', '#00d4ff').attr('font-size', '12px').attr('font-weight', '600')
+      .text('Shiro');
+    svg.append('text').attr('x', labelW + colW + 20 + colW / 2).attr('y', 14)
+      .attr('text-anchor', 'middle').attr('fill', '#888').attr('font-size', '12px').attr('font-weight', '600')
+      .text('WebContainers');
+
+    metrics.forEach((m, i) => {
+      const y = startY + i * rowH + 20;
+
+      svg.append('text')
+        .attr('x', 0).attr('y', y + 16)
+        .attr('fill', '#aaa')
+        .attr('font-size', '13px')
+        .text(m.label);
+
+      // Shiro cell
+      svg.append('rect')
+        .attr('x', labelW).attr('y', y)
+        .attr('width', colW).attr('height', 30)
+        .attr('rx', 4)
+        .attr('fill', '#0a1a2e');
+
+      svg.append('text')
+        .attr('x', labelW + colW / 2).attr('y', y + 19)
+        .attr('text-anchor', 'middle')
+        .attr('fill', '#00d4ff')
+        .attr('font-size', '12px')
+        .text(m.shiroLabel);
+
+      // WC cell
+      svg.append('rect')
+        .attr('x', labelW + colW + 20).attr('y', y)
+        .attr('width', colW).attr('height', 30)
+        .attr('rx', 4)
+        .attr('fill', '#1a1a1a');
+
+      svg.append('text')
+        .attr('x', labelW + colW + 20 + colW / 2).attr('y', y + 19)
+        .attr('text-anchor', 'middle')
+        .attr('fill', '#888')
+        .attr('font-size', '12px')
+        .text(m.wcLabel);
+    });
+  })();
+  </script>
+</body>
+</html>
