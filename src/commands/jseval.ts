@@ -368,7 +368,15 @@ export const nodeCmd: Command = {
           const stdoutEvents: Record<string, Function[]> = {};
           const stdoutObj: any = {
             write: (s: string | Uint8Array, encodingOrCb?: string | Function, cb?: Function) => {
-              const str = typeof s === 'string' ? s : new TextDecoder().decode(s);
+              let str = typeof s === 'string' ? s : new TextDecoder().decode(s);
+              // Detect OAuth URL in Claude Code login flow and append a clickable link
+              const oauthMatch = str.match(/(https:\/\/claude\.ai\/oauth\/authorize\S+)/);
+              if (oauthMatch && ctx.terminal) {
+                const url = oauthMatch[1];
+                // OSC 8 hyperlink: \x1b]8;;URL\x07TEXT\x1b]8;;\x07
+                const clickable = `\r\n\r\n  \x1b]8;;${url}\x07\x1b[1;36m[ Click here to sign in ]\x1b[0m\x1b]8;;\x07\r\n`;
+                str += clickable;
+              }
               stdoutBuf.push(str);
               // Stream to terminal in real-time if available (enables streaming for claude -p, etc.)
               if (ctx.terminal) {
@@ -2166,6 +2174,12 @@ export const nodeCmd: Command = {
                   // Pass through to Shiro's builtin rg command (preserves all flags)
                   normalized = `rg ${rgArgs}`;
                 }
+              }
+
+              // Suppress OAuth browser popup — it doesn't work in Shiro (wrong redirect domain).
+              // Claude Code will fall back to showing the URL in terminal, which we make clickable.
+              if (/^(open|xdg-open)\s+https:\/\/claude\.ai\/oauth\//.test(normalized)) {
+                return { stdout: '', stderr: '', exitCode: 1 };
               }
 
               // Drain pending IDB writes so shell commands can see files written by
