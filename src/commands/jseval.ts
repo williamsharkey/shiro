@@ -2290,17 +2290,27 @@ export const nodeCmd: Command = {
                 } else {
                   cmd = `${file} ${shellQuoteArgs(args || [])}`;
                 }
+                const isClipCmd = /^(pbcopy|xclip(\s|$)|xsel(\s|$)|wl-copy(\s|$)|clip(\.exe)?$)/.test(cmd.trim());
+                let clipBuf = '';
                 const childEvents: Record<string, Function[]> = {};
                 const child: any = {
                   pid: Math.floor(Math.random() * 10000) + 1000,
                   stdout: { on: (ev: string, fn: Function) => { (childEvents['stdout_' + ev] ??= []).push(fn); return child.stdout; }, pipe: (d: any) => d },
                   stderr: { on: (ev: string, fn: Function) => { (childEvents['stderr_' + ev] ??= []).push(fn); return child.stderr; }, pipe: (d: any) => d },
-                  stdin: { write: () => true, end: () => {}, on: () => child.stdin },
+                  stdin: {
+                    write: (data: any) => { if (isClipCmd) clipBuf += (typeof data === 'string' ? data : String(data)); return true; },
+                    end: () => { if (isClipCmd) navigator.clipboard.writeText(clipBuf).catch(() => {}); },
+                    on: () => child.stdin,
+                  },
                   on: (ev: string, fn: Function) => { (childEvents[ev] ??= []).push(fn); return child; },
                   once: (ev: string, fn: Function) => child.on(ev, fn),
                   kill: () => true,
                 };
-                const p = execAsync(cmd).then(r => {
+                const cmdP = isClipCmd
+                  ? new Promise<{ stdout: string; stderr: string; exitCode: number }>(resolve =>
+                      setTimeout(() => resolve({ stdout: '', stderr: '', exitCode: 0 }), 0))
+                  : execAsync(cmd);
+                const p = cmdP.then(r => {
                   if (r.stdout) (childEvents['stdout_data'] || []).forEach(fn => fn(FakeBuffer.from(r.stdout)));
                   (childEvents['stdout_end'] || []).forEach(fn => fn());
                   if (r.stderr) (childEvents['stderr_data'] || []).forEach(fn => fn(FakeBuffer.from(r.stderr)));
@@ -2329,9 +2339,18 @@ export const nodeCmd: Command = {
                 const events: Record<string, Function[]> = {};
                 const stdoutEvents: Record<string, Function[]> = {};
                 const stderrEvents: Record<string, Function[]> = {};
+                // Detect clipboard commands (pbcopy, xclip, etc.) to shim with browser clipboard API.
+                // Claude Code's "c to copy" runs: spawn('/bin/sh', ['-c', 'pbcopy'], {input: url})
+                const isClipboardCmd = /^(pbcopy|xclip(\s|$)|xsel(\s|$)|wl-copy(\s|$)|clip(\.exe)?$)/.test(fullCmd.trim());
+                let clipboardBuf = '';
                 const child: any = {
                   pid: Math.floor(Math.random() * 10000) + 1000,
-                  stdin: { write: () => true, end: () => {}, on: () => child.stdin, destroy: () => {} },
+                  stdin: {
+                    write: (data: any) => { if (isClipboardCmd) clipboardBuf += (typeof data === 'string' ? data : String(data)); return true; },
+                    end: () => { if (isClipboardCmd) navigator.clipboard.writeText(clipboardBuf).catch(() => {}); },
+                    on: () => child.stdin,
+                    destroy: () => {},
+                  },
                   stdout: {
                     on: (ev: string, fn: Function) => { (stdoutEvents[ev] ??= []).push(fn); return child.stdout; },
                     once: (ev: string, fn: Function) => { (stdoutEvents[ev] ??= []).push(fn); return child.stdout; },
@@ -2366,7 +2385,12 @@ export const nodeCmd: Command = {
                   ref: () => child,
                   unref: () => child,
                 };
-                const p = execAsync(fullCmd).then(r => {
+                // For clipboard commands, resolve after a microtask to let stdin.write/end happen first
+                const cmdPromise = isClipboardCmd
+                  ? new Promise<{ stdout: string; stderr: string; exitCode: number }>(resolve =>
+                      setTimeout(() => resolve({ stdout: '', stderr: '', exitCode: 0 }), 0))
+                  : execAsync(fullCmd);
+                const p = cmdPromise.then(r => {
                   if (r.stdout) (stdoutEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(r.stdout)));
                   (stdoutEvents['end'] || []).forEach(fn => fn());
                   (stdoutEvents['close'] || []).forEach(fn => fn());
