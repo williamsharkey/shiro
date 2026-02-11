@@ -141,18 +141,15 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 ## Testing
 
-Tests live in `windwalker/tests/shiro-vitest/` (monorepo subdirectory).
-Windwalker uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**300 tests across 15 test files** — all passing.
+Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
+Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
+**315 tests across 16 test files** — all passing.
 
 ```bash
-cd windwalker
-npm install
-npm run test:shiro        # vitest unit/integration tests (300 tests, ~45s)
-npm run test:skyeyes:shiro # browser tests via skyeyes
+npm test                          # Run from shiro root
+# or:
+cd tests && npm run test:shiro    # Run from tests/ directory
 ```
-
-Running `npm test` in shiro will print these instructions as a reminder.
 
 ### Test Files
 
@@ -226,14 +223,17 @@ These were merged from separate repos with full commit history preserved (`git l
 
 - **`fluffycoreutils/`**: Shared Unix commands library (ls, cat, grep, sed, xargs with -I/-n/-d, etc.) — ES module consumed by Shiro and Foam via `src/fluffy-adapter.ts`
 - **`spirit/`**: *(removed)* — replaced by Claude Code (inner claude) running directly in Shiro
-- **`windwalker/`**: Test automation suite — vitest unit tests + skyeyes browser tests. Run: `cd windwalker && npm run test:shiro`
+- **`tests/`**: Test suite — vitest unit tests + skyeyes browser tests. Run: `npm test`
 - **`hypercompact/`**: HTML compression utilities for compact DOM representations
+
+- **`skyeyes/`**: Browser-side bridge for remote JS execution and testing
+- **`shiro-mcp/`**: MCP server for connecting Claude Code to Shiro via WebRTC
+- **`shiro-website/`**: Marketing site and technical article
 
 ## Related Projects (separate repos)
 
 - **Foam** (williamsharkey/foam): Sister browser OS in plain JS. Compatible shell semantics
 - **Nimbus** (williamsharkey/nimbus): Multi-repo orchestrator with live dashboard preview
-- **Skyeyes** (williamsharkey/skyeyes): Browser-side bridge for remote JS execution and testing
 
 ## Remote Connection (shiro-mcp)
 

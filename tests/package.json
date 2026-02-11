@@ -1,7 +1,7 @@
 {
-  "name": "windwalker",
+  "name": "shiro-tests",
   "version": "0.1.0",
-  "description": "Unified test suite for Spirit on Foam and Shiro cloud OS environments",
+  "description": "Test suite for Shiro browser OS",
   "type": "module",
   "scripts": {
     "test": "node tests/runner-linkedom.js",

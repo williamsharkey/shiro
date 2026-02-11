@@ -320,7 +320,7 @@ async function main() {
     }
   });
 
-  // Expose global for test automation (windwalker) and programmatic access
+  // Expose global for test automation and programmatic access
   (window as any).__shiro = {
     fs,
     shell,

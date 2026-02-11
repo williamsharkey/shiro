@@ -6,8 +6,7 @@ import { nodePolyfills } from 'vite-plugin-node-polyfills';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// When windwalker is inside shiro monorepo, shiroRoot is the parent directory.
-// When windwalker is a standalone sibling repo, it would be '../shiro'.
+// tests/ is inside shiro monorepo, shiroRoot is the parent directory.
 const shiroRoot = path.resolve(__dirname, '..');
 
 export default defineConfig({

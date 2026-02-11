@@ -71,7 +71,7 @@ You CAN modify Shiro itself! The full source is at https://github.com/williamsha
 | **spirit** | Claude Code agent loop library | https://github.com/williamsharkey/spirit |
 | **nimbus** | Monorepo orchestrator | https://github.com/williamsharkey/nimbus-land |
 | **skyeyes** | Browser bridge for testing | https://github.com/williamsharkey/skyeyes |
-| **windwalker** | Test automation | https://github.com/williamsharkey/windwalker |
+| **tests** | Test suite (in shiro monorepo) | https://github.com/williamsharkey/shiro |
 
 ### How to Modify Shiro
 
