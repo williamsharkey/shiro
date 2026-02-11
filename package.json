@@ -1,0 +1,7 @@
+{
+  "name": "skyeyes",
+  "version": "0.1.0",
+  "description": "Browser-side WebSocket bridge for remote JS execution in live pages. Inspired by FunctionServer Eye/Lens.",
+  "main": "skyeyes.js",
+  "license": "MIT"
+}
