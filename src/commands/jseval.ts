@@ -255,6 +255,8 @@ export const nodeCmd: Command = {
     // Save originals for CORS proxy interception (must be in outer scope for catch block)
     const _origFetch = globalThis.fetch;
     const _origXHR = typeof XMLHttpRequest !== 'undefined' ? XMLHttpRequest : undefined;
+    const _prevST = globalThis.setTimeout;
+    const _prevCT = globalThis.clearTimeout;
     let _ownsStdinPassthrough = false; // Track if THIS invocation set up stdin passthrough
 
     try {
@@ -4963,7 +4965,40 @@ export const nodeCmd: Command = {
 
         let resolved = modPath;
 
-        if (modPath.startsWith('./') || modPath.startsWith('../') || modPath.startsWith('/')) {
+        // Handle Node.js package #imports (subpath imports)
+        // e.g., chalk uses `import x from '#ansi-styles'` which maps via package.json "imports"
+        if (modPath.startsWith('#')) {
+          let lookupDir = fromDir;
+          while (lookupDir) {
+            const pkgJsonPath = `${lookupDir}/package.json`;
+            if (fileCache.has(pkgJsonPath)) {
+              try {
+                const pkg = JSON.parse(fileCache.get(pkgJsonPath)!);
+                if (pkg.imports && pkg.imports[modPath]) {
+                  const mapping = pkg.imports[modPath];
+                  let target: string | undefined;
+                  if (typeof mapping === 'string') {
+                    target = mapping;
+                  } else if (typeof mapping === 'object') {
+                    target = mapping.default || mapping.node || mapping.import || mapping.require;
+                  }
+                  if (target) {
+                    resolved = ctx.fs.resolvePath(target, lookupDir);
+                    if (!resolved.endsWith('.js') && !resolved.endsWith('.json')) {
+                      if (fileCache.has(resolved + '.js')) resolved += '.js';
+                      else if (fileCache.has(resolved + '/index.js')) resolved += '/index.js';
+                    }
+                    if (moduleCache.has(resolved)) return moduleCache.get(resolved)!.exports;
+                    break;
+                  }
+                }
+              } catch { /* ignore parse errors */ }
+            }
+            const parent = lookupDir.substring(0, lookupDir.lastIndexOf('/')) || '';
+            if (parent === lookupDir || !parent) break;
+            lookupDir = parent;
+          }
+        } else if (modPath.startsWith('./') || modPath.startsWith('../') || modPath.startsWith('/')) {
           resolved = ctx.fs.resolvePath(modPath, fromDir);
           if (!resolved.endsWith('.js') && !resolved.endsWith('.json')) {
             if (fileCache.has(resolved + '.js')) resolved += '.js';
@@ -5153,10 +5188,59 @@ export const nodeCmd: Command = {
                   if (!main) main = pkg.main || pkg.module || 'index.js';
                   if (typeof main !== 'string') main = 'index.js';
                   main = main.replace(/^\.\//, '');
-                  if (!/\.(js|cjs|mjs|json)$/.test(main)) main += '.js';
+                  if (!/\.(js|cjs|mjs|json)$/.test(main)) {
+                    const asDir = `${globalPkgDir}/${main}/index.js`;
+                    const asFile = `${globalPkgDir}/${main}.js`;
+                    if (fileCache.has(asDir) && !fileCache.has(asFile)) main += '/index.js';
+                    else main += '.js';
+                  }
                   resolved = `${globalPkgDir}/${main}`;
                 } catch {
                   resolved = `${globalPkgDir}/index.js`;
+                }
+              }
+              found = true;
+            }
+          }
+          // Also check from ctx.cwd — scripts in /tmp need to find packages in /home/user/node_modules
+          if (!found && ctx.cwd !== fromDir) {
+            const cwdPkgDir = `${ctx.cwd}/node_modules/${pkgName}`;
+            const cwdPkgPath = `${cwdPkgDir}/package.json`;
+            if (fileCache.has(cwdPkgPath)) {
+              if (subpath) {
+                const subpathFull = `${cwdPkgDir}/${subpath}`;
+                if (fileCache.has(subpathFull + '.js')) resolved = subpathFull + '.js';
+                else if (fileCache.has(subpathFull)) resolved = subpathFull;
+                else if (fileCache.has(subpathFull + '/index.js')) resolved = subpathFull + '/index.js';
+                else resolved = subpathFull + '.js';
+              } else {
+                try {
+                  const pkg = JSON.parse(fileCache.get(cwdPkgPath)!);
+                  let main: string | undefined;
+                  if (pkg.exports) {
+                    const exp = pkg.exports;
+                    if (typeof exp === 'string') main = exp;
+                    else if (exp['.']) {
+                      const dotExport = exp['.'];
+                      main = typeof dotExport === 'string' ? dotExport
+                        : (dotExport.import || dotExport.require || dotExport.default);
+                    } else if (exp.import || exp.require || exp.default) {
+                      main = exp.import || exp.require || exp.default;
+                    }
+                    if (typeof main === 'object') main = (main as any).import || (main as any).require || (main as any).default;
+                  }
+                  if (!main) main = pkg.main || pkg.module || 'index.js';
+                  if (typeof main !== 'string') main = 'index.js';
+                  main = main.replace(/^\.\//, '');
+                  if (!/\.(js|cjs|mjs|json)$/.test(main)) {
+                    const asDir = `${cwdPkgDir}/${main}/index.js`;
+                    const asFile = `${cwdPkgDir}/${main}.js`;
+                    if (fileCache.has(asDir) && !fileCache.has(asFile)) main += '/index.js';
+                    else main += '.js';
+                  }
+                  resolved = `${cwdPkgDir}/${main}`;
+                } catch {
+                  resolved = `${cwdPkgDir}/index.js`;
                 }
               }
               found = true;
@@ -5199,28 +5283,37 @@ export const nodeCmd: Command = {
             dirname: modDir,
             filename: resolved,
           };
-          // Use AsyncFunction but don't await - allows top-level await in modules
-          // The async execution will continue and populate module.exports
-          const AsyncFn = Object.getPrototypeOf(async function(){}).constructor;
-          const wrapped = new AsyncFn(
+          const fnParams = [
             'module', 'exports', 'require', '__filename', '__dirname',
             'console', 'process', 'global', 'Buffer', '__import_meta',
-            transformedContent
-          );
-          // Execute async but track the promise for later awaiting
-          const execPromise = wrapped(mod, mod.exports, nestedRequire, resolved, modDir,
-            fakeConsole, fakeProcess, globalThis, FakeBuffer, modImportMeta
-          );
-          // For modules with top-level await, add promise to pending
-          pendingPromises.push(execPromise.catch((e: any) => {
-            if (!(e instanceof ProcessExitError)) {
-              console.error(`Error in module ${resolved}:`, e.message, e.stack?.slice(0, 300));
-              // Emit as uncaughtException if handlers are registered
-              if (processEvents['uncaughtException']?.length) {
-                fakeProcess.emit('uncaughtException', e);
-              }
+          ];
+          const fnArgs = [mod, mod.exports, nestedRequire, resolved, modDir,
+            fakeConsole, fakeProcess, globalThis, FakeBuffer, modImportMeta];
+
+          // Try synchronous execution first — most npm packages don't use top-level await.
+          // This ensures module.exports is populated before require() returns,
+          // fixing ESM-only packages like chalk v5 that export via `export default`.
+          try {
+            const syncFn = new Function(...fnParams, transformedContent);
+            syncFn(...fnArgs);
+          } catch (syncErr: any) {
+            // SyntaxError from top-level `await` → fall back to AsyncFunction
+            if (syncErr instanceof SyntaxError && /\bawait\b/.test(transformedContent)) {
+              const AsyncFn = Object.getPrototypeOf(async function(){}).constructor;
+              const wrapped = new AsyncFn(...fnParams, transformedContent);
+              const execPromise = wrapped(...fnArgs);
+              pendingPromises.push(execPromise.catch((e: any) => {
+                if (!(e instanceof ProcessExitError)) {
+                  console.error(`Error in module ${resolved}:`, e.message, e.stack?.slice(0, 300));
+                  if (processEvents['uncaughtException']?.length) {
+                    fakeProcess.emit('uncaughtException', e);
+                  }
+                }
+              }));
+            } else {
+              throw syncErr;
             }
-          }));
+          }
 
         } catch (err) {
           moduleCache.delete(resolved);
@@ -5756,6 +5849,25 @@ export const nodeCmd: Command = {
         globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
           let url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
           if (isBlocked(url)) return Promise.resolve(new Response('{}', { status: 200 }));
+          // Route localhost/127.0.0.1 requests through virtual iframe servers
+          const localhostMatch = url.match(/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::(\d+))?(\/.*)?$/);
+          if (localhostMatch) {
+            const port = parseInt(localhostMatch[1] || '80');
+            const path = localhostMatch[2] || '/';
+            if (iframeServer.isPortInUse(port)) {
+              return iframeServer.fetch(port, path, {
+                method: init?.method || 'GET',
+                headers: (init?.headers && typeof init.headers === 'object' && !Array.isArray(init.headers))
+                  ? init.headers as Record<string, string> : {},
+                body: typeof init?.body === 'string' ? init.body : null,
+              }).then(vResp => new Response(
+                typeof vResp.body === 'string' ? vResp.body
+                  : vResp.body instanceof Uint8Array ? new TextDecoder().decode(vResp.body)
+                  : JSON.stringify(vResp.body ?? ''),
+                { status: vResp.status || 200, statusText: vResp.statusText || 'OK', headers: vResp.headers || {} },
+              ));
+            }
+          }
           const rewritten = rewriteUrl(url);
           if (rewritten !== url) {
             if (typeof input === 'string') input = rewritten;
@@ -5810,6 +5922,12 @@ export const nodeCmd: Command = {
           XMLHttpRequest.prototype.open = function(this: XMLHttpRequest, method: string, url: string | URL, ...rest: any[]) {
             const u = typeof url === 'string' ? url : url.toString();
             if (isBlocked(u)) { (this as any)._blocked = true; return; }
+            // Route localhost/127.0.0.1 through virtual iframe servers
+            const lhm = u.match(/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::(\d+))?(\/.*)?$/);
+            if (lhm && iframeServer.isPortInUse(parseInt(lhm[1] || '80'))) {
+              (this as any)._localhost = { port: parseInt(lhm[1] || '80'), path: lhm[2] || '/', method };
+              return;
+            }
             return origOpen.call(this, method, rewriteUrl(u), ...(rest as [boolean, string?, string?]));
           } as any;
           XMLHttpRequest.prototype.setRequestHeader = function(this: XMLHttpRequest, name: string, value: string) {
@@ -5818,26 +5936,40 @@ export const nodeCmd: Command = {
             return origSetHeader.call(this, name, value);
           };
           XMLHttpRequest.prototype.send = function(this: XMLHttpRequest, body?: any) {
-            if ((this as any)._blocked) {
-              // Simulate a complete successful response for blocked URLs.
-              // Must trigger both onreadystatechange AND onload — axios uses the former.
-              Object.defineProperty(this, 'status', { value: 200 });
-              Object.defineProperty(this, 'statusText', { value: 'OK' });
-              Object.defineProperty(this, 'responseText', { value: '{}' });
-              Object.defineProperty(this, 'response', { value: '{}' });
-              Object.defineProperty(this, 'readyState', { value: 4 });
-              Object.defineProperty(this, 'responseURL', { value: '' });
-              setTimeout(() => {
-                const rsEvt = new Event('readystatechange');
-                if (typeof (this as any).onreadystatechange === 'function') (this as any).onreadystatechange(rsEvt);
-                try { this.dispatchEvent(rsEvt); } catch {}
-                const loadEvt = new ProgressEvent('load');
-                if (typeof (this as any).onload === 'function') (this as any).onload(loadEvt);
-                try { this.dispatchEvent(loadEvt); } catch {}
-                const endEvt = new ProgressEvent('loadend');
-                if (typeof (this as any).onloadend === 'function') (this as any).onloadend(endEvt);
-                try { this.dispatchEvent(endEvt); } catch {}
-              }, 0);
+            if ((this as any)._blocked || (this as any)._localhost) {
+              const isLocalhost = !!(this as any)._localhost;
+              const respondWith = (status: number, statusText: string, responseText: string) => {
+                Object.defineProperty(this, 'status', { value: status });
+                Object.defineProperty(this, 'statusText', { value: statusText });
+                Object.defineProperty(this, 'responseText', { value: responseText });
+                Object.defineProperty(this, 'response', { value: responseText });
+                Object.defineProperty(this, 'readyState', { value: 4 });
+                Object.defineProperty(this, 'responseURL', { value: '' });
+                setTimeout(() => {
+                  const rsEvt = new Event('readystatechange');
+                  if (typeof (this as any).onreadystatechange === 'function') (this as any).onreadystatechange(rsEvt);
+                  try { this.dispatchEvent(rsEvt); } catch {}
+                  const loadEvt = new ProgressEvent('load');
+                  if (typeof (this as any).onload === 'function') (this as any).onload(loadEvt);
+                  try { this.dispatchEvent(loadEvt); } catch {}
+                  const endEvt = new ProgressEvent('loadend');
+                  if (typeof (this as any).onloadend === 'function') (this as any).onloadend(endEvt);
+                  try { this.dispatchEvent(endEvt); } catch {}
+                }, 0);
+              };
+              if (isLocalhost) {
+                const { port, path, method } = (this as any)._localhost;
+                iframeServer.fetch(port, path, { method, body: typeof body === 'string' ? body : null })
+                  .then(vResp => {
+                    const text = typeof vResp.body === 'string' ? vResp.body
+                      : vResp.body instanceof Uint8Array ? new TextDecoder().decode(vResp.body)
+                      : JSON.stringify(vResp.body ?? '');
+                    respondWith(vResp.status || 200, vResp.statusText || 'OK', text);
+                  })
+                  .catch(() => respondWith(500, 'Internal Server Error', ''));
+              } else {
+                respondWith(200, 'OK', '{}');
+              }
               return;
             }
             return origSend.call(this, body);
@@ -5851,6 +5983,36 @@ export const nodeCmd: Command = {
       const _origClearImmediate = (globalThis as any).clearImmediate;
       (globalThis as any).setImmediate = (fn: Function, ...args: any[]) => setTimeout(fn, 0, ...args);
       (globalThis as any).clearImmediate = (id: any) => clearTimeout(id);
+
+      // Track active timers so scripts using setTimeout get their callbacks before exit.
+      let _activeTimers = 0;
+      let _timersResolve: (() => void) | null = null;
+      let _timersDone: Promise<void> | null = null;
+      const _timerIds = new Set<any>();
+      // Only wrap for regular scripts — CLI bundle already wraps timers internally
+      if (code.length <= 500000) {
+        globalThis.setTimeout = function(fn: any, ms?: number, ...args: any[]) {
+          _activeTimers++;
+          if (!_timersDone) _timersDone = new Promise(r => { _timersResolve = r; });
+          const id = _prevST(() => {
+            _timerIds.delete(id);
+            try { if (typeof fn === 'function') fn(...args); }
+            finally {
+              _activeTimers--;
+              if (_activeTimers <= 0 && _timersResolve) { _timersResolve(); _timersResolve = null; _timersDone = null; }
+            }
+          }, ms);
+          _timerIds.add(id);
+          return id;
+        } as typeof setTimeout;
+        globalThis.clearTimeout = function(id: any) {
+          if (_timerIds.delete(id)) {
+            _activeTimers--;
+            if (_activeTimers <= 0 && _timersResolve) { _timersResolve(); _timersResolve = null; _timersDone = null; }
+          }
+          _prevCT(id);
+        };
+      }
 
       // Wrap WebAssembly.instantiate to gracefully handle unsupported WASM binaries.
       // Tree-sitter's emscripten code calls abort() on CompileError, which throws a
@@ -5905,6 +6067,21 @@ export const nodeCmd: Command = {
         pendingPromises.length = 0; // Clear array so new ones can be detected
         await Promise.all(current);
       }
+
+      // Wait for pending timers (setTimeout callbacks) to fire — max 5s
+      // Skip when interactive mode is active — setRawMode(false) schedules a 500ms timer
+      // that must fire during the deferred exit wait, not here (otherwise it prematurely
+      // sets exitCalled=true, causing the deferred exit to create a fresh unresolvable promise).
+      if (_activeTimers > 0 && _timersDone && !isInteractiveMode) {
+        try {
+          await Promise.race([_timersDone, new Promise((_, rej) => _prevST(() => rej('timer-wait-timeout'), 5000))]);
+        } catch { /* timeout is fine */ }
+      }
+
+      // Restore original setTimeout/clearTimeout BEFORE deferred exit check.
+      // The deferred exit creates its own setTimeout (for timeout); if still wrapped,
+      // timer tracking would interfere with interactive mode's setRawMode(false) flow.
+      if (code.length <= 500000) { globalThis.setTimeout = _prevST; globalThis.clearTimeout = _prevCT; }
 
       // If the script returned without calling process.exit AND produced no visible output,
       // there may be unawaited async work (e.g., CLI print mode fires Hvq without await).
@@ -5968,6 +6145,7 @@ export const nodeCmd: Command = {
       }
       // Restore original fetch/globals (XHR prototype patch is idempotent, no restore needed)
       globalThis.fetch = _origFetch;
+      if (code.length <= 500000) { globalThis.setTimeout = _prevST; globalThis.clearTimeout = _prevCT; }
       if (_origSetImmediate) (globalThis as any).setImmediate = _origSetImmediate; else delete (globalThis as any).setImmediate;
       if (_origClearImmediate) (globalThis as any).clearImmediate = _origClearImmediate; else delete (globalThis as any).clearImmediate;
 
@@ -5981,6 +6159,7 @@ export const nodeCmd: Command = {
       }
       // Restore original fetch/globals (XHR prototype patch is idempotent, no restore needed)
       globalThis.fetch = _origFetch;
+      if (code.length <= 500000) { globalThis.setTimeout = _prevST; globalThis.clearTimeout = _prevCT; }
       delete (globalThis as any).setImmediate;
       delete (globalThis as any).clearImmediate;
       ctx.stderr += `${e.stack || e.message}\n`;

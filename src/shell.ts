@@ -454,9 +454,19 @@ export class Shell {
       }
 
       // Expand $@ and $* (all positional parameters)
+      // Bash behavior: "$@" with no args expands to nothing (zero words)
       if (ch === '$' && (line[i + 1] === '@' || line[i + 1] === '*')) {
-        result += this.env['@'] ?? '';
-        i += 2;
+        const val = this.env['@'] ?? '';
+        if (val === '' && inDouble) {
+          // Remove the opening quote already appended
+          if (result.endsWith('"')) result = result.slice(0, -1);
+          i += 2;
+          // Consume the closing quote
+          if (i < line.length && line[i] === '"') { inDouble = false; i++; }
+        } else {
+          result += val;
+          i += 2;
+        }
         continue;
       }
 

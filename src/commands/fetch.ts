@@ -1,4 +1,5 @@
 import { Command, CommandContext } from './index';
+import { iframeServer } from '../iframe-server';
 
 export const fetchCmd: Command = {
   name: 'fetch',
@@ -94,6 +95,37 @@ export const fetchCmd: Command = {
     }
 
     try {
+      // Route localhost requests through virtual iframe servers
+      const localhostMatch = url.match(/^https?:\/\/(?:localhost|127\.0\.0\.1)(?::(\d+))?(\/.*)?$/);
+      if (localhostMatch) {
+        const port = parseInt(localhostMatch[1] || '80');
+        const path = localhostMatch[2] || '/';
+        if (iframeServer.isPortInUse(port)) {
+          const vResp = await iframeServer.fetch(port, path, { method, headers, body: body || undefined });
+          let output = '';
+          if (showHeaders || headersOnly) {
+            output += `HTTP/${vResp.status || 200} ${vResp.statusText || 'OK'}\n`;
+            if (vResp.headers) for (const [k, v] of Object.entries(vResp.headers)) output += `${k}: ${v}\n`;
+            output += '\n';
+          }
+          if (!headersOnly) {
+            const text = typeof vResp.body === 'string' ? vResp.body
+              : vResp.body instanceof Uint8Array ? new TextDecoder().decode(vResp.body)
+              : JSON.stringify(vResp.body);
+            output += text;
+            if (!text.endsWith('\n')) output += '\n';
+          }
+          if (outputFile) {
+            const resolved = ctx.fs.resolvePath(outputFile, ctx.cwd);
+            await ctx.fs.writeFile(resolved, output);
+            ctx.stdout = '';
+          } else {
+            ctx.stdout = output;
+          }
+          return (vResp.status || 200) < 400 ? 0 : 1;
+        }
+      }
+
       const fetchOpts: RequestInit = {
         method,
         headers,
