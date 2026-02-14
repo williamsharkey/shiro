@@ -90,6 +90,7 @@ import { htmlCmd, imgCmd } from './commands/html';
 import { dougCmd } from './commands/doug';
 import { becomeCmd, unbecomeCmd, getBecomeConfig, activateBecomeMode, deactivateBecomeMode } from './commands/become';
 import { pageCmd } from './commands/page';
+import { ghCmd } from './commands/gh';
 import { processTable } from './process-table';
 import { iframeServer } from './iframe-server';
 import { allCommands } from '../fluffycoreutils/src/index';
@@ -258,6 +259,7 @@ async function main() {
   registerCommand(commands, becomeCmd, 'src/commands/become.ts');
   registerCommand(commands, unbecomeCmd, 'src/commands/become.ts');
   registerCommand(commands, pageCmd, 'src/commands/page.ts');
+  registerCommand(commands, ghCmd, 'src/commands/gh.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {

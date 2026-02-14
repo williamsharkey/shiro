@@ -1,7 +1,383 @@
-import git from 'isomorphic-git';
+import git, { TREE, STAGE } from 'isomorphic-git';
 // @ts-ignore - isomorphic-git http module
 import http from 'isomorphic-git/http/web';
 import { Command, CommandContext } from './index';
+
+// --- Module-scope helpers ---
+
+/** Simple greedy unified diff between two arrays of lines */
+function unifiedDiff(oldLines: string[], newLines: string[]): string {
+  let out = '';
+  const ctx_lines = 3;
+  const n = oldLines.length, m = newLines.length;
+  const edits: { type: number; old?: string; new?: string; oldIdx?: number; newIdx?: number }[] = [];
+  let oi = 0, ni = 0;
+  while (oi < n || ni < m) {
+    if (oi < n && ni < m && oldLines[oi] === newLines[ni]) {
+      edits.push({ type: 0, old: oldLines[oi], oldIdx: oi, newIdx: ni });
+      oi++; ni++;
+    } else {
+      let bestOld = -1, bestNew = -1, bestDist = Infinity;
+      const maxLook = Math.min(50, Math.max(n - oi, m - ni));
+      for (let look = 0; look < maxLook && bestDist > 0; look++) {
+        if (oi + look < n) {
+          for (let j = ni; j < Math.min(ni + maxLook, m); j++) {
+            if (oldLines[oi + look] === newLines[j] && look + (j - ni) < bestDist) {
+              bestDist = look + (j - ni); bestOld = oi + look; bestNew = j;
+            }
+          }
+        }
+      }
+      if (bestOld === -1) {
+        while (oi < n) { edits.push({ type: -1, old: oldLines[oi], oldIdx: oi }); oi++; }
+        while (ni < m) { edits.push({ type: 1, new: newLines[ni], newIdx: ni }); ni++; }
+      } else {
+        while (oi < bestOld) { edits.push({ type: -1, old: oldLines[oi], oldIdx: oi }); oi++; }
+        while (ni < bestNew) { edits.push({ type: 1, new: newLines[ni], newIdx: ni }); ni++; }
+      }
+    }
+  }
+  let i = 0;
+  while (i < edits.length) {
+    if (edits[i].type === 0) { i++; continue; }
+    const hunkStart = Math.max(0, i - ctx_lines);
+    let hunkEnd = i;
+    while (hunkEnd < edits.length) {
+      if (edits[hunkEnd].type !== 0) { hunkEnd++; continue; }
+      let nextChange = hunkEnd;
+      while (nextChange < edits.length && edits[nextChange].type === 0) nextChange++;
+      if (nextChange < edits.length && nextChange - hunkEnd <= ctx_lines * 2) {
+        hunkEnd = nextChange + 1;
+      } else {
+        hunkEnd = Math.min(hunkEnd + ctx_lines, edits.length);
+        break;
+      }
+    }
+    let oldStart = 1, newStart = 1, oldCount = 0, newCount = 0;
+    let first = true;
+    for (let j = hunkStart; j < hunkEnd; j++) {
+      if (first && edits[j].oldIdx != null) { oldStart = edits[j].oldIdx! + 1; first = false; }
+      if (first && edits[j].newIdx != null) { newStart = edits[j].newIdx! + 1; first = false; }
+      if (edits[j].type <= 0 && edits[j].oldIdx != null) oldCount++;
+      if (edits[j].type >= 0 && edits[j].newIdx != null) newCount++;
+    }
+    if (first) { oldStart = 1; newStart = 1; }
+    out += `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@\n`;
+    for (let j = hunkStart; j < hunkEnd; j++) {
+      const e = edits[j];
+      if (e.type === 0) out += ` ${e.old}\n`;
+      else if (e.type === -1) out += `-${e.old}\n`;
+      else if (e.type === 1) out += `+${e.new}\n`;
+    }
+    i = hunkEnd;
+  }
+  return out;
+}
+
+/** Resolve a revision string like HEAD, HEAD~3, HEAD^2, short SHA, branch name */
+async function resolveRevision(fs: any, dir: string, ref: string): Promise<string> {
+  // Parse into base + modifiers: "HEAD~3" → base="HEAD", ops=[{type:'~',n:3}]
+  const ops: { type: string; n: number }[] = [];
+  let base = ref;
+  const modRe = /([~^])(\d*)/g;
+  let match: RegExpExecArray | null;
+  // Find where modifiers start
+  const firstMod = ref.search(/[~^]/);
+  if (firstMod > 0) {
+    base = ref.slice(0, firstMod);
+    const modStr = ref.slice(firstMod);
+    while ((match = modRe.exec(modStr)) !== null) {
+      ops.push({ type: match[1], n: match[2] ? parseInt(match[2], 10) : 1 });
+    }
+  }
+
+  // Resolve base ref
+  let oid: string;
+  try {
+    oid = await git.resolveRef({ fs, dir, ref: base });
+  } catch {
+    // Try as short SHA — expandOid finds full OID from prefix
+    try {
+      oid = await git.expandOid({ fs, dir, oid: base });
+    } catch {
+      throw new Error(`bad revision '${ref}'`);
+    }
+  }
+
+  // Walk ancestors
+  for (const op of ops) {
+    if (op.type === '~') {
+      for (let i = 0; i < op.n; i++) {
+        const { commit } = await git.readCommit({ fs, dir, oid });
+        if (!commit.parent || commit.parent.length === 0) {
+          throw new Error(`revision '${ref}' has no parent at ~${i + 1}`);
+        }
+        oid = commit.parent[0];
+      }
+    } else if (op.type === '^') {
+      const { commit } = await git.readCommit({ fs, dir, oid });
+      const idx = op.n - 1;
+      if (!commit.parent || idx >= commit.parent.length) {
+        throw new Error(`revision '${ref}' has no parent at ^${op.n}`);
+      }
+      oid = commit.parent[idx];
+    }
+  }
+
+  return oid;
+}
+
+/** Read file content at a specific commit OID */
+async function readFileAtRef(fs: any, dir: string, oid: string, filepath: string): Promise<string | null> {
+  try {
+    const { blob } = await git.readBlob({ fs, dir, oid, filepath });
+    return new TextDecoder().decode(blob);
+  } catch { return null; }
+}
+
+interface DiffOpts {
+  nameOnly?: boolean;
+  stat?: boolean;
+}
+
+interface ChangedFile {
+  filepath: string;
+  oldContent: string | null;
+  newContent: string | null;
+}
+
+/** Diff two commits by walking their trees */
+async function diffCommits(fs: any, dir: string, oid1: string | null, oid2: string, opts?: DiffOpts): Promise<string> {
+  let out = '';
+  const changes: ChangedFile[] = [];
+
+  if (oid1 === null) {
+    // Root commit — all files are additions. Walk single tree.
+    const files = await git.walk({
+      fs, dir,
+      trees: [TREE({ ref: oid2 })],
+      map: async (filepath: string, [entry]: any[]) => {
+        if (filepath === '.' || filepath === '..') return undefined;
+        if (!entry) return undefined;
+        const type = await entry.type();
+        if (type === 'tree') return undefined;
+        return filepath;
+      },
+    });
+    for (const fp of files) {
+      if (!fp) continue;
+      const content = await readFileAtRef(fs, dir, oid2, fp);
+      changes.push({ filepath: fp, oldContent: null, newContent: content });
+    }
+  } else {
+    // Walk both trees
+    const results = await git.walk({
+      fs, dir,
+      trees: [TREE({ ref: oid1 }), TREE({ ref: oid2 })],
+      map: async (filepath: string, [entry1, entry2]: any[]) => {
+        if (filepath === '.' || filepath === '..') return undefined;
+        const o1 = entry1 ? await entry1.oid() : null;
+        const o2 = entry2 ? await entry2.oid() : null;
+        if (o1 === o2) return undefined; // identical
+        const t1 = entry1 ? await entry1.type() : null;
+        const t2 = entry2 ? await entry2.type() : null;
+        if (t1 === 'tree' || t2 === 'tree') return undefined; // directory entry
+        return { filepath, hasEntry1: !!entry1, hasEntry2: !!entry2 };
+      },
+    });
+    for (const r of results) {
+      if (!r) continue;
+      const oldContent = r.hasEntry1 ? await readFileAtRef(fs, dir, oid1, r.filepath) : null;
+      const newContent = r.hasEntry2 ? await readFileAtRef(fs, dir, oid2, r.filepath) : null;
+      changes.push({ filepath: r.filepath, oldContent, newContent });
+    }
+  }
+
+  if (opts?.nameOnly) {
+    for (const c of changes) out += c.filepath + '\n';
+    return out;
+  }
+
+  if (opts?.stat) {
+    let totalAdd = 0, totalDel = 0;
+    const stats: { filepath: string; add: number; del: number }[] = [];
+    for (const c of changes) {
+      const oldLines = c.oldContent ? c.oldContent.split('\n') : [];
+      const newLines = c.newContent ? c.newContent.split('\n') : [];
+      // Count additions and deletions
+      let add = 0, del = 0;
+      if (!c.oldContent) { add = newLines.length; }
+      else if (!c.newContent) { del = oldLines.length; }
+      else {
+        // Simple line-count diff
+        const diff = unifiedDiff(oldLines, newLines);
+        for (const line of diff.split('\n')) {
+          if (line.startsWith('+') && !line.startsWith('+++') && !line.startsWith('@@')) add++;
+          else if (line.startsWith('-') && !line.startsWith('---') && !line.startsWith('@@')) del++;
+        }
+      }
+      stats.push({ filepath: c.filepath, add, del });
+      totalAdd += add; totalDel += del;
+    }
+    const maxPath = Math.max(...stats.map(s => s.filepath.length), 0);
+    for (const s of stats) {
+      const total = s.add + s.del;
+      const bar = '+'.repeat(Math.min(s.add, 30)) + '-'.repeat(Math.min(s.del, 30));
+      out += ` ${s.filepath.padEnd(maxPath)} | ${String(total).padStart(4)} ${bar}\n`;
+    }
+    out += ` ${changes.length} file${changes.length !== 1 ? 's' : ''} changed`;
+    if (totalAdd > 0) out += `, ${totalAdd} insertion${totalAdd !== 1 ? 's' : ''}(+)`;
+    if (totalDel > 0) out += `, ${totalDel} deletion${totalDel !== 1 ? 's' : ''}(-)`;
+    out += '\n';
+    return out;
+  }
+
+  // Full diff output
+  for (const c of changes) {
+    out += `diff --git a/${c.filepath} b/${c.filepath}\n`;
+    if (c.oldContent === null) {
+      out += `new file\n--- /dev/null\n+++ b/${c.filepath}\n`;
+      const lines = (c.newContent || '').split('\n');
+      out += `@@ -0,0 +1,${lines.length} @@\n`;
+      for (const line of lines) out += `+${line}\n`;
+    } else if (c.newContent === null) {
+      out += `deleted file\n--- a/${c.filepath}\n+++ /dev/null\n`;
+      const lines = c.oldContent.split('\n');
+      out += `@@ -1,${lines.length} +0,0 @@\n`;
+      for (const line of lines) out += `-${line}\n`;
+    } else {
+      out += `--- a/${c.filepath}\n+++ b/${c.filepath}\n`;
+      out += unifiedDiff(c.oldContent.split('\n'), c.newContent.split('\n'));
+    }
+  }
+  return out;
+}
+
+/** Diff staged changes vs HEAD */
+async function diffStaged(fs: any, dir: string, opts?: DiffOpts): Promise<string> {
+  let out = '';
+  const changes: ChangedFile[] = [];
+
+  let hasHead = true;
+  try {
+    await git.resolveRef({ fs, dir, ref: 'HEAD' });
+  } catch {
+    hasHead = false;
+  }
+
+  const trees = hasHead ? [TREE({ ref: 'HEAD' }), STAGE()] : [STAGE()];
+  const results = await git.walk({
+    fs, dir,
+    trees,
+    map: async (filepath: string, entries: any[]) => {
+      if (filepath === '.' || filepath === '..') return undefined;
+      if (!hasHead) {
+        // No HEAD — everything staged is new
+        const entry = entries[0];
+        if (!entry) return undefined;
+        const type = await entry.type();
+        if (type === 'tree') return undefined;
+        return { filepath, hasOld: false, hasNew: true };
+      }
+      const [entry1, entry2] = entries;
+      const o1 = entry1 ? await entry1.oid() : null;
+      const o2 = entry2 ? await entry2.oid() : null;
+      if (o1 === o2) return undefined;
+      const t1 = entry1 ? await entry1.type() : null;
+      const t2 = entry2 ? await entry2.type() : null;
+      if (t1 === 'tree' || t2 === 'tree') return undefined;
+      return { filepath, hasOld: !!entry1, hasNew: !!entry2 };
+    },
+  });
+
+  for (const r of results) {
+    if (!r) continue;
+    let oldContent: string | null = null;
+    let newContent: string | null = null;
+    if (r.hasOld && hasHead) {
+      const headOid = await git.resolveRef({ fs, dir, ref: 'HEAD' });
+      oldContent = await readFileAtRef(fs, dir, headOid, r.filepath);
+    }
+    if (r.hasNew) {
+      // Read from staging area — use readBlob with HEAD as fallback context
+      // The staged content can be read by resolving the index
+      try {
+        const oids = await git.walk({
+          fs, dir,
+          trees: [STAGE()],
+          map: async (fp: string, [entry]: any[]) => {
+            if (fp !== r.filepath) return undefined;
+            if (!entry) return undefined;
+            const content = await entry.content();
+            return content ? new TextDecoder().decode(content) : null;
+          },
+        });
+        newContent = oids.find((x: any) => x != null) ?? null;
+      } catch {
+        newContent = null;
+      }
+    }
+    changes.push({ filepath: r.filepath, oldContent, newContent });
+  }
+
+  if (opts?.nameOnly) {
+    for (const c of changes) out += c.filepath + '\n';
+    return out;
+  }
+
+  if (opts?.stat) {
+    let totalAdd = 0, totalDel = 0;
+    const stats: { filepath: string; add: number; del: number }[] = [];
+    for (const c of changes) {
+      const oldLines = c.oldContent ? c.oldContent.split('\n') : [];
+      const newLines = c.newContent ? c.newContent.split('\n') : [];
+      let add = 0, del = 0;
+      if (!c.oldContent) { add = newLines.length; }
+      else if (!c.newContent) { del = oldLines.length; }
+      else {
+        const diff = unifiedDiff(oldLines, newLines);
+        for (const line of diff.split('\n')) {
+          if (line.startsWith('+') && !line.startsWith('+++') && !line.startsWith('@@')) add++;
+          else if (line.startsWith('-') && !line.startsWith('---') && !line.startsWith('@@')) del++;
+        }
+      }
+      stats.push({ filepath: c.filepath, add, del });
+      totalAdd += add; totalDel += del;
+    }
+    const maxPath = Math.max(...stats.map(s => s.filepath.length), 0);
+    for (const s of stats) {
+      const total = s.add + s.del;
+      const bar = '+'.repeat(Math.min(s.add, 30)) + '-'.repeat(Math.min(s.del, 30));
+      out += ` ${s.filepath.padEnd(maxPath)} | ${String(total).padStart(4)} ${bar}\n`;
+    }
+    out += ` ${changes.length} file${changes.length !== 1 ? 's' : ''} changed`;
+    if (totalAdd > 0) out += `, ${totalAdd} insertion${totalAdd !== 1 ? 's' : ''}(+)`;
+    if (totalDel > 0) out += `, ${totalDel} deletion${totalDel !== 1 ? 's' : ''}(-)`;
+    out += '\n';
+    return out;
+  }
+
+  for (const c of changes) {
+    out += `diff --git a/${c.filepath} b/${c.filepath}\n`;
+    if (c.oldContent === null) {
+      out += `new file\n--- /dev/null\n+++ b/${c.filepath}\n`;
+      const lines = (c.newContent || '').split('\n');
+      out += `@@ -0,0 +1,${lines.length} @@\n`;
+      for (const line of lines) out += `+${line}\n`;
+    } else if (c.newContent === null) {
+      out += `deleted file\n--- a/${c.filepath}\n+++ /dev/null\n`;
+      const lines = c.oldContent.split('\n');
+      out += `@@ -1,${lines.length} +0,0 @@\n`;
+      for (const line of lines) out += `-${line}\n`;
+    } else {
+      out += `--- a/${c.filepath}\n+++ b/${c.filepath}\n`;
+      out += unifiedDiff(c.oldContent.split('\n'), c.newContent.split('\n'));
+    }
+  }
+  return out;
+}
+
+// --- Main command ---
 
 export const gitCmd: Command = {
   name: 'git',
@@ -9,7 +385,7 @@ export const gitCmd: Command = {
   async exec(ctx: CommandContext) {
     const subcommand = ctx.args[0];
     if (!subcommand || subcommand === '--help' || subcommand === '-h') {
-      ctx.stdout = 'usage: git <command> [<args>]\n\nAvailable commands:\n  init, add, commit, status, log, diff, branch, checkout, clone\n  push, pull, fetch, remote, merge\n';
+      ctx.stdout = 'usage: git <command> [<args>]\n\nAvailable commands:\n  init, add, commit, status, log, diff, show, branch, checkout, clone\n  push, pull, fetch, remote, merge\n';
       return 0;
     }
     if (subcommand === '--version' || subcommand === '-v') {
@@ -23,13 +399,11 @@ export const gitCmd: Command = {
     try {
       switch (subcommand) {
         case 'init': {
-          // git init [directory] - optional directory argument
           let targetDir = dir;
           if (ctx.args[1]) {
             targetDir = ctx.fs.resolvePath(ctx.args[1], dir);
             await ctx.fs.mkdir(targetDir, { recursive: true });
           }
-          // Pre-create .git directory for isomorphic-git compatibility
           const gitDir = ctx.fs.resolvePath('.git', targetDir);
           try {
             await ctx.fs.mkdir(gitDir, { recursive: true });
@@ -44,7 +418,6 @@ export const gitCmd: Command = {
         case 'add': {
           const paths = ctx.args.slice(1);
           if (paths.length === 0 || paths.includes('.')) {
-            // Add all files
             const allFiles = await listAllFiles(ctx.fs, dir, dir);
             for (const filepath of allFiles) {
               await git.add({ fs, dir, filepath });
@@ -79,14 +452,14 @@ export const gitCmd: Command = {
         case 'status': {
           const matrix = await git.statusMatrix({ fs, dir });
           const STATUS_MAP: Record<string, string> = {
-            '003': 'added',     // new file, staged
-            '020': 'deleted',   // deleted, not staged
-            '023': 'deleted',   // deleted, staged
-            '100': 'deleted',   // HEAD has it, workdir deleted
+            '003': 'added',
+            '020': 'deleted',
+            '023': 'deleted',
+            '100': 'deleted',
             '101': 'deleted',
             '103': 'modified',
             '110': 'deleted',
-            '111': '',          // unmodified
+            '111': '',
             '120': 'modified',
             '121': 'modified',
             '122': 'modified',
@@ -133,10 +506,14 @@ export const gitCmd: Command = {
         case 'log': {
           let maxCount = 10;
           let oneline = false;
+          let showStat = false;
+          let nameOnly = false;
           for (let i = 1; i < ctx.args.length; i++) {
             if (ctx.args[i] === '-n' && ctx.args[i + 1]) maxCount = parseInt(ctx.args[++i]);
             if (ctx.args[i]?.startsWith('--max-count=')) maxCount = parseInt(ctx.args[i].split('=')[1]);
             if (ctx.args[i] === '--oneline') oneline = true;
+            if (ctx.args[i] === '--stat') showStat = true;
+            if (ctx.args[i] === '--name-only') nameOnly = true;
           }
           const commits = await git.log({ fs, dir, depth: maxCount });
           for (const c of commits) {
@@ -149,152 +526,136 @@ export const gitCmd: Command = {
               ctx.stdout += `Date:   ${date.toISOString()}\n`;
               ctx.stdout += `\n    ${c.commit.message.trim()}\n\n`;
             }
+            if (showStat || nameOnly) {
+              const parentOid = c.commit.parent.length > 0 ? c.commit.parent[0] : null;
+              const diffOut = await diffCommits(fs, dir, parentOid, c.oid, {
+                stat: showStat,
+                nameOnly,
+              });
+              ctx.stdout += diffOut;
+              if (diffOut) ctx.stdout += '\n';
+            }
           }
           break;
         }
 
         case 'diff': {
-          // Simple unified diff helper
-          const unifiedDiff = (oldLines: string[], newLines: string[]): string => {
-            let out = '';
-            const ctx_lines = 3; // context lines around changes
-            // Find changed regions using LCS-based approach
-            // Simple O(nm) diff: mark matching lines, output hunks
-            const n = oldLines.length, m = newLines.length;
-            // Build edit script: 0=context, -1=removed, +1=added
-            const edits: { type: number; old?: string; new?: string; oldIdx?: number; newIdx?: number }[] = [];
-            let oi = 0, ni = 0;
-            // Simple greedy diff (works well for small files)
-            while (oi < n || ni < m) {
-              if (oi < n && ni < m && oldLines[oi] === newLines[ni]) {
-                edits.push({ type: 0, old: oldLines[oi], oldIdx: oi, newIdx: ni });
-                oi++; ni++;
+          // Parse flags and positional args
+          let cached = false;
+          let nameOnlyFlag = false;
+          let statFlag = false;
+          const positional: string[] = [];
+          for (let i = 1; i < ctx.args.length; i++) {
+            const a = ctx.args[i];
+            if (a === '--cached' || a === '--staged') cached = true;
+            else if (a === '--name-only') nameOnlyFlag = true;
+            else if (a === '--stat') statFlag = true;
+            else if (!a.startsWith('-')) positional.push(a);
+          }
+          const diffOpts: DiffOpts = { nameOnly: nameOnlyFlag, stat: statFlag };
+
+          if (cached) {
+            // git diff --cached: staged vs HEAD
+            ctx.stdout = await diffStaged(fs, dir, diffOpts);
+            break;
+          }
+
+          if (positional.length >= 1) {
+            // Check for commit..commit syntax
+            const dotDot = positional[0].indexOf('..');
+            let ref1: string, ref2: string;
+            if (dotDot > 0) {
+              ref1 = positional[0].slice(0, dotDot);
+              ref2 = positional[0].slice(dotDot + 2);
+              const oid1 = await resolveRevision(fs, dir, ref1);
+              const oid2 = await resolveRevision(fs, dir, ref2);
+              ctx.stdout = await diffCommits(fs, dir, oid1, oid2, diffOpts);
+            } else if (positional.length >= 2) {
+              // Two refs: git diff ref1 ref2
+              const oid1 = await resolveRevision(fs, dir, positional[0]);
+              const oid2 = await resolveRevision(fs, dir, positional[1]);
+              ctx.stdout = await diffCommits(fs, dir, oid1, oid2, diffOpts);
+            } else {
+              // Single ref: diff ref vs working tree
+              // For now, diff ref vs HEAD (since working tree diff requires statusMatrix)
+              const refOid = await resolveRevision(fs, dir, positional[0]);
+              const headOid = await resolveRevision(fs, dir, 'HEAD');
+              if (refOid !== headOid) {
+                ctx.stdout = await diffCommits(fs, dir, refOid, headOid, diffOpts);
               } else {
-                // Look ahead for resync point
-                let bestOld = -1, bestNew = -1, bestDist = Infinity;
-                const maxLook = Math.min(50, Math.max(n - oi, m - ni));
-                for (let look = 0; look < maxLook && bestDist > 0; look++) {
-                  // Check if advancing old by 'look' finds a match
-                  if (oi + look < n) {
-                    for (let j = ni; j < Math.min(ni + maxLook, m); j++) {
-                      if (oldLines[oi + look] === newLines[j] && look + (j - ni) < bestDist) {
-                        bestDist = look + (j - ni); bestOld = oi + look; bestNew = j;
-                      }
-                    }
-                  }
-                }
-                if (bestOld === -1) {
-                  // No resync — consume remaining
-                  while (oi < n) { edits.push({ type: -1, old: oldLines[oi], oldIdx: oi }); oi++; }
-                  while (ni < m) { edits.push({ type: 1, new: newLines[ni], newIdx: ni }); ni++; }
-                } else {
-                  while (oi < bestOld) { edits.push({ type: -1, old: oldLines[oi], oldIdx: oi }); oi++; }
-                  while (ni < bestNew) { edits.push({ type: 1, new: newLines[ni], newIdx: ni }); ni++; }
-                }
+                ctx.stdout = '';
               }
             }
-            // Group edits into hunks with context
-            let i = 0;
-            while (i < edits.length) {
-              // Skip context-only regions to find next change
-              if (edits[i].type === 0) { i++; continue; }
-              // Found a change — build hunk with context
-              const hunkStart = Math.max(0, i - ctx_lines);
-              let hunkEnd = i;
-              // Extend hunk to include all nearby changes (within ctx_lines gap)
-              while (hunkEnd < edits.length) {
-                if (edits[hunkEnd].type !== 0) { hunkEnd++; continue; }
-                // Check if another change is within ctx_lines
-                let nextChange = hunkEnd;
-                while (nextChange < edits.length && edits[nextChange].type === 0) nextChange++;
-                if (nextChange < edits.length && nextChange - hunkEnd <= ctx_lines * 2) {
-                  hunkEnd = nextChange + 1;
-                } else {
-                  hunkEnd = Math.min(hunkEnd + ctx_lines, edits.length);
-                  break;
-                }
-              }
-              // Compute line numbers for hunk header
-              let oldStart = 1, newStart = 1, oldCount = 0, newCount = 0;
-              let first = true;
-              for (let j = hunkStart; j < hunkEnd; j++) {
-                if (first && edits[j].oldIdx != null) { oldStart = edits[j].oldIdx! + 1; first = false; }
-                if (first && edits[j].newIdx != null) { newStart = edits[j].newIdx! + 1; first = false; }
-                if (edits[j].type <= 0 && edits[j].oldIdx != null) oldCount++;
-                if (edits[j].type >= 0 && edits[j].newIdx != null) newCount++;
-              }
-              if (first) { oldStart = 1; newStart = 1; }
-              out += `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@\n`;
-              for (let j = hunkStart; j < hunkEnd; j++) {
-                const e = edits[j];
-                if (e.type === 0) out += ` ${e.old}\n`;
-                else if (e.type === -1) out += `-${e.old}\n`;
-                else if (e.type === 1) out += `+${e.new}\n`;
-              }
-              i = hunkEnd;
-            }
-            return out;
-          };
+            break;
+          }
 
-          // Read file content from HEAD commit
-          const readHeadFile = async (filepath: string): Promise<string | null> => {
-            try {
-              const oid = await git.resolveRef({ fs, dir, ref: 'HEAD' });
-              const { blob } = await git.readBlob({ fs, dir, oid, filepath });
-              return new TextDecoder().decode(blob);
-            } catch { return null; }
-          };
-
+          // Default: working tree vs HEAD (existing behavior)
           const matrix = await git.statusMatrix({ fs, dir });
+          let output = '';
           for (const [filepath, head, workdir, _stage] of matrix) {
             if (head === workdir) continue;
-            ctx.stdout += `diff --git a/${filepath} b/${filepath}\n`;
+            if (nameOnlyFlag) {
+              output += `${filepath}\n`;
+              continue;
+            }
+            output += `diff --git a/${filepath} b/${filepath}\n`;
             if (head === 0 && workdir === 2) {
-              // New file
               const content = await ctx.fs.readFile(ctx.fs.resolvePath(filepath as string, dir), 'utf8');
-              ctx.stdout += `new file\n`;
-              ctx.stdout += `--- /dev/null\n`;
-              ctx.stdout += `+++ b/${filepath}\n`;
+              output += `new file\n--- /dev/null\n+++ b/${filepath}\n`;
               const lines = (content as string).split('\n');
-              ctx.stdout += `@@ -0,0 +1,${lines.length} @@\n`;
-              for (const line of lines) ctx.stdout += `+${line}\n`;
+              output += `@@ -0,0 +1,${lines.length} @@\n`;
+              for (const line of lines) output += `+${line}\n`;
             } else if (workdir === 0) {
-              // Deleted file
-              const oldContent = await readHeadFile(filepath as string);
-              ctx.stdout += `deleted file\n`;
-              ctx.stdout += `--- a/${filepath}\n`;
-              ctx.stdout += `+++ /dev/null\n`;
+              const headOid = await git.resolveRef({ fs, dir, ref: 'HEAD' });
+              const oldContent = await readFileAtRef(fs, dir, headOid, filepath as string);
+              output += `deleted file\n--- a/${filepath}\n+++ /dev/null\n`;
               if (oldContent != null) {
                 const lines = oldContent.split('\n');
-                ctx.stdout += `@@ -1,${lines.length} +0,0 @@\n`;
-                for (const line of lines) ctx.stdout += `-${line}\n`;
+                output += `@@ -1,${lines.length} +0,0 @@\n`;
+                for (const line of lines) output += `-${line}\n`;
               }
             } else {
-              // Modified file — compute real diff
-              const oldContent = await readHeadFile(filepath as string);
+              const headOid = await git.resolveRef({ fs, dir, ref: 'HEAD' });
+              const oldContent = await readFileAtRef(fs, dir, headOid, filepath as string);
               const newContent = await ctx.fs.readFile(ctx.fs.resolvePath(filepath as string, dir), 'utf8');
-              ctx.stdout += `--- a/${filepath}\n`;
-              ctx.stdout += `+++ b/${filepath}\n`;
+              output += `--- a/${filepath}\n+++ b/${filepath}\n`;
               if (oldContent != null && newContent != null) {
-                const oldLines = (oldContent as string).split('\n');
-                const newLines = (newContent as string).split('\n');
-                ctx.stdout += unifiedDiff(oldLines, newLines);
+                output += unifiedDiff(oldContent.split('\n'), (newContent as string).split('\n'));
               } else {
-                ctx.stdout += `(could not read file contents)\n`;
+                output += `(could not read file contents)\n`;
               }
             }
           }
-          if (!ctx.stdout) ctx.stdout = '';
+          ctx.stdout = output;
+          break;
+        }
+
+        case 'show': {
+          const ref = ctx.args[1] || 'HEAD';
+          let nameOnlyFlag = false;
+          let statFlag = false;
+          for (let i = 1; i < ctx.args.length; i++) {
+            if (ctx.args[i] === '--name-only') nameOnlyFlag = true;
+            if (ctx.args[i] === '--stat') statFlag = true;
+          }
+          const commitOid = await resolveRevision(fs, dir, ref);
+          const { commit } = await git.readCommit({ fs, dir, oid: commitOid });
+          const date = new Date(commit.author.timestamp * 1000);
+
+          ctx.stdout = `commit ${commitOid}\n`;
+          ctx.stdout += `Author: ${commit.author.name} <${commit.author.email}>\n`;
+          ctx.stdout += `Date:   ${date.toISOString()}\n`;
+          ctx.stdout += `\n    ${commit.message.trim()}\n\n`;
+
+          const parentOid = commit.parent.length > 0 ? commit.parent[0] : null;
+          const diffOpts: DiffOpts = { nameOnly: nameOnlyFlag, stat: statFlag };
+          ctx.stdout += await diffCommits(fs, dir, parentOid, commitOid, diffOpts);
           break;
         }
 
         case 'branch': {
-          // git branch <name> — create a new branch
-          // git branch -d <name> — delete a branch
-          // git branch (no args) — list branches
           const branchArgs = ctx.args.slice(1);
           if (branchArgs.length > 0 && !branchArgs[0].startsWith('-')) {
-            // Create branch
             const newBranch = branchArgs[0];
             await git.branch({ fs, dir, ref: newBranch });
             break;
@@ -320,7 +681,6 @@ export const gitCmd: Command = {
             ctx.stderr = 'error: must specify branch or path\n';
             return 1;
           }
-          // Check if -b flag (create new branch)
           if (target === '-b') {
             const newBranch = ctx.args[2];
             if (!newBranch) {
@@ -330,13 +690,11 @@ export const gitCmd: Command = {
             await git.branch({ fs, dir, ref: newBranch, checkout: true });
             ctx.stdout = `Switched to a new branch '${newBranch}'\n`;
           } else {
-            // Try as branch first
             const branches = await git.listBranches({ fs, dir });
             if (branches.includes(target)) {
               await git.checkout({ fs, dir, ref: target });
               ctx.stdout = `Switched to branch '${target}'\n`;
             } else {
-              // Try as file restore (checkout -- file)
               const filepath = target === '--' ? ctx.args[2] : target;
               if (!filepath) {
                 ctx.stderr = `error: pathspec '${target}' did not match any branch or file\n`;
@@ -350,7 +708,6 @@ export const gitCmd: Command = {
         }
 
         case 'clone': {
-          // Parse flags: skip --depth, --branch, --single-branch, etc.
           const cloneArgs = ctx.args.slice(1);
           let url = '';
           let cloneTarget = '';
@@ -358,13 +715,12 @@ export const gitCmd: Command = {
           for (let i = 0; i < cloneArgs.length; i++) {
             const a = cloneArgs[i];
             if (a === '--depth' && i + 1 < cloneArgs.length) { cloneDepth = parseInt(cloneArgs[++i], 10) || 1; continue; }
-            if (a === '--branch' || a === '-b') { i++; continue; } // skip branch value
+            if (a === '--branch' || a === '-b') { i++; continue; }
             if (a === '--single-branch' || a === '--no-tags' || a === '--quiet' || a === '-q') continue;
-            if (a.startsWith('-')) continue; // skip unknown flags
+            if (a.startsWith('-')) continue;
             if (!url) { url = a; } else if (!cloneTarget) { cloneTarget = a; }
           }
           if (!url) { ctx.stderr = 'error: must specify repository URL\n'; return 1; }
-          // Normalize URL: add https:// if no protocol
           if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('git://')) {
             url = 'https://' + url;
           }
@@ -373,7 +729,6 @@ export const gitCmd: Command = {
             ? ctx.fs.resolvePath(cloneTarget, ctx.cwd)
             : ctx.fs.resolvePath(repoName, ctx.cwd);
           await ctx.fs.mkdir(targetDir, { recursive: true });
-          // Pre-create .git directory for isomorphic-git compatibility
           const gitDir = ctx.fs.resolvePath('.git', targetDir);
           try {
             await ctx.fs.mkdir(gitDir, { recursive: true });
@@ -382,7 +737,6 @@ export const gitCmd: Command = {
           }
           ctx.stdout = `Cloning into '${repoName}'...\n`;
 
-          // Use git protocol via CORS proxy (GitHub API tarball fails due to CORS)
           const corsProxy = ctx.env['GIT_CORS_PROXY'] || (typeof location !== 'undefined' ? location.origin + '/git-proxy' : 'https://cors.isomorphic-git.org');
           const token = ctx.env['GITHUB_TOKEN'] || (typeof localStorage !== 'undefined' ? localStorage.getItem('shiro_github_token') || '' : '');
           await Promise.race([
@@ -398,7 +752,6 @@ export const gitCmd: Command = {
             ),
           ]);
 
-          // Ensure working tree is fully populated (clone can leave subdirs empty)
           try {
             const branch = await git.currentBranch({ fs, dir: targetDir }) || 'main';
             await git.checkout({ fs, dir: targetDir, ref: branch, force: true });
@@ -411,7 +764,6 @@ export const gitCmd: Command = {
         case 'remote': {
           const remoteCmd = ctx.args[1];
           if (!remoteCmd || remoteCmd === '-v') {
-            // List remotes
             const remotes = await git.listRemotes({ fs, dir });
             if (remotes.length === 0) {
               ctx.stdout = '';
@@ -467,14 +819,38 @@ export const gitCmd: Command = {
           }
           const currentBranch = ref || await git.currentBranch({ fs, dir }) || 'main';
           ctx.stdout = `Pushing to ${remote}/${currentBranch}...\n`;
-          await git.push({
-            fs, http, dir,
-            remote,
-            ref: currentBranch,
-            corsProxy,
-            onAuth: () => ({ username: token }),
-          });
-          ctx.stdout += `done.\n`;
+          try {
+            const result = await git.push({
+              fs, http, dir,
+              remote,
+              ref: currentBranch,
+              corsProxy,
+              onAuth: () => ({ username: token }),
+              onMessage: (msg: string) => { ctx.stdout += msg; },
+            });
+            if (result.ok) {
+              ctx.stdout += `done.\n`;
+            } else {
+              ctx.stderr = `error: push failed\n`;
+              if (result.refs) {
+                for (const [refName, status] of Object.entries(result.refs)) {
+                  if (!(status as any).ok) {
+                    ctx.stderr += `  ${refName}: ${(status as any).error || 'rejected'}\n`;
+                  }
+                }
+              }
+              return 1;
+            }
+          } catch (e: any) {
+            if (e.code === 'HttpError' || e.statusCode === 401 || e.statusCode === 403) {
+              ctx.stderr = `error: authentication failed (HTTP ${e.statusCode || ''})\nCheck your GITHUB_TOKEN is valid and has push access.\n`;
+            } else if (e.code === 'PushRejectedError') {
+              ctx.stderr = `error: push rejected — remote has new commits. Pull first.\n`;
+            } else {
+              ctx.stderr = `error: push failed: ${e.message}\n`;
+            }
+            return 1;
+          }
           break;
         }
 
@@ -580,7 +956,6 @@ async function listAllFiles(fs: any, dir: string, base: string): Promise<string[
     if (stat.isDirectory()) {
       files.push(...await listAllFiles(fs, fullPath, base));
     } else {
-      // Return relative path from base
       files.push(fullPath.slice(base.length + 1));
     }
   }
