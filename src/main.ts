@@ -58,7 +58,6 @@ import { shiroOnlyCommands } from './commands/coreutils';
 import { gitCmd } from './commands/git';
 import { fetchCmd, curlCmd } from './commands/fetch';
 import { globCmd } from './commands/glob';
-import { spiritCmd } from './commands/spirit';
 import { jsEvalCmd, nodeCmd } from './commands/jseval';
 import { npmCmd } from './commands/npm';
 import { buildCmd } from './commands/build';
@@ -217,7 +216,6 @@ async function main() {
   registerCommand(commands, fetchCmd, 'src/commands/fetch.ts');
   registerCommand(commands, curlCmd, 'src/commands/fetch.ts');
   registerCommand(commands, globCmd, 'src/commands/glob.ts');
-  registerCommand(commands, spiritCmd, 'src/commands/spirit.ts');
   registerCommand(commands, jsEvalCmd, 'src/commands/jseval.ts');
   registerCommand(commands, nodeCmd, 'src/commands/jseval.ts');
   registerCommand(commands, npmCmd, 'src/commands/npm.ts');

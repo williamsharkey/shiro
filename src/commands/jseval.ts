@@ -342,6 +342,7 @@ export const nodeCmd: Command = {
           // Suppress npm-to-native-installer warning (only relevant for Claude Code)
           ...(scriptPath?.includes('claude-code') ? {
             DISABLE_INSTALLATION_CHECKS: '1',
+            CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: '1',
           } : {}),
         } as Record<string, string>,
         cwd: () => ctx.shell.cwd,
@@ -369,6 +370,12 @@ export const nodeCmd: Command = {
           const stdoutObj: any = {
             write: (s: string | Uint8Array, encodingOrCb?: string | Function, cb?: Function) => {
               let str = typeof s === 'string' ? s : new TextDecoder().decode(s);
+              // Detect OAuth URL in Claude Code login flow and append a clickable link
+              const oauthMatch = str.match(/(https:\/\/claude\.ai\/oauth\/authorize\S+)/);
+              if (oauthMatch && ctx.terminal) {
+                const url = oauthMatch[1];
+                str += `\r\n\r\n  \x1b]8;;${url}\x07\x1b[1;36m[ Click here to sign in ]\x1b[0m\x1b]8;;\x07\r\n`;
+              }
               stdoutBuf.push(str);
               // Stream to terminal in real-time if available (enables streaming for claude -p, etc.)
               if (ctx.terminal) {
@@ -1022,6 +1029,14 @@ export const nodeCmd: Command = {
         }
         return Math.min(sEnd - sStart, target.length - tStart);
       };
+      FakeBuffer.prototype.trim = function() { return this.toString().trim(); };
+      FakeBuffer.prototype.trimEnd = function() { return this.toString().trimEnd(); };
+      FakeBuffer.prototype.trimStart = function() { return this.toString().trimStart(); };
+      FakeBuffer.prototype.split = function(sep: any, limit?: number) { return this.toString().split(sep, limit); };
+      FakeBuffer.prototype.replace = function(search: any, replacement: any) { return this.toString().replace(search, replacement); };
+      FakeBuffer.prototype.startsWith = function(s: string) { return this.toString().startsWith(s); };
+      FakeBuffer.prototype.endsWith = function(s: string) { return this.toString().endsWith(s); };
+      FakeBuffer.prototype.includes = function(s: any) { if (typeof s === 'string') return this.toString().includes(s); return Uint8Array.prototype.includes.call(this, s); };
       FakeBuffer.prototype.equals = function(other: Uint8Array) {
         if (this.length !== other.length) return false;
         for (let i = 0; i < this.length; i++) if (this[i] !== other[i]) return false;
@@ -2273,6 +2288,8 @@ export const nodeCmd: Command = {
                 return buf;
               },
               spawnSync: (cmd: string, args?: string[], opts?: any) => {
+                // Handle overload: spawnSync(cmd, opts) without args
+                if (args && !Array.isArray(args)) { opts = args; args = undefined; }
                 let fullCmd: string;
                 if (isShellBin(cmd) && args) {
                   fullCmd = extractShellArgs(args);
@@ -2478,6 +2495,8 @@ export const nodeCmd: Command = {
                 return child;
               },
               execFileSync: (file: string, args?: string[], opts?: any) => {
+                // Handle overload: execFileSync(file, opts) without args
+                if (args && !Array.isArray(args)) { opts = args; args = undefined; }
                 let fullCmd: string;
                 if (isShellBin(file) && args) {
                   fullCmd = extractShellArgs(args);
