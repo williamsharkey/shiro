@@ -2392,6 +2392,25 @@ export const nodeCmd: Command = {
                 // Claude Code's "c to copy" runs: spawn('/bin/sh', ['-c', 'pbcopy'], {input: url})
                 const isClipboardCmd = /^(pbcopy|xclip(\s|$)|xsel(\s|$)|wl-copy(\s|$)|clip(\.exe)?$)/.test(fullCmd.trim());
                 let clipboardBuf = '';
+                // Create async iterator for stream mocks so execa's getStream (for await...of) works.
+                // Without this, execa can't read stdout/stderr and always gets empty output.
+                const makeStreamIterator = (streamEvents: Record<string, Function[]>) => {
+                  return function() {
+                    const chunks: any[] = [];
+                    let done = false;
+                    let resolve: (() => void) | null = null;
+                    // Listen for data and end events
+                    (streamEvents['data'] ??= []).push((chunk: any) => { chunks.push(chunk); resolve?.(); });
+                    (streamEvents['end'] ??= []).push(() => { done = true; resolve?.(); });
+                    return {
+                      next(): Promise<{ value: any; done: boolean }> {
+                        if (chunks.length > 0) return Promise.resolve({ value: chunks.shift(), done: false });
+                        if (done) return Promise.resolve({ value: undefined, done: true });
+                        return new Promise(r => { resolve = () => { resolve = null; r(this.next()); }; });
+                      },
+                    };
+                  };
+                };
                 const child: any = {
                   pid: Math.floor(Math.random() * 10000) + 1000,
                   stdin: {
@@ -2409,6 +2428,7 @@ export const nodeCmd: Command = {
                     pipe: (dest: any) => dest,
                     setEncoding: () => child.stdout,
                     destroy: () => child.stdout,
+                    [Symbol.asyncIterator]: makeStreamIterator(stdoutEvents),
                   },
                   stderr: {
                     on: (ev: string, fn: Function) => { (stderrEvents[ev] ??= []).push(fn); return child.stderr; },
@@ -2419,6 +2439,7 @@ export const nodeCmd: Command = {
                     pipe: (dest: any) => dest,
                     setEncoding: () => child.stderr,
                     destroy: () => child.stderr,
+                    [Symbol.asyncIterator]: makeStreamIterator(stderrEvents),
                   },
                   on: (ev: string, fn: Function) => { (events[ev] ??= []).push(fn); return child; },
                   once: (ev: string, fn: Function) => { const w = (...a: any[]) => { child.off(ev, w); fn(...a); }; return child.on(ev, w); },
