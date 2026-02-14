@@ -24,6 +24,7 @@ const PROXY_TARGETS = {
   'anthropic': 'https://api.anthropic.com',
   'platform': 'https://platform.claude.com',
   'mcp-proxy': 'https://mcp-proxy.anthropic.com',
+  'github': 'https://api.github.com',
 };
 
 const SKIP_REQUEST_HEADERS = new Set([
