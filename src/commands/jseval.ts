@@ -2082,6 +2082,23 @@ export const nodeCmd: Command = {
           }
           case 'child_process':
           case 'node:child_process': {
+            // Synchronous fast-path responses for version/detection checks.
+            // spawnSync/execSync/execFileSync are async under the hood but some callers
+            // read stdout synchronously. Pre-populate known safe responses so the CLI
+            // sees the right answer without awaiting.
+            const getSyncResponse = (cmd: string): { stdout: string; stderr: string; status: number } | null => {
+              // Strip shell wrapper: /bin/sh -c "git --version" → git --version
+              let trimmed = cmd.trim();
+              const shellMatch = trimmed.match(/^\/bin\/(?:sh|bash|zsh)\s+(?:-\w+\s+)*-\w*c\s+["']?(.+?)["']?$/);
+              if (shellMatch) trimmed = shellMatch[1].trim();
+              if (/^git\s+--version$/.test(trimmed)) {
+                return { stdout: 'git version 2.47.0\n', stderr: '', status: 0 };
+              }
+              if (/^(which|command\s+-v)\s+git$/.test(trimmed)) {
+                return { stdout: '/usr/local/bin/git\n', stderr: '', status: 0 };
+              }
+              return null;
+            };
             // Shim /bin/sh, /bin/bash, /bin/zsh — Shiro has no real shell binaries.
             // Claude Code's Bash tool calls patterns like:
             //   spawn('/bin/sh', ['-l', '-c', 'echo hello'])  → extract 'echo hello'
@@ -2220,6 +2237,15 @@ export const nodeCmd: Command = {
                 // In browser, execSync cannot truly block. We return a placeholder
                 // Buffer and queue the actual execution. Works correctly when the
                 // result is used at top-level of an async script (node -e).
+                // Synchronous fast-path for detection commands
+                const syncResponse = getSyncResponse(cmd);
+                if (syncResponse) {
+                  const wantStr = opts?.encoding && opts.encoding !== 'buffer';
+                  if (wantStr) return syncResponse.stdout;
+                  const buf: any = FakeBuffer.from(syncResponse.stdout);
+                  buf.then = (resolve: any) => resolve(FakeBuffer.from(syncResponse.stdout));
+                  return buf;
+                }
                 let result = '';
                 const wantString = opts?.encoding && opts.encoding !== 'buffer';
                 const p = execAsync(cmd).then(r => { result = r.stdout; });
@@ -2246,12 +2272,29 @@ export const nodeCmd: Command = {
                 };
                 return buf;
               },
-              spawnSync: (cmd: string, args?: string[]) => {
+              spawnSync: (cmd: string, args?: string[], opts?: any) => {
                 let fullCmd: string;
                 if (isShellBin(cmd) && args) {
                   fullCmd = extractShellArgs(args);
                 } else {
                   fullCmd = args ? `${cmd} ${shellQuoteArgs(args)}` : cmd;
+                }
+                const wantString = opts?.encoding && opts.encoding !== 'buffer';
+                const wrap = (s: string) => wantString ? s : FakeBuffer.from(s);
+                // Synchronous fast-paths for version/detection checks that the CLI reads
+                // without awaiting. Without this, stdout is '' when read synchronously.
+                const syncResponse = getSyncResponse(fullCmd);
+                if (syncResponse) {
+                  const out = wrap(syncResponse.stdout);
+                  const err = wrap(syncResponse.stderr);
+                  const st = syncResponse.status;
+                  return {
+                    get stdout() { return out; },
+                    get stderr() { return err; },
+                    get status() { return st; },
+                    error: undefined as any,
+                    then: (resolve: any) => resolve({ stdout: out, stderr: err, status: st }),
+                  };
                 }
                 let stdout = '';
                 let stderr = '';
@@ -2259,10 +2302,10 @@ export const nodeCmd: Command = {
                 const p = execAsync(fullCmd).then(r => { stdout = r.stdout; stderr = r.stderr; status = r.exitCode; });
                 pendingPromises.push(p);
                 return {
-                  get stdout() { return FakeBuffer.from(stdout); },
-                  get stderr() { return FakeBuffer.from(stderr); },
+                  get stdout() { return wrap(stdout); },
+                  get stderr() { return wrap(stderr); },
                   get status() { return status; },
-                  then: (resolve: any, reject: any) => p.then(() => resolve({ stdout: FakeBuffer.from(stdout), stderr: FakeBuffer.from(stderr), status })).catch(reject),
+                  then: (resolve: any, reject: any) => p.then(() => resolve({ stdout: wrap(stdout), stderr: wrap(stderr), status })).catch(reject),
                 };
               },
               exec: (cmd: string, opts: any, cb?: any) => {
@@ -2419,6 +2462,13 @@ export const nodeCmd: Command = {
                   fullCmd = extractShellArgs(args);
                 } else {
                   fullCmd = args ? `${file} ${shellQuoteArgs(args)}` : file;
+                }
+                // Synchronous fast-path for detection commands
+                const syncResponse = getSyncResponse(fullCmd);
+                if (syncResponse) {
+                  const buf: any = FakeBuffer.from(syncResponse.stdout);
+                  buf.then = (resolve: any) => resolve(FakeBuffer.from(syncResponse.stdout));
+                  return buf;
                 }
                 let result = '';
                 const p = execAsync(fullCmd).then(r => { result = r.stdout; });
