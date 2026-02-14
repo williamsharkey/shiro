@@ -84,6 +84,7 @@ import { mcpCmd } from './commands/mcp-client';
 import { groupCmd } from './commands/group';
 import { spawnCmd } from './commands/spawn';
 import { scCmd } from './commands/sc';
+import { cwCmd } from './commands/cw';
 import { setupCmd } from './commands/setup';
 import { psCmd, killCmd } from './commands/ps';
 import { htmlCmd, imgCmd } from './commands/html';
@@ -262,6 +263,7 @@ async function main() {
   registerCommand(commands, groupCmd, 'src/commands/group.ts');
   registerCommand(commands, spawnCmd, 'src/commands/spawn.ts');
   registerCommand(commands, scCmd, 'src/commands/sc.ts');
+  registerCommand(commands, cwCmd, 'src/commands/cw.ts');
   registerCommand(commands, setupCmd, 'src/commands/setup.ts');
   registerCommand(commands, psCmd, 'src/commands/ps.ts');
   registerCommand(commands, killCmd, 'src/commands/ps.ts');
