@@ -28,6 +28,12 @@ interface Cell {
   link?: string;
 }
 
+interface Segment {
+  text: string;
+  css: string;
+  link?: string;
+}
+
 function emptyCell(): Cell {
   return { char: ' ', style: {} };
 }
@@ -100,6 +106,7 @@ export class WebTerminal implements TerminalLike {
   private rafPending = false;
   private scrollbackDirty = false;
   private scrollbackRendered = 0;
+  private prevSegments: Segment[][] = [];
 
   private stdinPassthrough: ((data: string) => void) | null = null;
   private forceExitCallback: (() => void) | null = null;
@@ -108,10 +115,6 @@ export class WebTerminal implements TerminalLike {
   private resizeCallbacks: ((cols: number, rows: number) => void)[] = [];
   private resizeObserver: ResizeObserver;
   private disposed = false;
-
-  private menuDebounce: ReturnType<typeof setTimeout> | null = null;
-  private menuBar: HTMLDivElement | null = null;
-  private outputBuffer = '';
 
   secretMasker: ((text: string) => string) | null = null;
 
@@ -140,6 +143,8 @@ export class WebTerminal implements TerminalLike {
         outline: none;
       }
       .web-terminal .line { min-height: 1.4em; }
+      .web-terminal .line-clickable { cursor: pointer; transition: background 0.1s; }
+      .web-terminal .line-clickable:hover { background: rgba(255,255,255,0.06); border-radius: 3px; }
       .web-terminal a { color: #74c0fc; text-decoration: underline; cursor: pointer; }
       .web-terminal a:hover { color: #91d5ff; }
     `;
@@ -268,12 +273,6 @@ export class WebTerminal implements TerminalLike {
   writeOutput(text: string): void {
     if (this.disposed) return;
     if (this.secretMasker) text = this.secretMasker(text);
-
-    // Buffer for menu detection
-    this.outputBuffer += text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1b\]8;;[^\x07]*\x07/g, '');
-    if (this.outputBuffer.length > 2048) this.outputBuffer = this.outputBuffer.slice(-2048);
-    if (this.menuDebounce) clearTimeout(this.menuDebounce);
-    this.menuDebounce = setTimeout(() => this.scanForMenu(), 150);
 
     for (let i = 0; i < text.length; i++) {
       const ch = text[i];
@@ -417,19 +416,21 @@ export class WebTerminal implements TerminalLike {
             this.dirtyRows.add(r);
           }
           this.eraseLineTo(this.cursor.row, this.cursor.col);
-        } else if (mode === 2 || mode === 3) {
-          // Erase entire display
+        } else if (mode === 2) {
+          // Erase display — just clear buffer, don't push to scrollback.
+          // Ink uses this for frame redraws, not for archiving content.
           for (let r = 0; r < this.rows; r++) {
-            if (this.rowHasContent(this.buffer[r])) {
-              this.scrollback.push(this.buffer[r]);
-              this.scrollbackDirty = true;
-            }
             this.buffer[r] = this.emptyRow();
             this.dirtyRows.add(r);
           }
-          while (this.scrollback.length > 2000) this.scrollback.shift();
           this.cursor.row = 0;
           this.cursor.col = 0;
+        } else if (mode === 3) {
+          // Erase scrollback
+          this.scrollback = [];
+          this.scrollbackDirty = false;
+          this.scrollbackRendered = 0;
+          this.scrollbackEl.innerHTML = '';
         }
         break;
       }
@@ -470,10 +471,6 @@ export class WebTerminal implements TerminalLike {
 
       default: break; // Unhandled — ignore
     }
-  }
-
-  private rowHasContent(row: Cell[]): boolean {
-    return row.some(c => c.char !== ' ');
   }
 
   private eraseLineFrom(row: number, col: number): void {
@@ -587,14 +584,46 @@ export class WebTerminal implements TerminalLike {
       this.screenEl.removeChild(this.screenEl.lastChild!);
     }
 
-    // Re-render dirty rows
+    // Re-render dirty rows with segment diffing
     for (const r of this.dirtyRows) {
       if (r >= this.rows || r >= this.buffer.length) continue;
-      const newLine = this.renderRow(this.buffer[r]);
-      const old = this.screenEl.children[r];
-      if (old) {
-        this.screenEl.replaceChild(newLine, old);
+      const newSegs = this.rowToSegments(this.buffer[r]);
+      const prevSegs = this.prevSegments[r];
+
+      // Skip if segments haven't changed
+      if (prevSegs && this.segmentsEqual(prevSegs, newSegs)) continue;
+
+      const old = this.screenEl.children[r] as HTMLDivElement;
+      if (!old) continue;
+
+      // If segment count + structure matches, try span-level text mutation
+      if (prevSegs && prevSegs.length === newSegs.length && newSegs.length > 0) {
+        let canMutate = true;
+        for (let i = 0; i < newSegs.length; i++) {
+          if (newSegs[i].css !== prevSegs[i].css || newSegs[i].link !== prevSegs[i].link) {
+            canMutate = false;
+            break;
+          }
+        }
+        if (canMutate) {
+          // Mutate text content of existing spans
+          const spans = old.querySelectorAll('span');
+          if (spans.length === newSegs.length) {
+            for (let i = 0; i < newSegs.length; i++) {
+              if (spans[i].textContent !== newSegs[i].text) {
+                spans[i].textContent = newSegs[i].text;
+              }
+            }
+            this.prevSegments[r] = newSegs;
+            continue;
+          }
+        }
       }
+
+      // Full replace
+      const newLine = this.renderRow(this.buffer[r]);
+      this.screenEl.replaceChild(newLine, old);
+      this.prevSegments[r] = newSegs;
     }
     this.dirtyRows.clear();
 
@@ -604,6 +633,58 @@ export class WebTerminal implements TerminalLike {
       const atBottom = wrapper.scrollHeight - wrapper.scrollTop - wrapper.clientHeight < 50;
       if (atBottom) wrapper.scrollTop = wrapper.scrollHeight;
     }
+  }
+
+  private styleToCss(style: CellStyle): string {
+    let css = '';
+    if (style.fg) css += `color:${style.fg};`;
+    if (style.bg) css += `background:${style.bg};`;
+    if (style.bold) css += 'font-weight:bold;';
+    if (style.dim) css += 'opacity:0.6;';
+    if (style.italic) css += 'font-style:italic;';
+    if (style.underline && style.strikethrough) {
+      css += 'text-decoration:underline line-through;';
+    } else if (style.underline) {
+      css += 'text-decoration:underline;';
+    } else if (style.strikethrough) {
+      css += 'text-decoration:line-through;';
+    }
+    return css;
+  }
+
+  private rowToSegments(cells: Cell[]): Segment[] {
+    // Find last non-space character (same trim logic as renderRow)
+    let lastContent = cells.length - 1;
+    while (lastContent >= 0 && cells[lastContent].char === ' ' &&
+      !cells[lastContent].link && !cells[lastContent].style.bg) {
+      lastContent--;
+    }
+    if (lastContent < 0) return [];
+
+    const segments: Segment[] = [];
+    let spanStart = 0;
+    while (spanStart <= lastContent) {
+      const startCell = cells[spanStart];
+      let spanEnd = spanStart;
+      while (spanEnd < lastContent &&
+        stylesEqual(cells[spanEnd + 1].style, startCell.style) &&
+        cells[spanEnd + 1].link === startCell.link) {
+        spanEnd++;
+      }
+      const text = cells.slice(spanStart, spanEnd + 1).map(c => c.char).join('');
+      const css = this.styleToCss(startCell.style);
+      segments.push({ text, css, link: startCell.link });
+      spanStart = spanEnd + 1;
+    }
+    return segments;
+  }
+
+  private segmentsEqual(a: Segment[], b: Segment[]): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (a[i].text !== b[i].text || a[i].css !== b[i].css || a[i].link !== b[i].link) return false;
+    }
+    return true;
   }
 
   private renderRow(cells: Cell[]): HTMLDivElement {
@@ -641,6 +722,21 @@ export class WebTerminal implements TerminalLike {
 
     // Auto-detect URLs in text content that aren't already linked
     this.linkifyUrls(div);
+
+    // Inline clickable menu items: detect "1) Label" or "1. Label" patterns
+    if (this.stdinPassthrough) {
+      const plainText = cells.slice(0, lastContent + 1).map(c => c.char).join('');
+      const menuMatch = plainText.match(/^\s*(\d+)[.)]\s+(.+?)$/);
+      if (menuMatch) {
+        div.classList.add('line-clickable');
+        const digit = menuMatch[1];
+        div.addEventListener('click', (e) => {
+          if (window.getSelection()?.toString()) return; // don't interfere with text selection
+          e.stopPropagation();
+          this.handleInput(digit + '\r');
+        });
+      }
+    }
 
     return div;
   }
@@ -781,7 +877,6 @@ export class WebTerminal implements TerminalLike {
   }
 
   injectInput(data: string): void {
-    this.hideMenu();
     this.handleInput(data);
   }
 
@@ -838,81 +933,10 @@ export class WebTerminal implements TerminalLike {
     this.exitRawMode();
   }
 
-  // ── Menu detection (same as WindowTerminal) ─────────────────────
-
-  private scanForMenu(): void {
-    const lines = this.outputBuffer.split('\n');
-    const menuRe = /^\s*(\d+)[.)]\s+(.+?)$/;
-    let streak: { num: string; label: string }[] = [];
-
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const m = lines[i].match(menuRe);
-      if (m) {
-        streak.unshift({ num: m[1], label: m[2].trim() });
-      } else if (streak.length >= 2) {
-        break;
-      } else {
-        streak = [];
-      }
-    }
-
-    if (streak.length >= 2) {
-      this.showMenu(streak);
-    } else {
-      this.hideMenu();
-    }
-  }
-
-  private showMenu(items: { num: string; label: string }[]): void {
-    this.hideMenu();
-    const bar = document.createElement('div');
-    bar.style.cssText = `
-      position:sticky;bottom:0;left:0;right:0;
-      display:flex;flex-wrap:wrap;gap:6px;padding:6px 8px;
-      background:rgba(20,20,40,0.92);border-radius:8px;
-      z-index:10;justify-content:center;margin-top:4px;
-    `;
-    for (const item of items) {
-      const btn = document.createElement('button');
-      const shortLabel = item.label.length > 18 ? item.label.slice(0, 16) + '\u2026' : item.label;
-      btn.textContent = `${item.num}: ${shortLabel}`;
-      btn.style.cssText = `
-        background:#2a2a4a;color:#e0e0e0;border:1px solid #4a4a6a;
-        border-radius:12px;padding:4px 12px;font-size:13px;
-        font-family:inherit;cursor:pointer;white-space:nowrap;
-      `;
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this.hideMenu();
-        this.handleInput(item.num + '\r');
-      });
-      btn.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        this.hideMenu();
-        this.handleInput(item.num + '\r');
-      }, { passive: false });
-      bar.appendChild(btn);
-    }
-    this.menuBar = bar;
-    const wrapper = this.container.querySelector('.web-terminal');
-    if (wrapper) wrapper.appendChild(bar);
-    setTimeout(() => { if (this.menuBar === bar) this.hideMenu(); }, 15000);
-  }
-
-  private hideMenu(): void {
-    if (this.menuBar) {
-      this.menuBar.remove();
-      this.menuBar = null;
-    }
-  }
-
   // ── Cleanup ─────────────────────────────────────────────────────
 
   dispose(): void {
     this.disposed = true;
-    this.hideMenu();
-    if (this.menuDebounce) clearTimeout(this.menuDebounce);
     this.resizeObserver.disconnect();
     this.resizeCallbacks = [];
     this.stdinPassthrough = null;
