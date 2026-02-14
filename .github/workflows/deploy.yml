@@ -1,4 +1,4 @@
-name: Deploy to GitHub Pages
+name: Deploy
 
 on:
   push:
@@ -47,8 +47,14 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shiro-build
+          path: |
+            dist/
+            server.mjs
 
-  deploy:
+  deploy-pages:
     needs: build
     runs-on: ubuntu-latest
     environment:
@@ -57,3 +63,24 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  deploy-droplet:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: shiro-build
+      - name: Deploy to DigitalOcean
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H 161.35.13.177 >> ~/.ssh/known_hosts 2>/dev/null
+          SSH_OPTS="-i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new"
+          scp $SSH_OPTS -r dist/* root@161.35.13.177:/opt/shiro/public/
+          scp $SSH_OPTS server.mjs root@161.35.13.177:/opt/shiro/server.mjs
+          ssh $SSH_OPTS root@161.35.13.177 "systemctl restart shiro"
+          echo "Deployed to https://shiro.computer"

@@ -403,6 +403,49 @@ You have skyeyes MCP tools for browser interaction (see `~/.claude/CLAUDE.md` fo
 - `shiro-shiro` — your shiro iframe
 - `foam-shiro` — your foam iframe
 
+## Git Push Auth Quirk
+
+When running `git push` inside Shiro, the `GITHUB_TOKEN` environment variable may not propagate automatically. Use this pattern:
+
+```bash
+GITHUB_TOKEN=$GITHUB_TOKEN git push origin main
+```
+
+## Shell & Node Gotchas
+
+- **Semicolons in `js-eval`**: The shell splits on `;` before passing to `js-eval`. Use `node script.js` for multi-statement JS.
+- **`//` in node scripts**: The AsyncFunction wrapper can sometimes fail on `//` comment syntax. Prefer `/* */` comments or remove comments.
+- **Unicode in string concatenation**: When building HTML strings with `+`, `\u2014` and similar escapes may double-escape. Use HTML entities (`&mdash;`) instead.
+
+## Hot-Loading Commands
+
+Inject commands into a running Shiro session without rebuilding:
+
+```javascript
+var shiro = window.__shiro;
+var myCmd = { name: 'mycmd', description: '...', exec: function(ctx) { ... } };
+try { shiro.registry.register('commands/mycmd', myCmd, 'src/commands/mycmd.ts'); }
+catch(e) { shiro.registry.replace('commands/mycmd', myCmd, 'src/commands/mycmd.ts'); }
+```
+
+The try/catch handles re-loading (first load uses `register`, subsequent loads use `replace`).
+
+## Setup Command (OAuth)
+
+The `setup` command (`src/commands/setup.ts`) provides a mobile-friendly OAuth sign-in GUI:
+
+- Uses PKCE flow with `crypto.subtle.digest('SHA-256', ...)` for code_challenge
+- Redirect URI: `https://platform.claude.com/oauth/code/callback` (manual code paste flow)
+- `shiro.computer/oauth/callback` is NOT a registered redirect URI
+- srcdoc iframes have `null` origin — pass `window.location.origin` from the parent TypeScript context
+- srcdoc iframes can't `window.open()` cross-origin due to COOP headers — use `postMessage` to parent
+- OAuth `state` and PKCE `code_challenge` parameters are both required
+- Already-authorized users may see a 400 error on the consent page (server-side stale session issue)
+
+## DigitalOcean Deployment
+
+Shiro deploys to a DigitalOcean droplet (IP: 161.35.13.177, ID: 550124232). The `doctl` CLI cannot run inside Shiro (Go binary). Deploy via `npm run deploy` which uses SSH/SCP. Credentials should be stored in Claude's auto memory.
+
 ## Keep It Manageable
 
 - **One command per file** (or small groups of related commands like coreutils)

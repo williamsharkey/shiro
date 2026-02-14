@@ -58,7 +58,7 @@ import { shiroOnlyCommands } from './commands/coreutils';
 import { gitCmd } from './commands/git';
 import { fetchCmd, curlCmd } from './commands/fetch';
 import { globCmd } from './commands/glob';
-
+import { spiritCmd } from './commands/spirit';
 import { jsEvalCmd, nodeCmd } from './commands/jseval';
 import { npmCmd } from './commands/npm';
 import { buildCmd } from './commands/build';
@@ -85,6 +85,7 @@ import { mcpCmd } from './commands/mcp-client';
 import { groupCmd } from './commands/group';
 import { spawnCmd } from './commands/spawn';
 import { scCmd } from './commands/sc';
+import { setupCmd } from './commands/setup';
 import { psCmd, killCmd } from './commands/ps';
 import { htmlCmd, imgCmd } from './commands/html';
 import { dougCmd } from './commands/doug';
@@ -216,7 +217,7 @@ async function main() {
   registerCommand(commands, fetchCmd, 'src/commands/fetch.ts');
   registerCommand(commands, curlCmd, 'src/commands/fetch.ts');
   registerCommand(commands, globCmd, 'src/commands/glob.ts');
-
+  registerCommand(commands, spiritCmd, 'src/commands/spirit.ts');
   registerCommand(commands, jsEvalCmd, 'src/commands/jseval.ts');
   registerCommand(commands, nodeCmd, 'src/commands/jseval.ts');
   registerCommand(commands, npmCmd, 'src/commands/npm.ts');
@@ -250,6 +251,7 @@ async function main() {
   registerCommand(commands, groupCmd, 'src/commands/group.ts');
   registerCommand(commands, spawnCmd, 'src/commands/spawn.ts');
   registerCommand(commands, scCmd, 'src/commands/sc.ts');
+  registerCommand(commands, setupCmd, 'src/commands/setup.ts');
   registerCommand(commands, psCmd, 'src/commands/ps.ts');
   registerCommand(commands, killCmd, 'src/commands/ps.ts');
   registerCommand(commands, htmlCmd, 'src/commands/html.ts');
@@ -338,7 +340,13 @@ async function main() {
   window.addEventListener('message', (event) => {
     if (event.origin !== window.location.origin) return;
     if (event.data?.type !== 'shiro-oauth-callback') return;
-    const { code, state, port, params } = event.data;
+    const { code, state, params } = event.data;
+    let port = event.data.port;
+    // Extract port from state parameter (setup command encodes it as port_XXXXX_random)
+    if (!port && state) {
+      const m = state.match(/^port_(\d+)_/);
+      if (m) port = m[1];
+    }
     if (!port) return;
     // Reconstruct the original callback URL path with query params
     const callbackParams = new URLSearchParams();

@@ -20,6 +20,19 @@ export const scCmd: Command = {
       return 1;
     }
 
+    // On mobile, hint about the setup command if not yet authenticated
+    const isMobile = typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)')?.matches;
+    if (isMobile) {
+      try {
+        const creds = await ctx.fs.readFile('/home/user/.claude/.credentials.json', 'utf8');
+        const parsed = JSON.parse(creds as string);
+        if (!parsed.claudeAiOauth?.accessToken) throw new Error('no token');
+      } catch {
+        if (ctx.terminal) {
+          ctx.terminal.writeOutput('\r\n  Tip: Run \x1b[1;33msetup\x1b[0m for a mobile-friendly sign-in experience.\r\n\r\n');
+        }
+      }
+    }
     // Build the command string for the spawned shell
     const claudeArgs = ctx.args.length > 0
       ? ' ' + ctx.args.map(a =>
