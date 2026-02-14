@@ -104,6 +104,33 @@ export class ShiroTerminal {
             openRemotePanel();
             return;
           }
+          if (uri === 'shiro://claude') {
+            this.term.writeln('');
+            this.shell.fs.exists('/usr/local/bin/claude').then(installed => {
+              const cmd = installed ? 'sc' : 'curl -fsSL https://claude.ai/install.sh | bash';
+              this.shell.execute(
+                cmd,
+                (s) => this.term.write(s),
+                (s) => this.term.write(`\x1b[31m${s}\x1b[0m`)
+              ).then(() => {
+                this.showPrompt();
+              });
+            });
+            return;
+          }
+          // Handle shiro://cmd/<command> — run a shell command from HUD links
+          if (uri.startsWith('shiro://cmd/')) {
+            const cmd = decodeURIComponent(uri.slice('shiro://cmd/'.length));
+            this.term.writeln('');
+            this.shell.execute(
+              cmd,
+              (s) => this.term.write(s),
+              (s) => this.term.write(`\x1b[31m${s}\x1b[0m`)
+            ).then(() => {
+              this.showPrompt();
+            });
+            return;
+          }
           // Handle shiro://copy?text=... — copy text to clipboard
           if (uri.startsWith('shiro://copy?text=')) {
             const text = decodeURIComponent(uri.slice('shiro://copy?text='.length));
@@ -359,7 +386,6 @@ export class ShiroTerminal {
     const aboutUrl = `${baseUrl}/about`;
     const mcpUrl = `${baseUrl}/mcp.html`;
     const githubUrl = 'https://github.com/williamsharkey/shiro';
-    const discordUrl = 'https://discord.gg/Wkw4SZ2V';
 
     // Pad hostname to fit layout (max ~20 chars for subdomain display)
     const hostDisplay = displayHost.length <= 20 ? displayHost : displayHost.slice(0, 17) + '...';
@@ -394,14 +420,29 @@ export class ShiroTerminal {
     this.term.writeln('\x1b[36m║\x1b[0m                \x1b[92mcloud operating system\x1b[0m   \x1b[36m║\x1b[0m');
     // Row 3: Empty
     this.term.writeln('\x1b[36m║\x1b[0m                                         \x1b[36m║\x1b[0m');
+    const deepwikiUrl = 'https://deepwiki.com/williamsharkey/shiro';
     // Row 4: help / mcp
-    this.term.writeln(`\x1b[36m║\x1b[0m  \x1b[33mhelp\x1b[0m                             ${link(mcpUrl, 'mcp', '94')}   \x1b[36m║\x1b[0m`);
-    // Row 5: spirit / about
-    this.term.writeln(`\x1b[36m║\x1b[0m  \x1b[33mspirit\x1b[0m                         ${link(aboutUrl, 'about', '94')}   \x1b[36m║\x1b[0m`);
+    this.term.writeln(`\x1b[36m║\x1b[0m  ${link('shiro://cmd/help', 'help', '94')}                             ${link(mcpUrl, 'mcp', '94')}   \x1b[36m║\x1b[0m`);
+    // Row 5: deepwiki / about
+    this.term.writeln(`\x1b[36m║\x1b[0m  ${link(deepwikiUrl, 'deepwiki', '94')}                       ${link(aboutUrl, 'about', '94')}   \x1b[36m║\x1b[0m`);
     // Row 6: upload / github
-    this.term.writeln(`\x1b[36m║\x1b[0m  \x1b[33mupload\x1b[0m                        ${link(githubUrl, 'github', '94')}   \x1b[36m║\x1b[0m`);
-    // Row 7: download / discord
-    this.term.writeln(`\x1b[36m║\x1b[0m  \x1b[33mdownload\x1b[0m                     ${link(discordUrl, 'discord', '94')}   \x1b[36m║\x1b[0m`);
+    this.term.writeln(`\x1b[36m║\x1b[0m  ${link('shiro://cmd/upload', 'upload', '94')}                        ${link(githubUrl, 'github', '94')}   \x1b[36m║\x1b[0m`);
+    // Row 7: download / claude code (pad = 28 - label.length to keep 41-char inner width)
+    const claudeRow = startRow + 7;
+    const drawClaudeLabel = (installed: boolean) => {
+      const label = installed ? 'open claude' : 'install claude';
+      const pad = ' '.repeat(28 - label.length);
+      return `\x1b[36m║\x1b[0m  ${link('shiro://cmd/download', 'download', '94')}${pad}${link('shiro://claude', label, '94')}   \x1b[36m║\x1b[0m`;
+    };
+    this.term.writeln(drawClaudeLabel(false)); // default: install
+    // Async-check if claude is installed and update the label in-place
+    this.shell.fs.exists('/usr/local/bin/claude').then(installed => {
+      if (!installed) return;
+      const buf = this.term.buffer.active;
+      const visibleRow = claudeRow - buf.baseY;
+      if (visibleRow < 0 || visibleRow >= this.term.rows) return;
+      this.term.write(`\x1b7\x1b[${visibleRow + 1};1H${drawClaudeLabel(true)}\x1b8`);
+    });
     // Row 8: Bottom border
     this.term.writeln('\x1b[36m╚═══════════════════╛\x1b[97m白\x1b[36m╒══════════════════╝\x1b[0m');
     // Row 9: Empty line
