@@ -91,6 +91,18 @@ import { dougCmd } from './commands/doug';
 import { becomeCmd, unbecomeCmd, getBecomeConfig, activateBecomeMode, deactivateBecomeMode } from './commands/become';
 import { pageCmd } from './commands/page';
 import { ghCmd } from './commands/gh';
+import { mkTempCmd } from './commands/mktemp';
+import { jqCmd } from './commands/jq';
+import { tputCmd } from './commands/tput';
+import { sttyCmd } from './commands/stty';
+import { gzipCmd, gunzipCmd } from './commands/gzip';
+import { wgetCmd } from './commands/wget';
+import { pgrepCmd, pkillCmd } from './commands/pgrep';
+import { nprocCmd } from './commands/nproc';
+import { getconfCmd } from './commands/getconf';
+import { edCmd } from './commands/ed';
+import { iconvCmd } from './commands/iconv';
+import { zipCmd, unzipCmd } from './commands/zip';
 import { processTable } from './process-table';
 import { iframeServer } from './iframe-server';
 import { allCommands } from '../fluffycoreutils/src/index';
@@ -260,6 +272,21 @@ async function main() {
   registerCommand(commands, unbecomeCmd, 'src/commands/become.ts');
   registerCommand(commands, pageCmd, 'src/commands/page.ts');
   registerCommand(commands, ghCmd, 'src/commands/gh.ts');
+  registerCommand(commands, mkTempCmd, 'src/commands/mktemp.ts');
+  registerCommand(commands, jqCmd, 'src/commands/jq.ts');
+  registerCommand(commands, tputCmd, 'src/commands/tput.ts');
+  registerCommand(commands, sttyCmd, 'src/commands/stty.ts');
+  registerCommand(commands, gzipCmd, 'src/commands/gzip.ts');
+  registerCommand(commands, gunzipCmd, 'src/commands/gzip.ts');
+  registerCommand(commands, wgetCmd, 'src/commands/wget.ts');
+  registerCommand(commands, pgrepCmd, 'src/commands/pgrep.ts');
+  registerCommand(commands, pkillCmd, 'src/commands/pgrep.ts');
+  registerCommand(commands, nprocCmd, 'src/commands/nproc.ts');
+  registerCommand(commands, getconfCmd, 'src/commands/getconf.ts');
+  registerCommand(commands, edCmd, 'src/commands/ed.ts');
+  registerCommand(commands, iconvCmd, 'src/commands/iconv.ts');
+  registerCommand(commands, zipCmd, 'src/commands/zip.ts');
+  registerCommand(commands, unzipCmd, 'src/commands/zip.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {
@@ -277,6 +304,8 @@ async function main() {
     'mkdir', 'rm', 'cp', 'mv', 'echo', 'touch', 'chmod', 'head', 'tail',
     'sort', 'uniq', 'wc', 'tr', 'tee', 'diff', 'env', 'which', 'test',
     'sh', 'bash', 'vi', 'nano', 'rg', 'esbuild',
+    'mktemp', 'jq', 'tput', 'stty', 'gzip', 'gunzip', 'wget',
+    'pgrep', 'pkill', 'nproc', 'getconf', 'ed', 'iconv', 'zip', 'unzip',
   ];
   (async () => {
     try {
