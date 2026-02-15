@@ -250,11 +250,11 @@ Commands:
         }
         if (repoSub === 'clone') {
           const target = ctx.args[2];
-          if (!target) { ctx.stderr = 'usage: gh repo clone <owner/repo>\n'; return 1; }
+          if (!target) { ctx.stderr = 'usage: gh repo clone <owner/repo> [directory]\n'; return 1; }
           const cloneUrl = target.includes('/') ? `https://github.com/${target}.git` : target;
-          // Delegate to git clone
-          ctx.args = ['clone', cloneUrl];
-          return ctx.shell.execute(`git clone ${cloneUrl}`, (s: string) => { ctx.stdout += s; }, (s: string) => { ctx.stderr += s; });
+          const destDir = ctx.args[3] || '';
+          const cloneCmd = destDir ? `git clone ${cloneUrl} ${destDir}` : `git clone ${cloneUrl}`;
+          return ctx.shell.execute(cloneCmd, (s: string) => { ctx.stdout += s; }, (s: string) => { ctx.stderr += s; });
         }
         ctx.stderr = `gh repo: '${repoSub}' is not a valid subcommand. Valid: view, list, create, clone\n`;
         return 1;

@@ -63,10 +63,13 @@ export const pageCmd: Command = {
   async exec(ctx) {
     const raw = ctx.args.slice();
 
-    // Parse optional :port prefix
+    // Parse optional :port or bare port prefix
     let port: number | undefined;
     if (raw.length && /^:\d+$/.test(raw[0])) {
       port = parseInt(raw[0].slice(1), 10);
+      raw.shift();
+    } else if (raw.length && /^\d+$/.test(raw[0])) {
+      port = parseInt(raw[0], 10);
       raw.shift();
     }
 
@@ -175,7 +178,7 @@ export const pageCmd: Command = {
       }
 
       case 'text':
-        ctx.stdout += ((el as HTMLElement).textContent || '') + '\n';
+        ctx.stdout += ((el as HTMLElement).innerText || '') + '\n';
         return 0;
 
       case 'html':

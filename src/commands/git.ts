@@ -904,6 +904,9 @@ export const gitCmd: Command = {
               corsProxy,
               singleBranch: true,
               depth: cloneDepth,
+              onProgress: async () => {
+                await new Promise(resolve => setTimeout(resolve, 0));
+              },
               ...(token ? { onAuth: () => ({ username: token }) } : {}),
             }),
             new Promise<never>((_, reject) =>
@@ -912,6 +915,7 @@ export const gitCmd: Command = {
           ]);
 
           try {
+            await new Promise(resolve => setTimeout(resolve, 0));
             const branch = await git.currentBranch({ fs, dir: targetDir }) || 'main';
             await git.checkout({ fs, dir: targetDir, ref: branch, force: true });
           } catch { /* checkout best-effort */ }
