@@ -56,6 +56,8 @@ import { CommandRegistry, Command } from './commands/index';
 import { registry } from './registry';
 import { shiroOnlyCommands } from './commands/coreutils';
 import { gitCmd } from './commands/git';
+import { grepCmd } from './commands/grep';
+import { sedCmd } from './commands/sed';
 import { fetchCmd, curlCmd } from './commands/fetch';
 import { globCmd } from './commands/glob';
 import { jsEvalCmd, nodeCmd } from './commands/jseval';
@@ -227,6 +229,8 @@ async function main() {
   // Register additional Shiro commands not in fluffycoreutils
   // These are registered in both CommandRegistry and ModuleRegistry for hot-reload
   registerCommand(commands, gitCmd, 'src/commands/git.ts');
+  registerCommand(commands, grepCmd, 'src/commands/grep.ts');
+  registerCommand(commands, sedCmd, 'src/commands/sed.ts');
   registerCommand(commands, fetchCmd, 'src/commands/fetch.ts');
   registerCommand(commands, curlCmd, 'src/commands/fetch.ts');
   registerCommand(commands, globCmd, 'src/commands/glob.ts');

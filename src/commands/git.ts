@@ -2,6 +2,9 @@ import git, { TREE, STAGE } from 'isomorphic-git';
 // @ts-ignore - isomorphic-git http module
 import http from 'isomorphic-git/http/web';
 import { Command, CommandContext } from './index';
+import { gitStashHandler } from './git-stash';
+import { gitResetHandler } from './git-reset';
+import { gitTagHandler } from './git-tag';
 
 // --- Module-scope helpers ---
 
@@ -137,6 +140,7 @@ async function readFileAtRef(fs: any, dir: string, oid: string, filepath: string
 
 interface DiffOpts {
   nameOnly?: boolean;
+  nameStatus?: boolean;
   stat?: boolean;
 }
 
@@ -195,6 +199,16 @@ async function diffCommits(fs: any, dir: string, oid1: string | null, oid2: stri
 
   if (opts?.nameOnly) {
     for (const c of changes) out += c.filepath + '\n';
+    return out;
+  }
+
+  if (opts?.nameStatus) {
+    for (const c of changes) {
+      let status = 'M';
+      if (c.oldContent === null) status = 'A';
+      else if (c.newContent === null) status = 'D';
+      out += `${status}\t${c.filepath}\n`;
+    }
     return out;
   }
 
@@ -325,6 +339,16 @@ async function diffStaged(fs: any, dir: string, opts?: DiffOpts): Promise<string
     return out;
   }
 
+  if (opts?.nameStatus) {
+    for (const c of changes) {
+      let status = 'M';
+      if (c.oldContent === null) status = 'A';
+      else if (c.newContent === null) status = 'D';
+      out += `${status}\t${c.filepath}\n`;
+    }
+    return out;
+  }
+
   if (opts?.stat) {
     let totalAdd = 0, totalDel = 0;
     const stats: { filepath: string; add: number; del: number }[] = [];
@@ -377,6 +401,41 @@ async function diffStaged(fs: any, dir: string, opts?: DiffOpts): Promise<string
   return out;
 }
 
+/** Format relative time from unix timestamp */
+function timeAgoFromTimestamp(ts: number): string {
+  const secs = Math.floor((Date.now() / 1000) - ts);
+  if (secs < 60) return `${secs} seconds ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins} minute${mins !== 1 ? 's' : ''} ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} hour${hrs !== 1 ? 's' : ''} ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days} day${days !== 1 ? 's' : ''} ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 4) return `${weeks} week${weeks !== 1 ? 's' : ''} ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} month${months !== 1 ? 's' : ''} ago`;
+  const years = Math.floor(days / 365);
+  return `${years} year${years !== 1 ? 's' : ''} ago`;
+}
+
+/** Apply format specifiers to a commit */
+function formatCommit(c: { oid: string; commit: any }, fmt: string): string {
+  let result = fmt;
+  result = result.replace(/%H/g, c.oid);
+  result = result.replace(/%h/g, c.oid.slice(0, 7));
+  result = result.replace(/%s/g, c.commit.message.split('\n')[0].trim());
+  result = result.replace(/%an/g, c.commit.author.name);
+  result = result.replace(/%ae/g, c.commit.author.email);
+  result = result.replace(/%ad/g, new Date(c.commit.author.timestamp * 1000).toISOString());
+  result = result.replace(/%ar/g, timeAgoFromTimestamp(c.commit.author.timestamp));
+  result = result.replace(/%cn/g, c.commit.committer?.name || c.commit.author.name);
+  result = result.replace(/%ce/g, c.commit.committer?.email || c.commit.author.email);
+  result = result.replace(/%n/g, '\n');
+  result = result.replace(/%%/g, '%');
+  return result;
+}
+
 // --- Main command ---
 
 export const gitCmd: Command = {
@@ -400,7 +459,7 @@ export const gitCmd: Command = {
     const subcommand = ctx.args[0];
 
     if (!subcommand || subcommand === '--help' || subcommand === '-h') {
-      ctx.stdout = 'usage: git <command> [<args>]\n\nAvailable commands:\n  init, add, commit, status, log, diff, show, branch, checkout, clone\n  push, pull, fetch, remote, merge\n';
+      ctx.stdout = 'usage: git <command> [<args>]\n\nAvailable commands:\n  init, add, commit, status, log, diff, show, branch, checkout, clone\n  push, pull, fetch, remote, merge, stash, reset, tag\n';
       return 0;
     }
     if (subcommand === '--version' || subcommand === '-v') {
@@ -447,24 +506,54 @@ export const gitCmd: Command = {
 
         case 'commit': {
           let message = '';
+          let amend = false;
+          let allowEmpty = false;
           for (let i = 1; i < ctx.args.length; i++) {
             if ((ctx.args[i] === '-m' || ctx.args[i] === '--message') && ctx.args[i + 1]) {
               message = ctx.args[++i];
             }
+            if (ctx.args[i] === '--amend') amend = true;
+            if (ctx.args[i] === '--allow-empty') allowEmpty = true;
           }
+
+          const author = { name: ctx.env['USER'] || 'user', email: 'user@shiro.local' };
+
+          if (amend) {
+            // Read current HEAD commit
+            const headOid = await git.resolveRef({ fs, dir, ref: 'HEAD' });
+            const { commit: headCommit } = await git.readCommit({ fs, dir, oid: headOid });
+            if (!message) message = headCommit.message;
+            // Move HEAD to parent
+            const currentBranch = await git.currentBranch({ fs, dir }) || 'main';
+            if (headCommit.parent.length > 0) {
+              await git.writeRef({ fs, dir, ref: `refs/heads/${currentBranch}`, value: headCommit.parent[0], force: true });
+            }
+            const sha = await git.commit({ fs, dir, message, author });
+            ctx.stdout = `[${currentBranch} ${sha.slice(0, 7)}] ${message.split('\n')[0].trim()}\n`;
+            break;
+          }
+
           if (!message) {
             ctx.stderr = 'error: must supply commit message with -m\n';
             return 1;
           }
           const sha = await git.commit({
-            fs, dir, message,
-            author: { name: ctx.env['USER'] || 'user', email: 'user@shiro.local' },
+            fs, dir, message, author,
+            ...(allowEmpty ? { allowEmpty: true } : {}),
           });
-          ctx.stdout = `[main ${sha.slice(0, 7)}] ${message}\n`;
+          const branch = await git.currentBranch({ fs, dir }) || 'main';
+          ctx.stdout = `[${branch} ${sha.slice(0, 7)}] ${message}\n`;
           break;
         }
 
         case 'status': {
+          let porcelain = false;
+          let short = false;
+          for (let i = 1; i < ctx.args.length; i++) {
+            if (ctx.args[i] === '--porcelain') porcelain = true;
+            if (ctx.args[i] === '-s' || ctx.args[i] === '--short') short = true;
+          }
+
           const matrix = await git.statusMatrix({ fs, dir });
           const STATUS_MAP: Record<string, string> = {
             '003': 'added',
@@ -480,6 +569,25 @@ export const gitCmd: Command = {
             '122': 'modified',
             '123': 'modified',
           };
+
+          if (porcelain || short) {
+            // Porcelain/short output: XY codes
+            for (const [filepath, head, workdir, stage] of matrix) {
+              const key = `${head}${workdir}${stage}`;
+              if (key === '111') continue;
+              let X = ' ', Y = ' ';
+              // Index (X) status
+              if (head === 0 && stage === 2) X = 'A';      // added to index
+              else if (head === 1 && stage === 3) X = 'M';  // modified in index
+              else if (head === 1 && stage === 0) X = 'D';  // deleted from index
+              // Worktree (Y) status
+              if (stage === 2 && workdir === 0) Y = 'D';    // deleted in worktree
+              else if (head === 1 && workdir === 2 && stage === 1) Y = 'M'; // modified in worktree
+              else if (head === 0 && workdir === 2 && stage === 0) { X = '?'; Y = '?'; } // untracked
+              ctx.stdout += `${X}${Y} ${filepath}\n`;
+            }
+            break;
+          }
 
           let hasChanges = false;
           const staged: string[] = [];
@@ -523,16 +631,24 @@ export const gitCmd: Command = {
           let oneline = false;
           let showStat = false;
           let nameOnly = false;
+          let formatStr = '';
           for (let i = 1; i < ctx.args.length; i++) {
             if (ctx.args[i] === '-n' && ctx.args[i + 1]) maxCount = parseInt(ctx.args[++i]);
-            if (ctx.args[i]?.startsWith('--max-count=')) maxCount = parseInt(ctx.args[i].split('=')[1]);
-            if (ctx.args[i] === '--oneline') oneline = true;
-            if (ctx.args[i] === '--stat') showStat = true;
-            if (ctx.args[i] === '--name-only') nameOnly = true;
+            else if (ctx.args[i]?.startsWith('-') && /^-\d+$/.test(ctx.args[i])) maxCount = parseInt(ctx.args[i].slice(1));
+            else if (ctx.args[i]?.startsWith('--max-count=')) maxCount = parseInt(ctx.args[i].split('=')[1]);
+            else if (ctx.args[i] === '--oneline') oneline = true;
+            else if (ctx.args[i] === '--stat') showStat = true;
+            else if (ctx.args[i] === '--name-only') nameOnly = true;
+            else if (ctx.args[i]?.startsWith('--format=')) formatStr = ctx.args[i].slice(9);
+            else if (ctx.args[i]?.startsWith('--pretty=format:')) formatStr = ctx.args[i].slice(16);
+            else if (ctx.args[i] === '--pretty=oneline') oneline = true;
+            else if (ctx.args[i]?.startsWith('--pretty=')) formatStr = ctx.args[i].slice(9);
           }
           const commits = await git.log({ fs, dir, depth: maxCount });
           for (const c of commits) {
-            if (oneline) {
+            if (formatStr) {
+              ctx.stdout += formatCommit(c, formatStr) + '\n';
+            } else if (oneline) {
               ctx.stdout += `${c.oid.slice(0, 7)} ${c.commit.message.trim()}\n`;
             } else {
               ctx.stdout += `commit ${c.oid}\n`;
@@ -558,16 +674,18 @@ export const gitCmd: Command = {
           // Parse flags and positional args
           let cached = false;
           let nameOnlyFlag = false;
+          let nameStatusFlag = false;
           let statFlag = false;
           const positional: string[] = [];
           for (let i = 1; i < ctx.args.length; i++) {
             const a = ctx.args[i];
             if (a === '--cached' || a === '--staged') cached = true;
             else if (a === '--name-only') nameOnlyFlag = true;
+            else if (a === '--name-status') nameStatusFlag = true;
             else if (a === '--stat') statFlag = true;
             else if (!a.startsWith('-')) positional.push(a);
           }
-          const diffOpts: DiffOpts = { nameOnly: nameOnlyFlag, stat: statFlag };
+          const diffOpts: DiffOpts = { nameOnly: nameOnlyFlag, nameStatus: nameStatusFlag, stat: statFlag };
 
           if (cached) {
             // git diff --cached: staged vs HEAD
@@ -670,22 +788,44 @@ export const gitCmd: Command = {
 
         case 'branch': {
           const branchArgs = ctx.args.slice(1);
-          if (branchArgs.length > 0 && !branchArgs[0].startsWith('-')) {
-            const newBranch = branchArgs[0];
+          let showAll = false;
+          let showRemote = false;
+          for (const ba of branchArgs) {
+            if (ba === '-a' || ba === '--all') showAll = true;
+            if (ba === '-r' || ba === '--remotes') showRemote = true;
+          }
+          const nonFlagArgs = branchArgs.filter(a => !a.startsWith('-'));
+          if (nonFlagArgs.length > 0 && !showAll && !showRemote) {
+            if (branchArgs[0] === '-d' || branchArgs[0] === '-D') {
+              const delBranch = nonFlagArgs[0];
+              if (!delBranch) { ctx.stderr = 'fatal: branch name required\n'; return 1; }
+              await git.deleteBranch({ fs, dir, ref: delBranch });
+              ctx.stdout += `Deleted branch ${delBranch}.\n`;
+              break;
+            }
+            const newBranch = nonFlagArgs[0];
             await git.branch({ fs, dir, ref: newBranch });
             break;
           }
-          if (branchArgs[0] === '-d' || branchArgs[0] === '-D') {
-            const delBranch = branchArgs[1];
-            if (!delBranch) { ctx.stderr = 'fatal: branch name required\n'; return 1; }
-            await git.deleteBranch({ fs, dir, ref: delBranch });
-            ctx.stdout += `Deleted branch ${delBranch}.\n`;
-            break;
+          if (!showRemote) {
+            const branches = await git.listBranches({ fs, dir });
+            const current = await git.currentBranch({ fs, dir });
+            for (const b of branches) {
+              ctx.stdout += (b === current ? '* ' : '  ') + b + '\n';
+            }
           }
-          const branches = await git.listBranches({ fs, dir });
-          const current = await git.currentBranch({ fs, dir });
-          for (const b of branches) {
-            ctx.stdout += (b === current ? '* ' : '  ') + b + '\n';
+          if (showAll || showRemote) {
+            try {
+              const remotes = await git.listRemotes({ fs, dir });
+              for (const r of remotes) {
+                try {
+                  const remoteBranches = await git.listBranches({ fs, dir, remote: r.remote });
+                  for (const b of remoteBranches) {
+                    ctx.stdout += `  remotes/${r.remote}/${b}\n`;
+                  }
+                } catch {}
+              }
+            } catch {}
           }
           break;
         }
@@ -928,6 +1068,15 @@ export const gitCmd: Command = {
           }
           break;
         }
+
+        case 'stash':
+          return gitStashHandler(ctx, fs, dir);
+
+        case 'reset':
+          return gitResetHandler(ctx, fs, dir);
+
+        case 'tag':
+          return gitTagHandler(ctx, fs, dir);
 
         default:
           ctx.stderr = `git: '${subcommand}' is not a git command\n`;

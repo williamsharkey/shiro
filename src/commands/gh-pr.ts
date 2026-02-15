@@ -5,7 +5,7 @@ import { ghApi, parseFlags, getRepoFromFlags, detectRepo, timeAgo, isDryRun } fr
 const VALID_SUBS = 'list, create, view, merge, close, reopen, comment, diff, checks, review, edit, ready';
 const VALUE_FLAGS = [
   'state', 'L', 'limit', 'title', 'body', 'base', 'head', 'repo', 'R',
-  'json', 't', 'b', 'add-label', 'remove-label',
+  'json', 't', 'b', 'add-label', 'remove-label', 'label', 'reviewer', 'assignee',
 ];
 
 export async function ghPrHandler(ctx: CommandContext, token: string): Promise<number> {
@@ -73,6 +73,7 @@ Commands:
       const body = flags['body'] || flags['b'] || '';
       const baseBranch = flags['base'] || 'main';
       let head = flags['head'] || '';
+      const draft = flags['draft'] === 'true';
       if (!title) {
         ctx.stderr = 'error: --title is required\n';
         return 1;
@@ -92,13 +93,32 @@ Commands:
         ctx.stdout += `  title: ${JSON.stringify(title)}\n`;
         ctx.stdout += `  head: ${head} -> base: ${baseBranch}\n`;
         if (body) ctx.stdout += `  body: ${JSON.stringify(body)}\n`;
+        if (draft) ctx.stdout += `  draft: true\n`;
+        if (flags['label']) ctx.stdout += `  labels: ${flags['label']}\n`;
+        if (flags['reviewer']) ctx.stdout += `  reviewers: ${flags['reviewer']}\n`;
+        if (flags['assignee']) ctx.stdout += `  assignees: ${flags['assignee']}\n`;
         return 0;
       }
-      const { status, data } = await ghApi(token, 'POST', `${base}/pulls`, {
-        title, body, head, base: baseBranch,
-      });
+      const createPayload: any = { title, body, head, base: baseBranch };
+      if (draft) createPayload.draft = true;
+      const { status, data } = await ghApi(token, 'POST', `${base}/pulls`, createPayload);
       if (status === 201) {
         ctx.stdout = `Created PR #${data.number}: ${data.title}\n${data.html_url}\n`;
+        // Add labels after creation
+        if (flags['label']) {
+          const labels = flags['label'].split(',').map((l: string) => l.trim());
+          await ghApi(token, 'POST', `${base}/issues/${data.number}/labels`, { labels });
+        }
+        // Request reviewers
+        if (flags['reviewer']) {
+          const reviewers = flags['reviewer'].split(',').map((r: string) => r.trim());
+          await ghApi(token, 'POST', `${base}/pulls/${data.number}/requested_reviewers`, { reviewers });
+        }
+        // Add assignees
+        if (flags['assignee']) {
+          const assignees = flags['assignee'].split(',').map((a: string) => a.trim());
+          await ghApi(token, 'POST', `${base}/issues/${data.number}/assignees`, { assignees });
+        }
       } else {
         ctx.stderr = `error: failed to create PR (HTTP ${status}): ${data?.message || JSON.stringify(data?.errors)}\n`;
         return 1;
@@ -129,14 +149,16 @@ Commands:
     case 'merge': {
       const num = positional[0];
       if (!num) {
-        ctx.stderr = 'usage: gh pr merge <number> [--merge|--squash|--rebase] [--dry-run]\n';
+        ctx.stderr = 'usage: gh pr merge <number> [--merge|--squash|--rebase] [--delete-branch] [--dry-run]\n';
         return 1;
       }
       let mergeMethod = 'merge';
       if (flags['squash'] === 'true') mergeMethod = 'squash';
       if (flags['rebase'] === 'true') mergeMethod = 'rebase';
+      const deleteBranch = flags['delete-branch'] === 'true' || flags['d'] === 'true';
       if (isDryRun(flags)) {
         ctx.stdout = `[dry-run] Would merge PR #${num} (${mergeMethod})\n`;
+        if (deleteBranch) ctx.stdout += `[dry-run] Would delete head branch\n`;
         return 0;
       }
       const { status, data } = await ghApi(token, 'PUT', `${base}/pulls/${num}/merge`, {
@@ -144,6 +166,17 @@ Commands:
       });
       if (status === 200) {
         ctx.stdout = `Merged PR #${num} (${mergeMethod})\n`;
+        if (deleteBranch) {
+          // Get the PR to find head branch
+          const { data: prData } = await ghApi(token, 'GET', `${base}/pulls/${num}`);
+          const headBranch = prData?.head?.ref;
+          if (headBranch) {
+            const { status: delStatus } = await ghApi(token, 'DELETE', `${base}/git/refs/heads/${headBranch}`);
+            if (delStatus === 204) {
+              ctx.stdout += `Deleted branch ${headBranch}\n`;
+            }
+          }
+        }
       } else {
         ctx.stderr = `error: merge failed (HTTP ${status}): ${data?.message || ''}\n`;
         return 1;

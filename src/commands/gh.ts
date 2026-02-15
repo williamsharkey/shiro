@@ -3,6 +3,7 @@ import { Command, CommandContext } from './index';
 import { ghApiHandler } from './gh-api';
 import { ghIssueHandler } from './gh-issue';
 import { ghPrHandler } from './gh-pr';
+import { ghReleaseHandler } from './gh-release';
 
 export function getToken(ctx: CommandContext): string {
   return ctx.env['GITHUB_TOKEN'] || ctx.env['GH_TOKEN']
@@ -113,6 +114,7 @@ export const ghCmd: Command = {
 Commands:
   pr       Pull requests (list, create, view, merge, close, comment, diff, checks, review, edit, ready)
   issue    Issues (list, create, view, close, reopen, comment, edit, delete, lock, label)
+  release  Releases (list, create, view)
   api      Make GitHub API requests
   auth     Authentication (status, login, logout)
   repo     Repository info (view)
@@ -208,6 +210,9 @@ Commands:
 
       case 'issue':
         return ghIssueHandler(ctx, token);
+
+      case 'release':
+        return ghReleaseHandler(ctx, token);
 
       case 'api':
         return ghApiHandler(ctx, token);

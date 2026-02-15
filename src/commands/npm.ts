@@ -407,12 +407,13 @@ async function createBinSymlinks(
 }
 
 async function npmInstall(ctx: CommandContext): Promise<number> {
-  // Check for global flag
+  // Check for global flag and save-dev
   const isGlobal = ctx.args.includes('-g') || ctx.args.includes('--global');
+  const saveDev = ctx.args.includes('-D') || ctx.args.includes('--save-dev');
 
-  // Filter out flags, including -g/--global
+  // Filter out flags, including -g/--global, -D/--save-dev
   const packagesToInstall = ctx.args.slice(1).filter(arg =>
-    !arg.startsWith('--') && arg !== '-g'
+    !arg.startsWith('--') && arg !== '-g' && arg !== '-D'
   );
 
   if (isGlobal) {
@@ -448,15 +449,32 @@ async function npmInstall(ctx: CommandContext): Promise<number> {
     ctx.stdout += 'Installing dependencies...\n';
   } else {
     // Install specific packages
-    if (!pkg.dependencies) pkg.dependencies = {};
+    const targetSection = saveDev ? 'devDependencies' : 'dependencies';
+    if (!pkg[targetSection]) pkg[targetSection] = {};
 
     for (const spec of packagesToInstall) {
-      const [name, version] = spec.includes('@') && !spec.startsWith('@')
-        ? spec.split('@')
-        : [spec, 'latest'];
+      let name: string, version: string;
+      if (spec.startsWith('@')) {
+        // Scoped package: @scope/pkg or @scope/pkg@version
+        const lastAt = spec.lastIndexOf('@');
+        if (lastAt > 0) {
+          name = spec.slice(0, lastAt);
+          version = spec.slice(lastAt + 1);
+        } else {
+          name = spec;
+          version = 'latest';
+        }
+      } else if (spec.includes('@')) {
+        const atIdx = spec.indexOf('@');
+        name = spec.slice(0, atIdx);
+        version = spec.slice(atIdx + 1);
+      } else {
+        name = spec;
+        version = 'latest';
+      }
 
       depsToResolve[name] = version;
-      pkg.dependencies[name] = version === 'latest' ? '*' : version;
+      pkg[targetSection]![name] = version === 'latest' ? '*' : version;
     }
 
     // Save updated package.json
@@ -525,9 +543,24 @@ async function npmInstallGlobal(
 
   const depsToResolve: Record<string, string> = {};
   for (const spec of packagesToInstall) {
-    const [name, version] = spec.includes('@') && !spec.startsWith('@')
-      ? spec.split('@')
-      : [spec, 'latest'];
+    let name: string, version: string;
+    if (spec.startsWith('@')) {
+      const lastAt = spec.lastIndexOf('@');
+      if (lastAt > 0) {
+        name = spec.slice(0, lastAt);
+        version = spec.slice(lastAt + 1);
+      } else {
+        name = spec;
+        version = 'latest';
+      }
+    } else if (spec.includes('@')) {
+      const atIdx = spec.indexOf('@');
+      name = spec.slice(0, atIdx);
+      version = spec.slice(atIdx + 1);
+    } else {
+      name = spec;
+      version = 'latest';
+    }
     depsToResolve[name] = version;
   }
 
