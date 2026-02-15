@@ -62,6 +62,9 @@ export function createFluffyFS(fs: FileSystem): FluffyFS {
         await fs.rmdir(path);
       }
     },
+    async chmod(path: string, mode: number): Promise<void> {
+      await fs.chmod(path, mode);
+    },
     resolvePath(path: string, cwd: string): string {
       return fs.resolvePath(path, cwd);
     },

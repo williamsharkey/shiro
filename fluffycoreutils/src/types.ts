@@ -15,6 +15,8 @@ export interface FluffyFS {
   rmdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
   /** Create a symbolic link. If not supported, ln will fall back to copy. */
   symlink?(target: string, path: string): Promise<void>;
+  /** Change file mode bits. */
+  chmod?(path: string, mode: number): Promise<void>;
   resolvePath(path: string, cwd: string): string;
 }
 

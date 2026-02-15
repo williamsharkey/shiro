@@ -222,6 +222,15 @@ export class Shell {
       if (compound.operator === '&&' && exitCode !== 0) continue;
       if (compound.operator === '||' && exitCode === 0) continue;
 
+      // Check if compound is a control structure BEFORE variable expansion
+      // (control structures handle their own expansion internally to support loop variables)
+      if (this.isControlStructure(compound.command.trim())) {
+        exitCode = await this.execControlStructure(compound.command.trim(), writeStdout, stderrWriter);
+        this.lastExitCode = exitCode;
+        this.env['?'] = String(exitCode);
+        continue;
+      }
+
       // Expand arithmetic, command substitution, and environment variables
       let expanded = this.expandArithmetic(compound.command);
       expanded = await this.expandCommandSubstitution(expanded, stderrWriter);
@@ -244,6 +253,62 @@ export class Shell {
 
         const cmdName = expandedArgs[0];
         const cmdArgs = expandedArgs.slice(1);
+
+        // Handle [[ ... ]] as inline test command
+        if (cmdName === '[[') {
+          const closingIdx = cmdArgs.indexOf(']]');
+          const testArgs = closingIdx >= 0 ? cmdArgs.slice(0, closingIdx) : cmdArgs;
+          exitCode = await this.evalTest(testArgs.join(' '));
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+
+        // Handle /bin/sh, /bin/bash, /bin/zsh — dispatch to shell
+        if (/^\/bin\/(sh|bash|zsh)$/.test(cmdName)) {
+          const cIdx = cmdArgs.findIndex(a => /^-\w*c$/.test(a));
+          if (cIdx >= 0 && cIdx + 1 < cmdArgs.length) {
+            // /bin/sh -c "command" → execute command
+            const shellCmd = cmdArgs.slice(cIdx + 1).join(' ');
+            exitCode = await this.execute(shellCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
+          } else {
+            // /bin/sh script.sh or /bin/sh (no args)
+            const scripts = cmdArgs.filter(a => !a.startsWith('-'));
+            if (scripts.length > 0) {
+              const scriptPath = this.fs.resolvePath(scripts[0], this.cwd);
+              try {
+                const content = await this.fs.readFile(scriptPath, 'utf8') as string;
+                const shCtx: CommandContext = { args: scripts.slice(1), fs: this.fs, cwd: this.cwd, env: this.env, stdin: '', stdout: '', stderr: '', shell: this, terminal: terminalOverride || this.terminal };
+                exitCode = await this.executeShellScript(content, scripts.slice(1), shCtx, writeStdout, stderrWriter);
+              } catch (e: any) {
+                stderrWriter(`shiro: ${scripts[0]}: ${e.message}\r\n`);
+                exitCode = 1;
+              }
+            } else {
+              exitCode = 0; // bare /bin/sh with flags only → no-op
+            }
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+
+        // Handle /usr/bin/env CMD ARGS → execute CMD ARGS
+        if (cmdName === '/usr/bin/env' || cmdName === '/bin/env') {
+          if (cmdArgs.length > 0) {
+            const envCmd = cmdArgs.join(' ');
+            exitCode = await this.execute(envCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
+          } else {
+            // bare env → print environment
+            exitCode = await this.execute('env', writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
 
         // Handle . as alias for source
         const effectiveCmdName = cmdName === '.' ? 'source' : cmdName;
@@ -484,13 +549,56 @@ export class Shell {
         continue;
       }
 
-      // Expand ${VAR}
+      // Expand ${VAR} and ${VAR:-default}, ${VAR:=default}, ${VAR:+alt}, ${VAR:?err}
       if (ch === '$' && line[i + 1] === '{') {
-        const m = line.slice(i).match(/^\$\{([A-Za-z_][A-Za-z0-9_]*)\}/);
-        if (m) {
-          result += this.env[m[1]] ?? '';
-          i += m[0].length;
-          continue;
+        // Count brace depth to find matching }
+        let depth = 0;
+        let j = i + 1;
+        let braceInSQ = false, braceInDQ = false;
+        while (j < line.length) {
+          const bc = line[j];
+          if (bc === "'" && !braceInDQ) braceInSQ = !braceInSQ;
+          else if (bc === '"' && !braceInSQ) braceInDQ = !braceInDQ;
+          else if (!braceInSQ && !braceInDQ) {
+            if (bc === '{') depth++;
+            else if (bc === '}') { depth--; if (depth === 0) break; }
+          }
+          j++;
+        }
+        if (depth === 0 && j < line.length) {
+          const inner = line.slice(i + 2, j); // content between ${ and }
+          // Parse: VAR[:]([-=+?])operand or just VAR
+          const opMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)(:?)([-=+?])(.*)$/s);
+          if (opMatch) {
+            const [, varName, colon, op, operand] = opMatch;
+            const val = this.env[varName];
+            const isUnset = val === undefined;
+            const isEmpty = val === '';
+            const check = colon ? (isUnset || isEmpty) : isUnset;
+            // Recursively expand operand (handles nested ${})
+            const expandedOperand = this.expandVars(operand);
+            switch (op) {
+              case '-': result += check ? expandedOperand : (val ?? ''); break;
+              case '=':
+                if (check) { this.env[varName] = expandedOperand; result += expandedOperand; }
+                else result += val ?? '';
+                break;
+              case '+': result += check ? '' : expandedOperand; break;
+              case '?':
+                if (check) throw new Error(`${varName}: ${expandedOperand || 'parameter not set'}`);
+                result += val ?? '';
+                break;
+            }
+            i = j + 1;
+            continue;
+          }
+          // Simple ${VAR}
+          const simpleMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)$/);
+          if (simpleMatch) {
+            result += this.env[simpleMatch[1]] ?? '';
+            i = j + 1;
+            continue;
+          }
         }
       }
 
@@ -569,6 +677,7 @@ export class Shell {
     let inSingle = false;
     let inDouble = false;
     let currentOp: '' | '&&' | '||' | ';' = '';
+    let depth = 0; // track control structure nesting (do/done, then/fi, {/})
     let i = 0;
 
     while (i < line.length) {
@@ -584,26 +693,41 @@ export class Shell {
       if (ch === '"' && !inSingle) { inDouble = !inDouble; current += ch; i++; continue; }
 
       if (!inSingle && !inDouble) {
-        if (ch === '&' && line[i + 1] === '&') {
-          if (current.trim()) result.push({ operator: currentOp, command: current.trim() });
-          currentOp = '&&';
-          current = '';
-          i += 2;
-          continue;
+        // Track control structure keywords to avoid splitting inside them
+        // Only match at word boundary: beginning of string or after whitespace/;
+        const prevCh = i > 0 ? line[i - 1] : ' ';
+        if (/[\s;]/.test(prevCh) || i === 0) {
+          const rest = line.slice(i);
+          const wordMatch = rest.match(/^(for|while|until|if|case|do|then|done|fi|esac)\b/);
+          if (wordMatch) {
+            const word = wordMatch[1];
+            if (word === 'for' || word === 'while' || word === 'until' || word === 'if' || word === 'case') depth++;
+            else if (word === 'done' || word === 'fi' || word === 'esac') depth--;
+          }
         }
-        if (ch === '|' && line[i + 1] === '|') {
-          if (current.trim()) result.push({ operator: currentOp, command: current.trim() });
-          currentOp = '||';
-          current = '';
-          i += 2;
-          continue;
-        }
-        if (ch === ';') {
-          if (current.trim()) result.push({ operator: currentOp, command: current.trim() });
-          currentOp = ';';
-          current = '';
-          i++;
-          continue;
+
+        if (depth <= 0) {
+          if (ch === '&' && line[i + 1] === '&') {
+            if (current.trim()) result.push({ operator: currentOp, command: current.trim() });
+            currentOp = '&&';
+            current = '';
+            i += 2;
+            continue;
+          }
+          if (ch === '|' && line[i + 1] === '|') {
+            if (current.trim()) result.push({ operator: currentOp, command: current.trim() });
+            currentOp = '||';
+            current = '';
+            i += 2;
+            continue;
+          }
+          if (ch === ';') {
+            if (current.trim()) result.push({ operator: currentOp, command: current.trim() });
+            currentOp = ';';
+            current = '';
+            i++;
+            continue;
+          }
         }
       }
 
@@ -779,9 +903,16 @@ export class Shell {
       } else if (input[i] === '$' && input[i + 1] === '(') {
         let depth = 1;
         let j = i + 2;
+        let subSQ = false, subDQ = false;
         while (j < input.length && depth > 0) {
-          if (input[j] === '(') depth++;
-          if (input[j] === ')') depth--;
+          const sc = input[j];
+          if (sc === '\\' && !subSQ) { j += 2; continue; }
+          if (sc === "'" && !subDQ) { subSQ = !subSQ; j++; continue; }
+          if (sc === '"' && !subSQ) { subDQ = !subDQ; j++; continue; }
+          if (!subSQ && !subDQ) {
+            if (sc === '(') depth++;
+            if (sc === ')') depth--;
+          }
           j++;
         }
         const subCmd = input.slice(i + 2, j - 1);
@@ -1013,7 +1144,7 @@ export class Shell {
   // ─── CONTROL STRUCTURES ───────────────────────────────────────────────────
 
   private isControlStructure(input: string): boolean {
-    return /^if\s+/.test(input) || /^while\s+/.test(input) || /^for\s+/.test(input) || /^case\s+/.test(input);
+    return /^if\s+/.test(input) || /^while\s+/.test(input) || /^until\s+/.test(input) || /^for\s+/.test(input) || /^case\s+/.test(input);
   }
 
   private async execControlStructure(
@@ -1021,6 +1152,7 @@ export class Shell {
   ): Promise<number> {
     if (/^if\s+/.test(input)) return this.execIf(input, writeStdout, writeStderr);
     if (/^while\s+/.test(input)) return this.execWhile(input, writeStdout, writeStderr);
+    if (/^until\s+/.test(input)) return this.execUntil(input, writeStdout, writeStderr);
     if (/^for\s+/.test(input)) return this.execFor(input, writeStdout, writeStderr);
     if (/^case\s+/.test(input)) return this.execCase(input, writeStdout, writeStderr);
     return 0;
@@ -1030,6 +1162,10 @@ export class Shell {
     condition: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void
   ): Promise<number> {
     const trimmed = condition.trim();
+    // [[ ... ]] syntax (bash double-bracket test)
+    if (trimmed.startsWith('[[') && trimmed.endsWith(']]')) {
+      return this.evalTest(trimmed.slice(2, -2).trim());
+    }
     // [ ... ] syntax
     if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
       return this.evalTest(trimmed.slice(1, -1).trim());
@@ -1156,6 +1292,42 @@ export class Shell {
     let iter = 0;
     while (iter++ < 10000) {
       if ((await this.evalCondition(condMatch[1], writeStdout, writeStderr)) !== 0) break;
+      if (body.trim()) await this.execute(body, writeStdout, writeStderr);
+    }
+    return 0;
+  }
+
+  private async execUntil(
+    input: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void
+  ): Promise<number> {
+    const lines = input.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+
+    // Single-line: until <cond>; do <cmd>; done
+    if (lines.length === 1) {
+      const m = lines[0].match(/^until\s+(.+?);\s*do\s+(.+?);\s*done$/);
+      if (m) {
+        let iter = 0;
+        while (iter++ < 10000) {
+          if ((await this.evalCondition(m[1], writeStdout, writeStderr)) === 0) break;
+          await this.execute(m[2], writeStdout, writeStderr);
+        }
+        return 0;
+      }
+    }
+
+    const condMatch = lines[0].match(/^until\s+(.+?)(?:;\s*do)?$/);
+    if (!condMatch) { writeStderr('until: syntax error\r\n'); return 1; }
+
+    let doIdx = -1, doneIdx = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i] === 'do' || lines[i].endsWith('; do')) doIdx = i;
+      if (lines[i] === 'done') doneIdx = i;
+    }
+
+    const body = lines.slice((doIdx >= 0 ? doIdx : 0) + 1, doneIdx >= 0 ? doneIdx : lines.length).join('\n');
+    let iter = 0;
+    while (iter++ < 10000) {
+      if ((await this.evalCondition(condMatch[1], writeStdout, writeStderr)) === 0) break;
       if (body.trim()) await this.execute(body, writeStdout, writeStderr);
     }
     return 0;

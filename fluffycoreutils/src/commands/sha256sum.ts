@@ -32,7 +32,8 @@ export const sha256sum: FluffyCommand = {
         }
 
         const hash = await sha256(content);
-        const marker = binary ? "*" : " ";
+        // Standard format: hash, two spaces, filename (or * for binary mode)
+        const marker = binary ? " *" : "  ";
         output.push(`${hash}${marker}${file === "-" ? "-" : file}`);
       }
 
@@ -51,17 +52,12 @@ export const sha256sum: FluffyCommand = {
   },
 };
 
-// SHA-256 using Web Crypto API (browser-native)
 async function sha256(str: string): Promise<string> {
-  // In browser environment with Web Crypto API
-  const g = globalThis as any;
-  if (typeof g.crypto !== "undefined" && g.crypto.subtle) {
-    const encoder = new g.TextEncoder();
-    const data = encoder.encode(str);
-    const hashBuffer = await g.crypto.subtle.digest("SHA-256", data);
-    const hashArray = Array.from(new g.Uint8Array(hashBuffer)) as number[];
-    const hashHex = hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
-    return hashHex;
+  if (typeof crypto !== "undefined" && crypto.subtle) {
+    const data = new TextEncoder().encode(str);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
   }
 
   // Fallback: simple hash (not cryptographically secure)

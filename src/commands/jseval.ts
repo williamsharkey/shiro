@@ -2106,11 +2106,78 @@ export const nodeCmd: Command = {
               let trimmed = cmd.trim();
               const shellMatch = trimmed.match(/^\/bin\/(?:sh|bash|zsh)\s+(?:-\w+\s+)*-\w*c\s+["']?(.+?)["']?$/);
               if (shellMatch) trimmed = shellMatch[1].trim();
+              // Version/detection checks
               if (/^git\s+--version$/.test(trimmed)) {
                 return { stdout: 'git version 2.47.0\n', stderr: '', status: 0 };
               }
               if (/^(which|command\s+-v)\s+git$/.test(trimmed)) {
                 return { stdout: '/usr/local/bin/git\n', stderr: '', status: 0 };
+              }
+              // pwd
+              if (trimmed === 'pwd') {
+                return { stdout: ctx.cwd + '\n', stderr: '', status: 0 };
+              }
+              // echo
+              if (/^echo\s/.test(trimmed) || trimmed === 'echo') {
+                const echoArg = trimmed === 'echo' ? '' : trimmed.slice(5);
+                // Expand env vars in echo args
+                const expanded = echoArg.replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (_, k: string) => ctx.env[k] || '');
+                return { stdout: expanded + '\n', stderr: '', status: 0 };
+              }
+              // cat <file> — read from fileCache for synchronous access
+              const catMatch = trimmed.match(/^cat\s+(.+)$/);
+              if (catMatch) {
+                const catPath = catMatch[1].trim().replace(/^["']|["']$/g, '');
+                const resolved = ctx.fs.resolvePath(catPath, ctx.cwd);
+                const cached = fileCache.get(resolved);
+                if (cached !== undefined) {
+                  return { stdout: cached, stderr: '', status: 0 };
+                }
+              }
+              // true / : → empty, status 0
+              if (trimmed === 'true' || trimmed === ':') {
+                return { stdout: '', stderr: '', status: 0 };
+              }
+              // false → status 1
+              if (trimmed === 'false') {
+                return { stdout: '', stderr: '', status: 1 };
+              }
+              // node --version / node -v
+              if (/^node\s+(--version|-v)$/.test(trimmed)) {
+                return { stdout: 'v20.0.0\n', stderr: '', status: 0 };
+              }
+              // npm --version
+              if (/^npm\s+--version$/.test(trimmed)) {
+                return { stdout: '10.0.0\n', stderr: '', status: 0 };
+              }
+              // uname variants
+              if (/^uname(\s|$)/.test(trimmed)) {
+                const flags = trimmed.slice(5).trim();
+                if (flags === '-s' || flags === '') return { stdout: 'Linux\n', stderr: '', status: 0 };
+                if (flags === '-m') return { stdout: 'x86_64\n', stderr: '', status: 0 };
+                if (flags === '-n') return { stdout: 'shiro\n', stderr: '', status: 0 };
+                if (flags === '-r') return { stdout: '0.1.0\n', stderr: '', status: 0 };
+                if (flags === '-a') return { stdout: 'Linux shiro 0.1.0 x86_64\n', stderr: '', status: 0 };
+              }
+              // which/command -v for known commands
+              const whichMatch = trimmed.match(/^(which|command\s+-v)\s+(\S+)$/);
+              if (whichMatch) {
+                const cmdName = whichMatch[2];
+                const knownCmds = ['node', 'npm', 'npx', 'git', 'cat', 'ls', 'grep', 'sed', 'find', 'echo',
+                  'mkdir', 'rm', 'cp', 'mv', 'touch', 'chmod', 'head', 'tail', 'sort', 'uniq', 'wc', 'tr',
+                  'tee', 'diff', 'env', 'which', 'test', 'sh', 'bash', 'vi', 'rg', 'curl', 'mktemp', 'jq',
+                  'tput', 'stty', 'gzip', 'gunzip', 'wget', 'pgrep', 'pkill', 'nproc', 'getconf', 'ed'];
+                if (knownCmds.includes(cmdName)) {
+                  return { stdout: `/usr/local/bin/${cmdName}\n`, stderr: '', status: 0 };
+                }
+              }
+              // git config
+              const gitConfigMatch = trimmed.match(/^git\s+config\s+(?:--global\s+)?(?:--get\s+)?(\S+)$/);
+              if (gitConfigMatch) {
+                const key = gitConfigMatch[1];
+                if (key === 'user.name') return { stdout: 'user\n', stderr: '', status: 0 };
+                if (key === 'user.email') return { stdout: 'user@shiro.computer\n', stderr: '', status: 0 };
+                return { stdout: '', stderr: '', status: 1 }; // unknown config key
               }
               return null;
             };
@@ -2554,7 +2621,11 @@ export const nodeCmd: Command = {
             hostname: () => 'shiro',
             type: () => 'Shiro',
             release: () => '0.1.0',
-            cpus: () => [{ model: 'Browser', speed: 0 }],
+            cpus: () => {
+              const count = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 4;
+              const cpu = { model: 'Browser vCPU', speed: 2400, times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 } };
+              return Array.from({ length: count }, () => ({ ...cpu }));
+            },
             totalmem: () => 0,
             freemem: () => 0,
             EOL: '\n',

@@ -318,6 +318,12 @@ async function main() {
         if (await fs.exists(shimPath)) continue;
         await fs.writeFile(shimPath, `#!/bin/sh\n${cmd} "$@"\n`);
       }
+      // Create /bin/sh, /bin/bash, /usr/bin/env so stat() checks pass
+      await fs.mkdir('/bin', { recursive: true });
+      await fs.mkdir('/usr/bin', { recursive: true });
+      if (!await fs.exists('/bin/sh')) await fs.writeFile('/bin/sh', '#!/bin/sh\n');
+      if (!await fs.exists('/bin/bash')) await fs.writeFile('/bin/bash', '#!/bin/bash\n');
+      if (!await fs.exists('/usr/bin/env')) await fs.writeFile('/usr/bin/env', '#!/bin/sh\n');
     } catch {}
   })();
 

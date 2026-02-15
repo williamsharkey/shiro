@@ -5,8 +5,9 @@ export const mkTempCmd: Command = {
   description: 'Create temporary file or directory',
   async exec(ctx) {
     let makeDir = false;
-    let parentDir = '/tmp';
+    let parentDir = '';
     let template = 'tmp.XXXXXX';
+    let suffix = '';
 
     let i = 0;
     while (i < ctx.args.length) {
@@ -17,19 +18,35 @@ export const mkTempCmd: Command = {
         parentDir = ctx.args[++i];
       } else if (arg === '-t' && ctx.args[i + 1]) {
         template = ctx.args[++i];
+      } else if (arg === '--suffix' && ctx.args[i + 1]) {
+        suffix = ctx.args[++i];
+      } else if (arg.startsWith('--suffix=')) {
+        suffix = arg.slice('--suffix='.length);
       } else if (!arg.startsWith('-')) {
         template = arg;
       }
       i++;
     }
 
-    const suffix = Math.random().toString(36).slice(2, 8);
-    const name = template.replace(/X{3,}/, suffix);
-    const resolvedParent = ctx.fs.resolvePath(parentDir, ctx.cwd);
-    const fullPath = resolvedParent + '/' + name;
+    // If template contains '/', extract directory part from template path
+    let dir: string;
+    let baseName: string;
+    const lastSlash = template.lastIndexOf('/');
+    if (lastSlash >= 0) {
+      dir = template.slice(0, lastSlash) || '/';
+      baseName = template.slice(lastSlash + 1);
+    } else {
+      dir = parentDir || '/tmp';
+      baseName = template;
+    }
+
+    const randomChars = Math.random().toString(36).slice(2, 8);
+    const name = baseName.replace(/X{3,}/, randomChars) + suffix;
+    const resolvedDir = ctx.fs.resolvePath(dir, ctx.cwd);
+    const fullPath = resolvedDir + '/' + name;
 
     try {
-      await ctx.fs.mkdir(resolvedParent, { recursive: true });
+      await ctx.fs.mkdir(resolvedDir, { recursive: true });
       if (makeDir) {
         await ctx.fs.mkdir(fullPath, { recursive: true });
       } else {
