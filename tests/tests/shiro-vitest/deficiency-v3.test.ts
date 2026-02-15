@@ -296,4 +296,27 @@ describe('Deficiency v3 fixes', () => {
       expect(exists).toBe(true);
     });
   });
+
+  // ─── Fix 19: subshell compound commands ─────────────────────────────────
+
+  describe('Fix 19: subshell with compound commands', () => {
+    it('(cd /tmp; echo $PWD); echo $PWD — env isolation', async () => {
+      shell.cwd = '/home/user';
+      const { output } = await run(shell, '(cd /tmp; echo $PWD); echo $PWD');
+      expect(output).toContain('/tmp');
+      expect(output).toContain('/home/user');
+    });
+
+    it('(echo a; echo b) preserves both outputs', async () => {
+      const { output } = await run(shell, '(echo a; echo b)');
+      expect(output).toContain('a');
+      expect(output).toContain('b');
+    });
+
+    it('(echo hello && echo world) with && inside parens', async () => {
+      const { output } = await run(shell, '(echo hello && echo world)');
+      expect(output).toContain('hello');
+      expect(output).toContain('world');
+    });
+  });
 });

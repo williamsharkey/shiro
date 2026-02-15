@@ -170,7 +170,7 @@ class IframeServerManager {
     }
 
     // Setup resource proxy listener (once per page)
-    this.setupResourceProxy();
+    this.ensureResourceProxy();
 
     // Resource interceptor script - MUST run first to catch resource loads
     // This intercepts fetch, XHR, and dynamically added script/link/img tags
@@ -622,7 +622,7 @@ class IframeServerManager {
    * Setup the resource proxy message listener (called once)
    * This handles vfs-fetch messages from iframes and serves resources from the virtual server
    */
-  private setupResourceProxy(): void {
+  ensureResourceProxy(): void {
     if (this.resourceProxySetup) return;
     this.resourceProxySetup = true;
 

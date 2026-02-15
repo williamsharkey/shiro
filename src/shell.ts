@@ -244,10 +244,26 @@ export class Shell {
         continue;
       }
 
+      // Check if compound is a subshell: (commands)
+      const trimmedCmd = compound.command.trim();
+      if (trimmedCmd.startsWith('(') && trimmedCmd.endsWith(')')) {
+        const inner = trimmedCmd.slice(1, -1).trim();
+        if (inner) {
+          const child = this.fork();
+          const result = await child.exec(inner);
+          if (result.stdout) writeStdout(result.stdout.replace(/\n/g, '\r\n'));
+          if (result.stderr) stderrWriter(result.stderr.replace(/\n/g, '\r\n'));
+          exitCode = result.exitCode;
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          continue;
+        }
+      }
+
       // Check if compound is a control structure BEFORE variable expansion
       // (control structures handle their own expansion internally to support loop variables)
-      if (this.isControlStructure(compound.command.trim())) {
-        exitCode = await this.execControlStructure(compound.command.trim(), writeStdout, stderrWriter);
+      if (this.isControlStructure(trimmedCmd)) {
+        exitCode = await this.execControlStructure(trimmedCmd, writeStdout, stderrWriter);
         this.lastExitCode = exitCode;
         this.env['?'] = String(exitCode);
         continue;
@@ -998,6 +1014,7 @@ export class Shell {
     let inDouble = false;
     let currentOp: '' | '&&' | '||' | ';' = '';
     let depth = 0; // track control structure nesting (do/done, then/fi, {/})
+    let parenDepth = 0; // track subshell ( ... ) nesting separately
     let i = 0;
 
     while (i < line.length) {
@@ -1013,6 +1030,18 @@ export class Shell {
       if (ch === '"' && !inSingle) { inDouble = !inDouble; current += ch; i++; continue; }
 
       if (!inSingle && !inDouble) {
+        // Track subshell parenthesized groups: ( ... )
+        // Only count '(' at operator positions (after whitespace/;/start), not after $ or word chars
+        const prevCh = i > 0 ? line[i - 1] : ' ';
+        if (ch === '(' && !/\w/.test(prevCh) && prevCh !== '$') {
+          parenDepth++;
+          current += ch; i++; continue;
+        }
+        if (ch === ')' && parenDepth > 0) {
+          parenDepth--;
+          current += ch; i++; continue;
+        }
+
         // Track {/} brace groups and function bodies
         if (ch === '{') {
           // Only count as depth if preceded by whitespace/; (not in ${VAR})
@@ -1027,7 +1056,6 @@ export class Shell {
 
         // Track control structure keywords to avoid splitting inside them
         // Only match at word boundary: beginning of string or after whitespace/;
-        const prevCh = i > 0 ? line[i - 1] : ' ';
         if (/[\s;]/.test(prevCh) || i === 0) {
           const rest = line.slice(i);
           const wordMatch = rest.match(/^(for|while|until|if|case|do|then|done|fi|esac)\b/);
@@ -1038,7 +1066,7 @@ export class Shell {
           }
         }
 
-        if (depth <= 0) {
+        if (depth <= 0 && parenDepth <= 0) {
           if (ch === '&' && line[i + 1] === '&') {
             if (current.trim()) result.push({ operator: currentOp, command: current.trim() });
             currentOp = '&&';

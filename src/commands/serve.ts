@@ -144,6 +144,7 @@ async function openInIframe(ctx: CommandContext, port: number, path: string = '/
 
     // Inject resource interceptor and navigation scripts
     html = injectIframeScripts(html, port);
+    iframeServer.ensureResourceProxy();
 
     // Set iframe content
     serverWindow.iframe.srcdoc = html;
@@ -222,6 +223,7 @@ async function openInSplit(ctx: CommandContext, port: number, path: string = '/'
     }
 
     html = injectIframeScripts(html, port);
+    iframeServer.ensureResourceProxy();
     split.iframe.srcdoc = html;
     split.iframe.setAttribute('data-virtual-path', path);
 
