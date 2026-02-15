@@ -15,6 +15,8 @@ export interface FluffyFS {
   rmdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
   /** Create a symbolic link. If not supported, ln will fall back to copy. */
   symlink?(target: string, path: string): Promise<void>;
+  /** Read a symbolic link target. */
+  readlink?(path: string): Promise<string>;
   /** Change file mode bits. */
   chmod?(path: string, mode: number): Promise<void>;
   resolvePath(path: string, cwd: string): string;
@@ -22,9 +24,11 @@ export interface FluffyFS {
 
 export interface FluffyEntry {
   name: string;
-  type: "file" | "dir";
+  type: "file" | "dir" | "symlink";
   size: number;
   mtime: number;
+  mode?: number;
+  target?: string; // symlink target
 }
 
 export interface FluffyStat {

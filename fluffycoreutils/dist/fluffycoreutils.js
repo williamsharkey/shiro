@@ -14,14 +14,14 @@ function parseArgs(n, e = []) {
       if (o.has(c) && a + 1 < n.length)
         s[c] = n[++a];
       else
-        for (let l = 0; l < c.length; l++) {
-          const d = c[l];
-          if (o.has(d)) {
-            const u = c.slice(l + 1);
-            u ? s[d] = u : a + 1 < n.length && (s[d] = n[++a]);
+        for (let d = 0; d < c.length; d++) {
+          const l = c[d];
+          if (o.has(l)) {
+            const u = c.slice(d + 1);
+            u ? s[l] = u : a + 1 < n.length && (s[l] = n[++a]);
             break;
           }
-          t[d] = !0;
+          t[l] = !0;
         }
     } else
       r.push(i);
@@ -175,38 +175,38 @@ Shell implementers: Parse array syntax at the variable expansion level.
       ), c = i.endsWith(`
 `) ? i.slice(0, -1).split(`
 `) : i.split(`
-`), l = [], d = parseBlocks(r);
-      if (d.begin) {
-        const u = executeAction(d.begin, [], a);
-        u && l.push(u);
+`), d = [], l = parseBlocks(r);
+      if (l.begin) {
+        const u = executeAction(l.begin, [], a);
+        u && d.push(u);
       }
       for (const u of c) {
         a.NR++;
         const p = typeof a.FS == "string" && a.FS !== " " ? new RegExp(a.FS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")) : /\s+/, f = a.FS === " " ? u.split(p).filter((h) => h !== "") : u.split(p);
-        if (a.NF = f.length, d.main) {
+        if (a.NF = f.length, l.main) {
           let h = !0;
-          if (d.mainPattern)
+          if (l.mainPattern)
             try {
-              h = new RegExp(d.mainPattern).test(u);
+              h = new RegExp(l.mainPattern).test(u);
             } catch {
               h = !1;
             }
           if (h) {
-            const m = executeAction(d.main, f, a);
-            m !== null && l.push(m);
+            const m = executeAction(l.main, f, a);
+            m !== null && d.push(m);
           }
-        } else if (!d.begin && !d.end) {
+        } else if (!l.begin && !l.end) {
           const h = executeAction(r, f, a);
-          h !== null && l.push(h);
+          h !== null && d.push(h);
         }
       }
-      if (d.end) {
-        const u = executeAction(d.end, [], a);
-        u && l.push(u);
+      if (l.end) {
+        const u = executeAction(l.end, [], a);
+        u && d.push(u);
       }
       return {
-        stdout: l.join(`
-`) + (l.length > 0 ? `
+        stdout: d.join(`
+`) + (d.length > 0 ? `
 ` : ""),
         stderr: "",
         exitCode: 0
@@ -335,12 +335,12 @@ function execStatement(n, e, t) {
   if (!s) return null;
   const r = s.match(/^for\s*\(\s*(\w+)\s+in\s+(\w+)\s*\)\s*(.+)$/);
   if (r) {
-    const [, i, c, l] = r, d = t.arrays[c];
-    if (!d) return null;
+    const [, i, c, d] = r, l = t.arrays[c];
+    if (!l) return null;
     let u = null;
-    for (const p of Object.keys(d)) {
+    for (const p of Object.keys(l)) {
       t.variables[i] = p;
-      const f = execStatement(l, e, t);
+      const f = execStatement(d, e, t);
       f !== null && (u = u !== null ? u + `
 ` + f : f);
     }
@@ -355,8 +355,8 @@ function execStatement(n, e, t) {
     if (!i || i === "")
       return e.join(t.OFS);
     if (i.includes(","))
-      return i.split(/\s*,\s*/).map((d) => {
-        let u = substituteVariables(d.trim(), e, t);
+      return i.split(/\s*,\s*/).map((l) => {
+        let u = substituteVariables(l.trim(), e, t);
         return u = evaluateArithmetic$1(u), u.replace(/^["'](.*)["']$/, "$1");
       }).join(t.OFS);
     {
@@ -366,30 +366,30 @@ function execStatement(n, e, t) {
   }
   const o = s.match(/^(\w+(?:\[[^\]]+\])?)(\+\+|--)$/);
   if (o) {
-    const [, i, c] = o, l = resolveFieldRefs(i, e), d = resolveVar(l, t);
-    return setVar(l, String(c === "++" ? d + 1 : d - 1), t), null;
+    const [, i, c] = o, d = resolveFieldRefs(i, e), l = resolveVar(d, t);
+    return setVar(d, String(c === "++" ? l + 1 : l - 1), t), null;
   }
   const a = s.match(/^(\w+(?:\[[^\]]+\])?)\s*([\+\-\*\/]?)=\s*(.+)$/);
   if (a) {
-    const [, i, c, l] = a, d = resolveFieldRefs(i, e);
-    let u = substituteVariables(l, e, t);
+    const [, i, c, d] = a, l = resolveFieldRefs(i, e);
+    let u = substituteVariables(d, e, t);
     u = evaluateArithmetic$1(u);
-    const p = parseFloat(u) || 0, f = resolveVar(d, t);
+    const p = parseFloat(u) || 0, f = resolveVar(l, t);
     switch (c) {
       case "+":
-        setVar(d, String(f + p), t);
+        setVar(l, String(f + p), t);
         break;
       case "-":
-        setVar(d, String(f - p), t);
+        setVar(l, String(f - p), t);
         break;
       case "*":
-        setVar(d, String(f * p), t);
+        setVar(l, String(f * p), t);
         break;
       case "/":
-        setVar(d, String(f / p), t);
+        setVar(l, String(f / p), t);
         break;
       default:
-        setVar(d, String(p), t);
+        setVar(l, String(p), t);
         break;
     }
     return null;
@@ -464,48 +464,48 @@ function formatPrintf(n, e, t) {
   }
   if (r.trim() && s.push(r.trim()), s.length === 0) return "";
   let c = s[0].trim().replace(/^["'](.*)["']$/, "$1");
-  const l = [];
+  const d = [];
   for (let p = 1; p < s.length; p++) {
     let f = substituteVariables(s[p].trim(), e, t);
-    f = evaluateArithmetic$1(f), l.push(f);
+    f = evaluateArithmetic$1(f), d.push(f);
   }
-  let d = c, u = 0;
-  return d = d.replace(/%(-)?(\d+)?(?:\.(\d+))?([sdifgex%])/g, (p, f, h, m, g) => {
+  let l = c, u = 0;
+  return l = l.replace(/%(-)?(\d+)?(?:\.(\d+))?([sdifgex%])/g, (p, f, h, m, g) => {
     if (g === "%") return "%";
-    if (u >= l.length) return p;
-    const y = l[u++];
-    let x;
+    if (u >= d.length) return p;
+    const x = d[u++];
+    let y;
     switch (g) {
       case "s":
-        x = y;
+        y = x;
         break;
       case "d":
       // decimal integer
       case "i":
-        x = String(parseInt(y) || 0);
+        y = String(parseInt(x) || 0);
         break;
       case "f":
-        const $ = parseFloat(y) || 0;
-        x = m ? $.toFixed(parseInt(m)) : String($);
+        const w = parseFloat(x) || 0;
+        y = m ? w.toFixed(parseInt(m)) : String(w);
         break;
       case "g":
       // general format
       case "e":
       // exponential
       case "x":
-        x = y;
+        y = x;
         break;
       default:
-        x = y;
+        y = x;
     }
     if (h) {
-      const $ = parseInt(h);
-      f ? x = x.padEnd($, " ") : x = x.padStart($, " ");
+      const w = parseInt(h);
+      f ? y = y.padEnd(w, " ") : y = y.padStart(w, " ");
     }
-    return x;
-  }), d = d.replace(/\\n/g, `
-`), d = d.replace(/\\t/g, "	"), d = d.replace(/\\r/g, "\r"), d = d.replace(/\\\\/g, "\\"), d.endsWith(`
-`) && (d = d.slice(0, -1)), d;
+    return y;
+  }), l = l.replace(/\\n/g, `
+`), l = l.replace(/\\t/g, "	"), l = l.replace(/\\r/g, "\r"), l = l.replace(/\\\\/g, "\\"), l.endsWith(`
+`) && (l = l.slice(0, -1)), l;
 }
 function processStringFunctions(n, e, t) {
   let s = n;
@@ -513,33 +513,33 @@ function processStringFunctions(n, e, t) {
     const a = o ? substituteVariables(o, e, t) : e.join(t.OFS);
     return String(a.length);
   }), s = s.replace(/substr\s*\(\s*([^,)]+)\s*,\s*([^,)]+)(?:\s*,\s*([^)]+))?\s*\)/g, (r, o, a, i) => {
-    const c = substituteVariables(o.trim(), e, t), l = parseInt(substituteVariables(a.trim(), e, t)) - 1, d = i ? parseInt(substituteVariables(i.trim(), e, t)) : void 0;
-    return d ? c.slice(l, l + d) : c.slice(l);
+    const c = substituteVariables(o.trim(), e, t), d = parseInt(substituteVariables(a.trim(), e, t)) - 1, l = i ? parseInt(substituteVariables(i.trim(), e, t)) : void 0;
+    return l ? c.slice(d, d + l) : c.slice(d);
   }), s = s.replace(/index\s*\(\s*([^,)]+)\s*,\s*([^)]+)\s*\)/g, (r, o, a) => {
-    const i = substituteVariables(o.trim(), e, t), c = substituteVariables(a.trim(), e, t).replace(/^["'](.*)["']$/, "$1"), l = i.indexOf(c);
-    return String(l === -1 ? 0 : l + 1);
+    const i = substituteVariables(o.trim(), e, t), c = substituteVariables(a.trim(), e, t).replace(/^["'](.*)["']$/, "$1"), d = i.indexOf(c);
+    return String(d === -1 ? 0 : d + 1);
   }), s = s.replace(/tolower\s*\(\s*([^)]*)\s*\)/g, (r, o) => substituteVariables(o, e, t).toLowerCase()), s = s.replace(/toupper\s*\(\s*([^)]*)\s*\)/g, (r, o) => substituteVariables(o, e, t).toUpperCase()), s = s.replace(/split\s*\(\s*([^,)]+)\s*,\s*([^,)]+)(?:\s*,\s*([^)]+))?\s*\)/g, (r, o, a, i) => {
-    const c = substituteVariables(o.trim(), e, t), l = i ? substituteVariables(i.trim(), e, t).replace(/^["'](.*)["']$/, "$1") : t.FS, d = c.split(new RegExp(l));
-    return String(d.length);
+    const c = substituteVariables(o.trim(), e, t), d = i ? substituteVariables(i.trim(), e, t).replace(/^["'](.*)["']$/, "$1") : t.FS, l = c.split(new RegExp(d));
+    return String(l.length);
   }), s = s.replace(/gsub\s*\(\s*([^,)]+)\s*,\s*([^,)]+)(?:\s*,\s*([^)]+))?\s*\)/g, (r, o, a, i) => {
-    const c = substituteVariables(o.trim(), e, t).replace(/^["'](.*)["']$/, "$1"), l = substituteVariables(a.trim(), e, t).replace(/^["'](.*)["']$/, "$1"), d = i ? substituteVariables(i.trim(), e, t) : e[0] || "";
+    const c = substituteVariables(o.trim(), e, t).replace(/^["'](.*)["']$/, "$1"), d = substituteVariables(a.trim(), e, t).replace(/^["'](.*)["']$/, "$1"), l = i ? substituteVariables(i.trim(), e, t) : e[0] || "";
     try {
-      return d.replace(new RegExp(c, "g"), l);
+      return l.replace(new RegExp(c, "g"), d);
     } catch {
-      return d;
+      return l;
     }
   }), s = s.replace(/sub\s*\(\s*([^,)]+)\s*,\s*([^,)]+)(?:\s*,\s*([^)]+))?\s*\)/g, (r, o, a, i) => {
-    const c = substituteVariables(o.trim(), e, t).replace(/^["'](.*)["']$/, "$1"), l = substituteVariables(a.trim(), e, t).replace(/^["'](.*)["']$/, "$1"), d = i ? substituteVariables(i.trim(), e, t) : e[0] || "";
+    const c = substituteVariables(o.trim(), e, t).replace(/^["'](.*)["']$/, "$1"), d = substituteVariables(a.trim(), e, t).replace(/^["'](.*)["']$/, "$1"), l = i ? substituteVariables(i.trim(), e, t) : e[0] || "";
     try {
-      return d.replace(new RegExp(c), l);
+      return l.replace(new RegExp(c), d);
     } catch {
-      return d;
+      return l;
     }
   }), s = s.replace(/match\s*\(\s*([^,)]+)\s*,\s*([^)]+)\s*\)/g, (r, o, a) => {
     const i = substituteVariables(o.trim(), e, t), c = substituteVariables(a.trim(), e, t).replace(/^["'](.*)["']$/, "$1");
     try {
-      const l = i.match(new RegExp(c));
-      return l ? String(l.index + 1) : "0";
+      const d = i.match(new RegExp(c));
+      return d ? String(d.index + 1) : "0";
     } catch {
       return "0";
     }
@@ -560,9 +560,9 @@ const base64 = {
       );
       let c;
       if (r) {
-        const l = a ? i.replace(/[^A-Za-z0-9+/=]/g, "") : i.replace(/\s/g, "");
+        const d = a ? i.replace(/[^A-Za-z0-9+/=]/g, "") : i.replace(/\s/g, "");
         try {
-          c = globalThis.atob(l);
+          c = globalThis.atob(d);
         } catch {
           return {
             stdout: "",
@@ -572,15 +572,15 @@ const base64 = {
           };
         }
       } else {
-        const l = globalThis.btoa(i);
+        const d = globalThis.btoa(i);
         if (o > 0) {
-          const d = [];
-          for (let u = 0; u < l.length; u += o)
-            d.push(l.substring(u, u + o));
-          c = d.join(`
+          const l = [];
+          for (let u = 0; u < d.length; u += o)
+            l.push(d.substring(u, u + o));
+          c = l.join(`
 `);
         } else
-          c = l;
+          c = d;
       }
       return {
         stdout: c + (c ? `
@@ -634,7 +634,7 @@ const base64 = {
     if (!i.trim())
       return { stdout: "", stderr: "", exitCode: 0 };
     const c = i.split(`
-`).map((p) => p.trim()).filter(Boolean), l = [], d = /* @__PURE__ */ new Map();
+`).map((p) => p.trim()).filter(Boolean), d = [], l = /* @__PURE__ */ new Map();
     let u = a;
     o && (u = 20);
     for (const p of c) {
@@ -645,15 +645,15 @@ const base64 = {
         continue;
       }
       if (p === "scale") {
-        l.push(String(u));
+        d.push(String(u));
         continue;
       }
       const f = p.match(/^([a-z_][a-z0-9_]*)\s*=\s*(.+)$/i);
       if (f) {
         const h = f[1], m = f[2];
         try {
-          const g = evaluateExpression$1(m, d, u, o);
-          d.set(h, g);
+          const g = evaluateExpression$1(m, l, u, o);
+          l.set(h, g);
           continue;
         } catch (g) {
           return {
@@ -665,8 +665,8 @@ const base64 = {
         }
       }
       try {
-        const h = evaluateExpression$1(p, d, u, o), m = formatNumber$1(h, u);
-        l.push(m);
+        const h = evaluateExpression$1(p, l, u, o), m = formatNumber$1(h, u);
+        d.push(m);
       } catch (h) {
         return {
           stdout: "",
@@ -677,8 +677,8 @@ const base64 = {
       }
     }
     return {
-      stdout: l.join(`
-`) + (l.length > 0 ? `
+      stdout: d.join(`
+`) + (d.length > 0 ? `
 ` : ""),
       stderr: "",
       exitCode: 0
@@ -900,12 +900,12 @@ collect2: error: ld returned 1 exit status
 `,
         exitCode: 1
       };
-    const l = e.fs.resolvePath(a, e.cwd), d = /printf\s*\(\s*["'].*[Hh]ello.*["']/.test(c) || /puts\s*\(\s*["'].*[Hh]ello.*["']/.test(c);
+    const d = e.fs.resolvePath(a, e.cwd), l = /printf\s*\(\s*["'].*[Hh]ello.*["']/.test(c) || /puts\s*\(\s*["'].*[Hh]ello.*["']/.test(c);
     let u = `#!/bin/sh
 `;
-    return d ? u += `echo 'Hello, World!'
+    return l ? u += `echo 'Hello, World!'
 ` : u += `# Compiled binary stub
-`, await e.fs.writeFile(l, u), {
+`, await e.fs.writeFile(d, u), {
       stdout: "",
       stderr: "",
       exitCode: 0
@@ -917,36 +917,83 @@ collect2: error: ld returned 1 exit status
   async exec(n, e) {
     return gcc.exec(n, e);
   }
-}, chmod = {
+};
+function applySymbolicMode(n, e) {
+  const t = n.split(",");
+  let s = e;
+  for (const r of t) {
+    const o = r.match(/^([ugoa]*)([+\-=])([rwxXst]*)$/);
+    if (!o) return null;
+    const [, a, i, c] = o, d = a || "ugo";
+    let l = 0;
+    c.includes("r") && (l |= 4), c.includes("w") && (l |= 2), c.includes("x") && (l |= 1), c.includes("X") && (e & 73) !== 0 && (l |= 1);
+    for (const u of d) {
+      let p = 0;
+      u === "u" ? p = 6 : u === "g" ? p = 3 : u === "o" && (p = 0);
+      const f = l << p;
+      switch (i) {
+        case "+":
+          s |= f;
+          break;
+        case "-":
+          s &= ~f;
+          break;
+        case "=":
+          s = s & ~(7 << p) | f;
+          break;
+      }
+    }
+  }
+  return s;
+}
+const chmod = {
   name: "chmod",
   description: "Change file mode bits",
   async exec(n, e) {
-    const { flags: t, positional: s } = parseArgs(n), r = t.R;
-    if (s.length < 2)
+    let t = !1, s = "";
+    const r = [];
+    for (let a = 0; a < n.length; a++) {
+      const i = n[a];
+      i === "-R" || i === "--recursive" ? t = !0 : s ? r.push(i) : s = i;
+    }
+    if (!s || r.length === 0)
       return { stdout: "", stderr: `chmod: missing operand
 `, exitCode: 1 };
-    const o = s[0], a = s.slice(1), i = parseInt(o, 8);
-    if (isNaN(i))
-      return { stdout: "", stderr: `chmod: invalid mode: '${o}'
-`, exitCode: 1 };
-    async function c(l) {
-      const d = e.fs.resolvePath(l, e.cwd);
-      if (r)
+    async function o(a, i) {
+      const c = e.fs.resolvePath(a, e.cwd);
+      if (e.fs.chmod && await e.fs.chmod(c, i), t)
         try {
-          if ((await e.fs.stat(d)).type === "dir") {
-            const p = await e.fs.readdir(d);
-            for (const f of p)
-              await c(d + "/" + f.name);
+          if ((await e.fs.stat(c)).type === "dir") {
+            const l = await e.fs.readdir(c);
+            for (const u of l)
+              await o(c + "/" + u.name, i);
           }
         } catch {
         }
     }
     try {
-      for (const l of a)
-        await c(l);
+      if (/^[0-7]+$/.test(s)) {
+        const a = parseInt(s, 8);
+        for (const i of r)
+          await o(i, a);
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+      for (const a of r) {
+        const i = e.fs.resolvePath(a, e.cwd);
+        let c = 420;
+        try {
+          c = (await e.fs.stat(i)).mode;
+        } catch {
+        }
+        const d = applySymbolicMode(s, c);
+        if (d === null)
+          return { stdout: "", stderr: `chmod: invalid mode: '${s}'
+`, exitCode: 1 };
+        await o(a, d);
+      }
       return { stdout: "", stderr: "", exitCode: 0 };
-    } catch (l) {
-      return { stdout: "", stderr: `chmod: ${l instanceof Error ? l.message : l}
+    } catch (a) {
+      return { stdout: "", stderr: `chmod: ${a instanceof Error ? a.message : a}
 `, exitCode: 1 };
     }
   }
@@ -964,8 +1011,8 @@ collect2: error: ld returned 1 exit status
     i[0], i[1];
     const c = [];
     try {
-      for (const l of o)
-        a && c.push(`ownership of '${l}' retained as ${r}`);
+      for (const d of o)
+        a && c.push(`ownership of '${d}' retained as ${r}`);
       return {
         stdout: c.join(`
 `) + (c.length > 0 ? `
@@ -973,10 +1020,10 @@ collect2: error: ld returned 1 exit status
         stderr: "",
         exitCode: 0
       };
-    } catch (l) {
+    } catch (d) {
       return {
         stdout: "",
-        stderr: `chown: ${l instanceof Error ? l.message : l}
+        stderr: `chown: ${d instanceof Error ? d.message : d}
 `,
         exitCode: 1
       };
@@ -1003,17 +1050,17 @@ collect2: error: ld returned 1 exit status
       ), a = o.split(`
 `);
       if (a.length > 0 && a[a.length - 1] === "" && a.pop(), t.t) {
-        const p = s.s || "	", f = new RegExp(p), h = a.map((x) => x.split(f)), m = Math.max(...h.map((x) => x.length)), g = new Array(m).fill(0);
-        for (const x of h)
-          for (let $ = 0; $ < x.length; $++)
-            g[$] = Math.max(g[$] || 0, x[$].length);
-        const y = h.map((x) => x.map(($, C) => {
-          const w = g[C];
-          return $.padEnd(w);
+        const p = s.s || "	", f = new RegExp(p), h = a.map((y) => y.split(f)), m = Math.max(...h.map((y) => y.length)), g = new Array(m).fill(0);
+        for (const y of h)
+          for (let w = 0; w < y.length; w++)
+            g[w] = Math.max(g[w] || 0, y[w].length);
+        const x = h.map((y) => y.map((w, C) => {
+          const $ = g[C];
+          return w.padEnd($);
         }).join("  ")).join(`
 `);
         return {
-          stdout: y ? y + `
+          stdout: x ? x + `
 ` : "",
           stderr: "",
           exitCode: 0
@@ -1022,14 +1069,14 @@ collect2: error: ld returned 1 exit status
       const i = s.c ? parseInt(s.c) : 80, c = a.flatMap((p) => p.split(/\s+/).filter((f) => f));
       if (c.length === 0)
         return { stdout: "", stderr: "", exitCode: 0 };
-      const d = Math.max(...c.map((p) => p.length)) + 2, u = Math.max(1, Math.floor(i / d));
+      const l = Math.max(...c.map((p) => p.length)) + 2, u = Math.max(1, Math.floor(i / l));
       if (t.x) {
         const p = Math.ceil(c.length / u), f = Array(p).fill(null).map(() => []);
         for (let m = 0; m < c.length; m++) {
           const g = m % p;
           f[g].push(c[m]);
         }
-        const h = f.map((m) => m.map((g) => g.padEnd(d)).join("").trimEnd()).join(`
+        const h = f.map((m) => m.map((g) => g.padEnd(l)).join("").trimEnd()).join(`
 `);
         return {
           stdout: h ? h + `
@@ -1041,7 +1088,7 @@ collect2: error: ld returned 1 exit status
         const p = [];
         for (let f = 0; f < c.length; f += u) {
           const h = c.slice(f, f + u);
-          p.push(h.map((m) => m.padEnd(d)).join("").trimEnd());
+          p.push(h.map((m) => m.padEnd(l)).join("").trimEnd());
         }
         return {
           stdout: p.join(`
@@ -1074,36 +1121,36 @@ collect2: error: ld returned 1 exit status
       };
     const r = t[1], o = t[2], a = t[3];
     try {
-      const i = e.fs.resolvePath(s[0], e.cwd), c = e.fs.resolvePath(s[1], e.cwd), l = await e.fs.readFile(i), d = await e.fs.readFile(c), u = l.split(`
-`).filter((g) => g !== "" || l.endsWith(`
-`)), p = d.split(`
+      const i = e.fs.resolvePath(s[0], e.cwd), c = e.fs.resolvePath(s[1], e.cwd), d = await e.fs.readFile(i), l = await e.fs.readFile(c), u = d.split(`
 `).filter((g) => g !== "" || d.endsWith(`
+`)), p = l.split(`
+`).filter((g) => g !== "" || l.endsWith(`
 `));
       u.length > 0 && u[u.length - 1] === "" && u.pop(), p.length > 0 && p[p.length - 1] === "" && p.pop();
       const f = [];
       let h = 0, m = 0;
       for (; h < u.length || m < p.length; ) {
-        const g = h < u.length ? u[h] : null, y = m < p.length ? p[m] : null;
+        const g = h < u.length ? u[h] : null, x = m < p.length ? p[m] : null;
         if (g === null) {
           if (!o) {
-            const x = r ? "" : "	";
-            f.push(x + y);
+            const y = r ? "" : "	";
+            f.push(y + x);
           }
           m++;
-        } else if (y === null)
+        } else if (x === null)
           r || f.push(g), h++;
-        else if (g < y)
+        else if (g < x)
           r || f.push(g), h++;
-        else if (g > y) {
+        else if (g > x) {
           if (!o) {
-            const x = r ? "" : "	";
-            f.push(x + y);
+            const y = r ? "" : "	";
+            f.push(y + x);
           }
           m++;
         } else {
           if (!a) {
-            let x = "";
-            r || (x += "	"), o || (x += "	"), f.push(x + g);
+            let y = "";
+            r || (y += "	"), o || (y += "	"), f.push(y + g);
           }
           h++, m++;
         }
@@ -1157,32 +1204,32 @@ collect2: error: ld returned 1 exit status
     if (a.length > 1 && !i)
       return { stdout: "", stderr: `cp: target is not a directory
 `, exitCode: 1 };
-    async function c(d, u) {
-      const p = await e.fs.readFile(d);
+    async function c(l, u) {
+      const p = await e.fs.readFile(l);
       await e.fs.writeFile(u, p);
     }
-    async function l(d, u) {
+    async function d(l, u) {
       await e.fs.mkdir(u, { recursive: !0 });
-      const p = await e.fs.readdir(d);
+      const p = await e.fs.readdir(l);
       for (const f of p) {
-        const h = d + "/" + f.name, m = u + "/" + f.name;
-        f.type === "dir" ? await l(h, m) : await c(h, m);
+        const h = l + "/" + f.name, m = u + "/" + f.name;
+        f.type === "dir" ? await d(h, m) : await c(h, m);
       }
     }
     try {
-      for (const d of a) {
-        const u = e.fs.resolvePath(d, e.cwd), p = await e.fs.stat(u), f = d.split("/").pop(), h = i ? o + "/" + f : o;
+      for (const l of a) {
+        const u = e.fs.resolvePath(l, e.cwd), p = await e.fs.stat(u), f = l.split("/").pop(), h = i ? o + "/" + f : o;
         if (p.type === "dir") {
           if (!r)
-            return { stdout: "", stderr: `cp: -r not specified; omitting directory '${d}'
+            return { stdout: "", stderr: `cp: -r not specified; omitting directory '${l}'
 `, exitCode: 1 };
-          await l(u, h);
+          await d(u, h);
         } else
           await c(u, h);
       }
       return { stdout: "", stderr: "", exitCode: 0 };
-    } catch (d) {
-      return { stdout: "", stderr: `cp: ${d instanceof Error ? d.message : d}
+    } catch (l) {
+      return { stdout: "", stderr: `cp: ${l instanceof Error ? l.message : l}
 `, exitCode: 1 };
     }
   }
@@ -1194,7 +1241,7 @@ collect2: error: ld returned 1 exit status
     if (r.length === 0)
       return { stdout: "", stderr: `curl: no URL specified!
 `, exitCode: 1 };
-    const o = r[0], a = s.X || s.request || (s.d || s.data ? "POST" : "GET"), i = s.o || s.output, c = t.s || t.silent, l = t.i || t.include, d = t.I || t.head, u = t.L || t.location, p = {}, f = s.H || s.header;
+    const o = r[0], a = s.X || s.request || (s.d || s.data ? "POST" : "GET"), i = s.o || s.output, c = t.s || t.silent, d = t.i || t.include, l = t.I || t.head, u = t.L || t.location, p = {}, f = s.H || s.header;
     if (f) {
       const g = f.split(":");
       g.length >= 2 && (p[g[0].trim()] = g.slice(1).join(":").trim());
@@ -1205,39 +1252,39 @@ collect2: error: ld returned 1 exit status
     (s.d || s.data) && (m = s.d || s.data, p["Content-Type"] || (p["Content-Type"] = "application/x-www-form-urlencoded"));
     try {
       const g = {
-        method: d ? "HEAD" : a,
+        method: l ? "HEAD" : a,
         headers: p,
         redirect: u ? "follow" : "manual"
       };
       m && a !== "GET" && a !== "HEAD" && (g.body = m);
-      const y = await fetch(o, g);
-      let x = "";
-      if ((l || d) && (x += `HTTP/1.1 ${y.status} ${y.statusText}
-`, y.headers.forEach(($, C) => {
-        x += `${C}: ${$}
+      const x = await fetch(o, g);
+      let y = "";
+      if ((d || l) && (y += `HTTP/1.1 ${x.status} ${x.statusText}
+`, x.headers.forEach((w, C) => {
+        y += `${C}: ${w}
 `;
-      }), x += `
-`), !d) {
-        const $ = await y.text();
-        x += $;
+      }), y += `
+`), !l) {
+        const w = await x.text();
+        y += w;
       }
       if (i) {
-        const $ = e.fs.resolvePath(i, e.cwd);
-        return await e.fs.writeFile($, d ? "" : await y.text()), c ? { stdout: "", stderr: "", exitCode: 0 } : {
+        const w = e.fs.resolvePath(i, e.cwd);
+        return await e.fs.writeFile(w, l ? "" : await x.text()), c ? { stdout: "", stderr: "", exitCode: 0 } : {
           stdout: "",
           stderr: `  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
                                  Dload  Upload   Total   Spent    Left  Speed
-100  ${x.length}  100  ${x.length}    0     0   ${x.length}      0 --:--:-- --:--:-- --:--:--  ${x.length}
+100  ${y.length}  100  ${y.length}    0     0   ${y.length}      0 --:--:-- --:--:-- --:--:--  ${y.length}
 `,
           exitCode: 0
         };
       }
-      return !c && !y.ok ? {
-        stdout: x,
-        stderr: `curl: (22) The requested URL returned error: ${y.status}
+      return !c && !x.ok ? {
+        stdout: y,
+        stderr: `curl: (22) The requested URL returned error: ${x.status}
 `,
         exitCode: 22
-      } : { stdout: x, stderr: "", exitCode: 0 };
+      } : { stdout: y, stderr: "", exitCode: 0 };
     } catch (g) {
       return {
         stdout: "",
@@ -1262,19 +1309,19 @@ collect2: error: ld returned 1 exit status
         e.fs,
         e.cwd,
         e.fs.resolvePath
-      ), c = parseRanges(o ?? a), l = i.split(`
+      ), c = parseRanges(o ?? a), d = i.split(`
 `);
-      l.length > 0 && l[l.length - 1] === "" && l.pop();
-      const d = [];
-      for (const u of l)
+      d.length > 0 && d[d.length - 1] === "" && d.pop();
+      const l = [];
+      for (const u of d)
         if (o) {
           const p = u.split(r), f = c.flatMap((h) => p.slice(h.start - 1, h.end)).filter((h) => h !== void 0);
-          d.push(f.join(r));
+          l.push(f.join(r));
         } else {
           const p = u.split(""), f = c.flatMap((h) => p.slice(h.start - 1, h.end)).filter((h) => h !== void 0);
-          d.push(f.join(""));
+          l.push(f.join(""));
         }
-      return { stdout: d.join(`
+      return { stdout: l.join(`
 `) + `
 `, stderr: "", exitCode: 0 };
     } catch (i) {
@@ -1332,8 +1379,8 @@ const date = {
   }
 };
 function formatDate$1(n, e, t = !1) {
-  const s = (x) => String(x).padStart(2, "0"), r = (x) => String(x).padStart(3, "0"), o = (x) => t ? n[`getUTC${x}`]() : n[`get${x}`](), a = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"], i = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], c = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"], l = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], d = o("FullYear"), u = o("Month"), p = o("Date"), f = o("Hours"), h = o("Minutes"), m = o("Seconds"), g = o("Milliseconds"), y = o("Day");
-  return e.replace(/%Y/g, String(d)).replace(/%y/g, String(d).slice(-2)).replace(/%m/g, s(u + 1)).replace(/%d/g, s(p)).replace(/%e/g, String(p).padStart(2, " ")).replace(/%H/g, s(f)).replace(/%I/g, s(f % 12 || 12)).replace(/%M/g, s(h)).replace(/%S/g, s(m)).replace(/%N/g, r(g) + "000000").replace(/%p/g, f >= 12 ? "PM" : "AM").replace(/%P/g, f >= 12 ? "pm" : "am").replace(/%s/g, String(Math.floor(n.getTime() / 1e3))).replace(/%A/g, a[y]).replace(/%a/g, i[y]).replace(/%w/g, String(y)).replace(/%u/g, String(y || 7)).replace(/%B/g, c[u]).replace(/%b/g, l[u]).replace(/%h/g, l[u]).replace(/%F/g, `${d}-${s(u + 1)}-${s(p)}`).replace(/%T/g, `${s(f)}:${s(h)}:${s(m)}`).replace(/%R/g, `${s(f)}:${s(h)}`).replace(/%n/g, `
+  const s = (y) => String(y).padStart(2, "0"), r = (y) => String(y).padStart(3, "0"), o = (y) => t ? n[`getUTC${y}`]() : n[`get${y}`](), a = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"], i = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], c = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"], d = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], l = o("FullYear"), u = o("Month"), p = o("Date"), f = o("Hours"), h = o("Minutes"), m = o("Seconds"), g = o("Milliseconds"), x = o("Day");
+  return e.replace(/%Y/g, String(l)).replace(/%y/g, String(l).slice(-2)).replace(/%m/g, s(u + 1)).replace(/%d/g, s(p)).replace(/%e/g, String(p).padStart(2, " ")).replace(/%H/g, s(f)).replace(/%I/g, s(f % 12 || 12)).replace(/%M/g, s(h)).replace(/%S/g, s(m)).replace(/%N/g, r(g) + "000000").replace(/%p/g, f >= 12 ? "PM" : "AM").replace(/%P/g, f >= 12 ? "pm" : "am").replace(/%s/g, String(Math.floor(n.getTime() / 1e3))).replace(/%A/g, a[x]).replace(/%a/g, i[x]).replace(/%w/g, String(x)).replace(/%u/g, String(x || 7)).replace(/%B/g, c[u]).replace(/%b/g, d[u]).replace(/%h/g, d[u]).replace(/%F/g, `${l}-${s(u + 1)}-${s(p)}`).replace(/%T/g, `${s(f)}:${s(h)}:${s(m)}`).replace(/%R/g, `${s(f)}:${s(h)}`).replace(/%n/g, `
 `).replace(/%t/g, "	").replace(/%%/g, "%");
 }
 const local = {
@@ -1453,22 +1500,22 @@ const local = {
   description: "Compare files line by line",
   async exec(n, e) {
     var p, f;
-    const { flags: t, positional: s, values: r } = parseArgs(n, ["U", "context", "C"]), o = t.u || r.U !== void 0, a = r.U || r.context || r.C || (t.u ? 3 : 0), i = typeof a == "string" ? parseInt(a) : 3, c = t.q || t.brief, l = t.i, d = t.w || t["ignore-all-space"], u = t.y || t["side-by-side"];
+    const { flags: t, positional: s, values: r } = parseArgs(n, ["U", "context", "C"]), o = t.u || r.U !== void 0, a = r.U || r.context || r.C || (t.u ? 3 : 0), i = typeof a == "string" ? parseInt(a) : 3, c = t.q || t.brief, d = t.i, l = t.w || t["ignore-all-space"], u = t.y || t["side-by-side"];
     if (s.length < 2)
       return { stdout: "", stderr: `diff: missing operand
 `, exitCode: 2 };
     try {
-      const h = e.fs.resolvePath(s[0], e.cwd), m = e.fs.resolvePath(s[1], e.cwd), g = await e.fs.readFile(h), y = await e.fs.readFile(m);
-      if (g === y)
+      const h = e.fs.resolvePath(s[0], e.cwd), m = e.fs.resolvePath(s[1], e.cwd), g = await e.fs.readFile(h), x = await e.fs.readFile(m);
+      if (g === x)
         return { stdout: "", stderr: "", exitCode: 0 };
       if (c)
         return { stdout: `Files ${s[0]} and ${s[1]} differ
 `, stderr: "", exitCode: 1 };
-      const x = g.split(`
-`), $ = y.split(`
-`), C = computeDiff(x, $, { ignoreCase: l, ignoreWhitespace: d }), w = [];
+      const y = g.split(`
+`), w = x.split(`
+`), C = computeDiff(y, w, { ignoreCase: d, ignoreWhitespace: l }), $ = [];
       if (o) {
-        w.push(`--- ${s[0]}`), w.push(`+++ ${s[1]}`);
+        $.push(`--- ${s[0]}`), $.push(`+++ ${s[1]}`);
         let v = 0;
         for (; v < C.length; ) {
           if (C[v].type === "equal") {
@@ -1476,46 +1523,46 @@ const local = {
             continue;
           }
           const b = Math.max(0, v - 1);
-          let E = v;
-          for (; E < C.length; ) {
-            const I = C[E];
+          let S = v;
+          for (; S < C.length; ) {
+            const I = C[S];
             if (I.type !== "equal")
-              E++;
+              S++;
             else if (I.lines.length <= i * 2)
-              E++;
+              S++;
             else
               break;
           }
-          const T = (((p = C[b]) == null ? void 0 : p.line1) ?? 0) + 1, A = (((f = C[b]) == null ? void 0 : f.line2) ?? 0) + 1;
+          const A = (((p = C[b]) == null ? void 0 : p.line1) ?? 0) + 1, T = (((f = C[b]) == null ? void 0 : f.line2) ?? 0) + 1;
           let R = 0, F = 0;
-          for (let I = b; I < E; I++)
+          for (let I = b; I < S; I++)
             (C[I].type === "equal" || C[I].type === "delete") && (R += C[I].lines.length), (C[I].type === "equal" || C[I].type === "add") && (F += C[I].lines.length);
-          w.push(`@@ -${T},${R} +${A},${F} @@`);
-          for (let I = b; I < E; I++) {
+          $.push(`@@ -${A},${R} +${T},${F} @@`);
+          for (let I = b; I < S; I++) {
             const P = C[I];
-            P.type === "equal" ? P.lines.forEach((k) => w.push(` ${k}`)) : P.type === "delete" ? P.lines.forEach((k) => w.push(`-${k}`)) : P.type === "add" && P.lines.forEach((k) => w.push(`+${k}`));
+            P.type === "equal" ? P.lines.forEach((k) => $.push(` ${k}`)) : P.type === "delete" ? P.lines.forEach((k) => $.push(`-${k}`)) : P.type === "add" && P.lines.forEach((k) => $.push(`+${k}`));
           }
-          v = E;
+          v = S;
         }
       } else if (u)
-        for (const S of C)
-          S.type === "equal" ? S.lines.forEach((b) => {
-            const E = b.substring(0, 40).padEnd(40);
-            w.push(`${E} | ${b}`);
-          }) : S.type === "delete" ? S.lines.forEach((b) => {
-            const E = b.substring(0, 40).padEnd(40);
-            w.push(`${E} <`);
-          }) : S.type === "add" && S.lines.forEach((b) => {
-            w.push(`${" ".repeat(40)} > ${b}`);
+        for (const E of C)
+          E.type === "equal" ? E.lines.forEach((b) => {
+            const S = b.substring(0, 40).padEnd(40);
+            $.push(`${S} | ${b}`);
+          }) : E.type === "delete" ? E.lines.forEach((b) => {
+            const S = b.substring(0, 40).padEnd(40);
+            $.push(`${S} <`);
+          }) : E.type === "add" && E.lines.forEach((b) => {
+            $.push(`${" ".repeat(40)} > ${b}`);
           });
       else
         for (const v of C) {
           if (v.type === "equal") continue;
-          const S = (v.line1 ?? 0) + 1, b = (v.line2 ?? 0) + 1;
-          v.type === "delete" ? (w.push(`${S},${S + v.lines.length - 1}d${b - 1}`), v.lines.forEach((E) => w.push(`< ${E}`))) : v.type === "add" && (w.push(`${S - 1}a${b},${b + v.lines.length - 1}`), v.lines.forEach((E) => w.push(`> ${E}`)));
+          const E = (v.line1 ?? 0) + 1, b = (v.line2 ?? 0) + 1;
+          v.type === "delete" ? ($.push(`${E},${E + v.lines.length - 1}d${b - 1}`), v.lines.forEach((S) => $.push(`< ${S}`))) : v.type === "add" && ($.push(`${E - 1}a${b},${b + v.lines.length - 1}`), v.lines.forEach((S) => $.push(`> ${S}`)));
         }
-      return { stdout: w.join(`
-`) + (w.length > 0 ? `
+      return { stdout: $.join(`
+`) + ($.length > 0 ? `
 ` : ""), stderr: "", exitCode: 1 };
     } catch (h) {
       return { stdout: "", stderr: `diff: ${h instanceof Error ? h.message : h}
@@ -1524,17 +1571,17 @@ const local = {
   }
 };
 function computeDiff(n, e, t = {}) {
-  const s = n.length, r = e.length, o = (d) => {
-    let u = d;
+  const s = n.length, r = e.length, o = (l) => {
+    let u = l;
     return t.ignoreWhitespace && (u = u.replace(/\s+/g, "")), t.ignoreCase && (u = u.toLowerCase()), u;
   }, a = Array(s + 1).fill(0).map(() => Array(r + 1).fill(0));
-  for (let d = 1; d <= s; d++)
+  for (let l = 1; l <= s; l++)
     for (let u = 1; u <= r; u++)
-      o(n[d - 1]) === o(e[u - 1]) ? a[d][u] = a[d - 1][u - 1] + 1 : a[d][u] = Math.max(a[d - 1][u], a[d][u - 1]);
+      o(n[l - 1]) === o(e[u - 1]) ? a[l][u] = a[l - 1][u - 1] + 1 : a[l][u] = Math.max(a[l - 1][u], a[l][u - 1]);
   const i = [];
-  let c = s, l = r;
-  for (; c > 0 || l > 0; )
-    c > 0 && l > 0 && o(n[c - 1]) === o(e[l - 1]) ? (i.length > 0 && i[i.length - 1].type === "equal" ? i[i.length - 1].lines.unshift(n[c - 1]) : i.push({ type: "equal", lines: [n[c - 1]], line1: c - 1, line2: l - 1 }), c--, l--) : l > 0 && (c === 0 || a[c][l - 1] >= a[c - 1][l]) ? (i.length > 0 && i[i.length - 1].type === "add" ? i[i.length - 1].lines.unshift(e[l - 1]) : i.push({ type: "add", lines: [e[l - 1]], line1: c, line2: l - 1 }), l--) : (i.length > 0 && i[i.length - 1].type === "delete" ? i[i.length - 1].lines.unshift(n[c - 1]) : i.push({ type: "delete", lines: [n[c - 1]], line1: c - 1, line2: l }), c--);
+  let c = s, d = r;
+  for (; c > 0 || d > 0; )
+    c > 0 && d > 0 && o(n[c - 1]) === o(e[d - 1]) ? (i.length > 0 && i[i.length - 1].type === "equal" ? i[i.length - 1].lines.unshift(n[c - 1]) : i.push({ type: "equal", lines: [n[c - 1]], line1: c - 1, line2: d - 1 }), c--, d--) : d > 0 && (c === 0 || a[c][d - 1] >= a[c - 1][d]) ? (i.length > 0 && i[i.length - 1].type === "add" ? i[i.length - 1].lines.unshift(e[d - 1]) : i.push({ type: "add", lines: [e[d - 1]], line1: c, line2: d - 1 }), d--) : (i.length > 0 && i[i.length - 1].type === "delete" ? i[i.length - 1].lines.unshift(n[c - 1]) : i.push({ type: "delete", lines: [n[c - 1]], line1: c - 1, line2: d }), c--);
   return i.reverse();
 }
 const dirname = {
@@ -1598,10 +1645,10 @@ Usage: until CONDITION; do COMMANDS; done
   name: "du",
   description: "Estimate file space usage",
   async exec(n, e) {
-    const { flags: t, positional: s, values: r } = parseArgs(n, ["max-depth", "d"]), o = s.length > 0 ? s : ["."], a = t.s, i = t.a, c = t.h, l = r["max-depth"] || r.d, d = l ? parseInt(l) : 1 / 0, u = [];
+    const { flags: t, positional: s, values: r } = parseArgs(n, ["max-depth", "d"]), o = s.length > 0 ? s : ["."], a = t.s, i = t.a, c = t.h, d = r["max-depth"] || r.d, l = d ? parseInt(d) : 1 / 0, u = [];
     try {
       for (const p of o) {
-        const f = e.fs.resolvePath(p, e.cwd), h = await calculateSize(f, e.fs, 0, d, i, !a, u, c), m = c ? formatHuman(h) : String(Math.ceil(h / 1024));
+        const f = e.fs.resolvePath(p, e.cwd), h = await calculateSize(f, e.fs, 0, l, i, !a, u, c), m = c ? formatHuman(h) : String(Math.ceil(h / 1024));
         u.push(`${m}	${p}`);
       }
       return {
@@ -1627,11 +1674,11 @@ async function calculateSize(n, e, t, s, r, o, a, i) {
     if (c.type === "file")
       return c.size;
     if (c.type === "dir" && t < s) {
-      const l = await e.readdir(n);
-      let d = 0;
-      for (const u of l) {
+      const d = await e.readdir(n);
+      let l = 0;
+      for (const u of d) {
         const p = n + "/" + u.name, f = await calculateSize(p, e, t + 1, s, r, o, a, i);
-        if (d += f, r && u.type === "file") {
+        if (l += f, r && u.type === "file") {
           const h = i ? formatHuman(f) : String(Math.ceil(f / 1024));
           a.push(`${h}	${p}`);
         }
@@ -1640,7 +1687,7 @@ async function calculateSize(n, e, t, s, r, o, a, i) {
           a.push(`${h}	${p}`);
         }
       }
-      return d;
+      return l;
     }
     return 0;
   } catch {
@@ -1770,9 +1817,9 @@ Usage: if CONDITION; then COMMANDS; [elif CONDITION; then COMMANDS;] [else COMMA
         e.fs,
         e.cwd,
         e.fs.resolvePath
-      ), l = c.split(`
-`), d = [];
-      for (const u of l) {
+      ), d = c.split(`
+`), l = [];
+      for (const u of d) {
         let p = "", f = 0;
         for (let h = 0; h < u.length; h++) {
           const m = u[h];
@@ -1785,10 +1832,10 @@ Usage: if CONDITION; then COMMANDS; [elif CONDITION; then COMMANDS;] [else COMMA
           else
             p += m, f++;
         }
-        d.push(p);
+        l.push(p);
       }
       return {
-        stdout: d.join(`
+        stdout: l.join(`
 `) + (c.endsWith(`
 `) ? `
 ` : ""),
@@ -2030,19 +2077,19 @@ Usage: function NAME { COMMANDS; } or NAME() { COMMANDS; }
 `, exitCode: 1 };
     const r = s.b, o = s.i || s.mime, a = s["mime-type"], i = s["mime-encoding"], c = [];
     try {
-      for (const l of t) {
-        const d = e.fs.resolvePath(l, e.cwd);
+      for (const d of t) {
+        const l = e.fs.resolvePath(d, e.cwd);
         try {
-          if ((await e.fs.stat(d)).type === "dir") {
-            const m = r ? "directory" : `${l}: directory`;
+          if ((await e.fs.stat(l)).type === "dir") {
+            const m = r ? "directory" : `${d}: directory`;
             c.push(m);
             continue;
           }
-          const p = await e.fs.readFile(d), f = detectFileType(p, l);
+          const p = await e.fs.readFile(l), f = detectFileType(p, d);
           let h;
-          a ? h = r ? f.mimeType : `${l}: ${f.mimeType}` : i ? h = r ? f.encoding : `${l}: ${f.encoding}` : o ? h = r ? `${f.mimeType}; charset=${f.encoding}` : `${l}: ${f.mimeType}; charset=${f.encoding}` : h = r ? f.description : `${l}: ${f.description}`, c.push(h);
+          a ? h = r ? f.mimeType : `${d}: ${f.mimeType}` : i ? h = r ? f.encoding : `${d}: ${f.encoding}` : o ? h = r ? `${f.mimeType}; charset=${f.encoding}` : `${d}: ${f.mimeType}; charset=${f.encoding}` : h = r ? f.description : `${d}: ${f.description}`, c.push(h);
         } catch (u) {
-          c.push(`${l}: cannot open (${u instanceof Error ? u.message : u})`);
+          c.push(`${d}: cannot open (${u instanceof Error ? u.message : u})`);
         }
       }
       return {
@@ -2052,10 +2099,10 @@ Usage: function NAME { COMMANDS; } or NAME() { COMMANDS; }
         stderr: "",
         exitCode: 0
       };
-    } catch (l) {
+    } catch (d) {
       return {
         stdout: "",
-        stderr: `file: ${l instanceof Error ? l.message : l}
+        stderr: `file: ${d instanceof Error ? d.message : d}
 `,
         exitCode: 1
       };
@@ -2121,48 +2168,48 @@ const find = {
   name: "find",
   description: "Search for files in a directory hierarchy",
   async exec(n, e) {
-    const { values: t, positional: s, flags: r } = parseArgs(n, ["name", "type", "exec", "maxdepth", "mindepth", "path", "iname"]), o = s[0] ?? ".", a = t.name, i = t.iname, c = t.path, l = t.type, d = t.maxdepth ? parseInt(t.maxdepth) : 1 / 0, u = t.mindepth ? parseInt(t.mindepth) : 0, p = t.exec, f = r.print !== !1, h = e.fs.resolvePath(o, e.cwd), m = [], g = [];
-    let y;
+    const { values: t, positional: s, flags: r } = parseArgs(n, ["name", "type", "exec", "maxdepth", "mindepth", "path", "iname"]), o = s[0] ?? ".", a = t.name, i = t.iname, c = t.path, d = t.type, l = t.maxdepth ? parseInt(t.maxdepth) : 1 / 0, u = t.mindepth ? parseInt(t.mindepth) : 0, p = t.exec, f = r.print !== !1, h = e.fs.resolvePath(o, e.cwd), m = [], g = [];
+    let x;
     if (a) {
       const v = a.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
-      y = new RegExp(`^${v}$`);
+      x = new RegExp(`^${v}$`);
     }
-    let x;
+    let y;
     if (i) {
       const v = i.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
-      x = new RegExp(`^${v}$`, "i");
+      y = new RegExp(`^${v}$`, "i");
     }
-    let $;
+    let w;
     if (c) {
       const v = c.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
-      $ = new RegExp(v);
+      w = new RegExp(v);
     }
-    async function C(v, S, b) {
-      let E;
+    async function C(v, E, b) {
+      let S;
       try {
-        E = await e.fs.readdir(v);
+        S = await e.fs.readdir(v);
       } catch {
         return;
       }
-      for (const T of E) {
-        const A = v + "/" + T.name, R = S ? S + "/" + T.name : T.name, F = o === "." ? "./" + R : o + "/" + R, I = b + 1;
+      for (const A of S) {
+        const T = v + "/" + A.name, R = E ? E + "/" + A.name : A.name, F = o === "." ? "./" + R : o + "/" + R, I = b + 1;
         let P = !0;
-        if (!(I > d)) {
-          if (I < u && (P = !1), y && !y.test(T.name) && (P = !1), x && !x.test(T.name) && (P = !1), $ && !$.test(F) && (P = !1), l === "f" && T.type !== "file" && (P = !1), l === "d" && T.type !== "dir" && (P = !1), P && (f && m.push(F), p)) {
+        if (!(I > l)) {
+          if (I < u && (P = !1), x && !x.test(A.name) && (P = !1), y && !y.test(A.name) && (P = !1), w && !w.test(F) && (P = !1), d === "f" && A.type !== "file" && (P = !1), d === "d" && A.type !== "dir" && (P = !1), P && (f && m.push(F), p)) {
             const k = p.replace(/\{\}/g, F);
             g.push(`Executing: ${k}`);
           }
-          T.type === "dir" && I < d && await C(A, R, I);
+          A.type === "dir" && I < l && await C(T, R, I);
         }
       }
     }
-    0 >= u && (!l || l === "d") && !y && !x && !$ && f && m.push(o === "." ? "." : o), await C(h, "", 0);
-    let w = "";
-    return m.length > 0 && (w = m.join(`
+    0 >= u && (!d || d === "d") && !x && !y && !w && f && m.push(o === "." ? "." : o), await C(h, "", 0);
+    let $ = "";
+    return m.length > 0 && ($ = m.join(`
 `) + `
-`), g.length > 0 && (w += g.join(`
+`), g.length > 0 && ($ += g.join(`
 `) + `
-`), { stdout: w, stderr: "", exitCode: 0 };
+`), { stdout: $, stderr: "", exitCode: 0 };
   }
 }, fmt = {
   name: "fmt",
@@ -2186,27 +2233,27 @@ const find = {
         e.cwd,
         e.fs.resolvePath
       ), c = i.split(`
-`), l = [];
-      let d = [];
+`), d = [];
+      let l = [];
       const u = () => {
-        if (d.length !== 0) {
+        if (l.length !== 0) {
           if (a)
-            for (const p of d)
-              l.push(...wrapLine(p, o));
+            for (const p of l)
+              d.push(...wrapLine(p, o));
           else {
-            const p = d.join(" ").trim();
-            p && l.push(...wrapLine(p, o));
+            const p = l.join(" ").trim();
+            p && d.push(...wrapLine(p, o));
           }
-          d = [];
+          l = [];
         }
       };
       for (const p of c) {
         const f = p.trim();
-        f === "" ? (u(), l.push("")) : d.push(f);
+        f === "" ? (u(), d.push("")) : l.push(f);
       }
       return u(), {
-        stdout: l.join(`
-`) + (l.length > 0 ? `
+        stdout: d.join(`
+`) + (d.length > 0 ? `
 ` : ""),
         stderr: "",
         exitCode: 0
@@ -2250,25 +2297,25 @@ const fold = {
         e.cwd,
         e.fs.resolvePath
       ), c = i.split(`
-`), l = [];
-      for (const d of c) {
-        if (d.length <= o) {
-          l.push(d);
+`), d = [];
+      for (const l of c) {
+        if (l.length <= o) {
+          d.push(l);
           continue;
         }
-        let u = d;
+        let u = l;
         for (; u.length > o; ) {
           let p = o;
           if (a) {
             const f = u.substring(0, o).lastIndexOf(" ");
             f > 0 && (p = f + 1);
           }
-          l.push(u.substring(0, p)), u = u.substring(p);
+          d.push(u.substring(0, p)), u = u.substring(p);
         }
-        u.length > 0 && l.push(u);
+        u.length > 0 && d.push(u);
       }
       return {
-        stdout: l.join(`
+        stdout: d.join(`
 `) + (i.endsWith(`
 `) ? `
 ` : ""),
@@ -2288,8 +2335,8 @@ const fold = {
   name: "free",
   description: "Display amount of free and used memory",
   async exec(n, e) {
-    const { flags: t } = parseArgs(n), s = t.h, r = t.b, o = t.m, a = t.g, i = [], c = 8388608, l = 4194304, d = 4194304, u = 524288, p = 1048576, f = 5242880;
-    return s ? (i.push("               total        used        free      shared  buff/cache   available"), i.push("Mem:            8.0G        4.0G        4.0G       512M        1.0G        5.0G"), i.push("Swap:           2.0G          0B        2.0G")) : r ? (i.push("               total        used        free      shared  buff/cache   available"), i.push(`Mem:    ${c * 1024} ${l * 1024} ${d * 1024} ${u * 1024} ${p * 1024} ${f * 1024}`), i.push(`Swap:   ${2097152 * 1024}           0 ${2097152 * 1024}`)) : o ? (i.push("               total        used        free      shared  buff/cache   available"), i.push(`Mem:           ${Math.floor(c / 1024)}        ${Math.floor(l / 1024)}        ${Math.floor(d / 1024)}         ${Math.floor(u / 1024)}        ${Math.floor(p / 1024)}        ${Math.floor(f / 1024)}`), i.push("Swap:          2048           0        2048")) : a ? (i.push("               total        used        free      shared  buff/cache   available"), i.push("Mem:               8           4           4           0           1           5"), i.push("Swap:              2           0           2")) : (i.push("               total        used        free      shared  buff/cache   available"), i.push(`Mem:        ${c}     ${l}     ${d}      ${u}     ${p}     ${f}`), i.push("Swap:       2097152           0     2097152")), {
+    const { flags: t } = parseArgs(n), s = t.h, r = t.b, o = t.m, a = t.g, i = [], c = 8388608, d = 4194304, l = 4194304, u = 524288, p = 1048576, f = 5242880;
+    return s ? (i.push("               total        used        free      shared  buff/cache   available"), i.push("Mem:            8.0G        4.0G        4.0G       512M        1.0G        5.0G"), i.push("Swap:           2.0G          0B        2.0G")) : r ? (i.push("               total        used        free      shared  buff/cache   available"), i.push(`Mem:    ${c * 1024} ${d * 1024} ${l * 1024} ${u * 1024} ${p * 1024} ${f * 1024}`), i.push(`Swap:   ${2097152 * 1024}           0 ${2097152 * 1024}`)) : o ? (i.push("               total        used        free      shared  buff/cache   available"), i.push(`Mem:           ${Math.floor(c / 1024)}        ${Math.floor(d / 1024)}        ${Math.floor(l / 1024)}         ${Math.floor(u / 1024)}        ${Math.floor(p / 1024)}        ${Math.floor(f / 1024)}`), i.push("Swap:          2048           0        2048")) : a ? (i.push("               total        used        free      shared  buff/cache   available"), i.push("Mem:               8           4           4           0           1           5"), i.push("Swap:              2           0           2")) : (i.push("               total        used        free      shared  buff/cache   available"), i.push(`Mem:        ${c}     ${d}     ${l}      ${u}     ${p}     ${f}`), i.push("Swap:       2097152           0     2097152")), {
       stdout: i.join(`
 `) + `
 `,
@@ -2315,24 +2362,24 @@ const fold = {
     for (let m = 0; m < i.length; m++) {
       const g = i[m];
       if (g === ":") continue;
-      const y = i[m + 1] === ":";
-      c.set(g, y);
+      const x = i[m + 1] === ":";
+      c.set(g, x);
     }
-    const l = r.length > 0 ? r : (h = e.env) != null && h.$1 ? [e.env.$1, e.env.$2, e.env.$3].filter(Boolean) : [];
-    if (l.length === 0 || o > l.length)
+    const d = r.length > 0 ? r : (h = e.env) != null && h.$1 ? [e.env.$1, e.env.$2, e.env.$3].filter(Boolean) : [];
+    if (d.length === 0 || o > d.length)
       return e.env && (e.env.OPTIND = "1"), {
         stdout: "",
         stderr: "",
         exitCode: 1
       };
-    const d = l[o - 1];
-    if (!d || !d.startsWith("-") || d === "-" || d === "--")
+    const l = d[o - 1];
+    if (!l || !l.startsWith("-") || l === "-" || l === "--")
       return e.env && (e.env.OPTIND = "1"), {
         stdout: "",
         stderr: "",
         exitCode: 1
       };
-    const u = d[1];
+    const u = l[1];
     if (!c.has(u))
       return e.env && (e.env[s] = "?", e.env.OPTARG = u, e.env.OPTIND = String(o + 1)), a ? {
         stdout: "",
@@ -2346,10 +2393,10 @@ const fold = {
       };
     if (c.get(u)) {
       let m;
-      if (d.length > 2)
-        m = d.slice(2);
-      else if (o < l.length)
-        m = l[o], e.env && (e.env.OPTIND = String(o + 2));
+      if (l.length > 2)
+        m = l.slice(2);
+      else if (o < d.length)
+        m = d[o], e.env && (e.env.OPTIND = String(o + 2));
       else
         return e.env && (e.env[s] = "?", e.env.OPTARG = u, e.env.OPTIND = String(o + 1)), a ? {
           stdout: "",
@@ -2374,7 +2421,7 @@ const fold = {
   name: "grep",
   description: "Search for patterns in files",
   async exec(n, e) {
-    const { flags: t, values: s, positional: r } = parseArgs(n, ["e"]), o = !!t.i, a = !!t.v, i = !!t.c, c = !!t.l, l = !!t.n, d = !!(t.r || t.R), u = s.e ?? r.shift();
+    const { flags: t, values: s, positional: r } = parseArgs(n, ["e"]), o = !!t.i, a = !!t.v, i = !!t.c, c = !!t.l, d = !!t.n, l = !!(t.r || t.R), u = s.e ?? r.shift();
     if (!u)
       return { stdout: "", stderr: `grep: missing pattern
 `, exitCode: 2 };
@@ -2386,62 +2433,62 @@ const fold = {
       return { stdout: "", stderr: `grep: invalid pattern: ${u}
 `, exitCode: 2 };
     }
-    const h = r.length > 0 ? r : ["-"], m = h.length > 1 || d, g = [];
-    let y = !1;
-    async function x(w, v) {
-      let S;
+    const h = r.length > 0 ? r : ["-"], m = h.length > 1 || l, g = [];
+    let x = !1;
+    async function y($, v) {
+      let E;
       try {
-        if (w === "-")
-          S = e.stdin;
+        if ($ === "-")
+          E = e.stdin;
         else {
-          const T = e.fs.resolvePath(w, e.cwd);
-          S = await e.fs.readFile(T);
+          const A = e.fs.resolvePath($, e.cwd);
+          E = await e.fs.readFile(A);
         }
       } catch {
-        g.push(`grep: ${w}: No such file or directory`);
+        g.push(`grep: ${$}: No such file or directory`);
         return;
       }
-      const b = S.split(`
+      const b = E.split(`
 `);
       b.length > 0 && b[b.length - 1] === "" && b.pop();
-      let E = 0;
-      for (let T = 0; T < b.length; T++)
-        if (f.test(b[T]) !== a && (y = !0, E++, !i && !c)) {
-          const R = m ? `${v}:` : "", F = l ? `${T + 1}:` : "";
-          g.push(`${R}${F}${b[T]}`);
+      let S = 0;
+      for (let A = 0; A < b.length; A++)
+        if (f.test(b[A]) !== a && (x = !0, S++, !i && !c)) {
+          const R = m ? `${v}:` : "", F = d ? `${A + 1}:` : "";
+          g.push(`${R}${F}${b[A]}`);
         }
-      i && g.push(m ? `${v}:${E}` : String(E)), c && E > 0 && g.push(v);
+      i && g.push(m ? `${v}:${S}` : String(S)), c && S > 0 && g.push(v);
     }
-    async function $(w) {
-      const v = e.fs.resolvePath(w, e.cwd);
-      let S;
+    async function w($) {
+      const v = e.fs.resolvePath($, e.cwd);
+      let E;
       try {
-        S = await e.fs.readdir(v);
+        E = await e.fs.readdir(v);
       } catch {
         return;
       }
-      for (const b of S) {
-        const E = v + "/" + b.name;
-        b.type === "dir" ? await $(E) : await x(E, E);
+      for (const b of E) {
+        const S = v + "/" + b.name;
+        b.type === "dir" ? await w(S) : await y(S, S);
       }
     }
-    for (const w of h)
-      if (w === "-")
-        await x("-", "(standard input)");
-      else if (d) {
-        const v = e.fs.resolvePath(w, e.cwd);
-        let S;
+    for (const $ of h)
+      if ($ === "-")
+        await y("-", "(standard input)");
+      else if (l) {
+        const v = e.fs.resolvePath($, e.cwd);
+        let E;
         try {
-          S = await e.fs.stat(v);
+          E = await e.fs.stat(v);
         } catch {
           continue;
         }
-        S.type === "dir" ? await $(v) : await x(w, w);
+        E.type === "dir" ? await w(v) : await y($, $);
       } else
-        await x(w, w);
+        await y($, $);
     return { stdout: g.length > 0 ? g.join(`
 `) + `
-` : "", stderr: "", exitCode: y ? 0 : 1 };
+` : "", stderr: "", exitCode: x ? 0 : 1 };
   }
 }, hash = {
   name: "hash",
@@ -2582,29 +2629,29 @@ Shell implementers: Parse heredoc at the token/syntax level before command execu
         e.cwd,
         e.fs.resolvePath
       );
-      let l = c.substring(i, a ? i + a : void 0);
-      const d = [];
+      let d = c.substring(i, a ? i + a : void 0);
+      const l = [];
       if (o) {
-        for (let p = 0; p < l.length; p += 16) {
-          const f = l.substring(p, p + 16), h = (i + p).toString(16).padStart(8, "0"), m = formatHexGroup(f.substring(0, 8)), g = formatHexGroup(f.substring(8, 16)), y = formatAscii(f);
-          d.push(`${h}  ${m}  ${g}  |${y}|`);
+        for (let p = 0; p < d.length; p += 16) {
+          const f = d.substring(p, p + 16), h = (i + p).toString(16).padStart(8, "0"), m = formatHexGroup(f.substring(0, 8)), g = formatHexGroup(f.substring(8, 16)), x = formatAscii(f);
+          l.push(`${h}  ${m}  ${g}  |${x}|`);
         }
-        const u = (i + l.length).toString(16).padStart(8, "0");
-        d.push(u);
+        const u = (i + d.length).toString(16).padStart(8, "0");
+        l.push(u);
       } else {
-        for (let p = 0; p < l.length; p += 16) {
-          const f = l.substring(p, p + 16), h = (i + p).toString(16).padStart(7, "0"), m = [];
+        for (let p = 0; p < d.length; p += 16) {
+          const f = d.substring(p, p + 16), h = (i + p).toString(16).padStart(7, "0"), m = [];
           for (let g = 0; g < f.length; g += 2) {
-            const y = f.charCodeAt(g), x = g + 1 < f.length ? f.charCodeAt(g + 1) : 0, $ = (y << 8 | x).toString(16).padStart(4, "0");
-            m.push($);
+            const x = f.charCodeAt(g), y = g + 1 < f.length ? f.charCodeAt(g + 1) : 0, w = (x << 8 | y).toString(16).padStart(4, "0");
+            m.push(w);
           }
-          d.push(`${h} ${m.join(" ")}`);
+          l.push(`${h} ${m.join(" ")}`);
         }
-        const u = (i + l.length).toString(16).padStart(7, "0");
-        d.push(u);
+        const u = (i + d.length).toString(16).padStart(7, "0");
+        l.push(u);
       }
       return {
-        stdout: d.join(`
+        stdout: l.join(`
 `) + `
 `,
         stderr: "",
@@ -2649,16 +2696,16 @@ const hostname = {
   async exec(n, e) {
     const { positional: t, flags: s } = parseArgs(n), r = t[0] || e.env.USER || "user", o = s.u || s.user, a = s.g || s.group, i = s.G || s.groups, c = s.n || s.name;
     s.r || s.real;
-    const l = 1e3, d = 1e3, u = [1e3], p = r, f = "users", h = [];
+    const d = 1e3, l = 1e3, u = [1e3], p = r, f = "users", h = [];
     if (o)
-      c ? h.push(p) : h.push(String(l));
+      c ? h.push(p) : h.push(String(d));
     else if (a)
-      c ? h.push(f) : h.push(String(d));
+      c ? h.push(f) : h.push(String(l));
     else if (i)
       c ? h.push(f) : h.push(u.join(" "));
     else {
       const m = u.map((g) => `${g}(${f})`).join(",");
-      h.push(`uid=${l}(${p}) gid=${d}(${f}) groups=${m}`);
+      h.push(`uid=${d}(${p}) gid=${l}(${f}) groups=${m}`);
     }
     return {
       stdout: h.join(`
@@ -2681,35 +2728,35 @@ const hostname = {
     const c = [];
     try {
       if (a)
-        for (const l of s) {
-          const d = e.fs.resolvePath(l, e.cwd);
-          await e.fs.mkdir(d, { recursive: !0 }), i && c.push(`install: creating directory '${l}'`);
+        for (const d of s) {
+          const l = e.fs.resolvePath(d, e.cwd);
+          await e.fs.mkdir(l, { recursive: !0 }), i && c.push(`install: creating directory '${d}'`);
         }
       else if (o) {
-        const l = e.fs.resolvePath(o, e.cwd);
-        for (const d of s) {
-          const u = e.fs.resolvePath(d, e.cwd), p = d.split("/").pop() || d, f = l + "/" + p, h = await e.fs.readFile(u);
-          await e.fs.writeFile(f, h), i && c.push(`'${d}' -> '${o}/${p}'`);
+        const d = e.fs.resolvePath(o, e.cwd);
+        for (const l of s) {
+          const u = e.fs.resolvePath(l, e.cwd), p = l.split("/").pop() || l, f = d + "/" + p, h = await e.fs.readFile(u);
+          await e.fs.writeFile(f, h), i && c.push(`'${l}' -> '${o}/${p}'`);
         }
       } else {
         if (s.length < 2)
           return { stdout: "", stderr: `install: missing destination
 `, exitCode: 1 };
-        const l = s[s.length - 1], d = s.slice(0, -1), u = e.fs.resolvePath(l, e.cwd);
+        const d = s[s.length - 1], l = s.slice(0, -1), u = e.fs.resolvePath(d, e.cwd);
         let p = !1;
         try {
           p = (await e.fs.stat(u)).type === "dir";
         } catch {
-          p = d.length > 1;
+          p = l.length > 1;
         }
-        if (p && d.length > 1)
-          for (const f of d) {
-            const h = e.fs.resolvePath(f, e.cwd), m = f.split("/").pop() || f, g = u + "/" + m, y = await e.fs.readFile(h);
-            await e.fs.writeFile(g, y), i && c.push(`'${f}' -> '${l}/${m}'`);
+        if (p && l.length > 1)
+          for (const f of l) {
+            const h = e.fs.resolvePath(f, e.cwd), m = f.split("/").pop() || f, g = u + "/" + m, x = await e.fs.readFile(h);
+            await e.fs.writeFile(g, x), i && c.push(`'${f}' -> '${d}/${m}'`);
           }
         else {
-          const f = e.fs.resolvePath(d[0], e.cwd), h = await e.fs.readFile(f);
-          await e.fs.writeFile(u, h), i && c.push(`'${d[0]}' -> '${l}'`);
+          const f = e.fs.resolvePath(l[0], e.cwd), h = await e.fs.readFile(f);
+          await e.fs.writeFile(u, h), i && c.push(`'${l[0]}' -> '${d}'`);
         }
       }
       return {
@@ -2719,10 +2766,10 @@ const hostname = {
         stderr: "",
         exitCode: 0
       };
-    } catch (l) {
+    } catch (d) {
       return {
         stdout: "",
-        stderr: `install: ${l instanceof Error ? l.message : l}
+        stderr: `install: ${d instanceof Error ? d.message : d}
 `,
         exitCode: 1
       };
@@ -2740,30 +2787,30 @@ const hostname = {
 `,
         exitCode: 1
       };
-    const o = t[1] ? parseInt(t[1]) - 1 : 0, a = t[2] ? parseInt(t[2]) - 1 : 0, i = t.t || /\s+/, c = t.o, l = r.i;
+    const o = t[1] ? parseInt(t[1]) - 1 : 0, a = t[2] ? parseInt(t[2]) - 1 : 0, i = t.t || /\s+/, c = t.o, d = r.i;
     try {
-      const d = e.fs.resolvePath(s[0], e.cwd), u = e.fs.resolvePath(s[1], e.cwd), p = await e.fs.readFile(d), f = await e.fs.readFile(u), h = p.split(`
-`).filter((w) => w.trim() !== ""), m = f.split(`
-`).filter((w) => w.trim() !== ""), g = (w) => w.map((v) => v.split(i)), y = g(h), x = g(m), $ = /* @__PURE__ */ new Map();
-      for (const w of x) {
-        const v = (w[a] || "").trim(), S = l ? v.toLowerCase() : v;
-        $.has(S) || $.set(S, []), $.get(S).push(w);
+      const l = e.fs.resolvePath(s[0], e.cwd), u = e.fs.resolvePath(s[1], e.cwd), p = await e.fs.readFile(l), f = await e.fs.readFile(u), h = p.split(`
+`).filter(($) => $.trim() !== ""), m = f.split(`
+`).filter(($) => $.trim() !== ""), g = ($) => $.map((v) => v.split(i)), x = g(h), y = g(m), w = /* @__PURE__ */ new Map();
+      for (const $ of y) {
+        const v = ($[a] || "").trim(), E = d ? v.toLowerCase() : v;
+        w.has(E) || w.set(E, []), w.get(E).push($);
       }
       const C = [];
-      for (const w of y) {
-        const v = (w[o] || "").trim(), S = l ? v.toLowerCase() : v, b = $.get(S) || [];
-        for (const E of b) {
-          let T;
+      for (const $ of x) {
+        const v = ($[o] || "").trim(), E = d ? v.toLowerCase() : v, b = w.get(E) || [];
+        for (const S of b) {
+          let A;
           if (c)
-            T = c.split(",").map((R) => {
+            A = c.split(",").map((R) => {
               const [F, I] = R.split(".").map((k) => parseInt(k));
-              return (F === 1 ? w : E)[I - 1] || "";
+              return (F === 1 ? $ : S)[I - 1] || "";
             }).join(" ");
           else {
-            const A = w[o] || "", R = w.filter((I, P) => P !== o), F = E.filter((I, P) => P !== a);
-            T = [A, ...R, ...F].join(" ");
+            const T = $[o] || "", R = $.filter((I, P) => P !== o), F = S.filter((I, P) => P !== a);
+            A = [T, ...R, ...F].join(" ");
           }
-          C.push(T);
+          C.push(A);
         }
       }
       return {
@@ -2773,10 +2820,10 @@ const hostname = {
         stderr: "",
         exitCode: 0
       };
-    } catch (d) {
+    } catch (l) {
       return {
         stdout: "",
-        stderr: `join: ${d instanceof Error ? d.message : d}
+        stderr: `join: ${l instanceof Error ? l.message : l}
 `,
         exitCode: 1
       };
@@ -2797,7 +2844,7 @@ const hostname = {
       ), o = r.split(`
 `), a = t.N || t.n;
       let i = "";
-      return a ? i = o.map((c, l) => `${String(l + 1).padStart(6)}  ${c}`).join(`
+      return a ? i = o.map((c, d) => `${String(d + 1).padStart(6)}  ${c}`).join(`
 `) : i = r, i && !i.endsWith(`
 `) && (i += `
 `), { stdout: i, stderr: "", exitCode: 0 };
@@ -2876,7 +2923,7 @@ const arithmeticExpansion = {
     if (s.length < 2)
       return { stdout: "", stderr: `ln: missing operand
 `, exitCode: 1 };
-    const i = e.fs.resolvePath(s[0], e.cwd), c = e.fs.resolvePath(s[1], e.cwd), l = [];
+    const i = e.fs.resolvePath(s[0], e.cwd), c = e.fs.resolvePath(s[1], e.cwd), d = [];
     try {
       if (await e.fs.exists(c))
         if (o)
@@ -2892,20 +2939,20 @@ const arithmeticExpansion = {
             exitCode: 1
           };
       if (r && e.fs.symlink)
-        await e.fs.symlink(i, c), a && l.push(`'${c}' -> '${i}'`);
+        await e.fs.symlink(i, c), a && d.push(`'${c}' -> '${i}'`);
       else {
-        const d = await e.fs.readFile(i);
-        await e.fs.writeFile(c, d), a && l.push(`'${c}' => '${i}'`);
+        const l = await e.fs.readFile(i);
+        await e.fs.writeFile(c, l), a && d.push(`'${c}' => '${i}'`);
       }
       return {
-        stdout: l.join(`
-`) + (l.length > 0 ? `
+        stdout: d.join(`
+`) + (d.length > 0 ? `
 ` : ""),
         stderr: "",
         exitCode: 0
       };
-    } catch (d) {
-      return { stdout: "", stderr: `ln: ${d instanceof Error ? d.message : d}
+    } catch (l) {
+      return { stdout: "", stderr: `ln: ${l instanceof Error ? l.message : l}
 `, exitCode: 1 };
     }
   }
@@ -2913,41 +2960,41 @@ const arithmeticExpansion = {
   name: "ls",
   description: "List directory contents",
   async exec(n, e) {
-    const { flags: t, positional: s } = parseArgs(n), r = s.length > 0 ? s : ["."], o = t.a, a = t.l, i = t.h, c = t.R, l = [];
-    async function d(u, p, f) {
+    const { flags: t, positional: s } = parseArgs(n), r = s.length > 0 ? s : ["."], o = t.a, a = t.l, i = t.h, c = t.R, d = [];
+    async function l(u, p, f) {
       const h = await e.fs.readdir(u), m = o ? h : h.filter((g) => !g.name.startsWith("."));
-      if (m.sort((g, y) => g.name.localeCompare(y.name)), f && l.push(`${p}:`), a) {
-        l.push(`total ${m.length}`);
+      if (m.sort((g, x) => g.name.localeCompare(x.name)), f && d.push(`${p}:`), a) {
+        d.push(`total ${m.length}`);
         for (const g of m)
-          l.push(formatLong(g.name, g, i));
+          d.push(formatLong(g.name, g, i));
       } else
-        l.push(m.map((g) => g.type === "dir" ? g.name + "/" : g.name).join("  "));
+        d.push(m.map((g) => g.type === "dir" ? g.name + "/" : g.name).join("  "));
       if (c) {
         for (const g of m)
           if (g.type === "dir") {
-            l.push("");
-            const y = u === "/" ? "/" + g.name : u + "/" + g.name, x = p === "." ? g.name : p + "/" + g.name;
-            await d(y, x, !0);
+            d.push("");
+            const x = u === "/" ? "/" + g.name : u + "/" + g.name, y = p === "." ? g.name : p + "/" + g.name;
+            await l(x, y, !0);
           }
       }
     }
     for (const u of r) {
       const p = e.fs.resolvePath(u, e.cwd), f = await e.fs.stat(p);
       if (f.type === "file") {
-        l.push(a ? formatLong(p.split("/").pop(), f, i) : p.split("/").pop());
+        d.push(a ? formatLong(p.split("/").pop(), f, i) : p.split("/").pop());
         continue;
       }
       const h = r.length > 1 || c;
-      await d(p, u, h);
+      await l(p, u, h);
     }
-    return { stdout: l.join(`
+    return { stdout: d.join(`
 `) + `
 `, stderr: "", exitCode: 0 };
   }
 };
 function formatLong(n, e, t) {
-  const s = e.type === "dir" ? "d" : "-", r = e.mode ?? (e.type === "dir" ? 493 : 420), o = formatPerms(r), a = t ? humanSize(e.size) : String(e.size).padStart(8), i = new Date(e.mtime), c = formatDate(i);
-  return `${s}${o}  1 user user ${a} ${c} ${n}`;
+  const s = e.type === "symlink" ? "l" : e.type === "dir" ? "d" : "-", r = e.mode ?? (e.type === "symlink" ? 511 : e.type === "dir" ? 493 : 420), o = formatPerms(r), a = t ? humanSize(e.size) : String(e.size).padStart(8), i = new Date(e.mtime), c = formatDate(i), d = e.type === "symlink" && e.target ? ` -> ${e.target}` : "";
+  return `${s}${o}  1 user user ${a} ${c} ${n}${d}`;
 }
 function formatPerms(n) {
   let t = "";
@@ -2971,9 +3018,9 @@ const make = {
   async exec(n, e) {
     const { values: t, positional: s, flags: r } = parseArgs(n, ["f", "file", "C", "j"]), o = t.f || t.file || "Makefile", a = t.C;
     t.j;
-    const i = r.n || r["dry-run"], c = r.p || r.print, l = s.length > 0 ? s : ["all"];
+    const i = r.n || r["dry-run"], c = r.p || r.print, d = s.length > 0 ? s : ["all"];
     try {
-      const d = a ? e.fs.resolvePath(a, e.cwd) : e.cwd, u = e.fs.resolvePath(o, d);
+      const l = a ? e.fs.resolvePath(a, e.cwd) : e.cwd, u = e.fs.resolvePath(o, l);
       let p;
       try {
         p = await e.fs.readFile(u);
@@ -2986,7 +3033,7 @@ const make = {
         };
       }
       const f = parseMakefile(p), h = [];
-      for (const m of l) {
+      for (const m of d) {
         const g = f.get(m);
         if (!g)
           return {
@@ -2995,14 +3042,14 @@ const make = {
 `,
             exitCode: 2
           };
-        for (const y of g.prerequisites) {
-          const x = f.get(y);
-          if (x)
-            for (const $ of x.commands)
-              c || i ? h.push($) : h.push(`# ${$}`);
+        for (const x of g.prerequisites) {
+          const y = f.get(x);
+          if (y)
+            for (const w of y.commands)
+              c || i ? h.push(w) : h.push(`# ${w}`);
         }
-        for (const y of g.commands)
-          c || i ? h.push(y) : h.push(`# ${y}`);
+        for (const x of g.commands)
+          c || i ? h.push(x) : h.push(`# ${x}`);
       }
       return {
         stdout: h.join(`
@@ -3011,10 +3058,10 @@ const make = {
         stderr: "",
         exitCode: 0
       };
-    } catch (d) {
+    } catch (l) {
       return {
         stdout: "",
-        stderr: `make: ${d instanceof Error ? d.message : d}
+        stderr: `make: ${l instanceof Error ? l.message : l}
 `,
         exitCode: 2
       };
@@ -3029,8 +3076,8 @@ function parseMakefile(n) {
     const o = t[r];
     if (!(o.trim().startsWith("#") || o.trim() === ""))
       if (o.includes(":") && !o.startsWith("	")) {
-        const a = o.indexOf(":"), i = o.substring(0, a).trim(), c = o.substring(a + 1).trim(), l = c ? c.split(/\s+/) : [];
-        s = { target: i, prerequisites: l, commands: [] }, e.set(i, s);
+        const a = o.indexOf(":"), i = o.substring(0, a).trim(), c = o.substring(a + 1).trim(), d = c ? c.split(/\s+/) : [];
+        s = { target: i, prerequisites: d, commands: [] }, e.set(i, s);
       } else o.startsWith("	") && s && s.commands.push(o.substring(1));
   }
   return e;
@@ -3050,15 +3097,15 @@ const md5sum = {
     const a = s.length > 0 ? s : ["-"], i = [];
     try {
       for (const c of a) {
-        let l;
+        let d;
         if (c === "-")
-          l = e.stdin;
+          d = e.stdin;
         else {
           const p = e.fs.resolvePath(c, e.cwd);
-          l = await e.fs.readFile(p);
+          d = await e.fs.readFile(p);
         }
-        const d = await md5(l), u = o ? "*" : " ";
-        i.push(`${d}${u}${c === "-" ? "-" : c}`);
+        const l = await md5(d), u = o ? "*" : " ";
+        i.push(`${l}${u}${c === "-" ? "-" : c}`);
       }
       return {
         stdout: i.join(`
@@ -3123,8 +3170,8 @@ const mkdir = {
 `, exitCode: 1 };
     try {
       for (const a of r) {
-        const i = e.fs.resolvePath(a, e.cwd), c = a.split("/").pop(), l = o ? s + "/" + c : s;
-        await e.fs.rename(i, l);
+        const i = e.fs.resolvePath(a, e.cwd), c = a.split("/").pop(), d = o ? s + "/" + c : s;
+        await e.fs.rename(i, d);
       }
       return { stdout: "", stderr: "", exitCode: 0 };
     } catch (a) {
@@ -3136,9 +3183,9 @@ const mkdir = {
   name: "nl",
   description: "Number lines of files",
   async exec(n, e) {
-    const { values: t, positional: s, flags: r } = parseArgs(n, ["b", "s", "w", "n", "v"]), o = t.b || "t", a = t.s || "	", i = parseInt(t.w || "6", 10), c = t.n || "rn", l = parseInt(t.v || "1", 10);
+    const { values: t, positional: s, flags: r } = parseArgs(n, ["b", "s", "w", "n", "v"]), o = t.b || "t", a = t.s || "	", i = parseInt(t.w || "6", 10), c = t.n || "rn", d = parseInt(t.v || "1", 10);
     r.p;
-    const d = r.ba;
+    const l = r.ba;
     try {
       const { content: u } = await readInput(
         s,
@@ -3148,11 +3195,11 @@ const mkdir = {
         e.fs.resolvePath
       ), p = u.split(`
 `), f = [];
-      let h = l;
+      let h = d;
       for (const m of p) {
         let g = !1;
-        const y = d ? "a" : o;
-        switch (y) {
+        const x = l ? "a" : o;
+        switch (x) {
           case "a":
             g = !0;
             break;
@@ -3163,18 +3210,18 @@ const mkdir = {
             g = !1;
             break;
           default:
-            if (y.startsWith("p")) {
-              const x = y.substring(1);
+            if (x.startsWith("p")) {
+              const y = x.substring(1);
               try {
-                g = new RegExp(x).test(m);
+                g = new RegExp(y).test(m);
               } catch {
                 g = !1;
               }
             }
         }
         if (g) {
-          const x = formatNumber(h, i, c);
-          f.push(x + a + m), h++;
+          const y = formatNumber(h, i, c);
+          f.push(y + a + m), h++;
         } else
           f.push(" ".repeat(i) + a + m);
       }
@@ -3250,7 +3297,7 @@ Try 'nohup --help' for more information.
   name: "od",
   description: "Dump files in octal and other formats",
   async exec(n, e) {
-    const { values: t, positional: s, flags: r } = parseArgs(n, ["t", "N", "j", "w", "A"]), o = t.t || "o2", a = t.N ? parseInt(t.N) : void 0, i = t.j ? parseInt(t.j) : 0, c = t.w ? parseInt(t.w) : 16, l = t.A || "o", d = r.b || r.c || r.d || r.o || r.s || r.x;
+    const { values: t, positional: s, flags: r } = parseArgs(n, ["t", "N", "j", "w", "A"]), o = t.t || "o2", a = t.N ? parseInt(t.N) : void 0, i = t.j ? parseInt(t.j) : 0, c = t.w ? parseInt(t.w) : 16, d = t.A || "o", l = r.b || r.c || r.d || r.o || r.s || r.x;
     try {
       const { content: u } = await readInput(
         s,
@@ -3262,13 +3309,13 @@ Try 'nohup --help' for more information.
       let p = u.substring(i, a ? i + a : void 0);
       const f = [];
       let h = "o", m = 2;
-      d ? r.b ? (h = "o", m = 1) : r.c ? (h = "c", m = 1) : r.d || r.s ? (h = "d", m = 2) : r.o ? (h = "o", m = 2) : r.x && (h = "x", m = 2) : o && (h = o[0] || "o", m = parseInt(o.substring(1)) || 2);
+      l ? r.b ? (h = "o", m = 1) : r.c ? (h = "c", m = 1) : r.d || r.s ? (h = "d", m = 2) : r.o ? (h = "o", m = 2) : r.x && (h = "x", m = 2) : o && (h = o[0] || "o", m = parseInt(o.substring(1)) || 2);
       let g = i;
-      for (let y = 0; y < p.length; y += c) {
-        const x = p.substring(y, y + c), $ = formatAddress(g, l), C = formatChunk(x, h, m);
-        f.push(`${$} ${C}`), g += x.length;
+      for (let x = 0; x < p.length; x += c) {
+        const y = p.substring(x, x + c), w = formatAddress(g, d), C = formatChunk(y, h, m);
+        f.push(`${w} ${C}`), g += y.length;
       }
-      return l !== "n" && f.push(formatAddress(g, l)), {
+      return d !== "n" && f.push(formatAddress(g, d)), {
         stdout: f.join(`
 `) + `
 `,
@@ -3353,32 +3400,32 @@ const paste = {
     s.length === 0 && s.push("-");
     try {
       const i = [];
-      for (const l of s) {
-        let d;
-        if (l === "-")
-          d = e.stdin;
+      for (const d of s) {
+        let l;
+        if (d === "-")
+          l = e.stdin;
         else {
-          const u = e.fs.resolvePath(l, e.cwd);
-          d = await e.fs.readFile(u);
+          const u = e.fs.resolvePath(d, e.cwd);
+          l = await e.fs.readFile(u);
         }
-        i.push(d.split(`
+        i.push(l.split(`
 `).filter((u, p, f) => p < f.length - 1 || u !== ""));
       }
       const c = [];
       if (a)
-        for (const l of i) {
-          const d = o.split(""), u = [];
-          for (let p = 0; p < l.length; p++)
-            u.push(l[p]), p < l.length - 1 && u.push(d[p % d.length]);
+        for (const d of i) {
+          const l = o.split(""), u = [];
+          for (let p = 0; p < d.length; p++)
+            u.push(d[p]), p < d.length - 1 && u.push(l[p % l.length]);
           c.push(u.join(""));
         }
       else {
-        const l = Math.max(...i.map((u) => u.length)), d = o.split("");
-        for (let u = 0; u < l; u++) {
+        const d = Math.max(...i.map((u) => u.length)), l = o.split("");
+        for (let u = 0; u < d; u++) {
           const p = [];
           for (let f = 0; f < i.length; f++) {
             const h = i[f][u] || "";
-            p.push(h), f < i.length - 1 && p.push(d[f % d.length]);
+            p.push(h), f < i.length - 1 && p.push(l[f % l.length]);
           }
           c.push(p.join(""));
         }
@@ -3403,35 +3450,35 @@ const paste = {
   name: "patch",
   description: "Apply a diff file to an original",
   async exec(n, e) {
-    const { values: t, positional: s, flags: r } = parseArgs(n, ["p", "i", "input", "o", "output"]), o = t.p ? parseInt(t.p) : 0, a = t.i || t.input, i = t.o || t.output, c = r.R || r.reverse, l = r["dry-run"];
+    const { values: t, positional: s, flags: r } = parseArgs(n, ["p", "i", "input", "o", "output"]), o = t.p ? parseInt(t.p) : 0, a = t.i || t.input, i = t.o || t.output, c = r.R || r.reverse, d = r["dry-run"];
     try {
-      let d;
+      let l;
       if (a) {
         const f = e.fs.resolvePath(a, e.cwd);
-        d = await e.fs.readFile(f);
+        l = await e.fs.readFile(f);
       } else if (s.length > 0) {
         const f = e.fs.resolvePath(s[0], e.cwd);
-        d = await e.fs.readFile(f);
+        l = await e.fs.readFile(f);
       } else
-        d = e.stdin;
-      const u = parseUnifiedDiff(d), p = [];
+        l = e.stdin;
+      const u = parseUnifiedDiff(l), p = [];
       for (const f of u) {
         const h = stripPath(f.newFile, o), m = stripPath(f.oldFile, o);
-        if (p.push(`patching file ${h}`), !l) {
+        if (p.push(`patching file ${h}`), !d) {
           let g;
           try {
-            const x = e.fs.resolvePath(h, e.cwd);
-            g = await e.fs.readFile(x);
+            const y = e.fs.resolvePath(h, e.cwd);
+            g = await e.fs.readFile(y);
           } catch {
             g = "";
           }
-          const y = applyPatch(g, f.hunks, c);
+          const x = applyPatch(g, f.hunks, c);
           if (i) {
-            const x = e.fs.resolvePath(i, e.cwd);
-            await e.fs.writeFile(x, y);
+            const y = e.fs.resolvePath(i, e.cwd);
+            await e.fs.writeFile(y, x);
           } else {
-            const x = e.fs.resolvePath(h, e.cwd);
-            await e.fs.writeFile(x, y);
+            const y = e.fs.resolvePath(h, e.cwd);
+            await e.fs.writeFile(y, x);
           }
         }
       }
@@ -3442,10 +3489,10 @@ const paste = {
         stderr: "",
         exitCode: 0
       };
-    } catch (d) {
+    } catch (l) {
       return {
         stdout: "",
-        stderr: `patch: ${d instanceof Error ? d.message : d}
+        stderr: `patch: ${l instanceof Error ? l.message : l}
 `,
         exitCode: 1
       };
@@ -3482,13 +3529,13 @@ function applyPatch(n, e, t) {
   for (const r of e) {
     const o = r.oldStart - 1, a = r.oldLines, i = [];
     for (const c of r.lines) {
-      const l = c[0], d = c.substring(1);
+      const d = c[0], l = c.substring(1);
       if (t) {
-        if (l === "+")
+        if (d === "+")
           continue;
-        i.push(d);
+        i.push(l);
       } else
-        (l === "+" || l === " ") && i.push(d);
+        (d === "+" || d === " ") && i.push(l);
     }
     s.splice(o, a, ...i);
   }
@@ -3640,41 +3687,41 @@ const pkgConfig = {
       "a",
       "across",
       "columns"
-    ]), o = r.h || r.header || "", a = parseInt(r.l || r.length || "66"), i = parseInt(r.w || r.width || "72"), c = t.t || t["omit-header"], l = t.d || t["double-space"], d = t.n || t["number-lines"], u = t.m || t.merge, p = r.s || r.separator || "	", f = t.a || t.across, h = parseInt(r.columns || "1"), m = s.length > 0 ? s : ["-"];
+    ]), o = r.h || r.header || "", a = parseInt(r.l || r.length || "66"), i = parseInt(r.w || r.width || "72"), c = t.t || t["omit-header"], d = t.d || t["double-space"], l = t.n || t["number-lines"], u = t.m || t.merge, p = r.s || r.separator || "	", f = t.a || t.across, h = parseInt(r.columns || "1"), m = s.length > 0 ? s : ["-"];
     let g = "";
-    for (const y of m) {
-      let x;
+    for (const x of m) {
+      let y;
       try {
-        if (y === "-")
-          x = e.stdin;
+        if (x === "-")
+          y = e.stdin;
         else {
-          const A = e.fs.resolvePath(y, e.cwd);
-          x = await e.fs.readFile(A);
+          const T = e.fs.resolvePath(x, e.cwd);
+          y = await e.fs.readFile(T);
         }
-      } catch (A) {
+      } catch (T) {
         return {
           stdout: "",
-          stderr: `pr: ${y}: ${A instanceof Error ? A.message : String(A)}
+          stderr: `pr: ${x}: ${T instanceof Error ? T.message : String(T)}
 `,
           exitCode: 1
         };
       }
-      const $ = x.split(`
-`), C = y === "-" ? "" : y, w = (/* @__PURE__ */ new Date()).toISOString().split("T")[0], v = o || C, S = c ? [] : [
+      const w = y.split(`
+`), C = x === "-" ? "" : x, $ = (/* @__PURE__ */ new Date()).toISOString().split("T")[0], v = o || C, E = c ? [] : [
         "",
         "",
-        `${w}  ${v}  Page 1`,
+        `${$}  ${v}  Page 1`,
         "",
         ""
       ];
-      let b = [...$];
-      l && (b = b.flatMap((A) => [A, ""])), d && (b = b.map((A, R) => `${(R + 1).toString().padStart(6, " ")}  ${A}`)), h > 1 ? b = formatColumns(b, h, i, p, f) : u && m.length > 1;
-      const E = a - S.length - 5, T = [];
-      for (let A = 0; A < b.length; A += E)
-        T.push(b.slice(A, A + E));
-      for (let A = 0; A < T.length; A++) {
+      let b = [...w];
+      d && (b = b.flatMap((T) => [T, ""])), l && (b = b.map((T, R) => `${(R + 1).toString().padStart(6, " ")}  ${T}`)), h > 1 ? b = formatColumns(b, h, i, p, f) : u && m.length > 1;
+      const S = a - E.length - 5, A = [];
+      for (let T = 0; T < b.length; T += S)
+        A.push(b.slice(T, T + S));
+      for (let T = 0; T < A.length; T++) {
         if (!c) {
-          const R = `${w}  ${v}  Page ${A + 1}`;
+          const R = `${$}  ${v}  Page ${T + 1}`;
           g += `
 
 ` + R + `
@@ -3682,7 +3729,7 @@ const pkgConfig = {
 
 `;
         }
-        g += T[A].join(`
+        g += A[T].join(`
 `) + `
 `;
       }
@@ -3698,18 +3745,18 @@ function formatColumns(n, e, t, s, r) {
   const o = Math.floor((t - (e - 1) * s.length) / e), a = [];
   if (r)
     for (let i = 0; i < n.length; i += e) {
-      const l = n.slice(i, i + e).map((d) => d.padEnd(o).slice(0, o));
-      a.push(l.join(s));
+      const d = n.slice(i, i + e).map((l) => l.padEnd(o).slice(0, o));
+      a.push(d.join(s));
     }
   else {
     const i = Math.ceil(n.length / e);
     for (let c = 0; c < i; c++) {
-      const l = [];
-      for (let d = 0; d < e; d++) {
-        const u = d * i + c, p = u < n.length ? n[u] : "";
-        l.push(p.padEnd(o).slice(0, o));
+      const d = [];
+      for (let l = 0; l < e; l++) {
+        const u = l * i + c, p = u < n.length ? n[u] : "";
+        d.push(p.padEnd(o).slice(0, o));
       }
-      a.push(l.join(s));
+      a.push(d.join(s));
     }
   }
   return a;
@@ -3784,24 +3831,38 @@ const printenv = {
           r += "%", o++;
         else {
           let a = "";
-          for (; o < e.length && !/[sdf]/.test(e[o]); )
+          for (; o < e.length && !/[sdfxX]/.test(e[o]); )
             a += e[o], o++;
           const i = e[o] ?? "s";
           o++;
-          const c = t[s++] ?? "";
+          const c = t[s++] ?? "", d = a.startsWith("-"), l = a.startsWith("0") || d && a[1] === "0", u = a.replace(/^-?0?/, ""), p = u.indexOf("."), f = p >= 0 ? parseInt(u.slice(0, p), 10) || 0 : parseInt(u, 10) || 0;
+          let h;
           switch (i) {
             case "s":
-              r += c;
+              h = c;
               break;
             case "d":
-              r += String(parseInt(c, 10) || 0);
+              h = String(parseInt(c, 10) || 0);
+              break;
+            case "x":
+              h = (parseInt(c, 10) || 0).toString(16);
+              break;
+            case "X":
+              h = (parseInt(c, 10) || 0).toString(16).toUpperCase();
               break;
             case "f": {
-              const l = a.includes(".") ? parseInt(a.split(".")[1], 10) : 6;
-              r += (parseFloat(c) || 0).toFixed(l);
+              const m = a.includes(".") ? parseInt(a.split(".")[1], 10) : 6;
+              h = (parseFloat(c) || 0).toFixed(m);
               break;
             }
+            default:
+              h = c;
           }
+          if (f > 0 && h.length < f) {
+            const m = l && !d && i !== "s" ? "0" : " ";
+            d ? h = h.padEnd(f, " ") : h = h.padStart(f, m);
+          }
+          r += h;
         }
       else
         r += e[o], o++;
@@ -3903,7 +3964,7 @@ Shell implementers: Parse at lexer/parser level, execute before main command.
   name: "read",
   description: "Read a line from stdin into variables",
   async exec(n, e) {
-    var l;
+    var d;
     const { positional: t, flags: s, values: r } = parseArgs(n, ["r", "p", "n", "t", "d", "a", "s"]);
     let o = e.stdin || "";
     r.p;
@@ -3913,8 +3974,8 @@ Shell implementers: Parse at lexer/parser level, execute before main command.
     if (i !== void 0)
       c = o.slice(0, i);
     else {
-      const d = o.indexOf(a);
-      d >= 0 ? c = o.slice(0, d) : c = o;
+      const l = o.indexOf(a);
+      l >= 0 ? c = o.slice(0, l) : c = o;
     }
     if (s.r || (c = c.replace(/\\n/g, `
 `).replace(/\\t/g, "	").replace(/\\\\/g, "\\")), t.length === 0)
@@ -3922,8 +3983,8 @@ Shell implementers: Parse at lexer/parser level, execute before main command.
     else if (t.length === 1)
       e.env && (e.env[t[0]] = c);
     else {
-      const d = ((l = e.env) == null ? void 0 : l.IFS) || ` 	
-`, u = new RegExp(`[${d.replace(/[-\\^$*+?.()|[\]{}]/g, "\\$&")}]+`), p = c.split(u).filter((f) => f);
+      const l = ((d = e.env) == null ? void 0 : d.IFS) || ` 	
+`, u = new RegExp(`[${l.replace(/[-\\^$*+?.()|[\]{}]/g, "\\$&")}]+`), p = c.split(u).filter((f) => f);
       for (let f = 0; f < t.length; f++) {
         const h = t[f];
         f < t.length - 1 ? e.env && (e.env[h] = p[f] || "") : e.env && (e.env[h] = p.slice(f).join(" "));
@@ -3944,9 +4005,26 @@ Shell implementers: Parse at lexer/parser level, execute before main command.
       return { stdout: "", stderr: `readlink: missing operand
 `, exitCode: 1 };
     const o = e.fs.resolvePath(s[0], e.cwd);
-    return r ? { stdout: o + `
-`, stderr: "", exitCode: 0 } : { stdout: o + `
+    if (r) {
+      try {
+        if (e.fs.readlink) {
+          const a = await e.fs.readlink(o), i = o.split("/").slice(0, -1).join("/") || "/";
+          return { stdout: (a.startsWith("/") ? a : e.fs.resolvePath(a, i)) + `
 `, stderr: "", exitCode: 0 };
+        }
+      } catch {
+      }
+      return { stdout: o + `
+`, stderr: "", exitCode: 0 };
+    }
+    try {
+      if (e.fs.readlink)
+        return { stdout: await e.fs.readlink(o) + `
+`, stderr: "", exitCode: 0 };
+    } catch {
+    }
+    return { stdout: "", stderr: `readlink: ${s[0]}: not a symbolic link
+`, exitCode: 1 };
   }
 }, realpath = {
   name: "realpath",
@@ -3959,28 +4037,28 @@ Shell implementers: Parse at lexer/parser level, execute before main command.
     const r = t.q || t.quiet, o = !t.s;
     t.s;
     const a = [], i = [];
-    for (const d of s)
+    for (const l of s)
       try {
-        let u = e.fs.resolvePath(d, e.cwd);
+        let u = e.fs.resolvePath(l, e.cwd);
         if (o) {
           const p = u.split("/").filter((h) => h !== "" && h !== "."), f = [];
           for (const h of p)
             h === ".." ? f.length > 0 && f.pop() : f.push(h);
           u = "/" + f.join("/");
         }
-        await e.fs.exists(u) ? a.push(u) : r || i.push(`realpath: ${d}: No such file or directory`);
+        await e.fs.exists(u) ? a.push(u) : r || i.push(`realpath: ${l}: No such file or directory`);
       } catch (u) {
-        r || i.push(`realpath: ${d}: ${u instanceof Error ? u.message : u}`);
+        r || i.push(`realpath: ${l}: ${u instanceof Error ? u.message : u}`);
       }
     const c = i.length > 0 ? i.join(`
 `) + `
-` : "", l = i.length > 0 ? 1 : 0;
+` : "", d = i.length > 0 ? 1 : 0;
     return {
       stdout: a.join(`
 `) + (a.length > 0 ? `
 ` : ""),
       stderr: c,
-      exitCode: l
+      exitCode: d
     };
   }
 }, returnCmd = {
@@ -4004,24 +4082,24 @@ Shell implementers: Parse at lexer/parser level, execute before main command.
 `, exitCode: 1 };
     async function a(i) {
       const c = await e.fs.readdir(i);
-      for (const l of c) {
-        const d = i + "/" + l.name;
-        l.type === "dir" ? await a(d) : await e.fs.unlink(d);
+      for (const d of c) {
+        const l = i + "/" + d.name;
+        d.type === "dir" ? await a(l) : await e.fs.unlink(l);
       }
       await e.fs.rmdir(i);
     }
     try {
       for (const i of s) {
         const c = e.fs.resolvePath(i, e.cwd);
-        let l;
+        let d;
         try {
-          l = await e.fs.stat(c);
+          d = await e.fs.stat(c);
         } catch {
           if (o) continue;
           return { stdout: "", stderr: `rm: cannot remove '${i}': No such file or directory
 `, exitCode: 1 };
         }
-        if (l.type === "dir") {
+        if (d.type === "dir") {
           if (!r)
             return { stdout: "", stderr: `rm: cannot remove '${i}': Is a directory
 `, exitCode: 1 };
@@ -4047,10 +4125,10 @@ Shell implementers: Parse at lexer/parser level, execute before main command.
     if (!a)
       return { stdout: "", stderr: `sed: unsupported expression: ${o}
 `, exitCode: 1 };
-    const [, , i, c, l] = a, d = l.includes("g"), u = l.includes("i");
+    const [, , i, c, d] = a, l = d.includes("g"), u = d.includes("i");
     let p;
     try {
-      const f = (d ? "g" : "") + (u ? "i" : "");
+      const f = (l ? "g" : "") + (u ? "i" : "");
       p = new RegExp(i, f);
     } catch {
       return { stdout: "", stderr: `sed: invalid regex: ${i}
@@ -4068,10 +4146,10 @@ Shell implementers: Parse at lexer/parser level, execute before main command.
 `);
       if (r && h.length > 0) {
         for (const g of h) {
-          const y = e.fs.resolvePath(g, e.cwd), $ = (await e.fs.readFile(y)).split(`
+          const x = e.fs.resolvePath(g, e.cwd), w = (await e.fs.readFile(x)).split(`
 `).map((C) => C.replace(p, c)).join(`
 `);
-          await e.fs.writeFile(y, $);
+          await e.fs.writeFile(x, w);
         }
         return { stdout: "", stderr: "", exitCode: 0 };
       }
@@ -4105,22 +4183,22 @@ Shell implementers: Parse at lexer/parser level, execute before main command.
         exitCode: 1
       };
     const c = s.s || s.separator || `
-`, l = s.f || s.format, d = t.w, u = [];
+`, d = s.f || s.format, l = t.w, u = [];
     if (a > 0)
       for (let h = o; h <= i; h += a)
         u.push(String(h));
     else
       for (let h = o; h >= i; h += a)
         u.push(String(h));
-    if (d) {
+    if (l) {
       const h = Math.max(...u.map((m) => m.length));
       for (let m = 0; m < u.length; m++)
         u[m] = u[m].padStart(h, "0");
     }
-    if (l && typeof l == "string")
+    if (d && typeof d == "string")
       for (let h = 0; h < u.length; h++) {
         const m = parseFloat(u[h]);
-        l.includes("%g") || l.includes("%d") || l.includes("%i") ? u[h] = l.replace(/%[gdi]/, String(m)) : l.includes("%f") ? u[h] = l.replace(/%f/, m.toFixed(6)) : l.includes("%e") && (u[h] = l.replace(/%e/, m.toExponential()));
+        d.includes("%g") || d.includes("%d") || d.includes("%i") ? u[h] = d.replace(/%[gdi]/, String(m)) : d.includes("%f") ? u[h] = d.replace(/%f/, m.toFixed(6)) : d.includes("%e") && (u[h] = d.replace(/%e/, m.toExponential()));
       }
     return {
       stdout: u.join(c) + ((typeof c == "string" ? c : `
@@ -4197,15 +4275,15 @@ Shell implementers: Parse at lexer/parser level, execute before main command.
     const a = s.length > 0 ? s : ["-"], i = [];
     try {
       for (const c of a) {
-        let l;
+        let d;
         if (c === "-")
-          l = e.stdin;
+          d = e.stdin;
         else {
           const p = e.fs.resolvePath(c, e.cwd);
-          l = await e.fs.readFile(p);
+          d = await e.fs.readFile(p);
         }
-        const d = await sha256(l), u = o ? "*" : " ";
-        i.push(`${d}${u}${c === "-" ? "-" : c}`);
+        const l = await sha256(d), u = o ? " *" : "  ";
+        i.push(`${l}${u}${c === "-" ? "-" : c}`);
       }
       return {
         stdout: i.join(`
@@ -4225,17 +4303,16 @@ Shell implementers: Parse at lexer/parser level, execute before main command.
   }
 };
 async function sha256(n) {
-  const e = globalThis;
-  if (typeof e.crypto < "u" && e.crypto.subtle) {
-    const r = new e.TextEncoder().encode(n), o = await e.crypto.subtle.digest("SHA-256", r);
-    return Array.from(new e.Uint8Array(o)).map((c) => c.toString(16).padStart(2, "0")).join("");
+  if (typeof crypto < "u" && crypto.subtle) {
+    const t = new TextEncoder().encode(n), s = await crypto.subtle.digest("SHA-256", t);
+    return Array.from(new Uint8Array(s)).map((o) => o.toString(16).padStart(2, "0")).join("");
   }
-  let t = 0;
-  for (let s = 0; s < n.length; s++) {
-    const r = n.charCodeAt(s);
-    t = (t << 5) - t + r, t = t & t;
+  let e = 0;
+  for (let t = 0; t < n.length; t++) {
+    const s = n.charCodeAt(t);
+    e = (e << 5) - e + s, e = e & e;
   }
-  return Math.abs(t).toString(16).padStart(64, "0");
+  return Math.abs(e).toString(16).padStart(64, "0");
 }
 const shift = {
   name: "shift",
@@ -4413,20 +4490,20 @@ const shrine = {
     const i = [];
     try {
       for (const c of t) {
-        const l = e.fs.resolvePath(c, e.cwd);
+        const d = e.fs.resolvePath(c, e.cwd);
         try {
-          const d = await e.fs.stat(l);
+          const l = await e.fs.stat(d);
           if (o) {
-            const u = formatStat(c, d, o);
+            const u = formatStat(c, l, o);
             i.push(u);
           } else if (a)
-            i.push(`${c} ${d.size} 0 ${d.mode} 0 0 0 0 0 0 ${d.mtime}`);
+            i.push(`${c} ${l.size} 0 ${l.mode} 0 0 0 0 0 0 ${l.mtime}`);
           else {
-            const u = d.type === "dir" ? "directory" : "regular file", p = formatMode(d.mode), f = new Date(d.mtime).toISOString();
-            i.push(`  File: ${c}`), i.push(`  Size: ${d.size}	Blocks: 0	IO Block: 4096	${u}`), i.push("Device: 0	Inode: 0	Links: 1"), i.push(`Access: (${p})	Uid: (0/root)	Gid: (0/root)`), i.push(`Access: ${f}`), i.push(`Modify: ${f}`), i.push(`Change: ${f}`);
+            const u = l.type === "dir" ? "directory" : "regular file", p = formatMode(l.mode), f = new Date(l.mtime).toISOString();
+            i.push(`  File: ${c}`), i.push(`  Size: ${l.size}	Blocks: 0	IO Block: 4096	${u}`), i.push("Device: 0	Inode: 0	Links: 1"), i.push(`Access: (${p})	Uid: (0/root)	Gid: (0/root)`), i.push(`Access: ${f}`), i.push(`Modify: ${f}`), i.push(`Change: ${f}`);
           }
-        } catch (d) {
-          i.push(`stat: cannot stat '${c}': ${d instanceof Error ? d.message : d}`);
+        } catch (l) {
+          i.push(`stat: cannot stat '${c}': ${l instanceof Error ? l.message : l}`);
         }
       }
       return {
@@ -4471,15 +4548,15 @@ const strings = {
     r.a;
     try {
       const i = s.length > 0 ? s : ["-"], c = [];
-      for (const l of i) {
-        let d, u = l;
-        if (l === "-")
-          d = e.stdin, u = "(standard input)";
+      for (const d of i) {
+        let l, u = d;
+        if (d === "-")
+          l = e.stdin, u = "(standard input)";
         else {
-          const f = e.fs.resolvePath(l, e.cwd);
-          d = await e.fs.readFile(f);
+          const f = e.fs.resolvePath(d, e.cwd);
+          l = await e.fs.readFile(f);
         }
-        const p = extractStrings(d, o);
+        const p = extractStrings(l, o);
         for (const f of p)
           a ? c.push(`${u}: ${f}`) : c.push(f);
       }
@@ -4526,21 +4603,21 @@ const tail = {
         e.fs.resolvePath
       );
       if (o) {
-        const d = parseInt(a, 10);
-        return { stdout: i.slice(-d), stderr: "", exitCode: 0 };
+        const l = parseInt(a, 10);
+        return { stdout: i.slice(-l), stderr: "", exitCode: 0 };
       }
       const c = i.split(`
 `);
       c.length > 0 && c[c.length - 1] === "" && c.pop();
-      let l;
+      let d;
       if (a.startsWith("+")) {
-        const d = parseInt(a.slice(1), 10);
-        l = c.slice(Math.max(0, d - 1));
+        const l = parseInt(a.slice(1), 10);
+        d = c.slice(Math.max(0, l - 1));
       } else {
-        const d = parseInt(a, 10);
-        l = d >= c.length ? c : c.slice(-d);
+        const l = parseInt(a, 10);
+        d = l >= c.length ? c : c.slice(-l);
       }
-      return { stdout: l.join(`
+      return { stdout: d.join(`
 `) + `
 `, stderr: "", exitCode: 0 };
     } catch (i) {
@@ -4552,91 +4629,49 @@ const tail = {
   name: "tar",
   description: "Archive utility (simplified tar format)",
   async exec(n, e) {
-    const { flags: t, values: s, positional: r } = parseArgs(n, ["f", "C"]), o = t.c || t.create, a = t.x || t.extract, i = t.t || t.list, c = t.v || t.verbose, l = s.f, d = s.C;
-    let u = e.cwd;
-    d && (u = e.fs.resolvePath(d, e.cwd));
-    const p = [o, a, i].filter(Boolean).length;
-    if (p === 0)
+    let t = n;
+    n.length > 0 && /^[a-zA-Z]{2,}$/.test(n[0]) && !n[0].startsWith("-") && (t = ["-" + n[0], ...n.slice(1)]);
+    const { flags: s, values: r, positional: o } = parseArgs(t, ["f", "C"]), a = s.c || s.create, i = s.x || s.extract, c = s.t || s.list, d = s.v || s.verbose, l = r.f, u = r.C;
+    let p = e.cwd;
+    u && (p = e.fs.resolvePath(u, e.cwd));
+    const f = [a, i, c].filter(Boolean).length;
+    if (f === 0)
       return { stdout: "", stderr: `tar: You must specify one of -c, -x, or -t
 `, exitCode: 1 };
-    if (p > 1)
+    if (f > 1)
       return { stdout: "", stderr: `tar: You may not specify more than one -c, -x, or -t
 `, exitCode: 1 };
     try {
-      if (o) {
+      if (a) {
         if (!l)
           return { stdout: "", stderr: `tar: Refusing to write archive to terminal (missing -f option?)
 `, exitCode: 1 };
-        const f = r;
-        if (f.length === 0)
+        const h = o;
+        if (h.length === 0)
           return { stdout: "", stderr: `tar: Cowardly refusing to create an empty archive
 `, exitCode: 1 };
-        const h = [];
-        async function m($, C) {
-          const w = e.fs.resolvePath($, u);
-          if ((await e.fs.stat(w)).type === "dir") {
-            h.push({ path: C + "/", content: "", isDir: !0 });
-            const S = await e.fs.readdir(w);
-            for (const b of S)
-              await m(w + "/" + b.name, C + "/" + b.name);
+        const m = [];
+        async function g(C, $) {
+          const v = e.fs.resolvePath(C, p);
+          if ((await e.fs.stat(v)).type === "dir") {
+            m.push({ path: $ + "/", content: "", isDir: !0 });
+            const b = await e.fs.readdir(v);
+            for (const S of b)
+              await g(v + "/" + S.name, $ + "/" + S.name);
           } else {
-            const S = await e.fs.readFile(w);
-            h.push({ path: C, content: S, isDir: !1 });
+            const b = await e.fs.readFile(v);
+            m.push({ path: $, content: b, isDir: !1 });
           }
         }
-        for (const $ of f)
-          await m($, $);
-        const g = ["FLUFFY-TAR-V1"];
-        for (const $ of h)
-          c && console.error($.path), g.push(`FILE:${$.path}`), g.push(`SIZE:${$.content.length}`), g.push(`TYPE:${$.isDir ? "dir" : "file"}`), g.push("DATA-START"), g.push($.content), g.push("DATA-END");
-        const y = g.join(`
-`), x = e.fs.resolvePath(l, e.cwd);
-        return await e.fs.writeFile(x, y), {
-          stdout: c ? h.map(($) => $.path).join(`
-`) + `
-` : "",
-          stderr: "",
-          exitCode: 0
-        };
-      }
-      if (a) {
-        if (!l)
-          return { stdout: "", stderr: `tar: Refusing to read archive from terminal (missing -f option?)
-`, exitCode: 1 };
-        const f = e.fs.resolvePath(l, e.cwd), m = (await e.fs.readFile(f)).split(`
-`);
-        if (m[0] !== "FLUFFY-TAR-V1")
-          return { stdout: "", stderr: `tar: This does not look like a tar archive
-`, exitCode: 1 };
-        let g = 1;
-        const y = [];
-        for (; g < m.length && m[g].startsWith("FILE:"); ) {
-          const x = m[g].slice(5), $ = parseInt(m[g + 1].slice(5), 10), C = m[g + 2].slice(5);
-          g += 4;
-          const w = [];
-          for (; g < m.length && m[g] !== "DATA-END"; )
-            w.push(m[g]), g++;
-          const v = w.join(`
-`);
-          g++;
-          const S = e.fs.resolvePath(x, u);
-          if (C === "dir")
-            await e.fs.mkdir(S, { recursive: !0 });
-          else {
-            const b = S.lastIndexOf("/");
-            if (b > 0) {
-              const E = S.slice(0, b);
-              try {
-                await e.fs.mkdir(E, { recursive: !0 });
-              } catch {
-              }
-            }
-            await e.fs.writeFile(S, v);
-          }
-          y.push(x), c && console.error(x);
-        }
-        return {
-          stdout: c ? y.join(`
+        for (const C of h)
+          await g(C, C);
+        const x = ["FLUFFY-TAR-V1"];
+        for (const C of m)
+          d && console.error(C.path), x.push(`FILE:${C.path}`), x.push(`SIZE:${C.content.length}`), x.push(`TYPE:${C.isDir ? "dir" : "file"}`), x.push("DATA-START"), x.push(C.content), x.push("DATA-END");
+        const y = x.join(`
+`), w = e.fs.resolvePath(l, e.cwd);
+        return await e.fs.writeFile(w, y), {
+          stdout: d ? m.map((C) => C.path).join(`
 `) + `
 ` : "",
           stderr: "",
@@ -4647,24 +4682,68 @@ const tail = {
         if (!l)
           return { stdout: "", stderr: `tar: Refusing to read archive from terminal (missing -f option?)
 `, exitCode: 1 };
-        const f = e.fs.resolvePath(l, e.cwd), m = (await e.fs.readFile(f)).split(`
+        const h = e.fs.resolvePath(l, e.cwd), g = (await e.fs.readFile(h)).split(`
 `);
-        if (m[0] !== "FLUFFY-TAR-V1")
+        if (g[0] !== "FLUFFY-TAR-V1")
           return { stdout: "", stderr: `tar: This does not look like a tar archive
 `, exitCode: 1 };
-        const g = [];
-        for (let y = 1; y < m.length; y++)
-          m[y].startsWith("FILE:") && g.push(m[y].slice(5));
-        return { stdout: g.join(`
+        let x = 1;
+        const y = [];
+        for (; x < g.length && g[x].startsWith("FILE:"); ) {
+          const w = g[x].slice(5), C = parseInt(g[x + 1].slice(5), 10), $ = g[x + 2].slice(5);
+          x += 4;
+          const v = [];
+          for (; x < g.length && g[x] !== "DATA-END"; )
+            v.push(g[x]), x++;
+          const E = v.join(`
+`);
+          x++;
+          const b = e.fs.resolvePath(w, p);
+          if ($ === "dir")
+            await e.fs.mkdir(b, { recursive: !0 });
+          else {
+            const S = b.lastIndexOf("/");
+            if (S > 0) {
+              const A = b.slice(0, S);
+              try {
+                await e.fs.mkdir(A, { recursive: !0 });
+              } catch {
+              }
+            }
+            await e.fs.writeFile(b, E);
+          }
+          y.push(w), d && console.error(w);
+        }
+        return {
+          stdout: d ? y.join(`
+`) + `
+` : "",
+          stderr: "",
+          exitCode: 0
+        };
+      }
+      if (c) {
+        if (!l)
+          return { stdout: "", stderr: `tar: Refusing to read archive from terminal (missing -f option?)
+`, exitCode: 1 };
+        const h = e.fs.resolvePath(l, e.cwd), g = (await e.fs.readFile(h)).split(`
+`);
+        if (g[0] !== "FLUFFY-TAR-V1")
+          return { stdout: "", stderr: `tar: This does not look like a tar archive
+`, exitCode: 1 };
+        const x = [];
+        for (let y = 1; y < g.length; y++)
+          g[y].startsWith("FILE:") && x.push(g[y].slice(5));
+        return { stdout: x.join(`
 `) + `
 `, stderr: "", exitCode: 0 };
       }
       return { stdout: "", stderr: `tar: Unknown error
 `, exitCode: 1 };
-    } catch (f) {
+    } catch (h) {
       return {
         stdout: "",
-        stderr: `tar: ${f instanceof Error ? f.message : f}
+        stderr: `tar: ${h instanceof Error ? h.message : h}
 `,
         exitCode: 1
       };
@@ -4732,8 +4811,8 @@ async function evaluate(n, e) {
       case "-b":
       case "-c":
         try {
-          const c = e.fs.resolvePath(i, e.cwd), l = await e.fs.stat(c);
-          return a === "-f" ? l.type === "file" : a === "-d" ? l.type === "dir" : a === "-L" || a === "-h" ? l.type === "symlink" : a === "-S" ? l.type === "socket" : a === "-p" ? l.type === "fifo" : a === "-b" ? l.type === "block" : a === "-c" ? l.type === "char" : !0;
+          const c = e.fs.resolvePath(i, e.cwd), d = await e.fs.stat(c);
+          return a === "-f" ? d.type === "file" : a === "-d" ? d.type === "dir" : a === "-L" || a === "-h" ? d.type === "symlink" : a === "-S" ? d.type === "socket" : a === "-p" ? d.type === "fifo" : a === "-b" ? d.type === "block" : a === "-c" ? d.type === "char" : !0;
         } catch {
           return !1;
         }
@@ -4749,8 +4828,8 @@ async function evaluate(n, e) {
           const c = e.fs.resolvePath(i, e.cwd);
           if (await e.fs.stat(c), a === "-s")
             try {
-              const l = await ((o = (r = e.fs).readFile) == null ? void 0 : o.call(r, c));
-              return l && l.length > 0;
+              const d = await ((o = (r = e.fs).readFile) == null ? void 0 : o.call(r, c));
+              return d && d.length > 0;
             } catch {
               return !1;
             }
@@ -4849,12 +4928,12 @@ ${h}`,
         exitCode: 1
       };
     r.k || r["kill-after"];
-    const c = r.s || r.signal || "TERM", l = s["preserve-status"];
+    const c = r.s || r.signal || "TERM", d = s["preserve-status"];
     s.foreground;
-    const d = s.v || s.verbose;
+    const l = s.v || s.verbose;
     try {
       const u = a.join(" ");
-      if (d)
+      if (l)
         return {
           stdout: "",
           stderr: `timeout: would run command '${u}' with ${i}s timeout using signal ${c}
@@ -4869,7 +4948,7 @@ ${h}`,
         }, p);
         globalThis.clearTimeout(m), h(null);
       }), f) {
-        const h = l ? 143 : 124;
+        const h = d ? 143 : 124;
         return {
           stdout: "",
           stderr: `timeout: command '${u}' timed out after ${i}s
@@ -4948,22 +5027,22 @@ const touch = {
   description: "Translate or delete characters",
   async exec(n, e) {
     const { flags: t, positional: s } = parseArgs(n, []), r = t.d, o = t.s, a = t.c || t.C, i = t.t;
-    let c = expandSet(s[0] ?? ""), l = expandSet(s[1] ?? "");
-    const d = e.stdin;
-    a && c && (c = getComplement(c)), i && l && (c = c.slice(0, l.length));
+    let c = expandSet(s[0] ?? ""), d = expandSet(s[1] ?? "");
+    const l = e.stdin;
+    a && c && (c = getComplement(c)), i && d && (c = c.slice(0, d.length));
     let u;
     if (r) {
       const p = new Set(c.split(""));
-      u = d.split("").filter((f) => !p.has(f)).join("");
-    } else if (c && l) {
+      u = l.split("").filter((f) => !p.has(f)).join("");
+    } else if (c && d) {
       const p = /* @__PURE__ */ new Map();
       for (let f = 0; f < c.length; f++)
-        p.set(c[f], l[Math.min(f, l.length - 1)]);
-      u = d.split("").map((f) => p.get(f) ?? f).join("");
+        p.set(c[f], d[Math.min(f, d.length - 1)]);
+      u = l.split("").map((f) => p.get(f) ?? f).join("");
     } else
-      u = d;
+      u = l;
     if (o) {
-      const p = l ? new Set(l.split("")) : c ? new Set(c.split("")) : null;
+      const p = d ? new Set(d.split("")) : c ? new Set(c.split("")) : null;
       if (p) {
         let f = "", h = "";
         for (const m of u)
@@ -5154,13 +5233,13 @@ const trap = {
       if (t[0] === "-" || t.length === 0)
         s = e.stdin;
       else {
-        const d = e.fs.resolvePath(t[0], e.cwd);
-        s = await e.fs.readFile(d);
+        const l = e.fs.resolvePath(t[0], e.cwd);
+        s = await e.fs.readFile(l);
       }
-    } catch (d) {
+    } catch (l) {
       return {
         stdout: "",
-        stderr: `tsort: ${t[0]}: ${d instanceof Error ? d.message : String(d)}
+        stderr: `tsort: ${t[0]}: ${l instanceof Error ? l.message : String(l)}
 `,
         exitCode: 1
       };
@@ -5174,36 +5253,36 @@ const trap = {
         exitCode: 1
       };
     const o = /* @__PURE__ */ new Map(), a = /* @__PURE__ */ new Map(), i = /* @__PURE__ */ new Set();
-    for (let d = 0; d < r.length; d += 2) {
-      const u = r[d], p = r[d + 1];
+    for (let l = 0; l < r.length; l += 2) {
+      const u = r[l], p = r[l + 1];
       i.add(u), i.add(p), o.has(u) || o.set(u, /* @__PURE__ */ new Set()), o.get(u).add(p);
     }
-    for (const d of i)
-      a.has(d) || a.set(d, 0);
-    for (const [d, u] of o)
+    for (const l of i)
+      a.has(l) || a.set(l, 0);
+    for (const [l, u] of o)
       for (const p of u)
         a.set(p, (a.get(p) || 0) + 1);
-    const c = [], l = [];
-    for (const [d, u] of a)
-      u === 0 && c.push(d);
+    const c = [], d = [];
+    for (const [l, u] of a)
+      u === 0 && c.push(l);
     for (c.sort(); c.length > 0; ) {
       c.sort();
-      const d = c.shift();
-      l.push(d);
-      const u = o.get(d);
+      const l = c.shift();
+      d.push(l);
+      const u = o.get(l);
       if (u)
         for (const p of u) {
           const f = a.get(p) - 1;
           a.set(p, f), f === 0 && c.push(p);
         }
     }
-    return l.length !== i.size ? {
+    return d.length !== i.size ? {
       stdout: "",
       stderr: `tsort: cycle detected
 `,
       exitCode: 1
     } : {
-      stdout: l.join(`
+      stdout: d.join(`
 `) + `
 `,
       stderr: "",
@@ -5220,18 +5299,18 @@ const trap = {
 `, exitCode: 1 };
     const r = s.a, o = s.t, a = s.p, i = [];
     let c = 0;
-    for (const l of t) {
-      const d = (e.env.PATH || "/bin:/usr/bin").split(":");
+    for (const d of t) {
+      const l = (e.env.PATH || "/bin:/usr/bin").split(":");
       let u = !1;
-      for (const p of d) {
-        const f = p + "/" + l;
+      for (const p of l) {
+        const f = p + "/" + d;
         try {
-          if (await e.fs.exists(f) && (u = !0, o ? i.push("file") : a ? i.push(f) : i.push(`${l} is ${f}`), !r))
+          if (await e.fs.exists(f) && (u = !0, o ? i.push("file") : a ? i.push(f) : i.push(`${d} is ${f}`), !r))
             break;
         } catch {
         }
       }
-      u || (!o && !a && i.push(`type: ${l}: not found`), c = 1);
+      u || (!o && !a && i.push(`type: ${d}: not found`), c = 1);
     }
     return {
       stdout: i.join(`
@@ -5288,9 +5367,9 @@ const trap = {
     };
     if (r)
       return {
-        stdout: Object.entries(o).map(([l, { value: d, unit: u }]) => {
+        stdout: Object.entries(o).map(([d, { value: l, unit: u }]) => {
           const p = u ? ` (${u})` : "";
-          return `${l}${p.padEnd(25 - l.length)} ${d}`;
+          return `${d}${p.padEnd(25 - d.length)} ${l}`;
         }).join(`
 `) + `
 `,
@@ -5409,18 +5488,18 @@ const unalias = {
         e.fs,
         e.cwd,
         e.fs.resolvePath
-      ), l = c.split(`
-`), d = [];
-      for (const u of l) {
+      ), d = c.split(`
+`), l = [];
+      for (const u of d) {
         let p = "", f = 0, h = 0;
         for (let m = 0; m < u.length; m++) {
           const g = u[m];
           g === " " ? (h++, f++, f % a === 0 && (i || p.trim() === "" ? (h >= a && (p += "	".repeat(Math.floor(h / a)), h = h % a), h > 0 && (p += " ".repeat(h), h = 0)) : (p += " ".repeat(h), h = 0))) : (h > 0 && (p += " ".repeat(h), h = 0), p += g, f++);
         }
-        h > 0 && (p += " ".repeat(h)), d.push(p);
+        h > 0 && (p += " ".repeat(h)), l.push(p);
       }
       return {
-        stdout: d.join(`
+        stdout: l.join(`
 `) + (c.endsWith(`
 `) ? `
 ` : ""),
@@ -5442,26 +5521,26 @@ const unalias = {
   async exec(n, e) {
     const { flags: t, positional: s, values: r } = parseArgs(n, ["f", "s", "w"]), o = r.f ? parseInt(r.f) : 0, a = r.s ? parseInt(r.s) : 0, i = r.w ? parseInt(r.w) : void 0, c = t.i;
     try {
-      const { content: l } = await readInput(
+      const { content: d } = await readInput(
         s,
         e.stdin,
         e.fs,
         e.cwd,
         e.fs.resolvePath
-      ), d = l.split(`
+      ), l = d.split(`
 `);
-      d.length > 0 && d[d.length - 1] === "" && d.pop();
+      l.length > 0 && l[l.length - 1] === "" && l.pop();
       const u = [];
       let p = "", f = "", h = 0;
-      for (const m of d) {
+      for (const m of l) {
         const g = getComparisonKey(m, o, a, i, c);
         g === f ? h++ : (h > 0 && emitLine(p, h, t, u), p = m, f = g, h = 1);
       }
       return h > 0 && emitLine(p, h, t, u), { stdout: u.join(`
 `) + (u.length > 0 ? `
 ` : ""), stderr: "", exitCode: 0 };
-    } catch (l) {
-      return { stdout: "", stderr: `uniq: ${l instanceof Error ? l.message : l}
+    } catch (d) {
+      return { stdout: "", stderr: `uniq: ${d instanceof Error ? d.message : d}
 `, exitCode: 1 };
     }
   }
@@ -5484,22 +5563,22 @@ const uname = {
     if (t.s || !t.n && !t.r && !t.v && !t.m)
       return { stdout: r + `
 `, stderr: "", exitCode: 0 };
-    const l = [];
-    return t.s && l.push(r), t.n && l.push(o), t.r && l.push(a), t.v && l.push(i), t.m && l.push(c), { stdout: l.join(" ") + `
+    const d = [];
+    return t.s && d.push(r), t.n && d.push(o), t.r && d.push(a), t.v && d.push(i), t.m && d.push(c), { stdout: d.join(" ") + `
 `, stderr: "", exitCode: 0 };
   }
 }, uptime = {
   name: "uptime",
   description: "Tell how long the system has been running",
   async exec(n, e) {
-    const { flags: t } = parseArgs(n), s = t.p || t.pretty, r = t.s || t.since, o = 86400 + 3600 * 5 + 1380, a = Math.floor(o / 86400), i = Math.floor(o % 86400 / 3600), c = Math.floor(o % 3600 / 60), l = /* @__PURE__ */ new Date(), d = new Date(l.getTime() - o * 1e3), u = [];
+    const { flags: t } = parseArgs(n), s = t.p || t.pretty, r = t.s || t.since, o = 86400 + 3600 * 5 + 1380, a = Math.floor(o / 86400), i = Math.floor(o % 86400 / 3600), c = Math.floor(o % 3600 / 60), d = /* @__PURE__ */ new Date(), l = new Date(d.getTime() - o * 1e3), u = [];
     if (r)
-      u.push(d.toISOString());
+      u.push(l.toISOString());
     else if (s) {
       const p = [];
       a > 0 && p.push(`${a} day${a !== 1 ? "s" : ""}`), i > 0 && p.push(`${i} hour${i !== 1 ? "s" : ""}`), c > 0 && p.push(`${c} minute${c !== 1 ? "s" : ""}`), u.push(`up ${p.join(", ")}`);
     } else {
-      const p = l.toTimeString().split(" ")[0], f = a > 0 ? `${a} day${a !== 1 ? "s" : ""}, ${i}:${String(c).padStart(2, "0")}` : `${i}:${String(c).padStart(2, "0")}`;
+      const p = d.toTimeString().split(" ")[0], f = a > 0 ? `${a} day${a !== 1 ? "s" : ""}, ${i}:${String(c).padStart(2, "0")}` : `${i}:${String(c).padStart(2, "0")}`;
       u.push(` ${p} up ${f}, 1 user, load average: 0.50, 0.40, 0.35`);
     }
     return {
@@ -5586,16 +5665,16 @@ Browser shells should implement watch at the shell level for proper integration.
   async exec(n, e) {
     const { flags: t, positional: s } = parseArgs(n), r = t.l, o = t.w, a = t.c, i = !r && !o && !a;
     try {
-      const { content: c, files: l } = await readInput(
+      const { content: c, files: d } = await readInput(
         s,
         e.stdin,
         e.fs,
         e.cwd,
         e.fs.resolvePath
-      ), d = c.split(`
+      ), l = c.split(`
 `).length - (c.endsWith(`
 `) ? 1 : 0), u = c.split(/\s+/).filter(Boolean).length, p = c.length, f = [];
-      return (i || r) && f.push(String(d).padStart(6)), (i || o) && f.push(String(u).padStart(6)), (i || a) && f.push(String(p).padStart(6)), l.length === 1 && f.push(" " + s[0]), { stdout: f.join(" ") + `
+      return (i || r) && f.push(String(l).padStart(6)), (i || o) && f.push(String(u).padStart(6)), (i || a) && f.push(String(p).padStart(6)), d.length === 1 && f.push(" " + s[0]), { stdout: f.join(" ") + `
 `, stderr: "", exitCode: 0 };
     } catch (c) {
       return { stdout: "", stderr: `wc: ${c instanceof Error ? c.message : c}
@@ -5611,10 +5690,10 @@ Browser shells should implement watch at the shell level for proper integration.
       return { stdout: "", stderr: `which: missing argument
 `, exitCode: 1 };
     const o = s[0], a = e.env.PATH || "/bin:/usr/bin:/usr/local/bin", i = a.split(":"), c = [];
-    for (const l of i) {
-      const d = `${l}/${o}`;
+    for (const d of i) {
+      const l = `${d}/${o}`;
       try {
-        if (await e.fs.exists(d) && (await e.fs.stat(d)).type === "file" && (c.push(d), !r))
+        if (await e.fs.exists(l) && (await e.fs.stat(l)).type === "file" && (c.push(l), !r))
           break;
       } catch {
         continue;
@@ -5644,67 +5723,67 @@ Browser shells should implement watch at the shell level for proper integration.
   name: "xargs",
   description: "Build and execute command lines from stdin",
   async exec(n, e) {
-    const { flags: t, positional: s, values: r } = parseArgs(n, ["n", "I", "i", "d", "delimiter"]), o = t.I || t.L || t.l, a = r.I || r.i, i = r.n ? parseInt(r.n) : void 0, c = r.d || r.delimiter || /\s+/, l = t.t || t.verbose, d = t.r, u = s.length > 0 ? s.join(" ") : "echo";
+    const { flags: t, positional: s, values: r } = parseArgs(n, ["n", "I", "i", "d", "delimiter"]), o = t.I || t.L || t.l, a = r.I || r.i, i = r.n ? parseInt(r.n) : void 0, c = r.d || r.delimiter || /\s+/, d = t.t || t.verbose, l = t.r, u = s.length > 0 ? s.join(" ") : "echo";
     s.length > 0;
     let p;
     if (typeof c == "string" ? p = e.stdin.split(c).filter(Boolean) : p = e.stdin.trim().split(c).filter(Boolean), p.length === 0)
-      return d ? { stdout: "", stderr: "", exitCode: 0 } : { stdout: "", stderr: "", exitCode: 0 };
+      return l ? { stdout: "", stderr: "", exitCode: 0 } : { stdout: "", stderr: "", exitCode: 0 };
     if (e.exec) {
-      let m = "", g = "", y = 0;
+      let m = "", g = "", x = 0;
       if (a) {
-        const x = typeof a == "string" ? a : "{}";
-        for (const $ of p) {
-          const C = u.replace(new RegExp(escapeRegex(x), "g"), $);
-          l && (m += `+ ${C}
+        const y = typeof a == "string" ? a : "{}";
+        for (const w of p) {
+          const C = u.replace(new RegExp(escapeRegex(y), "g"), w);
+          d && (m += `+ ${C}
 `);
-          const w = await e.exec(C);
-          w.stdout && (m += w.stdout), w.stderr && (g += w.stderr), y = w.exitCode;
+          const $ = await e.exec(C);
+          $.stdout && (m += $.stdout), $.stderr && (g += $.stderr), x = $.exitCode;
         }
       } else if (i)
-        for (let x = 0; x < p.length; x += i) {
-          const $ = p.slice(x, x + i), C = `${u} ${$.map(escapeArg).join(" ")}`;
-          l && (m += `+ ${C}
+        for (let y = 0; y < p.length; y += i) {
+          const w = p.slice(y, y + i), C = `${u} ${w.map(escapeArg).join(" ")}`;
+          d && (m += `+ ${C}
 `);
-          const w = await e.exec(C);
-          w.stdout && (m += w.stdout), w.stderr && (g += w.stderr), y = w.exitCode;
+          const $ = await e.exec(C);
+          $.stdout && (m += $.stdout), $.stderr && (g += $.stderr), x = $.exitCode;
         }
       else if (o)
-        for (const x of p) {
-          const $ = `${u} ${escapeArg(x)}`;
-          l && (m += `+ ${$}
+        for (const y of p) {
+          const w = `${u} ${escapeArg(y)}`;
+          d && (m += `+ ${w}
 `);
-          const C = await e.exec($);
-          C.stdout && (m += C.stdout), C.stderr && (g += C.stderr), y = C.exitCode;
+          const C = await e.exec(w);
+          C.stdout && (m += C.stdout), C.stderr && (g += C.stderr), x = C.exitCode;
         }
       else {
-        const x = u === "echo" ? `echo ${p.map(escapeArg).join(" ")}` : `${u} ${p.map(escapeArg).join(" ")}`;
-        l && (m += `+ ${x}
+        const y = u === "echo" ? `echo ${p.map(escapeArg).join(" ")}` : `${u} ${p.map(escapeArg).join(" ")}`;
+        d && (m += `+ ${y}
 `);
-        const $ = await e.exec(x);
-        $.stdout && (m += $.stdout), $.stderr && (g += $.stderr), y = $.exitCode;
+        const w = await e.exec(y);
+        w.stdout && (m += w.stdout), w.stderr && (g += w.stderr), x = w.exitCode;
       }
-      return { stdout: m, stderr: g, exitCode: y };
+      return { stdout: m, stderr: g, exitCode: x };
     }
     const f = [], h = [];
     if (a) {
       const m = typeof a == "string" ? a : "{}";
       for (const g of p) {
-        const y = u.replace(new RegExp(escapeRegex(m), "g"), g);
-        h.push(y), l && f.push(`+ ${y}`);
+        const x = u.replace(new RegExp(escapeRegex(m), "g"), g);
+        h.push(x), d && f.push(`+ ${x}`);
       }
     } else if (i)
       for (let m = 0; m < p.length; m += i) {
-        const g = p.slice(m, m + i), y = `${u} ${g.map(escapeArg).join(" ")}`;
-        h.push(y), l && f.push(`+ ${y}`);
+        const g = p.slice(m, m + i), x = `${u} ${g.map(escapeArg).join(" ")}`;
+        h.push(x), d && f.push(`+ ${x}`);
       }
     else if (o)
       for (const m of p) {
         const g = `${u} ${escapeArg(m)}`;
-        h.push(g), l && f.push(`+ ${g}`);
+        h.push(g), d && f.push(`+ ${g}`);
       }
     else {
       const m = u === "echo" ? p.join(" ") : `${u} ${p.map(escapeArg).join(" ")}`;
-      h.push(m), l && f.push(`+ ${m}`);
+      h.push(m), d && f.push(`+ ${m}`);
     }
     return u === "echo" && !a && !i && !o ? f.push(...p) : f.push(...h), {
       stdout: f.join(`

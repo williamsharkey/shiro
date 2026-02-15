@@ -53,6 +53,9 @@ export const sedCmd: Command = {
         let deleted = false;
         let printed = false;
 
+        const insertBefore: string[] = [];
+        const appendAfter: string[] = [];
+
         for (const cmd of commands) {
           // Check address match
           if (!addressMatches(cmd.address, current, lineNum + 1, lines.length)) continue;
@@ -63,8 +66,14 @@ export const sedCmd: Command = {
             deleted = true;
           } else if (cmd.type === 'p') {
             printed = true;
+          } else if (cmd.type === 'i') {
+            insertBefore.push(cmd.text!);
+          } else if (cmd.type === 'a') {
+            appendAfter.push(cmd.text!);
           }
         }
+
+        result.push(...insertBefore);
 
         if (!deleted) {
           if (!suppressDefault) {
@@ -74,6 +83,8 @@ export const sedCmd: Command = {
             result.push(current);
           }
         }
+
+        result.push(...appendAfter);
       }
 
       return result.join('\n');
@@ -108,6 +119,7 @@ interface SedCommand {
   type: string;
   regex?: RegExp;
   replacement?: string;
+  text?: string; // for 'a' (append) and 'i' (insert) commands
   address?: SedAddress;
 }
 
@@ -190,6 +202,8 @@ function parseSedExpression(expr: string): SedCommand[] {
       const [, , pattern, replacement, flagStr] = sMatch;
       const regexFlags = flagStr.includes('g') ? 'g' : '';
       const caseFlag = flagStr.includes('i') ? 'i' : '';
+      // Convert BRE \( \) to ERE ( ) for JS RegExp
+      const jsPattern = pattern.replace(/\\([()])/g, '$1');
       // Convert \1..\9 backreferences to $1..$9 for JS .replace()
       const jsReplacement = replacement
         .replace(/\\(\d)/g, '$$$1')
@@ -197,7 +211,7 @@ function parseSedExpression(expr: string): SedCommand[] {
         .replace(/\\t/g, '\t');
       commands.push({
         type: 's',
-        regex: new RegExp(pattern, regexFlags + caseFlag),
+        regex: new RegExp(jsPattern, regexFlags + caseFlag),
         replacement: jsReplacement,
         address,
       });
@@ -233,6 +247,14 @@ function parseSedExpression(expr: string): SedCommand[] {
         type: 'p',
         address: { type: 'regex', re: new RegExp(patPrintMatch[1]) },
       });
+      continue;
+    }
+
+    // Handle a\ (append after) and i\ (insert before)
+    const aiMatch = remaining.match(/^([ai])\\?(.*)$/);
+    if (aiMatch && (aiMatch[1] === 'a' || aiMatch[1] === 'i')) {
+      const text = aiMatch[2].replace(/^\\n/, '\n').replace(/\\n/g, '\n');
+      commands.push({ type: aiMatch[1], text, address });
       continue;
     }
 

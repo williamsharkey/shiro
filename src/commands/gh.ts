@@ -4,6 +4,9 @@ import { ghApiHandler } from './gh-api';
 import { ghIssueHandler } from './gh-issue';
 import { ghPrHandler } from './gh-pr';
 import { ghReleaseHandler } from './gh-release';
+import { ghWorkflowHandler, ghRunHandler } from './gh-workflow';
+import { ghLabelHandler } from './gh-label';
+import { ghSearchHandler } from './gh-search';
 
 export function getToken(ctx: CommandContext): string {
   return ctx.env['GITHUB_TOKEN'] || ctx.env['GH_TOKEN']
@@ -112,12 +115,16 @@ export const ghCmd: Command = {
       ctx.stdout = `usage: gh <command> <subcommand> [flags]
 
 Commands:
-  pr       Pull requests (list, create, view, merge, close, comment, diff, checks, review, edit, ready)
-  issue    Issues (list, create, view, close, reopen, comment, edit, delete, lock, label)
-  release  Releases (list, create, view)
-  api      Make GitHub API requests
-  auth     Authentication (status, login, logout)
-  repo     Repository info (view)
+  pr        Pull requests (list, create, view, merge, close, comment, diff, checks, review, edit, ready)
+  issue     Issues (list, create, view, close, reopen, comment, edit, delete, lock, label)
+  release   Releases (list, create, view, download)
+  api       Make GitHub API requests
+  auth      Authentication (status, login, logout)
+  repo      Repository (view, list, create, clone)
+  workflow  Workflows (list)
+  run       Workflow runs (list, view)
+  label     Labels (list, create)
+  search    Search (issues, repos)
 `;
       return 0;
     }
@@ -169,7 +176,7 @@ Commands:
       case 'repo': {
         const repoSub = ctx.args[1];
         if (!repoSub || repoSub === '--help') {
-          ctx.stdout = 'usage: gh repo view [owner/repo]\n';
+          ctx.stdout = 'usage: gh repo <command> [flags]\n\nCommands:\n  view     View a repository\n  list     List repositories [owner]\n  create   Create a repository <name> [--public|--private]\n  clone    Clone a repository <owner/repo>\n';
           return 0;
         }
         if (repoSub === 'view') {
@@ -201,7 +208,55 @@ Commands:
           ctx.stdout += `\n${data.html_url}\n`;
           return 0;
         }
-        ctx.stderr = `gh repo: '${repoSub}' is not a valid subcommand. Valid: view\n`;
+        if (repoSub === 'list') {
+          if (!token) { ctx.stderr = 'error: authentication required. Set GITHUB_TOKEN.\n'; return 1; }
+          const { flags, positional } = parseFlags(ctx.args.slice(2), ['L', 'limit']);
+          const limit = parseInt(flags['L'] || flags['limit'] || '30', 10);
+          const owner = positional[0];
+          const endpoint = owner ? `/users/${owner}/repos?per_page=${limit}&sort=updated` : `/user/repos?per_page=${limit}&sort=updated`;
+          const { status, data } = await ghApi(token, 'GET', endpoint);
+          if (status !== 200) {
+            ctx.stderr = `error: API returned ${status}: ${data?.message || ''}\n`;
+            return 1;
+          }
+          if (!data || data.length === 0) {
+            ctx.stdout = 'No repositories found\n';
+            return 0;
+          }
+          for (const r of data) {
+            const name = (r.full_name || '').padEnd(35);
+            const desc = (r.description || '').slice(0, 45);
+            const vis = r.private ? 'private' : 'public';
+            ctx.stdout += `${name}  ${vis.padEnd(8)}  ${desc}\n`;
+          }
+          return 0;
+        }
+        if (repoSub === 'create') {
+          if (!token) { ctx.stderr = 'error: authentication required. Set GITHUB_TOKEN.\n'; return 1; }
+          const { flags, positional } = parseFlags(ctx.args.slice(2), ['description']);
+          const name = positional[0];
+          if (!name) { ctx.stderr = 'error: repository name is required\nusage: gh repo create <name> [--public|--private]\n'; return 1; }
+          const isPrivate = flags['private'] === 'true';
+          const payload: any = { name, private: isPrivate };
+          if (flags['description']) payload.description = flags['description'];
+          const { status, data } = await ghApi(token, 'POST', '/user/repos', payload);
+          if (status === 201) {
+            ctx.stdout = `Created repository ${data.full_name}\n${data.html_url}\n`;
+          } else {
+            ctx.stderr = `error: failed to create repository (HTTP ${status}): ${data?.message || ''}\n`;
+            return 1;
+          }
+          return 0;
+        }
+        if (repoSub === 'clone') {
+          const target = ctx.args[2];
+          if (!target) { ctx.stderr = 'usage: gh repo clone <owner/repo>\n'; return 1; }
+          const cloneUrl = target.includes('/') ? `https://github.com/${target}.git` : target;
+          // Delegate to git clone
+          ctx.args = ['clone', cloneUrl];
+          return ctx.shell.execute(`git clone ${cloneUrl}`, (s: string) => { ctx.stdout += s; }, (s: string) => { ctx.stderr += s; });
+        }
+        ctx.stderr = `gh repo: '${repoSub}' is not a valid subcommand. Valid: view, list, create, clone\n`;
         return 1;
       }
 
@@ -216,6 +271,18 @@ Commands:
 
       case 'api':
         return ghApiHandler(ctx, token);
+
+      case 'workflow':
+        return ghWorkflowHandler(ctx, token);
+
+      case 'run':
+        return ghRunHandler(ctx, token);
+
+      case 'label':
+        return ghLabelHandler(ctx, token);
+
+      case 'search':
+        return ghSearchHandler(ctx, token);
 
       default:
         ctx.stderr = `gh: '${sub}' is not a valid command. See 'gh --help'.\n`;

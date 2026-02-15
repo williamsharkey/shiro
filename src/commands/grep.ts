@@ -16,6 +16,8 @@ export const grepCmd: Command = {
     let afterCtx = 0;
     let pattern = '';
     const files: string[] = [];
+    const includeGlobs: string[] = [];
+    const excludeGlobs: string[] = [];
 
     let i = 0;
     while (i < ctx.args.length) {
@@ -32,6 +34,10 @@ export const grepCmd: Command = {
       else if (arg === '-A' && i + 1 < ctx.args.length) { afterCtx = parseInt(ctx.args[++i], 10) || 0; }
       else if (arg === '-B' && i + 1 < ctx.args.length) { beforeCtx = parseInt(ctx.args[++i], 10) || 0; }
       else if (arg === '-C' && i + 1 < ctx.args.length) { beforeCtx = afterCtx = parseInt(ctx.args[++i], 10) || 0; }
+      else if (arg === '--include' && i + 1 < ctx.args.length) { includeGlobs.push(ctx.args[++i]); }
+      else if (arg.startsWith('--include=')) { includeGlobs.push(arg.slice('--include='.length)); }
+      else if (arg === '--exclude' && i + 1 < ctx.args.length) { excludeGlobs.push(ctx.args[++i]); }
+      else if (arg.startsWith('--exclude=')) { excludeGlobs.push(arg.slice('--exclude='.length)); }
       else if (arg.startsWith('-') && arg.length > 1 && !arg.startsWith('--')) {
         // Combined flags like -in, or -A3 shorthand
         let j = 1;
@@ -62,6 +68,16 @@ export const grepCmd: Command = {
       }
       i++;
     }
+
+    // Build include/exclude matchers
+    const globToRe = (g: string) => new RegExp('^' + g.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
+    const includeRes = includeGlobs.map(globToRe);
+    const excludeRes = excludeGlobs.map(globToRe);
+    const matchesFileFilter = (name: string): boolean => {
+      if (includeRes.length > 0 && !includeRes.some(re => re.test(name))) return false;
+      if (excludeRes.length > 0 && excludeRes.some(re => re.test(name))) return false;
+      return true;
+    };
 
     if (!pattern) {
       ctx.stderr = 'grep: missing pattern\n';
@@ -175,6 +191,7 @@ export const grepCmd: Command = {
         if (stat.isDirectory()) {
           await searchDir(childPath);
         } else {
+          if (!matchesFileFilter(entry)) continue;
           await searchFile(childPath, childPath, true);
         }
       }

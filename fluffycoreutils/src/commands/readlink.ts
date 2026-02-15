@@ -12,14 +12,33 @@ export const readlink: FluffyCommand = {
       return { stdout: "", stderr: "readlink: missing operand\n", exitCode: 1 };
     }
 
-    // In virtual FS, just resolve the path
     const resolved = io.fs.resolvePath(positional[0], io.cwd);
 
     if (canonicalize) {
+      // -f: canonicalize, resolving all symlinks
+      try {
+        if (io.fs.readlink) {
+          const target = await io.fs.readlink(resolved);
+          // Resolve relative symlink targets
+          const dir = resolved.split("/").slice(0, -1).join("/") || "/";
+          const canonical = target.startsWith("/") ? target : io.fs.resolvePath(target, dir);
+          return { stdout: canonical + "\n", stderr: "", exitCode: 0 };
+        }
+      } catch {
+        // Not a symlink, just return resolved path
+      }
       return { stdout: resolved + "\n", stderr: "", exitCode: 0 };
     }
 
-    // Without -f, readlink only works on symlinks (not supported in virtual FS)
-    return { stdout: resolved + "\n", stderr: "", exitCode: 0 };
+    // Without -f, readlink only prints symlink target
+    try {
+      if (io.fs.readlink) {
+        const target = await io.fs.readlink(resolved);
+        return { stdout: target + "\n", stderr: "", exitCode: 0 };
+      }
+    } catch {
+      // Not a symlink
+    }
+    return { stdout: "", stderr: `readlink: ${positional[0]}: not a symbolic link\n`, exitCode: 1 };
   },
 };

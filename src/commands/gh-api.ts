@@ -60,6 +60,14 @@ export async function ghApiHandler(ctx: CommandContext, token: string): Promise<
     method = 'POST';
   }
 
+  // Bug fix: GET requests can't have a body — convert fields to query params
+  if (method === 'GET' && body) {
+    const sep = resolvedPath.includes('?') ? '&' : '?';
+    const params = Object.entries(body).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`).join('&');
+    resolvedPath += sep + params;
+    body = undefined;
+  }
+
   // Bug fix: --dry-run shows preview instead of executing
   if (isDryRun(flags) && method !== 'GET') {
     ctx.stdout = `[dry-run] Would ${method} /${resolvedPath.replace(/^\//, '')}\n`;
@@ -79,6 +87,11 @@ export async function ghApiHandler(ctx: CommandContext, token: string): Promise<
   const paginate = flags['paginate'] === 'true';
 
   if (paginate) {
+    // Append per_page=100 for efficiency
+    const pageSep = resolvedPath.includes('?') ? '&' : '?';
+    if (!resolvedPath.includes('per_page=')) {
+      resolvedPath += pageSep + 'per_page=100';
+    }
     // Collect all pages
     let allData: any[] = [];
     let nextUrl: string | null = resolvedPath;

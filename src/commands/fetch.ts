@@ -15,6 +15,7 @@ export const fetchCmd: Command = {
     let showErrors = false;
     let failOnError = false;
     let followRedirects = true; // fetch follows by default, but we track for -L
+    let maxTime = 0; // timeout in seconds
     const headers: Record<string, string> = {};
 
     let i = 0;
@@ -45,6 +46,11 @@ export const fetchCmd: Command = {
         failOnError = true;
       } else if (arg === '-L' || arg === '--location') {
         followRedirects = true;
+      } else if (arg === '-u' || arg === '--user') {
+        const cred = ctx.args[++i] || '';
+        headers['Authorization'] = 'Basic ' + btoa(cred);
+      } else if (arg === '-m' || arg === '--max-time') {
+        maxTime = parseFloat(ctx.args[++i] || '0');
       } else if (arg.startsWith('-') && !arg.startsWith('--')) {
         // Handle combined flags like -fsSL
         for (const flag of arg.slice(1)) {
@@ -138,7 +144,20 @@ export const fetchCmd: Command = {
         }
       }
 
-      const response = await fetch(url, fetchOpts);
+      // Apply --max-time timeout
+      let abortTimer: ReturnType<typeof setTimeout> | undefined;
+      if (maxTime > 0) {
+        const controller = new AbortController();
+        fetchOpts.signal = controller.signal;
+        abortTimer = setTimeout(() => controller.abort(), maxTime * 1000);
+      }
+
+      let response: Response;
+      try {
+        response = await fetch(url, fetchOpts);
+      } finally {
+        if (abortTimer) clearTimeout(abortTimer);
+      }
 
       // Handle -f (fail silently on HTTP errors)
       if (failOnError && !response.ok) {

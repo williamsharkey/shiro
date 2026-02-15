@@ -1127,6 +1127,22 @@ export class Shell {
     while (i < input.length) {
       const ch = input[i];
 
+      // Skip ${...} parameter expansions verbatim (don't sentinel-mark glob chars inside)
+      if (!inSingle && ch === '$' && input[i + 1] === '{') {
+        current += '${';
+        let depth = 1;
+        let j = i + 2;
+        while (j < input.length && depth > 0) {
+          if (input[j] === '{') depth++;
+          else if (input[j] === '}') depth--;
+          if (depth > 0) current += input[j];
+          j++;
+        }
+        current += '}';
+        i = j;
+        continue;
+      }
+
       if (ch === '\\' && !inSingle && i + 1 < input.length) {
         const next = input[i + 1];
         if (inDouble) {

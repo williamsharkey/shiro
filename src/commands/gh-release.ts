@@ -11,9 +11,10 @@ export async function ghReleaseHandler(ctx: CommandContext, token: string): Prom
     ctx.stdout = `usage: gh release <command> [flags]
 
 Commands:
-  list     List releases
-  create   Create a release <tag> [--title] [--notes] [--target] [--draft] [--prerelease]
-  view     View a release <tag>
+  list       List releases
+  create     Create a release <tag> [--title] [--notes] [--target] [--draft] [--prerelease]
+  view       View a release <tag>
+  download   Download release assets <tag>
 `;
     return 0;
   }
@@ -122,8 +123,33 @@ Commands:
       return 0;
     }
 
+    case 'download': {
+      const tag = positional[0];
+      if (!tag) {
+        ctx.stderr = 'usage: gh release download <tag>\n';
+        return 1;
+      }
+      const { status, data } = await ghApi(token, 'GET', `${base}/releases/tags/${tag}`);
+      if (status !== 200) {
+        ctx.stderr = `error: API returned ${status}: ${data?.message || ''}\n`;
+        return 1;
+      }
+      const assets = data.assets || [];
+      if (assets.length === 0) {
+        ctx.stdout = 'No assets found for this release\n';
+        return 0;
+      }
+      ctx.stdout = `Assets for ${tag}:\n`;
+      for (const a of assets) {
+        ctx.stdout += `  ${a.name} (${(a.size / 1024).toFixed(1)} KB)\n`;
+        ctx.stdout += `    ${a.browser_download_url}\n`;
+      }
+      ctx.stdout += '\nNote: binary download is limited in browser environments. Use the URLs above.\n';
+      return 0;
+    }
+
     default:
-      ctx.stderr = `gh release: '${relSub}' is not a valid subcommand. Valid: list, create, view\n`;
+      ctx.stderr = `gh release: '${relSub}' is not a valid subcommand. Valid: list, create, view, download\n`;
       return 1;
   }
 }

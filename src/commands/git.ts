@@ -431,6 +431,10 @@ function formatCommit(c: { oid: string; commit: any }, fmt: string): string {
   result = result.replace(/%ar/g, timeAgoFromTimestamp(c.commit.author.timestamp));
   result = result.replace(/%cn/g, c.commit.committer?.name || c.commit.author.name);
   result = result.replace(/%ce/g, c.commit.committer?.email || c.commit.author.email);
+  const committerTs = c.commit.committer?.timestamp || c.commit.author.timestamp;
+  result = result.replace(/%cr/g, timeAgoFromTimestamp(committerTs));
+  result = result.replace(/%cd/g, new Date(committerTs * 1000).toString());
+  result = result.replace(/%ci/g, new Date(committerTs * 1000).toISOString());
   result = result.replace(/%n/g, '\n');
   result = result.replace(/%%/g, '%');
   return result;
@@ -459,7 +463,7 @@ export const gitCmd: Command = {
     const subcommand = ctx.args[0];
 
     if (!subcommand || subcommand === '--help' || subcommand === '-h') {
-      ctx.stdout = 'usage: git <command> [<args>]\n\nAvailable commands:\n  init, add, commit, status, log, diff, show, branch, checkout, clone\n  push, pull, fetch, remote, merge, stash, reset, tag\n';
+      ctx.stdout = 'usage: git <command> [<args>]\n\nAvailable commands:\n  init, add, commit, status, log, diff, show, branch, checkout, clone\n  push, pull, fetch, remote, merge, stash, reset, tag, cherry-pick, revert, rebase, reflog\n';
       return 0;
     }
     if (subcommand === '--version' || subcommand === '-v') {
@@ -1077,6 +1081,180 @@ export const gitCmd: Command = {
 
         case 'tag':
           return gitTagHandler(ctx, fs, dir);
+
+        case 'cherry-pick': {
+          const ref = ctx.args[1];
+          if (!ref) { ctx.stderr = 'usage: git cherry-pick <commit>\n'; return 1; }
+          let oid: string;
+          try {
+            oid = await git.resolveRef({ fs, dir, ref });
+          } catch {
+            try { oid = await git.expandOid({ fs, dir, oid: ref }); }
+            catch { ctx.stderr = `fatal: bad revision '${ref}'\n`; return 128; }
+          }
+          const commitObj = await git.readCommit({ fs, dir, oid });
+          const parentOid = commitObj.commit.parent[0];
+          if (!parentOid) { ctx.stderr = 'fatal: cannot cherry-pick root commit\n'; return 1; }
+          // Walk tree diff parent→commit, apply changes
+          const changes = await git.walk({ fs, dir, trees: [git.TREE({ ref: parentOid }), git.TREE({ ref: oid })],
+            map: async (filepath: string, [A, B]: any[]) => {
+              if (filepath === '.') return;
+              const aOid = A ? await A.oid() : null;
+              const bOid = B ? await B.oid() : null;
+              if (aOid === bOid) return;
+              const aType = A ? await A.type() : null;
+              const bType = B ? await B.type() : null;
+              if (bType === 'tree' || aType === 'tree') return;
+              return { filepath, aOid, bOid, bType };
+            },
+          });
+          for (const ch of changes.filter(Boolean)) {
+            const fullPath = dir + '/' + ch.filepath;
+            if (ch.bOid) {
+              const { blob } = await git.readBlob({ fs, dir, oid: ch.bOid });
+              await ctx.fs.mkdir(fullPath.split('/').slice(0, -1).join('/'), { recursive: true });
+              await ctx.fs.writeFile(fullPath, new TextDecoder().decode(blob));
+              await git.add({ fs, dir, filepath: ch.filepath });
+            } else {
+              await ctx.fs.unlink(fullPath).catch(() => {});
+              await git.remove({ fs, dir, filepath: ch.filepath });
+            }
+          }
+          const msg = commitObj.commit.message.trim() + `\n\n(cherry picked from commit ${oid.slice(0, 7)})`;
+          await git.commit({ fs, dir, message: msg, author: commitObj.commit.author });
+          ctx.stdout = `[cherry-pick ${oid.slice(0, 7)}] ${commitObj.commit.message.split('\n')[0]}\n`;
+          return 0;
+        }
+
+        case 'revert': {
+          const ref = ctx.args[1];
+          if (!ref) { ctx.stderr = 'usage: git revert <commit>\n'; return 1; }
+          let oid: string;
+          try {
+            oid = await git.resolveRef({ fs, dir, ref });
+          } catch {
+            try { oid = await git.expandOid({ fs, dir, oid: ref }); }
+            catch { ctx.stderr = `fatal: bad revision '${ref}'\n`; return 128; }
+          }
+          const commitObj = await git.readCommit({ fs, dir, oid });
+          const parentOid = commitObj.commit.parent[0];
+          if (!parentOid) { ctx.stderr = 'fatal: cannot revert root commit\n'; return 1; }
+          // Reverse diff: commit→parent (apply parent state for changed files)
+          const changes = await git.walk({ fs, dir, trees: [git.TREE({ ref: oid }), git.TREE({ ref: parentOid })],
+            map: async (filepath: string, [A, B]: any[]) => {
+              if (filepath === '.') return;
+              const aOid = A ? await A.oid() : null;
+              const bOid = B ? await B.oid() : null;
+              if (aOid === bOid) return;
+              const aType = A ? await A.type() : null;
+              const bType = B ? await B.type() : null;
+              if (bType === 'tree' || aType === 'tree') return;
+              return { filepath, aOid, bOid, bType };
+            },
+          });
+          for (const ch of changes.filter(Boolean)) {
+            const fullPath = dir + '/' + ch.filepath;
+            if (ch.bOid) {
+              const { blob } = await git.readBlob({ fs, dir, oid: ch.bOid });
+              await ctx.fs.mkdir(fullPath.split('/').slice(0, -1).join('/'), { recursive: true });
+              await ctx.fs.writeFile(fullPath, new TextDecoder().decode(blob));
+              await git.add({ fs, dir, filepath: ch.filepath });
+            } else {
+              await ctx.fs.unlink(fullPath).catch(() => {});
+              await git.remove({ fs, dir, filepath: ch.filepath });
+            }
+          }
+          const subject = commitObj.commit.message.split('\n')[0];
+          const msg = `Revert "${subject}"\n\nThis reverts commit ${oid.slice(0, 7)}.`;
+          await git.commit({ fs, dir, message: msg,
+            author: { name: 'user', email: 'user@shiro.computer', timestamp: Math.floor(Date.now() / 1000), timezoneOffset: 0 } });
+          ctx.stdout = `[revert ${oid.slice(0, 7)}] Revert "${subject}"\n`;
+          return 0;
+        }
+
+        case 'rebase': {
+          if (ctx.args[1] === '-i' || ctx.args[1] === '--interactive') {
+            ctx.stderr = 'fatal: interactive rebase is not supported\n';
+            return 1;
+          }
+          if (ctx.args[1] === '--continue' || ctx.args[1] === '--abort') {
+            ctx.stderr = `fatal: no rebase in progress\n`;
+            return 1;
+          }
+          const target = ctx.args[1];
+          if (!target) { ctx.stderr = 'usage: git rebase <branch>\n'; return 1; }
+          let targetOid: string;
+          try {
+            targetOid = await git.resolveRef({ fs, dir, ref: target });
+          } catch {
+            ctx.stderr = `fatal: invalid upstream '${target}'\n`; return 128;
+          }
+          const headOid = await git.resolveRef({ fs, dir, ref: 'HEAD' });
+          // Find merge base (walk both histories to find common ancestor)
+          const targetLog = await git.log({ fs, dir, ref: targetOid, depth: 200 });
+          const headLog = await git.log({ fs, dir, ref: headOid, depth: 200 });
+          const targetOids = new Set(targetLog.map(c => c.oid));
+          let mergeBase = '';
+          for (const c of headLog) {
+            if (targetOids.has(c.oid)) { mergeBase = c.oid; break; }
+          }
+          if (!mergeBase) { ctx.stderr = 'fatal: no common ancestor found\n'; return 1; }
+          // Collect commits from merge-base..HEAD (exclusive of merge-base)
+          const toReplay: typeof headLog = [];
+          for (const c of headLog) {
+            if (c.oid === mergeBase) break;
+            toReplay.push(c);
+          }
+          toReplay.reverse();
+          if (toReplay.length === 0) {
+            ctx.stdout = `Current branch is up to date.\n`;
+            return 0;
+          }
+          // Reset HEAD to target
+          const currentBranch = await git.currentBranch({ fs, dir }) || 'HEAD';
+          await git.writeRef({ fs, dir, ref: `refs/heads/${currentBranch}`, value: targetOid, force: true });
+          // Checkout target tree
+          await git.checkout({ fs, dir, ref: currentBranch, force: true });
+          // Cherry-pick each commit
+          for (const entry of toReplay) {
+            const parentOid = entry.commit.parent[0];
+            if (!parentOid) continue;
+            const changes = await git.walk({ fs, dir, trees: [git.TREE({ ref: parentOid }), git.TREE({ ref: entry.oid })],
+              map: async (filepath: string, [A, B]: any[]) => {
+                if (filepath === '.') return;
+                const aOid = A ? await A.oid() : null;
+                const bOid = B ? await B.oid() : null;
+                if (aOid === bOid) return;
+                const bType = B ? await B.type() : null;
+                const aType = A ? await A.type() : null;
+                if (bType === 'tree' || aType === 'tree') return;
+                return { filepath, bOid };
+              },
+            });
+            for (const ch of changes.filter(Boolean)) {
+              const fullPath = dir + '/' + ch.filepath;
+              if (ch.bOid) {
+                const { blob } = await git.readBlob({ fs, dir, oid: ch.bOid });
+                await ctx.fs.mkdir(fullPath.split('/').slice(0, -1).join('/'), { recursive: true });
+                await ctx.fs.writeFile(fullPath, new TextDecoder().decode(blob));
+                await git.add({ fs, dir, filepath: ch.filepath });
+              } else {
+                await ctx.fs.unlink(fullPath).catch(() => {});
+                await git.remove({ fs, dir, filepath: ch.filepath });
+              }
+            }
+            await git.commit({ fs, dir, message: entry.commit.message, author: entry.commit.author });
+          }
+          ctx.stdout = `Successfully rebased and updated refs/heads/${currentBranch}.\n`;
+          return 0;
+        }
+
+        case 'reflog': {
+          // isomorphic-git has no reflog; show current HEAD as single entry
+          const headOid = await git.resolveRef({ fs, dir, ref: 'HEAD' });
+          ctx.stdout = `${headOid.slice(0, 7)} HEAD@{0}: current state\n`;
+          return 0;
+        }
 
         default:
           ctx.stderr = `git: '${subcommand}' is not a git command\n`;

@@ -31,9 +31,9 @@ export const printf: FluffyCommand = {
           result += "%";
           i++;
         } else {
-          // Parse format spec: %[-][\d+][.\d+][sdf]
+          // Parse format spec: %[-][0][\d+][.\d+][sdfx]
           let spec = "";
-          while (i < format.length && !/[sdf]/.test(format[i])) {
+          while (i < format.length && !/[sdfxX]/.test(format[i])) {
             spec += format[i];
             i++;
           }
@@ -41,15 +41,36 @@ export const printf: FluffyCommand = {
           i++;
           const val = params[paramIdx++] ?? "";
 
+          // Parse width/alignment from spec
+          const leftAlign = spec.startsWith("-");
+          const zeroPad = spec.startsWith("0") || (leftAlign && spec[1] === "0");
+          const specClean = spec.replace(/^-?0?/, "");
+          const dotIdx = specClean.indexOf(".");
+          const width = dotIdx >= 0 ? parseInt(specClean.slice(0, dotIdx), 10) || 0 : parseInt(specClean, 10) || 0;
+
+          let formatted: string;
           switch (type) {
-            case "s": result += val; break;
-            case "d": result += String(parseInt(val, 10) || 0); break;
+            case "s": formatted = val; break;
+            case "d": formatted = String(parseInt(val, 10) || 0); break;
+            case "x": formatted = (parseInt(val, 10) || 0).toString(16); break;
+            case "X": formatted = (parseInt(val, 10) || 0).toString(16).toUpperCase(); break;
             case "f": {
               const precision = spec.includes(".") ? parseInt(spec.split(".")[1], 10) : 6;
-              result += (parseFloat(val) || 0).toFixed(precision);
+              formatted = (parseFloat(val) || 0).toFixed(precision);
               break;
             }
+            default: formatted = val;
           }
+
+          if (width > 0 && formatted.length < width) {
+            const fill = (zeroPad && !leftAlign && type !== "s") ? "0" : " ";
+            if (leftAlign) {
+              formatted = formatted.padEnd(width, " ");
+            } else {
+              formatted = formatted.padStart(width, fill);
+            }
+          }
+          result += formatted;
         }
       } else {
         result += format[i];

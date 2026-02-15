@@ -60,16 +60,17 @@ export const ls: FluffyCommand = {
 
 function formatLong(
   name: string,
-  entry: { type: string; size: number; mtime: number; mode?: number },
+  entry: { type: string; size: number; mtime: number; mode?: number; target?: string },
   human?: boolean
 ): string {
-  const typeChar = entry.type === "dir" ? "d" : "-";
-  const mode = entry.mode ?? (entry.type === "dir" ? 0o755 : 0o644);
+  const typeChar = entry.type === "symlink" ? "l" : entry.type === "dir" ? "d" : "-";
+  const mode = entry.mode ?? (entry.type === "symlink" ? 0o777 : entry.type === "dir" ? 0o755 : 0o644);
   const perms = formatPerms(mode);
   const size = human ? humanSize(entry.size) : String(entry.size).padStart(8);
   const date = new Date(entry.mtime);
   const dateStr = formatDate(date);
-  return `${typeChar}${perms}  1 user user ${size} ${dateStr} ${name}`;
+  const suffix = entry.type === "symlink" && entry.target ? ` -> ${entry.target}` : "";
+  return `${typeChar}${perms}  1 user user ${size} ${dateStr} ${name}${suffix}`;
 }
 
 function formatPerms(mode: number): string {

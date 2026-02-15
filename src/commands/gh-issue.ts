@@ -93,6 +93,7 @@ Commands:
       const payload: any = { title, body };
       if (flags['label']) payload.labels = flags['label'].split(',');
       if (flags['assignee']) payload.assignees = flags['assignee'].split(',').map((a: string) => a.trim());
+      if (flags['milestone']) payload.milestone = parseInt(flags['milestone'], 10);
 
       if (isDryRun(flags)) {
         ctx.stdout = `[dry-run] Would POST ${base}/issues\n`;
@@ -100,6 +101,7 @@ Commands:
         if (body) ctx.stdout += `  body: ${JSON.stringify(body)}\n`;
         if (payload.labels) ctx.stdout += `  labels: ${payload.labels.join(', ')}\n`;
         if (payload.assignees) ctx.stdout += `  assignees: ${payload.assignees.join(', ')}\n`;
+        if (payload.milestone) ctx.stdout += `  milestone: ${payload.milestone}\n`;
         return 0;
       }
 

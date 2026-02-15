@@ -149,21 +149,26 @@ Commands:
     case 'merge': {
       const num = positional[0];
       if (!num) {
-        ctx.stderr = 'usage: gh pr merge <number> [--merge|--squash|--rebase] [--delete-branch] [--dry-run]\n';
+        ctx.stderr = 'usage: gh pr merge <number> [--merge|--squash|--rebase] [--delete-branch] [--auto] [--body MSG] [--dry-run]\n';
         return 1;
       }
       let mergeMethod = 'merge';
       if (flags['squash'] === 'true') mergeMethod = 'squash';
       if (flags['rebase'] === 'true') mergeMethod = 'rebase';
       const deleteBranch = flags['delete-branch'] === 'true' || flags['d'] === 'true';
+      const autoMerge = flags['auto'] === 'true';
+      const commitBody = flags['body'] || flags['b'] || '';
       if (isDryRun(flags)) {
         ctx.stdout = `[dry-run] Would merge PR #${num} (${mergeMethod})\n`;
+        if (autoMerge) ctx.stdout += `[dry-run] Would enable auto-merge\n`;
+        if (commitBody) ctx.stdout += `[dry-run] Commit message: ${commitBody}\n`;
         if (deleteBranch) ctx.stdout += `[dry-run] Would delete head branch\n`;
         return 0;
       }
-      const { status, data } = await ghApi(token, 'PUT', `${base}/pulls/${num}/merge`, {
-        merge_method: mergeMethod,
-      });
+      const mergePayload: any = { merge_method: mergeMethod };
+      if (commitBody) mergePayload.commit_message = commitBody;
+      if (autoMerge) mergePayload.auto_merge = true;
+      const { status, data } = await ghApi(token, 'PUT', `${base}/pulls/${num}/merge`, mergePayload);
       if (status === 200) {
         ctx.stdout = `Merged PR #${num} (${mergeMethod})\n`;
         if (deleteBranch) {

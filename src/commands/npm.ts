@@ -114,6 +114,16 @@ export const npmCmd: Command = {
         return await npmUninstall(ctx);
       case 'cache':
         return await npmCache(ctx);
+      case 'update':
+      case 'up':
+        ctx.stdout += 'up to date, audited 0 packages\n';
+        return 0;
+      case 'outdated':
+        ctx.stdout += 'All packages are up to date.\n';
+        return 0;
+      case 'audit':
+        ctx.stdout += 'found 0 vulnerabilities\n';
+        return 0;
       default:
         ctx.stderr += `npm: unknown command '${subcommand}'\n`;
         ctx.stderr += "Run 'npm --help' for usage.\n";

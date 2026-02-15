@@ -5,11 +5,15 @@ export async function gitTagHandler(ctx: CommandContext, fs: any, dir: string): 
   let deleteMode = false;
   let listPattern = '';
   let listMode = false;
+  let annotated = false;
+  let message = '';
   const positional: string[] = [];
 
   for (let i = 1; i < ctx.args.length; i++) {
     const a = ctx.args[i];
     if (a === '-d' || a === '--delete') deleteMode = true;
+    else if (a === '-a' || a === '--annotate') annotated = true;
+    else if (a === '-m' && ctx.args[i + 1] !== undefined) { message = ctx.args[++i]; annotated = true; }
     else if (a === '-l' || a === '--list') {
       listMode = true;
       if (ctx.args[i + 1] && !ctx.args[i + 1].startsWith('-')) {
@@ -52,7 +56,25 @@ export async function gitTagHandler(ctx: CommandContext, fs: any, dir: string): 
         return 128;
       }
     }
-    await git.tag({ fs, dir, ref: tagName, object: oid });
+    if (annotated) {
+      if (!message) {
+        ctx.stderr = 'fatal: no tag message specified (use -m)\n';
+        return 1;
+      }
+      const tagOid = await git.writeTag({
+        fs, dir, tag: {
+          object: oid,
+          type: 'commit',
+          tag: tagName,
+          tagger: { name: 'user', email: 'user@shiro.computer', timestamp: Math.floor(Date.now() / 1000), timezoneOffset: 0 },
+          message,
+        },
+      });
+      // Write the ref to point to the annotated tag object
+      await git.writeRef({ fs, dir, ref: `refs/tags/${tagName}`, value: tagOid, force: false });
+    } else {
+      await git.tag({ fs, dir, ref: tagName, object: oid });
+    }
     ctx.stdout = '';
     return 0;
   }
