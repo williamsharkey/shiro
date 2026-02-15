@@ -966,6 +966,18 @@ function formatOutput(value: JqValue, raw: boolean, compact: boolean): string {
   return JSON.stringify(value, null, 2);
 }
 
+export function evaluateJq(data: any, expr: string, raw = false): string {
+  const tokens = tokenize(expr);
+  const { filter } = parse(tokens);
+  const results = filter(data);
+  const parts: string[] = [];
+  for (const result of results) {
+    const formatted = formatOutput(result, raw, false);
+    if (formatted !== '') parts.push(formatted);
+  }
+  return parts.join('\n') + (parts.length > 0 ? '\n' : '');
+}
+
 export const jqCmd: Command = {
   name: 'jq',
   description: 'JSON processor',
