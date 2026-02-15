@@ -2117,11 +2117,17 @@ export const nodeCmd: Command = {
               if (trimmed === 'pwd') {
                 return { stdout: ctx.cwd + '\n', stderr: '', status: 0 };
               }
-              // echo
+              // echo (only handle simple cases — fall through to async for shell operators)
               if (/^echo\s/.test(trimmed) || trimmed === 'echo') {
                 const echoArg = trimmed === 'echo' ? '' : trimmed.slice(5);
+                // If the echo args contain shell operators, fall through to async
+                if (/&&|\|\||[;|]/.test(echoArg) && !/^['"].*['"]$/.test(echoArg)) {
+                  return null;
+                }
                 // Expand env vars in echo args
-                const expanded = echoArg.replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (_, k: string) => ctx.env[k] || '');
+                let expanded = echoArg.replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (_, k: string) => ctx.env[k] || '');
+                // Strip outer quotes (shell would do this)
+                expanded = expanded.replace(/^["']|["']$/g, '');
                 return { stdout: expanded + '\n', stderr: '', status: 0 };
               }
               // cat <file> — read from fileCache for synchronous access
@@ -2312,6 +2318,10 @@ export const nodeCmd: Command = {
                 }
               }
 
+              // Normalize \r\n to \n (shell adds \r\n for terminal display, but Node convention is \n)
+              stdout = stdout.replace(/\r\n/g, '\n');
+              stderr = stderr.replace(/\r\n/g, '\n');
+
               return { stdout, stderr, exitCode };
             };
             const cpModule: any = {
@@ -2319,9 +2329,20 @@ export const nodeCmd: Command = {
                 // In browser, execSync cannot truly block. We return a placeholder
                 // Buffer and queue the actual execution. Works correctly when the
                 // result is used at top-level of an async script (node -e).
+                // Handle cwd option
+                let effectiveCmd = cmd;
+                if (opts?.cwd) {
+                  effectiveCmd = `cd ${shellQuoteArg(String(opts.cwd))} && ${cmd}`;
+                }
                 // Synchronous fast-path for detection commands
-                const syncResponse = getSyncResponse(cmd);
+                const syncResponse = getSyncResponse(effectiveCmd);
                 if (syncResponse) {
+                  // Throw on non-zero exit (bash semantics)
+                  if (syncResponse.status !== 0) {
+                    throw Object.assign(new Error(`Command failed: ${cmd}`), {
+                      status: syncResponse.status, stderr: syncResponse.stderr, stdout: syncResponse.stdout,
+                    });
+                  }
                   const wantStr = opts?.encoding && opts.encoding !== 'buffer';
                   if (wantStr) return syncResponse.stdout;
                   const buf: any = FakeBuffer.from(syncResponse.stdout);
@@ -2329,27 +2350,31 @@ export const nodeCmd: Command = {
                   return buf;
                 }
                 let result = '';
+                let resultErr = '';
+                let resultCode = 0;
                 const wantString = opts?.encoding && opts.encoding !== 'buffer';
-                const p = execAsync(cmd).then(r => { result = r.stdout; });
+                const p = execAsync(effectiveCmd).then(r => { result = r.stdout; resultErr = r.stderr; resultCode = r.exitCode; });
                 if (wantString) {
-                  // Return a string-like thenable (has .split, .trim, etc.)
                   const str: any = new String('');
-                  str.then = (resolve: any, reject: any) => p.then(() => resolve(result)).catch(reject);
-                  // Proxy to make property access return from resolved result
+                  str.then = (resolve: any, reject: any) => p.then(() => {
+                    if (resultCode !== 0) reject(Object.assign(new Error(`Command failed: ${cmd}`), { status: resultCode, stderr: resultErr, stdout: result }));
+                    else resolve(result);
+                  }).catch(reject);
                   return new Proxy(str, {
                     get(target, prop) {
                       if (prop === 'then') return str.then;
-                      // Delegate to the result string once resolved
                       const val = (result as any)[prop];
                       if (typeof val === 'function') return val.bind(result);
                       return val;
                     },
                   });
                 }
-                // Create a thenable Buffer-like that resolves when awaited
                 const buf: any = {
                   toString: () => result,
-                  then: (resolve: any, reject: any) => p.then(() => resolve(FakeBuffer.from(result))).catch(reject),
+                  then: (resolve: any, reject: any) => p.then(() => {
+                    if (resultCode !== 0) reject(Object.assign(new Error(`Command failed: ${cmd}`), { status: resultCode, stderr: resultErr, stdout: result }));
+                    else resolve(FakeBuffer.from(result));
+                  }).catch(reject),
                   [Symbol.toPrimitive]: () => result,
                 };
                 return buf;
@@ -2362,6 +2387,11 @@ export const nodeCmd: Command = {
                   fullCmd = extractShellArgs(args);
                 } else {
                   fullCmd = args ? `${cmd} ${shellQuoteArgs(args)}` : cmd;
+                }
+                // Handle cwd option
+                if (opts?.cwd) {
+                  const cwdPath = String(opts.cwd);
+                  fullCmd = `cd ${shellQuoteArg(cwdPath)} && ${fullCmd}`;
                 }
                 const wantString = opts?.encoding && opts.encoding !== 'buffer';
                 const wrap = (s: string) => wantString ? s : FakeBuffer.from(s);
@@ -2376,7 +2406,7 @@ export const nodeCmd: Command = {
                     get stdout() { return out; },
                     get stderr() { return err; },
                     get status() { return st; },
-                    error: undefined as any,
+                    error: st !== 0 ? new Error(`spawnSync exited with ${st}`) : undefined as any,
                     then: (resolve: any) => resolve({ stdout: out, stderr: err, status: st }),
                   };
                 }
@@ -2389,6 +2419,7 @@ export const nodeCmd: Command = {
                   get stdout() { return wrap(stdout); },
                   get stderr() { return wrap(stderr); },
                   get status() { return status; },
+                  get error() { return status !== 0 ? new Error(`spawnSync exited with ${status}`) : undefined; },
                   then: (resolve: any, reject: any) => p.then(() => resolve({ stdout: wrap(stdout), stderr: wrap(stderr), status })).catch(reject),
                 };
               },
@@ -2626,8 +2657,11 @@ export const nodeCmd: Command = {
               const cpu = { model: 'Browser vCPU', speed: 2400, times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 } };
               return Array.from({ length: count }, () => ({ ...cpu }));
             },
-            totalmem: () => 0,
-            freemem: () => 0,
+            totalmem: () => {
+              const dm = typeof navigator !== 'undefined' ? (navigator as any).deviceMemory : undefined;
+              return dm ? dm * 1024 * 1024 * 1024 : 8 * 1024 * 1024 * 1024; // default 8GB
+            },
+            freemem: () => 4 * 1024 * 1024 * 1024, // 4GB default
             EOL: '\n',
             userInfo: () => ({ username: 'user', homedir: ctx.env['HOME'] || '/home/user', shell: '/bin/sh', uid: 1000, gid: 1000 }),
             networkInterfaces: () => ({}),

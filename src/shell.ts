@@ -213,6 +213,21 @@ export class Shell {
       return this.execControlStructure(effectiveLine, writeStdout, stderrWriter);
     }
 
+    // Check for subshell: (commands)
+    if (effectiveLine.startsWith('(') && effectiveLine.endsWith(')')) {
+      const inner = effectiveLine.slice(1, -1).trim();
+      if (inner) {
+        // Execute in a forked shell (env changes don't propagate back)
+        const child = this.fork();
+        const result = await child.exec(inner);
+        if (result.stdout) writeStdout(result.stdout.replace(/\n/g, '\r\n'));
+        if (result.stderr) stderrWriter(result.stderr.replace(/\n/g, '\r\n'));
+        this.lastExitCode = result.exitCode;
+        this.env['?'] = String(result.exitCode);
+        return result.exitCode;
+      }
+    }
+
     // Split into compound commands: &&, ||, ;
     const compounds = this.parseCompound(effectiveLine);
     let exitCode = 0;
@@ -221,6 +236,13 @@ export class Shell {
       // Check conditional
       if (compound.operator === '&&' && exitCode !== 0) continue;
       if (compound.operator === '||' && exitCode === 0) continue;
+
+      // Check for function definition in this compound
+      const compFuncDef = this.parseFunctionDef(compound.command.trim());
+      if (compFuncDef) {
+        this.functions[compFuncDef.name] = { body: compFuncDef.body };
+        continue;
+      }
 
       // Check if compound is a control structure BEFORE variable expansion
       // (control structures handle their own expansion internally to support loop variables)
@@ -231,20 +253,32 @@ export class Shell {
         continue;
       }
 
-      // Expand arithmetic, command substitution, and environment variables
-      let expanded = this.expandArithmetic(compound.command);
+      // Expand braces, arithmetic, command substitution, and environment variables
+      let expanded = this.expandBraces(compound.command);
+      expanded = this.expandArithmetic(expanded);
       expanded = await this.expandCommandSubstitution(expanded, stderrWriter);
       expanded = this.expandVars(expanded);
 
       // Parse pipeline
       const pipeline = this.parsePipeline(expanded);
 
+      // Check for ! negation prefix
+      let negateExit = false;
+      if (pipeline.length > 0 && pipeline[0].trim().startsWith('! ')) {
+        negateExit = true;
+        pipeline[0] = pipeline[0].trim().slice(2);
+      } else if (pipeline.length > 0 && pipeline[0].trim() === '!') {
+        // Bare ! with pipeline after
+        negateExit = true;
+        pipeline.shift();
+      }
+
       let lastOutput = '';
       exitCode = 0;
 
       for (let i = 0; i < pipeline.length; i++) {
         const segment = pipeline[i];
-        const { args, redirects } = this.parseSegment(segment);
+        const { args, redirects, hereString } = this.parseSegment(segment);
 
         if (args.length === 0) continue;
 
@@ -348,6 +382,21 @@ export class Shell {
           // zsh/bash shell options — no-op in Shiro
           continue;
         }
+        if (effectiveCmdName === 'declare' || effectiveCmdName === 'typeset' || effectiveCmdName === 'local') {
+          // Basic declare/typeset/local support
+          for (const arg of cmdArgs) {
+            if (arg === '-x' || arg === '-r' || arg === '-i' || arg === '-a' || arg === '-f' || arg === '-p') continue;
+            if (arg.startsWith('-')) continue; // skip other flags
+            const eqIdx = arg.indexOf('=');
+            if (eqIdx >= 0) {
+              this.env[arg.slice(0, eqIdx)] = arg.slice(eqIdx + 1);
+            } else {
+              // Declare without value — ensure exists
+              if (!(arg in this.env)) this.env[arg] = '';
+            }
+          }
+          continue;
+        }
 
         // Handle stdin redirect (<)
         let stdin = i > 0 ? lastOutput : '';
@@ -372,6 +421,11 @@ export class Shell {
         // Inject heredoc content as stdin if present and this is the first pipeline segment
         if (heredocStdin && i === 0 && !stdin) {
           stdin = heredocStdin;
+        }
+
+        // Here-string (<<<) overrides stdin
+        if (hereString) {
+          stdin = hereString;
         }
 
         const ctx: CommandContext = {
@@ -482,11 +536,150 @@ export class Shell {
         this.cwd = this.env['PWD'] || this.cwd;
       }
 
+      // Apply ! negation
+      if (negateExit) {
+        exitCode = exitCode === 0 ? 1 : 0;
+      }
+
       this.lastExitCode = exitCode;
       this.env['?'] = String(exitCode);
     }
 
     return exitCode;
+  }
+
+  /**
+   * Expand brace expressions: {a,b,c} → a b c, {1..5} → 1 2 3 4 5
+   * Handles prefix/suffix: pre{a,b}suf → preasuf prebsuf
+   * Respects quoting: '{a,b}' is literal.
+   */
+  private expandBraces(input: string): string {
+    // Quick check: no unquoted braces
+    if (!input.includes('{')) return input;
+
+    // Tokenize respecting quotes, then expand each token
+    const tokens = this.tokenize(input);
+    const expanded: string[] = [];
+    for (const tok of tokens) {
+      expanded.push(...this.expandBraceToken(tok));
+    }
+    // Reconstruct: join with spaces, but preserve redirect tokens
+    return expanded.join(' ');
+  }
+
+  private expandBraceToken(token: string): string[] {
+    // Don't expand if token contains sentinel-quoted braces or no braces
+    if (token.includes('\x01') || !token.includes('{') || !token.includes('}')) return [token];
+
+    // Find the first unquoted { and its matching }, skipping ${...} parameter expansions
+    let braceStart = -1;
+    let braceEnd = -1;
+    let depth = 0;
+    let inSQ = false, inDQ = false;
+    for (let i = 0; i < token.length; i++) {
+      const ch = token[i];
+      if (ch === '\\') { i++; continue; }
+      if (ch === "'" && !inDQ) { inSQ = !inSQ; continue; }
+      if (ch === '"' && !inSQ) { inDQ = !inDQ; continue; }
+      if (inSQ || inDQ) continue;
+      // Skip ${...} — this is a parameter expansion, not brace expansion
+      if (ch === '$' && token[i + 1] === '{') {
+        let bd = 1;
+        i += 2;
+        while (i < token.length && bd > 0) {
+          if (token[i] === '{') bd++;
+          else if (token[i] === '}') bd--;
+          i++;
+        }
+        i--; // will be incremented by the loop
+        continue;
+      }
+      // Skip $((...)  — arithmetic
+      if (ch === '$' && token[i + 1] === '(' && token[i + 2] === '(') {
+        i += 2;
+        continue;
+      }
+      if (ch === '{') {
+        if (depth === 0) braceStart = i;
+        depth++;
+      } else if (ch === '}') {
+        depth--;
+        if (depth === 0) { braceEnd = i; break; }
+      }
+    }
+    if (braceStart < 0 || braceEnd < 0) return [token];
+
+    const prefix = token.slice(0, braceStart);
+    const body = token.slice(braceStart + 1, braceEnd);
+    const suffix = token.slice(braceEnd + 1);
+
+    // Check for range: {a..z}, {1..5}, {01..10}
+    const rangeMatch = body.match(/^(-?\d+)\.\.(-?\d+)(?:\.\.(-?\d+))?$/);
+    if (rangeMatch) {
+      const start = parseInt(rangeMatch[1]);
+      const end = parseInt(rangeMatch[2]);
+      const step = rangeMatch[3] ? parseInt(rangeMatch[3]) : (start <= end ? 1 : -1);
+      const padLen = Math.max(rangeMatch[1].length, rangeMatch[2].length);
+      const shouldPad = rangeMatch[1].startsWith('0') || rangeMatch[2].startsWith('0');
+      const items: string[] = [];
+      if (step > 0) {
+        for (let n = start; n <= end; n += step) {
+          items.push(shouldPad ? String(n).padStart(padLen, '0') : String(n));
+        }
+      } else if (step < 0) {
+        for (let n = start; n >= end; n += step) {
+          items.push(shouldPad ? String(Math.abs(n)).padStart(padLen, '0') : String(n));
+        }
+      }
+      const result: string[] = [];
+      for (const item of items) {
+        result.push(...this.expandBraceToken(prefix + item + suffix));
+      }
+      return result;
+    }
+
+    // Char range: {a..z}
+    const charRange = body.match(/^([a-zA-Z])\.\.([a-zA-Z])$/);
+    if (charRange) {
+      const startCode = charRange[1].charCodeAt(0);
+      const endCode = charRange[2].charCodeAt(0);
+      const step = startCode <= endCode ? 1 : -1;
+      const items: string[] = [];
+      for (let c = startCode; step > 0 ? c <= endCode : c >= endCode; c += step) {
+        items.push(String.fromCharCode(c));
+      }
+      const result: string[] = [];
+      for (const item of items) {
+        result.push(...this.expandBraceToken(prefix + item + suffix));
+      }
+      return result;
+    }
+
+    // Comma separated: {a,b,c}
+    // Split on commas at depth 0
+    const parts: string[] = [];
+    let current = '';
+    let partDepth = 0;
+    for (let i = 0; i < body.length; i++) {
+      const ch = body[i];
+      if (ch === '{') partDepth++;
+      else if (ch === '}') partDepth--;
+      else if (ch === ',' && partDepth === 0) {
+        parts.push(current);
+        current = '';
+        continue;
+      }
+      current += ch;
+    }
+    parts.push(current);
+
+    if (parts.length <= 1) return [token]; // No comma found, not a brace expansion
+
+    const result: string[] = [];
+    for (const part of parts) {
+      result.push(...this.expandBraceToken(prefix + part + suffix));
+    }
+    return result;
   }
 
   private expandVars(line: string): string {
@@ -510,6 +703,13 @@ export class Shell {
 
       // Handle backslash (skip next char)
       if (ch === '\\' && i + 1 < line.length) { result += ch + line[i + 1]; i += 2; continue; }
+
+      // Expand $$ (process ID)
+      if (ch === '$' && line[i + 1] === '$') {
+        result += '1';
+        i += 2;
+        continue;
+      }
 
       // Expand $? (last exit code)
       if (ch === '$' && line[i + 1] === '?') {
@@ -549,7 +749,7 @@ export class Shell {
         continue;
       }
 
-      // Expand ${VAR} and ${VAR:-default}, ${VAR:=default}, ${VAR:+alt}, ${VAR:?err}
+      // Expand ${VAR} and parameter expansion operators
       if (ch === '$' && line[i + 1] === '{') {
         // Count brace depth to find matching }
         let depth = 0;
@@ -567,46 +767,28 @@ export class Shell {
         }
         if (depth === 0 && j < line.length) {
           const inner = line.slice(i + 2, j); // content between ${ and }
-          // Parse: VAR[:]([-=+?])operand or just VAR
-          const opMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)(:?)([-=+?])(.*)$/s);
-          if (opMatch) {
-            const [, varName, colon, op, operand] = opMatch;
-            const val = this.env[varName];
-            const isUnset = val === undefined;
-            const isEmpty = val === '';
-            const check = colon ? (isUnset || isEmpty) : isUnset;
-            // Recursively expand operand (handles nested ${})
-            const expandedOperand = this.expandVars(operand);
-            switch (op) {
-              case '-': result += check ? expandedOperand : (val ?? ''); break;
-              case '=':
-                if (check) { this.env[varName] = expandedOperand; result += expandedOperand; }
-                else result += val ?? '';
-                break;
-              case '+': result += check ? '' : expandedOperand; break;
-              case '?':
-                if (check) throw new Error(`${varName}: ${expandedOperand || 'parameter not set'}`);
-                result += val ?? '';
-                break;
-            }
-            i = j + 1;
-            continue;
-          }
-          // Simple ${VAR}
-          const simpleMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)$/);
-          if (simpleMatch) {
-            result += this.env[simpleMatch[1]] ?? '';
+          const expanded = this.expandParamExpression(inner);
+          if (expanded !== null) {
+            result += expanded;
             i = j + 1;
             continue;
           }
         }
       }
 
-      // Expand $VAR
+      // Expand $VAR (including special dynamic variables)
       if (ch === '$') {
         const m = line.slice(i).match(/^\$([A-Za-z_][A-Za-z0-9_]*)/);
         if (m) {
-          result += this.env[m[1]] ?? '';
+          const varName = m[1];
+          // Dynamic special variables
+          if (varName === 'RANDOM') { result += String(Math.floor(Math.random() * 32768)); i += m[0].length; continue; }
+          if (varName === 'BASH_VERSION') { result += '5.0.0'; i += m[0].length; continue; }
+          if (varName === 'HOSTNAME') { result += 'shiro'; i += m[0].length; continue; }
+          if (varName === 'PPID') { result += '0'; i += m[0].length; continue; }
+          if (varName === 'LINENO') { result += '1'; i += m[0].length; continue; }
+          if (varName === 'SECONDS') { result += String(Math.floor(performance.now() / 1000)); i += m[0].length; continue; }
+          result += this.env[varName] ?? '';
           i += m[0].length;
           continue;
         }
@@ -628,6 +810,144 @@ export class Shell {
       i++;
     }
     return result;
+  }
+
+  /**
+   * Expand advanced ${...} parameter expressions.
+   * Supports: ${#VAR}, ${VAR#pat}, ${VAR##pat}, ${VAR%pat}, ${VAR%%pat},
+   * ${VAR/pat/rep}, ${VAR//pat/rep}, ${VAR:offset}, ${VAR:offset:length},
+   * ${VAR^^}, ${VAR,,}, ${VAR:-default}, ${VAR:=default}, ${VAR:+alt}, ${VAR:?err}
+   */
+  private expandParamExpression(inner: string): string | null {
+    // ${#VAR} — string length
+    const lenMatch = inner.match(/^#([A-Za-z_][A-Za-z0-9_]*)$/);
+    if (lenMatch) {
+      return String((this.env[lenMatch[1]] ?? '').length);
+    }
+
+    // ${VAR^^} — uppercase all
+    const ucMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\^\^$/);
+    if (ucMatch) return (this.env[ucMatch[1]] ?? '').toUpperCase();
+
+    // ${VAR,,} — lowercase all
+    const lcMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*),,$/);
+    if (lcMatch) return (this.env[lcMatch[1]] ?? '').toLowerCase();
+
+    // ${VAR:offset} and ${VAR:offset:length} — substring
+    const subMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*):(-?\d+)(?::(-?\d+))?$/);
+    if (subMatch) {
+      const val = this.env[subMatch[1]] ?? '';
+      let offset = parseInt(subMatch[2]);
+      if (offset < 0) offset = Math.max(0, val.length + offset);
+      if (subMatch[3] !== undefined) {
+        const len = parseInt(subMatch[3]);
+        return len < 0 ? val.slice(offset, Math.max(0, val.length + len)) : val.slice(offset, offset + len);
+      }
+      return val.slice(offset);
+    }
+
+    // ${VAR//pattern/replacement} — replace all
+    const repAllMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\/\/((?:[^/]|\\\/)*)\/([\s\S]*)$/);
+    if (repAllMatch) {
+      const val = this.env[repAllMatch[1]] ?? '';
+      const pat = repAllMatch[2].replace(/\\\//g, '/');
+      const rep = this.expandVars(repAllMatch[3]);
+      const re = new RegExp(this.globToRegex(pat), 'g');
+      return val.replace(re, rep);
+    }
+
+    // ${VAR/pattern/replacement} — replace first
+    const repMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\/((?:[^/]|\\\/)*)\/([\s\S]*)$/);
+    if (repMatch) {
+      const val = this.env[repMatch[1]] ?? '';
+      const pat = repMatch[2].replace(/\\\//g, '/');
+      const rep = this.expandVars(repMatch[3]);
+      const re = new RegExp(this.globToRegex(pat));
+      return val.replace(re, rep);
+    }
+
+    // ${VAR##pattern} — remove longest prefix
+    const rmPrefLong = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)##(.+)$/);
+    if (rmPrefLong) {
+      const val = this.env[rmPrefLong[1]] ?? '';
+      const reStr = this.globToRegex(rmPrefLong[2]);
+      // Greedy: find longest prefix matching the pattern
+      for (let len = val.length; len >= 0; len--) {
+        const prefix = val.slice(0, len);
+        if (new RegExp('^' + reStr + '$').test(prefix)) return val.slice(len);
+      }
+      return val;
+    }
+
+    // ${VAR#pattern} — remove shortest prefix
+    const rmPrefShort = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)#(.+)$/);
+    if (rmPrefShort) {
+      const val = this.env[rmPrefShort[1]] ?? '';
+      const reStr = this.globToRegex(rmPrefShort[2]);
+      for (let len = 0; len <= val.length; len++) {
+        const prefix = val.slice(0, len);
+        if (new RegExp('^' + reStr + '$').test(prefix)) return val.slice(len);
+      }
+      return val;
+    }
+
+    // ${VAR%%pattern} — remove longest suffix
+    const rmSufLong = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)%%(.+)$/);
+    if (rmSufLong) {
+      const val = this.env[rmSufLong[1]] ?? '';
+      const reStr = this.globToRegex(rmSufLong[2]);
+      for (let start = 0; start <= val.length; start++) {
+        const suffix = val.slice(start);
+        if (new RegExp('^' + reStr + '$').test(suffix)) return val.slice(0, start);
+      }
+      return val;
+    }
+
+    // ${VAR%pattern} — remove shortest suffix
+    const rmSufShort = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)%(.+)$/);
+    if (rmSufShort) {
+      const val = this.env[rmSufShort[1]] ?? '';
+      const reStr = this.globToRegex(rmSufShort[2]);
+      for (let start = val.length; start >= 0; start--) {
+        const suffix = val.slice(start);
+        if (new RegExp('^' + reStr + '$').test(suffix)) return val.slice(0, start);
+      }
+      return val;
+    }
+
+    // ${VAR:-default}, ${VAR:=default}, ${VAR:+alt}, ${VAR:?err}
+    const opMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)(:?)([-=+?])(.*)$/s);
+    if (opMatch) {
+      const [, varName, colon, op, operand] = opMatch;
+      const val = this.env[varName];
+      const isUnset = val === undefined;
+      const isEmpty = val === '';
+      const check = colon ? (isUnset || isEmpty) : isUnset;
+      const expandedOperand = this.expandVars(operand);
+      switch (op) {
+        case '-': return check ? expandedOperand : (val ?? '');
+        case '=':
+          if (check) { this.env[varName] = expandedOperand; return expandedOperand; }
+          return val ?? '';
+        case '+': return check ? '' : expandedOperand;
+        case '?':
+          if (check) throw new Error(`${varName}: ${expandedOperand || 'parameter not set'}`);
+          return val ?? '';
+      }
+    }
+
+    // Simple ${VAR}
+    const simpleMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)$/);
+    if (simpleMatch) {
+      return this.env[simpleMatch[1]] ?? '';
+    }
+
+    return null; // not recognized
+  }
+
+  /** Convert a shell glob pattern to a regex string */
+  private globToRegex(pattern: string): string {
+    return pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
   }
 
   private parseHeredoc(input: string): { command: string; body: string } | null {
@@ -693,6 +1013,18 @@ export class Shell {
       if (ch === '"' && !inSingle) { inDouble = !inDouble; current += ch; i++; continue; }
 
       if (!inSingle && !inDouble) {
+        // Track {/} brace groups and function bodies
+        if (ch === '{') {
+          // Only count as depth if preceded by whitespace/; (not in ${VAR})
+          const prevBrace = i > 0 ? line[i - 1] : ' ';
+          if (/[\s;)]/.test(prevBrace) || i === 0) depth++;
+          current += ch; i++; continue;
+        }
+        if (ch === '}') {
+          if (depth > 0) depth--;
+          current += ch; i++; continue;
+        }
+
         // Track control structure keywords to avoid splitting inside them
         // Only match at word boundary: beginning of string or after whitespace/;
         const prevCh = i > 0 ? line[i - 1] : ' ';
@@ -761,15 +1093,19 @@ export class Shell {
     return segments;
   }
 
-  private parseSegment(segment: string): { args: string[], redirects: Redirect[] } {
+  private parseSegment(segment: string): { args: string[], redirects: Redirect[], hereString?: string } {
     const tokens = this.tokenize(segment);
     const args: string[] = [];
     const redirects: Redirect[] = [];
+    let hereString: string | undefined;
 
     for (let i = 0; i < tokens.length; i++) {
       if (tokens[i] === '2>&1') {
-        // 2>&1 doesn't need a target - it redirects stderr to stdout
         redirects.push({ type: '2>&1', target: '' });
+      } else if (tokens[i] === '<<<' && i + 1 < tokens.length) {
+        // Here-string: <<< "string" — set as stdin
+        hereString = tokens[i + 1].replace(/\x01/g, '') + '\n';
+        i++;
       } else if ((tokens[i] === '>' || tokens[i] === '>>' || tokens[i] === '<' || tokens[i] === '2>' || tokens[i] === '2>>') && i + 1 < tokens.length) {
         redirects.push({ type: tokens[i] as Redirect['type'], target: tokens[i + 1].replace(/\x01/g, '') });
         i++;
@@ -778,7 +1114,7 @@ export class Shell {
       }
     }
 
-    return { args, redirects };
+    return { args, redirects, hereString };
   }
 
   private tokenize(input: string): string[] {
@@ -874,8 +1210,14 @@ export class Shell {
         continue;
       }
 
-      // Handle < stdin redirect
+      // Handle <<< here-string, << heredoc (already handled elsewhere), < stdin redirect
       if (ch === '<' && !inSingle && !inDouble) {
+        if (input[i + 1] === '<' && input[i + 2] === '<') {
+          if (current) { tokens.push(current); current = ''; }
+          tokens.push('<<<');
+          i += 3;
+          continue;
+        }
         if (current) { tokens.push(current); current = ''; }
         tokens.push('<');
         i++;
@@ -918,7 +1260,15 @@ export class Shell {
         const subCmd = input.slice(i + 2, j - 1);
         const subResult = await this.exec(subCmd);
         if (subResult.stderr) stderrWriter(subResult.stderr);
-        result.push(subResult.stdout.replace(/[\r\n]+$/, ''));
+        let subOut = subResult.stdout.replace(/[\r\n]+$/, '');
+        // If $() appears as the RHS of a variable assignment (VAR=$(...)), wrap the
+        // output in double-quotes so tokenize() preserves spaces. This matches bash
+        // semantics: VAR=$(cmd) preserves spaces, bare $(cmd) word-splits.
+        const preceding = result.join('');
+        if (/[A-Za-z_][A-Za-z0-9_]*=$/.test(preceding)) {
+          subOut = '"' + subOut.replace(/"/g, '\\"') + '"';
+        }
+        result.push(subOut);
         i = j;
       } else if (input[i] === '`') {
         let j = input.indexOf('`', i + 1);
@@ -926,7 +1276,12 @@ export class Shell {
         const subCmd = input.slice(i + 1, j);
         const subResult = await this.exec(subCmd);
         if (subResult.stderr) stderrWriter(subResult.stderr);
-        result.push(subResult.stdout.replace(/[\r\n]+$/, ''));
+        let subOut = subResult.stdout.replace(/[\r\n]+$/, '');
+        const preceding = result.join('');
+        if (/[A-Za-z_][A-Za-z0-9_]*=$/.test(preceding)) {
+          subOut = '"' + subOut.replace(/"/g, '\\"') + '"';
+        }
+        result.push(subOut);
         i = j + 1;
       } else {
         result.push(input[i]);
@@ -997,8 +1352,8 @@ export class Shell {
   }
 
   private evalArithmetic(expr: string): number {
-    // Replace variable references
-    let expanded = expr.replace(/\$\{?([A-Za-z_]\w*)\}?/g, (_, name: string) => this.env[name] || '0');
+    // Replace variable references (including positional params $1, $2, etc.)
+    let expanded = expr.replace(/\$\{?([A-Za-z_]\w*|\d+)\}?/g, (_, name: string) => this.env[name] || '0');
     expanded = expanded.replace(/\b([A-Za-z_]\w*)\b/g, (match) => {
       if (/^\d+$/.test(match)) return match;
       return this.env[match] || '0';
@@ -1222,77 +1577,160 @@ export class Shell {
   private async execIf(
     input: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void
   ): Promise<number> {
-    const lines = input.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+    // Normalize to semicolons for easier parsing
+    const joined = input.replace(/\r?\n/g, '; ').replace(/;\s*;/g, ';');
 
-    // Single-line: if <cond>; then <cmd>; fi
-    if (lines.length === 1) {
-      const m = lines[0].match(/^if\s+(.+?);\s*then\s+(.+?)(?:;\s*else\s+(.+?))?;\s*fi$/);
-      if (m) {
-        const cond = await this.evalCondition(m[1], writeStdout, writeStderr);
-        if (cond === 0) return this.execute(m[2], writeStdout, writeStderr);
-        if (m[3]) return this.execute(m[3], writeStdout, writeStderr);
-        return 0;
+    // Parse if/elif/else/fi with depth tracking for nested if blocks
+    interface IfBranch { condition: string; body: string; }
+    const branches: IfBranch[] = [];
+    let elseBody = '';
+
+    const tokens = this.shellTokenScan(joined);
+    // Find the structure at depth 0
+    type Marker = { word: string; pos: number };
+    const depth0: Marker[] = [];
+    let ifDepth = 0;
+    for (const tok of tokens) {
+      if (tok.word === 'if') {
+        if (ifDepth === 0) depth0.push(tok);
+        ifDepth++;
+      } else if (tok.word === 'fi') {
+        ifDepth--;
+        if (ifDepth === 0) depth0.push(tok);
+      } else if (ifDepth === 1 && (tok.word === 'then' || tok.word === 'elif' || tok.word === 'else')) {
+        depth0.push(tok);
       }
     }
 
-    // Multi-line
-    const condMatch = lines[0].match(/^if\s+(.+?)(?:;\s*then)?$/);
-    if (!condMatch) { writeStderr('if: syntax error\r\n'); return 1; }
-
-    let thenIdx = -1, elseIdx = -1, fiIdx = -1;
-    for (let i = 0; i < lines.length; i++) {
-      const l = lines[i];
-      if (l === 'then' || l.endsWith('; then')) thenIdx = i;
-      else if (l === 'else') elseIdx = i;
-      else if (l === 'fi') fiIdx = i;
+    // Parse structure: if COND then BODY [elif COND then BODY]* [else BODY] fi
+    let i = 0;
+    while (i < depth0.length) {
+      const cur = depth0[i];
+      if (cur.word === 'if' || cur.word === 'elif') {
+        // Find the 'then' after this
+        const thenMarker = depth0[i + 1];
+        if (!thenMarker || thenMarker.word !== 'then') { writeStderr('if: syntax error\r\n'); return 1; }
+        const condStr = joined.slice(cur.pos + cur.word.length, thenMarker.pos).trim().replace(/^;\s*/, '').replace(/;\s*$/, '').trim();
+        // Find the next elif/else/fi
+        const nextMarker = depth0[i + 2];
+        const bodyEnd = nextMarker ? nextMarker.pos : joined.length;
+        const bodyStr = joined.slice(thenMarker.pos + 4, bodyEnd).trim().replace(/^;\s*/, '').replace(/;\s*$/, '').trim();
+        branches.push({ condition: condStr, body: bodyStr });
+        i += 2;
+      } else if (cur.word === 'else') {
+        const nextMarker = depth0[i + 1]; // should be fi
+        const bodyEnd = nextMarker ? nextMarker.pos : joined.length;
+        elseBody = joined.slice(cur.pos + 4, bodyEnd).trim().replace(/^;\s*/, '').replace(/;\s*$/, '').trim();
+        i++;
+      } else if (cur.word === 'fi') {
+        break;
+      } else {
+        i++;
+      }
     }
 
-    const cond = await this.evalCondition(condMatch[1], writeStdout, writeStderr);
+    if (branches.length === 0) { writeStderr('if: syntax error\r\n'); return 1; }
 
-    if (cond === 0) {
-      const start = thenIdx + 1;
-      const end = elseIdx >= 0 ? elseIdx : fiIdx;
-      const block = lines.slice(start, end).join('\n');
-      return block.trim() ? this.execute(block, writeStdout, writeStderr) : 0;
-    } else if (elseIdx >= 0) {
-      const block = lines.slice(elseIdx + 1, fiIdx).join('\n');
-      return block.trim() ? this.execute(block, writeStdout, writeStderr) : 0;
+    // Evaluate branches in order
+    for (const branch of branches) {
+      const expandedCond = this.expandVars(await this.expandCommandSubstitution(this.expandArithmetic(branch.condition), writeStderr));
+      const condResult = await this.evalCondition(expandedCond, writeStdout, writeStderr);
+      if (condResult === 0) {
+        return branch.body.trim() ? this.execute(branch.body, writeStdout, writeStderr) : 0;
+      }
+    }
+
+    // No branch matched, try else
+    if (elseBody) {
+      return this.execute(elseBody, writeStdout, writeStderr);
     }
     return 0;
+  }
+
+  /**
+   * Parse a loop construct (while/until/for) extracting condition and body.
+   * Handles nested loops by tracking do/done depth.
+   */
+  private parseLoopConstruct(input: string, keyword: string): { condition: string; body: string } | null {
+    // Find '; do ' or standalone 'do' with depth tracking
+    const joined = input.replace(/\r?\n/g, '; ');
+    // Scan for 'do' at depth 0 (not inside nested for/while/until)
+    let depth = 0;
+    let doPos = -1;
+    let donePos = -1;
+    const tokens = this.shellTokenScan(joined);
+    for (const tok of tokens) {
+      if (tok.word === 'for' || tok.word === 'while' || tok.word === 'until') {
+        if (tok.pos > 0) depth++; // nested loop (skip the outermost keyword)
+      } else if (tok.word === 'do') {
+        if (depth === 0) { doPos = tok.pos; }
+        else depth--; // absorb do for the nested loop
+      } else if (tok.word === 'done') {
+        if (doPos >= 0 && depth === 0) { donePos = tok.pos; break; }
+        else if (depth > 0) depth--; // nested done
+      }
+    }
+    if (doPos < 0) return null;
+
+    // Condition: between keyword and 'do'
+    let condStart = keyword.length;
+    let condEnd = doPos;
+    // Handle "; do" — strip trailing semicolons
+    let condStr = joined.slice(condStart, condEnd).trim().replace(/;\s*$/, '').trim();
+
+    // Body: between 'do' and last 'done'
+    let bodyStart = doPos + 2; // length of 'do'
+    let bodyEnd = donePos >= 0 ? donePos : joined.length;
+    let bodyStr = joined.slice(bodyStart, bodyEnd).trim().replace(/^;\s*/, '').replace(/;\s*$/, '').trim();
+
+    return { condition: condStr, body: bodyStr };
+  }
+
+  /**
+   * Scan input for shell keywords at word boundaries, respecting quotes.
+   */
+  private shellTokenScan(input: string): { word: string; pos: number }[] {
+    const results: { word: string; pos: number }[] = [];
+    let inSQ = false, inDQ = false;
+    let i = 0;
+    const keywords = ['for', 'while', 'until', 'do', 'done', 'if', 'then', 'elif', 'else', 'fi', 'case', 'esac', 'in'];
+    while (i < input.length) {
+      const ch = input[i];
+      if (ch === '\\' && !inSQ) { i += 2; continue; }
+      if (ch === "'" && !inDQ) { inSQ = !inSQ; i++; continue; }
+      if (ch === '"' && !inSQ) { inDQ = !inDQ; i++; continue; }
+      if (inSQ || inDQ) { i++; continue; }
+      // Check word boundary
+      const prevCh = i > 0 ? input[i - 1] : ' ';
+      if (/[\s;]/.test(prevCh) || i === 0) {
+        for (const kw of keywords) {
+          if (input.slice(i, i + kw.length) === kw) {
+            const after = input[i + kw.length];
+            if (after === undefined || /[\s;]/.test(after)) {
+              results.push({ word: kw, pos: i });
+              i += kw.length;
+              break;
+            }
+          }
+        }
+      }
+      i++;
+    }
+    return results;
   }
 
   private async execWhile(
     input: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void
   ): Promise<number> {
-    const lines = input.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+    const parsed = this.parseLoopConstruct(input, 'while');
+    if (!parsed) { writeStderr('while: syntax error\r\n'); return 1; }
 
-    // Single-line: while <cond>; do <cmd>; done
-    if (lines.length === 1) {
-      const m = lines[0].match(/^while\s+(.+?);\s*do\s+(.+?);\s*done$/);
-      if (m) {
-        let iter = 0;
-        while (iter++ < 10000) {
-          if ((await this.evalCondition(m[1], writeStdout, writeStderr)) !== 0) break;
-          await this.execute(m[2], writeStdout, writeStderr);
-        }
-        return 0;
-      }
-    }
-
-    const condMatch = lines[0].match(/^while\s+(.+?)(?:;\s*do)?$/);
-    if (!condMatch) { writeStderr('while: syntax error\r\n'); return 1; }
-
-    let doIdx = -1, doneIdx = -1;
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i] === 'do' || lines[i].endsWith('; do')) doIdx = i;
-      if (lines[i] === 'done') doneIdx = i;
-    }
-
-    const body = lines.slice((doIdx >= 0 ? doIdx : 0) + 1, doneIdx >= 0 ? doneIdx : lines.length).join('\n');
     let iter = 0;
     while (iter++ < 10000) {
-      if ((await this.evalCondition(condMatch[1], writeStdout, writeStderr)) !== 0) break;
-      if (body.trim()) await this.execute(body, writeStdout, writeStderr);
+      // Expand vars in condition each iteration (loop vars like $X change)
+      const expandedCond = this.expandVars(await this.expandCommandSubstitution(this.expandArithmetic(parsed.condition), writeStderr));
+      if ((await this.evalCondition(expandedCond, writeStdout, writeStderr)) !== 0) break;
+      if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr);
     }
     return 0;
   }
@@ -1300,35 +1738,14 @@ export class Shell {
   private async execUntil(
     input: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void
   ): Promise<number> {
-    const lines = input.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+    const parsed = this.parseLoopConstruct(input, 'until');
+    if (!parsed) { writeStderr('until: syntax error\r\n'); return 1; }
 
-    // Single-line: until <cond>; do <cmd>; done
-    if (lines.length === 1) {
-      const m = lines[0].match(/^until\s+(.+?);\s*do\s+(.+?);\s*done$/);
-      if (m) {
-        let iter = 0;
-        while (iter++ < 10000) {
-          if ((await this.evalCondition(m[1], writeStdout, writeStderr)) === 0) break;
-          await this.execute(m[2], writeStdout, writeStderr);
-        }
-        return 0;
-      }
-    }
-
-    const condMatch = lines[0].match(/^until\s+(.+?)(?:;\s*do)?$/);
-    if (!condMatch) { writeStderr('until: syntax error\r\n'); return 1; }
-
-    let doIdx = -1, doneIdx = -1;
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i] === 'do' || lines[i].endsWith('; do')) doIdx = i;
-      if (lines[i] === 'done') doneIdx = i;
-    }
-
-    const body = lines.slice((doIdx >= 0 ? doIdx : 0) + 1, doneIdx >= 0 ? doneIdx : lines.length).join('\n');
     let iter = 0;
     while (iter++ < 10000) {
-      if ((await this.evalCondition(condMatch[1], writeStdout, writeStderr)) === 0) break;
-      if (body.trim()) await this.execute(body, writeStdout, writeStderr);
+      const expandedCond = this.expandVars(await this.expandCommandSubstitution(this.expandArithmetic(parsed.condition), writeStderr));
+      if ((await this.evalCondition(expandedCond, writeStdout, writeStderr)) === 0) break;
+      if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr);
     }
     return 0;
   }
@@ -1336,35 +1753,19 @@ export class Shell {
   private async execFor(
     input: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void
   ): Promise<number> {
-    const lines = input.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+    const parsed = this.parseLoopConstruct(input, 'for');
+    if (!parsed) { writeStderr('for: syntax error\r\n'); return 1; }
 
-    // Single-line: for i in 1 2 3; do echo $i; done
-    if (lines.length === 1) {
-      const m = lines[0].match(/^for\s+(\w+)\s+in\s+(.+?);\s*do\s+(.+?);\s*done$/);
-      if (m) {
-        const items = this.expandVars(m[2]).split(/\s+/).filter(Boolean);
-        for (const item of items) {
-          this.env[m[1]] = item;
-          await this.execute(m[3], writeStdout, writeStderr);
-        }
-        return 0;
-      }
-    }
-
-    const forMatch = lines[0].match(/^for\s+(\w+)\s+in\s+(.+?)(?:;\s*do)?$/);
+    // Parse "VAR in item1 item2 item3" from condition
+    const forMatch = parsed.condition.match(/^(\w+)\s+in\s+(.+)$/);
     if (!forMatch) { writeStderr('for: syntax error\r\n'); return 1; }
 
-    let doIdx = -1, doneIdx = -1;
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i] === 'do' || lines[i].endsWith('; do')) doIdx = i;
-      if (lines[i] === 'done') doneIdx = i;
-    }
-
-    const body = lines.slice((doIdx >= 0 ? doIdx : 0) + 1, doneIdx >= 0 ? doneIdx : lines.length).join('\n');
-    const items = this.expandVars(forMatch[2]).split(/\s+/).filter(Boolean);
+    const varName = forMatch[1];
+    const itemsStr = await this.expandCommandSubstitution(this.expandArithmetic(forMatch[2]), writeStderr);
+    const items = this.expandVars(itemsStr).split(/\s+/).filter(Boolean);
     for (const item of items) {
-      this.env[forMatch[1]] = item;
-      if (body.trim()) await this.execute(body, writeStdout, writeStderr);
+      this.env[varName] = item;
+      if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr);
     }
     return 0;
   }
@@ -1372,36 +1773,43 @@ export class Shell {
   private async execCase(
     input: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void
   ): Promise<number> {
-    const lines = input.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+    // Normalize newlines to semicolons (preserve ;; clause separators)
+    const joined = input.replace(/\r?\n/g, '; ');
 
-    const caseMatch = lines[0].match(/^case\s+(.+?)\s+in$/);
+    // Parse: case WORD in ... esac
+    const caseMatch = joined.match(/^case\s+(.+?)\s+in\b/);
     if (!caseMatch) { writeStderr('case: syntax error\r\n'); return 1; }
 
-    const word = this.expandVars(caseMatch[1]);
-    let esacIdx = lines.findIndex(l => l === 'esac');
-    if (esacIdx < 0) esacIdx = lines.length;
+    const rawWord = caseMatch[1].trim();
+    const word = this.expandVars(rawWord).replace(/^["']|["']$/g, '');
 
-    for (let i = 1; i < esacIdx; i++) {
-      const patternMatch = lines[i].match(/^(.+?)\s*\)/);
-      if (patternMatch) {
-        const patterns = patternMatch[1].split('|').map(p => p.trim());
-        let matched = false;
-        for (const p of patterns) {
-          if (p === '*' || word === p) { matched = true; break; }
-          const re = new RegExp('^' + p.replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
-          if (re.test(word)) { matched = true; break; }
-        }
-        if (matched) {
-          const cmdLines: string[] = [];
-          i++;
-          while (i < esacIdx && !lines[i].endsWith(';;')) { cmdLines.push(lines[i]); i++; }
-          if (i < esacIdx && lines[i].endsWith(';;')) {
-            const last = lines[i].replace(/;;\s*$/, '').trim();
-            if (last) cmdLines.push(last);
-          }
-          if (cmdLines.length > 0) return this.execute(cmdLines.join('\n'), writeStdout, writeStderr);
-          return 0;
-        }
+    // Get the body between 'in' and 'esac'
+    const inPos = joined.indexOf(' in', caseMatch.index! + 4) + 3;
+    const tokens = this.shellTokenScan(joined);
+    const esacTok = tokens.find(t => t.word === 'esac');
+    const body = joined.slice(inPos, esacTok ? esacTok.pos : joined.length).trim();
+
+    // Split body into clauses on ';;'
+    const clauses = body.split(';;').map(c => c.trim()).filter(Boolean);
+
+    for (const clause of clauses) {
+      // Parse: pattern[|pattern]) commands
+      const clauseMatch = clause.match(/^(.+?)\)\s*([\s\S]*)$/);
+      if (!clauseMatch) continue;
+      const patterns = clauseMatch[1].split('|').map(p => p.trim().replace(/^\(/, ''));
+      const commands = clauseMatch[2].trim().replace(/^;\s*/, '').replace(/;\s*$/, '');
+
+      let matched = false;
+      for (const p of patterns) {
+        if (p === '*') { matched = true; break; }
+        if (word === p) { matched = true; break; }
+        // Glob match
+        const re = new RegExp('^' + p.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
+        if (re.test(word)) { matched = true; break; }
+      }
+      if (matched) {
+        if (commands) return this.execute(commands, writeStdout, writeStderr);
+        return 0;
       }
     }
     return 0;

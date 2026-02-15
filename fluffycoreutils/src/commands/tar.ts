@@ -21,7 +21,12 @@ export const tar: FluffyCommand = {
   name: "tar",
   description: "Archive utility (simplified tar format)",
   async exec(args, io) {
-    const { flags, values, positional } = parseArgs(args, ["f", "C"]);
+    // Support combined flags without leading dash: tar czf → tar -czf, tar xzf → tar -xzf
+    let processedArgs = args;
+    if (args.length > 0 && /^[a-zA-Z]{2,}$/.test(args[0]) && !args[0].startsWith('-')) {
+      processedArgs = ['-' + args[0], ...args.slice(1)];
+    }
+    const { flags, values, positional } = parseArgs(processedArgs, ["f", "C"]);
 
     const create = flags.c || flags.create;
     const extract = flags.x || flags.extract;

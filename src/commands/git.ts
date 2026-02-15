@@ -383,7 +383,22 @@ export const gitCmd: Command = {
   name: 'git',
   description: 'Version control system',
   async exec(ctx: CommandContext) {
+    // Parse -C <dir> flag before subcommand (git -C /path subcmd ...)
+    const filteredArgs: string[] = [];
+    let workDir = ctx.cwd;
+    for (let ai = 0; ai < ctx.args.length; ai++) {
+      if (ctx.args[ai] === '-C' && ai + 1 < ctx.args.length) {
+        workDir = ctx.fs.resolvePath(ctx.args[ai + 1], workDir);
+        ai++; // skip the path arg
+      } else {
+        filteredArgs.push(ctx.args[ai]);
+      }
+    }
+    // Mutate ctx in-place so stdout/stderr propagate back
+    ctx.args = filteredArgs;
+    ctx.cwd = workDir;
     const subcommand = ctx.args[0];
+
     if (!subcommand || subcommand === '--help' || subcommand === '-h') {
       ctx.stdout = 'usage: git <command> [<args>]\n\nAvailable commands:\n  init, add, commit, status, log, diff, show, branch, checkout, clone\n  push, pull, fetch, remote, merge\n';
       return 0;
@@ -394,7 +409,7 @@ export const gitCmd: Command = {
     }
 
     const fs = ctx.fs.toIsomorphicGitFS();
-    const dir = ctx.cwd;
+    const dir = workDir;
 
     try {
       switch (subcommand) {
