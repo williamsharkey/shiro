@@ -102,6 +102,7 @@ export class WebTerminal implements TerminalLike {
   private csiParams = '';
   private oscData = '';
   private savedCursor: { row: number; col: number } | null = null;
+  private wrapPending = false;  // DEC autowrap: defer wrap until next printable char
 
   private dirtyRows = new Set<number>();
   private rafPending = false;
@@ -297,7 +298,9 @@ export class WebTerminal implements TerminalLike {
             this.parseState = ParseState.ESC;
           } else if (ch === '\r') {
             this.cursor.col = 0;
+            this.wrapPending = false;
           } else if (ch === '\n') {
+            this.wrapPending = false;
             this.cursor.row++;
             if (this.cursor.row >= this.rows) {
               this.cursor.row = this.rows - 1;
@@ -378,6 +381,16 @@ export class WebTerminal implements TerminalLike {
   }
 
   private putChar(ch: string): void {
+    // DEC autowrap: if a previous char filled the last column, wrap NOW
+    if (this.wrapPending) {
+      this.wrapPending = false;
+      this.cursor.col = 0;
+      this.cursor.row++;
+      if (this.cursor.row >= this.rows) {
+        this.cursor.row = this.rows - 1;
+        this.scrollUp();
+      }
+    }
     // Ensure row exists
     while (this.cursor.row >= this.buffer.length) {
       this.buffer.push(this.emptyRow());
@@ -398,17 +411,17 @@ export class WebTerminal implements TerminalLike {
     }
     this.cursor.col++;
     if (this.cursor.col >= this.cols) {
-      this.cursor.col = 0;
-      this.cursor.row++;
-      if (this.cursor.row >= this.rows) {
-        this.cursor.row = this.rows - 1;
-        this.scrollUp();
-      }
+      // Don't wrap yet — set pending. Wrap happens on next printable char or explicit \n.
+      this.wrapPending = true;
+      this.cursor.col = this.cols - 1;  // cursor stays at last column
     }
   }
 
   private executeCsi(final: string): void {
     const params = this.csiParams.split(';').map(s => parseInt(s, 10) || 0);
+
+    // Any cursor-movement CSI clears pending autowrap
+    if ('ABCDEFGHfduI'.includes(final)) this.wrapPending = false;
 
     switch (final) {
       case 'm': this.applySgr(params); break;
@@ -450,6 +463,7 @@ export class WebTerminal implements TerminalLike {
         if (this.savedCursor) {
           this.cursor.row = this.savedCursor.row;
           this.cursor.col = this.savedCursor.col;
+          this.wrapPending = false;
         }
         break;
 
