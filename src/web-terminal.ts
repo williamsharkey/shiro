@@ -108,6 +108,15 @@ export class WebTerminal implements TerminalLike {
   private scrollbackRendered = 0;
   private prevSegments: Segment[][] = [];
 
+  // Synchronized update mode (ESC[?2026h/l) — batch rendering during Ink frames
+  private syncUpdateActive = false;
+  // Frame boundary tracking — detect stale rows above the Ink frame
+  private inkFrameTop = -1;
+  private totalScrollCount = 0;
+  private prevScrollCount = 0;
+  private frameWriteMin = Infinity;
+  private frameWriteMax = -1;
+
   private stdinPassthrough: ((data: string) => void) | null = null;
   private forceExitCallback: (() => void) | null = null;
   private rawModeCallback: ((key: string) => void) | null = null;
@@ -264,6 +273,7 @@ export class WebTerminal implements TerminalLike {
     this.scrollbackDirty = true;
     this.buffer.push(this.emptyRow());
     if (this.scrollback.length > 2000) this.scrollback.shift();
+    this.totalScrollCount++;
     // Entire screen shifted
     for (let r = 0; r < this.rows; r++) this.dirtyRows.add(r);
   }
@@ -357,6 +367,10 @@ export class WebTerminal implements TerminalLike {
       link: this.currentLink,
     };
     this.dirtyRows.add(this.cursor.row);
+    if (this.syncUpdateActive) {
+      this.frameWriteMin = Math.min(this.frameWriteMin, this.cursor.row);
+      this.frameWriteMax = Math.max(this.frameWriteMax, this.cursor.row);
+    }
     this.cursor.col++;
     if (this.cursor.col >= this.cols) {
       this.cursor.col = 0;
@@ -442,6 +456,10 @@ export class WebTerminal implements TerminalLike {
         } else if (mode === 1) {
           this.eraseLineTo(this.cursor.row, this.cursor.col);
         } else if (mode === 2) {
+          if (this.syncUpdateActive) {
+            this.frameWriteMin = Math.min(this.frameWriteMin, this.cursor.row);
+            this.frameWriteMax = Math.max(this.frameWriteMax, this.cursor.row);
+          }
           this.buffer[this.cursor.row] = this.emptyRow();
           this.dirtyRows.add(this.cursor.row);
         }
@@ -466,8 +484,21 @@ export class WebTerminal implements TerminalLike {
         break;
       }
 
-      // Hide/show cursor — no-op for DOM
-      case 'h': case 'l': break;
+      case 'h': case 'l': {
+        // ESC[?2026h/l — synchronized update mode
+        if (this.csiParams === '?2026') {
+          if (final === 'h') {
+            this.syncUpdateActive = true;
+            this.frameWriteMin = Infinity;
+            this.frameWriteMax = -1;
+          } else {
+            this.syncUpdateActive = false;
+            this.cleanStaleAboveFrame();
+          }
+        }
+        // Other private modes (cursor visibility, etc.) — no-op for DOM
+        break;
+      }
 
       default: break; // Unhandled — ignore
     }
@@ -480,6 +511,10 @@ export class WebTerminal implements TerminalLike {
       line[c] = emptyCell();
     }
     this.dirtyRows.add(row);
+    if (this.syncUpdateActive) {
+      this.frameWriteMin = Math.min(this.frameWriteMin, row);
+      this.frameWriteMax = Math.max(this.frameWriteMax, row);
+    }
   }
 
   private eraseLineTo(row: number, col: number): void {
@@ -489,6 +524,10 @@ export class WebTerminal implements TerminalLike {
       line[c] = emptyCell();
     }
     this.dirtyRows.add(row);
+    if (this.syncUpdateActive) {
+      this.frameWriteMin = Math.min(this.frameWriteMin, row);
+      this.frameWriteMax = Math.max(this.frameWriteMax, row);
+    }
   }
 
   private applySgr(params: number[]): void {
@@ -556,12 +595,38 @@ export class WebTerminal implements TerminalLike {
   // ── DOM Rendering ───────────────────────────────────────────────
 
   private scheduleRender(): void {
-    if (this.rafPending) return;
+    if (this.rafPending || this.syncUpdateActive) return;
     this.rafPending = true;
     requestAnimationFrame(() => {
       this.rafPending = false;
       this.render();
     });
+  }
+
+  /** Clear stale rows above the Ink frame when the frame top moves down. */
+  private cleanStaleAboveFrame(): void {
+    if (this.frameWriteMin >= Infinity) return;
+
+    // Only perform cleanup for substantial redraws (span >= 3 rows),
+    // not for single-character keystroke updates
+    const writeSpan = this.frameWriteMax - this.frameWriteMin;
+    if (writeSpan < 3) return;
+
+    const scrollsSince = this.totalScrollCount - this.prevScrollCount;
+    const adjustedPrevTop = this.inkFrameTop - scrollsSince;
+
+    if (adjustedPrevTop >= 0 && this.frameWriteMin > adjustedPrevTop) {
+      // Frame top moved down — clear the gap (stale rows from previous frame)
+      for (let r = Math.max(0, adjustedPrevTop); r < this.frameWriteMin; r++) {
+        if (r < this.rows) {
+          this.buffer[r] = this.emptyRow();
+          this.dirtyRows.add(r);
+        }
+      }
+    }
+
+    this.inkFrameTop = this.frameWriteMin;
+    this.prevScrollCount = this.totalScrollCount;
   }
 
   private render(): void {
