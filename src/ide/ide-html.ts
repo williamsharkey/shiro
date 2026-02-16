@@ -626,22 +626,6 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   </div>
 </div>
 
-<script type="importmap">
-{
-  "imports": {
-    "@codemirror/state": "https://esm.sh/@codemirror/state@6",
-    "@codemirror/view": "https://esm.sh/@codemirror/view@6?external=@codemirror/state",
-    "codemirror": "https://esm.sh/codemirror@6?external=@codemirror/state,@codemirror/view",
-    "@codemirror/lang-javascript": "https://esm.sh/@codemirror/lang-javascript@6?external=@codemirror/state,@codemirror/view",
-    "@codemirror/lang-html": "https://esm.sh/@codemirror/lang-html@6?external=@codemirror/state,@codemirror/view",
-    "@codemirror/lang-css": "https://esm.sh/@codemirror/lang-css@6?external=@codemirror/state,@codemirror/view",
-    "@codemirror/lang-json": "https://esm.sh/@codemirror/lang-json@6?external=@codemirror/state,@codemirror/view",
-    "@codemirror/lang-markdown": "https://esm.sh/@codemirror/lang-markdown@6?external=@codemirror/state,@codemirror/view",
-    "@codemirror/theme-one-dark": "https://esm.sh/@codemirror/theme-one-dark@6?external=@codemirror/state,@codemirror/view",
-    "@codemirror/commands": "https://esm.sh/@codemirror/commands@6?external=@codemirror/state,@codemirror/view"
-  }
-}
-</script>
 <script type="module">
 // ─── Configuration ───
 const PROJECT_DIR = ${JSON.stringify(projectDir)};
@@ -688,18 +672,22 @@ const api = {
 // ─── CodeMirror loading ───
 let cmState, cmView, cmCommands, cmLangJS, cmLangHTML, cmLangCSS, cmLangJSON, cmLangMD, cmOneDark, cmBasicSetup;
 async function loadCodeMirror() {
+  /* Load all CM packages from esm.sh with ?deps to force shared @codemirror/state
+     and @codemirror/view — prevents duplicate-instance instanceof failures. */
+  const B = 'https://esm.sh';
+  const D = '?deps=@codemirror/state@6,@codemirror/view@6';
   try {
     const [stMod, vwMod, cmMod, jsM, htM, csM, jnM, mdM, thM, cmdM] = await Promise.all([
-      import('@codemirror/state'),
-      import('@codemirror/view'),
-      import('codemirror'),
-      import('@codemirror/lang-javascript'),
-      import('@codemirror/lang-html'),
-      import('@codemirror/lang-css'),
-      import('@codemirror/lang-json'),
-      import('@codemirror/lang-markdown'),
-      import('@codemirror/theme-one-dark'),
-      import('@codemirror/commands'),
+      import(/* @vite-ignore */ B + '/@codemirror/state@6'),
+      import(/* @vite-ignore */ B + '/@codemirror/view@6?deps=@codemirror/state@6'),
+      import(/* @vite-ignore */ B + '/codemirror@6' + D),
+      import(/* @vite-ignore */ B + '/@codemirror/lang-javascript@6' + D),
+      import(/* @vite-ignore */ B + '/@codemirror/lang-html@6' + D),
+      import(/* @vite-ignore */ B + '/@codemirror/lang-css@6' + D),
+      import(/* @vite-ignore */ B + '/@codemirror/lang-json@6' + D),
+      import(/* @vite-ignore */ B + '/@codemirror/lang-markdown@6' + D),
+      import(/* @vite-ignore */ B + '/@codemirror/theme-one-dark@6' + D),
+      import(/* @vite-ignore */ B + '/@codemirror/commands@6' + D),
     ]);
     cmState = stMod;
     cmView = vwMod;
@@ -859,7 +847,7 @@ class EditorManager {
           }
         }
       }),
-    ];
+    ].filter(Boolean);
     if (lang) extensions.push(lang);
 
     const edContainer = document.createElement('div');
