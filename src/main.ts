@@ -461,8 +461,8 @@ async function main() {
   initTitle();
 
   // Auto-reconnect remote session if one was active before page reload
-  // Skip in become mode — no terminal/HUD visible, remote panel would float over app
-  if (!becomeConfig || !localStorage.getItem('shiro-become')) {
+  // Skip only if become mode is actually active (not just config in localStorage)
+  if (!document.body.classList.contains('become-active')) {
     const persistedCode = getPersistedRemoteCode();
     if (persistedCode) {
       startRemoteWithCode(persistedCode, terminal);
