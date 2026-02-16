@@ -101,6 +101,7 @@ export class WebTerminal implements TerminalLike {
   private parseState: ParseState = ParseState.NORMAL;
   private csiParams = '';
   private oscData = '';
+  private savedCursor: { row: number; col: number } | null = null;
 
   private dirtyRows = new Set<number>();
   private rafPending = false;
@@ -142,8 +143,7 @@ export class WebTerminal implements TerminalLike {
         padding: 8px 12px;
         overflow-y: auto;
         overflow-x: hidden;
-        white-space: pre-wrap;
-        word-wrap: break-word;
+        white-space: pre;
         user-select: text;
         -webkit-user-select: text;
         cursor: text;
@@ -274,6 +274,9 @@ export class WebTerminal implements TerminalLike {
     this.buffer.push(this.emptyRow());
     if (this.scrollback.length > 2000) this.scrollback.shift();
     this.totalScrollCount++;
+    // Shift prevSegments to match buffer shift (so diffing compares correct rows)
+    this.prevSegments.shift();
+    this.prevSegments.push([]);
     // Entire screen shifted
     for (let r = 0; r < this.rows; r++) this.dirtyRows.add(r);
   }
@@ -317,6 +320,28 @@ export class WebTerminal implements TerminalLike {
           } else if (ch === ']') {
             this.parseState = ParseState.OSC;
             this.oscData = '';
+          } else if (ch === '7') {
+            // DEC save cursor
+            this.savedCursor = { row: this.cursor.row, col: this.cursor.col };
+            this.parseState = ParseState.NORMAL;
+          } else if (ch === '8') {
+            // DEC restore cursor
+            if (this.savedCursor) {
+              this.cursor.row = this.savedCursor.row;
+              this.cursor.col = this.savedCursor.col;
+            }
+            this.parseState = ParseState.NORMAL;
+          } else if (ch === 'M') {
+            // Reverse index — move cursor up, scroll down if at top
+            if (this.cursor.row > 0) {
+              this.cursor.row--;
+            } else {
+              // At top — scroll down (insert blank line at top)
+              this.buffer.pop();
+              this.buffer.unshift(this.emptyRow());
+              for (let r = 0; r < this.rows; r++) this.dirtyRows.add(r);
+            }
+            this.parseState = ParseState.NORMAL;
           } else {
             // Unknown escape — ignore and return to normal
             this.parseState = ParseState.NORMAL;
@@ -413,6 +438,56 @@ export class WebTerminal implements TerminalLike {
       case 'G': // Cursor horizontal absolute
         this.cursor.col = Math.min(this.cols - 1, (params[0] || 1) - 1);
         break;
+
+      case 'd': // Cursor vertical absolute (VPA)
+        this.cursor.row = Math.min(this.rows - 1, (params[0] || 1) - 1);
+        break;
+
+      case 's': // Save cursor position
+        this.savedCursor = { row: this.cursor.row, col: this.cursor.col };
+        break;
+      case 'u': // Restore cursor position
+        if (this.savedCursor) {
+          this.cursor.row = this.savedCursor.row;
+          this.cursor.col = this.savedCursor.col;
+        }
+        break;
+
+      case 'P': { // Delete characters (shift left)
+        const n = params[0] || 1;
+        const row = this.buffer[this.cursor.row];
+        if (row) {
+          row.splice(this.cursor.col, n);
+          while (row.length < this.cols) row.push(emptyCell());
+          this.dirtyRows.add(this.cursor.row);
+        }
+        break;
+      }
+
+      case '@': { // Insert characters (shift right)
+        const n = params[0] || 1;
+        const row = this.buffer[this.cursor.row];
+        if (row) {
+          const blanks = [];
+          for (let i = 0; i < n; i++) blanks.push(emptyCell());
+          row.splice(this.cursor.col, 0, ...blanks);
+          row.length = this.cols;
+          this.dirtyRows.add(this.cursor.row);
+        }
+        break;
+      }
+
+      case 'X': { // Erase characters (overwrite with blanks, don't shift)
+        const n = params[0] || 1;
+        const row = this.buffer[this.cursor.row];
+        if (row) {
+          for (let i = 0; i < n && this.cursor.col + i < row.length; i++) {
+            row[this.cursor.col + i] = emptyCell();
+          }
+          this.dirtyRows.add(this.cursor.row);
+        }
+        break;
+      }
 
       case 'J': { // Erase display
         const mode = params[0] || 0;
