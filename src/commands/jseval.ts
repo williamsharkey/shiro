@@ -1204,7 +1204,14 @@ export const nodeCmd: Command = {
                 fileCache.set(resolved, strData);
                 fileMtimes.set(resolved, Date.now());
                 // Track VFS write so it completes before script exit
-                pendingPromises.push(ctx.fs.writeFile(resolved, strData).catch(() => {}));
+                // Check fileCache before writing — if path was renamed/deleted (e.g. atomic
+                // write pattern: writeFileSync(.tmp) → renameSync(.tmp, final)), skip the
+                // IDB write so the .tmp file doesn't get recreated after renameSync's unlink.
+                const writePath = resolved;
+                pendingPromises.push((async () => {
+                  if (!fileCache.has(writePath)) return; // renamed/deleted — skip
+                  await ctx.fs.writeFile(writePath, strData);
+                })().catch(() => {}));
                 // localStorage WAL for critical config files (survives page close before IndexedDB flushes)
                 // Skip .tmp files — they'll be WAL'd when renamed to their final name
                 if ((resolved.startsWith(homeDir + '/.claude') || resolved === homeDir + '/.claude.json') && !resolved.includes('.tmp.')) {
