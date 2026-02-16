@@ -626,6 +626,22 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   </div>
 </div>
 
+<script type="importmap">
+{
+  "imports": {
+    "@codemirror/state": "https://esm.sh/@codemirror/state@6",
+    "@codemirror/view": "https://esm.sh/@codemirror/view@6?external=@codemirror/state",
+    "codemirror": "https://esm.sh/codemirror@6?external=@codemirror/state,@codemirror/view",
+    "@codemirror/lang-javascript": "https://esm.sh/@codemirror/lang-javascript@6?external=@codemirror/state,@codemirror/view",
+    "@codemirror/lang-html": "https://esm.sh/@codemirror/lang-html@6?external=@codemirror/state,@codemirror/view",
+    "@codemirror/lang-css": "https://esm.sh/@codemirror/lang-css@6?external=@codemirror/state,@codemirror/view",
+    "@codemirror/lang-json": "https://esm.sh/@codemirror/lang-json@6?external=@codemirror/state,@codemirror/view",
+    "@codemirror/lang-markdown": "https://esm.sh/@codemirror/lang-markdown@6?external=@codemirror/state,@codemirror/view",
+    "@codemirror/theme-one-dark": "https://esm.sh/@codemirror/theme-one-dark@6?external=@codemirror/state,@codemirror/view",
+    "@codemirror/commands": "https://esm.sh/@codemirror/commands@6?external=@codemirror/state,@codemirror/view"
+  }
+}
+</script>
 <script type="module">
 // ─── Configuration ───
 const PROJECT_DIR = ${JSON.stringify(projectDir)};
@@ -671,22 +687,19 @@ const api = {
 
 // ─── CodeMirror loading ───
 let cmState, cmView, cmCommands, cmLangJS, cmLangHTML, cmLangCSS, cmLangJSON, cmLangMD, cmOneDark, cmBasicSetup;
-const CM_VERSION = '6.0';
-const ESM_BASE = 'https://esm.sh';
-
 async function loadCodeMirror() {
   try {
     const [stMod, vwMod, cmMod, jsM, htM, csM, jnM, mdM, thM, cmdM] = await Promise.all([
-      import(ESM_BASE + '/@codemirror/state@' + CM_VERSION),
-      import(ESM_BASE + '/@codemirror/view@' + CM_VERSION),
-      import(ESM_BASE + '/codemirror@' + CM_VERSION),
-      import(ESM_BASE + '/@codemirror/lang-javascript@' + CM_VERSION),
-      import(ESM_BASE + '/@codemirror/lang-html@' + CM_VERSION),
-      import(ESM_BASE + '/@codemirror/lang-css@' + CM_VERSION),
-      import(ESM_BASE + '/@codemirror/lang-json@' + CM_VERSION),
-      import(ESM_BASE + '/@codemirror/lang-markdown@' + CM_VERSION),
-      import(ESM_BASE + '/@codemirror/theme-one-dark@' + CM_VERSION),
-      import(ESM_BASE + '/@codemirror/commands@' + CM_VERSION),
+      import('@codemirror/state'),
+      import('@codemirror/view'),
+      import('codemirror'),
+      import('@codemirror/lang-javascript'),
+      import('@codemirror/lang-html'),
+      import('@codemirror/lang-css'),
+      import('@codemirror/lang-json'),
+      import('@codemirror/lang-markdown'),
+      import('@codemirror/theme-one-dark'),
+      import('@codemirror/commands'),
     ]);
     cmState = stMod;
     cmView = vwMod;
