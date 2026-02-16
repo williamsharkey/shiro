@@ -91,6 +91,25 @@ export const rgCmd: Command = {
         if (i + 1 < ctx.args.length) { const c = parseInt(ctx.args[++i], 10) || 0; afterCtx = beforeCtx = c; }
       } else if (arg.startsWith('-C') && /^-C\d+$/.test(arg)) {
         afterCtx = beforeCtx = parseInt(arg.slice(2), 10) || 0;
+      } else if (arg === '--max-columns' || arg === '-M') {
+        if (i + 1 < ctx.args.length) i++; // consume value, ignore
+      } else if (arg.startsWith('--max-columns=')) {
+        // ignore
+      } else if (arg === '-m' || arg === '--max-count') {
+        if (i + 1 < ctx.args.length) i++; // consume value, ignore
+      } else if (arg.startsWith('--max-count=')) {
+        // ignore
+      } else if (arg === '--color' || arg === '--colour' || arg === '--colors' || arg === '--colours') {
+        if (i + 1 < ctx.args.length) i++; // consume value (never, always, auto)
+      } else if (arg.startsWith('--color=') || arg.startsWith('--colour=')) {
+        // ignore
+      } else if (arg === '--no-config' || arg === '--no-ignore' || arg === '--no-messages'
+        || arg === '--pcre2' || arg === '--multiline' || arg === '--sort-files'
+        || arg === '--follow' || arg === '-L' || arg === '-S' || arg === '--smart-case'
+        || arg === '--trim' || arg === '-j' || arg === '--threads'
+        || arg === '--json' || arg === '--vimgrep') {
+        // flags without values — consume and ignore
+        if (arg === '-j' || arg === '--threads') { if (i + 1 < ctx.args.length) i++; } // -j takes a value
       } else if (arg === '--help' || arg === '-h') {
         ctx.stdout = 'Usage: rg [OPTIONS] PATTERN [PATH...]\n\nOptions:\n  -i          Case insensitive\n  -v          Invert match\n  -n/-N       Show/hide line numbers\n  -c          Count matches\n  -l          Files with matches only\n  -w          Word match\n  -o          Only matching text\n  -F          Fixed strings (no regex)\n  -t TYPE     File type (js, ts, py, etc.)\n  -g GLOB     Glob filter\n  -A/-B/-C N  Context lines\n  -e PATTERN  Pattern\n  --hidden    Search hidden files\n';
         return 0;
