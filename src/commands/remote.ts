@@ -361,22 +361,27 @@ async function startRemote(ctx: CommandContext): Promise<number> {
   const { full: code, display: displayCode } = generateCode();
 
   // Copy to clipboard immediately (before async work breaks user gesture chain)
-  // Save old clipboard value so we can restore on failure
-  let oldClipboard: string | null = null;
   let clipboardCopied = false;
-  try {
-    oldClipboard = await navigator.clipboard.readText();
-  } catch {
-    // Can't read clipboard, that's fine
-  }
   try {
     await navigator.clipboard.writeText(code);
     clipboardCopied = true;
   } catch {
-    // Will report failure later
+    // Will report failure below
   }
 
-  ctx.stdout += 'Starting remote session...\n';
+  // Output code IMMEDIATELY — don't wait for ICE/signaling
+  if (clipboardCopied) {
+    ctx.stdout += `\x1b[32mConnection code copied to clipboard!\x1b[0m\n`;
+  } else {
+    ctx.stdout += `\x1b[33mCouldn't copy to clipboard. Code: ${code}\x1b[0m\n`;
+  }
+  ctx.stdout += `Display code: \x1b[93m${displayCode}\x1b[0m\n`;
+  ctx.stdout += `Run \x1b[36mremote stop\x1b[0m to end the session.\n`;
+
+  // Update HUD to show the code (if visible)
+  if (ctx.terminal) {
+    (ctx.terminal as any).updateHudRemoteCode?.(displayCode);
+  }
 
   // Create shadow shell (panel is created lazily on demand)
   const shadowShell = createShadowShell();
@@ -402,6 +407,24 @@ async function startRemote(ctx: CommandContext): Promise<number> {
   };
 
   window.__shiroRemoteSession = session;
+
+  // Do WebRTC setup + signaling in the background (don't block command output)
+  setupSignaling(session).catch((err) => {
+    console.error(`[remote] Signaling failed: ${err.message}`);
+    logActivity(session, 'error', `Signaling failed: ${err.message}`);
+    session.status = 'error';
+    if (session.panel) session.panel.setStatus('disconnected');
+  });
+
+  return 0;
+}
+
+/**
+ * Setup WebRTC offer, gather ICE candidates, and register with signaling server.
+ * Runs in the background so `remote start` returns instantly.
+ */
+async function setupSignaling(session: RemoteSession): Promise<void> {
+  const pc = session.pc;
 
   // Create data channel and wire up handlers
   const dc = pc.createDataChannel('shiro-remote', { ordered: true });
@@ -435,59 +458,27 @@ async function startRemote(ctx: CommandContext): Promise<number> {
   });
 
   // Register with signaling server
-  try {
-    const res = await fetch(`${SIGNALING_URL}/offer`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        code,
-        offer: pc.localDescription,
-        candidates: iceCandidates,
-      }),
-    });
+  const res = await fetch(`${SIGNALING_URL}/offer`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      code: session.code,
+      offer: pc.localDescription,
+      candidates: iceCandidates,
+    }),
+  });
 
-    if (!res.ok) {
-      throw new Error(`Signaling server error: ${res.status}`);
-    }
-
-    session.status = 'waiting';
-
-    // Persist code for auto-reconnect after page reload
-    localStorage.setItem(REMOTE_CODE_KEY, code);
-
-    // Report clipboard status (copy happened earlier, before async work)
-    if (clipboardCopied) {
-      ctx.stdout += `\x1b[32mConnection code copied to clipboard!\x1b[0m\n`;
-    } else {
-      ctx.stdout += `\x1b[33mCouldn't copy to clipboard. Code: ${code}\x1b[0m\n`;
-    }
-
-    ctx.stdout += `\nRemote session active. Waiting for connection...\n`;
-    ctx.stdout += `Display code: \x1b[93m${displayCode}\x1b[0m\n`;
-    ctx.stdout += `Run \x1b[36mremote stop\x1b[0m to end the session.\n\n`;
-
-    // Update HUD to show the code (if visible)
-    if (ctx.terminal) {
-      (ctx.terminal as any).updateHudRemoteCode?.(displayCode);
-    }
-
-    // Start polling for answer in background
-    pollForAnswer(session);
-
-    return 0;
-  } catch (err: any) {
-    // Restore old clipboard if we overwrote it
-    if (clipboardCopied && oldClipboard !== null) {
-      try {
-        await navigator.clipboard.writeText(oldClipboard);
-      } catch {
-        // Best effort
-      }
-    }
-    ctx.stderr += `Failed to start remote: ${err.message}\n`;
-    cleanupSession();
-    return 1;
+  if (!res.ok) {
+    throw new Error(`Signaling server error: ${res.status}`);
   }
+
+  session.status = 'waiting';
+
+  // Persist code for auto-reconnect after page reload
+  localStorage.setItem(REMOTE_CODE_KEY, session.code);
+
+  // Start polling for answer
+  pollForAnswer(session);
 }
 
 /**
