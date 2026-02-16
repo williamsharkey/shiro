@@ -74,13 +74,15 @@ class IframeServerManager {
       return { status: 404, body: `No server listening on port ${port}` };
     }
 
-    // Parse query string from path
-    let pathname = path;
+    // Strip hash fragment and parse query string from path
+    const hashIndex = path.indexOf('#');
+    const pathWithoutHash = hashIndex >= 0 ? path.substring(0, hashIndex) : path;
+    let pathname = pathWithoutHash;
     let query: Record<string, string> = {};
-    const queryIndex = path.indexOf('?');
+    const queryIndex = pathWithoutHash.indexOf('?');
     if (queryIndex >= 0) {
-      pathname = path.substring(0, queryIndex);
-      const params = new URLSearchParams(path.substring(queryIndex + 1));
+      pathname = pathWithoutHash.substring(0, queryIndex);
+      const params = new URLSearchParams(pathWithoutHash.substring(queryIndex + 1));
       params.forEach((value, key) => {
         query[key] = value;
       });
@@ -756,6 +758,18 @@ export function createStaticServer(
       }
     } catch {
       // Path doesn't exist
+    }
+
+    // Try extensionless HTML fallback (e.g. /auth → /auth.html)
+    const lastSegment = filePath.substring(filePath.lastIndexOf('/') + 1);
+    if (!lastSegment.includes('.')) {
+      try {
+        const htmlPath = filePath + '.html';
+        const htmlStat = await fs.stat(htmlPath);
+        if (htmlStat && !htmlStat.isDirectory()) {
+          filePath = htmlPath;
+        }
+      } catch { /* no .html fallback */ }
     }
 
     try {
