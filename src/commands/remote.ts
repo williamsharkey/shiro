@@ -408,6 +408,9 @@ async function startRemote(ctx: CommandContext): Promise<number> {
 
   window.__shiroRemoteSession = session;
 
+  // Persist code immediately so auto-reconnect works after page reload
+  localStorage.setItem(REMOTE_CODE_KEY, code);
+
   // Do WebRTC setup + signaling in the background (don't block command output)
   setupSignaling(session).catch((err) => {
     console.error(`[remote] Signaling failed: ${err.message}`);
@@ -473,9 +476,6 @@ async function setupSignaling(session: RemoteSession): Promise<void> {
   }
 
   session.status = 'waiting';
-
-  // Persist code for auto-reconnect after page reload
-  localStorage.setItem(REMOTE_CODE_KEY, session.code);
 
   // Start polling for answer
   pollForAnswer(session);
@@ -693,6 +693,11 @@ export async function startRemoteWithCode(
 
   window.__shiroRemoteSession = session;
 
+  // Update HUD immediately (before signaling)
+  if (terminal) {
+    terminal.updateHudRemoteCode(displayCode);
+  }
+
   // Create data channel and wire up handlers
   const dc = pc.createDataChannel('shiro-remote', { ordered: true });
   wireSession(session, dc);
@@ -740,11 +745,6 @@ export async function startRemoteWithCode(
     }
 
     session.status = 'waiting';
-
-    // Update HUD if terminal available
-    if (terminal) {
-      terminal.updateHudRemoteCode(displayCode);
-    }
 
     // Start polling for answer
     pollForAnswer(session);

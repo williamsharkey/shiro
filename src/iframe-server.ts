@@ -27,6 +27,8 @@ interface RegisteredServer {
   handler: RequestHandler;
   name?: string;
   iframe?: HTMLIFrameElement;
+  resourceInterceptorScript?: string;
+  navigationScript?: string;
 }
 
 /**
@@ -477,45 +479,12 @@ class IframeServerManager {
 </script>
 `;
 
-    // Pre-process HTML to defer initial resource loading
-    // Convert <link href="/..."> to <link data-vfs-href="/..."> so our interceptor can load them
-    // Convert <script src="/..."> to <script data-vfs-src="/..."> for the same reason
-    html = html.replace(/<link([^>]*)\shref=(["'])([^"']+)\2/gi, (match, attrs, quote, href) => {
-      // Only defer relative URLs
-      if (href.startsWith('/') || href.startsWith('./') || href.startsWith('../')) {
-        return `<link${attrs} data-vfs-href=${quote}${href}${quote}`;
-      }
-      return match;
-    });
-    html = html.replace(/<script([^>]*)\ssrc=(["'])([^"']+)\2/gi, (match, attrs, quote, src) => {
-      // Defer relative URLs (including type="module" scripts)
-      if (src.startsWith('/') || src.startsWith('./') || src.startsWith('../')) {
-        // Mark module scripts with data-vfs-module for special handling
-        if (attrs.includes('type="module"') || attrs.includes("type='module'")) {
-          return `<script${attrs} data-vfs-module-src=${quote}${src}${quote}`;
-        }
-        return `<script${attrs} data-vfs-src=${quote}${src}${quote}`;
-      }
-      return match;
-    });
+    // Cache scripts for navigateIframe to reuse
+    server.resourceInterceptorScript = resourceInterceptorScript;
+    server.navigationScript = navigationScript;
 
-    // Inject resource interceptor at START of head (before any resources load)
-    if (html.includes('<head>')) {
-      html = html.replace('<head>', '<head>' + resourceInterceptorScript);
-    } else if (html.includes('<html>')) {
-      html = html.replace('<html>', '<html><head>' + resourceInterceptorScript + '</head>');
-    } else {
-      html = resourceInterceptorScript + html;
-    }
-
-    // Inject navigation script before closing body/html tag
-    if (html.includes('</body>')) {
-      html = html.replace('</body>', navigationScript + '</body>');
-    } else if (html.includes('</html>')) {
-      html = html.replace('</html>', navigationScript + '</html>');
-    } else {
-      html += navigationScript;
-    }
+    // Process HTML: rewrite resource URLs, inject interceptor + navigation scripts
+    html = this.prepareHtmlForIframe(html, resourceInterceptorScript, navigationScript);
 
     // Use srcdoc for same-origin access
     iframe.srcdoc = html;
@@ -558,6 +527,49 @@ class IframeServerManager {
   }
 
   /**
+   * Process HTML for display in a virtual server iframe.
+   * Rewrites resource URLs, injects resource interceptor and navigation scripts.
+   */
+  private prepareHtmlForIframe(html: string, resourceInterceptorScript: string, navigationScript: string): string {
+    // Rewrite relative href/src to data-vfs-* so the browser doesn't try to load them directly
+    html = html.replace(/<link([^>]*)\shref=(["'])([^"']+)\2/gi, (match, attrs, quote, href) => {
+      if (href.startsWith('/') || href.startsWith('./') || href.startsWith('../')) {
+        return `<link${attrs} data-vfs-href=${quote}${href}${quote}`;
+      }
+      return match;
+    });
+    html = html.replace(/<script([^>]*)\ssrc=(["'])([^"']+)\2/gi, (match, attrs, quote, src) => {
+      if (src.startsWith('/') || src.startsWith('./') || src.startsWith('../')) {
+        if (attrs.includes('type="module"') || attrs.includes("type='module'")) {
+          return `<script${attrs} data-vfs-module-src=${quote}${src}${quote}`;
+        }
+        return `<script${attrs} data-vfs-src=${quote}${src}${quote}`;
+      }
+      return match;
+    });
+
+    // Inject resource interceptor at START of head
+    if (html.includes('<head>')) {
+      html = html.replace('<head>', '<head>' + resourceInterceptorScript);
+    } else if (html.includes('<html>')) {
+      html = html.replace('<html>', '<html><head>' + resourceInterceptorScript + '</head>');
+    } else {
+      html = resourceInterceptorScript + html;
+    }
+
+    // Inject navigation script before closing body/html tag
+    if (html.includes('</body>')) {
+      html = html.replace('</body>', navigationScript + '</body>');
+    } else if (html.includes('</html>')) {
+      html = html.replace('</html>', navigationScript + '</html>');
+    } else {
+      html += navigationScript;
+    }
+
+    return html;
+  }
+
+  /**
    * Navigate an existing iframe to a new path
    */
   async navigateIframe(port: number, path: string): Promise<void> {
@@ -575,6 +587,11 @@ class IframeServerManager {
       html = new TextDecoder().decode(response.body);
     } else {
       html = `<pre>${JSON.stringify(response.body, null, 2)}</pre>`;
+    }
+
+    // Process HTML with cached resource proxy + navigation scripts
+    if (server.resourceInterceptorScript && server.navigationScript) {
+      html = this.prepareHtmlForIframe(html, server.resourceInterceptorScript, server.navigationScript);
     }
 
     // Update iframe path attribute
