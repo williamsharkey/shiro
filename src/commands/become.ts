@@ -85,9 +85,13 @@ export async function activateBecomeMode(config: BecomeConfig): Promise<void> {
 
     // Handle vfs-fetch requests from iframe
     if (event.source === iframe.contentWindow && event.data?.type === 'vfs-fetch') {
-      const { id, port: fetchPort, url, method } = event.data;
+      const { id, port: fetchPort, url, method, headers, body: reqBody } = event.data;
       try {
-        const resp = await iframeServer.fetch(fetchPort || config.port, url, { method: method || 'GET' });
+        const resp = await iframeServer.fetch(fetchPort || config.port, url, {
+          method: method || 'GET',
+          headers: headers || {},
+          body: reqBody || null,
+        });
         let body = '';
         if (typeof resp.body === 'string') body = resp.body;
         else if (resp.body instanceof Uint8Array) body = new TextDecoder().decode(resp.body);

@@ -93,6 +93,7 @@ import { htmlCmd, imgCmd } from './commands/html';
 import { dougCmd } from './commands/doug';
 import { becomeCmd, unbecomeCmd, getBecomeConfig, activateBecomeMode, deactivateBecomeMode } from './commands/become';
 import { pageCmd } from './commands/page';
+import { ideCmd } from './commands/ide';
 import { ghCmd } from './commands/gh';
 import { mkTempCmd } from './commands/mktemp';
 import { jqCmd } from './commands/jq';
@@ -277,6 +278,7 @@ async function main() {
   registerCommand(commands, becomeCmd, 'src/commands/become.ts');
   registerCommand(commands, unbecomeCmd, 'src/commands/become.ts');
   registerCommand(commands, pageCmd, 'src/commands/page.ts');
+  registerCommand(commands, ideCmd, 'src/commands/ide.ts');
   registerCommand(commands, ghCmd, 'src/commands/gh.ts');
   registerCommand(commands, mkTempCmd, 'src/commands/mktemp.ts');
   registerCommand(commands, jqCmd, 'src/commands/jq.ts');
