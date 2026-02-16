@@ -2264,26 +2264,8 @@ export const nodeCmd: Command = {
                 if (rgArgs.includes('--version')) {
                   return { stdout: 'ripgrep 14.0.0 (shiro shim)\n', stderr: '', exitCode: 0 };
                 }
-                // rg --files → build find command with proper glob filtering
-                if (rgArgs.match(/--files\b/)) {
-                  // Extract glob patterns
-                  const globs: string[] = [];
-                  const globRe = /(?:--glob[= ]|-g\s*)(\S+)/g;
-                  let gm;
-                  while ((gm = globRe.exec(rgArgs)) !== null) globs.push(gm[1]);
-                  const rest = rgArgs.replace(/--files\s*/g, '').replace(/--hidden\s*/g, '').replace(/(?:--glob[= ]|-g\s*)\S+\s*/g, '').trim();
-                  const dir = rest || '.';
-                  if (globs.length > 0) {
-                    // Convert globs to find -name args: *.js → -name "*.js"
-                    const nameArgs = globs.filter(g => !g.startsWith('!')).map(g => `-name "${g}"`).join(' -o ');
-                    normalized = nameArgs ? `find ${dir} -type f \\( ${nameArgs} \\)` : `find ${dir} -type f`;
-                  } else {
-                    normalized = `find ${dir} -type f`;
-                  }
-                } else {
-                  // Pass through to Shiro's builtin rg command (preserves all flags)
-                  normalized = `rg ${rgArgs}`;
-                }
+                // Pass through to Shiro's builtin rg command (handles --files, --sort, all flags)
+                normalized = `rg ${rgArgs}`;
               }
 
               // Suppress OAuth browser popup — it doesn't work in Shiro (wrong redirect domain).

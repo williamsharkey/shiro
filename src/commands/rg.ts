@@ -15,12 +15,17 @@ export const rgCmd: Command = {
     let lineNumbers = true; // rg shows line numbers by default
     let countOnly = false;
     let filesOnly = false;
+    let listFiles = false; // --files mode (Glob tool)
     let wordMatch = false;
     let onlyMatching = false;
     let fixedStrings = false;
     let noFilename = false;
     let forceFilename = false;
     let hidden = false;
+    let followSymlinks = false;
+    let noIgnore = false;
+    let sortBy = ''; // 'modified', 'path', etc.
+    let maxDepth = 0; // 0 = unlimited
     let afterCtx = 0, beforeCtx = 0;
     let pattern = '';
     const paths: string[] = [];
@@ -68,9 +73,19 @@ export const rgCmd: Command = {
       else if (arg === '--no-filename') { noFilename = true; }
       else if (arg === '--with-filename' || arg === '-H') { forceFilename = true; }
       else if (arg === '--hidden') { hidden = true; }
+      else if (arg === '--files') { listFiles = true; }
+      else if (arg === '--follow' || arg === '-L') { followSymlinks = true; }
+      else if (arg === '--no-ignore') { noIgnore = true; }
       else if (arg === '--no-heading') { /* default behavior */ }
       else if (arg === '--heading') { /* ignore for now */ }
       else if (arg === '-e' && i + 1 < ctx.args.length) { pattern = ctx.args[++i]; }
+      else if (arg === '--sort' && i + 1 < ctx.args.length) { sortBy = ctx.args[++i]; }
+      else if (arg.startsWith('--sort=')) { sortBy = arg.slice(7); }
+      else if (arg === '--max-depth' || arg === '--maxdepth') {
+        if (i + 1 < ctx.args.length) maxDepth = parseInt(ctx.args[++i], 10) || 0;
+      } else if (arg.startsWith('--max-depth=')) {
+        maxDepth = parseInt(arg.slice(12), 10) || 0;
+      }
       else if (arg === '-t' || arg === '--type') {
         if (i + 1 < ctx.args.length) typeFilters.push(ctx.args[++i]);
       } else if (arg.startsWith('--type=')) {
@@ -103,9 +118,10 @@ export const rgCmd: Command = {
         if (i + 1 < ctx.args.length) i++; // consume value (never, always, auto)
       } else if (arg.startsWith('--color=') || arg.startsWith('--colour=')) {
         // ignore
-      } else if (arg === '--no-config' || arg === '--no-ignore' || arg === '--no-messages'
-        || arg === '--pcre2' || arg === '--multiline' || arg === '--sort-files'
-        || arg === '--follow' || arg === '-L' || arg === '-S' || arg === '--smart-case'
+      } else if (arg === '--no-config' || arg === '--no-messages'
+        || arg === '--pcre2' || arg === '--multiline' || arg === '--multiline-dotall'
+        || arg === '--sort-files'
+        || arg === '-S' || arg === '--smart-case'
         || arg === '--trim' || arg === '-j' || arg === '--threads'
         || arg === '--json' || arg === '--vimgrep') {
         // flags without values — consume and ignore
@@ -126,6 +142,8 @@ export const rgCmd: Command = {
           else if (ch === 'o') onlyMatching = true;
           else if (ch === 'F') fixedStrings = true;
           else if (ch === 'H') forceFilename = true;
+          else if (ch === 'U') { /* multiline — consume */ }
+          else if (ch === 'L') { followSymlinks = true; }
         }
       } else if (!pattern) {
         pattern = arg;
@@ -133,6 +151,89 @@ export const rgCmd: Command = {
         paths.push(arg);
       }
       i++;
+    }
+
+    // --files mode: list matching files (used by Claude Code Glob tool)
+    if (listFiles) {
+      // In --files mode, pattern is actually a path (no pattern needed)
+      if (pattern) paths.unshift(pattern);
+      const searchPaths = paths.length > 0 ? paths : [ctx.cwd];
+      const files: { path: string; mtime: number }[] = [];
+
+      const collectFiles = async (dirPath: string, basePath: string, depth: number) => {
+        if (maxDepth > 0 && depth > maxDepth) return;
+        let entries: string[];
+        try { entries = await ctx.fs.readdir(dirPath); } catch { return; }
+        for (const entry of entries) {
+          if (!hidden && entry.startsWith('.')) continue;
+          if (entry === 'node_modules' || entry === '.git') continue;
+          const childPath = dirPath === '/' ? '/' + entry : dirPath + '/' + entry;
+          const displayPath = basePath ? basePath + '/' + entry : entry;
+          try {
+            const stat = await ctx.fs.stat(childPath);
+            if (stat.isDirectory()) {
+              await collectFiles(childPath, displayPath, depth + 1);
+            } else {
+              if (matchesFilters(displayPath)) {
+                files.push({ path: displayPath, mtime: stat.mtime?.getTime?.() || 0 });
+              }
+            }
+          } catch { /* skip */ }
+        }
+      };
+
+      // Build filters using the same glob/type matchers below
+      const allowedExts = new Set<string>();
+      for (const t of typeFilters) {
+        const exts = typeMap[t];
+        if (exts) exts.forEach(e => allowedExts.add(e));
+      }
+      const globMatchers = globFilters.map(g => {
+        const neg = g.startsWith('!');
+        const pat = neg ? g.slice(1) : g;
+        // rg matches patterns without '/' against basename only
+        const basenameOnly = !pat.includes('/');
+        const re = new RegExp('^' + pat.replace(/\./g, '\\.').replace(/\*\*/g, '§').replace(/\*/g, '[^/]*').replace(/§/g, '.*').replace(/\?/g, '.') + '$');
+        return { re, neg, basenameOnly };
+      });
+      const matchesFilters = (filePath: string): boolean => {
+        const ext = filePath.includes('.') ? filePath.slice(filePath.lastIndexOf('.')) : '';
+        if (allowedExts.size > 0 && !allowedExts.has(ext)) return false;
+        const basename = filePath.includes('/') ? filePath.slice(filePath.lastIndexOf('/') + 1) : filePath;
+        for (const { re, neg, basenameOnly } of globMatchers) {
+          const target = basenameOnly ? basename : filePath;
+          if (neg && re.test(target)) return false;
+          if (!neg && !re.test(target)) return false;
+        }
+        return true;
+      };
+
+      for (const p of searchPaths) {
+        const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+        try {
+          const stat = await ctx.fs.stat(resolved);
+          if (stat.isDirectory()) {
+            await collectFiles(resolved, paths.length > 0 ? p : '', 1);
+          } else {
+            const display = paths.length > 0 ? p : resolved;
+            if (matchesFilters(display)) {
+              files.push({ path: display, mtime: stat.mtime?.getTime?.() || 0 });
+            }
+          }
+        } catch {
+          ctx.stderr += `rg: ${p}: No such file or directory\n`;
+        }
+      }
+
+      // Sort by requested order
+      if (sortBy === 'modified') {
+        files.sort((a, b) => b.mtime - a.mtime); // newest first
+      } else {
+        files.sort((a, b) => a.path.localeCompare(b.path)); // alphabetical
+      }
+
+      ctx.stdout = files.map(f => f.path).join('\n') + (files.length ? '\n' : '');
+      return files.length > 0 ? 0 : 1;
     }
 
     if (!pattern) {
@@ -164,16 +265,20 @@ export const rgCmd: Command = {
     const globMatchers = globFilters.map(g => {
       const neg = g.startsWith('!');
       const pat = neg ? g.slice(1) : g;
+      // rg matches patterns without '/' against basename only
+      const basenameOnly = !pat.includes('/');
       const re = new RegExp('^' + pat.replace(/\./g, '\\.').replace(/\*\*/g, '§').replace(/\*/g, '[^/]*').replace(/§/g, '.*').replace(/\?/g, '.') + '$');
-      return { re, neg };
+      return { re, neg, basenameOnly };
     });
 
     const matchesFilters = (filePath: string): boolean => {
       const ext = filePath.includes('.') ? filePath.slice(filePath.lastIndexOf('.')) : '';
       if (allowedExts.size > 0 && !allowedExts.has(ext)) return false;
-      for (const { re, neg } of globMatchers) {
-        if (neg && re.test(filePath)) return false;
-        if (!neg && !re.test(filePath)) return false;
+      const basename = filePath.includes('/') ? filePath.slice(filePath.lastIndexOf('/') + 1) : filePath;
+      for (const { re, neg, basenameOnly } of globMatchers) {
+        const target = basenameOnly ? basename : filePath;
+        if (neg && re.test(target)) return false;
+        if (!neg && !re.test(target)) return false;
       }
       return true;
     };
