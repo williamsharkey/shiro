@@ -16,12 +16,13 @@ export const xargs: FluffyCommand = {
     const command = positional.length > 0 ? positional.join(" ") : "echo";
     const cmdTemplate = positional.length > 0 ? positional : ["echo"];
 
-    // Parse input items
+    // Parse input items — when -I is used, split on newlines (POSIX behavior)
     let inputItems: string[];
-    if (typeof delimiter === "string") {
-      inputItems = io.stdin.split(delimiter).filter(Boolean);
+    const effectiveDelimiter = replaceStr ? '\n' : delimiter;
+    if (typeof effectiveDelimiter === "string") {
+      inputItems = io.stdin.split(effectiveDelimiter).filter(Boolean);
     } else {
-      inputItems = io.stdin.trim().split(delimiter).filter(Boolean);
+      inputItems = io.stdin.trim().split(effectiveDelimiter).filter(Boolean);
     }
 
     if (inputItems.length === 0) {

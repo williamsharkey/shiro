@@ -636,6 +636,7 @@ export const gitCmd: Command = {
           let showStat = false;
           let nameOnly = false;
           let formatStr = '';
+          let showAll = false;
           for (let i = 1; i < ctx.args.length; i++) {
             if (ctx.args[i] === '-n' && ctx.args[i + 1]) maxCount = parseInt(ctx.args[++i]);
             else if (ctx.args[i]?.startsWith('-') && /^-\d+$/.test(ctx.args[i])) maxCount = parseInt(ctx.args[i].slice(1));
@@ -643,12 +644,30 @@ export const gitCmd: Command = {
             else if (ctx.args[i] === '--oneline') oneline = true;
             else if (ctx.args[i] === '--stat') showStat = true;
             else if (ctx.args[i] === '--name-only') nameOnly = true;
+            else if (ctx.args[i] === '--all') showAll = true;
             else if (ctx.args[i]?.startsWith('--format=')) formatStr = ctx.args[i].slice(9);
             else if (ctx.args[i]?.startsWith('--pretty=format:')) formatStr = ctx.args[i].slice(16);
             else if (ctx.args[i] === '--pretty=oneline') oneline = true;
             else if (ctx.args[i]?.startsWith('--pretty=')) formatStr = ctx.args[i].slice(9);
           }
-          const commits = await git.log({ fs, dir, depth: maxCount });
+          let commits;
+          if (showAll) {
+            const branches = await git.listBranches({ fs, dir });
+            const allCommits = new Map<string, any>();
+            for (const branch of branches) {
+              try {
+                const branchCommits = await git.log({ fs, dir, ref: branch, depth: maxCount });
+                for (const c of branchCommits) {
+                  if (!allCommits.has(c.oid)) allCommits.set(c.oid, c);
+                }
+              } catch {}
+            }
+            commits = [...allCommits.values()]
+              .sort((a, b) => b.commit.author.timestamp - a.commit.author.timestamp)
+              .slice(0, maxCount);
+          } else {
+            commits = await git.log({ fs, dir, depth: maxCount });
+          }
           for (const c of commits) {
             if (formatStr) {
               ctx.stdout += formatCommit(c, formatStr) + '\n';

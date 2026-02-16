@@ -1683,9 +1683,17 @@ export class Shell {
     const tokens = args.split(/\s+/);
     if (tokens.length === 0) return 1;
 
+    // Strip surrounding quotes from each token (vars already expanded by caller)
+    const strip = (t: string) => {
+      if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
+        return t.slice(1, -1);
+      }
+      return t;
+    };
+
     if (tokens.length === 2) {
-      const [op, arg] = tokens;
-      const expanded = this.expandVars(arg);
+      const op = tokens[0];
+      const expanded = strip(tokens[1]);
       switch (op) {
         case '-z': return expanded === '' ? 0 : 1;
         case '-n': return expanded !== '' ? 0 : 1;
@@ -1700,9 +1708,9 @@ export class Shell {
     }
 
     if (tokens.length === 3) {
-      const left = this.expandVars(tokens[0]);
+      const left = strip(tokens[0]);
       const op = tokens[1];
-      const right = this.expandVars(tokens[2]);
+      const right = strip(tokens[2]);
       switch (op) {
         case '=': case '==': return left === right ? 0 : 1;
         case '!=': return left !== right ? 0 : 1;
@@ -2167,7 +2175,7 @@ export class Shell {
   /**
    * Execute content as a shell script.
    */
-  private async executeShellScript(
+  async executeShellScript(
     content: string,
     args: string[],
     ctx: CommandContext,
@@ -2188,13 +2196,40 @@ export class Shell {
     this.env['#'] = String(args.length);
     this.env['@'] = args.join(' ');
 
-    // Execute script line by line
+    // Execute script with multi-line compound statement accumulation
     const lines = content.split('\n');
     let exitCode = 0;
+    let buffer = '';
+    let depth = 0; // track nesting: for/while/until/if/case increment, done/fi/esac decrement
+
     for (const line of lines) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith('#')) continue;
-      exitCode = await this.execute(trimmed, writeStdout, writeStderr, false, ctx.terminal, true);
+
+      // Count opening/closing keywords (quote-aware)
+      const keywords = this.shellTokenScan(trimmed);
+      for (const kw of keywords) {
+        if (['for', 'while', 'until', 'if', 'case'].includes(kw.word)) depth++;
+        if (['done', 'fi', 'esac'].includes(kw.word)) depth--;
+      }
+
+      if (buffer) {
+        buffer += '; ' + trimmed;
+      } else {
+        buffer = trimmed;
+      }
+
+      // If depth is 0, we have a complete statement — execute it
+      if (depth <= 0) {
+        depth = 0;
+        exitCode = await this.execute(buffer, writeStdout, writeStderr, false, ctx.terminal, true);
+        buffer = '';
+      }
+    }
+
+    // Execute any remaining buffer
+    if (buffer.trim()) {
+      exitCode = await this.execute(buffer, writeStdout, writeStderr, false, ctx.terminal, true);
     }
 
     // Restore positional parameters

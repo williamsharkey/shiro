@@ -603,37 +603,12 @@ export const shCmd: Command = {
         const script = typeof content === 'string' ? content : new TextDecoder().decode(content as any);
         let stdout = '';
         let stderr = '';
-        // Set up positional parameters ($@, $1, $2, etc.)
-        const savedParams: Record<string, string | undefined> = {};
-        for (let i = 0; i <= scriptArgs.length; i++) {
-          savedParams[String(i)] = ctx.shell.env[String(i)];
-        }
-        savedParams['@'] = ctx.shell.env['@'];
-        savedParams['*'] = ctx.shell.env['*'];
-        savedParams['#'] = ctx.shell.env['#'];
-        ctx.shell.env['0'] = scriptPath;
-        for (let i = 0; i < scriptArgs.length; i++) {
-          ctx.shell.env[String(i + 1)] = scriptArgs[i];
-        }
-        ctx.shell.env['@'] = scriptArgs.join(' ');
-        ctx.shell.env['*'] = scriptArgs.join(' ');
-        ctx.shell.env['#'] = String(scriptArgs.length);
-        // Execute each line of the script
-        let exitCode = 0;
-        for (const line of script.split('\n')) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed.startsWith('#')) continue;
-          exitCode = await ctx.shell.execute(trimmed, (s) => { stdout += s; }, (s) => { stderr += s; }, false, undefined, true);
-          if (exitCode !== 0) break;
-        }
-        // Restore positional parameters
-        for (const key of Object.keys(savedParams)) {
-          if (savedParams[key] === undefined) {
-            delete ctx.shell.env[key];
-          } else {
-            ctx.shell.env[key] = savedParams[key]!;
-          }
-        }
+        // Delegate to shell's script executor (handles multi-line compound statements)
+        const exitCode = await ctx.shell.executeShellScript(
+          script, scriptArgs, ctx,
+          (s: string) => { stdout += s; },
+          (s: string) => { stderr += s; },
+        );
         ctx.stdout += stdout;
         ctx.stderr += stderr;
         return exitCode;
@@ -695,8 +670,29 @@ export const openCmd: Command = {
  * Commands that need shell access or override fluffycoreutils bugs.
  * Registered AFTER fluffy commands so they take precedence.
  */
+export const revCmd: Command = {
+  name: 'rev',
+  description: 'Reverse lines character-wise',
+  async exec(ctx) {
+    const input = ctx.stdin || (ctx.args.length ? await ctx.fs.readFile(
+      ctx.fs.resolvePath(ctx.args[0], ctx.cwd), 'utf8') as string : '');
+    ctx.stdout = input.split('\n').map(l => l.split('').reverse().join('')).join('\n');
+    return 0;
+  },
+};
+
+export const yesCmd: Command = {
+  name: 'yes',
+  description: 'Output a string repeatedly',
+  async exec(ctx) {
+    const str = ctx.args.length ? ctx.args.join(' ') : 'y';
+    ctx.stdout = (str + '\n').repeat(100);
+    return 0;
+  },
+};
+
 export const shiroOnlyCommands: Command[] = [
-  cdCmd, exportCmd, helpCmd, whichCmd, typeCmd, rmdirCmd, sleepCmd, seqCmd,
+  cdCmd, exportCmd, helpCmd, whichCmd, typeCmd, rmdirCmd, sleepCmd, seqCmd, revCmd, yesCmd,
   // Overrides for fluffy bugs or Shiro-specific behavior:
   rmCmd, findCmd, lnCmd, hostnameCmd, unameCmd,
   grepCmd, sedCmd, diffCmd,
