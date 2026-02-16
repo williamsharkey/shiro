@@ -304,10 +304,18 @@ export const lnCmd: Command = {
   description: 'Create links between files',
   async exec(ctx) {
     let symbolic = false;
+    let force = false;
     const args: string[] = [];
     for (const arg of ctx.args) {
-      if (arg === '-s') symbolic = true;
-      else args.push(arg);
+      if (arg.startsWith('-') && arg !== '--') {
+        // Parse combined flags like -sf, -s, -f
+        for (const ch of arg.slice(1)) {
+          if (ch === 's') symbolic = true;
+          else if (ch === 'f') force = true;
+        }
+      } else {
+        args.push(arg);
+      }
     }
     if (args.length < 2) {
       ctx.stderr = 'ln: missing file operand\n';
@@ -320,6 +328,9 @@ export const lnCmd: Command = {
     const target = args[0];
     const linkPath = ctx.fs.resolvePath(args[1], ctx.cwd);
     try {
+      if (force) {
+        try { await ctx.fs.unlink(linkPath); } catch {}
+      }
       await ctx.fs.symlink(target, linkPath);
       return 0;
     } catch (e: any) {
@@ -622,19 +633,14 @@ export const shCmd: Command = {
     if (ctx.stdin) {
       let stdout = '';
       let stderr = '';
-      for (const line of ctx.stdin.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#')) continue;
-        const code = await ctx.shell.execute(trimmed, (s) => { stdout += s; }, (s) => { stderr += s; }, false, undefined, true);
-        if (code !== 0) {
-          ctx.stdout += stdout;
-          ctx.stderr += stderr;
-          return code;
-        }
-      }
+      const exitCode = await ctx.shell.executeShellScript(
+        ctx.stdin, [], ctx,
+        (s: string) => { stdout += s; },
+        (s: string) => { stderr += s; },
+      );
       ctx.stdout += stdout;
       ctx.stderr += stderr;
-      return 0;
+      return exitCode;
     }
 
     // No input — nothing to do

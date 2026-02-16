@@ -23,7 +23,7 @@ export const realpath: FluffyCommand = {
         // Resolve the path
         let resolved = io.fs.resolvePath(path, io.cwd);
 
-        // Normalize the path
+        // Normalize the path and resolve symlinks
         if (canonicalize) {
           // Remove redundant separators and resolve . and ..
           const parts = resolved.split("/").filter(p => p !== "" && p !== ".");
@@ -40,6 +40,25 @@ export const realpath: FluffyCommand = {
           }
 
           resolved = "/" + canonical.join("/");
+
+          // Follow symlinks to final target
+          if (io.fs.readlink) {
+            const maxFollows = 20;
+            for (let follow = 0; follow < maxFollows; follow++) {
+              try {
+                const target = await io.fs.readlink(resolved);
+                // If target is relative, resolve against parent dir
+                if (target.startsWith('/')) {
+                  resolved = target;
+                } else {
+                  const parent = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
+                  resolved = io.fs.resolvePath(target, parent);
+                }
+              } catch {
+                break; // Not a symlink
+              }
+            }
+          }
         }
 
         // Verify the path exists

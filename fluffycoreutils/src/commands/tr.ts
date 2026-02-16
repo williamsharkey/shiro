@@ -60,8 +60,19 @@ export const tr: FluffyCommand = {
 };
 
 function expandSet(s: string): string {
+  // Handle escape sequences first: \n, \t, \\, \r, \a, \b, \f, \v
+  let result = s
+    .replace(/\\\\/g, "\x00ESC_BS\x00")
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, "\t")
+    .replace(/\\r/g, "\r")
+    .replace(/\\a/g, "\x07")
+    .replace(/\\b/g, "\b")
+    .replace(/\\f/g, "\f")
+    .replace(/\\v/g, "\v")
+    .replace(/\x00ESC_BS\x00/g, "\\");
+
   // Handle character classes like [:upper:], [:lower:], ranges like a-z
-  let result = s;
   result = result.replace(/\[:upper:\]/g, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
   result = result.replace(/\[:lower:\]/g, "abcdefghijklmnopqrstuvwxyz");
   result = result.replace(/\[:digit:\]/g, "0123456789");
