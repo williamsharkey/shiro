@@ -33,7 +33,7 @@ export interface FluffyEntry {
     target?: string;
 }
 export interface FluffyStat {
-    type: "file" | "dir";
+    type: "file" | "dir" | "symlink";
     size: number;
     mode: number;
     mtime: number;

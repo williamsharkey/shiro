@@ -69,6 +69,7 @@ export const findCmd: Command = {
       try {
         const entries = await ctx.fs.readdir(dir);
         for (const entry of entries) {
+          if (entry === '.git' || entry === 'node_modules') continue;
           const childPath = dir === '/' ? '/' + entry : dir + '/' + entry;
           const stat = await ctx.fs.stat(childPath);
           const displayPath = formatPath(childPath, resolved, searchDir);
@@ -140,7 +141,7 @@ function globToRegex(pattern: string, caseInsensitive: boolean): RegExp {
   for (const ch of pattern) {
     if (ch === '*') regex += '.*';
     else if (ch === '?') regex += '.';
-    else if (ch === '.') regex += '\\.';
+    else if (/[.+^${}()|[\]\\]/.test(ch)) regex += '\\' + ch;
     else regex += ch;
   }
   regex += '$';

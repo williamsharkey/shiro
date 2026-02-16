@@ -27,24 +27,33 @@ export function createFluffyFS(fs: FileSystem): FluffyFS {
       const entries: FluffyEntry[] = [];
       for (const name of names) {
         const childPath = path === '/' ? '/' + name : path + '/' + name;
-        const stat = await fs.stat(childPath);
-        entries.push({
+        // Use lstat to detect symlinks without following them
+        const stat = await fs.lstat(childPath);
+        const entry: FluffyEntry = {
           name,
-          type: stat.isDirectory() ? 'dir' : 'file',
+          type: stat.isSymbolicLink() ? 'symlink' : stat.isDirectory() ? 'dir' : 'file',
           size: stat.size,
           mtime: stat.mtime.getTime(),
-        });
+        };
+        if (stat.isSymbolicLink()) {
+          try { entry.target = await fs.readlink(childPath); } catch {}
+        }
+        entries.push(entry);
       }
       return entries;
     },
     async stat(path: string): Promise<FluffyStat> {
-      const s = await fs.stat(path);
-      return {
-        type: s.isDirectory() ? 'dir' : 'file',
+      const s = await fs.lstat(path);
+      const result: FluffyStat = {
+        type: s.isSymbolicLink() ? 'symlink' : s.isDirectory() ? 'dir' : 'file',
         size: s.size,
-        mode: s.mode,
+        mode: s.isSymbolicLink() ? 0o777 : s.mode,
         mtime: s.mtime.getTime(),
       };
+      if (s.isSymbolicLink()) {
+        try { (result as any).target = await fs.readlink(path); } catch {}
+      }
+      return result;
     },
     async exists(path: string): Promise<boolean> {
       return await fs.exists(path);
@@ -64,6 +73,12 @@ export function createFluffyFS(fs: FileSystem): FluffyFS {
     },
     async chmod(path: string, mode: number): Promise<void> {
       await fs.chmod(path, mode);
+    },
+    async symlink(target: string, path: string): Promise<void> {
+      await fs.symlink(target, path);
+    },
+    async readlink(path: string): Promise<string> {
+      return await fs.readlink(path);
     },
     resolvePath(path: string, cwd: string): string {
       return fs.resolvePath(path, cwd);

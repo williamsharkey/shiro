@@ -2192,6 +2192,7 @@ const find = {
         return;
       }
       for (const A of S) {
+        if (A.name === ".git" || A.name === "node_modules") continue;
         const T = v + "/" + A.name, R = E ? E + "/" + A.name : A.name, F = o === "." ? "./" + R : o + "/" + R, I = b + 1;
         let P = !0;
         if (!(I > l)) {
@@ -2980,7 +2981,7 @@ const arithmeticExpansion = {
     }
     for (const u of r) {
       const p = e.fs.resolvePath(u, e.cwd), f = await e.fs.stat(p);
-      if (f.type === "file") {
+      if (f.type === "file" || f.type === "symlink") {
         d.push(a ? formatLong(p.split("/").pop(), f, i) : p.split("/").pop());
         continue;
       }

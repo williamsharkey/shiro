@@ -45,7 +45,7 @@ export const ls: FluffyCommand = {
       const resolved = io.fs.resolvePath(p, io.cwd);
       const stat = await io.fs.stat(resolved);
 
-      if (stat.type === "file") {
+      if (stat.type === "file" || stat.type === "symlink") {
         results.push(longFormat ? formatLong(resolved.split("/").pop()!, stat, humanReadable) : resolved.split("/").pop()!);
         continue;
       }

@@ -294,6 +294,17 @@ export class Shell {
 
       for (let i = 0; i < pipeline.length; i++) {
         const segment = pipeline[i];
+
+        // Check if this pipeline segment is a control structure (e.g. `echo foo | while ...`)
+        if (this.isControlStructure(segment.trim())) {
+          const pipeStdin = i > 0 ? lastOutput : '';
+          exitCode = await this.execControlStructurePiped(segment.trim(), pipeStdin, writeStdout, stderrWriter);
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+
         const { args, redirects, hereString } = this.parseSegment(segment);
 
         if (args.length === 0) continue;
@@ -411,6 +422,60 @@ export class Shell {
               if (!(arg in this.env)) this.env[arg] = '';
             }
           }
+          continue;
+        }
+
+        // Shell builtin: read
+        if (effectiveCmdName === 'read') {
+          // Parse flags: -r (raw), variable names
+          let rawMode = false;
+          const readVars: string[] = [];
+          for (const a of cmdArgs) {
+            if (a === '-r') rawMode = true;
+            else if (!a.startsWith('-')) readVars.push(a);
+          }
+          // Read one line from stdin — prefer piped stdin (__PIPE_STDIN), then pipe, then heredoc
+          let readInput = '';
+          const hasPipeStdin = '__PIPE_STDIN' in this.env;
+          if (hasPipeStdin) {
+            readInput = this.env['__PIPE_STDIN'];
+          } else {
+            readInput = i > 0 ? lastOutput : (heredocStdin || '');
+          }
+          const firstNewline = readInput.indexOf('\n');
+          let readLine: string;
+          let remaining: string;
+          if (firstNewline >= 0) {
+            readLine = readInput.slice(0, firstNewline);
+            remaining = readInput.slice(firstNewline + 1);
+          } else {
+            readLine = readInput;
+            remaining = '';
+          }
+          // Consume the line from __PIPE_STDIN so next read gets the next line
+          if (hasPipeStdin) {
+            this.env['__PIPE_STDIN'] = remaining;
+          }
+          const processed = rawMode ? readLine : readLine.replace(/\\(.)/g, '$1');
+          if (readVars.length === 0) {
+            this.env['REPLY'] = processed;
+          } else if (readVars.length === 1) {
+            this.env[readVars[0]] = processed;
+          } else {
+            // Split into words, last var gets the remainder
+            const words = processed.split(/\s+/);
+            for (let vi = 0; vi < readVars.length; vi++) {
+              if (vi === readVars.length - 1) {
+                this.env[readVars[vi]] = words.slice(vi).join(' ');
+              } else {
+                this.env[readVars[vi]] = words[vi] || '';
+              }
+            }
+          }
+          exitCode = (readLine || firstNewline >= 0) ? 0 : 1;
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
           continue;
         }
 
@@ -570,8 +635,25 @@ export class Shell {
    * Respects quoting: '{a,b}' is literal.
    */
   private expandBraces(input: string): string {
-    // Quick check: no unquoted braces
+    // Quick check: no braces at all
     if (!input.includes('{')) return input;
+
+    // Check if any { is unquoted — if all braces are inside quotes, skip expansion
+    let hasUnquotedBrace = false;
+    let bSQ = false, bDQ = false;
+    for (let bi = 0; bi < input.length; bi++) {
+      const bc = input[bi];
+      if (bc === '\\' && !bSQ) { bi++; continue; }
+      if (bc === "'" && !bDQ) { bSQ = !bSQ; continue; }
+      if (bc === '"' && !bSQ) { bDQ = !bDQ; continue; }
+      if (bc === '{' && !bSQ && !bDQ) {
+        // Skip ${...} — parameter expansion, not brace expansion
+        if (bi > 0 && input[bi - 1] === '$') continue;
+        hasUnquotedBrace = true;
+        break;
+      }
+    }
+    if (!hasUnquotedBrace) return input;
 
     // Tokenize respecting quotes, then expand each token
     const tokens = this.tokenize(input);
@@ -1557,6 +1639,24 @@ export class Shell {
     return 0;
   }
 
+  /**
+   * Execute a control structure as a pipeline segment with piped stdin.
+   * Used for patterns like: echo "data" | while read line; do ...; done
+   */
+  private async execControlStructurePiped(
+    input: string, pipeStdin: string,
+    writeStdout: (s: string) => void, writeStderr: (s: string) => void
+  ): Promise<number> {
+    if (/^while\s+/.test(input)) return this.execWhile(input, writeStdout, writeStderr, pipeStdin);
+    // For other control structures, set __PIPE_STDIN env and delegate
+    const saved = this.env['__PIPE_STDIN'];
+    this.env['__PIPE_STDIN'] = pipeStdin;
+    const result = await this.execControlStructure(input, writeStdout, writeStderr);
+    if (saved === undefined) delete this.env['__PIPE_STDIN'];
+    else this.env['__PIPE_STDIN'] = saved;
+    return result;
+  }
+
   private async evalCondition(
     condition: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void
   ): Promise<number> {
@@ -1764,10 +1864,17 @@ export class Shell {
   }
 
   private async execWhile(
-    input: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void
+    input: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void,
+    pipeStdin?: string,
   ): Promise<number> {
     const parsed = this.parseLoopConstruct(input, 'while');
     if (!parsed) { writeStderr('while: syntax error\r\n'); return 1; }
+
+    // If piped stdin is provided, store remaining lines for `read` to consume
+    const savedPipeStdin = this.env['__PIPE_STDIN'];
+    if (pipeStdin !== undefined) {
+      this.env['__PIPE_STDIN'] = pipeStdin;
+    }
 
     let iter = 0;
     while (iter++ < 10000) {
@@ -1775,6 +1882,12 @@ export class Shell {
       const expandedCond = this.expandVars(await this.expandCommandSubstitution(this.expandArithmetic(parsed.condition), writeStderr));
       if ((await this.evalCondition(expandedCond, writeStdout, writeStderr)) !== 0) break;
       if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr);
+    }
+
+    // Restore
+    if (pipeStdin !== undefined) {
+      if (savedPipeStdin === undefined) delete this.env['__PIPE_STDIN'];
+      else this.env['__PIPE_STDIN'] = savedPipeStdin;
     }
     return 0;
   }

@@ -55,6 +55,7 @@ export const find: FluffyCommand = {
       } catch { return; }
 
       for (const entry of entries) {
+        if (entry.name === '.git' || entry.name === 'node_modules') continue;
         const fullPath = dir + "/" + entry.name;
         const relPath = rel ? rel + "/" + entry.name : entry.name;
         const displayPath = startPath === "." ? "./" + relPath : startPath + "/" + relPath;

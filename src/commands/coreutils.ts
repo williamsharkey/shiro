@@ -282,6 +282,7 @@ async function walkFind(
   try { entries = await ctx.fs.readdir(dir); } catch { return; }
 
   for (const name of entries) {
+    if (name === '.git' || name === 'node_modules') continue;
     const fullPath = dir === '/' ? '/' + name : dir + '/' + name;
     const displayPath = displayBase + '/' + name;
     const stat = await ctx.fs.stat(fullPath).catch(() => null);

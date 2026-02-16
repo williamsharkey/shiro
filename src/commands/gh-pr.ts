@@ -30,12 +30,12 @@ Commands:
     return 0;
   }
 
-  if (!token) {
+  const { flags, positional } = parseFlags(ctx.args.slice(2), VALUE_FLAGS);
+
+  if (!token && !isDryRun(flags)) {
     ctx.stderr = 'error: authentication required. Set GITHUB_TOKEN.\n';
     return 1;
   }
-
-  const { flags, positional } = parseFlags(ctx.args.slice(2), VALUE_FLAGS);
   const repo = getRepoFromFlags(flags) || await detectRepo(ctx);
   if (!repo) {
     ctx.stderr = 'error: could not detect repository. Use --repo owner/repo or run from a git repo with a GitHub remote.\n';

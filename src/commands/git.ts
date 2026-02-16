@@ -735,6 +735,11 @@ export const gitCmd: Command = {
               output += `${filepath}\n`;
               continue;
             }
+            if (nameStatusFlag) {
+              const status = (head === 0) ? 'A' : (workdir === 0) ? 'D' : 'M';
+              output += `${status}\t${filepath}\n`;
+              continue;
+            }
             output += `diff --git a/${filepath} b/${filepath}\n`;
             if (head === 0 && workdir === 2) {
               const content = await ctx.fs.readFile(ctx.fs.resolvePath(filepath as string, dir), 'utf8');
@@ -775,18 +780,35 @@ export const gitCmd: Command = {
             if (ctx.args[i] === '--name-only') nameOnlyFlag = true;
             if (ctx.args[i] === '--stat') statFlag = true;
           }
-          const commitOid = await resolveRevision(fs, dir, ref);
-          const { commit } = await git.readCommit({ fs, dir, oid: commitOid });
+          let oid = await resolveRevision(fs, dir, ref);
+
+          // Check if this is an annotated tag object
+          try {
+            const { type } = await git.readObject({ fs, dir, oid });
+            if (type === 'tag') {
+              const { tag } = await git.readTag({ fs, dir, oid });
+              ctx.stdout = `tag ${ref}\n`;
+              ctx.stdout += `Tagger: ${tag.tagger.name} <${tag.tagger.email}>\n`;
+              ctx.stdout += `Date:   ${new Date(tag.tagger.timestamp * 1000).toISOString()}\n`;
+              ctx.stdout += `\n    ${tag.message.trim()}\n\n`;
+              // Follow to the target commit
+              oid = tag.object;
+            }
+          } catch {
+            // Not a tag object, continue as commit
+          }
+
+          const { commit } = await git.readCommit({ fs, dir, oid });
           const date = new Date(commit.author.timestamp * 1000);
 
-          ctx.stdout = `commit ${commitOid}\n`;
+          ctx.stdout += `commit ${oid}\n`;
           ctx.stdout += `Author: ${commit.author.name} <${commit.author.email}>\n`;
           ctx.stdout += `Date:   ${date.toISOString()}\n`;
           ctx.stdout += `\n    ${commit.message.trim()}\n\n`;
 
           const parentOid = commit.parent.length > 0 ? commit.parent[0] : null;
           const diffOpts: DiffOpts = { nameOnly: nameOnlyFlag, stat: statFlag };
-          ctx.stdout += await diffCommits(fs, dir, parentOid, commitOid, diffOpts);
+          ctx.stdout += await diffCommits(fs, dir, parentOid, oid, diffOpts);
           break;
         }
 
@@ -1091,10 +1113,9 @@ export const gitCmd: Command = {
           if (!ref) { ctx.stderr = 'usage: git cherry-pick <commit>\n'; return 1; }
           let oid: string;
           try {
-            oid = await git.resolveRef({ fs, dir, ref });
+            oid = await resolveRevision(fs, dir, ref);
           } catch {
-            try { oid = await git.expandOid({ fs, dir, oid: ref }); }
-            catch { ctx.stderr = `fatal: bad revision '${ref}'\n`; return 128; }
+            ctx.stderr = `fatal: bad revision '${ref}'\n`; return 128;
           }
           const commitObj = await git.readCommit({ fs, dir, oid });
           const parentOid = commitObj.commit.parent[0];
@@ -1135,10 +1156,9 @@ export const gitCmd: Command = {
           if (!ref) { ctx.stderr = 'usage: git revert <commit>\n'; return 1; }
           let oid: string;
           try {
-            oid = await git.resolveRef({ fs, dir, ref });
+            oid = await resolveRevision(fs, dir, ref);
           } catch {
-            try { oid = await git.expandOid({ fs, dir, oid: ref }); }
-            catch { ctx.stderr = `fatal: bad revision '${ref}'\n`; return 128; }
+            ctx.stderr = `fatal: bad revision '${ref}'\n`; return 128;
           }
           const commitObj = await git.readCommit({ fs, dir, oid });
           const parentOid = commitObj.commit.parent[0];

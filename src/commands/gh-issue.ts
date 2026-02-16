@@ -4,8 +4,8 @@ import { ghApi, parseFlags, getRepoFromFlags, detectRepo, timeAgo, isDryRun } fr
 const VALID_SUBS = 'list, create, view, close, reopen, comment, edit, delete, lock, label';
 const VALUE_FLAGS = [
   'state', 'L', 'limit', 'label', 'title', 'body', 'repo', 'R',
-  'assignee', 'search', 'milestone', 'json', 't', 'b',
-  'add-label', 'remove-label', 'add', 'remove',
+  'assignee', 'search', 'milestone', 'json', 't', 'b', 'm', 'p',
+  'add-label', 'remove-label', 'add', 'remove', 'project',
 ];
 
 export async function ghIssueHandler(ctx: CommandContext, token: string): Promise<number> {
@@ -28,12 +28,12 @@ Commands:
     return 0;
   }
 
-  if (!token) {
+  const { flags, positional } = parseFlags(ctx.args.slice(2), VALUE_FLAGS);
+
+  if (!token && !isDryRun(flags)) {
     ctx.stderr = 'error: authentication required. Set GITHUB_TOKEN.\n';
     return 1;
   }
-
-  const { flags, positional } = parseFlags(ctx.args.slice(2), VALUE_FLAGS);
   const repo = getRepoFromFlags(flags) || await detectRepo(ctx);
   if (!repo) {
     ctx.stderr = 'error: could not detect repository. Use --repo owner/repo.\n';
@@ -93,7 +93,10 @@ Commands:
       const payload: any = { title, body };
       if (flags['label']) payload.labels = flags['label'].split(',');
       if (flags['assignee']) payload.assignees = flags['assignee'].split(',').map((a: string) => a.trim());
-      if (flags['milestone']) payload.milestone = parseInt(flags['milestone'], 10);
+      const milestone = flags['milestone'] || flags['m'];
+      if (milestone) payload.milestone = parseInt(milestone, 10);
+      const project = flags['project'] || flags['p'];
+      if (project) payload.project = project;
 
       if (isDryRun(flags)) {
         ctx.stdout = `[dry-run] Would POST ${base}/issues\n`;
@@ -102,6 +105,7 @@ Commands:
         if (payload.labels) ctx.stdout += `  labels: ${payload.labels.join(', ')}\n`;
         if (payload.assignees) ctx.stdout += `  assignees: ${payload.assignees.join(', ')}\n`;
         if (payload.milestone) ctx.stdout += `  milestone: ${payload.milestone}\n`;
+        if (payload.project) ctx.stdout += `  project: ${payload.project}\n`;
         return 0;
       }
 
