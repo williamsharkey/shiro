@@ -1,5 +1,5 @@
 // ide-html.ts — Generates the complete IDE HTML interface
-// Single inline HTML with CSS + JS, loaded via CodeMirror 6 from esm.sh CDN
+// Single inline HTML with CSS + JS, using LiteEditor (zero-dependency textarea-based editor)
 
 export function generateIdeHtml(projectDir: string): string {
   return `<!DOCTYPE html>
@@ -202,8 +202,132 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   overflow: hidden;
   position: relative;
 }
-#editor-pane .cm-editor { height: 100%; }
-#editor-pane .cm-scroller { overflow: auto; }
+/* LiteEditor */
+.lite-editor-wrap {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--bg);
+}
+.lite-gutter {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 48px;
+  height: 100%;
+  overflow: hidden;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  text-align: right;
+  padding: 0 6px 0 0;
+  user-select: none;
+  z-index: 0;
+}
+.lite-gutter .ln { display: block; }
+.lite-highlight {
+  position: absolute;
+  top: 0;
+  left: 48px;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+}
+.lite-highlight code {
+  display: block;
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 0 8px;
+  white-space: pre;
+  tab-size: 2;
+  color: var(--text);
+}
+.lite-textarea {
+  position: absolute;
+  top: 0;
+  left: 48px;
+  right: 0;
+  bottom: 0;
+  overflow: auto;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 0 8px;
+  white-space: pre;
+  tab-size: 2;
+  color: rgba(255,255,255,0.5);
+  caret-color: #e0e0e0;
+  mix-blend-mode: multiply;
+  z-index: 1;
+  -webkit-text-fill-color: transparent;
+}
+.lite-textarea::selection { background: rgba(108,99,255,0.35); }
+.lite-find-bar {
+  position: absolute;
+  top: 4px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  z-index: 10;
+  box-shadow: 0 4px 12px rgba(0,0,0,.4);
+}
+.lite-find-bar input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  padding: 2px 8px;
+  outline: none;
+  width: 180px;
+}
+.lite-find-bar input:focus { border-color: var(--accent); }
+.lite-find-bar button {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 4px;
+}
+.lite-find-bar button:hover { color: var(--text); }
+
+/* Syntax token colors (One Dark) */
+.tok-keyword { color: #c678dd; }
+.tok-string { color: #98c379; }
+.tok-comment { color: #5c6370; font-style: italic; }
+.tok-number { color: #d19a66; }
+.tok-func { color: #61afef; }
+.tok-tag { color: #e06c75; }
+.tok-attr { color: #d19a66; }
+.tok-type { color: #e5c07b; }
+.tok-operator { color: #56b6c2; }
+.tok-property { color: #e06c75; }
+.tok-heading { color: #c678dd; font-weight: bold; }
+.tok-bold { font-weight: bold; }
+.tok-italic { font-style: italic; }
+.tok-code { color: #56b6c2; }
+.tok-link { color: #61afef; text-decoration: underline; }
 #welcome-screen {
   display: flex;
   flex-direction: column;
@@ -387,6 +511,27 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   outline: none;
 }
 #claude-input::placeholder { color: var(--text-dim); }
+#claude-input-row { gap: 6px; }
+#claude-new-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+#claude-new-btn:hover { color: var(--text); background: var(--accent-dim); }
+.claude-code-block { position: relative; margin: 8px 0; border-radius: 6px; overflow: hidden; }
+.claude-code-block pre { margin: 0; padding: 12px; background: var(--bg); overflow-x: auto; font-size: 12px; font-family: var(--font); line-height: 1.5; }
+.claude-code-actions { position: absolute; top: 4px; right: 4px; display: flex; gap: 4px; }
+.claude-code-actions button { background: var(--surface2); border: 1px solid var(--border); color: var(--text-dim); padding: 2px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; }
+.claude-code-actions button:hover { color: var(--text); background: var(--accent-dim); }
+.claude-msg.assistant .body code { background: var(--surface2); padding: 1px 4px; border-radius: 3px; font-family: var(--font); font-size: 12px; }
+.claude-msg.assistant .body h2, .claude-msg.assistant .body h3, .claude-msg.assistant .body h4 { margin: 8px 0 4px; font-weight: 500; }
+.claude-msg.assistant .body ul, .claude-msg.assistant .body ol { margin: 4px 0; padding-left: 20px; }
+.claude-msg.assistant .body li { margin: 2px 0; }
 
 /* Slash menu overlay */
 #slash-menu {
@@ -538,7 +683,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 
 <div id="loading-overlay">
   <div class="spinner"></div>
-  <div style="color:var(--text-dim);font-size:12px">Loading CodeMirror...</div>
+  <div style="color:var(--text-dim);font-size:12px">Loading IDE...</div>
 </div>
 
 <div id="ide-root">
@@ -605,6 +750,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
       <div id="claude-messages"></div>
       <div id="claude-input-row">
         <input id="claude-input" placeholder="Ask Claude..." autocomplete="off" spellcheck="false">
+        <button id="claude-new-btn" title="New conversation">New</button>
       </div>
     </div>
   </div>
@@ -663,62 +809,470 @@ const api = {
   },
   claude: {
     prompt: (text) => api.call('claude/prompt', { prompt: text }),
+    chat: (prompt, context, isFirstMessage) =>
+      api.call('claude/chat', { prompt, context, isFirstMessage }),
   },
   project: {
     scaffold: (template, name) => api.call('project/scaffold', { template, name }),
   },
 };
 
-// ─── CodeMirror loading ───
-let cmState, cmView, cmCommands, cmLangJS, cmLangHTML, cmLangCSS, cmLangJSON, cmLangMD, cmOneDark, cmBasicSetup;
-async function loadCodeMirror() {
-  /* Load all CM packages from esm.sh with ?deps to force shared @codemirror/state
-     and @codemirror/view — prevents duplicate-instance instanceof failures. */
-  const B = 'https://esm.sh';
-  const D = '?deps=@codemirror/state@6,@codemirror/view@6';
-  try {
-    const [stMod, vwMod, cmMod, jsM, htM, csM, jnM, mdM, thM, cmdM] = await Promise.all([
-      import(/* @vite-ignore */ B + '/@codemirror/state@6'),
-      import(/* @vite-ignore */ B + '/@codemirror/view@6?deps=@codemirror/state@6'),
-      import(/* @vite-ignore */ B + '/codemirror@6' + D),
-      import(/* @vite-ignore */ B + '/@codemirror/lang-javascript@6' + D),
-      import(/* @vite-ignore */ B + '/@codemirror/lang-html@6' + D),
-      import(/* @vite-ignore */ B + '/@codemirror/lang-css@6' + D),
-      import(/* @vite-ignore */ B + '/@codemirror/lang-json@6' + D),
-      import(/* @vite-ignore */ B + '/@codemirror/lang-markdown@6' + D),
-      import(/* @vite-ignore */ B + '/@codemirror/theme-one-dark@6' + D),
-      import(/* @vite-ignore */ B + '/@codemirror/commands@6' + D),
-    ]);
-    cmState = stMod;
-    cmView = vwMod;
-    cmBasicSetup = cmMod.basicSetup;
-    cmLangJS = jsM;
-    cmLangHTML = htM;
-    cmLangCSS = csM;
-    cmLangJSON = jnM;
-    cmLangMD = mdM;
-    cmOneDark = thM.oneDark;
-    cmCommands = cmdM;
-    return true;
-  } catch (err) {
-    console.error('Failed to load CodeMirror:', err);
-    return false;
-  }
-}
-
 // ─── Language detection ───
 function langForFile(name) {
   const ext = name.split('.').pop()?.toLowerCase();
   switch (ext) {
-    case 'js': case 'mjs': case 'cjs': return cmLangJS.javascript();
-    case 'ts': case 'mts': case 'cts': return cmLangJS.javascript({ typescript: true });
-    case 'jsx': return cmLangJS.javascript({ jsx: true });
-    case 'tsx': return cmLangJS.javascript({ typescript: true, jsx: true });
-    case 'html': case 'htm': case 'svg': return cmLangHTML.html();
-    case 'css': return cmLangCSS.css();
-    case 'json': return cmLangJSON.json();
-    case 'md': case 'mdx': case 'markdown': return cmLangMD.markdown();
-    default: return null;
+    case 'js': case 'mjs': case 'cjs': case 'jsx': return 'js';
+    case 'ts': case 'mts': case 'cts': case 'tsx': return 'ts';
+    case 'html': case 'htm': case 'svg': return 'html';
+    case 'css': return 'css';
+    case 'json': return 'json';
+    case 'md': case 'mdx': case 'markdown': return 'md';
+    default: return 'text';
+  }
+}
+
+// ─── Tokenizer ───
+function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function span(cls, text) { return '<span class="' + cls + '">' + esc(text) + '</span>'; }
+
+const JS_KW = new Set('const let var function return if else for while do switch case break continue new delete typeof instanceof void throw try catch finally class extends super this import export from default async await yield of in true false null undefined static get set'.split(' '));
+const TS_KW = new Set([...JS_KW, 'type', 'interface', 'enum', 'namespace', 'declare', 'abstract', 'implements', 'readonly', 'as', 'is', 'keyof', 'infer', 'never', 'unknown', 'any']);
+const TYPE_NAMES = new Set('String Number Boolean Object Array Function Promise Map Set Date RegExp Error Symbol BigInt'.split(' '));
+const OP_CHARS = new Set('=+-*/%<>!&|^~?:');
+
+function tokenizeJS(text, typescript) {
+  const KW = typescript ? TS_KW : JS_KW;
+  let out = '', i = 0, len = text.length;
+  function isIdChar(c) { return /[a-zA-Z0-9_$]/.test(c); }
+  function ahead(s) { return text.substr(i, s.length) === s; }
+  while (i < len) {
+    /* line comment */
+    if (ahead('//')) {
+      let j = i; while (j < len && text[j] !== '\\n') j++;
+      out += span('tok-comment', text.slice(i, j)); i = j; continue;
+    }
+    /* block comment */
+    if (ahead('/*')) {
+      let j = text.indexOf('*/', i + 2);
+      if (j < 0) j = len - 2;
+      out += span('tok-comment', text.slice(i, j + 2)); i = j + 2; continue;
+    }
+    /* template literal */
+    if (text[i] === '\`') {
+      let j = i + 1, depth = 0, s = '\`';
+      while (j < len) {
+        if (text[j] === '\\\\') { s += text.substr(j, 2); j += 2; continue; }
+        if (depth === 0 && text[j] === '\`') { s += '\`'; j++; break; }
+        if (text[j] === '$' && text[j+1] === '{') { depth++; s += text.substr(j, 2); j += 2; continue; }
+        if (text[j] === '{') { depth++; }
+        if (text[j] === '}') { if (depth > 0) depth--; }
+        s += text[j]; j++;
+      }
+      out += span('tok-string', s); i = j; continue;
+    }
+    /* string */
+    if (text[i] === "'" || text[i] === '"') {
+      const q = text[i]; let j = i + 1;
+      while (j < len && text[j] !== q && text[j] !== '\\n') {
+        if (text[j] === '\\\\') j++;
+        j++;
+      }
+      if (j < len && text[j] === q) j++;
+      out += span('tok-string', text.slice(i, j)); i = j; continue;
+    }
+    /* number */
+    if (/[0-9]/.test(text[i]) && (i === 0 || !isIdChar(text[i-1]))) {
+      let j = i;
+      if (text[j] === '0' && (text[j+1] === 'x' || text[j+1] === 'X')) { j += 2; while (j < len && /[0-9a-fA-F_]/.test(text[j])) j++; }
+      else if (text[j] === '0' && (text[j+1] === 'b' || text[j+1] === 'B')) { j += 2; while (j < len && /[01_]/.test(text[j])) j++; }
+      else { while (j < len && /[0-9._eE]/.test(text[j])) j++; }
+      if (j < len && text[j] === 'n') j++; /* BigInt */
+      out += span('tok-number', text.slice(i, j)); i = j; continue;
+    }
+    /* identifier / keyword */
+    if (/[a-zA-Z_$]/.test(text[i])) {
+      let j = i; while (j < len && isIdChar(text[j])) j++;
+      const word = text.slice(i, j);
+      /* look ahead for ( to detect function calls */
+      let k = j; while (k < len && text[k] === ' ') k++;
+      if (KW.has(word)) out += span('tok-keyword', word);
+      else if (TYPE_NAMES.has(word)) out += span('tok-type', word);
+      else if (text[k] === '(') out += span('tok-func', word);
+      else out += esc(word);
+      i = j; continue;
+    }
+    /* operator */
+    if (OP_CHARS.has(text[i])) {
+      let j = i; while (j < len && OP_CHARS.has(text[j])) j++;
+      out += span('tok-operator', text.slice(i, j)); i = j; continue;
+    }
+    /* default */
+    out += esc(text[i]); i++;
+  }
+  return out;
+}
+
+function tokenizeCSS(text) {
+  let out = '', i = 0, len = text.length;
+  while (i < len) {
+    if (text[i] === '/' && text[i+1] === '*') {
+      let j = text.indexOf('*/', i + 2);
+      if (j < 0) j = len - 2;
+      out += span('tok-comment', text.slice(i, j + 2)); i = j + 2; continue;
+    }
+    if (text[i] === '@') {
+      let j = i + 1; while (j < len && /[a-zA-Z-]/.test(text[j])) j++;
+      out += span('tok-keyword', text.slice(i, j)); i = j; continue;
+    }
+    if (text[i] === '"' || text[i] === "'") {
+      const q = text[i]; let j = i + 1;
+      while (j < len && text[j] !== q) { if (text[j] === '\\\\') j++; j++; }
+      if (j < len) j++;
+      out += span('tok-string', text.slice(i, j)); i = j; continue;
+    }
+    if (text[i] === '#' && /[0-9a-fA-F]/.test(text[i+1] || '')) {
+      let j = i + 1; while (j < len && /[0-9a-fA-F]/.test(text[j])) j++;
+      out += span('tok-number', text.slice(i, j)); i = j; continue;
+    }
+    if (/[0-9]/.test(text[i])) {
+      let j = i; while (j < len && /[0-9.%a-zA-Z]/.test(text[j])) j++;
+      out += span('tok-number', text.slice(i, j)); i = j; continue;
+    }
+    if (/[a-zA-Z-]/.test(text[i])) {
+      let j = i; while (j < len && /[a-zA-Z0-9-_]/.test(text[j])) j++;
+      const word = text.slice(i, j);
+      let k = j; while (k < len && text[k] === ' ') k++;
+      if (text[k] === ':' && text[k+1] !== ':') out += span('tok-property', word);
+      else out += esc(word);
+      i = j; continue;
+    }
+    out += esc(text[i]); i++;
+  }
+  return out;
+}
+
+function tokenizeHTML(text) {
+  let out = '', i = 0, len = text.length;
+  while (i < len) {
+    if (text.substr(i, 4) === '<!--') {
+      let j = text.indexOf('-->', i + 4);
+      if (j < 0) j = len - 3;
+      out += span('tok-comment', text.slice(i, j + 3)); i = j + 3; continue;
+    }
+    if (text[i] === '<') {
+      /* opening/closing tag */
+      let j = i + 1;
+      if (text[j] === '/') j++;
+      let tagStart = j;
+      while (j < len && /[a-zA-Z0-9-]/.test(text[j])) j++;
+      let tag = text.slice(tagStart, j);
+      out += esc(text.slice(i, tagStart));
+      if (tag) out += span('tok-tag', tag);
+      /* attributes */
+      while (j < len && text[j] !== '>') {
+        if (text[j] === '"' || text[j] === "'") {
+          const q = text[j]; let k = j + 1;
+          while (k < len && text[k] !== q) k++;
+          if (k < len) k++;
+          out += span('tok-string', text.slice(j, k)); j = k; continue;
+        }
+        if (/[a-zA-Z-]/.test(text[j])) {
+          let k = j; while (k < len && /[a-zA-Z0-9-]/.test(text[k])) k++;
+          out += span('tok-attr', text.slice(j, k)); j = k; continue;
+        }
+        out += esc(text[j]); j++;
+      }
+      if (j < len) { out += esc('>'); j++; }
+      i = j; continue;
+    }
+    out += esc(text[i]); i++;
+  }
+  return out;
+}
+
+function tokenizeJSON(text) {
+  let out = '', i = 0, len = text.length;
+  while (i < len) {
+    if (text[i] === '"') {
+      let j = i + 1;
+      while (j < len && text[j] !== '"') { if (text[j] === '\\\\') j++; j++; }
+      if (j < len) j++;
+      const s = text.slice(i, j);
+      let k = j; while (k < len && text[k] === ' ') k++;
+      if (text[k] === ':') out += span('tok-property', s);
+      else out += span('tok-string', s);
+      i = j; continue;
+    }
+    if (/[0-9-]/.test(text[i])) {
+      let j = i; if (text[j] === '-') j++;
+      while (j < len && /[0-9.eE+-]/.test(text[j])) j++;
+      out += span('tok-number', text.slice(i, j)); i = j; continue;
+    }
+    if (text.substr(i, 4) === 'true' || text.substr(i, 5) === 'false' || text.substr(i, 4) === 'null') {
+      const w = text[i] === 'f' ? 5 : 4;
+      out += span('tok-keyword', text.substr(i, w)); i += w; continue;
+    }
+    out += esc(text[i]); i++;
+  }
+  return out;
+}
+
+function tokenizeMD(text) {
+  const lines = text.split('\\n');
+  let inFence = false, out = [];
+  for (const line of lines) {
+    if (line.startsWith('\`\`\`')) { inFence = !inFence; out.push(span('tok-code', line)); continue; }
+    if (inFence) { out.push(span('tok-code', line)); continue; }
+    if (/^#{1,6} /.test(line)) { out.push(span('tok-heading', line)); continue; }
+    /* inline formatting */
+    let s = '', j = 0;
+    while (j < line.length) {
+      if (line[j] === '\`') {
+        let k = j + 1; while (k < line.length && line[k] !== '\`') k++;
+        if (k < line.length) { s += span('tok-code', line.slice(j, k + 1)); j = k + 1; continue; }
+      }
+      if (line[j] === '*' && line[j+1] === '*') {
+        let k = line.indexOf('**', j + 2);
+        if (k > j) { s += span('tok-bold', line.slice(j, k + 2)); j = k + 2; continue; }
+      }
+      if (line[j] === '*' && line[j+1] !== '*') {
+        let k = line.indexOf('*', j + 1);
+        if (k > j) { s += span('tok-italic', line.slice(j, k + 1)); j = k + 1; continue; }
+      }
+      if (line[j] === '[') {
+        let cb = line.indexOf('](', j);
+        if (cb > j) {
+          let ce = line.indexOf(')', cb + 2);
+          if (ce > cb) {
+            s += esc(line.slice(j, cb + 2)) + span('tok-link', line.slice(cb + 2, ce)) + esc(')');
+            j = ce + 1; continue;
+          }
+        }
+      }
+      s += esc(line[j]); j++;
+    }
+    out.push(s);
+  }
+  return out.join('\\n');
+}
+
+function tokenize(text, lang) {
+  if (lang === 'js') return tokenizeJS(text, false);
+  if (lang === 'ts') return tokenizeJS(text, true);
+  if (lang === 'css') return tokenizeCSS(text);
+  if (lang === 'html') return tokenizeHTML(text);
+  if (lang === 'json') return tokenizeJSON(text);
+  if (lang === 'md') return tokenizeMD(text);
+  return esc(text);
+}
+
+// ─── LiteEditor ───
+const BRACKET_PAIRS = { '(': ')', '[': ']', '{': '}' };
+const OPEN_BRACKETS = new Set(['(', '[', '{']);
+const INDENT_AFTER = new Set(['{', '(', ':', '[']);
+
+class LiteEditor {
+  constructor(container, opts) {
+    opts = opts || {};
+    this.language = opts.language || 'text';
+    this.onChange = opts.onChange || null;
+    this.onSave = opts.onSave || null;
+    this._rafId = null;
+
+    this.wrap = document.createElement('div');
+    this.wrap.className = 'lite-editor-wrap';
+
+    this.gutter = document.createElement('div');
+    this.gutter.className = 'lite-gutter';
+
+    this.pre = document.createElement('pre');
+    this.pre.className = 'lite-highlight';
+    this.code = document.createElement('code');
+    this.pre.appendChild(this.code);
+
+    this.textarea = document.createElement('textarea');
+    this.textarea.className = 'lite-textarea';
+    this.textarea.spellcheck = false;
+    this.textarea.autocomplete = 'off';
+    this.textarea.autocapitalize = 'off';
+
+    this.wrap.appendChild(this.gutter);
+    this.wrap.appendChild(this.pre);
+    this.wrap.appendChild(this.textarea);
+    container.appendChild(this.wrap);
+
+    this.findBar = null;
+
+    /* Events */
+    this.textarea.addEventListener('input', () => this._onInput());
+    this.textarea.addEventListener('scroll', () => this._syncScroll());
+    this.textarea.addEventListener('keydown', (e) => this._onKeydown(e));
+
+    /* ResizeObserver to sync scroll on resize */
+    this._ro = new ResizeObserver(() => this._syncScroll());
+    this._ro.observe(this.wrap);
+  }
+
+  getValue() { return this.textarea.value; }
+
+  setValue(text) {
+    this.textarea.value = text;
+    this._scheduleHighlight();
+  }
+
+  focus() { this.textarea.focus(); }
+
+  setLanguage(lang) {
+    this.language = lang;
+    this._scheduleHighlight();
+  }
+
+  undo() { this.textarea.focus(); document.execCommand('undo'); }
+  redo() { this.textarea.focus(); document.execCommand('redo'); }
+
+  destroy() {
+    if (this._rafId) cancelAnimationFrame(this._rafId);
+    this._ro.disconnect();
+    this.closeFind();
+    this.wrap.remove();
+  }
+
+  openFind() {
+    if (this.findBar) { this.findBar.querySelector('input').focus(); return; }
+    this.findBar = document.createElement('div');
+    this.findBar.className = 'lite-find-bar';
+    this.findBar.innerHTML =
+      '<input type="text" placeholder="Find..." spellcheck="false" autocomplete="off">' +
+      '<button title="Previous">\\u2191</button>' +
+      '<button title="Next">\\u2193</button>' +
+      '<button title="Close">\\u2715</button>';
+    this.wrap.appendChild(this.findBar);
+    const inp = this.findBar.querySelector('input');
+    const btns = this.findBar.querySelectorAll('button');
+    btns[0].addEventListener('click', () => this._findNext(inp.value, -1));
+    btns[1].addEventListener('click', () => this._findNext(inp.value, 1));
+    btns[2].addEventListener('click', () => this.closeFind());
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { this._findNext(inp.value, e.shiftKey ? -1 : 1); e.preventDefault(); }
+      if (e.key === 'Escape') { this.closeFind(); e.preventDefault(); }
+    });
+    inp.focus();
+  }
+
+  closeFind() {
+    if (this.findBar) { this.findBar.remove(); this.findBar = null; }
+  }
+
+  _onInput() {
+    if (this.onChange) this.onChange(this.textarea.value);
+    this._scheduleHighlight();
+  }
+
+  _syncScroll() {
+    this.pre.scrollTop = this.textarea.scrollTop;
+    this.pre.scrollLeft = this.textarea.scrollLeft;
+    this.gutter.style.transform = 'translateY(' + (-this.textarea.scrollTop) + 'px)';
+  }
+
+  _scheduleHighlight() {
+    if (this._rafId) cancelAnimationFrame(this._rafId);
+    this._rafId = requestAnimationFrame(() => { this._rafId = null; this._highlight(); });
+  }
+
+  _highlight() {
+    const text = this.textarea.value;
+    this.code.innerHTML = tokenize(text, this.language);
+    const lineCount = text.split('\\n').length;
+    this._renderGutter(lineCount);
+    /* Match code height to textarea so pre can scroll as far (prevents bottom desync) */
+    this.code.style.minHeight = this.textarea.scrollHeight + 'px';
+  }
+
+  _renderGutter(lineCount) {
+    let html = '';
+    for (let i = 1; i <= lineCount; i++) html += '<span class="ln">' + i + '</span>';
+    this.gutter.innerHTML = html;
+  }
+
+  _onKeydown(e) {
+    /* Ctrl+S save */
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      e.preventDefault();
+      if (this.onSave) this.onSave();
+      return;
+    }
+    /* Ctrl+F find */
+    if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+      e.preventDefault();
+      this.openFind();
+      return;
+    }
+    /* Tab indent */
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const ta = this.textarea;
+      const start = ta.selectionStart, end = ta.selectionEnd;
+      if (e.shiftKey) {
+        /* dedent: remove up to 2 spaces before cursor */
+        const before = ta.value.substring(0, start);
+        const lineStart = before.lastIndexOf('\\n') + 1;
+        const linePrefix = before.substring(lineStart, start);
+        const spaces = linePrefix.match(/^ {1,2}/);
+        if (spaces) {
+          ta.selectionStart = lineStart;
+          ta.selectionEnd = lineStart + spaces[0].length;
+          document.execCommand('delete');
+        }
+      } else {
+        document.execCommand('insertText', false, '  ');
+      }
+      this._onInput();
+      return;
+    }
+    /* Enter auto-indent */
+    if (e.key === 'Enter') {
+      const ta = this.textarea;
+      const start = ta.selectionStart;
+      const before = ta.value.substring(0, start);
+      const lineStart = before.lastIndexOf('\\n') + 1;
+      const currentLine = before.substring(lineStart);
+      const indent = currentLine.match(/^[ \\t]*/)[0];
+      const lastChar = before.trimEnd().slice(-1);
+      const extra = INDENT_AFTER.has(lastChar) ? '  ' : '';
+      e.preventDefault();
+      document.execCommand('insertText', false, '\\n' + indent + extra);
+      this._onInput();
+      return;
+    }
+    /* Auto-close brackets */
+    if (OPEN_BRACKETS.has(e.key)) {
+      const ta = this.textarea;
+      const start = ta.selectionStart, end = ta.selectionEnd;
+      if (start === end) {
+        e.preventDefault();
+        document.execCommand('insertText', false, e.key + BRACKET_PAIRS[e.key]);
+        ta.selectionStart = ta.selectionEnd = start + 1;
+      }
+    }
+  }
+
+  _findNext(query, dir) {
+    if (!query) return;
+    const ta = this.textarea;
+    const text = ta.value.toLowerCase();
+    const q = query.toLowerCase();
+    let pos;
+    if (dir > 0) {
+      pos = text.indexOf(q, ta.selectionEnd);
+      if (pos < 0) pos = text.indexOf(q); /* wrap */
+    } else {
+      pos = text.lastIndexOf(q, ta.selectionStart - 1);
+      if (pos < 0) pos = text.lastIndexOf(q); /* wrap */
+    }
+    if (pos >= 0) {
+      ta.focus();
+      ta.setSelectionRange(pos, pos + query.length);
+    }
   }
 }
 
@@ -813,7 +1367,7 @@ class EditorManager {
   constructor(editorPane, tabBar) {
     this.editorPane = editorPane;
     this.tabBar = tabBar;
-    this.tabs = []; /* { path, view, modified, content } */
+    this.tabs = []; /* { path, editor, modified, content, container } */
     this.activeTab = null;
     this.onSave = null;
   }
@@ -830,37 +1384,27 @@ class EditorManager {
     const welcome = this.editorPane.querySelector('#welcome-screen');
     if (welcome) welcome.style.display = 'none';
 
-    /* Create EditorView */
     const lang = langForFile(path);
-    const extensions = [
-      cmBasicSetup,
-      cmOneDark,
-      cmView.keymap.of([
-        { key: 'Mod-s', run: () => { this.save(); return true; } },
-      ]),
-      cmView.EditorView.updateListener.of(update => {
-        if (update.docChanged) {
-          const tab = this.tabs.find(t => t.view === update.view);
-          if (tab && !tab.modified) {
-            tab.modified = true;
-            this.renderTabs();
-          }
-        }
-      }),
-    ].filter(Boolean);
-    if (lang) extensions.push(lang);
 
     const edContainer = document.createElement('div');
     edContainer.style.cssText = 'height:100%;display:none';
     this.editorPane.appendChild(edContainer);
 
-    const state = cmState.EditorState.create({
-      doc: content,
-      extensions,
+    const self = this;
+    const editor = new LiteEditor(edContainer, {
+      language: lang,
+      onChange: () => {
+        const tab = self.tabs.find(t => t.editor === editor);
+        if (tab && !tab.modified) {
+          tab.modified = true;
+          self.renderTabs();
+        }
+      },
+      onSave: () => self.save(),
     });
-    const view = new cmView.EditorView({ state, parent: edContainer });
+    editor.setValue(content);
 
-    const tab = { path, view, modified: false, content, container: edContainer };
+    const tab = { path, editor, modified: false, content, container: edContainer };
     this.tabs.push(tab);
     this.activate(tab);
   }
@@ -871,7 +1415,7 @@ class EditorManager {
     }
     this.activeTab = tab;
     tab.container.style.display = 'block';
-    tab.view.focus();
+    tab.editor.focus();
     this.renderTabs();
   }
 
@@ -879,7 +1423,7 @@ class EditorManager {
     const idx = this.tabs.indexOf(tab);
     if (idx < 0) return;
 
-    tab.view.destroy();
+    tab.editor.destroy();
     tab.container.remove();
     this.tabs.splice(idx, 1);
 
@@ -898,7 +1442,7 @@ class EditorManager {
   async save() {
     if (!this.activeTab) return;
     const tab = this.activeTab;
-    const content = tab.view.state.doc.toString();
+    const content = tab.editor.getValue();
     const res = await api.fs.write(tab.path, content);
     if (res.ok) {
       tab.modified = false;
@@ -930,7 +1474,7 @@ class EditorManager {
   }
 
   getActiveContent() {
-    return this.activeTab ? this.activeTab.view.state.doc.toString() : null;
+    return this.activeTab ? this.activeTab.editor.getValue() : null;
   }
 }
 
@@ -1144,6 +1688,43 @@ class PreviewPane {
   }
 }
 
+// ─── Claude conversation state ───
+let claudeConversationActive = false;
+let _editorRef = null; // set during init
+let _fileTreeRef = null; // set during init
+let _bottomRef = null; // set during init
+
+function gatherContext() {
+  const ctx = { projectDir: PROJECT_DIR, openFiles: [] };
+  if (_editorRef && _editorRef.activeTab) {
+    ctx.currentFile = {
+      path: _editorRef.activeTab.path,
+      content: _editorRef.activeTab.editor?.getValue() || '',
+    };
+  }
+  if (_editorRef) ctx.openFiles = _editorRef.tabs.map(t => t.path);
+  if (_bottomRef) {
+    const lines = Array.from(_bottomRef.termOutput.querySelectorAll('.term-line'))
+      .slice(-20).map(el => el.textContent);
+    if (lines.length) ctx.recentTerminal = lines.join('\\n');
+  }
+  return ctx;
+}
+
+function renderMarkdown(text) {
+  return text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>')
+    .replace(/\\*(.+?)\\*/g, '<em>$1</em>')
+    .replace(/\`([^\`]+)\`/g, '<code>$1</code>')
+    .replace(/^### (.+)$/gm, '<h4>$1</h4>')
+    .replace(/^## (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^# (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^- (.+)$/gm, '<li>$1</li>')
+    .replace(/(<li>.*<\\/li>\\n?)+/g, (m) => '<ul>' + m + '</ul>')
+    .replace(/\\n/g, '<br>');
+}
+
 // ─── Bottom Panel ───
 class BottomPanel {
   constructor() {
@@ -1183,16 +1764,43 @@ class BottomPanel {
         this.claudeInput.value = '';
         this.addClaudeMsg('user', prompt);
         this.addClaudeMsg('assistant', 'Thinking...');
+
+        const isFirst = !claudeConversationActive;
+        const context = isFirst ? gatherContext() : null;
+
         try {
-          const res = await api.claude.prompt(prompt);
+          const res = await api.claude.chat(prompt, context, isFirst);
+          claudeConversationActive = true;
           /* Remove "Thinking..." */
           this.claudeMsgs.lastElementChild?.remove();
-          this.addClaudeMsg('assistant', res.stdout || res.stderr || 'No response');
+          const text = res.stdout || res.stderr || 'No response';
+          this.addClaudeMsgRich('assistant', text);
+
+          /* Refresh files Claude may have edited */
+          if (_fileTreeRef) _fileTreeRef.refresh();
+          if (_editorRef) {
+            for (const tab of _editorRef.tabs) {
+              try {
+                const fresh = await api.fs.read(tab.path);
+                if (fresh.content !== undefined && fresh.content !== tab.editor?.getValue()) {
+                  tab.editor?.setValue(fresh.content);
+                  tab.modified = false;
+                  _editorRef.renderTabs();
+                }
+              } catch {}
+            }
+          }
         } catch (err) {
           this.claudeMsgs.lastElementChild?.remove();
           this.addClaudeMsg('assistant', 'Error: ' + err.message);
         }
       }
+    });
+
+    /* New conversation button */
+    document.getElementById('claude-new-btn')?.addEventListener('click', () => {
+      claudeConversationActive = false;
+      this.claudeMsgs.innerHTML = '';
     });
   }
 
@@ -1225,6 +1833,77 @@ class BottomPanel {
     msg.className = 'claude-msg ' + role;
     msg.innerHTML = '<div class="role">' + role + '</div><div class="body"></div>';
     msg.querySelector('.body').textContent = text;
+    this.claudeMsgs.appendChild(msg);
+    this.claudeMsgs.scrollTop = this.claudeMsgs.scrollHeight;
+  }
+
+  addClaudeMsgRich(role, text) {
+    const msg = document.createElement('div');
+    msg.className = 'claude-msg ' + role;
+    const roleEl = document.createElement('div');
+    roleEl.className = 'role';
+    roleEl.textContent = role;
+    msg.appendChild(roleEl);
+
+    const body = document.createElement('div');
+    body.className = 'body';
+
+    /* Parse fenced code blocks */
+    const parts = text.split(/(^\`\`\`[^\\n]*\\n[\\s\\S]*?^\`\`\`)/gm);
+    for (const part of parts) {
+      const fenceMatch = part.match(/^\`\`\`([^\\n]*)\\n([\\s\\S]*?)^\`\`\`/m);
+      if (fenceMatch) {
+        const lang = fenceMatch[1].trim() || 'text';
+        const code = fenceMatch[2];
+
+        const block = document.createElement('div');
+        block.className = 'claude-code-block';
+
+        const pre = document.createElement('pre');
+        /* Use tokenizer if available for the language */
+        try {
+          const mappedLang = lang === 'javascript' ? 'js' : lang === 'typescript' ? 'ts' : lang === 'markdown' ? 'md' : lang;
+          pre.innerHTML = tokenize(code, mappedLang);
+        } catch {
+          pre.textContent = code;
+        }
+        block.appendChild(pre);
+
+        const actions = document.createElement('div');
+        actions.className = 'claude-code-actions';
+
+        const copyBtn = document.createElement('button');
+        copyBtn.textContent = 'Copy';
+        copyBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(code).catch(() => {});
+          copyBtn.textContent = 'Copied!';
+          setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+        });
+        actions.appendChild(copyBtn);
+
+        const applyBtn = document.createElement('button');
+        applyBtn.textContent = 'Apply';
+        applyBtn.addEventListener('click', () => {
+          if (_editorRef && _editorRef.activeTab) {
+            _editorRef.activeTab.editor.setValue(code);
+            _editorRef.activeTab.modified = true;
+            _editorRef.renderTabs();
+            applyBtn.textContent = 'Applied!';
+            setTimeout(() => { applyBtn.textContent = 'Apply'; }, 1500);
+          }
+        });
+        actions.appendChild(applyBtn);
+
+        block.appendChild(actions);
+        body.appendChild(block);
+      } else if (part.trim()) {
+        const prose = document.createElement('div');
+        prose.innerHTML = renderMarkdown(part);
+        body.appendChild(prose);
+      }
+    }
+
+    msg.appendChild(body);
     this.claudeMsgs.appendChild(msg);
     this.claudeMsgs.scrollTop = this.claudeMsgs.scrollHeight;
   }
@@ -1413,12 +2092,7 @@ class MenuBar {
 
 // ─── Main Init ───
 async function init() {
-  const loaded = await loadCodeMirror();
   document.getElementById('loading-overlay').remove();
-  if (!loaded) {
-    document.body.innerHTML = '<div style="color:#ff6b6b;padding:2em;font-family:monospace">Failed to load CodeMirror from esm.sh. Check your network connection.</div>';
-    return;
-  }
 
   const fileTree = new FileTree(document.getElementById('tree-content'));
   const editor = new EditorManager(document.getElementById('editor-pane'), document.getElementById('tab-bar'));
@@ -1428,6 +2102,11 @@ async function init() {
   const suggestions = new SuggestionsBar(document.getElementById('suggestions-bar'));
   const scaffold = new ScaffoldModal();
   const menuBar = new MenuBar();
+
+  /* Set refs for Claude context gathering */
+  _editorRef = editor;
+  _fileTreeRef = fileTree;
+  _bottomRef = bottom;
 
   /* Wire file tree -> editor */
   fileTree.onFileSelect = async (path) => {
@@ -1470,11 +2149,9 @@ async function init() {
         try { await api.shell.exec('unbecome'); } catch {}
         break;
       }
-      case 'undo': cmCommands.undo(editor.activeTab?.view); break;
-      case 'redo': cmCommands.redo(editor.activeTab?.view); break;
-      case 'find':
-        if (editor.activeTab?.view) cmCommands.openSearchPanel(editor.activeTab.view);
-        break;
+      case 'undo': editor.activeTab?.editor?.undo(); break;
+      case 'redo': editor.activeTab?.editor?.redo(); break;
+      case 'find': editor.activeTab?.editor?.openFind(); break;
       case 'toggle-sidebar': document.getElementById('ide-root').classList.toggle('sidebar-hidden'); break;
       case 'toggle-bottom': bottom.toggle(); break;
       case 'toggle-preview': preview.toggle(); if (preview.isVisible()) preview.reload(); break;
@@ -1580,28 +2257,54 @@ async function init() {
       }
       case 'explain-file': {
         if (!editor.activeTab) break;
-        const content = editor.getActiveContent();
-        const path = editor.activeTab.path;
+        const promptText = 'Explain this file concisely: ' + editor.activeTab.path;
         bottom.switchTab('claude');
         if (bottom.panel.classList.contains('hidden')) bottom.panel.classList.remove('hidden');
-        bottom.addClaudeMsg('user', 'Explain this file: ' + path);
+        bottom.addClaudeMsg('user', promptText);
         bottom.addClaudeMsg('assistant', 'Thinking...');
-        const r = await api.claude.prompt('Explain this file concisely. Path: ' + path + '\\n\\n' + content);
-        bottom.claudeMsgs.lastElementChild?.remove();
-        bottom.addClaudeMsg('assistant', r.stdout || r.stderr || 'No response');
+        const isFirst = !claudeConversationActive;
+        const ctx = isFirst ? gatherContext() : null;
+        try {
+          const r = await api.claude.chat(promptText, ctx, isFirst);
+          claudeConversationActive = true;
+          bottom.claudeMsgs.lastElementChild?.remove();
+          bottom.addClaudeMsgRich('assistant', r.stdout || r.stderr || 'No response');
+        } catch (err) {
+          bottom.claudeMsgs.lastElementChild?.remove();
+          bottom.addClaudeMsg('assistant', 'Error: ' + err.message);
+        }
         break;
       }
       case 'fix-errors': {
         if (!editor.activeTab) break;
-        const content2 = editor.getActiveContent();
-        const path2 = editor.activeTab.path;
+        const promptText2 = 'Find and fix any errors in: ' + editor.activeTab.path;
         bottom.switchTab('claude');
         if (bottom.panel.classList.contains('hidden')) bottom.panel.classList.remove('hidden');
-        bottom.addClaudeMsg('user', 'Fix errors in: ' + path2);
+        bottom.addClaudeMsg('user', promptText2);
         bottom.addClaudeMsg('assistant', 'Thinking...');
-        const r = await api.claude.prompt('Find and fix any errors in this code. Show the corrected version. Path: ' + path2 + '\\n\\n' + content2);
-        bottom.claudeMsgs.lastElementChild?.remove();
-        bottom.addClaudeMsg('assistant', r.stdout || r.stderr || 'No response');
+        const isFirst2 = !claudeConversationActive;
+        const ctx2 = isFirst2 ? gatherContext() : null;
+        try {
+          const r = await api.claude.chat(promptText2, ctx2, isFirst2);
+          claudeConversationActive = true;
+          bottom.claudeMsgs.lastElementChild?.remove();
+          bottom.addClaudeMsgRich('assistant', r.stdout || r.stderr || 'No response');
+          /* Refresh files in case Claude made edits */
+          fileTree.refresh();
+          for (const tab of editor.tabs) {
+            try {
+              const fresh = await api.fs.read(tab.path);
+              if (fresh.content !== undefined && fresh.content !== tab.editor?.getValue()) {
+                tab.editor?.setValue(fresh.content);
+                tab.modified = false;
+                editor.renderTabs();
+              }
+            } catch {}
+          }
+        } catch (err) {
+          bottom.claudeMsgs.lastElementChild?.remove();
+          bottom.addClaudeMsg('assistant', 'Error: ' + err.message);
+        }
         break;
       }
       case 'show-shortcuts': {
@@ -1619,7 +2322,7 @@ async function init() {
       }
       case 'about': {
         bottom.focusTerminal();
-        bottom.appendTerm('Shiro IDE — Browser-native development environment\\nPowered by CodeMirror 6 + Shiro OS', 'stdout');
+        bottom.appendTerm('Shiro IDE — Browser-native development environment\\nPowered by LiteEditor + Shiro OS', 'stdout');
         break;
       }
       default:
@@ -1655,7 +2358,7 @@ async function init() {
     /* Slash key opens menu (when not in an editor or input) */
     if (e.key === '/' && !e.ctrlKey && !e.metaKey) {
       const active = document.activeElement;
-      if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.closest('.cm-editor'))) return;
+      if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return;
       e.preventDefault();
       slashMenu.open();
       return;

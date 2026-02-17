@@ -422,10 +422,16 @@ async function main() {
     return;
   }
 
+  // Pre-hide terminal if we'll enter become/IDE mode (prevents flash)
+  const becomeConfig = getBecomeConfig();
+  const earlyPathname = location.pathname.replace(/\/$/, '');
+  if (becomeConfig || earlyPathname === '/ide') {
+    document.body.classList.add('become-active');
+  }
+
   await terminal.start();
 
   // Check for become mode (app mode) — restore full-screen app if configured
-  const becomeConfig = getBecomeConfig();
   if (becomeConfig) {
     const pathname = location.pathname.replace(/\/$/, '');
     const params = new URLSearchParams(location.search);
@@ -433,20 +439,45 @@ async function main() {
     // ?unbecome escape hatch — clear become config and show terminal
     if (params.has('unbecome')) {
       localStorage.removeItem('shiro-become');
+      document.body.classList.remove('become-active');
       history.replaceState({}, '', '/');
     } else if (pathname === '/' + becomeConfig.slug) {
       // Only re-enter become mode on the slug path, NOT on root /
-      const startResult = await shell.execute(
-        `serve "${becomeConfig.directory}" ${becomeConfig.port}`,
-        () => {}, () => {},
-      );
-      if (startResult === 0) {
-        await activateBecomeMode(becomeConfig);
+      let startResult: number;
+      if (becomeConfig.slug === 'ide') {
+        // IDE needs its own router (API routes), not a basic serve
+        startResult = await shell.execute(
+          `ide "${becomeConfig.directory}"`,
+          () => {}, () => {},
+        );
+        // ide command handles activateBecomeMode internally
       } else {
+        startResult = await shell.execute(
+          `serve "${becomeConfig.directory}" ${becomeConfig.port}`,
+          () => {}, () => {},
+        );
+        if (startResult === 0) {
+          await activateBecomeMode(becomeConfig);
+        }
+      }
+      if (startResult !== 0) {
         // Server failed to start — clear become config and show terminal
         localStorage.removeItem('shiro-become');
+        document.body.classList.remove('become-active');
         console.warn('[shiro] Become mode: server failed to start, falling back to terminal');
       }
+    } else {
+      // Pathname doesn't match slug — show terminal (stale config)
+      document.body.classList.remove('become-active');
+    }
+  }
+
+  // URL-path fallback: visiting /ide directly should auto-launch IDE
+  if (!becomeConfig && earlyPathname === '/ide') {
+    const rc = await shell.execute('ide', () => {}, () => {});
+    if (rc !== 0) {
+      // IDE failed to start — show terminal
+      document.body.classList.remove('become-active');
     }
   }
 

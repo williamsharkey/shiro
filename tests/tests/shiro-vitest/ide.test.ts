@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { createTestShell, run } from './helpers';
 import { Shell } from '@shiro/shell';
 import { FileSystem } from '@shiro/filesystem';
@@ -13,7 +13,7 @@ import type { CommandContext } from '@shiro/commands/index';
  * Tests the IDE API router, scaffold templates, HTML generation, and
  * createRouter utility. The API router is tested directly via
  * createIdeRouter() to avoid needing localStorage/DOM (activateBecomeMode).
- * CodeMirror loading can't be tested in linkedom — that requires a real browser.
+ * LiteEditor DOM interaction can't be tested in linkedom — that requires a real browser.
  */
 
 const TEST_PORT = 5555; // avoid clashing with IDE_PORT=4000
@@ -66,7 +66,7 @@ describe('IDE', () => {
       const ctx = createCtx(shell, fs, ['--help']);
       const code = await ideCmd.exec(ctx);
       expect(code).toBe(0);
-      expect(ctx.stdout).toContain('CodeMirror 6');
+      expect(ctx.stdout).toContain('syntax highlighting');
       expect(ctx.stdout).toContain('Slash menu');
     });
 
@@ -102,11 +102,11 @@ describe('IDE', () => {
       expect(html).toContain('/home/user/myproject');
     });
 
-    it('should include CodeMirror esm.sh imports with ?deps for dedup', () => {
+    it('should include LiteEditor and tokenizer', () => {
       const html = generateIdeHtml('/tmp');
-      expect(html).toContain('esm.sh');
-      expect(html).toContain('@codemirror/state@6');
-      expect(html).toContain('?deps=');
+      expect(html).toContain('LiteEditor');
+      expect(html).toContain('tokenize');
+      expect(html).not.toContain('esm.sh');
     });
 
     it('should include the slash menu structure', () => {
@@ -141,14 +141,16 @@ describe('IDE', () => {
 
     it('should include keyboard shortcut handlers', () => {
       const html = generateIdeHtml('/tmp');
-      expect(html).toContain('Mod-s');
+      expect(html).toContain('onSave');
       expect(html).toContain('toggle-sidebar');
       expect(html).toContain('toggle-bottom');
     });
 
-    it('should include .filter(Boolean) guard on extensions array', () => {
+    it('should include LiteEditor class with undo/redo/find', () => {
       const html = generateIdeHtml('/tmp');
-      expect(html).toContain('.filter(Boolean)');
+      expect(html).toContain('undo()');
+      expect(html).toContain('redo()');
+      expect(html).toContain('openFind()');
     });
 
     it('should include CSS color theme variables', () => {
@@ -163,6 +165,23 @@ describe('IDE', () => {
       expect(html).toContain('data-panel="terminal"');
       expect(html).toContain('data-panel="output"');
       expect(html).toContain('data-panel="claude"');
+    });
+
+    it('should include Claude chat UI elements', () => {
+      const html = generateIdeHtml('/tmp');
+      expect(html).toContain('id="claude-new-btn"');
+      expect(html).toContain('claude-code-block');
+      expect(html).toContain('claude-code-actions');
+      expect(html).toContain('claudeConversationActive');
+      expect(html).toContain('gatherContext');
+      expect(html).toContain('addClaudeMsgRich');
+      expect(html).toContain('renderMarkdown');
+    });
+
+    it('should include api.claude.chat method', () => {
+      const html = generateIdeHtml('/tmp');
+      expect(html).toContain('claude/chat');
+      expect(html).toContain('isFirstMessage');
     });
 
     it('should escape project dir in JSON for JS context', () => {
@@ -399,6 +418,76 @@ describe('IDE', () => {
         await fs.writeFile('/tmp/ide-test.txt', 'line1\nline2\nline3\n');
         const res = await apiCall(TEST_PORT, 'shell/exec', { command: 'cat /tmp/ide-test.txt | wc -l' });
         expect(res.stdout.trim()).toBe('3');
+      });
+    });
+
+    // ── claude/chat route ──
+    // Tests the new multi-turn Claude chat endpoint (command construction only;
+    // actual Claude CLI isn't available in test env, so we verify the route
+    // accepts requests and returns the expected response shape)
+
+    describe('POST /api/claude/chat', () => {
+      it('should accept a first message with context and return response shape', async () => {
+        const res = await apiCall(TEST_PORT, 'claude/chat', {
+          prompt: 'hello',
+          context: {
+            projectDir: '/home/user/test-project',
+            currentFile: { path: '/home/user/test-project/index.html', content: '<h1>Hello</h1>' },
+            openFiles: ['/home/user/test-project/index.html'],
+          },
+          isFirstMessage: true,
+        });
+        // Claude CLI won't be available in test env, so we get stderr or non-zero exit
+        expect(res).toHaveProperty('stdout');
+        expect(res).toHaveProperty('stderr');
+        expect(res).toHaveProperty('exitCode');
+      });
+
+      it('should accept a follow-up message without context', async () => {
+        const res = await apiCall(TEST_PORT, 'claude/chat', {
+          prompt: 'what about this?',
+          context: null,
+          isFirstMessage: false,
+        });
+        expect(res).toHaveProperty('stdout');
+        expect(res).toHaveProperty('stderr');
+        expect(res).toHaveProperty('exitCode');
+      });
+
+      it('should handle empty prompt gracefully', async () => {
+        const res = await apiCall(TEST_PORT, 'claude/chat', {
+          prompt: '',
+          isFirstMessage: true,
+        });
+        expect(res).toHaveProperty('exitCode');
+      });
+
+      it('should handle prompt with single quotes (shell escaping)', async () => {
+        const res = await apiCall(TEST_PORT, 'claude/chat', {
+          prompt: "what's this file's purpose?",
+          isFirstMessage: true,
+          context: { projectDir: '/home/user/test-project' },
+        });
+        // Should not crash — the shell escaping handles single quotes
+        expect(res).toHaveProperty('exitCode');
+      });
+
+      it('should include context fields in first message', async () => {
+        // We can't inspect the actual command string from outside, but we
+        // verify the route processes context without error
+        const res = await apiCall(TEST_PORT, 'claude/chat', {
+          prompt: 'explain',
+          isFirstMessage: true,
+          context: {
+            projectDir: '/home/user/test-project',
+            currentFile: { path: '/home/user/test-project/app.js', content: 'console.log("hi");' },
+            openFiles: ['/home/user/test-project/app.js', '/home/user/test-project/style.css'],
+            gitStatus: 'M app.js',
+            recentTerminal: '$ echo test\ntest',
+          },
+        });
+        expect(res).toHaveProperty('stdout');
+        expect(res).toHaveProperty('stderr');
       });
     });
 
@@ -732,5 +821,234 @@ describe('IDE', () => {
       const res = await apiCall(TEST_PORT, 'fs/read', { path: '/home/user/test-project/main.js' });
       expect(res.content).toBe('console.log("hi");');
     });
+  });
+});
+
+/**
+ * LiteEditor Alignment Tests
+ *
+ * Proves that the textarea (where you type) and the pre (syntax highlight layer)
+ * stay visually aligned. Linkedom can't compute pixel positions, but we prove the
+ * invariants that guarantee alignment:
+ *
+ * 1. Tokenizer preserves every character at its exact offset (no insertions/deletions)
+ * 2. Textarea and pre use identical CSS layout properties (font, size, line-height, etc.)
+ * 3. Scroll position is synced between the two layers
+ *
+ * If all three hold, character at offset N in the textarea is at the same visual
+ * position as character at offset N in the pre — at every scroll position.
+ */
+describe('LiteEditor alignment', () => {
+  let tokenize: (text: string, lang: string) => string;
+
+  beforeAll(() => {
+    const html = generateIdeHtml('/tmp');
+    const script = html.match(/<script type="module">([\s\S]*?)<\/script>/)?.[1] || '';
+
+    // Extract pure tokenizer functions (no DOM deps) from the IDE HTML script
+    const start = script.indexOf('function esc(');
+    const end = script.indexOf('class LiteEditor');
+    if (start < 0 || end < 0) throw new Error('Could not extract tokenizer from IDE HTML');
+    const code = script.substring(start, end);
+    const factory = new Function(code + '\nreturn tokenize;');
+    tokenize = factory() as (text: string, lang: string) => string;
+  });
+
+  /** Strip HTML span tags, then decode entities (&amp; last to avoid double-decode) */
+  function stripHtml(s: string): string {
+    return s
+      .replace(/<[^>]+>/g, '')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&');
+  }
+
+  // ── Invariant 1: Character-exact text preservation per language ──
+
+  it('JS: tokenizer preserves every character', () => {
+    const code = 'const x = 42;\nfunction foo(bar) {\n  return "hello" + bar;\n}\n';
+    expect(stripHtml(tokenize(code, 'js'))).toBe(code);
+  });
+
+  it('TS: tokenizer preserves every character', () => {
+    const code = 'interface Foo {\n  name: string;\n  count: number;\n}\ntype Bar = Foo & { extra: boolean };\n';
+    expect(stripHtml(tokenize(code, 'ts'))).toBe(code);
+  });
+
+  it('CSS: tokenizer preserves every character', () => {
+    const code = '/* comment */\n@media (max-width: 768px) {\n  .foo { color: #ff0; font-size: 14px; }\n}\n';
+    expect(stripHtml(tokenize(code, 'css'))).toBe(code);
+  });
+
+  it('HTML: tokenizer preserves every character', () => {
+    const code = '<!-- comment -->\n<div class="foo" id="bar">\n  <span>text</span>\n</div>\n';
+    expect(stripHtml(tokenize(code, 'html'))).toBe(code);
+  });
+
+  it('JSON: tokenizer preserves every character', () => {
+    const code = '{\n  "name": "test",\n  "count": 42,\n  "active": true,\n  "data": null\n}\n';
+    expect(stripHtml(tokenize(code, 'json'))).toBe(code);
+  });
+
+  it('Markdown: tokenizer preserves every character', () => {
+    const code = '# Heading\n\n**bold** and *italic*\n\n`code` and [link](http://x.com)\n\n```\nfenced\n```\n';
+    expect(stripHtml(tokenize(code, 'md'))).toBe(code);
+  });
+
+  it('plain text: passes through unchanged', () => {
+    const code = 'just some text\nwith multiple\nlines\n';
+    expect(stripHtml(tokenize(code, 'text'))).toBe(code);
+  });
+
+  // ── Special characters that could break alignment ──
+
+  it('preserves < > & in JS comparisons and bitwise ops', () => {
+    const code = 'if (a < b && c > d) { return a & 0xff; }\n';
+    expect(stripHtml(tokenize(code, 'js'))).toBe(code);
+  });
+
+  it('preserves tab characters', () => {
+    const code = 'function f() {\n\treturn\t42;\n}\n';
+    expect(stripHtml(tokenize(code, 'js'))).toBe(code);
+  });
+
+  it('preserves Unicode characters', () => {
+    const code = 'const msg = "\u00e9\u00e8\u00ea \u00fc\u00f6\u00e4 \u2603\u2764";\n';
+    expect(stripHtml(tokenize(code, 'js'))).toBe(code);
+  });
+
+  it('preserves template literals with ${} interpolation', () => {
+    const code = 'const s = `hello ${name} world`;\n';
+    expect(stripHtml(tokenize(code, 'js'))).toBe(code);
+  });
+
+  it('preserves empty lines between code', () => {
+    const code = 'const a = 1;\n\n\nconst b = 2;\n';
+    expect(stripHtml(tokenize(code, 'js'))).toBe(code);
+  });
+
+  it('preserves HTML entities in source text (no double-decode)', () => {
+    const code = 'const s = "&amp; &lt; &gt;";\n';
+    expect(stripHtml(tokenize(code, 'js'))).toBe(code);
+  });
+
+  // ── Character offset alignment (proves any word is at the same position) ──
+
+  it('character offsets of specific words match after tokenization', () => {
+    const code = [
+      'function calculateTotal(items) {',
+      '  let sum = 0;',
+      '  for (const item of items) {',
+      '    sum += item.price;',
+      '  }',
+      '  return sum;',
+      '}',
+      '',
+    ].join('\n');
+    const stripped = stripHtml(tokenize(code, 'js'));
+
+    for (const word of ['calculateTotal', 'items', 'sum', 'price', 'return']) {
+      const srcIdx = code.indexOf(word);
+      const hitIdx = stripped.indexOf(word);
+      expect(hitIdx).toBe(srcIdx);
+    }
+  });
+
+  // ── Large multi-page documents ──
+
+  it('500-line JS file: every character preserved', () => {
+    let code = '';
+    for (let i = 0; i < 500; i++) {
+      code += 'const val' + i + ' = ' + (i * 3.14).toFixed(2) + '; // comment ' + i + '\n';
+      if (i % 10 === 0) code += 'function fn' + i + '(a, b) { return a + b; }\n';
+      if (i % 25 === 0) code += '/* multi\n   line\n   comment */\n';
+      if (i % 50 === 0) code += 'const s' + i + ' = "text ' + i + '";\n';
+    }
+    expect(stripHtml(tokenize(code, 'js'))).toBe(code);
+  });
+
+  it('300-line doc: word offsets match at start, middle, and end (scroll regions)', () => {
+    let code = '';
+    for (let i = 0; i < 300; i++) {
+      code += 'const variable_' + i + ' = ' + i + ';\n';
+    }
+    const stripped = stripHtml(tokenize(code, 'js'));
+
+    // Start region (top of viewport)
+    expect(stripped.indexOf('variable_5')).toBe(code.indexOf('variable_5'));
+    // Middle region (after scrolling ~50%)
+    expect(stripped.indexOf('variable_150')).toBe(code.indexOf('variable_150'));
+    // End region (after scrolling to bottom)
+    expect(stripped.indexOf('variable_295')).toBe(code.indexOf('variable_295'));
+    // Line count preserved (same vertical extent)
+    expect(stripped.split('\n').length).toBe(code.split('\n').length);
+  });
+
+  // ── Invariant 2: CSS layout properties match (same font/size/spacing = same pixel positions) ──
+
+  it('textarea and pre/code share identical font, size, line-height, padding, white-space, tab-size', () => {
+    const html = generateIdeHtml('/tmp');
+    const textareaCSS = html.match(/\.lite-textarea\s*\{([^}]+)\}/)?.[1] || '';
+    const codeCSS = html.match(/\.lite-highlight code\s*\{([^}]+)\}/)?.[1] || '';
+
+    for (const prop of ['font-size: 13px', 'line-height: 1.6', 'padding: 0 8px', 'white-space: pre', 'tab-size: 2']) {
+      expect(textareaCSS).toContain(prop);
+      expect(codeCSS).toContain(prop);
+    }
+    // Same font variable
+    expect(textareaCSS).toContain('var(--font)');
+    expect(codeCSS).toContain('var(--font)');
+  });
+
+  // ── Invariant 3: Scroll sync (positions stay aligned after scrolling) ──
+
+  it('scroll handler copies scrollTop and scrollLeft from textarea to pre', () => {
+    const html = generateIdeHtml('/tmp');
+    expect(html).toContain('this.pre.scrollTop = this.textarea.scrollTop');
+    expect(html).toContain('this.pre.scrollLeft = this.textarea.scrollLeft');
+  });
+
+  it('gutter syncs with textarea scroll via translateY', () => {
+    const html = generateIdeHtml('/tmp');
+    expect(html).toContain('this.gutter.style.transform');
+    expect(html).toContain('translateY(');
+  });
+
+  it('_highlight sets code minHeight to textarea scrollHeight (prevents bottom desync)', () => {
+    const html = generateIdeHtml('/tmp');
+    expect(html).toContain('this.code.style.minHeight');
+    expect(html).toContain('this.textarea.scrollHeight');
+  });
+
+  // ── Tokenizer correctness (right spans for right tokens) ──
+
+  it('keywords get tok-keyword class', () => {
+    const html = tokenize('const x = 1;', 'js');
+    expect(html).toContain('tok-keyword');
+    expect(html).toContain('>const<');
+  });
+
+  it('strings get tok-string class', () => {
+    const html = tokenize('const s = "hello";', 'js');
+    expect(html).toContain('tok-string');
+    expect(html).toContain('>"hello"<');
+  });
+
+  it('comments get tok-comment class', () => {
+    const html = tokenize('// todo\nconst x = 1;', 'js');
+    expect(html).toContain('tok-comment');
+    expect(html).toContain('// todo');
+  });
+
+  it('numbers get tok-number class', () => {
+    const html = tokenize('const x = 3.14;', 'js');
+    expect(html).toContain('tok-number');
+    expect(html).toContain('>3.14<');
+  });
+
+  it('function names get tok-func class', () => {
+    const html = tokenize('foo(42)', 'js');
+    expect(html).toContain('tok-func');
+    expect(html).toContain('>foo<');
   });
 });

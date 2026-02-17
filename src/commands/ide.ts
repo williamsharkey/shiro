@@ -1,5 +1,5 @@
 // ide.ts — IDE command: launches a full visual development environment
-// Uses CodeMirror 6 (loaded from esm.sh CDN) in a become-mode iframe
+// Uses LiteEditor (zero-dependency textarea-based editor) in a become-mode iframe
 
 import { Command, CommandContext } from './index';
 import { createRouter, iframeServer } from '../iframe-server';
@@ -342,7 +342,7 @@ export function createIdeRouter(fs: FileSystem, shell: Shell, projectDir: string
     return { status: 200, body: JSON.stringify({ stdout, stderr, exitCode }), headers: JSON_HDR };
   });
 
-  // ── Claude route ──
+  // ── Claude routes ──
   router.post('/api/claude/prompt', async (req) => {
     const { prompt } = parseBody(req);
     let stdout = '', stderr = '';
@@ -351,6 +351,38 @@ export function createIdeRouter(fs: FileSystem, shell: Shell, projectDir: string
       `claude -p '${escaped}'`,
       (d: string) => { stdout += d; }, (d: string) => { stderr += d; },
     );
+    return { status: 200, body: JSON.stringify({ stdout, stderr, exitCode }), headers: JSON_HDR };
+  });
+
+  router.post('/api/claude/chat', async (req) => {
+    const { prompt, context, isFirstMessage } = parseBody(req);
+    let stdout = '', stderr = '';
+
+    // Build prompt with IDE context on first message
+    let fullPrompt = prompt || '';
+    if (isFirstMessage && context) {
+      let preamble = 'You are an AI assistant in Shiro IDE, a browser-native development environment.\n';
+      preamble += 'Project directory: ' + (context.projectDir || projectDir) + '\n';
+      if (context.currentFile) {
+        preamble += '\nCurrently editing: ' + context.currentFile.path + '\n';
+        preamble += '```\n' + context.currentFile.content + '\n```\n';
+      }
+      if (context.openFiles?.length)
+        preamble += '\nOpen files: ' + context.openFiles.join(', ') + '\n';
+      if (context.gitStatus)
+        preamble += '\nGit status:\n' + context.gitStatus + '\n';
+      if (context.recentTerminal)
+        preamble += '\nRecent terminal output:\n' + context.recentTerminal + '\n';
+      fullPrompt = preamble + '\n---\nUser: ' + prompt;
+    }
+
+    const escaped = fullPrompt.replace(/'/g, "'\\''");
+    const flags = '--dangerously-skip-permissions';
+    const continueFlag = isFirstMessage ? '' : '--continue ';
+    const cmd = `cd "${projectDir}" && claude ${continueFlag}-p ${flags} '${escaped}'`;
+
+    const exitCode = await shell.execute(cmd,
+      (d: string) => { stdout += d; }, (d: string) => { stderr += d; });
     return { status: 200, body: JSON.stringify({ stdout, stderr, exitCode }), headers: JSON_HDR };
   });
 
@@ -388,7 +420,7 @@ export function createIdeRouter(fs: FileSystem, shell: Shell, projectDir: string
 
 export const ideCmd: Command = {
   name: 'ide',
-  description: 'Launch visual IDE (CodeMirror 6)',
+  description: 'Launch visual IDE',
 
   async exec(ctx: CommandContext): Promise<number> {
     const args = ctx.args;
@@ -399,7 +431,7 @@ export const ideCmd: Command = {
 
   The IDE provides:
     - File tree with git status indicators
-    - Multi-tab editor (CodeMirror 6)
+    - Multi-tab editor with syntax highlighting
     - Slash menu (/) for quick commands
     - Integrated terminal, output panel, Claude chat
     - Live preview for HTML projects
