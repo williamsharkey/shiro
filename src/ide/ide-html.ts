@@ -139,7 +139,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 }
 .tree-item:hover { background: var(--border); }
 .tree-item.selected { background: var(--accent-dim); color: #fff; }
-.tree-item .icon { min-width: 32px; text-align: left; font-size: 12px; flex-shrink: 0; }
+.tree-item .icon { text-align: center; font-size: 12px; flex-shrink: 0; padding-right: 0.1em; }
 .tree-item .name { overflow: hidden; text-overflow: ellipsis; flex: 1; }
 .tree-item .git-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
 .tree-item .git-dot.modified { background: var(--yellow); }
