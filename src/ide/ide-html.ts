@@ -269,9 +269,8 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   padding: 0 8px;
   white-space: pre;
   tab-size: 2;
-  color: rgba(255,255,255,0.5);
-  caret-color: #e0e0e0;
-  mix-blend-mode: multiply;
+  color: transparent;
+  caret-color: #fff;
   z-index: 1;
   -webkit-text-fill-color: transparent;
 }
@@ -1281,9 +1280,9 @@ function fileIcon(name, isDir) {
   if (isDir) return '\\ud83d\\udcc1';
   const ext = name.split('.').pop()?.toLowerCase();
   const icons = {
-    js: '\\ud83d\\udfe8', ts: '\\ud83d\\udfe6', jsx: '\\u269b\\ufe0f', tsx: '\\u269b\\ufe0f',
-    html: '\\ud83c\\udf10', htm: '\\ud83c\\udf10', css: '\\ud83c\\udfa8', json: '\\ud83d\\udccb',
-    md: '\\ud83d\\udcdd', svg: '\\ud83d\\uddbc\\ufe0f', png: '\\ud83d\\uddbc\\ufe0f', jpg: '\\ud83d\\uddbc\\ufe0f',
+    js: '\\ud83d\\udfe8', ts: '\\ud83d\\udd37', jsx: '\\u269b\\ufe0f', tsx: '\\u269b\\ufe0f',
+    html: '\\ud83c\\udf10', htm: '\\ud83c\\udf10', css: '\\ud83d\\udc8e', json: '\\ud83d\\udccb',
+    md: '\\u24c2\\ufe0f', svg: '\\ud83d\\uddbc\\ufe0f', png: '\\ud83d\\uddbc\\ufe0f', jpg: '\\ud83d\\uddbc\\ufe0f',
     gif: '\\ud83d\\uddbc\\ufe0f', sh: '\\ud83d\\udcdc', txt: '\\ud83d\\udcc4', toml: '\\u2699\\ufe0f',
     yaml: '\\u2699\\ufe0f', yml: '\\u2699\\ufe0f', lock: '\\ud83d\\udd12',
   };
@@ -1332,7 +1331,7 @@ class FileTree {
       const arrow = isDir ? (isOpen ? '\\u25be ' : '\\u25b8 ') : '  ';
 
       el.innerHTML =
-        '<span class="icon">' + arrow + fileIcon(entry.name, isDir) + '</span>' +
+        '<span class="icon">' + arrow + fileIcon(entry.name, isDir) + ' </span>' +
         '<span class="name">' + entry.name + '</span>' +
         (this.gitStatus[fullPath] ? '<span class="git-dot ' + this.gitStatus[fullPath] + '"></span>' : '');
 
