@@ -1281,7 +1281,7 @@ function fileIcon(name, isDir) {
   const ext = name.split('.').pop()?.toLowerCase();
   const icons = {
     js: '\\ud83d\\udfe8', ts: '\\ud83d\\udd37', jsx: '\\u269b\\ufe0f', tsx: '\\u269b\\ufe0f',
-    html: '\\ud83c\\udf10', htm: '\\ud83c\\udf10', css: '\\ud83d\\udc8e', json: '\\ud83d\\udccb',
+    html: '\\ud83c\\udf10', htm: '\\ud83c\\udf10', css: '\\ud83d\\udc8e', json: '\\u24bf',
     md: '\\u24c2\\ufe0f', svg: '\\ud83d\\uddbc\\ufe0f', png: '\\ud83d\\uddbc\\ufe0f', jpg: '\\ud83d\\uddbc\\ufe0f',
     gif: '\\ud83d\\uddbc\\ufe0f', sh: '\\ud83d\\udcdc', txt: '\\ud83d\\udcc4', toml: '\\u2699\\ufe0f',
     yaml: '\\u2699\\ufe0f', yml: '\\u2699\\ufe0f', lock: '\\ud83d\\udd12',
