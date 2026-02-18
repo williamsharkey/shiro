@@ -330,8 +330,8 @@
     <h1>Shiro</h1>
     <p class="subtitle">
       A static HTML file that boots into something resembling a Unix
-      shell.<label for="sn-size" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-size" class="margin-toggle"/><span class="sidenote">~350 KB gzipped. All JavaScript and CSS are inlined into a single document&thinsp;&mdash;&thinsp;no external assets, no CDN, no build artifacts to coordinate.</span>
-      It has pipes, redirects, a persistent filesystem, and about 150 commands&thinsp;&mdash;&thinsp;just
+      shell.<label for="sn-size" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-size" class="margin-toggle"/><span class="sidenote">~420 KB gzipped. All JavaScript and CSS are inlined into a single document&thinsp;&mdash;&thinsp;no external assets, no CDN, no build artifacts to coordinate.</span>
+      It has pipes, redirects, a persistent filesystem, and over 200 commands&thinsp;&mdash;&thinsp;just
       enough to be useful, not enough to fool anyone into thinking it's a real
       operating system.
     </p>
@@ -341,6 +341,9 @@
       The idea was to shim enough of Node.js and enough of the standard
       tools that an AI coding agent could work inside a browser tab: reading files, making edits,
       searching code, serving apps. It mostly works.
+    </p>
+    <p class="subtitle" style="margin-bottom: 6px">
+      If you'd rather just use it: <a href="/">shiro.computer</a>.
     </p>
 
     <div id="engine-status" class="status">loading shiro&hellip;</div>
@@ -408,7 +411,7 @@
       a pure-JavaScript implementation. Local operations&thinsp;&mdash;&thinsp;init, add, commit,
       diff, log, branch&thinsp;&mdash;&thinsp;need no server at all. Cloning from GitHub requires a CORS proxy,
       since browsers can't make cross-origin git HTTP requests
-      directly.<label for="sn-proxy" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-proxy" class="margin-toggle"/><span class="sidenote">The production server at shiro.computer is about 200 lines of Node.js. It serves the static file and proxies three routes: the Anthropic API, git HTTPS, and WebRTC signaling. That's the entire backend.</span></p>
+      directly.<label for="sn-proxy" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-proxy" class="margin-toggle"/><span class="sidenote">The production server at shiro.computer is about 400 lines of Node.js. It serves the static file and proxies API routes (Anthropic, GitHub, OAuth), handles WebRTC signaling, git CORS, and a WebSocket relay for encrypted group networking.</span></p>
     </section>
 
     <!-- Demo 5: Serve a page -->
@@ -579,8 +582,7 @@
     <!-- Rough edges -->
     <section class="info-section">
       <h2>Rough edges</h2>
-      <p>Editors like vi and nano are registered as commands but haven't been
-      seriously tested. Shell scripting handles basic constructs, not the
+      <p>Shell scripting handles basic constructs, not the
       full POSIX specification. npm installs real packages from the registry,
       but anything requiring native compilation won't work. There's no process
       isolation&thinsp;&mdash;&thinsp;everything runs in the main
