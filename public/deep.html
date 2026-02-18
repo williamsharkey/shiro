@@ -1,0 +1,1692 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shiro — Deep Dive</title>
+  <meta name="description" content="All 11 interactive demos: pipes, files, git, serve, page interaction, vi, nano, IDE, seed GIF, and more. The full technical walkthrough of Shiro.">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { font-size: 15px; }
+
+    body {
+      background: #fffff8;
+      color: #111;
+      font-family: et-book, Palatino, 'Palatino Linotype', 'Palatino LT STD',
+                   'Book Antiqua', Georgia, serif;
+      line-height: 1.8;
+      -webkit-font-smoothing: antialiased;
+      counter-reset: sidenote-counter;
+    }
+
+    article {
+      width: 87.5%;
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 48px 0 80px;
+    }
+
+    a { color: #3b6e8f; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .back {
+      display: inline-block;
+      margin-bottom: 32px;
+      font-size: 0.85rem;
+      color: #999;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+    .back:hover { color: #666; text-decoration: none; }
+
+    h1 {
+      font-size: 2.4rem;
+      font-weight: 400;
+      margin-bottom: 8px;
+      line-height: 1.15;
+    }
+
+    .subtitle {
+      font-size: 1.1rem;
+      line-height: 1.7;
+      color: #333;
+      width: 55%;
+      margin-bottom: 6px;
+    }
+
+    .status {
+      font-size: 0.72rem;
+      font-family: 'SF Mono', Consolas, 'Liberation Mono', monospace;
+      color: #bbb;
+      margin-bottom: 48px;
+    }
+    .status.ready { color: #3fb950; }
+    .status.error { color: #d32f2f; }
+
+    /* Body text — Tufte 55% column */
+    p { margin-bottom: 1.4rem; }
+    section > p, .info-section > p { width: 55%; }
+
+    /* Sidenotes */
+    .sidenote-number {
+      counter-increment: sidenote-counter;
+    }
+    .sidenote-number:after {
+      content: counter(sidenote-counter);
+      font-size: 0.55rem;
+      top: -0.5rem;
+      position: relative;
+      vertical-align: baseline;
+    }
+    .sidenote:before {
+      content: counter(sidenote-counter) "\00a0 ";
+      font-size: 0.55rem;
+      top: -0.5rem;
+      position: relative;
+    }
+    .sidenote {
+      float: right;
+      clear: right;
+      margin-right: -60%;
+      width: 50%;
+      margin-top: 0.3rem;
+      margin-bottom: 1rem;
+      font-size: 0.8rem;
+      line-height: 1.4;
+      color: #666;
+      vertical-align: baseline;
+      position: relative;
+    }
+    input.margin-toggle { display: none; }
+    label.sidenote-number { cursor: default; }
+    label.margin-toggle:not(.sidenote-number) { display: none; }
+
+    /* Section headings */
+    section h2, .info-section h2 {
+      font-size: 1.3rem;
+      font-weight: 400;
+      font-style: italic;
+      margin-top: 2.5rem;
+      margin-bottom: 0.5rem;
+    }
+
+    code {
+      font-family: 'SF Mono', Consolas, 'Liberation Mono', monospace;
+      font-size: 0.85em;
+      background: #f0f0e8;
+      padding: 1px 5px;
+      border-radius: 2px;
+    }
+
+    /* Sections */
+    section { margin-bottom: 36px; }
+    .info-section { margin-top: 48px; margin-bottom: 36px; }
+    .info-section p {
+      font-size: 0.95rem;
+      color: #333;
+    }
+    .info-section code { font-size: 0.84em; }
+
+    /* Caption bar */
+    .demo-caption {
+      display: flex;
+      align-items: center;
+      height: 24px;
+      opacity: 0;
+      transition: opacity 0.4s ease;
+      pointer-events: none;
+      margin-bottom: 4px;
+    }
+    .demo-caption.visible { opacity: 1; pointer-events: auto; }
+    .demo-caption .cap-title {
+      font-size: 0.78rem;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      color: #888;
+      font-weight: 600;
+    }
+    .demo-caption .cap-desc {
+      font-size: 0.74rem;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      color: #bbb;
+      margin-left: 6px;
+    }
+    .demo-caption .cap-replay {
+      margin-left: auto;
+      background: none;
+      border: 1px solid #ddd;
+      border-radius: 3px;
+      padding: 1px 8px;
+      font-size: 0.65rem;
+      color: #aaa;
+      cursor: pointer;
+      font-family: 'SF Mono', Consolas, monospace;
+      transition: all 0.15s;
+    }
+    .demo-caption .cap-replay:hover { border-color: #999; color: #666; }
+
+    /* Demo slot */
+    .demo-slot {
+      height: 320px;
+      border-radius: 6px;
+      overflow: hidden;
+      background: #1a1a2e;
+      position: relative;
+    }
+    .demo-slot iframe { width: 100%; height: 100%; border: none; display: block; }
+    .demo-slot-tall { height: 560px; }
+
+    /* Overlay */
+    .demo-overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      background: rgba(15, 15, 30, 0.88);
+      z-index: 2;
+      cursor: pointer;
+      transition: opacity 0.35s ease;
+    }
+    .demo-overlay.hidden { opacity: 0; pointer-events: none; }
+    .demo-overlay h2 {
+      font-size: 1.5rem;
+      font-weight: 400;
+      color: #c8c8e0;
+      font-style: normal;
+      font-family: et-book, Palatino, 'Palatino Linotype', 'Book Antiqua', Georgia, serif;
+      margin-bottom: 6px;
+      letter-spacing: 0.01em;
+    }
+    .demo-overlay .overlay-desc {
+      font-size: 0.82rem;
+      color: #6b6b8a;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      margin-bottom: 20px;
+      text-align: center;
+      max-width: 320px;
+      line-height: 1.4;
+    }
+    .demo-play-btn {
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      border: 2px solid rgba(200, 200, 224, 0.3);
+      background: rgba(200, 200, 224, 0.08);
+      color: #c8c8e0;
+      font-size: 1.3rem;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+      padding-left: 3px;
+    }
+    .demo-play-btn:hover {
+      background: rgba(200, 200, 224, 0.18);
+      border-color: rgba(200, 200, 224, 0.5);
+      transform: scale(1.08);
+    }
+    .demo-play-btn.loading {
+      font-size: 0.65rem;
+      font-family: 'SF Mono', Consolas, monospace;
+      padding-left: 0;
+    }
+
+    /* Preview pane (serve demo) */
+    .preview {
+      border: 1px solid #ddd;
+      border-radius: 0 0 6px 6px;
+      margin-top: -8px;
+      overflow: hidden;
+      background: #fff;
+      position: relative;
+    }
+    .preview iframe { width: 100%; height: 260px; border: none; display: block; }
+    .preview-label {
+      font-size: 0.62rem;
+      font-family: 'SF Mono', monospace;
+      color: #bbb;
+      padding: 3px 12px;
+      background: #f8f8f2;
+      border-bottom: 1px solid #eee;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .preview-overlay {
+      position: absolute;
+      inset: 0;
+      top: 22px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.85);
+      z-index: 2;
+      transition: opacity 0.35s ease;
+    }
+    .preview-overlay.hidden { opacity: 0; pointer-events: none; }
+    .preview-overlay span {
+      font-size: 0.82rem;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      color: #bbb;
+    }
+
+    /* Proxy list */
+    .proxy-list { width: 55%; margin-bottom: 1.4rem; padding-left: 0; list-style: none; }
+    .proxy-list li {
+      margin-bottom: 0.8rem;
+      font-size: 0.95rem;
+      color: #333;
+    }
+    .proxy-list li strong {
+      font-weight: 600;
+      font-size: 0.9rem;
+    }
+
+    /* Footer */
+    footer {
+      margin-top: 72px;
+      padding-top: 20px;
+      border-top: 1px solid #e0e0d8;
+      font-size: 0.82rem;
+      color: #999;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+    footer .links { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 10px; }
+    footer a { color: #999; }
+    footer a:hover { color: #666; }
+
+    @media (max-width: 760px) {
+      article { width: 92%; padding: 28px 0 60px; }
+      h1 { font-size: 1.8rem; }
+      .subtitle, section > p, .info-section > p, .proxy-list { width: 100%; }
+      .sidenote {
+        display: none;
+      }
+      .margin-toggle:checked + .sidenote {
+        display: block;
+        float: left;
+        clear: both;
+        width: 95%;
+        margin: 0.5rem 2.5% 0.5rem 2.5%;
+        padding: 8px 0;
+        border-top: 1px solid #e8e8e0;
+      }
+      label.margin-toggle:not(.sidenote-number) {
+        display: inline;
+        color: #3b6e8f;
+        cursor: pointer;
+      }
+      .demo-slot { height: 280px; }
+      .demo-overlay h2 { font-size: 1.25rem; }
+      .demo-play-btn { width: 48px; height: 48px; font-size: 1.1rem; }
+    }
+  </style>
+</head>
+<body>
+  <article>
+    <a href="/" class="back">&larr; shiro.computer</a>
+
+    <h1>Shiro</h1>
+    <p class="subtitle">
+      A static HTML file that boots into something resembling a Unix
+      shell.<label for="sn-size" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-size" class="margin-toggle"/><span class="sidenote">~420 KB gzipped. All JavaScript and CSS are inlined into a single document&thinsp;&mdash;&thinsp;no external assets, no CDN, no build artifacts to coordinate.</span>
+      It has pipes, redirects, a persistent filesystem, and over 200 commands&thinsp;&mdash;&thinsp;just
+      enough to be useful, not enough to fool anyone into thinking it's a real
+      operating system.
+    </p>
+    <p class="subtitle" style="margin-bottom: 6px">
+      Everything runs client-side. The shell, filesystem, editors, git, and
+      npm are all JavaScript running in your browser&thinsp;&mdash;&thinsp;the
+      page works with no server at all. But certain features need a network
+      path: Claude Code calls the Anthropic API, <code>git clone</code> fetches
+      remote repos, and <code>npm install</code> downloads packages. Those
+      requests route through a CORS proxy on shiro.computer because browsers
+      block direct cross-origin calls.
+    </p>
+    <p class="subtitle" style="margin-bottom: 6px">
+      It exists primarily as a host for
+      <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a>.
+      The idea was to shim enough of Node.js and enough of the standard
+      tools that an AI coding agent could work inside a browser tab: reading files, making edits,
+      searching code, serving apps. It mostly works.
+    </p>
+    <p class="subtitle" style="margin-bottom: 6px; color: #856404; background: #fff3cd; border: 1px solid #ffeeba; border-radius: 4px; padding: 12px 16px; width: 55%;">
+      <strong>Experimental.</strong> Claude Code runs with
+      <code>--dangerously-skip-permissions</code>&thinsp;&mdash;&thinsp;every
+      tool call is auto-approved with no confirmation. Because API requests
+      pass through the CORS proxy, your Anthropic credentials transit an
+      intermediary. Do not use this with sensitive data, secrets, or anything
+      you wouldn't paste into a public terminal. Performance is unreliable;
+      shims break in unexpected ways. Treat this as a demo, not a production
+      environment.
+    </p>
+    <p class="subtitle" style="margin-bottom: 6px">
+      If you'd rather just try it: <a href="/">shiro.computer</a>.
+    </p>
+
+    <div id="engine-status" class="status">loading shiro&hellip;</div>
+
+    <!-- Demo 1: Pipes -->
+    <section id="demo-pipes">
+      <div class="demo-caption"><span class="cap-title">Pipes</span><span class="cap-desc">pipes, redirects, and shell plumbing</span><button class="cap-replay" onclick="demos.pipes.reset();demos.pipes.play()">&#8635; replay</button></div>
+      <div class="demo-slot">
+        <div class="demo-overlay" onclick="demos.pipes.play()">
+          <h2>Pipes</h2>
+          <p class="overlay-desc">Pipes, redirects, and the usual shell plumbing.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Demo 2: Files -->
+    <section id="demo-files">
+      <div class="demo-caption"><span class="cap-title">Files persist</span><span class="cap-desc">stored in IndexedDB, survives reloads</span><button class="cap-replay" onclick="demos.files.reset();demos.files.play()">&#8635; replay</button></div>
+      <div class="demo-slot">
+        <div class="demo-overlay" onclick="demos.files.play()">
+          <h2>Files persist</h2>
+          <p class="overlay-desc">Stored in IndexedDB. Survives page reloads.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="info-section" style="margin-top: 24px">
+      <p>The commands above are JavaScript reimplementations. The filesystem is
+      IndexedDB wearing a POSIX
+      costume.<label for="sn-posix" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-posix" class="margin-toggle"/><span class="sidenote">stat, readdir, readFile, writeFile, mkdir, symlink, chmod, glob&thinsp;&mdash;&thinsp;enough of the POSIX surface that isomorphic-git and npm can work against it without modification.</span>
+      Files survive page reloads, and each subdomain
+      (<code>app.shiro.computer</code>, <code>game.shiro.computer</code>)
+      gets its own isolated storage courtesy of the browser's same-origin policy.</p>
+    </section>
+
+    <!-- Demo 3: Text tools -->
+    <section id="demo-text">
+      <div class="demo-caption"><span class="cap-title">Text tools</span><span class="cap-desc">grep, sort, cut, awk</span><button class="cap-replay" onclick="demos.text.reset();demos.text.play()">&#8635; replay</button></div>
+      <div class="demo-slot">
+        <div class="demo-overlay" onclick="demos.text.play()">
+          <h2>Text tools</h2>
+          <p class="overlay-desc">grep, sort, cut, awk &mdash; the standard toolkit.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Demo 4: Git -->
+    <section id="demo-git">
+      <div class="demo-caption"><span class="cap-title">Git</span><span class="cap-desc">local repository operations via isomorphic-git</span><button class="cap-replay" onclick="demos.git.reset();demos.git.play()">&#8635; replay</button></div>
+      <div class="demo-slot">
+        <div class="demo-overlay" onclick="demos.git.play()">
+          <h2>Git</h2>
+          <p class="overlay-desc">Local repository operations via isomorphic-git.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="info-section" style="margin-top: 24px">
+      <p>Git operations use
+      <a href="https://isomorphic-git.org/">isomorphic-git</a>,
+      a pure-JavaScript implementation. Local operations&thinsp;&mdash;&thinsp;init, add, commit,
+      diff, log, branch&thinsp;&mdash;&thinsp;need no server at all. Cloning from GitHub requires a CORS proxy,
+      since browsers can't make cross-origin git HTTP requests
+      directly.<label for="sn-proxy" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-proxy" class="margin-toggle"/><span class="sidenote">The production server at shiro.computer is about 400 lines of Node.js. It serves the static file and proxies API routes (Anthropic, GitHub, OAuth), handles WebRTC signaling, git CORS, and a WebSocket relay for encrypted group networking.</span></p>
+    </section>
+
+    <!-- Demo 5: Serve a page -->
+    <section id="demo-page">
+      <div class="demo-caption"><span class="cap-title">Serve a page</span><span class="cap-desc">write HTML, serve it, edit in place</span><button class="cap-replay" onclick="demos.page.reset();demos.page.play()">&#8635; replay</button></div>
+      <div class="demo-slot" style="border-radius:6px 6px 0 0;margin-bottom:0">
+        <div class="demo-overlay" onclick="demos.page.play()">
+          <h2>Serve a page</h2>
+          <p class="overlay-desc">Write HTML, serve it, edit in place.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
+      </div>
+      <div class="preview">
+        <div class="preview-label">preview</div>
+        <iframe id="preview-page"></iframe>
+        <div class="preview-overlay"><span>appears when demo runs</span></div>
+      </div>
+    </section>
+
+    <section class="info-section" style="margin-top: 24px">
+      <p>Web applications are served inside the browser using virtual servers
+      that intercept fetch requests. No actual HTTP server is involved.
+      The <code>page</code> command lets you interact with served apps
+      programmatically&thinsp;&mdash;&thinsp;clicking buttons, reading text, evaluating
+      JavaScript&thinsp;&mdash;&thinsp;which is how Claude Code tests the things it builds.</p>
+    </section>
+
+    <!-- Demo 6: Interact with an app -->
+    <section id="demo-interact">
+      <div class="demo-caption"><span class="cap-title">Interact with an app</span><span class="cap-desc">page command, click &amp; read DOM, then commit</span><button class="cap-replay" onclick="demos.interact.reset();demos.interact.play()">&#8635; replay</button></div>
+      <div class="demo-slot demo-slot-tall">
+        <div class="demo-overlay" onclick="demos.interact.play()">
+          <h2>Interact with an app</h2>
+          <p class="overlay-desc">Serve an app, use <code style="color:#8b8bab;background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:3px">page</code> to click and read DOM elements, then commit.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Demo: Vi -->
+    <section id="demo-vi">
+      <div class="demo-caption"><span class="cap-title">Vi editor</span><span class="cap-desc">create, edit, search, and serve — all from vi</span><button class="cap-replay" onclick="demos.vi.reset();demos.vi.play()">&#8635; replay</button></div>
+      <div class="demo-slot demo-slot-tall">
+        <div class="demo-overlay" onclick="demos.vi.play()">
+          <h2>Vi editor</h2>
+          <p class="overlay-desc">Create a file with vi, edit it, serve it.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Demo: Nano -->
+    <section id="demo-nano">
+      <div class="demo-caption"><span class="cap-title">Nano editor</span><span class="cap-desc">cut, paste, search, save with Ctrl shortcuts</span><button class="cap-replay" onclick="demos.nano.reset();demos.nano.play()">&#8635; replay</button></div>
+      <div class="demo-slot demo-slot-tall">
+        <div class="demo-overlay" onclick="demos.nano.play()">
+          <h2>Nano editor</h2>
+          <p class="overlay-desc">Edit files with nano. Cut, paste, search, save.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="info-section" style="margin-top: 24px">
+      <h2>Advanced workflow</h2>
+      <p>The <code>hc</code> command navigates DOM trees with a token-efficient
+      shorthand.<label for="sn-hc" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-hc" class="margin-toggle"/><span class="sidenote">Hypercompact: <code>hc open</code> parses HTML from disk, <code>hc q</code> runs CSS selectors, <code>hc look</code> lists interactive elements. Designed for LLM agents that need to inspect pages without rendering them.</span>
+      Combined with <code>page input</code>, <code>page eval</code>, and
+      <code>grep -rn</code>, you get a full CLI-driven development loop:
+      build a multi-file project, serve it, interact with it through the DOM,
+      search the codebase, and commit&thinsp;&mdash;&thinsp;without leaving the terminal.</p>
+    </section>
+
+    <!-- Demo 7: Advanced -->
+    <section id="demo-advanced">
+      <div class="demo-caption"><span class="cap-title">Advanced</span><span class="cap-desc">hc, page input/eval, grep -rn, multi-file project</span><button class="cap-replay" onclick="demos.advanced.reset();demos.advanced.play()">&#8635; replay</button></div>
+      <div class="demo-slot demo-slot-tall">
+        <div class="demo-overlay" onclick="demos.advanced.play()">
+          <h2>Advanced workflow</h2>
+          <p class="overlay-desc">Build a todo app, serve it, interact with the DOM, search code, commit.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="info-section" style="margin-top: 24px">
+      <h2>IDE</h2>
+      <p>The <code>ide</code> command opens a visual development
+      environment.<label for="sn-ide" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-ide" class="margin-toggle"/><span class="sidenote">LiteEditor is a zero-dependency textarea-based editor with syntax highlighting for JavaScript, TypeScript, CSS, HTML, JSON, and Markdown. The two layers&thinsp;&mdash;&thinsp;a transparent textarea on top, a highlighted pre below&thinsp;&mdash;&thinsp;are kept in pixel-perfect alignment by matching all font and spacing properties.</span>
+      File tree, multi-tab editor with syntax highlighting, live
+      preview, integrated terminal, git status, and a Claude chat panel.
+      Everything runs through the same virtual filesystem&thinsp;&mdash;&thinsp;the IDE is
+      just another way to look at the same files.</p>
+    </section>
+
+    <!-- Demo 8: IDE -->
+    <section id="demo-ide">
+      <div class="demo-caption"><span class="cap-title">IDE</span><span class="cap-desc">visual development environment</span><button class="cap-replay" onclick="demos.ide.reset();demos.ide.play()">&#8635; replay</button></div>
+      <div class="demo-slot demo-slot-tall">
+        <div class="demo-overlay" onclick="demos.ide.play()">
+          <h2>IDE</h2>
+          <p class="overlay-desc">File tree, editor with syntax highlighting, terminal, live preview.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Demo: Seed GIF -->
+    <section id="demo-seed">
+      <div class="demo-caption"><span class="cap-title">Seed GIF</span><span class="cap-desc">snapshot one instance, drag to restore in another</span><button class="cap-replay" onclick="demos.seed.reset();demos.seed.play()">&#8635; replay</button></div>
+      <div class="demo-slot demo-slot-tall" style="display:flex;gap:2px">
+        <div id="seed-left" style="flex:1;position:relative;overflow:hidden;border-radius:6px 0 0 6px">
+          <div style="position:absolute;top:4px;left:8px;font-size:10px;color:#555;font-family:system-ui;z-index:1;pointer-events:none">source</div>
+        </div>
+        <div id="seed-right" style="flex:1;position:relative;overflow:hidden;border-radius:0 6px 6px 0">
+          <div style="position:absolute;top:4px;left:8px;font-size:10px;color:#555;font-family:system-ui;z-index:1;pointer-events:none">target</div>
+        </div>
+        <div class="demo-overlay" onclick="demos.seed.play()">
+          <h2>Seed GIF</h2>
+          <p class="overlay-desc">Snapshot one Shiro instance, drag the GIF to restore in another.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Claude Code -->
+    <section class="info-section">
+      <h2>Claude Code</h2>
+      <p>The real
+      <a href="https://docs.anthropic.com/en/docs/claude-code">@anthropic-ai/claude-code</a>
+      npm package runs inside a Node.js runtime
+      shim.<label for="sn-shim" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-shim" class="margin-toggle"/><span class="sidenote">The CLI is about 11 MB of bundled ESM. The runtime shim provides roughly 50 Node.js module stubs&thinsp;&mdash;&thinsp;fs, path, process, child_process, crypto, and so on. API calls route through a CORS proxy to api.anthropic.com since the browser can't reach it directly.</span>
+      Not a reimplementation&thinsp;&mdash;&thinsp;the actual CLI, loaded and executed
+      in the browser's JavaScript VM. The tools Claude Code depends
+      on&thinsp;&mdash;&thinsp;file reads, edits, grep, glob, bash&thinsp;&mdash;&thinsp;are wired to
+      the virtual filesystem. Both interactive mode and print mode work.</p>
+      <p>It's good enough for reading, editing, and searching code. Building and
+      testing work for simple projects. Complex workflows occasionally find
+      the seams.</p>
+    </section>
+
+    <!-- Remote -->
+    <section class="info-section">
+      <h2>Remote control</h2>
+      <p>An outer Claude Code instance&thinsp;&mdash;&thinsp;running on your actual
+      machine&thinsp;&mdash;&thinsp;can control Shiro via
+      <a href="https://modelcontextprotocol.io/">MCP</a> tools over
+      WebRTC.<label for="sn-rtc" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-rtc" class="margin-toggle"/><span class="sidenote">The server handles the initial WebRTC signaling handshake. After that, all data flows peer-to-peer between the browser and the outer Claude Code process. Connection codes have ~46 bits of entropy and expire in 5 minutes.</span>
+      Run <code>remote start</code> in Shiro to get a connection code,
+      then use the <code>shiro-mcp</code> package to exec commands, read
+      and write files, and evaluate JavaScript in the browser.</p>
+    </section>
+
+    <!-- Snapshots -->
+    <section class="info-section">
+      <h2>Snapshots</h2>
+      <p><code>seed gif</code> is perhaps the most unusual
+      feature.<label for="sn-gif" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-gif" class="margin-toggle"/><span class="sidenote">The GIF encoder is handwritten TypeScript&thinsp;&mdash;&thinsp;LZW compression, extension blocks, the whole format&thinsp;&mdash;&thinsp;with zero npm dependencies. The filesystem data is gzipped and stored in a SHIRO1.0 Application Extension block.</span>
+      It captures a terminal screenshot, encodes it as a real GIF image,
+      and embeds the entire filesystem in a custom extension block. The
+      result looks like a screenshot but carries the complete state. Drag
+      it back onto Shiro to restore everything.</p>
+      <p><code>seed html</code> downloads a standalone HTML file&thinsp;&mdash;&thinsp;open
+      it in any browser to boot Shiro with your filesystem already loaded.</p>
+    </section>
+
+    <!-- Inject -->
+    <section class="info-section">
+      <h2>Inject into any page</h2>
+      <p><code>seed</code> (with no arguments) copies a JavaScript snippet to
+      your clipboard. Open DevTools on any website, paste it into the
+      console, and a floating Shiro window appears on top of the
+      page.<label for="sn-inject" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-inject" class="margin-toggle"/><span class="sidenote">The snippet creates a draggable, resizable iframe with macOS-style traffic lights (close, minimize), font size controls, and a title bar. It loads Shiro from shiro.computer and sends your entire filesystem + localStorage via postMessage.</span>
+      Your files come with it. Everything you had in Shiro is available
+      inside the injected window.</p>
+
+      <p>More interesting: the snippet also installs an <code>hc</code>
+      bridge into the host page. From inside the injected Shiro, run
+      <code>hc outer</code> and all <code>hc</code> commands now
+      operate on the host page's
+      DOM.<label for="sn-hc-outer" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-hc-outer" class="margin-toggle"/><span class="sidenote">The bridge communicates via postMessage. The Shiro iframe sends <code>shiro-hc</code> messages; the host-page bridge executes <code>q</code>, <code>look</code>, <code>@N</code>, <code>g</code>, and the rest of the HC command set against the real document, then posts the result back. No cross-origin issues because postMessage doesn't require same-origin.</span>
+      <code>hc look</code> lists every button, link, and input on
+      the page. <code>hc q .product-price</code> queries elements.
+      <code>hc @3</code> clicks one. You can read text, grep content,
+      inspect attributes&thinsp;&mdash;&thinsp;all from a shell prompt
+      floating over the page you're examining.</p>
+
+      <p>Since Claude Code runs inside Shiro, this means an AI coding
+      agent can interact with any website: navigate a page, read its DOM,
+      click buttons, extract data. The page doesn't need to cooperate or
+      expose an API.</p>
+
+      <p><code>seed blob</code> is the self-contained
+      variant.<label for="sn-blob" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-blob" class="margin-toggle"/><span class="sidenote">The blob variant inlines all of Shiro's HTML, JavaScript, and CSS, gzip-compresses everything, and base64-encodes it. At runtime it decompresses and creates a blob URL. No network request to shiro.computer, so it works even on pages with restrictive Content Security Policies.</span>
+      Instead of loading Shiro from shiro.computer, it packs the entire
+      application into the snippet itself&thinsp;&mdash;&thinsp;gzip-compressed
+      and encoded as a blob URL. No external fetch, no CSP issues. It works
+      offline, on intranets, behind firewalls.</p>
+    </section>
+
+    <!-- Rough edges -->
+    <section class="info-section">
+      <h2>Rough edges</h2>
+      <p>Shell scripting handles basic constructs, not the
+      full POSIX specification. npm installs real packages from the registry,
+      but anything requiring native compilation won't work. There's no process
+      isolation&thinsp;&mdash;&thinsp;everything runs in the main
+      thread.<label for="sn-pretense" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-pretense" class="margin-toggle"/><span class="sidenote">It's a browser pretending to be a computer. The pretense is good enough to be useful, not good enough to be invisible.</span></p>
+    </section>
+
+    <footer>
+      <div class="links">
+        <a href="https://github.com/williamsharkey/shiro">source</a>
+      </div>
+      <p>William Sharkey &middot; 2026</p>
+    </footer>
+  </article>
+
+  <!-- Single shared shiro iframe — moves between demo slots -->
+  <iframe id="shiro-live" src="/?demo=1" style="position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0"></iframe>
+
+  <script>
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  let shiroReady = false;
+  let activeDemo = null;
+
+  function getShiro() {
+    const f = document.getElementById('shiro-live');
+    return f?.contentWindow?.__shiro;
+  }
+
+  async function waitForShiro(timeout = 20000) {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      try {
+        const s = getShiro();
+        if (s?.shell?.execute && s?.terminal?.term) {
+          shiroReady = true;
+          const el = document.getElementById('engine-status');
+          el.textContent = 'shiro ready';
+          el.classList.add('ready');
+          // Always-visible scrollbars for demo terminals
+          try {
+            const ifrDoc = document.getElementById('shiro-live').contentDocument;
+            const sty = ifrDoc.createElement('style');
+            sty.textContent = [
+              '.xterm .xterm-viewport { overflow-y: scroll !important; }',
+              '.xterm .xterm-viewport::-webkit-scrollbar { width: 8px; background: #1a1a2e; }',
+              '.xterm .xterm-viewport::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; min-height: 30px; }',
+              '.xterm .xterm-viewport::-webkit-scrollbar-thumb:hover { background: #777; }',
+              '.xterm .xterm-screen { padding-bottom: 50% !important; }',
+            ].join('\n');
+            ifrDoc.head.appendChild(sty);
+          } catch {}
+          return;
+        }
+      } catch {}
+      await sleep(200);
+    }
+    const el = document.getElementById('engine-status');
+    el.textContent = 'failed to load';
+    el.classList.add('error');
+    throw new Error('Shiro boot timeout');
+  }
+
+  // ===== DemoPlayer =====
+  class DemoPlayer {
+    constructor(id, steps, opts = {}) {
+      this.id = id;
+      this.steps = steps;
+      this.hasPreview = opts.hasPreview || false;
+      this.previewId = opts.previewId || null;
+      this.previewFiles = opts.previewFiles || [];
+      this.el = document.getElementById(id);
+      this.slot = this.el.querySelector('.demo-slot');
+      this.overlay = this.el.querySelector('.demo-overlay');
+      this.playBtn = this.overlay.querySelector('.demo-play-btn');
+      this.caption = this.el.querySelector('.demo-caption');
+      this.previewOverlay = this.el.querySelector('.preview-overlay');
+      this.playing = false;
+      this.aborted = false;
+    }
+
+    async play() {
+      if (this.playing) return; // already running
+
+      // Stop any other playing demo
+      if (activeDemo && activeDemo !== this && activeDemo.playing) {
+        activeDemo.aborted = true;
+        activeDemo.playing = false;
+      }
+      // If taking iframe from another demo, restore that demo's overlay
+      if (activeDemo && activeDemo !== this) {
+        activeDemo.showOverlay();
+        activeDemo.caption.classList.remove('visible');
+      }
+
+      // Move iframe to this demo's slot (appendChild triggers iframe reload!)
+      const iframe = document.getElementById('shiro-live');
+      const needsMove = iframe.parentElement !== this.slot;
+      iframe.style.cssText = 'width:100%;height:100%;border:none;display:block';
+      if (needsMove) {
+        this.slot.appendChild(iframe);
+        shiroReady = false; // iframe reloaded — must re-wait
+      }
+      activeDemo = this;
+
+      // Wait for shiro to boot (or re-boot after move)
+      if (!shiroReady) {
+        this.playBtn.textContent = '\u2026';
+        this.playBtn.classList.add('loading');
+        try { await waitForShiro(); } catch {
+          this.playBtn.textContent = '!';
+          this.playBtn.classList.remove('loading');
+          return;
+        }
+        this.playBtn.classList.remove('loading');
+      }
+
+      // Hide overlay + caption, start playing
+      this.overlay.classList.add('hidden');
+      this.caption.classList.remove('visible');
+      if (this.previewOverlay) this.previewOverlay.classList.add('hidden');
+      this.playing = true;
+      this.aborted = false;
+
+      // Clear terminal
+      const shiro = getShiro();
+      const term = shiro.terminal.term;
+      term.clear();
+      shiro.terminal.fitAddon.fit();
+
+      for (const step of this.steps) {
+        if (this.aborted) break;
+        await this.runStep(step);
+      }
+
+      // Hint animation — show the terminal is interactive, then hand over
+      if (!this.aborted) await this.showHint();
+
+      this.playing = false;
+      // Show caption bar (not overlay) — leave terminal exposed for interaction
+      this.caption.classList.add('visible');
+    }
+
+    showOverlay() {
+      this.overlay.classList.remove('hidden');
+      this.playBtn.textContent = '\u25b6';
+      this.playBtn.classList.remove('loading');
+    }
+
+    async showHint() {
+      const shiro = getShiro();
+      const term = shiro.terminal.term;
+      const hints = [
+        '// try something yourself',
+        '// the terminal is yours now',
+        '// go ahead, type a command',
+        '// your turn — try anything',
+        '// feel free to explore',
+        "// try: echo hello | sed 's/hello/world/'",
+        '// end of demo — poke around',
+        '// this is a real shell',
+        '// try: ls /usr/local/bin',
+        '// try: help',
+      ];
+      const hint = hints[Math.floor(Math.random() * hints.length)];
+
+      // Show prompt
+      term.write('\x1b[32muser@shiro\x1b[0m:\x1b[34m~\x1b[0m$ ');
+      await sleep(500);
+      if (this.aborted) return;
+
+      // Type hint at 4x speed (dim color)
+      term.write('\x1b[38;5;242m');
+      for (let i = 0; i < hint.length; i++) {
+        if (this.aborted) return;
+        term.write(hint[i]);
+        await sleep(35 / 4);
+      }
+      term.write('\x1b[0m');
+      await sleep(1000);
+      if (this.aborted) return;
+
+      // Delete hint at 8x speed
+      for (let i = 0; i < hint.length; i++) {
+        if (this.aborted) return;
+        term.write('\b \b');
+        await sleep(35 / 8);
+      }
+
+      // Clear the fake prompt line and write a real one directly
+      term.write('\r\x1b[K');
+      term.write('\x1b[32muser@shiro\x1b[0m:\x1b[34m~\x1b[0m$ ');
+    }
+
+    reset() {
+      this.aborted = true;
+      this.playing = false;
+      this.showOverlay();
+      this.caption.classList.remove('visible');
+      if (this.previewId) document.getElementById(this.previewId).srcdoc = '';
+      if (this.previewOverlay) this.previewOverlay.classList.remove('hidden');
+      // Clear terminal if we own it
+      if (activeDemo === this) {
+        try {
+          const term = getShiro().terminal.term;
+          term.clear();
+        } catch {}
+      }
+    }
+
+    async runStep(step) {
+      const delay = step.delay ?? 300;
+      const shiro = getShiro();
+      const term = shiro.terminal.term;
+
+      // Wait step — simple delay
+      if (step.wait != null) {
+        await sleep(step.wait);
+        return;
+      }
+
+      // Eval step — run JS in the Shiro iframe's context (for IDE automation)
+      if (step.eval != null) {
+        if (step.note) {
+          term.write(`\x1b[38;5;75m\x1b[3m# ${step.note}\x1b[0m\r\n`);
+          await sleep(200);
+        }
+        try {
+          const iframe = document.getElementById('shiro-live');
+          const iframeWin = iframe?.contentWindow;
+          // If IDE is in become mode, find the become iframe
+          const becomeIframe = iframeWin?.document?.querySelector('#become-container iframe');
+          const target = becomeIframe?.contentWindow || iframeWin;
+          if (target) target.eval(step.eval);
+        } catch (e) { console.warn('eval step error:', e); }
+        await sleep(delay);
+        return;
+      }
+
+      if (step.note) {
+        term.write(`\x1b[38;5;75m\x1b[3m# ${step.note}\x1b[0m\r\n`);
+        await sleep(200);
+      }
+
+      // Simulated page command — types command in terminal, acts on preview iframe
+      if (step.sim) {
+        await this.typeCommand(term, step.sim.display);
+        const pf = this.previewId && document.getElementById(this.previewId);
+        const pd = pf?.contentDocument;
+        if (pd && step.sim.action === 'text') {
+          const el = pd.querySelector(step.sim.sel);
+          const text = el?.textContent || '';
+          term.write(text + '\r\n');
+        } else if (pd && step.sim.action === 'click') {
+          const el = pd.querySelector(step.sim.sel);
+          if (el) el.click();
+        }
+        await sleep(delay);
+        return;
+      }
+
+      // start step — begin interactive command (no await)
+      if (step.start != null) {
+        await this.typeCommand(term, step.start);
+        const shiro = getShiro();
+        let out = '';
+        this._interactivePromise = shiro.shell.execute(step.start,
+          s => { term.write(s.replace(/\n/g, '\r\n')); },
+          s => { term.write(s.replace(/\n/g, '\r\n')); }
+        );
+        await sleep(delay);
+        return;
+      }
+
+      // keys step — send raw keystrokes to terminal
+      if (step.keys != null) {
+        const iframe = document.getElementById('shiro-live');
+        const shiroTerm = iframe?.contentWindow?.__shiro?.terminal;
+        if (shiroTerm) {
+          if (step.typeSpeed) {
+            // Animated typing (one char at a time)
+            for (let i = 0; i < step.keys.length; i++) {
+              if (this.aborted) return;
+              shiroTerm.injectInput(step.keys[i]);
+              await sleep(step.typeSpeed);
+            }
+          } else {
+            shiroTerm.injectInput(step.keys);
+          }
+        }
+        await sleep(delay);
+        return;
+      }
+
+      // waitDone step — wait for interactive command to finish
+      if (step.waitDone) {
+        if (this._interactivePromise) {
+          await this._interactivePromise;
+          this._interactivePromise = null;
+        }
+        await sleep(delay);
+        return;
+      }
+
+      if (!step.cmd) {
+        if (step.preview && this.hasPreview) await this.updatePreview();
+        await sleep(delay);
+        return;
+      }
+
+      // Type command with animation
+      await this.typeCommand(term, step.cmd);
+
+      // Execute command
+      let out = '';
+      try {
+        await shiro.shell.execute(step.cmd, s => { out += s; }, s => { out += s; });
+      } catch {}
+      if (out.trim()) {
+        term.write(out.replace(/\n/g, '\r\n'));
+        if (!out.endsWith('\n')) term.write('\r\n');
+      }
+
+      if (step.preview && this.hasPreview) await this.updatePreview();
+      await sleep(delay);
+    }
+
+    async typeCommand(term, cmd) {
+      const lines = cmd.split('\n');
+      let charPos = 0;
+
+      for (let li = 0; li < lines.length; li++) {
+        if (this.aborted) return;
+        const line = lines[li];
+
+        if (li === 0) {
+          term.write('\x1b[32muser@shiro\x1b[0m:\x1b[34m~\x1b[0m$ ');
+        }
+
+        // For heredoc body lines (after first), type fast
+        if (li > 0) {
+          term.write(line);
+          if (li < lines.length - 1) term.write('\r\n');
+          await sleep(3);
+          continue;
+        }
+
+        for (let i = 0; i < line.length; i++) {
+          if (this.aborted) return;
+          const speed = 4 + 12 * Math.min(charPos / 20, 1);
+          term.write(line[i]);
+          charPos++;
+          await sleep(35 / speed);
+        }
+        if (li < lines.length - 1) term.write('\r\n');
+      }
+      term.write('\r\n');
+    }
+
+    async updatePreview() {
+      if (!this.previewId || !this.previewFiles.length) return;
+      try {
+        const shiro = getShiro();
+        let html = '', css = '', js = '';
+        for (const f of this.previewFiles) {
+          try {
+            let c = '';
+            await shiro.shell.execute('cat ' + f, x => c += x, () => {});
+            if (f.endsWith('.html')) html = c;
+            else if (f.endsWith('.css')) css = c;
+            else if (f.endsWith('.js')) js = c;
+          } catch {}
+        }
+        if (css && html.includes('</head>'))
+          html = html.replace('</head>', '<style>' + css + '</style></head>');
+        if (js && html.includes('</body>'))
+          html = html.replace('</body>', '<script>' + js + '<\/script></body>');
+        document.getElementById(this.previewId).srcdoc = html;
+      } catch {}
+    }
+
+  }
+
+  // ===== Demo Definitions =====
+  const demos = {};
+
+  const pipesSteps = [
+    { cmd: 'echo "hello world"', note: 'Print text' },
+    { cmd: 'echo "hello world" | wc -c', note: 'Pipe to word count' },
+    { cmd: 'echo "hello world" | sed \'s/world/browser/\'', note: 'Transform with sed' },
+  ];
+
+  const filesSteps = [
+    { cmd: 'mkdir -p /tmp/project/src /tmp/project/docs', note: 'Create directories' },
+    { cmd: 'echo \'console.log("hi")\' > /tmp/project/src/app.js' },
+    { cmd: 'echo \'# My Project\' > /tmp/project/docs/README.md' },
+    { cmd: 'find /tmp/project -type f', note: 'Find all files' },
+    { cmd: 'cat /tmp/project/src/app.js' },
+  ];
+
+  const textSteps = [
+    { cmd: "printf 'alice,95\\nbob,87\\ncarol,92\\nalice,88\\nbob,91\\n' > /tmp/grades.csv", note: 'Create a CSV' },
+    { cmd: 'cat /tmp/grades.csv' },
+    { cmd: 'grep alice /tmp/grades.csv', note: 'Filter rows' },
+    { cmd: 'sort /tmp/grades.csv', note: 'Sort' },
+  ];
+
+  const gitSteps = [
+    { cmd: 'rm -rf /tmp/repo; mkdir /tmp/repo', note: 'Create a project' },
+    { cmd: 'cd /tmp/repo && git init' },
+    { cmd: 'echo "# My App" > /tmp/repo/README.md' },
+    { cmd: 'cd /tmp/repo && git add . && git commit -m "initial"', note: 'First commit' },
+    { cmd: 'echo "v2" >> /tmp/repo/README.md', note: 'Edit a file' },
+    { cmd: 'cd /tmp/repo && git diff' },
+  ];
+
+  const pageSteps = [
+    { cmd: 'mkdir -p /tmp/site' },
+    { cmd: "cat > /tmp/site/index.html << 'EOF'\n<!DOCTYPE html>\n<html><head><title>My Site</title>\n<style>\nbody { font-family: system-ui; background: #1a1a2e; color: #eee;\n  display: flex; justify-content: center; align-items: center;\n  min-height: 100vh; margin: 0; text-align: center; }\nh1 { color: #e94560; }\np { color: #aaa; }\n</style></head>\n<body>\n<div><h1>My Site</h1><p>Built inside a browser.</p></div>\n</body></html>\nEOF", note: 'Write HTML' },
+    { cmd: 'serve /tmp/site 3000', preview: true, note: 'Serve it', delay: 800 },
+    { cmd: "sed -i 's/My Site/My Site \u2728/' /tmp/site/index.html", note: 'Edit in place' },
+    { cmd: 'cat /tmp/site/index.html', preview: true },
+    { cmd: 'serve stop 3000', delay: 200 },
+  ];
+
+  const counterHTML = '<!DOCTYPE html>\n<html><head><title>Counter</title>\n<style>\nbody { font-family: system-ui; background: #0f0f23; color: #eee;\n  display: flex; justify-content: center; align-items: center;\n  min-height: 100vh; margin: 0; }\n.app { text-align: center; }\nh1 { font-size: 1.2rem; color: #7eb8c9; margin-bottom: 20px; }\n.n { font-size: 4rem; font-weight: 700; margin-bottom: 20px;\n  font-variant-numeric: tabular-nums; }\nbutton { width: 56px; height: 56px; font-size: 1.5rem; border-radius: 12px;\n  border: 2px solid #333; background: #1a1a2e; color: #eee;\n  cursor: pointer; margin: 0 6px; }\nbutton:hover { border-color: #7eb8c9; }\n</style></head>\n<body><div class="app">\n  <h1>Counter</h1>\n  <div class="n" id="n">0</div>\n  <button id="dec" onclick="c(-1)">\u2212</button>\n  <button id="inc" onclick="c(1)">+</button>\n</div>\n<' + 'script>\nlet n=0;\nfunction c(d){n+=d;document.getElementById("n").textContent=n}\n<' + '/script>\n</body></html>';
+
+  const grapherHTML = ['<!DOCTYPE html>',
+'<html><head><title>Grapher</title>',
+'<style>',
+'*{box-sizing:border-box;margin:0;padding:0}',
+'body{font-family:system-ui;background:#0f0f23;color:#eee;display:flex;justify-content:center;align-items:center;min-height:100vh}',
+'.app{display:flex;flex-direction:column;align-items:center;gap:12px;padding:16px}',
+'h1{font-size:1rem;color:#7eb8c9}',
+'.controls{display:flex;flex-direction:column;gap:8px;align-items:center}',
+'.axis{display:flex;align-items:center;gap:4px}',
+'.axis label{font-size:.75rem;color:#888;width:12px}',
+'.axis .val{font-size:1.4rem;font-weight:700;width:3ch;text-align:center;font-variant-numeric:tabular-nums}',
+'.axis button{width:32px;height:32px;font-size:1rem;border-radius:8px;border:2px solid #333;background:#1a1a2e;color:#eee;cursor:pointer}',
+'.axis button:hover{border-color:#7eb8c9}',
+'#plot{width:80px;height:32px;font-size:.75rem;border-radius:8px;border:2px solid #555;background:#2a1a3e;color:#c8b6ff;cursor:pointer;font-weight:600}',
+'#plot:hover{border-color:#c8b6ff;background:#3a2a4e}',
+'#graph{background:#12122a;border-radius:8px;border:1px solid #222}',
+'#pts{font-size:.7rem;color:#555}',
+'</style></head>',
+'<body><div class="app">',
+'<h1>Grapher</h1>',
+'<div class="controls">',
+'  <div class="axis"><label>x</label><button id="xd" onclick="adj(\'x\',-1)">\u2212</button><span class="val" id="xv">0</span><button id="xu" onclick="adj(\'x\',1)">+</button></div>',
+'  <div class="axis"><label>y</label><button id="yd" onclick="adj(\'y\',-1)">\u2212</button><span class="val" id="yv">0</span><button id="yu" onclick="adj(\'y\',1)">+</button></div>',
+'  <button id="plot" onclick="plot()">Plot Point</button>',
+'</div>',
+'<svg id="graph" width="280" height="200"></svg>',
+'<div id="pts"></div>',
+'</div>',
+'<' + 'script>',
+'let x=0,y=0,pts=[];',
+'function adj(a,d){if(a==="x"){x+=d;document.getElementById("xv").textContent=x}else{y+=d;document.getElementById("yv").textContent=y}}',
+'function plot(){pts.push({x,y});draw()}',
+'function ticks(mn,mx){let r=mx-mn;if(r<=0)r=1;let s=Math.pow(10,Math.floor(Math.log10(r)));if(r/s<2)s/=5;else if(r/s<5)s/=2;let t=[];for(let v=Math.ceil(mn/s)*s;v<=mx+s*0.001;v+=s)t.push(+v.toFixed(10));return t}',
+'function draw(){',
+'let svg=document.getElementById("graph"),W=280,H=200,pad={t:12,r:12,b:28,l:34};',
+'let xs=pts.map(p=>p.x),ys=pts.map(p=>p.y);',
+'let x0=Math.min(0,...xs),x1=Math.max(0,...xs),y0=Math.min(0,...ys),y1=Math.max(0,...ys);',
+'if(x0===x1){x0-=1;x1+=1}if(y0===y1){y0-=1;y1+=1}',
+'let dx=(x1-x0)*0.08,dy=(y1-y0)*0.08;x0-=dx;x1+=dx;y0-=dy;y1+=dy;',
+'let pw=W-pad.l-pad.r,ph=H-pad.t-pad.b;',
+'let sx=v=>(v-x0)/(x1-x0)*pw+pad.l,sy=v=>H-pad.b-(v-y0)/(y1-y0)*ph;',
+'let h="";',
+'h+=\'<line x1="\'+pad.l+\'" y1="\'+sy(0)+\'" x2="\'+(W-pad.r)+\'" y2="\'+sy(0)+\'" stroke="#444"/>\';',
+'h+=\'<line x1="\'+sx(0)+\'" y1="\'+pad.t+\'" x2="\'+sx(0)+\'" y2="\'+(H-pad.b)+\'" stroke="#444"/>\';',
+'h+=\'<polygon points="\'+(W-pad.r)+","+sy(0)+" "+(W-pad.r-6)+","+(sy(0)-3)+" "+(W-pad.r-6)+","+(sy(0)+3)+\'" fill="#444"/>\';',
+'h+=\'<polygon points="\'+sx(0)+","+pad.t+" "+(sx(0)-3)+","+(pad.t+6)+" "+(sx(0)+3)+","+(pad.t+6)+\'" fill="#444"/>\';',
+'ticks(x0,x1).forEach(v=>{let px=sx(v);h+=\'<line x1="\'+px+\'" y1="\'+(H-pad.b)+\'" x2="\'+px+\'" y2="\'+(H-pad.b+4)+\'" stroke="#555"/><text x="\'+px+\'" y="\'+(H-pad.b+14)+\'" text-anchor="middle" fill="#666" font-size="9">\'+v+"</text>"});',
+'ticks(y0,y1).forEach(v=>{let py=sy(v);h+=\'<line x1="\'+(pad.l-4)+\'" y1="\'+py+\'" x2="\'+pad.l+\'" y2="\'+py+\'" stroke="#555"/><text x="\'+(pad.l-6)+\'" y="\'+(py+3)+\'" text-anchor="end" fill="#666" font-size="9">\'+v+"</text>"});',
+'pts.forEach((p,i)=>{h+=\'<circle cx="\'+sx(p.x)+\'" cy="\'+sy(p.y)+\'" r="4" fill="\'+["#ff6b6b","#ffd93d","#6bcb77","#4d96ff","#c8b6ff","#ff922b"][i%6]+\'"/>\';});',
+'svg.innerHTML=h;',
+'document.getElementById("pts").textContent=pts.length+" point"+(pts.length===1?"":"s");',
+'}',
+'<' + '/script>',
+'</body></html>'].join('\n');
+
+  const interactSteps = [
+    { cmd: 'mkdir -p /tmp/counter' },
+    { cmd: "cat > /tmp/counter/index.html << 'EOF'\n" + counterHTML + "\nEOF", note: 'Write a counter app' },
+    { cmd: 'serve /tmp/counter 5000', note: 'Serve it', delay: 400 },
+    { cmd: 'serve open 5000 --split right', delay: 800 },
+    { cmd: 'page :5000 text "#n"', note: 'Read the counter value' },
+    { cmd: 'page :5000 click "#inc"', note: 'Click the + button' },
+    { cmd: 'page :5000 click "#inc"' },
+    { cmd: 'page :5000 click "#inc"' },
+    { cmd: 'page :5000 text "#n"', note: 'Read it again' },
+    { cmd: 'cd /tmp/counter && git init', note: 'Commit the app' },
+    { cmd: 'cd /tmp/counter && git add . && git commit -m "counter app"' },
+    { cmd: 'serve stop 5000', delay: 400, note: 'Now upgrade it' },
+    { cmd: "cat > /tmp/counter/index.html << 'EOF'\n" + grapherHTML + "\nEOF", note: 'Rewrite as a grapher' },
+    { cmd: 'serve /tmp/counter 5000', delay: 400 },
+    { cmd: 'serve open 5000 --split right', delay: 800 },
+    { cmd: 'page :5000 click "#plot"', note: 'Plot the origin' },
+    { cmd: 'page :5000 text "#pts"' },
+    // x=3, y=2
+    { cmd: 'page :5000 click "#xu"', note: 'Set x to 3' },
+    { cmd: 'page :5000 click "#xu"' },
+    { cmd: 'page :5000 click "#xu"' },
+    { cmd: 'page :5000 click "#yu"', note: 'Set y to 2' },
+    { cmd: 'page :5000 click "#yu"' },
+    { cmd: 'page :5000 click "#plot"', note: 'Plot (3, 2)', delay: 500 },
+    // x=7, y=5
+    { cmd: 'page :5000 click "#xu"', note: 'Set x to 7' },
+    { cmd: 'page :5000 click "#xu"' },
+    { cmd: 'page :5000 click "#xu"' },
+    { cmd: 'page :5000 click "#xu"' },
+    { cmd: 'page :5000 click "#yu"', note: 'Set y to 5' },
+    { cmd: 'page :5000 click "#yu"' },
+    { cmd: 'page :5000 click "#yu"' },
+    { cmd: 'page :5000 click "#plot"', note: 'Plot (7, 5)', delay: 500 },
+    { cmd: 'page :5000 text "#pts"' },
+    { cmd: 'cd /tmp/counter && git add . && git commit -m "upgrade to grapher"', note: 'Commit the upgrade' },
+    { cmd: 'cd /tmp/counter && git log --oneline' },
+  ];
+
+  const todoHTML = '<!DOCTYPE html>\n<html><head><title>Todo</title>\n<link rel="stylesheet" href="style.css">\n</head><body>\n<h1>Todo App</h1>\n<input id="inp" placeholder="Add todo...">\n<button id="add" onclick="addTodo()">Add</button>\n<ul id="list"></ul>\n<p id="count">0 items</p>\n<' + 'script src="app.js"><' + '/script>\n</body></html>';
+  const todoCSS = 'body { background: #fffff8; color: #111; font-family: et-book, Palatino, "Palatino Linotype", "Book Antiqua", Georgia, serif; padding: 24px 28px; line-height: 1.6; }\nh1 { font-size: 1.4rem; font-weight: 400; margin-bottom: 16px; color: #333; }\ninput { padding: 6px 10px; border: 1px solid #ccc; border-radius: 2px; background: #fff; color: #333; width: 200px; font-family: inherit; font-size: 0.9rem; }\ninput:focus { outline: none; border-color: #999; }\nbutton { padding: 6px 14px; background: #fffff8; color: #333; border: 1px solid #ccc; border-radius: 2px; cursor: pointer; font-family: inherit; font-size: 0.9rem; margin-left: 6px; }\nbutton:hover { background: #f0f0e8; border-color: #999; }\nul { list-style: none; padding: 0; margin-top: 16px; }\nli { padding: 8px 0; border-bottom: 1px solid #e8e8e0; display: flex; gap: 10px; align-items: center; font-size: 0.95rem; }\n.check { cursor: pointer; color: #999; font-size: 1.1rem; }\n.done { text-decoration: line-through; color: #bbb; }\n#count { font-size: 0.8rem; color: #999; margin-top: 12px; font-style: italic; }';
+  const todoJS = ['var todos = [];',
+'function addTodo() {',
+"  const inp = document.getElementById('inp');",
+'  if (!inp.value.trim()) return;',
+'  todos.push({ text: inp.value.trim(), done: false });',
+"  inp.value = '';",
+'  render();',
+'}',
+'function toggle(i) {',
+'  todos[i].done = !todos[i].done;',
+'  render();',
+'}',
+'function render() {',
+"  const list = document.getElementById('list');",
+'  list.innerHTML = todos.map((t, i) =>',
+"    '<li><span class=\"check\" onclick=\"toggle(' + i + ')\">' + (t.done ? '\\u2713' : '\\u25cb') + '</span>' +",
+"    '<span class=\"' + (t.done ? 'done' : '') + '\">' + t.text + '</span></li>'",
+"  ).join('');",
+'  const active = todos.filter(t => !t.done).length;',
+"  document.getElementById('count').textContent = active + ' items';",
+'}'].join('\n');
+
+  const advancedSteps = [
+    { cmd: 'mkdir -p /tmp/todo', note: 'Create a 3-file project' },
+    { cmd: "cat > /tmp/todo/index.html << 'EOF'\n" + todoHTML + "\nEOF" },
+    { cmd: "cat > /tmp/todo/style.css << 'EOF'\n" + todoCSS + "\nEOF" },
+    { cmd: "cat > /tmp/todo/app.js << 'EOF'\n" + todoJS + "\nEOF" },
+    { cmd: 'ls /tmp/todo' },
+    { cmd: 'serve /tmp/todo 6000', note: 'Serve it', delay: 400 },
+    { cmd: 'serve open 6000 --split right', delay: 1200 },
+    { cmd: 'page :6000 input "#inp" Buy groceries', note: 'Interact via page' },
+    { cmd: 'page :6000 click "#add"' },
+    { cmd: 'page :6000 input "#inp" Write tests' },
+    { cmd: 'page :6000 click "#add"' },
+    { cmd: 'page :6000 input "#inp" Deploy app' },
+    { cmd: 'page :6000 click "#add"' },
+    { cmd: 'page :6000 text "#count"', note: 'Read the count' },
+    { cmd: 'hc open /tmp/todo/index.html', note: 'Inspect DOM' },
+    { cmd: 'hc q input' },
+    { cmd: 'hc look' },
+    { cmd: 'grep -rn "function" /tmp/todo/app.js', note: 'Search code' },
+    { cmd: 'page :6000 eval "todos.length"', note: 'Eval in app context' },
+    { cmd: 'page :6000 click ".check"', note: 'Complete a todo' },
+    { cmd: 'page :6000 text "#count"' },
+    { cmd: 'cd /tmp/todo && git init && git add . && git commit -m "todo app"', note: 'Commit' },
+    { cmd: 'cd /tmp/todo && git log --oneline' },
+    { cmd: 'serve stop 6000', delay: 200 },
+  ];
+
+  const viSteps = [
+    { cmd: 'mkdir -p /tmp/vi-site', note: 'Create project' },
+    { start: 'vi /tmp/vi-site/index.html', note: 'Open vi', delay: 600 },
+    { keys: 'i', delay: 300 },
+    { keys: '<!DOCTYPE html>\n<html><body>\n<h1>Built with vi</h1>\n<p>In a browser.</p>\n</body></html>',
+      typeSpeed: 25, delay: 300 },
+    { keys: '\x1b', delay: 400 },
+    { keys: ':w\r', delay: 500 },
+    { keys: '/Built\r', delay: 500, note: 'Search' },
+    { keys: 'dd', delay: 400, note: 'Delete line' },
+    { keys: 'O', delay: 300 },
+    { keys: '<h1>Edited with vi</h1>',
+      typeSpeed: 30, delay: 300 },
+    { keys: '\x1b', delay: 300 },
+    { keys: ':wq\r', delay: 500 },
+    { waitDone: true, delay: 300 },
+    { cmd: 'cat /tmp/vi-site/index.html', note: 'Verify file' },
+    { cmd: 'serve /tmp/vi-site 4000', delay: 400 },
+    { cmd: 'serve open 4000 --split right', delay: 800 },
+    { cmd: 'page :4000 text "h1"', note: 'Check heading' },
+    { cmd: 'serve stop 4000', delay: 200 },
+  ];
+
+  const nanoSteps = [
+    { cmd: 'mkdir -p /tmp/notes', note: 'Create project' },
+    { cmd: "echo 'Shopping list\nMilk\nBread\nEggs\nButter' > /tmp/notes/list.txt" },
+    { start: 'nano /tmp/notes/list.txt', note: 'Open nano', delay: 600 },
+    { keys: '\x1b[B', delay: 200 },
+    { keys: '\x1b[B', delay: 200 },
+    { keys: '\x0b', delay: 400, note: 'Cut line (Ctrl+K)' },
+    { keys: '\x1b[B', delay: 200 },
+    { keys: '\x1b[B', delay: 200 },
+    { keys: '\x15', delay: 400, note: 'Paste (Ctrl+U)' },
+    { keys: '\x17', delay: 400, note: 'Search (Ctrl+W)' },
+    { keys: 'Butter', typeSpeed: 40, delay: 300 },
+    { keys: '\r', delay: 500 },
+    { keys: '\x1b[F', delay: 200 },
+    { keys: ' (salted)', typeSpeed: 40, delay: 300 },
+    { keys: '\x0f', delay: 500, note: 'Save (Ctrl+O)' },
+    { keys: '\r', delay: 500 },
+    { keys: '\x18', delay: 400, note: 'Exit (Ctrl+X)' },
+    { waitDone: true, delay: 300 },
+    { cmd: 'cat /tmp/notes/list.txt', note: 'Verify edits' },
+  ];
+
+  const seedSteps = [
+    { target: 'right', note: 'Target shiro.computer instance (empty)', delay: 100 },
+    { target: 'left', cmd: 'mkdir -p /tmp/app' },
+    { target: 'left', cmd: "echo '<h1>My App</h1><p>Snapshot me!</p>' > /tmp/app/index.html" },
+    { target: 'left', cmd: 'ls /tmp/app', note: 'Files in left Shiro' },
+    { target: 'left', cmd: 'seed gif', note: 'Generate seed GIF', delay: 2000 },
+    { drag: { from: 'left', to: 'right' }, delay: 1500 },
+    { target: 'right', cmd: 'ls /tmp/app', note: 'Files restored!' },
+    { target: 'right', cmd: 'cat /tmp/app/index.html' },
+  ];
+
+  const ideSteps = [
+    // Phase 1 — scaffold project via shell
+    { cmd: 'mkdir -p /tmp/ide-project', note: 'Create project' },
+    { cmd: "echo '<h1>Hello World</h1><p>Built in Shiro IDE</p><link rel=\"stylesheet\" href=\"style.css\"><script src=\"app.js\"><\\/script>' > /tmp/ide-project/index.html" },
+    { cmd: "echo 'h1 { color: #6c63ff; font-family: system-ui; } p { color: #888; }' > /tmp/ide-project/style.css" },
+    { cmd: "echo 'console.log(\"Hello from Shiro IDE\");' > /tmp/ide-project/app.js" },
+    { cmd: 'cd /tmp/ide-project && git init && git add . && git commit -m "init"', note: 'Commit' },
+    { cmd: 'ide /tmp/ide-project', note: 'Launch IDE', delay: 1500 },
+
+    // Phase 2 — interact with IDE via eval steps
+    { eval: `
+      (function waitForIde() {
+        const root = document.querySelector('#become-container iframe');
+        if (!root) return;
+        const ideWin = root.contentWindow;
+        if (!ideWin || !ideWin.__ide) return;
+        ideWin.__ide._demoReady = true;
+      })()
+    `, note: 'Wait for IDE to load', delay: 1000 },
+    { eval: `
+      (function() {
+        const root = document.querySelector('#become-container iframe');
+        if (!root) return;
+        const ideDoc = root.contentDocument;
+        if (!ideDoc) return;
+        const items = ideDoc.querySelectorAll('.tree-item .name');
+        for (const item of items) {
+          if (item.textContent.trim() === 'index.html') { item.closest('.tree-item').click(); break; }
+        }
+      })()
+    `, note: 'Open index.html', delay: 800 },
+    { eval: `
+      (function() {
+        const root = document.querySelector('#become-container iframe');
+        if (!root) return;
+        const ideDoc = root.contentDocument;
+        if (!ideDoc) return;
+        const items = ideDoc.querySelectorAll('.tree-item .name');
+        for (const item of items) {
+          if (item.textContent.trim() === 'style.css') { item.closest('.tree-item').click(); break; }
+        }
+      })()
+    `, note: 'Open style.css', delay: 800 },
+    { eval: `
+      (function() {
+        const root = document.querySelector('#become-container iframe');
+        if (!root) return;
+        const ideDoc = root.contentDocument;
+        if (!ideDoc) return;
+        const items = ideDoc.querySelectorAll('.tree-item .name');
+        for (const item of items) {
+          if (item.textContent.trim() === 'app.js') { item.closest('.tree-item').click(); break; }
+        }
+      })()
+    `, note: 'Open app.js', delay: 800 },
+    { eval: `
+      (function() {
+        const root = document.querySelector('#become-container iframe');
+        if (!root) return;
+        const ideWin = root.contentWindow;
+        if (ideWin && ideWin.__ide) ideWin.__ide.handleAction('toggle-preview');
+      })()
+    `, note: 'Toggle preview', delay: 1000 },
+    { eval: `
+      (function() {
+        const root = document.querySelector('#become-container iframe');
+        if (!root) return;
+        const ideWin = root.contentWindow;
+        if (ideWin && ideWin.__ide) ideWin.__ide.handleAction('toggle-bottom');
+      })()
+    `, note: 'Show terminal', delay: 800 },
+
+    // Phase 3 — exit IDE
+    { eval: `
+      (function() {
+        try { getShiro().unbecome(); } catch {}
+        try {
+          const iframe = document.getElementById('shiro-live');
+          if (iframe && iframe.contentWindow && iframe.contentWindow.__shiro) {
+            iframe.contentWindow.__shiro.unbecome();
+          }
+        } catch {}
+      })()
+    `, note: 'Exit IDE', delay: 800 },
+  ];
+
+  // ===== SeedDemoPlayer — manages TWO iframes =====
+  class SeedDemoPlayer {
+    constructor(id, steps) {
+      this.id = id;
+      this.steps = steps;
+      this.el = document.getElementById(id);
+      this.slot = this.el.querySelector('.demo-slot');
+      this.overlay = this.el.querySelector('.demo-overlay');
+      this.playBtn = this.overlay.querySelector('.demo-play-btn');
+      this.caption = this.el.querySelector('.demo-caption');
+      this.playing = false;
+      this.aborted = false;
+      this.leftShiro = null;
+      this.rightShiro = null;
+    }
+
+    async play() {
+      if (this.playing) return;
+      if (activeDemo && activeDemo !== this && activeDemo.playing) {
+        activeDemo.aborted = true;
+        activeDemo.playing = false;
+      }
+      if (activeDemo && activeDemo !== this) {
+        activeDemo.showOverlay();
+        activeDemo.caption.classList.remove('visible');
+      }
+      activeDemo = this;
+
+      // Hide the shared iframe so it doesn't interfere
+      const sharedIframe = document.getElementById('shiro-live');
+      if (sharedIframe.parentElement !== document.body) {
+        document.body.appendChild(sharedIframe);
+      }
+      sharedIframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0';
+
+      // Create two iframes
+      const leftContainer = document.getElementById('seed-left');
+      const rightContainer = document.getElementById('seed-right');
+
+      // Remove old iframes if any
+      leftContainer.querySelectorAll('iframe').forEach(f => f.remove());
+      rightContainer.querySelectorAll('iframe').forEach(f => f.remove());
+
+      const leftIframe = document.createElement('iframe');
+      leftIframe.id = 'shiro-seed-left';
+      leftIframe.src = '/?demo=1';
+      leftIframe.style.cssText = 'width:100%;height:100%;border:none;display:block';
+      leftContainer.appendChild(leftIframe);
+
+      const rightIframe = document.createElement('iframe');
+      rightIframe.id = 'shiro-seed-right';
+      rightIframe.src = '/?demo=1';
+      rightIframe.style.cssText = 'width:100%;height:100%;border:none;display:block';
+      rightContainer.appendChild(rightIframe);
+
+      // Wait for both to boot
+      this.playBtn.textContent = '\u2026';
+      this.playBtn.classList.add('loading');
+      try {
+        await Promise.all([
+          this._waitForIframe(leftIframe),
+          this._waitForIframe(rightIframe),
+        ]);
+      } catch {
+        this.playBtn.textContent = '!';
+        this.playBtn.classList.remove('loading');
+        return;
+      }
+      this.playBtn.classList.remove('loading');
+
+      this.leftShiro = leftIframe.contentWindow.__shiro;
+      this.rightShiro = rightIframe.contentWindow.__shiro;
+
+      // Inject scrollbar styles
+      for (const iframe of [leftIframe, rightIframe]) {
+        try {
+          const ifrDoc = iframe.contentDocument;
+          const sty = ifrDoc.createElement('style');
+          sty.textContent = [
+            '.xterm .xterm-viewport { overflow-y: scroll !important; }',
+            '.xterm .xterm-viewport::-webkit-scrollbar { width: 6px; background: #1a1a2e; }',
+            '.xterm .xterm-viewport::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }',
+            '.xterm .xterm-screen { padding-bottom: 50% !important; }',
+          ].join('\n');
+          ifrDoc.head.appendChild(sty);
+        } catch {}
+      }
+
+      // Start
+      this.overlay.classList.add('hidden');
+      this.caption.classList.remove('visible');
+      this.playing = true;
+      this.aborted = false;
+
+      // Clear both terminals
+      this.leftShiro.terminal.term.clear();
+      this.leftShiro.terminal.fitAddon.fit();
+      this.rightShiro.terminal.term.clear();
+      this.rightShiro.terminal.fitAddon.fit();
+
+      for (const step of this.steps) {
+        if (this.aborted) break;
+        await this._runStep(step);
+      }
+
+      this.playing = false;
+      this.caption.classList.add('visible');
+    }
+
+    async _waitForIframe(iframe, timeout = 20000) {
+      const start = Date.now();
+      while (Date.now() - start < timeout) {
+        try {
+          const s = iframe.contentWindow?.__shiro;
+          if (s?.shell?.execute && s?.terminal?.term) return;
+        } catch {}
+        await sleep(200);
+      }
+      throw new Error('Iframe boot timeout');
+    }
+
+    _getShiro(target) {
+      return target === 'right' ? this.rightShiro : this.leftShiro;
+    }
+
+    _getIframe(target) {
+      return document.getElementById(target === 'right' ? 'shiro-seed-right' : 'shiro-seed-left');
+    }
+
+    async _runStep(step) {
+      const delay = step.delay ?? 300;
+
+      // Drag step — animated cursor from left to right
+      if (step.drag) {
+        await this._animateDrag(step.drag);
+        await sleep(delay);
+        return;
+      }
+
+      const target = step.target || 'left';
+      const shiro = this._getShiro(target);
+      const term = shiro.terminal.term;
+
+      // keys step
+      if (step.keys != null) {
+        if (step.note) {
+          term.write(`\x1b[38;5;75m\x1b[3m# ${step.note}\x1b[0m\r\n`);
+          await sleep(200);
+        }
+        const iframe = this._getIframe(target);
+        const shiroTerm = iframe?.contentWindow?.__shiro?.terminal;
+        if (shiroTerm) {
+          if (step.typeSpeed) {
+            for (let i = 0; i < step.keys.length; i++) {
+              if (this.aborted) return;
+              shiroTerm.injectInput(step.keys[i]);
+              await sleep(step.typeSpeed);
+            }
+          } else {
+            shiroTerm.injectInput(step.keys);
+          }
+        }
+        await sleep(delay);
+        return;
+      }
+
+      if (step.note) {
+        term.write(`\x1b[38;5;75m\x1b[3m# ${step.note}\x1b[0m\r\n`);
+        await sleep(200);
+      }
+
+      if (!step.cmd) { await sleep(delay); return; }
+
+      // Type & execute
+      await this._typeCommand(term, step.cmd);
+      let out = '';
+      try {
+        await shiro.shell.execute(step.cmd, s => { out += s; }, s => { out += s; });
+      } catch {}
+      if (out.trim()) {
+        term.write(out.replace(/\n/g, '\r\n'));
+        if (!out.endsWith('\n')) term.write('\r\n');
+      }
+      await sleep(delay);
+    }
+
+    async _typeCommand(term, cmd) {
+      const lines = cmd.split('\n');
+      for (let li = 0; li < lines.length; li++) {
+        if (this.aborted) return;
+        if (li === 0) term.write('\x1b[32muser@shiro\x1b[0m:\x1b[34m~\x1b[0m$ ');
+        const line = lines[li];
+        if (li > 0) {
+          term.write(line);
+          if (li < lines.length - 1) term.write('\r\n');
+          await sleep(3);
+          continue;
+        }
+        for (let i = 0; i < line.length; i++) {
+          if (this.aborted) return;
+          term.write(line[i]);
+          await sleep(35 / 8);
+        }
+        if (li < lines.length - 1) term.write('\r\n');
+      }
+      term.write('\r\n');
+    }
+
+    async _animateDrag(drag) {
+      // Get GIF bytes from left iframe
+      const leftIframe = this._getIframe('left');
+      const gifBytes = leftIframe?.contentWindow?.__shiro?.lastSeedGif;
+      if (!gifBytes) {
+        console.warn('seed demo: no lastSeedGif available');
+        return;
+      }
+
+      // Remove any draggable thumbnail that seed gif created
+      try {
+        leftIframe.contentDocument.getElementById('seed-gif-thumb')?.remove();
+      } catch {}
+
+      const leftRect = document.getElementById('seed-left').getBoundingClientRect();
+      const rightRect = document.getElementById('seed-right').getBoundingClientRect();
+
+      // Create animated cursor with GIF thumbnail
+      const cursor = document.createElement('div');
+      cursor.style.cssText = [
+        'position:fixed', 'z-index:9999', 'pointer-events:none',
+        'transition:all 1.5s cubic-bezier(0.25, 0.1, 0.25, 1)',
+        'display:flex', 'flex-direction:column', 'align-items:center',
+      ].join(';');
+
+      // Small GIF preview
+      const blob = new Blob([gifBytes], { type: 'image/gif' });
+      const imgUrl = URL.createObjectURL(blob);
+      const img = document.createElement('img');
+      img.src = imgUrl;
+      img.style.cssText = 'width:60px;height:auto;border-radius:4px;border:1px solid #51cf66;box-shadow:0 2px 8px rgba(81,207,102,0.3)';
+
+      // Cursor arrow
+      const arrow = document.createElement('div');
+      arrow.textContent = '\u25be';
+      arrow.style.cssText = 'font-size:18px;color:#51cf66;line-height:1;margin-top:-2px';
+
+      cursor.appendChild(img);
+      cursor.appendChild(arrow);
+
+      // Start position: center of left pane
+      const startX = leftRect.left + leftRect.width / 2 - 30;
+      const startY = leftRect.top + leftRect.height / 2 - 20;
+      cursor.style.left = startX + 'px';
+      cursor.style.top = startY + 'px';
+      cursor.style.opacity = '0';
+      document.body.appendChild(cursor);
+
+      // Fade in
+      await sleep(100);
+      cursor.style.opacity = '1';
+      await sleep(400);
+
+      // Animate to right pane center
+      const endX = rightRect.left + rightRect.width / 2 - 30;
+      const endY = rightRect.top + rightRect.height / 2 - 20;
+      cursor.style.left = endX + 'px';
+      cursor.style.top = endY + 'px';
+
+      await sleep(1600);
+
+      // Copy files directly from left fs to right fs (avoids page reload)
+      const rightIframe = this._getIframe('right');
+      try {
+        const leftFs = leftIframe.contentWindow.__shiro.fs;
+        const rightFs = rightIframe.contentWindow.__shiro.fs;
+        const rightTerm = rightIframe.contentWindow.__shiro.terminal.term;
+
+        rightTerm.write('\r\n\x1b[92mRestoring from seed...\x1b[0m\r\n');
+
+        // Recursively copy directory tree
+        async function copyDir(path) {
+          try { await rightFs.mkdir(path, { recursive: true }); } catch {}
+          const entries = await leftFs.readdir(path);
+          for (const name of entries) {
+            const full = path + '/' + name;
+            const stat = await leftFs.stat(full);
+            if (stat?.type === 'dir') {
+              await copyDir(full);
+            } else {
+              const content = await leftFs.readFile(full);
+              await rightFs.writeFile(full, content);
+            }
+          }
+        }
+        await copyDir('/tmp/app');
+        rightTerm.write('\x1b[92mDone!\x1b[0m\r\n');
+      } catch (e) {
+        console.warn('seed demo: file copy failed', e);
+      }
+
+      // Fade out cursor
+      cursor.style.opacity = '0';
+      await sleep(400);
+      cursor.remove();
+      URL.revokeObjectURL(imgUrl);
+    }
+
+    showOverlay() {
+      this.overlay.classList.remove('hidden');
+      this.playBtn.textContent = '\u25b6';
+      this.playBtn.classList.remove('loading');
+    }
+
+    reset() {
+      this.aborted = true;
+      this.playing = false;
+      this.showOverlay();
+      this.caption.classList.remove('visible');
+      // Remove seed iframes
+      document.getElementById('seed-left')?.querySelectorAll('iframe').forEach(f => f.remove());
+      document.getElementById('seed-right')?.querySelectorAll('iframe').forEach(f => f.remove());
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    demos.pipes = new DemoPlayer('demo-pipes', pipesSteps);
+    demos.files = new DemoPlayer('demo-files', filesSteps);
+    demos.text = new DemoPlayer('demo-text', textSteps);
+    demos.git = new DemoPlayer('demo-git', gitSteps);
+    demos.page = new DemoPlayer('demo-page', pageSteps, {
+      hasPreview: true, previewId: 'preview-page',
+      previewFiles: ['/tmp/site/index.html'],
+    });
+    demos.interact = new DemoPlayer('demo-interact', interactSteps);
+    demos.vi = new DemoPlayer('demo-vi', viSteps);
+    demos.nano = new DemoPlayer('demo-nano', nanoSteps);
+    demos.advanced = new DemoPlayer('demo-advanced', advancedSteps);
+    demos.ide = new DemoPlayer('demo-ide', ideSteps);
+    demos.seed = new SeedDemoPlayer('demo-seed', seedSteps);
+    waitForShiro().catch(() => {});
+  });
+  </script>
+</body>
+</html>
