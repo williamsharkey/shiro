@@ -1154,8 +1154,8 @@
   ];
 
   const viSteps = [
-    { cmd: 'mkdir -p /tmp/site', note: 'Create project' },
-    { start: 'vi /tmp/site/index.html', note: 'Open vi', delay: 600 },
+    { cmd: 'mkdir -p /tmp/vi-site', note: 'Create project' },
+    { start: 'vi /tmp/vi-site/index.html', note: 'Open vi', delay: 600 },
     { keys: 'i', delay: 300 },
     { keys: '<!DOCTYPE html>\n<html><body>\n<h1>Built with vi</h1>\n<p>In a browser.</p>\n</body></html>',
       typeSpeed: 25, delay: 300 },
@@ -1169,8 +1169,8 @@
     { keys: '\x1b', delay: 300 },
     { keys: ':wq\r', delay: 500 },
     { waitDone: true, delay: 300 },
-    { cmd: 'cat /tmp/site/index.html', note: 'Verify file' },
-    { cmd: 'serve /tmp/site 4000', delay: 400 },
+    { cmd: 'cat /tmp/vi-site/index.html', note: 'Verify file' },
+    { cmd: 'serve /tmp/vi-site 4000', delay: 400 },
     { cmd: 'serve open 4000 --split right', delay: 800 },
     { cmd: 'page :4000 text "h1"', note: 'Check heading' },
     { cmd: 'serve stop 4000', delay: 200 },
