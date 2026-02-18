@@ -46,6 +46,14 @@ Object.defineProperty(window, 'location', {
 });
 (window as any).queueMicrotask = (cb: Function) => Promise.resolve().then(() => cb());
 
+// DOMParser polyfill — needed by hc open command
+(globalThis as any).DOMParser = class DOMParser {
+  parseFromString(html: string, mime: string) {
+    const { document: doc } = parseHTML(html);
+    return doc;
+  }
+};
+
 globalThis.window = window as any;
 globalThis.document = document as any;
 globalThis.self = globalThis; // xterm.js uses `self` (browser global)

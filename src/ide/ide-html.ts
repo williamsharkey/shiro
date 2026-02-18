@@ -2392,6 +2392,9 @@ async function init() {
     }
   });
 
+  /* Expose IDE internals for demo automation and testing */
+  window.__ide = { fileTree, editor, slashMenu, handleAction, bottom, preview, scaffold, menuBar, suggestions };
+
   /* Initial load */
   await fileTree.refresh();
   suggestions.start();

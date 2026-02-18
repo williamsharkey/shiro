@@ -448,6 +448,50 @@
       </div>
     </section>
 
+    <section class="info-section" style="margin-top: 24px">
+      <h2>Advanced workflow</h2>
+      <p>The <code>hc</code> command navigates DOM trees with a token-efficient
+      shorthand.<label for="sn-hc" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-hc" class="margin-toggle"/><span class="sidenote">Hypercompact: <code>hc open</code> parses HTML from disk, <code>hc q</code> runs CSS selectors, <code>hc look</code> lists interactive elements. Designed for LLM agents that need to inspect pages without rendering them.</span>
+      Combined with <code>page input</code>, <code>page eval</code>, and
+      <code>grep -rn</code>, you get a full CLI-driven development loop:
+      build a multi-file project, serve it, interact with it through the DOM,
+      search the codebase, and commit&thinsp;&mdash;&thinsp;without leaving the terminal.</p>
+    </section>
+
+    <!-- Demo 7: Advanced -->
+    <section id="demo-advanced">
+      <div class="demo-caption"><span class="cap-title">Advanced</span><span class="cap-desc">hc, page input/eval, grep -rn, multi-file project</span><button class="cap-replay" onclick="demos.advanced.reset();demos.advanced.play()">&#8635; replay</button></div>
+      <div class="demo-slot demo-slot-tall">
+        <div class="demo-overlay" onclick="demos.advanced.play()">
+          <h2>Advanced workflow</h2>
+          <p class="overlay-desc">Build a todo app, serve it, interact with the DOM, search code, commit.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="info-section" style="margin-top: 24px">
+      <h2>IDE</h2>
+      <p>The <code>ide</code> command opens a visual development
+      environment.<label for="sn-ide" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-ide" class="margin-toggle"/><span class="sidenote">LiteEditor is a zero-dependency textarea-based editor with syntax highlighting for JavaScript, TypeScript, CSS, HTML, JSON, and Markdown. The two layers&thinsp;&mdash;&thinsp;a transparent textarea on top, a highlighted pre below&thinsp;&mdash;&thinsp;are kept in pixel-perfect alignment by matching all font and spacing properties.</span>
+      File tree, multi-tab editor with syntax highlighting, live
+      preview, integrated terminal, git status, and a Claude chat panel.
+      Everything runs through the same virtual filesystem&thinsp;&mdash;&thinsp;the IDE is
+      just another way to look at the same files.</p>
+    </section>
+
+    <!-- Demo 8: IDE -->
+    <section id="demo-ide">
+      <div class="demo-caption"><span class="cap-title">IDE</span><span class="cap-desc">visual development environment</span><button class="cap-replay" onclick="demos.ide.reset();demos.ide.play()">&#8635; replay</button></div>
+      <div class="demo-slot demo-slot-tall">
+        <div class="demo-overlay" onclick="demos.ide.play()">
+          <h2>IDE</h2>
+          <p class="overlay-desc">File tree, editor with syntax highlighting, terminal, live preview.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
+      </div>
+    </section>
+
     <!-- Claude Code -->
     <section class="info-section">
       <h2>Claude Code</h2>
@@ -541,6 +585,7 @@
               '.xterm .xterm-viewport::-webkit-scrollbar { width: 8px; background: #1a1a2e; }',
               '.xterm .xterm-viewport::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; min-height: 30px; }',
               '.xterm .xterm-viewport::-webkit-scrollbar-thumb:hover { background: #777; }',
+              '.xterm .xterm-screen { padding-bottom: 50% !important; }',
             ].join('\n');
             ifrDoc.head.appendChild(sty);
           } catch {}
@@ -627,13 +672,6 @@
         await this.runStep(step);
       }
 
-      // Add scroll margin — write blank lines so last command can scroll up
-      if (!this.aborted) {
-        const halfRows = Math.floor(term.rows / 2);
-        term.write('\r\n'.repeat(halfRows));
-        term.scrollLines(-halfRows);
-      }
-
       // Hint animation — show the terminal is interactive, then hand over
       if (!this.aborted) await this.showHint();
 
@@ -713,6 +751,30 @@
       const delay = step.delay ?? 300;
       const shiro = getShiro();
       const term = shiro.terminal.term;
+
+      // Wait step — simple delay
+      if (step.wait != null) {
+        await sleep(step.wait);
+        return;
+      }
+
+      // Eval step — run JS in the Shiro iframe's context (for IDE automation)
+      if (step.eval != null) {
+        if (step.note) {
+          term.write(`\x1b[38;5;75m\x1b[3m# ${step.note}\x1b[0m\r\n`);
+          await sleep(200);
+        }
+        try {
+          const iframe = document.getElementById('shiro-live');
+          const iframeWin = iframe?.contentWindow;
+          // If IDE is in become mode, find the become iframe
+          const becomeIframe = iframeWin?.document?.querySelector('#become-container iframe');
+          const target = becomeIframe?.contentWindow || iframeWin;
+          if (target) target.eval(step.eval);
+        } catch (e) { console.warn('eval step error:', e); }
+        await sleep(delay);
+        return;
+      }
 
       if (step.note) {
         term.write(`\x1b[38;5;75m\x1b[3m# ${step.note}\x1b[0m\r\n`);
@@ -953,6 +1015,143 @@
     { cmd: 'cd /tmp/counter && git log --oneline' },
   ];
 
+  const todoHTML = '<!DOCTYPE html>\n<html><head><title>Todo</title>\n<link rel="stylesheet" href="style.css">\n</head><body>\n<h1>Todo App</h1>\n<input id="inp" placeholder="Add todo...">\n<button id="add" onclick="addTodo()">Add</button>\n<ul id="list"></ul>\n<p id="count">0 items</p>\n<' + 'script src="app.js"><' + '/script>\n</body></html>';
+  const todoCSS = 'body { background: #0f0f23; color: #eee; font-family: system-ui; padding: 20px; }\ninput { padding: 8px; border-radius: 4px; border: 1px solid #333; background: #1a1a2e; color: #eee; width: 200px; }\nbutton { padding: 8px 16px; background: #6c63ff; color: white; border: none; border-radius: 4px; cursor: pointer; margin-left: 6px; }\nul { list-style: none; padding: 0; margin-top: 12px; }\nli { padding: 8px; border-bottom: 1px solid #222; display: flex; gap: 8px; align-items: center; }\n.check { cursor: pointer; }\n.done { text-decoration: line-through; color: #666; }';
+  const todoJS = ['const todos = [];',
+'function addTodo() {',
+"  const inp = document.getElementById('inp');",
+'  if (!inp.value.trim()) return;',
+'  todos.push({ text: inp.value.trim(), done: false });',
+"  inp.value = '';",
+'  render();',
+'}',
+'function toggle(i) {',
+'  todos[i].done = !todos[i].done;',
+'  render();',
+'}',
+'function render() {',
+"  const list = document.getElementById('list');",
+'  list.innerHTML = todos.map((t, i) =>',
+"    '<li><span class=\"check\" onclick=\"toggle(' + i + ')\">' + (t.done ? '\\u2713' : '\\u25cb') + '</span>' +",
+"    '<span class=\"' + (t.done ? 'done' : '') + '\">' + t.text + '</span></li>'",
+"  ).join('');",
+'  const active = todos.filter(t => !t.done).length;',
+"  document.getElementById('count').textContent = active + ' items';",
+'}'].join('\n');
+
+  const advancedSteps = [
+    { cmd: 'mkdir -p /tmp/todo', note: 'Create a 3-file project' },
+    { cmd: "cat > /tmp/todo/index.html << 'EOF'\n" + todoHTML + "\nEOF" },
+    { cmd: "cat > /tmp/todo/style.css << 'EOF'\n" + todoCSS + "\nEOF" },
+    { cmd: "cat > /tmp/todo/app.js << 'EOF'\n" + todoJS + "\nEOF" },
+    { cmd: 'ls /tmp/todo' },
+    { cmd: 'serve /tmp/todo 6000', note: 'Serve it', delay: 400 },
+    { cmd: 'serve open 6000 --split right', delay: 800 },
+    { cmd: 'page :6000 input "#inp" Buy groceries', note: 'Interact via page' },
+    { cmd: 'page :6000 click "#add"' },
+    { cmd: 'page :6000 input "#inp" Write tests' },
+    { cmd: 'page :6000 click "#add"' },
+    { cmd: 'page :6000 input "#inp" Deploy app' },
+    { cmd: 'page :6000 click "#add"' },
+    { cmd: 'page :6000 text "#count"', note: 'Read the count' },
+    { cmd: 'hc open /tmp/todo/index.html', note: 'Inspect DOM' },
+    { cmd: 'hc q input' },
+    { cmd: 'hc look' },
+    { cmd: 'grep -rn "function" /tmp/todo/app.js', note: 'Search code' },
+    { cmd: 'page :6000 eval "todos.length"', note: 'Eval in app context' },
+    { cmd: 'page :6000 click ".check"', note: 'Complete a todo' },
+    { cmd: 'page :6000 text "#count"' },
+    { cmd: 'cd /tmp/todo && git init && git add . && git commit -m "todo app"', note: 'Commit' },
+    { cmd: 'cd /tmp/todo && git log --oneline' },
+    { cmd: 'serve stop 6000', delay: 200 },
+  ];
+
+  const ideSteps = [
+    // Phase 1 — scaffold project via shell
+    { cmd: 'mkdir -p /tmp/ide-project', note: 'Create project' },
+    { cmd: "echo '<h1>Hello World</h1><p>Built in Shiro IDE</p><link rel=\"stylesheet\" href=\"style.css\"><script src=\"app.js\"><\\/script>' > /tmp/ide-project/index.html" },
+    { cmd: "echo 'h1 { color: #6c63ff; font-family: system-ui; } p { color: #888; }' > /tmp/ide-project/style.css" },
+    { cmd: "echo 'console.log(\"Hello from Shiro IDE\");' > /tmp/ide-project/app.js" },
+    { cmd: 'cd /tmp/ide-project && git init && git add . && git commit -m "init"', note: 'Commit' },
+    { cmd: 'ide /tmp/ide-project', note: 'Launch IDE', delay: 1500 },
+
+    // Phase 2 — interact with IDE via eval steps
+    { eval: `
+      (function waitForIde() {
+        const root = document.querySelector('#become-container iframe');
+        if (!root) return;
+        const ideWin = root.contentWindow;
+        if (!ideWin || !ideWin.__ide) return;
+        ideWin.__ide._demoReady = true;
+      })()
+    `, note: 'Wait for IDE to load', delay: 1000 },
+    { eval: `
+      (function() {
+        const root = document.querySelector('#become-container iframe');
+        if (!root) return;
+        const ideDoc = root.contentDocument;
+        if (!ideDoc) return;
+        const items = ideDoc.querySelectorAll('.tree-item .name');
+        for (const item of items) {
+          if (item.textContent.trim() === 'index.html') { item.closest('.tree-item').click(); break; }
+        }
+      })()
+    `, note: 'Open index.html', delay: 800 },
+    { eval: `
+      (function() {
+        const root = document.querySelector('#become-container iframe');
+        if (!root) return;
+        const ideDoc = root.contentDocument;
+        if (!ideDoc) return;
+        const items = ideDoc.querySelectorAll('.tree-item .name');
+        for (const item of items) {
+          if (item.textContent.trim() === 'style.css') { item.closest('.tree-item').click(); break; }
+        }
+      })()
+    `, note: 'Open style.css', delay: 800 },
+    { eval: `
+      (function() {
+        const root = document.querySelector('#become-container iframe');
+        if (!root) return;
+        const ideDoc = root.contentDocument;
+        if (!ideDoc) return;
+        const items = ideDoc.querySelectorAll('.tree-item .name');
+        for (const item of items) {
+          if (item.textContent.trim() === 'app.js') { item.closest('.tree-item').click(); break; }
+        }
+      })()
+    `, note: 'Open app.js', delay: 800 },
+    { eval: `
+      (function() {
+        const root = document.querySelector('#become-container iframe');
+        if (!root) return;
+        const ideWin = root.contentWindow;
+        if (ideWin && ideWin.__ide) ideWin.__ide.handleAction('toggle-preview');
+      })()
+    `, note: 'Toggle preview', delay: 1000 },
+    { eval: `
+      (function() {
+        const root = document.querySelector('#become-container iframe');
+        if (!root) return;
+        const ideWin = root.contentWindow;
+        if (ideWin && ideWin.__ide) ideWin.__ide.handleAction('toggle-bottom');
+      })()
+    `, note: 'Show terminal', delay: 800 },
+
+    // Phase 3 — exit IDE
+    { eval: `
+      (function() {
+        try { getShiro().unbecome(); } catch {}
+        try {
+          const iframe = document.getElementById('shiro-live');
+          if (iframe && iframe.contentWindow && iframe.contentWindow.__shiro) {
+            iframe.contentWindow.__shiro.unbecome();
+          }
+        } catch {}
+      })()
+    `, note: 'Exit IDE', delay: 800 },
+  ];
+
   document.addEventListener('DOMContentLoaded', () => {
     demos.pipes = new DemoPlayer('demo-pipes', pipesSteps);
     demos.files = new DemoPlayer('demo-files', filesSteps);
@@ -963,6 +1162,8 @@
       previewFiles: ['/tmp/site/index.html'],
     });
     demos.interact = new DemoPlayer('demo-interact', interactSteps);
+    demos.advanced = new DemoPlayer('demo-advanced', advancedSteps);
+    demos.ide = new DemoPlayer('demo-ide', ideSteps);
     waitForShiro().catch(() => {});
   });
   </script>

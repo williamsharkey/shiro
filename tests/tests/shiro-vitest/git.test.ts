@@ -85,16 +85,4 @@ describe('git commands', () => {
     expect(stdout).not.toContain('https://github.com/old/repo.git');
   });
 
-  it.skip('should clone a repository', async () => {
-    let stdout = '';
-    let stderr = '';
-
-    const exitCode = await shell.execute('git clone https://github.com/octocat/Hello-World test-clone', (s) => { stdout += s; }, (e) => { stderr += e; });
-
-    expect(stdout).toContain('Cloning into');
-    expect(exitCode).toBe(0);
-
-    const cloneExists = await fs.exists('/home/user/test-clone');
-    expect(cloneExists).toBe(true);
-  });
 });

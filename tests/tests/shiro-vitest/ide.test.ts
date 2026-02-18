@@ -822,6 +822,110 @@ describe('IDE', () => {
       expect(res.content).toBe('console.log("hi");');
     });
   });
+
+  // ─── IDE demo E2E workflow ───
+  // Replicates the about page IDE demo: scaffold files → launch IDE router → verify API routes
+
+  describe('IDE demo workflow', () => {
+    const IDE_DEMO_DIR = '/home/user/ide-demo';
+    const IDE_DEMO_PORT = 9999;
+
+    async function ideApiCall(endpoint: string, data: any = {}): Promise<any> {
+      return apiCall(IDE_DEMO_PORT, endpoint, data);
+    }
+
+    beforeEach(async () => {
+      // Scaffold the same project the IDE demo creates
+      await fs.mkdir(IDE_DEMO_DIR, { recursive: true });
+      await fs.writeFile(IDE_DEMO_DIR + '/index.html',
+        '<h1>Hello World</h1><p>Built in Shiro IDE</p><link rel="stylesheet" href="style.css"><script src="app.js"></script>');
+      await fs.writeFile(IDE_DEMO_DIR + '/style.css',
+        'h1 { color: #6c63ff; font-family: system-ui; } p { color: #888; }');
+      await fs.writeFile(IDE_DEMO_DIR + '/app.js',
+        'console.log("Hello from Shiro IDE");');
+
+      // Git init + commit (same as demo)
+      await shell.execute(`cd "${IDE_DEMO_DIR}" && git init`, () => {}, () => {});
+      await shell.execute(`cd "${IDE_DEMO_DIR}" && git add .`, () => {}, () => {});
+      await shell.execute(`cd "${IDE_DEMO_DIR}" && git commit -m "init"`, () => {}, () => {});
+
+      // Start IDE router
+      const router = createIdeRouter(fs, shell, IDE_DEMO_DIR);
+      router.serve(IDE_DEMO_PORT, 'ide-demo-test');
+    });
+
+    afterEach(() => {
+      if (iframeServer.isPortInUse(IDE_DEMO_PORT)) iframeServer.close(IDE_DEMO_PORT);
+    });
+
+    it('fs/read returns scaffolded index.html', async () => {
+      const res = await ideApiCall('fs/read', { path: IDE_DEMO_DIR + '/index.html' });
+      expect(res.content).toContain('Hello World');
+      expect(res.content).toContain('style.css');
+      expect(res.content).toContain('app.js');
+    });
+
+    it('fs/read returns scaffolded style.css', async () => {
+      const res = await ideApiCall('fs/read', { path: IDE_DEMO_DIR + '/style.css' });
+      expect(res.content).toContain('#6c63ff');
+      expect(res.content).toContain('font-family');
+    });
+
+    it('fs/read returns scaffolded app.js', async () => {
+      const res = await ideApiCall('fs/read', { path: IDE_DEMO_DIR + '/app.js' });
+      expect(res.content).toContain('console.log');
+      expect(res.content).toContain('Hello from Shiro IDE');
+    });
+
+    it('fs/readdir lists all 3 project files', async () => {
+      const res = await ideApiCall('fs/readdir', { path: IDE_DEMO_DIR });
+      const names = res.entries.filter((e: any) => e.type === 'file').map((e: any) => e.name);
+      expect(names).toContain('index.html');
+      expect(names).toContain('style.css');
+      expect(names).toContain('app.js');
+    });
+
+    it('git/status is clean after initial commit', async () => {
+      const res = await ideApiCall('git/status');
+      expect(res.stdout.trim()).toBe('');
+    });
+
+    it('git/log shows init commit', async () => {
+      const res = await ideApiCall('git/log', { n: 5 });
+      expect(res.stdout).toContain('init');
+    });
+
+    it('editing a file shows changes in git/diff', async () => {
+      await fs.writeFile(IDE_DEMO_DIR + '/app.js', 'console.log("Updated!");');
+      const res = await ideApiCall('git/diff');
+      expect(res.stdout).toContain('Updated');
+    });
+
+    it('shell/exec can run grep on project files', async () => {
+      const res = await ideApiCall('shell/exec', { command: 'grep -rn "color" ' + IDE_DEMO_DIR + '/style.css' });
+      expect(res.stdout).toContain('#6c63ff');
+      expect(res.exitCode).toBe(0);
+    });
+
+    it('shell/exec can list project with ls', async () => {
+      const res = await ideApiCall('shell/exec', { command: 'ls ' + IDE_DEMO_DIR });
+      expect(res.stdout).toContain('index.html');
+      expect(res.stdout).toContain('app.js');
+    });
+
+    it('fs/glob matches JS files', async () => {
+      const res = await ideApiCall('fs/glob', { pattern: '*.js', base: IDE_DEMO_DIR });
+      expect(res.files.length).toBe(1);
+      expect(res.files[0]).toContain('app.js');
+    });
+
+    it('GET / returns IDE HTML with project dir', async () => {
+      const resp = await iframeServer.fetch(IDE_DEMO_PORT, '/');
+      expect(resp.status).toBe(200);
+      expect(resp.body as string).toContain('Shiro IDE');
+      expect(resp.body as string).toContain('ide-demo');
+    });
+  });
 });
 
 /**

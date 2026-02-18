@@ -4045,7 +4045,19 @@ Shell implementers: Parse at lexer/parser level, execute before main command.
           const p = u.split("/").filter((h) => h !== "" && h !== "."), f = [];
           for (const h of p)
             h === ".." ? f.length > 0 && f.pop() : f.push(h);
-          u = "/" + f.join("/");
+          if (u = "/" + f.join("/"), e.fs.readlink)
+            for (let g = 0; g < 20; g++)
+              try {
+                const m = await e.fs.readlink(u);
+                if (m.startsWith("/"))
+                  u = m;
+                else {
+                  const x = u.substring(0, u.lastIndexOf("/")) || "/";
+                  u = e.fs.resolvePath(m, x);
+                }
+              } catch {
+                break;
+              }
         }
         await e.fs.exists(u) ? a.push(u) : r || i.push(`realpath: ${l}: No such file or directory`);
       } catch (u) {
@@ -5055,7 +5067,8 @@ const touch = {
   }
 };
 function expandSet(n) {
-  let e = n;
+  let e = n.replace(/\\\\/g, "\0ESC_BS\0").replace(/\\n/g, `
+`).replace(/\\t/g, "	").replace(/\\r/g, "\r").replace(/\\a/g, "\x07").replace(/\\b/g, "\b").replace(/\\f/g, "\f").replace(/\\v/g, "\v").replace(/\x00ESC_BS\x00/g, "\\");
   e = e.replace(/\[:upper:\]/g, "ABCDEFGHIJKLMNOPQRSTUVWXYZ"), e = e.replace(/\[:lower:\]/g, "abcdefghijklmnopqrstuvwxyz"), e = e.replace(/\[:digit:\]/g, "0123456789"), e = e.replace(/\[:space:\]/g, ` 	
 \r`), e = e.replace(/\[:alpha:\]/g, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"), e = e.replace(/\[:alnum:\]/g, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"), e = e.replace(/\[:punct:\]/g, "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"), e = e.replace(/\[:print:\]/g, " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~");
   let t = "", s = 0;
