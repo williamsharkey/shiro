@@ -1673,11 +1673,43 @@ class PreviewPane {
 
   async reload() {
     const path = this.urlInput.value || '/';
+    const dir = path.replace(/\/[^/]*$/, '') || '/';
     try {
       const res = await api.fs.read(PROJECT_DIR + path);
-      if (res.content !== undefined) {
-        this.iframe.srcdoc = res.content;
+      if (res.content === undefined) return;
+      let html = res.content;
+
+      // Inline linked stylesheets so srcdoc (null origin) can render them
+      const linkRe = /<link[^>]+rel=["']stylesheet["'][^>]*>/gi;
+      for (const m of html.matchAll(linkRe)) {
+        const hrefMatch = m[0].match(/href=["']([^"']+)["']/);
+        if (!hrefMatch) continue;
+        const href = hrefMatch[1];
+        if (href.startsWith('http://') || href.startsWith('https://')) continue;
+        const cssPath = href.startsWith('/') ? href : dir + '/' + href;
+        try {
+          const css = await api.fs.read(PROJECT_DIR + cssPath);
+          if (css.content !== undefined) {
+            html = html.replace(m[0], '<style>' + css.content + '</style>');
+          }
+        } catch {}
       }
+
+      // Inline external scripts
+      const scriptRe = /<script[^>]+src=["']([^"']+)["'][^>]*><\/script>/gi;
+      for (const m of html.matchAll(scriptRe)) {
+        const src = m[1];
+        if (src.startsWith('http://') || src.startsWith('https://')) continue;
+        const jsPath = src.startsWith('/') ? src : dir + '/' + src;
+        try {
+          const js = await api.fs.read(PROJECT_DIR + jsPath);
+          if (js.content !== undefined) {
+            html = html.replace(m[0], '<script>' + js.content + '<\/script>');
+          }
+        } catch {}
+      }
+
+      this.iframe.srcdoc = html;
     } catch {}
   }
 
