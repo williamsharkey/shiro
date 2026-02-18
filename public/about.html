@@ -345,6 +345,16 @@
     <p class="subtitle" style="margin-bottom: 6px">
       If you'd rather just use it: <a href="/">shiro.computer</a>.
     </p>
+    <p class="subtitle" style="margin-bottom: 6px; color: #856404; background: #fff3cd; border: 1px solid #ffeeba; border-radius: 4px; padding: 12px 16px; width: 55%;">
+      <strong>Experimental.</strong> Claude Code runs here with
+      <code>--dangerously-skip-permissions</code>&thinsp;&mdash;&thinsp;every
+      tool call is auto-approved with no confirmation. API requests pass through
+      a CORS proxy on the server, which means your Anthropic credentials transit
+      an intermediary. Do not use this system with sensitive data, secrets, or
+      anything you wouldn't paste into a public terminal. Performance is
+      unreliable; shims break in unexpected ways. Treat this as a demo, not a
+      production environment.
+    </p>
 
     <div id="engine-status" class="status">loading shiro&hellip;</div>
 
