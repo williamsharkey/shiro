@@ -1,9 +1,11 @@
 # Shiro
 
-A Unix-like development environment that runs entirely in a browser tab. Files persist in IndexedDB, the shell supports pipes and redirects, and 150+ commands are available — including git, npm, node, vi, and curl. It builds to a single HTML file (~350 KB gzipped) with no external assets.
+A Unix-like development environment that runs entirely in a browser tab. Files persist in IndexedDB, the shell supports pipes and redirects, and 200+ commands are available — including git, npm, node, vi, and curl. It builds to a single static HTML file (~420 KB gzipped) with no external assets.
 
 **Live:** [shiro.computer](https://shiro.computer)
 **About:** [shiro.computer/about](https://shiro.computer/about)
+
+> **Experimental.** Claude Code runs with `--dangerously-skip-permissions` (all tool calls auto-approved). API requests route through a CORS proxy on the server, so your Anthropic credentials transit an intermediary. Do not use with sensitive data. Performance is unreliable — treat this as a demo, not a production environment.
 
 ## What It Does
 

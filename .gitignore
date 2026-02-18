@@ -5,3 +5,4 @@ dist/
 .DS_Store
 claude-code-pkg/
 .vercel
+.wrangler
