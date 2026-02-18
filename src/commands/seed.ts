@@ -639,11 +639,19 @@ async function execSeedGif(ctx: CommandContext): Promise<number> {
     ctx.stdout += 'Encoding GIF...\n';
     const gifBytes = encodeGIF(canvas, compressed);
 
+    // Store on __shiro for demo/drag access
+    if (typeof window !== 'undefined' && (window as any).__shiro) {
+      (window as any).__shiro.lastSeedGif = gifBytes;
+    }
+
     // Download
     const subdomain = getCurrentSubdomain();
     const date = new Date().toISOString().slice(0, 10);
     const filename = `${subdomain || 'shiro'}-${date}.gif`;
     triggerDownload(gifBytes, 'image/gif', filename);
+
+    // Show draggable thumbnail
+    showDraggableGif(gifBytes, filename);
 
     // Stats output
     const imageApprox = gifBytes.length - compressed.length;
@@ -669,6 +677,63 @@ async function execSeedGif(ctx: CommandContext): Promise<number> {
     ctx.stderr = `seed gif: ${e.message}\n`;
     return 1;
   }
+}
+
+// ─── draggable GIF thumbnail ─────────────────────────────────
+
+function showDraggableGif(gifBytes: Uint8Array, filename: string) {
+  if (typeof document === 'undefined') return;
+  const container = document.getElementById('terminal');
+  if (!container) return;
+
+  // Remove any existing thumbnail
+  const existing = document.getElementById('seed-gif-thumb');
+  if (existing) existing.remove();
+
+  const blob = new Blob([gifBytes as BlobPart], { type: 'image/gif' });
+  const url = URL.createObjectURL(blob);
+
+  const el = document.createElement('div');
+  el.id = 'seed-gif-thumb';
+  el.draggable = true;
+  el.style.cssText = [
+    'position:absolute', 'bottom:16px', 'right:16px', 'z-index:1000',
+    'background:#1a1a2e', 'border:1px solid #444', 'border-radius:8px',
+    'padding:6px', 'cursor:grab', 'box-shadow:0 4px 12px rgba(0,0,0,0.5)',
+    'display:flex', 'flex-direction:column', 'align-items:center', 'gap:4px',
+  ].join(';');
+
+  const img = document.createElement('img');
+  img.src = url;
+  img.style.cssText = 'width:120px;height:auto;border-radius:4px;pointer-events:none';
+
+  const label = document.createElement('span');
+  label.textContent = 'Drag to import';
+  label.style.cssText = 'font-size:10px;color:#888;font-family:system-ui';
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '\u00d7';
+  closeBtn.style.cssText = [
+    'position:absolute', 'top:2px', 'right:6px', 'background:none',
+    'border:none', 'color:#666', 'font-size:14px', 'cursor:pointer',
+    'line-height:1', 'padding:0',
+  ].join(';');
+  closeBtn.onclick = () => { el.remove(); URL.revokeObjectURL(url); };
+
+  el.appendChild(closeBtn);
+  el.appendChild(img);
+  el.appendChild(label);
+
+  el.addEventListener('dragstart', (e) => {
+    const file = new File([gifBytes as BlobPart], filename, { type: 'image/gif' });
+    e.dataTransfer!.items.add(file);
+    e.dataTransfer!.effectAllowed = 'copy';
+  });
+
+  container.appendChild(el);
+
+  // Auto-remove after 30 seconds
+  setTimeout(() => { if (el.parentNode) { el.remove(); URL.revokeObjectURL(url); } }, 30000);
 }
 
 // ─── seed html implementation ────────────────────────────────

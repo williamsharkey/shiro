@@ -377,6 +377,7 @@ async function main() {
     processTable, // Windowed process registry
     unbecome: deactivateBecomeMode, // Exit app mode from browser console
     closeSplit: closeSplitView, // Close split pane from browser console
+    lastSeedGif: null as Uint8Array | null, // Last generated seed GIF bytes (for demos/drag)
   };
 
   // OAuth callback bridge: receive auth codes from /oauth/callback popup

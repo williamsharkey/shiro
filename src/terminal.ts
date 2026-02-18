@@ -658,6 +658,13 @@ export class ShiroTerminal {
         if (ch === '\t') { this.rawModeCallback('Tab'); continue; }
         if (ch === '\x03') { this.rawModeCallback('Ctrl+C'); continue; }
 
+        // Map Ctrl+A through Ctrl+Z (code 1-26, skip 3=Ctrl+C, 9=Tab, 10=\n, 13=\r already handled)
+        const code = ch.charCodeAt(0);
+        if (code >= 1 && code <= 26 && code !== 3 && code !== 9 && code !== 10 && code !== 13) {
+          this.rawModeCallback('Ctrl+' + String.fromCharCode(code + 64));
+          continue;
+        }
+
         // Regular character
         this.rawModeCallback(ch);
       }
