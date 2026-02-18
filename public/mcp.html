@@ -178,16 +178,42 @@
         No servers needed &mdash; it uses WebRTC for a direct peer-to-peer connection.
       </p>
 
-      <div class="diagram">
-┌─────────────────┐         ┌──────────────────┐         ┌─────────────────┐
-│  Your Terminal  │         │  Signaling Svc   │         │  Shiro Browser  │
-│                 │         │                  │         │                 │
-│  Claude Code    │◄───────►│  remote.shiro    │◄───────►│  remote start   │
-│  + MCP Tool     │         │  .computer       │         │                 │
-└────────┬────────┘         └──────────────────┘         └────────┬────────┘
-         │                                                        │
-         └──────────────── WebRTC DataChannel ────────────────────┘
-                         (direct P2P after setup)
+      <div class="diagram" style="text-align:center;padding:1.5rem 0">
+        <svg viewBox="0 0 680 200" style="max-width:680px;width:100%" xmlns="http://www.w3.org/2000/svg">
+          <style>
+            .box { fill:#252542; stroke:#00d4ff; stroke-width:1.5; rx:6 }
+            .label { fill:#e0e0e0; font-family:'JetBrains Mono',monospace; font-size:12px; text-anchor:middle }
+            .sublabel { fill:#8888aa; font-family:'JetBrains Mono',monospace; font-size:10px; text-anchor:middle }
+            .arrow { stroke:#cc5de8; stroke-width:1.5; marker-end:url(#ah); marker-start:url(#ah2) }
+            .p2p { stroke:#51cf66; stroke-width:2; stroke-dasharray:6,3 }
+            .p2p-label { fill:#51cf66; font-family:'JetBrains Mono',monospace; font-size:11px; text-anchor:middle }
+            .p2p-sub { fill:#8888aa; font-family:'JetBrains Mono',monospace; font-size:9px; text-anchor:middle }
+          </style>
+          <defs>
+            <marker id="ah" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="#cc5de8" fill="#cc5de8" d="M0,0 L8,3 L0,6Z"/></marker>
+            <marker id="ah2" markerWidth="8" markerHeight="6" refX="0" refY="3" orient="auto"><path fill="#cc5de8" d="M8,0 L0,3 L8,6Z"/></marker>
+          </defs>
+          <!-- boxes -->
+          <rect class="box" x="10" y="20" width="170" height="80"/>
+          <rect class="box" x="255" y="20" width="170" height="80"/>
+          <rect class="box" x="500" y="20" width="170" height="80"/>
+          <!-- labels -->
+          <text class="label" x="95" y="52">Your Terminal</text>
+          <text class="sublabel" x="95" y="70">Claude Code</text>
+          <text class="sublabel" x="95" y="84">+ MCP Tool</text>
+          <text class="label" x="340" y="52">Signaling</text>
+          <text class="sublabel" x="340" y="70">shiro.computer</text>
+          <text class="sublabel" x="340" y="84">/signal/*</text>
+          <text class="label" x="585" y="52">Shiro Browser</text>
+          <text class="sublabel" x="585" y="70">remote start</text>
+          <!-- signaling arrows -->
+          <line class="arrow" x1="180" y1="60" x2="255" y2="60"/>
+          <line class="arrow" x1="425" y1="60" x2="500" y2="60"/>
+          <!-- P2P arc -->
+          <path class="p2p" d="M95,100 C95,175 585,175 585,100" fill="none"/>
+          <text class="p2p-label" x="340" y="160">WebRTC DataChannel</text>
+          <text class="p2p-sub" x="340" y="175">direct P2P after setup</text>
+        </svg>
       </div>
     </section>
 
@@ -229,7 +255,7 @@
         </div>
         <div class="tool">
           <div class="tool-name">exec</div>
-          <div class="tool-desc">Execute shell commands &mdash; 140+ commands including hc, serve, image, npm, node</div>
+          <div class="tool-desc">Execute shell commands &mdash; 200+ commands including hc, serve, image, npm, node</div>
         </div>
         <div class="tool">
           <div class="tool-name">read</div>
@@ -306,13 +332,12 @@ clear           # Refresh the banner to show/hide connection code</code></pre>
       <p>This section helps AI assistants (Claude, etc.) use Shiro MCP effectively.</p>
 
       <h3>Shell Commands (exec)</h3>
-      <p>Shiro provides 140+ commands. Run <code>help</code> for full list. Key Shiro-specific commands:</p>
+      <p>Shiro provides 200+ commands. Run <code>help</code> for full list. Key Shiro-specific commands:</p>
       <pre><code>hc              # Hypercompact DOM navigation (see below)
 serve &lt;dir&gt;     # Start virtual HTTP server
 servers         # List active servers
 serve stop &lt;p&gt;  # Stop server on port
 image save/load # Filesystem snapshots
-spirit          # AI coding agent (requires API key)
 npm install     # Install npm packages
 node file.js    # Run JavaScript files</code></pre>
 
