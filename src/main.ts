@@ -107,6 +107,7 @@ import { getconfCmd } from './commands/getconf';
 import { edCmd } from './commands/ed';
 import { iconvCmd } from './commands/iconv';
 import { zipCmd, unzipCmd } from './commands/zip';
+import { ccCmd, gccCmd } from './commands/cc';
 import { processTable } from './process-table';
 import { iframeServer } from './iframe-server';
 import { allCommands } from '../fluffycoreutils/src/index';
@@ -295,6 +296,8 @@ async function main() {
   registerCommand(commands, iconvCmd, 'src/commands/iconv.ts');
   registerCommand(commands, zipCmd, 'src/commands/zip.ts');
   registerCommand(commands, unzipCmd, 'src/commands/zip.ts');
+  registerCommand(commands, ccCmd, 'src/commands/cc.ts');
+  registerCommand(commands, gccCmd, 'src/commands/cc.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {
@@ -314,6 +317,7 @@ async function main() {
     'sh', 'bash', 'vi', 'nano', 'rg', 'esbuild',
     'mktemp', 'jq', 'tput', 'stty', 'gzip', 'gunzip', 'wget',
     'pgrep', 'pkill', 'nproc', 'getconf', 'ed', 'iconv', 'zip', 'unzip',
+    'cc', 'gcc',
   ];
   (async () => {
     try {
