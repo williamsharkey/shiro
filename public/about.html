@@ -574,9 +574,42 @@
       and embeds the entire filesystem in a custom extension block. The
       result looks like a screenshot but carries the complete state. Drag
       it back onto Shiro to restore everything.</p>
-      <p>There are simpler variants: <code>seed</code> copies a JS snippet to the
-      clipboard (paste it in any browser console to load your files there),
-      and <code>seed html</code> produces a standalone page.</p>
+      <p><code>seed html</code> downloads a standalone HTML file&thinsp;&mdash;&thinsp;open
+      it in any browser to boot Shiro with your filesystem already loaded.</p>
+    </section>
+
+    <!-- Inject -->
+    <section class="info-section">
+      <h2>Inject into any page</h2>
+      <p><code>seed</code> (with no arguments) copies a JavaScript snippet to
+      your clipboard. Open DevTools on any website, paste it into the
+      console, and a floating Shiro window appears on top of the
+      page.<label for="sn-inject" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-inject" class="margin-toggle"/><span class="sidenote">The snippet creates a draggable, resizable iframe with macOS-style traffic lights (close, minimize), font size controls, and a title bar. It loads Shiro from shiro.computer and sends your entire filesystem + localStorage via postMessage.</span>
+      Your files come with it. Everything you had in Shiro is available
+      inside the injected window.</p>
+
+      <p>More interesting: the snippet also installs an <code>hc</code>
+      bridge into the host page. From inside the injected Shiro, run
+      <code>hc outer</code> and all <code>hc</code> commands now
+      operate on the host page's
+      DOM.<label for="sn-hc-outer" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-hc-outer" class="margin-toggle"/><span class="sidenote">The bridge communicates via postMessage. The Shiro iframe sends <code>shiro-hc</code> messages; the host-page bridge executes <code>q</code>, <code>look</code>, <code>@N</code>, <code>g</code>, and the rest of the HC command set against the real document, then posts the result back. No cross-origin issues because postMessage doesn't require same-origin.</span>
+      <code>hc look</code> lists every button, link, and input on
+      the page. <code>hc q .product-price</code> queries elements.
+      <code>hc @3</code> clicks one. You can read text, grep content,
+      inspect attributes&thinsp;&mdash;&thinsp;all from a shell prompt
+      floating over the page you're examining.</p>
+
+      <p>Since Claude Code runs inside Shiro, this means an AI coding
+      agent can interact with any website: navigate a page, read its DOM,
+      click buttons, extract data. The page doesn't need to cooperate or
+      expose an API.</p>
+
+      <p><code>seed blob</code> is the self-contained
+      variant.<label for="sn-blob" class="margin-toggle sidenote-number"></label><input type="checkbox" id="sn-blob" class="margin-toggle"/><span class="sidenote">The blob variant inlines all of Shiro's HTML, JavaScript, and CSS, gzip-compresses everything, and base64-encodes it. At runtime it decompresses and creates a blob URL. No network request to shiro.computer, so it works even on pages with restrictive Content Security Policies.</span>
+      Instead of loading Shiro from shiro.computer, it packs the entire
+      application into the snippet itself&thinsp;&mdash;&thinsp;gzip-compressed
+      and encoded as a blob URL. No external fetch, no CSP issues. It works
+      offline, on intranets, behind firewalls.</p>
     </section>
 
     <!-- Rough edges -->
@@ -1199,6 +1232,7 @@
   ];
 
   const seedSteps = [
+    { target: 'right', note: 'Target shiro.computer instance (empty)', delay: 100 },
     { target: 'left', cmd: 'mkdir -p /tmp/app' },
     { target: 'left', cmd: "echo '<h1>My App</h1><p>Snapshot me!</p>' > /tmp/app/index.html" },
     { target: 'left', cmd: 'ls /tmp/app', note: 'Files in left Shiro' },
