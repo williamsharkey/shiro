@@ -290,6 +290,10 @@ export function injectIframeScripts(html: string, port: number): string {
   });
 
   function fetchFromParent(url, options) {
+    // Normalize bare filenames to absolute paths (e.g. "style.css" → "/style.css")
+    if (url && !url.startsWith('/') && !url.startsWith('http') && !url.startsWith('data:') && !url.startsWith('blob:')) {
+      url = '/' + url;
+    }
     return new Promise(function(resolve, reject) {
       var id = 'res_' + (++resourceId);
       pendingResources.set(id, { resolve: resolve, reject: reject });
@@ -314,7 +318,7 @@ export function injectIframeScripts(html: string, port: number): string {
   var originalFetch = window.fetch;
   window.fetch = function(url, options) {
     var urlStr = typeof url === 'string' ? url : url.toString();
-    if (urlStr.startsWith('/') || urlStr.startsWith('./') || urlStr.startsWith('../')) {
+    if (!urlStr.startsWith('http://') && !urlStr.startsWith('https://') && !urlStr.startsWith('data:') && !urlStr.startsWith('blob:') && !urlStr.startsWith('//')) {
       return fetchFromParent(urlStr, options).then(function(data) {
         return new Response(data.body, {
           status: data.status || 200,
@@ -478,15 +482,18 @@ export function injectIframeScripts(html: string, port: number): string {
 })();
 </script>`;
 
-  // Rewrite <link href="/..."> and <script src="/..."> to deferred loading
+  // Rewrite <link href="..."> and <script src="..."> to deferred loading
+  // Handles all relative URLs: /path, ./path, ../path, and bare filenames like style.css
+  const isRelativeUrl = (url: string) =>
+    !url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('data:') && !url.startsWith('blob:') && !url.startsWith('//');
   html = html.replace(/<link([^>]*)\shref=(["'])([^"']+)\2/gi, (match, attrs, quote, href) => {
-    if (href.startsWith('/') || href.startsWith('./') || href.startsWith('../')) {
+    if (isRelativeUrl(href)) {
       return `<link${attrs} data-vfs-href=${quote}${href}${quote}`;
     }
     return match;
   });
   html = html.replace(/<script([^>]*)\ssrc=(["'])([^"']+)\2/gi, (match, attrs, quote, src) => {
-    if (src.startsWith('/') || src.startsWith('./') || src.startsWith('../')) {
+    if (isRelativeUrl(src)) {
       if (attrs.includes('type="module"') || attrs.includes("type='module'")) {
         return `<script${attrs} data-vfs-module-src=${quote}${src}${quote}`;
       }

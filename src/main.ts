@@ -418,6 +418,8 @@ async function main() {
     // Skip banner, HUD, mobile input, favicon — just show a clean prompt
     terminal.term.options.fontSize = 13;
     terminal.fitAddon.fit();
+    // Init drop handler so seed GIF drag-and-drop works in demos
+    initDropHandler(terminal, fs);
     // Signal ready
     (window as any).__shiroDemo = true;
     return;

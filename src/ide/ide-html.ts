@@ -1696,7 +1696,7 @@ class PreviewPane {
       }
 
       // Inline external scripts
-      const scriptRe = /<script[^>]+src=["']([^"']+)["'][^>]*><\/script>/gi;
+      const scriptRe = /<script[^>]+src=["']([^"']+)["'][^>]*><\\/script>/gi;
       for (const m of html.matchAll(scriptRe)) {
         const src = m[1];
         if (src.startsWith('http://') || src.startsWith('https://')) continue;
@@ -1704,7 +1704,7 @@ class PreviewPane {
         try {
           const js = await api.fs.read(PROJECT_DIR + jsPath);
           if (js.content !== undefined) {
-            html = html.replace(m[0], '<script>' + js.content + '<\/script>');
+            html = html.replace(m[0], '<script>' + js.content + '<\\/script>');
           }
         } catch {}
       }

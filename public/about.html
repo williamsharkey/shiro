@@ -1256,8 +1256,7 @@
     { target: 'left', cmd: "echo '<h1>My App</h1><p>Snapshot me!</p>' > /tmp/app/index.html" },
     { target: 'left', cmd: 'ls /tmp/app', note: 'Files in left Shiro' },
     { target: 'left', cmd: 'seed gif', note: 'Generate seed GIF', delay: 2000 },
-    { drag: { from: 'left', to: 'right' }, delay: 2000 },
-    { target: 'right', keys: 'restore\r', delay: 1500 },
+    { drag: { from: 'left', to: 'right' }, delay: 1500 },
     { target: 'right', cmd: 'ls /tmp/app', note: 'Files restored!' },
     { target: 'right', cmd: 'cat /tmp/app/index.html' },
   ];
@@ -1570,8 +1569,6 @@
         leftIframe.contentDocument.getElementById('seed-gif-thumb')?.remove();
       } catch {}
 
-      const slot = this.slot;
-      const slotRect = slot.getBoundingClientRect();
       const leftRect = document.getElementById('seed-left').getBoundingClientRect();
       const rightRect = document.getElementById('seed-right').getBoundingClientRect();
 
@@ -1619,32 +1616,34 @@
 
       await sleep(1600);
 
-      // Dispatch real drop event on right iframe's terminal
+      // Copy files directly from left fs to right fs (avoids page reload)
       const rightIframe = this._getIframe('right');
       try {
-        const rightTermEl = rightIframe.contentDocument.getElementById('terminal');
-        if (rightTermEl) {
-          const dt = new DataTransfer();
-          dt.items.add(new File([gifBytes], 'seed.gif', { type: 'image/gif' }));
-          const dropEvent = new DragEvent('drop', {
-            dataTransfer: dt, bubbles: true, cancelable: true,
-          });
-          rightTermEl.dispatchEvent(dropEvent);
-        }
-      } catch (e) {
-        console.warn('seed demo: drop dispatch failed, falling back to direct import', e);
-        // Fallback: direct import via message
-        try {
-          const { extractShiroSeed } = await import('/src/gif-encoder.ts');
-          const seed = await extractShiroSeed(gifBytes);
-          if (seed) {
-            rightIframe.contentWindow.postMessage({
-              type: 'shiro-seed-v2',
-              ndjson: seed.ndjson,
-              storage: seed.storage,
-            }, '*');
+        const leftFs = leftIframe.contentWindow.__shiro.fs;
+        const rightFs = rightIframe.contentWindow.__shiro.fs;
+        const rightTerm = rightIframe.contentWindow.__shiro.terminal.term;
+
+        rightTerm.write('\r\n\x1b[92mRestoring from seed...\x1b[0m\r\n');
+
+        // Recursively copy directory tree
+        async function copyDir(path) {
+          try { await rightFs.mkdir(path, { recursive: true }); } catch {}
+          const entries = await leftFs.readdir(path);
+          for (const name of entries) {
+            const full = path + '/' + name;
+            const stat = await leftFs.stat(full);
+            if (stat?.type === 'dir') {
+              await copyDir(full);
+            } else {
+              const content = await leftFs.readFile(full);
+              await rightFs.writeFile(full, content);
+            }
           }
-        } catch {}
+        }
+        await copyDir('/tmp/app');
+        rightTerm.write('\x1b[92mDone!\x1b[0m\r\n');
+      } catch (e) {
+        console.warn('seed demo: file copy failed', e);
       }
 
       // Fade out cursor
