@@ -448,6 +448,30 @@
       </div>
     </section>
 
+    <!-- Demo: Vi -->
+    <section id="demo-vi">
+      <div class="demo-caption"><span class="cap-title">Vi editor</span><span class="cap-desc">create, edit, search, and serve — all from vi</span><button class="cap-replay" onclick="demos.vi.reset();demos.vi.play()">&#8635; replay</button></div>
+      <div class="demo-slot demo-slot-tall">
+        <div class="demo-overlay" onclick="demos.vi.play()">
+          <h2>Vi editor</h2>
+          <p class="overlay-desc">Create a file with vi, edit it, serve it.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Demo: Nano -->
+    <section id="demo-nano">
+      <div class="demo-caption"><span class="cap-title">Nano editor</span><span class="cap-desc">cut, paste, search, save with Ctrl shortcuts</span><button class="cap-replay" onclick="demos.nano.reset();demos.nano.play()">&#8635; replay</button></div>
+      <div class="demo-slot demo-slot-tall">
+        <div class="demo-overlay" onclick="demos.nano.play()">
+          <h2>Nano editor</h2>
+          <p class="overlay-desc">Edit files with nano. Cut, paste, search, save.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
+      </div>
+    </section>
+
     <section class="info-section" style="margin-top: 24px">
       <h2>Advanced workflow</h2>
       <p>The <code>hc</code> command navigates DOM trees with a token-efficient
@@ -487,6 +511,24 @@
         <div class="demo-overlay" onclick="demos.ide.play()">
           <h2>IDE</h2>
           <p class="overlay-desc">File tree, editor with syntax highlighting, terminal, live preview.</p>
+          <button class="demo-play-btn">&#9654;</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Demo: Seed GIF -->
+    <section id="demo-seed">
+      <div class="demo-caption"><span class="cap-title">Seed GIF</span><span class="cap-desc">snapshot one instance, drag to restore in another</span><button class="cap-replay" onclick="demos.seed.reset();demos.seed.play()">&#8635; replay</button></div>
+      <div class="demo-slot demo-slot-tall" style="display:flex;gap:2px">
+        <div id="seed-left" style="flex:1;position:relative;overflow:hidden;border-radius:6px 0 0 6px">
+          <div style="position:absolute;top:4px;left:8px;font-size:10px;color:#555;font-family:system-ui;z-index:1;pointer-events:none">source</div>
+        </div>
+        <div id="seed-right" style="flex:1;position:relative;overflow:hidden;border-radius:0 6px 6px 0">
+          <div style="position:absolute;top:4px;left:8px;font-size:10px;color:#555;font-family:system-ui;z-index:1;pointer-events:none">target</div>
+        </div>
+        <div class="demo-overlay" onclick="demos.seed.play()">
+          <h2>Seed GIF</h2>
+          <p class="overlay-desc">Snapshot one Shiro instance, drag the GIF to restore in another.</p>
           <button class="demo-play-btn">&#9654;</button>
         </div>
       </div>
@@ -798,6 +840,49 @@
         return;
       }
 
+      // start step — begin interactive command (no await)
+      if (step.start != null) {
+        await this.typeCommand(term, step.start);
+        const shiro = getShiro();
+        let out = '';
+        this._interactivePromise = shiro.shell.execute(step.start,
+          s => { term.write(s.replace(/\n/g, '\r\n')); },
+          s => { term.write(s.replace(/\n/g, '\r\n')); }
+        );
+        await sleep(delay);
+        return;
+      }
+
+      // keys step — send raw keystrokes to terminal
+      if (step.keys != null) {
+        const iframe = document.getElementById('shiro-live');
+        const shiroTerm = iframe?.contentWindow?.__shiro?.terminal;
+        if (shiroTerm) {
+          if (step.typeSpeed) {
+            // Animated typing (one char at a time)
+            for (let i = 0; i < step.keys.length; i++) {
+              if (this.aborted) return;
+              shiroTerm.injectInput(step.keys[i]);
+              await sleep(step.typeSpeed);
+            }
+          } else {
+            shiroTerm.injectInput(step.keys);
+          }
+        }
+        await sleep(delay);
+        return;
+      }
+
+      // waitDone step — wait for interactive command to finish
+      if (step.waitDone) {
+        if (this._interactivePromise) {
+          await this._interactivePromise;
+          this._interactivePromise = null;
+        }
+        await sleep(delay);
+        return;
+      }
+
       if (!step.cmd) {
         if (step.preview && this.hasPreview) await this.updatePreview();
         await sleep(delay);
@@ -1016,8 +1101,8 @@
   ];
 
   const todoHTML = '<!DOCTYPE html>\n<html><head><title>Todo</title>\n<link rel="stylesheet" href="style.css">\n</head><body>\n<h1>Todo App</h1>\n<input id="inp" placeholder="Add todo...">\n<button id="add" onclick="addTodo()">Add</button>\n<ul id="list"></ul>\n<p id="count">0 items</p>\n<' + 'script src="app.js"><' + '/script>\n</body></html>';
-  const todoCSS = 'body { background: #0f0f23; color: #eee; font-family: system-ui; padding: 20px; }\ninput { padding: 8px; border-radius: 4px; border: 1px solid #333; background: #1a1a2e; color: #eee; width: 200px; }\nbutton { padding: 8px 16px; background: #6c63ff; color: white; border: none; border-radius: 4px; cursor: pointer; margin-left: 6px; }\nul { list-style: none; padding: 0; margin-top: 12px; }\nli { padding: 8px; border-bottom: 1px solid #222; display: flex; gap: 8px; align-items: center; }\n.check { cursor: pointer; }\n.done { text-decoration: line-through; color: #666; }';
-  const todoJS = ['const todos = [];',
+  const todoCSS = 'body { background: #fffff8; color: #111; font-family: et-book, Palatino, "Palatino Linotype", "Book Antiqua", Georgia, serif; padding: 24px 28px; line-height: 1.6; }\nh1 { font-size: 1.4rem; font-weight: 400; margin-bottom: 16px; color: #333; }\ninput { padding: 6px 10px; border: 1px solid #ccc; border-radius: 2px; background: #fff; color: #333; width: 200px; font-family: inherit; font-size: 0.9rem; }\ninput:focus { outline: none; border-color: #999; }\nbutton { padding: 6px 14px; background: #fffff8; color: #333; border: 1px solid #ccc; border-radius: 2px; cursor: pointer; font-family: inherit; font-size: 0.9rem; margin-left: 6px; }\nbutton:hover { background: #f0f0e8; border-color: #999; }\nul { list-style: none; padding: 0; margin-top: 16px; }\nli { padding: 8px 0; border-bottom: 1px solid #e8e8e0; display: flex; gap: 10px; align-items: center; font-size: 0.95rem; }\n.check { cursor: pointer; color: #999; font-size: 1.1rem; }\n.done { text-decoration: line-through; color: #bbb; }\n#count { font-size: 0.8rem; color: #999; margin-top: 12px; font-style: italic; }';
+  const todoJS = ['var todos = [];',
 'function addTodo() {',
 "  const inp = document.getElementById('inp');",
 '  if (!inp.value.trim()) return;',
@@ -1046,7 +1131,7 @@
     { cmd: "cat > /tmp/todo/app.js << 'EOF'\n" + todoJS + "\nEOF" },
     { cmd: 'ls /tmp/todo' },
     { cmd: 'serve /tmp/todo 6000', note: 'Serve it', delay: 400 },
-    { cmd: 'serve open 6000 --split right', delay: 800 },
+    { cmd: 'serve open 6000 --split right', delay: 1200 },
     { cmd: 'page :6000 input "#inp" Buy groceries', note: 'Interact via page' },
     { cmd: 'page :6000 click "#add"' },
     { cmd: 'page :6000 input "#inp" Write tests' },
@@ -1064,6 +1149,62 @@
     { cmd: 'cd /tmp/todo && git init && git add . && git commit -m "todo app"', note: 'Commit' },
     { cmd: 'cd /tmp/todo && git log --oneline' },
     { cmd: 'serve stop 6000', delay: 200 },
+  ];
+
+  const viSteps = [
+    { cmd: 'mkdir -p /tmp/site', note: 'Create project' },
+    { start: 'vi /tmp/site/index.html', note: 'Open vi', delay: 600 },
+    { keys: 'i', delay: 300 },
+    { keys: '<!DOCTYPE html>\n<html><body>\n<h1>Built with vi</h1>\n<p>In a browser.</p>\n</body></html>',
+      typeSpeed: 25, delay: 300 },
+    { keys: '\x1b', delay: 400 },
+    { keys: ':w\r', delay: 500 },
+    { keys: '/Built\r', delay: 500, note: 'Search' },
+    { keys: 'dd', delay: 400, note: 'Delete line' },
+    { keys: 'O', delay: 300 },
+    { keys: '<h1>Edited with vi</h1>',
+      typeSpeed: 30, delay: 300 },
+    { keys: '\x1b', delay: 300 },
+    { keys: ':wq\r', delay: 500 },
+    { waitDone: true, delay: 300 },
+    { cmd: 'cat /tmp/site/index.html', note: 'Verify file' },
+    { cmd: 'serve /tmp/site 4000', delay: 400 },
+    { cmd: 'serve open 4000 --split right', delay: 800 },
+    { cmd: 'page :4000 text "h1"', note: 'Check heading' },
+    { cmd: 'serve stop 4000', delay: 200 },
+  ];
+
+  const nanoSteps = [
+    { cmd: 'mkdir -p /tmp/notes', note: 'Create project' },
+    { cmd: "echo 'Shopping list\nMilk\nBread\nEggs\nButter' > /tmp/notes/list.txt" },
+    { start: 'nano /tmp/notes/list.txt', note: 'Open nano', delay: 600 },
+    { keys: '\x1b[B', delay: 200 },
+    { keys: '\x1b[B', delay: 200 },
+    { keys: '\x0b', delay: 400, note: 'Cut line (Ctrl+K)' },
+    { keys: '\x1b[B', delay: 200 },
+    { keys: '\x1b[B', delay: 200 },
+    { keys: '\x15', delay: 400, note: 'Paste (Ctrl+U)' },
+    { keys: '\x17', delay: 400, note: 'Search (Ctrl+W)' },
+    { keys: 'Butter', typeSpeed: 40, delay: 300 },
+    { keys: '\r', delay: 500 },
+    { keys: '\x1b[F', delay: 200 },
+    { keys: ' (salted)', typeSpeed: 40, delay: 300 },
+    { keys: '\x0f', delay: 500, note: 'Save (Ctrl+O)' },
+    { keys: '\r', delay: 500 },
+    { keys: '\x18', delay: 400, note: 'Exit (Ctrl+X)' },
+    { waitDone: true, delay: 300 },
+    { cmd: 'cat /tmp/notes/list.txt', note: 'Verify edits' },
+  ];
+
+  const seedSteps = [
+    { target: 'left', cmd: 'mkdir -p /tmp/app' },
+    { target: 'left', cmd: "echo '<h1>My App</h1><p>Snapshot me!</p>' > /tmp/app/index.html" },
+    { target: 'left', cmd: 'ls /tmp/app', note: 'Files in left Shiro' },
+    { target: 'left', cmd: 'seed gif', note: 'Generate seed GIF', delay: 2000 },
+    { drag: { from: 'left', to: 'right' }, delay: 2000 },
+    { target: 'right', keys: 'restore\r', delay: 1500 },
+    { target: 'right', cmd: 'ls /tmp/app', note: 'Files restored!' },
+    { target: 'right', cmd: 'cat /tmp/app/index.html' },
   ];
 
   const ideSteps = [
@@ -1152,6 +1293,329 @@
     `, note: 'Exit IDE', delay: 800 },
   ];
 
+  // ===== SeedDemoPlayer — manages TWO iframes =====
+  class SeedDemoPlayer {
+    constructor(id, steps) {
+      this.id = id;
+      this.steps = steps;
+      this.el = document.getElementById(id);
+      this.slot = this.el.querySelector('.demo-slot');
+      this.overlay = this.el.querySelector('.demo-overlay');
+      this.playBtn = this.overlay.querySelector('.demo-play-btn');
+      this.caption = this.el.querySelector('.demo-caption');
+      this.playing = false;
+      this.aborted = false;
+      this.leftShiro = null;
+      this.rightShiro = null;
+    }
+
+    async play() {
+      if (this.playing) return;
+      if (activeDemo && activeDemo !== this && activeDemo.playing) {
+        activeDemo.aborted = true;
+        activeDemo.playing = false;
+      }
+      if (activeDemo && activeDemo !== this) {
+        activeDemo.showOverlay();
+        activeDemo.caption.classList.remove('visible');
+      }
+      activeDemo = this;
+
+      // Hide the shared iframe so it doesn't interfere
+      const sharedIframe = document.getElementById('shiro-live');
+      if (sharedIframe.parentElement !== document.body) {
+        document.body.appendChild(sharedIframe);
+      }
+      sharedIframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0';
+
+      // Create two iframes
+      const leftContainer = document.getElementById('seed-left');
+      const rightContainer = document.getElementById('seed-right');
+
+      // Remove old iframes if any
+      leftContainer.querySelectorAll('iframe').forEach(f => f.remove());
+      rightContainer.querySelectorAll('iframe').forEach(f => f.remove());
+
+      const leftIframe = document.createElement('iframe');
+      leftIframe.id = 'shiro-seed-left';
+      leftIframe.src = '/?demo=1';
+      leftIframe.style.cssText = 'width:100%;height:100%;border:none;display:block';
+      leftContainer.appendChild(leftIframe);
+
+      const rightIframe = document.createElement('iframe');
+      rightIframe.id = 'shiro-seed-right';
+      rightIframe.src = '/?demo=1';
+      rightIframe.style.cssText = 'width:100%;height:100%;border:none;display:block';
+      rightContainer.appendChild(rightIframe);
+
+      // Wait for both to boot
+      this.playBtn.textContent = '\u2026';
+      this.playBtn.classList.add('loading');
+      try {
+        await Promise.all([
+          this._waitForIframe(leftIframe),
+          this._waitForIframe(rightIframe),
+        ]);
+      } catch {
+        this.playBtn.textContent = '!';
+        this.playBtn.classList.remove('loading');
+        return;
+      }
+      this.playBtn.classList.remove('loading');
+
+      this.leftShiro = leftIframe.contentWindow.__shiro;
+      this.rightShiro = rightIframe.contentWindow.__shiro;
+
+      // Inject scrollbar styles
+      for (const iframe of [leftIframe, rightIframe]) {
+        try {
+          const ifrDoc = iframe.contentDocument;
+          const sty = ifrDoc.createElement('style');
+          sty.textContent = [
+            '.xterm .xterm-viewport { overflow-y: scroll !important; }',
+            '.xterm .xterm-viewport::-webkit-scrollbar { width: 6px; background: #1a1a2e; }',
+            '.xterm .xterm-viewport::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }',
+            '.xterm .xterm-screen { padding-bottom: 50% !important; }',
+          ].join('\n');
+          ifrDoc.head.appendChild(sty);
+        } catch {}
+      }
+
+      // Start
+      this.overlay.classList.add('hidden');
+      this.caption.classList.remove('visible');
+      this.playing = true;
+      this.aborted = false;
+
+      // Clear both terminals
+      this.leftShiro.terminal.term.clear();
+      this.leftShiro.terminal.fitAddon.fit();
+      this.rightShiro.terminal.term.clear();
+      this.rightShiro.terminal.fitAddon.fit();
+
+      for (const step of this.steps) {
+        if (this.aborted) break;
+        await this._runStep(step);
+      }
+
+      this.playing = false;
+      this.caption.classList.add('visible');
+    }
+
+    async _waitForIframe(iframe, timeout = 20000) {
+      const start = Date.now();
+      while (Date.now() - start < timeout) {
+        try {
+          const s = iframe.contentWindow?.__shiro;
+          if (s?.shell?.execute && s?.terminal?.term) return;
+        } catch {}
+        await sleep(200);
+      }
+      throw new Error('Iframe boot timeout');
+    }
+
+    _getShiro(target) {
+      return target === 'right' ? this.rightShiro : this.leftShiro;
+    }
+
+    _getIframe(target) {
+      return document.getElementById(target === 'right' ? 'shiro-seed-right' : 'shiro-seed-left');
+    }
+
+    async _runStep(step) {
+      const delay = step.delay ?? 300;
+
+      // Drag step — animated cursor from left to right
+      if (step.drag) {
+        await this._animateDrag(step.drag);
+        await sleep(delay);
+        return;
+      }
+
+      const target = step.target || 'left';
+      const shiro = this._getShiro(target);
+      const term = shiro.terminal.term;
+
+      // keys step
+      if (step.keys != null) {
+        if (step.note) {
+          term.write(`\x1b[38;5;75m\x1b[3m# ${step.note}\x1b[0m\r\n`);
+          await sleep(200);
+        }
+        const iframe = this._getIframe(target);
+        const shiroTerm = iframe?.contentWindow?.__shiro?.terminal;
+        if (shiroTerm) {
+          if (step.typeSpeed) {
+            for (let i = 0; i < step.keys.length; i++) {
+              if (this.aborted) return;
+              shiroTerm.injectInput(step.keys[i]);
+              await sleep(step.typeSpeed);
+            }
+          } else {
+            shiroTerm.injectInput(step.keys);
+          }
+        }
+        await sleep(delay);
+        return;
+      }
+
+      if (step.note) {
+        term.write(`\x1b[38;5;75m\x1b[3m# ${step.note}\x1b[0m\r\n`);
+        await sleep(200);
+      }
+
+      if (!step.cmd) { await sleep(delay); return; }
+
+      // Type & execute
+      await this._typeCommand(term, step.cmd);
+      let out = '';
+      try {
+        await shiro.shell.execute(step.cmd, s => { out += s; }, s => { out += s; });
+      } catch {}
+      if (out.trim()) {
+        term.write(out.replace(/\n/g, '\r\n'));
+        if (!out.endsWith('\n')) term.write('\r\n');
+      }
+      await sleep(delay);
+    }
+
+    async _typeCommand(term, cmd) {
+      const lines = cmd.split('\n');
+      for (let li = 0; li < lines.length; li++) {
+        if (this.aborted) return;
+        if (li === 0) term.write('\x1b[32muser@shiro\x1b[0m:\x1b[34m~\x1b[0m$ ');
+        const line = lines[li];
+        if (li > 0) {
+          term.write(line);
+          if (li < lines.length - 1) term.write('\r\n');
+          await sleep(3);
+          continue;
+        }
+        for (let i = 0; i < line.length; i++) {
+          if (this.aborted) return;
+          term.write(line[i]);
+          await sleep(35 / 8);
+        }
+        if (li < lines.length - 1) term.write('\r\n');
+      }
+      term.write('\r\n');
+    }
+
+    async _animateDrag(drag) {
+      // Get GIF bytes from left iframe
+      const leftIframe = this._getIframe('left');
+      const gifBytes = leftIframe?.contentWindow?.__shiro?.lastSeedGif;
+      if (!gifBytes) {
+        console.warn('seed demo: no lastSeedGif available');
+        return;
+      }
+
+      // Remove any draggable thumbnail that seed gif created
+      try {
+        leftIframe.contentDocument.getElementById('seed-gif-thumb')?.remove();
+      } catch {}
+
+      const slot = this.slot;
+      const slotRect = slot.getBoundingClientRect();
+      const leftRect = document.getElementById('seed-left').getBoundingClientRect();
+      const rightRect = document.getElementById('seed-right').getBoundingClientRect();
+
+      // Create animated cursor with GIF thumbnail
+      const cursor = document.createElement('div');
+      cursor.style.cssText = [
+        'position:fixed', 'z-index:9999', 'pointer-events:none',
+        'transition:all 1.5s cubic-bezier(0.25, 0.1, 0.25, 1)',
+        'display:flex', 'flex-direction:column', 'align-items:center',
+      ].join(';');
+
+      // Small GIF preview
+      const blob = new Blob([gifBytes], { type: 'image/gif' });
+      const imgUrl = URL.createObjectURL(blob);
+      const img = document.createElement('img');
+      img.src = imgUrl;
+      img.style.cssText = 'width:60px;height:auto;border-radius:4px;border:1px solid #51cf66;box-shadow:0 2px 8px rgba(81,207,102,0.3)';
+
+      // Cursor arrow
+      const arrow = document.createElement('div');
+      arrow.textContent = '\u25be';
+      arrow.style.cssText = 'font-size:18px;color:#51cf66;line-height:1;margin-top:-2px';
+
+      cursor.appendChild(img);
+      cursor.appendChild(arrow);
+
+      // Start position: center of left pane
+      const startX = leftRect.left + leftRect.width / 2 - 30;
+      const startY = leftRect.top + leftRect.height / 2 - 20;
+      cursor.style.left = startX + 'px';
+      cursor.style.top = startY + 'px';
+      cursor.style.opacity = '0';
+      document.body.appendChild(cursor);
+
+      // Fade in
+      await sleep(100);
+      cursor.style.opacity = '1';
+      await sleep(400);
+
+      // Animate to right pane center
+      const endX = rightRect.left + rightRect.width / 2 - 30;
+      const endY = rightRect.top + rightRect.height / 2 - 20;
+      cursor.style.left = endX + 'px';
+      cursor.style.top = endY + 'px';
+
+      await sleep(1600);
+
+      // Dispatch real drop event on right iframe's terminal
+      const rightIframe = this._getIframe('right');
+      try {
+        const rightTermEl = rightIframe.contentDocument.getElementById('terminal');
+        if (rightTermEl) {
+          const dt = new DataTransfer();
+          dt.items.add(new File([gifBytes], 'seed.gif', { type: 'image/gif' }));
+          const dropEvent = new DragEvent('drop', {
+            dataTransfer: dt, bubbles: true, cancelable: true,
+          });
+          rightTermEl.dispatchEvent(dropEvent);
+        }
+      } catch (e) {
+        console.warn('seed demo: drop dispatch failed, falling back to direct import', e);
+        // Fallback: direct import via message
+        try {
+          const { extractShiroSeed } = await import('/src/gif-encoder.ts');
+          const seed = await extractShiroSeed(gifBytes);
+          if (seed) {
+            rightIframe.contentWindow.postMessage({
+              type: 'shiro-seed-v2',
+              ndjson: seed.ndjson,
+              storage: seed.storage,
+            }, '*');
+          }
+        } catch {}
+      }
+
+      // Fade out cursor
+      cursor.style.opacity = '0';
+      await sleep(400);
+      cursor.remove();
+      URL.revokeObjectURL(imgUrl);
+    }
+
+    showOverlay() {
+      this.overlay.classList.remove('hidden');
+      this.playBtn.textContent = '\u25b6';
+      this.playBtn.classList.remove('loading');
+    }
+
+    reset() {
+      this.aborted = true;
+      this.playing = false;
+      this.showOverlay();
+      this.caption.classList.remove('visible');
+      // Remove seed iframes
+      document.getElementById('seed-left')?.querySelectorAll('iframe').forEach(f => f.remove());
+      document.getElementById('seed-right')?.querySelectorAll('iframe').forEach(f => f.remove());
+    }
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     demos.pipes = new DemoPlayer('demo-pipes', pipesSteps);
     demos.files = new DemoPlayer('demo-files', filesSteps);
@@ -1162,8 +1626,11 @@
       previewFiles: ['/tmp/site/index.html'],
     });
     demos.interact = new DemoPlayer('demo-interact', interactSteps);
+    demos.vi = new DemoPlayer('demo-vi', viSteps);
+    demos.nano = new DemoPlayer('demo-nano', nanoSteps);
     demos.advanced = new DemoPlayer('demo-advanced', advancedSteps);
     demos.ide = new DemoPlayer('demo-ide', ideSteps);
+    demos.seed = new SeedDemoPlayer('demo-seed', seedSteps);
     waitForShiro().catch(() => {});
   });
   </script>
