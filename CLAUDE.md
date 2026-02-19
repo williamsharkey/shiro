@@ -36,7 +36,9 @@ src/
 ├── split-view.ts        # Docked split pane (right/bottom) for serve --split
 └── commands/            # One file per command or group of related commands
     ├── index.ts          # Command/CommandContext/TerminalLike interfaces, CommandRegistry class
-    ├── coreutils.ts      # 41 commands: ls, cat, mkdir, rm, cp, mv, echo, sort, seq, test, ln, etc.
+    ├── coreutils.ts      # Shell-aware commands: cd, export, help, rm, find, ln, etc.
+    ├── flags.ts          # Shared utilities: parseArgs, readInput, readdirEntries, statEntry
+    ├── unix.ts           # Barrel export of ~100 Unix command files (ls, cat, awk, xargs, etc.)
     ├── grep.ts           # grep with -i, -v, -n, -c, -l, -r flags
     ├── sed.ts            # sed with s/pattern/replace/flags and /pattern/d
     ├── git.ts            # isomorphic-git: init, add, commit, status, log, diff, clone, remote set-url
@@ -67,12 +69,7 @@ src/
     ├── page.ts           # page: interact with served app iframes (click, input, text, eval, etc.)
     ├── become.ts         # become/unbecome: full-screen app mode with shareable URLs
     ├── sc.ts             # sc: spawn Claude Code in a new terminal window
-    └── fluffy/           # Absorbed fluffycoreutils — 112 Unix commands
-        ├── index.ts       # Barrel export of all adapted commands
-        ├── adapt.ts       # FluffyCommand → Shiro Command wrapper
-        ├── types.ts       # FluffyFS, FluffyCommand interfaces
-        ├── flags.ts       # Flag parsing utilities
-        └── *.ts           # Individual command files (cat, ls, awk, xargs, etc.)
+    └── *.ts              # Individual Unix commands (cat, ls, awk, xargs, head, etc.)
 ├── gif-encoder.ts       # Zero-dep GIF89a encoder + SHIRO1.0 seed extractor
 ├── drop-handler.ts      # Drag-and-drop seed GIF import onto terminal
 └── utils/

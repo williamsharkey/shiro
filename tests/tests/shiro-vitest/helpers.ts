@@ -3,6 +3,7 @@ import { Shell } from '@shiro/shell';
 import { CommandRegistry } from '@shiro/commands/index';
 import { ShiroTerminal } from '@shiro/terminal';
 import { shiroOnlyCommands } from '@shiro/commands/coreutils';
+import { unixCommands } from '@shiro/commands/unix';
 import { gitCmd } from '@shiro/commands/git';
 import { globCmd } from '@shiro/commands/glob';
 import { jsEvalCmd, nodeCmd } from '@shiro/commands/jseval';
@@ -21,7 +22,6 @@ import { getconfCmd } from '@shiro/commands/getconf';
 import { edCmd } from '@shiro/commands/ed';
 import { iconvCmd } from '@shiro/commands/iconv';
 import { zipCmd, unzipCmd } from '@shiro/commands/zip';
-import { allCommands } from '@shiro/commands/fluffy';
 
 export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell }> {
   const fs = new FileSystem();
@@ -29,12 +29,12 @@ export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell 
 
   const commands = new CommandRegistry();
 
-  // Register shared fluffycoreutils (already adapted to Shiro Command interface)
-  for (const cmd of Object.values(allCommands)) {
+  // Register Unix commands (standard coreutils)
+  for (const cmd of unixCommands) {
     commands.register(cmd);
   }
 
-  // Register Shiro-only commands (override fluffy where needed)
+  // Register Shiro-only commands (override where needed)
   commands.registerAll(shiroOnlyCommands);
 
   // Register additional Shiro commands

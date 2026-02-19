@@ -1,10 +1,9 @@
 /**
- * Shiro-only commands that require shell state access or aren't in fluffycoreutils.
+ * Shiro-only commands that require shell state access.
  *
- * Most coreutils (cat, ls, grep, sed, etc.) are now provided by the shared
- * fluffycoreutils library. These commands remain here because they need
- * direct access to ctx.shell (cd, export, help, which, xargs) or aren't
- * in the shared library (sleep, seq, rmdir).
+ * Most Unix utilities live in individual files (see unix.ts barrel).
+ * These commands remain here because they need direct access to
+ * ctx.shell (cd, export, help) or are Shiro-specific (sleep, seq, rmdir).
  */
 import { Command } from './index';
 import { grepCmd } from './grep';
@@ -203,7 +202,7 @@ export const seqCmd: Command = {
   },
 };
 
-// --- Override commands where fluffy has bugs or Shiro needs custom behavior ---
+// --- Commands that need Shiro-specific behavior ---
 
 export const rmCmd: Command = {
   name: 'rm',
@@ -673,8 +672,8 @@ export const openCmd: Command = {
 };
 
 /**
- * Commands that need shell access or override fluffycoreutils bugs.
- * Registered AFTER fluffy commands so they take precedence.
+ * Additional commands that need shell access or Shiro-specific behavior.
+ * Registered AFTER Unix commands so they take precedence.
  */
 export const revCmd: Command = {
   name: 'rev',
@@ -699,7 +698,7 @@ export const yesCmd: Command = {
 
 export const shiroOnlyCommands: Command[] = [
   cdCmd, exportCmd, helpCmd, whichCmd, typeCmd, rmdirCmd, sleepCmd, seqCmd, revCmd, yesCmd,
-  // Overrides for fluffy bugs or Shiro-specific behavior:
+  // Shiro-specific implementations:
   rmCmd, findCmd, lnCmd, hostnameCmd, unameCmd,
   grepCmd, sedCmd, diffCmd,
   // Install script support:
@@ -708,9 +707,8 @@ export const shiroOnlyCommands: Command[] = [
   shCmd, bashCmd,
   // Browser helpers:
   openCmd, { name: 'xdg-open', description: 'Open a URL in the browser', exec: (ctx) => openCmd.exec(ctx) },
-  // POSIX test bracket alias (delegates to fluffycoreutils test)
+  // POSIX test bracket alias (delegates to test command)
   { name: '[', description: 'Evaluate conditional expression', async exec(ctx) {
-    // The fluffycoreutils test command already handles trailing ]
     const testCmd = ctx.shell.commands.get('test');
     if (testCmd) return testCmd.exec(ctx);
     ctx.stderr = '[: test command not found\n';

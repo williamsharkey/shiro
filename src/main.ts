@@ -66,7 +66,7 @@ import { buildCmd } from './commands/build';
 import { viCmd } from './commands/vi';
 import { nanoCmd } from './commands/nano';
 import { uploadCmd, downloadCmd, shiroConfigCmd } from './commands/upload';
-import { sourceCmd } from './commands/source';
+import { sourceCmd, dotCmd } from './commands/source';
 import { jobsCmd, fgCmd, bgCmd, waitCmd } from './commands/jobs';
 import { hcCmd } from './commands/hc';
 import { testCmd } from './commands/test';
@@ -110,7 +110,7 @@ import { zipCmd, unzipCmd } from './commands/zip';
 import { ccCmd, gccCmd } from './commands/cc';
 import { processTable } from './process-table';
 import { iframeServer } from './iframe-server';
-import { allCommands } from './commands/fluffy';
+import { unixCommands } from './commands/unix';
 import { ShiroTerminal } from './terminal';
 
 import { initFaviconUpdater, initTitle } from './favicon';
@@ -218,15 +218,15 @@ async function main() {
   // Set up command registry
   const commands = new CommandRegistry();
 
-  // Register shared fluffycoreutils (already adapted to Shiro Command interface)
-  for (const cmd of Object.values(allCommands)) {
+  // Register Unix commands (standard coreutils)
+  for (const cmd of unixCommands) {
     commands.register(cmd);
   }
 
   // Register Shiro-only commands (cd, export, help, sleep, seq, which, rmdir)
   commands.registerAll(shiroOnlyCommands);
 
-  // Register additional Shiro commands not in fluffycoreutils
+  // Register additional Shiro commands
   // These are registered in both CommandRegistry and ModuleRegistry for hot-reload
   registerCommand(commands, gitCmd, 'src/commands/git.ts');
   registerCommand(commands, grepCmd, 'src/commands/grep.ts');
@@ -244,6 +244,7 @@ async function main() {
   registerCommand(commands, downloadCmd, 'src/commands/upload.ts');
   registerCommand(commands, shiroConfigCmd, 'src/commands/upload.ts');
   registerCommand(commands, sourceCmd, 'src/commands/source.ts');
+  registerCommand(commands, dotCmd, 'src/commands/source.ts');
   registerCommand(commands, jobsCmd, 'src/commands/jobs.ts');
   registerCommand(commands, fgCmd, 'src/commands/jobs.ts');
   registerCommand(commands, bgCmd, 'src/commands/jobs.ts');

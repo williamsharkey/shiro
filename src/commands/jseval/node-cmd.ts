@@ -5762,10 +5762,11 @@ export const nodeCmd: Command = {
       }
 
       // Flush output to ctx.stdout so callers (child_process.exec, pipes) can capture it
-      if (stdoutBuf.length > 0) {
+      // Skip if we already streamed directly to the terminal — otherwise output appears twice
+      if (stdoutBuf.length > 0 && !streamedToTerminal) {
         ctx.stdout += stdoutBuf.join('\n') + '\n';
       }
-      if (stderrBuf.length > 0) {
+      if (stderrBuf.length > 0 && !streamedToTerminal) {
         ctx.stderr += stderrBuf.join('\n') + '\n';
       }
 

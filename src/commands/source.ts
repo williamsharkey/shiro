@@ -96,3 +96,10 @@ export const sourceCmd: Command = {
     return exitCode;
   },
 };
+
+/** Alias for source (POSIX `.` command) */
+export const dotCmd: Command = {
+  name: '.',
+  description: 'Execute commands from a file in the current shell (alias for source)',
+  exec: (ctx) => sourceCmd.exec(ctx),
+};
