@@ -68,9 +68,7 @@ You CAN modify Shiro itself! The full source is at https://github.com/williamsha
 |------|-------------|-----|
 | **shiro** | This browser OS (TypeScript/Vite) | https://github.com/williamsharkey/shiro |
 | **fluffycoreutils** | Shared Unix commands (submodule) | https://github.com/williamsharkey/fluffycoreutils |
-| **spirit** | Claude Code agent loop library | https://github.com/williamsharkey/spirit |
 | **nimbus** | Monorepo orchestrator | https://github.com/williamsharkey/nimbus-land |
-| **skyeyes** | Browser bridge for testing | https://github.com/williamsharkey/skyeyes |
 | **tests** | Test suite (in shiro monorepo) | https://github.com/williamsharkey/shiro |
 
 ### How to Modify Shiro
@@ -79,7 +77,7 @@ You CAN modify Shiro itself! The full source is at https://github.com/williamsha
 2. Edit files in \`shiro/src/commands/\` (one file per command)
 3. Edit \`shiro/src/main.ts\` to register new commands
 4. Key files:
-   - \`src/commands/jseval.ts\` — Node.js runtime (~5000 lines, the JS VM)
+   - \`src/commands/jseval/\` — Node.js runtime (split into crypto, utils, module-transform, js-eval-cmd, node-cmd)
    - \`src/commands/coreutils.ts\` — ls, cat, mkdir, rm, cp, mv, etc.
    - \`src/commands/git.ts\` — git (isomorphic-git)
    - \`src/commands/npm.ts\` — npm package manager

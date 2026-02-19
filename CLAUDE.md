@@ -27,7 +27,6 @@ src/
 ├── terminal.ts          # xterm.js integration, line editing, tab completion, key handling
 ├── shell.ts             # Command parser: pipes, redirects, env vars, quoting, history
 ├── filesystem.ts        # IndexedDB-backed POSIX filesystem (the foundation everything uses)
-├── spirit-provider.ts   # OSProvider adapter for Spirit (Claude Code agent)
 ├── active-terminal.ts   # Global active terminal tracking (routes mobile input to focused terminal)
 ├── mobile-input.ts      # Unified mobile toolbar: virtual keys, copy/paste, voice input
 ├── remote-panel.ts      # Draggable floating panel UI (used by remote, group)
@@ -45,11 +44,17 @@ src/
     ├── fetch.ts          # fetch/curl - HTTP requests from the shell
     ├── diff.ts           # diff between two files
     ├── glob.ts           # glob pattern matching
-    ├── jseval.ts         # js-eval (browser JS VM) and node (JS file execution)
+    ├── jseval.ts         # Barrel re-export for jseval/ directory
+    ├── jseval/            # Node.js runtime (split from monolithic jseval.ts)
+    │   ├── index.ts       # Re-exports jsEvalCmd + nodeCmd
+    │   ├── js-eval-cmd.ts # js-eval: browser JS VM evaluation
+    │   ├── node-cmd.ts    # node: full Node.js-like runtime with module shims
+    │   ├── crypto.ts      # Sync SHA-256, SHA-1, FNV hash implementations
+    │   ├── utils.ts       # ProcessExitError, formatArg
+    │   └── module-transform.ts  # ES module → CommonJS transforms
     ├── npm.ts            # npm package manager: install, list, run, uninstall
     ├── build.ts          # esbuild-wasm bundler for TypeScript/JavaScript
     ├── vi.ts             # minimal vi-like modal text editor
-    ├── spirit.ts         # Spirit AI agent (deprecated — use claude instead)
     ├── rg.ts             # ripgrep-compatible search (used by Claude Code Grep tool)
     ├── remote.ts         # WebRTC remote connection for Claude Code MCP
     ├── mcp-client.ts     # MCP Streamable HTTP client (connect to external MCP servers)
@@ -144,7 +149,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**315 tests across 16 test files** — all passing.
+**512 tests across 21 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -222,16 +227,9 @@ Row 2: [ - ] [ | ] [ / ]  [~] [`] [$] [&]  ···spacer···  [ Copy] [ ; ]   [
 
 ## Monorepo Subdirectories
 
-These were merged from separate repos with full commit history preserved (`git log -- subdir/` works):
-
 - **`fluffycoreutils/`**: Shared Unix commands library (ls, cat, grep, sed, xargs with -I/-n/-d, etc.) — ES module consumed by Shiro and Foam via `src/fluffy-adapter.ts`
-- **`spirit/`**: *(removed)* — replaced by Claude Code (inner claude) running directly in Shiro
-- **`tests/`**: Test suite — vitest unit tests + skyeyes browser tests. Run: `npm test`
-- **`hypercompact/`**: HTML compression utilities for compact DOM representations
-
-- **`skyeyes/`**: Browser-side bridge for remote JS execution and testing
+- **`tests/`**: Test suite — vitest unit tests. Run: `npm test`
 - **`shiro-mcp/`**: MCP server for connecting Claude Code to Shiro via WebRTC
-- **`shiro-website/`**: Marketing site and technical article
 
 ## Related Projects (separate repos)
 
@@ -362,11 +360,11 @@ unbecome                    # Return to terminal (also: __shiro.unbecome() in co
 
 ## Claude Code (Inner Claude)
 
-The real `@anthropic-ai/claude-code` CLI (v2.1.38, 11MB bundled ESM) runs inside Shiro's Node.js runtime (`jseval.ts`). Both print mode (`claude -p "..."`) and interactive mode (`claude`) work.
+The real `@anthropic-ai/claude-code` CLI (v2.1.38, 11MB bundled ESM) runs inside Shiro's Node.js runtime (`src/commands/jseval/`). Both print mode (`claude -p "..."`) and interactive mode (`claude`) work.
 
 **How it works:**
 - Shell finds `claude` → bin stub at `/usr/local/bin/claude` → follows to `cli.js`
-- `jseval.ts` transforms the ESM bundle, wraps in AsyncFunction, provides ~50 Node.js module shims
+- `jseval/node-cmd.ts` transforms the ESM bundle, wraps in AsyncFunction, provides ~50 Node.js module shims
 - API calls go through CORS proxy: `globalThis.fetch` → rewrite URLs → `/api/anthropic/*` → `api.anthropic.com`
 - OAuth tokens auto-refresh before CLI runs (pre-flight check in jseval.ts)
 
@@ -379,11 +377,8 @@ The real `@anthropic-ai/claude-code` CLI (v2.1.38, 11MB bundled ESM) runs inside
 - Tree-sitter WASM gracefully degraded (syntax highlighting disabled; browser can't compile the emscripten binary)
 - Vendored ripgrep (ELF binary) shimmed to Shiro's builtin `rg` command (full flag support)
 - `fileCache` keeps sync/async fs operations coherent — FileHandle, `fs.promises`, and sync all update it
-- `openSync` with 'w' flags truncates in fileCache (POSIX behavior); `writeSync` appends to that
-- `fs.promises.rename` updates fileCache so subsequent sync reads see moved content
-- Callback-style `fs.open/read/write` use real fd tracking (same as `openSync/writeSync`)
 - `pendingPromises` array tracks all async IDB writes; drained before `execAsync` and script exit
-- Binary files (ELF, Mach-O) rejected at shell level with "cannot execute binary file"
+- ES module transforms in `jseval/module-transform.ts` (pure string transforms, extracted for readability)
 
 **Dual-layer cache coherence (`execAsync`):**
 - `writeFileSync` updates `fileCache` and queues an async IDB write in `pendingPromises`
@@ -393,15 +388,8 @@ The real `@anthropic-ai/claude-code` CLI (v2.1.38, 11MB bundled ESM) runs inside
 
 **Bundled library compatibility:**
 - `__stubProxy` wraps failed module factories in Proxy that auto-stubs missing properties
-- `transformBundledESM` patches the lazy factory (`R=`) to catch init failures gracefully
+- `transformBundledESM` (in `jseval/module-transform.ts`) patches the lazy factory to catch init failures gracefully
 - `proper-lockfile` (bundled in CLI for TaskCreate file locking) uses a `toSync` wrapper that requires: `mkdirSync`, `realpathSync`, `statSync`, `rmdirSync`, `utimesSync` — all shimmed
-- `fluffycoreutils` xargs with `-I`, `-n`, `-d` flags works via `exec` function passed from `fluffy-adapter.ts`
-
-## Skyeyes MCP Tools
-
-You have skyeyes MCP tools for browser interaction (see `~/.claude/CLAUDE.md` for full tool list). Your dedicated page IDs:
-- `shiro-shiro` — your shiro iframe
-- `foam-shiro` — your foam iframe
 
 ## Git Push Auth Quirk
 

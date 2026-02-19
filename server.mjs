@@ -158,7 +158,8 @@ function handleOAuthCallback(req, res) {
 
 // --- Static file server ---
 async function handleStatic(req, res) {
-  let filePath = join(STATIC_DIR, new URL(req.url, 'http://localhost').pathname);
+  let pathname = new URL(req.url, 'http://localhost').pathname;
+  let filePath = join(STATIC_DIR, pathname);
 
   try {
     const s = await stat(filePath);

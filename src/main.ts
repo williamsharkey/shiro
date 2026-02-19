@@ -93,7 +93,7 @@ import { htmlCmd, imgCmd } from './commands/html';
 import { dougCmd } from './commands/doug';
 import { becomeCmd, unbecomeCmd, getBecomeConfig, activateBecomeMode, deactivateBecomeMode } from './commands/become';
 import { pageCmd } from './commands/page';
-import { ideCmd } from './commands/ide';
+
 import { ghCmd } from './commands/gh';
 import { mkTempCmd } from './commands/mktemp';
 import { jqCmd } from './commands/jq';
@@ -113,8 +113,7 @@ import { iframeServer } from './iframe-server';
 import { allCommands } from '../fluffycoreutils/src/index';
 import { wrapFluffyCommand } from './fluffy-adapter';
 import { ShiroTerminal } from './terminal';
-// Spirit removed — Claude Code (inner claude) replaces it
-// import { ShiroProvider } from '../spirit/src/providers/shiro-provider';
+
 import { initFaviconUpdater, initTitle } from './favicon';
 import { initMobileInput } from './mobile-input';
 import { initDropHandler } from './drop-handler';
@@ -279,7 +278,7 @@ async function main() {
   registerCommand(commands, becomeCmd, 'src/commands/become.ts');
   registerCommand(commands, unbecomeCmd, 'src/commands/become.ts');
   registerCommand(commands, pageCmd, 'src/commands/page.ts');
-  registerCommand(commands, ideCmd, 'src/commands/ide.ts');
+
   registerCommand(commands, ghCmd, 'src/commands/gh.ts');
   registerCommand(commands, mkTempCmd, 'src/commands/mktemp.ts');
   registerCommand(commands, jqCmd, 'src/commands/jq.ts');
@@ -357,10 +356,6 @@ async function main() {
   // Connect terminal to shell for interactive commands (vi, etc.)
   shell.setTerminal(terminal);
 
-  // Spirit removed — Claude Code (inner claude) replaces it
-  // const provider = new ShiroProvider(fs, shell, terminal);
-  // (shell as any)._spiritProvider = provider;
-
   // Listen for font size changes from parent (seed snippet)
   window.addEventListener('message', (e) => {
     if (e.data && e.data.type === 'shiro-fontsize') {
@@ -374,7 +369,7 @@ async function main() {
     fs,
     shell,
     terminal,
-    provider: null, // Spirit removed — use claude instead
+
     commands,
     registry, // ModuleRegistry for hot-reload
     iframeServer, // Iframe-based virtual HTTP server
@@ -431,8 +426,7 @@ async function main() {
 
   // Pre-hide terminal if we'll enter become/IDE mode (prevents flash)
   const becomeConfig = getBecomeConfig();
-  const earlyPathname = location.pathname.replace(/\/$/, '');
-  if (becomeConfig || earlyPathname === '/ide') {
+  if (becomeConfig) {
     document.body.classList.add('become-active');
   }
 
@@ -451,22 +445,13 @@ async function main() {
     } else if (pathname === '/' + becomeConfig.slug) {
       // Only re-enter become mode on the slug path, NOT on root /
       let startResult: number;
-      if (becomeConfig.slug === 'ide') {
-        // IDE needs its own router (API routes), not a basic serve
-        startResult = await shell.execute(
-          `ide "${becomeConfig.directory}"`,
-          () => {}, () => {},
-        );
-        // ide command handles activateBecomeMode internally
-      } else {
-        startResult = await shell.execute(
+      startResult = await shell.execute(
           `serve "${becomeConfig.directory}" ${becomeConfig.port}`,
           () => {}, () => {},
         );
         if (startResult === 0) {
           await activateBecomeMode(becomeConfig);
         }
-      }
       if (startResult !== 0) {
         // Server failed to start — clear become config and show terminal
         localStorage.removeItem('shiro-become');
@@ -475,15 +460,6 @@ async function main() {
       }
     } else {
       // Pathname doesn't match slug — show terminal (stale config)
-      document.body.classList.remove('become-active');
-    }
-  }
-
-  // URL-path fallback: visiting /ide directly should auto-launch IDE
-  if (!becomeConfig && earlyPathname === '/ide') {
-    const rc = await shell.execute('ide', () => {}, () => {});
-    if (rc !== 0) {
-      // IDE failed to start — show terminal
       document.body.classList.remove('become-active');
     }
   }

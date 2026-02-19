@@ -35,16 +35,6 @@ export default defineConfig({
         find: /^\.\.\/fluffycoreutils\/(.*)/,
         replacement: path.resolve(__dirname, 'fluffycoreutils/$1'),
       },
-      {
-        // Handle imports like ../spirit/src/... from src/ files
-        find: /^\.\.\/spirit\/(.*)/,
-        replacement: path.resolve(__dirname, 'spirit/$1'),
-      },
-      {
-        // Handle imports like ../../spirit/src/... from deeper directories
-        find: /^\.\.\/\.\.\/spirit\/(.*)/,
-        replacement: path.resolve(__dirname, 'spirit/$1'),
-      },
     ],
   },
   server: {

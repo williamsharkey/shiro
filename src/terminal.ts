@@ -384,7 +384,6 @@ export class ShiroTerminal {
     // Build URLs preserving subdomain
     const baseUrl = `https://${hostname}`;
     const aboutUrl = `${baseUrl}/about`;
-    const mcpUrl = `${baseUrl}/mcp.html`;
     const githubUrl = 'https://github.com/williamsharkey/shiro';
 
     // Pad hostname to fit layout (max ~20 chars for subdomain display)
@@ -421,12 +420,12 @@ export class ShiroTerminal {
     // Row 3: Empty
     this.term.writeln('\x1b[36m║\x1b[0m                                         \x1b[36m║\x1b[0m');
     const deepwikiUrl = 'https://deepwiki.com/williamsharkey/shiro';
-    // Row 4: help / mcp
-    this.term.writeln(`\x1b[36m║\x1b[0m  ${link('shiro://cmd/help', 'help', '94')}                             ${link(mcpUrl, 'mcp', '94')}   \x1b[36m║\x1b[0m`);
+    // Row 4: help / github
+    this.term.writeln(`\x1b[36m║\x1b[0m  ${link('shiro://cmd/help', 'help', '94')}                          ${link(githubUrl, 'github', '94')}   \x1b[36m║\x1b[0m`);
     // Row 5: deepwiki / about
     this.term.writeln(`\x1b[36m║\x1b[0m  ${link(deepwikiUrl, 'deepwiki', '94')}                       ${link(aboutUrl, 'about', '94')}   \x1b[36m║\x1b[0m`);
-    // Row 6: upload / github
-    this.term.writeln(`\x1b[36m║\x1b[0m  ${link('shiro://cmd/upload', 'upload', '94')}                        ${link(githubUrl, 'github', '94')}   \x1b[36m║\x1b[0m`);
+    // Row 6: upload
+    this.term.writeln(`\x1b[36m║\x1b[0m  ${link('shiro://cmd/upload', 'upload', '94')}                                 \x1b[36m║\x1b[0m`);
     // Row 7: download / claude code (pad = 28 - label.length to keep 41-char inner width)
     const claudeRow = startRow + 7;
     const drawClaudeLabel = (installed: boolean) => {
