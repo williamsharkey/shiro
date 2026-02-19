@@ -368,6 +368,10 @@ const server = createServer(async (req, res) => {
     res.writeHead(200);
     return res.end('ok');
   }
+  if (pathname === '/show') {
+    res.writeHead(301, { location: '/about' });
+    return res.end();
+  }
   if (pathname === '/offer' || pathname.startsWith('/offer/') || pathname.startsWith('/answer/')) {
     return handleSignaling(req, res, pathname);
   }

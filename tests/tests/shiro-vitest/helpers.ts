@@ -21,8 +21,7 @@ import { getconfCmd } from '@shiro/commands/getconf';
 import { edCmd } from '@shiro/commands/ed';
 import { iconvCmd } from '@shiro/commands/iconv';
 import { zipCmd, unzipCmd } from '@shiro/commands/zip';
-import { allCommands } from '@shiro-fluffy/index';
-import { wrapFluffyCommand } from '@shiro/fluffy-adapter';
+import { allCommands } from '@shiro/commands/fluffy';
 
 export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell }> {
   const fs = new FileSystem();
@@ -30,9 +29,9 @@ export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell 
 
   const commands = new CommandRegistry();
 
-  // Register shared fluffycoreutils
-  for (const fluffy of Object.values(allCommands)) {
-    commands.register(wrapFluffyCommand(fluffy));
+  // Register shared fluffycoreutils (already adapted to Shiro Command interface)
+  for (const cmd of Object.values(allCommands)) {
+    commands.register(cmd);
   }
 
   // Register Shiro-only commands (override fluffy where needed)

@@ -22,10 +22,6 @@ export default defineConfig({
     alias: {
       // Clean alias for test imports
       '@shiro': path.resolve(shiroRoot, 'src'),
-      '@shiro-fluffy': path.resolve(shiroRoot, 'fluffycoreutils/src'),
-      '@shiro-adapter': path.resolve(shiroRoot, 'src'),
-      // Aliases used internally by shiro source files when they import submodules
-      '../fluffycoreutils': path.resolve(shiroRoot, 'fluffycoreutils'),
       // CSS import is a no-op in Node.js tests
       '@xterm/xterm/css/xterm.css': path.resolve(__dirname, 'tests/shiro-vitest/stubs/xterm.css.ts'),
     },

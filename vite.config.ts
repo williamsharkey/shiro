@@ -28,15 +28,7 @@ export default defineConfig({
       external: [],
     },
   },
-  resolve: {
-    alias: [
-      {
-        // Handle imports like ../fluffycoreutils/src/index from src/ files
-        find: /^\.\.\/fluffycoreutils\/(.*)/,
-        replacement: path.resolve(__dirname, 'fluffycoreutils/$1'),
-      },
-    ],
-  },
+  resolve: {},
   server: {
     fs: {
       allow: ['..'],

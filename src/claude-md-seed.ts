@@ -33,7 +33,6 @@ Shiro is a browser-native Unix environment. Everything runs in the browser — f
 
 \`\`\`bash
 git clone https://github.com/williamsharkey/shiro
-git clone https://github.com/williamsharkey/fluffycoreutils
 git add . && git commit -m "message"
 git push origin main
 \`\`\`
@@ -67,7 +66,6 @@ You CAN modify Shiro itself! The full source is at https://github.com/williamsha
 | Repo | Description | URL |
 |------|-------------|-----|
 | **shiro** | This browser OS (TypeScript/Vite) | https://github.com/williamsharkey/shiro |
-| **fluffycoreutils** | Shared Unix commands (submodule) | https://github.com/williamsharkey/fluffycoreutils |
 | **nimbus** | Monorepo orchestrator | https://github.com/williamsharkey/nimbus-land |
 | **tests** | Test suite (in shiro monorepo) | https://github.com/williamsharkey/shiro |
 

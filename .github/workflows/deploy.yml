@@ -1,9 +1,16 @@
-name: Deploy
+name: Deploy (disabled — deploy manually via npm run deploy)
 
+# Disabled: we deploy directly to DigitalOcean via npm run deploy
+# on:
+#   push:
+#     branches: [main]
+#   workflow_dispatch:
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'This workflow is disabled. Deploy via npm run deploy instead.'
+        required: true
 
 permissions:
   contents: read
@@ -19,9 +26,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          token: ${{ secrets.GH_PAT }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -35,9 +39,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          token: ${{ secrets.GH_PAT }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22

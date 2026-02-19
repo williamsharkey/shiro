@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Shiro Remote MCP - Connect Claude Code to Shiro</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <style>
+    :root {
+      --bg: #1a1a2e;
+      --bg-light: #252542;
+      --fg: #e0e0e0;
+      --fg-dim: #8888aa;
+      --accent: #00d4ff;
+      --accent2: #cc5de8;
+      --green: #51cf66;
+      --yellow: #ffd43b;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    header {
+      text-align: center;
+      margin-bottom: 3rem;
+      padding-bottom: 2rem;
+      border-bottom: 1px solid var(--bg-light);
+    }
+    h1 {
+      font-size: 2.5rem;
+      margin-bottom: 0.5rem;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .tagline {
+      color: var(--fg-dim);
+      font-size: 1.1rem;
+    }
+    h2 {
+      color: var(--accent);
+      margin: 2rem 0 1rem 0;
+      font-size: 1.5rem;
+    }
+    h3 {
+      color: var(--accent2);
+      margin: 1.5rem 0 0.75rem 0;
+      font-size: 1.2rem;
+    }
+    p {
+      margin-bottom: 1rem;
+    }
+    code {
+      background: var(--bg-light);
+      padding: 0.2em 0.4em;
+      border-radius: 4px;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 0.9em;
+    }
+    pre {
+      background: var(--bg-light);
+      padding: 1rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      margin: 1rem 0;
+      border-left: 3px solid var(--accent);
+    }
+    pre code {
+      background: none;
+      padding: 0;
+    }
+    .step {
+      background: var(--bg-light);
+      padding: 1.5rem;
+      border-radius: 8px;
+      margin: 1rem 0;
+    }
+    .step-number {
+      display: inline-block;
+      width: 28px;
+      height: 28px;
+      background: var(--accent);
+      color: var(--bg);
+      border-radius: 50%;
+      text-align: center;
+      line-height: 28px;
+      font-weight: bold;
+      margin-right: 0.5rem;
+    }
+    .tools-list {
+      display: grid;
+      gap: 1rem;
+      margin: 1rem 0;
+    }
+    .tool {
+      background: var(--bg-light);
+      padding: 1rem;
+      border-radius: 8px;
+      border-left: 3px solid var(--green);
+    }
+    .tool-name {
+      color: var(--green);
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: bold;
+    }
+    .tool-desc {
+      color: var(--fg-dim);
+      font-size: 0.9rem;
+      margin-top: 0.25rem;
+    }
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+    .diagram {
+      background: var(--bg-light);
+      padding: 1.5rem;
+      border-radius: 8px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      line-height: 1.4;
+      overflow-x: auto;
+      margin: 1rem 0;
+    }
+    .note {
+      background: rgba(255, 212, 59, 0.1);
+      border-left: 3px solid var(--yellow);
+      padding: 1rem;
+      border-radius: 0 8px 8px 0;
+      margin: 1rem 0;
+    }
+    .note-title {
+      color: var(--yellow);
+      font-weight: bold;
+      margin-bottom: 0.5rem;
+    }
+    footer {
+      margin-top: 3rem;
+      padding-top: 2rem;
+      border-top: 1px solid var(--bg-light);
+      text-align: center;
+      color: var(--fg-dim);
+    }
+    .back-link {
+      display: inline-block;
+      margin-top: 1rem;
+      padding: 0.5rem 1rem;
+      background: var(--bg-light);
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Shiro Remote MCP</h1>
+      <p class="tagline">Connect Claude Code to your browser-based Shiro instance via WebRTC</p>
+    </header>
+
+    <section>
+      <h2>What is this?</h2>
+      <p>
+        Shiro Remote lets you control a <a href="/">Shiro</a> browser instance directly from
+        <a href="https://github.com/anthropics/claude-code">Claude Code</a> running on your computer.
+        No servers needed &mdash; it uses WebRTC for a direct peer-to-peer connection.
+      </p>
+
+      <div class="diagram" style="text-align:center;padding:1.5rem 0">
+        <svg viewBox="0 0 680 200" style="max-width:680px;width:100%" xmlns="http://www.w3.org/2000/svg">
+          <style>
+            .box { fill:#252542; stroke:#00d4ff; stroke-width:1.5; rx:6 }
+            .label { fill:#e0e0e0; font-family:'JetBrains Mono',monospace; font-size:12px; text-anchor:middle }
+            .sublabel { fill:#8888aa; font-family:'JetBrains Mono',monospace; font-size:10px; text-anchor:middle }
+            .arrow { stroke:#cc5de8; stroke-width:1.5; marker-end:url(#ah); marker-start:url(#ah2) }
+            .p2p { stroke:#51cf66; stroke-width:2; stroke-dasharray:6,3 }
+            .p2p-label { fill:#51cf66; font-family:'JetBrains Mono',monospace; font-size:11px; text-anchor:middle }
+            .p2p-sub { fill:#8888aa; font-family:'JetBrains Mono',monospace; font-size:9px; text-anchor:middle }
+          </style>
+          <defs>
+            <marker id="ah" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="#cc5de8" fill="#cc5de8" d="M0,0 L8,3 L0,6Z"/></marker>
+            <marker id="ah2" markerWidth="8" markerHeight="6" refX="0" refY="3" orient="auto"><path fill="#cc5de8" d="M8,0 L0,3 L8,6Z"/></marker>
+          </defs>
+          <!-- boxes -->
+          <rect class="box" x="10" y="20" width="170" height="80"/>
+          <rect class="box" x="255" y="20" width="170" height="80"/>
+          <rect class="box" x="500" y="20" width="170" height="80"/>
+          <!-- labels -->
+          <text class="label" x="95" y="52">Your Terminal</text>
+          <text class="sublabel" x="95" y="70">Claude Code</text>
+          <text class="sublabel" x="95" y="84">+ MCP Tool</text>
+          <text class="label" x="340" y="52">Signaling</text>
+          <text class="sublabel" x="340" y="70">shiro.computer</text>
+          <text class="sublabel" x="340" y="84">/signal/*</text>
+          <text class="label" x="585" y="52">Shiro Browser</text>
+          <text class="sublabel" x="585" y="70">remote start</text>
+          <!-- signaling arrows -->
+          <line class="arrow" x1="180" y1="60" x2="255" y2="60"/>
+          <line class="arrow" x1="425" y1="60" x2="500" y2="60"/>
+          <!-- P2P arc -->
+          <path class="p2p" d="M95,100 C95,175 585,175 585,100" fill="none"/>
+          <text class="p2p-label" x="340" y="160">WebRTC DataChannel</text>
+          <text class="p2p-sub" x="340" y="175">direct P2P after setup</text>
+        </svg>
+      </div>
+    </section>
+
+    <section>
+      <h2>Quick Start</h2>
+
+      <div class="step">
+        <p><span class="step-number">1</span> <strong>Install</strong> &mdash; Run this once to add Shiro to Claude Code:</p>
+        <pre><code>npx shiro-mcp --install</code></pre>
+        <p>Then restart Claude Code.</p>
+      </div>
+
+      <div class="step">
+        <p><span class="step-number">2</span> <strong>Connect</strong> &mdash; In <a href="/">Shiro</a>, run <code>remote start</code> to get a connection code, then tell Claude:</p>
+        <pre><code>"Connect to Shiro with code fluffy-cloud-shimutako"</code></pre>
+        <p>Done! Claude can now execute commands, read/write files, and run JavaScript in your browser.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Available Tools</h2>
+      <p>All tools are namespaced under <code>shiro:</code> in Claude Code.</p>
+      <div class="tools-list">
+        <div class="tool">
+          <div class="tool-name">connect</div>
+          <div class="tool-desc">Connect to a Shiro instance using a connection code from <code>remote start</code></div>
+        </div>
+        <div class="tool">
+          <div class="tool-name">reconnect</div>
+          <div class="tool-desc">Reconnect after browser page reload (uses saved code, browser must run <code>remote start</code> again)</div>
+        </div>
+        <div class="tool">
+          <div class="tool-name">disconnect</div>
+          <div class="tool-desc">Disconnect and clear the saved connection code</div>
+        </div>
+        <div class="tool">
+          <div class="tool-name">status</div>
+          <div class="tool-desc">Check connection status: connected, code, status</div>
+        </div>
+        <div class="tool">
+          <div class="tool-name">exec</div>
+          <div class="tool-desc">Execute shell commands &mdash; 200+ commands including hc, serve, image, npm, node</div>
+        </div>
+        <div class="tool">
+          <div class="tool-name">read</div>
+          <div class="tool-desc">Read a file from /home/user (persistent) or /tmp</div>
+        </div>
+        <div class="tool">
+          <div class="tool-name">write</div>
+          <div class="tool-desc">Write a file to the virtual filesystem</div>
+        </div>
+        <div class="tool">
+          <div class="tool-name">list</div>
+          <div class="tool-desc">List directory contents</div>
+        </div>
+        <div class="tool">
+          <div class="tool-name">eval</div>
+          <div class="tool-desc">Execute JavaScript in browser (use JSON.stringify for objects)</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Connection Codes</h2>
+      <p>
+        Connection codes like <code>fluffy-cloud-shimutako</code> provide ~46 bits of entropy,
+        making them virtually impossible to guess. They expire after 5 minutes.
+      </p>
+      <p>
+        The code has three parts:
+      </p>
+      <ul style="margin-left: 1.5rem; margin-bottom: 1rem;">
+        <li><strong>Adjective</strong> (200 options) &mdash; fluffy, cosmic, brave...</li>
+        <li><strong>Noun</strong> (200 options) &mdash; cloud, fox, crystal...</li>
+        <li><strong>Syllables</strong> (64⁴ options) &mdash; shimutako, karinobe...</li>
+      </ul>
+      <p>
+        Only the first two parts are shown in the Shiro banner for privacy &mdash;
+        someone watching your screen can't hijack your session.
+      </p>
+    </section>
+
+    <section>
+      <h2>Manual Configuration</h2>
+      <p>If <code>npx shiro-mcp --install</code> doesn't work, add this to your Claude config manually:</p>
+      <pre><code>// ~/.claude.json (Claude Code CLI)
+// or ~/Library/Application Support/Claude/claude_desktop_config.json (Desktop)
+{
+  "mcpServers": {
+    "shiro": {
+      "command": "npx",
+      "args": ["-y", "shiro-mcp"]
+    }
+  }
+}</code></pre>
+
+      <div class="note">
+        <div class="note-title">Requirements</div>
+        <p>
+          Node.js 18+ required. The <code>node-datachannel</code> package provides WebRTC support.
+        </p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Shiro Commands</h2>
+      <p>Commands available in the Shiro terminal:</p>
+      <pre><code>remote start    # Start a remote session, get connection code
+remote stop     # Stop the current remote session
+remote status   # Check connection status
+clear           # Refresh the banner to show/hide connection code</code></pre>
+    </section>
+
+    <section>
+      <h2>For AI Assistants</h2>
+      <p>This section helps AI assistants (Claude, etc.) use Shiro MCP effectively.</p>
+
+      <h3>Shell Commands (exec)</h3>
+      <p>Shiro provides 200+ commands. Run <code>help</code> for full list. Key Shiro-specific commands:</p>
+      <pre><code>hc              # Hypercompact DOM navigation (see below)
+serve &lt;dir&gt;     # Start virtual HTTP server
+servers         # List active servers
+serve stop &lt;p&gt;  # Stop server on port
+image save/load # Filesystem snapshots
+npm install     # Install npm packages
+node file.js    # Run JavaScript files</code></pre>
+
+      <h3>Hypercompact (hc) &mdash; Token-Efficient DOM Navigation</h3>
+      <pre><code>hc live           # Attach to live page DOM
+hc look           # List interactive elements (@0, @1, ...)
+hc @N             # Click element N
+hc q &lt;selector&gt;   # Query elements (CSS selector)
+hc t100           # Get text content (100 char limit)
+hc h50            # Get HTML (50 char limit)
+hc a              # Show attributes
+hc close          # Detach from DOM</code></pre>
+
+      <h3>eval Tool &mdash; Important</h3>
+      <p>Objects return <code>"[object Object]"</code>. Always wrap in <code>JSON.stringify()</code>:</p>
+      <pre><code>// Wrong - returns "[object Object]"
+{ width: innerWidth }
+
+// Correct - returns actual values
+JSON.stringify({ width: innerWidth })</code></pre>
+
+      <h3>Filesystem Layout</h3>
+      <pre><code>/home/user    # User files (persistent, IndexedDB)
+/tmp          # Temporary files</code></pre>
+    </section>
+
+    <section>
+      <h2>Troubleshooting</h2>
+
+      <h3>Connection fails immediately</h3>
+      <p>Make sure the code hasn't expired (5 minute timeout). Run <code>remote start</code> again in Shiro to get a fresh code.</p>
+
+      <h3>WebRTC connection times out</h3>
+      <p>Some corporate networks block WebRTC. Try from a different network or use a VPN.</p>
+
+      <h3>Connection lost after browser reload</h3>
+      <p>When the Shiro browser page reloads, run <code>remote start</code> in Shiro again, then use the <code>reconnect</code> tool (it remembers the last code).</p>
+
+      <h3>node-datachannel build errors</h3>
+      <p>The package requires Node.js 18+ and a C++ compiler. On most systems it installs pre-built binaries. If compilation is needed:</p>
+      <pre><code># macOS
+xcode-select --install
+
+# Ubuntu/Debian
+sudo apt install build-essential cmake</code></pre>
+    </section>
+
+    <footer>
+      <p>Part of the <a href="https://github.com/williamsharkey/shiro">Shiro</a> project</p>
+      <a href="/" class="back-link">← Back to Shiro</a>
+    </footer>
+  </div>
+</body>
+</html>

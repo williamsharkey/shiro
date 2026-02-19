@@ -110,8 +110,7 @@ import { zipCmd, unzipCmd } from './commands/zip';
 import { ccCmd, gccCmd } from './commands/cc';
 import { processTable } from './process-table';
 import { iframeServer } from './iframe-server';
-import { allCommands } from '../fluffycoreutils/src/index';
-import { wrapFluffyCommand } from './fluffy-adapter';
+import { allCommands } from './commands/fluffy';
 import { ShiroTerminal } from './terminal';
 
 import { initFaviconUpdater, initTitle } from './favicon';
@@ -219,9 +218,9 @@ async function main() {
   // Set up command registry
   const commands = new CommandRegistry();
 
-  // Register shared fluffycoreutils (37 commands: cat, ls, grep, sed, find, diff, etc.)
-  for (const fluffy of Object.values(allCommands)) {
-    commands.register(wrapFluffyCommand(fluffy));
+  // Register shared fluffycoreutils (already adapted to Shiro Command interface)
+  for (const cmd of Object.values(allCommands)) {
+    commands.register(cmd);
   }
 
   // Register Shiro-only commands (cd, export, help, sleep, seq, which, rmdir)

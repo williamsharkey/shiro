@@ -66,7 +66,13 @@ src/
     ├── html.ts           # html (render HTML in window) and img (display image)
     ├── page.ts           # page: interact with served app iframes (click, input, text, eval, etc.)
     ├── become.ts         # become/unbecome: full-screen app mode with shareable URLs
-    └── sc.ts             # sc: spawn Claude Code in a new terminal window
+    ├── sc.ts             # sc: spawn Claude Code in a new terminal window
+    └── fluffy/           # Absorbed fluffycoreutils — 112 Unix commands
+        ├── index.ts       # Barrel export of all adapted commands
+        ├── adapt.ts       # FluffyCommand → Shiro Command wrapper
+        ├── types.ts       # FluffyFS, FluffyCommand interfaces
+        ├── flags.ts       # Flag parsing utilities
+        └── *.ts           # Individual command files (cat, ls, awk, xargs, etc.)
 ├── gif-encoder.ts       # Zero-dep GIF89a encoder + SHIRO1.0 seed extractor
 ├── drop-handler.ts      # Drag-and-drop seed GIF import onto terminal
 └── utils/
@@ -227,7 +233,6 @@ Row 2: [ - ] [ | ] [ / ]  [~] [`] [$] [&]  ···spacer···  [ Copy] [ ; ]   [
 
 ## Monorepo Subdirectories
 
-- **`fluffycoreutils/`**: Shared Unix commands library (ls, cat, grep, sed, xargs with -I/-n/-d, etc.) — ES module consumed by Shiro and Foam via `src/fluffy-adapter.ts`
 - **`tests/`**: Test suite — vitest unit tests. Run: `npm test`
 - **`shiro-mcp/`**: MCP server for connecting Claude Code to Shiro via WebRTC
 
