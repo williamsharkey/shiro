@@ -54,7 +54,8 @@ import { FileSystem } from './filesystem';
 import { Shell } from './shell';
 import { CommandRegistry, Command } from './commands/index';
 import { registry } from './registry';
-import { shiroOnlyCommands } from './commands/coreutils';
+import { shellBuiltins } from './commands/shell-builtins';
+import { shiroCmds } from './commands/shiro-cmds';
 import { gitCmd } from './commands/git';
 import { grepCmd } from './commands/grep';
 import { sedCmd } from './commands/sed';
@@ -223,8 +224,11 @@ async function main() {
     commands.register(cmd);
   }
 
-  // Register Shiro-only commands (cd, export, help, sleep, seq, which, rmdir)
-  commands.registerAll(shiroOnlyCommands);
+  // Register shell builtins (cd, export, help, command, sh, bash, grep/sed/diff overrides)
+  commands.registerAll(shellBuiltins);
+
+  // Register Shiro-specific commands (rm, find, ln, uname, which, type, etc.)
+  commands.registerAll(shiroCmds);
 
   // Register additional Shiro commands
   // These are registered in both CommandRegistry and ModuleRegistry for hot-reload

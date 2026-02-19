@@ -36,12 +36,14 @@ src/
 ├── split-view.ts        # Docked split pane (right/bottom) for serve --split
 └── commands/            # One file per command or group of related commands
     ├── index.ts          # Command/CommandContext/TerminalLike interfaces, CommandRegistry class
-    ├── coreutils.ts      # Shell-aware commands: cd, export, help, rm, find, ln, etc.
+    ├── shell-builtins.ts # Shell builtins needing ctx.shell: cd, export, help, command, sh, bash
+    ├── shiro-cmds.ts     # Shiro-specific overrides: rm, find, ln, uname, which, type, cut, shasum
     ├── flags.ts          # Shared utilities: parseArgs, readInput, readdirEntries, statEntry
     ├── unix.ts           # Barrel export of ~100 Unix command files (ls, cat, awk, xargs, etc.)
     ├── grep.ts           # grep with -i, -v, -n, -c, -l, -r flags
     ├── sed.ts            # sed with s/pattern/replace/flags and /pattern/d
     ├── git.ts            # isomorphic-git: init, add, commit, status, log, diff, clone, remote set-url
+    ├── git-utils.ts      # Git helpers: unifiedDiff, resolveRevision, diffCommits, formatCommit
     ├── find.ts           # find with -name, -type filters
     ├── fetch.ts          # fetch/curl - HTTP requests from the shell
     ├── diff.ts           # diff between two files

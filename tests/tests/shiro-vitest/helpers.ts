@@ -2,7 +2,8 @@ import { FileSystem } from '@shiro/filesystem';
 import { Shell } from '@shiro/shell';
 import { CommandRegistry } from '@shiro/commands/index';
 import { ShiroTerminal } from '@shiro/terminal';
-import { shiroOnlyCommands } from '@shiro/commands/coreutils';
+import { shellBuiltins } from '@shiro/commands/shell-builtins';
+import { shiroCmds } from '@shiro/commands/shiro-cmds';
 import { unixCommands } from '@shiro/commands/unix';
 import { gitCmd } from '@shiro/commands/git';
 import { globCmd } from '@shiro/commands/glob';
@@ -34,8 +35,11 @@ export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell 
     commands.register(cmd);
   }
 
-  // Register Shiro-only commands (override where needed)
-  commands.registerAll(shiroOnlyCommands);
+  // Register shell builtins (cd, export, help, command, sh, bash, grep/sed/diff overrides)
+  commands.registerAll(shellBuiltins);
+
+  // Register Shiro-specific commands (rm, find, ln, uname, which, type, etc.)
+  commands.registerAll(shiroCmds);
 
   // Register additional Shiro commands
   commands.register(gitCmd);
