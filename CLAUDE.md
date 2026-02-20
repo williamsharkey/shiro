@@ -172,7 +172,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**549 tests across 22 test files** — all passing (1 pre-existing flaky test in claude-code-install).
+**556 tests across 23 test files** — all passing (1 pre-existing flaky test in claude-code-install).
 
 ```bash
 npm test                          # Run from shiro root
@@ -195,6 +195,7 @@ cd tests && npm run test:shiro    # Run from tests/ directory
 | `claude-tools.test.ts` | **37 tests** | All Claude Code tool shim bugs (see below) |
 | `claude-code-install.test.ts` | E2E | Full `npm install -g @anthropic-ai/claude-code` + run |
 | `lazy-commands.test.ts` | **37 tests** | All lazy-loaded commands: lazyCommand helper, build, nano, termcast, image, gh, mcp, group, cc/gcc, python/pip, sqlite3 |
+| `build-output.test.ts` | **7 tests** | Build validation: no unresolved `__VITE_PRELOAD__` markers, entry JS/CSS inlined, lazy chunks exist and are clean |
 
 ### Claude Code Tool Shim Tests (`claude-tools.test.ts`)
 
