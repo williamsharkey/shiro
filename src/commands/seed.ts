@@ -688,18 +688,43 @@ function showDraggableGif(gifBytes: Uint8Array, filename: string) {
   const existing = document.getElementById('seed-gif-thumb');
   if (existing) existing.remove();
 
+  // Inject keyframe animation (once)
+  if (!document.getElementById('seed-gif-anim')) {
+    const style = document.createElement('style');
+    style.id = 'seed-gif-anim';
+    style.textContent = `
+      @keyframes seed-slide-in {
+        0% { transform: translateY(200px) scale(0.5); opacity: 0; }
+        60% { transform: translateY(-10px) scale(1.03); opacity: 1; }
+        80% { transform: translateY(4px) scale(0.98); }
+        100% { transform: translateY(0) scale(1); opacity: 1; }
+      }
+      @keyframes seed-pulse {
+        0%, 100% { box-shadow: 0 4px 16px rgba(81,207,102,0.3); }
+        50% { box-shadow: 0 4px 24px rgba(81,207,102,0.6); }
+      }
+      #seed-gif-thumb {
+        animation: seed-slide-in 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both,
+                   seed-pulse 1.5s ease-in-out 0.5s 3;
+      }
+      #seed-gif-thumb:hover {
+        transform: scale(1.05);
+        box-shadow: 0 6px 20px rgba(81,207,102,0.5);
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
   const blob = new Blob([gifBytes as BlobPart], { type: 'image/gif' });
   const url = URL.createObjectURL(blob);
 
-  // Use fixed positioning on document.body so the thumbnail renders
-  // at a predictable screen position and produces a clean drag ghost
   const el = document.createElement('div');
   el.id = 'seed-gif-thumb';
   el.draggable = true;
   el.style.cssText = [
     'position:fixed', 'bottom:24px', 'right:24px', 'z-index:2147483646',
     'background:#1a1a2e', 'border:2px solid #51cf66', 'border-radius:8px',
-    'padding:8px', 'cursor:grab', 'box-shadow:0 4px 16px rgba(81,207,102,0.3)',
+    'padding:8px', 'cursor:grab',
     'display:flex', 'flex-direction:column', 'align-items:center', 'gap:4px',
     'transition:transform 0.15s ease, box-shadow 0.15s ease',
   ].join(';');
@@ -725,23 +750,11 @@ function showDraggableGif(gifBytes: Uint8Array, filename: string) {
   el.appendChild(img);
   el.appendChild(label);
 
-  // Hover effect
-  el.addEventListener('mouseenter', () => {
-    el.style.transform = 'scale(1.05)';
-    el.style.boxShadow = '0 6px 20px rgba(81,207,102,0.5)';
-  });
-  el.addEventListener('mouseleave', () => {
-    el.style.transform = '';
-    el.style.boxShadow = '0 4px 16px rgba(81,207,102,0.3)';
-  });
-
   el.addEventListener('dragstart', (e) => {
     const file = new File([gifBytes as BlobPart], filename, { type: 'image/gif' });
     e.dataTransfer!.items.add(file);
     e.dataTransfer!.effectAllowed = 'copy';
-    // Set a visible drag image using the img element
     e.dataTransfer!.setDragImage(img, img.width / 2, img.height / 2);
-    // Fade the source during drag
     el.style.opacity = '0.4';
   });
 
@@ -751,14 +764,7 @@ function showDraggableGif(gifBytes: Uint8Array, filename: string) {
 
   document.body.appendChild(el);
 
-  // Pulse animation to draw attention
-  el.animate([
-    { transform: 'scale(1)' },
-    { transform: 'scale(1.06)' },
-    { transform: 'scale(1)' },
-  ], { duration: 600, iterations: 2 });
-
-  // Auto-remove after 60 seconds (more time to drag across windows)
+  // Auto-remove after 60 seconds
   setTimeout(() => { if (el.parentNode) { el.remove(); URL.revokeObjectURL(url); } }, 60000);
 }
 
