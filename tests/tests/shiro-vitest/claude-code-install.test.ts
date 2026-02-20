@@ -133,7 +133,7 @@ describe('Claude Code Install', () => {
       const found = await shell.findExecutableInPath('test-cmd');
       expect(found).toBe('/usr/local/bin/test-cmd');
 
-      const stat = await fs.stat('/usr/local/bin/test-cmd');
+      const stat = await fs.lstat('/usr/local/bin/test-cmd');
       expect(stat.type).toBe('symlink');
     });
 

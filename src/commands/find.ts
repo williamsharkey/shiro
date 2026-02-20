@@ -13,6 +13,7 @@ export const findCmd: Command = {
     let minDepth = 0;
     let print0 = false;
     let sizeSpec = ''; // e.g. '+100k', '-1M'
+    let execArgs: string[] | null = null; // -exec template args (with {} placeholders)
 
     let i = 0;
     // First non-flag argument is the directory
@@ -39,6 +40,16 @@ export const findCmd: Command = {
         sizeSpec = ctx.args[++i];
       } else if (arg === '-print0') {
         print0 = true;
+      } else if (arg === '-exec') {
+        // Collect args until ';' or '+'
+        execArgs = [];
+        i++;
+        while (i < ctx.args.length) {
+          const ea = ctx.args[i];
+          if (ea === ';' || ea === '+') break;
+          execArgs.push(ea);
+          i++;
+        }
       }
       i++;
     }
@@ -51,6 +62,20 @@ export const findCmd: Command = {
 
     const results: string[] = [];
 
+    const runExec = async (displayPath: string) => {
+      if (!execArgs || !ctx.shell) return;
+      const cmdLine = execArgs.map(a => a === '{}' ? displayPath : a).join(' ');
+      let out = '';
+      let err = '';
+      await ctx.shell.execute(
+        cmdLine,
+        (s: string) => { out += s; },
+        (s: string) => { err += s; },
+      );
+      if (out) ctx.stdout = (ctx.stdout || '') + out;
+      if (err) ctx.stderr = (ctx.stderr || '') + err;
+    };
+
     const walk = async (dir: string, depth: number) => {
       if (depth > maxDepth) return;
 
@@ -61,7 +86,11 @@ export const findCmd: Command = {
           const dirStat = await ctx.fs.stat(dir);
           const displayPath = formatPath(dir, resolved, searchDir);
           if (matchesFilters(dirName, displayPath, dirStat, nameRegex, inameRegex, pathRegex, typeFilter, true, sizeFilter)) {
-            results.push(displayPath);
+            if (execArgs) {
+              await runExec(displayPath);
+            } else {
+              results.push(displayPath);
+            }
           }
         }
       }
@@ -77,14 +106,22 @@ export const findCmd: Command = {
           if (stat.isDirectory()) {
             if (depth + 1 >= minDepth) {
               if (matchesFilters(entry, displayPath, stat, nameRegex, inameRegex, pathRegex, typeFilter, true, sizeFilter)) {
-                results.push(displayPath);
+                if (execArgs) {
+                  await runExec(displayPath);
+                } else {
+                  results.push(displayPath);
+                }
               }
             }
             await walk(childPath, depth + 1);
           } else {
             if (depth + 1 >= minDepth) {
               if (matchesFilters(entry, displayPath, stat, nameRegex, inameRegex, pathRegex, typeFilter, false, sizeFilter)) {
-                results.push(displayPath);
+                if (execArgs) {
+                  await runExec(displayPath);
+                } else {
+                  results.push(displayPath);
+                }
               }
             }
           }
@@ -96,9 +133,9 @@ export const findCmd: Command = {
 
     await walk(resolved, 0);
 
-    if (results.length > 0) {
+    if (!execArgs && results.length > 0) {
       const sep = print0 ? '\0' : '\n';
-      ctx.stdout = results.join(sep) + (print0 ? '\0' : '\n');
+      ctx.stdout = (ctx.stdout || '') + results.join(sep) + (print0 ? '\0' : '\n');
     }
     return 0;
   },

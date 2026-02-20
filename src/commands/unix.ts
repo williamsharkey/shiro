@@ -40,6 +40,7 @@ import { false as falseCmd } from './false';
 import { forCmd, inCmd } from './for';
 import { functionCmd } from './function';
 import { file } from './file';
+import { findCmd } from './find';
 import { fmt } from './fmt';
 import { fold } from './fold';
 import { free } from './free';
@@ -113,7 +114,7 @@ export const unixCommands: Command[] = [
   caseCmd, esac, cat, chmod, chown, clear, column, comm, continueCmd, cp, cut,
   date, declare, local, readonly, unset, df, dirname, doCmd, done, until, whileCmd,
   du, echo, elif, elseCmd, fi, ifCmd, then, env, evalCmd, exit, expand, expr,
-  exportCmd, falseCmd, forCmd, inCmd, functionCmd, file, fmt, fold, free,
+  exportCmd, falseCmd, findCmd, forCmd, inCmd, functionCmd, file, fmt, fold, free,
   getopts, hash, head, heredoc, hexdump, id, install, join, kill, less, letCmd,
   ls, make, md5sum, mkdir, mv, nl, nohup, od, paste, patch, pkgConfig, pr,
   printenv, printf, processSubstitution, pwd, read, readlink, realpath, returnCmd,

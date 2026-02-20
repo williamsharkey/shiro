@@ -189,6 +189,29 @@ export class FileSystem {
     return result;
   }
 
+  /** Follow symlinks to their final target path (up to 40 hops). */
+  private async _resolve(path: string): Promise<string> {
+    const seen = new Set<string>();
+    let current = path;
+    for (let i = 0; i < 40; i++) {
+      const node = await this._get(current);
+      if (!node || node.type !== 'symlink') return current;
+      if (seen.has(current)) {
+        throw fsError('ELOOP', `ELOOP: too many levels of symbolic links, '${path}'`);
+      }
+      seen.add(current);
+      const target = node.symlinkTarget || new TextDecoder().decode(node.content!);
+      // Resolve relative symlink targets against the symlink's parent directory
+      if (target.startsWith('/')) {
+        current = target;
+      } else {
+        const parent = current.substring(0, current.lastIndexOf('/')) || '/';
+        current = this.resolvePath(target, parent);
+      }
+    }
+    throw fsError('ELOOP', `ELOOP: too many levels of symbolic links, '${path}'`);
+  }
+
   private async _put(node: FSNode): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const req = this._store('readwrite').put(node);
@@ -309,13 +332,18 @@ export class FileSystem {
   async stat(path: string): Promise<StatResult> {
     // Virtual /dev/null
     if (path === '/dev/null') return makeStat({ path, type: 'file', content: new Uint8Array(0), mode: 0o666, mtime: 0, ctime: 0, size: 0 });
-    const node = await this._get(path);
+    const resolved = await this._resolve(path);
+    const node = await this._get(resolved);
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, stat '${path}'`);
     return makeStat(node);
   }
 
   async lstat(path: string): Promise<StatResult> {
-    return this.stat(path);
+    // Virtual /dev/null
+    if (path === '/dev/null') return makeStat({ path, type: 'file', content: new Uint8Array(0), mode: 0o666, mtime: 0, ctime: 0, size: 0 });
+    const node = await this._get(path);
+    if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, lstat '${path}'`);
+    return makeStat(node);
   }
 
   async exists(path: string): Promise<boolean> {
@@ -327,7 +355,8 @@ export class FileSystem {
   async readFile(path: string, encoding?: 'utf8'): Promise<Uint8Array | string> {
     // Virtual /dev/null — always reads empty
     if (path === '/dev/null') return encoding === 'utf8' ? '' : new Uint8Array(0);
-    const node = await this._get(path);
+    const resolved = await this._resolve(path);
+    const node = await this._get(resolved);
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, open '${path}'`);
     if (node.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, read '${path}'`);
     const data = node.content || new Uint8Array(0);

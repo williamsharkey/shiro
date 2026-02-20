@@ -227,7 +227,7 @@ async function main() {
   // Register shell builtins (cd, export, help, command, sh, bash, grep/sed/diff overrides)
   commands.registerAll(shellBuiltins);
 
-  // Register Shiro-specific commands (rm, find, ln, uname, which, type, etc.)
+  // Register Shiro-specific commands (rm, ln, uname, which, type, etc.)
   commands.registerAll(shiroCmds);
 
   // Register additional Shiro commands

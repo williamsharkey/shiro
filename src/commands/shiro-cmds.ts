@@ -32,74 +32,6 @@ export const rmCmd: Command = {
   },
 };
 
-export const findCmd: Command = {
-  name: 'find',
-  description: 'Search for files in a directory hierarchy',
-  async exec(ctx) {
-    let namePattern = '';
-    let typeFilter = '';
-    let maxDepth = Infinity;
-    const paths: string[] = [];
-
-    for (let i = 0; i < ctx.args.length; i++) {
-      if (ctx.args[i] === '-name' && ctx.args[i + 1]) {
-        namePattern = ctx.args[++i];
-      } else if (ctx.args[i] === '-type' && ctx.args[i + 1]) {
-        typeFilter = ctx.args[++i];
-      } else if (ctx.args[i] === '-maxdepth' && ctx.args[i + 1]) {
-        maxDepth = parseInt(ctx.args[++i]);
-      } else if (!ctx.args[i].startsWith('-')) {
-        paths.push(ctx.args[i]);
-      }
-    }
-
-    if (paths.length === 0) paths.push('.');
-
-    const nameRegex = namePattern ? globToRegex(namePattern) : null;
-
-    for (const p of paths) {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      await walkFind(ctx, resolved, p, nameRegex, typeFilter, 0, maxDepth);
-    }
-    return 0;
-  },
-};
-
-function globToRegex(pattern: string): RegExp {
-  const escaped = pattern
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*/g, '.*')
-    .replace(/\?/g, '.');
-  return new RegExp(`^${escaped}$`);
-}
-
-async function walkFind(
-  ctx: any, dir: string, displayBase: string,
-  nameRegex: RegExp | null, typeFilter: string,
-  depth: number, maxDepth: number,
-): Promise<void> {
-  if (depth > maxDepth) return;
-  let entries: string[];
-  try { entries = await ctx.fs.readdir(dir); } catch { return; }
-
-  for (const name of entries) {
-    if (name === '.git' || name === 'node_modules') continue;
-    const fullPath = dir === '/' ? '/' + name : dir + '/' + name;
-    const displayPath = displayBase + '/' + name;
-    const stat = await ctx.fs.stat(fullPath).catch(() => null);
-    if (!stat) continue;
-
-    const isDir = stat.isDirectory();
-    let include = true;
-    if (nameRegex && !nameRegex.test(name)) include = false;
-    if (typeFilter === 'f' && isDir) include = false;
-    if (typeFilter === 'd' && !isDir) include = false;
-
-    if (include) ctx.stdout += displayPath + '\n';
-    if (isDir) await walkFind(ctx, fullPath, displayPath, nameRegex, typeFilter, depth + 1, maxDepth);
-  }
-}
-
 export const lnCmd: Command = {
   name: 'ln',
   description: 'Create links between files',
@@ -436,7 +368,7 @@ export const openCmd: Command = {
  * take precedence where needed (rm, find, ln, etc.).
  */
 export const shiroCmds: Command[] = [
-  rmCmd, findCmd, lnCmd,
+  rmCmd, lnCmd,
   hostnameCmd, unameCmd,
   whichCmd, typeCmd,
   rmdirCmd, revCmd,

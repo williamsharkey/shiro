@@ -72,6 +72,12 @@ export const fetchCmd: Command = {
       return 1;
     }
 
+    // Handle -d @filename: read file contents as body
+    if (body && body.startsWith('@')) {
+      const filePath = ctx.fs.resolvePath(body.slice(1), ctx.cwd);
+      body = await ctx.fs.readFile(filePath, 'utf8') as string;
+    }
+
     // Add protocol if missing
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       url = 'https://' + url;
