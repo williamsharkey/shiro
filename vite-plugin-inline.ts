@@ -56,7 +56,9 @@ export function inlineAssets(): Plugin {
                 (_m, file) => `import("./${assetDir}/${file}")`,
               );
             }
-            delete bundle[src]; // remove standalone entry JS file
+            // Keep the entry chunk file — lazy chunks import shared code
+            // from it (e.g. import {...} from "./index-xxx.js"). We inline
+            // it into HTML for fast boot, but it must also stay as a file.
             return `<script type="module">${code}</script>`;
           }
           return _match;

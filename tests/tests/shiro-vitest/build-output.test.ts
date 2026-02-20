@@ -53,9 +53,17 @@ describe.skipIf(!hasDist)('Build Output Validation', () => {
     expect(html).not.toMatch(/<link\b[^>]*\brel=["']stylesheet["'][^>]*\bhref=["'][^"']*\.css["']/);
   });
 
+  it('entry chunk should exist in dist/assets/ (lazy chunks import from it)', () => {
+    const jsFiles = listJsFiles(distDir + '/assets');
+    const entryFile = jsFiles.find(f => f.startsWith('index-'));
+    expect(entryFile).toBeTruthy();
+  });
+
   it('lazy chunks should exist in dist/assets/', () => {
     const jsFiles = listJsFiles(distDir + '/assets');
-    expect(jsFiles.length).toBeGreaterThanOrEqual(10);
+    // Exclude entry chunk from count
+    const lazyFiles = jsFiles.filter(f => !f.startsWith('index-'));
+    expect(lazyFiles.length).toBeGreaterThanOrEqual(10);
   });
 
   it('lazy chunks should not contain unresolved markers', () => {
