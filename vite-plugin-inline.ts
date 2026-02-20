@@ -1,6 +1,7 @@
 /**
- * Vite plugin: inline all JS/CSS assets into index.html at build time.
- * Produces a single self-contained HTML file with no external references.
+ * Vite plugin: inline the entry JS/CSS and favicon into index.html at build time.
+ * Dynamic import chunks (lazy-loaded commands) stay as separate .js files in dist/
+ * for code splitting. The entry chunk is the one referenced by <script src> in HTML.
  */
 import type { Plugin } from 'vite';
 import { readFileSync, unlinkSync } from 'fs';
@@ -29,13 +30,14 @@ export function inlineAssets(): Plugin {
         ? htmlAsset.source
         : new TextDecoder().decode(htmlAsset.source);
 
-      // Inline JS: <script type="module" crossorigin src="./assets/xxx.js"></script>
+      // Inline only the entry JS chunk (referenced by <script src> in HTML).
+      // Dynamic import chunks are NOT referenced in HTML — they stay as files.
       html = html.replace(
         /<script\b[^>]*\bsrc=["']\.?\/?([^"']+\.js)["'][^>]*><\/script>/g,
         (_match, src) => {
           const chunk = bundle[src];
-          if (chunk && chunk.type === 'chunk') {
-            delete bundle[src]; // remove standalone JS file
+          if (chunk && chunk.type === 'chunk' && chunk.isEntry) {
+            delete bundle[src]; // remove standalone entry JS file
             return `<script type="module">${chunk.code}</script>`;
           }
           return _match;
@@ -59,11 +61,9 @@ export function inlineAssets(): Plugin {
       );
 
       // Inline favicon: <link rel="icon" ... href="./favicon.svg" />
-      // Favicon comes from public/ dir so it's not in the bundle — read from disk or bundle
       html = html.replace(
         /<link\b[^>]*\brel=["']icon["'][^>]*\bhref=["']\.?\/?([^"']+\.svg)["'][^>]*\/?>/g,
         (_match, href) => {
-          // Check bundle first
           const asset = bundle[href];
           if (asset && asset.type === 'asset') {
             const svg = typeof asset.source === 'string'
@@ -73,11 +73,9 @@ export function inlineAssets(): Plugin {
             delete bundle[href];
             return `<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,${b64}" />`;
           }
-          // Try reading from public dir (Vite copies public files directly)
           try {
             const svg = readFileSync(resolve('public', href), 'utf-8');
             const b64 = Buffer.from(svg).toString('base64');
-            // Mark for deletion after write
             if (bundle[href]) delete bundle[href];
             return `<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,${b64}" />`;
           } catch {

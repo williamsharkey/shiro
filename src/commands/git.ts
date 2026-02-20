@@ -510,21 +510,26 @@ export const gitCmd: Command = {
 
           const corsProxy = ctx.env['GIT_CORS_PROXY'] || (typeof location !== 'undefined' ? location.origin + '/git-proxy' : 'https://cors.isomorphic-git.org');
           const token = ctx.env['GITHUB_TOKEN'] || (typeof localStorage !== 'undefined' ? localStorage.getItem('shiro_github_token') || '' : '');
-          await Promise.race([
-            git.clone({
-              fs, http, dir: targetDir, url,
-              corsProxy,
-              singleBranch: true,
-              depth: cloneDepth,
-              onProgress: async () => {
-                await new Promise(resolve => setTimeout(resolve, 0));
-              },
-              ...(token ? { onAuth: () => ({ username: token }) } : {}),
-            }),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('clone timed out')), 60000)
-            ),
-          ]);
+          try {
+            await Promise.race([
+              git.clone({
+                fs, http, dir: targetDir, url,
+                corsProxy,
+                singleBranch: true,
+                depth: cloneDepth,
+                onProgress: async () => {
+                  await new Promise(resolve => setTimeout(resolve, 0));
+                },
+                ...(token ? { onAuth: () => ({ username: token }) } : {}),
+              }),
+              new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error('clone timed out after 60s')), 60000)
+              ),
+            ]);
+          } catch (cloneErr: any) {
+            ctx.stderr = `fatal: ${cloneErr.message || cloneErr}\n`;
+            return 128;
+          }
 
           try {
             await new Promise(resolve => setTimeout(resolve, 0));

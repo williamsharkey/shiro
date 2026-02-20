@@ -54,6 +54,7 @@ import { FileSystem } from './filesystem';
 import { Shell } from './shell';
 import { CommandRegistry, Command } from './commands/index';
 import { registry } from './registry';
+import { lazyCommand } from './utils/lazy-command';
 import { shellBuiltins } from './commands/shell-builtins';
 import { shiroCmds } from './commands/shiro-cmds';
 import { gitCmd } from './commands/git';
@@ -63,28 +64,21 @@ import { fetchCmd, curlCmd } from './commands/fetch';
 import { globCmd } from './commands/glob';
 import { jsEvalCmd, nodeCmd } from './commands/jseval';
 import { npmCmd } from './commands/npm';
-import { buildCmd } from './commands/build';
 import { viCmd } from './commands/vi';
-import { nanoCmd } from './commands/nano';
 import { uploadCmd, downloadCmd, shiroConfigCmd } from './commands/upload';
 import { sourceCmd, dotCmd } from './commands/source';
 import { jobsCmd, fgCmd, bgCmd, waitCmd } from './commands/jobs';
 import { hcCmd } from './commands/hc';
 import { testCmd } from './commands/test';
 import { reloadCmd } from './commands/reload';
-import { termcastCmd } from './commands/termcast';
 import { serveCmd, serversCmd } from './commands/serve';
-import { imageCmd } from './commands/image';
 import { clipReportCmd } from './commands/clip-report';
-import { seedCmd } from './commands/seed';
 import { remoteCmd, getPersistedRemoteCode, startRemoteWithCode } from './commands/remote';
 import { hudCmd } from './commands/hud';
 import { faviconCmd } from './commands/favicon';
 import { historyCmd } from './commands/history';
 import { consoleCmd } from './commands/console';
 import { rgCmd } from './commands/rg';
-import { mcpCmd } from './commands/mcp-client';
-import { groupCmd } from './commands/group';
 import { spawnCmd } from './commands/spawn';
 import { scCmd } from './commands/sc';
 import { cwCmd } from './commands/cw';
@@ -95,9 +89,7 @@ import { dougCmd } from './commands/doug';
 import { becomeCmd, unbecomeCmd, getBecomeConfig, activateBecomeMode, deactivateBecomeMode } from './commands/become';
 import { pageCmd } from './commands/page';
 
-import { ghCmd } from './commands/gh';
 import { mkTempCmd } from './commands/mktemp';
-import { jqCmd } from './commands/jq';
 import { tputCmd } from './commands/tput';
 import { sttyCmd } from './commands/stty';
 import { gzipCmd, gunzipCmd } from './commands/gzip';
@@ -105,10 +97,7 @@ import { wgetCmd } from './commands/wget';
 import { pgrepCmd, pkillCmd } from './commands/pgrep';
 import { nprocCmd } from './commands/nproc';
 import { getconfCmd } from './commands/getconf';
-import { edCmd } from './commands/ed';
 import { iconvCmd } from './commands/iconv';
-import { zipCmd, unzipCmd } from './commands/zip';
-import { ccCmd, gccCmd } from './commands/cc';
 import { processTable } from './process-table';
 import { iframeServer } from './iframe-server';
 import { unixCommands } from './commands/unix';
@@ -241,9 +230,11 @@ async function main() {
   registerCommand(commands, jsEvalCmd, 'src/commands/jseval.ts');
   registerCommand(commands, nodeCmd, 'src/commands/jseval.ts');
   registerCommand(commands, npmCmd, 'src/commands/npm.ts');
-  registerCommand(commands, buildCmd, 'src/commands/build.ts');
+  registerCommand(commands, lazyCommand('build', 'Bundle TypeScript/JavaScript using esbuild-wasm',
+    () => import('./commands/build').then(m => m.buildCmd)), 'src/commands/build.ts');
   registerCommand(commands, viCmd, 'src/commands/vi.ts');
-  registerCommand(commands, nanoCmd, 'src/commands/nano.ts');
+  registerCommand(commands, lazyCommand('nano', 'Simple text editor (Ctrl+O save, Ctrl+X exit)',
+    () => import('./commands/nano').then(m => m.nanoCmd)), 'src/commands/nano.ts');
   registerCommand(commands, uploadCmd, 'src/commands/upload.ts');
   registerCommand(commands, downloadCmd, 'src/commands/upload.ts');
   registerCommand(commands, shiroConfigCmd, 'src/commands/upload.ts');
@@ -256,20 +247,25 @@ async function main() {
   registerCommand(commands, hcCmd, 'src/commands/hc.ts');
   registerCommand(commands, testCmd, 'src/commands/test.ts');
   registerCommand(commands, reloadCmd, 'src/commands/reload.ts');
-  registerCommand(commands, termcastCmd, 'src/commands/termcast.ts');
+  registerCommand(commands, lazyCommand('termcast', 'Record terminal sessions in asciicast format',
+    () => import('./commands/termcast').then(m => m.termcastCmd)), 'src/commands/termcast.ts');
   registerCommand(commands, serveCmd, 'src/commands/serve.ts');
   registerCommand(commands, serversCmd, 'src/commands/serve.ts');
-  registerCommand(commands, imageCmd, 'src/commands/image.ts');
+  registerCommand(commands, lazyCommand('image', 'Manage shiro images (filesystem snapshots)',
+    () => import('./commands/image').then(m => m.imageCmd)), 'src/commands/image.ts');
   registerCommand(commands, clipReportCmd, 'src/commands/clip-report.ts');
-  registerCommand(commands, seedCmd, 'src/commands/seed.ts');
+  registerCommand(commands, lazyCommand('seed', 'Export Shiro state (seed [blob|gif|html] [subdomain])',
+    () => import('./commands/seed').then(m => m.seedCmd)), 'src/commands/seed.ts');
   registerCommand(commands, remoteCmd, 'src/commands/remote.ts');
   registerCommand(commands, hudCmd, 'src/commands/hud.ts');
   registerCommand(commands, faviconCmd, 'src/commands/favicon.ts');
   registerCommand(commands, historyCmd, 'src/commands/history.ts');
   registerCommand(commands, consoleCmd, 'src/commands/console.ts');
   registerCommand(commands, rgCmd, 'src/commands/rg.ts');
-  registerCommand(commands, mcpCmd, 'src/commands/mcp-client.ts');
-  registerCommand(commands, groupCmd, 'src/commands/group.ts');
+  registerCommand(commands, lazyCommand('mcp', 'MCP Streamable HTTP client',
+    () => import('./commands/mcp-client').then(m => m.mcpCmd)), 'src/commands/mcp-client.ts');
+  registerCommand(commands, lazyCommand('group', 'Encrypted group networking',
+    () => import('./commands/group').then(m => m.groupCmd)), 'src/commands/group.ts');
   registerCommand(commands, spawnCmd, 'src/commands/spawn.ts');
   registerCommand(commands, scCmd, 'src/commands/sc.ts');
   registerCommand(commands, cwCmd, 'src/commands/cw.ts');
@@ -283,9 +279,11 @@ async function main() {
   registerCommand(commands, unbecomeCmd, 'src/commands/become.ts');
   registerCommand(commands, pageCmd, 'src/commands/page.ts');
 
-  registerCommand(commands, ghCmd, 'src/commands/gh.ts');
+  registerCommand(commands, lazyCommand('gh', 'GitHub CLI',
+    () => import('./commands/gh').then(m => m.ghCmd)), 'src/commands/gh.ts');
   registerCommand(commands, mkTempCmd, 'src/commands/mktemp.ts');
-  registerCommand(commands, jqCmd, 'src/commands/jq.ts');
+  registerCommand(commands, lazyCommand('jq', 'JSON processor',
+    () => import('./commands/jq').then(m => m.jqCmd)), 'src/commands/jq.ts');
   registerCommand(commands, tputCmd, 'src/commands/tput.ts');
   registerCommand(commands, sttyCmd, 'src/commands/stty.ts');
   registerCommand(commands, gzipCmd, 'src/commands/gzip.ts');
@@ -295,12 +293,27 @@ async function main() {
   registerCommand(commands, pkillCmd, 'src/commands/pgrep.ts');
   registerCommand(commands, nprocCmd, 'src/commands/nproc.ts');
   registerCommand(commands, getconfCmd, 'src/commands/getconf.ts');
-  registerCommand(commands, edCmd, 'src/commands/ed.ts');
+  registerCommand(commands, lazyCommand('ed', 'Line editor',
+    () => import('./commands/ed').then(m => m.edCmd)), 'src/commands/ed.ts');
   registerCommand(commands, iconvCmd, 'src/commands/iconv.ts');
-  registerCommand(commands, zipCmd, 'src/commands/zip.ts');
-  registerCommand(commands, unzipCmd, 'src/commands/zip.ts');
-  registerCommand(commands, ccCmd, 'src/commands/cc.ts');
-  registerCommand(commands, gccCmd, 'src/commands/cc.ts');
+  registerCommand(commands, lazyCommand('zip', 'Create ZIP archives',
+    () => import('./commands/zip').then(m => m.zipCmd)), 'src/commands/zip.ts');
+  registerCommand(commands, lazyCommand('unzip', 'Extract ZIP archives',
+    () => import('./commands/zip').then(m => m.unzipCmd)), 'src/commands/zip.ts');
+  registerCommand(commands, lazyCommand('cc', 'C compiler (xcc/wcc)',
+    () => import('./commands/cc').then(m => m.ccCmd)), 'src/commands/cc.ts');
+  registerCommand(commands, lazyCommand('gcc', 'C compiler (alias for cc)',
+    () => import('./commands/cc').then(m => m.gccCmd)), 'src/commands/cc.ts');
+
+  // Lazy-loaded new capabilities (WASM runtimes from CDN)
+  registerCommand(commands, lazyCommand('python', 'Python interpreter (Pyodide)',
+    () => import('./commands/python').then(m => m.pythonCmd)), 'src/commands/python.ts');
+  registerCommand(commands, lazyCommand('python3', 'Python 3 interpreter (Pyodide)',
+    () => import('./commands/python').then(m => m.python3Cmd)), 'src/commands/python.ts');
+  registerCommand(commands, lazyCommand('pip', 'Python package manager',
+    () => import('./commands/python').then(m => m.pipCmd)), 'src/commands/python.ts');
+  registerCommand(commands, lazyCommand('sqlite3', 'SQLite database engine',
+    () => import('./commands/sqlite').then(m => m.sqlite3Cmd)), 'src/commands/sqlite.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {
@@ -320,7 +333,7 @@ async function main() {
     'sh', 'bash', 'vi', 'nano', 'rg', 'esbuild',
     'mktemp', 'jq', 'tput', 'stty', 'gzip', 'gunzip', 'wget',
     'pgrep', 'pkill', 'nproc', 'getconf', 'ed', 'iconv', 'zip', 'unzip',
-    'cc', 'gcc',
+    'cc', 'gcc', 'python', 'python3', 'pip', 'sqlite3',
   ];
   (async () => {
     try {
