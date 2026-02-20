@@ -683,6 +683,8 @@ async function execSeedGif(ctx: CommandContext): Promise<number> {
 
 function showDraggableGif(gifBytes: Uint8Array, filename: string) {
   if (typeof document === 'undefined') return;
+  const container = document.getElementById('terminal');
+  if (!container) return;
 
   // Remove any existing thumbnail
   const existing = document.getElementById('seed-gif-thumb');
@@ -694,29 +696,27 @@ function showDraggableGif(gifBytes: Uint8Array, filename: string) {
   const el = document.createElement('div');
   el.id = 'seed-gif-thumb';
   el.draggable = true;
-  // Start off-screen at bottom, will animate in via JS
   el.style.cssText = [
-    'position:fixed', 'right:24px', 'z-index:2147483646',
+    'position:absolute', 'bottom:16px', 'right:16px', 'z-index:1000',
     'background:#1a1a2e', 'border:2px solid #51cf66', 'border-radius:8px',
-    'padding:8px', 'cursor:grab', 'box-shadow:0 4px 16px rgba(81,207,102,0.3)',
+    'padding:6px', 'cursor:grab', 'box-shadow:0 4px 12px rgba(0,0,0,0.5)',
     'display:flex', 'flex-direction:column', 'align-items:center', 'gap:4px',
-    'bottom:-200px', 'opacity:0',
   ].join(';');
 
   const img = document.createElement('img');
   img.src = url;
-  img.style.cssText = 'width:140px;height:auto;border-radius:4px;pointer-events:none';
+  img.style.cssText = 'width:120px;height:auto;border-radius:4px;pointer-events:none';
 
   const label = document.createElement('span');
   label.textContent = '\u2b06 Drag to another Shiro tab';
-  label.style.cssText = 'font-size:11px;color:#51cf66;font-family:system-ui;font-weight:600';
+  label.style.cssText = 'font-size:10px;color:#51cf66;font-family:system-ui;font-weight:600';
 
   const closeBtn = document.createElement('button');
   closeBtn.textContent = '\u00d7';
   closeBtn.style.cssText = [
     'position:absolute', 'top:2px', 'right:6px', 'background:none',
-    'border:none', 'color:#666', 'font-size:16px', 'cursor:pointer',
-    'line-height:1', 'padding:2px',
+    'border:none', 'color:#666', 'font-size:14px', 'cursor:pointer',
+    'line-height:1', 'padding:0',
   ].join(';');
   closeBtn.onclick = () => { el.remove(); URL.revokeObjectURL(url); };
 
@@ -724,37 +724,15 @@ function showDraggableGif(gifBytes: Uint8Array, filename: string) {
   el.appendChild(img);
   el.appendChild(label);
 
+  // Use native HTML5 drag — no setDragImage override, let browser
+  // render the default drag ghost (which animates across windows)
   el.addEventListener('dragstart', (e) => {
     const file = new File([gifBytes as BlobPart], filename, { type: 'image/gif' });
     e.dataTransfer!.items.add(file);
     e.dataTransfer!.effectAllowed = 'copy';
-    e.dataTransfer!.setDragImage(img, img.width / 2, img.height / 2);
-    el.style.opacity = '0.4';
   });
 
-  el.addEventListener('dragend', () => {
-    el.style.opacity = '1';
-  });
-
-  document.body.appendChild(el);
-
-  // Animate in via JS — force layout then set final position with transition.
-  // This is the most reliable cross-browser approach (no CSS keyframes needed).
-  el.getBoundingClientRect(); // force layout so initial position is committed
-  el.style.transition = 'bottom 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s ease';
-  el.style.bottom = '24px';
-  el.style.opacity = '1';
-
-  // Pulse glow after slide-in completes
-  setTimeout(() => {
-    let pulseCount = 0;
-    const pulse = setInterval(() => {
-      el.style.boxShadow = pulseCount % 2 === 0
-        ? '0 4px 24px rgba(81,207,102,0.7)'
-        : '0 4px 16px rgba(81,207,102,0.3)';
-      if (++pulseCount >= 6) clearInterval(pulse);
-    }, 400);
-  }, 500);
+  container.appendChild(el);
 
   // Auto-remove after 60 seconds
   setTimeout(() => { if (el.parentNode) { el.remove(); URL.revokeObjectURL(url); } }, 60000);
