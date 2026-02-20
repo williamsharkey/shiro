@@ -683,8 +683,6 @@ async function execSeedGif(ctx: CommandContext): Promise<number> {
 
 function showDraggableGif(gifBytes: Uint8Array, filename: string) {
   if (typeof document === 'undefined') return;
-  const container = document.getElementById('terminal');
-  if (!container) return;
 
   // Remove any existing thumbnail
   const existing = document.getElementById('seed-gif-thumb');
@@ -693,30 +691,33 @@ function showDraggableGif(gifBytes: Uint8Array, filename: string) {
   const blob = new Blob([gifBytes as BlobPart], { type: 'image/gif' });
   const url = URL.createObjectURL(blob);
 
+  // Use fixed positioning on document.body so the thumbnail renders
+  // at a predictable screen position and produces a clean drag ghost
   const el = document.createElement('div');
   el.id = 'seed-gif-thumb';
   el.draggable = true;
   el.style.cssText = [
-    'position:absolute', 'bottom:16px', 'right:16px', 'z-index:1000',
-    'background:#1a1a2e', 'border:1px solid #444', 'border-radius:8px',
-    'padding:6px', 'cursor:grab', 'box-shadow:0 4px 12px rgba(0,0,0,0.5)',
+    'position:fixed', 'bottom:24px', 'right:24px', 'z-index:2147483646',
+    'background:#1a1a2e', 'border:2px solid #51cf66', 'border-radius:8px',
+    'padding:8px', 'cursor:grab', 'box-shadow:0 4px 16px rgba(81,207,102,0.3)',
     'display:flex', 'flex-direction:column', 'align-items:center', 'gap:4px',
+    'transition:transform 0.15s ease, box-shadow 0.15s ease',
   ].join(';');
 
   const img = document.createElement('img');
   img.src = url;
-  img.style.cssText = 'width:120px;height:auto;border-radius:4px;pointer-events:none';
+  img.style.cssText = 'width:140px;height:auto;border-radius:4px;pointer-events:none';
 
   const label = document.createElement('span');
-  label.textContent = 'Drag to import';
-  label.style.cssText = 'font-size:10px;color:#888;font-family:system-ui';
+  label.textContent = '\u2b06 Drag to another Shiro tab';
+  label.style.cssText = 'font-size:11px;color:#51cf66;font-family:system-ui;font-weight:600';
 
   const closeBtn = document.createElement('button');
   closeBtn.textContent = '\u00d7';
   closeBtn.style.cssText = [
     'position:absolute', 'top:2px', 'right:6px', 'background:none',
-    'border:none', 'color:#666', 'font-size:14px', 'cursor:pointer',
-    'line-height:1', 'padding:0',
+    'border:none', 'color:#666', 'font-size:16px', 'cursor:pointer',
+    'line-height:1', 'padding:2px',
   ].join(';');
   closeBtn.onclick = () => { el.remove(); URL.revokeObjectURL(url); };
 
@@ -724,16 +725,41 @@ function showDraggableGif(gifBytes: Uint8Array, filename: string) {
   el.appendChild(img);
   el.appendChild(label);
 
+  // Hover effect
+  el.addEventListener('mouseenter', () => {
+    el.style.transform = 'scale(1.05)';
+    el.style.boxShadow = '0 6px 20px rgba(81,207,102,0.5)';
+  });
+  el.addEventListener('mouseleave', () => {
+    el.style.transform = '';
+    el.style.boxShadow = '0 4px 16px rgba(81,207,102,0.3)';
+  });
+
   el.addEventListener('dragstart', (e) => {
     const file = new File([gifBytes as BlobPart], filename, { type: 'image/gif' });
     e.dataTransfer!.items.add(file);
     e.dataTransfer!.effectAllowed = 'copy';
+    // Set a visible drag image using the img element
+    e.dataTransfer!.setDragImage(img, img.width / 2, img.height / 2);
+    // Fade the source during drag
+    el.style.opacity = '0.4';
   });
 
-  container.appendChild(el);
+  el.addEventListener('dragend', () => {
+    el.style.opacity = '1';
+  });
 
-  // Auto-remove after 30 seconds
-  setTimeout(() => { if (el.parentNode) { el.remove(); URL.revokeObjectURL(url); } }, 30000);
+  document.body.appendChild(el);
+
+  // Pulse animation to draw attention
+  el.animate([
+    { transform: 'scale(1)' },
+    { transform: 'scale(1.06)' },
+    { transform: 'scale(1)' },
+  ], { duration: 600, iterations: 2 });
+
+  // Auto-remove after 60 seconds (more time to drag across windows)
+  setTimeout(() => { if (el.parentNode) { el.remove(); URL.revokeObjectURL(url); } }, 60000);
 }
 
 // ─── seed html implementation ────────────────────────────────
