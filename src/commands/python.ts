@@ -251,17 +251,17 @@ export const pipCmd: Command = {
   name: 'pip',
   description: 'Python package manager',
   async exec(ctx: CommandContext) {
+    const args = ctx.args;
+    if (args[0] !== 'install' || !args[1]) {
+      ctx.stderr = 'usage: pip install <package> [<package>...]\n';
+      return 1;
+    }
+
     let py: any;
     try {
       py = await ensurePyodide(ctx);
     } catch (err: any) {
       ctx.stderr = `error: failed to load Pyodide: ${err.message}\n`;
-      return 1;
-    }
-
-    const args = ctx.args;
-    if (args[0] !== 'install' || !args[1]) {
-      ctx.stderr = 'usage: pip install <package> [<package>...]\n';
       return 1;
     }
 

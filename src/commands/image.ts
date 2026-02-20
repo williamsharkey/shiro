@@ -115,7 +115,7 @@ async function saveImage(ctx: CommandContext, name: string, description: string,
 
   // Create image directory if it doesn't exist
   const imageDir = '/home/user/shiro-images';
-  if (!await fs.stat(imageDir)) {
+  if (!await fs.exists(imageDir)) {
     await fs.mkdir(imageDir, { recursive: true });
   }
 
@@ -136,9 +136,10 @@ async function saveImage(ctx: CommandContext, name: string, description: string,
 
   for (const dir of directories) {
     const absDir = fs.resolvePath(dir, ctx.cwd);
-    const stat = await fs.stat(absDir);
-
-    if (!stat) {
+    let stat;
+    try {
+      stat = await fs.stat(absDir);
+    } catch {
       ctx.stderr = `image: directory not found: ${dir}\n`;
       continue;
     }
@@ -192,7 +193,7 @@ async function loadImage(ctx: CommandContext, name: string, targetDir?: string):
   let imagePath: string | null = null;
   for (const path of imagePaths) {
     const absPath = fs.resolvePath(path, ctx.cwd);
-    if (await fs.stat(absPath)) {
+    if (await fs.exists(absPath)) {
       imagePath = absPath;
       break;
     }
@@ -247,7 +248,7 @@ async function loadImage(ctx: CommandContext, name: string, targetDir?: string):
 
       // Ensure parent directory exists
       const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
-      if (parentDir && !await fs.stat(parentDir)) {
+      if (parentDir && !await fs.exists(parentDir)) {
         await fs.mkdir(parentDir, { recursive: true });
       }
 
@@ -294,8 +295,7 @@ async function listImages(ctx: CommandContext): Promise<number> {
   const fs = ctx.fs;
   const imageDir = '/home/user/shiro-images';
 
-  const stat = await fs.stat(imageDir);
-  if (!stat) {
+  if (!await fs.exists(imageDir)) {
     ctx.stdout = 'No images found\n';
     ctx.stdout += `Images are stored in ${imageDir}\n`;
     return 0;
@@ -337,8 +337,7 @@ async function deleteImage(ctx: CommandContext, name: string): Promise<number> {
   const fs = ctx.fs;
   const imagePath = `/home/user/shiro-images/${name}.json`;
 
-  const stat = await fs.stat(imagePath);
-  if (!stat) {
+  if (!await fs.exists(imagePath)) {
     ctx.stderr = `image: image not found: ${name}\n`;
     return 1;
   }

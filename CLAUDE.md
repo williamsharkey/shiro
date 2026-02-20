@@ -14,10 +14,11 @@ Shiro is a browser-native cloud OS. A Unix-like environment that runs entirely i
 
 - TypeScript catches bugs before runtime
 - Separate files mean an LLM can read/edit one command at a time without loading thousands of lines of context
-- Vite builds it into a single static bundle (`dist/`) that can be served from anywhere with no backend
+- Vite builds it into a static bundle (`dist/`) that can be served from anywhere with no backend
 - Adding new commands is just adding a file to `src/commands/` and registering it in `src/main.ts`
+- Infrequently-used commands are lazy-loaded via `lazyCommand()` — zero boot cost, loaded on first use
 
-**The `dist/` folder after `npx vite build` is a static site** - deploy it anywhere (GitHub Pages, S3, open it locally). `npm run dev` is just for live-reload during development.
+**The `dist/` folder after `npx vite build` is a static site** — one HTML entry file + lazy-loaded JS chunks. Deploy anywhere (GitHub Pages, S3, open it locally). `npm run dev` is just for live-reload during development.
 
 ## Project Structure
 
@@ -71,15 +72,18 @@ src/
     ├── page.ts           # page: interact with served app iframes (click, input, text, eval, etc.)
     ├── become.ts         # become/unbecome: full-screen app mode with shareable URLs
     ├── sc.ts             # sc: spawn Claude Code in a new terminal window
+    ├── python.ts         # python/python3/pip via Pyodide WASM (lazy-loaded)
+    ├── sqlite.ts         # sqlite3 via sql.js WASM (lazy-loaded)
     └── *.ts              # Individual Unix commands (cat, ls, awk, xargs, head, etc.)
 ├── gif-encoder.ts       # Zero-dep GIF89a encoder + SHIRO1.0 seed extractor
 ├── drop-handler.ts      # Drag-and-drop seed GIF import onto terminal
 └── utils/
     ├── copy-utils.ts     # bufferToString (isWrapped-aware), smartCopyProcess (indent strip)
     ├── tar-utils.ts      # gzip decompression and tar extraction
-    └── semver-utils.ts   # semantic versioning and range resolution
+    ├── semver-utils.ts   # semantic versioning and range resolution
+    └── lazy-command.ts   # Lazy-loading wrapper for on-demand command imports
 server.mjs                   # Unified Node.js server (proxy, signaling, relay, static)
-vite-plugin-inline.ts        # Build plugin: inlines JS/CSS/favicon into single HTML
+vite-plugin-inline.ts        # Build plugin: inlines entry JS/CSS/favicon into HTML (lazy chunks stay as files)
 deploy.sh                    # Build + scp + restart on DO droplet
 ```
 
@@ -87,10 +91,24 @@ deploy.sh                    # Build + scp + restart on DO droplet
 
 1. Create a new `.ts` file in `src/commands/` (or add to an existing group)
 2. Export a `Command` object implementing `{ name, description, exec(ctx) }`
-3. Register it in `src/main.ts` with `commands.register(yourCmd)`
+3. Register it in `src/main.ts` — either **static** or **lazy-loaded**
 4. The `CommandContext` gives you: `args`, `fs`, `cwd`, `env`, `stdin`, `stdout`, `stderr`, `shell`
 
-Example:
+**Static** (loaded at boot — for core/frequently-used commands):
+```typescript
+import { myCmd } from './commands/mycmd';
+registerCommand(commands, myCmd, 'src/commands/mycmd.ts');
+```
+
+**Lazy-loaded** (loaded on first use — for large/infrequent commands):
+```typescript
+registerCommand(commands, lazyCommand('mycmd', 'Does something useful',
+  () => import('./commands/mycmd').then(m => m.myCmd)), 'src/commands/mycmd.ts');
+```
+
+Use lazy-loading when: the command pulls in large dependencies (WASM runtimes, parsers), is rarely used, or adds >5KB to the entry bundle. Currently lazy-loaded: build, nano, termcast, image, seed, gh, mcp, group, jq, ed, zip/unzip, cc/gcc, python/python3/pip, sqlite3.
+
+Example command file:
 ```typescript
 import { Command } from './index';
 
@@ -128,7 +146,7 @@ Shiro deploys to a **DigitalOcean droplet** at https://shiro.computer (`161.35.1
 
 A single Node.js server (`server.mjs`) handles everything: static files, API proxy, OAuth callback, WebRTC signaling, and WebSocket relay. Nginx sits in front with SSL (wildcard cert for `*.shiro.computer` via certbot-dns-porkbun).
 
-**Build output is a single self-contained HTML file** — all JS/CSS/favicon inlined by `vite-plugin-inline.ts`. No separate asset files. ~352KB gzipped.
+**Build output is an HTML entry file + lazy-loaded JS chunks** — entry JS/CSS/favicon inlined by `vite-plugin-inline.ts`, dynamic imports stay as separate `.js` files in `dist/assets/`. Entry: ~361KB gzipped, lazy chunks: ~43KB total (loaded on demand).
 
 ```bash
 # Build and deploy to production
@@ -154,7 +172,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**512 tests across 21 test files** — all passing.
+**549 tests across 22 test files** — all passing (1 pre-existing flaky test in claude-code-install).
 
 ```bash
 npm test                          # Run from shiro root
@@ -176,6 +194,7 @@ cd tests && npm run test:shiro    # Run from tests/ directory
 | `page.test.ts` | Page | iframe interaction (click, text, eval) |
 | `claude-tools.test.ts` | **37 tests** | All Claude Code tool shim bugs (see below) |
 | `claude-code-install.test.ts` | E2E | Full `npm install -g @anthropic-ai/claude-code` + run |
+| `lazy-commands.test.ts` | **37 tests** | All lazy-loaded commands: lazyCommand helper, build, nano, termcast, image, gh, mcp, group, cc/gcc, python/pip, sqlite3 |
 
 ### Claude Code Tool Shim Tests (`claude-tools.test.ts`)
 
