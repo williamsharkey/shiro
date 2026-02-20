@@ -37,8 +37,17 @@ export function inlineAssets(): Plugin {
         (_match, src) => {
           const chunk = bundle[src];
           if (chunk && chunk.type === 'chunk' && chunk.isEntry) {
+            // Resolve Vite's module preload dep markers. Vite's internal
+            // buildImportAnalysisPlugin replaces __VITE_PRELOAD__ with actual
+            // dep arrays after all plugins' generateBundle hooks — but we're
+            // inlining the code now, before that pass runs. Our lazy chunks
+            // have no CSS/shared deps, so `void 0` (no deps) is correct.
+            let code = chunk.code;
+            if (code.includes('__VITE_PRELOAD__')) {
+              code = code.replace(/__VITE_PRELOAD__/g, 'void 0');
+            }
             delete bundle[src]; // remove standalone entry JS file
-            return `<script type="module">${chunk.code}</script>`;
+            return `<script type="module">${code}</script>`;
           }
           return _match;
         }

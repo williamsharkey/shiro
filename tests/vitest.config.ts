@@ -16,6 +16,10 @@ export default defineConfig({
         Buffer: true,
         process: true,
       },
+      // Don't polyfill fs/child_process — tests need real Node.js access
+      // (build-output.test.ts reads dist/ files). Shiro source code doesn't
+      // import these modules; only isomorphic-git needs Buffer/process.
+      exclude: ['fs', 'child_process', 'module'],
     }),
   ],
   resolve: {
