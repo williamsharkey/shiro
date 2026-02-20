@@ -46,6 +46,16 @@ export function inlineAssets(): Plugin {
             if (code.includes('__VITE_PRELOAD__')) {
               code = code.replace(/__VITE_PRELOAD__/g, 'void 0');
             }
+            // The entry chunk was in assets/ alongside lazy chunks, so its
+            // dynamic imports use "./chunk.js". Now that it's inlined into
+            // index.html (one level up), rewrite to "./assets/chunk.js".
+            const assetDir = src.split('/')[0]; // e.g. "assets"
+            if (assetDir) {
+              code = code.replace(
+                /import\("\.\/([^"]+\.js)"\)/g,
+                (_m, file) => `import("./${assetDir}/${file}")`,
+              );
+            }
             delete bundle[src]; // remove standalone entry JS file
             return `<script type="module">${code}</script>`;
           }

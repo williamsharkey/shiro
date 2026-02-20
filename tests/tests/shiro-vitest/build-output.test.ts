@@ -66,6 +66,17 @@ describe.skipIf(!hasDist)('Build Output Validation', () => {
     }
   });
 
+  it('dynamic imports should reference assets/ directory', () => {
+    html = html || readFile(indexPath);
+    // After inlining, dynamic imports must point to ./assets/ not ./
+    // (entry chunk moved from assets/ to index.html root)
+    const imports = html.match(/import\("[^"]*\.js"\)/g) || [];
+    expect(imports.length).toBeGreaterThanOrEqual(10);
+    for (const imp of imports) {
+      expect(imp).toMatch(/import\("\.\/assets\//);
+    }
+  });
+
   it('should not have other unresolved Vite markers', () => {
     html = html || readFile(indexPath);
     expect(html).not.toContain('__VITE_IS_MODERN__');
