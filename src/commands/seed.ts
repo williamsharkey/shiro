@@ -688,45 +688,19 @@ function showDraggableGif(gifBytes: Uint8Array, filename: string) {
   const existing = document.getElementById('seed-gif-thumb');
   if (existing) existing.remove();
 
-  // Inject keyframe animation (once)
-  if (!document.getElementById('seed-gif-anim')) {
-    const style = document.createElement('style');
-    style.id = 'seed-gif-anim';
-    style.textContent = `
-      @keyframes seed-slide-in {
-        0% { transform: translateY(200px) scale(0.5); opacity: 0; }
-        60% { transform: translateY(-10px) scale(1.03); opacity: 1; }
-        80% { transform: translateY(4px) scale(0.98); }
-        100% { transform: translateY(0) scale(1); opacity: 1; }
-      }
-      @keyframes seed-pulse {
-        0%, 100% { box-shadow: 0 4px 16px rgba(81,207,102,0.3); }
-        50% { box-shadow: 0 4px 24px rgba(81,207,102,0.6); }
-      }
-      #seed-gif-thumb {
-        animation: seed-slide-in 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both,
-                   seed-pulse 1.5s ease-in-out 0.5s 3;
-      }
-      #seed-gif-thumb:hover {
-        transform: scale(1.05);
-        box-shadow: 0 6px 20px rgba(81,207,102,0.5);
-      }
-    `;
-    document.head.appendChild(style);
-  }
-
   const blob = new Blob([gifBytes as BlobPart], { type: 'image/gif' });
   const url = URL.createObjectURL(blob);
 
   const el = document.createElement('div');
   el.id = 'seed-gif-thumb';
   el.draggable = true;
+  // Start off-screen at bottom, will animate in via JS
   el.style.cssText = [
-    'position:fixed', 'bottom:24px', 'right:24px', 'z-index:2147483646',
+    'position:fixed', 'right:24px', 'z-index:2147483646',
     'background:#1a1a2e', 'border:2px solid #51cf66', 'border-radius:8px',
-    'padding:8px', 'cursor:grab',
+    'padding:8px', 'cursor:grab', 'box-shadow:0 4px 16px rgba(81,207,102,0.3)',
     'display:flex', 'flex-direction:column', 'align-items:center', 'gap:4px',
-    'transition:transform 0.15s ease, box-shadow 0.15s ease',
+    'bottom:-200px', 'opacity:0',
   ].join(';');
 
   const img = document.createElement('img');
@@ -763,6 +737,24 @@ function showDraggableGif(gifBytes: Uint8Array, filename: string) {
   });
 
   document.body.appendChild(el);
+
+  // Animate in via JS — force layout then set final position with transition.
+  // This is the most reliable cross-browser approach (no CSS keyframes needed).
+  el.getBoundingClientRect(); // force layout so initial position is committed
+  el.style.transition = 'bottom 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s ease';
+  el.style.bottom = '24px';
+  el.style.opacity = '1';
+
+  // Pulse glow after slide-in completes
+  setTimeout(() => {
+    let pulseCount = 0;
+    const pulse = setInterval(() => {
+      el.style.boxShadow = pulseCount % 2 === 0
+        ? '0 4px 24px rgba(81,207,102,0.7)'
+        : '0 4px 16px rgba(81,207,102,0.3)';
+      if (++pulseCount >= 6) clearInterval(pulse);
+    }, 400);
+  }, 500);
 
   // Auto-remove after 60 seconds
   setTimeout(() => { if (el.parentNode) { el.remove(); URL.revokeObjectURL(url); } }, 60000);
