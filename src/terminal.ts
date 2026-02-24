@@ -6,6 +6,7 @@ import { bufferToString } from './utils/copy-utils';
 import { openRemotePanel } from './commands/remote';
 import { setActiveTerminal } from './active-terminal';
 import { createHudPanel, HudPanel } from './hud-panel';
+import { showTemplatePalette } from './template-palette';
 
 /**
  * HUD (Heads-Up Display) state for dynamic banner updates.
@@ -104,6 +105,23 @@ export class ShiroTerminal {
           }
           if (uri === 'shiro://remote') {
             openRemotePanel();
+            return;
+          }
+          if (uri === 'shiro://about') {
+            window.open('/about', '_blank');
+            return;
+          }
+          if (uri === 'shiro://templates') {
+            showTemplatePalette((cmd) => {
+              this.term.writeln('');
+              this.shell.execute(
+                cmd,
+                (s) => this.term.write(s),
+                (s) => this.term.write(`\x1b[31m${s}\x1b[0m`)
+              ).then(() => {
+                this.showPrompt();
+              });
+            });
             return;
           }
           if (uri === 'shiro://claude') {
@@ -372,16 +390,14 @@ export class ShiroTerminal {
    * Can be called anytime to draw a fresh HUD at the current cursor position.
    */
   drawHud() {
+    const W = 43; // box width in visible columns
     const build = buildNumber.trim().padStart(4, '0');
 
     // Detect subdomain
     const hostname = typeof window !== 'undefined' ? window.location.hostname : 'shiro.computer';
     const subdomainMatch = hostname.match(/^([^.]+)\.shiro\.computer$/);
     const displayHost = subdomainMatch ? `${subdomainMatch[1]}.shiro.computer` : 'shiro.computer';
-
-    // Pad hostname to fit layout (max ~20 chars for subdomain display)
     const hostDisplay = displayHost.length <= 20 ? displayHost : displayHost.slice(0, 17) + '...';
-    const hostPad = ' '.repeat(Math.max(0, 22 - hostDisplay.length));
 
     // Record HUD start position (absolute row in buffer)
     const buffer = this.term.buffer.active;
@@ -391,35 +407,56 @@ export class ShiroTerminal {
     const remoteSession = (window as any).__shiroRemoteSession;
     const remoteCode = remoteSession?.displayCode; // e.g., "chibi-gray"
 
-    // Row 0: Top border - with or without remote code
+    const L = '\x1b]8;;'; // OSC 8 link prefix
+    const E = '\x1b]8;;\x07'; // OSC 8 link end
+
+    // Row 0: Top border — domain + (remote code or version)
     if (remoteCode) {
+      // ┌── HOST ──...── CODE ○ ──...──┐
       const codeLen = remoteCode.length;
-      const leftPad = Math.max(1, 35 - codeLen);
-      const linkStart = '\x1b]8;;shiro://remote\x07';
-      const linkEnd = '\x1b]8;;\x07';
-      this.term.writeln(`\x1b[36m╔${'═'.repeat(leftPad)}╛${linkStart}\x1b[93m${remoteCode} \x1b[90m○\x1b[0m${linkEnd}\x1b[36m╒══╗\x1b[0m`);
+      const fixed = 4 + hostDisplay.length + 3 + 1 + codeLen + 3 + 1; // ┌── HOST ── CODE ○ ──┐ minimum
+      const fill = Math.max(2, W - fixed);
+      const fill1 = Math.max(1, Math.floor(fill / 2));
+      const fill2 = fill - fill1;
+      const linkS = `${L}shiro://remote\x07`;
+      this.term.writeln(`\x1b[36m┌── \x1b[1;97m${hostDisplay}\x1b[0m\x1b[36m ${'─'.repeat(fill1)} ${linkS}\x1b[93m${remoteCode} \x1b[90m○\x1b[0m${E}\x1b[36m ${'─'.repeat(fill2)}┐\x1b[0m`);
     } else {
-      this.term.writeln('\x1b[36m╔═════════════════════════════════════════╗\x1b[0m');
+      // ┌── HOST ──...── v0.1.0 #BUILD ──┐
+      const version = `v0.1.0 #${build}`;
+      const fixed = 4 + hostDisplay.length + 1 + 1 + version.length + 3; // ┌── HOST  ...  version ──┐
+      const fill = Math.max(1, W - fixed);
+      this.term.writeln(`\x1b[36m┌── \x1b[1;97m${hostDisplay}\x1b[0m\x1b[36m ${'─'.repeat(fill)} \x1b[95m${version}\x1b[0m\x1b[36m ──┐\x1b[0m`);
     }
 
-    // Row 1: Host and version
-    this.term.writeln(`\x1b[36m║\x1b[0m  \x1b[1;97m${hostDisplay}\x1b[0m${hostPad}\x1b[95mv0.1.0\x1b[0m   \x1b[95m#${build}\x1b[0m   \x1b[36m║\x1b[0m`);
-    // Row 2: Tagline
-    this.term.writeln('\x1b[36m║\x1b[0m                \x1b[92mcloud operating system\x1b[0m   \x1b[36m║\x1b[0m');
-    // Row 3: Bottom border
-    this.term.writeln('\x1b[36m╚═══════════════════╛\x1b[97m白\x1b[36m╒══════════════════╝\x1b[0m');
-    // Row 4: Empty line
+    // Row 1: Shortcuts — clickable links
+    const link = (text: string, uri: string) => `${L}${uri}\x07\x1b[97m${text}\x1b[0m${E}`;
+    const shortcuts = [
+      link('help', 'shiro://cmd/help'),
+      link('about', 'shiro://about'),
+      link('templates', 'shiro://templates'),
+      link('files', 'shiro://cmd/finder'),
+    ].join('\x1b[36m · \x1b[0m');
+    // Visible: "  help · about · templates · files" = 34 chars + padding
+    const visLen = 2 + 4 + 3 + 5 + 3 + 9 + 3 + 5; // = 34
+    const pad = ' '.repeat(Math.max(0, W - 2 - visLen)); // -2 for │ on each side
+    this.term.writeln(`\x1b[36m│\x1b[0m  ${shortcuts}${pad}\x1b[36m│\x1b[0m`);
+
+    // Row 2: Bottom border with 白 (double-width CJK = 2 cols)
+    // ┘ = 1, 白 = 2, ┌── = 3 visible per side + dashes
+    const dashL = 19; // dashes before 白
+    const dashR = W - 1 - dashL - 2 - 1; // 43 - 1(└) - 19 - 2(白) - 1(┘) = 20
+    this.term.writeln(`\x1b[36m└${'─'.repeat(dashL)}\x1b[97m白\x1b[36m${'─'.repeat(dashR)}┘\x1b[0m`);
+
+    // Row 3: Empty line
     this.term.writeln('');
 
     // Store HUD state for dynamic updates
     this.hud = {
       startRow,
-      lineCount: 5,
+      lineCount: 4,
       slots: {
-        // Remote code appears in top border, centered around column 28
         remoteCode: { row: 0, col: 28, width: 20 },
-        // Rec status appears on row 2 (tagline row), around column 36
-        recStatus: { row: 2, col: 34, width: 8 },
+        recStatus: { row: 1, col: 37, width: 5 },
       },
     };
 
@@ -468,29 +505,39 @@ export class ShiroTerminal {
   updateHudRemoteCode(code: string | null) {
     if (!this.isHudVisible()) return;
 
-    // Calculate viewport-relative row position
+    const W = 43;
     const buffer = this.term.buffer.active;
-    const viewportRow = this.hud!.startRow - buffer.baseY + 1; // Convert to 1-indexed viewport position
-
-    // Only update if the HUD row is actually in the viewport
+    const viewportRow = this.hud!.startRow - buffer.baseY + 1;
     if (viewportRow < 1 || viewportRow > this.term.rows) return;
 
-    this.term.write('\x1b7'); // Save cursor (DECSC)
-    this.term.write(`\x1b[${viewportRow};1H`); // Move to start of row (viewport-relative)
+    const hostname = typeof window !== 'undefined' ? window.location.hostname : 'shiro.computer';
+    const subdomainMatch = hostname.match(/^([^.]+)\.shiro\.computer$/);
+    const displayHost = subdomainMatch ? `${subdomainMatch[1]}.shiro.computer` : 'shiro.computer';
+    const hostDisplay = displayHost.length <= 20 ? displayHost : displayHost.slice(0, 17) + '...';
+    const build = buildNumber.trim().padStart(4, '0');
 
-    // Box is 43 chars wide. Right end is always ╒══╗ (4 chars) for alignment.
-    // With code: includes OSC 8 link + activity dot (2 extra visible chars: " ○")
+    const L = '\x1b]8;;';
+    const E = '\x1b]8;;\x07';
+
+    this.term.write('\x1b7');
+    this.term.write(`\x1b[${viewportRow};1H`);
+
     if (code) {
       const codeLen = code.length;
-      const leftPad = Math.max(1, 35 - codeLen);
-      const linkStart = '\x1b]8;;shiro://remote\x07';
-      const linkEnd = '\x1b]8;;\x07';
-      this.term.write(`\x1b[36m╔${'═'.repeat(leftPad)}╛${linkStart}\x1b[93m${code} \x1b[90m○\x1b[0m${linkEnd}\x1b[36m╒══╗\x1b[0m`);
+      const fixed = 4 + hostDisplay.length + 3 + 1 + codeLen + 3 + 1;
+      const fill = Math.max(2, W - fixed);
+      const fill1 = Math.max(1, Math.floor(fill / 2));
+      const fill2 = fill - fill1;
+      const linkS = `${L}shiro://remote\x07`;
+      this.term.write(`\x1b[36m┌── \x1b[1;97m${hostDisplay}\x1b[0m\x1b[36m ${'─'.repeat(fill1)} ${linkS}\x1b[93m${code} \x1b[90m○\x1b[0m${E}\x1b[36m ${'─'.repeat(fill2)}┐\x1b[0m`);
     } else {
-      this.term.write('\x1b[36m╔═════════════════════════════════════════╗\x1b[0m');
+      const version = `v0.1.0 #${build}`;
+      const fixed = 4 + hostDisplay.length + 1 + 1 + version.length + 3;
+      const fill = Math.max(1, W - fixed);
+      this.term.write(`\x1b[36m┌── \x1b[1;97m${hostDisplay}\x1b[0m\x1b[36m ${'─'.repeat(fill)} \x1b[95m${version}\x1b[0m\x1b[36m ──┐\x1b[0m`);
     }
 
-    this.term.write('\x1b8'); // Restore cursor (DECRC)
+    this.term.write('\x1b8');
   }
 
   /**
@@ -500,15 +547,21 @@ export class ShiroTerminal {
   updateHudRemoteActivity(active: boolean) {
     if (!this.isHudVisible()) return;
 
-    // The dot is the last visible character before ╒══╗ on row 0
-    // Position depends on the remote code length — find it dynamically
     const remoteSession = (window as any).__shiroRemoteSession;
     if (!remoteSession?.displayCode) return;
 
+    const hostname = typeof window !== 'undefined' ? window.location.hostname : 'shiro.computer';
+    const subdomainMatch = hostname.match(/^([^.]+)\.shiro\.computer$/);
+    const displayHost = subdomainMatch ? `${subdomainMatch[1]}.shiro.computer` : 'shiro.computer';
+    const hostDisplay = displayHost.length <= 20 ? displayHost : displayHost.slice(0, 17) + '...';
+
+    const W = 43;
     const codeLen = remoteSession.displayCode.length;
-    const leftPad = Math.max(1, 35 - codeLen);
-    // Dot column: ╔(1) + padding + ╛(1) + code + space(1) + dot position
-    const dotCol = 1 + leftPad + 1 + codeLen + 1 + 1; // 1-indexed
+    const fixed = 4 + hostDisplay.length + 3 + 1 + codeLen + 3 + 1;
+    const fill = Math.max(2, W - fixed);
+    const fill1 = Math.max(1, Math.floor(fill / 2));
+    // Dot column: ┌──(3) + space(1) + host + space(1) + fill1 dashes + space(1) + code + space(1) + dot
+    const dotCol = 3 + 1 + hostDisplay.length + 1 + fill1 + 1 + codeLen + 1 + 1; // 1-indexed
 
     const buffer = this.term.buffer.active;
     const viewportRow = this.hud!.startRow - buffer.baseY + 1;
@@ -520,10 +573,10 @@ export class ShiroTerminal {
       ? `${linkStart}\x1b[32m●\x1b[0m${linkEnd}`   // green filled
       : `${linkStart}\x1b[90m○\x1b[0m${linkEnd}`;   // dim empty
 
-    this.term.write('\x1b7'); // Save cursor
-    this.term.write(`\x1b[${viewportRow};${dotCol}H`); // Move to dot position
+    this.term.write('\x1b7');
+    this.term.write(`\x1b[${viewportRow};${dotCol}H`);
     this.term.write(dot);
-    this.term.write('\x1b8'); // Restore cursor
+    this.term.write('\x1b8');
   }
 
   /**

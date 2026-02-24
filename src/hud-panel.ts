@@ -7,6 +7,7 @@
  */
 
 import type { Shell } from './shell';
+import { showTemplatePalette } from './template-palette';
 
 export interface HudPanel {
   show(): void;
@@ -87,9 +88,11 @@ export function createHudPanel(shell: Shell): HudPanel {
 
   // Menu items
   const items = [
-    { label: 'Files', desc: 'Upload & download', icon: '↕', action: 'files' },
+    { label: 'Files', desc: 'File manager', icon: '↕', action: 'files' },
     { label: 'Claude', desc: 'AI assistant', icon: '◆', action: 'claude' },
+    { label: 'Templates', desc: 'Starter projects', icon: '◇', action: 'templates' },
     { label: 'Remote', desc: 'MCP connection', icon: '○', action: 'remote' },
+    { label: 'About', desc: 'shiro.computer', icon: '白', action: 'about' },
     { label: 'Help', desc: 'Commands & guide', icon: '?', action: 'help' },
   ];
 
@@ -160,7 +163,7 @@ export function createHudPanel(shell: Shell): HudPanel {
 
   const expand = () => {
     expanded = true;
-    menu.style.maxHeight = '200px';
+    menu.style.maxHeight = '320px';
     menu.style.opacity = '1';
     menu.style.marginTop = '6px';
     expandBtn.style.transform = 'rotate(90deg)';
@@ -293,27 +296,7 @@ function runInTerminal(shell: Shell, cmd: string) {
 function handleAction(action: string, shell: Shell) {
   switch (action) {
     case 'files': {
-      // Open a file picker — upload files to /home/user/
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.multiple = true;
-      input.onchange = async () => {
-        if (!input.files?.length) return;
-        const term = (window as any).__shiro?.terminal as any;
-        for (const file of Array.from(input.files)) {
-          const buf = new Uint8Array(await file.arrayBuffer());
-          const path = `/home/user/${file.name}`;
-          await shell.fs.writeFile(path, buf);
-          if (term?.term) {
-            term.term.writeln(`\r\n\x1b[32m  uploaded: ${file.name}\x1b[0m`);
-          }
-        }
-        if (term?.term) {
-          term.term.writeln('');
-          term.showPrompt?.();
-        }
-      };
-      input.click();
+      runInTerminal(shell, 'finder');
       break;
     }
     case 'claude': {
@@ -324,6 +307,14 @@ function handleAction(action: string, shell: Shell) {
     }
     case 'remote': {
       import('./commands/remote').then(m => m.openRemotePanel());
+      break;
+    }
+    case 'templates': {
+      showTemplatePalette((cmd) => runInTerminal(shell, cmd));
+      break;
+    }
+    case 'about': {
+      window.open('/about', '_blank');
       break;
     }
     case 'help': {

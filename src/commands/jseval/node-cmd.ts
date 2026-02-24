@@ -5691,6 +5691,10 @@ export const nodeCmd: Command = {
         } else if (e.message?.includes('extends value') || e.message?.includes('is not a constructor') || e.message?.includes('prototype')) {
           stderrBuf.push(e.message);
           exitCode = 1;
+        } else if (e.name === 'ReferenceError' || e.name === 'TypeError' || e.name === 'SyntaxError') {
+          stderrBuf.push(e.message || String(e));
+          console.error('[node] Runtime error:', e);
+          exitCode = 1;
         } else {
           throw e;
         }
@@ -5802,7 +5806,9 @@ export const nodeCmd: Command = {
       if (code.length <= 500000) { globalThis.setTimeout = _prevST; globalThis.clearTimeout = _prevCT; }
       delete (globalThis as any).setImmediate;
       delete (globalThis as any).clearImmediate;
-      ctx.stderr += `${e.stack || e.message}\n`;
+      const msg = e.message || String(e);
+      console.error('[node] Script error:', e);
+      ctx.stderr += `Error: ${msg}\n`;
       return 1;
     }
   },

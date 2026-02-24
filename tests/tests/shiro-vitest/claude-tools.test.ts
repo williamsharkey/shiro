@@ -541,6 +541,19 @@ describe('Claude Code Tool Shims', () => {
       expect(ctx.stdout).toContain('lockSync-pattern:ok');
     });
 
+    it('TypeError should produce clean error, not minified stack trace', async () => {
+      const ctx = createCtx(shell, fs, ['-e', [
+        'null.foo;',
+      ].join('\n')]);
+      const exitCode = await nodeCmd.exec(ctx);
+      expect(exitCode).toBe(1);
+      // Should contain a clean message, not a minified stack trace
+      const output = ctx.stderr + ctx.stdout;
+      expect(output).toMatch(/Cannot read propert/);
+      // Should NOT contain garbled stack frames from minified code
+      expect(output).not.toMatch(/\n\s+at [a-zA-Z]{1,3}@/);
+    });
+
     it('multiple overwrites via shell should always show latest', async () => {
       const ctx = createCtx(shell, fs, ['-e', [
         'const fs = require("fs");',

@@ -314,6 +314,8 @@ async function main() {
     () => import('./commands/python').then(m => m.pipCmd)), 'src/commands/python.ts');
   registerCommand(commands, lazyCommand('sqlite3', 'SQLite database engine',
     () => import('./commands/sqlite').then(m => m.sqlite3Cmd)), 'src/commands/sqlite.ts');
+  registerCommand(commands, lazyCommand('finder', 'Visual file manager',
+    () => import('./commands/finder').then(m => m.finderCmd)), 'src/commands/finder.ts');
   registerCommand(commands, lazyCommand('code', 'Rich code editor (CodeMirror)',
     () => import('./commands/code-editor').then(m => m.codeEditorCmd)), 'src/commands/code-editor.ts');
   registerCommand(commands, lazyCommand('builder', 'AI app builder (chat + live preview)',
