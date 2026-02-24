@@ -3,7 +3,9 @@
 > A standalone Unix environment that runs in a browser tab — shell, git, npm, node, vi, C compiler, SQLite, Python, and Claude Code. One HTML file. No server.
 
 **Live:** [shiro.computer](https://shiro.computer)
+**Docs:** [shiro.computer/docs](https://shiro.computer/docs)
 **About:** [shiro.computer/about](https://shiro.computer/about)
+**Examples:** [examples/](examples/)
 
 ## What's in it
 
@@ -69,6 +71,10 @@ claude -p "create a todo app with localStorage"
 The real `@anthropic-ai/claude-code` CLI runs inside Shiro's Node.js runtime shim. The tools Claude Code relies on — file reads, edits, grep, glob, bash — are shimmed to use the virtual filesystem. Both print mode (`claude -p "..."`) and interactive mode (`claude`) work. API calls route through a CORS proxy to Anthropic's API.
 
 An outer Claude Code instance can also control Shiro remotely via MCP tools over WebRTC. Run `remote start` in Shiro, then connect with the `shiro-mcp` package.
+
+## Node.js Compatibility
+
+~50 shimmed Node.js modules. Core modules (fs, path, buffer, events, process, crypto, os, url, util, child_process) are fully functional. See the [full compatibility table](https://shiro.computer/docs#node-compat).
 
 ## Development
 

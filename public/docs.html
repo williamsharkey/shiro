@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shiro Documentation</title>
+  <meta name="description" content="Documentation for Shiro — a browser-native Unix environment with shell, git, npm, node, C compiler, SQLite, Python, and Claude Code.">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0f0f1a;
+      color: #e0e0e0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: #00d4ff; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    code {
+      font-family: 'SF Mono', Consolas, 'Liberation Mono', monospace;
+      font-size: 0.88em;
+      background: rgba(255, 255, 255, 0.08);
+      padding: 2px 6px;
+      border-radius: 3px;
+    }
+
+    /* ===== Layout ===== */
+    .layout {
+      display: flex;
+      min-height: 100vh;
+    }
+
+    /* ===== Sidebar ===== */
+    .sidebar {
+      width: 240px;
+      position: fixed;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      background: #13132a;
+      border-right: 1px solid #2a2a3e;
+      padding: 20px 0;
+      overflow-y: auto;
+      z-index: 100;
+    }
+
+    .sidebar-header {
+      padding: 0 16px 16px;
+      border-bottom: 1px solid #2a2a3e;
+      margin-bottom: 12px;
+    }
+
+    .sidebar-header a {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .sidebar-header .back {
+      display: block;
+      font-size: 0.75rem;
+      color: #666;
+      margin-top: 2px;
+    }
+
+    .sidebar nav a {
+      display: block;
+      padding: 6px 16px;
+      color: #999;
+      font-size: 0.85rem;
+      transition: color 0.1s, background 0.1s;
+    }
+
+    .sidebar nav a:hover {
+      color: #fff;
+      background: rgba(255, 255, 255, 0.04);
+      text-decoration: none;
+    }
+
+    .sidebar nav a.active {
+      color: #00d4ff;
+      background: rgba(0, 212, 255, 0.06);
+    }
+
+    .sidebar nav .section-label {
+      display: block;
+      padding: 12px 16px 4px;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #555;
+      font-weight: 600;
+    }
+
+    /* ===== Content ===== */
+    .content {
+      flex: 1;
+      margin-left: 240px;
+      padding: 40px 48px 80px;
+      max-width: 820px;
+    }
+
+    .content h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+
+    .content h2 {
+      font-size: 1.4rem;
+      font-weight: 600;
+      color: #fff;
+      margin-top: 48px;
+      margin-bottom: 12px;
+      padding-top: 16px;
+      border-top: 1px solid #1e1e35;
+    }
+
+    .content h3 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: #ccc;
+      margin-top: 28px;
+      margin-bottom: 8px;
+    }
+
+    .content p {
+      margin-bottom: 12px;
+      color: #bbb;
+    }
+
+    .content ul, .content ol {
+      margin-bottom: 12px;
+      padding-left: 24px;
+      color: #bbb;
+    }
+
+    .content li { margin-bottom: 4px; }
+
+    /* ===== Code blocks ===== */
+    .code-block {
+      position: relative;
+      background: #1a1a2e;
+      border: 1px solid #2a2a3e;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      overflow: hidden;
+    }
+
+    .code-block pre {
+      margin: 0;
+      padding: 16px 20px;
+      font-family: 'SF Mono', Consolas, 'Liberation Mono', monospace;
+      font-size: 0.85rem;
+      line-height: 1.6;
+      overflow-x: auto;
+      color: #e0e0e0;
+    }
+
+    .code-block .copy-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid #333;
+      color: #888;
+      font-size: 0.7rem;
+      padding: 3px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+
+    .code-block:hover .copy-btn { opacity: 1; }
+    .copy-btn:hover { background: rgba(255, 255, 255, 0.15); color: #ccc; }
+
+    .code-block .g { color: #51cf66; }
+    .code-block .c { color: #888; }
+    .code-block .s { color: #ffd43b; }
+    .code-block .o { color: #74b9ff; }
+
+    /* ===== Tables ===== */
+    .content table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 16px;
+      font-size: 0.88rem;
+    }
+
+    .content th, .content td {
+      text-align: left;
+      padding: 8px 12px;
+      border-bottom: 1px solid #1e1e35;
+    }
+
+    .content th {
+      color: #999;
+      font-weight: 600;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .content td { color: #bbb; }
+
+    .status-works { color: #51cf66; }
+    .status-partial { color: #ffd43b; }
+    .status-stub { color: #888; }
+
+    /* ===== Hamburger (mobile) ===== */
+    .hamburger {
+      display: none;
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      z-index: 200;
+      background: #1a1a2e;
+      border: 1px solid #2a2a3e;
+      color: #ccc;
+      font-size: 1.2rem;
+      width: 36px;
+      height: 36px;
+      border-radius: 6px;
+      cursor: pointer;
+      line-height: 36px;
+      text-align: center;
+    }
+
+    .sidebar-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 90;
+    }
+
+    @media (max-width: 768px) {
+      .hamburger { display: block; }
+      .sidebar { transform: translateX(-100%); transition: transform 0.2s; }
+      .sidebar.open { transform: translateX(0); }
+      .sidebar-overlay.open { display: block; }
+      .content { margin-left: 0; padding: 60px 20px 80px; }
+    }
+  </style>
+</head>
+<body>
+  <button class="hamburger" onclick="toggleSidebar()">&#9776;</button>
+  <div class="sidebar-overlay" onclick="toggleSidebar()"></div>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <a href="/about">Shiro</a>
+        <a class="back" href="/">&larr; Open Shiro</a>
+      </div>
+      <nav>
+        <span class="section-label">Getting Started</span>
+        <a href="#quick-start">Quick Start</a>
+        <a href="#filesystem">Filesystem</a>
+        <a href="#shell">Shell</a>
+
+        <span class="section-label">Languages &amp; Tools</span>
+        <a href="#packages">npm &amp; Node.js</a>
+        <a href="#wasm">WASM Runtimes</a>
+        <a href="#git">Git</a>
+
+        <span class="section-label">Advanced</span>
+        <a href="#claude-code">Claude Code</a>
+        <a href="#servers">Virtual Servers</a>
+        <a href="#remote">Remote Control</a>
+
+        <span class="section-label">Reference</span>
+        <a href="#node-compat">Node.js Compatibility</a>
+        <a href="#commands">Command List</a>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <!-- ===== Quick Start ===== -->
+      <h1 id="quick-start">Quick Start</h1>
+      <p>Open <a href="/">shiro.computer</a> and start typing. The terminal is a full Unix shell with 200+ commands, persistent files, and WASM runtimes.</p>
+
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Create files and directories</span>
+mkdir -p ~/project/src
+echo 'Hello from Shiro' > ~/project/README.md
+
+<span class="c"># List and search</span>
+ls -la ~/project
+find ~/project -name "*.md"
+
+<span class="c"># Pipes and redirects</span>
+echo "hello world" | sed 's/hello/goodbye/' | wc -c
+
+<span class="c"># Files persist across reloads</span>
+cat ~/project/README.md</pre></div>
+
+      <p>Everything runs in the browser. Files are stored in IndexedDB and survive page reloads. No server needed.</p>
+
+      <!-- ===== Filesystem ===== -->
+      <h2 id="filesystem">Filesystem</h2>
+      <p>Shiro has an IndexedDB-backed POSIX filesystem. Files persist across sessions. The root is <code>/</code> with standard directories.</p>
+
+      <h3>Key Paths</h3>
+      <table>
+        <tr><th>Path</th><th>Purpose</th></tr>
+        <tr><td><code>/home/user</code></td><td>Home directory (<code>~</code>)</td></tr>
+        <tr><td><code>/tmp</code></td><td>Temporary files (not cleared automatically)</td></tr>
+        <tr><td><code>/usr/local/bin</code></td><td>Global binaries (npm -g installs here)</td></tr>
+        <tr><td><code>/usr/local/lib</code></td><td>Global node_modules</td></tr>
+      </table>
+
+      <h3>File Operations</h3>
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Create, copy, move, remove</span>
+touch file.txt
+cp file.txt backup.txt
+mv backup.txt renamed.txt
+rm renamed.txt
+
+<span class="c"># Directory operations</span>
+mkdir -p deep/nested/path
+rmdir empty-dir
+rm -r deep
+
+<span class="c"># Permissions (stored but not enforced)</span>
+chmod 755 script.sh
+ls -l script.sh
+
+<span class="c"># Symbolic links</span>
+ln -s /home/user/target /home/user/link
+readlink /home/user/link
+
+<span class="c"># Disk usage</span>
+du -sh /home/user</pre></div>
+
+      <!-- ===== Shell ===== -->
+      <h2 id="shell">Shell</h2>
+      <p>The shell supports pipes, redirects, variables, compound commands, and quoting. It's not bash-compatible but covers the most common patterns.</p>
+
+      <h3>Pipes and Redirects</h3>
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Pipe output between commands</span>
+ls -la | grep ".js" | wc -l
+
+<span class="c"># Redirect to file</span>
+echo "hello" > output.txt
+echo "more" >> output.txt    <span class="c"># append</span>
+
+<span class="c"># Input redirect</span>
+cat < output.txt
+
+<span class="c"># Stderr redirect</span>
+command-that-fails 2> errors.txt</pre></div>
+
+      <h3>Variables</h3>
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Set and use variables</span>
+NAME="Shiro"
+echo "Welcome to $NAME"
+echo "Home is ${HOME}"
+
+<span class="c"># Built-in variables</span>
+echo $HOME          <span class="c"># /home/user</span>
+echo $SHELL         <span class="c"># /bin/sh</span>
+echo $?             <span class="c"># last exit code</span>
+
+<span class="c"># Export for child processes</span>
+export API_KEY=abc123</pre></div>
+
+      <h3>Compound Commands</h3>
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># AND — run next only if previous succeeds</span>
+mkdir -p /tmp/test && echo "created"
+
+<span class="c"># OR — run next only if previous fails</span>
+cat /nonexistent 2>/dev/null || echo "file not found"
+
+<span class="c"># Semicolons — run sequentially regardless</span>
+echo "first" ; echo "second" ; echo "third"</pre></div>
+
+      <h3>Quoting</h3>
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Single quotes — literal, no expansion</span>
+echo '$HOME is not expanded'
+
+<span class="c"># Double quotes — variables expanded</span>
+echo "Home is $HOME"
+
+<span class="c"># Backslash escapes</span>
+echo "line one\nline two"</pre></div>
+
+      <!-- ===== Packages ===== -->
+      <h2 id="packages">npm &amp; Node.js</h2>
+      <p>Install real npm packages from the registry. <code>require()</code> resolves from <code>node_modules</code>. Node.js scripts run with CommonJS and ES module support.</p>
+
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Initialize a project</span>
+mkdir -p ~/myapp && cd ~/myapp
+npm init -y
+
+<span class="c"># Install packages (real tarballs from registry.npmjs.org)</span>
+npm install lodash
+npm install -g prettier
+
+<span class="c"># Use in scripts</span>
+node -e "console.log(require('lodash').uniq([1,1,2,3]))"
+
+<span class="c"># Run a script file</span>
+echo 'const _ = require("lodash"); console.log(_.chunk([1,2,3,4,5,6], 2));' > app.js
+node app.js
+
+<span class="c"># npm scripts</span>
+npm run start
+
+<span class="c"># Package management</span>
+npm list
+npm uninstall lodash</pre></div>
+
+      <h3>esbuild Bundler</h3>
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Bundle TypeScript/JavaScript</span>
+build src/app.ts --bundle --outfile=dist/app.js</pre></div>
+
+      <!-- ===== WASM Runtimes ===== -->
+      <h2 id="wasm">WASM Runtimes</h2>
+      <p>Six language runtimes compiled to WebAssembly, lazy-loaded on first use (~1MB each, cached in IndexedDB).</p>
+
+      <h3>C Compiler (xcc)</h3>
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre>echo '#include &lt;stdio.h&gt;
+int main() { printf("Hello from C!\\n"); return 0; }' > hello.c
+cc hello.c -o hello
+./hello</pre></div>
+
+      <h3>SQLite (sql.js)</h3>
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre>sqlite3 app.db "CREATE TABLE users (name TEXT, age INTEGER);"
+sqlite3 app.db "INSERT INTO users VALUES ('Alice', 30), ('Bob', 25);"
+sqlite3 app.db "SELECT * FROM users WHERE age > 28;"
+sqlite3 app.db ".tables"</pre></div>
+
+      <h3>Python (Pyodide)</h3>
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre>python3 -c "print('Hello from Python!')"
+python3 -c "import json; print(json.dumps({'key': 'value'}, indent=2))"
+
+<span class="c"># Run a script</span>
+echo 'for i in range(5): print(f"Count: {i}")' > count.py
+python3 count.py</pre></div>
+
+      <h3>Lua (Fengari)</h3>
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre>lua -e "print('Hello from Lua!')"
+lua -e "for i=1,5 do print(i) end"</pre></div>
+
+      <h3>jq (JSON processor)</h3>
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre>echo '{"name":"Alice","scores":[95,87,92]}' | jq '.scores | add / length'
+echo '[1,2,3,4,5]' | jq 'map(. * 2)'</pre></div>
+
+      <!-- ===== Git ===== -->
+      <h2 id="git">Git</h2>
+      <p>Full client-side git via isomorphic-git. init, add, commit, diff, log, clone, push, and remote operations all work.</p>
+
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Initialize and make commits</span>
+git init
+echo "# My Project" > README.md
+git add .
+git commit -m "Initial commit"
+
+<span class="c"># Make changes and diff</span>
+echo "Updated" >> README.md
+git diff
+git add . && git commit -m "Update readme"
+
+<span class="c"># View history</span>
+git log --oneline
+git status
+
+<span class="c"># Clone a repo (HTTP only, needs CORS proxy)</span>
+git clone https://github.com/user/repo.git
+
+<span class="c"># Push (needs GITHUB_TOKEN)</span>
+GITHUB_TOKEN=$GITHUB_TOKEN git push origin main</pre></div>
+
+      <!-- ===== Claude Code ===== -->
+      <h2 id="claude-code">Claude Code</h2>
+      <p>The real <code>@anthropic-ai/claude-code</code> CLI runs inside Shiro's Node.js runtime. It can read, write, edit, and search files in the virtual filesystem.</p>
+
+      <h3>Setup</h3>
+      <p>Run <code>setup</code> to sign in with your Anthropic account via OAuth. Your credentials persist in IndexedDB.</p>
+
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Sign in (opens OAuth flow)</span>
+setup
+
+<span class="c"># Print mode — one-shot code generation</span>
+claude -p "Write a function that checks if a number is prime"
+
+<span class="c"># Pipe input for analysis</span>
+cat app.js | claude -p "Review this code for bugs"
+
+<span class="c"># Interactive mode (opens in a terminal window)</span>
+sc</pre></div>
+
+      <h3>What Works</h3>
+      <ul>
+        <li>Print mode (<code>claude -p "..."</code>) and interactive mode (<code>claude</code>)</li>
+        <li>File tools: Read, Write, Edit, Glob, Grep</li>
+        <li>Bash tool: runs commands in the virtual shell</li>
+        <li>Stdin piping: <code>echo "text" | claude -p "analyze"</code></li>
+      </ul>
+
+      <h3>Limitations</h3>
+      <ul>
+        <li>Tree-sitter WASM doesn't load (syntax highlighting disabled)</li>
+        <li>No native binary execution (ripgrep is shimmed to Shiro's <code>rg</code>)</li>
+        <li>API calls route through a CORS proxy on shiro.computer</li>
+      </ul>
+
+      <!-- ===== Virtual Servers ===== -->
+      <h2 id="servers">Virtual Servers</h2>
+      <p>Serve web apps from the virtual filesystem using a Service Worker. Interact with them from the shell using <code>page</code> commands.</p>
+
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Start a server</span>
+serve /tmp/myapp 3000
+
+<span class="c"># Interact with the page</span>
+page :3000 text "body"           <span class="c"># read text</span>
+page :3000 click "#button"       <span class="c"># click an element</span>
+page :3000 input "#name" "Alice" <span class="c"># type into input</span>
+page :3000 eval "document.title" <span class="c"># run JavaScript</span>
+
+<span class="c"># Split view — dock app beside the terminal</span>
+serve /tmp/myapp 3000 --split right
+serve open 3000 --split bottom
+serve unsplit
+
+<span class="c"># Full-screen app mode</span>
+become 3000 myapp    <span class="c"># URL becomes /myapp</span>
+unbecome             <span class="c"># return to terminal</span></pre></div>
+
+      <!-- ===== Remote Control ===== -->
+      <h2 id="remote">Remote Control</h2>
+      <p>An outer Claude Code instance can control Shiro remotely via MCP tools over WebRTC. Peer-to-peer with no data going through the server after signaling.</p>
+
+      <h3>In Shiro (browser)</h3>
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre>remote start     <span class="c"># Generate connection code</span>
+remote status    <span class="c"># Check connection</span>
+remote stop      <span class="c"># End session</span></pre></div>
+
+      <h3>In Claude Code (desktop)</h3>
+      <p>Add to <code>~/.claude.json</code>:</p>
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre>{
+  "mcpServers": {
+    "shiro": { "command": "shiro-mcp" }
+  }
+}</pre></div>
+      <p>Then use tools: <code>shiro:connect</code>, <code>shiro:exec</code>, <code>shiro:read</code>, <code>shiro:write</code>, <code>shiro:list</code>, <code>shiro:eval</code>.</p>
+
+      <!-- ===== Node.js Compatibility ===== -->
+      <h2 id="node-compat">Node.js Compatibility</h2>
+      <p>Shiro shims ~50 Node.js modules to run in the browser. Most are functional for common use cases. Some are stubs that satisfy import checks without full behavior.</p>
+
+      <table>
+        <tr><th>Module</th><th>Status</th><th>Notes</th></tr>
+        <tr><td><code>fs</code></td><td class="status-works">Works</td><td>readFile, writeFile, stat, mkdir, readdir, unlink, rename, existsSync, promises</td></tr>
+        <tr><td><code>path</code></td><td class="status-works">Works</td><td>join, resolve, basename, dirname, extname, relative, parse, format, sep</td></tr>
+        <tr><td><code>buffer</code></td><td class="status-works">Works</td><td>Buffer.from, alloc, toString, slice, concat, compare</td></tr>
+        <tr><td><code>events</code></td><td class="status-works">Works</td><td>EventEmitter: on, once, emit, removeListener</td></tr>
+        <tr><td><code>process</code></td><td class="status-works">Works</td><td>env, cwd, exit, nextTick, argv, platform, version, stdout, stderr</td></tr>
+        <tr><td><code>child_process</code></td><td class="status-works">Works</td><td>exec, execSync route through the virtual shell</td></tr>
+        <tr><td><code>crypto</code></td><td class="status-works">Works</td><td>createHash (sha256, sha1, md5), randomBytes, randomUUID</td></tr>
+        <tr><td><code>os</code></td><td class="status-works">Works</td><td>platform, arch, homedir, tmpdir, cpus, EOL</td></tr>
+        <tr><td><code>url</code></td><td class="status-works">Works</td><td>URL class, parse, format</td></tr>
+        <tr><td><code>util</code></td><td class="status-works">Works</td><td>promisify, format, inspect, types</td></tr>
+        <tr><td><code>stream</code></td><td class="status-partial">Partial</td><td>Readable, Writable, Transform constructors exist; no full piping</td></tr>
+        <tr><td><code>http</code></td><td class="status-partial">Partial</td><td>createServer for virtual servers; no outgoing HTTP</td></tr>
+        <tr><td><code>https</code></td><td class="status-partial">Partial</td><td>Same as http; uses fetch() internally</td></tr>
+        <tr><td><code>net</code></td><td class="status-stub">Stub</td><td>Socket constructor exists; no TCP</td></tr>
+        <tr><td><code>tls</code></td><td class="status-stub">Stub</td><td>Satisfies imports; no real TLS</td></tr>
+        <tr><td><code>dns</code></td><td class="status-stub">Stub</td><td>resolve/lookup return mock results</td></tr>
+        <tr><td><code>zlib</code></td><td class="status-partial">Partial</td><td>gzip/gunzip via DecompressionStream</td></tr>
+        <tr><td><code>readline</code></td><td class="status-partial">Partial</td><td>createInterface works for stdin reading</td></tr>
+        <tr><td><code>string_decoder</code></td><td class="status-works">Works</td><td>StringDecoder UTF-8</td></tr>
+        <tr><td><code>querystring</code></td><td class="status-works">Works</td><td>parse, stringify, encode, decode</td></tr>
+        <tr><td><code>assert</code></td><td class="status-works">Works</td><td>ok, equal, deepEqual, throws, strict</td></tr>
+        <tr><td><code>module</code></td><td class="status-partial">Partial</td><td>createRequire, _resolveFilename</td></tr>
+        <tr><td><code>worker_threads</code></td><td class="status-stub">Stub</td><td>isMainThread = true; no real threads</td></tr>
+        <tr><td><code>cluster</code></td><td class="status-stub">Stub</td><td>isMaster/isPrimary = true</td></tr>
+        <tr><td><code>vm</code></td><td class="status-stub">Stub</td><td>runInNewContext wraps eval</td></tr>
+        <tr><td><code>async_hooks</code></td><td class="status-stub">Stub</td><td>createHook returns no-op</td></tr>
+        <tr><td><code>perf_hooks</code></td><td class="status-partial">Partial</td><td>performance.now() works</td></tr>
+      </table>
+
+      <p><span class="status-works">Works</span> = most APIs functional &nbsp; <span class="status-partial">Partial</span> = core APIs work, edge cases may fail &nbsp; <span class="status-stub">Stub</span> = satisfies imports, limited functionality</p>
+
+      <!-- ===== Command List ===== -->
+      <h2 id="commands">Command List</h2>
+      <p>200+ commands. Core coreutils are loaded at boot. Large commands (build, python, sqlite3, etc.) are lazy-loaded on first use.</p>
+
+      <h3>Core</h3>
+      <p><code>ls</code> <code>cat</code> <code>echo</code> <code>mkdir</code> <code>rm</code> <code>cp</code> <code>mv</code> <code>touch</code> <code>pwd</code> <code>cd</code> <code>head</code> <code>tail</code> <code>wc</code> <code>sort</code> <code>uniq</code> <code>tee</code> <code>tr</code> <code>cut</code> <code>paste</code> <code>yes</code> <code>true</code> <code>false</code></p>
+
+      <h3>Search &amp; Text</h3>
+      <p><code>grep</code> <code>sed</code> <code>awk</code> <code>find</code> <code>rg</code> <code>diff</code> <code>xargs</code> <code>glob</code> <code>basename</code> <code>dirname</code> <code>realpath</code></p>
+
+      <h3>Archives &amp; Compression</h3>
+      <p><code>tar</code> <code>gzip</code> <code>gunzip</code> <code>zip</code> <code>unzip</code></p>
+
+      <h3>Dev Tools</h3>
+      <p><code>node</code> <code>npm</code> <code>git</code> <code>build</code> <code>vi</code> <code>nano</code> <code>ed</code> <code>cc</code> <code>gcc</code> <code>python3</code> <code>pip</code> <code>sqlite3</code> <code>lua</code> <code>jq</code></p>
+
+      <h3>Network &amp; Servers</h3>
+      <p><code>fetch</code> <code>curl</code> <code>wget</code> <code>serve</code> <code>page</code> <code>become</code> <code>unbecome</code> <code>remote</code> <code>mcp</code> <code>group</code></p>
+
+      <h3>System</h3>
+      <p><code>env</code> <code>export</code> <code>which</code> <code>type</code> <code>uname</code> <code>hostname</code> <code>whoami</code> <code>date</code> <code>uptime</code> <code>ps</code> <code>kill</code> <code>sleep</code> <code>clear</code> <code>history</code> <code>help</code></p>
+
+      <h3>Shiro-specific</h3>
+      <p><code>setup</code> <code>claude</code> <code>sc</code> <code>seed</code> <code>image</code> <code>html</code> <code>img</code> <code>spawn</code> <code>hud</code> <code>js-eval</code></p>
+    </main>
+  </div>
+
+  <script>
+    function toggleSidebar() {
+      document.querySelector('.sidebar').classList.toggle('open');
+      document.querySelector('.sidebar-overlay').classList.toggle('open');
+    }
+
+    function copyBlock(btn) {
+      const pre = btn.parentElement.querySelector('pre');
+      const text = pre.textContent;
+      navigator.clipboard.writeText(text).then(() => {
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = 'Copy', 1500);
+      });
+    }
+
+    // Highlight active sidebar link on scroll
+    const sections = document.querySelectorAll('[id]');
+    const navLinks = document.querySelectorAll('.sidebar nav a[href^="#"]');
+    window.addEventListener('scroll', () => {
+      let current = '';
+      for (const section of sections) {
+        if (section.getBoundingClientRect().top < 120) current = section.id;
+      }
+      navLinks.forEach(link => {
+        link.classList.toggle('active', link.getAttribute('href') === '#' + current);
+      });
+    });
+
+    // Close sidebar on nav click (mobile)
+    navLinks.forEach(link => link.addEventListener('click', () => {
+      document.querySelector('.sidebar').classList.remove('open');
+      document.querySelector('.sidebar-overlay').classList.remove('open');
+    }));
+  </script>
+</body>
+</html>
