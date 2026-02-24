@@ -22,7 +22,7 @@ export function createHudPanel(shell: Shell): HudPanel {
   wrapper.style.cssText = `
     position: fixed;
     top: 12px;
-    left: 12px;
+    right: 12px;
     z-index: 10000;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     opacity: 0;
@@ -218,6 +218,7 @@ export function createHudPanel(shell: Shell): HudPanel {
     if (Math.abs(moveX) > 3 || Math.abs(moveY) > 3) didDrag = true;
     wrapper.style.left = (dx + moveX) + 'px';
     wrapper.style.top = (dy + moveY) + 'px';
+    wrapper.style.right = 'auto';
   };
   const onTouchMove = (e: TouchEvent) => {
     if (!dragging) return;
@@ -227,6 +228,7 @@ export function createHudPanel(shell: Shell): HudPanel {
     if (Math.abs(moveX) > 3 || Math.abs(moveY) > 3) didDrag = true;
     wrapper.style.left = (dx + moveX) + 'px';
     wrapper.style.top = (dy + moveY) + 'px';
+    wrapper.style.right = 'auto';
   };
   const onEnd = () => {
     dragging = false;
