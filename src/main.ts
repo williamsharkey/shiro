@@ -320,6 +320,14 @@ async function main() {
     () => import('./commands/builder').then(m => m.builderCmd)), 'src/commands/builder.ts');
   registerCommand(commands, lazyCommand('ffmpeg', 'Video/audio processing (ffmpeg.wasm)',
     () => import('./commands/ffmpeg').then(m => m.ffmpegCmd)), 'src/commands/ffmpeg.ts');
+  registerCommand(commands, lazyCommand('lua', 'Lua 5.4 interpreter (wasmoon)',
+    () => import('./commands/lua').then(m => m.luaCmd)), 'src/commands/lua.ts');
+  registerCommand(commands, lazyCommand('psql', 'PostgreSQL database (PGlite)',
+    () => import('./commands/postgres').then(m => m.psqlCmd)), 'src/commands/postgres.ts');
+  registerCommand(commands, lazyCommand('convert', 'ImageMagick image conversion (magick-wasm)',
+    () => import('./commands/magick').then(m => m.convertCmd)), 'src/commands/magick.ts');
+  registerCommand(commands, lazyCommand('magick', 'ImageMagick (magick-wasm)',
+    () => import('./commands/magick').then(m => m.magickCmd)), 'src/commands/magick.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {

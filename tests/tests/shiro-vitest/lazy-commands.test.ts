@@ -500,4 +500,194 @@ describe('Lazy-Loaded Commands', () => {
       expect(ctx.stderr).toContain('ffmpeg');
     });
   });
+
+  describe('lua', () => {
+    it('should import and have correct name/description', async () => {
+      const { luaCmd } = await import('@shiro/commands/lua');
+      expect(luaCmd.name).toBe('lua');
+      expect(luaCmd.description).toContain('Lua');
+    });
+
+    it('should show usage when called with no args and no stdin', async () => {
+      const { luaCmd } = await import('@shiro/commands/lua');
+      const ctx = {
+        args: [],
+        fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
+      };
+      const code = await luaCmd.exec(ctx);
+      expect(code).toBe(0);
+      expect(ctx.stdout).toContain('Usage:');
+      expect(ctx.stdout).toContain('lua');
+    });
+
+    it('should show version with -v flag', async () => {
+      const { luaCmd } = await import('@shiro/commands/lua');
+      const ctx = {
+        args: ['-v'],
+        fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
+      };
+      const code = await luaCmd.exec(ctx);
+      expect(code).toBe(0);
+      expect(ctx.stdout).toContain('Lua 5.4');
+      expect(ctx.stdout).toContain('wasmoon');
+    });
+
+    it('should fail gracefully when WASM cannot be loaded (test env)', async () => {
+      const { luaCmd } = await import('@shiro/commands/lua');
+      const ctx = {
+        args: ['-e', 'print("hello")'],
+        fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
+      };
+      const code = await luaCmd.exec(ctx);
+      // CDN load will fail in test env
+      expect(code).toBe(1);
+      expect(ctx.stderr).toContain('lua');
+    });
+
+    it('should error when script file not found', async () => {
+      const { luaCmd } = await import('@shiro/commands/lua');
+      // Bypass WASM loading by checking file existence first
+      // The command reads the file before loading WASM, so this might
+      // fail at WASM load or file read — either way it returns 1
+      const ctx = {
+        args: ['nonexistent.lua'],
+        fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
+      };
+      const code = await luaCmd.exec(ctx);
+      expect(code).toBe(1);
+    });
+  });
+
+  describe('psql (PostgreSQL)', () => {
+    it('should import and have correct name/description', async () => {
+      const { psqlCmd } = await import('@shiro/commands/postgres');
+      expect(psqlCmd.name).toBe('psql');
+      expect(psqlCmd.description).toContain('PostgreSQL');
+    });
+
+    it('should show version with --version flag', async () => {
+      const { psqlCmd } = await import('@shiro/commands/postgres');
+      const ctx = {
+        args: ['--version'],
+        fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
+      };
+      const code = await psqlCmd.exec(ctx);
+      expect(code).toBe(0);
+      expect(ctx.stdout).toContain('PGlite');
+    });
+
+    it('should show help with --help flag', async () => {
+      const { psqlCmd } = await import('@shiro/commands/postgres');
+      const ctx = {
+        args: ['--help'],
+        fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
+      };
+      const code = await psqlCmd.exec(ctx);
+      expect(code).toBe(0);
+      expect(ctx.stdout).toContain('Usage:');
+      expect(ctx.stdout).toContain('SELECT');
+    });
+
+    it('should show database list with --list flag', async () => {
+      const { psqlCmd } = await import('@shiro/commands/postgres');
+      const ctx = {
+        args: ['--list'],
+        fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
+      };
+      const code = await psqlCmd.exec(ctx);
+      expect(code).toBe(0);
+      expect(ctx.stdout).toContain('database');
+    });
+
+    it('should error when no SQL provided', async () => {
+      const { psqlCmd } = await import('@shiro/commands/postgres');
+      const ctx = {
+        args: ['mydb'],
+        fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
+      };
+      const code = await psqlCmd.exec(ctx);
+      expect(code).toBe(1);
+      expect(ctx.stderr).toContain('no SQL');
+    });
+
+    it('should fail gracefully when PGlite cannot be loaded (test env)', async () => {
+      const { psqlCmd } = await import('@shiro/commands/postgres');
+      const ctx = {
+        args: ['SELECT 1;'],
+        fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
+      };
+      const code = await psqlCmd.exec(ctx);
+      // CDN load will fail in test env
+      expect(code).toBe(1);
+      expect(ctx.stderr).toContain('psql');
+    });
+  });
+
+  describe('convert / magick (ImageMagick)', () => {
+    it('should import and have correct names', async () => {
+      const { convertCmd, magickCmd } = await import('@shiro/commands/magick');
+      expect(convertCmd.name).toBe('convert');
+      expect(magickCmd.name).toBe('magick');
+    });
+
+    it('should show usage when called with no args', async () => {
+      const { convertCmd } = await import('@shiro/commands/magick');
+      const ctx = {
+        args: [],
+        fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
+      };
+      const code = await convertCmd.exec(ctx);
+      expect(code).toBe(0);
+      expect(ctx.stdout).toContain('Usage:');
+      expect(ctx.stdout).toContain('-resize');
+    });
+
+    it('should show version with --version flag', async () => {
+      const { convertCmd } = await import('@shiro/commands/magick');
+      const ctx = {
+        args: ['--version'],
+        fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
+      };
+      const code = await convertCmd.exec(ctx);
+      expect(code).toBe(0);
+      expect(ctx.stdout).toContain('magick-wasm');
+    });
+
+    it('should error when input file not found', async () => {
+      const { convertCmd } = await import('@shiro/commands/magick');
+      const ctx = {
+        args: ['nonexistent.png', 'output.png'],
+        fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
+      };
+      const code = await convertCmd.exec(ctx);
+      expect(code).toBe(1);
+      expect(ctx.stderr).toContain('nonexistent.png');
+    });
+
+    it('should fail gracefully when WASM cannot be loaded (test env)', async () => {
+      const { convertCmd } = await import('@shiro/commands/magick');
+      // Create a dummy input file so it gets past the file-read step
+      await fs.writeFile('/home/user/test.png', new Uint8Array([0x89, 0x50, 0x4E, 0x47]));
+      const ctx = {
+        args: ['test.png', '-resize', '50%', 'out.png'],
+        fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
+      };
+      const code = await convertCmd.exec(ctx);
+      // CDN load will fail in test env
+      expect(code).toBe(1);
+      expect(ctx.stderr).toContain('convert');
+    });
+
+    it('magick identify should fail gracefully (test env)', async () => {
+      const { magickCmd } = await import('@shiro/commands/magick');
+      await fs.writeFile('/home/user/test2.png', new Uint8Array([0x89, 0x50, 0x4E, 0x47]));
+      const ctx = {
+        args: ['identify', 'test2.png'],
+        fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
+      };
+      const code = await magickCmd.exec(ctx);
+      expect(code).toBe(1);
+      expect(ctx.stderr).toContain('magick');
+    });
+  });
 });
