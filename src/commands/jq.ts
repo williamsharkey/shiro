@@ -12,12 +12,15 @@ function tokenize(expr: string): string[] {
   while (i < expr.length) {
     const c = expr[i];
     if (/\s/.test(c)) { i++; continue; }
-    if ('.[],:|(){}?'.includes(c)) {
+    if ('.[],:|(){}?;'.includes(c)) {
       tokens.push(c);
       i++;
     } else if (c === '/' && expr[i + 1] === '/') {
       tokens.push('//');
       i += 2;
+    } else if (c === '/') {
+      tokens.push('/');
+      i++;
     } else if (c === '=' && expr[i + 1] === '=') {
       tokens.push('==');
       i += 2;

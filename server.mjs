@@ -4,9 +4,10 @@
  */
 
 import { createServer } from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, writeFile, stat, readdir, unlink, mkdir } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { WebSocketServer } from 'ws';
+import { randomBytes } from 'node:crypto';
 
 const PORT = process.env.PORT || 3000;
 const STATIC_DIR = process.env.STATIC_DIR || '/opt/shiro/public';
@@ -341,6 +342,121 @@ async function handleGitProxy(req, res, targetUrl) {
   }
 }
 
+// --- Seed sharing ---
+const SEED_DIR = process.env.SEED_DIR || '/opt/shiro/seeds';
+const SEED_MAX_SIZE = 512 * 1024; // 512KB max per seed (gzipped)
+const SEED_RATE_LIMIT = 200; // per IP per month
+
+// In-memory rate limit tracker: ip -> { count, resetAt }
+const seedRates = new Map();
+
+// Ensure seed directory exists
+mkdir(SEED_DIR, { recursive: true }).catch(() => {});
+
+function checkSeedRateLimit(ip) {
+  const now = Date.now();
+  let entry = seedRates.get(ip);
+  if (!entry || now > entry.resetAt) {
+    // Reset monthly
+    entry = { count: 0, resetAt: now + 30 * 24 * 60 * 60 * 1000 };
+    seedRates.set(ip, entry);
+  }
+  if (entry.count >= SEED_RATE_LIMIT) return false;
+  entry.count++;
+  return true;
+}
+
+async function handleSeedUpload(req, res) {
+  const origin = req.headers['origin'];
+  const cors = corsHeaders(origin);
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, cors);
+    return res.end();
+  }
+
+  const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress;
+  if (!checkSeedRateLimit(ip)) {
+    res.writeHead(429, { 'content-type': 'application/json', ...cors });
+    return res.end(JSON.stringify({ error: 'Rate limit exceeded (200/month)' }));
+  }
+
+  // Collect body (already gzipped from client)
+  const chunks = [];
+  let totalSize = 0;
+  for await (const chunk of req) {
+    totalSize += chunk.length;
+    if (totalSize > SEED_MAX_SIZE) {
+      res.writeHead(413, { 'content-type': 'application/json', ...cors });
+      return res.end(JSON.stringify({ error: 'Seed too large (max 512KB)' }));
+    }
+    chunks.push(chunk);
+  }
+  const body = Buffer.concat(chunks);
+
+  // Generate short ID (8 chars, base36)
+  const id = randomBytes(5).toString('base36').slice(0, 8).padEnd(8, '0');
+  const meta = JSON.stringify({ created: Date.now(), lastVisited: Date.now(), ip, size: body.length });
+
+  try {
+    await writeFile(join(SEED_DIR, `${id}.gz`), body);
+    await writeFile(join(SEED_DIR, `${id}.meta`), meta);
+    console.log(`[seed] Created ${id} (${body.length} bytes) from ${ip}`);
+    res.writeHead(200, { 'content-type': 'application/json', ...cors });
+    res.end(JSON.stringify({ id, url: `/s/${id}` }));
+  } catch (err) {
+    console.error('[seed] Write error:', err.message);
+    res.writeHead(500, { 'content-type': 'application/json', ...cors });
+    res.end(JSON.stringify({ error: 'Failed to save seed' }));
+  }
+}
+
+async function handleSeedDownload(req, res, id) {
+  const origin = req.headers['origin'];
+  const cors = corsHeaders(origin);
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, cors);
+    return res.end();
+  }
+
+  try {
+    const data = await readFile(join(SEED_DIR, `${id}.gz`));
+    // Update lastVisited
+    try {
+      const metaPath = join(SEED_DIR, `${id}.meta`);
+      const meta = JSON.parse(await readFile(metaPath, 'utf-8'));
+      meta.lastVisited = Date.now();
+      await writeFile(metaPath, JSON.stringify(meta));
+    } catch {}
+    res.writeHead(200, { 'content-type': 'application/octet-stream', ...cors });
+    res.end(data);
+  } catch {
+    res.writeHead(404, { 'content-type': 'application/json', ...cors });
+    res.end(JSON.stringify({ error: 'Seed not found' }));
+  }
+}
+
+// Lazy cleanup: delete seeds not visited in 60 days (runs every 6 hours)
+setInterval(async () => {
+  try {
+    const files = await readdir(SEED_DIR);
+    const cutoff = Date.now() - 60 * 24 * 60 * 60 * 1000;
+    for (const file of files) {
+      if (!file.endsWith('.meta')) continue;
+      try {
+        const meta = JSON.parse(await readFile(join(SEED_DIR, file), 'utf-8'));
+        if (meta.lastVisited < cutoff) {
+          const id = file.replace('.meta', '');
+          await unlink(join(SEED_DIR, `${id}.gz`)).catch(() => {});
+          await unlink(join(SEED_DIR, `${id}.meta`)).catch(() => {});
+          console.log(`[seed] Cleaned up expired seed: ${id}`);
+        }
+      } catch {}
+    }
+  } catch {}
+}, 6 * 60 * 60 * 1000);
+
 // --- HTTP server ---
 const server = createServer(async (req, res) => {
   const pathname = new URL(req.url, 'http://localhost').pathname;
@@ -375,6 +491,15 @@ const server = createServer(async (req, res) => {
   if (pathname === '/offer' || pathname.startsWith('/offer/') || pathname.startsWith('/answer/')) {
     return handleSignaling(req, res, pathname);
   }
+  // Seed sharing: POST /api/seed (upload), GET /api/seed/:id (download raw data)
+  if (pathname === '/api/seed' && req.method === 'POST') {
+    return handleSeedUpload(req, res);
+  }
+  const seedApiMatch = pathname.match(/^\/api\/seed\/([a-z0-9]{4,16})$/);
+  if (seedApiMatch && req.method === 'GET') {
+    return handleSeedDownload(req, res, seedApiMatch[1]);
+  }
+  // /s/:id falls through to handleStatic which SPA-fallbacks to index.html
   return handleStatic(req, res);
 });
 

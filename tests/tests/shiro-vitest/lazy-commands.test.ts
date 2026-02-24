@@ -457,4 +457,47 @@ describe('Lazy-Loaded Commands', () => {
     });
 
   });
+
+  describe('ffmpeg', () => {
+    it('should import and have correct name/description', async () => {
+      const { ffmpegCmd } = await import('@shiro/commands/ffmpeg');
+      expect(ffmpegCmd.name).toBe('ffmpeg');
+      expect(ffmpegCmd.description).toContain('ffmpeg');
+    });
+
+    it('should show usage when called with no args', async () => {
+      const { ffmpegCmd } = await import('@shiro/commands/ffmpeg');
+      const ctx = {
+        args: [],
+        fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
+      };
+      const code = await ffmpegCmd.exec(ctx);
+      expect(code).toBe(0);
+      expect(ctx.stdout).toContain('Usage:');
+      expect(ctx.stdout).toContain('-i');
+    });
+
+    it('should show version with -version flag', async () => {
+      const { ffmpegCmd } = await import('@shiro/commands/ffmpeg');
+      const ctx = {
+        args: ['-version'],
+        fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
+      };
+      const code = await ffmpegCmd.exec(ctx);
+      expect(code).toBe(0);
+      expect(ctx.stdout).toContain('ffmpeg.wasm');
+    });
+
+    it('should fail gracefully when WASM cannot be loaded (test env)', async () => {
+      const { ffmpegCmd } = await import('@shiro/commands/ffmpeg');
+      const ctx = {
+        args: ['-i', 'input.mp4', 'output.gif'],
+        fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
+      };
+      const code = await ffmpegCmd.exec(ctx);
+      // CDN load will fail in test env
+      expect(code).toBe(1);
+      expect(ctx.stderr).toContain('ffmpeg');
+    });
+  });
 });

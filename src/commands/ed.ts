@@ -86,7 +86,8 @@ export const edCmd: Command = {
         }
 
         case 'w': {
-          const wFile = cmd.slice(1).trim() || filename;
+          const isWq = cmd.startsWith('wq');
+          const wFile = (isWq ? cmd.slice(2).trim() : cmd.slice(1).trim()) || filename;
           if (!wFile) {
             ctx.stderr += '?\n';
             continue;
@@ -97,7 +98,7 @@ export const edCmd: Command = {
           await ctx.fs.writeFile(resolved, text);
           ctx.stdout += `${new TextEncoder().encode(text).length}\n`;
           dirty = false;
-          if (cmd.startsWith('wq')) return 0;
+          if (isWq) return 0;
           break;
         }
 

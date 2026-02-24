@@ -402,7 +402,7 @@ function buildBlobSnippet(compressedHtmlB64: string, compressedFsB64: string, co
 
 export const seedCmd: Command = {
   name: 'seed',
-  description: 'Export Shiro state (seed [blob|gif|html] [subdomain])',
+  description: 'Export Shiro state (seed [blob|gif|html|share] [subdomain])',
 
   async exec(ctx: CommandContext): Promise<number> {
     // ─── seed gif ────────────────────────────────────────
@@ -413,6 +413,11 @@ export const seedCmd: Command = {
     // ─── seed html ───────────────────────────────────────
     if (ctx.args[0] === 'html') {
       return execSeedHtml(ctx);
+    }
+
+    // ─── seed share ──────────────────────────────────────
+    if (ctx.args[0] === 'share') {
+      return execSeedShare(ctx);
     }
 
     // Check for blob mode: seed blob
@@ -736,6 +741,77 @@ function showDraggableGif(gifBytes: Uint8Array, filename: string) {
 
   // Auto-remove after 60 seconds
   setTimeout(() => { if (el.parentNode) { el.remove(); URL.revokeObjectURL(url); } }, 60000);
+}
+
+// ─── seed share implementation ───────────────────────────────
+
+async function execSeedShare(ctx: CommandContext): Promise<number> {
+  try {
+    ctx.stdout = 'Serializing filesystem...\n';
+    const { ndjson, storageJson, stats } = await serializeState(ctx);
+
+    // Build seed envelope and compress
+    const seedEnvelope = JSON.stringify({
+      version: SHIRO_VERSION,
+      hostname: typeof window !== 'undefined' ? window.location.hostname : 'shiro.computer',
+      timestamp: Date.now(),
+      files: stats.files,
+      dirs: stats.dirs,
+      totalBytes: stats.totalBytes,
+      ndjson,
+      storage: storageJson,
+    });
+
+    ctx.stdout += 'Compressing...\n';
+    const compressed = await gzipCompress(new TextEncoder().encode(seedEnvelope));
+    ctx.stdout += `  Compressed: ${(compressed.length / 1024).toFixed(0)} KB\n`;
+
+    ctx.stdout += 'Uploading...\n';
+    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://shiro.computer';
+    const res = await fetch(`${origin}/api/seed`, {
+      method: 'POST',
+      body: compressed as unknown as BodyInit,
+      headers: { 'Content-Type': 'application/octet-stream' },
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      ctx.stderr = `seed share: ${err.error}\n`;
+      return 1;
+    }
+
+    const { id, url } = await res.json();
+    const fullUrl = `${origin}${url}`;
+
+    // Copy URL to clipboard
+    try {
+      await navigator.clipboard.writeText(fullUrl);
+    } catch {}
+
+    let output = '\n';
+    output += `  Shiro Shared Seed v${SHIRO_VERSION}\n`;
+    output += `  ${'─'.repeat(30)}\n`;
+    output += `  Files:       ${stats.files}\n`;
+    output += `  Directories: ${stats.dirs}\n`;
+    output += `  Data size:   ${stats.sizeMB} MB\n`;
+    output += `  Compressed:  ${(compressed.length / 1024).toFixed(0)} KB\n`;
+    output += `  ID:          ${id}\n`;
+    output += `  URL:         ${fullUrl}\n`;
+
+    if (stats.detectedKeys.length > 0) {
+      output += `\n  API keys detected:\n`;
+      for (const key of stats.detectedKeys) output += `    - ${key}\n`;
+      output += `\n  Warning: This shared seed contains your API keys!\n`;
+    }
+
+    output += `\n  URL copied to clipboard. Share it to give anyone a Shiro instance with your files.\n`;
+    output += `  Link expires after 60 days of no visits.\n\n`;
+    ctx.stdout = output;
+    return 0;
+  } catch (e: any) {
+    ctx.stderr = `seed share: ${e.message}\n`;
+    return 1;
+  }
 }
 
 // ─── seed html implementation ────────────────────────────────

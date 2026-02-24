@@ -314,6 +314,12 @@ async function main() {
     () => import('./commands/python').then(m => m.pipCmd)), 'src/commands/python.ts');
   registerCommand(commands, lazyCommand('sqlite3', 'SQLite database engine',
     () => import('./commands/sqlite').then(m => m.sqlite3Cmd)), 'src/commands/sqlite.ts');
+  registerCommand(commands, lazyCommand('code', 'Rich code editor (CodeMirror)',
+    () => import('./commands/code-editor').then(m => m.codeEditorCmd)), 'src/commands/code-editor.ts');
+  registerCommand(commands, lazyCommand('builder', 'AI app builder (chat + live preview)',
+    () => import('./commands/builder').then(m => m.builderCmd)), 'src/commands/builder.ts');
+  registerCommand(commands, lazyCommand('ffmpeg', 'Video/audio processing (ffmpeg.wasm)',
+    () => import('./commands/ffmpeg').then(m => m.ffmpegCmd)), 'src/commands/ffmpeg.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {
@@ -478,6 +484,92 @@ async function main() {
     } else {
       // Pathname doesn't match slug — show terminal (stale config)
       document.body.classList.remove('become-active');
+    }
+  }
+
+  // Check for shared seed URL: /s/:id
+  const seedMatch = location.pathname.match(/^\/s\/([a-z0-9]{4,16})$/);
+  if (seedMatch) {
+    const seedId = seedMatch[1];
+    terminal.term.writeln(`\r\nLoading shared seed ${seedId}...`);
+    try {
+      const res = await fetch(`/api/seed/${seedId}`);
+      if (res.ok) {
+        const compressed = new Uint8Array(await res.arrayBuffer());
+        // Decompress
+        const ds = new DecompressionStream('gzip');
+        const writer = ds.writable.getWriter();
+        writer.write(compressed);
+        writer.close();
+        const reader = ds.readable.getReader();
+        const chunks: Uint8Array[] = [];
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+        }
+        const total = chunks.reduce((s, c) => s + c.length, 0);
+        const full = new Uint8Array(total);
+        let offset = 0;
+        for (const c of chunks) { full.set(c, offset); offset += c.length; }
+        const envelope = JSON.parse(new TextDecoder().decode(full));
+
+        // Hydrate filesystem
+        const lines = envelope.ndjson.split('\n');
+        const nodes: any[] = [];
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          const node = JSON.parse(trimmed);
+          nodes.push({
+            ...node,
+            content: node.content ? Uint8Array.from(atob(node.content), (c: string) => c.charCodeAt(0)) : null,
+          });
+        }
+        await fs.importAll(nodes);
+
+        // Restore localStorage
+        if (envelope.storage) {
+          const storageObj = typeof envelope.storage === 'string' ? JSON.parse(envelope.storage) : envelope.storage;
+          for (const [key, value] of Object.entries(storageObj)) {
+            localStorage.setItem(key, value as string);
+          }
+        }
+
+        terminal.term.writeln(`Loaded ${envelope.files} files. Reloading...`);
+        // Redirect to root so we don't re-import on reload
+        setTimeout(() => { location.href = '/'; }, 500);
+        return;
+      } else {
+        terminal.term.writeln(`Seed not found (${res.status})`);
+      }
+    } catch (e: any) {
+      terminal.term.writeln(`Failed to load seed: ${e.message}`);
+    }
+  }
+
+  // Check for GitHub import URL: /:user/:repo
+  const ghMatch = location.pathname.match(/^\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+)\/?$/);
+  if (ghMatch && !seedMatch) {
+    const [, user, repo] = ghMatch;
+    // Avoid collision with reserved paths
+    const reserved = ['api', 'oauth', 'offer', 'answer', 'git-proxy', 'channel', 'assets'];
+    if (!reserved.includes(user.toLowerCase())) {
+      const repoUrl = `https://github.com/${user}/${repo}`;
+      terminal.term.writeln(`\r\nCloning ${repoUrl}...`);
+      const cloneDir = `/home/user/${repo}`;
+      shell.execute(
+        `git clone ${repoUrl} ${cloneDir} && cd ${cloneDir}`,
+        (out: string) => terminal.term.write(out.replace(/\n/g, '\r\n')),
+        (err: string) => terminal.term.write(err.replace(/\n/g, '\r\n')),
+      ).then((code: number) => {
+        if (code === 0) {
+          shell.cwd = cloneDir;
+          terminal.term.writeln(`\r\nCloned to ${cloneDir}`);
+        }
+        // Replace URL to root so refresh doesn't re-clone
+        history.replaceState({}, '', '/');
+      });
     }
   }
 
