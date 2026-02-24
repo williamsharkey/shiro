@@ -1,13 +1,37 @@
 # Shiro
 
-A Unix-like development environment that runs entirely in a browser tab. Files persist in IndexedDB, the shell supports pipes and redirects, and 200+ commands are available — including git, npm, node, vi, and curl. It builds to a single static HTML file (~420 KB gzipped) with no external assets.
+> A standalone Unix environment that runs in a browser tab — shell, git, npm, node, vi, C compiler, SQLite, Python, and Claude Code. One HTML file. No server.
 
 **Live:** [shiro.computer](https://shiro.computer)
 **About:** [shiro.computer/about](https://shiro.computer/about)
 
-> **Experimental.** Claude Code runs with `--dangerously-skip-permissions` (all tool calls auto-approved). API requests route through a CORS proxy on the server, so your Anthropic credentials transit an intermediary. Do not use with sensitive data. Performance is unreliable — treat this as a demo, not a production environment.
+## What's in it
 
-## What It Does
+- **200+ commands** — ls, grep, awk, sed, find, curl, diff, xargs, tar, wc, sort, uniq...
+- **Persistent filesystem** — IndexedDB-backed. Files survive reloads.
+- **Git** — isomorphic-git: init, add, commit, diff, log, clone, push
+- **npm** — Real tarballs from registry.npmjs.org. require() resolves node_modules.
+- **Node.js runtime** — Run .js files. CommonJS and ES module transforms.
+- **C compiler** — xcc compiles C to WebAssembly, runs via WASI
+- **SQLite** — sql.js WASM. Persistent databases in IndexedDB.
+- **Python** — Pyodide WASM. pip installs packages.
+- **Lua, jq, esbuild** — Lazy-loaded WASM runtimes, cached on first use
+- **Claude Code** — The real @anthropic-ai/claude-code CLI runs inside the browser
+- **Virtual servers** — `serve` hosts apps, `page` interacts with them
+- **One HTML file** — ~420 KB gzipped. Deploy anywhere. Works offline.
+
+## vs WebContainers
+
+| | Shiro | WebContainers |
+|---|---|---|
+| Deployment | Single HTML file | SDK integration |
+| Server needed | No | Yes (proxy) |
+| Persistence | IndexedDB | Memory only |
+| Claude Code | Built-in | No |
+| C/Python/Lua/SQL | WASM runtimes | Node.js only |
+| Size | ~420 KB | ~30 MB |
+
+## Examples
 
 ```bash
 # Shell basics
@@ -23,13 +47,21 @@ git log --oneline
 npm install lodash prettier
 node -e "console.log(require('lodash').uniq([1,1,2]))"
 
+# C compiler → WebAssembly
+echo '#include <stdio.h>\nint main(){printf("hello\\n");}' > hi.c
+cc hi.c -o hi && ./hi
+
+# SQLite
+sqlite3 app.db "CREATE TABLE users(name TEXT); INSERT INTO users VALUES('alice');"
+sqlite3 app.db "SELECT * FROM users;"
+
 # Serve and interact with web apps
 serve /tmp/myapp 3000
 page :3000 click "#button"
 page :3000 text "body"
 
 # Claude Code (runs inside the browser)
-claude -p "create a todo app"
+claude -p "create a todo app with localStorage"
 ```
 
 ## Claude Code Integration
@@ -50,3 +82,5 @@ npm run deploy       # Build + deploy to shiro.computer
 ## License
 
 MIT
+
+> **Note:** Experimental. Claude Code runs with `--dangerously-skip-permissions` (all tool calls auto-approved). API requests transit a CORS proxy. Don't use with sensitive data.

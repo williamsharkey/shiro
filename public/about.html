@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Shiro — A Unix environment in one HTML file</title>
-  <meta name="description" content="Shell, filesystem, git, npm, vi, and 200+ commands. ~420 KB gzipped. No server. Runs in your browser right now.">
-  <meta property="og:title" content="Shiro — A Unix environment in one HTML file">
-  <meta property="og:description" content="Shell, filesystem, git, npm, vi, and 200+ commands. ~420 KB gzipped. No server. Runs in your browser.">
+  <title>Shiro — A complete dev environment in your browser</title>
+  <meta name="description" content="Shell, git, npm, node, C compiler, SQLite, Python, and Claude Code. 200+ commands in ~420 KB. No server required.">
+  <meta property="og:title" content="Shiro — A complete dev environment in your browser">
+  <meta property="og:description" content="Shell, git, npm, node, C compiler, SQLite, Python, and Claude Code. 200+ commands in ~420 KB. No server required.">
   <meta property="og:image" content="https://shiro.computer/og.png">
   <meta property="og:url" content="https://shiro.computer/about">
   <meta property="og:type" content="website">
@@ -350,10 +350,10 @@
   <header class="hero">
     <div class="container">
       <h1>Shiro</h1>
-      <p class="tagline">A Unix environment in one HTML file.</p>
+      <p class="tagline">A complete dev environment in your browser.</p>
       <p class="sub">
-        Shell, filesystem, git, npm, vi, and 200+ commands.
-        ~420 KB gzipped. No server. Runs in your browser right now.
+        Shell, git, npm, node, C compiler, SQLite, Python, and Claude Code.
+        200+ commands in ~420 KB. No server required.
       </p>
       <div class="cta-links">
         <a href="/" class="cta-primary">Open Shiro</a>
@@ -396,9 +396,9 @@
   <section class="explainer">
     <div class="container">
       <p>
-        A static HTML file that boots into a Unix shell. The filesystem is IndexedDB.
-        Commands are JavaScript. Files survive page reloads. Everything runs
-        client-side&thinsp;&mdash;&thinsp;the page works offline with no server at all.
+        Write code, install packages, compile C, query databases, and run Claude
+        Code&thinsp;&mdash;&thinsp;all in a browser tab. Files persist in IndexedDB. WASM runtimes
+        load on demand. Nothing leaves your machine unless you want it to.
       </p>
     </div>
   </section>
@@ -485,6 +485,14 @@
         <div class="card">
           <h3>One file</h3>
           <p>Single self-contained HTML. All JS/CSS inlined by the build. ~420 KB gzipped. Deploy anywhere&thinsp;&mdash;&thinsp;GitHub Pages, S3, open it locally.</p>
+        </div>
+        <div class="card">
+          <h3>WASM Runtimes</h3>
+          <p>C compiler (xcc), SQLite (sql.js), Python (Pyodide), Lua, jq, esbuild. Lazy-loaded and cached. Zero boot cost.</p>
+        </div>
+        <div class="card">
+          <h3>Claude Code</h3>
+          <p>The real @anthropic-ai/claude-code CLI, shimmed to use the virtual filesystem. Print mode and interactive mode. Runs entirely client-side.</p>
         </div>
       </div>
     </div>
