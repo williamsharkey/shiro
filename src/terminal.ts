@@ -5,6 +5,7 @@ import buildNumber from '../build-number.txt?raw';
 import { bufferToString } from './utils/copy-utils';
 import { openRemotePanel } from './commands/remote';
 import { setActiveTerminal } from './active-terminal';
+import { createHudPanel, HudPanel } from './hud-panel';
 
 /**
  * HUD (Heads-Up Display) state for dynamic banner updates.
@@ -43,6 +44,7 @@ export class ShiroTerminal {
 
   // HUD state for dynamic updates
   private hud: HudState | null = null;
+  private hudPanel: HudPanel | null = null;
 
   // Reverse history search state (Ctrl+R)
   private reverseSearchMode = false;
@@ -377,15 +379,6 @@ export class ShiroTerminal {
     const subdomainMatch = hostname.match(/^([^.]+)\.shiro\.computer$/);
     const displayHost = subdomainMatch ? `${subdomainMatch[1]}.shiro.computer` : 'shiro.computer';
 
-    // OSC 8 hyperlink helper: \x1b]8;;URL\x07text\x1b]8;;\x07
-    const link = (url: string, text: string, color: string = '33') =>
-      `\x1b]8;;${url}\x07\x1b[${color}m${text}\x1b[0m\x1b]8;;\x07`;
-
-    // Build URLs preserving subdomain
-    const baseUrl = `https://${hostname}`;
-    const aboutUrl = `${baseUrl}/about`;
-    const githubUrl = 'https://github.com/williamsharkey/shiro';
-
     // Pad hostname to fit layout (max ~20 chars for subdomain display)
     const hostDisplay = displayHost.length <= 20 ? displayHost : displayHost.slice(0, 17) + '...';
     const hostPad = ' '.repeat(Math.max(0, 22 - hostDisplay.length));
@@ -399,13 +392,9 @@ export class ShiroTerminal {
     const remoteCode = remoteSession?.displayCode; // e.g., "chibi-gray"
 
     // Row 0: Top border - with or without remote code
-    // Box is 43 chars wide. Right end is always ╒══╗ (4 chars) for alignment.
-    // Format: ╔ + ═padding + ╛ + code + " ○" + ╒══╗ = 43 (with link wrapping name+dot)
-    // So: 1 + padding + 1 + codeLen + 2 + 4 = 43 → padding = 35 - codeLen
     if (remoteCode) {
       const codeLen = remoteCode.length;
       const leftPad = Math.max(1, 35 - codeLen);
-      // OSC 8 link wraps name + activity dot — clicking opens remote panel
       const linkStart = '\x1b]8;;shiro://remote\x07';
       const linkEnd = '\x1b]8;;\x07';
       this.term.writeln(`\x1b[36m╔${'═'.repeat(leftPad)}╛${linkStart}\x1b[93m${remoteCode} \x1b[90m○\x1b[0m${linkEnd}\x1b[36m╒══╗\x1b[0m`);
@@ -417,48 +406,25 @@ export class ShiroTerminal {
     this.term.writeln(`\x1b[36m║\x1b[0m  \x1b[1;97m${hostDisplay}\x1b[0m${hostPad}\x1b[95mv0.1.0\x1b[0m   \x1b[95m#${build}\x1b[0m   \x1b[36m║\x1b[0m`);
     // Row 2: Tagline
     this.term.writeln('\x1b[36m║\x1b[0m                \x1b[92mcloud operating system\x1b[0m   \x1b[36m║\x1b[0m');
-    // Row 3: Empty
-    this.term.writeln('\x1b[36m║\x1b[0m                                         \x1b[36m║\x1b[0m');
-    const deepwikiUrl = 'https://deepwiki.com/williamsharkey/shiro';
-    const mcpUrl = `${baseUrl}/mcp`;
-    // Row 4: help / mcp
-    this.term.writeln(`\x1b[36m║\x1b[0m  ${link('shiro://cmd/help', 'help', '94')}                             ${link(mcpUrl, 'mcp', '94')}   \x1b[36m║\x1b[0m`);
-    // Row 5: deepwiki / about
-    this.term.writeln(`\x1b[36m║\x1b[0m  ${link(deepwikiUrl, 'deepwiki', '94')}                       ${link(aboutUrl, 'about', '94')}   \x1b[36m║\x1b[0m`);
-    // Row 6: upload / github
-    this.term.writeln(`\x1b[36m║\x1b[0m  ${link('shiro://cmd/upload', 'upload', '94')}                        ${link(githubUrl, 'github', '94')}   \x1b[36m║\x1b[0m`);
-    // Row 7: download / claude code (pad = 28 - label.length to keep 41-char inner width)
-    const claudeRow = startRow + 7;
-    const drawClaudeLabel = (installed: boolean) => {
-      const label = installed ? 'open claude' : 'install claude';
-      const pad = ' '.repeat(28 - label.length);
-      return `\x1b[36m║\x1b[0m  ${link('shiro://cmd/download', 'download', '94')}${pad}${link('shiro://claude', label, '94')}   \x1b[36m║\x1b[0m`;
-    };
-    this.term.writeln(drawClaudeLabel(false)); // default: install
-    // Async-check if claude is installed and update the label in-place
-    this.shell.fs.exists('/usr/local/bin/claude').then(installed => {
-      if (!installed) return;
-      const buf = this.term.buffer.active;
-      const visibleRow = claudeRow - buf.baseY;
-      if (visibleRow < 0 || visibleRow >= this.term.rows) return;
-      this.term.write(`\x1b7\x1b[${visibleRow + 1};1H${drawClaudeLabel(true)}\x1b8`);
-    });
-    // Row 8: Bottom border
+    // Row 3: Bottom border
     this.term.writeln('\x1b[36m╚═══════════════════╛\x1b[97m白\x1b[36m╒══════════════════╝\x1b[0m');
-    // Row 9: Empty line
+    // Row 4: Empty line
     this.term.writeln('');
 
     // Store HUD state for dynamic updates
     this.hud = {
       startRow,
-      lineCount: 10,
+      lineCount: 5,
       slots: {
         // Remote code appears in top border, centered around column 28
         remoteCode: { row: 0, col: 28, width: 20 },
-        // Rec status appears on row 4, around column 36
-        recStatus: { row: 4, col: 34, width: 8 },
+        // Rec status appears on row 2 (tagline row), around column 36
+        recStatus: { row: 2, col: 34, width: 8 },
       },
     };
+
+    // Initialize floating HUD panel (shows when terminal HUD scrolls out of view)
+    this.initHudPanel();
   }
 
   /**
@@ -469,6 +435,17 @@ export class ShiroTerminal {
     const buffer = this.term.buffer.active;
     const scrollback = this.term.options.scrollback || 1000;
     return this.hud.startRow >= buffer.baseY - scrollback;
+  }
+
+  /**
+   * Check if any part of the HUD is currently visible in the viewport.
+   */
+  isHudInViewport(): boolean {
+    if (!this.hud) return false;
+    const buffer = this.term.buffer.active;
+    const hudTop = this.hud.startRow - buffer.baseY;
+    const hudBottom = hudTop + this.hud.lineCount;
+    return hudBottom > 0 && hudTop < this.term.rows;
   }
 
   /**
@@ -558,6 +535,39 @@ export class ShiroTerminal {
     const slot = this.hud!.slots.recStatus;
     const padded = status.padEnd(slot.width);
     this.updateHudAt(slot.row, slot.col, padded);
+  }
+
+  /**
+   * Initialize the floating HUD panel and scroll detection.
+   * When the terminal HUD scrolls out of the viewport, a compact floating
+   * widget appears in the top-left corner. Scrolling back hides it.
+   */
+  private initHudPanel() {
+    if (typeof document === 'undefined') return;
+    if (this.hudPanel) return; // already initialized
+
+    this.hudPanel = createHudPanel(this.shell);
+
+    // Poll for HUD visibility changes (xterm.js doesn't expose a scroll event
+    // reliably for viewport-relative checks, so we use a lightweight interval)
+    let wasInViewport = true;
+    const check = () => {
+      if (!this.hudPanel) return;
+      const inViewport = this.isHudInViewport();
+      if (inViewport !== wasInViewport) {
+        wasInViewport = inViewport;
+        if (inViewport) {
+          this.hudPanel.hide();
+        } else {
+          this.hudPanel.show();
+        }
+      }
+    };
+
+    // Check on scroll, linefeed, and periodically as fallback
+    this.term.onLineFeed(check);
+    this.term.onScroll(check);
+    setInterval(check, 500);
   }
 
   // Keep old name as alias for backwards compatibility
