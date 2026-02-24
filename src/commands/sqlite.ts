@@ -14,7 +14,7 @@ import { Command, CommandContext } from './index';
  *   sqlite3 test.db < query.sql             # stdin piping
  */
 
-const SQLJS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.11.0';
+const SQLJS_CDN = 'https://cdn.jsdelivr.net/npm/sql.js@1.12.0/dist';
 
 let SQL: any = null;
 let loadPromise: Promise<any> | null = null;
@@ -26,10 +26,16 @@ async function ensureSQLjs(ctx: CommandContext): Promise<any> {
   loadPromise = (async () => {
     ctx.stdout += 'Loading SQLite (sql.js)... ';
 
-    // Import sql.js ESM module
-    const mod = await import(/* @vite-ignore */ `${SQLJS_CDN}/sql-wasm.mjs`);
-    const initSqlJs = mod.default || mod.initSqlJs;
-    if (!initSqlJs) throw new Error('Failed to load sql.js');
+    // sql.js provides an IIFE script (not ESM) — fetch and evaluate it
+    let initSqlJs = (globalThis as any).initSqlJs;
+    if (!initSqlJs) {
+      const resp = await fetch(`${SQLJS_CDN}/sql-wasm.js`);
+      if (!resp.ok) throw new Error(`Failed to download sql.js: ${resp.status}`);
+      const code = await resp.text();
+      new Function(code)();
+      initSqlJs = (globalThis as any).initSqlJs;
+    }
+    if (!initSqlJs) throw new Error('initSqlJs not defined after loading sql-wasm.js');
 
     SQL = await initSqlJs({
       locateFile: (file: string) => `${SQLJS_CDN}/${file}`,

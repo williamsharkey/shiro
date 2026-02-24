@@ -102,7 +102,7 @@ async function unzipFiles(buf: ArrayBuffer): Promise<Map<string, Uint8Array>> {
 
 // ===== Path Helpers =====
 
-function normPath(p: string): string {
+export function normPath(p: string): string {
   const parts = p.split('/').filter(s => s && s !== '.');
   const out: string[] = [];
   for (const s of parts) { if (s === '..') out.pop(); else out.push(s); }
@@ -122,12 +122,12 @@ interface FD {
   data: Uint8Array | null;
 }
 
-interface SimpleFS {
+export interface SimpleFS {
   files: Map<string, Uint8Array>;
   dirs: Set<string>;
 }
 
-class WasiRT {
+export class WasiRT {
   private memory!: WebAssembly.Memory;
   private dv!: DataView;
   private u8!: Uint8Array;
@@ -598,14 +598,13 @@ export const ccCmd: Command = {
       }
     }
 
-    // Build compiler filesystem (toolchain + source files)
+    // Build compiler filesystem (toolchain + source files at root)
     const cfs: SimpleFS = {
       files: new Map(toolchain.files),
       dirs: new Set(toolchain.dirs),
     };
-    cfs.dirs.add('/work');
     for (const src of sources) {
-      cfs.files.set('/work/' + src.name, new TextEncoder().encode(src.content));
+      cfs.files.set('/' + src.name, new TextEncoder().encode(src.content));
     }
 
     // Build compiler arguments
@@ -640,7 +639,7 @@ export const ccCmd: Command = {
     if (compileOnly) {
       for (const src of sources) {
         const oName = src.name.replace(/\.c$/, '.o');
-        const oData = cfs.files.get('/work/' + oName);
+        const oData = cfs.files.get('/' + oName);
         if (oData) {
           const outPath = ctx.fs.resolvePath(outputFile || oName, ctx.cwd);
           await ctx.fs.writeFile(outPath, oData);
@@ -650,7 +649,7 @@ export const ccCmd: Command = {
     }
 
     // Full compile: read a.wasm output
-    const wasmData = cfs.files.get('/work/a.wasm');
+    const wasmData = cfs.files.get('/a.wasm');
     if (!wasmData) {
       ctx.stderr += 'cc: error: compilation produced no output\n';
       return 1;

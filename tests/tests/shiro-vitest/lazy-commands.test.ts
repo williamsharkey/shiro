@@ -361,6 +361,106 @@ describe('Lazy-Loaded Commands', () => {
       expect(exitCode).toBe(0);
       expect(output).toContain('Usage:');
     });
+
+    it('cc source should place files at root (/) not /work/', async () => {
+      // Regression test: cc previously placed source files at /work/filename
+      // but WASI preopen fd=3 resolves relative paths from /, causing ENOENT
+      const ccSource = await import('@shiro/commands/cc?raw');
+      const src = typeof ccSource === 'string' ? ccSource : ccSource.default;
+      // Source files should be placed at root: '/' + src.name
+      expect(src).toContain("'/' + src.name");
+      // Output should also be read from root
+      expect(src).toContain("'/a.wasm'");
+      // Should NOT reference /work/ for source file placement
+      expect(src).not.toContain("'/work/' + src.name");
+    });
+
+    it('should error on missing source file', async () => {
+      // cc tries to init toolchain (will fail in test), but we can test arg parsing
+      const { ccCmd } = await import('@shiro/commands/cc');
+      const ctx = {
+        args: ['nonexistent.c'],
+        fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
+      };
+      const code = await ccCmd.exec(ctx);
+      expect(code).toBe(1);
+      // Will fail at toolchain download in test env
+      expect(ctx.stderr.length).toBeGreaterThan(0);
+    });
+
+    it('WASI normPath should resolve paths correctly', async () => {
+      const { normPath } = await import('@shiro/commands/cc');
+      expect(normPath('/work/primes.c')).toBe('/work/primes.c');
+      expect(normPath('/primes.c')).toBe('/primes.c');
+      expect(normPath('/usr/include/stdio.h')).toBe('/usr/include/stdio.h');
+      expect(normPath('/work/../primes.c')).toBe('/primes.c');
+      expect(normPath('/a/b/./c')).toBe('/a/b/c');
+    });
+
+    it('WASI path_open should resolve source files at root', async () => {
+      // Regression test: source files must be at root (/) not /work/
+      // because WASI preopen fd=3 resolves relative paths from /
+      const { WasiRT } = await import('@shiro/commands/cc');
+      const testFS = {
+        files: new Map<string, Uint8Array>([
+          ['/primes.c', new TextEncoder().encode('#include <stdio.h>\nint main() {}')],
+          ['/usr/include/stdio.h', new TextEncoder().encode('typedef int FILE;')],
+        ]),
+        dirs: new Set(['/', '/usr', '/usr/include']),
+      };
+      const rt = new WasiRT(testFS, ['cc', 'primes.c'], {});
+
+      // Get WASI imports and test path_open
+      const imports = rt.getImports() as any;
+      const wasi = imports.wasi_snapshot_preview1;
+
+      // Create a memory for the runtime
+      const memory = new WebAssembly.Memory({ initial: 1 });
+      (rt as any).memory = memory;
+      (rt as any).dv = new DataView(memory.buffer);
+      (rt as any).u8 = new Uint8Array(memory.buffer);
+
+      // Write "primes.c" into memory at offset 100
+      const pathBytes = new TextEncoder().encode('primes.c');
+      new Uint8Array(memory.buffer).set(pathBytes, 100);
+
+      // Write fd output location at offset 200
+      const fdOut = 200;
+
+      // Call path_open: dirfd=3 (preopen=/), path at 100, len=8, oflags=0 (read)
+      const result = wasi.path_open(3, 0, 100, pathBytes.length, 0, 0n, 0n, 0, fdOut);
+      expect(result).toBe(0); // E.OK — file found at /primes.c
+
+      // Verify the fd was allocated
+      const allocatedFd = new DataView(memory.buffer).getUint32(fdOut, true);
+      expect(allocatedFd).toBeGreaterThanOrEqual(4);
+    });
+
+    it('WASI path_open should fail for files not at root', async () => {
+      // Verify that files ONLY at /work/ are NOT found by relative path resolution
+      const { WasiRT } = await import('@shiro/commands/cc');
+      const testFS = {
+        files: new Map<string, Uint8Array>([
+          ['/work/primes.c', new TextEncoder().encode('int main() {}')],
+        ]),
+        dirs: new Set(['/', '/work']),
+      };
+      const rt = new WasiRT(testFS, ['cc', 'primes.c'], {});
+      const imports = rt.getImports() as any;
+      const wasi = imports.wasi_snapshot_preview1;
+
+      const memory = new WebAssembly.Memory({ initial: 1 });
+      (rt as any).memory = memory;
+      (rt as any).dv = new DataView(memory.buffer);
+      (rt as any).u8 = new Uint8Array(memory.buffer);
+
+      const pathBytes = new TextEncoder().encode('primes.c');
+      new Uint8Array(memory.buffer).set(pathBytes, 100);
+
+      // path_open should fail: primes.c resolves to /primes.c but file is at /work/primes.c
+      const result = wasi.path_open(3, 0, 100, pathBytes.length, 0, 0n, 0n, 0, 200);
+      expect(result).toBe(44); // E.NOENT
+    });
   });
 
   // ─── python / python3 / pip ──────────────────────────────────
@@ -454,6 +554,18 @@ describe('Lazy-Loaded Commands', () => {
       // CDN load will fail in test env
       expect(code).toBe(1);
       expect(ctx.stderr).toContain('sql.js');
+    });
+
+    it('should use correct CDN URL (jsdelivr, not cdnjs)', async () => {
+      // Regression test: cdnjs URL for sql-wasm.mjs returned 404
+      // Must use jsdelivr with the IIFE script (sql-wasm.js), not ESM (.mjs)
+      const sqliteSource = await import('@shiro/commands/sqlite?raw');
+      const src = typeof sqliteSource === 'string' ? sqliteSource : sqliteSource.default;
+      // Verify CDN URL points to jsdelivr (working CDN)
+      expect(src).toContain('cdn.jsdelivr.net/npm/sql.js');
+      // Verify it loads the IIFE script (.js), not the non-existent ESM module (.mjs)
+      expect(src).toContain('sql-wasm.js');
+      expect(src).not.toContain('sql-wasm.mjs');
     });
 
   });
