@@ -362,17 +362,14 @@ describe('Lazy-Loaded Commands', () => {
       expect(output).toContain('Usage:');
     });
 
-    it('cc source should place files at root (/) not /work/', async () => {
-      // Regression test: cc previously placed source files at /work/filename
-      // but WASI preopen fd=3 resolves relative paths from /, causing ENOENT
+    it('cc source should place files at both root and /work/', async () => {
+      // Regression: cc originally placed files only at /work/, which failed
+      // because WASI preopen fd=3 resolves relative paths from /.
+      // Fix: place files at BOTH / and /work/ to handle all resolution strategies.
       const ccSource = await import('@shiro/commands/cc?raw');
       const src = typeof ccSource === 'string' ? ccSource : ccSource.default;
-      // Source files should be placed at root: '/' + src.name
       expect(src).toContain("'/' + src.name");
-      // Output should also be read from root
-      expect(src).toContain("'/a.wasm'");
-      // Should NOT reference /work/ for source file placement
-      expect(src).not.toContain("'/work/' + src.name");
+      expect(src).toContain("'/work/' + src.name");
     });
 
     it('should error on missing source file', async () => {
@@ -436,8 +433,9 @@ describe('Lazy-Loaded Commands', () => {
       expect(allocatedFd).toBeGreaterThanOrEqual(4);
     });
 
-    it('WASI path_open should fail for files not at root', async () => {
-      // Verify that files ONLY at /work/ are NOT found by relative path resolution
+    it('WASI dual preopen should find files via /work preopen', async () => {
+      // With dual preopens (fd=3→/, fd=4→/work), compiler can find files
+      // at /work/ when using fd=4 for path resolution
       const { WasiRT } = await import('@shiro/commands/cc');
       const testFS = {
         files: new Map<string, Uint8Array>([
@@ -445,7 +443,10 @@ describe('Lazy-Loaded Commands', () => {
         ]),
         dirs: new Set(['/', '/work']),
       };
-      const rt = new WasiRT(testFS, ['cc', 'primes.c'], {});
+      const rt = new WasiRT(testFS, ['cc', 'primes.c'], {}, '', [
+        { fd: 3, path: '/' },
+        { fd: 4, path: '/work' },
+      ]);
       const imports = rt.getImports() as any;
       const wasi = imports.wasi_snapshot_preview1;
 
@@ -457,9 +458,19 @@ describe('Lazy-Loaded Commands', () => {
       const pathBytes = new TextEncoder().encode('primes.c');
       new Uint8Array(memory.buffer).set(pathBytes, 100);
 
-      // path_open should fail: primes.c resolves to /primes.c but file is at /work/primes.c
-      const result = wasi.path_open(3, 0, 100, pathBytes.length, 0, 0n, 0n, 0, 200);
-      expect(result).toBe(44); // E.NOENT
+      // fd=3 (/) should fail — file is only at /work/primes.c
+      const r1 = wasi.path_open(3, 0, 100, pathBytes.length, 0, 0n, 0n, 0, 200);
+      expect(r1).toBe(44); // E.NOENT
+
+      // fd=4 (/work) should succeed — resolves to /work/primes.c
+      const r2 = wasi.path_open(4, 0, 100, pathBytes.length, 0, 0n, 0n, 0, 200);
+      expect(r2).toBe(0); // E.OK
+
+      // Verify fd_prestat_get returns both preopens
+      const buf = 300;
+      expect(wasi.fd_prestat_get(3, buf)).toBe(0);
+      expect(wasi.fd_prestat_get(4, buf)).toBe(0);
+      expect(wasi.fd_prestat_get(5, buf)).toBe(8); // E.BADF — no more preopens
     });
   });
 
@@ -556,9 +567,10 @@ describe('Lazy-Loaded Commands', () => {
       expect(ctx.stderr).toContain('sql.js');
     });
 
-    it('should use correct CDN URL (jsdelivr, not cdnjs)', async () => {
-      // Regression test: cdnjs URL for sql-wasm.mjs returned 404
-      // Must use jsdelivr with the IIFE script (sql-wasm.js), not ESM (.mjs)
+    it('should use correct CDN URL and UMD loading (not ESM import)', async () => {
+      // Regression: cdnjs URL returned 404, and dynamic import() failed because
+      // sql-wasm.js is UMD (module.exports), not ESM. Must use jsdelivr CDN
+      // with fetch + mock CommonJS module/exports objects.
       const sqliteSource = await import('@shiro/commands/sqlite?raw');
       const src = typeof sqliteSource === 'string' ? sqliteSource : sqliteSource.default;
       // Verify CDN URL points to jsdelivr (working CDN)
@@ -566,6 +578,10 @@ describe('Lazy-Loaded Commands', () => {
       // Verify it loads the IIFE script (.js), not the non-existent ESM module (.mjs)
       expect(src).toContain('sql-wasm.js');
       expect(src).not.toContain('sql-wasm.mjs');
+      // Verify UMD loading: provides mock module/exports for CommonJS export
+      expect(src).toContain("new Function('module', 'exports', code)");
+      // Should NOT use dynamic import() which fails with UMD scripts
+      expect(src).not.toContain('await import(');
     });
 
   });

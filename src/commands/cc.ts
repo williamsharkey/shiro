@@ -142,9 +142,12 @@ export class WasiRT {
     private args: string[],
     private env: Record<string, string>,
     private stdinData = '',
+    private preopens: { fd: number; path: string }[] = [{ fd: 3, path: '/' }],
   ) {
-    // fd 3 = preopen for "/"
-    this.fds.set(3, { path: '/', dir: true, pos: 0, data: null });
+    for (const p of preopens) {
+      this.fds.set(p.fd, { path: p.path, dir: true, pos: 0, data: null });
+    }
+    this.nfd = Math.max(this.nfd, ...preopens.map(p => p.fd + 1));
   }
 
   private setMem(m: WebAssembly.Memory) {
@@ -305,15 +308,17 @@ export class WasiRT {
       },
       fd_prestat_get(fd: number, buf: number) {
         w.sync();
-        if (fd !== 3) return E.BADF;
+        const preopen = w.preopens.find(po => po.fd === fd);
+        if (!preopen) return E.BADF;
         w.dv.setUint32(buf, 0, true); // type = dir
-        w.dv.setUint32(buf + 4, 1, true); // name length = 1 ("/")
+        w.dv.setUint32(buf + 4, new TextEncoder().encode(preopen.path).length, true);
         return E.OK;
       },
       fd_prestat_dir_name(fd: number, p: number, len: number) {
         w.sync();
-        if (fd !== 3) return E.BADF;
-        w.u8.set(new TextEncoder().encode('/').slice(0, len), p);
+        const preopen = w.preopens.find(po => po.fd === fd);
+        if (!preopen) return E.BADF;
+        w.u8.set(new TextEncoder().encode(preopen.path).slice(0, len), p);
         return E.OK;
       },
       path_open(dirfd: number, _df: number, pathP: number, pathL: number,
@@ -598,13 +603,18 @@ export const ccCmd: Command = {
       }
     }
 
-    // Build compiler filesystem (toolchain + source files at root)
+    // Build compiler filesystem (toolchain + source files)
+    // Place source files at both root and /work — xcc may resolve relative
+    // paths from either location depending on its WASI libc implementation
     const cfs: SimpleFS = {
       files: new Map(toolchain.files),
       dirs: new Set(toolchain.dirs),
     };
+    cfs.dirs.add('/work');
     for (const src of sources) {
-      cfs.files.set('/' + src.name, new TextEncoder().encode(src.content));
+      const encoded = new TextEncoder().encode(src.content);
+      cfs.files.set('/' + src.name, encoded);
+      cfs.files.set('/work/' + src.name, encoded);
     }
 
     // Build compiler arguments
@@ -613,14 +623,17 @@ export const ccCmd: Command = {
     ccArgs.push(...extraFlags);
     for (const src of sources) ccArgs.push(src.name);
 
-    // Run compiler
+    // Run compiler with two preopens: / (toolchain) and /work (source files)
     const rt = new WasiRT(cfs, ccArgs, {
       HOME: '/work',
       INCLUDE: '/usr/include',
       LIB: '/usr/lib',
       PATH: '/usr/bin',
       PWD: '/work',
-    });
+    }, '', [
+      { fd: 3, path: '/' },
+      { fd: 4, path: '/work' },
+    ]);
 
     try {
       await rt.run(ccModule!);
@@ -635,11 +648,11 @@ export const ccCmd: Command = {
     if (rt.stdout) ctx.stdout += rt.stdout;
     if (rt.exitCode !== 0) return rt.exitCode;
 
-    // Handle output
+    // Handle output — check both root and /work for compiler output
     if (compileOnly) {
       for (const src of sources) {
         const oName = src.name.replace(/\.c$/, '.o');
-        const oData = cfs.files.get('/' + oName);
+        const oData = cfs.files.get('/work/' + oName) || cfs.files.get('/' + oName);
         if (oData) {
           const outPath = ctx.fs.resolvePath(outputFile || oName, ctx.cwd);
           await ctx.fs.writeFile(outPath, oData);
@@ -648,8 +661,8 @@ export const ccCmd: Command = {
       return 0;
     }
 
-    // Full compile: read a.wasm output
-    const wasmData = cfs.files.get('/a.wasm');
+    // Full compile: read a.wasm output (check /work first, then root)
+    const wasmData = cfs.files.get('/work/a.wasm') || cfs.files.get('/a.wasm');
     if (!wasmData) {
       ctx.stderr += 'cc: error: compilation produced no output\n';
       return 1;

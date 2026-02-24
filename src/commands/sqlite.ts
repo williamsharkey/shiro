@@ -26,16 +26,21 @@ async function ensureSQLjs(ctx: CommandContext): Promise<any> {
   loadPromise = (async () => {
     ctx.stdout += 'Loading SQLite (sql.js)... ';
 
-    // sql.js provides an IIFE script (not ESM) — fetch and evaluate it
+    // sql.js uses a UMD pattern: module.exports = initSqlJs
+    // Provide mock CommonJS objects so the UMD export works
     let initSqlJs = (globalThis as any).initSqlJs;
     if (!initSqlJs) {
       const resp = await fetch(`${SQLJS_CDN}/sql-wasm.js`);
       if (!resp.ok) throw new Error(`Failed to download sql.js: ${resp.status}`);
       const code = await resp.text();
-      new Function(code)();
-      initSqlJs = (globalThis as any).initSqlJs;
+      const mod: any = { exports: {} };
+      new Function('module', 'exports', code)(mod, mod.exports);
+      initSqlJs = mod.exports.default || mod.exports;
+      if (typeof initSqlJs === 'function') {
+        (globalThis as any).initSqlJs = initSqlJs;
+      }
     }
-    if (!initSqlJs) throw new Error('initSqlJs not defined after loading sql-wasm.js');
+    if (typeof initSqlJs !== 'function') throw new Error('Failed to load initSqlJs from sql-wasm.js');
 
     SQL = await initSqlJs({
       locateFile: (file: string) => `${SQLJS_CDN}/${file}`,
