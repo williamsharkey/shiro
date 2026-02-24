@@ -454,12 +454,12 @@
   <!-- ===== Demo 4: The Chain ===== -->
   <section class="demo-section container" id="demo-chain">
     <h2 class="section-title">The Chain</h2>
-    <p class="section-desc">C compiler &rarr; Lua &rarr; SQLite &rarr; jq &rarr; esbuild &rarr; git &rarr; serve. Six pioneers, one browser tab.</p>
-    <div class="demo-caption"><span class="cap-title">Chain</span><span class="cap-desc">Turing &rarr; Shannon &rarr; von Neumann &rarr; Kay &rarr; Davis &rarr; Engelbart</span><button class="cap-replay" onclick="demos.chain.reset();demos.chain.play()">&#8635; replay</button></div>
+    <p class="section-desc">C compiler &rarr; Lua &rarr; SQLite &rarr; jq &rarr; esbuild &rarr; git &rarr; serve. All in one browser tab.</p>
+    <div class="demo-caption"><span class="cap-title">Chain</span><span class="cap-desc">cc &rarr; lua &rarr; sqlite3 &rarr; jq &rarr; build &rarr; git &rarr; serve</span><button class="cap-replay" onclick="demos.chain.reset();demos.chain.play()">&#8635; replay</button></div>
     <div class="demo-slot demo-slot-tall">
       <div class="demo-overlay" onclick="demos.chain.play()">
         <h2>The Chain</h2>
-        <p class="overlay-desc">Six computing pioneers. Six WASM runtimes. One Rube Goldberg machine.</p>
+        <p class="overlay-desc">Six WASM runtimes chained together. Each step feeds the next.</p>
         <button class="demo-play-btn">&#9654;</button>
       </div>
     </div>
@@ -1391,15 +1391,6 @@
     'const resp = await fetch("gamedata.json");',
     'const gd = await resp.json();',
     'const an = gd.analysis || {};',
-    'const pioneers = ["Turing","Shannon","von Neumann","Kay","Davis","Engelbart"];',
-    'const quotes = [',
-    '  "We can only see a short distance ahead, but we can see plenty there that needs to be done.",',
-    '  "Information is the resolution of uncertainty.",',
-    '  "If people do not believe that mathematics is simple, it is only because they do not realize how complicated life is.",',
-    '  "The best way to predict the future is to invent it.",',
-    '  "One person built an entire operating system.",',
-    '  "The digital revolution is far more significant than the invention of writing or even of printing."',
-    '];',
     'const gaps: number[] = an.gaps || [];',
     'const maxGap = Math.max(...gaps, 1);',
     '',
@@ -1408,7 +1399,7 @@
     '',
     'const app = document.getElementById("app")!;',
     'app.innerHTML = [',
-    '  \'<div id="qbar" style="text-align:center;padding:8px;font-size:13px;color:#888;font-style:italic;min-height:36px"></div>\',',
+    '  \'<div style="text-align:center;padding:10px;font-size:14px;color:#7eb8c9">Prime Explorer</div>\',',
     '  \'<div id="grid" style="display:grid;grid-template-columns:repeat(10,1fr);gap:3px;max-width:420px;margin:0 auto;padding:0 12px"></div>\',',
     '  \'<div style="text-align:center;margin-top:12px"><button id="start" style="padding:8px 24px;border-radius:6px;border:1px solid #333;background:#1a1a2e;color:#00d4ff;cursor:pointer;font-size:14px">Start Sieve</button></div>\',',
     '  \'<div id="info" style="text-align:center;padding:8px;font-size:11px;color:#555;margin-top:8px"></div>\',',
@@ -1432,10 +1423,6 @@
     '  grid.appendChild(d);',
     '  cells.push(d);',
     '}',
-    '',
-    'let qi = 0;',
-    'setInterval(() => { document.getElementById("qbar")!.textContent = pioneers[qi % pioneers.length] + ": \\u201c" + quotes[qi % quotes.length] + "\\u201d"; qi++; }, 2500);',
-    'document.getElementById("qbar")!.textContent = pioneers[0] + ": \\u201c" + quotes[0] + "\\u201d";',
     '',
     'document.getElementById("start")!.onclick = async () => {',
     '  (document.getElementById("start") as HTMLButtonElement).disabled = true;',
@@ -1482,34 +1469,34 @@
     { cmd: 'cd /tmp/chain && git init', delay: 400 },
 
     // Stage 1: TURING
-    { note: 'Turing \u2014 compile C to WebAssembly' },
+    { note: 'compile C to WebAssembly' },
     { cmd: "cat > /tmp/chain/primes.c << 'EOF'\n" + chainPrimesC + "\nEOF" },
     { cmd: 'cd /tmp/chain && cc primes.c -o primes', delay: 600 },
     { cmd: 'cd /tmp/chain && ./primes > primes.json && cat primes.json' },
 
     // Stage 2: SHANNON
-    { note: 'Shannon \u2014 measure information content' },
+    { note: 'measure information entropy' },
     { cmd: "cat > /tmp/chain/entropy.lua << 'EOF'\n" + chainEntropyLua + "\nEOF" },
     { cmd: 'cd /tmp/chain && lua entropy.lua < primes.json > analysis.json && cat analysis.json', delay: 600 },
 
     // Stage 3: VON NEUMANN
-    { note: 'von Neumann \u2014 store in a database' },
+    { note: 'store in a database' },
     { cmd: 'sqlite3 /tmp/chain/chain.db "CREATE TABLE primes(p INT)"' },
     { cmd: "sqlite3 /tmp/chain/chain.db \"INSERT INTO primes VALUES(2),(3),(5),(7),(11),(13),(17),(19),(23),(29),(31),(37)\"" },
     { cmd: "sqlite3 /tmp/chain/chain.db \"SELECT COUNT(*) || ' primes | range: ' || MIN(p) || '-' || MAX(p) || ' | mean: ' || ROUND(AVG(p),1) FROM primes\"" },
 
     // Stage 4: KAY
-    { note: 'Kay \u2014 dynamic transformation' },
+    { note: 'merge and transform with jq' },
     { cmd: 'cd /tmp/chain && jq -s "{primes:.[0],analysis:.[1]}" primes.json analysis.json > gamedata.json && cat gamedata.json' },
 
     // Stage 5: DAVIS
-    { note: 'Davis \u2014 compile TypeScript' },
+    { note: 'bundle TypeScript app' },
     { cmd: "cat > /tmp/chain/app.ts << 'EOF'\n" + chainAppTS + "\nEOF" },
     { cmd: 'cd /tmp/chain && build app.ts --bundle --outfile=app.js', delay: 600 },
     { cmd: "cat > /tmp/chain/index.html << 'EOF'\n" + chainAppHTML + "\nEOF" },
 
     // Stage 6: ENGELBART
-    { note: 'Engelbart \u2014 ship it' },
+    { note: 'commit and serve' },
     { cmd: 'cd /tmp/chain && git add . && git commit -m "The Chain"' },
     { cmd: 'cd /tmp/chain && git log --oneline' },
     { cmd: 'serve /tmp/chain 6000', delay: 400 },
