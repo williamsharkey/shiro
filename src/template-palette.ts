@@ -10,6 +10,8 @@ interface Template {
   desc: string;
   icon: string;
   cmd: string;
+  /** If set, show this port in a split iframe inside the spawned window */
+  splitPort?: number;
 }
 
 const templates: Template[] = [
@@ -17,14 +19,15 @@ const templates: Template[] = [
     name: 'Static Page',
     desc: 'HTML page served on port 3000',
     icon: '🌐',
+    splitPort: 3000,
     cmd: `mkdir -p /tmp/mypage && cat > /tmp/mypage/index.html << 'ENDHTML'
 <!DOCTYPE html>
 <html>
-<head><title>My Page</title><style>body{font-family:system-ui;max-width:600px;margin:40px auto;padding:0 20px}</style></head>
+<head><title>My Page</title><style>body{font-family:system-ui;max-width:600px;margin:40px auto;padding:0 20px;background:white}</style></head>
 <body><h1>Hello from Shiro</h1><p>Edit /tmp/mypage/index.html to get started.</p></body>
 </html>
 ENDHTML
-serve /tmp/mypage 3000 --split right`,
+serve /tmp/mypage 3000`,
   },
   {
     name: 'Node.js Server',
@@ -55,6 +58,7 @@ python /tmp/hello.py`,
     name: 'React App',
     desc: 'JSX + esbuild on port 3002',
     icon: '⚛️',
+    splitPort: 3002,
     cmd: `mkdir -p /tmp/myreact && cat > /tmp/myreact/app.jsx << 'ENDJSX'
 import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -69,12 +73,13 @@ function App() {
 createRoot(document.getElementById('root')).render(React.createElement(App));
 ENDJSX
 node -e "require('fs').writeFileSync('/tmp/myreact/index.html','<!DOCTYPE html><html><head><title>React App</title></head><body><div id=root></div><scr'+'ipt src=bundle.js></scr'+'ipt></body></html>')"
-build /tmp/myreact/app.jsx --bundle --outfile=/tmp/myreact/bundle.js && serve /tmp/myreact 3002 --split right`,
+build /tmp/myreact/app.jsx --bundle --outfile=/tmp/myreact/bundle.js && serve /tmp/myreact 3002`,
   },
   {
     name: 'React + Routing',
     desc: 'Multi-page app with live reload',
     icon: '🔀',
+    splitPort: 3003,
     cmd: `mkdir -p /tmp/myapp && cat > /tmp/myapp/app.tsx << 'ENDTSX'
 import React, { useState, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -114,15 +119,15 @@ createRoot(document.getElementById('root')).render(React.createElement(App));
 ENDTSX
 node -e "require('fs').writeFileSync('/tmp/myapp/index.html','<!DOCTYPE html><html><head><title>My App</title></head><body><div id=root></div><scr'+'ipt src=bundle.js></scr'+'ipt></body></html>')"
 build /tmp/myapp/app.tsx --bundle --outfile=/tmp/myapp/bundle.js --watch &
-serve /tmp/myapp 3003 --split right`,
+serve /tmp/myapp 3003`,
   },
 ];
 
 /**
  * Show the template palette modal. Returns when the user picks a template or closes.
- * @param runCmd callback receiving the template name and shell command
+ * @param runCmd callback receiving the template name, shell command, and optional split port
  */
-export function showTemplatePalette(runCmd: (name: string, cmd: string) => void): void {
+export function showTemplatePalette(runCmd: (name: string, cmd: string, splitPort?: number) => void): void {
   const overlay = document.createElement('div');
   overlay.style.cssText = `
     position: fixed; inset: 0; z-index: 2147483646;
@@ -172,7 +177,7 @@ export function showTemplatePalette(runCmd: (name: string, cmd: string) => void)
 
     row.onclick = () => {
       overlay.remove();
-      runCmd(tmpl.name, tmpl.cmd);
+      runCmd(tmpl.name, tmpl.cmd, tmpl.splitPort);
     };
   }
 

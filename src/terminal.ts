@@ -113,7 +113,7 @@ export class ShiroTerminal {
             return;
           }
           if (uri === 'shiro://templates') {
-            showTemplatePalette((name, cmd) => spawnInWindow(this.shell, cmd, name));
+            showTemplatePalette((name, cmd, splitPort) => spawnInWindow(this.shell, cmd, name, splitPort));
             return;
           }
           if (uri === 'shiro://claude') {

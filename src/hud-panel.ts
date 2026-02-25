@@ -311,7 +311,7 @@ function handleAction(action: string, shell: Shell) {
       break;
     }
     case 'templates': {
-      showTemplatePalette((name, cmd) => spawnInWindow(shell, cmd, name));
+      showTemplatePalette((name, cmd, splitPort) => spawnInWindow(shell, cmd, name, splitPort));
       break;
     }
     case 'about': {

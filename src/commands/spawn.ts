@@ -11,6 +11,8 @@ import { Command } from './index';
 import { processTable } from '../process-table';
 import { createServerWindow } from '../server-window';
 import { WindowTerminal } from '../window-terminal';
+import { iframeServer } from '../iframe-server';
+import { injectIframeScripts } from './serve';
 import type { Shell } from '../shell';
 
 /**
@@ -18,12 +20,15 @@ import type { Shell } from '../shell';
  * After the command finishes (or immediately if no command), starts an
  * interactive REPL so the user can type more commands.
  *
+ * @param splitPort — if set, show the served page in a split iframe inside the window after the command finishes
+ *
  * Exported for use by template palette and other callers.
  */
 export function spawnInWindow(
   shell: Shell,
   command?: string,
   title?: string,
+  splitPort?: number,
 ): { pid: number; promise: Promise<number> } {
   const childShell = shell.fork();
   const label = command || 'terminal';
@@ -47,7 +52,7 @@ export function spawnInWindow(
   const win = createServerWindow({
     mode: 'terminal',
     title: title || (command ? `[${proc.pid}] ${command.split(/\s/)[0]}` : `[${proc.pid}] terminal`),
-    width: '48em',
+    width: splitPort ? '64em' : '48em',
     height: '28em',
     onClose: doClose,
   });
@@ -67,6 +72,25 @@ export function spawnInWindow(
   };
 
   requestAnimationFrame(() => winTerm.term.focus());
+
+  /** Try to show the split iframe for the served port */
+  const tryShowSplit = async (port: number) => {
+    if (!iframeServer.isPortInUse(port) || !win.showSplit) return;
+    try {
+      const response = await iframeServer.fetch(port, '/');
+      let html: string;
+      if (typeof response.body === 'string') {
+        html = response.body;
+      } else if (response.body instanceof Uint8Array) {
+        html = new TextDecoder().decode(response.body);
+      } else {
+        html = '<!DOCTYPE html><html><body></body></html>';
+      }
+      html = injectIframeScripts(html, port);
+      iframeServer.ensureResourceProxy();
+      win.showSplit(html, port);
+    } catch {}
+  };
 
   /** Start an interactive REPL in the window */
   const startRepl = () => {
@@ -162,6 +186,10 @@ export function spawnInWindow(
         );
         if (proc.status !== 'running') return exitCode;
         winTerm.writeOutput(`\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`);
+      }
+      // Show split iframe if requested
+      if (splitPort && proc.status === 'running') {
+        await tryShowSplit(splitPort);
       }
       // Drop into interactive REPL
       if (proc.status === 'running') {

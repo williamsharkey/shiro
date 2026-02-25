@@ -30,6 +30,8 @@ export interface ServerWindow {
   setTitle: (title: string) => void;
   updateIframe: (html: string) => void;
   setTerminal?: (wt: import('./window-terminal').WindowTerminal) => void;
+  /** Split a terminal-mode window: terminal on left, iframe on right */
+  showSplit?: (html: string, port: number) => void;
 }
 
 export function createServerWindow(options: ServerWindowOptions): ServerWindow {
@@ -239,13 +241,16 @@ export function createServerWindow(options: ServerWindowOptions): ServerWindow {
   let contentDiv: HTMLDivElement | null = null;
   let contentElement: HTMLElement;
 
+  // Container for split layout (terminal + iframe side by side)
+  let splitContainer: HTMLDivElement | null = null;
+
   if (mode === 'terminal') {
     contentDiv = document.createElement('div');
     contentDiv.style.cssText = 'flex:1;overflow:hidden;display:flex;background:#1a1a2e';
     contentElement = contentDiv;
-    // Create a dummy iframe for the interface
+    // Create iframe (hidden until showSplit is called)
     iframe = document.createElement('iframe');
-    iframe.style.display = 'none';
+    iframe.style.cssText = 'display:none;border:none;border-left:1px solid #333;background:#fff';
   } else {
     iframe = document.createElement('iframe');
     iframe.style.cssText = 'border:none;width:100%;flex:1;background:#0a0a1a;visibility:visible;opacity:1;display:block';
@@ -398,6 +403,26 @@ export function createServerWindow(options: ServerWindowOptions): ServerWindow {
           }
         });
       }
+    } : undefined,
+    showSplit: mode === 'terminal' ? (html: string, splitPort: number) => {
+      if (splitContainer) return; // already split
+      // Wrap contentDiv + iframe in a flex row
+      splitContainer = document.createElement('div');
+      splitContainer.style.cssText = 'flex:1;display:flex;overflow:hidden';
+      // Terminal gets 50%
+      contentDiv!.style.flex = '1';
+      contentDiv!.style.minWidth = '0';
+      // Iframe gets 50%
+      iframe.style.display = 'block';
+      iframe.style.flex = '1';
+      iframe.style.minWidth = '0';
+      iframe.setAttribute('data-virtual-port', String(splitPort));
+      iframe.srcdoc = html;
+      // Re-parent
+      wrapper.insertBefore(splitContainer, resizeHandle);
+      splitContainer.appendChild(contentDiv!);
+      splitContainer.appendChild(iframe);
+      contentElement.remove(); // remove old direct child (same as contentDiv, now re-parented)
     } : undefined,
   };
 }
