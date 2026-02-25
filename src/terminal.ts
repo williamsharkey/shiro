@@ -414,7 +414,7 @@ export class ShiroTerminal {
     if (remoteCode) {
       // ┌── HOST ──...── CODE ○ ──...──┐
       const codeLen = remoteCode.length;
-      const fixed = 4 + hostDisplay.length + 3 + 1 + codeLen + 3 + 1; // ┌── HOST ── CODE ○ ──┐ minimum
+      const fixed = 10 + hostDisplay.length + codeLen; // ┌── HOST _ fill1 _ CODE _ ○ _ fill2 ┐
       const fill = Math.max(2, W - fixed);
       const fill1 = Math.max(1, Math.floor(fill / 2));
       const fill2 = fill - fill1;
@@ -524,7 +524,7 @@ export class ShiroTerminal {
 
     if (code) {
       const codeLen = code.length;
-      const fixed = 4 + hostDisplay.length + 3 + 1 + codeLen + 3 + 1;
+      const fixed = 10 + hostDisplay.length + codeLen;
       const fill = Math.max(2, W - fixed);
       const fill1 = Math.max(1, Math.floor(fill / 2));
       const fill2 = fill - fill1;
@@ -557,7 +557,7 @@ export class ShiroTerminal {
 
     const W = 43;
     const codeLen = remoteSession.displayCode.length;
-    const fixed = 4 + hostDisplay.length + 3 + 1 + codeLen + 3 + 1;
+    const fixed = 10 + hostDisplay.length + codeLen;
     const fill = Math.max(2, W - fixed);
     const fill1 = Math.max(1, Math.floor(fill / 2));
     // Dot column: ┌──(3) + space(1) + host + space(1) + fill1 dashes + space(1) + code + space(1) + dot

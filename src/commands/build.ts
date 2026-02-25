@@ -82,7 +82,7 @@ async function cacheWasm(wasmBinary: ArrayBuffer): Promise<void> {
   }
 }
 
-async function ensureEsbuildInitialized(): Promise<void> {
+export async function ensureEsbuildInitialized(): Promise<void> {
   if (esbuildInitialized) return;
 
   if (initPromise) {
@@ -129,7 +129,7 @@ async function ensureEsbuildInitialized(): Promise<void> {
 /**
  * Create a virtual filesystem plugin for esbuild that reads from Shiro's filesystem
  */
-function createVirtualFSPlugin(ctx: CommandContext): esbuild.Plugin {
+export function createVirtualFSPlugin(ctx: CommandContext): esbuild.Plugin {
   return {
     name: 'shiro-virtual-fs',
     setup(build) {
@@ -228,6 +228,66 @@ function createVirtualFSPlugin(ctx: CommandContext): esbuild.Plugin {
   };
 }
 
+/**
+ * Run a single esbuild build and write output files.
+ * Returns the list of input files from metafile (for watch mode).
+ */
+async function runBuild(
+  ctx: CommandContext,
+  entryPath: string,
+  outfile: string,
+  options: any,
+  write: (msg: string) => void,
+): Promise<{ ok: boolean; inputs: string[] }> {
+  const result = await esbuild.build({
+    entryPoints: [entryPath],
+    bundle: options.bundle,
+    minify: options.minify,
+    sourcemap: options.sourcemap,
+    format: options.format,
+    target: options.target,
+    write: false,
+    metafile: true,
+    plugins: [createVirtualFSPlugin(ctx)],
+    logLevel: 'silent',
+  });
+
+  if (result.errors.length > 0) {
+    for (const error of result.errors) {
+      write(`Error: ${error.text}\n`);
+      if (error.location) {
+        write(`  at ${error.location.file}:${error.location.line}:${error.location.column}\n`);
+      }
+    }
+    return { ok: false, inputs: [] };
+  }
+
+  for (const warning of result.warnings) {
+    write(`Warning: ${warning.text}\n`);
+  }
+
+  if (result.outputFiles && result.outputFiles.length > 0) {
+    const output = result.outputFiles[0];
+    const outputPath = ctx.fs.resolvePath(outfile, ctx.cwd);
+    const outputDir = outputPath.split('/').slice(0, -1).join('/');
+    if (outputDir) {
+      try { await ctx.fs.mkdir(outputDir); } catch { /* exists */ }
+    }
+    await ctx.fs.writeFile(outputPath, output.contents);
+    const sizeKB = (output.contents.length / 1024).toFixed(2);
+    write(`\u2713 Built: ${outputPath} (${sizeKB} KB)\n`);
+
+    if (options.sourcemap && result.outputFiles.length > 1) {
+      const sourcemapOutput = result.outputFiles[1];
+      await ctx.fs.writeFile(outputPath + '.map', sourcemapOutput.contents);
+    }
+  }
+
+  // Extract input file paths from metafile
+  const inputs = result.metafile ? Object.keys(result.metafile.inputs) : [entryPath];
+  return { ok: true, inputs };
+}
+
 export const buildCmd: Command = {
   name: 'build',
   description: 'Bundle TypeScript/JavaScript using esbuild-wasm',
@@ -242,17 +302,17 @@ export const buildCmd: Command = {
       ctx.stdout += '  --sourcemap       Generate source maps\n';
       ctx.stdout += '  --format=FORMAT   Output format (iife, cjs, esm)\n';
       ctx.stdout += '  --target=TARGET   Target environment (es2015, es2020, etc.)\n';
+      ctx.stdout += '  --watch           Rebuild on file changes and auto-reload served iframes\n';
       ctx.stdout += '\nExample:\n';
       ctx.stdout += '  build src/index.ts --outfile=dist/bundle.js --bundle --minify\n';
+      ctx.stdout += '  build app.tsx --bundle --watch --outfile=bundle.js &\n';
       return 0;
     }
 
     try {
-      // Initialize esbuild
       ctx.stdout += 'Initializing esbuild...\n';
       await ensureEsbuildInitialized();
 
-      // Parse arguments
       const entryPoint = ctx.args[0];
       const options: any = {
         bundle: false,
@@ -263,6 +323,7 @@ export const buildCmd: Command = {
       };
 
       let outfile = 'out.js';
+      let watch = false;
 
       for (let i = 1; i < ctx.args.length; i++) {
         const arg = ctx.args[i];
@@ -278,73 +339,109 @@ export const buildCmd: Command = {
           options.format = arg.slice('--format='.length);
         } else if (arg.startsWith('--target=')) {
           options.target = arg.slice('--target='.length);
+        } else if (arg === '--watch') {
+          watch = true;
         }
       }
 
-      // Resolve entry point
       const entryPath = ctx.fs.resolvePath(entryPoint, ctx.cwd);
+      const write = (msg: string) => { ctx.stdout += msg; };
 
-      ctx.stdout += `Building ${entryPath}...\n`;
+      write(`Building ${entryPath}...\n`);
+      const first = await runBuild(ctx, entryPath, outfile, options, write);
+      if (!first.ok && !watch) return 1;
 
-      // Build with esbuild
-      const result = await esbuild.build({
-        entryPoints: [entryPath],
-        bundle: options.bundle,
-        minify: options.minify,
-        sourcemap: options.sourcemap,
-        format: options.format,
-        target: options.target,
-        write: false, // Don't write to real filesystem
-        plugins: [createVirtualFSPlugin(ctx)],
-        logLevel: 'silent',
-      });
+      if (!watch) return first.ok ? 0 : 1;
 
-      // Handle build errors
-      if (result.errors.length > 0) {
-        for (const error of result.errors) {
-          ctx.stderr += `Error: ${error.text}\n`;
-          if (error.location) {
-            ctx.stderr += `  at ${error.location.file}:${error.location.line}:${error.location.column}\n`;
-          }
-        }
-        return 1;
+      // -- Watch mode --
+      const term = ctx.terminal;
+      const liveWrite = (msg: string) => {
+        if (term) term.writeOutput(msg.replace(/\n/g, '\r\n'));
+        else ctx.stdout += msg;
+      };
+
+      // Collect initial mtimes
+      const mtimes = new Map<string, number>();
+      for (const f of first.inputs) {
+        try {
+          const stat = await ctx.fs.stat(f);
+          if (stat) mtimes.set(f, (stat as any).mtimeMs ?? stat.mtime.getTime());
+        } catch { /* skip */ }
       }
 
-      // Handle warnings
-      if (result.warnings.length > 0) {
-        for (const warning of result.warnings) {
-          ctx.stdout += `Warning: ${warning.text}\n`;
-        }
-      }
+      liveWrite(`[watching ${mtimes.size} files, Ctrl+C to stop]\n`);
 
-      // Write output to virtual filesystem
-      if (result.outputFiles && result.outputFiles.length > 0) {
-        const output = result.outputFiles[0];
-        const outputPath = ctx.fs.resolvePath(outfile, ctx.cwd);
+      // Get iframeServer for reload broadcast
+      const iframeServer = typeof window !== 'undefined' && (window as any).__shiro?.iframeServer;
 
-        // Ensure output directory exists
-        const outputDir = outputPath.split('/').slice(0, -1).join('/');
-        if (outputDir) {
+      // Poll loop
+      let stopped = false;
+      const interval = setInterval(async () => {
+        if (stopped) return;
+        let changed = false;
+
+        // Check all tracked files for mtime changes
+        for (const [file, oldMtime] of mtimes) {
           try {
-            await ctx.fs.mkdir(outputDir);
-          } catch {
-            // Directory might already exist
+            const stat = await ctx.fs.stat(file);
+            if (!stat) continue;
+            const newMtime = (stat as any).mtimeMs ?? stat.mtime.getTime();
+            if (newMtime > oldMtime) {
+              changed = true;
+              mtimes.set(file, newMtime);
+            }
+          } catch { /* file deleted */ }
+        }
+
+        if (!changed) return;
+
+        const t0 = performance.now();
+        const res = await runBuild(ctx, entryPath, outfile, options, liveWrite);
+        const elapsed = Math.round(performance.now() - t0);
+
+        if (res.ok) {
+          liveWrite(`[rebuilt in ${elapsed}ms]\n`);
+          // Update tracked files from new metafile
+          for (const f of res.inputs) {
+            if (!mtimes.has(f)) {
+              try {
+                const stat = await ctx.fs.stat(f);
+                if (stat) mtimes.set(f, (stat as any).mtimeMs ?? stat.mtime.getTime());
+              } catch { /* skip */ }
+            }
           }
+          // Broadcast reload to all served iframes
+          if (iframeServer?.broadcastReload) {
+            iframeServer.broadcastReload();
+          }
+        } else {
+          liveWrite(`[build failed after ${elapsed}ms]\n`);
         }
+      }, 500);
 
-        await ctx.fs.writeFile(outputPath, output.contents);
-
-        const sizeKB = (output.contents.length / 1024).toFixed(2);
-        ctx.stdout += `✓ Built successfully: ${outputPath} (${sizeKB} KB)\n`;
-
-        // Write sourcemap if generated
-        if (options.sourcemap && result.outputFiles.length > 1) {
-          const sourcemapOutput = result.outputFiles[1];
-          const sourcemapPath = outputPath + '.map';
-          await ctx.fs.writeFile(sourcemapPath, sourcemapOutput.contents);
-          ctx.stdout += `✓ Generated sourcemap: ${sourcemapPath}\n`;
+      // Block until terminal closes or Ctrl+C
+      await new Promise<void>((resolve) => {
+        if (term) {
+          term.enterStdinPassthrough((data) => {
+            // Ctrl+C
+            if (data === '\x03') {
+              stopped = true;
+              clearInterval(interval);
+              term.exitStdinPassthrough();
+              liveWrite('[watch stopped]\n');
+              resolve();
+            }
+          });
+        } else {
+          // No terminal (background mode) — run until process is killed
+          // Store cleanup on the global so `kill` command can stop it
+          (globalThis as any).__buildWatchCleanup = () => {
+            stopped = true;
+            clearInterval(interval);
+            resolve();
+          };
         }
-      }
+      });
 
       return 0;
     } catch (e: any) {

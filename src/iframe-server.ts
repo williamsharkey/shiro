@@ -437,10 +437,17 @@ class IframeServerManager {
 })();
 </script>`;
 
-    // Navigation helper script (end of body)
+    // Navigation helper script (end of body) — includes reload listener + link/form interception
     const navigationScript = `
 <script>
 (function() {
+  // Auto-reload: listen for shiro-reload from parent (build --watch)
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'shiro-reload') {
+      location.reload();
+    }
+  });
+
   // Intercept link clicks for virtual navigation
   document.addEventListener('click', function(e) {
     const link = e.target.closest('a[href]');
@@ -597,6 +604,21 @@ class IframeServerManager {
     // Update iframe path attribute
     server.iframe.setAttribute('data-virtual-path', path);
     server.iframe.srcdoc = html;
+  }
+
+  /**
+   * Broadcast a reload message to served iframes.
+   * If port is given, only reload that port's iframe; otherwise reload all.
+   */
+  broadcastReload(port?: number): void {
+    const targets = port !== undefined
+      ? [this.servers.get(port)].filter(Boolean)
+      : Array.from(this.servers.values());
+    for (const server of targets) {
+      if (server?.iframe?.contentWindow) {
+        server.iframe.contentWindow.postMessage({ type: 'shiro-reload' }, '*');
+      }
+    }
   }
 
   /**

@@ -1067,16 +1067,25 @@ export class Shell {
     // Collect body lines until we find the delimiter on its own line
     const bodyLines: string[] = [];
     let found = false;
+    let delimiterIndex = -1;
     for (let i = 1; i < lines.length; i++) {
       const line = stripTabs ? lines[i].replace(/^\t+/, '') : lines[i];
       if (line.trim() === delimiter) {
         found = true;
+        delimiterIndex = i;
         break;
       }
       bodyLines.push(line);
     }
 
     if (!found) return null;
+
+    // Capture any commands after the closing delimiter line
+    let finalCommand = command;
+    const remaining = lines.slice(delimiterIndex + 1).map(l => l.trim()).filter(Boolean);
+    if (remaining.length > 0) {
+      finalCommand = finalCommand + ' && ' + remaining.join(' && ');
+    }
 
     let body = bodyLines.join('\n');
     // If delimiter was not quoted, expand variables
@@ -1086,7 +1095,7 @@ export class Shell {
     // Add trailing newline (standard heredoc behavior)
     body += '\n';
 
-    return { command, body };
+    return { command: finalCommand, body };
   }
 
   private parseCompound(line: string): { operator: '' | '&&' | '||' | ';'; command: string }[] {

@@ -184,7 +184,7 @@ describe('Claude Code Install', () => {
       const stat = await fs.stat('/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js');
       expect(stat.type).toBe('file');
 
-      const binStat = await fs.stat('/usr/local/bin/claude');
+      const binStat = await fs.lstat('/usr/local/bin/claude');
       expect(binStat.type).toBe('symlink');
     }, 120000);
 

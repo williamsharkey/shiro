@@ -71,6 +71,51 @@ ENDJSX
 node -e "require('fs').writeFileSync('/tmp/myreact/index.html','<!DOCTYPE html><html><head><title>React App</title></head><body><div id=root></div><scr'+'ipt src=bundle.js></scr'+'ipt></body></html>')"
 build /tmp/myreact/app.jsx --bundle --outfile=/tmp/myreact/bundle.js && serve /tmp/myreact 3002`,
   },
+  {
+    name: 'React + Routing',
+    desc: 'Multi-page app with live reload',
+    icon: '🔀',
+    cmd: `mkdir -p /tmp/myapp && cat > /tmp/myapp/app.tsx << 'ENDTSX'
+import React, { useState, useEffect } from 'react';
+import { createRoot } from 'react-dom/client';
+var pages = {
+  '/': function() { return React.createElement('div', null,
+    React.createElement('h1', null, 'Home'),
+    React.createElement('p', null, 'A React app running in Shiro with live reload.'),
+    React.createElement('nav', null,
+      React.createElement('a', { href: '#/about', style: { marginRight: 12 } }, 'About'),
+      React.createElement('a', { href: '#/counter' }, 'Counter')))},
+  '/about': function() { return React.createElement('div', null,
+    React.createElement('h1', null, 'About'),
+    React.createElement('p', null, 'Edit /tmp/myapp/app.tsx and watch it update.'),
+    React.createElement('p', null, 'Try: page text h1'),
+    React.createElement('a', { href: '#/' }, 'Back'))},
+  '/counter': function() {
+    var s = useState(0);
+    return React.createElement('div', null,
+      React.createElement('h1', null, 'Counter'),
+      React.createElement('p', { id: 'count' }, 'Count: ' + s[0]),
+      React.createElement('button', { onClick: function() { s[1](s[0] + 1); }, style: { padding: '8px 16px', fontSize: 16 } }, '+1'),
+      React.createElement('br'), React.createElement('br'),
+      React.createElement('a', { href: '#/' }, 'Back'))}
+};
+var style = { fontFamily: 'system-ui', maxWidth: 500, margin: '40px auto', padding: '0 20px' };
+function App() {
+  var r = useState(location.hash.slice(1) || '/');
+  useEffect(function() {
+    var fn = function() { r[1](location.hash.slice(1) || '/'); };
+    window.addEventListener('hashchange', fn);
+    return function() { window.removeEventListener('hashchange', fn); };
+  }, []);
+  var Page = pages[r[0]] || pages['/'];
+  return React.createElement('div', { style: style }, React.createElement(Page));
+}
+createRoot(document.getElementById('root')).render(React.createElement(App));
+ENDTSX
+node -e "require('fs').writeFileSync('/tmp/myapp/index.html','<!DOCTYPE html><html><head><title>My App</title></head><body><div id=root></div><scr'+'ipt src=bundle.js></scr'+'ipt></body></html>')"
+build /tmp/myapp/app.tsx --bundle --outfile=/tmp/myapp/bundle.js --watch &
+serve /tmp/myapp 3003 --split right`,
+  },
 ];
 
 /**

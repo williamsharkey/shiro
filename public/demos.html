@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shiro Demos — Run GitHub repos instantly in your browser</title>
+  <meta name="description" content="Clone and run 30+ open-source projects directly in your browser. Games, tools, visualizations — no install, no server.">
+  <meta property="og:title" content="Shiro Demos — Run GitHub repos instantly in your browser">
+  <meta property="og:description" content="Clone and run 30+ open-source projects directly in your browser. Games, tools, visualizations — no install, no server.">
+  <meta property="og:url" content="https://shiro.computer/demos">
+  <meta property="og:type" content="website">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0f0f1a;
+      color: #e0e0e0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .container { max-width: 900px; margin: 0 auto; padding: 0 24px; }
+
+    a { color: #00d4ff; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    code {
+      font-family: 'SF Mono', Consolas, 'Liberation Mono', monospace;
+      font-size: 0.88em;
+      background: rgba(255, 255, 255, 0.08);
+      padding: 2px 6px;
+      border-radius: 3px;
+    }
+
+    /* Hero */
+    .hero { padding: 60px 0 40px; text-align: center; }
+
+    .hero h1 {
+      font-size: 2.8rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 12px;
+      color: #fff;
+    }
+
+    .hero .tagline {
+      font-size: 1.15rem;
+      color: #b0b0c8;
+      margin-bottom: 8px;
+      font-family: 'SF Mono', Consolas, 'Liberation Mono', monospace;
+    }
+
+    .hero .sub {
+      font-size: 0.95rem;
+      color: #888;
+      max-width: 620px;
+      margin: 0 auto 20px;
+    }
+
+    .back-link {
+      display: inline-block;
+      margin-bottom: 24px;
+      font-size: 0.9rem;
+      color: #888;
+    }
+    .back-link:hover { color: #00d4ff; }
+
+    /* Sections */
+    .section {
+      margin-bottom: 48px;
+    }
+
+    .section h2 {
+      font-size: 1.4rem;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .section .section-desc {
+      font-size: 0.9rem;
+      color: #888;
+      margin-bottom: 16px;
+    }
+
+    .badge {
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .badge-green { background: rgba(0, 200, 100, 0.15); color: #00c864; }
+    .badge-blue { background: rgba(0, 150, 255, 0.15); color: #0096ff; }
+    .badge-yellow { background: rgba(255, 200, 0, 0.15); color: #ffc800; }
+    .badge-purple { background: rgba(180, 100, 255, 0.15); color: #b464ff; }
+    .badge-orange { background: rgba(255, 140, 0, 0.15); color: #ff8c00; }
+
+    /* Cards grid */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 12px;
+    }
+
+    .card {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 8px;
+      padding: 16px;
+      transition: border-color 0.15s, background 0.15s;
+      display: block;
+    }
+
+    .card:hover {
+      border-color: rgba(0, 212, 255, 0.3);
+      background: rgba(255, 255, 255, 0.06);
+      text-decoration: none;
+    }
+
+    .card .repo-name {
+      font-family: 'SF Mono', Consolas, 'Liberation Mono', monospace;
+      font-size: 0.88rem;
+      color: #00d4ff;
+      margin-bottom: 4px;
+    }
+
+    .card .desc {
+      font-size: 0.85rem;
+      color: #aaa;
+      line-height: 1.4;
+    }
+
+    /* How it works */
+    .how-it-works {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 10px;
+      padding: 28px;
+      margin-bottom: 48px;
+    }
+
+    .how-it-works h2 {
+      font-size: 1.2rem;
+      color: #fff;
+      margin-bottom: 16px;
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 20px;
+    }
+
+    .step {
+      text-align: center;
+    }
+
+    .step .num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(0, 212, 255, 0.12);
+      color: #00d4ff;
+      font-weight: 700;
+      font-size: 0.85rem;
+      margin-bottom: 8px;
+    }
+
+    .step p {
+      font-size: 0.88rem;
+      color: #aaa;
+    }
+
+    .step code {
+      font-size: 0.8rem;
+    }
+
+    /* Footer */
+    .footer {
+      padding: 32px 0;
+      text-align: center;
+      color: #555;
+      font-size: 0.85rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    @media (max-width: 600px) {
+      .hero h1 { font-size: 2rem; }
+      .cards { grid-template-columns: 1fr; }
+      .steps { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="hero">
+      <a href="/" class="back-link">&larr; shiro.computer</a>
+      <h1>Demos</h1>
+      <p class="tagline">Run GitHub repos instantly in your browser</p>
+      <p class="sub">Click any project below to clone, detect, and run it inside Shiro. Games become full-screen apps. CLI tools run in the terminal. No install required.</p>
+    </div>
+
+    <div class="how-it-works">
+      <h2>How it works</h2>
+      <div class="steps">
+        <div class="step">
+          <div class="num">1</div>
+          <p>Visit <code>shiro.computer/<em>user/repo</em></code></p>
+        </div>
+        <div class="step">
+          <div class="num">2</div>
+          <p>Shiro clones the repo with <code>git clone</code></p>
+        </div>
+        <div class="step">
+          <div class="num">3</div>
+          <p>Auto-detects project type (static, Node, Python, C, Lua)</p>
+        </div>
+        <div class="step">
+          <div class="num">4</div>
+          <p>Installs deps, builds, and runs &mdash; all in-browser</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Static HTML -->
+    <div class="section">
+      <h2>Web Games &amp; Interactive <span class="badge badge-green">static html</span></h2>
+      <p class="section-desc">Pure HTML/CSS/JS projects. Served directly from the cloned repo &mdash; zero build step.</p>
+      <div class="cards">
+        <a class="card" href="/gabrielecirulli/2048">
+          <div class="repo-name">gabrielecirulli/2048</div>
+          <div class="desc">The classic 2048 sliding puzzle game</div>
+        </a>
+        <a class="card" href="/doublespeakgames/adarkroom">
+          <div class="repo-name">doublespeakgames/adarkroom</div>
+          <div class="desc">Text adventure survival RPG</div>
+        </a>
+        <a class="card" href="/1j01/jspaint">
+          <div class="repo-name">1j01/jspaint</div>
+          <div class="desc">MS Paint clone in the browser</div>
+        </a>
+        <a class="card" href="/ncase/trust">
+          <div class="repo-name">ncase/trust</div>
+          <div class="desc">The Evolution of Trust &mdash; game theory interactive</div>
+        </a>
+        <a class="card" href="/ncase/loopy">
+          <div class="repo-name">ncase/loopy</div>
+          <div class="desc">A tool for thinking in systems</div>
+        </a>
+        <a class="card" href="/ncase/anxiety">
+          <div class="repo-name">ncase/anxiety</div>
+          <div class="desc">Adventures With Anxiety &mdash; interactive story</div>
+        </a>
+        <a class="card" href="/ncase/fireflies">
+          <div class="repo-name">ncase/fireflies</div>
+          <div class="desc">Firefly synchronization emergence simulation</div>
+        </a>
+        <a class="card" href="/jackschaedler/circles-sines-signals">
+          <div class="repo-name">jackschaedler/circles-sines-signals</div>
+          <div class="desc">A compact primer on digital signal processing</div>
+        </a>
+        <a class="card" href="/muan/emoji-minesweeper">
+          <div class="repo-name">muan/emoji-minesweeper</div>
+          <div class="desc">Minesweeper with emoji</div>
+        </a>
+        <a class="card" href="/jakesgordon/javascript-tetris">
+          <div class="repo-name">jakesgordon/javascript-tetris</div>
+          <div class="desc">Tetris in plain JavaScript</div>
+        </a>
+        <a class="card" href="/nebez/floppybird">
+          <div class="repo-name">nebez/floppybird</div>
+          <div class="desc">Flappy Bird clone</div>
+        </a>
+        <a class="card" href="/dionyziz/canvas-tetris">
+          <div class="repo-name">dionyziz/canvas-tetris</div>
+          <div class="desc">Tetris on HTML5 Canvas</div>
+        </a>
+      </div>
+    </div>
+
+    <!-- Node.js Web -->
+    <div class="section">
+      <h2>Node.js Web Apps <span class="badge badge-blue">node + build</span></h2>
+      <p class="section-desc">Projects with <code>package.json</code>. Shiro runs <code>npm install</code>, builds with esbuild fallback if needed, then serves.</p>
+      <div class="cards">
+        <a class="card" href="/tastejs/todomvc">
+          <div class="repo-name">tastejs/todomvc</div>
+          <div class="desc">TodoMVC &mdash; the same app in every framework</div>
+        </a>
+        <a class="card" href="/vuejs/petite-vue">
+          <div class="repo-name">vuejs/petite-vue</div>
+          <div class="desc">Lightweight Vue alternative (6KB)</div>
+        </a>
+        <a class="card" href="/sveltejs/template">
+          <div class="repo-name">sveltejs/template</div>
+          <div class="desc">Svelte starter template</div>
+        </a>
+        <a class="card" href="/jackrugile/3d-particle-explorations">
+          <div class="repo-name">jackrugile/3d-particle-explorations</div>
+          <div class="desc">3D particle system visualizations</div>
+        </a>
+      </div>
+    </div>
+
+    <!-- Node.js CLI -->
+    <div class="section">
+      <h2>Node.js CLI Tools <span class="badge badge-yellow">node cli</span></h2>
+      <p class="section-desc">Terminal programs that produce visible output. Runs the bin entry or example scripts.</p>
+      <div class="cards">
+        <a class="card" href="/kroitor/asciichart">
+          <div class="repo-name">kroitor/asciichart</div>
+          <div class="desc">ASCII sine wave charts &mdash; zero deps</div>
+        </a>
+        <a class="card" href="/piuccio/cowsay">
+          <div class="repo-name">piuccio/cowsay</div>
+          <div class="desc">Talking ASCII cow</div>
+        </a>
+        <a class="card" href="/patorjk/figlet.js">
+          <div class="repo-name">patorjk/figlet.js</div>
+          <div class="desc">FIGlet ASCII art text</div>
+        </a>
+        <a class="card" href="/bokub/gradient-string">
+          <div class="repo-name">bokub/gradient-string</div>
+          <div class="desc">Gradient colored terminal text</div>
+        </a>
+      </div>
+    </div>
+
+    <!-- Python -->
+    <div class="section">
+      <h2>Python Programs <span class="badge badge-purple">python / pyodide</span></h2>
+      <p class="section-desc">Run via Pyodide WASM runtime. Detects <code>__main__.py</code> or entry scripts automatically.</p>
+      <div class="cards">
+        <a class="card" href="/Textualize/rich">
+          <div class="repo-name">Textualize/rich</div>
+          <div class="desc">Rich test card &mdash; colors, tables, syntax highlighting</div>
+        </a>
+        <a class="card" href="/tqdm/tqdm">
+          <div class="repo-name">tqdm/tqdm</div>
+          <div class="desc">Fast, extensible progress bar</div>
+        </a>
+        <a class="card" href="/bfontaine/term2048">
+          <div class="repo-name">bfontaine/term2048</div>
+          <div class="desc">2048 game in the terminal</div>
+        </a>
+        <a class="card" href="/TheAlgorithms/Python">
+          <div class="repo-name">TheAlgorithms/Python</div>
+          <div class="desc">Algorithm implementations in Python</div>
+        </a>
+      </div>
+    </div>
+
+    <!-- C -->
+    <div class="section">
+      <h2>C Programs <span class="badge badge-orange">c / wasi</span></h2>
+      <p class="section-desc">Compiled with Shiro's built-in C compiler targeting WASI. Simple programs with <code>main()</code> work best.</p>
+      <div class="cards">
+        <a class="card" href="/TheAlgorithms/C">
+          <div class="repo-name">TheAlgorithms/C</div>
+          <div class="desc">Algorithm implementations in C</div>
+        </a>
+        <a class="card" href="/antirez/kilo">
+          <div class="repo-name">antirez/kilo</div>
+          <div class="desc">Tiny text editor in 1000 lines</div>
+        </a>
+        <a class="card" href="/orangeduck/mpc">
+          <div class="repo-name">orangeduck/mpc</div>
+          <div class="desc">Parser combinator library</div>
+        </a>
+        <a class="card" href="/clibs/clib">
+          <div class="repo-name">clibs/clib</div>
+          <div class="desc">C package manager</div>
+        </a>
+      </div>
+    </div>
+
+    <!-- Lua -->
+    <div class="section">
+      <h2>Lua Scripts <span class="badge badge-orange">lua</span></h2>
+      <p class="section-desc">Pure Lua programs. Single-file utilities and libraries.</p>
+      <div class="cards">
+        <a class="card" href="/mpeterv/luacheck">
+          <div class="repo-name">mpeterv/luacheck</div>
+          <div class="desc">Lua linter CLI tool</div>
+        </a>
+        <a class="card" href="/kikito/inspect.lua">
+          <div class="repo-name">kikito/inspect.lua</div>
+          <div class="desc">Lua pretty printer</div>
+        </a>
+        <a class="card" href="/rxi/json.lua">
+          <div class="repo-name">rxi/json.lua</div>
+          <div class="desc">JSON parser in pure Lua</div>
+        </a>
+        <a class="card" href="/rxi/lume">
+          <div class="repo-name">rxi/lume</div>
+          <div class="desc">Lua utility library</div>
+        </a>
+      </div>
+    </div>
+
+    <div class="footer">
+      <a href="/">shiro.computer</a> &mdash; a browser OS by <a href="https://github.com/williamsharkey">William Sharkey</a>
+    </div>
+  </div>
+</body>
+</html>

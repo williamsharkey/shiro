@@ -324,6 +324,8 @@ async function main() {
     () => import('./commands/ffmpeg').then(m => m.ffmpegCmd)), 'src/commands/ffmpeg.ts');
   registerCommand(commands, lazyCommand('lua', 'Lua 5.4 interpreter (wasmoon)',
     () => import('./commands/lua').then(m => m.luaCmd)), 'src/commands/lua.ts');
+  registerCommand(commands, lazyCommand('play', 'Auto-detect and run current project',
+    () => import('./commands/play').then(m => m.playCmd)), 'src/commands/play.ts');
   registerCommand(commands, lazyCommand('psql', 'PostgreSQL database (PGlite)',
     () => import('./commands/postgres').then(m => m.psqlCmd)), 'src/commands/postgres.ts');
   registerCommand(commands, lazyCommand('convert', 'ImageMagick image conversion (magick-wasm)',
@@ -572,10 +574,20 @@ async function main() {
         `git clone ${repoUrl} ${cloneDir} && cd ${cloneDir}`,
         (out: string) => terminal.term.write(out.replace(/\n/g, '\r\n')),
         (err: string) => terminal.term.write(err.replace(/\n/g, '\r\n')),
-      ).then((code: number) => {
+      ).then(async (code: number) => {
         if (code === 0) {
           shell.cwd = cloneDir;
           terminal.term.writeln(`\r\nCloned to ${cloneDir}`);
+          // Auto-detect and run the project
+          try {
+            const { detectAndRun } = await import('./github-player/index');
+            await detectAndRun({
+              fs, shell, terminal, dir: cloneDir, repoName: repo, user,
+              log: (msg) => terminal.term.writeln('\r\n' + msg),
+            });
+          } catch (err: any) {
+            terminal.term.writeln(`\r\n\x1b[33mAuto-run failed: ${err.message}\x1b[0m`);
+          }
         }
         // Replace URL to root so refresh doesn't re-clone
         history.replaceState({}, '', '/');
