@@ -24,7 +24,7 @@ const templates: Template[] = [
 <body><h1>Hello from Shiro</h1><p>Edit /tmp/mypage/index.html to get started.</p></body>
 </html>
 ENDHTML
-serve /tmp/mypage 3000`,
+serve /tmp/mypage 3000 --split right`,
   },
   {
     name: 'Node.js Server',
@@ -69,7 +69,7 @@ function App() {
 createRoot(document.getElementById('root')).render(React.createElement(App));
 ENDJSX
 node -e "require('fs').writeFileSync('/tmp/myreact/index.html','<!DOCTYPE html><html><head><title>React App</title></head><body><div id=root></div><scr'+'ipt src=bundle.js></scr'+'ipt></body></html>')"
-build /tmp/myreact/app.jsx --bundle --outfile=/tmp/myreact/bundle.js && serve /tmp/myreact 3002`,
+build /tmp/myreact/app.jsx --bundle --outfile=/tmp/myreact/bundle.js && serve /tmp/myreact 3002 --split right`,
   },
   {
     name: 'React + Routing',

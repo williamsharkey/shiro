@@ -29,18 +29,27 @@ export function spawnInWindow(
   const label = command || 'terminal';
   const proc = processTable.allocate(label);
 
+  // Guard against reentrant close (forceKill → forceExitCb → win.close → onClose)
+  let closing = false;
+  let replResolve: (() => void) | null = null;
+
+  const doClose = () => {
+    if (closing) return;
+    closing = true;
+    if (proc.status === 'running') {
+      winTerm.forceKill();
+      processTable.kill(proc.pid);
+    }
+    winTerm.dispose();
+    replResolve?.();
+  };
+
   const win = createServerWindow({
     mode: 'terminal',
     title: title || (command ? `[${proc.pid}] ${command.split(/\s/)[0]}` : `[${proc.pid}] terminal`),
     width: '48em',
     height: '28em',
-    onClose: () => {
-      if (proc.status === 'running') {
-        winTerm.forceKill();
-        processTable.kill(proc.pid);
-      }
-      winTerm.dispose();
-    },
+    onClose: doClose,
   });
 
   const winTerm = new WindowTerminal(win.contentDiv!);
@@ -54,6 +63,7 @@ export function spawnInWindow(
     proc.status = 'killed';
     proc.exitCode = 130;
     winTerm.writeOutput('\r\n\x1b[31m[Process killed]\x1b[0m\r\n');
+    replResolve?.();
   };
 
   requestAnimationFrame(() => winTerm.term.focus());
@@ -73,6 +83,7 @@ export function spawnInWindow(
     winTerm.enterStdinPassthrough((data: string) => {
       // Ctrl+D — close window
       if (data === '\x04') {
+        doClose();
         win.close();
         return;
       }
@@ -118,7 +129,6 @@ export function spawnInWindow(
         if (cursorPos > 0) {
           lineBuffer = lineBuffer.slice(0, cursorPos - 1) + lineBuffer.slice(cursorPos);
           cursorPos--;
-          // Redraw: move back, rewrite rest, clear trailing, reposition
           const tail = lineBuffer.slice(cursorPos);
           winTerm.writeOutput(`\b${tail} \x1b[${tail.length + 1}D`);
         }
@@ -134,6 +144,7 @@ export function spawnInWindow(
       }
     }, () => {
       // Force exit callback (double Ctrl+C)
+      doClose();
       win.close();
     });
   };
@@ -157,11 +168,7 @@ export function spawnInWindow(
         startRepl();
         // Keep the process alive until window is closed
         await new Promise<void>((resolve) => {
-          const origKill = proc.kill;
-          proc.kill = () => { origKill(); resolve(); };
-          const origClose = win.close;
-          // Patch close to also resolve
-          (win as any).__replResolve = resolve;
+          replResolve = resolve;
         });
       }
       return 0;
