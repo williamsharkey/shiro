@@ -88,6 +88,7 @@ import { htmlCmd, imgCmd } from './commands/html';
 import { dougCmd } from './commands/doug';
 import { becomeCmd, unbecomeCmd, getBecomeConfig, activateBecomeMode, deactivateBecomeMode } from './commands/become';
 import { pageCmd } from './commands/page';
+import { titleCmd } from './commands/title';
 
 import { mkTempCmd } from './commands/mktemp';
 import { tputCmd } from './commands/tput';
@@ -278,6 +279,7 @@ async function main() {
   registerCommand(commands, becomeCmd, 'src/commands/become.ts');
   registerCommand(commands, unbecomeCmd, 'src/commands/become.ts');
   registerCommand(commands, pageCmd, 'src/commands/page.ts');
+  registerCommand(commands, titleCmd, 'src/commands/title.ts');
 
   registerCommand(commands, lazyCommand('gh', 'GitHub CLI',
     () => import('./commands/gh').then(m => m.ghCmd)), 'src/commands/gh.ts');

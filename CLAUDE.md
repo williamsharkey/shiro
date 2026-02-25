@@ -66,7 +66,8 @@ src/
     ├── group.ts          # Encrypted group networking (peer discovery via relay)
     ├── seed.ts           # Export state as snippet, blob, gif, or html
     ├── hud.ts            # HUD redraw command
-    ├── spawn.ts          # Run commands in windowed terminals
+    ├── spawn.ts          # Run commands in windowed terminals (+ spawnInWindow helper for templates)
+    ├── title.ts          # title: set window or document title
     ├── ps.ts             # ps (list processes) and kill (terminate by PID)
     ├── html.ts           # html (render HTML in window) and img (display image)
     ├── page.ts           # page: interact with served app iframes (click, input, text, eval, etc.)

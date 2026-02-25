@@ -120,9 +120,9 @@ serve /tmp/myapp 3003 --split right`,
 
 /**
  * Show the template palette modal. Returns when the user picks a template or closes.
- * @param runCmd callback to execute the chosen template's shell command
+ * @param runCmd callback receiving the template name and shell command
  */
-export function showTemplatePalette(runCmd: (cmd: string) => void): void {
+export function showTemplatePalette(runCmd: (name: string, cmd: string) => void): void {
   const overlay = document.createElement('div');
   overlay.style.cssText = `
     position: fixed; inset: 0; z-index: 2147483646;
@@ -172,7 +172,7 @@ export function showTemplatePalette(runCmd: (cmd: string) => void): void {
 
     row.onclick = () => {
       overlay.remove();
-      runCmd(tmpl.cmd);
+      runCmd(tmpl.name, tmpl.cmd);
     };
   }
 

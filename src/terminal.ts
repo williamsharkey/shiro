@@ -7,6 +7,7 @@ import { openRemotePanel } from './commands/remote';
 import { setActiveTerminal } from './active-terminal';
 import { createHudPanel, HudPanel } from './hud-panel';
 import { showTemplatePalette } from './template-palette';
+import { spawnInWindow } from './commands/spawn';
 
 /**
  * HUD (Heads-Up Display) state for dynamic banner updates.
@@ -112,16 +113,7 @@ export class ShiroTerminal {
             return;
           }
           if (uri === 'shiro://templates') {
-            showTemplatePalette((cmd) => {
-              this.term.writeln('');
-              this.shell.execute(
-                cmd,
-                (s) => this.term.write(s),
-                (s) => this.term.write(`\x1b[31m${s}\x1b[0m`)
-              ).then(() => {
-                this.showPrompt();
-              });
-            });
+            showTemplatePalette((name, cmd) => spawnInWindow(this.shell, cmd, name));
             return;
           }
           if (uri === 'shiro://claude') {

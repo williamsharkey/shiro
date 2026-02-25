@@ -20,6 +20,8 @@
 - **Lua, jq, esbuild** — Lazy-loaded WASM runtimes, cached on first use
 - **Claude Code** — The real @anthropic-ai/claude-code CLI runs inside the browser
 - **Virtual servers** — `serve` hosts apps, `page` interacts with them
+- **Windowed terminals** — `spawn` opens commands in their own window with interactive REPL
+- **Template palette** — Starter projects (React, Node, Python) launch in windowed terminals
 - **One HTML file** — ~420 KB gzipped. Deploy anywhere. Works offline.
 
 ## vs WebContainers
@@ -61,6 +63,11 @@ sqlite3 app.db "SELECT * FROM users;"
 serve /tmp/myapp 3000
 page :3000 click "#button"
 page :3000 text "body"
+
+# Windowed terminals
+spawn                    # Open a blank interactive terminal window
+spawn node server.js     # Run command in a window, then drop to REPL
+title "My App"           # Set the window title
 
 # Claude Code (runs inside the browser)
 claude -p "create a todo app with localStorage"

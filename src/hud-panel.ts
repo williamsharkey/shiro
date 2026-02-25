@@ -8,6 +8,7 @@
 
 import type { Shell } from './shell';
 import { showTemplatePalette } from './template-palette';
+import { spawnInWindow } from './commands/spawn';
 
 export interface HudPanel {
   show(): void;
@@ -310,7 +311,7 @@ function handleAction(action: string, shell: Shell) {
       break;
     }
     case 'templates': {
-      showTemplatePalette((cmd) => runInTerminal(shell, cmd));
+      showTemplatePalette((name, cmd) => spawnInWindow(shell, cmd, name));
       break;
     }
     case 'about': {
