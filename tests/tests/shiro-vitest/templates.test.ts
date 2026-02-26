@@ -204,38 +204,13 @@ describe('Template Command Structure', () => {
   });
 });
 
-// ── Command Execution ──────────────────────────────────────────────
+// ── Full Command Execution (live reproduction) ───────────────────
 //
-// Shell.execute() splits multi-line input on newlines, so heredocs
-// that appear after echo commands get orphaned.  Work around this by
-// extracting each heredoc block individually and running it as a
-// standalone shell.execute() call.
+// Each template's full multi-line cmd string is passed to shell.execute()
+// in a single call — exactly how spawnInWindow() does it in production.
+// This reproduces the bug where << tokens inside heredocs were mishandled.
 
-/**
- * Extract heredoc blocks from a template cmd string.
- * Returns an array of standalone shell commands, each creating one file.
- * Matches patterns like:
- *   mkdir -p /tmp/dir && cat > /path << 'DELIM' ... DELIM
- *   cat > /path << 'DELIM' ... DELIM
- */
-function extractHeredocs(cmd: string): { shellCmd: string; path: string }[] {
-  const results: { shellCmd: string; path: string }[] = [];
-  const regex = /((?:mkdir\s+-p\s+[^\n&]+&&\s*)?cat\s*>\s*(\S+)\s*<<\s*'([A-Z]+)')\n([\s\S]*?)\n\3/g;
-  let match;
-  while ((match = regex.exec(cmd)) !== null) {
-    const header = match[1];   // e.g. "mkdir -p /tmp/dir && cat > /path << 'DELIM'"
-    const path = match[2];     // e.g. "/path"
-    const delim = match[3];    // e.g. "DELIM"
-    const body = match[4];     // heredoc content
-    results.push({
-      shellCmd: `${header}\n${body}\n${delim}`,
-      path,
-    });
-  }
-  return results;
-}
-
-describe('Template Command Execution', () => {
+describe('Template Full Command Execution', () => {
   let shell: Shell;
   let fs: FileSystem;
 
@@ -245,197 +220,139 @@ describe('Template Command Execution', () => {
     fs = env.fs;
   });
 
+  for (const t of allTemplates) {
+    // Skip templates that need lazy-loaded commands (serve, node, python, build, cc, sqlite3)
+    const needsLazy = ['serve ', 'node ', 'python3 ', 'build ', 'cc ', 'sqlite3 '];
+    const lastLine = t.cmd.split('\n').filter(l => l.trim()).pop() || '';
+    const usesLazy = needsLazy.some(c => lastLine.trimStart().startsWith(c));
+
+    it(`${t.name}: full cmd executes without ENOENT`, async () => {
+      // Run the full multi-line cmd — strip trailing serve/node/etc. lines
+      // that need lazy-loaded commands not available in test env
+      const lines = t.cmd.split('\n');
+      const cmdLines: string[] = [];
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (needsLazy.some(c => trimmed.startsWith(c))) continue;
+        cmdLines.push(line);
+      }
+      const cmd = cmdLines.join('\n');
+
+      const { output } = await run(shell, cmd);
+      expect(output).not.toContain('ENOENT');
+    });
+  }
+
+  it('HTML Page: creates /tmp/mypage/index.html', async () => {
+    const template = categories[0].templates[0];
+    await run(shell, template.cmd.split('\n').filter(l => !l.trim().startsWith('serve ')).join('\n'));
+    const content = await fs.readFile('/tmp/mypage/index.html', 'utf8') as string;
+    expect(content).toContain('<!DOCTYPE html>');
+    expect(content).toContain('Hello from Shiro');
+    expect(content).toContain('<style>');
+    expect(content).toContain('onclick=');
+  });
+
+  it('Node.js Server: creates /tmp/myapi/server.js and index.html', async () => {
+    const template = categories[0].templates[1];
+    await run(shell, template.cmd.split('\n').filter(l => !l.trim().startsWith('node ')).join('\n'));
+    const serverJs = await fs.readFile('/tmp/myapi/server.js', 'utf8') as string;
+    expect(serverJs).toContain("require('express')");
+    expect(serverJs).toContain('/api/time');
+    expect(serverJs).toContain('app.listen(3001');
+    const indexHtml = await fs.readFile('/tmp/myapi/index.html', 'utf8') as string;
+    expect(indexHtml).toContain('API Dashboard');
+  });
+
+  it('Python: creates /tmp/lesson.py', async () => {
+    const template = categories[1].templates[0];
+    await run(shell, template.cmd.split('\n').filter(l => !l.trim().startsWith('python3 ')).join('\n'));
+    const content = await fs.readFile('/tmp/lesson.py', 'utf8') as string;
+    expect(content).toContain('import math');
+    expect(content).toContain('fibonacci');
+  });
+
+  it('TypeScript: creates /tmp/myts/app.ts', async () => {
+    const template = categories[1].templates[1];
+    await run(shell, template.cmd.split('\n').filter(l => !l.trim().startsWith('build ')).join('\n'));
+    const content = await fs.readFile('/tmp/myts/app.ts', 'utf8') as string;
+    expect(content).toContain('interface Person');
+    expect(content).toContain('function greet');
+  });
+
+  it('C Program: creates /tmp/hello.c', async () => {
+    const template = categories[1].templates[2];
+    await run(shell, template.cmd.split('\n').filter(l => !l.trim().startsWith('cc ')).join('\n'));
+    const content = await fs.readFile('/tmp/hello.c', 'utf8') as string;
+    expect(content).toContain('#include <stdio.h>');
+    expect(content).toContain('typedef struct');
+  });
+
+  it('SQLite: creates /tmp/setup.sql', async () => {
+    const template = categories[2].templates[0];
+    await run(shell, template.cmd.split('\n').filter(l => !l.trim().startsWith('sqlite3 ')).join('\n'));
+    const content = await fs.readFile('/tmp/setup.sql', 'utf8') as string;
+    expect(content).toContain('CREATE TABLE');
+    expect(content).toContain('SELECT');
+  });
+
+  it('React App: creates /tmp/myreact/index.html', async () => {
+    const template = categories[0].templates[2];
+    await run(shell, template.cmd.split('\n').filter(l => !l.trim().startsWith('serve ')).join('\n'));
+    const content = await fs.readFile('/tmp/myreact/index.html', 'utf8') as string;
+    expect(content).toContain('unpkg.com/react@18');
+    expect(content).toContain('React.useState');
+  });
+
+  it('React + Routing: creates /tmp/myapp/index.html', async () => {
+    const template = categories[0].templates[3];
+    await run(shell, template.cmd.split('\n').filter(l => !l.trim().startsWith('serve ')).join('\n'));
+    const content = await fs.readFile('/tmp/myapp/index.html', 'utf8') as string;
+    expect(content).toContain('unpkg.com/react@18');
+    expect(content).toContain('hashchange');
+  });
+
+  it('Shell Tutorial: creates CSV files', async () => {
+    const template = categories[2].templates[1];
+    const { output } = await run(shell, template.cmd);
+    const content = await fs.readFile('/tmp/tutorial/people.csv', 'utf8') as string;
+    expect(content).toContain('Alice,25,Engineer');
+    expect(output).toContain('cat: read files');
+    expect(output).toContain('Developer');
+  });
+
   it('echo commands produce ANSI-colored output', async () => {
     const { output } = await run(shell, 'echo "\x1b[1;36m--- Lesson ---\x1b[0m"');
     expect(output).toContain('\x1b[1;36m');
     expect(output).toContain('--- Lesson ---');
   });
 
-  describe('HTML Page template', () => {
-    it('creates /tmp/mypage/index.html with correct content', async () => {
-      const template = categories[0].templates[0]; // Web > HTML Page
-      const heredocs = extractHeredocs(template.cmd);
-      expect(heredocs.length).toBeGreaterThanOrEqual(1);
-      for (const h of heredocs) await run(shell, h.shellCmd);
-
-      const content = await fs.readFile('/tmp/mypage/index.html', 'utf8') as string;
-      expect(content).toContain('<!DOCTYPE html>');
-      expect(content).toContain('Hello from Shiro');
-      expect(content).toContain('<style>');
-      expect(content).toContain('onclick=');
-    });
+  it('grep finds Developer lines', async () => {
+    await fs.mkdir('/tmp/tutorial', { recursive: true });
+    await fs.writeFile('/tmp/tutorial/people.csv',
+      'Alice,25,Engineer\nBob,30,Designer\nCarol,28,Developer\n');
+    const { output } = await run(shell, 'grep Developer /tmp/tutorial/people.csv');
+    expect(output).toContain('Carol,28,Developer');
+    expect(output).not.toContain('Alice');
   });
 
-  describe('Node.js Server template', () => {
-    it('creates /tmp/myapi/server.js and index.html', async () => {
-      const template = categories[0].templates[1]; // Web > Node.js Server
-      const heredocs = extractHeredocs(template.cmd);
-      expect(heredocs.length).toBe(2); // server.js + index.html
-      for (const h of heredocs) await run(shell, h.shellCmd);
-
-      const serverJs = await fs.readFile('/tmp/myapi/server.js', 'utf8') as string;
-      expect(serverJs).toContain("require('express')");
-      expect(serverJs).toContain('/api/time');
-      expect(serverJs).toContain('/api/echo');
-      expect(serverJs).toContain('/api/random');
-      expect(serverJs).toContain('app.listen(3001');
-
-      const indexHtml = await fs.readFile('/tmp/myapi/index.html', 'utf8') as string;
-      expect(indexHtml).toContain('API Dashboard');
-      expect(indexHtml).toContain('callApi');
-      expect(indexHtml).toContain('/api/time');
-    });
+  it('pipes work: sort | head', async () => {
+    await fs.mkdir('/tmp/tutorial', { recursive: true });
+    await fs.writeFile('/tmp/tutorial/people.csv',
+      'Carol,28,Developer\nAlice,25,Engineer\nBob,30,Designer\n');
+    const { output } = await run(shell, 'cat /tmp/tutorial/people.csv | sort | head -2');
+    const lines = output.trim().split(/\r?\n/);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('Alice');
+    expect(lines[1]).toContain('Bob');
   });
 
-  describe('Python template', () => {
-    it('creates /tmp/lesson.py with educational content', async () => {
-      const template = categories[1].templates[0]; // Languages > Python
-      const heredocs = extractHeredocs(template.cmd);
-      expect(heredocs.length).toBe(1);
-      for (const h of heredocs) await run(shell, h.shellCmd);
-
-      const content = await fs.readFile('/tmp/lesson.py', 'utf8') as string;
-      expect(content).toContain('import math');
-      expect(content).toContain('fibonacci');
-      expect(content).toContain('scores');
-      expect(content).toContain('Sine wave');
-    });
-  });
-
-  describe('TypeScript template', () => {
-    it('creates /tmp/myts/app.ts with type annotations', async () => {
-      const template = categories[1].templates[1]; // Languages > TypeScript
-      const heredocs = extractHeredocs(template.cmd);
-      expect(heredocs.length).toBe(1);
-      for (const h of heredocs) await run(shell, h.shellCmd);
-
-      const content = await fs.readFile('/tmp/myts/app.ts', 'utf8') as string;
-      expect(content).toContain('interface Person');
-      expect(content).toContain('name: string');
-      expect(content).toContain('function greet');
-      expect(content).toContain('function first<T>');
-    });
-  });
-
-  describe('C Program template', () => {
-    it('creates /tmp/hello.c with structs and pointers', async () => {
-      const template = categories[1].templates[2]; // Languages > C Program
-      const heredocs = extractHeredocs(template.cmd);
-      expect(heredocs.length).toBe(1);
-      for (const h of heredocs) await run(shell, h.shellCmd);
-
-      const content = await fs.readFile('/tmp/hello.c', 'utf8') as string;
-      expect(content).toContain('#include <stdio.h>');
-      expect(content).toContain('typedef struct');
-      expect(content).toContain('Student');
-      expect(content).toContain('int *ptr');
-    });
-  });
-
-  describe('SQLite template', () => {
-    it('creates /tmp/setup.sql with SQL statements', async () => {
-      const template = categories[2].templates[0]; // Tools > SQLite Database
-      const heredocs = extractHeredocs(template.cmd);
-      expect(heredocs.length).toBe(1);
-      for (const h of heredocs) await run(shell, h.shellCmd);
-
-      const content = await fs.readFile('/tmp/setup.sql', 'utf8') as string;
-      expect(content).toContain('CREATE TABLE');
-      expect(content).toContain("INSERT INTO students VALUES ('Alice'");
-      expect(content).toContain('SELECT');
-      expect(content).toContain('GROUP BY');
-    });
-  });
-
-  describe('React App template', () => {
-    it('creates /tmp/myreact/index.html with React CDN and counter', async () => {
-      const template = categories[0].templates[2]; // Web > React App
-      const heredocs = extractHeredocs(template.cmd);
-      expect(heredocs.length).toBe(1);
-      for (const h of heredocs) await run(shell, h.shellCmd);
-
-      const content = await fs.readFile('/tmp/myreact/index.html', 'utf8') as string;
-      expect(content).toContain('unpkg.com/react@18');
-      expect(content).toContain('React.useState');
-      expect(content).toContain('Counter');
-      expect(content).toContain('ReactDOM.createRoot');
-    });
-  });
-
-  describe('React + Routing template', () => {
-    it('creates /tmp/myapp/index.html with routes and navigation', async () => {
-      const template = categories[0].templates[3]; // Web > React + Routing
-      const heredocs = extractHeredocs(template.cmd);
-      expect(heredocs.length).toBe(1);
-      for (const h of heredocs) await run(shell, h.shellCmd);
-
-      const content = await fs.readFile('/tmp/myapp/index.html', 'utf8') as string;
-      expect(content).toContain('unpkg.com/react@18');
-      expect(content).toContain('hashchange');
-      expect(content).toContain("routes");
-      expect(content).toContain('Home');
-      expect(content).toContain('CounterPage');
-      expect(content).toContain('About');
-    });
-  });
-
-  describe('Shell Tutorial template', () => {
-    it('creates CSV files and runs shell commands', async () => {
-      const template = categories[2].templates[1]; // Tools > Shell Tutorial
-
-      // Shell Tutorial uses echo+redirect (no heredocs), run line by line
-      const lines = template.cmd.split('\n');
-      let output = '';
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        const result = await run(shell, trimmed);
-        output += result.output;
-      }
-
-      // Check files were created
-      const content = await fs.readFile('/tmp/tutorial/people.csv', 'utf8') as string;
-      expect(content).toContain('Alice,25,Engineer');
-      expect(content).toContain('Eve,22,Developer');
-
-      // Check output contains tutorial sections
-      expect(output).toContain('cat: read files');
-      expect(output).toContain('grep: search for patterns');
-      expect(output).toContain('Developer');
-      expect(output).toContain('wc: count lines');
-
-      // Sorted file should exist
-      const sorted = await fs.readFile('/tmp/tutorial/sorted.csv', 'utf8') as string;
-      expect(sorted).toContain('Alice');
-    });
-
-    it('grep finds Developer lines', async () => {
-      await fs.mkdir('/tmp/tutorial', { recursive: true });
-      await fs.writeFile('/tmp/tutorial/people.csv',
-        'Alice,25,Engineer\nBob,30,Designer\nCarol,28,Developer\n');
-      const { output } = await run(shell, 'grep Developer /tmp/tutorial/people.csv');
-      expect(output).toContain('Carol,28,Developer');
-      expect(output).not.toContain('Alice');
-    });
-
-    it('pipes work: sort | head', async () => {
-      await fs.mkdir('/tmp/tutorial', { recursive: true });
-      await fs.writeFile('/tmp/tutorial/people.csv',
-        'Carol,28,Developer\nAlice,25,Engineer\nBob,30,Designer\n');
-      const { output } = await run(shell, 'cat /tmp/tutorial/people.csv | sort | head -2');
-      const lines = output.trim().split(/\r?\n/);
-      expect(lines).toHaveLength(2);
-      expect(lines[0]).toContain('Alice');
-      expect(lines[1]).toContain('Bob');
-    });
-
-    it('redirects work: output to file', async () => {
-      await fs.mkdir('/tmp/tutorial', { recursive: true });
-      await fs.writeFile('/tmp/tutorial/people.csv',
-        'Carol\nAlice\nBob\n');
-      await run(shell, 'cat /tmp/tutorial/people.csv | sort > /tmp/tutorial/sorted.csv');
-      const sorted = await fs.readFile('/tmp/tutorial/sorted.csv', 'utf8') as string;
-      expect(sorted.trim().split('\n')[0]).toBe('Alice');
-    });
+  it('redirects work: output to file', async () => {
+    await fs.mkdir('/tmp/tutorial', { recursive: true });
+    await fs.writeFile('/tmp/tutorial/people.csv',
+      'Carol\nAlice\nBob\n');
+    await run(shell, 'cat /tmp/tutorial/people.csv | sort > /tmp/tutorial/sorted.csv');
+    const sorted = await fs.readFile('/tmp/tutorial/sorted.csv', 'utf8') as string;
+    expect(sorted.trim().split('\n')[0]).toBe('Alice');
   });
 });

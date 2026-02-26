@@ -113,7 +113,17 @@ export class ShiroTerminal {
             return;
           }
           if (uri === 'shiro://templates') {
-            showTemplatePalette((name, cmd, splitPort) => spawnInWindow(this.shell, cmd, name, splitPort));
+            showTemplatePalette(
+              (name, cmd, splitPort) => spawnInWindow(this.shell, cmd, name, splitPort),
+              (templateId) => {
+                import('./living-templates').then(({ livingTemplates }) => {
+                  import('./template-runner').then(({ runLivingTemplate }) => {
+                    const tmpl = livingTemplates.find(t => t.id === templateId);
+                    if (tmpl) runLivingTemplate(this.shell, tmpl);
+                  });
+                });
+              },
+            );
             return;
           }
           if (uri === 'shiro://claude') {
@@ -415,7 +425,7 @@ export class ShiroTerminal {
     } else {
       // ┌── HOST ──...── v0.1.0 #BUILD ──┐
       const version = `v0.1.0 #${build}`;
-      const fixed = 4 + hostDisplay.length + 1 + 1 + version.length + 3; // ┌── HOST  ...  version ──┐
+      const fixed = 4 + hostDisplay.length + 1 + 1 + version.length + 4; // ┌── HOST  ...  version ──┐
       const fill = Math.max(1, W - fixed);
       this.term.writeln(`\x1b[36m┌── \x1b[1;97m${hostDisplay}\x1b[0m\x1b[36m ${'─'.repeat(fill)} \x1b[95m${version}\x1b[0m\x1b[36m ──┐\x1b[0m`);
     }

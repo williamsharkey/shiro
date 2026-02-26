@@ -311,7 +311,17 @@ function handleAction(action: string, shell: Shell) {
       break;
     }
     case 'templates': {
-      showTemplatePalette((name, cmd, splitPort) => spawnInWindow(shell, cmd, name, splitPort));
+      showTemplatePalette(
+        (name, cmd, splitPort) => spawnInWindow(shell, cmd, name, splitPort),
+        (templateId) => {
+          import('./living-templates').then(({ livingTemplates }) => {
+            import('./template-runner').then(({ runLivingTemplate }) => {
+              const tmpl = livingTemplates.find(t => t.id === templateId);
+              if (tmpl) runLivingTemplate(shell, tmpl);
+            });
+          });
+        },
+      );
       break;
     }
     case 'about': {

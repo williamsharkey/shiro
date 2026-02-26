@@ -124,10 +124,26 @@ function fsError(code: string, message: string): Error {
   return err;
 }
 
+export type FSChangeEvent = 'write' | 'delete' | 'mkdir' | 'rename';
+export type FSChangeListener = (event: FSChangeEvent, path: string, newPath?: string) => void;
+
 export class FileSystem {
   private db: IDBDatabase | null = null;
   private cache: Map<string, FSNode | undefined> = new Map();
   private cacheEnabled = true;
+  private _changeListeners: Set<FSChangeListener> = new Set();
+
+  /** Subscribe to filesystem change events. Returns unsubscribe function. */
+  onChange(listener: FSChangeListener): () => void {
+    this._changeListeners.add(listener);
+    return () => { this._changeListeners.delete(listener); };
+  }
+
+  private _emitChange(event: FSChangeEvent, path: string, newPath?: string): void {
+    for (const fn of this._changeListeners) {
+      try { fn(event, path, newPath); } catch {}
+    }
+  }
 
   async init(): Promise<void> {
     this.db = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -389,6 +405,7 @@ export class FileSystem {
       ctime: existing?.ctime ?? now,
       size: content.length,
     });
+    this._emitChange('write', path);
   }
 
   async appendFile(path: string, data: Uint8Array | string): Promise<void> {
@@ -414,6 +431,7 @@ export class FileSystem {
         const existing = await this._get(current);
         if (!existing) {
           await this._put(this._makeNode(current, 'dir'));
+          this._emitChange('mkdir', current);
         } else if (existing.type !== 'dir') {
           throw fsError('ENOTDIR', `ENOTDIR: not a directory '${current}'`);
         }
@@ -430,6 +448,7 @@ export class FileSystem {
     if (parent.type !== 'dir') throw fsError('ENOTDIR', `ENOTDIR: not a directory '${parentPath}'`);
 
     await this._put(this._makeNode(path, 'dir'));
+    this._emitChange('mkdir', path);
   }
 
   async readdir(path: string): Promise<string[]> {
@@ -458,6 +477,7 @@ export class FileSystem {
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, unlink '${path}'`);
     if (node.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, unlink '${path}'`);
     await this._delete(path);
+    this._emitChange('delete', path);
   }
 
   async rmdir(path: string): Promise<void> {
@@ -468,6 +488,7 @@ export class FileSystem {
     const entries = await this.readdir(path);
     if (entries.length > 0) throw fsError('ENOTEMPTY', `ENOTEMPTY: directory not empty, rmdir '${path}'`);
     await this._delete(path);
+    this._emitChange('delete', path);
   }
 
   async rm(path: string, options?: { recursive?: boolean }): Promise<void> {
@@ -483,10 +504,12 @@ export class FileSystem {
       for (const key of toDelete) {
         await this._delete(key);
       }
+      this._emitChange('delete', path);
     } else if (node.type === 'dir') {
       throw fsError('EISDIR', `EISDIR: is a directory, rm '${path}'`);
     } else {
       await this._delete(path);
+      this._emitChange('delete', path);
     }
   }
 
@@ -515,6 +538,7 @@ export class FileSystem {
       await this._put({ ...node, path: newPath, mtime: Date.now() });
       await this._delete(oldPath);
     }
+    this._emitChange('rename', oldPath, newPath);
   }
 
   async chmod(path: string, mode: number): Promise<void> {

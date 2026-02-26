@@ -26,7 +26,7 @@ Shiro is a browser-native cloud OS. A Unix-like environment that runs entirely i
 src/
 ├── main.ts              # Bootstrap - registers all commands, inits FS, starts terminal
 ├── terminal.ts          # xterm.js integration, line editing, tab completion, key handling
-├── shell.ts             # Command parser: pipes, redirects, env vars, quoting, history
+├── shell.ts             # Command parser: pipes, redirects, env vars, quoting, heredocs, history
 ├── filesystem.ts        # IndexedDB-backed POSIX filesystem (the foundation everything uses)
 ├── active-terminal.ts   # Global active terminal tracking (routes mobile input to focused terminal)
 ├── mobile-input.ts      # Unified mobile toolbar: virtual keys, copy/paste, voice input
@@ -35,6 +35,10 @@ src/
 ├── window-terminal.ts   # Lightweight xterm.js wrapper for windowed processes (+ number menu detection)
 ├── process-table.ts     # Global process registry with PID allocation
 ├── split-view.ts        # Docked split pane (right/bottom) for serve --split
+├── hud-panel.ts         # HUD overlay panel (status bar, shortcuts, template palette link)
+├── template-palette.ts  # Template definitions (9 educational lessons across 3 categories)
+├── template-runner.ts   # Template execution engine (runs multi-line cmd in windowed terminal)
+├── living-templates.ts  # Living template UI (palette overlay, category tabs, launch buttons)
 └── commands/            # One file per command or group of related commands
     ├── index.ts          # Command/CommandContext/TerminalLike interfaces, CommandRegistry class
     ├── shell-builtins.ts # Shell builtins needing ctx.shell: cd, export, help, command, sh, bash
@@ -173,7 +177,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**556 tests across 23 test files** — all passing (1 pre-existing flaky test in claude-code-install).
+**1053 tests across 33 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -197,6 +201,7 @@ cd tests && npm run test:shiro    # Run from tests/ directory
 | `claude-code-install.test.ts` | E2E | Full `npm install -g @anthropic-ai/claude-code` + run |
 | `lazy-commands.test.ts` | **37 tests** | All lazy-loaded commands: lazyCommand helper, build, nano, termcast, image, gh, mcp, group, cc/gcc, python/pip, sqlite3 |
 | `build-output.test.ts` | **7 tests** | Build validation: no unresolved `__VITE_PRELOAD__` markers, entry JS/CSS inlined, lazy chunks exist and are clean |
+| `templates.test.ts` | **31 tests** | Template data integrity, command structure, full multi-line cmd execution through shell |
 
 ### Claude Code Tool Shim Tests (`claude-tools.test.ts`)
 
@@ -220,6 +225,8 @@ The shell supports:
 - **Pipes**: `echo hello | grep hello`
 - **Redirects**: `>`, `>>`, `<`, `2>`, `2>>`
 - **Compound commands**: `&&`, `||`, `;`
+- **Heredocs**: `cat > file << 'DELIM'` ... `DELIM` (single-quoted = no expansion)
+- **Multi-line input**: `execute()` splits multi-line strings into statements, respecting heredoc blocks and quoted strings
 - **Environment variables**: `$VAR`, `${VAR}`, `$?` (last exit code)
 - **Positional parameters**: `$@`, `$*`, `$#`, `$0`-`$9`
 - **Quoting**: single quotes (literal), double quotes (with var expansion), backslash escapes

@@ -676,9 +676,83 @@ echo "${DM}  cat /tmp/tutorial/people.csv | cut -d, -f1${RS}"`,
 ];
 
 /**
- * Show the template palette modal with categories and difficulty levels.
+ * Genre labels and colors for living templates.
  */
-export function showTemplatePalette(runCmd: (name: string, cmd: string, splitPort?: number) => void): void {
+const genreInfo: Record<string, { label: string; color: string }> = {
+  quest: { label: 'QUESTS', color: '#ef4444' },
+  mirror: { label: 'CREATE', color: '#3b82f6' },
+  automator: { label: 'AUTOMATE', color: '#f59e0b' },
+  canvas: { label: 'ART', color: '#c084fc' },
+  collaborator: { label: 'AI', color: '#8b5cf6' },
+};
+
+/**
+ * Build a template row element (shared between living and classic templates).
+ */
+function makeRow(
+  icon: string,
+  name: string,
+  desc: string,
+  level: string,
+  time: string | undefined,
+  onClick: () => void,
+): HTMLDivElement {
+  const levelColors: Record<string, string> = {
+    beginner: '#22c55e',
+    intermediate: '#eab308',
+    advanced: '#ef4444',
+  };
+
+  const row = document.createElement('div');
+  row.style.cssText = `
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 12px; border-radius: 8px; cursor: pointer;
+    transition: background 0.1s;
+  `;
+  row.onmouseenter = () => { row.style.background = 'rgba(255,255,255,0.06)'; };
+  row.onmouseleave = () => { row.style.background = 'none'; };
+
+  const iconEl = document.createElement('span');
+  iconEl.textContent = icon;
+  iconEl.style.cssText = 'font-size: 20px; width: 28px; text-align: center; flex-shrink: 0;';
+
+  const text = document.createElement('div');
+  text.style.cssText = 'flex: 1; min-width: 0;';
+  const nameEl = document.createElement('div');
+  nameEl.textContent = name;
+  nameEl.style.cssText = 'color: rgba(255,255,255,0.9); font-size: 13px; font-weight: 500;';
+  const descEl = document.createElement('div');
+  descEl.textContent = desc + (time ? `  ${time}` : '');
+  descEl.style.cssText = 'color: rgba(255,255,255,0.35); font-size: 11px; margin-top: 1px;';
+  text.appendChild(nameEl);
+  text.appendChild(descEl);
+
+  const badge = document.createElement('span');
+  badge.textContent = level;
+  badge.style.cssText = `
+    font-size: 10px; color: ${levelColors[level] || '#888'};
+    opacity: 0.7; flex-shrink: 0; text-transform: uppercase;
+    letter-spacing: 0.5px;
+  `;
+
+  // Check for progress
+  const progressKey = 'shiro-template-progress-';
+  // We'll check for any completed checkpoints later
+
+  row.appendChild(iconEl);
+  row.appendChild(text);
+  row.appendChild(badge);
+  row.onclick = onClick;
+  return row;
+}
+
+/**
+ * Show the template palette modal with living templates and classic templates.
+ */
+export function showTemplatePalette(
+  runCmd: (name: string, cmd: string, splitPort?: number) => void,
+  runLiving?: (templateId: string) => void,
+): void {
   const overlay = document.createElement('div');
   overlay.style.cssText = `
     position: fixed; inset: 0; z-index: 2147483646;
@@ -689,24 +763,61 @@ export function showTemplatePalette(runCmd: (name: string, cmd: string, splitPor
   const modal = document.createElement('div');
   modal.style.cssText = `
     background: #1a1a2e; border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 12px; padding: 20px; width: 380px; max-width: 90vw;
+    border-radius: 12px; padding: 20px; width: 420px; max-width: 90vw;
     max-height: 80vh; overflow-y: auto;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   `;
 
   const title = document.createElement('div');
-  title.textContent = 'Lessons';
+  title.textContent = 'Learn';
   title.style.cssText = 'color: #fff; font-size: 16px; font-weight: 600; margin-bottom: 12px;';
   modal.appendChild(title);
 
-  const levelColors: Record<string, string> = {
-    beginner: '#22c55e',
-    intermediate: '#eab308',
-    advanced: '#ef4444',
-  };
+  // ── Living Templates (interactive guided tutorials) ──
+  if (runLiving) {
+    // Dynamic import to keep bundle lean
+    import('./living-templates').then(({ livingTemplates }) => {
+      // Group by genre
+      const byGenre = new Map<string, typeof livingTemplates>();
+      for (const t of livingTemplates) {
+        if (!byGenre.has(t.genre)) byGenre.set(t.genre, []);
+        byGenre.get(t.genre)!.push(t);
+      }
 
+      // Insert living templates before the classic ones (before first child after title)
+      const insertBefore = modal.children[1] as HTMLElement | null; // first classic header
+
+      for (const [genre, templates] of byGenre) {
+        const info = genreInfo[genre] || { label: genre.toUpperCase(), color: '#888' };
+        const header = document.createElement('div');
+        header.style.cssText = `
+          color: ${info.color}; font-size: 11px; font-weight: 600;
+          letter-spacing: 1px; padding: 12px 12px 4px; margin-top: 4px;
+        `;
+        header.innerHTML = `${info.label} <span style="color:rgba(255,255,255,0.2);font-size:10px;font-weight:400;margin-left:4px">guided</span>`;
+        if (insertBefore) modal.insertBefore(header, insertBefore);
+        else modal.appendChild(header);
+
+        for (const t of templates) {
+          const row = makeRow(t.icon, t.name, t.desc, t.level, t.time, () => {
+            overlay.remove();
+            runLiving(t.id);
+          });
+          if (insertBefore) modal.insertBefore(row, insertBefore);
+          else modal.appendChild(row);
+        }
+      }
+
+      // Divider between living and classic
+      const divider = document.createElement('div');
+      divider.style.cssText = 'border-top: 1px solid rgba(255,255,255,0.06); margin: 12px 0 4px;';
+      if (insertBefore) modal.insertBefore(divider, insertBefore);
+      else modal.appendChild(divider);
+    }).catch(() => {});
+  }
+
+  // ── Classic Templates (shell command strings) ──
   for (const cat of categories) {
-    // Category header
     const header = document.createElement('div');
     header.textContent = cat.name.toUpperCase();
     header.style.cssText = `
@@ -716,47 +827,11 @@ export function showTemplatePalette(runCmd: (name: string, cmd: string, splitPor
     modal.appendChild(header);
 
     for (const tmpl of cat.templates) {
-      const row = document.createElement('div');
-      row.style.cssText = `
-        display: flex; align-items: center; gap: 10px;
-        padding: 8px 12px; border-radius: 8px; cursor: pointer;
-        transition: background 0.1s;
-      `;
-      row.onmouseenter = () => { row.style.background = 'rgba(255,255,255,0.06)'; };
-      row.onmouseleave = () => { row.style.background = 'none'; };
-
-      const icon = document.createElement('span');
-      icon.textContent = tmpl.icon;
-      icon.style.cssText = 'font-size: 20px; width: 28px; text-align: center; flex-shrink: 0;';
-
-      const text = document.createElement('div');
-      text.style.cssText = 'flex: 1; min-width: 0;';
-      const nameEl = document.createElement('div');
-      nameEl.textContent = tmpl.name;
-      nameEl.style.cssText = 'color: rgba(255,255,255,0.9); font-size: 13px; font-weight: 500;';
-      const descEl = document.createElement('div');
-      descEl.textContent = tmpl.desc;
-      descEl.style.cssText = 'color: rgba(255,255,255,0.35); font-size: 11px; margin-top: 1px;';
-      text.appendChild(nameEl);
-      text.appendChild(descEl);
-
-      const badge = document.createElement('span');
-      badge.textContent = tmpl.level;
-      badge.style.cssText = `
-        font-size: 10px; color: ${levelColors[tmpl.level]};
-        opacity: 0.7; flex-shrink: 0; text-transform: uppercase;
-        letter-spacing: 0.5px;
-      `;
-
-      row.appendChild(icon);
-      row.appendChild(text);
-      row.appendChild(badge);
-      modal.appendChild(row);
-
-      row.onclick = () => {
+      const row = makeRow(tmpl.icon, tmpl.name, tmpl.desc, tmpl.level, undefined, () => {
         overlay.remove();
         runCmd(tmpl.name, tmpl.cmd, tmpl.splitPort);
-      };
+      });
+      modal.appendChild(row);
     }
   }
 

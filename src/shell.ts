@@ -184,6 +184,19 @@ export class Shell {
       }
     }
 
+    // Split multi-line input into individual statements (respecting heredoc blocks)
+    const statements = this.splitStatements(trimmed);
+    if (statements.length > 1) {
+      let lastExit = 0;
+      for (const stmt of statements) {
+        if (!stmt.trim()) continue;
+        lastExit = await this.execute(stmt, writeStdout, writeStderr, remote, terminalOverride, true);
+      }
+      this.lastExitCode = lastExit;
+      this.env['?'] = String(lastExit);
+      return lastExit;
+    }
+
     // Handle heredocs before anything else
     const heredoc = this.parseHeredoc(trimmed);
     const effectiveLine = heredoc ? heredoc.command : trimmed;
@@ -1046,6 +1059,97 @@ export class Shell {
   /** Convert a shell glob pattern to a regex string */
   private globToRegex(pattern: string): string {
     return pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+  }
+
+  /** Split multi-line input into statements, keeping heredoc blocks and quoted strings intact. */
+  private splitStatements(input: string): string[] {
+    const lines = input.split(/\r?\n/);
+    if (lines.length <= 1) return [input];
+
+    const statements: string[] = [];
+    let i = 0;
+    let accumulator = '';
+    let quoteChar: string | null = null; // track open quote across lines
+
+    while (i < lines.length) {
+      const line = lines[i];
+
+      // If we're inside an open quote from a previous line, accumulate
+      if (quoteChar) {
+        accumulator += '\n' + line;
+        // Check if this line closes the quote
+        if (this.lineClosesQuote(line, quoteChar)) {
+          quoteChar = null;
+          // Check if MORE quotes open after the close on this line
+          const afterClose = this.unclosedQuote(accumulator);
+          if (afterClose) quoteChar = afterClose;
+        }
+        if (!quoteChar) {
+          statements.push(accumulator);
+          accumulator = '';
+        }
+        i++;
+        continue;
+      }
+
+      // Check if this line starts a heredoc
+      const heredocMatch = line.match(/<<-?\s*(?:'([^']+)'|"([^"]+)"|(\S+))/);
+      if (heredocMatch) {
+        const delimiter = heredocMatch[1] || heredocMatch[2] || heredocMatch[3];
+        let block = line;
+        i++;
+        while (i < lines.length) {
+          block += '\n' + lines[i];
+          if (lines[i].trim() === delimiter) break;
+          i++;
+        }
+        statements.push(block);
+        i++;
+        continue;
+      }
+
+      // Check if this line has an unclosed quote
+      const openQuote = this.unclosedQuote(line);
+      if (openQuote) {
+        accumulator = line;
+        quoteChar = openQuote;
+        i++;
+        continue;
+      }
+
+      statements.push(line);
+      i++;
+    }
+
+    // Flush any remaining accumulated content
+    if (accumulator) statements.push(accumulator);
+
+    return statements;
+  }
+
+  /** Check if a line has an unclosed quote. Returns the quote char or null. */
+  private unclosedQuote(line: string): string | null {
+    let inSingle = false;
+    let inDouble = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '\\' && inDouble) { i++; continue; }
+      if (ch === "'" && !inDouble) inSingle = !inSingle;
+      else if (ch === '"' && !inSingle) inDouble = !inDouble;
+    }
+    if (inSingle) return "'";
+    if (inDouble) return '"';
+    return null;
+  }
+
+  /** Check if a line closes a specific quote character. */
+  private lineClosesQuote(line: string, quote: string): boolean {
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '\\' && quote === '"') { i++; continue; }
+      if (ch === quote) return true;
+    }
+    return false;
   }
 
   private parseHeredoc(input: string): { command: string; body: string } | null {
