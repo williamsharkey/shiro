@@ -75,7 +75,18 @@ export function spawnInWindow(
 
   /** Try to show the split iframe for the served port */
   const tryShowSplit = async (port: number) => {
-    if (!iframeServer.isPortInUse(port) || !win.showSplit) return;
+    if (!win.showSplit) return;
+
+    // Poll for the port to become available (server may register async, e.g. Express listen())
+    const deadline = Date.now() + 3000;
+    while (!iframeServer.isPortInUse(port) && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 300));
+    }
+    if (!iframeServer.isPortInUse(port)) {
+      winTerm.writeOutput(`\x1b[33m[split] Port ${port} not registered — skipping split view\x1b[0m\r\n`);
+      return;
+    }
+
     try {
       const response = await iframeServer.fetch(port, '/');
       let html: string;
@@ -89,7 +100,9 @@ export function spawnInWindow(
       html = injectIframeScripts(html, port);
       iframeServer.ensureResourceProxy();
       win.showSplit(html, port);
-    } catch {}
+    } catch (err: any) {
+      winTerm.writeOutput(`\x1b[33m[split] Failed to load port ${port}: ${err.message || err}\x1b[0m\r\n`);
+    }
   };
 
   /** Start an interactive REPL in the window */

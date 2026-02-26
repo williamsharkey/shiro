@@ -44,13 +44,14 @@ describe.skipIf(!hasDist)('Build Output Validation', () => {
   it('should contain the inlined entry script', () => {
     html = html || readFile(indexPath);
     expect(html).toContain('<script type="module">');
-    expect(html).not.toMatch(/<script\b[^>]*\bsrc=["'][^"']*\.js["']/);
+    // Exclude absolute URLs (CDN scripts in template data are OK)
+    expect(html).not.toMatch(/<script\b[^>]*\bsrc=["'](?!https?:\/\/)[^"']*\.js["']/);
   });
 
   it('should contain the inlined CSS', () => {
     html = html || readFile(indexPath);
     expect(html).toContain('<style>');
-    expect(html).not.toMatch(/<link\b[^>]*\brel=["']stylesheet["'][^>]*\bhref=["'][^"']*\.css["']/);
+    expect(html).not.toMatch(/<link\b[^>]*\brel=["']stylesheet["'][^>]*\bhref=["'](?!https?:\/\/)[^"']*\.css["']/);
   });
 
   it('entry chunk should exist in dist/assets/ (lazy chunks import from it)', () => {
