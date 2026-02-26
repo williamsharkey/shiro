@@ -728,6 +728,7 @@ class IframeServerManager {
    * Clean up all servers
    */
   cleanup(): void {
+    console.log('[IframeServer] cleanup() called, closing', this.servers.size, 'servers');
     for (const [port] of this.servers) {
       this.close(port);
     }
@@ -735,8 +736,13 @@ class IframeServerManager {
   }
 }
 
-// Singleton instance
-export const iframeServer = new IframeServerManager();
+// Singleton instance — reuse window global to survive Vite chunk duplication.
+// When iframe-server.ts appears in both the main bundle and a lazy chunk,
+// both evaluations share the same IframeServerManager via the window global.
+export const iframeServer: IframeServerManager =
+  (typeof window !== 'undefined' && (window as any).__iframeServer?.serve)
+    ? (window as any).__iframeServer
+    : new IframeServerManager();
 
 /**
  * Create a static file server from the virtual filesystem

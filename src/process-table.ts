@@ -70,4 +70,12 @@ class ProcessTable {
   }
 }
 
-export const processTable = new ProcessTable();
+// Singleton — reuse window global to survive double evaluation
+// (entry chunk is both inlined in HTML and loaded as file by lazy chunks)
+export const processTable: ProcessTable =
+  (typeof window !== 'undefined' && (window as any).__processTable?.allocate)
+    ? (window as any).__processTable
+    : new ProcessTable();
+if (typeof window !== 'undefined') {
+  (window as any).__processTable = processTable;
+}

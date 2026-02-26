@@ -78,17 +78,28 @@ export function spawnInWindow(
     if (!win.showSplit) return;
 
     // Poll for the port to become available (server may register async, e.g. Express listen())
-    const deadline = Date.now() + 3000;
-    while (!iframeServer.isPortInUse(port) && Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, 300));
+    // Also check the window global in case of module duplication across chunks
+    const globalIS = (window as any).__iframeServer;
+    const checkPort = (p: number) => iframeServer.isPortInUse(p) || (globalIS && globalIS !== iframeServer && globalIS.isPortInUse(p));
+    const getServer = (p: number) => {
+      if (iframeServer.isPortInUse(p)) return iframeServer;
+      if (globalIS && globalIS.isPortInUse(p)) return globalIS;
+      return null;
+    };
+
+    const deadline = Date.now() + 5000;
+    while (!checkPort(port) && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 200));
     }
-    if (!iframeServer.isPortInUse(port)) {
+    if (!checkPort(port)) {
       winTerm.writeOutput(`\x1b[33m[split] Port ${port} not registered — skipping split view\x1b[0m\r\n`);
       return;
     }
 
+    const activeServer = getServer(port)!;
+
     try {
-      const response = await iframeServer.fetch(port, '/');
+      const response = await activeServer.fetch(port, '/');
       let html: string;
       if (typeof response.body === 'string') {
         html = response.body;
@@ -98,7 +109,7 @@ export function spawnInWindow(
         html = '<!DOCTYPE html><html><body></body></html>';
       }
       html = injectIframeScripts(html, port);
-      iframeServer.ensureResourceProxy();
+      activeServer.ensureResourceProxy();
       win.showSplit(html, port);
     } catch (err: any) {
       winTerm.writeOutput(`\x1b[33m[split] Failed to load port ${port}: ${err.message || err}\x1b[0m\r\n`);

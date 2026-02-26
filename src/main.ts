@@ -619,4 +619,10 @@ async function main() {
   }
 }
 
-main().catch(console.error);
+// Guard: the entry chunk is inlined into HTML AND kept as a file for lazy chunk
+// imports. The browser evaluates it twice (inline script ≠ file module). The boot
+// flag prevents main() from running a second time when lazy chunks load.
+if (!(window as any).__shiroBooted) {
+  (window as any).__shiroBooted = true;
+  main().catch(console.error);
+}
