@@ -181,7 +181,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1180 tests across 35 test files** — all passing.
+**1194 tests across 35 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root

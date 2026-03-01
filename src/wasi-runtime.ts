@@ -367,10 +367,13 @@ export class WasiRT {
     | { type: 'rename'; oldPath: string; newPath: string }
   > = [];
 
+  /** Dirty file data from fds that were closed before flushAll — flushed in flushAll */
+  private closedDirtyFds: Array<{ path: string; data: Uint8Array }> = [];
+
   // ── Helper: flush dirty fds and deferred ops back to filesystem ────
 
   private async flushAll(): Promise<void> {
-    // Flush dirty file descriptors
+    // Flush dirty file descriptors still open
     for (const [, fd] of this.fds) {
       if (fd.dirty && fd.path) {
         try {
@@ -381,6 +384,15 @@ export class WasiRT {
         fd.dirty = false;
       }
     }
+    // Flush data from fds that were closed during execution
+    for (const { path, data } of this.closedDirtyFds) {
+      try {
+        await this.config.fs.writeFile(path, data);
+      } catch {
+        // Best effort
+      }
+    }
+    this.closedDirtyFds = [];
 
     // Execute deferred filesystem operations
     for (const op of this.deferredOps) {
@@ -579,7 +591,12 @@ export class WasiRT {
   // ── fd operations ────────────────────────────────────────────────
 
   private fd_close(fd: number): number {
-    if (!this.fds.has(fd)) return WASI_EBADF;
+    const f = this.fds.get(fd);
+    if (!f) return WASI_EBADF;
+    // Preserve dirty data for flushing later (fd_close is sync, flush is async)
+    if (f.dirty && f.path) {
+      this.closedDirtyFds.push({ path: f.path, data: new Uint8Array(f.data) });
+    }
     this.fds.delete(fd);
     return WASI_ESUCCESS;
   }
