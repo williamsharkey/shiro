@@ -181,7 +181,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1200 tests across 35 test files** — all passing.
+**1211 tests across 35 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -228,14 +228,20 @@ Covers all 9 known bugs plus regression tests:
 
 The shell supports:
 - **Pipes**: `echo hello | grep hello`
-- **Redirects**: `>`, `>>`, `<`, `2>`, `2>>`
+- **Redirects**: `>`, `>>`, `<`, `2>`, `2>>`, `2>&1`
+- **Device files**: `/dev/null`, `/dev/stdin`, `/dev/stdout`, `/dev/stderr`
 - **Compound commands**: `&&`, `||`, `;`
 - **Heredocs**: `cat > file << 'DELIM'` ... `DELIM` (single-quoted = no expansion)
+- **Here-strings**: `cat <<< "hello"`
 - **Multi-line input**: `execute()` splits multi-line strings into statements, respecting heredoc blocks and quoted strings
 - **Environment variables**: `$VAR`, `${VAR}`, `$?` (last exit code)
 - **Positional parameters**: `$@`, `$*`, `$#`, `$0`-`$9`
 - **Quoting**: single quotes (literal), double quotes (with var expansion), backslash escapes
 - **Comments**: lines starting with `#`
+- **Shell options**: `set -e` (errexit — abort on error), `set -x` (xtrace — echo commands), `set +e`/`+x` to disable
+- **Control structures**: if/elif/else/fi, while/until/do/done, for/in/do/done, case/esac
+- **Functions**: `name() { ... }` and `function name { ... }`
+- **Job control**: `cmd &` (background), `fg`, `bg`, `jobs`, `wait`
 
 ## WASI Runtime (Tier 2)
 

@@ -279,4 +279,88 @@ describe('Shell Advanced', () => {
       expect(output).not.toContain('no');
     });
   });
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  set -e (errexit)
+  // ═══════════════════════════════════════════════════════════════════
+
+  describe('set -e (errexit)', () => {
+    it('aborts execution on non-zero exit code', async () => {
+      // false returns 1, so echo should NOT run
+      const { output, exitCode } = await run(shell, 'set -e; false; echo should-not-appear');
+      expect(exitCode).not.toBe(0);
+      expect(output).not.toContain('should-not-appear');
+    });
+
+    it('does not abort on zero exit code', async () => {
+      const { output, exitCode } = await run(shell, 'set -e; true; echo visible');
+      expect(exitCode).toBe(0);
+      expect(output).toContain('visible');
+    });
+
+    it('does not abort on && chain (error handled by design)', async () => {
+      const { output } = await run(shell, 'set -e; false && echo chained; echo after');
+      expect(output).toContain('after');
+    });
+
+    it('does not abort on || chain', async () => {
+      const { output } = await run(shell, 'set -e; false || echo fallback; echo after');
+      expect(output).toContain('fallback');
+      expect(output).toContain('after');
+    });
+
+    it('can be disabled with set +e', async () => {
+      const { output } = await run(shell, 'set -e; set +e; false; echo visible');
+      expect(output).toContain('visible');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  set -x (xtrace)
+  // ═══════════════════════════════════════════════════════════════════
+
+  describe('set -x (xtrace)', () => {
+    it('echoes commands to stderr with + prefix', async () => {
+      let stderr = '';
+      await shell.execute('set -x; echo hello', (s) => {}, (s) => { stderr += s; });
+      expect(stderr).toContain('+ echo hello');
+    });
+
+    it('can be disabled with set +x', async () => {
+      let stderr = '';
+      await shell.execute('set -x; echo traced; set +x; echo not-traced', (s) => {}, (s) => { stderr += s; });
+      expect(stderr).toContain('+ echo traced');
+      expect(stderr).not.toContain('+ echo not-traced');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  /dev/null, /dev/stdout, /dev/stderr device files
+  // ═══════════════════════════════════════════════════════════════════
+
+  describe('/dev/* device files', () => {
+    it('/dev/null discards output', async () => {
+      const { output } = await run(shell, 'echo hello > /dev/null');
+      expect(output).toBe('');
+    });
+
+    it('/dev/null discards stderr', async () => {
+      let stderr = '';
+      await shell.execute('echo error >&2 2>/dev/null', (s) => {}, (s) => { stderr += s; });
+      expect(stderr).toBe('');
+    });
+
+    it('> /dev/stderr redirects stdout to stderr', async () => {
+      let stderr = '';
+      let stdout = '';
+      await shell.execute('echo hello > /dev/stderr', (s) => { stdout += s; }, (s) => { stderr += s; });
+      expect(stderr).toContain('hello');
+      expect(stdout).toBe('');
+    });
+
+    it('< /dev/stdin reads from pipe', async () => {
+      const { output } = await run(shell, 'echo hello | cat < /dev/stdin');
+      expect(output).toContain('hello');
+    });
+  });
 });

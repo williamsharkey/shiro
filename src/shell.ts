@@ -39,6 +39,8 @@ export class Shell {
   lastExitCode: number = 0;
   functions: Record<string, { body: string }> = {};
   backgroundJobs: Map<number, BackgroundJob> = new Map();
+  /** Shell options: errexit (-e), xtrace (-x), nounset (-u), verbose (-v) */
+  options: Set<string> = new Set();
   private nextJobId = 1;
   private terminal?: ShiroTerminal;
 
@@ -107,6 +109,7 @@ export class Shell {
     child.cwd = this.cwd;
     child.env = { ...this.env };
     child.functions = { ...this.functions };
+    child.options = new Set(this.options);
     child.history = this.history; // share history array reference
     return child;
   }
@@ -199,6 +202,8 @@ export class Shell {
       for (const stmt of statements) {
         if (!stmt.trim()) continue;
         lastExit = await this.execute(stmt, writeStdout, writeStderr, remote, terminalOverride, true);
+        // errexit: abort on non-zero exit code
+        if (this.options.has('errexit') && lastExit !== 0) break;
       }
       this.lastExitCode = lastExit;
       this.env['?'] = String(lastExit);
@@ -395,6 +400,11 @@ export class Shell {
         // Handle . as alias for source
         const effectiveCmdName = cmdName === '.' ? 'source' : cmdName;
 
+        // xtrace: echo command to stderr before executing
+        if (this.options.has('xtrace')) {
+          stderrWriter(`+ ${[effectiveCmdName, ...cmdArgs].join(' ')}\r\n`);
+        }
+
         // Handle built-in variable assignment: FOO=bar
         if (effectiveCmdName.includes('=') && !effectiveCmdName.startsWith('=')) {
           const eqIdx = cmdName.indexOf('=');
@@ -506,6 +516,11 @@ export class Shell {
           if (redir.type === '<') {
             if (redir.target === '/dev/null') {
               stdin = '';
+              continue;
+            }
+            // /dev/stdin reads from pipe input
+            if (redir.target === '/dev/stdin') {
+              stdin = i > 0 ? lastOutput : (heredocStdin || '');
               continue;
             }
             const targetPath = this.fs.resolvePath(redir.target, this.cwd);
@@ -626,6 +641,14 @@ export class Shell {
               stderrOutput = '';
               continue;
             }
+            // 2>/dev/stderr → default behavior (let it through)
+            if (redir.target === '/dev/stderr') continue;
+            // 2>/dev/stdout → redirect stderr to stdout
+            if (redir.target === '/dev/stdout') {
+              ctx.stdout += stderrOutput;
+              stderrOutput = '';
+              continue;
+            }
             const targetPath = this.fs.resolvePath(redir.target, this.cwd);
             if (redir.type === '2>') {
               await this.fs.writeFile(targetPath, stderrOutput);
@@ -652,6 +675,14 @@ export class Shell {
         for (const redir of redirects) {
           if (redir.type === '>' || redir.type === '>>') {
             if (redir.target === '/dev/null') {
+              output = '';
+              continue;
+            }
+            // /dev/stdout → write to stdout (default behavior, just let it through)
+            if (redir.target === '/dev/stdout') continue;
+            // /dev/stderr → redirect stdout content to stderr
+            if (redir.target === '/dev/stderr') {
+              stderrWriter(output.replace(/\n/g, '\r\n'));
               output = '';
               continue;
             }
@@ -682,6 +713,16 @@ export class Shell {
 
       this.lastExitCode = exitCode;
       this.env['?'] = String(exitCode);
+
+      // errexit: abort on non-zero exit from commands NOT in && / || chains
+      if (this.options.has('errexit') && exitCode !== 0 && !negateExit) {
+        // Don't abort if this command is part of a && or || chain
+        const compIdx = compounds.indexOf(compound);
+        const thisOp = compound.operator;
+        const nextOp = compIdx + 1 < compounds.length ? compounds[compIdx + 1].operator : '';
+        const inChain = thisOp === '&&' || thisOp === '||' || nextOp === '&&' || nextOp === '||';
+        if (!inChain) break;
+      }
     }
 
     return exitCode;
