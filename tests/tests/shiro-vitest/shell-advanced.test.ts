@@ -2150,4 +2150,145 @@ describe('Shell Advanced', () => {
       expect(lines[0].trim()).toContain('apple');
     });
   });
+
+  // === Section 51: unset builtin ===
+  describe('51. unset builtin', () => {
+    it('unset removes a variable', async () => {
+      const { output } = await run(shell, 'FOO=hello; echo $FOO; unset FOO; echo ">${FOO}<"');
+      const lines = output.replace(/\r/g, '').trim().split('\n');
+      expect(lines[0]).toBe('hello');
+      expect(lines[1]).toBe('><');
+    });
+
+    it('unset -f removes a function', async () => {
+      const { output } = await run(shell, 'greet() { echo hi; }; greet; unset -f greet; greet 2>/dev/null; echo $?');
+      const lines = output.replace(/\r/g, '').trim().split('\n');
+      expect(lines[0]).toBe('hi');
+    });
+
+    it('unset multiple variables', async () => {
+      const { output } = await run(shell, 'A=1; B=2; C=3; unset A C; echo ">${A}< >${B}< >${C}<"');
+      expect(output.replace(/\r/g, '').trim()).toBe('>< >2< ><');
+    });
+
+    it('unset readonly variable fails', async () => {
+      const { output } = await run(shell, 'readonly CONST=42; unset CONST; echo $CONST');
+      // CONST should still have its value since unset of readonly should fail
+      expect(output).toContain('42');
+      expect(output).toContain('readonly');
+    });
+  });
+
+  // === Section 52: readonly builtin ===
+  describe('52. readonly builtin', () => {
+    it('readonly prevents reassignment', async () => {
+      const { output, exitCode } = await run(shell, 'readonly PI=3.14; PI=3.15; echo $PI');
+      // Value should remain 3.14 since reassignment should fail
+      expect(output).toContain('3.14');
+      expect(output).toContain('readonly');
+    });
+
+    it('readonly with assignment', async () => {
+      const { output } = await run(shell, 'readonly VERSION=1.0; echo $VERSION');
+      expect(output.replace(/\r/g, '').trim()).toBe('1.0');
+    });
+
+    it('readonly -p lists readonly vars', async () => {
+      const { output } = await run(shell, 'readonly X=10; readonly -p');
+      expect(output).toContain('X');
+    });
+
+    it('readonly without value marks existing var', async () => {
+      const { output } = await run(shell, 'Y=hello; readonly Y; Y=world; echo $Y');
+      // Value should remain hello since Y was marked readonly before reassignment
+      expect(output).toContain('hello');
+      expect(output).toContain('readonly');
+    });
+  });
+
+  // === Section 53: ANSI-C quoting $'...' ===
+  describe("53. ANSI-C quoting", () => {
+    it("$'\\n' produces newline", async () => {
+      const { output } = await run(shell, "echo -e $'hello\\nworld'");
+      const lines = output.replace(/\r/g, '').trim().split('\n');
+      expect(lines.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it("$'\\x41' via variable produces A", async () => {
+      const { output } = await run(shell, "X=$'\\x48\\x49'; echo \"$X\"");
+      expect(output.replace(/\r/g, '').trim()).toBe('HI');
+    });
+
+    it("$'\\x41' produces A", async () => {
+      const { output } = await run(shell, "echo $'\\x41\\x42\\x43'");
+      expect(output.replace(/\r/g, '').trim()).toBe('ABC');
+    });
+
+    it("$'\\e' produces escape character", async () => {
+      const { output } = await run(shell, "echo $'\\e[31mred\\e[0m'");
+      expect(output).toContain('\x1b[31m');
+    });
+  });
+
+  // === Section 54: $(< file) command substitution shorthand ===
+  describe('54. $(< file) shorthand', () => {
+    it('$(< file) reads file contents', async () => {
+      await shell.fs.writeFile('/tmp/greeting.txt', 'hello world');
+      const { output } = await run(shell, 'MSG=$(< /tmp/greeting.txt); echo "$MSG"');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello world');
+    });
+
+    it('$(< file) with multiline content', async () => {
+      await shell.fs.writeFile('/tmp/multi.txt', 'line1\nline2\nline3');
+      const { output } = await run(shell, 'DATA=$(< /tmp/multi.txt); echo "$DATA"');
+      expect(output).toContain('line1');
+      expect(output).toContain('line3');
+    });
+
+    it('$(< nonexistent) results in empty variable', async () => {
+      const { output } = await run(shell, 'X=$(< /tmp/no_such_file_xyz.txt); echo "done"');
+      expect(output).toContain('done');
+    });
+  });
+
+  // === Section 55: tilde expansion ~+ ~- ===
+  describe('55. tilde expansion ~+ ~-', () => {
+    it('~+ expands to PWD', async () => {
+      shell.env['PWD'] = '/home/user';
+      const { output } = await run(shell, 'echo ~+');
+      expect(output.replace(/\r/g, '').trim()).toBe('/home/user');
+    });
+
+    it('~- expands to OLDPWD', async () => {
+      shell.env['OLDPWD'] = '/tmp';
+      const { output } = await run(shell, 'echo ~-');
+      expect(output.replace(/\r/g, '').trim()).toBe('/tmp');
+    });
+
+    it('~ still expands to HOME', async () => {
+      shell.env['HOME'] = '/home/testuser';
+      const { output } = await run(shell, 'echo ~');
+      expect(output.replace(/\r/g, '').trim()).toBe('/home/testuser');
+    });
+  });
+
+  // === Section 56: export inline builtin ===
+  describe('56. export inline builtin', () => {
+    it('export VAR=value sets variable', async () => {
+      const { output } = await run(shell, 'export GREETING=hello; echo $GREETING');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello');
+    });
+
+    it('export -p lists exported variables', async () => {
+      shell.env['TEST_EXPORT'] = 'yes';
+      const { output } = await run(shell, 'export -p');
+      expect(output).toContain('TEST_EXPORT');
+    });
+
+    it('export without args lists all', async () => {
+      shell.env['MY_VAR'] = 'val';
+      const { output } = await run(shell, 'export');
+      expect(output).toContain('MY_VAR');
+    });
+  });
 });

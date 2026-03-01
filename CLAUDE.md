@@ -181,7 +181,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1473 tests across 35 test files** — all passing.
+**1494 tests across 35 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -283,6 +283,12 @@ The shell supports:
 - **${var@Q/E/U/u/L/A}**: Variable transformations (quote, escape, case, assignment form)
 - **wait -n**: Wait for any background job to complete
 - **jobs -p/-l**: Print PIDs only, long format
+- **unset**: `unset VAR`, `unset -f FUNC`, `unset arr[N]` for arrays/assoc arrays, readonly enforcement
+- **readonly**: `readonly VAR=val`, `readonly -p`, prevents reassignment and unsetting
+- **$'...' ANSI-C quoting**: `$'\n'`, `$'\t'`, `$'\xHH'`, `$'\uHHHH'`, `$'\e'`, `$'\nnn'` octal
+- **$(< file)**: Command substitution shorthand to read file contents directly
+- **~+/~-**: Tilde expansion `~+` → `$PWD`, `~-` → `$OLDPWD`
+- **export inline**: `export VAR=val`, `export -p` lists all exported variables
 
 ## WASI Runtime (Tier 2)
 

@@ -62,6 +62,8 @@ export class Shell {
   dirStack: string[] = [];
   /** Local variable frames for function scoping — stack of {varName → savedValue|undefined} */
   private localVarStack: Map<string, string | undefined>[] = [];
+  /** Readonly variable names */
+  readonlyVars: Set<string> = new Set();
   private nextJobId = 1;
   private terminal?: ShiroTerminal;
 
@@ -522,6 +524,14 @@ export class Shell {
           }
 
           // Regular variable assignment: FOO=bar
+          if (this.readonlyVars.has(key)) {
+            stderrWriter(`${key}: readonly variable\r\n`);
+            exitCode = 1;
+            this.lastExitCode = exitCode;
+            this.env['?'] = String(exitCode);
+            lastOutput = '';
+            continue;
+          }
           this.env[key] = val;
           if (key === 'PWD') this.cwd = val;
           // Persist API keys to localStorage
@@ -807,7 +817,7 @@ export class Shell {
                          'return', 'trap', 'getopts', 'printf', 'type', 'command', 'hash',
                          'mapfile', 'readarray', 'select', 'alias', 'unalias', 'pushd', 'popd',
                          'dirs', 'let', 'exec', 'builtin', 'ulimit', 'umask',
-                         'complete', 'compgen', 'enable', 'disown'].includes(name)) {
+                         'complete', 'compgen', 'enable', 'disown', 'unset', 'readonly'].includes(name)) {
               writeStdout(`${name} is a shell builtin\r\n`);
             } else if (this.commands.get(name)) {
               writeStdout(`${name} is a registered command\r\n`);
@@ -830,7 +840,7 @@ export class Shell {
                    'true', 'false', 'break', 'continue', 'return', 'trap', 'printf',
                    'type', 'command', 'hash', 'mapfile', 'readarray', 'alias', 'unalias',
                    'pushd', 'popd', 'dirs', 'let', 'exec', 'builtin', 'ulimit', 'umask',
-                   'complete', 'compgen', 'enable', 'disown'].includes(name)) {
+                   'complete', 'compgen', 'enable', 'disown', 'unset', 'readonly'].includes(name)) {
                 writeStdout(`${name}\r\n`);
               } else {
                 exitCode = 1;
@@ -1182,6 +1192,115 @@ export class Shell {
               this.env['#'] = String(shifted.length);
               this.env['@'] = shifted.join(' ');
               exitCode = 0;
+            }
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+
+        // Shell builtin: unset — remove variables or functions
+        if (effectiveCmdName === 'unset') {
+          let unsetFunc = false;
+          const unsetNames: string[] = [];
+          for (const arg of cmdArgs) {
+            if (arg === '-f') { unsetFunc = true; continue; }
+            if (arg === '-v') { unsetFunc = false; continue; }
+            unsetNames.push(arg);
+          }
+          exitCode = 0;
+          for (const name of unsetNames) {
+            if (unsetFunc) {
+              delete this.functions[name];
+            } else {
+              // Check for array element: arr[idx]
+              const bracketMatch = name.match(/^(\w+)\[(.+)\]$/);
+              if (bracketMatch) {
+                const arrName = bracketMatch[1];
+                const idx = bracketMatch[2];
+                const assoc = this.assocArrays.get(arrName);
+                if (assoc) {
+                  assoc.delete(idx);
+                } else {
+                  const arr = this.arrays.get(arrName);
+                  if (arr) {
+                    const numIdx = parseInt(idx, 10);
+                    if (!isNaN(numIdx) && numIdx >= 0 && numIdx < arr.length) {
+                      arr[numIdx] = '';
+                    }
+                  }
+                }
+              } else if (this.readonlyVars.has(name)) {
+                stderrWriter(`unset: ${name}: cannot unset: readonly variable\r\n`);
+                exitCode = 1;
+              } else {
+                delete this.env[name];
+                this.namerefs.delete(name);
+                this.arrays.delete(name);
+                this.assocArrays.delete(name);
+              }
+            }
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+
+        // Shell builtin: readonly — mark variables as readonly
+        if (effectiveCmdName === 'readonly') {
+          exitCode = 0;
+          if (cmdArgs.length === 0 || (cmdArgs.length === 1 && cmdArgs[0] === '-p')) {
+            // List readonly variables
+            for (const name of [...this.readonlyVars].sort()) {
+              const val = this.env[name];
+              writeStdout(`declare -r ${name}${val !== undefined ? `="${val}"` : ''}\r\n`);
+            }
+          } else {
+            for (const arg of cmdArgs) {
+              if (arg === '-p') continue;
+              const eqIdx = arg.indexOf('=');
+              if (eqIdx !== -1) {
+                const name = arg.slice(0, eqIdx);
+                const val = arg.slice(eqIdx + 1);
+                if (this.readonlyVars.has(name)) {
+                  stderrWriter(`readonly: ${name}: readonly variable\r\n`);
+                  exitCode = 1;
+                } else {
+                  this.env[name] = val;
+                  this.readonlyVars.add(name);
+                }
+              } else {
+                this.readonlyVars.add(arg);
+              }
+            }
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+
+        // Shell builtin: export — set/list exported variables
+        if (effectiveCmdName === 'export') {
+          exitCode = 0;
+          if (cmdArgs.length === 0 || (cmdArgs.length === 1 && cmdArgs[0] === '-p')) {
+            const lines = Object.entries(this.env)
+              .filter(([k]) => !k.match(/^[0-9?#@*!_$]$/))
+              .map(([k, v]) => `declare -x ${k}="${v}"`)
+              .sort();
+            for (const l of lines) writeStdout(l + '\r\n');
+          } else {
+            for (const arg of cmdArgs) {
+              if (arg === '-p' || arg === '-n') continue;
+              const eqIdx = arg.indexOf('=');
+              if (eqIdx !== -1) {
+                const name = arg.slice(0, eqIdx);
+                const val = arg.slice(eqIdx + 1);
+                this.env[name] = val;
+              }
+              // In browser shell, all variables are effectively exported
             }
           }
           this.lastExitCode = exitCode;
@@ -1835,11 +1954,24 @@ export class Shell {
         const after = line[i + 1] || '';
         // Only expand after = in assignment context (VAR=~), not in operators like =~
         const isAssignContext = before === '=' ? (i >= 2 && /[A-Za-z0-9_]/.test(line[i - 2])) : true;
-        if ((i === 0 || /[\s=]/.test(before)) && isAssignContext && (/[\/\s;|&>]/.test(after) || i + 1 >= line.length)) {
-          const home = this.env['HOME'] || '/home/user';
-          result += home;
-          i++;
-          continue;
+        if ((i === 0 || /[\s=]/.test(before)) && isAssignContext) {
+          // ~+ expands to $PWD, ~- expands to $OLDPWD
+          if (after === '+' && (/[\/\s;|&>]/.test(line[i + 2] || '') || i + 2 >= line.length)) {
+            result += this.env['PWD'] || this.cwd;
+            i += 2;
+            continue;
+          }
+          if (after === '-' && (/[\/\s;|&>]/.test(line[i + 2] || '') || i + 2 >= line.length)) {
+            result += this.env['OLDPWD'] || this.cwd;
+            i += 2;
+            continue;
+          }
+          if (/[\/\s;|&>]/.test(after) || i + 1 >= line.length) {
+            const home = this.env['HOME'] || '/home/user';
+            result += home;
+            i++;
+            continue;
+          }
         }
       }
 
@@ -2469,6 +2601,53 @@ export class Shell {
         continue;
       }
 
+      // $'...' ANSI-C quoting: process escape sequences
+      if (ch === '$' && input[i + 1] === "'" && !inSingle && !inDouble) {
+        i += 2; // skip $'
+        while (i < input.length && input[i] !== "'") {
+          if (input[i] === '\\' && i + 1 < input.length) {
+            const esc = input[i + 1];
+            switch (esc) {
+              case 'n': current += '\n'; i += 2; break;
+              case 't': current += '\t'; i += 2; break;
+              case 'r': current += '\r'; i += 2; break;
+              case '\\': current += '\\'; i += 2; break;
+              case "'": current += "'"; i += 2; break;
+              case '"': current += '"'; i += 2; break;
+              case 'a': current += '\x07'; i += 2; break;
+              case 'b': current += '\b'; i += 2; break;
+              case 'e': case 'E': current += '\x1b'; i += 2; break;
+              case 'f': current += '\f'; i += 2; break;
+              case 'v': current += '\v'; i += 2; break;
+              case 'x': {
+                const hex = input.slice(i + 2, i + 4).match(/^[0-9a-fA-F]{1,2}/);
+                if (hex) { current += String.fromCharCode(parseInt(hex[0], 16)); i += 2 + hex[0].length; }
+                else { current += '\\x'; i += 2; }
+                break;
+              }
+              case 'u': {
+                const uni = input.slice(i + 2, i + 6).match(/^[0-9a-fA-F]{1,4}/);
+                if (uni) { current += String.fromCodePoint(parseInt(uni[0], 16)); i += 2 + uni[0].length; }
+                else { current += '\\u'; i += 2; }
+                break;
+              }
+              default:
+                if (esc >= '0' && esc <= '7') {
+                  const oct = input.slice(i + 1, i + 4).match(/^[0-7]{1,3}/);
+                  if (oct) { current += String.fromCharCode(parseInt(oct[0], 8)); i += 1 + oct[0].length; }
+                  else { current += '\\'; i++; }
+                } else {
+                  current += '\\' + esc; i += 2;
+                }
+            }
+          } else {
+            current += input[i]; i++;
+          }
+        }
+        if (i < input.length) i++; // skip closing '
+        continue;
+      }
+
       if (ch === "'" && !inDouble) {
         inSingle = !inSingle;
         i++;
@@ -2593,9 +2772,24 @@ export class Shell {
           j++;
         }
         const subCmd = input.slice(i + 2, j - 1);
-        const subResult = await this.exec(subCmd);
-        if (subResult.stderr) stderrWriter(subResult.stderr);
-        let subOut = subResult.stdout.replace(/[\r\n]+$/, '');
+        // $(< file) shorthand: read file contents directly
+        const fileReadMatch = subCmd.trim().match(/^<\s*(.+)$/);
+        let subOut: string;
+        if (fileReadMatch) {
+          const filePath = this.expandVars(fileReadMatch[1].trim()).replace(/^["']|["']$/g, '');
+          const resolved = this.fs.resolvePath(filePath, this.cwd);
+          try {
+            subOut = await this.fs.readFile(resolved, 'utf8') as string;
+            subOut = subOut.replace(/[\r\n]+$/, '');
+          } catch {
+            stderrWriter(`${filePath}: No such file or directory\r\n`);
+            subOut = '';
+          }
+        } else {
+          const subResult = await this.exec(subCmd);
+          if (subResult.stderr) stderrWriter(subResult.stderr);
+          subOut = subResult.stdout.replace(/[\r\n]+$/, '');
+        }
         // If $() appears as the RHS of a variable assignment (VAR=$(...)), wrap the
         // output in double-quotes so tokenize() preserves spaces. This matches bash
         // semantics: VAR=$(cmd) preserves spaces, bare $(cmd) word-splits.
