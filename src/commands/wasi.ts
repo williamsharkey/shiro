@@ -1,5 +1,6 @@
 import { Command, CommandContext } from './index';
 import { WasiRT, WasiExit, WasiConfig } from '../wasi-runtime';
+import { findPackage, getCompiledModule } from '../wasi-packages';
 
 /**
  * wasi — Run WASM+WASI binaries in Shiro
@@ -7,6 +8,7 @@ import { WasiRT, WasiExit, WasiConfig } from '../wasi-runtime';
  * Usage:
  *   wasi run <file.wasm> [args...]    Run a local WASM binary
  *   wasi run <url> [args...]          Fetch and run a remote WASM binary
+ *   wasi exec <pkg> [args...]         Run a package (downloads if needed, like npx)
  *   wasi                              Show help
  */
 export const wasiCmd: Command = {
@@ -17,17 +19,24 @@ export const wasiCmd: Command = {
     const subcmd = ctx.args[0];
 
     if (!subcmd || subcmd === '--help' || subcmd === '-h') {
-      ctx.stdout += 'Usage: wasi run <file.wasm|url> [args...]\n';
+      ctx.stdout += 'Usage:\n';
+      ctx.stdout += '  wasi run <file.wasm|url> [args...]   Run a WASM binary\n';
+      ctx.stdout += '  wasi exec <package> [args...]        Run a package (auto-downloads)\n';
       ctx.stdout += '\nRun any WASM+WASI binary against Shiro\'s filesystem.\n';
       ctx.stdout += '\nExamples:\n';
       ctx.stdout += '  wasi run ./program.wasm\n';
       ctx.stdout += '  wasi run https://example.com/tool.wasm --flag\n';
+      ctx.stdout += '  wasi exec cowsay "hello world"\n';
       return 0;
+    }
+
+    if (subcmd === 'exec') {
+      return wasiExec(ctx);
     }
 
     if (subcmd !== 'run') {
       ctx.stderr += `wasi: unknown subcommand '${subcmd}'\n`;
-      ctx.stderr += 'Usage: wasi run <file.wasm|url> [args...]\n';
+      ctx.stderr += 'Usage: wasi run <file.wasm|url> [args...] | wasi exec <package> [args...]\n';
       return 1;
     }
 
@@ -107,3 +116,50 @@ export const wasiCmd: Command = {
     }
   },
 };
+
+/**
+ * wasi exec <pkg> [args...] — like npx for WASM packages.
+ * Downloads the package if not cached, compiles, and runs immediately.
+ */
+async function wasiExec(ctx: CommandContext): Promise<number> {
+  const pkgName = ctx.args[1];
+  if (!pkgName) {
+    ctx.stderr += 'wasi exec: missing package name\n';
+    ctx.stderr += 'Usage: wasi exec <package> [args...]\n';
+    return 1;
+  }
+
+  const pkg = findPackage(pkgName);
+  if (!pkg) {
+    ctx.stderr += `wasi exec: unknown package '${pkgName}'\n`;
+    ctx.stderr += 'Run "pkg available" to see available packages.\n';
+    return 1;
+  }
+
+  const wasmArgs = ctx.args.slice(2);
+
+  try {
+    const wasmModule = await getCompiledModule(pkg.name, (msg) => {
+      ctx.stderr += `  ${msg}\n`;
+    });
+
+    const config: WasiConfig = {
+      fs: ctx.fs,
+      cwd: ctx.cwd,
+      args: [pkg.name, ...wasmArgs],
+      env: { ...ctx.env },
+      stdin: ctx.stdin || '',
+      onStdout: (text) => { ctx.stdout += text; },
+      onStderr: (text) => { ctx.stderr += text; },
+      preopens: { '/': '/', '.': ctx.cwd },
+    };
+
+    const wasi = new WasiRT(config);
+    await wasi.preloadTree(ctx.cwd, 3, 100);
+    return await wasi.run(wasmModule);
+  } catch (e: any) {
+    if (e instanceof WasiExit) return e.code;
+    ctx.stderr += `wasi exec: ${e.message}\n`;
+    return 1;
+  }
+}

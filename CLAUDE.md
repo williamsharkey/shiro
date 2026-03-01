@@ -181,7 +181,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1194 tests across 35 test files** — all passing.
+**1200 tests across 35 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -250,8 +250,8 @@ Shiro has a full WASI preview1 runtime (`src/wasi-runtime.ts`) enabling real WAS
 - Deferred filesystem operations (unlink, rmdir, rename) queued during execution, flushed after
 
 **Package Manager (`pkg`):**
-- 12 verified packages from Wasmer registry (cdn.wasmer.io webc containers)
-- Categories: fun (cowsay, fortune, lolcat, figlet), coreutils (coreutils, grep, sed), languages (quickjs, lua), tools (sqlite, viu, util-linux)
+- 22 verified packages from Wasmer registry (cdn.wasmer.io webc containers)
+- Categories: fun (cowsay, fortune, lolcat, figlet), coreutils (coreutils, grep, sed), languages (quickjs, lua, ruby, php), shells (bash, dash), tools (sqlite, viu, util-linux, openssl, wabt, brotli, uuid, qr2text, optipng)
 - IndexedDB cache for downloaded WASM binaries, compiled WebAssembly.Module memory cache
 - WebC container extraction: scans for WASM magic bytes, walks section headers to find module boundaries
 - `pkg install <name>` writes `#!wasi-pkg <name>` stubs to `/usr/local/bin/` for PATH lookup
@@ -259,10 +259,11 @@ Shiro has a full WASI preview1 runtime (`src/wasi-runtime.ts`) enabling real WAS
 
 **Usage:**
 ```bash
-pkg available              # List 12 available WASM packages
+pkg available              # List 22 available WASM packages
 pkg install cowsay         # Download and install (writes PATH stub)
 cowsay hello               # Runs via PATH stub → WASM package cache
 wasi run ./program.wasm    # Run any WASM+WASI binary
+wasi exec cowsay "hello"   # Run package directly (auto-downloads, like npx)
 ```
 
 **Key files:** `src/wasi-runtime.ts`, `src/wasi-packages.ts`, `src/commands/wasi.ts`, `src/commands/pkg.ts`

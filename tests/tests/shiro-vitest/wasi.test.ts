@@ -914,7 +914,7 @@ describe('wasi-packages', () => {
 
   it('listAvailable returns all packages', () => {
     const all = listAvailable();
-    expect(all.length).toBeGreaterThanOrEqual(12);
+    expect(all.length).toBeGreaterThanOrEqual(20);
   });
 
   it('isAvailableAsPackage("cowsay") returns package', () => {
@@ -931,6 +931,21 @@ describe('wasi-packages', () => {
     expect(findPackage('qjs')?.name).toBe('quickjs');
     expect(findPackage('sqlite3')?.name).toBe('sqlite');
     expect(findPackage('hexdump')?.name).toBe('util-linux');
+    expect(findPackage('wat2wasm')?.name).toBe('wabt');
+    expect(findPackage('irb')?.name).toBe('ruby');
+  });
+
+  it('includes new packages (bash, ruby, php, openssl, wabt, etc.)', () => {
+    expect(findPackage('bash')).toBeDefined();
+    expect(findPackage('dash')).toBeDefined();
+    expect(findPackage('ruby')).toBeDefined();
+    expect(findPackage('php')).toBeDefined();
+    expect(findPackage('openssl')).toBeDefined();
+    expect(findPackage('wabt')).toBeDefined();
+    expect(findPackage('brotli')).toBeDefined();
+    expect(findPackage('uuid')).toBeDefined();
+    expect(findPackage('qr2text')).toBeDefined();
+    expect(findPackage('optipng')).toBeDefined();
   });
 
   it('all packages have webc format and cdn.wasmer.io URLs', () => {
@@ -1104,6 +1119,23 @@ describe('wasi command', () => {
     expect(exitCode).toBe(1);
     expect(output).toContain('unknown subcommand');
   });
+
+  it('wasi exec (no package) exits 1', async () => {
+    const { exitCode } = await run(shell, 'wasi exec');
+    expect(exitCode).toBe(1);
+  });
+
+  it('wasi exec nonexistent exits 1', async () => {
+    const { exitCode, output } = await run(shell, 'wasi exec nonexistent');
+    expect(exitCode).toBe(1);
+    expect(output).toContain('unknown package');
+  });
+
+  it('wasi help shows exec subcommand', async () => {
+    const { output, exitCode } = await run(shell, 'wasi --help');
+    expect(exitCode).toBe(0);
+    expect(output).toContain('wasi exec');
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1137,6 +1169,25 @@ describe('Shell WASM integration', () => {
     const { output, exitCode } = await run(shell, 'wasi run /home/user/hello.wasm');
     expect(exitCode).toBe(0);
     expect(output).toContain('hello');
+  });
+
+  it('pipes stdin to WASM binary via shell pipe', async () => {
+    const wasmBytes = buildStdinEchoWasm();
+    await fs.writeFile('/home/user/echo.wasm', wasmBytes);
+
+    // echo "test data" | wasi run ./echo.wasm
+    const { output, exitCode } = await run(shell, 'echo "test data" | wasi run /home/user/echo.wasm');
+    expect(exitCode).toBe(0);
+    expect(output).toContain('test data');
+  });
+
+  it('passes args to WASM binary through wasi run', async () => {
+    const wasmBytes = buildArgsEchoWasm();
+    await fs.writeFile('/home/user/argecho.wasm', wasmBytes);
+
+    const { output, exitCode } = await run(shell, 'wasi run /home/user/argecho.wasm world');
+    expect(exitCode).toBe(0);
+    expect(output).toContain('world');
   });
 
   it('finds .wasm files in PATH via suffix search', async () => {
