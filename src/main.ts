@@ -99,8 +99,7 @@ import { pgrepCmd, pkillCmd } from './commands/pgrep';
 import { nprocCmd } from './commands/nproc';
 import { getconfCmd } from './commands/getconf';
 import { iconvCmd } from './commands/iconv';
-import { wasiCmd } from './commands/wasi';
-import { pkgCmd } from './commands/pkg';
+// wasi and pkg are lazy-loaded (pulls in ~960-line wasi-runtime.ts)
 import { processTable } from './process-table';
 import { iframeServer } from './iframe-server';
 import { unixCommands } from './commands/unix';
@@ -336,8 +335,10 @@ async function main() {
     () => import('./commands/magick').then(m => m.convertCmd)), 'src/commands/magick.ts');
   registerCommand(commands, lazyCommand('magick', 'ImageMagick (magick-wasm)',
     () => import('./commands/magick').then(m => m.magickCmd)), 'src/commands/magick.ts');
-  registerCommand(commands, wasiCmd, 'src/commands/wasi.ts');
-  registerCommand(commands, pkgCmd, 'src/commands/pkg.ts');
+  registerCommand(commands, lazyCommand('wasi', 'Run WASM+WASI binaries',
+    () => import('./commands/wasi').then(m => m.wasiCmd)), 'src/commands/wasi.ts');
+  registerCommand(commands, lazyCommand('pkg', 'WASM package manager',
+    () => import('./commands/pkg').then(m => m.pkgCmd)), 'src/commands/pkg.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {
