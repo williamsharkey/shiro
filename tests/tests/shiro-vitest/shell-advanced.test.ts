@@ -1351,4 +1351,201 @@ describe('Shell Advanced', () => {
       expect(result.output.replace(/\r/g, '').trim()).toBe('yes');
     });
   });
+
+  // ─── 23. source / exec / builtin ────────────────────────────────────────────
+
+  describe('source / exec / builtin', () => {
+    it('source executes script in current shell scope', async () => {
+      await fs.writeFile('/tmp/test.sh', 'MYVAR=hello\n');
+      await run(shell, 'source /tmp/test.sh');
+      expect(shell.env['MYVAR']).toBe('hello');
+    });
+
+    it('. is alias for source', async () => {
+      await fs.writeFile('/tmp/test2.sh', 'DOT_VAR=world\n');
+      await run(shell, '. /tmp/test2.sh');
+      expect(shell.env['DOT_VAR']).toBe('world');
+    });
+
+    it('source non-existent file returns error', async () => {
+      const result = await run(shell, 'source /tmp/nonexistent.sh');
+      expect(result.exitCode).toBe(1);
+    });
+
+    it('exec runs command', async () => {
+      const { output } = await run(shell, 'exec echo hello');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello');
+    });
+
+    it('builtin runs builtin ignoring functions', async () => {
+      await run(shell, 'echo() { printf "custom: %s" "$1"; }');
+      const { output } = await run(shell, 'builtin echo hello');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello');
+    });
+  });
+
+  // ─── 24. shell stubs ──────────────────────────────────────────────────────
+
+  describe('shell stubs', () => {
+    it('ulimit -n returns file descriptor limit', async () => {
+      const { output, exitCode } = await run(shell, 'ulimit -n');
+      expect(exitCode).toBe(0);
+      expect(output.replace(/\r/g, '').trim()).toBe('1024');
+    });
+
+    it('umask returns 0022', async () => {
+      const { output, exitCode } = await run(shell, 'umask');
+      expect(exitCode).toBe(0);
+      expect(output.replace(/\r/g, '').trim()).toBe('0022');
+    });
+
+    it('complete is a silent no-op', async () => {
+      const result = await run(shell, 'complete -F _my_func mycommand');
+      expect(result.exitCode).toBe(0);
+    });
+
+    it('enable is a silent no-op', async () => {
+      const result = await run(shell, 'enable -n test');
+      expect(result.exitCode).toBe(0);
+    });
+
+    it('disown is a silent no-op', async () => {
+      const result = await run(shell, 'disown');
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
+  // ─── 25. array improvements ───────────────────────────────────────────────
+
+  describe('array improvements', () => {
+    it('${#arr[N]} returns element length', async () => {
+      shell.arrays.set('words', ['hello', 'hi', 'greetings']);
+      const { output } = await run(shell, 'echo ${#words[0]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('5');
+    });
+
+    it('${#arr[N]} for assoc array element length', async () => {
+      shell.assocArrays.set('map', new Map([['key', 'longvalue']]));
+      const { output } = await run(shell, 'echo ${#map[key]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('9');
+    });
+
+    it('iterate over associative array keys', async () => {
+      shell.assocArrays.set('colors', new Map([['red', '#ff0000'], ['blue', '#0000ff']]));
+      const { output } = await run(shell, 'for k in ${!colors[@]}; do echo "$k"; done');
+      const lines = output.replace(/\r/g, '').trim().split('\n').sort();
+      expect(lines).toEqual(['blue', 'red']);
+    });
+
+    it('iterate over associative array values', async () => {
+      shell.assocArrays.set('nums', new Map([['a', '1'], ['b', '2']]));
+      const { output } = await run(shell, 'for v in ${nums[@]}; do echo "$v"; done');
+      const lines = output.replace(/\r/g, '').trim().split('\n').sort();
+      expect(lines).toEqual(['1', '2']);
+    });
+  });
+
+  // ─── 26. string operations ────────────────────────────────────────────────
+
+  describe('string operations', () => {
+    it('${var/pattern/rep} replaces first match', async () => {
+      shell.env['s'] = 'hello world hello';
+      const { output } = await run(shell, 'echo ${s/hello/hi}');
+      expect(output.replace(/\r/g, '').trim()).toBe('hi world hello');
+    });
+
+    it('${var//pattern/rep} replaces all matches', async () => {
+      shell.env['s'] = 'hello world hello';
+      const { output } = await run(shell, 'echo ${s//hello/hi}');
+      expect(output.replace(/\r/g, '').trim()).toBe('hi world hi');
+    });
+
+    it('${var:offset:length} extracts substring', async () => {
+      shell.env['s'] = 'hello world';
+      const { output } = await run(shell, 'echo ${s:6:5}');
+      expect(output.replace(/\r/g, '').trim()).toBe('world');
+    });
+
+    it('${var:offset} extracts from offset to end', async () => {
+      shell.env['s'] = 'hello world';
+      const { output } = await run(shell, 'echo ${s:6}');
+      expect(output.replace(/\r/g, '').trim()).toBe('world');
+    });
+
+    it('${var#pattern} removes shortest prefix', async () => {
+      shell.env['path'] = '/home/user/file.txt';
+      const { output } = await run(shell, 'echo ${path#*/}');
+      expect(output.replace(/\r/g, '').trim()).toBe('home/user/file.txt');
+    });
+
+    it('${var##pattern} removes longest prefix', async () => {
+      shell.env['path'] = '/home/user/file.txt';
+      const { output } = await run(shell, 'echo ${path##*/}');
+      expect(output.replace(/\r/g, '').trim()).toBe('file.txt');
+    });
+
+    it('${var%pattern} removes shortest suffix', async () => {
+      shell.env['f'] = 'file.tar.gz';
+      const { output } = await run(shell, 'echo ${f%.*}');
+      expect(output.replace(/\r/g, '').trim()).toBe('file.tar');
+    });
+
+    it('${var%%pattern} removes longest suffix', async () => {
+      shell.env['f'] = 'file.tar.gz';
+      const { output } = await run(shell, 'echo ${f%%.*}');
+      expect(output.replace(/\r/g, '').trim()).toBe('file');
+    });
+
+    it('${var^^} converts to uppercase', async () => {
+      shell.env['s'] = 'hello';
+      const { output } = await run(shell, 'echo ${s^^}');
+      expect(output.replace(/\r/g, '').trim()).toBe('HELLO');
+    });
+
+    it('${var,,} converts to lowercase', async () => {
+      shell.env['s'] = 'HELLO';
+      const { output } = await run(shell, 'echo ${s,,}');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello');
+    });
+
+    it('${var:-default} uses default when unset', async () => {
+      const { output } = await run(shell, 'echo ${UNSET_VAR:-default_val}');
+      expect(output.replace(/\r/g, '').trim()).toBe('default_val');
+    });
+
+    it('${var:=default} assigns default when unset', async () => {
+      await run(shell, 'echo ${NEW_VAR:=assigned}');
+      expect(shell.env['NEW_VAR']).toBe('assigned');
+    });
+
+    it('${#var} returns string length', async () => {
+      shell.env['s'] = 'hello';
+      const { output } = await run(shell, 'echo ${#s}');
+      expect(output.replace(/\r/g, '').trim()).toBe('5');
+    });
+  });
+
+  // ─── 27. while read patterns ──────────────────────────────────────────────
+
+  describe('while read patterns', () => {
+    it('while read loop with counter', async () => {
+      shell.env['__PIPE_STDIN'] = 'a\nb\nc\n';
+      const { output } = await run(shell, 'n=0; while read line; do n=$((n+1)); done; echo $n');
+      expect(output.replace(/\r/g, '').trim()).toBe('3');
+    });
+
+    it('read splits into multiple vars', async () => {
+      shell.env['__PIPE_STDIN'] = 'hello world 123\n';
+      await run(shell, 'read a b c');
+      expect(shell.env['a']).toBe('hello');
+      expect(shell.env['b']).toBe('world');
+      expect(shell.env['c']).toBe('123');
+    });
+
+    it('read -r preserves backslashes', async () => {
+      shell.env['__PIPE_STDIN'] = 'path\\to\\file\n';
+      await run(shell, 'read -r line');
+      expect(shell.env['line']).toBe('path\\to\\file');
+    });
+  });
 });

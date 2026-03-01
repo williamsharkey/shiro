@@ -721,7 +721,8 @@ export class Shell {
                          'declare', 'local', 'typeset', 'true', 'false', 'break', 'continue',
                          'return', 'trap', 'getopts', 'printf', 'type', 'command', 'hash',
                          'mapfile', 'readarray', 'select', 'alias', 'unalias', 'pushd', 'popd',
-                         'dirs', 'let'].includes(name)) {
+                         'dirs', 'let', 'exec', 'builtin', 'ulimit', 'umask',
+                         'complete', 'compgen', 'enable', 'disown'].includes(name)) {
               writeStdout(`${name} is a shell builtin\r\n`);
             } else if (this.commands.get(name)) {
               writeStdout(`${name} is a registered command\r\n`);
@@ -743,7 +744,8 @@ export class Shell {
                   ['cd', 'echo', 'read', 'eval', 'set', 'export', 'source', 'shift',
                    'true', 'false', 'break', 'continue', 'return', 'trap', 'printf',
                    'type', 'command', 'hash', 'mapfile', 'readarray', 'alias', 'unalias',
-                   'pushd', 'popd', 'dirs', 'let'].includes(name)) {
+                   'pushd', 'popd', 'dirs', 'let', 'exec', 'builtin', 'ulimit', 'umask',
+                   'complete', 'compgen', 'enable', 'disown'].includes(name)) {
                 writeStdout(`${name}\r\n`);
               } else {
                 exitCode = 1;
@@ -1059,6 +1061,87 @@ export class Shell {
           }
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+
+        // Shell builtin: source / . — execute script in current shell scope
+        if (effectiveCmdName === 'source') {
+          if (cmdArgs.length === 0) {
+            stderrWriter('source: filename argument required\r\n');
+            exitCode = 1;
+          } else {
+            const scriptPath = this.fs.resolvePath(cmdArgs[0], this.cwd);
+            try {
+              const raw = await this.fs.readFile(scriptPath);
+              const content = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+              exitCode = await this.execute(content, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
+            } catch (e: any) {
+              stderrWriter(`source: ${cmdArgs[0]}: ${e.message}\r\n`);
+              exitCode = 1;
+            }
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+
+        // Shell builtin: exec — replace shell with command (in browser, just execute)
+        if (effectiveCmdName === 'exec') {
+          if (cmdArgs.length > 0) {
+            const execCmd = cmdArgs.join(' ');
+            exitCode = await this.execute(execCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
+          }
+          // exec with no args can be used for fd redirects only (handled by redirect processing)
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+
+        // Shell builtin: builtin — run builtin ignoring functions
+        if (effectiveCmdName === 'builtin') {
+          if (cmdArgs.length > 0) {
+            const builtinCmd = cmdArgs.join(' ');
+            // Temporarily remove function override
+            const savedFn = this.functions[cmdArgs[0]];
+            delete this.functions[cmdArgs[0]];
+            exitCode = await this.execute(builtinCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
+            if (savedFn) this.functions[cmdArgs[0]] = savedFn;
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+
+        // Shell stubs for commonly expected builtins (no-ops that scripts depend on)
+        if (effectiveCmdName === 'ulimit') {
+          // ulimit -n → file descriptor limit, etc.
+          if (cmdArgs.includes('-n')) { writeStdout('1024\r\n'); }
+          else if (cmdArgs.includes('-s')) { writeStdout('8192\r\n'); }
+          else if (cmdArgs.length === 0 || cmdArgs.includes('-f')) { writeStdout('unlimited\r\n'); }
+          this.lastExitCode = 0;
+          this.env['?'] = '0';
+          lastOutput = '';
+          continue;
+        }
+        if (effectiveCmdName === 'umask') {
+          if (cmdArgs.length === 0) {
+            writeStdout('0022\r\n');
+          }
+          this.lastExitCode = 0;
+          this.env['?'] = '0';
+          lastOutput = '';
+          continue;
+        }
+        if (effectiveCmdName === 'complete' || effectiveCmdName === 'compgen' ||
+            effectiveCmdName === 'compopt' || effectiveCmdName === 'enable' ||
+            effectiveCmdName === 'disown') {
+          // Bash completion and job management stubs — silent no-op
+          this.lastExitCode = 0;
+          this.env['?'] = '0';
           lastOutput = '';
           continue;
         }
@@ -1605,6 +1688,20 @@ export class Shell {
       if (assoc) return String(assoc.size);
       const arr = this.arrays.get(name);
       return String(arr ? arr.length : 0);
+    }
+    // ${#arr[N]} — length of array element
+    const arrElemLenMatch = inner.match(/^#([A-Za-z_][A-Za-z0-9_]*)\[(.+)\]$/);
+    if (arrElemLenMatch) {
+      const name = arrElemLenMatch[1];
+      const key = arrElemLenMatch[2];
+      const assoc = this.assocArrays.get(name);
+      if (assoc) return String((assoc.get(key) ?? '').length);
+      const arr = this.arrays.get(name);
+      if (arr) {
+        const idx = parseInt(key, 10);
+        return String((arr[idx] ?? '').length);
+      }
+      return '0';
     }
 
     // ${arr[@]:start:len} or ${arr[@]:start} — array slicing

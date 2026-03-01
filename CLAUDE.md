@@ -181,7 +181,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1350 tests across 35 test files** — all passing.
+**1380 tests across 35 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -265,6 +265,9 @@ The shell supports:
 - **Process substitution**: `<(cmd)`, `>(cmd)` virtual file descriptors
 - **Regex matching**: `[[ string =~ pattern ]]` with `BASH_REMATCH` array
 - **Test improvements**: `-s` (non-zero size), `-L`/`-h` (symlink), `-a`/`-o` logical, `<`/`>` string comparison
+- **source / exec / builtin**: `source file` runs in current scope, `exec cmd`, `builtin cmd` bypasses functions
+- **Shell stubs**: `ulimit`, `umask`, `complete`, `compgen`, `enable`, `disown` (no-op stubs for script compatibility)
+- **Array element length**: `${#arr[N]}` returns length of element at index N
 
 ## WASI Runtime (Tier 2)
 
