@@ -266,7 +266,10 @@ export class WasiRT {
         environ_sizes_get: this.environ_sizes_get.bind(this),
         clock_time_get: this.clock_time_get.bind(this),
         clock_res_get: this.clock_res_get.bind(this),
+        fd_advise: this.fd_advise.bind(this),
+        fd_allocate: this.fd_allocate.bind(this),
         fd_close: this.fd_close.bind(this),
+        fd_datasync: this.fd_datasync.bind(this),
         fd_fdstat_get: this.fd_fdstat_get.bind(this),
         fd_fdstat_set_flags: this.fd_fdstat_set_flags.bind(this),
         fd_filestat_get: this.fd_filestat_get.bind(this),
@@ -741,6 +744,18 @@ export class WasiRT {
     const view = this.getView();
     view.setBigUint64(offsetPtr, BigInt(f.offset), true);
     return WASI_ESUCCESS;
+  }
+
+  private fd_advise(_fd: number, _offset: bigint, _len: bigint, _advice: number): number {
+    return WASI_ESUCCESS; // advisory only, no-op
+  }
+
+  private fd_allocate(_fd: number, _offset: bigint, _len: bigint): number {
+    return WASI_ESUCCESS; // no-op — buffers grow dynamically
+  }
+
+  private fd_datasync(_fd: number): number {
+    return WASI_ESUCCESS; // no-op
   }
 
   private fd_sync(_fd: number): number {

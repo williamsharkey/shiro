@@ -249,7 +249,7 @@ The shell supports:
 Shiro has a full WASI preview1 runtime (`src/wasi-runtime.ts`) enabling real WASM binaries to run in-browser. This is Tier 2 of the three-tier architecture (Tier 1: JS commands, Tier 2: WASM+WASI, Tier 3: x86 emulation).
 
 **Architecture:**
-- 37 WASI syscall bindings: fd_read/write/seek, path_open, clock_time_get, random_get, proc_exit, etc.
+- 40 WASI syscall bindings: fd_read/write/seek/advise/allocate/datasync, path_open, clock_time_get, random_get, proc_exit, etc.
 - File descriptor table with stdin(0), stdout(1), stderr(2), preopens(3+)
 - Pre-opens map `/` and `.` (cwd) into the Shiro virtual filesystem
 - `preloadTree()` recursively caches the cwd file tree (3 levels, 100 files cap) before WASM execution
