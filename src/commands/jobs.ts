@@ -8,16 +8,25 @@ export const jobsCmd: Command = {
   description: 'List background jobs',
   async exec(ctx: CommandContext): Promise<number> {
     const shell = ctx.shell;
+    const pOnly = ctx.args.includes('-p');
+    const longFormat = ctx.args.includes('-l');
+
     if (shell.backgroundJobs.size === 0) {
-      ctx.stdout = 'No background jobs.\n';
+      if (!pOnly) ctx.stdout = 'No background jobs.\n';
       return 0;
     }
 
     for (const [id, job] of shell.backgroundJobs) {
-      const status = job.status === 'running' ? 'Running'
-        : job.status === 'done' ? `Done (${job.exitCode})`
-        : `Failed (${job.exitCode})`;
-      ctx.stdout += `[${id}] ${status}\t${job.command}\n`;
+      if (pOnly) {
+        ctx.stdout += `${id}\n`;
+      } else {
+        const status = job.status === 'running' ? 'Running'
+          : job.status === 'done' ? `Done (${job.exitCode})`
+          : `Failed (${job.exitCode})`;
+        ctx.stdout += longFormat
+          ? `[${id}] ${id}\t${status}\t${job.command}\n`
+          : `[${id}] ${status}\t${job.command}\n`;
+      }
     }
 
     // Clean up completed jobs after displaying
@@ -95,13 +104,24 @@ export const waitCmd: Command = {
     const shell = ctx.shell;
     let lastExitCode = 0;
 
+    // wait -n: wait for any one job to complete
+    if (ctx.args.includes('-n')) {
+      if (shell.backgroundJobs.size === 0) return 0;
+      const entries = [...shell.backgroundJobs.entries()];
+      const result = await Promise.race(entries.map(([id, job]) => job.promise.then(code => ({ id, code }))));
+      shell.backgroundJobs.delete(result.id);
+      return result.code;
+    }
+
     if (ctx.args.length > 0) {
-      // Wait for specific job
-      const jobId = parseInt(ctx.args[0].replace('%', ''), 10);
-      const job = shell.backgroundJobs.get(jobId);
-      if (job) {
-        lastExitCode = await job.promise;
-        shell.backgroundJobs.delete(jobId);
+      // Wait for specific job(s)
+      for (const arg of ctx.args) {
+        const jobId = parseInt(arg.replace('%', ''), 10);
+        const job = shell.backgroundJobs.get(jobId);
+        if (job) {
+          lastExitCode = await job.promise;
+          shell.backgroundJobs.delete(jobId);
+        }
       }
     } else {
       // Wait for all jobs

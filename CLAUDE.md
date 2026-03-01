@@ -181,7 +181,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1445 tests across 35 test files** — all passing.
+**1463 tests across 35 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -280,6 +280,9 @@ The shell supports:
 - **${!prefix*}**: List variable names matching prefix
 - **declare -i/-l/-u/-p**: Integer-only, lowercase, uppercase, and print variable attributes
 - **xargs -0**: Null-delimited input support
+- **${var@Q/E/U/u/L/A}**: Variable transformations (quote, escape, case, assignment form)
+- **wait -n**: Wait for any background job to complete
+- **jobs -p/-l**: Print PIDs only, long format
 
 ## WASI Runtime (Tier 2)
 

@@ -2095,6 +2095,23 @@ export class Shell {
       }
     }
 
+    // ${VAR@op} — variable transformations
+    const atMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)@([QEUuLaAK])$/);
+    if (atMatch) {
+      const val = this.env[atMatch[1]] ?? '';
+      switch (atMatch[2]) {
+        case 'Q': return `'${val.replace(/'/g, "'\\''")}'`; // quote for reuse
+        case 'E': return val.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r').replace(/\\\\/g, '\\'); // interpret escapes
+        case 'U': return val.toUpperCase();
+        case 'u': return val.length > 0 ? val[0].toUpperCase() + val.slice(1) : '';
+        case 'L': return val.toLowerCase();
+        case 'a': return ''; // attributes (stub)
+        case 'A': return `declare -- ${atMatch[1]}="${val}"`; // assignment form
+        case 'K': return val; // display as key-value (stub)
+        default: return val;
+      }
+    }
+
     // Simple ${VAR}
     const simpleMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)$/);
     if (simpleMatch) {

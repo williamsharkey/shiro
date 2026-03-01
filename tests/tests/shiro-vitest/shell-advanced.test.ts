@@ -1978,4 +1978,113 @@ describe('Shell Advanced', () => {
       expect(output.replace(/\r/g, '').trim()).toBe('w:alpha\nw:beta\nw:gamma');
     });
   });
+
+  // ─── Section 45: ${var@op} transformations ─────────────────────────────────
+  describe('variable transformations', () => {
+    it('${var@Q} quotes value for reuse', async () => {
+      shell.env['MSG'] = "hello";
+      const { output } = await run(shell, 'echo "${MSG@Q}"');
+      expect(output.replace(/\r/g, '').trim()).toContain("hello");
+    });
+
+    it('${var@U} converts to uppercase', async () => {
+      shell.env['MSG'] = 'hello';
+      const { output } = await run(shell, 'echo ${MSG@U}');
+      expect(output.replace(/\r/g, '').trim()).toBe('HELLO');
+    });
+
+    it('${var@L} converts to lowercase', async () => {
+      shell.env['MSG'] = 'HELLO';
+      const { output } = await run(shell, 'echo ${MSG@L}');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello');
+    });
+
+    it('${var@u} capitalizes first character', async () => {
+      shell.env['MSG'] = 'hello world';
+      const { output } = await run(shell, 'echo ${MSG@u}');
+      expect(output.replace(/\r/g, '').trim()).toBe('Hello world');
+    });
+
+    it('${var@E} interprets escape sequences', async () => {
+      shell.env['MSG'] = 'line1\\nline2';
+      const { output } = await run(shell, 'echo "${MSG@E}"');
+      expect(output.replace(/\r/g, '').trim()).toBe('line1\nline2');
+    });
+
+    it('${var@A} shows assignment form', async () => {
+      shell.env['MSG'] = 'test';
+      const { output } = await run(shell, 'echo "${MSG@A}"');
+      expect(output.replace(/\r/g, '').trim()).toContain('MSG=');
+      expect(output.replace(/\r/g, '').trim()).toContain('test');
+    });
+  });
+
+  // ─── Section 46: command substitution in assignments ───────────────────────
+  describe('command substitution in assignments', () => {
+    it('variable assignment from command substitution', async () => {
+      const { output } = await run(shell, 'result=$(echo hello); echo $result');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello');
+    });
+
+    it('nested command substitution', async () => {
+      const { output } = await run(shell, 'x=$(echo $(echo deep)); echo $x');
+      expect(output.replace(/\r/g, '').trim()).toBe('deep');
+    });
+
+    it('command substitution in if condition', async () => {
+      const { output } = await run(shell, 'if [ "$(echo yes)" = "yes" ]; then echo matched; fi');
+      expect(output.replace(/\r/g, '').trim()).toBe('matched');
+    });
+
+    it('arithmetic with command substitution', async () => {
+      const { output } = await run(shell, 'x=$((2 + 3)); echo $x');
+      expect(output.replace(/\r/g, '').trim()).toBe('5');
+    });
+  });
+
+  // ─── Section 47: arithmetic assignments ────────────────────────────────────
+  describe('arithmetic assignments', () => {
+    it('(( var = expr )) assigns', async () => {
+      const { output } = await run(shell, '((x = 5 + 3)); echo $x');
+      expect(output.replace(/\r/g, '').trim()).toBe('8');
+    });
+
+    it('(( var++ )) post-increments', async () => {
+      const { output } = await run(shell, 'x=5; ((x++)); echo $x');
+      expect(output.replace(/\r/g, '').trim()).toBe('6');
+    });
+
+    it('(( var += n )) adds', async () => {
+      const { output } = await run(shell, 'x=10; ((x += 5)); echo $x');
+      expect(output.replace(/\r/g, '').trim()).toBe('15');
+    });
+
+    it('(( var *= n )) multiplies', async () => {
+      const { output } = await run(shell, 'x=3; ((x *= 4)); echo $x');
+      expect(output.replace(/\r/g, '').trim()).toBe('12');
+    });
+
+    it('((--var)) pre-decrements', async () => {
+      const { output } = await run(shell, 'x=5; ((--x)); echo $x');
+      expect(output.replace(/\r/g, '').trim()).toBe('4');
+    });
+  });
+
+  // ─── Section 48: function scoping and inheritance ──────────────────────────
+  describe('function scoping and inheritance', () => {
+    it('subshell inherits functions', async () => {
+      const { output } = await run(shell, 'greet() { echo hi; }; (greet)');
+      expect(output.replace(/\r/g, '').trim()).toBe('hi');
+    });
+
+    it('function can modify local and global vars', async () => {
+      const { output } = await run(shell, 'x=1; inc() { local y=10; x=$((x+1)); }; inc; echo "x=$x"');
+      expect(output.replace(/\r/g, '').trim()).toBe('x=2');
+    });
+
+    it('local variable in nested function calls', async () => {
+      const { output } = await run(shell, 'outer() { local a=out; inner; echo $a; }; inner() { local a=in; }; outer');
+      expect(output.replace(/\r/g, '').trim()).toBe('out');
+    });
+  });
 });
