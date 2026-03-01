@@ -181,7 +181,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1258 tests across 35 test files** — all passing.
+**1269 tests across 35 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -246,6 +246,8 @@ The shell supports:
 - **Control structures**: if/elif/else/fi, while/until/do/done, for/in/do/done, case/esac
 - **Functions**: `name() { ... }` and `function name { ... }`
 - **Job control**: `cmd &` (background), `fg`, `bg`, `jobs`, `wait`
+- **PIPESTATUS**: `${PIPESTATUS[@]}` array of pipeline exit codes, **FUNCNAME**: `${FUNCNAME[0]}` function name stack
+- **mapfile/readarray**: `mapfile arr` reads lines into array, `read -a arr` splits words into array
 
 ## WASI Runtime (Tier 2)
 

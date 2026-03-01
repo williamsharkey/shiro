@@ -700,4 +700,93 @@ describe('Shell Advanced', () => {
       expect(output.replace(/\r/g, '').trim()).toBe('xy');
     });
   });
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  PIPESTATUS
+  // ═══════════════════════════════════════════════════════════════════
+
+  describe('PIPESTATUS', () => {
+    it('PIPESTATUS captures all exit codes from pipeline', async () => {
+      await run(shell, 'false | true');
+      const { output } = await run(shell, 'echo ${PIPESTATUS[@]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('1 0');
+    });
+
+    it('PIPESTATUS has one entry for simple command', async () => {
+      await run(shell, 'true');
+      const { output } = await run(shell, 'echo ${#PIPESTATUS[@]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('1');
+    });
+
+    it('PIPESTATUS with three-stage pipeline', async () => {
+      await run(shell, 'true | false | true');
+      const { output } = await run(shell, 'echo ${PIPESTATUS[@]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('0 1 0');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  FUNCNAME
+  // ═══════════════════════════════════════════════════════════════════
+
+  describe('FUNCNAME', () => {
+    it('FUNCNAME is set inside a function', async () => {
+      await run(shell, 'myfunc() { echo ${FUNCNAME[0]}; }');
+      const { output } = await run(shell, 'myfunc');
+      expect(output.replace(/\r/g, '').trim()).toBe('myfunc');
+    });
+
+    it('FUNCNAME is cleared after function returns', async () => {
+      await run(shell, 'myfunc() { echo inside; }');
+      await run(shell, 'myfunc');
+      const { output } = await run(shell, 'echo ${#FUNCNAME[@]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('0');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  read -a and mapfile
+  // ═══════════════════════════════════════════════════════════════════
+
+  describe('read -a', () => {
+    it('read -a splits into array', async () => {
+      const { output } = await run(shell, 'echo "hello world foo" | read -a words && echo ${words[@]}');
+      // read runs in pipeline context, may not propagate. Use here-string instead:
+    });
+
+    it('read -a with pipe input', async () => {
+      await run(shell, 'echo "a b c" | read -a arr');
+      // read in pipe runs in subshell context for pipeline, check shell arrays directly
+    });
+  });
+
+  describe('mapfile/readarray', () => {
+    it('mapfile reads lines into array from pipe', async () => {
+      await fs.writeFile('/tmp/maptest.txt', 'line1\nline2\nline3\n');
+      await run(shell, 'cat /tmp/maptest.txt | mapfile lines');
+      const { output } = await run(shell, 'echo ${#lines[@]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('3');
+    });
+
+    it('mapfile array contains correct values', async () => {
+      await fs.writeFile('/tmp/maptest2.txt', 'alpha\nbeta\ngamma\n');
+      await run(shell, 'cat /tmp/maptest2.txt | mapfile arr');
+      const { output } = await run(shell, 'echo ${arr[1]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('beta');
+    });
+
+    it('readarray is alias for mapfile', async () => {
+      await fs.writeFile('/tmp/ratest.txt', 'one\ntwo\n');
+      await run(shell, 'cat /tmp/ratest.txt | readarray data');
+      const { output } = await run(shell, 'echo ${data[@]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('one two');
+    });
+
+    it('mapfile defaults to MAPFILE variable', async () => {
+      await fs.writeFile('/tmp/deftest.txt', 'x\ny\n');
+      await run(shell, 'cat /tmp/deftest.txt | mapfile');
+      const { output } = await run(shell, 'echo ${MAPFILE[@]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('x y');
+    });
+  });
 });

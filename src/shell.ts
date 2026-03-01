@@ -560,11 +560,13 @@ export class Shell {
 
         // Shell builtin: read
         if (effectiveCmdName === 'read') {
-          // Parse flags: -r (raw), variable names
+          // Parse flags: -r (raw), -a (array), variable names
           let rawMode = false;
+          let arrayMode = false;
           const readVars: string[] = [];
           for (const a of cmdArgs) {
             if (a === '-r') rawMode = true;
+            else if (a === '-a') arrayMode = true;
             else if (!a.startsWith('-')) readVars.push(a);
           }
           // Read one line from stdin — prefer piped stdin (__PIPE_STDIN), then pipe, then heredoc
@@ -590,6 +592,16 @@ export class Shell {
             this.env['__PIPE_STDIN'] = remaining;
           }
           const processed = rawMode ? readLine : readLine.replace(/\\(.)/g, '$1');
+          if (arrayMode) {
+            const arrName = readVars[0] || 'MAPFILE';
+            const words = processed.split(/\s+/).filter(Boolean);
+            this.arrays.set(arrName, words);
+            exitCode = (readLine || firstNewline >= 0) ? 0 : 1;
+            this.lastExitCode = exitCode;
+            this.env['?'] = String(exitCode);
+            lastOutput = '';
+            continue;
+          }
           if (readVars.length === 0) {
             this.env['REPLY'] = processed;
           } else if (readVars.length === 1) {
@@ -606,6 +618,31 @@ export class Shell {
             }
           }
           exitCode = (readLine || firstNewline >= 0) ? 0 : 1;
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+
+        // Shell builtin: mapfile / readarray
+        if (effectiveCmdName === 'mapfile' || effectiveCmdName === 'readarray') {
+          const arrName = cmdArgs.find(a => !a.startsWith('-')) || 'MAPFILE';
+          let mapInput = '';
+          const hasPipeStdin = '__PIPE_STDIN' in this.env;
+          if (hasPipeStdin) {
+            mapInput = this.env['__PIPE_STDIN'];
+            delete this.env['__PIPE_STDIN'];
+          } else {
+            mapInput = i > 0 ? lastOutput : (heredocStdin || '');
+          }
+          const lines = mapInput.split('\n');
+          // Remove trailing empty line from trailing newline
+          if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
+          // By default, mapfile preserves trailing newlines on each element
+          // -t flag strips them (we strip by default like bash's common usage)
+          const stripNewlines = cmdArgs.includes('-t') || true;
+          this.arrays.set(arrName, stripNewlines ? lines : lines.map(l => l + '\n'));
+          exitCode = 0;
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
           lastOutput = '';
@@ -811,9 +848,12 @@ export class Shell {
 
       // pipefail: use last non-zero exit code from any pipe segment
       if (this.options.has('pipefail') && pipeExitCodes.length > 1) {
-        const lastNonZero = pipeExitCodes.reverse().find(c => c !== 0);
+        const lastNonZero = [...pipeExitCodes].reverse().find(c => c !== 0);
         if (lastNonZero !== undefined) exitCode = lastNonZero;
       }
+
+      // Store PIPESTATUS array
+      this.arrays.set('PIPESTATUS', pipeExitCodes.map(String));
 
       // Apply ! negation
       if (negateExit) {
@@ -2069,6 +2109,10 @@ export class Shell {
     this.env['#'] = String(args.length);
     this.env['@'] = args.join(' ');
 
+    // Track FUNCNAME stack
+    const prevFuncname = this.arrays.get('FUNCNAME') || [];
+    this.arrays.set('FUNCNAME', [name, ...prevFuncname]);
+
     // Execute body
     let exitCode = 0;
     const bodyLines = func.body.split(/\n|;/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
@@ -2081,7 +2125,10 @@ export class Shell {
       exitCode = await this.execute(line, writeStdout, writeStderr);
     }
 
-    // Restore
+    // Restore FUNCNAME stack
+    this.arrays.set('FUNCNAME', prevFuncname);
+
+    // Restore positional params
     for (const key of Object.keys(saved)) {
       if (saved[key] === undefined) delete this.env[key];
       else this.env[key] = saved[key]!;
