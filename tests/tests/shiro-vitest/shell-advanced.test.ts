@@ -1739,4 +1739,152 @@ describe('Shell Advanced', () => {
       expect(output.replace(/\r/g, '').trim()).toBe('answer');
     });
   });
+
+  // ─── Section 35: test -v and glob matching in [[ ]] ────────────────────────
+  describe('test -v and glob matching', () => {
+    it('-v returns 0 for set variable', async () => {
+      shell.env['MYVAR'] = 'hello';
+      const { exitCode } = await run(shell, '[[ -v MYVAR ]]');
+      expect(exitCode).toBe(0);
+    });
+
+    it('-v returns 1 for unset variable', async () => {
+      delete shell.env['NOVAR'];
+      const { exitCode } = await run(shell, '[[ -v NOVAR ]]');
+      expect(exitCode).toBe(1);
+    });
+
+    it('glob matching with * in [[ == ]]', async () => {
+      const { exitCode } = await run(shell, '[[ "hello.txt" == *.txt ]]');
+      expect(exitCode).toBe(0);
+    });
+
+    it('glob non-match returns 1', async () => {
+      const { exitCode } = await run(shell, '[[ "hello.txt" == *.py ]]');
+      expect(exitCode).toBe(1);
+    });
+
+    it('glob matching with ? wildcard', async () => {
+      const { exitCode } = await run(shell, '[[ "cat" == c?t ]]');
+      expect(exitCode).toBe(0);
+    });
+
+    it('!= with glob pattern', async () => {
+      const { exitCode } = await run(shell, '[[ "file.js" != *.ts ]]');
+      expect(exitCode).toBe(0);
+    });
+  });
+
+  // ─── Section 36: special variables ─────────────────────────────────────────
+  describe('special variables', () => {
+    it('$RANDOM generates a number', async () => {
+      const { output } = await run(shell, 'echo $RANDOM');
+      const num = parseInt(output.replace(/\r/g, '').trim());
+      expect(num).toBeGreaterThanOrEqual(0);
+      expect(num).toBeLessThan(32768);
+    });
+
+    it('$BASH_VERSION returns a version string', async () => {
+      const { output } = await run(shell, 'echo $BASH_VERSION');
+      expect(output.replace(/\r/g, '').trim()).toBe('5.0.0');
+    });
+
+    it('$SECONDS returns a number', async () => {
+      const { output } = await run(shell, 'echo $SECONDS');
+      const num = parseInt(output.replace(/\r/g, '').trim());
+      expect(num).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  // ─── Section 37: arithmetic while/if conditions ────────────────────────────
+  describe('arithmetic while/if conditions', () => {
+    it('while (( )) loop counts down', async () => {
+      const { output } = await run(shell, 'i=3; while ((i > 0)); do echo $i; i=$((i - 1)); done');
+      expect(output.replace(/\r/g, '').trim()).toBe('3\n2\n1');
+    });
+
+    it('if (( )) arithmetic condition', async () => {
+      const { output } = await run(shell, 'x=5; if ((x > 3)); then echo big; else echo small; fi');
+      expect(output.replace(/\r/g, '').trim()).toBe('big');
+    });
+
+    it('if (( )) false branch', async () => {
+      const { output } = await run(shell, 'x=1; if ((x > 3)); then echo big; else echo small; fi');
+      expect(output.replace(/\r/g, '').trim()).toBe('small');
+    });
+  });
+
+  // ─── Section 38: parameter expansion (:?, :+) ─────────────────────────────
+  describe('parameter expansion', () => {
+    it('${var:+alt} returns alt when set', async () => {
+      shell.env['X'] = 'hello';
+      const { output } = await run(shell, 'echo ${X:+replacement}');
+      expect(output.replace(/\r/g, '').trim()).toBe('replacement');
+    });
+
+    it('${var:+alt} returns empty when unset', async () => {
+      delete shell.env['X'];
+      const { output } = await run(shell, 'echo "${X:+replacement}"');
+      expect(output.replace(/\r/g, '').trim()).toBe('');
+    });
+
+    it('${var:?error} succeeds when set', async () => {
+      shell.env['X'] = 'value';
+      const { output } = await run(shell, 'echo ${X:?must be set}');
+      expect(output.replace(/\r/g, '').trim()).toBe('value');
+    });
+
+    it('${var:=default} assigns when unset', async () => {
+      delete shell.env['NEWV'];
+      await run(shell, 'echo ${NEWV:=mydefault}');
+      expect(shell.env['NEWV']).toBe('mydefault');
+    });
+  });
+
+  // ─── Section 39: array pattern replacement ─────────────────────────────────
+  describe('array pattern replacement', () => {
+    it('${arr[@]/pattern/rep} replaces first match in each element', async () => {
+      shell.arrays.set('files', ['foo.txt', 'bar.txt', 'baz.log']);
+      const { output } = await run(shell, 'echo ${files[@]/.txt/.md}');
+      expect(output.replace(/\r/g, '').trim()).toBe('foo.md bar.md baz.log');
+    });
+
+    it('${arr[@]//pattern/rep} replaces all matches', async () => {
+      shell.arrays.set('words', ['aabbaa', 'ccaadd']);
+      const { output } = await run(shell, 'echo ${words[@]//aa/XX}');
+      expect(output.replace(/\r/g, '').trim()).toBe('XXbbXX ccXXdd');
+    });
+
+    it('${arr[@]/#prefix/rep} replaces prefix', async () => {
+      shell.arrays.set('items', ['pre_one', 'pre_two', 'other']);
+      const { output } = await run(shell, 'echo ${items[@]/#pre_/}');
+      expect(output.replace(/\r/g, '').trim()).toBe('one two other');
+    });
+
+    it('${arr[@]/%suffix/rep} replaces suffix', async () => {
+      shell.arrays.set('exts', ['file.bak', 'data.bak', 'keep.txt']);
+      const { output } = await run(shell, 'echo ${exts[@]/%.bak/.old}');
+      expect(output.replace(/\r/g, '').trim()).toBe('file.old data.old keep.txt');
+    });
+  });
+
+  // ─── Section 40: heredoc features ──────────────────────────────────────────
+  describe('heredoc features', () => {
+    it('heredoc with variable expansion', async () => {
+      shell.env['NAME'] = 'world';
+      const { output } = await run(shell, 'cat <<EOF\nhello $NAME\nEOF');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello world');
+    });
+
+    it('heredoc with quoted delimiter suppresses expansion', async () => {
+      shell.env['NAME'] = 'world';
+      const { output } = await run(shell, "cat <<'EOF'\nhello $NAME\nEOF");
+      expect(output.replace(/\r/g, '').trim()).toBe('hello $NAME');
+    });
+
+    it('here-string works', async () => {
+      const { output } = await run(shell, 'cat <<< "hello there"');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello there');
+    });
+  });
 });

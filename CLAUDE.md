@@ -181,7 +181,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1410 tests across 35 test files** — all passing.
+**1433 tests across 35 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -273,6 +273,9 @@ The shell supports:
 - **printf -v**: `printf -v varname FORMAT ARGS` assigns formatted output to variable
 - **local scoping**: `local var=val` creates function-scoped variables that restore on return
 - **read improvements**: `-d` (custom delimiter), `-n` (nchars), `-p` (prompt), `-s` (silent)
+- **test -v / -R**: `-v` (variable is set), `-R` (variable is nameref)
+- **Glob matching in [[ ]]**: `[[ str == *.txt ]]`, `[[ str != pattern ]]` with `*` and `?` wildcards
+- **Array pattern replacement**: `${arr[@]/pat/rep}`, `${arr[@]//pat/rep}`, `${arr[@]/#pre/rep}`, `${arr[@]/%suf/rep}`
 
 ## WASI Runtime (Tier 2)
 

@@ -1868,6 +1868,38 @@ export class Shell {
       return values.slice(offset).join(' ');
     }
 
+    // ${arr[@]/pattern/replacement} — pattern replacement on all elements
+    const arrPatMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\[[@*]\](\/\/?)(#?%?)(.*?)\/(.*)$/);
+    if (arrPatMatch) {
+      const name = arrPatMatch[1];
+      const doubleSlash = arrPatMatch[2] === '//';
+      const anchor = arrPatMatch[3]; // # for prefix, % for suffix
+      const pattern = arrPatMatch[4];
+      const replacement = arrPatMatch[5];
+      const assoc = this.assocArrays.get(name);
+      const values = assoc ? Array.from(assoc.values()) : (this.arrays.get(name) ?? []);
+      const mapped = values.map(v => {
+        if (anchor === '#') {
+          // Prefix replacement
+          const re = new RegExp('^' + this.globToRegex(pattern));
+          return v.replace(re, replacement);
+        } else if (anchor === '%') {
+          // Suffix replacement
+          const re = new RegExp(this.globToRegex(pattern) + '$');
+          return v.replace(re, replacement);
+        } else if (doubleSlash) {
+          // Replace all
+          const re = new RegExp(this.globToRegex(pattern), 'g');
+          return v.replace(re, replacement);
+        } else {
+          // Replace first
+          const re = new RegExp(this.globToRegex(pattern));
+          return v.replace(re, replacement);
+        }
+      });
+      return mapped.join(' ');
+    }
+
     // ${arr[@]} or ${arr[*]} — all array elements (space-separated)
     const arrAllMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\[[@*]\]$/);
     if (arrAllMatch) {
@@ -3004,6 +3036,8 @@ export class Shell {
             const s = await this.fs.stat(this.fs.resolvePath(expanded, this.cwd));
             return s.type === 'symlink' ? 0 : 1;
           } catch { return 1; }
+        case '-v': return (expanded in this.env) ? 0 : 1;
+        case '-R': return this.namerefs.has(expanded) ? 0 : 1;
         case '!': return (await this.evalTest(tokens.slice(1).join(' '))) === 0 ? 1 : 0;
       }
     }
@@ -3013,8 +3047,21 @@ export class Shell {
       const op = tokens[1];
       const right = strip(tokens[2]);
       switch (op) {
-        case '=': case '==': return left === right ? 0 : 1;
-        case '!=': return left !== right ? 0 : 1;
+        case '=': case '==': {
+          // Support glob patterns in [[ ]] (*, ?, [...])
+          if (right.includes('*') || right.includes('?') || right.includes('[')) {
+            const re = new RegExp('^' + right.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
+            return re.test(left) ? 0 : 1;
+          }
+          return left === right ? 0 : 1;
+        }
+        case '!=': {
+          if (right.includes('*') || right.includes('?') || right.includes('[')) {
+            const re = new RegExp('^' + right.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
+            return re.test(left) ? 1 : 0;
+          }
+          return left !== right ? 0 : 1;
+        }
         case '-eq': return parseInt(left) === parseInt(right) ? 0 : 1;
         case '-ne': return parseInt(left) !== parseInt(right) ? 0 : 1;
         case '-lt': return parseInt(left) < parseInt(right) ? 0 : 1;
