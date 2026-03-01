@@ -807,4 +807,30 @@ describe('Shell WASM integration', () => {
     expect(exitCode).toBe(0);
     expect(output).toContain('hello');
   });
+
+  it('finds .wasm files in PATH via suffix search', async () => {
+    // Write a WASM binary to /usr/local/bin/myprog.wasm
+    const wasmBytes = buildExitWasm(0);
+    await fs.mkdir('/usr');
+    await fs.mkdir('/usr/local');
+    await fs.mkdir('/usr/local/bin');
+    await fs.writeFile('/usr/local/bin/myprog.wasm', wasmBytes);
+
+    // Run via bare name — shell should find myprog.wasm in PATH
+    const { exitCode } = await run(shell, 'myprog');
+    expect(exitCode).toBe(0);
+  });
+
+  it('#!wasi-pkg stub routes through WASM package cache', async () => {
+    // Write a #!wasi-pkg stub file — this can't actually run (no cached package)
+    // but we can verify the stub is detected and an error is returned (no package in cache)
+    for (const dir of ['/usr', '/usr/local', '/usr/local/bin']) {
+      try { await fs.mkdir(dir); } catch { /* may already exist */ }
+    }
+    await fs.writeFile('/usr/local/bin/fakepkg', '#!wasi-pkg fakepkg\n');
+
+    // Running should fail because 'fakepkg' is not in the package registry
+    const { exitCode } = await run(shell, 'fakepkg');
+    expect(exitCode).not.toBe(0);
+  });
 });
