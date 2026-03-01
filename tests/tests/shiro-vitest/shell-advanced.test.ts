@@ -2664,4 +2664,126 @@ describe('Shell Advanced', () => {
       expect(output).toContain('builtin');
     });
   });
+
+  // === Section 71: nocaseglob ===
+  describe('71. nocaseglob', () => {
+    it('nocaseglob matches case-insensitively', async () => {
+      await run(shell, 'echo "hello" > /tmp/file.TXT');
+      await run(shell, 'echo "world" > /tmp/file.txt');
+      await run(shell, 'shopt -s nocaseglob');
+      const { output } = await run(shell, 'echo /tmp/*.txt');
+      expect(output).toContain('file.TXT');
+      expect(output).toContain('file.txt');
+    });
+
+    it('without nocaseglob, glob is case-sensitive', async () => {
+      await run(shell, 'echo "hello" > /tmp/file.TXT');
+      await run(shell, 'echo "world" > /tmp/file.txt');
+      const { output } = await run(shell, 'echo /tmp/*.txt');
+      expect(output).toContain('file.txt');
+      expect(output).not.toContain('file.TXT');
+    });
+  });
+
+  // === Section 72: nullglob ===
+  describe('72. nullglob', () => {
+    it('nullglob returns empty when no matches', async () => {
+      await run(shell, 'shopt -s nullglob');
+      const { output } = await run(shell, 'echo *.zzzzz');
+      expect(output.trim()).toBe('');
+    });
+
+    it('without nullglob, unmatched glob kept literal', async () => {
+      const { output } = await run(shell, 'echo *.zzzzz');
+      expect(output.trim()).toBe('*.zzzzz');
+    });
+  });
+
+  // === Section 73: dotglob ===
+  describe('73. dotglob', () => {
+    it('dotglob includes dotfiles in glob', async () => {
+      await run(shell, 'mkdir -p /tmp/dtest');
+      await run(shell, 'echo a > /tmp/dtest/visible');
+      await run(shell, 'echo b > /tmp/dtest/.hidden');
+      await run(shell, 'shopt -s dotglob');
+      const { output } = await run(shell, 'echo /tmp/dtest/*');
+      expect(output).toContain('.hidden');
+      expect(output).toContain('visible');
+    });
+
+    it('without dotglob, * excludes dotfiles', async () => {
+      await run(shell, 'mkdir -p /tmp/dtest2');
+      await run(shell, 'echo a > /tmp/dtest2/visible');
+      await run(shell, 'echo b > /tmp/dtest2/.hidden');
+      const { output } = await run(shell, 'echo /tmp/dtest2/*');
+      expect(output).toContain('visible');
+      expect(output).not.toContain('.hidden');
+    });
+
+    it('explicit .* matches dotfiles even without dotglob', async () => {
+      await run(shell, 'mkdir -p /tmp/dtest3');
+      await run(shell, 'echo b > /tmp/dtest3/.secret');
+      const { output } = await run(shell, 'echo /tmp/dtest3/.*');
+      expect(output).toContain('.secret');
+    });
+  });
+
+  // === Section 74: history -d/-s ===
+  describe('74. history -d and -s', () => {
+    it('history -s appends command to history', async () => {
+      await run(shell, 'history -s "fake command"');
+      const { output } = await run(shell, 'history');
+      expect(output).toContain('fake command');
+    });
+
+    it('history -d removes entry by position', async () => {
+      // Clear and add known entries
+      await run(shell, 'history -c');
+      await run(shell, 'echo one');
+      await run(shell, 'echo two');
+      await run(shell, 'echo three');
+      // History now has: [history -c, echo one, echo two, echo three]
+      // Delete first entry
+      await run(shell, 'history -d 1');
+      const { output } = await run(shell, 'history');
+      expect(output).not.toMatch(/^\s*1\s+history -c/m);
+    });
+
+    it('history N shows last N entries', async () => {
+      await run(shell, 'history -c');
+      await run(shell, 'echo a');
+      await run(shell, 'echo b');
+      await run(shell, 'echo c');
+      await run(shell, 'echo d');
+      const { output } = await run(shell, 'history 2');
+      const lines = output.trim().split('\n').filter((l: string) => l.trim());
+      expect(lines.length).toBe(2);
+    });
+  });
+
+  // === Section 75: LINENO ===
+  describe('75. LINENO tracking', () => {
+    it('LINENO reports correct line in multi-line script', async () => {
+      const script = 'echo line1=$LINENO\necho line2=$LINENO\necho line3=$LINENO';
+      const { output } = await run(shell, script);
+      expect(output).toContain('line1=1');
+      expect(output).toContain('line2=2');
+      expect(output).toContain('line3=3');
+    });
+
+    it('LINENO resets for each top-level execute', async () => {
+      await run(shell, 'echo first=$LINENO\necho second=$LINENO');
+      const { output } = await run(shell, 'echo reset=$LINENO');
+      expect(output).toContain('reset=1');
+    });
+
+    it('LINENO is restored after source', async () => {
+      await run(shell, 'echo "echo sourced=$LINENO" > /tmp/lineno_src.sh');
+      const script = 'echo before=$LINENO\nsource /tmp/lineno_src.sh\necho after=$LINENO';
+      const { output } = await run(shell, script);
+      expect(output).toContain('before=1');
+      expect(output).toContain('sourced=1');
+      expect(output).toContain('after=3');
+    });
+  });
 });

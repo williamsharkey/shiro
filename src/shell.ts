@@ -68,6 +68,10 @@ export class Shell {
   callStack: { funcName: string; source: string }[] = [];
   /** Bash shopt options: extglob, nocaseglob, nullglob, dotglob, globstar, etc. */
   shoptopts: Set<string> = new Set();
+  /** Current line number for LINENO tracking */
+  currentLine: number = 1;
+  /** Depth of execute() recursion — only top-level resets LINENO */
+  private executeDepth: number = 0;
   private nextJobId = 1;
   private terminal?: ShiroTerminal;
 
@@ -235,6 +239,13 @@ export class Shell {
     const trimmed = joined.trim();
     if (!trimmed || trimmed.startsWith('#')) return 0;
 
+    // LINENO tracking: reset at top-level execute, track depth
+    this.executeDepth++;
+    const isTopLevel = this.executeDepth === 1;
+    if (isTopLevel) {
+      this.currentLine = 1;
+    }
+
     // Record command for title display
     recordCommand(trimmed, remote);
 
@@ -242,6 +253,7 @@ export class Shell {
     if (trimmed.endsWith('&') && !trimmed.endsWith('&&')) {
       const bgCmd = trimmed.slice(0, -1).trim();
       if (bgCmd) {
+        this.executeDepth--;
         return this.executeBackground(bgCmd, writeStdout, writeStderr);
       }
     }
@@ -250,14 +262,19 @@ export class Shell {
     const statements = this.splitStatements(trimmed);
     if (statements.length > 1) {
       let lastExit = 0;
-      for (const stmt of statements) {
-        if (!stmt.trim()) continue;
+      let lineOffset = isTopLevel ? 0 : this.currentLine - 1;
+      for (let si = 0; si < statements.length; si++) {
+        const stmt = statements[si];
+        if (!stmt.trim()) { if (isTopLevel) this.currentLine = lineOffset + si + 1; continue; }
+        this.currentLine = lineOffset + si + 1;
+        this.env['LINENO'] = String(this.currentLine);
         lastExit = await this.execute(stmt, writeStdout, writeStderr, remote, terminalOverride, true);
         // errexit: abort on non-zero exit code
         if (this.options.has('errexit') && lastExit !== 0) break;
       }
       this.lastExitCode = lastExit;
       this.env['?'] = String(lastExit);
+      this.executeDepth--;
       return lastExit;
     }
 
@@ -282,8 +299,12 @@ export class Shell {
     const funcDef = this.parseFunctionDef(effectiveLine);
     if (funcDef) {
       this.functions[funcDef.name] = { body: funcDef.body };
+      this.executeDepth--;
       return 0;
     }
+
+    // Update LINENO before executing commands
+    this.env['LINENO'] = String(this.currentLine);
 
     // NOTE: Control structures, (( )), and subshells are handled inside the
     // parseCompound loop below. This ensures that semicolons AFTER a control
@@ -1507,7 +1528,14 @@ export class Shell {
             try {
               const raw = await this.fs.readFile(scriptPath);
               const content = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+              // Save/restore LINENO across source calls
+              const savedLine = this.currentLine;
+              const savedDepth = this.executeDepth;
+              this.executeDepth = 0; // source starts a fresh top-level
               exitCode = await this.execute(content, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
+              this.currentLine = savedLine;
+              this.executeDepth = savedDepth;
+              this.env['LINENO'] = String(this.currentLine);
             } catch (e: any) {
               stderrWriter(`source: ${cmdArgs[0]}: ${e.message}\r\n`);
               exitCode = 1;
@@ -1923,6 +1951,7 @@ export class Shell {
       }
     }
 
+    this.executeDepth--;
     return exitCode;
   }
 
@@ -2181,7 +2210,7 @@ export class Shell {
           if (varName === 'BASH_VERSION') { result += '5.0.0'; i += m[0].length; continue; }
           if (varName === 'HOSTNAME') { result += 'shiro'; i += m[0].length; continue; }
           if (varName === 'PPID') { result += '0'; i += m[0].length; continue; }
-          if (varName === 'LINENO') { result += '1'; i += m[0].length; continue; }
+          if (varName === 'LINENO') { result += (this.env['LINENO'] || '1'); i += m[0].length; continue; }
           if (varName === 'SECONDS') { result += String(Math.floor(performance.now() / 1000)); i += m[0].length; continue; }
           if (varName === 'EPOCHSECONDS') { result += String(Math.floor(Date.now() / 1000)); i += m[0].length; continue; }
           if (varName === 'EPOCHREALTIME') { const now = Date.now(); result += `${Math.floor(now / 1000)}.${String(now % 1000).padStart(3, '0')}`; i += m[0].length; continue; }
@@ -3245,12 +3274,17 @@ export class Shell {
 
       if (hasGlob) {
         try {
-          const matches = await this.fs.glob(arg, this.cwd);
+          const matches = await this.fs.glob(arg, this.cwd, {
+            caseInsensitive: this.shoptopts.has('nocaseglob'),
+            dotglob: this.shoptopts.has('dotglob'),
+          });
           if (matches.length > 0) {
             result.push(...matches);
           } else {
-            // No matches: keep literal (bash behavior)
-            result.push(arg);
+            // nullglob: return nothing; default: keep literal
+            if (!this.shoptopts.has('nullglob')) {
+              result.push(arg);
+            }
           }
         } catch {
           result.push(arg);

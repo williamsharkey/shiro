@@ -1,4 +1,4 @@
-function globPatternToRegex(pattern: string, base: string): RegExp {
+function globPatternToRegex(pattern: string, base: string, caseInsensitive?: boolean): RegExp {
   // Resolve the pattern relative to base
   let fullPattern: string;
   if (pattern.startsWith('/')) {
@@ -45,7 +45,7 @@ function globPatternToRegex(pattern: string, base: string): RegExp {
     }
   }
   regex += '$';
-  return new RegExp(regex);
+  return new RegExp(regex, caseInsensitive ? 'i' : undefined);
 }
 
 const DB_NAME = 'shiro-fs';
@@ -573,14 +573,23 @@ export class FileSystem {
     return node.symlinkTarget || new TextDecoder().decode(node.content!);
   }
 
-  async glob(pattern: string, base?: string): Promise<string[]> {
+  async glob(pattern: string, base?: string, options?: { caseInsensitive?: boolean; dotglob?: boolean }): Promise<string[]> {
     const root = base || '/';
     const allKeys = await this._getAllKeys();
-    const regex = globPatternToRegex(pattern, root);
+    const regex = globPatternToRegex(pattern, root, options?.caseInsensitive);
+    const dotglob = options?.dotglob ?? false;
+    // Check if the pattern basename starts with '.' (explicit dotfile match)
+    const patBase = pattern.includes('/') ? pattern.slice(pattern.lastIndexOf('/') + 1) : pattern;
+    const patternStartsDot = patBase.startsWith('.');
     const results: string[] = [];
     for (const key of allKeys) {
       const node = await this._get(key);
       if (node && node.type === 'file' && regex.test(key)) {
+        // Filter dotfiles unless dotglob is on or pattern explicitly starts with '.'
+        if (!dotglob && !patternStartsDot) {
+          const basename = key.slice(key.lastIndexOf('/') + 1);
+          if (basename.startsWith('.')) continue;
+        }
         // Return relative to base
         if (base && key.startsWith(base)) {
           const rel = key.slice(base.length);
