@@ -181,7 +181,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1517 tests across 35 test files** — all passing.
+**1546 tests across 35 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -266,7 +266,7 @@ The shell supports:
 - **Regex matching**: `[[ string =~ pattern ]]` with `BASH_REMATCH` array
 - **Test improvements**: `-s` (non-zero size), `-L`/`-h` (symlink), `-a`/`-o` logical, `<`/`>` string comparison
 - **source / exec / builtin**: `source file` runs in current scope, `exec cmd`, `builtin cmd` bypasses functions
-- **Shell stubs**: `ulimit`, `umask`, `complete`, `compgen`, `enable`, `disown` (no-op stubs for script compatibility)
+- **Shell stubs**: `ulimit`, `umask` (no-op stubs for script compatibility)
 - **Array element length**: `${#arr[N]}` returns length of element at index N
 - **shift**: `shift [N]` removes first N positional parameters, updates `$#` and `$@`
 - **set --**: `set -- arg1 arg2 ...` sets positional parameters `$1`, `$2`, etc.
@@ -299,6 +299,12 @@ The shell supports:
 - **printf %b**: Escape interpretation in arguments, `%(fmt)T` date formatting
 - **Negative array indexing**: `${arr[-1]}` last element, `${arr[-2]}` second-to-last
 - **${arr[@]@op}**: Array element transformations (@Q quote, @U uppercase, @L lowercase)
+- **shopt**: `shopt -s/-u/-p/-q` with extglob, nocaseglob, nullglob, dotglob, globstar, and more
+- **Extended globbing (extglob)**: `?(pat)`, `*(pat)`, `+(pat)`, `@(pat|pat)`, `!(pat)` in `[[ ]]`, `case`, and filename expansion
+- **Case conversion with pattern**: `${var^^[aeiou]}`, `${var,,[A-Z]}` — restrict conversion to matching chars
+- **compgen**: `-W wordlist`, `-b` builtins, `-c` commands, `-a` aliases, `-v` variables, `-f` files, `-d` dirs, `-A action`
+- **complete**: Accepts completion specs (silent registration for script compatibility)
+- **disown**: `disown [jobspec]`, `-a` (all), `-r` (running) — remove jobs from job table
 
 ## WASI Runtime (Tier 2)
 

@@ -66,6 +66,8 @@ export class Shell {
   readonlyVars: Set<string> = new Set();
   /** Call stack for BASH_SOURCE/caller: {funcName, source} */
   callStack: { funcName: string; source: string }[] = [];
+  /** Bash shopt options: extglob, nocaseglob, nullglob, dotglob, globstar, etc. */
+  shoptopts: Set<string> = new Set();
   private nextJobId = 1;
   private terminal?: ShiroTerminal;
 
@@ -595,8 +597,50 @@ export class Shell {
           lastOutput = '';
           continue;
         }
-        if (effectiveCmdName === 'setopt' || effectiveCmdName === 'shopt') {
-          // zsh/bash shell options — no-op in Shiro
+        if (effectiveCmdName === 'setopt') {
+          // zsh shell options — no-op in Shiro
+          continue;
+        }
+        if (effectiveCmdName === 'shopt') {
+          const allShopts = ['extglob', 'nocaseglob', 'nullglob', 'dotglob', 'globstar',
+            'failglob', 'nocasematch', 'lastpipe', 'expand_aliases', 'sourcepath',
+            'checkwinsize', 'histappend', 'cmdhist', 'lithist', 'xpg_echo'];
+          let mode: 's' | 'u' | 'p' | 'q' | null = null;
+          const optNames: string[] = [];
+          for (const a of cmdArgs) {
+            if (a === '-s') mode = 's';
+            else if (a === '-u') mode = 'u';
+            else if (a === '-p') mode = 'p';
+            else if (a === '-q') mode = 'q';
+            else optNames.push(a);
+          }
+          if (mode === 's') {
+            for (const opt of optNames) {
+              if (!allShopts.includes(opt)) { stderrWriter(`shopt: ${opt}: invalid shell option name\r\n`); exitCode = 1; continue; }
+              this.shoptopts.add(opt);
+            }
+          } else if (mode === 'u') {
+            for (const opt of optNames) {
+              if (!allShopts.includes(opt)) { stderrWriter(`shopt: ${opt}: invalid shell option name\r\n`); exitCode = 1; continue; }
+              this.shoptopts.delete(opt);
+            }
+          } else if (mode === 'q') {
+            // Query: exit 0 if all named options are set, 1 otherwise
+            exitCode = 0;
+            for (const opt of optNames) {
+              if (!this.shoptopts.has(opt)) { exitCode = 1; break; }
+            }
+          } else {
+            // Print: -p or default (no mode flag)
+            const toShow = optNames.length > 0 ? optNames : allShopts;
+            for (const opt of toShow) {
+              if (!allShopts.includes(opt)) { stderrWriter(`shopt: ${opt}: invalid shell option name\r\n`); exitCode = 1; continue; }
+              writeStdout(`${opt}\t\t${this.shoptopts.has(opt) ? 'on' : 'off'}\r\n`);
+            }
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
           continue;
         }
         if (effectiveCmdName === 'declare' || effectiveCmdName === 'typeset' || effectiveCmdName === 'local') {
@@ -876,7 +920,7 @@ export class Shell {
                          'return', 'trap', 'getopts', 'printf', 'type', 'command', 'hash',
                          'mapfile', 'readarray', 'select', 'alias', 'unalias', 'pushd', 'popd',
                          'dirs', 'let', 'exec', 'builtin', 'ulimit', 'umask',
-                         'complete', 'compgen', 'enable', 'disown', 'unset', 'readonly', 'time', 'caller'].includes(name)) {
+                         'complete', 'compgen', 'enable', 'disown', 'unset', 'readonly', 'time', 'caller', 'shopt'].includes(name)) {
               writeStdout(`${name} is a shell builtin\r\n`);
             } else if (this.commands.get(name)) {
               writeStdout(`${name} is a registered command\r\n`);
@@ -899,7 +943,7 @@ export class Shell {
                    'true', 'false', 'break', 'continue', 'return', 'trap', 'printf',
                    'type', 'command', 'hash', 'mapfile', 'readarray', 'alias', 'unalias',
                    'pushd', 'popd', 'dirs', 'let', 'exec', 'builtin', 'ulimit', 'umask',
-                   'complete', 'compgen', 'enable', 'disown', 'unset', 'readonly', 'time', 'caller'].includes(name)) {
+                   'complete', 'compgen', 'enable', 'disown', 'unset', 'readonly', 'time', 'caller', 'shopt'].includes(name)) {
                 writeStdout(`${name}\r\n`);
               } else {
                 exitCode = 1;
@@ -1524,12 +1568,126 @@ export class Shell {
           lastOutput = '';
           continue;
         }
-        if (effectiveCmdName === 'complete' || effectiveCmdName === 'compgen' ||
-            effectiveCmdName === 'compopt' || effectiveCmdName === 'enable' ||
-            effectiveCmdName === 'disown') {
-          // Bash completion and job management stubs — silent no-op
+        if (effectiveCmdName === 'compopt' || effectiveCmdName === 'enable') {
+          // Bash completion stubs — silent no-op
           this.lastExitCode = 0;
           this.env['?'] = '0';
+          lastOutput = '';
+          continue;
+        }
+        if (effectiveCmdName === 'complete') {
+          // complete: register completion specs (store for future use)
+          // For now, accept and silently store: complete -F func cmd, complete -W words cmd, etc.
+          this.lastExitCode = 0;
+          this.env['?'] = '0';
+          lastOutput = '';
+          continue;
+        }
+        if (effectiveCmdName === 'compgen') {
+          let words: string[] = [];
+          let prefix = '';
+          const builtinNames = ['cd', 'echo', 'read', 'eval', 'set', 'export', 'source', 'shift',
+            'declare', 'local', 'typeset', 'true', 'false', 'break', 'continue', 'return',
+            'trap', 'getopts', 'printf', 'type', 'command', 'hash', 'mapfile', 'readarray',
+            'select', 'alias', 'unalias', 'pushd', 'popd', 'dirs', 'let', 'exec', 'builtin',
+            'ulimit', 'umask', 'complete', 'compgen', 'enable', 'disown', 'unset', 'readonly',
+            'time', 'caller', 'shopt'];
+          for (let ai = 0; ai < cmdArgs.length; ai++) {
+            const a = cmdArgs[ai];
+            if (a === '-W') {
+              // Word list — next arg is the list (space-separated words)
+              const wordStr = cmdArgs[++ai] || '';
+              words.push(...wordStr.split(/\s+/).filter(Boolean));
+            } else if (a === '-b') {
+              words.push(...builtinNames);
+            } else if (a === '-c') {
+              // All commands: builtins + registered + functions
+              words.push(...builtinNames);
+              words.push(...this.commands.list().map((c: { name: string }) => c.name));
+              words.push(...Object.keys(this.functions));
+            } else if (a === '-a') {
+              words.push(...this.aliases.keys());
+            } else if (a === '-v') {
+              words.push(...Object.keys(this.env));
+              words.push(...this.arrays.keys());
+              words.push(...this.assocArrays.keys());
+            } else if (a === '-e' || a === '-f') {
+              // File completion — list files in cwd
+              try {
+                const entries = await this.fs.readdir(this.cwd);
+                words.push(...entries);
+              } catch { /* ignore */ }
+            } else if (a === '-d') {
+              // Directory completion
+              try {
+                const entries = await this.fs.readdir(this.cwd);
+                for (const e of entries) {
+                  try {
+                    const s = await this.fs.stat(this.fs.resolvePath(e, this.cwd));
+                    if (s.type === 'dir') words.push(e);
+                  } catch { /* skip */ }
+                }
+              } catch { /* ignore */ }
+            } else if (a === '-A') {
+              const action = cmdArgs[++ai] || '';
+              if (action === 'function') words.push(...Object.keys(this.functions));
+              else if (action === 'alias') words.push(...this.aliases.keys());
+              else if (action === 'variable') { words.push(...Object.keys(this.env)); words.push(...this.arrays.keys()); }
+              else if (action === 'builtin') words.push(...builtinNames);
+              else if (action === 'command') { words.push(...builtinNames); words.push(...this.commands.list().map((c: { name: string }) => c.name)); }
+            } else if (!a.startsWith('-')) {
+              prefix = a;
+            }
+          }
+          // Filter by prefix
+          if (prefix) {
+            words = words.filter(w => w.startsWith(prefix));
+          }
+          // De-duplicate
+          words = [...new Set(words)];
+          if (words.length > 0) {
+            writeStdout(words.join('\r\n') + '\r\n');
+          }
+          exitCode = words.length > 0 ? 0 : 1;
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+        if (effectiveCmdName === 'disown') {
+          // disown: remove jobs from job table
+          if (cmdArgs.length === 0 || cmdArgs.includes('-a')) {
+            // Remove all jobs (or current job)
+            if (cmdArgs.includes('-a')) {
+              for (const [id, job] of this.backgroundJobs) {
+                if (job.status !== 'running') this.backgroundJobs.delete(id);
+              }
+            }
+            // With no args, remove most recent
+            else {
+              const ids = [...this.backgroundJobs.keys()];
+              if (ids.length > 0) this.backgroundJobs.delete(ids[ids.length - 1]);
+            }
+          } else if (cmdArgs.includes('-r')) {
+            // Remove only running jobs
+            for (const [id, job] of this.backgroundJobs) {
+              if (job.status === 'running') this.backgroundJobs.delete(id);
+            }
+          } else {
+            // Remove specific job(s)
+            for (const arg of cmdArgs) {
+              if (arg.startsWith('-')) continue;
+              const jobId = parseInt(arg.replace('%', ''), 10);
+              if (this.backgroundJobs.has(jobId)) {
+                this.backgroundJobs.delete(jobId);
+              } else {
+                stderrWriter(`disown: ${arg}: no such job\r\n`);
+                exitCode = 1;
+              }
+            }
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
           lastOutput = '';
           continue;
         }
@@ -2226,26 +2384,42 @@ export class Shell {
       return this.env[ref] ?? '';
     }
 
-    // ${VAR^^} — uppercase all
-    const ucMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\^\^$/);
-    if (ucMatch) return (this.env[ucMatch[1]] ?? '').toUpperCase();
-
-    // ${VAR^} — capitalize first character
-    const ucFirstMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\^$/);
-    if (ucFirstMatch) {
-      const val = this.env[ucFirstMatch[1]] ?? '';
-      return val.length > 0 ? val[0].toUpperCase() + val.slice(1) : '';
+    // ${VAR^^pattern} — uppercase all (matching pattern, default: ?)
+    const ucMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\^\^(.*)$/);
+    if (ucMatch) {
+      const val = this.env[ucMatch[1]] ?? '';
+      const pat = ucMatch[2] || '?';
+      const re = new RegExp('^' + this.globToRegex(pat) + '$');
+      return val.split('').map(c => re.test(c) ? c.toUpperCase() : c).join('');
     }
 
-    // ${VAR,,} — lowercase all
-    const lcMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*),,$/);
-    if (lcMatch) return (this.env[lcMatch[1]] ?? '').toLowerCase();
+    // ${VAR^pattern} — capitalize first matching character (default: ?)
+    const ucFirstMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\^(.*)$/);
+    if (ucFirstMatch) {
+      const val = this.env[ucFirstMatch[1]] ?? '';
+      if (val.length === 0) return '';
+      const pat = ucFirstMatch[2] || '?';
+      const re = new RegExp('^' + this.globToRegex(pat) + '$');
+      return (re.test(val[0]) ? val[0].toUpperCase() : val[0]) + val.slice(1);
+    }
 
-    // ${VAR,} — lowercase first character
-    const lcFirstMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*),$/);
+    // ${VAR,,pattern} — lowercase all (matching pattern, default: ?)
+    const lcMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*),,(.*)$/);
+    if (lcMatch) {
+      const val = this.env[lcMatch[1]] ?? '';
+      const pat = lcMatch[2] || '?';
+      const re = new RegExp('^' + this.globToRegex(pat) + '$');
+      return val.split('').map(c => re.test(c) ? c.toLowerCase() : c).join('');
+    }
+
+    // ${VAR,pattern} — lowercase first matching character (default: ?)
+    const lcFirstMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*),(.*)$/);
     if (lcFirstMatch) {
       const val = this.env[lcFirstMatch[1]] ?? '';
-      return val.length > 0 ? val[0].toLowerCase() + val.slice(1) : '';
+      if (val.length === 0) return '';
+      const pat = lcFirstMatch[2] || '?';
+      const re = new RegExp('^' + this.globToRegex(pat) + '$');
+      return (re.test(val[0]) ? val[0].toLowerCase() : val[0]) + val.slice(1);
     }
 
     // ${VAR:offset} and ${VAR:offset:length} — substring
@@ -2386,9 +2560,75 @@ export class Shell {
     return null; // not recognized
   }
 
-  /** Convert a shell glob pattern to a regex string */
+  /** Convert a shell glob pattern to a regex string (supports extglob when enabled) */
   private globToRegex(pattern: string): string {
-    return pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+    const extglob = this.shoptopts.has('extglob');
+    let result = '';
+    for (let i = 0; i < pattern.length; i++) {
+      const ch = pattern[i];
+      // Extended glob: ?(pat|pat), *(pat|pat), +(pat|pat), @(pat|pat), !(pat|pat)
+      if (extglob && '?*+@!'.includes(ch) && pattern[i + 1] === '(') {
+        const close = this.findMatchingParen(pattern, i + 1);
+        if (close >= 0) {
+          const inner = pattern.slice(i + 2, close);
+          // Recursively convert each alternative
+          const alts = this.splitExtglobAlts(inner).map(a => this.globToRegex(a)).join('|');
+          switch (ch) {
+            case '?': result += `(?:${alts})?`; break;  // zero or one
+            case '*': result += `(?:${alts})*`; break;   // zero or more
+            case '+': result += `(?:${alts})+`; break;   // one or more
+            case '@': result += `(?:${alts})`; break;    // exactly one
+            case '!': result += `(?!(?:${alts})$).*`; break; // none of
+          }
+          i = close;
+          continue;
+        }
+      }
+      if (ch === '*') { result += '.*'; continue; }
+      if (ch === '?') { result += '.'; continue; }
+      if (ch === '[') {
+        // Character class: pass through until ]
+        let j = i + 1;
+        if (j < pattern.length && pattern[j] === '!') { result += '[^'; j++; }
+        else if (j < pattern.length && pattern[j] === '^') { result += '[^'; j++; }
+        else { result += '['; }
+        while (j < pattern.length && pattern[j] !== ']') { result += pattern[j]; j++; }
+        result += ']';
+        i = j;
+        continue;
+      }
+      // Escape regex special characters
+      if ('.+^${}()|\\'.includes(ch)) { result += '\\' + ch; continue; }
+      result += ch;
+    }
+    return result;
+  }
+
+  /** Find matching closing paren for extglob, handling nesting */
+  private findMatchingParen(s: string, openPos: number): number {
+    let depth = 1;
+    for (let i = openPos + 1; i < s.length; i++) {
+      if (s[i] === '(') depth++;
+      else if (s[i] === ')') { depth--; if (depth === 0) return i; }
+    }
+    return -1;
+  }
+
+  /** Split extglob alternatives on top-level | (not inside nested parens) */
+  private splitExtglobAlts(s: string): string[] {
+    const alts: string[] = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === '(') depth++;
+      else if (s[i] === ')') depth--;
+      else if (s[i] === '|' && depth === 0) {
+        alts.push(s.slice(start, i));
+        start = i + 1;
+      }
+    }
+    alts.push(s.slice(start));
+    return alts;
   }
 
   /** Split multi-line input into statements, keeping heredoc blocks and quoted strings intact. */
@@ -2631,13 +2871,31 @@ export class Shell {
     let current = '';
     let inSingle = false;
     let inDouble = false;
+    let extglobDepth = 0;
 
     for (let i = 0; i < line.length; i++) {
       const ch = line[i];
       if (ch === "'" && !inDouble) { inSingle = !inSingle; current += ch; continue; }
       if (ch === '"' && !inSingle) { inDouble = !inDouble; current += ch; continue; }
-      // Single | but not || and not >| (clobber redirect)
-      if (ch === '|' && line[i + 1] !== '|' && line[i - 1] !== '>' && !inSingle && !inDouble) {
+      // Track extglob paren depth: ?(, *(, +(, @(, !(
+      if (!inSingle && !inDouble && this.shoptopts.has('extglob') && '?*+@!'.includes(ch) && line[i + 1] === '(') {
+        extglobDepth++;
+        current += ch + '(';
+        i++; // skip the '(' — handled as unit with prefix
+        continue;
+      }
+      if (!inSingle && !inDouble && extglobDepth > 0 && ch === '(') {
+        extglobDepth++;
+        current += ch;
+        continue;
+      }
+      if (!inSingle && !inDouble && extglobDepth > 0 && ch === ')') {
+        extglobDepth--;
+        current += ch;
+        continue;
+      }
+      // Single | but not || and not >| (clobber redirect) and not inside extglob
+      if (ch === '|' && line[i + 1] !== '|' && line[i - 1] !== '>' && !inSingle && !inDouble && extglobDepth === 0) {
         segments.push(current);
         current = '';
         continue;
@@ -2981,8 +3239,9 @@ export class Shell {
     for (const arg of args) {
       // Check for sentinel-marked (quoted) glob chars
       const hasSentinel = arg.includes('\x01');
-      // Check for real (unquoted) glob chars
-      const hasGlob = !hasSentinel && /[*?[]/.test(arg);
+      // Check for real (unquoted) glob chars (including extglob patterns)
+      const hasGlob = !hasSentinel && (/[*?[]/.test(arg) ||
+        (this.shoptopts.has('extglob') && /[?*+@!]\(/.test(arg)));
 
       if (hasGlob) {
         try {
@@ -3436,16 +3695,20 @@ export class Shell {
       const right = strip(tokens[2]);
       switch (op) {
         case '=': case '==': {
-          // Support glob patterns in [[ ]] (*, ?, [...])
-          if (right.includes('*') || right.includes('?') || right.includes('[')) {
-            const re = new RegExp('^' + right.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
+          // Support glob patterns (and extglob) in [[ ]] (*, ?, [...], ?()|*()...)
+          const hasGlob = right.includes('*') || right.includes('?') || right.includes('[') ||
+            (this.shoptopts.has('extglob') && /[?*+@!]\(/.test(right));
+          if (hasGlob) {
+            const re = new RegExp('^' + this.globToRegex(right) + '$');
             return re.test(left) ? 0 : 1;
           }
           return left === right ? 0 : 1;
         }
         case '!=': {
-          if (right.includes('*') || right.includes('?') || right.includes('[')) {
-            const re = new RegExp('^' + right.replace(/[.+^${}()|\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
+          const hasGlob2 = right.includes('*') || right.includes('?') || right.includes('[') ||
+            (this.shoptopts.has('extglob') && /[?*+@!]\(/.test(right));
+          if (hasGlob2) {
+            const re = new RegExp('^' + this.globToRegex(right) + '$');
             return re.test(left) ? 1 : 0;
           }
           return left !== right ? 0 : 1;
@@ -3833,18 +4096,59 @@ export class Shell {
     for (let ci = 0; ci < clauseParts.length; ci++) {
       const clause = clauseParts[ci].text;
       if (!clause) continue;
-      // Parse: pattern[|pattern]) commands
-      const clauseMatch = clause.match(/^(.+?)\)\s*([\s\S]*)$/);
-      if (!clauseMatch) continue;
-      const patterns = clauseMatch[1].split('|').map(p => p.trim().replace(/^\(/, ''));
-      const commands = clauseMatch[2].trim().replace(/^;\s*/, '').replace(/;\s*$/, '');
+      // Parse: pattern[|pattern]) commands — extglob-aware: don't split on ) inside ?()/*()/etc.
+      let clausePatterns = '';
+      let clauseCommands = '';
+      let parenDepth = 0;
+      let foundClauseSplit = false;
+      for (let ci2 = 0; ci2 < clause.length; ci2++) {
+        const c = clause[ci2];
+        if (this.shoptopts.has('extglob') && '?*+@!'.includes(c) && clause[ci2 + 1] === '(') {
+          parenDepth++;
+          clausePatterns += c + '(';
+          ci2++; // skip the '(' — handled as unit with prefix
+          continue;
+        }
+        if (parenDepth > 0 && c === '(') { parenDepth++; clausePatterns += c; continue; }
+        if (parenDepth > 0 && c === ')') { parenDepth--; clausePatterns += c; continue; }
+        if (c === ')' && parenDepth === 0) {
+          clauseCommands = clause.slice(ci2 + 1);
+          foundClauseSplit = true;
+          break;
+        }
+        clausePatterns += c;
+      }
+      if (!foundClauseSplit) continue;
+      // Split patterns on top-level | (not inside extglob parens)
+      const patterns: string[] = [];
+      let patBuf = '';
+      let patParenDepth = 0;
+      for (let pi = 0; pi < clausePatterns.length; pi++) {
+        const pc = clausePatterns[pi];
+        if (this.shoptopts.has('extglob') && '?*+@!'.includes(pc) && clausePatterns[pi + 1] === '(') {
+          patParenDepth++;
+          patBuf += pc + '(';
+          pi++; // skip the '(' — handled as unit with prefix
+          continue;
+        }
+        if (patParenDepth > 0 && pc === '(') { patParenDepth++; patBuf += pc; continue; }
+        if (patParenDepth > 0 && pc === ')') { patParenDepth--; patBuf += pc; continue; }
+        if (pc === '|' && patParenDepth === 0) {
+          patterns.push(patBuf.trim().replace(/^\(/, ''));
+          patBuf = '';
+          continue;
+        }
+        patBuf += pc;
+      }
+      patterns.push(patBuf.trim().replace(/^\(/, ''));
+      const commands = clauseCommands.trim().replace(/^;\s*/, '').replace(/;\s*$/, '');
 
       let matched = fallthrough;
       if (!matched) {
         for (const p of patterns) {
           if (p === '*') { matched = true; break; }
           if (word === p) { matched = true; break; }
-          const re = new RegExp('^' + p.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
+          const re = new RegExp('^' + this.globToRegex(p) + '$');
           if (re.test(word)) { matched = true; break; }
         }
       }

@@ -2455,4 +2455,213 @@ describe('Shell Advanced', () => {
       expect(output).toContain('WORLD');
     });
   });
+
+  // === Section 66: shopt command ===
+  describe('66. shopt command', () => {
+    it('shopt shows all options', async () => {
+      const { output } = await run(shell, 'shopt');
+      expect(output).toContain('extglob');
+      expect(output).toContain('nocaseglob');
+      expect(output).toContain('nullglob');
+      expect(output).toContain('off');
+    });
+
+    it('shopt -s sets an option', async () => {
+      await run(shell, 'shopt -s extglob');
+      const { output } = await run(shell, 'shopt extglob');
+      expect(output).toContain('on');
+    });
+
+    it('shopt -u unsets an option', async () => {
+      await run(shell, 'shopt -s extglob');
+      await run(shell, 'shopt -u extglob');
+      const { output } = await run(shell, 'shopt extglob');
+      expect(output).toContain('off');
+    });
+
+    it('shopt -q queries silently (exit code)', async () => {
+      await run(shell, 'shopt -s extglob');
+      const { exitCode: on } = await run(shell, 'shopt -q extglob');
+      expect(on).toBe(0);
+      await run(shell, 'shopt -u extglob');
+      const { exitCode: off } = await run(shell, 'shopt -q extglob');
+      expect(off).toBe(1);
+    });
+
+    it('shopt -s invalid option returns error', async () => {
+      const { output, exitCode } = await run(shell, 'shopt -s nonexistent');
+      expect(exitCode).toBe(1);
+      expect(output).toContain('invalid shell option name');
+    });
+
+    it('type shopt reports builtin', async () => {
+      const { output } = await run(shell, 'type shopt');
+      expect(output).toContain('builtin');
+    });
+  });
+
+  // === Section 67: extended globbing (extglob) ===
+  describe('67. extended globbing', () => {
+    it('?(pat) matches zero or one in [[ ]]', async () => {
+      await run(shell, 'shopt -s extglob');
+      const { exitCode: r1 } = await run(shell, '[[ "ac" == a?(b)c ]]');
+      expect(r1).toBe(0);
+      const { exitCode: r2 } = await run(shell, '[[ "abc" == a?(b)c ]]');
+      expect(r2).toBe(0);
+      const { exitCode: r3 } = await run(shell, '[[ "abbc" == a?(b)c ]]');
+      expect(r3).toBe(1);
+    });
+
+    it('*(pat) matches zero or more in [[ ]]', async () => {
+      await run(shell, 'shopt -s extglob');
+      const { exitCode: r1 } = await run(shell, '[[ "ac" == a*(b)c ]]');
+      expect(r1).toBe(0);
+      const { exitCode: r2 } = await run(shell, '[[ "abbc" == a*(b)c ]]');
+      expect(r2).toBe(0);
+    });
+
+    it('+(pat) matches one or more in [[ ]]', async () => {
+      await run(shell, 'shopt -s extglob');
+      const { exitCode: r1 } = await run(shell, '[[ "abc" == a+(b)c ]]');
+      expect(r1).toBe(0);
+      const { exitCode: r2 } = await run(shell, '[[ "ac" == a+(b)c ]]');
+      expect(r2).toBe(1);
+    });
+
+    it('@(pat|pat) matches exactly one in [[ ]]', async () => {
+      await run(shell, 'shopt -s extglob');
+      const { exitCode: r1 } = await run(shell, '[[ "cat" == @(cat|dog) ]]');
+      expect(r1).toBe(0);
+      const { exitCode: r2 } = await run(shell, '[[ "bird" == @(cat|dog) ]]');
+      expect(r2).toBe(1);
+    });
+
+    it('!(pat) matches anything except in [[ ]]', async () => {
+      await run(shell, 'shopt -s extglob');
+      const { exitCode: r1 } = await run(shell, '[[ "hello" == !(world) ]]');
+      expect(r1).toBe(0);
+      const { exitCode: r2 } = await run(shell, '[[ "world" == !(world) ]]');
+      expect(r2).toBe(1);
+    });
+
+    it('extglob in case statement', async () => {
+      await run(shell, 'shopt -s extglob');
+      const { output } = await run(shell, 'case "abc" in a+(b)c) echo matched;; *) echo no;; esac');
+      expect(output.trim()).toBe('matched');
+    });
+
+    it('extglob disabled by default', async () => {
+      // Without extglob, ?(b) should NOT be treated as extended glob
+      const { exitCode } = await run(shell, '[[ "abc" == a?(b)c ]]');
+      // Without extglob, this is a literal pattern match that should fail
+      expect(exitCode).toBe(1);
+    });
+
+    it('extglob with alternations', async () => {
+      await run(shell, 'shopt -s extglob');
+      const { exitCode } = await run(shell, '[[ "foo.jpg" == *.@(jpg|png|gif) ]]');
+      expect(exitCode).toBe(0);
+      const { exitCode: r2 } = await run(shell, '[[ "foo.bmp" == *.@(jpg|png|gif) ]]');
+      expect(r2).toBe(1);
+    });
+  });
+
+  // === Section 68: case conversion with pattern ===
+  describe('68. case conversion with pattern', () => {
+    it('${var^^[aeiou]} uppercases only matching chars', async () => {
+      await run(shell, 'x=hello');
+      const { output } = await run(shell, 'echo "${x^^[aeiou]}"');
+      expect(output.trim()).toBe('hEllO');
+    });
+
+    it('${var,,[AEIOU]} lowercases only vowels', async () => {
+      await run(shell, 'x=HELLO');
+      const { output } = await run(shell, 'echo "${x,,[AEIOU]}"');
+      expect(output.trim()).toBe('HeLLo');
+    });
+
+    it('${var^} without pattern uppercases first char', async () => {
+      await run(shell, 'x=hello');
+      const { output } = await run(shell, 'echo "${x^}"');
+      expect(output.trim()).toBe('Hello');
+    });
+
+    it('${var^^} without pattern uppercases all', async () => {
+      await run(shell, 'x=hello');
+      const { output } = await run(shell, 'echo "${x^^}"');
+      expect(output.trim()).toBe('HELLO');
+    });
+
+    it('${var,,} without pattern lowercases all', async () => {
+      await run(shell, 'x=HELLO');
+      const { output } = await run(shell, 'echo "${x,,}"');
+      expect(output.trim()).toBe('hello');
+    });
+
+    it('${var,} without pattern lowercases first char', async () => {
+      await run(shell, 'x=HELLO');
+      const { output } = await run(shell, 'echo "${x,}"');
+      expect(output.trim()).toBe('hELLO');
+    });
+
+    it('${var^[a-z]} uppercases first char only if it matches', async () => {
+      await run(shell, 'x=hello');
+      const { output } = await run(shell, 'echo "${x^[a-z]}"');
+      expect(output.trim()).toBe('Hello');
+    });
+  });
+
+  // === Section 69: compgen ===
+  describe('69. compgen', () => {
+    it('compgen -W filters word list by prefix', async () => {
+      const { output, exitCode } = await run(shell, 'compgen -W "apple banana avocado" a');
+      expect(exitCode).toBe(0);
+      expect(output).toContain('apple');
+      expect(output).toContain('avocado');
+      expect(output).not.toContain('banana');
+    });
+
+    it('compgen -b lists builtins', async () => {
+      const { output, exitCode } = await run(shell, 'compgen -b');
+      expect(exitCode).toBe(0);
+      expect(output).toContain('echo');
+      expect(output).toContain('cd');
+    });
+
+    it('compgen -W with no matches returns exit 1', async () => {
+      const { exitCode } = await run(shell, 'compgen -W "apple banana" z');
+      expect(exitCode).toBe(1);
+    });
+
+    it('compgen -a lists aliases', async () => {
+      await run(shell, 'alias ll="ls -l"');
+      const { output } = await run(shell, 'compgen -a');
+      expect(output).toContain('ll');
+    });
+
+    it('compgen -v lists variables', async () => {
+      await run(shell, 'MYVAR=hello');
+      const { output } = await run(shell, 'compgen -v MY');
+      expect(output).toContain('MYVAR');
+    });
+  });
+
+  // === Section 70: disown ===
+  describe('70. disown', () => {
+    it('disown with no jobs is silent', async () => {
+      const { exitCode } = await run(shell, 'disown');
+      expect(exitCode).toBe(0);
+    });
+
+    it('disown invalid job returns error', async () => {
+      const { output, exitCode } = await run(shell, 'disown %99');
+      expect(exitCode).toBe(1);
+      expect(output).toContain('no such job');
+    });
+
+    it('type disown reports builtin', async () => {
+      const { output } = await run(shell, 'type disown');
+      expect(output).toContain('builtin');
+    });
+  });
 });
