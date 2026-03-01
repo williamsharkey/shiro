@@ -2291,4 +2291,96 @@ describe('Shell Advanced', () => {
       expect(output).toContain('MY_VAR');
     });
   });
+
+  // === Section 57: time builtin ===
+  describe('57. time builtin', () => {
+    it('time measures command execution', async () => {
+      const { output } = await run(shell, 'time echo hello');
+      expect(output).toContain('hello');
+      expect(output).toContain('real');
+    });
+
+    it('time with no args shows timing', async () => {
+      const { output } = await run(shell, 'time true');
+      expect(output).toContain('real');
+      expect(output).toContain('0m');
+    });
+  });
+
+  // === Section 58: $EPOCHSECONDS and $EPOCHREALTIME ===
+  describe('58. epoch variables', () => {
+    it('$EPOCHSECONDS returns unix timestamp', async () => {
+      const { output } = await run(shell, 'echo $EPOCHSECONDS');
+      const ts = parseInt(output.replace(/\r/g, '').trim(), 10);
+      const now = Math.floor(Date.now() / 1000);
+      expect(ts).toBeGreaterThan(now - 5);
+      expect(ts).toBeLessThanOrEqual(now + 1);
+    });
+
+    it('$EPOCHREALTIME has decimal point', async () => {
+      const { output } = await run(shell, 'echo $EPOCHREALTIME');
+      expect(output).toContain('.');
+    });
+  });
+
+  // === Section 59: case fallthrough ;& and ;;& ===
+  describe('59. case fallthrough', () => {
+    it(';& falls through to next clause', async () => {
+      const { output } = await run(shell, 'X=a; case $X in a) echo one;& b) echo two;; c) echo three;; esac');
+      expect(output).toContain('one');
+      expect(output).toContain('two');
+    });
+
+    it(';;& continues pattern checking', async () => {
+      const { output } = await run(shell, 'X=hello; case $X in h*) echo match1;;& *o) echo match2;; *z) echo nomatch;; esac');
+      expect(output).toContain('match1');
+      expect(output).toContain('match2');
+    });
+
+    it(';; stops after first match (baseline)', async () => {
+      const { output } = await run(shell, 'X=a; case $X in a) echo first;; b) echo second;; esac');
+      expect(output).toContain('first');
+      expect(output).not.toContain('second');
+    });
+  });
+
+  // === Section 60: caller and BASH_SOURCE ===
+  describe('60. caller and BASH_SOURCE', () => {
+    it('caller returns info inside function', async () => {
+      const script = 'show() { caller; }; show';
+      const { output, exitCode } = await run(shell, script);
+      expect(exitCode).toBe(0);
+      expect(output).toContain('show');
+    });
+
+    it('FUNCNAME tracks function name', async () => {
+      const script = 'myfunc() { echo "${FUNCNAME[0]}"; }; myfunc';
+      const { output } = await run(shell, script);
+      expect(output.replace(/\r/g, '').trim()).toBe('myfunc');
+    });
+
+    it('caller outside function returns 1', async () => {
+      const { exitCode } = await run(shell, 'caller');
+      expect(exitCode).toBe(1);
+    });
+  });
+
+  // === Section 61: ${var@a} variable attributes ===
+  describe('61. variable attributes @a', () => {
+    it('@a shows r for readonly', async () => {
+      const { output } = await run(shell, 'readonly RO=1; echo "${RO@a}"');
+      expect(output.replace(/\r/g, '').trim()).toContain('r');
+    });
+
+    it('@a shows a for array', async () => {
+      await run(shell, 'arr=(1 2 3)');
+      const { output } = await run(shell, 'echo "${arr@a}"');
+      expect(output.replace(/\r/g, '').trim()).toContain('a');
+    });
+
+    it('@a returns empty for regular var', async () => {
+      const { output } = await run(shell, 'PLAIN=hello; echo ">${PLAIN@a}<"');
+      expect(output.replace(/\r/g, '').trim()).toBe('><');
+    });
+  });
 });

@@ -64,6 +64,8 @@ export class Shell {
   private localVarStack: Map<string, string | undefined>[] = [];
   /** Readonly variable names */
   readonlyVars: Set<string> = new Set();
+  /** Call stack for BASH_SOURCE/caller: {funcName, source} */
+  callStack: { funcName: string; source: string }[] = [];
   private nextJobId = 1;
   private terminal?: ShiroTerminal;
 
@@ -546,6 +548,41 @@ export class Shell {
           continue;
         }
 
+        // Shell builtin: time — measure command execution time
+        if (effectiveCmdName === 'time') {
+          const timeCmd = cmdArgs.join(' ');
+          const start = performance.now();
+          if (timeCmd) {
+            exitCode = await this.execute(timeCmd, writeStdout, stderrWriter);
+          }
+          const elapsed = (performance.now() - start) / 1000;
+          const mins = Math.floor(elapsed / 60);
+          const secs = elapsed % 60;
+          stderrWriter(`\nreal\t${mins}m${secs.toFixed(3)}s\r\n`);
+          stderrWriter(`user\t0m0.000s\r\n`);
+          stderrWriter(`sys\t0m0.000s\r\n`);
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+
+        // Shell builtin: caller — print call stack info
+        if (effectiveCmdName === 'caller') {
+          const frameNum = cmdArgs.length > 0 ? parseInt(cmdArgs[0], 10) : 0;
+          if (this.callStack.length > frameNum) {
+            const frame = this.callStack[this.callStack.length - 1 - frameNum];
+            writeStdout(`1 ${frame.funcName} ${frame.source}\r\n`);
+            exitCode = 0;
+          } else {
+            exitCode = 1;
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+
         // Shell builtins: eval, setopt, shopt
         if (effectiveCmdName === 'eval') {
           // Execute remaining args as a shell command
@@ -817,7 +854,7 @@ export class Shell {
                          'return', 'trap', 'getopts', 'printf', 'type', 'command', 'hash',
                          'mapfile', 'readarray', 'select', 'alias', 'unalias', 'pushd', 'popd',
                          'dirs', 'let', 'exec', 'builtin', 'ulimit', 'umask',
-                         'complete', 'compgen', 'enable', 'disown', 'unset', 'readonly'].includes(name)) {
+                         'complete', 'compgen', 'enable', 'disown', 'unset', 'readonly', 'time', 'caller'].includes(name)) {
               writeStdout(`${name} is a shell builtin\r\n`);
             } else if (this.commands.get(name)) {
               writeStdout(`${name} is a registered command\r\n`);
@@ -840,7 +877,7 @@ export class Shell {
                    'true', 'false', 'break', 'continue', 'return', 'trap', 'printf',
                    'type', 'command', 'hash', 'mapfile', 'readarray', 'alias', 'unalias',
                    'pushd', 'popd', 'dirs', 'let', 'exec', 'builtin', 'ulimit', 'umask',
-                   'complete', 'compgen', 'enable', 'disown', 'unset', 'readonly'].includes(name)) {
+                   'complete', 'compgen', 'enable', 'disown', 'unset', 'readonly', 'time', 'caller'].includes(name)) {
                 writeStdout(`${name}\r\n`);
               } else {
                 exitCode = 1;
@@ -1940,6 +1977,8 @@ export class Shell {
           if (varName === 'PPID') { result += '0'; i += m[0].length; continue; }
           if (varName === 'LINENO') { result += '1'; i += m[0].length; continue; }
           if (varName === 'SECONDS') { result += String(Math.floor(performance.now() / 1000)); i += m[0].length; continue; }
+          if (varName === 'EPOCHSECONDS') { result += String(Math.floor(Date.now() / 1000)); i += m[0].length; continue; }
+          if (varName === 'EPOCHREALTIME') { const now = Date.now(); result += `${Math.floor(now / 1000)}.${String(now % 1000).padStart(3, '0')}`; i += m[0].length; continue; }
           // Resolve namerefs: if varName is a nameref, follow it
           const resolved = this.namerefs.has(varName) ? this.namerefs.get(varName)! : varName;
           result += this.env[resolved] ?? '';
@@ -2250,7 +2289,16 @@ export class Shell {
         case 'U': return val.toUpperCase();
         case 'u': return val.length > 0 ? val[0].toUpperCase() + val.slice(1) : '';
         case 'L': return val.toLowerCase();
-        case 'a': return ''; // attributes (stub)
+        case 'a': {
+          // Return actual variable attributes
+          const vname = atMatch[1];
+          let attrs = '';
+          if (this.readonlyVars.has(vname)) attrs += 'r';
+          if (this.namerefs.has(vname)) attrs += 'n';
+          if (this.arrays.has(vname)) attrs += 'a';
+          if (this.assocArrays.has(vname)) attrs += 'A';
+          return attrs;
+        }
         case 'A': return `declare -- ${atMatch[1]}="${val}"`; // assignment form
         case 'K': return val; // display as key-value (stub)
         default: return val;
@@ -3140,9 +3188,12 @@ export class Shell {
     this.env['#'] = String(args.length);
     this.env['@'] = args.join(' ');
 
-    // Track FUNCNAME stack
+    // Track FUNCNAME and BASH_SOURCE stacks
     const prevFuncname = this.arrays.get('FUNCNAME') || [];
     this.arrays.set('FUNCNAME', [name, ...prevFuncname]);
+    const prevBashSource = this.arrays.get('BASH_SOURCE') || [];
+    this.arrays.set('BASH_SOURCE', ['main', ...prevBashSource]);
+    this.callStack.push({ funcName: name, source: 'main' });
 
     // Push local variable frame for `local` declarations
     this.localVarStack.push(new Map());
@@ -3158,6 +3209,8 @@ export class Shell {
         // Restore before re-throwing
         this.restoreLocalVars();
         this.arrays.set('FUNCNAME', prevFuncname);
+        this.arrays.set('BASH_SOURCE', prevBashSource);
+        this.callStack.pop();
         for (const key of Object.keys(saved)) {
           if (saved[key] === undefined) delete this.env[key];
           else this.env[key] = saved[key]!;
@@ -3169,8 +3222,10 @@ export class Shell {
     // Pop local variable frame — restore saved values
     this.restoreLocalVars();
 
-    // Restore FUNCNAME stack
+    // Restore FUNCNAME and BASH_SOURCE stacks
     this.arrays.set('FUNCNAME', prevFuncname);
+    this.arrays.set('BASH_SOURCE', prevBashSource);
+    this.callStack.pop();
 
     // Restore positional params
     for (const key of Object.keys(saved)) {
@@ -3687,28 +3742,49 @@ export class Shell {
     const esacTok = tokens.find(t => t.word === 'esac');
     const body = joined.slice(inPos, esacTok ? esacTok.pos : joined.length).trim();
 
-    // Split body into clauses on ';;'
-    const clauses = body.split(';;').map(c => c.trim()).filter(Boolean);
+    // Split body into clauses, tracking separator type (;;, ;&, ;;&)
+    const clauseParts: { text: string; separator: string }[] = [];
+    let remaining = body;
+    while (remaining) {
+      // Find next separator: ;;&, ;&, or ;;
+      const sepMatch = remaining.match(/(;;&|;&|;;)/);
+      if (sepMatch) {
+        clauseParts.push({ text: remaining.slice(0, sepMatch.index!).trim(), separator: sepMatch[1] });
+        remaining = remaining.slice(sepMatch.index! + sepMatch[1].length).trim();
+      } else {
+        if (remaining.trim()) clauseParts.push({ text: remaining.trim(), separator: ';;' });
+        break;
+      }
+    }
 
-    for (const clause of clauses) {
+    let fallthrough = false;
+    for (let ci = 0; ci < clauseParts.length; ci++) {
+      const clause = clauseParts[ci].text;
+      if (!clause) continue;
       // Parse: pattern[|pattern]) commands
       const clauseMatch = clause.match(/^(.+?)\)\s*([\s\S]*)$/);
       if (!clauseMatch) continue;
       const patterns = clauseMatch[1].split('|').map(p => p.trim().replace(/^\(/, ''));
       const commands = clauseMatch[2].trim().replace(/^;\s*/, '').replace(/;\s*$/, '');
 
-      let matched = false;
-      for (const p of patterns) {
-        if (p === '*') { matched = true; break; }
-        if (word === p) { matched = true; break; }
-        // Glob match
-        const re = new RegExp('^' + p.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
-        if (re.test(word)) { matched = true; break; }
+      let matched = fallthrough;
+      if (!matched) {
+        for (const p of patterns) {
+          if (p === '*') { matched = true; break; }
+          if (word === p) { matched = true; break; }
+          const re = new RegExp('^' + p.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$');
+          if (re.test(word)) { matched = true; break; }
+        }
       }
       if (matched) {
-        if (commands) return this.execute(commands, writeStdout, writeStderr);
-        return 0;
+        let exitCode = 0;
+        if (commands) exitCode = await this.execute(commands, writeStdout, writeStderr);
+        const sep = clauseParts[ci].separator;
+        if (sep === ';&') { fallthrough = true; continue; } // fallthrough: execute next body without checking
+        if (sep === ';;&') { fallthrough = false; continue; } // continue checking remaining patterns
+        return exitCode; // ;; — done
       }
+      fallthrough = false;
     }
     return 0;
   }

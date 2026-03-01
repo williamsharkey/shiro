@@ -181,7 +181,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1494 tests across 35 test files** — all passing.
+**1507 tests across 35 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -289,6 +289,12 @@ The shell supports:
 - **$(< file)**: Command substitution shorthand to read file contents directly
 - **~+/~-**: Tilde expansion `~+` → `$PWD`, `~-` → `$OLDPWD`
 - **export inline**: `export VAR=val`, `export -p` lists all exported variables
+- **time**: `time cmd` measures execution time (real/user/sys)
+- **$EPOCHSECONDS/$EPOCHREALTIME**: Unix epoch timestamp variables
+- **case ;&  and ;;&**: Fallthrough (`;&`) and pattern-continue (`;;&`) in case/esac
+- **caller**: `caller [N]` prints function call stack info
+- **BASH_SOURCE**: Array tracking source filenames in call stack
+- **${var@a}**: Variable attribute flags (r=readonly, a=array, A=assoc, n=nameref)
 
 ## WASI Runtime (Tier 2)
 
