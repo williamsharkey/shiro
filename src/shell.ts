@@ -810,10 +810,32 @@ export class Shell {
 
         // Shell builtin: trap
         if (effectiveCmdName === 'trap') {
-          if (cmdArgs.length === 0) {
+          if (cmdArgs.length === 0 || (cmdArgs.length === 1 && cmdArgs[0] === '-p')) {
             // List all traps
             for (const [sig, cmd] of this.traps) {
               writeStdout(`trap -- '${cmd}' ${sig}\r\n`);
+            }
+            exitCode = 0;
+            this.lastExitCode = 0;
+            this.env['?'] = '0';
+            lastOutput = '';
+            continue;
+          }
+          if (cmdArgs[0] === '-l') {
+            // List signal names
+            writeStdout('EXIT ERR INT TERM HUP QUIT DEBUG RETURN\r\n');
+            exitCode = 0;
+            this.lastExitCode = 0;
+            this.env['?'] = '0';
+            lastOutput = '';
+            continue;
+          }
+          // trap -p SIGNAL — show specific trap
+          if (cmdArgs[0] === '-p' && cmdArgs.length > 1) {
+            for (let si = 1; si < cmdArgs.length; si++) {
+              const sig = cmdArgs[si].toUpperCase();
+              const cmd = this.traps.get(sig);
+              if (cmd !== undefined) writeStdout(`trap -- '${cmd}' ${sig}\r\n`);
             }
             exitCode = 0;
             this.lastExitCode = 0;
@@ -949,6 +971,25 @@ export class Shell {
                 fi++;
                 if (fi >= fmt.length) { result += '%'; break; }
                 if (fmt[fi] === '%') { result += '%'; fi++; continue; }
+                // %(fmt)T — date/time formatting
+                if (fmt[fi] === '(') {
+                  const closeP = fmt.indexOf(')T', fi);
+                  if (closeP > fi) {
+                    const dateFmt = fmt.slice(fi + 1, closeP);
+                    const ts = argIdx < fmtArgs.length ? parseInt(fmtArgs[argIdx++]) * 1000 : Date.now();
+                    const d = new Date(ts === -1000 ? Date.now() : ts);
+                    let dateResult = dateFmt;
+                    dateResult = dateResult.replace(/%Y/g, String(d.getFullYear()));
+                    dateResult = dateResult.replace(/%m/g, String(d.getMonth() + 1).padStart(2, '0'));
+                    dateResult = dateResult.replace(/%d/g, String(d.getDate()).padStart(2, '0'));
+                    dateResult = dateResult.replace(/%H/g, String(d.getHours()).padStart(2, '0'));
+                    dateResult = dateResult.replace(/%M/g, String(d.getMinutes()).padStart(2, '0'));
+                    dateResult = dateResult.replace(/%S/g, String(d.getSeconds()).padStart(2, '0'));
+                    result += dateResult;
+                    fi = closeP + 2;
+                    continue;
+                  }
+                }
                 // Parse flags, width, precision
                 let flags = '';
                 while (fi < fmt.length && '-+ 0#'.includes(fmt[fi])) { flags += fmt[fi]; fi++; }
@@ -965,6 +1006,13 @@ export class Shell {
                 let formatted = '';
                 switch (spec) {
                   case 's': formatted = arg; break;
+                  case 'b': {
+                    // %b: interpret escape sequences in argument
+                    formatted = arg.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r')
+                      .replace(/\\\\/g, '\\').replace(/\\a/g, '\x07').replace(/\\b/g, '\b')
+                      .replace(/\\e/g, '\x1b').replace(/\\f/g, '\f').replace(/\\v/g, '\v');
+                    break;
+                  }
                   case 'd': case 'i': formatted = String(parseInt(arg) || 0); break;
                   case 'f': {
                     const num = parseFloat(arg) || 0;
@@ -2108,6 +2156,27 @@ export class Shell {
       return mapped.join(' ');
     }
 
+    // ${arr[@]@Q} — quote all array elements
+    const arrAtOpMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\[[@*]\]@([QEUuLA])$/);
+    if (arrAtOpMatch) {
+      const name = arrAtOpMatch[1];
+      const op = arrAtOpMatch[2];
+      const assoc = this.assocArrays.get(name);
+      const values = assoc ? Array.from(assoc.values()) : (this.arrays.get(name) ?? []);
+      const mapped = values.map(v => {
+        switch (op) {
+          case 'Q': return `'${v.replace(/'/g, "'\\''")}'`;
+          case 'E': return v.replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+          case 'U': return v.toUpperCase();
+          case 'u': return v.length > 0 ? v[0].toUpperCase() + v.slice(1) : '';
+          case 'L': return v.toLowerCase();
+          case 'A': return v;
+          default: return v;
+        }
+      });
+      return mapped.join(' ');
+    }
+
     // ${arr[@]} or ${arr[*]} — all array elements (space-separated)
     const arrAllMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\[[@*]\]$/);
     if (arrAllMatch) {
@@ -2126,10 +2195,13 @@ export class Shell {
       // Associative array?
       const assoc = this.assocArrays.get(name);
       if (assoc) return assoc.get(key) ?? '';
-      // Indexed array
+      // Indexed array (support negative indices: arr[-1] = last element)
       const arr = this.arrays.get(name);
-      const idx = parseInt(key, 10);
-      if (arr && !isNaN(idx) && idx >= 0 && idx < arr.length) return arr[idx];
+      let idx = parseInt(key, 10);
+      if (arr && !isNaN(idx)) {
+        if (idx < 0) idx = arr.length + idx;
+        if (idx >= 0 && idx < arr.length) return arr[idx];
+      }
       return '';
     }
 

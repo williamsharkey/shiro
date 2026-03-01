@@ -181,7 +181,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1507 tests across 35 test files** — all passing.
+**1517 tests across 35 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -295,6 +295,10 @@ The shell supports:
 - **caller**: `caller [N]` prints function call stack info
 - **BASH_SOURCE**: Array tracking source filenames in call stack
 - **${var@a}**: Variable attribute flags (r=readonly, a=array, A=assoc, n=nameref)
+- **trap -p/-l**: `trap -p` print traps, `trap -p SIG` print specific, `trap -l` list signals
+- **printf %b**: Escape interpretation in arguments, `%(fmt)T` date formatting
+- **Negative array indexing**: `${arr[-1]}` last element, `${arr[-2]}` second-to-last
+- **${arr[@]@op}**: Array element transformations (@Q quote, @U uppercase, @L lowercase)
 
 ## WASI Runtime (Tier 2)
 

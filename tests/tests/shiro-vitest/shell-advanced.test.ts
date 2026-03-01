@@ -2383,4 +2383,76 @@ describe('Shell Advanced', () => {
       expect(output.replace(/\r/g, '').trim()).toBe('><');
     });
   });
+
+  // === Section 62: trap improvements ===
+  describe('62. trap improvements', () => {
+    it('trap -p shows traps', async () => {
+      const { output } = await run(shell, "trap 'echo bye' EXIT; trap -p");
+      expect(output).toContain('EXIT');
+      expect(output).toContain('echo bye');
+    });
+
+    it('trap -l lists signal names', async () => {
+      const { output } = await run(shell, 'trap -l');
+      expect(output).toContain('EXIT');
+      expect(output).toContain('INT');
+    });
+
+    it('trap -p SIGNAL shows specific trap', async () => {
+      const { output } = await run(shell, "trap 'echo err' ERR; trap -p ERR");
+      expect(output).toContain('ERR');
+    });
+  });
+
+  // === Section 63: printf improvements ===
+  describe('63. printf improvements', () => {
+    it('printf %b interprets escapes', async () => {
+      const { output } = await run(shell, 'printf "%b" "hello\\nworld"');
+      expect(output).toContain('hello');
+      expect(output).toContain('world');
+    });
+
+    it('printf %(fmt)T formats date', async () => {
+      const { output } = await run(shell, 'printf "%(%%Y)T" -1');
+      // Should contain a year like 2026
+      expect(output.replace(/\r/g, '')).toMatch(/20\d\d/);
+    });
+
+    it('printf %02d pads with zeros', async () => {
+      const { output } = await run(shell, 'printf "%02d" 5');
+      expect(output.replace(/\r/g, '')).toBe('05');
+    });
+  });
+
+  // === Section 64: negative array indexing ===
+  describe('64. negative array indexing', () => {
+    it('arr[-1] accesses last element', async () => {
+      await run(shell, 'arr=(a b c d e)');
+      const { output } = await run(shell, 'echo "${arr[-1]}"');
+      expect(output.replace(/\r/g, '').trim()).toBe('e');
+    });
+
+    it('arr[-2] accesses second to last', async () => {
+      await run(shell, 'arr=(x y z)');
+      const { output } = await run(shell, 'echo "${arr[-2]}"');
+      expect(output.replace(/\r/g, '').trim()).toBe('y');
+    });
+  });
+
+  // === Section 65: array element transformations ===
+  describe('65. array element transformations', () => {
+    it('${arr[@]@Q} quotes all elements', async () => {
+      await run(shell, 'arr=(hello world)');
+      const { output } = await run(shell, 'echo "${arr[@]@Q}"');
+      expect(output).toContain('hello');
+      expect(output).toContain('world');
+    });
+
+    it('${arr[@]@U} uppercases all elements', async () => {
+      await run(shell, 'arr=(hello world)');
+      const { output } = await run(shell, 'echo "${arr[@]@U}"');
+      expect(output).toContain('HELLO');
+      expect(output).toContain('WORLD');
+    });
+  });
 });
