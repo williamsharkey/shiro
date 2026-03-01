@@ -3,7 +3,13 @@ import { CommandRegistry, CommandContext } from './commands/index';
 import type { ShiroTerminal } from './terminal';
 import { recordCommand } from './favicon';
 import { isAvailableAsPackage, getCompiledModule } from './wasi-packages';
-import { WasiRT, WasiExit } from './wasi-runtime';
+
+// Lazy-load the WASI runtime (~960 lines) only when WASM execution is needed
+let _wasiRuntime: typeof import('./wasi-runtime') | null = null;
+async function loadWasiRuntime() {
+  if (!_wasiRuntime) _wasiRuntime = await import('./wasi-runtime');
+  return _wasiRuntime;
+}
 
 interface Redirect {
   type: '>' | '>>' | '<' | '2>' | '2>>' | '2>&1';
@@ -572,6 +578,7 @@ export class Shell {
                 const wasmModule = await getCompiledModule(wasmPkg.name, (msg) => {
                   stderrWriter(`  ${msg}\r\n`);
                 });
+                const { WasiRT, WasiExit } = await loadWasiRuntime();
                 const config = {
                   fs: this.fs,
                   cwd: this.cwd,
@@ -585,9 +592,14 @@ export class Shell {
                 const wasi = new WasiRT(config);
                 await wasi.preloadTree(this.cwd, 3, 100);
                 exitCode = await wasi.run(wasmModule);
+                // Write PATH stubs so future runs skip auto-install
+                await this.writeWasiPkgStubs(wasmPkg.name, wasmPkg.aliases);
               } catch (e: any) {
+                const { WasiExit } = await loadWasiRuntime();
                 if (e instanceof WasiExit) {
                   exitCode = e.code;
+                  // Still write stubs on non-zero exit — package is installed
+                  await this.writeWasiPkgStubs(wasmPkg.name, wasmPkg.aliases);
                 } else {
                   stderrWriter(`shiro: failed to run ${wasmPkg.name}: ${e.message}\r\n`);
                   exitCode = 1;
@@ -2226,6 +2238,35 @@ export class Shell {
       return this.executeWasmBinary(resolvedPath, args, ctx, writeStdout, writeStderr);
     }
 
+    // Check for #!wasi-pkg stub — load from package cache
+    if (content.startsWith('#!wasi-pkg ')) {
+      const pkgName = content.split('\n')[0].substring('#!wasi-pkg '.length).trim();
+      try {
+        const { WasiRT } = await loadWasiRuntime();
+        const wasmModule = await getCompiledModule(pkgName, (msg) => {
+          writeStderr(`  ${msg}\r\n`);
+        });
+        const config = {
+          fs: this.fs,
+          cwd: this.cwd,
+          args: [pkgName, ...args],
+          env: { ...this.env },
+          stdin: ctx.stdin || '',
+          onStdout: (text: string) => { ctx.stdout += text; },
+          onStderr: (text: string) => { ctx.stderr += text; },
+          preopens: { '/': '/', '.': this.cwd },
+        };
+        const wasi = new WasiRT(config);
+        await wasi.preloadTree(this.cwd, 3, 100);
+        return await wasi.run(wasmModule);
+      } catch (e: any) {
+        const { WasiExit } = await loadWasiRuntime();
+        if (e instanceof WasiExit) return e.code;
+        writeStderr(`shiro: ${pkgName}: ${e.message}\r\n`);
+        return 1;
+      }
+    }
+
     // Reject other binary files (ELF, Mach-O, etc.) that can't be interpreted
     if (content.charCodeAt(0) === 0x7f || content.includes('\0')) {
       writeStderr(`shiro: ${resolvedPath}: cannot execute binary file\n`);
@@ -2291,6 +2332,24 @@ export class Shell {
   }
 
   /**
+   * Write #!wasi-pkg stubs to /usr/local/bin for a package and its aliases.
+   */
+  private async writeWasiPkgStubs(pkgName: string, aliases?: string[]): Promise<void> {
+    try {
+      for (const dir of ['/usr', '/usr/local', '/usr/local/bin']) {
+        try { await this.fs.stat(dir); } catch { await this.fs.mkdir(dir); }
+      }
+      const stubContent = `#!wasi-pkg ${pkgName}\n`;
+      const names = [pkgName, ...(aliases || [])];
+      for (const name of names) {
+        await this.fs.writeFile(`/usr/local/bin/${name}`, stubContent);
+      }
+    } catch {
+      // Non-fatal — auto-install still works without stubs
+    }
+  }
+
+  /**
    * Execute a WASM+WASI binary through the WasiRT.
    */
   private async executeWasmBinary(
@@ -2301,6 +2360,7 @@ export class Shell {
     writeStderr: (s: string) => void,
   ): Promise<number> {
     try {
+      const { WasiRT } = await loadWasiRuntime();
       const data = await this.fs.readFile(filePath) as Uint8Array;
       const wasmBytes = new Uint8Array(data).buffer;
       const wasmModule = await WebAssembly.compile(wasmBytes);
@@ -2321,6 +2381,7 @@ export class Shell {
       await wasi.preloadTree(this.cwd, 3, 100);
       return await wasi.run(wasmModule);
     } catch (e: any) {
+      const { WasiExit } = await loadWasiRuntime();
       if (e instanceof WasiExit) {
         return e.code;
       }

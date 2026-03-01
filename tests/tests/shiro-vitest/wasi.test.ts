@@ -10,7 +10,7 @@ import {
 } from '@shiro/wasi-runtime';
 import {
   findPackage, searchPackages, listAvailable, isAvailableAsPackage,
-  downloadPackage, getCachedPackage,
+  downloadPackage, getCachedPackage, extractWasmFromWebc,
 } from '@shiro/wasi-packages';
 
 // ═══════════════════════════════════════════════════════════════════
@@ -581,9 +581,9 @@ describe('wasi-packages', () => {
     expect(results.length).toBeGreaterThan(1);
   });
 
-  it('listAvailable returns all 6 packages', () => {
+  it('listAvailable returns all packages', () => {
     const all = listAvailable();
-    expect(all.length).toBe(6);
+    expect(all.length).toBeGreaterThanOrEqual(12);
   });
 
   it('isAvailableAsPackage("cowsay") returns package', () => {
@@ -596,12 +596,36 @@ describe('wasi-packages', () => {
     expect(isAvailableAsPackage('xyz')).toBeUndefined();
   });
 
+  it('finds packages by alias', () => {
+    expect(findPackage('qjs')?.name).toBe('quickjs');
+    expect(findPackage('sqlite3')?.name).toBe('sqlite');
+    expect(findPackage('hexdump')?.name).toBe('util-linux');
+  });
+
+  it('all packages have webc format and cdn.wasmer.io URLs', () => {
+    const all = listAvailable();
+    for (const pkg of all) {
+      expect(pkg.format).toBe('webc');
+      expect(pkg.url).toContain('cdn.wasmer.io/webcimages/');
+    }
+  });
+
   it('downloadPackage + getCachedPackage round-trip via IndexedDB', async () => {
-    // Mock fetch to return fake WASM bytes
-    const fakeWasm = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+    // Mock fetch to return a fake WebC container with embedded WASM
+    // Build a fake webc: some header bytes + WASM magic + version + minimal content
+    const wasmPayload = new Uint8Array([
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // WASM magic + version
+      0x01, 0x04, 0x01, 0x60, 0x00, 0x00, // type section
+    ]);
+    // Wrap in a fake webc container (some random header bytes before the WASM)
+    const webcHeader = new Uint8Array([0x57, 0x45, 0x42, 0x43, 0x00, 0x00, 0x00, 0x10]);
+    const fakeWebc = new Uint8Array(webcHeader.length + wasmPayload.length);
+    fakeWebc.set(webcHeader, 0);
+    fakeWebc.set(wasmPayload, webcHeader.length);
+
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
-      arrayBuffer: () => Promise.resolve(fakeWasm.buffer),
+      arrayBuffer: () => Promise.resolve(fakeWebc.buffer),
     });
     vi.stubGlobal('fetch', mockFetch);
 
@@ -616,6 +640,54 @@ describe('wasi-packages', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+//  C2. extractWasmFromWebc tests
+// ═══════════════════════════════════════════════════════════════════
+
+describe('extractWasmFromWebc', () => {
+  it('extracts WASM binary from webc container', () => {
+    // Build a valid WASM module
+    const wasmModule = buildExitWasm(0);
+    // Wrap it in fake container bytes
+    const header = new Uint8Array([0x57, 0x45, 0x42, 0x43, 0x00, 0x01, 0x00, 0x00, 0xff, 0xfe]);
+    const container = new Uint8Array(header.length + wasmModule.length);
+    container.set(header, 0);
+    container.set(wasmModule, header.length);
+
+    const extracted = extractWasmFromWebc(container.buffer);
+    expect(extracted).not.toBeNull();
+    expect(new Uint8Array(extracted!).slice(0, 4)).toEqual(new Uint8Array([0x00, 0x61, 0x73, 0x6d]));
+    expect(extracted!.byteLength).toBe(wasmModule.length);
+  });
+
+  it('returns the largest WASM binary when multiple are present', () => {
+    const small = buildExitWasm(0);
+    const large = buildHelloWasm();
+    const filler = new Uint8Array([0xff, 0xff, 0xff, 0xff]);
+    const container = new Uint8Array(small.length + filler.length + large.length);
+    container.set(small, 0);
+    container.set(filler, small.length);
+    container.set(large, small.length + filler.length);
+
+    const extracted = extractWasmFromWebc(container.buffer);
+    expect(extracted).not.toBeNull();
+    // Should return the larger one (hello binary is bigger than exit binary)
+    expect(extracted!.byteLength).toBe(large.length);
+  });
+
+  it('returns null when no WASM magic found', () => {
+    const garbage = new Uint8Array([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]);
+    expect(extractWasmFromWebc(garbage.buffer)).toBeNull();
+  });
+
+  it('handles raw WASM binary (no container)', () => {
+    const wasm = buildExitWasm(0);
+    const extracted = extractWasmFromWebc(wasm.buffer);
+    expect(extracted).not.toBeNull();
+    expect(extracted!.byteLength).toBe(wasm.length);
   });
 });
 

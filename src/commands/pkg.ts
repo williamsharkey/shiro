@@ -21,6 +21,43 @@ import {
  *   pkg info <name>       Show package details
  */
 
+const PKG_BIN_DIR = '/usr/local/bin';
+
+/** Ensure /usr/local/bin exists in the virtual FS */
+async function ensureBinDir(fs: any): Promise<void> {
+  for (const dir of ['/usr', '/usr/local', PKG_BIN_DIR]) {
+    try {
+      await fs.stat(dir);
+    } catch {
+      await fs.mkdir(dir);
+    }
+  }
+}
+
+/** Write #!wasi-pkg stubs to /usr/local/bin for a package + its aliases */
+async function writePathStubs(ctx: CommandContext, pkgName: string): Promise<void> {
+  const pkg = findPackage(pkgName);
+  if (!pkg) return;
+  await ensureBinDir(ctx.fs);
+  const stubContent = `#!wasi-pkg ${pkg.name}\n`;
+  const names = [pkg.name, ...(pkg.aliases || [])];
+  for (const cmdName of names) {
+    await ctx.fs.writeFile(`${PKG_BIN_DIR}/${cmdName}`, stubContent);
+  }
+}
+
+/** Remove #!wasi-pkg stubs from /usr/local/bin for a package + its aliases */
+async function removePathStubs(ctx: CommandContext, pkgName: string): Promise<void> {
+  const pkg = findPackage(pkgName);
+  if (!pkg) return;
+  const names = [pkg.name, ...(pkg.aliases || [])];
+  for (const cmdName of names) {
+    try {
+      await ctx.fs.unlink(`${PKG_BIN_DIR}/${cmdName}`);
+    } catch { /* ignore if not found */ }
+  }
+}
+
 async function pkgInstall(ctx: CommandContext): Promise<number> {
   const name = ctx.args[1];
   if (!name) {
@@ -32,6 +69,8 @@ async function pkgInstall(ctx: CommandContext): Promise<number> {
     await downloadPackage(name, (msg) => {
       ctx.stdout += msg + '\n';
     });
+    // Write PATH stubs so the command is found via PATH lookup
+    await writePathStubs(ctx, name);
     return 0;
   } catch (e: any) {
     ctx.stderr += `pkg install: ${e.message}\n`;
@@ -105,6 +144,7 @@ async function pkgRemove(ctx: CommandContext): Promise<number> {
   }
 
   try {
+    await removePathStubs(ctx, name);
     await removePackage(name);
     clearModuleCache(name);
     ctx.stdout += `Removed ${name}\n`;
