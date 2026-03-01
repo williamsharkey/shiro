@@ -1605,4 +1605,138 @@ describe('Shell Advanced', () => {
       expect(output.replace(/\r/g, '').trim()).toBe('hello world');
     });
   });
+
+  // ─── Section 30: shift ─────────────────────────────────────────────────────
+  describe('shift', () => {
+    it('shift removes first positional parameter', async () => {
+      const { output } = await run(shell, 'set -- a b c d; shift; echo $1 $2 $3');
+      expect(output.replace(/\r/g, '').trim()).toBe('b c d');
+    });
+
+    it('shift N removes first N parameters', async () => {
+      const { output } = await run(shell, 'set -- a b c d e; shift 2; echo $1 $2 $3');
+      expect(output.replace(/\r/g, '').trim()).toBe('c d e');
+    });
+
+    it('shift updates $#', async () => {
+      const { output } = await run(shell, 'set -- a b c d; shift; echo $#');
+      expect(output.replace(/\r/g, '').trim()).toBe('3');
+    });
+
+    it('shift beyond count fails', async () => {
+      const { exitCode } = await run(shell, 'set -- a b; shift 5');
+      expect(exitCode).toBe(1);
+    });
+
+    it('shift in function with args', async () => {
+      const { output } = await run(shell, 'f() { shift; echo $1; }; f x y z');
+      expect(output.replace(/\r/g, '').trim()).toBe('y');
+    });
+  });
+
+  // ─── Section 31: set -- positional parameters ──────────────────────────────
+  describe('set -- positional parameters', () => {
+    it('set -- assigns positional parameters', async () => {
+      const { output } = await run(shell, 'set -- hello world; echo $1 $2');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello world');
+    });
+
+    it('set -- updates $#', async () => {
+      const { output } = await run(shell, 'set -- a b c; echo $#');
+      expect(output.replace(/\r/g, '').trim()).toBe('3');
+    });
+
+    it('set -- clears old params', async () => {
+      const { output } = await run(shell, 'set -- a b c d; set -- x y; echo $1 $2 $3');
+      expect(output.replace(/\r/g, '').trim()).toBe('x y');
+    });
+
+    it('set -- with no args clears all params', async () => {
+      const { output } = await run(shell, 'set -- a b c; set --; echo $#');
+      expect(output.replace(/\r/g, '').trim()).toBe('0');
+    });
+
+    it('set -e still works', async () => {
+      const { exitCode } = await run(shell, 'set -e; true');
+      expect(exitCode).toBe(0);
+    });
+  });
+
+  // ─── Section 32: printf -v ─────────────────────────────────────────────────
+  describe('printf -v', () => {
+    it('printf -v assigns to variable', async () => {
+      const { output } = await run(shell, 'printf -v result "hello %s" world; echo $result');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello world');
+    });
+
+    it('printf -v with format specifiers', async () => {
+      const { output } = await run(shell, 'printf -v num "%d items" 42; echo $num');
+      expect(output.replace(/\r/g, '').trim()).toBe('42 items');
+    });
+
+    it('printf without -v still prints to stdout', async () => {
+      const { output } = await run(shell, 'printf "%s-%s" foo bar');
+      expect(output.replace(/\r/g, '').trim()).toBe('foo-bar');
+    });
+
+    it('printf -v with padding', async () => {
+      const { output } = await run(shell, 'printf -v padded "%05d" 42; echo $padded');
+      expect(output.replace(/\r/g, '').trim()).toBe('00042');
+    });
+  });
+
+  // ─── Section 33: local variable scoping ────────────────────────────────────
+  describe('local variable scoping', () => {
+    it('local variable does not leak to caller', async () => {
+      const { output } = await run(shell, 'f() { local x=inner; }; x=outer; f; echo $x');
+      expect(output.replace(/\r/g, '').trim()).toBe('outer');
+    });
+
+    it('local variable without value initializes empty', async () => {
+      const { output } = await run(shell, 'f() { local myvar; echo "val:${myvar}"; }; f');
+      expect(output.replace(/\r/g, '').trim()).toBe('val:');
+    });
+
+    it('local variable is visible inside function', async () => {
+      const { output } = await run(shell, 'f() { local msg=hello; echo $msg; }; f');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello');
+    });
+
+    it('local restores previous value after function', async () => {
+      const { output } = await run(shell, 'x=before; f() { local x=inside; echo $x; }; f; echo $x');
+      expect(output.replace(/\r/g, '').trim()).toBe('inside\nbefore');
+    });
+
+    it('local removes variable if it did not exist before', async () => {
+      const { output } = await run(shell, 'unset newvar; f() { local newvar=temp; }; f; echo "${newvar:-unset}"');
+      expect(output.replace(/\r/g, '').trim()).toBe('unset');
+    });
+  });
+
+  // ─── Section 34: read improvements ─────────────────────────────────────────
+  describe('read improvements', () => {
+    it('read -d uses custom delimiter', async () => {
+      shell.env['__PIPE_STDIN'] = 'hello:world:end';
+      const { output } = await run(shell, 'read -d : val; echo $val');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello');
+    });
+
+    it('read -n reads N characters', async () => {
+      shell.env['__PIPE_STDIN'] = 'abcdefgh';
+      const { output } = await run(shell, 'read -n3 val; echo $val');
+      expect(output.replace(/\r/g, '').trim()).toBe('abc');
+    });
+
+    it('read -r preserves backslashes', async () => {
+      shell.env['__PIPE_STDIN'] = 'path\\to\\file';
+      const { output } = await run(shell, 'read -r val; echo "$val"');
+      expect(output.replace(/\r/g, '').trim()).toBe('path\\to\\file');
+    });
+
+    it('read -p skips prompt in non-interactive mode', async () => {
+      shell.env['__PIPE_STDIN'] = 'answer';
+      const { output } = await run(shell, 'read -p "Enter: " val; echo $val');
+      expect(output.replace(/\r/g, '').trim()).toBe('answer');
+    });
+  });
 });

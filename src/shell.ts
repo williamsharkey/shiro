@@ -60,6 +60,8 @@ export class Shell {
   namerefs: Map<string, string> = new Map();
   /** Directory stack for pushd/popd */
   dirStack: string[] = [];
+  /** Local variable frames for function scoping — stack of {varName → savedValue|undefined} */
+  private localVarStack: Map<string, string | undefined>[] = [];
   private nextJobId = 1;
   private terminal?: ShiroTerminal;
 
@@ -129,6 +131,16 @@ export class Shell {
     const args: string[] = [];
     for (let i = 1; i <= count; i++) args.push(this.env[String(i)] || '');
     return args;
+  }
+
+  /** Pop and restore local variable frame */
+  private restoreLocalVars(): void {
+    const frame = this.localVarStack.pop();
+    if (!frame) return;
+    for (const [varName, savedValue] of frame) {
+      if (savedValue === undefined) delete this.env[varName];
+      else this.env[varName] = savedValue;
+    }
   }
 
   fork(): Shell {
@@ -569,15 +581,23 @@ export class Shell {
             continue;
           }
           // Basic declare/typeset/local support
+          const isLocal = effectiveCmdName === 'local';
           for (const arg of cmdArgs) {
             if (arg === '-x' || arg === '-r' || arg === '-i' || arg === '-f' || arg === '-p') continue;
             if (arg.startsWith('-')) continue; // skip other flags
             const eqIdx = arg.indexOf('=');
+            const varName = eqIdx >= 0 ? arg.slice(0, eqIdx) : arg;
+            // Save old value in local var frame if inside a function
+            if (isLocal && this.localVarStack.length > 0) {
+              const frame = this.localVarStack[this.localVarStack.length - 1];
+              if (!frame.has(varName)) {
+                frame.set(varName, varName in this.env ? this.env[varName] : undefined);
+              }
+            }
             if (eqIdx >= 0) {
-              this.env[arg.slice(0, eqIdx)] = arg.slice(eqIdx + 1);
+              this.env[varName] = arg.slice(eqIdx + 1);
             } else {
-              // Declare without value — ensure exists
-              if (!(arg in this.env)) this.env[arg] = '';
+              if (!(varName in this.env)) this.env[varName] = '';
             }
           }
           continue;
@@ -585,13 +605,22 @@ export class Shell {
 
         // Shell builtin: read
         if (effectiveCmdName === 'read') {
-          // Parse flags: -r (raw), -a (array), variable names
+          // Parse flags: -r (raw), -a (array), -p (prompt), -d (delimiter), -n (nchars), -s (silent)
           let rawMode = false;
           let arrayMode = false;
+          let readDelim = '\n';
+          let readNchars = -1;
           const readVars: string[] = [];
-          for (const a of cmdArgs) {
+          for (let ri = 0; ri < cmdArgs.length; ri++) {
+            const a = cmdArgs[ri];
             if (a === '-r') rawMode = true;
             else if (a === '-a') arrayMode = true;
+            else if (a === '-s') { /* silent - no-op in non-interactive */ }
+            else if (a === '-p' && ri + 1 < cmdArgs.length) { ri++; /* skip prompt text */ }
+            else if (a === '-d' && ri + 1 < cmdArgs.length) { readDelim = cmdArgs[++ri]; }
+            else if (a === '-n' && ri + 1 < cmdArgs.length) { readNchars = parseInt(cmdArgs[++ri], 10) || -1; }
+            else if (a.startsWith('-n') && a.length > 2) { readNchars = parseInt(a.slice(2), 10) || -1; }
+            else if (a.startsWith('-d') && a.length > 2) { readDelim = a.slice(2); }
             else if (!a.startsWith('-')) readVars.push(a);
           }
           // Read one line from stdin — prefer piped stdin (__PIPE_STDIN), then pipe, then heredoc
@@ -602,15 +631,20 @@ export class Shell {
           } else {
             readInput = i > 0 ? lastOutput : (heredocStdin || '');
           }
-          const firstNewline = readInput.indexOf('\n');
           let readLine: string;
           let remaining: string;
-          if (firstNewline >= 0) {
-            readLine = readInput.slice(0, firstNewline);
-            remaining = readInput.slice(firstNewline + 1);
+          if (readNchars > 0) {
+            readLine = readInput.slice(0, readNchars);
+            remaining = readInput.slice(readNchars);
           } else {
-            readLine = readInput;
-            remaining = '';
+            const delimIdx = readInput.indexOf(readDelim);
+            if (delimIdx >= 0) {
+              readLine = readInput.slice(0, delimIdx);
+              remaining = readInput.slice(delimIdx + readDelim.length);
+            } else {
+              readLine = readInput;
+              remaining = '';
+            }
           }
           // Consume the line from __PIPE_STDIN so next read gets the next line
           if (hasPipeStdin) {
@@ -621,7 +655,7 @@ export class Shell {
             const arrName = readVars[0] || 'MAPFILE';
             const words = processed.split(/\s+/).filter(Boolean);
             this.arrays.set(arrName, words);
-            exitCode = (readLine || firstNewline >= 0) ? 0 : 1;
+            exitCode = readLine.length > 0 ? 0 : 1;
             this.lastExitCode = exitCode;
             this.env['?'] = String(exitCode);
             lastOutput = '';
@@ -642,7 +676,7 @@ export class Shell {
               }
             }
           }
-          exitCode = (readLine || firstNewline >= 0) ? 0 : 1;
+          exitCode = readLine.length > 0 ? 0 : 1;
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
           lastOutput = '';
@@ -789,8 +823,15 @@ export class Shell {
             stderrWriter('printf: usage: printf format [arguments]\r\n');
             exitCode = 1;
           } else {
-            const fmt = cmdArgs[0];
-            const fmtArgs = cmdArgs.slice(1);
+            // Handle -v varname
+            let printfVarName: string | null = null;
+            let printfCmdArgs = cmdArgs;
+            if (cmdArgs[0] === '-v' && cmdArgs.length >= 3) {
+              printfVarName = cmdArgs[1];
+              printfCmdArgs = cmdArgs.slice(2);
+            }
+            const fmt = printfCmdArgs[0];
+            const fmtArgs = printfCmdArgs.slice(1);
             let argIdx = 0;
             let result = '';
             let fi = 0;
@@ -865,7 +906,11 @@ export class Shell {
               result += fmt[fi];
               fi++;
             }
-            writeStdout(result.replace(/\n/g, '\r\n'));
+            if (printfVarName) {
+              this.env[printfVarName] = result;
+            } else {
+              writeStdout(result.replace(/\n/g, '\r\n'));
+            }
             exitCode = 0;
           }
           this.lastExitCode = exitCode;
@@ -1072,6 +1117,94 @@ export class Shell {
               result = this.evalArithmetic(expr);
             }
             exitCode = result === 0 ? 1 : 0;
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+
+        // Shell builtin: shift — shift positional parameters
+        if (effectiveCmdName === 'shift') {
+          const n = cmdArgs.length > 0 ? parseInt(cmdArgs[0], 10) : 1;
+          if (isNaN(n) || n < 0) {
+            stderrWriter('shift: numeric argument required\r\n');
+            exitCode = 1;
+          } else {
+            const count = parseInt(this.env['#'] || '0', 10);
+            if (n > count) {
+              stderrWriter(`shift: shift count (${n}) exceeds positional parameter count (${count})\r\n`);
+              exitCode = 1;
+            } else {
+              const args = this.getPositionalArgs();
+              const shifted = args.slice(n);
+              // Clear old params
+              for (let si = 1; si <= count; si++) delete this.env[String(si)];
+              // Set new params
+              for (let si = 0; si < shifted.length; si++) this.env[String(si + 1)] = shifted[si];
+              this.env['#'] = String(shifted.length);
+              this.env['@'] = shifted.join(' ');
+              exitCode = 0;
+            }
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+
+        // Shell builtin: set -- args (positional parameter assignment)
+        if (effectiveCmdName === 'set') {
+          // Check for -- to set positional parameters
+          const ddIdx = cmdArgs.indexOf('--');
+          if (ddIdx >= 0) {
+            const newArgs = cmdArgs.slice(ddIdx + 1);
+            // Clear old positional params
+            const oldCount = parseInt(this.env['#'] || '0', 10);
+            for (let si = 1; si <= oldCount; si++) delete this.env[String(si)];
+            // Set new positional params
+            for (let si = 0; si < newArgs.length; si++) this.env[String(si + 1)] = newArgs[si];
+            this.env['#'] = String(newArgs.length);
+            this.env['@'] = newArgs.join(' ');
+            exitCode = 0;
+          } else {
+            // Handle set -e, -x, etc. inline
+            for (let si = 0; si < cmdArgs.length; si++) {
+              const arg = cmdArgs[si];
+              if (arg === '-o' || arg === '+o') {
+                const optName = cmdArgs[++si];
+                if (!optName) {
+                  const allOpts = ['errexit', 'nounset', 'xtrace', 'verbose', 'noexec', 'pipefail'];
+                  for (const opt of allOpts) {
+                    writeStdout(`${opt}\t\t${this.options.has(opt) ? 'on' : 'off'}\r\n`);
+                  }
+                } else {
+                  const optMap: Record<string, string> = { errexit: 'errexit', nounset: 'nounset', xtrace: 'xtrace', verbose: 'verbose', noexec: 'noexec', pipefail: 'pipefail' };
+                  const mapped = optMap[optName];
+                  if (mapped) {
+                    if (arg === '-o') this.options.add(mapped);
+                    else this.options.delete(mapped);
+                  } else {
+                    stderrWriter(`set: ${optName}: invalid option name\r\n`);
+                    exitCode = 1;
+                  }
+                }
+                continue;
+              }
+              const shortMap: Record<string, string> = { e: 'errexit', u: 'nounset', x: 'xtrace', v: 'verbose', n: 'noexec' };
+              if (arg.startsWith('-') && arg.length > 1 && arg[1] !== '-') {
+                for (let j = 1; j < arg.length; j++) {
+                  const mapped = shortMap[arg[j]];
+                  if (mapped) this.options.add(mapped);
+                }
+              } else if (arg.startsWith('+') && arg.length > 1) {
+                for (let j = 1; j < arg.length; j++) {
+                  const mapped = shortMap[arg[j]];
+                  if (mapped) this.options.delete(mapped);
+                }
+              }
+            }
+            exitCode = 0;
           }
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
@@ -2723,6 +2856,9 @@ export class Shell {
     const prevFuncname = this.arrays.get('FUNCNAME') || [];
     this.arrays.set('FUNCNAME', [name, ...prevFuncname]);
 
+    // Push local variable frame for `local` declarations
+    this.localVarStack.push(new Map());
+
     // Execute body — catch ReturnSignal for `return [N]`
     let exitCode = 0;
     try {
@@ -2732,6 +2868,7 @@ export class Shell {
         exitCode = e.code;
       } else {
         // Restore before re-throwing
+        this.restoreLocalVars();
         this.arrays.set('FUNCNAME', prevFuncname);
         for (const key of Object.keys(saved)) {
           if (saved[key] === undefined) delete this.env[key];
@@ -2740,6 +2877,9 @@ export class Shell {
         throw e;
       }
     }
+
+    // Pop local variable frame — restore saved values
+    this.restoreLocalVars();
 
     // Restore FUNCNAME stack
     this.arrays.set('FUNCNAME', prevFuncname);
