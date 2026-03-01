@@ -281,7 +281,6 @@ async function main() {
   registerCommand(commands, becomeCmd, 'src/commands/become.ts');
   registerCommand(commands, unbecomeCmd, 'src/commands/become.ts');
   registerCommand(commands, pageCmd, 'src/commands/page.ts');
-<<<<<<< HEAD
   registerCommand(commands, titleCmd, 'src/commands/title.ts');
 
   registerCommand(commands, lazyCommand('gh', 'GitHub CLI',
