@@ -181,7 +181,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1298 tests across 35 test files** — all passing.
+**1350 tests across 35 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -253,6 +253,18 @@ The shell supports:
 - **break/continue/return**: `break [N]`, `continue [N]` in loops, `return [N]` from functions
 - **trap**: `trap 'command' SIGNAL` for ERR/EXIT/INT, `trap` lists, `trap '' SIG` resets
 - **select**: `select VAR in items; do ...; done` numbered menu construct
+- **getopts**: `getopts OPTSTRING VAR [args...]` for option parsing with OPTIND/OPTARG
+- **printf**: `printf FORMAT [ARGS...]` with %s, %d, %f, %x, %o, %c, width, precision, flags
+- **type/command/hash**: command identification builtins
+- **Arithmetic operators**: `&&`, `||`, `!`, `?:` (ternary), `&`, `|`, `^`, `~`, `<<`, `>>` with full precedence
+- **alias/unalias**: `alias name=value`, `unalias name`, `unalias -a`
+- **pushd/popd/dirs**: directory stack navigation
+- **let**: `let "expr"` arithmetic evaluation
+- **Brace expansion**: `{a,b,c}`, `{1..5}`, `{a..z}`, `{1..10..2}`, nested braces
+- **Subshells**: `(commands)` runs in forked shell
+- **Process substitution**: `<(cmd)`, `>(cmd)` virtual file descriptors
+- **Regex matching**: `[[ string =~ pattern ]]` with `BASH_REMATCH` array
+- **Test improvements**: `-s` (non-zero size), `-L`/`-h` (symlink), `-a`/`-o` logical, `<`/`>` string comparison
 
 ## WASI Runtime (Tier 2)
 

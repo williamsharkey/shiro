@@ -54,6 +54,10 @@ export class Shell {
   assocArrays: Map<string, Map<string, string>> = new Map();
   /** Trap handlers: signal → command string */
   traps: Map<string, string> = new Map();
+  /** Shell aliases: name → replacement string */
+  aliases: Map<string, string> = new Map();
+  /** Directory stack for pushd/popd */
+  dirStack: string[] = [];
   private nextJobId = 1;
   private terminal?: ShiroTerminal;
 
@@ -117,6 +121,14 @@ export class Shell {
    * Create a child shell that shares fs/commands but has its own cwd/env.
    * Used by spawn to isolate process state from the parent terminal.
    */
+  /** Get positional parameters $1..$# as an array */
+  private getPositionalArgs(): string[] {
+    const count = parseInt(this.env['#'] || '0', 10);
+    const args: string[] = [];
+    for (let i = 1; i <= count; i++) args.push(this.env[String(i)] || '');
+    return args;
+  }
+
   fork(): Shell {
     const child = new Shell(this.fs, this.commands);
     child.cwd = this.cwd;
@@ -126,6 +138,8 @@ export class Shell {
     child.arrays = new Map(Array.from(this.arrays.entries()).map(([k, v]) => [k, [...v]]));
     child.assocArrays = new Map(Array.from(this.assocArrays.entries()).map(([k, v]) => [k, new Map(v)]));
     child.traps = new Map(this.traps);
+    child.aliases = new Map(this.aliases);
+    child.dirStack = [...this.dirStack];
     child.history = this.history; // share history array reference
     return child;
   }
@@ -412,6 +426,17 @@ export class Shell {
           continue;
         }
 
+        // Alias expansion: if cmdName matches an alias, replace it
+        if (this.aliases.has(cmdName)) {
+          const aliasValue = this.aliases.get(cmdName)!;
+          const fullCmd = aliasValue + (cmdArgs.length > 0 ? ' ' + cmdArgs.join(' ') : '');
+          exitCode = await this.execute(fullCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+
         // Handle . as alias for source
         const effectiveCmdName = cmdName === '.' ? 'source' : cmdName;
 
@@ -683,6 +708,357 @@ export class Shell {
           exitCode = 0;
           this.lastExitCode = 0;
           this.env['?'] = '0';
+          lastOutput = '';
+          continue;
+        }
+
+        // Shell builtins: type, command -v, hash
+        if (effectiveCmdName === 'type') {
+          for (const name of cmdArgs) {
+            if (name in this.functions) {
+              writeStdout(`${name} is a function\r\n`);
+            } else if (['cd', 'echo', 'read', 'eval', 'set', 'export', 'source', 'shift',
+                         'declare', 'local', 'typeset', 'true', 'false', 'break', 'continue',
+                         'return', 'trap', 'getopts', 'printf', 'type', 'command', 'hash',
+                         'mapfile', 'readarray', 'select', 'alias', 'unalias', 'pushd', 'popd',
+                         'dirs', 'let'].includes(name)) {
+              writeStdout(`${name} is a shell builtin\r\n`);
+            } else if (this.commands.get(name)) {
+              writeStdout(`${name} is a registered command\r\n`);
+            } else {
+              stderrWriter(`type: ${name}: not found\r\n`);
+              exitCode = 1;
+            }
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+        if (effectiveCmdName === 'command') {
+          if (cmdArgs[0] === '-v') {
+            // command -v: like which
+            for (const name of cmdArgs.slice(1)) {
+              if (name in this.functions || this.commands.get(name) ||
+                  ['cd', 'echo', 'read', 'eval', 'set', 'export', 'source', 'shift',
+                   'true', 'false', 'break', 'continue', 'return', 'trap', 'printf',
+                   'type', 'command', 'hash', 'mapfile', 'readarray', 'alias', 'unalias',
+                   'pushd', 'popd', 'dirs', 'let'].includes(name)) {
+                writeStdout(`${name}\r\n`);
+              } else {
+                exitCode = 1;
+              }
+            }
+            this.lastExitCode = exitCode;
+            this.env['?'] = String(exitCode);
+            lastOutput = '';
+            continue;
+          }
+          // command NAME args: execute command bypassing functions
+          // Just fall through to normal execution
+        }
+        if (effectiveCmdName === 'hash') {
+          // hash -r: clear hash table (no-op, we don't cache)
+          writeStdout('hash: hash table empty\r\n');
+          exitCode = 0;
+          this.lastExitCode = 0;
+          this.env['?'] = '0';
+          lastOutput = '';
+          continue;
+        }
+
+        // Shell builtin: printf FORMAT [ARGS...]
+        if (effectiveCmdName === 'printf') {
+          if (cmdArgs.length === 0) {
+            stderrWriter('printf: usage: printf format [arguments]\r\n');
+            exitCode = 1;
+          } else {
+            const fmt = cmdArgs[0];
+            const fmtArgs = cmdArgs.slice(1);
+            let argIdx = 0;
+            let result = '';
+            let fi = 0;
+            while (fi < fmt.length) {
+              if (fmt[fi] === '\\') {
+                // Escape sequences
+                fi++;
+                if (fi >= fmt.length) { result += '\\'; break; }
+                switch (fmt[fi]) {
+                  case 'n': result += '\n'; break;
+                  case 't': result += '\t'; break;
+                  case 'r': result += '\r'; break;
+                  case '\\': result += '\\'; break;
+                  case '"': result += '"'; break;
+                  case "'": result += "'"; break;
+                  case '0': {
+                    // Octal
+                    let oct = '';
+                    fi++;
+                    while (fi < fmt.length && /[0-7]/.test(fmt[fi]) && oct.length < 3) { oct += fmt[fi]; fi++; }
+                    result += String.fromCharCode(parseInt(oct || '0', 8));
+                    fi--;
+                    break;
+                  }
+                  default: result += '\\' + fmt[fi];
+                }
+                fi++;
+                continue;
+              }
+              if (fmt[fi] === '%') {
+                fi++;
+                if (fi >= fmt.length) { result += '%'; break; }
+                if (fmt[fi] === '%') { result += '%'; fi++; continue; }
+                // Parse flags, width, precision
+                let flags = '';
+                while (fi < fmt.length && '-+ 0#'.includes(fmt[fi])) { flags += fmt[fi]; fi++; }
+                let width = '';
+                while (fi < fmt.length && /\d/.test(fmt[fi])) { width += fmt[fi]; fi++; }
+                let precision = '';
+                if (fi < fmt.length && fmt[fi] === '.') {
+                  fi++;
+                  while (fi < fmt.length && /\d/.test(fmt[fi])) { precision += fmt[fi]; fi++; }
+                }
+                const spec = fi < fmt.length ? fmt[fi] : '';
+                fi++;
+                const arg = argIdx < fmtArgs.length ? fmtArgs[argIdx++] : '';
+                let formatted = '';
+                switch (spec) {
+                  case 's': formatted = arg; break;
+                  case 'd': case 'i': formatted = String(parseInt(arg) || 0); break;
+                  case 'f': {
+                    const num = parseFloat(arg) || 0;
+                    formatted = precision ? num.toFixed(parseInt(precision)) : num.toFixed(6);
+                    break;
+                  }
+                  case 'x': formatted = (parseInt(arg) || 0).toString(16); break;
+                  case 'X': formatted = (parseInt(arg) || 0).toString(16).toUpperCase(); break;
+                  case 'o': formatted = (parseInt(arg) || 0).toString(8); break;
+                  case 'c': formatted = arg ? arg[0] : ''; break;
+                  default: formatted = '%' + spec;
+                }
+                // Apply width
+                if (width) {
+                  const w = parseInt(width);
+                  if (flags.includes('-')) formatted = formatted.padEnd(w);
+                  else if (flags.includes('0') && /[dioxXf]/.test(spec)) formatted = formatted.padStart(w, '0');
+                  else formatted = formatted.padStart(w);
+                }
+                result += formatted;
+                continue;
+              }
+              result += fmt[fi];
+              fi++;
+            }
+            writeStdout(result.replace(/\n/g, '\r\n'));
+            exitCode = 0;
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+
+        // Shell builtin: getopts OPTSTRING VAR [args...]
+        if (effectiveCmdName === 'getopts') {
+          if (cmdArgs.length < 2) {
+            stderrWriter('getopts: usage: getopts optstring name [arg ...]\r\n');
+            exitCode = 1;
+          } else {
+            const optstring = cmdArgs[0];
+            const varName = cmdArgs[1];
+            // Use positional params if no extra args
+            const args = cmdArgs.length > 2 ? cmdArgs.slice(2) : this.getPositionalArgs();
+            const optind = parseInt(this.env['OPTIND'] || '1', 10);
+
+            if (optind > args.length) {
+              // No more arguments
+              this.env[varName] = '?';
+              exitCode = 1;
+            } else {
+              const arg = args[optind - 1];
+              if (arg.startsWith('-') && arg.length > 1 && arg !== '--') {
+                const opt = arg[1];
+                const colonIdx = optstring.indexOf(opt);
+                if (colonIdx < 0) {
+                  // Unknown option
+                  this.env[varName] = '?';
+                  this.env['OPTARG'] = opt;
+                  stderrWriter(`getopts: illegal option -- ${opt}\r\n`);
+                  this.env['OPTIND'] = String(optind + 1);
+                  exitCode = 0;
+                } else if (optstring[colonIdx + 1] === ':') {
+                  // Option requires argument
+                  if (arg.length > 2) {
+                    // Argument attached: -fvalue
+                    this.env[varName] = opt;
+                    this.env['OPTARG'] = arg.slice(2);
+                    this.env['OPTIND'] = String(optind + 1);
+                  } else if (optind < args.length) {
+                    // Next argument is the value
+                    this.env[varName] = opt;
+                    this.env['OPTARG'] = args[optind];
+                    this.env['OPTIND'] = String(optind + 2);
+                  } else {
+                    // Missing argument
+                    this.env[varName] = '?';
+                    stderrWriter(`getopts: option requires an argument -- ${opt}\r\n`);
+                    this.env['OPTIND'] = String(optind + 1);
+                  }
+                  exitCode = 0;
+                } else {
+                  // Boolean option
+                  this.env[varName] = opt;
+                  delete this.env['OPTARG'];
+                  // Handle bundled options: -abc
+                  if (arg.length > 2) {
+                    // Rewrite arg to remaining options for next call
+                    args[optind - 1] = '-' + arg.slice(2);
+                  } else {
+                    this.env['OPTIND'] = String(optind + 1);
+                  }
+                  exitCode = 0;
+                }
+              } else {
+                // Non-option argument or --
+                this.env[varName] = '?';
+                if (arg === '--') this.env['OPTIND'] = String(optind + 1);
+                exitCode = 1;
+              }
+            }
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+
+        // Shell builtin: alias / unalias
+        if (effectiveCmdName === 'alias') {
+          if (cmdArgs.length === 0) {
+            // List all aliases
+            for (const [name, value] of this.aliases) {
+              writeStdout(`alias ${name}='${value}'\r\n`);
+            }
+          } else {
+            for (const arg of cmdArgs) {
+              const eqIdx = arg.indexOf('=');
+              if (eqIdx >= 0) {
+                this.aliases.set(arg.substring(0, eqIdx), arg.substring(eqIdx + 1));
+              } else {
+                const val = this.aliases.get(arg);
+                if (val !== undefined) {
+                  writeStdout(`alias ${arg}='${val}'\r\n`);
+                } else {
+                  stderrWriter(`alias: ${arg}: not found\r\n`);
+                  exitCode = 1;
+                }
+              }
+            }
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+        if (effectiveCmdName === 'unalias') {
+          if (cmdArgs.length === 0) {
+            stderrWriter('unalias: usage: unalias [-a] name ...\r\n');
+            exitCode = 1;
+          } else if (cmdArgs[0] === '-a') {
+            this.aliases.clear();
+          } else {
+            for (const name of cmdArgs) {
+              if (!this.aliases.delete(name)) {
+                stderrWriter(`unalias: ${name}: not found\r\n`);
+                exitCode = 1;
+              }
+            }
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+
+        // Shell builtin: pushd / popd / dirs
+        if (effectiveCmdName === 'pushd') {
+          if (cmdArgs.length === 0) {
+            // Swap top two entries
+            if (this.dirStack.length === 0) {
+              stderrWriter('pushd: no other directory\r\n');
+              exitCode = 1;
+            } else {
+              const top = this.dirStack.pop()!;
+              this.dirStack.push(this.cwd);
+              try {
+                const resolved = this.fs.resolvePath(top, this.cwd);
+                await this.fs.stat(resolved);
+                this.cwd = resolved;
+                this.env['PWD'] = resolved;
+              } catch {
+                stderrWriter(`pushd: ${top}: No such file or directory\r\n`);
+                exitCode = 1;
+              }
+            }
+          } else {
+            const dir = cmdArgs[0];
+            const resolved = this.fs.resolvePath(dir, this.cwd);
+            try {
+              await this.fs.stat(resolved);
+              this.dirStack.push(this.cwd);
+              this.cwd = resolved;
+              this.env['PWD'] = resolved;
+            } catch {
+              stderrWriter(`pushd: ${dir}: No such file or directory\r\n`);
+              exitCode = 1;
+            }
+          }
+          if (exitCode === 0) {
+            writeStdout(`${this.cwd} ${this.dirStack.slice().reverse().join(' ')}\r\n`);
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+        if (effectiveCmdName === 'popd') {
+          if (this.dirStack.length === 0) {
+            stderrWriter('popd: directory stack empty\r\n');
+            exitCode = 1;
+          } else {
+            const dir = this.dirStack.pop()!;
+            this.cwd = dir;
+            this.env['PWD'] = dir;
+            writeStdout(`${this.cwd} ${this.dirStack.slice().reverse().join(' ')}\r\n`);
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+        if (effectiveCmdName === 'dirs') {
+          const stack = [this.cwd, ...this.dirStack.slice().reverse()];
+          writeStdout(stack.join(' ') + '\r\n');
+          this.lastExitCode = 0;
+          this.env['?'] = '0';
+          lastOutput = '';
+          continue;
+        }
+
+        // Shell builtin: let "expr" — evaluate arithmetic, return 1 if result is 0
+        if (effectiveCmdName === 'let') {
+          if (cmdArgs.length === 0) {
+            stderrWriter('let: usage: let expression\r\n');
+            exitCode = 1;
+          } else {
+            let result = 0;
+            for (const expr of cmdArgs) {
+              result = this.evalArithmetic(expr);
+            }
+            exitCode = result === 0 ? 1 : 0;
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
           lastOutput = '';
           continue;
         }
@@ -1184,11 +1560,13 @@ export class Shell {
         }
       }
 
-      // Tilde expansion (only unquoted)
+      // Tilde expansion (only unquoted, not inside operators like =~)
       if (ch === '~' && !inDouble) {
         const before = i === 0 ? '' : line[i - 1];
         const after = line[i + 1] || '';
-        if ((i === 0 || /[\s=]/.test(before)) && (/[\/\s;|&>]/.test(after) || i + 1 >= line.length)) {
+        // Only expand after = in assignment context (VAR=~), not in operators like =~
+        const isAssignContext = before === '=' ? (i >= 2 && /[A-Za-z0-9_]/.test(line[i - 2])) : true;
+        if ((i === 0 || /[\s=]/.test(before)) && isAssignContext && (/[\/\s;|&>]/.test(after) || i + 1 >= line.length)) {
           const home = this.env['HOME'] || '/home/user';
           result += home;
           i++;
@@ -2079,13 +2457,15 @@ export class Shell {
         tokens.push({ type: 'num', value: parseInt(num) });
         continue;
       }
-      const ops2 = ['**', '<=', '>=', '==', '!='];
+      // Multi-char operators (check longest first)
+      const ops2 = ['**', '<=', '>=', '==', '!=', '&&', '||', '<<', '>>'];
       let found = false;
       for (const op of ops2) {
         if (expr.slice(i, i + op.length) === op) { tokens.push({ type: 'op', value: op }); i += op.length; found = true; break; }
       }
       if (found) continue;
-      if ('+-*/%<>'.includes(expr[i])) { tokens.push({ type: 'op', value: expr[i] }); i++; continue; }
+      // Single-char operators
+      if ('+-*/%<>&|^~!?:'.includes(expr[i])) { tokens.push({ type: 'op', value: expr[i] }); i++; continue; }
       if (expr[i] === '(') { tokens.push({ type: 'paren', value: '(' }); i++; continue; }
       if (expr[i] === ')') { tokens.push({ type: 'paren', value: ')' }); i++; continue; }
       i++;
@@ -2095,16 +2475,20 @@ export class Shell {
     const peek = () => tokens[pos];
     const next = () => tokens[pos++];
 
+    // Precedence (lowest to highest): ternary ?:, ||, &&, |, ^, &, ==/!=, </>/<=/>=, <>/<>>, +/-, */÷/%, **, unary !/~
     const parseAtom = (): number => {
       const t = peek();
       if (!t) return 0;
       if (t.type === 'num') { next(); return t.value; }
-      if (t.value === '(') { next(); const v = parseExpr(); next(); return v; }
+      if (t.value === '(') { next(); const v = parseTernary(); if (peek()?.value === ')') next(); return v; }
+      // Unary operators: !, ~
+      if (t.value === '!') { next(); return parseAtom() === 0 ? 1 : 0; }
+      if (t.value === '~') { next(); return ~parseAtom(); }
       return 0;
     };
     const parsePow = (): number => {
       let left = parseAtom();
-      while (peek() && peek().value === '**') { next(); left = Math.pow(left, parseAtom()); }
+      while (peek()?.value === '**') { next(); left = Math.pow(left, parseAtom()); }
       return left;
     };
     const parseMul = (): number => {
@@ -2126,21 +2510,73 @@ export class Shell {
       }
       return left;
     };
-    const parseExpr = (): number => {
+    const parseShift = (): number => {
       let left = parseAdd();
-      while (peek() && ['<', '>', '<=', '>=', '==', '!='].includes(peek().value)) {
+      while (peek() && ['<<', '>>'].includes(peek().value)) {
         const op = next().value;
         const right = parseAdd();
-        if (op === '<') left = left < right ? 1 : 0;
-        else if (op === '>') left = left > right ? 1 : 0;
-        else if (op === '<=') left = left <= right ? 1 : 0;
-        else if (op === '>=') left = left >= right ? 1 : 0;
-        else if (op === '==') left = left === right ? 1 : 0;
-        else if (op === '!=') left = left !== right ? 1 : 0;
+        left = op === '<<' ? left << right : left >> right;
       }
       return left;
     };
-    return parseExpr();
+    const parseRel = (): number => {
+      let left = parseShift();
+      while (peek() && ['<', '>', '<=', '>='].includes(peek().value)) {
+        const op = next().value;
+        const right = parseShift();
+        if (op === '<') left = left < right ? 1 : 0;
+        else if (op === '>') left = left > right ? 1 : 0;
+        else if (op === '<=') left = left <= right ? 1 : 0;
+        else left = left >= right ? 1 : 0;
+      }
+      return left;
+    };
+    const parseEq = (): number => {
+      let left = parseRel();
+      while (peek() && ['==', '!='].includes(peek().value)) {
+        const op = next().value;
+        const right = parseRel();
+        left = op === '==' ? (left === right ? 1 : 0) : (left !== right ? 1 : 0);
+      }
+      return left;
+    };
+    const parseBitAnd = (): number => {
+      let left = parseEq();
+      while (peek()?.value === '&') { next(); left = left & parseEq(); }
+      return left;
+    };
+    const parseBitXor = (): number => {
+      let left = parseBitAnd();
+      while (peek()?.value === '^') { next(); left = left ^ parseBitAnd(); }
+      return left;
+    };
+    const parseBitOr = (): number => {
+      let left = parseBitXor();
+      while (peek()?.value === '|') { next(); left = left | parseBitXor(); }
+      return left;
+    };
+    const parseLogAnd = (): number => {
+      let left = parseBitOr();
+      while (peek()?.value === '&&') { next(); const right = parseBitOr(); left = (left !== 0 && right !== 0) ? 1 : 0; }
+      return left;
+    };
+    const parseLogOr = (): number => {
+      let left = parseLogAnd();
+      while (peek()?.value === '||') { next(); const right = parseLogAnd(); left = (left !== 0 || right !== 0) ? 1 : 0; }
+      return left;
+    };
+    const parseTernary = (): number => {
+      const cond = parseLogOr();
+      if (peek()?.value === '?') {
+        next(); // consume ?
+        const trueVal = parseTernary();
+        if (peek()?.value === ':') next(); // consume :
+        const falseVal = parseTernary();
+        return cond !== 0 ? trueVal : falseVal;
+      }
+      return cond;
+    };
+    return parseTernary();
   }
 
   // ─── SHELL FUNCTIONS ──────────────────────────────────────────────────────
@@ -2274,6 +2710,25 @@ export class Shell {
       return t;
     };
 
+    // Handle compound expressions with -a (AND) and -o (OR)
+    const oIdx = tokens.indexOf('-o');
+    if (oIdx > 0 && oIdx < tokens.length - 1) {
+      const left = await this.evalTest(tokens.slice(0, oIdx).join(' '));
+      const right = await this.evalTest(tokens.slice(oIdx + 1).join(' '));
+      return (left === 0 || right === 0) ? 0 : 1;
+    }
+    const aIdx = tokens.indexOf('-a');
+    if (aIdx > 0 && aIdx < tokens.length - 1) {
+      const left = await this.evalTest(tokens.slice(0, aIdx).join(' '));
+      const right = await this.evalTest(tokens.slice(aIdx + 1).join(' '));
+      return (left === 0 && right === 0) ? 0 : 1;
+    }
+
+    // Single arg: true if non-empty string
+    if (tokens.length === 1) {
+      return strip(tokens[0]) !== '' ? 0 : 1;
+    }
+
     if (tokens.length === 2) {
       const op = tokens[0];
       const expanded = strip(tokens[1]);
@@ -2286,6 +2741,16 @@ export class Shell {
           try { const s = await this.fs.stat(this.fs.resolvePath(expanded, this.cwd)); return s.type === 'file' ? 0 : 1; } catch { return 1; }
         case '-d':
           try { const s = await this.fs.stat(this.fs.resolvePath(expanded, this.cwd)); return s.type === 'dir' ? 0 : 1; } catch { return 1; }
+        case '-s':
+          try {
+            const s = await this.fs.stat(this.fs.resolvePath(expanded, this.cwd));
+            return s.type === 'file' && (s.size ?? 0) > 0 ? 0 : 1;
+          } catch { return 1; }
+        case '-L': case '-h':
+          try {
+            const s = await this.fs.stat(this.fs.resolvePath(expanded, this.cwd));
+            return s.type === 'symlink' ? 0 : 1;
+          } catch { return 1; }
         case '!': return (await this.evalTest(tokens.slice(1).join(' '))) === 0 ? 1 : 0;
       }
     }
@@ -2303,6 +2768,21 @@ export class Shell {
         case '-le': return parseInt(left) <= parseInt(right) ? 0 : 1;
         case '-gt': return parseInt(left) > parseInt(right) ? 0 : 1;
         case '-ge': return parseInt(left) >= parseInt(right) ? 0 : 1;
+        case '=~': {
+          // Regex match (bash [[ =~ ]])
+          try {
+            const re = new RegExp(right);
+            const match = left.match(re);
+            if (match) {
+              // Set BASH_REMATCH array
+              this.arrays.set('BASH_REMATCH', match.map(m => m ?? ''));
+              return 0;
+            }
+            return 1;
+          } catch { return 1; }
+        }
+        case '<': return left < right ? 0 : 1;
+        case '>': return left > right ? 0 : 1;
       }
     }
 

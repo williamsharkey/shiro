@@ -989,4 +989,366 @@ describe('Shell Advanced', () => {
       expect(output.replace(/\r/g, '')).toContain('x=');
     });
   });
+
+  // ─── GETOPTS ────────────────────────────────────────────────────────────────
+
+  describe('getopts', () => {
+    it('parses boolean options', async () => {
+      await run(shell, 'OPTIND=1');
+      await run(shell, 'getopts "abc" opt -a');
+      const { output } = await run(shell, 'echo $opt');
+      expect(output.replace(/\r/g, '').trim()).toBe('a');
+    });
+
+    it('parses option with argument', async () => {
+      await run(shell, 'OPTIND=1');
+      await run(shell, 'getopts "f:" opt -f myfile');
+      const opt = await run(shell, 'echo $opt');
+      const arg = await run(shell, 'echo $OPTARG');
+      expect(opt.output.replace(/\r/g, '').trim()).toBe('f');
+      expect(arg.output.replace(/\r/g, '').trim()).toBe('myfile');
+    });
+
+    it('returns 1 when no more options', async () => {
+      await run(shell, 'OPTIND=1');
+      const result = await run(shell, 'getopts "a" opt hello');
+      expect(result.exitCode).toBe(1);
+    });
+
+    it('handles attached argument -fvalue', async () => {
+      await run(shell, 'OPTIND=1');
+      await run(shell, 'getopts "f:" opt -fbar');
+      const arg = await run(shell, 'echo $OPTARG');
+      expect(arg.output.replace(/\r/g, '').trim()).toBe('bar');
+    });
+  });
+
+  // ─── ARITHMETIC LOGICAL OPERATORS ───────────────────────────────────────────
+
+  describe('arithmetic logical operators', () => {
+    it('logical AND (&&)', async () => {
+      const { output } = await run(shell, 'echo $(( 1 && 1 ))');
+      expect(output.replace(/\r/g, '').trim()).toBe('1');
+      const { output: o2 } = await run(shell, 'echo $(( 1 && 0 ))');
+      expect(o2.replace(/\r/g, '').trim()).toBe('0');
+    });
+
+    it('logical OR (||)', async () => {
+      const { output } = await run(shell, 'echo $(( 0 || 1 ))');
+      expect(output.replace(/\r/g, '').trim()).toBe('1');
+      const { output: o2 } = await run(shell, 'echo $(( 0 || 0 ))');
+      expect(o2.replace(/\r/g, '').trim()).toBe('0');
+    });
+
+    it('logical NOT (!)', async () => {
+      const { output } = await run(shell, 'echo $(( !0 ))');
+      expect(output.replace(/\r/g, '').trim()).toBe('1');
+      const { output: o2 } = await run(shell, 'echo $(( !5 ))');
+      expect(o2.replace(/\r/g, '').trim()).toBe('0');
+    });
+
+    it('ternary operator (?:)', async () => {
+      const { output } = await run(shell, 'echo $(( 1 ? 10 : 20 ))');
+      expect(output.replace(/\r/g, '').trim()).toBe('10');
+      const { output: o2 } = await run(shell, 'echo $(( 0 ? 10 : 20 ))');
+      expect(o2.replace(/\r/g, '').trim()).toBe('20');
+    });
+
+    it('bitwise AND (&)', async () => {
+      const { output } = await run(shell, 'echo $(( 12 & 10 ))');
+      expect(output.replace(/\r/g, '').trim()).toBe('8');
+    });
+
+    it('bitwise OR (|)', async () => {
+      const { output } = await run(shell, 'echo $(( 12 | 3 ))');
+      expect(output.replace(/\r/g, '').trim()).toBe('15');
+    });
+
+    it('bitwise XOR (^)', async () => {
+      const { output } = await run(shell, 'echo $(( 5 ^ 3 ))');
+      expect(output.replace(/\r/g, '').trim()).toBe('6');
+    });
+
+    it('left shift (<<)', async () => {
+      const { output } = await run(shell, 'echo $(( 1 << 4 ))');
+      expect(output.replace(/\r/g, '').trim()).toBe('16');
+    });
+
+    it('right shift (>>)', async () => {
+      const { output } = await run(shell, 'echo $(( 16 >> 2 ))');
+      expect(output.replace(/\r/g, '').trim()).toBe('4');
+    });
+
+    it('bitwise NOT (~)', async () => {
+      const { output } = await run(shell, 'echo $(( ~0 ))');
+      expect(output.replace(/\r/g, '').trim()).toBe('-1');
+    });
+  });
+
+  // ─── PRINTF ─────────────────────────────────────────────────────────────────
+
+  describe('printf', () => {
+    it('basic string format', async () => {
+      const { output } = await run(shell, 'printf "hello %s\\n" world');
+      expect(output.replace(/\r/g, '')).toBe('hello world\n');
+    });
+
+    it('decimal format', async () => {
+      const { output } = await run(shell, 'printf "%d items\\n" 42');
+      expect(output.replace(/\r/g, '')).toBe('42 items\n');
+    });
+
+    it('hex format', async () => {
+      const { output } = await run(shell, 'printf "%x\\n" 255');
+      expect(output.replace(/\r/g, '')).toBe('ff\n');
+    });
+
+    it('float format with precision', async () => {
+      const { output } = await run(shell, 'printf "%.2f\\n" 3.14159');
+      expect(output.replace(/\r/g, '')).toBe('3.14\n');
+    });
+
+    it('width padding', async () => {
+      const { output } = await run(shell, 'printf "%10s|\\n" hi');
+      expect(output.replace(/\r/g, '')).toBe('        hi|\n');
+    });
+
+    it('left-justify', async () => {
+      const { output } = await run(shell, 'printf "%-10s|\\n" hi');
+      expect(output.replace(/\r/g, '')).toBe('hi        |\n');
+    });
+
+    it('zero-padded', async () => {
+      const { output } = await run(shell, 'printf "%05d\\n" 42');
+      expect(output.replace(/\r/g, '')).toBe('00042\n');
+    });
+
+    it('literal percent', async () => {
+      const { output } = await run(shell, 'printf "100%%\\n"');
+      expect(output.replace(/\r/g, '')).toBe('100%\n');
+    });
+  });
+
+  // ─── TYPE / COMMAND / HASH ──────────────────────────────────────────────────
+
+  describe('type, command, hash', () => {
+    it('type identifies builtins', async () => {
+      const { output } = await run(shell, 'type echo');
+      expect(output.replace(/\r/g, '').trim()).toBe('echo is a shell builtin');
+    });
+
+    it('type identifies functions', async () => {
+      await run(shell, 'myfn() { echo hi; }');
+      const { output } = await run(shell, 'type myfn');
+      expect(output.replace(/\r/g, '').trim()).toBe('myfn is a function');
+    });
+
+    it('type identifies registered commands', async () => {
+      const { output } = await run(shell, 'type ls');
+      expect(output.replace(/\r/g, '').trim()).toBe('ls is a registered command');
+    });
+
+    it('type returns error for unknown', async () => {
+      const result = await run(shell, 'type nonexistent_cmd_xyz');
+      expect(result.exitCode).toBe(1);
+    });
+
+    it('command -v returns name for known command', async () => {
+      const { output } = await run(shell, 'command -v echo');
+      expect(output.replace(/\r/g, '').trim()).toBe('echo');
+    });
+
+    it('command -v returns 1 for unknown', async () => {
+      const result = await run(shell, 'command -v nonexistent_xyz');
+      expect(result.exitCode).toBe(1);
+    });
+
+    it('hash outputs empty message', async () => {
+      const { output } = await run(shell, 'hash');
+      expect(output.replace(/\r/g, '').trim()).toContain('hash');
+    });
+  });
+
+  // ─── 18. alias / unalias ────────────────────────────────────────────────────
+
+  describe('alias / unalias', () => {
+    it('alias sets and expands a simple alias', async () => {
+      await run(shell, "alias greet='echo hello'");
+      const { output } = await run(shell, 'greet');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello');
+    });
+
+    it('alias with no args lists all aliases', async () => {
+      await run(shell, "alias ll='ls -la'");
+      const { output } = await run(shell, 'alias');
+      expect(output).toContain("ll='ls -la'");
+    });
+
+    it('alias expands with additional args', async () => {
+      await run(shell, "alias say='echo'");
+      const { output } = await run(shell, 'say world');
+      expect(output.replace(/\r/g, '').trim()).toBe('world');
+    });
+
+    it('unalias removes an alias', async () => {
+      await run(shell, "alias greet='echo hi'");
+      await run(shell, 'unalias greet');
+      const result = await run(shell, 'greet');
+      expect(result.exitCode).not.toBe(0);
+    });
+
+    it('unalias -a removes all aliases', async () => {
+      await run(shell, "alias a='echo a'");
+      await run(shell, "alias b='echo b'");
+      await run(shell, 'unalias -a');
+      const { output } = await run(shell, 'alias');
+      expect(output.replace(/\r/g, '').trim()).toBe('');
+    });
+  });
+
+  // ─── 19. pushd / popd / dirs ────────────────────────────────────────────────
+
+  describe('pushd / popd / dirs', () => {
+    it('pushd changes directory and adds to stack', async () => {
+      await run(shell, 'mkdir -p /tmp/testdir');
+      const { output } = await run(shell, 'pushd /tmp/testdir');
+      expect(output).toContain('/tmp/testdir');
+      expect(shell.cwd).toBe('/tmp/testdir');
+    });
+
+    it('popd returns to previous directory', async () => {
+      await run(shell, 'mkdir -p /tmp/testdir');
+      const origCwd = shell.cwd;
+      await run(shell, 'pushd /tmp/testdir');
+      await run(shell, 'popd');
+      expect(shell.cwd).toBe(origCwd);
+    });
+
+    it('dirs shows the directory stack', async () => {
+      const { output } = await run(shell, 'dirs');
+      expect(output.replace(/\r/g, '').trim()).toBe(shell.cwd);
+    });
+
+    it('popd on empty stack returns error', async () => {
+      const result = await run(shell, 'popd');
+      expect(result.exitCode).toBe(1);
+    });
+  });
+
+  // ─── 20. let builtin ───────────────────────────────────────────────────────
+
+  describe('let builtin', () => {
+    it('let evaluates arithmetic and sets variables', async () => {
+      await run(shell, 'let "x=5+3"');
+      expect(shell.env['x']).toBe('8');
+    });
+
+    it('let returns 1 when result is 0', async () => {
+      const result = await run(shell, 'let "0"');
+      expect(result.exitCode).toBe(1);
+    });
+
+    it('let returns 0 when result is non-zero', async () => {
+      const result = await run(shell, 'let "1+1"');
+      expect(result.exitCode).toBe(0);
+    });
+
+    it('let with multiple expressions evaluates all', async () => {
+      await run(shell, 'let "a=2" "b=3" "c=a+b"');
+      expect(shell.env['c']).toBe('5');
+    });
+  });
+
+  // ─── 21. brace expansion ──────────────────────────────────────────────────
+
+  describe('brace expansion', () => {
+    it('{a,b,c} expands to three words', async () => {
+      const { output } = await run(shell, 'echo {a,b,c}');
+      expect(output.replace(/\r/g, '').trim()).toBe('a b c');
+    });
+
+    it('{1..5} expands to number sequence', async () => {
+      const { output } = await run(shell, 'echo {1..5}');
+      expect(output.replace(/\r/g, '').trim()).toBe('1 2 3 4 5');
+    });
+
+    it('{a..e} expands to letter sequence', async () => {
+      const { output } = await run(shell, 'echo {a..e}');
+      expect(output.replace(/\r/g, '').trim()).toBe('a b c d e');
+    });
+
+    it('prefix{a,b}suffix combines', async () => {
+      const { output } = await run(shell, 'echo pre{A,B}suf');
+      expect(output.replace(/\r/g, '').trim()).toBe('preAsuf preBsuf');
+    });
+
+    it('{5..1} descending range', async () => {
+      const { output } = await run(shell, 'echo {5..1}');
+      expect(output.replace(/\r/g, '').trim()).toBe('5 4 3 2 1');
+    });
+
+    it('{1..10..2} range with step', async () => {
+      const { output } = await run(shell, 'echo {1..10..2}');
+      expect(output.replace(/\r/g, '').trim()).toBe('1 3 5 7 9');
+    });
+
+    it('nested brace {a,{b,c}} expands', async () => {
+      const { output } = await run(shell, 'echo {a,{b,c}}');
+      expect(output.replace(/\r/g, '').trim()).toBe('a b c');
+    });
+
+    it('${var} not treated as brace expansion', async () => {
+      shell.env['x'] = 'hello';
+      const { output } = await run(shell, 'echo ${x}');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello');
+    });
+  });
+
+  // ─── 22. test / [[ ]] improvements ─────────────────────────────────────────
+
+  describe('test improvements', () => {
+    it('-s returns 0 for non-empty file', async () => {
+      await run(shell, 'echo "data" > /tmp/testfile');
+      const result = await run(shell, 'if [ -s /tmp/testfile ]; then echo yes; fi');
+      expect(result.output.replace(/\r/g, '').trim()).toBe('yes');
+    });
+
+    it('-s returns 1 for missing file', async () => {
+      const result = await run(shell, 'if [ -s /tmp/nofile ]; then echo yes; else echo no; fi');
+      expect(result.output.replace(/\r/g, '').trim()).toBe('no');
+    });
+
+    it('-a combines two tests (AND)', async () => {
+      await run(shell, 'echo "data" > /tmp/testfile');
+      const result = await run(shell, 'if [ -f /tmp/testfile -a -s /tmp/testfile ]; then echo yes; fi');
+      expect(result.output.replace(/\r/g, '').trim()).toBe('yes');
+    });
+
+    it('-o combines two tests (OR)', async () => {
+      const result = await run(shell, 'if [ -f /tmp/nofile -o -d /home ]; then echo yes; fi');
+      expect(result.output.replace(/\r/g, '').trim()).toBe('yes');
+    });
+
+    it('[[ =~ ]] matches regex', async () => {
+      const result = await run(shell, 'if [[ hello123 =~ ^hello[0-9]+ ]]; then echo match; fi');
+      expect(result.output.replace(/\r/g, '').trim()).toBe('match');
+    });
+
+    it('[[ =~ ]] sets BASH_REMATCH', async () => {
+      // Test that =~ returns 1 for non-match to verify it's actually parsing =~
+      const noMatch = await run(shell, '[[ abc123 =~ xyz ]]');
+      expect(noMatch.exitCode).toBe(1);
+      // Now test match
+      const result = await run(shell, '[[ abc123 =~ abc ]]');
+      expect(result.exitCode).toBe(0);
+      const arr = shell.arrays.get('BASH_REMATCH');
+      expect(arr).toBeDefined();
+      expect(arr![0]).toBe('abc');
+    });
+
+    it('[[ < ]] string comparison', async () => {
+      const result = await run(shell, 'if [[ apple < banana ]]; then echo yes; fi');
+      expect(result.output.replace(/\r/g, '').trim()).toBe('yes');
+    });
+  });
 });
