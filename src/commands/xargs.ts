@@ -6,11 +6,12 @@ export const xargs: Command = {
   description: "Build and execute command lines from stdin",
   async exec(ctx) {
     const args = ctx.args;
-    const { flags, positional, values } = parseArgs(args, ["n", "I", "i", "d", "delimiter"]);
+    const { flags, positional, values } = parseArgs(args, ["n", "I", "i", "d", "delimiter", "0"]);
     const onePerLine = flags.I || flags.L || flags.l;
     const replaceStr = values.I || values.i; // -I{} or -i
     const maxArgs = values.n ? parseInt(values.n) : undefined;
-    const delimiter = values.d || values.delimiter || /\s+/;
+    const nullDelim = flags['0'] || flags.null;
+    const delimiter = nullDelim ? '\0' : (values.d || values.delimiter || /\s+/);
     const verbose = flags.t || flags.verbose;
     const noRunIfEmpty = flags.r;
 

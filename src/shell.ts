@@ -580,13 +580,33 @@ export class Shell {
             }
             continue;
           }
-          // Basic declare/typeset/local support
+          // Parse flags for declare/typeset/local
           const isLocal = effectiveCmdName === 'local';
+          let declFlags = '';
+          const declPositional: string[] = [];
           for (const arg of cmdArgs) {
-            if (arg === '-x' || arg === '-r' || arg === '-i' || arg === '-f' || arg === '-p') continue;
+            if (arg.startsWith('-') && /^-[xrilup]+$/.test(arg)) { declFlags += arg.slice(1); continue; }
             if (arg.startsWith('-')) continue; // skip other flags
+            declPositional.push(arg);
+          }
+          // declare -p: show variable values
+          if (declFlags.includes('p') && declPositional.length > 0) {
+            for (const name of declPositional) {
+              const val = this.env[name];
+              if (val !== undefined) writeStdout(`declare -- ${name}="${val}"\r\n`);
+            }
+            continue;
+          }
+          for (const arg of declPositional) {
             const eqIdx = arg.indexOf('=');
             const varName = eqIdx >= 0 ? arg.slice(0, eqIdx) : arg;
+            let value = eqIdx >= 0 ? arg.slice(eqIdx + 1) : undefined;
+            // Apply type transformations
+            if (value !== undefined) {
+              if (declFlags.includes('i')) value = String(parseInt(value) || 0);
+              if (declFlags.includes('l')) value = value.toLowerCase();
+              if (declFlags.includes('u')) value = value.toUpperCase();
+            }
             // Save old value in local var frame if inside a function
             if (isLocal && this.localVarStack.length > 0) {
               const frame = this.localVarStack[this.localVarStack.length - 1];
@@ -594,8 +614,8 @@ export class Shell {
                 frame.set(varName, varName in this.env ? this.env[varName] : undefined);
               }
             }
-            if (eqIdx >= 0) {
-              this.env[varName] = arg.slice(eqIdx + 1);
+            if (value !== undefined) {
+              this.env[varName] = value;
             } else {
               if (!(varName in this.env)) this.env[varName] = '';
             }
@@ -651,9 +671,12 @@ export class Shell {
             this.env['__PIPE_STDIN'] = remaining;
           }
           const processed = rawMode ? readLine : readLine.replace(/\\(.)/g, '$1');
+          // Use IFS for splitting (default: space/tab/newline)
+          const ifs = this.env['IFS'] ?? ' \t\n';
+          const ifsRegex = ifs === ' \t\n' ? /\s+/ : new RegExp('[' + ifs.replace(/[-[\]{}()*+?.,\\^$|#]/g, '\\$&') + ']+');
           if (arrayMode) {
             const arrName = readVars[0] || 'MAPFILE';
-            const words = processed.split(/\s+/).filter(Boolean);
+            const words = processed.split(ifsRegex).filter(Boolean);
             this.arrays.set(arrName, words);
             exitCode = readLine.length > 0 ? 0 : 1;
             this.lastExitCode = exitCode;
@@ -666,11 +689,12 @@ export class Shell {
           } else if (readVars.length === 1) {
             this.env[readVars[0]] = processed;
           } else {
-            // Split into words, last var gets the remainder
-            const words = processed.split(/\s+/);
+            // Split into words using IFS, last var gets the remainder
+            const words = processed.split(ifsRegex);
+            const joinChar = ifs[0] || ' ';
             for (let vi = 0; vi < readVars.length; vi++) {
               if (vi === readVars.length - 1) {
-                this.env[readVars[vi]] = words.slice(vi).join(' ');
+                this.env[readVars[vi]] = words.slice(vi).join(joinChar);
               } else {
                 this.env[readVars[vi]] = words[vi] || '';
               }
@@ -1929,6 +1953,14 @@ export class Shell {
     const lenMatch = inner.match(/^#([A-Za-z_][A-Za-z0-9_]*)$/);
     if (lenMatch) {
       return String((this.env[lenMatch[1]] ?? '').length);
+    }
+
+    // ${!prefix*} or ${!prefix@} — list variable names matching prefix
+    const prefixMatch = inner.match(/^!([A-Za-z_][A-Za-z0-9_]*)[*@]$/);
+    if (prefixMatch) {
+      const prefix = prefixMatch[1];
+      const matching = Object.keys(this.env).filter(k => k.startsWith(prefix)).sort();
+      return matching.join(' ');
     }
 
     // ${!VAR} — indirect expansion (value of variable named by VAR's value)

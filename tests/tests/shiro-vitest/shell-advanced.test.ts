@@ -1887,4 +1887,95 @@ describe('Shell Advanced', () => {
       expect(output.replace(/\r/g, '').trim()).toBe('hello there');
     });
   });
+
+  // ─── Section 41: IFS support ───────────────────────────────────────────────
+  describe('IFS support', () => {
+    it('read with custom IFS splits on colon', async () => {
+      shell.env['IFS'] = ':';
+      shell.env['__PIPE_STDIN'] = 'a:b:c';
+      const { output } = await run(shell, 'read x y z; echo "$x|$y|$z"');
+      expect(output.replace(/\r/g, '').trim()).toBe('a|b|c');
+      delete shell.env['IFS'];
+    });
+
+    it('read with IFS=, for CSV', async () => {
+      shell.env['IFS'] = ',';
+      shell.env['__PIPE_STDIN'] = 'one,two,three';
+      const { output } = await run(shell, 'read a b c; echo "$a $b $c"');
+      expect(output.replace(/\r/g, '').trim()).toBe('one two three');
+      delete shell.env['IFS'];
+    });
+
+    it('read -a with custom IFS', async () => {
+      shell.env['IFS'] = ':';
+      shell.env['__PIPE_STDIN'] = 'x:y:z';
+      const { output } = await run(shell, 'read -a arr; echo ${arr[0]} ${arr[1]} ${arr[2]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('x y z');
+      delete shell.env['IFS'];
+    });
+  });
+
+  // ─── Section 42: ${!prefix*} variable name expansion ──────────────────────
+  describe('variable name expansion', () => {
+    it('${!prefix*} lists matching variable names', async () => {
+      shell.env['MY_VAR1'] = 'a';
+      shell.env['MY_VAR2'] = 'b';
+      shell.env['MY_OTHER'] = 'c';
+      shell.env['NOTMY'] = 'd';
+      const { output } = await run(shell, 'echo ${!MY_*}');
+      const names = output.replace(/\r/g, '').trim().split(' ').sort();
+      expect(names).toContain('MY_VAR1');
+      expect(names).toContain('MY_VAR2');
+      expect(names).toContain('MY_OTHER');
+      expect(names).not.toContain('NOTMY');
+    });
+  });
+
+  // ─── Section 43: declare flags ─────────────────────────────────────────────
+  describe('declare flags', () => {
+    it('declare -i forces integer', async () => {
+      const { output } = await run(shell, 'declare -i num=hello; echo $num');
+      expect(output.replace(/\r/g, '').trim()).toBe('0');
+    });
+
+    it('declare -l forces lowercase', async () => {
+      const { output } = await run(shell, 'declare -l str=HELLO; echo $str');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello');
+    });
+
+    it('declare -u forces uppercase', async () => {
+      const { output } = await run(shell, 'declare -u str=hello; echo $str');
+      expect(output.replace(/\r/g, '').trim()).toBe('HELLO');
+    });
+
+    it('declare -p shows variable value', async () => {
+      shell.env['SHOW'] = 'test_val';
+      const { output } = await run(shell, 'declare -p SHOW');
+      expect(output.replace(/\r/g, '').trim()).toContain('SHOW="test_val"');
+    });
+  });
+
+  // ─── Section 44: while (( )) and more conditions ──────────────────────────
+  describe('more control flow patterns', () => {
+    it('until loop runs until condition true', async () => {
+      const { output } = await run(shell, 'i=0; until [ $i -eq 3 ]; do echo $i; i=$((i+1)); done');
+      expect(output.replace(/\r/g, '').trim()).toBe('0\n1\n2');
+    });
+
+    it('nested if/elif/else', async () => {
+      const { output } = await run(shell, 'x=2; if [ $x -eq 1 ]; then echo one; elif [ $x -eq 2 ]; then echo two; else echo other; fi');
+      expect(output.replace(/\r/g, '').trim()).toBe('two');
+    });
+
+    it('case with multiple patterns', async () => {
+      const { output } = await run(shell, 'x=hello; case $x in hi|hello) echo matched;; bye) echo nope;; esac');
+      expect(output.replace(/\r/g, '').trim()).toBe('matched');
+    });
+
+    it('for loop with command substitution', async () => {
+      await shell.fs.writeFile('/tmp/words.txt', 'alpha\nbeta\ngamma');
+      const { output } = await run(shell, 'for w in $(cat /tmp/words.txt); do echo "w:$w"; done');
+      expect(output.replace(/\r/g, '').trim()).toBe('w:alpha\nw:beta\nw:gamma');
+    });
+  });
 });
