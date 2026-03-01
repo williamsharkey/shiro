@@ -274,3 +274,33 @@ export async function removePackage(name: string): Promise<void> {
 export function isAvailableAsPackage(cmdName: string): WasmPackage | undefined {
   return findPackage(cmdName);
 }
+
+// ── Compiled module cache ─────────────────────────────────────────
+
+const moduleCache: Map<string, WebAssembly.Module> = new Map();
+
+/**
+ * Get a compiled WebAssembly.Module for a package (from memory cache or compile).
+ * Caches the compiled module in memory for subsequent runs — skips compilation.
+ */
+export async function getCompiledModule(
+  name: string,
+  onProgress?: (msg: string) => void,
+): Promise<WebAssembly.Module> {
+  const cached = moduleCache.get(name);
+  if (cached) return cached;
+
+  const binary = await getPackage(name, onProgress);
+  const mod = await WebAssembly.compile(binary);
+  moduleCache.set(name, mod);
+  return mod;
+}
+
+/** Clear the compiled module cache (e.g., after package removal) */
+export function clearModuleCache(name?: string): void {
+  if (name) {
+    moduleCache.delete(name);
+  } else {
+    moduleCache.clear();
+  }
+}

@@ -359,9 +359,18 @@ export class WasiRT {
     return normPath(basePath + '/' + relPath);
   }
 
-  // ── Helper: flush dirty fds back to filesystem ─────────────────────
+  // ── Helper: deferred operations queue ──────────────────────────────
+
+  private deferredOps: Array<
+    | { type: 'delete'; path: string }
+    | { type: 'rmdir'; path: string }
+    | { type: 'rename'; oldPath: string; newPath: string }
+  > = [];
+
+  // ── Helper: flush dirty fds and deferred ops back to filesystem ────
 
   private async flushAll(): Promise<void> {
+    // Flush dirty file descriptors
     for (const [, fd] of this.fds) {
       if (fd.dirty && fd.path) {
         try {
@@ -372,6 +381,33 @@ export class WasiRT {
         fd.dirty = false;
       }
     }
+
+    // Execute deferred filesystem operations
+    for (const op of this.deferredOps) {
+      try {
+        switch (op.type) {
+          case 'delete':
+            await this.config.fs.unlink(op.path);
+            break;
+          case 'rmdir':
+            await this.config.fs.rmdir(op.path);
+            break;
+          case 'rename':
+            // Read the data, write to new path, delete old path
+            try {
+              const data = await this.config.fs.readFile(op.oldPath);
+              await this.config.fs.writeFile(op.newPath, data);
+              await this.config.fs.unlink(op.oldPath);
+            } catch {
+              // Best effort
+            }
+            break;
+        }
+      } catch {
+        // Best effort
+      }
+    }
+    this.deferredOps = [];
   }
 
   // ── Helper: synchronous file preload (must be called before run for path_open) ──
@@ -399,12 +435,62 @@ export class WasiRT {
     }
   }
 
-  /** Pre-load directory listing */
+  /** Cache for preloaded directory listings: path → entry names */
+  private dirCache: Map<string, string[]> = new Map();
+
+  /** Pre-load directory listing and cache it for fd_readdir */
   async preloadDir(path: string): Promise<string[] | null> {
+    if (this.dirCache.has(path)) return this.dirCache.get(path)!;
     try {
-      return await this.config.fs.readdir(path);
+      const entries = await this.config.fs.readdir(path);
+      this.dirCache.set(path, entries);
+      // Also register the directory in fileCache so path_filestat_get works
+      if (!this.fileCache.has(path)) {
+        this.fileCache.set(path, {
+          data: new Uint8Array(0),
+          stat: { type: 'dir', size: 0, mtime: Date.now() },
+        });
+      }
+      return entries;
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Recursively preload a directory tree for synchronous WASI access.
+   * Caps at maxDepth levels and maxFiles total to avoid blowing up memory.
+   */
+  async preloadTree(rootPath: string, maxDepth: number = 3, maxFiles: number = 100): Promise<void> {
+    let fileCount = 0;
+    const queue: Array<{ path: string; depth: number }> = [{ path: rootPath, depth: 0 }];
+
+    while (queue.length > 0 && fileCount < maxFiles) {
+      const { path: dirPath, depth } = queue.shift()!;
+      const entries = await this.preloadDir(dirPath);
+      if (!entries) continue;
+
+      for (const name of entries) {
+        if (fileCount >= maxFiles) break;
+        const fullPath = dirPath === '/' ? `/${name}` : `${dirPath}/${name}`;
+        try {
+          const stat = await this.config.fs.stat(fullPath);
+          if (stat.type === 'dir') {
+            this.fileCache.set(fullPath, {
+              data: new Uint8Array(0),
+              stat: { type: 'dir', size: 0, mtime: stat.mtime.getTime() },
+            });
+            if (depth < maxDepth) {
+              queue.push({ path: fullPath, depth: depth + 1 });
+            }
+          } else {
+            await this.preloadFile(fullPath);
+            fileCount++;
+          }
+        } catch {
+          // Skip files we can't stat
+        }
+      }
     }
   }
 
@@ -667,26 +753,79 @@ export class WasiRT {
 
   // ── fd_readdir ─────────────────────────────────────────────────────
 
-  private dirEntryCache: Map<number, Uint8Array> = new Map();
+  /**
+   * Serialized dirent buffers per fd, built on first call from preloaded dirCache.
+   * dirent layout (WASI preview1):
+   *   d_next:   u64  (8 bytes) — cookie of next entry
+   *   d_ino:    u64  (8 bytes) — inode (we use 0)
+   *   d_namlen: u32  (4 bytes)
+   *   d_type:   u8   (1 byte)  — WASI filetype
+   *   padding:  3 bytes
+   *   name:     d_namlen bytes (NOT null-terminated)
+   * Total header = 24 bytes + name
+   */
+  private dirEntryBuf: Map<number, Uint8Array> = new Map();
 
   private fd_readdir(fd: number, bufPtr: number, bufLen: number, cookie: bigint, usedPtr: number): number {
     const f = this.fds.get(fd);
     if (!f || f.filetype !== WASI_FILETYPE_DIRECTORY) return WASI_EBADF;
 
-    // For synchronous readdir, we rely on preloaded directory listings
-    // This is a limitation — we use a cached approach
     const dirPath = f.path || '/';
-    const cached = this.dirEntryCache.get(fd);
 
-    // Build the entry buffer on first call (cookie === 0)
-    if (!cached || cookie === 0n) {
-      // We can't do async here, so we try to read from preloaded data
-      // The caller (wasi command) should preload directories before running
-      // For now, return an empty listing — the wasi command preloads needed dirs
-      const view = this.getView();
-      view.setUint32(usedPtr, 0, true);
-      return WASI_ESUCCESS;
+    // Build serialized entry buffer on first use or cookie 0
+    if (!this.dirEntryBuf.has(fd)) {
+      const entries = this.dirCache.get(dirPath) || [];
+      const enc = new TextEncoder();
+      // Calculate total size
+      let totalSize = 0;
+      const encodedNames: Uint8Array[] = [];
+      for (const name of entries) {
+        const nameBytes = enc.encode(name);
+        encodedNames.push(nameBytes);
+        totalSize += 24 + nameBytes.length;
+      }
+      // Serialize
+      const buf = new Uint8Array(totalSize);
+      const dv = new DataView(buf.buffer);
+      let off = 0;
+      for (let i = 0; i < entries.length; i++) {
+        const nameBytes = encodedNames[i];
+        const entryPath = dirPath === '/' ? `/${entries[i]}` : `${dirPath}/${entries[i]}`;
+        const cached = this.fileCache.get(entryPath);
+        const ftype = cached?.stat.type === 'dir' ? WASI_FILETYPE_DIRECTORY : WASI_FILETYPE_REGULAR_FILE;
+
+        dv.setBigUint64(off, BigInt(i + 1), true);       // d_next
+        dv.setBigUint64(off + 8, 0n, true);              // d_ino
+        dv.setUint32(off + 16, nameBytes.length, true);  // d_namlen
+        buf[off + 20] = ftype;                            // d_type
+        // 3 bytes padding (already 0)
+        buf.set(nameBytes, off + 24);
+        off += 24 + nameBytes.length;
+      }
+      this.dirEntryBuf.set(fd, buf);
     }
+
+    const serialized = this.dirEntryBuf.get(fd)!;
+    const cookieNum = Number(cookie);
+    const view = this.getView();
+    const mem = this.getU8();
+
+    // Find the byte offset for the given cookie (entry index)
+    // We need to skip `cookie` entries to find the start offset
+    const enc = new TextEncoder();
+    const entries = this.dirCache.get(dirPath) || [];
+    let byteOff = 0;
+    for (let i = 0; i < cookieNum && i < entries.length; i++) {
+      byteOff += 24 + enc.encode(entries[i]).length;
+    }
+
+    // Copy as much as fits into the output buffer
+    const remaining = serialized.length - byteOff;
+    const toCopy = Math.min(remaining, bufLen);
+    if (toCopy > 0) {
+      mem.set(serialized.subarray(byteOff, byteOff + toCopy), bufPtr);
+    }
+    view.setUint32(usedPtr, toCopy, true);
 
     return WASI_ESUCCESS;
   }
@@ -817,23 +956,44 @@ export class WasiRT {
     return WASI_ENOSYS;
   }
 
-  private path_remove_directory(_dirFd: number, _pathPtr: number, _pathLen: number): number {
-    return WASI_ENOSYS; // handled by wasi command wrapper
+  private path_remove_directory(dirFd: number, pathPtr: number, pathLen: number): number {
+    const absPath = this.resolveFdPath(dirFd, pathPtr, pathLen);
+    if (!absPath) return WASI_EBADF;
+    this.deferredOps.push({ type: 'rmdir', path: absPath });
+    // Remove from caches
+    this.fileCache.delete(absPath);
+    this.dirCache.delete(absPath);
+    return WASI_ESUCCESS;
   }
 
   private path_rename(
-    _oldDirFd: number, _oldPathPtr: number, _oldPathLen: number,
-    _newDirFd: number, _newPathPtr: number, _newPathLen: number,
+    oldDirFd: number, oldPathPtr: number, oldPathLen: number,
+    newDirFd: number, newPathPtr: number, newPathLen: number,
   ): number {
-    return WASI_ENOSYS;
+    const oldPath = this.resolveFdPath(oldDirFd, oldPathPtr, oldPathLen);
+    const newPath = this.resolveFdPath(newDirFd, newPathPtr, newPathLen);
+    if (!oldPath || !newPath) return WASI_EBADF;
+    this.deferredOps.push({ type: 'rename', oldPath, newPath });
+    // Update caches
+    const cached = this.fileCache.get(oldPath);
+    if (cached) {
+      this.fileCache.set(newPath, cached);
+      this.fileCache.delete(oldPath);
+    }
+    return WASI_ESUCCESS;
   }
 
   private path_symlink(_oldPathPtr: number, _oldPathLen: number, _dirFd: number, _newPathPtr: number, _newPathLen: number): number {
     return WASI_ENOSYS;
   }
 
-  private path_unlink_file(_dirFd: number, _pathPtr: number, _pathLen: number): number {
-    return WASI_ENOSYS; // handled by wasi command wrapper
+  private path_unlink_file(dirFd: number, pathPtr: number, pathLen: number): number {
+    const absPath = this.resolveFdPath(dirFd, pathPtr, pathLen);
+    if (!absPath) return WASI_EBADF;
+    this.deferredOps.push({ type: 'delete', path: absPath });
+    // Remove from cache
+    this.fileCache.delete(absPath);
+    return WASI_ESUCCESS;
   }
 
   // ── process ────────────────────────────────────────────────────────

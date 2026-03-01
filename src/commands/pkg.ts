@@ -6,6 +6,7 @@ import {
   downloadPackage,
   removePackage,
   findPackage,
+  clearModuleCache,
 } from '../wasi-packages';
 
 /**
@@ -105,6 +106,7 @@ async function pkgRemove(ctx: CommandContext): Promise<number> {
 
   try {
     await removePackage(name);
+    clearModuleCache(name);
     ctx.stdout += `Removed ${name}\n`;
     return 0;
   } catch (e: any) {

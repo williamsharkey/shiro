@@ -92,8 +92,8 @@ export const wasiCmd: Command = {
       // Create runtime and run
       const wasi = new WasiRT(config);
 
-      // Pre-load the working directory listing so path_open can find files
-      await wasi.preloadDir(ctx.cwd);
+      // Recursively pre-load the working directory tree so path_open/fd_readdir work
+      await wasi.preloadTree(ctx.cwd, 3, 100);
 
       // Run
       const exitCode = await wasi.run(wasmModule);

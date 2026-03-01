@@ -2,7 +2,7 @@ import { FileSystem } from './filesystem';
 import { CommandRegistry, CommandContext } from './commands/index';
 import type { ShiroTerminal } from './terminal';
 import { recordCommand } from './favicon';
-import { isAvailableAsPackage, getPackage } from './wasi-packages';
+import { isAvailableAsPackage, getCompiledModule } from './wasi-packages';
 import { WasiRT, WasiExit } from './wasi-runtime';
 
 interface Redirect {
@@ -569,11 +569,9 @@ export class Shell {
             if (wasmPkg) {
               try {
                 stderrWriter(`shiro: '${effectiveCmdName}' not installed. Installing ${wasmPkg.name}...\r\n`);
-                const binary = await getPackage(wasmPkg.name, (msg) => {
+                const wasmModule = await getCompiledModule(wasmPkg.name, (msg) => {
                   stderrWriter(`  ${msg}\r\n`);
                 });
-                // Run the downloaded WASM binary through WASI
-                const wasmModule = await WebAssembly.compile(binary);
                 const config = {
                   fs: this.fs,
                   cwd: this.cwd,
@@ -585,6 +583,7 @@ export class Shell {
                   preopens: { '/': '/', '.': this.cwd },
                 };
                 const wasi = new WasiRT(config);
+                await wasi.preloadTree(this.cwd, 3, 100);
                 exitCode = await wasi.run(wasmModule);
               } catch (e: any) {
                 if (e instanceof WasiExit) {
@@ -2165,16 +2164,18 @@ export class Shell {
       pathDirs.push(...envPath.split(':').filter(Boolean));
     }
 
-    // Search each directory
+    // Search each directory (also check for .wasm extension)
     for (const pathDir of pathDirs) {
-      const candidate = `${pathDir}/${name}`;
-      try {
-        const stat = await this.fs.stat(candidate);
-        if (stat.type === 'file' || stat.type === 'symlink') {
-          return candidate;
+      for (const suffix of ['', '.wasm']) {
+        const candidate = `${pathDir}/${name}${suffix}`;
+        try {
+          const stat = await this.fs.stat(candidate);
+          if (stat.type === 'file' || stat.type === 'symlink') {
+            return candidate;
+          }
+        } catch {
+          // Not found, continue
         }
-      } catch {
-        // Not found in this directory, continue
       }
     }
 
@@ -2317,6 +2318,7 @@ export class Shell {
       };
 
       const wasi = new WasiRT(config);
+      await wasi.preloadTree(this.cwd, 3, 100);
       return await wasi.run(wasmModule);
     } catch (e: any) {
       if (e instanceof WasiExit) {
