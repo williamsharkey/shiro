@@ -1548,4 +1548,61 @@ describe('Shell Advanced', () => {
       expect(shell.env['line']).toBe('path\\to\\file');
     });
   });
+
+  // ─── 28. nested functions and recursion ───────────────────────────────────
+
+  describe('nested functions and recursion', () => {
+    it('function calls another function', async () => {
+      await run(shell, 'greet() { echo "hello $1"; }');
+      await run(shell, 'greet_all() { greet alice; greet bob; }');
+      const { output } = await run(shell, 'greet_all');
+      const lines = output.replace(/\r/g, '').trim().split('\n');
+      expect(lines).toEqual(['hello alice', 'hello bob']);
+    });
+
+    it('command substitution with function', async () => {
+      await run(shell, 'double() { echo $(($1 * 2)); }');
+      const { output } = await run(shell, 'result=$(double 5); echo $result');
+      expect(output.replace(/\r/g, '').trim()).toBe('10');
+    });
+
+    it('function with return code', async () => {
+      await run(shell, 'is_even() { return $(($1 % 2)); }');
+      const r1 = await run(shell, 'is_even 4; echo $?');
+      expect(r1.output.replace(/\r/g, '').trim()).toBe('0');
+      const r2 = await run(shell, 'is_even 3; echo $?');
+      expect(r2.output.replace(/\r/g, '').trim()).toBe('1');
+    });
+
+    it('function accesses global variables', async () => {
+      shell.env['COUNTER'] = '0';
+      await run(shell, 'increment() { COUNTER=$((COUNTER + 1)); }');
+      await run(shell, 'increment; increment; increment');
+      expect(shell.env['COUNTER']).toBe('3');
+    });
+
+    it('function with loop', async () => {
+      await run(shell, 'sum_to() { local s=0; for ((i=1; i<=$1; i++)); do s=$((s+i)); done; echo $s; }');
+      const { output } = await run(shell, 'sum_to 10');
+      expect(output.replace(/\r/g, '').trim()).toBe('55');
+    });
+  });
+
+  // ─── 29. declare -n / namerefs ────────────────────────────────────────────
+
+  describe('declare -n / namerefs', () => {
+    it('declare -n creates nameref', async () => {
+      shell.env['target'] = 'original';
+      await run(shell, 'declare -n ref=target');
+      const { output } = await run(shell, 'echo $ref');
+      expect(output.replace(/\r/g, '').trim()).toBe('original');
+    });
+
+    it('indirect expansion ${!var}', async () => {
+      shell.env['name'] = 'greeting';
+      shell.env['greeting'] = 'hello world';
+      const { output } = await run(shell, 'echo ${!name}');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello world');
+    });
+  });
 });

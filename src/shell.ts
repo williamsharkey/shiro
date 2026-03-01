@@ -56,6 +56,8 @@ export class Shell {
   traps: Map<string, string> = new Map();
   /** Shell aliases: name → replacement string */
   aliases: Map<string, string> = new Map();
+  /** Namerefs: name → target variable name */
+  namerefs: Map<string, string> = new Map();
   /** Directory stack for pushd/popd */
   dirStack: string[] = [];
   private nextJobId = 1;
@@ -139,6 +141,7 @@ export class Shell {
     child.assocArrays = new Map(Array.from(this.assocArrays.entries()).map(([k, v]) => [k, new Map(v)]));
     child.traps = new Map(this.traps);
     child.aliases = new Map(this.aliases);
+    child.namerefs = new Map(this.namerefs);
     child.dirStack = [...this.dirStack];
     child.history = this.history; // share history array reference
     return child;
@@ -538,6 +541,17 @@ export class Shell {
           continue;
         }
         if (effectiveCmdName === 'declare' || effectiveCmdName === 'typeset' || effectiveCmdName === 'local') {
+          // declare -n ref=target → nameref
+          if (cmdArgs.includes('-n')) {
+            for (const arg of cmdArgs) {
+              if (arg.startsWith('-')) continue;
+              const eqIdx = arg.indexOf('=');
+              if (eqIdx >= 0) {
+                this.namerefs.set(arg.slice(0, eqIdx), arg.slice(eqIdx + 1));
+              }
+            }
+            continue;
+          }
           // declare -A name → associative array
           if (cmdArgs.includes('-A')) {
             for (const arg of cmdArgs) {
@@ -1637,7 +1651,9 @@ export class Shell {
           if (varName === 'PPID') { result += '0'; i += m[0].length; continue; }
           if (varName === 'LINENO') { result += '1'; i += m[0].length; continue; }
           if (varName === 'SECONDS') { result += String(Math.floor(performance.now() / 1000)); i += m[0].length; continue; }
-          result += this.env[varName] ?? '';
+          // Resolve namerefs: if varName is a nameref, follow it
+          const resolved = this.namerefs.has(varName) ? this.namerefs.get(varName)! : varName;
+          result += this.env[resolved] ?? '';
           i += m[0].length;
           continue;
         }
