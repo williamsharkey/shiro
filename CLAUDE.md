@@ -79,7 +79,11 @@ src/
     ├── sc.ts             # sc: spawn Claude Code in a new terminal window
     ├── python.ts         # python/python3/pip via Pyodide WASM (lazy-loaded)
     ├── sqlite.ts         # sqlite3 via sql.js WASM (lazy-loaded)
+    ├── wasi.ts           # wasi run <file.wasm|url> — WASI binary execution (lazy-loaded)
+    ├── pkg.ts            # WASM package manager: install, search, list, remove (lazy-loaded)
     └── *.ts              # Individual Unix commands (cat, ls, awk, xargs, head, etc.)
+├── wasi-runtime.ts      # WASI preview1 runtime — 37 syscalls, fd table, preloadTree, deferred ops
+├── wasi-packages.ts     # WASM package registry (12 packages), IndexedDB cache, WebC extraction
 ├── gif-encoder.ts       # Zero-dep GIF89a encoder + SHIRO1.0 seed extractor
 ├── drop-handler.ts      # Drag-and-drop seed GIF import onto terminal
 └── utils/
@@ -111,7 +115,7 @@ registerCommand(commands, lazyCommand('mycmd', 'Does something useful',
   () => import('./commands/mycmd').then(m => m.myCmd)), 'src/commands/mycmd.ts');
 ```
 
-Use lazy-loading when: the command pulls in large dependencies (WASM runtimes, parsers), is rarely used, or adds >5KB to the entry bundle. Currently lazy-loaded: build, nano, termcast, image, seed, gh, mcp, group, jq, ed, zip/unzip, cc/gcc, python/python3/pip, sqlite3.
+Use lazy-loading when: the command pulls in large dependencies (WASM runtimes, parsers), is rarely used, or adds >5KB to the entry bundle. Currently lazy-loaded: build, nano, termcast, image, seed, gh, mcp, group, jq, ed, zip/unzip, cc/gcc, python/python3/pip, sqlite3, wasi, pkg.
 
 Example command file:
 ```typescript
@@ -177,7 +181,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1053 tests across 33 test files** — all passing.
+**1180 tests across 35 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -202,6 +206,7 @@ cd tests && npm run test:shiro    # Run from tests/ directory
 | `lazy-commands.test.ts` | **37 tests** | All lazy-loaded commands: lazyCommand helper, build, nano, termcast, image, gh, mcp, group, cc/gcc, python/pip, sqlite3 |
 | `build-output.test.ts` | **7 tests** | Build validation: no unresolved `__VITE_PRELOAD__` markers, entry JS/CSS inlined, lazy chunks exist and are clean |
 | `templates.test.ts` | **31 tests** | Template data integrity, command structure, full multi-line cmd execution through shell |
+| `wasi.test.ts` | **48 tests** | WASI runtime (normPath, FD, WasiExit, WasiRT), WASM execution, packages, WebC extraction, pkg/wasi commands |
 
 ### Claude Code Tool Shim Tests (`claude-tools.test.ts`)
 
@@ -231,6 +236,36 @@ The shell supports:
 - **Positional parameters**: `$@`, `$*`, `$#`, `$0`-`$9`
 - **Quoting**: single quotes (literal), double quotes (with var expansion), backslash escapes
 - **Comments**: lines starting with `#`
+
+## WASI Runtime (Tier 2)
+
+Shiro has a full WASI preview1 runtime (`src/wasi-runtime.ts`) enabling real WASM binaries to run in-browser. This is Tier 2 of the three-tier architecture (Tier 1: JS commands, Tier 2: WASM+WASI, Tier 3: x86 emulation).
+
+**Architecture:**
+- 37 WASI syscall bindings: fd_read/write/seek, path_open, clock_time_get, random_get, proc_exit, etc.
+- File descriptor table with stdin(0), stdout(1), stderr(2), preopens(3+)
+- Pre-opens map `/` and `.` (cwd) into the Shiro virtual filesystem
+- `preloadTree()` recursively caches the cwd file tree (3 levels, 100 files cap) before WASM execution
+- Directory listing cache (`dirCache`) for proper `fd_readdir` with dirent struct serialization
+- Deferred filesystem operations (unlink, rmdir, rename) queued during execution, flushed after
+
+**Package Manager (`pkg`):**
+- 12 verified packages from Wasmer registry (cdn.wasmer.io webc containers)
+- Categories: fun (cowsay, fortune, lolcat, figlet), coreutils (coreutils, grep, sed), languages (quickjs, lua), tools (sqlite, viu, util-linux)
+- IndexedDB cache for downloaded WASM binaries, compiled WebAssembly.Module memory cache
+- WebC container extraction: scans for WASM magic bytes, walks section headers to find module boundaries
+- `pkg install <name>` writes `#!wasi-pkg <name>` stubs to `/usr/local/bin/` for PATH lookup
+- Auto-install: unknown commands matching a package name are downloaded and run on the fly
+
+**Usage:**
+```bash
+pkg available              # List 12 available WASM packages
+pkg install cowsay         # Download and install (writes PATH stub)
+cowsay hello               # Runs via PATH stub → WASM package cache
+wasi run ./program.wasm    # Run any WASM+WASI binary
+```
+
+**Key files:** `src/wasi-runtime.ts`, `src/wasi-packages.ts`, `src/commands/wasi.ts`, `src/commands/pkg.ts`
 
 ## Filesystem
 
