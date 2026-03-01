@@ -578,3 +578,49 @@ Shiro deploys to a DigitalOcean droplet (IP: 161.35.13.177, ID: 550124232). The 
 - **No monolithic files** - if a file grows past ~300 lines, split it
 - **Register new commands in main.ts** - that's the single wiring point
 
+## Standing Instruction for AI Agents
+
+**Compare with the vision documents and keep going to implement the full vision. Continue updating docs, updating tests, commit, push, and continue toward full vision.**
+
+The workflow cycle is: **implement shell features → write tests → update CLAUDE.md → commit → push → deploy → repeat**.
+
+The vision: a **fully functional browser-native Linux system** where Claude Code (Spirit) runs with no external server. There is always work to do — if your current task is done, find the next missing Linux capability and implement it.
+
+### Current State (Build #828, 1546 tests)
+
+The shell (`src/shell.ts`, ~4500 lines) has comprehensive bash compatibility. Core features working: pipes, redirects, heredocs, arrays (indexed + associative), arithmetic, functions, control structures, job control, process substitution, extglob, brace expansion, namerefs, traps, and 30+ inline builtins.
+
+### Future Plans — Next Features to Implement (Priority Order)
+
+#### P0: Shell Builtins Still Missing or Stubbed
+1. **`wait` builtin** — Not implemented at all. Needs: `wait [pid]`, `wait -n` (any job), `wait -f` (force wait). Background jobs exist (`backgroundJobs` Map) but no wait mechanism.
+2. **`history` builtin** — Not implemented. History array exists (`this.history`). Needs: `history`, `history N`, `history -c` (clear), `history -d N` (delete), `history -s "cmd"` (append). The shell already loads/saves `~/.bash_history`.
+3. **`fc` builtin** — Fix command. `fc -l` (list), `fc -s` (re-execute), `fc N` (edit and run). Low priority but useful.
+4. **`enable` builtin** — Currently a silent stub. Real bash `enable -n cmd` disables a builtin. Low priority.
+
+#### P1: Shell Features — Medium Priority
+5. **`nocaseglob` actual implementation** — The shopt flag is accepted but `globToRegex()` doesn't apply case-insensitive matching. Fix: pass `'i'` regex flag when `this.shoptopts.has('nocaseglob')`.
+6. **`nullglob` actual implementation** — Flag is accepted but `expandGlobs()` doesn't return empty on no-match. Fix: return `[]` instead of keeping literal when `this.shoptopts.has('nullglob')`.
+7. **`dotglob` actual implementation** — Flag accepted but globs don't match dotfiles. Fix: modify `fs.glob()` or `expandGlobs()` to include hidden files when enabled.
+8. **`read -t TIMEOUT`** — Read with timeout. Could use `setTimeout` + `Promise.race`.
+9. **`read -u FD`** — Read from file descriptor. Would need FD table integration.
+10. **`LINENO` tracking** — Currently always returns `'1'`. Needs actual line counting during execution.
+11. **`declare -g`** — Global scope declaration from inside functions. Currently not supported.
+12. **`mapfile -C callback`** — Callback function invoked for each line.
+13. **`coproc`** — Two-way pipe with background process. Complex in browser — may need `ReadableStream`/`WritableStream` pairs.
+
+#### P2: Broader System Capabilities
+14. **Tab completion engine** — `complete` specs are accepted silently. Wire them to the terminal's tab handler (`terminal.ts`) for real context-sensitive completion.
+15. **Signal handling** — `trap` works for ERR/EXIT/INT but Ctrl+C doesn't actually send SIGINT to background jobs. Wire terminal Ctrl+C to job interruption.
+16. **Process table** — `ps` and `kill` exist but background jobs and foreground control could be more robust.
+17. **`/proc` filesystem** — Virtual `/proc/self/`, `/proc/uptime`, `/proc/meminfo` for script compatibility.
+18. **Tier 3: x86 emulation** — The next architectural tier. Would enable running actual Linux binaries in-browser.
+
+### Technical Notes for New Agents
+
+- **Inline builtins** in `src/shell.ts` have access to `this.env`, `this.arrays`, `this.assocArrays`, `this.readonlyVars`, `this.shoptopts`, `this.backgroundJobs`, `this.functions`, `this.aliases`, `this.namerefs`, `this.callStack`. They use `continue` to skip to the next pipeline segment — but MUST also set the local `exitCode` variable (not just `this.lastExitCode`), or the exit code gets overwritten to 0 by line ~1905.
+- **ANSI-C quoting** `$'...'` is handled ONLY in the tokenizer — never in `expandVars`.
+- **Tests** are in `tests/tests/shiro-vitest/shell-advanced.test.ts`. Sections are numbered (currently 1-70). Add new sections sequentially. The `run(shell, cmd)` helper returns `{ output, exitCode }`. Stderr goes to stdout in the test helper.
+- **Deploy cycle**: `npm run deploy` auto-increments build number, runs tsc + vite build, and scp's to the DO droplet.
+- **5 pre-existing test failures** in `about-demos.test.ts` (Demo 3: Text Processing) are unrelated to shell features — they fail because the test setup doesn't create `/tmp/grades.csv`.
+
