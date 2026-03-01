@@ -865,4 +865,128 @@ describe('Shell Advanced', () => {
       expect(output.replace(/\r/g, '').trim()).toBe('x y');
     });
   });
+
+  // ─── BREAK / CONTINUE / RETURN ─────────────────────────────────────────────
+
+  describe('break, continue, return', () => {
+    it('break exits for loop early', async () => {
+      const { output } = await run(shell, 'for i in 1 2 3 4 5; do if [ $i -eq 3 ]; then break; fi; echo $i; done');
+      expect(output.replace(/\r/g, '').trim()).toBe('1\n2');
+    });
+
+    it('continue skips iteration in for loop', async () => {
+      const { output } = await run(shell, 'for i in 1 2 3 4 5; do if [ $i -eq 3 ]; then continue; fi; echo $i; done');
+      expect(output.replace(/\r/g, '').trim()).toBe('1\n2\n4\n5');
+    });
+
+    it('break exits while loop', async () => {
+      await run(shell, 'n=0');
+      const { output } = await run(shell, 'while [ $n -lt 10 ]; do if [ $n -eq 3 ]; then break; fi; echo $n; n=$((n+1)); done');
+      expect(output.replace(/\r/g, '').trim()).toBe('0\n1\n2');
+    });
+
+    it('continue in while loop', async () => {
+      await run(shell, 'n=0; result=""');
+      const { output } = await run(shell, 'while [ $n -lt 5 ]; do n=$((n+1)); if [ $n -eq 3 ]; then continue; fi; echo $n; done');
+      expect(output.replace(/\r/g, '').trim()).toBe('1\n2\n4\n5');
+    });
+
+    it('break in C-style for loop', async () => {
+      const { output } = await run(shell, 'for ((i=0; i<10; i++)); do if [ $i -eq 4 ]; then break; fi; echo $i; done');
+      expect(output.replace(/\r/g, '').trim()).toBe('0\n1\n2\n3');
+    });
+
+    it('continue in C-style for loop still updates', async () => {
+      const { output } = await run(shell, 'for ((i=0; i<5; i++)); do if [ $i -eq 2 ]; then continue; fi; echo $i; done');
+      expect(output.replace(/\r/g, '').trim()).toBe('0\n1\n3\n4');
+    });
+
+    it('return exits function with code', async () => {
+      await run(shell, 'myfunc() { echo before; return 42; echo after; }');
+      const result = await run(shell, 'myfunc');
+      expect(result.output.replace(/\r/g, '').trim()).toBe('before');
+      expect(result.exitCode).toBe(42);
+    });
+
+    it('return 0 from function', async () => {
+      await run(shell, 'check() { if [ "$1" = "ok" ]; then return 0; fi; return 1; }');
+      const ok = await run(shell, 'check ok');
+      expect(ok.exitCode).toBe(0);
+      const fail = await run(shell, 'check bad');
+      expect(fail.exitCode).toBe(1);
+    });
+
+    it('return inside loop inside function', async () => {
+      await run(shell, 'search() { for i in a b c; do if [ "$i" = "b" ]; then return 0; fi; done; return 1; }');
+      const result = await run(shell, 'search');
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
+  // ─── TRAP ───────────────────────────────────────────────────────────────────
+
+  describe('trap', () => {
+    it('trap with no args lists traps', async () => {
+      await run(shell, "trap 'echo bye' EXIT");
+      const { output } = await run(shell, 'trap');
+      expect(output.replace(/\r/g, '').trim()).toContain('EXIT');
+    });
+
+    it('trap ERR fires on non-zero exit', async () => {
+      await run(shell, "trap 'echo ERROR' ERR");
+      const { output } = await run(shell, 'false');
+      expect(output.replace(/\r/g, '').trim()).toBe('ERROR');
+    });
+
+    it('trap ERR does not fire on zero exit', async () => {
+      await run(shell, "trap 'echo ERROR' ERR");
+      const { output } = await run(shell, 'true');
+      expect(output.replace(/\r/g, '').trim()).toBe('');
+    });
+
+    it('trap can be reset with empty string', async () => {
+      await run(shell, "trap 'echo ERR' ERR");
+      await run(shell, "trap '' ERR");
+      const { output } = await run(shell, 'false');
+      expect(output.replace(/\r/g, '').trim()).toBe('');
+    });
+
+    it('trap can be reset with dash', async () => {
+      await run(shell, "trap 'echo ERR' ERR");
+      await run(shell, 'trap - ERR');
+      const { output } = await run(shell, 'false');
+      expect(output.replace(/\r/g, '').trim()).toBe('');
+    });
+  });
+
+  // ─── SELECT ─────────────────────────────────────────────────────────────────
+
+  describe('select', () => {
+    it('select displays numbered menu', async () => {
+      // Use __PIPE_STDIN directly since pipeline expansion runs before select body
+      shell.env['__PIPE_STDIN'] = '2\n';
+      const { output } = await run(shell, 'select fruit in apple banana cherry; do echo $fruit; break; done');
+      delete shell.env['__PIPE_STDIN'];
+      const lines = output.replace(/\r/g, '').trim().split('\n');
+      expect(lines[0]).toBe('1) apple');
+      expect(lines[1]).toBe('2) banana');
+      expect(lines[2]).toBe('3) cherry');
+      expect(lines[3]).toBe('banana');
+    });
+
+    it('select sets REPLY variable', async () => {
+      shell.env['__PIPE_STDIN'] = '1\n';
+      await run(shell, 'select x in a b c; do break; done');
+      delete shell.env['__PIPE_STDIN'];
+      const { output } = await run(shell, 'echo $REPLY');
+      expect(output.replace(/\r/g, '').trim()).toBe('1');
+    });
+
+    it('select with invalid choice sets empty var', async () => {
+      shell.env['__PIPE_STDIN'] = '99\n';
+      const { output } = await run(shell, 'select x in a b; do echo "x=$x"; break; done');
+      delete shell.env['__PIPE_STDIN'];
+      expect(output.replace(/\r/g, '')).toContain('x=');
+    });
+  });
 });

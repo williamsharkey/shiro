@@ -181,7 +181,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1281 tests across 35 test files** — all passing.
+**1298 tests across 35 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -250,6 +250,9 @@ The shell supports:
 - **mapfile/readarray**: `mapfile arr` reads lines into array, `read -a arr` splits words into array
 - **C-style for loops**: `for ((i=0; i<10; i++)); do ...; done` with full arithmetic
 - **Array slicing**: `${arr[@]:start:len}`, `${arr[@]:start}`, negative offsets
+- **break/continue/return**: `break [N]`, `continue [N]` in loops, `return [N]` from functions
+- **trap**: `trap 'command' SIGNAL` for ERR/EXIT/INT, `trap` lists, `trap '' SIG` resets
+- **select**: `select VAR in items; do ...; done` numbered menu construct
 
 ## WASI Runtime (Tier 2)
 

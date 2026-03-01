@@ -30,6 +30,13 @@ const SECRET_ENV_KEYS = [
   'API_KEY', 'SECRET_KEY', 'ACCESS_TOKEN', 'AUTH_TOKEN',
 ];
 
+/** Sentinel thrown by `break [N]` inside loops */
+class BreakSignal { constructor(public levels: number = 1) {} }
+/** Sentinel thrown by `continue [N]` inside loops */
+class ContinueSignal { constructor(public levels: number = 1) {} }
+/** Sentinel thrown by `return [N]` inside functions */
+class ReturnSignal { constructor(public code: number = 0) {} }
+
 export class Shell {
   fs: FileSystem;
   cwd: string = '/home/user';
@@ -45,6 +52,8 @@ export class Shell {
   arrays: Map<string, string[]> = new Map();
   /** Bash-style associative arrays (declare -A) */
   assocArrays: Map<string, Map<string, string>> = new Map();
+  /** Trap handlers: signal → command string */
+  traps: Map<string, string> = new Map();
   private nextJobId = 1;
   private terminal?: ShiroTerminal;
 
@@ -116,6 +125,7 @@ export class Shell {
     child.options = new Set(this.options);
     child.arrays = new Map(Array.from(this.arrays.entries()).map(([k, v]) => [k, [...v]]));
     child.assocArrays = new Map(Array.from(this.assocArrays.entries()).map(([k, v]) => [k, new Map(v)]));
+    child.traps = new Map(this.traps);
     child.history = this.history; // share history array reference
     return child;
   }
@@ -240,34 +250,10 @@ export class Shell {
       return 0;
     }
 
-    // Check for control structures (if/while/for/case)
-    if (this.isControlStructure(effectiveLine)) {
-      return this.execControlStructure(effectiveLine, writeStdout, stderrWriter);
-    }
-
-    // Check for (( expr )) arithmetic command
-    if (effectiveLine.startsWith('((') && effectiveLine.endsWith('))')) {
-      const expr = effectiveLine.slice(2, -2).trim();
-      const val = this.evalArithmetic(expr);
-      this.lastExitCode = val !== 0 ? 0 : 1; // bash: (( 0 )) returns 1, (( non-zero )) returns 0
-      this.env['?'] = String(this.lastExitCode);
-      return this.lastExitCode;
-    }
-
-    // Check for subshell: (commands)
-    if (effectiveLine.startsWith('(') && effectiveLine.endsWith(')')) {
-      const inner = effectiveLine.slice(1, -1).trim();
-      if (inner) {
-        // Execute in a forked shell (env changes don't propagate back)
-        const child = this.fork();
-        const result = await child.exec(inner);
-        if (result.stdout) writeStdout(result.stdout.replace(/\n/g, '\r\n'));
-        if (result.stderr) stderrWriter(result.stderr.replace(/\n/g, '\r\n'));
-        this.lastExitCode = result.exitCode;
-        this.env['?'] = String(result.exitCode);
-        return result.exitCode;
-      }
-    }
+    // NOTE: Control structures, (( )), and subshells are handled inside the
+    // parseCompound loop below. This ensures that semicolons AFTER a control
+    // structure closing keyword (fi, done, esac) are properly split.
+    // e.g., "if [ $x -eq 1 ]; then break; fi; echo $x" → two compounds.
 
     // Split into compound commands: &&, ||, ;
     const compounds = this.parseCompound(effectiveLine);
@@ -649,6 +635,58 @@ export class Shell {
           continue;
         }
 
+        // Shell builtins: break and continue (throw sentinels caught by loop handlers)
+        if (effectiveCmdName === 'break') {
+          const levels = cmdArgs.length > 0 ? parseInt(cmdArgs[0], 10) || 1 : 1;
+          throw new BreakSignal(levels);
+        }
+        if (effectiveCmdName === 'continue') {
+          const levels = cmdArgs.length > 0 ? parseInt(cmdArgs[0], 10) || 1 : 1;
+          throw new ContinueSignal(levels);
+        }
+
+        // Shell builtin: return (throw sentinel caught by execFunction)
+        if (effectiveCmdName === 'return') {
+          const code = cmdArgs.length > 0 ? parseInt(cmdArgs[0], 10) || 0 : this.lastExitCode;
+          throw new ReturnSignal(code);
+        }
+
+        // Shell builtin: trap
+        if (effectiveCmdName === 'trap') {
+          if (cmdArgs.length === 0) {
+            // List all traps
+            for (const [sig, cmd] of this.traps) {
+              writeStdout(`trap -- '${cmd}' ${sig}\r\n`);
+            }
+            exitCode = 0;
+            this.lastExitCode = 0;
+            this.env['?'] = '0';
+            lastOutput = '';
+            continue;
+          }
+          if (cmdArgs.length === 1) {
+            // trap SIGNAL — reset trap
+            const sig = cmdArgs[0].toUpperCase();
+            this.traps.delete(sig);
+          } else {
+            // trap 'command' SIGNAL [SIGNAL...]
+            const cmd = cmdArgs[0];
+            for (let si = 1; si < cmdArgs.length; si++) {
+              const sig = cmdArgs[si].toUpperCase();
+              if (cmd === '' || cmd === '-') {
+                this.traps.delete(sig); // reset to default
+              } else {
+                this.traps.set(sig, cmd);
+              }
+            }
+          }
+          exitCode = 0;
+          this.lastExitCode = 0;
+          this.env['?'] = '0';
+          lastOutput = '';
+          continue;
+        }
+
         // Handle stdin redirect (<)
         let stdin = i > 0 ? lastOutput : '';
         for (const redir of redirects) {
@@ -862,6 +900,12 @@ export class Shell {
 
       this.lastExitCode = exitCode;
       this.env['?'] = String(exitCode);
+
+      // Fire ERR trap on non-zero exit code
+      if (exitCode !== 0 && this.traps.has('ERR')) {
+        const errCmd = this.traps.get('ERR')!;
+        await this.execute(errCmd, writeStdout, stderrWriter);
+      }
 
       // errexit: abort on non-zero exit from commands NOT in && / || chains
       if (this.options.has('errexit') && exitCode !== 0 && !negateExit) {
@@ -1525,6 +1569,7 @@ export class Shell {
     let inDouble = false;
     let currentOp: '' | '&&' | '||' | ';' = '';
     let depth = 0; // track control structure nesting (do/done, then/fi, {/})
+    let braceDepth = 0; // track only { } brace groups (not ${VAR})
     let parenDepth = 0; // track subshell ( ... ) nesting separately
     let i = 0;
 
@@ -1557,11 +1602,12 @@ export class Shell {
         if (ch === '{') {
           // Only count as depth if preceded by whitespace/; (not in ${VAR})
           const prevBrace = i > 0 ? line[i - 1] : ' ';
-          if (/[\s;)]/.test(prevBrace) || i === 0) depth++;
+          if (/[\s;)]/.test(prevBrace) || i === 0) { depth++; braceDepth++; }
           current += ch; i++; continue;
         }
         if (ch === '}') {
-          if (depth > 0) depth--;
+          // Only decrement if we have a matching brace-group { (not ${VAR})
+          if (braceDepth > 0) { depth--; braceDepth--; }
           current += ch; i++; continue;
         }
 
@@ -1569,10 +1615,10 @@ export class Shell {
         // Only match at word boundary: beginning of string or after whitespace/;
         if (/[\s;]/.test(prevCh) || i === 0) {
           const rest = line.slice(i);
-          const wordMatch = rest.match(/^(for|while|until|if|case|do|then|done|fi|esac)\b/);
+          const wordMatch = rest.match(/^(for|while|until|select|if|case|do|then|done|fi|esac)\b/);
           if (wordMatch) {
             const word = wordMatch[1];
-            if (word === 'for' || word === 'while' || word === 'until' || word === 'if' || word === 'case') depth++;
+            if (word === 'for' || word === 'while' || word === 'until' || word === 'select' || word === 'if' || word === 'case') depth++;
             else if (word === 'done' || word === 'fi' || word === 'esac') depth--;
           }
         }
@@ -2128,16 +2174,22 @@ export class Shell {
     const prevFuncname = this.arrays.get('FUNCNAME') || [];
     this.arrays.set('FUNCNAME', [name, ...prevFuncname]);
 
-    // Execute body
+    // Execute body — catch ReturnSignal for `return [N]`
     let exitCode = 0;
-    const bodyLines = func.body.split(/\n|;/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
-    for (const line of bodyLines) {
-      if (line === 'return' || line.startsWith('return ')) {
-        const retMatch = line.match(/^return\s+(\d+)?/);
-        exitCode = retMatch?.[1] ? parseInt(retMatch[1]) : this.lastExitCode;
-        break;
+    try {
+      exitCode = await this.execute(func.body, writeStdout, writeStderr);
+    } catch (e) {
+      if (e instanceof ReturnSignal) {
+        exitCode = e.code;
+      } else {
+        // Restore before re-throwing
+        this.arrays.set('FUNCNAME', prevFuncname);
+        for (const key of Object.keys(saved)) {
+          if (saved[key] === undefined) delete this.env[key];
+          else this.env[key] = saved[key]!;
+        }
+        throw e;
       }
-      exitCode = await this.execute(line, writeStdout, writeStderr);
     }
 
     // Restore FUNCNAME stack
@@ -2155,7 +2207,7 @@ export class Shell {
   // ─── CONTROL STRUCTURES ───────────────────────────────────────────────────
 
   private isControlStructure(input: string): boolean {
-    return /^if\s+/.test(input) || /^while\s+/.test(input) || /^until\s+/.test(input) || /^for\s+/.test(input) || /^case\s+/.test(input);
+    return /^if\s+/.test(input) || /^while\s+/.test(input) || /^until\s+/.test(input) || /^for\s+/.test(input) || /^case\s+/.test(input) || /^select\s+/.test(input);
   }
 
   private async execControlStructure(
@@ -2166,6 +2218,7 @@ export class Shell {
     if (/^until\s+/.test(input)) return this.execUntil(input, writeStdout, writeStderr);
     if (/^for\s+/.test(input)) return this.execFor(input, writeStdout, writeStderr);
     if (/^case\s+/.test(input)) return this.execCase(input, writeStdout, writeStderr);
+    if (/^select\s+/.test(input)) return this.execSelect(input, writeStdout, writeStderr);
     return 0;
   }
 
@@ -2342,7 +2395,7 @@ export class Shell {
     let donePos = -1;
     const tokens = this.shellTokenScan(joined);
     for (const tok of tokens) {
-      if (tok.word === 'for' || tok.word === 'while' || tok.word === 'until') {
+      if (tok.word === 'for' || tok.word === 'while' || tok.word === 'until' || tok.word === 'select') {
         if (tok.pos > 0) depth++; // nested loop (skip the outermost keyword)
       } else if (tok.word === 'do') {
         if (depth === 0) { doPos = tok.pos; }
@@ -2375,7 +2428,7 @@ export class Shell {
     const results: { word: string; pos: number }[] = [];
     let inSQ = false, inDQ = false;
     let i = 0;
-    const keywords = ['for', 'while', 'until', 'do', 'done', 'if', 'then', 'elif', 'else', 'fi', 'case', 'esac', 'in'];
+    const keywords = ['for', 'while', 'until', 'select', 'do', 'done', 'if', 'then', 'elif', 'else', 'fi', 'case', 'esac', 'in'];
     while (i < input.length) {
       const ch = input[i];
       if (ch === '\\' && !inSQ) { i += 2; continue; }
@@ -2419,7 +2472,13 @@ export class Shell {
       // Expand vars in condition each iteration (loop vars like $X change)
       const expandedCond = this.expandVars(await this.expandCommandSubstitution(this.expandArithmetic(parsed.condition), writeStderr));
       if ((await this.evalCondition(expandedCond, writeStdout, writeStderr)) !== 0) break;
-      if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr);
+      try {
+        if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr);
+      } catch (e) {
+        if (e instanceof BreakSignal) { if (e.levels > 1) throw new BreakSignal(e.levels - 1); break; }
+        if (e instanceof ContinueSignal) { if (e.levels > 1) throw new ContinueSignal(e.levels - 1); continue; }
+        throw e;
+      }
     }
 
     // Restore
@@ -2440,7 +2499,13 @@ export class Shell {
     while (iter++ < 10000) {
       const expandedCond = this.expandVars(await this.expandCommandSubstitution(this.expandArithmetic(parsed.condition), writeStderr));
       if ((await this.evalCondition(expandedCond, writeStdout, writeStderr)) === 0) break;
-      if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr);
+      try {
+        if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr);
+      } catch (e) {
+        if (e instanceof BreakSignal) { if (e.levels > 1) throw new BreakSignal(e.levels - 1); break; }
+        if (e instanceof ContinueSignal) { if (e.levels > 1) throw new ContinueSignal(e.levels - 1); continue; }
+        throw e;
+      }
     }
     return 0;
   }
@@ -2465,7 +2530,13 @@ export class Shell {
         // Evaluate test — 0 means false (stop)
         if (test && this.evalArithmetic(test) === 0) break;
         // Execute body
-        if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr);
+        try {
+          if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr);
+        } catch (e) {
+          if (e instanceof BreakSignal) { if (e.levels > 1) throw new BreakSignal(e.levels - 1); break; }
+          if (e instanceof ContinueSignal) { if (e.levels > 1) throw new ContinueSignal(e.levels - 1); /* fall through to update */ }
+          else throw e;
+        }
         // Execute update
         if (update) this.evalArithmetic(update);
       }
@@ -2481,8 +2552,78 @@ export class Shell {
     const items = this.expandVars(itemsStr).split(/\s+/).filter(Boolean);
     for (const item of items) {
       this.env[varName] = item;
-      if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr);
+      try {
+        if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr);
+      } catch (e) {
+        if (e instanceof BreakSignal) { if (e.levels > 1) throw new BreakSignal(e.levels - 1); break; }
+        if (e instanceof ContinueSignal) { if (e.levels > 1) throw new ContinueSignal(e.levels - 1); continue; }
+        throw e;
+      }
     }
+    return 0;
+  }
+
+  private async execSelect(
+    input: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void
+  ): Promise<number> {
+    const parsed = this.parseLoopConstruct(input, 'select');
+    if (!parsed) { writeStderr('select: syntax error\r\n'); return 1; }
+
+    // Parse "VAR in item1 item2 item3" from condition
+    const selMatch = parsed.condition.match(/^(\w+)\s+in\s+(.+)$/);
+    if (!selMatch) { writeStderr('select: syntax error\r\n'); return 1; }
+
+    const varName = selMatch[1];
+    const itemsStr = await this.expandCommandSubstitution(this.expandArithmetic(selMatch[2]), writeStderr);
+    const items = this.expandVars(itemsStr).split(/\s+/).filter(Boolean);
+
+    // Display menu
+    for (let idx = 0; idx < items.length; idx++) {
+      writeStdout(`${idx + 1}) ${items[idx]}\r\n`);
+    }
+
+    // Read selection from stdin (__PIPE_STDIN or REPLY)
+    const ps3 = this.env['PS3'] || '#? ';
+    const hasPipeStdin = '__PIPE_STDIN' in this.env;
+    let readInput = hasPipeStdin ? this.env['__PIPE_STDIN'] : '';
+
+    let iter = 0;
+    while (iter++ < 100) {
+      // Get one line of input
+      const firstNewline = readInput.indexOf('\n');
+      let choice: string;
+      if (firstNewline >= 0) {
+        choice = readInput.slice(0, firstNewline).trim();
+        readInput = readInput.slice(firstNewline + 1);
+        if (hasPipeStdin) this.env['__PIPE_STDIN'] = readInput;
+      } else if (readInput.trim()) {
+        choice = readInput.trim();
+        readInput = '';
+        if (hasPipeStdin) delete this.env['__PIPE_STDIN'];
+      } else {
+        break; // no more input
+      }
+
+      this.env['REPLY'] = choice;
+      const num = parseInt(choice, 10);
+      if (num >= 1 && num <= items.length) {
+        this.env[varName] = items[num - 1];
+      } else {
+        this.env[varName] = '';
+      }
+
+      try {
+        if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr);
+      } catch (e) {
+        if (e instanceof BreakSignal) { if (e.levels > 1) throw new BreakSignal(e.levels - 1); break; }
+        if (e instanceof ContinueSignal) { if (e.levels > 1) throw new ContinueSignal(e.levels - 1); continue; }
+        throw e;
+      }
+
+      // In non-interactive (piped) mode, process one selection then stop
+      if (!hasPipeStdin) break;
+    }
+
     return 0;
   }
 
@@ -2856,7 +2997,7 @@ export class Shell {
       // Count opening/closing keywords (quote-aware)
       const keywords = this.shellTokenScan(trimmed);
       for (const kw of keywords) {
-        if (['for', 'while', 'until', 'if', 'case'].includes(kw.word)) depth++;
+        if (['for', 'while', 'until', 'select', 'if', 'case'].includes(kw.word)) depth++;
         if (['done', 'fi', 'esac'].includes(kw.word)) depth--;
       }
 
