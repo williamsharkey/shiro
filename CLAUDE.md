@@ -181,7 +181,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1463 tests across 35 test files** — all passing.
+**1473 tests across 35 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -241,13 +241,13 @@ The shell supports:
 - **Shell options**: `set -e` (errexit), `set -x` (xtrace), `set -o pipefail`, `set +e`/`+x`/`+o` to disable
 - **Bash-style arrays**: `arr=(a b c)`, `${arr[0]}`, `${arr[@]}`, `${#arr[@]}`, `arr[N]=val`, `arr+=(d e)`, `${!arr[@]}`
 - **Associative arrays**: `declare -A map`, `map[key]=val`, `${map[key]}`, `${!map[@]}`, `${#map[@]}`
-- **Arithmetic**: `$((expr))` expansion, `(( expr ))` command, `i++`, `i--`, `+=`, `-=`, `*=`, `/=`
+- **Arithmetic**: `$((expr))` expansion, `(( expr ))` command/condition, `i++`, `i--`, `+=`, `-=`, `*=`, `/=`
 - **String ops**: `${var^}`, `${var,}`, `${var^^}`, `${var,,}`, `${!ref}` indirect, `${#var}`, `${var:-default}`
 - **Control structures**: if/elif/else/fi, while/until/do/done, for/in/do/done, case/esac
 - **Functions**: `name() { ... }` and `function name { ... }`
 - **Job control**: `cmd &` (background), `fg`, `bg`, `jobs`, `wait`
 - **PIPESTATUS**: `${PIPESTATUS[@]}` array of pipeline exit codes, **FUNCNAME**: `${FUNCNAME[0]}` function name stack
-- **mapfile/readarray**: `mapfile arr` reads lines into array, `read -a arr` splits words into array
+- **mapfile/readarray**: `mapfile arr` reads lines into array, `mapfile -d, -s, -n` flags, `read -a arr` splits words into array
 - **C-style for loops**: `for ((i=0; i<10; i++)); do ...; done` with full arithmetic
 - **Array slicing**: `${arr[@]:start:len}`, `${arr[@]:start}`, negative offsets
 - **break/continue/return**: `break [N]`, `continue [N]` in loops, `return [N]` from functions

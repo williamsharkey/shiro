@@ -709,7 +709,19 @@ export class Shell {
 
         // Shell builtin: mapfile / readarray
         if (effectiveCmdName === 'mapfile' || effectiveCmdName === 'readarray') {
-          const arrName = cmdArgs.find(a => !a.startsWith('-')) || 'MAPFILE';
+          // Parse flags: -t (strip), -d (delimiter), -s (skip N lines), -n (count)
+          let mapDelim = '\n';
+          let mapSkip = 0;
+          let mapCount = -1;
+          let arrName = 'MAPFILE';
+          for (let mi = 0; mi < cmdArgs.length; mi++) {
+            if (cmdArgs[mi] === '-d' && mi + 1 < cmdArgs.length) { mapDelim = cmdArgs[++mi]; }
+            else if (cmdArgs[mi].startsWith('-d') && cmdArgs[mi].length > 2) { mapDelim = cmdArgs[mi].slice(2); }
+            else if (cmdArgs[mi] === '-s' && mi + 1 < cmdArgs.length) { mapSkip = parseInt(cmdArgs[++mi], 10) || 0; }
+            else if (cmdArgs[mi] === '-n' && mi + 1 < cmdArgs.length) { mapCount = parseInt(cmdArgs[++mi], 10) || -1; }
+            else if (cmdArgs[mi] === '-t') { /* strip - already default */ }
+            else if (!cmdArgs[mi].startsWith('-')) { arrName = cmdArgs[mi]; }
+          }
           let mapInput = '';
           const hasPipeStdin = '__PIPE_STDIN' in this.env;
           if (hasPipeStdin) {
@@ -718,13 +730,14 @@ export class Shell {
           } else {
             mapInput = i > 0 ? lastOutput : (heredocStdin || '');
           }
-          const lines = mapInput.split('\n');
-          // Remove trailing empty line from trailing newline
+          let lines = mapInput.split(mapDelim);
+          // Remove trailing empty element from trailing delimiter
           if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
-          // By default, mapfile preserves trailing newlines on each element
-          // -t flag strips them (we strip by default like bash's common usage)
-          const stripNewlines = cmdArgs.includes('-t') || true;
-          this.arrays.set(arrName, stripNewlines ? lines : lines.map(l => l + '\n'));
+          // Apply skip
+          if (mapSkip > 0) lines = lines.slice(mapSkip);
+          // Apply count
+          if (mapCount >= 0) lines = lines.slice(0, mapCount);
+          this.arrays.set(arrName, lines);
           exitCode = 0;
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
@@ -3024,6 +3037,11 @@ export class Shell {
     }
     if (trimmed.startsWith('test ')) {
       return this.evalTest(trimmed.slice(5));
+    }
+    // (( expr )) — arithmetic condition
+    if (trimmed.startsWith('((') && trimmed.endsWith('))')) {
+      const expr = this.expandVars(trimmed.slice(2, -2).trim());
+      return this.evalArithmetic(expr) !== 0 ? 0 : 1;
     }
     // Execute as command
     const result = await this.exec(trimmed);

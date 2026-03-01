@@ -2087,4 +2087,67 @@ describe('Shell Advanced', () => {
       expect(output.replace(/\r/g, '').trim()).toBe('out');
     });
   });
+
+  // ─── Section 49: mapfile improvements ──────────────────────────────────────
+  describe('mapfile improvements', () => {
+    it('mapfile -s skips first N lines', async () => {
+      shell.env['__PIPE_STDIN'] = 'a\nb\nc\nd';
+      const { output } = await run(shell, 'mapfile -s 2 arr; echo ${arr[0]} ${arr[1]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('c d');
+    });
+
+    it('mapfile -n reads N lines', async () => {
+      shell.env['__PIPE_STDIN'] = 'a\nb\nc\nd';
+      const { output } = await run(shell, 'mapfile -n 2 arr; echo ${#arr[@]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('2');
+    });
+
+    it('mapfile -d uses custom delimiter', async () => {
+      shell.env['__PIPE_STDIN'] = 'a:b:c';
+      const { output } = await run(shell, 'mapfile -d : arr; echo ${arr[0]} ${arr[1]} ${arr[2]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('a b c');
+    });
+  });
+
+  // ─── Section 50: integration tests ────────────────────────────────────────
+  describe('integration tests', () => {
+    it('function with conditional returns', async () => {
+      const { output } = await run(shell, 'check() { if [ $1 -gt 0 ]; then echo positive; return 0; else echo zero; return 1; fi; }; check 5; check 0');
+      expect(output.replace(/\r/g, '').trim()).toBe('positive\nzero');
+    });
+
+    it('while read loop counts lines', async () => {
+      shell.env['__PIPE_STDIN'] = 'apple\nbanana\ncherry';
+      const { output } = await run(shell, 'count=0; while read fruit; do count=$((count + 1)); done; echo "counted $count fruits"');
+      expect(output.replace(/\r/g, '').trim()).toBe('counted 3 fruits');
+    });
+
+    it('case statement with multiple branches', async () => {
+      const { output } = await run(shell, 'result=""; for ext in js ts py rb; do case $ext in js|ts) result="$result web" ;; py) result="$result python" ;; *) result="$result other" ;; esac; done; echo $result');
+      expect(output.replace(/\r/g, '').trim()).toBe('web web python other');
+    });
+
+    it('function with array args and sum', async () => {
+      const { output } = await run(shell, 'sum() { local total=0; for val in "$@"; do total=$((total + val)); done; echo $total; }; result=$(sum 10 20 30 40 50); echo "sum=$result"');
+      expect(output.replace(/\r/g, '').trim()).toBe('sum=150');
+    });
+
+    it('inner break only breaks inner loop', async () => {
+      const { output } = await run(shell, 'for i in 1 2; do for j in a b c; do if [ "$j" = "b" ]; then break; fi; echo "$i$j"; done; done');
+      expect(output.replace(/\r/g, '').trim()).toBe('1a\n2a');
+    });
+
+    it('here-string with variable', async () => {
+      shell.env['NAME'] = 'world';
+      const { output } = await run(shell, 'cat <<< "hello $NAME"');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello world');
+    });
+
+    it('pipeline with sort and uniq', async () => {
+      await shell.fs.writeFile('/tmp/data.txt', 'banana\napple\ncherry\napple\nbanana\napple');
+      const { output } = await run(shell, 'cat /tmp/data.txt | sort | uniq -c | sort -rn');
+      const lines = output.replace(/\r/g, '').trim().split('\n');
+      expect(lines[0].trim()).toContain('apple');
+    });
+  });
 });
