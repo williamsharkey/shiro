@@ -41,6 +41,8 @@ export class Shell {
   backgroundJobs: Map<number, BackgroundJob> = new Map();
   /** Shell options: errexit (-e), xtrace (-x), nounset (-u), verbose (-v) */
   options: Set<string> = new Set();
+  /** Bash-style indexed arrays */
+  arrays: Map<string, string[]> = new Map();
   private nextJobId = 1;
   private terminal?: ShiroTerminal;
 
@@ -110,6 +112,7 @@ export class Shell {
     child.env = { ...this.env };
     child.functions = { ...this.functions };
     child.options = new Set(this.options);
+    child.arrays = new Map(Array.from(this.arrays.entries()).map(([k, v]) => [k, [...v]]));
     child.history = this.history; // share history array reference
     return child;
   }
@@ -336,7 +339,10 @@ export class Shell {
         if (args.length === 0) continue;
 
         // Expand glob patterns in args (but not quoted ones marked with \x01)
-        const expandedArgs = await this.expandGlobs(args);
+        let expandedArgs = await this.expandGlobs(args);
+
+        // Expand process substitution: <(cmd) and >(cmd)
+        expandedArgs = await this.expandProcessSubstitution(expandedArgs, stderrWriter);
 
         const cmdName = expandedArgs[0];
         const cmdArgs = expandedArgs.slice(1);
@@ -405,11 +411,41 @@ export class Shell {
           stderrWriter(`+ ${[effectiveCmdName, ...cmdArgs].join(' ')}\r\n`);
         }
 
-        // Handle built-in variable assignment: FOO=bar
+        // Handle array assignment: arr=(a b c) or arr[N]=val
         if (effectiveCmdName.includes('=') && !effectiveCmdName.startsWith('=')) {
           const eqIdx = cmdName.indexOf('=');
           const key = cmdName.substring(0, eqIdx);
           const val = cmdName.substring(eqIdx + 1);
+
+          // Array assignment: name=(elem1 elem2 elem3)
+          if (val.startsWith('(') && (val.endsWith(')') || cmdArgs.length > 0)) {
+            let elements: string;
+            if (val.endsWith(')')) {
+              elements = val.slice(1, -1);
+            } else {
+              // Multi-token: name=(a b c) got split, reconstruct
+              const fullVal = [val, ...cmdArgs].join(' ');
+              const closeIdx = fullVal.indexOf(')');
+              elements = closeIdx >= 0 ? fullVal.slice(1, closeIdx) : fullVal.slice(1);
+            }
+            const arr = elements.trim() ? this.tokenize(elements) : [];
+            this.arrays.set(key, arr.map(a => a.replace(/\x01/g, '')));
+            continue;
+          }
+
+          // Indexed array assignment: arr[N]=val
+          const bracketMatch = key.match(/^(\w+)\[(\d+)\]$/);
+          if (bracketMatch) {
+            const arrName = bracketMatch[1];
+            const idx = parseInt(bracketMatch[2], 10);
+            const arr = this.arrays.get(arrName) || [];
+            while (arr.length <= idx) arr.push('');
+            arr[idx] = val;
+            this.arrays.set(arrName, arr);
+            continue;
+          }
+
+          // Regular variable assignment: FOO=bar
           this.env[key] = val;
           if (key === 'PWD') this.cwd = val;
           // Persist API keys to localStorage
@@ -1016,6 +1052,28 @@ export class Shell {
    * ${VAR^^}, ${VAR,,}, ${VAR:-default}, ${VAR:=default}, ${VAR:+alt}, ${VAR:?err}
    */
   private expandParamExpression(inner: string): string | null {
+    // ${#arr[@]} or ${#arr[*]} — array length
+    const arrLenMatch = inner.match(/^#([A-Za-z_][A-Za-z0-9_]*)\[[@*]\]$/);
+    if (arrLenMatch) {
+      const arr = this.arrays.get(arrLenMatch[1]);
+      return String(arr ? arr.length : 0);
+    }
+
+    // ${arr[@]} or ${arr[*]} — all array elements (space-separated)
+    const arrAllMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\[[@*]\]$/);
+    if (arrAllMatch) {
+      const arr = this.arrays.get(arrAllMatch[1]);
+      return arr ? arr.join(' ') : '';
+    }
+
+    // ${arr[N]} — indexed array access
+    const arrIdxMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\[(\d+)\]$/);
+    if (arrIdxMatch) {
+      const arr = this.arrays.get(arrIdxMatch[1]);
+      const idx = parseInt(arrIdxMatch[2], 10);
+      return arr && idx < arr.length ? arr[idx] : '';
+    }
+
     // ${#VAR} — string length
     const lenMatch = inner.match(/^#([A-Za-z_][A-Za-z0-9_]*)$/);
     if (lenMatch) {
@@ -1536,11 +1594,27 @@ export class Shell {
       }
 
       // Handle <<< here-string, << heredoc (already handled elsewhere), < stdin redirect
+      // But NOT <( which is process substitution
       if (ch === '<' && !inSingle && !inDouble) {
         if (input[i + 1] === '<' && input[i + 2] === '<') {
           if (current) { tokens.push(current); current = ''; }
           tokens.push('<<<');
           i += 3;
+          continue;
+        }
+        // <( is process substitution — keep as part of arg, find matching )
+        if (input[i + 1] === '(') {
+          let depth = 1;
+          let j = i + 2;
+          while (j < input.length && depth > 0) {
+            if (input[j] === '(') depth++;
+            else if (input[j] === ')') depth--;
+            j++;
+          }
+          const procSub = input.slice(i, j);
+          if (current) { tokens.push(current); current = ''; }
+          tokens.push(procSub);
+          i = j;
           continue;
         }
         if (current) { tokens.push(current); current = ''; }
@@ -1620,6 +1694,35 @@ export class Shell {
 
   /**
    * Expand glob patterns in args. Tokens containing \x01-prefixed glob chars
+   * Process substitution: <(cmd) runs cmd, writes output to a temp file, replaces with path.
+   * >(cmd) creates a temp file, runs cmd with stdin from that file after main command writes it.
+   * For simplicity, we only implement <(cmd) (input process substitution).
+   */
+  private async expandProcessSubstitution(args: string[], writeStderr: (s: string) => void): Promise<string[]> {
+    const result: string[] = [];
+    let tmpCounter = 0;
+    for (const arg of args) {
+      // Match <(command) — must be the entire arg or standalone
+      const match = arg.match(/^<\((.+)\)$/);
+      if (match) {
+        const subcmd = match[1];
+        try {
+          const { stdout } = await this.exec(subcmd);
+          const tmpPath = `/tmp/.procsub_${Date.now()}_${tmpCounter++}`;
+          await this.fs.writeFile(tmpPath, stdout);
+          result.push(tmpPath);
+        } catch (e: any) {
+          writeStderr(`shiro: process substitution failed: ${e.message}\r\n`);
+          result.push(arg);
+        }
+      } else {
+        result.push(arg);
+      }
+    }
+    return result;
+  }
+
+  /**
    * (from quoted strings) are NOT expanded — the sentinel is stripped instead.
    * Follows bash behavior: no matches = keep the literal pattern.
    */

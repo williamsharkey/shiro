@@ -363,4 +363,99 @@ describe('Shell Advanced', () => {
       expect(output).toContain('hello');
     });
   });
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  Process substitution <()
+  // ═══════════════════════════════════════════════════════════════════
+
+  describe('process substitution <()', () => {
+    it('expands <(cmd) to temp file path containing output', async () => {
+      // cat <(echo hello) should print "hello"
+      const { output, exitCode } = await run(shell, 'cat <(echo hello)');
+      expect(exitCode).toBe(0);
+      expect(output).toContain('hello');
+    });
+
+    it('works with diff on two process substitutions', async () => {
+      // diff <(echo a) <(echo a) should return 0 (identical)
+      const { exitCode } = await run(shell, 'diff <(echo same) <(echo same)');
+      expect(exitCode).toBe(0);
+    });
+
+    it('diff detects differences between process substitutions', async () => {
+      const { output, exitCode } = await run(shell, 'diff <(echo aaa) <(echo bbb)');
+      expect(exitCode).not.toBe(0);
+      expect(output).toContain('aaa');
+      expect(output).toContain('bbb');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  Bash-style arrays
+  // ═══════════════════════════════════════════════════════════════════
+
+  describe('bash-style arrays', () => {
+    it('arr=(a b c); echo ${arr[0]} → a', async () => {
+      const { output } = await run(shell, 'arr=(a b c); echo ${arr[0]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('a');
+    });
+
+    it('arr=(a b c); echo ${arr[1]} → b', async () => {
+      const { output } = await run(shell, 'arr=(a b c); echo ${arr[1]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('b');
+    });
+
+    it('arr=(a b c); echo ${arr[2]} → c', async () => {
+      const { output } = await run(shell, 'arr=(a b c); echo ${arr[2]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('c');
+    });
+
+    it('${arr[@]} expands to all elements', async () => {
+      const { output } = await run(shell, 'arr=(x y z); echo ${arr[@]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('x y z');
+    });
+
+    it('${arr[*]} expands to all elements', async () => {
+      const { output } = await run(shell, 'arr=(x y z); echo ${arr[*]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('x y z');
+    });
+
+    it('${#arr[@]} returns array length', async () => {
+      const { output } = await run(shell, 'arr=(a b c d); echo ${#arr[@]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('4');
+    });
+
+    it('${#arr[*]} returns array length', async () => {
+      const { output } = await run(shell, 'arr=(one two three); echo ${#arr[*]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('3');
+    });
+
+    it('out-of-bounds index returns empty string', async () => {
+      const { output } = await run(shell, 'arr=(a b); echo "x${arr[5]}y"');
+      expect(output.replace(/\r/g, '').trim()).toBe('xy');
+    });
+
+    it('indexed assignment: arr[1]=hello', async () => {
+      const { output } = await run(shell, 'arr=(a b c); arr[1]=hello; echo ${arr[1]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello');
+    });
+
+    it('empty array has length 0', async () => {
+      const { output } = await run(shell, 'arr=(); echo ${#arr[@]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('0');
+    });
+
+    it('array persists across commands in same shell', async () => {
+      await run(shell, 'myarr=(first second third)');
+      const { output } = await run(shell, 'echo ${myarr[2]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('third');
+    });
+
+    it('for loop over array elements', async () => {
+      await run(shell, 'arr=(apple banana cherry)');
+      const { output } = await run(shell, 'for item in ${arr[@]}; do echo $item; done');
+      const lines = output.replace(/\r/g, '').trim().split('\n');
+      expect(lines).toEqual(['apple', 'banana', 'cherry']);
+    });
+  });
 });

@@ -181,7 +181,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1211 tests across 35 test files** — all passing.
+**1226 tests across 35 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -239,6 +239,7 @@ The shell supports:
 - **Quoting**: single quotes (literal), double quotes (with var expansion), backslash escapes
 - **Comments**: lines starting with `#`
 - **Shell options**: `set -e` (errexit — abort on error), `set -x` (xtrace — echo commands), `set +e`/`+x` to disable
+- **Bash-style arrays**: `arr=(a b c)`, `${arr[0]}`, `${arr[@]}`, `${#arr[@]}`, `arr[N]=val`
 - **Control structures**: if/elif/else/fi, while/until/do/done, for/in/do/done, case/esac
 - **Functions**: `name() { ... }` and `function name { ... }`
 - **Job control**: `cmd &` (background), `fg`, `bg`, `jobs`, `wait`
