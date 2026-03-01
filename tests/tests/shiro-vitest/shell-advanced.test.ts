@@ -789,4 +789,80 @@ describe('Shell Advanced', () => {
       expect(output.replace(/\r/g, '').trim()).toBe('x y');
     });
   });
+
+  // ─── C-STYLE FOR LOOPS ──────────────────────────────────────────────────────
+
+  describe('c-style for loops', () => {
+    it('basic for ((i=0; i<5; i++))', async () => {
+      const { output } = await run(shell, 'for ((i=0; i<5; i++)); do echo $i; done');
+      expect(output.replace(/\r/g, '').trim()).toBe('0\n1\n2\n3\n4');
+    });
+
+    it('for loop with decrement', async () => {
+      const { output } = await run(shell, 'for ((i=3; i>0; i--)); do echo $i; done');
+      expect(output.replace(/\r/g, '').trim()).toBe('3\n2\n1');
+    });
+
+    it('for loop with step of 2', async () => {
+      const { output } = await run(shell, 'for ((i=0; i<10; i+=2)); do echo $i; done');
+      expect(output.replace(/\r/g, '').trim()).toBe('0\n2\n4\n6\n8');
+    });
+
+    it('for loop accumulator', async () => {
+      await run(shell, 'sum=0');
+      await run(shell, 'for ((i=1; i<=5; i++)); do (( sum += i )); done');
+      const { output } = await run(shell, 'echo $sum');
+      expect(output.replace(/\r/g, '').trim()).toBe('15');
+    });
+
+    it('for loop with multiplication in update', async () => {
+      const { output } = await run(shell, 'for ((i=1; i<100; i*=2)); do echo $i; done');
+      expect(output.replace(/\r/g, '').trim()).toBe('1\n2\n4\n8\n16\n32\n64');
+    });
+
+    it('for loop zero iterations', async () => {
+      const { output } = await run(shell, 'for ((i=5; i<5; i++)); do echo $i; done');
+      expect(output.replace(/\r/g, '').trim()).toBe('');
+    });
+
+    it('for loop variable persists after loop', async () => {
+      await run(shell, 'for ((j=0; j<3; j++)); do echo $j; done');
+      const { output } = await run(shell, 'echo $j');
+      expect(output.replace(/\r/g, '').trim()).toBe('3');
+    });
+  });
+
+  // ─── ARRAY SLICING ─────────────────────────────────────────────────────────
+
+  describe('array slicing', () => {
+    it('${arr[@]:start} slices from offset', async () => {
+      await run(shell, 'colors=(red green blue yellow purple)');
+      const { output } = await run(shell, 'echo ${colors[@]:2}');
+      expect(output.replace(/\r/g, '').trim()).toBe('blue yellow purple');
+    });
+
+    it('${arr[@]:start:len} slices with length', async () => {
+      await run(shell, 'nums=(a b c d e f)');
+      const { output } = await run(shell, 'echo ${nums[@]:1:3}');
+      expect(output.replace(/\r/g, '').trim()).toBe('b c d');
+    });
+
+    it('${arr[@]:0:2} first two elements', async () => {
+      await run(shell, 'items=(one two three four)');
+      const { output } = await run(shell, 'echo ${items[@]:0:2}');
+      expect(output.replace(/\r/g, '').trim()).toBe('one two');
+    });
+
+    it('${arr[@]: -2} negative offset (last 2)', async () => {
+      await run(shell, 'vals=(10 20 30 40 50)');
+      const { output } = await run(shell, 'echo ${vals[@]: -2}');
+      expect(output.replace(/\r/g, '').trim()).toBe('40 50');
+    });
+
+    it('${arr[@]:start:len} out of bounds returns available', async () => {
+      await run(shell, 'short=(x y)');
+      const { output } = await run(shell, 'echo ${short[@]:0:10}');
+      expect(output.replace(/\r/g, '').trim()).toBe('x y');
+    });
+  });
 });

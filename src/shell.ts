@@ -1185,6 +1185,21 @@ export class Shell {
       return String(arr ? arr.length : 0);
     }
 
+    // ${arr[@]:start:len} or ${arr[@]:start} — array slicing
+    const arrSliceMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\[[@*]\]:\s*(-?\d+)(?::(-?\d+))?$/);
+    if (arrSliceMatch) {
+      const name = arrSliceMatch[1];
+      const assoc = this.assocArrays.get(name);
+      const values = assoc ? Array.from(assoc.values()) : (this.arrays.get(name) ?? []);
+      let offset = parseInt(arrSliceMatch[2]);
+      if (offset < 0) offset = Math.max(0, values.length + offset);
+      if (arrSliceMatch[3] !== undefined) {
+        const len = parseInt(arrSliceMatch[3]);
+        return values.slice(offset, offset + len).join(' ');
+      }
+      return values.slice(offset).join(' ');
+    }
+
     // ${arr[@]} or ${arr[*]} — all array elements (space-separated)
     const arrAllMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\[[@*]\]$/);
     if (arrAllMatch) {
@@ -2435,6 +2450,27 @@ export class Shell {
   ): Promise<number> {
     const parsed = this.parseLoopConstruct(input, 'for');
     if (!parsed) { writeStderr('for: syntax error\r\n'); return 1; }
+
+    // C-style for loop: for ((init; test; update))
+    const cStyleMatch = parsed.condition.match(/^\(\((.+)\)\)$/s);
+    if (cStyleMatch) {
+      const parts = cStyleMatch[1].split(';').map(s => s.trim());
+      if (parts.length !== 3) { writeStderr('for: syntax error in arithmetic\r\n'); return 1; }
+      const [init, test, update] = parts;
+      // Execute init expression
+      this.evalArithmetic(init);
+      // Loop
+      let iter = 0;
+      while (iter++ < 10000) {
+        // Evaluate test — 0 means false (stop)
+        if (test && this.evalArithmetic(test) === 0) break;
+        // Execute body
+        if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr);
+        // Execute update
+        if (update) this.evalArithmetic(update);
+      }
+      return 0;
+    }
 
     // Parse "VAR in item1 item2 item3" from condition
     const forMatch = parsed.condition.match(/^(\w+)\s+in\s+(.+)$/);
