@@ -457,5 +457,111 @@ describe('Shell Advanced', () => {
       const lines = output.replace(/\r/g, '').trim().split('\n');
       expect(lines).toEqual(['apple', 'banana', 'cherry']);
     });
+
+    it('arr+=(d e) appends elements', async () => {
+      await run(shell, 'arr=(a b c)');
+      await run(shell, 'arr+=(d e)');
+      const { output } = await run(shell, 'echo ${arr[@]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('a b c d e');
+    });
+
+    it('arr+= on empty array creates it', async () => {
+      await run(shell, 'x=()');
+      await run(shell, 'x+=(hello)');
+      const { output } = await run(shell, 'echo ${x[0]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello');
+    });
+
+    it('${!arr[@]} returns indices', async () => {
+      await run(shell, 'arr=(a b c)');
+      const { output } = await run(shell, 'echo ${!arr[@]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('0 1 2');
+    });
+
+    it('unset arr removes entire array', async () => {
+      await run(shell, 'arr=(a b c)');
+      await run(shell, 'unset arr');
+      const { output } = await run(shell, 'echo ${#arr[@]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('0');
+    });
+
+    it('unset arr[1] clears single element', async () => {
+      await run(shell, 'arr=(a b c)');
+      await run(shell, 'unset arr[1]');
+      const { output } = await run(shell, 'echo "${arr[0]}|${arr[1]}|${arr[2]}"');
+      expect(output.replace(/\r/g, '').trim()).toBe('a||c');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  Associative arrays (declare -A)
+  // ═══════════════════════════════════════════════════════════════════
+
+  describe('associative arrays', () => {
+    it('declare -A creates an associative array', async () => {
+      await run(shell, 'declare -A map');
+      await run(shell, 'map[name]=alice');
+      await run(shell, 'map[age]=30');
+      const { output } = await run(shell, 'echo ${map[name]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('alice');
+    });
+
+    it('${map[key]} accesses value by key', async () => {
+      await run(shell, 'declare -A colors');
+      await run(shell, 'colors[sky]=blue');
+      await run(shell, 'colors[grass]=green');
+      const { output } = await run(shell, 'echo ${colors[sky]} ${colors[grass]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('blue green');
+    });
+
+    it('${#map[@]} returns number of keys', async () => {
+      await run(shell, 'declare -A m');
+      await run(shell, 'm[a]=1');
+      await run(shell, 'm[b]=2');
+      await run(shell, 'm[c]=3');
+      const { output } = await run(shell, 'echo ${#m[@]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('3');
+    });
+
+    it('${!map[@]} returns all keys', async () => {
+      await run(shell, 'declare -A m');
+      await run(shell, 'm[x]=1');
+      await run(shell, 'm[y]=2');
+      const { output } = await run(shell, 'echo ${!m[@]}');
+      const keys = output.replace(/\r/g, '').trim().split(' ').sort();
+      expect(keys).toEqual(['x', 'y']);
+    });
+
+    it('${map[@]} returns all values', async () => {
+      await run(shell, 'declare -A m');
+      await run(shell, 'm[a]=hello');
+      await run(shell, 'm[b]=world');
+      const { output } = await run(shell, 'echo ${m[@]}');
+      const vals = output.replace(/\r/g, '').trim().split(' ').sort();
+      expect(vals).toEqual(['hello', 'world']);
+    });
+
+    it('unset map[key] removes single key', async () => {
+      await run(shell, 'declare -A m');
+      await run(shell, 'm[a]=1');
+      await run(shell, 'm[b]=2');
+      await run(shell, 'unset m[a]');
+      const { output } = await run(shell, 'echo ${#m[@]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('1');
+    });
+
+    it('unset map removes entire associative array', async () => {
+      await run(shell, 'declare -A m');
+      await run(shell, 'm[a]=1');
+      await run(shell, 'unset m');
+      const { output } = await run(shell, 'echo ${#m[@]}');
+      expect(output.replace(/\r/g, '').trim()).toBe('0');
+    });
+
+    it('missing key returns empty string', async () => {
+      await run(shell, 'declare -A m');
+      const { output } = await run(shell, 'echo "x${m[nonexistent]}y"');
+      expect(output.replace(/\r/g, '').trim()).toBe('xy');
+    });
   });
 });

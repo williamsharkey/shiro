@@ -43,6 +43,8 @@ export class Shell {
   options: Set<string> = new Set();
   /** Bash-style indexed arrays */
   arrays: Map<string, string[]> = new Map();
+  /** Bash-style associative arrays (declare -A) */
+  assocArrays: Map<string, Map<string, string>> = new Map();
   private nextJobId = 1;
   private terminal?: ShiroTerminal;
 
@@ -113,6 +115,7 @@ export class Shell {
     child.functions = { ...this.functions };
     child.options = new Set(this.options);
     child.arrays = new Map(Array.from(this.arrays.entries()).map(([k, v]) => [k, [...v]]));
+    child.assocArrays = new Map(Array.from(this.assocArrays.entries()).map(([k, v]) => [k, new Map(v)]));
     child.history = this.history; // share history array reference
     return child;
   }
@@ -417,6 +420,24 @@ export class Shell {
           const key = cmdName.substring(0, eqIdx);
           const val = cmdName.substring(eqIdx + 1);
 
+          // Array append: name+=(elem1 elem2)
+          if (key.endsWith('+') && val.startsWith('(') && (val.endsWith(')') || cmdArgs.length > 0)) {
+            const arrName = key.slice(0, -1);
+            let elements: string;
+            if (val.endsWith(')')) {
+              elements = val.slice(1, -1);
+            } else {
+              const fullVal = [val, ...cmdArgs].join(' ');
+              const closeIdx = fullVal.indexOf(')');
+              elements = closeIdx >= 0 ? fullVal.slice(1, closeIdx) : fullVal.slice(1);
+            }
+            const newElems = elements.trim() ? this.tokenize(elements) : [];
+            const existing = this.arrays.get(arrName) || [];
+            existing.push(...newElems.map(a => a.replace(/\x01/g, '')));
+            this.arrays.set(arrName, existing);
+            continue;
+          }
+
           // Array assignment: name=(elem1 elem2 elem3)
           if (val.startsWith('(') && (val.endsWith(')') || cmdArgs.length > 0)) {
             let elements: string;
@@ -433,15 +454,24 @@ export class Shell {
             continue;
           }
 
-          // Indexed array assignment: arr[N]=val
-          const bracketMatch = key.match(/^(\w+)\[(\d+)\]$/);
+          // Indexed or associative array element assignment: arr[key]=val
+          const bracketMatch = key.match(/^(\w+)\[(.+)\]$/);
           if (bracketMatch) {
             const arrName = bracketMatch[1];
-            const idx = parseInt(bracketMatch[2], 10);
-            const arr = this.arrays.get(arrName) || [];
-            while (arr.length <= idx) arr.push('');
-            arr[idx] = val;
-            this.arrays.set(arrName, arr);
+            const idxKey = bracketMatch[2];
+            // Associative array?
+            if (this.assocArrays.has(arrName)) {
+              this.assocArrays.get(arrName)!.set(idxKey, val);
+              continue;
+            }
+            // Indexed array (numeric index)
+            const numIdx = parseInt(idxKey, 10);
+            if (!isNaN(numIdx)) {
+              const arr = this.arrays.get(arrName) || [];
+              while (arr.length <= numIdx) arr.push('');
+              arr[numIdx] = val;
+              this.arrays.set(arrName, arr);
+            }
             continue;
           }
 
@@ -477,9 +507,25 @@ export class Shell {
           continue;
         }
         if (effectiveCmdName === 'declare' || effectiveCmdName === 'typeset' || effectiveCmdName === 'local') {
+          // declare -A name → associative array
+          if (cmdArgs.includes('-A')) {
+            for (const arg of cmdArgs) {
+              if (arg.startsWith('-')) continue;
+              if (!this.assocArrays.has(arg)) this.assocArrays.set(arg, new Map());
+            }
+            continue;
+          }
+          // declare -a name → indexed array
+          if (cmdArgs.includes('-a')) {
+            for (const arg of cmdArgs) {
+              if (arg.startsWith('-')) continue;
+              if (!this.arrays.has(arg)) this.arrays.set(arg, []);
+            }
+            continue;
+          }
           // Basic declare/typeset/local support
           for (const arg of cmdArgs) {
-            if (arg === '-x' || arg === '-r' || arg === '-i' || arg === '-a' || arg === '-f' || arg === '-p') continue;
+            if (arg === '-x' || arg === '-r' || arg === '-i' || arg === '-f' || arg === '-p') continue;
             if (arg.startsWith('-')) continue; // skip other flags
             const eqIdx = arg.indexOf('=');
             if (eqIdx >= 0) {
@@ -1052,26 +1098,49 @@ export class Shell {
    * ${VAR^^}, ${VAR,,}, ${VAR:-default}, ${VAR:=default}, ${VAR:+alt}, ${VAR:?err}
    */
   private expandParamExpression(inner: string): string | null {
+    // ${!arr[@]} or ${!arr[*]} — array indices/keys
+    const arrKeysMatch = inner.match(/^!([A-Za-z_][A-Za-z0-9_]*)\[[@*]\]$/);
+    if (arrKeysMatch) {
+      const name = arrKeysMatch[1];
+      const assoc = this.assocArrays.get(name);
+      if (assoc) return Array.from(assoc.keys()).join(' ');
+      const arr = this.arrays.get(name);
+      return arr ? arr.map((_, i) => String(i)).join(' ') : '';
+    }
+
     // ${#arr[@]} or ${#arr[*]} — array length
     const arrLenMatch = inner.match(/^#([A-Za-z_][A-Za-z0-9_]*)\[[@*]\]$/);
     if (arrLenMatch) {
-      const arr = this.arrays.get(arrLenMatch[1]);
+      const name = arrLenMatch[1];
+      const assoc = this.assocArrays.get(name);
+      if (assoc) return String(assoc.size);
+      const arr = this.arrays.get(name);
       return String(arr ? arr.length : 0);
     }
 
     // ${arr[@]} or ${arr[*]} — all array elements (space-separated)
     const arrAllMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\[[@*]\]$/);
     if (arrAllMatch) {
-      const arr = this.arrays.get(arrAllMatch[1]);
+      const name = arrAllMatch[1];
+      const assoc = this.assocArrays.get(name);
+      if (assoc) return Array.from(assoc.values()).join(' ');
+      const arr = this.arrays.get(name);
       return arr ? arr.join(' ') : '';
     }
 
-    // ${arr[N]} — indexed array access
-    const arrIdxMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\[(\d+)\]$/);
+    // ${arr[key]} — indexed or associative array access
+    const arrIdxMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\[(.+)\]$/);
     if (arrIdxMatch) {
-      const arr = this.arrays.get(arrIdxMatch[1]);
-      const idx = parseInt(arrIdxMatch[2], 10);
-      return arr && idx < arr.length ? arr[idx] : '';
+      const name = arrIdxMatch[1];
+      const key = arrIdxMatch[2];
+      // Associative array?
+      const assoc = this.assocArrays.get(name);
+      if (assoc) return assoc.get(key) ?? '';
+      // Indexed array
+      const arr = this.arrays.get(name);
+      const idx = parseInt(key, 10);
+      if (arr && !isNaN(idx) && idx >= 0 && idx < arr.length) return arr[idx];
+      return '';
     }
 
     // ${#VAR} — string length

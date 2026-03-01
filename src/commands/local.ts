@@ -42,7 +42,7 @@ export const declare: Command = {
   description: "Declare variables and give them attributes",
   async exec(ctx) {
     const args = ctx.args;
-    const { flags, positional } = parseArgs(args, ["r", "a", "A", "i", "x", "p", "f", "g"]);
+    const { flags, positional } = parseArgs(args, []);
 
     // -p: display attributes and values
     if (flags.p) {
@@ -62,6 +62,28 @@ export const declare: Command = {
         ctx.stdout += output;
         return 0;
       }
+    }
+
+    // -A: declare associative array
+    if (flags.A && ctx.shell) {
+      for (const arg of positional) {
+        const name = arg.split("=", 1)[0];
+        if (!ctx.shell.assocArrays.has(name)) {
+          ctx.shell.assocArrays.set(name, new Map());
+        }
+      }
+      return 0;
+    }
+
+    // -a: declare indexed array
+    if (flags.a && ctx.shell) {
+      for (const arg of positional) {
+        const name = arg.split("=", 1)[0];
+        if (!ctx.shell.arrays.has(name)) {
+          ctx.shell.arrays.set(name, []);
+        }
+      }
+      return 0;
     }
 
     // Variable declarations
@@ -122,9 +144,34 @@ export const unset: Command = {
 
     // -f: unset functions (not applicable here)
     // -v: unset variables (default)
-    if (!flags.f && ctx.env) {
+    if (!flags.f) {
       for (const name of positional) {
-        delete ctx.env[name];
+        // unset arr[key] — remove single array/assoc element
+        const bracketMatch = name.match(/^(\w+)\[(.+)\]$/);
+        if (bracketMatch && ctx.shell) {
+          const arrName = bracketMatch[1];
+          const key = bracketMatch[2];
+          // Associative array?
+          const assoc = ctx.shell.assocArrays?.get(arrName);
+          if (assoc) { assoc.delete(key); continue; }
+          // Indexed array
+          const arr = ctx.shell.arrays?.get(arrName);
+          if (arr) {
+            const idx = parseInt(key, 10);
+            if (!isNaN(idx) && idx < arr.length) arr[idx] = '';
+          }
+          continue;
+        }
+        // unset entire array or variable
+        if (ctx.shell?.assocArrays?.has(name)) {
+          ctx.shell.assocArrays.delete(name);
+        }
+        if (ctx.shell?.arrays?.has(name)) {
+          ctx.shell.arrays.delete(name);
+        }
+        if (ctx.env) {
+          delete ctx.env[name];
+        }
       }
     }
 
