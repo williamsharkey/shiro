@@ -564,4 +564,140 @@ describe('Shell Advanced', () => {
       expect(output.replace(/\r/g, '').trim()).toBe('xy');
     });
   });
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  (( )) arithmetic command
+  // ═══════════════════════════════════════════════════════════════════
+
+  describe('(( )) arithmetic command', () => {
+    it('(( 1 + 1 )) returns exit 0 (non-zero result)', async () => {
+      const { exitCode } = await run(shell, '(( 1 + 1 ))');
+      expect(exitCode).toBe(0);
+    });
+
+    it('(( 0 )) returns exit 1 (zero result)', async () => {
+      const { exitCode } = await run(shell, '(( 0 ))');
+      expect(exitCode).toBe(1);
+    });
+
+    it('(( i = 5 )) assigns variable', async () => {
+      await run(shell, '(( i = 5 ))');
+      const { output } = await run(shell, 'echo $i');
+      expect(output.replace(/\r/g, '').trim()).toBe('5');
+    });
+
+    it('(( i++ )) post-increments', async () => {
+      await run(shell, 'i=3');
+      await run(shell, '(( i++ ))');
+      const { output } = await run(shell, 'echo $i');
+      expect(output.replace(/\r/g, '').trim()).toBe('4');
+    });
+
+    it('(( i-- )) post-decrements', async () => {
+      await run(shell, 'i=5');
+      await run(shell, '(( i-- ))');
+      const { output } = await run(shell, 'echo $i');
+      expect(output.replace(/\r/g, '').trim()).toBe('4');
+    });
+
+    it('(( i += 10 )) adds to variable', async () => {
+      await run(shell, 'i=5');
+      await run(shell, '(( i += 10 ))');
+      const { output } = await run(shell, 'echo $i');
+      expect(output.replace(/\r/g, '').trim()).toBe('15');
+    });
+
+    it('(( x = y + z )) with variable references', async () => {
+      await run(shell, 'y=3');
+      await run(shell, 'z=7');
+      await run(shell, '(( x = y + z ))');
+      const { output } = await run(shell, 'echo $x');
+      expect(output.replace(/\r/g, '').trim()).toBe('10');
+    });
+
+    it('(( 5 > 3 )) returns 0 (true)', async () => {
+      const { exitCode } = await run(shell, '(( 5 > 3 ))');
+      expect(exitCode).toBe(0);
+    });
+
+    it('(( 3 > 5 )) returns 1 (false)', async () => {
+      const { exitCode } = await run(shell, '(( 3 > 5 ))');
+      expect(exitCode).toBe(1);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  pipefail
+  // ═══════════════════════════════════════════════════════════════════
+
+  describe('set -o pipefail', () => {
+    it('without pipefail, pipe exit is last command', async () => {
+      const { exitCode } = await run(shell, 'false | true');
+      expect(exitCode).toBe(0);
+    });
+
+    it('with pipefail, pipe exit is first non-zero', async () => {
+      await run(shell, 'set -o pipefail');
+      const { exitCode } = await run(shell, 'false | true');
+      expect(exitCode).not.toBe(0);
+    });
+
+    it('pipefail with all success returns 0', async () => {
+      await run(shell, 'set -o pipefail');
+      const { exitCode } = await run(shell, 'echo hello | cat');
+      expect(exitCode).toBe(0);
+    });
+
+    it('pipefail can be disabled with set +o pipefail', async () => {
+      await run(shell, 'set -o pipefail');
+      await run(shell, 'set +o pipefail');
+      const { exitCode } = await run(shell, 'false | true');
+      expect(exitCode).toBe(0);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  String manipulation expansions
+  // ═══════════════════════════════════════════════════════════════════
+
+  describe('string case manipulation', () => {
+    it('${var^} capitalizes first character', async () => {
+      await run(shell, 'export word=hello');
+      const { output } = await run(shell, 'echo ${word^}');
+      expect(output.replace(/\r/g, '').trim()).toBe('Hello');
+    });
+
+    it('${var,} lowercases first character', async () => {
+      await run(shell, 'export word=HELLO');
+      const { output } = await run(shell, 'echo ${word,}');
+      expect(output.replace(/\r/g, '').trim()).toBe('hELLO');
+    });
+
+    it('${var^^} uppercases all', async () => {
+      await run(shell, 'export word=hello');
+      const { output } = await run(shell, 'echo ${word^^}');
+      expect(output.replace(/\r/g, '').trim()).toBe('HELLO');
+    });
+
+    it('${var,,} lowercases all', async () => {
+      await run(shell, 'export word=HELLO');
+      const { output } = await run(shell, 'echo ${word,,}');
+      expect(output.replace(/\r/g, '').trim()).toBe('hello');
+    });
+  });
+
+  describe('indirect expansion', () => {
+    it('${!ref} expands to value of variable named by ref', async () => {
+      await run(shell, 'export target=world');
+      await run(shell, 'export ref=target');
+      const { output } = await run(shell, 'echo ${!ref}');
+      expect(output.replace(/\r/g, '').trim()).toBe('world');
+    });
+
+    it('${!ref} with nonexistent target returns empty', async () => {
+      await run(shell, 'export ref=nosuchvar');
+      const { output } = await run(shell, 'echo "x${!ref}y"');
+      expect(output.replace(/\r/g, '').trim()).toBe('xy');
+    });
+  });
 });

@@ -181,7 +181,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1239 tests across 35 test files** — all passing.
+**1258 tests across 35 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -238,9 +238,11 @@ The shell supports:
 - **Positional parameters**: `$@`, `$*`, `$#`, `$0`-`$9`
 - **Quoting**: single quotes (literal), double quotes (with var expansion), backslash escapes
 - **Comments**: lines starting with `#`
-- **Shell options**: `set -e` (errexit — abort on error), `set -x` (xtrace — echo commands), `set +e`/`+x` to disable
+- **Shell options**: `set -e` (errexit), `set -x` (xtrace), `set -o pipefail`, `set +e`/`+x`/`+o` to disable
 - **Bash-style arrays**: `arr=(a b c)`, `${arr[0]}`, `${arr[@]}`, `${#arr[@]}`, `arr[N]=val`, `arr+=(d e)`, `${!arr[@]}`
 - **Associative arrays**: `declare -A map`, `map[key]=val`, `${map[key]}`, `${!map[@]}`, `${#map[@]}`
+- **Arithmetic**: `$((expr))` expansion, `(( expr ))` command, `i++`, `i--`, `+=`, `-=`, `*=`, `/=`
+- **String ops**: `${var^}`, `${var,}`, `${var^^}`, `${var,,}`, `${!ref}` indirect, `${#var}`, `${var:-default}`
 - **Control structures**: if/elif/else/fi, while/until/do/done, for/in/do/done, case/esac
 - **Functions**: `name() { ... }` and `function name { ... }`
 - **Job control**: `cmd &` (background), `fg`, `bg`, `jobs`, `wait`

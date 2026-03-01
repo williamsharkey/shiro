@@ -245,6 +245,15 @@ export class Shell {
       return this.execControlStructure(effectiveLine, writeStdout, stderrWriter);
     }
 
+    // Check for (( expr )) arithmetic command
+    if (effectiveLine.startsWith('((') && effectiveLine.endsWith('))')) {
+      const expr = effectiveLine.slice(2, -2).trim();
+      const val = this.evalArithmetic(expr);
+      this.lastExitCode = val !== 0 ? 0 : 1; // bash: (( 0 )) returns 1, (( non-zero )) returns 0
+      this.env['?'] = String(this.lastExitCode);
+      return this.lastExitCode;
+    }
+
     // Check for subshell: (commands)
     if (effectiveLine.startsWith('(') && effectiveLine.endsWith(')')) {
       const inner = effectiveLine.slice(1, -1).trim();
@@ -276,8 +285,18 @@ export class Shell {
         continue;
       }
 
-      // Check if compound is a subshell: (commands)
       const trimmedCmd = compound.command.trim();
+
+      // Check for (( expr )) arithmetic command in compound
+      if (trimmedCmd.startsWith('((') && trimmedCmd.endsWith('))')) {
+        const expr = trimmedCmd.slice(2, -2).trim();
+        exitCode = this.evalArithmetic(expr) !== 0 ? 0 : 1;
+        this.lastExitCode = exitCode;
+        this.env['?'] = String(exitCode);
+        continue;
+      }
+
+      // Check if compound is a subshell: (commands)
       if (trimmedCmd.startsWith('(') && trimmedCmd.endsWith(')')) {
         const inner = trimmedCmd.slice(1, -1).trim();
         if (inner) {
@@ -323,6 +342,7 @@ export class Shell {
 
       let lastOutput = '';
       exitCode = 0;
+      const pipeExitCodes: number[] = [];
 
       for (let i = 0; i < pipeline.length; i++) {
         const segment = pipeline[i];
@@ -783,9 +803,16 @@ export class Shell {
         }
 
         lastOutput = output;
+        pipeExitCodes.push(exitCode);
 
         // Update cwd from env
         this.cwd = this.env['PWD'] || this.cwd;
+      }
+
+      // pipefail: use last non-zero exit code from any pipe segment
+      if (this.options.has('pipefail') && pipeExitCodes.length > 1) {
+        const lastNonZero = pipeExitCodes.reverse().find(c => c !== 0);
+        if (lastNonZero !== undefined) exitCode = lastNonZero;
       }
 
       // Apply ! negation
@@ -1149,13 +1176,34 @@ export class Shell {
       return String((this.env[lenMatch[1]] ?? '').length);
     }
 
+    // ${!VAR} — indirect expansion (value of variable named by VAR's value)
+    const indirectMatch = inner.match(/^!([A-Za-z_][A-Za-z0-9_]*)$/);
+    if (indirectMatch) {
+      const ref = this.env[indirectMatch[1]] ?? '';
+      return this.env[ref] ?? '';
+    }
+
     // ${VAR^^} — uppercase all
     const ucMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\^\^$/);
     if (ucMatch) return (this.env[ucMatch[1]] ?? '').toUpperCase();
 
+    // ${VAR^} — capitalize first character
+    const ucFirstMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\^$/);
+    if (ucFirstMatch) {
+      const val = this.env[ucFirstMatch[1]] ?? '';
+      return val.length > 0 ? val[0].toUpperCase() + val.slice(1) : '';
+    }
+
     // ${VAR,,} — lowercase all
     const lcMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*),,$/);
     if (lcMatch) return (this.env[lcMatch[1]] ?? '').toLowerCase();
+
+    // ${VAR,} — lowercase first character
+    const lcFirstMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*),$/);
+    if (lcFirstMatch) {
+      const val = this.env[lcFirstMatch[1]] ?? '';
+      return val.length > 0 ? val[0].toLowerCase() + val.slice(1) : '';
+    }
 
     // ${VAR:offset} and ${VAR:offset:length} — substring
     const subMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*):(-?\d+)(?::(-?\d+))?$/);
@@ -1849,8 +1897,57 @@ export class Shell {
   }
 
   private evalArithmetic(expr: string): number {
+    const trimmed = expr.trim();
+
+    // Handle comma-separated expressions: (( a=1, b=2 ))
+    if (trimmed.includes(',')) {
+      const parts = trimmed.split(',');
+      let result = 0;
+      for (const part of parts) result = this.evalArithmetic(part);
+      return result;
+    }
+
+    // Handle assignment: var = expr, var += expr, var -= expr, var *= expr, var /= expr, var %= expr
+    const assignMatch = trimmed.match(/^([A-Za-z_]\w*)\s*([-+*/%]?)=\s*(.+)$/);
+    if (assignMatch && assignMatch[2] !== '=' && assignMatch[2] !== '!') {
+      const [, varName, op, rhs] = assignMatch;
+      const rhsVal = this.evalArithmetic(rhs);
+      let result: number;
+      if (op === '') {
+        result = rhsVal;
+      } else {
+        const cur = parseInt(this.env[varName] || '0', 10);
+        switch (op) {
+          case '+': result = cur + rhsVal; break;
+          case '-': result = cur - rhsVal; break;
+          case '*': result = cur * rhsVal; break;
+          case '/': result = rhsVal !== 0 ? Math.trunc(cur / rhsVal) : 0; break;
+          case '%': result = rhsVal !== 0 ? cur % rhsVal : 0; break;
+          default: result = rhsVal;
+        }
+      }
+      this.env[varName] = String(result);
+      return result;
+    }
+
+    // Handle post-increment/decrement: var++, var--
+    const postMatch = trimmed.match(/^([A-Za-z_]\w*)\s*(\+\+|--)$/);
+    if (postMatch) {
+      const cur = parseInt(this.env[postMatch[1]] || '0', 10);
+      this.env[postMatch[1]] = String(postMatch[2] === '++' ? cur + 1 : cur - 1);
+      return cur; // return old value
+    }
+
+    // Handle pre-increment/decrement: ++var, --var
+    const preMatch = trimmed.match(/^(\+\+|--)([A-Za-z_]\w*)$/);
+    if (preMatch) {
+      const newVal = parseInt(this.env[preMatch[2]] || '0', 10) + (preMatch[1] === '++' ? 1 : -1);
+      this.env[preMatch[2]] = String(newVal);
+      return newVal; // return new value
+    }
+
     // Replace variable references (including positional params $1, $2, etc.)
-    let expanded = expr.replace(/\$\{?([A-Za-z_]\w*|\d+)\}?/g, (_, name: string) => this.env[name] || '0');
+    let expanded = trimmed.replace(/\$\{?([A-Za-z_]\w*|\d+)\}?/g, (_, name: string) => this.env[name] || '0');
     expanded = expanded.replace(/\b([A-Za-z_]\w*)\b/g, (match) => {
       if (/^\d+$/.test(match)) return match;
       return this.env[match] || '0';
