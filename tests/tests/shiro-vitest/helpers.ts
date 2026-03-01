@@ -23,6 +23,8 @@ import { getconfCmd } from '@shiro/commands/getconf';
 import { edCmd } from '@shiro/commands/ed';
 import { iconvCmd } from '@shiro/commands/iconv';
 import { zipCmd, unzipCmd } from '@shiro/commands/zip';
+import { wasiCmd } from '@shiro/commands/wasi';
+import { pkgCmd } from '@shiro/commands/pkg';
 
 export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell }> {
   const fs = new FileSystem();
@@ -65,6 +67,8 @@ export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell 
   commands.register(iconvCmd);
   commands.register(zipCmd);
   commands.register(unzipCmd);
+  commands.register(wasiCmd);
+  commands.register(pkgCmd);
 
   const shell = new Shell(fs, commands);
   return { fs, shell };

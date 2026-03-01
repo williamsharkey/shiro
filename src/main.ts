@@ -99,6 +99,8 @@ import { pgrepCmd, pkillCmd } from './commands/pgrep';
 import { nprocCmd } from './commands/nproc';
 import { getconfCmd } from './commands/getconf';
 import { iconvCmd } from './commands/iconv';
+import { wasiCmd } from './commands/wasi';
+import { pkgCmd } from './commands/pkg';
 import { processTable } from './process-table';
 import { iframeServer } from './iframe-server';
 import { unixCommands } from './commands/unix';
@@ -279,6 +281,7 @@ async function main() {
   registerCommand(commands, becomeCmd, 'src/commands/become.ts');
   registerCommand(commands, unbecomeCmd, 'src/commands/become.ts');
   registerCommand(commands, pageCmd, 'src/commands/page.ts');
+<<<<<<< HEAD
   registerCommand(commands, titleCmd, 'src/commands/title.ts');
 
   registerCommand(commands, lazyCommand('gh', 'GitHub CLI',
@@ -334,6 +337,8 @@ async function main() {
     () => import('./commands/magick').then(m => m.convertCmd)), 'src/commands/magick.ts');
   registerCommand(commands, lazyCommand('magick', 'ImageMagick (magick-wasm)',
     () => import('./commands/magick').then(m => m.magickCmd)), 'src/commands/magick.ts');
+  registerCommand(commands, wasiCmd, 'src/commands/wasi.ts');
+  registerCommand(commands, pkgCmd, 'src/commands/pkg.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {

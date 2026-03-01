@@ -2,6 +2,8 @@ import { FileSystem } from './filesystem';
 import { CommandRegistry, CommandContext } from './commands/index';
 import type { ShiroTerminal } from './terminal';
 import { recordCommand } from './favicon';
+import { isAvailableAsPackage, getPackage } from './wasi-packages';
+import { WasiRT, WasiExit } from './wasi-runtime';
 
 interface Redirect {
   type: '>' | '>>' | '<' | '2>' | '2>>' | '2>&1';
@@ -562,11 +564,43 @@ export class Shell {
               exitCode = 1;
             }
           } else {
-            stderrWriter(`shiro: command not found: ${effectiveCmdName}\r\n`);
-            exitCode = 127;
-            this.lastExitCode = exitCode;
-            this.env['?'] = String(exitCode);
-            break;
+            // Check if a WASM package is available for this command
+            const wasmPkg = isAvailableAsPackage(effectiveCmdName);
+            if (wasmPkg) {
+              try {
+                stderrWriter(`shiro: '${effectiveCmdName}' not installed. Installing ${wasmPkg.name}...\r\n`);
+                const binary = await getPackage(wasmPkg.name, (msg) => {
+                  stderrWriter(`  ${msg}\r\n`);
+                });
+                // Run the downloaded WASM binary through WASI
+                const wasmModule = await WebAssembly.compile(binary);
+                const config = {
+                  fs: this.fs,
+                  cwd: this.cwd,
+                  args: [wasmPkg.name, ...cmdArgs],
+                  env: { ...this.env },
+                  stdin: ctx.stdin || '',
+                  onStdout: (text: string) => { ctx.stdout += text; },
+                  onStderr: (text: string) => { ctx.stderr += text; },
+                  preopens: { '/': '/', '.': this.cwd },
+                };
+                const wasi = new WasiRT(config);
+                exitCode = await wasi.run(wasmModule);
+              } catch (e: any) {
+                if (e instanceof WasiExit) {
+                  exitCode = e.code;
+                } else {
+                  stderrWriter(`shiro: failed to run ${wasmPkg.name}: ${e.message}\r\n`);
+                  exitCode = 1;
+                }
+              }
+            } else {
+              stderrWriter(`shiro: command not found: ${effectiveCmdName}\r\n`);
+              exitCode = 127;
+              this.lastExitCode = exitCode;
+              this.env['?'] = String(exitCode);
+              break;
+            }
           }
         }
 
@@ -2185,7 +2219,13 @@ export class Shell {
       return 1;
     }
 
-    // Reject binary files (ELF, Mach-O, etc.) that can't be interpreted
+    // Check if this is a WASM binary — run through WASI runtime
+    if (content.charCodeAt(0) === 0x00 && content.charCodeAt(1) === 0x61 &&
+        content.charCodeAt(2) === 0x73 && content.charCodeAt(3) === 0x6d) {
+      return this.executeWasmBinary(resolvedPath, args, ctx, writeStdout, writeStderr);
+    }
+
+    // Reject other binary files (ELF, Mach-O, etc.) that can't be interpreted
     if (content.charCodeAt(0) === 0x7f || content.includes('\0')) {
       writeStderr(`shiro: ${resolvedPath}: cannot execute binary file\n`);
       return 126;
@@ -2247,6 +2287,44 @@ export class Shell {
 
     // Default to shell script
     return this.executeShellScript(content, args, ctx, writeStdout, writeStderr);
+  }
+
+  /**
+   * Execute a WASM+WASI binary through the WasiRT.
+   */
+  private async executeWasmBinary(
+    filePath: string,
+    args: string[],
+    ctx: CommandContext,
+    writeStdout: (s: string) => void,
+    writeStderr: (s: string) => void,
+  ): Promise<number> {
+    try {
+      const data = await this.fs.readFile(filePath) as Uint8Array;
+      const wasmBytes = new Uint8Array(data).buffer;
+      const wasmModule = await WebAssembly.compile(wasmBytes);
+
+      const programName = filePath.split('/').pop() || filePath;
+      const config = {
+        fs: this.fs,
+        cwd: this.cwd,
+        args: [programName, ...args],
+        env: { ...this.env },
+        stdin: ctx.stdin || '',
+        onStdout: (text: string) => { ctx.stdout += text; },
+        onStderr: (text: string) => { ctx.stderr += text; },
+        preopens: { '/': '/', '.': this.cwd },
+      };
+
+      const wasi = new WasiRT(config);
+      return await wasi.run(wasmModule);
+    } catch (e: any) {
+      if (e instanceof WasiExit) {
+        return e.code;
+      }
+      writeStderr(`shiro: ${filePath}: ${e.message}\n`);
+      return 1;
+    }
   }
 
   /**

@@ -1,0 +1,109 @@
+import { Command, CommandContext } from './index';
+import { WasiRT, WasiExit, WasiConfig } from '../wasi-runtime';
+
+/**
+ * wasi — Run WASM+WASI binaries in Shiro
+ *
+ * Usage:
+ *   wasi run <file.wasm> [args...]    Run a local WASM binary
+ *   wasi run <url> [args...]          Fetch and run a remote WASM binary
+ *   wasi                              Show help
+ */
+export const wasiCmd: Command = {
+  name: 'wasi',
+  description: 'Run WASM+WASI binaries',
+
+  async exec(ctx: CommandContext): Promise<number> {
+    const subcmd = ctx.args[0];
+
+    if (!subcmd || subcmd === '--help' || subcmd === '-h') {
+      ctx.stdout += 'Usage: wasi run <file.wasm|url> [args...]\n';
+      ctx.stdout += '\nRun any WASM+WASI binary against Shiro\'s filesystem.\n';
+      ctx.stdout += '\nExamples:\n';
+      ctx.stdout += '  wasi run ./program.wasm\n';
+      ctx.stdout += '  wasi run https://example.com/tool.wasm --flag\n';
+      return 0;
+    }
+
+    if (subcmd !== 'run') {
+      ctx.stderr += `wasi: unknown subcommand '${subcmd}'\n`;
+      ctx.stderr += 'Usage: wasi run <file.wasm|url> [args...]\n';
+      return 1;
+    }
+
+    const target = ctx.args[1];
+    if (!target) {
+      ctx.stderr += 'wasi: missing WASM file path or URL\n';
+      return 1;
+    }
+
+    const wasmArgs = ctx.args.slice(2);
+
+    try {
+      // Load the WASM binary
+      let wasmBytes: ArrayBuffer;
+
+      if (target.startsWith('http://') || target.startsWith('https://')) {
+        // Fetch from URL
+        const resp = await fetch(target);
+        if (!resp.ok) {
+          ctx.stderr += `wasi: failed to fetch ${target}: ${resp.status} ${resp.statusText}\n`;
+          return 1;
+        }
+        wasmBytes = await resp.arrayBuffer();
+      } else {
+        // Read from Shiro filesystem
+        const resolvedPath = ctx.fs.resolvePath(target, ctx.cwd);
+        try {
+          const data = await ctx.fs.readFile(resolvedPath) as Uint8Array;
+          wasmBytes = new Uint8Array(data).buffer;
+        } catch (e: any) {
+          ctx.stderr += `wasi: ${resolvedPath}: ${e.message}\n`;
+          return 1;
+        }
+      }
+
+      // Validate WASM magic bytes
+      const magic = new Uint8Array(wasmBytes, 0, 4);
+      if (magic[0] !== 0x00 || magic[1] !== 0x61 || magic[2] !== 0x73 || magic[3] !== 0x6d) {
+        ctx.stderr += `wasi: ${target}: not a valid WASM binary\n`;
+        return 1;
+      }
+
+      // Compile
+      const wasmModule = await WebAssembly.compile(wasmBytes);
+
+      // Set up WASI config
+      const programName = target.split('/').pop() || target;
+      const config: WasiConfig = {
+        fs: ctx.fs,
+        cwd: ctx.cwd,
+        args: [programName, ...wasmArgs],
+        env: { ...ctx.env },
+        stdin: ctx.stdin || '',
+        onStdout: (text) => { ctx.stdout += text; },
+        onStderr: (text) => { ctx.stderr += text; },
+        preopens: {
+          '/': '/',
+          '.': ctx.cwd,
+        },
+      };
+
+      // Create runtime and run
+      const wasi = new WasiRT(config);
+
+      // Pre-load the working directory listing so path_open can find files
+      await wasi.preloadDir(ctx.cwd);
+
+      // Run
+      const exitCode = await wasi.run(wasmModule);
+      return exitCode;
+    } catch (e: any) {
+      if (e instanceof WasiExit) {
+        return e.code;
+      }
+      ctx.stderr += `wasi: ${e.message}\n`;
+      return 1;
+    }
+  },
+};
