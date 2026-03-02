@@ -112,6 +112,13 @@ import { ddCmd } from './dd';
 import { xxdCmd } from './xxd';
 import { dcCmd } from './dc';
 import { splitCmd } from './split';
+import { factorCmd } from './factor';
+import { cksumCmd } from './cksum';
+import { base32Cmd } from './base32';
+import { numfmtCmd } from './numfmt';
+import { csplitCmd } from './csplit';
+import { niceCmd, wCmd, whoCmd, usersCmd, lsofCmd } from './system-info';
+import { dos2unixCmd, unix2dosCmd } from './line-endings';
 
 /** All Unix commands as an array for registration. */
 export const unixCommands: Command[] = [
@@ -127,6 +134,8 @@ export const unixCommands: Command[] = [
   test, time, timeout, touch, tr, trap, trueCmd, tsort, type, ulimit, umask,
   unalias, unexpand, uniq, uptime, watch, wc, which, whoami, xargs, yes,
   revCmd, tacCmd, shufCmd, cmpCmd, ddCmd, xxdCmd, dcCmd, splitCmd,
+  factorCmd, cksumCmd, base32Cmd, numfmtCmd, csplitCmd,
+  niceCmd, wCmd, whoCmd, usersCmd, lsofCmd, dos2unixCmd, unix2dosCmd,
 ];
 
 /** Arithmetic expansion helper for $(( )) syntax */

@@ -26,6 +26,12 @@ import { zipCmd, unzipCmd } from '@shiro/commands/zip';
 import { wasiCmd } from '@shiro/commands/wasi';
 import { pkgCmd } from '@shiro/commands/pkg';
 import { historyCmd } from '@shiro/commands/history';
+import { speakCmd } from '@shiro/commands/speak';
+import { listenCmd } from '@shiro/commands/listen';
+import { notifyCmd } from '@shiro/commands/notify';
+import { cameraCmd } from '@shiro/commands/camera';
+import { topCmd } from '@shiro/commands/top';
+import { manCmd } from '@shiro/commands/man';
 
 export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell }> {
   const fs = new FileSystem();
@@ -71,6 +77,12 @@ export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell 
   commands.register(wasiCmd);
   commands.register(pkgCmd);
   commands.register(historyCmd);
+  commands.register(speakCmd);
+  commands.register(listenCmd);
+  commands.register(notifyCmd);
+  commands.register(cameraCmd);
+  commands.register(topCmd);
+  commands.register(manCmd);
 
   const shell = new Shell(fs, commands);
   return { fs, shell };

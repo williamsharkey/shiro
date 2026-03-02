@@ -99,6 +99,10 @@ import { pgrepCmd, pkillCmd } from './commands/pgrep';
 import { nprocCmd } from './commands/nproc';
 import { getconfCmd } from './commands/getconf';
 import { iconvCmd } from './commands/iconv';
+import { speakCmd } from './commands/speak';
+import { listenCmd } from './commands/listen';
+import { notifyCmd } from './commands/notify';
+import { cameraCmd } from './commands/camera';
 // wasi and pkg are lazy-loaded (pulls in ~960-line wasi-runtime.ts)
 import { processTable } from './process-table';
 import { iframeServer } from './iframe-server';
@@ -349,6 +353,18 @@ async function main() {
     () => import('./commands/wasi').then(m => m.wasiCmd)), 'src/commands/wasi.ts');
   registerCommand(commands, lazyCommand('pkg', 'WASM package manager',
     () => import('./commands/pkg').then(m => m.pkgCmd)), 'src/commands/pkg.ts');
+
+  // Web API commands (browser-native, no CDN deps)
+  registerCommand(commands, speakCmd, 'src/commands/speak.ts');
+  registerCommand(commands, listenCmd, 'src/commands/listen.ts');
+  registerCommand(commands, notifyCmd, 'src/commands/notify.ts');
+  registerCommand(commands, cameraCmd, 'src/commands/camera.ts');
+
+  // TUI commands (lazy-loaded)
+  registerCommand(commands, lazyCommand('top', 'Real-time process monitor',
+    () => import('./commands/top').then(m => m.topCmd)), 'src/commands/top.ts');
+  registerCommand(commands, lazyCommand('man', 'Manual pages',
+    () => import('./commands/man').then(m => m.manCmd)), 'src/commands/man.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {

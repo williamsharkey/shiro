@@ -192,7 +192,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1706 tests across 36 test files** — all passing.
+**1809 tests across 40 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -651,13 +651,13 @@ The workflow cycle is: **implement shell features → write tests → update CLA
 
 The vision: a **fully functional browser-native Linux system** where Claude Code (Spirit) runs with no external server. There is always work to do — if your current task is done, find the next missing Linux capability and implement it.
 
-### Current State (Build #851, 1706 tests)
+### Current State (Build #856, 1809 tests)
 
-The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Core features working: pipes, redirects, heredocs, arrays (indexed + associative), arithmetic, functions, control structures, job control, process substitution, extglob, brace expansion, namerefs, traps, and 30+ inline builtins. All three architecture tiers are operational: Tier 1 (200+ JS commands), Tier 2 (WASM+WASI, 22 packages), Tier 3 (x86-64 emulator, Phase 3 complete — ~130 instructions, ~46 syscalls, SSE2, TLS, runs real musl-static ELF binaries).
+The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Core features working: pipes, redirects, heredocs, arrays (indexed + associative), arithmetic, functions, control structures, job control, process substitution, extglob, brace expansion, namerefs, traps, and 30+ inline builtins. All three architecture tiers are operational: Tier 1 (220+ JS commands), Tier 2 (WASM+WASI, 22 packages), Tier 3 (x86-64 emulator, Phase 3 complete — ~130 instructions, ~46 syscalls, SSE2, TLS, runs real musl-static ELF binaries).
 
 ### Future Plans — Next Features to Implement (Priority Order)
 
-> **Recently Completed (Shiro Vision Stages 1-3 + x86 Phases 1-3):**
+> **Recently Completed (Shiro Vision Stages 1-3 + x86 Phases 1-3 + Command Expansion):**
 > - `enable` builtin with -n/-a/-p flags and builtin gating
 > - `read -t TIMEOUT` and `read -u FD`
 > - `mapfile -C callback` with quantum
@@ -670,11 +670,10 @@ The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Co
 > - Tab completion engine, nocaseglob, nullglob, dotglob, failglob, globstar, LINENO, EXIT trap
 > - x86-64 emulator Phase 2: ~100 instructions, ~40 syscalls, auxv, FS/GS segment, SSE2, XMM regs
 > - x86-64 emulator Phase 3: ~130 instructions, ~46 syscalls, TLS, runs real musl-static ELF binaries
-
-#### P0: TypeScript Command Expansion
-1. **Batch 1 coreutils** — rev, tac, shuf, cmp, dd, xxd, dc, split (native TS, full VFS integration)
-2. **Batch 2 coreutils** — top, man, factor, cksum, base32, numfmt, csplit, nice
-3. **Batch 3 gap-fillers** — lsof, w/who/users, dos2unix, unix2dos, rev improvements, additional flags
+> - Living OS — speak, listen, notify, camera, top (TUI), man (manual pages), less (full TUI pager)
+> - Batch 1 coreutils — rev, tac, shuf, cmp, dd, xxd, dc, split
+> - Batch 2 coreutils — factor, cksum, base32, numfmt, csplit, nice
+> - Batch 3 coreutils — lsof, w, who, users, dos2unix, unix2dos
 
 #### P1: Command Completeness
 4. **Full POSIX coverage** — every standard coreutil as native TypeScript

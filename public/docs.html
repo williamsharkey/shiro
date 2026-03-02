@@ -272,6 +272,7 @@
         <span class="section-label">Advanced</span>
         <a href="#editors">Editors &amp; Viewers</a>
         <a href="#claude-code">Claude Code</a>
+        <a href="#webapis">Web APIs</a>
         <a href="#servers">Virtual Servers</a>
         <a href="#remote">Remote Control</a>
 
@@ -284,7 +285,7 @@
     <main class="content">
       <!-- ===== Quick Start ===== -->
       <h1 id="quick-start">Quick Start</h1>
-      <p>Open <a href="/">shiro.computer</a> and start typing. The terminal is a full Unix shell with 200+ commands, persistent files, and WASM runtimes.</p>
+      <p>Open <a href="/">shiro.computer</a> and start typing. The terminal is a full Unix shell with 220+ commands, persistent files, and WASM runtimes.</p>
 
       <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Create files and directories</span>
 mkdir -p ~/project/src
@@ -551,6 +552,36 @@ html page.html
 <span class="c"># Display an image</span>
 img screenshot.png</pre></div>
 
+      <!-- ===== Web APIs ===== -->
+      <h2 id="webapis">Web APIs</h2>
+      <p>Browser-native capabilities exposed as Unix commands. Pipe them together with standard shell tools.</p>
+
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Text-to-speech</span>
+echo "Hello world" | speak
+speak -r 1.5 "Fast speech"
+speak --list                  <span class="c"># list voices</span>
+
+<span class="c"># Speech-to-text</span>
+listen                        <span class="c"># single utterance to stdout</span>
+listen | sh                   <span class="c"># speak a command to execute it</span>
+listen -c &gt;&gt; notes.txt        <span class="c"># dictate continuously</span>
+
+<span class="c"># Desktop notifications</span>
+build &amp;&amp; notify "Build complete"
+notify -t "Alert" "Check this"
+
+<span class="c"># Webcam snapshot</span>
+camera -o selfie.png
+camera &amp;&amp; img camera-*.png
+
+<span class="c"># Process monitor</span>
+top                           <span class="c"># interactive TUI (q to quit)</span>
+top -b -n 1                   <span class="c"># batch mode, one snapshot</span>
+
+<span class="c"># Manual pages</span>
+man grep                      <span class="c"># full man page in less pager</span>
+man -k search                 <span class="c"># search all descriptions</span></pre></div>
+
       <!-- ===== Virtual Servers ===== -->
       <h2 id="servers">Virtual Servers</h2>
       <p>Serve web apps from the virtual filesystem using a Service Worker. Interact with them from the shell using <code>page</code> commands.</p>
@@ -630,16 +661,19 @@ remote stop      <span class="c"># End session</span></pre></div>
 
       <!-- ===== Command List ===== -->
       <h2 id="commands">Command List</h2>
-      <p>200+ commands. Core coreutils are loaded at boot. Large commands (build, python, sqlite3, etc.) are lazy-loaded on first use.</p>
+      <p>220+ commands. Core coreutils are loaded at boot. Large commands (build, python, sqlite3, etc.) are lazy-loaded on first use.</p>
 
       <h3>Core</h3>
-      <p><code>ls</code> <code>cat</code> <code>echo</code> <code>mkdir</code> <code>rm</code> <code>cp</code> <code>mv</code> <code>touch</code> <code>pwd</code> <code>cd</code> <code>head</code> <code>tail</code> <code>wc</code> <code>sort</code> <code>uniq</code> <code>tee</code> <code>tr</code> <code>cut</code> <code>paste</code> <code>yes</code> <code>true</code> <code>false</code></p>
+      <p><code>ls</code> <code>cat</code> <code>echo</code> <code>mkdir</code> <code>rm</code> <code>cp</code> <code>mv</code> <code>touch</code> <code>pwd</code> <code>cd</code> <code>head</code> <code>tail</code> <code>wc</code> <code>sort</code> <code>uniq</code> <code>tee</code> <code>tr</code> <code>cut</code> <code>paste</code> <code>yes</code> <code>true</code> <code>false</code> <code>rev</code> <code>tac</code> <code>shuf</code> <code>split</code> <code>csplit</code></p>
 
       <h3>Search &amp; Text</h3>
-      <p><code>grep</code> <code>sed</code> <code>awk</code> <code>find</code> <code>rg</code> <code>diff</code> <code>xargs</code> <code>glob</code> <code>basename</code> <code>dirname</code> <code>realpath</code></p>
+      <p><code>grep</code> <code>sed</code> <code>awk</code> <code>find</code> <code>rg</code> <code>diff</code> <code>xargs</code> <code>glob</code> <code>basename</code> <code>dirname</code> <code>realpath</code> <code>cmp</code> <code>dos2unix</code> <code>unix2dos</code></p>
 
       <h3>Archives &amp; Compression</h3>
       <p><code>tar</code> <code>gzip</code> <code>gunzip</code> <code>zip</code> <code>unzip</code></p>
+
+      <h3>Math &amp; Data</h3>
+      <p><code>dc</code> <code>factor</code> <code>numfmt</code> <code>cksum</code> <code>base32</code> <code>base64</code> <code>xxd</code> <code>dd</code></p>
 
       <h3>Dev Tools</h3>
       <p><code>node</code> <code>npm</code> <code>git</code> <code>build</code> <code>vi</code> <code>nano</code> <code>ed</code> <code>cc</code> <code>gcc</code> <code>python3</code> <code>pip</code> <code>sqlite3</code> <code>lua</code> <code>jq</code></p>
@@ -648,10 +682,13 @@ remote stop      <span class="c"># End session</span></pre></div>
       <p><code>fetch</code> <code>curl</code> <code>wget</code> <code>serve</code> <code>page</code> <code>become</code> <code>unbecome</code> <code>remote</code> <code>mcp</code> <code>group</code></p>
 
       <h3>System</h3>
-      <p><code>env</code> <code>export</code> <code>which</code> <code>type</code> <code>uname</code> <code>hostname</code> <code>whoami</code> <code>date</code> <code>uptime</code> <code>ps</code> <code>kill</code> <code>sleep</code> <code>clear</code> <code>history</code> <code>help</code></p>
+      <p><code>env</code> <code>export</code> <code>which</code> <code>type</code> <code>uname</code> <code>hostname</code> <code>whoami</code> <code>date</code> <code>uptime</code> <code>free</code> <code>ps</code> <code>kill</code> <code>sleep</code> <code>clear</code> <code>history</code> <code>help</code> <code>top</code> <code>w</code> <code>who</code> <code>users</code> <code>lsof</code> <code>nice</code> <code>man</code></p>
+
+      <h3>Web APIs</h3>
+      <p><code>speak</code> <code>listen</code> <code>notify</code> <code>camera</code></p>
 
       <h3>Editors &amp; Viewers</h3>
-      <p><code>code</code> <code>monaco</code> <code>mdview</code> <code>html</code> <code>img</code> <code>open</code></p>
+      <p><code>code</code> <code>monaco</code> <code>less</code> <code>mdview</code> <code>html</code> <code>img</code> <code>open</code></p>
 
       <h3>Shiro-specific</h3>
       <p><code>setup</code> <code>claude</code> <code>sc</code> <code>seed</code> <code>image</code> <code>spawn</code> <code>hud</code> <code>js-eval</code></p>

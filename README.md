@@ -9,7 +9,7 @@
 
 ## What's in it
 
-- **200+ commands** — ls, grep, awk, sed, find, curl, diff, xargs, tar, wc, sort, uniq...
+- **220+ commands** — ls, grep, awk, sed, find, curl, diff, xargs, tar, wc, sort, uniq, factor, base32, numfmt, dos2unix...
 - **Persistent filesystem** — IndexedDB-backed. Files survive reloads.
 - **Git** — isomorphic-git: init, add, commit, diff, log, clone, push
 - **npm** — Real tarballs from registry.npmjs.org. require() resolves node_modules.
