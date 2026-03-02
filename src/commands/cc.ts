@@ -324,19 +324,27 @@ export class WasiRT {
       path_open(dirfd: number, _df: number, pathP: number, pathL: number,
                 oflags: number, _rb: bigint, _ri: bigint, fdflags: number, fdP: number) {
         w.sync();
+        const rawPath = w.str(pathP, pathL);
         const path = w.resolve(dirfd, pathP, pathL);
         const creat = (oflags & 1) !== 0;
         const trunc = (oflags & 8) !== 0;
         const isDir = (oflags & 2) !== 0;
         if (isDir) {
-          if (!w.fs.dirs.has(path)) return E.NOENT;
+          const found = w.fs.dirs.has(path);
+          if (!found) {
+            console.warn(`[cc:path_open] dir MISS dirfd=${dirfd} raw="${rawPath}" resolved="${path}"`);
+            return E.NOENT;
+          }
           const fd = w.nfd++;
           w.fds.set(fd, { path, dir: true, pos: 0, data: null });
           w.dv.setUint32(fdP, fd, true);
           return E.OK;
         }
         let data = w.fs.files.get(path) || null;
-        if (!data && !creat) return E.NOENT;
+        if (!data && !creat) {
+          console.warn(`[cc:path_open] file MISS dirfd=${dirfd} raw="${rawPath}" resolved="${path}" files=[${[...w.fs.files.keys()].filter(k => k.includes(rawPath)).join(',')}]`);
+          return E.NOENT;
+        }
         if (!data || trunc) data = new Uint8Array(0);
         else data = new Uint8Array(data); // copy for mutation
         const fd = w.nfd++;
@@ -346,10 +354,14 @@ export class WasiRT {
       },
       path_filestat_get(fd: number, _f: number, pathP: number, pathL: number, buf: number) {
         w.sync();
+        const rawPath = w.str(pathP, pathL);
         const path = w.resolve(fd, pathP, pathL);
         const isDir = w.fs.dirs.has(path);
         const file = w.fs.files.get(path);
-        if (!isDir && !file) return E.NOENT;
+        if (!isDir && !file) {
+          console.warn(`[cc:stat] MISS fd=${fd} raw="${rawPath}" resolved="${path}"`);
+          return E.NOENT;
+        }
         const size = file ? file.length : 0;
         w.dv.setBigUint64(buf, 0n, true);      // dev
         w.dv.setBigUint64(buf + 8, 0n, true);  // ino
@@ -414,7 +426,7 @@ export class WasiRT {
         w.sync();
         const f = w.fds.get(fd);
         if (!f || !f.dir) return E.BADF;
-        const dirPath = f.path;
+        const dirPath = f.path === '.' ? '/' : f.path;
         // Enumerate files and subdirectories in this directory
         const entries: string[] = [];
         for (const [path] of w.fs.files) {
@@ -661,16 +673,17 @@ export const ccCmd: Command = {
     ccArgs.push(...extraFlags);
     for (const src of sources) ccArgs.push(src.name);
 
-    // Run compiler with two preopens: / (toolchain) and /work (source files)
+    // Run compiler with preopens: "." (CWD for relative paths) and "/" (for absolute paths)
+    // Many WASI libcs (including xcc's) require a "." preopen to resolve relative filenames
     const rt = new WasiRT(cfs, ccArgs, {
-      HOME: '/work',
+      HOME: '/',
       INCLUDE: '/usr/include',
       LIB: '/usr/lib',
       PATH: '/usr/bin',
-      PWD: '/work',
+      PWD: '/',
     }, '', [
-      { fd: 3, path: '/' },
-      { fd: 4, path: '/work' },
+      { fd: 3, path: '.' },
+      { fd: 4, path: '/' },
     ]);
 
     try {
