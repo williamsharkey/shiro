@@ -192,7 +192,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1668 tests across 36 test files** — all passing.
+**1706 tests across 36 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -385,8 +385,8 @@ Shiro has a from-scratch x86-64 emulator written entirely in TypeScript. No exte
 - **CPU state** (`src/x86/cpu.ts`): 16 64-bit registers via BigInt64Array, RFLAGS with individual flag accessors (CF, ZF, SF, OF, PF, AF, DF), segment bases (FS/GS for TLS)
 - **Virtual memory** (`src/x86/memory.ts`): Paged 4KB demand-allocation, little-endian read/write for 8/16/32/64-bit values, cross-page boundary handling
 - **ELF64 loader** (`src/x86/elf.ts`): Parses ELF64 headers, loads PT_LOAD segments, sets up Linux ABI stack (argc/argv/envp), 16-byte aligned RSP
-- **Instruction decoder** (`src/x86/decode.ts`): ~40 instructions (Phase 1), full ModR/M+SIB decoding, REX prefix handling, RIP-relative addressing
-- **Linux syscalls** (`src/x86/syscalls.ts`): 25+ syscalls mapped to Shiro VFS (read, write, open, close, stat, fstat, lseek, mmap, brk, ioctl, access, dup, getpid, exit, uname, getcwd, chdir, getuid/gid, arch_prctl, clock_gettime, openat, newfstatat)
+- **Instruction decoder** (`src/x86/decode.ts`): ~130 instructions, full ModR/M+SIB decoding, REX prefix handling, RIP-relative addressing, SSE2 packed ops
+- **Linux syscalls** (`src/x86/syscalls.ts`): ~46 syscalls mapped to Shiro VFS (read, write, open, close, stat, fstat, lseek, mmap, brk, ioctl, access, dup, getpid, exit, uname, getcwd, chdir, getuid/gid, arch_prctl, clock_gettime, openat, newfstatat, writev, getrandom, fcntl, and more)
 
 **Usage:**
 ```bash
@@ -396,7 +396,7 @@ x86 info ./hello     # Show ELF headers (educational)
 x86 debug ./hello    # Step-through with register dumps
 ```
 
-**Phase 1 instructions:** MOV, LEA, PUSH, POP, ADD, SUB, CMP, AND, OR, XOR, TEST, SHL, SHR, SAR, JMP, Jcc (all 16 conditions), CALL, RET, SYSCALL, NOP, MOVZX, MOVSX, MOVSXD, CDQ, CQO, CDQE, SETcc, CMOVcc, IMUL, MUL, DIV, IDIV, NEG, NOT, INC, DEC, REP MOVSB, REP STOSB, LEAVE, XCHG, BSF, BSR
+**Instructions (~130):** MOV, LEA, PUSH, POP, ADD, SUB, CMP, AND, OR, XOR, TEST, SHL, SHR, SAR, JMP, Jcc (all 16 conditions), CALL, RET, SYSCALL, NOP, MOVZX, MOVSX, MOVSXD, CDQ, CQO, CDQE, SETcc, CMOVcc, IMUL, MUL, DIV, IDIV, NEG, NOT, INC, DEC, REP MOVSB, REP STOSB, LEAVE, XCHG, BSF, BSR, ADC, SBB, HLT, PAUSE, ENDBR64, PUNPCKLQDQ, PUNPCKHQDQ, PCMPEQB, PCMPGTB, PCMPEQD, PMOVMSKB, PAND, PANDN, POR, PSUBB, PADDB, PADDQ, PMINUB, PMAXUB, PSHUFD, PUNPCKLBW, PUNPCKHBW, PSLLQ, PSRLQ, PSRLDQ, PSLLDQ, MOVQ, UCOMISD, UCOMISS, and more SSE2 variants
 
 **Key files:** `src/x86/cpu.ts`, `src/x86/memory.ts`, `src/x86/elf.ts`, `src/x86/decode.ts`, `src/x86/syscalls.ts`, `src/x86/runtime.ts`, `src/commands/x86.ts`
 
@@ -651,13 +651,13 @@ The workflow cycle is: **implement shell features → write tests → update CLA
 
 The vision: a **fully functional browser-native Linux system** where Claude Code (Spirit) runs with no external server. There is always work to do — if your current task is done, find the next missing Linux capability and implement it.
 
-### Current State (Build #850, 1703 tests)
+### Current State (Build #851, 1706 tests)
 
-The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Core features working: pipes, redirects, heredocs, arrays (indexed + associative), arithmetic, functions, control structures, job control, process substitution, extglob, brace expansion, namerefs, traps, and 30+ inline builtins. All three architecture tiers are operational: Tier 1 (200+ JS commands), Tier 2 (WASM+WASI, 22 packages), Tier 3 (x86-64 emulator, Phase 2 — ~100 instructions, ~40 syscalls, XMM registers, SSE2).
+The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Core features working: pipes, redirects, heredocs, arrays (indexed + associative), arithmetic, functions, control structures, job control, process substitution, extglob, brace expansion, namerefs, traps, and 30+ inline builtins. All three architecture tiers are operational: Tier 1 (200+ JS commands), Tier 2 (WASM+WASI, 22 packages), Tier 3 (x86-64 emulator, Phase 3 complete — ~130 instructions, ~46 syscalls, SSE2, TLS, runs real musl-static ELF binaries).
 
 ### Future Plans — Next Features to Implement (Priority Order)
 
-> **Recently Completed (Shiro Vision Stages 1-3 + x86 Phase 2):**
+> **Recently Completed (Shiro Vision Stages 1-3 + x86 Phases 1-3):**
 > - `enable` builtin with -n/-a/-p flags and builtin gating
 > - `read -t TIMEOUT` and `read -u FD`
 > - `mapfile -C callback` with quantum
@@ -669,15 +669,16 @@ The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Co
 > - x86-64 emulator Phase 1: CPU, memory, ELF64 loader, ~40 instructions, 25+ syscalls
 > - Tab completion engine, nocaseglob, nullglob, dotglob, failglob, globstar, LINENO, EXIT trap
 > - x86-64 emulator Phase 2: ~100 instructions, ~40 syscalls, auxv, FS/GS segment, SSE2, XMM regs
+> - x86-64 emulator Phase 3: ~130 instructions, ~46 syscalls, TLS, runs real musl-static ELF binaries
 
-#### P0: x86 Emulator — Phase 3 (musl-static "hello world")
-1. **Expand to ~200 instructions** — Full x86-64 userspace instruction set for musl libc static binaries
-2. **Test with real musl-static binary** — Compile `hello.c` with `musl-gcc -static -Os`, debug startup path
-3. **Instruction coverage gaps** — Fill gaps discovered from running real binaries (likely: more ALU variants, conditional moves, string ops, addressing modes)
+#### P0: x86 Emulator — Phase 4 (busybox-static)
+1. **Cross-compile minimal busybox** — Use `x86_64-linux-musl-gcc` with minimal config (echo, cat, ls, true, false, yes, wc, head, tail, sh)
+2. **Iterative gap-filling** — Run → fail → implement → repeat. Fill syscall and instruction gaps discovered from running busybox applets
+3. **Key syscalls needed** — getdents64, pipe2, dup3, execve, wait4, clone (stub), unlinkat, mkdirat, renameat2, ftruncate
+4. **Test progression** — busybox echo → cat → ls → wc → sh -c "echo hello" (real shell in emulator)
 
 #### P1: Broader Binary Support
-4. **busybox support** — Run busybox-static in the x86 emulator (would give 300+ real Unix commands)
-5. **ELF improvements** — Better section handling, .bss zero-fill, proper program header mapping
+5. **Full busybox** — Expand from minimal config to all ~300 applets
 6. **Syscall coverage** — Add syscalls discovered from running real programs (socket stubs, epoll stubs, etc.)
 
 #### P2: Performance + Infrastructure
@@ -691,6 +692,6 @@ The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Co
 - **ANSI-C quoting** `$'...'` is handled ONLY in the tokenizer — never in `expandVars`.
 - **Tests** are in `tests/tests/shiro-vitest/shell-advanced.test.ts`. Sections are numbered (currently 1-81). Add new sections sequentially. The `run(shell, cmd)` helper returns `{ output, exitCode }`. Stderr goes to stdout in the test helper.
 - **Deploy cycle**: `npm run deploy` auto-increments build number, runs tsc + vite build, and scp's to the DO droplet.
-- **x86 emulator**: Tests use `buildElf64(code)` helper to hand-craft minimal ELF64 binaries from raw byte arrays. The emulator uses `bigint` for all 64-bit values (registers, addresses). Phase 2 added XMM registers (`cpu.xmmLo`/`xmmHi`), FS/GS segment overrides (`decoder.segOverride`), auxiliary vector in ELF loader, and ~60 new instructions including SSE2 data movement.
+- **x86 emulator**: Tests use `buildElf64(code)` helper to hand-craft minimal ELF64 binaries from raw byte arrays. The emulator uses `bigint` for all 64-bit values (registers, addresses). Phase 3 complete: ~130 instructions, ~46 syscalls, XMM registers, FS/GS segment overrides, SSE2, TLS support. Runs real musl-static ELF binaries. Test fixture at `tests/tests/shiro-vitest/fixtures/hello-musl`.
 - **Virtual filesystem providers**: `VirtualFSProvider` interface in `filesystem.ts`. `/dev` and `/proc` are fully virtual — add new providers to the `virtualProviders` array.
 

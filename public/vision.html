@@ -215,10 +215,10 @@
           <h3>Real binaries via WebAssembly</h3>
           <p>A full WASI preview1 runtime with 40 syscalls. Runs real compiled programs: xcc (C compiler), Lua, jq, and 22 packages from the Wasmer registry. Near-native speed.</p>
         </div>
-        <div class="tier future">
+        <div class="tier active">
           <div class="tier-label">Tier 3 — x86 emulation</div>
           <h3>Run any Linux binary</h3>
-          <p>The final tier. x86 instruction-level emulation would let Shiro run unmodified Linux binaries — true universality. Not yet implemented.</p>
+          <p>A full x86-64 instruction-level emulator with ~130 instructions, 46 Linux syscalls, SSE2, and TLS support. Runs real musl-static ELF binaries compiled with gcc — in the browser, no server.</p>
         </div>
       </div>
     </section>
@@ -233,7 +233,7 @@
         <code>jq</code> <code>lua</code> <code>curl</code> <code>tar</code> <code>zip</code>
         <code>find</code> <code>sort</code> <code>wc</code> <code>diff</code> <code>ssh-keygen</code>
       </div>
-      <p>The shell supports pipes, redirects, heredocs, arrays, arithmetic, functions, process substitution, extended globbing, traps, programmable tab completion, and dozens more bash features — tested by 1,584 automated tests.</p>
+      <p>The shell supports pipes, redirects, heredocs, arrays, arithmetic, functions, process substitution, extended globbing, traps, programmable tab completion, and dozens more bash features — tested by 1,706 automated tests.</p>
     </section>
 
     <section>
@@ -260,7 +260,7 @@
     <section>
       <h2>What's next</h2>
       <p>The system grows toward full Linux compatibility, one capability at a time:</p>
-      <p><strong>Signal handling</strong> — wire Ctrl+C to real job interruption. <strong>/proc filesystem</strong> — virtual <code>/proc/self/</code>, <code>/proc/uptime</code>, <code>/proc/meminfo</code> for script compatibility. <strong>Process isolation</strong> — move heavy computation to Web Workers. <strong>Tier 3</strong> — x86 emulation for unmodified Linux binaries.</p>
+      <p><strong>busybox-static</strong> — run 300+ real Unix commands as actual x86 Linux binaries in the browser. <strong>JIT compilation</strong> — compile hot basic blocks to JavaScript functions for 10-100x speedup. <strong>Networking stubs</strong> — socket/connect/send/recv syscalls mapped to fetch/WebSocket.</p>
     </section>
 
     <section>

@@ -18,6 +18,7 @@
 - **SQLite** — sql.js WASM. Persistent databases in IndexedDB.
 - **Python** — Pyodide WASM. pip installs packages.
 - **Lua, jq, esbuild** — Lazy-loaded WASM runtimes, cached on first use
+- **x86-64 emulator** — Runs real Linux ELF binaries (musl-static) via instruction-level emulation. ~130 instructions, 46 syscalls, SSE2.
 - **Claude Code** — The real @anthropic-ai/claude-code CLI runs inside the browser
 - **Virtual servers** — `serve` hosts apps, `page` interacts with them
 - **Windowed terminals** — `spawn` opens commands in their own window with interactive REPL
@@ -58,6 +59,11 @@ cc hi.c -o hi && ./hi
 # SQLite
 sqlite3 app.db "CREATE TABLE users(name TEXT); INSERT INTO users VALUES('alice');"
 sqlite3 app.db "SELECT * FROM users;"
+
+# x86-64 emulator (runs real Linux binaries)
+./hello              # Auto-detect ELF binary, run in emulator
+x86 run ./hello      # Explicit execution
+x86 debug ./hello    # Step-through with register dumps
 
 # Serve and interact with web apps
 serve /tmp/myapp 3000
