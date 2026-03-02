@@ -429,6 +429,16 @@ export class Decoder {
       this.decodeAluGroup(op - 0x08, 'or');
       return;
     }
+    // ADC group: 10-15
+    if (op >= 0x10 && op <= 0x15) {
+      this.decodeAluGroup(op - 0x10, 'adc');
+      return;
+    }
+    // SBB group: 18-1D
+    if (op >= 0x18 && op <= 0x1D) {
+      this.decodeAluGroup(op - 0x18, 'sbb');
+      return;
+    }
     // AND group: 20-25
     if (op >= 0x20 && op <= 0x25) {
       this.decodeAluGroup(op - 0x20, 'and');
@@ -620,9 +630,9 @@ export class Decoder {
       return;
     }
 
-    // NOP (90) or XCHG rAX, r (90-97)
+    // NOP (90) or PAUSE (F3 90) or XCHG rAX, r (90-97)
     if (op === 0x90) {
-      // NOP (or XCHG rax, rax — same thing)
+      // NOP / PAUSE (F3 prefix makes it a PAUSE hint — still a no-op)
       return;
     }
     if (op >= 0x91 && op <= 0x97) {
@@ -859,6 +869,12 @@ export class Decoder {
       return;
     }
 
+    // HLT (F4) — halt the CPU
+    if (op === 0xF4) {
+      this.cpu.halted = true;
+      return;
+    }
+
     // CLC (F8), STC (F9), CLI (FA), STI (FB), CLD (FC), STD (FD)
     if (op === 0xF8) { this.cpu.cf = false; return; }
     if (op === 0xF9) { this.cpu.cf = true; return; }
@@ -907,6 +923,8 @@ export class Decoder {
       switch (operation) {
         case 'add': return this.aluAdd(a, b, opBits);
         case 'or':  return this.aluOr(a, b, opBits);
+        case 'adc': { const carry = this.cpu.cf ? 1n : 0n; return this.aluAdd(a, b + carry, opBits); }
+        case 'sbb': { const carry = this.cpu.cf ? 1n : 0n; return this.aluSub(a, b + carry, opBits); }
         case 'and': return this.aluAnd(a, b, opBits);
         case 'sub': return this.aluSub(a, b, opBits);
         case 'xor': return this.aluXor(a, b, opBits);
@@ -1480,10 +1498,32 @@ export class Decoder {
 
     // ─── SSE/SSE2 dispatch ──────────────────────────────────────────
     // MOVUPS/MOVAPS/XORPS (no prefix), MOVDQA/PXOR (66 prefix), MOVDQU (F3 prefix)
+    // PUNPCKLQDQ, PCMPEQB, PCMPGTB, PMOVMSKB, PAND, PANDN, POR
+    // PSUBB, PADDB, PADDQ, PMINUB, PMAXUB, PSHUFD, PUNPCKLBW, PUNPCKHBW
+    // PSLLQ/PSRLQ, MOVQ (F3 0F 7E)
     if (op2 === 0x10 || op2 === 0x11 || op2 === 0x28 || op2 === 0x29 ||
         op2 === 0x6F || op2 === 0x7F || op2 === 0x57 || op2 === 0xEF ||
-        op2 === 0x6E || op2 === 0x7E) {
+        op2 === 0x6E || op2 === 0x7E ||
+        op2 === 0x6C || op2 === 0x6D ||  // PUNPCKLQDQ, PUNPCKHQDQ
+        op2 === 0x74 || op2 === 0x64 ||  // PCMPEQB, PCMPGTB
+        op2 === 0xD7 ||                   // PMOVMSKB
+        op2 === 0xDB || op2 === 0xDF || op2 === 0xEB ||  // PAND, PANDN, POR
+        op2 === 0xF8 || op2 === 0xFC || op2 === 0xD4 ||  // PSUBB, PADDB, PADDQ
+        op2 === 0xDA || op2 === 0xDE ||  // PMINUB, PMAXUB
+        op2 === 0x70 ||                   // PSHUFD
+        op2 === 0x60 || op2 === 0x68 ||  // PUNPCKLBW, PUNPCKHBW
+        op2 === 0x73 ||                   // PSLLQ/PSRLQ imm
+        op2 === 0xD6 ||                   // MOVQ store (66 0F D6)
+        op2 === 0x38 ||                   // SSSE3/SSE4 3-byte escape — just consume
+        op2 === 0x76 ||                   // PCMPEQD
+        op2 === 0x2E || op2 === 0x2F) {  // UCOMISD/UCOMISS
       this.decodeSSE(op2);
+      return;
+    }
+
+    // ENDBR64 (F3 0F 1E FA) / ENDBR32 (F3 0F 1E FB) — Intel CET NOP
+    if (op2 === 0x1E && this.prefixF3) {
+      this.readByte(); // consume ModR/M byte (FA or FB)
       return;
     }
 
@@ -1789,6 +1829,90 @@ export class Decoder {
   // ─── SSE/SSE2 instructions ──────────────────────────────────────────────────
 
   private decodeSSE(op2: number): void {
+    // Special case: 0F 38 is a 3-byte opcode escape (SSSE3/SSE4) — consume and NOP
+    if (op2 === 0x38) {
+      const op3 = this.readByte();
+      this.decodeModRMXmm(); // consume ModR/M
+      return;
+    }
+
+    // Special case: PSLLQ/PSRLQ imm form (66 0F 73 /6 imm8 or /2 imm8)
+    if (op2 === 0x73) {
+      const modrm = this.readByte();
+      const subOp = (modrm >> 3) & 7;
+      const xmmIdx = (modrm & 7) | (this.rexB ? 8 : 0);
+      const imm = this.readByte();
+      const lo = this.cpu.getXmmLo(xmmIdx);
+      const hi = this.cpu.getXmmHi(xmmIdx);
+      if (subOp === 6) {
+        // PSLLQ xmm, imm8 — shift each 64-bit lane left
+        const shift = BigInt(imm);
+        this.cpu.setXmm(xmmIdx,
+          imm >= 64 ? 0n : (lo << shift) & MASK64,
+          imm >= 64 ? 0n : (hi << shift) & MASK64);
+      } else if (subOp === 2) {
+        // PSRLQ xmm, imm8 — shift each 64-bit lane right
+        const shift = BigInt(imm);
+        this.cpu.setXmm(xmmIdx,
+          imm >= 64 ? 0n : (lo >> shift) & MASK64,
+          imm >= 64 ? 0n : (hi >> shift) & MASK64);
+      } else if (subOp === 3) {
+        // PSRLDQ xmm, imm8 — byte-shift right the whole 128-bit register
+        const shiftBytes = Math.min(imm, 16);
+        const shiftBits = shiftBytes * 8;
+        // Combine as 128-bit value: (hi << 64) | lo
+        const val128 = (hi << 64n) | lo;
+        const shifted = val128 >> BigInt(shiftBits);
+        this.cpu.setXmm(xmmIdx, shifted & MASK64, (shifted >> 64n) & MASK64);
+      } else if (subOp === 7) {
+        // PSLLDQ xmm, imm8 — byte-shift left the whole 128-bit register
+        const shiftBytes = Math.min(imm, 16);
+        const shiftBits = shiftBytes * 8;
+        const val128 = (hi << 64n) | lo;
+        const shifted = val128 << BigInt(shiftBits);
+        this.cpu.setXmm(xmmIdx, shifted & MASK64, (shifted >> 64n) & MASK64);
+      }
+      return;
+    }
+
+    // PMOVMSKB r32, xmm (66 0F D7) — extract MSBs of each byte
+    if (op2 === 0xD7) {
+      const modrm = this.readByte();
+      const dstReg = ((modrm >> 3) & 7) | (this.rexR ? 8 : 0);
+      const srcXmm = (modrm & 7) | (this.rexB ? 8 : 0);
+      const lo = this.cpu.getXmmLo(srcXmm);
+      const hi = this.cpu.getXmmHi(srcXmm);
+      let mask = 0;
+      for (let i = 0; i < 8; i++) {
+        if (((lo >> BigInt(i * 8 + 7)) & 1n) !== 0n) mask |= (1 << i);
+      }
+      for (let i = 0; i < 8; i++) {
+        if (((hi >> BigInt(i * 8 + 7)) & 1n) !== 0n) mask |= (1 << (i + 8));
+      }
+      this.cpu.setReg32(dstReg, BigInt(mask));
+      return;
+    }
+
+    // PSHUFD xmm, xmm/m128, imm8 (66 0F 70)
+    if (op2 === 0x70) {
+      const { xmmReg: dstXmm, rm } = this.decodeModRMXmm();
+      const [slo, shi] = rm.type === 'reg'
+        ? [this.cpu.getXmmLo(rm.reg!), this.cpu.getXmmHi(rm.reg!)]
+        : this.readXmm128(rm.addr!);
+      const imm = this.readByte();
+      // Source dwords: [0]=lo[31:0], [1]=lo[63:32], [2]=hi[31:0], [3]=hi[63:32]
+      const dwords = [
+        slo & MASK32, (slo >> 32n) & MASK32,
+        shi & MASK32, (shi >> 32n) & MASK32,
+      ];
+      const r0 = dwords[imm & 3];
+      const r1 = dwords[(imm >> 2) & 3];
+      const r2 = dwords[(imm >> 4) & 3];
+      const r3 = dwords[(imm >> 6) & 3];
+      this.cpu.setXmm(dstXmm, (r1 << 32n) | r0, (r3 << 32n) | r2);
+      return;
+    }
+
     const { xmmReg, rm } = this.decodeModRMXmm();
 
     const readSrc128 = (): [bigint, bigint] => {
@@ -1840,15 +1964,233 @@ export class Decoder {
         }
         break;
       }
-      case 0x7E: { // MOVD/MOVQ r/m32 or r/m64, xmm (66 prefix)
+      case 0x7E: { // MOVD/MOVQ r/m, xmm (66 prefix) or MOVQ xmm, xmm/m64 (F3 prefix)
+        if (this.prefixF3) {
+          // MOVQ xmm, xmm/m64: load 64 bits into low xmm, zero high
+          const val = rm.type === 'reg' ? this.cpu.getXmmLo(rm.reg!) : this.mem.read64(rm.addr!);
+          this.cpu.setXmm(xmmReg, val, 0n);
+        } else {
+          const lo = this.cpu.getXmmLo(xmmReg);
+          if (rm.type === 'reg') {
+            if (this.rexW) this.cpu.setReg64(rm.reg!, lo);
+            else this.cpu.setReg32(rm.reg!, lo & MASK32);
+          } else {
+            if (this.rexW) this.mem.write64(rm.addr!, lo);
+            else this.mem.write32(rm.addr!, Number(lo & MASK32));
+          }
+        }
+        break;
+      }
+      case 0xD6: { // MOVQ xmm/m64, xmm (66 0F D6) — store low 64 bits
         const lo = this.cpu.getXmmLo(xmmReg);
         if (rm.type === 'reg') {
-          if (this.rexW) this.cpu.setReg64(rm.reg!, lo);
-          else this.cpu.setReg32(rm.reg!, lo & MASK32);
+          this.cpu.setXmm(rm.reg!, lo, 0n);
         } else {
-          if (this.rexW) this.mem.write64(rm.addr!, lo);
-          else this.mem.write32(rm.addr!, Number(lo & MASK32));
+          this.mem.write64(rm.addr!, lo);
         }
+        break;
+      }
+      // ─── PUNPCKLQDQ / PUNPCKHQDQ ─────────────────────────────────
+      case 0x6C: { // PUNPCKLQDQ xmm, xmm/m128 — interleave low 64-bit qwords
+        const [slo] = readSrc128();
+        const dlo = this.cpu.getXmmLo(xmmReg);
+        this.cpu.setXmm(xmmReg, dlo, slo);
+        break;
+      }
+      case 0x6D: { // PUNPCKHQDQ xmm, xmm/m128 — interleave high 64-bit qwords
+        const [, shi] = readSrc128();
+        const dhi = this.cpu.getXmmHi(xmmReg);
+        this.cpu.setXmm(xmmReg, dhi, shi);
+        break;
+      }
+      // ─── PUNPCKLBW / PUNPCKHBW ──────────────────────────────────
+      case 0x60: { // PUNPCKLBW xmm, xmm/m128 — interleave low bytes
+        const [slo] = readSrc128();
+        const dlo = this.cpu.getXmmLo(xmmReg);
+        let rlo = 0n, rhi = 0n;
+        for (let i = 0; i < 8; i++) {
+          const db = (dlo >> BigInt(i * 8)) & 0xFFn;
+          const sb = (slo >> BigInt(i * 8)) & 0xFFn;
+          if (i < 4) {
+            rlo |= (db << BigInt(i * 16)) | (sb << BigInt(i * 16 + 8));
+          } else {
+            rhi |= (db << BigInt((i - 4) * 16)) | (sb << BigInt((i - 4) * 16 + 8));
+          }
+        }
+        this.cpu.setXmm(xmmReg, rlo & MASK64, rhi & MASK64);
+        break;
+      }
+      case 0x68: { // PUNPCKHBW xmm, xmm/m128 — interleave high bytes
+        const [, shi] = readSrc128();
+        const dhi = this.cpu.getXmmHi(xmmReg);
+        let rlo = 0n, rhi = 0n;
+        for (let i = 0; i < 8; i++) {
+          const db = (dhi >> BigInt(i * 8)) & 0xFFn;
+          const sb = (shi >> BigInt(i * 8)) & 0xFFn;
+          if (i < 4) {
+            rlo |= (db << BigInt(i * 16)) | (sb << BigInt(i * 16 + 8));
+          } else {
+            rhi |= (db << BigInt((i - 4) * 16)) | (sb << BigInt((i - 4) * 16 + 8));
+          }
+        }
+        this.cpu.setXmm(xmmReg, rlo & MASK64, rhi & MASK64);
+        break;
+      }
+      // ─── Packed compare ──────────────────────────────────────────
+      case 0x74: { // PCMPEQB xmm, xmm/m128
+        const [slo, shi] = readSrc128();
+        const dlo = this.cpu.getXmmLo(xmmReg);
+        const dhi = this.cpu.getXmmHi(xmmReg);
+        let rlo = 0n, rhi = 0n;
+        for (let i = 0; i < 8; i++) {
+          const shift = BigInt(i * 8);
+          if (((dlo >> shift) & 0xFFn) === ((slo >> shift) & 0xFFn)) rlo |= 0xFFn << shift;
+        }
+        for (let i = 0; i < 8; i++) {
+          const shift = BigInt(i * 8);
+          if (((dhi >> shift) & 0xFFn) === ((shi >> shift) & 0xFFn)) rhi |= 0xFFn << shift;
+        }
+        this.cpu.setXmm(xmmReg, rlo & MASK64, rhi & MASK64);
+        break;
+      }
+      case 0x76: { // PCMPEQD xmm, xmm/m128
+        const [slo, shi] = readSrc128();
+        const dlo = this.cpu.getXmmLo(xmmReg);
+        const dhi = this.cpu.getXmmHi(xmmReg);
+        let rlo = 0n, rhi = 0n;
+        for (let i = 0; i < 2; i++) {
+          const shift = BigInt(i * 32);
+          if (((dlo >> shift) & MASK32) === ((slo >> shift) & MASK32)) rlo |= MASK32 << shift;
+        }
+        for (let i = 0; i < 2; i++) {
+          const shift = BigInt(i * 32);
+          if (((dhi >> shift) & MASK32) === ((shi >> shift) & MASK32)) rhi |= MASK32 << shift;
+        }
+        this.cpu.setXmm(xmmReg, rlo & MASK64, rhi & MASK64);
+        break;
+      }
+      case 0x64: { // PCMPGTB xmm, xmm/m128
+        const [slo, shi] = readSrc128();
+        const dlo = this.cpu.getXmmLo(xmmReg);
+        const dhi = this.cpu.getXmmHi(xmmReg);
+        const signed8 = (v: bigint) => (v & 0x80n) ? v - 0x100n : v;
+        let rlo = 0n, rhi = 0n;
+        for (let i = 0; i < 8; i++) {
+          const shift = BigInt(i * 8);
+          if (signed8((dlo >> shift) & 0xFFn) > signed8((slo >> shift) & 0xFFn)) rlo |= 0xFFn << shift;
+        }
+        for (let i = 0; i < 8; i++) {
+          const shift = BigInt(i * 8);
+          if (signed8((dhi >> shift) & 0xFFn) > signed8((shi >> shift) & 0xFFn)) rhi |= 0xFFn << shift;
+        }
+        this.cpu.setXmm(xmmReg, rlo & MASK64, rhi & MASK64);
+        break;
+      }
+      // ─── Packed logical ──────────────────────────────────────────
+      case 0xDB: { // PAND xmm, xmm/m128
+        const [slo, shi] = readSrc128();
+        this.cpu.setXmm(xmmReg,
+          this.cpu.getXmmLo(xmmReg) & slo,
+          this.cpu.getXmmHi(xmmReg) & shi);
+        break;
+      }
+      case 0xDF: { // PANDN xmm, xmm/m128 — ~dest & src
+        const [slo, shi] = readSrc128();
+        this.cpu.setXmm(xmmReg,
+          (~this.cpu.getXmmLo(xmmReg) & slo) & MASK64,
+          (~this.cpu.getXmmHi(xmmReg) & shi) & MASK64);
+        break;
+      }
+      case 0xEB: { // POR xmm, xmm/m128
+        const [slo, shi] = readSrc128();
+        this.cpu.setXmm(xmmReg,
+          this.cpu.getXmmLo(xmmReg) | slo,
+          this.cpu.getXmmHi(xmmReg) | shi);
+        break;
+      }
+      // ─── Packed arithmetic ──────────────────────────────────────
+      case 0xF8: { // PSUBB xmm, xmm/m128
+        const [slo, shi] = readSrc128();
+        const dlo = this.cpu.getXmmLo(xmmReg);
+        const dhi = this.cpu.getXmmHi(xmmReg);
+        let rlo = 0n, rhi = 0n;
+        for (let i = 0; i < 8; i++) {
+          const shift = BigInt(i * 8);
+          rlo |= (((dlo >> shift) & 0xFFn) - ((slo >> shift) & 0xFFn)) & 0xFFn << shift;
+        }
+        for (let i = 0; i < 8; i++) {
+          const shift = BigInt(i * 8);
+          rhi |= (((dhi >> shift) & 0xFFn) - ((shi >> shift) & 0xFFn)) & 0xFFn << shift;
+        }
+        this.cpu.setXmm(xmmReg, rlo & MASK64, rhi & MASK64);
+        break;
+      }
+      case 0xFC: { // PADDB xmm, xmm/m128
+        const [slo, shi] = readSrc128();
+        const dlo = this.cpu.getXmmLo(xmmReg);
+        const dhi = this.cpu.getXmmHi(xmmReg);
+        let rlo = 0n, rhi = 0n;
+        for (let i = 0; i < 8; i++) {
+          const shift = BigInt(i * 8);
+          rlo |= (((dlo >> shift) & 0xFFn) + ((slo >> shift) & 0xFFn)) & 0xFFn << shift;
+        }
+        for (let i = 0; i < 8; i++) {
+          const shift = BigInt(i * 8);
+          rhi |= (((dhi >> shift) & 0xFFn) + ((shi >> shift) & 0xFFn)) & 0xFFn << shift;
+        }
+        this.cpu.setXmm(xmmReg, rlo & MASK64, rhi & MASK64);
+        break;
+      }
+      case 0xD4: { // PADDQ xmm, xmm/m128
+        const [slo, shi] = readSrc128();
+        this.cpu.setXmm(xmmReg,
+          (this.cpu.getXmmLo(xmmReg) + slo) & MASK64,
+          (this.cpu.getXmmHi(xmmReg) + shi) & MASK64);
+        break;
+      }
+      case 0xDA: { // PMINUB xmm, xmm/m128
+        const [slo, shi] = readSrc128();
+        const dlo = this.cpu.getXmmLo(xmmReg);
+        const dhi = this.cpu.getXmmHi(xmmReg);
+        let rlo = 0n, rhi = 0n;
+        for (let i = 0; i < 8; i++) {
+          const shift = BigInt(i * 8);
+          const d = (dlo >> shift) & 0xFFn, s = (slo >> shift) & 0xFFn;
+          rlo |= (d < s ? d : s) << shift;
+        }
+        for (let i = 0; i < 8; i++) {
+          const shift = BigInt(i * 8);
+          const d = (dhi >> shift) & 0xFFn, s = (shi >> shift) & 0xFFn;
+          rhi |= (d < s ? d : s) << shift;
+        }
+        this.cpu.setXmm(xmmReg, rlo & MASK64, rhi & MASK64);
+        break;
+      }
+      case 0xDE: { // PMAXUB xmm, xmm/m128
+        const [slo, shi] = readSrc128();
+        const dlo = this.cpu.getXmmLo(xmmReg);
+        const dhi = this.cpu.getXmmHi(xmmReg);
+        let rlo = 0n, rhi = 0n;
+        for (let i = 0; i < 8; i++) {
+          const shift = BigInt(i * 8);
+          const d = (dlo >> shift) & 0xFFn, s = (slo >> shift) & 0xFFn;
+          rlo |= (d > s ? d : s) << shift;
+        }
+        for (let i = 0; i < 8; i++) {
+          const shift = BigInt(i * 8);
+          const d = (dhi >> shift) & 0xFFn, s = (shi >> shift) & 0xFFn;
+          rhi |= (d > s ? d : s) << shift;
+        }
+        this.cpu.setXmm(xmmReg, rlo & MASK64, rhi & MASK64);
+        break;
+      }
+      // ─── UCOMISD/UCOMISS — set flags from floating-point compare (stub) ──
+      case 0x2E:
+      case 0x2F: {
+        readSrc128(); // consume operand
+        this.cpu.zf = true;
+        this.cpu.cf = false;
+        this.cpu.pf = false;
         break;
       }
     }

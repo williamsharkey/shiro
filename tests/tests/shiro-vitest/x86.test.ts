@@ -1433,3 +1433,95 @@ describe('x86-64 Musl Startup Simulation', () => {
     expect(exitCode).toBe(0);
   });
 });
+
+// ─── Musl-static Hello World Integration Tests ─────────────────────────────
+
+import * as fs_node from 'fs';
+import * as path from 'path';
+
+/** Execute a real ELF binary in the emulator, returning stdout, exit code, and instruction count */
+async function executeElfInTest(
+  elfData: Uint8Array,
+  argv: string[],
+  opts?: { maxInstructions?: number; envp?: string[] },
+): Promise<{ exitCode: number; stdout: string; stderr: string; instructionCount: number }> {
+  const maxInstructions = opts?.maxInstructions ?? 10_000_000;
+  const envp = opts?.envp ?? ['PATH=/usr/bin', 'HOME=/home/user'];
+
+  const cpu = new CPU();
+  const mem = new VirtualMemory();
+  const decoder = new Decoder(cpu, mem);
+
+  loadElf(elfData, mem, cpu, argv, envp);
+
+  const { fs } = await createTestShell();
+
+  let stdout = '';
+  let stderr = '';
+  const syscalls = new LinuxSyscalls(
+    cpu, mem, fs, '/home/user',
+    (s: string) => { stdout += s; },
+    (s: string) => { stderr += s; },
+    '',
+  );
+
+  decoder.onSyscall = () => {
+    (decoder as any)._pendingSyscall = true;
+  };
+
+  let exitCode = -1;
+  let instructionCount = 0;
+  try {
+    while (instructionCount < maxInstructions) {
+      (decoder as any)._pendingSyscall = false;
+      decoder.step();
+      instructionCount++;
+      if ((decoder as any)._pendingSyscall) {
+        await syscalls.handleSyscall();
+      }
+    }
+  } catch (e: any) {
+    if (e instanceof X86Exit) {
+      exitCode = e.code;
+    } else {
+      throw e;
+    }
+  }
+
+  return { exitCode, stdout, stderr, instructionCount };
+}
+
+describe('x86-64 Musl-static Hello World', () => {
+  const fixturePath = path.join(__dirname, 'fixtures', 'hello-musl');
+  let helloBinary: Uint8Array;
+
+  beforeEach(() => {
+    helloBinary = new Uint8Array(fs_node.readFileSync(fixturePath));
+  });
+
+  it('loads fixture file correctly', () => {
+    expect(helloBinary.length).toBeGreaterThan(0);
+    // ELF magic: 0x7f 'E' 'L' 'F'
+    expect(helloBinary[0]).toBe(0x7f);
+    expect(helloBinary[1]).toBe(0x45);
+    expect(helloBinary[2]).toBe(0x4c);
+    expect(helloBinary[3]).toBe(0x46);
+  });
+
+  it('parses ELF headers from real binary', () => {
+    const info = parseElf64(helloBinary);
+    expect(info.isStaticLinked).toBe(true);
+    expect(info.machine).toBe(62); // EM_X86_64
+    expect(info.elfClass).toBe(2); // ELFCLASS64
+    expect(info.entryPoint).toBeGreaterThan(0n);
+    expect(info.programHeaders.length).toBeGreaterThan(0);
+  });
+
+  it('runs musl-static hello world', async () => {
+    const { exitCode, stdout, stderr, instructionCount } = await executeElfInTest(helloBinary, ['hello']);
+    expect(stdout).toBe('Hello, world!\n');
+    expect(exitCode).toBe(0);
+    expect(instructionCount).toBeLessThan(1_000_000);
+    expect(instructionCount).toBeGreaterThan(100); // sanity: not trivial
+  });
+});
