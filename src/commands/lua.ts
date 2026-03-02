@@ -1,10 +1,9 @@
 import { Command, CommandContext } from './index';
 
 /**
- * lua: Lua 5.4 interpreter via wasmoon (WebAssembly)
+ * lua: Lua 5.4 interpreter
  *
- * Downloads wasmoon (~130KB WASM) on first use, browser-cached.
- * Full Lua 5.4 VM with filesystem access.
+ * Primary: wasmoon (Emscripten). Fallback: WASI lua package.
  *
  * Usage:
  *   lua script.lua              # run a file
@@ -17,6 +16,7 @@ const WASMOON_CDN = 'https://esm.sh/wasmoon@1.16.0';
 
 let factory: any = null;
 let loadPromise: Promise<any> | null = null;
+let wasmoonFailed = false;
 
 async function ensureLua(ctx: CommandContext): Promise<any> {
   if (factory) return factory;
@@ -43,21 +43,68 @@ async function ensureLua(ctx: CommandContext): Promise<any> {
   }
 }
 
+/**
+ * Run lua via the WASI lua package (fallback when wasmoon fails)
+ */
+async function runWasiLua(ctx: CommandContext): Promise<number> {
+  const { findPackage, getCompiledModule } = await import('../wasi-packages');
+  const { WasiRT, WasiExit } = await import('../wasi-runtime');
+
+  const pkg = findPackage('lua');
+  if (!pkg) {
+    ctx.stderr += 'lua: WASI lua package not available\n';
+    return 1;
+  }
+
+  // Build WASI args: lua [original args...]
+  const wasiArgs = ['lua', ...ctx.args];
+
+  // If no file arg and stdin is present, pass '-' to read from stdin
+  if (ctx.args.length === 0 && ctx.stdin) {
+    wasiArgs.push('-');
+  }
+
+  try {
+    const wasmModule = await getCompiledModule(pkg.name, (msg) => {
+      ctx.stderr += `  ${msg}\n`;
+    });
+
+    const config = {
+      fs: ctx.fs,
+      cwd: ctx.cwd,
+      args: wasiArgs,
+      env: { ...ctx.env },
+      stdin: ctx.stdin || '',
+      onStdout: (text: string) => { ctx.stdout += text; },
+      onStderr: (text: string) => { ctx.stderr += text; },
+      preopens: { '/': '/', '.': ctx.cwd } as Record<string, string>,
+    };
+
+    const wasi = new WasiRT(config);
+    await wasi.preloadTree(ctx.cwd, 3, 100);
+    return await wasi.run(wasmModule);
+  } catch (e: any) {
+    if (e && typeof e === 'object' && 'code' in e) return (e as any).code;
+    ctx.stderr += `lua: ${e.message}\n`;
+    return 1;
+  }
+}
+
 export const luaCmd: Command = {
   name: 'lua',
-  description: 'Lua 5.4 interpreter (wasmoon)',
+  description: 'Lua 5.4 interpreter',
   async exec(ctx: CommandContext): Promise<number> {
     const args = ctx.args;
 
     // Handle -v / --version
     if (args.includes('-v') || args.includes('--version')) {
-      ctx.stdout = 'Lua 5.4 (wasmoon 1.16.0) -- browser WebAssembly build\n';
+      ctx.stdout = 'Lua 5.4 -- browser WebAssembly build\n';
       return 0;
     }
 
     if (args.length === 0 && !ctx.stdin) {
       ctx.stdout = [
-        'Lua 5.4 (Shiro) — powered by wasmoon',
+        'Lua 5.4 (Shiro)',
         '',
         'Usage:',
         '  lua script.lua              Run a Lua script',
@@ -69,34 +116,52 @@ export const luaCmd: Command = {
       return 0;
     }
 
+    // If wasmoon previously failed, go straight to WASI
+    if (wasmoonFailed) {
+      return runWasiLua(ctx);
+    }
+
+    // Try wasmoon first
     let luaFactory: any;
     try {
       luaFactory = await ensureLua(ctx);
-    } catch (err: any) {
-      ctx.stderr = `lua: failed to load: ${err.message}\n`;
-      return 1;
+    } catch {
+      wasmoonFailed = true;
+      return runWasiLua(ctx);
     }
 
-    // Create a fresh engine for each invocation
     let engine: any;
     try {
       engine = await luaFactory.createEngine();
-    } catch (err: any) {
-      ctx.stderr = `lua: failed to create engine: ${err.message}\n`;
-      return 1;
+    } catch {
+      // wasmoon loaded but engine creation fails (Emscripten environment issue)
+      wasmoonFailed = true;
+      factory = null;
+      loadPromise = null;
+      return runWasiLua(ctx);
     }
 
     try {
       // Redirect print() to ctx.stdout
       let output = '';
-      engine.global.set('print', (...args: any[]) => {
-        output += args.map((a: any) => String(a)).join('\t') + '\n';
+      engine.global.set('print', (...printArgs: any[]) => {
+        output += printArgs.map((a: any) => String(a)).join('\t') + '\n';
       });
 
-      // Provide io.write
+      // Provide io.write and io.read
+      let stdinConsumed = false;
       engine.global.set('io', {
-        write: (...args: any[]) => {
-          output += args.map((a: any) => String(a)).join('');
+        write: (...writeArgs: any[]) => {
+          output += writeArgs.map((a: any) => String(a)).join('');
+        },
+        read: (fmt: string) => {
+          if (!stdinConsumed && ctx.stdin) {
+            stdinConsumed = true;
+            if (fmt === '*a' || fmt === '*all') return ctx.stdin;
+            if (fmt === '*l' || fmt === '*line') return ctx.stdin.split('\n')[0];
+            return ctx.stdin;
+          }
+          return null;
         },
       });
 

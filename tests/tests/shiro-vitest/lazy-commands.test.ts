@@ -657,7 +657,7 @@ describe('Lazy-Loaded Commands', () => {
       const code = await luaCmd.exec(ctx);
       expect(code).toBe(0);
       expect(ctx.stdout).toContain('Lua 5.4');
-      expect(ctx.stdout).toContain('wasmoon');
+      expect(ctx.stdout).toContain('WebAssembly');
     });
 
     it('should fail gracefully when WASM cannot be loaded (test env)', async () => {
