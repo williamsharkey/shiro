@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { CPU, RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI } from '@shiro/x86/cpu';
+import { CPU, RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI, R8 } from '@shiro/x86/cpu';
 import { VirtualMemory } from '@shiro/x86/memory';
 import { Decoder, X86ExitSignal } from '@shiro/x86/decode';
 import { parseElf64, loadElf } from '@shiro/x86/elf';
@@ -788,5 +788,648 @@ describe('x86-64 Syscalls', () => {
 
     expect(mem.readString(0x2000n)).toBe('Linux');
     expect(mem.readString(0x2000n + 65n)).toBe('shiro');
+  });
+});
+
+// ─── Phase 2 Tests ──────────────────────────────────────────────────────────
+
+describe('x86-64 FS/GS Segment Override', () => {
+  let cpu: CPU;
+  let mem: VirtualMemory;
+  let dec: Decoder;
+
+  beforeEach(() => {
+    cpu = new CPU();
+    mem = new VirtualMemory();
+    dec = new Decoder(cpu, mem);
+    cpu.setReg64(RSP, 0x7FFF0000n);
+    mem.allocatePages(0x7FFE0000n, 8);
+  });
+
+  function loadCode(bytes: number[]): void {
+    const base = 0x1000n;
+    for (let i = 0; i < bytes.length; i++) {
+      mem.write8(base + BigInt(i), bytes[i]);
+    }
+    cpu.rip = base;
+  }
+
+  it('MOV rax, fs:[0x10] reads from fsBase+0x10', () => {
+    cpu.fsBase = 0x5000n;
+    mem.write64(0x5010n, 0xDEADBEEFn);
+    // mov rax, fs:[0x10] → 64 48 8B 04 25 10 00 00 00
+    // Actually: FS prefix (0x64) + REX.W (0x48) + MOV r, rm (0x8B) + ModR/M for [disp32]
+    // ModR/M = 04 (SIB follows, mod=00), SIB = 25 (no index, no base = disp32)
+    loadCode([0x64, 0x48, 0x8B, 0x04, 0x25, 0x10, 0x00, 0x00, 0x00]);
+    dec.step();
+    expect(cpu.getReg64(RAX)).toBe(0xDEADBEEFn);
+  });
+
+  it('MOV rax, gs:[rbx] reads from gsBase+rbx', () => {
+    cpu.gsBase = 0x6000n;
+    cpu.setReg64(RBX, 0x20n);
+    mem.write64(0x6020n, 0xCAFEBABEn);
+    // gs: (0x65) + REX.W (0x48) + MOV r, rm (0x8B) + ModR/M=03 (rax, [rbx])
+    loadCode([0x65, 0x48, 0x8B, 0x03]);
+    dec.step();
+    expect(cpu.getReg64(RAX)).toBe(0xCAFEBABEn);
+  });
+});
+
+describe('x86-64 Auxiliary Vector', () => {
+  it('loadElf places auxv on stack with AT_PAGESZ=4096', () => {
+    const code = new Uint8Array([0x90]); // NOP
+    const elf = buildElf64(code);
+    const cpu = new CPU();
+    const mem = new VirtualMemory();
+
+    loadElf(elf, mem, cpu, ['test'], []);
+
+    // Walk the stack: argc, argv[0], NULL, envp NULL, then auxv
+    let sp = cpu.getReg64(RSP);
+    const argc = Number(mem.read64(sp));
+    sp += 8n; // skip argc
+    // Skip argv pointers + NULL
+    for (let i = 0; i <= argc; i++) sp += 8n;
+    // Skip envp NULL
+    sp += 8n;
+
+    // Now at auxv — search for AT_PAGESZ (type 6)
+    let foundPageSz = false;
+    for (let i = 0; i < 20; i++) {
+      const type = Number(mem.read64(sp));
+      const val = mem.read64(sp + 8n);
+      if (type === 0) break; // AT_NULL
+      if (type === 6) { // AT_PAGESZ
+        expect(val).toBe(4096n);
+        foundPageSz = true;
+      }
+      sp += 16n;
+    }
+    expect(foundPageSz).toBe(true);
+  });
+
+  it('loadElf places AT_ENTRY with correct entry point', () => {
+    const code = new Uint8Array([0x90]);
+    const elf = buildElf64(code);
+    const cpu = new CPU();
+    const mem = new VirtualMemory();
+
+    loadElf(elf, mem, cpu, ['test'], []);
+
+    let sp = cpu.getReg64(RSP);
+    const argc = Number(mem.read64(sp));
+    sp += 8n;
+    for (let i = 0; i <= argc; i++) sp += 8n;
+    sp += 8n;
+
+    let foundEntry = false;
+    for (let i = 0; i < 20; i++) {
+      const type = Number(mem.read64(sp));
+      const val = mem.read64(sp + 8n);
+      if (type === 0) break;
+      if (type === 9) { // AT_ENTRY
+        expect(val).toBe(0x400000n);
+        foundEntry = true;
+      }
+      sp += 16n;
+    }
+    expect(foundEntry).toBe(true);
+  });
+});
+
+describe('x86-64 writev syscall', () => {
+  it('writev concatenates iovecs to stdout', async () => {
+    const cpu = new CPU();
+    const mem = new VirtualMemory();
+    const { fs } = await createTestShell();
+    let output = '';
+    const sc = new LinuxSyscalls(cpu, mem, fs, '/', s => { output += s; }, () => {}, '');
+
+    // Write two strings into memory
+    mem.writeString(0x2000n, 'Hello');
+    mem.writeString(0x2010n, ' World');
+
+    // Build iovec array at 0x3000: {ptr, len} × 2
+    mem.write64(0x3000n, 0x2000n); // iov[0].iov_base
+    mem.write64(0x3008n, 5n);      // iov[0].iov_len
+    mem.write64(0x3010n, 0x2010n); // iov[1].iov_base
+    mem.write64(0x3018n, 6n);      // iov[1].iov_len
+
+    cpu.setReg64(RAX, 20n);     // sys_writev
+    cpu.setReg64(RDI, 1n);      // fd = stdout
+    cpu.setReg64(RSI, 0x3000n); // iov
+    cpu.setReg64(RDX, 2n);      // iovcnt
+
+    await sc.handleSyscall();
+    expect(output).toBe('Hello World');
+    expect(cpu.getReg64(RAX)).toBe(11n);
+  });
+});
+
+describe('x86-64 getrandom syscall', () => {
+  it('getrandom fills buffer with random bytes', async () => {
+    const cpu = new CPU();
+    const mem = new VirtualMemory();
+    const { fs } = await createTestShell();
+    const sc = new LinuxSyscalls(cpu, mem, fs, '/', () => {}, () => {}, '');
+
+    mem.allocatePages(0x4000n, 1);
+    cpu.setReg64(RAX, 318n);    // sys_getrandom
+    cpu.setReg64(RDI, 0x4000n); // buf
+    cpu.setReg64(RSI, 16n);     // buflen
+    cpu.setReg64(RDX, 0n);      // flags
+
+    await sc.handleSyscall();
+    expect(cpu.getReg64(RAX)).toBe(16n);
+    // At least some bytes should be non-zero (extremely unlikely all 16 are 0)
+    let nonZero = false;
+    for (let i = 0; i < 16; i++) {
+      if (mem.read8(0x4000n + BigInt(i)) !== 0) nonZero = true;
+    }
+    expect(nonZero).toBe(true);
+  });
+});
+
+// ─── Sprint 2 Tests: New Instructions ────────────────────────────────────────
+
+describe('x86-64 Sprint 2 Instructions', () => {
+  let cpu: CPU;
+  let mem: VirtualMemory;
+  let dec: Decoder;
+
+  beforeEach(() => {
+    cpu = new CPU();
+    mem = new VirtualMemory();
+    dec = new Decoder(cpu, mem);
+    cpu.setReg64(RSP, 0x7FFF0000n);
+    mem.allocatePages(0x7FFE0000n, 8);
+  });
+
+  function loadCode(bytes: number[]): void {
+    const base = 0x1000n;
+    for (let i = 0; i < bytes.length; i++) {
+      mem.write8(base + BigInt(i), bytes[i]);
+    }
+    cpu.rip = base;
+  }
+
+  it('REPE CMPSB with equal strings', () => {
+    mem.writeString(0x3000n, 'ABCDE');
+    mem.writeString(0x4000n, 'ABCDE');
+    cpu.setReg64(RSI, 0x3000n);
+    cpu.setReg64(RDI, 0x4000n);
+    cpu.setReg64(RCX, 5n);
+    cpu.df = false;
+    // repe cmpsb → F3 A6
+    loadCode([0xF3, 0xA6]);
+    dec.step();
+    expect(cpu.getReg64(RCX)).toBe(0n);
+    expect(cpu.zf).toBe(true);
+  });
+
+  it('REPE CMPSB with unequal strings', () => {
+    mem.writeString(0x3000n, 'ABXDE');
+    mem.writeString(0x4000n, 'ABCDE');
+    cpu.setReg64(RSI, 0x3000n);
+    cpu.setReg64(RDI, 0x4000n);
+    cpu.setReg64(RCX, 5n);
+    cpu.df = false;
+    loadCode([0xF3, 0xA6]);
+    dec.step();
+    expect(cpu.zf).toBe(false); // stopped at mismatch
+    expect(cpu.getReg64(RCX)).toBe(2n); // consumed 3 out of 5
+  });
+
+  it('REPNE SCASB finds zero (strlen)', () => {
+    // String "Hello" at 0x5000 (5 chars + null = 6 bytes)
+    mem.writeString(0x5000n, 'Hello');
+    cpu.setReg64(RDI, 0x5000n);
+    cpu.setReg64(RCX, 100n);
+    cpu.setReg8(RAX, 0n); // scanning for null
+    cpu.df = false;
+    // repne scasb → F2 AE
+    loadCode([0xF2, 0xAE]);
+    dec.step();
+    // RCX should be 100 - 6 = 94 (scanned 6 bytes: H, e, l, l, o, \0)
+    expect(cpu.getReg64(RCX)).toBe(94n);
+    expect(cpu.zf).toBe(true); // found the null
+  });
+
+  it('CMPXCHG success path (equal)', () => {
+    cpu.setReg64(RAX, 42n);
+    cpu.setReg64(RCX, 99n);
+    mem.write64(0x6000n, 42n); // dest = 42 (matches RAX)
+    cpu.setReg64(RBX, 0x6000n);
+    // lock cmpxchg [rbx], rcx → F0 48 0F B1 0B
+    loadCode([0xF0, 0x48, 0x0F, 0xB1, 0x0B]);
+    dec.step();
+    expect(cpu.zf).toBe(true);
+    expect(mem.read64(0x6000n)).toBe(99n); // dest updated to RCX
+    expect(cpu.getReg64(RAX)).toBe(42n);   // RAX unchanged
+  });
+
+  it('CMPXCHG failure path (not equal)', () => {
+    cpu.setReg64(RAX, 42n);
+    cpu.setReg64(RCX, 99n);
+    mem.write64(0x6000n, 50n); // dest = 50 (doesn't match RAX)
+    cpu.setReg64(RBX, 0x6000n);
+    // lock cmpxchg [rbx], rcx → F0 48 0F B1 0B
+    loadCode([0xF0, 0x48, 0x0F, 0xB1, 0x0B]);
+    dec.step();
+    expect(cpu.zf).toBe(false);
+    expect(mem.read64(0x6000n)).toBe(50n); // dest unchanged
+    expect(cpu.getReg64(RAX)).toBe(50n);   // RAX loaded with dest
+  });
+
+  it('PUSHF/POPF round-trip', () => {
+    cpu.cf = true;
+    cpu.zf = true;
+    cpu.sf = false;
+    // pushf → 9C
+    loadCode([0x9C]);
+    dec.step();
+    // Modify flags
+    cpu.cf = false;
+    cpu.zf = false;
+    // popf → 9D
+    loadCode([0x9D]);
+    dec.step();
+    expect(cpu.cf).toBe(true);
+    expect(cpu.zf).toBe(true);
+  });
+
+  it('CPUID leaf 0 returns vendor string', () => {
+    cpu.setReg32(RAX, 0n);
+    // cpuid → 0F A2
+    loadCode([0x0F, 0xA2]);
+    dec.step();
+    expect(cpu.getReg32(RAX)).toBe(1n); // max leaf
+    // Check "GenuineIntel"
+    const ebx = cpu.getReg32(RBX);
+    const edx = cpu.getReg32(RDX);
+    const ecx = cpu.getReg32(RCX);
+    const vendor = String.fromCharCode(
+      ...[ebx, edx, ecx].flatMap(v => [
+        Number(v & 0xFFn), Number((v >> 8n) & 0xFFn),
+        Number((v >> 16n) & 0xFFn), Number((v >> 24n) & 0xFFn),
+      ])
+    );
+    expect(vendor).toBe('GenuineIntel');
+  });
+
+  it('CPUID leaf 1 returns feature flags with SSE2', () => {
+    cpu.setReg32(RAX, 1n);
+    loadCode([0x0F, 0xA2]);
+    dec.step();
+    const edx = cpu.getReg32(RDX);
+    // SSE2 is bit 26
+    expect((edx >> 26n) & 1n).toBe(1n);
+  });
+
+  it('LOOP decrements RCX and branches', () => {
+    cpu.setReg64(RCX, 3n);
+    cpu.setReg64(RAX, 0n);
+    // Loop body: inc eax (FF C0) → loop -4 (E2 FC)
+    loadCode([0xFF, 0xC0, 0xE2, 0xFC]);
+    // Execute 3 iterations: each is inc+loop
+    for (let i = 0; i < 6; i++) dec.step();
+    expect(cpu.getReg32(RAX)).toBe(3n);
+    expect(cpu.getReg64(RCX)).toBe(0n);
+  });
+
+  it('SAHF/LAHF round-trip', () => {
+    cpu.cf = true;
+    cpu.zf = true;
+    cpu.sf = false;
+    // lahf → 9F (flags → AH)
+    loadCode([0x9F]);
+    dec.step();
+    const ah = cpu.getReg8High(4);
+    // Clear flags
+    cpu.cf = false;
+    cpu.zf = false;
+    // sahf → 9E (AH → flags)
+    loadCode([0x9E]);
+    dec.step();
+    expect(cpu.cf).toBe(true);
+    expect(cpu.zf).toBe(true);
+  });
+});
+
+// ─── Sprint 3 Tests: Bit Operations + SSE2 ──────────────────────────────────
+
+describe('x86-64 Sprint 3 Instructions', () => {
+  let cpu: CPU;
+  let mem: VirtualMemory;
+  let dec: Decoder;
+
+  beforeEach(() => {
+    cpu = new CPU();
+    mem = new VirtualMemory();
+    dec = new Decoder(cpu, mem);
+    cpu.setReg64(RSP, 0x7FFF0000n);
+    mem.allocatePages(0x7FFE0000n, 8);
+  });
+
+  function loadCode(bytes: number[]): void {
+    const base = 0x1000n;
+    for (let i = 0; i < bytes.length; i++) {
+      mem.write8(base + BigInt(i), bytes[i]);
+    }
+    cpu.rip = base;
+  }
+
+  it('BT sets CF from tested bit', () => {
+    cpu.setReg64(RAX, 0b1010n);
+    cpu.setReg64(RCX, 3n);
+    // bt eax, ecx → 0F A3 C8
+    loadCode([0x0F, 0xA3, 0xC8]);
+    dec.step();
+    expect(cpu.cf).toBe(true); // bit 3 is set
+
+    cpu.setReg64(RCX, 2n);
+    loadCode([0x0F, 0xA3, 0xC8]);
+    dec.step();
+    expect(cpu.cf).toBe(false); // bit 2 is not set
+  });
+
+  it('BTS sets CF and sets the bit', () => {
+    cpu.setReg64(RAX, 0b1000n);
+    cpu.setReg64(RCX, 1n);
+    // bts eax, ecx → 0F AB C8
+    loadCode([0x0F, 0xAB, 0xC8]);
+    dec.step();
+    expect(cpu.cf).toBe(false); // bit 1 was not set
+    expect(cpu.getReg32(RAX)).toBe(0b1010n); // bit 1 now set
+  });
+
+  it('BTR clears the bit', () => {
+    cpu.setReg64(RAX, 0b1010n);
+    cpu.setReg64(RCX, 3n);
+    // btr eax, ecx → 0F B3 C8
+    loadCode([0x0F, 0xB3, 0xC8]);
+    dec.step();
+    expect(cpu.cf).toBe(true); // bit 3 was set
+    expect(cpu.getReg32(RAX)).toBe(0b0010n); // bit 3 cleared
+  });
+
+  it('BTC complements the bit', () => {
+    cpu.setReg64(RAX, 0b1010n);
+    cpu.setReg64(RCX, 1n);
+    // btc eax, ecx → 0F BB C8
+    loadCode([0x0F, 0xBB, 0xC8]);
+    dec.step();
+    expect(cpu.cf).toBe(true); // bit 1 was set
+    expect(cpu.getReg32(RAX)).toBe(0b1000n); // bit 1 toggled off
+  });
+
+  it('BSWAP 32-bit reverses bytes', () => {
+    cpu.setReg32(RAX, 0x01020304n);
+    // bswap eax → 0F C8
+    loadCode([0x0F, 0xC8]);
+    dec.step();
+    expect(cpu.getReg32(RAX)).toBe(0x04030201n);
+  });
+
+  it('BSWAP 64-bit reverses bytes', () => {
+    cpu.setReg64(RAX, 0x0102030405060708n);
+    // bswap rax → REX.W 0F C8 → 48 0F C8
+    loadCode([0x48, 0x0F, 0xC8]);
+    dec.step();
+    expect(cpu.getReg64(RAX)).toBe(0x0807060504030201n);
+  });
+
+  it('SHLD shifts left filling from source', () => {
+    cpu.setReg64(RAX, 0xFF000000n);
+    cpu.setReg64(RCX, 0x12345678n);
+    // shld eax, ecx, 8 → 0F A4 C8 08
+    loadCode([0x0F, 0xA4, 0xC8, 0x08]);
+    dec.step();
+    // EAX shifted left 8, low 8 bits filled from ECX high bits
+    expect(cpu.getReg32(RAX)).toBe(0x00000012n);
+  });
+
+  it('SHRD shifts right filling from source', () => {
+    cpu.setReg64(RAX, 0x12345678n);
+    cpu.setReg64(RCX, 0xABn);
+    // shrd eax, ecx, 8 → 0F AC C8 08
+    loadCode([0x0F, 0xAC, 0xC8, 0x08]);
+    dec.step();
+    // EAX shifted right 8, high 8 bits filled from ECX low bits
+    expect(cpu.getReg32(RAX)).toBe(0xAB123456n);
+  });
+
+  it('XORPS xmm0, xmm0 zeros the register', () => {
+    cpu.setXmm(0, 0xFFFFFFFFFFFFFFFFn, 0xFFFFFFFFFFFFFFFFn);
+    // xorps xmm0, xmm0 → 0F 57 C0
+    loadCode([0x0F, 0x57, 0xC0]);
+    dec.step();
+    expect(cpu.getXmmLo(0)).toBe(0n);
+    expect(cpu.getXmmHi(0)).toBe(0n);
+  });
+
+  it('MOVDQA xmm ↔ xmm/m128 round-trip', () => {
+    cpu.setXmm(1, 0x1234567890ABCDEFn, 0xFEDCBA0987654321n);
+    // movdqa xmm0, xmm1 → 66 0F 6F C1
+    loadCode([0x66, 0x0F, 0x6F, 0xC1]);
+    dec.step();
+    expect(cpu.getXmmLo(0)).toBe(0x1234567890ABCDEFn);
+    expect(cpu.getXmmHi(0)).toBe(0xFEDCBA0987654321n);
+
+    // movdqa [mem], xmm0 → 66 0F 7F 03 (store to [rbx])
+    cpu.setReg64(RBX, 0x8000n);
+    mem.allocatePages(0x8000n, 1);
+    loadCode([0x66, 0x0F, 0x7F, 0x03]);
+    dec.step();
+    expect(mem.read64(0x8000n)).toBe(0x1234567890ABCDEFn);
+    expect(mem.read64(0x8008n)).toBe(0xFEDCBA0987654321n);
+  });
+
+  it('MOVD from GP to XMM and back', () => {
+    cpu.setReg32(RAX, 0x42n);
+    // movd xmm0, eax → 66 0F 6E C0
+    loadCode([0x66, 0x0F, 0x6E, 0xC0]);
+    dec.step();
+    expect(cpu.getXmmLo(0)).toBe(0x42n);
+    expect(cpu.getXmmHi(0)).toBe(0n);
+
+    // movd ecx, xmm0 → 66 0F 7E C1
+    loadCode([0x66, 0x0F, 0x7E, 0xC1]);
+    dec.step();
+    expect(cpu.getReg32(RCX)).toBe(0x42n);
+  });
+});
+
+// ─── Sprint 4 Tests: Syscalls + End-to-End ──────────────────────────────────
+
+describe('x86-64 Sprint 4 Syscalls', () => {
+  it('readv reads scatter-gather from stdin', async () => {
+    const cpu = new CPU();
+    const mem = new VirtualMemory();
+    const { fs } = await createTestShell();
+    const sc = new LinuxSyscalls(cpu, mem, fs, '/', () => {}, () => {}, 'HelloWorld');
+
+    // Build iovec array: 2 buffers of 5 bytes each
+    mem.allocatePages(0x2000n, 1);
+    mem.allocatePages(0x3000n, 1);
+    mem.write64(0x4000n, 0x2000n); mem.write64(0x4008n, 5n);
+    mem.write64(0x4010n, 0x3000n); mem.write64(0x4018n, 5n);
+
+    cpu.setReg64(RAX, 19n);     // sys_readv
+    cpu.setReg64(RDI, 0n);      // fd = stdin
+    cpu.setReg64(RSI, 0x4000n); // iov
+    cpu.setReg64(RDX, 2n);      // iovcnt
+
+    await sc.handleSyscall();
+    expect(cpu.getReg64(RAX)).toBe(10n);
+    expect(mem.readString(0x2000n, 5)).toBe('Hello');
+    expect(mem.readString(0x3000n, 5)).toBe('World');
+  });
+
+  it('sysinfo fills struct', async () => {
+    const cpu = new CPU();
+    const mem = new VirtualMemory();
+    const { fs } = await createTestShell();
+    const sc = new LinuxSyscalls(cpu, mem, fs, '/', () => {}, () => {}, '');
+
+    mem.allocatePages(0x5000n, 1);
+    cpu.setReg64(RAX, 99n);     // sys_sysinfo
+    cpu.setReg64(RDI, 0x5000n); // buf
+
+    await sc.handleSyscall();
+    expect(cpu.getReg64(RAX)).toBe(0n);
+    expect(mem.read64(0x5000n + 32n)).toBe(268435456n); // totalram = 256MB
+  });
+});
+
+describe('x86-64 Musl Startup Simulation', () => {
+  it('exercises auxv → arch_prctl → set_tid_address → writev → exit_group', async () => {
+    const { fs } = await createTestShell();
+
+    // Hand-assemble a program that simulates the musl startup syscall sequence:
+    // 1. arch_prctl(ARCH_SET_FS, 0x800000) — set TLS base
+    // 2. set_tid_address(0x800100)          — set TID pointer
+    // 3. writev(1, iov, 1)                  — write "Hello" to stdout
+    // 4. exit_group(0)
+
+    const msg = new TextEncoder().encode('Hello\n');
+    // Layout:
+    // 0x00: mov rdi, 0x1002 (ARCH_SET_FS)       7 bytes
+    // 0x07: mov rsi, 0x800000                    7 bytes
+    // 0x0E: mov rax, 158 (arch_prctl)            7 bytes
+    // 0x15: syscall                              2 bytes
+    // 0x17: mov rdi, 0x800100                    7 bytes
+    // 0x1E: mov rax, 218 (set_tid_address)       7 bytes
+    // 0x25: syscall                              2 bytes
+    // 0x27: lea rsi, [rip+iov]                   7 bytes → iov at 0x56
+    // 0x2E: write iov_base at iov+0: lea rcx, [rip+msg] → use mov instead
+    //       Actually let's build iov in data section and use absolute addressing
+    //       Simpler: write "Hello\n" and iov struct in data, reference with RIP-relative
+    //
+    // Simplified approach: put msg and iov in the data section
+
+    // First pass: emit code bytes to determine size, then place data after
+    const codeBytes: number[] = [];
+    const emit = (...bytes: number[]) => { for (const b of bytes) codeBytes.push(b); };
+
+    // mov rdi, 0x1002 (ARCH_SET_FS)
+    emit(0x48, 0xC7, 0xC7, 0x02, 0x10, 0x00, 0x00);
+    // mov rsi, 0x800000
+    emit(0x48, 0xC7, 0xC6, 0x00, 0x00, 0x80, 0x00);
+    // mov rax, 158
+    emit(0x48, 0xC7, 0xC0, 158, 0x00, 0x00, 0x00);
+    // syscall
+    emit(0x0F, 0x05);
+    // mov rdi, 0x800100
+    emit(0x48, 0xC7, 0xC7, 0x00, 0x01, 0x80, 0x00);
+    // mov rax, 218 (set_tid_address)
+    emit(0x48, 0xC7, 0xC0, 218, 0x00, 0x00, 0x00);
+    // syscall
+    emit(0x0F, 0x05);
+    // mov rdi, 1 (stdout)
+    emit(0x48, 0xC7, 0xC7, 0x01, 0x00, 0x00, 0x00);
+    // lea rsi, [rip + disp32] — placeholder, fix up below
+    const leaIdx = codeBytes.length;
+    emit(0x48, 0x8D, 0x35, 0x00, 0x00, 0x00, 0x00);
+    // mov rdx, 1 (iovcnt)
+    emit(0x48, 0xC7, 0xC2, 0x01, 0x00, 0x00, 0x00);
+    // mov rax, 20 (writev)
+    emit(0x48, 0xC7, 0xC0, 20, 0x00, 0x00, 0x00);
+    // syscall
+    emit(0x0F, 0x05);
+    // mov rdi, 0 (exit code)
+    emit(0x48, 0xC7, 0xC7, 0x00, 0x00, 0x00, 0x00);
+    // mov rax, 231 (exit_group)
+    emit(0x48, 0xC7, 0xC0, 231, 0x00, 0x00, 0x00);
+    // syscall
+    emit(0x0F, 0x05);
+
+    // Place data after code (align to 8)
+    const codeEnd = codeBytes.length;
+    const msgOffset = (codeEnd + 7) & ~7;
+    const iovOffset = msgOffset + ((msg.length + 7) & ~7);
+    const totalSize = iovOffset + 16;
+    const code = new Uint8Array(totalSize);
+    for (let i = 0; i < codeBytes.length; i++) code[i] = codeBytes[i];
+
+    // Fix up lea displacement: RIP after lea = leaIdx + 7, target = iovOffset
+    const leaDisp = iovOffset - (leaIdx + 7);
+    code[leaIdx + 3] = leaDisp & 0xFF;
+    code[leaIdx + 4] = (leaDisp >> 8) & 0xFF;
+    code[leaIdx + 5] = (leaDisp >> 16) & 0xFF;
+    code[leaIdx + 6] = (leaDisp >> 24) & 0xFF;
+
+    // Write msg data
+    for (let i = 0; i < msg.length; i++) code[msgOffset + i] = msg[i];
+
+    // Write iov struct: {iov_base (8 bytes), iov_len (8 bytes)}
+    // code[0] → vaddr 0x400000, so code[msgOffset] → vaddr 0x400000 + msgOffset
+    const msgVaddr = 0x400000 + msgOffset;
+    const iovView = new DataView(code.buffer, iovOffset, 16);
+    iovView.setUint32(0, msgVaddr & 0xFFFFFFFF, true);
+    iovView.setUint32(4, 0, true);
+    iovView.setUint32(8, msg.length, true);
+    iovView.setUint32(12, 0, true);
+
+    const elf = buildElf64(code);
+
+    const cpuE = new CPU();
+    const memE = new VirtualMemory();
+    const decoder = new Decoder(cpuE, memE);
+
+    loadElf(elf, memE, cpuE, ['test'], ['PATH=/usr/bin']);
+
+    let output = '';
+    const syscalls = new LinuxSyscalls(
+      cpuE, memE, fs, '/home/user',
+      (s: string) => { output += s; },
+      (s: string) => {},
+      '',
+    );
+
+    decoder.onSyscall = () => {
+      (decoder as any)._pendingSyscall = true;
+    };
+
+    let exitCode = -1;
+    for (let i = 0; i < 5000; i++) {
+      (decoder as any)._pendingSyscall = false;
+      try {
+        decoder.step();
+        if ((decoder as any)._pendingSyscall) {
+          await syscalls.handleSyscall();
+        }
+      } catch (e: any) {
+        if (e instanceof X86Exit) {
+          exitCode = e.code;
+          break;
+        }
+        throw e;
+      }
+    }
+
+    expect(output).toBe('Hello\n');
+    expect(exitCode).toBe(0);
   });
 });

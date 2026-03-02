@@ -47,6 +47,10 @@ export class CPU {
   // 16 general-purpose 64-bit registers
   regs: BigInt64Array;
 
+  // 16 XMM registers (128-bit each, stored as lo/hi 64-bit halves)
+  xmmLo: BigUint64Array;
+  xmmHi: BigUint64Array;
+
   // Instruction pointer
   rip: bigint = 0n;
 
@@ -65,6 +69,15 @@ export class CPU {
 
   constructor() {
     this.regs = new BigInt64Array(16);
+    this.xmmLo = new BigUint64Array(16);
+    this.xmmHi = new BigUint64Array(16);
+  }
+
+  getXmmLo(idx: number): bigint { return this.xmmLo[idx]; }
+  getXmmHi(idx: number): bigint { return this.xmmHi[idx]; }
+  setXmm(idx: number, lo: bigint, hi: bigint): void {
+    this.xmmLo[idx] = lo;
+    this.xmmHi[idx] = hi;
   }
 
   // Register accessors by index
@@ -177,11 +190,19 @@ export class CPU {
     }
     lines.push(`rip = 0x${this.rip.toString(16).padStart(16, '0')}  rflags= 0x${this.rflags.toString(16).padStart(8, '0')}`);
     lines.push(`flags: ${this.cf ? 'CF ' : ''}${this.zf ? 'ZF ' : ''}${this.sf ? 'SF ' : ''}${this.of ? 'OF ' : ''}${this.pf ? 'PF ' : ''}${this.af ? 'AF ' : ''}${this.df ? 'DF ' : ''}`);
+    for (let i = 0; i < 16; i++) {
+      const hi = this.xmmHi[i].toString(16).padStart(16, '0');
+      const lo = this.xmmLo[i].toString(16).padStart(16, '0');
+      if (this.xmmLo[i] !== 0n || this.xmmHi[i] !== 0n) {
+        lines.push(`xmm${i.toString().padEnd(3)}= 0x${hi}${lo}`);
+      }
+    }
     return lines.join('\n');
   }
 
   reset(): void {
     for (let i = 0; i < 16; i++) this.regs[i] = 0n;
+    for (let i = 0; i < 16; i++) { this.xmmLo[i] = 0n; this.xmmHi[i] = 0n; }
     this.rip = 0n;
     this.rflags = 0x202;
     this.halted = false;

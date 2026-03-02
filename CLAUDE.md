@@ -651,13 +651,13 @@ The workflow cycle is: **implement shell features → write tests → update CLA
 
 The vision: a **fully functional browser-native Linux system** where Claude Code (Spirit) runs with no external server. There is always work to do — if your current task is done, find the next missing Linux capability and implement it.
 
-### Current State (Build #849, 1668 tests)
+### Current State (Build #850, 1703 tests)
 
-The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Core features working: pipes, redirects, heredocs, arrays (indexed + associative), arithmetic, functions, control structures, job control, process substitution, extglob, brace expansion, namerefs, traps, and 30+ inline builtins. All three architecture tiers are operational: Tier 1 (200+ JS commands), Tier 2 (WASM+WASI, 22 packages), Tier 3 (x86-64 emulator, Phase 1).
+The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Core features working: pipes, redirects, heredocs, arrays (indexed + associative), arithmetic, functions, control structures, job control, process substitution, extglob, brace expansion, namerefs, traps, and 30+ inline builtins. All three architecture tiers are operational: Tier 1 (200+ JS commands), Tier 2 (WASM+WASI, 22 packages), Tier 3 (x86-64 emulator, Phase 2 — ~100 instructions, ~40 syscalls, XMM registers, SSE2).
 
 ### Future Plans — Next Features to Implement (Priority Order)
 
-> **Recently Completed (Shiro Vision Stages 1-3):**
+> **Recently Completed (Shiro Vision Stages 1-3 + x86 Phase 2):**
 > - `enable` builtin with -n/-a/-p flags and builtin gating
 > - `read -t TIMEOUT` and `read -u FD`
 > - `mapfile -C callback` with quantum
@@ -668,21 +668,22 @@ The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Co
 > - `/dev` virtual filesystem refactor (null, zero, random, urandom)
 > - x86-64 emulator Phase 1: CPU, memory, ELF64 loader, ~40 instructions, 25+ syscalls
 > - Tab completion engine, nocaseglob, nullglob, dotglob, failglob, globstar, LINENO, EXIT trap
+> - x86-64 emulator Phase 2: ~100 instructions, ~40 syscalls, auxv, FS/GS segment, SSE2, XMM regs
 
-#### P0: x86 Emulator — Phase 2
-1. **Expand to ~100 instructions** — String ops (REP MOVSB/STOSB/CMPSB), more CMOV variants, XADD, CMPXCHG, BT/BTS/BTR/BTC
-2. **SSE basics** — MOVAPS/MOVUPS, XORPS (for zeroing), basic SSE2 integer ops (musl uses these)
-3. **More syscalls** — readv/writev, pread64/pwrite64, fcntl, pipe, socket stubs, readlink, getdents64
+#### P0: x86 Emulator — Phase 3 (musl-static "hello world")
+1. **Expand to ~200 instructions** — Full x86-64 userspace instruction set for musl libc static binaries
+2. **Test with real musl-static binary** — Compile `hello.c` with `musl-gcc -static -Os`, debug startup path
+3. **Instruction coverage gaps** — Fill gaps discovered from running real binaries (likely: more ALU variants, conditional moves, string ops, addressing modes)
 
-#### P1: x86 Emulator — Phase 3 (musl-static "hello world")
-4. **~200 instructions** — Full x86-64 userspace instruction set for musl libc static binaries
-5. **TLS support** — `arch_prctl(ARCH_SET_FS)` + proper FS segment base for thread-local storage
-6. **Dynamic linker stubs** — Handle `AT_*` auxiliary vector entries on the stack
+#### P1: Broader Binary Support
+4. **busybox support** — Run busybox-static in the x86 emulator (would give 300+ real Unix commands)
+5. **ELF improvements** — Better section handling, .bss zero-fill, proper program header mapping
+6. **Syscall coverage** — Add syscalls discovered from running real programs (socket stubs, epoll stubs, etc.)
 
-#### P2: Broader System Capabilities
-7. **busybox support** — Run busybox-static in the x86 emulator (would give 300+ real Unix commands)
-8. **JIT compilation** — Compile hot basic blocks to JavaScript functions for 10-100x speedup
-9. **Networking stubs** — socket/connect/send/recv syscalls mapped to fetch/WebSocket
+#### P2: Performance + Infrastructure
+7. **JIT compilation** — Compile hot basic blocks to JavaScript functions for 10-100x speedup
+8. **Networking stubs** — socket/connect/send/recv syscalls mapped to fetch/WebSocket
+9. **Debug tooling** — Enhanced `x86 debug` with breakpoints, watchpoints, memory dumps
 
 ### Technical Notes for New Agents
 
@@ -690,7 +691,6 @@ The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Co
 - **ANSI-C quoting** `$'...'` is handled ONLY in the tokenizer — never in `expandVars`.
 - **Tests** are in `tests/tests/shiro-vitest/shell-advanced.test.ts`. Sections are numbered (currently 1-81). Add new sections sequentially. The `run(shell, cmd)` helper returns `{ output, exitCode }`. Stderr goes to stdout in the test helper.
 - **Deploy cycle**: `npm run deploy` auto-increments build number, runs tsc + vite build, and scp's to the DO droplet.
-- **x86 emulator**: Tests use `buildElf64(code)` helper to hand-craft minimal ELF64 binaries from raw byte arrays. The emulator uses `bigint` for all 64-bit values (registers, addresses).
+- **x86 emulator**: Tests use `buildElf64(code)` helper to hand-craft minimal ELF64 binaries from raw byte arrays. The emulator uses `bigint` for all 64-bit values (registers, addresses). Phase 2 added XMM registers (`cpu.xmmLo`/`xmmHi`), FS/GS segment overrides (`decoder.segOverride`), auxiliary vector in ELF loader, and ~60 new instructions including SSE2 data movement.
 - **Virtual filesystem providers**: `VirtualFSProvider` interface in `filesystem.ts`. `/dev` and `/proc` are fully virtual — add new providers to the `virtualProviders` array.
-- **5 pre-existing test failures** in `about-demos.test.ts` (Demo 3: Text Processing) are unrelated to shell features — they fail because the test setup doesn't create `/tmp/grades.csv`.
 

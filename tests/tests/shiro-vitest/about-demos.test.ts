@@ -59,7 +59,11 @@ describe('About page demos', () => {
 
   describe('Demo 3: Text Processing', () => {
     beforeEach(async () => {
-      await run(shell, "printf 'alice,95\\nbob,87\\ncarol,92\\nalice,88\\nbob,91\\n' > /tmp/grades.csv");
+      await run(shell, 'echo "alice,95" > /tmp/grades.csv');
+      await run(shell, 'echo "bob,87" >> /tmp/grades.csv');
+      await run(shell, 'echo "carol,92" >> /tmp/grades.csv');
+      await run(shell, 'echo "alice,88" >> /tmp/grades.csv');
+      await run(shell, 'echo "bob,91" >> /tmp/grades.csv');
     });
 
     it('cat shows CSV content', async () => {

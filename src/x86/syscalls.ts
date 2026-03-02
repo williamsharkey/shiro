@@ -14,6 +14,9 @@ const ENOMEM = 12;
 const EACCES = 13;
 const EFAULT = 14;
 const ENOTTY = 25;
+const EPERM = 1;
+const EINVAL = 22;
+const ENOSPC = 28;
 const ENOSYS = 38;
 
 // File descriptor table entry
@@ -106,8 +109,40 @@ export class LinuxSyscalls {
       case 104: result = 1000n; break; // getgid
       case 107: result = 1000n; break; // geteuid
       case 108: result = 1000n; break; // getegid
+      case 110: result = 1000n; break; // getppid
+      case 13:  result = 0n; break; // rt_sigaction — stub
+      case 14:  result = 0n; break; // rt_sigprocmask — stub
+      case 20:  result = this.sysWritev(arg0, arg1, arg2); break;
+      case 72:  result = this.sysFcntl(arg0, arg1, arg2); break;
+      case 89:  result = this.sysReadlink(arg0, arg1, arg2); break;
       case 158: result = this.sysArchPrctl(arg0, arg1); break;
       case 218: result = 1000n; break; // set_tid_address — return fake TID
+      case 271: result = 0n; break; // ppoll — stub (return timeout)
+      case 302: result = this.sysPrlimit64(arg0, arg1, arg2, arg3); break;
+      case 318: result = this.sysGetrandom(arg0, arg1, arg2); break;
+      case 7:   result = 0n; break; // poll — stub
+      case 17:  result = await this.sysPread64(arg0, arg1, arg2, arg3); break;
+      case 18:  result = await this.sysPwrite64(arg0, arg1, arg2, arg3); break;
+      case 19:  result = this.sysReadv(arg0, arg1, arg2); break;
+      case 28:  result = 0n; break; // madvise — no-op
+      case 35:  result = this.sysNanosleep(arg0, arg1); break;
+      case 41:  result = -BigInt(ENOSYS); break; // socket — not supported
+      case 56:  result = -BigInt(ENOSYS); break; // clone — not supported
+      case 99:  result = this.sysSysinfo(arg0); break;
+      case 131: result = -BigInt(EACCES); break; // sigaltstack — stub
+      case 137: result = 0n; break; // statfs — stub return ok
+      case 157: result = 0n; break; // prctl — stub
+      case 186: result = 1000n; break; // gettid
+      case 200: result = -BigInt(ENOSYS); break; // tkill — stub
+      case 202: result = 0n; break; // futex — stub (return success)
+      case 204: result = 0n; break; // sched_getaffinity — stub
+      case 217: result = this.sysGetdents64(arg0, arg1, arg2); break;
+      case 233: result = -BigInt(ENOSYS); break; // epoll_ctl
+      case 234: result = -BigInt(ENOSYS); break; // tgkill
+      case 267: result = this.sysReadlinkat(arg0, arg1, arg2, arg3); break;
+      case 273: result = 0n; break; // set_robust_list — stub
+      case 291: result = -BigInt(ENOSYS); break; // epoll_create1
+      case 293: result = -BigInt(ENOSYS); break; // pipe2 — not supported
       case 228: result = this.sysClockGettime(arg0, arg1); break;
       case 231: throw new X86Exit(Number(arg0 & 0xFFn)); // exit_group
       case 257: result = await this.sysOpenat(arg0, arg1, arg2, arg3); break;
@@ -285,14 +320,20 @@ export class LinuxSyscalls {
   private sysMmap(addr: bigint, length: bigint, prot: bigint, flags: bigint, fd: bigint, offset: bigint): bigint {
     const len = Number(length);
     const f = Number(flags);
+    const pages = Math.ceil(len / 4096);
+
+    // MAP_FIXED (0x10) — use the specified address
+    const useFixed = (f & 0x10) !== 0 && addr !== 0n;
 
     // MAP_ANONYMOUS (0x20) — just allocate memory
     if (f & 0x20) {
-      // Find a free region (simple bump allocator starting at 0x40000000)
-      const pages = Math.ceil(len / 4096);
-      const allocAddr = this.brkAddr;
+      const allocAddr = useFixed ? addr : this.brkAddr;
       this.mem.allocatePages(allocAddr, pages);
-      this.brkAddr += BigInt(pages * 4096);
+      // Zero-fill for MAP_ANONYMOUS
+      for (let i = 0n; i < BigInt(len); i++) {
+        this.mem.write8(allocAddr + i, 0);
+      }
+      if (!useFixed) this.brkAddr += BigInt(pages * 4096);
       return allocAddr;
     }
 
@@ -300,13 +341,12 @@ export class LinuxSyscalls {
     const fdEntry = this.fdTable.get(Number(fd));
     if (!fdEntry || !fdEntry.content) return -BigInt(EBADF);
 
-    const pages = Math.ceil(len / 4096);
-    const allocAddr = this.brkAddr;
+    const allocAddr = useFixed ? addr : this.brkAddr;
     this.mem.allocatePages(allocAddr, pages);
     const off = Number(offset);
     const data = fdEntry.content.slice(off, off + len);
     this.mem.writeBytes(allocAddr, data);
-    this.brkAddr += BigInt(pages * 4096);
+    if (!useFixed) this.brkAddr += BigInt(pages * 4096);
     return allocAddr;
   }
 
@@ -394,6 +434,190 @@ export class LinuxSyscalls {
     } catch {
       return -BigInt(ENOENT);
     }
+  }
+
+  private sysWritev(fdNum: bigint, iovAddr: bigint, iovcnt: bigint): bigint {
+    const fd = Number(fdNum);
+    const cnt = Number(iovcnt);
+    let totalWritten = 0;
+
+    for (let i = 0; i < cnt; i++) {
+      const base = iovAddr + BigInt(i * 16);
+      const bufAddr = this.mem.read64(base);
+      const bufLen = Number(this.mem.read64(base + 8n));
+      if (bufLen === 0) continue;
+
+      const data = this.mem.readBytes(bufAddr, bufLen);
+      const text = new TextDecoder().decode(data);
+
+      if (fd === 1) {
+        this.onStdout(text);
+      } else if (fd === 2) {
+        this.onStderr(text);
+      } else {
+        const entry = this.fdTable.get(fd);
+        if (!entry) return -BigInt(EBADF);
+        if (entry.content) {
+          const newContent = new Uint8Array(Math.max(entry.content.length, entry.offset + bufLen));
+          newContent.set(entry.content);
+          newContent.set(data, entry.offset);
+          entry.content = newContent;
+          entry.offset += bufLen;
+        }
+      }
+      totalWritten += bufLen;
+    }
+    return BigInt(totalWritten);
+  }
+
+  private sysFcntl(fdNum: bigint, cmd: bigint, arg: bigint): bigint {
+    const fd = Number(fdNum);
+    if (fd > 2 && !this.fdTable.has(fd)) return -BigInt(EBADF);
+    const c = Number(cmd);
+    // F_GETFD=1, F_SETFD=2, F_GETFL=3, F_SETFL=4
+    if (c === 1) return 0n; // F_GETFD → no flags
+    if (c === 2) return 0n; // F_SETFD → ok
+    if (c === 3) {
+      const entry = this.fdTable.get(fd);
+      return BigInt(entry ? entry.flags : 0);
+    }
+    if (c === 4) return 0n; // F_SETFL → ok
+    return -BigInt(EINVAL);
+  }
+
+  private sysReadlink(pathAddr: bigint, buf: bigint, bufsiz: bigint): bigint {
+    const path = this.mem.readString(pathAddr);
+    if (path === '/proc/self/exe') {
+      const exe = '/usr/bin/program';
+      const encoded = new TextEncoder().encode(exe);
+      const len = Math.min(encoded.length, Number(bufsiz));
+      this.mem.writeBytes(buf, encoded.subarray(0, len));
+      return BigInt(len);
+    }
+    return -BigInt(ENOENT);
+  }
+
+  private sysPrlimit64(pid: bigint, resource: bigint, newLimit: bigint, oldLimit: bigint): bigint {
+    if (oldLimit !== 0n) {
+      // Write RLIM_INFINITY to old limit struct {rlim_cur, rlim_max} (2 × uint64)
+      const RLIM_INFINITY = 0xFFFFFFFFFFFFFFFFn;
+      this.mem.write64(oldLimit, RLIM_INFINITY);      // rlim_cur
+      this.mem.write64(oldLimit + 8n, RLIM_INFINITY); // rlim_max
+    }
+    return 0n;
+  }
+
+  private sysGetrandom(buf: bigint, buflen: bigint, flags: bigint): bigint {
+    const len = Number(buflen);
+    const bytes = new Uint8Array(len);
+    crypto.getRandomValues(bytes);
+    this.mem.writeBytes(buf, bytes);
+    return BigInt(len);
+  }
+
+  private async sysPread64(fdNum: bigint, buf: bigint, count: bigint, offset: bigint): Promise<bigint> {
+    const fd = Number(fdNum);
+    const entry = this.fdTable.get(fd);
+    if (!entry || !entry.content) return -BigInt(EBADF);
+    const off = Number(offset);
+    const n = Number(count);
+    const available = entry.content.length - off;
+    const toRead = Math.min(n, Math.max(0, available));
+    if (toRead <= 0) return 0n;
+    const slice = entry.content.slice(off, off + toRead);
+    this.mem.writeBytes(buf, slice);
+    return BigInt(toRead);
+  }
+
+  private async sysPwrite64(fdNum: bigint, buf: bigint, count: bigint, offset: bigint): Promise<bigint> {
+    const fd = Number(fdNum);
+    const entry = this.fdTable.get(fd);
+    if (!entry) return -BigInt(EBADF);
+    const n = Number(count);
+    const off = Number(offset);
+    const data = this.mem.readBytes(buf, n);
+    if (entry.content) {
+      const newContent = new Uint8Array(Math.max(entry.content.length, off + n));
+      newContent.set(entry.content);
+      newContent.set(data, off);
+      entry.content = newContent;
+    }
+    return BigInt(n);
+  }
+
+  private sysReadv(fdNum: bigint, iovAddr: bigint, iovcnt: bigint): bigint {
+    const fd = Number(fdNum);
+    const cnt = Number(iovcnt);
+    let totalRead = 0;
+
+    for (let i = 0; i < cnt; i++) {
+      const base = iovAddr + BigInt(i * 16);
+      const bufAddr = this.mem.read64(base);
+      const bufLen = Number(this.mem.read64(base + 8n));
+      if (bufLen === 0) continue;
+
+      if (fd === 0) {
+        const data = this.stdinBuffer.slice(0, bufLen);
+        this.stdinBuffer = this.stdinBuffer.slice(bufLen);
+        const encoded = new TextEncoder().encode(data);
+        this.mem.writeBytes(bufAddr, encoded);
+        totalRead += encoded.length;
+      } else {
+        const entry = this.fdTable.get(fd);
+        if (!entry || !entry.content) return -BigInt(EBADF);
+        const available = entry.content.length - entry.offset;
+        const toRead = Math.min(bufLen, available);
+        if (toRead > 0) {
+          const slice = entry.content.slice(entry.offset, entry.offset + toRead);
+          this.mem.writeBytes(bufAddr, slice);
+          entry.offset += toRead;
+          totalRead += toRead;
+        }
+      }
+    }
+    return BigInt(totalRead);
+  }
+
+  private sysNanosleep(req: bigint, rem: bigint): bigint {
+    // Stub: just return success (we can't actually sleep in single-threaded emulation)
+    if (rem !== 0n) {
+      this.mem.write64(rem, 0n);
+      this.mem.write64(rem + 8n, 0n);
+    }
+    return 0n;
+  }
+
+  private sysSysinfo(buf: bigint): bigint {
+    // struct sysinfo = 112 bytes on x86-64
+    for (let i = 0; i < 112; i++) this.mem.write8(buf + BigInt(i), 0);
+    const uptime = BigInt(Math.floor((performance.now() - this.startTime) / 1000));
+    this.mem.write64(buf, uptime);          // uptime
+    this.mem.write64(buf + 32n, 268435456n); // totalram (256MB)
+    this.mem.write64(buf + 40n, 134217728n); // freeram (128MB)
+    this.mem.write64(buf + 48n, 134217728n); // sharedram
+    this.mem.write64(buf + 56n, 0n);         // bufferram
+    this.mem.write64(buf + 64n, 268435456n); // totalswap
+    this.mem.write64(buf + 72n, 268435456n); // freeswap
+    this.mem.write16(buf + 80n, 0);          // procs
+    this.mem.write32(buf + 104n, 1);         // mem_unit
+    return 0n;
+  }
+
+  private sysGetdents64(fdNum: bigint, dirp: bigint, count: bigint): bigint {
+    // Return 0 = empty directory (end of entries)
+    return 0n;
+  }
+
+  private sysReadlinkat(dirfd: bigint, pathAddr: bigint, buf: bigint, bufsiz: bigint): bigint {
+    const path = this.mem.readString(pathAddr);
+    if (path === '/proc/self/exe') {
+      const exe = '/usr/bin/program';
+      const encoded = new TextEncoder().encode(exe);
+      const len = Math.min(encoded.length, Number(bufsiz));
+      this.mem.writeBytes(buf, encoded.subarray(0, len));
+      return BigInt(len);
+    }
+    return -BigInt(ENOENT);
   }
 
   private sysArchPrctl(code: bigint, addr: bigint): bigint {

@@ -41,6 +41,7 @@ export class Decoder {
   private prefixF2 = false;  // REPNE
   private prefixF3 = false;  // REP/REPE
   private prefixF0 = false;  // LOCK
+  private segOverride: 0 | 0x64 | 0x65 = 0;  // FS/GS segment override
   private pos = 0n;
 
   constructor(cpu: CPU, mem: VirtualMemory) {
@@ -58,6 +59,7 @@ export class Decoder {
     this.prefixF2 = false;
     this.prefixF3 = false;
     this.prefixF0 = false;
+    this.segOverride = 0;
 
     // 1. Consume legacy prefixes
     let prefixLoop = true;
@@ -69,9 +71,11 @@ export class Decoder {
         case 0xF0: this.prefixF0 = true; break;
         case 0xF2: this.prefixF2 = true; break;
         case 0xF3: this.prefixF3 = true; break;
-        case 0x2E: case 0x3E: case 0x26: case 0x36: case 0x64: case 0x65:
+        case 0x2E: case 0x3E: case 0x26: case 0x36:
           // Segment override prefixes — ignored in 64-bit mode (except FS/GS)
           break;
+        case 0x64: this.segOverride = 0x64; break; // FS override
+        case 0x65: this.segOverride = 0x65; break; // GS override
         default:
           // Not a prefix, put it back
           this.pos -= 1n;
@@ -177,6 +181,13 @@ export class Decoder {
     return { reg, rm: { type: 'mem', addr } };
   }
 
+  /** Apply FS/GS segment override to an address */
+  private applySegOverride(addr: bigint): bigint {
+    if (this.segOverride === 0x64) return (addr + this.cpu.fsBase) & MASK64;
+    if (this.segOverride === 0x65) return (addr + this.cpu.gsBase) & MASK64;
+    return addr;
+  }
+
   /** Compute effective address from mod and rm fields */
   private computeAddress(mod: number, rmLow3: number, hasRexB: boolean): bigint {
     let addr = 0n;
@@ -189,7 +200,7 @@ export class Decoder {
       // RIP-relative addressing (very common in x86-64!)
       const disp = this.readSignedDword();
       addr = this.pos + BigInt(disp); // RIP points to next instruction byte at this point
-      return addr;
+      return this.applySegOverride(addr);
     } else {
       addr = this.cpu.getReg64(rm);
     }
@@ -201,7 +212,7 @@ export class Decoder {
       addr += BigInt(this.readSignedDword());
     }
 
-    return addr & MASK64;
+    return this.applySegOverride(addr & MASK64);
   }
 
   /** Decode SIB byte */
@@ -584,6 +595,31 @@ export class Decoder {
       return;
     }
 
+    // PUSHF (9C) / POPF (9D)
+    if (op === 0x9C) {
+      this.push64(BigInt(this.cpu.rflags));
+      return;
+    }
+    if (op === 0x9D) {
+      const val = Number(this.pop64() & 0xFFFFFFFFn);
+      // Preserve reserved bits: bit 1 is always 1, bit 3/5 always 0
+      this.cpu.rflags = (val & ~0x2A) | 0x02 | (this.cpu.rflags & 0x200); // keep IF
+      return;
+    }
+
+    // SAHF (9E): AH → flags low byte; LAHF (9F): flags low byte → AH
+    if (op === 0x9E) {
+      const ah = Number(this.cpu.getReg8High(4)); // AH
+      // SAHF sets SF:ZF:0:AF:0:PF:1:CF from AH
+      this.cpu.rflags = (this.cpu.rflags & ~0xD5) | (ah & 0xD5) | 0x02;
+      return;
+    }
+    if (op === 0x9F) {
+      const flags = this.cpu.rflags & 0xFF;
+      this.cpu.setReg8High(4, BigInt(flags));
+      return;
+    }
+
     // NOP (90) or XCHG rAX, r (90-97)
     if (op === 0x90) {
       // NOP (or XCHG rax, rax — same thing)
@@ -679,6 +715,24 @@ export class Decoder {
       return;
     }
 
+    // CMPSB/CMPS (A6/A7) — compare [RSI] with [RDI]
+    if (op === 0xA6 || op === 0xA7) {
+      this.doCmps(op === 0xA6 ? 8 : bits);
+      return;
+    }
+
+    // LODSB/LODS (AC/AD) — load [RSI] into AL/AX/EAX/RAX
+    if (op === 0xAC || op === 0xAD) {
+      this.doLods(op === 0xAC ? 8 : bits);
+      return;
+    }
+
+    // SCASB/SCAS (AE/AF) — compare AL/AX/EAX/RAX with [RDI]
+    if (op === 0xAE || op === 0xAF) {
+      this.doScas(op === 0xAE ? 8 : bits);
+      return;
+    }
+
     // MOV r8, imm8 (B0-B7)
     if (op >= 0xB0 && op <= 0xB7) {
       const reg = (op - 0xB0) | (this.rexB ? 8 : 0);
@@ -707,6 +761,15 @@ export class Decoder {
     // Group 2: shift/rotate rm, imm8 (C0=8bit, C1=16/32/64bit)
     if (op === 0xC0 || op === 0xC1) {
       this.decodeGroup2(op === 0xC0 ? 8 : bits, 'imm8');
+      return;
+    }
+
+    // RET near imm16 (C2)
+    if (op === 0xC2) {
+      const imm16 = this.readWord();
+      this.cpu.rip = this.pop64();
+      this.cpu.setReg64(RSP, this.cpu.getReg64(RSP) + BigInt(imm16));
+      this.pos = this.cpu.rip;
       return;
     }
 
@@ -752,6 +815,19 @@ export class Decoder {
     // Group 2: shift/rotate rm, CL (D2=8bit, D3=16/32/64bit)
     if (op === 0xD2 || op === 0xD3) {
       this.decodeGroup2(op === 0xD2 ? 8 : bits, 'cl');
+      return;
+    }
+
+    // LOOPNZ/LOOPNE (E0), LOOPZ/LOOPE (E1), LOOP (E2)
+    if (op === 0xE0 || op === 0xE1 || op === 0xE2) {
+      const disp = this.readSignedByte();
+      let rcx = this.cpu.getReg64(RCX) - 1n;
+      rcx &= MASK64;
+      this.cpu.setReg64(RCX, rcx);
+      let take = rcx !== 0n;
+      if (op === 0xE0) take = take && !this.cpu.zf; // LOOPNZ
+      if (op === 0xE1) take = take && this.cpu.zf;  // LOOPZ
+      if (take) this.pos += BigInt(disp);
       return;
     }
 
@@ -971,8 +1047,30 @@ export class Decoder {
           this.cpu.setArithFlags(result, opBits);
         }
         break;
+      case 2: {
+        // RCL — rotate through carry left
+        let v = val;
+        for (let i = 0; i < count; i++) {
+          const oldCF = this.cpu.cf ? 1n : 0n;
+          this.cpu.cf = ((v >> BigInt(opBits - 1)) & 1n) !== 0n;
+          v = ((v << 1n) | oldCF) & m;
+        }
+        result = v;
+        break;
+      }
+      case 3: {
+        // RCR — rotate through carry right
+        let v = val;
+        for (let i = 0; i < count; i++) {
+          const oldCF = this.cpu.cf ? 1n : 0n;
+          this.cpu.cf = (v & 1n) !== 0n;
+          v = (v >> 1n) | (oldCF << BigInt(opBits - 1));
+        }
+        result = v & m;
+        break;
+      }
       default:
-        return; // RCL, RCR not implemented yet
+        return;
     }
     this.writeOperand(rm, result!, opBits);
   }
@@ -1227,10 +1325,167 @@ export class Decoder {
     }
   }
 
+  // ─── CMPS string operation ─────────────────────────────────────────────────
+
+  private doCmps(opBits: number): void {
+    const byteCount = opBits >> 3;
+    const dir = this.cpu.df ? -BigInt(byteCount) : BigInt(byteCount);
+
+    const readVal = (addr: bigint): bigint => {
+      if (opBits === 8) return BigInt(this.mem.read8(addr));
+      if (opBits === 16) return BigInt(this.mem.read16(addr));
+      if (opBits === 32) return BigInt(this.mem.read32(addr));
+      return this.mem.read64(addr);
+    };
+
+    const doOne = () => {
+      const src = this.cpu.getReg64(RSI);
+      const dst = this.cpu.getReg64(RDI);
+      const a = readVal(src);
+      const b = readVal(dst);
+      this.aluSub(a, b, opBits); // sets flags: [RSI] - [RDI]
+      this.cpu.setReg64(RSI, (src + dir) & MASK64);
+      this.cpu.setReg64(RDI, (dst + dir) & MASK64);
+    };
+
+    if (this.prefixF3) {
+      // REPE CMPSB — repeat while equal (ZF=1) and RCX>0
+      let rcx = this.cpu.getReg64(RCX);
+      while (rcx > 0n) {
+        doOne();
+        rcx--;
+        if (!this.cpu.zf) break;
+      }
+      this.cpu.setReg64(RCX, rcx);
+    } else if (this.prefixF2) {
+      // REPNE CMPSB — repeat while not equal (ZF=0) and RCX>0
+      let rcx = this.cpu.getReg64(RCX);
+      while (rcx > 0n) {
+        doOne();
+        rcx--;
+        if (this.cpu.zf) break;
+      }
+      this.cpu.setReg64(RCX, rcx);
+    } else {
+      doOne();
+    }
+  }
+
+  // ─── SCAS string operation ─────────────────────────────────────────────────
+
+  private doScas(opBits: number): void {
+    const byteCount = opBits >> 3;
+    const dir = this.cpu.df ? -BigInt(byteCount) : BigInt(byteCount);
+
+    const readVal = (addr: bigint): bigint => {
+      if (opBits === 8) return BigInt(this.mem.read8(addr));
+      if (opBits === 16) return BigInt(this.mem.read16(addr));
+      if (opBits === 32) return BigInt(this.mem.read32(addr));
+      return this.mem.read64(addr);
+    };
+
+    const acc = opBits === 8 ? this.cpu.getReg8(RAX) :
+                opBits === 16 ? this.cpu.getReg16(RAX) :
+                opBits === 32 ? this.cpu.getReg32(RAX) : this.cpu.getReg64(RAX);
+
+    const doOne = () => {
+      const dst = this.cpu.getReg64(RDI);
+      const val = readVal(dst);
+      this.aluSub(acc, val, opBits); // flags = accumulator - [RDI]
+      this.cpu.setReg64(RDI, (dst + dir) & MASK64);
+    };
+
+    if (this.prefixF3) {
+      // REPE SCAS — repeat while equal (ZF=1) and RCX>0
+      let rcx = this.cpu.getReg64(RCX);
+      while (rcx > 0n) {
+        doOne();
+        rcx--;
+        if (!this.cpu.zf) break;
+      }
+      this.cpu.setReg64(RCX, rcx);
+    } else if (this.prefixF2) {
+      // REPNE SCAS — repeat while not equal (ZF=0) and RCX>0 (strlen pattern)
+      let rcx = this.cpu.getReg64(RCX);
+      while (rcx > 0n) {
+        doOne();
+        rcx--;
+        if (this.cpu.zf) break;
+      }
+      this.cpu.setReg64(RCX, rcx);
+    } else {
+      doOne();
+    }
+  }
+
+  // ─── LODS string operation ─────────────────────────────────────────────────
+
+  private doLods(opBits: number): void {
+    const byteCount = opBits >> 3;
+    const dir = this.cpu.df ? -BigInt(byteCount) : BigInt(byteCount);
+
+    const doOne = () => {
+      const src = this.cpu.getReg64(RSI);
+      if (opBits === 8) this.cpu.setReg8(RAX, BigInt(this.mem.read8(src)));
+      else if (opBits === 16) this.cpu.setReg16(RAX, BigInt(this.mem.read16(src)));
+      else if (opBits === 32) this.cpu.setReg32(RAX, BigInt(this.mem.read32(src)));
+      else this.cpu.setReg64(RAX, this.mem.read64(src));
+      this.cpu.setReg64(RSI, (src + dir) & MASK64);
+    };
+
+    if (this.prefixF3) {
+      let rcx = this.cpu.getReg64(RCX);
+      while (rcx > 0n) { doOne(); rcx--; }
+      this.cpu.setReg64(RCX, 0n);
+    } else {
+      doOne();
+    }
+  }
+
   // ─── Two-byte opcode dispatch (0F xx) ──────────────────────────────────────
+
+  // ─── XMM helpers ──────────────────────────────────────────────────────────
+
+  /** Read 128-bit value from memory into [lo, hi] */
+  private readXmm128(addr: bigint): [bigint, bigint] {
+    return [this.mem.read64(addr), this.mem.read64(addr + 8n)];
+  }
+
+  /** Write 128-bit value to memory */
+  private writeXmm128(addr: bigint, lo: bigint, hi: bigint): void {
+    this.mem.write64(addr, lo);
+    this.mem.write64(addr + 8n, hi);
+  }
+
+  /** Decode ModR/M for XMM instructions: reg field → XMM index, rm → XMM or memory */
+  private decodeModRMXmm(): { xmmReg: number; rm: Operand } {
+    const modrm = this.readByte();
+    const mod = (modrm >> 6) & 3;
+    let reg = (modrm >> 3) & 7;
+    let rm = modrm & 7;
+
+    if (this.rexR) reg |= 8;
+    if (this.rexB) rm |= 8;
+
+    if (mod === 3) {
+      return { xmmReg: reg, rm: { type: 'reg', reg: rm } };
+    }
+
+    const addr = this.computeAddress(mod, rm & 7, this.rexB);
+    return { xmmReg: reg, rm: { type: 'mem', addr } };
+  }
 
   private decodeTwoByteOpcode(op2: number): void {
     const bits = this.operandSize();
+
+    // ─── SSE/SSE2 dispatch ──────────────────────────────────────────
+    // MOVUPS/MOVAPS/XORPS (no prefix), MOVDQA/PXOR (66 prefix), MOVDQU (F3 prefix)
+    if (op2 === 0x10 || op2 === 0x11 || op2 === 0x28 || op2 === 0x29 ||
+        op2 === 0x6F || op2 === 0x7F || op2 === 0x57 || op2 === 0xEF ||
+        op2 === 0x6E || op2 === 0x7E) {
+      this.decodeSSE(op2);
+      return;
+    }
 
     // SYSCALL (0F 05)
     if (op2 === 0x05) {
@@ -1239,6 +1494,169 @@ export class Decoder {
       this.cpu.regs[R8 + 3] = BigInt.asIntN(64, BigInt(this.cpu.rflags)); // R11 = RFLAGS
       if (this.onSyscall) {
         this.onSyscall();
+      }
+      return;
+    }
+
+    // CPUID (0F A2)
+    if (op2 === 0xA2) {
+      const leaf = Number(this.cpu.getReg32(RAX));
+      if (leaf === 0) {
+        this.cpu.setReg32(RAX, 1n);  // max leaf = 1
+        // "GenuineIntel" in EBX:EDX:ECX
+        this.cpu.setReg32(RBX, 0x756E6547n); // "Genu"
+        this.cpu.setReg32(RDX, 0x49656E69n); // "ineI"
+        this.cpu.setReg32(RCX, 0x6C65746En); // "ntel"
+      } else if (leaf === 1) {
+        this.cpu.setReg32(RAX, 0x000306C3n); // family 6, model 3C (Haswell-like)
+        this.cpu.setReg32(RBX, 0x00010800n); // CLFLUSH=8, logical CPUs=1
+        this.cpu.setReg32(RCX, 0x00000201n); // SSE3 + PCLMULQDQ
+        this.cpu.setReg32(RDX, 0x06000001n); // FPU + SSE + SSE2
+      } else {
+        this.cpu.setReg32(RAX, 0n);
+        this.cpu.setReg32(RBX, 0n);
+        this.cpu.setReg32(RCX, 0n);
+        this.cpu.setReg32(RDX, 0n);
+      }
+      return;
+    }
+
+    // BT r/m, r (0F A3)
+    if (op2 === 0xA3) {
+      const { reg, rm } = this.decodeModRM();
+      const val = this.readOperand(rm, bits);
+      const bitIdx = Number(this.readOperand({ type: 'reg', reg }, bits) & BigInt(bits - 1));
+      this.cpu.cf = ((val >> BigInt(bitIdx)) & 1n) !== 0n;
+      return;
+    }
+
+    // SHLD r/m, r, imm8 (0F A4) and SHLD r/m, r, CL (0F A5)
+    if (op2 === 0xA4 || op2 === 0xA5) {
+      const { reg, rm } = this.decodeModRM();
+      const count = op2 === 0xA4 ? this.readByte() & 0x3F : Number(this.cpu.getReg8(RCX)) & 0x3F;
+      if (count === 0) return;
+      const dest = this.readOperand(rm, bits);
+      const src = this.readOperand({ type: 'reg', reg }, bits);
+      const m = this.mask(bits);
+      const result = ((dest << BigInt(count)) | (src >> BigInt(bits - count))) & m;
+      this.writeOperand(rm, result, bits);
+      this.cpu.cf = ((dest >> BigInt(bits - count)) & 1n) !== 0n;
+      this.cpu.setArithFlags(result, bits);
+      return;
+    }
+
+    // BTS r/m, r (0F AB)
+    if (op2 === 0xAB) {
+      const { reg, rm } = this.decodeModRM();
+      const val = this.readOperand(rm, bits);
+      const bitIdx = Number(this.readOperand({ type: 'reg', reg }, bits) & BigInt(bits - 1));
+      this.cpu.cf = ((val >> BigInt(bitIdx)) & 1n) !== 0n;
+      this.writeOperand(rm, val | (1n << BigInt(bitIdx)), bits);
+      return;
+    }
+
+    // SHRD r/m, r, imm8 (0F AC) and SHRD r/m, r, CL (0F AD)
+    if (op2 === 0xAC || op2 === 0xAD) {
+      const { reg, rm } = this.decodeModRM();
+      const count = op2 === 0xAC ? this.readByte() & 0x3F : Number(this.cpu.getReg8(RCX)) & 0x3F;
+      if (count === 0) return;
+      const dest = this.readOperand(rm, bits);
+      const src = this.readOperand({ type: 'reg', reg }, bits);
+      const m = this.mask(bits);
+      const result = ((dest >> BigInt(count)) | (src << BigInt(bits - count))) & m;
+      this.writeOperand(rm, result, bits);
+      this.cpu.cf = ((dest >> BigInt(count - 1)) & 1n) !== 0n;
+      this.cpu.setArithFlags(result, bits);
+      return;
+    }
+
+    // BTR r/m, r (0F B3)
+    if (op2 === 0xB3) {
+      const { reg, rm } = this.decodeModRM();
+      const val = this.readOperand(rm, bits);
+      const bitIdx = Number(this.readOperand({ type: 'reg', reg }, bits) & BigInt(bits - 1));
+      this.cpu.cf = ((val >> BigInt(bitIdx)) & 1n) !== 0n;
+      this.writeOperand(rm, val & ~(1n << BigInt(bitIdx)), bits);
+      return;
+    }
+
+    // BT/BTS/BTR/BTC immediate form (0F BA /4-7)
+    if (op2 === 0xBA) {
+      const { reg: subOp, rm } = this.decodeModRM();
+      const imm = this.readByte() & (bits - 1);
+      const val = this.readOperand(rm, bits);
+      this.cpu.cf = ((val >> BigInt(imm)) & 1n) !== 0n;
+      if ((subOp & 7) === 5) { // BTS
+        this.writeOperand(rm, val | (1n << BigInt(imm)), bits);
+      } else if ((subOp & 7) === 6) { // BTR
+        this.writeOperand(rm, val & ~(1n << BigInt(imm)), bits);
+      } else if ((subOp & 7) === 7) { // BTC
+        this.writeOperand(rm, val ^ (1n << BigInt(imm)), bits);
+      }
+      return;
+    }
+
+    // BTC r/m, r (0F BB)
+    if (op2 === 0xBB) {
+      const { reg, rm } = this.decodeModRM();
+      const val = this.readOperand(rm, bits);
+      const bitIdx = Number(this.readOperand({ type: 'reg', reg }, bits) & BigInt(bits - 1));
+      this.cpu.cf = ((val >> BigInt(bitIdx)) & 1n) !== 0n;
+      this.writeOperand(rm, val ^ (1n << BigInt(bitIdx)), bits);
+      return;
+    }
+
+    // XADD r/m8, r8 (0F C0) and XADD r/m, r (0F C1)
+    if (op2 === 0xC0 || op2 === 0xC1) {
+      const opBits = op2 === 0xC0 ? 8 : bits;
+      const { reg, rm } = this.decodeModRM();
+      const dest = this.readOperand(rm, opBits);
+      const src = this.readOperand({ type: 'reg', reg }, opBits);
+      const sum = this.aluAdd(dest, src, opBits);
+      this.writeOperand({ type: 'reg', reg }, dest, opBits); // reg ← old dest
+      this.writeOperand(rm, sum, opBits); // dest ← sum
+      return;
+    }
+
+    // BSWAP r32/r64 (0F C8-CF)
+    if (op2 >= 0xC8 && op2 <= 0xCF) {
+      const reg = (op2 - 0xC8) | (this.rexB ? 8 : 0);
+      if (this.rexW) {
+        let v = this.cpu.getReg64(reg);
+        let r = 0n;
+        for (let i = 0; i < 8; i++) {
+          r = (r << 8n) | (v & 0xFFn);
+          v >>= 8n;
+        }
+        this.cpu.setReg64(reg, r);
+      } else {
+        let v = Number(this.cpu.getReg32(reg));
+        const r = (((v & 0xFF) << 24) | ((v & 0xFF00) << 8) |
+                   ((v >>> 8) & 0xFF00) | ((v >>> 24) & 0xFF)) >>> 0;
+        this.cpu.setReg32(reg, BigInt(r));
+      }
+      return;
+    }
+
+    // CMPXCHG r/m8, r8 (0F B0) and CMPXCHG r/m, r (0F B1)
+    if (op2 === 0xB0 || op2 === 0xB1) {
+      const opBits = op2 === 0xB0 ? 8 : bits;
+      const { reg, rm } = this.decodeModRM();
+      const dest = this.readOperand(rm, opBits);
+      const acc = opBits === 64 ? this.cpu.getReg64(RAX) :
+                  opBits === 32 ? this.cpu.getReg32(RAX) :
+                  opBits === 16 ? this.cpu.getReg16(RAX) : this.cpu.getReg8(RAX);
+      this.aluSub(acc, dest, opBits); // sets flags
+      if (acc === dest) {
+        // ZF=1 (already set by aluSub), src → dest
+        const src = this.readOperand({ type: 'reg', reg }, opBits);
+        this.writeOperand(rm, src, opBits);
+      } else {
+        // ZF=0 (already set by aluSub), dest → accumulator
+        if (opBits === 64) this.cpu.setReg64(RAX, dest);
+        else if (opBits === 32) this.cpu.setReg32(RAX, dest);
+        else if (opBits === 16) this.cpu.setReg16(RAX, dest);
+        else this.cpu.setReg8(RAX, dest);
       }
       return;
     }
@@ -1366,5 +1784,73 @@ export class Decoder {
     }
 
     throw new Error(`Unknown two-byte opcode: 0F ${op2.toString(16).padStart(2, '0')} at 0x${(this.pos - 2n).toString(16)}`);
+  }
+
+  // ─── SSE/SSE2 instructions ──────────────────────────────────────────────────
+
+  private decodeSSE(op2: number): void {
+    const { xmmReg, rm } = this.decodeModRMXmm();
+
+    const readSrc128 = (): [bigint, bigint] => {
+      if (rm.type === 'reg') {
+        return [this.cpu.getXmmLo(rm.reg!), this.cpu.getXmmHi(rm.reg!)];
+      }
+      return this.readXmm128(rm.addr!);
+    };
+
+    const writeDst128 = (lo: bigint, hi: bigint) => {
+      if (rm.type === 'reg') {
+        this.cpu.setXmm(rm.reg!, lo, hi);
+      } else {
+        this.writeXmm128(rm.addr!, lo, hi);
+      }
+    };
+
+    switch (op2) {
+      case 0x10: // MOVUPS/MOVDQU xmm, xmm/m128 (load)
+      case 0x28: // MOVAPS/MOVDQA xmm, xmm/m128 (load)
+      case 0x6F: { // MOVDQA (66) or MOVDQU (F3) xmm, xmm/m128 (load)
+        const [lo, hi] = readSrc128();
+        this.cpu.setXmm(xmmReg, lo, hi);
+        break;
+      }
+      case 0x11: // MOVUPS/MOVDQU xmm/m128, xmm (store)
+      case 0x29: // MOVAPS/MOVDQA xmm/m128, xmm (store)
+      case 0x7F: { // MOVDQA (66) or MOVDQU (F3) xmm/m128, xmm (store)
+        const lo = this.cpu.getXmmLo(xmmReg);
+        const hi = this.cpu.getXmmHi(xmmReg);
+        writeDst128(lo, hi);
+        break;
+      }
+      case 0x57: // XORPS xmm, xmm/m128 (no prefix) — 128-bit XOR
+      case 0xEF: { // PXOR xmm, xmm/m128 (66 prefix)
+        const [slo, shi] = readSrc128();
+        const dlo = this.cpu.getXmmLo(xmmReg);
+        const dhi = this.cpu.getXmmHi(xmmReg);
+        this.cpu.setXmm(xmmReg, (dlo ^ slo) & MASK64, (dhi ^ shi) & MASK64);
+        break;
+      }
+      case 0x6E: { // MOVD/MOVQ xmm, r/m32 or r/m64 (66 prefix, REX.W selects 64-bit)
+        if (rm.type === 'reg') {
+          const val = this.rexW ? this.cpu.getReg64(rm.reg!) : this.cpu.getReg32(rm.reg!);
+          this.cpu.setXmm(xmmReg, val & MASK64, 0n);
+        } else {
+          const val = this.rexW ? this.mem.read64(rm.addr!) : BigInt(this.mem.read32(rm.addr!));
+          this.cpu.setXmm(xmmReg, val & MASK64, 0n);
+        }
+        break;
+      }
+      case 0x7E: { // MOVD/MOVQ r/m32 or r/m64, xmm (66 prefix)
+        const lo = this.cpu.getXmmLo(xmmReg);
+        if (rm.type === 'reg') {
+          if (this.rexW) this.cpu.setReg64(rm.reg!, lo);
+          else this.cpu.setReg32(rm.reg!, lo & MASK32);
+        } else {
+          if (this.rexW) this.mem.write64(rm.addr!, lo);
+          else this.mem.write32(rm.addr!, Number(lo & MASK32));
+        }
+        break;
+      }
+    }
   }
 }

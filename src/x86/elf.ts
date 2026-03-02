@@ -23,6 +23,9 @@ export interface ElfInfo {
   isStaticLinked: boolean;
   machine: number;
   elfClass: number;
+  phOff: number;
+  phEntSize: number;
+  phNum: number;
 }
 
 export interface ProgramHeader {
@@ -116,7 +119,7 @@ export function parseElf64(data: Uint8Array): ElfInfo {
     programHeaders.push({ type, flags, offset, vaddr, paddr, filesz, memsz, align });
   }
 
-  return { entryPoint, programHeaders, isStaticLinked, machine, elfClass };
+  return { entryPoint, programHeaders, isStaticLinked, machine, elfClass, phOff, phEntSize, phNum };
 }
 
 /** Load ELF segments into virtual memory and set up initial stack */
@@ -176,10 +179,45 @@ export function loadElf(
   // Align SP to 8 bytes
   sp &= ~7n;
 
-  // Write auxiliary vector (minimal — AT_NULL terminator)
+  // Write 16 random bytes for AT_RANDOM
   sp -= 16n;
-  mem.write64(sp, 0n);      // AT_NULL
-  mem.write64(sp + 8n, 0n);
+  const randAddr = sp;
+  for (let i = 0; i < 16; i++) {
+    mem.write8(sp + BigInt(i), (Math.random() * 256) | 0);
+  }
+
+  // Calculate phdr address — find which PT_LOAD segment contains the program headers
+  let phdrAddr = 0n;
+  for (const ph of info.programHeaders) {
+    if (ph.type === PT_LOAD && info.phOff >= ph.offset && info.phOff < ph.offset + ph.filesz) {
+      phdrAddr = ph.vaddr + BigInt(info.phOff - ph.offset);
+      break;
+    }
+  }
+
+  // Write auxiliary vector (pairs of uint64: type, value)
+  const auxv: [number, bigint][] = [
+    [3,  phdrAddr],                     // AT_PHDR
+    [4,  BigInt(info.phEntSize)],       // AT_PHENT
+    [5,  BigInt(info.phNum)],           // AT_PHNUM
+    [6,  4096n],                        // AT_PAGESZ
+    [9,  info.entryPoint],              // AT_ENTRY
+    [11, 1000n],                        // AT_UID
+    [12, 1000n],                        // AT_EUID
+    [13, 1000n],                        // AT_GID
+    [14, 1000n],                        // AT_EGID
+    [16, 0n],                           // AT_HWCAP
+    [25, randAddr],                     // AT_RANDOM
+    [26, 0n],                           // AT_HWCAP2
+    [0,  0n],                           // AT_NULL (terminator)
+  ];
+
+  // Write auxv in reverse so they appear in order on the stack
+  for (let i = auxv.length - 1; i >= 0; i--) {
+    sp -= 16n;
+    mem.write64(sp, BigInt(auxv[i][0]));
+    mem.write64(sp + 8n, auxv[i][1]);
+  }
 
   // Write envp array (pointers + NULL terminator)
   sp -= 8n;
