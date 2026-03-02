@@ -455,8 +455,8 @@
   <!-- ===== Demo 4: The Chain ===== -->
   <section class="demo-section container" id="demo-chain">
     <h2 class="section-title">The Chain</h2>
-    <p class="section-desc">C compiler &rarr; Lua &rarr; SQLite &rarr; jq &rarr; esbuild &rarr; git &rarr; serve. All in one browser tab.</p>
-    <div class="demo-caption"><span class="cap-title">Chain</span><span class="cap-desc">cc &rarr; lua &rarr; sqlite3 &rarr; jq &rarr; build &rarr; git &rarr; serve</span><button class="cap-replay" onclick="demos.chain.reset();demos.chain.play()">&#8635; replay</button></div>
+    <p class="section-desc">C compiler &rarr; Node &rarr; SQLite &rarr; jq &rarr; esbuild &rarr; git &rarr; serve. All in one browser tab.</p>
+    <div class="demo-caption"><span class="cap-title">Chain</span><span class="cap-desc">cc &rarr; node &rarr; sqlite3 &rarr; jq &rarr; build &rarr; git &rarr; serve</span><button class="cap-replay" onclick="demos.chain.reset();demos.chain.play()">&#8635; replay</button></div>
     <div class="demo-slot demo-slot-tall">
       <div class="demo-overlay" onclick="demos.chain.play()">
         <h2>The Chain</h2>
@@ -1377,24 +1377,20 @@
     '}',
   ].join('\n');
 
-  const chainEntropyLua = [
-    'local s = io.read("*a")',
-    'local nums = {}',
-    'for n in s:gmatch("%d+") do nums[#nums+1] = tonumber(n) end',
-    'local gaps = {}',
-    'for i=2,#nums do gaps[#gaps+1] = nums[i] - nums[i-1] end',
-    'local freq = {}',
-    'for _,g in ipairs(gaps) do freq[g] = (freq[g] or 0) + 1 end',
-    'local H = 0',
-    'for _,f in pairs(freq) do local p = f/#gaps; H = H - p*math.log(p)/math.log(2) end',
-    'local mx = 0',
-    'for _,g in ipairs(gaps) do if g > mx then mx = g end end',
-    'io.write(string.format(\'{"entropy":%.4f,"count":%d,"max_gap":%d,"gaps":[\', H, #nums, mx))',
-    'for i,g in ipairs(gaps) do',
-    '  if i > 1 then io.write(",") end',
-    '  io.write(g)',
-    'end',
-    'io.write("]}\\n")',
+  const chainEntropyJS = [
+    'let buf = "";',
+    'process.stdin.on("data", d => buf += d);',
+    'process.stdin.on("end", () => {',
+    '  const nums = JSON.parse(buf);',
+    '  const gaps = [];',
+    '  for (let i = 1; i < nums.length; i++) gaps.push(nums[i] - nums[i-1]);',
+    '  const freq = {};',
+    '  gaps.forEach(g => freq[g] = (freq[g]||0) + 1);',
+    '  let H = 0;',
+    '  Object.values(freq).forEach(f => { const p = f/gaps.length; H -= p * Math.log2(p); });',
+    '  const mx = Math.max(...gaps);',
+    '  console.log(JSON.stringify({entropy:+H.toFixed(4),count:nums.length,max_gap:mx,gaps}));',
+    '});',
   ].join('\n');
 
   const chainAppTS = [
@@ -1415,7 +1411,7 @@
     '  \'<div id="grid" style="display:grid;grid-template-columns:repeat(10,1fr);gap:3px;max-width:420px;margin:0 auto;padding:0 12px"></div>\',',
     '  \'<div style="text-align:center;margin-top:12px"><button id="start" style="padding:8px 24px;border-radius:6px;border:1px solid #333;background:#1a1a2e;color:#00d4ff;cursor:pointer;font-size:14px">Start Sieve</button></div>\',',
     '  \'<div id="info" style="text-align:center;padding:8px;font-size:11px;color:#555;margin-top:8px"></div>\',',
-    '  \'<div style="text-align:center;padding:6px;font-size:10px;color:#444">Built with cc \\u2192 lua \\u2192 sqlite3 \\u2192 jq \\u2192 esbuild \\u2192 git \\u2014 all in a browser tab</div>\',',
+    '  \'<div style="text-align:center;padding:6px;font-size:10px;color:#444">Built with cc \\u2192 node \\u2192 sqlite3 \\u2192 jq \\u2192 esbuild \\u2192 git \\u2014 all in a browser tab</div>\',',
     '].join("");',
     '',
     'const grid = document.getElementById("grid")!;',
@@ -1488,8 +1484,8 @@
 
     // Stage 2: SHANNON
     { note: 'measure information entropy' },
-    { cmd: "cat > /tmp/chain/entropy.lua << 'EOF'\n" + chainEntropyLua + "\nEOF" },
-    { cmd: 'cd /tmp/chain && lua entropy.lua < primes.json > analysis.json && cat analysis.json', delay: 600 },
+    { cmd: "cat > /tmp/chain/entropy.js << 'EOF'\n" + chainEntropyJS + "\nEOF" },
+    { cmd: 'cd /tmp/chain && node entropy.js < primes.json > analysis.json && cat analysis.json', delay: 600 },
 
     // Stage 3: VON NEUMANN
     { note: 'store in a database' },
