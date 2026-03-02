@@ -327,6 +327,8 @@ async function main() {
     () => import('./commands/code-editor').then(m => m.codeEditorCmd)), 'src/commands/code-editor.ts');
   registerCommand(commands, lazyCommand('monaco', 'VS Code editor (Monaco)',
     () => import('./commands/monaco-editor').then(m => m.monacoEditorCmd)), 'src/commands/monaco-editor.ts');
+  registerCommand(commands, lazyCommand('mdview', 'Render markdown as formatted HTML',
+    () => import('./commands/mdview').then(m => m.mdviewCmd)), 'src/commands/mdview.ts');
   registerCommand(commands, lazyCommand('builder', 'AI app builder (chat + live preview)',
     () => import('./commands/builder').then(m => m.builderCmd)), 'src/commands/builder.ts');
   registerCommand(commands, lazyCommand('ffmpeg', 'Video/audio processing (ffmpeg.wasm)',

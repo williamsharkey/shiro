@@ -270,6 +270,7 @@
         <a href="#git">Git</a>
 
         <span class="section-label">Advanced</span>
+        <a href="#editors">Editors &amp; Viewers</a>
         <a href="#claude-code">Claude Code</a>
         <a href="#servers">Virtual Servers</a>
         <a href="#remote">Remote Control</a>
@@ -510,6 +511,46 @@ sc</pre></div>
         <li>API calls route through a CORS proxy on shiro.computer</li>
       </ul>
 
+      <!-- ===== Editors & Viewers ===== -->
+      <h2 id="editors">Editors &amp; Viewers</h2>
+      <p>Shiro includes rich code editors and file viewers. The <code>open</code> command uses file associations to pick the right tool automatically.</p>
+
+      <h3>Code Editors</h3>
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># CodeMirror editor (lightweight)</span>
+code app.js
+
+<span class="c"># Monaco editor (VS Code engine)</span>
+monaco app.ts
+
+<span class="c"># Auto-detect: open picks editor by extension</span>
+open app.js        <span class="c"># opens in code editor</span></pre></div>
+
+      <h3>Markdown Viewer</h3>
+      <p>The <code>mdview</code> command renders markdown as formatted HTML with syntax-highlighted code blocks, tables, and dark-theme styling.</p>
+
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># View a markdown file</span>
+mdview README.md
+
+<span class="c"># Pipe markdown content</span>
+echo '# Hello World
+- item one
+- item two
+
+```js
+console.log("highlighted!")
+```' | mdview
+
+<span class="c"># open auto-detects .md files</span>
+open notes.md      <span class="c"># renders with mdview</span></pre></div>
+
+      <h3>HTML &amp; Images</h3>
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Render HTML in a window</span>
+echo '&lt;h1&gt;Hello&lt;/h1&gt;' | html
+html page.html
+
+<span class="c"># Display an image</span>
+img screenshot.png</pre></div>
+
       <!-- ===== Virtual Servers ===== -->
       <h2 id="servers">Virtual Servers</h2>
       <p>Serve web apps from the virtual filesystem using a Service Worker. Interact with them from the shell using <code>page</code> commands.</p>
@@ -609,8 +650,11 @@ remote stop      <span class="c"># End session</span></pre></div>
       <h3>System</h3>
       <p><code>env</code> <code>export</code> <code>which</code> <code>type</code> <code>uname</code> <code>hostname</code> <code>whoami</code> <code>date</code> <code>uptime</code> <code>ps</code> <code>kill</code> <code>sleep</code> <code>clear</code> <code>history</code> <code>help</code></p>
 
+      <h3>Editors &amp; Viewers</h3>
+      <p><code>code</code> <code>monaco</code> <code>mdview</code> <code>html</code> <code>img</code> <code>open</code></p>
+
       <h3>Shiro-specific</h3>
-      <p><code>setup</code> <code>claude</code> <code>sc</code> <code>seed</code> <code>image</code> <code>html</code> <code>img</code> <code>spawn</code> <code>hud</code> <code>js-eval</code></p>
+      <p><code>setup</code> <code>claude</code> <code>sc</code> <code>seed</code> <code>image</code> <code>spawn</code> <code>hud</code> <code>js-eval</code></p>
     </main>
     <footer style="padding:24px 0;margin-top:40px;border-top:1px solid #1a1a2e;text-align:center;font-size:0.85rem;color:#555;">
       <a href="/" style="color:#888;">Try Shiro</a>

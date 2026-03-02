@@ -13,7 +13,7 @@ const defaults: Record<string, string> = {
   cpp: 'code', cc: 'code', hpp: 'code',
   css: 'code', scss: 'code', less: 'code',
   html: 'code', htm: 'code',
-  json: 'code', md: 'code',
+  json: 'code', md: 'mdview',
   yaml: 'code', yml: 'code', toml: 'code',
   sh: 'code', bash: 'code', zsh: 'code',
   txt: 'code', xml: 'code', sql: 'code',
