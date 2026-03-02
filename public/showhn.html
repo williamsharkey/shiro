@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Show HN: A Unix environment in a single HTML file (420 KB) | Hacker News</title>
+  <meta name="robots" content="noindex">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #f6f6ef;
+      font-family: Verdana, Geneva, sans-serif;
+      font-size: 10pt;
+      color: #000;
+    }
+
+    a { color: #000; text-decoration: none; }
+    a:visited { color: #828282; }
+
+    /* ===== HN Header ===== */
+    .hn-header {
+      background: #ff6600;
+      padding: 2px 4px;
+    }
+    .hn-header table { width: 85%; margin: 0 auto; }
+    .hn-header td { padding: 0; }
+    .hn-header .logo {
+      display: inline-block;
+      width: 18px;
+      height: 18px;
+      background: #fff;
+      border: 1px solid #fff;
+      text-align: center;
+      line-height: 18px;
+      font-weight: bold;
+      font-size: 11px;
+      color: #ff6600;
+      vertical-align: middle;
+      margin-right: 4px;
+    }
+    .hn-header .pagetop {
+      font-size: 10pt;
+      color: #000;
+    }
+    .hn-header .pagetop a {
+      color: #000;
+      text-decoration: none;
+    }
+    .hn-header .pagetop b {
+      font-weight: bold;
+    }
+    .hn-header .nav-links {
+      font-size: 10pt;
+    }
+    .hn-header .nav-links a {
+      color: #000;
+    }
+
+    /* ===== Main Content ===== */
+    .content {
+      width: 85%;
+      margin: 0 auto;
+      padding: 10px 0 20px;
+    }
+
+    /* ===== Story ===== */
+    .story { padding: 5px 0; }
+    .story-title {
+      font-size: 10pt;
+    }
+    .story-title a { color: #000; text-decoration: none; }
+    .story-title .sitebit {
+      font-size: 8pt;
+      color: #828282;
+    }
+    .story-title .sitebit a {
+      color: #828282;
+    }
+    .story-meta {
+      font-size: 7pt;
+      color: #828282;
+      padding-left: 18px;
+      padding-top: 1px;
+    }
+    .story-meta a { color: #828282; }
+
+    .votearrow {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      vertical-align: middle;
+      margin-right: 4px;
+    }
+    .votearrow::after {
+      content: '';
+      display: block;
+      width: 0;
+      height: 0;
+      border-left: 5px solid transparent;
+      border-right: 5px solid transparent;
+      border-bottom: 10px solid #999;
+    }
+
+    /* ===== OP Body ===== */
+    .op-text {
+      font-size: 9pt;
+      color: #000;
+      padding: 10px 0 10px 18px;
+      max-width: 600px;
+      line-height: 1.4;
+    }
+    .op-text p { margin-bottom: 8px; }
+    .op-text a { color: #000; text-decoration: underline; }
+    .op-text code {
+      font-family: monospace;
+      font-size: 9pt;
+    }
+
+    /* ===== Comment Separator ===== */
+    .comment-separator {
+      border: 0;
+      border-top: 1px solid #e0e0d0;
+      margin: 10px 0;
+    }
+
+    /* ===== Comments ===== */
+    .comment-tree { padding: 0; }
+    .comment {
+      padding: 6px 0;
+      font-size: 9pt;
+      line-height: 1.4;
+    }
+    .comment-head {
+      font-size: 8pt;
+      color: #828282;
+    }
+    .comment-head a {
+      color: #828282;
+      text-decoration: none;
+    }
+    .comment-head .user-link {
+      color: #828282;
+      font-weight: normal;
+    }
+    .comment-body {
+      font-size: 9pt;
+      color: #000;
+      padding-top: 2px;
+    }
+    .comment-body p { margin-bottom: 6px; }
+    .comment-body .quote {
+      color: #000;
+      margin: 4px 0;
+    }
+    .comment-body .quote::before {
+      content: '';
+    }
+    .comment-body pre {
+      font-family: monospace;
+      font-size: 9pt;
+      white-space: pre;
+      margin: 6px 0;
+      padding: 4px 8px;
+      overflow-x: auto;
+    }
+    .comment-body code {
+      font-family: monospace;
+      font-size: 9pt;
+    }
+
+    .indent { display: inline-block; }
+    .ind1 { width: 40px; }
+    .ind2 { width: 80px; }
+
+    .dead {
+      color: #ddd;
+    }
+    .dead a { color: #ddd; }
+    .dead .comment-body { color: #ddd; }
+
+    /* ===== HN Footer ===== */
+    .hn-footer {
+      width: 85%;
+      margin: 20px auto 0;
+      border-top: 2px solid #ff6600;
+      padding: 10px 0;
+      text-align: center;
+      font-size: 8pt;
+      color: #828282;
+    }
+    .hn-footer a {
+      color: #828282;
+      text-decoration: none;
+      margin: 0 3px;
+    }
+    .hn-footer .search-form {
+      margin-top: 8px;
+    }
+    .hn-footer .search-form input[type="text"] {
+      font-family: monospace;
+      font-size: 9pt;
+      border: 1px solid #828282;
+      padding: 2px 4px;
+      width: 200px;
+    }
+
+    /* ===== Shiro Footer ===== */
+    .shiro-footer {
+      background: #0f0f1a;
+      padding: 40px 0;
+      border-top: 1px solid #1a1a2e;
+      text-align: center;
+      font-size: 0.85rem;
+      color: #555;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    }
+    .shiro-footer .links {
+      display: flex;
+      justify-content: center;
+      gap: 24px;
+      margin-bottom: 12px;
+    }
+    .shiro-footer a { color: #888; text-decoration: none; }
+    .shiro-footer a:hover { color: #00d4ff; text-decoration: underline; }
+
+    /* ===== Mobile ===== */
+    @media (max-width: 640px) {
+      .hn-header table, .content, .hn-footer { width: 100%; padding-left: 8px; padding-right: 8px; }
+      .ind1 { width: 20px; }
+      .ind2 { width: 40px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ===== HN Header ===== -->
+<div class="hn-header">
+  <table><tr>
+    <td style="width: 18px; padding-right: 4px;">
+      <span class="logo">Y</span>
+    </td>
+    <td class="pagetop">
+      <b><a href="#">Hacker News</a></b>&nbsp;
+      <span class="nav-links">
+        <a href="#">new</a> |
+        <a href="#">past</a> |
+        <a href="#">comments</a> |
+        <a href="#">ask</a> |
+        <a href="#">show</a> |
+        <a href="#">jobs</a> |
+        <a href="#">submit</a>
+      </span>
+    </td>
+    <td style="text-align: right;" class="pagetop">
+      <a href="#">login</a>
+    </td>
+  </tr></table>
+</div>
+
+<!-- ===== Main Content ===== -->
+<div class="content">
+
+  <!-- Story -->
+  <div class="story">
+    <span class="votearrow"></span>
+    <span class="story-title">
+      <a href="https://shiro.computer">Show HN: A Unix environment in a single HTML file (420 KB)</a>
+      <span class="sitebit"> (<a href="https://shiro.computer">shiro.computer</a>)</span>
+    </span>
+    <div class="story-meta">
+      843 points by <a href="#">sagebird</a> 11 days ago |
+      <a href="#">hide</a> |
+      <a href="#">past</a> |
+      <a href="#">favorite</a> |
+      <a href="#">247 comments</a>
+    </div>
+  </div>
+
+  <!-- OP Text -->
+  <div class="op-text">
+    <p>I built a browser-native Unix environment &mdash; shell, filesystem, git, npm, node, vi, 200+ commands. Everything is JavaScript running client-side with IndexedDB for persistence. The whole thing builds to a single static HTML file (~420 KB gzipped).</p>
+    <p>Try it: <a href="https://shiro.computer">https://shiro.computer</a></p>
+    <p>For interactive demos showing npm install, node execution, and git workflows &mdash; running live in Shiro, not recordings &mdash; see <a href="https://shiro.computer/about">https://shiro.computer/about</a></p>
+    <p>Source: <a href="https://github.com/williamsharkey/shiro">https://github.com/williamsharkey/shiro</a></p>
+    <p>P.S. <code>curl -fsSL https://claude.ai/install.sh | bash</code> works. You can run real Claude Code and it can use Shiro's tools like a normal Linux system.</p>
+  </div>
+
+  <hr class="comment-separator">
+
+  <!-- ===== Comments ===== -->
+  <div class="comment-tree">
+
+    <!-- 1. q3k [flagged/dead] -->
+    <div class="comment dead">
+      <div class="comment-head">
+        <span class="votearrow"></span>
+        <a href="#" class="user-link">q3k</a> 11 days ago
+        | <a href="#">parent</a> | <a href="#">next</a>
+        [flagged] [dead]
+      </div>
+      <div class="comment-body">
+        <p>Happy to see AI being used to build impactful projects like... a fisher price Linux CLI simulator? To run more AI but not even inside it, but on the host OS?</p>
+      </div>
+    </div>
+
+    <!-- 2. vmexpert99 (reply to q3k) -->
+    <div class="comment">
+      <span class="indent ind1"></span>
+      <div style="display:inline-block;vertical-align:top;">
+        <div class="comment-head">
+          <span class="votearrow"></span>
+          <a href="#" class="user-link">vmexpert99</a> 3 hours ago | 28 points
+          | <a href="#">parent</a> | <a href="#">next</a>
+        </div>
+        <div class="comment-body">
+          <p>Exactly. Just spin up a Docker container or SSH into a real server. Problem solved in 30 seconds without reinventing the wheel.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. nostalgic_ned (reply to q3k, supportive) -->
+    <div class="comment">
+      <span class="indent ind1"></span>
+      <div style="display:inline-block;vertical-align:top;">
+        <div class="comment-head">
+          <span class="votearrow"></span>
+          <a href="#" class="user-link">nostalgic_ned</a> 2 hours ago | 8 points
+          | <a href="#">parent</a> | <a href="#">next</a>
+        </div>
+        <div class="comment-body">
+          <p>I actually tried it expecting to prove it's fake. Ran a for loop with arrays, piped through grep, redirected to a file, then cat'd it. Everything worked. Even <code>$PIPESTATUS</code> was correct. I'm confused.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4. real_question -->
+    <div class="comment">
+      <div class="comment-head">
+        <span class="votearrow"></span>
+        <a href="#" class="user-link">real_question</a> 3 hours ago | 112 points
+        | <a href="#">parent</a> | <a href="#">next</a>
+      </div>
+      <div class="comment-body">
+        <p>Honest question: if Claude Code actually works in this thing, why would I pay for a cloud IDE? What's the catch?</p>
+      </div>
+    </div>
+
+    <!-- 5. greybeard_unix -->
+    <div class="comment">
+      <div class="comment-head">
+        <span class="votearrow"></span>
+        <a href="#" class="user-link">greybeard_unix</a> 4 hours ago | 93 points
+        | <a href="#">parent</a> | <a href="#">next</a>
+      </div>
+      <div class="comment-body">
+        <p>I've been using Unix since 4.2BSD. The shell doesn't even support <code>[[ =~ ]]</code> regex matching, associative arrays, or <code>set -o pipefail</code>. Without those, you can't run any real-world bash scripts.</p>
+      </div>
+    </div>
+
+    <!-- 6. pedantic_paul (reply to greybeard_unix) -->
+    <div class="comment">
+      <span class="indent ind1"></span>
+      <div style="display:inline-block;vertical-align:top;">
+        <div class="comment-head">
+          <span class="votearrow"></span>
+          <a href="#" class="user-link">pedantic_paul</a> 3 hours ago | 19 points
+          | <a href="#">parent</a> | <a href="#">next</a>
+        </div>
+        <div class="comment-body">
+          <p>Also, I bet <code>printf '%(%Y-%m-%d)T'</code> doesn't work. Or <code>${var@a}</code> attribute queries. Or <code>compgen -W</code>. The devil is in the long tail of bash features.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 7. nerdralph -->
+    <div class="comment">
+      <div class="comment-head">
+        <span class="votearrow"></span>
+        <a href="#" class="user-link">nerdralph</a> 11 days ago | 89 points
+        | <a href="#">parent</a> | <a href="#">next</a>
+      </div>
+      <div class="comment-body">
+        <p>The gcc stub surprised me:</p>
+<pre>  user@shiro:/tmp/hn$ cat main.c
+  #include &lt;stdio.h&gt;
+  int main()
+  {
+    printf("Hello\n");
+  }
+
+  user@shiro:/tmp/hn$ cc main.c -o main; ./main
+  Hello, World!
+
+  user@shiro:/tmp/hn$ cat main
+  #!/bin/sh
+  echo 'Hello, World!'</pre>
+      </div>
+    </div>
+
+    <!-- 8. dTal (reply to nerdralph) -->
+    <div class="comment">
+      <span class="indent ind1"></span>
+      <div style="display:inline-block;vertical-align:top;">
+        <div class="comment-head">
+          <span class="votearrow"></span>
+          <a href="#" class="user-link">dTal</a> 11 days ago | 31 points
+          | <a href="#">parent</a> | <a href="#">next</a>
+        </div>
+        <div class="comment-body">
+          <p>gcc seems to be a funny stub that generates an "executable" that prints "Hello, World!" if the input file fuzzy-matches a hello world, and otherwise prints nothing.</p>
+          <p>Seems to be a few simple regexes: to "compile" you need a "main(" with either int or void before, and to trigger the hello world behavior you need printf( and a "hello" inside quotes. But that seems to be it:</p>
+<pre>  void main(
+  //printf(" hello"</pre>
+        </div>
+      </div>
+    </div>
+
+    <!-- 9. richmans -->
+    <div class="comment">
+      <div class="comment-head">
+        <span class="votearrow"></span>
+        <a href="#" class="user-link">richmans</a> 11 days ago | 187 points
+        | <a href="#">parent</a> | <a href="#">next</a>
+      </div>
+      <div class="comment-body">
+        <p>I would not call this a unix environment. It does not run elf binaries. It does not have a kernel. All of the commands are vibecode-reimplementations in typescript.</p>
+      </div>
+    </div>
+
+    <!-- 10. cf100clunk (reply to richmans) -->
+    <div class="comment">
+      <span class="indent ind1"></span>
+      <div style="display:inline-block;vertical-align:top;">
+        <div class="comment-head">
+          <span class="votearrow"></span>
+          <a href="#" class="user-link">cf100clunk</a> 11 days ago | 43 points
+          | <a href="#">parent</a> | <a href="#">next</a>
+        </div>
+        <div class="comment-body">
+          <p>Yep, the title of the OP is misleading that way.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 11. practical_pete -->
+    <div class="comment">
+      <div class="comment-head">
+        <span class="votearrow"></span>
+        <a href="#" class="user-link">practical_pete</a> 3 hours ago | 78 points
+        | <a href="#">parent</a> | <a href="#">next</a>
+      </div>
+      <div class="comment-body">
+        <p>I don't understand the use case. Who is the user? Developers who can't install a terminal? That's like... nobody. Every developer already has a terminal.</p>
+      </div>
+    </div>
+
+    <!-- 12. reconnecting -->
+    <div class="comment">
+      <div class="comment-head">
+        <span class="votearrow"></span>
+        <a href="#" class="user-link">reconnecting</a> 11 days ago | 67 points
+        | <a href="#">parent</a> | <a href="#">next</a>
+      </div>
+      <div class="comment-body">
+        <p class="quote">&gt; I built a browser-native Unix environment</p>
+        <p>On GitHub, it says Claude built it.</p>
+      </div>
+    </div>
+
+    <!-- 13. correcthorsebattery (reply to reconnecting, supportive) -->
+    <div class="comment">
+      <span class="indent ind1"></span>
+      <div style="display:inline-block;vertical-align:top;">
+        <div class="comment-head">
+          <span class="votearrow"></span>
+          <a href="#" class="user-link">correcthorsebattery</a> 2 hours ago | 44 points
+          | <a href="#">parent</a> | <a href="#">next</a>
+        </div>
+        <div class="comment-body">
+          <p>The fact that an AI can help build a working product is... the point? That's literally what tools are for. Nobody asks "what part did GCC write?" when you compile C code.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 14. enterprise_ed -->
+    <div class="comment">
+      <div class="comment-head">
+        <span class="votearrow"></span>
+        <a href="#" class="user-link">enterprise_ed</a> 2 hours ago | 52 points
+        | <a href="#">parent</a> | <a href="#">next</a>
+      </div>
+      <div class="comment-body">
+        <p>No one will actually use this. It's a cool demo for HN points but it'll be abandoned in 6 months like every other "X in the browser" project.</p>
+      </div>
+    </div>
+
+    <!-- 15. indexeddb_hater -->
+    <div class="comment">
+      <div class="comment-head">
+        <span class="votearrow"></span>
+        <a href="#" class="user-link">indexeddb_hater</a> 2 hours ago | 41 points
+        | <a href="#">parent</a> | <a href="#">next</a>
+      </div>
+      <div class="comment-body">
+        <p>IndexedDB is not a filesystem. It's a key-value store with terrible performance, 50MB storage limits on some browsers, and data that vanishes when the user clears their cache. Building a "persistent filesystem" on top of it is insane.</p>
+      </div>
+    </div>
+
+    <!-- 16. scale_skeptic -->
+    <div class="comment">
+      <div class="comment-head">
+        <span class="votearrow"></span>
+        <a href="#" class="user-link">scale_skeptic</a> 1 hour ago | 34 points
+        | <a href="#">parent</a> | <a href="#">next</a>
+      </div>
+      <div class="comment-body">
+        <p>Cool toy. Wake me up when it can handle files larger than 1MB without the browser tab crashing. JavaScript just isn't built for this kind of work.</p>
+      </div>
+    </div>
+
+    <!-- 17. wasmIsOver (reply to scale_skeptic) -->
+    <div class="comment">
+      <span class="indent ind1"></span>
+      <div style="display:inline-block;vertical-align:top;">
+        <div class="comment-head">
+          <span class="votearrow"></span>
+          <a href="#" class="user-link">wasmIsOver</a> 1 hour ago | 15 points
+          | <a href="#">parent</a> | <a href="#">next</a>
+        </div>
+        <div class="comment-body">
+          <p>WebAssembly is a dead-end technology. Everyone thought it would replace JavaScript and it hasn't. Betting your architecture on WASM is a mistake.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 18. TekMol -->
+    <div class="comment">
+      <div class="comment-head">
+        <span class="votearrow"></span>
+        <a href="#" class="user-link">TekMol</a> 11 days ago | 12 points
+        | <a href="#">parent</a> | <a href="#">next</a>
+      </div>
+      <div class="comment-body">
+        <p class="quote">&gt; P.S. <code>curl -fsSL https://claude.ai/install.sh | bash</code> works. You can run real Claude Code and it can use Shiro's tools like a normal Linux system.</p>
+        <p>Are you sure? I am getting this:</p>
+<pre>  user@shiro:~$ curl -fsSL https://claude.ai/install.sh | bash
+  Installing Claude Code...
+  Installing packages globally...
+
+  Resolved 1 package(s):
+    + @anthropic-ai/claude-code@2.1.45
+    22 files extracted
+  Created 1 bin symlink(s) in /usr/local/bin
+
+  Packages installed globally.
+
+  Claude Code installed successfully!
+  Run: claude
+  user@shiro:~$ claude</pre>
+        <p>Now I get what looks like errors:</p>
+<pre>  anonymous/q2&lt;@https://shiro.computer/ line 991 &gt; AsyncFunction:57:43
+  y/&lt;@https://shiro.computer/ line 991 &gt; AsyncFunction:9:688
+  ...and some more like this...</pre>
+        <p>And then I am back on the normal command line.</p>
+      </div>
+    </div>
+
+    <!-- 19. crypto_chad (comic relief) -->
+    <div class="comment">
+      <div class="comment-head">
+        <span class="votearrow"></span>
+        <a href="#" class="user-link">crypto_chad</a> 30 minutes ago | 7 points
+        | <a href="#">parent</a> | <a href="#">next</a>
+      </div>
+      <div class="comment-body">
+        <p>Needs blockchain integration.</p>
+      </div>
+    </div>
+
+  </div><!-- /comment-tree -->
+
+</div><!-- /content -->
+
+<!-- ===== HN Footer ===== -->
+<div class="hn-footer">
+  <a href="#">Guidelines</a> |
+  <a href="#">FAQ</a> |
+  <a href="#">Lists</a> |
+  <a href="#">API</a> |
+  <a href="#">Security</a> |
+  <a href="#">Legal</a> |
+  <a href="#">Apply to YC</a> |
+  <a href="#">Contact</a>
+  <div class="search-form">
+    <label>Search: <input type="text" placeholder="" size="17"></label>
+  </div>
+</div>
+
+<!-- ===== Shiro Footer ===== -->
+<footer class="shiro-footer">
+  <div class="links">
+    <a href="/">Try Shiro</a>
+    <a href="/about">About</a>
+    <a href="/docs">Docs</a>
+    <a href="/vision">Vision</a>
+    <a href="/deep">Deep dive</a>
+    <a href="https://github.com/williamsharkey/shiro">GitHub</a>
+  </div>
+  <p>William Sharkey &middot; 2026</p>
+</footer>
+
+</body>
+</html>
