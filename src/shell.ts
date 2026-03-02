@@ -12,8 +12,9 @@ async function loadWasiRuntime() {
 }
 
 interface Redirect {
-  type: '>' | '>>' | '<' | '2>' | '2>>' | '2>&1';
+  type: '>' | '>>' | '<' | '2>' | '2>>' | '2>&1' | '>&-';
   target: string;
+  fd?: number;
 }
 
 export interface BackgroundJob {
@@ -22,6 +23,7 @@ export interface BackgroundJob {
   promise: Promise<number>;
   status: 'running' | 'done' | 'failed';
   exitCode: number;
+  abortController?: AbortController;
 }
 
 // Env var names whose values should be masked in terminal output
@@ -78,6 +80,14 @@ export class Shell {
   shoptopts: Set<string> = new Set();
   /** Programmable completion specs: command name → spec */
   completionSpecs: Map<string, CompletionSpec> = new Map();
+  /** Builtins disabled via `enable -n` */
+  disabledBuiltins: Set<string> = new Set();
+  /** File descriptors for `read -u FD` and `exec N< file` */
+  fileDescriptors: Map<number, { content: string; offset: number }> = new Map();
+  /** Coproc state: { name, pid, output } */
+  coproc: { name: string; pid: number; output: string } | null = null;
+  /** Abort controller for the currently running command (SIGINT) */
+  abortController: AbortController | null = null;
   /** Current line number for LINENO tracking */
   currentLine: number = 1;
   /** Depth of execute() recursion — only top-level resets LINENO */
@@ -255,6 +265,8 @@ export class Shell {
     const isTopLevel = this.executeDepth === 1;
     if (isTopLevel) {
       this.currentLine = 1;
+      // Set up abort controller for SIGINT (Ctrl+C)
+      this.abortController = new AbortController();
     }
 
     // Record command for title display
@@ -265,6 +277,7 @@ export class Shell {
       const bgCmd = trimmed.slice(0, -1).trim();
       if (bgCmd) {
         this.executeDepth--;
+        if (isTopLevel) this.abortController = null;
         return this.executeBackground(bgCmd, writeStdout, writeStderr);
       }
     }
@@ -292,6 +305,7 @@ export class Shell {
       this.lastExitCode = lastExit;
       this.env['?'] = String(lastExit);
       this.executeDepth--;
+      if (isTopLevel) this.abortController = null;
       return lastExit;
     }
 
@@ -317,6 +331,7 @@ export class Shell {
     if (funcDef) {
       this.functions[funcDef.name] = { body: funcDef.body };
       this.executeDepth--;
+      if (isTopLevel) this.abortController = null;
       return 0;
     }
 
@@ -404,6 +419,14 @@ export class Shell {
       const pipeExitCodes: number[] = [];
 
       for (let i = 0; i < pipeline.length; i++) {
+        // Check for SIGINT (abort)
+        if (this.abortController?.signal.aborted) {
+          exitCode = 130; // 128 + SIGINT(2)
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          break;
+        }
+
         const segment = pipeline[i];
 
         // Check if this pipeline segment is a control structure (e.g. `echo foo | while ...`)
@@ -597,8 +620,12 @@ export class Shell {
           continue;
         }
 
+        // Check if this builtin has been disabled via `enable -n`
+        // If disabled, skip the builtin dispatch and fall through to external command lookup
+        const _builtinDisabled = this.disabledBuiltins.has(effectiveCmdName);
+
         // Shell builtin: time — measure command execution time
-        if (effectiveCmdName === 'time') {
+        if (!_builtinDisabled && effectiveCmdName === 'time') {
           const timeCmd = cmdArgs.join(' ');
           const start = performance.now();
           if (timeCmd) {
@@ -617,7 +644,7 @@ export class Shell {
         }
 
         // Shell builtin: caller — print call stack info
-        if (effectiveCmdName === 'caller') {
+        if (!_builtinDisabled && effectiveCmdName === 'caller') {
           const frameNum = cmdArgs.length > 0 ? parseInt(cmdArgs[0], 10) : 0;
           if (this.callStack.length > frameNum) {
             const frame = this.callStack[this.callStack.length - 1 - frameNum];
@@ -633,7 +660,7 @@ export class Shell {
         }
 
         // Shell builtins: eval, setopt, shopt
-        if (effectiveCmdName === 'eval') {
+        if (!_builtinDisabled && effectiveCmdName === 'eval') {
           // Execute remaining args as a shell command
           const evalCmd = cmdArgs.join(' ');
           if (evalCmd) {
@@ -644,11 +671,11 @@ export class Shell {
           lastOutput = '';
           continue;
         }
-        if (effectiveCmdName === 'setopt') {
+        if (!_builtinDisabled && effectiveCmdName === 'setopt') {
           // zsh shell options — no-op in Shiro
           continue;
         }
-        if (effectiveCmdName === 'shopt') {
+        if (!_builtinDisabled && effectiveCmdName === 'shopt') {
           const allShopts = ['extglob', 'nocaseglob', 'nullglob', 'dotglob', 'globstar',
             'failglob', 'nocasematch', 'lastpipe', 'expand_aliases', 'sourcepath',
             'checkwinsize', 'histappend', 'cmdhist', 'lithist', 'xpg_echo'];
@@ -690,7 +717,7 @@ export class Shell {
           lastOutput = '';
           continue;
         }
-        if (effectiveCmdName === 'declare' || effectiveCmdName === 'typeset' || effectiveCmdName === 'local') {
+        if (!_builtinDisabled && (effectiveCmdName === 'declare' || effectiveCmdName === 'typeset' || effectiveCmdName === 'local')) {
           // declare -n ref=target → nameref
           if (cmdArgs.includes('-n')) {
             for (const arg of cmdArgs) {
@@ -767,12 +794,14 @@ export class Shell {
         }
 
         // Shell builtin: read
-        if (effectiveCmdName === 'read') {
-          // Parse flags: -r (raw), -a (array), -p (prompt), -d (delimiter), -n (nchars), -s (silent)
+        if (!_builtinDisabled && effectiveCmdName === 'read') {
+          // Parse flags: -r (raw), -a (array), -p (prompt), -d (delimiter), -n (nchars), -s (silent), -t (timeout), -u (fd)
           let rawMode = false;
           let arrayMode = false;
           let readDelim = '\n';
           let readNchars = -1;
+          let readTimeout = -1;
+          let readFd = -1;
           const readVars: string[] = [];
           for (let ri = 0; ri < cmdArgs.length; ri++) {
             const a = cmdArgs[ri];
@@ -784,15 +813,40 @@ export class Shell {
             else if (a === '-n' && ri + 1 < cmdArgs.length) { readNchars = parseInt(cmdArgs[++ri], 10) || -1; }
             else if (a.startsWith('-n') && a.length > 2) { readNchars = parseInt(a.slice(2), 10) || -1; }
             else if (a.startsWith('-d') && a.length > 2) { readDelim = a.slice(2); }
+            else if (a === '-t' && ri + 1 < cmdArgs.length) { readTimeout = parseFloat(cmdArgs[++ri]) || 0; }
+            else if (a.startsWith('-t') && a.length > 2) { readTimeout = parseFloat(a.slice(2)) || 0; }
+            else if (a === '-u' && ri + 1 < cmdArgs.length) { readFd = parseInt(cmdArgs[++ri], 10); }
+            else if (a.startsWith('-u') && a.length > 2) { readFd = parseInt(a.slice(2), 10); }
             else if (!a.startsWith('-')) readVars.push(a);
           }
-          // Read one line from stdin — prefer piped stdin (__PIPE_STDIN), then pipe, then heredoc
+          // Read one line from stdin — prefer FD, piped stdin (__PIPE_STDIN), then pipe, then heredoc
           let readInput = '';
           const hasPipeStdin = '__PIPE_STDIN' in this.env;
-          if (hasPipeStdin) {
+          if (readFd >= 0 && this.fileDescriptors.has(readFd)) {
+            // Read from file descriptor
+            const fd = this.fileDescriptors.get(readFd)!;
+            readInput = fd.content.slice(fd.offset);
+          } else if (hasPipeStdin) {
             readInput = this.env['__PIPE_STDIN'];
           } else {
             readInput = i > 0 ? lastOutput : (heredocStdin || '');
+          }
+          // Handle -t 0: check if input is available (non-blocking)
+          if (readTimeout === 0) {
+            exitCode = readInput.length > 0 ? 0 : 1;
+            this.lastExitCode = exitCode;
+            this.env['?'] = String(exitCode);
+            lastOutput = '';
+            continue;
+          }
+          // Handle -t N: timeout (for non-piped/non-interactive, just check availability)
+          if (readTimeout > 0 && !readInput) {
+            // No input available and timeout specified → exit 142 (128 + SIGALRM(14))
+            exitCode = 142;
+            this.lastExitCode = exitCode;
+            this.env['?'] = String(exitCode);
+            lastOutput = '';
+            continue;
           }
           let readLine: string;
           let remaining: string;
@@ -809,8 +863,11 @@ export class Shell {
               remaining = '';
             }
           }
-          // Consume the line from __PIPE_STDIN so next read gets the next line
-          if (hasPipeStdin) {
+          // Consume the line from source so next read gets the next line
+          if (readFd >= 0 && this.fileDescriptors.has(readFd)) {
+            const fd = this.fileDescriptors.get(readFd)!;
+            fd.offset = fd.content.length - remaining.length;
+          } else if (hasPipeStdin) {
             this.env['__PIPE_STDIN'] = remaining;
           }
           const processed = rawMode ? readLine : readLine.replace(/\\(.)/g, '$1');
@@ -851,17 +908,21 @@ export class Shell {
         }
 
         // Shell builtin: mapfile / readarray
-        if (effectiveCmdName === 'mapfile' || effectiveCmdName === 'readarray') {
-          // Parse flags: -t (strip), -d (delimiter), -s (skip N lines), -n (count)
+        if (!_builtinDisabled && (effectiveCmdName === 'mapfile' || effectiveCmdName === 'readarray')) {
+          // Parse flags: -t (strip), -d (delimiter), -s (skip N lines), -n (count), -C callback, -c quantum
           let mapDelim = '\n';
           let mapSkip = 0;
           let mapCount = -1;
+          let mapCallback = '';
+          let mapQuantum = 5000;
           let arrName = 'MAPFILE';
           for (let mi = 0; mi < cmdArgs.length; mi++) {
             if (cmdArgs[mi] === '-d' && mi + 1 < cmdArgs.length) { mapDelim = cmdArgs[++mi]; }
             else if (cmdArgs[mi].startsWith('-d') && cmdArgs[mi].length > 2) { mapDelim = cmdArgs[mi].slice(2); }
             else if (cmdArgs[mi] === '-s' && mi + 1 < cmdArgs.length) { mapSkip = parseInt(cmdArgs[++mi], 10) || 0; }
             else if (cmdArgs[mi] === '-n' && mi + 1 < cmdArgs.length) { mapCount = parseInt(cmdArgs[++mi], 10) || -1; }
+            else if (cmdArgs[mi] === '-C' && mi + 1 < cmdArgs.length) { mapCallback = cmdArgs[++mi]; }
+            else if (cmdArgs[mi] === '-c' && mi + 1 < cmdArgs.length) { mapQuantum = parseInt(cmdArgs[++mi], 10) || 5000; }
             else if (cmdArgs[mi] === '-t') { /* strip - already default */ }
             else if (!cmdArgs[mi].startsWith('-')) { arrName = cmdArgs[mi]; }
           }
@@ -881,6 +942,14 @@ export class Shell {
           // Apply count
           if (mapCount >= 0) lines = lines.slice(0, mapCount);
           this.arrays.set(arrName, lines);
+          // Invoke -C callback every -c quantum lines
+          if (mapCallback && this.functions[mapCallback]) {
+            for (let li = 0; li < lines.length; li++) {
+              if ((li % mapQuantum) === 0) {
+                await this.execFunction(mapCallback, [String(li), lines[li]], writeStdout, stderrWriter);
+              }
+            }
+          }
           exitCode = 0;
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
@@ -905,7 +974,7 @@ export class Shell {
         }
 
         // Shell builtin: trap
-        if (effectiveCmdName === 'trap') {
+        if (!_builtinDisabled && effectiveCmdName === 'trap') {
           if (cmdArgs.length === 0 || (cmdArgs.length === 1 && cmdArgs[0] === '-p')) {
             // List all traps
             for (const [sig, cmd] of this.traps) {
@@ -963,7 +1032,7 @@ export class Shell {
         }
 
         // Shell builtin: fc (fix command — list/re-execute history)
-        if (effectiveCmdName === 'fc') {
+        if (!_builtinDisabled && effectiveCmdName === 'fc') {
           let listMode = false;
           let reverseMode = false;
           let reExecMode = false;
@@ -1039,7 +1108,7 @@ export class Shell {
         }
 
         // Shell builtins: type, command -v, hash
-        if (effectiveCmdName === 'type') {
+        if (!_builtinDisabled && effectiveCmdName === 'type') {
           for (const name of cmdArgs) {
             if (name in this.functions) {
               writeStdout(`${name} is a function\r\n`);
@@ -1062,7 +1131,7 @@ export class Shell {
           lastOutput = '';
           continue;
         }
-        if (effectiveCmdName === 'command') {
+        if (!_builtinDisabled && effectiveCmdName === 'command') {
           if (cmdArgs[0] === '-v') {
             // command -v: like which
             for (const name of cmdArgs.slice(1)) {
@@ -1085,7 +1154,7 @@ export class Shell {
           // command NAME args: execute command bypassing functions
           // Just fall through to normal execution
         }
-        if (effectiveCmdName === 'hash') {
+        if (!_builtinDisabled && effectiveCmdName === 'hash') {
           // hash -r: clear hash table (no-op, we don't cache)
           writeStdout('hash: hash table empty\r\n');
           exitCode = 0;
@@ -1096,7 +1165,7 @@ export class Shell {
         }
 
         // Shell builtin: printf FORMAT [ARGS...]
-        if (effectiveCmdName === 'printf') {
+        if (!_builtinDisabled && effectiveCmdName === 'printf') {
           if (cmdArgs.length === 0) {
             stderrWriter('printf: usage: printf format [arguments]\r\n');
             exitCode = 1;
@@ -1224,7 +1293,7 @@ export class Shell {
         }
 
         // Shell builtin: getopts OPTSTRING VAR [args...]
-        if (effectiveCmdName === 'getopts') {
+        if (!_builtinDisabled && effectiveCmdName === 'getopts') {
           if (cmdArgs.length < 2) {
             stderrWriter('getopts: usage: getopts optstring name [arg ...]\r\n');
             exitCode = 1;
@@ -1298,7 +1367,7 @@ export class Shell {
         }
 
         // Shell builtin: alias / unalias
-        if (effectiveCmdName === 'alias') {
+        if (!_builtinDisabled && effectiveCmdName === 'alias') {
           if (cmdArgs.length === 0) {
             // List all aliases
             for (const [name, value] of this.aliases) {
@@ -1325,7 +1394,7 @@ export class Shell {
           lastOutput = '';
           continue;
         }
-        if (effectiveCmdName === 'unalias') {
+        if (!_builtinDisabled && effectiveCmdName === 'unalias') {
           if (cmdArgs.length === 0) {
             stderrWriter('unalias: usage: unalias [-a] name ...\r\n');
             exitCode = 1;
@@ -1346,7 +1415,7 @@ export class Shell {
         }
 
         // Shell builtin: pushd / popd / dirs
-        if (effectiveCmdName === 'pushd') {
+        if (!_builtinDisabled && effectiveCmdName === 'pushd') {
           if (cmdArgs.length === 0) {
             // Swap top two entries
             if (this.dirStack.length === 0) {
@@ -1386,7 +1455,7 @@ export class Shell {
           lastOutput = '';
           continue;
         }
-        if (effectiveCmdName === 'popd') {
+        if (!_builtinDisabled && effectiveCmdName === 'popd') {
           if (this.dirStack.length === 0) {
             stderrWriter('popd: directory stack empty\r\n');
             exitCode = 1;
@@ -1401,7 +1470,7 @@ export class Shell {
           lastOutput = '';
           continue;
         }
-        if (effectiveCmdName === 'dirs') {
+        if (!_builtinDisabled && effectiveCmdName === 'dirs') {
           const stack = [this.cwd, ...this.dirStack.slice().reverse()];
           writeStdout(stack.join(' ') + '\r\n');
           this.lastExitCode = 0;
@@ -1411,7 +1480,7 @@ export class Shell {
         }
 
         // Shell builtin: let "expr" — evaluate arithmetic, return 1 if result is 0
-        if (effectiveCmdName === 'let') {
+        if (!_builtinDisabled && effectiveCmdName === 'let') {
           if (cmdArgs.length === 0) {
             stderrWriter('let: usage: let expression\r\n');
             exitCode = 1;
@@ -1429,7 +1498,7 @@ export class Shell {
         }
 
         // Shell builtin: shift — shift positional parameters
-        if (effectiveCmdName === 'shift') {
+        if (!_builtinDisabled && effectiveCmdName === 'shift') {
           const n = cmdArgs.length > 0 ? parseInt(cmdArgs[0], 10) : 1;
           if (isNaN(n) || n < 0) {
             stderrWriter('shift: numeric argument required\r\n');
@@ -1458,7 +1527,7 @@ export class Shell {
         }
 
         // Shell builtin: unset — remove variables or functions
-        if (effectiveCmdName === 'unset') {
+        if (!_builtinDisabled && effectiveCmdName === 'unset') {
           let unsetFunc = false;
           const unsetNames: string[] = [];
           for (const arg of cmdArgs) {
@@ -1506,7 +1575,7 @@ export class Shell {
         }
 
         // Shell builtin: readonly — mark variables as readonly
-        if (effectiveCmdName === 'readonly') {
+        if (!_builtinDisabled && effectiveCmdName === 'readonly') {
           exitCode = 0;
           if (cmdArgs.length === 0 || (cmdArgs.length === 1 && cmdArgs[0] === '-p')) {
             // List readonly variables
@@ -1540,7 +1609,7 @@ export class Shell {
         }
 
         // Shell builtin: export — set/list exported variables
-        if (effectiveCmdName === 'export') {
+        if (!_builtinDisabled && effectiveCmdName === 'export') {
           exitCode = 0;
           if (cmdArgs.length === 0 || (cmdArgs.length === 1 && cmdArgs[0] === '-p')) {
             const lines = Object.entries(this.env)
@@ -1567,7 +1636,7 @@ export class Shell {
         }
 
         // Shell builtin: set -- args (positional parameter assignment)
-        if (effectiveCmdName === 'set') {
+        if (!_builtinDisabled && effectiveCmdName === 'set') {
           // Check for -- to set positional parameters
           const ddIdx = cmdArgs.indexOf('--');
           if (ddIdx >= 0) {
@@ -1626,7 +1695,7 @@ export class Shell {
         }
 
         // Shell builtin: source / . — execute script in current shell scope
-        if (effectiveCmdName === 'source') {
+        if (!_builtinDisabled && effectiveCmdName === 'source') {
           if (cmdArgs.length === 0) {
             stderrWriter('source: filename argument required\r\n');
             exitCode = 1;
@@ -1655,12 +1724,25 @@ export class Shell {
         }
 
         // Shell builtin: exec — replace shell with command (in browser, just execute)
-        if (effectiveCmdName === 'exec') {
+        if (!_builtinDisabled && effectiveCmdName === 'exec') {
+          // Handle FD redirects: exec N< file, exec N> file, exec N<&-
+          for (const redir of redirects) {
+            if (redir.fd !== undefined && redir.type === '<') {
+              try {
+                const content = await this.fs.readFile(this.fs.resolvePath(redir.target, this.cwd), 'utf8') as string;
+                this.fileDescriptors.set(redir.fd, { content, offset: 0 });
+              } catch (e: any) {
+                stderrWriter(`shiro: ${redir.target}: ${e.message}\r\n`);
+                exitCode = 1;
+              }
+            } else if (redir.fd !== undefined && redir.type === '>&-') {
+              this.fileDescriptors.delete(redir.fd);
+            }
+          }
           if (cmdArgs.length > 0) {
             const execCmd = cmdArgs.join(' ');
             exitCode = await this.execute(execCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
           }
-          // exec with no args can be used for fd redirects only (handled by redirect processing)
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
           lastOutput = '';
@@ -1668,7 +1750,7 @@ export class Shell {
         }
 
         // Shell builtin: builtin — run builtin ignoring functions
-        if (effectiveCmdName === 'builtin') {
+        if (!_builtinDisabled && effectiveCmdName === 'builtin') {
           if (cmdArgs.length > 0) {
             const builtinCmd = cmdArgs.join(' ');
             // Temporarily remove function override
@@ -1684,7 +1766,7 @@ export class Shell {
         }
 
         // Shell stubs for commonly expected builtins (no-ops that scripts depend on)
-        if (effectiveCmdName === 'ulimit') {
+        if (!_builtinDisabled && effectiveCmdName === 'ulimit') {
           // ulimit -n → file descriptor limit, etc.
           if (cmdArgs.includes('-n')) { writeStdout('1024\r\n'); }
           else if (cmdArgs.includes('-s')) { writeStdout('8192\r\n'); }
@@ -1694,7 +1776,7 @@ export class Shell {
           lastOutput = '';
           continue;
         }
-        if (effectiveCmdName === 'umask') {
+        if (!_builtinDisabled && effectiveCmdName === 'umask') {
           if (cmdArgs.length === 0) {
             writeStdout('0022\r\n');
           }
@@ -1703,14 +1785,72 @@ export class Shell {
           lastOutput = '';
           continue;
         }
-        if (effectiveCmdName === 'compopt' || effectiveCmdName === 'enable') {
-          // Bash completion stubs — silent no-op
+        if (!_builtinDisabled && effectiveCmdName === 'compopt') {
+          // Bash completion stub — silent no-op
           this.lastExitCode = 0;
           this.env['?'] = '0';
           lastOutput = '';
           continue;
         }
-        if (effectiveCmdName === 'complete') {
+        if (effectiveCmdName === 'enable') {
+          // enable [-n] [-a] [-p] [name ...]
+          // -n: disable builtins, -a: print all (enabled+disabled), -p: print in reusable format
+          let disableMode = false;
+          let printAll = false;
+          let printMode = false;
+          const names: string[] = [];
+          for (const a of cmdArgs) {
+            if (a === '-n') disableMode = true;
+            else if (a === '-a') printAll = true;
+            else if (a === '-p') printMode = true;
+            else if (!a.startsWith('-')) names.push(a);
+          }
+          // List of all shell builtins
+          const allBuiltins = [
+            '.', ':', '[', 'alias', 'bg', 'bind', 'break', 'builtin', 'caller',
+            'cd', 'command', 'compgen', 'complete', 'compopt', 'continue',
+            'declare', 'dirs', 'disown', 'echo', 'enable', 'eval', 'exec',
+            'exit', 'export', 'false', 'fc', 'fg', 'getopts', 'hash', 'help',
+            'history', 'jobs', 'kill', 'let', 'local', 'logout', 'mapfile',
+            'popd', 'printf', 'pushd', 'pwd', 'read', 'readarray', 'readonly',
+            'return', 'select', 'set', 'shift', 'shopt', 'source', 'test',
+            'time', 'trap', 'true', 'type', 'typeset', 'ulimit', 'umask',
+            'unalias', 'unset', 'wait',
+          ];
+          if (names.length === 0) {
+            // Print mode
+            if (printAll || printMode) {
+              for (const b of allBuiltins) {
+                const disabled = this.disabledBuiltins.has(b);
+                if (printAll || !disabled) {
+                  writeStdout(`enable ${disabled ? '-n ' : ''}${b}\r\n`);
+                }
+              }
+            } else {
+              // Default: show enabled builtins
+              for (const b of allBuiltins) {
+                if (!this.disabledBuiltins.has(b)) {
+                  writeStdout(`enable ${b}\r\n`);
+                }
+              }
+            }
+          } else {
+            // Enable or disable named builtins
+            for (const name of names) {
+              if (disableMode) {
+                this.disabledBuiltins.add(name);
+              } else {
+                this.disabledBuiltins.delete(name);
+              }
+            }
+          }
+          exitCode = 0;
+          this.lastExitCode = 0;
+          this.env['?'] = '0';
+          lastOutput = '';
+          continue;
+        }
+        if (!_builtinDisabled && effectiveCmdName === 'complete') {
           // Programmable completion: parse and store specs
           let spec: CompletionSpec = {};
           let printMode = false;
@@ -1764,7 +1904,7 @@ export class Shell {
           lastOutput = '';
           continue;
         }
-        if (effectiveCmdName === 'compgen') {
+        if (!_builtinDisabled && effectiveCmdName === 'compgen') {
           let words: string[] = [];
           let prefix = '';
           const builtinNames = ['cd', 'echo', 'read', 'eval', 'set', 'export', 'source', 'shift',
@@ -1835,7 +1975,41 @@ export class Shell {
           lastOutput = '';
           continue;
         }
-        if (effectiveCmdName === 'disown') {
+        if (!_builtinDisabled && effectiveCmdName === 'coproc') {
+          // coproc [NAME] command — run command as coprocess
+          // NAME is only recognized if it's an uppercase identifier AND there are further args
+          let coprocName = 'COPROC';
+          let coprocCmd: string;
+          if (cmdArgs.length >= 2 && /^[A-Z_][A-Z0-9_]*$/.test(cmdArgs[0])) {
+            coprocName = cmdArgs[0];
+            coprocCmd = cmdArgs.slice(1).join(' ');
+          } else {
+            coprocCmd = cmdArgs.join(' ');
+          }
+          // Execute command and capture output
+          let coprocOutput = '';
+          const coprocPid = this.nextJobId++;
+          const coprocPromise = this.execute(coprocCmd, (s: string) => { coprocOutput += s; }, stderrWriter)
+            .then((code) => {
+              // Store output in the coproc array
+              this.coproc = { name: coprocName, pid: coprocPid, output: coprocOutput };
+              this.arrays.set(coprocName, [coprocOutput.replace(/\r\n/g, '\n').trimEnd()]);
+              this.env[`${coprocName}_PID`] = String(coprocPid);
+              return code;
+            });
+          // Register as background job
+          const job: BackgroundJob = { id: coprocPid, command: `coproc ${coprocCmd}`, promise: coprocPromise, status: 'running', exitCode: 0 };
+          this.backgroundJobs.set(coprocPid, job);
+          coprocPromise.then((code) => { job.status = 'done'; job.exitCode = code; });
+          this.env[`${coprocName}_PID`] = String(coprocPid);
+          writeStdout(`[${coprocPid}] coproc started\r\n`);
+          exitCode = 0;
+          this.lastExitCode = 0;
+          this.env['?'] = '0';
+          lastOutput = '';
+          continue;
+        }
+        if (!_builtinDisabled && effectiveCmdName === 'disown') {
           // disown: remove jobs from job table
           if (cmdArgs.length === 0 || cmdArgs.includes('-a')) {
             // Remove all jobs (or current job)
@@ -2105,6 +2279,9 @@ export class Shell {
     }
 
     this.executeDepth--;
+    if (isTopLevel) {
+      this.abortController = null;
+    }
     return exitCode;
   }
 
@@ -3104,6 +3281,15 @@ export class Shell {
       } else if ((tokens[i] === '>' || tokens[i] === '>>' || tokens[i] === '<' || tokens[i] === '2>' || tokens[i] === '2>>') && i + 1 < tokens.length) {
         redirects.push({ type: tokens[i] as Redirect['type'], target: tokens[i + 1].replace(/\x01/g, '') });
         i++;
+      } else if (/^\d+<$/.test(tokens[i]) && i + 1 < tokens.length) {
+        // FD redirect: N< file
+        const fd = parseInt(tokens[i], 10);
+        redirects.push({ type: '<', target: tokens[i + 1].replace(/\x01/g, ''), fd });
+        i++;
+      } else if (/^\d+>&-$/.test(tokens[i])) {
+        // Close FD: N>&-
+        const fd = parseInt(tokens[i], 10);
+        redirects.push({ type: '>&-', target: '', fd });
       } else {
         args.push(tokens[i]);
       }
@@ -3254,6 +3440,13 @@ export class Shell {
 
       // Handle >>, >| and > redirects (>| is zsh clobber, treated as >)
       if (ch === '>' && !inSingle && !inDouble) {
+        // FD close: N>&- (current is digits)
+        if (current && /^\d+$/.test(current) && input[i + 1] === '&' && input[i + 2] === '-') {
+          tokens.push(current + '>&-');
+          current = '';
+          i += 3;
+          continue;
+        }
         if (current) { tokens.push(current); current = ''; }
         if (input[i + 1] === '>') {
           tokens.push('>>');
@@ -3290,6 +3483,13 @@ export class Shell {
           if (current) { tokens.push(current); current = ''; }
           tokens.push(procSub);
           i = j;
+          continue;
+        }
+        // FD redirect: N< file (current is digits)
+        if (current && /^\d+$/.test(current)) {
+          tokens.push(current + '<');
+          current = '';
+          i++;
           continue;
         }
         if (current) { tokens.push(current); current = ''; }
@@ -4490,7 +4690,17 @@ export class Shell {
       }
     }
 
-    // Reject other binary files (ELF, Mach-O, etc.) that can't be interpreted
+    // Detect ELF binaries → run in x86-64 emulator
+    if (content.charCodeAt(0) === 0x7f && content.charCodeAt(1) === 0x45 /* E */ &&
+        content.charCodeAt(2) === 0x4c /* L */ && content.charCodeAt(3) === 0x46 /* F */) {
+      const { executeElf } = await import('./x86/runtime');
+      return executeElf(resolvedPath, args, {
+        fs: this.fs, cwd: this.cwd, args, env: this.env,
+        stdin: '', writeStdout: writeStdout, writeStderr: writeStderr,
+      });
+    }
+
+    // Reject other binary files (Mach-O, etc.) that can't be interpreted
     if (content.charCodeAt(0) === 0x7f || content.includes('\0')) {
       writeStderr(`shiro: ${resolvedPath}: cannot execute binary file\n`);
       return 126;

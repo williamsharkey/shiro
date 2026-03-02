@@ -2938,4 +2938,248 @@ describe('Shell Advanced', () => {
       expect(output).toContain('-F _my_completer');
     });
   });
+
+  // ─── Stage 1a: enable builtin ──────────────────────────────────────────────
+
+  describe('enable builtin', () => {
+    it('enable with no args lists all enabled builtins', async () => {
+      const { output } = await run(shell, 'enable');
+      expect(output).toContain('enable echo');
+      expect(output).toContain('enable read');
+      expect(output).toContain('enable eval');
+    });
+
+    it('enable -n disables a builtin', async () => {
+      await run(shell, 'enable -n echo');
+      expect(shell.disabledBuiltins.has('echo')).toBe(true);
+    });
+
+    it('enable (without -n) re-enables a disabled builtin', async () => {
+      await run(shell, 'enable -n echo');
+      expect(shell.disabledBuiltins.has('echo')).toBe(true);
+      await run(shell, 'enable echo');
+      expect(shell.disabledBuiltins.has('echo')).toBe(false);
+    });
+
+    it('enable -a prints all builtins including disabled ones', async () => {
+      await run(shell, 'enable -n printf');
+      const { output } = await run(shell, 'enable -a');
+      expect(output).toContain('enable -n printf');
+      expect(output).toContain('enable echo');
+    });
+
+    it('disabled builtin falls through to external command lookup', async () => {
+      await run(shell, 'enable -n echo');
+      // echo is also registered as a command (via unixCommands), so it should still work
+      const { output } = await run(shell, 'echo hello');
+      expect(output).toContain('hello');
+    });
+  });
+
+  // ─── Stage 1b: read -t timeout ────────────────────────────────────────────
+
+  describe('read -t timeout', () => {
+    it('read -t 0 returns 0 when input is available', async () => {
+      const { exitCode } = await run(shell, 'echo data | read -t 0 x');
+      expect(exitCode).toBe(0);
+    });
+
+    it('read -t 0 returns 1 when no input is available', async () => {
+      const { exitCode } = await run(shell, 'read -t 0 x');
+      expect(exitCode).toBe(1);
+    });
+
+    it('read -t N times out with exit 142 when no input', async () => {
+      const { exitCode } = await run(shell, 'read -t 1 x');
+      expect(exitCode).toBe(142);
+    });
+
+    it('read -tN compact form works', async () => {
+      const { exitCode } = await run(shell, 'read -t0 x');
+      expect(exitCode).toBe(1);
+    });
+
+    it('read -t with piped input reads normally', async () => {
+      await run(shell, 'echo hello | read -t 1 x');
+      expect(shell.env['x']).toBe('hello');
+    });
+  });
+
+  // ─── Stage 1c: mapfile -C callback ────────────────────────────────────────
+
+  describe('mapfile -C callback', () => {
+    it('mapfile -C invokes callback function', async () => {
+      await fs.writeFile('/tmp/cb.txt', 'a\nb\nc\n');
+      await run(shell, 'callback() { echo "called:$1:$2"; }');
+      const { output } = await run(shell, 'cat /tmp/cb.txt | mapfile -C callback -c 1 arr');
+      expect(output).toContain('called:0:a');
+      expect(output).toContain('called:1:b');
+      expect(output).toContain('called:2:c');
+    });
+
+    it('mapfile -C with default quantum 5000 calls once', async () => {
+      await fs.writeFile('/tmp/cb2.txt', 'a\nb\nc\n');
+      await run(shell, 'counter() { echo "idx:$1"; }');
+      const { output } = await run(shell, 'cat /tmp/cb2.txt | mapfile -C counter arr');
+      // Default quantum is 5000, only index 0 matches (0 % 5000 === 0)
+      expect(output).toContain('idx:0');
+      expect(output).not.toContain('idx:1');
+    });
+
+    it('mapfile still populates array with -C', async () => {
+      await fs.writeFile('/tmp/cb3.txt', 'x\ny\nz\n');
+      await run(shell, 'noop() { :; }');
+      await run(shell, 'cat /tmp/cb3.txt | mapfile -C noop -c 1 arr');
+      const arr = shell.arrays.get('arr');
+      expect(arr).toEqual(['x', 'y', 'z']);
+    });
+  });
+
+  // ─── Stage 1d: read -u FD ─────────────────────────────────────────────────
+
+  describe('read -u FD', () => {
+    it('reads from file descriptor opened with exec', async () => {
+      await fs.writeFile('/home/user/fdtest.txt', 'line1\nline2\nline3\n');
+      await run(shell, 'exec 3< fdtest.txt');
+      await run(shell, 'read -u 3 first');
+      expect(shell.env['first']).toBe('line1');
+      await run(shell, 'read -u 3 second');
+      expect(shell.env['second']).toBe('line2');
+    });
+
+    it('read -u with compact form works', async () => {
+      await fs.writeFile('/home/user/fdtest2.txt', 'hello\n');
+      await run(shell, 'exec 4< fdtest2.txt');
+      await run(shell, 'read -u4 val');
+      expect(shell.env['val']).toBe('hello');
+    });
+  });
+
+  // ─── Stage 1e: coproc ─────────────────────────────────────────────────────
+
+  describe('coproc', () => {
+    it('coproc starts a background process', async () => {
+      const { output } = await run(shell, 'coproc echo hello');
+      expect(output).toContain('coproc started');
+      expect(shell.env['COPROC_PID']).toBeDefined();
+    });
+
+    it('coproc with name sets NAME_PID', async () => {
+      const { output } = await run(shell, 'coproc MYPROC echo world');
+      expect(output).toContain('coproc started');
+      expect(shell.env['MYPROC_PID']).toBeDefined();
+    });
+  });
+
+  // Stage 2b: Process table robustness — kill command
+  describe('kill command', () => {
+    it('kill -l lists signals', async () => {
+      const { output, exitCode } = await run(shell, 'kill -l');
+      expect(exitCode).toBe(0);
+      expect(output).toContain('HUP');
+      expect(output).toContain('TERM');
+      expect(output).toContain('INT');
+    });
+
+    it('kill -L lists signals with numbers', async () => {
+      const { output, exitCode } = await run(shell, 'kill -L');
+      expect(exitCode).toBe(0);
+      expect(output).toContain('1) SIGHUP');
+      expect(output).toContain('15) SIGTERM');
+    });
+
+    it('kill with no args shows usage', async () => {
+      const { exitCode } = await run(shell, 'kill');
+      expect(exitCode).toBe(1);
+    });
+
+    it('kill non-existent PID fails', async () => {
+      const { exitCode } = await run(shell, 'kill 99999');
+      expect(exitCode).toBe(1);
+    });
+
+    it('kill non-existent job spec fails', async () => {
+      const { exitCode } = await run(shell, 'kill %99');
+      expect(exitCode).toBe(1);
+    });
+  });
+
+  // Stage 2c: /proc virtual filesystem
+  describe('/proc virtual filesystem', () => {
+    it('cat /proc/version shows Linux version', async () => {
+      const { output, exitCode } = await run(shell, 'cat /proc/version');
+      expect(exitCode).toBe(0);
+      expect(output).toContain('Linux version 6.1.0-shiro');
+    });
+
+    it('cat /proc/uptime returns uptime', async () => {
+      const { output, exitCode } = await run(shell, 'cat /proc/uptime');
+      expect(exitCode).toBe(0);
+      // Should be a number like "0.12 0.12"
+      expect(output).toMatch(/\d+\.\d+ \d+\.\d+/);
+    });
+
+    it('cat /proc/meminfo shows memory info', async () => {
+      const { output, exitCode } = await run(shell, 'cat /proc/meminfo');
+      expect(exitCode).toBe(0);
+      expect(output).toContain('MemTotal:');
+      expect(output).toContain('MemFree:');
+    });
+
+    it('cat /proc/cpuinfo shows CPU info', async () => {
+      const { output, exitCode } = await run(shell, 'cat /proc/cpuinfo');
+      expect(exitCode).toBe(0);
+      expect(output).toContain('processor');
+      expect(output).toContain('Shiro Virtual CPU');
+    });
+
+    it('ls /proc lists proc entries', async () => {
+      const { output, exitCode } = await run(shell, 'ls /proc');
+      expect(exitCode).toBe(0);
+      expect(output).toContain('version');
+      expect(output).toContain('uptime');
+      expect(output).toContain('meminfo');
+      expect(output).toContain('self');
+    });
+
+    it('cat /proc/self/status shows process info', async () => {
+      const { output, exitCode } = await run(shell, 'cat /proc/self/status');
+      expect(exitCode).toBe(0);
+      expect(output).toContain('Name:');
+      expect(output).toContain('shiro');
+    });
+
+    it('test -f /proc/version is true', async () => {
+      const { exitCode } = await run(shell, 'test -f /proc/version');
+      expect(exitCode).toBe(0);
+    });
+
+    it('test -d /proc is true', async () => {
+      const { exitCode } = await run(shell, 'test -d /proc');
+      expect(exitCode).toBe(0);
+    });
+
+    it('/dev/null exists and is writable', async () => {
+      const { exitCode: e1 } = await run(shell, 'echo test > /dev/null');
+      expect(e1).toBe(0);
+      const { output, exitCode: e2 } = await run(shell, 'cat /dev/null');
+      expect(e2).toBe(0);
+      expect(output).toBe('');
+    });
+
+    it('ls /dev shows device files', async () => {
+      const { output, exitCode } = await run(shell, 'ls /dev');
+      expect(exitCode).toBe(0);
+      expect(output).toContain('null');
+      expect(output).toContain('zero');
+      expect(output).toContain('random');
+    });
+
+    it('ls / shows dev and proc', async () => {
+      const { output, exitCode } = await run(shell, 'ls /');
+      expect(exitCode).toBe(0);
+      expect(output).toContain('dev');
+      expect(output).toContain('proc');
+    });
+  });
 });

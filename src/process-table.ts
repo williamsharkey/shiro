@@ -15,6 +15,7 @@ export interface ShiroProcess {
   serverWindow: ServerWindow | null;
   promise: Promise<number>;
   kill: () => void;
+  abortController: AbortController | null;
 }
 
 class ProcessTable {
@@ -33,6 +34,7 @@ class ProcessTable {
       serverWindow: null,
       promise: Promise.resolve(0), // replaced by spawn
       kill: () => {}, // replaced by spawn
+      abortController: null,
     };
     this.processes.set(pid, proc);
     return proc;
@@ -41,6 +43,7 @@ class ProcessTable {
   kill(pid: number): boolean {
     const proc = this.processes.get(pid);
     if (!proc || proc.status !== 'running') return false;
+    if (proc.abortController) proc.abortController.abort();
     proc.kill();
     proc.status = 'killed';
     proc.exitCode = 130;

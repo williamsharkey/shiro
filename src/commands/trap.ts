@@ -77,7 +77,7 @@ export const kill: Command = {
   description: "Send signal to process",
   async exec(ctx) {
     const args = ctx.args;
-    const { flags, values, positional } = parseArgs(args, ["l", "L", "s"]);
+    const { flags, values, positional } = parseArgs(args, ["s"]);
 
     // -l: list signals
     if (flags.l || flags.L) {
@@ -104,9 +104,53 @@ export const kill: Command = {
       return 1;
     }
 
-    // In a browser environment, we can't actually send signals to processes
-    // This is a stub for compatibility
-    ctx.stderr += `kill: sending signal ${signal} to processes: ${positional.join(", ")}\n`;
-    return 0;
+    const { processTable } = await import('../process-table');
+    const shell = ctx.shell;
+    let anyFailed = false;
+
+    for (const pidStr of positional) {
+      // %N targets background job N in the shell
+      if (pidStr.startsWith('%')) {
+        const jobId = parseInt(pidStr.slice(1), 10);
+        const job = shell.backgroundJobs.get(jobId);
+        if (job && job.status === 'running') {
+          if (job.abortController) job.abortController.abort();
+          job.status = 'failed';
+          job.exitCode = 130;
+        } else {
+          ctx.stderr += `kill: %${jobId}: no such job\n`;
+          anyFailed = true;
+        }
+        continue;
+      }
+
+      const pid = parseInt(pidStr, 10);
+      if (isNaN(pid)) {
+        ctx.stderr += `kill: ${pidStr}: invalid pid\n`;
+        anyFailed = true;
+        continue;
+      }
+
+      // Try process table first (windowed processes)
+      if (processTable.kill(pid)) continue;
+
+      // Try shell background jobs (by job ID matching PID)
+      let found = false;
+      for (const [id, job] of shell.backgroundJobs) {
+        if (id === pid && job.status === 'running') {
+          if (job.abortController) job.abortController.abort();
+          job.status = 'failed';
+          job.exitCode = 130;
+          found = true;
+          break;
+        }
+      }
+      if (found) continue;
+
+      ctx.stderr += `kill: (${pid}) - No such process\n`;
+      anyFailed = true;
+    }
+
+    return anyFailed ? 1 : 0;
   },
 };

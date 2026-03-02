@@ -288,6 +288,8 @@ async function main() {
 
   registerCommand(commands, lazyCommand('gh', 'GitHub CLI',
     () => import('./commands/gh').then(m => m.ghCmd)), 'src/commands/gh.ts');
+  registerCommand(commands, lazyCommand('x86', 'Run x86-64 ELF binaries',
+    () => import('./commands/x86').then(m => m.x86Cmd)), 'src/commands/x86.ts');
   registerCommand(commands, mkTempCmd, 'src/commands/mktemp.ts');
   registerCommand(commands, lazyCommand('jq', 'JSON processor',
     () => import('./commands/jq').then(m => m.jqCmd)), 'src/commands/jq.ts');

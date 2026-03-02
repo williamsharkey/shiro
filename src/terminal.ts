@@ -739,15 +739,26 @@ export class ShiroTerminal {
     // When a command is running and Spirit is waiting for user input,
     // route keystrokes to the user-input buffer instead of the shell.
     if (this.running) {
-      // Allow Ctrl+C to force-kill even without stdinPassthrough
-      // (ink may have disabled raw mode while "thinking")
-      if (data.includes('\x03') && this.stdinForceExitCallback) {
-        const now = Date.now();
-        if (now - this.lastCtrlCTime < 1000) {
-          this.stdinForceExitCallback();
-          return;
+      // Ctrl+C → abort current command via shell's abort controller + fire INT trap
+      if (data.includes('\x03')) {
+        if (this.shell.abortController) {
+          this.shell.abortController.abort();
+          this.term.write('^C\r\n');
+          // Fire INT trap if set
+          const intTrap = this.shell.traps.get('INT');
+          if (intTrap) {
+            this.shell.execute(intTrap, (s: string) => this.term.write(s)).catch(() => {});
+          }
         }
-        this.lastCtrlCTime = now;
+        // Allow Ctrl+C to force-kill (double press)
+        if (this.stdinForceExitCallback) {
+          const now = Date.now();
+          if (now - this.lastCtrlCTime < 1000) {
+            this.stdinForceExitCallback();
+            return;
+          }
+          this.lastCtrlCTime = now;
+        }
       }
       if (this.userInputCallback) {
         this.handleUserInput(data);

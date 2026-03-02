@@ -127,11 +127,162 @@ function fsError(code: string, message: string): Error {
 export type FSChangeEvent = 'write' | 'delete' | 'mkdir' | 'rename';
 export type FSChangeListener = (event: FSChangeEvent, path: string, newPath?: string) => void;
 
+/**
+ * Virtual filesystem provider for synthetic paths like /proc and /dev.
+ */
+export interface VirtualFSProvider {
+  /** Check if this provider handles the given path */
+  handles(path: string): boolean;
+  /** Read file content (returns null if path is a directory) */
+  readFile(path: string, encoding?: 'utf8'): string | Uint8Array | null;
+  /** Stat a path (returns null if not found) */
+  stat(path: string): StatResult | null;
+  /** List directory entries (returns null if not a directory or not found) */
+  readdir(path: string): string[] | null;
+  /** Check existence */
+  exists(path: string): boolean;
+  /** Write (returns true if handled, even if silently discarded) */
+  writeFile(path: string, data: Uint8Array | string): boolean;
+}
+
+/** /dev virtual provider */
+class DevProvider implements VirtualFSProvider {
+  handles(path: string): boolean {
+    return path === '/dev/null' || path === '/dev/zero' || path === '/dev/random' || path === '/dev/urandom' || path === '/dev' || path === '/dev/stdin' || path === '/dev/stdout' || path === '/dev/stderr' || path === '/dev/fd';
+  }
+  readFile(path: string, encoding?: 'utf8'): string | Uint8Array | null {
+    if (path === '/dev/null') return encoding === 'utf8' ? '' : new Uint8Array(0);
+    if (path === '/dev/zero') return new Uint8Array(4096); // return a page of zeros
+    if (path === '/dev/random' || path === '/dev/urandom') {
+      const buf = new Uint8Array(256);
+      crypto.getRandomValues(buf);
+      return buf;
+    }
+    if (path === '/dev') return null; // directory
+    return encoding === 'utf8' ? '' : new Uint8Array(0);
+  }
+  stat(path: string): StatResult | null {
+    if (path === '/dev') return makeStat({ path, type: 'dir', content: null, mode: 0o755, mtime: 0, ctime: 0, size: 0 });
+    if (this.handles(path)) return makeStat({ path, type: 'file', content: new Uint8Array(0), mode: 0o666, mtime: 0, ctime: 0, size: 0 });
+    return null;
+  }
+  readdir(path: string): string[] | null {
+    if (path === '/dev') return ['null', 'zero', 'random', 'urandom', 'stdin', 'stdout', 'stderr', 'fd'];
+    return null;
+  }
+  exists(path: string): boolean { return this.handles(path); }
+  writeFile(path: string): boolean {
+    if (path === '/dev/null') return true; // silently discard
+    return this.handles(path); // other dev files: accept but discard
+  }
+}
+
+/** /proc virtual provider — dynamic system info from Shiro */
+class ProcProvider implements VirtualFSProvider {
+  private startTime = Date.now();
+
+  private entries: Record<string, () => string> = {
+    '/proc/uptime': () => {
+      const secs = ((Date.now() - this.startTime) / 1000).toFixed(2);
+      return `${secs} ${secs}\n`;
+    },
+    '/proc/version': () => `Linux version 6.1.0-shiro (shiro@browser) (TypeScript) #1 SMP ${new Date().toUTCString()}\n`,
+    '/proc/meminfo': () => {
+      const total = (typeof performance !== 'undefined' && (performance as any).memory?.jsHeapSizeLimit) || 256 * 1024 * 1024;
+      const used = (typeof performance !== 'undefined' && (performance as any).memory?.usedJSHeapSize) || 64 * 1024 * 1024;
+      const free = total - used;
+      const toKB = (n: number) => Math.floor(n / 1024);
+      return [
+        `MemTotal:       ${toKB(total)} kB`,
+        `MemFree:        ${toKB(free)} kB`,
+        `MemAvailable:   ${toKB(free)} kB`,
+        `Buffers:               0 kB`,
+        `Cached:                0 kB`,
+        `SwapTotal:             0 kB`,
+        `SwapFree:              0 kB`,
+      ].join('\n') + '\n';
+    },
+    '/proc/cpuinfo': () => {
+      const cores = navigator?.hardwareConcurrency || 4;
+      return Array.from({ length: cores }, (_, i) => [
+        `processor\t: ${i}`,
+        `model name\t: Shiro Virtual CPU`,
+        `cpu MHz\t\t: 3000.000`,
+        `cache size\t: 8192 KB`,
+      ].join('\n')).join('\n\n') + '\n';
+    },
+    '/proc/loadavg': () => '0.00 0.00 0.00 1/1 1\n',
+    '/proc/stat': () => 'cpu  0 0 0 0 0 0 0 0 0 0\n',
+    '/proc/filesystems': () => 'nodev\tshirofs\n',
+    '/proc/mounts': () => 'shirofs / shirofs rw 0 0\n',
+    '/proc/self/status': () => [
+      'Name:\tshiro',
+      'State:\tR (running)',
+      'Pid:\t1',
+      'PPid:\t0',
+      'Uid:\t1000\t1000\t1000\t1000',
+      'Gid:\t1000\t1000\t1000\t1000',
+    ].join('\n') + '\n',
+    '/proc/self/cmdline': () => 'shiro\0',
+    '/proc/self/cwd': () => '/home/user',
+    '/proc/self/exe': () => '/usr/bin/shiro',
+  };
+
+  private dirs = ['/proc', '/proc/self'];
+
+  handles(path: string): boolean {
+    return path === '/proc' || path === '/proc/self' || path.startsWith('/proc/') && (path in this.entries || this.dirs.includes(path));
+  }
+
+  readFile(path: string, encoding?: 'utf8'): string | Uint8Array | null {
+    if (this.dirs.includes(path)) return null;
+    const gen = this.entries[path];
+    if (!gen) return null;
+    const content = gen();
+    return encoding === 'utf8' ? content : new TextEncoder().encode(content);
+  }
+
+  stat(path: string): StatResult | null {
+    if (this.dirs.includes(path)) return makeStat({ path, type: 'dir', content: null, mode: 0o555, mtime: Date.now(), ctime: this.startTime, size: 0 });
+    if (path in this.entries) {
+      const content = this.entries[path]();
+      return makeStat({ path, type: 'file', content: new TextEncoder().encode(content), mode: 0o444, mtime: Date.now(), ctime: this.startTime, size: content.length });
+    }
+    return null;
+  }
+
+  readdir(path: string): string[] | null {
+    if (path === '/proc') {
+      const entries: string[] = [];
+      for (const key of Object.keys(this.entries)) {
+        const rest = key.slice('/proc/'.length);
+        if (!rest.includes('/')) entries.push(rest);
+      }
+      entries.push('self');
+      return [...new Set(entries)].sort();
+    }
+    if (path === '/proc/self') {
+      const entries: string[] = [];
+      for (const key of Object.keys(this.entries)) {
+        if (key.startsWith('/proc/self/')) {
+          entries.push(key.slice('/proc/self/'.length));
+        }
+      }
+      return entries.sort();
+    }
+    return null;
+  }
+
+  exists(path: string): boolean { return this.handles(path); }
+  writeFile(): boolean { return false; }
+}
+
 export class FileSystem {
   private db: IDBDatabase | null = null;
   private cache: Map<string, FSNode | undefined> = new Map();
   private cacheEnabled = true;
   private _changeListeners: Set<FSChangeListener> = new Set();
+  private virtualProviders: VirtualFSProvider[] = [new DevProvider(), new ProcProvider()];
 
   /** Subscribe to filesystem change events. Returns unsubscribe function. */
   onChange(listener: FSChangeListener): () => void {
@@ -346,8 +497,9 @@ export class FileSystem {
   }
 
   async stat(path: string): Promise<StatResult> {
-    // Virtual /dev/null
-    if (path === '/dev/null') return makeStat({ path, type: 'file', content: new Uint8Array(0), mode: 0o666, mtime: 0, ctime: 0, size: 0 });
+    for (const vp of this.virtualProviders) {
+      if (vp.handles(path)) { const s = vp.stat(path); if (s) return s; }
+    }
     const resolved = await this._resolve(path);
     const node = await this._get(resolved);
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, stat '${path}'`);
@@ -355,22 +507,30 @@ export class FileSystem {
   }
 
   async lstat(path: string): Promise<StatResult> {
-    // Virtual /dev/null
-    if (path === '/dev/null') return makeStat({ path, type: 'file', content: new Uint8Array(0), mode: 0o666, mtime: 0, ctime: 0, size: 0 });
+    for (const vp of this.virtualProviders) {
+      if (vp.handles(path)) { const s = vp.stat(path); if (s) return s; }
+    }
     const node = await this._get(path);
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, lstat '${path}'`);
     return makeStat(node);
   }
 
   async exists(path: string): Promise<boolean> {
-    if (path === '/dev/null') return true;
+    for (const vp of this.virtualProviders) {
+      if (vp.exists(path)) return true;
+    }
     const node = await this._get(path);
     return !!node;
   }
 
   async readFile(path: string, encoding?: 'utf8'): Promise<Uint8Array | string> {
-    // Virtual /dev/null — always reads empty
-    if (path === '/dev/null') return encoding === 'utf8' ? '' : new Uint8Array(0);
+    for (const vp of this.virtualProviders) {
+      if (vp.handles(path)) {
+        const data = vp.readFile(path, encoding);
+        if (data !== null) return data;
+        throw fsError('EISDIR', `EISDIR: illegal operation on a directory, read '${path}'`);
+      }
+    }
     const resolved = await this._resolve(path);
     const node = await this._get(resolved);
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, open '${path}'`);
@@ -383,8 +543,9 @@ export class FileSystem {
   }
 
   async writeFile(path: string, data: Uint8Array | string, options?: { mode?: number }): Promise<void> {
-    // Virtual /dev/null — silently discard writes
-    if (path === '/dev/null') return;
+    for (const vp of this.virtualProviders) {
+      if (vp.writeFile(path, data)) return;
+    }
     const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
     const parent = await this._get(parentPath);
     if (!parent) throw fsError('ENOENT', `ENOENT: no such file or directory, open '${path}'`);
@@ -452,6 +613,15 @@ export class FileSystem {
   }
 
   async readdir(path: string): Promise<string[]> {
+    // Check virtual providers first
+    for (const vp of this.virtualProviders) {
+      if (vp.handles(path)) {
+        const entries = vp.readdir(path);
+        if (entries !== null) return entries;
+        throw fsError('ENOTDIR', `ENOTDIR: not a directory '${path}'`);
+      }
+    }
+
     const node = await this._get(path);
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, readdir '${path}'`);
     if (node.type !== 'dir') throw fsError('ENOTDIR', `ENOTDIR: not a directory '${path}'`);
@@ -466,6 +636,19 @@ export class FileSystem {
       const rest = key.slice(prefix.length);
       if (!rest.includes('/')) {
         entries.push(rest);
+      }
+    }
+
+    // For root directory, add virtual top-level dirs
+    if (path === '/') {
+      const vdirs = new Set<string>();
+      for (const vp of this.virtualProviders) {
+        for (const name of ['dev', 'proc']) {
+          if (vp.handles('/' + name)) vdirs.add(name);
+        }
+      }
+      for (const vd of vdirs) {
+        if (!entries.includes(vd)) entries.push(vd);
       }
     }
 
