@@ -5,6 +5,7 @@
  * or provide browser-specific functionality.
  */
 import { Command } from './index';
+import { getAssociation } from '../file-associations';
 
 export const rmCmd: Command = {
   name: 'rm',
@@ -349,15 +350,40 @@ export const sha256sumCmd: Command = {
 
 export const openCmd: Command = {
   name: 'open',
-  description: 'Open a URL in the browser',
+  description: 'Open files, directories, or URLs',
   async exec(ctx) {
-    const url = ctx.args[0];
-    if (!url) {
-      ctx.stderr = 'Usage: open <url>\n';
+    let app: string | null = null;
+    const targets: string[] = [];
+    for (let i = 0; i < ctx.args.length; i++) {
+      if (ctx.args[i] === '-a' && ctx.args[i + 1]) { app = ctx.args[++i]; continue; }
+      targets.push(ctx.args[i]);
+    }
+    if (targets.length === 0) {
+      ctx.stderr = 'Usage: open [-a app] <file|url>\n';
       return 1;
     }
-    if (typeof window !== 'undefined') {
-      window.open(url, '_blank');
+
+    for (const target of targets) {
+      // URL?
+      if (/^https?:\/\//.test(target)) {
+        if (typeof window !== 'undefined') window.open(target, '_blank');
+        continue;
+      }
+      // File or directory
+      const resolved = ctx.fs.resolvePath(target, ctx.cwd);
+      const stat = await ctx.fs.stat(resolved).catch(() => null);
+      if (!stat) {
+        ctx.stderr += `open: ${target}: No such file or directory\n`;
+        return 1;
+      }
+
+      const cmd = app || (stat.type === 'dir' ? 'code' : getAssociation(target)) || 'code';
+      const escaped = resolved.replace(/"/g, '\\"');
+      await ctx.shell.execute(
+        `${cmd} "${escaped}"`,
+        (d: string) => { ctx.stdout += d; },
+        (d: string) => { ctx.stderr += d; },
+      );
     }
     return 0;
   },

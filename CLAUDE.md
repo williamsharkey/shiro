@@ -39,10 +39,11 @@ src/
 ├── template-palette.ts  # Template definitions (9 educational lessons across 3 categories)
 ├── template-runner.ts   # Template execution engine (runs multi-line cmd in windowed terminal)
 ├── living-templates.ts  # Living template UI (palette overlay, category tabs, launch buttons)
+├── file-associations.ts # Extension-to-command registry (used by `open` to pick editor/viewer)
 └── commands/            # One file per command or group of related commands
     ├── index.ts          # Command/CommandContext/TerminalLike interfaces, CommandRegistry class
     ├── shell-builtins.ts # Shell builtins needing ctx.shell: cd, export, help, command, sh, bash
-    ├── shiro-cmds.ts     # Shiro-specific overrides: rm, find, ln, uname, which, type, cut, shasum
+    ├── shiro-cmds.ts     # Shiro-specific overrides: rm, ln, uname, which, type, cut, shasum, open
     ├── flags.ts          # Shared utilities: parseArgs, readInput, readdirEntries, statEntry
     ├── unix.ts           # Barrel export of ~100 Unix command files (ls, cat, awk, xargs, etc.)
     ├── grep.ts           # grep with -i, -v, -n, -c, -l, -r flags
@@ -64,6 +65,8 @@ src/
     ├── npm.ts            # npm package manager: install, list, run, uninstall
     ├── build.ts          # esbuild-wasm bundler for TypeScript/JavaScript
     ├── vi.ts             # minimal vi-like modal text editor
+    ├── code-editor.ts    # code: rich editor (CodeMirror 6, CDN-loaded, lazy)
+    ├── monaco-editor.ts  # monaco: VS Code editor (Monaco, CDN-loaded, lazy)
     ├── rg.ts             # ripgrep-compatible search (used by Claude Code Grep tool)
     ├── remote.ts         # WebRTC remote connection for Claude Code MCP
     ├── mcp-client.ts     # MCP Streamable HTTP client (connect to external MCP servers)
@@ -115,7 +118,7 @@ registerCommand(commands, lazyCommand('mycmd', 'Does something useful',
   () => import('./commands/mycmd').then(m => m.myCmd)), 'src/commands/mycmd.ts');
 ```
 
-Use lazy-loading when: the command pulls in large dependencies (WASM runtimes, parsers), is rarely used, or adds >5KB to the entry bundle. Currently lazy-loaded: build, nano, termcast, image, seed, gh, mcp, group, jq, ed, zip/unzip, cc/gcc, python/python3/pip, sqlite3, wasi, pkg.
+Use lazy-loading when: the command pulls in large dependencies (WASM runtimes, parsers), is rarely used, or adds >5KB to the entry bundle. Currently lazy-loaded: build, nano, termcast, image, seed, gh, mcp, group, jq, ed, zip/unzip, cc/gcc, python/python3/pip, sqlite3, wasi, pkg, finder, code, monaco, builder, ffmpeg, lua, play, psql, convert/magick.
 
 Example command file:
 ```typescript
@@ -223,6 +226,25 @@ Covers all 9 known bugs plus regression tests:
 - **Cache invalidation**: `fileCache` refresh after `execAsync` (shell → sync read coherence)
 - **xargs -I**: Fluffycoreutils xargs with `-I{}` placeholder substitution
 - **Overwrite coherence**: Multiple shell writes → sync reads always see latest
+
+## Editors & File Associations
+
+Shiro has two rich editors and a file association registry that `open` uses to pick the right one:
+
+**Editors:**
+- `code file.ts` — CodeMirror 6 editor (lighter, ~200KB from esm.sh CDN). Syntax highlighting, search, bracket matching.
+- `monaco file.ts` — Monaco Editor / VS Code engine (~5MB from jsDelivr CDN). IntelliSense, type checking for JS/TS, minimap, multi-cursor.
+- Both open in a server window, support Cmd+S save (postMessage → Shiro FS), sidebar file tree, tabs.
+
+**File associations** (`src/file-associations.ts`):
+- Maps file extensions to commands (e.g., `.ts` → `code`, `.png` → `img`)
+- `open file.ts` looks up the association and runs the mapped command
+- `open -a monaco file.ts` overrides the association
+- `open https://...` opens URLs in a new browser tab
+- `open src/` opens directories in `code`
+- Call `setAssociation('ts', 'monaco')` programmatically to change defaults
+
+**Key files:** `src/commands/code-editor.ts`, `src/commands/monaco-editor.ts`, `src/file-associations.ts`, `src/commands/shiro-cmds.ts` (openCmd)
 
 ## Shell Features
 

@@ -109,6 +109,7 @@ import { initFaviconUpdater, initTitle } from './favicon';
 import { initMobileInput } from './mobile-input';
 import { initDropHandler } from './drop-handler';
 import { closeSplitView } from './split-view';
+import { initFileAssociations } from './file-associations';
 import buildNumber from '../build-number.txt?raw';
 import { CLAUDE_MD } from './claude-md-seed';
 
@@ -138,6 +139,9 @@ async function main() {
     await fs.writeFile('/home/user/CLAUDE.md', CLAUDE_MD);
   } catch {}
   console.log('[shiro] Filesystem initialized');
+
+  // Initialize file associations (extension → command mappings for `open`)
+  initFileAssociations();
 
   // Listen for seed hydration from parent (when loaded via seed snippet)
   window.addEventListener('message', async (e) => {
@@ -321,6 +325,8 @@ async function main() {
     () => import('./commands/finder').then(m => m.finderCmd)), 'src/commands/finder.ts');
   registerCommand(commands, lazyCommand('code', 'Rich code editor (CodeMirror)',
     () => import('./commands/code-editor').then(m => m.codeEditorCmd)), 'src/commands/code-editor.ts');
+  registerCommand(commands, lazyCommand('monaco', 'VS Code editor (Monaco)',
+    () => import('./commands/monaco-editor').then(m => m.monacoEditorCmd)), 'src/commands/monaco-editor.ts');
   registerCommand(commands, lazyCommand('builder', 'AI app builder (chat + live preview)',
     () => import('./commands/builder').then(m => m.builderCmd)), 'src/commands/builder.ts');
   registerCommand(commands, lazyCommand('ffmpeg', 'Video/audio processing (ffmpeg.wasm)',
