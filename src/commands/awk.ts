@@ -1,6 +1,11 @@
 
 import type { Command } from './index';
 import { parseArgs, readInput } from './flags';
+
+// Signal classes for control flow
+class AwkNext {}
+class AwkExit { constructor(public code: number) {} }
+
 export const awk: Command = {
   name: "awk",
   description: "Pattern scanning and processing language",
@@ -13,93 +18,94 @@ export const awk: Command = {
       return 1;
     }
 
-    // First positional arg is the program, rest are files
     const program = positional[0];
     const files = positional.slice(1);
 
-    // AWK context with built-in variables
-    const awkContext: AwkContext = {
-      FS: values.F || " ",  // Field separator
-      OFS: " ",             // Output field separator
-      RS: "\n",             // Record separator
-      ORS: "\n",            // Output record separator
-      NR: 0,                // Number of records
-      NF: 0,                // Number of fields
+    const awkCtx: AwkContext = {
+      FS: values.F || " ",
+      OFS: " ",
+      RS: "\n",
+      ORS: "\n",
+      NR: 0,
+      NF: 0,
       FILENAME: files[0] || "-",
-      variables: {} as Record<string, string>,
-      arrays: {} as Record<string, Record<string, string>>,
+      variables: {},
+      arrays: {},
     };
 
     // User variables (-v var=value)
     if (values.v) {
       const parts = values.v.split("=");
       if (parts.length === 2) {
-        awkContext.variables[parts[0]] = parts[1];
+        awkCtx.variables[parts[0]] = parts[1];
       }
     }
 
     try {
-      const { content } = await readInput(
-        files,
-        ctx.stdin,
-        ctx.fs,
-        ctx.cwd,
-        ctx.fs.resolvePath
-      );
-
+      const { content } = await readInput(files, ctx.stdin, ctx.fs, ctx.cwd, ctx.fs.resolvePath);
       const lines = content.endsWith("\n") ? content.slice(0, -1).split("\n") : content.split("\n");
       const output: string[] = [];
 
-      // Parse blocks: extract BEGIN, END, and main action blocks
-      // Use brace-depth counting instead of [^}] to handle nested braces
       const blocks = parseBlocks(program);
 
       // Execute BEGIN block
       if (blocks.begin) {
-        const result = executeAction(blocks.begin, [], awkContext);
-        if (result) output.push(result);
+        const r = executeBlock(blocks.begin, [], awkCtx);
+        if (r !== null) output.push(r);
       }
 
       // Process each line
-      for (const line of lines) {
-        awkContext.NR++;
+      let exitCode = 0;
+      try {
+        for (const line of lines) {
+          awkCtx.NR++;
+          const fieldSepRegex = typeof awkCtx.FS === "string" && awkCtx.FS !== " "
+            ? new RegExp(awkCtx.FS.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+            : /\s+/;
+          const fields = awkCtx.FS === " "
+            ? line.split(fieldSepRegex).filter(f => f !== "")
+            : line.split(fieldSepRegex);
+          awkCtx.NF = fields.length;
 
-        // Split by field separator
-        const fieldSepRegex = typeof awkContext.FS === "string" && awkContext.FS !== " "
-          ? new RegExp(awkContext.FS.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-          : /\s+/;
-        const fields = awkContext.FS === " "
-          ? line.split(fieldSepRegex).filter(f => f !== "")
-          : line.split(fieldSepRegex);
-        awkContext.NF = fields.length;
-
-        if (blocks.main) {
-          let shouldProcess = true;
-          if (blocks.mainPattern) {
-            try {
-              shouldProcess = new RegExp(blocks.mainPattern).test(line);
-            } catch {
-              shouldProcess = false;
+          // Process all pattern-action pairs
+          try {
+            for (const rule of blocks.rules) {
+              let shouldProcess = true;
+              if (rule.pattern) {
+                if (rule.pattern.startsWith('/') && rule.pattern.endsWith('/')) {
+                  const pat = rule.pattern.slice(1, -1);
+                  try { shouldProcess = new RegExp(pat).test(line); } catch { shouldProcess = false; }
+                } else {
+                  // Expression pattern
+                  shouldProcess = evalCondition(rule.pattern, fields, awkCtx);
+                }
+              }
+              if (shouldProcess) {
+                const r = executeBlock(rule.action, fields, awkCtx);
+                if (r !== null) output.push(r);
+              }
             }
+          } catch (e) {
+            if (e instanceof AwkNext) continue;
+            throw e;
           }
-          if (shouldProcess) {
-            const result = executeAction(blocks.main, fields, awkContext);
-            if (result !== null) output.push(result);
-          }
-        } else if (!blocks.begin && !blocks.end) {
-          const result = executeAction(program, fields, awkContext);
-          if (result !== null) output.push(result);
+        }
+      } catch (e) {
+        if (e instanceof AwkExit) {
+          exitCode = e.code;
+        } else {
+          throw e;
         }
       }
 
       // Execute END block
       if (blocks.end) {
-        const result = executeAction(blocks.end, [], awkContext);
-        if (result) output.push(result);
+        const r = executeBlock(blocks.end, [], awkCtx);
+        if (r !== null) output.push(r);
       }
 
       ctx.stdout += output.join("\n") + (output.length > 0 ? "\n" : "");
-      return 0;
+      return exitCode;
     } catch (e: unknown) {
       ctx.stderr += `awk: ${e instanceof Error ? e.message : e}\n`;
       return 1;
@@ -119,21 +125,23 @@ interface AwkContext {
   arrays: Record<string, Record<string, string>>;
 }
 
+interface AwkRule {
+  pattern: string | null;
+  action: string;
+}
+
 interface AwkBlocks {
   begin?: string;
   end?: string;
-  main?: string;
-  mainPattern?: string;
+  rules: AwkRule[];
 }
 
-/** Extract BEGIN, END, and main blocks using brace-depth counting. */
 function parseBlocks(program: string): AwkBlocks {
-  const result: AwkBlocks = {};
+  const result: AwkBlocks = { rules: [] };
   let i = 0;
   const p = program.trim();
 
   while (i < p.length) {
-    // Skip whitespace
     while (i < p.length && /\s/.test(p[i])) i++;
     if (i >= p.length) break;
 
@@ -161,55 +169,75 @@ function parseBlocks(program: string): AwkBlocks {
       }
     }
 
-    // Check for /pattern/ { action }
+    // Check for /pattern/ { action } or condition { action } or just { action }
+    let pattern: string | null = null;
+
     if (p[i] === '/') {
       const endSlash = p.indexOf('/', i + 1);
       if (endSlash > i) {
-        result.mainPattern = p.slice(i + 1, endSlash);
+        pattern = p.slice(i, endSlash + 1);
         i = endSlash + 1;
         while (i < p.length && /\s/.test(p[i])) i++;
       }
+    } else if (p[i] !== '{') {
+      // Condition expression (e.g. $1 > 5)
+      let condStart = i;
+      while (i < p.length && p[i] !== '{') i++;
+      pattern = p.slice(condStart, i).trim();
+      if (!pattern) pattern = null;
     }
 
-    // Main action block
     if (p[i] === '{') {
       const body = extractBlock(p, i);
-      result.main = body.content;
+      result.rules.push({ pattern, action: body.content });
       i = body.end;
       continue;
+    }
+
+    // If we have just a pattern with no block at all, treat the whole program as action
+    if (i >= p.length && result.rules.length === 0 && !result.begin && !result.end) {
+      result.rules.push({ pattern: null, action: p });
+      break;
     }
 
     i++;
   }
 
+  // If no blocks were found, treat entire program as action
+  if (result.rules.length === 0 && !result.begin && !result.end) {
+    result.rules.push({ pattern: null, action: p });
+  }
+
   return result;
 }
 
-/** Extract content between matched braces, handling nesting. */
 function extractBlock(str: string, start: number): { content: string; end: number } {
   let depth = 0;
   let i = start;
+  let inStr = false;
+  let strCh = '';
   while (i < str.length) {
+    if (inStr) {
+      if (str[i] === strCh && str[i - 1] !== '\\') inStr = false;
+      i++;
+      continue;
+    }
+    if (str[i] === '"' || str[i] === "'") { inStr = true; strCh = str[i]; }
     if (str[i] === '{') depth++;
     else if (str[i] === '}') {
       depth--;
-      if (depth === 0) {
-        return { content: str.slice(start + 1, i), end: i + 1 };
-      }
+      if (depth === 0) return { content: str.slice(start + 1, i), end: i + 1 };
     }
     i++;
   }
   return { content: str.slice(start + 1), end: str.length };
 }
 
-/** Substitute only $N field references (not arrays/variables) for use in LHS of assignments. */
 function resolveFieldRefs(ref: string, fields: string[]): string {
   return ref.replace(/\$(\d+)/g, (_, n) => fields[parseInt(n) - 1] || "");
 }
 
-/** Resolve a variable or array reference to its value. */
 function resolveVar(name: string, ctx: AwkContext): number {
-  // Check for array reference: name[key]
   const arrMatch = name.match(/^(\w+)\[(.+)\]$/);
   if (arrMatch) {
     const [, arrName, key] = arrMatch;
@@ -218,7 +246,15 @@ function resolveVar(name: string, ctx: AwkContext): number {
   return parseFloat(ctx.variables[name]) || 0;
 }
 
-/** Set a variable or array element. */
+function getVarStr(name: string, ctx: AwkContext): string {
+  const arrMatch = name.match(/^(\w+)\[(.+)\]$/);
+  if (arrMatch) {
+    const [, arrName, key] = arrMatch;
+    return ctx.arrays[arrName]?.[key] ?? "";
+  }
+  return ctx.variables[name] ?? "";
+}
+
 function setVar(name: string, value: string, ctx: AwkContext): void {
   const arrMatch = name.match(/^(\w+)\[(.+)\]$/);
   if (arrMatch) {
@@ -230,26 +266,63 @@ function setVar(name: string, value: string, ctx: AwkContext): void {
   }
 }
 
-function executeAction(
-  action: string,
-  fields: string[],
-  ctx: AwkContext
-): string | null {
+function evalCondition(cond: string, fields: string[], ctx: AwkContext): boolean {
+  const c = cond.trim();
+
+  // Check for (key in array) — membership test
+  const inMatch = c.match(/^\(?\s*(\S+)\s+in\s+(\w+)\s*\)?$/);
+  if (inMatch) {
+    const key = substituteVariables(inMatch[1], fields, ctx);
+    return ctx.arrays[inMatch[2]]?.[key] !== undefined;
+  }
+
+  // Comparison operators
+  const compMatch = c.match(/^(.+?)\s*(==|!=|>=|<=|>|<|~|!~)\s*(.+)$/);
+  if (compMatch) {
+    let left = substituteVariables(compMatch[1].trim(), fields, ctx);
+    left = evaluateExpr(left);
+    let right = substituteVariables(compMatch[3].trim(), fields, ctx);
+    right = evaluateExpr(right);
+    const op = compMatch[2];
+    const lNum = parseFloat(left);
+    const rNum = parseFloat(right);
+    const bothNum = !isNaN(lNum) && !isNaN(rNum) && left.trim() !== '' && right.trim() !== '';
+
+    switch (op) {
+      case '==': return bothNum ? lNum === rNum : left === right;
+      case '!=': return bothNum ? lNum !== rNum : left !== right;
+      case '>': return bothNum ? lNum > rNum : left > right;
+      case '<': return bothNum ? lNum < rNum : left < right;
+      case '>=': return bothNum ? lNum >= rNum : left >= right;
+      case '<=': return bothNum ? lNum <= rNum : left <= right;
+      case '~': try { return new RegExp(right.replace(/^\/|\/$/g, '')).test(left); } catch { return false; }
+      case '!~': try { return !new RegExp(right.replace(/^\/|\/$/g, '')).test(left); } catch { return true; }
+    }
+  }
+
+  // Regex match: /pattern/
+  if (c.startsWith('/') && c.endsWith('/')) {
+    try { return new RegExp(c.slice(1, -1)).test(fields.join(ctx.OFS)); } catch { return false; }
+  }
+
+  // Truthy check
+  const val = substituteVariables(c, fields, ctx);
+  const num = parseFloat(val);
+  if (!isNaN(num)) return num !== 0;
+  return val !== '' && val !== '0';
+}
+
+function executeBlock(action: string, fields: string[], ctx: AwkContext): string | null {
   let code = action.trim();
-
-  // Process string functions
   code = processStringFunctions(code, fields, ctx);
-
-  // Split on ; but not inside quotes or parens
   const statements = splitStatements(code);
   let printResult: string | null = null;
 
   for (const rawStmt of statements) {
     const stmt = rawStmt.trim();
     if (!stmt) continue;
-
     const r = execStatement(stmt, fields, ctx);
-    if (r !== null) printResult = r;
+    if (r !== null) printResult = printResult !== null ? printResult + "\n" + r : r;
   }
 
   return printResult;
@@ -269,32 +342,68 @@ function splitStatements(code: string): string[] {
       if (ch === strCh && code[i - 1] !== '\\') inStr = false;
       continue;
     }
-    if (ch === '"' || ch === "'") {
-      inStr = true;
-      strCh = ch;
-      current += ch;
-      continue;
-    }
+    if (ch === '"' || ch === "'") { inStr = true; strCh = ch; current += ch; continue; }
     if (ch === '(' || ch === '{') { depth++; current += ch; continue; }
     if (ch === ')' || ch === '}') { depth--; current += ch; continue; }
-    if (ch === ';' && depth === 0) {
-      result.push(current);
-      current = "";
-      continue;
-    }
+    if (ch === ';' && depth === 0) { result.push(current); current = ""; continue; }
     current += ch;
   }
   if (current.trim()) result.push(current);
   return result;
 }
 
-function execStatement(
-  stmt: string,
-  fields: string[],
-  ctx: AwkContext
-): string | null {
+function execStatement(stmt: string, fields: string[], ctx: AwkContext): string | null {
   const s = stmt.trim();
   if (!s) return null;
+
+  // Handle next
+  if (s === 'next') throw new AwkNext();
+
+  // Handle exit
+  const exitMatch = s.match(/^exit\s*(\d*)$/);
+  if (exitMatch) throw new AwkExit(parseInt(exitMatch[1] || '0', 10));
+
+  // Handle delete array[key]
+  const deleteMatch = s.match(/^delete\s+(\w+)\[([^\]]+)\]$/);
+  if (deleteMatch) {
+    const [, arrName, key] = deleteMatch;
+    const resolvedKey = substituteVariables(key, fields, ctx);
+    if (ctx.arrays[arrName]) delete ctx.arrays[arrName][resolvedKey];
+    return null;
+  }
+
+  // Handle if/else
+  if (s.startsWith('if')) {
+    return execIfElse(s, fields, ctx);
+  }
+
+  // Handle while(cond) { ... }
+  const whileMatch = s.match(/^while\s*\((.+?)\)\s*\{([\s\S]*)\}$/);
+  if (whileMatch) {
+    const [, cond, body] = whileMatch;
+    let result: string | null = null;
+    let safety = 10000;
+    while (evalCondition(cond, fields, ctx) && safety-- > 0) {
+      const r = executeBlock(body, fields, ctx);
+      if (r !== null) result = result !== null ? result + "\n" + r : r;
+    }
+    return result;
+  }
+
+  // Handle C-style for(init; cond; incr) { ... }
+  const forMatch = s.match(/^for\s*\(\s*([^;]*)\s*;\s*([^;]*)\s*;\s*([^)]*)\s*\)\s*\{([\s\S]*)\}$/);
+  if (forMatch) {
+    const [, init, cond, incr, body] = forMatch;
+    if (init.trim()) execStatement(init.trim(), fields, ctx);
+    let result: string | null = null;
+    let safety = 10000;
+    while (evalCondition(cond.trim(), fields, ctx) && safety-- > 0) {
+      const r = executeBlock(body, fields, ctx);
+      if (r !== null) result = result !== null ? result + "\n" + r : r;
+      if (incr.trim()) execStatement(incr.trim(), fields, ctx);
+    }
+    return result;
+  }
 
   // Handle for(k in arr) { ... } or for(k in arr) stmt
   const forInMatch = s.match(/^for\s*\(\s*(\w+)\s+in\s+(\w+)\s*\)\s*(.+)$/);
@@ -306,9 +415,7 @@ function execStatement(
     for (const key of Object.keys(arr)) {
       ctx.variables[iterVar] = key;
       const r = execStatement(body, fields, ctx);
-      if (r !== null) {
-        result = result !== null ? result + "\n" + r : r;
-      }
+      if (r !== null) result = result !== null ? result + "\n" + r : r;
     }
     return result;
   }
@@ -316,9 +423,7 @@ function execStatement(
   // Handle printf statement
   if (s.startsWith("printf")) {
     const printfMatch = s.match(/printf\s+(.+)/);
-    if (printfMatch) {
-      return formatPrintf(printfMatch[1], fields, ctx);
-    }
+    if (printfMatch) return formatPrintf(printfMatch[1], fields, ctx);
     return null;
   }
 
@@ -329,50 +434,63 @@ function execStatement(
     if (!printExpr || printExpr === "") {
       return fields.join(ctx.OFS);
     } else if (printExpr.includes(",")) {
-      const parts = printExpr.split(/\s*,\s*/);
+      const parts = smartSplit(printExpr, ',');
       const outputs = parts.map(part => {
-        let output = substituteVariables(part.trim(), fields, ctx);
-        output = evaluateArithmetic(output);
+        let p = part.trim();
+        // Strip string literal quotes before substitution
+        if ((p.startsWith('"') && p.endsWith('"')) || (p.startsWith("'") && p.endsWith("'"))) {
+          return p.slice(1, -1).replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+        }
+        let output = substituteVariables(p, fields, ctx);
+        output = evaluateExpr(output);
         return output.replace(/^["'](.*)["']$/, "$1");
       });
       return outputs.join(ctx.OFS);
     } else {
-      let output = substituteVariables(printExpr, fields, ctx);
-      output = evaluateArithmetic(output);
+      let p = printExpr;
+      // Strip string literal quotes
+      if ((p.startsWith('"') && p.endsWith('"')) || (p.startsWith("'") && p.endsWith("'"))) {
+        return p.slice(1, -1).replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+      }
+      let output = substituteVariables(p, fields, ctx);
+      output = evaluateExpr(output);
       output = output.replace(/^["'](.*)["']$/, "$1");
       output = output.replace(/\s+/g, " ").trim();
       return output;
     }
   }
 
-  // Handle increment/decrement: var++ or arr[key]++
+  // Handle increment/decrement
   const incrMatch = s.match(/^(\w+(?:\[[^\]]+\])?)(\+\+|--)$/);
   if (incrMatch) {
     const [, ref, op] = incrMatch;
-    // Only substitute $N field refs in the key, not the whole array reference
     const resolved = resolveFieldRefs(ref, fields);
     const current = resolveVar(resolved, ctx);
     setVar(resolved, String(op === "++" ? current + 1 : current - 1), ctx);
     return null;
   }
 
-  // Handle assignment: var[key] op= expr or var op= expr
+  // Handle assignment
   const assignMatch = s.match(/^(\w+(?:\[[^\]]+\])?)\s*([\+\-\*\/]?)=\s*(.+)$/);
   if (assignMatch) {
     const [, ref, op, exprStr] = assignMatch;
-    // Only substitute $N field refs in LHS, not full variable resolution
     const resolved = resolveFieldRefs(ref, fields);
     let value = substituteVariables(exprStr, fields, ctx);
-    value = evaluateArithmetic(value);
-    const numVal = parseFloat(value) || 0;
-    const current = resolveVar(resolved, ctx);
+    value = evaluateExpr(value);
 
-    switch (op) {
-      case "+": setVar(resolved, String(current + numVal), ctx); break;
-      case "-": setVar(resolved, String(current - numVal), ctx); break;
-      case "*": setVar(resolved, String(current * numVal), ctx); break;
-      case "/": setVar(resolved, String(current / numVal), ctx); break;
-      default: setVar(resolved, String(numVal), ctx); break;
+    if (op) {
+      const numVal = parseFloat(value) || 0;
+      const current = resolveVar(resolved, ctx);
+      switch (op) {
+        case "+": setVar(resolved, String(current + numVal), ctx); break;
+        case "-": setVar(resolved, String(current - numVal), ctx); break;
+        case "*": setVar(resolved, String(current * numVal), ctx); break;
+        case "/": setVar(resolved, String(current / numVal), ctx); break;
+      }
+    } else {
+      // Plain assignment — could be string or number
+      const stripped = value.replace(/^["'](.*)["']$/, '$1');
+      setVar(resolved, stripped, ctx);
     }
     return null;
   }
@@ -380,25 +498,106 @@ function execStatement(
   return null;
 }
 
-function substituteVariables(
-  str: string,
-  fields: string[],
-  ctx: AwkContext
-): string {
-  let output = str;
-
-  // Replace $0 with whole line
-  output = output.replace(/\$0/g, fields.join(ctx.OFS));
-
-  // Replace $NF with last field
-  output = output.replace(/\$NF/g, fields[fields.length - 1] || "");
-
-  // Replace numbered fields
-  for (let i = 1; i <= fields.length; i++) {
-    output = output.replace(new RegExp(`\\$${i}\\b`, "g"), fields[i - 1] || "");
+function execIfElse(s: string, fields: string[], ctx: AwkContext): string | null {
+  // Parse: if (cond) { body } else if (cond) { body } else { body }
+  // Also: if (cond) stmt; else stmt
+  const ifMatch = s.match(/^if\s*\((.+?)\)\s*\{([\s\S]*?)\}(?:\s*else\s+if\s*\((.+?)\)\s*\{([\s\S]*?)\})*(?:\s*else\s*\{([\s\S]*?)\})?$/);
+  if (ifMatch) {
+    if (evalCondition(ifMatch[1], fields, ctx)) {
+      return executeBlock(ifMatch[2], fields, ctx);
+    }
+    // Check else-if chains
+    const rest = s.slice(ifMatch[0].indexOf('}') + 1).trim();
+    if (rest.startsWith('else if')) {
+      return execIfElse(rest.slice(5).trim(), fields, ctx);
+    }
+    if (ifMatch[5] !== undefined) {
+      return executeBlock(ifMatch[5], fields, ctx);
+    }
+    return null;
   }
 
-  // Replace built-in variables
+  // Simpler form: if (cond) stmt
+  const simpleIf = s.match(/^if\s*\((.+?)\)\s+(.+?)(?:\s+else\s+(.+))?$/);
+  if (simpleIf) {
+    if (evalCondition(simpleIf[1], fields, ctx)) {
+      // Handle braced body
+      const body = simpleIf[2].trim();
+      if (body.startsWith('{') && body.endsWith('}')) {
+        return executeBlock(body.slice(1, -1), fields, ctx);
+      }
+      return execStatement(body, fields, ctx);
+    } else if (simpleIf[3]) {
+      const elseBody = simpleIf[3].trim();
+      if (elseBody.startsWith('{') && elseBody.endsWith('}')) {
+        return executeBlock(elseBody.slice(1, -1), fields, ctx);
+      }
+      return execStatement(elseBody, fields, ctx);
+    }
+    return null;
+  }
+
+  return null;
+}
+
+function smartSplit(str: string, delimiter: string): string[] {
+  const result: string[] = [];
+  let current = '';
+  let depth = 0;
+  let inStr = false;
+  let strCh = '';
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (inStr) { current += ch; if (ch === strCh && str[i - 1] !== '\\') inStr = false; continue; }
+    if (ch === '"' || ch === "'") { inStr = true; strCh = ch; current += ch; continue; }
+    if (ch === '(' || ch === '[') { depth++; current += ch; continue; }
+    if (ch === ')' || ch === ']') { depth--; current += ch; continue; }
+    if (ch === delimiter && depth === 0) { result.push(current); current = ''; continue; }
+    current += ch;
+  }
+  if (current) result.push(current);
+  return result;
+}
+
+function substituteVariables(str: string, fields: string[], ctx: AwkContext): string {
+  let output = str;
+
+  // Handle string concatenation with spaces (e.g. "foo" " " "bar")
+  // and sprintf
+  const sprintfMatch = output.match(/sprintf\s*\((.+)\)/);
+  if (sprintfMatch) {
+    const result = formatPrintf(sprintfMatch[1], fields, ctx);
+    output = output.replace(/sprintf\s*\(.+\)/, result || '');
+  }
+
+  // Ternary operator: cond ? val1 : val2
+  const ternMatch = output.match(/^(.+?)\s*\?\s*(.+?)\s*:\s*(.+)$/);
+  if (ternMatch) {
+    const cond = evalCondition(ternMatch[1].trim(), fields, ctx);
+    const branch = cond ? ternMatch[2].trim() : ternMatch[3].trim();
+    return substituteVariables(branch, fields, ctx);
+  }
+
+  output = output.replace(/\$0/g, fields.join(ctx.OFS));
+  output = output.replace(/\$NF/g, fields[fields.length - 1] || "");
+
+  // Indirect field references: $var where var is a variable
+  output = output.replace(/\$(\w+)/g, (match, name) => {
+    const num = parseInt(name, 10);
+    if (!isNaN(num)) {
+      // Direct: $1, $2, etc.
+      return fields[num - 1] || "";
+    }
+    // Indirect: $var → resolve var to number, then get that field
+    const varVal = ctx.variables[name];
+    if (varVal !== undefined) {
+      const idx = parseInt(varVal, 10);
+      if (!isNaN(idx) && idx > 0) return fields[idx - 1] || "";
+      if (idx === 0) return fields.join(ctx.OFS);
+    }
+    return match;
+  });
+
   output = output.replace(/\bNR\b/g, String(ctx.NR));
   output = output.replace(/\bNF\b/g, String(ctx.NF));
   output = output.replace(/\bFS\b/g, ctx.FS);
@@ -407,13 +606,12 @@ function substituteVariables(
   output = output.replace(/\bORS\b/g, ctx.ORS);
   output = output.replace(/\bFILENAME\b/g, ctx.FILENAME);
 
-  // Replace array references: arr[key]
+  // Replace array references
   output = output.replace(/(\w+)\[([^\]]+)\]/g, (_, arrName, key) => {
     const resolvedKey = substituteVariables(key, fields, ctx);
     return ctx.arrays[arrName]?.[resolvedKey] ?? "0";
   });
 
-  // Replace user variables (but not array names that were already handled)
   for (const [key, value] of Object.entries(ctx.variables)) {
     output = output.replace(new RegExp(`\\b${key}\\b`, "g"), value);
   }
@@ -421,149 +619,86 @@ function substituteVariables(
   return output;
 }
 
-function evaluateArithmetic(str: string): string {
-  const arithmeticPattern = /^([\d.]+)\s*([\+\-\*\/])\s*([\d.]+)$/;
-  const match = str.match(arithmeticPattern);
+function evaluateExpr(str: string): string {
+  // Handle string concatenation
+  const strParts = str.match(/^"([^"]*)"(?:\s+"([^"]*)")*$/);
+  if (strParts) {
+    return '"' + str.replace(/"\s*"/g, '') + '"';
+  }
 
+  const arithmeticPattern = /^([\d.]+)\s*([\+\-\*\/%])\s*([\d.]+)$/;
+  const match = str.match(arithmeticPattern);
   if (match) {
     const left = parseFloat(match[1]);
     const op = match[2];
     const right = parseFloat(match[3]);
-
     let result: number;
     switch (op) {
       case "+": result = left + right; break;
       case "-": result = left - right; break;
       case "*": result = left * right; break;
       case "/": result = left / right; break;
+      case "%": result = left % right; break;
       default: return str;
     }
-
     return String(result);
   }
-
   return str;
 }
 
-function formatPrintf(
-  expr: string,
-  fields: string[],
-  ctx: AwkContext
-): string {
-  // Parse printf format: printf "format", arg1, arg2, ...
-  // Split carefully — don't split on commas inside array brackets
-  const parts: string[] = [];
-  let current = "";
-  let depth = 0;
-  let inStr = false;
-  let strCh = "";
-
-  for (let i = 0; i < expr.length; i++) {
-    const ch = expr[i];
-    if (inStr) {
-      current += ch;
-      if (ch === strCh && expr[i - 1] !== '\\') inStr = false;
-      continue;
-    }
-    if (ch === '"' || ch === "'") { inStr = true; strCh = ch; current += ch; continue; }
-    if (ch === '[') { depth++; current += ch; continue; }
-    if (ch === ']') { depth--; current += ch; continue; }
-    if (ch === ',' && depth === 0 && !inStr) {
-      parts.push(current.trim());
-      current = "";
-      continue;
-    }
-    current += ch;
-  }
-  if (current.trim()) parts.push(current.trim());
-
+function formatPrintf(expr: string, fields: string[], ctx: AwkContext): string {
+  const parts: string[] = smartSplit(expr, ',');
   if (parts.length === 0) return "";
 
-  // Extract format string (remove quotes)
   let format = parts[0].trim().replace(/^["'](.*)["']$/, "$1");
-
-  // Get arguments
   const args: string[] = [];
   for (let i = 1; i < parts.length; i++) {
     let arg = substituteVariables(parts[i].trim(), fields, ctx);
-    arg = evaluateArithmetic(arg);
+    arg = evaluateExpr(arg);
     args.push(arg);
   }
 
-  // Process format string
   let output = format;
   let argIdx = 0;
 
-  // Replace format specifiers
   output = output.replace(/%(-)?(\d+)?(?:\.(\d+))?([sdifgex%])/g, (match, leftAlign, width, precision, type) => {
     if (type === "%") return "%";
-
     if (argIdx >= args.length) return match;
     const arg = args[argIdx++];
 
     let formatted: string;
     switch (type) {
-      case "s": // string
-        formatted = arg;
-        break;
-      case "d": // decimal integer
-      case "i": // integer
-        formatted = String(parseInt(arg) || 0);
-        break;
-      case "f": // floating point
+      case "s": formatted = arg; break;
+      case "d": case "i": formatted = String(parseInt(arg) || 0); break;
+      case "f": {
         const num = parseFloat(arg) || 0;
         formatted = precision ? num.toFixed(parseInt(precision)) : String(num);
         break;
-      case "g": // general format
-      case "e": // exponential
-      case "x": // hexadecimal
-        formatted = arg;
-        break;
-      default:
-        formatted = arg;
+      }
+      case "g": case "e": case "x": formatted = arg; break;
+      default: formatted = arg;
     }
 
-    // Apply width
     if (width) {
       const w = parseInt(width);
-      if (leftAlign) {
-        formatted = formatted.padEnd(w, " ");
-      } else {
-        formatted = formatted.padStart(w, " ");
-      }
+      formatted = leftAlign ? formatted.padEnd(w, " ") : formatted.padStart(w, " ");
     }
-
     return formatted;
   });
 
-  // Handle escape sequences
-  output = output.replace(/\\n/g, "\n");
-  output = output.replace(/\\t/g, "\t");
-  output = output.replace(/\\r/g, "\r");
-  output = output.replace(/\\\\/g, "\\");
-
-  // Remove trailing newline for consistency
-  if (output.endsWith("\n")) {
-    output = output.slice(0, -1);
-  }
-
+  output = output.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\r/g, "\r").replace(/\\\\/g, "\\");
+  if (output.endsWith("\n")) output = output.slice(0, -1);
   return output;
 }
 
-function processStringFunctions(
-  code: string,
-  fields: string[],
-  ctx: AwkContext
-): string {
+function processStringFunctions(code: string, fields: string[], ctx: AwkContext): string {
   let result = code;
 
-  // length(s)
   result = result.replace(/length\s*\(\s*([^)]*)\s*\)/g, (_, arg) => {
     const str = arg ? substituteVariables(arg, fields, ctx) : fields.join(ctx.OFS);
     return String(str.length);
   });
 
-  // substr(s, start, length)
   result = result.replace(/substr\s*\(\s*([^,)]+)\s*,\s*([^,)]+)(?:\s*,\s*([^)]+))?\s*\)/g, (_, str, start, len) => {
     const s = substituteVariables(str.trim(), fields, ctx);
     const startIdx = parseInt(substituteVariables(start.trim(), fields, ctx)) - 1;
@@ -571,7 +706,6 @@ function processStringFunctions(
     return length ? s.slice(startIdx, startIdx + length) : s.slice(startIdx);
   });
 
-  // index(s, t)
   result = result.replace(/index\s*\(\s*([^,)]+)\s*,\s*([^)]+)\s*\)/g, (_, str, substr) => {
     const s = substituteVariables(str.trim(), fields, ctx);
     const t = substituteVariables(substr.trim(), fields, ctx).replace(/^["'](.*)["']$/, "$1");
@@ -579,25 +713,25 @@ function processStringFunctions(
     return String(idx === -1 ? 0 : idx + 1);
   });
 
-  // tolower(s)
   result = result.replace(/tolower\s*\(\s*([^)]*)\s*\)/g, (_, arg) => {
     return substituteVariables(arg, fields, ctx).toLowerCase();
   });
 
-  // toupper(s)
   result = result.replace(/toupper\s*\(\s*([^)]*)\s*\)/g, (_, arg) => {
     return substituteVariables(arg, fields, ctx).toUpperCase();
   });
 
-  // split(s, a, fs)
   result = result.replace(/split\s*\(\s*([^,)]+)\s*,\s*([^,)]+)(?:\s*,\s*([^)]+))?\s*\)/g, (_, str, arr, sep) => {
     const s = substituteVariables(str.trim(), fields, ctx);
+    const arrName = arr.trim();
     const separator = sep ? substituteVariables(sep.trim(), fields, ctx).replace(/^["'](.*)["']$/, "$1") : ctx.FS;
     const parts = s.split(new RegExp(separator));
+    // Store split results in array
+    if (!ctx.arrays[arrName]) ctx.arrays[arrName] = {};
+    parts.forEach((p, i) => { ctx.arrays[arrName][String(i + 1)] = p; });
     return String(parts.length);
   });
 
-  // gsub(regex, replacement, target)
   result = result.replace(/gsub\s*\(\s*([^,)]+)\s*,\s*([^,)]+)(?:\s*,\s*([^)]+))?\s*\)/g, (_, pattern, repl, target) => {
     const pat = substituteVariables(pattern.trim(), fields, ctx).replace(/^["'](.*)["']$/, "$1");
     const replacement = substituteVariables(repl.trim(), fields, ctx).replace(/^["'](.*)["']$/, "$1");
@@ -605,7 +739,6 @@ function processStringFunctions(
     try { return tgt.replace(new RegExp(pat, "g"), replacement); } catch { return tgt; }
   });
 
-  // sub(regex, replacement, target)
   result = result.replace(/sub\s*\(\s*([^,)]+)\s*,\s*([^,)]+)(?:\s*,\s*([^)]+))?\s*\)/g, (_, pattern, repl, target) => {
     const pat = substituteVariables(pattern.trim(), fields, ctx).replace(/^["'](.*)["']$/, "$1");
     const replacement = substituteVariables(repl.trim(), fields, ctx).replace(/^["'](.*)["']$/, "$1");
@@ -613,7 +746,6 @@ function processStringFunctions(
     try { return tgt.replace(new RegExp(pat), replacement); } catch { return tgt; }
   });
 
-  // match(s, regex)
   result = result.replace(/match\s*\(\s*([^,)]+)\s*,\s*([^)]+)\s*\)/g, (_, str, pattern) => {
     const s = substituteVariables(str.trim(), fields, ctx);
     const pat = substituteVariables(pattern.trim(), fields, ctx).replace(/^["'](.*)["']$/, "$1");

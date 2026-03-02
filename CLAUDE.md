@@ -651,9 +651,9 @@ The workflow cycle is: **implement shell features → write tests → update CLA
 
 The vision: a **fully functional browser-native Linux system** where Claude Code (Spirit) runs with no external server. There is always work to do — if your current task is done, find the next missing Linux capability and implement it.
 
-### Current State (Build #856, 1809 tests)
+### Current State (Build #858, 1885 tests)
 
-The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Core features working: pipes, redirects, heredocs, arrays (indexed + associative), arithmetic, functions, control structures, job control, process substitution, extglob, brace expansion, namerefs, traps, and 30+ inline builtins. All three architecture tiers are operational: Tier 1 (220+ JS commands), Tier 2 (WASM+WASI, 22 packages), Tier 3 (x86-64 emulator, Phase 3 complete — ~130 instructions, ~46 syscalls, SSE2, TLS, runs real musl-static ELF binaries).
+The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Core features working: pipes, redirects, heredocs, arrays (indexed + associative), arithmetic, functions, control structures, job control, process substitution, extglob, brace expansion, namerefs, traps, and 30+ inline builtins. All three architecture tiers are operational: Tier 1 (220+ JS commands), Tier 2 (WASM+WASI, 22 packages), Tier 3 (x86-64 emulator, Phase 3 complete — ~130 instructions, ~46 syscalls, SSE2, TLS, runs real musl-static ELF binaries, Phases 4-6 complete — enhanced commands, JIT basic block cache, network syscall stubs, debug enhancements).
 
 ### Future Plans — Next Features to Implement (Priority Order)
 
@@ -674,15 +674,32 @@ The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Co
 > - Batch 1 coreutils — rev, tac, shuf, cmp, dd, xxd, dc, split
 > - Batch 2 coreutils — factor, cksum, base32, numfmt, csplit, nice
 > - Batch 3 coreutils — lsof, w, who, users, dos2unix, unix2dos
+> - Enhanced sort (-k/-t/-f/-h/-V/-s/-b/-c), ls (--color/-1/-S/-t/-d/-F/--group-directories-first)
+> - watch real TUI (alternate screen, -n interval, -d diffs, -t, -e, -g)
+> - grep --color, -F fixed strings, -q quiet, -x whole line, -m maxcount, -H/-h filename
+> - POSIX ustar tar (512-byte blocks, gzip via CompressionStream, backward compat with FLUFFY-TAR-V1)
+> - find expression tree AST (!, -not, -o/-or, -a/-and, -empty, -mtime, -delete, -prune)
+> - sed hold space (h/H/g/G/x), branching (b/t/:label), y transliterate, c/q/= commands, regex ranges
+> - awk if/else, while, C-style for, next, exit, delete arr[key], (key in arr), ternary, indirect $var
+> - x86 network syscall stubs (socket/connect/sendto/recvfrom → fetch() for HTTP)
+> - x86 debug breakpoints (--break ADDR), watchpoints (--watch ADDR), memory dump (--dump ADDR SIZE)
+> - x86 JIT basic block cache (identification, FNV-1a hash invalidation, LRU eviction)
 
-#### P1: Command Completeness
-4. **Full POSIX coverage** — every standard coreutil as native TypeScript
-5. **Enhanced flags** — add missing flags to existing commands (ls --color=always, sort -V, etc.)
+#### P1: Binary Package Manager (`xpkg`) — Phase 7
+4. **xpkg install/list/search/remove** — downloads musl-static x86-64 ELF binaries from a JSON manifest on CDN
+5. **Initial packages** — busybox (~800KB, 300+ commands), dash, tree, file, bc
+6. **JIT Phase 2** — compile hot basic blocks to JS functions (scaffold exists in jit.ts)
 
-#### P2: Performance + Infrastructure
-6. **JIT compilation** — Compile hot x86 basic blocks to JavaScript functions for 10-100x speedup
-7. **Networking stubs** — socket/connect/send/recv syscalls mapped to fetch/WebSocket
-8. **Debug tooling** — Enhanced `x86 debug` with breakpoints, watchpoints, memory dumps
+#### P2: Terminal Multiplexer + Compression — Phases 8-9
+7. **tmux-lite** — split-pane, new-session, select-pane, detach/attach, visual pane splitting, status bar
+8. **Compression suite** — bzip2/bunzip2, xz/unxz, zstd/unzstd, tar -j/-J/--zstd integration
+
+#### P3: Networking + Services — Phases 10-11
+9. **SSH-over-WebRTC** — `ssh <code>` bidirectional terminal over WebRTC DataChannel, `scp` file transfer
+10. **Init system + cron** — crontab, systemctl start/stop/restart/status, /etc/services/, journalctl
+
+#### P4: Real Interpreters — Phase 12
+11. **CPython + Bash via x86** — extend decoder (10-30 more instructions), extend syscalls (mmap file-backed, pipe, dup2, signals), JIT Phase 3 full codegen, cross-compile python3.12-musl-static and bash-5.2-musl-static
 
 ### Technical Notes for New Agents
 
@@ -690,6 +707,6 @@ The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Co
 - **ANSI-C quoting** `$'...'` is handled ONLY in the tokenizer — never in `expandVars`.
 - **Tests** are in `tests/tests/shiro-vitest/shell-advanced.test.ts`. Sections are numbered (currently 1-81). Add new sections sequentially. The `run(shell, cmd)` helper returns `{ output, exitCode }`. Stderr goes to stdout in the test helper.
 - **Deploy cycle**: `npm run deploy` auto-increments build number, runs tsc + vite build, and scp's to the DO droplet.
-- **x86 emulator**: Tests use `buildElf64(code)` helper to hand-craft minimal ELF64 binaries from raw byte arrays. The emulator uses `bigint` for all 64-bit values (registers, addresses). Phase 3 complete: ~130 instructions, ~46 syscalls, XMM registers, FS/GS segment overrides, SSE2, TLS support. Runs real musl-static ELF binaries. Test fixture at `tests/tests/shiro-vitest/fixtures/hello-musl`.
+- **x86 emulator**: Tests use `buildElf64(code)` helper to hand-craft minimal ELF64 binaries from raw byte arrays. The emulator uses `bigint` for all 64-bit values (registers, addresses). Phase 3 complete: ~130 instructions, ~58 syscalls (including network stubs), XMM registers, FS/GS segment overrides, SSE2, TLS support. JIT basic block cache with FNV-1a hash invalidation. Debug mode with breakpoints, watchpoints, and memory dumps. Runs real musl-static ELF binaries. Test fixture at `tests/tests/shiro-vitest/fixtures/hello-musl`.
 - **Virtual filesystem providers**: `VirtualFSProvider` interface in `filesystem.ts`. `/dev` and `/proc` are fully virtual — add new providers to the `virtualProviders` array.
 

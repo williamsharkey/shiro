@@ -207,7 +207,7 @@
       <div class="tiers">
         <div class="tier active">
           <div class="tier-label">Tier 1 — JavaScript</div>
-          <h3>200+ hand-written commands</h3>
+          <h3>220+ hand-written commands</h3>
           <p>ls, cat, grep, sed, git, npm, node, esbuild, sqlite3, python — reimplemented in TypeScript. Fast, small (~420 KB total), deeply integrated with the browser.</p>
         </div>
         <div class="tier active">
@@ -218,7 +218,7 @@
         <div class="tier active">
           <div class="tier-label">Tier 3 — x86 emulation</div>
           <h3>Run any Linux binary</h3>
-          <p>A full x86-64 instruction-level emulator with ~130 instructions, 46 Linux syscalls, SSE2, and TLS support. Runs real musl-static ELF binaries compiled with gcc — in the browser, no server.</p>
+          <p>A full x86-64 instruction-level emulator with ~130 instructions, 58 Linux syscalls, SSE2, and TLS support. JIT basic block cache and network syscall stubs. Runs real musl-static ELF binaries compiled with gcc — in the browser, no server.</p>
         </div>
       </div>
     </section>
@@ -233,7 +233,7 @@
         <code>jq</code> <code>lua</code> <code>curl</code> <code>tar</code> <code>zip</code>
         <code>find</code> <code>sort</code> <code>wc</code> <code>diff</code> <code>ssh-keygen</code>
       </div>
-      <p>The shell supports pipes, redirects, heredocs, arrays, arithmetic, functions, process substitution, extended globbing, traps, programmable tab completion, and dozens more bash features — tested by 1,706 automated tests.</p>
+      <p>The shell supports pipes, redirects, heredocs, arrays, arithmetic, functions, process substitution, extended globbing, traps, programmable tab completion, and dozens more bash features — tested by 1,885 automated tests.</p>
     </section>
 
     <section>
@@ -260,7 +260,7 @@
     <section>
       <h2>What's next</h2>
       <p>The system grows toward full Linux compatibility — and beyond — one capability at a time:</p>
-      <p><strong>Browser-native APIs as Unix commands</strong> — <code>speak</code> (text-to-speech), <code>listen</code> (speech-to-text), <code>notify</code> (desktop notifications), <code>camera</code> (webcam snapshots). Pipe them together: <code>listen | sh</code> speaks a command and executes it. <strong>Interactive TUI</strong> — <code>top</code> (live process monitor), <code>less</code> (full pager with search), <code>man</code> (manual pages). <strong>Full POSIX coverage</strong> — expand toward every standard Unix command, all native TypeScript. <strong>JIT compilation</strong> — compile hot x86 basic blocks to JavaScript functions for 10-100x speedup.</p>
+      <p><strong>Binary package manager</strong> — <code>xpkg install busybox</code> downloads and runs real x86 Linux binaries through the emulator. <strong>Terminal multiplexer</strong> — tmux-like pane splitting, sessions, and detach/attach. <strong>SSH-over-WebRTC</strong> — <code>ssh &lt;code&gt;</code> opens a shell session between browser tabs, <code>scp</code> transfers files. <strong>Init system + cron</strong> — scheduled tasks, service management, journalctl. <strong>Real CPython and Bash</strong> — extend the x86 emulator to run python3 and bash compiled as musl-static binaries.</p>
     </section>
 
     <section>

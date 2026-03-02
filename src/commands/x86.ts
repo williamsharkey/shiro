@@ -79,7 +79,37 @@ export const x86Cmd: Command = {
     }
 
     if (subCmd === 'debug') {
-      return debugElf(filePath, fileArgs, x86Ctx);
+      // Parse debug options: --break ADDR, --watch ADDR, --dump ADDR SIZE
+      const breakpoints: bigint[] = [];
+      const watchpoints: bigint[] = [];
+      let dumpAddr: bigint | undefined;
+      let dumpSize: number | undefined;
+      const debugFileArgs: string[] = [];
+
+      for (let i = 0; i < fileArgs.length; i++) {
+        if (fileArgs[i] === '--break' && i + 1 < fileArgs.length) {
+          breakpoints.push(BigInt(fileArgs[++i]));
+        } else if (fileArgs[i] === '--watch' && i + 1 < fileArgs.length) {
+          watchpoints.push(BigInt(fileArgs[++i]));
+        } else if (fileArgs[i] === '--dump' && i + 1 < fileArgs.length) {
+          dumpAddr = BigInt(fileArgs[++i]);
+          if (i + 1 < fileArgs.length && /^\d+$/.test(fileArgs[i + 1])) {
+            dumpSize = parseInt(fileArgs[++i], 10);
+          }
+        } else {
+          debugFileArgs.push(fileArgs[i]);
+        }
+      }
+
+      const debugOpts = {
+        breakpoints: breakpoints.length > 0 ? breakpoints : undefined,
+        watchpoints: watchpoints.length > 0 ? watchpoints : undefined,
+        dumpAddr,
+        dumpSize,
+      };
+
+      x86Ctx.args = debugFileArgs;
+      return debugElf(filePath, debugFileArgs, x86Ctx, debugOpts);
     }
 
     writeStderr(`x86: unknown command '${subCmd}'\r\n`);

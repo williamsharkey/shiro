@@ -1,71 +1,170 @@
 
-/**
- * watch - Execute a program periodically, showing output
- *
- * In Unix, watch runs a command repeatedly at specified intervals,
- * displaying the output and updating the screen.
- *
- * In browser environment, this is a stub that acknowledges the command.
- * A real implementation would require:
- * - setInterval for periodic execution
- * - Terminal UI for updating display
- * - Integration with shell's command executor
- *
- * Syntax:
- *   watch [-n SECONDS] [-d] [-t] COMMAND
- *
- * Options:
- *   -n, --interval SECONDS  Specify update interval (default: 2)
- *   -d, --differences       Highlight changes between updates
- *   -t, --no-title         Turn off header
- *   -b, --beep             Beep if command has a non-zero exit
- *   -e, --errexit          Exit if command has a non-zero exit
- *   -g, --chgexit          Exit when output changes
- */
 import type { Command } from './index';
-import { parseArgs } from './flags';
+
 export const watch: Command = {
   name: "watch",
   description: "Execute a program periodically, showing output",
   async exec(ctx) {
-    const args = ctx.args;
-    const { values, positional, flags } = parseArgs(args, [
-      "n", "interval", "d", "differences", "t", "no-title",
-      "b", "beep", "e", "errexit", "g", "chgexit", "help"
-    ]);
+    // Parse arguments manually for -n, -d, -t, -e, -g
+    let interval = 2;
+    let showDiffs = false;
+    let noTitle = false;
+    let errexit = false;
+    let chgexit = false;
+    const cmdParts: string[] = [];
+    let parsingFlags = true;
 
-    if (flags.help) {
-      ctx.stdout += `Usage: watch [options] command Execute a program periodically, showing output fullscreen.  Options: -n, --interval <secs>  Seconds to wait between updates (default: 2) -d, --differences      Highlight changes between updates -t, --no-title        Turn off header showing interval, command, and time -b, --beep            Beep if command has a non-zero exit status -e, --errexit         Exit if command has a non-zero exit status -g, --chgexit         Exit when output from command changes -h, --help            Display this help and exit  Examples: watch -n 5 ls -l       # Update every 5 seconds watch -d df -h         # Highlight differences in disk usage watch date             # Show current time, updating every 2 seconds \n`;
-      return 0;
+    let i = 0;
+    while (i < ctx.args.length) {
+      const arg = ctx.args[i];
+      if (parsingFlags && (arg === '-n' || arg === '--interval') && i + 1 < ctx.args.length) {
+        interval = parseFloat(ctx.args[++i]) || 2;
+      } else if (parsingFlags && (arg === '-d' || arg === '--differences')) {
+        showDiffs = true;
+      } else if (parsingFlags && (arg === '-t' || arg === '--no-title')) {
+        noTitle = true;
+      } else if (parsingFlags && (arg === '-e' || arg === '--errexit')) {
+        errexit = true;
+      } else if (parsingFlags && (arg === '-g' || arg === '--chgexit')) {
+        chgexit = true;
+      } else if (parsingFlags && arg === '--help') {
+        ctx.stdout += 'Usage: watch [options] command\n\nOptions:\n  -n, --interval <secs>  Seconds between updates (default: 2)\n  -d, --differences      Highlight changes\n  -t, --no-title         Hide header\n  -e, --errexit          Exit on command error\n  -g, --chgexit          Exit when output changes\n';
+        return 0;
+      } else {
+        parsingFlags = false;
+        cmdParts.push(arg);
+      }
+      i++;
     }
 
-    if (positional.length === 0) {
+    if (cmdParts.length === 0) {
       ctx.stderr += "watch: missing command\nTry 'watch --help' for more information.\n";
       return 1;
     }
 
-    const interval = parseFloat(values.n || values.interval || "2");
-    const command = positional.join(" ");
+    const command = cmdParts.join(' ');
 
-    // In a real implementation, this would:
-    // 1. Clear the screen
-    // 2. Show header with interval, command, and time
-    // 3. Execute the command
-    // 4. Display the output
-    // 5. Wait for interval seconds
-    // 6. Repeat from step 1
-    //
-    // Special handling:
-    // -d: Compare output and highlight differences
-    // -e: Exit on non-zero exit code
-    // -g: Exit when output changes
-    // -b: Beep on non-zero exit code
+    // Batch mode (no terminal) — run once and return
+    if (!ctx.terminal) {
+      let header = '';
+      if (!noTitle) {
+        const now = new Date();
+        const timeStr = now.toTimeString().slice(0, 8);
+        header = `Every ${interval}.0s: ${command}    ${timeStr}\n\n`;
+      }
+      let out = '';
+      const exitCode = await ctx.shell.execute(command, (s: string) => { out += s; });
+      ctx.stdout += header + out;
+      if (errexit && exitCode !== 0) return exitCode;
+      return 0;
+    }
 
-    // For browser environment, we'll just show what would be watched
-    const header = flags.t || flags["no-title"] ? "" :
-      `Every ${interval}s: ${command}\n\n`;
+    // TUI mode — alternate screen, periodic execution
+    const terminal = ctx.terminal;
+    const write = (s: string) => terminal.writeOutput(s);
+    const { cols } = terminal.getSize();
 
-    ctx.stdout += header + `watch: This is a stub implementation. In a real shell, this would execute '${command}' every ${interval} seconds.  To implement watch in a browser environment: 1. Use setInterval to run command periodically 2. Update a dedicated output area 3. Handle options like -d (differences), -e (errexit), -g (chgexit) 4. Provide a way to stop watching (Ctrl+C)  Browser shells should implement watch at the shell level for proper integration. \n`;
-    return 0;
+    // Enter alternate screen
+    write('\x1b[?1049h');
+    write('\x1b[?25l'); // hide cursor
+
+    let prevOutput = '';
+    let running = true;
+    let iteration = 0;
+
+    const render = async (): Promise<number> => {
+      let out = '';
+      const exitCode = await ctx.shell.execute(command, (s: string) => { out += s; });
+
+      if (chgexit && iteration > 0 && out !== prevOutput) {
+        return -2;
+      }
+      if (errexit && exitCode !== 0) {
+        return exitCode;
+      }
+
+      write('\x1b[2J\x1b[H');
+
+      if (!noTitle) {
+        const now = new Date();
+        const timeStr = now.toTimeString().slice(0, 8);
+        write(`\x1b[7mEvery ${interval}.0s: ${command}    ${timeStr}\x1b[27m\r\n\r\n`);
+      }
+
+      if (showDiffs && prevOutput && out !== prevOutput) {
+        const oldLines = prevOutput.split('\n');
+        const newLines = out.split('\n');
+        for (let j = 0; j < newLines.length; j++) {
+          if (j >= oldLines.length || newLines[j] !== oldLines[j]) {
+            write(`\x1b[7m${newLines[j]}\x1b[27m\r\n`);
+          } else {
+            write(newLines[j] + '\r\n');
+          }
+        }
+      } else {
+        const lines = out.split('\n');
+        for (const line of lines) {
+          write(line + '\r\n');
+        }
+      }
+
+      prevOutput = out;
+      iteration++;
+      return exitCode;
+    };
+
+    const cleanup = () => {
+      running = false;
+      terminal.exitRawMode();
+      write('\x1b[?25h');
+      write('\x1b[?1049l');
+    };
+
+    return new Promise<number>((resolve) => {
+      let intervalId: ReturnType<typeof setInterval> | null = null;
+
+      const onKey = (key: string) => {
+        if (key === 'q' || key === 'Q' || key === '\x03') {
+          cleanup();
+          if (intervalId) clearInterval(intervalId);
+          resolve(0);
+        }
+      };
+
+      terminal.enterRawMode(onKey);
+
+      // Ctrl+C abort
+      const signal = ctx.shell?.abortController?.signal;
+      if (signal) {
+        signal.addEventListener('abort', () => {
+          cleanup();
+          if (intervalId) clearInterval(intervalId);
+          resolve(130);
+        }, { once: true });
+      }
+
+      // Initial render
+      render().then(firstResult => {
+        if (!running) return;
+        if (firstResult === -2 || (errexit && firstResult !== 0)) {
+          cleanup();
+          resolve(firstResult === -2 ? 0 : firstResult);
+          return;
+        }
+
+        intervalId = setInterval(async () => {
+          if (!running) {
+            if (intervalId) clearInterval(intervalId);
+            return;
+          }
+          const result = await render();
+          if (result === -2 || (errexit && result !== 0)) {
+            cleanup();
+            if (intervalId) clearInterval(intervalId);
+            resolve(result === -2 ? 0 : result);
+          }
+        }, interval * 1000);
+      });
+    });
   },
 };

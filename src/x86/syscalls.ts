@@ -18,6 +18,9 @@ const EPERM = 1;
 const EINVAL = 22;
 const ENOSPC = 28;
 const ENOSYS = 38;
+const ENETUNREACH = 101;
+const EAFNOSUPPORT = 97;
+const ECONNREFUSED = 111;
 
 // File descriptor table entry
 interface FDEntry {
@@ -25,6 +28,20 @@ interface FDEntry {
   offset: number;
   content: Uint8Array | null;  // null = stdin/stdout/stderr
   flags: number;
+}
+
+// Socket metadata for network syscall stubs
+interface SocketEntry {
+  fd: number;
+  domain: number;    // AF_INET=2, AF_INET6=10
+  type: number;      // SOCK_STREAM=1, SOCK_DGRAM=2
+  protocol: number;
+  targetHost: string;
+  targetPort: number;
+  connected: boolean;
+  writeBuffer: Uint8Array[];
+  readBuffer: Uint8Array;
+  readOffset: number;
 }
 
 // Stat struct size (Linux x86-64 stat struct = 144 bytes)
@@ -40,6 +57,7 @@ export class LinuxSyscalls {
   private fs: FileSystem;
   private cwd: string;
   private fdTable: Map<number, FDEntry> = new Map();
+  private socketTable: Map<number, SocketEntry> = new Map();
   private nextFd = 3;
   private brkAddr: bigint;
   private startTime: number;
@@ -126,7 +144,21 @@ export class LinuxSyscalls {
       case 19:  result = this.sysReadv(arg0, arg1, arg2); break;
       case 28:  result = 0n; break; // madvise — no-op
       case 35:  result = this.sysNanosleep(arg0, arg1); break;
-      case 41:  result = -BigInt(ENOSYS); break; // socket — not supported
+      case 41:  result = this.sysSocket(arg0, arg1, arg2); break; // socket
+      case 42:  result = await this.sysConnect(arg0, arg1, arg2); break; // connect
+      case 43:  result = -BigInt(ENOSYS); break; // accept — not supported
+      case 44:  result = await this.sysSendto(arg0, arg1, arg2, arg3, arg4, arg5); break; // sendto
+      case 45:  result = await this.sysRecvfrom(arg0, arg1, arg2, arg3, arg4, arg5); break; // recvfrom
+      case 46:  result = await this.sysSendmsg(arg0, arg1, arg2); break; // sendmsg (stub)
+      case 47:  result = -BigInt(ENOSYS); break; // recvmsg — stub
+      case 48:  result = 0n; break; // shutdown — stub
+      case 49:  result = -BigInt(ENOSYS); break; // bind — not supported
+      case 50:  result = -BigInt(ENOSYS); break; // listen — not supported
+      case 51:  result = -BigInt(ENOSYS); break; // getsockname — stub
+      case 52:  result = -BigInt(ENOSYS); break; // getpeername — stub
+      case 53:  result = -BigInt(ENOSYS); break; // socketpair — not supported
+      case 54:  result = this.sysGetsockopt(arg0, arg1, arg2, arg3, arg4); break; // getsockopt
+      case 55:  result = this.sysSetsockopt(arg0, arg1, arg2, arg3, arg4); break; // setsockopt
       case 56:  result = -BigInt(ENOSYS); break; // clone — not supported
       case 99:  result = this.sysSysinfo(arg0); break;
       case 131: result = -BigInt(EACCES); break; // sigaltstack — stub
@@ -642,5 +674,160 @@ export class LinuxSyscalls {
     this.mem.write64(tp, sec);
     this.mem.write64(tp + 8n, nsec);
     return 0n;
+  }
+
+  // ─── Network syscall stubs ────────────────────────────────────────────────
+
+  private sysSocket(domain: bigint, type: bigint, protocol: bigint): bigint {
+    const d = Number(domain);
+    const t = Number(type) & 0xFF; // Mask off SOCK_NONBLOCK/SOCK_CLOEXEC flags
+    // Only support AF_INET (2) and AF_INET6 (10)
+    if (d !== 2 && d !== 10) return -BigInt(EAFNOSUPPORT);
+    // Only support SOCK_STREAM (1) for HTTP
+    if (t !== 1 && t !== 2) return -BigInt(ENOSYS);
+    const fd = this.nextFd++;
+    this.fdTable.set(fd, { path: `socket:${fd}`, offset: 0, content: new Uint8Array(0), flags: 0 });
+    this.socketTable.set(fd, {
+      fd, domain: d, type: t, protocol: Number(protocol),
+      targetHost: '', targetPort: 0, connected: false,
+      writeBuffer: [], readBuffer: new Uint8Array(0), readOffset: 0,
+    });
+    return BigInt(fd);
+  }
+
+  private async sysConnect(fdNum: bigint, addrPtr: bigint, addrLen: bigint): Promise<bigint> {
+    const fd = Number(fdNum);
+    const sock = this.socketTable.get(fd);
+    if (!sock) return -BigInt(EBADF);
+    // Parse sockaddr_in: family(2), port(2 big-endian), addr(4)
+    const family = this.mem.read16(addrPtr);
+    const portHi = this.mem.read8(addrPtr + 2n);
+    const portLo = this.mem.read8(addrPtr + 3n);
+    const port = (portHi << 8) | portLo;
+    // Read IPv4 address
+    const a0 = this.mem.read8(addrPtr + 4n);
+    const a1 = this.mem.read8(addrPtr + 5n);
+    const a2 = this.mem.read8(addrPtr + 6n);
+    const a3 = this.mem.read8(addrPtr + 7n);
+    sock.targetHost = `${a0}.${a1}.${a2}.${a3}`;
+    sock.targetPort = port;
+    sock.connected = true;
+    // Only allow HTTP (80) and HTTPS (443) — reject others
+    if (port !== 80 && port !== 443) {
+      return -BigInt(ENETUNREACH);
+    }
+    return 0n;
+  }
+
+  private async sysSendto(fdNum: bigint, buf: bigint, len: bigint, flags: bigint, destAddr: bigint, addrLen: bigint): Promise<bigint> {
+    const fd = Number(fdNum);
+    const sock = this.socketTable.get(fd);
+    if (!sock) {
+      // Fall through to regular write
+      return this.sysWrite(fdNum, buf, len);
+    }
+    const n = Number(len);
+    const data = this.mem.readBytes(buf, n);
+    sock.writeBuffer.push(new Uint8Array(data));
+    return BigInt(n);
+  }
+
+  private async sysRecvfrom(fdNum: bigint, buf: bigint, len: bigint, flags: bigint, srcAddr: bigint, addrLen: bigint): Promise<bigint> {
+    const fd = Number(fdNum);
+    const sock = this.socketTable.get(fd);
+    if (!sock) {
+      return this.sysRead(fdNum, buf, len);
+    }
+    // If we have buffered read data, return it
+    if (sock.readOffset < sock.readBuffer.length) {
+      const n = Math.min(Number(len), sock.readBuffer.length - sock.readOffset);
+      this.mem.writeBytes(buf, sock.readBuffer.slice(sock.readOffset, sock.readOffset + n));
+      sock.readOffset += n;
+      return BigInt(n);
+    }
+    // Try to fetch via HTTP if we have buffered write data
+    if (sock.writeBuffer.length > 0 && sock.connected) {
+      try {
+        const response = await this.fetchFromSocket(sock);
+        sock.readBuffer = response;
+        sock.readOffset = 0;
+        sock.writeBuffer = [];
+        const n = Math.min(Number(len), response.length);
+        this.mem.writeBytes(buf, response.slice(0, n));
+        sock.readOffset = n;
+        return BigInt(n);
+      } catch {
+        return -BigInt(ECONNREFUSED);
+      }
+    }
+    return 0n; // EOF
+  }
+
+  private async sysSendmsg(fdNum: bigint, msg: bigint, flags: bigint): Promise<bigint> {
+    // Stub — just acknowledge
+    return 0n;
+  }
+
+  private sysGetsockopt(fdNum: bigint, level: bigint, optname: bigint, optval: bigint, optlen: bigint): bigint {
+    // Stub — return success with zero value
+    if (optval !== 0n && optlen !== 0n) {
+      const len = this.mem.read32(optlen);
+      if (len >= 4) this.mem.write32(optval, 0);
+    }
+    return 0n;
+  }
+
+  private sysSetsockopt(fdNum: bigint, level: bigint, optname: bigint, optval: bigint, optlen: bigint): bigint {
+    // Stub — accept any option
+    return 0n;
+  }
+
+  /** Attempt to perform an HTTP fetch based on buffered socket writes */
+  private async fetchFromSocket(sock: SocketEntry): Promise<Uint8Array> {
+    // Concatenate write buffers to get the raw HTTP request
+    const totalLen = sock.writeBuffer.reduce((s, b) => s + b.length, 0);
+    const rawRequest = new Uint8Array(totalLen);
+    let offset = 0;
+    for (const buf of sock.writeBuffer) {
+      rawRequest.set(buf, offset);
+      offset += buf.length;
+    }
+    const requestText = new TextDecoder().decode(rawRequest);
+
+    // Parse HTTP request line
+    const firstLine = requestText.split('\r\n')[0] || requestText.split('\n')[0];
+    const parts = firstLine.split(' ');
+    const method = parts[0] || 'GET';
+    const path = parts[1] || '/';
+
+    // Extract Host header
+    const hostMatch = requestText.match(/Host:\s*([^\r\n]+)/i);
+    const host = hostMatch ? hostMatch[1].trim() : sock.targetHost;
+
+    const protocol = sock.targetPort === 443 ? 'https' : 'http';
+    const url = `${protocol}://${host}${path}`;
+
+    // Use fetch() to make the actual HTTP request
+    const response = await fetch(url, {
+      method,
+      headers: { 'User-Agent': 'Shiro-x86/1.0' },
+    });
+
+    // Build HTTP response
+    const body = await response.arrayBuffer();
+    const bodyBytes = new Uint8Array(body);
+    const statusLine = `HTTP/1.1 ${response.status} ${response.statusText}\r\n`;
+    const headers: string[] = [];
+    response.headers.forEach((value, key) => {
+      headers.push(`${key}: ${value}`);
+    });
+    headers.push(`Content-Length: ${bodyBytes.length}`);
+    const headerText = statusLine + headers.join('\r\n') + '\r\n\r\n';
+    const headerBytes = new TextEncoder().encode(headerText);
+
+    const result = new Uint8Array(headerBytes.length + bodyBytes.length);
+    result.set(headerBytes);
+    result.set(bodyBytes, headerBytes.length);
+    return result;
   }
 }

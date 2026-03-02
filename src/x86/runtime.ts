@@ -3,7 +3,7 @@
  * Connects the CPU, memory, decoder, ELF loader, and syscalls together.
  */
 
-import { CPU } from './cpu';
+import { CPU, REG_NAMES } from './cpu';
 import { VirtualMemory } from './memory';
 import { Decoder } from './decode';
 import { loadElf, parseElf64, elfInfoString } from './elf';
@@ -20,6 +20,14 @@ export interface X86Context {
   stdin: string;
   writeStdout: (s: string) => void;
   writeStderr: (s: string) => void;
+}
+
+export interface DebugOptions {
+  breakpoints?: bigint[];     // addresses to break at
+  watchpoints?: bigint[];     // memory addresses to watch for writes
+  dumpAddr?: bigint;          // hex dump start address
+  dumpSize?: number;          // hex dump size (bytes)
+  maxSteps?: number;          // max instructions to execute
 }
 
 /** Execute an ELF64 binary in the x86-64 emulator */
@@ -113,11 +121,49 @@ export function getElfInfo(data: Uint8Array): string {
   return elfInfoString(info);
 }
 
+/** Format a hex memory dump */
+export function hexDump(mem: VirtualMemory, startAddr: bigint, size: number): string {
+  const lines: string[] = [];
+  for (let off = 0; off < size; off += 16) {
+    const addr = startAddr + BigInt(off);
+    let hex = '';
+    let ascii = '';
+    for (let i = 0; i < 16 && off + i < size; i++) {
+      const byte = mem.read8(addr + BigInt(i));
+      hex += byte.toString(16).padStart(2, '0') + ' ';
+      ascii += (byte >= 0x20 && byte <= 0x7e) ? String.fromCharCode(byte) : '.';
+    }
+    lines.push(`0x${addr.toString(16).padStart(8, '0')}  ${hex.padEnd(48)} |${ascii}|`);
+  }
+  return lines.join('\n');
+}
+
+/** Format register diff between two snapshots */
+function regDiff(prevRegs: BigInt64Array, cpu: CPU): string {
+  const changes: string[] = [];
+  for (let i = 0; i < 16; i++) {
+    const prev = BigInt.asUintN(64, prevRegs[i]);
+    const curr = BigInt.asUintN(64, cpu.regs[i]);
+    if (prev !== curr) {
+      changes.push(`  ${REG_NAMES[i]}: 0x${prev.toString(16)} → 0x${curr.toString(16)}`);
+    }
+  }
+  return changes.length > 0 ? changes.join('\n') : '';
+}
+
+/** Snapshot current register state */
+function snapshotRegs(cpu: CPU): BigInt64Array {
+  const snap = new BigInt64Array(16);
+  for (let i = 0; i < 16; i++) snap[i] = cpu.regs[i];
+  return snap;
+}
+
 /** Debug-mode execution: step through with register dumps */
 export async function debugElf(
   path: string,
   args: string[],
   ctx: X86Context,
+  opts?: DebugOptions,
 ): Promise<number> {
   let elfData: Uint8Array;
   try {
@@ -153,14 +199,38 @@ export async function debugElf(
     (decoder as any)._pendingSyscall = true;
   };
 
+  const breakpoints = new Set(opts?.breakpoints || []);
+  const watchpoints = opts?.watchpoints || [];
+  const maxSteps = opts?.maxSteps || 1000;
+
+  // If dump requested, show memory dump and return
+  if (opts?.dumpAddr !== undefined) {
+    const size = opts.dumpSize || 64;
+    ctx.writeStdout(hexDump(mem, opts.dumpAddr, size) + '\r\n');
+    return 0;
+  }
+
   let count = 0;
-  const MAX_DEBUG = 1000; // Much smaller limit for debug mode
+  let prevRegs = snapshotRegs(cpu);
+
   try {
-    while (!cpu.halted && count < MAX_DEBUG) {
+    while (!cpu.halted && count < maxSteps) {
+      const rip = cpu.rip;
+
+      // Check breakpoints
+      if (count > 0 && breakpoints.has(rip)) {
+        ctx.writeStdout(`\r\nBreakpoint hit at 0x${rip.toString(16).padStart(8, '0')} (after ${count} instructions)\r\n`);
+        ctx.writeStdout(cpu.dump().split('\n').map(l => '  ' + l).join('\r\n') + '\r\n');
+        return 0;
+      }
+
+      // Snapshot watchpoints before step
+      const watchBefore = watchpoints.map(addr => mem.read8(addr));
+
       // Print current instruction address
-      const rip = cpu.rip.toString(16).padStart(8, '0');
-      const byte = mem.read8(cpu.rip).toString(16).padStart(2, '0');
-      ctx.writeStdout(`[${count.toString().padStart(4)}] 0x${rip}: ${byte}  `);
+      const ripStr = rip.toString(16).padStart(8, '0');
+      const byte = mem.read8(rip).toString(16).padStart(2, '0');
+      ctx.writeStdout(`[${count.toString().padStart(4)}] 0x${ripStr}: ${byte}  `);
 
       (decoder as any)._pendingSyscall = false;
       decoder.step();
@@ -173,7 +243,22 @@ export async function debugElf(
         ctx.writeStdout(`\r\n`);
       }
 
-      // Print register state every 10 instructions
+      // Check watchpoints after step
+      for (let wi = 0; wi < watchpoints.length; wi++) {
+        const newVal = mem.read8(watchpoints[wi]);
+        if (newVal !== watchBefore[wi]) {
+          ctx.writeStdout(`  Watchpoint 0x${watchpoints[wi].toString(16)}: ${watchBefore[wi]} → ${newVal}\r\n`);
+        }
+      }
+
+      // Show register diff
+      const diff = regDiff(prevRegs, cpu);
+      if (diff) {
+        ctx.writeStdout(diff.split('\n').map(l => l).join('\r\n') + '\r\n');
+      }
+      prevRegs = snapshotRegs(cpu);
+
+      // Print full register state every 10 instructions
       if (count % 10 === 0) {
         ctx.writeStdout(cpu.dump().split('\n').map(l => '  ' + l).join('\r\n') + '\r\n');
       }
