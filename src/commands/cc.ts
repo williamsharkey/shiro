@@ -410,7 +410,45 @@ export class WasiRT {
       fd_filestat_set_times: () => E.OK, fd_filestat_set_size: () => E.OK,
       fd_fdstat_set_flags: () => E.OK, path_filestat_set_times: () => E.OK,
       sched_yield: () => E.OK,
-      fd_renumber: () => E.NOSYS, fd_readdir: () => E.NOSYS,
+      fd_readdir(fd: number, buf: number, bufLen: number, cookie: bigint, usedP: number) {
+        w.sync();
+        const f = w.fds.get(fd);
+        if (!f || !f.dir) return E.BADF;
+        const dirPath = f.path;
+        // Enumerate files and subdirectories in this directory
+        const entries: string[] = [];
+        for (const [path] of w.fs.files) {
+          const parent = path.substring(0, path.lastIndexOf('/')) || '/';
+          if (parent === dirPath) {
+            entries.push(path.substring(path.lastIndexOf('/') + 1));
+          }
+        }
+        for (const d of w.fs.dirs) {
+          if (d === dirPath) continue;
+          const parent = d.substring(0, d.lastIndexOf('/')) || '/';
+          if (parent === dirPath) {
+            entries.push(d.substring(d.lastIndexOf('/') + 1));
+          }
+        }
+        // Write dirent structures
+        let offset = 0;
+        const view = w.dv;
+        for (let i = Number(cookie); i < entries.length && offset + 24 < bufLen; i++) {
+          const name = new TextEncoder().encode(entries[i]);
+          const fullPath = dirPath === '/' ? '/' + entries[i] : dirPath + '/' + entries[i];
+          const isDir = w.fs.dirs.has(fullPath);
+          view.setBigUint64(buf + offset, BigInt(i + 1), true);      // d_next (cookie)
+          view.setBigUint64(buf + offset + 8, 0n, true);             // d_ino
+          view.setUint32(buf + offset + 16, name.length, true);       // d_namlen
+          view.setUint8(buf + offset + 20, isDir ? FT.DIR : FT.REG); // d_type
+          const nameSpace = Math.min(name.length, bufLen - offset - 24);
+          w.u8.set(name.subarray(0, nameSpace), buf + offset + 24);
+          offset += 24 + nameSpace;
+        }
+        view.setUint32(usedP, offset, true);
+        return E.OK;
+      },
+      fd_renumber: () => E.NOSYS,
       fd_pread: () => E.NOSYS, fd_pwrite: () => E.NOSYS,
       path_readlink: () => E.NOSYS, path_symlink: () => E.NOSYS,
       path_link: () => E.NOSYS, path_rename: () => E.NOSYS,

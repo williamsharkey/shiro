@@ -2786,4 +2786,156 @@ describe('Shell Advanced', () => {
       expect(output).toContain('after=3');
     });
   });
+
+  // === Section 76: failglob ===
+  describe('76. failglob', () => {
+    it('failglob causes error on unmatched glob', async () => {
+      await run(shell, 'shopt -s failglob');
+      const { output } = await run(shell, 'echo *.zzzzzznotexist');
+      expect(output).toContain('no match');
+    });
+
+    it('failglob succeeds when glob matches', async () => {
+      await run(shell, 'shopt -s failglob');
+      await run(shell, 'echo hello > /tmp/failglob_test.txt');
+      const { output } = await run(shell, 'echo /tmp/failglob_test*');
+      expect(output).toContain('failglob_test.txt');
+    });
+
+    it('failglob off falls back to literal', async () => {
+      await run(shell, 'shopt -u failglob');
+      const { output } = await run(shell, 'echo *.zzzzzznotexist');
+      expect(output).toContain('*.zzzzzznotexist');
+    });
+  });
+
+  // === Section 77: globstar ===
+  describe('77. globstar', () => {
+    it('without globstar, ** acts as single *', async () => {
+      await run(shell, 'mkdir -p /tmp/gs/a/b');
+      await run(shell, 'echo deep > /tmp/gs/a/b/file.txt');
+      await run(shell, 'echo top > /tmp/gs/top.txt');
+      await run(shell, 'shopt -u globstar');
+      const { output } = await run(shell, 'echo /tmp/gs/**');
+      // Without globstar, ** is just * — should NOT recurse into a/b
+      expect(output).not.toContain('a/b/file.txt');
+    });
+
+    it('with globstar, ** recurses directories', async () => {
+      await run(shell, 'mkdir -p /tmp/gs2/a/b');
+      await run(shell, 'echo deep > /tmp/gs2/a/b/nested.txt');
+      await run(shell, 'shopt -s globstar');
+      const { output } = await run(shell, 'echo /tmp/gs2/**/*.txt');
+      expect(output).toContain('nested.txt');
+    });
+  });
+
+  // === Section 78: declare -g / -r ===
+  describe('78. declare -g / -r', () => {
+    it('declare -g sets global variable from inside function', async () => {
+      const script = 'myfn() { declare -g GVAR=global_val; }; myfn; echo $GVAR';
+      const { output } = await run(shell, script);
+      expect(output).toContain('global_val');
+    });
+
+    it('declare without -g is local in function', async () => {
+      const script = 'myfn() { local LVAR=local_val; }; myfn; echo "LVAR=$LVAR"';
+      const { output } = await run(shell, script);
+      expect(output).toContain('LVAR=');
+      expect(output).not.toContain('local_val');
+    });
+
+    it('declare -r makes variable readonly', async () => {
+      await run(shell, 'declare -r ROVAR=frozen');
+      const { output } = await run(shell, 'ROVAR=changed; echo $ROVAR');
+      expect(output).toContain('frozen');
+    });
+
+    it('declare -r -g works together', async () => {
+      const script = 'fn() { declare -rg RGVAR=locked; }; fn; echo $RGVAR';
+      const { output } = await run(shell, script);
+      expect(output).toContain('locked');
+    });
+  });
+
+  // === Section 79: EXIT trap ===
+  describe('79. EXIT trap', () => {
+    it('EXIT trap fires at end of script', async () => {
+      const script = 'trap "echo EXITING" EXIT\necho hello';
+      const { output } = await run(shell, script);
+      expect(output).toContain('hello');
+      expect(output).toContain('EXITING');
+    });
+
+    it('EXIT trap fires only once', async () => {
+      const script = 'trap "echo BYE" EXIT\necho one\necho two';
+      const { output } = await run(shell, script);
+      const matches = output.match(/BYE/g);
+      expect(matches).toHaveLength(1);
+    });
+
+    it('EXIT trap fires on exit command', async () => {
+      // exit command fires trap — output captured via ctx.stdout
+      await run(shell, 'trap "echo CLEANUP" EXIT');
+      const { output } = await run(shell, 'exit 0');
+      expect(output).toContain('CLEANUP');
+    });
+  });
+
+  // === Section 80: fc builtin ===
+  describe('80. fc (fix command)', () => {
+    it('fc -l lists history entries', async () => {
+      await run(shell, 'echo alpha');
+      await run(shell, 'echo beta');
+      await run(shell, 'echo gamma');
+      const { output } = await run(shell, 'fc -l -1 -1');
+      expect(output).toContain('fc -l');
+    });
+
+    it('fc -s re-executes last command', async () => {
+      await run(shell, 'echo rerun_me');
+      const { output } = await run(shell, 'fc -s');
+      expect(output).toContain('rerun_me');
+    });
+
+    it('fc -s with substitution replaces text', async () => {
+      await run(shell, 'echo old_word');
+      const { output } = await run(shell, 'fc -s old_word=new_word');
+      expect(output).toContain('new_word');
+    });
+
+    it('type reports fc as builtin', async () => {
+      const { output } = await run(shell, 'type fc');
+      expect(output).toContain('builtin');
+    });
+  });
+
+  // === Section 81: complete builtin ===
+  describe('81. complete builtin', () => {
+    it('complete -W stores word completion spec', async () => {
+      await run(shell, 'complete -W "start stop restart" myservice');
+      const { output } = await run(shell, 'complete -p myservice');
+      expect(output).toContain('myservice');
+      expect(output).toContain('start stop restart');
+    });
+
+    it('complete -p with no args lists all specs', async () => {
+      await run(shell, 'complete -W "build test" mytool');
+      const { output } = await run(shell, 'complete -p');
+      expect(output).toContain('mytool');
+    });
+
+    it('complete -r removes spec', async () => {
+      await run(shell, 'complete -W "x y" rmtest');
+      await run(shell, 'complete -r rmtest');
+      const { output } = await run(shell, 'complete -p rmtest');
+      expect(output).toBe('');
+    });
+
+    it('complete -F stores function name', async () => {
+      await run(shell, 'complete -F _my_completer mycmd');
+      const { output } = await run(shell, 'complete -p mycmd');
+      expect(output).toContain('-F _my_completer');
+    });
+  });
 });

@@ -11,8 +11,15 @@ export const exit: Command = {
     const code = positional.length > 0 ? parseInt(positional[0]) : 0;
     const exitCode = isNaN(code) ? 2 : code;
 
-    // In a real shell, this would terminate the shell process
-    // Here we just return the exit code
+    // Fire EXIT trap if set
+    if (ctx.shell.traps.has('EXIT')) {
+      const exitCmd = ctx.shell.traps.get('EXIT')!;
+      ctx.shell.traps.delete('EXIT'); // prevent re-entry
+      let trapOutput = '';
+      await ctx.shell.execute(exitCmd, (s: string) => { trapOutput += s; });
+      if (trapOutput) ctx.stdout += trapOutput;
+    }
+
     return exitCode;
   },
 };

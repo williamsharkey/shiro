@@ -30,6 +30,14 @@ const SECRET_ENV_KEYS = [
   'API_KEY', 'SECRET_KEY', 'ACCESS_TOKEN', 'AUTH_TOKEN',
 ];
 
+interface CompletionSpec {
+  words?: string[];
+  funcName?: string;
+  action?: string;
+  prefix?: string;
+  suffix?: string;
+}
+
 /** Sentinel thrown by `break [N]` inside loops */
 class BreakSignal { constructor(public levels: number = 1) {} }
 /** Sentinel thrown by `continue [N]` inside loops */
@@ -68,6 +76,8 @@ export class Shell {
   callStack: { funcName: string; source: string }[] = [];
   /** Bash shopt options: extglob, nocaseglob, nullglob, dotglob, globstar, etc. */
   shoptopts: Set<string> = new Set();
+  /** Programmable completion specs: command name → spec */
+  completionSpecs: Map<string, CompletionSpec> = new Map();
   /** Current line number for LINENO tracking */
   currentLine: number = 1;
   /** Depth of execute() recursion — only top-level resets LINENO */
@@ -166,6 +176,7 @@ export class Shell {
     child.namerefs = new Map(this.namerefs);
     child.dirStack = [...this.dirStack];
     child.history = this.history; // share history array reference
+    child.completionSpecs = new Map(this.completionSpecs);
     return child;
   }
 
@@ -271,6 +282,12 @@ export class Shell {
         lastExit = await this.execute(stmt, writeStdout, writeStderr, remote, terminalOverride, true);
         // errexit: abort on non-zero exit code
         if (this.options.has('errexit') && lastExit !== 0) break;
+      }
+      // Fire EXIT trap at end of top-level multi-line script
+      if (isTopLevel && this.traps.has('EXIT')) {
+        const exitCmd = this.traps.get('EXIT')!;
+        this.traps.delete('EXIT'); // prevent re-entry
+        await this.execute(exitCmd, writeStdout, writeStderr, false, terminalOverride, true);
       }
       this.lastExitCode = lastExit;
       this.env['?'] = String(lastExit);
@@ -404,7 +421,16 @@ export class Shell {
         if (args.length === 0) continue;
 
         // Expand glob patterns in args (but not quoted ones marked with \x01)
-        let expandedArgs = await this.expandGlobs(args);
+        const globResult = await this.expandGlobs(args, stderrWriter);
+        if (globResult === null) {
+          // failglob: unmatched glob pattern — abort this command
+          exitCode = 1;
+          this.lastExitCode = 1;
+          this.env['?'] = '1';
+          lastOutput = '';
+          continue;
+        }
+        let expandedArgs = globResult;
 
         // Expand process substitution: <(cmd) and >(cmd)
         expandedArgs = await this.expandProcessSubstitution(expandedArgs, stderrWriter);
@@ -697,7 +723,7 @@ export class Shell {
           let declFlags = '';
           const declPositional: string[] = [];
           for (const arg of cmdArgs) {
-            if (arg.startsWith('-') && /^-[xrilup]+$/.test(arg)) { declFlags += arg.slice(1); continue; }
+            if (arg.startsWith('-') && /^-[xrilupg]+$/.test(arg)) { declFlags += arg.slice(1); continue; }
             if (arg.startsWith('-')) continue; // skip other flags
             declPositional.push(arg);
           }
@@ -720,7 +746,8 @@ export class Shell {
               if (declFlags.includes('u')) value = value.toUpperCase();
             }
             // Save old value in local var frame if inside a function
-            if (isLocal && this.localVarStack.length > 0) {
+            const isGlobal = declFlags.includes('g');
+            if (isLocal && !isGlobal && this.localVarStack.length > 0) {
               const frame = this.localVarStack[this.localVarStack.length - 1];
               if (!frame.has(varName)) {
                 frame.set(varName, varName in this.env ? this.env[varName] : undefined);
@@ -730,6 +757,10 @@ export class Shell {
               this.env[varName] = value;
             } else {
               if (!(varName in this.env)) this.env[varName] = '';
+            }
+            // declare -r marks variable readonly
+            if (declFlags.includes('r')) {
+              this.readonlyVars.add(varName);
             }
           }
           continue;
@@ -931,6 +962,82 @@ export class Shell {
           continue;
         }
 
+        // Shell builtin: fc (fix command — list/re-execute history)
+        if (effectiveCmdName === 'fc') {
+          let listMode = false;
+          let reverseMode = false;
+          let reExecMode = false;
+          let substitution: { pat: string; rep: string } | null = null;
+          const fcPositional: string[] = [];
+
+          for (let ai = 0; ai < cmdArgs.length; ai++) {
+            const a = cmdArgs[ai];
+            if (a === '-l') { listMode = true; }
+            else if (a === '-r') { reverseMode = true; }
+            else if (a === '-s') { reExecMode = true; }
+            else if (a === '-e' && cmdArgs[ai + 1] === '-') { reExecMode = true; ai++; }
+            else if (a === '-lr' || a === '-rl') { listMode = true; reverseMode = true; }
+            else if (reExecMode && a.includes('=') && fcPositional.length === 0) {
+              const eqIdx = a.indexOf('=');
+              substitution = { pat: a.slice(0, eqIdx), rep: a.slice(eqIdx + 1) };
+            }
+            else if (!a.startsWith('-')) { fcPositional.push(a); }
+          }
+
+          const hist = this.history;
+
+          if (listMode) {
+            // fc -l [first [last]] — list history entries
+            let first = -16, last = -1;
+            if (fcPositional.length >= 1) {
+              first = this.fcResolveRef(fcPositional[0], hist);
+            }
+            if (fcPositional.length >= 2) {
+              last = this.fcResolveRef(fcPositional[1], hist);
+            }
+            // Normalize negative indices
+            if (first < 0) first = hist.length + first;
+            if (last < 0) last = hist.length + last;
+            first = Math.max(0, first);
+            last = Math.min(hist.length - 1, last);
+            if (first > last) { const tmp = first; first = last; last = tmp; reverseMode = !reverseMode; }
+            const entries: string[] = [];
+            for (let hi = first; hi <= last; hi++) {
+              entries.push(`${hi + 1}\t${hist[hi]}`);
+            }
+            if (reverseMode) entries.reverse();
+            writeStdout(entries.join('\r\n') + '\r\n');
+          } else if (reExecMode) {
+            // fc -s [pat=rep] [cmd] — re-execute (skip the fc command itself in history)
+            let targetIdx = hist.length - 2;
+            if (fcPositional.length > 0) {
+              const ref = fcPositional[fcPositional.length - 1];
+              targetIdx = this.fcResolveRef(ref, hist);
+              if (targetIdx < 0) targetIdx = hist.length + targetIdx;
+            }
+            targetIdx = Math.max(0, Math.min(hist.length - 1, targetIdx));
+            let cmd = hist[targetIdx] || '';
+            if (substitution) {
+              cmd = cmd.replace(substitution.pat, substitution.rep);
+            }
+            writeStdout(cmd + '\r\n');
+            exitCode = await this.execute(cmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
+          } else {
+            // Default: fc with no flags — in bash opens editor, here just list last 16
+            let first = hist.length - 16, last = hist.length - 1;
+            first = Math.max(0, first);
+            const entries: string[] = [];
+            for (let hi = first; hi <= last; hi++) {
+              entries.push(`${hi + 1}\t${hist[hi]}`);
+            }
+            writeStdout(entries.join('\r\n') + '\r\n');
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
+
         // Shell builtins: type, command -v, hash
         if (effectiveCmdName === 'type') {
           for (const name of cmdArgs) {
@@ -941,7 +1048,7 @@ export class Shell {
                          'return', 'trap', 'getopts', 'printf', 'type', 'command', 'hash',
                          'mapfile', 'readarray', 'select', 'alias', 'unalias', 'pushd', 'popd',
                          'dirs', 'let', 'exec', 'builtin', 'ulimit', 'umask',
-                         'complete', 'compgen', 'enable', 'disown', 'unset', 'readonly', 'time', 'caller', 'shopt'].includes(name)) {
+                         'complete', 'compgen', 'enable', 'disown', 'unset', 'readonly', 'time', 'caller', 'shopt', 'fc'].includes(name)) {
               writeStdout(`${name} is a shell builtin\r\n`);
             } else if (this.commands.get(name)) {
               writeStdout(`${name} is a registered command\r\n`);
@@ -964,7 +1071,7 @@ export class Shell {
                    'true', 'false', 'break', 'continue', 'return', 'trap', 'printf',
                    'type', 'command', 'hash', 'mapfile', 'readarray', 'alias', 'unalias',
                    'pushd', 'popd', 'dirs', 'let', 'exec', 'builtin', 'ulimit', 'umask',
-                   'complete', 'compgen', 'enable', 'disown', 'unset', 'readonly', 'time', 'caller', 'shopt'].includes(name)) {
+                   'complete', 'compgen', 'enable', 'disown', 'unset', 'readonly', 'time', 'caller', 'shopt', 'fc'].includes(name)) {
                 writeStdout(`${name}\r\n`);
               } else {
                 exitCode = 1;
@@ -1604,8 +1711,54 @@ export class Shell {
           continue;
         }
         if (effectiveCmdName === 'complete') {
-          // complete: register completion specs (store for future use)
-          // For now, accept and silently store: complete -F func cmd, complete -W words cmd, etc.
+          // Programmable completion: parse and store specs
+          let spec: CompletionSpec = {};
+          let printMode = false;
+          let removeMode = false;
+          const completeCmds: string[] = [];
+
+          for (let ai = 0; ai < cmdArgs.length; ai++) {
+            const a = cmdArgs[ai];
+            if (a === '-W') {
+              const wordStr = cmdArgs[++ai] || '';
+              spec.words = wordStr.split(/\s+/).filter(Boolean);
+            } else if (a === '-F') {
+              spec.funcName = cmdArgs[++ai] || '';
+            } else if (a === '-A') {
+              spec.action = cmdArgs[++ai] || '';
+            } else if (a === '-P') {
+              spec.prefix = cmdArgs[++ai] || '';
+            } else if (a === '-S') {
+              spec.suffix = cmdArgs[++ai] || '';
+            } else if (a === '-p') {
+              printMode = true;
+            } else if (a === '-r') {
+              removeMode = true;
+            } else if (!a.startsWith('-')) {
+              completeCmds.push(a);
+            }
+          }
+
+          if (printMode) {
+            if (completeCmds.length > 0) {
+              for (const cmd of completeCmds) {
+                const s = this.completionSpecs.get(cmd);
+                if (s) writeStdout(this.formatCompleteSpec(cmd, s) + '\r\n');
+              }
+            } else {
+              for (const [cmd, s] of this.completionSpecs) {
+                writeStdout(this.formatCompleteSpec(cmd, s) + '\r\n');
+              }
+            }
+          } else if (removeMode) {
+            for (const cmd of completeCmds) {
+              this.completionSpecs.delete(cmd);
+            }
+          } else {
+            for (const cmd of completeCmds) {
+              this.completionSpecs.set(cmd, spec);
+            }
+          }
           this.lastExitCode = 0;
           this.env['?'] = '0';
           lastOutput = '';
@@ -1619,7 +1772,7 @@ export class Shell {
             'trap', 'getopts', 'printf', 'type', 'command', 'hash', 'mapfile', 'readarray',
             'select', 'alias', 'unalias', 'pushd', 'popd', 'dirs', 'let', 'exec', 'builtin',
             'ulimit', 'umask', 'complete', 'compgen', 'enable', 'disown', 'unset', 'readonly',
-            'time', 'caller', 'shopt'];
+            'time', 'caller', 'shopt', 'fc'];
           for (let ai = 0; ai < cmdArgs.length; ai++) {
             const a = cmdArgs[ai];
             if (a === '-W') {
@@ -3263,7 +3416,7 @@ export class Shell {
    * (from quoted strings) are NOT expanded — the sentinel is stripped instead.
    * Follows bash behavior: no matches = keep the literal pattern.
    */
-  private async expandGlobs(args: string[]): Promise<string[]> {
+  private async expandGlobs(args: string[], writeStderr?: (s: string) => void): Promise<string[] | null> {
     const result: string[] = [];
     for (const arg of args) {
       // Check for sentinel-marked (quoted) glob chars
@@ -3274,13 +3427,22 @@ export class Shell {
 
       if (hasGlob) {
         try {
-          const matches = await this.fs.glob(arg, this.cwd, {
+          // If globstar is not set, collapse ** to * so it won't recurse directories
+          let globPattern = arg;
+          if (!this.shoptopts.has('globstar')) {
+            globPattern = globPattern.replace(/\*\*/g, '*');
+          }
+          const matches = await this.fs.glob(globPattern, this.cwd, {
             caseInsensitive: this.shoptopts.has('nocaseglob'),
             dotglob: this.shoptopts.has('dotglob'),
           });
           if (matches.length > 0) {
             result.push(...matches);
           } else {
+            if (this.shoptopts.has('failglob')) {
+              if (writeStderr) writeStderr(`-bash: no match: ${arg}\r\n`);
+              return null;
+            }
             // nullglob: return nothing; default: keep literal
             if (!this.shoptopts.has('nullglob')) {
               result.push(arg);
@@ -4368,13 +4530,10 @@ export class Shell {
     const trimmedContent = content.trim();
     if (!trimmedContent.includes('\n') && !trimmedContent.includes(' ') &&
         (trimmedContent.endsWith('.js') || trimmedContent.endsWith('.mjs') || trimmedContent.endsWith('.ts'))) {
-      console.log(`[executeScript] bin stub detected → following to ${trimmedContent}`);
       try {
         const targetContent = await this.fs.readFile(trimmedContent, 'utf8') as string;
-        console.log(`[executeScript] bin stub target loaded (${targetContent.length} bytes), passing args: ${JSON.stringify(args)}`);
         return this.executeNodeScript(trimmedContent, targetContent, args, ctx, writeStdout, writeStderr);
       } catch (e: any) {
-        console.log(`[executeScript] bin stub target not found: ${e.message}`);
         // Target doesn't exist, fall through
       }
     }
@@ -4547,6 +4706,13 @@ export class Shell {
       exitCode = await this.execute(buffer, writeStdout, writeStderr, false, ctx.terminal, true);
     }
 
+    // Fire EXIT trap at end of script
+    if (this.traps.has('EXIT')) {
+      const exitCmd = this.traps.get('EXIT')!;
+      this.traps.delete('EXIT'); // prevent re-entry
+      await this.execute(exitCmd, writeStdout, writeStderr, false, ctx.terminal, true);
+    }
+
     // Restore positional parameters
     for (const key of Object.keys(savedParams)) {
       if (savedParams[key] === undefined) {
@@ -4557,6 +4723,31 @@ export class Shell {
     }
 
     return exitCode;
+  }
+
+  /** Format a completion spec for `complete -p` output */
+  private formatCompleteSpec(cmd: string, spec: CompletionSpec): string {
+    let parts = ['complete'];
+    if (spec.words) parts.push(`-W '${spec.words.join(' ')}'`);
+    if (spec.funcName) parts.push(`-F ${spec.funcName}`);
+    if (spec.action) parts.push(`-A ${spec.action}`);
+    if (spec.prefix) parts.push(`-P '${spec.prefix}'`);
+    if (spec.suffix) parts.push(`-S '${spec.suffix}'`);
+    parts.push(cmd);
+    return parts.join(' ');
+  }
+
+  /** Resolve fc history reference: number (1-based abs or negative relative) or string prefix */
+  private fcResolveRef(ref: string, hist: string[]): number {
+    const num = parseInt(ref, 10);
+    if (!isNaN(num)) {
+      return num > 0 ? num - 1 : num; // 1-based → 0-based for positive; negative stays as-is
+    }
+    // String prefix search — find most recent matching entry
+    for (let i = hist.length - 1; i >= 0; i--) {
+      if (hist[i].startsWith(ref)) return i;
+    }
+    return hist.length - 1;
   }
 }
 

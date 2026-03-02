@@ -181,7 +181,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1546 tests across 35 test files** — all passing.
+**1584 tests across 35 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -586,39 +586,38 @@ The workflow cycle is: **implement shell features → write tests → update CLA
 
 The vision: a **fully functional browser-native Linux system** where Claude Code (Spirit) runs with no external server. There is always work to do — if your current task is done, find the next missing Linux capability and implement it.
 
-### Current State (Build #828, 1546 tests)
+### Current State (Build #828, 1584 tests)
 
 The shell (`src/shell.ts`, ~4500 lines) has comprehensive bash compatibility. Core features working: pipes, redirects, heredocs, arrays (indexed + associative), arithmetic, functions, control structures, job control, process substitution, extglob, brace expansion, namerefs, traps, and 30+ inline builtins.
 
 ### Future Plans — Next Features to Implement (Priority Order)
 
 #### P0: Shell Builtins Still Missing or Stubbed
-1. **`fc` builtin** — Fix command. `fc -l` (list), `fc -s` (re-execute), `fc N` (edit and run). Low priority but useful.
-2. **`enable` builtin** — Currently a silent stub. Real bash `enable -n cmd` disables a builtin. Low priority.
+1. **`enable` builtin** — Currently a silent stub. Real bash `enable -n cmd` disables a builtin. Low priority.
 
-> **Completed:** `wait` builtin (already implemented), `history` builtin with `-c`/`-d N`/`-s "cmd"`/`N` (implemented).
+> **Completed:** `wait` builtin (already implemented), `history` builtin with `-c`/`-d N`/`-s "cmd"`/`N` (implemented), `fc` builtin (`fc -l` list, `fc -s` re-execute), `declare -r` (readonly).
 
 #### P1: Shell Features — Medium Priority
-3. **`read -t TIMEOUT`** — Read with timeout. Could use `setTimeout` + `Promise.race`.
-4. **`read -u FD`** — Read from file descriptor. Would need FD table integration.
-5. **`declare -g`** — Global scope declaration from inside functions. Currently not supported.
-6. **`mapfile -C callback`** — Callback function invoked for each line.
-7. **`coproc`** — Two-way pipe with background process. Complex in browser — may need `ReadableStream`/`WritableStream` pairs.
+2. **`read -t TIMEOUT`** — Read with timeout. Could use `setTimeout` + `Promise.race`.
+3. **`read -u FD`** — Read from file descriptor. Would need FD table integration.
+4. **`mapfile -C callback`** — Callback function invoked for each line.
+5. **`coproc`** — Two-way pipe with background process. Complex in browser — may need `ReadableStream`/`WritableStream` pairs.
 
-> **Completed:** `nocaseglob` (case-insensitive globbing), `nullglob` (empty on no-match), `dotglob` (include dotfiles in globs), `LINENO` tracking (correct line numbers in multi-line scripts, saved/restored across `source`).
+> **Completed:** `nocaseglob` (case-insensitive globbing), `nullglob` (empty on no-match), `dotglob` (include dotfiles in globs), `LINENO` tracking (correct line numbers in multi-line scripts, saved/restored across `source`), `declare -g` (global scope from functions), `failglob` (error on unmatched glob), `globstar` gate (`**` only recurses when enabled), EXIT trap (fires at script end and on `exit`).
 
 #### P2: Broader System Capabilities
-14. **Tab completion engine** — `complete` specs are accepted silently. Wire them to the terminal's tab handler (`terminal.ts`) for real context-sensitive completion.
-15. **Signal handling** — `trap` works for ERR/EXIT/INT but Ctrl+C doesn't actually send SIGINT to background jobs. Wire terminal Ctrl+C to job interruption.
-16. **Process table** — `ps` and `kill` exist but background jobs and foreground control could be more robust.
-17. **`/proc` filesystem** — Virtual `/proc/self/`, `/proc/uptime`, `/proc/meminfo` for script compatibility.
-18. **Tier 3: x86 emulation** — The next architectural tier. Would enable running actual Linux binaries in-browser.
+6. **Signal handling** — `trap` works for ERR/EXIT/INT but Ctrl+C doesn't actually send SIGINT to background jobs. Wire terminal Ctrl+C to job interruption.
+7. **Process table** — `ps` and `kill` exist but background jobs and foreground control could be more robust.
+8. **`/proc` filesystem** — Virtual `/proc/self/`, `/proc/uptime`, `/proc/meminfo` for script compatibility.
+9. **Tier 3: x86 emulation** — The next architectural tier. Would enable running actual Linux binaries in-browser.
+
+> **Completed:** Tab completion engine — `compgen`/`complete` wired to terminal tab handler for real context-sensitive completion.
 
 ### Technical Notes for New Agents
 
 - **Inline builtins** in `src/shell.ts` have access to `this.env`, `this.arrays`, `this.assocArrays`, `this.readonlyVars`, `this.shoptopts`, `this.backgroundJobs`, `this.functions`, `this.aliases`, `this.namerefs`, `this.callStack`. They use `continue` to skip to the next pipeline segment — but MUST also set the local `exitCode` variable (not just `this.lastExitCode`), or the exit code gets overwritten to 0 by line ~1905.
 - **ANSI-C quoting** `$'...'` is handled ONLY in the tokenizer — never in `expandVars`.
-- **Tests** are in `tests/tests/shiro-vitest/shell-advanced.test.ts`. Sections are numbered (currently 1-75). Add new sections sequentially. The `run(shell, cmd)` helper returns `{ output, exitCode }`. Stderr goes to stdout in the test helper.
+- **Tests** are in `tests/tests/shiro-vitest/shell-advanced.test.ts`. Sections are numbered (currently 1-81). Add new sections sequentially. The `run(shell, cmd)` helper returns `{ output, exitCode }`. Stderr goes to stdout in the test helper.
 - **Deploy cycle**: `npm run deploy` auto-increments build number, runs tsc + vite build, and scp's to the DO droplet.
 - **5 pre-existing test failures** in `about-demos.test.ts` (Demo 3: Text Processing) are unrelated to shell features — they fail because the test setup doesn't create `/tmp/grades.csv`.
 

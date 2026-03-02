@@ -507,6 +507,7 @@
         <a href="/docs">Docs</a>
         <a href="https://github.com/williamsharkey/shiro">GitHub</a>
         <a href="/deep">Deep dive (all 11 demos)</a>
+        <a href="/vision">Vision</a>
       </div>
       <p>William Sharkey &middot; 2026</p>
     </div>
@@ -1511,8 +1512,10 @@
     { cmd: 'cd /tmp/chain && git log --oneline' },
     { cmd: 'serve /tmp/chain 6000', delay: 400 },
     { cmd: 'serve open 6000 --split right', delay: 800 },
+    { cmd: 'page :6000 wait "#start" 5000' },
     { cmd: 'page :6000 click "#start"', note: 'Start the visualization' },
     { wait: 2000 },
+    { cmd: 'page :6000 wait "#info" 3000' },
     { cmd: 'page :6000 text "#info"' },
   ];
 

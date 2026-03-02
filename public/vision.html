@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shiro — The Vision</title>
+  <meta name="description" content="A browser-native Linux system. Three tiers of execution: JS commands, WASM/WASI, and x86 emulation. No server required.">
+  <meta property="og:title" content="Shiro — The Vision">
+  <meta property="og:description" content="A browser-native Linux system. Three tiers of execution: JS commands, WASM/WASI, and x86 emulation. No server required.">
+  <meta property="og:image" content="https://shiro.computer/og.png">
+  <meta property="og:url" content="https://shiro.computer/vision">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0f0f1a;
+      color: #e0e0e0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      line-height: 1.7;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .container { max-width: 720px; margin: 0 auto; padding: 0 24px; }
+
+    a { color: #00d4ff; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    code {
+      font-family: 'SF Mono', Consolas, 'Liberation Mono', monospace;
+      font-size: 0.88em;
+      background: rgba(255, 255, 255, 0.08);
+      padding: 2px 6px;
+      border-radius: 3px;
+    }
+
+    /* Hero */
+    .hero {
+      padding: 100px 0 60px;
+      text-align: center;
+    }
+    .hero h1 {
+      font-size: 3rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: #fff;
+      margin-bottom: 16px;
+    }
+    .hero .subtitle {
+      font-size: 1.15rem;
+      color: #b0b0c8;
+      max-width: 560px;
+      margin: 0 auto;
+      font-family: 'SF Mono', Consolas, 'Liberation Mono', monospace;
+    }
+
+    /* Sections */
+    section {
+      margin-bottom: 56px;
+    }
+    section h2 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 16px;
+      letter-spacing: -0.01em;
+    }
+    section p {
+      color: #b8b8cc;
+      margin-bottom: 14px;
+    }
+
+    /* Tier diagram */
+    .tiers {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      margin: 28px 0;
+    }
+    .tier {
+      border: 1px solid #1a1a2e;
+      padding: 20px 24px;
+      position: relative;
+    }
+    .tier:first-child { border-radius: 8px 8px 0 0; }
+    .tier:last-child { border-radius: 0 0 8px 8px; }
+    .tier:not(:first-child) { border-top: none; }
+    .tier-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #555;
+      margin-bottom: 6px;
+    }
+    .tier h3 {
+      font-size: 1.1rem;
+      color: #fff;
+      margin-bottom: 6px;
+    }
+    .tier p {
+      font-size: 0.9rem;
+      color: #999;
+      margin: 0;
+    }
+    .tier.active {
+      border-color: #00d4ff33;
+      background: rgba(0, 212, 255, 0.03);
+    }
+    .tier.active .tier-label { color: #00d4ff; }
+    .tier.future {
+      opacity: 0.5;
+    }
+
+    /* Command grid */
+    .cmd-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 16px 0;
+    }
+    .cmd-grid code {
+      font-size: 0.82rem;
+      padding: 4px 10px;
+      border: 1px solid #1a1a2e;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    /* Chain proof */
+    .chain {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 20px 0;
+      font-family: 'SF Mono', Consolas, 'Liberation Mono', monospace;
+      font-size: 0.9rem;
+    }
+    .chain-step {
+      background: #1a1a2e;
+      padding: 6px 14px;
+      border-radius: 6px;
+      color: #e0e0e0;
+    }
+    .chain-arrow { color: #555; }
+
+    /* Goal */
+    .goal {
+      border-left: 3px solid #00d4ff;
+      padding: 16px 20px;
+      margin: 24px 0;
+      background: rgba(0, 212, 255, 0.04);
+      border-radius: 0 6px 6px 0;
+    }
+    .goal p {
+      color: #c8c8dc;
+      margin: 0;
+    }
+
+    /* Footer */
+    footer {
+      padding: 40px 0;
+      border-top: 1px solid #1a1a2e;
+      text-align: center;
+      font-size: 0.85rem;
+      color: #555;
+    }
+    footer .links {
+      display: flex;
+      justify-content: center;
+      gap: 24px;
+      margin-bottom: 12px;
+    }
+    footer a { color: #888; }
+    footer a:hover { color: #00d4ff; }
+
+    @media (max-width: 640px) {
+      .hero h1 { font-size: 2.2rem; }
+      .hero .subtitle { font-size: 1rem; }
+      .container { padding: 0 16px; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="hero">
+    <div class="container">
+      <h1>The Vision</h1>
+      <p class="subtitle">A browser-native Linux system. No server, no VM, no compromise.</p>
+    </div>
+  </div>
+
+  <div class="container">
+
+    <section>
+      <h2>Why</h2>
+      <p>Open a browser tab. It already has a persistent filesystem, a JIT compiler, hardware-accelerated graphics, and a network stack. It has everything a computer needs — except the software that makes it feel like one.</p>
+      <p>Shiro is that software. A Unix-like operating system that runs entirely in JavaScript, backed by IndexedDB for persistence. Shell, git, npm, node, compilers, databases, editors, and an AI coding agent — all in one tab, with zero backend.</p>
+    </section>
+
+    <section>
+      <h2>Three Tiers</h2>
+      <p>Not everything can be a JavaScript reimplementation. Shiro's architecture has three tiers of execution, each more general than the last:</p>
+
+      <div class="tiers">
+        <div class="tier active">
+          <div class="tier-label">Tier 1 — JavaScript</div>
+          <h3>200+ hand-written commands</h3>
+          <p>ls, cat, grep, sed, git, npm, node, esbuild, sqlite3, python — reimplemented in TypeScript. Fast, small (~420 KB total), deeply integrated with the browser.</p>
+        </div>
+        <div class="tier active">
+          <div class="tier-label">Tier 2 — WASM + WASI</div>
+          <h3>Real binaries via WebAssembly</h3>
+          <p>A full WASI preview1 runtime with 40 syscalls. Runs real compiled programs: xcc (C compiler), Lua, jq, and 22 packages from the Wasmer registry. Near-native speed.</p>
+        </div>
+        <div class="tier future">
+          <div class="tier-label">Tier 3 — x86 emulation</div>
+          <h3>Run any Linux binary</h3>
+          <p>The final tier. x86 instruction-level emulation would let Shiro run unmodified Linux binaries — true universality. Not yet implemented.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>What works today</h2>
+      <p>Shiro isn't a prototype. It's a working system with comprehensive bash-compatible shell scripting, package management, and real development tools.</p>
+      <div class="cmd-grid">
+        <code>ls</code> <code>cat</code> <code>grep</code> <code>sed</code> <code>awk</code>
+        <code>git</code> <code>npm</code> <code>node</code> <code>cc</code> <code>python</code>
+        <code>sqlite3</code> <code>esbuild</code> <code>vi</code> <code>nano</code>
+        <code>jq</code> <code>lua</code> <code>curl</code> <code>tar</code> <code>zip</code>
+        <code>find</code> <code>sort</code> <code>wc</code> <code>diff</code> <code>ssh-keygen</code>
+      </div>
+      <p>The shell supports pipes, redirects, heredocs, arrays, arithmetic, functions, process substitution, extended globbing, traps, programmable tab completion, and dozens more bash features — tested by 1,584 automated tests.</p>
+    </section>
+
+    <section>
+      <h2>The Chain</h2>
+      <p>Proof that it works: six tools from three different execution models, piped through each other in a single browser tab.</p>
+      <div class="chain">
+        <span class="chain-step">cc</span>
+        <span class="chain-arrow">&rarr;</span>
+        <span class="chain-step">lua</span>
+        <span class="chain-arrow">&rarr;</span>
+        <span class="chain-step">sqlite3</span>
+        <span class="chain-arrow">&rarr;</span>
+        <span class="chain-step">jq</span>
+        <span class="chain-arrow">&rarr;</span>
+        <span class="chain-step">esbuild</span>
+        <span class="chain-arrow">&rarr;</span>
+        <span class="chain-step">git</span>
+        <span class="chain-arrow">&rarr;</span>
+        <span class="chain-step">serve</span>
+      </div>
+      <p>Compile C to WebAssembly, measure information entropy in Lua, store results in SQLite, transform with jq, bundle a TypeScript visualization with esbuild, commit with git, and serve it — all without leaving the browser. <a href="/about#demo-chain">Watch it run</a>.</p>
+    </section>
+
+    <section>
+      <h2>What's next</h2>
+      <p>The system grows toward full Linux compatibility, one capability at a time:</p>
+      <p><strong>Signal handling</strong> — wire Ctrl+C to real job interruption. <strong>/proc filesystem</strong> — virtual <code>/proc/self/</code>, <code>/proc/uptime</code>, <code>/proc/meminfo</code> for script compatibility. <strong>Process isolation</strong> — move heavy computation to Web Workers. <strong>Tier 3</strong> — x86 emulation for unmodified Linux binaries.</p>
+    </section>
+
+    <section>
+      <h2>The goal</h2>
+      <div class="goal">
+        <p>Claude Code running natively in-browser — with first-class access to the DOM, the filesystem, and the full JavaScript VM. No server, no tunnel, no SSH. Just open a tab and start building.</p>
+      </div>
+    </section>
+
+  </div>
+
+  <footer>
+    <div class="container">
+      <div class="links">
+        <a href="/">Try Shiro</a>
+        <a href="/about">About</a>
+        <a href="/docs">Docs</a>
+        <a href="https://github.com/williamsharkey/shiro">GitHub</a>
+        <a href="/deep">Deep dive</a>
+      </div>
+      <p>William Sharkey &middot; 2026</p>
+    </div>
+  </footer>
+
+</body>
+</html>

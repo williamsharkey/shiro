@@ -1318,6 +1318,35 @@ export class ShiroTerminal {
       }
     };
 
+    // Check programmable completion specs first
+    if (!isFirstWord) {
+      const command = parts[0];
+      const spec = this.shell.completionSpecs.get(command);
+      if (spec) {
+        if (spec.words) {
+          const matches = spec.words.filter(w => w.startsWith(partial));
+          if (matches.length > 0) {
+            showMatches(matches);
+            return;
+          }
+        }
+        if (spec.funcName && spec.funcName in this.shell.functions) {
+          // Set COMP_WORDS, COMP_CWORD, COMP_LINE, then call the function
+          this.shell.arrays.set('COMP_WORDS', parts);
+          this.shell.env['COMP_CWORD'] = String(parts.length - 1);
+          this.shell.env['COMP_LINE'] = before;
+          this.shell.arrays.set('COMPREPLY', []);
+          let funcOut = '';
+          await this.shell.execute(spec.funcName, (s: string) => { funcOut += s; });
+          const reply = this.shell.arrays.get('COMPREPLY') || [];
+          if (reply.length > 0) {
+            showMatches(reply);
+            return;
+          }
+        }
+      }
+    }
+
     // Check for subcommand completion
     if (!isFirstWord) {
       const command = parts[0];
