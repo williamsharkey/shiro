@@ -107,6 +107,11 @@ import { which } from './which';
 import { whoami } from './whoami';
 import { xargs } from './xargs';
 import { yes } from './yes';
+import { revCmd, tacCmd, shufCmd, cmpCmd } from './text-utils';
+import { ddCmd } from './dd';
+import { xxdCmd } from './xxd';
+import { dcCmd } from './dc';
+import { splitCmd } from './split';
 
 /** All Unix commands as an array for registration. */
 export const unixCommands: Command[] = [
@@ -121,6 +126,7 @@ export const unixCommands: Command[] = [
   seq, set, sha256sum, shift, shrine, sleep, sort, stat, strings, tail, tar, tee,
   test, time, timeout, touch, tr, trap, trueCmd, tsort, type, ulimit, umask,
   unalias, unexpand, uniq, uptime, watch, wc, which, whoami, xargs, yes,
+  revCmd, tacCmd, shufCmd, cmpCmd, ddCmd, xxdCmd, dcCmd, splitCmd,
 ];
 
 /** Arithmetic expansion helper for $(( )) syntax */

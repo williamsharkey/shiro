@@ -671,20 +671,19 @@ The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Co
 > - x86-64 emulator Phase 2: ~100 instructions, ~40 syscalls, auxv, FS/GS segment, SSE2, XMM regs
 > - x86-64 emulator Phase 3: ~130 instructions, ~46 syscalls, TLS, runs real musl-static ELF binaries
 
-#### P0: x86 Emulator — Phase 4 (busybox-static)
-1. **Cross-compile minimal busybox** — Use `x86_64-linux-musl-gcc` with minimal config (echo, cat, ls, true, false, yes, wc, head, tail, sh)
-2. **Iterative gap-filling** — Run → fail → implement → repeat. Fill syscall and instruction gaps discovered from running busybox applets
-3. **Key syscalls needed** — getdents64, pipe2, dup3, execve, wait4, clone (stub), unlinkat, mkdirat, renameat2, ftruncate
-4. **Test progression** — busybox echo → cat → ls → wc → sh -c "echo hello" (real shell in emulator)
+#### P0: TypeScript Command Expansion
+1. **Batch 1 coreutils** — rev, tac, shuf, cmp, dd, xxd, dc, split (native TS, full VFS integration)
+2. **Batch 2 coreutils** — top, man, factor, cksum, base32, numfmt, csplit, nice
+3. **Batch 3 gap-fillers** — lsof, w/who/users, dos2unix, unix2dos, rev improvements, additional flags
 
-#### P1: Broader Binary Support
-5. **Full busybox** — Expand from minimal config to all ~300 applets
-6. **Syscall coverage** — Add syscalls discovered from running real programs (socket stubs, epoll stubs, etc.)
+#### P1: Command Completeness
+4. **Full POSIX coverage** — every standard coreutil as native TypeScript
+5. **Enhanced flags** — add missing flags to existing commands (ls --color=always, sort -V, etc.)
 
 #### P2: Performance + Infrastructure
-7. **JIT compilation** — Compile hot basic blocks to JavaScript functions for 10-100x speedup
-8. **Networking stubs** — socket/connect/send/recv syscalls mapped to fetch/WebSocket
-9. **Debug tooling** — Enhanced `x86 debug` with breakpoints, watchpoints, memory dumps
+6. **JIT compilation** — Compile hot x86 basic blocks to JavaScript functions for 10-100x speedup
+7. **Networking stubs** — socket/connect/send/recv syscalls mapped to fetch/WebSocket
+8. **Debug tooling** — Enhanced `x86 debug` with breakpoints, watchpoints, memory dumps
 
 ### Technical Notes for New Agents
 
