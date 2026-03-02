@@ -33,7 +33,7 @@ src/
 ├── remote-panel.ts      # Draggable floating panel UI (used by remote, group)
 ├── server-window.ts     # macOS-style window wrapper (iframe + terminal modes)
 ├── window-terminal.ts   # Lightweight xterm.js wrapper for windowed processes (+ number menu detection)
-├── process-table.ts     # Global process registry with PID allocation
+├── process-table.ts     # Global process registry with PID allocation + AbortController per process
 ├── split-view.ts        # Docked split pane (right/bottom) for serve --split
 ├── hud-panel.ts         # HUD overlay panel (status bar, shortcuts, template palette link)
 ├── template-palette.ts  # Template definitions (9 educational lessons across 3 categories)
@@ -84,7 +84,15 @@ src/
     ├── sqlite.ts         # sqlite3 via sql.js WASM (lazy-loaded)
     ├── wasi.ts           # wasi run <file.wasm|url> — WASI binary execution (lazy-loaded)
     ├── pkg.ts            # WASM package manager: install, search, list, remove (lazy-loaded)
+    ├── x86.ts            # x86 run/info/debug — x86-64 ELF execution (lazy-loaded)
     └── *.ts              # Individual Unix commands (cat, ls, awk, xargs, head, etc.)
+├── x86/                 # x86-64 emulator (Tier 3) — from-scratch TypeScript
+│   ├── cpu.ts            # CPU state: 16 64-bit registers, RFLAGS, segment bases
+│   ├── memory.ts         # Virtual memory: paged 4KB demand-allocation
+│   ├── elf.ts            # ELF64 parser + loader (PT_LOAD segments, stack setup)
+│   ├── decode.ts         # Instruction decoder: ~40 instructions, ModR/M+SIB, REX
+│   ├── syscalls.ts       # Linux syscall emulation: 25+ syscalls → Shiro VFS
+│   └── runtime.ts        # Top-level executor: executeElf(), debugElf(), getElfInfo()
 ├── wasi-runtime.ts      # WASI preview1 runtime — 37 syscalls, fd table, preloadTree, deferred ops
 ├── wasi-packages.ts     # WASM package registry (12 packages), IndexedDB cache, WebC extraction
 ├── gif-encoder.ts       # Zero-dep GIF89a encoder + SHIRO1.0 seed extractor
@@ -184,7 +192,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1584 tests across 35 test files** — all passing.
+**1668 tests across 36 test files** — all passing.
 
 ```bash
 npm test                          # Run from shiro root
@@ -210,6 +218,8 @@ cd tests && npm run test:shiro    # Run from tests/ directory
 | `build-output.test.ts` | **7 tests** | Build validation: no unresolved `__VITE_PRELOAD__` markers, entry JS/CSS inlined, lazy chunks exist and are clean |
 | `templates.test.ts` | **31 tests** | Template data integrity, command structure, full multi-line cmd execution through shell |
 | `wasi.test.ts` | **48 tests** | WASI runtime (normPath, FD, WasiExit, WasiRT), WASM execution, packages, WebC extraction, pkg/wasi commands |
+| `x86.test.ts` | **56 tests** | x86 CPU state, virtual memory, ELF64 parsing, instruction decoding, Hello World integration, syscalls |
+| `shell-advanced.test.ts` | **455 tests** | All advanced shell features: extglob, arrays, arithmetic, control flow, namerefs, traps, builtins, /proc, kill |
 
 ### Claude Code Tool Shim Tests (`claude-tools.test.ts`)
 
@@ -250,8 +260,9 @@ Shiro has two rich editors and a file association registry that `open` uses to p
 
 The shell supports:
 - **Pipes**: `echo hello | grep hello`
-- **Redirects**: `>`, `>>`, `<`, `2>`, `2>>`, `2>&1`
-- **Device files**: `/dev/null`, `/dev/stdin`, `/dev/stdout`, `/dev/stderr`
+- **Redirects**: `>`, `>>`, `<`, `2>`, `2>>`, `2>&1`, `N<` (FD redirect), `N>&-` (FD close)
+- **Device files**: `/dev/null`, `/dev/zero`, `/dev/random`, `/dev/urandom`, `/dev/stdin`, `/dev/stdout`, `/dev/stderr`
+- **Virtual /proc**: `/proc/version`, `/proc/uptime`, `/proc/meminfo`, `/proc/cpuinfo`, `/proc/loadavg`, `/proc/self/*`
 - **Compound commands**: `&&`, `||`, `;`
 - **Heredocs**: `cat > file << 'DELIM'` ... `DELIM` (single-quoted = no expansion)
 - **Here-strings**: `cat <<< "hello"`
@@ -327,6 +338,13 @@ The shell supports:
 - **compgen**: `-W wordlist`, `-b` builtins, `-c` commands, `-a` aliases, `-v` variables, `-f` files, `-d` dirs, `-A action`
 - **complete**: Accepts completion specs (silent registration for script compatibility)
 - **disown**: `disown [jobspec]`, `-a` (all), `-r` (running) — remove jobs from job table
+- **enable**: `enable -n cmd` disables a builtin, `enable cmd` re-enables, `enable -a` lists all, `enable -p` lists disabled
+- **read -t TIMEOUT**: `read -t 0` checks input availability, `read -t N` times out after N seconds (exit 142)
+- **read -u FD**: Read from file descriptor, with `exec N< file` redirect support
+- **mapfile -C callback**: Invoke callback function every `-c quantum` lines during mapfile
+- **coproc**: `coproc [NAME] command` — run command as coprocess, sets NAME array + NAME_PID
+- **kill**: Actually terminates processes — supports `%N` job specs, PID lookup in process table and background jobs
+- **Signal handling**: AbortController per command, Ctrl+C fires INT trap, exit code 130 on abort
 
 ## WASI Runtime (Tier 2)
 
@@ -359,12 +377,37 @@ wasi exec cowsay "hello"   # Run package directly (auto-downloads, like npx)
 
 **Key files:** `src/wasi-runtime.ts`, `src/wasi-packages.ts`, `src/commands/wasi.ts`, `src/commands/pkg.ts`
 
+## x86-64 Emulator (Tier 3)
+
+Shiro has a from-scratch x86-64 emulator written entirely in TypeScript. No external libraries — every instruction, every syscall, every memory operation is transparent, debuggable, moddable TypeScript.
+
+**Architecture:**
+- **CPU state** (`src/x86/cpu.ts`): 16 64-bit registers via BigInt64Array, RFLAGS with individual flag accessors (CF, ZF, SF, OF, PF, AF, DF), segment bases (FS/GS for TLS)
+- **Virtual memory** (`src/x86/memory.ts`): Paged 4KB demand-allocation, little-endian read/write for 8/16/32/64-bit values, cross-page boundary handling
+- **ELF64 loader** (`src/x86/elf.ts`): Parses ELF64 headers, loads PT_LOAD segments, sets up Linux ABI stack (argc/argv/envp), 16-byte aligned RSP
+- **Instruction decoder** (`src/x86/decode.ts`): ~40 instructions (Phase 1), full ModR/M+SIB decoding, REX prefix handling, RIP-relative addressing
+- **Linux syscalls** (`src/x86/syscalls.ts`): 25+ syscalls mapped to Shiro VFS (read, write, open, close, stat, fstat, lseek, mmap, brk, ioctl, access, dup, getpid, exit, uname, getcwd, chdir, getuid/gid, arch_prctl, clock_gettime, openat, newfstatat)
+
+**Usage:**
+```bash
+./hello              # Auto-detect ELF binary, run in x86 emulator
+x86 run ./hello      # Explicit execution
+x86 info ./hello     # Show ELF headers (educational)
+x86 debug ./hello    # Step-through with register dumps
+```
+
+**Phase 1 instructions:** MOV, LEA, PUSH, POP, ADD, SUB, CMP, AND, OR, XOR, TEST, SHL, SHR, SAR, JMP, Jcc (all 16 conditions), CALL, RET, SYSCALL, NOP, MOVZX, MOVSX, MOVSXD, CDQ, CQO, CDQE, SETcc, CMOVcc, IMUL, MUL, DIV, IDIV, NEG, NOT, INC, DEC, REP MOVSB, REP STOSB, LEAVE, XCHG, BSF, BSR
+
+**Key files:** `src/x86/cpu.ts`, `src/x86/memory.ts`, `src/x86/elf.ts`, `src/x86/decode.ts`, `src/x86/syscalls.ts`, `src/x86/runtime.ts`, `src/commands/x86.ts`
+
 ## Filesystem
 
 - IndexedDB-backed with in-memory cache for performance
 - POSIX-like API: stat, readdir, readFile, writeFile, mkdir, unlink, rename, symlink, chmod, glob
 - Path resolution handles `.`, `..`, and `~`
 - `clearCache()` method available if external DB modifications occur
+- **Virtual filesystem providers** (`VirtualFSProvider` interface): `/dev` (null, zero, random, urandom) and `/proc` (version, uptime, meminfo, cpuinfo, loadavg, self/*) are dynamically generated — no IndexedDB storage
+- Virtual entries appear in `ls /` and `readdir('/')` alongside real directories
 
 ## Mobile Input
 
@@ -608,32 +651,38 @@ The workflow cycle is: **implement shell features → write tests → update CLA
 
 The vision: a **fully functional browser-native Linux system** where Claude Code (Spirit) runs with no external server. There is always work to do — if your current task is done, find the next missing Linux capability and implement it.
 
-### Current State (Build #828, 1584 tests)
+### Current State (Build #849, 1668 tests)
 
-The shell (`src/shell.ts`, ~4500 lines) has comprehensive bash compatibility. Core features working: pipes, redirects, heredocs, arrays (indexed + associative), arithmetic, functions, control structures, job control, process substitution, extglob, brace expansion, namerefs, traps, and 30+ inline builtins.
+The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Core features working: pipes, redirects, heredocs, arrays (indexed + associative), arithmetic, functions, control structures, job control, process substitution, extglob, brace expansion, namerefs, traps, and 30+ inline builtins. All three architecture tiers are operational: Tier 1 (200+ JS commands), Tier 2 (WASM+WASI, 22 packages), Tier 3 (x86-64 emulator, Phase 1).
 
 ### Future Plans — Next Features to Implement (Priority Order)
 
-#### P0: Shell Builtins Still Missing or Stubbed
-1. **`enable` builtin** — Currently a silent stub. Real bash `enable -n cmd` disables a builtin. Low priority.
+> **Recently Completed (Shiro Vision Stages 1-3):**
+> - `enable` builtin with -n/-a/-p flags and builtin gating
+> - `read -t TIMEOUT` and `read -u FD`
+> - `mapfile -C callback` with quantum
+> - `coproc` with named coprocesses
+> - Signal handling (AbortController, Ctrl+C → SIGINT)
+> - Process table robustness (kill actually terminates, abort controllers)
+> - `/proc` virtual filesystem (version, uptime, meminfo, cpuinfo, loadavg, self/*)
+> - `/dev` virtual filesystem refactor (null, zero, random, urandom)
+> - x86-64 emulator Phase 1: CPU, memory, ELF64 loader, ~40 instructions, 25+ syscalls
+> - Tab completion engine, nocaseglob, nullglob, dotglob, failglob, globstar, LINENO, EXIT trap
 
-> **Completed:** `wait` builtin (already implemented), `history` builtin with `-c`/`-d N`/`-s "cmd"`/`N` (implemented), `fc` builtin (`fc -l` list, `fc -s` re-execute), `declare -r` (readonly).
+#### P0: x86 Emulator — Phase 2
+1. **Expand to ~100 instructions** — String ops (REP MOVSB/STOSB/CMPSB), more CMOV variants, XADD, CMPXCHG, BT/BTS/BTR/BTC
+2. **SSE basics** — MOVAPS/MOVUPS, XORPS (for zeroing), basic SSE2 integer ops (musl uses these)
+3. **More syscalls** — readv/writev, pread64/pwrite64, fcntl, pipe, socket stubs, readlink, getdents64
 
-#### P1: Shell Features — Medium Priority
-2. **`read -t TIMEOUT`** — Read with timeout. Could use `setTimeout` + `Promise.race`.
-3. **`read -u FD`** — Read from file descriptor. Would need FD table integration.
-4. **`mapfile -C callback`** — Callback function invoked for each line.
-5. **`coproc`** — Two-way pipe with background process. Complex in browser — may need `ReadableStream`/`WritableStream` pairs.
-
-> **Completed:** `nocaseglob` (case-insensitive globbing), `nullglob` (empty on no-match), `dotglob` (include dotfiles in globs), `LINENO` tracking (correct line numbers in multi-line scripts, saved/restored across `source`), `declare -g` (global scope from functions), `failglob` (error on unmatched glob), `globstar` gate (`**` only recurses when enabled), EXIT trap (fires at script end and on `exit`).
+#### P1: x86 Emulator — Phase 3 (musl-static "hello world")
+4. **~200 instructions** — Full x86-64 userspace instruction set for musl libc static binaries
+5. **TLS support** — `arch_prctl(ARCH_SET_FS)` + proper FS segment base for thread-local storage
+6. **Dynamic linker stubs** — Handle `AT_*` auxiliary vector entries on the stack
 
 #### P2: Broader System Capabilities
-6. **Signal handling** — `trap` works for ERR/EXIT/INT but Ctrl+C doesn't actually send SIGINT to background jobs. Wire terminal Ctrl+C to job interruption.
-7. **Process table** — `ps` and `kill` exist but background jobs and foreground control could be more robust.
-8. **`/proc` filesystem** — Virtual `/proc/self/`, `/proc/uptime`, `/proc/meminfo` for script compatibility.
-9. **Tier 3: x86 emulation** — The next architectural tier. Would enable running actual Linux binaries in-browser.
-
-> **Completed:** Tab completion engine — `compgen`/`complete` wired to terminal tab handler for real context-sensitive completion.
+7. **busybox support** — Run busybox-static in the x86 emulator (would give 300+ real Unix commands)
+8. **JIT compilation** — Compile hot basic blocks to JavaScript functions for 10-100x speedup
+9. **Networking stubs** — socket/connect/send/recv syscalls mapped to fetch/WebSocket
 
 ### Technical Notes for New Agents
 
@@ -641,5 +690,7 @@ The shell (`src/shell.ts`, ~4500 lines) has comprehensive bash compatibility. Co
 - **ANSI-C quoting** `$'...'` is handled ONLY in the tokenizer — never in `expandVars`.
 - **Tests** are in `tests/tests/shiro-vitest/shell-advanced.test.ts`. Sections are numbered (currently 1-81). Add new sections sequentially. The `run(shell, cmd)` helper returns `{ output, exitCode }`. Stderr goes to stdout in the test helper.
 - **Deploy cycle**: `npm run deploy` auto-increments build number, runs tsc + vite build, and scp's to the DO droplet.
+- **x86 emulator**: Tests use `buildElf64(code)` helper to hand-craft minimal ELF64 binaries from raw byte arrays. The emulator uses `bigint` for all 64-bit values (registers, addresses).
+- **Virtual filesystem providers**: `VirtualFSProvider` interface in `filesystem.ts`. `/dev` and `/proc` are fully virtual — add new providers to the `virtualProviders` array.
 - **5 pre-existing test failures** in `about-demos.test.ts` (Demo 3: Text Processing) are unrelated to shell features — they fail because the test setup doesn't create `/tmp/grades.csv`.
 
