@@ -353,6 +353,22 @@ async function main() {
     () => import('./commands/wasi').then(m => m.wasiCmd)), 'src/commands/wasi.ts');
   registerCommand(commands, lazyCommand('pkg', 'WASM package manager',
     () => import('./commands/pkg').then(m => m.pkgCmd)), 'src/commands/pkg.ts');
+  registerCommand(commands, lazyCommand('xpkg', 'Binary (x86-64) package manager',
+    () => import('./commands/xpkg').then(m => m.xpkgCmd)), 'src/commands/xpkg.ts');
+
+  // Compression commands (lazy-loaded)
+  registerCommand(commands, lazyCommand('bzip2', 'Compress files (bzip2)',
+    () => import('./commands/bzip2').then(m => m.bzip2Cmd)), 'src/commands/bzip2.ts');
+  registerCommand(commands, lazyCommand('bunzip2', 'Decompress bzip2 files',
+    () => import('./commands/bzip2').then(m => m.bunzip2Cmd)), 'src/commands/bzip2.ts');
+  registerCommand(commands, lazyCommand('xz', 'XZ compression (decompress only)',
+    () => import('./commands/xz').then(m => m.xzCmd)), 'src/commands/xz.ts');
+  registerCommand(commands, lazyCommand('unxz', 'Decompress XZ files',
+    () => import('./commands/xz').then(m => m.unxzCmd)), 'src/commands/xz.ts');
+  registerCommand(commands, lazyCommand('zstd', 'Zstandard compression (decompress only)',
+    () => import('./commands/zstd').then(m => m.zstdCmd)), 'src/commands/zstd.ts');
+  registerCommand(commands, lazyCommand('unzstd', 'Decompress Zstandard files',
+    () => import('./commands/zstd').then(m => m.unzstdCmd)), 'src/commands/zstd.ts');
 
   // Web API commands (browser-native, no CDN deps)
   registerCommand(commands, speakCmd, 'src/commands/speak.ts');
@@ -365,6 +381,18 @@ async function main() {
     () => import('./commands/top').then(m => m.topCmd)), 'src/commands/top.ts');
   registerCommand(commands, lazyCommand('man', 'Manual pages',
     () => import('./commands/man').then(m => m.manCmd)), 'src/commands/man.ts');
+  registerCommand(commands, lazyCommand('tmux', 'Terminal multiplexer',
+    () => import('./commands/tmux').then(m => m.tmuxCmd)), 'src/commands/tmux.ts');
+  registerCommand(commands, lazyCommand('systemctl', 'Control the system service manager',
+    () => import('./commands/systemctl').then(m => m.systemctlCmd)), 'src/commands/systemctl.ts');
+  registerCommand(commands, lazyCommand('crontab', 'Maintain crontab files',
+    () => import('./commands/cron').then(m => m.crontabCmd)), 'src/commands/cron.ts');
+  registerCommand(commands, lazyCommand('journalctl', 'Query the journal',
+    () => import('./commands/cron').then(m => m.journalctlCmd)), 'src/commands/cron.ts');
+  registerCommand(commands, lazyCommand('ssh', 'Connect to remote Shiro via WebRTC',
+    () => import('./commands/ssh').then(m => m.sshCmd)), 'src/commands/ssh.ts');
+  registerCommand(commands, lazyCommand('scp', 'Copy files over WebRTC',
+    () => import('./commands/scp').then(m => m.scpCmd)), 'src/commands/scp.ts');
 
   // Subscribe to hot-reload events to update CommandRegistry
   registry.subscribe((name, newModule, oldModule) => {

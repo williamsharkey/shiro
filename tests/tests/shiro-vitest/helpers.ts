@@ -25,6 +25,10 @@ import { iconvCmd } from '@shiro/commands/iconv';
 import { zipCmd, unzipCmd } from '@shiro/commands/zip';
 import { wasiCmd } from '@shiro/commands/wasi';
 import { pkgCmd } from '@shiro/commands/pkg';
+import { xpkgCmd } from '@shiro/commands/xpkg';
+import { bzip2Cmd, bunzip2Cmd } from '@shiro/commands/bzip2';
+import { xzCmd, unxzCmd } from '@shiro/commands/xz';
+import { zstdCmd, unzstdCmd } from '@shiro/commands/zstd';
 import { historyCmd } from '@shiro/commands/history';
 import { speakCmd } from '@shiro/commands/speak';
 import { listenCmd } from '@shiro/commands/listen';
@@ -32,6 +36,10 @@ import { notifyCmd } from '@shiro/commands/notify';
 import { cameraCmd } from '@shiro/commands/camera';
 import { topCmd } from '@shiro/commands/top';
 import { manCmd } from '@shiro/commands/man';
+import { systemctlCmd } from '@shiro/commands/systemctl';
+import { crontabCmd, journalctlCmd } from '@shiro/commands/cron';
+import { sshCmd } from '@shiro/commands/ssh';
+import { scpCmd } from '@shiro/commands/scp';
 
 export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell }> {
   const fs = new FileSystem();
@@ -76,6 +84,13 @@ export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell 
   commands.register(unzipCmd);
   commands.register(wasiCmd);
   commands.register(pkgCmd);
+  commands.register(xpkgCmd);
+  commands.register(bzip2Cmd);
+  commands.register(bunzip2Cmd);
+  commands.register(xzCmd);
+  commands.register(unxzCmd);
+  commands.register(zstdCmd);
+  commands.register(unzstdCmd);
   commands.register(historyCmd);
   commands.register(speakCmd);
   commands.register(listenCmd);
@@ -83,6 +98,11 @@ export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell 
   commands.register(cameraCmd);
   commands.register(topCmd);
   commands.register(manCmd);
+  commands.register(systemctlCmd);
+  commands.register(crontabCmd);
+  commands.register(journalctlCmd);
+  commands.register(sshCmd);
+  commands.register(scpCmd);
 
   const shell = new Shell(fs, commands);
   return { fs, shell };

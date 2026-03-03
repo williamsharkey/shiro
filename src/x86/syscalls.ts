@@ -28,6 +28,15 @@ interface FDEntry {
   offset: number;
   content: Uint8Array | null;  // null = stdin/stdout/stderr
   flags: number;
+  pipe?: PipeBuffer;  // if this FD is a pipe endpoint
+}
+
+// In-memory ring buffer for pipe(2)
+interface PipeBuffer {
+  data: Uint8Array;
+  readPos: number;
+  writePos: number;
+  closed: boolean;
 }
 
 // Socket metadata for network syscall stubs
@@ -128,8 +137,9 @@ export class LinuxSyscalls {
       case 107: result = 1000n; break; // geteuid
       case 108: result = 1000n; break; // getegid
       case 110: result = 1000n; break; // getppid
-      case 13:  result = 0n; break; // rt_sigaction — stub
-      case 14:  result = 0n; break; // rt_sigprocmask — stub
+      case 13:  result = this.sysRtSigaction(arg0, arg1, arg2); break;
+      case 14:  result = this.sysRtSigprocmask(arg0, arg1, arg2, arg3); break;
+      case 22:  result = this.sysPipe(arg0); break; // pipe
       case 20:  result = this.sysWritev(arg0, arg1, arg2); break;
       case 72:  result = this.sysFcntl(arg0, arg1, arg2); break;
       case 89:  result = this.sysReadlink(arg0, arg1, arg2); break;
@@ -174,7 +184,7 @@ export class LinuxSyscalls {
       case 267: result = this.sysReadlinkat(arg0, arg1, arg2, arg3); break;
       case 273: result = 0n; break; // set_robust_list — stub
       case 291: result = -BigInt(ENOSYS); break; // epoll_create1
-      case 293: result = -BigInt(ENOSYS); break; // pipe2 — not supported
+      case 293: result = this.sysPipe2(arg0, arg1); break; // pipe2
       case 228: result = this.sysClockGettime(arg0, arg1); break;
       case 231: throw new X86Exit(Number(arg0 & 0xFFn)); // exit_group
       case 257: result = await this.sysOpenat(arg0, arg1, arg2, arg3); break;
@@ -203,7 +213,21 @@ export class LinuxSyscalls {
     }
 
     const entry = this.fdTable.get(fd);
-    if (!entry || !entry.content) return -BigInt(EBADF);
+    if (!entry) return -BigInt(EBADF);
+
+    // Pipe read
+    if (entry.pipe) {
+      const pipe = entry.pipe;
+      const available = pipe.writePos - pipe.readPos;
+      if (available <= 0) return 0n; // EOF or empty
+      const toRead = Math.min(n, available);
+      const slice = pipe.data.slice(pipe.readPos, pipe.readPos + toRead);
+      this.mem.writeBytes(buf, slice);
+      pipe.readPos += toRead;
+      return BigInt(toRead);
+    }
+
+    if (!entry.content) return -BigInt(EBADF);
 
     const available = entry.content.length - entry.offset;
     const toRead = Math.min(n, available);
@@ -233,6 +257,17 @@ export class LinuxSyscalls {
 
     const entry = this.fdTable.get(fd);
     if (!entry) return -BigInt(EBADF);
+
+    // Pipe write
+    if (entry.pipe) {
+      const pipe = entry.pipe;
+      const space = pipe.data.length - pipe.writePos;
+      const toWrite = Math.min(n, space);
+      if (toWrite <= 0) return -BigInt(ENOSPC);
+      pipe.data.set(data.slice(0, toWrite), pipe.writePos);
+      pipe.writePos += toWrite;
+      return BigInt(toWrite);
+    }
 
     // Write to file — accumulate and flush on close
     // For simplicity, we buffer writes in content
@@ -434,8 +469,108 @@ export class LinuxSyscalls {
     const entry = this.fdTable.get(Number(oldFd));
     if (!entry) return -BigInt(EBADF);
     const nfd = Number(newFd);
+    // Close existing FD at newFd if any
+    this.fdTable.delete(nfd);
     this.fdTable.set(nfd, { ...entry });
     return BigInt(nfd);
+  }
+
+  // ─── Pipe syscalls ────────────────────────────────────────────────────────
+
+  private sysPipe(pipefdAddr: bigint): bigint {
+    return this.createPipe(pipefdAddr, 0);
+  }
+
+  private sysPipe2(pipefdAddr: bigint, flags: bigint): bigint {
+    return this.createPipe(pipefdAddr, Number(flags));
+  }
+
+  private createPipe(pipefdAddr: bigint, _flags: number): bigint {
+    const buf: PipeBuffer = {
+      data: new Uint8Array(65536), // 64KB ring buffer
+      readPos: 0,
+      writePos: 0,
+      closed: false,
+    };
+
+    const readFd = this.nextFd++;
+    const writeFd = this.nextFd++;
+
+    this.fdTable.set(readFd, {
+      path: `pipe:[${readFd}]`,
+      offset: 0,
+      content: null,
+      flags: 0, // O_RDONLY
+      pipe: buf,
+    });
+
+    this.fdTable.set(writeFd, {
+      path: `pipe:[${writeFd}]`,
+      offset: 0,
+      content: null,
+      flags: 1, // O_WRONLY
+      pipe: buf,
+    });
+
+    // Write [readFd, writeFd] as int32 pair to user memory
+    this.mem.write32(pipefdAddr, readFd);
+    this.mem.write32(pipefdAddr + 4n, writeFd);
+
+    return 0n;
+  }
+
+  // ─── Signal syscalls (enhanced stubs) ─────────────────────────────────────
+
+  private sigActions: Map<number, bigint> = new Map(); // signal → handler address
+  private sigMask: bigint = 0n; // blocked signal mask
+
+  private sysRtSigaction(signum: bigint, act: bigint, oldact: bigint): bigint {
+    const sig = Number(signum);
+    if (sig < 1 || sig > 64) return -BigInt(EINVAL);
+
+    // Save old action if oldact is non-null
+    if (oldact !== 0n) {
+      const oldHandler = this.sigActions.get(sig) || 0n; // SIG_DFL
+      this.mem.write64(oldact, oldHandler);       // sa_handler
+      this.mem.write64(oldact + 8n, 0n);          // sa_flags
+      this.mem.write64(oldact + 16n, 0n);         // sa_restorer
+      this.mem.write64(oldact + 24n, 0n);         // sa_mask
+    }
+
+    // Set new action if act is non-null
+    if (act !== 0n) {
+      const handler = this.mem.read64(act);
+      this.sigActions.set(sig, handler);
+    }
+
+    return 0n;
+  }
+
+  private sysRtSigprocmask(how: bigint, set: bigint, oldset: bigint, _sigsetsize: bigint): bigint {
+    // Save old mask
+    if (oldset !== 0n) {
+      this.mem.write64(oldset, this.sigMask);
+    }
+
+    // Modify mask
+    if (set !== 0n) {
+      const newMask = this.mem.read64(set);
+      switch (Number(how)) {
+        case 0: // SIG_BLOCK
+          this.sigMask |= newMask;
+          break;
+        case 1: // SIG_UNBLOCK
+          this.sigMask &= ~newMask;
+          break;
+        case 2: // SIG_SETMASK
+          this.sigMask = newMask;
+          break;
+        default:
+          return -BigInt(EINVAL);
+      }
+    }
+
+    return 0n;
   }
 
   private sysUname(buf: bigint): bigint {

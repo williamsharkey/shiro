@@ -1514,7 +1514,8 @@ export class Decoder {
         op2 === 0x60 || op2 === 0x68 ||  // PUNPCKLBW, PUNPCKHBW
         op2 === 0x73 ||                   // PSLLQ/PSRLQ imm
         op2 === 0xD6 ||                   // MOVQ store (66 0F D6)
-        op2 === 0x38 ||                   // SSSE3/SSE4 3-byte escape — just consume
+        op2 === 0x38 ||                   // SSSE3/SSE4 3-byte escape (0F 38 xx)
+        op2 === 0x3A ||                   // SSE4 3-byte escape (0F 3A xx) — PCMPISTRI etc.
         op2 === 0x76 ||                   // PCMPEQD
         op2 === 0x2E || op2 === 0x2F) {  // UCOMISD/UCOMISS
       this.decodeSSE(op2);
@@ -1833,6 +1834,130 @@ export class Decoder {
     if (op2 === 0x38) {
       const op3 = this.readByte();
       this.decodeModRMXmm(); // consume ModR/M
+      return;
+    }
+
+    // 0F 3A — SSE4 3-byte escape (PCMPISTRI, PCLMULQDQ, etc.)
+    if (op2 === 0x3A) {
+      const op3 = this.readByte();
+      if (op3 === 0x63 || op3 === 0x62) {
+        // PCMPISTRI (63) / PCMPISTRM (62) xmm1, xmm2/m128, imm8
+        const { xmmReg, rm } = this.decodeModRMXmm();
+        const imm8 = this.readByte();
+
+        // xmmReg is xmm1 (destination), rm is xmm2/m128 (source)
+        const xmm1Idx = xmmReg;
+        let xmm2Lo: bigint, xmm2Hi: bigint;
+        if (rm.type === 'reg') {
+          xmm2Lo = this.cpu.getXmmLo(rm.reg!);
+          xmm2Hi = this.cpu.getXmmHi(rm.reg!);
+        } else {
+          // Load from memory
+          xmm2Lo = this.mem.read64(rm.addr!);
+          xmm2Hi = this.mem.read64(rm.addr! + 8n);
+        }
+
+        // Simplified PCMPISTRI: compare packed strings, result in ECX
+        // This implements basic byte-equal comparison (imm8 mode 0x08-0x0C common cases)
+        const xmm1Lo = this.cpu.getXmmLo(xmm1Idx);
+        const xmm1Hi = this.cpu.getXmmHi(xmm1Idx);
+
+        // Extract bytes from both operands
+        const bytes1: number[] = [];
+        const bytes2: number[] = [];
+        for (let b = 0; b < 8; b++) {
+          bytes1.push(Number((xmm1Lo >> BigInt(b * 8)) & 0xFFn));
+          bytes2.push(Number((xmm2Lo >> BigInt(b * 8)) & 0xFFn));
+        }
+        for (let b = 0; b < 8; b++) {
+          bytes1.push(Number((xmm1Hi >> BigInt(b * 8)) & 0xFFn));
+          bytes2.push(Number((xmm2Hi >> BigInt(b * 8)) & 0xFFn));
+        }
+
+        // Find null terminators
+        let len1 = 16, len2 = 16;
+        for (let b = 0; b < 16; b++) { if (bytes1[b] === 0) { len1 = b; break; } }
+        for (let b = 0; b < 16; b++) { if (bytes2[b] === 0) { len2 = b; break; } }
+
+        // Determine comparison mode from imm8
+        const aggregation = (imm8 >> 2) & 3; // bits [3:2]
+
+        if (op3 === 0x63) {
+          // PCMPISTRI: result index → ECX
+          let resultIdx = 16;
+
+          if (aggregation === 0 || aggregation === 2) {
+            // Equal any / Equal each — find first matching/equal byte
+            for (let b = 0; b < len2; b++) {
+              let match = false;
+              if (aggregation === 0) {
+                // Equal any: is bytes2[b] in bytes1?
+                for (let a = 0; a < len1; a++) {
+                  if (bytes2[b] === bytes1[a]) { match = true; break; }
+                }
+              } else {
+                // Equal each: bytes2[b] == bytes1[b]?
+                match = b < len1 && bytes2[b] === bytes1[b];
+              }
+
+              const polarity = (imm8 >> 4) & 3; // bits [5:4]
+              if (polarity === 1 || polarity === 3) match = !match;
+
+              if (match) {
+                resultIdx = b;
+                break;
+              }
+            }
+          } else if (aggregation === 1) {
+            // Ranges: bytes1 defines character ranges [lo,hi] pairs
+            for (let b = 0; b < len2; b++) {
+              let inRange = false;
+              for (let r = 0; r + 1 < len1; r += 2) {
+                if (bytes2[b] >= bytes1[r] && bytes2[b] <= bytes1[r + 1]) {
+                  inRange = true;
+                  break;
+                }
+              }
+              const polarity = (imm8 >> 4) & 3;
+              if (polarity === 1 || polarity === 3) inRange = !inRange;
+
+              if (inRange) {
+                resultIdx = b;
+                break;
+              }
+            }
+          } else {
+            // aggregation === 3: Equal ordered (substring search)
+            for (let b = 0; b <= len2 - len1; b++) {
+              let match = true;
+              for (let a = 0; a < len1; a++) {
+                if (bytes2[b + a] !== bytes1[a]) { match = false; break; }
+              }
+              if (match) { resultIdx = b; break; }
+            }
+          }
+
+          this.cpu.setReg32(RCX, BigInt(resultIdx));
+
+          // Set flags
+          this.cpu.cf = resultIdx < 16;    // CFlag = result is valid
+          this.cpu.zf = len2 < 16;          // ZFlag = xmm2 has null
+          this.cpu.sf = len1 < 16;          // SFlag = xmm1 has null
+          this.cpu.of = resultIdx === 0;    // OFlag = bit 0 of result
+        } else {
+          // PCMPISTRM: result mask → XMM0 (simplified: set to all zeros)
+          this.cpu.setXmm(0, 0n, 0n);
+          this.cpu.zf = len2 < 16;
+          this.cpu.sf = len1 < 16;
+          this.cpu.cf = false;
+          this.cpu.of = false;
+        }
+        return;
+      }
+
+      // Other 0F 3A instructions: consume ModR/M + imm8
+      this.decodeModRMXmm();
+      this.readByte(); // consume imm8
       return;
     }
 

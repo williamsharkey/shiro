@@ -128,6 +128,9 @@ export const tar: Command = {
     const list = flags.t || flags.list;
     const verbose = flags.v || flags.verbose;
     const gzip = flags.z;
+    const bzip2Flag = flags.j;
+    const xzFlag = flags.J;
+    const zstdFlag = flags.zstd;
     const file = values.f;
     const changeDir = values.C;
 
@@ -201,7 +204,7 @@ export const tar: Command = {
           offset += block.length;
         }
 
-        // Gzip if requested
+        // Compress if requested
         if (gzip && typeof CompressionStream !== 'undefined') {
           const cs = new CompressionStream('gzip');
           const writer = cs.writable.getWriter();
@@ -221,6 +224,9 @@ export const tar: Command = {
             archiveData.set(chunk, off);
             off += chunk.length;
           }
+        } else if (bzip2Flag) {
+          const { bzip2Compress } = await import('./bzip2');
+          archiveData = new Uint8Array(bzip2Compress(archiveData));
         }
 
         const archivePath = ctx.fs.resolvePath(file, ctx.cwd);
@@ -250,9 +256,14 @@ export const tar: Command = {
           rawData = new TextEncoder().encode(strContent);
         }
 
-        // Decompress gzip if needed
+        // Decompress if needed — auto-detect by magic bytes or flag
         let archiveData = rawData;
-        if (gzip || (rawData[0] === 0x1f && rawData[1] === 0x8b)) {
+        const isGzip = gzip || (rawData[0] === 0x1f && rawData[1] === 0x8b);
+        const isBzip2 = bzip2Flag || (rawData[0] === 0x42 && rawData[1] === 0x5A && rawData[2] === 0x68);
+        const isXz = xzFlag || (rawData[0] === 0xFD && rawData[1] === 0x37 && rawData[2] === 0x7A);
+        const isZstd = zstdFlag || (rawData[0] === 0x28 && rawData[1] === 0xB5 && rawData[2] === 0x2F && rawData[3] === 0xFD);
+
+        if (isGzip) {
           if (typeof DecompressionStream !== 'undefined') {
             const ds = new DecompressionStream('gzip');
             const writer = ds.writable.getWriter();
@@ -273,6 +284,15 @@ export const tar: Command = {
               off += chunk.length;
             }
           }
+        } else if (isBzip2) {
+          const { bzip2Decompress } = await import('./bzip2');
+          archiveData = bzip2Decompress(rawData);
+        } else if (isXz) {
+          const { xzDecompress } = await import('./xz');
+          archiveData = xzDecompress(rawData);
+        } else if (isZstd) {
+          const { zstdDecompress } = await import('./zstd');
+          archiveData = zstdDecompress(rawData);
         }
 
         // Also check if it's old format in binary form

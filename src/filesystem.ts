@@ -277,12 +277,50 @@ class ProcProvider implements VirtualFSProvider {
   writeFile(): boolean { return false; }
 }
 
+/** /var/log virtual provider — reads from ServiceManager's log buffer */
+let _serviceManagerModule: { serviceManager: { getSyslog(): string } } | null = null;
+
+class VarLogProvider implements VirtualFSProvider {
+  private getSyslog(): string {
+    // Access cached module or read from window global
+    if (_serviceManagerModule) return _serviceManagerModule.serviceManager.getSyslog();
+    if (typeof window !== 'undefined' && (window as any).__serviceManager?.getSyslog) {
+      return (window as any).__serviceManager.getSyslog();
+    }
+    // Trigger lazy load for next time
+    import('./service-manager').then(m => { _serviceManagerModule = m; }).catch(() => {});
+    return '';
+  }
+
+  handles(path: string): boolean {
+    return path === '/var/log' || path === '/var/log/syslog' || path === '/var/log/journal';
+  }
+  readFile(path: string, encoding?: 'utf8'): string | Uint8Array | null {
+    if (path === '/var/log') return null; // directory
+    const content = this.getSyslog();
+    return encoding === 'utf8' ? content : new TextEncoder().encode(content);
+  }
+  stat(path: string): StatResult | null {
+    if (path === '/var/log') return makeStat({ path, type: 'dir', content: null, mode: 0o755, mtime: Date.now(), ctime: 0, size: 0 });
+    if (path === '/var/log/syslog' || path === '/var/log/journal') {
+      return makeStat({ path, type: 'file', content: new Uint8Array(0), mode: 0o644, mtime: Date.now(), ctime: 0, size: 0 });
+    }
+    return null;
+  }
+  readdir(path: string): string[] | null {
+    if (path === '/var/log') return ['syslog', 'journal'];
+    return null;
+  }
+  exists(path: string): boolean { return this.handles(path); }
+  writeFile(): boolean { return false; }
+}
+
 export class FileSystem {
   private db: IDBDatabase | null = null;
   private cache: Map<string, FSNode | undefined> = new Map();
   private cacheEnabled = true;
   private _changeListeners: Set<FSChangeListener> = new Set();
-  private virtualProviders: VirtualFSProvider[] = [new DevProvider(), new ProcProvider()];
+  private virtualProviders: VirtualFSProvider[] = [new DevProvider(), new ProcProvider(), new VarLogProvider()];
 
   /** Subscribe to filesystem change events. Returns unsubscribe function. */
   onChange(listener: FSChangeListener): () => void {

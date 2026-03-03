@@ -115,6 +115,68 @@ export async function executeElf(
   return 0;
 }
 
+/** Execute an ELF64 binary from a pre-loaded Uint8Array (for xpkg cached binaries) */
+export async function executeElfFromBytes(
+  elfData: Uint8Array,
+  argv0: string,
+  args: string[],
+  ctx: X86Context,
+): Promise<number> {
+  const cpu = new CPU();
+  const mem = new VirtualMemory();
+  const decoder = new Decoder(cpu, mem);
+
+  const argv = [argv0, ...args];
+  const envp = Object.entries(ctx.env).map(([k, v]) => `${k}=${v}`);
+
+  try {
+    const info = loadElf(elfData, mem, cpu, argv, envp);
+    if (!info.isStaticLinked) {
+      ctx.writeStderr(`shiro: ${argv0}: dynamically-linked ELF binaries are not supported (need static linking)\r\n`);
+      return 126;
+    }
+  } catch (e: any) {
+    ctx.writeStderr(`shiro: ${argv0}: ${e.message}\r\n`);
+    return 126;
+  }
+
+  const syscalls = new LinuxSyscalls(
+    cpu, mem, ctx.fs, ctx.cwd,
+    ctx.writeStdout, ctx.writeStderr,
+    ctx.stdin,
+  );
+
+  decoder.onSyscall = () => {
+    (decoder as any)._pendingSyscall = true;
+  };
+
+  let instructionCount = 0;
+  try {
+    while (!cpu.halted && instructionCount < MAX_INSTRUCTIONS) {
+      (decoder as any)._pendingSyscall = false;
+      decoder.step();
+      instructionCount++;
+
+      if ((decoder as any)._pendingSyscall) {
+        await syscalls.handleSyscall();
+      }
+    }
+
+    if (instructionCount >= MAX_INSTRUCTIONS) {
+      ctx.writeStderr(`shiro: ${argv0}: exceeded instruction limit (${MAX_INSTRUCTIONS})\r\n`);
+      return 1;
+    }
+  } catch (e: any) {
+    if (e instanceof X86Exit) {
+      return e.code;
+    }
+    ctx.writeStderr(`shiro: ${argv0}: ${e.message}\r\n`);
+    return 1;
+  }
+
+  return 0;
+}
+
 /** Get ELF info without executing */
 export function getElfInfo(data: Uint8Array): string {
   const info = parseElf64(data);

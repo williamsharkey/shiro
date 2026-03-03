@@ -283,28 +283,42 @@ function hasImmediateOperand(opcode: number, isTwoByte: boolean): boolean {
   return false;
 }
 
-/** Compile a basic block into a JavaScript function (Phase 2 — hot-path optimization) */
+/** Compile a basic block into a JavaScript function (Phase 2 — real codegen) */
 export function compileBlock(block: BasicBlock, cpu: CPU, mem: VirtualMemory): Function | null {
   // Only compile blocks that have been executed enough times
   if (block.execCount < 10) return null;
 
-  // For now, generate a simple function that replays the block's effects
-  // This is a scaffold for future full compilation
-  const lines: string[] = [];
-  lines.push('// JIT compiled block at 0x' + block.startAddr.toString(16));
-
-  for (const inst of block.instructions) {
-    lines.push(`// ${inst.mnemonic} @ 0x${inst.address.toString(16)}`);
+  // Delegate to real codegen (Phase 2: register-to-register ops)
+  if (_codegenModule) {
+    const fn = _codegenModule.generateBlockCode(block, cpu, mem);
+    if (fn) return fn;
   }
 
-  // The compiled function advances RIP to the block's end
+  // Fallback: simple function that advances RIP
+  const lines: string[] = [];
+  lines.push('// JIT compiled block at 0x' + block.startAddr.toString(16));
   lines.push(`cpu.rip = ${block.endAddr}n;`);
   lines.push(`return ${block.endAddr}n;`);
-
   try {
-    const fn = new Function('cpu', 'mem', lines.join('\n'));
-    return fn;
+    return new Function('cpu', 'mem', lines.join('\n'));
   } catch {
     return null;
   }
+}
+
+/** Cached codegen module reference (loaded lazily) */
+let _codegenModule: { generateBlockCode: (block: BasicBlock, cpu: CPU, mem: VirtualMemory) => Function | null } | null = null;
+
+/** Load the JIT codegen module (call once at startup or first JIT attempt) */
+export async function loadCodegen(): Promise<void> {
+  try {
+    _codegenModule = await import('./jit-codegen');
+  } catch {
+    _codegenModule = null;
+  }
+}
+
+/** Set codegen module directly (for testing or synchronous init) */
+export function setCodegenModule(mod: { generateBlockCode: (block: BasicBlock, cpu: CPU, mem: VirtualMemory) => Function | null } | null): void {
+  _codegenModule = mod;
 }

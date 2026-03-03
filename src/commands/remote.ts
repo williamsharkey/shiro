@@ -282,6 +282,136 @@ async function handleRemoteCommand(session: RemoteSession, message: string): Pro
         return JSON.stringify({ type: 'eval_result', result: resultStr, requestId });
       }
 
+      case 'terminal_start': {
+        // Start an interactive terminal session
+        const shell = session.shadowShell;
+        if (!shell) {
+          return JSON.stringify({ type: 'error', error: 'Shell not available', requestId });
+        }
+        logActivity(session, 'info', `Terminal session started (${cmd.cols || 80}x${cmd.rows || 24})`);
+
+        // Create a forked shell for the terminal session
+        const termShell = shell.fork();
+        (session as any)._termShell = termShell;
+        (session as any)._termActive = true;
+
+        // Send initial prompt
+        const cwd = termShell.cwd;
+        const home = termShell.env.HOME || '/home/user';
+        const display = cwd.startsWith(home) ? '~' + cwd.slice(home.length) : cwd;
+        const prompt = `${display}$ `;
+        if (session.dc) {
+          session.dc.send(JSON.stringify({ type: 'terminal_output', data: prompt, requestId }));
+        }
+        return JSON.stringify({ type: 'terminal_started', requestId });
+      }
+
+      case 'terminal_input': {
+        // Forward keystroke to the terminal shell
+        const termShell = (session as any)._termShell as Shell | undefined;
+        const termActive = (session as any)._termActive as boolean;
+        if (!termShell || !termActive) {
+          return JSON.stringify({ type: 'error', error: 'No active terminal session', requestId });
+        }
+
+        const data = cmd.data as string;
+
+        // Handle Enter — execute command
+        if (data === '\r' || data === '\n') {
+          const inputBuf = (session as any)._termInputBuf || '';
+          (session as any)._termInputBuf = '';
+
+          if (session.dc) {
+            session.dc.send(JSON.stringify({ type: 'terminal_output', data: '\r\n' }));
+          }
+
+          const command = inputBuf.trim();
+          if (command === 'exit') {
+            (session as any)._termActive = false;
+            if (session.dc) {
+              session.dc.send(JSON.stringify({ type: 'terminal_end', requestId }));
+            }
+            return JSON.stringify({ type: 'terminal_end', requestId });
+          }
+
+          if (command) {
+            logActivity(session, 'exec', `[term] $ ${command}`);
+            let output = '';
+            try {
+              await termShell.execute(command, (s: string) => { output += s; });
+            } catch (e: any) {
+              output = `Error: ${e.message}\n`;
+            }
+            // Convert \n to \r\n for terminal display
+            const converted = output.replace(/\n/g, '\r\n');
+            if (converted && session.dc) {
+              session.dc.send(JSON.stringify({ type: 'terminal_output', data: converted }));
+            }
+          }
+
+          // Send new prompt
+          const cwd2 = termShell.cwd;
+          const home2 = termShell.env.HOME || '/home/user';
+          const display2 = cwd2.startsWith(home2) ? '~' + cwd2.slice(home2.length) : cwd2;
+          const prompt2 = `${display2}$ `;
+          if (session.dc) {
+            session.dc.send(JSON.stringify({ type: 'terminal_output', data: prompt2 }));
+          }
+          return ''; // Already sent responses via DC
+        }
+
+        // Handle backspace
+        if (data === '\x7f' || data === '\b') {
+          const buf = (session as any)._termInputBuf || '';
+          if (buf.length > 0) {
+            (session as any)._termInputBuf = buf.slice(0, -1);
+            if (session.dc) {
+              session.dc.send(JSON.stringify({ type: 'terminal_output', data: '\b \b' }));
+            }
+          }
+          return '';
+        }
+
+        // Handle Ctrl+C
+        if (data === '\x03') {
+          (session as any)._termInputBuf = '';
+          if (session.dc) {
+            session.dc.send(JSON.stringify({ type: 'terminal_output', data: '^C\r\n' }));
+            const cwd3 = termShell.cwd;
+            const home3 = termShell.env.HOME || '/home/user';
+            const display3 = cwd3.startsWith(home3) ? '~' + cwd3.slice(home3.length) : cwd3;
+            session.dc.send(JSON.stringify({ type: 'terminal_output', data: `${display3}$ ` }));
+          }
+          return '';
+        }
+
+        // Handle Ctrl+D — end session
+        if (data === '\x04') {
+          (session as any)._termActive = false;
+          if (session.dc) {
+            session.dc.send(JSON.stringify({ type: 'terminal_end', requestId }));
+          }
+          return JSON.stringify({ type: 'terminal_end', requestId });
+        }
+
+        // Regular character — echo and buffer
+        if (data.length === 1 && data.charCodeAt(0) >= 32) {
+          (session as any)._termInputBuf = ((session as any)._termInputBuf || '') + data;
+          if (session.dc) {
+            session.dc.send(JSON.stringify({ type: 'terminal_output', data }));
+          }
+        }
+        return '';
+      }
+
+      case 'terminal_end': {
+        (session as any)._termActive = false;
+        (session as any)._termShell = null;
+        (session as any)._termInputBuf = '';
+        logActivity(session, 'info', 'Terminal session ended');
+        return JSON.stringify({ type: 'terminal_end_ack', requestId });
+      }
+
       default:
         return JSON.stringify({ type: 'error', error: `Unknown command type: ${cmd.type}`, requestId });
     }

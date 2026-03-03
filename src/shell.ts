@@ -4690,6 +4690,28 @@ export class Shell {
       }
     }
 
+    // Check for #!x86-pkg stub — load from x86 ELF package cache
+    if (content.startsWith('#!x86-pkg ')) {
+      const parts = content.split('\n')[0].substring('#!x86-pkg '.length).trim().split(/\s+/);
+      const pkgName = parts[0];
+      const appletName = parts[1]; // undefined if not a multi-call binary
+      try {
+        const { getX86Binary } = await import('./x86-packages');
+        const elfData = await getX86Binary(pkgName, (msg) => {
+          writeStderr(`  ${msg}\r\n`);
+        });
+        const { executeElfFromBytes } = await import('./x86/runtime');
+        const argv0 = appletName || pkgName;
+        return executeElfFromBytes(elfData, argv0, args, {
+          fs: this.fs, cwd: this.cwd, args, env: this.env,
+          stdin: ctx.stdin || '', writeStdout: writeStdout, writeStderr: writeStderr,
+        });
+      } catch (e: any) {
+        writeStderr(`shiro: ${pkgName}: ${e.message}\r\n`);
+        return 1;
+      }
+    }
+
     // Detect ELF binaries → run in x86-64 emulator
     if (content.charCodeAt(0) === 0x7f && content.charCodeAt(1) === 0x45 /* E */ &&
         content.charCodeAt(2) === 0x4c /* L */ && content.charCodeAt(3) === 0x46 /* F */) {
