@@ -1,0 +1,17 @@
+export { createPathModule } from './path';
+export { createOsModule } from './os';
+export { createEventsModule } from './events';
+export { createUrlModule } from './url';
+export { createUtilModule } from './util';
+export { createFsModule, createFsPromisesModule } from './fs';
+export type { FsDeps } from './fs';
+export { createChildProcessModule } from './child-process';
+export type { ChildProcessDeps } from './child-process';
+export { createStreamModule } from './stream';
+export { createCryptoModule } from './crypto';
+export type { CryptoDeps } from './crypto';
+export { createHttpModule, createHttpsModule, createHttp2Module } from './http';
+export type { HttpDeps } from './http';
+export { createNetModule, createTlsModule } from './net-tls';
+export { createMiscModule } from './misc';
+export type { MiscDeps } from './misc';

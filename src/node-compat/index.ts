@@ -1,0 +1,11 @@
+export type { NodeEnv, SharedState } from './types';
+export { SYNC_OP_LIMIT, tickSyncOps } from './types';
+export { createFakeBuffer } from './buffer';
+export { createFakeConsole } from './console';
+export { createFakeProcess } from './process';
+export { createFileCache } from './file-cache';
+export { preloadDir, preloadEnvironment } from './preload';
+export { createAutoStubFactory } from './auto-stub';
+export { createRequireFunction } from './require';
+export type { RequireDeps } from './require';
+export { executeNodeScript } from './execution';
