@@ -288,15 +288,113 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
     }
 
     case 'worker_threads':
-    case 'node:worker_threads': return {
-      isMainThread: true,
-      parentPort: null,
-      workerData: null,
-      threadId: 0,
-      Worker: class Worker { constructor() { throw new Error('Workers not supported'); } },
-      MessageChannel: class MessageChannel { port1 = {}; port2 = {}; },
-      MessagePort: class MessagePort {},
-    };
+    case 'node:worker_threads': {
+      // EventEmitter mixin for Worker/MessagePort
+      function makeEmitter(obj: any) {
+        const _events: Record<string, Function[]> = {};
+        obj.on = (ev: string, fn: Function) => { (_events[ev] ??= []).push(fn); return obj; };
+        obj.once = (ev: string, fn: Function) => {
+          const wrapped = (...args: any[]) => { obj.off(ev, wrapped); fn(...args); };
+          return obj.on(ev, wrapped);
+        };
+        obj.off = (ev: string, fn: Function) => { _events[ev] = (_events[ev] || []).filter(f => f !== fn); return obj; };
+        obj.addListener = obj.on;
+        obj.removeListener = obj.off;
+        obj.removeAllListeners = (ev?: string) => { if (ev) delete _events[ev]; else Object.keys(_events).forEach(k => delete _events[k]); return obj; };
+        obj.emit = (ev: string, ...args: any[]) => { (_events[ev] || []).forEach(f => { try { f(...args); } catch {} }); return !!(_events[ev]?.length); };
+        obj.listeners = (ev: string) => [...(_events[ev] || [])];
+        obj.listenerCount = (ev: string) => (_events[ev] || []).length;
+        obj.eventNames = () => Object.keys(_events).filter(k => _events[k].length > 0);
+        return obj;
+      }
+
+      class MessagePort {
+        constructor() { makeEmitter(this); }
+        postMessage(_value: any, _transferList?: any[]) {}
+        start() {}
+        close() { (this as any).emit('close'); }
+        ref() { return this; }
+        unref() { return this; }
+        // EventEmitter methods added by makeEmitter
+        on!: (ev: string, fn: Function) => this;
+        once!: (ev: string, fn: Function) => this;
+        off!: (ev: string, fn: Function) => this;
+        addListener!: (ev: string, fn: Function) => this;
+        removeListener!: (ev: string, fn: Function) => this;
+        removeAllListeners!: (ev?: string) => this;
+        emit!: (ev: string, ...args: any[]) => boolean;
+      }
+
+      class MessageChannel {
+        port1: MessagePort;
+        port2: MessagePort;
+        constructor() {
+          this.port1 = new MessagePort();
+          this.port2 = new MessagePort();
+        }
+      }
+
+      class Worker {
+        threadId = 1;
+        resourceLimits = {};
+        constructor(_filename: string | URL, _options?: any) {
+          makeEmitter(this);
+          // Only emit error if someone is listening; always emit exit(1) for graceful degradation
+          setTimeout(() => {
+            if ((this as any).listenerCount('error') > 0) {
+              (this as any).emit('error', new Error('Worker threads not supported in browser'));
+            }
+            (this as any).emit('exit', 1);
+          }, 0);
+        }
+        postMessage(_value: any, _transferList?: any[]) {}
+        terminate(): Promise<number> {
+          (this as any).emit('exit', 0);
+          return Promise.resolve(0);
+        }
+        ref() { return this; }
+        unref() { return this; }
+        getHeapSnapshot() { return Promise.resolve({}); }
+        // EventEmitter methods added by makeEmitter
+        on!: (ev: string, fn: Function) => this;
+        once!: (ev: string, fn: Function) => this;
+        off!: (ev: string, fn: Function) => this;
+        addListener!: (ev: string, fn: Function) => this;
+        removeListener!: (ev: string, fn: Function) => this;
+        removeAllListeners!: (ev?: string) => this;
+        emit!: (ev: string, ...args: any[]) => boolean;
+        listenerCount!: (ev: string) => number;
+      }
+
+      class BroadcastChannel {
+        name: string;
+        constructor(name: string) { this.name = name; makeEmitter(this); }
+        postMessage(_msg: any) {}
+        close() {}
+        on!: (ev: string, fn: Function) => this;
+        off!: (ev: string, fn: Function) => this;
+      }
+
+      const envData = new Map<string, any>();
+
+      return {
+        isMainThread: true,
+        parentPort: null,
+        workerData: null,
+        threadId: 0,
+        resourceLimits: {},
+        SHARE_ENV: Symbol('SHARE_ENV'),
+        Worker,
+        MessageChannel,
+        MessagePort,
+        BroadcastChannel,
+        markAsUntransferable: (_obj: any) => {},
+        moveMessagePortToContext: (port: any, _ctx: any) => port,
+        receiveMessageOnPort: (_port: any) => undefined,
+        setEnvironmentData: (key: any, value: any) => { envData.set(key, value); },
+        getEnvironmentData: (key: any) => envData.get(key),
+      };
+    }
 
     case 'readline':
     case 'node:readline': return {
@@ -508,6 +606,29 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
 
     case 'vm':
     case 'node:vm': {
+      const VM_CONTEXT_SYMBOL = Symbol.for('__isVMContext');
+
+      function createContext(sandbox?: any): any {
+        if (!sandbox) sandbox = {};
+        Object.defineProperty(sandbox, VM_CONTEXT_SYMBOL, { value: true, enumerable: false, configurable: false });
+        return new Proxy(sandbox, {
+          get(target, prop, receiver) {
+            if (prop in target) return Reflect.get(target, prop, receiver);
+            if (typeof prop === 'string' && prop in globalThis) return (globalThis as any)[prop];
+            return undefined;
+          },
+          has(target, prop) {
+            return prop in target || prop in globalThis;
+          },
+          set(target, prop, value) { target[prop] = value; return true; },
+        });
+      }
+
+      function isContext(obj: any): boolean {
+        if (!obj || typeof obj !== 'object') return false;
+        return obj[VM_CONTEXT_SYMBOL] === true;
+      }
+
       // Script class wraps new Function for running code in contexts
       class Script {
         private _code: string;
@@ -524,15 +645,21 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
         }
         runInContext(context?: any, options?: any): any {
           if (!context) return this.runInThisContext(options);
+          // For proxy-based contexts, enumerate own keys from underlying sandbox
           const keys = Object.keys(context);
           const values = keys.map(k => context[k]);
-          const fn = new Function(...keys, this._code);
-          return fn(...values);
+          // Try eval-based execution first (returns last expression value, matches vm.Script behavior)
+          // Fall back to direct Function execution for code with return statements
+          try {
+            const fn = new Function(...keys, 'return eval(' + JSON.stringify(this._code) + ')');
+            return fn(...values);
+          } catch {
+            const fn = new Function(...keys, this._code);
+            return fn(...values);
+          }
         }
       }
-      function createContext(sandbox?: any): any {
-        return sandbox ? { ...sandbox } : {};
-      }
+
       function createScript(code: string, options?: any): Script {
         return new Script(code, options);
       }
@@ -546,6 +673,14 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
         return new Script(code, options).runInContext(context, options);
       }
       function compileFunction(code: string, params?: string[], options?: any): Function {
+        const context = options?.parsingContext;
+        if (context) {
+          const ctxKeys = Object.keys(context);
+          const ctxVals = ctxKeys.map(k => context[k]);
+          const inner = new Function(...ctxKeys, ...(params || []), code);
+          const bound = (...args: any[]) => inner(...ctxVals, ...args);
+          return bound;
+        }
         return new Function(...(params || []), code);
       }
       return {
@@ -556,7 +691,7 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
         runInNewContext,
         runInContext,
         compileFunction,
-        isContext: (obj: any) => typeof obj === 'object' && obj !== null,
+        isContext,
       };
     }
 

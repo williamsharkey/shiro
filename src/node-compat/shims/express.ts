@@ -337,24 +337,26 @@ export function createExpressFactory(deps: ExpressDeps): any {
         closeServer = () => {
           cleanup();
           fakeConsole.log(`Server on port ${port} closed`);
-          // Hide iframe container
-          const terminal = (ctx.shell as any)._terminal;
-          if (terminal && typeof terminal.hideIframeContainer === 'function') {
-            terminal.hideIframeContainer();
-          }
+          // Close split-view pane
+          try {
+            if (typeof document !== 'undefined') {
+              import('../../split-view').then(({ closeSplitView }) => closeSplitView()).catch(() => {});
+            }
+          } catch {}
           resolve();
         };
 
         fakeConsole.log(`Express app listening on port ${port}`);
 
-        // Show iframe if terminal supports it
-        const terminal = (ctx.shell as any)._terminal;
-        if (terminal && typeof terminal.getIframeContainer === 'function') {
-          const container = terminal.getIframeContainer();
-          iframeServer.createIframe(port, container, { height: '300px' })
-            .then(() => fakeConsole.log('Browser window opened'))
-            .catch((err: Error) => fakeConsole.warn('Could not open browser:', err.message));
-        }
+        // Open split-view preview pane
+        try {
+          if (typeof document !== 'undefined') {
+            import('../../split-view').then(({ createSplitView }) => {
+              createSplitView({ port, direction: 'right', title: `Express :${port}` });
+              fakeConsole.log('Browser window opened');
+            }).catch((err: Error) => fakeConsole.warn('Could not open browser:', err.message));
+          }
+        } catch {}
 
         callback?.();
         // Note: promise does NOT resolve here - server keeps running

@@ -651,55 +651,39 @@ The workflow cycle is: **implement shell features → write tests → update CLA
 
 The vision: a **fully functional browser-native Linux system** where Claude Code (Spirit) runs with no external server. There is always work to do — if your current task is done, find the next missing Linux capability and implement it.
 
-### Current State (Build #858, 1885 tests)
+### Current State (Build #862, 2171+ tests)
 
-The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Core features working: pipes, redirects, heredocs, arrays (indexed + associative), arithmetic, functions, control structures, job control, process substitution, extglob, brace expansion, namerefs, traps, and 30+ inline builtins. All three architecture tiers are operational: Tier 1 (220+ JS commands), Tier 2 (WASM+WASI, 22 packages), Tier 3 (x86-64 emulator, Phase 3 complete — ~130 instructions, ~46 syscalls, SSE2, TLS, runs real musl-static ELF binaries, Phases 4-6 complete — enhanced commands, JIT basic block cache, network syscall stubs, debug enhancements).
+The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Core features working: pipes, redirects, heredocs, arrays (indexed + associative), arithmetic, functions, control structures, job control, process substitution, extglob, brace expansion, namerefs, traps, and 30+ inline builtins. All three architecture tiers are operational: Tier 1 (220+ JS commands), Tier 2 (WASM+WASI, 22 packages), Tier 3 (x86-64 emulator, Phase 3 complete — ~130 instructions, ~58 syscalls, SSE2, TLS, runs real musl-static ELF binaries). Node.js compat layer modularized (10+ files under `src/node-compat/`). npm installs real packages, node runs them with JSX/TSX support. `npx` auto-installs and executes package binaries.
 
 ### Future Plans — Next Features to Implement (Priority Order)
 
-> **Recently Completed (Shiro Vision Stages 1-3 + x86 Phases 1-3 + Command Expansion):**
-> - `enable` builtin with -n/-a/-p flags and builtin gating
-> - `read -t TIMEOUT` and `read -u FD`
-> - `mapfile -C callback` with quantum
-> - `coproc` with named coprocesses
-> - Signal handling (AbortController, Ctrl+C → SIGINT)
-> - Process table robustness (kill actually terminates, abort controllers)
-> - `/proc` virtual filesystem (version, uptime, meminfo, cpuinfo, loadavg, self/*)
-> - `/dev` virtual filesystem refactor (null, zero, random, urandom)
-> - x86-64 emulator Phase 1: CPU, memory, ELF64 loader, ~40 instructions, 25+ syscalls
-> - Tab completion engine, nocaseglob, nullglob, dotglob, failglob, globstar, LINENO, EXIT trap
-> - x86-64 emulator Phase 2: ~100 instructions, ~40 syscalls, auxv, FS/GS segment, SSE2, XMM regs
-> - x86-64 emulator Phase 3: ~130 instructions, ~46 syscalls, TLS, runs real musl-static ELF binaries
-> - Living OS — speak, listen, notify, camera, top (TUI), man (manual pages), less (full TUI pager)
-> - Batch 1 coreutils — rev, tac, shuf, cmp, dd, xxd, dc, split
-> - Batch 2 coreutils — factor, cksum, base32, numfmt, csplit, nice
-> - Batch 3 coreutils — lsof, w, who, users, dos2unix, unix2dos
-> - Enhanced sort (-k/-t/-f/-h/-V/-s/-b/-c), ls (--color/-1/-S/-t/-d/-F/--group-directories-first)
-> - watch real TUI (alternate screen, -n interval, -d diffs, -t, -e, -g)
-> - grep --color, -F fixed strings, -q quiet, -x whole line, -m maxcount, -H/-h filename
-> - POSIX ustar tar (512-byte blocks, gzip via CompressionStream, backward compat with FLUFFY-TAR-V1)
-> - find expression tree AST (!, -not, -o/-or, -a/-and, -empty, -mtime, -delete, -prune)
-> - sed hold space (h/H/g/G/x), branching (b/t/:label), y transliterate, c/q/= commands, regex ranges
-> - awk if/else, while, C-style for, next, exit, delete arr[key], (key in arr), ternary, indirect $var
-> - x86 network syscall stubs (socket/connect/sendto/recvfrom → fetch() for HTTP)
-> - x86 debug breakpoints (--break ADDR), watchpoints (--watch ADDR), memory dump (--dump ADDR SIZE)
-> - x86 JIT basic block cache (identification, FNV-1a hash invalidation, LRU eviction)
+> **ALL COMPLETE through Phase 16:**
+> - Phases 1-6: Shell vision stages, x86 emulator (3 phases), enhanced commands, coreutils batches 1-3
+> - Phases 7-12: xpkg, tmux, compression, SSH/SCP, init system, x86 Phase 3 expansion
+> - Phase 13 (App Platform): npm start/run/init, serve with hot reload + split-pane iframe preview
+> - Phase 14 (Infrastructure): JSX/TSX transform, fs.createReadStream/WriteStream, worker_threads stub, node-compat modularization
+> - Phase 15 (Browser Superpowers): cv command (camera → AI pipe via Claude API), serve with hot reload, group encrypted networking
+> - Phase 16 (Package Compatibility): vm module upgraded (Proxy-based createContext, compileFunction with parsingContext, eval-based Script.runInContext), worker_threads improved (conditional error emit, resourceLimits), npx command, dynamic script timeout (60s for >500KB scripts)
 
-#### P1: Binary Package Manager (`xpkg`) — Phase 7
-4. **xpkg install/list/search/remove** — downloads musl-static x86-64 ELF binaries from a JSON manifest on CDN
-5. **Initial packages** — busybox (~800KB, 300+ commands), dash, tree, file, bc
-6. **JIT Phase 2** — compile hot basic blocks to JS functions (scaffold exists in jit.ts)
+#### Phase 17: Spirit Pipe Mode — AI-Native Shell
+1. **Spirit pipe** — `cat data.csv | spirit "summarize this"` pipes data through AI
+2. **Spirit generate** — `spirit "write an Express API" > server.js`
 
-#### P2: Terminal Multiplexer + Compression — Phases 8-9
-7. **tmux-lite** — split-pane, new-session, select-pane, detach/attach, visual pane splitting, status bar
-8. **Compression suite** — bzip2/bunzip2, xz/unxz, zstd/unzstd, tar -j/-J/--zstd integration
+#### Phase 18: Package Compatibility — Actually Run Them
+3. **prettier** — test `npx prettier --write file.js`, fix remaining vm/module issues
+4. **eslint** — test `npx eslint file.js`, fix config resolution
+5. **typescript (tsc)** — test `npx tsc`, fix sys module pattern, large script perf
+6. **react + react-dom** — test `npm install react react-dom`, verify JSX bundling works end-to-end
 
-#### P3: Networking + Services — Phases 10-11
-9. **SSH-over-WebRTC** — `ssh <code>` bidirectional terminal over WebRTC DataChannel, `scp` file transfer
-10. **Init system + cron** — crontab, systemctl start/stop/restart/status, /etc/services/, journalctl
+#### Phase 19: Port Auto-Detection & Full-Stack Demo
+7. **Port auto-detection** — watch for `listening on port N` in stdout, auto-open iframe preview
+8. **Full-stack demo page** — curated walkthrough: init → install → code → run → preview
+9. **Module.createRequire** — expose on module object for meta-programming packages
 
-#### P4: Real Interpreters — Phase 12
-11. **CPython + Bash via x86** — extend decoder (10-30 more instructions), extend syscalls (mmap file-backed, pipe, dup2, signals), JIT Phase 3 full codegen, cross-compile python3.12-musl-static and bash-5.2-musl-static
+#### Phase 20: Polish & Performance
+10. **Startup optimization** — profile and reduce boot time
+11. **Memory management** — IndexedDB garbage collection for old node_modules
+12. **Error messages** — better error messages when packages fail (missing APIs, etc.)
 
 ### Technical Notes for New Agents
 

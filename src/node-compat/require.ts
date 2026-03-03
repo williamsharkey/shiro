@@ -5,7 +5,7 @@
  */
 
 import type { CommandContext } from '../commands/index';
-import { transformESModules } from '../commands/jseval/module-transform';
+import { transformESModules, transformTS, transformJSX } from '../commands/jseval/module-transform';
 import { ProcessExitError } from '../commands/jseval/utils';
 
 export interface RequireDeps {
@@ -36,6 +36,16 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
       return createAutoStub(modPath, result);
     }
     return result;
+  }
+
+  function tryResolveExtensions(base: string): string | undefined {
+    for (const ext of ['.ts', '.tsx', '.js', '.jsx']) {
+      if (fileCache.has(base + ext)) return base + ext;
+    }
+    for (const idx of ['/index.ts', '/index.tsx', '/index.js', '/index.jsx']) {
+      if (fileCache.has(base + idx)) return base + idx;
+    }
+    return undefined;
   }
 
   function _requireModule(modPath: string, fromDir: string): any {
@@ -77,9 +87,9 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
               }
               if (target) {
                 resolved = ctx.fs.resolvePath(target, lookupDir);
-                if (!resolved.endsWith('.js') && !resolved.endsWith('.json')) {
-                  if (fileCache.has(resolved + '.js')) resolved += '.js';
-                  else if (fileCache.has(resolved + '/index.js')) resolved += '/index.js';
+                if (!resolved.endsWith('.js') && !resolved.endsWith('.json') && !resolved.endsWith('.ts') && !resolved.endsWith('.tsx') && !resolved.endsWith('.jsx')) {
+                  const found = tryResolveExtensions(resolved);
+                  if (found) resolved = found;
                 }
                 if (moduleCache.has(resolved)) return moduleCache.get(resolved)!.exports;
                 break;
@@ -93,9 +103,9 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
       }
     } else if (modPath.startsWith('./') || modPath.startsWith('../') || modPath.startsWith('/')) {
       resolved = ctx.fs.resolvePath(modPath, fromDir);
-      if (!resolved.endsWith('.js') && !resolved.endsWith('.json')) {
-        if (fileCache.has(resolved + '.js')) resolved += '.js';
-        else if (fileCache.has(resolved + '/index.js')) resolved += '/index.js';
+      if (!resolved.endsWith('.js') && !resolved.endsWith('.json') && !resolved.endsWith('.ts') && !resolved.endsWith('.tsx') && !resolved.endsWith('.jsx')) {
+        const found = tryResolveExtensions(resolved);
+        if (found) resolved = found;
       }
     } else {
       // Handle subpath imports like 'semver/functions/coerce'
@@ -166,14 +176,11 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
             } else {
               // Fall back to direct file lookup
               const subpathFull = `${pkgDir}/${subpath}`;
-              if (fileCache.has(subpathFull + '.js')) {
-                resolved = subpathFull + '.js';
-              } else if (fileCache.has(subpathFull)) {
+              if (fileCache.has(subpathFull)) {
                 resolved = subpathFull;
-              } else if (fileCache.has(subpathFull + '/index.js')) {
-                resolved = subpathFull + '/index.js';
               } else {
-                resolved = subpathResolved || subpathFull + '.js'; // Will fail with helpful error
+                const found = tryResolveExtensions(subpathFull);
+                resolved = found || subpathResolved || subpathFull + '.js'; // Will fail with helpful error
               }
             }
           } else {
@@ -217,12 +224,12 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
 
               main = main.replace(/^\.\//, '');
               // Don't add .js if already has valid extension
-              if (!/\.(js|cjs|mjs|json)$/.test(main)) {
-                // Check if main points to a directory (e.g., chalk@4 "main": "source")
-                const asDir = `${pkgDir}/${main}/index.js`;
-                const asFile = `${pkgDir}/${main}.js`;
-                if (fileCache.has(asDir) && !fileCache.has(asFile)) {
-                  main += '/index.js';
+              if (!/\.(js|cjs|mjs|json|ts|tsx|jsx)$/.test(main)) {
+                // Check if main points to a directory or file, trying TS extensions first
+                const fullBase = `${pkgDir}/${main}`;
+                const found = tryResolveExtensions(fullBase);
+                if (found) {
+                  main = found.substring(pkgDir.length + 1);
                 } else {
                   main += '.js';
                 }
@@ -368,8 +375,15 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
     const nestedRequire = (p: string) => requireModule(p, modDir);
 
     try {
-      // Transform ES module syntax to CommonJS
-      const transformedContent = transformESModules(content);
+      // Transform TypeScript/JSX/ESM syntax to CommonJS
+      let transformedContent = content;
+      if (resolved.endsWith('.ts') || resolved.endsWith('.tsx')) {
+        transformedContent = transformTS(transformedContent);
+      }
+      if (resolved.endsWith('.tsx') || resolved.endsWith('.jsx')) {
+        transformedContent = transformJSX(transformedContent);
+      }
+      transformedContent = transformESModules(transformedContent);
 
       const modImportMeta = {
         url: `file://${resolved}`,

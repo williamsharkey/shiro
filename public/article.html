@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>The Browser Became a Computer &mdash; Shiro</title>
-  <meta name="description" content="How WebAssembly, IndexedDB, and ES modules converged to let a browser tab run 152 Unix commands, a TypeScript compiler, git, and npm &mdash; with no server.">
+  <meta name="description" content="How WebAssembly, IndexedDB, and ES modules converged to let a browser tab run 220+ Unix commands, a TypeScript compiler, git, and npm &mdash; with no server.">
   <link rel="stylesheet" href="tufte.css">
   <style>
     /* Article overrides on Tufte base */
@@ -235,7 +235,7 @@
   <a href="/about" class="back-link">&larr; shiro.computer/about</a>
   <article>
     <h1>The Browser Became a Computer</h1>
-    <p class="subtitle">How one browser tab learned to run 152 Unix commands, compile TypeScript, manage packages, and host AI agents &mdash; with no server at all.</p>
+    <p class="subtitle">How one browser tab learned to run 220+ Unix commands, compile TypeScript, manage packages, and host AI agents &mdash; with no server at all.</p>
     <p class="byline">William Sharkey &middot; February 2026</p>
 
     <section>
@@ -255,7 +255,7 @@
       </p>
 
       <p>
-        <a href="https://shiro.computer">Shiro</a> is proof of the crossing. It is a Unix development environment that runs entirely in a browser tab: 152 commands, a shell with pipes and redirects, git, npm, a TypeScript compiler, text editors, and an AI coding agent. No backend server. No WebSocket to a cloud VM. Every byte lives in IndexedDB. Every process runs in your browser's JavaScript engine.
+        <a href="https://shiro.computer">Shiro</a> is proof of the crossing. It is a Unix development environment that runs entirely in a browser tab: 220+ commands, a shell with pipes and redirects, git, npm, a TypeScript compiler, text editors, and an AI coding agent. No backend server. No WebSocket to a cloud VM. Every byte lives in IndexedDB. Every process runs in your browser's JavaScript engine.
         <label for="sn-foam" class="margin-toggle sidenote-number"></label>
         <input type="checkbox" id="sn-foam" class="margin-toggle">
         <span class="sidenote">
@@ -295,7 +295,7 @@
       <h2>The stack, in layers</h2>
 
       <p>
-        <span class="newthought">Shiro's architecture</span> is a clean layer cake. At the bottom, the browser provides raw primitives: IndexedDB for storage, JavaScript for compute, xterm.js for display. Shiro builds a virtual filesystem on top of IndexedDB, a shell interpreter on top of the filesystem, and 152 commands on top of the shell. Each layer only talks to the one below it.
+        <span class="newthought">Shiro's architecture</span> is a clean layer cake. At the bottom, the browser provides raw primitives: IndexedDB for storage, JavaScript for compute, xterm.js for display. Shiro builds a virtual filesystem on top of IndexedDB, a shell interpreter on top of the filesystem, and 220+ commands on top of the shell. Each layer only talks to the one below it.
       </p>
 
       <figure class="fullwidth">
@@ -561,7 +561,7 @@
       { label: 'Browser', sub: 'IndexedDB  ·  WebAssembly  ·  ES Modules  ·  Fetch  ·  Web Crypto', color: '#1a1a2e', y: 0, detail: 'Raw browser APIs that Shiro builds on. IndexedDB provides persistent storage (survives restarts). WebAssembly runs esbuild at near-native speed. ES modules enable the command system. No polyfills needed.' },
       { label: 'Virtual Filesystem', sub: 'FSNode records in IndexedDB  ·  In-memory cache  ·  isomorphic-git adapter', color: '#16213e', y: 1, detail: 'Every file is an FSNode: path, type, Uint8Array content, Unix permissions, timestamps. An in-memory Map cache makes hot reads instant. The toIsomorphicGitFS() adapter lets git work against the same storage.' },
       { label: 'Shell Interpreter', sub: 'Pipes  ·  Redirects  ·  Variables  ·  Heredocs  ·  Control flow  ·  1,223 lines', color: '#0f3460', y: 2, detail: 'Hand-written parser: tokenize respecting quotes, split on compound operators (&&, ||, ;), parse pipes and redirects, expand variables ($VAR, ${VAR}, $?), dispatch to command registry. Supports if/while/for/case, functions, background jobs.' },
-      { label: 'Command Layer', sub: '152 commands  ·  FluffyCoreutils (126)  ·  Built-ins (26+)  ·  Hot-reloadable', color: '#533483', y: 3, detail: '126 commands from FluffyCoreutils (ls, grep, awk, sed, make, bc...) plus 26+ Shiro-specific commands (git, npm, build, vi, nano, fetch, spirit...). Each command is a module with { name, description, exec(ctx) }. Hot-reload swaps modules without page refresh.' },
+      { label: 'Command Layer', sub: '220+ commands  ·  Three tiers: JS, WASM+WASI, x86  ·  Hot-reloadable', color: '#533483', y: 3, detail: '220+ commands across three execution tiers: TypeScript (ls, grep, awk, sed, git, npm, node...), WASM+WASI (cc, python, lua, jq, 22 packages), and x86-64 emulation (real musl-static ELF binaries). Each command is a module with { name, description, exec(ctx) }.' },
       { label: 'Terminal + Spirit', sub: 'xterm.js  ·  FitAddon  ·  Raw mode for editors  ·  AI agent via OSProvider', color: '#e94560', y: 4, detail: 'xterm.js renders the terminal with themes and raw mode for vi/nano. Spirit (Claude Code agent) connects via OSProvider interface: same read/write/exec/glob tools as CLI Claude Code, but running entirely in the browser.' },
     ];
 

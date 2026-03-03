@@ -305,4 +305,136 @@ describe('npm integration', () => {
       expect(exitCode).toBe(1);
     });
   });
+
+  // ─── npm start ─────────────────────────────────────────────
+
+  describe('npm start', () => {
+    it('should run the start script from package.json', async () => {
+      await run(shell, 'mkdir -p /tmp/ni-start1');
+      await run(shell, 'cd /tmp/ni-start1');
+      await fs.writeFile('/tmp/ni-start1/package.json', JSON.stringify({
+        name: 'test-app',
+        version: '1.0.0',
+        scripts: { start: 'echo hello-start' },
+      }));
+      const { output, exitCode } = await run(shell, 'npm start');
+      expect(exitCode).toBe(0);
+      expect(output.replace(/\r/g, '')).toContain('hello-start');
+      expect(output.replace(/\r/g, '')).toContain('> test-app@1.0.0 start');
+    });
+
+    it('should default to "node server.js" when no start script defined', async () => {
+      await run(shell, 'mkdir -p /tmp/ni-start2');
+      await run(shell, 'cd /tmp/ni-start2');
+      await fs.writeFile('/tmp/ni-start2/package.json', JSON.stringify({
+        name: 'test-app',
+        version: '1.0.0',
+        scripts: {},
+      }));
+      const { output } = await run(shell, 'npm start');
+      expect(output.replace(/\r/g, '')).toContain('> node server.js');
+    });
+
+    it('should error without package.json', async () => {
+      await run(shell, 'mkdir -p /tmp/ni-start3');
+      await run(shell, 'cd /tmp/ni-start3');
+      const { exitCode, output } = await run(shell, 'npm start');
+      expect(exitCode).toBe(1);
+      expect(output.replace(/\r/g, '')).toContain('package.json not found');
+    });
+  });
+
+  // ─── npm test ──────────────────────────────────────────────
+
+  describe('npm test', () => {
+    it('should run the test script from package.json', async () => {
+      await run(shell, 'mkdir -p /tmp/ni-test1');
+      await run(shell, 'cd /tmp/ni-test1');
+      await fs.writeFile('/tmp/ni-test1/package.json', JSON.stringify({
+        name: 'test-app',
+        version: '1.0.0',
+        scripts: { test: 'echo running-tests' },
+      }));
+      const { output, exitCode } = await run(shell, 'npm test');
+      expect(exitCode).toBe(0);
+      expect(output.replace(/\r/g, '')).toContain('running-tests');
+    });
+
+    it('should error when no test script defined', async () => {
+      await run(shell, 'mkdir -p /tmp/ni-test2');
+      await run(shell, 'cd /tmp/ni-test2');
+      await fs.writeFile('/tmp/ni-test2/package.json', JSON.stringify({
+        name: 'test-app',
+        version: '1.0.0',
+        scripts: {},
+      }));
+      const { output, exitCode } = await run(shell, 'npm test');
+      expect(exitCode).toBe(1);
+      expect(output.replace(/\r/g, '')).toContain('missing script: test');
+    });
+
+    it('should work with npm t alias', async () => {
+      await run(shell, 'mkdir -p /tmp/ni-test3');
+      await run(shell, 'cd /tmp/ni-test3');
+      await fs.writeFile('/tmp/ni-test3/package.json', JSON.stringify({
+        name: 'test-app',
+        version: '1.0.0',
+        scripts: { test: 'echo alias-works' },
+      }));
+      const { output, exitCode } = await run(shell, 'npm t');
+      expect(exitCode).toBe(0);
+      expect(output.replace(/\r/g, '')).toContain('alias-works');
+    });
+
+    it('should work with npm tst alias', async () => {
+      await run(shell, 'mkdir -p /tmp/ni-test4');
+      await run(shell, 'cd /tmp/ni-test4');
+      await fs.writeFile('/tmp/ni-test4/package.json', JSON.stringify({
+        name: 'test-app',
+        version: '1.0.0',
+        scripts: { test: 'echo tst-alias' },
+      }));
+      const { output, exitCode } = await run(shell, 'npm tst');
+      expect(exitCode).toBe(0);
+      expect(output.replace(/\r/g, '')).toContain('tst-alias');
+    });
+
+    it('should error without package.json', async () => {
+      await run(shell, 'mkdir -p /tmp/ni-test5');
+      await run(shell, 'cd /tmp/ni-test5');
+      const { exitCode, output } = await run(shell, 'npm test');
+      expect(exitCode).toBe(1);
+      expect(output.replace(/\r/g, '')).toContain('package.json not found');
+    });
+  });
+
+  // ─── npm stop ──────────────────────────────────────────────
+
+  describe('npm stop', () => {
+    it('should run the stop script from package.json', async () => {
+      await run(shell, 'mkdir -p /tmp/ni-stop1');
+      await run(shell, 'cd /tmp/ni-stop1');
+      await fs.writeFile('/tmp/ni-stop1/package.json', JSON.stringify({
+        name: 'test-app',
+        version: '1.0.0',
+        scripts: { stop: 'echo stopping-app' },
+      }));
+      const { output, exitCode } = await run(shell, 'npm stop');
+      expect(exitCode).toBe(0);
+      expect(output.replace(/\r/g, '')).toContain('stopping-app');
+    });
+
+    it('should error when no stop script defined', async () => {
+      await run(shell, 'mkdir -p /tmp/ni-stop2');
+      await run(shell, 'cd /tmp/ni-stop2');
+      await fs.writeFile('/tmp/ni-stop2/package.json', JSON.stringify({
+        name: 'test-app',
+        version: '1.0.0',
+        scripts: {},
+      }));
+      const { output, exitCode } = await run(shell, 'npm stop');
+      expect(exitCode).toBe(1);
+      expect(output.replace(/\r/g, '')).toContain('missing script: stop');
+    });
+  });
 });

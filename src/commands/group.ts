@@ -32,6 +32,7 @@ interface GroupState {
   heartbeatTimer: number;
   pruneTimer: number;
   panel: RemotePanel;
+  remoteCode?: string;
 }
 
 declare global {
@@ -99,7 +100,7 @@ function buildAnnouncement(state: GroupState): Record<string, unknown> {
     name: state.peerName,
     capabilities: ['exec', 'read', 'write', 'eval'],
     mcpUrl: undefined,
-    remoteCode: undefined,
+    remoteCode: state.remoteCode,
     timestamp: Date.now(),
   };
 }
@@ -149,7 +150,11 @@ export const groupCmd: Command = {
         '  join <name> <password>   Join an encrypted group\n' +
         '  leave                    Leave current group\n' +
         '  peers                    List discovered peers\n' +
-        '  status                   Show current group info\n';
+        '  status                   Show current group info\n' +
+        '  share                    Share terminal with group peers\n' +
+        '  unshare                  Stop sharing terminal\n' +
+        '  watch <peer>             Watch a peer\'s terminal\n' +
+        '  unwatch                  Stop watching\n';
       return 0;
     }
 
@@ -311,6 +316,84 @@ export const groupCmd: Command = {
         `Peer ID: ${state.peerId.slice(0, 8)}...\n` +
         `WebSocket: ${wsState}\n` +
         `Peers: ${state.peers.size}\n`;
+      return 0;
+    }
+
+    if (sub === 'share') {
+      const state = window.__shiroGroup;
+      if (!state) {
+        ctx.stderr = 'Not in a group. Use: group join <name> <password>\n';
+        return 1;
+      }
+      if (state.remoteCode) {
+        ctx.stdout = `Already sharing (code: ${state.remoteCode})\n`;
+        return 0;
+      }
+      // Execute remote start and capture output
+      let output = '';
+      await ctx.shell.execute('remote start', (s: string) => { output += s; });
+      const codeMatch = output.match(/Code:\s*(\S+)/i)
+        || output.match(/copied.*?:\s*(\S+)/i)
+        || output.match(/(\S+-\S+-\S+)/);
+      if (codeMatch) {
+        state.remoteCode = codeMatch[1];
+        sendAnnouncement(state);
+        ctx.stdout = `Sharing terminal with group. Code: ${state.remoteCode}\n`;
+      } else {
+        ctx.stderr = 'group share: failed to start remote session\n';
+        return 1;
+      }
+      return 0;
+    }
+
+    if (sub === 'unshare') {
+      const state = window.__shiroGroup;
+      if (!state) {
+        ctx.stderr = 'Not in a group. Use: group join <name> <password>\n';
+        return 1;
+      }
+      if (!state.remoteCode) {
+        ctx.stdout = 'Not currently sharing\n';
+        return 0;
+      }
+      state.remoteCode = undefined;
+      sendAnnouncement(state);
+      await ctx.shell.execute('remote stop', () => {});
+      ctx.stdout = 'Stopped sharing terminal\n';
+      return 0;
+    }
+
+    if (sub === 'watch') {
+      const state = window.__shiroGroup;
+      if (!state) {
+        ctx.stderr = 'Not in a group. Use: group join <name> <password>\n';
+        return 1;
+      }
+      const peerName = ctx.args[1];
+      if (!peerName) {
+        ctx.stderr = 'Usage: group watch <peer-name>\n';
+        return 1;
+      }
+      // Find peer by name
+      let target: PeerInfo | undefined;
+      for (const peer of state.peers.values()) {
+        if (peer.name === peerName) { target = peer; break; }
+      }
+      if (!target) {
+        ctx.stderr = `group watch: unknown peer "${peerName}"\n`;
+        return 1;
+      }
+      if (!target.remoteCode) {
+        ctx.stderr = `group watch: peer "${peerName}" is not sharing\n`;
+        return 1;
+      }
+      ctx.stdout = `Connecting to ${target.name}...\n`;
+      await ctx.shell.execute(`remote connect ${target.remoteCode}`, (s: string) => { ctx.stdout += s; });
+      return 0;
+    }
+
+    if (sub === 'unwatch') {
+      await ctx.shell.execute('remote disconnect', (s: string) => { ctx.stdout += s; });
       return 0;
     }
 

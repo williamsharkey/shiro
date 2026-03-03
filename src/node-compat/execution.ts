@@ -8,7 +8,7 @@ import type { CommandContext } from '../commands/index';
 import { iframeServer } from '../iframe-server';
 import { sha256sync, sha1sync, fnvHash } from '../commands/jseval/crypto';
 import { ProcessExitError, formatArg } from '../commands/jseval/utils';
-import { transformESModules } from '../commands/jseval/module-transform';
+import { transformESModules, transformTS, transformJSX } from '../commands/jseval/module-transform';
 import type { SharedState } from './types';
 import { createFakeBuffer } from './buffer';
 import { createFakeConsole } from './console';
@@ -168,8 +168,15 @@ export async function executeNodeScript(
     const fakeRequire = (moduleName: string) => requireModule(moduleName, ctx.cwd);
 
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-    // Transform ES modules and wrap for execution
-    let transformedCode = transformESModules(code);
+    // Transform TypeScript/JSX/ESM syntax for execution
+    let transformedCode = code;
+    if (scriptPath && (scriptPath.endsWith('.ts') || scriptPath.endsWith('.tsx'))) {
+      transformedCode = transformTS(transformedCode);
+    }
+    if (scriptPath && (scriptPath.endsWith('.tsx') || scriptPath.endsWith('.jsx'))) {
+      transformedCode = transformJSX(transformedCode);
+    }
+    transformedCode = transformESModules(transformedCode);
 
     // Stash real browser console on globalThis so injected code can use it
     if (code.length > 500000) {
@@ -403,8 +410,8 @@ export async function executeNodeScript(
       };
     }
 
-    // Script execution timeout
-    const SCRIPT_TIMEOUT = 15000;
+    // Script execution timeout — scale up for large bundles (e.g. TypeScript ~5MB)
+    const SCRIPT_TIMEOUT = code.length > 500_000 ? 60_000 : 15_000;
     let scriptTimedOut = false;
     const timeoutPromise = new Promise<never>((_, reject) => {
       _st.scriptTimeoutId = setTimeout(() => {

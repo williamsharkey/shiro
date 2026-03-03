@@ -49,10 +49,25 @@ export const nodeCmd: Command = {
     let scriptPath = '';
     if (!code && fileArgs.length > 0) {
       scriptPath = ctx.fs.resolvePath(fileArgs[0], ctx.cwd);
+      // If no extension given, probe .js, .ts, .tsx, .jsx
+      let found = false;
       try {
         code = await ctx.fs.readFile(scriptPath, 'utf8') as string;
-      } catch (e: any) {
-        ctx.stderr += `node: ${e.message}\n`;
+        found = true;
+      } catch {
+        if (!/\.\w+$/.test(scriptPath)) {
+          for (const ext of ['.js', '.ts', '.tsx', '.jsx']) {
+            try {
+              code = await ctx.fs.readFile(scriptPath + ext, 'utf8') as string;
+              scriptPath = scriptPath + ext;
+              found = true;
+              break;
+            } catch { /* try next */ }
+          }
+        }
+      }
+      if (!found) {
+        ctx.stderr += `node: Cannot find module '${fileArgs[0]}'\n`;
         return 1;
       }
     }

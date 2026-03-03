@@ -18,7 +18,11 @@
 - **SQLite** — sql.js WASM. Persistent databases in IndexedDB.
 - **Python** — Pyodide WASM. pip installs packages.
 - **Lua, jq, esbuild** — Lazy-loaded WASM runtimes, cached on first use
-- **x86-64 emulator** — Runs real Linux ELF binaries (musl-static) via instruction-level emulation. ~130 instructions, 46 syscalls, SSE2.
+- **x86-64 emulator** — Runs real Linux ELF binaries (musl-static) via instruction-level emulation. ~135 instructions, ~60 syscalls, SSE2, JIT block cache.
+- **tmux** — Terminal multiplexer with split panes, sessions, detach/attach
+- **SSH/SCP over WebRTC** — Peer-to-peer shell sessions and file transfer between browser tabs
+- **Compression** — bzip2, xz, zstd with full tar integration (-j/-J/--zstd)
+- **Init system** — systemctl services, cron scheduling, journalctl logs
 - **Claude Code** — The real @anthropic-ai/claude-code CLI runs inside the browser
 - **Virtual servers** — `serve` hosts apps, `page` interacts with them
 - **Windowed terminals** — `spawn` opens commands in their own window with interactive REPL

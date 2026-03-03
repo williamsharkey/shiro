@@ -341,7 +341,7 @@ du -sh /home/user</pre></div>
 
       <!-- ===== Shell ===== -->
       <h2 id="shell">Shell</h2>
-      <p>The shell supports pipes, redirects, variables, compound commands, and quoting. It's not bash-compatible but covers the most common patterns.</p>
+      <p>The shell is bash-compatible with pipes, redirects, variables, arrays, arithmetic, functions, process substitution, extended globbing, traps, and programmable tab completion.</p>
 
       <h3>Pipes and Redirects</h3>
       <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Pipe output between commands</span>
@@ -415,7 +415,12 @@ npm run start
 
 <span class="c"># Package management</span>
 npm list
-npm uninstall lodash</pre></div>
+npm uninstall lodash
+
+<span class="c"># npx — run package binaries (auto-installs if needed)</span>
+npx prettier --write app.js
+npx typescript --version
+npx @scope/pkg arg1 arg2</pre></div>
 
       <h3>esbuild Bundler</h3>
       <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Bundle TypeScript/JavaScript</span>
@@ -574,6 +579,10 @@ notify -t "Alert" "Check this"
 camera -o selfie.png
 camera &amp;&amp; img camera-*.png
 
+<span class="c"># Computer vision (camera → Claude AI)</span>
+camera | cv "describe this"
+cv -f photo.png "what's in this image?"
+
 <span class="c"># Process monitor</span>
 top                           <span class="c"># interactive TUI (q to quit)</span>
 top -b -n 1                   <span class="c"># batch mode, one snapshot</span>
@@ -676,7 +685,7 @@ remote stop      <span class="c"># End session</span></pre></div>
       <p><code>dc</code> <code>factor</code> <code>numfmt</code> <code>cksum</code> <code>base32</code> <code>base64</code> <code>xxd</code> <code>dd</code></p>
 
       <h3>Dev Tools</h3>
-      <p><code>node</code> <code>npm</code> <code>git</code> <code>build</code> <code>vi</code> <code>nano</code> <code>ed</code> <code>cc</code> <code>gcc</code> <code>python3</code> <code>pip</code> <code>sqlite3</code> <code>lua</code> <code>jq</code></p>
+      <p><code>node</code> <code>npm</code> <code>npx</code> <code>git</code> <code>build</code> <code>vi</code> <code>nano</code> <code>ed</code> <code>cc</code> <code>gcc</code> <code>python3</code> <code>pip</code> <code>sqlite3</code> <code>lua</code> <code>jq</code></p>
 
       <h3>Network &amp; Servers</h3>
       <p><code>fetch</code> <code>curl</code> <code>wget</code> <code>serve</code> <code>page</code> <code>become</code> <code>unbecome</code> <code>remote</code> <code>mcp</code> <code>group</code></p>
@@ -685,7 +694,7 @@ remote stop      <span class="c"># End session</span></pre></div>
       <p><code>env</code> <code>export</code> <code>which</code> <code>type</code> <code>uname</code> <code>hostname</code> <code>whoami</code> <code>date</code> <code>uptime</code> <code>free</code> <code>ps</code> <code>kill</code> <code>sleep</code> <code>clear</code> <code>history</code> <code>help</code> <code>top</code> <code>w</code> <code>who</code> <code>users</code> <code>lsof</code> <code>nice</code> <code>man</code></p>
 
       <h3>Web APIs</h3>
-      <p><code>speak</code> <code>listen</code> <code>notify</code> <code>camera</code></p>
+      <p><code>speak</code> <code>listen</code> <code>notify</code> <code>camera</code> <code>cv</code></p>
 
       <h3>Editors &amp; Viewers</h3>
       <p><code>code</code> <code>monaco</code> <code>less</code> <code>mdview</code> <code>html</code> <code>img</code> <code>open</code></p>

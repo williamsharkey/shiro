@@ -64,6 +64,7 @@ import { fetchCmd, curlCmd } from './commands/fetch';
 import { globCmd } from './commands/glob';
 import { jsEvalCmd, nodeCmd } from './commands/jseval';
 import { npmCmd } from './commands/npm';
+import { npxCmd } from './commands/npx';
 import { viCmd } from './commands/vi';
 import { uploadCmd, downloadCmd, shiroConfigCmd } from './commands/upload';
 import { sourceCmd, dotCmd } from './commands/source';
@@ -103,6 +104,7 @@ import { speakCmd } from './commands/speak';
 import { listenCmd } from './commands/listen';
 import { notifyCmd } from './commands/notify';
 import { cameraCmd } from './commands/camera';
+import { cvCmd } from './commands/cv';
 // wasi and pkg are lazy-loaded (pulls in ~960-line wasi-runtime.ts)
 import { processTable } from './process-table';
 import { iframeServer } from './iframe-server';
@@ -240,6 +242,7 @@ async function main() {
   registerCommand(commands, jsEvalCmd, 'src/commands/jseval.ts');
   registerCommand(commands, nodeCmd, 'src/commands/jseval.ts');
   registerCommand(commands, npmCmd, 'src/commands/npm.ts');
+  registerCommand(commands, npxCmd, 'src/commands/npx.ts');
   registerCommand(commands, lazyCommand('build', 'Bundle TypeScript/JavaScript using esbuild-wasm',
     () => import('./commands/build').then(m => m.buildCmd)), 'src/commands/build.ts');
   registerCommand(commands, viCmd, 'src/commands/vi.ts');
@@ -375,6 +378,7 @@ async function main() {
   registerCommand(commands, listenCmd, 'src/commands/listen.ts');
   registerCommand(commands, notifyCmd, 'src/commands/notify.ts');
   registerCommand(commands, cameraCmd, 'src/commands/camera.ts');
+  registerCommand(commands, cvCmd, 'src/commands/cv.ts');
 
   // TUI commands (lazy-loaded)
   registerCommand(commands, lazyCommand('top', 'Real-time process monitor',

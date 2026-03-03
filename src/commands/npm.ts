@@ -83,6 +83,9 @@ export const npmCmd: Command = {
       ctx.stdout += '  list              List installed packages\n';
       ctx.stdout += '  ls                Alias for list\n';
       ctx.stdout += '  run <script>      Run a script from package.json\n';
+      ctx.stdout += '  start             Run the start script (default: node server.js)\n';
+      ctx.stdout += '  test, t           Run the test script\n';
+      ctx.stdout += '  stop              Run the stop script\n';
       ctx.stdout += '  uninstall [pkg]   Remove a package\n';
       ctx.stdout += '  cache clean       Clear the metadata cache\n';
       ctx.stdout += '  cache status      Show cache statistics\n';
@@ -108,6 +111,14 @@ export const npmCmd: Command = {
         return await npmList(ctx);
       case 'run':
         return await npmRun(ctx);
+      case 'start':
+        return await npmRunScript(ctx, 'start', 'node server.js');
+      case 'test':
+      case 't':
+      case 'tst':
+        return await npmRunScript(ctx, 'test');
+      case 'stop':
+        return await npmRunScript(ctx, 'stop');
       case 'uninstall':
       case 'remove':
       case 'rm':
@@ -806,6 +817,51 @@ async function npmRun(ctx: CommandContext): Promise<number> {
   );
 
   return exitCode;
+}
+
+/**
+ * Run a named script shortcut (npm start, npm test, npm stop).
+ * Falls back to defaultScript if the script isn't defined in package.json.
+ */
+async function npmRunScript(ctx: CommandContext, scriptName: string, defaultScript?: string): Promise<number> {
+  const pkgPath = ctx.fs.resolvePath('package.json', ctx.cwd);
+
+  let pkg: PackageJson;
+  try {
+    const content = await ctx.fs.readFile(pkgPath, 'utf8') as string;
+    pkg = JSON.parse(content);
+  } catch {
+    ctx.stderr += 'npm: package.json not found.\n';
+    return 1;
+  }
+
+  const script = pkg.scripts?.[scriptName];
+  if (!script) {
+    if (defaultScript) {
+      ctx.stdout += `> ${pkg.name || ''}@${pkg.version || ''} ${scriptName}\n`;
+      ctx.stdout += `> ${defaultScript}\n\n`;
+      return await ctx.shell.execute(defaultScript,
+        (s) => ctx.stdout += s,
+        (s) => ctx.stderr += s,
+        false, undefined, true
+      );
+    }
+    ctx.stderr += `npm: missing script: ${scriptName}\n`;
+    ctx.stderr += '\nAvailable scripts:\n';
+    for (const name of Object.keys(pkg.scripts || {})) {
+      ctx.stderr += `  ${name}\n`;
+    }
+    return 1;
+  }
+
+  ctx.stdout += `> ${pkg.name || ''}@${pkg.version || ''} ${scriptName}\n`;
+  ctx.stdout += `> ${script}\n\n`;
+
+  return await ctx.shell.execute(script,
+    (s) => ctx.stdout += s,
+    (s) => ctx.stderr += s,
+    false, undefined, true
+  );
 }
 
 async function npmUninstall(ctx: CommandContext): Promise<number> {

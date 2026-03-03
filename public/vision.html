@@ -233,7 +233,7 @@
         <code>jq</code> <code>lua</code> <code>curl</code> <code>tar</code> <code>zip</code>
         <code>find</code> <code>sort</code> <code>wc</code> <code>diff</code> <code>ssh-keygen</code>
       </div>
-      <p>The shell supports pipes, redirects, heredocs, arrays, arithmetic, functions, process substitution, extended globbing, traps, programmable tab completion, and dozens more bash features — tested by 1,885 automated tests.</p>
+      <p>The shell supports pipes, redirects, heredocs, arrays, arithmetic, functions, process substitution, extended globbing, traps, programmable tab completion, and dozens more bash features — tested by 2,171+ automated tests.</p>
     </section>
 
     <section>
@@ -258,15 +258,21 @@
     </section>
 
     <section>
-      <h2>What's next</h2>
-      <p>The system grows toward full Linux compatibility — and beyond — one capability at a time:</p>
-      <p><strong>Binary package manager</strong> — <code>xpkg install busybox</code> downloads and runs real x86 Linux binaries through the emulator. <strong>Terminal multiplexer</strong> — tmux-like pane splitting, sessions, and detach/attach. <strong>SSH-over-WebRTC</strong> — <code>ssh &lt;code&gt;</code> opens a shell session between browser tabs, <code>scp</code> transfers files. <strong>Init system + cron</strong> — scheduled tasks, service management, journalctl. <strong>Real CPython and Bash</strong> — extend the x86 emulator to run python3 and bash compiled as musl-static binaries.</p>
+      <h2>What's already shipped</h2>
+      <p>Everything below was once "what's next." Now it's live, tested, and deployed:</p>
+      <p><strong>Binary package manager</strong> — <code>xpkg install</code> downloads and runs real x86 Linux binaries through the emulator. <strong>Terminal multiplexer</strong> — tmux-like pane splitting, sessions, and detach/attach. <strong>SSH-over-WebRTC</strong> — <code>ssh &lt;code&gt;</code> opens a peer-to-peer shell session between browser tabs, <code>scp</code> transfers files. <strong>Compression suite</strong> — bzip2, xz, and zstd with full tar integration. <strong>Init system + cron</strong> — systemctl services, cron scheduling, journalctl logs. <strong>JIT codegen</strong> — the x86 emulator now has block-level code generation. <strong>Node.js compat</strong> — npm installs real packages, node runs them with JSX/TSX support. <strong>npx</strong> auto-installs and executes. <strong>Computer vision</strong> — <code>camera | cv "describe this"</code> pipes webcam snapshots through Claude API. <strong>Hot reload</strong> — <code>serve</code> watches files and live-reloads the preview iframe.</p>
+    </section>
+
+    <section>
+      <h2>What's next — Spirit + Package Ecosystem</h2>
+      <p>The app platform is built. <code>npm install</code>, <code>npm start</code>, <code>npx</code>, JSX/TSX, and live preview with hot reload all work. The next frontier is <strong>AI-native shell interaction</strong> and <strong>real-world package compatibility</strong>.</p>
+      <p><strong>Spirit pipe mode</strong> — <code>cat data.csv | spirit "summarize this"</code> pipes data through AI. <strong>Spirit generate</strong> — <code>spirit "write an Express API" > server.js</code>. <strong>Package compatibility</strong> — prettier, eslint, typescript, and React running end-to-end in the browser. <strong>Port auto-detection</strong> — watch for listening ports and auto-open preview.</p>
     </section>
 
     <section>
       <h2>The goal</h2>
       <div class="goal">
-        <p>Claude Code running natively in-browser — with first-class access to the DOM, the filesystem, and the full JavaScript VM. No server, no tunnel, no SSH. Just open a tab and start building.</p>
+        <p>A browser tab where you can <code>npm install</code>, <code>npm start</code>, and see your app live — with Claude Code as your pair programmer. No server, no tunnel, no SSH. Just open a tab and start building.</p>
       </div>
     </section>
 

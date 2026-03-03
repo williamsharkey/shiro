@@ -1,5 +1,584 @@
 // ES module ↔ CommonJS transform utilities (pure string transforms, no side effects)
 
+// ── TypeScript type stripping ──────────────────────────────────────────────
+
+/** Strip balanced braces starting at pos (which must be '{'), returns index after closing '}' */
+function skipBalancedBraces(src: string, pos: number): number {
+  let depth = 0;
+  const len = src.length;
+  while (pos < len) {
+    const ch = src[pos];
+    if (ch === '{') depth++;
+    else if (ch === '}') { depth--; if (depth === 0) return pos + 1; }
+    else if (ch === "'" || ch === '"' || ch === '`') { pos = skipString(src, pos); continue; }
+    else if (ch === '/' && pos + 1 < len) {
+      if (src[pos + 1] === '/') { pos = src.indexOf('\n', pos); if (pos < 0) return len; continue; }
+      if (src[pos + 1] === '*') { pos = src.indexOf('*/', pos + 2); if (pos < 0) return len; pos += 2; continue; }
+    }
+    pos++;
+  }
+  return len;
+}
+
+/** Skip a string literal (single, double, or template) starting at pos */
+function skipString(src: string, pos: number): number {
+  const q = src[pos];
+  pos++;
+  const len = src.length;
+  if (q === '`') {
+    let depth = 0;
+    while (pos < len) {
+      if (src[pos] === '\\') { pos += 2; continue; }
+      if (src[pos] === '$' && pos + 1 < len && src[pos + 1] === '{') { depth++; pos += 2; continue; }
+      if (src[pos] === '}' && depth > 0) { depth--; pos++; continue; }
+      if (src[pos] === '`' && depth === 0) return pos + 1;
+      pos++;
+    }
+    return len;
+  }
+  while (pos < len) {
+    if (src[pos] === '\\') { pos += 2; continue; }
+    if (src[pos] === q) return pos + 1;
+    pos++;
+  }
+  return len;
+}
+
+/** Preserve strings and comments, replacing with placeholders. Returns [modified src, restore fn] */
+function preserveStringsAndComments(src: string): [string, (s: string) => string] {
+  const saved: string[] = [];
+  let out = '';
+  let i = 0;
+  const len = src.length;
+  while (i < len) {
+    const ch = src[i];
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const end = skipString(src, i);
+      saved.push(src.substring(i, end));
+      out += `___PRESERVE_${saved.length - 1}___`;
+      i = end;
+    } else if (ch === '/' && i + 1 < len && src[i + 1] === '/') {
+      const nl = src.indexOf('\n', i);
+      const end = nl >= 0 ? nl : len;
+      saved.push(src.substring(i, end));
+      out += `___PRESERVE_${saved.length - 1}___`;
+      i = end;
+    } else if (ch === '/' && i + 1 < len && src[i + 1] === '*') {
+      const end = src.indexOf('*/', i + 2);
+      const commentEnd = end >= 0 ? end + 2 : len;
+      saved.push(src.substring(i, commentEnd));
+      out += `___PRESERVE_${saved.length - 1}___`;
+      i = commentEnd;
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  const restore = (s: string) => s.replace(/___PRESERVE_(\d+)___/g, (_, idx) => saved[parseInt(idx)]);
+  return [out, restore];
+}
+
+/**
+ * Strip TypeScript type syntax from source code (synchronous string transform).
+ * Handles: interfaces, type aliases, enums, declare blocks, type annotations,
+ * as-casts, non-null assertions, generics, type-only imports.
+ */
+export function transformTS(src: string): string {
+  const [safe, restore] = preserveStringsAndComments(src);
+  let s = safe;
+
+  // Strip interface/type/enum/declare blocks
+  s = s.replace(/\b(export\s+)?interface\s+[\w$<>,\s]+\{/g, (match) => {
+    return '___STRIP_BLOCK___' + '{';
+  });
+  s = s.replace(/\b(export\s+)?type\s+([\w$]+)\s*(<[^>]*>)?\s*=\s*/g, (match) => {
+    return '___STRIP_STATEMENT___';
+  });
+  s = s.replace(/\b(export\s+)?(const\s+)?enum\s+[\w$]+\s*\{/g, () => {
+    return '___STRIP_BLOCK___' + '{';
+  });
+  s = s.replace(/\bdeclare\s+(module|const|function|class|var|let|type|interface|enum|namespace|global)\b[^{;]*/g, (match) => {
+    return '___STRIP_DECL___';
+  });
+
+  // Process stripped blocks (balanced brace removal)
+  let iterations = 0;
+  while (s.includes('___STRIP_BLOCK___') && iterations++ < 50) {
+    const idx = s.indexOf('___STRIP_BLOCK___');
+    const braceStart = s.indexOf('{', idx);
+    if (braceStart < 0) { s = s.replace('___STRIP_BLOCK___', ''); continue; }
+    const after = skipBalancedBraces(s, braceStart);
+    s = s.substring(0, idx) + s.substring(after);
+  }
+
+  // Process stripped statements (remove to next semicolon or newline)
+  while (s.includes('___STRIP_STATEMENT___')) {
+    const idx = s.indexOf('___STRIP_STATEMENT___');
+    let end = idx + '___STRIP_STATEMENT___'.length;
+    // Find the end of the type alias (handle balanced braces in object types)
+    let depth = 0;
+    while (end < s.length) {
+      const ch = s[end];
+      if (ch === '{' || ch === '(' || ch === '<') depth++;
+      else if (ch === '}' || ch === ')' || ch === '>') depth--;
+      else if (ch === ';' && depth <= 0) { end++; break; }
+      else if (ch === '\n' && depth <= 0) { break; }
+      end++;
+    }
+    s = s.substring(0, idx) + s.substring(end);
+  }
+
+  // Process stripped declarations (to semicolon or brace block)
+  while (s.includes('___STRIP_DECL___')) {
+    const idx = s.indexOf('___STRIP_DECL___');
+    let end = idx + '___STRIP_DECL___'.length;
+    // Skip whitespace
+    while (end < s.length && /\s/.test(s[end])) end++;
+    if (end < s.length && s[end] === '{') {
+      end = skipBalancedBraces(s, end);
+    } else {
+      // Find semicolon or newline
+      while (end < s.length && s[end] !== ';' && s[end] !== '\n') end++;
+      if (end < s.length && s[end] === ';') end++;
+    }
+    s = s.substring(0, idx) + s.substring(end);
+  }
+
+  // Strip inline `type` keyword from imports: import { type Foo, Bar } → import { Bar }
+  s = s.replace(/\{\s*type\s+[\w$]+\s*,/g, (m) => '{');
+  s = s.replace(/,\s*type\s+[\w$]+\s*([,}])/g, '$1');
+  s = s.replace(/\{\s*type\s+[\w$]+\s*\}/g, '{}');
+
+  // Strip generic type parameters before '(' in function calls/declarations
+  // e.g., function f<T>( → function f(
+  //        foo<string>( → foo(
+  s = s.replace(/<[\w$\s,\[\]|&?:=.]+>(?=\s*\()/g, '');
+
+  // Strip parameter type annotations: (x: number, y: string) → (x, y)
+  // Also handles destructured params: ({ a, b }: Props) → ({ a, b })
+  // Must not strip ternary colons or object literal colons
+  s = s.replace(/(\((?:[^()]*|\([^()]*\))*\))\s*:\s*[\w$<>\[\]|&?.\s]+(?=\s*[{=>,)])/g, (match, params) => {
+    // Strip annotations from inside the param list
+    return stripParamAnnotations(params);
+  });
+
+  // Strip return type annotations: ): ReturnType { → ) {
+  // Match closing paren followed by colon and type, ending at { or =>
+  s = s.replace(/\)\s*:\s*[\w$<>\[\]|&?.\s]+(?=\s*\{)/g, ')');
+  s = s.replace(/\)\s*:\s*[\w$<>\[\]|&?.\s]+(?=\s*=>)/g, ')');
+
+  // Strip variable type annotations: const x: number = → const x =
+  s = s.replace(/((?:const|let|var)\s+[\w$]+)\s*:\s*[\w$<>\[\]|&?.]+\s*(?==)/g, '$1 ');
+
+  // Strip `as Type` casts (but not `as` in import renaming)
+  s = s.replace(/\bas\s+(?:const|[\w$<>\[\]|&?.]+)(?=\s*[;,)\]\}=])/g, '');
+
+  // Strip non-null assertions: expr!. → expr. and expr!) → expr)
+  s = s.replace(/!(?=\.\w)/g, '');
+  s = s.replace(/!(?=\s*[;,)\]])/g, '');
+
+  // Strip import type statements entirely
+  s = s.replace(/\bimport\s+type\s+[^;]+;?/g, '');
+
+  return restore(s);
+}
+
+/** Strip type annotations from parameter list */
+function stripParamAnnotations(params: string): string {
+  // Simple approach: remove `: type` patterns after param names
+  // Handle (x: number, y: string) and ({ a, b }: Props)
+  let result = '';
+  let depth = 0;
+  let i = 0;
+  while (i < params.length) {
+    const ch = params[i];
+    if (ch === '(' || ch === '{' || ch === '[') { depth++; result += ch; i++; }
+    else if (ch === ')' || ch === '}' || ch === ']') { depth--; result += ch; i++; }
+    else if (ch === ':' && depth === 1) {
+      // Skip the type annotation — find the next ',' or ')' at the same depth
+      i++;
+      let typeDepth = 0;
+      while (i < params.length) {
+        const tc = params[i];
+        if (tc === '<' || tc === '(' || tc === '{' || tc === '[') typeDepth++;
+        else if (tc === '>' || tc === ')' || tc === '}' || tc === ']') {
+          // '=>' is an arrow function type, not a closing bracket
+          if (tc === '>' && i > 0 && params[i - 1] === '=') { i++; continue; }
+          if (typeDepth > 0) typeDepth--;
+          else break;
+        }
+        else if (tc === ',' && typeDepth === 0) break;
+        else if (tc === '=' && typeDepth === 0 && (i + 1 >= params.length || params[i + 1] !== '>')) break;
+        i++;
+      }
+    } else {
+      result += ch;
+      i++;
+    }
+  }
+  return result;
+}
+
+// ── JSX Transform ──────────────────────────────────────────────────────────
+
+/** Quick check if source likely contains JSX */
+export function hasJSX(src: string): boolean {
+  return /<[A-Z]/.test(src) || /<[a-z]+[\s/>]/.test(src) || /<>/.test(src);
+}
+
+interface JSXResult { output: string; pos: number; }
+
+/**
+ * Transform JSX syntax to __jsx() calls (synchronous string transform).
+ * <div className="foo">Hello</div> → __jsx("div", {className: "foo"}, "Hello")
+ */
+export function transformJSX(src: string): string {
+  if (!hasJSX(src)) return src;
+
+  // Preserve strings and comments
+  const saved: string[] = [];
+  let safe = '';
+  let idx = 0;
+  const len = src.length;
+  while (idx < len) {
+    const ch = src[idx];
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const end = skipString(src, idx);
+      saved.push(src.substring(idx, end));
+      safe += `___JSX_SAVE_${saved.length - 1}___`;
+      idx = end;
+    } else if (ch === '/' && idx + 1 < len && src[idx + 1] === '/') {
+      const nl = src.indexOf('\n', idx);
+      const end = nl >= 0 ? nl : len;
+      saved.push(src.substring(idx, end));
+      safe += `___JSX_SAVE_${saved.length - 1}___`;
+      idx = end;
+    } else if (ch === '/' && idx + 1 < len && src[idx + 1] === '*') {
+      const end = src.indexOf('*/', idx + 2);
+      const commentEnd = end >= 0 ? end + 2 : len;
+      saved.push(src.substring(idx, commentEnd));
+      safe += `___JSX_SAVE_${saved.length - 1}___`;
+      idx = commentEnd;
+    } else {
+      safe += ch;
+      idx++;
+    }
+  }
+
+  let hadJSX = false;
+  let out = '';
+  let i = 0;
+  const slen = safe.length;
+
+  while (i < slen) {
+    if (safe[i] === '<' && isJSXStart(safe, i)) {
+      const result = parseJSXElement(safe, i);
+      if (result) {
+        hadJSX = true;
+        out += result.output;
+        i = result.pos;
+        continue;
+      }
+    }
+    out += safe[i];
+    i++;
+  }
+
+  // Restore saved strings/comments
+  out = out.replace(/___JSX_SAVE_(\d+)___/g, (_, id) => saved[parseInt(id)]);
+
+  if (hadJSX) {
+    out = 'var __jsx = require("react").createElement, __jsxFrag = require("react").Fragment;\n' + out;
+  }
+
+  return out;
+}
+
+/** Determine if '<' at position i is a JSX open tag (not a comparison) */
+function isJSXStart(src: string, i: number): boolean {
+  // Check what follows '<' — must be a letter, _, $, or '>' (fragment)
+  if (i + 1 >= src.length) return false;
+  const next = src[i + 1];
+  if (next === '>') return true; // fragment <>
+  if (next === '/') return false; // closing tag won't appear standalone
+  if (!/[a-zA-Z_$]/.test(next)) return false;
+
+  // Check what precedes — comparison operators come after identifiers/numbers/close-parens
+  let j = i - 1;
+  while (j >= 0 && /\s/.test(src[j])) j--;
+  if (j < 0) return true; // start of file
+  const prev = src[j];
+  // After identifier char, number, or ')' — it's likely comparison
+  if (/[\w$)]/.test(prev)) {
+    // But check for keywords that precede JSX
+    const before = src.substring(0, j + 1).trimEnd();
+    if (/\b(return|case|in|of|typeof|instanceof|void|delete|throw|new|yield|await|default|export)$/.test(before)) return true;
+    if (before.endsWith('=>')) return true;
+    return false;
+  }
+  // After these chars, it's JSX context
+  if ('=({[,;:?&|!+-*/%^~'.includes(prev)) return true;
+  if (prev === '>') {
+    // Could be end of generic or end of JSX — check for preceding JSX
+    return true;
+  }
+  return true;
+}
+
+function parseJSXElement(src: string, pos: number): JSXResult | null {
+  if (pos >= src.length || src[pos] !== '<') return null;
+
+  // Fragment: <>...</>
+  if (src[pos + 1] === '>') {
+    return parseJSXFragment(src, pos);
+  }
+
+  // Opening tag
+  const tagResult = parseJSXOpenTag(src, pos);
+  if (!tagResult) return null;
+
+  if (tagResult.selfClosing) {
+    const propsStr = tagResult.props || 'null';
+    return { output: `__jsx(${tagResult.tag}, ${propsStr})`, pos: tagResult.pos };
+  }
+
+  // Parse children
+  const children = parseJSXChildren(src, tagResult.pos, tagResult.rawTag);
+  if (!children) return null;
+
+  const propsStr = tagResult.props || 'null';
+  if (children.items.length === 0) {
+    return { output: `__jsx(${tagResult.tag}, ${propsStr})`, pos: children.pos };
+  }
+  return { output: `__jsx(${tagResult.tag}, ${propsStr}, ${children.items.join(', ')})`, pos: children.pos };
+}
+
+function parseJSXFragment(src: string, pos: number): JSXResult | null {
+  // Skip '<>'
+  pos += 2;
+  const children = parseJSXChildren(src, pos, '');
+  if (!children) return null;
+  if (children.items.length === 0) {
+    return { output: `__jsx(__jsxFrag, null)`, pos: children.pos };
+  }
+  return { output: `__jsx(__jsxFrag, null, ${children.items.join(', ')})`, pos: children.pos };
+}
+
+interface TagResult { tag: string; rawTag: string; props: string; selfClosing: boolean; pos: number; }
+
+function parseJSXOpenTag(src: string, pos: number): TagResult | null {
+  if (src[pos] !== '<') return null;
+  pos++; // skip '<'
+
+  // Parse tag name (may include dots: Foo.Bar)
+  let rawTag = '';
+  while (pos < src.length && /[\w$.]/.test(src[pos])) {
+    rawTag += src[pos];
+    pos++;
+  }
+  if (!rawTag) return null;
+
+  // Determine tag string
+  const tag = /^[a-z]/.test(rawTag) ? `"${rawTag}"` : rawTag;
+
+  // Parse props
+  const propsResult = parseJSXProps(src, pos);
+  pos = propsResult.pos;
+
+  // Self-closing or open
+  let selfClosing = false;
+  if (src[pos] === '/' && pos + 1 < src.length && src[pos + 1] === '>') {
+    selfClosing = true;
+    pos += 2;
+  } else if (src[pos] === '>') {
+    pos++;
+  } else {
+    return null; // malformed
+  }
+
+  return { tag, rawTag, props: propsResult.output, selfClosing, pos };
+}
+
+interface PropsResult { output: string; pos: number; }
+
+function parseJSXProps(src: string, pos: number): PropsResult {
+  const props: string[] = [];
+  let hasSpread = false;
+
+  while (pos < src.length) {
+    // Skip whitespace
+    while (pos < src.length && /\s/.test(src[pos])) pos++;
+    if (pos >= src.length) break;
+
+    // End of tag
+    if (src[pos] === '>' || (src[pos] === '/' && pos + 1 < src.length && src[pos + 1] === '>')) break;
+
+    // Spread: {...expr}
+    if (src[pos] === '{' && pos + 3 < src.length && src[pos + 1] === '.' && src[pos + 2] === '.' && src[pos + 3] === '.') {
+      pos += 4; // skip '{...'
+      const exprResult = collectBracedContent(src, pos, '}');
+      hasSpread = true;
+      props.push(`___SPREAD___${exprResult.content}`);
+      pos = exprResult.pos + 1; // skip '}'
+      continue;
+    }
+
+    // Attribute name
+    let name = '';
+    while (pos < src.length && /[\w$-]/.test(src[pos])) {
+      name += src[pos];
+      pos++;
+    }
+    if (!name) break;
+
+    // Skip whitespace
+    while (pos < src.length && /\s/.test(src[pos])) pos++;
+
+    // Check for '='
+    if (pos < src.length && src[pos] === '=') {
+      pos++; // skip '='
+      while (pos < src.length && /\s/.test(src[pos])) pos++;
+
+      if (pos < src.length && src[pos] === '{') {
+        // Expression prop: key={expr}
+        pos++; // skip '{'
+        const exprResult = collectBracedContent(src, pos, '}');
+        props.push(`${camelProp(name)}: ${exprResult.content}`);
+        pos = exprResult.pos + 1; // skip '}'
+      } else if (pos < src.length && (src[pos] === '"' || src[pos] === "'")) {
+        // String prop: key="value"
+        const q = src[pos];
+        pos++; // skip quote
+        let val = '';
+        while (pos < src.length && src[pos] !== q) {
+          val += src[pos];
+          pos++;
+        }
+        if (pos < src.length) pos++; // skip closing quote
+        props.push(`${camelProp(name)}: "${val}"`);
+      } else {
+        // Bare value (unlikely but handle)
+        let val = '';
+        while (pos < src.length && !/[\s/>]/.test(src[pos])) { val += src[pos]; pos++; }
+        props.push(`${camelProp(name)}: ${val}`);
+      }
+    } else {
+      // Boolean prop: <input disabled /> → disabled: true
+      props.push(`${camelProp(name)}: true`);
+    }
+  }
+
+  if (props.length === 0) return { output: 'null', pos };
+
+  // Build props object, handling spreads
+  if (hasSpread) {
+    const parts: string[] = [];
+    let currentObj: string[] = [];
+    for (const p of props) {
+      if (p.startsWith('___SPREAD___')) {
+        if (currentObj.length > 0) { parts.push(`{${currentObj.join(', ')}}`); currentObj = []; }
+        parts.push(p.replace('___SPREAD___', ''));
+      } else {
+        currentObj.push(p);
+      }
+    }
+    if (currentObj.length > 0) parts.push(`{${currentObj.join(', ')}}`);
+    return { output: `Object.assign({}, ${parts.join(', ')})`, pos };
+  }
+
+  return { output: `{${props.join(', ')}}`, pos };
+}
+
+/** Convert hyphenated prop names to camelCase (data-* and aria-* stay as strings) */
+function camelProp(name: string): string {
+  if (name.includes('-')) {
+    if (name.startsWith('data-') || name.startsWith('aria-')) return `"${name}"`;
+    return name.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+  }
+  return name;
+}
+
+/** Collect content inside braces/brackets, tracking depth. pos should be right after opening brace. */
+function collectBracedContent(src: string, pos: number, closer: string): { content: string; pos: number } {
+  let depth = 0;
+  let content = '';
+  while (pos < src.length) {
+    const ch = src[pos];
+    if (ch === '{' || ch === '(' || ch === '[') { depth++; content += ch; }
+    else if (ch === '}' || ch === ')' || ch === ']') {
+      if (ch === closer && depth === 0) return { content, pos };
+      depth--;
+      content += ch;
+    }
+    else if (ch === '<' && isJSXStart(src, pos)) {
+      // Nested JSX inside expression
+      const jsxResult = parseJSXElement(src, pos);
+      if (jsxResult) { content += jsxResult.output; pos = jsxResult.pos; continue; }
+      else { content += ch; }
+    }
+    else { content += ch; }
+    pos++;
+  }
+  return { content, pos };
+}
+
+interface ChildrenResult { items: string[]; pos: number; }
+
+function parseJSXChildren(src: string, pos: number, closingTag: string): ChildrenResult | null {
+  const items: string[] = [];
+
+  while (pos < src.length) {
+    // Check for closing tag
+    if (src[pos] === '<' && pos + 1 < src.length && src[pos + 1] === '/') {
+      // Closing tag
+      pos += 2; // skip '</'
+      if (closingTag === '') {
+        // Fragment closing: </>
+        if (src[pos] === '>') { pos++; return { items, pos }; }
+      }
+      let tag = '';
+      while (pos < src.length && /[\w$.]/.test(src[pos])) { tag += src[pos]; pos++; }
+      while (pos < src.length && /\s/.test(src[pos])) pos++;
+      if (pos < src.length && src[pos] === '>') pos++;
+      if (tag === closingTag) return { items, pos };
+      return null; // mismatched tag
+    }
+
+    // JSX expression child: {expr}
+    if (src[pos] === '{') {
+      pos++; // skip '{'
+      const exprResult = collectBracedContent(src, pos, '}');
+      const expr = exprResult.content.trim();
+      if (expr) items.push(expr);
+      pos = exprResult.pos + 1; // skip '}'
+      continue;
+    }
+
+    // Nested JSX element
+    if (src[pos] === '<' && src[pos + 1] !== '/') {
+      const child = parseJSXElement(src, pos);
+      if (child) {
+        items.push(child.output);
+        pos = child.pos;
+        continue;
+      }
+    }
+
+    // Text content
+    let text = '';
+    while (pos < src.length && src[pos] !== '<' && src[pos] !== '{') {
+      text += src[pos];
+      pos++;
+    }
+    text = text.replace(/\s+/g, ' ').trim();
+    if (text) items.push(`"${text.replace(/"/g, '\\"')}"`);
+  }
+
+  return null; // unclosed
+}
+
+// ── Original functions ─────────────────────────────────────────────────────
+
 export function stripShebang(src: string): string {
   if (src.startsWith('#!')) {
     const nl = src.indexOf('\n');

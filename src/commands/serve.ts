@@ -54,7 +54,17 @@ async function serveStatic(ctx: CommandContext, port: number, directory: string,
 
   // Register the server
   const cleanup = iframeServer.serve(port, handler, `static:${directory}`);
-  activeServers.set(port, { cleanup, directory: absDir, type: 'static' });
+
+  // Hot reload: watch for filesystem changes under served directory
+  let reloadTimer = 0;
+  const unsubFs = ctx.fs.onChange((_event, path) => {
+    if (path.startsWith(absDir)) {
+      clearTimeout(reloadTimer);
+      reloadTimer = window.setTimeout(() => iframeServer.broadcastReload(port), 100);
+    }
+  });
+  const wrappedCleanup = () => { clearTimeout(reloadTimer); unsubFs(); cleanup(); };
+  activeServers.set(port, { cleanup: wrappedCleanup, directory: absDir, type: 'static' });
 
   ctx.stdout = `Serving ${directory} on port ${port}\n`;
 

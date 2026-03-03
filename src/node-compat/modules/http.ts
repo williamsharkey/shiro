@@ -173,14 +173,15 @@ function _createHttpOrHttpsModule(deps: HttpDeps, isHttps: boolean): any {
         cleanupFn = iframeServer.serve(port, handler, `${proto}:${port}`);
         fakeConsole.log(`Server listening on port ${port}`);
 
-        // Show iframe if terminal supports it
-        const terminal = (ctx.shell as any)._terminal;
-        if (terminal && typeof terminal.getIframeContainer === 'function') {
-          const container = terminal.getIframeContainer();
-          iframeServer.createIframe(port, container, { height: '300px' })
-            .then(() => fakeConsole.log('Browser window opened'))
-            .catch((err: Error) => fakeConsole.warn('Could not open browser:', err.message));
-        }
+        // Open split-view preview pane
+        try {
+          if (typeof document !== 'undefined') {
+            import('../../split-view').then(({ createSplitView }) => {
+              createSplitView({ port, direction: 'right', title: `Server :${port}` });
+              fakeConsole.log('Browser window opened');
+            }).catch((err: Error) => fakeConsole.warn('Could not open browser:', err.message));
+          }
+        } catch {}
 
         server.listening = true;
         // Fire callback async (like real Node.js nextTick)
@@ -201,6 +202,12 @@ function _createHttpOrHttpsModule(deps: HttpDeps, isHttps: boolean): any {
           fakeConsole.log(`Server on port ${listeningPort} closed`);
           listeningPort = null;
         }
+        // Close split-view pane
+        try {
+          if (typeof document !== 'undefined') {
+            import('../../split-view').then(({ closeSplitView }) => closeSplitView()).catch(() => {});
+          }
+        } catch {}
         server.emit('close');
         cb?.();
         return this;
