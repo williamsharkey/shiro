@@ -40,5 +40,11 @@ export function createFileCache() {
     }
   }
 
-  return { fileCache, fileMtimes, moduleCache, tickSyncOps };
+  function getCacheStats() {
+    let totalSize = 0;
+    for (const content of fileCache.values()) totalSize += content.length;
+    return { fileCount: fileCache.size, moduleCount: moduleCache.size, totalSizeBytes: totalSize };
+  }
+
+  return { fileCache, fileMtimes, moduleCache, tickSyncOps, getCacheStats };
 }

@@ -819,6 +819,50 @@ ${B}EXAMPLES${R}
        csplit file.txt '/^Chapter/' '{*}'
               Split before each "Chapter" heading
 `,
+  spirit: `${B}SPIRIT(1)${R}                    Shiro Manual                     ${B}SPIRIT(1)${R}
+
+${B}NAME${R}
+       spirit - AI assistant powered by Claude
+
+${B}SYNOPSIS${R}
+       ${B}spirit${R} [${U}options${R}] [${U}prompt${R}]
+       ${U}command${R} | ${B}spirit${R} [${U}options${R}] [${U}prompt${R}]
+
+${B}DESCRIPTION${R}
+       Sends a prompt to the Claude API and streams the response to stdout.
+       When stdin is piped, the input data is included in the message.
+
+       Requires ${B}ANTHROPIC_API_KEY${R} environment variable to be set.
+
+${B}OPTIONS${R}
+       ${B}--model${R} ${U}MODEL${R}
+              Model to use (default: claude-sonnet-4-20250514)
+
+       ${B}--system${R} ${U}PROMPT${R}
+              Set a system prompt
+
+       ${B}--max-tokens${R} ${U}N${R}
+              Maximum tokens in response (default: 4096)
+
+       ${B}--list-models${R}
+              List available models and exit
+
+       ${B}-h${R}, ${B}--help${R}
+              Show usage information
+
+${B}EXAMPLES${R}
+       spirit "explain how DNS works"
+              Ask a question
+
+       cat data.csv | spirit "summarize this"
+              Pipe data through AI
+
+       spirit --model claude-opus-4-20250514 "review this" < code.js
+              Use a specific model
+
+       spirit --system "You are a bash expert" "find large files"
+              Set a system prompt
+`,
 };
 
 function autoGenerateManPage(name: string, description: string): string {

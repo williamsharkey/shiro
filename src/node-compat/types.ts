@@ -60,6 +60,7 @@ export interface SharedState {
   ownsStdinPassthrough: boolean;
   deferredExitResolve: ((code: number) => void) | null;
   fakeProcess: any;  // set after createFakeProcess() returns
+  portDetected?: boolean;
 }
 
 /** Sync FS operation watchdog limit */

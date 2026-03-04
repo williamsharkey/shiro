@@ -192,6 +192,11 @@ export function createExpressFactory(deps: ExpressDeps): any {
             const params = matchPath(mw.path, req.path);
             if (params !== null) {
               req.params = { ...req.params, ...params };
+              // Strip mount prefix for router middleware (like Express does)
+              const originalPath = req.path;
+              if (mw.path !== '/' && mw.path !== '/*' && req.path.startsWith(mw.path)) {
+                req.path = req.path.slice(mw.path.length) || '/';
+              }
               try {
                 // Create a promise that resolves when next() is called
                 let nextCalled = false;
@@ -214,12 +219,14 @@ export function createExpressFactory(deps: ExpressDeps): any {
                   }
                 });
                 await nextPromise;
+                req.path = originalPath; // Restore original path after router
                 if (ended) return;
                 // Clear error if error handler handled it without passing to next
                 if (isErrorHandler && !nextError) lastError = null;
                 if (nextError) lastError = nextError;
                 if (!nextCalled) return; // Handler didn't call next, stop chain
               } catch (err: any) {
+                req.path = originalPath; // Restore original path on error
                 lastError = err;
                 // Continue to find error handler
               }

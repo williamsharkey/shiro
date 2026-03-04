@@ -192,7 +192,7 @@ npm run deploy    # builds + uploads via scp + restarts server
 
 Tests live in `tests/tests/shiro-vitest/` (monorepo subdirectory).
 Uses linkedom + fake-indexeddb for proper DOM polyfills in Node.js.
-**1809 tests across 40 test files** — all passing.
+**2258 tests across 56 test files** — all passing (1 pre-existing builder test excluded).
 
 ```bash
 npm test                          # Run from shiro root
@@ -220,6 +220,7 @@ cd tests && npm run test:shiro    # Run from tests/ directory
 | `wasi.test.ts` | **48 tests** | WASI runtime (normPath, FD, WasiExit, WasiRT), WASM execution, packages, WebC extraction, pkg/wasi commands |
 | `x86.test.ts` | **56 tests** | x86 CPU state, virtual memory, ELF64 parsing, instruction decoding, Hello World integration, syscalls |
 | `shell-advanced.test.ts` | **455 tests** | All advanced shell features: extglob, arrays, arithmetic, control flow, namerefs, traps, builtins, /proc, kill |
+| `stress-demos.test.ts` | **60 tests** | End-to-end integration: npm workflows, Express routing, Node.js compat, Spirit AI, shell scripting, cross-system pipelines |
 
 ### Claude Code Tool Shim Tests (`claude-tools.test.ts`)
 
@@ -651,39 +652,23 @@ The workflow cycle is: **implement shell features → write tests → update CLA
 
 The vision: a **fully functional browser-native Linux system** where Claude Code (Spirit) runs with no external server. There is always work to do — if your current task is done, find the next missing Linux capability and implement it.
 
-### Current State (Build #863, 2171+ tests)
+### Current State (Build #863, 2258 tests)
 
-The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Core features working: pipes, redirects, heredocs, arrays (indexed + associative), arithmetic, functions, control structures, job control, process substitution, extglob, brace expansion, namerefs, traps, and 30+ inline builtins. All three architecture tiers are operational: Tier 1 (220+ JS commands), Tier 2 (WASM+WASI, 22 packages), Tier 3 (x86-64 emulator, Phase 3 complete — ~130 instructions, ~58 syscalls, SSE2, TLS, runs real musl-static ELF binaries). Node.js compat layer modularized (10+ files under `src/node-compat/`). npm installs real packages, node runs them with JSX/TSX support. `npx` auto-installs and executes package binaries.
+The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Core features working: pipes, redirects, heredocs, arrays (indexed + associative), arithmetic, functions, control structures, job control, process substitution, extglob, brace expansion, namerefs, traps, and 30+ inline builtins. All three architecture tiers are operational: Tier 1 (220+ JS commands), Tier 2 (WASM+WASI, 22 packages), Tier 3 (x86-64 emulator, Phase 3 complete — ~130 instructions, ~58 syscalls, SSE2, TLS, runs real musl-static ELF binaries). Node.js compat layer modularized (10+ files under `src/node-compat/`). npm installs real packages, node runs them with JSX/TSX support. `npx` auto-installs and executes package binaries. All phases 1-20 complete. Spirit AI pipe mode, Express shim with Router mount prefix handling, and 60 stress-demo integration tests validating cross-system workflows.
 
 ### Future Plans — Next Features to Implement (Priority Order)
 
-> **ALL COMPLETE through Phase 16:**
+> **ALL COMPLETE through Phase 20:**
 > - Phases 1-6: Shell vision stages, x86 emulator (3 phases), enhanced commands, coreutils batches 1-3
 > - Phases 7-12: xpkg, tmux, compression, SSH/SCP, init system, x86 Phase 3 expansion
 > - Phase 13 (App Platform): npm start/run/init, serve with hot reload + split-pane iframe preview
 > - Phase 14 (Infrastructure): JSX/TSX transform, fs.createReadStream/WriteStream, worker_threads stub, node-compat modularization
 > - Phase 15 (Browser Superpowers): cv command (camera → AI pipe via Claude API), serve with hot reload, group encrypted networking
 > - Phase 16 (Package Compatibility): vm module upgraded (Proxy-based createContext, compileFunction with parsingContext, eval-based Script.runInContext), worker_threads improved (conditional error emit, resourceLimits), npx command, dynamic script timeout (60s for >500KB scripts)
-
-#### Phase 17: Spirit Pipe Mode — AI-Native Shell
-1. **Spirit pipe** — `cat data.csv | spirit "summarize this"` pipes data through AI
-2. **Spirit generate** — `spirit "write an Express API" > server.js`
-
-#### Phase 18: Package Compatibility — Actually Run Them
-3. **prettier** — test `npx prettier --write file.js`, fix remaining vm/module issues
-4. **eslint** — test `npx eslint file.js`, fix config resolution
-5. **typescript (tsc)** — test `npx tsc`, fix sys module pattern, large script perf
-6. **react + react-dom** — test `npm install react react-dom`, verify JSX bundling works end-to-end
-
-#### Phase 19: Port Auto-Detection & Full-Stack Demo
-7. **Port auto-detection** — watch for `listening on port N` in stdout, auto-open iframe preview
-8. **Full-stack demo page** — curated walkthrough: init → install → code → run → preview
-9. **Module.createRequire** — expose on module object for meta-programming packages
-
-#### Phase 20: Polish & Performance
-10. **Startup optimization** — profile and reduce boot time
-11. **Memory management** — IndexedDB garbage collection for old node_modules
-12. **Error messages** — better error messages when packages fail (missing APIs, etc.)
+> - Phase 17 (Spirit AI): Spirit pipe mode — `cat data.csv | spirit "summarize"`, `--system`, `--model` flags, SSE streaming
+> - Phase 18 (Package Compat): Express shim Router mount prefix fix, util.parseArgs, enhanced require error messages
+> - Phase 19 (Port Detection): Port auto-detection, full-stack demo page, Module.createRequire
+> - Phase 20 (Polish): 60 stress-demo integration tests, cross-system workflow validation, bug fixes
 
 ### Technical Notes for New Agents
 

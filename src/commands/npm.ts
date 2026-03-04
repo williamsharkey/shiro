@@ -924,11 +924,22 @@ async function npmCache(ctx: CommandContext): Promise<number> {
 
   switch (action) {
     case 'clean':
-    case 'clear':
+    case 'clear': {
+      const force = ctx.args.includes('--force') || ctx.args.includes('-f');
       const size = metadataCache.size;
       metadataCache.clear();
       ctx.stdout += `Cleared ${size} cached package metadata entries.\n`;
+      if (force) {
+        const nmPath = ctx.fs.resolvePath('node_modules', ctx.cwd);
+        try {
+          await ctx.fs.rm(nmPath, { recursive: true });
+          ctx.stdout += 'Removed node_modules/ directory.\n';
+        } catch {
+          ctx.stdout += 'No node_modules/ directory to remove.\n';
+        }
+      }
       return 0;
+    }
 
     case 'status':
     case 'ls':

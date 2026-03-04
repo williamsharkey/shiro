@@ -105,6 +105,7 @@ import { listenCmd } from './commands/listen';
 import { notifyCmd } from './commands/notify';
 import { cameraCmd } from './commands/camera';
 import { cvCmd } from './commands/cv';
+import { spiritCmd } from './commands/spirit';
 // wasi and pkg are lazy-loaded (pulls in ~960-line wasi-runtime.ts)
 import { processTable } from './process-table';
 import { iframeServer } from './iframe-server';
@@ -379,6 +380,7 @@ async function main() {
   registerCommand(commands, notifyCmd, 'src/commands/notify.ts');
   registerCommand(commands, cameraCmd, 'src/commands/camera.ts');
   registerCommand(commands, cvCmd, 'src/commands/cv.ts');
+  registerCommand(commands, spiritCmd, 'src/commands/spirit.ts');
 
   // TUI commands (lazy-loaded)
   registerCommand(commands, lazyCommand('top', 'Real-time process monitor',

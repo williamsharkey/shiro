@@ -36,6 +36,7 @@ import { listenCmd } from '@shiro/commands/listen';
 import { notifyCmd } from '@shiro/commands/notify';
 import { cameraCmd } from '@shiro/commands/camera';
 import { cvCmd } from '@shiro/commands/cv';
+import { spiritCmd } from '@shiro/commands/spirit';
 import { serveCmd, serversCmd } from '@shiro/commands/serve';
 import { groupCmd } from '@shiro/commands/group';
 import { topCmd } from '@shiro/commands/top';
@@ -102,6 +103,7 @@ export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell 
   commands.register(notifyCmd);
   commands.register(cameraCmd);
   commands.register(cvCmd);
+  commands.register(spiritCmd);
   commands.register(serveCmd);
   commands.register(serversCmd);
   commands.register(groupCmd);

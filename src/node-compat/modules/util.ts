@@ -112,5 +112,120 @@ export function createUtilModule(): any {
     styleText: (_style: string, text: string) => text,
     TextEncoder,
     TextDecoder,
+    parseArgs: (config: any = {}) => {
+      const { args = [], options = {}, strict = true, allowPositionals = false, allowNegative = false } = config;
+      const values: Record<string, any> = {};
+      const positionals: string[] = [];
+      const tokens: any[] = [];
+
+      // Initialize defaults
+      for (const [key, opt] of Object.entries(options) as [string, any][]) {
+        if (opt.default !== undefined) values[key] = opt.default;
+        else if (opt.type === 'boolean') values[key] = false;
+        else if (opt.multiple) values[key] = [];
+      }
+
+      // Build short-to-long alias map
+      const shortToLong: Record<string, string> = {};
+      for (const [key, opt] of Object.entries(options) as [string, any][]) {
+        if (opt.short) shortToLong[opt.short] = key;
+      }
+
+      function setOption(name: string, value: any) {
+        const opt = (options as Record<string, any>)[name];
+        if (opt?.multiple) {
+          if (!Array.isArray(values[name])) values[name] = [];
+          values[name].push(value);
+        } else {
+          values[name] = value;
+        }
+      }
+
+      function findOption(name: string): { key: string; opt: any } | null {
+        if ((options as Record<string, any>)[name]) return { key: name, opt: (options as Record<string, any>)[name] };
+        if (shortToLong[name]) return { key: shortToLong[name], opt: (options as Record<string, any>)[shortToLong[name]] };
+        return null;
+      }
+
+      for (let i = 0; i < args.length; i++) {
+        const arg = args[i];
+        if (arg === '--') {
+          positionals.push(...args.slice(i + 1));
+          break;
+        }
+        if (arg.startsWith('--')) {
+          // Handle --no-X boolean negation
+          const eqIdx = arg.indexOf('=');
+          let name: string, val: string | undefined;
+          if (eqIdx !== -1) {
+            name = arg.slice(2, eqIdx);
+            val = arg.slice(eqIdx + 1);
+          } else {
+            name = arg.slice(2);
+          }
+
+          // Check --no-X negation
+          let negated = false;
+          let found = findOption(name);
+          if (!found && name.startsWith('no-') && allowNegative) {
+            const posName = name.slice(3);
+            found = findOption(posName);
+            if (found && found.opt.type === 'boolean') {
+              negated = true;
+              name = posName;
+            } else {
+              found = null;
+            }
+          }
+
+          if (!found) {
+            if (strict) {
+              const err = new TypeError(`Unknown option '${arg}'`);
+              (err as any).code = 'ERR_PARSE_ARGS_UNKNOWN_OPTION';
+              throw err;
+            }
+            // Non-strict: skip unknown
+            continue;
+          }
+
+          if (found.opt.type === 'boolean') {
+            setOption(found.key, !negated);
+          } else {
+            // String type
+            if (val !== undefined) {
+              setOption(found.key, val);
+            } else if (i + 1 < args.length) {
+              setOption(found.key, args[++i]);
+            }
+          }
+        } else if (arg.startsWith('-') && arg.length === 2) {
+          const ch = arg[1];
+          const found = findOption(ch);
+          if (!found) {
+            if (strict) {
+              const err = new TypeError(`Unknown option '${arg}'`);
+              (err as any).code = 'ERR_PARSE_ARGS_UNKNOWN_OPTION';
+              throw err;
+            }
+            continue;
+          }
+          if (found.opt.type === 'boolean') {
+            setOption(found.key, true);
+          } else {
+            if (i + 1 < args.length) {
+              setOption(found.key, args[++i]);
+            }
+          }
+        } else {
+          if (strict && !allowPositionals) {
+            const err = new TypeError(`Unexpected argument '${arg}'`);
+            (err as any).code = 'ERR_PARSE_ARGS_UNEXPECTED_POSITIONAL';
+            throw err;
+          }
+          positionals.push(arg);
+        }
+      }
+      return { values, positionals, tokens };
+    },
   };
 }

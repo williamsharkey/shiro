@@ -48,7 +48,7 @@ export function createFakeProcess(
     platform: 'linux',
     arch: 'x64',
     version: 'v20.0.0',
-    versions: { node: '20.0.0', v8: '11.3.244.8', modules: '115' },
+    versions: { node: '20.0.0', v8: '11.3.244.8', modules: '115', openssl: '3.0.13', uv: '1.46.0', zlib: '1.3.0.1-motley-71660e1', brotli: '1.1.0', napi: '9', llhttp: '8.1.1', unicode: '15.1', icu: '74.1', cldr: '44.1', tz: '2024a' },
     stdout: createStdout(ctx, stdoutBuf, _st),
     stderr: createStderr(ctx, stderrBuf, _st),
     stdin: createStdin(ctx, _st, processEvents),
@@ -168,6 +168,19 @@ function createStdout(ctx: CommandContext, stdoutBuf: string[], _st: SharedState
           ctx.terminal.writeOutput(str);
         } else {
           ctx.terminal.writeOutput(str.replace(/\r?\n/g, '\r\n'));
+        }
+      }
+      // Auto-detect port from stdout messages like "listening on port 3000"
+      if (!_st.portDetected && ctx.terminal) {
+        const portMatch = str.match(/(?:listening|running|started|ready)\s+(?:on|at)\s+(?:https?:\/\/[^:]+:|port\s*)(\d{2,5})/i);
+        if (portMatch) {
+          const port = parseInt(portMatch[1]);
+          if (port > 0 && port < 65536) {
+            _st.portDetected = true;
+            import('../split-view').then(({ createSplitView }) => {
+              createSplitView({ port, direction: 'right', title: `Server :${port}` });
+            }).catch(() => {});
+          }
         }
       }
       const callback = typeof encodingOrCb === 'function' ? encodingOrCb : cb;

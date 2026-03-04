@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shiro App Platform — Build and run apps in your browser</title>
+  <meta name="description" content="npm install, npm start, and see your app live. A complete Node.js-compatible environment in a browser tab.">
+  <meta property="og:title" content="Shiro App Platform — Build and run apps in your browser">
+  <meta property="og:description" content="npm install, npm start, and see your app live. A complete Node.js-compatible environment in a browser tab.">
+  <meta property="og:url" content="https://shiro.computer/demo">
+  <meta property="og:type" content="website">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0f0f1a;
+      color: #e0e0e0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      line-height: 1.7;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .container { max-width: 780px; margin: 0 auto; padding: 0 24px; }
+
+    a { color: #00d4ff; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .hero { padding: 60px 0 40px; text-align: center; }
+
+    .hero h1 {
+      font-size: 2.4rem;
+      font-weight: 700;
+      background: linear-gradient(135deg, #00d4ff, #7b61ff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 12px;
+    }
+
+    .hero p { font-size: 1.15rem; color: #a0a0b0; max-width: 600px; margin: 0 auto; }
+
+    .steps { padding: 20px 0 60px; }
+
+    .step {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 12px;
+      padding: 28px 32px;
+      margin-bottom: 24px;
+    }
+
+    .step-num {
+      display: inline-block;
+      background: linear-gradient(135deg, #00d4ff, #7b61ff);
+      color: #0f0f1a;
+      font-weight: 700;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      text-align: center;
+      line-height: 32px;
+      font-size: 0.9rem;
+      margin-bottom: 12px;
+    }
+
+    .step h2 { font-size: 1.3rem; margin-bottom: 8px; color: #fff; }
+
+    .step p { color: #b0b0c0; margin-bottom: 12px; }
+
+    pre {
+      background: #1a1a2e;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 16px 20px;
+      overflow-x: auto;
+      font-family: 'SF Mono', Consolas, 'Liberation Mono', monospace;
+      font-size: 0.92rem;
+      line-height: 1.5;
+      color: #c8d6e5;
+    }
+
+    pre .prompt { color: #00d4ff; }
+    pre .comment { color: #6272a4; }
+
+    .features {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      padding: 0 0 60px;
+    }
+
+    @media (max-width: 600px) { .features { grid-template-columns: 1fr; } }
+
+    .feature {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 10px;
+      padding: 20px 24px;
+    }
+
+    .feature h3 { font-size: 1rem; color: #fff; margin-bottom: 4px; }
+    .feature p { font-size: 0.9rem; color: #888; }
+
+    .cta { text-align: center; padding: 40px 0 80px; }
+
+    .cta a {
+      display: inline-block;
+      background: linear-gradient(135deg, #00d4ff, #7b61ff);
+      color: #fff;
+      font-weight: 600;
+      font-size: 1.1rem;
+      padding: 14px 36px;
+      border-radius: 8px;
+      transition: opacity 0.2s;
+    }
+    .cta a:hover { opacity: 0.9; text-decoration: none; }
+
+    footer { text-align: center; padding: 0 0 40px; color: #555; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <section class="hero">
+      <h1>Build Apps in Your Browser</h1>
+      <p>npm install, npm start, and see your app live &mdash; with Claude as your pair programmer. No local setup needed.</p>
+    </section>
+
+    <section class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <h2>Initialize your project</h2>
+        <p>Create a new project with npm init, just like you would locally.</p>
+        <pre><span class="prompt">$</span> npm init -y
+<span class="comment"># Creates package.json with defaults</span></pre>
+      </div>
+
+      <div class="step">
+        <div class="step-num">2</div>
+        <h2>Install dependencies</h2>
+        <p>Install packages from the npm registry. Express, React, anything you need.</p>
+        <pre><span class="prompt">$</span> npm install express
+<span class="comment"># Downloads and installs express + dependencies</span></pre>
+      </div>
+
+      <div class="step">
+        <div class="step-num">3</div>
+        <h2>Write your server</h2>
+        <p>Use spirit to generate code, or write it yourself with vi.</p>
+        <pre><span class="prompt">$</span> spirit "write an Express API with a /hello endpoint" > server.js
+<span class="comment"># Or: vi server.js</span></pre>
+      </div>
+
+      <div class="step">
+        <div class="step-num">4</div>
+        <h2>Start and preview</h2>
+        <p>Run your app. Shiro auto-detects the port and opens a live preview pane.</p>
+        <pre><span class="prompt">$</span> npm start
+<span class="comment"># Server starts, split-view preview opens automatically</span></pre>
+      </div>
+
+      <div class="step">
+        <div class="step-num">5</div>
+        <h2>Iterate with AI</h2>
+        <p>Pipe files to spirit for analysis, refactoring, or adding features.</p>
+        <pre><span class="prompt">$</span> cat server.js | spirit "add a /users endpoint with GET and POST"
+<span class="comment"># AI reads your code and generates the updated version</span></pre>
+      </div>
+    </section>
+
+    <section class="features">
+      <div class="feature">
+        <h3>Full npm support</h3>
+        <p>npm install, start, run, init &mdash; packages from the real registry.</p>
+      </div>
+      <div class="feature">
+        <h3>Live preview</h3>
+        <p>Split-pane preview with hot reload. See changes instantly.</p>
+      </div>
+      <div class="feature">
+        <h3>JSX/TSX transforms</h3>
+        <p>Write React and TypeScript. Transforms happen automatically.</p>
+      </div>
+      <div class="feature">
+        <h3>AI pair programmer</h3>
+        <p>spirit command pipes stdin + prompt to Claude. Generate, refactor, explain.</p>
+      </div>
+    </section>
+
+    <section class="cta">
+      <a href="/">Open Shiro Terminal</a>
+    </section>
+
+    <footer>
+      <a href="/about">About</a> &middot; <a href="/demos">Demos</a> &middot; <a href="/docs">Docs</a>
+    </footer>
+  </div>
+</body>
+</html>

@@ -266,6 +266,7 @@
 
         <span class="section-label">Languages &amp; Tools</span>
         <a href="#packages">npm &amp; Node.js</a>
+        <a href="#spirit">Spirit (AI)</a>
         <a href="#wasm">WASM Runtimes</a>
         <a href="#git">Git</a>
 
@@ -285,7 +286,7 @@
     <main class="content">
       <!-- ===== Quick Start ===== -->
       <h1 id="quick-start">Quick Start</h1>
-      <p>Open <a href="/">shiro.computer</a> and start typing. The terminal is a full Unix shell with 220+ commands, persistent files, and WASM runtimes.</p>
+      <p>Open <a href="/">shiro.computer</a> and start typing. The terminal is a full Unix shell with 220+ commands, persistent files, WASM runtimes, and Spirit AI.</p>
 
       <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Create files and directories</span>
 mkdir -p ~/project/src
@@ -425,6 +426,31 @@ npx @scope/pkg arg1 arg2</pre></div>
       <h3>esbuild Bundler</h3>
       <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Bundle TypeScript/JavaScript</span>
 build src/app.ts --bundle --outfile=dist/app.js</pre></div>
+
+      <!-- ===== Spirit AI ===== -->
+      <h2 id="spirit">Spirit (AI)</h2>
+      <p>Built-in AI assistant powered by Claude. Pipe data through it, generate code, or ask questions. Requires an Anthropic API key.</p>
+
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Set your API key</span>
+export ANTHROPIC_API_KEY=sk-ant-...
+
+<span class="c"># Ask a question</span>
+spirit "explain how DNS works"
+
+<span class="c"># Pipe data through AI</span>
+cat data.csv | spirit "summarize this data"
+
+<span class="c"># Generate code</span>
+spirit "write an Express API with /users endpoint" > server.js
+
+<span class="c"># Use a specific model</span>
+spirit --model claude-opus-4-20250514 "review this code" < app.js
+
+<span class="c"># Set a system prompt</span>
+spirit --system "You are a bash expert" "how do I find large files?"
+
+<span class="c"># List available models</span>
+spirit --list-models</pre></div>
 
       <!-- ===== WASM Runtimes ===== -->
       <h2 id="wasm">WASM Runtimes</h2>
@@ -646,7 +672,7 @@ remote stop      <span class="c"># End session</span></pre></div>
         <tr><td><code>crypto</code></td><td class="status-works">Works</td><td>createHash (sha256, sha1, md5), randomBytes, randomUUID</td></tr>
         <tr><td><code>os</code></td><td class="status-works">Works</td><td>platform, arch, homedir, tmpdir, cpus, EOL</td></tr>
         <tr><td><code>url</code></td><td class="status-works">Works</td><td>URL class, parse, format</td></tr>
-        <tr><td><code>util</code></td><td class="status-works">Works</td><td>promisify, format, inspect, types</td></tr>
+        <tr><td><code>util</code></td><td class="status-works">Works</td><td>promisify, format, inspect, types, parseArgs</td></tr>
         <tr><td><code>stream</code></td><td class="status-partial">Partial</td><td>Readable, Writable, Transform constructors exist; no full piping</td></tr>
         <tr><td><code>http</code></td><td class="status-partial">Partial</td><td>createServer for virtual servers; no outgoing HTTP</td></tr>
         <tr><td><code>https</code></td><td class="status-partial">Partial</td><td>Same as http; uses fetch() internally</td></tr>
@@ -670,7 +696,7 @@ remote stop      <span class="c"># End session</span></pre></div>
 
       <!-- ===== Command List ===== -->
       <h2 id="commands">Command List</h2>
-      <p>220+ commands. Core coreutils are loaded at boot. Large commands (build, python, sqlite3, etc.) are lazy-loaded on first use.</p>
+      <p>220+ commands, 2250+ tests. Core coreutils are loaded at boot. Large commands (build, python, sqlite3, etc.) are lazy-loaded on first use.</p>
 
       <h3>Core</h3>
       <p><code>ls</code> <code>cat</code> <code>echo</code> <code>mkdir</code> <code>rm</code> <code>cp</code> <code>mv</code> <code>touch</code> <code>pwd</code> <code>cd</code> <code>head</code> <code>tail</code> <code>wc</code> <code>sort</code> <code>uniq</code> <code>tee</code> <code>tr</code> <code>cut</code> <code>paste</code> <code>yes</code> <code>true</code> <code>false</code> <code>rev</code> <code>tac</code> <code>shuf</code> <code>split</code> <code>csplit</code></p>
@@ -699,8 +725,11 @@ remote stop      <span class="c"># End session</span></pre></div>
       <h3>Editors &amp; Viewers</h3>
       <p><code>code</code> <code>monaco</code> <code>less</code> <code>mdview</code> <code>html</code> <code>img</code> <code>open</code></p>
 
+      <h3>AI</h3>
+      <p><code>spirit</code> <code>claude</code> <code>sc</code> <code>cv</code></p>
+
       <h3>Shiro-specific</h3>
-      <p><code>setup</code> <code>claude</code> <code>sc</code> <code>seed</code> <code>image</code> <code>spawn</code> <code>hud</code> <code>js-eval</code></p>
+      <p><code>setup</code> <code>seed</code> <code>image</code> <code>spawn</code> <code>hud</code> <code>js-eval</code></p>
     </main>
     <footer style="padding:24px 0;margin-top:40px;border-top:1px solid #1a1a2e;text-align:center;font-size:0.85rem;color:#555;">
       <a href="/" style="color:#888;">Try Shiro</a>

@@ -146,7 +146,7 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
                 const exp = pkg.exports[subpathKey];
                 if (exp) {
                   const target = typeof exp === 'string' ? exp
-                    : (exp.import || exp.require || exp.default);
+                    : (exp.browser || exp.import || exp.require || exp.default);
                   if (target) {
                     subpathResolved = `${pkgDir}/${target.replace(/^\.\//, '')}`;
                   }
@@ -159,7 +159,7 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
                       const match = subpath.match(regex);
                       if (match) {
                         const target = typeof value === 'string' ? value
-                          : ((value as any).import || (value as any).require || (value as any).default);
+                          : ((value as any).browser || (value as any).import || (value as any).require || (value as any).default);
                         if (target) {
                           subpathResolved = `${pkgDir}/${target.replace(/^\.\//, '').replace('*', match[1])}`;
                           break;
@@ -200,15 +200,15 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
                   if (typeof dotExport === 'string') {
                     main = dotExport;
                   } else {
-                    // Conditional exports: prefer import > require > default > node
-                    main = dotExport.import || dotExport.require || dotExport.default || dotExport.node;
+                    // Conditional exports: prefer browser > import > require > default > node
+                    main = dotExport.browser || dotExport.import || dotExport.require || dotExport.default || dotExport.node;
                     // Handle nested conditional (e.g., { default: { import: "..." } })
                     if (typeof main === 'object') {
-                      main = (main as any).import || (main as any).require || (main as any).default;
+                      main = (main as any).browser || (main as any).import || (main as any).require || (main as any).default;
                     }
                   }
-                } else if (exp.import || exp.require || exp.default) {
-                  main = exp.import || exp.require || exp.default;
+                } else if (exp.browser || exp.import || exp.require || exp.default) {
+                  main = exp.browser || exp.import || exp.require || exp.default;
                 }
               }
 
@@ -280,9 +280,9 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
                 else if (exp['.']) {
                   const dotExport = exp['.'];
                   main = typeof dotExport === 'string' ? dotExport
-                    : (dotExport.import || dotExport.require || dotExport.default);
-                } else if (exp.import || exp.require || exp.default) {
-                  main = exp.import || exp.require || exp.default;
+                    : (dotExport.browser || dotExport.import || dotExport.require || dotExport.default);
+                } else if (exp.browser || exp.import || exp.require || exp.default) {
+                  main = exp.browser || exp.import || exp.require || exp.default;
                 }
               }
               if (!main) main = pkg.main || pkg.module || 'index.js';
@@ -323,11 +323,11 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
                 else if (exp['.']) {
                   const dotExport = exp['.'];
                   main = typeof dotExport === 'string' ? dotExport
-                    : (dotExport.import || dotExport.require || dotExport.default);
-                } else if (exp.import || exp.require || exp.default) {
-                  main = exp.import || exp.require || exp.default;
+                    : (dotExport.browser || dotExport.import || dotExport.require || dotExport.default);
+                } else if (exp.browser || exp.import || exp.require || exp.default) {
+                  main = exp.browser || exp.import || exp.require || exp.default;
                 }
-                if (typeof main === 'object') main = (main as any).import || (main as any).require || (main as any).default;
+                if (typeof main === 'object') main = (main as any).browser || (main as any).import || (main as any).require || (main as any).default;
               }
               if (!main) main = pkg.main || pkg.module || 'index.js';
               if (typeof main !== 'string') main = 'index.js';
@@ -360,7 +360,9 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
         .filter(k => k.includes(modPath.replace(/^\.\.?\//g, '').replace(/\.js$/, '')))
         .slice(0, 5);
       const hint = nearby.length ? `\nSimilar files in cache: ${nearby.join(', ')}` : '';
-      throw new Error(`Cannot find module '${modPath}' (resolved: ${resolved})${hint}`);
+      const isNpmPkg = !modPath.startsWith('.') && !modPath.startsWith('/');
+      const npmHint = isNpmPkg ? `\nTry: npm install ${modPath.split('/')[0]}` : '';
+      throw new Error(`Cannot find module '${modPath}' (resolved: ${resolved})${hint}${npmHint}`);
     }
 
     if (resolved.endsWith('.json')) {
