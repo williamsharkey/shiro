@@ -540,7 +540,7 @@ typedef struct {
 } Student;
 
 void print_student(Student s) {
-    printf("  %s (age %d, GPA %.1f)\n", s.name, s.age, s.gpa);
+    printf("  %s (age %d, GPA %.1f)\\n", s.name, s.age, s.gpa);
 }
 
 int main() {
