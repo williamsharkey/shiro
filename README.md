@@ -26,7 +26,7 @@
 - **Claude Code** — The real @anthropic-ai/claude-code CLI runs inside the browser
 - **Virtual servers** — `serve` hosts apps, `page` interacts with them
 - **Windowed terminals** — `spawn` opens commands in their own window with interactive REPL
-- **Template palette** — 9 educational lessons (HTML, React, Node, Python, TypeScript, C, SQLite, Shell) launch in windowed terminals with split view
+- **Template palette** — 13 educational templates across 4 categories (Web, Languages, Packages, Tools) including WASM package manager, x86 Linux binaries, full-stack Express+SQLite, and cross-language data pipelines
 - **One HTML file** — ~420 KB gzipped. Deploy anywhere. Works offline.
 
 ## vs WebContainers

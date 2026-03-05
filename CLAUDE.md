@@ -36,7 +36,7 @@ src/
 ├── process-table.ts     # Global process registry with PID allocation + AbortController per process
 ├── split-view.ts        # Docked split pane (right/bottom) for serve --split
 ├── hud-panel.ts         # HUD overlay panel (status bar, shortcuts, template palette link)
-├── template-palette.ts  # Template definitions (9 educational lessons across 3 categories)
+├── template-palette.ts  # Template definitions (13 templates across 4 categories: Web, Languages, Packages, Tools)
 ├── template-runner.ts   # Template execution engine (runs multi-line cmd in windowed terminal)
 ├── living-templates.ts  # Living template UI (palette overlay, category tabs, launch buttons)
 ├── file-associations.ts # Extension-to-command registry (used by `open` to pick editor/viewer)
@@ -216,7 +216,7 @@ cd tests && npm run test:shiro    # Run from tests/ directory
 | `claude-code-install.test.ts` | E2E | Full `npm install -g @anthropic-ai/claude-code` + run |
 | `lazy-commands.test.ts` | **37 tests** | All lazy-loaded commands: lazyCommand helper, build, nano, termcast, image, gh, mcp, group, cc/gcc, python/pip, sqlite3 |
 | `build-output.test.ts` | **7 tests** | Build validation: no unresolved `__VITE_PRELOAD__` markers, entry JS/CSS inlined, lazy chunks exist and are clean |
-| `templates.test.ts` | **31 tests** | Template data integrity, command structure, full multi-line cmd execution through shell |
+| `templates.test.ts` | **55 tests** | Template data integrity, command structure, full multi-line cmd execution through shell |
 | `wasi.test.ts` | **48 tests** | WASI runtime (normPath, FD, WasiExit, WasiRT), WASM execution, packages, WebC extraction, pkg/wasi commands |
 | `x86.test.ts` | **56 tests** | x86 CPU state, virtual memory, ELF64 parsing, instruction decoding, Hello World integration, syscalls |
 | `shell-advanced.test.ts` | **455 tests** | All advanced shell features: extglob, arrays, arithmetic, control flow, namerefs, traps, builtins, /proc, kill |

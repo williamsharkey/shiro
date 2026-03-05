@@ -21,13 +21,13 @@ const allTemplates = categories.flatMap(c =>
 // ── Data Integrity ─────────────────────────────────────────────────
 
 describe('Template Data Integrity', () => {
-  it('should have 3 categories', () => {
-    expect(categories).toHaveLength(3);
-    expect(categories.map(c => c.name)).toEqual(['Web', 'Languages', 'Tools']);
+  it('should have 4 categories', () => {
+    expect(categories).toHaveLength(4);
+    expect(categories.map(c => c.name)).toEqual(['Web', 'Languages', 'Packages', 'Tools']);
   });
 
-  it('should have 9 templates total', () => {
-    expect(allTemplates).toHaveLength(9);
+  it('should have 13 templates total', () => {
+    expect(allTemplates).toHaveLength(13);
   });
 
   it('every template has required fields', () => {
@@ -119,8 +119,8 @@ describe('Template Command Structure', () => {
     const webTemplates = allTemplates.filter(t => t.category === 'Web');
     for (const t of webTemplates) {
       // HTML Page, React App, and React+Routing use serve directly
-      // Node.js Server uses node (Express listen registers the port)
-      if (t.name !== 'Node.js Server') {
+      // Node.js Server and Full-Stack API use node (Express listen registers the port)
+      if (t.name !== 'Node.js Server' && t.name !== 'Full-Stack API') {
         expect(t.cmd, `${t.name}: should use serve`).toContain('serve ');
       }
     }
@@ -202,6 +202,41 @@ describe('Template Command Structure', () => {
     expect(sh!.cmd).toContain('grep');
     expect(sh!.cmd).toContain('sort');
   });
+
+  it('Full-Stack API template uses Express and better-sqlite3', () => {
+    const fs = allTemplates.find(t => t.name === 'Full-Stack API');
+    expect(fs).toBeDefined();
+    expect(fs!.cmd).toContain('express');
+    expect(fs!.cmd).toContain('better-sqlite3');
+    expect(fs!.cmd).toContain('/api/notes');
+    expect(fs!.cmd).toContain('app.listen(3004');
+  });
+
+  it('WASM Packages template uses pkg install', () => {
+    const wasm = allTemplates.find(t => t.name === 'WASM Packages');
+    expect(wasm).toBeDefined();
+    expect(wasm!.cmd).toContain('pkg install cowsay');
+    expect(wasm!.cmd).toContain('pkg install figlet');
+    expect(wasm!.cmd).toContain('fortune');
+  });
+
+  it('x86 Linux Binaries template uses xpkg install', () => {
+    const x86 = allTemplates.find(t => t.name === 'x86 Linux Binaries');
+    expect(x86).toBeDefined();
+    expect(x86!.cmd).toContain('xpkg install busybox');
+    expect(x86!.cmd).toContain('busybox uname');
+    expect(x86!.cmd).toContain('busybox ash');
+  });
+
+  it('Cross-Language Pipeline template uses 5 languages', () => {
+    const pipe = allTemplates.find(t => t.name === 'Cross-Language Pipeline');
+    expect(pipe).toBeDefined();
+    expect(pipe!.cmd).toContain('cc /tmp/pipeline/generate.c');
+    expect(pipe!.cmd).toContain('node /tmp/pipeline/transform.js');
+    expect(pipe!.cmd).toContain('python analyze.py');
+    expect(pipe!.cmd).toContain('sqlite3');
+    expect(pipe!.cmd).toContain('while IFS=');
+  });
 });
 
 // ── Full Command Execution (live reproduction) ───────────────────
@@ -221,8 +256,9 @@ describe('Template Full Command Execution', () => {
   });
 
   for (const t of allTemplates) {
-    // Skip templates that need lazy-loaded commands (serve, node, python, build, cc, sqlite3)
-    const needsLazy = ['serve ', 'node ', 'python3 ', 'build ', 'cc ', 'sqlite3 '];
+    // Skip templates that need lazy-loaded commands
+    const needsLazy = ['serve ', 'node ', 'python3 ', 'python ', 'build ', 'cc ', 'sqlite3 ',
+      'pkg ', 'xpkg ', 'busybox ', 'cowsay', 'figlet', 'fortune', 'seq '];
     const lastLine = t.cmd.split('\n').filter(l => l.trim()).pop() || '';
     const usesLazy = needsLazy.some(c => lastLine.trimStart().startsWith(c));
 
@@ -289,7 +325,7 @@ describe('Template Full Command Execution', () => {
   });
 
   it('SQLite: creates /tmp/setup.sql', async () => {
-    const template = categories[2].templates[0];
+    const template = categories[3].templates[0];
     await run(shell, template.cmd.split('\n').filter(l => !l.trim().startsWith('sqlite3 ')).join('\n'));
     const content = await fs.readFile('/tmp/setup.sql', 'utf8') as string;
     expect(content).toContain('CREATE TABLE');
@@ -312,8 +348,32 @@ describe('Template Full Command Execution', () => {
     expect(content).toContain('hashchange');
   });
 
+  it('Full-Stack API: creates server.js and index.html', async () => {
+    const template = categories[0].templates[4];
+    const needsLazy = ['node ', 'serve '];
+    await run(shell, template.cmd.split('\n').filter(l => !needsLazy.some(c => l.trim().startsWith(c))).join('\n'));
+    const serverJs = await fs.readFile('/tmp/fullstack/server.js', 'utf8') as string;
+    expect(serverJs).toContain("require('express')");
+    expect(serverJs).toContain("require('better-sqlite3')");
+    expect(serverJs).toContain('/api/notes');
+    const indexHtml = await fs.readFile('/tmp/fullstack/index.html', 'utf8') as string;
+    expect(indexHtml).toContain('Notes Dashboard');
+  });
+
+  it('Cross-Language Pipeline: creates C and JS source files', async () => {
+    const template = categories[3].templates[2];
+    const needsLazy = ['cc ', 'node ', 'python ', '(cd ', 'sqlite3 ', 'seq '];
+    await run(shell, template.cmd.split('\n').filter(l => !needsLazy.some(c => l.trim().startsWith(c))).join('\n'));
+    const cFile = await fs.readFile('/tmp/pipeline/generate.c', 'utf8') as string;
+    expect(cFile).toContain('#include <stdio.h>');
+    expect(cFile).toContain('fopen');
+    const jsFile = await fs.readFile('/tmp/pipeline/transform.js', 'utf8') as string;
+    expect(jsFile).toContain("require('fs')");
+    expect(jsFile).toContain('JSON.stringify');
+  });
+
   it('Shell Tutorial: creates CSV files', async () => {
-    const template = categories[2].templates[1];
+    const template = categories[3].templates[1];
     const { output } = await run(shell, template.cmd);
     const content = await fs.readFile('/tmp/tutorial/people.csv', 'utf8') as string;
     expect(content).toContain('Alice,25,Engineer');

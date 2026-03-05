@@ -7,6 +7,8 @@
 const CY = '\x1b[1;36m';  // bold cyan — headings
 const GN = '\x1b[32m';    // green — steps
 const DM = '\x1b[90m';    // dim gray — explanations
+const YL = '\x1b[1;33m';  // bold yellow
+const BD = '\x1b[1m';     // bold
 const RS = '\x1b[0m';     // reset
 
 export interface Template {
@@ -373,6 +375,149 @@ echo "${DM}  vi /tmp/myapp/index.html   (add a new page)${RS}"
 echo "${DM}  Add a route: '/todos': TodoPage${RS}"
 echo "${DM}  Try useEffect for data fetching${RS}"`,
       },
+      {
+        name: 'Full-Stack API',
+        desc: 'Express + SQLite with live preview',
+        icon: '\u{1F4E1}',
+        level: 'advanced',
+        splitPort: 3004,
+        cmd: `echo "${CY}--- Full-Stack API: Express + SQLite ---${RS}"
+echo ""
+echo "${DM}A complete API server with a database and dashboard UI.${RS}"
+echo "${DM}Express handles HTTP routes. SQLite stores data persistently.${RS}"
+echo ""
+echo "${GN}> Creating /tmp/fullstack/server.js${RS}"
+mkdir -p /tmp/fullstack && cat > /tmp/fullstack/server.js << 'ENDJS'
+var express = require('express');
+var fs = require('fs');
+var Database = require('better-sqlite3');
+var app = express();
+
+app.use(express.json());
+
+/* Initialize database */
+var db = new Database(':memory:');
+
+async function main() {
+  await db.ready;
+
+  /* Create notes table */
+  await db.prepare('CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, body TEXT, created_at TEXT)');
+
+  /* Seed starter notes if empty */
+  var count = await db.prepare('SELECT COUNT(*) as n FROM notes');
+  if (count[0].n === 0) {
+    await db.prepare("INSERT INTO notes (title, body, created_at) VALUES ('Welcome', 'This is your first note!', datetime('now'))");
+    await db.prepare("INSERT INTO notes (title, body, created_at) VALUES ('Shopping List', 'Milk, eggs, bread', datetime('now'))");
+    await db.prepare("INSERT INTO notes (title, body, created_at) VALUES ('Ideas', 'Build something awesome with Shiro', datetime('now'))");
+  }
+
+  /* GET /api/notes — list all notes */
+  app.get('/api/notes', async function(req, res) {
+    var rows = await db.prepare('SELECT * FROM notes ORDER BY id DESC');
+    res.json(rows);
+  });
+
+  /* POST /api/notes — create a note */
+  app.post('/api/notes', async function(req, res) {
+    var title = req.body.title || 'Untitled';
+    var body = req.body.body || '';
+    await db.prepare("INSERT INTO notes (title, body, created_at) VALUES ('" + title.replace(/'/g, "''") + "', '" + body.replace(/'/g, "''") + "', datetime('now'))");
+    res.json({ ok: true });
+  });
+
+  /* GET /api/stats — database statistics */
+  app.get('/api/stats', async function(req, res) {
+    var total = await db.prepare('SELECT COUNT(*) as n FROM notes');
+    var latest = await db.prepare('SELECT created_at FROM notes ORDER BY id DESC LIMIT 1');
+    res.json({ total: total[0].n, latest: latest[0] ? latest[0].created_at : null });
+  });
+
+  /* Serve the dashboard */
+  app.get('/', function(req, res) {
+    var html = fs.readFileSync('/tmp/fullstack/index.html', 'utf8');
+    res.send(html);
+  });
+
+  app.listen(3004, function() { console.log('Full-stack server on port 3004'); });
+}
+
+main();
+ENDJS
+echo "${GN}> Creating /tmp/fullstack/index.html${RS}"
+cat > /tmp/fullstack/index.html << 'ENDHTML'
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Notes API</title>
+  <style>
+    body { font-family: system-ui; max-width: 600px; margin: 40px auto; padding: 0 20px; background: #fff; color: #333; }
+    h1 { color: #7c3aed; }
+    .stats { display: flex; gap: 16px; margin: 16px 0; }
+    .stat { background: #f5f3ff; padding: 12px 16px; border-radius: 8px; flex: 1; text-align: center; }
+    .stat .n { font-size: 28px; font-weight: bold; color: #7c3aed; }
+    .stat .label { font-size: 11px; color: #888; text-transform: uppercase; }
+    .note { background: #faf5ff; border-radius: 8px; padding: 12px 16px; margin: 8px 0; }
+    .note h3 { margin: 0 0 4px; color: #6d28d9; font-size: 14px; }
+    .note p { margin: 0; font-size: 13px; color: #555; }
+    .note .time { font-size: 10px; color: #aaa; margin-top: 4px; }
+    .form { background: #f9fafb; border-radius: 8px; padding: 16px; margin: 16px 0; }
+    input, textarea { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box; margin-bottom: 8px; }
+    textarea { height: 60px; resize: vertical; }
+    button { background: #7c3aed; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+    button:hover { background: #6d28d9; }
+  </style>
+</head>
+<body>
+  <h1>Notes Dashboard</h1>
+  <div class="stats" id="stats"></div>
+  <div class="form">
+    <input id="title" placeholder="Note title..." />
+    <textarea id="body" placeholder="Note body..."></textarea>
+    <button onclick="addNote()">Add Note</button>
+  </div>
+  <div id="notes"></div>
+  <script>
+    function loadStats() {
+      fetch('/api/stats').then(function(r){return r.json()}).then(function(s) {
+        document.getElementById('stats').innerHTML =
+          '<div class="stat"><div class="n">'+s.total+'</div><div class="label">Notes</div></div>' +
+          '<div class="stat"><div class="n">'+(s.latest||'-')+'</div><div class="label">Latest</div></div>';
+      });
+    }
+    function loadNotes() {
+      fetch('/api/notes').then(function(r){return r.json()}).then(function(notes) {
+        var html = '';
+        for (var i = 0; i < notes.length; i++) {
+          html += '<div class="note"><h3>'+notes[i].title+'</h3><p>'+notes[i].body+'</p><div class="time">'+notes[i].created_at+'</div></div>';
+        }
+        document.getElementById('notes').innerHTML = html || '<p>No notes yet.</p>';
+      });
+    }
+    function addNote() {
+      var t = document.getElementById('title');
+      var b = document.getElementById('body');
+      fetch('/api/notes', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({title: t.value, body: b.value})
+      }).then(function() { t.value=''; b.value=''; loadStats(); loadNotes(); });
+    }
+    loadStats();
+    loadNotes();
+  </script>
+</body>
+</html>
+ENDHTML
+echo ""
+echo "${GN}> Starting server on port 3004${RS}"
+node /tmp/fullstack/server.js
+echo ""
+echo "${DM}What to try next:${RS}"
+echo "${DM}  curl localhost:3004/api/stats${RS}"
+echo "${DM}  Add a DELETE /api/notes/:id endpoint${RS}"
+echo "${DM}  vi /tmp/fullstack/index.html  (style the dashboard)${RS}"`,
+      },
     ],
   },
   {
@@ -591,6 +736,80 @@ echo "${DM}  Try adding a function or a loop${RS}"`,
     ],
   },
   {
+    name: 'Packages',
+    templates: [
+      {
+        name: 'WASM Packages',
+        desc: 'Real WASM packages from Wasmer',
+        icon: '\u{1F4E6}',
+        level: 'intermediate',
+        cmd: `echo "${CY}--- WASM Packages: Real Software in the Browser ---${RS}"
+echo ""
+echo "${DM}Shiro can install real packages from the ${BD}Wasmer registry${RS}${DM}.${RS}"
+echo "${DM}These are WebAssembly binaries — compiled code running at near-native speed.${RS}"
+echo "${DM}22 packages available, cached in IndexedDB for instant re-runs.${RS}"
+echo ""
+echo "${GN}> Installing cowsay...${RS}"
+pkg install cowsay && echo "${GN}> Installing figlet...${RS}" && pkg install figlet && echo "${GN}> Installing fortune...${RS}" && pkg install fortune
+echo ""
+echo "${YL}--- figlet: ASCII art text ---${RS}"
+echo "SHIRO" | figlet
+echo ""
+echo "${YL}--- cowsay: talking cow ---${RS}"
+echo "Real packages in a browser!" | cowsay
+echo ""
+echo "${YL}--- fortune | cowsay: chained pipeline ---${RS}"
+fortune | cowsay
+echo ""
+echo "${DM}These are real WASM binaries from cdn.wasmer.io, not JavaScript shims.${RS}"
+echo "${DM}They run in a WASI sandbox with full stdin/stdout piping.${RS}"
+echo ""
+echo "${DM}What to try next:${RS}"
+echo "${DM}  pkg available                    (see all 22 packages)${RS}"
+echo "${DM}  pkg install qr2text && echo 'https://shiro.computer' | qr2text${RS}"
+echo "${DM}  pkg install lolcat && echo 'Rainbow text!' | lolcat${RS}"
+echo "${DM}  fortune | figlet | lolcat        (triple pipeline)${RS}"`,
+      },
+      {
+        name: 'x86 Linux Binaries',
+        desc: 'Real Linux ELF binaries in-browser',
+        icon: '\u{1F9EC}',
+        level: 'advanced',
+        cmd: `echo "${CY}--- x86-64 Emulator: Real Linux Binaries ---${RS}"
+echo ""
+echo "${DM}Shiro includes a full ${BD}x86-64 emulator${RS}${DM} that runs real Linux ELF binaries.${RS}"
+echo "${DM}Not transpiled. Not interpreted. Actual x86 instructions decoded and executed.${RS}"
+echo ""
+echo "${GN}> Installing busybox (1.1 MB real ELF binary)...${RS}"
+xpkg install busybox
+echo ""
+echo "${YL}--- uname: real binary, real output ---${RS}"
+busybox uname -a
+echo ""
+echo "${YL}--- ash: a real POSIX shell running inside x86 emulation ---${RS}"
+busybox ash -c 'for i in 1 2 3; do echo "Hello from x86 #$i"; done'
+echo ""
+echo "${YL}--- piping stdin to x86 binary ---${RS}"
+seq 1 10 | busybox awk '{s+=$1} END {print "Sum of 1..10:", s}'
+echo ""
+echo "${YL}--- md5sum: cryptographic hash via x86 ---${RS}"
+echo "Shiro x86" | busybox md5sum
+echo ""
+echo "${YL}--- fibonacci with awk ---${RS}"
+busybox awk 'BEGIN {a=0;b=1; for(i=0;i<12;i++){printf "%d ",a; c=a+b;a=b;b=c} print ""}'
+echo ""
+echo "${DM}This is a ${BD}real 1.1 MB statically-linked ELF binary${RS}${DM} running in the browser.${RS}"
+echo "${DM}~130 x86 instructions decoded, ~58 Linux syscalls emulated.${RS}"
+echo ""
+echo "${DM}What to try next:${RS}"
+echo "${DM}  xpkg available                   (see all x86 packages)${RS}"
+echo "${DM}  xpkg install bc && echo '2^64' | bc${RS}"
+echo "${DM}  busybox ls -la /                 (list VFS root)${RS}"
+echo "${DM}  busybox ash                      (interactive x86 shell!)${RS}"`,
+      },
+    ],
+  },
+  {
     name: 'Tools',
     templates: [
       {
@@ -670,6 +889,139 @@ echo "${DM}  grep -v Alice /tmp/tutorial/people.csv   (exclude Alice)${RS}"
 echo "${DM}  echo 'Frank,27,Artist' >> /tmp/tutorial/people.csv${RS}"
 echo "${DM}  ls /tmp/tutorial${RS}"
 echo "${DM}  cat /tmp/tutorial/people.csv | cut -d, -f1${RS}"`,
+      },
+      {
+        name: 'Cross-Language Pipeline',
+        desc: 'Five languages, one pipeline',
+        icon: '\u{1F500}',
+        level: 'advanced',
+        cmd: `echo "${CY}--- Cross-Language Pipeline ---${RS}"
+echo ""
+echo "${DM}Five languages processing data through Shiro's shared virtual filesystem.${RS}"
+echo "${DM}Each step reads the previous step's output — no IPC, just files.${RS}"
+echo ""
+echo "${YL}=== Step 1/5: C — Generate sensor data ===${RS}"
+echo "${GN}> Creating /tmp/pipeline/generate.c${RS}"
+mkdir -p /tmp/pipeline && cat > /tmp/pipeline/generate.c << 'ENDC'
+#include <stdio.h>
+#include <math.h>
+
+int main() {
+    FILE *f = fopen("/tmp/pipeline/data.csv", "w");
+    fprintf(f, "sensor,hour,value\\n");
+    for (int h = 0; h < 24; h++) {
+        double temp = 20.0 + 8.0 * sin((h - 6) * 3.14159 / 12.0) + (h % 3) * 0.7;
+        double humid = 60.0 + 15.0 * cos((h - 14) * 3.14159 / 12.0) - (h % 5) * 0.5;
+        fprintf(f, "temp,%d,%.1f\\n", h, temp);
+        fprintf(f, "humidity,%d,%.1f\\n", h, humid);
+    }
+    fclose(f);
+    printf("Generated 48 sensor readings to data.csv\\n");
+    return 0;
+}
+ENDC
+cc /tmp/pipeline/generate.c -o /tmp/pipeline/generate && /tmp/pipeline/generate
+echo ""
+echo "${YL}=== Step 2/5: Node.js — Transform CSV to JSON ===${RS}"
+echo "${GN}> Creating /tmp/pipeline/transform.js${RS}"
+cat > /tmp/pipeline/transform.js << 'ENDJS'
+var fs = require('fs');
+var csv = fs.readFileSync('/tmp/pipeline/data.csv', 'utf8');
+var lines = csv.trim().split('\\n').slice(1);
+var records = lines.map(function(line) {
+  var parts = line.split(',');
+  return { sensor: parts[0], hour: parseInt(parts[1]), value: parseFloat(parts[2]) };
+});
+
+var sensors = {};
+for (var i = 0; i < records.length; i++) {
+  var r = records[i];
+  if (!sensors[r.sensor]) sensors[r.sensor] = { values: [], min: Infinity, max: -Infinity, sum: 0 };
+  var s = sensors[r.sensor];
+  s.values.push(r.value);
+  s.sum += r.value;
+  if (r.value < s.min) s.min = r.value;
+  if (r.value > s.max) s.max = r.value;
+}
+
+var stats = {};
+for (var name in sensors) {
+  var s = sensors[name];
+  stats[name] = { min: s.min, max: s.max, avg: Math.round(s.sum / s.values.length * 10) / 10, count: s.values.length };
+}
+
+var result = { records: records, stats: stats };
+fs.writeFileSync('/tmp/pipeline/data.json', JSON.stringify(result, null, 2));
+console.log('Stats:', JSON.stringify(stats));
+ENDJS
+node /tmp/pipeline/transform.js
+echo ""
+echo "${YL}=== Step 3/5: Python — Anomaly detection ===${RS}"
+echo "${DM}(Loading Pyodide runtime... ~12 MB first time)${RS}"
+echo "${GN}> Creating /tmp/pipeline/analyze.py${RS}"
+cat > /tmp/pipeline/analyze.py << 'ENDPY'
+import json
+
+with open('/shiro/tmp/pipeline/data.json') as f:
+    data = json.load(f)
+
+records = data['records']
+by_sensor = {}
+for r in records:
+    by_sensor.setdefault(r['sensor'], []).append(r['value'])
+
+print("Anomaly Report:")
+print("-" * 40)
+for sensor, values in by_sensor.items():
+    mean = sum(values) / len(values)
+    anomalies = []
+    for i, v in enumerate(values):
+        deviation = abs(v - mean) / mean * 100
+        if deviation > 35:
+            anomalies.append((i, v, deviation))
+    if anomalies:
+        print(f"  {sensor}: {len(anomalies)} anomalies (mean={mean:.1f})")
+        for idx, val, dev in anomalies:
+            print(f"    hour {idx}: {val:.1f} ({dev:.0f}% from mean)")
+    else:
+        print(f"  {sensor}: no anomalies (mean={mean:.1f})")
+ENDPY
+(cd /tmp/pipeline && python analyze.py)
+echo ""
+echo "${YL}=== Step 4/5: SQLite — Query peak values ===${RS}"
+cat > /tmp/pipeline/query.sql << 'ENDSQL'
+.mode column
+.headers on
+CREATE TABLE readings (sensor TEXT, hour INTEGER, value REAL);
+.import /tmp/pipeline/data.csv readings
+DELETE FROM readings WHERE sensor = 'sensor';
+
+SELECT '--- Peak temperature hours ---';
+SELECT hour, value FROM readings WHERE sensor='temp' ORDER BY value DESC LIMIT 5;
+SELECT '';
+SELECT '--- Peak humidity hours ---';
+SELECT hour, value FROM readings WHERE sensor='humidity' ORDER BY value DESC LIMIT 5;
+ENDSQL
+sqlite3 < /tmp/pipeline/query.sql
+echo ""
+echo "${YL}=== Step 5/5: Shell — ASCII temperature chart ===${RS}"
+echo "Hour | Temperature"
+echo "-----|------------"
+sqlite3 /tmp/pipeline/pipeline.db << 'ENDSQL' | while IFS='|' read hour val; do bar=""; i=0; limit=$(echo "$val" | cut -d. -f1); while [ $i -lt $limit ] && [ $i -lt 30 ]; do bar="$bar#"; i=$((i+1)); done; printf "%4s | %-30s %s\\n" "$hour" "$bar" "$val"; done
+CREATE TABLE IF NOT EXISTS r (sensor TEXT, hour INTEGER, value REAL);
+DELETE FROM r;
+.import /tmp/pipeline/data.csv r
+DELETE FROM r WHERE sensor = 'sensor';
+SELECT hour, value FROM r WHERE sensor='temp' ORDER BY hour;
+ENDSQL
+echo ""
+echo "${CY}--- Pipeline complete! ---${RS}"
+echo "${DM}5 languages, 1 shared filesystem, 0 network calls.${RS}"
+echo ""
+echo "${DM}What to try next:${RS}"
+echo "${DM}  cat /tmp/pipeline/data.csv | head   (raw CSV)${RS}"
+echo "${DM}  cat /tmp/pipeline/data.json | head   (JSON with stats)${RS}"
+echo "${DM}  sqlite3 (interactive SQL on the data)${RS}"`,
       },
     ],
   },
