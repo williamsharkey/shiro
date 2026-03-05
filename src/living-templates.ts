@@ -1000,120 +1000,176 @@ const artGuide = `<!DOCTYPE html>
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     background: #0f0f1a;
     color: #e2e8f0;
-    padding: 20px;
-    line-height: 1.6;
+    padding: 16px;
+    line-height: 1.5;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
   }
-  h1 { font-size: 18px; color: #c084fc; margin-bottom: 4px; }
-  .subtitle { color: #64748b; font-size: 12px; margin-bottom: 16px; }
+  h1 { font-size: 16px; color: #c084fc; margin-bottom: 2px; }
+  .subtitle { color: #64748b; font-size: 11px; margin-bottom: 8px; }
   canvas {
     display: block;
     width: 100%;
-    border-radius: 8px;
-    margin: 12px 0;
+    height: 140px;
+    border-radius: 6px;
     background: #000;
+    flex-shrink: 0;
   }
   .controls {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-    margin: 12px 0;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 6px;
+    margin: 8px 0;
+    flex-shrink: 0;
   }
   .control {
     background: #1e293b;
-    border-radius: 8px;
-    padding: 10px;
+    border-radius: 6px;
+    padding: 6px 8px;
   }
   .control label {
     display: block;
-    font-size: 10px;
+    font-size: 9px;
     color: #64748b;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    margin-bottom: 4px;
   }
   .control input[type=range] {
     width: 100%;
     accent-color: #c084fc;
   }
   .control .value {
-    font-size: 18px;
+    font-size: 14px;
     font-weight: bold;
     color: #c084fc;
     font-family: monospace;
   }
+  .steps {
+    flex: 1;
+    overflow-y: auto;
+    margin-top: 8px;
+  }
   .step {
     background: #1e293b;
-    border: 1px solid #334155;
-    border-radius: 8px;
-    padding: 14px;
-    margin: 10px 0;
+    border-left: 3px solid #334155;
+    border-radius: 0 6px 6px 0;
+    padding: 10px 12px;
+    margin: 6px 0;
+    transition: border-color 0.3s;
   }
-  .step-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
-  .step-desc { font-size: 12px; color: #94a3b8; }
+  .step.active { border-left-color: #c084fc; }
+  .step.done { border-left-color: #22c55e; }
+  .step-num {
+    display: inline-block;
+    width: 18px; height: 18px;
+    background: #334155;
+    color: #94a3b8;
+    border-radius: 50%;
+    text-align: center;
+    font-size: 11px;
+    line-height: 18px;
+    margin-right: 6px;
+    font-weight: bold;
+  }
+  .step.active .step-num { background: #c084fc; color: #0f0f1a; }
+  .step.done .step-num { background: #22c55e; color: #0f0f1a; }
+  .step-title { font-size: 12px; font-weight: 600; display: inline; }
+  .step-desc { font-size: 11px; color: #94a3b8; margin-top: 4px; }
   .cmd-btn {
     display: inline-block;
     background: #0f172a;
     border: 1px solid #475569;
     border-radius: 4px;
-    padding: 5px 10px;
+    padding: 4px 8px;
     cursor: pointer;
     color: #c084fc;
     font-family: monospace;
-    font-size: 12px;
-    margin-top: 8px;
+    font-size: 11px;
+    margin-top: 6px;
   }
-  .cmd-btn:hover { border-color: #c084fc; }
+  .cmd-btn:hover { border-color: #c084fc; background: #1e1b4b; }
   .finale {
     text-align: center;
-    padding: 16px;
+    padding: 10px;
     display: none;
   }
-  .finale p { color: #94a3b8; font-size: 12px; }
+  .finale p { color: #22c55e; font-size: 12px; font-weight: 600; }
+  .how-it-works {
+    font-size: 10px;
+    color: #475569;
+    border-top: 1px solid #1e293b;
+    padding-top: 6px;
+    margin-top: 4px;
+  }
+  .how-it-works code { color: #c084fc; background: #1e293b; padding: 1px 4px; border-radius: 3px; font-size: 10px; }
 </style>
 </head>
 <body>
   <h1>Code as Art</h1>
-  <p class="subtitle">Numbers become beauty. Change a value, change the art.</p>
+  <p class="subtitle">Numbers become beauty. Drag the sliders, then edit the source code.</p>
 
-  <canvas id="canvas" width="600" height="300"></canvas>
+  <canvas id="canvas" width="600" height="140"></canvas>
 
   <div class="controls">
     <div class="control">
-      <label>Spiral Count</label>
+      <label>Spirals</label>
       <div class="value" id="v-spirals">7</div>
       <input type="range" min="1" max="30" value="7" id="spirals" />
     </div>
     <div class="control">
-      <label>Color Speed</label>
+      <label>Color</label>
       <div class="value" id="v-speed">3</div>
       <input type="range" min="1" max="10" value="3" id="speed" />
     </div>
     <div class="control">
-      <label>Point Size</label>
+      <label>Size</label>
       <div class="value" id="v-size">2</div>
       <input type="range" min="1" max="8" value="2" id="size" />
     </div>
     <div class="control">
-      <label>Brightness</label>
+      <label>Bright</label>
       <div class="value" id="v-bright">60</div>
       <input type="range" min="20" max="100" value="60" id="bright" />
     </div>
   </div>
 
-  <div class="step">
-    <div class="step-title">Now edit the code</div>
-    <div class="step-desc">The art is generated by <code>/tmp/art/spiral.js</code>. Open it and change the numbers.</div>
-    <div class="cmd-btn" onclick="bridge.execInTerminal('vi /tmp/art/spiral.js')">vi /tmp/art/spiral.js</div>
-  </div>
+  <div class="steps">
+    <div class="step active" id="step-1">
+      <span class="step-num">1</span>
+      <div class="step-title">Explore the sliders above</div>
+      <div class="step-desc">Drag the sliders and watch the art change in real time. Each parameter controls a different aspect of the spiral math.</div>
+    </div>
 
-  <div class="step">
-    <div class="step-title">Export your creation</div>
-    <div class="step-desc">Capture your unique art as a GIF to share.</div>
-    <div class="cmd-btn" onclick="bridge.execInTerminal('seed gif')">seed gif</div>
-  </div>
+    <div class="step" id="step-2">
+      <span class="step-num">2</span>
+      <div class="step-title">Read the source code</div>
+      <div class="step-desc">See the math behind the art. The file <code>/tmp/art/spiral.js</code> uses sine, cosine, and HSL colors.</div>
+      <div class="cmd-btn" onclick="bridge.execInTerminal('cat /tmp/art/spiral.js')">cat /tmp/art/spiral.js</div>
+    </div>
 
-  <div class="finale" id="finale">
-    <p>You painted with numbers. Code is a creative medium.</p>
+    <div class="step" id="step-3">
+      <span class="step-num">3</span>
+      <div class="step-title">Edit the code</div>
+      <div class="step-desc">Open the file and change <code>SPIRALS</code>, <code>POINT_SIZE</code>, or the angle formula. Save and watch the art react.</div>
+      <div class="cmd-btn" onclick="bridge.execInTerminal('vi /tmp/art/spiral.js')">vi /tmp/art/spiral.js</div>
+    </div>
+
+    <div class="step" id="step-4">
+      <span class="step-num">4</span>
+      <div class="step-title">Export your creation</div>
+      <div class="step-desc">Capture your unique art as a seed GIF to share.</div>
+      <div class="cmd-btn" onclick="bridge.execInTerminal('seed gif')">seed gif</div>
+    </div>
+
+    <div class="finale" id="finale">
+      <p>You painted with numbers. Code is a creative medium.</p>
+    </div>
+
+    <div class="how-it-works">
+      The spiral uses <code>Math.sin()</code> and <code>Math.cos()</code> to plot points in a circle. The <code>hue</code> shifts over time creating the color animation. Each slider maps to a variable in the code.
+    </div>
   </div>
 
 <script>
@@ -1155,6 +1211,9 @@ function draw() {
   slider.oninput = function() {
     params[key] = parseInt(slider.value);
     display.textContent = slider.value;
+    // Mark step 1 done after first slider interaction
+    document.getElementById('step-1').className = 'step done';
+    document.getElementById('step-2').className = 'step active';
   };
 });
 
@@ -1164,6 +1223,8 @@ draw();
 window.addEventListener('shiro-fs-change', function(e) {
   if (e.detail.path === '/tmp/art/spiral.js') {
     bridge.completeCheckpoint('edit-code');
+    document.getElementById('step-3').className = 'step done';
+    document.getElementById('step-4').className = 'step active';
     document.getElementById('finale').style.display = 'block';
   }
 });
