@@ -502,6 +502,14 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
         ref: () => child,
         unref: () => child,
       };
+      // Make child thenable so `await child` works like execa — Claude Code's Bash tool
+      // does `await child` which resolves immediately if there's no .then() method,
+      // causing it to read the output file before spawn has completed.
+      let _resolveChild: ((v: any) => void) | null = null;
+      const _childPromise = new Promise<any>(r => { _resolveChild = r; });
+      child.then = (resolve?: (v: any) => any, reject?: (e: any) => any) => _childPromise.then(resolve, reject);
+      child.catch = (reject?: (e: any) => any) => _childPromise.catch(reject);
+      child.finally = (fn?: () => void) => _childPromise.finally(fn);
       // For clipboard commands, resolve after a microtask to let stdin.write/end happen first
       const cmdPromise = isClipboardCmd
         ? new Promise<{ stdout: string; stderr: string; exitCode: number }>(resolve =>
@@ -537,9 +545,11 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
         child.exitCode = r.exitCode;
         (events['close'] || []).forEach(fn => fn(r.exitCode, null));
         (events['exit'] || []).forEach(fn => fn(r.exitCode, null));
+        _resolveChild?.({ stdout: r.stdout || '', stderr: r.stderr || '', exitCode: r.exitCode });
       }).catch((err) => {
         (events['error'] || []).forEach(fn => fn(new Error(`spawn ${cmd} failed`)));
         (events['close'] || []).forEach(fn => fn(1, null));
+        _resolveChild?.({ stdout: '', stderr: '', exitCode: 1 });
       });
       pendingPromises.push(p);
       return child;

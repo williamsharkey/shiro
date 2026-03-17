@@ -311,20 +311,35 @@ export function createFsModule(deps: FsDeps): any {
     chmodSync: () => {},
     chownSync: () => {},
     // File descriptor based sync operations (minimal stubs for CLI compatibility)
-    openSync: (p: string, flags?: string) => {
+    openSync: (p: string, flags?: string | number) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       const fd = 100 + Math.floor(Math.random() * 9900);
       // Store mapping for writeSync/readSync/closeSync
       (globalThis as any).__shiroFds = (globalThis as any).__shiroFds || {};
-      const f = flags || 'r';
+      // Normalize flags: numeric (O_WRONLY=1, O_RDWR=2, O_CREAT=64, O_TRUNC=512, O_APPEND=1024)
+      // to string 'r'/'w'/'a' for compatibility
+      let f: string;
+      if (typeof flags === 'number') {
+        const isWrite = (flags & 1) || (flags & 2); // O_WRONLY | O_RDWR
+        const isAppend = flags & 1024; // O_APPEND
+        const isTrunc = flags & 512; // O_TRUNC
+        f = isAppend ? 'a' : isWrite ? 'w' : 'r';
+      } else {
+        f = flags || 'r';
+      }
       (globalThis as any).__shiroFds[fd] = { path: resolved, flags: f, offset: 0 };
       if (resolved.includes('/tasks/') || resolved.includes('/tmp/claude')) {
-        console.warn(`[fs-debug] openSync: ${resolved} flags=${f} → fd=${fd}`);
+        console.warn(`[fs-debug] openSync: ${resolved} flags=${flags}→${f} → fd=${fd}`);
       }
       // 'w' / 'w+' / 'wx' flags truncate the file on open (POSIX behavior)
       if (f.includes('w')) {
         fileCache.set(resolved, '');
         fileMtimes.set(resolved, Date.now());
+        // Ensure parent dirs exist in fileCache
+        const parentDir = resolved.substring(0, resolved.lastIndexOf('/'));
+        if (parentDir && !fileCache.has(parentDir + '/.')) {
+          fileCache.set(parentDir + '/.', '');
+        }
       }
       return fd;
     },
@@ -449,7 +464,7 @@ export function createFsModule(deps: FsDeps): any {
       };
       return ws;
     },
-    constants: { F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1 },
+    constants: { F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1, O_RDONLY: 0, O_WRONLY: 1, O_RDWR: 2, O_CREAT: 64, O_EXCL: 128, O_TRUNC: 512, O_APPEND: 1024, O_NONBLOCK: 2048, S_IFMT: 61440, S_IFREG: 32768, S_IFDIR: 16384, S_IFLNK: 40960 },
     // Callback-style async fs methods (used by graceful-fs, fs-extra)
     readFile: (p: string, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
@@ -1110,6 +1125,6 @@ export function createFsPromisesModule(deps: FsDeps): any {
       };
     },
     watch: async function*(_p: string, _opts?: any) { /* no-op async generator */ },
-    constants: { F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1 },
+    constants: { F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1, O_RDONLY: 0, O_WRONLY: 1, O_RDWR: 2, O_CREAT: 64, O_EXCL: 128, O_TRUNC: 512, O_APPEND: 1024, O_NONBLOCK: 2048, S_IFMT: 61440, S_IFREG: 32768, S_IFDIR: 16384, S_IFLNK: 40960 },
   };
 }
