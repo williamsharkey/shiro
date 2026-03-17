@@ -652,7 +652,7 @@ The workflow cycle is: **implement shell features → write tests → update CLA
 
 The vision: a **fully functional browser-native Linux system** where Claude Code (Spirit) runs with no external server. There is always work to do — if your current task is done, find the next missing Linux capability and implement it.
 
-### Current State (Build #863, 2258 tests)
+### Current State (Build #875, 2258 tests)
 
 The shell (`src/shell.ts`, ~4800 lines) has comprehensive bash compatibility. Core features working: pipes, redirects, heredocs, arrays (indexed + associative), arithmetic, functions, control structures, job control, process substitution, extglob, brace expansion, namerefs, traps, and 30+ inline builtins. All three architecture tiers are operational: Tier 1 (220+ JS commands), Tier 2 (WASM+WASI, 22 packages), Tier 3 (x86-64 emulator, Phase 3 complete — ~130 instructions, ~58 syscalls, SSE2, TLS, runs real musl-static ELF binaries). Node.js compat layer modularized (10+ files under `src/node-compat/`). npm installs real packages, node runs them with JSX/TSX support. `npx` auto-installs and executes package binaries. All phases 1-20 complete. Spirit AI pipe mode, Express shim with Router mount prefix handling, and 60 stress-demo integration tests validating cross-system workflows.
 
