@@ -427,11 +427,12 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
         else if (typeof s1 === 'number') stdioOutFd = s1;
         if (s2 && typeof s2 === 'object' && typeof s2.fd === 'number') stdioErrFd = s2.fd;
         else if (typeof s2 === 'number') stdioErrFd = s2;
-        console.warn(`[spawn-debug] stdio: [${opts.stdio.map((s: any) => typeof s === 'object' ? JSON.stringify(s) : s).join(', ')}] → outFd=${stdioOutFd} errFd=${stdioErrFd}`);
       }
-      if (opts?.stdio === undefined) {
-        console.warn(`[spawn-debug] spawn(${cmd}, ${JSON.stringify(args?.slice(0,3))}) — no stdio option, cmd: ${fullCmd.slice(0,100)}`);
-      }
+      // Capture fd→path mapping NOW (before async exec) because closeSync may delete
+      // the fd entry before the spawn promise resolves
+      const fds = (globalThis as any).__shiroFds || {};
+      const stdioOutPath = stdioOutFd !== null ? fds[stdioOutFd]?.path : null;
+      const stdioErrPath = stdioErrFd !== null && stdioErrFd !== stdioOutFd ? fds[stdioErrFd]?.path : null;
       const events: Record<string, Function[]> = {};
       const stdoutEvents: Record<string, Function[]> = {};
       const stderrEvents: Record<string, Function[]> = {};
@@ -516,25 +517,22 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
             setTimeout(() => resolve({ stdout: '', stderr: '', exitCode: 0 }), 0))
         : execAsync(fullCmd);
       const p = cmdPromise.then(r => {
-        // Write output to stdio file descriptors if specified (Claude Code's Bash tool
-        // opens an output file, passes the fd as stdio[1]/stdio[2], then reads it back)
-        const fds = (globalThis as any).__shiroFds;
-        if (fds) {
-          const combinedOutput = (r.stdout || '') + (r.stderr || '');
-          if (stdioOutFd !== null && fds[stdioOutFd]) {
-            const existing = fileCache.get(fds[stdioOutFd].path) || '';
-            const newContent = existing + (r.stdout || '') + (stdioErrFd === stdioOutFd ? (r.stderr || '') : '');
-            fileCache.set(fds[stdioOutFd].path, newContent);
-            fileMtimes.set(fds[stdioOutFd].path, Date.now());
-            pendingPromises.push(ctx.fs.writeFile(fds[stdioOutFd].path, newContent).catch(() => {}));
-          }
-          if (stdioErrFd !== null && stdioErrFd !== stdioOutFd && fds[stdioErrFd]) {
-            const existing = fileCache.get(fds[stdioErrFd].path) || '';
-            const newContent = existing + (r.stderr || '');
-            fileCache.set(fds[stdioErrFd].path, newContent);
-            fileMtimes.set(fds[stdioErrFd].path, Date.now());
-            pendingPromises.push(ctx.fs.writeFile(fds[stdioErrFd].path, newContent).catch(() => {}));
-          }
+        // Write output to stdio file paths FIRST (before emitting events, because
+        // event handlers may call closeSync which deletes the fd→path mapping).
+        // We use stdioOutPath/stdioErrPath captured at spawn time.
+        if (stdioOutPath) {
+          const existing = fileCache.get(stdioOutPath) || '';
+          const newContent = existing + (r.stdout || '') + (stdioErrFd === stdioOutFd ? (r.stderr || '') : '');
+          fileCache.set(stdioOutPath, newContent);
+          fileMtimes.set(stdioOutPath, Date.now());
+          pendingPromises.push(ctx.fs.writeFile(stdioOutPath, newContent).catch(() => {}));
+        }
+        if (stdioErrPath) {
+          const existing = fileCache.get(stdioErrPath) || '';
+          const newContent = existing + (r.stderr || '');
+          fileCache.set(stdioErrPath, newContent);
+          fileMtimes.set(stdioErrPath, Date.now());
+          pendingPromises.push(ctx.fs.writeFile(stdioErrPath, newContent).catch(() => {}));
         }
         if (r.stdout) (stdoutEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(r.stdout)));
         (stdoutEvents['end'] || []).forEach(fn => fn());
@@ -545,11 +543,6 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
         child.exitCode = r.exitCode;
         (events['close'] || []).forEach(fn => fn(r.exitCode, null));
         (events['exit'] || []).forEach(fn => fn(r.exitCode, null));
-        if (stdioOutFd !== null) {
-          const fds2 = (globalThis as any).__shiroFds;
-          const outPath = fds2?.[stdioOutFd]?.path;
-          console.warn(`[spawn-debug] child resolved: exitCode=${r.exitCode} stdout=${(r.stdout||'').length}b outFd=${stdioOutFd} outPath=${outPath} fileCache=${outPath ? (fileCache.get(outPath)||'').length + 'b' : 'n/a'}`);
-        }
         _resolveChild?.({ stdout: r.stdout || '', stderr: r.stderr || '', exitCode: r.exitCode });
       }).catch((err) => {
         (events['error'] || []).forEach(fn => fn(new Error(`spawn ${cmd} failed`)));
