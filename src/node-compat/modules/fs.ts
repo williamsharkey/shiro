@@ -36,9 +36,12 @@ export function createFsModule(deps: FsDeps): any {
         cached = ctx.fs.readCached(resolved) ?? ctx.fs.readCached(resolved + '.js');
         if (cached !== undefined) fileCache.set(resolved, cached); // promote to fileCache
       }
+      if (resolved.includes('/tasks/') && resolved.includes('.output')) {
+        console.warn(`[fs-debug] readFileSync: ${resolved} → ${cached === undefined ? 'NOT FOUND' : cached.length + ' bytes'}`);
+      }
       if (cached === undefined) {
           if (resolved.includes('/tasks/') || resolved.includes('/tmp/claude')) {
-            console.warn(`[fs-debug] readFileSync ENOENT: ${resolved} (fileCache size: ${fileCache.size}, has task dirs: ${[...fileCache.keys()].filter(k => k.includes('/tasks/')).length})`);
+            console.warn(`[fs-debug] readFileSync ENOENT: ${resolved} (fileCache size: ${fileCache.size}, has task files: ${[...fileCache.keys()].filter(k => k.includes('/tasks/')).slice(0,5).join(', ')})`);
           }
           throw fsError('ENOENT', `ENOENT: no such file or directory, open '${p}'`, 'open', p);
       }
@@ -331,14 +334,17 @@ export function createFsModule(deps: FsDeps): any {
       if (resolved.includes('/tasks/') || resolved.includes('/tmp/claude')) {
         console.warn(`[fs-debug] openSync: ${resolved} flags=${flags}→${f} → fd=${fd}`);
       }
-      // 'w' / 'w+' / 'wx' flags truncate the file on open (POSIX behavior)
-      if (f.includes('w')) {
-        fileCache.set(resolved, '');
+      // Create/truncate file for write modes, create empty for append
+      if (f.includes('w') || f.includes('a')) {
+        if (f.includes('w') || !fileCache.has(resolved)) {
+          fileCache.set(resolved, ''); // truncate for 'w', create for 'a' if missing
+        }
         fileMtimes.set(resolved, Date.now());
         // Ensure parent dirs exist in fileCache
         const parentDir = resolved.substring(0, resolved.lastIndexOf('/'));
         if (parentDir && !fileCache.has(parentDir + '/.')) {
           fileCache.set(parentDir + '/.', '');
+          pendingPromises.push(ctx.fs.mkdir(parentDir, { recursive: true }).catch(() => {}));
         }
       }
       return fd;
@@ -359,9 +365,12 @@ export function createFsModule(deps: FsDeps): any {
       const fdInfo = (globalThis as any).__shiroFds?.[fd];
       if (!fdInfo) return 0;
       const content = fileCache.get(fdInfo.path) || '';
+      if (fdInfo.path.includes('/tasks/') && fdInfo.path.includes('.output')) {
+        console.warn(`[fs-debug] readSync fd=${fd} path=${fdInfo.path} content=${content.length}bytes offset=${fdInfo.offset}`);
+      }
       const bytes = new TextEncoder().encode(content);
       const pos = position ?? fdInfo.offset;
-      const len = Math.min(length ?? buf.length, bytes.length - pos);
+      const len = Math.min(length ?? buf.length, Math.max(0, bytes.length - pos));
       for (let i = 0; i < len; i++) buf[(offset ?? 0) + i] = bytes[pos + i];
       fdInfo.offset = pos + len;
       return len;

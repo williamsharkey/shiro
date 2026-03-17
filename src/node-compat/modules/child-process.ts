@@ -545,6 +545,11 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
         child.exitCode = r.exitCode;
         (events['close'] || []).forEach(fn => fn(r.exitCode, null));
         (events['exit'] || []).forEach(fn => fn(r.exitCode, null));
+        if (stdioOutFd !== null) {
+          const fds2 = (globalThis as any).__shiroFds;
+          const outPath = fds2?.[stdioOutFd]?.path;
+          console.warn(`[spawn-debug] child resolved: exitCode=${r.exitCode} stdout=${(r.stdout||'').length}b outFd=${stdioOutFd} outPath=${outPath} fileCache=${outPath ? (fileCache.get(outPath)||'').length + 'b' : 'n/a'}`);
+        }
         _resolveChild?.({ stdout: r.stdout || '', stderr: r.stderr || '', exitCode: r.exitCode });
       }).catch((err) => {
         (events['error'] || []).forEach(fn => fn(new Error(`spawn ${cmd} failed`)));
