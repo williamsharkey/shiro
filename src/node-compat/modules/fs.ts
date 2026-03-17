@@ -376,7 +376,11 @@ export function createFsModule(deps: FsDeps): any {
       return len;
     },
     closeSync: (fd: number) => {
-      if ((globalThis as any).__shiroFds?.[fd]) delete (globalThis as any).__shiroFds[fd];
+      const fdInfo = (globalThis as any).__shiroFds?.[fd];
+      if (fdInfo?.path?.includes('/tasks/')) {
+        console.warn(`[fs-debug] closeSync fd=${fd} path=${fdInfo.path} (content in cache: ${(fileCache.get(fdInfo.path)||'').length}b)`);
+      }
+      if (fdInfo) delete (globalThis as any).__shiroFds[fd];
     },
     fsyncSync: () => {},
     fdatasyncSync: () => {},
@@ -477,12 +481,19 @@ export function createFsModule(deps: FsDeps): any {
     // Callback-style async fs methods (used by graceful-fs, fs-extra)
     readFile: (p: string, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const opts2 = typeof optsOrCb === 'function' ? undefined : optsOrCb;
+      const resolved = typeof p === 'number'
+        ? ((globalThis as any).__shiroFds?.[p]?.path || '')
+        : ctx.fs.resolvePath(String(p), ctx.cwd);
+      if (resolved.includes('/tasks/') && resolved.includes('.output')) {
+        console.warn(`[fs-debug] fs.readFile(cb): ${resolved} (fileCache: ${fileCache.has(resolved) ? (fileCache.get(resolved)||'').length + 'b' : 'miss'})`);
+      }
       // Check fileCache first — sync writes may have updated it
       const cached = fileCache.get(resolved);
       if (cached !== undefined) {
-        // Use queueMicrotask for consistent async behavior
-        queueMicrotask(() => callback?.(null, cached));
+        const encoding = typeof opts2 === 'string' ? opts2 : opts2?.encoding;
+        const result = encoding ? cached : FakeBuffer.from(cached);
+        queueMicrotask(() => callback?.(null, result));
         return;
       }
       ctx.fs.readFile(resolved, 'utf8')
@@ -691,13 +702,20 @@ export function createFsModule(deps: FsDeps): any {
     },
     read: (fd: number, buf: any, off: number, len: number, pos: any, cb?: any) => {
       const fdInfo = (globalThis as any).__shiroFds?.[fd];
-      if (!fdInfo) { cb?.(null, 0, buf); return; }
+      if (!fdInfo) {
+        console.warn(`[fs-debug] fs.read fd=${fd} — fd NOT found (closed?), returning 0 bytes`);
+        cb?.(null, 0, buf);
+        return;
+      }
       const content = fileCache.get(fdInfo.path) || '';
       const bytes = new TextEncoder().encode(content);
       const p2 = pos ?? fdInfo.offset;
-      const n = Math.min(len, bytes.length - p2);
+      const n = Math.min(len, Math.max(0, bytes.length - p2));
       for (let i = 0; i < n; i++) buf[(off ?? 0) + i] = bytes[p2 + i];
       fdInfo.offset = p2 + n;
+      if (fdInfo.path.includes('/tasks/') && fdInfo.path.includes('.output')) {
+        console.warn(`[fs-debug] fs.read fd=${fd} path=${fdInfo.path} → ${n} bytes (content=${content.length}b, pos=${p2})`);
+      }
       cb?.(null, n, buf);
     },
     write: (fd: number, buf: any, off: number, len: number, pos: any, cb?: any) => {
@@ -795,8 +813,13 @@ export function createFsModule(deps: FsDeps): any {
     },
     // Async promises API
     promises: {
-      readFile: async (p: string, opts?: any) => {
-        const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      readFile: async (p: string | number, opts?: any) => {
+        const resolved = typeof p === 'number'
+          ? ((globalThis as any).__shiroFds?.[p]?.path || ctx.fs.resolvePath(String(p), ctx.cwd))
+          : ctx.fs.resolvePath(String(p), ctx.cwd);
+        if (resolved.includes('/tasks/') && resolved.includes('.output')) {
+          console.warn(`[fs-debug] fsShim.promises.readFile: ${resolved} (fileCache: ${fileCache.has(resolved) ? (fileCache.get(resolved)||'').length + 'b' : 'miss'})`);
+        }
         const encoding = typeof opts === 'string' ? opts : opts?.encoding;
         // Check fileCache first (may have data from writeFileSync not yet flushed)
         const cached = fileCache.get(resolved);
@@ -913,8 +936,13 @@ export function createFsPromisesModule(deps: FsDeps): any {
 
   // Async fs promises API
   return {
-    readFile: async (p: string, opts?: any) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+    readFile: async (p: string | number, opts?: any) => {
+      const resolved = typeof p === 'number'
+        ? ((globalThis as any).__shiroFds?.[p]?.path || ctx.fs.resolvePath(String(p), ctx.cwd))
+        : ctx.fs.resolvePath(String(p), ctx.cwd);
+      if (resolved.includes('/tasks/') && resolved.includes('.output')) {
+        console.warn(`[fs-debug] promises.readFile: ${resolved} (fileCache: ${fileCache.has(resolved) ? (fileCache.get(resolved)||'').length + 'b' : 'miss'})`);
+      }
       // Check fileCache first (may have data from writeFileSync not yet flushed)
       const cached = fileCache.get(resolved);
       const encoding = typeof opts === 'string' ? opts : opts?.encoding;
