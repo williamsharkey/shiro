@@ -92,6 +92,49 @@ export function createStreamModule(): any {
     pipeline: async (...streams: any[]) => streams[streams.length - 1],
     finished: async () => {},
   };
+  streamModule.consumers = {
+    arrayBuffer: async (stream: any) => {
+      const chunks: any[] = [];
+      for await (const chunk of stream) chunks.push(chunk);
+      const totalLength = chunks.reduce((acc: number, c: any) => acc + (c.byteLength || c.length || 0), 0);
+      const result = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        const bytes = typeof chunk === 'string' ? new TextEncoder().encode(chunk) : new Uint8Array(chunk.buffer || chunk);
+        result.set(bytes, offset);
+        offset += bytes.length;
+      }
+      return result.buffer;
+    },
+    blob: async (stream: any) => {
+      const chunks: any[] = [];
+      for await (const chunk of stream) chunks.push(chunk);
+      return new Blob(chunks);
+    },
+    buffer: async (stream: any) => {
+      const chunks: any[] = [];
+      for await (const chunk of stream) chunks.push(typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk);
+      const totalLength = chunks.reduce((acc: number, c: any) => acc + (c.byteLength || c.length || 0), 0);
+      const result = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        const bytes = new Uint8Array(chunk.buffer || chunk);
+        result.set(bytes, offset);
+        offset += bytes.length;
+      }
+      return result;
+    },
+    json: async (stream: any) => {
+      let text = '';
+      for await (const chunk of stream) text += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
+      return JSON.parse(text);
+    },
+    text: async (stream: any) => {
+      let text = '';
+      for await (const chunk of stream) text += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
+      return text;
+    },
+  };
   // Make the module itself a constructor (for `const Stream = require('stream')`)
   streamModule.default = Stream;
   // Node.js stream module is itself a constructor with a prototype

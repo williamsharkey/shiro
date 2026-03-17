@@ -228,7 +228,7 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
           'assert', 'async_hooks', 'buffer', 'child_process', 'constants', 'crypto',
           'diagnostics_channel', 'dns', 'events', 'fs', 'fs/promises', 'http', 'https',
           'module', 'net', 'os', 'path', 'perf_hooks', 'process', 'querystring',
-          'readline', 'stream', 'stream/promises', 'string_decoder', 'timers', 'timers/promises', 'tls',
+          'readline', 'stream', 'stream/consumers', 'stream/promises', 'string_decoder', 'timers', 'timers/promises', 'tls',
           'tty', 'url', 'util', 'v8', 'worker_threads', 'zlib',
         ],
         isBuiltin: (name: string) => {

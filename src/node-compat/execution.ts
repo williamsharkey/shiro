@@ -132,6 +132,8 @@ export async function executeNodeScript(
         case 'node:stream': return createStreamModule();
         case 'stream/promises':
         case 'node:stream/promises': return createStreamModule().promises;
+        case 'stream/consumers':
+        case 'node:stream/consumers': return createStreamModule().consumers;
         case 'crypto':
         case 'node:crypto': return createCryptoModule({ sha256sync, sha1sync, fnvHash, FakeBuffer });
         case 'http':
