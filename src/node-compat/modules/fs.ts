@@ -37,6 +37,9 @@ export function createFsModule(deps: FsDeps): any {
         if (cached !== undefined) fileCache.set(resolved, cached); // promote to fileCache
       }
       if (cached === undefined) {
+          if (resolved.includes('/tasks/') || resolved.includes('/tmp/claude')) {
+            console.warn(`[fs-debug] readFileSync ENOENT: ${resolved} (fileCache size: ${fileCache.size}, has task dirs: ${[...fileCache.keys()].filter(k => k.includes('/tasks/')).length})`);
+          }
           throw fsError('ENOENT', `ENOENT: no such file or directory, open '${p}'`, 'open', p);
       }
       const encoding = typeof opts === 'string' ? opts : opts?.encoding;
@@ -48,6 +51,9 @@ export function createFsModule(deps: FsDeps): any {
       tickSyncOps();
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       const strData = typeof data === 'string' ? data : new TextDecoder().decode(data);
+      if (resolved.includes('/tasks/') || resolved.includes('/tmp/claude')) {
+        console.warn(`[fs-debug] writeFileSync: ${resolved} (${strData.length} bytes)`);
+      }
       fileCache.set(resolved, strData);
       fileMtimes.set(resolved, Date.now());
       // Skip IDB write for .tmp files — they're transient atomic-write intermediaries.
@@ -312,6 +318,9 @@ export function createFsModule(deps: FsDeps): any {
       (globalThis as any).__shiroFds = (globalThis as any).__shiroFds || {};
       const f = flags || 'r';
       (globalThis as any).__shiroFds[fd] = { path: resolved, flags: f, offset: 0 };
+      if (resolved.includes('/tasks/') || resolved.includes('/tmp/claude')) {
+        console.warn(`[fs-debug] openSync: ${resolved} flags=${f} → fd=${fd}`);
+      }
       // 'w' / 'w+' / 'wx' flags truncate the file on open (POSIX behavior)
       if (f.includes('w')) {
         fileCache.set(resolved, '');
@@ -350,6 +359,9 @@ export function createFsModule(deps: FsDeps): any {
     utimesSync: () => {},
     rmSync: (p: string, opts?: any) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      if (resolved.includes('/tmp/claude')) {
+        console.warn(`[fs-debug] rmSync: ${resolved} (recursive: ${!!opts?.recursive})`);
+      }
       if (opts?.recursive) {
         // Remove directory and all contents from fileCache + IDB
         const prefix = resolved + '/';
