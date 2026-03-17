@@ -520,9 +520,11 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
         // Write output to stdio file paths FIRST (before emitting events, because
         // event handlers may call closeSync which deletes the fd→path mapping).
         // We use stdioOutPath/stdioErrPath captured at spawn time.
+        console.warn(`[spawn-debug] WRITE: stdioOutPath=${stdioOutPath} stdout=${(r.stdout||'').length}b stderr=${(r.stderr||'').length}b`);
         if (stdioOutPath) {
           const existing = fileCache.get(stdioOutPath) || '';
           const newContent = existing + (r.stdout || '') + (stdioErrFd === stdioOutFd ? (r.stderr || '') : '');
+          console.warn(`[spawn-debug] Writing ${newContent.length}b to ${stdioOutPath}`);
           fileCache.set(stdioOutPath, newContent);
           fileMtimes.set(stdioOutPath, Date.now());
           pendingPromises.push(ctx.fs.writeFile(stdioOutPath, newContent).catch(() => {}));
