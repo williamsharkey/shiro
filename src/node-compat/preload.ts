@@ -95,17 +95,19 @@ export async function preloadEnvironment(
     console.warn(`[wal] Replay error: ${e.message}`);
   }
 
-  // Clean up stale .tmp files from atomic writes
-  try {
-    const homeEntries = await ctx.fs.readdir(homeDir);
-    let tmpCleaned = 0;
-    for (const name of homeEntries) {
-      if (name.includes('.tmp.')) {
-        try { await ctx.fs.unlink(homeDir + '/' + name); tmpCleaned++; } catch {}
+  // Clean up stale .tmp files from atomic writes (home dir + .claude dir)
+  for (const cleanDir of [homeDir, homeDir + '/.claude']) {
+    try {
+      const entries = await ctx.fs.readdir(cleanDir);
+      let tmpCleaned = 0;
+      for (const name of entries) {
+        if (name.includes('.tmp.')) {
+          try { await ctx.fs.unlink(cleanDir + '/' + name); tmpCleaned++; } catch {}
+        }
       }
-    }
-    if (tmpCleaned) console.warn(`[init] Cleaned ${tmpCleaned} stale .tmp files from ${homeDir}`);
-  } catch {}
+      if (tmpCleaned) console.warn(`[init] Cleaned ${tmpCleaned} stale .tmp files from ${cleanDir}`);
+    } catch {}
+  }
 
   // Create essential directories
   try { await ctx.fs.mkdir(homeDir + '/.claude', { recursive: true }); } catch {}
@@ -113,9 +115,30 @@ export async function preloadEnvironment(
   try { await ctx.fs.mkdir(homeDir + '/.claude/statsig', { recursive: true }); } catch {}
   try { await ctx.fs.mkdir(homeDir + '/.config', { recursive: true }); } catch {}
 
-  // Create minimal Claude Code settings if not present
-  try { await ctx.fs.stat(homeDir + '/.claude/settings.json'); } catch {
-    try { await ctx.fs.writeFile(homeDir + '/.claude/settings.json', '{}'); } catch {}
+  // Ensure Claude Code settings has proper permissions structure
+  {
+    const settingsPath = homeDir + '/.claude/settings.json';
+    let settings: any = {};
+    try {
+      const existing = await ctx.fs.readFile(settingsPath, 'utf8');
+      settings = JSON.parse(existing as string);
+    } catch { /* file doesn't exist or invalid JSON */ }
+    // Add permissions block if missing (required by newer Claude Code versions)
+    if (!settings.permissions) {
+      settings.permissions = {
+        allow: [
+          "Bash", "Read", "Edit", "Write", "WebFetch", "WebSearch",
+          "Glob", "Grep", "mcp__*"
+        ],
+        deny: []
+      };
+      try { await ctx.fs.writeFile(settingsPath, JSON.stringify(settings, null, 2)); } catch {}
+    }
+    // Remove legacy/unrecognized keys that /doctor flags
+    if (settings.skipDangerousModePermissionPrompt !== undefined) {
+      delete settings.skipDangerousModePermissionPrompt;
+      try { await ctx.fs.writeFile(settingsPath, JSON.stringify(settings, null, 2)); } catch {}
+    }
   }
   try { await ctx.fs.stat(homeDir + '/.claude/statsig/cache.json'); } catch {
     try { await ctx.fs.writeFile(homeDir + '/.claude/statsig/cache.json', '{}'); } catch {}

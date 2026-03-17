@@ -403,11 +403,30 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       return child;
     },
     spawn: (cmd: string, args?: string[], opts?: any) => {
+      // Handle overload: spawn(cmd, opts) without args
+      if (args && !Array.isArray(args)) { opts = args; args = undefined; }
       let fullCmd: string;
       if (isShellBin(cmd) && args) {
         fullCmd = extractShellArgs(args);
       } else {
         fullCmd = args ? `${cmd} ${shellQuoteArgs(args)}` : cmd;
+      }
+      // Handle cwd option
+      if (opts?.cwd) {
+        fullCmd = `cd ${shellQuoteArg(String(opts.cwd))} && ${fullCmd}`;
+      }
+      // Detect stdio file descriptors — Claude Code's Bash tool opens output files
+      // and passes them as stdio[1]/stdio[2]. We detect fd-like objects with .fd property
+      // or 'pipe'/'inherit' strings and write output to the file after execution.
+      let stdioOutFd: number | null = null;
+      let stdioErrFd: number | null = null;
+      if (opts?.stdio && Array.isArray(opts.stdio)) {
+        const s1 = opts.stdio[1];
+        const s2 = opts.stdio[2];
+        if (s1 && typeof s1 === 'object' && typeof s1.fd === 'number') stdioOutFd = s1.fd;
+        else if (typeof s1 === 'number') stdioOutFd = s1;
+        if (s2 && typeof s2 === 'object' && typeof s2.fd === 'number') stdioErrFd = s2.fd;
+        else if (typeof s2 === 'number') stdioErrFd = s2;
       }
       const events: Record<string, Function[]> = {};
       const stdoutEvents: Record<string, Function[]> = {};

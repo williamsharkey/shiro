@@ -11,6 +11,16 @@ export interface FsDeps {
   homeDir: string;
 }
 
+/** Create a Node.js-style fs error with code, errno, syscall properties */
+function fsError(code: string, message: string, syscall?: string, path?: string): Error {
+  const err: any = new Error(message);
+  err.code = code;
+  err.errno = code === 'ENOENT' ? -2 : code === 'EEXIST' ? -17 : code === 'EISDIR' ? -21 : code === 'ENOTDIR' ? -20 : code === 'EACCES' ? -13 : -1;
+  if (syscall) err.syscall = syscall;
+  if (path) err.path = path;
+  return err;
+}
+
 export function createFsModule(deps: FsDeps): any {
   const { ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir } = deps;
 
@@ -27,7 +37,7 @@ export function createFsModule(deps: FsDeps): any {
         if (cached !== undefined) fileCache.set(resolved, cached); // promote to fileCache
       }
       if (cached === undefined) {
-          throw new Error(`ENOENT: no such file or directory, open '${p}'`);
+          throw fsError('ENOENT', `ENOENT: no such file or directory, open '${p}'`, 'open', p);
       }
       const encoding = typeof opts === 'string' ? opts : opts?.encoding;
       if (encoding === 'utf8' || encoding === 'utf-8' || encoding === 'utf8') return cached;
@@ -81,7 +91,7 @@ export function createFsModule(deps: FsDeps): any {
       }
       if (!isFile && !isDir) {
         if (opts?.throwIfNoEntry === false) return undefined;
-        throw new Error(`ENOENT: no such file or directory, stat '${p}'`);
+        throw fsError('ENOENT', `ENOENT: no such file or directory, stat '${p}'`, 'stat', p);
       }
       const mtime = new Date(fileMtimes.get(resolved) || Date.now());
       const size = isFile ? (fileCache.get(resolved) || '').length : 0;
@@ -199,7 +209,10 @@ export function createFsModule(deps: FsDeps): any {
       pendingPromises.push(ctx.fs.mkdir(resolved, opts).catch(() => {}));
     },
     unlinkSync: (p: string) => {
-      ctx.fs.unlink(ctx.fs.resolvePath(p, ctx.cwd)).catch(() => {});
+      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      fileCache.delete(resolved);
+      fileMtimes.delete(resolved);
+      pendingPromises.push(ctx.fs.unlink(resolved).catch(() => {}));
     },
     copyFileSync: (src: string, dst: string) => {
       const srcRes = ctx.fs.resolvePath(src, ctx.cwd);
@@ -252,7 +265,7 @@ export function createFsModule(deps: FsDeps): any {
       // Verify path exists (file or directory)
       const isFile = fileCache.has(resolved);
       const isDir = [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
-      if (!isFile && !isDir) throw new Error(`ENOENT: no such file or directory, realpath '${p}'`);
+      if (!isFile && !isDir) throw fsError('ENOENT', `ENOENT: no such file or directory, realpath '${p}'`, 'realpath', p);
       return resolved;
     },
     accessSync: (p: string) => {
@@ -260,7 +273,7 @@ export function createFsModule(deps: FsDeps): any {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       const isFile = fileCache.has(resolved);
       const isDir = [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
-      if (!isFile && !isDir) throw new Error(`ENOENT: no such file or directory, access '${p}'`);
+      if (!isFile && !isDir) throw fsError('ENOENT', `ENOENT: no such file or directory, access '${p}'`, 'access', p);
     },
     lstatSync: (p: string, opts?: any) => {
       tickSyncOps();
@@ -269,7 +282,7 @@ export function createFsModule(deps: FsDeps): any {
       const isDir = [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
       if (!isFile && !isDir) {
         if (opts?.throwIfNoEntry === false) return undefined;
-        throw new Error(`ENOENT: no such file or directory, lstat '${p}'`);
+        throw fsError('ENOENT', `ENOENT: no such file or directory, lstat '${p}'`, 'lstat', p);
       }
       const mtime = new Date(fileMtimes.get(resolved) || Date.now());
       const size = isFile ? (fileCache.get(resolved) || '').length : 0;
@@ -338,16 +351,26 @@ export function createFsModule(deps: FsDeps): any {
     rmSync: (p: string, opts?: any) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       if (opts?.recursive) {
-        // Remove directory and all contents
+        // Remove directory and all contents from fileCache + IDB
         const prefix = resolved + '/';
+        const now = Date.now();
         for (const key of [...fileCache.keys()]) {
           if (key === resolved || key.startsWith(prefix)) {
+            // Protect recently-written task output files from startup cleanup race.
+            // Claude Code's startup purges other sessions' /tmp/claude-* dirs, but
+            // the current session may have just written output files there.
+            const mtime = fileMtimes.get(key);
+            if (mtime && (now - mtime) < 30000 && key.includes('/tasks/')) {
+              continue; // skip files written in the last 30 seconds under tasks/
+            }
             fileCache.delete(key);
+            fileMtimes.delete(key);
             ctx.fs.unlink(key).catch(() => {});
           }
         }
       } else {
         fileCache.delete(resolved);
+        fileMtimes.delete(resolved);
         ctx.fs.unlink(resolved).catch(() => {});
       }
     },
@@ -576,7 +599,10 @@ export function createFsModule(deps: FsDeps): any {
         .catch((e: any) => callback?.(e));
     },
     unlink: (p: string, cb?: any) => {
-      ctx.fs.unlink(ctx.fs.resolvePath(p, ctx.cwd))
+      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      fileCache.delete(resolved);
+      fileMtimes.delete(resolved);
+      ctx.fs.unlink(resolved)
         .then(() => cb?.(null))
         .catch((e: any) => cb?.(e));
     },
@@ -593,7 +619,7 @@ export function createFsModule(deps: FsDeps): any {
     access: (p: string, modeOrCb?: any, cb?: any) => {
       const callback = typeof modeOrCb === 'function' ? modeOrCb : cb;
       ctx.fs.exists(ctx.fs.resolvePath(p, ctx.cwd))
-        .then((exists: boolean) => exists ? callback?.(null) : callback?.(new Error(`ENOENT: no such file or directory, access '${p}'`)))
+        .then((exists: boolean) => exists ? callback?.(null) : callback?.(fsError('ENOENT', `ENOENT: no such file or directory, access '${p}'`, 'access', p)))
         .catch((e: any) => callback?.(e));
     },
     chmod: (_p: string, _m: any, cb?: any) => { cb?.(null); },
@@ -819,12 +845,12 @@ export function createFsModule(deps: FsDeps): any {
         return ctx.fs.stat(resolved);
       },
       mkdir: async (p: string, opts?: any) => ctx.fs.mkdir(ctx.fs.resolvePath(p, ctx.cwd), opts),
-      unlink: async (p: string) => ctx.fs.unlink(ctx.fs.resolvePath(p, ctx.cwd)),
+      unlink: async (p: string) => { const r = ctx.fs.resolvePath(p, ctx.cwd); fileCache.delete(r); fileMtimes.delete(r); return ctx.fs.unlink(r); },
       access: async (p: string) => {
         const resolved = ctx.fs.resolvePath(p, ctx.cwd);
         if (fileCache.has(resolved) || fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readCached(resolved) !== undefined || ctx.fs.readdirCached(resolved) !== undefined) return;
         const exists = await ctx.fs.exists(resolved);
-        if (!exists) throw new Error(`ENOENT: no such file or directory, access '${p}'`);
+        if (!exists) throw fsError('ENOENT', `ENOENT: no such file or directory, access '${p}'`, 'access', p);
       },
     },
   };
@@ -965,10 +991,14 @@ export function createFsPromisesModule(deps: FsDeps): any {
     },
     unlink: async (p: string) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      fileCache.delete(resolved);
+      fileMtimes.delete(resolved);
       await ctx.fs.unlink(resolved);
     },
     rm: async (p: string, opts?: any) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      fileCache.delete(resolved);
+      fileMtimes.delete(resolved);
       await ctx.fs.unlink(resolved);
     },
     access: async (p: string) => {
@@ -976,7 +1006,7 @@ export function createFsPromisesModule(deps: FsDeps): any {
       // Check fileCache/dirs before going to IDB
       if (fileCache.has(resolved) || fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readCached(resolved) !== undefined || ctx.fs.readdirCached(resolved) !== undefined) return;
       const exists = await ctx.fs.exists(resolved);
-      if (!exists) throw new Error(`ENOENT: no such file or directory, access '${p}'`);
+      if (!exists) throw fsError('ENOENT', `ENOENT: no such file or directory, access '${p}'`, 'access', p);
     },
     lstat: async (p: string) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
