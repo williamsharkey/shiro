@@ -366,6 +366,21 @@ export const openCmd: Command = {
     for (const target of targets) {
       // URL?
       if (/^https?:\/\//.test(target)) {
+        // Intercept OAuth URLs — rewrite redirect_uri for manual code flow
+        // and show clickable links instead of opening a window that won't work
+        if (target.includes('claude.ai/oauth/')) {
+          const fixedUrl = target.replace(
+            /redirect_uri=http%3A%2F%2Flocalhost%3A\d+%2F[^&]*/,
+            'redirect_uri=' + encodeURIComponent('https://platform.claude.com/oauth/code/callback')
+          );
+          if (ctx.terminal) {
+            const openBtn = `\x1b]8;;${fixedUrl}\x07\x1b[1;36m[ Open in Browser ]\x1b[0m\x1b]8;;\x07`;
+            ctx.terminal.writeOutput(`\r\n  ${openBtn}\r\n`);
+          } else {
+            if (typeof window !== 'undefined') window.open(fixedUrl, '_blank');
+          }
+          continue;
+        }
         if (typeof window !== 'undefined') window.open(target, '_blank');
         continue;
       }

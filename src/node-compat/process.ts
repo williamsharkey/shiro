@@ -155,10 +155,14 @@ function createStdout(ctx: CommandContext, stdoutBuf: string[], _st: SharedState
     write: (s: string | Uint8Array, encodingOrCb?: string | Function, cb?: Function) => {
       let str = typeof s === 'string' ? s : new TextDecoder().decode(s);
       // Detect OAuth URL in Claude Code login flow and append a clickable link
+      // Fix redirect_uri from localhost to manual code flow
       const oauthMatch = str.match(/(https:\/\/claude\.ai\/oauth\/authorize\S+)/);
       if (oauthMatch && ctx.terminal) {
-        const url = oauthMatch[1];
-        str += `\r\n\r\n  \x1b]8;;${url}\x07\x1b[1;36m[ Click here to sign in ]\x1b[0m\x1b]8;;\x07\r\n`;
+        const fixedUrl = oauthMatch[1].replace(
+          /redirect_uri=http%3A%2F%2Flocalhost%3A\d+%2F[^&]*/,
+          'redirect_uri=' + encodeURIComponent('https://platform.claude.com/oauth/code/callback')
+        );
+        str += `\r\n\r\n  \x1b]8;;${fixedUrl}\x07\x1b[1;36m[ Click here to sign in ]\x1b[0m\x1b]8;;\x07\r\n`;
       }
       stdoutBuf.push(str);
       // Stream to terminal in real-time if available
