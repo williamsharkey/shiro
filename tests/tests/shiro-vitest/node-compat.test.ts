@@ -883,6 +883,28 @@ describe('Node.js Module Compatibility', () => {
       expect(exitCode).toBe(0);
       expect(ctx.stdout).toContain('content:spawn-file-output');
     });
+
+    it('await child waits for stdio-backed output to be durable in Shiro FS', async () => {
+      const ctx = createCtx(shell, fs, ['-e', [
+        'const cp = require("child_process");',
+        'const fs = require("fs");',
+        'const outPath = "/tmp/nc-cp-spawn-durable.output";',
+        'const origWriteFile = shiro.fs.writeFile.bind(shiro.fs);',
+        'shiro.fs.writeFile = async (...args) => {',
+        '  await new Promise(resolve => setTimeout(resolve, 25));',
+        '  return origWriteFile(...args);',
+        '};',
+        'const fd = fs.openSync(outPath, fs.constants.O_CREAT | fs.constants.O_APPEND | fs.constants.O_WRONLY);',
+        'const child = cp.spawn("/bin/sh", ["-lc", "echo durable-output"], { stdio: ["ignore", fd, fd] });',
+        'fs.closeSync(fd);',
+        'await child;',
+        'const durable = await shiro.fs.readFile(outPath, "utf8");',
+        'console.log("durable:" + String(durable).trim());',
+      ].join('\n')]);
+      const exitCode = await nodeCmd.exec(ctx);
+      expect(exitCode).toBe(0);
+      expect(ctx.stdout).toContain('durable:durable-output');
+    });
   });
 
   // ─── url module (~6 tests) ─────────────────────────────────────────────

@@ -517,6 +517,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
             setTimeout(() => resolve({ stdout: '', stderr: '', exitCode: 0 }), 0))
         : execAsync(fullCmd);
       const p = cmdPromise.then(r => {
+        const writePromises: Promise<any>[] = [];
         // Write output to stdio file paths FIRST (before emitting events, because
         // event handlers may call closeSync which deletes the fd→path mapping).
         // We use stdioOutPath/stdioErrPath captured at spawn time.
@@ -527,25 +528,31 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
           console.warn(`[spawn-debug] Writing ${newContent.length}b to ${stdioOutPath}`);
           fileCache.set(stdioOutPath, newContent);
           fileMtimes.set(stdioOutPath, Date.now());
-          pendingPromises.push(ctx.fs.writeFile(stdioOutPath, newContent).catch(() => {}));
+          const flush = ctx.fs.writeFile(stdioOutPath, newContent).catch(() => {});
+          pendingPromises.push(flush);
+          writePromises.push(flush);
         }
         if (stdioErrPath) {
           const existing = fileCache.get(stdioErrPath) || '';
           const newContent = existing + (r.stderr || '');
           fileCache.set(stdioErrPath, newContent);
           fileMtimes.set(stdioErrPath, Date.now());
-          pendingPromises.push(ctx.fs.writeFile(stdioErrPath, newContent).catch(() => {}));
+          const flush = ctx.fs.writeFile(stdioErrPath, newContent).catch(() => {});
+          pendingPromises.push(flush);
+          writePromises.push(flush);
         }
-        if (r.stdout) (stdoutEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(r.stdout)));
-        (stdoutEvents['end'] || []).forEach(fn => fn());
-        (stdoutEvents['close'] || []).forEach(fn => fn());
-        if (r.stderr) (stderrEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(r.stderr)));
-        (stderrEvents['end'] || []).forEach(fn => fn());
-        (stderrEvents['close'] || []).forEach(fn => fn());
-        child.exitCode = r.exitCode;
-        (events['close'] || []).forEach(fn => fn(r.exitCode, null));
-        (events['exit'] || []).forEach(fn => fn(r.exitCode, null));
-        _resolveChild?.({ stdout: r.stdout || '', stderr: r.stderr || '', exitCode: r.exitCode });
+        return Promise.all(writePromises).then(() => {
+          if (r.stdout) (stdoutEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(r.stdout)));
+          (stdoutEvents['end'] || []).forEach(fn => fn());
+          (stdoutEvents['close'] || []).forEach(fn => fn());
+          if (r.stderr) (stderrEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(r.stderr)));
+          (stderrEvents['end'] || []).forEach(fn => fn());
+          (stderrEvents['close'] || []).forEach(fn => fn());
+          child.exitCode = r.exitCode;
+          (events['close'] || []).forEach(fn => fn(r.exitCode, null));
+          (events['exit'] || []).forEach(fn => fn(r.exitCode, null));
+          _resolveChild?.({ stdout: r.stdout || '', stderr: r.stderr || '', exitCode: r.exitCode });
+        });
       }).catch((err) => {
         (events['error'] || []).forEach(fn => fn(new Error(`spawn ${cmd} failed`)));
         (events['close'] || []).forEach(fn => fn(1, null));
