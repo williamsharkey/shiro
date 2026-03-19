@@ -10,6 +10,7 @@ import {
   diffCommits, diffStaged, formatCommit,
   type DiffOpts,
 } from './git-utils';
+import { getShiroOrigin } from '../utils/shiro-origin';
 
 // --- Main command ---
 
@@ -508,7 +509,7 @@ export const gitCmd: Command = {
           }
           ctx.stdout = `Cloning into '${repoName}'...\n`;
 
-          const corsProxy = ctx.env['GIT_CORS_PROXY'] || (typeof location !== 'undefined' ? location.origin + '/git-proxy' : 'https://cors.isomorphic-git.org');
+          const corsProxy = ctx.env['GIT_CORS_PROXY'] || `${getShiroOrigin()}/git-proxy`;
           const token = ctx.env['GITHUB_TOKEN'] || (typeof localStorage !== 'undefined' ? localStorage.getItem('shiro_github_token') || '' : '');
           try {
             await Promise.race([
@@ -902,7 +903,7 @@ function parseRemoteArgs(ctx: CommandContext): { remote: string; ref: string; to
 
   const token = ctx.env['GITHUB_TOKEN']
     || (typeof localStorage !== 'undefined' ? localStorage.getItem('shiro_github_token') || '' : '');
-  const corsProxy = ctx.env['GIT_CORS_PROXY'] || (typeof location !== 'undefined' ? location.origin + '/git-proxy' : 'https://cors.isomorphic-git.org');
+  const corsProxy = ctx.env['GIT_CORS_PROXY'] || `${getShiroOrigin()}/git-proxy`;
 
   return { remote, ref, token, corsProxy };
 }

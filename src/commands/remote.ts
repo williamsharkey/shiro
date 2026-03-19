@@ -1,6 +1,7 @@
 import { Command, CommandContext } from './index';
 import { Shell } from '../shell';
 import { createRemotePanel, type RemotePanel, type LogType } from '../remote-panel';
+import { getShiroOrigin } from '../utils/shiro-origin';
 
 // LocalStorage key for persisting remote session code across page reloads
 const REMOTE_CODE_KEY = 'shiro-remote-code';
@@ -88,7 +89,7 @@ function generateCode(): { full: string; display: string } {
 }
 
 // Signaling server URL — same origin, server.mjs handles /offer and /answer routes
-const SIGNALING_URL = location.origin;
+const SIGNALING_URL = getShiroOrigin();
 
 interface RemoteSession {
   code: string;

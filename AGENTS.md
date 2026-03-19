@@ -65,6 +65,7 @@ export const myCmd: Command = {
 - Claude auth/bootstrap lives in `src/commands/setup.ts`, `src/claude-config.ts`, `src/node-compat/preload.ts`, and `src/node-compat/process.ts`.
 - Shiro pre-seeds trust/onboarding/bypass settings for Claude Code.
 - Browser-hosted Claude is more stable with conservative runtime defaults. Prefer serial/single-lane behavior over background worker fan-out unless you have verified a broader mode works.
+- In `seed blob`, Claude runs cross-origin from the host page. Shiro-backed calls must resolve through the Shiro origin, not the parent site, and `server.mjs` CORS preflight handling must tolerate Claude headers like `x-app` and `x-stainless-*`.
 
 ## Build, Test, Deploy
 
@@ -82,8 +83,9 @@ Use focused vitest runs while iterating, then run the smallest meaningful verifi
 - `tests/tests/shiro-vitest/claude-bootstrap.test.ts`
 - `tests/tests/shiro-vitest/node-runtime.test.ts`
 - `tests/tests/shiro-vitest/new-features.test.ts`
+- `tests/tests/shiro-vitest/server-cors.test.ts`
 
-Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` handles build, upload, and restart.
+Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` handles build, upload, and restart, and it is the only place that should bump `build-number.txt`.
 
 ## Gotchas
 

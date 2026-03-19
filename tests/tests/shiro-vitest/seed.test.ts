@@ -587,10 +587,19 @@ describe('seed blob — self-contained clipboard snippet', () => {
     fs = env.fs;
     installClipboardMock();
 
-    (globalThis as any).fetch = async () => ({
-      text: async () => '/* mock content */',
-      ok: true,
-    });
+    (globalThis as any).fetch = async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('/src/main.ts')) {
+        return {
+          text: async () => 'console.log("mock main");',
+          ok: true,
+        };
+      }
+      return {
+        text: async () => '<!DOCTYPE html><html><head><title>seed test</title><script src="/src/main.ts" type="module"></script></head><body><div id="terminal"></div></body></html>',
+        ok: true,
+      };
+    };
   });
 
   afterEach(() => {
@@ -622,6 +631,7 @@ describe('seed blob — self-contained clipboard snippet', () => {
     expect(lastClipboardText).toContain('hcOuterAvailable:true');
     expect(lastClipboardText).toContain('sameOriginParentAccess:true');
     expect(lastClipboardText).toContain('context:buildContext()');
+    expect(lastClipboardText).toContain('shiro-seed-ready');
     expect(lastClipboardText).not.toContain('iframe.sandbox=');
   });
 
@@ -661,6 +671,90 @@ describe('seed blob — self-contained clipboard snippet', () => {
 
     const readme = await fs2.readFile('/home/user/README.md', 'utf8');
     expect(readme).toContain('# Test Readme');
+  });
+
+  it('should build blob HTML from canonical fetched markup and pin relative assets to the Shiro origin', async () => {
+    const terminal = document.createElement('div');
+    terminal.id = 'terminal';
+    terminal.innerHTML = '<div id="mutated-terminal">old output</div>';
+    document.body.appendChild(terminal);
+
+    try {
+      await run(shell, 'seed blob');
+      const snippet = lastClipboardText!;
+      const dcMatches = [...snippet.matchAll(/_dc\('([^']+)'\)/g)];
+      expect(dcMatches.length).toBe(3);
+
+      const html = await decompressB64(dcMatches[0][1]);
+      expect(html).toContain('<base href="http://shiro.test/">');
+      expect(html).toContain('<div id="terminal"></div>');
+      expect(html).not.toContain('mutated-terminal');
+    } finally {
+      terminal.remove();
+    }
+  });
+
+  it('should wait for a ready handshake before posting seed data to the blob iframe', async () => {
+    await run(shell, 'seed blob');
+    const snippet = lastClipboardText!;
+
+    const originalCreateElement = document.createElement.bind(document);
+    const originalAddEventListener = window.addEventListener.bind(window);
+    const messageListeners: Array<(event: any) => void> = [];
+    const posted: any[] = [];
+    let iframeEl: any = null;
+
+    document.createElement = ((tag: string) => {
+      const el = originalCreateElement(tag) as any;
+      if (tag === 'iframe') {
+        const childWindow = {
+          focus() {},
+          postMessage(payload: any) {
+            posted.push(payload);
+          },
+        };
+        Object.defineProperty(el, 'contentWindow', {
+          value: childWindow,
+          configurable: true,
+        });
+        el.focus = () => {};
+        iframeEl = el;
+      }
+      return el;
+    }) as typeof document.createElement;
+
+    window.addEventListener = ((type: string, listener: any, options?: any) => {
+      if (type === 'message') messageListeners.push(listener);
+      return originalAddEventListener(type, listener, options);
+    }) as typeof window.addEventListener;
+
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    (globalThis as any).URL.createObjectURL = () => 'blob:test-seed';
+    (globalThis as any).URL.revokeObjectURL = () => {};
+
+    try {
+      await (0, eval)(snippet);
+      expect(iframeEl).not.toBeNull();
+
+      await iframeEl.onload?.();
+      expect(posted.filter(msg => msg?.type === 'shiro-seed-v2')).toHaveLength(0);
+
+      const readyEvent = { data: { type: 'shiro-seed-ready' }, source: iframeEl.contentWindow };
+      for (const listener of messageListeners) listener(readyEvent);
+      for (let i = 0; i < 10 && !posted.some(msg => msg?.type === 'shiro-seed-v2'); i++) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+
+      const seedMessages = posted.filter(msg => msg?.type === 'shiro-seed-v2');
+      expect(seedMessages).toHaveLength(1);
+      expect(seedMessages[0]?.type).toBe('shiro-seed-v2');
+    } finally {
+      document.createElement = originalCreateElement;
+      window.addEventListener = originalAddEventListener;
+      (globalThis as any).URL.createObjectURL = originalCreateObjectURL;
+      (globalThis as any).URL.revokeObjectURL = originalRevokeObjectURL;
+    }
   });
 });
 

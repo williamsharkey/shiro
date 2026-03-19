@@ -7,6 +7,7 @@ import { ghReleaseHandler } from './gh-release';
 import { ghWorkflowHandler, ghRunHandler } from './gh-workflow';
 import { ghLabelHandler } from './gh-label';
 import { ghSearchHandler } from './gh-search';
+import { getShiroOrigin } from '../utils/shiro-origin';
 
 export function getToken(ctx: CommandContext): string {
   return ctx.env['GITHUB_TOKEN'] || ctx.env['GH_TOKEN']
@@ -28,7 +29,7 @@ export async function detectRepo(ctx: CommandContext): Promise<{ owner: string; 
 export async function ghApi(
   token: string, method: string, path: string, body?: any, extraHeaders?: Record<string, string>,
 ): Promise<{ status: number; data: any; headers: Headers }> {
-  const baseUrl = typeof location !== 'undefined' ? location.origin + '/api/github' : 'https://api.github.com';
+  const baseUrl = `${getShiroOrigin()}/api/github`;
   const url = path.startsWith('http') ? path : `${baseUrl}${path.startsWith('/') ? path : '/' + path}`;
   const headers: Record<string, string> = {
     'Accept': 'application/vnd.github+json',

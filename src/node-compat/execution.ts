@@ -32,6 +32,7 @@ import { createHttpModule, createHttpsModule, createHttp2Module } from './module
 import { createNetModule, createTlsModule } from './modules/net-tls';
 import { createMiscModule } from './modules/misc';
 import { createAppShim } from './shims/app-shims';
+import { getShiroOrigin } from '../utils/shiro-origin';
 
 /**
  * Execute a Node.js script in Shiro's browser-based JS VM.
@@ -232,7 +233,7 @@ export async function executeNodeScript(
     }
 
     // CORS proxy setup
-    const corsProxyOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+    const corsProxyOrigin = typeof window !== 'undefined' ? getShiroOrigin() : '';
     const corsProxyMap: [string, string][] = [
       ['https://api.anthropic.com/', '/api/anthropic/'],
       ['https://platform.claude.com/', '/api/platform/'],

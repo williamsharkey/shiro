@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node increment-build.js && tsc && vite build",
+    "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "cd tests && npx vitest run --config vitest.config.ts",
     "deploy": "bash deploy.sh"

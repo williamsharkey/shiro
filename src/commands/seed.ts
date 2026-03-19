@@ -1,5 +1,6 @@
 import { Command, CommandContext } from './index';
 import { captureTerminal, addOverlay, encodeGIF } from '../gif-encoder';
+import { getShiroOrigin } from '../utils/shiro-origin';
 
 /**
  * seed: Copy a Shiro seed to clipboard — full state snapshot
@@ -190,11 +191,21 @@ function buildSnippet(url: string, ndjson: string, storage: string, stats: SeedS
       createdAt:new Date().toISOString()
     };
   }
-  var seeded=false;
+  var seeded=false,seedReady=false;
+  function maybeSeed(){
+    if(seeded||!seedReady||!iframe.contentWindow)return;
+    seeded=true;
+    iframe.contentWindow.postMessage({type:'shiro-seed-v2',ndjson:SEED_FS,storage:SEED_STORAGE,context:buildContext()},'*');
+  }
+  window.addEventListener('message',function(e){
+    if(e.source===iframe.contentWindow&&e.data&&e.data.type==='shiro-seed-ready'){
+      seedReady=true;
+      maybeSeed();
+    }
+  });
   iframe.onload=function(){
     setTimeout(focusShiro,0);
-    if(seeded)return;seeded=true;
-    iframe.contentWindow.postMessage({type:'shiro-seed-v2',ndjson:SEED_FS,storage:SEED_STORAGE,context:buildContext()},'*');
+    maybeSeed();
   };
   /* HC bridge: lets the Shiro iframe run HC commands against the host DOM */
   (function(){
@@ -258,9 +269,49 @@ function buildTargetUrl(targetSubdomain?: string): string {
  * Replaces <link rel="stylesheet" href> with <style>content</style>
  */
 async function inlineDocument(): Promise<string> {
-  // Clone the document
-  const doc = document.cloneNode(true) as Document;
-  const baseUrl = window.location.origin;
+  const sourceUrl = window.location?.href || document.baseURI || 'https://shiro.computer/';
+  const sourceOrigin = (() => {
+    try {
+      return new URL(sourceUrl, 'https://shiro.computer/').origin;
+    } catch {
+      return 'https://shiro.computer';
+    }
+  })();
+  let doc: Document | null = null;
+
+  try {
+    const res = await fetch(sourceUrl, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const html = await res.text();
+    if (typeof DOMParser !== 'undefined') {
+      doc = new DOMParser().parseFromString(html, 'text/html');
+    }
+  } catch (e) {
+    console.warn(`Failed to fetch canonical HTML: ${sourceUrl}`, e);
+  }
+
+  if (!doc || !doc.documentElement) {
+    doc = document.cloneNode(true) as Document;
+  }
+
+  // Seeded blobs should boot from a clean app shell, not a clone of the
+  // current live xterm DOM or previously injected seed window.
+  doc.getElementById('shiro-seed')?.remove();
+  const terminalEl = doc.getElementById('terminal');
+  if (terminalEl) terminalEl.innerHTML = '';
+
+  let head = doc.head;
+  if (!head) {
+    head = doc.createElement('head');
+    doc.documentElement.insertBefore(head, doc.body || null);
+  }
+
+  let baseEl = head.querySelector('base');
+  if (!baseEl) {
+    baseEl = doc.createElement('base');
+    head.insertBefore(baseEl, head.firstChild);
+  }
+  baseEl.setAttribute('href', `${sourceOrigin}/`);
 
   // Find all external scripts
   const scripts = doc.querySelectorAll('script[src]');
@@ -269,7 +320,7 @@ async function inlineDocument(): Promise<string> {
     if (!src) continue;
 
     try {
-      const url = new URL(src, baseUrl).href;
+      const url = new URL(src, sourceUrl).href;
       const res = await fetch(url);
       const content = await res.text();
 
@@ -292,7 +343,7 @@ async function inlineDocument(): Promise<string> {
     if (!href) continue;
 
     try {
-      const url = new URL(href, baseUrl).href;
+      const url = new URL(href, sourceUrl).href;
       const res = await fetch(url);
       const content = await res.text();
 
@@ -412,11 +463,21 @@ function buildBlobSnippet(compressedHtmlB64: string, compressedFsB64: string, co
       createdAt:new Date().toISOString()
     };
   }
-  var seeded=false;
-  iframe.onload=async function(){
-    setTimeout(focusShiro,0);
-    if(seeded)return;seeded=true;
+  var seeded=false,seedReady=false;
+  async function maybeSeed(){
+    if(seeded||!seedReady||!iframe.contentWindow)return;
+    seeded=true;
     iframe.contentWindow.postMessage({type:'shiro-seed-v2',ndjson:await _fsP,storage:await _lsP,context:buildContext()},'*');
+  }
+  window.addEventListener('message',function(e){
+    if(e.source===iframe.contentWindow&&e.data&&e.data.type==='shiro-seed-ready'){
+      seedReady=true;
+      maybeSeed();
+    }
+  });
+  iframe.onload=function(){
+    setTimeout(focusShiro,0);
+    maybeSeed();
   };
   (function(){
     var cur=document.body,lastR=[],lastG=null;
@@ -819,7 +880,7 @@ async function execSeedShare(ctx: CommandContext): Promise<number> {
     ctx.stdout += `  Compressed: ${(compressed.length / 1024).toFixed(0)} KB\n`;
 
     ctx.stdout += 'Uploading...\n';
-    const origin = typeof window !== 'undefined' ? window.location.origin : 'https://shiro.computer';
+    const origin = getShiroOrigin();
     const res = await fetch(`${origin}/api/seed`, {
       method: 'POST',
       body: compressed as unknown as BodyInit,

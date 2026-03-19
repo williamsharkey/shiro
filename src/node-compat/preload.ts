@@ -1,4 +1,5 @@
 import type { CommandContext } from '../commands/index';
+import { getShiroOrigin } from '../utils/shiro-origin';
 import { DEFAULT_CLAUDE_THEME, ensureClaudeBootstrap } from '../claude-config';
 
 /**
@@ -176,7 +177,7 @@ export async function preloadEnvironment(
         const oauth = creds.claudeAiOauth;
         if (oauth?.refreshToken && oauth.expiresAt && (oauth.expiresAt - Date.now() < 300000)) {
           console.log(`[node] OAuth token expires in ${Math.round((oauth.expiresAt - Date.now()) / 1000)}s, refreshing...`);
-          const proxyOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+          const proxyOrigin = typeof window !== 'undefined' ? getShiroOrigin() : '';
           const tokenUrl = proxyOrigin + '/api/platform/v1/oauth/token';
           const body = new URLSearchParams({
             grant_type: 'refresh_token',

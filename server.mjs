@@ -8,6 +8,7 @@ import { readFile, writeFile, stat, readdir, unlink, mkdir } from 'node:fs/promi
 import { join, extname } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { randomBytes } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 
 const PORT = process.env.PORT || 3000;
 const STATIC_DIR = process.env.STATIC_DIR || '/opt/shiro/public';
@@ -40,19 +41,47 @@ const SKIP_RESPONSE_HEADERS = new Set([
   'content-encoding', 'content-length', 'transfer-encoding', 'connection',
 ]);
 
-function corsHeaders(origin) {
+const DEFAULT_CORS_ALLOW_HEADERS = [
+  'Content-Type',
+  'Authorization',
+  'x-api-key',
+  'anthropic-version',
+  'anthropic-beta',
+  'anthropic-dangerous-direct-browser-access',
+  'x-app',
+  'x-stainless-arch',
+  'x-stainless-lang',
+  'x-stainless-os',
+  'x-stainless-package-version',
+  'x-stainless-retry-count',
+  'x-stainless-runtime',
+  'x-stainless-runtime-version',
+  'x-stainless-timeout',
+  'mcp-session-id',
+];
+
+function buildAllowedHeaders(requestHeaders) {
+  const requested = String(requestHeaders || '')
+    .split(',')
+    .map((header) => header.trim())
+    .filter(Boolean);
+  return Array.from(new Set([...DEFAULT_CORS_ALLOW_HEADERS, ...requested])).join(', ');
+}
+
+export function corsHeaders(origin, requestHeaders) {
   return {
     'access-control-allow-origin': origin || '*',
     'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'access-control-allow-headers': 'Content-Type, Authorization, x-api-key, anthropic-version, anthropic-beta, anthropic-dangerous-direct-browser-access, x-stainless-arch, x-stainless-lang, x-stainless-os, x-stainless-package-version, x-stainless-retry-count, x-stainless-runtime, x-stainless-runtime-version, mcp-session-id',
+    'access-control-allow-headers': buildAllowedHeaders(requestHeaders),
     'access-control-expose-headers': 'x-request-id, request-id, anthropic-ratelimit-requests-limit, anthropic-ratelimit-requests-remaining, anthropic-ratelimit-tokens-limit, anthropic-ratelimit-tokens-remaining, retry-after, mcp-session-id',
     'access-control-max-age': '86400',
+    'vary': 'Origin, Access-Control-Request-Headers',
   };
 }
 
 async function handleProxy(req, res, pathAfterApi) {
   const origin = req.headers['origin'];
-  const cors = corsHeaders(origin);
+  const cors = corsHeaders(origin, req.headers['access-control-request-headers']);
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204, cors);
@@ -161,11 +190,20 @@ function handleOAuthCallback(req, res) {
 async function handleStatic(req, res) {
   let pathname = new URL(req.url, 'http://localhost').pathname;
   let filePath = join(STATIC_DIR, pathname);
+  const requestExt = extname(pathname);
+  const staticHeaders = {
+    'access-control-allow-origin': '*',
+    'cross-origin-resource-policy': 'cross-origin',
+  };
 
   try {
     const s = await stat(filePath);
     if (s.isDirectory()) filePath = join(filePath, 'index.html');
   } catch {
+    if (pathname.startsWith('/assets/') || requestExt) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', ...staticHeaders });
+      return res.end('Not found');
+    }
     // Try .html extension (e.g. /about → about.html)
     try {
       await stat(filePath + '.html');
@@ -179,10 +217,10 @@ async function handleStatic(req, res) {
   try {
     const data = await readFile(filePath);
     const ext = extname(filePath);
-    res.writeHead(200, { 'content-type': MIME[ext] || 'application/octet-stream' });
+    res.writeHead(200, { 'content-type': MIME[ext] || 'application/octet-stream', ...staticHeaders });
     res.end(data);
   } catch {
-    res.writeHead(404);
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', ...staticHeaders });
     res.end('Not found');
   }
 }
@@ -201,7 +239,7 @@ setInterval(() => {
 
 async function handleSignaling(req, res, pathname) {
   const origin = req.headers['origin'];
-  const cors = corsHeaders(origin);
+  const cors = corsHeaders(origin, req.headers['access-control-request-headers']);
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204, cors);
@@ -288,7 +326,7 @@ async function handleSignaling(req, res, pathname) {
 // --- Git CORS proxy (for isomorphic-git clone) ---
 async function handleGitProxy(req, res, targetUrl) {
   const origin = req.headers['origin'];
-  const cors = corsHeaders(origin);
+  const cors = corsHeaders(origin, req.headers['access-control-request-headers']);
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204, cors);
@@ -368,7 +406,7 @@ function checkSeedRateLimit(ip) {
 
 async function handleSeedUpload(req, res) {
   const origin = req.headers['origin'];
-  const cors = corsHeaders(origin);
+  const cors = corsHeaders(origin, req.headers['access-control-request-headers']);
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204, cors);
@@ -413,7 +451,7 @@ async function handleSeedUpload(req, res) {
 
 async function handleSeedDownload(req, res, id) {
   const origin = req.headers['origin'];
-  const cors = corsHeaders(origin);
+  const cors = corsHeaders(origin, req.headers['access-control-request-headers']);
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204, cors);
@@ -537,6 +575,10 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Shiro server listening on :${PORT}`);
-});
+const isDirectRun = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectRun) {
+  server.listen(PORT, () => {
+    console.log(`Shiro server listening on :${PORT}`);
+  });
+}

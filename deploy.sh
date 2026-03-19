@@ -7,11 +7,8 @@ REMOTE_DIR="/opt/shiro"
 SSH_KEY="$HOME/.ssh/id_ed25519"
 SSH_OPTS="-i $SSH_KEY"
 
-# Auto-increment build number
-BUILD_FILE="build-number.txt"
-BUILD_NUM=$(($(cat "$BUILD_FILE") + 1))
-echo "$BUILD_NUM" > "$BUILD_FILE"
-echo "Build #$BUILD_NUM"
+# Auto-increment build number exactly once per deploy
+node increment-build.js
 
 echo "Building..."
 npm run build

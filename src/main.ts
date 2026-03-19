@@ -126,6 +126,7 @@ import {
   SHIRO_RUNTIME_CONTEXT_SESSION_KEY,
   writeRuntimeContextFiles,
 } from './seed-runtime-context';
+import { getShiroOrigin } from './utils/shiro-origin';
 
 /**
  * Register a command in both the CommandRegistry (for execution) and
@@ -244,6 +245,12 @@ async function main() {
       }
     }
   });
+
+  if (window.parent !== window) {
+    try {
+      window.parent.postMessage({ type: 'shiro-seed-ready' }, '*');
+    } catch {}
+  }
 
   // Set up command registry
   const commands = new CommandRegistry();
@@ -516,7 +523,7 @@ async function main() {
 
   // OAuth callback bridge: receive auth codes from /oauth/callback popup
   window.addEventListener('message', (event) => {
-    if (event.origin !== window.location.origin) return;
+    if (event.origin !== getShiroOrigin()) return;
     if (event.data?.type !== 'shiro-oauth-callback') return;
     const { code, state, params } = event.data;
     let port = event.data.port;

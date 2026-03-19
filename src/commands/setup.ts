@@ -13,6 +13,7 @@
 import { Command } from './index';
 import { createServerWindow } from '../server-window';
 import { DEFAULT_CLAUDE_THEME, ensureClaudeBootstrap } from '../claude-config';
+import { getShiroOrigin } from '../utils/shiro-origin';
 
 const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 const OAUTH_SCOPES = 'user:inference user:profile';
@@ -227,7 +228,7 @@ export const setupCmd: Command = {
       alreadyAuthenticated,
       codeVerifier,
       codeChallenge,
-      origin: window.location.origin,
+      origin: getShiroOrigin(),
     });
 
     const win = createServerWindow({

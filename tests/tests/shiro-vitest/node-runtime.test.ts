@@ -180,6 +180,24 @@ describe('Node Runtime (jseval.ts)', () => {
         planAgents: '1',
       });
     });
+
+    it('should derive Claude proxy base from document base URI in seeded contexts', async () => {
+      const base = document.createElement('base');
+      base.href = 'https://shiro.computer/';
+      document.head.appendChild(base);
+
+      try {
+        await fs.mkdir('/work/demo/claude-code', { recursive: true });
+        await fs.writeFile('/work/demo/claude-code/cli.js', 'console.log(process.env.ANTHROPIC_BASE_URL);');
+
+        const ctx = createCtx(shell, fs, ['/work/demo/claude-code/cli.js']);
+        const exitCode = await nodeCmd.exec(ctx);
+        expect(exitCode).toBe(0);
+        expect(ctx.stdout.trim()).toBe('https://shiro.computer/api/anthropic');
+      } finally {
+        base.remove();
+      }
+    });
   });
 
   describe('process shim', () => {

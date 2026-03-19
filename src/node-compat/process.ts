@@ -1,6 +1,7 @@
 import type { CommandContext } from '../commands/index';
 import type { SharedState } from './types';
 import { ProcessExitError } from '../commands/jseval/utils';
+import { getShiroOrigin } from '../utils/shiro-origin';
 
 /**
  * Create the fake process object for the Node.js compat layer.
@@ -21,7 +22,7 @@ export function createFakeProcess(
     MCP_CONNECTION_NONBLOCKING: '1',
     // Route API calls through CORS proxy when in browser
     ...(typeof window !== 'undefined' && !ctx.env['ANTHROPIC_BASE_URL'] ? {
-      ANTHROPIC_BASE_URL: `${window.location.origin}/api/anthropic`,
+      ANTHROPIC_BASE_URL: `${getShiroOrigin()}/api/anthropic`,
     } : {}),
   };
 
