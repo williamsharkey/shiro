@@ -5,6 +5,10 @@ import { Command, CommandContext } from './index';
  * "One DSL, Many Contexts"
  */
 
+function getRuntimeContext(): { hcOuterAvailable?: boolean } | null {
+  return (window as any).__shiro?.runtimeContext || null;
+}
+
 class HCSession {
   doc: Document;
   source: string;
@@ -296,6 +300,9 @@ Example:
   hc n0
   hc a
 `;
+      if (getRuntimeContext()?.hcOuterAvailable) {
+        ctx.stdout += '\nDetected host-page bridge. Run "hc outer" to inspect the page that spawned this Shiro instance.\n';
+      }
       return 0;
     }
 
@@ -359,7 +366,11 @@ Example:
 
     // Run HC command
     if (!window.__hc.session) {
-      ctx.stderr = 'hc: no session. Use "hc open <file>", "hc live", or "hc outer" first.\n';
+      if (getRuntimeContext()?.hcOuterAvailable) {
+        ctx.stderr = 'hc: no session. This Shiro instance was injected into a host page; run "hc outer" first.\n';
+      } else {
+        ctx.stderr = 'hc: no session. Use "hc open <file>", "hc live", or "hc outer" first.\n';
+      }
       return 1;
     }
 

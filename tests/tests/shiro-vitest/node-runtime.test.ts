@@ -127,6 +127,59 @@ describe('Node Runtime (jseval.ts)', () => {
       expect(exitCode).toBe(0);
       expect(ctx.stdout).toContain('/a/b');
     });
+
+    it('should apply browser-safe Claude Code runtime defaults', async () => {
+      await fs.mkdir('/work/demo/claude-code', { recursive: true });
+      await fs.writeFile('/work/demo/claude-code/cli.js', [
+        'console.log(JSON.stringify({',
+        '  disableBackground: process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS,',
+        '  maxConcurrency: process.env.CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY,',
+        '  planAgents: process.env.CLAUDE_CODE_PLAN_V2_AGENT_COUNT,',
+        '  exploreAgents: process.env.CLAUDE_CODE_PLAN_V2_EXPLORE_AGENT_COUNT,',
+        '  disableMarketplace: process.env.CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL,',
+        '  disableInstallChecks: process.env.DISABLE_INSTALLATION_CHECKS,',
+        '}));',
+      ].join('\n'));
+
+      const ctx = createCtx(shell, fs, ['/work/demo/claude-code/cli.js']);
+      const exitCode = await nodeCmd.exec(ctx);
+      expect(exitCode).toBe(0);
+
+      const env = JSON.parse(ctx.stdout.trim());
+      expect(env).toEqual({
+        disableBackground: '1',
+        maxConcurrency: '1',
+        planAgents: '1',
+        exploreAgents: '1',
+        disableMarketplace: '1',
+        disableInstallChecks: '1',
+      });
+    });
+
+    it('should preserve explicit Claude Code env overrides', async () => {
+      shell.env['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'] = '0';
+      shell.env['CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY'] = '4';
+
+      await fs.mkdir('/work/demo/claude-code', { recursive: true });
+      await fs.writeFile('/work/demo/claude-code/cli.js', [
+        'console.log(JSON.stringify({',
+        '  disableBackground: process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS,',
+        '  maxConcurrency: process.env.CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY,',
+        '  planAgents: process.env.CLAUDE_CODE_PLAN_V2_AGENT_COUNT,',
+        '}));',
+      ].join('\n'));
+
+      const ctx = createCtx(shell, fs, ['/work/demo/claude-code/cli.js']);
+      const exitCode = await nodeCmd.exec(ctx);
+      expect(exitCode).toBe(0);
+
+      const env = JSON.parse(ctx.stdout.trim());
+      expect(env).toEqual({
+        disableBackground: '0',
+        maxConcurrency: '4',
+        planAgents: '1',
+      });
+    });
   });
 
   describe('process shim', () => {

@@ -506,6 +506,22 @@ describe('seed — clipboard snippet export', () => {
     expect(lastClipboardText).toContain('shiro-seed-v2');
   });
 
+  it('should include seed runtime context metadata', async () => {
+    await run(shell, 'seed');
+    expect(lastClipboardText).toContain("mode:'seed'");
+    expect(lastClipboardText).toContain('hcOuterAvailable:true');
+    expect(lastClipboardText).toContain('sameOriginParentAccess:false');
+    expect(lastClipboardText).toContain('context:buildContext()');
+  });
+
+  it('should isolate the injected window and request terminal focus', async () => {
+    await run(shell, 'seed');
+    expect(lastClipboardText).toContain("attachShadow({mode:'open'})");
+    expect(lastClipboardText).toContain("pointerEvents='auto'");
+    expect(lastClipboardText).toContain('shiro-focus-terminal');
+    expect(lastClipboardText).toContain('iframe.tabIndex=0');
+  });
+
   it('should show file and directory stats', async () => {
     const { output } = await run(shell, 'seed');
     expect(output).toContain('Files:');
@@ -598,6 +614,23 @@ describe('seed blob — self-contained clipboard snippet', () => {
     await run(shell, 'seed blob');
     expect(lastClipboardText).toContain('DecompressionStream');
     expect(lastClipboardText).toContain('shiro-seed-v2');
+  });
+
+  it('should include blob runtime context metadata and avoid sandboxing the iframe', async () => {
+    await run(shell, 'seed blob');
+    expect(lastClipboardText).toContain("mode:'seed-blob'");
+    expect(lastClipboardText).toContain('hcOuterAvailable:true');
+    expect(lastClipboardText).toContain('sameOriginParentAccess:true');
+    expect(lastClipboardText).toContain('context:buildContext()');
+    expect(lastClipboardText).not.toContain('iframe.sandbox=');
+  });
+
+  it('should isolate the blob window and request terminal focus', async () => {
+    await run(shell, 'seed blob');
+    expect(lastClipboardText).toContain("attachShadow({mode:'open'})");
+    expect(lastClipboardText).toContain("pointerEvents='auto'");
+    expect(lastClipboardText).toContain('shiro-focus-terminal');
+    expect(lastClipboardText).toContain('iframe.tabIndex=0');
   });
 
   it('should contain 3 compressed base64 _dc calls', async () => {

@@ -1,4 +1,5 @@
 import type { CommandContext } from '../commands/index';
+import { DEFAULT_CLAUDE_THEME, ensureClaudeBootstrap } from '../claude-config';
 
 /**
  * Pre-load files from the virtual filesystem into the memory cache.
@@ -115,31 +116,18 @@ export async function preloadEnvironment(
   try { await ctx.fs.mkdir(homeDir + '/.claude/statsig', { recursive: true }); } catch {}
   try { await ctx.fs.mkdir(homeDir + '/.config', { recursive: true }); } catch {}
 
-  // Ensure Claude Code settings has proper permissions structure
-  {
-    const settingsPath = homeDir + '/.claude/settings.json';
-    let settings: any = {};
-    try {
-      const existing = await ctx.fs.readFile(settingsPath, 'utf8');
-      settings = JSON.parse(existing as string);
-    } catch { /* file doesn't exist or invalid JSON */ }
-    // Add permissions block if missing (required by newer Claude Code versions)
-    if (!settings.permissions) {
-      settings.permissions = {
-        allow: [
-          "Bash", "Read", "Edit", "Write", "WebFetch", "WebSearch",
-          "Glob", "Grep", "mcp__*"
-        ],
-        deny: []
-      };
-      try { await ctx.fs.writeFile(settingsPath, JSON.stringify(settings, null, 2)); } catch {}
-    }
-    // Remove legacy/unrecognized keys that /doctor flags
-    if (settings.skipDangerousModePermissionPrompt !== undefined) {
-      delete settings.skipDangerousModePermissionPrompt;
-      try { await ctx.fs.writeFile(settingsPath, JSON.stringify(settings, null, 2)); } catch {}
-    }
-  }
+  const isClaudeCodeScript = scriptPath?.includes('claude-code');
+  try {
+    await ensureClaudeBootstrap(ctx.fs, {
+      homeDir,
+      projectPath: ctx.cwd,
+      theme: isClaudeCodeScript ? DEFAULT_CLAUDE_THEME : undefined,
+      completeOnboarding: Boolean(isClaudeCodeScript),
+      trustProject: Boolean(isClaudeCodeScript),
+      completeProjectOnboarding: Boolean(isClaudeCodeScript),
+      acceptBypassPermissions: Boolean(isClaudeCodeScript),
+    });
+  } catch {}
   try { await ctx.fs.stat(homeDir + '/.claude/statsig/cache.json'); } catch {
     try { await ctx.fs.writeFile(homeDir + '/.claude/statsig/cache.json', '{}'); } catch {}
   }
@@ -179,7 +167,7 @@ export async function preloadEnvironment(
   }
 
   // Pre-flight OAuth token refresh for Claude Code CLI
-  if (scriptPath?.includes('claude-code')) {
+  if (isClaudeCodeScript) {
     const credsPath = homeDir + '/.claude/.credentials.json';
     const credsStr = fileCache.get(credsPath);
     if (credsStr) {

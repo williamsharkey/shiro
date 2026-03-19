@@ -85,20 +85,24 @@ export const builderCmd: Command = {
       return 1;
     }
 
-    // Write a builder-specific CLAUDE.md for the app
+    // Write builder-specific agent instructions plus a CLAUDE.md compatibility shim.
     try {
-      await ctx.fs.writeFile(`${appDir}/CLAUDE.md`, `# Builder Mode
+      await ctx.fs.writeFile(`${appDir}/AGENTS.md`, `# AGENTS.md
 
-You are building a web application in this directory.
-The app is live-previewed — changes to files take effect immediately.
+## Builder Mode
+
+You are building a web app in this directory. The preview is live.
 
 ## Rules
-- Write all HTML/CSS/JS in this directory
-- The entry point is index.html
-- Keep everything in a single directory (no subdirs needed for simple apps)
-- Use vanilla HTML/CSS/JS unless the user requests a framework
-- Make it look good — use modern CSS, nice colors, smooth animations
-- After writing files, the preview updates automatically
+- Write app files in this directory.
+- The entry point is \`index.html\`.
+- Keep the structure simple unless the user asks for more.
+- Use vanilla HTML/CSS/JS unless the user requests a framework.
+- After edits, the preview updates automatically.
+`);
+      await ctx.fs.writeFile(`${appDir}/CLAUDE.md`, `# CLAUDE.md
+
+Deprecated. Read \`./AGENTS.md\`.
 `);
     } catch {}
 

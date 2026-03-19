@@ -100,7 +100,9 @@ function buildSnippet(url: string, ndjson: string, storage: string, stats: SeedS
   return `${header}
 (function(){
   if(document.getElementById('shiro-seed')){console.log('Shiro already seeded');return}
-  var w=document.createElement('div');w.id='shiro-seed';
+  var host=document.createElement('div');host.id='shiro-seed';
+  var root=host.attachShadow?host.attachShadow({mode:'open'}):host;
+  var w=document.createElement('div');
   var S=w.style;S.position='fixed';S.bottom='20px';S.right='20px';S.width='32em';S.height='22em';
   S.zIndex='2147483647';S.borderRadius='8px';S.overflow='hidden';
   S.boxShadow='rgb(206,170,227) 0px 5px 11px -3px';S.opacity='0.88';S.backdropFilter='blur(8px)';
@@ -115,7 +117,7 @@ function buildSnippet(url: string, ndjson: string, storage: string, stats: SeedS
     d.appendChild(ic);d.onmouseenter=function(){ic.style.opacity='0.8'};d.onmouseleave=function(){ic.style.opacity='0'};return d;
   }
   var close=mkDot('#ff5f57','\\u00b7');
-  close.onclick=function(){w.remove()};
+  close.onclick=function(){host.remove()};
   var mini=mkDot('#febc2e','\\u2013');
   var minimized=false;
   mini.onclick=function(){
@@ -123,6 +125,7 @@ function buildSnippet(url: string, ndjson: string, storage: string, stats: SeedS
     iframe.style.display=minimized?'none':'block';
     rh.style.display=minimized?'none':'block';
     w.style.height=minimized?'32px':savedH+'px';
+    if(!minimized)setTimeout(focusShiro,0);
   };
   dots.appendChild(close);dots.appendChild(mini);
   var title=document.createElement('span');title.textContent='shiro';
@@ -141,13 +144,20 @@ function buildSnippet(url: string, ndjson: string, storage: string, stats: SeedS
   tb.onmouseleave=function(){zoomWrap.style.opacity='0'};
   tb.appendChild(dots);tb.appendChild(title);tb.appendChild(zoomWrap);
   var iframe=document.createElement('iframe');iframe.src='${url}';
-  var is=iframe.style;is.border='none';is.width='100%';is.flex='1';is.background='#0a0a1a';
+  var is=iframe.style;is.border='none';is.width='100%';is.flex='1';is.display='block';is.pointerEvents='auto';is.background='#0a0a1a';
+  iframe.tabIndex=0;iframe.title='Shiro';
   iframe.allow='clipboard-read; clipboard-write';
   var rh=document.createElement('div');var rs=rh.style;
   rs.position='absolute';rs.bottom='0';rs.right='0';rs.width='16px';rs.height='16px';
   rs.cursor='nwse-resize';rs.background='linear-gradient(135deg,transparent 50%,#555 50%)';
   w.appendChild(tb);w.appendChild(iframe);w.appendChild(rh);
-  document.body.appendChild(w);
+  root.appendChild(w);document.body.appendChild(host);
+  function focusShiro(){
+    iframe.style.pointerEvents='auto';
+    try{iframe.focus()}catch(ex){}
+    try{iframe.contentWindow&&iframe.contentWindow.focus&&iframe.contentWindow.focus()}catch(ex){}
+    try{iframe.contentWindow&&iframe.contentWindow.postMessage({type:'shiro-focus-terminal'},'*')}catch(ex){}
+  }
   var dx=0,dy=0,sx=0,sy=0,dragging=false;
   tb.onmousedown=function(e){dragging=true;sx=e.clientX;sy=e.clientY;
     var r=w.getBoundingClientRect();dx=r.left;dy=r.top;
@@ -158,18 +168,33 @@ function buildSnippet(url: string, ndjson: string, storage: string, stats: SeedS
     if(resizing){var rr=w.getBoundingClientRect();
       var nw=Math.max(300,e.clientX-rr.left);var nh=Math.max(200,e.clientY-rr.top);
       w.style.width=nw+'px';w.style.height=nh+'px';savedH=nh}});
-  document.addEventListener('mouseup',function(){dragging=false;resizing=false;tb.style.cursor='grab';iframe.style.pointerEvents=''});
+  document.addEventListener('mouseup',function(){dragging=false;resizing=false;tb.style.cursor='grab';iframe.style.pointerEvents='auto'});
   var resizing=false,savedH=w.offsetHeight||352;
   rh.onmousedown=function(e){resizing=true;iframe.style.pointerEvents='none';e.preventDefault();e.stopPropagation()};
-  /* Click on wrapper focuses iframe for keyboard input */
-  w.addEventListener('mousedown',function(e){if(e.target===iframe||iframe.contains(e.target)){try{iframe.focus()}catch(ex){}}});
+  /* Click on wrapper focuses iframe and terminal for keyboard input */
+  iframe.onmousedown=function(){focusShiro()};
+  iframe.ontouchstart=function(){focusShiro()};
+  w.addEventListener('mousedown',function(e){if(e.target===iframe||iframe.contains(e.target)){focusShiro()}});
   /* NDJSON seed data - parsed incrementally */
   var SEED_FS=\`${escapedNdjson}\`;
   var SEED_STORAGE=\`${escapedStorage}\`;
+  function buildContext(){
+    return {
+      mode:'seed',
+      injected:true,
+      hcOuterAvailable:true,
+      sameOriginParentAccess:false,
+      hostUrl:location.href,
+      hostOrigin:location.origin,
+      hostTitle:document.title||'',
+      createdAt:new Date().toISOString()
+    };
+  }
   var seeded=false;
   iframe.onload=function(){
+    setTimeout(focusShiro,0);
     if(seeded)return;seeded=true;
-    iframe.contentWindow.postMessage({type:'shiro-seed-v2',ndjson:SEED_FS,storage:SEED_STORAGE},'*');
+    iframe.contentWindow.postMessage({type:'shiro-seed-v2',ndjson:SEED_FS,storage:SEED_STORAGE,context:buildContext()},'*');
   };
   /* HC bridge: lets the Shiro iframe run HC commands against the host DOM */
   (function(){
@@ -302,7 +327,9 @@ function buildBlobSnippet(compressedHtmlB64: string, compressedFsB64: string, co
   var blobUrl=URL.createObjectURL(blob);
   var _fsP=_dc('${compressedFsB64}');
   var _lsP=_dc('${compressedStorageB64}');
-  var w=document.createElement('div');w.id='shiro-seed';
+  var host=document.createElement('div');host.id='shiro-seed';
+  var root=host.attachShadow?host.attachShadow({mode:'open'}):host;
+  var w=document.createElement('div');
   var S=w.style;S.position='fixed';S.bottom='20px';S.right='20px';S.width='32em';S.height='22em';
   S.zIndex='2147483647';S.borderRadius='8px';S.overflow='hidden';
   S.boxShadow='rgb(206,170,227) 0px 5px 11px -3px';S.opacity='0.88';S.backdropFilter='blur(8px)';
@@ -317,7 +344,7 @@ function buildBlobSnippet(compressedHtmlB64: string, compressedFsB64: string, co
     d.appendChild(ic);d.onmouseenter=function(){ic.style.opacity='0.8'};d.onmouseleave=function(){ic.style.opacity='0'};return d;
   }
   var close=mkDot('#ff5f57','\\u00b7');
-  close.onclick=function(){URL.revokeObjectURL(blobUrl);w.remove()};
+  close.onclick=function(){URL.revokeObjectURL(blobUrl);host.remove()};
   var mini=mkDot('#febc2e','\\u2013');
   var minimized=false;
   mini.onclick=function(){
@@ -325,6 +352,7 @@ function buildBlobSnippet(compressedHtmlB64: string, compressedFsB64: string, co
     iframe.style.display=minimized?'none':'block';
     rh.style.display=minimized?'none':'block';
     w.style.height=minimized?'32px':savedH+'px';
+    if(!minimized)setTimeout(focusShiro,0);
   };
   dots.appendChild(close);dots.appendChild(mini);
   var title=document.createElement('span');title.textContent='shiro';
@@ -342,14 +370,20 @@ function buildBlobSnippet(compressedHtmlB64: string, compressedFsB64: string, co
   tb.onmouseleave=function(){zoomWrap.style.opacity='0'};
   tb.appendChild(dots);tb.appendChild(title);tb.appendChild(zoomWrap);
   var iframe=document.createElement('iframe');iframe.src=blobUrl;
-  var is=iframe.style;is.border='none';is.width='100%';is.flex='1';is.background='#0a0a1a';
+  var is=iframe.style;is.border='none';is.width='100%';is.flex='1';is.display='block';is.pointerEvents='auto';is.background='#0a0a1a';
+  iframe.tabIndex=0;iframe.title='Shiro';
   iframe.allow='clipboard-read; clipboard-write';
-  iframe.sandbox='allow-scripts allow-same-origin allow-forms allow-modals allow-popups';
   var rh=document.createElement('div');var rs=rh.style;
   rs.position='absolute';rs.bottom='0';rs.right='0';rs.width='16px';rs.height='16px';
   rs.cursor='nwse-resize';rs.background='linear-gradient(135deg,transparent 50%,#555 50%)';
   w.appendChild(tb);w.appendChild(iframe);w.appendChild(rh);
-  document.body.appendChild(w);
+  root.appendChild(w);document.body.appendChild(host);
+  function focusShiro(){
+    iframe.style.pointerEvents='auto';
+    try{iframe.focus()}catch(ex){}
+    try{iframe.contentWindow&&iframe.contentWindow.focus&&iframe.contentWindow.focus()}catch(ex){}
+    try{iframe.contentWindow&&iframe.contentWindow.postMessage({type:'shiro-focus-terminal'},'*')}catch(ex){}
+  }
   var dx=0,dy=0,sx=0,sy=0,dragging=false;
   tb.onmousedown=function(e){dragging=true;sx=e.clientX;sy=e.clientY;
     var r=w.getBoundingClientRect();dx=r.left;dy=r.top;
@@ -360,14 +394,29 @@ function buildBlobSnippet(compressedHtmlB64: string, compressedFsB64: string, co
     if(resizing){var rr=w.getBoundingClientRect();
       var nw=Math.max(300,e.clientX-rr.left);var nh=Math.max(200,e.clientY-rr.top);
       w.style.width=nw+'px';w.style.height=nh+'px';savedH=nh}});
-  document.addEventListener('mouseup',function(){dragging=false;resizing=false;tb.style.cursor='grab';iframe.style.pointerEvents=''});
+  document.addEventListener('mouseup',function(){dragging=false;resizing=false;tb.style.cursor='grab';iframe.style.pointerEvents='auto'});
   var resizing=false,savedH=w.offsetHeight||352;
   rh.onmousedown=function(e){resizing=true;iframe.style.pointerEvents='none';e.preventDefault();e.stopPropagation()};
-  w.addEventListener('mousedown',function(e){if(e.target===iframe||iframe.contains(e.target)){try{iframe.focus()}catch(ex){}}});
+  iframe.onmousedown=function(){focusShiro()};
+  iframe.ontouchstart=function(){focusShiro()};
+  w.addEventListener('mousedown',function(e){if(e.target===iframe||iframe.contains(e.target)){focusShiro()}});
+  function buildContext(){
+    return {
+      mode:'seed-blob',
+      injected:true,
+      hcOuterAvailable:true,
+      sameOriginParentAccess:true,
+      hostUrl:location.href,
+      hostOrigin:location.origin,
+      hostTitle:document.title||'',
+      createdAt:new Date().toISOString()
+    };
+  }
   var seeded=false;
   iframe.onload=async function(){
+    setTimeout(focusShiro,0);
     if(seeded)return;seeded=true;
-    iframe.contentWindow.postMessage({type:'shiro-seed-v2',ndjson:await _fsP,storage:await _lsP},'*');
+    iframe.contentWindow.postMessage({type:'shiro-seed-v2',ndjson:await _fsP,storage:await _lsP,context:buildContext()},'*');
   };
   (function(){
     var cur=document.body,lastR=[],lastG=null;

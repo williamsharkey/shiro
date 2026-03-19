@@ -117,8 +117,15 @@ import { initMobileInput } from './mobile-input';
 import { initDropHandler } from './drop-handler';
 import { closeSplitView } from './split-view';
 import { initFileAssociations } from './file-associations';
+import { setActiveTerminal } from './active-terminal';
 import buildNumber from '../build-number.txt?raw';
-import { CLAUDE_MD } from './claude-md-seed';
+import { AGENTS_MD, CLAUDE_MD } from './claude-md-seed';
+import {
+  defaultRuntimeContext,
+  parseRuntimeContext,
+  SHIRO_RUNTIME_CONTEXT_SESSION_KEY,
+  writeRuntimeContextFiles,
+} from './seed-runtime-context';
 
 /**
  * Register a command in both the CommandRegistry (for execution) and
@@ -140,10 +147,20 @@ async function main() {
   // Initialize filesystem
   const fs = new FileSystem();
   await fs.init();
-  // Seed CLAUDE.md for internal Claude Code (always update to latest version)
+  const runtimeContext = (() => {
+    if (window.parent === window) return defaultRuntimeContext();
+    try {
+      return parseRuntimeContext(sessionStorage.getItem(SHIRO_RUNTIME_CONTEXT_SESSION_KEY));
+    } catch {
+      return defaultRuntimeContext();
+    }
+  })();
+  // Seed agent instructions for internal Claude Code (always update to latest version)
   try {
     await fs.mkdir('/home/user', { recursive: true });
+    await fs.writeFile('/home/user/AGENTS.md', AGENTS_MD);
     await fs.writeFile('/home/user/CLAUDE.md', CLAUDE_MD);
+    await writeRuntimeContextFiles(fs, runtimeContext);
   } catch {}
   console.log('[shiro] Filesystem initialized');
 
@@ -155,7 +172,7 @@ async function main() {
     // Legacy format (v1): single JSON blob
     if (e.data && e.data.type === 'shiro-seed') {
       try {
-        const { fs: nodes, localStorage: storage } = e.data.data;
+        const { fs: nodes, localStorage: storage, context } = e.data.data;
         // Decode base64 content back to Uint8Array
         const decoded = nodes.map((n: any) => ({
           ...n,
@@ -168,6 +185,11 @@ async function main() {
             localStorage.setItem(key, value as string);
           }
         }
+        if (context) {
+          try {
+            sessionStorage.setItem(SHIRO_RUNTIME_CONTEXT_SESSION_KEY, JSON.stringify(context));
+          } catch {}
+        }
         // Reload to boot with imported state
         location.reload();
       } catch (err) {
@@ -178,7 +200,7 @@ async function main() {
     // New format (v2): NDJSON for incremental parsing
     if (e.data && e.data.type === 'shiro-seed-v2') {
       try {
-        const { ndjson, storage } = e.data;
+        const { ndjson, storage, context } = e.data;
         const lines = ndjson.split('\n');
         const nodes: any[] = [];
         const BATCH_SIZE = 100;
@@ -208,6 +230,11 @@ async function main() {
           for (const [key, value] of Object.entries(storageObj)) {
             localStorage.setItem(key, value as string);
           }
+        }
+        if (context) {
+          try {
+            sessionStorage.setItem(SHIRO_RUNTIME_CONTEXT_SESSION_KEY, JSON.stringify(context));
+          } catch {}
         }
 
         // Reload to boot with imported state
@@ -463,6 +490,11 @@ async function main() {
     if (e.data && e.data.type === 'shiro-fontsize') {
       terminal.term.options.fontSize = e.data.size;
       terminal.fitAddon.fit();
+      return;
+    }
+    if (e.data && e.data.type === 'shiro-focus-terminal') {
+      terminal.term.focus();
+      setActiveTerminal(terminal);
     }
   });
 
@@ -471,6 +503,7 @@ async function main() {
     fs,
     shell,
     terminal,
+    runtimeContext,
 
     commands,
     registry, // ModuleRegistry for hot-reload

@@ -16,20 +16,35 @@ export function createFakeProcess(
   processEvents: Record<string, Function[]>,
   pendingPromises: Promise<any>[],
 ): any {
+  const processEnv: Record<string, string> = {
+    ...ctx.env,
+    MCP_CONNECTION_NONBLOCKING: '1',
+    // Route API calls through CORS proxy when in browser
+    ...(typeof window !== 'undefined' && !ctx.env['ANTHROPIC_BASE_URL'] ? {
+      ANTHROPIC_BASE_URL: `${window.location.origin}/api/anthropic`,
+    } : {}),
+  };
+
+  if (scriptPath?.includes('claude-code')) {
+    // Claude Code is substantially more stable in Shiro when its planner and tool use
+    // stay in a single foreground lane instead of spinning background tasks/workers.
+    const claudeDefaults: Record<string, string> = {
+      DISABLE_INSTALLATION_CHECKS: '1',
+      CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: '1',
+      CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
+      CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY: '1',
+      CLAUDE_CODE_PLAN_V2_AGENT_COUNT: '1',
+      CLAUDE_CODE_PLAN_V2_EXPLORE_AGENT_COUNT: '1',
+    };
+    for (const [key, value] of Object.entries(claudeDefaults)) {
+      if (!(key in processEnv)) {
+        processEnv[key] = value;
+      }
+    }
+  }
+
   const fp: any = {
-    env: {
-      ...ctx.env,
-      MCP_CONNECTION_NONBLOCKING: '1',
-      // Route API calls through CORS proxy when in browser
-      ...(typeof window !== 'undefined' && !ctx.env['ANTHROPIC_BASE_URL'] ? {
-        ANTHROPIC_BASE_URL: `${window.location.origin}/api/anthropic`,
-      } : {}),
-      // Suppress npm-to-native-installer warning (only relevant for Claude Code)
-      ...(scriptPath?.includes('claude-code') ? {
-        DISABLE_INSTALLATION_CHECKS: '1',
-        CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: '1',
-      } : {}),
-    } as Record<string, string>,
+    env: processEnv,
     cwd: () => ctx.shell.cwd,
     chdir: (dir: string) => { ctx.shell.cwd = ctx.fs.resolvePath(dir, ctx.shell.cwd); ctx.shell.env['PWD'] = ctx.shell.cwd; },
     exit: (c?: number) => {

@@ -352,7 +352,7 @@ describe('builder — AI app builder', () => {
     expect(content).toContain('Describe what you want to build');
   });
 
-  it('should create CLAUDE.md with builder instructions', async () => {
+  it('should create AGENTS.md plus a CLAUDE.md shim for builder mode', async () => {
     const ctx = {
       args: ['/tmp/test-builder-app2'],
       fs, cwd: '/home/user', env: {},
@@ -360,9 +360,12 @@ describe('builder — AI app builder', () => {
     };
     await builderCmd.exec(ctx);
 
+    const agentsMd = await fs.readFile('/tmp/test-builder-app2/AGENTS.md', 'utf8');
     const claudeMd = await fs.readFile('/tmp/test-builder-app2/CLAUDE.md', 'utf8');
-    expect(claudeMd).toContain('Builder Mode');
-    expect(claudeMd).toContain('index.html');
+    expect(agentsMd).toContain('Builder Mode');
+    expect(agentsMd).toContain('index.html');
+    expect(claudeMd).toContain('Deprecated');
+    expect(claudeMd).toContain('./AGENTS.md');
   });
 
   it('should use /tmp/builder-app as default directory', async () => {
@@ -393,6 +396,11 @@ describe('builder — AI app builder', () => {
   it('should fail gracefully when serve command is missing', async () => {
     // Create a shell without serve registered
     const { fs: fs2, shell: shell2 } = await createTestShell();
+    const originalGet = shell2.commands.get.bind(shell2.commands);
+    shell2.commands.get = ((name: string) => {
+      if (name === 'serve') return undefined;
+      return originalGet(name);
+    }) as typeof shell2.commands.get;
     const ctx = {
       args: [],
       fs: fs2, cwd: '/home/user', env: {},

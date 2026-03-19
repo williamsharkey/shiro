@@ -12,6 +12,7 @@
 
 import { Command } from './index';
 import { createServerWindow } from '../server-window';
+import { DEFAULT_CLAUDE_THEME, ensureClaudeBootstrap } from '../claude-config';
 
 const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
 const OAUTH_SCOPES = 'user:inference user:profile';
@@ -259,15 +260,15 @@ export const setupCmd: Command = {
             },
           };
           await ctx.fs.writeFile(credsPath, JSON.stringify(creds, null, 2));
-
-          const configPath = '/home/user/.claude.json';
-          let config: Record<string, unknown> = {};
-          try {
-            const existing = await ctx.fs.readFile(configPath, 'utf8');
-            config = JSON.parse(existing as string);
-          } catch { /* no existing config */ }
-          config.hasCompletedOnboarding = true;
-          await ctx.fs.writeFile(configPath, JSON.stringify(config, null, 2));
+          await ensureClaudeBootstrap(ctx.fs, {
+            homeDir: '/home/user',
+            projectPath: ctx.cwd,
+            theme: DEFAULT_CLAUDE_THEME,
+            completeOnboarding: true,
+            trustProject: true,
+            completeProjectOnboarding: true,
+            acceptBypassPermissions: true,
+          });
         } catch (e: any) {
           console.warn('[setup] Failed to save credentials:', e.message);
         }

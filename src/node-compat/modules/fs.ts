@@ -24,6 +24,15 @@ function fsError(code: string, message: string, syscall?: string, path?: string)
 export function createFsModule(deps: FsDeps): any {
   const { ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir } = deps;
 
+  const materializeOpenFile = (resolved: string) => {
+    const content = fileCache.get(resolved) || '';
+    const parentDir = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
+    pendingPromises.push((async () => {
+      await ctx.fs.mkdir(parentDir, { recursive: true }).catch(() => {});
+      await ctx.fs.writeFile(resolved, content);
+    })().catch(() => {}));
+  };
+
   // Synchronous shims that use cached data or throw
   const fsShim: any = {
     readFileSync: (p: string, opts?: any) => {
@@ -346,6 +355,7 @@ export function createFsModule(deps: FsDeps): any {
           fileCache.set(parentDir + '/.', '');
           pendingPromises.push(ctx.fs.mkdir(parentDir, { recursive: true }).catch(() => {}));
         }
+        materializeOpenFile(resolved);
       }
       return fd;
     },
@@ -692,11 +702,21 @@ export function createFsModule(deps: FsDeps): any {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       const fd = 100 + Math.floor(Math.random() * 9900);
       (globalThis as any).__shiroFds = (globalThis as any).__shiroFds || {};
-      const f = typeof flags === 'string' ? flags : 'r';
+      let f: string;
+      if (typeof flags === 'number') {
+        const isWrite = (flags & 1) || (flags & 2);
+        const isAppend = flags & 1024;
+        f = isAppend ? 'a' : isWrite ? 'w' : 'r';
+      } else {
+        f = flags || 'r';
+      }
       (globalThis as any).__shiroFds[fd] = { path: resolved, flags: f, offset: 0 };
-      if (f.includes('w')) {
-        fileCache.set(resolved, '');
+      if (f.includes('w') || f.includes('a')) {
+        if (f.includes('w') || !fileCache.has(resolved)) {
+          fileCache.set(resolved, '');
+        }
         fileMtimes.set(resolved, Date.now());
+        materializeOpenFile(resolved);
       }
       callback?.(null, fd);
     },

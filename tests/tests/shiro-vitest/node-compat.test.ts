@@ -837,6 +837,22 @@ describe('Node.js Module Compatibility', () => {
       expect(exitCode).toBe(0);
       expect(ctx.stdout).toContain('code:1');
     });
+
+    it('spawn preserves stdio-backed output files after fd close', async () => {
+      const ctx = createCtx(shell, fs, ['-e', [
+        'const cp = require("child_process");',
+        'const fs = require("fs");',
+        'const outPath = "/tmp/nc-cp-spawn.output";',
+        'const fd = fs.openSync(outPath, fs.constants.O_CREAT | fs.constants.O_APPEND | fs.constants.O_WRONLY);',
+        'const child = cp.spawn("/bin/sh", ["-lc", "echo spawn-file-output"], { stdio: ["ignore", fd, fd] });',
+        'fs.closeSync(fd);',
+        'await child;',
+        'console.log("content:" + fs.readFileSync(outPath, "utf8").trim());',
+      ].join('\n')]);
+      const exitCode = await nodeCmd.exec(ctx);
+      expect(exitCode).toBe(0);
+      expect(ctx.stdout).toContain('content:spawn-file-output');
+    });
   });
 
   // ─── url module (~6 tests) ─────────────────────────────────────────────
