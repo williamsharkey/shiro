@@ -21,8 +21,46 @@ function fsError(code: string, message: string, syscall?: string, path?: string)
   return err;
 }
 
+function createRemovalHelpers(
+  ctx: CommandContext,
+  fileCache: Map<string, string>,
+  fileMtimes: Map<string, number>,
+) {
+  const isProtectedRecentTaskOutput = (path: string, now = Date.now()) => {
+    const mtime = fileMtimes.get(path);
+    return !!(
+      mtime &&
+      (now - mtime) < 30000 &&
+      path.includes('/tasks/') &&
+      path.includes('.output')
+    );
+  };
+
+  const removePathFromCaches = (resolved: string, recursive = false) => {
+    const now = Date.now();
+    if (recursive) {
+      const prefix = resolved.endsWith('/') ? resolved : resolved + '/';
+      for (const key of [...fileCache.keys()]) {
+        if (key !== resolved && !key.startsWith(prefix)) continue;
+        if (isProtectedRecentTaskOutput(key, now)) continue;
+        fileCache.delete(key);
+        fileMtimes.delete(key);
+        ctx.fs.unlink(key).catch(() => {});
+      }
+      return;
+    }
+    if (isProtectedRecentTaskOutput(resolved, now)) return;
+    fileCache.delete(resolved);
+    fileMtimes.delete(resolved);
+    ctx.fs.unlink(resolved).catch(() => {});
+  };
+
+  return { isProtectedRecentTaskOutput, removePathFromCaches };
+}
+
 export function createFsModule(deps: FsDeps): any {
   const { ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir } = deps;
+  const { removePathFromCaches } = createRemovalHelpers(ctx, fileCache, fileMtimes);
 
   const materializeOpenFile = (resolved: string) => {
     const content = fileCache.get(resolved) || '';
@@ -400,29 +438,7 @@ export function createFsModule(deps: FsDeps): any {
       if (resolved.includes('/tmp/claude')) {
         console.warn(`[fs-debug] rmSync: ${resolved} (recursive: ${!!opts?.recursive})`);
       }
-      if (opts?.recursive) {
-        // Remove directory and all contents from fileCache + IDB
-        const prefix = resolved + '/';
-        const now = Date.now();
-        for (const key of [...fileCache.keys()]) {
-          if (key === resolved || key.startsWith(prefix)) {
-            // Protect recently-written task output files from startup cleanup race.
-            // Claude Code's startup purges other sessions' /tmp/claude-* dirs, but
-            // the current session may have just written output files there.
-            const mtime = fileMtimes.get(key);
-            if (mtime && (now - mtime) < 30000 && key.includes('/tasks/')) {
-              continue; // skip files written in the last 30 seconds under tasks/
-            }
-            fileCache.delete(key);
-            fileMtimes.delete(key);
-            ctx.fs.unlink(key).catch(() => {});
-          }
-        }
-      } else {
-        fileCache.delete(resolved);
-        fileMtimes.delete(resolved);
-        ctx.fs.unlink(resolved).catch(() => {});
-      }
+      removePathFromCaches(resolved, !!opts?.recursive);
     },
     rmdirSync: (p: string) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
@@ -799,9 +815,10 @@ export function createFsModule(deps: FsDeps): any {
     },
     rm: (p: string, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
-      ctx.fs.unlink(ctx.fs.resolvePath(p, ctx.cwd))
-        .then(() => callback?.(null))
-        .catch((e: any) => callback?.(e));
+      const opts = typeof optsOrCb === 'object' ? optsOrCb : undefined;
+      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      removePathFromCaches(resolved, !!opts?.recursive);
+      queueMicrotask(() => callback?.(null));
     },
     opendir: (p: string, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
@@ -925,6 +942,10 @@ export function createFsModule(deps: FsDeps): any {
       },
       mkdir: async (p: string, opts?: any) => ctx.fs.mkdir(ctx.fs.resolvePath(p, ctx.cwd), opts),
       unlink: async (p: string) => { const r = ctx.fs.resolvePath(p, ctx.cwd); fileCache.delete(r); fileMtimes.delete(r); return ctx.fs.unlink(r); },
+      rm: async (p: string, opts?: any) => {
+        const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+        removePathFromCaches(resolved, !!opts?.recursive);
+      },
       access: async (p: string) => {
         const resolved = ctx.fs.resolvePath(p, ctx.cwd);
         if (fileCache.has(resolved) || fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readCached(resolved) !== undefined || ctx.fs.readdirCached(resolved) !== undefined) return;
@@ -953,6 +974,7 @@ export function createFsModule(deps: FsDeps): any {
 
 export function createFsPromisesModule(deps: FsDeps): any {
   const { ctx, fileCache, fileMtimes, FakeBuffer, homeDir } = deps;
+  const { removePathFromCaches } = createRemovalHelpers(ctx, fileCache, fileMtimes);
 
   // Async fs promises API
   return {
@@ -1081,9 +1103,7 @@ export function createFsPromisesModule(deps: FsDeps): any {
     },
     rm: async (p: string, opts?: any) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      fileCache.delete(resolved);
-      fileMtimes.delete(resolved);
-      await ctx.fs.unlink(resolved);
+      removePathFromCaches(resolved, !!opts?.recursive);
     },
     access: async (p: string) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);

@@ -148,6 +148,36 @@ describe('Node.js Module Compatibility', () => {
       expect(ctx.stdout).toContain('hello world');
     });
 
+    it('promises.rm recursive cleanup preserves recent Claude task output files', async () => {
+      const taskOutput = '/tmp/claude-1000/-home-user/session/tasks/task.output';
+      const ctx = createCtx(shell, fs, ['-e', [
+        'const fs = require("fs");',
+        `const taskOutput = ${JSON.stringify(taskOutput)};`,
+        'fs.writeFileSync(taskOutput, "task result");',
+        'await fs.promises.rm("/tmp/claude-1000", { recursive: true, force: true });',
+        'console.log(fs.readFileSync(taskOutput, "utf8"));',
+      ].join('\n')]);
+      const exitCode = await nodeCmd.exec(ctx);
+      expect(exitCode).toBe(0);
+      expect(ctx.stdout).toContain('task result');
+    });
+
+    it('callback fs.rm recursive cleanup preserves recent Claude task output files', async () => {
+      const taskOutput = '/tmp/claude-1000/-home-user/session/tasks/task-cb.output';
+      const ctx = createCtx(shell, fs, ['-e', [
+        'const fs = require("fs");',
+        `const taskOutput = ${JSON.stringify(taskOutput)};`,
+        'fs.writeFileSync(taskOutput, "callback task result");',
+        'await new Promise((resolve, reject) => {',
+        '  fs.rm("/tmp/claude-1000", { recursive: true, force: true }, (err) => err ? reject(err) : resolve());',
+        '});',
+        'console.log(fs.readFileSync(taskOutput, "utf8"));',
+      ].join('\n')]);
+      const exitCode = await nodeCmd.exec(ctx);
+      expect(exitCode).toBe(0);
+      expect(ctx.stdout).toContain('callback task result');
+    });
+
     it('copyFileSync copies a file', async () => {
       const ctx = createCtx(shell, fs, ['-e', [
         'const fs = require("fs");',
