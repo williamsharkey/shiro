@@ -1,6 +1,7 @@
 import type { CommandContext } from '../commands/index';
 import { getShiroOrigin } from '../utils/shiro-origin';
 import { DEFAULT_CLAUDE_THEME, ensureClaudeBootstrap } from '../claude-config';
+import { ensureClaudeAuthState } from '../claude-auth';
 
 /**
  * Pre-load files from the virtual filesystem into the memory cache.
@@ -206,6 +207,17 @@ export async function preloadEnvironment(
       } catch (e: any) {
         console.warn(`[node] OAuth token refresh error: ${e.message}`);
       }
+    }
+
+    try {
+      await ensureClaudeAuthState(ctx.fs, {
+        homeDir,
+        projectPath: ctx.cwd,
+        origin: getShiroOrigin(),
+        theme: DEFAULT_CLAUDE_THEME,
+      });
+    } catch (e: any) {
+      console.warn(`[node] Claude auth sync error: ${e.message}`);
     }
   }
 

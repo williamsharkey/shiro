@@ -12,11 +12,12 @@
 
 import { Command } from './index';
 import { createServerWindow } from '../server-window';
-import { DEFAULT_CLAUDE_THEME, ensureClaudeBootstrap } from '../claude-config';
+import { DEFAULT_CLAUDE_THEME } from '../claude-config';
+import { ensureClaudeAuthState } from '../claude-auth';
 import { getShiroOrigin } from '../utils/shiro-origin';
 
 const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
-const OAUTH_SCOPES = 'user:inference user:profile';
+const OAUTH_SCOPES = 'org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload';
 const MANUAL_REDIRECT = 'https://platform.claude.com/oauth/code/callback';
 
 function buildSetupHTML(opts: {
@@ -250,25 +251,14 @@ export const setupCmd: Command = {
       if (event.data?.type === 'setup-save-tokens') {
         const { tokens } = event.data;
         try {
-          try { await ctx.fs.mkdir('/home/user/.claude'); } catch { /* exists */ }
-
-          const creds = {
-            claudeAiOauth: {
-              accessToken: tokens.accessToken,
-              refreshToken: tokens.refreshToken,
-              expiresAt: tokens.expiresAt,
-              scopes: tokens.scopes,
-            },
-          };
-          await ctx.fs.writeFile(credsPath, JSON.stringify(creds, null, 2));
-          await ensureClaudeBootstrap(ctx.fs, {
+          await ensureClaudeAuthState(ctx.fs, {
             homeDir: '/home/user',
             projectPath: ctx.cwd,
+            origin: getShiroOrigin(),
+            tokens,
             theme: DEFAULT_CLAUDE_THEME,
-            completeOnboarding: true,
-            trustProject: true,
-            completeProjectOnboarding: true,
-            acceptBypassPermissions: true,
+            ensureBootstrap: true,
+            refreshRemoteState: true,
           });
         } catch (e: any) {
           console.warn('[setup] Failed to save credentials:', e.message);
