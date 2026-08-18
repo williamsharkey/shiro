@@ -9,6 +9,7 @@
  */
 
 import { Command } from './index';
+import { claudeLaunchCmd } from '../claude-code-version';
 
 export const scCmd: Command = {
   name: 'sc',
@@ -40,9 +41,8 @@ export const scCmd: Command = {
         ).join(' ')
       : '';
 
-    // Chain install check + run using shell && operators (no /bin/sh needed)
     // spawn joins args with spaces and passes to shell.execute(), so use a single string
-    const cmd = `which claude > /dev/null 2>&1 || npm install -g @anthropic-ai/claude-code && claude --dangerously-skip-permissions${claudeArgs}`;
+    const cmd = await claudeLaunchCmd(ctx.fs, claudeArgs);
 
     return spawnCmd.exec({
       ...ctx,

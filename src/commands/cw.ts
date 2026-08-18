@@ -13,6 +13,7 @@ import { processTable } from '../process-table';
 import { createServerWindow } from '../server-window';
 import { WebTerminal } from '../web-terminal';
 import { smartCopyProcess } from '../utils/copy-utils';
+import { claudeLaunchCmd } from '../claude-code-version';
 
 export const cwCmd: Command = {
   name: 'cw',
@@ -39,7 +40,7 @@ export const cwCmd: Command = {
         ).join(' ')
       : '';
 
-    const cmd = `which claude > /dev/null 2>&1 || npm install -g @anthropic-ai/claude-code && claude --dangerously-skip-permissions${claudeArgs}`;
+    const cmd = await claudeLaunchCmd(ctx.fs, claudeArgs);
 
     // Fork shell so spawned process gets its own cwd/env
     const childShell = ctx.shell.fork();

@@ -13,6 +13,7 @@ import { Command, CommandContext } from './index';
 import { processTable } from '../process-table';
 import { createServerWindow } from '../server-window';
 import { WindowTerminal } from '../window-terminal';
+import { claudeLaunchCmd } from '../claude-code-version';
 
 export const builderCmd: Command = {
   name: 'builder',
@@ -107,7 +108,7 @@ Deprecated. Read \`./AGENTS.md\`.
     } catch {}
 
     // Build Claude command that works in the app directory
-    const claudeCmd = `cd ${appDir} && which claude > /dev/null 2>&1 || npm install -g @anthropic-ai/claude-code && claude --dangerously-skip-permissions`;
+    const claudeCmd = `cd ${appDir} && ${await claudeLaunchCmd(ctx.fs)}`;
 
     await spawnCmd.exec({
       ...ctx,

@@ -5,6 +5,7 @@ import { FileSystem } from '@shiro/filesystem';
 import { npmCmd } from '@shiro/commands/npm';
 import { fetchCmd } from '@shiro/commands/fetch';
 import { nodeCmd } from '@shiro/commands/jseval';
+import { CLAUDE_CODE_PKG, CLAUDE_CODE_DIR } from '@shiro/claude-code-version';
 import type { CommandContext } from '@shiro/commands/index';
 
 /**
@@ -32,6 +33,13 @@ describe('Claude Code Install', () => {
     const env = await createTestShell();
     shell = env.shell;
     fs = env.fs;
+    // FileSystem always opens the same IndexedDB ('shiro-fs'), so tests in this
+    // file share state. The bin-symlink fixtures below write a stub cli.js; left
+    // in place it stands in for the real CLI in the "REAL install" steps, which
+    // is how a fully broken `claude` kept this suite green. Wipe between tests.
+    for (const p of [CLAUDE_CODE_DIR, '/usr/local/bin/claude']) {
+      try { await fs.rm(p, { recursive: true }); } catch { /* not there yet */ }
+    }
   });
 
   describe('npm install -g flag parsing', () => {
@@ -168,7 +176,7 @@ describe('Claude Code Install', () => {
     });
 
     it('step 2: npm install -g @anthropic-ai/claude-code downloads real package', async () => {
-      const ctx = createCtx(shell, fs, ['install', '-g', '@anthropic-ai/claude-code']);
+      const ctx = createCtx(shell, fs, ['install', '-g', CLAUDE_CODE_PKG]);
       const exitCode = await npmCmd.exec(ctx);
 
       expect(exitCode).toBe(0);
@@ -189,15 +197,26 @@ describe('Claude Code Install', () => {
     }, 120000);
 
     it('step 3: claude is found via PATH after install', async () => {
-      const installCtx = createCtx(shell, fs, ['install', '-g', '@anthropic-ai/claude-code']);
+      const installCtx = createCtx(shell, fs, ['install', '-g', CLAUDE_CODE_PKG]);
       await npmCmd.exec(installCtx);
 
       const found = await shell.findExecutableInPath('claude');
       expect(found).toBe('/usr/local/bin/claude');
     }, 120000);
 
+    it('step 3b: claude --version runs through PATH after install', async () => {
+      const installCtx = createCtx(shell, fs, ['install', '-g', CLAUDE_CODE_PKG]);
+      const installExit = await npmCmd.exec(installCtx);
+      expect(installExit).toBe(0);
+
+      const { output, exitCode } = await run(shell, 'claude --version');
+
+      expect(exitCode).toBe(0);
+      expect(output).toMatch(/\d+\.\d+\.\d+/);
+    }, 120000);
+
     it('step 4: claude --version runs via node and outputs version', async () => {
-      const installCtx = createCtx(shell, fs, ['install', '-g', '@anthropic-ai/claude-code']);
+      const installCtx = createCtx(shell, fs, ['install', '-g', CLAUDE_CODE_PKG]);
       const installExit = await npmCmd.exec(installCtx);
       expect(installExit).toBe(0);
 
@@ -213,7 +232,7 @@ describe('Claude Code Install', () => {
     }, 120000);
 
     it('step 5: claude --help shows usage information', async () => {
-      const installCtx = createCtx(shell, fs, ['install', '-g', '@anthropic-ai/claude-code']);
+      const installCtx = createCtx(shell, fs, ['install', '-g', CLAUDE_CODE_PKG]);
       await npmCmd.exec(installCtx);
 
       const helpCtx = createCtx(shell, fs, [
@@ -226,8 +245,14 @@ describe('Claude Code Install', () => {
       expect(helpCtx.stdout.length).toBeGreaterThan(0);
     }, 120000);
 
-    it('step 6: claude -p "hello" runs with API key error', async () => {
-      const installCtx = createCtx(shell, fs, ['install', '-g', '@anthropic-ai/claude-code']);
+    // Skipped under Node: src/node-compat/process.ts only sets ANTHROPIC_BASE_URL
+    // when `window` exists, so here the CLI dials api.anthropic.com directly and
+    // the shim cannot resolve it — the request never reaches Anthropic, so no
+    // "Invalid API key" ever comes back and this spends its full 120s timeout
+    // retrying ENOTFOUND. The authenticated request path is browser-only and has
+    // to be verified there.
+    it.skip('step 6: claude -p "hello" runs with API key error', async () => {
+      const installCtx = createCtx(shell, fs, ['install', '-g', CLAUDE_CODE_PKG]);
       await npmCmd.exec(installCtx);
 
       shell.env['ANTHROPIC_API_KEY'] = 'sk-ant-api03-test-invalid-key-for-testing';
@@ -243,7 +268,7 @@ describe('Claude Code Install', () => {
     }, 120000);
 
     it('step 7: claude without -p detects non-TTY stdin correctly', async () => {
-      const installCtx = createCtx(shell, fs, ['install', '-g', '@anthropic-ai/claude-code']);
+      const installCtx = createCtx(shell, fs, ['install', '-g', CLAUDE_CODE_PKG]);
       await npmCmd.exec(installCtx);
 
       shell.env['ANTHROPIC_API_KEY'] = 'sk-ant-api03-test-invalid-key-for-testing';

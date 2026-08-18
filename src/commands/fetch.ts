@@ -1,5 +1,6 @@
 import { Command, CommandContext } from './index';
 import { iframeServer } from '../iframe-server';
+import { CLAUDE_CODE_PKG } from '../claude-code-version';
 
 export const fetchCmd: Command = {
   name: 'fetch',
@@ -90,7 +91,7 @@ export const fetchCmd: Command = {
         '#!/bin/sh',
         'set -e',
         'echo "Installing Claude Code..."',
-        'npm install -g @anthropic-ai/claude-code',
+        `npm install -g ${CLAUDE_CODE_PKG}`,
         'echo ""',
         'echo "Claude Code installed successfully!"',
         'echo "Run: claude"',
