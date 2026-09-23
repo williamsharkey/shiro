@@ -93,7 +93,13 @@ claude -p "create a todo app with localStorage"
 
 The real `@anthropic-ai/claude-code` CLI runs inside Shiro's Node.js runtime shim. The tools Claude Code relies on — file reads, edits, grep, glob, bash — are shimmed to use the virtual filesystem. Both print mode (`claude -p "..."`) and interactive mode (`claude`) work. API calls route through a CORS proxy to Anthropic's API.
 
+Type `claude`. Shiro installs Claude Code in the background on first boot. If you aren't signed in, a panel opens with a button for the sign-in page and a box for the code it gives you; credentials persist in IndexedDB. `claude-window` (formerly `sc`) runs it in a new window, and `claude login` signs in again.
+
+Shiro pins `@anthropic-ai/claude-code@2.1.112`, the last pure-JavaScript release (later ones ship native binaries). It reports a newer version to the API so current models work, and defaults to `claude-opus-5-5` with the flicker-free fullscreen renderer.
+
 An outer Claude Code instance can also control Shiro remotely via MCP tools over WebRTC. Run `remote start` in Shiro, then connect with the `shiro-mcp` package.
+
+To profile a live session, run `remote start` in Shiro and then `node shiro-mcp/probe.mjs <code>` locally. It logs heap, freezes (long tasks and page response time), filesystem traffic, and errors every 2 seconds to `probe.jsonl`, reconnects after a reload, and serves ad-hoc `eval`/`exec` on `127.0.0.1:7788`.
 
 ## Node.js Compatibility
 
