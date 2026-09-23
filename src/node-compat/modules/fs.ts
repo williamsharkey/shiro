@@ -976,7 +976,7 @@ export function createFsModule(deps: FsDeps): any {
 }
 
 export function createFsPromisesModule(deps: FsDeps): any {
-  const { ctx, fileCache, fileMtimes, FakeBuffer, homeDir } = deps;
+  const { ctx, fileCache, fileMtimes, FakeBuffer, homeDir, getBuiltinModule } = deps;
   const { removePathFromCaches } = createRemovalHelpers(ctx, fileCache, fileMtimes);
 
   // Async fs promises API
@@ -1180,10 +1180,17 @@ export function createFsPromisesModule(deps: FsDeps): any {
       await ctx.fs.mkdir(dir, { recursive: true });
       return dir;
     },
-    open: async (p: string, _flags?: any) => {
+    open: async (p: string, flags?: any) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      // Register a real fd: Claude's Bash tool opens its output file here and
+      // passes handle.fd as spawn stdio. With the old fd 0, spawn couldn't map
+      // it to the file, so every command's output was dropped.
+      const syncFs = getBuiltinModule('fs');
+      const fd: number = syncFs.openSync(p, flags ?? 'r');
       return {
-        fd: 0,
+        fd,
+        write: async (data: any) => ({ bytesWritten: syncFs.writeSync(fd, data), buffer: data }),
+        appendFile: async (data: any) => { syncFs.writeSync(fd, data); },
         readFile: async (opts?: any) => {
           const encoding = typeof opts === 'string' ? opts : opts?.encoding;
           // Check fileCache first (consistent with readFileSync)
@@ -1199,9 +1206,11 @@ export function createFsPromisesModule(deps: FsDeps): any {
           fileCache.set(resolved, content); // Keep fileCache in sync for readFileSync/renameSync
           await ctx.fs.writeFile(resolved, content);
         },
-        close: async () => {},
+        close: async () => { syncFs.closeSync(fd); },
         stat: async () => ctx.fs.stat(resolved),
         chmod: async () => {},
+        sync: async () => {},
+        datasync: async () => {},
       };
     },
     watch: async function*(_p: string, _opts?: any) { /* no-op async generator */ },

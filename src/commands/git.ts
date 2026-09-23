@@ -507,7 +507,7 @@ export const gitCmd: Command = {
           } catch (e) {
             // Ignore if already exists
           }
-          ctx.stdout = `Cloning into '${repoName}'...\n`;
+          ctx.stdout = `Cloning into '${cloneTarget || repoName}'...\n`;
 
           const corsProxy = ctx.env['GIT_CORS_PROXY'] || `${getShiroOrigin()}/git-proxy`;
           const token = ctx.env['GITHUB_TOKEN'] || (typeof localStorage !== 'undefined' ? localStorage.getItem('shiro_github_token') || '' : '');
