@@ -1187,8 +1187,32 @@ export function createFsPromisesModule(deps: FsDeps): any {
       // it to the file, so every command's output was dropped.
       const syncFs = getBuiltinModule('fs');
       const fd: number = syncFs.openSync(p, flags ?? 'r');
-      return {
+      // Current bytes: the in-memory copy is ahead of IndexedDB while a
+      // spawned command is still writing its output file.
+      const currentBytes = async (): Promise<Uint8Array> => {
+        const cached = fileCache.get(resolved);
+        if (cached !== undefined) return new TextEncoder().encode(cached);
+        const data = await ctx.fs.readFile(resolved);
+        return typeof data === 'string' ? new TextEncoder().encode(data) : data;
+      };
+      const close = async () => { syncFs.closeSync(fd); };
+      const handle: any = {
         fd,
+        // Claude Code reads task output with handle.read(buf, off, len, pos)
+        read: async (bufOrOpts?: any, offset?: number, length?: number, position?: number | null) => {
+          let buffer = bufOrOpts;
+          if (bufOrOpts && !(bufOrOpts instanceof Uint8Array)) {
+            ({ buffer, offset, length, position } = bufOrOpts);
+          }
+          buffer ??= FakeBuffer.alloc(16384);
+          offset ??= 0;
+          length ??= buffer.length - offset;
+          const bytes = await currentBytes();
+          const start = position ?? 0;
+          const n = Math.max(0, Math.min(length!, bytes.length - start));
+          buffer.set(bytes.subarray(start, start + n), offset);
+          return { bytesRead: n, buffer };
+        },
         write: async (data: any) => ({ bytesWritten: syncFs.writeSync(fd, data), buffer: data }),
         appendFile: async (data: any) => { syncFs.writeSync(fd, data); },
         readFile: async (opts?: any) => {
@@ -1206,12 +1230,28 @@ export function createFsPromisesModule(deps: FsDeps): any {
           fileCache.set(resolved, content); // Keep fileCache in sync for readFileSync/renameSync
           await ctx.fs.writeFile(resolved, content);
         },
-        close: async () => { syncFs.closeSync(fd); },
-        stat: async () => ctx.fs.stat(resolved),
+        close,
+        stat: async () => {
+          let st: any;
+          try {
+            st = await ctx.fs.stat(resolved);
+          } catch (e) {
+            if (!fileCache.has(resolved)) throw e;
+            // Written to memory but not flushed to IndexedDB yet
+            const now = new Date();
+            st = { isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false,
+              mode: 0o100644, mtime: now, ctime: now, atime: now, birthtime: now, mtimeMs: now.getTime() };
+          }
+          if (fileCache.has(resolved)) st.size = (await currentBytes()).length;
+          return st;
+        },
         chmod: async () => {},
         sync: async () => {},
         datasync: async () => {},
       };
+      // `await using` (Claude Code's bundled helper) requires a disposable handle
+      handle[(Symbol as any).asyncDispose ?? Symbol.for('Symbol.asyncDispose')] = close;
+      return handle;
     },
     watch: async function*(_p: string, _opts?: any) { /* no-op async generator */ },
     constants: { F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1, O_RDONLY: 0, O_WRONLY: 1, O_RDWR: 2, O_CREAT: 64, O_EXCL: 128, O_TRUNC: 512, O_APPEND: 1024, O_NONBLOCK: 2048, S_IFMT: 61440, S_IFREG: 32768, S_IFDIR: 16384, S_IFLNK: 40960 },

@@ -56,7 +56,10 @@ export async function executeNodeScript(
       const errStr = msg || 'Unknown error';
       console.warn('[node] unhandled rejection:', event.reason?.stack || errStr);
       _nodeStderrBuf?.push(`UnhandledPromiseRejection: ${errStr}`);
-      if (ctx.terminal) ctx.terminal.writeOutput(`\x1b[31mUnhandledPromiseRejection: ${errStr}\x1b[0m\r\n`);
+      // Don't paint over a fullscreen TUI (Claude Code): its screen is on the
+      // alternate buffer and stray text lands in its input box.
+      const altScreen = (ctx.terminal as any)?.term?.buffer?.active?.type === 'alternate';
+      if (ctx.terminal && !altScreen) ctx.terminal.writeOutput(`\x1b[31mUnhandledPromiseRejection: ${errStr}\x1b[0m\r\n`);
       event.preventDefault();
     }
   };
