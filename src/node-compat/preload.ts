@@ -128,6 +128,7 @@ export async function preloadEnvironment(
       trustProject: Boolean(isClaudeCodeScript),
       completeProjectOnboarding: Boolean(isClaudeCodeScript),
       acceptBypassPermissions: Boolean(isClaudeCodeScript),
+      defaultTui: isClaudeCodeScript ? 'fullscreen' : undefined,
     });
   } catch {}
   try { await ctx.fs.stat(homeDir + '/.claude/statsig/cache.json'); } catch {

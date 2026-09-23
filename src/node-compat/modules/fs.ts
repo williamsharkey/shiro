@@ -97,8 +97,9 @@ export function createFsModule(deps: FsDeps): any {
       if (!encoding) return FakeBuffer.from(cached);
       return cached;
     },
-    writeFileSync: (p: string, data: string | Uint8Array) => {
+    writeFileSync: (p: string | number, data: string | Uint8Array) => {
       tickSyncOps();
+      if (typeof p === 'number') { fsShim.writeSync(p, data); return; }
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       const strData = typeof data === 'string' ? data : new TextDecoder().decode(data);
       if (resolved.includes('/tasks/') || resolved.includes('/tmp/claude')) {
@@ -444,7 +445,9 @@ export function createFsModule(deps: FsDeps): any {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       ctx.fs.rmdir(resolved).catch(() => {});
     },
-    appendFileSync: (p: string, data: string | Uint8Array) => {
+    appendFileSync: (p: string | number, data: string | Uint8Array) => {
+      // Node accepts an fd from openSync here (Claude's session log does this)
+      if (typeof p === 'number') { fsShim.writeSync(p, data); return; }
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       const existing = fileCache.get(resolved) || '';
       const str = typeof data === 'string' ? data : new TextDecoder().decode(data);

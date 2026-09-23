@@ -128,15 +128,12 @@ export class ShiroTerminal {
           }
           if (uri === 'shiro://claude') {
             this.term.writeln('');
-            this.shell.fs.exists('/usr/local/bin/claude').then(installed => {
-              const cmd = installed ? 'sc' : 'curl -fsSL https://claude.ai/install.sh | bash';
-              this.shell.execute(
-                cmd,
-                (s) => this.term.write(s),
-                (s) => this.term.write(`\x1b[31m${s}\x1b[0m`)
-              ).then(() => {
-                this.showPrompt();
-              });
+            this.shell.execute(
+              'claude-window',
+              (s) => this.term.write(s),
+              (s) => this.term.write(`\x1b[31m${s}\x1b[0m`)
+            ).then(() => {
+              this.showPrompt();
             });
             return;
           }

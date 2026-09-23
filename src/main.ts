@@ -81,7 +81,9 @@ import { historyCmd } from './commands/history';
 import { consoleCmd } from './commands/console';
 import { rgCmd } from './commands/rg';
 import { spawnCmd } from './commands/spawn';
-import { scCmd } from './commands/sc';
+import { scCmd, claudeWindowCmd } from './commands/sc';
+import { claudeCmd } from './commands/claude';
+import { ensureClaudeCodeInstalled } from './claude-code-version';
 import { cwCmd } from './commands/cw';
 import { setupCmd } from './commands/setup';
 import { psCmd, killCmd } from './commands/ps';
@@ -315,6 +317,8 @@ async function main() {
   registerCommand(commands, lazyCommand('group', 'Encrypted group networking',
     () => import('./commands/group').then(m => m.groupCmd)), 'src/commands/group.ts');
   registerCommand(commands, spawnCmd, 'src/commands/spawn.ts');
+  registerCommand(commands, claudeCmd, 'src/commands/claude.ts');
+  registerCommand(commands, claudeWindowCmd, 'src/commands/sc.ts');
   registerCommand(commands, scCmd, 'src/commands/sc.ts');
   registerCommand(commands, cwCmd, 'src/commands/cw.ts');
   registerCommand(commands, setupCmd, 'src/commands/setup.ts');
@@ -722,6 +726,14 @@ async function main() {
       startRemoteWithCode(persistedCode, terminal);
     }
   }
+
+  // Have Claude Code ready before anyone types `claude`. Waits a few seconds
+  // so the 18 MB tarball download doesn't compete with boot.
+  setTimeout(() => {
+    ensureClaudeCodeInstalled(fs)
+      .then(() => console.log('[shiro] Claude Code ready'))
+      .catch((e) => console.warn('[shiro] Claude Code background install failed:', e?.message || e));
+  }, 3000);
 }
 
 // Guard: the entry chunk is inlined into HTML AND kept as a file for lazy chunk

@@ -514,10 +514,10 @@ GITHUB_TOKEN=$GITHUB_TOKEN git push origin main</pre></div>
       <p>The real <code>@anthropic-ai/claude-code</code> CLI runs inside Shiro's Node.js runtime. It can read, write, edit, and search files in the virtual filesystem.</p>
 
       <h3>Setup</h3>
-      <p>Run <code>setup</code> to sign in with your Anthropic account via OAuth. Your credentials persist in IndexedDB.</p>
+      <p>Claude Code is installed in the background when Shiro first boots. Run <code>claude</code>: if you aren't signed in, a panel opens with a button for the sign-in page and a box for the code it gives you. Credentials persist in IndexedDB, and <code>claude login</code> or <code>setup</code> signs in again.</p>
 
-      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Sign in (opens OAuth flow)</span>
-setup
+      <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Sign in again / switch accounts</span>
+claude login
 
 <span class="c"># Print mode — one-shot code generation</span>
 claude -p "Write a function that checks if a number is prime"
@@ -525,8 +525,11 @@ claude -p "Write a function that checks if a number is prime"
 <span class="c"># Pipe input for analysis</span>
 cat app.js | claude -p "Review this code for bugs"
 
-<span class="c"># Interactive mode (opens in a terminal window)</span>
-sc</pre></div>
+<span class="c"># Interactive mode in this terminal</span>
+claude
+
+<span class="c"># Interactive mode in a new terminal window (old name: sc)</span>
+claude-window</pre></div>
 
       <h3>What Works</h3>
       <ul>
@@ -726,7 +729,7 @@ remote stop      <span class="c"># End session</span></pre></div>
       <p><code>code</code> <code>monaco</code> <code>less</code> <code>mdview</code> <code>html</code> <code>img</code> <code>open</code></p>
 
       <h3>AI</h3>
-      <p><code>spirit</code> <code>claude</code> <code>sc</code> <code>cv</code></p>
+      <p><code>spirit</code> <code>claude</code> <code>claude-window</code> <code>cv</code></p>
 
       <h3>Shiro-specific</h3>
       <p><code>setup</code> <code>seed</code> <code>image</code> <code>spawn</code> <code>hud</code> <code>js-eval</code></p>

@@ -346,8 +346,15 @@ describe('Shell Advanced', () => {
 
     it('/dev/null discards stderr', async () => {
       let stderr = '';
-      await shell.execute('echo error >&2 2>/dev/null', (s) => {}, (s) => { stderr += s; });
+      // Left to right: stderr goes to /dev/null first, then stdout follows it
+      await shell.execute('echo error 2>/dev/null >&2', (s) => {}, (s) => { stderr += s; });
       expect(stderr).toBe('');
+    });
+
+    it('>&2 before 2>/dev/null still reaches stderr, as in bash', async () => {
+      let stderr = '';
+      await shell.execute('echo error >&2 2>/dev/null', (s) => {}, (s) => { stderr += s; });
+      expect(stderr).toContain('error');
     });
 
     it('> /dev/stderr redirects stdout to stderr', async () => {

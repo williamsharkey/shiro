@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createTestShell } from './helpers';
+import { createTestShell, run } from './helpers';
 import { Shell } from '@shiro/shell';
 import { FileSystem } from '@shiro/filesystem';
 import { npmCmd } from '@shiro/commands/npm';

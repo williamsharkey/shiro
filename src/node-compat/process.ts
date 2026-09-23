@@ -2,6 +2,7 @@ import type { CommandContext } from '../commands/index';
 import type { SharedState } from './types';
 import { ProcessExitError } from '../commands/jseval/utils';
 import { getShiroOrigin } from '../utils/shiro-origin';
+import { CLAUDE_CODE_DEFAULT_MODEL } from '../claude-code-version';
 
 /**
  * Create the fake process object for the Node.js compat layer.
@@ -30,6 +31,8 @@ export function createFakeProcess(
     // Claude Code is substantially more stable in Shiro when its planner and tool use
     // stay in a single foreground lane instead of spinning background tasks/workers.
     const claudeDefaults: Record<string, string> = {
+      ANTHROPIC_MODEL: CLAUDE_CODE_DEFAULT_MODEL,
+      DISABLE_AUTOUPDATER: '1',
       DISABLE_INSTALLATION_CHECKS: '1',
       CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: '1',
       CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',

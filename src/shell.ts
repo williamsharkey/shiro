@@ -1,7 +1,6 @@
 import { FileSystem } from './filesystem';
 import { CommandRegistry, CommandContext } from './commands/index';
 import type { ShiroTerminal } from './terminal';
-import { recordCommand } from './favicon';
 import { isAvailableAsPackage, getCompiledModule } from './wasi-packages';
 
 // Lazy-load the WASI runtime (~960 lines) only when WASM execution is needed
@@ -46,6 +45,27 @@ class BreakSignal { constructor(public levels: number = 1) {} }
 class ContinueSignal { constructor(public levels: number = 1) {} }
 /** Sentinel thrown by `return [N]` inside functions */
 class ReturnSignal { constructor(public code: number = 0) {} }
+
+const ENV_PREFIX_RE = /^\s*([A-Za-z_][A-Za-z0-9_]*)=((?:"(?:[^"\\]|\\.)*"|'[^']*'|[^\s'"|;&<>()])*)(?=\s)/;
+
+/**
+ * Split leading `NAME=value` assignments off a command segment.
+ * Returns null unless at least one assignment is followed by a command.
+ */
+export function splitEnvPrefix(segment: string): { assignments: [string, string][]; rest: string } | null {
+  const assignments: [string, string][] = [];
+  let rest = segment;
+  for (let m = ENV_PREFIX_RE.exec(rest); m; m = ENV_PREFIX_RE.exec(rest)) {
+    const value = m[2].replace(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g, (_all, dq, sq) =>
+      dq !== undefined ? dq.replace(/\\(["\\$`])/g, '$1') : sq);
+    assignments.push([m[1], value]);
+    rest = rest.slice(m[0].length);
+  }
+  if (assignments.length === 0 || !rest.trim() || /^\s*[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/.test(rest)) return null;
+  // Array assignments (arr=(...)) and bare compound words stay on the existing path
+  if (/^\s*\(/.test(rest)) return null;
+  return { assignments, rest: rest.trimStart() };
+}
 
 export class Shell {
   fs: FileSystem;
@@ -269,9 +289,6 @@ export class Shell {
       this.abortController = new AbortController();
     }
 
-    // Record command for title display
-    recordCommand(trimmed, remote);
-
     // Check for background execution (&)
     if (trimmed.endsWith('&') && !trimmed.endsWith('&&')) {
       const bgCmd = trimmed.slice(0, -1).trim();
@@ -417,6 +434,8 @@ export class Shell {
       let lastOutput = '';
       exitCode = 0;
       const pipeExitCodes: number[] = [];
+      // Env from `NAME=value cmd` prefixes, restored once the pipeline finishes
+      const prefixEnvSaved = new Map<string, string | undefined>();
 
       for (let i = 0; i < pipeline.length; i++) {
         // Check for SIGINT (abort)
@@ -427,7 +446,19 @@ export class Shell {
           break;
         }
 
-        const segment = pipeline[i];
+        let segment = pipeline[i];
+
+        // `NAME=value cmd args`: export NAME to cmd only, like POSIX shells do
+        const envPrefix = splitEnvPrefix(segment);
+        if (envPrefix) {
+          for (const [key, value] of envPrefix.assignments) {
+            if (!prefixEnvSaved.has(key)) {
+              prefixEnvSaved.set(key, Object.prototype.hasOwnProperty.call(this.env, key) ? this.env[key] : undefined);
+            }
+            this.env[key] = value;
+          }
+          segment = envPrefix.rest;
+        }
 
         // Check if this pipeline segment is a control structure (e.g. `echo foo | while ...`)
         if (this.isControlStructure(segment.trim())) {
@@ -2244,6 +2275,11 @@ export class Shell {
         this.cwd = this.env['PWD'] || this.cwd;
       }
 
+      for (const [key, value] of prefixEnvSaved) {
+        if (value === undefined) delete this.env[key];
+        else this.env[key] = value;
+      }
+
       // pipefail: use last non-zero exit code from any pipe segment
       if (this.options.has('pipefail') && pipeExitCodes.length > 1) {
         const lastNonZero = [...pipeExitCodes].reverse().find(c => c !== 0);
@@ -3279,7 +3315,15 @@ export class Shell {
         hereString = tokens[i + 1].replace(/\x01/g, '') + '\n';
         i++;
       } else if ((tokens[i] === '>' || tokens[i] === '>>' || tokens[i] === '<' || tokens[i] === '2>' || tokens[i] === '2>>') && i + 1 < tokens.length) {
-        redirects.push({ type: tokens[i] as Redirect['type'], target: tokens[i + 1].replace(/\x01/g, '') });
+        // >&2 / >&1 duplicate onto stderr/stdout rather than naming a file
+        const rawTarget = tokens[i + 1].replace(/\x01/g, '');
+        let target = rawTarget === '&2' ? '/dev/stderr' : rawTarget === '&1' ? '/dev/stdout' : rawTarget;
+        if (rawTarget === '&2') {
+          // Redirects apply left to right: `2>x >&2` sends stdout to x too
+          const stderrRedir = [...redirects].reverse().find(r => r.type === '2>' || r.type === '2>>');
+          if (stderrRedir) target = stderrRedir.target;
+        }
+        redirects.push({ type: tokens[i] as Redirect['type'], target });
         i++;
       } else if (/^\d+<$/.test(tokens[i]) && i + 1 < tokens.length) {
         // FD redirect: N< file
@@ -3447,6 +3491,8 @@ export class Shell {
           i += 3;
           continue;
         }
+        // `1>` is the explicit form of `>`; the 1 is an fd, not an argument
+        if (current === '1') current = '';
         if (current) { tokens.push(current); current = ''; }
         if (input[i + 1] === '>') {
           tokens.push('>>');
@@ -4859,6 +4905,10 @@ export class Shell {
       writeStderr('shiro: node command not available\r\n');
       return 127;
     }
+
+    // Run bin symlinks (e.g. /usr/local/bin/claude) under their real path so
+    // __dirname, relative requires, and per-package runtime tweaks see the package.
+    try { filePath = await this.fs.realpath(filePath); } catch { /* keep as given */ }
 
     const nodeCtx: CommandContext = {
       args: [filePath, ...args],

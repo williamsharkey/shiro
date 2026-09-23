@@ -417,6 +417,11 @@ export class FileSystem {
     throw fsError('ELOOP', `ELOOP: too many levels of symbolic links, '${path}'`);
   }
 
+  /** Path with symlinks in the final component followed (like realpath for bin links). */
+  async realpath(path: string): Promise<string> {
+    return this._resolve(path);
+  }
+
   private async _put(node: FSNode): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const req = this._store('readwrite').put(node);

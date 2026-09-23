@@ -1364,9 +1364,9 @@ const copilotGuide = `<!DOCTYPE html>
     <div class="step-label">Step 1 &mdash; Tell Claude what to build</div>
     <div class="step-title">Build something with one sentence</div>
     <div class="step-desc">Claude Code can build full apps from a description. Try this:</div>
-    <div class="cmd-btn" onclick="run1()">sc -p "build a to-do app with dark theme, save to /tmp/todo"</div>
+    <div class="cmd-btn" onclick="run1()">claude-window -p "build a to-do app with dark theme, save to /tmp/todo"</div>
     <div class="callout" style="margin-top:10px">
-      Or type your own request! <code>sc -p "build me a [your idea]"</code>
+      Or type your own request! <code>claude-window -p "build me a [your idea]"</code>
     </div>
   </div>
 
@@ -1415,7 +1415,7 @@ function advance() {
 }
 
 function run1() {
-  bridge.execInTerminal('sc -p "build a simple to-do app with dark theme and save it to /tmp/todo"');
+  bridge.execInTerminal('claude-window -p "build a simple to-do app with dark theme and save it to /tmp/todo"');
   // Wait for Claude to finish (can take a while)
   var check = setInterval(function() {
     bridge.checkFile('/tmp/todo/index.html');
@@ -1461,7 +1461,7 @@ export const aiCopilot: LivingTemplate = {
   icon: '\u{1F916}',
   desc: 'Direct AI to build, then read and modify the code',
   time: '~10 min',
-  learns: ['sc', 'cat', 'vi', 'serve', 'reading code'],
+  learns: ['claude-window', 'cat', 'vi', 'serve', 'reading code'],
   guideHtml: copilotGuide,
   guidePort: 9005,
   setup: [

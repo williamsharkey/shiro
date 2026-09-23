@@ -212,7 +212,12 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
 
     let stdout = '';
     let stderr = '';
-    const exitCode = await ctx.shell.execute(normalized, (s) => { stdout += s; }, (s) => { stderr += s; }, false, ctx.terminal, true);
+    // Run in a forked shell with no terminal: a child process's output belongs to
+    // the parent that spawned it. With a terminal attached, nested programs (node,
+    // tsc, vitest) saw a TTY and painted straight over Claude's UI instead of
+    // returning output to its Bash tool. The fork also keeps `cd`/`export` from
+    // leaking into the interactive shell.
+    const exitCode = await ctx.shell.fork().execute(normalized, (s) => { stdout += s; }, (s) => { stderr += s; }, false, undefined, true);
 
     // Refresh fileCache from Shiro FS cache — shell commands may have created,
     // modified, or deleted files that fileCache still has stale entries for.

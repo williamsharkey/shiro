@@ -27,6 +27,12 @@ export interface ClaudeBootstrapOptions {
   trustProject?: boolean;
   completeProjectOnboarding?: boolean;
   acceptBypassPermissions?: boolean;
+  /**
+   * Seed Claude Code's `tui` setting when unset. "fullscreen" draws on the
+   * alternate screen, so resizes and frames taller than the window can't leave
+   * stale copies in scrollback. `/tui default` inside Claude switches back.
+   */
+  defaultTui?: 'fullscreen' | 'default';
 }
 
 type ClaudeConfigFS = Pick<FileSystem, 'readFile' | 'writeFile' | 'resolvePath'>;
@@ -67,6 +73,11 @@ export async function ensureClaudeBootstrap(
 
   if (options.acceptBypassPermissions && settings.skipDangerousModePermissionPrompt !== true) {
     settings.skipDangerousModePermissionPrompt = true;
+    settingsChanged = true;
+  }
+
+  if (options.defaultTui && settings.tui === undefined) {
+    settings.tui = options.defaultTui;
     settingsChanged = true;
   }
 

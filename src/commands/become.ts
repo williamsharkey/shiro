@@ -137,7 +137,7 @@ export function deactivateBecomeMode(): void {
 
   // Reset URL and title
   history.pushState({}, '', '/');
-  document.title = 'shiro';
+  document.title = window.location.hostname || 'shiro';
 
   // Focus terminal
   const shiro = (window as any).__shiro;

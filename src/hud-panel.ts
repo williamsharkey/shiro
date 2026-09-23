@@ -301,9 +301,7 @@ function handleAction(action: string, shell: Shell) {
       break;
     }
     case 'claude': {
-      shell.fs.exists('/usr/local/bin/claude').then(installed => {
-        runInTerminal(shell, installed ? 'sc' : 'curl -fsSL https://claude.ai/install.sh | bash');
-      });
+      runInTerminal(shell, 'claude-window');
       break;
     }
     case 'remote': {

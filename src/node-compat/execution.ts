@@ -15,6 +15,7 @@ import { createFakeConsole } from './console';
 import { createFakeProcess } from './process';
 import { createFileCache } from './file-cache';
 import { preloadEnvironment } from './preload';
+import { isClaudeCodeScript, patchClaudeCodeSource } from '../claude-code-version';
 import { createAutoStubFactory } from './auto-stub';
 import { createRequireFunction } from './require';
 import { createExpressFactory } from './shims/express';
@@ -53,6 +54,7 @@ export async function executeNodeScript(
       event.preventDefault();
     } else {
       const errStr = msg || 'Unknown error';
+      console.warn('[node] unhandled rejection:', event.reason?.stack || errStr);
       _nodeStderrBuf?.push(`UnhandledPromiseRejection: ${errStr}`);
       if (ctx.terminal) ctx.terminal.writeOutput(`\x1b[31mUnhandledPromiseRejection: ${errStr}\x1b[0m\r\n`);
       event.preventDefault();
@@ -174,7 +176,7 @@ export async function executeNodeScript(
 
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
     // Transform TypeScript/JSX/ESM syntax for execution
-    let transformedCode = code;
+    let transformedCode = isClaudeCodeScript(scriptPath) ? patchClaudeCodeSource(code) : code;
     if (scriptPath && (scriptPath.endsWith('.ts') || scriptPath.endsWith('.tsx'))) {
       transformedCode = transformTS(transformedCode);
     }

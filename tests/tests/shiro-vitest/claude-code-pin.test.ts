@@ -14,6 +14,7 @@ import { FileSystem } from '@shiro/filesystem';
 import { npmCmd } from '@shiro/commands/npm';
 import {
   CLAUDE_CODE_VERSION,
+  CLAUDE_CODE_REPORTED_VERSION,
   CLAUDE_CODE_DIR,
   CLAUDE_CODE_CLI_JS,
   CLAUDE_BIN,
@@ -63,7 +64,7 @@ describe('Claude Code pinned install', () => {
 
     const { output, exitCode } = await run(shell, cmd + ' 2>&1');
     expect(exitCode).toBe(0);
-    expect(output).toContain(`${CLAUDE_CODE_VERSION} (Claude Code)`);
+    expect(output).toContain(`${CLAUDE_CODE_REPORTED_VERSION} (Claude Code)`);
   }, 300000);
 
   it('a second `sc` reuses the install instead of reinstalling', async () => {
@@ -74,7 +75,7 @@ describe('Claude Code pinned install', () => {
 
     const { output, exitCode } = await run(shell, cmd + ' 2>&1');
     expect(exitCode).toBe(0);
-    expect(output).toContain(`${CLAUDE_CODE_VERSION} (Claude Code)`);
+    expect(output).toContain(`${CLAUDE_CODE_REPORTED_VERSION} (Claude Code)`);
     expect(output).not.toContain('Installing packages globally');
   }, 300000);
 
@@ -98,7 +99,7 @@ describe('Claude Code pinned install', () => {
 
     const { output, exitCode } = await run(shell, await claudeLaunchCmd(fs, ' --version') + ' 2>&1');
     expect(exitCode).toBe(0);
-    expect(output).toContain(`${CLAUDE_CODE_VERSION} (Claude Code)`);
+    expect(output).toContain(`${CLAUDE_CODE_REPORTED_VERSION} (Claude Code)`);
 
     const pkg = JSON.parse(await fs.readFile(`${CLAUDE_CODE_DIR}/package.json`, 'utf8') as string);
     expect(pkg.version).toBe(CLAUDE_CODE_VERSION);
