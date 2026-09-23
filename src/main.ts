@@ -83,6 +83,7 @@ import { rgCmd } from './commands/rg';
 import { spawnCmd } from './commands/spawn';
 import { scCmd, claudeWindowCmd } from './commands/sc';
 import { claudeCmd } from './commands/claude';
+import { pbcopyCmd, xclipCmd, wlCopyCmd } from './commands/pbcopy';
 import { ensureClaudeCodeInstalled } from './claude-code-version';
 import { cwCmd } from './commands/cw';
 import { setupCmd } from './commands/setup';
@@ -318,6 +319,9 @@ async function main() {
     () => import('./commands/group').then(m => m.groupCmd)), 'src/commands/group.ts');
   registerCommand(commands, spawnCmd, 'src/commands/spawn.ts');
   registerCommand(commands, claudeCmd, 'src/commands/claude.ts');
+  registerCommand(commands, pbcopyCmd, 'src/commands/pbcopy.ts');
+  registerCommand(commands, xclipCmd, 'src/commands/pbcopy.ts');
+  registerCommand(commands, wlCopyCmd, 'src/commands/pbcopy.ts');
   registerCommand(commands, claudeWindowCmd, 'src/commands/sc.ts');
   registerCommand(commands, scCmd, 'src/commands/sc.ts');
   registerCommand(commands, cwCmd, 'src/commands/cw.ts');

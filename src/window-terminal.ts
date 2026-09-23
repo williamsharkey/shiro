@@ -5,6 +5,7 @@
 
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { installOsc52 } from './utils/osc52';
 import type { TerminalLike } from './commands/index';
 import { bufferToString } from './utils/copy-utils';
 import { setActiveTerminal } from './active-terminal';
@@ -75,6 +76,7 @@ export class WindowTerminal implements TerminalLike {
 
     this.fitAddon = new FitAddon();
     this.term.loadAddon(this.fitAddon);
+    installOsc52(this.term);
     this.term.open(container);
 
     // Initial fit after a frame so the container has layout
