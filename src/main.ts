@@ -81,6 +81,7 @@ import { initDropHandler } from './drop-handler';
 import { closeSplitView } from './split-view';
 import { initFileAssociations } from './file-associations';
 import { setActiveTerminal } from './active-terminal';
+import { initPanes } from './panes';
 import buildNumber from '../build-number.txt?raw';
 import { AGENTS_MD, CLAUDE_MD } from './claude-md-seed';
 import {
@@ -539,6 +540,14 @@ async function main() {
   if (becomeConfig) {
     document.body.classList.add('become-active');
   }
+
+  // Tiling panes: drag a corner triangle of any pane to split it
+  initPanes(terminal, () => {
+    const paneShell = new Shell(fs, commands);
+    Object.assign(paneShell.env, shell.env);
+    paneShell.cwd = shell.cwd;
+    return paneShell;
+  });
 
   await terminal.start();
 

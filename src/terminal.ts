@@ -27,6 +27,9 @@ interface HudState {
 export class ShiroTerminal {
   /** Live terminals, so status can go to an idle one (e.g. the upper pane of a split). */
   static instances = new Set<ShiroTerminal>();
+  /** Set on extra panes: typing `exit` (or Ctrl-D on an empty line) at the prompt closes the pane */
+  onExit?: () => void;
+  private teardown?: () => void;
 
   term: Terminal;
   fitAddon: FitAddon;
@@ -184,34 +187,41 @@ export class ShiroTerminal {
     this.term.open(container);
     this.fitAddon.fit();
 
-    // Create iframe container for virtual servers
-    this.iframeContainer = document.createElement('div');
-    this.iframeContainer.id = 'shiro-iframes';
-    this.iframeContainer.style.cssText = `
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      z-index: 1000;
-      background: #1a1a2e;
-      border-top: 2px solid #3d3d5c;
-      display: none;
-    `;
-    document.body.appendChild(this.iframeContainer);
+    // Iframe container for virtual servers — one per page, shared by every pane
+    const existingIframes = document.getElementById('shiro-iframes');
+    if (existingIframes) {
+      this.iframeContainer = existingIframes;
+    } else {
+      this.iframeContainer = document.createElement('div');
+      this.iframeContainer.id = 'shiro-iframes';
+      this.iframeContainer.style.cssText = `
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        z-index: 1000;
+        background: #1a1a2e;
+        border-top: 2px solid #3d3d5c;
+        display: none;
+      `;
+      document.body.appendChild(this.iframeContainer);
+    }
 
     // Refit on window resize
-    window.addEventListener('resize', () => {
+    const refit = () => {
       this.fitAddon.fit();
       this.resizeCallbacks.forEach(cb => cb(this.term.cols, this.term.rows));
-    });
+    };
+    window.addEventListener('resize', refit);
 
     // ResizeObserver catches container size changes that don't trigger window resize
-    // (e.g., dev tools opening/closing, CSS layout changes)
-    const resizeObserver = new ResizeObserver(() => {
-      this.fitAddon.fit();
-      this.resizeCallbacks.forEach(cb => cb(this.term.cols, this.term.rows));
-    });
+    // (e.g., dev tools opening/closing, CSS layout changes, pane dividers)
+    const resizeObserver = new ResizeObserver(refit);
     resizeObserver.observe(container);
+    this.teardown = () => {
+      window.removeEventListener('resize', refit);
+      resizeObserver.disconnect();
+    };
 
     this.term.onData((data: string) => this.handleInput(data));
 
@@ -222,6 +232,18 @@ export class ShiroTerminal {
     });
 
     // Mobile copy/paste is now handled by the unified toolbar in mobile-input.ts
+  }
+
+  /** Remove this terminal for good (closing a pane). The shared iframe container stays. */
+  dispose(): void {
+    this.teardown?.();
+    ShiroTerminal.instances.delete(this);
+    try { this.term.dispose(); } catch { /* already gone */ }
+  }
+
+  /** Start an extra pane's shell: prompt only, no banner and no ~/.profile (it may autostart things). */
+  startPane(): void {
+    this.showPrompt();
   }
 
   writeOutput(text: string): void {
@@ -839,10 +861,21 @@ export class ShiroTerminal {
     for (let i = 0; i < data.length; i++) {
       const ch = data[i];
 
+      if (ch === '\x04' && !this.lineBuffer && this.onExit) {
+        this.onExit();
+        return;
+      }
+
       if (ch === '\r' || ch === '\n') {
         this.term.writeln('');
         this.historyIndex = -1;
         this.savedLine = '';
+        if (this.onExit && /^\s*(exit|logout)(\s+\d+)?\s*$/.test(this.lineBuffer)) {
+          this.lineBuffer = '';
+          this.cursorPos = 0;
+          this.onExit();
+          return;
+        }
 
         if (this.lineBuffer.trim()) {
           this.running = true;
