@@ -15,7 +15,7 @@ import { getShiroOrigin } from './utils/shiro-origin';
 import { copyText } from './utils/osc52';
 import { GLOBAL_GITCONFIG, formatGitConfig, parseGitConfig } from './commands/git';
 
-/** Client ID of the "Shiro" GitHub OAuth app (device flow enabled; not a secret). */
+/** Client ID of the "shiro.computer" GitHub OAuth app (device flow enabled; not a secret). */
 export const GITHUB_OAUTH_CLIENT_ID = 'Ov23liznflO83ISe0lvr';
 
 /** Scopes gh itself asks for, plus workflow and user:email (for git identity). */
@@ -51,7 +51,7 @@ export async function requestDeviceCode(scopes: string[], fetchImpl: FetchLike =
   });
   if (data?.error) {
     throw new Error(data.error === 'device_flow_disabled'
-      ? 'device flow is not enabled for the Shiro GitHub OAuth app'
+      ? 'device flow is not enabled for the shiro.computer GitHub OAuth app'
       : `${data.error}${data.error_description ? ': ' + data.error_description : ''}`);
   }
   return data as DeviceCode;

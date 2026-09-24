@@ -148,8 +148,12 @@ async function handleProxy(req, res, pathAfterApi) {
     });
 
     const respHeaders = { ...cors };
+    // Allow-listed targets are github.com pages: pass only the body's type. Their
+    // headers (long CSP, cookies) overflow nginx's proxy buffer (502) and the page
+    // has no use for them.
+    const passHeader = allowed ? (k) => k.toLowerCase() === 'content-type' : (k) => !SKIP_RESPONSE_HEADERS.has(k.toLowerCase());
     for (const [k, v] of upstream.headers) {
-      if (!SKIP_RESPONSE_HEADERS.has(k.toLowerCase())) respHeaders[k] = v;
+      if (passHeader(k)) respHeaders[k] = v;
     }
 
     console.log(`[proxy] ${req.method} /api/${pathAfterApi} → ${upstream.status}`);
