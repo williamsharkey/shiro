@@ -16,7 +16,7 @@ import { copyText } from './utils/osc52';
 import { GLOBAL_GITCONFIG, formatGitConfig, parseGitConfig } from './commands/git';
 
 /** Client ID of the "Shiro" GitHub OAuth app (device flow enabled; not a secret). */
-export const GITHUB_OAUTH_CLIENT_ID = 'SHIRO_GITHUB_CLIENT_ID_PENDING';
+export const GITHUB_OAUTH_CLIENT_ID = 'Ov23liznflO83ISe0lvr';
 
 /** Scopes gh itself asks for, plus workflow and user:email (for git identity). */
 export const DEFAULT_GITHUB_SCOPES = ['repo', 'read:org', 'gist', 'workflow', 'user:email'];
