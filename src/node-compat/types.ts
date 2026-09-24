@@ -61,6 +61,10 @@ export interface SharedState {
   deferredExitResolve: ((code: number) => void) | null;
   fakeProcess: any;  // set after createFakeProcess() returns
   portDetected?: boolean;
+  /** Globals this script installed, so exit only restores them while still ours */
+  installedFetch?: typeof fetch;
+  installedSetTimeout?: typeof setTimeout;
+  installedClearTimeout?: typeof clearTimeout;
 }
 
 /** Sync FS operation watchdog limit */

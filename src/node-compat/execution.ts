@@ -82,6 +82,17 @@ export async function executeNodeScript(
     fakeProcess: null,
   };
 
+  // Put back page globals this script replaced, but only while they are still
+  // ours. Scripts overlap (autostart launches Claude from a timer; Claude runs
+  // tool scripts): restoring blindly on exit clobbered whatever a still-running
+  // script had installed since, e.g. Claude's Node-style setTimeout (".unref
+  // is not a function") and its fetch routing.
+  const restoreGlobals = (includeFetch: boolean) => {
+    if (includeFetch && _st.installedFetch && globalThis.fetch === _st.installedFetch) globalThis.fetch = _origFetch;
+    if (_st.installedSetTimeout && globalThis.setTimeout === _st.installedSetTimeout) globalThis.setTimeout = _prevST;
+    if (_st.installedClearTimeout && globalThis.clearTimeout === _st.installedClearTimeout) globalThis.clearTimeout = _prevCT;
+  };
+
   try {
     const stdoutBuf: string[] = [];
     const stderrBuf: string[] = [];
@@ -257,7 +268,7 @@ export async function executeNodeScript(
     const isBlocked = (u: string) => blockedUrls.some(b => u.includes(b));
 
     if (corsProxyOrigin) {
-      globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      globalThis.fetch = _st.installedFetch = (input: RequestInfo | URL, init?: RequestInit) => {
         let url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
         if (isBlocked(url)) return Promise.resolve(new Response('{}', { status: 200 }));
         // Route localhost/127.0.0.1 requests through virtual iframe servers
@@ -401,7 +412,7 @@ export async function executeNodeScript(
     let _timersDone: Promise<void> | null = null;
     const _timerIds = new Set<any>();
     if (code.length <= 500000) {
-      globalThis.setTimeout = function(fn: any, ms?: number, ...args: any[]) {
+      globalThis.setTimeout = _st.installedSetTimeout = function(fn: any, ms?: number, ...args: any[]) {
         _activeTimers++;
         if (!_timersDone) _timersDone = new Promise(r => { _timersResolve = r; });
         const id = _prevST(() => {
@@ -415,7 +426,7 @@ export async function executeNodeScript(
         _timerIds.add(id);
         return id;
       } as typeof setTimeout;
-      globalThis.clearTimeout = function(id: any) {
+      globalThis.clearTimeout = _st.installedClearTimeout = function(id: any) {
         if (_timerIds.delete(id)) {
           _activeTimers--;
           if (_activeTimers <= 0 && _timersResolve) { _timersResolve(); _timersResolve = null; _timersDone = null; }
@@ -477,7 +488,7 @@ export async function executeNodeScript(
     }
 
     // Restore setTimeout/clearTimeout before deferred exit
-    if (code.length <= 500000) { globalThis.setTimeout = _prevST; globalThis.clearTimeout = _prevCT; }
+    restoreGlobals(false);
 
     // Deferred exit wait
     const hasFinishedOutput = _st.exitCalled || scriptTimedOut
@@ -522,8 +533,7 @@ export async function executeNodeScript(
     if (typeof window !== 'undefined') {
       setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
     }
-    globalThis.fetch = _origFetch;
-    if (code.length <= 500000) { globalThis.setTimeout = _prevST; globalThis.clearTimeout = _prevCT; }
+    restoreGlobals(true);
 
     return _st.exitCode;
   } catch (e: any) {
@@ -532,8 +542,7 @@ export async function executeNodeScript(
     if (typeof window !== 'undefined') {
       setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
     }
-    globalThis.fetch = _origFetch;
-    if (code.length <= 500000) { globalThis.setTimeout = _prevST; globalThis.clearTimeout = _prevCT; }
+    restoreGlobals(true);
     const msg = e.message || String(e);
     console.error('[node] Script error:', e);
     ctx.stderr += `Error: ${msg}\n`;

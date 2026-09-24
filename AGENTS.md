@@ -86,6 +86,8 @@ export const myCmd: Command = {
 ## Node Processes Share The Page
 
 - Every `node` script runs in the same page as the shell and every other script. Claude Code runs for hours while its tool calls start and finish other scripts, so a script must never remove globals on exit that another might still use. `setImmediate` is polyfilled once and never removed; deleting it from a finishing child hung Claude's Bash tool.
+- When a script exits it restores `fetch`/`setTimeout`/`clearTimeout` only if the global is still the one it installed (`restoreGlobals` in `execution.ts`). Restoring blindly let `~/.profile`-launched autostart scripts clobber Claude's Node-style `setTimeout`, and Claude crashed with `.unref is not a function` on the first message.
+- The terminal skips its startup prompt when `~/.profile` launched a command through `injectInput`; that command prints the prompt when it finishes.
 - The module transform still assigns global `setTimeout`/`setInterval` wrappers for some bundles without restoring them. It's harmless so far, but it has the same problem.
 
 ## Build, Test, Deploy

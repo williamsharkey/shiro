@@ -17,3 +17,31 @@ describe('overlapping node processes', () => {
     expect(output).toContain('PARENT-OK');
   }, 30000); // two node startups; slower than the 5s default
 });
+
+describe('a finishing script restoring page globals', () => {
+  it('leaves globals that a later, still-running script installed', async () => {
+    const { shell, fs } = await createTestShell();
+    await fs.mkdir('/tmp/overlap', { recursive: true });
+    // Like ~/strudel/autostart.js: a short script that launches a long-lived one from a timer
+    // and is still running (a pending timer) while the long-lived one starts up
+    await fs.writeFile('/tmp/overlap/a.js', `setTimeout(() => { globalThis.__startB(); setTimeout(() => {}, 3000); }, 50);`);
+    // Like Claude Code: installs a Node-style setTimeout and keeps using it after A has exited
+    await fs.writeFile('/tmp/overlap/b.mjs', `
+      const native = globalThis.setTimeout;
+      const mine = (fn, ms) => ({ id: native(fn, ms), unref() { return this; } });
+      globalThis.setTimeout = mine;
+      await new Promise((r) => native(r, 5000)); // until after A has exited
+      // (Node's own setTimeout also has unref, so check identity, not behavior)
+      console.log(globalThis.setTimeout === mine ? 'B-OK' : 'B-CLOBBERED');
+    `);
+    let bOutput = '';
+    let bDone!: Promise<number>;
+    (globalThis as any).__startB = () => {
+      bDone = shell.fork().execute('node /tmp/overlap/b.mjs', (s: string) => { bOutput += s; }, (s: string) => { bOutput += s; });
+    };
+    await run(shell, 'node /tmp/overlap/a.js');
+    await bDone;
+    delete (globalThis as any).__startB;
+    expect(bOutput).toContain('B-OK');
+  }, 30000);
+});

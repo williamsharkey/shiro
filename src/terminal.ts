@@ -383,7 +383,10 @@ export class ShiroTerminal {
         await this.shell.execute(text, () => {}, () => {});
       }
     } catch {}
-    this.showPrompt();
+    // ~/.profile may have started a command through injectInput (e.g. an autostart
+    // that launches Claude); that command prints the prompt when it finishes, and a
+    // prompt now would land on top of its screen.
+    if (!this.running) this.showPrompt();
   }
 
   /**
