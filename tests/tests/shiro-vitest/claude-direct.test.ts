@@ -38,6 +38,15 @@ describe('Claude Code version reporting', () => {
     expect(fns.IF1('claude-sonnet-4-5')).toBe('high');
   });
 
+  it('uses the in-memory TodoWrite list unless CLAUDE_CODE_ENABLE_TASKS is set', () => {
+    const src = 'function kJ(){if(S6(process.env.CLAUDE_CODE_ENABLE_TASKS))return!0;return!I7()}';
+    const out = patchClaudeCodeSource(src);
+    const S6 = (v: any) => v === '1' || v === 'true';
+    const kJ = new Function('S6', 'I7', 'process', out + '; return kJ;');
+    expect(kJ(S6, () => false, { env: {} })()).toBe(false);                            // interactive, default
+    expect(kJ(S6, () => false, { env: { CLAUDE_CODE_ENABLE_TASKS: '1' } })()).toBe(true);
+  });
+
   it('leaves newer builds alone', () => {
     const src = 'a={VERSION:"9.0.0"}';
     expect(patchClaudeCodeSource(src)).toBe(src);

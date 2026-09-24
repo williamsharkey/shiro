@@ -31,3 +31,25 @@ describe('spawn with an fs/promises output fd (Claude Bash tool)', () => {
     expect(output).toContain('HANDLE:captured-output');
   });
 });
+
+describe('fs.rmdir on directories (proper-lockfile release)', () => {
+  it('callback and promise rmdir remove an empty directory', async () => {
+    const { shell } = await createTestShell();
+    const { output } = await run(shell, `node -e "
+      const fs = require('fs');
+      fs.mkdirSync('/tmp/rmd-a', { recursive: true });
+      fs.mkdir('/tmp/rmd-cb', (e) => {
+        fs.mkdir('/tmp/rmd-cb', (e2) => {
+          fs.rmdir('/tmp/rmd-cb', (e3) => {
+            fs.stat('/tmp/rmd-cb', (e4) => {
+              const fsp = require('fs/promises'); fsp.mkdir('/tmp/rmd-p').then(() => fsp.rmdir('/tmp/rmd-p')).then(() => fsp.stat('/tmp/rmd-p')).catch((e5) => {
+                console.log('RESULT', e ? e.code : 'ok', e2 && e2.code, e3 ? e3.code : 'removed', e4 && e4.code, e5 && (e5.code || e5.message));
+              });
+            });
+          });
+        });
+      });
+    "`);
+    expect(output).toContain('RESULT ok EEXIST removed ENOENT ENOENT');
+  }, 30000);
+});

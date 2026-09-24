@@ -62,6 +62,7 @@ const NEWER_MODEL = '/(opus|sonnet)-[5-9]/';
  * control, and a "medium" default effort on subscriptions. These rewrites treat
  * Opus/Sonnet 5+ like Opus 4.7: adaptive thinking, effort (incl. xhigh), and the
  * xhigh launch default. Each targets exact 2.1.112 code and is skipped if absent.
+ * The last one swaps the file-locked task list for TodoWrite (see comment there).
  */
 const CAPABILITY_PATCHES: Array<[string, string]> = [
   // adaptive thinking + effort support (the same gate appears in both checks)
@@ -73,6 +74,11 @@ const CAPABILITY_PATCHES: Array<[string, string]> = [
   ['if(K.includes("opus-4-7"))return"xhigh";', `if(K.includes("opus-4-7")||${NEWER_MODEL}.test(K))return"xhigh";`],
   ['let _=o5(q).includes("opus-4-7")&&!H8().unpinOpus47LaunchEffort',
    `let _=/opus-4-7|(opus|sonnet)-[5-9]/.test(o5(q))&&!H8().unpinOpus47LaunchEffort`],
+  // Interactive sessions default to the file-backed task list (TaskCreate etc.),
+  // which guards task files with proper-lockfile and hung in Shiro's fs shim. Use
+  // the in-memory TodoWrite list instead unless CLAUDE_CODE_ENABLE_TASKS=1.
+  ['function kJ(){if(S6(process.env.CLAUDE_CODE_ENABLE_TASKS))return!0;return!I7()}',
+   'function kJ(){return S6(process.env.CLAUDE_CODE_ENABLE_TASKS)}'],
 ];
 
 /**

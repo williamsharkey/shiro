@@ -658,10 +658,15 @@ export function createFsModule(deps: FsDeps): any {
         .then(() => cb?.(null))
         .catch((e: any) => cb?.(e));
     },
-    rmdir: (p: string, cb?: any) => {
-      ctx.fs.unlink(ctx.fs.resolvePath(p, ctx.cwd))
-        .then(() => cb?.(null))
-        .catch((e: any) => cb?.(e));
+    rmdir: (p: string, optsOrCb?: any, cb?: any) => {
+      // rmdir removes directories (unlink only removes files; proper-lockfile
+      // releases its lock with fs.rmdir and got EISDIR, so locks never released)
+      const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      fileCache.delete(resolved + '/.');
+      ctx.fs.rmdir(resolved)
+        .then(() => callback?.(null))
+        .catch((e: any) => callback?.(e));
     },
     rename: (oldP: string, newP: string, cb?: any) => {
       ctx.fs.rename(ctx.fs.resolvePath(oldP, ctx.cwd), ctx.fs.resolvePath(newP, ctx.cwd))
@@ -1138,7 +1143,8 @@ export function createFsPromisesModule(deps: FsDeps): any {
     },
     rmdir: async (p: string) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      await ctx.fs.unlink(resolved);
+      fileCache.delete(resolved + '/.');
+      await ctx.fs.rmdir(resolved);
     },
     utimes: async () => {},
     mkdtemp: async (prefix: string) => {
