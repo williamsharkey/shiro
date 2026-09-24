@@ -33,7 +33,7 @@ Commands:
   const { flags, positional } = parseFlags(ctx.args.slice(2), VALUE_FLAGS);
 
   if (!token && !isDryRun(flags)) {
-    ctx.stderr = 'error: authentication required. Set GITHUB_TOKEN.\n';
+    ctx.stderr = 'error: not signed in to GitHub. Run: gh auth login\n';
     return 1;
   }
   const repo = getRepoFromFlags(flags) || await detectRepo(ctx);

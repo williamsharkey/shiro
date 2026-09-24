@@ -103,19 +103,18 @@ To profile a live session, run `remote start` in Shiro and then `node shiro-mcp/
 
 ## Git and GitHub
 
-`git` (isomorphic-git) and a `gh` compatible with the common GitHub CLI commands are built in. Sign in once with a token; private repos work too:
+`git` (isomorphic-git) and a `gh` compatible with the common GitHub CLI commands are built in. Sign in once and private repos work too:
 
 ```bash
-echo <token> | gh auth login --with-token      # stored in this origin's localStorage
-git config --global user.name "Your Name"
-git config --global user.email you@example.com
+gh auth login        # shows a one-time code and a panel with Copy / Open GitHub buttons
+                     # approve on github.com; git name/email are filled in from your account
 
 gh repo clone owner/private-repo
 git init && git add . && git commit -m "First commit"
 gh repo create my-project --private --source . --push
 ```
 
-`gh auth logout` removes the token. Use a subdomain (for example `music.shiro.computer`) to keep a project's storage, including its token, separate.
+`gh auth login --with-token` still accepts a token on stdin, `gh auth refresh -s delete_repo` adds a scope, and `gh auth logout` removes the token. Use a subdomain (for example `music.shiro.computer`) to keep a project's storage, including its token, separate.
 
 ## Node.js Compatibility
 

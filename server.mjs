@@ -27,6 +27,13 @@ const PROXY_TARGETS = {
   'platform': 'https://platform.claude.com',
   'mcp-proxy': 'https://mcp-proxy.anthropic.com',
   'github': 'https://api.github.com',
+  // GitHub's OAuth device flow lives on github.com, which has no CORS
+  'github-login': 'https://github.com',
+};
+
+// Only these paths may be proxied per target (targets not listed are unrestricted)
+const PROXY_ALLOWED_PATHS = {
+  'github-login': ['/login/device/code', '/login/oauth/access_token'],
 };
 
 const SKIP_REQUEST_HEADERS = new Set([
@@ -78,7 +85,7 @@ export function corsHeaders(origin, requestHeaders) {
     'access-control-allow-origin': origin || '*',
     'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'access-control-allow-headers': buildAllowedHeaders(requestHeaders),
-    'access-control-expose-headers': 'x-request-id, request-id, anthropic-ratelimit-requests-limit, anthropic-ratelimit-requests-remaining, anthropic-ratelimit-tokens-limit, anthropic-ratelimit-tokens-remaining, retry-after, mcp-session-id',
+    'access-control-expose-headers': 'x-request-id, request-id, x-oauth-scopes, anthropic-ratelimit-requests-limit, anthropic-ratelimit-requests-remaining, anthropic-ratelimit-tokens-limit, anthropic-ratelimit-tokens-remaining, retry-after, mcp-session-id',
     'access-control-max-age': '86400',
     'vary': 'Origin, Access-Control-Request-Headers',
   };
@@ -104,6 +111,12 @@ async function handleProxy(req, res, pathAfterApi) {
   if (!base) {
     res.writeHead(404, cors);
     return res.end(`Unknown API target: ${target}`);
+  }
+
+  const allowed = PROXY_ALLOWED_PATHS[target];
+  if (allowed && (!allowed.includes(rest) || req.method !== 'POST')) {
+    res.writeHead(403, cors);
+    return res.end(`Not allowed: ${req.method} ${target}${rest}`);
   }
 
   // Collect body

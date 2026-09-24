@@ -20,7 +20,7 @@ Commands:
   }
 
   if (!token) {
-    ctx.stderr = 'error: authentication required. Set GITHUB_TOKEN.\n';
+    ctx.stderr = 'error: not signed in to GitHub. Run: gh auth login\n';
     return 1;
   }
 

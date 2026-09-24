@@ -536,6 +536,12 @@ export const gitCmd: Command = {
             ]);
           } catch (cloneErr: any) {
             ctx.stderr = `fatal: ${cloneErr.message || cloneErr}\n`;
+            const httpStatus = cloneErr?.data?.statusCode;
+            if ((httpStatus === 401 || httpStatus === 403 || httpStatus === 404) && /github\.com/.test(url)) {
+              ctx.stderr += token
+                ? 'hint: the repository may not exist, or your GitHub sign-in lacks access to it.\n'
+                : 'hint: private repositories need a GitHub sign-in. Run: gh auth login\n';
+            }
             return 128;
           }
 
@@ -602,7 +608,7 @@ export const gitCmd: Command = {
         case 'push': {
           const { remote, ref, token, corsProxy } = parseRemoteArgs(ctx);
           if (!token) {
-            ctx.stderr = 'error: authentication required\nSet GITHUB_TOKEN or run: export GITHUB_TOKEN=ghp_...\n';
+            ctx.stderr = 'error: not signed in to GitHub. Run: gh auth login\n';
             return 1;
           }
           const currentBranch = ref || await git.currentBranch({ fs, dir }) || 'main';
@@ -632,7 +638,7 @@ export const gitCmd: Command = {
             }
           } catch (e: any) {
             if (e.code === 'HttpError' || e.statusCode === 401 || e.statusCode === 403) {
-              ctx.stderr = `error: authentication failed (HTTP ${e.statusCode || ''})\nCheck your GITHUB_TOKEN is valid and has push access.\n`;
+              ctx.stderr = `error: authentication failed (HTTP ${e.statusCode || e.data?.statusCode || ''})\nSign in again with: gh auth login (or gh auth refresh if the token lacks access)\n`;
             } else if (e.code === 'PushRejectedError') {
               ctx.stderr = `error: push rejected — remote has new commits. Pull first.\n`;
             } else {
@@ -889,10 +895,10 @@ export const gitCmd: Command = {
   },
 };
 
-const GLOBAL_GITCONFIG = '/home/user/.gitconfig';
+export const GLOBAL_GITCONFIG = '/home/user/.gitconfig';
 
 /** Parse a git-style INI file into { "section.key": value } ("section.sub.key" for [section "sub"]). */
-function parseGitConfig(text: string): Record<string, string> {
+export function parseGitConfig(text: string): Record<string, string> {
   const out: Record<string, string> = {};
   let section = '';
   for (const raw of text.split('\n')) {
@@ -906,7 +912,7 @@ function parseGitConfig(text: string): Record<string, string> {
   return out;
 }
 
-function formatGitConfig(values: Record<string, string>): string {
+export function formatGitConfig(values: Record<string, string>): string {
   const sections: Record<string, string[]> = {};
   for (const [key, value] of Object.entries(values)) {
     const i = key.lastIndexOf('.');

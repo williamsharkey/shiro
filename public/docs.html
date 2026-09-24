@@ -503,10 +503,9 @@ git add . && git commit -m "Update readme"
 git log --oneline
 git status
 
-<span class="c"># Sign in to GitHub once (saved in this site's localStorage; gh auth logout removes it)</span>
-echo ghp_xxx | gh auth login --with-token
-git config --global user.name "Your Name"
-git config --global user.email you@example.com
+<span class="c"># Sign in to GitHub once: shows a one-time code and a panel with Copy / Open GitHub</span>
+<span class="c"># (saved in this site's localStorage; gh auth logout removes it)</span>
+gh auth login
 
 <span class="c"># Clone, including private repos</span>
 git clone https://github.com/user/repo.git

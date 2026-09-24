@@ -152,7 +152,13 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
   // Extract command from spawn-style args array for shell binaries
   const extractShellArgs = (args: string[]): string => {
     const cIdx = args.findIndex(a => /^-\w*c$/.test(a));
-    if (cIdx >= 0 && cIdx + 1 < args.length) return args.slice(cIdx + 1).join(' ');
+    if (cIdx >= 0 && cIdx + 1 < args.length) {
+      // Options may follow -c (Claude Code runs `zsh -c -l <cmd>`); skip them so they
+      // don't end up inside the command, where a cwd prefix would make `-l` a command
+      const rest = args.slice(cIdx + 1);
+      while (rest.length > 1 && /^-[a-zA-Z]+$/.test(rest[0])) rest.shift();
+      return rest.join(' ');
+    }
     // No -c: find non-flag args (file paths to source)
     const scripts = args.filter(a => !a.startsWith('-'));
     if (scripts.length > 0) {
