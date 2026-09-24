@@ -125,6 +125,9 @@ Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` ha
 - Most filesystem work is async under the hood even when sync APIs are emulated.
 - Background-task-heavy or highly concurrent agent flows can stall in the browser runtime.
 - `seed` and `seed blob` are not equivalent. Preserve their runtime-context differences.
+- A loop, `if`, `case`, or subshell can head a pipeline (`for …; done | tail -1`): `splitTopLevelPipes` finds the pipe after the closing keyword and `runHeadedPipeline` feeds the head's output to the rest. Redirections after `done`/`fi`/`esac` (`< in`, `> out`, `2>&1`) are applied by `splitCompoundRedirects`. `printf` (except `-v`) is the regular command, so redirects and pipes apply; `ctx.stdoutIsTTY` is false for piped/redirected commands (`ls` then prints one name per line).
+- Node scripts end like node on an empty event loop: after the synchronous part, the runner waits until nothing tracked is in flight (`fetch`, `fs.promises`, timers; see `node-compat/activity.ts`) and output has been quiet for 60–150 ms, with the old 10 s ceiling as a fallback. Missing Node APIs come from `auto-stub.ts`, which logs `[AutoStub] called missing …` the first time; a stubbed callback API never calls back, so check the console for these when something hangs.
+- `require('sharp')` is a browser-backed implementation (`shims/browser-sharp.ts`: createImageBitmap + canvas, real metadata/resize/JPEG/PNG/WebP). Claude Code's image loader is patched to use it; its bundled native/sharp path stalled image Reads.
 - Per-command env (`NAME=value cmd`) is applied for that pipeline only (`splitEnvPrefix` in `shell.ts`), and `>&2`/`1>&2` duplicate onto stderr left to right, as in bash.
 - `ls` prints columns even when piped.
 - Keep docs unified: update `AGENTS.md` first, keep `CLAUDE.md` as a shim.
