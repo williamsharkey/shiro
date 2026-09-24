@@ -8,6 +8,35 @@ function decodeBase64Utf8(b64: string): string {
   return new TextDecoder().decode(bytes);
 }
 
+/** Legacy copy via a hidden textarea; works where the async API is refused. */
+function execCommandCopy(text: string): boolean {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none';
+  const prevFocus = document.activeElement as HTMLElement | null;
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch { ok = false; }
+  ta.remove();
+  prevFocus?.focus?.();
+  return ok;
+}
+
+/** Copy to the clipboard, falling back when the async API is refused (e.g. document not focused). */
+export function copyText(text: string): void {
+  const fallback = (why: string) => {
+    const ok = execCommandCopy(text);
+    console.log(`[osc52] ${ok ? 'copied' : 'FAILED to copy'} ${text.length} chars via execCommand (${why})`);
+  };
+  if (!navigator.clipboard?.writeText) { fallback('no async clipboard API'); return; }
+  navigator.clipboard.writeText(text).then(
+    () => console.log(`[osc52] copied ${text.length} chars`),
+    (e) => fallback(e?.message || String(e)),
+  );
+}
+
 /**
  * OSC 52 clipboard writes (`ESC ] 52 ; c ; <base64> BEL`). TUIs that handle the
  * mouse themselves, like Claude Code's fullscreen mode, copy a selection this
@@ -19,12 +48,14 @@ export function installOsc52(term: Terminal): void {
     const sep = data.indexOf(';');
     const payload = sep >= 0 ? data.slice(sep + 1) : data;
     if (!payload || payload === '?') return true;
+    let text: string;
     try {
-      const text = decodeBase64Utf8(payload);
-      navigator.clipboard?.writeText(text).catch((e) => console.warn('[osc52] clipboard write failed:', e?.message || e));
+      text = decodeBase64Utf8(payload);
     } catch (e: any) {
       console.warn('[osc52] bad payload:', e?.message || e);
+      return true;
     }
+    copyText(text);
     return true;
   });
 }

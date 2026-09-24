@@ -7,19 +7,15 @@
  */
 
 import { Command, CommandContext } from './index';
+import { copyText } from '../utils/osc52';
 
 async function copyStdin(ctx: CommandContext, name: string): Promise<number> {
   if (ctx.args.includes('-o') || ctx.args.includes('--paste')) {
     ctx.stderr += `${name}: reading the clipboard is not supported\n`;
     return 1;
   }
-  try {
-    await navigator.clipboard.writeText(ctx.stdin || '');
-    return 0;
-  } catch (e: any) {
-    ctx.stderr += `${name}: ${e?.message || 'clipboard unavailable'}\n`;
-    return 1;
-  }
+  copyText(ctx.stdin || '');
+  return 0;
 }
 
 const make = (name: string): Command => ({
