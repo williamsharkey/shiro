@@ -101,6 +101,22 @@ An outer Claude Code instance can also control Shiro remotely via MCP tools over
 
 To profile a live session, run `remote start` in Shiro and then `node shiro-mcp/probe.mjs <code>` locally. It logs heap, freezes (long tasks and page response time), filesystem traffic, and errors every 2 seconds to `probe.jsonl`, reconnects after a reload, and serves ad-hoc `eval`/`exec` on `127.0.0.1:7788`.
 
+## Git and GitHub
+
+`git` (isomorphic-git) and a `gh` compatible with the common GitHub CLI commands are built in. Sign in once with a token; private repos work too:
+
+```bash
+echo <token> | gh auth login --with-token      # stored in this origin's localStorage
+git config --global user.name "Your Name"
+git config --global user.email you@example.com
+
+gh repo clone owner/private-repo
+git init && git add . && git commit -m "First commit"
+gh repo create my-project --private --source . --push
+```
+
+`gh auth logout` removes the token. Use a subdomain (for example `music.shiro.computer`) to keep a project's storage, including its token, separate.
+
 ## Node.js Compatibility
 
 ~50 shimmed Node.js modules. Core modules (fs, path, buffer, events, process, crypto, os, url, util, child_process) are fully functional. See the [full compatibility table](https://shiro.computer/docs#node-compat).

@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Deprecated. The canonical agent instructions are in [AGENTS.md](/Users/william/Desktop/shiro-toolfix/AGENTS.md).
+Deprecated. The canonical agent instructions are in [AGENTS.md](AGENTS.md).
 
 If a tool auto-loads only `CLAUDE.md`, treat this file as a shim:
 

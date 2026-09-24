@@ -486,7 +486,7 @@ echo '[1,2,3,4,5]' | jq 'map(. * 2)'</pre></div>
 
       <!-- ===== Git ===== -->
       <h2 id="git">Git</h2>
-      <p>Full client-side git via isomorphic-git. init, add, commit, diff, log, clone, push, and remote operations all work.</p>
+      <p>Full client-side git via isomorphic-git: init, config, add, commit, diff, log, clone, push, pull, fetch, and remote operations. Sign in with a GitHub token to clone private repos and push; the token is only sent to github.com.</p>
 
       <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Initialize and make commits</span>
 git init
@@ -503,11 +503,22 @@ git add . && git commit -m "Update readme"
 git log --oneline
 git status
 
-<span class="c"># Clone a repo (HTTP only, needs CORS proxy)</span>
-git clone https://github.com/user/repo.git
+<span class="c"># Sign in to GitHub once (saved in this site's localStorage; gh auth logout removes it)</span>
+echo ghp_xxx | gh auth login --with-token
+git config --global user.name "Your Name"
+git config --global user.email you@example.com
 
-<span class="c"># Push (needs GITHUB_TOKEN)</span>
-GITHUB_TOKEN=$GITHUB_TOKEN git push origin main</pre></div>
+<span class="c"># Clone, including private repos</span>
+git clone https://github.com/user/repo.git
+gh repo clone user/private-repo
+
+<span class="c"># Publish a local repo as a new private GitHub repo</span>
+gh repo create my-project --private --source . --push
+
+<span class="c"># Day to day</span>
+git pull && git push</pre></div>
+
+      <p><code>gh</code> covers <code>auth</code>, <code>repo</code> (view, list, create, clone, delete), <code>api</code> (with <code>-q</code>/<code>--jq</code>), <code>pr</code>, <code>issue</code>, <code>release</code>, <code>workflow</code>, <code>run</code>, <code>label</code>, and <code>search</code>.</p>
 
       <!-- ===== Claude Code ===== -->
       <h2 id="claude-code">Claude Code</h2>
@@ -714,7 +725,7 @@ remote stop      <span class="c"># End session</span></pre></div>
       <p><code>dc</code> <code>factor</code> <code>numfmt</code> <code>cksum</code> <code>base32</code> <code>base64</code> <code>xxd</code> <code>dd</code></p>
 
       <h3>Dev Tools</h3>
-      <p><code>node</code> <code>npm</code> <code>npx</code> <code>git</code> <code>build</code> <code>vi</code> <code>nano</code> <code>ed</code> <code>cc</code> <code>gcc</code> <code>python3</code> <code>pip</code> <code>sqlite3</code> <code>lua</code> <code>jq</code></p>
+      <p><code>node</code> <code>npm</code> <code>npx</code> <code>git</code> <code>gh</code> <code>build</code> <code>vi</code> <code>nano</code> <code>ed</code> <code>cc</code> <code>gcc</code> <code>python3</code> <code>pip</code> <code>sqlite3</code> <code>lua</code> <code>jq</code></p>
 
       <h3>Network &amp; Servers</h3>
       <p><code>fetch</code> <code>curl</code> <code>wget</code> <code>serve</code> <code>page</code> <code>become</code> <code>unbecome</code> <code>remote</code> <code>mcp</code> <code>group</code></p>
@@ -729,7 +740,7 @@ remote stop      <span class="c"># End session</span></pre></div>
       <p><code>code</code> <code>monaco</code> <code>less</code> <code>mdview</code> <code>html</code> <code>img</code> <code>open</code></p>
 
       <h3>AI</h3>
-      <p><code>spirit</code> <code>claude</code> <code>claude-window</code> <code>cv</code></p>
+      <p><code>spirit</code> <code>claude</code> <code>claude-window</code> <code>pbcopy</code> <code>cv</code></p>
 
       <h3>Shiro-specific</h3>
       <p><code>setup</code> <code>seed</code> <code>image</code> <code>spawn</code> <code>hud</code> <code>js-eval</code></p>

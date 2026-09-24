@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Canonical agent instructions live here. [CLAUDE.md](/Users/william/Desktop/shiro-toolfix/CLAUDE.md) is a compatibility shim and should only point back to this file.
+Canonical agent instructions live here. [CLAUDE.md](CLAUDE.md) is a compatibility shim and should only point back to this file.
 
 ## Mission
 
@@ -67,11 +67,26 @@ export const myCmd: Command = {
 - Scripts run through bin symlinks execute under their real path (`shell.ts` → `fs.realpath`), so Claude-specific preload/env tweaks key off `/@anthropic-ai/claude-code/`.
 - Claude's `tui` setting is seeded to `fullscreen` (alt-screen renderer). The classic renderer leaves stale frames in scrollback when the window is resized or a frame is taller than the terminal.
 - Commands run through the `child_process` shim execute in a forked shell with no terminal, so their output returns to the caller instead of painting over Claude's UI.
-- To profile a live session: `remote start` in Shiro, then `node shiro-mcp/probe.mjs <code>` (run `npm install` in `shiro-mcp/` first). It samples heap, long tasks, page response time, IndexedDB filesystem traffic, and errors into `probe.jsonl`, and serves `curl localhost:7788/eval --data-binary '<js>'` and `/exec`.
+- To profile a live session: `remote start` in Shiro, then `node shiro-mcp/probe.mjs <code>` (run `npm install` in `shiro-mcp/` first; set `SHIRO_SIGNALING_URL` for subdomains like `https://music.shiro.computer`). Every 2s it logs heap, long tasks, page response time, IndexedDB filesystem traffic, errors, tagged console lines, and shell commands still running after 30s into `probe.jsonl`, and serves `curl localhost:7788/eval --data-binary '<js>'` and `/exec`. Replies over the data channel are size-limited; fetch large files in ~100 KB slices.
+- Fullscreen TUIs copy a selection with OSC 52; both terminals handle it (`src/utils/osc52.ts`, with an `execCommand` fallback), and `pbcopy`/`xclip`/`wl-copy` are builtins that copy stdin.
+- Claude's Bash tool opens its task output file with `fs.promises.open` and reads it back with `handle.read()` inside `await using`, so the shim's FileHandle must keep a real registered fd, `read`, `stat`, and `[Symbol.asyncDispose]`.
 - Claude auth/bootstrap lives in `src/claude-signin.ts`, `src/claude-auth.ts`, `src/claude-config.ts`, `src/node-compat/preload.ts`, and `src/node-compat/process.ts`.
 - Shiro pre-seeds trust/onboarding/bypass settings for Claude Code.
 - Browser-hosted Claude is more stable with conservative runtime defaults. Prefer serial/single-lane behavior over background worker fan-out unless you have verified a broader mode works.
 - In `seed blob`, Claude runs cross-origin from the host page. Shiro-backed calls must resolve through the Shiro origin, not the parent site, and `server.mjs` CORS preflight handling must tolerate Claude headers like `x-app` and `x-stainless-*`.
+
+## Git And GitHub
+
+- `git` is isomorphic-git through the `/git-proxy/` route in `server.mjs`. The proxy drops `WWW-Authenticate` from responses: a same-origin 401 carrying it makes the browser show a native login prompt that stalls the request, and every later one to the origin, until the command times out.
+- `githubAuth()` in `src/commands/git.ts` sends the token on the first request (`x-access-token` basic auth) for github.com remotes only, and cancels on auth failure instead of retrying. Clone, push, fetch, and pull use it. The token comes from `GITHUB_TOKEN`/`GH_TOKEN` or `localStorage.shiro_github_token` (`gh auth login --with-token`).
+- `git config` supports get/set/`--list`/`--unset`, local and `--global` (`~/.gitconfig`). Commit authors come from repo config, then `~/.gitconfig`, then `GIT_AUTHOR_*`.
+- `gh` (`src/commands/gh*.ts`) follows the real CLI's flags where implemented: `auth` (status/login/logout/token/setup-git), `repo` (view `--json`, list, create `--source --push`, clone, delete `--yes`), `api` (`-q/--jq`, `-f/-F`, `-X/--method`), `pr`, `issue`, `release`, `workflow`, `run`, `label`, `search`.
+- Known gaps: git only works from the repository root (no upward `.git` discovery), and `git log --oneline` prints full messages.
+
+## Node Processes Share The Page
+
+- Every `node` script runs in the same page as the shell and every other script. Claude Code runs for hours while its tool calls start and finish other scripts, so a script must never remove globals on exit that another might still use. `setImmediate` is polyfilled once and never removed; deleting it from a finishing child hung Claude's Bash tool.
+- The module transform still assigns global `setTimeout`/`setInterval` wrappers for some bundles without restoring them. It's harmless so far, but it has the same problem.
 
 ## Build, Test, Deploy
 
@@ -99,4 +114,6 @@ Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` ha
 - Most filesystem work is async under the hood even when sync APIs are emulated.
 - Background-task-heavy or highly concurrent agent flows can stall in the browser runtime.
 - `seed` and `seed blob` are not equivalent. Preserve their runtime-context differences.
+- Per-command env (`NAME=value cmd`) is applied for that pipeline only (`splitEnvPrefix` in `shell.ts`), and `>&2`/`1>&2` duplicate onto stderr left to right, as in bash.
+- `ls` prints columns even when piped.
 - Keep docs unified: update `AGENTS.md` first, keep `CLAUDE.md` as a shim.
