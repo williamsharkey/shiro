@@ -50,10 +50,52 @@ export const exportCmd: Command = {
   },
 };
 
+const GETTING_STARTED = `Shiro: a Unix-like environment in your browser tab. Files persist in this
+site's storage; use a subdomain (e.g. music.shiro.computer) for a separate workspace.
+
+Claude Code
+  claude                 run Claude Code here (installs itself; sign-in panel if needed)
+  claude --continue      resume the last conversation in this directory
+  claude-window          run it in a new window
+  claude login           sign in again / switch accounts
+
+GitHub
+  gh auth login          sign in with a one-time code; sets git user.name/email
+  gh repo clone o/r      clone (private repos too)
+  gh repo create NAME --private --source . --push
+  git status | add | commit | push | pull | log | diff
+
+Connect an outside agent
+  remote start           get a code; an MCP client (shiro-mcp) can then drive this tab
+  console -g PATTERN     search this page's console log (--prev: before the last reload)
+
+Everyday
+  ls, cat, grep, sed, rg, find, jq, vi, nano    the usual tools
+  node, npm, npx         Node.js (shimmed) and real npm packages
+  serve DIR              serve a folder in a preview window
+  finder                 file manager
+
+Try: claude "make a small page that plays a drum loop, then serve it"
+
+help --all lists every command; help NAME describes one.
+Source and docs: https://github.com/williamsharkey/shiro
+`;
+
 export const helpCmd: Command = {
   name: 'help',
-  description: 'Show available commands',
+  description: 'Getting started (help --all: every command)',
   async exec(ctx) {
+    const arg = ctx.args[0];
+    if (arg && arg !== '--all' && arg !== '-a') {
+      const cmd = ctx.shell.commands.get(arg);
+      if (!cmd) { ctx.stderr = `help: no command named '${arg}'\n`; return 1; }
+      ctx.stdout = `${cmd.name} - ${cmd.description}\nMore: ${cmd.name} --help\n`;
+      return 0;
+    }
+    if (!arg) {
+      ctx.stdout = GETTING_STARTED;
+      return 0;
+    }
     ctx.stdout = 'shiro - available commands:\n\n';
     const cmds = ctx.shell.commands.list();
     const nameCol = 10;

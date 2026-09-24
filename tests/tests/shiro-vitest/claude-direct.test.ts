@@ -47,6 +47,17 @@ describe('Claude Code version reporting', () => {
     expect(kJ(S6, () => false, { env: { CLAUDE_CODE_ENABLE_TASKS: '1' } })()).toBe(true);
   });
 
+  it('replaces the Opus 4.7 launch card and names Opus 5.5', () => {
+    const src = 'function UdK(){return{title:"Opus 4.7 is here",c:"Welcome to Opus 4.7 xhigh!"}}var pdK="Welcome to Opus 4.7 xhigh! · /effort to tune",qUY="Welcome to Opus 4.7 xhigh!";'
+      + 'switch(o5(q)){case"claude-opus-4-7":return"Opus 4.7"+K;}';
+    const out = patchClaudeCodeSource(src);
+    expect(out).not.toContain('Opus 4.7 is here');
+    expect(out).not.toContain('Welcome to Opus 4.7');
+    expect(out).toContain('title:"Claude Code in Shiro"');
+    expect(out).toContain('pdK="Running in your browser on Shiro · /effort');
+    expect(out).toContain('case"claude-opus-5-5":return"Opus 5.5"+K;');
+  });
+
   it('leaves newer builds alone', () => {
     const src = 'a={VERSION:"9.0.0"}';
     expect(patchClaudeCodeSource(src)).toBe(src);

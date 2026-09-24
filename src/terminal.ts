@@ -25,6 +25,9 @@ interface HudState {
 }
 
 export class ShiroTerminal {
+  /** Live terminals, so status can go to an idle one (e.g. the upper pane of a split). */
+  static instances = new Set<ShiroTerminal>();
+
   term: Terminal;
   fitAddon: FitAddon;
   private shell: Shell;
@@ -55,6 +58,7 @@ export class ShiroTerminal {
   private reverseSearchIndex = -1;
 
   constructor(container: HTMLElement, shell: Shell) {
+    ShiroTerminal.instances.add(this);
     this.shell = shell;
     this.term = new Terminal({
       theme: {
@@ -141,6 +145,12 @@ export class ShiroTerminal {
           // Handle shiro://cmd/<command> — run a shell command from HUD links
           if (uri.startsWith('shiro://cmd/')) {
             const cmd = decodeURIComponent(uri.slice('shiro://cmd/'.length));
+            // Type it at an idle prompt, exactly as if the user had (interactive
+            // commands like `claude` then get the terminal properly)
+            if (!this.isBusy() && !this.lineBuffer) {
+              this.injectInput(cmd + '\r');
+              return;
+            }
             this.term.writeln('');
             this.shell.execute(
               cmd,
@@ -424,21 +434,25 @@ export class ShiroTerminal {
       this.term.writeln(`\x1b[36m┌── \x1b[1;97m${hostDisplay}\x1b[0m\x1b[36m ${'─'.repeat(fill)} \x1b[95m${version}\x1b[0m\x1b[36m ──┐\x1b[0m`);
     }
 
-    // Row 1: Shortcuts — clickable links
+    // Rows 1-4: what to do first — each command is a link that types it at the prompt
     const link = (text: string, uri: string) => `${L}${uri}\x07\x1b[97m${text}\x1b[0m${E}`;
-    const shortcuts = [
-      link('help', 'shiro://cmd/help'),
-      link('about', 'shiro://about'),
-      link('templates', 'shiro://templates'),
-      link('files', 'shiro://cmd/finder'),
-    ].join('\x1b[36m · \x1b[0m');
-    // Visible: "  help · about · templates · files" = 34 chars + padding
-    const visLen = 2 + 4 + 3 + 5 + 3 + 9 + 3 + 5; // = 34
-    const pad = ' '.repeat(Math.max(0, W - 2 - visLen)); // -2 for │ on each side
-    this.term.writeln(`\x1b[36m│\x1b[0m  ${shortcuts}${pad}\x1b[36m│\x1b[0m`);
+    const cmdLink = (cmd: string) => link(cmd, 'shiro://cmd/' + encodeURIComponent(cmd));
+    const row = (visible: string, rendered: string) =>
+      `\x1b[36m│\x1b[0m${rendered}${' '.repeat(Math.max(0, W - 2 - visible.length))}\x1b[36m│\x1b[0m`;
+    const entries: Array<[string, string]> = [
+      ['claude', 'Claude Code, ready to go'],
+      ['gh auth login', 'sign in to GitHub'],
+      ['remote start', 'connect an agent (MCP)'],
+    ];
+    for (const [cmd, desc] of entries) {
+      const visible = '  ' + cmd.padEnd(15) + desc;
+      this.term.writeln(row(visible, '  ' + cmdLink(cmd) + ' '.repeat(15 - cmd.length) + `\x1b[90m${desc}\x1b[0m`));
+    }
+    const sep = '\x1b[36m · \x1b[0m';
+    const footer = [cmdLink('help'), link('files', 'shiro://cmd/finder'), link('github', 'https://github.com/williamsharkey/shiro')].join(sep);
+    this.term.writeln(row('  help · files · github', '  ' + footer));
 
-    // Row 2: Bottom border with 白 (double-width CJK = 2 cols)
-    // ┘ = 1, 白 = 2, ┌── = 3 visible per side + dashes
+    // Bottom border with 白 (double-width CJK = 2 cols)
     const dashL = 19; // dashes before 白
     const dashR = W - 1 - dashL - 2 - 1; // 43 - 1(└) - 19 - 2(白) - 1(┘) = 20
     this.term.writeln(`\x1b[36m└${'─'.repeat(dashL)}\x1b[97m白\x1b[36m${'─'.repeat(dashR)}┘\x1b[0m`);
@@ -449,10 +463,10 @@ export class ShiroTerminal {
     // Store HUD state for dynamic updates
     this.hud = {
       startRow,
-      lineCount: 4,
+      lineCount: 7,
       slots: {
         remoteCode: { row: 0, col: 28, width: 20 },
-        recStatus: { row: 1, col: 37, width: 5 },
+        recStatus: { row: 4, col: 37, width: 5 },
       },
     };
 
@@ -485,8 +499,38 @@ export class ShiroTerminal {
    * Update a specific position in the HUD without disturbing terminal content.
    * Does nothing if HUD has scrolled out of view.
    */
+  /**
+   * True while a command owns the terminal (a full-screen app like Claude Code
+   * on the alternate screen, or anything running). In-place banner rewrites
+   * would land on top of its output, so they are skipped or sent elsewhere.
+   */
+  isBusy(): boolean {
+    return this.running || this.term.buffer.active.type === 'alternate';
+  }
+
+  /**
+   * An idle terminal (other than this one) that can show remote status instead,
+   * e.g. the shell pane above Claude Code in a split layout.
+   */
+  private idleSibling(): ShiroTerminal | null {
+    for (const t of ShiroTerminal.instances) {
+      if (t === this || t.isBusy() || !t.term.element?.isConnected) continue;
+      if (t.lineBuffer) continue; // don't redraw over something being typed
+      return t;
+    }
+    return null;
+  }
+
+  /** Show the banner in this idle terminal (above a fresh prompt) if it has none visible. */
+  private adoptHud() {
+    if (this.isHudInViewport()) return;
+    this.term.write('\r\x1b[2K');
+    this.drawHud();
+    this.showPrompt();
+  }
+
   updateHudAt(rowOffset: number, col: number, text: string) {
-    if (!this.isHudVisible()) return;
+    if (!this.isHudVisible() || this.isBusy()) return;
 
     const targetRow = this.hud!.startRow + rowOffset + 1; // +1 because terminal rows are 1-indexed
     this.term.write('\x1b7');                          // Save cursor
@@ -499,6 +543,11 @@ export class ShiroTerminal {
    * Update the remote code display in the HUD top border.
    */
   updateHudRemoteCode(code: string | null) {
+    if (this.isBusy()) {
+      const other = this.idleSibling();
+      if (other) { other.hud && other.isHudInViewport() ? other.updateHudRemoteCode(code) : other.adoptHud(); }
+      return;
+    }
     if (!this.isHudVisible()) return;
 
     const W = 43;
@@ -541,6 +590,11 @@ export class ShiroTerminal {
    * active=true: green filled ●, active=false: dim empty ○
    */
   updateHudRemoteActivity(active: boolean) {
+    if (this.isBusy()) {
+      const other = this.idleSibling();
+      if (other?.hud && other.isHudInViewport()) other.updateHudRemoteActivity(active);
+      return;
+    }
     if (!this.isHudVisible()) return;
 
     const remoteSession = (window as any).__shiroRemoteSession;
@@ -579,7 +633,7 @@ export class ShiroTerminal {
    * Update the rec status display in the HUD.
    */
   updateHudRecStatus(status: string) {
-    if (!this.isHudVisible()) return;
+    if (!this.isHudVisible() || this.isBusy()) return;
 
     const slot = this.hud!.slots.recStatus;
     const padded = status.padEnd(slot.width);

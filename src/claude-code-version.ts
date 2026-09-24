@@ -79,6 +79,14 @@ const CAPABILITY_PATCHES: Array<[string, string]> = [
   // the in-memory TodoWrite list instead unless CLAUDE_CODE_ENABLE_TASKS=1.
   ['function kJ(){if(S6(process.env.CLAUDE_CODE_ENABLE_TASKS))return!0;return!I7()}',
    'function kJ(){return S6(process.env.CLAUDE_CODE_ENABLE_TASKS)}'],
+  // Display names for the header and /model
+  ['case"claude-opus-4-7":return"Opus 4.7"+K;', 'case"claude-opus-5-5":return"Opus 5.5"+K;case"claude-opus-4-7":return"Opus 4.7"+K;'],
+  ['if(_.includes("claude-opus-4-7"))return K?"Opus 4.7 (1M context)":"Opus 4.7";',
+   'if(_.includes("claude-opus-5-5"))return K?"Opus 5.5 (1M context)":"Opus 5.5";if(_.includes("claude-opus-4-7"))return K?"Opus 4.7 (1M context)":"Opus 4.7";'],
+  // The welcome card still announced the Opus 4.7 launch
+  ['title:"Opus 4.7 is here"', 'title:"Claude Code in Shiro"'],
+  ['"Welcome to Opus 4.7 xhigh!"', '"Running in your browser on Shiro"'],
+  ['pdK="Welcome to Opus 4.7 xhigh! · /effort', 'pdK="Running in your browser on Shiro · /effort'],
 ];
 
 /**

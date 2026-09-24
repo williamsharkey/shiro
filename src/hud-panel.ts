@@ -2,13 +2,11 @@
  * Floating HUD panel — appears when the terminal HUD scrolls out of view.
  *
  * Compact state: small pill showing "白 shiro" docked top-left.
- * Expanded state: shows quick action links (files, claude, remote, help).
+ * Expanded state: quick actions (Claude, GitHub sign-in, remote, files, help, source).
  * Draggable via the compact header.
  */
 
 import type { Shell } from './shell';
-import { showTemplatePalette } from './template-palette';
-import { spawnInWindow } from './commands/spawn';
 
 export interface HudPanel {
   show(): void;
@@ -89,12 +87,12 @@ export function createHudPanel(shell: Shell): HudPanel {
 
   // Menu items
   const items = [
+    { label: 'Claude', desc: 'Claude Code in a window', icon: '◆', action: 'claude' },
+    { label: 'GitHub', desc: 'Sign in (gh auth login)', icon: '⎇', action: 'gh' },
+    { label: 'Remote', desc: 'Connect an agent (MCP)', icon: '○', action: 'remote' },
     { label: 'Files', desc: 'File manager', icon: '↕', action: 'files' },
-    { label: 'Claude', desc: 'AI assistant', icon: '◆', action: 'claude' },
-    { label: 'Templates', desc: 'Starter projects', icon: '◇', action: 'templates' },
-    { label: 'Remote', desc: 'MCP connection', icon: '○', action: 'remote' },
-    { label: 'About', desc: 'shiro.computer', icon: '白', action: 'about' },
-    { label: 'Help', desc: 'Commands & guide', icon: '?', action: 'help' },
+    { label: 'Help', desc: 'Getting started', icon: '?', action: 'help' },
+    { label: 'Source', desc: 'github.com/williamsharkey/shiro', icon: '白', action: 'source' },
   ];
 
   items.forEach((item, i) => {
@@ -308,22 +306,12 @@ function handleAction(action: string, shell: Shell) {
       import('./commands/remote').then(m => m.openRemotePanel());
       break;
     }
-    case 'templates': {
-      showTemplatePalette(
-        (name, cmd, splitPort) => spawnInWindow(shell, cmd, name, splitPort),
-        (templateId) => {
-          import('./living-templates').then(({ livingTemplates }) => {
-            import('./template-runner').then(({ runLivingTemplate }) => {
-              const tmpl = livingTemplates.find(t => t.id === templateId);
-              if (tmpl) runLivingTemplate(shell, tmpl);
-            });
-          });
-        },
-      );
+    case 'gh': {
+      runInTerminal(shell, 'gh auth login');
       break;
     }
-    case 'about': {
-      window.open('/about', '_blank');
+    case 'source': {
+      window.open('https://github.com/williamsharkey/shiro', '_blank', 'noopener');
       break;
     }
     case 'help': {
