@@ -385,11 +385,15 @@ export async function executeNodeScript(
       }
     }
 
-    // Polyfill setImmediate/clearImmediate
-    const _origSetImmediate = (globalThis as any).setImmediate;
-    const _origClearImmediate = (globalThis as any).clearImmediate;
-    (globalThis as any).setImmediate = (fn: Function, ...args: any[]) => setTimeout(fn, 0, ...args);
-    (globalThis as any).clearImmediate = (id: any) => clearTimeout(id);
+    // Polyfill setImmediate/clearImmediate once for the page and never remove it.
+    // Node processes share this global and overlap (Claude Code runs for hours
+    // while its tool calls start and finish other scripts); a finishing child
+    // that deleted it broke the still-running parent mid-call, leaving Claude's
+    // Bash tool awaiting a promise that never settled.
+    if (typeof (globalThis as any).setImmediate !== 'function') {
+      (globalThis as any).setImmediate = (fn: Function, ...args: any[]) => setTimeout(fn, 0, ...args);
+      (globalThis as any).clearImmediate = (id: any) => clearTimeout(id);
+    }
 
     // Track active timers
     let _activeTimers = 0;
@@ -520,8 +524,6 @@ export async function executeNodeScript(
     }
     globalThis.fetch = _origFetch;
     if (code.length <= 500000) { globalThis.setTimeout = _prevST; globalThis.clearTimeout = _prevCT; }
-    if (_origSetImmediate) (globalThis as any).setImmediate = _origSetImmediate; else delete (globalThis as any).setImmediate;
-    if (_origClearImmediate) (globalThis as any).clearImmediate = _origClearImmediate; else delete (globalThis as any).clearImmediate;
 
     return _st.exitCode;
   } catch (e: any) {
@@ -532,8 +534,6 @@ export async function executeNodeScript(
     }
     globalThis.fetch = _origFetch;
     if (code.length <= 500000) { globalThis.setTimeout = _prevST; globalThis.clearTimeout = _prevCT; }
-    delete (globalThis as any).setImmediate;
-    delete (globalThis as any).clearImmediate;
     const msg = e.message || String(e);
     console.error('[node] Script error:', e);
     ctx.stderr += `Error: ${msg}\n`;
