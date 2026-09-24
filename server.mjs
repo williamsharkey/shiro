@@ -22,6 +22,18 @@ const MIME = {
 };
 
 // --- API proxy ---
+// Node's built-in fetch gives up if response headers take over 5 minutes. A
+// non-streaming model call only sends headers when the whole reply is done, so
+// long ones died at exactly 5:00 ("fetch failed") and Claude Code sat waiting.
+// undici (installed next to server.mjs on the host) lets the proxy wait as long
+// as the client does; without it we fall back to the built-in fetch.
+let upstreamFetch = fetch;
+try {
+  const { Agent, fetch: undiciFetch } = await import('undici');
+  const dispatcher = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
+  upstreamFetch = (url, init) => undiciFetch(url, { ...init, dispatcher });
+} catch { console.warn('[proxy] undici not installed; upstream calls time out after 5 minutes'); }
+
 const PROXY_TARGETS = {
   'anthropic': 'https://api.anthropic.com',
   'platform': 'https://platform.claude.com',
@@ -140,12 +152,22 @@ async function handleProxy(req, res, pathAfterApi) {
     const origUrl = new URL(req.url, 'http://localhost');
     url.search = origUrl.search;
 
-    const upstream = await fetch(url.toString(), {
+    // One line per model call: size, streaming, and time to first byte of headers
+    let callInfo = '';
+    if (rest.startsWith('/v1/messages') && body.length) {
+      try {
+        const j = JSON.parse(body.toString());
+        callInfo = ` model=${j.model} stream=${!!j.stream} max_tokens=${j.max_tokens} bytes=${body.length}`;
+      } catch { /* not JSON */ }
+    }
+    const t0 = Date.now();
+    const upstream = await upstreamFetch(url.toString(), {
       method: req.method,
       headers,
       body: body.length ? body : undefined,
       duplex: 'half',
     });
+    if (callInfo) console.log(`[proxy] messages${callInfo} → ${upstream.status} headers in ${Date.now() - t0}ms`);
 
     const respHeaders = { ...cors };
     // Allow-listed targets are github.com pages: pass only the body's type. Their
@@ -180,7 +202,7 @@ async function handleProxy(req, res, pathAfterApi) {
       res.end();
     }
   } catch (err) {
-    console.error(`Proxy error [${req.method} ${req.url}]:`, err.message || err);
+    console.error(`Proxy error [${req.method} ${req.url}]:`, err.message || err, err.cause?.code || err.cause?.message || '');
     res.writeHead(502, { 'content-type': 'application/json', ...cors });
     res.end(JSON.stringify({ error: err.message }));
   }
