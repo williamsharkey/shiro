@@ -24,6 +24,8 @@ export interface CommandContext {
   stderr: string;
   shell: Shell;
   terminal?: TerminalLike;
+  /** false when stdout goes to a pipe or file (ls then prints one name per line, like coreutils) */
+  stdoutIsTTY?: boolean;
 }
 
 export interface Command {

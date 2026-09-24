@@ -50,7 +50,8 @@ export const ls: Command = {
     const args = ctx.args;
     // Custom parsing for --color=VALUE and --group-directories-first
     let colorMode = 'never'; // 'always', 'auto', 'never'
-    let onePerLine = false;
+    // Piped or redirected output gets one plain name per line, as with coreutils ls
+    let onePerLine = ctx.stdoutIsTTY === false;
     let sortBySize = false;
     let sortByTime = false;
     let dirsOnly = false;
@@ -125,7 +126,7 @@ export const ls: Command = {
       } else if (onePerLine) {
         for (const entry of filtered) {
           const name = colorize(entry.name, entry, useColor);
-          const suffix = classify ? typeIndicator(entry) : (entry.type === 'dir' ? '/' : '');
+          const suffix = classify ? typeIndicator(entry) : (entry.type === 'dir' && ctx.stdoutIsTTY !== false ? '/' : '');
           results.push(name + suffix);
         }
       } else {

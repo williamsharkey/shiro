@@ -67,6 +67,11 @@ export function splitEnvPrefix(segment: string): { assignments: [string, string]
   return { assignments, rest: rest.trimStart() };
 }
 
+/** Runaway-loop guard for while/until/for((;;)); high enough for `while read` over big files */
+const LOOP_ITERATION_LIMIT = 10_000_000;
+/** Let the page paint and handle input during long shell loops */
+const yieldToEventLoop = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
 export class Shell {
   fs: FileSystem;
   cwd: string = '/home/user';
@@ -275,6 +280,9 @@ export class Shell {
     terminalOverride?: any,
     skipHistory: boolean = false,
   ): Promise<number> {
+    // Stdin handed over by a pipeline whose head was a loop or subshell (see runHeadedPipeline)
+    const injectedStdin = this.injectedStdin;
+    this.injectedStdin = null;
     // Handle backslash line continuations: \<newline> joins lines
     const joined = line.replace(/\\\n/g, '');
     const trimmed = joined.trim();
@@ -329,7 +337,7 @@ export class Shell {
     // Handle heredocs before anything else
     const heredoc = this.parseHeredoc(trimmed);
     const effectiveLine = heredoc ? heredoc.command : trimmed;
-    const heredocStdin = heredoc ? heredoc.body : '';
+    const heredocStdin = heredoc ? heredoc.body : (injectedStdin ?? '');
 
     // Strip control characters from history entries (ink UI can leak ANSI/DEL chars)
     // Only record user-typed commands (not programmatic calls from child_process, spawn, etc.)
@@ -385,6 +393,18 @@ export class Shell {
         this.lastExitCode = exitCode;
         this.env['?'] = String(exitCode);
         continue;
+      }
+
+      // A loop, if, or subshell piped onward (`for …; done | tail -1`): run the head,
+      // then the rest of the pipeline on its output
+      if (this.isControlStructure(trimmedCmd) || trimmedCmd.startsWith('(')) {
+        const parts = splitTopLevelPipes(trimmedCmd);
+        if (parts.length > 1) {
+          exitCode = await this.runHeadedPipeline(parts, heredocStdin, writeStdout, stderrWriter, terminalOverride);
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          continue;
+        }
       }
 
       // Check if compound is a subshell: (commands)
@@ -1196,7 +1216,7 @@ export class Shell {
         }
 
         // Shell builtin: printf FORMAT [ARGS...]
-        if (!_builtinDisabled && effectiveCmdName === 'printf') {
+        if (!_builtinDisabled && effectiveCmdName === 'printf' && cmdArgs[0] === '-v') {
           if (cmdArgs.length === 0) {
             stderrWriter('printf: usage: printf format [arguments]\r\n');
             exitCode = 1;
@@ -1208,112 +1228,11 @@ export class Shell {
               printfVarName = cmdArgs[1];
               printfCmdArgs = cmdArgs.slice(2);
             }
-            const fmt = printfCmdArgs[0];
-            const fmtArgs = printfCmdArgs.slice(1);
-            let argIdx = 0;
-            let result = '';
-            let fi = 0;
-            while (fi < fmt.length) {
-              if (fmt[fi] === '\\') {
-                // Escape sequences
-                fi++;
-                if (fi >= fmt.length) { result += '\\'; break; }
-                switch (fmt[fi]) {
-                  case 'n': result += '\n'; break;
-                  case 't': result += '\t'; break;
-                  case 'r': result += '\r'; break;
-                  case '\\': result += '\\'; break;
-                  case '"': result += '"'; break;
-                  case "'": result += "'"; break;
-                  case '0': {
-                    // Octal
-                    let oct = '';
-                    fi++;
-                    while (fi < fmt.length && /[0-7]/.test(fmt[fi]) && oct.length < 3) { oct += fmt[fi]; fi++; }
-                    result += String.fromCharCode(parseInt(oct || '0', 8));
-                    fi--;
-                    break;
-                  }
-                  default: result += '\\' + fmt[fi];
-                }
-                fi++;
-                continue;
-              }
-              if (fmt[fi] === '%') {
-                fi++;
-                if (fi >= fmt.length) { result += '%'; break; }
-                if (fmt[fi] === '%') { result += '%'; fi++; continue; }
-                // %(fmt)T — date/time formatting
-                if (fmt[fi] === '(') {
-                  const closeP = fmt.indexOf(')T', fi);
-                  if (closeP > fi) {
-                    const dateFmt = fmt.slice(fi + 1, closeP);
-                    const ts = argIdx < fmtArgs.length ? parseInt(fmtArgs[argIdx++]) * 1000 : Date.now();
-                    const d = new Date(ts === -1000 ? Date.now() : ts);
-                    let dateResult = dateFmt;
-                    dateResult = dateResult.replace(/%Y/g, String(d.getFullYear()));
-                    dateResult = dateResult.replace(/%m/g, String(d.getMonth() + 1).padStart(2, '0'));
-                    dateResult = dateResult.replace(/%d/g, String(d.getDate()).padStart(2, '0'));
-                    dateResult = dateResult.replace(/%H/g, String(d.getHours()).padStart(2, '0'));
-                    dateResult = dateResult.replace(/%M/g, String(d.getMinutes()).padStart(2, '0'));
-                    dateResult = dateResult.replace(/%S/g, String(d.getSeconds()).padStart(2, '0'));
-                    result += dateResult;
-                    fi = closeP + 2;
-                    continue;
-                  }
-                }
-                // Parse flags, width, precision
-                let flags = '';
-                while (fi < fmt.length && '-+ 0#'.includes(fmt[fi])) { flags += fmt[fi]; fi++; }
-                let width = '';
-                while (fi < fmt.length && /\d/.test(fmt[fi])) { width += fmt[fi]; fi++; }
-                let precision = '';
-                if (fi < fmt.length && fmt[fi] === '.') {
-                  fi++;
-                  while (fi < fmt.length && /\d/.test(fmt[fi])) { precision += fmt[fi]; fi++; }
-                }
-                const spec = fi < fmt.length ? fmt[fi] : '';
-                fi++;
-                const arg = argIdx < fmtArgs.length ? fmtArgs[argIdx++] : '';
-                let formatted = '';
-                switch (spec) {
-                  case 's': formatted = arg; break;
-                  case 'b': {
-                    // %b: interpret escape sequences in argument
-                    formatted = arg.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r')
-                      .replace(/\\\\/g, '\\').replace(/\\a/g, '\x07').replace(/\\b/g, '\b')
-                      .replace(/\\e/g, '\x1b').replace(/\\f/g, '\f').replace(/\\v/g, '\v');
-                    break;
-                  }
-                  case 'd': case 'i': formatted = String(parseInt(arg) || 0); break;
-                  case 'f': {
-                    const num = parseFloat(arg) || 0;
-                    formatted = precision ? num.toFixed(parseInt(precision)) : num.toFixed(6);
-                    break;
-                  }
-                  case 'x': formatted = (parseInt(arg) || 0).toString(16); break;
-                  case 'X': formatted = (parseInt(arg) || 0).toString(16).toUpperCase(); break;
-                  case 'o': formatted = (parseInt(arg) || 0).toString(8); break;
-                  case 'c': formatted = arg ? arg[0] : ''; break;
-                  default: formatted = '%' + spec;
-                }
-                // Apply width
-                if (width) {
-                  const w = parseInt(width);
-                  if (flags.includes('-')) formatted = formatted.padEnd(w);
-                  else if (flags.includes('0') && /[dioxXf]/.test(spec)) formatted = formatted.padStart(w, '0');
-                  else formatted = formatted.padStart(w);
-                }
-                result += formatted;
-                continue;
-              }
-              result += fmt[fi];
-              fi++;
-            }
+            const printfResult = formatPrintf(printfCmdArgs[0], printfCmdArgs.slice(1));
             if (printfVarName) {
-              this.env[printfVarName] = result;
+              this.env[printfVarName] = printfResult;
             } else {
-              writeStdout(result.replace(/\n/g, '\r\n'));
+              writeStdout(printfResult.replace(/\n/g, '\r\n'));
             }
             exitCode = 0;
           }
@@ -2123,6 +2042,7 @@ export class Shell {
           stderr: '',
           shell: this,
           terminal: terminalOverride || this.terminal,
+          stdoutIsTTY: i === pipeline.length - 1 && !redirects.some(r => r.type === '>' || r.type === '>>'),
         };
 
         // Check shell functions first
@@ -4011,11 +3931,90 @@ export class Shell {
 
   // ─── CONTROL STRUCTURES ───────────────────────────────────────────────────
 
+  /** Stdin for the next execute() call's first command; set only by runHeadedPipeline */
+  private injectedStdin: string | null = null;
+
+  private async runHeadedPipeline(
+    parts: string[], stdin: string,
+    writeStdout: (s: string) => void, writeStderr: (s: string) => void, terminalOverride?: any,
+  ): Promise<number> {
+    const head = parts[0].trim();
+    let captured = '';
+    const capture = (s: string) => { captured += s; };
+    let code: number;
+    if (head.startsWith('(') && head.endsWith(')')) {
+      const result = await this.fork().exec(head.slice(1, -1).trim());
+      captured = result.stdout;
+      if (result.stderr) writeStderr(result.stderr.replace(/\n/g, '\r\n'));
+      code = result.exitCode;
+    } else if (stdin) {
+      code = await this.execControlStructurePiped(head, stdin, capture, writeStderr);
+    } else {
+      code = await this.execControlStructure(head, capture, writeStderr);
+    }
+    if (this.abortController?.signal.aborted) return 130;
+    this.injectedStdin = captured.replace(/\r\n/g, '\n');
+    const rest = parts.slice(1).join('|');
+    const restCode = await this.execute(rest, writeStdout, writeStderr, false, terminalOverride || this.terminal, true);
+    this.injectedStdin = null;
+    return this.options.has('pipefail') && code !== 0 && restCode === 0 ? code : restCode;
+  }
+
   private isControlStructure(input: string): boolean {
     return /^if\s+/.test(input) || /^while\s+/.test(input) || /^until\s+/.test(input) || /^for\s+/.test(input) || /^case\s+/.test(input) || /^select\s+/.test(input);
   }
 
+  /**
+   * Run a control structure, applying redirections written after its closing
+   * keyword (`done < file`, `fi > out`, `done 2>/dev/null`, ...).
+   */
   private async execControlStructure(
+    input: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void,
+    pipeStdin?: string,
+  ): Promise<number> {
+    const { compound, redirects } = splitCompoundRedirects(input);
+    if (!redirects.length) {
+      return pipeStdin === undefined
+        ? this.execControlStructureCore(compound, writeStdout, writeStderr)
+        : this.execControlStructureWithStdin(compound, pipeStdin, writeStdout, writeStderr);
+    }
+    let stdin = pipeStdin;
+    let out = writeStdout, err = writeStderr;
+    let outFile: { path: string; append: boolean } | null = null;
+    let captured = '';
+    for (const r of redirects) {
+      const target = this.expandVars(r.target);
+      if (r.op === '<') {
+        try {
+          const data = await this.fs.readFile(this.fs.resolvePath(target, this.cwd), 'utf8');
+          stdin = typeof data === 'string' ? data : new TextDecoder().decode(data);
+        } catch {
+          writeStderr(`shiro: ${target}: No such file or directory\r\n`);
+          return 1;
+        }
+      } else if (r.op === '2>&1') {
+        err = (s) => out(s);
+      } else if (r.op === '2>' || r.op === '2>>') {
+        err = target === '/dev/null' ? () => {} : writeStderr;
+      } else if (r.op === '>' || r.op === '>>' || r.op === '&>') {
+        if (r.op === '&>') err = (s) => out(s);
+        if (target === '/dev/null') { out = () => {}; continue; }
+        outFile = { path: this.fs.resolvePath(target, this.cwd), append: r.op === '>>' };
+        out = (s) => { captured += s; };
+      }
+    }
+    const code = stdin === undefined
+      ? await this.execControlStructureCore(compound, out, err)
+      : await this.execControlStructureWithStdin(compound, stdin, out, err);
+    if (outFile) {
+      const text = captured.replace(/\r\n/g, '\n');
+      if (outFile.append) await this.fs.appendFile(outFile.path, text);
+      else await this.fs.writeFile(outFile.path, text);
+    }
+    return code;
+  }
+
+  private async execControlStructureCore(
     input: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void
   ): Promise<number> {
     if (/^if\s+/.test(input)) return this.execIf(input, writeStdout, writeStderr);
@@ -4035,11 +4034,18 @@ export class Shell {
     input: string, pipeStdin: string,
     writeStdout: (s: string) => void, writeStderr: (s: string) => void
   ): Promise<number> {
+    return this.execControlStructure(input, writeStdout, writeStderr, pipeStdin);
+  }
+
+  private async execControlStructureWithStdin(
+    input: string, pipeStdin: string,
+    writeStdout: (s: string) => void, writeStderr: (s: string) => void
+  ): Promise<number> {
     if (/^while\s+/.test(input)) return this.execWhile(input, writeStdout, writeStderr, pipeStdin);
     // For other control structures, set __PIPE_STDIN env and delegate
     const saved = this.env['__PIPE_STDIN'];
     this.env['__PIPE_STDIN'] = pipeStdin;
-    const result = await this.execControlStructure(input, writeStdout, writeStderr);
+    const result = await this.execControlStructureCore(input, writeStdout, writeStderr);
     if (saved === undefined) delete this.env['__PIPE_STDIN'];
     else this.env['__PIPE_STDIN'] = saved;
     return result;
@@ -4341,7 +4347,8 @@ export class Shell {
     }
 
     let iter = 0;
-    while (iter++ < 10000) {
+    while (iter++ < LOOP_ITERATION_LIMIT) {
+      if (iter % 1000 === 0) await yieldToEventLoop(); // keep the page responsive in long loops
       // Expand vars in condition each iteration (loop vars like $X change)
       const expandedCond = this.expandVars(await this.expandCommandSubstitution(this.expandArithmetic(parsed.condition), writeStderr));
       if ((await this.evalCondition(expandedCond, writeStdout, writeStderr)) !== 0) break;
@@ -4369,7 +4376,8 @@ export class Shell {
     if (!parsed) { writeStderr('until: syntax error\r\n'); return 1; }
 
     let iter = 0;
-    while (iter++ < 10000) {
+    while (iter++ < LOOP_ITERATION_LIMIT) {
+      if (iter % 1000 === 0) await yieldToEventLoop();
       const expandedCond = this.expandVars(await this.expandCommandSubstitution(this.expandArithmetic(parsed.condition), writeStderr));
       if ((await this.evalCondition(expandedCond, writeStdout, writeStderr)) === 0) break;
       try {
@@ -4399,7 +4407,8 @@ export class Shell {
       this.evalArithmetic(init);
       // Loop
       let iter = 0;
-      while (iter++ < 10000) {
+      while (iter++ < LOOP_ITERATION_LIMIT) {
+        if (iter % 1000 === 0) await yieldToEventLoop();
         // Evaluate test — 0 means false (stop)
         if (test && this.evalArithmetic(test) === 0) break;
         // Execute body
@@ -5033,3 +5042,234 @@ export class Shell {
   }
 }
 
+/**
+ * Split a command on pipes that are outside quotes, $( ), ( ), { }, and compound
+ * commands (for/while/until/select … done, if … fi, case … esac), so the pipe
+ * after `done` or a subshell is found but pipes inside the body are not.
+ */
+export function splitTopLevelPipes(cmd: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let paren = 0, brace = 0;
+  const blocks: string[] = []; // expected closers: done / fi / esac
+  let inSingle = false, inDouble = false;
+  let cmdPos = true; // at a position where a command (and so a keyword) can start
+  let i = 0;
+  const OPEN: Record<string, string> = { for: 'done', while: 'done', until: 'done', select: 'done', if: 'fi', case: 'esac' };
+  while (i < cmd.length) {
+    const ch = cmd[i];
+    if (inSingle) { current += ch; if (ch === "'") inSingle = false; i++; continue; }
+    if (ch === '\\') { current += ch + (cmd[i + 1] ?? ''); i += 2; cmdPos = false; continue; }
+    if (inDouble) { current += ch; if (ch === '"') inDouble = false; i++; continue; }
+    if (ch === "'") { inSingle = true; current += ch; i++; cmdPos = false; continue; }
+    if (ch === '"') { inDouble = true; current += ch; i++; cmdPos = false; continue; }
+    if (ch === '(') { paren++; current += ch; i++; cmdPos = true; continue; }
+    if (ch === ')') { if (paren > 0) paren--; current += ch; i++; cmdPos = false; continue; }
+    if (ch === '|' && cmd[i + 1] === '|') { current += '||'; i += 2; cmdPos = true; continue; }
+    if (ch === '|' && cmd[i - 1] !== '>') {
+      if (paren === 0 && brace === 0 && blocks.length === 0) { parts.push(current); current = ''; }
+      else current += ch;
+      i++; cmdPos = true; continue;
+    }
+    if (ch === ';' || ch === '&' || ch === '\n') { current += ch; i++; cmdPos = true; continue; }
+    if (/\s/.test(ch)) { current += ch; i++; continue; }
+    // A word
+    let j = i;
+    while (j < cmd.length && !/[\s;&|()'"\\]/.test(cmd[j])) j++;
+    const word = cmd.slice(i, j) || ch;
+    if (j === i) j = i + 1;
+    if (paren === 0) {
+      if (cmdPos && OPEN[word]) blocks.push(OPEN[word]);
+      else if (cmdPos && blocks.length && word === blocks[blocks.length - 1]) blocks.pop();
+      else if (cmdPos && word === '{') brace++;
+      else if (cmdPos && word === '}' && brace > 0) brace--;
+    }
+    cmdPos = ['do', 'then', 'else', 'elif', '{', '!', 'if', 'while', 'until', 'time'].includes(word);
+    current += cmd.slice(i, j);
+    i = j;
+  }
+  parts.push(current);
+  return parts.map((p) => p.trim()).filter((p, idx, arr) => p || arr.length === 1);
+}
+
+/**
+ * printf formatting shared by the `printf` command and the shell's `printf -v`.
+ * Like bash, the format is reused until every argument is consumed.
+ */
+export function formatPrintf(fmt: string, fmtArgs: string[]): string {
+  let out = '';
+  let argIdx = 0;
+  do {
+    const startIdx = argIdx;
+    const r = formatPrintfOnce(fmt, fmtArgs, argIdx);
+    out += r.result;
+    argIdx = r.argIdx;
+    if (argIdx === startIdx) break; // format consumes no arguments
+  } while (argIdx < fmtArgs.length);
+  return out;
+}
+
+function formatPrintfOnce(fmt: string, fmtArgs: string[], argIdx: number): { result: string; argIdx: number } {
+  let result = '';
+  let fi = 0;
+  while (fi < fmt.length) {
+    if (fmt[fi] === '\\') {
+      // Escape sequences
+      fi++;
+      if (fi >= fmt.length) { result += '\\'; break; }
+      switch (fmt[fi]) {
+        case 'n': result += '\n'; break;
+        case 't': result += '\t'; break;
+        case 'r': result += '\r'; break;
+        case '\\': result += '\\'; break;
+        case '"': result += '"'; break;
+        case "'": result += "'"; break;
+        case '0': {
+          // Octal
+          let oct = '';
+          fi++;
+          while (fi < fmt.length && /[0-7]/.test(fmt[fi]) && oct.length < 3) { oct += fmt[fi]; fi++; }
+          result += String.fromCharCode(parseInt(oct || '0', 8));
+          fi--;
+          break;
+        }
+        default: result += '\\' + fmt[fi];
+      }
+      fi++;
+      continue;
+    }
+    if (fmt[fi] === '%') {
+      fi++;
+      if (fi >= fmt.length) { result += '%'; break; }
+      if (fmt[fi] === '%') { result += '%'; fi++; continue; }
+      // %(fmt)T — date/time formatting
+      if (fmt[fi] === '(') {
+        const closeP = fmt.indexOf(')T', fi);
+        if (closeP > fi) {
+          const dateFmt = fmt.slice(fi + 1, closeP);
+          const ts = argIdx < fmtArgs.length ? parseInt(fmtArgs[argIdx++]) * 1000 : Date.now();
+          const d = new Date(ts === -1000 ? Date.now() : ts);
+          let dateResult = dateFmt;
+          dateResult = dateResult.replace(/%Y/g, String(d.getFullYear()));
+          dateResult = dateResult.replace(/%m/g, String(d.getMonth() + 1).padStart(2, '0'));
+          dateResult = dateResult.replace(/%d/g, String(d.getDate()).padStart(2, '0'));
+          dateResult = dateResult.replace(/%H/g, String(d.getHours()).padStart(2, '0'));
+          dateResult = dateResult.replace(/%M/g, String(d.getMinutes()).padStart(2, '0'));
+          dateResult = dateResult.replace(/%S/g, String(d.getSeconds()).padStart(2, '0'));
+          result += dateResult;
+          fi = closeP + 2;
+          continue;
+        }
+      }
+      // Parse flags, width, precision
+      let flags = '';
+      while (fi < fmt.length && '-+ 0#'.includes(fmt[fi])) { flags += fmt[fi]; fi++; }
+      let width = '';
+      while (fi < fmt.length && /\d/.test(fmt[fi])) { width += fmt[fi]; fi++; }
+      let precision = '';
+      if (fi < fmt.length && fmt[fi] === '.') {
+        fi++;
+        while (fi < fmt.length && /\d/.test(fmt[fi])) { precision += fmt[fi]; fi++; }
+      }
+      const spec = fi < fmt.length ? fmt[fi] : '';
+      fi++;
+      const arg = argIdx < fmtArgs.length ? fmtArgs[argIdx++] : '';
+      let formatted = '';
+      switch (spec) {
+        case 's': formatted = arg; break;
+        case 'b': {
+          // %b: interpret escape sequences in argument
+          formatted = arg.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r')
+            .replace(/\\\\/g, '\\').replace(/\\a/g, '\x07').replace(/\\b/g, '\b')
+            .replace(/\\e/g, '\x1b').replace(/\\f/g, '\f').replace(/\\v/g, '\v');
+          break;
+        }
+        case 'd': case 'i': formatted = String(parseInt(arg) || 0); break;
+        case 'f': {
+          const num = parseFloat(arg) || 0;
+          formatted = precision ? num.toFixed(parseInt(precision)) : num.toFixed(6);
+          break;
+        }
+        case 'x': formatted = (parseInt(arg) || 0).toString(16); break;
+        case 'X': formatted = (parseInt(arg) || 0).toString(16).toUpperCase(); break;
+        case 'o': formatted = (parseInt(arg) || 0).toString(8); break;
+        case 'c': formatted = arg ? arg[0] : ''; break;
+        default: formatted = '%' + spec;
+      }
+      // Apply width
+      if (width) {
+        const w = parseInt(width);
+        if (flags.includes('-')) formatted = formatted.padEnd(w);
+        else if (flags.includes('0') && /[dioxXf]/.test(spec)) formatted = formatted.padStart(w, '0');
+        else formatted = formatted.padStart(w);
+      }
+      result += formatted;
+      continue;
+    }
+    result += fmt[fi];
+    fi++;
+  }
+  return { result, argIdx };
+}
+
+export interface CompoundRedirect { op: '<' | '>' | '>>' | '&>' | '2>' | '2>>' | '2>&1'; target: string }
+
+/**
+ * Split redirections off the end of a compound command:
+ * `while read l; do …; done < in.txt > out.txt` → the loop, plus [<in.txt, >out.txt].
+ */
+export function splitCompoundRedirects(cmd: string): { compound: string; redirects: CompoundRedirect[] } {
+  const end = compoundEnd(cmd);
+  if (end < 0 || end >= cmd.length) return { compound: cmd, redirects: [] };
+  const suffix = cmd.slice(end);
+  const redirects: CompoundRedirect[] = [];
+  const re = /\s*(2>&1|&>|2>>|2>|>>|>|<)\s*('[^']*'|"[^"]*"|[^\s<>]+)?/y;
+  let pos = 0;
+  while (pos < suffix.length) {
+    if (!suffix.slice(pos).trim()) break;
+    re.lastIndex = pos;
+    const m = re.exec(suffix);
+    if (!m) return { compound: cmd, redirects: [] }; // not just redirections: leave it alone
+    const op = m[1] as CompoundRedirect['op'];
+    let target = m[2] ?? '';
+    if (op !== '2>&1' && !target) return { compound: cmd, redirects: [] };
+    if (/^['"]/.test(target)) target = target.slice(1, -1);
+    redirects.push({ op, target });
+    pos = re.lastIndex;
+  }
+  return { compound: cmd.slice(0, end).trim(), redirects };
+}
+
+/** Index just past the keyword that closes the compound command starting cmd, or -1. */
+function compoundEnd(cmd: string): number {
+  const OPEN: Record<string, string> = { for: 'done', while: 'done', until: 'done', select: 'done', if: 'fi', case: 'esac' };
+  const blocks: string[] = [];
+  let paren = 0, inSingle = false, inDouble = false, cmdPos = true;
+  let i = 0;
+  while (i < cmd.length) {
+    const ch = cmd[i];
+    if (inSingle) { if (ch === "'") inSingle = false; i++; continue; }
+    if (ch === '\\') { i += 2; cmdPos = false; continue; }
+    if (inDouble) { if (ch === '"') inDouble = false; i++; continue; }
+    if (ch === "'") { inSingle = true; i++; cmdPos = false; continue; }
+    if (ch === '"') { inDouble = true; i++; cmdPos = false; continue; }
+    if (ch === '(') { paren++; i++; cmdPos = true; continue; }
+    if (ch === ')') { if (paren > 0) paren--; i++; cmdPos = false; continue; }
+    if (ch === ';' || ch === '&' || ch === '|' || ch === '\n') { i++; cmdPos = true; continue; }
+    if (/\s/.test(ch)) { i++; continue; }
+    let j = i;
+    while (j < cmd.length && !/[\s;&|()'"\\]/.test(cmd[j])) j++;
+    if (j === i) j = i + 1;
+    const word = cmd.slice(i, j);
+    if (paren === 0 && cmdPos) {
+      if (OPEN[word]) blocks.push(OPEN[word]);
+      else if (blocks.length && word === blocks[blocks.length - 1]) {
+        blocks.pop();
+        if (!blocks.length) return j;
+      }
+    }
+    cmdPos = ['do', 'then', 'else', 'elif', '{', '!', 'if', 'while', 'until', 'time'].includes(word);
+    i = j;
+  }
+  return -1;
+}
