@@ -454,6 +454,10 @@ function wireSession(session: RemoteSession, dc: RTCDataChannel) {
     // Guard against re-entrant/duplicate onclose fires
     if (closeFired) return;
     closeFired = true;
+    // `remote start`/`remote stop` replaced or ended this session on purpose; its
+    // close fires later, and re-registering here would kill the new session and
+    // bring the old code back.
+    if (window.__shiroRemoteSession !== session) return;
 
     console.log('[remote] Peer disconnected');
     if (session.panel) session.panel.setStatus('disconnected');

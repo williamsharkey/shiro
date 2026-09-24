@@ -1,4 +1,5 @@
 import type { CommandContext } from '../../commands/index';
+import { decodeUtf8Strict } from '../preload';
 
 export interface FsDeps {
   ctx: CommandContext;
@@ -79,14 +80,26 @@ export function createFsModule(deps: FsDeps): any {
       let cached = fileCache.get(resolved) ?? fileCache.get(resolved + '.js');
       // Fallback: check Shiro's FS in-memory cache for files created by
       // shell commands (git clone, echo, sed) that bypass nodeCmd's fileCache
+      const encoding = typeof opts === 'string' ? opts : opts?.encoding;
       if (cached === undefined) {
-        cached = ctx.fs.readCached(resolved) ?? ctx.fs.readCached(resolved + '.js');
-        if (cached !== undefined) fileCache.set(resolved, cached); // promote to fileCache
+        const bytes = ctx.fs.readBytesCached(resolved);
+        if (bytes !== undefined) {
+          const text = decodeUtf8Strict(bytes);
+          if (text === null) {
+            // Binary: hand back the real bytes and keep it out of the text cache
+            if (!encoding) return FakeBuffer.from(bytes);
+            return new TextDecoder().decode(bytes);
+          }
+          cached = text;
+          fileCache.set(resolved, cached); // promote to fileCache
+        } else {
+          cached = ctx.fs.readCached(resolved + '.js');
+          if (cached !== undefined) fileCache.set(resolved, cached);
+        }
       }
       if (cached === undefined) {
           throw fsError('ENOENT', `ENOENT: no such file or directory, open '${p}'`, 'open', p);
       }
-      const encoding = typeof opts === 'string' ? opts : opts?.encoding;
       if (encoding === 'utf8' || encoding === 'utf-8' || encoding === 'utf8') return cached;
       if (!encoding) return FakeBuffer.from(cached);
       return cached;
@@ -694,7 +707,26 @@ export function createFsModule(deps: FsDeps): any {
     },
     readlink: (p: string, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
-      callback?.(null, ctx.fs.resolvePath(p, ctx.cwd));
+      ctx.fs.readlink(ctx.fs.resolvePath(p, ctx.cwd))
+        .then((target: string) => callback?.(null, target))
+        .catch((e: any) => callback?.(e));
+    },
+    // Claude Code writes config "through" a symlink when readlinkSync succeeds, so it
+    // must throw EINVAL for regular files (a missing readlinkSync used to return '',
+    // which resolved to the parent directory and aimed every config save at ~).
+    readlinkSync: (p: string) => {
+      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const target = ctx.fs.readlinkCached(resolved);
+      if (typeof target === 'string') return target;
+      const exists = target === null || fileCache.has(resolved);
+      const err: any = new Error(exists
+        ? `EINVAL: invalid argument, readlink '${p}'`
+        : `ENOENT: no such file or directory, readlink '${p}'`);
+      err.code = exists ? 'EINVAL' : 'ENOENT';
+      err.errno = exists ? -22 : -2;
+      err.syscall = 'readlink';
+      err.path = p;
+      throw err;
     },
     close: (_fd: number, cb?: any) => { cb?.(null); },
     open: (p: string, flags: any, modeOrCb?: any, cb?: any) => {

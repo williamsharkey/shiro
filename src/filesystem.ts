@@ -472,6 +472,22 @@ export class FileSystem {
     return new TextDecoder().decode(node.content);
   }
 
+  /** Synchronously read a file's raw bytes from the in-memory cache. */
+  readBytesCached(path: string): Uint8Array | undefined {
+    const node = this.cache.get(path);
+    if (!node || node.type !== 'file' || !node.content) return undefined;
+    return node.content;
+  }
+
+  /** Synchronous readlink from the in-memory cache: the target for a cached
+   *  symlink, null for any other cached node, undefined if not cached. */
+  readlinkCached(path: string): string | null | undefined {
+    const node = this.cache.get(path);
+    if (!node) return undefined;
+    if (node.type !== 'symlink') return null;
+    return node.symlinkTarget || new TextDecoder().decode(node.content!);
+  }
+
   /** Synchronously list directory entries from the in-memory cache. */
   readdirCached(path: string): string[] | undefined {
     const node = this.cache.get(path);

@@ -308,6 +308,7 @@ async function handleSignaling(req, res, pathname) {
       return res.end(JSON.stringify({ error: 'Missing code or offer' }));
     }
 
+    console.log(`[signal] offer registered: ${data.code} (${offers.has(data.code) ? 'refresh' : 'new'})`);
     offers.set(data.code, {
       offer: data.offer,
       candidates: data.candidates || [],
@@ -325,6 +326,7 @@ async function handleSignaling(req, res, pathname) {
   if (offerMatch && req.method === 'GET') {
     const entry = offers.get(offerMatch[1]);
     if (!entry) {
+      console.log(`[signal] offer lookup miss: ${offerMatch[1]} (known: ${[...offers.keys()].join(', ') || 'none'})`);
       res.writeHead(404, { 'content-type': 'application/json', ...cors });
       return res.end(JSON.stringify({ error: 'Not found' }));
     }

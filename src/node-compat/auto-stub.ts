@@ -37,6 +37,9 @@ export function createAutoStubFactory(): { createAutoStub: (modPath: string, tar
         let _stubCallCount = 0;
         const stub: any = function(...args: any[]) {
           _stubCallCount++;
+          // A stubbed callback API never calls back, so its caller waits forever;
+          // log the first call so such hangs can be traced to the missing API.
+          if (_stubCallCount === 1) console.warn(`[AutoStub] called missing ${modPath}.${String(prop)}()`);
           if (_stubCallCount > 50) return undefined; // Safety bail for infinite recursion
           // For sync functions that return values, return sensible defaults
           if (prop.endsWith('Sync')) return '';

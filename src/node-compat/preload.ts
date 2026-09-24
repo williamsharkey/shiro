@@ -3,6 +3,11 @@ import { getShiroOrigin } from '../utils/shiro-origin';
 import { DEFAULT_CLAUDE_THEME, ensureClaudeBootstrap } from '../claude-config';
 import { ensureClaudeAuthState } from '../claude-auth';
 
+/** UTF-8 text, or null for bytes that aren't valid UTF-8 (binary files). */
+export function decodeUtf8Strict(bytes: Uint8Array): string | null {
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { return null; }
+}
+
 /**
  * Pre-load files from the virtual filesystem into the memory cache.
  * This enables synchronous readFileSync/statSync to work without IndexedDB round-trips.
@@ -28,8 +33,12 @@ export async function preloadDir(
           fileMtimes.set(fp, st.mtime?.getTime?.() || Date.now());
           await preloadDir(ctx, fileCache, fileMtimes, fp, depth + 1, maxDepth);
         } else if (st.size < 16777216) { // 16MB limit
-          const content = await ctx.fs.readFile(fp, 'utf8');
-          fileCache.set(fp, content as string);
+          // The cache holds text; a binary file (image, wasm) decoded as UTF-8 comes
+          // back corrupted, so those stay out and are read as bytes on demand.
+          const raw = await ctx.fs.readFile(fp);
+          const content = typeof raw === 'string' ? raw : decodeUtf8Strict(raw);
+          if (content === null) continue;
+          fileCache.set(fp, content);
           fileMtimes.set(fp, st.mtime?.getTime?.() || Date.now());
         }
       } catch { /* skip */ }
