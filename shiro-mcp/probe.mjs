@@ -46,6 +46,34 @@ const INSTALL = `(() => {
     wrapped.__probed = true;
     proto[m] = wrapped;
   }
+  // Console lines from Shiro's own tags, so nobody has to copy them out of DevTools
+  P.console = [];
+  for (const level of ['log', 'warn', 'error']) {
+    const orig = console[level].bind(console);
+    console[level] = (...args) => {
+      try {
+        const text = args.map((x) => typeof x === 'string' ? x : (x && x.stack) || String(x)).join(' ');
+        if (/\[(osc52|node|shiro|preload|init|wal|remote|fetch)\]|error|rejection/i.test(text) && !/\[(fs-debug|spawn-debug|xterm)\]/.test(text)) {
+          P.console.push(level + ': ' + text.slice(0, 500));
+          if (P.console.length > 500) P.console.shift();
+        }
+      } catch {}
+      return orig(...args);
+    };
+  }
+  // Every shell command with its duration; unfinished ones reveal hangs
+  P.exec = [];
+  const shellProto = Object.getPrototypeOf(window.__shiro.shell);
+  if (!shellProto.__probeExec) {
+    const origExecute = shellProto.execute;
+    shellProto.execute = async function (line, ...rest) {
+      const e = { t: Date.now(), line: String(line).slice(0, 400), ms: null };
+      window.__probe.exec.push(e);
+      if (window.__probe.exec.length > 1000) window.__probe.exec.shift();
+      try { return await origExecute.call(this, line, ...rest); } finally { e.ms = Date.now() - e.t; }
+    };
+    shellProto.__probeExec = true;
+  }
   addEventListener('error', (e) => P.errors.push('error: ' + String(e.message).slice(0, 400)));
   addEventListener('unhandledrejection', (e) => P.errors.push('rejection: ' + String(e.reason?.stack || e.reason?.message || e.reason).slice(0, 600)));
   return 'installed';
@@ -62,6 +90,9 @@ const SAMPLE = `(async () => {
     sinceLastMs: Math.round(now - P.lastSample),
     longtasks: P.longtasks.splice(0),
     errors: P.errors.splice(0),
+    console: P.console.splice(0),
+    running: P.exec.filter((e) => e.ms === null && Date.now() - e.t > 30000).map((e) => Math.round((Date.now() - e.t) / 1000) + 's ' + e.line.slice(0, 200)),
+    slowDone: P.exec.filter((e) => e.ms !== null && e.ms > 10000 && !e.reported && (e.reported = true)).map((e) => e.ms + 'ms ' + e.line.slice(0, 200)),
     fs: Object.fromEntries(Object.entries(P.fs).map(([k, v]) => [k, [v.n, Math.round(v.ms), Math.round(v.max), v.bytes, v.maxPath]])),
     procs: window.__shiro.processTable.list().map((p) => p.pid + ':' + p.command.slice(0, 40) + ':' + p.status),
     scrollback: window.__shiro.terminal.term.buffer.normal.length,
@@ -142,7 +173,8 @@ async function sampleLoop() {
       s.rttMs = Date.now() - t; // main-thread responsiveness
       log({ sample: s });
       const lt = s.longtasks.reduce((a, [, d]) => a + d, 0);
-      console.log(`heap ${s.heapMB}/${s.limitMB}MB idb ${s.idbMB}MB rtt ${s.rttMs}ms longtask ${lt}ms procs ${s.procs.length}${s.errors.length ? ' ERR ' + s.errors.length : ''}`);
+      console.log(`heap ${s.heapMB}/${s.limitMB}MB idb ${s.idbMB}MB rtt ${s.rttMs}ms longtask ${lt}ms procs ${s.procs.length}${s.errors.length ? ' ERR ' + s.errors.length : ''}${s.running.length ? ' RUNNING ' + s.running.length : ''}`);
+      for (const line of s.console) console.log('  console ' + line.slice(0, 200));
     } catch (e) {
       log({ event: 'sample_failed', error: e.message, waitedMs: Date.now() - t });
     }
