@@ -1,9 +1,11 @@
 import type { CommandContext } from '../../commands/index';
+import { createBrowserSharp } from './browser-sharp';
 
 export interface AppShimDeps {
   ctx: CommandContext;
   fileCache: Map<string, string>;
   fakeProcess: any;
+  FakeBuffer?: any;
 }
 
 export function createAppShim(name: string, deps: AppShimDeps): any | null {
@@ -260,72 +262,20 @@ export function createAppShim(name: string, deps: AppShimDeps): any | null {
       };
       return { expressjwt, default: expressjwt };
     }
-    case 'sharp': {
-      // sharp image processing stub - native module can't run in browser
-      // Returns a chainable API that passes through or returns placeholder data
-      const sharp = (input?: any) => {
-        const instance: any = {
-          resize: () => instance,
-          rotate: () => instance,
-          flip: () => instance,
-          flop: () => instance,
-          sharpen: () => instance,
-          median: () => instance,
-          blur: () => instance,
-          flatten: () => instance,
-          gamma: () => instance,
-          negate: () => instance,
-          normalise: () => instance,
-          normalize: () => instance,
-          clahe: () => instance,
-          convolve: () => instance,
-          threshold: () => instance,
-          linear: () => instance,
-          recomb: () => instance,
-          modulate: () => instance,
-          tint: () => instance,
-          greyscale: () => instance,
-          grayscale: () => instance,
-          toColourspace: () => instance,
-          toColorspace: () => instance,
-          removeAlpha: () => instance,
-          ensureAlpha: () => instance,
-          extractChannel: () => instance,
-          joinChannel: () => instance,
-          bandbool: () => instance,
-          extract: () => instance,
-          trim: () => instance,
-          extend: () => instance,
-          composite: () => instance,
-          jpeg: () => instance,
-          png: () => instance,
-          webp: () => instance,
-          avif: () => instance,
-          heif: () => instance,
-          tiff: () => instance,
-          gif: () => instance,
-          jp2: () => instance,
-          raw: () => instance,
-          tile: () => instance,
-          timeout: () => instance,
-          withMetadata: () => instance,
-          clone: () => sharp(input),
-          metadata: async () => ({ width: 100, height: 100, format: 'png' }),
-          stats: async () => ({ channels: [] }),
-          toBuffer: async () => input || new Uint8Array(0),
-          toFile: async (path: string) => ({ size: 0, width: 100, height: 100 }),
-          pipe: (dest: any) => dest,
-        };
-        return instance;
-      };
-      sharp.cache = () => {};
-      sharp.concurrency = () => 1;
-      sharp.counters = () => ({});
-      sharp.simd = () => false;
-      sharp.format = { jpeg: {}, png: {}, webp: {} };
-      sharp.versions = { sharp: '0.0.0-shiro-stub' };
-      return Object.assign(sharp, { default: sharp });
-    }
+    case 'sharp':
+      // Real image metadata/resize/encode through the browser's decoders
+      return createBrowserSharp(
+        (bytes) => deps.FakeBuffer?.from ? deps.FakeBuffer.from(bytes) : bytes,
+        async (p) => {
+          const data = await ctx.fs.readFile(ctx.fs.resolvePath(p, ctx.cwd));
+          return typeof data === 'string' ? new TextEncoder().encode(data) : data;
+        },
+        async (p, data) => {
+          const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+          fileCache.delete(resolved); // binary: keep it out of the text cache
+          await ctx.fs.writeFile(resolved, data);
+        },
+      );
     default:
       return null;
   }

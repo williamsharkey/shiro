@@ -83,6 +83,11 @@ const CAPABILITY_PATCHES: Array<[string, string]> = [
   ['case"claude-opus-4-7":return"Opus 4.7"+K;', 'case"claude-opus-5-5":return"Opus 5.5"+K;case"claude-opus-4-7":return"Opus 4.7"+K;'],
   ['if(_.includes("claude-opus-4-7"))return K?"Opus 4.7 (1M context)":"Opus 4.7";',
    'if(_.includes("claude-opus-5-5"))return K?"Opus 5.5 (1M context)":"Opus 5.5";if(_.includes("claude-opus-4-7"))return K?"Opus 4.7 (1M context)":"Opus 4.7";'],
+  // Image reads (Read on a .png/.jpg, pasted screenshots) load an image library
+  // first. The bundled native processor and bundled sharp can't work in a page,
+  // and the Read stalled there; Shiro's `sharp` does it with browser decoders.
+  ['async function i$6(){if(vy8)return vy8.default;if(v$())try{let _=await Promise.resolve().then(() => (_y8(),Ky8)),z=_.sharp||_.default;return vy8={default:z},z}catch{console.warn("Native image processor not available, falling back to sharp")}let q=await Promise.resolve().then(() => K6(Bm1(),1)),K=tU_(q);return vy8={default:K},K}',
+   'async function i$6(){if(vy8)return vy8.default;let K=d6("sharp");return vy8={default:K},K}'],
   // The welcome card still announced the Opus 4.7 launch
   ['title:"Opus 4.7 is here"', 'title:"Claude Code in Shiro"'],
   ['"Welcome to Opus 4.7 xhigh!"', '"Running in your browser on Shiro"'],

@@ -791,6 +791,9 @@ export function getPersistedRemoteCode(): string | null {
  * Silently starts without command-line output.
  * Optionally reuses an existing panel and shell (for reconnect after disconnect).
  */
+const RECONNECT_RETRIES = 8; // about 2 minutes in total
+const reconnectAttempts = new Map<string, number>();
+
 export async function startRemoteWithCode(
   code: string,
   terminal?: any,
@@ -897,13 +900,28 @@ export async function startRemoteWithCode(
     // Start polling for answer
     pollForAnswer(session);
 
+    reconnectAttempts.delete(code);
     console.log('[remote] Auto-reconnect successful, waiting for peer');
     return true;
   } catch (err: any) {
-    console.error(`[remote] Auto-reconnect failed: ${err.message}`);
-    // Clear persisted code on failure
-    localStorage.removeItem(REMOTE_CODE_KEY);
     cleanupSession();
+    // The signaling server may just be restarting (a deploy); retry a few times
+    // with the same code before giving it up.
+    const attempt = (reconnectAttempts.get(code) ?? 0) + 1;
+    reconnectAttempts.set(code, attempt);
+    if (attempt <= RECONNECT_RETRIES && localStorage.getItem(REMOTE_CODE_KEY) === code) {
+      const delay = 3000 * attempt;
+      console.warn(`[remote] Auto-reconnect failed (${err.message}); retrying in ${delay / 1000}s`);
+      setTimeout(() => {
+        if (!window.__shiroRemoteSession && localStorage.getItem(REMOTE_CODE_KEY) === code) {
+          startRemoteWithCode(code, terminal, existingPanel, existingShell, existingPanelOpen, existingBuffer);
+        }
+      }, delay);
+      return false;
+    }
+    console.error(`[remote] Auto-reconnect failed: ${err.message}`);
+    reconnectAttempts.delete(code);
+    localStorage.removeItem(REMOTE_CODE_KEY);
     return false;
   }
 }

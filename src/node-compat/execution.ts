@@ -4,6 +4,7 @@
  * Extracted from node-cmd.ts exec() body.
  */
 
+import { activity, trackAsync, trackModule } from './activity';
 import type { CommandContext } from '../commands/index';
 import { iframeServer } from '../iframe-server';
 import { sha256sync, sha1sync, fnvHash } from '../commands/jseval/crypto';
@@ -34,6 +35,11 @@ import { createNetModule, createTlsModule } from './modules/net-tls';
 import { createMiscModule } from './modules/misc';
 import { createAppShim } from './shims/app-shims';
 import { getShiroOrigin } from '../utils/shiro-origin';
+
+/** Quiet time after which a finished async script exits */
+const IDLE_EXIT_MS = 150;
+/** ...and for a script that never started tracked async work */
+const IDLE_EXIT_SYNC_MS = 60;
 
 /**
  * Execute a Node.js script in Shiro's browser-based JS VM.
@@ -132,9 +138,13 @@ export async function executeNodeScript(
         case 'path':
         case 'node:path': return createPathModule(ctx);
         case 'fs':
-        case 'node:fs': return createFsModule({ ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir });
+        case 'node:fs': {
+          const fsMod = createFsModule({ ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir });
+          fsMod.promises = trackModule(fsMod.promises);
+          return fsMod;
+        }
         case 'fs/promises':
-        case 'node:fs/promises': return createFsPromisesModule({ ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir });
+        case 'node:fs/promises': return trackModule(createFsPromisesModule({ ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir }));
         case 'child_process':
         case 'node:child_process': return createChildProcessModule({ ctx, fileCache, fileMtimes, pendingPromises, FakeBuffer });
         case 'os':
@@ -164,7 +174,7 @@ export async function executeNodeScript(
         case 'http2':
         case 'node:http2': return createHttp2Module();
         default: {
-          const appShim = createAppShim(name, { ctx, fileCache, fakeProcess });
+          const appShim = createAppShim(name, { ctx, fileCache, fakeProcess, FakeBuffer });
           if (appShim !== null) return appShim;
           return createMiscModule(name, { ctx, FakeBuffer, fakeProcess, fakeConsole, getBuiltinModule, fileCache, moduleCache, requireModule });
         }
@@ -268,7 +278,8 @@ export async function executeNodeScript(
     const isBlocked = (u: string) => blockedUrls.some(b => u.includes(b));
 
     if (corsProxyOrigin) {
-      globalThis.fetch = _st.installedFetch = (input: RequestInfo | URL, init?: RequestInit) => {
+      globalThis.fetch = _st.installedFetch = (input: RequestInfo | URL, init?: RequestInit) => trackAsync(routedFetch(input, init));
+      const routedFetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         let url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
         if (isBlocked(url)) return Promise.resolve(new Response('{}', { status: 200 }));
         // Route localhost/127.0.0.1 requests through virtual iframe servers
@@ -438,6 +449,7 @@ export async function executeNodeScript(
     // Script execution timeout — scale up for large bundles (e.g. TypeScript ~5MB)
     const SCRIPT_TIMEOUT = code.length > 500_000 ? 60_000 : 15_000;
     let scriptTimedOut = false;
+    const runStart = performance.now();
     const timeoutPromise = new Promise<never>((_, reject) => {
       _st.scriptTimeoutId = setTimeout(() => {
         scriptTimedOut = true;
@@ -481,23 +493,24 @@ export async function executeNodeScript(
     }
 
     // Wait for pending timers (max 5s)
+    // Timers still pending after this cap (a 60s timeout) don't keep the script alive
+    let timersOutlasted = false;
     if (_activeTimers > 0 && _timersDone && !_st.isInteractiveMode) {
       try {
         await Promise.race([_timersDone, new Promise((_, rej) => _prevST(() => rej('timer-wait-timeout'), 5000))]);
-      } catch { /* timeout is fine */ }
+      } catch { timersOutlasted = true; }
     }
 
-    // Restore setTimeout/clearTimeout before deferred exit
-    restoreGlobals(false);
+    // Restore setTimeout/clearTimeout before deferred exit. Scripts that aren't
+    // interactive keep them until the wait below, so timers they set from async
+    // callbacks still count as activity.
+    if (_st.isInteractiveMode) restoreGlobals(false);
 
     // Deferred exit wait
-    const hasFinishedOutput = _st.exitCalled || scriptTimedOut
-      || stdoutBuf.length > 0 || stderrBuf.length > 0 || _st.streamedToTerminal
-      || printResult;
-    if (_st.isInteractiveMode || !hasFinishedOutput) {
+    if (_st.isInteractiveMode || !(_st.exitCalled || scriptTimedOut)) {
       const DEFERRED_TIMEOUT = _st.isInteractiveMode ? 86400000 : code.length > 500000 ? 300000 : 10000;
       const deferredTimeout = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new ProcessExitError(124)), DEFERRED_TIMEOUT);
+        _prevST(() => reject(new ProcessExitError(124)), DEFERRED_TIMEOUT); // untracked: not script activity
       });
       let freshExitPromise = deferredExitPromise;
       if (_st.exitCalled && _st.isInteractiveMode) {
@@ -506,15 +519,46 @@ export async function executeNodeScript(
         });
         _st.exitCalled = false;
       }
+      // An async script (top-level await, promise chain) is finished once nothing
+      // it started is in flight and it has been quiet briefly, like node exiting on
+      // an empty event loop; don't sit out the whole timeout after it's done.
+      let waitOver = false;
+      const idleExit = _st.isInteractiveMode ? new Promise<number>(() => {}) : new Promise<number>((resolve) => {
+        let outSeen = stdoutBuf.length + stderrBuf.length;
+        let quietSince = performance.now();
+        const poll = () => {
+          if (waitOver) return;
+          const now = performance.now();
+          const out = stdoutBuf.length + stderrBuf.length;
+          if (out !== outSeen || activity.pending > 0 || (_activeTimers > 0 && !timersOutlasted) || pendingPromises.length > 0) {
+            outSeen = out;
+            quietSince = now;
+          }
+          if (activity.last > quietSince) quietSince = activity.last;
+          // Only sync work so far: exit sooner; after async work, allow a longer lull
+          const window = activity.last > runStart ? IDLE_EXIT_MS : IDLE_EXIT_SYNC_MS;
+          if (now - quietSince >= window) resolve(_st.exitCode);
+          else _prevST(poll, 20);
+        };
+        _prevST(poll, 20);
+      });
       try {
-        const waitCode = await Promise.race([freshExitPromise, deferredTimeout]);
+        const waitCode = await Promise.race([freshExitPromise, deferredTimeout, idleExit]);
         _st.exitCode = waitCode;
       } catch (e: any) {
         if (e instanceof ProcessExitError) {
           _st.exitCode = e.code;
         }
+      } finally {
+        waitOver = true;
+      }
+      while (pendingPromises.length > 0) {
+        const current = [...pendingPromises];
+        pendingPromises.length = 0;
+        await Promise.all(current);
       }
     }
+    if (!_st.isInteractiveMode) restoreGlobals(false);
 
     // Flush output
     if (stdoutBuf.length > 0 && !_st.streamedToTerminal) {
