@@ -220,6 +220,23 @@ IMPORTANT: Use JSON.stringify() for objects, otherwise they return as "[object O
     }
   },
   {
+    name: "console",
+    description: `Search the Shiro page's console log. Shiro records every console message from page load into a bounded buffer (newest 3000 entries, repeats collapsed), so this works no matter when you connected. previous: true searches the log saved by the page load before this one (e.g. before a crash or reload).
+
+Returns newest-last entries { seq, t, level, text, count } plus matched/truncated counts. Defaults to 100 entries and 64 KB of text; raise limit/maxBytes if you need more.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        grep: { type: "string", description: "Case-insensitive regex the message must match" },
+        level: { type: "string", description: "Comma list of levels: error,warn,log,info,debug" },
+        since: { type: "number", description: "Only entries at/after this ms epoch; negative = that many ms ago (e.g. -600000 for the last 10 minutes)" },
+        limit: { type: "number", description: "Max entries (newest kept). Default 100, max 5000" },
+        maxBytes: { type: "number", description: "Max characters of message text. Default 65536, max 200000" },
+        previous: { type: "boolean", description: "Search the previous page load's saved log instead" }
+      }
+    }
+  },
+  {
     name: "errors",
     description: "Get and clear pending console errors from Shiro browser. Errors accumulate passively and show as pendingErrors count in exec results.",
     inputSchema: {
@@ -578,6 +595,12 @@ async function handleTool(name: string, args: Record<string, unknown>): Promise<
 
     case "list": {
       const result: any = await sendCommand({ type: "list", path: args.path });
+      attachUserMessages(result);
+      return result;
+    }
+
+    case "console": {
+      const result: any = await sendCommand({ type: "console", grep: args.grep, level: args.level, since: args.since, limit: args.limit, maxBytes: args.maxBytes, previous: args.previous });
       attachUserMessages(result);
       return result;
     }

@@ -1,53 +1,13 @@
-// Console capture - must be first before any other code runs
-interface CapturedMessage {
-  type: 'error' | 'warn' | 'log' | 'info' | 'debug';
-  message: string;
-  timestamp: number;
-}
-const capturedMessages: CapturedMessage[] = [];
-const seenMessages = new Set<string>();
+// Console capture - must be first before any other code runs (bounded ring buffer)
+import { queryConsole, clearConsoleLog } from './console-log';
 
-function captureMethod(method: 'log' | 'info' | 'warn' | 'error' | 'debug') {
-  const original = console[method];
-  console[method] = (...args: any[]) => {
-    const msg = args.map(a => typeof a === 'string' ? a : (a?.message || String(a))).join(' ').slice(0, 500);
-    if (!seenMessages.has(msg)) {
-      seenMessages.add(msg);
-      capturedMessages.push({ type: method, message: msg, timestamp: Date.now() });
-    }
-    original.apply(console, args);
-  };
-}
-
-captureMethod('log');
-captureMethod('info');
-captureMethod('warn');
-captureMethod('error');
-captureMethod('debug');
-
-// Also capture unhandled errors
-window.addEventListener('error', (event) => {
-  const msg = `${event.message} at ${event.filename}:${event.lineno}`.slice(0, 500);
-  if (!seenMessages.has(msg)) {
-    seenMessages.add(msg);
-    capturedMessages.push({ type: 'error', message: msg, timestamp: Date.now() });
-  }
+// Old capture API, kept as a view over the bounded log (console command, clip-report)
+Object.defineProperty(window, '__shiroCapturedMessages', {
+  configurable: true,
+  get: () => queryConsole({ limit: 100000, maxBytes: 1e9 }).entries
+    .map((e) => ({ type: e.level, message: e.count > 1 ? `${e.text} (×${e.count})` : e.text, timestamp: e.t })),
 });
-
-window.addEventListener('unhandledrejection', (event) => {
-  const msg = `Unhandled rejection: ${event.reason?.message || event.reason}`.slice(0, 500);
-  if (!seenMessages.has(msg)) {
-    seenMessages.add(msg);
-    capturedMessages.push({ type: 'error', message: msg, timestamp: Date.now() });
-  }
-});
-
-// Export for console command and clip-report
-(window as any).__shiroCapturedMessages = capturedMessages;
-(window as any).__shiroClearMessages = () => {
-  capturedMessages.length = 0;
-  seenMessages.clear();
-};
+(window as any).__shiroClearMessages = clearConsoleLog;
 
 import '@xterm/xterm/css/xterm.css';
 import { FileSystem } from './filesystem';

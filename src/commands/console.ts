@@ -1,4 +1,5 @@
 import { Command, CommandContext } from './index';
+import { queryConsole, formatEntries } from '../console-log';
 
 /**
  * console - Display and copy captured console messages
@@ -65,6 +66,21 @@ export const consoleCmd: Command = {
         copy = true;
       } else if (arg === '--status') {
         showStatus = true;
+      } else if (arg === '-g' || arg === '--grep' || arg === '--prev' || arg === '--since') {
+        // Query the bounded log: console -g PATTERN [--prev] [--since SECONDS] [-n N]
+        let grep: string | undefined, since: number | undefined, previous = false;
+        for (let j = i; j < args.length; j++) {
+          if (args[j] === '-g' || args[j] === '--grep') grep = args[++j];
+          else if (args[j] === '--since') since = -1000 * (parseFloat(args[++j]) || 0);
+          else if (args[j] === '--prev') previous = true;
+          else if (args[j] === '-n' || args[j] === '--last') count = parseInt(args[++j]) || 10;
+          else if (args[j] === '-e' || args[j] === '--errors') typeFilter = 'error';
+          else if (args[j] === '-w' || args[j] === '--warnings') typeFilter = 'warn';
+        }
+        const result = queryConsole({ grep, since, previous, level: typeFilter || undefined, limit: count ?? 100 });
+        const text = formatEntries(result);
+        ctx.stdout = (text || 'No matching console messages.') + '\n';
+        return 0;
       } else if (arg === '-h' || arg === '--help') {
         ctx.stdout = `console [options]
   -n, --last N      Show only last N entries
@@ -75,10 +91,14 @@ export const consoleCmd: Command = {
   -d, --debug       Show only debug
   -c, --clear       Clear captured messages
   -C, --copy        Dedupe and copy to clipboard
+  -g, --grep RE     Only messages matching a regex (case-insensitive)
+  --since SECONDS   Only messages from the last SECONDS
+  --prev            Search the log saved by the previous page load
   --status          Show capture stats
   -h, --help        Show this help
 
-All console methods are captured from boot (no --live needed).
+All console methods are captured from boot into a bounded log (newest 3000 entries;
+repeats collapse). The newest 300 are also kept across reloads (--prev).
 
 Examples:
   console                  Show all captured messages

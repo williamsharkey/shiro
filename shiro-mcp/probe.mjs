@@ -1,6 +1,7 @@
 // Shiro live-session probe: pairs with a `remote start` code over WebRTC (same
 // protocol as shiro-mcp), installs instrumentation in the page, samples it every
 // few seconds into a JSONL log, and serves ad-hoc evals on 127.0.0.1:7788.
+// Console history lives in Shiro itself: curl 'localhost:7788/console?grep=error&limit=50'
 //
 //   cd shiro-mcp && npm install && node probe.mjs <code>   # run (keep in background)
 //   curl -s localhost:7788/eval --data-binary @snippet.js
@@ -46,21 +47,6 @@ const INSTALL = `(() => {
     wrapped.__probed = true;
     proto[m] = wrapped;
   }
-  // Console lines from Shiro's own tags, so nobody has to copy them out of DevTools
-  P.console = [];
-  for (const level of ['log', 'warn', 'error']) {
-    const orig = console[level].bind(console);
-    console[level] = (...args) => {
-      try {
-        const text = args.map((x) => typeof x === 'string' ? x : (x && x.stack) || String(x)).join(' ');
-        if (/\[(osc52|node|shiro|preload|init|wal|remote|fetch)\]|error|rejection/i.test(text) && !/\[(fs-debug|spawn-debug|xterm)\]/.test(text)) {
-          P.console.push(level + ': ' + text.slice(0, 500));
-          if (P.console.length > 500) P.console.shift();
-        }
-      } catch {}
-      return orig(...args);
-    };
-  }
   // Every shell command with its duration; unfinished ones reveal hangs
   P.exec = [];
   const shellProto = Object.getPrototypeOf(window.__shiro.shell);
@@ -90,7 +76,6 @@ const SAMPLE = `(async () => {
     sinceLastMs: Math.round(now - P.lastSample),
     longtasks: P.longtasks.splice(0),
     errors: P.errors.splice(0),
-    console: P.console.splice(0),
     running: P.exec.filter((e) => e.ms === null && Date.now() - e.t > 30000).map((e) => Math.round((Date.now() - e.t) / 1000) + 's ' + e.line.slice(0, 200)),
     slowDone: P.exec.filter((e) => e.ms !== null && e.ms > 10000 && !e.reported && (e.reported = true)).map((e) => e.ms + 'ms ' + e.line.slice(0, 200)),
     fs: Object.fromEntries(Object.entries(P.fs).map(([k, v]) => [k, [v.n, Math.round(v.ms), Math.round(v.max), v.bytes, v.maxPath]])),
@@ -182,7 +167,6 @@ async function sampleLoop() {
       log({ sample: s });
       const lt = s.longtasks.reduce((a, [, d]) => a + d, 0);
       console.log(`heap ${s.heapMB}/${s.limitMB}MB idb ${s.idbMB}MB rtt ${s.rttMs}ms longtask ${lt}ms procs ${s.procs.length}${s.errors.length ? ' ERR ' + s.errors.length : ''}${s.running.length ? ' RUNNING ' + s.running.length : ''}`);
-      for (const line of s.console) console.log('  console ' + line.slice(0, 200));
     } catch (e) {
       log({ event: 'sample_failed', error: e.message, waitedMs: Date.now() - t });
     }
@@ -194,6 +178,16 @@ http.createServer(async (req, res) => {
   for await (const chunk of req) body += chunk;
   try {
     if (req.url === '/eval') res.end(String(await evalJs(body, 300000)));
+    else if (req.url.startsWith('/console')) {
+      // /console?grep=RE&level=error,warn&since=-600000&limit=100&maxBytes=65536&previous=1&format=json
+      const q = new URL(req.url, 'http://x').searchParams;
+      const num = (k) => (q.has(k) ? Number(q.get(k)) : undefined);
+      const r = await request({ type: 'console', grep: q.get('grep') || undefined, level: q.get('level') || undefined,
+        since: num('since'), limit: num('limit'), maxBytes: num('maxBytes'), previous: q.get('previous') === '1' }, 60000);
+      if (q.get('format') === 'json') res.end(JSON.stringify(r));
+      else res.end(r.entries.map((e) => `${new Date(e.t).toISOString().slice(11, 23)} ${e.level.padEnd(5)} ${e.text}${e.count > 1 ? ` (x${e.count})` : ''}`).join('\n')
+        + `\n[${r.entries.length} shown, ${r.matched} matched, ${r.total} in log${r.truncated ? ', truncated' : ''}]\n`);
+    }
     else if (req.url === '/exec') res.end(JSON.stringify(await request({ type: 'exec', command: body }, 300000)));
     else res.end(connected ? 'connected' : 'disconnected');
   } catch (e) { res.statusCode = 500; res.end('ERR ' + e.message); }

@@ -275,6 +275,19 @@ async function handleRemoteCommand(session: RemoteSession, message: string): Pro
         return JSON.stringify({ type: 'list_result', path: cmd.path, entries, requestId });
       }
 
+      case 'console': {
+        // Bounded, filterable query of the console log captured since boot
+        // (or the previous page load with previous: true). Defaults cap the reply
+        // at 100 entries / 64 KB so a noisy page can't flood the peer.
+        const { queryConsole } = await import('../console-log');
+        const result = queryConsole({
+          grep: cmd.grep, level: cmd.level, since: cmd.since, previous: !!cmd.previous,
+          limit: Math.min(cmd.limit ?? 100, 5000),
+          maxBytes: Math.min(cmd.maxBytes ?? 65536, 200000),
+        });
+        return JSON.stringify({ type: 'console_result', ...result, requestId });
+      }
+
       case 'eval': {
         logActivity(session, 'eval', cmd.code);
         const result = await eval(cmd.code);

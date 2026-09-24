@@ -214,18 +214,10 @@ export class ShiroTerminal {
     // Mobile copy/paste is now handled by the unified toolbar in mobile-input.ts
   }
 
-  private _writeCount = 0;
   writeOutput(text: string): void {
     // Mask any secret env values (tokens, API keys) before rendering
     text = this.shell.maskSecrets(text);
-    const n = ++this._writeCount;
-    this.term.write(text, () => {
-      // Diagnostic: log first 5 writes and check xterm.js buffer after processing
-      if (n <= 20) {
-        const line0 = this.term.buffer.active.getLine(0)?.translateToString(true) || '';
-        console.warn(`[xterm] write #${n} (${text.length}b) line0="${line0.slice(0,60)}"`);
-      }
-    });
+    this.term.write(text);
   }
 
   /**

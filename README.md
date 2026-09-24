@@ -99,7 +99,9 @@ Shiro pins `@anthropic-ai/claude-code@2.1.112`, the last pure-JavaScript release
 
 An outer Claude Code instance can also control Shiro remotely via MCP tools over WebRTC. Run `remote start` in Shiro, then connect with the `shiro-mcp` package.
 
-To profile a live session, run `remote start` in Shiro and then `node shiro-mcp/probe.mjs <code>` locally. It logs heap, freezes (long tasks and page response time), filesystem traffic, and errors every 2 seconds to `probe.jsonl`, reconnects after a reload, and serves ad-hoc `eval`/`exec` on `127.0.0.1:7788`.
+Shiro records its console from page load into a bounded log (newest 3000 entries, repeats collapsed), plus the tail of the previous page load, so a peer that connects later can still see what happened: `console -g error --prev` in the shell, or the shiro-mcp `console` tool.
+
+To profile a live session, run `remote start` in Shiro and then `node shiro-mcp/probe.mjs <code>` locally. It logs heap, freezes (long tasks and page response time), filesystem traffic, and errors every 2 seconds to `probe.jsonl`, reconnects after a reload, and serves ad-hoc `eval`/`exec` and `console` queries on `127.0.0.1:7788` (`PROBE_LITE=1` skips the sampling).
 
 ## Git and GitHub
 

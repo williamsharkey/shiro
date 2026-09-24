@@ -83,13 +83,7 @@ export function createFsModule(deps: FsDeps): any {
         cached = ctx.fs.readCached(resolved) ?? ctx.fs.readCached(resolved + '.js');
         if (cached !== undefined) fileCache.set(resolved, cached); // promote to fileCache
       }
-      if (resolved.includes('/tasks/') && resolved.includes('.output')) {
-        console.warn(`[fs-debug] readFileSync: ${resolved} → ${cached === undefined ? 'NOT FOUND' : cached.length + ' bytes'}`);
-      }
       if (cached === undefined) {
-          if (resolved.includes('/tasks/') || resolved.includes('/tmp/claude')) {
-            console.warn(`[fs-debug] readFileSync ENOENT: ${resolved} (fileCache size: ${fileCache.size}, has task files: ${[...fileCache.keys()].filter(k => k.includes('/tasks/')).slice(0,5).join(', ')})`);
-          }
           throw fsError('ENOENT', `ENOENT: no such file or directory, open '${p}'`, 'open', p);
       }
       const encoding = typeof opts === 'string' ? opts : opts?.encoding;
@@ -102,9 +96,6 @@ export function createFsModule(deps: FsDeps): any {
       if (typeof p === 'number') { fsShim.writeSync(p, data); return; }
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       const strData = typeof data === 'string' ? data : new TextDecoder().decode(data);
-      if (resolved.includes('/tasks/') || resolved.includes('/tmp/claude')) {
-        console.warn(`[fs-debug] writeFileSync: ${resolved} (${strData.length} bytes)`);
-      }
       fileCache.set(resolved, strData);
       fileMtimes.set(resolved, Date.now());
       // Skip IDB write for .tmp files — they're transient atomic-write intermediaries.
@@ -379,9 +370,6 @@ export function createFsModule(deps: FsDeps): any {
         f = flags || 'r';
       }
       (globalThis as any).__shiroFds[fd] = { path: resolved, flags: f, offset: 0 };
-      if (resolved.includes('/tasks/') || resolved.includes('/tmp/claude')) {
-        console.warn(`[fs-debug] openSync: ${resolved} flags=${flags}→${f} → fd=${fd}`);
-      }
       // Create/truncate file for write modes, create empty for append
       if (f.includes('w') || f.includes('a')) {
         if (f.includes('w') || !fileCache.has(resolved)) {
@@ -414,9 +402,6 @@ export function createFsModule(deps: FsDeps): any {
       const fdInfo = (globalThis as any).__shiroFds?.[fd];
       if (!fdInfo) return 0;
       const content = fileCache.get(fdInfo.path) || '';
-      if (fdInfo.path.includes('/tasks/') && fdInfo.path.includes('.output')) {
-        console.warn(`[fs-debug] readSync fd=${fd} path=${fdInfo.path} content=${content.length}bytes offset=${fdInfo.offset}`);
-      }
       const bytes = new TextEncoder().encode(content);
       const pos = position ?? fdInfo.offset;
       const len = Math.min(length ?? buf.length, Math.max(0, bytes.length - pos));
@@ -426,9 +411,6 @@ export function createFsModule(deps: FsDeps): any {
     },
     closeSync: (fd: number) => {
       const fdInfo = (globalThis as any).__shiroFds?.[fd];
-      if (fdInfo?.path?.includes('/tasks/')) {
-        console.warn(`[fs-debug] closeSync fd=${fd} path=${fdInfo.path} (content in cache: ${(fileCache.get(fdInfo.path)||'').length}b)`);
-      }
       if (fdInfo) delete (globalThis as any).__shiroFds[fd];
     },
     fsyncSync: () => {},
@@ -436,9 +418,6 @@ export function createFsModule(deps: FsDeps): any {
     utimesSync: () => {},
     rmSync: (p: string, opts?: any) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      if (resolved.includes('/tmp/claude')) {
-        console.warn(`[fs-debug] rmSync: ${resolved} (recursive: ${!!opts?.recursive})`);
-      }
       removePathFromCaches(resolved, !!opts?.recursive);
     },
     rmdirSync: (p: string) => {
@@ -514,9 +493,6 @@ export function createFsModule(deps: FsDeps): any {
       const resolved = typeof p === 'number'
         ? ((globalThis as any).__shiroFds?.[p]?.path || '')
         : ctx.fs.resolvePath(String(p), ctx.cwd);
-      if (resolved.includes('/tasks/') && resolved.includes('.output')) {
-        console.warn(`[fs-debug] fs.readFile(cb): ${resolved} (fileCache: ${fileCache.has(resolved) ? (fileCache.get(resolved)||'').length + 'b' : 'miss'})`);
-      }
       // Check fileCache first — sync writes may have updated it
       const cached = fileCache.get(resolved);
       if (cached !== undefined) {
@@ -742,7 +718,6 @@ export function createFsModule(deps: FsDeps): any {
     read: (fd: number, buf: any, off: number, len: number, pos: any, cb?: any) => {
       const fdInfo = (globalThis as any).__shiroFds?.[fd];
       if (!fdInfo) {
-        console.warn(`[fs-debug] fs.read fd=${fd} — fd NOT found (closed?), returning 0 bytes`);
         cb?.(null, 0, buf);
         return;
       }
@@ -752,9 +727,6 @@ export function createFsModule(deps: FsDeps): any {
       const n = Math.min(len, Math.max(0, bytes.length - p2));
       for (let i = 0; i < n; i++) buf[(off ?? 0) + i] = bytes[p2 + i];
       fdInfo.offset = p2 + n;
-      if (fdInfo.path.includes('/tasks/') && fdInfo.path.includes('.output')) {
-        console.warn(`[fs-debug] fs.read fd=${fd} path=${fdInfo.path} → ${n} bytes (content=${content.length}b, pos=${p2})`);
-      }
       cb?.(null, n, buf);
     },
     write: (fd: number, buf: any, off: number, len: number, pos: any, cb?: any) => {
@@ -857,9 +829,6 @@ export function createFsModule(deps: FsDeps): any {
         const resolved = typeof p === 'number'
           ? ((globalThis as any).__shiroFds?.[p]?.path || ctx.fs.resolvePath(String(p), ctx.cwd))
           : ctx.fs.resolvePath(String(p), ctx.cwd);
-        if (resolved.includes('/tasks/') && resolved.includes('.output')) {
-          console.warn(`[fs-debug] fsShim.promises.readFile: ${resolved} (fileCache: ${fileCache.has(resolved) ? (fileCache.get(resolved)||'').length + 'b' : 'miss'})`);
-        }
         const encoding = typeof opts === 'string' ? opts : opts?.encoding;
         // Check fileCache first (may have data from writeFileSync not yet flushed)
         const cached = fileCache.get(resolved);
@@ -985,9 +954,6 @@ export function createFsPromisesModule(deps: FsDeps): any {
       const resolved = typeof p === 'number'
         ? ((globalThis as any).__shiroFds?.[p]?.path || ctx.fs.resolvePath(String(p), ctx.cwd))
         : ctx.fs.resolvePath(String(p), ctx.cwd);
-      if (resolved.includes('/tasks/') && resolved.includes('.output')) {
-        console.warn(`[fs-debug] promises.readFile: ${resolved} (fileCache: ${fileCache.has(resolved) ? (fileCache.get(resolved)||'').length + 'b' : 'miss'})`);
-      }
       // Check fileCache first (may have data from writeFileSync not yet flushed)
       const cached = fileCache.get(resolved);
       const encoding = typeof opts === 'string' ? opts : opts?.encoding;
