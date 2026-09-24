@@ -155,6 +155,13 @@ async function handleProxy(req, res, pathAfterApi) {
     for (const [k, v] of upstream.headers) {
       if (passHeader(k)) respHeaders[k] = v;
     }
+    // Stream event-streams straight through. nginx buffers proxied responses by
+    // default, so while a model thinks (only tiny keep-alive pings) the browser saw
+    // nothing, not even headers, for minutes, then the whole reply at once.
+    if ((upstream.headers.get('content-type') || '').includes('text/event-stream')) {
+      respHeaders['x-accel-buffering'] = 'no';
+      respHeaders['cache-control'] = 'no-cache';
+    }
 
     console.log(`[proxy] ${req.method} /api/${pathAfterApi} → ${upstream.status}`);
     res.writeHead(upstream.status, respHeaders);
