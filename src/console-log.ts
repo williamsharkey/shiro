@@ -12,7 +12,14 @@
  * Queried by the `console` command and by remote peers (`{type: 'console'}`).
  */
 
-export type ConsoleLevel = 'error' | 'warn' | 'log' | 'info' | 'debug';
+// Safari (26) lacks Symbol.dispose/asyncDispose. Bundles like Claude Code fall
+// back to Symbol.for('Symbol.dispose') when *reading* the symbol but define
+// disposers under `Symbol.dispose` (undefined -> key "undefined"), so `using`
+// throws "Object not disposable". Polyfill before anything else loads.
+if (!(Symbol as any).dispose) Object.defineProperty(Symbol, 'dispose', { value: Symbol.for('Symbol.dispose') });
+if (!(Symbol as any).asyncDispose) Object.defineProperty(Symbol, 'asyncDispose', { value: Symbol.for('Symbol.asyncDispose') });
+
+export type ConsoleLevel ='error' | 'warn' | 'log' | 'info' | 'debug';
 
 export interface ConsoleEntry {
   seq: number;

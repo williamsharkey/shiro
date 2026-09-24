@@ -412,6 +412,7 @@ export class ShiroTerminal {
     // Check for active remote session
     const remoteSession = (window as any).__shiroRemoteSession;
     const remoteCode = remoteSession?.displayCode; // e.g., "chibi-gray"
+    this.hudCode = remoteCode || null;
 
     const L = '\x1b]8;;'; // OSC 8 link prefix
     const E = '\x1b]8;;\x07'; // OSC 8 link end
@@ -504,6 +505,13 @@ export class ShiroTerminal {
    * on the alternate screen, or anything running). In-place banner rewrites
    * would land on top of its output, so they are skipped or sent elsewhere.
    */
+  /** Remote code currently drawn in this terminal's banner top row (null = version layout) */
+  private hudCode: string | null = null;
+
+  private onAltScreen(): boolean {
+    return this.term.buffer.active.type === 'alternate';
+  }
+
   isBusy(): boolean {
     return this.running || this.term.buffer.active.type === 'alternate';
   }
@@ -543,7 +551,8 @@ export class ShiroTerminal {
    * Update the remote code display in the HUD top border.
    */
   updateHudRemoteCode(code: string | null) {
-    if (this.isBusy()) {
+    // Only a full-screen app blocks this: `remote start` itself runs as a command here
+    if (this.onAltScreen()) {
       const other = this.idleSibling();
       if (other) { other.hud && other.isHudInViewport() ? other.updateHudRemoteCode(code) : other.adoptHud(); }
       return;
@@ -566,6 +575,7 @@ export class ShiroTerminal {
 
     this.term.write('\x1b7');
     this.term.write(`\x1b[${viewportRow};1H`);
+    this.hudCode = code;
 
     if (code) {
       const codeLen = code.length;
@@ -590,7 +600,7 @@ export class ShiroTerminal {
    * active=true: green filled ●, active=false: dim empty ○
    */
   updateHudRemoteActivity(active: boolean) {
-    if (this.isBusy()) {
+    if (this.onAltScreen()) {
       const other = this.idleSibling();
       if (other?.hud && other.isHudInViewport()) other.updateHudRemoteActivity(active);
       return;
@@ -599,6 +609,8 @@ export class ShiroTerminal {
 
     const remoteSession = (window as any).__shiroRemoteSession;
     if (!remoteSession?.displayCode) return;
+    // The dot's column only exists in the code layout; never draw it over the version text
+    if (this.hudCode !== remoteSession.displayCode) return;
 
     const hostname = typeof window !== 'undefined' ? window.location.hostname : 'shiro.computer';
     const subdomainMatch = hostname.match(/^([^.]+)\.shiro\.computer$/);
