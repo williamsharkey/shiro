@@ -145,8 +145,9 @@ Commands:
             ctx.stderr = `error: authentication failed (HTTP ${status})\n`;
             return 1;
           }
-          ctx.stdout = `Logged in to github.com as ${data.login} (${data.name || ''})\n`;
-          ctx.stdout += `Token: ${token.slice(0, 8)}...${token.slice(-4)}\n`;
+          ctx.stdout = `github.com\n  ✓ Logged in to github.com account ${data.login} (${data.name || ''})\n`;
+          ctx.stdout += `  - Token: ${token.slice(0, 4)}${'*'.repeat(Math.max(0, token.length - 4))}\n`;
+
         } else if (authSub === 'login') {
           const { flags } = parseFlags(ctx.args.slice(2), []);
           if (flags['with-token'] === 'true') {
@@ -162,13 +163,19 @@ Commands:
             ctx.stderr = 'usage: echo <token> | gh auth login --with-token\n';
             return 1;
           }
+        } else if (authSub === 'token') {
+          if (!token) { ctx.stderr = 'no oauth token found for github.com\n'; return 1; }
+          ctx.stdout = token + '\n';
+        } else if (authSub === 'setup-git') {
+          // Shiro's git already uses the gh token for github.com remotes
+          if (!token) { ctx.stderr = 'You are not logged into any GitHub hosts. Run gh auth login first.\n'; return 1; }
         } else if (authSub === 'logout') {
           if (typeof localStorage !== 'undefined') localStorage.removeItem('shiro_github_token');
           delete ctx.env['GITHUB_TOKEN'];
           delete ctx.env['GH_TOKEN'];
           ctx.stdout = 'Logged out.\n';
         } else {
-          ctx.stderr = `gh auth: '${authSub}' is not a valid subcommand. Valid: status, login, logout\n`;
+          ctx.stderr = `gh auth: '${authSub}' is not a valid subcommand. Valid: status, login, logout, token, setup-git\n`;
           return 1;
         }
         return 0;
@@ -177,7 +184,7 @@ Commands:
       case 'repo': {
         const repoSub = ctx.args[1];
         if (!repoSub || repoSub === '--help') {
-          ctx.stdout = 'usage: gh repo <command> [flags]\n\nCommands:\n  view     View a repository\n  list     List repositories [owner]\n  create   Create a repository <name> [--public|--private]\n  clone    Clone a repository <owner/repo>\n';
+          ctx.stdout = 'usage: gh repo <command> [flags]\n\nCommands:\n  view     View a repository [--json fields]\n  list     List repositories [owner]\n  create   Create a repository [owner/]<name> --public|--private [-d desc] [--source dir [--push] [--remote name]] [--clone]\n  clone    Clone a repository <owner/repo> [dir]\n  delete   Delete a repository <owner/repo> --yes\n';
           return 0;
         }
         if (repoSub === 'view') {
@@ -185,7 +192,7 @@ Commands:
             ctx.stderr = 'error: authentication required. Set GITHUB_TOKEN.\n';
             return 1;
           }
-          const { flags, positional } = parseFlags(ctx.args.slice(2), ['repo', 'R']);
+          const { flags, positional } = parseFlags(ctx.args.slice(2), ['repo', 'R', 'json', 'q', 'jq']);
           let repo: { owner: string; repo: string } | null = null;
           if (positional[0]) {
             const parts = positional[0].split('/');
@@ -200,6 +207,28 @@ Commands:
           if (status !== 200) {
             ctx.stderr = `error: API returned ${status}: ${data?.message || ''}\n`;
             return 1;
+          }
+          if (flags['json'] !== undefined) {
+            const all: Record<string, any> = {
+              name: data.name,
+              nameWithOwner: data.full_name,
+              owner: { login: data.owner?.login },
+              description: data.description ?? '',
+              url: data.html_url,
+              sshUrl: data.ssh_url,
+              visibility: String(data.visibility || (data.private ? 'private' : 'public')).toUpperCase(),
+              isPrivate: !!data.private,
+              isFork: !!data.fork,
+              defaultBranchRef: { name: data.default_branch },
+              stargazerCount: data.stargazers_count,
+              createdAt: data.created_at,
+              pushedAt: data.pushed_at,
+            };
+            const fields = flags['json'] && flags['json'] !== 'true' ? flags['json'].split(',') : Object.keys(all);
+            const out: Record<string, any> = {};
+            for (const f of fields) if (f in all) out[f] = all[f];
+            ctx.stdout = JSON.stringify(out, null, 2) + '\n';
+            return 0;
           }
           ctx.stdout = `${data.full_name}\n`;
           if (data.description) ctx.stdout += `${data.description}\n`;
@@ -234,19 +263,69 @@ Commands:
         }
         if (repoSub === 'create') {
           if (!token) { ctx.stderr = 'error: authentication required. Set GITHUB_TOKEN.\n'; return 1; }
-          const { flags, positional } = parseFlags(ctx.args.slice(2), ['description']);
-          const name = positional[0];
-          if (!name) { ctx.stderr = 'error: repository name is required\nusage: gh repo create <name> [--public|--private]\n'; return 1; }
-          const isPrivate = flags['private'] === 'true';
-          const payload: any = { name, private: isPrivate };
-          if (flags['description']) payload.description = flags['description'];
-          const { status, data } = await ghApi(token, 'POST', '/user/repos', payload);
-          if (status === 201) {
-            ctx.stdout = `Created repository ${data.full_name}\n${data.html_url}\n`;
-          } else {
-            ctx.stderr = `error: failed to create repository (HTTP ${status}): ${data?.message || ''}\n`;
+          const { flags, positional } = parseFlags(ctx.args.slice(2),
+            ['description', 'd', 'source', 's', 'remote', 'r', 'homepage', 'h', 'team', 't', 'template', 'p', 'gitignore', 'g', 'license', 'l']);
+          const visibility = flags['private'] === 'true' ? 'private' : flags['public'] === 'true' ? 'public' : flags['internal'] === 'true' ? 'internal' : '';
+          const source = flags['source'] ?? flags['s'];
+          let fullName = positional[0] || '';
+          if (!fullName && source) fullName = ctx.fs.resolvePath(source, ctx.cwd).split('/').filter(Boolean).pop() || '';
+          if (!fullName) { ctx.stderr = 'error: repository name is required\nusage: gh repo create [owner/]<name> --public|--private [--source dir [--push]]\n'; return 1; }
+          if (!visibility) { ctx.stderr = '--public, --private, or --internal required when not running interactively\n'; return 1; }
+          const [ownerPart, namePart] = fullName.includes('/') ? fullName.split('/', 2) : ['', fullName];
+          const payload: any = { name: namePart, private: visibility !== 'public' };
+          if (visibility === 'internal') payload.visibility = 'internal';
+          const desc = flags['description'] ?? flags['d'];
+          if (desc) payload.description = desc;
+          const homepage = flags['homepage'] ?? flags['h'];
+          if (homepage) payload.homepage = homepage;
+          let endpoint = '/user/repos';
+          if (ownerPart) {
+            const me = await ghApi(token, 'GET', '/user');
+            if (me.data?.login?.toLowerCase() !== ownerPart.toLowerCase()) endpoint = `/orgs/${ownerPart}/repos`;
+          }
+          const { status, data } = await ghApi(token, 'POST', endpoint, payload);
+          if (status !== 201) {
+            ctx.stderr = `error: failed to create repository (HTTP ${status}): ${data?.message || ''}${data?.errors ? ' ' + JSON.stringify(data.errors) : ''}\n`;
             return 1;
           }
+          ctx.stdout = `✓ Created repository ${data.full_name} on GitHub\n  ${data.html_url}\n`;
+          const cloneUrl = data.clone_url as string;
+          const run = (cmd: string) => ctx.shell.execute(cmd, (o: string) => { ctx.stdout += o; }, (e: string) => { ctx.stderr += e; });
+          const q = (v: string) => "'" + v.replace(/'/g, "'\\''") + "'";
+          if (source) {
+            const dir = ctx.fs.resolvePath(source, ctx.cwd);
+            const remoteName = flags['remote'] ?? flags['r'] ?? 'origin';
+            const code = await run(`cd ${q(dir)} && git remote add ${q(remoteName)} ${q(cloneUrl)}`);
+            if (code !== 0) return code;
+            ctx.stdout += `✓ Added remote ${cloneUrl}\n`;
+            if (flags['push'] === 'true') {
+              const pushCode = await run(`cd ${q(dir)} && git push ${q(remoteName)}`);
+              if (pushCode !== 0) return pushCode;
+              ctx.stdout += `✓ Pushed commits to ${cloneUrl}\n`;
+            }
+          } else if (flags['clone'] === 'true') {
+            return run(`git clone ${q(cloneUrl)}`);
+          }
+          return 0;
+        }
+        if (repoSub === 'delete') {
+          if (!token) { ctx.stderr = 'error: authentication required. Set GITHUB_TOKEN.\n'; return 1; }
+          const { flags, positional } = parseFlags(ctx.args.slice(2), []);
+          const repo = positional[0]?.includes('/')
+            ? { owner: positional[0].split('/')[0], repo: positional[0].split('/')[1] }
+            : await detectRepo(ctx);
+          if (!repo) { ctx.stderr = 'usage: gh repo delete <owner/repo> --yes\n'; return 1; }
+          if (flags['yes'] !== 'true' && flags['confirm'] !== 'true') {
+            ctx.stderr = `--yes required to delete ${repo.owner}/${repo.repo} when not running interactively\n`;
+            return 1;
+          }
+          const { status, data } = await ghApi(token, 'DELETE', `/repos/${repo.owner}/${repo.repo}`);
+          if (status !== 204) {
+            const hint = status === 403 ? ' (the token needs the delete_repo scope)' : '';
+            ctx.stderr = `error: failed to delete repository (HTTP ${status}): ${data?.message || ''}${hint}\n`;
+            return 1;
+          }
+          ctx.stdout = `✓ Deleted repository ${repo.owner}/${repo.repo}\n`;
           return 0;
         }
         if (repoSub === 'clone') {
@@ -257,7 +336,7 @@ Commands:
           const cloneCmd = destDir ? `git clone ${cloneUrl} ${destDir}` : `git clone ${cloneUrl}`;
           return ctx.shell.execute(cloneCmd, (s: string) => { ctx.stdout += s; }, (s: string) => { ctx.stderr += s; });
         }
-        ctx.stderr = `gh repo: '${repoSub}' is not a valid subcommand. Valid: view, list, create, clone\n`;
+        ctx.stderr = `gh repo: '${repoSub}' is not a valid subcommand. Valid: view, list, create, clone, delete\n`;
         return 1;
       }
 

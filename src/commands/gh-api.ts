@@ -2,8 +2,16 @@ import { CommandContext } from './index';
 import { ghApi, parseFlags, getRepoFromFlags, detectRepo, isDryRun } from './gh';
 import { evaluateJq } from './jq';
 
+/** gh prints --jq string results raw, like `jq -r`. */
+function ghJq(data: any, expr: string): string {
+  return evaluateJq(data, expr).split('\n').map((line) => {
+    if (!line.startsWith('"')) return line;
+    try { const v = JSON.parse(line); return typeof v === 'string' ? v : line; } catch { return line; }
+  }).join('\n');
+}
+
 export async function ghApiHandler(ctx: CommandContext, token: string): Promise<number> {
-  const valueFlags = ['X', 'f', 'F', 'H', 'repo', 'R', 'jq', 'template'];
+  const valueFlags = ['X', 'method', 'f', 'F', 'H', 'repo', 'R', 'jq', 'q', 'template'];
   const { flags, positional } = parseFlags(ctx.args.slice(1), valueFlags);
   const path = positional[0];
   if (!path) {
@@ -11,7 +19,8 @@ export async function ghApiHandler(ctx: CommandContext, token: string): Promise<
     return 1;
   }
 
-  let method = (flags['X'] || 'GET').toUpperCase();
+  const explicitMethod = flags['X'] || flags['method'];
+  let method = (explicitMethod || 'GET').toUpperCase();
 
   // Parse -f/-F key=value fields into body
   let body: Record<string, any> | undefined;
@@ -33,6 +42,9 @@ export async function ghApiHandler(ctx: CommandContext, token: string): Promise<
       }
     }
   }
+
+  // Like gh: fields without an explicit method mean POST
+  if (body && !explicitMethod) method = 'POST';
 
   // Parse -H headers
   const extraHeaders: Record<string, string> = {};
@@ -83,7 +95,7 @@ export async function ghApiHandler(ctx: CommandContext, token: string): Promise<
     ctx.stderr = 'warning: no token set, request may fail for private resources\n';
   }
 
-  const jqExpr = flags['jq'];
+  const jqExpr = flags['jq'] ?? flags['q'];
   const paginate = flags['paginate'] === 'true';
 
   if (paginate) {
@@ -117,7 +129,7 @@ export async function ghApiHandler(ctx: CommandContext, token: string): Promise<
     }
     const result = allData;
     if (jqExpr) {
-      ctx.stdout = evaluateJq(result, jqExpr);
+      ctx.stdout = ghJq(result, jqExpr);
     } else {
       ctx.stdout = JSON.stringify(result, null, 2) + '\n';
     }
@@ -131,7 +143,7 @@ export async function ghApiHandler(ctx: CommandContext, token: string): Promise<
 
   // Bug fix: --jq filters the output
   if (jqExpr) {
-    ctx.stdout = evaluateJq(data, jqExpr);
+    ctx.stdout = ghJq(data, jqExpr);
   } else {
     ctx.stdout = JSON.stringify(data, null, 2) + '\n';
   }

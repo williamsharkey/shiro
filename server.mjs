@@ -41,6 +41,11 @@ const SKIP_RESPONSE_HEADERS = new Set([
   'content-encoding', 'content-length', 'transfer-encoding', 'connection',
 ]);
 
+// The git proxy also drops WWW-Authenticate: a browser answers it with a native
+// login prompt that stalls the request (and later ones to the origin). Git
+// clients still see the 401 and supply credentials themselves.
+const SKIP_GIT_RESPONSE_HEADERS = new Set([...SKIP_RESPONSE_HEADERS, 'www-authenticate']);
+
 const DEFAULT_CORS_ALLOW_HEADERS = [
   'Content-Type',
   'Authorization',
@@ -356,7 +361,7 @@ async function handleGitProxy(req, res, targetUrl) {
 
     const respHeaders = { ...cors };
     for (const [k, v] of upstream.headers) {
-      if (!SKIP_RESPONSE_HEADERS.has(k.toLowerCase())) respHeaders[k] = v;
+      if (!SKIP_GIT_RESPONSE_HEADERS.has(k.toLowerCase())) respHeaders[k] = v;
     }
 
     res.writeHead(upstream.status, respHeaders);

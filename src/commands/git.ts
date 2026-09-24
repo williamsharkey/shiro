@@ -35,7 +35,7 @@ export const gitCmd: Command = {
     const subcommand = ctx.args[0];
 
     if (!subcommand || subcommand === '--help' || subcommand === '-h') {
-      ctx.stdout = 'usage: git <command> [<args>]\n\nAvailable commands:\n  init, add, commit, status, log, diff, show, branch, checkout, clone\n  push, pull, fetch, remote, merge, stash, reset, tag, cherry-pick, revert, rebase, reflog\n';
+      ctx.stdout = 'usage: git <command> [<args>]\n\nAvailable commands:\n  init, config, add, commit, status, log, diff, show, branch, checkout, clone\n  push, pull, fetch, remote, merge, stash, reset, tag, cherry-pick, revert, rebase, reflog\n';
       return 0;
     }
     if (subcommand === '--version' || subcommand === '-v') {
@@ -48,10 +48,14 @@ export const gitCmd: Command = {
 
     try {
       switch (subcommand) {
+        case 'config':
+          return gitConfigCommand(ctx, fs, dir);
+
         case 'init': {
           let targetDir = dir;
-          if (ctx.args[1]) {
-            targetDir = ctx.fs.resolvePath(ctx.args[1], dir);
+          const initPath = ctx.args.slice(1).find((x, i, arr) => !x.startsWith('-') && arr[i - 1] !== '-b' && arr[i - 1] !== '--initial-branch');
+          if (initPath) {
+            targetDir = ctx.fs.resolvePath(initPath, dir);
             await ctx.fs.mkdir(targetDir, { recursive: true });
           }
           const gitDir = ctx.fs.resolvePath('.git', targetDir);
@@ -60,7 +64,10 @@ export const gitCmd: Command = {
           } catch (e) {
             // Ignore if already exists
           }
-          await git.init({ fs, dir: targetDir });
+          const branchFlag = ctx.args.findIndex(x => x === '-b' || x === '--initial-branch');
+          const defaultBranch = (branchFlag > 0 && ctx.args[branchFlag + 1])
+            || (await readGlobalConfig(ctx))['init.defaultbranch'] || 'main';
+          await git.init({ fs, dir: targetDir, defaultBranch });
           ctx.stdout = `Initialized empty Git repository in ${targetDir}/.git/\n`;
           break;
         }
@@ -92,7 +99,7 @@ export const gitCmd: Command = {
             if (ctx.args[i] === '--allow-empty') allowEmpty = true;
           }
 
-          const author = { name: ctx.env['USER'] || 'user', email: 'user@shiro.local' };
+          const author = await resolveAuthor(ctx, fs, dir);
 
           if (amend) {
             // Read current HEAD commit
@@ -521,7 +528,7 @@ export const gitCmd: Command = {
                 onProgress: async () => {
                   await new Promise(resolve => setTimeout(resolve, 0));
                 },
-                ...(token ? { onAuth: () => ({ username: token }) } : {}),
+                ...githubAuth(token, url),
               }),
               new Promise<never>((_, reject) =>
                 setTimeout(() => reject(new Error('clone timed out after 60s')), 60000)
@@ -599,6 +606,7 @@ export const gitCmd: Command = {
             return 1;
           }
           const currentBranch = ref || await git.currentBranch({ fs, dir }) || 'main';
+          const pushUrl = await remoteUrl(fs, dir, remote);
           ctx.stdout = `Pushing to ${remote}/${currentBranch}...\n`;
           try {
             const result = await git.push({
@@ -606,7 +614,7 @@ export const gitCmd: Command = {
               remote,
               ref: currentBranch,
               corsProxy,
-              onAuth: () => ({ username: token }),
+              ...githubAuth(token, pushUrl),
               onMessage: (msg: string) => { ctx.stdout += msg; },
             });
             if (result.ok) {
@@ -637,16 +645,12 @@ export const gitCmd: Command = {
 
         case 'fetch': {
           const { remote, token, corsProxy } = parseRemoteArgs(ctx);
-          if (!token) {
-            ctx.stderr = 'error: authentication required\nSet GITHUB_TOKEN or run: export GITHUB_TOKEN=ghp_...\n';
-            return 1;
-          }
           ctx.stdout = `Fetching from ${remote}...\n`;
           await git.fetch({
             fs, http, dir,
             remote,
             corsProxy,
-            onAuth: () => ({ username: token }),
+            ...githubAuth(token, await remoteUrl(fs, dir, remote)),
           });
           ctx.stdout += `done.\n`;
           break;
@@ -654,10 +658,6 @@ export const gitCmd: Command = {
 
         case 'pull': {
           const { remote, ref, token, corsProxy } = parseRemoteArgs(ctx);
-          if (!token) {
-            ctx.stderr = 'error: authentication required\nSet GITHUB_TOKEN or run: export GITHUB_TOKEN=ghp_...\n';
-            return 1;
-          }
           const currentBranch = ref || await git.currentBranch({ fs, dir }) || 'main';
           ctx.stdout = `Pulling from ${remote}/${currentBranch}...\n`;
           await git.pull({
@@ -666,8 +666,8 @@ export const gitCmd: Command = {
             ref: currentBranch,
             corsProxy,
             singleBranch: true,
-            author: { name: ctx.env['USER'] || 'user', email: 'user@shiro.local' },
-            onAuth: () => ({ username: token }),
+            author: await resolveAuthor(ctx, fs, dir),
+            ...githubAuth(token, await remoteUrl(fs, dir, remote)),
           });
           ctx.stdout += `done.\n`;
           break;
@@ -683,7 +683,7 @@ export const gitCmd: Command = {
             fs, dir,
             ours: await git.currentBranch({ fs, dir }) || 'main',
             theirs,
-            author: { name: ctx.env['USER'] || 'user', email: 'user@shiro.local' },
+            author: await resolveAuthor(ctx, fs, dir),
           });
           if (mergeResult.alreadyMerged) {
             ctx.stdout = 'Already up to date.\n';
@@ -888,6 +888,106 @@ export const gitCmd: Command = {
     return 0;
   },
 };
+
+const GLOBAL_GITCONFIG = '/home/user/.gitconfig';
+
+/** Parse a git-style INI file into { "section.key": value } ("section.sub.key" for [section "sub"]). */
+function parseGitConfig(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  let section = '';
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#') || line.startsWith(';')) continue;
+    const sec = line.match(/^\[([^\s\]"]+)(?:\s+"([^"]*)")?\]$/);
+    if (sec) { section = sec[2] !== undefined ? `${sec[1]}.${sec[2]}` : sec[1]; continue; }
+    const kv = line.match(/^([\w-]+)\s*(?:=\s*(.*))?$/);
+    if (kv && section) out[`${section}.${kv[1]}`.toLowerCase()] = (kv[2] ?? 'true').replace(/^"(.*)"$/, '$1');
+  }
+  return out;
+}
+
+function formatGitConfig(values: Record<string, string>): string {
+  const sections: Record<string, string[]> = {};
+  for (const [key, value] of Object.entries(values)) {
+    const i = key.lastIndexOf('.');
+    const sec = key.slice(0, i), name = key.slice(i + 1);
+    const j = sec.indexOf('.');
+    const header = j < 0 ? `[${sec}]` : `[${sec.slice(0, j)} "${sec.slice(j + 1)}"]`;
+    (sections[header] ??= []).push(`\t${name} = ${value}`);
+  }
+  return Object.entries(sections).map(([h, lines]) => [h, ...lines].join('\n')).join('\n') + '\n';
+}
+
+async function readGlobalConfig(ctx: CommandContext): Promise<Record<string, string>> {
+  try { return parseGitConfig(await ctx.fs.readFile(GLOBAL_GITCONFIG, 'utf8') as string); } catch { return {}; }
+}
+
+/** Commit author: repo config, then ~/.gitconfig, then GIT_AUTHOR_* env, then a default. */
+async function resolveAuthor(ctx: CommandContext, fs: any, dir: string): Promise<{ name: string; email: string }> {
+  const repoValue = async (path: string) => { try { return await git.getConfig({ fs, dir, path }); } catch { return undefined; } };
+  const global = await readGlobalConfig(ctx);
+  return {
+    name: (await repoValue('user.name')) || global['user.name'] || ctx.env['GIT_AUTHOR_NAME'] || ctx.env['USER'] || 'user',
+    email: (await repoValue('user.email')) || global['user.email'] || ctx.env['GIT_AUTHOR_EMAIL'] || 'user@shiro.local',
+  };
+}
+
+async function gitConfigCommand(ctx: CommandContext, fs: any, dir: string): Promise<number> {
+  const args = ctx.args.slice(1);
+  const global = args.includes('--global');
+  const list = args.includes('--list') || args.includes('-l');
+  const unset = args.includes('--unset');
+  const positional = args.filter(a => !a.startsWith('-'));
+  const [key, value] = [positional[0]?.toLowerCase(), positional.slice(1).join(' ')];
+  const inRepo = await ctx.fs.exists(dir + '/.git');
+
+  if (list) {
+    const values = { ...(await readGlobalConfig(ctx)) };
+    if (!global && inRepo) {
+      try { Object.assign(values, parseGitConfig(await ctx.fs.readFile(dir + '/.git/config', 'utf8') as string)); } catch {}
+    }
+    ctx.stdout = Object.entries(values).map(([k, v]) => `${k}=${v}`).join('\n') + (Object.keys(values).length ? '\n' : '');
+    return 0;
+  }
+  if (!key) { ctx.stderr = 'usage: git config [--global] <name> [<value>] | --list | --unset <name>\n'; return 1; }
+
+  if (global || !inRepo) {
+    if (!global && !inRepo && (value || unset)) { ctx.stderr = 'fatal: not in a git directory\n'; return 128; }
+    const values = await readGlobalConfig(ctx);
+    if (unset) { delete values[key]; await ctx.fs.writeFile(GLOBAL_GITCONFIG, formatGitConfig(values)); return 0; }
+    if (value) { values[key] = value; await ctx.fs.writeFile(GLOBAL_GITCONFIG, formatGitConfig(values)); return 0; }
+    if (values[key] === undefined) return 1;
+    ctx.stdout = values[key] + '\n';
+    return 0;
+  }
+  if (unset) { await git.setConfig({ fs, dir, path: key, value: undefined }); return 0; }
+  if (value) { await git.setConfig({ fs, dir, path: key, value }); return 0; }
+  let current: any;
+  try { current = await git.getConfig({ fs, dir, path: key }); } catch {}
+  if (current === undefined) current = (await readGlobalConfig(ctx))[key];
+  if (current === undefined) return 1;
+  ctx.stdout = current + '\n';
+  return 0;
+}
+
+/**
+ * Credentials for GitHub remotes, sent on the first request. Left to the usual
+ * 401 challenge, the browser answers GitHub's `WWW-Authenticate: Basic` with its
+ * own login prompt, which stalls that request and every later one to the same
+ * origin until the clone/push times out. Only github.com URLs get the token.
+ */
+export function githubAuth(token: string, url: string | undefined): Record<string, any> {
+  if (!token || !url || !/^https?:\/\/([^/@]+@)?github\.com\//.test(url)) return {};
+  return {
+    headers: { Authorization: 'Basic ' + btoa('x-access-token:' + token) },
+    onAuth: () => ({ username: 'x-access-token', password: token }),
+    onAuthFailure: () => ({ cancel: true }),
+  };
+}
+
+async function remoteUrl(fs: any, dir: string, remote: string): Promise<string | undefined> {
+  try { return await git.getConfig({ fs, dir, path: `remote.${remote}.url` }); } catch { return undefined; }
+}
 
 function parseRemoteArgs(ctx: CommandContext): { remote: string; ref: string; token: string; corsProxy: string } {
   let remote = 'origin';
