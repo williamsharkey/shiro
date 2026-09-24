@@ -117,7 +117,7 @@ Use focused vitest runs while iterating, then run the smallest meaningful verifi
 - `tests/tests/shiro-vitest/new-features.test.ts`
 - `tests/tests/shiro-vitest/server-cors.test.ts`
 
-Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` handles build, upload, and restart, and it is the only place that should bump `build-number.txt`.
+Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` handles build, upload, and restart, and it is the only place that should bump `build-number.txt`. `deploy.sh` uploads only `server.mjs`; the host's own `/opt/shiro/package.json` holds its deps (`ws`, and `undici` so proxied model calls have no 5-minute header timeout). Each model call logs one `[proxy] messages model=… stream=… bytes=… → status headers in Nms` line (`journalctl -u shiro`).
 
 ## Gotchas
 
