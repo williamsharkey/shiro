@@ -83,16 +83,22 @@ export async function preloadEnvironment(
         continue;
       }
       const data = localStorage.getItem(key);
-      if (data !== null) {
+      localStorage.removeItem(key);
+      if (data === null) continue;
+      try {
+        // A WAL entry can't restore over a directory; drop it instead of failing every run
+        const existing = await ctx.fs.stat(path).catch(() => null);
+        if (existing?.isDirectory()) { walSkipped++; continue; }
         const parentDir = path.substring(0, path.lastIndexOf('/'));
         try { await ctx.fs.mkdir(parentDir, { recursive: true }); } catch {}
         await ctx.fs.writeFile(path, data);
         walReplayed++;
+      } catch (e: any) {
+        console.warn(`[wal] Could not replay ${path}: ${e.message}`);
       }
-      localStorage.removeItem(key);
     }
     if (walReplayed || walSkipped) {
-      console.warn(`[wal] Replayed ${walReplayed} files, skipped ${walSkipped} .tmp files`);
+      console.warn(`[wal] Replayed ${walReplayed} files, skipped ${walSkipped}`);
     }
   } catch (e: any) {
     console.warn(`[wal] Replay error: ${e.message}`);
