@@ -148,9 +148,9 @@ describe('Node Runtime (jseval.ts)', () => {
       const env = JSON.parse(ctx.stdout.trim());
       expect(env).toEqual({
         disableBackground: '1',
-        maxConcurrency: '1',
-        planAgents: '1',
-        exploreAgents: '1',
+        maxConcurrency: '4',
+        planAgents: '3',
+        exploreAgents: '3',
         disableMarketplace: '1',
         disableInstallChecks: '1',
       });
@@ -158,7 +158,7 @@ describe('Node Runtime (jseval.ts)', () => {
 
     it('should preserve explicit Claude Code env overrides', async () => {
       shell.env['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'] = '0';
-      shell.env['CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY'] = '4';
+      shell.env['CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY'] = '2';
 
       await fs.mkdir('/work/demo/claude-code', { recursive: true });
       await fs.writeFile('/work/demo/claude-code/cli.js', [
@@ -176,8 +176,8 @@ describe('Node Runtime (jseval.ts)', () => {
       const env = JSON.parse(ctx.stdout.trim());
       expect(env).toEqual({
         disableBackground: '0',
-        maxConcurrency: '4',
-        planAgents: '1',
+        maxConcurrency: '2',
+        planAgents: '3',
       });
     });
 

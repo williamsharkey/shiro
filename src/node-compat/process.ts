@@ -28,17 +28,20 @@ export function createFakeProcess(
   };
 
   if (scriptPath?.includes('claude-code')) {
-    // Claude Code is substantially more stable in Shiro when its planner and tool use
-    // stay in a single foreground lane instead of spinning background tasks/workers.
+    // Background tasks stay off (long-lived background processes are still the
+    // riskiest part of the browser runtime). Parallel tool calls and planner agents
+    // were serialized to 1 while overlapping scripts could clobber each other's page
+    // globals; with that fixed they get modest parallelism. Override any of these by
+    // exporting them, e.g. in ~/.profile.
     const claudeDefaults: Record<string, string> = {
       ANTHROPIC_MODEL: CLAUDE_CODE_DEFAULT_MODEL,
       DISABLE_AUTOUPDATER: '1',
       DISABLE_INSTALLATION_CHECKS: '1',
       CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: '1',
       CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
-      CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY: '1',
-      CLAUDE_CODE_PLAN_V2_AGENT_COUNT: '1',
-      CLAUDE_CODE_PLAN_V2_EXPLORE_AGENT_COUNT: '1',
+      CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY: '4',
+      CLAUDE_CODE_PLAN_V2_AGENT_COUNT: '3',
+      CLAUDE_CODE_PLAN_V2_EXPLORE_AGENT_COUNT: '3',
     };
     for (const [key, value] of Object.entries(claudeDefaults)) {
       if (!(key in processEnv)) {

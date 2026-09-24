@@ -149,8 +149,15 @@ async function connect() {
     body: JSON.stringify({ answer: { type: desc.type, sdp: desc.sdp }, candidates: ice }) });
   if (!ans.ok) throw new Error('answer rejected');
   await Promise.race([opened, new Promise((_, rej) => setTimeout(() => rej(new Error('open timeout')), 30000))]);
-  log({ event: 'connected', install: await evalJs(INSTALL) });
-  console.log('connected + instrumented');
+  if (process.env.PROBE_LITE) {
+    log({ event: 'connected', install: 'skipped (PROBE_LITE)' });
+    console.log('connected (lite)');
+    return;
+  }
+  // Never let a failing install block the connection; ad-hoc /eval still works
+  const install = await evalJs(INSTALL, 15000).catch((e) => 'install failed: ' + e.message);
+  log({ event: 'connected', install });
+  console.log('connected + ' + install);
 }
 
 let reconnecting = false;
@@ -168,6 +175,7 @@ async function sampleLoop() {
     await new Promise((r) => setTimeout(r, INTERVAL));
     if (!connected) continue;
     const t = Date.now();
+    if (process.env.PROBE_LITE) continue;
     try {
       const s = JSON.parse(await evalJs(SAMPLE, 120000));
       s.rttMs = Date.now() - t; // main-thread responsiveness

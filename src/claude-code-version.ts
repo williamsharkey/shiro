@@ -53,16 +53,42 @@ export function isClaudeCodeScript(scriptPath: string | undefined): boolean {
   return !!scriptPath && scriptPath.includes('/@anthropic-ai/claude-code/');
 }
 
+// Models newer than the pinned build knows about (Opus/Sonnet 5+).
+const NEWER_MODEL = '/(opus|sonnet)-[5-9]/';
+
 /**
- * Raise the version Claude Code reports to CLAUDE_CODE_REPORTED_VERSION.
- * Only ever bumps: a build that is already newer is left alone.
+ * 2.1.112 decides model capabilities by name and only recognizes models up to
+ * Opus 4.7. For anything newer it fell back to fixed-budget thinking, no effort
+ * control, and a "medium" default effort on subscriptions. These rewrites treat
+ * Opus/Sonnet 5+ like Opus 4.7: adaptive thinking, effort (incl. xhigh), and the
+ * xhigh launch default. Each targets exact 2.1.112 code and is skipped if absent.
+ */
+const CAPABILITY_PATCHES: Array<[string, string]> = [
+  // adaptive thinking + effort support (the same gate appears in both checks)
+  ['_.includes("opus-4-7")||_.includes("opus-4-6")||_.includes("sonnet-4-6")',
+   `_.includes("opus-4-7")||_.includes("opus-4-6")||_.includes("sonnet-4-6")||${NEWER_MODEL}.test(_)`],
+  // xhigh effort support
+  ['return o5(q).includes("opus-4-7")}', `return /opus-4-7|(opus|sonnet)-[5-9]/.test(o5(q))}`],
+  // default effort per model, and the launch default
+  ['if(K.includes("opus-4-7"))return"xhigh";', `if(K.includes("opus-4-7")||${NEWER_MODEL}.test(K))return"xhigh";`],
+  ['let _=o5(q).includes("opus-4-7")&&!H8().unpinOpus47LaunchEffort',
+   `let _=/opus-4-7|(opus|sonnet)-[5-9]/.test(o5(q))&&!H8().unpinOpus47LaunchEffort`],
+];
+
+/**
+ * Rewrite the Claude Code bundle as it loads: raise the version it reports to
+ * CLAUDE_CODE_REPORTED_VERSION (only ever bumps), and teach it about newer models.
  */
 export function patchClaudeCodeSource(code: string): string {
-  return code.replace(/VERSION:"(\d+\.\d+\.\d+)"/g, (match, version: string) =>
+  let out = code.replace(/VERSION:"(\d+\.\d+\.\d+)"/g, (match, version: string) =>
     compareVersions(version, CLAUDE_CODE_REPORTED_VERSION) < 0
       ? `VERSION:"${CLAUDE_CODE_REPORTED_VERSION}"`
       : match,
   );
+  for (const [from, to] of CAPABILITY_PATCHES) {
+    if (out.includes(from)) out = out.split(from).join(to);
+  }
+  return out;
 }
 
 /** Package spec to hand to `npm install -g`. */
