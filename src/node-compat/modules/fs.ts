@@ -365,6 +365,24 @@ export function createFsModule(deps: FsDeps): any {
     },
     chmodSync: () => {},
     chownSync: () => {},
+    fstatSync: (fd: number) => {
+      if (fd === 0 || fd === 1 || fd === 2) {
+        // stdio is the terminal: a character device, like a TTY
+        const now = new Date();
+        return { isFile: () => false, isDirectory: () => false, isSymbolicLink: () => false,
+          isCharacterDevice: () => true, isBlockDevice: () => false, isFIFO: () => false, isSocket: () => false,
+          size: 0, mode: 0o20620, mtime: now, ctime: now, atime: now, birthtime: now,
+          mtimeMs: now.getTime(), ctimeMs: now.getTime(), atimeMs: now.getTime(), birthtimeMs: now.getTime(),
+          dev: 0, ino: 0, nlink: 1, uid: 1000, gid: 1000, rdev: 0, blksize: 4096, blocks: 0 };
+      }
+      const entry = (globalThis as any).__shiroFds?.[fd];
+      if (!entry) {
+        const err: any = new Error(`EBADF: bad file descriptor, fstat`);
+        err.code = 'EBADF'; err.errno = -9; err.syscall = 'fstat';
+        throw err;
+      }
+      return fsShim.statSync(entry.path);
+    },
     // File descriptor based sync operations (minimal stubs for CLI compatibility)
     openSync: (p: string, flags?: string | number) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
@@ -801,7 +819,12 @@ export function createFsModule(deps: FsDeps): any {
     },
     utimes: (_p: string, _a: any, _m: any, cb?: any) => { cb?.(null); },
     futimes: (_fd: number, _a: any, _m: any, cb?: any) => { cb?.(null); },
-    fstat: (_fd: number, cb?: any) => { cb?.(null, { isFile: () => true, isDirectory: () => false, size: 0, mtime: new Date() }); },
+    fstat: (fd: number, optsOrCb?: any, cb?: any) => {
+      const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
+      let st: any;
+      try { st = fsShim.fstatSync(fd); } catch (e) { callback?.(e); return; }
+      callback?.(null, st);
+    },
     fsync: (_fd: number, cb?: any) => { cb?.(null); },
     fdatasync: (_fd: number, cb?: any) => { cb?.(null); },
     fchmod: (_fd: number, _m: any, cb?: any) => { cb?.(null); },
