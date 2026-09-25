@@ -52,9 +52,12 @@ let mainLeaf: Leaf;
 let makeShell: () => Shell;
 
 const CSS = `
-#shiro-panes { flex: 1; min-width: 0; min-height: 0; display: flex;
-  height: calc(100% - clamp(0px, calc(100vh - 20em), 1em)); }
-#shiro-panes #terminal { height: auto; }
+/* The wrapper takes no box of its own: its child sits directly in #shiro-layout,
+   so page scripts that size things beside the terminal (strudelish's divider sets
+   percentages of the layout width) measure against the same box. */
+#shiro-panes { display: contents; }
+#shiro-panes > * { min-width: 0; min-height: 0; height: calc(100% - clamp(0px, calc(100vh - 20em), 1em)); }
+.shiro-split > #terminal { height: auto; }
 .shiro-split { display: flex; min-width: 0; min-height: 0; }
 .shiro-split.row { flex-direction: row; }
 .shiro-split.column { flex-direction: column; }
