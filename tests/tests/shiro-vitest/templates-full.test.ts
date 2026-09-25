@@ -14,6 +14,13 @@ import { categories, type Template } from '@shiro/template-palette';
 import { livingTemplates } from '@shiro/living-templates';
 import type { LivingTemplate } from '@shiro/template-runner';
 import { createTestShell, run } from './helpers';
+
+/** Look templates up by name: positions shift whenever a template is added. */
+function tpl(name: string): Template {
+  const t = categories.flatMap((c) => c.templates).find((x) => x.name === name);
+  if (!t) throw new Error(`no template named ${name}`);
+  return t;
+}
 import { Shell } from '@shiro/shell';
 import { FileSystem } from '@shiro/filesystem';
 import { serveCmd, serversCmd } from '@shiro/commands/serve';
@@ -63,9 +70,19 @@ describe('Classic Templates: Full Execution with Serve', () => {
 
   /** Filter out lines that start with unavailable commands */
   function filterCmd(cmd: string): string {
-    return cmd.split('\n')
-      .filter(l => !unavailable.some(c => l.trim().startsWith(c)))
-      .join('\n');
+    const out: string[] = [];
+    let skipUntil: string | null = null; // heredoc terminator of a dropped line
+    for (const l of cmd.split('\n')) {
+      if (skipUntil !== null) { if (l.trim() === skipUntil) skipUntil = null; continue; }
+      // any command in the line (after &&, ||, ;, |), not just the first
+      if (l.split(/&&|\|\||;|\|/).some(seg => unavailable.some(c => seg.trim().startsWith(c)))) {
+        const heredoc = l.match(/<<-?\s*['"]?(\w+)['"]?/);
+        if (heredoc) skipUntil = heredoc[1]; // drop its body too, or the body runs as commands
+        continue;
+      }
+      out.push(l);
+    }
+    return out.join('\n');
   }
 
   for (const t of allClassic) {
@@ -80,13 +97,13 @@ describe('Classic Templates: Full Execution with Serve', () => {
   // ── Web templates: serve registers ports ──
 
   it('HTML Page: serve registers port 3000', async () => {
-    const cmd = filterCmd(categories[0].templates[0].cmd);
+    const cmd = filterCmd(tpl('HTML Page').cmd);
     await run(shell, cmd);
     expect(iframeServer.isPortInUse(3000)).toBe(true);
   });
 
   it('HTML Page: iframeServer.fetch returns HTML with correct content', async () => {
-    const cmd = filterCmd(categories[0].templates[0].cmd);
+    const cmd = filterCmd(tpl('HTML Page').cmd);
     await run(shell, cmd);
     const resp = await iframeServer.fetch(3000, '/');
     expect(resp.status).toBe(200);
@@ -97,13 +114,13 @@ describe('Classic Templates: Full Execution with Serve', () => {
   });
 
   it('React App: serve registers port 3002', async () => {
-    const cmd = filterCmd(categories[0].templates[2].cmd);
+    const cmd = filterCmd(tpl('React App').cmd);
     await run(shell, cmd);
     expect(iframeServer.isPortInUse(3002)).toBe(true);
   });
 
   it('React App: fetched HTML loads React from CDN', async () => {
-    const cmd = filterCmd(categories[0].templates[2].cmd);
+    const cmd = filterCmd(tpl('React App').cmd);
     await run(shell, cmd);
     const resp = await iframeServer.fetch(3002, '/');
     const body = typeof resp.body === 'string' ? resp.body : new TextDecoder().decode(resp.body as Uint8Array);
@@ -113,13 +130,13 @@ describe('Classic Templates: Full Execution with Serve', () => {
   });
 
   it('React + Routing: serve registers port 3003', async () => {
-    const cmd = filterCmd(categories[0].templates[3].cmd);
+    const cmd = filterCmd(tpl('React + Routing').cmd);
     await run(shell, cmd);
     expect(iframeServer.isPortInUse(3003)).toBe(true);
   });
 
   it('React + Routing: fetched HTML has hash-based routing', async () => {
-    const cmd = filterCmd(categories[0].templates[3].cmd);
+    const cmd = filterCmd(tpl('React + Routing').cmd);
     await run(shell, cmd);
     const resp = await iframeServer.fetch(3003, '/');
     const body = typeof resp.body === 'string' ? resp.body : new TextDecoder().decode(resp.body as Uint8Array);
@@ -131,7 +148,7 @@ describe('Classic Templates: Full Execution with Serve', () => {
   // ── Node.js template: creates Express server file ──
 
   it('Node.js Server: creates server.js with Express routes', async () => {
-    const cmd = filterCmd(categories[0].templates[1].cmd);
+    const cmd = filterCmd(tpl('Node.js Server').cmd);
     await run(shell, cmd);
     const serverJs = await fs.readFile('/tmp/myapi/server.js', 'utf8') as string;
     expect(serverJs).toContain("require('express')");
@@ -142,7 +159,7 @@ describe('Classic Templates: Full Execution with Serve', () => {
   });
 
   it('Node.js Server: creates index.html with API dashboard', async () => {
-    const cmd = filterCmd(categories[0].templates[1].cmd);
+    const cmd = filterCmd(tpl('Node.js Server').cmd);
     await run(shell, cmd);
     const html = await fs.readFile('/tmp/myapi/index.html', 'utf8') as string;
     expect(html).toContain('API Dashboard');
@@ -155,7 +172,7 @@ describe('Classic Templates: Full Execution with Serve', () => {
   // ── Language templates: file content validation ──
 
   it('Python: lesson.py has all educational sections', async () => {
-    const cmd = filterCmd(categories[1].templates[0].cmd);
+    const cmd = filterCmd(tpl('Python').cmd);
     await run(shell, cmd);
     const content = await fs.readFile('/tmp/lesson.py', 'utf8') as string;
     expect(content).toContain('import math');
@@ -167,7 +184,7 @@ describe('Classic Templates: Full Execution with Serve', () => {
   });
 
   it('TypeScript: app.ts has types and generics', async () => {
-    const cmd = filterCmd(categories[1].templates[1].cmd);
+    const cmd = filterCmd(tpl('TypeScript').cmd);
     await run(shell, cmd);
     const content = await fs.readFile('/tmp/myts/app.ts', 'utf8') as string;
     expect(content).toContain('interface Person');
@@ -178,7 +195,7 @@ describe('Classic Templates: Full Execution with Serve', () => {
   });
 
   it('C Program: hello.c has struct, pointer, and array', async () => {
-    const cmd = filterCmd(categories[1].templates[2].cmd);
+    const cmd = filterCmd(tpl('C Program').cmd);
     await run(shell, cmd);
     const content = await fs.readFile('/tmp/hello.c', 'utf8') as string;
     expect(content).toContain('#include <stdio.h>');
@@ -192,7 +209,7 @@ describe('Classic Templates: Full Execution with Serve', () => {
   // ── Tool templates: file content validation ──
 
   it('SQLite: setup.sql has CREATE, INSERT, SELECT, GROUP BY', async () => {
-    const cmd = filterCmd(categories[2].templates[0].cmd);
+    const cmd = filterCmd(tpl('SQLite Database').cmd);
     await run(shell, cmd);
     const content = await fs.readFile('/tmp/setup.sql', 'utf8') as string;
     expect(content).toContain('CREATE TABLE');
@@ -203,7 +220,7 @@ describe('Classic Templates: Full Execution with Serve', () => {
   });
 
   it('Shell Tutorial: creates CSV and runs full pipeline', async () => {
-    const { output } = await run(shell, categories[2].templates[1].cmd);
+    const { output } = await run(shell, tpl('Shell Tutorial').cmd);
     // File created
     const csv = await fs.readFile('/tmp/tutorial/people.csv', 'utf8') as string;
     expect(csv).toContain('Alice,25,Engineer');
@@ -227,7 +244,8 @@ describe('Classic Templates: Full Execution with Serve', () => {
       const cmd = filterCmd(t.cmd);
       const { output } = await run(shell, cmd);
       // Should contain the ANSI-formatted lesson banner
-      expect(output, `${t.name}: missing banner`).toContain('--- Lesson');
+      // Each template opens with a "--- Title ---" banner line
+      expect(output.replace(/\x1b\[[0-9;]*m/g, ''), `${t.name}: missing banner`).toMatch(/--- .+/);
     }
   });
 
@@ -242,7 +260,7 @@ describe('Classic Templates: Full Execution with Serve', () => {
   // ── serve list/stop integration ──
 
   it('serve list shows registered servers', async () => {
-    const cmd = filterCmd(categories[0].templates[0].cmd);
+    const cmd = filterCmd(tpl('HTML Page').cmd);
     await run(shell, cmd);
     const { output } = await run(shell, 'serve list');
     expect(output).toContain(':3000');
@@ -250,7 +268,7 @@ describe('Classic Templates: Full Execution with Serve', () => {
   });
 
   it('serve stop unregisters port', async () => {
-    const cmd = filterCmd(categories[0].templates[0].cmd);
+    const cmd = filterCmd(tpl('HTML Page').cmd);
     await run(shell, cmd);
     expect(iframeServer.isPortInUse(3000)).toBe(true);
     await run(shell, 'serve stop 3000');
@@ -258,7 +276,7 @@ describe('Classic Templates: Full Execution with Serve', () => {
   });
 
   it('serve fetch returns 200 from virtual server', async () => {
-    const cmd = filterCmd(categories[0].templates[0].cmd);
+    const cmd = filterCmd(tpl('HTML Page').cmd);
     await run(shell, cmd);
     const { output } = await run(shell, 'serve fetch 3000 /');
     expect(output).toContain('Status: 200');
@@ -836,8 +854,8 @@ describe('Classic Templates: Sequential Serve', () => {
 
     // All web template ports should be registered
     for (const t of webTemplates) {
-      if (t.name !== 'Node.js Server') {
-        // Node.js server uses node (can't run in test), but others use serve
+      if (!/^\s*node /m.test(t.cmd)) {
+        // Templates served by a node script (Node.js Server, Full-Stack API) can't run in tests; the rest use serve
         expect(iframeServer.isPortInUse(t.splitPort!),
           `${t.name}: port ${t.splitPort} not registered`).toBe(true);
       }
@@ -845,7 +863,7 @@ describe('Classic Templates: Sequential Serve', () => {
   });
 
   it('serve stop frees port for reuse', async () => {
-    const htmlTemplate = categories[0].templates[0];
+    const htmlTemplate = tpl('HTML Page');
     const cmd = htmlTemplate.cmd.split('\n')
       .filter(l => !['node '].some(c => l.trim().startsWith(c)))
       .join('\n');

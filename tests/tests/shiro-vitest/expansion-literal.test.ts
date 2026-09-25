@@ -41,4 +41,22 @@ describe('expansion results are data, not syntax', () => {
     expect(r).toContain('content: "hello file"');
     expect(r).toContain('tree: [{"path":"a.js","mode":"100644"}]');
   });
+
+  it('leaves single-quoted and escaped substitutions alone', async () => {
+    expect(await out(`echo '$(echo no)' "$(echo yes)"`)).toBe('$(echo no) yes\n');
+    expect(await out("echo '`echo no`'")).toBe('`echo no`\n');
+    expect(await out('echo \\$(echo no)')).toBe('$(echo no)\n');
+    expect(await out('echo "a \\`x\\` b"')).toBe('a `x` b\n');
+  });
+
+  it('time/env/exec re-run the parsed command without re-splitting it', async () => {
+    const t = await out(`time echo "a;b"`);
+    expect(t.startsWith('a;b\n')).toBe(true);
+    expect(await out(`env echo "it's; fine"`)).toBe("it's; fine\n");
+  });
+
+  it('handles nested quotes inside $(...) inside double quotes', async () => {
+    expect(await out('R=r/x; echo "1 $(echo -f content="$(cat /tmp/j.json)" -X $R)"'))
+      .toBe('1 -f content=[{"path":"a.js","mode":"100644"}] -X r/x\n');
+  });
 });

@@ -87,6 +87,11 @@ export function restoreExpansion(text: string): string {
   return /[\uE000-\uE004]/.test(text) ? text.replace(/[\uE000-\uE004]/g, (c) => EXPANSION_RESTORE[c]) : text;
 }
 
+/** Re-quote already-parsed args so a command can be run again verbatim (time, env, exec, aliases). */
+export function quoteArgsForShell(args: string[]): string {
+  return args.map((a) => (/^[A-Za-z0-9_\-.,/:=@%+]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)).join(' ');
+}
+
 export class Shell {
   fs: FileSystem;
   cwd: string = '/home/user';
@@ -543,7 +548,8 @@ export class Shell {
           const cIdx = cmdArgs.findIndex(a => /^-\w*c$/.test(a));
           if (cIdx >= 0 && cIdx + 1 < cmdArgs.length) {
             // /bin/sh -c "command" → execute command
-            const shellCmd = cmdArgs.slice(cIdx + 1).join(' ');
+            // `sh -c CMD [NAME ARGS...]`: only CMD is the command string
+            const shellCmd = cmdArgs[cIdx + 1];
             exitCode = await this.execute(shellCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
           } else {
             // /bin/sh script.sh or /bin/sh (no args)
@@ -571,7 +577,7 @@ export class Shell {
         // Handle /usr/bin/env CMD ARGS → execute CMD ARGS
         if (cmdName === '/usr/bin/env' || cmdName === '/bin/env') {
           if (cmdArgs.length > 0) {
-            const envCmd = cmdArgs.join(' ');
+            const envCmd = quoteArgsForShell(cmdArgs);
             exitCode = await this.execute(envCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
           } else {
             // bare env → print environment
@@ -586,7 +592,7 @@ export class Shell {
         // Alias expansion: if cmdName matches an alias, replace it
         if (this.aliases.has(cmdName)) {
           const aliasValue = this.aliases.get(cmdName)!;
-          const fullCmd = aliasValue + (cmdArgs.length > 0 ? ' ' + cmdArgs.join(' ') : '');
+          const fullCmd = aliasValue + (cmdArgs.length > 0 ? ' ' + quoteArgsForShell(cmdArgs) : '');
           exitCode = await this.execute(fullCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
@@ -692,7 +698,8 @@ export class Shell {
 
         // Shell builtin: time — measure command execution time
         if (!_builtinDisabled && effectiveCmdName === 'time') {
-          const timeCmd = cmdArgs.join(' ');
+          // Args are already parsed and expanded; quote them so re-running doesn't re-split `;` or quotes
+          const timeCmd = quoteArgsForShell(cmdArgs);
           const start = performance.now();
           if (timeCmd) {
             exitCode = await this.execute(timeCmd, writeStdout, stderrWriter);
@@ -1705,7 +1712,7 @@ export class Shell {
             }
           }
           if (cmdArgs.length > 0) {
-            const execCmd = cmdArgs.join(' ');
+            const execCmd = quoteArgsForShell(cmdArgs);
             exitCode = await this.execute(execCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
           }
           this.lastExitCode = exitCode;
@@ -1717,7 +1724,7 @@ export class Shell {
         // Shell builtin: builtin — run builtin ignoring functions
         if (!_builtinDisabled && effectiveCmdName === 'builtin') {
           if (cmdArgs.length > 0) {
-            const builtinCmd = cmdArgs.join(' ');
+            const builtinCmd = quoteArgsForShell(cmdArgs);
             // Temporarily remove function override
             const savedFn = this.functions[cmdArgs[0]];
             delete this.functions[cmdArgs[0]];
@@ -3496,7 +3503,15 @@ export class Shell {
   private async expandCommandSubstitution(input: string, stderrWriter: (s: string) => void): Promise<string> {
     const result: string[] = [];
     let i = 0;
+    // Quote context of the text around substitutions: nothing expands inside
+    // single quotes, and a backslash escapes a following ` or $ (\` is a literal backtick)
+    let outerSQ = false, outerDQ = false;
     while (i < input.length) {
+      const oc = input[i];
+      if (oc === "'" && !outerDQ) { outerSQ = !outerSQ; result.push(oc); i++; continue; }
+      if (outerSQ) { result.push(oc); i++; continue; }
+      if (oc === '"') { outerDQ = !outerDQ; result.push(oc); i++; continue; }
+      if (oc === '\\' && i + 1 < input.length) { result.push(oc + input[i + 1]); i += 2; continue; }
       if (input[i] === '$' && input[i + 1] === '(' && input[i + 2] === '(') {
         // Skip arithmetic expansion $((…)) — handled by expandArithmetic
         result.push(input[i]);
