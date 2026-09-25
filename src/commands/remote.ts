@@ -636,15 +636,26 @@ async function pollForAnswer(session: RemoteSession) {
   const maxAttempts = 60; // 5 minutes at 5-second intervals
   let attempts = 0;
 
+  // The signaling server forgets offers after 5 minutes or on a restart; a
+  // session still waiting for a peer registers again under the same code so the
+  // code the user shared keeps working until `remote stop`.
+  const renew = (why: string) => {
+    if (window.__shiroRemoteSession !== session) return;
+    console.log(`[remote] ${why}; registering the code again`);
+    const { code, panel, shadowShell, panelOpen, activityBuffer } = session;
+    session.panel = null; // keep the panel across the re-registration
+    cleanupSession(true);
+    startRemoteWithCode(code, undefined, panel, shadowShell, panelOpen, activityBuffer);
+  };
+
   const poll = async () => {
-    if (!window.__shiroRemoteSession || session.status === 'connected') {
+    if (window.__shiroRemoteSession !== session || session.status === 'connected') {
       return;
     }
 
     attempts++;
     if (attempts > maxAttempts) {
-      console.log('[remote] Session timed out');
-      cleanupSession();
+      renew('Offer expired');
       return;
     }
 
@@ -653,9 +664,7 @@ async function pollForAnswer(session: RemoteSession) {
       if (res.ok) {
         const data = await res.json();
         if (data.expired) {
-          // Offer expired on signaling server - stop polling
-          console.log('[remote] Session expired on signaling server');
-          cleanupSession();
+          renew('Signaling server forgot the offer');
           return;
         } else if (data.waiting) {
           // No answer yet, continue polling
@@ -673,9 +682,7 @@ async function pollForAnswer(session: RemoteSession) {
           return;
         }
       } else if (res.status === 404) {
-        // Code no longer exists on signaling server - stop polling
-        console.log('[remote] Session no longer valid (404), stopping poll');
-        cleanupSession();
+        renew('Offer not found on signaling server');
         return;
       }
     } catch {
