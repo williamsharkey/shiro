@@ -123,6 +123,7 @@ function install(): void {
   });
   window.addEventListener('unhandledrejection', (event) => {
     const r = event.reason;
+    if (r?.name === 'ProcessExitError' || /^process\.exit\(\d*\)$/.test(r?.message || '')) return;
     record('error', `Unhandled rejection: ${r?.stack || r?.message || stringify(r)}`);
   });
 
