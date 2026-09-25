@@ -716,6 +716,23 @@ export class FileSystem {
   }
 
   /**
+   * writeFile() whose effect on the in-memory cache is immediate, for synchronous
+   * callers (node's fs.writeFileSync of binary data) that read the file right back.
+   */
+  writeNow(path: string, content: Uint8Array): Promise<void> {
+    if (this.cacheEnabled) {
+      const prev = this.cache.get(path);
+      const now = Date.now();
+      this.cache.set(path, {
+        path, type: 'file', content,
+        mode: prev?.mode ?? 0o644, mtime: now, ctime: prev?.ctime ?? now, size: content.length,
+      } as FSNode);
+      this._allKeysCache = null;
+    }
+    return this.writeFile(path, content);
+  }
+
+  /**
    * unlink() whose effect on the in-memory cache is immediate, for synchronous
    * callers (node's fs.unlinkSync) that list or stat the directory right after.
    */
