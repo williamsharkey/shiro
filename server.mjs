@@ -189,15 +189,42 @@ async function handleProxy(req, res, pathAfterApi) {
     res.writeHead(upstream.status, respHeaders);
     if (upstream.body) {
       const reader = upstream.body.getReader();
+      // For model streams, note how each one ends: an `event: error` from the API
+      // (overloaded, etc.), an upstream read failure, or the browser going away.
+      const isStream = callInfo && (upstream.headers.get('content-type') || '').includes('text/event-stream');
+      let bytes = 0, sawStop = false, apiError = '';
+      let clientGone = false;
+      res.on('close', () => {
+        if (!res.writableFinished) clientGone = true;
+        // A non-streaming reply only arrives when complete; say whether it reached the browser
+        if (callInfo && !isStream) console.log(`[proxy] reply ${res.writableFinished ? 'delivered' : 'NOT delivered (browser went away)'}: ${bytes} bytes, ${Date.now() - t0}ms`);
+      });
       const pump = async () => {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
+          bytes += value.length;
+          if (isStream) {
+            const text = Buffer.from(value).toString();
+            if (text.includes('message_stop')) sawStop = true;
+            const m = text.match(/event: error\ndata: (.*)/);
+            if (m) apiError = m[1].slice(0, 300);
+          }
+          if (clientGone) { reader.cancel().catch(() => {}); break; }
           res.write(value);
         }
         res.end();
       };
-      pump().catch(() => res.end());
+      pump().then(() => {
+        if (isStream && (!sawStop || apiError || clientGone)) {
+          console.log(`[proxy] stream ended early: ${bytes} bytes in ${Date.now() - t0}ms` +
+            `${apiError ? ` api error: ${apiError}` : ''}${clientGone ? ' (browser closed it)' : ''}` +
+            `${!sawStop && !apiError && !clientGone ? ' (no message_stop from upstream)' : ''}`);
+        }
+      }, (err) => {
+        if (isStream) console.log(`[proxy] stream read failed after ${bytes} bytes in ${Date.now() - t0}ms: ${err?.message || err} ${err?.cause?.code || ''}`);
+        res.end();
+      });
     } else {
       res.end();
     }
