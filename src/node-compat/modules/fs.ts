@@ -273,7 +273,9 @@ export function createFsModule(deps: FsDeps): any {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       fileCache.delete(resolved);
       fileMtimes.delete(resolved);
-      pendingPromises.push(ctx.fs.unlink(resolved).catch(() => {}));
+      // readdirSync/existsSync also consult the filesystem's cache; drop it there now,
+      // not when the async delete lands, or the file keeps being listed
+      pendingPromises.push(ctx.fs.unlinkNow(resolved).catch(() => {}));
     },
     // No hard links in Shiro's filesystem: link() copies, which is what callers
     // (atomic-write helpers, lockfiles) need from it

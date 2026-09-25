@@ -494,8 +494,9 @@ export class FileSystem {
     if (!node || node.type !== 'dir') return undefined;
     const prefix = path === '/' ? '/' : path + '/';
     const entries = new Set<string>();
-    for (const key of this.cache.keys()) {
-      if (key.startsWith(prefix)) {
+    for (const [key, value] of this.cache) {
+      // A cached miss (value undefined) records that a path doesn't exist
+      if (value !== undefined && key.startsWith(prefix)) {
         const rest = key.slice(prefix.length);
         const first = rest.split('/')[0];
         if (first) entries.add(first);
@@ -712,6 +713,19 @@ export class FileSystem {
     }
 
     return entries.sort();
+  }
+
+  /**
+   * unlink() whose effect on the in-memory cache is immediate, for synchronous
+   * callers (node's fs.unlinkSync) that list or stat the directory right after.
+   */
+  unlinkNow(path: string): Promise<void> {
+    const done = this.unlink(path); // reads the cached node before it is dropped below
+    if (this.cacheEnabled) {
+      this.cache.set(path, undefined);
+      this._allKeysCache = null;
+    }
+    return done;
   }
 
   async unlink(path: string): Promise<void> {
