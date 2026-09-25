@@ -117,7 +117,7 @@ Use focused vitest runs while iterating, then run the smallest meaningful verifi
 - `tests/tests/shiro-vitest/new-features.test.ts`
 - `tests/tests/shiro-vitest/server-cors.test.ts`
 
-Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` handles build, upload, and restart, and it is the only place that should bump `build-number.txt`. `deploy.sh` uploads only `server.mjs`; the host's own `/opt/shiro/package.json` holds its deps (`ws`, and `undici` so proxied model calls have no 5-minute header timeout). Each model call logs one `[proxy] messages model=… stream=… bytes=… → status headers in Nms` line (`journalctl -u shiro`).
+Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` handles build, upload, and restart, and it is the only place that should bump `build-number.txt`. nginx on the host sets `client_max_body_size 100m` (`/etc/nginx/sites-enabled/shiro`): the 1 MB default rejected long Claude conversations and GitHub blob uploads with 413. `deploy.sh` uploads only `server.mjs`; the host's own `/opt/shiro/package.json` holds its deps (`ws`, and `undici` so proxied model calls have no 5-minute header timeout). Each model call logs one `[proxy] messages model=… stream=… bytes=… → status headers in Nms` line (`journalctl -u shiro`).
 
 ## Gotchas
 
@@ -125,6 +125,7 @@ Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` ha
 - Most filesystem work is async under the hood even when sync APIs are emulated.
 - Background-task-heavy or highly concurrent agent flows can stall in the browser runtime.
 - `seed` and `seed blob` are not equivalent. Preserve their runtime-context differences.
+- Expansion results are data: `$VAR`, `${NAME}`, `$1`–`$9`, and `$(...)`/backtick output have their quotes, `\`, `$`, and backticks swapped for private-use stand-ins (`protectExpansion` in `shell.ts`) before the command text is tokenized, and swapped back when `parseSegment` finalizes args, redirect targets, and here-strings (`restoreExpansion`). Without this, JSON in variables lost its quotes and `$(echo '$HOME')` expanded. `"$@"` is left alone (it relies on embedded quotes).
 - A loop, `if`, `case`, or subshell can head a pipeline (`for …; done | tail -1`): `splitTopLevelPipes` finds the pipe after the closing keyword and `runHeadedPipeline` feeds the head's output to the rest. Redirections after `done`/`fi`/`esac` (`< in`, `> out`, `2>&1`) are applied by `splitCompoundRedirects`. `printf` (except `-v`) is the regular command, so redirects and pipes apply; `ctx.stdoutIsTTY` is false for piped/redirected commands (`ls` then prints one name per line).
 - Node scripts end like node on an empty event loop: after the synchronous part, the runner waits until nothing tracked is in flight (`fetch`, `fs.promises`, timers; see `node-compat/activity.ts`) and output has been quiet for 60–150 ms, with the old 10 s ceiling as a fallback. Missing Node APIs come from `auto-stub.ts`, which logs `[AutoStub] called missing …` the first time; a stubbed callback API never calls back, so check the console for these when something hangs.
 - `require('sharp')` is a browser-backed implementation (`shims/browser-sharp.ts`: createImageBitmap + canvas, real metadata/resize/JPEG/PNG/WebP). Claude Code's image loader is patched to use it; its bundled native/sharp path stalled image Reads.
