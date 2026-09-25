@@ -34,8 +34,23 @@ export async function ghApiHandler(ctx: CommandContext, token: string): Promise<
         const key = kv.slice(0, eq);
         const val = kv.slice(eq + 1);
         if (fieldArgs[i - 1] === '-F') {
-          // -F: try to parse as JSON
-          try { body[key] = JSON.parse(val); } catch { body[key] = val; }
+          // -F is gh's typed field: @file reads a file (@- is stdin), true/false/null
+          // and numbers become JSON values, and (a Shiro extra) JSON arrays/objects parse
+          if (val.startsWith('@')) {
+            const src = val.slice(1);
+            if (src === '-') body[key] = ctx.stdin;
+            else {
+              try {
+                const data = await ctx.fs.readFile(ctx.fs.resolvePath(src, ctx.cwd), 'utf8');
+                body[key] = typeof data === 'string' ? data : new TextDecoder().decode(data);
+              } catch {
+                ctx.stderr = `open ${src}: no such file or directory\n`;
+                return 1;
+              }
+            }
+          } else {
+            try { body[key] = JSON.parse(val); } catch { body[key] = val; }
+          }
         } else {
           body[key] = val;
         }

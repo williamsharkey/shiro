@@ -275,6 +275,17 @@ export function createFsModule(deps: FsDeps): any {
       fileMtimes.delete(resolved);
       pendingPromises.push(ctx.fs.unlink(resolved).catch(() => {}));
     },
+    // No hard links in Shiro's filesystem: link() copies, which is what callers
+    // (atomic-write helpers, lockfiles) need from it
+    linkSync: (src: string, dst: string) => {
+      const resolvedDst = ctx.fs.resolvePath(dst, ctx.cwd);
+      if (fileCache.has(resolvedDst) || ctx.fs.readBytesCached(resolvedDst) !== undefined) {
+        const err: any = new Error(`EEXIST: file already exists, link '${src}' -> '${dst}'`);
+        err.code = 'EEXIST'; err.errno = -17; err.syscall = 'link';
+        throw err;
+      }
+      fsShim.copyFileSync(src, dst);
+    },
     copyFileSync: (src: string, dst: string) => {
       const srcRes = ctx.fs.resolvePath(src, ctx.cwd);
       const dstRes = ctx.fs.resolvePath(dst, ctx.cwd);
@@ -712,11 +723,6 @@ export function createFsModule(deps: FsDeps): any {
     },
     chmod: (_p: string, _m: any, cb?: any) => { cb?.(null); },
     chown: (_p: string, _u: any, _g: any, cb?: any) => { cb?.(null); },
-    link: (src: string, dst: string, cb?: any) => {
-      ctx.fs.symlink(ctx.fs.resolvePath(src, ctx.cwd), ctx.fs.resolvePath(dst, ctx.cwd))
-        .then(() => cb?.(null))
-        .catch((e: any) => cb?.(e));
-    },
     symlink: (target: string, path: string, typeOrCb?: any, cb?: any) => {
       const callback = typeof typeOrCb === 'function' ? typeOrCb : cb;
       ctx.fs.symlink(ctx.fs.resolvePath(target, ctx.cwd), ctx.fs.resolvePath(path, ctx.cwd))
@@ -795,6 +801,9 @@ export function createFsModule(deps: FsDeps): any {
         pendingPromises.push(ctx.fs.writeFile(fdInfo.path, newContent).catch(() => {}));
       }
       cb?.(null, len, buf);
+    },
+    link: (src: string, dst: string, cb?: any) => {
+      try { fsShim.linkSync(src, dst); cb?.(null); } catch (e) { cb?.(e); }
     },
     copyFile: (src: string, dst: string, flagsOrCb?: any, cb?: any) => {
       const callback = typeof flagsOrCb === 'function' ? flagsOrCb : cb;
@@ -885,6 +894,7 @@ export function createFsModule(deps: FsDeps): any {
     },
     // Async promises API
     promises: {
+      link: async (src: string, dst: string) => { fsShim.linkSync(src, dst); },
       readFile: async (p: string | number, opts?: any) => {
         const resolved = typeof p === 'number'
           ? ((globalThis as any).__shiroFds?.[p]?.path || ctx.fs.resolvePath(String(p), ctx.cwd))
@@ -1173,6 +1183,16 @@ export function createFsPromisesModule(deps: FsDeps): any {
         fileMtimes.delete(oldRes);
       }
       await ctx.fs.rename(oldRes, newRes);
+    },
+    link: async (src: string, dst: string) => {
+      const exists = await ctx.fs.exists(ctx.fs.resolvePath(dst, ctx.cwd));
+      if (exists) {
+        const err: any = new Error(`EEXIST: file already exists, link '${src}' -> '${dst}'`);
+        err.code = 'EEXIST'; err.errno = -17; err.syscall = 'link';
+        throw err;
+      }
+      const data = await ctx.fs.readFile(ctx.fs.resolvePath(src, ctx.cwd));
+      await ctx.fs.writeFile(ctx.fs.resolvePath(dst, ctx.cwd), data);
     },
     copyFile: async (src: string, dst: string) => {
       const data = await ctx.fs.readFile(ctx.fs.resolvePath(src, ctx.cwd));

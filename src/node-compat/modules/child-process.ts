@@ -109,7 +109,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
   //   spawn('/bin/sh', ['-l'])                       → no-op (login shell init)
   //   spawn('/bin/sh', ['/tmp/claude-XXX-cwd'])      → source file as script
   //   exec('/bin/sh -l -c "echo hello"')             → extract 'echo hello'
-  const isShellBin = (s: string) => /^\/bin\/(?:sh|bash|zsh)$/.test(s);
+  const isShellBin = (s: string) => /^(?:\/(?:usr\/)?bin\/)?(?:sh|bash|zsh)$/.test(s);
   // Shell-quote a single argument: wrap in single quotes, escape internal single quotes
   const shellQuoteArg = (s: string): string => {
     if (/^[A-Za-z0-9_\-.,/:=@]+$/.test(s)) return s; // safe chars, no quoting needed

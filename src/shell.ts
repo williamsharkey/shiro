@@ -72,6 +72,21 @@ const LOOP_ITERATION_LIMIT = 10_000_000;
 /** Let the page paint and handle input during long shell loops */
 const yieldToEventLoop = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+/**
+ * Expansion results ($VAR, ${NAME}, $(cmd)) are data: bash never re-reads their
+ * quotes, backslashes, or $ as syntax. This shell expands into the command text
+ * and tokenizes afterwards, so those characters are swapped for private-use
+ * stand-ins on the way in and swapped back once words are final.
+ */
+const EXPANSION_PROTECT: Record<string, string> = { '"': '\uE000', "'": '\uE001', '\\': '\uE002', '$': '\uE003', '`': '\uE004' };
+const EXPANSION_RESTORE: Record<string, string> = Object.fromEntries(Object.entries(EXPANSION_PROTECT).map(([k, v]) => [v, k]));
+export function protectExpansion(value: string): string {
+  return /["'\\$`]/.test(value) ? value.replace(/["'\\$`]/g, (c) => EXPANSION_PROTECT[c]) : value;
+}
+export function restoreExpansion(text: string): string {
+  return /[\uE000-\uE004]/.test(text) ? text.replace(/[\uE000-\uE004]/g, (c) => EXPANSION_RESTORE[c]) : text;
+}
+
 export class Shell {
   fs: FileSystem;
   cwd: string = '/home/user';
@@ -2454,7 +2469,7 @@ export class Shell {
 
       // Expand $0-$9 (positional parameters)
       if (ch === '$' && line[i + 1] >= '0' && line[i + 1] <= '9') {
-        result += this.env[line[i + 1]] ?? '';
+        result += protectExpansion(this.env[line[i + 1]] ?? '');
         i += 2;
         continue;
       }
@@ -2479,7 +2494,7 @@ export class Shell {
           const inner = line.slice(i + 2, j); // content between ${ and }
           const expanded = this.expandParamExpression(inner);
           if (expanded !== null) {
-            result += expanded;
+            result += /^[A-Za-z_][A-Za-z0-9_]*$/.test(inner) ? protectExpansion(expanded) : expanded;
             i = j + 1;
             continue;
           }
@@ -2502,7 +2517,7 @@ export class Shell {
           if (varName === 'EPOCHREALTIME') { const now = Date.now(); result += `${Math.floor(now / 1000)}.${String(now % 1000).padStart(3, '0')}`; i += m[0].length; continue; }
           // Resolve namerefs: if varName is a nameref, follow it
           const resolved = this.namerefs.has(varName) ? this.namerefs.get(varName)! : varName;
-          result += this.env[resolved] ?? '';
+          result += protectExpansion(this.env[resolved] ?? '');
           i += m[0].length;
           continue;
         }
@@ -3259,7 +3274,11 @@ export class Shell {
       }
     }
 
-    return { args, redirects, hereString };
+    return {
+      args: args.map(restoreExpansion),
+      redirects: redirects.map((r) => ({ ...r, target: restoreExpansion(r.target) })),
+      hereString: hereString === undefined ? undefined : restoreExpansion(hereString),
+    };
   }
 
   private tokenize(input: string): string[] {
@@ -3519,9 +3538,10 @@ export class Shell {
         // If $() appears as the RHS of a variable assignment (VAR=$(...)), wrap the
         // output in double-quotes so tokenize() preserves spaces. This matches bash
         // semantics: VAR=$(cmd) preserves spaces, bare $(cmd) word-splits.
+        subOut = protectExpansion(subOut);
         const preceding = result.join('');
         if (/[A-Za-z_][A-Za-z0-9_]*=$/.test(preceding)) {
-          subOut = '"' + subOut.replace(/"/g, '\\"') + '"';
+          subOut = '"' + subOut + '"';
         }
         result.push(subOut);
         i = j;
@@ -3531,10 +3551,10 @@ export class Shell {
         const subCmd = input.slice(i + 1, j);
         const subResult = await this.exec(subCmd);
         if (subResult.stderr) stderrWriter(subResult.stderr);
-        let subOut = subResult.stdout.replace(/[\r\n]+$/, '');
+        let subOut = protectExpansion(subResult.stdout.replace(/[\r\n]+$/, ''));
         const preceding = result.join('');
         if (/[A-Za-z_][A-Za-z0-9_]*=$/.test(preceding)) {
-          subOut = '"' + subOut.replace(/"/g, '\\"') + '"';
+          subOut = '"' + subOut + '"';
         }
         result.push(subOut);
         i = j + 1;
