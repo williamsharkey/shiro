@@ -117,6 +117,8 @@ function install(): void {
     };
   }
   window.addEventListener('error', (event) => {
+    // A node script's process.exit() unwinding out of a callback, not a failure
+    if (event.error?.name === 'ProcessExitError' || /^process\.exit\(\d*\)$/.test(event.error?.message || '')) return;
     record('error', `Uncaught ${event.error?.stack || event.message} (${event.filename}:${event.lineno}:${event.colno})`);
   });
   window.addEventListener('unhandledrejection', (event) => {

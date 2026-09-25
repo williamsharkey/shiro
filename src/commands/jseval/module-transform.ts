@@ -853,7 +853,9 @@ export function transformESModules(src: string): string {
 
   // Dynamic import() → Promise.resolve(require()) - must be before other import transforms
   // Handles: await import("./path") or import("./path").then(...)
-  src = src.replace(/\bimport\s*\(\s*(['"`])([^'"`]+)\1\s*\)/g, 'Promise.resolve(require($1$2$1))');
+  // URLs (a CDN module) stay native import(): the browser loads them, require() can't
+  src = src.replace(/\bimport\s*\(\s*(['"`])([^'"`]+)\1\s*\)/g, (m, q, spec) =>
+    /^(?:https?|data|blob):/.test(spec) ? m : `Promise.resolve(require(${q}${spec}${q}))`);
 
   // import.meta → __import_meta (must be before import statement transforms)
   src = src.replace(/import\.meta/g, '__import_meta');

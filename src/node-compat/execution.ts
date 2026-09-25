@@ -255,6 +255,8 @@ export async function executeNodeScript(
 
     // Dynamic import() shim
     const dynamicImport = async (moduleName: string) => {
+      // A URL (CDN ES module) is loaded by the browser itself
+      if (/^(?:https?|data|blob):/.test(moduleName)) return import(/* @vite-ignore */ moduleName);
       try {
         return requireModule(moduleName, entryDirname);
       } catch (e: any) {
@@ -440,6 +442,10 @@ export async function executeNodeScript(
         const id = _baseST(() => {
           _timerIds.delete(id);
           try { if (typeof fn === 'function') fn(...args); }
+          catch (e) {
+            // process.exit() from a timer ends the script (already recorded); it isn't an error
+            if (!(e instanceof ProcessExitError)) throw e;
+          }
           finally {
             _activeTimers--;
             if (_activeTimers <= 0 && _timersResolve) { _timersResolve(); _timersResolve = null; _timersDone = null; }
