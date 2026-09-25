@@ -47,29 +47,33 @@ async function calculateSize(
   humanReadable: boolean
 ): Promise<number> {
   try {
-    const stat = await fs.stat(path);
+    const stat = await fs.lstat(path);
+    const isDir = typeof stat.isDirectory === 'function' ? stat.isDirectory() : stat.type === 'dir';
 
-    if (stat.type === "file") {
-      return stat.size;
+    if (!isDir) {
+      return stat.size || 0;
     }
 
-    if (stat.type === "dir" && depth < maxDepth) {
-      const entries = await fs.readdir(path);
+    if (depth < maxDepth) {
+      const entries: Array<string | { name: string }> = await fs.readdir(path);
       let totalSize = 0;
 
-      for (const entry of entries) {
-        const entryPath = path + "/" + entry.name;
+      for (const e of entries) {
+        const name = typeof e === 'string' ? e : e.name;
+        const entryPath = (path === '/' ? '' : path) + "/" + name;
+        let entryIsDir = false;
+        try { const st = await fs.lstat(entryPath); entryIsDir = typeof st.isDirectory === 'function' ? st.isDirectory() : st.type === 'dir'; } catch { /* vanished */ }
         const entrySize = await calculateSize(entryPath, fs, depth + 1, maxDepth, showAll, showSubdirs, output, humanReadable);
         totalSize += entrySize;
 
         // Show individual files if -a
-        if (showAll && entry.type === "file") {
+        if (showAll && !entryIsDir) {
           const sizeStr = humanReadable ? formatHuman(entrySize) : String(Math.ceil(entrySize / 1024));
           output.push(`${sizeStr}\t${entryPath}`);
         }
 
         // Show subdirectories if not summarizing
-        if (showSubdirs && entry.type === "dir" && depth + 1 < maxDepth) {
+        if (showSubdirs && entryIsDir && depth + 1 < maxDepth) {
           const sizeStr = humanReadable ? formatHuman(entrySize) : String(Math.ceil(entrySize / 1024));
           output.push(`${sizeStr}\t${entryPath}`);
         }

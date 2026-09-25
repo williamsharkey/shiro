@@ -609,10 +609,12 @@ export class ShiroTerminal {
       this.term.write(`\x1b[36m┌── \x1b[1;97m${hostDisplay}\x1b[0m\x1b[36m ${'─'.repeat(fill1)} ${linkS}\x1b[93m${code} \x1b[90m○\x1b[0m${E}\x1b[36m ${'─'.repeat(fill2)}┐\x1b[0m`);
     } else {
       const version = `v0.1.0 #${build}`;
-      const fixed = 4 + hostDisplay.length + 1 + 1 + version.length + 3;
+      const fixed = 4 + hostDisplay.length + 1 + 1 + version.length + 4; // same as drawHud
       const fill = Math.max(1, W - fixed);
       this.term.write(`\x1b[36m┌── \x1b[1;97m${hostDisplay}\x1b[0m\x1b[36m ${'─'.repeat(fill)} \x1b[95m${version}\x1b[0m\x1b[36m ──┐\x1b[0m`);
     }
+    // Nothing else shares the banner's row; clear what a wider earlier draw left behind
+    this.term.write('\x1b[K');
 
     this.term.write('\x1b8');
   }

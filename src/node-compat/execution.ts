@@ -36,6 +36,11 @@ import { createMiscModule } from './modules/misc';
 import { createAppShim } from './shims/app-shims';
 import { getShiroOrigin } from '../utils/shiro-origin';
 
+// The page's own fetch and timers, captured before any node script replaces them
+const PAGE_FETCH = globalThis.fetch.bind(globalThis);
+const PAGE_SET_TIMEOUT = globalThis.setTimeout.bind(globalThis) as typeof setTimeout;
+const PAGE_CLEAR_TIMEOUT = globalThis.clearTimeout.bind(globalThis) as typeof clearTimeout;
+
 /** Quiet time after which a finished async script exits */
 const IDLE_EXIT_MS = 150;
 /** ...and for a script that never started tracked async work */
@@ -70,11 +75,17 @@ export async function executeNodeScript(
     }
   };
 
-  // Save originals for CORS proxy interception
-  const _origFetch = globalThis.fetch;
+  // Wrappers call the page's own fetch/timers, not whatever script is installed
+  // on top: scripts overlap (autostart, Claude, its tool scripts), and chaining
+  // onto each other's wrappers doubled every request and timer for the whole
+  // session. What a script puts back on exit is still what it replaced.
+  const _origFetch = PAGE_FETCH;
+  const _restoreFetch = globalThis.fetch;
   const _origXHR = typeof XMLHttpRequest !== 'undefined' ? XMLHttpRequest : undefined;
   const _prevST = globalThis.setTimeout;
   const _prevCT = globalThis.clearTimeout;
+  const _baseST = PAGE_SET_TIMEOUT;
+  const _baseCT = PAGE_CLEAR_TIMEOUT;
 
   // Shared mutable state
   const _st: SharedState = {
@@ -94,7 +105,7 @@ export async function executeNodeScript(
   // script had installed since, e.g. Claude's Node-style setTimeout (".unref
   // is not a function") and its fetch routing.
   const restoreGlobals = (includeFetch: boolean) => {
-    if (includeFetch && _st.installedFetch && globalThis.fetch === _st.installedFetch) globalThis.fetch = _origFetch;
+    if (includeFetch && _st.installedFetch && globalThis.fetch === _st.installedFetch) globalThis.fetch = _restoreFetch;
     if (_st.installedSetTimeout && globalThis.setTimeout === _st.installedSetTimeout) globalThis.setTimeout = _prevST;
     if (_st.installedClearTimeout && globalThis.clearTimeout === _st.installedClearTimeout) globalThis.clearTimeout = _prevCT;
   };
@@ -426,7 +437,7 @@ export async function executeNodeScript(
       globalThis.setTimeout = _st.installedSetTimeout = function(fn: any, ms?: number, ...args: any[]) {
         _activeTimers++;
         if (!_timersDone) _timersDone = new Promise(r => { _timersResolve = r; });
-        const id = _prevST(() => {
+        const id = _baseST(() => {
           _timerIds.delete(id);
           try { if (typeof fn === 'function') fn(...args); }
           finally {
@@ -442,7 +453,7 @@ export async function executeNodeScript(
           _activeTimers--;
           if (_activeTimers <= 0 && _timersResolve) { _timersResolve(); _timersResolve = null; _timersDone = null; }
         }
-        _prevCT(id);
+        _baseCT(id);
       };
     }
 
@@ -497,7 +508,7 @@ export async function executeNodeScript(
     let timersOutlasted = false;
     if (_activeTimers > 0 && _timersDone && !_st.isInteractiveMode) {
       try {
-        await Promise.race([_timersDone, new Promise((_, rej) => _prevST(() => rej('timer-wait-timeout'), 5000))]);
+        await Promise.race([_timersDone, new Promise((_, rej) => _baseST(() => rej('timer-wait-timeout'), 5000))]);
       } catch { timersOutlasted = true; }
     }
 
@@ -510,7 +521,7 @@ export async function executeNodeScript(
     if (_st.isInteractiveMode || !(_st.exitCalled || scriptTimedOut)) {
       const DEFERRED_TIMEOUT = _st.isInteractiveMode ? 86400000 : code.length > 500000 ? 300000 : 10000;
       const deferredTimeout = new Promise<never>((_, reject) => {
-        _prevST(() => reject(new ProcessExitError(124)), DEFERRED_TIMEOUT); // untracked: not script activity
+        _baseST(() => reject(new ProcessExitError(124)), DEFERRED_TIMEOUT); // untracked: not script activity
       });
       let freshExitPromise = deferredExitPromise;
       if (_st.exitCalled && _st.isInteractiveMode) {
@@ -538,9 +549,9 @@ export async function executeNodeScript(
           // Only sync work so far: exit sooner; after async work, allow a longer lull
           const window = activity.last > runStart ? IDLE_EXIT_MS : IDLE_EXIT_SYNC_MS;
           if (now - quietSince >= window) resolve(_st.exitCode);
-          else _prevST(poll, 20);
+          else _baseST(poll, 20);
         };
-        _prevST(poll, 20);
+        _baseST(poll, 20);
       });
       try {
         const waitCode = await Promise.race([freshExitPromise, deferredTimeout, idleExit]);
