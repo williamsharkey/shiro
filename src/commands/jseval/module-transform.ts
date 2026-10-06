@@ -972,10 +972,19 @@ export function transformBundledESM(src: string): string {
   return src;
 }
 
+/** Transformed large bundles by source text: each `claude` launch (every pane)
+ *  loads the same 13 MB cli.js, and the transform takes about a second. */
+const bundleCache = new Map<string, string>();
+
 export function transformESModules(src: string): string {
   // Fast path for large bundled files (>500KB)
   if (src.length > 500000) {
-    return transformBundledESM(src);
+    const cached = bundleCache.get(src);
+    if (cached !== undefined) return cached;
+    const out = transformBundledESM(src);
+    if (bundleCache.size >= 2) bundleCache.delete(bundleCache.keys().next().value!);
+    bundleCache.set(src, out);
+    return out;
   }
 
   src = stripShebang(src);
