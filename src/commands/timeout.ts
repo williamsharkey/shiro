@@ -1,98 +1,91 @@
-
 import type { Command } from './index';
-import { parseArgs } from './flags';
+import { quoteArgsForShell } from '../shell';
+
+/**
+ * timeout [OPTION] DURATION COMMAND [ARG]...
+ * Runs COMMAND in a forked shell; if it is still running after DURATION it is
+ * aborted (loops and pipelines stop at their next check) and timeout exits 124.
+ */
 export const timeout: Command = {
   name: "timeout",
   description: "Run a command with a time limit",
   async exec(ctx) {
-    const args = ctx.args;
-    const { positional, flags, values } = parseArgs(args, ["k", "kill-after", "s", "signal"]);
-
-    if (positional.length === 0) {
-      ctx.stderr += "timeout: missing duration\n";
-      return 1;
+    // Options come before DURATION; everything after it belongs to COMMAND
+    let preserveStatus = false;
+    let verbose = false;
+    let signal = 'TERM';
+    let i = 0;
+    for (; i < ctx.args.length; i++) {
+      const a = ctx.args[i];
+      if (a === '--') { i++; break; }
+      if (!a.startsWith('-') || a === '-') break;
+      if (a === '--preserve-status') preserveStatus = true;
+      else if (a === '-v' || a === '--verbose') verbose = true;
+      else if (a === '--foreground') { /* no process groups here */ }
+      else if (a === '-s' || a === '--signal' || a === '-k' || a === '--kill-after') {
+        if (a === '-s' || a === '--signal') signal = ctx.args[i + 1] ?? signal;
+        i++;
+      } else if (/^--(signal|kill-after)=/.test(a) || /^-[sk]./.test(a)) {
+        if (/^(-s|--signal=)/.test(a)) signal = a.replace(/^(-s|--signal=)/, '');
+      } else {
+        ctx.stderr += `timeout: invalid option -- '${a}'\n`;
+        return 125;
+      }
     }
 
-    const durationStr = positional[0];
-    const command = positional.slice(1);
-
-    if (command.length === 0) {
-      ctx.stderr += "timeout: missing command\n";
-      return 1;
+    const durationStr = ctx.args[i];
+    const command = ctx.args.slice(i + 1);
+    if (durationStr === undefined) {
+      ctx.stderr += "timeout: missing operand\n";
+      return 125;
     }
-
-    // Parse duration
-    let duration = parseDuration(durationStr);
+    const duration = parseDuration(durationStr);
     if (duration === null) {
       ctx.stderr += `timeout: invalid time interval '${durationStr}'\n`;
-      return 1;
+      return 125;
+    }
+    if (command.length === 0) {
+      ctx.stderr += "timeout: missing operand\n";
+      return 125;
     }
 
-    const killAfter = values.k || values["kill-after"];
-    const signal = values.s || values.signal || "TERM";
-    const preserveStatus = flags["preserve-status"];
-    const foreground = flags.foreground;
-    const verbose = flags.v || flags.verbose;
+    const child = ctx.shell.fork();
+    if (ctx.terminal) child.setTerminal(ctx.terminal as any);
+    child.cwd = ctx.cwd;
+    let out = '';
+    let err = '';
+    const run = child.executeWithStdin(
+      quoteArgsForShell(command), ctx.stdin || '',
+      (s) => { out += s; }, (s) => { err += s; },
+    );
 
-    try {
-      // In browser environment, we can't actually execute commands with signals
-      // This is a simulation showing what would happen
-      const commandStr = command.join(" ");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = duration === 0 ? null : new Promise<'timeout'>((resolve) => {
+      timer = (globalThis as any).setTimeout(() => resolve('timeout'), duration * 1000);
+    });
+    const result = await (expired ? Promise.race([run, expired]) : run);
+    (globalThis as any).clearTimeout(timer);
 
-      if (verbose) {
-        ctx.stderr += `timeout: would run command '${commandStr}' with ${duration}s timeout using signal ${signal}\n`;
-        return 0;
-      }
-
-      // Simulate timeout
-      // In a real implementation, this would:
-      // 1. Start the command
-      // 2. Wait for timeout duration
-      // 3. Send signal if command hasn't finished
-      // 4. Optionally send KILL after kill-after duration
-
-      const timeoutMs = duration * 1000;
-      let timedOut = false;
-
-      await new Promise((resolve) => {
-        const timer = (globalThis as any).setTimeout(() => {
-          timedOut = true;
-          resolve(null);
-        }, timeoutMs);
-
-        // In real implementation, would wait for command to complete
-        // For now, just simulate immediate completion
-        (globalThis as any).clearTimeout(timer);
-        resolve(null);
-      });
-
-      if (timedOut) {
-        const exitCode = preserveStatus ? 143 : 124; // 124 = timeout, 143 = SIGTERM
-        ctx.stderr += `timeout: command '${commandStr}' timed out after ${duration}s\n`;
-        return exitCode;
-      }
-
-      ctx.stdout += `Command: ${commandStr}\n`;
-      return 0;
-    } catch (e: unknown) {
-      ctx.stderr += `timeout: ${e instanceof Error ? e.message : e}\n`;
-      return 1;
+    const flush = () => {
+      ctx.stdout += out.replace(/\r\n/g, '\n');
+      ctx.stderr += err.replace(/\r\n/g, '\n');
+    };
+    if (result === 'timeout') {
+      child.abortController?.abort();
+      flush();
+      if (verbose) ctx.stderr += `timeout: sending signal ${signal} to command '${command[0]}'\n`;
+      if (preserveStatus) return signal.replace(/^SIG/, '').toUpperCase() === 'KILL' ? 137 : 143;
+      return 124;
     }
+    flush();
+    return result;
   },
 };
 
 function parseDuration(str: string): number | null {
-  const match = str.match(/^(\d+(?:\.\d+)?)(s|m|h|d)?$/);
+  const match = str.match(/^(\d+(?:\.\d+)?|\.\d+)(s|m|h|d)?$/);
   if (!match) return null;
-
   const value = parseFloat(match[1]);
-  const unit = match[2] || "s";
-
-  switch (unit) {
-    case "s": return value;
-    case "m": return value * 60;
-    case "h": return value * 3600;
-    case "d": return value * 86400;
-    default: return null;
-  }
+  const mult = { s: 1, m: 60, h: 3600, d: 86400 }[match[2] || 's']!;
+  return value * mult;
 }

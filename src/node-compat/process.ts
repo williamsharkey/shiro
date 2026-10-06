@@ -187,8 +187,8 @@ function createStdout(ctx: CommandContext, stdoutBuf: string[], _st: SharedState
         str += `\r\n\r\n  \x1b]8;;${fixedUrl}\x07\x1b[1;36m[ Click here to sign in ]\x1b[0m\x1b]8;;\x07\r\n`;
       }
       stdoutBuf.push(str);
-      // Stream to terminal in real-time if available
-      if (ctx.terminal) {
+      // Stream to terminal in real-time unless stdout is piped or redirected
+      if (ctx.terminal && _st.stdoutToTerminal) {
         _st.streamedToTerminal = true;
         if (str.includes('\x1b[')) {
           ctx.terminal.writeOutput(str);
@@ -213,7 +213,7 @@ function createStdout(ctx: CommandContext, stdoutBuf: string[], _st: SharedState
       if (callback) queueMicrotask(() => (callback as Function)());
       return true;
     },
-    isTTY: !!ctx.terminal,
+    isTTY: _st.stdoutToTerminal,
     get columns() { return ctx.terminal ? ctx.terminal.getSize().cols : 80; },
     get rows() { return ctx.terminal ? ctx.terminal.getSize().rows : 24; },
     on: (ev: string, fn: Function) => {
@@ -281,7 +281,7 @@ function createStderr(ctx: CommandContext, stderrBuf: string[], _st: SharedState
       const str = typeof s === 'string' ? s : new TextDecoder().decode(s);
       stderrBuf.push(str);
       if (ctx.terminal) {
-        _st.streamedToTerminal = true;
+        _st.streamedStderr = true;
         if (str.includes('\x1b[')) {
           ctx.terminal.writeOutput(str);
         } else {

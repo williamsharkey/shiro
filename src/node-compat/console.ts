@@ -15,20 +15,20 @@ export function createFakeConsole(
   const fakeConsole: any = {
     log: (...args: any[]) => {
       const s = args.map(formatArg).join(' ');
-      stdoutBuf.push(s);
-      if (ctx.terminal) { _st.streamedToTerminal = true; ctx.terminal.writeOutput(s.replace(/\n/g, '\r\n') + '\r\n'); }
+      stdoutBuf.push(s + '\n');
+      if (_st.stdoutToTerminal && ctx.terminal) { _st.streamedToTerminal = true; ctx.terminal.writeOutput(s.replace(/\n/g, '\r\n') + '\r\n'); }
     },
     info: (...args: any[]) => {
       const s = args.map(formatArg).join(' ');
-      stdoutBuf.push(s);
-      if (ctx.terminal) { _st.streamedToTerminal = true; ctx.terminal.writeOutput(s.replace(/\n/g, '\r\n') + '\r\n'); }
+      stdoutBuf.push(s + '\n');
+      if (_st.stdoutToTerminal && ctx.terminal) { _st.streamedToTerminal = true; ctx.terminal.writeOutput(s.replace(/\n/g, '\r\n') + '\r\n'); }
     },
-    warn: (...args: any[]) => { stderrBuf.push(args.map(formatArg).join(' ')); },
-    error: (...args: any[]) => { stderrBuf.push(args.map(formatArg).join(' ')); },
+    warn: (...args: any[]) => { stderrBuf.push(args.map(formatArg).join(' ') + '\n'); },
+    error: (...args: any[]) => { stderrBuf.push(args.map(formatArg).join(' ') + '\n'); },
     dir: (obj: any) => {
       const s = JSON.stringify(obj, null, 2);
-      stdoutBuf.push(s);
-      if (ctx.terminal) { _st.streamedToTerminal = true; ctx.terminal.writeOutput(s.replace(/\n/g, '\r\n') + '\r\n'); }
+      stdoutBuf.push(s + '\n');
+      if (_st.stdoutToTerminal && ctx.terminal) { _st.streamedToTerminal = true; ctx.terminal.writeOutput(s.replace(/\n/g, '\r\n') + '\r\n'); }
     },
     debug: (...args: any[]) => { fakeConsole.log(...args); },
     trace: (...args: any[]) => { fakeConsole.log(...args); },
@@ -52,9 +52,9 @@ export function createFakeConsole(
         this._stderr = stderr || stdoutOrOpts || _st.fakeProcess?.stderr;
       }
     }
-    log(...args: any[]) { const s = args.map(formatArg).join(' ') + '\n'; if (this._stdout?.write) this._stdout.write(s); else { stdoutBuf.push(s.replace(/\n$/, '')); if (ctx.terminal) { _st.streamedToTerminal = true; ctx.terminal.writeOutput(s.replace(/\n/g, '\r\n')); } } }
+    log(...args: any[]) { const s = args.map(formatArg).join(' ') + '\n'; if (this._stdout?.write) this._stdout.write(s); else { stdoutBuf.push(s); if (_st.stdoutToTerminal && ctx.terminal) { _st.streamedToTerminal = true; ctx.terminal.writeOutput(s.replace(/\n/g, '\r\n')); } } }
     info(...args: any[]) { this.log(...args); }
-    warn(...args: any[]) { const s = args.map(formatArg).join(' ') + '\n'; if (this._stderr?.write) this._stderr.write(s); else { stderrBuf.push(s.replace(/\n$/, '')); } }
+    warn(...args: any[]) { const s = args.map(formatArg).join(' ') + '\n'; if (this._stderr?.write) this._stderr.write(s); else { stderrBuf.push(s); } }
     error(...args: any[]) { this.warn(...args); }
     dir(obj: any) { this.log(obj); }
     debug(...args: any[]) { this.log(...args); }

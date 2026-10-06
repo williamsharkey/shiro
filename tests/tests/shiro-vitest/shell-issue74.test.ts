@@ -166,3 +166,32 @@ describe('issue 74: shell pipes, redirects, read, brace groups', () => {
     });
   });
 });
+
+describe('timeout runs its command', () => {
+  let shell: Shell;
+  beforeEach(async () => {
+    ({ shell } = await createTestShell());
+  });
+  async function sh(cmd: string) {
+    let out = '';
+    const code = await shell.execute(cmd, (s) => { out += s; }, (s) => { out += s; });
+    return { out: out.replace(/\r\n/g, '\n'), code };
+  }
+
+  it('passes output, args, and exit status through', async () => {
+    expect(await sh("timeout 5 echo -n 'a b'")).toEqual({ out: 'a b', code: 0 });
+    expect((await sh('timeout 5 false')).code).toBe(1);
+    expect((await sh('echo in | timeout 5 cat')).out).toBe('in\n');
+  });
+
+  it('stops a command that runs too long with 124', async () => {
+    const t0 = Date.now();
+    const r = await sh('timeout 0.2 sleep 5');
+    expect(r.code).toBe(124);
+    expect(Date.now() - t0).toBeLessThan(3000);
+  });
+
+  it('rejects bad durations', async () => {
+    expect((await sh('timeout abc echo hi')).code).toBe(125);
+  });
+});

@@ -54,7 +54,11 @@ export interface NodeEnv {
 export interface SharedState {
   exitCode: number;
   exitCalled: boolean;
+  /** Stdout goes to the terminal: there is one and stdout isn't piped or redirected */
+  stdoutToTerminal: boolean;
+  /** Something was written to the terminal on stdout / stderr (so it isn't returned in ctx too) */
   streamedToTerminal: boolean;
+  streamedStderr: boolean;
   isInteractiveMode: boolean;
   scriptTimeoutId: any;
   ownsStdinPassthrough: boolean;

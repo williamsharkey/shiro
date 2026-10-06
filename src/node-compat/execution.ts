@@ -91,7 +91,9 @@ export async function executeNodeScript(
   const _st: SharedState = {
     exitCode: 0,
     exitCalled: false,
+    stdoutToTerminal: !!ctx.terminal && ctx.stdoutIsTTY !== false,
     streamedToTerminal: false,
+    streamedStderr: false,
     isInteractiveMode: false,
     scriptTimeoutId: null,
     ownsStdinPassthrough: false,
@@ -488,10 +490,10 @@ export async function executeNodeScript(
       if (e instanceof ProcessExitError) {
         _st.exitCode = e.code;
       } else if (e.message?.includes('extends value') || e.message?.includes('is not a constructor') || e.message?.includes('prototype')) {
-        stderrBuf.push(e.message);
+        stderrBuf.push(e.message + '\n');
         _st.exitCode = 1;
       } else if (e.name === 'ReferenceError' || e.name === 'TypeError' || e.name === 'SyntaxError') {
-        stderrBuf.push(e.message || String(e));
+        stderrBuf.push((e.message || String(e)) + '\n');
         console.error('[node] Runtime error:', e);
         _st.exitCode = 1;
       } else {
@@ -579,10 +581,11 @@ export async function executeNodeScript(
 
     // Flush output
     if (stdoutBuf.length > 0 && !_st.streamedToTerminal) {
-      ctx.stdout += stdoutBuf.join('\n') + '\n';
+      // Entries carry their own newlines: console.log adds one, stdout.write doesn't
+      ctx.stdout += stdoutBuf.join('');
     }
-    if (stderrBuf.length > 0 && !_st.streamedToTerminal) {
-      ctx.stderr += stderrBuf.join('\n') + '\n';
+    if (stderrBuf.length > 0 && !_st.streamedStderr) {
+      ctx.stderr += stderrBuf.join('');
     }
 
     if (printResult && !_st.exitCalled) {
