@@ -517,8 +517,13 @@ async function main() {
   });
 
   // Cleanup iframe servers on page unload (hot reload)
-  window.addEventListener('beforeunload', () => {
+  window.addEventListener('beforeunload', (e) => {
     iframeServer.cleanup();
+    // Leaving mid-write (e.g. during npm install) loses the unsaved files
+    if (fs.pendingWrites > 0) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
   });
 
   // Demo mode: lightweight boot for about page iframes

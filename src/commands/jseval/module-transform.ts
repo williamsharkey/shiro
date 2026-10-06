@@ -587,6 +587,141 @@ export function stripShebang(src: string): string {
   return src;
 }
 
+/**
+ * Mark which characters of src are code (1) rather than inside a string, template
+ * text, comment, or regex literal (0). Used so keyword rewrites never touch
+ * literals: TypeScript's bundle is full of messages like "'export import' ...".
+ * Regex literals are told from division by the previous token; one that would
+ * run past the end of its line is taken to be division instead.
+ */
+export function codeMask(src: string): Uint8Array {
+  const len = src.length;
+  const mask = new Uint8Array(len);
+  const braceStack: number[] = []; // template nesting: brace depth at each `${`
+  let depth = 0;
+  let prev = ''; // last significant code character
+  let i = 0;
+  const regexAfterWord = /(?:^|[^\w$.])(?:return|typeof|instanceof|in|of|new|delete|void|throw|case|do|else|yield|await)$/;
+  const isIdent = (c: number) => (c >= 97 && c <= 122) || (c >= 65 && c <= 90) || (c >= 48 && c <= 57) || c === 95 || c === 36 || c > 127;
+  const scanTemplate = (): void => {
+    // at template text; stops after the closing ` or after `${`
+    while (i < len) {
+      const c = src.charCodeAt(i);
+      if (c === 92) { i += 2; continue; } // backslash
+      if (c === 96) { i++; return; } // `
+      if (c === 36 && src.charCodeAt(i + 1) === 123) { // ${
+        i += 2;
+        braceStack.push(depth);
+        depth++;
+        prev = '{';
+        return;
+      }
+      i++;
+    }
+  };
+  while (i < len) {
+    const ch = src[i];
+    const c = src.charCodeAt(i);
+    if (c === 32 || c === 10 || c === 9 || c === 13) { mask[i] = 1; i++; continue; }
+    if (ch === '/' && src[i + 1] === '/') {
+      const nl = src.indexOf('\n', i);
+      i = nl < 0 ? len : nl;
+      continue;
+    }
+    if (ch === '/' && src[i + 1] === '*') {
+      const end = src.indexOf('*/', i + 2);
+      i = end < 0 ? len : end + 2;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      i++;
+      while (i < len && src[i] !== ch && src[i] !== '\n') i += src[i] === '\\' ? 2 : 1;
+      i++;
+      prev = 'a';
+      continue;
+    }
+    if (ch === '`') { i++; scanTemplate(); prev = 'a'; continue; }
+    if (ch === '/') {
+      const wordBefore = prev === 'w' ? src.slice(Math.max(0, i - 12), i).trimEnd() : '';
+      const isRegex = prev === '' || (prev !== 'a' && prev !== 'w' && '(,=:[!&|?{};+-*%<>~^'.includes(prev)) || regexAfterWord.test(wordBefore);
+      if (isRegex) {
+        let j = i + 1, inClass = false, ok = false;
+        while (j < len) {
+          const r = src[j];
+          if (r === '\n') break;
+          if (r === '\\') { j += 2; continue; }
+          if (r === '[') inClass = true;
+          else if (r === ']') inClass = false;
+          else if (r === '/' && !inClass) { ok = true; break; }
+          j++;
+        }
+        if (ok) {
+          i = j + 1;
+          while (i < len && /[a-z]/i.test(src[i])) i++;
+          prev = 'a';
+          continue;
+        }
+      }
+    }
+    mask[i] = 1;
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (braceStack.length && braceStack[braceStack.length - 1] === depth) {
+        braceStack.pop();
+        mask[i] = 0;
+        i++;
+        scanTemplate();
+        prev = 'a';
+        continue;
+      }
+    }
+    if (isIdent(c)) {
+      let j = i + 1;
+      while (j < len && isIdent(src.charCodeAt(j))) { mask[j] = 1; j++; }
+      i = j;
+      prev = 'w'; // a word: `return /re/` vs `x / y` is decided from its text
+      continue;
+    }
+    prev = ch;
+    i++;
+  }
+  return mask;
+}
+
+/** Source plus its codeMask, kept in step as replacements are made. */
+interface MaskedSource { src: string; mask: Uint8Array }
+
+/** src.replace(re, replacer) for matches that start in code (see codeMask). */
+function replaceInCode(ms: MaskedSource, re: RegExp, replacer: string | ((...args: any[]) => string)): void {
+  re.lastIndex = 0;
+  if (!re.test(ms.src)) return;
+  re.lastIndex = 0; // matchAll starts from lastIndex
+  const { src, mask } = ms;
+  const out: string[] = [];
+  const maskParts: Uint8Array[] = [];
+  let last = 0;
+  for (const m of src.matchAll(re.global ? re : new RegExp(re.source, re.flags + 'g'))) {
+    const off = m.index!;
+    if (!mask[off]) continue;
+    const rep = typeof replacer === 'function'
+      ? replacer(...m, off, src)
+      : replacer.replace(/\$(\d)/g, (_, n) => m[Number(n)] ?? '');
+    out.push(src.slice(last, off), rep);
+    maskParts.push(mask.subarray(last, off), new Uint8Array(rep.length).fill(1));
+    last = off + m[0].length;
+    if (!re.global) break;
+  }
+  if (!out.length) return;
+  out.push(src.slice(last));
+  maskParts.push(mask.subarray(last));
+  const newMask = new Uint8Array(maskParts.reduce((n, part) => n + part.length, 0));
+  let pos = 0;
+  for (const part of maskParts) { newMask.set(part, pos); pos += part.length; }
+  ms.src = out.join('');
+  ms.mask = newMask;
+}
+
 export function transformBundledESM(src: string): string {
   // Fast path for large bundled files (>500KB).
   // Bundled ESM files have thousands of string/template literals.
@@ -702,12 +837,14 @@ export function transformBundledESM(src: string): string {
   parts.push(src.substring(pos));
   src = parts.join('');
 
+  const ms: MaskedSource = { src, mask: codeMask(src) };
+
   // 2. import.meta → __import_meta (safe everywhere, no quotes introduced)
-  src = src.replace(/import\.meta/g, '__import_meta');
+  replaceInCode(ms, /import\.meta/g, '__import_meta');
 
   // 3. Dynamic import() → __dynamic_import()
   //    Safe: just replaces the keyword with a function name, no quotes.
-  src = src.replace(/\bimport\s*\(/g, '__dynamic_import(');
+  replaceInCode(ms, /\bimport\s*\(/g, '__dynamic_import(');
 
   // 4. Transform remaining static imports globally.
   //    Minified bundles have imports scattered throughout (not just at the top)
@@ -718,41 +855,41 @@ export function transformBundledESM(src: string): string {
   // so we use [\w$]+ instead of \w+ for identifier matching.
 
   // import Default, { named } from "module"
-  src = src.replace(/\bimport\s+([\w$]+)\s*,\s*\{([^}]+)\}\s*from\s*(['"])([^'"]+)\3\s*;?/g,
+  replaceInCode(ms, /\bimport\s+([\w$]+)\s*,\s*\{([^}]+)\}\s*from\s*(['"])([^'"]+)\3\s*;?/g,
     (_, defaultName, namedImports, q, mod) => {
       const fixed = namedImports.replace(/([\w$]+)\s+as\s+([\w$]+)/g, '$1: $2');
       return `const ${defaultName} = require(${q}${mod}${q}); const {${fixed}} = require(${q}${mod}${q});`;
     });
 
   // import { x as y } from "module"  (handles minified: import{x}from"m")
-  src = src.replace(/\bimport\s*\{([^}]+)\}\s*from\s*(['"])([^'"]+)\2\s*;?/g,
+  replaceInCode(ms, /\bimport\s*\{([^}]+)\}\s*from\s*(['"])([^'"]+)\2\s*;?/g,
     (_, imports, q, mod) => {
       const fixed = imports.replace(/([\w$]+)\s+as\s+([\w$]+)/g, '$1: $2');
       return `const {${fixed}} = require(${q}${mod}${q});`;
     });
 
   // import x from "module"
-  src = src.replace(/\bimport\s+([\w$]+)\s+from\s*(['"])([^'"]+)\2\s*;?/g,
+  replaceInCode(ms, /\bimport\s+([\w$]+)\s+from\s*(['"])([^'"]+)\2\s*;?/g,
     (_, name, q, mod) => `const ${name} = require(${q}${mod}${q});`);
 
   // import * as x from "module"  (handles minified: import*as x from"m")
-  src = src.replace(/\bimport\s*\*\s*as\s+([\w$]+)\s*from\s*(['"])([^'"]+)\2\s*;?/g,
+  replaceInCode(ms, /\bimport\s*\*\s*as\s+([\w$]+)\s*from\s*(['"])([^'"]+)\2\s*;?/g,
     (_, name, q, mod) => `const ${name} = require(${q}${mod}${q});`);
 
   // import "module" (side-effect only)
-  src = src.replace(/\bimport\s*(['"])([^'"]+)\1\s*;?/g,
+  replaceInCode(ms, /\bimport\s*(['"])([^'"]+)\1\s*;?/g,
     (_, q, mod) => `require(${q}${mod}${q});`);
 
   // 5. Strip 'export' keyword from declarations (safe, no quotes introduced).
-  src = src.replace(/\bexport\s+default\s+/g, 'module.exports = ');
-  src = src.replace(/\bexport\s+async\s+function\s+/g, 'async function ');
-  src = src.replace(/\bexport\s+function\s+/g, 'function ');
-  src = src.replace(/\bexport\s+class\s+/g, 'class ');
-  src = src.replace(/\bexport\s+(const|let|var)\s+/g, '$1 ');
+  replaceInCode(ms, /\bexport\s+default\s+/g, 'module.exports = ');
+  replaceInCode(ms, /\bexport\s+async\s+function\s+/g, 'async function ');
+  replaceInCode(ms, /\bexport\s+function\s+/g, 'function ');
+  replaceInCode(ms, /\bexport\s+class\s+/g, 'class ');
+  replaceInCode(ms, /\bexport\s+(const|let|var)\s+/g, '$1 ');
 
   // 6. Handle export { x as y } and export { x } from "y" patterns
   //    These appear in minified bundles as export{x as y} or export{x}from"y"
-  src = src.replace(/\bexport\s*\{([^}]+)\}\s*from\s*(['"])([^'"]+)\2\s*;?/g,
+  replaceInCode(ms, /\bexport\s*\{([^}]+)\}\s*from\s*(['"])([^'"]+)\2\s*;?/g,
     (_, exports, q, mod) => {
       const items = exports.split(',').map((s: string) => s.trim()).filter((s: string) => s);
       return items.map((item: string) => {
@@ -763,15 +900,15 @@ export function transformBundledESM(src: string): string {
     });
 
   // export * as name from "module"
-  src = src.replace(/\bexport\s*\*\s*as\s+([\w$]+)\s*from\s*(['"])([^'"]+)\2\s*;?/g,
+  replaceInCode(ms, /\bexport\s*\*\s*as\s+([\w$]+)\s*from\s*(['"])([^'"]+)\2\s*;?/g,
     (_, name, q, mod) => `module.exports.${name} = require(${q}${mod}${q});`);
 
   // export * from "module"
-  src = src.replace(/\bexport\s*\*\s*from\s*(['"])([^'"]+)\1\s*;?/g,
+  replaceInCode(ms, /\bexport\s*\*\s*from\s*(['"])([^'"]+)\1\s*;?/g,
     (_, q, mod) => `Object.assign(module.exports, require(${q}${mod}${q}));`);
 
   // export { x as y } (local re-exports, no from)
-  src = src.replace(/\bexport\s*\{([^}]+)\}\s*;?/g, (_, exports) => {
+  replaceInCode(ms, /\bexport\s*\{([^}]+)\}\s*;?/g, (_, exports) => {
     const items = exports.split(',').map((s: string) => s.trim()).filter((s: string) => s && /^[\w$]/.test(s));
     return items.map((item: string) => {
       const asMatch = item.match(/^([\w$]+)\s+as\s+([\w$]+)$/);
@@ -781,8 +918,10 @@ export function transformBundledESM(src: string): string {
   });
 
   // 7. Remove TypeScript type-only imports/exports
-  src = src.replace(/\bimport\s+type\s+[^;]+;?/g, '/* import type */');
-  src = src.replace(/\bexport\s+type\s+/g, '/* export type */ ');
+  replaceInCode(ms, /\bimport\s+type\s+[^;]+;?/g, '/* import type */');
+  replaceInCode(ms, /\bexport\s+type\s+/g, '/* export type */ ');
+
+  src = ms.src;
 
   // 8. Patch lazy module factory to handle initialization failures gracefully.
   //    The bundled code uses X=(A,q)=>()=>(q||A((q={exports:{}}).exports,q),q.exports)

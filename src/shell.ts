@@ -74,17 +74,20 @@ const yieldToEventLoop = () => new Promise<void>((resolve) => setTimeout(resolve
 
 /**
  * Expansion results ($VAR, ${NAME}, $(cmd)) are data: bash never re-reads their
- * quotes, backslashes, or $ as syntax. This shell expands into the command text
+ * quotes, backslashes, $, or operators (| < > & ;) as syntax. This shell expands into the command text
  * and tokenizes afterwards, so those characters are swapped for private-use
  * stand-ins on the way in and swapped back once words are final.
  */
-const EXPANSION_PROTECT: Record<string, string> = { '"': '\uE000', "'": '\uE001', '\\': '\uE002', '$': '\uE003', '`': '\uE004' };
+const EXPANSION_PROTECT: Record<string, string> = {
+  '"': '\uE000', "'": '\uE001', '\\': '\uE002', '$': '\uE003', '`': '\uE004',
+  '|': '\uE005', '<': '\uE006', '>': '\uE007', '&': '\uE008', ';': '\uE009',
+};
 const EXPANSION_RESTORE: Record<string, string> = Object.fromEntries(Object.entries(EXPANSION_PROTECT).map(([k, v]) => [v, k]));
 export function protectExpansion(value: string): string {
-  return /["'\\$`]/.test(value) ? value.replace(/["'\\$`]/g, (c) => EXPANSION_PROTECT[c]) : value;
+  return /["'\\$`|<>&;]/.test(value) ? value.replace(/["'\\$`|<>&;]/g, (c) => EXPANSION_PROTECT[c]) : value;
 }
 export function restoreExpansion(text: string): string {
-  return /[\uE000-\uE004]/.test(text) ? text.replace(/[\uE000-\uE004]/g, (c) => EXPANSION_RESTORE[c]) : text;
+  return /[\uE000-\uE009]/.test(text) ? text.replace(/[\uE000-\uE009]/g, (c) => EXPANSION_RESTORE[c]) : text;
 }
 
 /** Re-quote already-parsed args so a command can be run again verbatim (time, env, exec, aliases). */
@@ -332,11 +335,13 @@ export class Shell {
     if (statements.length > 1) {
       let lastExit = 0;
       let lineOffset = isTopLevel ? 0 : this.currentLine - 1;
+      const firstStmt = statements.findIndex((st) => st.trim() !== '');
       for (let si = 0; si < statements.length; si++) {
         const stmt = statements[si];
         if (!stmt.trim()) { if (isTopLevel) this.currentLine = lineOffset + si + 1; continue; }
         this.currentLine = lineOffset + si + 1;
         this.env['LINENO'] = String(this.currentLine);
+        if (si === firstStmt && injectedStdin !== null) this.injectedStdin = injectedStdin;
         lastExit = await this.execute(stmt, writeStdout, writeStderr, remote, terminalOverride, true);
         // errexit: abort on non-zero exit code
         if (this.options.has('errexit') && lastExit !== 0) break;
@@ -369,7 +374,10 @@ export class Shell {
       }
     }
 
-    const stderrWriter = writeStderr || writeStdout;
+    let stderrWriter = writeStderr || writeStdout;
+    // The caller's writers; builtins in a pipeline or with redirects write to capture buffers instead
+    const outerStdout = writeStdout;
+    const outerStderr = stderrWriter;
 
     // Check for function definition: name() { ... } or function name { ... }
     const funcDef = this.parseFunctionDef(effectiveLine);
@@ -451,14 +459,19 @@ export class Shell {
         continue;
       }
 
-      // Expand braces, arithmetic, command substitution, and environment variables
-      let expanded = this.expandBraces(compound.command);
-      expanded = this.expandArithmetic(expanded);
-      expanded = await this.expandCommandSubstitution(expanded, stderrWriter);
-      expanded = this.expandVars(expanded);
-
-      // Parse pipeline
-      const pipeline = this.parsePipeline(expanded);
+      // Control structures after a pipe (`echo y | while read l; do …; done`) expand
+      // their own words as they run (loop variables), so only the other segments
+      // are expanded up front
+      let pipeline: string[];
+      const rawSegments = splitTopLevelPipes(compound.command);
+      if (rawSegments.length > 1 && rawSegments.some(seg => this.isControlStructure(seg))) {
+        pipeline = [];
+        for (const seg of rawSegments) {
+          pipeline.push(this.isControlStructure(seg) ? seg : await this.expandWords(seg, stderrWriter));
+        }
+      } else {
+        pipeline = this.parsePipeline(await this.expandWords(compound.command, stderrWriter));
+      }
 
       // Check for ! negation prefix
       let negateExit = false;
@@ -476,8 +489,28 @@ export class Shell {
       const pipeExitCodes: number[] = [];
       // Env from `NAME=value cmd` prefixes, restored once the pipeline finishes
       const prefixEnvSaved = new Map<string, string | undefined>();
+      // Output of a builtin/function/loop that must be piped on or redirected
+      let capture: { out: string; err: string; redirects: Redirect[]; isLast: boolean } | null = null;
+      const flushCapture = async () => {
+        if (!capture) return;
+        const c = capture;
+        capture = null;
+        writeStdout = outerStdout;
+        stderrWriter = outerStderr;
+        lastOutput = await this.applyOutputRedirects(
+          c.out.replace(/\r\n/g, '\n'), c.err.replace(/\r\n/g, '\n'), c.redirects, c.isLast, writeStdout, stderrWriter);
+      };
+      const startCapture = (redirects: Redirect[], isLast: boolean) => {
+        const c = { out: '', err: '', redirects, isLast };
+        capture = c;
+        writeStdout = (t: string) => { c.out += t; };
+        stderrWriter = (t: string) => { c.err += t; };
+      };
 
       for (let i = 0; i < pipeline.length; i++) {
+        // A builtin that captured its output `continue`d here: pipe/redirect it now
+        await flushCapture();
+
         // Check for SIGINT (abort)
         if (this.abortController?.signal.aborted) {
           exitCode = 130; // 128 + SIGINT(2)
@@ -500,19 +533,39 @@ export class Shell {
           segment = envPrefix.rest;
         }
 
+        // A subshell after a pipe: `echo abc | (cat)`
+        const trimmedSeg = segment.trim();
+        if (i > 0 && trimmedSeg.startsWith('(') && trimmedSeg.endsWith(')') && !trimmedSeg.startsWith('((')) {
+          const pipeStdin = lastOutput;
+          lastOutput = '';
+          startCapture([], i === pipeline.length - 1);
+          exitCode = await this.fork().executeWithStdin(trimmedSeg.slice(1, -1).trim(), pipeStdin, writeStdout, stderrWriter);
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          continue;
+        }
+
         // Check if this pipeline segment is a control structure (e.g. `echo foo | while ...`)
         if (this.isControlStructure(segment.trim())) {
           const pipeStdin = i > 0 ? lastOutput : '';
+          lastOutput = '';
+          if (i < pipeline.length - 1) startCapture([], false);
           exitCode = await this.execControlStructurePiped(segment.trim(), pipeStdin, writeStdout, stderrWriter);
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
-          lastOutput = '';
           continue;
         }
 
         const { args, redirects, hereString } = this.parseSegment(segment);
 
         if (args.length === 0) continue;
+
+        // Builtins and functions write straight to the writers; when this segment
+        // feeds a pipe or has output redirects, collect that output instead
+        const isLastSegment = i === pipeline.length - 1;
+        if (!isLastSegment || redirects.some(r => r.type !== '<')) startCapture(redirects, isLastSegment);
+        // Stdin for builtins that run commands in a nested execute (eval, sh -c, aliases, functions)
+        const nestedStdin = i > 0 ? lastOutput : (hereString ?? heredocStdin);
 
         // Expand glob patterns in args (but not quoted ones marked with \x01)
         const globResult = await this.expandGlobs(args, stderrWriter);
@@ -550,6 +603,7 @@ export class Shell {
             // /bin/sh -c "command" → execute command
             // `sh -c CMD [NAME ARGS...]`: only CMD is the command string
             const shellCmd = cmdArgs[cIdx + 1];
+            this.injectedStdin = nestedStdin;
             exitCode = await this.execute(shellCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
           } else {
             // /bin/sh script.sh or /bin/sh (no args)
@@ -578,9 +632,11 @@ export class Shell {
         if (cmdName === '/usr/bin/env' || cmdName === '/bin/env') {
           if (cmdArgs.length > 0) {
             const envCmd = quoteArgsForShell(cmdArgs);
+            this.injectedStdin = nestedStdin;
             exitCode = await this.execute(envCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
           } else {
             // bare env → print environment
+            this.injectedStdin = nestedStdin;
             exitCode = await this.execute('env', writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
           }
           this.lastExitCode = exitCode;
@@ -593,6 +649,7 @@ export class Shell {
         if (this.aliases.has(cmdName)) {
           const aliasValue = this.aliases.get(cmdName)!;
           const fullCmd = aliasValue + (cmdArgs.length > 0 ? ' ' + quoteArgsForShell(cmdArgs) : '');
+          this.injectedStdin = nestedStdin;
           exitCode = await this.execute(fullCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
@@ -702,6 +759,7 @@ export class Shell {
           const timeCmd = quoteArgsForShell(cmdArgs);
           const start = performance.now();
           if (timeCmd) {
+            this.injectedStdin = nestedStdin;
             exitCode = await this.execute(timeCmd, writeStdout, stderrWriter);
           }
           const elapsed = (performance.now() - start) / 1000;
@@ -737,6 +795,7 @@ export class Shell {
           // Execute remaining args as a shell command
           const evalCmd = cmdArgs.join(' ');
           if (evalCmd) {
+            this.injectedStdin = nestedStdin;
             exitCode = await this.execute(evalCmd, writeStdout, stderrWriter);
           }
           this.lastExitCode = exitCode;
@@ -892,13 +951,32 @@ export class Shell {
             else if (a.startsWith('-u') && a.length > 2) { readFd = parseInt(a.slice(2), 10); }
             else if (!a.startsWith('-')) readVars.push(a);
           }
-          // Read one line from stdin — prefer FD, piped stdin (__PIPE_STDIN), then pipe, then heredoc
+          // Read one line from stdin — prefer FD, then the command's own <<< / <,
+          // then piped stdin (__PIPE_STDIN), then pipe, then heredoc
           let readInput = '';
-          const hasPipeStdin = '__PIPE_STDIN' in this.env;
+          const stdinRedirect = redirects.find(r => r.type === '<' && r.fd === undefined);
+          let redirectInput: string | undefined = hereString;
+          if (redirectInput === undefined && stdinRedirect) {
+            try {
+              redirectInput = stdinRedirect.target === '/dev/null' ? ''
+                : await this.fs.readFile(this.fs.resolvePath(stdinRedirect.target, this.cwd), 'utf8') as string;
+            } catch (e: any) {
+              stderrWriter(`shiro: ${stdinRedirect.target}: ${e.message}\r\n`);
+              exitCode = 1;
+              this.lastExitCode = 1;
+              this.env['?'] = '1';
+              lastOutput = '';
+              continue;
+            }
+          }
+          // An explicit redirect doesn't consume the enclosing loop's piped stdin
+          const hasPipeStdin = redirectInput === undefined && '__PIPE_STDIN' in this.env;
           if (readFd >= 0 && this.fileDescriptors.has(readFd)) {
             // Read from file descriptor
             const fd = this.fileDescriptors.get(readFd)!;
             readInput = fd.content.slice(fd.offset);
+          } else if (redirectInput !== undefined) {
+            readInput = redirectInput;
           } else if (hasPipeStdin) {
             readInput = this.env['__PIPE_STDIN'];
           } else {
@@ -1611,7 +1689,15 @@ export class Shell {
         if (!_builtinDisabled && effectiveCmdName === 'set') {
           // Check for -- to set positional parameters
           const ddIdx = cmdArgs.indexOf('--');
-          if (ddIdx >= 0) {
+          if (cmdArgs.length === 0) {
+            // Bare `set` lists shell variables, quoted so they can be read back
+            const names = Object.keys(this.env).filter(k => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k) && !k.startsWith('__')).sort();
+            for (const k of names) {
+              const v = this.env[k];
+              writeStdout(`${k}=${/^[A-Za-z0-9_\-.,/:@%+=]*$/.test(v) ? v : `'${v.replace(/'/g, `'\\''`)}'`}\r\n`);
+            }
+            exitCode = 0;
+          } else if (ddIdx >= 0) {
             const newArgs = cmdArgs.slice(ddIdx + 1);
             // Clear old positional params
             const oldCount = parseInt(this.env['#'] || '0', 10);
@@ -1713,6 +1799,7 @@ export class Shell {
           }
           if (cmdArgs.length > 0) {
             const execCmd = quoteArgsForShell(cmdArgs);
+            this.injectedStdin = nestedStdin;
             exitCode = await this.execute(execCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
           }
           this.lastExitCode = exitCode;
@@ -1728,6 +1815,7 @@ export class Shell {
             // Temporarily remove function override
             const savedFn = this.functions[cmdArgs[0]];
             delete this.functions[cmdArgs[0]];
+            this.injectedStdin = nestedStdin;
             exitCode = await this.execute(builtinCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
             if (savedFn) this.functions[cmdArgs[0]] = savedFn;
           }
@@ -2069,11 +2157,39 @@ export class Shell {
 
         // Check shell functions first
         if (this.functions[effectiveCmdName]) {
-          exitCode = await this.execFunction(effectiveCmdName, cmdArgs, writeStdout, stderrWriter);
+          // A function reads the segment's stdin: the first command of its body gets
+          // it, and `read`/loops inside consume it line by line. Without stdin of its
+          // own it keeps whatever an enclosing piped loop is reading.
+          const ownStdin = i > 0 || hereString !== undefined || !!heredocStdin || redirects.some(r => r.type === '<');
+          const savedPipeStdin = this.env['__PIPE_STDIN'];
+          if (ownStdin) {
+            this.env['__PIPE_STDIN'] = stdin;
+            this.injectedStdin = stdin;
+          }
+          try {
+            exitCode = await this.execFunction(effectiveCmdName, cmdArgs, writeStdout, stderrWriter);
+          } finally {
+            this.injectedStdin = null;
+            if (ownStdin) {
+              if (savedPipeStdin === undefined) delete this.env['__PIPE_STDIN'];
+              else this.env['__PIPE_STDIN'] = savedPipeStdin;
+            }
+          }
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
           lastOutput = '';
           continue;
+        }
+
+        // Regular commands return their output in ctx and get the redirect handling
+        // below; anything captured so far (xtrace, warnings) goes along with it
+        if (capture) {
+          const c = capture as { out: string; err: string };
+          capture = null;
+          writeStdout = outerStdout;
+          stderrWriter = outerStderr;
+          ctx.stdout = c.out.replace(/\r\n/g, '\n');
+          ctx.stderr = c.err.replace(/\r\n/g, '\n');
         }
 
         const cmd = this.commands.get(effectiveCmdName);
@@ -2140,75 +2256,7 @@ export class Shell {
           }
         }
 
-        // Check if stderr should be redirected to stdout (2>&1)
-        const redirectStderrToStdout = redirects.some(r => r.type === '2>&1');
-
-        // Handle stderr output and redirects
-        let stderrOutput = ctx.stderr;
-        for (const redir of redirects) {
-          if (redir.type === '2>' || redir.type === '2>>') {
-            if (redir.target === '/dev/null') {
-              stderrOutput = '';
-              continue;
-            }
-            // 2>/dev/stderr → default behavior (let it through)
-            if (redir.target === '/dev/stderr') continue;
-            // 2>/dev/stdout → redirect stderr to stdout
-            if (redir.target === '/dev/stdout') {
-              ctx.stdout += stderrOutput;
-              stderrOutput = '';
-              continue;
-            }
-            const targetPath = this.fs.resolvePath(redir.target, this.cwd);
-            if (redir.type === '2>') {
-              await this.fs.writeFile(targetPath, stderrOutput);
-            } else {
-              await this.fs.appendFile(targetPath, stderrOutput);
-            }
-            stderrOutput = '';
-          }
-        }
-
-        // Handle stdout redirects
-        let output = ctx.stdout;
-
-        // If 2>&1, merge stderr into stdout BEFORE processing stdout redirects
-        if (redirectStderrToStdout && stderrOutput) {
-          output += stderrOutput;
-          stderrOutput = '';
-        }
-
-        // Now write any remaining stderr to the error stream
-        if (stderrOutput) {
-          stderrWriter(stderrOutput.replace(/\n/g, '\r\n'));
-        }
-        for (const redir of redirects) {
-          if (redir.type === '>' || redir.type === '>>') {
-            if (redir.target === '/dev/null') {
-              output = '';
-              continue;
-            }
-            // /dev/stdout → write to stdout (default behavior, just let it through)
-            if (redir.target === '/dev/stdout') continue;
-            // /dev/stderr → redirect stdout content to stderr
-            if (redir.target === '/dev/stderr') {
-              stderrWriter(output.replace(/\n/g, '\r\n'));
-              output = '';
-              continue;
-            }
-            const targetPath = this.fs.resolvePath(redir.target, this.cwd);
-            if (redir.type === '>') {
-              await this.fs.writeFile(targetPath, output);
-            } else {
-              await this.fs.appendFile(targetPath, output);
-            }
-            output = '';
-          }
-        }
-
-        if (i === pipeline.length - 1 && output) {
-          writeStdout(output.replace(/\n/g, '\r\n'));
-        }
+        const output = await this.applyOutputRedirects(ctx.stdout, ctx.stderr, redirects, i === pipeline.length - 1, writeStdout, stderrWriter);
 
         lastOutput = output;
         pipeExitCodes.push(exitCode);
@@ -2216,6 +2264,8 @@ export class Shell {
         // Update cwd from env
         this.cwd = this.env['PWD'] || this.cwd;
       }
+
+      await flushCapture();
 
       for (const [key, value] of prefixEnvSaved) {
         if (value === undefined) delete this.env[key];
@@ -2261,6 +2311,87 @@ export class Shell {
       this.abortController = null;
     }
     return exitCode;
+  }
+
+  /**
+   * Apply a segment's output redirects (2>, 2>>, 2>&1, >, >>) to its stdout/stderr.
+   * Writes remaining stderr, and stdout too for the last pipeline segment; returns
+   * the stdout that flows to the next segment.
+   */
+  private async applyOutputRedirects(
+    stdout: string, stderr: string, redirects: Redirect[], isLast: boolean,
+    writeStdout: (s: string) => void, stderrWriter: (s: string) => void,
+  ): Promise<string> {
+    // Check if stderr should be redirected to stdout (2>&1)
+    const redirectStderrToStdout = redirects.some(r => r.type === '2>&1');
+
+    // Handle stderr output and redirects
+    let stderrOutput = stderr;
+    for (const redir of redirects) {
+      if (redir.type === '2>' || redir.type === '2>>') {
+        if (redir.target === '/dev/null') {
+          stderrOutput = '';
+          continue;
+        }
+        // 2>/dev/stderr → default behavior (let it through)
+        if (redir.target === '/dev/stderr') continue;
+        // 2>/dev/stdout → redirect stderr to stdout
+        if (redir.target === '/dev/stdout') {
+          stdout += stderrOutput;
+          stderrOutput = '';
+          continue;
+        }
+        const targetPath = this.fs.resolvePath(redir.target, this.cwd);
+        if (redir.type === '2>') {
+          await this.fs.writeFile(targetPath, stderrOutput);
+        } else {
+          await this.fs.appendFile(targetPath, stderrOutput);
+        }
+        stderrOutput = '';
+      }
+    }
+
+    // Handle stdout redirects
+    let output = stdout;
+
+    // If 2>&1, merge stderr into stdout BEFORE processing stdout redirects
+    if (redirectStderrToStdout && stderrOutput) {
+      output += stderrOutput;
+      stderrOutput = '';
+    }
+
+    // Now write any remaining stderr to the error stream
+    if (stderrOutput) {
+      stderrWriter(stderrOutput.replace(/\n/g, '\r\n'));
+    }
+    for (const redir of redirects) {
+      if (redir.type === '>' || redir.type === '>>') {
+        if (redir.target === '/dev/null') {
+          output = '';
+          continue;
+        }
+        // /dev/stdout → write to stdout (default behavior, just let it through)
+        if (redir.target === '/dev/stdout') continue;
+        // /dev/stderr → redirect stdout content to stderr
+        if (redir.target === '/dev/stderr') {
+          stderrWriter(output.replace(/\n/g, '\r\n'));
+          output = '';
+          continue;
+        }
+        const targetPath = this.fs.resolvePath(redir.target, this.cwd);
+        if (redir.type === '>') {
+          await this.fs.writeFile(targetPath, output);
+        } else {
+          await this.fs.appendFile(targetPath, output);
+        }
+        output = '';
+      }
+    }
+
+    if (isLast && output) {
+      writeStdout(output.replace(/\n/g, '\r\n'));
+    }
+    return output;
   }
 
   /**
@@ -3966,8 +4097,17 @@ export class Shell {
 
   // ─── CONTROL STRUCTURES ───────────────────────────────────────────────────
 
-  /** Stdin for the next execute() call's first command; set only by runHeadedPipeline */
+  /** Stdin for the next execute() call's first command (runHeadedPipeline, functions, eval, sh -c) */
   private injectedStdin: string | null = null;
+
+  /** execute() with `stdin` as the input of its first command, like `… | sh -c CMD`. */
+  executeWithStdin(
+    line: string, stdin: string,
+    writeStdout: (s: string) => void, writeStderr?: (s: string) => void,
+  ): Promise<number> {
+    this.injectedStdin = stdin;
+    return this.execute(line, writeStdout, writeStderr, false, undefined, true);
+  }
 
   private async runHeadedPipeline(
     parts: string[], stdin: string,
@@ -3996,7 +4136,16 @@ export class Shell {
   }
 
   private isControlStructure(input: string): boolean {
-    return /^if\s+/.test(input) || /^while\s+/.test(input) || /^until\s+/.test(input) || /^for\s+/.test(input) || /^case\s+/.test(input) || /^select\s+/.test(input);
+    return /^if\s+/.test(input) || /^while\s+/.test(input) || /^until\s+/.test(input) || /^for\s+/.test(input) || /^case\s+/.test(input) || /^select\s+/.test(input)
+      || isBraceGroup(input);
+  }
+
+  /** Brace, arithmetic, command-substitution, and variable expansion of command text */
+  private async expandWords(text: string, writeStderr: (s: string) => void): Promise<string> {
+    let expanded = this.expandBraces(text);
+    expanded = this.expandArithmetic(expanded);
+    expanded = await this.expandCommandSubstitution(expanded, writeStderr);
+    return this.expandVars(expanded);
   }
 
   /**
@@ -4058,6 +4207,11 @@ export class Shell {
     if (/^for\s+/.test(input)) return this.execFor(input, writeStdout, writeStderr);
     if (/^case\s+/.test(input)) return this.execCase(input, writeStdout, writeStderr);
     if (/^select\s+/.test(input)) return this.execSelect(input, writeStdout, writeStderr);
+    if (isBraceGroup(input)) {
+      // { list; } runs in the current shell
+      const inner = input.slice(1, input.lastIndexOf('}')).trim().replace(/;\s*$/, '');
+      return inner ? this.execute(inner, writeStdout, writeStderr, false, undefined, true) : 0;
+    }
     return 0;
   }
 
@@ -4080,6 +4234,8 @@ export class Shell {
     // For other control structures, set __PIPE_STDIN env and delegate
     const saved = this.env['__PIPE_STDIN'];
     this.env['__PIPE_STDIN'] = pipeStdin;
+    // A brace group's first command reads the pipe too: `… | { cat; }`
+    if (isBraceGroup(input)) this.injectedStdin = pipeStdin;
     const result = await this.execControlStructureCore(input, writeStdout, writeStderr);
     if (saved === undefined) delete this.env['__PIPE_STDIN'];
     else this.env['__PIPE_STDIN'] = saved;
@@ -5275,6 +5431,11 @@ export function splitCompoundRedirects(cmd: string): { compound: string; redirec
   return { compound: cmd.slice(0, end).trim(), redirects };
 }
 
+/** `{ list; }`, possibly followed by redirections */
+function isBraceGroup(cmd: string): boolean {
+  return /^\{\s/.test(cmd) && compoundEnd(cmd) > 0;
+}
+
 /** Index just past the keyword that closes the compound command starting cmd, or -1. */
 function compoundEnd(cmd: string): number {
   const OPEN: Record<string, string> = { for: 'done', while: 'done', until: 'done', select: 'done', if: 'fi', case: 'esac' };
@@ -5298,6 +5459,7 @@ function compoundEnd(cmd: string): number {
     const word = cmd.slice(i, j);
     if (paren === 0 && cmdPos) {
       if (OPEN[word]) blocks.push(OPEN[word]);
+      else if (word === '{') blocks.push('}');
       else if (blocks.length && word === blocks[blocks.length - 1]) {
         blocks.pop();
         if (!blocks.length) return j;

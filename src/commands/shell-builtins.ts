@@ -164,9 +164,9 @@ export const shCmd: Command = {
       const cmd = ctx.args[cIdx + 1];
       let stdout = '';
       let stderr = '';
-      const code = await ctx.shell.execute(cmd, (s) => { stdout += s; }, (s) => { stderr += s; }, false, undefined, true);
-      ctx.stdout += stdout;
-      ctx.stderr += stderr;
+      const code = await ctx.shell.executeWithStdin(cmd, ctx.stdin || '', (s) => { stdout += s; }, (s) => { stderr += s; });
+      ctx.stdout += stdout.replace(/\r\n/g, '\n');
+      ctx.stderr += stderr.replace(/\r\n/g, '\n');
       return code;
     }
 

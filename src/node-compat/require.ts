@@ -426,6 +426,9 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
 
     } catch (err) {
       moduleCache.delete(resolved);
+      // process.exit() while a module loads (tsc's lib/_tsc.js runs the compiler
+      // from require) ends the script; it is not a load failure
+      if (err instanceof ProcessExitError || (err as any)?._isProcessExit) throw err;
       const errMsg = err instanceof Error ? err.message : String(err);
       const enhancedErr = new Error(`Error loading module '${resolved}': ${errMsg}`);
       if (err instanceof Error && err.stack) {

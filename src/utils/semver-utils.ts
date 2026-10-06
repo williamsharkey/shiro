@@ -61,66 +61,103 @@ export function compareSemVer(a: SemVer, b: SemVer): number {
   if (!a.prerelease && b.prerelease) return 1;
   if (a.prerelease && !b.prerelease) return -1;
   if (a.prerelease && b.prerelease) {
-    return a.prerelease.localeCompare(b.prerelease);
+    const pa = a.prerelease.split('.'), pb = b.prerelease.split('.');
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+      if (pa[i] === undefined) return -1;
+      if (pb[i] === undefined) return 1;
+      if (pa[i] === pb[i]) continue;
+      const na = /^\d+$/.test(pa[i]), nb = /^\d+$/.test(pb[i]);
+      if (na && nb) return parseInt(pa[i], 10) - parseInt(pb[i], 10);
+      if (na !== nb) return na ? -1 : 1;
+      return pa[i] < pb[i] ? -1 : 1;
+    }
   }
 
   return 0;
 }
 
-/**
- * Check if version satisfies a caret range (^1.2.3)
- * Allows changes that do not modify the left-most non-zero digit
- */
-function satisfiesCaret(version: SemVer, range: SemVer): boolean {
-  if (version.major !== range.major) return false;
+type Bound = { op: '>=' | '>' | '<' | '<=' | '='; v: SemVer };
 
-  if (range.major > 0) {
-    // ^1.2.3 := >=1.2.3 <2.0.0
-    return version.minor > range.minor ||
-           (version.minor === range.minor && version.patch >= range.patch);
-  }
-
-  if (range.minor > 0) {
-    // ^0.2.3 := >=0.2.3 <0.3.0
-    return version.minor === range.minor && version.patch >= range.patch;
-  }
-
-  // ^0.0.3 := >=0.0.3 <0.0.4
-  return version.minor === range.minor && version.patch === range.patch;
-}
-
-/**
- * Check if version satisfies a tilde range (~1.2.3)
- * Allows patch-level changes
- */
-function satisfiesTilde(version: SemVer, range: SemVer): boolean {
-  // ~1.2.3 := >=1.2.3 <1.3.0
-  return version.major === range.major &&
-         version.minor === range.minor &&
-         version.patch >= range.patch;
-}
-
-/**
- * Check if version satisfies a comparator (>=, >, <, <=, =)
- */
-function satisfiesComparator(version: SemVer, operator: string, target: SemVer): boolean {
+function satisfiesComparator(version: SemVer, operator: Bound['op'], target: SemVer): boolean {
   const cmp = compareSemVer(version, target);
-
   switch (operator) {
-    case '=':
-    case '==':
-      return cmp === 0;
-    case '>':
-      return cmp > 0;
-    case '>=':
-      return cmp >= 0;
-    case '<':
-      return cmp < 0;
-    case '<=':
-      return cmp <= 0;
-    default:
-      return false;
+    case '=': return cmp === 0;
+    case '>': return cmp > 0;
+    case '>=': return cmp >= 0;
+    case '<': return cmp < 0;
+    case '<=': return cmp <= 0;
   }
+}
+
+/** Parse a possibly partial version with x/X/* wildcards: "1", "1.2", "1.2.x", "1.2.3-beta.1". */
+function parsePartial(str: string): { major?: number; minor?: number; patch?: number; prerelease?: string } | null {
+  const m = str.trim().replace(/^[v=]+/, '').match(/^(\d+|[xX*])(?:\.(\d+|[xX*]))?(?:\.(\d+|[xX*]))?(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/);
+  if (!m) return null;
+  const num = (x?: string) => (x === undefined || /^[xX*]$/.test(x) ? undefined : parseInt(x, 10));
+  const major = num(m[1]);
+  const minor = major === undefined ? undefined : num(m[2]);
+  const patch = minor === undefined ? undefined : num(m[3]);
+  return { major, minor, patch, prerelease: patch === undefined ? undefined : m[4] };
+}
+
+const sv = (major: number, minor: number, patch: number, prerelease?: string): SemVer =>
+  ({ major, minor, patch, prerelease, raw: `${major}.${minor}.${patch}${prerelease ? '-' + prerelease : ''}` });
+
+/** Desugar one comparator (^1.2, ~1.2.3, >=1.0, 1.x, 1.2.3) into plain bounds, as npm does. */
+function comparatorBounds(comp: string): Bound[] | null {
+  const m = comp.match(/^(\^|~>?|>=|<=|>|<|=)?\s*(.*)$/)!;
+  const op = m[1] || '';
+  const p = parsePartial(m[2]);
+  if (!p) return null;
+  const { major, minor, patch, prerelease } = p;
+  if (major === undefined) return op === '<' || op === '>' ? [{ op: '<', v: sv(0, 0, 0, '0') }] : [];
+  const lo = sv(major, minor ?? 0, patch ?? 0, prerelease);
+  switch (op) {
+    case '^': {
+      const hi = major > 0 || minor === undefined ? sv(major + 1, 0, 0, '0')
+        : minor > 0 || patch === undefined ? sv(0, minor + 1, 0, '0')
+        : sv(0, 0, patch + 1, '0');
+      return [{ op: '>=', v: lo }, { op: '<', v: hi }];
+    }
+    case '~': case '~>': {
+      const hi = minor === undefined ? sv(major + 1, 0, 0, '0') : sv(major, minor + 1, 0, '0');
+      return [{ op: '>=', v: lo }, { op: '<', v: hi }];
+    }
+    case '>': // >1.2 means >=1.3.0
+      if (minor === undefined) return [{ op: '>=', v: sv(major + 1, 0, 0) }];
+      if (patch === undefined) return [{ op: '>=', v: sv(major, minor + 1, 0) }];
+      return [{ op: '>', v: lo }];
+    case '<=': // <=1.2 means <1.3.0
+      if (minor === undefined) return [{ op: '<', v: sv(major + 1, 0, 0, '0') }];
+      if (patch === undefined) return [{ op: '<', v: sv(major, minor + 1, 0, '0') }];
+      return [{ op: '<=', v: lo }];
+    case '>=': return [{ op: '>=', v: lo }];
+    case '<': return [{ op: '<', v: lo }];
+    default: // bare or '=': partial versions are x-ranges (1.2 = 1.2.x)
+      if (minor === undefined) return [{ op: '>=', v: lo }, { op: '<', v: sv(major + 1, 0, 0, '0') }];
+      if (patch === undefined) return [{ op: '>=', v: lo }, { op: '<', v: sv(major, minor + 1, 0, '0') }];
+      return [{ op: '=', v: lo }];
+  }
+}
+
+/** Bounds for one ||-separated alternative: "a - b" or space-separated comparators. */
+function rangeSetBounds(set: string): Bound[] | null {
+  const hyphen = set.match(/^(\S+)\s+-\s+(\S+)$/);
+  if (hyphen) {
+    // 1.2.3 - 2.3 := >=1.2.3 <2.4.0-0 (a partial upper end includes its whole x-range)
+    const from = comparatorBounds('>=' + hyphen[1]);
+    const to = comparatorBounds('<=' + hyphen[2]);
+    return from && to ? [...from, ...to] : null;
+  }
+  // "> = 1.2.3" / ">= 1.2.3": attach operators to their version
+  const comps = set.replace(/(\^|~>?|>=|<=|>|<|=)\s+/g, '$1').split(/\s+/).filter(Boolean);
+  const bounds: Bound[] = [];
+  for (const c of comps) {
+    const b = comparatorBounds(c);
+    if (!b) return null;
+    bounds.push(...b);
+  }
+  return bounds;
 }
 
 /**
@@ -128,64 +165,18 @@ function satisfiesComparator(version: SemVer, operator: string, target: SemVer):
  */
 export function satisfiesRange(versionStr: string, rangeStr: string): boolean {
   rangeStr = rangeStr.trim();
-
-  // Wildcard or "latest"
-  if (rangeStr === '*' || rangeStr === 'latest' || rangeStr === '') {
-    return true;
-  }
-
+  if (rangeStr === 'latest') return true;
   const version = parseSemVer(versionStr);
   if (!version) return false;
-
-  // Exact version or partial version (e.g. "4" → "^4.0.0", "4.2" → "^4.2.0")
-  if (!rangeStr.match(/[\^~><]/)) {
-    const target = parseSemVer(rangeStr);
-    if (target) return compareSemVer(version, target) === 0;
-    // Partial version: "4" or "4.2" — treat as caret range
-    const partialMatch = rangeStr.match(/^(\d+)(?:\.(\d+))?$/);
-    if (partialMatch) {
-      const coerced = parseSemVer(`${partialMatch[1]}.${partialMatch[2] || '0'}.0`);
-      return coerced ? satisfiesCaret(version, coerced) : false;
-    }
-    return false;
-  }
-
-  // Caret range: ^1.2.3
-  if (rangeStr.startsWith('^')) {
-    const target = parseSemVer(rangeStr.slice(1));
-    return target ? satisfiesCaret(version, target) : false;
-  }
-
-  // Tilde range: ~1.2.3
-  if (rangeStr.startsWith('~')) {
-    const target = parseSemVer(rangeStr.slice(1));
-    return target ? satisfiesTilde(version, target) : false;
-  }
-
-  // Comparator range: >=1.2.3 <2.0.0
-  const comparatorMatch = rangeStr.match(/^(>=?|<=?|=)\s*(.+)$/);
-  if (comparatorMatch) {
-    const operator = comparatorMatch[1];
-    const target = parseSemVer(comparatorMatch[2]);
-    return target ? satisfiesComparator(version, operator, target) : false;
-  }
-
-  // Space-separated AND ranges: >=1.2.3 <2.0.0
-  if (rangeStr.includes(' ')) {
-    const parts = rangeStr.split(/\s+/);
-    for (let i = 0; i < parts.length; i += 2) {
-      const operator = parts[i];
-      const targetStr = parts[i + 1];
-      if (!targetStr) continue;
-
-      const target = parseSemVer(targetStr);
-      if (!target) return false;
-      if (!satisfiesComparator(version, operator, target)) return false;
-    }
-    return true;
-  }
-
-  return false;
+  return rangeStr.split('||').some((set) => {
+    const bounds = rangeSetBounds(set.trim());
+    if (!bounds) return false;
+    if (!bounds.every((b) => satisfiesComparator(version, b.op, b.v))) return false;
+    // Prereleases only match a range that names a prerelease of the same version
+    if (!version.prerelease) return true;
+    return bounds.some((b) => b.v.prerelease && b.v.prerelease !== '0'
+      && b.v.major === version.major && b.v.minor === version.minor && b.v.patch === version.patch);
+  });
 }
 
 /**

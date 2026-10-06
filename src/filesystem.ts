@@ -335,17 +335,7 @@ export class FileSystem {
   }
 
   async init(): Promise<void> {
-    this.db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, DB_VERSION);
-      req.onupgradeneeded = () => {
-        const db = req.result;
-        if (!db.objectStoreNames.contains(STORE_NAME)) {
-          db.createObjectStore(STORE_NAME, { keyPath: 'path' });
-        }
-      };
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
+    this.db = await this._openDb();
 
     // Ensure root directory exists
     const root = await this._get('/');
@@ -375,19 +365,89 @@ export class FileSystem {
     };
   }
 
-  private _store(mode: IDBTransactionMode): IDBObjectStore {
-    return this.db!.transaction(STORE_NAME, mode).objectStore(STORE_NAME);
+  private _opening: Promise<IDBDatabase> | null = null;
+  private _pendingWrites = 0;
+
+  /** Writes issued but not yet acknowledged by IndexedDB. */
+  get pendingWrites(): number { return this._pendingWrites; }
+
+  private _openDb(): Promise<IDBDatabase> {
+    if (this._opening) return this._opening;
+    this._opening = new Promise<IDBDatabase>((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(STORE_NAME)) {
+          db.createObjectStore(STORE_NAME, { keyPath: 'path' });
+        }
+      };
+      req.onsuccess = () => {
+        const db = req.result;
+        // The browser can close the connection under us (storage pressure,
+        // another tab upgrading, devtools "clear storage"). Drop the handle so
+        // the next operation reopens instead of failing with "The database
+        // connection is closing" forever.
+        db.onclose = () => { if (this.db === db) this.db = null; };
+        db.onversionchange = () => { db.close(); if (this.db === db) this.db = null; };
+        resolve(db);
+      };
+      req.onerror = () => reject(req.error);
+      req.onblocked = () => console.warn('[fs] IndexedDB open blocked by another connection');
+    }).finally(() => { this._opening = null; });
+    return this._opening;
+  }
+
+  private async _getDb(): Promise<IDBDatabase> {
+    if (!this.db) this.db = await this._openDb();
+    return this.db;
+  }
+
+  private static _isClosedError(e: unknown): boolean {
+    const name = (e as any)?.name;
+    return name === 'InvalidStateError' || name === 'TransactionInactiveError'
+      || (name === 'AbortError' && /clos/i.test(String((e as any)?.message)));
+  }
+
+  /** Run one request against the store, reopening the database once if the
+   *  connection was closed. Every request here is idempotent (get/put/delete
+   *  by key), so retrying after an abort is safe. */
+  private async _request<T>(mode: IDBTransactionMode, make: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const db = await this._getDb();
+        return await new Promise<T>((resolve, reject) => {
+          const tx = db.transaction(STORE_NAME, mode);
+          const req = make(tx.objectStore(STORE_NAME));
+          // Reads settle on the request; writes wait for the commit so an
+          // abort after onsuccess isn't reported as a saved write.
+          if (mode === 'readwrite') tx.oncomplete = () => resolve(req.result);
+          else req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+          tx.onabort = () => reject(tx.error || new DOMException('Transaction aborted', 'AbortError'));
+        });
+      } catch (e) {
+        if (attempt > 0 || !FileSystem._isClosedError(e)) throw e;
+        console.warn('[fs] IndexedDB connection lost, reopening:', (e as any)?.message);
+        if (this.db) { try { this.db.close(); } catch {} }
+        this.db = null;
+      }
+    }
+  }
+
+  private async _write<T>(make: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+    this._pendingWrites++;
+    try {
+      return await this._request('readwrite', make);
+    } finally {
+      this._pendingWrites--;
+    }
   }
 
   private async _get(path: string): Promise<FSNode | undefined> {
     if (this.cacheEnabled && this.cache.has(path)) {
       return this.cache.get(path);
     }
-    const result = await new Promise<FSNode | undefined>((resolve, reject) => {
-      const req = this._store('readonly').get(path);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
+    const result = await this._request('readonly', store => store.get(path) as IDBRequest<FSNode | undefined>);
     if (this.cacheEnabled) {
       this.cache.set(path, result);
     }
@@ -423,11 +483,7 @@ export class FileSystem {
   }
 
   private async _put(node: FSNode): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      const req = this._store('readwrite').put(node);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
+    await this._write(store => store.put(node));
     if (this.cacheEnabled) {
       this.cache.set(node.path, node);
       // Invalidate allKeys cache
@@ -436,11 +492,7 @@ export class FileSystem {
   }
 
   private async _delete(path: string): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      const req = this._store('readwrite').delete(path);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
+    await this._write(store => store.delete(path));
     if (this.cacheEnabled) {
       this.cache.delete(path);
       this._allKeysCache = null;
@@ -453,11 +505,7 @@ export class FileSystem {
     if (this.cacheEnabled && this._allKeysCache) {
       return this._allKeysCache;
     }
-    const result = await new Promise<string[]>((resolve, reject) => {
-      const req = this._store('readonly').getAllKeys();
-      req.onsuccess = () => resolve(req.result as string[]);
-      req.onerror = () => reject(req.error);
-    });
+    const result = await this._request('readonly', store => store.getAllKeys()) as string[];
     if (this.cacheEnabled) {
       this._allKeysCache = result;
     }
@@ -513,16 +561,12 @@ export class FileSystem {
 
   /** Export all filesystem nodes from IndexedDB */
   async exportAll(): Promise<FSNode[]> {
-    return new Promise<FSNode[]>((resolve, reject) => {
-      const req = this._store('readonly').getAll();
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
+    return this._request('readonly', store => store.getAll() as IDBRequest<FSNode[]>);
   }
 
   /** Import filesystem nodes, replacing all existing data */
   async importAll(nodes: FSNode[]): Promise<void> {
-    const tx = this.db!.transaction(STORE_NAME, 'readwrite');
+    const tx = (await this._getDb()).transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
     store.clear();
     for (const node of nodes) {
