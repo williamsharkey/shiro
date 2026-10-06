@@ -119,8 +119,29 @@ describe('issue 74: shell pipes, redirects, read, brace groups', () => {
       expect(await fs.exists('/home/user/b')).toBe(false);
       expect((await sh('x="a<b&c"; echo "$x"')).out).toBe('a<b&c\n');
     });
+    it('stays data in conditions, heredocs, for lists, and redirect targets', async () => {
+      expect((await sh('x="a|b"; if [ "$x" = "a|b" ]; then echo T1; fi')).out).toBe('T1\n');
+      expect((await sh('x="p;q"; while [ "$x" = "p;q" ]; do echo T2; break; done')).out).toBe('T2\n');
+      expect((await sh("x='a\"b'; test \"$x\" = 'a\"b' && echo T3")).out).toBe('T3\n');
+      await sh('x="<t>|"');
+      expect((await sh('cat <<EOF\nv=$x\nEOF')).out).toBe('v=<t>|\n');
+      expect((await sh('x="1|2"; for p in $x; do [ "$p" = "1|2" ] && echo T4; done')).out).toBe('T4\n');
+    });
     it('command substitution output', async () => {
       expect((await sh('echo "$(echo "x|y")"')).out).toBe('x|y\n');
+    });
+  });
+
+  describe('assignments are not word-split', () => {
+    it('y=$x keeps spaces and operators', async () => {
+      expect((await sh('x="hello world"; y=$x; echo "[$y]"')).out).toBe('[hello world]\n');
+      expect((await sh('x="a > b"; y=$x; echo "[$y]"')).out).toBe('[a > b]\n');
+      expect((await sh('x="a b"; export E=$x; z=$x$x; t=${x:-d e}; echo "[$E][$z][$t]"')).out).toBe('[a b][a ba b][a b]\n');
+      expect((await sh('x="a b"; f() { local q=$x; echo "[$q]"; }; f')).out).toBe('[a b]\n');
+      expect((await sh('y=$(echo a b); n=$((1+2)); echo "[$y] $n"')).out).toBe('[a b] 3\n');
+    });
+    it('several assignments on one line', async () => {
+      expect((await sh('a=1 b=2; echo "$a $b"')).out).toBe('1 2\n');
     });
   });
 

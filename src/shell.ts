@@ -470,7 +470,7 @@ export class Shell {
           pipeline.push(this.isControlStructure(seg) ? seg : await this.expandWords(seg, stderrWriter));
         }
       } else {
-        pipeline = this.parsePipeline(await this.expandWords(compound.command, stderrWriter));
+        pipeline = this.parsePipeline(await this.expandWords(quoteAssignmentValues(compound.command), stderrWriter));
       }
 
       // Check for ! negation prefix
@@ -737,6 +737,13 @@ export class Shell {
           }
           this.env[key] = val;
           if (key === 'PWD') this.cwd = val;
+          // `a=1 b=2` assigns both
+          for (const extra of cmdArgs) {
+            const em = extra.match(/^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/);
+            if (!em) break;
+            if (this.readonlyVars.has(em[1])) { stderrWriter(`${em[1]}: readonly variable\r\n`); exitCode = 1; continue; }
+            this.env[em[1]] = em[2];
+          }
           // Persist API keys to localStorage
           const persistKeys: Record<string, string> = {
             ANTHROPIC_API_KEY: 'shiro_anthropic_key',
@@ -3232,7 +3239,7 @@ export class Shell {
     let body = bodyLines.join('\n');
     // If delimiter was not quoted, expand variables
     if (!quoted) {
-      body = this.expandVars(body);
+      body = restoreExpansion(this.expandVars(body));
     }
     // Add trailing newline (standard heredoc behavior)
     body += '\n';
@@ -3667,7 +3674,7 @@ export class Shell {
         const fileReadMatch = subCmd.trim().match(/^<\s*(.+)$/);
         let subOut: string;
         if (fileReadMatch) {
-          const filePath = this.expandVars(fileReadMatch[1].trim()).replace(/^["']|["']$/g, '');
+          const filePath = restoreExpansion(this.expandVars(fileReadMatch[1].trim())).replace(/^["']|["']$/g, '');
           const resolved = this.fs.resolvePath(filePath, this.cwd);
           try {
             subOut = await this.fs.readFile(resolved, 'utf8') as string;
@@ -4167,7 +4174,7 @@ export class Shell {
     let outFile: { path: string; append: boolean } | null = null;
     let captured = '';
     for (const r of redirects) {
-      const target = this.expandVars(r.target);
+      const target = restoreExpansion(this.expandVars(r.target));
       if (r.op === '<') {
         try {
           const data = await this.fs.readFile(this.fs.resolvePath(target, this.cwd), 'utf8');
@@ -4270,7 +4277,8 @@ export class Shell {
   }
 
   private async evalTest(args: string): Promise<number> {
-    const tokens = args.split(/\s+/);
+    // Expanded values arrive with stand-ins for quotes/operators (protectExpansion)
+    const tokens = args.split(/\s+/).map(restoreExpansion);
     if (tokens.length === 0) return 1;
 
     // Strip surrounding quotes from each token (vars already expanded by caller)
@@ -4622,7 +4630,7 @@ export class Shell {
 
     const varName = forMatch[1];
     const itemsStr = await this.expandCommandSubstitution(this.expandArithmetic(forMatch[2]), writeStderr);
-    const items = this.expandVars(itemsStr).split(/\s+/).filter(Boolean);
+    const items = this.expandVars(itemsStr).split(/\s+/).filter(Boolean).map(restoreExpansion);
     for (const item of items) {
       this.env[varName] = item;
       try {
@@ -4648,7 +4656,7 @@ export class Shell {
 
     const varName = selMatch[1];
     const itemsStr = await this.expandCommandSubstitution(this.expandArithmetic(selMatch[2]), writeStderr);
-    const items = this.expandVars(itemsStr).split(/\s+/).filter(Boolean);
+    const items = this.expandVars(itemsStr).split(/\s+/).filter(Boolean).map(restoreExpansion);
 
     // Display menu
     for (let idx = 0; idx < items.length; idx++) {
@@ -4711,7 +4719,7 @@ export class Shell {
     if (!caseMatch) { writeStderr('case: syntax error\r\n'); return 1; }
 
     const rawWord = caseMatch[1].trim();
-    const word = this.expandVars(rawWord).replace(/^["']|["']$/g, '');
+    const word = restoreExpansion(this.expandVars(rawWord).replace(/^["']|["']$/g, ''));
 
     // Get the body between 'in' and 'esac'
     const inPos = joined.indexOf(' in', caseMatch.index! + 4) + 3;
@@ -5429,6 +5437,30 @@ export function splitCompoundRedirects(cmd: string): { compound: string; redirec
     pos = re.lastIndex;
   }
   return { compound: cmd.slice(0, end).trim(), redirects };
+}
+
+/**
+ * `y=$x` is not word-split in bash, but this shell expands into the command text
+ * before tokenizing. Double-quote simple unquoted assignment values that expand
+ * something (`y=$x`, `export P=$HOME/bin:$PATH`), for leading assignments and
+ * declaration builtins; anything with quotes, parens, or spaces outside ${…} is left alone.
+ */
+export function quoteAssignmentValues(cmd: string): string {
+  const lead = cmd.match(/^\s*(?:(?:local|export|declare|typeset|readonly)(?:\s+-\w+)*\s+)?/)![0];
+  let out = lead;
+  let pos = lead.length;
+  const re = /([A-Za-z_][A-Za-z0-9_]*\+?=)((?:\$\{[^}'"`]*\}|[^\s'"\\()<>|;&`{}])*)(\s+|$)/y;
+  for (;;) {
+    re.lastIndex = pos;
+    const m = re.exec(cmd);
+    if (!m || m[0] === '') break;
+    let value = m[2];
+    if (value.includes('$')) value = `"${value}"`;
+    out += m[1] + value + m[3];
+    pos = re.lastIndex;
+    if (!m[3]) break;
+  }
+  return out + cmd.slice(pos);
 }
 
 /** `{ list; }`, possibly followed by redirections */
