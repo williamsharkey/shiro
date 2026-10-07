@@ -10,6 +10,13 @@ const __dirname = path.dirname(__filename);
 // Use './' for relative paths (works with file:// and hosted)
 const base = process.env.VITE_BASE_PATH || './';
 
+// Same cross-origin isolation headers as server.mjs, so SharedArrayBuffer works
+// under `npm run dev` / `vite preview` too. SHIRO_ISOLATION=0 turns them off.
+const isolationHeaders: Record<string, string> = process.env.SHIRO_ISOLATION === '0' ? {} : {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'credentialless',
+};
+
 export default defineConfig({
   base,
   plugins: [
@@ -30,9 +37,13 @@ export default defineConfig({
   },
   resolve: {},
   server: {
+    headers: isolationHeaders,
     fs: {
       allow: ['..'],
     },
+  },
+  preview: {
+    headers: isolationHeaders,
   },
   optimizeDeps: {
     include: ['isomorphic-git', 'http-cache-semantics'],
