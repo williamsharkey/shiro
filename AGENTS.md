@@ -18,6 +18,7 @@ Do not treat the dashboard or wrappers as the product. The product is the browse
 - `src/node-compat/*`: Node.js runtime shims used by `node` and Claude Code.
 - `src/wasi-runtime.ts` + `src/wasi-packages.ts`: Tier 2 WASI support.
 - `src/x86/*`: Tier 3 x86-64 emulator.
+- `src/kernel/*`: Unix kernel core (process table, fd tables, pipes, syscall dispatch, SAB syscall channel for Worker guests). Contract: `docs/KERNEL_ABI.md`; roadmap: `docs/UNIX_COMPAT.md`. `window.__shiro.kernel`; kernel processes show in `ps`.
 - `src/commands/seed.ts`, `src/commands/hc.ts`, `src/seed-runtime-context.ts`: seeded sessions, host-page access, runtime orientation.
 - `src/claude-config.ts`, `src/node-compat/preload.ts`, `src/node-compat/process.ts`: Claude bootstrap, auth persistence, startup defaults.
 - `server.mjs`: static hosting, API proxying, OAuth callback, signaling, relay, and the opt-in WebSocket-to-TCP relay (`/tcp`, `SHIRO_TCP_RELAY=1`).
