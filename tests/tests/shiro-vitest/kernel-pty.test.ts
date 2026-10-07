@@ -11,6 +11,9 @@ import {
   SIG_IGN, SIG_BLOCK, SIG_UNBLOCK, SA_NOCLDSTOP, WIFSTOPPED, WSTOPSIG, WTERMSIG, WIFSIGNALED, WEXITSTATUS, shellStatus,
 } from '@shiro/kernel/signals';
 import { runKernelJob, jobsCmd, fgCmd, bgCmd, waitCmd } from '@shiro/commands/jobs';
+import { Kernel } from '@shiro/kernel/kernel';
+import { attachKernelTty } from '@shiro/kernel/pty';
+import * as A from '@shiro/kernel/abi';
 import { createTestShell } from './helpers';
 import type { Shell } from '@shiro/shell';
 
@@ -525,5 +528,151 @@ describe('shell job control for kernel jobs', () => {
     p.finish(0);
   });
 
+  it('a real kernel job: Ctrl-Z, jobs, fg', async () => {
+    const kernel = new Kernel({ registerWithProcessTable: false });
+    attachKernelTty(kernel); // the shared jobControl
+    const proc = tty.spawnJob(kernel, {
+      path: 'reader',
+      run: async (p, k) => {
+        const data = new Uint8Array(256);
+        const n = await k.syscall(p, A.SYS_read, [0, 256], data);
+        return n > 0 ? 0 : 1;
+      },
+    });
+    const run = runKernelJob(shell, { command: 'reader', pgid: proc.pgid, pids: [proc.pid], tty });
+    await tick();
+    tty.pty.input('\x1a');
+    expect(await run).toBe(128 + SIGTSTP);
+    expect((await sh('jobs')).output).toMatch(/Stopped\s+reader/);
+    const fg = sh('fg');
+    await tick();
+    tty.pty.input('data\n');
+    expect((await fg).exitCode).toBe(0);
+    expect(proc.state).toBe('zombie');
+  });
+
   const jc = () => jobControl;
+});
+
+describe('kernel processes on a pty', () => {
+  let kernel: Kernel;
+  let jc: JobControl;
+  let tty: TtySession;
+  let screen: { text: () => string };
+  beforeEach(() => {
+    kernel = new Kernel({ registerWithProcessTable: false });
+    jc = new JobControl();
+    attachKernelTty(kernel, jc);
+    tty = new TtySession({ jc });
+    screen = capture(tty.pty);
+  });
+
+  /** A kernel program that reads lines from fd 0 through the syscall layer and echoes them to fd 1 */
+  const echoLines = (n: number) => async (proc: any, k: Kernel) => {
+    const data = new Uint8Array(1024);
+    for (let i = 0; i < n; i++) {
+      const r = await k.syscall(proc, A.SYS_read, [0, 512], data);
+      if (r <= 0) return r === 0 ? 0 : 100 - r;
+      data.copyWithin(0, 0, r);
+      await k.syscall(proc, A.SYS_write, [1, r], data);
+    }
+    return 0;
+  };
+
+  it('jobs get the pty as stdio and controlling tty, in their own group under the session leader', async () => {
+    const p = tty.spawnJob(kernel, { path: 'echo-lines', run: echoLines(1) });
+    const f = tty.foreground({ pgid: p.pgid }); // before the program runs, like the shell does
+    const leader = tty.leader;
+    expect(p.ppid).toBe(leader.pid);
+    expect(p.sid).toBe(leader.pid);
+    expect(p.pgid).toBe(p.pid);
+    expect(p.fds.get(0)?.kind).toBe('pty');
+    const devTty = await kernel.open(p, '/dev/tty', A.O_RDWR);
+    expect((devTty as any).kind).toBe('pty');
+    await tick();
+    tty.pty.input('line one\r');
+    expect(await f).toEqual({ type: 'exited', status: 0 });
+    expect(screen.text()).toBe('line one\r\nline one\r\n');
+  });
+
+  it('Ctrl-C kills a kernel job; Ctrl-Z stops it and fg resumes the blocked read', async () => {
+    const a = tty.spawnJob(kernel, { path: 'a', run: echoLines(1) });
+    const fa = tty.foreground({ pgid: a.pgid });
+    await tick();
+    tty.pty.input('\x03');
+    const ra = await fa;
+    expect(WTERMSIG((ra as any).status)).toBe(SIGINT);
+    expect(a.state).toBe('zombie');
+
+    const b = tty.spawnJob(kernel, { path: 'b', run: echoLines(1) });
+    const job = { pgid: b.pgid };
+    const fb = tty.foreground(job);
+    await tick();
+    tty.pty.input('\x1a');
+    expect(await fb).toEqual({ type: 'stopped', sig: SIGTSTP });
+    expect(b.state).toBe('stopped');
+    // the parent can collect the stop with waitpid(WUNTRACED)
+    const w = await kernel.waitpid(b.pid, A.WUNTRACED | A.WNOHANG, kernel.procs.get(tty.leader.pid)!);
+    expect(WIFSTOPPED(w.status)).toBe(true);
+    const fb2 = tty.foreground(job, true);
+    await tick();
+    expect(b.state).toBe('running');
+    tty.pty.input('back\n');
+    expect(await fb2).toEqual({ type: 'exited', status: 0 });
+    expect(screen.text()).toContain('back\r\n');
+  });
+
+  it('a background kernel read gets SIGTTIN (caller found from its syscall signal)', async () => {
+    const p = tty.spawnJob(kernel, { path: 'bg', run: echoLines(1) });
+    expect(await jc.waitJob(p.pgid)).toEqual({ type: 'stopped', sig: SIGTTIN });
+    expect(p.state).toBe('stopped');
+    const f = tty.foreground({ pgid: p.pgid }, true);
+    tty.pty.input('fg now\n');
+    expect(await f).toEqual({ type: 'exited', status: 0 });
+  });
+
+  it('a guest-handled signal interrupts a blocked tty read with EINTR', async () => {
+    let result = 0;
+    const p = tty.spawnJob(kernel, {
+      path: 'guest',
+      run: async (proc, k) => {
+        const data = new Uint8Array(64);
+        result = await k.syscall(proc, A.SYS_read, [0, 64], data);
+        return 0;
+      },
+    });
+    p.dispositions.set(SIGUSR1, 0x1000); // a guest handler address
+    const f = tty.foreground({ pgid: p.pgid });
+    await tick();
+    expect(kernel.kill(p.pid, SIGUSR1)).toBe(0);
+    await f;
+    expect(result).toBe(-A.EINTR);
+    expect([...p.pendingSignals]).toContain(SIGUSR1);
+  });
+
+  it('kernel kill, SIGCHLD to the leader, and reaping', async () => {
+    const p = tty.spawnJob(kernel, { path: 'sleeper', run: () => new Promise<number>(() => {}) });
+    expect(jc.get(p.pid)).toBeDefined();
+    jc.kill(p.pid, SIGTERM);
+    await tick();
+    expect(p.state).toBe('zombie');
+    expect(WTERMSIG(p.exitStatus!)).toBe(SIGTERM);
+    await tick(); // the leader's SIGCHLD handler reaps it
+    await tick();
+    expect(kernel.procs.has(p.pid)).toBe(false);
+    expect(jc.get(p.pid)).toBeUndefined();
+  });
+
+  it('/dev/ptmx opens a new pty whose slave is /dev/pts/N', async () => {
+    const p = kernel.spawn({ path: 'opener', fds: {}, run: () => new Promise<number>(() => {}) });
+    const m = await kernel.open(p, '/dev/ptmx', A.O_RDWR) as PtyFile;
+    expect(m.kind).toBe('pty');
+    const n = new Uint8Array(4);
+    expect(await m.ioctl(0x80045430, n)).toBe(0); // TIOCGPTN
+    const idx = new DataView(n.buffer).getInt32(0, true);
+    const s = await kernel.open(p, `/dev/pts/${idx}`, A.O_RDWR | A.O_NOCTTY) as PtyFile;
+    await s.write(enc.encode('ping\n'));
+    expect(await readStr(m)).toBe('ping\r\n');
+    jc.kill(p.pid, 9);
+  });
 });

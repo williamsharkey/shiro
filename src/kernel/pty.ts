@@ -9,21 +9,23 @@
  * arguments use the asm-generic `struct termios` (36 bytes) and `struct winsize`.
  *
  * Calls that need the caller's identity (job-control checks, TIOCSCTTY, ...)
- * take an optional trailing `caller`; when it is omitted the resolver set with
- * `setTtyCallerResolver` is asked (the kernel installs one that returns the
- * process whose syscall is being serviced).
+ * take an optional trailing argument: a SignalTarget, or the AbortSignal the
+ * kernel passes to read/write (job control maps it back to the process, and
+ * its abort ends a blocked call with -EINTR).
  */
 import {
-  JobControl, jobControl, SignalTarget, createSignalTarget, WIFEXITED, SIG_IGN,
-  SIGINT, SIGQUIT, SIGTSTP, SIGTTIN, SIGTTOU, SIGWINCH, SIGHUP, SIGCONT, SIGTERM,
+  JobControl, jobControl, SignalTarget, createSignalTarget, attachKernel, WIFEXITED, SIG_IGN,
+  SIGINT, SIGQUIT, SIGTSTP, SIGTTIN, SIGTTOU, SIGWINCH, SIGHUP, SIGCONT, SIGTERM, SIGCHLD,
 } from './signals';
+import {
+  EPERM, ESRCH, EINTR, EIO, EAGAIN, EFAULT, EINVAL, ENOTTY, WNOHANG, S_IFCHR, type KStat,
+  O_RDWR, O_NOCTTY, O_NONBLOCK, POLLIN, POLLOUT, POLLERR, POLLHUP,
+} from './abi';
+import { retain, type OpenFile } from './fd';
+import type { Kernel, SpawnOptions } from './kernel';
+import type { Process } from './process';
 
-// ── errno / flags (mirror abi.ts; kept local until unix/kernel lands) ───────
-const EPERM = 1, ESRCH = 3, EINTR = 4, EIO = 5, EAGAIN = 11, EFAULT = 14, EINVAL = 22, ENOTTY = 25;
-export const O_RDWR = 0o2;
-export const O_NOCTTY = 0o400;
-export const O_NONBLOCK = 0o4000;
-export const POLLIN = 0x001, POLLPRI = 0x002, POLLOUT = 0x004, POLLERR = 0x008, POLLHUP = 0x010;
+export { O_RDWR, O_NOCTTY, O_NONBLOCK, POLLIN, POLLOUT, POLLERR, POLLHUP };
 
 // ── termios (Linux asm-generic values) ──────────────────────────────────────
 // c_iflag
@@ -160,12 +162,8 @@ export function decodeWinsize(buf: Uint8Array): Winsize {
 const readInt = (arg: Uint8Array) => (arg.byteLength >= 4 ? new DataView(arg.buffer, arg.byteOffset, 4).getInt32(0, true) : -1);
 const writeInt = (arg: Uint8Array, v: number) => new DataView(arg.buffer, arg.byteOffset, 4).setInt32(0, v, true);
 
-// ── caller resolution ───────────────────────────────────────────────────────
-let callerResolver: () => SignalTarget | undefined = () => undefined;
-/** The kernel installs a resolver returning the process whose syscall is in progress. */
-export function setTtyCallerResolver(fn: () => SignalTarget | undefined): void {
-  callerResolver = fn;
-}
+/** What read/write/ioctl may get as their last argument */
+export type CallerHint = SignalTarget | AbortSignal | undefined;
 
 /** Session id → its controlling tty (a session has at most one) */
 const controllingTtys = new Map<number, Pty>();
@@ -173,31 +171,26 @@ export function controllingTty(sid: number): Pty | undefined {
   return controllingTtys.get(sid);
 }
 
-/** Structural match for abi.ts `KStat` until unix/kernel lands */
-export interface PtyStat {
-  dev: number; ino: number; mode: number; nlink: number; uid: number; gid: number; rdev: number;
-  size: number; blksize: number; blocks: number; atimeMs: number; mtimeMs: number; ctimeMs: number;
-}
-
-/** Structural match for KERNEL_ABI.md `OpenFile` (plus the optional caller argument) */
-export interface PtyFile {
+/** A pty end as a kernel OpenFile (the trailing argument also accepts the caller) */
+export interface PtyFile extends OpenFile {
   kind: 'pty';
-  flags: number;
   readonly pty: Pty;
   readonly side: 'master' | 'slave';
-  read(buf: Uint8Array, caller?: SignalTarget): Promise<number>;
-  write(buf: Uint8Array, caller?: SignalTarget): Promise<number>;
-  poll(events: number): number;
-  onReady(cb: () => void): () => void;
-  ioctl(req: number, arg: Uint8Array, caller?: SignalTarget): Promise<number>;
-  stat(): Promise<PtyStat>;
-  close(): Promise<void>;
+  read(buf: Uint8Array, hint?: CallerHint): Promise<number>;
+  write(buf: Uint8Array, hint?: CallerHint): Promise<number>;
+  ioctl(req: number, arg: Uint8Array, hint?: CallerHint): Promise<number>;
+  stat(): Promise<KStat>;
 }
+
+/** Kernels that get /dev/pts/N nodes for new ptys */
+const ptyKernels = new Set<Kernel>();
+const livePtys = new Set<Pty>();
 
 let nextPtyIndex = 0;
 const utf8 = new TextEncoder();
 
 interface CanonLine { data: number[]; }
+interface Who { caller?: SignalTarget; abort?: AbortSignal }
 
 export class Pty {
   readonly index = nextPtyIndex++;
@@ -231,6 +224,13 @@ export class Pty {
     this.jc = opts.jc ?? jobControl;
     if (opts.winsize) Object.assign(this.winsize, opts.winsize);
     this.master = this.makeMaster();
+    livePtys.add(this);
+    for (const k of ptyKernels) this.registerDevice(k);
+  }
+
+  /** Make this pty's slave openable as /dev/pts/N in `kernel` */
+  registerDevice(kernel: Kernel): void {
+    kernel.registerDevice(this.name, (proc, flags) => (this.masterClosed ? -EIO : this.openSlave(flags, this.jc.get(proc.pid))));
   }
 
   get name(): string {
@@ -272,7 +272,7 @@ export class Pty {
     this.slaveEverOpened = true;
     const file = this.makeSlave(flags);
     // A session leader without a controlling tty acquires this one (unless O_NOCTTY)
-    const who = caller ?? callerResolver();
+    const who = caller;
     if (who && !(flags & O_NOCTTY) && who.pid === who.sid && !controllingTtys.has(who.sid) && !this.sid) {
       this.acquire(who);
     }
@@ -559,8 +559,8 @@ export class Pty {
     }
   }
 
-  /** Wait for any state change, a timeout (ms), or a signal for `caller`. Resolves true on timeout. */
-  private waitChange(caller: SignalTarget | undefined, timeoutMs?: number): Promise<boolean> {
+  /** Wait for any state change, a timeout (ms), an abort, or a signal for `caller`. Resolves true on timeout. */
+  private waitChange(caller: SignalTarget | undefined, timeoutMs?: number, abort?: AbortSignal): Promise<boolean> {
     return new Promise((resolve) => {
       let done = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -570,11 +570,16 @@ export class Pty {
         done = true;
         this.waiters.delete(onWake);
         if (timer) clearTimeout(timer);
+        abort?.removeEventListener('abort', onWake);
         unsub?.();
         resolve(timedOut);
       };
       const onWake = () => finish(false);
       this.waiters.add(onWake);
+      if (abort) {
+        if (abort.aborted) { finish(false); return; }
+        abort.addEventListener('abort', onWake, { once: true });
+      }
       if (timeoutMs !== undefined) timer = setTimeout(() => finish(true), timeoutMs);
       if (caller) {
         // A caught signal, termination or a stop/continue interrupts the wait
@@ -583,8 +588,9 @@ export class Pty {
     });
   }
 
-  /** A blocked call should give up with EINTR: caller died or has a caught signal pending */
-  private interrupted(caller: SignalTarget | undefined): boolean {
+  /** A blocked call should give up with EINTR: aborted by the kernel, caller died, or a caught signal is pending */
+  private interrupted(caller: SignalTarget | undefined, abort?: AbortSignal): boolean {
+    if (abort?.aborted) return true;
     if (!caller) return false;
     return caller.runState === 'zombie' || caller.signals.deliverable() !== 0n;
   }
@@ -613,8 +619,14 @@ export class Pty {
 
   // ── slave read/write ──
 
-  private async slaveRead(file: PtyFile, buf: Uint8Array, caller?: SignalTarget): Promise<number> {
-    caller ??= callerResolver();
+  /** Split a trailing argument into the calling process and the kernel's abort signal */
+  private who(hint: CallerHint): Who {
+    const abort = hint instanceof AbortSignal ? hint : undefined;
+    return { caller: this.jc.resolveCaller(hint), abort };
+  }
+
+  private async slaveRead(file: PtyFile, buf: Uint8Array, w: Who): Promise<number> {
+    const { caller, abort } = w;
     if (buf.length === 0) return 0;
     for (;;) {
       const jc = await this.jobCheck(caller, SIGTTIN);
@@ -623,11 +635,11 @@ export class Pty {
         if (this.lines.length) return this.takeLine(buf);
         if (this.hungUp || this.masterClosed) return 0;
         if (file.flags & O_NONBLOCK) return -EAGAIN;
-        await this.waitChange(caller);
-        if (this.interrupted(caller) && !this.lines.length) return -EINTR;
+        await this.waitChange(caller, undefined, abort);
+        if (this.interrupted(caller, abort) && !this.lines.length) return -EINTR;
         continue;
       }
-      return this.readNonCanonical(file, buf, caller);
+      return this.readNonCanonical(file, buf, w);
     }
   }
 
@@ -650,7 +662,8 @@ export class Pty {
   }
 
   /** VMIN/VTIME semantics (termios(3) "Noncanonical mode") */
-  private async readNonCanonical(file: PtyFile, buf: Uint8Array, caller?: SignalTarget): Promise<number> {
+  private async readNonCanonical(file: PtyFile, buf: Uint8Array, w: Who): Promise<number> {
+    const { caller, abort } = w;
     const min = this.termios.cc[VMIN];
     const timeMs = this.termios.cc[VTIME] * 100;
     const want = Math.min(min, buf.length);
@@ -666,39 +679,39 @@ export class Pty {
       while (!this.rawq.length && !hung()) {
         const left = deadline - Date.now();
         if (left <= 0) return 0;
-        await this.waitChange(caller, left);
-        if (this.interrupted(caller) && !this.rawq.length) return -EINTR;
-        if (this.termios.lflag & ICANON) return this.slaveRead(file, buf, caller);
+        await this.waitChange(caller, left, abort);
+        if (this.interrupted(caller, abort) && !this.rawq.length) return -EINTR;
+        if (this.termios.lflag & ICANON) return this.slaveRead(file, buf, w);
       }
       return this.takeRaw(buf);
     }
     // MIN > 0: block for the first byte, then (with VTIME) use an inter-byte timer
     while (!this.rawq.length && !hung()) {
-      await this.waitChange(caller);
-      if (this.interrupted(caller) && !this.rawq.length) return -EINTR;
-      if (this.termios.lflag & ICANON) return this.slaveRead(file, buf, caller);
+      await this.waitChange(caller, undefined, abort);
+      if (this.interrupted(caller, abort) && !this.rawq.length) return -EINTR;
+      if (this.termios.lflag & ICANON) return this.slaveRead(file, buf, w);
       const jc = await this.jobCheck(caller, SIGTTIN);
       if (jc < 0) return jc;
     }
     while (this.rawq.length < want && !hung()) {
       const have = this.rawq.length;
-      const timedOut = await this.waitChange(caller, timeMs > 0 ? timeMs : undefined);
-      if (this.interrupted(caller)) break;
+      const timedOut = await this.waitChange(caller, timeMs > 0 ? timeMs : undefined, abort);
+      if (this.interrupted(caller, abort)) break;
       if (timedOut && this.rawq.length === have) break;
     }
     return this.takeRaw(buf);
   }
 
-  private async slaveWrite(buf: Uint8Array, caller?: SignalTarget): Promise<number> {
-    caller ??= callerResolver();
+  private async slaveWrite(buf: Uint8Array, w: Who): Promise<number> {
+    const { caller, abort } = w;
     if (this.hungUp || this.masterClosed) return -EIO;
     if (this.termios.lflag & TOSTOP) {
       const jc = await this.jobCheck(caller, SIGTTOU);
       if (jc < 0) return jc;
     }
     while (this.outputStopped && !this.hungUp) {
-      await this.waitChange(caller);
-      if (this.interrupted(caller)) return -EINTR;
+      await this.waitChange(caller, undefined, abort);
+      if (this.interrupted(caller, abort)) return -EINTR;
     }
     if (this.hungUp) return -EIO;
     this.output(buf);
@@ -707,9 +720,9 @@ export class Pty {
 
   // ── ioctl ──
 
-  private async doIoctl(file: PtyFile, req: number, arg: Uint8Array, caller?: SignalTarget): Promise<number> {
+  private async doIoctl(file: PtyFile, req: number, arg: Uint8Array, hint: CallerHint): Promise<number> {
     const isMaster = file.side === 'master';
-    caller ??= isMaster ? undefined : callerResolver();
+    const caller = this.jc.resolveCaller(hint);
     // Job-control check for calls that change the tty from a background group
     const changes = req === TCSETS || req === TCSETSW || req === TCSETSF || req === TIOCSPGRP || req === TCFLSH || req === TCXONC;
     if (changes && !isMaster) {
@@ -825,10 +838,10 @@ export class Pty {
     }
   }
 
-  private stat(isMaster: boolean): PtyStat {
+  private stat(isMaster: boolean): KStat {
     const now = Date.now();
     return {
-      dev: 0x16, ino: 3 + this.index, mode: 0o020000 | 0o620, nlink: 1, uid: 0, gid: 5,
+      dev: 0x16, ino: 3 + this.index, mode: S_IFCHR | 0o620, nlink: 1, uid: 0, gid: 5,
       rdev: isMaster ? (5 << 8) | 2 : (136 << 8) | this.index,
       size: 0, blksize: 1024, blocks: 0, atimeMs: now, mtimeMs: now, ctimeMs: now,
     };
@@ -841,7 +854,8 @@ export class Pty {
       flags: O_RDWR,
       pty,
       side: 'master',
-      async read(buf) {
+      async read(buf, hint) {
+        const abort = hint instanceof AbortSignal ? hint : undefined;
         for (;;) {
           if (pty.outq.length) {
             let n = 0;
@@ -857,7 +871,8 @@ export class Pty {
           }
           if (pty.slaveEverOpened && pty.slaveCount === 0) return -EIO;
           if (file.flags & O_NONBLOCK) return -EAGAIN;
-          await pty.waitChange(undefined);
+          await pty.waitChange(undefined, undefined, abort);
+          if (abort?.aborted && !pty.outq.length) return -EINTR;
         }
       },
       async write(buf) {
@@ -876,11 +891,12 @@ export class Pty {
         pty.readyCbs.add(cb);
         return () => pty.readyCbs.delete(cb);
       },
-      ioctl(req, arg, caller) { return pty.doIoctl(file, req, arg, caller); },
+      ioctl(req, arg, hint) { return pty.doIoctl(file, req, arg, hint); },
       async stat() { return pty.stat(true); },
       async close() {
         if (pty.masterClosed) return;
         pty.masterClosed = true;
+        livePtys.delete(pty);
         pty.hangup();
       },
     };
@@ -895,8 +911,9 @@ export class Pty {
       flags,
       pty,
       side: 'slave',
-      read(buf, caller) { return pty.slaveRead(file, buf, caller); },
-      write(buf, caller) { return pty.slaveWrite(buf, caller); },
+      path: this.name,
+      read(buf, hint) { return pty.slaveRead(file, buf, pty.who(hint)); },
+      write(buf, hint) { return pty.slaveWrite(buf, pty.who(hint)); },
       poll(events) {
         let r = 0;
         const canon = !!(pty.termios.lflag & ICANON);
@@ -910,7 +927,7 @@ export class Pty {
         pty.readyCbs.add(cb);
         return () => pty.readyCbs.delete(cb);
       },
-      ioctl(req, arg, caller) { return pty.doIoctl(file, req, arg, caller); },
+      ioctl(req, arg, hint) { return pty.doIoctl(file, req, arg, hint); },
       async stat() { return pty.stat(false); },
       async close() {
         if (closed) return;
@@ -949,18 +966,24 @@ export interface TtyJob {
 export class TtySession {
   readonly pty: Pty;
   readonly jc: JobControl;
-  /** The interactive shell as a process: session leader, ignores the job-control stop signals */
-  readonly leader: ReturnType<typeof createSignalTarget>;
+  /**
+   * The interactive shell as a process: session leader, ignores the
+   * job-control stop signals. An in-page stand-in until `bindKernel` replaces
+   * it with a kernel process.
+   */
+  leader: SignalTarget;
   /** The shell's tty modes, restored when a job stops or dies from a signal */
   shellTermios: Termios;
+  private standIn: ReturnType<typeof createSignalTarget>;
+  private kernel?: Kernel;
+  private leaderProc?: Process;
 
   constructor(opts: { jc?: JobControl; winsize?: Partial<Winsize>; onOutput?: (data: Uint8Array) => void } = {}) {
     this.jc = opts.jc ?? jobControl;
     this.pty = new Pty({ jc: this.jc, winsize: opts.winsize });
-    this.leader = createSignalTarget({ jc: this.jc });
-    // Interactive bash ignores these (and catches SIGINT itself)
-    for (const sig of [SIGTSTP, SIGTTIN, SIGTTOU, SIGQUIT, SIGTERM]) this.leader.signals.handle(sig, SIG_IGN);
-    this.leader.signals.handle(SIGINT, () => {});
+    this.standIn = createSignalTarget({ jc: this.jc });
+    this.leader = this.standIn;
+    shellDispositions(this.leader);
     this.pty.acquire(this.leader);
     this.shellTermios = cloneTermios(this.pty.termios);
     if (opts.onOutput) this.pty.onOutput(opts.onOutput);
@@ -985,6 +1008,60 @@ export class TtySession {
     return createSignalTarget({
       jc: this.jc, pid, ppid: this.leader.pid, pgid: opts.pgid || pid, sid: this.leader.sid, onTerminate: opts.onTerminate,
     });
+  }
+
+  /**
+   * Back the session with a kernel process: an idle `-sh` session leader
+   * whose controlling tty is this pty, so jobs can be its children. Idempotent.
+   */
+  bindKernel(kernel: Kernel): Process {
+    if (this.leaderProc && this.kernel === kernel && this.leaderProc.state !== 'zombie') return this.leaderProc;
+    attachKernelTty(kernel, this.jc);
+    const ctty = this.openSlave();
+    retain(ctty); // the session's /dev/tty stays open as long as the session
+    const proc = kernel.spawn({
+      path: '-sh', argv: ['-sh'], setsid: true, fds: { 0: ctty, 1: ctty, 2: ctty },
+      run: () => new Promise<void>(() => {}),
+    });
+    proc.ctty = ctty;
+    const t = this.jc.get(proc.pid)!;
+    shellDispositions(t);
+    t.signals.handle(SIGCHLD, () => this.reap());
+    const fg = this.jobInForeground ? this.pty.fgPgrp : 0;
+    this.pty.release();
+    this.pty.acquire(t);
+    if (fg) this.pty.setForeground(fg);
+    this.leader = t;
+    this.kernel = kernel;
+    this.leaderProc = proc;
+    return proc;
+  }
+
+  /**
+   * Spawn a kernel job in this session: a new process group (unless `pgid`
+   * names an existing one) whose stdio is the pty slave and whose parent is
+   * the session leader. Pair with `foreground` or `runKernelJob`.
+   */
+  spawnJob(kernel: Kernel, opts: Omit<SpawnOptions, 'parent' | 'setsid'>): Process {
+    const parent = this.bindKernel(kernel);
+    let fds = opts.fds;
+    if (!fds) {
+      const slave = this.openSlave();
+      fds = { 0: slave, 1: slave, 2: slave };
+    }
+    return kernel.spawn({ ...opts, fds, parent, pgid: opts.pgid ?? 0 });
+  }
+
+  /** Reap exited children of the kernel leader (its SIGCHLD handler); job control already has their status. */
+  reap(): void {
+    const k = this.kernel, lp = this.leaderProc;
+    if (!k || !lp) return;
+    void (async () => {
+      for (;;) {
+        const r = await k.waitpid(-1, WNOHANG, lp);
+        if (r.pid <= 0) return;
+      }
+    })();
   }
 
   /**
@@ -1014,8 +1091,31 @@ export class TtySession {
   }
 
   dispose(): void {
-    void this.pty.master.close();
-    this.leader.finish(0);
-    this.jc.unregister(this.leader.pid);
+    void this.pty.master.close(); // hangup: SIGHUP to the leader and the foreground job
+    if (this.leaderProc && this.kernel) void this.kernel.exit(this.leaderProc, 0);
+    this.standIn.finish(0);
+    this.jc.unregister(this.standIn.pid);
   }
+}
+
+/** Interactive bash ignores the job-control signals and catches SIGINT itself */
+function shellDispositions(t: SignalTarget): void {
+  for (const sig of [SIGTSTP, SIGTTIN, SIGTTOU, SIGQUIT, SIGTERM]) t.signals.handle(sig, SIG_IGN);
+  t.signals.handle(SIGINT, () => {});
+}
+
+/**
+ * Wire a kernel to job control and the pty devices: /dev/ptmx opens a new pty
+ * master, /dev/pts/N its slaves (main.ts calls this at boot). Idempotent.
+ */
+export function attachKernelTty(kernel: Kernel, jc: JobControl = jobControl): void {
+  attachKernel(kernel, jc);
+  if (ptyKernels.has(kernel)) return;
+  ptyKernels.add(kernel);
+  kernel.registerDevice('/dev/ptmx', (_proc, flags) => {
+    const pty = new Pty({ jc });
+    pty.master.flags = flags;
+    return pty.master;
+  });
+  for (const p of livePtys) p.registerDevice(kernel);
 }

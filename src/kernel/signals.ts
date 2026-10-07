@@ -8,9 +8,16 @@
  * and optionally `onStop`/`onCont`/`onHandler`.
  *
  * Stopping is cooperative: a stopped process simply doesn't get syscall
- * replies. The kernel's dispatch awaits `jobControl.whileStopped(proc)` before
- * it replies, and in-page programs await it at their own checkpoints.
+ * replies (the kernel's dispatch waits in `proc.waitWhileStopped()`), and
+ * in-page programs await `jobControl.whileStopped` at their own checkpoints.
+ *
+ * `attachKernel` adopts every kernel Process: its `signalHook` routes all
+ * delivery here, its dispositions and mask back the SignalState, and its
+ * state changes are reported as job events.
  */
+import type { Kernel } from './kernel';
+import type { Process } from './process';
+import { processTable } from '../process-table';
 
 // ── Linux signal numbers ────────────────────────────────────────────────────
 export const SIGHUP = 1;
@@ -176,9 +183,13 @@ const EINVAL = 22;
 
 /** Per-process signal state: dispositions, blocked mask, pending set. */
 export class SignalState {
-  private actions = new Map<number, SigAction>();
-  mask: bigint = 0n;
+  protected actions = new Map<number, SigAction>();
+  private maskBits: bigint = 0n;
   pending: bigint = 0n;
+
+  /** Blocked signals (sigprocmask) */
+  get mask(): bigint { return this.maskBits; }
+  set mask(v: bigint) { this.maskBits = v; }
 
   getAction(sig: number): SigAction {
     return this.actions.get(sig) ?? { handler: SIG_DFL, flags: 0, mask: 0n };
@@ -271,10 +282,15 @@ export interface SignalTarget {
   runState?: RunState;
   /** Kill the process now (default action term/core, or SIGKILL). The kernel then calls `jobControl.exited`. */
   terminate(sig: number, core: boolean): void;
-  /** A caught signal is pending: set the syscall channel's pending-signal flag */
-  notifyPending?(): void;
+  /** A guest-handled signal is pending: set the syscall channel's pending-signal flag */
+  notifyPending?(sig: number): void;
+  /** Make the process stopped/running (the kernel's markStopped/markContinued); default: set runState */
   onStop?(sig: number): void;
   onCont?(): void;
+  /** Lifecycle owned by the kernel: it reparents children and sends SIGCHLD on exit itself */
+  managed?: boolean;
+  /** True once the process is gone from its owner's table (reaped); job control then forgets it */
+  reaped?(): boolean;
 }
 
 export type JobEvent =
@@ -295,13 +311,32 @@ export class JobControl {
   private procs = new Map<number, SignalTarget>();
   private listeners = new Set<(ev: JobEvent) => void>();
   private resumeWaiters = new Map<number, Array<() => void>>();
-  private nextPid = 1000;
   /** Unreaped wait statuses (for stop/continue/exit reports before the waiter subscribed) */
   private lastStatus = new Map<number, number>();
+  /** Last state reported per pid, so kernel and job-control paths never report a change twice */
+  private reported = new Map<number, RunState>();
 
-  /** Fallback pid allocator for in-page processes; the kernel can override via `setPidAllocator`. */
+  /** Pid allocator for in-page processes: the page-wide one the kernel uses too, unless overridden. */
   allocPid(): number {
-    return this.pidAllocator ? this.pidAllocator() : this.nextPid++;
+    return this.pidAllocator ? this.pidAllocator() : processTable.allocatePid();
+  }
+
+  private callerResolvers: Array<(hint: unknown) => SignalTarget | undefined> = [];
+  /**
+   * Which process is making a call, from whatever the transport passes along
+   * (the kernel passes the process's syscall AbortSignal to read/write).
+   */
+  resolveCaller(hint: unknown): SignalTarget | undefined {
+    if (hint && typeof hint === 'object' && 'pid' in hint && 'signals' in hint) return hint as SignalTarget;
+    for (const r of this.callerResolvers) {
+      const t = r(hint);
+      if (t) return t;
+    }
+    return undefined;
+  }
+  addCallerResolver(fn: (hint: unknown) => SignalTarget | undefined): () => void {
+    this.callerResolvers.push(fn);
+    return () => { this.callerResolvers = this.callerResolvers.filter((r) => r !== fn); };
   }
   private pidAllocator?: () => number;
   setPidAllocator(fn: () => number): void {
@@ -316,14 +351,18 @@ export class JobControl {
   unregister(pid: number): void {
     this.procs.delete(pid);
     this.lastStatus.delete(pid);
+    this.reported.delete(pid);
     this.wakeResumeWaiters(pid);
   }
 
   get(pid: number): SignalTarget | undefined {
-    return this.procs.get(pid);
+    const p = this.procs.get(pid);
+    if (p?.reaped?.()) { this.unregister(pid); return undefined; }
+    return p;
   }
 
   all(): SignalTarget[] {
+    for (const p of [...this.procs.values()]) if (p.reaped?.()) this.unregister(p.pid);
     return [...this.procs.values()];
   }
 
@@ -454,7 +493,7 @@ export class JobControl {
     if (h !== SIG_DFL) {
       // Guest handler pointer: the guest library dequeues and runs it after its next syscall reply
       st.pending = sigset.add(st.pending, sig);
-      p.notifyPending?.();
+      p.notifyPending?.(sig);
       this.emit({ type: 'signal', pid: p.pid, sig });
       return;
     }
@@ -485,7 +524,8 @@ export class JobControl {
       this.act(p, sig);
       if (p.runState !== 'running') break;
     }
-    if (p.signals.deliverable() & this.guestCaught(p)) p.notifyPending?.();
+    const guest = sigset.first(p.signals.deliverable() & this.guestCaught(p));
+    if (guest) p.notifyPending?.(guest);
   }
 
   private guestCaught(p: SignalTarget): bigint {
@@ -499,24 +539,36 @@ export class JobControl {
 
   private stop(p: SignalTarget, sig: number): void {
     if (p.runState !== 'running') return;
-    p.runState = 'stopped';
-    p.onStop?.(sig);
-    const status = W_STOPCODE(sig);
-    this.lastStatus.set(p.pid, status);
-    this.emit({ type: 'stopped', pid: p.pid, sig });
-    this.notifyParent(p, true);
+    if (p.onStop) p.onStop(sig);
+    else p.runState = 'stopped';
+    this.noteStopped(p, sig);
   }
 
   private resume(p: SignalTarget, report: boolean): void {
     if (p.runState !== 'stopped') return;
-    p.runState = 'running';
-    p.onCont?.();
+    if (p.onCont) p.onCont();
+    else p.runState = 'running';
+    this.noteContinued(p, report);
+  }
+
+  /** Record a stop (also called by the kernel bridge when the kernel stops a process itself). */
+  noteStopped(p: SignalTarget, sig: number): void {
+    if (this.reported.get(p.pid) === 'stopped' || this.reported.get(p.pid) === 'zombie') return;
+    this.reported.set(p.pid, 'stopped');
+    this.lastStatus.set(p.pid, W_STOPCODE(sig));
+    this.emit({ type: 'stopped', pid: p.pid, sig });
+    this.notifyParent(p, true);
+  }
+
+  /** Record a continue (SIGCONT, from either path). */
+  noteContinued(p: SignalTarget, report = true): void {
+    if (this.reported.get(p.pid) !== 'stopped') return;
+    this.reported.set(p.pid, 'running');
     this.wakeResumeWaiters(p.pid);
-    if (report) {
-      this.lastStatus.set(p.pid, W_CONTINUED);
-      this.emit({ type: 'continued', pid: p.pid });
-      this.notifyParent(p, true);
-    }
+    if (!report) return;
+    this.lastStatus.set(p.pid, W_CONTINUED);
+    this.emit({ type: 'continued', pid: p.pid });
+    this.notifyParent(p, true);
   }
 
   private notifyParent(p: SignalTarget, stopOrCont: boolean): void {
@@ -533,14 +585,15 @@ export class JobControl {
    */
   exited(pid: number, status: number): void {
     const p = this.procs.get(pid);
-    if (!p || p.runState === 'zombie') return;
-    p.runState = 'zombie';
+    if (!p || this.reported.get(pid) === 'zombie') return;
+    this.reported.set(pid, 'zombie');
+    if (!p.managed) p.runState = 'zombie';
     this.lastStatus.set(pid, status);
     this.wakeResumeWaiters(pid);
     const children = this.all().filter((c) => c.ppid === pid);
-    for (const c of children) c.ppid = this.procs.has(1) ? 1 : 0;
+    if (!p.managed) for (const c of children) if (!c.managed) c.ppid = this.procs.has(1) ? 1 : 0;
     this.emit({ type: 'exited', pid, status });
-    this.notifyParent(p, false);
+    if (!p.managed) this.notifyParent(p, false);
     // An exit that orphans a group with stopped members sends it SIGHUP then SIGCONT (POSIX)
     for (const pg of new Set([p.pgid, ...children.map((c) => c.pgid)])) {
       if (this.group(pg).some((q) => q.runState === 'stopped') && this.isOrphanedPgrp(pg)) {
@@ -665,4 +718,140 @@ const EPIPE = 32;
 export function brokenPipe(writer: SignalTarget | undefined, jc: JobControl = jobControl): number {
   if (writer) jc.send(writer, SIGPIPE);
   return -EPIPE;
+}
+
+// ── kernel bridge ───────────────────────────────────────────────────────────
+
+/**
+ * SignalState of a kernel Process: SIG_DFL/SIG_IGN/guest handlers live in
+ * `proc.dispositions` and the mask in `proc.sigmask` (the kernel's view);
+ * JS handlers for in-page code stay here.
+ */
+class ProcessSignalState extends SignalState {
+  constructor(private proc: Process) { super(); }
+
+  get mask(): bigint {
+    let m = 0n;
+    for (const s of this.proc.sigmask) m = sigset.add(m, s);
+    return m;
+  }
+  set mask(v: bigint) {
+    this.proc.sigmask = new Set();
+    for (let s = 1; s < NSIG; s++) if (sigset.has(v, s)) this.proc.sigmask.add(s);
+  }
+
+  getAction(sig: number): SigAction {
+    const local = this.actions.get(sig);
+    if (local) return local;
+    const d = this.proc.dispositions.get(sig);
+    return { handler: d === 'ignore' ? SIG_IGN : typeof d === 'number' ? d : SIG_DFL, flags: 0, mask: 0n };
+  }
+
+  setAction(sig: number, act: SigAction): number {
+    const r = super.setAction(sig, act);
+    if (r < 0) return r;
+    if (typeof act.handler === 'function') {
+      this.proc.dispositions.delete(sig);
+    } else {
+      this.actions.delete(sig);
+      if (act.handler === SIG_DFL) this.proc.dispositions.delete(sig);
+      else this.proc.dispositions.set(sig, act.handler === SIG_IGN ? 'ignore' : act.handler);
+    }
+    return 0;
+  }
+}
+
+const attached = new WeakMap<Kernel, JobControl>();
+
+/** The job-control view of a kernel process (adopted by `attachKernel`). */
+function kernelTarget(kernel: Kernel, proc: Process, jc: JobControl): SignalTarget {
+  const notify = () => (kernel as unknown as { notify?: () => void }).notify?.();
+  return {
+    get pid() { return proc.pid; },
+    get ppid() { return proc.ppid; },
+    set ppid(v: number) { proc.ppid = v; },
+    get pgid() { return proc.pgid; },
+    set pgid(v: number) { proc.pgid = v; },
+    get sid() { return proc.sid; },
+    set sid(v: number) { proc.sid = v; },
+    get runState(): RunState { return proc.state; },
+    set runState(_v: RunState | undefined) { /* driven by the kernel's markStopped/markContinued/markExited */ },
+    signals: new ProcessSignalState(proc),
+    managed: true,
+    reaped: () => kernel.procs.get(proc.pid) !== proc,
+    terminate(sig, core) {
+      void kernel.exit(proc, W_TERMSIG(sig, core));
+    },
+    onStop(sig) {
+      proc.markStopped(sig);
+      notify(); // wake waitpid(WUNTRACED)
+    },
+    onCont() {
+      proc.markContinued();
+      notify();
+    },
+    notifyPending(sig) {
+      // The kernel's queue owns guest-bound signals: the channel flags them one at a time
+      const t = jc.get(proc.pid);
+      if (t) t.signals.pending = sigset.del(t.signals.pending, sig);
+      proc.pendingSignals.add(sig);
+      proc.interruptSyscalls();
+      (proc.data.onSignal as ((s: number) => void) | undefined)?.(sig);
+    },
+  };
+}
+
+/**
+ * Route a kernel's signals through job control. Every process it spawns is
+ * registered with `jc`; kill(2), SIGCHLD, SIGPIPE and tty signals all go
+ * through `jc.send`, and kernel-side stops/exits are reported as job events.
+ * Idempotent; returns a detach function.
+ */
+export function attachKernel(kernel: Kernel, jc: JobControl = jobControl): () => void {
+  if (attached.has(kernel)) return () => {};
+  attached.set(kernel, jc);
+
+  const adopt = (proc: Process) => {
+    if (proc.pid === 1 || jc.get(proc.pid)) return;
+    const t = kernelTarget(kernel, proc, jc);
+    jc.register(t);
+    proc.signalHook = (_p, sig) => { jc.send(t, sig); return true; };
+    let last = proc.state;
+    proc.onStateChange(() => {
+      const now = proc.state;
+      if (now === last) return;
+      last = now;
+      if (now === 'stopped') jc.noteStopped(t, WSTOPSIG(proc.pendingStopReport ?? W_STOPCODE(SIGSTOP)) || SIGSTOP);
+      else if (now === 'running') jc.noteContinued(t);
+      else jc.exited(proc.pid, proc.exitStatus ?? 0);
+    });
+    if (proc.state === 'zombie') jc.exited(proc.pid, proc.exitStatus ?? 0);
+  };
+  for (const p of kernel.procs.values()) adopt(p);
+
+  // Adopt before the program starts (Kernel.start defers a microtask after spawn)
+  const origSpawn = kernel.spawn;
+  kernel.spawn = function (this: Kernel, opts) {
+    const p = origSpawn.call(this, opts);
+    adopt(p);
+    return p;
+  };
+
+  // read/write get the caller's syscall AbortSignal: map it back to the process
+  const unresolve = jc.addCallerResolver((hint) => {
+    if (!(hint instanceof AbortSignal)) return undefined;
+    for (const p of kernel.procs.values()) if (p.syscallSignal === hint) return jc.get(p.pid);
+    return undefined;
+  });
+
+  return () => {
+    kernel.spawn = origSpawn;
+    unresolve();
+    attached.delete(kernel);
+  };
+}
+
+/** The job-control target for a kernel process (after `attachKernel`). */
+export function targetOf(proc: Process, jc: JobControl = jobControl): SignalTarget | undefined {
+  return jc.get(proc.pid);
 }
