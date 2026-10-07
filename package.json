@@ -16,12 +16,10 @@
     "@xterm/xterm": "^5.5.0",
     "esbuild-wasm": "^0.27.2",
     "http-cache-semantics": "^4.1.1",
-    "isomorphic-git": "^1.27.1",
-    "web-worker": "^1.5.0"
+    "isomorphic-git": "^1.27.1"
   },
   "devDependencies": {
     "fake-indexeddb": "^6.2.5",
-    "pyodide": "^314.0.7",
     "typescript": "^5.7.0",
     "vite": "^6.0.0",
     "vite-plugin-node-polyfills": "^0.25.0",

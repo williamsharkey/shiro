@@ -57,16 +57,3 @@ Object.defineProperty(window, 'location', {
 globalThis.window = window as any;
 globalThis.document = document as any;
 globalThis.self = globalThis; // xterm.js uses `self` (browser global)
-
-import WebWorker from 'web-worker';
-class ShimWorker extends WebWorker {
-  constructor(url: string | URL, options?: any) {
-    if (url instanceof URL || (url && typeof (url as any).pathname === 'string')) {
-      super((url as any).pathname, options);
-    } else {
-      super(url, options);
-    }
-  }
-}
-(globalThis as any).Worker = ShimWorker;
-(window as any).Worker = ShimWorker;
