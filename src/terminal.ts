@@ -9,6 +9,7 @@ import { setActiveTerminal } from './active-terminal';
 import { createHudPanel, HudPanel } from './hud-panel';
 import { showTemplatePalette } from './template-palette';
 import { spawnInWindow } from './commands/spawn';
+import { TtySession } from './kernel/pty';
 
 /**
  * HUD (Heads-Up Display) state for dynamic banner updates.
@@ -33,6 +34,8 @@ export class ShiroTerminal {
 
   term: Terminal;
   fitAddon: FitAddon;
+  /** Controlling tty: kernel jobs get the pty slave; keystrokes go to it while one is in the foreground */
+  tty: TtySession;
   private shell: Shell;
   private lineBuffer = '';
   private cursorPos = 0;
@@ -207,9 +210,15 @@ export class ShiroTerminal {
       document.body.appendChild(this.iframeContainer);
     }
 
+    this.tty = new TtySession({
+      winsize: { rows: this.term.rows, cols: this.term.cols },
+      onOutput: (bytes) => this.term.write(bytes),
+    });
+
     // Refit on window resize
     const refit = () => {
       this.fitAddon.fit();
+      this.tty.resize(this.term.rows, this.term.cols); // SIGWINCH to the foreground job
       this.resizeCallbacks.forEach(cb => cb(this.term.cols, this.term.rows));
     };
     window.addEventListener('resize', refit);
@@ -221,6 +230,7 @@ export class ShiroTerminal {
     this.teardown = () => {
       window.removeEventListener('resize', refit);
       resizeObserver.disconnect();
+      this.tty.dispose();
     };
 
     this.term.onData((data: string) => this.handleInput(data));
@@ -764,6 +774,13 @@ export class ShiroTerminal {
   }
 
   private async handleInput(data: string) {
+    // A kernel job owns the terminal: everything goes through the pty line
+    // discipline (Ctrl-C/Ctrl-Z become SIGINT/SIGTSTP to its process group)
+    if (this.tty.jobInForeground) {
+      this.tty.pty.input(data);
+      return;
+    }
+
     // Stdin passthrough: forward raw data without parsing (e.g., ink/React terminal apps)
     if (this.stdinPassthrough) {
       // Double Ctrl+C force kill: if pressed twice within 1s, force exit

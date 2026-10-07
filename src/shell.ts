@@ -20,9 +20,14 @@ export interface BackgroundJob {
   id: number;
   command: string;
   promise: Promise<number>;
-  status: 'running' | 'done' | 'failed';
+  status: 'running' | 'stopped' | 'done' | 'failed';
   exitCode: number;
   abortController?: AbortController;
+  /** Kernel jobs: the process group (signals, fg/bg, Ctrl-Z) and its members */
+  pgid?: number;
+  pids?: number[];
+  /** Kernel jobs: tty modes saved when the job stopped */
+  termios?: import('./kernel/pty').Termios;
 }
 
 // Env var names whose values should be masked in terminal output
@@ -141,6 +146,10 @@ export class Shell {
   /** Depth of execute() recursion — only top-level resets LINENO */
   private executeDepth: number = 0;
   private nextJobId = 1;
+  /** Next job number for the job table (kernel jobs use it too) */
+  allocJobId(): number {
+    return this.nextJobId++;
+  }
   private terminal?: ShiroTerminal;
 
   constructor(fs: FileSystem, commands: CommandRegistry) {

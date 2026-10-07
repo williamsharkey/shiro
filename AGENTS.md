@@ -119,6 +119,14 @@ Use focused vitest runs while iterating, then run the smallest meaningful verifi
 
 Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` handles build, upload, and restart, and it is the only place that should bump `build-number.txt`. nginx on the host sets `client_max_body_size 100m` (`/etc/nginx/sites-enabled/shiro`): the 1 MB default rejected long Claude conversations and GitHub blob uploads with 413. `deploy.sh` uploads only `server.mjs`; the host's own `/opt/shiro/package.json` holds its deps (`ws`, and `undici` so proxied model calls have no 5-minute header timeout). Each model call logs one `[proxy] messages model=… stream=… bytes=… → status headers in Nms` line (`journalctl -u shiro`).
 
+## Terminals And Signals (kernel, phase 3)
+
+- `src/kernel/pty.ts`: `Pty` is a master/slave pair with Linux termios (36-byte `struct termios`, `winsize`), the n_tty line discipline (canonical editing, echo, ISIG, VMIN/VTIME, IXON), OPOST/ONLCR, and the tty ioctls (TCGETS/TCSETS*, TIOCGWINSZ/TIOCSWINSZ, TIOCSCTTY, TIOCGPGRP/TIOCSPGRP, FIONREAD, ...). Calls that need the caller's identity take an optional trailing `caller` or ask `setTtyCallerResolver`. Background reads get SIGTTIN (writes SIGTTOU with `tostop`); a stopped caller waits inside the call and retries when continued, which is the syscall restart.
+- `src/kernel/signals.ts`: Linux signal numbers, `SignalState` (dispositions, mask, pending), and `jobControl` (process groups, sessions, `kill`, stop/continue, SIGCHLD, orphaned groups, `waitJob`). Stopping is cooperative: stopped processes don't get syscall replies (`whileStopped`). `createSignalTarget` makes an in-page process.
+- Every `ShiroTerminal`/`WindowTerminal` owns a `TtySession` (`terminal.tty`): the pty plus a session-leader process standing in for the shell. Keystrokes go to the pty only while a kernel job is in the foreground (`tty.jobInForeground`); otherwise the shell's own line editor handles them as before. Resizes call `tty.resize` (SIGWINCH to the foreground group).
+- Shell job control for kernel jobs: `runKernelJob` in `src/commands/jobs.ts` (the hook for `kernel.spawn`); Ctrl-Z puts the job in `backgroundJobs` as `stopped`, and `fg`/`bg`/`jobs`/`kill %N`/`wait` signal and wait on its process group. Plain `&` jobs are still in-page promises that can only be aborted.
+- `kill` is one implementation (`src/commands/trap.ts`, re-exported by `ps.ts`) with bash's options; `stty` reads and sets the terminal's pty (a per-shell detached pty when there is no terminal); `tput lines/cols` use the pty size, overridden by `LINES`/`COLUMNS`.
+
 ## Gotchas
 
 - `child_process` is shimmed. There is no real process tree.
