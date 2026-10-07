@@ -362,3 +362,127 @@ describe('kernel loopback and listening sockets', () => {
     expect(await u.sendto(query, 0, v4('8.8.8.8', 123))).toBe(-ENETUNREACH);
   });
 });
+
+describe('x86 emulator socket syscalls', () => {
+  async function setup(stack: NetStack) {
+    const { LinuxSyscalls } = await import('@shiro/x86/syscalls');
+    const { CPU, RAX, RDI, RSI, RDX, R8, R9, R10 } = await import('@shiro/x86/cpu');
+    const { VirtualMemory } = await import('@shiro/x86/memory');
+    const { FileSystem } = await import('@shiro/filesystem');
+    const cpu = new CPU();
+    const mem = new VirtualMemory();
+    const fs = new FileSystem();
+    await fs.init();
+    const sys = new LinuxSyscalls(cpu, mem, fs, '/home/user', () => {}, () => {});
+    sys.net = stack;
+    const base = 0x600000n;
+    mem.allocatePages(base, 4);
+    const sc = async (nr: number, ...args: bigint[]) => {
+      cpu.setReg64(RAX, BigInt(nr));
+      [RDI, RSI, RDX, R10, R8, R9].forEach((r, i) => cpu.setReg64(r, args[i] ?? 0n));
+      await sys.handleSyscall();
+      return Number(BigInt.asIntN(64, cpu.getReg64(RAX)));
+    };
+    return { sc, mem, base };
+  }
+
+  it('socket/connect/write/shutdown/read/getpeername/poll/close through the relay', async () => {
+    const { sc, mem, base } = await setup(stackFor(P.relayA));
+    const SA = base, BUF = base + 0x100n, LEN = base + 0x80n, PFD = base + 0x90n;
+    const fd = await sc(41, 2n, 1n, 0n); // socket(AF_INET, SOCK_STREAM, 0)
+    expect(fd).toBeGreaterThanOrEqual(3);
+    mem.writeBytes(SA, encodeSockaddr(v4('127.0.0.1', P.echoPort)));
+    expect(await sc(42, BigInt(fd), SA, 16n)).toBe(0); // connect
+    mem.writeBytes(BUF, enc.encode('x86 says hi'));
+    expect(await sc(1, BigInt(fd), BUF, 11n)).toBe(11); // write
+    // poll(POLLIN) waits for the echo
+    mem.write32(PFD, fd); mem.write16(PFD + 4n, POLLIN); mem.write16(PFD + 6n, 0);
+    expect(await sc(7, PFD, 1n, 5000n)).toBe(1);
+    expect(mem.read16(PFD + 6n) & POLLIN).toBe(POLLIN);
+    expect(await sc(48, BigInt(fd), 1n)).toBe(0); // shutdown(SHUT_WR)
+    let got = '';
+    for (;;) {
+      const n = await sc(0, BigInt(fd), BUF, 4096n); // read
+      if (n <= 0) { expect(n).toBe(0); break; }
+      got += dec.decode(mem.readBytes(BUF, n));
+    }
+    expect(got).toBe('x86 says hi');
+    mem.write32(LEN, 128);
+    expect(await sc(52, BigInt(fd), SA, LEN)).toBe(0); // getpeername
+    expect(decodeSockaddr(mem.readBytes(SA, mem.read32(LEN)))).toEqual(v4('127.0.0.1', P.echoPort));
+    expect(await sc(3, BigInt(fd))).toBe(0);
+    expect(await sc(0, BigInt(fd), BUF, 1n)).toBe(-9); // EBADF
+  });
+
+  it('bind/listen/accept4 and socketpair work in-kernel', async () => {
+    const stack = new NetStack();
+    stack.configure({ relayUrl: null, tokenUrl: null, dohUrl: null, portHost: null });
+    const { sc, mem, base } = await setup(stack);
+    const SA = base, BUF = base + 0x100n, LEN = base + 0x80n, SV = base + 0x90n;
+    const lfd = await sc(41, 2n, 1n, 0n);
+    mem.writeBytes(SA, encodeSockaddr(v4('127.0.0.1', 9090)));
+    expect(await sc(49, BigInt(lfd), SA, 16n)).toBe(0); // bind
+    expect(await sc(50, BigInt(lfd), 16n)).toBe(0); // listen
+    const cfd = await sc(41, 2n, 1n | BigInt(SOCK_NONBLOCK), 0n);
+    expect(await sc(42, BigInt(cfd), SA, 16n)).toBe(0); // loopback connect completes at once
+    mem.write32(LEN, 128);
+    const afd = await sc(288, BigInt(lfd), SA, LEN, 0n); // accept4
+    expect(afd).toBeGreaterThan(cfd);
+    expect((decodeSockaddr(mem.readBytes(SA, 16)) as any).address).toBe('127.0.0.1');
+    expect(await sc(0, BigInt(cfd), BUF, 16n)).toBe(-EAGAIN); // nonblocking, nothing yet
+    mem.writeBytes(BUF, enc.encode('pong'));
+    expect(await sc(44, BigInt(afd), BUF, 4n, 0n, 0n, 0n)).toBe(4); // sendto
+    expect(await sc(45, BigInt(cfd), BUF, 16n, 0n, 0n, 0n)).toBe(4); // recvfrom
+    expect(await sc(53, 1n, 1n, 0n, SV)).toBe(0); // socketpair(AF_UNIX, SOCK_STREAM)
+    const [a, b] = [mem.read32(SV), mem.read32(SV + 4n)];
+    mem.writeBytes(BUF, enc.encode('z'));
+    expect(await sc(1, BigInt(a), BUF, 1n)).toBe(1);
+    expect(await sc(0, BigInt(b), BUF + 8n, 1n)).toBe(1);
+    mem.writeBytes(SA, encodeSockaddr(v4('127.0.0.1', 9090)));
+    expect(await sc(42, BigInt(await sc(41, 2n, 1n, 0n)), SA, 16n)).toBe(0);
+    mem.writeBytes(SA, encodeSockaddr(v4('127.0.0.1', 9091)));
+    expect(await sc(42, BigInt(await sc(41, 2n, 1n, 0n)), SA, 16n)).toBe(-ECONNREFUSED);
+  });
+});
+
+describe('node net module over kernel sockets', () => {
+  it('net.connect streams through the relay', async () => {
+    const { createNetModule } = await import('@shiro/node-compat/modules/net-tls');
+    const net = createNetModule({ stack: stackFor(P.relayA) });
+    const result = await new Promise<string>((resolve, reject) => {
+      let got = '';
+      const s = net.connect(P.echoPort, '127.0.0.1', () => s.end('from node net'));
+      s.setEncoding('utf8');
+      s.on('data', (d: string) => { got += d; });
+      s.on('error', reject);
+      s.on('close', () => resolve(got));
+    });
+    expect(result).toBe('from node net');
+  });
+
+  it('net.connect reports relay refusals as errors', async () => {
+    const { createNetModule } = await import('@shiro/node-compat/modules/net-tls');
+    const net = createNetModule({ stack: stackFor(P.relayB) });
+    const err: any = await new Promise((resolve) => {
+      const s = net.connect({ host: '10.0.0.1', port: 80 });
+      s.on('error', resolve);
+    });
+    expect(err.code).toBe('EACCES');
+    expect(err.syscall).toBe('connect');
+  });
+
+  it('net.createServer accepts loopback connections in the page', async () => {
+    const { createNetModule } = await import('@shiro/node-compat/modules/net-tls');
+    const stack = new NetStack();
+    stack.configure({ relayUrl: null, tokenUrl: null, dohUrl: null, portHost: null });
+    const net = createNetModule({ stack });
+    const server = net.createServer((sock: any) => sock.pipe(sock));
+    await new Promise<void>((r) => server.listen(5555, r));
+    expect(server.address().port).toBe(5555);
+    const chunks: string[] = [];
+    const client = net.connect({ port: 5555 });
+    for await (const c of (client.end('echo me'), client)) chunks.push(dec.decode(c as Uint8Array));
+    expect(chunks.join('')).toBe('echo me');
+    await new Promise<void>((r) => server.close(() => r()));
+  });
+});

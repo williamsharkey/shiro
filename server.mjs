@@ -868,7 +868,10 @@ export function createTcpRelay(config, { lookup, log = console.log } = {}) {
       if (!family && !HOSTNAME_RE.test(host)) return fail('EINVAL', 'bad host');
       let addrs;
       try {
-        addrs = family ? [{ address: host, family }] : await resolve(host);
+        addrs = family ? [{ address: host, family }] : await Promise.race([
+          resolve(host),
+          new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('timeout'), { code: 'EAI_AGAIN' })), cfg.connectTimeoutMs).unref?.()),
+        ]);
       } catch (err) {
         return fail(err?.code === 'ENOTFOUND' || err?.code === 'ENODATA' ? 'ENOTFOUND' : 'EAI_AGAIN', 'lookup failed');
       }
@@ -896,7 +899,8 @@ export function createTcpRelay(config, { lookup, log = console.log } = {}) {
       log(`[tcp] #${id} ${ip} connect ${target}`);
       phase = 'connecting';
       // Connect to the vetted IP literal: no second lookup, so no rebinding window.
-      tcp = net.connect({ host: address, port, timeout: cfg.connectTimeoutMs });
+      // allowHalfOpen: the peer's FIN must not end our side; the client decides with {"op":"shutdown"}
+      tcp = net.connect({ host: address, port, timeout: cfg.connectTimeoutMs, allowHalfOpen: true });
       tcp.setNoDelay(true);
       tcp.once('timeout', () => { if (phase === 'connecting') fail('ETIMEDOUT', 'connect timeout'); });
       tcp.once('connect', () => {

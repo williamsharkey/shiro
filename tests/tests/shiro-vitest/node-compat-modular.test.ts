@@ -255,7 +255,7 @@ describe('Node Compat Modular Tests', () => {
       expect(socket.writable).toBe(true);
       expect(socket.readable).toBe(true);
       expect(socket.destroyed).toBe(false);
-      expect(socket.remoteAddress).toBe('127.0.0.1');
+      expect(socket.remoteAddress).toBeUndefined(); // not connected, like Node
     });
   });
 

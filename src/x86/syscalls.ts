@@ -6,6 +6,11 @@
 import { CPU, RAX, RDI, RSI, RDX, R8, R10 } from './cpu';
 import { VirtualMemory } from './memory';
 import type { FileSystem } from '../filesystem';
+import {
+  netStack, NetStack, KSocket, KDatagramSocket, decodeSockaddr, encodeSockaddr, type SockAddr,
+  AF_UNIX, O_NONBLOCK, POLLIN, POLLOUT, POLLNVAL, SOL_SOCKET, SO_RCVTIMEO, SO_SNDTIMEO, SO_LINGER, FIONREAD,
+  ENOTSOCK, EOPNOTSUPP, EAFNOSUPPORT as NET_EAFNOSUPPORT,
+} from '../kernel/net';
 
 // Linux error codes (negated — syscalls return -ERRNO)
 const ENOENT = 2;
@@ -19,7 +24,6 @@ const EINVAL = 22;
 const ENOSPC = 28;
 const ENOSYS = 38;
 const ENETUNREACH = 101;
-const EAFNOSUPPORT = 97;
 const ECONNREFUSED = 111;
 
 // File descriptor table entry
@@ -29,6 +33,8 @@ interface FDEntry {
   content: Uint8Array | null;  // null = stdin/stdout/stderr
   flags: number;
   pipe?: PipeBuffer;  // if this FD is a pipe endpoint
+  sock?: KSocket | KDatagramSocket;  // if this FD is a kernel socket (src/kernel/net.ts)
+  legacyHttp?: LegacyHttp;  // port-80 fetch emulation when no TCP relay is configured
 }
 
 // In-memory ring buffer for pipe(2)
@@ -39,15 +45,10 @@ interface PipeBuffer {
   closed: boolean;
 }
 
-// Socket metadata for network syscall stubs
-interface SocketEntry {
-  fd: number;
-  domain: number;    // AF_INET=2, AF_INET6=10
-  type: number;      // SOCK_STREAM=1, SOCK_DGRAM=2
-  protocol: number;
+// Plain-HTTP-over-fetch emulation, the pre-relay behavior, kept for port 80 when no relay is configured
+interface LegacyHttp {
   targetHost: string;
   targetPort: number;
-  connected: boolean;
   writeBuffer: Uint8Array[];
   readBuffer: Uint8Array;
   readOffset: number;
@@ -66,7 +67,8 @@ export class LinuxSyscalls {
   private fs: FileSystem;
   private cwd: string;
   private fdTable: Map<number, FDEntry> = new Map();
-  private socketTable: Map<number, SocketEntry> = new Map();
+  /** Network stack backing socket fds (tests swap in their own). */
+  net: NetStack = netStack;
   private nextFd = 3;
   private brkAddr: bigint;
   private startTime: number;
@@ -123,7 +125,7 @@ export class LinuxSyscalls {
       case 10:  result = 0n; break; // mprotect — no-op
       case 11:  result = this.sysMunmap(arg0, arg1); break;
       case 12:  result = this.sysBrk(arg0); break;
-      case 16:  result = this.sysIoctl(arg0, arg1, arg2); break;
+      case 16:  result = await this.sysIoctl(arg0, arg1, arg2); break;
       case 21:  result = await this.sysAccess(arg0, arg1); break;
       case 32:  result = this.sysDup(arg0); break;
       case 33:  result = this.sysDup2(arg0, arg1); break;
@@ -140,33 +142,34 @@ export class LinuxSyscalls {
       case 13:  result = this.sysRtSigaction(arg0, arg1, arg2); break;
       case 14:  result = this.sysRtSigprocmask(arg0, arg1, arg2, arg3); break;
       case 22:  result = this.sysPipe(arg0); break; // pipe
-      case 20:  result = this.sysWritev(arg0, arg1, arg2); break;
+      case 20:  result = await this.sysWritev(arg0, arg1, arg2); break;
       case 72:  result = this.sysFcntl(arg0, arg1, arg2); break;
       case 89:  result = this.sysReadlink(arg0, arg1, arg2); break;
       case 158: result = this.sysArchPrctl(arg0, arg1); break;
       case 218: result = 1000n; break; // set_tid_address — return fake TID
-      case 271: result = 0n; break; // ppoll — stub (return timeout)
+      case 271: result = await this.sysPpoll(arg0, arg1, arg2); break; // ppoll
       case 302: result = this.sysPrlimit64(arg0, arg1, arg2, arg3); break;
       case 318: result = this.sysGetrandom(arg0, arg1, arg2); break;
-      case 7:   result = 0n; break; // poll — stub
+      case 7:   result = await this.sysPoll(arg0, Number(arg1), Number(BigInt.asIntN(32, arg2))); break; // poll
       case 17:  result = await this.sysPread64(arg0, arg1, arg2, arg3); break;
       case 18:  result = await this.sysPwrite64(arg0, arg1, arg2, arg3); break;
-      case 19:  result = this.sysReadv(arg0, arg1, arg2); break;
+      case 19:  result = await this.sysReadv(arg0, arg1, arg2); break;
       case 28:  result = 0n; break; // madvise — no-op
       case 35:  result = this.sysNanosleep(arg0, arg1); break;
       case 41:  result = this.sysSocket(arg0, arg1, arg2); break; // socket
       case 42:  result = await this.sysConnect(arg0, arg1, arg2); break; // connect
-      case 43:  result = -BigInt(ENOSYS); break; // accept — not supported
+      case 43:  result = await this.sysAccept(arg0, arg1, arg2, 0n); break; // accept
+      case 288: result = await this.sysAccept(arg0, arg1, arg2, arg3); break; // accept4
       case 44:  result = await this.sysSendto(arg0, arg1, arg2, arg3, arg4, arg5); break; // sendto
       case 45:  result = await this.sysRecvfrom(arg0, arg1, arg2, arg3, arg4, arg5); break; // recvfrom
-      case 46:  result = await this.sysSendmsg(arg0, arg1, arg2); break; // sendmsg (stub)
-      case 47:  result = -BigInt(ENOSYS); break; // recvmsg — stub
-      case 48:  result = 0n; break; // shutdown — stub
-      case 49:  result = -BigInt(ENOSYS); break; // bind — not supported
-      case 50:  result = -BigInt(ENOSYS); break; // listen — not supported
-      case 51:  result = -BigInt(ENOSYS); break; // getsockname — stub
-      case 52:  result = -BigInt(ENOSYS); break; // getpeername — stub
-      case 53:  result = -BigInt(ENOSYS); break; // socketpair — not supported
+      case 46:  result = await this.sysSendmsg(arg0, arg1, arg2); break; // sendmsg
+      case 47:  result = await this.sysRecvmsg(arg0, arg1, arg2); break; // recvmsg
+      case 48:  result = this.sysShutdown(arg0, arg1); break; // shutdown
+      case 49:  result = this.sysBind(arg0, arg1, arg2); break; // bind
+      case 50:  result = this.sysListen(arg0, arg1); break; // listen
+      case 51:  result = this.sysGetsockname(arg0, arg1, arg2); break; // getsockname
+      case 52:  result = this.sysGetpeername(arg0, arg1, arg2); break; // getpeername
+      case 53:  result = this.sysSocketpair(arg0, arg1, arg2, arg3); break; // socketpair
       case 54:  result = this.sysGetsockopt(arg0, arg1, arg2, arg3, arg4); break; // getsockopt
       case 55:  result = this.sysSetsockopt(arg0, arg1, arg2, arg3, arg4); break; // setsockopt
       case 56:  result = -BigInt(ENOSYS); break; // clone — not supported
@@ -202,6 +205,9 @@ export class LinuxSyscalls {
   private async sysRead(fdNum: bigint, buf: bigint, count: bigint): Promise<bigint> {
     const fd = Number(fdNum);
     const n = Number(count);
+
+    const sockEntry = this.fdTable.get(fd);
+    if (sockEntry?.sock || sockEntry?.legacyHttp) return this.sysRecvfrom(fdNum, buf, count, 0n, 0n, 0n);
 
     if (fd === 0) {
       // Read from stdin
@@ -242,6 +248,9 @@ export class LinuxSyscalls {
   private async sysWrite(fdNum: bigint, buf: bigint, count: bigint): Promise<bigint> {
     const fd = Number(fdNum);
     const n = Number(count);
+
+    const sockEntry = this.fdTable.get(fd);
+    if (sockEntry?.sock || sockEntry?.legacyHttp) return this.sockSend(sockEntry, this.mem.readBytes(buf, n), 0, null);
 
     const data = this.mem.readBytes(buf, n);
     const text = new TextDecoder().decode(data);
@@ -309,7 +318,9 @@ export class LinuxSyscalls {
     const fd = Number(fdNum);
     if (fd < 3) return 0n; // Don't close stdin/stdout/stderr
     if (!this.fdTable.has(fd)) return -BigInt(EBADF);
+    const entry = this.fdTable.get(fd);
     this.fdTable.delete(fd);
+    this.releaseSock(entry);
     return 0n;
   }
 
@@ -327,6 +338,10 @@ export class LinuxSyscalls {
     }
     const entry = this.fdTable.get(fd);
     if (!entry) return -BigInt(EBADF);
+    if (entry.sock || entry.legacyHttp) {
+      this.fillStatBuf(statBuf, 0, 0o140777, 1); // S_IFSOCK
+      return 0n;
+    }
     return this.fillStat(entry.path, statBuf);
   }
 
@@ -433,7 +448,22 @@ export class LinuxSyscalls {
     return this.brkAddr;
   }
 
-  private sysIoctl(fdNum: bigint, request: bigint, arg: bigint): bigint {
+  private async sysIoctl(fdNum: bigint, request: bigint, arg: bigint): Promise<bigint> {
+    const sock = this.fdTable.get(Number(fdNum))?.sock;
+    if (sock) {
+      const req = Number(request);
+      if (req === 0x5421) { // FIONBIO
+        sock.flags = this.mem.read32(arg) ? sock.flags | O_NONBLOCK : sock.flags & ~O_NONBLOCK;
+        return 0n;
+      }
+      if (req === FIONREAD) {
+        const out = new Uint8Array(4);
+        const r = await sock.ioctl(req, out);
+        if (r === 0) this.mem.writeBytes(arg, out);
+        return BigInt(r);
+      }
+      return -BigInt(ENOTTY);
+    }
     // TIOCGWINSZ (0x5413) — return terminal size
     if (Number(request) === 0x5413 && Number(fdNum) <= 2) {
       // struct winsize { rows(2), cols(2), xpixel(2), ypixel(2) }
@@ -470,8 +500,11 @@ export class LinuxSyscalls {
     if (!entry) return -BigInt(EBADF);
     const nfd = Number(newFd);
     // Close existing FD at newFd if any
+    if (nfd === Number(oldFd)) return BigInt(nfd);
+    const replaced = this.fdTable.get(nfd);
     this.fdTable.delete(nfd);
     this.fdTable.set(nfd, { ...entry });
+    this.releaseSock(replaced);
     return BigInt(nfd);
   }
 
@@ -603,10 +636,23 @@ export class LinuxSyscalls {
     }
   }
 
-  private sysWritev(fdNum: bigint, iovAddr: bigint, iovcnt: bigint): bigint {
+  private async sysWritev(fdNum: bigint, iovAddr: bigint, iovcnt: bigint): Promise<bigint> {
     const fd = Number(fdNum);
     const cnt = Number(iovcnt);
     let totalWritten = 0;
+
+    const sockEntry = this.fdTable.get(fd);
+    if (sockEntry?.sock || sockEntry?.legacyHttp) {
+      const parts: Uint8Array[] = [];
+      for (let i = 0; i < cnt; i++) {
+        const base = iovAddr + BigInt(i * 16);
+        parts.push(this.mem.readBytes(this.mem.read64(base), Number(this.mem.read64(base + 8n))));
+      }
+      const data = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+      let off = 0;
+      for (const p of parts) { data.set(p, off); off += p.length; }
+      return this.sockSend(sockEntry, data, 0, null);
+    }
 
     for (let i = 0; i < cnt; i++) {
       const base = iovAddr + BigInt(i * 16);
@@ -646,9 +692,14 @@ export class LinuxSyscalls {
     if (c === 2) return 0n; // F_SETFD → ok
     if (c === 3) {
       const entry = this.fdTable.get(fd);
+      if (entry?.sock) return BigInt(2 | (entry.sock.flags & O_NONBLOCK)); // O_RDWR
       return BigInt(entry ? entry.flags : 0);
     }
-    if (c === 4) return 0n; // F_SETFL → ok
+    if (c === 4) { // F_SETFL: sockets honor O_NONBLOCK
+      const sock = this.fdTable.get(fd)?.sock;
+      if (sock) sock.flags = (sock.flags & ~O_NONBLOCK) | (Number(arg) & O_NONBLOCK);
+      return 0n;
+    }
     return -BigInt(EINVAL);
   }
 
@@ -712,10 +763,29 @@ export class LinuxSyscalls {
     return BigInt(n);
   }
 
-  private sysReadv(fdNum: bigint, iovAddr: bigint, iovcnt: bigint): bigint {
+  private async sysReadv(fdNum: bigint, iovAddr: bigint, iovcnt: bigint): Promise<bigint> {
     const fd = Number(fdNum);
     const cnt = Number(iovcnt);
     let totalRead = 0;
+
+    const sockEntry = this.fdTable.get(fd);
+    if (sockEntry?.sock || sockEntry?.legacyHttp) {
+      const iov: { addr: bigint; len: number }[] = [];
+      for (let i = 0; i < cnt; i++) {
+        const base = iovAddr + BigInt(i * 16);
+        iov.push({ addr: this.mem.read64(base), len: Number(this.mem.read64(base + 8n)) });
+      }
+      const r = await this.sockRecv(sockEntry, iov.reduce((n, v) => n + v.len, 0), 0);
+      if (typeof r === 'bigint') return r;
+      let off = 0;
+      for (const v of iov) {
+        if (off >= r.data.length) break;
+        const k = Math.min(v.len, r.data.length - off);
+        this.mem.writeBytes(v.addr, r.data.subarray(off, off + k));
+        off += k;
+      }
+      return BigInt(r.data.length);
+    }
 
     for (let i = 0; i < cnt; i++) {
       const base = iovAddr + BigInt(i * 16);
@@ -811,114 +881,325 @@ export class LinuxSyscalls {
     return 0n;
   }
 
-  // ─── Network syscall stubs ────────────────────────────────────────────────
+  // ─── Sockets (kernel sockets from src/kernel/net.ts) ──────────────────────
 
-  private sysSocket(domain: bigint, type: bigint, protocol: bigint): bigint {
-    const d = Number(domain);
-    const t = Number(type) & 0xFF; // Mask off SOCK_NONBLOCK/SOCK_CLOEXEC flags
-    // Only support AF_INET (2) and AF_INET6 (10)
-    if (d !== 2 && d !== 10) return -BigInt(EAFNOSUPPORT);
-    // Only support SOCK_STREAM (1) for HTTP
-    if (t !== 1 && t !== 2) return -BigInt(ENOSYS);
+  private allocSock(sock: KSocket | KDatagramSocket): bigint {
     const fd = this.nextFd++;
-    this.fdTable.set(fd, { path: `socket:${fd}`, offset: 0, content: new Uint8Array(0), flags: 0 });
-    this.socketTable.set(fd, {
-      fd, domain: d, type: t, protocol: Number(protocol),
-      targetHost: '', targetPort: 0, connected: false,
-      writeBuffer: [], readBuffer: new Uint8Array(0), readOffset: 0,
-    });
+    this.fdTable.set(fd, { path: `socket:[${sock.ino}]`, offset: 0, content: null, flags: 2, sock });
     return BigInt(fd);
   }
 
+  private sockEntry(fdNum: bigint): FDEntry | bigint {
+    const entry = this.fdTable.get(Number(fdNum));
+    if (!entry) return -BigInt(EBADF);
+    if (!entry.sock && !entry.legacyHttp) return -BigInt(ENOTSOCK);
+    return entry;
+  }
+
+  /** Close the socket once no fd refers to it any more. */
+  private releaseSock(entry: FDEntry | undefined): void {
+    const sock = entry?.sock;
+    if (!sock) return;
+    for (const e of this.fdTable.values()) if (e.sock === sock) return;
+    void sock.close();
+  }
+
+  private readSockaddr(addr: bigint, len: bigint): SockAddr | bigint {
+    if (addr === 0n) return -BigInt(EFAULT);
+    const sa = decodeSockaddr(this.mem.readBytes(addr, Math.min(Number(len), 128)));
+    return typeof sa === 'number' ? BigInt(sa) : sa;
+  }
+
+  private writeSockaddr(sa: SockAddr, addr: bigint, lenPtr: bigint): void {
+    if (addr === 0n || lenPtr === 0n) return;
+    const bytes = sa.family === AF_UNIX ? new Uint8Array([AF_UNIX, 0]) : encodeSockaddr(sa);
+    const cap = this.mem.read32(lenPtr);
+    this.mem.writeBytes(addr, bytes.subarray(0, Math.min(cap, bytes.length)));
+    this.mem.write32(lenPtr, bytes.length);
+  }
+
+  private sysSocket(domain: bigint, type: bigint, protocol: bigint): bigint {
+    const sock = this.net.socket(Number(domain), Number(type), Number(protocol));
+    if (typeof sock === 'number') return BigInt(sock);
+    return this.allocSock(sock);
+  }
+
   private async sysConnect(fdNum: bigint, addrPtr: bigint, addrLen: bigint): Promise<bigint> {
-    const fd = Number(fdNum);
-    const sock = this.socketTable.get(fd);
-    if (!sock) return -BigInt(EBADF);
-    // Parse sockaddr_in: family(2), port(2 big-endian), addr(4)
-    const family = this.mem.read16(addrPtr);
-    const portHi = this.mem.read8(addrPtr + 2n);
-    const portLo = this.mem.read8(addrPtr + 3n);
-    const port = (portHi << 8) | portLo;
-    // Read IPv4 address
-    const a0 = this.mem.read8(addrPtr + 4n);
-    const a1 = this.mem.read8(addrPtr + 5n);
-    const a2 = this.mem.read8(addrPtr + 6n);
-    const a3 = this.mem.read8(addrPtr + 7n);
-    sock.targetHost = `${a0}.${a1}.${a2}.${a3}`;
-    sock.targetPort = port;
-    sock.connected = true;
-    // Only allow HTTP (80) and HTTPS (443) — reject others
-    if (port !== 80 && port !== 443) {
-      return -BigInt(ENETUNREACH);
+    const entry = this.sockEntry(fdNum);
+    if (typeof entry === 'bigint') return entry;
+    const sa = this.readSockaddr(addrPtr, addrLen);
+    if (typeof sa === 'bigint') return sa;
+    const sock = entry.sock!;
+    if (sock instanceof KDatagramSocket) return BigInt(sock.connect(sa));
+    const r = await sock.connect(sa);
+    if (r === -ENETUNREACH && !this.net.config.relayUrl && sa.port === 80) {
+      entry.legacyHttp = { targetHost: sa.address, targetPort: 80, writeBuffer: [], readBuffer: new Uint8Array(0), readOffset: 0 };
+      return 0n;
     }
-    return 0n;
+    return BigInt(r);
+  }
+
+  private async sysAccept(fdNum: bigint, addrPtr: bigint, lenPtr: bigint, flags: bigint): Promise<bigint> {
+    const entry = this.sockEntry(fdNum);
+    if (typeof entry === 'bigint') return entry;
+    if (!(entry.sock instanceof KSocket)) return -BigInt(EOPNOTSUPP);
+    const conn = await entry.sock.accept(Number(flags));
+    if (typeof conn === 'number') return BigInt(conn);
+    const fd = this.allocSock(conn);
+    const peer = conn.getpeername();
+    if (typeof peer !== 'number') this.writeSockaddr(peer, addrPtr, lenPtr);
+    return fd;
+  }
+
+  /** send/sendto/sendmsg/write on a socket fd. */
+  private async sockSend(entry: FDEntry, data: Uint8Array, flags: number, to: SockAddr | null): Promise<bigint> {
+    if (entry.legacyHttp) {
+      entry.legacyHttp.writeBuffer.push(data.slice());
+      return BigInt(data.length);
+    }
+    const sock = entry.sock!;
+    if (sock instanceof KDatagramSocket) return BigInt(await sock.sendto(data, flags, to));
+    return BigInt(await sock.send(data, flags));
+  }
+
+  /** recv/recvfrom/recvmsg/read on a socket fd. */
+  private async sockRecv(entry: FDEntry, len: number, flags: number): Promise<{ data: Uint8Array; from: SockAddr | null } | bigint> {
+    if (entry.legacyHttp) {
+      const n = await this.legacyRecv(entry.legacyHttp, len);
+      return typeof n === 'bigint' ? n : { data: n, from: null };
+    }
+    const sock = entry.sock!;
+    const buf = new Uint8Array(len);
+    if (sock instanceof KDatagramSocket) {
+      const r = await sock.recvfrom(buf, flags);
+      return typeof r === 'number' ? BigInt(r) : { data: buf.subarray(0, r.n), from: r.from };
+    }
+    const n = await sock.recv(buf, flags);
+    if (n < 0) return BigInt(n);
+    const peer = sock.getpeername();
+    return { data: buf.subarray(0, n), from: typeof peer === 'number' ? null : peer };
   }
 
   private async sysSendto(fdNum: bigint, buf: bigint, len: bigint, flags: bigint, destAddr: bigint, addrLen: bigint): Promise<bigint> {
-    const fd = Number(fdNum);
-    const sock = this.socketTable.get(fd);
-    if (!sock) {
-      // Fall through to regular write
-      return this.sysWrite(fdNum, buf, len);
+    const entry = this.fdTable.get(Number(fdNum));
+    if (!entry) return -BigInt(EBADF);
+    if (!entry.sock && !entry.legacyHttp) return this.sysWrite(fdNum, buf, len);
+    let to: SockAddr | null = null;
+    if (destAddr !== 0n && entry.sock instanceof KDatagramSocket) {
+      const sa = this.readSockaddr(destAddr, addrLen);
+      if (typeof sa === 'bigint') return sa;
+      to = sa;
     }
-    const n = Number(len);
-    const data = this.mem.readBytes(buf, n);
-    sock.writeBuffer.push(new Uint8Array(data));
-    return BigInt(n);
+    return this.sockSend(entry, this.mem.readBytes(buf, Number(len)), Number(flags), to);
   }
 
   private async sysRecvfrom(fdNum: bigint, buf: bigint, len: bigint, flags: bigint, srcAddr: bigint, addrLen: bigint): Promise<bigint> {
-    const fd = Number(fdNum);
-    const sock = this.socketTable.get(fd);
-    if (!sock) {
-      return this.sysRead(fdNum, buf, len);
+    const entry = this.fdTable.get(Number(fdNum));
+    if (!entry) return -BigInt(EBADF);
+    if (!entry.sock && !entry.legacyHttp) return this.sysRead(fdNum, buf, len);
+    const r = await this.sockRecv(entry, Number(len), Number(flags));
+    if (typeof r === 'bigint') return r;
+    this.mem.writeBytes(buf, r.data);
+    if (r.from) this.writeSockaddr(r.from, srcAddr, addrLen);
+    return BigInt(r.data.length);
+  }
+
+  // struct msghdr: name(0) namelen(8) iov(16) iovlen(24) control(32) controllen(40) flags(48)
+  private iovecs(msg: bigint): { addr: bigint; len: number }[] {
+    const iov = this.mem.read64(msg + 16n);
+    const cnt = Math.min(Number(this.mem.read64(msg + 24n)), 1024);
+    const out: { addr: bigint; len: number }[] = [];
+    for (let i = 0; i < cnt; i++) {
+      const base = iov + BigInt(i * 16);
+      out.push({ addr: this.mem.read64(base), len: Number(this.mem.read64(base + 8n)) });
     }
-    // If we have buffered read data, return it
-    if (sock.readOffset < sock.readBuffer.length) {
-      const n = Math.min(Number(len), sock.readBuffer.length - sock.readOffset);
-      this.mem.writeBytes(buf, sock.readBuffer.slice(sock.readOffset, sock.readOffset + n));
-      sock.readOffset += n;
-      return BigInt(n);
-    }
-    // Try to fetch via HTTP if we have buffered write data
-    if (sock.writeBuffer.length > 0 && sock.connected) {
-      try {
-        const response = await this.fetchFromSocket(sock);
-        sock.readBuffer = response;
-        sock.readOffset = 0;
-        sock.writeBuffer = [];
-        const n = Math.min(Number(len), response.length);
-        this.mem.writeBytes(buf, response.slice(0, n));
-        sock.readOffset = n;
-        return BigInt(n);
-      } catch {
-        return -BigInt(ECONNREFUSED);
-      }
-    }
-    return 0n; // EOF
+    return out;
   }
 
   private async sysSendmsg(fdNum: bigint, msg: bigint, flags: bigint): Promise<bigint> {
-    // Stub — just acknowledge
+    const entry = this.sockEntry(fdNum);
+    if (typeof entry === 'bigint') return entry;
+    const parts = this.iovecs(msg).map((v) => this.mem.readBytes(v.addr, v.len));
+    const data = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+    let off = 0;
+    for (const p of parts) { data.set(p, off); off += p.length; }
+    let to: SockAddr | null = null;
+    const name = this.mem.read64(msg);
+    if (name !== 0n && entry.sock instanceof KDatagramSocket) {
+      const sa = this.readSockaddr(name, BigInt(this.mem.read32(msg + 8n)));
+      if (typeof sa === 'bigint') return sa;
+      to = sa;
+    }
+    return this.sockSend(entry, data, Number(flags), to);
+  }
+
+  private async sysRecvmsg(fdNum: bigint, msg: bigint, flags: bigint): Promise<bigint> {
+    const entry = this.sockEntry(fdNum);
+    if (typeof entry === 'bigint') return entry;
+    const iov = this.iovecs(msg);
+    const r = await this.sockRecv(entry, iov.reduce((n, v) => n + v.len, 0), Number(flags));
+    if (typeof r === 'bigint') return r;
+    let off = 0;
+    for (const v of iov) {
+      if (off >= r.data.length) break;
+      const k = Math.min(v.len, r.data.length - off);
+      this.mem.writeBytes(v.addr, r.data.subarray(off, off + k));
+      off += k;
+    }
+    const name = this.mem.read64(msg);
+    if (name !== 0n && r.from) this.writeSockaddr(r.from, name, msg + 8n);
+    else this.mem.write32(msg + 8n, 0);
+    this.mem.write64(msg + 40n, 0n); // no ancillary data
+    this.mem.write32(msg + 48n, 0);
+    return BigInt(r.data.length);
+  }
+
+  private sysShutdown(fdNum: bigint, how: bigint): bigint {
+    const entry = this.sockEntry(fdNum);
+    if (typeof entry === 'bigint') return entry;
+    return entry.sock ? BigInt(entry.sock.shutdown(Number(how))) : 0n;
+  }
+
+  private sysBind(fdNum: bigint, addrPtr: bigint, addrLen: bigint): bigint {
+    const entry = this.sockEntry(fdNum);
+    if (typeof entry === 'bigint') return entry;
+    const sa = this.readSockaddr(addrPtr, addrLen);
+    if (typeof sa === 'bigint') return sa;
+    return BigInt(entry.sock!.bind(sa));
+  }
+
+  private sysListen(fdNum: bigint, backlog: bigint): bigint {
+    const entry = this.sockEntry(fdNum);
+    if (typeof entry === 'bigint') return entry;
+    if (!(entry.sock instanceof KSocket)) return -BigInt(EOPNOTSUPP);
+    return BigInt(entry.sock.listen(Number(backlog)));
+  }
+
+  private sysGetsockname(fdNum: bigint, addrPtr: bigint, lenPtr: bigint): bigint {
+    const entry = this.sockEntry(fdNum);
+    if (typeof entry === 'bigint') return entry;
+    if (!entry.sock) return -BigInt(EOPNOTSUPP);
+    this.writeSockaddr(entry.sock.getsockname(), addrPtr, lenPtr);
     return 0n;
   }
 
+  private sysGetpeername(fdNum: bigint, addrPtr: bigint, lenPtr: bigint): bigint {
+    const entry = this.sockEntry(fdNum);
+    if (typeof entry === 'bigint') return entry;
+    if (!entry.sock) return -BigInt(EOPNOTSUPP);
+    const peer = entry.sock.getpeername();
+    if (typeof peer === 'number') return BigInt(peer);
+    this.writeSockaddr(peer, addrPtr, lenPtr);
+    return 0n;
+  }
+
+  private sysSocketpair(domain: bigint, type: bigint, _protocol: bigint, sv: bigint): bigint {
+    if (Number(domain) !== AF_UNIX) return -BigInt(Number(domain) === 2 || Number(domain) === 10 ? EOPNOTSUPP : NET_EAFNOSUPPORT);
+    const pair = this.net.socketpair(Number(type));
+    if (typeof pair === 'number') return BigInt(pair);
+    this.mem.write32(sv, Number(this.allocSock(pair[0])));
+    this.mem.write32(sv + 4n, Number(this.allocSock(pair[1])));
+    return 0n;
+  }
+
+  private isTimeoutOpt(level: number, name: number) {
+    return level === SOL_SOCKET && (name === SO_RCVTIMEO || name === SO_SNDTIMEO);
+  }
+
   private sysGetsockopt(fdNum: bigint, level: bigint, optname: bigint, optval: bigint, optlen: bigint): bigint {
-    // Stub — return success with zero value
-    if (optval !== 0n && optlen !== 0n) {
-      const len = this.mem.read32(optlen);
-      if (len >= 4) this.mem.write32(optval, 0);
+    const entry = this.sockEntry(fdNum);
+    if (typeof entry === 'bigint') return entry;
+    if (!entry.sock || optval === 0n || optlen === 0n) return entry.sock ? -BigInt(EFAULT) : 0n;
+    const v = entry.sock.getsockopt(Number(level), Number(optname));
+    if (v < 0) return BigInt(v);
+    if (this.isTimeoutOpt(Number(level), Number(optname))) {
+      if (this.mem.read32(optlen) < 16) return -BigInt(EINVAL);
+      this.mem.write64(optval, BigInt(Math.floor(v / 1000)));
+      this.mem.write64(optval + 8n, BigInt((v % 1000) * 1000));
+      this.mem.write32(optlen, 16);
+      return 0n;
     }
+    if (this.mem.read32(optlen) < 4) return -BigInt(EINVAL);
+    this.mem.write32(optval, v);
+    this.mem.write32(optlen, 4);
     return 0n;
   }
 
   private sysSetsockopt(fdNum: bigint, level: bigint, optname: bigint, optval: bigint, optlen: bigint): bigint {
-    // Stub — accept any option
-    return 0n;
+    const entry = this.sockEntry(fdNum);
+    if (typeof entry === 'bigint') return entry;
+    if (!entry.sock) return 0n;
+    const lvl = Number(level), name = Number(optname), len = Number(optlen);
+    let value = 0;
+    if (optval !== 0n && this.isTimeoutOpt(lvl, name) && len >= 16) {
+      value = Number(this.mem.read64(optval)) * 1000 + Math.floor(Number(this.mem.read64(optval + 8n)) / 1000);
+    } else if (optval !== 0n && len >= 4) {
+      value = this.mem.read32(optval) | 0; // SO_LINGER: l_onoff comes first
+    } else if (optval !== 0n && len >= 1) {
+      value = this.mem.read8(optval);
+    }
+    if (lvl === SOL_SOCKET && name === SO_LINGER) value = value ? 1 : 0;
+    return BigInt(entry.sock.setsockopt(lvl, name, value));
+  }
+
+  /** poll(2). Only sets that include a socket wait; others keep the old "timed out" answer. */
+  private async sysPoll(fdsPtr: bigint, nfds: number, timeoutMs: number): Promise<bigint> {
+    const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : 0;
+    for (;;) {
+      let ready = 0;
+      const socks: (KSocket | KDatagramSocket)[] = [];
+      for (let i = 0; i < nfds; i++) {
+        const p = fdsPtr + BigInt(i * 8);
+        const fd = this.mem.read32(p) | 0;
+        if (fd < 0) { this.mem.write16(p + 6n, 0); continue; }
+        const entry = this.fdTable.get(fd);
+        if (entry?.sock) socks.push(entry.sock);
+        const events = this.mem.read16(p + 4n);
+        const rev = !entry ? POLLNVAL
+          : entry.sock ? entry.sock.poll(events)
+          : entry.legacyHttp ? events & (POLLIN | POLLOUT)
+          : 0;
+        this.mem.write16(p + 6n, rev);
+        if (rev) ready++;
+      }
+      if (ready || timeoutMs === 0 || !socks.length) return BigInt(ready);
+      const left = deadline ? deadline - Date.now() : -1;
+      if (deadline && left <= 0) return 0n;
+      await new Promise<void>((resolve) => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const offs: (() => void)[] = [];
+        const done = () => { offs.forEach((off) => off()); if (timer) clearTimeout(timer); resolve(); };
+        for (const s of socks) offs.push(s.onReady(done));
+        if (left > 0) timer = setTimeout(done, left);
+      });
+    }
+  }
+
+  private async sysPpoll(fdsPtr: bigint, nfds: bigint, tsp: bigint): Promise<bigint> {
+    const timeout = tsp === 0n ? -1
+      : Number(this.mem.read64(tsp)) * 1000 + Math.ceil(Number(this.mem.read64(tsp + 8n)) / 1e6);
+    return this.sysPoll(fdsPtr, Number(nfds), timeout);
+  }
+
+  /** The pre-relay behavior: buffer an HTTP request, answer it with fetch(). */
+  private async legacyRecv(sock: LegacyHttp, len: number): Promise<Uint8Array | bigint> {
+    if (sock.readOffset >= sock.readBuffer.length && sock.writeBuffer.length > 0) {
+      try {
+        sock.readBuffer = await this.fetchFromSocket(sock);
+        sock.readOffset = 0;
+        sock.writeBuffer = [];
+      } catch {
+        return -BigInt(ECONNREFUSED);
+      }
+    }
+    const n = Math.min(len, sock.readBuffer.length - sock.readOffset);
+    const out = sock.readBuffer.slice(sock.readOffset, sock.readOffset + Math.max(0, n));
+    sock.readOffset += out.length;
+    return out;
   }
 
   /** Attempt to perform an HTTP fetch based on buffered socket writes */
-  private async fetchFromSocket(sock: SocketEntry): Promise<Uint8Array> {
+  private async fetchFromSocket(sock: LegacyHttp): Promise<Uint8Array> {
     // Concatenate write buffers to get the raw HTTP request
     const totalLen = sock.writeBuffer.reduce((s, b) => s + b.length, 0);
     const rawRequest = new Uint8Array(totalLen);
