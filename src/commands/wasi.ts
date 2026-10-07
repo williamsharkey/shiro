@@ -1,12 +1,15 @@
 import { Command, CommandContext } from './index';
 import { WasiRT, WasiExit, WasiConfig } from '../wasi-runtime';
+import { WasiTTY, LineDiscipline, jspiAvailable } from '../wasi-tty';
 import { findPackage, getCompiledModule } from '../wasi-packages';
 
 /**
  * wasi — Run WASM+WASI binaries in Shiro
  *
  * Usage:
- *   wasi run <file.wasm> [args...]    Run a local WASM binary
+ *   wasi run [--raw] <file.wasm> [args...]    Run a local WASM binary
+ *     On a terminal (JSPI browsers), stdin is interactive: cooked lines by
+ *     default, or every keystroke with --raw (for TUIs).
  *   wasi run <url> [args...]          Fetch and run a remote WASM binary
  *   wasi exec <pkg> [args...]         Run a package (downloads if needed, like npx)
  *   wasi                              Show help
@@ -20,8 +23,10 @@ export const wasiCmd: Command = {
 
     if (!subcmd || subcmd === '--help' || subcmd === '-h') {
       ctx.stdout += 'Usage:\n';
-      ctx.stdout += '  wasi run <file.wasm|url> [args...]   Run a WASM binary\n';
-      ctx.stdout += '  wasi exec <package> [args...]        Run a package (auto-downloads)\n';
+      ctx.stdout += '  wasi run [--raw] <file.wasm|url> [args...]   Run a WASM binary\n';
+      ctx.stdout += '  wasi exec [--raw] <package> [args...]        Run a package (auto-downloads)\n';
+      ctx.stdout += '\nOn a terminal, stdin is interactive: line-edited by default,\n';
+      ctx.stdout += 'or raw keystrokes with --raw for full-screen programs.\n';
       ctx.stdout += '\nRun any WASM+WASI binary against Shiro\'s filesystem.\n';
       ctx.stdout += '\nExamples:\n';
       ctx.stdout += '  wasi run ./program.wasm\n';
@@ -30,8 +35,11 @@ export const wasiCmd: Command = {
       return 0;
     }
 
+    const raw = ctx.args[1] === '--raw';
+    if (raw) ctx.args.splice(1, 1);
+
     if (subcmd === 'exec') {
-      return wasiExec(ctx);
+      return wasiExec(ctx, raw);
     }
 
     if (subcmd !== 'run') {
@@ -99,14 +107,11 @@ export const wasiCmd: Command = {
       };
 
       // Create runtime and run
-      const wasi = new WasiRT(config);
-
-      // Recursively pre-load the working directory tree so path_open/fd_readdir work
-      await wasi.preloadTree(ctx.cwd, 3, 100);
-
-      // Run
-      const exitCode = await wasi.run(wasmModule);
-      return exitCode;
+      return await runWithTerminal(ctx, config, raw, async (wasi) => {
+        // Recursively pre-load the working directory tree so path_open/fd_readdir work
+        await wasi.preloadTree(ctx.cwd, 3, 100);
+        return wasi.run(wasmModule);
+      });
     } catch (e: any) {
       if (e instanceof WasiExit) {
         return e.code;
@@ -121,7 +126,7 @@ export const wasiCmd: Command = {
  * wasi exec <pkg> [args...] — like npx for WASM packages.
  * Downloads the package if not cached, compiles, and runs immediately.
  */
-async function wasiExec(ctx: CommandContext): Promise<number> {
+async function wasiExec(ctx: CommandContext, raw = false): Promise<number> {
   const pkgName = ctx.args[1];
   if (!pkgName) {
     ctx.stderr += 'wasi exec: missing package name\n';
@@ -154,12 +159,57 @@ async function wasiExec(ctx: CommandContext): Promise<number> {
       preopens: { '/': '/', '.': ctx.cwd },
     };
 
-    const wasi = new WasiRT(config);
-    await wasi.preloadTree(ctx.cwd, 3, 100);
-    return await wasi.run(wasmModule);
+    return await runWithTerminal(ctx, config, raw, async (wasi) => {
+      await wasi.preloadTree(ctx.cwd, 3, 100);
+      return wasi.run(wasmModule);
+    });
   } catch (e: any) {
     if (e instanceof WasiExit) return e.code;
     ctx.stderr += `wasi exec: ${e.message}\n`;
     return 1;
+  }
+}
+
+/**
+ * Run with interactive stdin when attached to a terminal, stdin is not piped,
+ * and the browser supports JSPI. Output then streams to the terminal; cooked
+ * mode maps \n to \r\n like a real tty, raw mode writes bytes unchanged.
+ * Otherwise this is the classic run: fixed stdin, buffered output.
+ */
+async function runWithTerminal(
+  ctx: CommandContext,
+  config: WasiConfig,
+  raw: boolean,
+  start: (wasi: WasiRT) => Promise<number>,
+): Promise<number> {
+  const term = ctx.terminal;
+  if (!term || ctx.stdin || ctx.stdoutIsTTY === false || !jspiAvailable()) {
+    if (raw && term && !jspiAvailable()) {
+      ctx.stderr += 'wasi: interactive stdin needs a browser with WebAssembly JSPI; running without it\n';
+    }
+    return start(new WasiRT(config));
+  }
+
+  const tty = new WasiTTY();
+  tty.raw = raw;
+  const write = (text: string) => term.writeOutput(tty.raw ? text : text.replace(/\r?\n/g, '\r\n'));
+  const size = () => { const s = term.getSize(); return { cols: s.cols, rows: s.rows }; };
+  const { cols, rows } = size();
+  config.tty = tty;
+  config.ttySize = size;
+  config.env = { TERM: 'xterm-256color', COLUMNS: String(cols), LINES: String(rows), ...config.env };
+  config.onStdout = write;
+  config.onStderr = write;
+
+  const kill = () => tty.abort(new WasiExit(130));
+  const discipline = new LineDiscipline(tty, (text) => term.writeOutput(text), kill);
+  term.enterStdinPassthrough((data) => discipline.input(data), kill);
+  try {
+    return await start(new WasiRT(config));
+  } catch (e) {
+    if (e instanceof WasiExit) return e.code;
+    throw e;
+  } finally {
+    term.exitStdinPassthrough();
   }
 }

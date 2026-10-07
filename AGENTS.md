@@ -16,7 +16,7 @@ Do not treat the dashboard or wrappers as the product. The product is the browse
 - `src/terminal.ts`: xterm integration and input handling.
 - `src/commands/*`: one command per file or small group.
 - `src/node-compat/*`: Node.js runtime shims used by `node` and Claude Code.
-- `src/wasi-runtime.ts` + `src/wasi-packages.ts`: Tier 2 WASI support.
+- `src/wasi-runtime.ts` + `src/wasi-packages.ts`: Tier 2 WASI support. `src/wasi-tty.ts` makes stdin interactive on a terminal when the browser has WebAssembly JSPI: `fd_read` and `poll_oneoff` suspend on keystrokes and timers, output streams live. Cooked line editing by default; `wasi run --raw` (or the `shiro.tty_set_raw` import) passes every key through for TUIs, and `shiro.tty_size` reports cols/rows. Piped stdin and non-JSPI browsers keep the old fixed-stdin behavior.
 - `src/x86/*`: Tier 3 x86-64 emulator.
 - `src/commands/seed.ts`, `src/commands/hc.ts`, `src/seed-runtime-context.ts`: seeded sessions, host-page access, runtime orientation.
 - `src/claude-config.ts`, `src/node-compat/preload.ts`, `src/node-compat/process.ts`: Claude bootstrap, auth persistence, startup defaults.
