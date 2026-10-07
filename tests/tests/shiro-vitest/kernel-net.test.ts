@@ -486,3 +486,49 @@ describe('node net module over kernel sockets', () => {
     await new Promise<void>((r) => server.close(() => r()));
   });
 });
+
+describe('kernel channel syscalls (netSyscall)', () => {
+  it('socket/bind/listen/connect/accept4/sendto/recvfrom/getsockname/socketpair with a real FdTable', async () => {
+    const { FdTable } = await import('@shiro/kernel/fd');
+    const { netSyscall, SYS_socket, SYS_bind, SYS_listen, SYS_connect, SYS_accept4, SYS_sendto, SYS_recvfrom,
+      SYS_getsockname, SYS_socketpair, SYS_shutdown } = await import('@shiro/kernel/net');
+    const stack = new NetStack();
+    stack.configure({ relayUrl: null, tokenUrl: null, dohUrl: null, portHost: null });
+    const ac = new AbortController();
+    const proc = { fds: new FdTable(), syscallSignal: ac.signal };
+    const data = new Uint8Array(4096);
+    const call = (nr: number, args: number[]) => netSyscall(proc, nr, args, data, undefined, stack);
+
+    const lfd = await call(SYS_socket, [AF_INET, SOCK_STREAM, 0]) as number;
+    data.set(encodeSockaddr(v4('0.0.0.0', 4242)));
+    expect(await call(SYS_bind, [lfd, 16])).toBe(0);
+    expect(await call(SYS_listen, [lfd, 4])).toBe(0);
+    const cfd = await call(SYS_socket, [AF_INET, SOCK_STREAM, 0]) as number;
+    data.set(encodeSockaddr(v4('127.0.0.1', 4242)));
+    expect(await call(SYS_connect, [cfd, 16])).toBe(0);
+    const afd = await call(SYS_accept4, [lfd, 0]) as number;
+    expect(afd).toBeGreaterThan(cfd);
+    expect((decodeSockaddr(data.subarray(0, 16)) as any).address).toBe('127.0.0.1');
+    data.set(enc.encode('chan'));
+    expect(await call(SYS_sendto, [cfd, 4, 0, 0])).toBe(4);
+    expect(await call(SYS_recvfrom, [afd, 100, 0])).toBe(4);
+    expect(dec.decode(data.subarray(0, 4))).toBe('chan');
+    expect((decodeSockaddr(data.subarray(100, 128)) as any).port).toBeGreaterThan(0);
+    expect(await call(SYS_getsockname, [afd])).toBe(16);
+    expect(decodeSockaddr(data.subarray(0, 16))).toEqual(v4('127.0.0.1', 4242)); // the address the client dialed
+    expect(await call(SYS_shutdown, [cfd, SHUT_WR])).toBe(0);
+    expect(await call(SYS_recvfrom, [afd, 100, 0])).toBe(0);
+    // A blocked recv ends with -EINTR when the process's syscall signal aborts
+    const blocked = call(SYS_recvfrom, [cfd, 100, 0]);
+    ac.abort();
+    expect(await blocked).toBe(-4);
+    expect(await call(SYS_socketpair, [1, SOCK_STREAM, 0])).toBe(0);
+    const dv = new DataView(data.buffer);
+    expect(dv.getInt32(4, true)).toBe(dv.getInt32(0, true) + 1);
+    expect(await call(SYS_recvfrom, [lfd + 100, 1, 0])).toBe(-9);
+    expect(await call(9999, [])).toBeUndefined();
+    // Closing the last fd closes the listener (port free again)
+    expect(await proc.fds.close(lfd)).toBe(0);
+    expect(stack.listeners.has(4242)).toBe(false);
+  });
+});

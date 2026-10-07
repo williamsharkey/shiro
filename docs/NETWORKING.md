@@ -47,6 +47,33 @@ guest (x86 / WASM / node net)                         server.mjs                
   sending plaintext to a TLS port would be worse. Guests that bring their own
   TLS (OpenSSL/rustls/Go in x86 or WASM) get end-to-end TLS through the relay.
 
+## Kernel syscalls (channel ABI)
+
+`netSyscall(proc, nr, args, data, onSigpipe?)` in `net.ts` implements the
+socket syscalls in the SAB-channel form of [KERNEL_ABI.md](KERNEL_ABI.md)
+and returns `undefined` for numbers it doesn't own, so `kernel.syscall` can
+forward its `default:` case to it. Sockets live in the process's `FdTable`
+like any `OpenFile`; `read`/`write`/`poll`/`fstat`/`ioctl(FIONREAD)`/`fcntl`
+already work through the generic paths, and blocked calls end with `-EINTR`
+when `proc.syscallSignal` aborts.
+
+| syscall | args | data in → out | result |
+|---|---|---|---|
+| socket (41) | domain, type (SOCK_NONBLOCK/SOCK_CLOEXEC ok), protocol | | fd |
+| socketpair (53) | AF_UNIX, type | → int32 sv[2] | 0 |
+| connect (42) / bind (49) | fd, addrLen | sockaddr | 0, -EINPROGRESS |
+| listen (50) | fd, backlog | | 0 |
+| accept (43) / accept4 (288) | fd (, flags) | → peer sockaddr | fd |
+| getsockname (51) / getpeername (52) | fd | → sockaddr | sockaddr length |
+| sendto (44) | fd, len, flags, addrLen | bytes, then sockaddr at offset len | n |
+| recvfrom (45) | fd, len, flags | → bytes, sender sockaddr at offset len (28 bytes reserved) | n, 0 = EOF |
+| shutdown (48) | fd, how | | 0 |
+| setsockopt (54) | fd, level, name, value (int; SO_RCVTIMEO/SO_SNDTIMEO in ms) | | 0 |
+| getsockopt (55) | fd, level, name | | value ≥ 0 or -errno |
+
+sendmsg/recvmsg are left to the guest library (gather/scatter around
+sendto/recvfrom); the x86 emulator implements them itself.
+
 ## Relay protocol (`/tcp`)
 
 1. `POST /tcp/token` from an allowed Origin → `{ "token": "...", "expires": ms }`.
@@ -159,7 +186,18 @@ per-IP connection cap and connect rate, Origin/token checks, refusal of
 private/loopback/link-local/metadata targets including names that resolve
 into them, loopback listen/accept, and the iframeServer HTTP bridge.
 
-## Not done yet (needs the kernel)
+## Asks for unix/kernel
+
+- `kernel.syscall`: in `default:`, `return (await netSyscall(proc, nr, args, data, () => this.deliver(proc, SIGPIPE))) ?? -ENOSYS`.
+- `abi.ts`: the `SYS_socket`… numbers above (net.ts exports them for now), the
+  socket errnos (`ENOTSOCK` 88 … `EINPROGRESS` 115), `AF_*`, `SOCK_*`, `SOL_*`,
+  `SO_*`, `MSG_*`, `POLLRDHUP`; net.ts would re-export them from there.
+- `GuestSys` in `channel.ts`: socket wrappers that reserve `SOCKADDR_ROOM`
+  after the payload for recvfrom.
+- `kernel.poll` waits on `OpenFile.onReady`, which sockets fire; epoll/select
+  should be built on the same pair.
+
+## Not done yet
 
 - `SIGPIPE` on `EPIPE` (sockets return `-EPIPE`; raising the signal is the
   kernel's job unless `MSG_NOSIGNAL`).
