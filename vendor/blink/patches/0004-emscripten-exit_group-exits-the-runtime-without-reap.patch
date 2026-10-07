@@ -1,0 +1,30 @@
+From df3ba478c5e307adec4a2e2873dba397cf86838c Mon Sep 17 00:00:00 2001
+From: shiro <x@x>
+Date: Wed, 7 Oct 2026 23:42:41 +0000
+Subject: [PATCH 4/4] emscripten: exit_group exits the runtime without reaping
+ threads
+
+---
+ blink/syscall.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/blink/syscall.c b/blink/syscall.c
+index ea51504..fde0c79 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -368,6 +368,12 @@ _Noreturn void SysExitGroup(struct Machine *m, int rc) {
+     _Exit(rc);
+   } else {
+     THR_LOGF("calling exit(%d)", rc);
++#ifdef __EMSCRIPTEN__
++    // The embedder tears down the whole runtime (all pthread workers) on
++    // exit, and pthread_kill() can't interrupt a worker blocked in a proxied
++    // syscall, so waiting for the other threads only hangs or trips asserts.
++    exit(rc);
++#endif
+     KillOtherThreads(m->system);
+ #ifdef HAVE_JIT
+     DisableJit(&m->system->jit);  // unmapping exec pages is slow
+-- 
+2.43.0
+

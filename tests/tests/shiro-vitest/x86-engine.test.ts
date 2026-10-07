@@ -26,9 +26,11 @@ function tryBuild(cmd: string, args: string[], env: Record<string, string> = {})
 
 const out = mkdtempSync(join(tmpdir(), 'shiro-x86-engine-'));
 const goBin = join(out, 'hello-go');
+const httpBin = join(out, 'nethttp');
 const glibcBin = join(out, 'hello-glibc');
 const goExe = existsSync('/usr/local/go/bin/go') ? '/usr/local/go/bin/go' : 'go';
 const haveGo = tryBuild(goExe, ['build', '-ldflags=-s', '-o', goBin, 'hello.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
+const haveHttp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', httpBin, 'nethttp.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const haveGlibc = tryBuild('gcc', ['-static', '-Os', '-o', glibcBin, 'hello.c']);
 
 async function setup(bin: Uint8Array) {
@@ -95,5 +97,14 @@ describe.skipIf(!haveGo)('Blink engine: static Go', () => {
     const { shell } = await setup(readFileSync(goBin));
     const r = await run(shell, './prog fail; echo "status=$?"');
     expect(r.output).toContain('status=5');
+  }, 120_000);
+});
+
+describe.skipIf(!haveHttp)('Blink engine: Go net/http over loopback', () => {
+  it('serves and fetches 4 concurrent requests in one process', async () => {
+    const { shell } = await setup(readFileSync(httpBin));
+    const r = await run(shell, './prog');
+    for (let i = 0; i < 4; i++) expect(r.output).toContain(`pong /${i}`);
+    expect(r.exitCode).toBe(0);
   }, 120_000);
 });
