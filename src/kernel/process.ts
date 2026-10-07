@@ -99,7 +99,7 @@ export class Process {
 
   /** Register cleanup run when the process is killed or exits (e.g. worker.terminate). */
   onTerminate(fn: () => void): void {
-    if (this.state === 'zombie') { fn(); return; }
+    if (this.exiting) { fn(); return; }
     this.terminators.push(fn);
   }
 
@@ -112,18 +112,30 @@ export class Process {
     return () => this.stateWaiters.delete(cb);
   }
 
-  /** Mark exited. Called by the kernel only (Kernel.exit also closes fds and reparents). */
-  markExited(status: number): boolean {
-    if (this.state === 'zombie') return false;
-    this.state = 'zombie';
-    this.exitStatus = status;
+  /** True from the moment exit starts (fds still closing) until reaped. */
+  exiting = false;
+
+  /**
+   * First half of exit: stop the runner (terminators) and interrupt blocked
+   * syscalls. Returns false if the process is already exiting.
+   */
+  beginExit(): boolean {
+    if (this.exiting) return false;
+    this.exiting = true;
     this.interruptSyscalls();
     for (const t of this.terminators.splice(0)) {
       try { t(); } catch { /* ignore */ }
     }
+    return true;
+  }
+
+  /** Second half of exit, after the kernel has closed the fds: become a zombie and wake waiters. */
+  markExited(status: number): void {
+    if (this.state === 'zombie') return;
+    this.state = 'zombie';
+    this.exitStatus = status;
     for (const w of this.exitWaiters.splice(0)) w(status);
     this.notifyStateChange();
-    return true;
   }
 
   markStopped(sig: number): void {
