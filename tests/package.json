@@ -10,7 +10,8 @@
   "dependencies": {
     "fake-indexeddb": "^6.0.0",
     "isomorphic-git": "^1.36.3",
-    "linkedom": "^0.18.0"
+    "linkedom": "^0.18.0",
+    "pyodide": "^314.0.7"
   },
   "devDependencies": {
     "@xterm/addon-fit": "^0.10.0",
