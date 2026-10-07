@@ -136,8 +136,6 @@ export class Shell {
   coproc: { name: string; pid: number; output: string } | null = null;
   /** Abort controller for the currently running command (SIGINT) */
   abortController: AbortController | null = null;
-  /** Set on shells whose output feeds a kernel pipe or file (src/wasi): commands see stdout as not a TTY. */
-  stdoutIsPipe = false;
   /** Current line number for LINENO tracking */
   currentLine: number = 1;
   /** Depth of execute() recursion — only top-level resets LINENO */
@@ -2161,7 +2159,7 @@ export class Shell {
           stderr: '',
           shell: this,
           terminal: terminalOverride || this.terminal,
-          stdoutIsTTY: this.stdoutIsPipe ? false : i === pipeline.length - 1 && !redirects.some(r => r.type === '>' || r.type === '>>'),
+          stdoutIsTTY: i === pipeline.length - 1 && !redirects.some(r => r.type === '>' || r.type === '>>'),
         };
 
         // Check shell functions first

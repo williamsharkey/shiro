@@ -9,9 +9,12 @@
  */
 
 import type { CommandContext } from '../commands/index';
-import { shellExitCode, SIGINT, SIGKILL } from './abi';
-import { BufferSource, CallbackSink, OpenFile, TtyFile, kernelFor } from './kernel';
-import { installWasmBinfmt, startWasmProcess, wasmProcessMode } from './host';
+import type { FileSystem } from '../filesystem';
+import * as A from '../kernel/abi';
+import { BufferFile, type OpenFile } from '../kernel/fd';
+import { Kernel, getKernel } from '../kernel/kernel';
+import { installWasmLoader, wasmProcessMode, wasmRunner } from './host';
+import { SinkFile, TtyFile } from './stdio';
 
 export interface RunWasiOptions {
   module: WebAssembly.Module;
@@ -22,17 +25,29 @@ export interface RunWasiOptions {
   env?: Record<string, string>;
 }
 
-const installed = new WeakSet<object>();
+const kernels = new WeakMap<FileSystem, Kernel>();
+
+/** The page kernel when it serves this filesystem, else one per filesystem (tests). */
+export function kernelForContext(ctx: CommandContext): Kernel {
+  const page = getKernel();
+  let k: Kernel;
+  if (page.fs === ctx.fs) {
+    k = page; // main.ts attached the page's fs and shell at boot
+  } else {
+    k = kernels.get(ctx.fs) ?? new Kernel({ fs: ctx.fs, shell: ctx.shell, registerWithProcessTable: false });
+    kernels.set(ctx.fs, k);
+  }
+  if (!k.shell && ctx.shell) k.shell = ctx.shell;
+  installWasmLoader(k);
+  return k;
+}
 
 export async function runWasiProgram(ctx: CommandContext, opts: RunWasiOptions): Promise<number> {
   const cwd = opts.cwd ?? ctx.cwd;
   const env = { ...(opts.env ?? ctx.env) };
   if (wasmProcessMode() === 'none') return runLegacy(ctx, opts, cwd, env);
 
-  const kernel = kernelFor(ctx.fs);
-  if (ctx.shell) kernel.shell = ctx.shell;
-  if (!installed.has(kernel)) { installWasmBinfmt(kernel); installed.add(kernel); }
-
+  const kernel = kernelForContext(ctx);
   const term = ctx.terminal;
   const toTerminal = !!term && ctx.stdoutIsTTY !== false;
   const interactive = toTerminal && !ctx.stdin;
@@ -42,8 +57,7 @@ export async function runWasiProgram(ctx: CommandContext, opts: RunWasiOptions):
   if (interactive) {
     tty = new TtyFile({
       output: (t) => term!.writeOutput(t),
-      signal: (sig) => { if (pgid) void kernel.kill(-pgid, sig); },
-      size: () => term!.getSize(),
+      signal: (sig) => { if (pgid) kernel.kill(-pgid, sig); },
     });
     const { cols, rows } = term!.getSize();
     env.TERM ??= 'xterm-256color';
@@ -51,32 +65,27 @@ export async function runWasiProgram(ctx: CommandContext, opts: RunWasiOptions):
     env.LINES ??= String(rows);
     fds = { 0: tty, 1: tty, 2: tty };
   } else {
-    const stdout = toTerminal
-      ? new CallbackSink((t) => term!.writeOutput(t.replace(/\r?\n/g, '\r\n')), { tty: true })
-      : new CallbackSink((t) => { ctx.stdout += t; });
     fds = {
-      0: new BufferSource(new TextEncoder().encode(ctx.stdin || '')),
-      1: stdout,
-      2: new CallbackSink((t) => { ctx.stderr += t; }),
+      0: new BufferFile(ctx.stdin || '', A.O_RDONLY),
+      1: toTerminal
+        ? new SinkFile((t) => term!.writeOutput(t.replace(/\r?\n/g, '\r\n')), { tty: true })
+        : new SinkFile((t) => { ctx.stdout += t; }),
+      2: new SinkFile((t) => { ctx.stderr += t; }),
     };
   }
 
-  const proc = kernel.createProcess({ argv: opts.argv, env, cwd, fds });
+  // Its own process group, so ^C reaches it and everything it spawns
+  const proc = kernel.spawn({ path: opts.argv[0], argv: opts.argv, env, cwd, fds, pgid: 0, run: wasmRunner(opts.module, opts.image) });
   pgid = proc.pgid;
   const abort = (ctx.shell as any)?.abortController as AbortController | null | undefined;
-  const onAbort = () => { void kernel.kill(proc.pid, SIGINT); };
+  const onAbort = () => { kernel.kill(-pgid, A.SIGINT); };
   abort?.signal.addEventListener('abort', onAbort);
-  if (tty) term!.enterStdinPassthrough((d) => tty!.input(d), () => { void kernel.kill(-pgid, SIGKILL); });
+  if (tty) term!.enterStdinPassthrough((d) => tty!.input(d), () => { kernel.kill(-pgid, A.SIGKILL); });
   try {
-    await startWasmProcess(kernel, proc, opts.module, opts.image);
     const status = await proc.wait();
-    return shellExitCode(status);
-  } catch (e: any) {
-    ctx.stderr += `${opts.argv[0]}: ${e?.message ?? e}\n`;
-    await proc.exit(1 << 8);
-    return 1;
+    await kernel.waitpid(proc.pid, A.WNOHANG); // reap it now rather than in 30 s
+    return A.shellExitCode(status);
   } finally {
-    kernel.reap(proc);
     abort?.signal.removeEventListener('abort', onAbort);
     if (tty) { tty.hangup(); term!.exitStdinPassthrough(); }
   }
