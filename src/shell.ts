@@ -136,6 +136,8 @@ export class Shell {
   coproc: { name: string; pid: number; output: string } | null = null;
   /** Abort controller for the currently running command (SIGINT) */
   abortController: AbortController | null = null;
+  /** Set on shells whose output feeds a kernel pipe or file (src/wasi): commands see stdout as not a TTY. */
+  stdoutIsPipe = false;
   /** Current line number for LINENO tracking */
   currentLine: number = 1;
   /** Depth of execute() recursion — only top-level resets LINENO */
@@ -2159,7 +2161,7 @@ export class Shell {
           stderr: '',
           shell: this,
           terminal: terminalOverride || this.terminal,
-          stdoutIsTTY: i === pipeline.length - 1 && !redirects.some(r => r.type === '>' || r.type === '>>'),
+          stdoutIsTTY: this.stdoutIsPipe ? false : i === pipeline.length - 1 && !redirects.some(r => r.type === '>' || r.type === '>>'),
         };
 
         // Check shell functions first
@@ -2226,20 +2228,10 @@ export class Shell {
                 const wasmModule = await getCompiledModule(wasmPkg.name, (msg) => {
                   stderrWriter(`  ${msg}\r\n`);
                 });
-                const { WasiRT, WasiExit } = await loadWasiRuntime();
-                const config = {
-                  fs: this.fs,
-                  cwd: this.cwd,
-                  args: [wasmPkg.name, ...cmdArgs],
-                  env: { ...this.env },
-                  stdin: ctx.stdin || '',
-                  onStdout: (text: string) => { ctx.stdout += text; },
-                  onStderr: (text: string) => { ctx.stderr += text; },
-                  preopens: { '/': '/', '.': this.cwd },
-                };
-                const wasi = new WasiRT(config);
-                await wasi.preloadTree(this.cwd, 3, 100);
-                exitCode = await wasi.run(wasmModule);
+                const { runWasiProgram } = await import('./wasi/run-command');
+                exitCode = await runWasiProgram(ctx, {
+                  module: wasmModule, argv: [wasmPkg.name, ...cmdArgs], cwd: this.cwd, env: { ...this.env },
+                });
                 // Write PATH stubs so future runs skip auto-install
                 await this.writeWasiPkgStubs(wasmPkg.name, wasmPkg.aliases);
               } catch (e: any) {
@@ -4919,23 +4911,13 @@ export class Shell {
     if (content.startsWith('#!wasi-pkg ')) {
       const pkgName = content.split('\n')[0].substring('#!wasi-pkg '.length).trim();
       try {
-        const { WasiRT } = await loadWasiRuntime();
         const wasmModule = await getCompiledModule(pkgName, (msg) => {
           writeStderr(`  ${msg}\r\n`);
         });
-        const config = {
-          fs: this.fs,
-          cwd: this.cwd,
-          args: [pkgName, ...args],
-          env: { ...this.env },
-          stdin: ctx.stdin || '',
-          onStdout: (text: string) => { ctx.stdout += text; },
-          onStderr: (text: string) => { ctx.stderr += text; },
-          preopens: { '/': '/', '.': this.cwd },
-        };
-        const wasi = new WasiRT(config);
-        await wasi.preloadTree(this.cwd, 3, 100);
-        return await wasi.run(wasmModule);
+        const { runWasiProgram } = await import('./wasi/run-command');
+        return await runWasiProgram(ctx, {
+          module: wasmModule, argv: [pkgName, ...args], cwd: this.cwd, env: { ...this.env },
+        });
       } catch (e: any) {
         const { WasiExit } = await loadWasiRuntime();
         if (e instanceof WasiExit) return e.code;
@@ -5066,26 +5048,15 @@ export class Shell {
     writeStderr: (s: string) => void,
   ): Promise<number> {
     try {
-      const { WasiRT } = await loadWasiRuntime();
       const data = await this.fs.readFile(filePath) as Uint8Array;
-      const wasmBytes = new Uint8Array(data).buffer;
-      const wasmModule = await WebAssembly.compile(wasmBytes);
+      const image = new Uint8Array(data);
+      const wasmModule = await WebAssembly.compile(image);
 
       const programName = filePath.split('/').pop() || filePath;
-      const config = {
-        fs: this.fs,
-        cwd: this.cwd,
-        args: [programName, ...args],
-        env: { ...this.env },
-        stdin: ctx.stdin || '',
-        onStdout: (text: string) => { ctx.stdout += text; },
-        onStderr: (text: string) => { ctx.stderr += text; },
-        preopens: { '/': '/', '.': this.cwd },
-      };
-
-      const wasi = new WasiRT(config);
-      await wasi.preloadTree(this.cwd, 3, 100);
-      return await wasi.run(wasmModule);
+      const { runWasiProgram } = await import('./wasi/run-command');
+      return await runWasiProgram(ctx, {
+        module: wasmModule, image, argv: [programName, ...args], cwd: this.cwd, env: { ...this.env },
+      });
     } catch (e: any) {
       const { WasiExit } = await loadWasiRuntime();
       if (e instanceof WasiExit) {
