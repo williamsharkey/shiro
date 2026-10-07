@@ -4969,10 +4969,11 @@ export class Shell {
     // Detect ELF binaries → run in x86-64 emulator
     if (content.charCodeAt(0) === 0x7f && content.charCodeAt(1) === 0x45 /* E */ &&
         content.charCodeAt(2) === 0x4c /* L */ && content.charCodeAt(3) === 0x46 /* F */) {
-      const { executeElf } = await import('./x86/runtime');
-      return executeElf(resolvedPath, args, {
+      // Blink (wasm) when the page can run it, else the built-in src/x86.
+      const { runElf } = await import('./x86-engine');
+      return runElf(resolvedPath, args, {
         fs: this.fs, cwd: this.cwd, args, env: this.env,
-        stdin: '', writeStdout: writeStdout, writeStderr: writeStderr,
+        stdin: ctx.stdin || '', writeStdout: writeStdout, writeStderr: writeStderr,
       });
     }
 
