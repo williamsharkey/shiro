@@ -16,6 +16,9 @@ npm run build
 echo "Uploading static files..."
 scp $SSH_OPTS -r dist/* "$HOST:$REMOTE_DIR/public/"
 
+# server.mjs sends COOP/COEP (cross-origin isolation) itself; nginx proxies to it
+# and passes them through. To turn isolation off on the host, add
+# Environment=SHIRO_ISOLATION=0 to the shiro systemd unit. See AGENTS.md.
 echo "Uploading server..."
 scp $SSH_OPTS server.mjs "$HOST:$REMOTE_DIR/server.mjs"
 
