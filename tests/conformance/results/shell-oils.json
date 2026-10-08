@@ -118,7 +118,7 @@
    ]
   },
   "var-sub-quote": {
-   "pass": 30,
+   "pass": 31,
    "total": 41,
    "failures": [
     {
@@ -152,10 +152,6 @@
     {
      "i": 31,
      "name": "Syntax error for single quote in double quote"
-    },
-    {
-     "i": 33,
-     "name": "$'' allowed within VarSub arguments"
     },
     {
      "i": 34,
@@ -458,7 +454,7 @@
    ]
   },
   "arith": {
-   "pass": 61,
+   "pass": 62,
    "total": 71,
    "failures": [
     {
@@ -492,10 +488,6 @@
     {
      "i": 53,
      "name": "Double subscript"
-    },
-    {
-     "i": 61,
-     "name": "Dynamic parsing of arithmetic"
     },
     {
      "i": 65,
@@ -832,161 +824,12 @@
    ]
   },
   "builtin-read": {
-   "pass": 27,
+   "pass": 64,
    "total": 64,
-   "failures": [
-    {
-     "i": 3,
-     "name": "read with zero args"
-    },
-    {
-     "i": 4,
-     "name": "read builtin with no newline returns status 1"
-    },
-    {
-     "i": 5,
-     "name": "read builtin splits value across multiple vars"
-    },
-    {
-     "i": 9,
-     "name": "read -n doesn't strip whitespace (bug fix)"
-    },
-    {
-     "i": 10,
-     "name": "read -d -n - respects delimiter and splits"
-    },
-    {
-     "i": 13,
-     "name": "read without args uses $REPLY, no splitting occurs (without -n)"
-    },
-    {
-     "i": 14,
-     "name": "read -n vs. -N"
-    },
-    {
-     "i": 15,
-     "name": "read -N ignores delimiters"
-    },
-    {
-     "i": 19,
-     "name": "read with line continuation reads multiple physical lines"
-    },
-    {
-     "i": 20,
-     "name": "read multiple vars spanning many lines"
-    },
-    {
-     "i": 24,
-     "name": "read multiple lines with IFS=:"
-    },
-    {
-     "i": 28,
-     "name": "read -a reads into array"
-    },
-    {
-     "i": 30,
-     "name": "read -d '' (null-separated records)"
-    },
-    {
-     "i": 31,
-     "name": "read -rd"
-    },
-    {
-     "i": 32,
-     "name": "read -d when there's no delimiter"
-    },
-    {
-     "i": 33,
-     "name": "read -t 0 tests if input is available"
-    },
-    {
-     "i": 34,
-     "name": "read -t 0.5"
-    },
-    {
-     "i": 36,
-     "name": "read -u"
-    },
-    {
-     "i": 38,
-     "name": "read -u -s"
-    },
-    {
-     "i": 39,
-     "name": "read -u 3 -d 5"
-    },
-    {
-     "i": 40,
-     "name": "read -u 3 -d b -N 6"
-    },
-    {
-     "i": 41,
-     "name": "read -N doesn't respect delimiter, while read -n does"
-    },
-    {
-     "i": 44,
-     "name": "read with smooshed args"
-    },
-    {
-     "i": 45,
-     "name": "read -r -d '' for NUL strings, e.g. find -print0"
-    },
-    {
-     "i": 50,
-     "name": "read -n and backslash escape"
-    },
-    {
-     "i": 51,
-     "name": "read -n 4 with incomplete backslash"
-    },
-    {
-     "i": 52,
-     "name": "read -n 4 with backslash + delim"
-    },
-    {
-     "i": 53,
-     "name": "\"backslash + newline\" should be swallowed regardless of \"-d <delim>\""
-    },
-    {
-     "i": 55,
-     "name": "IFS='x ' read -a: trailing spaces (unlimited split)"
-    },
-    {
-     "i": 56,
-     "name": "IFS='x ' read a b: trailing spaces (with max_split)"
-    },
-    {
-     "i": 57,
-     "name": "IFS='x ' read -a: intermediate spaces (unlimited split)"
-    },
-    {
-     "i": 58,
-     "name": "IFS='x ' incomplete backslash"
-    },
-    {
-     "i": 59,
-     "name": "IFS='\\ ' and backslash escaping"
-    },
-    {
-     "i": 60,
-     "name": "max_split and backslash escaping"
-    },
-    {
-     "i": 61,
-     "name": "IFS=x read a b <<< xxxxxx"
-    },
-    {
-     "i": 62,
-     "name": "read and \"\\ \""
-    },
-    {
-     "i": 63,
-     "name": "read bash bug"
-    }
-   ]
+   "failures": []
   },
   "builtin-eval-source": {
-   "pass": 9,
+   "pass": 11,
    "total": 23,
    "failures": [
     {
@@ -1024,14 +867,6 @@
     {
      "i": 14,
      "name": "Eval with syntax error"
-    },
-    {
-     "i": 15,
-     "name": "Eval in does tilde expansion"
-    },
-    {
-     "i": 16,
-     "name": "Eval in bash does tilde expansion in array"
     },
     {
      "i": 18,
@@ -1358,44 +1193,12 @@
    ]
   },
   "dbracket": {
-   "pass": 19,
+   "pass": 44,
    "total": 49,
    "failures": [
     {
-     "i": 2,
-     "name": "equality"
-    },
-    {
      "i": 5,
      "name": "[[ regex syntax error"
-    },
-    {
-     "i": 10,
-     "name": "|| chain"
-    },
-    {
-     "i": 11,
-     "name": "[[ compound expressions"
-    },
-    {
-     "i": 12,
-     "name": "precedence of && and || inside [["
-    },
-    {
-     "i": 14,
-     "name": "Octal literals with -eq"
-    },
-    {
-     "i": 16,
-     "name": "> on strings"
-    },
-    {
-     "i": 18,
-     "name": "-eq on strings"
-    },
-    {
-     "i": 20,
-     "name": "[[ with op variable (compare with test-builtin.test.sh)"
     },
     {
      "i": 22,
@@ -1406,80 +1209,12 @@
      "name": "[[ with env prefix doesn't work"
     },
     {
-     "i": 24,
-     "name": "[[ over multiple lines is OK"
-    },
-    {
-     "i": 25,
-     "name": "Argument that looks like a real operator"
-    },
-    {
-     "i": 26,
-     "name": "User array compared to \"$@\" (broken unless shopt -s strict_array)"
-    },
-    {
-     "i": 27,
-     "name": "Array coerces to string (shopt -s strict_array to disallow)"
-    },
-    {
-     "i": 30,
-     "name": "-eq does dynamic arithmetic parsing (not supported in OSH)"
-    },
-    {
-     "i": 31,
-     "name": "-eq coercion produces weird results"
-    },
-    {
-     "i": 33,
-     "name": "[[ '(' foo ]] is syntax error"
-    },
-    {
-     "i": 35,
-     "name": "[[ -z ]] is syntax error"
-    },
-    {
-     "i": 36,
-     "name": "[[ -z '>' ]]"
-    },
-    {
-     "i": 37,
-     "name": "[[ -z '>' a ]] is syntax error"
-    },
-    {
-     "i": 39,
-     "name": "[[ ]] is syntax error"
-    },
-    {
-     "i": 40,
-     "name": "[[ && ]] is syntax error"
-    },
-    {
-     "i": 41,
-     "name": "[[ a 3< b ]] doesn't work (bug regression)"
-    },
-    {
-     "i": 43,
-     "name": "more tilde expansion"
-    },
-    {
      "i": 44,
      "name": "tilde expansion with =~ (confusing)"
     },
     {
      "i": 45,
      "name": "[[ ]] with redirect"
-    },
-    {
-     "i": 46,
-     "name": "special chars"
-    },
-    {
-     "i": 47,
-     "name": "\\(\\) in pattern (regression)"
-    },
-    {
-     "i": 48,
-     "name": "negative numbers - zero, decimal, octal, hex, base N"
     }
    ]
   },
@@ -1575,7 +1310,7 @@
    "failures": []
   },
   "array": {
-   "pass": 60,
+   "pass": 63,
    "total": 78,
    "failures": [
     {
@@ -1627,20 +1362,8 @@
      "name": "Is element set?  test -v a[i]"
     },
     {
-     "i": 66,
-     "name": "[[ -v a[i] ]]"
-    },
-    {
      "i": 67,
      "name": "test -v a[i] with arith expressions"
-    },
-    {
-     "i": 68,
-     "name": "More arith expressions in [[ -v array[expr]] ]]"
-    },
-    {
-     "i": 70,
-     "name": "Regression: Negative index in [[ -v a[index] ]]"
     },
     {
      "i": 72,
@@ -1653,7 +1376,7 @@
    ]
   },
   "array-assoc": {
-   "pass": 29,
+   "pass": 31,
    "total": 38,
    "failures": [
     {
@@ -1683,14 +1406,6 @@
     {
      "i": 37,
      "name": "test -v with dynamic parsing"
-    },
-    {
-     "i": 38,
-     "name": "[[ -v assoc[key] ]]"
-    },
-    {
-     "i": 39,
-     "name": "[[ -v assoc[key] ]] syntax errors"
     }
    ]
   },
@@ -2162,80 +1877,12 @@
    ]
   },
   "regex": {
-   "pass": 18,
+   "pass": 35,
    "total": 37,
    "failures": [
     {
-     "i": 0,
-     "name": "BASH_REMATCH"
-    },
-    {
-     "i": 4,
-     "name": "Regex quoted with single quotes"
-    },
-    {
-     "i": 5,
-     "name": "Regex quoted with double quotes"
-    },
-    {
-     "i": 8,
-     "name": "Double quoting pat variable -- again bash doesn't like it."
-    },
-    {
-     "i": 10,
-     "name": "Regex with == and not =~ is parse error, different lexer mode required"
-    },
-    {
-     "i": 12,
-     "name": "Malformed regex"
-    },
-    {
-     "i": 13,
-     "name": "Regex with |"
-    },
-    {
-     "i": 14,
-     "name": "Regex to match literal brackets []"
-    },
-    {
-     "i": 15,
-     "name": "Regex to match literals . ^ $ etc."
-    },
-    {
      "i": 16,
      "name": "Unquoted { is a regex parse error"
-    },
-    {
-     "i": 18,
-     "name": "Quoted { and +"
-    },
-    {
-     "i": 19,
-     "name": "Escaped {"
-    },
-    {
-     "i": 26,
-     "name": "Bug: Nix idiom with closing ) next to pattern"
-    },
-    {
-     "i": 27,
-     "name": "unquoted (a  b) as pattern, (a  b|c)"
-    },
-    {
-     "i": 28,
-     "name": "Multiple adjacent () groups"
-    },
-    {
-     "i": 29,
-     "name": "unquoted [a  b] as pattern, [a  b|c]"
-    },
-    {
-     "i": 31,
-     "name": "Operator chars ; & but not |"
-    },
-    {
-     "i": 34,
-     "name": "Parse error with 2 words"
     },
     {
      "i": 35,

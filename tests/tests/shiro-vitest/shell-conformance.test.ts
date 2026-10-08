@@ -317,4 +317,32 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('F.bar.baz foo.bar.Z foo-bar-baz foo foo.babar.babaz\nbar.baz baz foo.bar foo foo.bar.baz foo.bar.ba\n');
   });
+
+  it('read: backslashes, IFS splitting, -n/-N/-d/-a/-u, piped subshells', async () => {
+    const r = await script([
+      "echo '  a b  ' | (read; echo \"[$REPLY]\")",
+      "printf 'A\\t\\tB C D E \\nFG\\n' | { read x y z; echo \"[$x/$y/$z]\"; }",
+      "IFS=: read a b <<< \"x:y:\"; echo \"[$a][$b]\"",
+      "printf 'one\\\\\\ntwo three\\n' | { read -r p q; read -a arr <<< \" 1  2 3 \"; echo \"[$p][$q] ${#arr[@]}\"; }",
+      "printf 'abcdef' | { read -n 3 c; read -N 2 d; echo \"$c $d\"; read e; echo \"e=$e st=$?\"; }",
+      "printf 'v1\\0v2\\0' | { read -r -d '' v; echo \"$v\"; }",
+      "read -u 3 r 3<<< \"from3\"; echo \"$r\"",
+    ].join('\n'));
+    expect(r.out).toBe('[  a b  ]\n[A/B/C D E]\n[x][y]\n[one\\][] 3\nabc de\ne=f st=1\nv1\nfrom3\n');
+  });
+
+  it('[[ ]]: operators inside, patterns, =~ with BASH_REMATCH, arithmetic, -v, multi-line', async () => {
+    const r = await script([
+      "[[ ''||! (1 == 2)&&(2 == 2)]] && echo compound",
+      "x='a b'; [[ $x == a* && $x != \"a*\" ]] && echo pat",
+      "[[ foo123 =~ ^([a-z]+)([0-9]+)$ ]] && echo \"${BASH_REMATCH[1]}-${BASH_REMATCH[2]}\"",
+      "re='a.c'; [[ abc =~ $re ]] && echo re1; [[ abc =~ \"$re\" ]] || echo re2",
+      "[[ 017 -eq 15 && 2 -lt 10 && b > a ]] && echo arith",
+      "[[ -v x && ! -v nope ]] && echo setvar",
+      "[[ foo == foo",
+      "&& bar == bar",
+      "]] && echo multiline",
+    ].join('\n'));
+    expect(r.out).toBe('compound\npat\nfoo-123\nre1\nre2\narith\nsetvar\nmultiline\n');
+  });
 });

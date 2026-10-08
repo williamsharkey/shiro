@@ -2,6 +2,10 @@ import { stripComments } from './shell-comments';
 import { groupStatements } from './shell-statements';
 import { printfFormat } from './utils/printf';
 import { evalArith, ArithError, type ArithEnv } from './utils/arith';
+import { readRecord, recordText, splitRecord } from './shell-read';
+import { parseDoubleBracket, doubleBracketEnd, DbSyntaxError, decodeAnsiC, ansiCEnd, type DbNode } from './shell-dbracket';
+import { TestEval } from './commands/posix-test';
+import { posixRegExp, RegexSyntaxError } from './utils/posix-regex';
 import { arrayValues, arrayTop, copyArray, splitRawWords as splitAssignWords, parseAssignWord, splitListWords, type AssignWord } from './shell-arrays';
 import { HeredocStore, extractHeredocs, hasHeredoc } from './shell-heredoc';
 import { FileSystem } from './filesystem';
@@ -643,6 +647,8 @@ export class Shell {
 
   /** Set while execute() routes default output through exec'd fds (nested calls don't re-route) */
   private fdRouting = false;
+  /** A non-interactive shell (script, sh -c): a syntax error exits it with status 2 */
+  private scriptShell = false;
   private flushFdWrites: (() => Promise<void>) | null = null;
 
   /** Output fds opened by exec (1 and 2 too, after `exec >file`) */
@@ -927,6 +933,19 @@ export class Shell {
         continue;
       }
 
+      // [[ … ]] (and ! [[ … ]]): parsed from the raw text
+      {
+        const neg = /^!\s+\[\[/.test(trimmedCmd);
+        const dbText = neg ? trimmedCmd.replace(/^!\s+/, '') : trimmedCmd;
+        if (dbText.startsWith('[[') && doubleBracketEnd(dbText, 0) === dbText.length) {
+          exitCode = await this.evalDoubleBracket(dbText.slice(2, -2), stderrWriter);
+          if (neg) exitCode = exitCode === 0 ? 1 : 0;
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          continue;
+        }
+      }
+
       // a=(…), a+=(…), a[i]=v, local/declare with array literals: expanded per word here
       const arrayStatus = await this.tryArrayAssignment(trimmedCmd, writeStdout, stderrWriter);
       if (arrayStatus !== null) {
@@ -942,10 +961,12 @@ export class Shell {
       let pipeline: string[];
       this.substStatus = null;
       const rawSegments = splitTopLevelPipes(compound.command);
-      if (rawSegments.length > 1 && rawSegments.some(seg => this.isControlStructure(seg))) {
+      // (A `( … )` subshell segment too: its words expand inside the subshell)
+      const keepRaw = (seg: string) => this.isControlStructure(seg) || /^\s*\((?!\()[\s\S]*\)\s*$/.test(seg);
+      if (rawSegments.length > 1 && rawSegments.some(keepRaw)) {
         pipeline = [];
         for (const seg of rawSegments) {
-          pipeline.push(this.isControlStructure(seg) ? seg : await this.expandWords(seg, stderrWriter));
+          pipeline.push(keepRaw(seg) ? seg.trim() : await this.expandWords(seg, stderrWriter));
         }
       } else {
         pipeline = this.parsePipeline(await this.expandWords(quoteAssignmentValues(compound.command), stderrWriter));
@@ -1443,29 +1464,43 @@ export class Shell {
 
         // Shell builtin: read
         if (!_builtinDisabled && effectiveCmdName === 'read') {
-          // Parse flags: -r (raw), -a (array), -p (prompt), -d (delimiter), -n (nchars), -s (silent), -t (timeout), -u (fd)
+          // Options (getopts style: -rd '' / -n4 / -u 3)
           let rawMode = false;
-          let arrayMode = false;
+          let arrayName: string | null = null;
           let readDelim = '\n';
           let readNchars = -1;
+          let readExact = false;
           let readTimeout = -1;
           let readFd = -1;
           const readVars: string[] = [];
+          let badOpt: string | null = null;
           for (let ri = 0; ri < cmdArgs.length; ri++) {
             const a = cmdArgs[ri];
-            if (a === '-r') rawMode = true;
-            else if (a === '-a') arrayMode = true;
-            else if (a === '-s') { /* silent - no-op in non-interactive */ }
-            else if (a === '-p' && ri + 1 < cmdArgs.length) { ri++; /* skip prompt text */ }
-            else if (a === '-d' && ri + 1 < cmdArgs.length) { readDelim = cmdArgs[++ri]; }
-            else if (a === '-n' && ri + 1 < cmdArgs.length) { readNchars = parseInt(cmdArgs[++ri], 10) || -1; }
-            else if (a.startsWith('-n') && a.length > 2) { readNchars = parseInt(a.slice(2), 10) || -1; }
-            else if (a.startsWith('-d') && a.length > 2) { readDelim = a.slice(2); }
-            else if (a === '-t' && ri + 1 < cmdArgs.length) { readTimeout = parseFloat(cmdArgs[++ri]) || 0; }
-            else if (a.startsWith('-t') && a.length > 2) { readTimeout = parseFloat(a.slice(2)) || 0; }
-            else if (a === '-u' && ri + 1 < cmdArgs.length) { readFd = parseInt(cmdArgs[++ri], 10); }
-            else if (a.startsWith('-u') && a.length > 2) { readFd = parseInt(a.slice(2), 10); }
-            else if (!a.startsWith('-')) readVars.push(a);
+            if (readVars.length || !a.startsWith('-') || a === '-') { readVars.push(a); continue; }
+            if (a === '--') { readVars.push(...cmdArgs.slice(ri + 1)); break; }
+            for (let k = 1; k < a.length; k++) {
+              const o = a[k];
+              if (o === 'r') { rawMode = true; continue; }
+              if (o === 's' || o === 'e') continue;
+              if (!'adinNptu'.includes(o)) { badOpt = `-${o}: invalid option`; break; }
+              let v = a.slice(k + 1);
+              if (!v) { if (ri + 1 >= cmdArgs.length) { badOpt = `-${o}: option requires an argument`; break; } v = cmdArgs[++ri]; }
+              if (o === 'a') arrayName = v;
+              else if (o === 'd') readDelim = v;
+              else if (o === 'n' || o === 'N') { readNchars = parseInt(v, 10); readExact = o === 'N'; if (isNaN(readNchars) || readNchars < 0) badOpt = `${v}: invalid number`; }
+              else if (o === 't') readTimeout = parseFloat(v) || 0;
+              else if (o === 'u') readFd = parseInt(v, 10);
+              break;
+            }
+            if (badOpt) break;
+          }
+          if (badOpt) {
+            stderrWriter(`shiro: read: ${badOpt}\r\n`);
+            exitCode = 2;
+            this.lastExitCode = exitCode;
+            this.env['?'] = String(exitCode);
+            lastOutput = '';
+            continue;
           }
           // Read one line from stdin — prefer FD, then the command's own <<< / <,
           // then piped stdin (__PIPE_STDIN), then pipe, then heredoc
@@ -1492,7 +1527,15 @@ export class Shell {
           }
           // An explicit redirect doesn't consume the enclosing loop's piped stdin
           const hasPipeStdin = redirectInput === undefined && '__PIPE_STDIN' in this.env;
-          if (readFd >= 0 && this.fileDescriptors.has(readFd)) {
+          // read -u N with N opened on this command (read -u 3 3<file)
+          const fdOpen = readFd >= 0 ? redirects.find(r => r.type === 'open' && r.mode === '<' && r.fd === readFd) : undefined;
+          if (fdOpen) {
+            try {
+              readInput = await this.readInputRedirect(fdOpen.target);
+            } catch (e: any) {
+              stderrWriter(`shiro: ${fdOpen.target}: ${e.message}\r\n`);
+            }
+          } else if (readFd >= 0 && this.fileDescriptors.has(readFd)) {
             // Read from file descriptor
             const fd = this.fileDescriptors.get(readFd)!;
             readInput = fd.content.slice(fd.offset);
@@ -1503,16 +1546,18 @@ export class Shell {
           } else {
             readInput = i > 0 ? lastOutput : (heredocStdin || '');
           }
+          // Input from a file, pipe or here-doc (not the terminal): -t never times out
+          const hasSource = !!fdOpen || readFd >= 0 || redirectInput !== undefined || hasPipeStdin || i > 0 || !!heredocStdin;
           // Handle -t 0: check if input is available (non-blocking)
           if (readTimeout === 0) {
-            exitCode = readInput.length > 0 ? 0 : 1;
+            exitCode = hasSource ? 0 : 1;
             this.lastExitCode = exitCode;
             this.env['?'] = String(exitCode);
             lastOutput = '';
             continue;
           }
           // Handle -t N: timeout (for non-piped/non-interactive, just check availability)
-          if (readTimeout > 0 && !readInput) {
+          if (readTimeout > 0 && !hasSource) {
             // No input available and timeout specified → exit 142 (128 + SIGALRM(14))
             exitCode = 142;
             this.lastExitCode = exitCode;
@@ -1520,59 +1565,35 @@ export class Shell {
             lastOutput = '';
             continue;
           }
-          let readLine: string;
-          let remaining: string;
-          if (readNchars > 0) {
-            readLine = readInput.slice(0, readNchars);
-            remaining = readInput.slice(readNchars);
-          } else {
-            const delimIdx = readInput.indexOf(readDelim);
-            if (delimIdx >= 0) {
-              readLine = readInput.slice(0, delimIdx);
-              remaining = readInput.slice(delimIdx + readDelim.length);
-            } else {
-              readLine = readInput;
-              remaining = '';
-            }
-          }
-          // Consume the line from source so next read gets the next line
+          const rec = readRecord(readInput, { raw: rawMode, delim: readDelim, nchars: readNchars, exact: readExact });
+          const remaining = readInput.slice(rec.consumed);
+          // Consume the record from the source so the next read gets what follows
           if (readFd >= 0 && this.fileDescriptors.has(readFd)) {
             const fd = this.fileDescriptors.get(readFd)!;
             fd.offset = fd.content.length - remaining.length;
           } else if (hasPipeStdin) {
             this.env['__PIPE_STDIN'] = remaining;
           }
-          const processed = rawMode ? readLine : readLine.replace(/\\(.)/g, '$1');
-          // Use IFS for splitting (default: space/tab/newline)
           const ifs = this.env['IFS'] ?? ' \t\n';
-          const ifsRegex = ifs === ' \t\n' ? /\s+/ : new RegExp('[' + ifs.replace(/[-[\]{}()*+?.,\\^$|#]/g, '\\$&') + ']+');
-          if (arrayMode) {
-            const arrName = readVars[0] || 'MAPFILE';
-            const words = processed.split(ifsRegex).filter(Boolean);
-            this.arrays.set(arrName, words);
-            exitCode = readLine.length > 0 ? 0 : 1;
-            this.lastExitCode = exitCode;
-            this.env['?'] = String(exitCode);
-            lastOutput = '';
-            continue;
-          }
-          if (readVars.length === 0) {
-            this.env['REPLY'] = processed;
-          } else if (readVars.length === 1) {
-            this.env[readVars[0]] = processed;
+          let readErr: string | null = null;
+          if (arrayName !== null) {
+            if (this.readonlyVars.has(arrayName)) readErr = `${arrayName}: readonly variable`;
+            else {
+              this.arrays.set(arrayName, readExact ? [recordText(rec)] : splitRecord(rec.chars, ifs, Infinity));
+              this.assocArrays.delete(arrayName);
+              delete this.env[arrayName];
+            }
+          } else if (readVars.length === 0) {
+            readErr = this.setVar('REPLY', recordText(rec));
           } else {
-            // Split into words using IFS, last var gets the remainder
-            const words = processed.split(ifsRegex);
-            const joinChar = ifs[0] || ' ';
-            for (let vi = 0; vi < readVars.length; vi++) {
-              if (vi === readVars.length - 1) {
-                this.env[readVars[vi]] = words.slice(vi).join(joinChar);
-              } else {
-                this.env[readVars[vi]] = words[vi] || '';
-              }
+            const fields = readExact ? [recordText(rec)] : splitRecord(rec.chars, ifs, readVars.length);
+            for (let vi = 0; vi < readVars.length && !readErr; vi++) {
+              if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(readVars[vi])) { readErr = `\`${readVars[vi]}': not a valid identifier`; break; }
+              readErr = this.setVar(readVars[vi], fields[vi] ?? '');
             }
           }
-          exitCode = readLine.length > 0 ? 0 : 1;
+          if (readErr) stderrWriter(`shiro: read: ${readErr}\r\n`);
+          exitCode = readErr ? (readErr.includes('identifier') ? 2 : 1) : rec.complete ? 0 : 1;
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
           lastOutput = '';
@@ -3311,7 +3332,7 @@ export class Shell {
             continue;
           }
           if (/[\/\s;|&>]/.test(after) || i + 1 >= line.length) {
-            const home = this.env['HOME'] || '/home/user';
+            const home = this.env['HOME'] ?? '/home/user';
             result += splitFields(home, ''); // a tilde expansion is one field
             i++;
             continue;
@@ -3777,6 +3798,7 @@ export class Shell {
         glob += '\\' + lit;
         continue;
       }
+      if (c === '$' && t[i + 1] === "'") { const e = ansiCEnd(t, i); glob += [...decodeAnsiC(t.slice(i + 2, e - 1))].map((x) => '\\' + x).join(''); i = e - 1; continue; }
       if (c === "'" || c === '"') { q = c; continue; }
       if (c === '\\') { glob += '\\' + (t[++i] ?? '\\'); continue; }
       glob += lit !== c ? '\\' + lit : c;
@@ -3968,6 +3990,12 @@ export class Shell {
         i = end;
         cmdPos = false;
         continue;
+      }
+
+      // [[ … ]] is one command: && || ( ) inside it belong to the expression
+      if (!inSingle && !inDouble && cmdPos && ch === '[' && line[i + 1] === '[') {
+        const end = doubleBracketEnd(line, i);
+        if (end > 0) { current += line.slice(i, end); i = end; cmdPos = false; continue; }
       }
 
       if (!inSingle && !inDouble) {
@@ -4950,8 +4978,8 @@ export class Shell {
   ): Promise<number> {
     const trimmed = condition.trim();
     // [[ ... ]] syntax (bash double-bracket test)
-    if (trimmed.startsWith('[[') && trimmed.endsWith(']]')) {
-      return this.evalTest(trimmed.slice(2, -2).trim());
+    if (doubleBracketEnd(trimmed, 0) === trimmed.length) {
+      return this.evalDoubleBracket(trimmed.slice(2, -2), writeStderr);
     }
     // `[ … ]` and `test …` run as the test command (posix-test.ts), with real argument words
     // (( expr )) — arithmetic condition
@@ -5374,6 +5402,113 @@ export class Shell {
   }
 
   /** The words of a `for`/`select` list, expanded like command arguments (quotes, splitting, globs) */
+  /** `[[ … ]]`: 0 true, 1 false, 2 on a syntax error or bad regex */
+  private async evalDoubleBracket(src: string, writeStderr: (s: string) => void): Promise<number> {
+    let tree: DbNode;
+    try {
+      tree = parseDoubleBracket(src);
+    } catch (e) {
+      if (!(e instanceof DbSyntaxError)) throw e;
+      writeStderr(`shiro: [[: ${e.message}\r\n`);
+      if (this.scriptShell) throw new ExitSignal(2);
+      return 2;
+    }
+    try {
+      return (await this.dbEval(tree, writeStderr)) ? 0 : 1;
+    } catch (e) {
+      if (e instanceof RegexSyntaxError) { writeStderr(`shiro: [[: invalid regular expression\r\n`); return 2; }
+      if (e instanceof ArithError) { writeStderr(`shiro: ${e.message}\r\n`); return 1; }
+      throw e;
+    }
+  }
+
+  private async dbEval(n: DbNode, writeStderr: (s: string) => void): Promise<boolean> {
+    switch (n.t) {
+      case 'and': return (await this.dbEval(n.a, writeStderr)) && this.dbEval(n.b, writeStderr);
+      case 'or': return (await this.dbEval(n.a, writeStderr)) || this.dbEval(n.b, writeStderr);
+      case 'not': return !(await this.dbEval(n.a, writeStderr));
+      case 'word': return (await this.expandScalar(n.w, writeStderr)) !== '';
+      case 'unary': {
+        const v = await this.expandScalar(n.w, writeStderr);
+        if (n.op === '-v') {
+          const m = /^([A-Za-z_][A-Za-z0-9_]*)(?:\[(.*)\])?$/s.exec(v);
+          if (!m) return false;
+          if (m[2] === '@' || m[2] === '*') return (this.getVar(m[1], m[2]) ?? undefined) !== undefined;
+          return this.getVar(m[1], m[2]) !== undefined;
+        }
+        if (n.op === '-o') return this.options.has(v);
+        if (n.op === '-R') return this.namerefs.has(v);
+        if (n.op === '-a') return new TestEval([], this.fs, this.cwd).unary('-e', v);
+        return new TestEval([], this.fs, this.cwd).unary(n.op, v);
+      }
+      case 'binary': {
+        const l = await this.expandScalar(n.l, writeStderr);
+        switch (n.op) {
+          case '=': case '==': case '!=': {
+            const re = await this.dbPattern(n.r, writeStderr);
+            return re.test(l) !== (n.op === '!=');
+          }
+          case '=~': {
+            const re = await this.dbRegex(n.r, writeStderr);
+            const m = re.exec(l);
+            if (!m) { this.arrays.delete('BASH_REMATCH'); return false; }
+            this.arrays.set('BASH_REMATCH', m.map((x) => x ?? ''));
+            return true;
+          }
+        }
+        const r = await this.expandScalar(n.r, writeStderr);
+        switch (n.op) {
+          case '<': return l < r;
+          case '>': return l > r;
+          case '-eq': case '-ne': case '-lt': case '-le': case '-gt': case '-ge': {
+            const a = this.evalArithBig(l || '0'), b = this.evalArithBig(r || '0');
+            return n.op === '-eq' ? a === b : n.op === '-ne' ? a !== b : n.op === '-lt' ? a < b
+              : n.op === '-le' ? a <= b : n.op === '-gt' ? a > b : a >= b;
+          }
+        }
+        return new TestEval([], this.fs, this.cwd).binary(l, n.op, r);
+      }
+    }
+  }
+
+  /** The right side of [[ x == PATTERN ]]: quoted parts literal, extglob on */
+  private async dbPattern(raw: string, writeStderr: (s: string) => void): Promise<RegExp> {
+    if (/\$\(|`/.test(raw)) raw = await this.expandCommandSubstitution(raw, writeStderr);
+    const had = this.shoptopts.has('extglob');
+    this.shoptopts.add('extglob');
+    try {
+      return new RegExp(`^(?:${this.patternRegex(raw)})$`, 's');
+    } finally {
+      if (!had) this.shoptopts.delete('extglob');
+    }
+  }
+
+  /** The right side of [[ x =~ REGEX ]]: an ERE whose quoted parts match literally */
+  private async dbRegex(raw: string, writeStderr: (s: string) => void): Promise<RegExp> {
+    if (/\$\(|`/.test(raw)) raw = await this.expandCommandSubstitution(raw, writeStderr);
+    const t = this.expandVars(raw);
+    const esc = (c: string) => (/[\\^$.*+?()[\]{}|]/.test(c) ? '\\' + c : c);
+    let src = '';
+    let q = '';
+    for (let i = 0; i < t.length; i++) {
+      const c = t[i];
+      const lit = EXPANSION_RESTORE[c];
+      if (q === "'") { if (c === "'") q = ''; else src += esc(lit ?? c); continue; }
+      if (q === '"') {
+        if (c === '"') { q = ''; continue; }
+        if (c === '\\' && /[\\"$`]/.test(t[i + 1] ?? '')) { src += esc(t[++i]); continue; }
+        src += esc(lit ?? c);
+        continue;
+      }
+      if (c === '$' && t[i + 1] === "'") { const e = ansiCEnd(t, i); src += [...decodeAnsiC(t.slice(i + 2, e - 1))].map(esc).join(''); i = e - 1; continue; }
+      if (c === "'" || c === '"') { q = c; continue; }
+      if (c === '\\') { src += '\\' + (t[++i] ?? '\\'); continue; }
+      // an unquoted expansion is regex text
+      src += lit ?? c;
+    }
+    return posixRegExp(src, { extended: true });
+  }
+
   /** One word, expanded without field splitting or globbing (an assignment value) */
   private async expandScalar(raw: string, writeStderr: (s: string) => void): Promise<string> {
     if (!/[$`'"\\~]/.test(raw)) return raw;
@@ -6213,6 +6348,7 @@ export class Shell {
     writeStdout: (s: string) => void, writeStderr: (s: string) => void,
   ): Promise<number> {
     const depth = this.executeDepth;
+    this.scriptShell = true;
     // Statements run nested, so exit/errexit unwind to here rather than to each statement
     this.executeDepth++;
     if (!this.abortController) this.abortController = this.inheritedAbort ?? new AbortController();
@@ -6284,6 +6420,10 @@ export function splitTopLevelPipes(cmd: string): string[] {
     if (ch === "'") { inSingle = true; current += ch; i++; cmdPos = false; continue; }
     if (ch === '"') { inDouble = true; current += ch; i++; cmdPos = false; continue; }
     if (ch === '$' && cmd[i + 1] === '{') { const e = skipParamBrace(cmd, i + 1); current += cmd.slice(i, e); i = e; cmdPos = false; continue; }
+    if (cmdPos && ch === '[' && cmd[i + 1] === '[') {
+      const e = doubleBracketEnd(cmd, i);
+      if (e > 0) { current += cmd.slice(i, e); i = e; cmdPos = false; continue; }
+    }
     if (ch === '(') { paren++; current += ch; i++; cmdPos = true; continue; }
     if (ch === ')') { if (paren > 0) paren--; current += ch; i++; cmdPos = false; continue; }
     if (ch === '|' && cmd[i + 1] === '|') { current += '||'; i += 2; cmdPos = true; continue; }

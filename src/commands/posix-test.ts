@@ -23,7 +23,7 @@ export const test: Command = {
 const UNARY = new Set(['-b', '-c', '-d', '-e', '-f', '-g', '-G', '-h', '-k', '-L', '-n', '-N', '-O', '-p', '-r', '-s', '-S', '-t', '-u', '-w', '-x', '-z']);
 const BINARY = new Set(['=', '==', '!=', '<', '>', '-eq', '-ne', '-lt', '-le', '-gt', '-ge', '-nt', '-ot', '-ef']);
 
-class TestEval {
+export class TestEval {
   private pos = 0;
   constructor(private args: string[], private fs: FileSystem, private cwd: string) {}
 
@@ -105,7 +105,7 @@ class TestEval {
     }
   }
 
-  private async unary(op: string, val: string): Promise<boolean> {
+  async unary(op: string, val: string): Promise<boolean> {
     switch (op) {
       case '-z': return val === '';
       case '-n': return val !== '';
@@ -142,7 +142,7 @@ class TestEval {
     return BigInt(s.trim());
   }
 
-  private async binary(l: string, op: string, r: string): Promise<boolean> {
+  async binary(l: string, op: string, r: string): Promise<boolean> {
     switch (op) {
       case '=': case '==': return l === r;
       case '!=': return l !== r;

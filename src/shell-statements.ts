@@ -27,7 +27,7 @@ const CMD_PREFIX = new Set(['do', 'then', 'else', 'elif', 'if', 'while', 'until'
 /** A newline after these is plain whitespace */
 const JOIN_WITH_SPACE = new Set(['do', 'then', 'else', 'elif', 'if', 'while', 'until', '!', 'time', '{']);
 
-type Paren = 'sub' | 'arith' | 'list';
+type Paren = 'sub' | 'arith' | 'list' | 'dbracket';
 
 export function groupStatements(src: string): Statement[] {
   const lines = src.split(/\r?\n/);
@@ -200,6 +200,9 @@ export function groupStatements(src: string): Statement[] {
       const glued = j < n && /['"`$\\]/.test(line[j]);
       lineOut += word; i = j;
       lastWasPatternClose = false;
+      // [[ … ]] may span lines; a newline inside it is a blank
+      if (word === ']]' && parens[parens.length - 1] === 'dbracket') { parens.pop(); cmdPos = false; lastWord = 'x'; continue; }
+      if (cmdPos && !glued && word === '[[' && !patternPos) { parens.push('dbracket'); cmdPos = false; lastWord = 'x'; continue; }
       if (patternPos) {
         if (word === 'esac' && !glued && blocks[blocks.length - 1] === 'esac') {
           blocks.pop(); patternPos = false; cmdPos = false; lastWord = 'esac';
