@@ -120,6 +120,16 @@ deps_zlib() {
   (cd "$src" && CFLAGS="-Os -fPIC" ./configure --static --prefix="$SYSROOT" >configure.log && make -j"$(nproc)" >make.log && make install >install.log)
 }
 
+# deps_libevent: static libevent 2.1 (core, no OpenSSL) into $SYSROOT
+deps_libevent() {
+  [ -f "$SYSROOT/lib/libevent_core.a" ] && return 0
+  local src
+  src=$(unpack "$(fetch https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz 92e6de1be9ec176428fd2367677e61ceffc2ee1cb119035037a27d346b0403bb)" libevent-2.1.12-stable)
+  (cd "$src" && ./configure --host=$HOST --prefix="$SYSROOT" --disable-shared --enable-static \
+      --disable-openssl --disable-samples --disable-libevent-regress --disable-debug-mode >configure.log 2>&1 &&
+    make -j"$(nproc)" >make.log 2>&1 && make install >install.log 2>&1)
+}
+
 # install_bin SRC DEST -> $PKG_OUT/DEST (stripped static ELF), prints sha256
 install_bin() {
   local src=$1 dst="$PKG_OUT/$2"

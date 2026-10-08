@@ -644,6 +644,10 @@ export class Kernel {
     while (i < args.length && /^-[a-zA-Z]+$/.test(args[i]) && args[i] !== '-c') i++; // -e, -x, -l ...
     let script: string;
     let positional: string[] = [];
+    // No script and a terminal (or -i): an interactive shell (a tmux pane, screen window, `sh` from a program)
+    if (args[i] !== '-c' && (args.slice(0, i).includes('-i') || (i >= args.length && proc.fds.get(0)?.kind === 'pty'))) {
+      return this.interactiveShell(proc, shell);
+    }
     if (args[i] === '-c') {
       script = args[i + 1] ?? '';
       positional = args.slice(i + 2);
@@ -684,6 +688,57 @@ export class Kernel {
     }
     await chain;
     return code;
+  }
+
+  /**
+   * Read-eval loop on fd 0 for `sh` run as a kernel process on a terminal: the
+   * pty's line discipline edits the line; PS1 (default `\u@\h:\w\$ `) goes to
+   * fd 2. Like bash, it survives Ctrl-C/Ctrl-\/Ctrl-Z (its foreground
+   * children, in the same process group, get them) and ends at `exit` or EOF.
+   */
+  private async interactiveShell(proc: Process, shell: Shell): Promise<number> {
+    const jobSignals = new Set([A.SIGINT, A.SIGQUIT, A.SIGTSTP, A.SIGTTIN, A.SIGTTOU]);
+    proc.signalHook = (p, sig) => {
+      if (!jobSignals.has(sig)) return false;
+      if (sig === A.SIGINT) p.interruptSyscalls(); // a fresh prompt
+      return true;
+    };
+    shell.env.PS1 ??= '\\u@\\h:\\w\\$ ';
+    let chain = Promise.resolve();
+    const out = (fd: number) => (s: string) => {
+      chain = chain.then(async () => { if (!proc.exiting) await this.writeAll(proc, fd, enc.encode(s.replace(/\r\n/g, '\n'))); });
+    };
+    const prompt = () => {
+      const home = shell.env.HOME || '/home/user';
+      const cwd = shell.cwd === home ? '~' : shell.cwd.startsWith(home + '/') ? '~' + shell.cwd.slice(home.length) : shell.cwd;
+      return (shell.env.PS1 ?? '').replace(/\\([uhHwW$n\\])/g, (_, c: string) => ({
+        u: shell.env.USER || 'user', h: 'shiro', H: 'shiro', w: cwd, W: cwd === '~' ? '~' : cwd.slice(cwd.lastIndexOf('/') + 1) || '/',
+        $: '$', n: '\n', '\\': '\\',
+      } as Record<string, string>)[c]);
+    };
+    const buf = new Uint8Array(4096);
+    let pending = '';
+    let code = 0;
+    for (;;) {
+      await chain;
+      await this.writeAll(proc, 2, enc.encode(prompt()));
+      // one line from the terminal (canonical mode hands over whole lines)
+      let line: string | null = null;
+      while (line === null) {
+        const nl = pending.indexOf('\n');
+        if (nl >= 0) { line = pending.slice(0, nl); pending = pending.slice(nl + 1); break; }
+        const f = proc.fds.get(0);
+        const n = f ? await f.read(buf, proc.syscallSignal) : 0;
+        if (proc.exiting) return code;
+        if (n === -A.EINTR) { pending = ''; await this.writeAll(proc, 2, enc.encode('\n' + prompt())); continue; }
+        if (n <= 0) { if (pending) { line = pending; pending = ''; break; } await this.writeAll(proc, 2, enc.encode('exit\n')); return code; }
+        pending += A.decodeText(buf.subarray(0, n));
+      }
+      if (!line.trim()) continue;
+      code = await shell.execute(line, out(1), out(2));
+      await chain;
+      if (shell.exited) return code;
+    }
   }
 
   private async runViaShell(proc: Process, name = proc.path): Promise<number> {

@@ -64,6 +64,7 @@ WASI/WASIX are WASM packages run as kernel processes in workers.
 | tar | 1.35 (GNU) | pkg (Blink) | works | `czf` (gzip run as a child through `/bin/sh`), `tzf`, `xzf -C` | |
 | gzip, gunzip, zcat | 1.15 (GNU) | pkg (Blink) | works | `-k`, `-c`, `-d`, `-t`, binary output redirected to a file | |
 | vim | 9.2.0000 | pkg (Blink) | works | edit + `:wq`; syntax colours from the runtime; `:help`; resize (SIGWINCH) updates `&columns`/`&lines`; Ctrl-Z stops it, `fg` resumes; `vim -es` scripting | Startup with `filetype`/`syntax` is slow (seconds): Blink interprets x86 at ~1/120 native speed. No POSIX timers (`timer_create`), so no `'redrawtime'` timeout |
+| tmux | 3.8 | pkg (Blink; libevent 2.1, ncurses 6.5) | works | `new-session` on the tty: status line, a shell in the pane, `C-b %` split, `C-b d` detach; `list-panes`, `send-keys` into a detached session; re-attach on a bigger terminal; `kill-session` | Slow to draw (emulated). After re-attaching at a new size the status line waits for the next key, which tmux then takes as input. The `tmux` builtin is replaced while the package is installed |
 | tree | 2.2.1 | pkg (Blink) | works | tree drawing and counts, `-d --noreport` | |
 | file | 5.46 | pkg (Blink) | works | shell script, JSON, PNG, gzip, ELF; `--mime-type` (magic database mapped with `mmap`) | |
 | xz, xzcat, unxz | 5.8.1 | pkg (Blink) | works | `-k`, `-l`, `xzcat`; `tar -J` | single-threaded |
@@ -117,6 +118,14 @@ Shiro changes these programs needed (tests in `x86-engine.test.ts`,
   with LTO, so every compressed asset in bat failed to load), futex
   `FUTEX_WAIT_BITSET`/`FUTEX_WAKE_BITSET` and `getrandom(GRND_INSECURE)`
   (patch 0017; Rust's std), `MADV_DONTNEED` (patch 0015). `x86-engine.test.ts`.
+- AF_UNIX path sockets, `sendmsg`/`recvmsg` with `SCM_RIGHTS` and
+  `SO_PEERCRED` in the kernel (Blink patch 0018): the tmux client and server
+  talk over `/tmp/tmux-1000/default` and the client hands over its tty.
+  `kernel-net.test.ts`, `x86-engine.test.ts`.
+- `sh` run as a program on a terminal with no script (a tmux pane, or `-i`)
+  is interactive: a `PS1` prompt (default `\u@\h:\w\$ `), a line read from
+  the tty in canonical mode, Ctrl-C/Ctrl-Z/Ctrl-\ left to its foreground
+  children, `exit` or EOF to end.
 - `ioctl(FIONBIO)` works on every file, pipes included (Rust's
   `Command::output()`). `kernel-core.test.ts`.
 - Blink keeps its own log in its in-memory root (`-L /blink.log`), not in

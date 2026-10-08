@@ -2486,6 +2486,35 @@
    "needs": [
     "x86"
    ]
+  },
+  {
+   "name": "tmux",
+   "version": "3.8",
+   "description": "Terminal multiplexer (static x86-64 build)",
+   "license": "ISC",
+   "source": "https://github.com/tmux/tmux/releases/download/3.8/tmux-3.8.tar.gz",
+   "homepage": "https://github.com/tmux/tmux",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/tmux.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/tmux",
+     "url": "/pkg/tmux/3.8/tmux.gz",
+     "sha256": "b91c97c91627d47bafdab346c32cc6ba2a74529f783bc4b6b9e02fb99147a06c",
+     "size": 608839,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "tmux": {
+     "file": "bin/tmux"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
   }
  ]
 }

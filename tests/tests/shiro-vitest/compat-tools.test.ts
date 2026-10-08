@@ -52,8 +52,14 @@ function fakeTerminal(rows = 24, cols = 80) {
   tty.pty.onOutput((b) => {
     const s = new TextDecoder().decode(b);
     screen += s;
-    // answer cursor position reports as xterm.js does (fzf --height asks)
+    // answer what xterm.js answers: cursor position (fzf --height), device attributes (tmux)
     if (s.includes('\x1b[6n')) queueMicrotask(() => tty.pty.input(`\x1b[${tty.pty.winsize.rows};1R`));
+    if (/\x1b\[0?c/.test(s)) queueMicrotask(() => tty.pty.input('\x1b[?1;2c'));
+    if (/\x1b\[>0?c/.test(s)) queueMicrotask(() => tty.pty.input('\x1b[>0;276;0c'));
+    if (s.includes('\x1b[>q')) queueMicrotask(() => tty.pty.input('\x1bP>|xterm.js(5.5.0)\x1b\\'));
+    if (s.includes('\x1b[?2026$p')) queueMicrotask(() => tty.pty.input('\x1b[?2026;2$y'));
+    if (s.includes('\x1b]10;?')) queueMicrotask(() => tty.pty.input('\x1b]10;rgb:ffff/ffff/ffff\x1b\\'));
+    if (s.includes('\x1b]11;?')) queueMicrotask(() => tty.pty.input('\x1b]11;rgb:0000/0000/0000\x1b\\'));
   });
   return {
     tty,
@@ -597,4 +603,34 @@ describe('WASM packages', () => {
     expect((await sh('/usr/bin/numfmt --to=iec 1048576')).out).toBe('1.0M\n');
     expect((await sh('/usr/bin/seq -s: 3')).out).toBe('1:2:3\n');
   }, 180_000);
+});
+
+describe('tmux', () => {
+  it('runs a session on the tty: shell pane, split, detach and re-attach; scripted control', async () => {
+    await install('tmux');
+    expect((await sh('tmux -V')).out).toBe('tmux 3.8\n');
+    // Interactive: the status line, a shell in the pane, a split, detach with C-b d
+    const { term, done } = onTerminal('tmux new-session -s main');
+    await until(() => term.screen.includes('[main]'), 'the status line');
+    await until(() => term.screen.includes('user@shiro:~/w$'), 'the pane shell prompt');
+    term.type('echo pane-$((6*7))\r');
+    await until(() => term.screen.includes('pane-42'), 'command output in the pane');
+    term.type('\x02%'); // C-b %: split left/right
+    await until(() => (term.screen.match(/user@shiro:~\/w\$/g) ?? []).length >= 3, 'a second pane');
+    term.type('\x02d');
+    expect(await done).toBe(0);
+    expect(term.screen).toContain('[detached (from session main)]');
+    // Scripted: the server kept running
+    expect((await sh("tmux list-panes -t main -F '#{pane_index}'")).out).toBe('0\n1\n');
+    await sh("tmux send-keys -t main.0 'echo scripted > /home/user/w/from-tmux.txt' Enter");
+    for (let i = 0; i < 200 && !(await fs.exists('/home/user/w/from-tmux.txt')); i++) await new Promise((r) => setTimeout(r, 50));
+    expect(await fs.readFile('/home/user/w/from-tmux.txt', 'utf8')).toBe('scripted\n');
+    // Re-attach on a new terminal; ending the session from outside detaches it
+    const again = onTerminal('tmux attach -t main', fakeTerminal(30, 100));
+    await until(() => again.term.screen.includes('pane-42') && again.term.screen.includes('scripted'), 'the re-attached session');
+    expect((await sh('tmux kill-session -t main')).exitCode).toBe(0);
+    expect(await again.done).toBe(0);
+    expect(again.term.screen).toContain('[exited]');
+    expect((await sh('tmux ls 2>&1; echo rc=$?')).out).toMatch(/no server running.*\nrc=1\n$/);
+  }, 300_000);
 });

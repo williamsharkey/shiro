@@ -208,6 +208,8 @@ export class Shell {
   history: string[] = [];
   commands: CommandRegistry;
   lastExitCode: number = 0;
+  /** The `exit` builtin ended this shell (an interactive loop stops reading). */
+  exited = false;
   functions: Record<string, { body: string }> = {};
   backgroundJobs: Map<number, BackgroundJob> = new Map();
   /** Shell options: errexit (-e), xtrace (-x), nounset (-u), verbose (-v) */
@@ -496,6 +498,7 @@ export class Shell {
       // a subshell or $(...) each run in their own Shell), which runs the EXIT trap
       if (e instanceof ExitSignal && depth === 0 && this.sourcing === 0) {
         this.executeDepth = 0;
+        this.exited = true;
         await this.runExitTrap(writeStdout, writeStderr || writeStdout, terminalOverride);
         this.lastExitCode = e.code;
         this.env['?'] = String(e.code);
