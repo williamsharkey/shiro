@@ -3281,9 +3281,11 @@ export class Shell {
           }
           const expanded = this.expandParamExpression(inner);
           if (expanded !== null) {
-            result += /^[A-Za-z_][A-Za-z0-9_]*$/.test(inner)
-              ? (inDouble ? protectExpansion(expanded) : splitFields(expanded, this.fieldIFS()))
-              : expanded;
+            // The value is data, except for ${x-word} ${x=word} ${x+word} ${x?word},
+            // whose word was expanded as shell text (its quotes still to be removed)
+            const wordOp = /^(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-]):?[-=+?]/.test(inner);
+            result += wordOp ? expanded
+              : inDouble ? protectExpansion(expanded) : splitFields(expanded, this.fieldIFS());
             i = j + 1;
             continue;
           }
@@ -3353,6 +3355,18 @@ export class Shell {
 
   /** ${NAME[...]...}: a list of words for [@]/[*], text otherwise; null if not an array reference */
   private expandArrayRef(inner: string): { list: string[]; star: boolean } | { text: string; raw: boolean } | null {
+    // ${!prefix@} / ${!prefix*}: names of the variables starting with prefix
+    const names = /^!([A-Za-z_][A-Za-z0-9_]*)([@*])$/.exec(inner);
+    if (names) {
+      const all = new Set([...Object.keys(this.env), ...this.arrays.keys(), ...this.assocArrays.keys()]);
+      return { list: [...all].filter((k) => k.startsWith(names[1]) && /^[A-Za-z_]/.test(k)).sort(), star: names[2] === '*' };
+    }
+    // ${@:off:len} / ${*:off:len}: offset 0 is $0
+    if (/^[@*]:(?![-=+?])/.test(inner)) {
+      const args = this.getPositionalArgs();
+      const pairs: [number, string][] = [[0, this.env['0'] ?? 'shiro'], ...args.map((a, k): [number, string] => [k + 1, a])];
+      return { list: this.sliceList(pairs, args.length + 1, inner.slice(2)), star: inner[0] === '*' };
+    }
     const m = /^([!#]?)([A-Za-z_][A-Za-z0-9_]*)\[/.exec(inner);
     if (!m) return null;
     let depth = 0, close = m[0].length - 1;
@@ -3385,23 +3399,8 @@ export class Shell {
       if (!op) return { list: vals, star };
       const slice = /^:(?![-=+?])([\s\S]*)$/.exec(op);
       if (slice) {
-        const colon = slice[1].indexOf(':');
-        const offE = colon < 0 ? slice[1] : slice[1].slice(0, colon);
-        let off = arith(offE);
-        let picked: string[];
-        if (arr) {
-          if (off < 0) off += arrayTop(arr);
-          picked = off < 0 ? [] : keys.filter((k) => Number(k) >= off).map((k) => get(k)!);
-        } else {
-          if (off < 0) off += vals.length;
-          picked = off < 0 ? [] : vals.slice(off);
-        }
-        if (colon >= 0) {
-          const len = arith(slice[1].slice(colon + 1));
-          if (len < 0) throw new Error(`${slice[1].slice(colon + 1).trim()}: substring expression < 0`);
-          picked = picked.slice(0, len);
-        }
-        return { list: picked, star };
+        const pairs: [number, string][] = arr ? keys.map((k) => [Number(k), get(k)!]) : vals.map((v, k) => [k, v]);
+        return { list: this.sliceList(pairs, arr ? arrayTop(arr) : vals.length, slice[1]), star };
       }
       const def = /^(:?)([-+])([\s\S]*)$/.exec(op);
       if (def) {
@@ -3436,6 +3435,24 @@ export class Shell {
     }
     const r = this.applyParamOp(v, op);
     return r === null ? null : { text: r, raw: true };
+  }
+
+  /** Elements of an [index, value] list from OFFSET[:LENGTH] (arithmetic; a negative offset counts back from top) */
+  private sliceList(pairs: [number, string][], top: number, spec: string): string[] {
+    const arith = (e: string) => {
+      try { return Number(this.evalArithBig(e)); } catch (err) { if (err instanceof ArithError) throw new Error(err.message); throw err; }
+    };
+    const [offE, lenE] = splitSliceSpec(spec);
+    let off = arith(offE);
+    if (off < 0) off += top;
+    if (off < 0) return [];
+    let picked = pairs.filter(([k]) => k >= off).map(([, v]) => v);
+    if (lenE !== undefined) {
+      const len = arith(lenE);
+      if (len < 0) throw new Error(`${lenE.trim()}: substring expression < 0`);
+      picked = picked.slice(0, len);
+    }
+    return picked;
   }
 
   /** ${NAME<op>} applied to a value (an array element) instead of a variable */
@@ -3668,18 +3685,24 @@ export class Shell {
       return (re.test(val[0]) ? val[0].toLowerCase() : val[0]) + val.slice(1);
     }
 
-    // ${VAR:offset} and ${VAR:offset:length} — substring
+    // ${VAR:offset} and ${VAR:offset:length} — substring (arithmetic; a negative
+    // offset counts from the end, a negative length is an end position from the end).
     // ${x:-1} is a default value: a negative offset is written ${x: -1} or ${x:(-1)}
-    const subMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*):(\d+|\s+-?\d+|\(\s*-?\d+\s*\))(?::(\s*-?\d+))?$/);
+    const subMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*|[0-9]+):(?![-=+?])([\s\S]*)$/);
     if (subMatch) {
-      const val = this.env[subMatch[1]] ?? '';
-      let offset = parseInt(subMatch[2].replace(/[()\s]/g, ''));
-      if (offset < 0) offset = Math.max(0, val.length + offset);
-      if (subMatch[3] !== undefined) {
-        const len = parseInt(subMatch[3]);
-        return len < 0 ? val.slice(offset, Math.max(0, val.length + len)) : val.slice(offset, offset + len);
-      }
-      return val.slice(offset);
+      const chars = [...(this.env[subMatch[1]] ?? this.scalarOf(subMatch[1]) ?? '')];
+      const [offE, lenE] = splitSliceSpec(subMatch[2]);
+      const arith = (e: string) => {
+        try { return Number(this.evalArithBig(e)); } catch (err) { if (err instanceof ArithError) throw new Error(err.message); throw err; }
+      };
+      let offset = arith(offE);
+      if (offset < 0) offset += chars.length;
+      if (offset < 0 || offset > chars.length) return '';
+      if (lenE === undefined) return chars.slice(offset).join('');
+      let end = arith(lenE);
+      end = end < 0 ? chars.length + end : offset + end;
+      if (end < offset) throw new Error(`${lenE.trim()}: substring expression < 0`);
+      return chars.slice(offset, end).join('');
     }
 
     // ${VAR/pat/rep}, ${VAR//pat/rep}, ${VAR/#pat/rep}, ${VAR/%pat/rep}
@@ -4429,9 +4452,12 @@ export class Shell {
         result.push(subOut);
         i = j;
       } else if (input[i] === '`') {
-        let j = input.indexOf('`', i + 1);
-        if (j === -1) { result.push(input.slice(i)); break; }
-        const subCmd = input.slice(i + 1, j);
+        // The body ends at the next unescaped `; in it \\ \$ \` (and \" inside
+        // double quotes) lose their backslash, other backslashes stay
+        let j = i + 1;
+        while (j < input.length && input[j] !== '`') j += input[j] === '\\' ? 2 : 1;
+        if (j >= input.length) { result.push(input.slice(i)); break; }
+        const subCmd = input.slice(i + 1, j).replace(outerDQ || quoted ? /\\([\\$`"])/g : /\\([\\$`])/g, '$1');
         const subResult = await this.subshellExec(subCmd);
         if (subResult.stderr) stderrWriter(subResult.stderr);
         const subOut = this.substitutionText(subResult.stdout.replace(/\r\n/g, '\n').replace(/\n+$/, ''), result.join(''), outerDQ || quoted);
@@ -4675,13 +4701,19 @@ export class Shell {
       (_m, sq, dq, bs) => sq ?? (dq !== undefined ? dq.replace(/\\([\\"$`])/g, '$1') : bs)));
   }
 
-  /** Index of an indexed array subscript (arithmetic; negative counts from the end) */
-  private arrayIndex(name: string, sub: string): number {
+  /**
+   * Index of an indexed array subscript (arithmetic; negative counts from the
+   * end). Out of range below 0: an error when assigning, -1 (unset) when reading.
+   */
+  private arrayIndex(name: string, sub: string, forRead = false): number {
     let n = Number(this.evalArithBig(sub));
     if (n < 0) {
       const arr = this.arrays.get(name);
       const top = arr ? arrayTop(arr) : (this.env[name] !== undefined ? 1 : 0);
-      if (n + top < 0) throw new ArithError(`${name}[${sub}]: bad array subscript`);
+      if (n + top < 0) {
+        if (forRead) return -1;
+        throw new ArithError(`${name}[${sub}]: bad array subscript`);
+      }
       n += top;
     }
     return n;
@@ -4700,7 +4732,8 @@ export class Shell {
       return assoc ? assoc.get('0') : this.arrays.get(name)?.[0];
     }
     if (assoc) return assoc.get(this.assocKey(sub));
-    const idx = this.arrayIndex(name, sub);
+    const idx = this.arrayIndex(name, sub, true);
+    if (idx < 0) return undefined;
     const arr = this.arrays.get(name);
     if (arr) return arr[idx];
     return idx === 0 ? this.env[name] : undefined;
@@ -4738,8 +4771,9 @@ export class Shell {
   // ─── SHELL FUNCTIONS ──────────────────────────────────────────────────────
 
   private parseFunctionDef(input: string): { name: string; body: string } | null {
-    let match = input.match(/^(\w+)\s*\(\)\s*\{([\s\S]*)\}$/);
-    if (!match) match = input.match(/^function\s+(\w+)\s*(?:\(\))?\s*\{([\s\S]*)\}$/);
+    // bash allows - . : in function names (test-hyphen() { … })
+    let match = input.match(/^([A-Za-z_][\w.:-]*)\s*\(\)\s*\{([\s\S]*)\}$/);
+    if (!match) match = input.match(/^function\s+([A-Za-z_][\w.:-]*)\s*(?:\(\))?\s*\{([\s\S]*)\}$/);
     if (match) return { name: match[1], body: match[2].trim() };
     return null;
   }
@@ -6574,6 +6608,22 @@ function skipParamBrace(s: string, i: number): number {
     else if (c === '}' && --depth === 0) return i + 1;
   }
   return s.length;
+}
+
+/** OFFSET and LENGTH of ${x:OFFSET:LENGTH} (the : of an arithmetic ?: is not the separator) */
+function splitSliceSpec(spec: string): [string, string | undefined] {
+  let depth = 0, ternary = 0;
+  for (let i = 0; i < spec.length; i++) {
+    const c = spec[i];
+    if (c === '(' || c === '[') depth++;
+    else if (c === ')' || c === ']') depth--;
+    else if (depth === 0 && c === '?') ternary++;
+    else if (depth === 0 && c === ':') {
+      if (ternary > 0) { ternary--; continue; }
+      return [spec.slice(0, i), spec.slice(i + 1)];
+    }
+  }
+  return [spec, undefined];
 }
 
 /** `{ list; }`, possibly followed by redirections */

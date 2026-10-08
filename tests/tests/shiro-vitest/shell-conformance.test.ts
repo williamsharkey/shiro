@@ -345,4 +345,17 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('compound\npat\nfoo-123\nre1\nre2\narith\nsetvar\nmultiline\n');
   });
+
+  it('backtick escapes, ${x:off:len} with arithmetic, ${@:off}, test -v, f-name(), ${!prefix@}', async () => {
+    const r = await script([
+      "X=/a/b; echo `echo \\$X | tr / _` \"`echo \\\"q\\\"`\" `echo a\\\\\\\\b`",
+      "s=abcdef; i=1; echo ${s:i+1:2} ${s: -2} ${s:1:-2} ${s:(-3):1}",
+      "set -- 4 5 6; echo \"${@:2}\" \"${*:1:2}\" \"${@: -1}\"",
+      "x=\"it's\"; echo ${x/t/T} \"${x#i}\"",
+      "a=(1 2); test -v 'a[1]' && echo set1; test -v 'a[5]' || echo unset5",
+      "my-func() { echo hyphen \"$1\"; }; my-func ok",
+      "v1=1 v2=2; echo ${!v@}",
+    ].join('\n'));
+    expect(r.out).toBe("_a_b q a\\b\ncd ef bcd d\n5 6 4 5 6\niT's t's\nset1\nunset5\nhyphen ok\nv1 v2\n");
+  });
 });

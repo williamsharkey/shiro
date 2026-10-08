@@ -40,7 +40,7 @@
    ]
   },
   "word-split": {
-   "pass": 43,
+   "pass": 44,
    "total": 53,
    "failures": [
     {
@@ -74,10 +74,6 @@
     {
      "i": 51,
      "name": "\"\"$A\"\" - empty string on both sides - derived from spec/toysh-posix #15"
-    },
-    {
-     "i": 53,
-     "name": "Regression: ${!v} should be split"
     },
     {
      "i": 54,
@@ -118,7 +114,7 @@
    ]
   },
   "var-sub-quote": {
-   "pass": 31,
+   "pass": 32,
    "total": 41,
    "failures": [
     {
@@ -154,17 +150,13 @@
      "name": "Syntax error for single quote in double quote"
     },
     {
-     "i": 34,
-     "name": "# operator with single quoted arg (dash/ash and bash/mksh disagree, reported by Crestwave)"
-    },
-    {
      "i": 38,
      "name": "Right Brace as argument (similar to #702)"
     }
    ]
   },
   "var-op-test": {
-   "pass": 20,
+   "pass": 22,
    "total": 35,
    "failures": [
     {
@@ -206,14 +198,6 @@
     {
      "i": 30,
      "name": "\"\\z\" as arg"
-    },
-    {
-     "i": 32,
-     "name": "op-test for ${a} and ${a[0]}"
-    },
-    {
-     "i": 33,
-     "name": "op-test for ${a[@]} and ${a[*]}"
     },
     {
      "i": 34,
@@ -274,7 +258,7 @@
    ]
   },
   "var-op-patsub": {
-   "pass": 21,
+   "pass": 22,
    "total": 27,
    "failures": [
     {
@@ -294,42 +278,18 @@
      "name": "When LC_ALL=C, pattern ? doesn't match multibyte character"
     },
     {
-     "i": 22,
-     "name": "patsub with single quotes and hyphen in character class (regression)"
-    },
-    {
      "i": 26,
      "name": "Chromium from http://www.oilshell.org/blog/2016/11/07.html"
     }
    ]
   },
   "var-op-slice": {
-   "pass": 9,
+   "pass": 16,
    "total": 21,
    "failures": [
     {
      "i": 1,
      "name": "Cannot take length of substring slice"
-    },
-    {
-     "i": 6,
-     "name": "Negative second arg is position, not length!"
-    },
-    {
-     "i": 8,
-     "name": "String slice with math"
-    },
-    {
-     "i": 13,
-     "name": "Slice with an index that's an array -- silent a[0] decay"
-    },
-    {
-     "i": 14,
-     "name": "Slice with an assoc array"
-    },
-    {
-     "i": 15,
-     "name": "Simple ${@:offset}"
     },
     {
      "i": 16,
@@ -340,20 +300,12 @@
      "name": "${@:offset:length} and ${*:offset:length}"
     },
     {
-     "i": 18,
-     "name": "${@:0:1}"
-    },
-    {
      "i": 19,
      "name": "Permutations of implicit begin and length"
     },
     {
      "i": 20,
      "name": "${array[@]:} vs ${array[@]: }  - bash and zsh inconsistent"
-    },
-    {
-     "i": 21,
-     "name": "${array[@]::} has implicit length of zero - for ble.sh"
     }
    ]
   },
@@ -496,7 +448,7 @@
    ]
   },
   "command-sub": {
-   "pass": 10,
+   "pass": 19,
    "total": 28,
    "failures": [
     {
@@ -520,20 +472,8 @@
      "name": "Command sub with here doc"
     },
     {
-     "i": 15,
-     "name": "Double Quotes in Command Sub in Double Quotes"
-    },
-    {
      "i": 16,
      "name": "Escaped quote in [[ ]]"
-    },
-    {
-     "i": 18,
-     "name": "Quoting $ within ``"
-    },
-    {
-     "i": 19,
-     "name": "Quoting $ within `` within double quotes"
     },
     {
      "i": 20,
@@ -542,30 +482,6 @@
     {
      "i": 21,
      "name": "Quoting \\ within `` within double quotes"
-    },
-    {
-     "i": 22,
-     "name": "Quoting ( within ``"
-    },
-    {
-     "i": 23,
-     "name": "Quoting ( within `` within double quotes"
-    },
-    {
-     "i": 24,
-     "name": "Quoting non-special characters within ``"
-    },
-    {
-     "i": 25,
-     "name": "Quoting non-special characters within `` within double quotes"
-    },
-    {
-     "i": 26,
-     "name": "Quoting double quotes within backticks"
-    },
-    {
-     "i": 27,
-     "name": "More levels of double quotes in backticks"
     },
     {
      "i": 28,
@@ -722,7 +638,7 @@
    ]
   },
   "func-parsing": {
-   "pass": 3,
+   "pass": 4,
    "total": 12,
    "failures": [
     {
@@ -754,10 +670,6 @@
      "name": "Function name with !"
     },
     {
-     "i": 12,
-     "name": "Function name with -"
-    },
-    {
      "i": 13,
      "name": "Break after ) is OK."
     }
@@ -782,7 +694,7 @@
    ]
   },
   "builtin-printf": {
-   "pass": 46,
+   "pass": 47,
    "total": 55,
    "failures": [
     {
@@ -796,10 +708,6 @@
     {
      "i": 4,
      "name": "printf -v syntax error"
-    },
-    {
-     "i": 6,
-     "name": "dynamic declare instead of %q"
     },
     {
      "i": 38,
@@ -1007,7 +915,7 @@
    ]
   },
   "builtin-bracket": {
-   "pass": 42,
+   "pass": 43,
    "total": 50,
    "failures": [
     {
@@ -1025,10 +933,6 @@
     {
      "i": 37,
      "name": "-u for setuid, -g too"
-    },
-    {
-     "i": 38,
-     "name": "-v to test variable (bash)"
     },
     {
      "i": 39,
@@ -1310,7 +1214,7 @@
    "failures": []
   },
   "array": {
-   "pass": 63,
+   "pass": 68,
    "total": 78,
    "failures": [
     {
@@ -1320,14 +1224,6 @@
     {
      "i": 5,
      "name": "array with invalid token"
-    },
-    {
-     "i": 9,
-     "name": "Negative index"
-    },
-    {
-     "i": 10,
-     "name": "Negative index and sparse array"
     },
     {
      "i": 18,
@@ -1358,25 +1254,13 @@
      "name": "array default"
     },
     {
-     "i": 65,
-     "name": "Is element set?  test -v a[i]"
-    },
-    {
-     "i": 67,
-     "name": "test -v a[i] with arith expressions"
-    },
-    {
      "i": 72,
      "name": "a+=() modifies existing instance of BashArray"
-    },
-    {
-     "i": 77,
-     "name": "Regression: silent out-of-bound negative index in ${a[-2]} and $((a[-2]))"
     }
    ]
   },
   "array-assoc": {
-   "pass": 31,
+   "pass": 33,
    "total": 38,
    "failures": [
     {
@@ -1398,14 +1282,6 @@
     {
      "i": 34,
      "name": "bash bug: (( A[\"$key\"] = 1 )) doesn't work"
-    },
-    {
-     "i": 36,
-     "name": "test -v assoc[key]"
-    },
-    {
-     "i": 37,
-     "name": "test -v with dynamic parsing"
     }
    ]
   },
@@ -1506,7 +1382,7 @@
    ]
   },
   "glob": {
-   "pass": 16,
+   "pass": 18,
    "total": 23,
    "failures": [
     {
@@ -1516,14 +1392,6 @@
     {
      "i": 27,
      "name": "Glob of negated unescaped [[] and []]"
-    },
-    {
-     "i": 28,
-     "name": "PatSub of unescaped [[] and []]"
-    },
-    {
-     "i": 29,
-     "name": "PatSub of negated unescaped [[] and []]"
     },
     {
      "i": 32,
@@ -1998,7 +1866,7 @@
    ]
   },
   "sh-options": {
-   "pass": 12,
+   "pass": 13,
    "total": 32,
    "failures": [
     {
@@ -2048,10 +1916,6 @@
     {
      "i": 20,
      "name": "noclobber on <>"
-    },
-    {
-     "i": 29,
-     "name": "shopt -s strict:all"
     },
     {
      "i": 30,

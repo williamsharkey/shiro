@@ -12,7 +12,13 @@ export const test: Command = {
   description: "Evaluate conditional expression",
   async exec(ctx) {
     try {
-      return (await new TestEval(ctx.args, ctx.fs, ctx.cwd).run()) ? 0 : 1;
+      // -v NAME / -v NAME[SUB]: is the shell variable set
+      const isSet = (n: string) => {
+        const m = /^([A-Za-z_][A-Za-z0-9_]*)(?:\[(.*)\])?$/s.exec(n);
+        if (!m || typeof ctx.shell?.getVar !== 'function') return false;
+        try { return ctx.shell.getVar(m[1], m[2]) !== undefined; } catch { return false; }
+      };
+      return (await new TestEval(ctx.args, ctx.fs, ctx.cwd, isSet).run()) ? 0 : 1;
     } catch (e: unknown) {
       ctx.stderr += `test: ${e instanceof Error ? e.message : e}\n`;
       return 2;
@@ -20,12 +26,13 @@ export const test: Command = {
   },
 };
 
-const UNARY = new Set(['-b', '-c', '-d', '-e', '-f', '-g', '-G', '-h', '-k', '-L', '-n', '-N', '-O', '-p', '-r', '-s', '-S', '-t', '-u', '-w', '-x', '-z']);
+const UNARY = new Set(['-v', '-b', '-c', '-d', '-e', '-f', '-g', '-G', '-h', '-k', '-L', '-n', '-N', '-O', '-p', '-r', '-s', '-S', '-t', '-u', '-w', '-x', '-z']);
 const BINARY = new Set(['=', '==', '!=', '<', '>', '-eq', '-ne', '-lt', '-le', '-gt', '-ge', '-nt', '-ot', '-ef']);
 
 export class TestEval {
   private pos = 0;
-  constructor(private args: string[], private fs: FileSystem, private cwd: string) {}
+  constructor(private args: string[], private fs: FileSystem, private cwd: string,
+    private isSet: (name: string) => boolean = () => false) {}
 
   async run(): Promise<boolean> {
     const a = this.args;
@@ -38,14 +45,14 @@ export class TestEval {
         throw new Error(`${a[0]}: unary operator expected`);
       case 3:
         if (BINARY.has(a[1])) return this.binary(a[0], a[1], a[2]);
-        if (a[0] === '!') return !(await new TestEval(a.slice(1), this.fs, this.cwd).run());
+        if (a[0] === '!') return !(await new TestEval(a.slice(1), this.fs, this.cwd, this.isSet).run());
         if (a[0] === '(' && a[2] === ')') return a[1] !== '';
         if (a[1] === '-a') return a[0] !== '' && a[2] !== '';
         if (a[1] === '-o') return a[0] !== '' || a[2] !== '';
         throw new Error(`${a[1]}: binary operator expected`);
       case 4:
-        if (a[0] === '!') return !(await new TestEval(a.slice(1), this.fs, this.cwd).run());
-        if (a[0] === '(' && a[3] === ')') return new TestEval(a.slice(1, 3), this.fs, this.cwd).run();
+        if (a[0] === '!') return !(await new TestEval(a.slice(1), this.fs, this.cwd, this.isSet).run());
+        if (a[0] === '(' && a[3] === ')') return new TestEval(a.slice(1, 3), this.fs, this.cwd, this.isSet).run();
     }
     const v = await this.or();
     if (this.pos < a.length) throw new Error(`${a[this.pos]}: unexpected argument`);
@@ -110,6 +117,7 @@ export class TestEval {
       case '-z': return val === '';
       case '-n': return val !== '';
       case '-t': return false; // no fd is a terminal from a builtin's point of view
+      case '-v': return this.isSet(val);
     }
     if (val === '') return false;
     const s = await this.stat(val, op !== '-L' && op !== '-h');
