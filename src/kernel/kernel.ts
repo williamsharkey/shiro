@@ -536,7 +536,8 @@ export class Kernel {
     const fds = proc.fds;
     const str = (off: number, len: number) => {
       if (len < 0 || off + len > data.length) throw Object.assign(new Error('EFAULT'), { errno: A.EFAULT });
-      return dec.decode(data.subarray(off, off + len));
+      // slice(): browsers refuse to decode views of a SharedArrayBuffer
+      return dec.decode(data.slice(off, off + len));
     };
     const i64 = (lo: number, hi: number) => (hi | 0) * 0x100000000 + (lo >>> 0);
     const file = (fd: number) => fds.get(fd);

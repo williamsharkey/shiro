@@ -447,6 +447,8 @@ async function main() {
   // Kernel processes (worker guests, spawned builtins) run against this fs and fork this shell
   const kernel = getKernel();
   kernel.attach(fs, shell);
+  // kernel.spawn() of an x86-64 ELF runs it in Blink when the page can (src/x86-engine)
+  void import('./x86-engine/blink').then(m => m.registerBlinkLoader(kernel));
 
   // Populate API keys from localStorage so `claude` CLI picks them up
   const storedAnthropicKey = localStorage.getItem('shiro_anthropic_key') || localStorage.getItem('shiro_api_key');

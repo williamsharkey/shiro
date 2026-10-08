@@ -6,7 +6,7 @@
  * glibc builds of the same programs are made in beforeAll when `go` / `gcc`
  * are available, and those cases are skipped otherwise.
  */
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, onTestFinished } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -107,4 +107,47 @@ describe.skipIf(!haveHttp)('Blink engine: Go net/http over loopback', () => {
     for (let i = 0; i < 4; i++) expect(r.output).toContain(`pong /${i}`);
     expect(r.exitCode).toBe(0);
   }, 120_000);
+});
+
+describe('Blink engine: kernel processes', () => {
+  it('kernel.spawn() runs an ELF through the Blink loader', async () => {
+    // Browsers refuse to decode views of a SharedArrayBuffer (Node doesn't);
+    // make the page side behave like a browser here.
+    const decode = TextDecoder.prototype.decode;
+    TextDecoder.prototype.decode = function (input?: any, opts?: any) {
+      if (input && input.buffer instanceof SharedArrayBuffer) throw new TypeError('The provided ArrayBufferView value must not be shared.');
+      return decode.call(this, input, opts);
+    };
+    onTestFinished(() => { TextDecoder.prototype.decode = decode; });
+    const { fs } = await setup(readFileSync(join(FIX, 'hello-musl')));
+    const { Kernel } = await import('@shiro/kernel/kernel');
+    const { BufferFile } = await import('@shiro/kernel/fd');
+    const { registerBlinkLoader } = await import('@shiro/x86-engine/blink');
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    registerBlinkLoader(kernel);
+    const out = new BufferFile(null);
+    const p = kernel.spawn({ path: './prog', argv: ['prog', 'k'], cwd: '/home/user/work', fds: { 0: new BufferFile('from kernel\n'), 1: out, 2: out } });
+    const status = await p.wait();
+    expect(status).toBe(0);
+    expect(out.text()).toContain('arg1=k');
+    expect(out.text()).toContain('stdin=from kernel');
+  }, 60_000);
+
+  it('blocks on a pipe for stdin until input arrives', async () => {
+    const { fs } = await setup(readFileSync(join(FIX, 'hello-musl')));
+    const { Kernel } = await import('@shiro/kernel/kernel');
+    const { BufferFile } = await import('@shiro/kernel/fd');
+    const { createPipe } = await import('@shiro/kernel/pipe');
+    const { blinkRunner } = await import('@shiro/x86-engine/blink');
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    const [r, w] = createPipe();
+    const out = new BufferFile(null);
+    const p = kernel.spawn({ path: '/home/user/work/prog', argv: ['prog'], cwd: '/home/user/work', fds: { 0: r, 1: out, 2: out }, run: blinkRunner('/home/user/work/prog') });
+    await new Promise((res) => setTimeout(res, 1500));
+    expect(p.exitStatus).toBeUndefined();          // still waiting on stdin
+    await w.write(new TextEncoder().encode('late line\n'));
+    await w.close();
+    expect(await p.wait()).toBe(0);
+    expect(out.text()).toContain('stdin=late line');
+  }, 60_000);
 });

@@ -2,20 +2,24 @@
  * Page side of the Blink x86-64 engine (jart/blink compiled to WebAssembly,
  * see docs/X86_ENGINES.md and vendor/blink/).
  *
- * Each run starts a Worker on public/engines/blink/host.mjs, which loads
- * blink.mjs/blink.wasm and runs the guest with real threads (emscripten
- * pthreads). That needs SharedArrayBuffer, so the engine is only available
- * when the page is cross-origin isolated (or in Node); callers fall back to
- * src/x86 otherwise.
+ * A Blink guest is a kernel process (src/kernel): its Worker runs
+ * public/engines/blink/host.mjs, which loads blink.mjs/blink.wasm and makes
+ * every file and stdio request as a kernel syscall over the SAB channel
+ * (docs/KERNEL_ABI.md). Guest threads are emscripten pthreads, so the engine
+ * needs SharedArrayBuffer: a cross-origin isolated page, or Node. Callers
+ * fall back to src/x86 otherwise.
  *
- * Interim wiring until src/kernel lands: the worker's filesystem requests
- * (stat/readdir/read/write/...) arrive over a SharedArrayBuffer channel with
- * the kernel ABI layout and are served here from the Shiro FileSystem;
- * stdout/stderr stream back as messages; stdin is the command's buffered
- * stdin string.
+ * - registerBlinkLoader(kernel): kernel.spawn() of an ELF runs it in Blink.
+ * - runElfWithBlink(): the shell's `./binary` path; spawns the process with
+ *   the command's stdin and streams its stdout/stderr back.
  */
 
 import type { FileSystem } from '../filesystem';
+import { Kernel, getKernel, type Runner } from '../kernel/kernel';
+import { workerRunner, webWorker, type GuestWorker } from '../kernel/worker-host';
+import { BufferFile, DevNull } from '../kernel/fd';
+import { shellExitCode, SIGKILL } from '../kernel/abi';
+import type { Process } from '../kernel/process';
 
 export interface BlinkRunOptions {
   fs: FileSystem;
@@ -24,19 +28,9 @@ export interface BlinkRunOptions {
   stdin?: string | Uint8Array;
   writeStdout: (s: string) => void;
   writeStderr: (s: string) => void;
-  /** Abort the guest (worker.terminate()); resolves with 128+9. */
+  /** Kill the guest (SIGKILL); resolves with 128+9. */
   signal?: AbortSignal;
 }
-
-// Channel layout shared with host.mjs (Int32 indices; data at byte 64).
-const ST = 0, OP = 1, RES = 2, LEN = 4, JLEN = 5, DATA = 64;
-const CHANNEL_BYTES = 64 + (1 << 20);
-const OPS = { STAT: 1, READDIR: 2, READ: 3, WRITE: 4, MKDIR: 5, UNLINK: 6, RMDIR: 7, RENAME: 8, SYMLINK: 9, READLINK: 10, CHMOD: 11 };
-
-const ERRNO: Record<string, number> = {
-  EPERM: 1, ENOENT: 2, EIO: 5, EBADF: 9, EACCES: 13, EEXIST: 17, ENOTDIR: 20,
-  EISDIR: 21, EINVAL: 22, ENOSPC: 28, EROFS: 30, ENOTEMPTY: 39, ELOOP: 40,
-};
 
 let assetBase: string | null = null;
 
@@ -59,15 +53,13 @@ function defaultAssetBase(): string {
   if (isNode()) {
     // vitest/Node: the repo's public/ dir, found from the working directory.
     const p = nodeProcess();
-    const nodeFs = p.getBuiltinModule?.('fs');
-    const nodePath = p.getBuiltinModule?.('path');
-    const nodeUrl = p.getBuiltinModule?.('url');
-    if (nodeFs && nodePath && nodeUrl) {
-      const candidates = [p.env.SHIRO_BLINK_ASSETS, 'public/engines/blink', '../public/engines/blink'].filter(Boolean);
-      for (const c of candidates) {
-        const dir = nodePath.resolve(p.cwd(), c);
-        if (nodeFs.existsSync(nodePath.join(dir, 'host.mjs'))) return nodeUrl.pathToFileURL(dir).href + '/';
-      }
+    const nodeFs = p.getBuiltinModule('fs');
+    const nodePath = p.getBuiltinModule('path');
+    const nodeUrl = p.getBuiltinModule('url');
+    const candidates = [p.env.SHIRO_BLINK_ASSETS, 'public/engines/blink', '../public/engines/blink'].filter(Boolean);
+    for (const c of candidates) {
+      const dir = nodePath.resolve(p.cwd(), c);
+      if (nodeFs.existsSync(nodePath.join(dir, 'host.mjs'))) return nodeUrl.pathToFileURL(dir).href + '/';
     }
   }
   const base = typeof document !== 'undefined' && document.baseURI ? document.baseURI : (globalThis as any).location?.href;
@@ -81,184 +73,119 @@ export function blinkSupported(): boolean {
   return typeof Worker !== 'undefined' && (globalThis as any).crossOriginIsolated === true;
 }
 
-interface HostWorker {
-  post(msg: any): void;
-  onMessage(fn: (msg: any) => void): void;
-  onError(fn: (err: any) => void): void;
-  terminate(): void;
-}
-
-async function startHost(): Promise<HostWorker> {
+async function workerFactory(): Promise<() => GuestWorker> {
   const url = defaultAssetBase() + 'host.mjs';
   if (isNode()) {
     const wtName = 'node:worker_threads';
     const wt: any = await import(/* @vite-ignore */ wtName);
-    const w = new wt.Worker(new URL(url));
-    return {
-      post: (m) => w.postMessage(m),
-      onMessage: (fn) => w.on('message', fn),
-      onError: (fn) => w.on('error', fn),
-      terminate: () => { void w.terminate(); },
+    return () => {
+      const w = new wt.Worker(new URL(url));
+      return {
+        postMessage: (m: unknown) => w.postMessage(m),
+        terminate: () => w.terminate(),
+        onMessage: (cb: (m: unknown) => void) => w.on('message', cb),
+        onError: (cb: (e: unknown) => void) => w.on('error', cb),
+      };
     };
   }
-  const w = new Worker(url, { type: 'module', name: 'blink' });
-  return {
-    post: (m) => w.postMessage(m),
-    onMessage: (fn) => w.addEventListener('message', (e: MessageEvent) => fn(e.data)),
-    onError: (fn) => w.addEventListener('error', (e: ErrorEvent) => fn(e.error || new Error(e.message))),
-    terminate: () => w.terminate(),
+  return () => webWorker(new Worker(url, { type: 'module', name: 'blink' }));
+}
+
+/** A kernel Runner that executes the ELF at absolute `path` in Blink. */
+export function blinkRunner(path: string): Runner {
+  return async (proc: Process, kernel: Kernel) => {
+    const create = await workerFactory();
+    const mounts = kernel.fs ? (await kernel.fs.readdir('/')).map((n) => '/' + n) : [];
+    const runner = workerRunner((p) => {
+      const w = create();
+      // Wake a guest blocked in poll()/epoll on stdin as soon as input arrives.
+      const off = p.fds.get(0)?.onReady(() => w.postMessage({ type: 'blink-ready', fd: 0 }));
+      if (off) p.onTerminate(off);
+      return w;
+    }, {
+      // SHIRO_BLINK_DEBUG=1: the worker logs kernel syscalls and Blink's own messages to the console
+      startData: { path, moduleUrl: defaultAssetBase() + 'blink.mjs', mounts, debug: proc.env.SHIRO_BLINK_DEBUG === '1' },
+    });
+    return runner(proc, kernel);
   };
 }
 
-function errnoOf(e: any): number {
-  const code = e?.code;
-  if (typeof code === 'string' && ERRNO[code]) return -ERRNO[code];
-  const m = /^(E[A-Z]+)\b/.exec(String(e?.message || ''));
-  if (m && ERRNO[m[1]]) return -ERRNO[m[1]];
-  return -ERRNO.EIO;
+/** True when the file at `path` starts with the ELF magic. */
+async function isElf(fs: FileSystem, path: string): Promise<boolean> {
+  try {
+    const raw = await fs.readFile(path);
+    return typeof raw !== 'string' && raw.length >= 4 && raw[0] === 0x7f && raw[1] === 0x45 && raw[2] === 0x4c && raw[3] === 0x46;
+  } catch {
+    return false;
+  }
 }
 
-/** Serves the worker's filesystem requests from a Shiro FileSystem. */
-class FsServer {
-  private readCache = new Map<string, Uint8Array>();
-  private writes = new Map<string, Uint8Array[]>();
-  private enc = new TextEncoder();
-  private dec = new TextDecoder();
-  private i32: Int32Array;
-  private u8: Uint8Array;
-  private busy = false;
+/** Run x86-64 ELF binaries that kernel.spawn() is asked to start in Blink. */
+export function registerBlinkLoader(kernel: Kernel): void {
+  kernel.addLoader(async (path, proc, k) => {
+    if (!blinkSupported() || !k.fs) return null;
+    let resolved: string | null = path;
+    if (!path.includes('/')) resolved = (await k.shell?.findExecutableInPath(path)) ?? null;
+    else if (!path.startsWith('/')) resolved = k.fs.resolvePath(path, proc.cwd);
+    if (!resolved || !(await isElf(k.fs, resolved))) return null;
+    return blinkRunner(resolved);
+  });
+}
 
-  constructor(private fs: FileSystem, chan: SharedArrayBuffer) {
-    this.i32 = new Int32Array(chan);
-    this.u8 = new Uint8Array(chan);
+const kernels = new WeakMap<FileSystem, Kernel>();
+
+/** The page kernel when it serves `fs` (attaching it if nothing has), else a private one. */
+function kernelFor(fs: FileSystem): Kernel {
+  const k = getKernel();
+  if (!k.fs) k.attach(fs);
+  if (k.fs === fs) return k;
+  let own = kernels.get(fs);
+  if (!own) {
+    own = new Kernel({ fs, registerWithProcessTable: false });
+    kernels.set(fs, own);
   }
+  return own;
+}
 
-  async service(): Promise<void> {
-    if (this.busy || Atomics.load(this.i32, ST) !== 1) return;
-    this.busy = true;
-    try {
-      const op = Atomics.load(this.i32, OP);
-      const jlen = Atomics.load(this.i32, JLEN);
-      const len = Atomics.load(this.i32, LEN);
-      const req = JSON.parse(this.dec.decode(this.u8.slice(DATA, DATA + jlen)));
-      const payload = this.u8.slice(DATA + jlen, DATA + len);
-      let res = 0;
-      let out: Uint8Array = new Uint8Array(0);
-      try {
-        [res, out] = await this.handle(op, req, payload);
-      } catch (e) {
-        res = errnoOf(e);
-      }
-      this.u8.set(out, DATA);
-      Atomics.store(this.i32, RES, res);
-      Atomics.store(this.i32, LEN, out.length);
-      Atomics.store(this.i32, ST, 2);
-      Atomics.notify(this.i32, ST);
-    } finally {
-      this.busy = false;
-    }
-  }
-
-  private json(v: unknown): Uint8Array { return this.enc.encode(JSON.stringify(v)); }
-
-  private async handle(op: number, req: any, payload: Uint8Array): Promise<[number, Uint8Array]> {
-    const fs = this.fs;
-    const none = new Uint8Array(0);
-    switch (op) {
-      case OPS.STAT: {
-        const st = await fs.lstat(req.path);
-        const info: any = { type: st.type, mode: st.mode, size: st.size, mtime: st.mtime.getTime() };
-        if (st.type === 'symlink') info.target = await fs.readlink(req.path);
-        return [0, this.json(info)];
-      }
-      case OPS.READDIR:
-        return [0, this.json(await fs.readdir(req.path))];
-      case OPS.READ: {
-        let data = this.readCache.get(req.path);
-        if (!data || req.offset === 0) {
-          const raw = await fs.readFile(req.path);
-          data = typeof raw === 'string' ? this.enc.encode(raw) : raw;
-          this.readCache.set(req.path, data);
-        }
-        const chunk = data.subarray(req.offset, req.offset + (CHANNEL_BYTES - DATA));
-        if (req.offset + chunk.length >= data.length) this.readCache.delete(req.path);
-        return [data.length, chunk];
-      }
-      case OPS.WRITE: {
-        const parts = req.offset === 0 ? [] : (this.writes.get(req.path) || []);
-        parts.push(payload);
-        if (!req.final) { this.writes.set(req.path, parts); return [0, none]; }
-        this.writes.delete(req.path);
-        const total = parts.reduce((n, p) => n + p.length, 0);
-        const buf = new Uint8Array(total);
-        let off = 0;
-        for (const p of parts) { buf.set(p, off); off += p.length; }
-        await fs.writeFile(req.path, buf, { mode: req.mode });
-        return [0, none];
-      }
-      case OPS.MKDIR: await fs.mkdir(req.path); return [0, none];
-      case OPS.UNLINK: await fs.unlink(req.path); return [0, none];
-      case OPS.RMDIR: await fs.rmdir(req.path); return [0, none];
-      case OPS.RENAME: await fs.rename(req.from, req.to); return [0, none];
-      case OPS.SYMLINK: await fs.symlink(req.target, req.path); return [0, none];
-      case OPS.READLINK: return [0, this.enc.encode(await fs.readlink(req.path))];
-      case OPS.CHMOD: await fs.chmod(req.path, req.mode); return [0, none];
-      default: return [-ERRNO.EINVAL, none];
-    }
+/** Writes go to a callback (a shell command's stdout/stderr); reads are EOF. */
+class OutputSink extends DevNull {
+  constructor(private sink: (data: Uint8Array) => void) { super(1); }
+  async write(buf: Uint8Array): Promise<number> {
+    this.sink(buf.slice());
+    return buf.length;
   }
 }
 
 /**
- * Run an x86-64 Linux ELF in Blink. `path` is the Shiro path of the binary
- * (the guest sees the Shiro filesystem, so it is loaded from there).
- * Resolves with the exit status.
+ * Run an x86-64 Linux ELF in Blink as a kernel process. `path` is the Shiro
+ * path of the binary (the guest sees the Shiro filesystem, so it loads from
+ * there). Resolves with the shell exit code.
  */
-export async function runElfWithBlink(path: string, args: string[], opts: BlinkRunOptions): Promise<number> {
-  const chan = new SharedArrayBuffer(CHANNEL_BYTES);
-  const server = new FsServer(opts.fs, chan);
-  const mounts = (await opts.fs.readdir('/')).map((n) => '/' + n);
-  const stdin = typeof opts.stdin === 'string' ? new TextEncoder().encode(opts.stdin) : (opts.stdin || new Uint8Array(0));
-  const host = await startHost();
-  const decoders = { 1: new TextDecoder(), 2: new TextDecoder() } as Record<number, TextDecoder>;
-
-  return new Promise<number>((resolve) => {
-    let finished = false;
-    const finish = (code: number) => {
-      if (finished) return;
-      finished = true;
-      host.terminate();
-      resolve(code);
-    };
-    opts.signal?.addEventListener('abort', () => finish(128 + 9));
-    host.onError((e) => {
-      opts.writeStderr(`blink: ${e?.message || e}\n`);
-      finish(126);
-    });
-    host.onMessage((msg) => {
-      if (!msg || finished) return;
-      switch (msg.type) {
-        case 'fs': void server.service(); break;
-        case 'out': {
-          const text = decoders[msg.fd].decode(msg.data, { stream: true });
-          if (text) (msg.fd === 2 ? opts.writeStderr : opts.writeStdout)(text);
-          break;
-        }
-        case 'exit': finish(msg.code); break;
-        case 'error':
-          opts.writeStderr(`blink: ${msg.message}\n`);
-          finish(134);
-          break;
-      }
-    });
-    host.post({
-      type: 'run',
-      argv: [path, ...args],
-      env: opts.env,
-      cwd: opts.cwd,
-      stdin,
-      mounts,
-      chan,
-      moduleUrl: defaultAssetBase() + 'blink.mjs',
-    });
+export async function runElfWithBlink(path: string, args: string[], opts: BlinkRunOptions, argv0 = path): Promise<number> {
+  const kernel = kernelFor(opts.fs);
+  const decoder = (write: (s: string) => void) => {
+    const d = new TextDecoder();
+    return (bytes: Uint8Array) => { const s = d.decode(bytes, { stream: true }); if (s) write(s); };
+  };
+  const proc = kernel.spawn({
+    path,
+    argv: [argv0, ...args],
+    env: opts.env,
+    cwd: opts.cwd,
+    fds: {
+      0: new BufferFile(opts.stdin ?? '', 0),
+      1: new OutputSink(decoder(opts.writeStdout)),
+      2: new OutputSink(decoder(opts.writeStderr)),
+    },
+    run: blinkRunner(path),
   });
+  const onAbort = () => kernel.kill(proc.pid, SIGKILL);
+  opts.signal?.addEventListener('abort', onAbort, { once: true });
+  try {
+    const status = await proc.wait();
+    await kernel.waitpid(proc.pid, 0).catch(() => undefined);
+    return shellExitCode(status);
+  } finally {
+    opts.signal?.removeEventListener('abort', onAbort);
+  }
 }

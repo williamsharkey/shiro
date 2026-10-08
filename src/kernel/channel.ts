@@ -181,7 +181,7 @@ export class GuestSys {
 
   getcwd(): string | number {
     const r = this.ch.call(A.SYS_getcwd, this.ch.data.length);
-    return r < 0 ? r : dec.decode(this.ch.data.subarray(0, r - 1));
+    return r < 0 ? r : dec.decode(this.ch.data.slice(0, r - 1));
   }
 
   chdir(path: string): number {
@@ -217,7 +217,7 @@ export class GuestSys {
   procInfo(): { argv: string[]; env: Record<string, string>; cwd: string; pid: number } {
     const r = this.ch.call(A.SYS_getenv);
     if (r < 0) throw new SysError(r, 'getenv');
-    return JSON.parse(dec.decode(this.ch.data.subarray(0, r)));
+    return JSON.parse(dec.decode(this.ch.data.slice(0, r)));
   }
 
   /** exit_group; does not return. */

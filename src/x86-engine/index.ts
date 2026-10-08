@@ -7,7 +7,10 @@
  *   x86   — the built-in TypeScript interpreter (src/x86). Single-threaded,
  *           main thread; fine for small static tools.
  *
- * `SHIRO_X86_ENGINE=x86|blink` in the environment forces one.
+ * Blink guests are kernel processes (src/kernel), so they show up in `ps`
+ * and get their stdio through kernel fds.
+ *
+ * `SHIRO_X86_ENGINE=x86` in the environment forces the built-in one.
  * See docs/X86_ENGINES.md.
  */
 
