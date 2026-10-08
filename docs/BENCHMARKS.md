@@ -258,6 +258,33 @@ probe the heap stays within ±0.1 MiB from round 2 on. Flagged and judged
 noise: kernel-lab metrics as before, `boot.warm.first_command` 5.9 → 6.6 ms
 (baseline 6.0), `wasm.tree_create` 8 → 15 ms (one sample).
 
+### unix/perf-fs-shell 4 — git and reload load on first use
+
+`perf-fs-shell-3-quick.json` → `perf-fs-shell-4-quick.json`. A source-map
+breakdown of the entry chunk (1.70 MB) put isomorphic-git (148 KiB),
+esbuild-wasm's JS API (68 KiB) and pako (48 KiB) in it, all only reachable
+from the `git` and `reload` commands, which were registered eagerly. Both are
+`lazyCommand`s now, and the `~/.gitconfig` helpers that `gh auth` uses moved
+to `src/commands/git-config.ts` so they don't pull in git. Entry chunk:
+1.70 → 1.28 MB.
+
+| metric (isolated) | before | after | same-machine baseline |
+|---|---:|---:|---:|
+| boot.cold.transfer | 1687 KiB | 1277 KiB | 1683 KiB |
+| boot.cold.first_prompt | 167.7 ms | 149.4 ms (re-runs 136, 149) | 209 ms |
+| boot.mem.uasm | 7.16 MiB | 5.90 MiB | 7.14 MiB |
+| boot.mem.js_heap | 3.83 MiB | 3.39 MiB | — |
+| boot.settled.js_heap | 3.87 MiB | 3.43 MiB | — |
+| claude.version | — | 686 ms | 761 ms |
+
+`boot.mem.renderer_rss` stays ~207 MiB: that is Chromium's renderer
+baseline plus the kernel and xterm, not the entry chunk. The background
+Claude Code install (19 MiB, `boot.settled.*`) already waits 3 s after boot
+and is what keeps `claude` startup at ~0.7 s, so it stays. Flagged and
+re-run: `shell.pipeline_seq_grep_wc` (9-run medians, 3× alternating: base
+14.1–15.7 ms, new 14.9–17.0 ms), `boot.warm.first_command` (re-runs 5.9,
+6.2 ms vs 6.6), x86/kernel metrics: noise.
+
 ## Results
 
 <!-- bench:table:begin -->
