@@ -1182,7 +1182,10 @@
     "threads",
     "sockets"
    ],
-   "notes": "WASIX build (wasix_32v1, shared env.memory). HTTP and HTTPS (its own OpenSSL) through the kernel sockets and the TCP relay. Verifying real sites needs its CA certificates at /openssl (the package's share/openssl)."
+   "notes": "WASIX build (wasix_32v1, shared env.memory). HTTP and HTTPS (its own OpenSSL, CA certificates mounted at /openssl) through the kernel sockets and the TCP relay.",
+   "mounts": {
+    "/openssl": "share/openssl"
+   }
   },
   {
    "name": "quickjs-ng",
@@ -1270,6 +1273,46 @@
      "webc": {
       "atom": "python"
      }
+    },
+    {
+     "path": "share/ssl",
+     "url": "https://cdn.wasmer.io/webcimages/a9fa8202f1bf6a4eca8d31ee5f2b1970c8f45af5c5520cc954d28a133333d8e7.webc",
+     "sha256": "a9fa8202f1bf6a4eca8d31ee5f2b1970c8f45af5c5520cc954d28a133333d8e7",
+     "size": 61744083,
+     "webc": {
+      "volume": "/fs/etc/ssl",
+      "dir": "/"
+     }
+    },
+    {
+     "path": "lib/python",
+     "url": "https://cdn.wasmer.io/webcimages/a9fa8202f1bf6a4eca8d31ee5f2b1970c8f45af5c5520cc954d28a133333d8e7.webc",
+     "sha256": "a9fa8202f1bf6a4eca8d31ee5f2b1970c8f45af5c5520cc954d28a133333d8e7",
+     "size": 61744083,
+     "webc": {
+      "volume": "/fs/nix/store/wf0002v5izqcb7kg59n8cilx58lcp373-python3-static-wasm32-unknown-wasi-3.13.15",
+      "dir": "/"
+     }
+    },
+    {
+     "path": "share/tzdata",
+     "url": "https://cdn.wasmer.io/webcimages/a9fa8202f1bf6a4eca8d31ee5f2b1970c8f45af5c5520cc954d28a133333d8e7.webc",
+     "sha256": "a9fa8202f1bf6a4eca8d31ee5f2b1970c8f45af5c5520cc954d28a133333d8e7",
+     "size": 61744083,
+     "webc": {
+      "volume": "/fs/nix/store/vlgjd2179ahfh509p1aid8fl22bw8ri3-tzdata-2026c",
+      "dir": "/"
+     }
+    },
+    {
+     "path": "share/ncurses",
+     "url": "https://cdn.wasmer.io/webcimages/a9fa8202f1bf6a4eca8d31ee5f2b1970c8f45af5c5520cc954d28a133333d8e7.webc",
+     "sha256": "a9fa8202f1bf6a4eca8d31ee5f2b1970c8f45af5c5520cc954d28a133333d8e7",
+     "size": 61744083,
+     "webc": {
+      "volume": "/fs/nix/store/wlw01rhlcm43s2k900xyijba456vyjhb-ncurses-static-wasm32-unknown-wasi-6.6",
+      "dir": "/"
+     }
     }
    ],
    "bin": {
@@ -1285,7 +1328,13 @@
     "dynamic-linking",
     "mounts"
    ],
-   "notes": "WASIX build (wasix_32v1, shared env.memory), a position-independent (dylink.0) module using WASIX dynamic calls. Its standard library is a volume it expects at its /nix/store prefix. Shiro's `python` builtin (Pyodide) covers most uses meanwhile."
+   "notes": "WASIX build (wasix_32v1, shared env.memory), a position-independent (dylink.0) module using WASIX dynamic calls; its standard library, CA certificates, tzdata and terminfo are volumes mounted at their /nix/store paths and /etc/ssl. Shiro's `python` builtin (Pyodide) stays the default `python`.",
+   "mounts": {
+    "/etc/ssl": "share/ssl",
+    "/nix/store/wf0002v5izqcb7kg59n8cilx58lcp373-python3-static-wasm32-unknown-wasi-3.13.15": "lib/python",
+    "/nix/store/vlgjd2179ahfh509p1aid8fl22bw8ri3-tzdata-2026c": "share/tzdata",
+    "/nix/store/wlw01rhlcm43s2k900xyijba456vyjhb-ncurses-static-wasm32-unknown-wasi-6.6": "share/ncurses"
+   }
   },
   {
    "name": "clang",
@@ -1341,16 +1390,67 @@
      "webc": {
       "atom": "llvm-nm"
      }
+    },
+    {
+     "path": "share/sysroot",
+     "url": "https://cdn.wasmer.io/webcimages/c127b7bfc0041d02c94045f40be7fb4b3eeb98cede25fad96261b7b90a82f405.webc",
+     "sha256": "c127b7bfc0041d02c94045f40be7fb4b3eeb98cede25fad96261b7b90a82f405",
+     "size": 110713421,
+     "webc": {
+      "volume": "/sysroot32",
+      "dir": "/"
+     }
+    },
+    {
+     "path": "share/lib",
+     "url": "https://cdn.wasmer.io/webcimages/c127b7bfc0041d02c94045f40be7fb4b3eeb98cede25fad96261b7b90a82f405.webc",
+     "sha256": "c127b7bfc0041d02c94045f40be7fb4b3eeb98cede25fad96261b7b90a82f405",
+     "size": 110713421,
+     "webc": {
+      "volume": "/lib-small",
+      "dir": "/"
+     }
     }
    ],
    "bin": {
     "clang-16": {
      "file": "bin/clang-16.wasm",
-     "shadow": false
+     "shadow": false,
+     "args": [
+      "-resource-dir=/lib/clang/16"
+     ]
     },
     "clang": {
      "file": "bin/clang-16-slim.wasm",
-     "shadow": false
+     "shadow": false,
+     "args": [
+      "-resource-dir=/lib/clang/16",
+      "--sysroot=/sysroot",
+      "--target=wasm32-wasi",
+      "-matomics",
+      "-mbulk-memory",
+      "-mmutable-globals",
+      "-pthread",
+      "-ftls-model=local-exec",
+      "-fno-trapping-math",
+      "-D_WASI_EMULATED_MMAN",
+      "-D_WASI_EMULATED_SIGNAL",
+      "-D_WASI_EMULATED_PROCESS_CLOCKS",
+      "-DUSE_TIMEGM",
+      "-Wl,--shared-memory",
+      "-Wl,--max-memory=4294967296",
+      "-Wl,--import-memory",
+      "-Wl,--export-dynamic",
+      "-Wl,--export=__heap_base",
+      "-Wl,--export=__stack_pointer",
+      "-Wl,--export=__data_end",
+      "-Wl,--export=__wasm_init_tls",
+      "-Wl,--export=__wasm_signal",
+      "-Wl,--export=__tls_size",
+      "-Wl,--export=__tls_align",
+      "-Wl,--export=__tls_base"
+     ],
+     "self": "clang-16"
     },
     "wasm-ld": {
      "file": "bin/lld.wasm",
@@ -1376,7 +1476,11 @@
     "sync-fs",
     "mounts"
    ],
-   "notes": "WASIX build (wasix_32v1, shared env.memory). 111 MB download. --version runs; compiling needs its sysroot volumes mounted at /sysroot and /lib, and the driver spawns lld."
+   "notes": "WASIX build (wasix_32v1, shared env.memory). 111 MB download. `clang` is clang-16-slim with the package's driver flags (wasm32-wasi, threads, shared imported memory); the sysroot and clang's headers are mounted at /sysroot and /lib, and the driver runs wasm-ld as a child process.",
+   "mounts": {
+    "/sysroot": "share/sysroot",
+    "/lib": "share/lib"
+   }
   }
  ]
 }

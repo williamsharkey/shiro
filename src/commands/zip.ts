@@ -24,8 +24,9 @@ function crc32(data: Uint8Array): number {
 async function deflateRaw(data: Uint8Array): Promise<Uint8Array> {
   const cs = new CompressionStream('deflate-raw');
   const writer = cs.writable.getWriter();
-  writer.write(data as any);
-  writer.close();
+  // A corrupt stream rejects these too; the reader below reports the error
+  writer.write(data as any).catch(() => {});
+  writer.close().catch(() => {});
   const reader = cs.readable.getReader();
   const chunks: Uint8Array[] = [];
   while (true) {
@@ -43,8 +44,9 @@ async function deflateRaw(data: Uint8Array): Promise<Uint8Array> {
 async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
   const ds = new DecompressionStream('deflate-raw');
   const writer = ds.writable.getWriter();
-  writer.write(data as any);
-  writer.close();
+  // A corrupt stream rejects these too; the reader below reports the error
+  writer.write(data as any).catch(() => {});
+  writer.close().catch(() => {});
   const reader = ds.readable.getReader();
   const chunks: Uint8Array[] = [];
   while (true) {

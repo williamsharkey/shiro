@@ -25,6 +25,10 @@ export interface RunWasiOptions {
   env?: Record<string, string>;
   /** Absolute directories to preopen by name besides "/" and "." (see wasmRunner) */
   preopens?: string[];
+  /** Directories the program sees at other paths: guest path → absolute directory (see wasmRunner) */
+  mounts?: Record<string, string>;
+  /** The program's own path, when not argv[0] found on PATH (see wasmRunner) */
+  exe?: string;
 }
 
 const kernels = new WeakMap<FileSystem, Kernel>();
@@ -58,7 +62,7 @@ export async function runWasiProgram(ctx: CommandContext, opts: RunWasiOptions):
   // A terminal with a pty session: run as a foreground job on its tty (job control, termios, SIGWINCH)
   if (toTerminal && term!.tty && ctx.shell) {
     const { runKernelPipeline } = await import('../shell-kernel');
-    const r = await runKernelPipeline(ctx.shell, [{ argv: opts.argv, run: wasmRunner(opts.module, opts.image) }], {
+    const r = await runKernelPipeline(ctx.shell, [{ argv: opts.argv, run: wasmRunner(opts.module, opts.image, opts.preopens, opts.mounts, opts.exe) }], {
       stdin: ctx.stdin ? ctx.stdin : undefined,
       captureStdout: false,
       captureStderr: false,
@@ -96,7 +100,7 @@ export async function runWasiProgram(ctx: CommandContext, opts: RunWasiOptions):
   }
 
   // Its own process group, so ^C reaches it and everything it spawns
-  const proc = kernel.spawn({ path: opts.argv[0], argv: opts.argv, env, cwd, fds, pgid: 0, run: wasmRunner(opts.module, opts.image, opts.preopens) });
+  const proc = kernel.spawn({ path: opts.argv[0], argv: opts.argv, env, cwd, fds, pgid: 0, run: wasmRunner(opts.module, opts.image, opts.preopens, opts.mounts, opts.exe) });
   pgid = proc.pgid;
   const abort = (ctx.shell as any)?.abortController as AbortController | null | undefined;
   const onAbort = () => { kernel.kill(-pgid, A.SIGINT); };

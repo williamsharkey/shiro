@@ -1,0 +1,4 @@
+{
+ "scripts": ["cat", "comm", "cp", "cut", "diff", "expand", "find", "fold", "grep", "head", "ls", "md5sum", "nl", "od", "printf", "readlink", "realpath", "rev", "sed", "seq", "sha1sum", "sha256sum", "sha512sum", "sort", "sum", "tail", "tar", "test", "tr", "uniq", "unexpand", "xargs", "xxd", "hexdump", "factor", "tsort", "uuencode", "awk", "patch"],
+ "applets": ["basename", "cat", "cmp", "cp", "cut", "date", "dd", "dirname", "du", "echo", "expr", "false", "find", "gunzip", "gzip", "hostname", "id", "ln", "ls", "md5sum", "mkdir", "mv", "paste", "pwd", "rm", "rmdir", "strings", "tail", "tar", "tee", "touch", "tr", "true", "wc", "which", "xargs"]
+}

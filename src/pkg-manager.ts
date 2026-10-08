@@ -65,6 +65,12 @@ export interface PkgBin {
   /** false: don't take precedence over a Shiro builtin of the same name */
   shadow?: boolean;
   /**
+   * Command the program reports as itself (/proc/self/exe; what it runs for
+   * an empty program name), when not this one: clang's slim driver re-runs
+   * the full clang-16 for -cc1, as Wasmer's "exec-name" does.
+   */
+  self?: string;
+  /**
    * "path": argv[0] is the absolute path the command was found at (not the
    * name typed), as CPython needs to find a venv's pyvenv.cfg.
    */
@@ -91,6 +97,12 @@ export interface PkgEntry {
   bin: Record<string, PkgBin>;
   /** Package directories preloaded for every run (WASI here reads files up front) */
   preload?: string[];
+  /**
+   * Package directories the program sees at fixed absolute paths (guest
+   * path → path relative to the package root), e.g. clang's sysroot at
+   * /sysroot. Applied per process, as WASI preopens named after the guest path.
+   */
+  mounts?: Record<string, string>;
   /** Kernel features required to work at all (package is blocked without them) */
   needs?: KernelFeature[];
   /** Kernel features some modes need (e.g. an interactive REPL); batch use works */
@@ -160,6 +172,15 @@ export function parseIndex(doc: unknown): PkgIndex {
       if (!NAME_RE.test(cmd) && !/^[a-z0-9][a-z0-9._+\[-]*$/.test(cmd)) fail(`${where}: bad command name ${cmd}`);
       if (typeof b?.file !== 'string' || !paths.has(b.file)) fail(`${where}: command ${cmd} runs unknown file ${b?.file}`);
       if (b.args !== undefined && (!Array.isArray(b.args) || b.args.some((a: unknown) => typeof a !== 'string'))) fail(`${where}: bad args for ${cmd}`);
+      if (b.self !== undefined && (typeof b.self !== 'string' || !p.bin[b.self])) fail(`${where}: ${cmd} names unknown self command ${b.self}`);
+    }
+    if (p.mounts !== undefined) {
+      if (!p.mounts || typeof p.mounts !== 'object') fail(`${where}: bad mounts`);
+      for (const [guest, rel] of Object.entries<any>(p.mounts)) {
+        if (!/^\/[^\0]*$/.test(guest) || guest.split('/').includes('..') || typeof rel !== 'string' || !safeRelPath(rel)) {
+          fail(`${where}: bad mount ${JSON.stringify(guest)}`);
+        }
+      }
     }
     for (const k of ['needs', 'wants'] as const) {
       if (p[k] === undefined) continue;
@@ -221,9 +242,9 @@ const MODE_FEATURES: Record<string, KernelFeature[]> = {
   // packages needing more name it (wasix-stack, sockets, ...)
   // (and the WASIX socket calls, over the kernel sockets of src/kernel/net.ts)
   // and position-independent (dylink.0) main modules, with WASIX dynamic calls
-  sab: ['blocking-stdin', 'tty', 'processes', 'threads', 'sync-fs', 'wasix', 'wasix-stack', 'sockets', 'dynamic-linking'],
+  sab: ['blocking-stdin', 'tty', 'processes', 'threads', 'sync-fs', 'wasix', 'wasix-stack', 'sockets', 'dynamic-linking', 'mounts'],
   // Main thread, imports suspend on the kernel (no shared memory, so no threads)
-  jspi: ['blocking-stdin', 'tty', 'processes', 'sync-fs', 'wasix', 'sockets'],
+  jspi: ['blocking-stdin', 'tty', 'processes', 'sync-fs', 'wasix', 'sockets', 'mounts'],
   none: [],
 };
 let runtimeMode: 'sab' | 'jspi' | 'none' | null = null;
@@ -401,6 +422,17 @@ async function installOne(fs: FileSystem, entry: PkgEntry, opts: PkgOptions): Pr
         await writeFileP(fs, dest + file.path.slice(prefix.length), file.data);
         size += file.data.length;
       }
+      // Directories that hold no files (python's lib-dynload) and symlinks exist in the volume too
+      for (const dir of vol.dirs) {
+        if (prefix && !dir.startsWith(prefix + '/')) continue;
+        await fs.mkdir(dest + dir.slice(prefix.length), { recursive: true });
+      }
+      for (const link of vol.symlinks) {
+        if (prefix && !link.path.startsWith(prefix + '/')) continue;
+        const at = dest + link.path.slice(prefix.length);
+        await fs.mkdir(at.slice(0, at.lastIndexOf('/')) || '/', { recursive: true });
+        if (!(await lstatSafe(fs, at))) await fs.symlink(link.target, at);
+      }
     }
   }
 
@@ -572,7 +604,11 @@ export async function runPackageBinary(binPath: string, argv0: string, args: str
   // programs keep the in-page runtime, which adapts wasi_unstable.
   if (mode !== 'none' && entry?.abi !== 'wasi_unstable') {
     const { runWasiProgram } = await import('./wasi/run-command');
-    return runWasiProgram(ctx, { module: mod, image: bytes, argv, cwd: ctx.cwd, env: { ...ctx.env }, preopens: await topLevelDirs(ctx.fs, entry) });
+    return runWasiProgram(ctx, {
+      module: mod, image: bytes, argv, cwd: ctx.cwd, env: { ...ctx.env },
+      preopens: await topLevelDirs(ctx.fs, entry), mounts: entry && name ? entryMounts(entry, name) : undefined,
+      exe: bin?.self ? `${PKG_BIN_DIR}/${bin.self}` : undefined,
+    });
   }
   return runInPage(mod, entry, argv, args, ctx);
 }
@@ -602,7 +638,32 @@ export async function packageKernelProgram(
     moduleCache.set(binPath, mod);
   }
   const { wasmRunner } = await import('./wasi/host');
-  return { argv: [argv0, ...(bin?.args || []), ...args], run: wasmRunner(mod, new Uint8Array(bytes), await topLevelDirs(fs, entry)) };
+  return {
+    argv: [argv0, ...(bin?.args || []), ...args],
+    run: wasmRunner(mod, new Uint8Array(bytes), await topLevelDirs(fs, entry), name ? entryMounts(entry, name) : undefined,
+      bin?.self ? `${PKG_BIN_DIR}/${bin.self}` : undefined),
+  };
+}
+
+/** A package's mounts as guest path → absolute directory. */
+function entryMounts(entry: PkgEntry, name: string): Record<string, string> | undefined {
+  if (!entry.mounts) return undefined;
+  const out: Record<string, string> = {};
+  for (const [guest, rel] of Object.entries(entry.mounts)) out[guest] = `${PKG_ROOT}/${name}/${rel}`;
+  return out;
+}
+
+/**
+ * Mounts for a program started by path (a package's `wasm-ld` spawned by
+ * its `clang`): those of the installed package the file belongs to.
+ */
+export async function packageMountsForPath(fs: FileSystem, path: string): Promise<Record<string, string> | undefined> {
+  let real = path;
+  try { real = await fs.realpath(path); } catch { /* keep the path */ }
+  const name = packageOfPath(real);
+  if (!name) return undefined;
+  const entry = (await readStatus(fs))[name]?.entry;
+  return entry ? entryMounts(entry, name) : undefined;
 }
 
 /**

@@ -10,7 +10,7 @@ import type { Shell } from '@shiro/shell';
 import type { FileSystem } from '@shiro/filesystem';
 import {
   parseIndex, builtinIndex, resolveDeps, installPackages, removePackage, readStatus,
-  packageStatus, findEntry, type PkgIndex, type PkgEntry,
+  packageStatus, findEntry, missingFeatures, type PkgIndex, type PkgEntry,
 } from '@shiro/pkg-manager';
 import { parseWebc, webcCommands, decodeCbor } from '@shiro/webc';
 import { extractWasmFromWebc, findPackage, downloadPackage } from '@shiro/wasi-packages';
@@ -528,12 +528,11 @@ describe('real packages as kernel processes', () => {
     expect((await sh(shell, `echo '[3,4]' | jq -c 'map(. * 2)' | cat`)).out).toBe('[6,8]\n');
   }, 60_000);
 
-  it('WASIX packages needing more than the guest has stay gated, naming what is missing', async () => {
-    const r = await sh(shell, 'pkg install python');
-    expect(r.exitCode).toBe(100);
-    expect(r.err).toContain('mounts');
-    expect(r.err).not.toContain('dynamic-linking');
-    expect(r.err).not.toMatch(/threads|processes/); // the kernel provides those now
+  it('every WASIX package in the index is installable where WASM processes have threads', () => {
+    // wasix-stack, sockets, dynamic-linking and mounts came with unix/wasix
+    for (const p of builtinIndex().packages.filter(p => p.abi === 'wasix')) {
+      expect([p.name, missingFeatures(p)]).toEqual([p.name, []]);
+    }
   });
 
   it('WASIX grep, sed, ripgrep and quickjs-ng run (network)', async (ctx) => {
