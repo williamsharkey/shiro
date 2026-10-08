@@ -230,6 +230,34 @@ ranges of the 3× re-runs above): `kernel.syscall_inpage`,
 `kernel.spawn_throughput.wasm` (nonisolated); `wasm.startup.lua` 9.2 → 10.5 ms
 (baseline 10.5).
 
+### unix/perf-fs-shell 3 — closed panes are released
+
+`perf-fs-shell-2-quick.json` → `perf-fs-shell-3-quick.json`. Every closed
+pane stayed alive: the kernel's device table kept the pane's `/dev/pts/N`
+opener, the pty kept its output callback, and that held the `ShiroTerminal`,
+its `Shell`, xterm and the pane's DOM (`Runtime.queryObjects`: +10 terminals
+and +10 shells per round of 10). Closing the pty master now unregisters its
+device node in every kernel and drops the output callback
+(`pane-teardown.test.ts`). Two xterm 5.5 problems on the same path:
+`CoreBrowserService` never disposes its `ScreenDprMonitor`, so a window
+`resize` listener survived each pane (disposed by hand now), and the
+Viewport's `setTimeout(syncScrollArea)` queued at `open()` threw
+`Cannot read properties of undefined (reading 'dimensions')` when a pane
+closed right away (`term.dispose()` now runs one task later).
+
+| metric (isolated) | before | after |
+|---|---:|---:|
+| hygiene.panes10.dom_nodes_delta | 169.5 | 1.5 |
+| hygiene.panes10.listeners_delta | 115 | 5 |
+| hygiene.panes10.js_heap_delta | 1.42 MiB | 0.60 MiB |
+| hygiene.panes10.total_heap_growth | 2.84 MiB | 1.21 MiB |
+| live ShiroTerminal / Shell after 3 rounds (probe) | 31 / 31 | 1 / 1 |
+
+The remaining heap delta is the first round's one-off growth: in a 7-round
+probe the heap stays within ±0.1 MiB from round 2 on. Flagged and judged
+noise: kernel-lab metrics as before, `boot.warm.first_command` 5.9 → 6.6 ms
+(baseline 6.0), `wasm.tree_create` 8 → 15 ms (one sample).
+
 ## Results
 
 <!-- bench:table:begin -->
