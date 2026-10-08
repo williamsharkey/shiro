@@ -6,7 +6,7 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1205/1567 (76.9%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1214/1567 (77.5%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **381/635 (60.0%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **146/399 (36.6%)** |
 
@@ -34,13 +34,13 @@ How each suite runs, and what is and isn't scored, is described in
 | arith | 2/71 | 62/71 | 9 |
 | command-sub | 0/28 | 19/28 | 9 |
 | here-doc | 0/32 | 29/32 | 3 |
-| redirect | 3/39 | 26/39 | 13 |
+| redirect | 3/39 | 28/39 | 11 |
 | if_ | 0/5 | 4/5 | 1 |
 | loop | 1/28 | 19/28 | 9 |
 | case_ | 0/13 | 12/13 | 1 |
 | sh-func | 0/11 | 10/11 | 1 |
 | func-parsing | 1/12 | 4/12 | 8 |
-| builtin-echo | 0/27 | 24/27 | 3 |
+| builtin-echo | 0/27 | 25/27 | 2 |
 | builtin-printf | 0/55 | 47/55 | 8 |
 | builtin-read | 0/64 | 64/64 | 0 |
 | builtin-eval-source | 0/23 | 11/23 | 12 |
@@ -61,13 +61,13 @@ How each suite runs, and what is and isn't scored, is described in
 | brace-expansion | 0/55 | 41/55 | 14 |
 | tilde | 0/14 | 7/14 | 7 |
 | glob | 0/23 | 18/23 | 5 |
-| pipeline | 0/25 | 17/25 | 8 |
+| pipeline | 0/25 | 19/25 | 6 |
 | exit-status | 0/11 | 5/11 | 6 |
 | errexit | 0/35 | 26/35 | 9 |
 | subshell | 0/2 | 2/2 | 0 |
 | command_ | 2/16 | 7/16 | 9 |
 | posix | 2/15 | 11/15 | 4 |
-| alias | 1/48 | 29/48 | 19 |
+| alias | 1/48 | 30/48 | 18 |
 | let | 0/2 | 1/2 | 1 |
 | empty-bodies | 0/3 | 3/3 | 0 |
 | whitespace | 0/0 | 0/0 | 0 |
@@ -75,8 +75,8 @@ How each suite runs, and what is and isn't scored, is described in
 | process-sub | 0/8 | 0/8 | 8 |
 | regex | 1/37 | 35/37 | 2 |
 | temp-binding | 0/4 | 4/4 | 0 |
-| background | 3/27 | 20/27 | 7 |
-| sh-options | 0/32 | 13/32 | 19 |
+| background | 3/27 | 21/27 | 6 |
+| sh-options | 0/32 | 15/32 | 17 |
 | command-parsing | 0/2 | 2/2 | 0 |
 
 <details><summary>Failing cases</summary>
@@ -97,13 +97,13 @@ How each suite runs, and what is and isn't scored, is described in
 - **arith**: Arith sub with word parts; Backticks within arith sub; Integer constant validation; Comma operator (borrowed from C); Logical Ops; Bitwise ops; Comment not allowed in the middle of multiline arithmetic; Double subscript; Invalid constant
 - **command-sub**: case in subshell; Backtick 2; Nested backticks; Making keyword out of command sub should NOT work; Command sub with here doc; Escaped quote in [[ ]]; Quoting \ within ``; Quoting \ within `` within double quotes; Syntax errors with double quotes within backticks
 - **here-doc**: Here doc with bad comsub delimiter; Here doc with line continuation, then pipe.  Syntax error.; Function def and execution with here doc
-- **redirect**: Descriptor redirect with filename; Named file descriptor; Redirect to empty string; Redirect to file descriptor that's not open; \>&word redirects stdout and stderr when word is not a number or -; 1\>&2- to move file descriptor; 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; echo foo \>&100 (OSH regression: does not fail with invalid fd 100); echo foo \>&N where N is first unused fd; exec {fd}\>&- (OSH regression: fails to close fd); xtrace not affected by redirects
+- **redirect**: Named file descriptor; Redirect to file descriptor that's not open; \>&word redirects stdout and stderr when word is not a number or -; 1\>&2- to move file descriptor; 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; echo foo \>&100 (OSH regression: does not fail with invalid fd 100); echo foo \>&N where N is first unused fd (hang/timeout); exec {fd}\>&- (OSH regression: fails to close fd); xtrace not affected by redirects
 - **if_**: if break corner case
 - **loop**: while in pipe with subshell; continue at top level; continue in subshell; continue in subshell aborts with errexit; bad arg to break; break in condition of loop; break in condition of nested loop; top-level break/continue/return (without strict_control_flow); builtin,command break,continue,return,exit
 - **case_**: case \n bug regression
 - **sh-func**: Subshell function
 - **func-parsing**: Function with spaces, to see if ( and ) are separate tokens.; Hard case, function with } token in it; . in function name; = in function name; Function name with $; Function name with command sub; Function name with !; Break after ) is OK.
-- **builtin-echo**: echo builtin should disallow typed args - literal; echo builtin should disallow typed args - variable; echo to redirected directory is an error
+- **builtin-echo**: echo builtin should disallow typed args - literal; echo builtin should disallow typed args - variable
 - **builtin-printf**: printf with no args; printf -v a[1]; printf -v syntax error; printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8; printf invalid format; bash truncates long strftime string at 128; printf positive integer overflow; printf negative integer overflow
 - **builtin-eval-source**: eval accepts/ignores --; eval usage; eval YSH block with 'break continue return error'; source accepts/ignores --; Source with no arguments; Source with arguments; Source from a function, mutating argv and defining a local var; Source with syntax error; Eval with syntax error; source looks in PATH for files; source finds files in PATH before current dir; sourcing along PATH should ignore directories
 - **builtin-getopts**: getopts with invalid variable name; OPTIND; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
@@ -122,18 +122,18 @@ How each suite runs, and what is and isn't scored, is described in
 - **brace-expansion**: partial leading expansion; partial leading expansion 2; expansion on RHS of assignment; no expansion with RHS assignment; Two kinds of tilde expansion; Ascending number range expansion with negative step is invalid; regression: -1 step disallowed; regression: 0 step disallowed; Descending number range expansion with positive step is invalid; Singleton char ranges with steps; Char range expansion with step; Char ranges with steps of the wrong sign; Mixed case char expansion is invalid; Descending char range expansion
 - **tilde**: ${undef:-~}; ${x//~/~root}; x=foo:~ has tilde expansion; a[x]=foo:~ has tilde expansion; tilde expansion an assignment keyword; x=${undef-~:~}; temp assignment x=~ env
 - **glob**: Glob of unescaped [[] and []]; Glob of negated unescaped [[] and []]; \ in unquoted substitutions does not match a backslash; \ in unquoted substitutions escapes globchars; shopt -u globskipdots shows . and ..
-- **pipeline**: PIPESTATUS; PIPESTATUS is set on simple commands; PIPESTATUS with shopt -s lastpipe; \|&; ! with ( ); ! is not a command; Evaluation of argv[0] in pipeline occurs in child; SIGPIPE causes pipeline to die (regression for issue #295)
+- **pipeline**: PIPESTATUS is set on simple commands; \|&; ! with ( ); ! is not a command; Evaluation of argv[0] in pipeline occurs in child; SIGPIPE causes pipeline to die (regression for issue #295)
 - **exit-status**: Truncating 'return' status; subshell OverflowError https://github.com/oilshell/oil/issues/996; func subshell OverflowError https://github.com/oilshell/oil/issues/996; If subshell false -- exit code is propagated in a weird way (strict_argv prevents); Exit code when command sub evaluates to empty str, e.g. `false` (#2416); More test cases with empty argv
 - **errexit**: More && \|\|; errexit and loop; errexit and brace group { }; set errexit while it's ignored in a subshell (moot with strict_errexit); errexit double guard; pipeline process respects errexit; simple command / assign - redir failure DOES respect errexit; bash atoms [[ (( - redir failure checked; Command sub exit code is lost
 - **command_**: Command block; Permission denied; $PATH lookup; filling $PATH cache, then insert the same command earlier in cache; filling $PATH cache, then deleting command; Non-executable on $PATH; hash without args prints the cache; hash with args; Executing command with same name as directory in PATH (#2429)
 - **posix**: Empty for loop without in.  Do can be on the same line I guess.; Empty action for case is syntax error; Bare semi-colon not allowed; Command substitution in default
-- **alias**: Usage of builtins; Basic alias; define and use alias on a single line; alias with trailing space causes alias expansion on second word; Recursive alias expansion of SECOND word; Alias must be an unquoted word, no expansions allowed; first and second word are the same alias, with trailing space; Syntax error after expansion; Loop split across alias in another way; Loop split across both iterative and recursive aliases; Alias with a quote in the middle is a syntax error; Two aliases in pipeline; Alias can be defined and used on a single line; alias with line continuation in the middle; alias for left brace; alias for left paren; here doc inside alias; Corner case: alias inside LHS array arithmetic expression; alias with word of multiple lines
+- **alias**: Usage of builtins; define and use alias on a single line; alias with trailing space causes alias expansion on second word; Recursive alias expansion of SECOND word; Alias must be an unquoted word, no expansions allowed; first and second word are the same alias, with trailing space; Syntax error after expansion; Loop split across alias in another way; Loop split across both iterative and recursive aliases; Alias with a quote in the middle is a syntax error; Two aliases in pipeline; Alias can be defined and used on a single line; alias with line continuation in the middle; alias for left brace; alias for left paren; here doc inside alias; Corner case: alias inside LHS array arithmetic expression; alias with word of multiple lines
 - **let**: let with ()
 - **shell-grammar**: If with then on same line missing semicolon
 - **process-sub**: Process sub input; Process sub from external process to stdin; Process sub from shell to stdin; Non-linear pipeline with \>(); status code is available; shopt -s process_sub_fail; process subs and pipelines together; process sub in background &
 - **regex**: Unquoted { is a regex parse error; make a lisp example
-- **background**: wait -n with arguments - arguments are respected; wait with invalid arg; Wait for job and PIPESTATUS; Wait for job and PIPESTATUS - cat; YSH wait --all; YSH wait --verbose; Signal message for killed background job
-- **sh-options**: $- with -c; $- and more options; $- with interactive shell; pass shopt options like sh -O nullglob; vi and emacs are mutually exclusive; interactive shell starts with emacs mode on; -n for no execution (useful with --ast-output); pipefail; shopt -p -o prints 'set' options; shopt -o prints 'set' options; shopt -p prints 'shopt' options; noclobber on \<\>; shopt allows for backward compatibility like bash; shopt -p validates option names; shopt -p -o validates option names; stubbed out bash options; Unimplemented options - print, query, set, unset; Unimplemented options - OSH shopt -s ignore_shopt_not_impl; no-ops not shown by shopt -p
+- **background**: wait -n with arguments - arguments are respected; wait with invalid arg; Wait for job and PIPESTATUS - cat; YSH wait --all; YSH wait --verbose; Signal message for killed background job
+- **sh-options**: $- with -c; $- with interactive shell; pass shopt options like sh -O nullglob; vi and emacs are mutually exclusive; interactive shell starts with emacs mode on; -n for no execution (useful with --ast-output); shopt -p -o prints 'set' options; shopt -o prints 'set' options; shopt -p prints 'shopt' options; noclobber on \<\>; shopt allows for backward compatibility like bash; shopt -p validates option names; shopt -p -o validates option names; stubbed out bash options; Unimplemented options - print, query, set, unset; Unimplemented options - OSH shopt -s ignore_shopt_not_impl; no-ops not shown by shopt -p
 
 </details>
 

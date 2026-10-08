@@ -504,20 +504,12 @@
    ]
   },
   "redirect": {
-   "pass": 26,
+   "pass": 28,
    "total": 39,
    "failures": [
     {
-     "i": 8,
-     "name": "Descriptor redirect with filename"
-    },
-    {
      "i": 10,
      "name": "Named file descriptor"
-    },
-    {
-     "i": 18,
-     "name": "Redirect to empty string"
     },
     {
      "i": 19,
@@ -549,7 +541,8 @@
     },
     {
      "i": 35,
-     "name": "echo foo >&N where N is first unused fd"
+     "name": "echo foo >&N where N is first unused fd",
+     "timeout": true
     },
     {
      "i": 36,
@@ -672,7 +665,7 @@
    ]
   },
   "builtin-echo": {
-   "pass": 24,
+   "pass": 25,
    "total": 27,
    "failures": [
     {
@@ -682,10 +675,6 @@
     {
      "i": 4,
      "name": "echo builtin should disallow typed args - variable"
-    },
-    {
-     "i": 26,
-     "name": "echo to redirected directory is an error"
     }
    ]
   },
@@ -1340,20 +1329,12 @@
    ]
   },
   "pipeline": {
-   "pass": 17,
+   "pass": 19,
    "total": 25,
    "failures": [
     {
-     "i": 7,
-     "name": "PIPESTATUS"
-    },
-    {
      "i": 8,
      "name": "PIPESTATUS is set on simple commands"
-    },
-    {
-     "i": 9,
-     "name": "PIPESTATUS with shopt -s lastpipe"
     },
     {
      "i": 10,
@@ -1519,16 +1500,12 @@
    ]
   },
   "alias": {
-   "pass": 29,
+   "pass": 30,
    "total": 48,
    "failures": [
     {
      "i": 0,
      "name": "Usage of builtins"
-    },
-    {
-     "i": 1,
-     "name": "Basic alias"
     },
     {
      "i": 2,
@@ -1688,7 +1665,7 @@
    "failures": []
   },
   "background": {
-   "pass": 20,
+   "pass": 21,
    "total": 27,
    "failures": [
     {
@@ -1698,10 +1675,6 @@
     {
      "i": 5,
      "name": "wait with invalid arg"
-    },
-    {
-     "i": 12,
-     "name": "Wait for job and PIPESTATUS"
     },
     {
      "i": 13,
@@ -1722,16 +1695,12 @@
    ]
   },
   "sh-options": {
-   "pass": 13,
+   "pass": 15,
    "total": 32,
    "failures": [
     {
      "i": 0,
      "name": "$- with -c"
-    },
-    {
-     "i": 2,
-     "name": "$- and more options"
     },
     {
      "i": 3,
@@ -1752,10 +1721,6 @@
     {
      "i": 12,
      "name": "-n for no execution (useful with --ast-output)"
-    },
-    {
-     "i": 13,
-     "name": "pipefail"
     },
     {
      "i": 14,
