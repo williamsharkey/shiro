@@ -15,6 +15,59 @@ import {
 import { type OpenFile, type OpenFileKind, ReadyListeners, refCount } from './fd';
 
 /**
+ * One setTimeout for every pending poll/epoll/select deadline. A wait that
+ * ends early (the usual case: readiness) just marks its entry dead, so a
+ * loop of epoll_wait(…, 1000) calls costs no setTimeout/clearTimeout pair
+ * per call (~5 µs each in Chromium).
+ */
+interface Deadline { at: number; fire: () => void; dead: boolean }
+const deadlines: Deadline[] = []; // sorted by `at`
+let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+let deadlineAt = Infinity;
+let cancelled = 0;
+
+function armDeadlines(): void {
+  while (deadlines.length && deadlines[0].dead) deadlines.shift();
+  const next = deadlines[0]?.at ?? Infinity;
+  if (next === deadlineAt) return;
+  if (deadlineTimer) clearTimeout(deadlineTimer);
+  deadlineTimer = null;
+  deadlineAt = next;
+  if (next === Infinity) return;
+  deadlineTimer = setTimeout(() => {
+    deadlineTimer = null;
+    deadlineAt = Infinity;
+    const now = Date.now();
+    while (deadlines.length && (deadlines[0].dead || deadlines[0].at <= now)) {
+      const d = deadlines.shift()!;
+      if (!d.dead) { d.dead = true; d.fire(); }
+    }
+    armDeadlines();
+  }, Math.max(0, next - Date.now()));
+  (deadlineTimer as any)?.unref?.();
+}
+
+/** Call `fire` after `ms`; returns a cancel function. */
+function addDeadline(ms: number, fire: () => void): () => void {
+  const d: Deadline = { at: Date.now() + ms, fire, dead: false };
+  let i = deadlines.length;
+  while (i > 0 && deadlines[i - 1].at > d.at) i--;
+  deadlines.splice(i, 0, d);
+  if (i === 0) armDeadlines();
+  return () => {
+    if (d.dead) return;
+    d.dead = true;
+    // Cancelled entries wait for their deadline to pass; compact when they pile up
+    if (++cancelled > 256 && cancelled * 2 > deadlines.length) {
+      let w = 0;
+      for (const e of deadlines) if (!e.dead) deadlines[w++] = e;
+      deadlines.length = w;
+      cancelled = 0;
+    }
+  };
+}
+
+/**
  * Wait until `scan()` reports something (> 0 or an error < 0), `timeoutMs`
  * passes (then scan once more), or `signal` aborts (-EINTR). `timeoutMs` < 0
  * waits forever; 0 scans once.
@@ -25,20 +78,20 @@ export function waitReady(files: Iterable<OpenFile>, scan: () => number, timeout
   if (signal?.aborted) return Promise.resolve(-EINTR);
   return new Promise<number>(resolve => {
     const offs: (() => void)[] = [];
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let cancelTimer: (() => void) | undefined;
     let done = false;
     const finish = (v: number) => {
       if (done) return;
       done = true;
       offs.forEach(o => o());
-      if (timer) clearTimeout(timer);
+      cancelTimer?.();
       signal?.removeEventListener('abort', onAbort);
       resolve(v);
     };
     const onAbort = () => finish(-EINTR);
     const check = () => { const r = scan(); if (r !== 0) finish(r); };
     for (const f of new Set(files)) offs.push(f.onReady(check));
-    if (timeoutMs > 0) timer = setTimeout(() => finish(scan()), timeoutMs);
+    if (timeoutMs > 0) cancelTimer = addDeadline(timeoutMs, () => finish(scan()));
     signal?.addEventListener('abort', onAbort, { once: true });
     // Readiness may have changed while subscribing
     check();

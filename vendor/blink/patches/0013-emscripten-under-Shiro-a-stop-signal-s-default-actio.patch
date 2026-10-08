@@ -1,0 +1,61 @@
+From c386b53a4169862744ae510b62ff0401980a299a Mon Sep 17 00:00:00 2001
+From: shiro <build@shiro>
+Date: Thu, 8 Oct 2026 03:49:21 +0000
+Subject: [PATCH 13/19] emscripten: under Shiro a stop signal's default action
+ stops the process
+
+TerminateSignal() hands SIGSTOP/SIGTSTP/SIGTTIN/SIGTTOU to the kernel
+(kill self with the default disposition) and waits to be continued, instead
+of terminating. vim's Ctrl-Z (handler, then kill(0, SIGTSTP)) and fg work.
+---
+ blink/blink.c   |  6 ++++++
+ blink/shiro.inc | 11 +++++++++++
+ 2 files changed, 17 insertions(+)
+
+diff --git a/blink/blink.c b/blink/blink.c
+index 879bffd..5157608 100644
+--- a/blink/blink.c
++++ b/blink/blink.c
+@@ -147,11 +147,17 @@ static void PrintDiagnostics(struct Machine *m) {
+        GetBacktrace(m), FormatPml4t(m), GetBlinkBacktrace());
+ }
+ 
++#ifdef __EMSCRIPTEN__
++bool ShiroStopSelf(struct Machine *, int);
++#endif
++
+ void TerminateSignal(struct Machine *m, int sig, int code) {
+   int syssig;
+   struct sigaction sa;
+   unassert(!IsSignalIgnoredByDefault(sig));
+ #ifdef __EMSCRIPTEN__
++  // Under Shiro a stop signal's default action stops the process in the kernel
++  if (ShiroStopSelf(m, sig)) return;
+   // Reaping threads hangs here (see SysExitGroup); let the embedder end
+   // the process with the signal (Module.shiroKill), else exit 128+sig.
+   if (IsSignalSerious(sig)) {
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index af01b37..d827103 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -746,6 +746,17 @@ static i64 ShiroVforkSigaction(struct Machine *m, int sig, i64 act, i64 old,
+   return 0;
+ }
+ 
++// A stop signal's default action under Shiro: the kernel stops this
++// process (job control), and syscalls wait until SIGCONT. Called from
++// TerminateSignal() instead of terminating.
++bool ShiroStopSelf(struct Machine *m, int sig) {
++  if (!g_shiro_pid || (sig != 19 && sig != 20 && sig != 21 && sig != 22)) return false;
++  ShiroMirrorSigaction(m, sig, SIG_DFL_LINUX);
++  KS(m, 62, A12(g_shiro_pid, sig));
++  KS(m, 24, A12(0));  // sched_yield: answered once we're continued
++  return true;
++}
++
+ // fork/vfork: the kernel makes the child; this thread runs it until execve
+ // or _exit (see the top of this file).
+ static i64 ShiroVfork(struct Machine *m, i64 stack, bool copystack) {
+-- 
+2.43.0
+

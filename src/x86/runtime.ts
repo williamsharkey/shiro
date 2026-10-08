@@ -14,6 +14,8 @@ const MAX_INSTRUCTIONS = 100_000_000; // Safety limit: 100M instructions
 
 export interface X86Context {
   fs: FileSystem;
+  /** The shell (the Blink engine runs builtins a guest execs through it) */
+  shell?: import('../shell').Shell;
   cwd: string;
   args: string[];
   env: Record<string, string>;

@@ -75,3 +75,19 @@ install_wasm() {
 }
 
 COMPAT_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/compat/wasi-compat.c"
+
+# Processes for wasi-sdk programs (compat/wasi-proc.c over the kernel's WASIX
+# proc_spawn3/proc_join/fd_pipe/fd_dup): posix_spawn, waitpid, pipe, dup2,
+# exec*, system, popen. Builds $PKG_WORK/shiro-proc/libshiro-proc.a; then use
+# $PROC_CFLAGS / $PROC_LIBS.
+COMPAT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/compat"
+setup_proc() {
+  local d="$PKG_WORK/shiro-proc"
+  mkdir -p "$d"
+  $CC -O2 $EMU_CFLAGS -I"$COMPAT_DIR/include" -c "$COMPAT_DIR/wasi-proc.c" -o "$d/wasi-proc.o"
+  $CC -O2 $EMU_CFLAGS -c "$COMPAT_DIR/wasi-compat.c" -o "$d/wasi-compat.o"
+  rm -f "$d/libshiro-proc.a"
+  $AR rcs "$d/libshiro-proc.a" "$d/wasi-proc.o" "$d/wasi-compat.o"
+  PROC_CFLAGS="-I$COMPAT_DIR/include"
+  PROC_LIBS="$d/libshiro-proc.a"
+}

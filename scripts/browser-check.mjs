@@ -9,7 +9,11 @@ const require = createRequire(import.meta.url);
 let chromium;
 try { ({ chromium } = require('playwright')); } catch { ({ chromium } = require('/opt/node-tools/node_modules/playwright')); }
 
-const [url = 'http://localhost:5299/', ...cmds] = process.argv.slice(2);
+// --upload LOCAL_DIR=SHIRO_DIR copies a local tree into Shiro's filesystem first
+const argv = process.argv.slice(2);
+const uploads = [];
+for (let i = argv.indexOf('--upload'); i >= 0; i = argv.indexOf('--upload')) { uploads.push(argv[i + 1].split('=')); argv.splice(i, 2); }
+const [url = 'http://localhost:5299/', ...cmds] = argv;
 const exe = process.env.CHROMIUM || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
 // Containers that reach the internet through a proxy: the browser uses it too
 // (https only: plain-http requests to the local server go direct)
@@ -21,6 +25,21 @@ if (process.env.SHOW_CONSOLE) page.on('console', (m) => console.log('[console]',
 await page.goto(url);
 await page.waitForFunction(() => window.__shiro && window.__shiro.shell, null, { timeout: 90000 });
 console.log('crossOriginIsolated =', await page.evaluate(() => crossOriginIsolated));
+const { readdirSync, readFileSync, statSync } = await import('node:fs');
+for (const [local, remote] of uploads) {
+  const files = [];
+  const walk = (d, r) => { for (const n of readdirSync(d)) { const p = `${d}/${n}`; if (statSync(p).isDirectory()) walk(p, `${r}/${n}`); else files.push([`${r}/${n}`, readFileSync(p).toString('base64'), statSync(p).mode]); } };
+  walk(local, remote);
+  for (let i = 0; i < files.length; i += 200) {
+    await page.evaluate(async (batch) => {
+      for (const [path, b64, mode] of batch) {
+        await window.__shiro.fs.mkdir(path.slice(0, path.lastIndexOf('/')), { recursive: true }).catch(() => {});
+        await window.__shiro.fs.writeFile(path, Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)), { mode: mode & 0o777 });
+      }
+    }, files.slice(i, i + 200));
+  }
+  console.log(`uploaded ${files.length} files to ${remote}`);
+}
 let failed = 0;
 for (const cmd of cmds) {
   const r = await page.evaluate(async (cmd) => {

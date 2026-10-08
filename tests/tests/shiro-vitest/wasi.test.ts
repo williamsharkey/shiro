@@ -948,7 +948,7 @@ describe('wasi-packages', () => {
   it('includes new packages (bash, ruby, php, openssl, wabt, etc.)', () => {
     expect(findPackage('bash')).toBeDefined();
     expect(findPackage('dash')).toBeDefined();
-    expect(findPackage('ruby')).toBeDefined();
+    // ruby is a tarball package now (pkg install ruby), outside this single-binary API
     expect(findPackage('php')).toBeDefined();
     expect(findPackage('openssl')).toBeDefined();
     expect(findPackage('wabt')).toBeDefined();

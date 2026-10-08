@@ -15,6 +15,7 @@
 
 import * as A from './abi';
 import type { Kernel } from './kernel';
+import type { OpenFile } from './fd';
 import type { Process } from './process';
 
 /** How a guest can block on a syscall here. */
@@ -47,11 +48,23 @@ export class GuestChannel {
    */
   onSignal?: (sig: number) => void;
 
-  /** `notify` tells the kernel a request is posted: postMessage('sys') to the page, or nothing when the kernel waits on the SAB itself. */
-  constructor(readonly sab: SharedArrayBuffer, private notify: () => void) {
+  /**
+   * `notify` tells the kernel a request is posted: postMessage('sys') to the
+   * page, or null when the kernel waits on the state word itself
+   * (KernelChannel.watch; the start message then says `wake: 'atomics'`).
+   */
+  constructor(readonly sab: SharedArrayBuffer, private notify: (() => void) | null) {
     this.i32 = new Int32Array(sab, 0, A.CH_DATA / 4);
     this.data = new Uint8Array(sab, A.CH_DATA);
   }
+
+  /**
+   * How long a guest spins on the state word before it sleeps in
+   * Atomics.wait. Most syscalls are answered within a few µs of the kernel
+   * seeing them, and a sleeping guest costs an Atomics.notify on the
+   * kernel's side and a thread wake-up on this one (~10–20 µs each).
+   */
+  static spinMs = 0.1;
 
   /** Raw syscall. Args are int32 slots; the data area must already hold any input. Returns the result or -errno. */
   call(nr: number, ...args: number[]): number {
@@ -59,13 +72,13 @@ export class GuestChannel {
     if (args.length > A.CH_NARGS) throw new Error(`syscall ${nr}: too many args`);
     i32[A.CH_SYSNO] = nr;
     for (let i = 0; i < A.CH_NARGS; i++) i32[A.CH_ARGS + i] = args[i] ?? 0;
-    Atomics.store(i32, A.CH_STATE, A.STATE_REQUEST);
-    Atomics.notify(i32, A.CH_STATE);
-    this.notify();
-    while (Atomics.load(i32, A.CH_STATE) === A.STATE_REQUEST) Atomics.wait(i32, A.CH_STATE, A.STATE_REQUEST);
+    if (Atomics.compareExchange(i32, A.CH_STATE, A.STATE_IDLE, A.STATE_REQUEST_SPIN) !== A.STATE_IDLE) throw new ChannelClosed();
+    Atomics.notify(i32, A.CH_STATE); // a kernel in watch() waits on this word
+    this.notify?.();
+    this.awaitReply();
     const result = i32[A.CH_RESULT];
-    Atomics.store(i32, A.CH_STATE, A.STATE_IDLE);
     const hi = i32[A.CH_ARGS];
+    if (Atomics.compareExchange(i32, A.CH_STATE, A.STATE_REPLY, A.STATE_IDLE) !== A.STATE_REPLY) throw new ChannelClosed();
     const sig = Atomics.exchange(i32, A.CH_SIGNAL, 0);
     if (sig) {
       try { this.onSignal?.(sig); }
@@ -77,10 +90,50 @@ export class GuestChannel {
     return result;
   }
 
+  /** Spin briefly, then sleep, until the kernel replies (or closes the channel). */
+  private awaitReply(): void {
+    const i32 = this.i32;
+    if (Atomics.load(i32, A.CH_STATE) === A.STATE_REQUEST_SPIN) {
+      const end = now() + GuestChannel.spinMs;
+      let n = 0;
+      while (Atomics.load(i32, A.CH_STATE) === A.STATE_REQUEST_SPIN) {
+        if ((++n & 63) === 0 && now() > end) break;
+      }
+    }
+    // Going to sleep: from now on the kernel must notify
+    if (Atomics.compareExchange(i32, A.CH_STATE, A.STATE_REQUEST_SPIN, A.STATE_REQUEST) === A.STATE_REQUEST_SPIN) {
+      while (Atomics.load(i32, A.CH_STATE) === A.STATE_REQUEST) Atomics.wait(i32, A.CH_STATE, A.STATE_REQUEST);
+    }
+    if (Atomics.load(i32, A.CH_STATE) === A.STATE_DEAD) throw new ChannelClosed();
+  }
+
+  /**
+   * Block until the kernel closes the channel, then throw ChannelClosed so
+   * the worker unwinds to its event loop: browsers can't terminate a Worker
+   * parked in Atomics.wait, so a guest must never park anywhere else.
+   */
+  park(): never {
+    const i32 = this.i32;
+    for (;;) {
+      const s = Atomics.load(i32, A.CH_STATE);
+      if (s === A.STATE_DEAD) throw new ChannelClosed();
+      Atomics.wait(i32, A.CH_STATE, s);
+    }
+  }
+
   /** 64-bit result of the last call (lseek): low word is the return value, high word is in args[0]. */
   result64(lo: number): number {
     return lo < 0 && lo > -4096 ? lo : (this.i32[A.CH_ARGS] | 0) * 0x100000000 + (lo >>> 0);
   }
+}
+
+/**
+ * Thrown in a guest when the kernel closed its channel (the process exited
+ * or was killed, or the thread ended): the guest should unwind and return
+ * to its event loop, where the host's terminate() takes effect.
+ */
+export class ChannelClosed extends Error {
+  constructor() { super('syscall channel closed'); this.name = 'ChannelClosed'; }
 }
 
 const enc = new TextEncoder();
@@ -517,16 +570,14 @@ export class GuestSys {
   /** End only the calling thread (SYS_exit from an attachThread worker; the main thread's exit ends the process). */
   exitThread(code: number): never {
     this.ch.call(A.SYS_exit, code);
-    const park = new Int32Array(new SharedArrayBuffer(4));
-    for (;;) Atomics.wait(park, 0, 0);
+    return this.ch.park();
   }
 
   /** exit_group; does not return. */
   exit(code: number): never {
     this.ch.call(A.SYS_exit_group, code);
-    // The kernel terminates the worker; until it does, park here.
-    const park = new Int32Array(new SharedArrayBuffer(4));
-    for (;;) Atomics.wait(park, 0, 0);
+    // The kernel closes the channel and terminates the worker
+    return this.ch.park();
   }
 }
 
@@ -540,6 +591,8 @@ export interface GuestStartMessage {
   argv: string[];
   env: Record<string, string>;
   cwd: string;
+  /** 'atomics': the kernel watches the channel's state word, so don't post SYS_MESSAGE per request. */
+  wake?: 'atomics' | 'message';
 }
 
 export function isStartMessage(m: unknown): m is GuestStartMessage {
@@ -551,21 +604,121 @@ export function isStartMessage(m: unknown): m is GuestStartMessage {
  * postMessage (self.postMessage, or parentPort.postMessage in Node).
  */
 export function connectGuest(start: GuestStartMessage, post: (m: unknown) => void): GuestSys {
-  return new GuestSys(new GuestChannel(start.sab, () => post(SYS_MESSAGE)));
+  return new GuestSys(new GuestChannel(start.sab, start.wake === 'atomics' ? null : () => post(SYS_MESSAGE)));
 }
 
 // ── Kernel side ─────────────────────────────────────────────────────────────
 
+/** Atomics.waitAsync, where the engine has it. */
+const waitAsync = (Atomics as any).waitAsync as
+  ((a: Int32Array, i: number, v: number, t?: number) => { async: boolean; value: any }) | undefined;
+
+/** True when KernelChannel.watch() can serve guests without SYS_MESSAGE. */
+export function canWatch(): boolean { return typeof waitAsync === 'function'; }
+
 /**
- * Serves one guest's channel. Call `handle()` whenever the guest posts
- * SYS_MESSAGE (worker-host does this); `watch()` instead polls the state word
- * with Atomics.waitAsync, for guests that only Atomics.notify.
+ * The page's time slice for serving requests back to back. A guest that is
+ * spinning gets its next request answered in the same task (no event-loop
+ * round trip), but only for this long; then watch() yields a macrotask so
+ * input, rendering and timers still run.
+ */
+const SLICE_MS = 4;
+/** How long watch() spins for a hot guest's next request after a reply. */
+const HOT_SPIN_MS = 0.03;
+/** A request that came within this long of the previous reply (spin plus a waitAsync wake-up) makes the guest hot. */
+const HOT_GAP_MS = 0.06;
+const now: () => number = typeof performance !== 'undefined' ? () => performance.now() : () => Date.now();
+let sliceStart = 0;
+let yielder: MessagePort | null = null;
+const yieldWaiters: (() => void)[] = [];
+
+function yieldToEventLoop(): Promise<void> {
+  if (typeof MessageChannel === 'undefined') return new Promise(r => setTimeout(r, 0));
+  if (!yielder) {
+    const mc = new MessageChannel();
+    mc.port1.onmessage = () => { for (const w of yieldWaiters.splice(0)) w(); };
+    (mc.port1 as any).unref?.();
+    yielder = mc.port2;
+  }
+  return new Promise(r => {
+    if (yieldWaiters.push(r) === 1) yielder!.postMessage(0);
+  });
+}
+
+/** Channels served by watch(). */
+const watching = new Set<KernelChannel>();
+let pumping = false;
+let pumpStopped: Promise<void> = Promise.resolve();
+
+/**
+ * While some guest is making syscalls back to back ("hot": its request came
+ * soon after the previous reply), the page spins for up to HOT_SPIN_MS after
+ * the last request it served, polling every hot channel and serving what is
+ * posted. A spinning guest's next request is then picked up within a
+ * microsecond instead of the ~20-30 µs it takes the page to run the task
+ * that resolves Atomics.waitAsync. Calls served here complete in microtasks
+ * (the awaits between polls); ones that block finish later and restart the
+ * pump if their channel is still hot. Guests that compute between calls
+ * aren't hot, so the page doesn't spin for them; SLICE_MS bounds each run.
+ */
+function pumpHot(): void {
+  if (pumping) return;
+  pumping = true;
+  let stopped!: () => void;
+  pumpStopped = new Promise(r => { stopped = r; });
+  void (async () => {
+    try {
+      // Never inside the caller (a reply in progress): start from a microtask
+      await null;
+      let t = now(), last = t, idle = 0;
+      for (;;) {
+        let hot = false, inflight = false, served = false;
+        for (const c of watching) {
+          if (c.inCall) inflight = true;
+          if (!c.hot) continue;
+          hot = true;
+          if (c.ready) {
+            if (!c.serveSync(t)) { void c.handle(); if (c.inCall) inflight = true; }
+            served = true;
+          }
+        }
+        if (!hot) return;
+        // The clock costs about as much as a poll: read it after serving, and every few idle polls
+        if (served) { t = last = now(); idle = 0; }
+        else if ((++idle & 7) === 0) {
+          t = now();
+          if (t - last > HOT_SPIN_MS) return;
+        }
+        if (t - sliceStart > SLICE_MS) {
+          await yieldToEventLoop();
+          sliceStart = last = t = now();
+        } else if (inflight || served) {
+          await null; // let calls in progress (and ones a reply just woke) run their microtasks
+        }
+      }
+    } finally {
+      pumping = false;
+      stopped();
+    }
+  })();
+}
+
+/**
+ * Serves one guest's channel. Either call `handle()` whenever the guest
+ * posts SYS_MESSAGE, or call `watch()` once: it waits on the state word with
+ * Atomics.waitAsync, which wakes the page faster than a message, and
+ * answers a spinning guest's next request without a round trip through the
+ * event loop. The guest learns which from the start message (`wake`).
  */
 export class KernelChannel {
   readonly i32: Int32Array;
   readonly data: Uint8Array;
   private busy = false;
   private stopped = false;
+  /** The guest made its last request soon after the previous reply (see pumpHot). */
+  hot = false;
+  private repliedAt = 0;
+  private readonly args: number[] = new Array(A.CH_NARGS).fill(0);
 
   /** Thread id served by this channel (the pid for the main thread). */
   readonly tid: number;
@@ -589,11 +742,13 @@ export class KernelChannel {
   /** Move the next deliverable guest signal (kernel.takeSignal) into this channel's signal word if it is free. */
   flagSignals(): void {
     if (this.stopped || Atomics.load(this.i32, A.CH_SIGNAL) !== 0) return;
+    if (this.proc.pendingSignals.size === 0) return;
     const sig = this.kernel.takeSignal(this.proc);
     if (sig) Atomics.store(this.i32, A.CH_SIGNAL, sig);
   }
 
   private reply(result: number): void {
+    if (this.stopped) return; // never overwrite STATE_DEAD
     if (result > 0x7fffffff || result < -0x80000000) {
       this.i32[A.CH_ARGS] = Math.floor(result / 0x100000000);
       result = result >>> 0;
@@ -602,46 +757,190 @@ export class KernelChannel {
     }
     this.i32[A.CH_RESULT] = result | 0;
     this.flagSignals();
-    Atomics.store(this.i32, A.CH_STATE, A.STATE_REPLY);
-    Atomics.notify(this.i32, A.CH_STATE);
+    // A guest still spinning needs no wake-up
+    if (Atomics.exchange(this.i32, A.CH_STATE, A.STATE_REPLY) !== A.STATE_REQUEST_SPIN) Atomics.notify(this.i32, A.CH_STATE);
   }
 
-  async handle(): Promise<void> {
-    if (this.busy || this.stopped) return;
-    if (Atomics.load(this.i32, A.CH_STATE) !== A.STATE_REQUEST) return;
+  /** A request is waiting (the guest may be spinning or asleep). */
+  get pending(): boolean {
+    const s = Atomics.load(this.i32, A.CH_STATE);
+    return s === A.STATE_REQUEST || s === A.STATE_REQUEST_SPIN;
+  }
+
+  /** A request is waiting and nothing is serving it yet. */
+  get ready(): boolean { return !this.busy && !this.stopped && this.pending; }
+
+  /** A call is in progress on the async path (it needs microtasks to finish; readiness waits don't). */
+  get inCall(): boolean { return this.asyncCall; }
+  private asyncCall = false;
+
+  private markPicked(t = now()): void {
+    this.hot = this.repliedAt > 0 && t - this.repliedAt < HOT_GAP_MS;
+  }
+
+  private loadArgs(): number[] {
+    // One args array per channel: a channel has one call in flight at a time
+    const args = this.args;
+    for (let i = 0; i < A.CH_NARGS; i++) args[i] = this.i32[A.CH_ARGS + i];
+    return args;
+  }
+
+  /**
+   * Serve the posted request if the kernel can answer it synchronously
+   * (Kernel.syscallSync). False when it needs handle(). `t`: the caller's
+   * reading of the clock, if it has a fresh one.
+   */
+  serveSync(t?: number): boolean {
+    if (!this.ready) return false;
+    const nr = this.i32[A.CH_SYSNO];
+    // busy while the kernel runs it: the call can wake other channels' waiters, and they mustn't re-serve this one
     this.busy = true;
+    let r: number | undefined;
     try {
-      const nr = this.i32[A.CH_SYSNO];
-      const args = Array.from(this.i32.subarray(A.CH_ARGS, A.CH_ARGS + A.CH_NARGS));
-      if (nr === A.SYS_gettid) { this.reply(this.tid); return; }
-      if (nr === A.SYS_exit && this.isThread) {
-        this.stop();
-        this.opts.onThreadExit?.(args[0]);
-        return;
-      }
-      const result = await this.kernel.syscall(this.proc, nr, args, this.data);
-      if (this.stopped || this.proc.exiting) return;
-      this.reply(result);
+      r = nr === A.SYS_gettid ? this.tid : this.kernel.syscallSync(this.proc, nr, this.loadArgs(), this.data);
     } finally {
       this.busy = false;
     }
+    if (r === undefined) return false;
+    t ??= now();
+    this.markPicked(t);
+    this.reply(r);
+    this.repliedAt = t; // the call took well under a microsecond
+    if (this.hot && !pumping && watching.has(this)) pumpHot();
+    return true;
   }
 
-  /** Serve requests by waiting on the state word (no postMessage needed). Needs Atomics.waitAsync. */
-  async watch(): Promise<void> {
-    const waitAsync = (Atomics as any).waitAsync as ((a: Int32Array, i: number, v: number) => { async: boolean; value: any }) | undefined;
-    if (!waitAsync) throw new Error('Atomics.waitAsync unavailable');
-    while (!this.stopped && !this.proc.exiting) {
-      const state = Atomics.load(this.i32, A.CH_STATE);
-      if (state === A.STATE_REQUEST) { await this.handle(); continue; }
-      const w = waitAsync(this.i32, A.CH_STATE, state);
-      if (w.async) await w.value;
+  async handle(): Promise<void> {
+    if (!this.ready || this.serveSync()) return;
+    this.busy = true;
+    this.markPicked();
+    const nr = this.i32[A.CH_SYSNO];
+    const args = this.loadArgs();
+    if (nr === A.SYS_exit && this.isThread) {
+      this.busy = false;
+      this.stop();
+      this.opts.onThreadExit?.(args[0]);
+      return;
+    }
+    const f = this.kernel.readinessFile(this.proc, nr, args);
+    if (f) return this.waitReady(f, nr, args);
+    let result: number | undefined;
+    this.asyncCall = true;
+    try {
+      result = await this.kernel.syscall(this.proc, nr, args, this.data);
+    } finally {
+      this.asyncCall = false;
+      this.finish(result);
     }
   }
 
+  /** End the call in progress: reply (unless the process is gone) and update the hot-guest bookkeeping. */
+  private finish(result: number | undefined): void {
+    this.busy = false;
+    if (result !== undefined && !this.stopped && !this.proc.exiting) this.reply(result);
+    this.repliedAt = now();
+    if (this.hot && watching.has(this)) pumpHot();
+  }
+
+  /**
+   * A read or write that would block: wait for the description's readiness
+   * callback and finish the call synchronously inside it (when a writer
+   * fills a pipe, the blocked reader's reply goes out before the writer's
+   * call returns), instead of going through the async read/write path.
+   * A signal ends the wait with -EINTR, as a blocked read/write would;
+   * anything unusual (EPIPE, a stopped process) falls back to `syscall`.
+   */
+  private waitReady(f: OpenFile, nr: number, args: number[]): Promise<void> {
+    return new Promise<void>(resolve => {
+      const proc = this.proc;
+      const sig = proc.syscallSignal;
+      let done = false;
+      let off = () => {};
+      const end = (r: number | undefined, fallback = false) => {
+        if (done) return;
+        done = true;
+        off();
+        sig.removeEventListener('abort', onAbort);
+        if (!fallback) { this.finish(r); resolve(); return; }
+        this.asyncCall = true;
+        void this.kernel.syscall(proc, nr, args, this.data).then(
+          res => { this.asyncCall = false; this.finish(res); },
+          () => { this.asyncCall = false; this.finish(undefined); }).finally(resolve);
+      };
+      // The call can wake its own description's listeners (a read makes room
+      // for a blocked writer, whose write wakes readers): never re-enter it
+      let busy = false, again = false;
+      const attempt = () => {
+        if (done) return;
+        if (busy) { again = true; return; }
+        busy = true;
+        try {
+          do {
+            again = false;
+            if (this.stopped || proc.exiting) { end(undefined); return; }
+            const r = this.kernel.syscallSync(proc, nr, args, this.data);
+            if (r !== undefined) { end(r); return; }
+            // Not ready, or something only the full path handles
+            if (proc.state !== 'running' || (nr === A.SYS_write && f.poll(A.POLLOUT) & A.POLLERR)) { end(undefined, true); return; }
+          } while (again);
+        } finally {
+          busy = false;
+        }
+      };
+      const onAbort = () => end(-A.EINTR);
+      if (sig.aborted) { end(-A.EINTR); return; }
+      off = f.onReady(attempt);
+      sig.addEventListener('abort', onAbort, { once: true });
+      attempt();
+    });
+  }
+
+  /** Serve requests by waiting on the state word (no SYS_MESSAGE needed). Needs Atomics.waitAsync (canWatch()). */
+  async watch(): Promise<void> {
+    if (!waitAsync) throw new Error('Atomics.waitAsync unavailable');
+    const i32 = this.i32;
+    watching.add(this);
+    try {
+      while (!this.stopped && !this.proc.exiting) {
+        const state = Atomics.load(i32, A.CH_STATE);
+        if (state === A.STATE_DEAD) return;
+        if ((state === A.STATE_REQUEST || state === A.STATE_REQUEST_SPIN) && !this.busy) {
+          if (now() - sliceStart > SLICE_MS) {
+            await yieldToEventLoop();
+            sliceStart = now();
+            continue;
+          }
+          await this.handle();
+          continue;
+        }
+        if (this.hot && pumping) {
+          // The pump serves this channel while it is hot; watch again once it stops
+          await pumpStopped;
+          continue;
+        }
+        // Idle, or a call in progress: the guest notifies with its next request
+        const w = waitAsync(i32, A.CH_STATE, state);
+        if (w.async) {
+          await w.value;
+          sliceStart = now(); // a new task
+        }
+      }
+    } finally {
+      watching.delete(this);
+    }
+  }
+
+  /**
+   * Stop serving and close the channel: a guest blocked on it (or that tries
+   * another call) gets ChannelClosed and unwinds, so the Worker can be
+   * terminated (browsers can't terminate one parked in Atomics.wait).
+   */
   stop(): void {
+    if (this.stopped) return;
     this.stopped = true;
     this.unlisten();
+    Atomics.store(this.i32, A.CH_STATE, A.STATE_DEAD);
+    Atomics.notify(this.i32, A.CH_STATE);
   }
 }
 

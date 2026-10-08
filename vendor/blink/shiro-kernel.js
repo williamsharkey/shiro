@@ -27,6 +27,15 @@ var ShiroKernelLibrary = {
       return res.r;
     });
   },
+
+  // fork(): hand the process snapshot (blink/shiro.inc) to the page, which
+  // starts it in a new worker as `pid`
+  shiro_fork_start__proxy: 'sync',
+  shiro_fork_start: (pid, ptr, len) => {
+    var K = Module['shiroKernel'];
+    if (!K || !K.fork) return -38; // ENOSYS
+    return K.fork(pid, HEAPU8.slice(ptr, ptr + len));
+  },
 };
 
 addToLibrary(ShiroKernelLibrary);

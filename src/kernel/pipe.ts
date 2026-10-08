@@ -64,6 +64,26 @@ export class Pipe {
     return n;
   }
 
+  /** read() when it needn't wait: data buffered, EOF, or an empty read. */
+  tryRead(out: Uint8Array): number | undefined {
+    if (out.length === 0) return 0;
+    if (this.count > 0) {
+      const n = this.take(out);
+      this.wakeWriters();
+      return n;
+    }
+    return this.writers === 0 ? 0 : undefined;
+  }
+
+  /** write() when all of `src` fits now (no wait, no EPIPE). */
+  tryWrite(src: Uint8Array): number | undefined {
+    if (this.readers === 0 || src.length > this.space) return undefined;
+    if (src.length === 0) return 0;
+    this.put(src);
+    this.wakeReaders();
+    return src.length;
+  }
+
   async read(out: Uint8Array, nonblock: boolean, signal?: AbortSignal): Promise<number> {
     if (out.length === 0) return 0;
     for (;;) {
@@ -134,6 +154,16 @@ export class PipeEnd implements OpenFile {
     return this.pipe.write(buf, !!(this.flags & O_NONBLOCK), signal);
   }
 
+  tryRead(buf: Uint8Array): number | undefined {
+    return this.end === 'r' ? this.pipe.tryRead(buf) : undefined;
+  }
+
+  tryWrite(buf: Uint8Array): number | undefined {
+    return this.end === 'w' ? this.pipe.tryWrite(buf) : undefined;
+  }
+
+  statSync(): KStat { return this.pipe.stat(); }
+
   poll(events: number): number {
     const p = this.pipe;
     let r = 0;
@@ -161,11 +191,14 @@ export class PipeEnd implements OpenFile {
 
   async stat(): Promise<KStat> { return this.pipe.stat(); }
 
-  async close(): Promise<void> {
-    if (this.closed) return;
+  async close(): Promise<void> { this.closeSync(); }
+
+  closeSync(): boolean {
+    if (this.closed) return true;
     this.closed = true;
     if (this.end === 'r') this.pipe.closeReader();
     else this.pipe.closeWriter();
+    return true;
   }
 }
 

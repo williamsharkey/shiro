@@ -17,7 +17,7 @@ import * as A from '../kernel/abi';
 import { KernelChannel, SYS_MESSAGE, canBlock, createChannelBuffer } from '../kernel/channel';
 import type { Kernel, Runner } from '../kernel/kernel';
 import { Process } from '../kernel/process';
-import { attachThread, type GuestWorker } from '../kernel/worker-host';
+import { attachThread, serve, type GuestWorker } from '../kernel/worker-host';
 import {
   SYS_wasi_thread_spawn, SYS_wasix_exec, SYS_wasix_fork, SYS_wasix_resolve, SYS_wasix_signal,
   WASIX_HANDLER, WASIX_SIG_CATCH, WASIX_SIG_DEFAULT, WASIX_SIG_IGNORED, type SysReply, type SysRequest,
@@ -25,6 +25,7 @@ import {
 import type { WasiGuestMessage, WasiStartMessage, WasixForkState } from './guest-worker';
 import { ProcExit, WasiGuest, buildImports, type Preopen } from './wasi-guest';
 import { findMemoryImport } from './wasm-imports';
+import { createWorkerPool, type WorkerPool } from './worker-pool';
 import { dylinkLayout, readDylink } from './dylink';
 import { readFuncSigs, type FuncSigs } from './dyncall';
 
@@ -33,14 +34,25 @@ import { readFuncSigs, type FuncSigs } from './dyncall';
 export type GuestWorkerFactory = (proc: Process) => GuestWorker;
 
 let workerFactory: GuestWorkerFactory | null = null;
+let pool: WorkerPool | null = null;
 
 /** Override how guest Workers are created (tests use Node worker_threads). */
-export function setGuestWorkerFactory(f: GuestWorkerFactory | null): void { workerFactory = f; }
+export function setGuestWorkerFactory(f: GuestWorkerFactory | null): void {
+  pool?.drain();
+  pool = null;
+  workerFactory = f;
+}
 
+/** Guest Workers come from a pool (./worker-pool.ts): a process's Worker runs the next process after it. */
 async function getWorkerFactory(): Promise<GuestWorkerFactory> {
   if (!workerFactory) workerFactory = (await import('./browser-worker')).createGuestWorker;
-  return workerFactory;
+  pool ??= createWorkerPool(workerFactory);
+  const p = pool;
+  return (proc) => p.acquire(proc);
 }
+
+/** The guest Worker pool, once a WASM process has run (tests, diagnostics). */
+export function guestWorkerPool(): WorkerPool | null { return pool; }
 
 export type RunMode = 'sab' | 'jspi';
 let forcedMode: RunMode | null = null;
@@ -124,9 +136,32 @@ export function installWasmLoader(kernel: Kernel): void {
       if (kk.fs) {
         try { mounts = await (await import('../pkg-manager')).packageMountsForPath(kk.fs, found.path); } catch { /* none */ }
       }
-      return wasmRunner(module, found.image, [], mounts)(p, kk);
+      return wasmRunner(module, found.image, await childPreopens(kk, module), mounts)(p, kk);
     };
   });
+}
+
+/** The WASIX calls Shiro's process shim for wasi-libc programs uses (scripts/pkgbuild/compat/wasi-proc.c). */
+const SHIM_WASIX = new Set(['proc_spawn3', 'proc_join', 'fd_pipe', 'fd_dup', 'getcwd']);
+
+/**
+ * "/usr", "/home", ...: preopened by name for a spawned WASM program, as
+ * runPackageBinary does at the prompt, because some wasi-libc builds never
+ * match a "/" preopen against "/usr/...". Not for WASIX-libc programs (their
+ * libc matches "/", and dash's strips the wrong prefix when several match);
+ * wasi-libc programs that only use the process shim's calls still get them.
+ */
+async function childPreopens(kernel: Kernel, module: WebAssembly.Module): Promise<string[]> {
+  const wasixLibc = WebAssembly.Module.imports(module).some(i => i.module === 'wasix_32v1' && !SHIM_WASIX.has(i.name));
+  const fs = kernel.fs;
+  if (wasixLibc || !fs) return [];
+  const out: string[] = [];
+  try {
+    for (const name of await fs.readdir('/')) {
+      try { if ((await fs.stat(`/${name}`)).type === 'dir') out.push(`/${name}`); } catch { /* skip */ }
+    }
+  } catch { /* none */ }
+  return out;
 }
 
 const syscallsInstalled = new WeakSet<Kernel>();
@@ -144,7 +179,7 @@ function installWasiSyscalls(kernel: Kernel): void {
     return spawn ? spawn(args[0]) : -A.ENOSYS;
   });
   kernel.registerSyscalls([SYS_wasix_fork], (proc) => {
-    const fork = proc.data.wasixFork as (() => number) | undefined;
+    const fork = proc.data.wasixFork as (() => number | Promise<number>) | undefined;
     return fork ? fork() : -A.ENOSYS;
   });
   kernel.registerSyscalls([SYS_wasix_exec], (proc, _nr, args, data) => {
@@ -167,10 +202,21 @@ function installWasiSyscalls(kernel: Kernel): void {
     data.set(text);
     return text.length;
   });
-  kernel.registerSyscalls([A.SYS_stat, A.SYS_lstat, A.SYS_newfstatat, A.SYS_access, A.SYS_faccessat], binCommandStat);
+  kernel.registerSyscalls([A.SYS_stat, A.SYS_lstat, A.SYS_newfstatat, A.SYS_access, A.SYS_faccessat], Object.assign(binCommandStat, { passSync: binCommandPasses }));
 }
 
 const BIN_DIR = /^\/(?:usr\/)?(?:local\/)?s?bin\/([^/]+)$/;
+
+/** binCommandStat will pass the call on: it isn't about a Shiro command's /bin path (kernel.syscallSync may answer it). */
+function binCommandPasses(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array, kernel: Kernel): boolean {
+  const at = nr === A.SYS_newfstatat || nr === A.SYS_faccessat;
+  if (nr === A.SYS_newfstatat && args[1] === 0) return true;
+  const len = at ? args[1] : args[0];
+  if (len <= 0 || len > data.length) return true;
+  const p = kernel.resolvePath(proc, A.decodeText(data.subarray(0, len)), at ? args[0] : A.AT_FDCWD);
+  const m = typeof p === 'string' ? BIN_DIR.exec(p) : null;
+  return !m || !kernel.shell?.commands.get(m[1]);
+}
 
 /**
  * Shiro's commands are executables in /bin, /usr/bin, ... even without a
@@ -318,7 +364,11 @@ function runWorkers(
     });
     const onGuestMessage = (m: unknown, isThread: boolean) => {
       const msg = m as WasiGuestMessage;
-      if (msg?.type === 'wasix-fork') { proc.data.wasixForkState = msg.state; return; }
+      if (msg?.type === 'wasix-fork') {
+        proc.data.wasixForkState = msg.state;
+        forkStateArrived?.();
+        return;
+      }
       if (msg?.type === 'wasix-signals') { signalInfo = msg.callback ? { callback: msg.callback, tlsBase: msg.tlsBase } : null; return; }
       if (msg?.type !== 'wasi-error' || proc.exiting) return;
       // Could not instantiate: 126 like an exec failure, or abort if a thread failed
@@ -341,6 +391,7 @@ function runWorkers(
       };
     }
 
+    let forkStateArrived: (() => void) | null = null;
     const w = factory(proc);
     const sab = createChannelBuffer();
     const channel = new KernelChannel(sab, kernel, proc);
@@ -377,7 +428,16 @@ function runWorkers(
 
     // WASIX fork: a new process with a copy of this one's memory, fds and
     // signal state, resuming from the stack the guest captured (proc_fork)
-    proc.data.wasixFork = (): number => {
+    proc.data.wasixFork = async (): Promise<number> => {
+      // The guest posts its stack before the syscall; a kernel watching the
+      // channel (not waiting for messages) can see the syscall first
+      if (!proc.data.wasixForkState && !replaced && !proc.exiting) {
+        await new Promise<void>(r => {
+          const t = setTimeout(r, 5000);
+          forkStateArrived = () => { clearTimeout(t); r(); };
+        });
+        forkStateArrived = null;
+      }
       const state = proc.data.wasixForkState as WasixForkState | undefined;
       delete proc.data.wasixForkState;
       if (!state || !memory || replaced) return -A.ENOSYS;
@@ -421,17 +481,15 @@ function runWorkers(
       resolve((async () => runner(proc, kernel))());
       return 0; // never reaches the guest: its channel is stopped
     };
-    w.onMessage((m) => {
-      if (m === SYS_MESSAGE) void channel.handle();
-      else onGuestMessage(m, false);
-    });
+    const wake = serve(channel, w);
+    w.onMessage((m) => { if (m !== SYS_MESSAGE) onGuestMessage(m, false); });
     w.onError((err) => {
       if (proc.exiting) return;
       void kernel.writeAll(proc, 2, new TextEncoder().encode(`${proc.comm}: ${(err as Error)?.message ?? err}\n`))
         .finally(() => kernel.exit(proc, A.W_TERMSIG(A.SIGABRT)));
     });
     const start: WasiStartMessage = {
-      type: 'shiro-start', sab, pid: proc.pid, argv: proc.argv, env: proc.env, cwd: proc.cwd,
+      type: 'shiro-start', sab, pid: proc.pid, argv: proc.argv, env: proc.env, cwd: proc.cwd, wake,
       wasi: { ...wasi(), ...(resume ? { resume: resume.state } : {}) },
     };
     w.postMessage(start);
@@ -450,12 +508,16 @@ async function runJspi(kernel: Kernel, proc: Process, module: WebAssembly.Module
   killedP.catch(() => { /* observed through the race below */ });
   proc.onTerminate(() => killed(new ProcExit(proc.exitStatus ?? 0)));
 
-  const call = async (req: SysRequest): Promise<SysReply> => {
+  const call = (req: SysRequest): SysReply | Promise<SysReply> => {
     const data = new Uint8Array(Math.max(req.data?.length ?? 0, req.out ?? 0, 64));
     if (req.data) data.set(req.data);
-    const ret = await Promise.race([kernel.syscall(proc, req.nr, req.args, data), killedP]);
-    if (proc.exiting) throw new ProcExit(proc.exitStatus ?? 0);
-    return { ret, data };
+    // Answered at once (ids, fstat, pipe I/O with data or room): no suspension
+    const fast = kernel.syscallSync(proc, req.nr, req.args, data);
+    if (fast !== undefined) return { ret: fast, data };
+    return Promise.race([kernel.syscall(proc, req.nr, req.args, data), killedP]).then(ret => {
+      if (proc.exiting) throw new ProcExit(proc.exitStatus ?? 0);
+      return { ret, data };
+    });
   };
   const guest = new WasiGuest({ args: proc.argv, env: proc.env, preopens, dataSize: 4 << 20 });
   const instance = await WebAssembly.instantiate(module, buildImports(guest, module, 'jspi', call));
