@@ -189,6 +189,8 @@ export class Shell {
     this.env = {
       HOME: '/home/user',
       USER: 'user',
+      LOGNAME: 'user',
+      LANG: 'C.UTF-8',
       SHELL: '/bin/sh',
       PATH: '/usr/local/bin:/usr/bin:/bin',
       PWD: '/home/user',

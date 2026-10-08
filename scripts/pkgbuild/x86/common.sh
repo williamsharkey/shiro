@@ -17,6 +17,8 @@ set -euo pipefail
 PKG_WORK=${PKG_WORK:-$PWD/.pkgbuild}
 PKG_OUT=${PKG_OUT:-$PKG_WORK/out}
 mkdir -p "$PKG_WORK/dl" "$PKG_OUT"
+# Reproducible builds: __DATE__/__TIME__ and friends come from here
+export SOURCE_DATE_EPOCH=1704067200
 PKGBUILD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # musl.cc's x86_64 cross toolchain: gcc 11.2.1, musl 1.2.2

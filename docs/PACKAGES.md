@@ -127,7 +127,7 @@ works everywhere and the interactive mode needs a page that can block.
 | grep (GNU 3.12), sed (GNU 4.9) | | Wasmer | WASIX | ok as kernel processes, as `/usr/bin/grep` and `/usr/bin/sed`; `grep -r` fails with ENOSYS |
 | ripgrep (rg) | 15.2.1 | Wasmer | WASIX | ok as kernel processes, as `/usr/bin/rg` |
 | quickjs-ng (qjs-ng) | 0.15.1 | Wasmer | WASIX | ok as kernel processes |
-| less | 685 | Wasmer | WASIX | runs as kernel processes (`/usr/bin/less`); passthrough checked, interactive paging not yet |
+| less-wasix (less) | 685 | Wasmer | WASIX | runs as kernel processes; passthrough checked, interactive paging not yet. The `less` package is now the x86-64 build ([COMPAT.md](COMPAT.md)) |
 | bash | 1.0.25 | Wasmer | WASIX | needs wasix-stack |
 | dash | 1.0.19 | Wasmer | WASIX | needs wasix-stack |
 | php | 8.3 | Wasmer | WASIX | needs wasix-stack (86 MB) |
@@ -161,6 +161,25 @@ git, make (no WASI builds; busybox and make also need processes).
 Dropped from the old list: Wasmer's `lua` 0.1.4 and `optipng` are emscripten
 builds (`env`/`asm2wasm` imports), not WASI; `sqlite` 0.2.2 is replaced by the
 3.50.4 build.
+
+## x86-64 packages (`"abi": "x86_64-linux"`)
+
+Static x86-64 musl builds of popular tools (less, vim, ...) run in Blink as
+kernel processes; [COMPAT.md](COMPAT.md) has the scoreboard. Index
+additions they use:
+
+- `"needs": ["x86"]`: the `x86` feature is present when Blink can run
+  (SharedArrayBuffer).
+- File `"unpack": "gzip"` (one compressed file) or `"tar.gz"` (a tree
+  unpacked into the directory `path`); sha256/size are the download's.
+  Programs under `bin/`, `sbin/` and `libexec/` are installed executable.
+- `"links": { "/usr/share/vim": "share/vim" }`: symlinks outside the package
+  root, made at install and removed with the package.
+
+Recipes are in `scripts/pkgbuild/x86/` (musl.cc toolchain and sources pinned
+by sha256, or by commit for git sources); `scripts/pkgbuild/x86/publish.sh
+NAME VERSION` writes the compressed files to `public/pkg/` and prints index
+entries.
 
 ## Building packages (`scripts/pkgbuild/`)
 

@@ -1018,7 +1018,7 @@
    ]
   },
   {
-   "name": "less",
+   "name": "less-wasix",
    "version": "685.0.1",
    "description": "less pager (WASIX build)",
    "license": "GPL-3.0-or-later OR BSD-2-Clause",
@@ -1318,6 +1318,96 @@
     "mounts"
    ],
    "notes": "WASIX build (wasix_32v1, shared env.memory). 111 MB download. --version runs; compiling needs its sysroot volumes mounted at /sysroot and /lib, and the driver spawns lld."
+  },
+  {
+   "name": "less",
+   "version": "710",
+   "description": "less pager (static x86-64 build; reads keys from /dev/tty)",
+   "license": "GPL-3.0-or-later OR BSD-2-Clause",
+   "source": "https://www.greenwoodsoftware.com/less/less-710.tar.gz",
+   "homepage": "https://www.greenwoodsoftware.com/less/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/less.sh",
+   "section": "text",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/less",
+     "url": "/pkg/less/710/less.gz",
+     "sha256": "26dd6ab97ad7cacfae27dc2bb78516491e5f0fd8d8a42063cc05098f5a93b50c",
+     "size": 179537,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/lessecho",
+     "url": "/pkg/less/710/lessecho.gz",
+     "sha256": "ea971f97bc3bd0b2bb2f8c82f7cc2b3abf0555cfcbd20d79c4ef7b4068084517",
+     "size": 15593,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "less": {
+     "file": "bin/less"
+    },
+    "lessecho": {
+     "file": "bin/lessecho"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "vim",
+   "version": "9.2.0000",
+   "description": "Vi IMproved (huge features, syntax highlighting, :help; static x86-64 build)",
+   "license": "Vim",
+   "source": "https://github.com/vim/vim/tree/v9.2.0000",
+   "homepage": "https://www.vim.org/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/vim.sh",
+   "section": "editors",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/vim",
+     "url": "/pkg/vim/9.2.0000/vim.gz",
+     "sha256": "f34559a8ecf901f8c0799231b7b2d4ce154601d3a6e14b193eb5df9678bd80e3",
+     "size": 1586122,
+     "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/vim/9.2.0000/share.tar.gz",
+     "sha256": "bf2cca9af6d5ee6d2885894609bf6c588d91245313cf6c7aaba98997d2f6aaf7",
+     "size": 7122314,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "vim": {
+     "file": "bin/vim"
+    },
+    "vi": {
+     "file": "bin/vim"
+    },
+    "view": {
+     "file": "bin/vim"
+    },
+    "vimdiff": {
+     "file": "bin/vim"
+    },
+    "ex": {
+     "file": "bin/vim"
+    }
+   },
+   "links": {
+    "/usr/share/vim": "share/vim"
+   },
+   "needs": [
+    "x86"
+   ]
   }
  ]
 }
