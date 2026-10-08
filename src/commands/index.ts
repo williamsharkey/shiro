@@ -12,6 +12,8 @@ export interface TerminalLike {
   getSize(): { rows: number; cols: number };
   getBufferContent?(): string;
   term: any; // xterm.js Terminal instance
+  /** The terminal's pty session (controlling tty, termios, foreground job) */
+  tty?: import('../kernel/pty').TtySession;
 }
 
 export interface CommandContext {

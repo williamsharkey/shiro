@@ -80,6 +80,8 @@ export class LinuxSyscalls {
   onStdout: (data: string) => void;
   onStderr: (data: string) => void;
   stdinBuffer: string;
+  /** Blocking stdin (kernel processes): replaces stdinBuffer when set */
+  readStdin?: (n: number) => Promise<Uint8Array>;
 
   constructor(
     cpu: CPU, mem: VirtualMemory, fs: FileSystem, cwd: string,
@@ -212,6 +214,11 @@ export class LinuxSyscalls {
     const fd = Number(fdNum);
     const n = Number(count);
 
+    if (fd === 0 && this.readStdin) {
+      const bytes = await this.readStdin(n);
+      this.mem.writeBytes(buf, bytes);
+      return BigInt(bytes.length);
+    }
     const sockEntry = this.fdTable.get(fd);
     if (sockEntry?.sock || sockEntry?.legacyHttp) return this.sysRecvfrom(fdNum, buf, count, 0n, 0n, 0n);
 
@@ -803,7 +810,13 @@ export class LinuxSyscalls {
       const bufLen = Number(this.mem.read64(base + 8n));
       if (bufLen === 0) continue;
 
-      if (fd === 0) {
+      if (fd === 0 && this.readStdin) {
+        // One blocking read, like readv on a tty: return what arrived
+        const bytes = await this.readStdin(bufLen);
+        this.mem.writeBytes(bufAddr, bytes);
+        totalRead += bytes.length;
+        if (bytes.length < bufLen) break;
+      } else if (fd === 0) {
         const data = this.stdinBuffer.slice(0, bufLen);
         this.stdinBuffer = this.stdinBuffer.slice(bufLen);
         const encoded = new TextEncoder().encode(data);

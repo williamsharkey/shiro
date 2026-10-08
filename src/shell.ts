@@ -20,9 +20,14 @@ export interface BackgroundJob {
   id: number;
   command: string;
   promise: Promise<number>;
-  status: 'running' | 'done' | 'failed';
+  status: 'running' | 'stopped' | 'done' | 'failed';
   exitCode: number;
   abortController?: AbortController;
+  /** Kernel jobs: the process group (signals, fg/bg, Ctrl-Z) and its members */
+  pgid?: number;
+  pids?: number[];
+  /** Kernel jobs: tty modes saved when the job stopped */
+  termios?: import('./kernel/pty').Termios;
 }
 
 // Env var names whose values should be masked in terminal output
@@ -65,6 +70,17 @@ export function splitEnvPrefix(segment: string): { assignments: [string, string]
   // Array assignments (arr=(...)) and bare compound words stay on the existing path
   if (/^\s*\(/.test(rest)) return null;
   return { assignments, rest: rest.trimStart() };
+}
+
+/** The terminal minus its pty session (for background work that must not become the foreground job) */
+function withoutTty<T extends object>(term: T): T {
+  return new Proxy(term, {
+    get(t, k) {
+      if (k === 'tty') return undefined;
+      const v = Reflect.get(t, k, t);
+      return typeof v === 'function' ? v.bind(t) : v;
+    },
+  });
 }
 
 /** Runaway-loop guard for while/until/for((;;)); high enough for `while read` over big files */
@@ -141,6 +157,10 @@ export class Shell {
   /** Depth of execute() recursion — only top-level resets LINENO */
   private executeDepth: number = 0;
   private nextJobId = 1;
+  /** Next job number for the job table (kernel jobs use it too) */
+  allocJobId(): number {
+    return this.nextJobId++;
+  }
   private terminal?: ShiroTerminal;
 
   constructor(fs: FileSystem, commands: CommandRegistry) {
@@ -277,7 +297,8 @@ export class Shell {
       command,
       status: 'running',
       exitCode: 0,
-      promise: this.execute(command, () => {}, stderrWriter).then(
+      // No tty for in-page background work: kernel programs inside it must not take the terminal
+      promise: this.execute(command, () => {}, stderrWriter, false, this.terminal ? withoutTty(this.terminal) : undefined).then(
         (code) => {
           job.status = code === 0 ? 'done' : 'failed';
           job.exitCode = code;
@@ -326,6 +347,7 @@ export class Shell {
       if (bgCmd) {
         this.executeDepth--;
         if (isTopLevel) this.abortController = null;
+        if (await this.launchKernelBackground(bgCmd, writeStdout, terminalOverride || this.terminal)) return 0;
         return this.executeBackground(bgCmd, writeStdout, writeStderr);
       }
     }
@@ -2199,6 +2221,18 @@ export class Shell {
           ctx.stderr = c.err.replace(/\r\n/g, '\n');
         }
 
+        // WASM and x86 programs, with the filter builtins piped to and from them, run as one kernel job
+        const hasShellStdin = i > 0 || hereString !== undefined || (i === 0 && !!heredocStdin) || redirects.some(r => r.type === '<');
+        const kernelRun = await this.tryKernelRun(pipeline, i, effectiveCmdName, cmdArgs, redirects, ctx,
+          hasShellStdin, writeStdout, stderrWriter, terminalOverride || this.terminal);
+        if (kernelRun) {
+          i = kernelRun.lastIndex;
+          exitCode = kernelRun.exitCode;
+          lastOutput = await this.applyOutputRedirects(kernelRun.stdout, kernelRun.stderr, kernelRun.redirects,
+            i === pipeline.length - 1, writeStdout, stderrWriter);
+          pipeExitCodes.push(...kernelRun.statuses);
+          continue;
+        }
         const cmd = this.commands.get(effectiveCmdName);
         if (cmd) {
           try {
@@ -2226,20 +2260,10 @@ export class Shell {
                 const wasmModule = await getCompiledModule(wasmPkg.name, (msg) => {
                   stderrWriter(`  ${msg}\r\n`);
                 });
-                const { WasiRT, WasiExit } = await loadWasiRuntime();
-                const config = {
-                  fs: this.fs,
-                  cwd: this.cwd,
-                  args: [wasmPkg.name, ...cmdArgs],
-                  env: { ...this.env },
-                  stdin: ctx.stdin || '',
-                  onStdout: (text: string) => { ctx.stdout += text; },
-                  onStderr: (text: string) => { ctx.stderr += text; },
-                  preopens: { '/': '/', '.': this.cwd },
-                };
-                const wasi = new WasiRT(config);
-                await wasi.preloadTree(this.cwd, 3, 100);
-                exitCode = await wasi.run(wasmModule);
+                const { runWasiProgram } = await import('./wasi/run-command');
+                exitCode = await runWasiProgram(ctx, {
+                  module: wasmModule, argv: [wasmPkg.name, ...cmdArgs], cwd: this.cwd, env: { ...this.env },
+                });
                 // Write PATH stubs so future runs skip auto-install
                 await this.writeWasiPkgStubs(wasmPkg.name, wasmPkg.aliases);
               } catch (e: any) {
@@ -4818,6 +4842,92 @@ export class Shell {
   // ─── PATH EXECUTION ─────────────────────────────────────────────────────────
 
   /**
+   * Run segment `i` (and the kernel programs piped right after it) as kernel
+   * processes when it is a WASM or x86 program (src/shell-kernel.ts). Null when
+   * it isn't one, so the caller falls back to the in-page paths.
+   */
+  private async tryKernelRun(
+    pipeline: string[], i: number, name: string, args: string[], redirects: Redirect[], ctx: CommandContext,
+    hasShellStdin: boolean, writeStdout: (s: string) => void, writeStderr: (s: string) => void, terminal: any,
+  ): Promise<{ lastIndex: number; redirects: Redirect[]; exitCode: number; statuses: number[]; stdout: string; stderr: string } | null> {
+    const { mayBeKernelProgram, resolveKernelProgram, builtinStage, runKernelPipeline } = await import('./shell-kernel');
+    const progress = (m: string) => writeStderr(`  ${m}\r\n`);
+    const stageFor = async (n: string, a: string[]) =>
+      builtinStage(this, n, a) ?? (mayBeKernelProgram(this, n) ? await resolveKernelProgram(this, n, a, progress) : null);
+    // Cheap exit for the common case: neither a filter builtin nor something to look up on PATH
+    const firstIsFilter = !!builtinStage(this, name, args);
+    if (!firstIsFilter && !mayBeKernelProgram(this, name)) return null;
+    if (firstIsFilter && i === pipeline.length - 1) return null;
+    const first = await stageFor(name, args);
+    if (!first) return null;
+    const hasOutRedirect = (r: Redirect[]) => r.some(x => x.type !== '<');
+    const programs = [first];
+    let last = i;
+    let lastRedirects = redirects;
+    if (!hasOutRedirect(redirects)) {
+      for (let j = i + 1; j < pipeline.length; j++) {
+        const seg = pipeline[j].trim();
+        if (splitEnvPrefix(seg) || this.isControlStructure(seg) || seg.startsWith('(') || seg.startsWith('{')) break;
+        const parsed = this.parseSegment(seg);
+        if (parsed.args.length === 0 || parsed.hereString !== undefined || parsed.redirects.some(r => r.type === '<')) break;
+        if (parsed.args.some(a => /^[<>]\(/.test(a))) break; // process substitution
+        const words = await this.expandGlobs(parsed.args);
+        if (!words) break;
+        const prog = await stageFor(words[0], words.slice(1));
+        if (!prog) break;
+        programs.push(prog);
+        last = j;
+        lastRedirects = parsed.redirects;
+        if (hasOutRedirect(parsed.redirects)) break;
+      }
+    }
+    // Only worth it when a real kernel program is involved
+    if (!programs.some(p => !p.builtin)) return null;
+    const crlf = (w: (s: string) => void) => (t: string) => w(t.replace(/\r?\n/g, '\r\n'));
+    const r = await runKernelPipeline(this, programs, {
+      stdin: hasShellStdin ? ctx.stdin : undefined,
+      captureStdout: last < pipeline.length - 1 || hasOutRedirect(lastRedirects),
+      captureStderr: hasOutRedirect(lastRedirects),
+      writeStdout: crlf(writeStdout),
+      writeStderr: crlf(writeStderr),
+      terminal,
+      command: pipeline.slice(i, last + 1).map(x => x.trim()).join(' | '),
+      cwd: this.cwd,
+      env: this.env,
+    });
+    return { lastIndex: last, redirects: lastRedirects, ...r, stdout: ctx.stdout + r.stdout, stderr: ctx.stderr + r.stderr };
+  }
+
+  /**
+   * `cmd &` where every stage is a kernel program: a real background job in
+   * the terminal's session (output to the tty, SIGTTIN if it reads). False
+   * when the pipeline has anything else, so the in-page background path runs it.
+   */
+  private async launchKernelBackground(command: string, writeStdout: (s: string) => void, term: any): Promise<boolean> {
+    if (!term?.tty || /[;&]|\|\||\$\(|`/.test(command)) return false;
+    const { mayBeKernelProgram, resolveKernelProgram, runKernelPipeline } = await import('./shell-kernel');
+    const segments = this.parsePipeline(await this.expandWords(command, () => {}));
+    const programs = [];
+    for (const seg of segments) {
+      const t = seg.trim();
+      if (!t || splitEnvPrefix(t) || this.isControlStructure(t) || t.startsWith('(')) return false;
+      const parsed = this.parseSegment(t);
+      if (parsed.redirects.length || parsed.hereString !== undefined || parsed.args.length === 0) return false;
+      const words = await this.expandGlobs(parsed.args);
+      if (!words || !mayBeKernelProgram(this, words[0])) return false;
+      const prog = await resolveKernelProgram(this, words[0], words.slice(1));
+      if (!prog) return false;
+      programs.push(prog);
+    }
+    if (programs.length === 0) return false;
+    await runKernelPipeline(this, programs, {
+      captureStdout: false, captureStderr: false, writeStdout, writeStderr: writeStdout,
+      terminal: term, command, background: true, cwd: this.cwd, env: this.env,
+    });
+    return true;
+  }
+
+  /**
    * Search PATH directories for an executable file.
    * Also checks node_modules/.bin relative to cwd.
    */
@@ -4919,23 +5029,13 @@ export class Shell {
     if (content.startsWith('#!wasi-pkg ')) {
       const pkgName = content.split('\n')[0].substring('#!wasi-pkg '.length).trim();
       try {
-        const { WasiRT } = await loadWasiRuntime();
         const wasmModule = await getCompiledModule(pkgName, (msg) => {
           writeStderr(`  ${msg}\r\n`);
         });
-        const config = {
-          fs: this.fs,
-          cwd: this.cwd,
-          args: [pkgName, ...args],
-          env: { ...this.env },
-          stdin: ctx.stdin || '',
-          onStdout: (text: string) => { ctx.stdout += text; },
-          onStderr: (text: string) => { ctx.stderr += text; },
-          preopens: { '/': '/', '.': this.cwd },
-        };
-        const wasi = new WasiRT(config);
-        await wasi.preloadTree(this.cwd, 3, 100);
-        return await wasi.run(wasmModule);
+        const { runWasiProgram } = await import('./wasi/run-command');
+        return await runWasiProgram(ctx, {
+          module: wasmModule, argv: [pkgName, ...args], cwd: this.cwd, env: { ...this.env },
+        });
       } catch (e: any) {
         const { WasiExit } = await loadWasiRuntime();
         if (e instanceof WasiExit) return e.code;
@@ -5067,26 +5167,15 @@ export class Shell {
     writeStderr: (s: string) => void,
   ): Promise<number> {
     try {
-      const { WasiRT } = await loadWasiRuntime();
       const data = await this.fs.readFile(filePath) as Uint8Array;
-      const wasmBytes = new Uint8Array(data).buffer;
-      const wasmModule = await WebAssembly.compile(wasmBytes);
+      const image = new Uint8Array(data);
+      const wasmModule = await WebAssembly.compile(image);
 
       const programName = filePath.split('/').pop() || filePath;
-      const config = {
-        fs: this.fs,
-        cwd: this.cwd,
-        args: [programName, ...args],
-        env: { ...this.env },
-        stdin: ctx.stdin || '',
-        onStdout: (text: string) => { ctx.stdout += text; },
-        onStderr: (text: string) => { ctx.stderr += text; },
-        preopens: { '/': '/', '.': this.cwd },
-      };
-
-      const wasi = new WasiRT(config);
-      await wasi.preloadTree(this.cwd, 3, 100);
-      return await wasi.run(wasmModule);
+      const { runWasiProgram } = await import('./wasi/run-command');
+      return await runWasiProgram(ctx, {
+        module: wasmModule, image, argv: [programName, ...args], cwd: this.cwd, env: { ...this.env },
+      });
     } catch (e: any) {
       const { WasiExit } = await loadWasiRuntime();
       if (e instanceof WasiExit) {

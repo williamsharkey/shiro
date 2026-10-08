@@ -1,6 +1,6 @@
 /**
  * ps - list running processes
- * kill - terminate a process by PID
+ * kill - re-exported from ./trap
  */
 
 import { Command } from './index';
@@ -34,38 +34,5 @@ export const psCmd: Command = {
   },
 };
 
-export const killCmd: Command = {
-  name: 'kill',
-  description: 'Kill a process by PID',
-  async exec(ctx) {
-    if (ctx.args.length === 0) {
-      ctx.stderr = 'Usage: kill <pid>\n';
-      return 1;
-    }
-
-    const pid = parseInt(ctx.args[0], 10);
-    if (isNaN(pid)) {
-      ctx.stderr = `kill: invalid PID: ${ctx.args[0]}\n`;
-      return 1;
-    }
-
-    const proc = processTable.get(pid);
-    if (!proc) {
-      ctx.stderr = `kill: no such process: ${pid}\n`;
-      return 1;
-    }
-
-    if (proc.status !== 'running') {
-      ctx.stderr = `kill: process ${pid} already ${proc.status}\n`;
-      return 1;
-    }
-
-    processTable.kill(pid);
-    // Close the window too
-    if (proc.serverWindow) {
-      proc.serverWindow.close();
-    }
-    ctx.stdout = `Killed [${pid}] ${proc.command}\n`;
-    return 0;
-  },
-};
+/** The real `kill` lives with `trap` (bash builtin semantics, kernel signals) */
+export { kill as killCmd } from './trap';

@@ -1,9 +1,15 @@
 import { Command, CommandContext } from './index';
-import { WasiRT, WasiExit, WasiConfig } from '../wasi-runtime';
+import { WasiExit } from '../wasi-runtime';
 import { findPackage, getCompiledModule } from '../wasi-packages';
+import { runWasiProgram } from '../wasi/run-command';
 
 /**
  * wasi — Run WASM+WASI binaries in Shiro
+ *
+ * Programs run as kernel processes when the page can block (Worker +
+ * SharedArrayBuffer, or JSPI): stdin from a terminal is interactive, output
+ * streams, files are opened on demand, and WASIX proc_spawn / wasi-threads
+ * work. Otherwise they use the older in-page runtime.
  *
  * Usage:
  *   wasi run <file.wasm> [args...]    Run a local WASM binary
@@ -82,31 +88,12 @@ export const wasiCmd: Command = {
       // Compile
       const wasmModule = await WebAssembly.compile(wasmBytes);
 
-      // Set up WASI config
       const programName = target.split('/').pop() || target;
-      const config: WasiConfig = {
-        fs: ctx.fs,
-        cwd: ctx.cwd,
-        args: [programName, ...wasmArgs],
-        env: { ...ctx.env },
-        stdin: ctx.stdin || '',
-        onStdout: (text) => { ctx.stdout += text; },
-        onStderr: (text) => { ctx.stderr += text; },
-        preopens: {
-          '/': '/',
-          '.': ctx.cwd,
-        },
-      };
-
-      // Create runtime and run
-      const wasi = new WasiRT(config);
-
-      // Recursively pre-load the working directory tree so path_open/fd_readdir work
-      await wasi.preloadTree(ctx.cwd, 3, 100);
-
-      // Run
-      const exitCode = await wasi.run(wasmModule);
-      return exitCode;
+      return await runWasiProgram(ctx, {
+        module: wasmModule,
+        image: new Uint8Array(wasmBytes),
+        argv: [programName, ...wasmArgs],
+      });
     } catch (e: any) {
       if (e instanceof WasiExit) {
         return e.code;
@@ -143,20 +130,7 @@ async function wasiExec(ctx: CommandContext): Promise<number> {
       ctx.stderr += `  ${msg}\n`;
     });
 
-    const config: WasiConfig = {
-      fs: ctx.fs,
-      cwd: ctx.cwd,
-      args: [pkg.name, ...wasmArgs],
-      env: { ...ctx.env },
-      stdin: ctx.stdin || '',
-      onStdout: (text) => { ctx.stdout += text; },
-      onStderr: (text) => { ctx.stderr += text; },
-      preopens: { '/': '/', '.': ctx.cwd },
-    };
-
-    const wasi = new WasiRT(config);
-    await wasi.preloadTree(ctx.cwd, 3, 100);
-    return await wasi.run(wasmModule);
+    return await runWasiProgram(ctx, { module: wasmModule, argv: [pkg.name, ...wasmArgs] });
   } catch (e: any) {
     if (e instanceof WasiExit) return e.code;
     ctx.stderr += `wasi exec: ${e.message}\n`;

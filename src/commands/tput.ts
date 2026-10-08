@@ -4,13 +4,20 @@ export const tputCmd: Command = {
   name: 'tput',
   description: 'Terminal capability lookup',
   async exec(ctx) {
-    const cap = ctx.args[0];
+    const args = [...ctx.args];
+    // -T type / -Ttype: only xterm-like terminals exist here
+    while (args[0]?.startsWith('-T')) { if (args.shift() === '-T') args.shift(); }
+    const cap = args[0];
     if (!cap) {
       ctx.stderr = 'tput: missing operand\n';
       return 1;
     }
 
-    const size = ctx.terminal?.getSize() || { cols: 80, rows: 24 };
+    // Size comes from the controlling tty (TIOCGWINSZ); LINES/COLUMNS override it, as in ncurses
+    const ws = ctx.terminal?.tty?.pty.winsize ?? ctx.terminal?.getSize() ?? { cols: 80, rows: 24 };
+    const envInt = (name: string) => (/^\d+$/.test(ctx.env[name] ?? '') ? parseInt(ctx.env[name], 10) : 0);
+    const size = { cols: envInt('COLUMNS') || ws.cols, rows: envInt('LINES') || ws.rows };
+    const num = (i: number) => parseInt(args[i] || '0', 10) || 0;
 
     const ansiColors: Record<number, string> = {
       0: '\x1b[30m', 1: '\x1b[31m', 2: '\x1b[32m', 3: '\x1b[33m',
@@ -84,6 +91,72 @@ export const tputCmd: Command = {
       case 'el':
         ctx.stdout = '\x1b[K';
         return 0;
+      case 'longname':
+        ctx.stdout = 'xterm with 256 colors';
+        return 0;
+      case 'home':
+        ctx.stdout = '\x1b[H';
+        return 0;
+      case 'ed':
+        ctx.stdout = '\x1b[J';
+        return 0;
+      case 'dim':
+        ctx.stdout = '\x1b[2m';
+        return 0;
+      case 'sitm':
+        ctx.stdout = '\x1b[3m';
+        return 0;
+      case 'ritm':
+        ctx.stdout = '\x1b[23m';
+        return 0;
+      case 'smso':
+        ctx.stdout = '\x1b[7m';
+        return 0;
+      case 'rmso':
+        ctx.stdout = '\x1b[27m';
+        return 0;
+      case 'blink':
+        ctx.stdout = '\x1b[5m';
+        return 0;
+      case 'bel':
+        ctx.stdout = '\x07';
+        return 0;
+      case 'cuu1':
+        ctx.stdout = '\x1b[A';
+        return 0;
+      case 'cud1':
+        ctx.stdout = '\n';
+        return 0;
+      case 'cuu': case 'cud': case 'cuf': case 'cub': {
+        const letter = { cuu: 'A', cud: 'B', cuf: 'C', cub: 'D' }[cap];
+        ctx.stdout = `\x1b[${num(1)}${letter}`;
+        return 0;
+      }
+      case 'hpa':
+        ctx.stdout = `\x1b[${num(1) + 1}G`;
+        return 0;
+      case 'vpa':
+        ctx.stdout = `\x1b[${num(1) + 1}d`;
+        return 0;
+      case 'il': case 'dl': case 'ich': case 'dch': case 'ech': {
+        const code = { il: 'L', dl: 'M', ich: '@', dch: 'P', ech: 'X' }[cap];
+        ctx.stdout = `\x1b[${num(1)}${code}`;
+        return 0;
+      }
+      case 'el1':
+        ctx.stdout = '\x1b[1K';
+        return 0;
+      case 'init':
+      case 'reset': {
+        // Like tput reset: sane tty modes, then the terminal's reset string
+        const tty = ctx.terminal?.tty?.pty;
+        if (tty) {
+          const { defaultTermios } = await import('../kernel/pty');
+          tty.setTermios(defaultTermios());
+        }
+        ctx.stdout = cap === 'reset' ? '\x1bc' : '\x1b[!p\x1b[?3;4l\x1b[4l\x1b>';
+        return 0;
+      }
       case 'smcup':
         ctx.stdout = '\x1b[?1049h';
         return 0;

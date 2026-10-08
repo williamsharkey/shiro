@@ -40,7 +40,7 @@ const O_RDONLY = 0, O_WRONLY = 1, O_CREAT = 0o100, O_TRUNC = 0o1000, O_DIRECTORY
 const POLLIN = 1, POLLOUT = 4;
 const S_IFMT = 0o170000, S_IFDIR = 0o040000, S_IFREG = 0o100000, S_IFLNK = 0o120000;
 
-let i32 = null, data = null, debug = false;
+let i32 = null, data = null, debug = false, progPath = '';
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
@@ -193,7 +193,10 @@ function makeShiroFS(FS) {
       const target = readlink(path);
       node.link = typeof target === 'string' ? target : '';
     } else {
-      node = MEMFS.createNode(parent, name, S_IFREG | (st.mode & 0o7777 || 0o644), 0);
+      // Shiro doesn't enforce the x bit, but Blink won't start a program
+      // without it: the binary being run is always executable here.
+      const perm = (st.mode & 0o7777 || 0o644) | (path === progPath ? 0o111 : 0);
+      node = MEMFS.createNode(parent, name, S_IFREG | perm, 0);
       node.shiroLazy = true;
       node.shiroSize = st.size;
     }
@@ -359,6 +362,7 @@ function exitGuest(code) {
 
 async function run(msg) {
   debug = !!msg.debug;
+  progPath = msg.path || '';
   i32 = new Int32Array(msg.sab, 0, CH_DATA / 4);
   data = new Uint8Array(msg.sab, CH_DATA);
   let stdioNodes = {};
