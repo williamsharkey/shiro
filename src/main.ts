@@ -71,6 +71,7 @@ import { cvCmd } from './commands/cv';
 import { spiritCmd } from './commands/spirit';
 // wasi and pkg are lazy-loaded (pulls in ~960-line wasi-runtime.ts)
 import { processTable } from './process-table';
+import { getKernel } from './kernel/kernel';
 import { iframeServer } from './iframe-server';
 import { unixCommands } from './commands/unix';
 import { ShiroTerminal } from './terminal';
@@ -448,6 +449,9 @@ async function main() {
 
   // Create shell
   const shell = new Shell(fs, commands);
+  // Kernel processes (worker guests, spawned builtins) run against this fs and fork this shell
+  const kernel = getKernel();
+  kernel.attach(fs, shell);
 
   // Populate API keys from localStorage so `claude` CLI picks them up
   const storedAnthropicKey = localStorage.getItem('shiro_anthropic_key') || localStorage.getItem('shiro_api_key');
@@ -490,6 +494,7 @@ async function main() {
     registry, // ModuleRegistry for hot-reload
     iframeServer, // Iframe-based virtual HTTP server
     processTable, // Windowed process registry
+    kernel, // Process table, fds, pipes and syscalls for worker guests (src/kernel)
     unbecome: deactivateBecomeMode, // Exit app mode from browser console
     closeSplit: closeSplitView, // Close split pane from browser console
     lastSeedGif: null as Uint8Array | null, // Last generated seed GIF bytes (for demos/drag)

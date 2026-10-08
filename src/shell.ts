@@ -4879,12 +4879,7 @@ export class Shell {
     try {
       const real = await this.fs.realpath(filePath);
       if (packageOfPath(real)) {
-        return await runPackageBinary(real, filePath.split('/').pop() || filePath, args, {
-          fs: this.fs, cwd: this.cwd, env: this.env, stdin: ctx.stdin || '',
-          stdinIsTTY: !ctx.stdin, stdoutIsTTY: ctx.stdoutIsTTY !== false,
-          onStdout: (text) => { ctx.stdout += text; },
-          onStderr: (text) => { ctx.stderr += text; },
-        });
+        return await runPackageBinary(real, filePath.split('/').pop() || filePath, args, ctx);
       }
     } catch { /* fall through to the generic path */ }
 
@@ -4926,23 +4921,13 @@ export class Shell {
     if (content.startsWith('#!wasi-pkg ')) {
       const pkgName = content.split('\n')[0].substring('#!wasi-pkg '.length).trim();
       try {
-        const { WasiRT } = await loadWasiRuntime();
         const wasmModule = await getCompiledModule(pkgName, (msg) => {
           writeStderr(`  ${msg}\r\n`);
         });
-        const config = {
-          fs: this.fs,
-          cwd: this.cwd,
-          args: [pkgName, ...args],
-          env: { ...this.env },
-          stdin: ctx.stdin || '',
-          onStdout: (text: string) => { ctx.stdout += text; },
-          onStderr: (text: string) => { ctx.stderr += text; },
-          preopens: { '/': '/', '.': this.cwd },
-        };
-        const wasi = new WasiRT(config);
-        await wasi.preloadTree(this.cwd, 3, 100);
-        return await wasi.run(wasmModule);
+        const { runWasiProgram } = await import('./wasi/run-command');
+        return await runWasiProgram(ctx, {
+          module: wasmModule, argv: [pkgName, ...args], cwd: this.cwd, env: { ...this.env },
+        });
       } catch (e: any) {
         const { WasiExit } = await loadWasiRuntime();
         if (e instanceof WasiExit) return e.code;
@@ -5055,26 +5040,15 @@ export class Shell {
     writeStderr: (s: string) => void,
   ): Promise<number> {
     try {
-      const { WasiRT } = await loadWasiRuntime();
       const data = await this.fs.readFile(filePath) as Uint8Array;
-      const wasmBytes = new Uint8Array(data).buffer;
-      const wasmModule = await WebAssembly.compile(wasmBytes);
+      const image = new Uint8Array(data);
+      const wasmModule = await WebAssembly.compile(image);
 
       const programName = filePath.split('/').pop() || filePath;
-      const config = {
-        fs: this.fs,
-        cwd: this.cwd,
-        args: [programName, ...args],
-        env: { ...this.env },
-        stdin: ctx.stdin || '',
-        onStdout: (text: string) => { ctx.stdout += text; },
-        onStderr: (text: string) => { ctx.stderr += text; },
-        preopens: { '/': '/', '.': this.cwd },
-      };
-
-      const wasi = new WasiRT(config);
-      await wasi.preloadTree(this.cwd, 3, 100);
-      return await wasi.run(wasmModule);
+      const { runWasiProgram } = await import('./wasi/run-command');
+      return await runWasiProgram(ctx, {
+        module: wasmModule, image, argv: [programName, ...args], cwd: this.cwd, env: { ...this.env },
+      });
     } catch (e: any) {
       const { WasiExit } = await loadWasiRuntime();
       if (e instanceof WasiExit) {

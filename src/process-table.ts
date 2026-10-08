@@ -18,12 +18,30 @@ export interface ShiroProcess {
   abortController: AbortController | null;
 }
 
+/** Another registry whose processes ps/kill/top should see (the kernel's process table). */
+export interface ProcessSource {
+  list(): ShiroProcess[];
+  get(pid: number): ShiroProcess | undefined;
+  kill(pid: number): boolean;
+}
+
 class ProcessTable {
   private processes = new Map<number, ShiroProcess>();
   private nextPid = 100;
+  private sources: ProcessSource[] = [];
+
+  /** Next pid; shared with the kernel so the two tables never collide. */
+  allocatePid(): number {
+    return this.nextPid++;
+  }
+
+  attachSource(source: ProcessSource): () => void {
+    this.sources.push(source);
+    return () => { this.sources = this.sources.filter(s => s !== source); };
+  }
 
   allocate(command: string): ShiroProcess {
-    const pid = this.nextPid++;
+    const pid = this.allocatePid();
     const proc: ShiroProcess = {
       pid,
       command,
@@ -42,7 +60,8 @@ class ProcessTable {
 
   kill(pid: number): boolean {
     const proc = this.processes.get(pid);
-    if (!proc || proc.status !== 'running') return false;
+    if (!proc) return this.sources.some(s => s.kill(pid));
+    if (proc.status !== 'running') return false;
     if (proc.abortController) proc.abortController.abort();
     proc.kill();
     proc.status = 'killed';
@@ -51,11 +70,19 @@ class ProcessTable {
   }
 
   list(): ShiroProcess[] {
-    return Array.from(this.processes.values());
+    const all = Array.from(this.processes.values());
+    for (const s of this.sources) all.push(...s.list());
+    return all.sort((a, b) => a.pid - b.pid);
   }
 
   get(pid: number): ShiroProcess | undefined {
-    return this.processes.get(pid);
+    const own = this.processes.get(pid);
+    if (own) return own;
+    for (const s of this.sources) {
+      const p = s.get(pid);
+      if (p) return p;
+    }
+    return undefined;
   }
 
   remove(pid: number): void {

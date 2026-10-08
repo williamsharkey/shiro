@@ -19,6 +19,7 @@
  */
 
 import type { FileSystem } from './filesystem';
+import type { CommandContext } from './commands/index';
 import { isWebc, parseWebc, type WebcPackage } from './webc';
 import builtinIndexJson from './pkg-index.json';
 
@@ -175,6 +176,7 @@ export function builtinIndex(): PkgIndex {
 
 /** Built-in index merged with lists fetched by `pkg update` (later lists win). */
 export async function loadIndex(fs: FileSystem): Promise<PkgIndex> {
+  await refreshRuntimeMode();
   const byName = new Map(builtinIndex().packages.map(p => [p.name, p]));
   let lists: string[] = [];
   try { lists = (await fs.readdir(PKG_LISTS_DIR)).filter(n => n.endsWith('.json')).sort(); } catch { /* none */ }
@@ -202,10 +204,36 @@ export function searchIndex(index: PkgIndex, query: string): PkgEntry[] {
 
 // ── Kernel capability gate ───────────────────────────────────────────
 
-/** Features the running kernel provides. The unix/wasi runtime registers them. */
+/** What the WASM process runtime (src/wasi/host.ts) can do in this page. */
+const MODE_FEATURES: Record<string, KernelFeature[]> = {
+  // Worker per process/thread, blocking syscalls over SharedArrayBuffer
+  sab: ['blocking-stdin', 'tty', 'processes', 'threads', 'sync-fs', 'wasix'],
+  // Main thread, imports suspend on the kernel (no shared memory, so no threads)
+  jspi: ['blocking-stdin', 'tty', 'processes', 'sync-fs', 'wasix'],
+  none: [],
+};
+let runtimeMode: 'sab' | 'jspi' | 'none' | null = null;
+
+/** Look up (once per call site) how WASM processes run here; gates use the result. */
+export async function refreshRuntimeMode(): Promise<'sab' | 'jspi' | 'none'> {
+  try {
+    const { wasmProcessMode } = await import('./wasi/host');
+    runtimeMode = wasmProcessMode();
+  } catch {
+    runtimeMode = 'none';
+  }
+  return runtimeMode;
+}
+
+/**
+ * Features the kernel provides: those of the WASM process runtime's mode,
+ * plus any a kernel component adds to globalThis.__shiroKernel.features.
+ */
 export function kernelFeatures(): Set<string> {
   const k = (globalThis as any).__shiroKernel;
-  return new Set(Array.isArray(k?.features) ? k.features : []);
+  const out = new Set<string>(Array.isArray(k?.features) ? k.features : []);
+  for (const f of MODE_FEATURES[runtimeMode ?? 'none']) out.add(f);
+  return out;
 }
 
 /** Hard requirements the current kernel doesn't meet. */
@@ -481,18 +509,6 @@ export function loadPackageShadows(fs: FileSystem): Promise<Set<string>> {
 
 // ── Running installed binaries ───────────────────────────────────────
 
-export interface RunContext {
-  fs: FileSystem;
-  cwd: string;
-  env: Record<string, string>;
-  stdin: string;
-  /** Whether stdin/stdout are the terminal (programs check isatty()) */
-  stdinIsTTY?: boolean;
-  stdoutIsTTY?: boolean;
-  onStdout: (s: string) => void;
-  onStderr: (s: string) => void;
-}
-
 const moduleCache = new Map<string, WebAssembly.Module>();
 
 /** Package that owns a path under /usr/lib/pkg, or null. */
@@ -504,30 +520,47 @@ export function packageOfPath(path: string): string | null {
 /**
  * Run an installed package binary. `binPath` is the resolved file under
  * /usr/lib/pkg, `argv0` the name it was invoked as (the /usr/bin link name).
+ * Output goes to ctx.stdout/ctx.stderr (or the terminal, for kernel
+ * processes writing to it).
  */
-export async function runPackageBinary(binPath: string, argv0: string, args: string[], ctx: RunContext): Promise<number> {
+export async function runPackageBinary(binPath: string, argv0: string, args: string[], ctx: CommandContext): Promise<number> {
   const name = packageOfPath(binPath);
   const status = name ? (await readStatus(ctx.fs))[name] : undefined;
   const entry = status?.entry;
   const rel = name ? binPath.slice(PKG_ROOT.length + name.length + 2) : '';
   const bin = entry && (entry.bin[argv0]?.file === rel ? entry.bin[argv0] :
     Object.values(entry.bin).find(b => b.file === rel));
+  const mode = await refreshRuntimeMode();
 
   if (entry) {
     const missing = missingFeatures(entry);
     if (missing.length && ctx.env.SHIRO_PKG_FORCE !== '1') {
-      ctx.onStderr(`${argv0}: needs kernel support Shiro doesn't have yet: ${missing.join(', ')}\n`);
+      ctx.stderr += `${argv0}: needs kernel support Shiro doesn't have yet: ${missing.join(', ')}\n`;
       return 126;
     }
   }
 
+  const bytes = await ctx.fs.readFile(binPath) as Uint8Array;
   let mod = moduleCache.get(binPath);
   if (!mod) {
-    const bytes = await ctx.fs.readFile(binPath) as Uint8Array;
     mod = await WebAssembly.compile(bytes as BufferSource);
     moduleCache.set(binPath, mod);
   }
+  const argv = [argv0, ...(bin?.args || []), ...args];
 
+  // A kernel process when the page can block: interactive stdin, streamed
+  // output, files opened on demand, threads and child processes. Snapshot-0
+  // programs keep the in-page runtime, which adapts wasi_unstable.
+  if (mode !== 'none' && entry?.abi !== 'wasi_unstable') {
+    const { runWasiProgram } = await import('./wasi/run-command');
+    return runWasiProgram(ctx, { module: mod, image: bytes, argv, cwd: ctx.cwd, env: { ...ctx.env } });
+  }
+  return runInPage(mod, entry, argv, args, ctx);
+}
+
+/** The older in-page runtime: files are read before the program starts. */
+async function runInPage(mod: WebAssembly.Module, entry: PkgEntry | undefined, argv: string[], args: string[], ctx: CommandContext): Promise<number> {
+  const name = entry?.name;
   // Some preview1 wasi-libc builds only match a preopen when a '/' follows
   // its name, so a lone "/" never matches "/usr/...": also preopen the
   // top-level directories this run touches. Snapshot-0 (2019) builds resolve
@@ -544,13 +577,13 @@ export async function runPackageBinary(binPath: string, argv0: string, args: str
   const wasi = new WasiRT({
     fs: ctx.fs,
     cwd: ctx.cwd,
-    args: [argv0, ...(bin?.args || []), ...args],
+    args: argv,
     env: { ...ctx.env },
-    stdin: ctx.stdin,
-    stdinIsTTY: ctx.stdinIsTTY,
-    stdoutIsTTY: ctx.stdoutIsTTY,
-    onStdout: ctx.onStdout,
-    onStderr: ctx.onStderr,
+    stdin: ctx.stdin || '',
+    stdinIsTTY: !ctx.stdin,
+    stdoutIsTTY: ctx.stdoutIsTTY !== false,
+    onStdout: (text) => { ctx.stdout += text; },
+    onStderr: (text) => { ctx.stderr += text; },
     preopens,
   });
   // This runtime reads files before the program starts: the working tree,
@@ -572,7 +605,7 @@ export async function runPackageBinary(binPath: string, argv0: string, args: str
     return await wasi.run(mod);
   } catch (e: any) {
     if (e instanceof WasiExit) return e.code;
-    ctx.onStderr(`${argv0}: ${e?.message || e}\n`);
+    ctx.stderr += `${argv[0]}: ${e?.message || e}\n`;
     return 1;
   }
 }

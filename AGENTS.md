@@ -16,8 +16,10 @@ Do not treat the dashboard or wrappers as the product. The product is the browse
 - `src/terminal.ts`: xterm integration and input handling.
 - `src/commands/*`: one command per file or small group.
 - `src/node-compat/*`: Node.js runtime shims used by `node` and Claude Code.
-- `src/wasi-runtime.ts` + `src/pkg-manager.ts`: Tier 2 WASI support and the package manager (`src/wasi-packages.ts` is the older single-binary API on top).
+- `src/wasi/*`: WASM programs as kernel processes (see "WASM Processes" below). `src/wasi-runtime.ts` is the old in-page runtime, kept as the fallback.
+- `src/pkg-manager.ts`: the package manager (`pkg`/`apt`, see "Packages"); `src/wasi-packages.ts` is the older single-binary API on top of its index.
 - `src/x86/*`: Tier 3 x86-64 emulator.
+- `src/kernel/*`: Unix kernel core (process table, fd tables, pipes, syscall dispatch, SAB syscall channel for Worker guests). Contract: `docs/KERNEL_ABI.md`; roadmap: `docs/UNIX_COMPAT.md`. `window.__shiro.kernel`; kernel processes show in `ps`.
 - `src/commands/seed.ts`, `src/commands/hc.ts`, `src/seed-runtime-context.ts`: seeded sessions, host-page access, runtime orientation.
 - `src/claude-config.ts`, `src/node-compat/preload.ts`, `src/node-compat/process.ts`: Claude bootstrap, auth persistence, startup defaults.
 - `server.mjs`: static hosting, API proxying, OAuth callback, signaling, relay.
@@ -91,6 +93,16 @@ export const myCmd: Command = {
 - `git config` supports get/set/`--list`/`--unset`, local and `--global` (`~/.gitconfig`). Commit authors come from repo config, then `~/.gitconfig`, then `GIT_AUTHOR_*`.
 - `gh` (`src/commands/gh*.ts`) follows the real CLI's flags where implemented: `auth` (status/login/logout/token/setup-git), `repo` (view `--json`, list, create `--source --push`, clone, delete `--yes`), `api` (`-q/--jq`, `-f/-F`, `-X/--method`), `pr`, `issue`, `release`, `workflow`, `run`, `label`, `search`.
 - Known gaps: git only works from the repository root (no upward `.git` discovery), and `git log --oneline` prints full messages.
+
+## WASM Processes
+
+- `wasi run`, `wasi exec`, `.wasm` files on PATH, `#!wasi-pkg` stubs, package auto-install and the lua fallback all go through `runWasiProgram` (`src/wasi/run-command.ts`). When the page can block it spawns a kernel process; when `canBlock()` is `'none'` it uses the old `WasiRT` (preloaded files, fixed stdin).
+- Cross-origin isolated page (SAB): each WASM thread is a Worker (`guest-worker.ts`, bundled inline via `?worker&inline`) making blocking syscalls through `Kernel.syscall`, so `fd_read` on an empty pipe or the terminal blocks, files open on demand, output streams. Without SAB but with JSPI (Chrome) the module runs on the main thread with `WebAssembly.Suspending` imports; wasi-threads programs then fail with a clear message.
+- `wasi-guest.ts` implements WASI preview1 once, as generators yielding kernel syscalls; `runSync` (Worker) and `runMaybeAsync` (JSPI) drive them. Other wasi/wasix imports become ENOSYS stubs so binaries still instantiate. The kernel only has `openat` among the `*at` calls, so the guest resolves dirfd-relative paths itself (preopens `/` and `.`, plus paths it opened); `pread`/`pwrite` are seek-and-restore.
+- Spawning from WASM uses WASIX `wasix_32v1` (`proc_spawn3`/`proc_spawn2`, `proc_exec*` emulated as spawn+wait+exit, `proc_join`, `fd_pipe`, `fd_dup`, `getcwd`/`chdir`) mapped onto `SYS_spawn`. File actions become the spawn fd map, which starts as 0,1,2 only. Children can be WASM (`installWasmLoader`: by path or `NAME`/`NAME.wasm` on PATH) or Shiro builtins.
+- wasi-threads: `wasi.thread-spawn` allocates the tid from a shared counter and asks the host for a Worker with its own channel to the same Process; shared memory limits come from the binary's import section (`wasm-imports.ts`). WASIX `futex_wait/wake` use `Atomics.wait/notify` on the shared memory.
+- Browsers refuse `TextDecoder.decode` on views of a SharedArrayBuffer (Node allows it, so vitest misses it). Copy channel bytes before decoding. `Kernel.syscall` currently decodes the channel directly, so WASI guests go through `kernel-channel.ts`, which passes it a private copy (sizes ride in arg slots 10/11) until that is fixed in `src/kernel`.
+- Tests: `tests/tests/shiro-vitest/kernel-wasi.test.ts`. Fixtures are freestanding C (no wasi-sysroot needed; `fixtures/wasi/build.sh`), plus a Go `GOOS=wasip1` program built at test time when Go is installed.
 
 ## Node Processes Share The Page
 
