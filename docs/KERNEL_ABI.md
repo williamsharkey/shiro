@@ -30,6 +30,13 @@ All changes so far are additive; nothing below renames or removes an earlier nam
     implement them. Channels (and the JSPI runner) try it first; a blocked
     pipe read/write (`kernel.readinessFile`) waits on `onReady` and is
     answered synchronously when the other end makes progress.
+  - Round 2: `syscallSync` also answers `openat` of cached files/dirs (no
+    O_CREAT/O_TRUNC; `kernel.openSync`), `close` when nothing needs writing
+    back (new optional `OpenFile.closeSync(): boolean`, `FdTable.closeSync`,
+    `releaseSync`), and stat/lstat/newfstatat from
+    `FileSystem.lookupCached(path, follow)`. A `SyscallHandler` may carry
+    `passSync(proc, nr, args, data, kernel)`: true when it would pass the
+    call on, so registering it doesn't force every call onto the async path.
   - While guests make syscalls back to back the page polls their channels
     for a few tens of µs after each reply (bounded by a 4 ms slice per
     task), so the next request is served without an event-loop round trip.
