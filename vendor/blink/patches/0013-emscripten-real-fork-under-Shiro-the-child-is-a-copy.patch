@@ -1,0 +1,314 @@
+From 98a3dfa934780e7d7c21cbff7cda14bdd315545f Mon Sep 17 00:00:00 2001
+From: shiro <build@shiro>
+Date: Thu, 8 Oct 2026 21:44:35 +0000
+Subject: [PATCH] emscripten: real fork() under Shiro: the child is a copy of
+ the guest in a new Blink
+
+fork() and clone() without CLONE_VM used to run the child on the parent's
+thread with vfork semantics, so a child that didn't exec at once wrote into
+the parent's memory, and one that never exec'd (exit only) broke the parent.
+Now the guest is written out as an image (registers, signal state, brk,
+every mapped page with its protection and contents; untouched reserved
+pages without contents) and handed to the embedder through shiro_fork();
+the page makes the child process (a copy of the fd table) and starts a
+Blink that loads the program, replaces its memory with the image and
+returns 0 from fork. vfork and clone(CLONE_VFORK) keep vfork semantics.
+---
+ blink/blink.c   |   4 +
+ blink/shiro.inc | 248 +++++++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 250 insertions(+), 2 deletions(-)
+
+diff --git a/blink/blink.c b/blink/blink.c
+index 879bffd..fa2182f 100644
+--- a/blink/blink.c
++++ b/blink/blink.c
+@@ -221,6 +221,7 @@ static void ProgramLimit(struct System *s, int hresource, int gresource) {
+ // The system the guest currently runs in, for signals sent from JavaScript.
+ static struct System *_Atomic g_shiro_system;
+ void ShiroInitSystem(struct System *, bool);
++void ShiroForkRestore(struct Machine *);
+ 
+ // Called by the embedder (Shiro's worker host) when the kernel signals this
+ // process: queue `sig` (Linux numbering) on a guest thread that doesn't
+@@ -271,6 +272,9 @@ static int Exec(char *execfn, char *prog, char **argv, char **envp) {
+       AddStdFd(&m->system->fds, i);
+     }
+     ProgramLimit(m->system, RLIMIT_NOFILE, RLIMIT_NOFILE_LINUX);
++#ifdef __EMSCRIPTEN__
++    ShiroForkRestore(m);  // a fork child: load the parent's image
++#endif
+   } else {
+ #ifdef HAVE_JIT
+     DisableJit(&old->system->jit);  // unmapping exec pages is slow
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index af01b37..fddae6e 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -949,6 +949,244 @@ static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
+   return addr;
+ }
+ 
++// ── fork: the child is a copy of this process in a new Blink ─────────────
++//
++// fork() (and clone without CLONE_VM) can't share our memory with the child,
++// so the guest is written out as an image -- registers, signal state, brk,
++// every mapped page with its protection and contents -- and handed to the
++// page (shiro_fork, served by host.mjs and src/x86-engine/blink.ts), which
++// makes the child process with a copy of our fd table and starts a Blink
++// for it that loads the image and returns 0 from fork. Only the calling
++// thread exists in the child, as on Linux. Pages that were never touched
++// anonymous memory (reserved, e.g. Go's arena hints) is recorded without
++// contents. MAP_SHARED
++// file mappings become private copies in the child.
++
++extern int shiro_fork(const void *image, int len);
++
++#define SHIRO_FORK_MAGIC "SHIROFK1"
++
++struct ShiroForkHead {
++  char magic[8];
++  u8 regs[128];
++  u8 xmm[16][16];
++  u64 ip;
++  u64 sigmask;
++  i64 fsbase, gsbase;
++  i64 brk, automap;
++  i64 stack;     // clone(): the child's stack pointer, or 0
++  i64 settid;    // CLONE_CHILD_SETTID: store the child's tid here
++  i64 cleartid;  // CLONE_CHILD_CLEARTID
++  u32 flags;
++  u32 mxcsr;
++  struct MachineFpu fpu;
++  struct sigaction_linux hands[64];
++  struct rlimit_linux rlim[RLIM_NLIMITS_LINUX];
++  u64 nruns;
++};
++
++struct ShiroForkRun {
++  i64 virt;
++  i64 pages;
++  u32 prot;
++  u32 data;  // contents follow (pages * 4096 bytes)
++};
++
++struct ShiroForkBuf {
++  u8 *p;
++  size_t n, c;
++  bool oom;
++  struct ShiroForkRun run;  // the run being collected
++  size_t runat;             // its offset in p
++  bool open;
++};
++
++static void *ShiroForkGrow(struct ShiroForkBuf *b, size_t k) {
++  if (b->oom) return 0;
++  if (b->n + k > b->c) {
++    size_t c = MAX(b->c * 2, b->n + k + (1 << 20));
++    u8 *p = (u8 *)realloc(b->p, c);
++    if (!p) {
++      b->oom = true;
++      return 0;
++    }
++    b->p = p;
++    b->c = c;
++  }
++  b->n += k;
++  return b->p + b->n - k;
++}
++
++static void ShiroForkClose(struct ShiroForkBuf *b) {
++  if (b->open && !b->oom) {
++    memcpy(b->p + b->runat, &b->run, sizeof(b->run));
++    ((struct ShiroForkHead *)b->p)->nruns++;
++  }
++  b->open = false;
++}
++
++static void ShiroForkPage(struct Machine *m, struct ShiroForkBuf *b, i64 virt,
++                          u64 entry) {
++  u8 *dst, *host;
++  // a reserved page has no contents yet, unless it's file-mapped (Blink
++  // loads those on first touch; the host page already has the bytes)
++  u32 prot = GetProtection(entry);
++  u32 data = !(entry & PAGE_RSRV) || (entry & (PAGE_HOST | PAGE_MAP | PAGE_MUG));
++  if (!b->open || virt != b->run.virt + b->run.pages * 4096 ||
++      prot != b->run.prot || data != b->run.data) {
++    ShiroForkClose(b);
++    if (!ShiroForkGrow(b, sizeof(struct ShiroForkRun))) return;
++    b->runat = b->n - sizeof(struct ShiroForkRun);
++    b->run.virt = virt;
++    b->run.pages = 0;
++    b->run.prot = prot;
++    b->run.data = data;
++    b->open = true;
++  }
++  ++b->run.pages;
++  if (!data) return;
++  if (!(dst = (u8 *)ShiroForkGrow(b, 4096))) return;
++  if ((host = GetPageAddress(m->system, entry & ~PAGE_RSRV, false))) {
++    memcpy(dst, host, 4096);
++  } else {
++    memset(dst, 0, 4096);
++  }
++}
++
++static void ShiroForkWalk(struct Machine *m, struct ShiroForkBuf *b, u64 table,
++                          int level, i64 base) {
++  u8 *pt;
++  u64 entry;
++  i64 virt;
++  int i;
++  if (!(pt = GetPageAddress(m->system, table, level == 39))) return;
++  for (i = 0; i < 512; ++i) {
++    entry = LoadPte(pt + i * 8);
++    if (!(entry & PAGE_V)) continue;
++    virt = base | (i64)i << level;
++    if (level == 39 && i >= 256) break;  // the upper half isn't the guest's
++    if (level > 12) {
++      ShiroForkWalk(m, b, entry, level - 9, virt);
++    } else {
++      ShiroForkPage(m, b, virt, entry);
++    }
++  }
++}
++
++static i64 ShiroFork(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
++  struct ShiroForkBuf b = {0};
++  struct ShiroForkHead *h;
++  i64 pid;
++  if (!(h = (struct ShiroForkHead *)ShiroForkGrow(&b, sizeof(*h)))) {
++    return -ENOMEM_LINUX;
++  }
++  memset(h, 0, sizeof(*h));
++  memcpy(h->magic, SHIRO_FORK_MAGIC, 8);
++  memcpy(h->regs, m->beg, sizeof(h->regs));
++  memcpy(h->xmm, m->xmm, sizeof(h->xmm));
++  h->ip = m->ip;
++  h->flags = m->flags;
++  h->mxcsr = m->mxcsr;
++  memcpy(&h->fpu, &m->fpu, sizeof(h->fpu));
++  h->sigmask = m->sigmask;
++  h->fsbase = m->fs.base;
++  h->gsbase = m->gs.base;
++  h->brk = m->system->brk;
++  h->automap = m->system->automap;
++  h->stack = stack;
++  if (flags & CLONE_CHILD_SETTID_LINUX) h->settid = ctid;
++  if (flags & CLONE_CHILD_CLEARTID_LINUX) h->cleartid = ctid;
++  LOCK(&m->system->sig_lock);
++  memcpy(h->hands, m->system->hands, sizeof(h->hands));
++  UNLOCK(&m->system->sig_lock);
++  memcpy(h->rlim, m->system->rlim, sizeof(h->rlim));
++  // the other guest threads are stopped: we hold the GIL (fork isn't a
++  // call that releases it), and mmap/munmap take mmap_lock
++  LOCK(&m->system->mmap_lock);
++  ShiroForkWalk(m, &b, m->system->cr3, 39, 0);
++  ShiroForkClose(&b);
++  UNLOCK(&m->system->mmap_lock);
++  if (b.oom) {
++    free(b.p);
++    return -ENOMEM_LINUX;
++  }
++  if (b.n > 0x7fffffff) {
++    free(b.p);
++    return -ENOMEM_LINUX;
++  }
++  pid = shiro_fork(b.p, (int)b.n);
++  free(b.p);
++  return pid;
++}
++
++static u8 *g_shiro_fork_image;
++static size_t g_shiro_fork_len;
++
++// The embedder (host.mjs) of a fork child puts the image here before main()
++EMSCRIPTEN_KEEPALIVE void *blink_shiro_fork_image(int len) {
++  g_shiro_fork_len = len;
++  return g_shiro_fork_image = (u8 *)malloc(len);
++}
++
++// Called by Exec() after loading the program: become the parent's copy.
++void ShiroForkRestore(struct Machine *m) {
++  struct ShiroForkHead h;
++  struct ShiroForkRun r;
++  u8 *p, *end;
++  u64 i;
++  i64 len;
++  if (!g_shiro_fork_image) return;
++  p = g_shiro_fork_image;
++  end = p + g_shiro_fork_len;
++  if (g_shiro_fork_len < sizeof(h)) Abort();
++  memcpy(&h, p, sizeof(h));
++  p += sizeof(h);
++  if (memcmp(h.magic, SHIRO_FORK_MAGIC, 8)) Abort();
++  unassert(!FreeVirtual(m->system, -0x800000000000, 0x1000000000000));
++  for (i = 0; i < h.nruns; ++i) {
++    if (end - p < (long)sizeof(r)) Abort();
++    memcpy(&r, p, sizeof(r));
++    p += sizeof(r);
++    len = r.pages * 4096;
++    if (!r.data) {
++      unassert(SysMmap(m, r.virt, len, r.prot, 0x32 /* PRIVATE|ANON|FIXED */,
++                       -1, 0) == r.virt);
++      continue;
++    }
++    if (end - p < len) Abort();
++    unassert(SysMmap(m, r.virt, len, PROT_READ | PROT_WRITE, 0x32, -1, 0) ==
++             r.virt);
++    unassert(CopyToUser(m, r.virt, p, len) != -1);
++    if (r.prot != (PROT_READ | PROT_WRITE)) {
++      unassert(!SysMprotect(m, r.virt, len, r.prot));
++    }
++    p += len;
++  }
++  free(g_shiro_fork_image);
++  g_shiro_fork_image = 0;
++  memcpy(m->beg, h.regs, sizeof(h.regs));
++  memcpy(m->xmm, h.xmm, sizeof(h.xmm));
++  m->ip = h.ip;
++  m->flags = h.flags;
++  m->mxcsr = h.mxcsr;
++  memcpy(&m->fpu, &h.fpu, sizeof(m->fpu));
++  m->sigmask = h.sigmask;
++  m->fs.base = h.fsbase;
++  m->gs.base = h.gsbase;
++  m->system->brk = h.brk;
++  m->system->automap = h.automap;
++  memcpy(m->system->hands, h.hands, sizeof(h.hands));
++  memcpy(m->system->rlim, h.rlim, sizeof(h.rlim));
++  Put64(m->ax, 0);  // fork returns 0 in the child
++  if (h.stack) Put64(m->sp, h.stack);
++  if (h.settid) {
++    u8 tid[4];
++    Write32(tid, g_shiro_pid);
++    CopyToUser(m, h.settid, tid, 4);
++  }
++  if (h.cleartid) m->ctid = h.cleartid;
++}
++
+ // ── the dispatcher ───────────────────────────────────────────────────────
+ 
+ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+@@ -1202,11 +1440,17 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     case 0x074: case 0x07A: case 0x07B:                               // set*id, setgroups, setfs*id
+       r = 0;
+       break;
+-    case 0x039: r = ShiroVfork(m, 0, true); break;                    // fork
++    case 0x039:                                                       // fork
++      r = t_vfork ? ShiroVfork(m, 0, true) : ShiroFork(m, 0, 0, 0);
++      break;
+     case 0x03A: r = ShiroVfork(m, 0, false); break;                   // vfork
+     case 0x038:                                                       // clone
+       if (!IsForkOrVfork(a)) return false;                           // threads stay Blink's
+-      r = ShiroVfork(m, b, !(a & CLONE_VFORK_LINUX));
++      if (!(a & CLONE_VFORK_LINUX) && !t_vfork) {
++        r = ShiroFork(m, a, b, d);
++      } else {
++        r = ShiroVfork(m, b, !(a & CLONE_VFORK_LINUX));
++      }
+       break;
+     case 0x03B: r = ShiroExecve(m, a, b, c); break;                   // execve
+     case 0x00D: {                                                     // rt_sigaction
+-- 
+2.43.0
+

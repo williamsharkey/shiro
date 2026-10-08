@@ -282,11 +282,10 @@ target), ~770 regions compiled ≈0.35 s.
 11. Kernel passthrough (`blink/shiro.inc`, included by `syscall.c`): under
    Shiro the guest's fd, filesystem and process syscalls go to the Shiro
    kernel through `shiro_ksys()` (`vendor/blink/shiro-kernel.js`), so guest
-   fd N is kernel fd N. `fork`/`vfork`/`clone(CLONE_VFORK)` run the child on
+   fd N is kernel fd N. `vfork`/`clone(CLONE_VFORK)` run the child on
    the calling thread until it calls `execve` or `_exit` (vfork semantics; the
-   kernel creates the child with `SYS_shiro_vfork`, and `fork` also saves and
-   restores the parent's live stack, which the child's return through libc
-   overwrites). `execve` goes through `SYS_shiro_execve`: an ELF is reloaded
+   kernel creates the child with `SYS_shiro_vfork`). `fork` worked the same
+   way until patch 13. `execve` goes through `SYS_shiro_execve`: an ELF is reloaded
    in this Blink, anything else (WASM, scripts, Shiro builtins like
    `/bin/sh`) replaces the worker in the same process. `rt_sigaction`
    mirrors the guest's dispositions into the kernel (caught signals are
@@ -297,6 +296,20 @@ target), ~770 regions compiled ≈0.35 s.
    transfer) and the tty ioctls (`TIOCSCTTY`, `TIOCGPTN`, ...) are covered;
    locks (`fcntl F_SETLK`, `flock`) always succeed.
 12. The wasm JIT (`blink/wjit.c`), described above.
+13. A real `fork()` (and `clone()` without `CLONE_VM`): the guest is written
+   out as an image (registers, signal state, brk, every mapped page with its
+   protection and contents; untouched anonymous pages without contents, so
+   Go's reserved arenas cost nothing), handed to the page through
+   `shiro_fork()`; `src/x86-engine/blink.ts` makes the child with
+   `kernel.vfork()` (a copy of the fd table) and starts a Blink for it that
+   loads the program, replaces its memory with the image and returns 0 from
+   fork (`CLONE_CHILD_SETTID`/`CLEARTID` honored). Before, the child ran on
+   the parent's thread and memory, so code between fork and exec changed the
+   parent and a child that never exec'd broke it (perl's `fork; open STDOUT,
+   ">&W"; exec`, IPC::Open3 and `prove` got no output). Only the calling
+   thread exists in the child, as on Linux; a `MAP_SHARED` file mapping
+   becomes a private copy in the child. Tests: `fixtures/x86/fork.c` in
+   `x86-engine.test.ts`, the perl cases in `compat-dev.test.ts`.
 
 Native Blink's own exit path (`KillOtherThreads`) still hangs after
 multi-threaded Go programs; the wasm build doesn't use it.

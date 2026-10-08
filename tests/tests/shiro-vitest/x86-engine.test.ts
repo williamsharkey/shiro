@@ -39,6 +39,8 @@ const haveTty = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', ttyBin,
 const haveGlibc = tryBuild('gcc', ['-static', '-Os', '-o', glibcBin, 'hello.c']);
 const jitBin = join(out, 'jit');
 const haveJit = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', jitBin, 'jit.c']);
+const forkBin = join(out, 'fork');
+const haveFork = tryBuild('gcc', ['-static', '-O1', '-o', forkBin, 'fork.c']);
 const fuzzBin = join(out, 'jitfuzz');
 const haveFuzz = tryBuild('gcc', ['-static', '-O1', '-o', fuzzBin, 'jitfuzz.c']);
 
@@ -135,6 +137,32 @@ describe.skipIf(!haveJit || !haveFuzz)('Blink engine: wasm JIT', () => {
     const { shell } = await setup(readFileSync(jitBin));
     const r = await run(shell, './prog threads');
     expect(r.output).toContain('threads counter=800000 plain=300000,300000,300000,300000 locked=784');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+});
+
+// fork() makes a copy of the guest in a new Blink (patch 0013); it used to
+// run the child on the parent's thread with vfork semantics.
+describe.skipIf(!haveFork)('Blink engine: fork', () => {
+  it('gives the child its own memory; a child that never execs exits with its status', async () => {
+    const { shell } = await setup(readFileSync(forkBin));
+    const r = await run(shell, './prog copy');
+    expect(r.output).toContain('child sees 100 c child');
+    expect(r.output).toContain('parent sees 1 p parent status 7');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  it('pipe + fork + dup2 + exec in the child (perl open STDOUT ">&W"; exec)', async () => {
+    const { shell } = await setup(readFileSync(forkBin));
+    const r = await run(shell, './prog pipe');
+    expect(r.output).toContain('pipe got: from-exec');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  it('a fork child forks again', async () => {
+    const { shell } = await setup(readFileSync(forkBin));
+    const r = await run(shell, './prog nested');
+    expect(r.output).toContain('nested status 44 counter 1');
     expect(r.exitCode).toBe(0);
   }, 60_000);
 });

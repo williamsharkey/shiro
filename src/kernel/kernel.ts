@@ -1377,6 +1377,15 @@ export class Kernel {
     return child;
   }
 
+  /**
+   * Starts `runner` in a child made by vfork() that has nothing running yet:
+   * a real fork, whose engine copied the parent's memory into the child.
+   */
+  startEmbryo(child: Process, runner: Runner): void {
+    delete child.data.embryo;
+    void this.start(child, runner);
+  }
+
   /** SYS_shiro_execve (see abi.ts). */
   private async sysExecve(proc: Process, req: { path: string; argv?: string[]; env?: string[]; inproc?: boolean }, data: Uint8Array): Promise<number> {
     if (!req || typeof req.path !== 'string' || !req.path) return -A.ENOENT;

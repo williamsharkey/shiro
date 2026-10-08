@@ -488,6 +488,10 @@ async function run(msg) {
       ch.done = null;
       if (debug) console.error(`[blink] ksys ${ch.i32[CH_SYSNO]} = ${r}`);
       done?.({ r, hi, sig });
+    } else if (m.type === 'blink-forked') {
+      const resolve = forkWaiters.get(m.id);
+      forkWaiters.delete(m.id);
+      resolve?.(m.pid);
     } else if (m.type === 'blink-signal' && !exiting) {
       // The kernel signalled us: any syscall reply carries the signal word.
       sys(SYS.getpid);
@@ -510,9 +514,18 @@ async function run(msg) {
       if (sig <= 32) ignLo |= 1 << (sig - 1); else ignHi |= 1 << (sig - 33);
     }
   }
+  // fork(): the page makes the child and answers 'blink-forked'
+  let forkSeq = 0;
+  const forkWaiters = new Map();
+  const fork = (image) => new Promise((resolve) => {
+    const id = ++forkSeq;
+    forkWaiters.set(id, resolve);
+    port.postMessage({ type: 'blink-fork', id, image: image.buffer }, [image.buffer]);
+  });
   const kernel = {
     sys,
     call,
+    fork,
     get data() { return data; },
     poll: (kfd, events, timeoutMs = 0) => pollFd(kfd, events, timeoutMs),
     watch(kfd, node) { watched.set(kfd, node); post({ type: 'blink-watch', fd: kfd }); },
@@ -557,6 +570,11 @@ async function run(msg) {
     });
     blinkModule = M;
     if (pool.length) M._blink_shiro_enable(msg.pid, chunk, ignLo >>> 0, ignHi >>> 0);
+    if (msg.forkImage) {
+      // a fork child: Blink loads the program, then the parent's image over it
+      const img = new Uint8Array(msg.forkImage);
+      M.HEAPU8.set(img, M._blink_shiro_fork_image(img.length));
+    }
     const argv = msg.argv && msg.argv.length ? msg.argv : [msg.path];
     M.callMain([...(msg.debug && msg.env?.SHIRO_BLINK_STRACE ? ['-s', '-e'] : []), '-0', argv[0], msg.path || argv[0], ...argv.slice(1)]);
   } catch (e) {
