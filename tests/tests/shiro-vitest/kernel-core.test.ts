@@ -327,6 +327,29 @@ describe('kernel processes', () => {
     kernel.kill(proc.pid, A.SIGKILL);
   });
 
+  it('a burst of file writes is stored once it pauses, not after every write', async () => {
+    const proc = kernel.spawn({ path: 'holder', cwd: '/tmp', run: () => new Promise<number>(() => {}) });
+    const f = (await kernel.open(proc, 'kburst.bin', A.O_CREAT | A.O_WRONLY | A.O_TRUNC)) as OpenFile;
+    const real = fs.writeFile.bind(fs);
+    let stores = 0;
+    (fs as any).writeFile = (...a: Parameters<typeof fs.writeFile>) => { stores++; return real(...a); };
+    try {
+      // Timers get to run between writes, as they do for a Worker guest
+      for (let i = 0; i < 40; i++) {
+        expect(await f.write(new Uint8Array(1024).fill(i))).toBe(1024);
+        await new Promise(res => setTimeout(res, 0));
+      }
+      expect(stores).toBeLessThanOrEqual(2);
+      await new Promise(res => setTimeout(res, 60)); // writes paused: stored now
+      const st = await fs.stat('/tmp/kburst.bin');
+      expect(st.size).toBe(40 * 1024);
+      await f.close();
+    } finally {
+      (fs as any).writeFile = real;
+      kernel.kill(proc.pid, A.SIGKILL);
+    }
+  });
+
   it('syscall dispatch: pipe2/dup2/fcntl/getdents in-page', async () => {
     const proc = kernel.spawn({ path: 'sc', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
     const data = new Uint8Array(4096);

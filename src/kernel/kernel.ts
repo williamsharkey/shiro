@@ -654,6 +654,67 @@ export class Kernel {
    * Never TextDecoder.decode it directly (browsers throw on shared memory);
    * decode copies (`decodeText`).
    */
+  /**
+   * The synchronous subset of `syscall`: the result when the call can finish
+   * right now without waiting or I/O (ids, fstat, pipe/file I/O that needs
+   * no wait), else undefined (use `syscall`). Channels try it first: the
+   * reply then goes out without a trip through the microtask queue.
+   * Registered handlers (registerSyscalls) always take the async path.
+   */
+  syscallSync(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): number | undefined {
+    if (proc.state !== 'running' || proc.exiting || this.syscallTable.has(nr)) return undefined;
+    switch (nr) {
+      case A.SYS_read: {
+        const f = proc.fds.get(args[0]);
+        return f?.tryRead?.(data.subarray(0, Math.min(args[1] >>> 0, data.length)));
+      }
+      case A.SYS_write: {
+        const f = proc.fds.get(args[0]);
+        return f?.tryWrite?.(data.subarray(0, Math.min(args[1] >>> 0, data.length)));
+      }
+      case A.SYS_fstat:
+      case A.SYS_newfstatat: {
+        if (nr === A.SYS_newfstatat && !(args[1] === 0 && args[2] & A.AT_EMPTY_PATH)) return undefined;
+        const st = proc.fds.get(args[0])?.statSync?.();
+        if (!st) return undefined;
+        A.encodeStat(st, data);
+        return 0;
+      }
+      case A.SYS_lseek: {
+        const f = proc.fds.get(args[0]);
+        if (!f) return undefined;
+        if (!f.seek) return -A.ESPIPE;
+        return f.seek((args[2] | 0) * 0x100000000 + (args[1] >>> 0), args[3]);
+      }
+      case A.SYS_fcntl: {
+        const cmd = args[1];
+        if (cmd !== A.F_GETFL && cmd !== A.F_GETFD && cmd !== A.F_SETFD) return undefined;
+        const r = this.fcntl(proc, args[0], cmd, args[2]);
+        return typeof r === 'number' ? r : undefined;
+      }
+      case A.SYS_getpid: return proc.pid;
+      case A.SYS_getppid: return proc.ppid;
+      case A.SYS_getuid: return proc.uid;
+      case A.SYS_getgid: return proc.gid;
+      case A.SYS_getpgrp: return proc.pgid;
+      default: return undefined;
+    }
+  }
+
+  /**
+   * For a read or write that syscallSync couldn't finish: the description
+   * to wait on with onReady before trying syscallSync again (pipes and
+   * other files with tryRead/tryWrite), or undefined to use `syscall`.
+   * Writes over PIPE_BUF can complete partially, so they take `syscall`.
+   */
+  readinessFile(proc: Process, nr: number, args: ArrayLike<number>): OpenFile | undefined {
+    if ((nr !== A.SYS_read && nr !== A.SYS_write) || proc.state !== 'running' || proc.exiting || this.syscallTable.has(nr)) return undefined;
+    const f = proc.fds.get(args[0]);
+    if (!f || f.flags & A.O_NONBLOCK) return undefined;
+    if (nr === A.SYS_read) return f.tryRead ? f : undefined;
+    return f.tryWrite && (args[1] >>> 0) <= A.PIPE_BUF ? f : undefined;
+  }
+
   async syscall(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
     if (proc.state === 'stopped') await proc.waitWhileStopped();
     if (proc.exiting) return -A.EINTR;

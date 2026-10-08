@@ -4,6 +4,38 @@
 
 All changes so far are additive; nothing below renames or removes an earlier name.
 
+- **2026-10-08 (unix/perf-kernel)** — all additive; old guests keep working.
+  - **Channel transport:** the kernel serves Worker channels with
+    `KernelChannel.watch()` (Atomics.waitAsync on the state word) when the
+    engine has it (`canWatch()`); the start message then carries
+    `wake: 'atomics'` and guests don't post `'sys'` (they still
+    `Atomics.notify` the state word, which wakes the kernel). Without
+    waitAsync, `wake: 'message'` and the old `'sys'` messages.
+    `worker-host.ts` `serve(channel, worker)` picks one.
+  - **New states:** `STATE_REQUEST_SPIN` (3): a request posted by a guest
+    that spins on the state word (`GuestChannel.spinMs`, 0.1 ms) before
+    sleeping; the kernel's reply needs no `Atomics.notify` while it spins,
+    and the guest compareExchanges 3 → 1 (`STATE_REQUEST`) before
+    `Atomics.wait`. Guests that store 1 are always notified, as before.
+    `STATE_DEAD` (4): `KernelChannel.stop()` closes the channel and
+    notifies; `GuestChannel` throws `ChannelClosed` so the worker unwinds
+    to its event loop. **Rule:** a guest must never park in Atomics.wait on
+    anything but its channel (`GuestChannel.park()`): Chromium can't
+    terminate a Worker parked in Atomics.wait, which leaked every exited
+    WASM process's Worker.
+  - **Sync fast path:** `kernel.syscallSync(proc, nr, args, data)` answers
+    calls that need no waiting or I/O (ids, fstat, lseek, some fcntl, and
+    read/write through the new optional `OpenFile.tryRead/tryWrite`), else
+    `undefined`; `statSync?()` too. Pipes, regular files and /dev/null
+    implement them. Channels (and the JSPI runner) try it first; a blocked
+    pipe read/write (`kernel.readinessFile`) waits on `onReady` and is
+    answered synchronously when the other end makes progress.
+  - While guests make syscalls back to back the page polls their channels
+    for a few tens of µs after each reply (bounded by a 4 ms slice per
+    task), so the next request is served without an event-loop round trip.
+    `wasix-fork` messages can now arrive after `SYS_wasix_fork`; the host
+    waits for the stack.
+
 - **2026-10-08 (unix/compat-tools)**
   - **New syscalls:** `SYS_shiro_vfork` (1010) creates a child process with
     nothing running in it (fd table forked, signal state copied); the
@@ -173,7 +205,8 @@ the Linux wait encoding (`code << 8`, or the signal number).
 Guests run in Workers. Each worker gets one `SharedArrayBuffer`:
 
 ```
-Int32 [0]  state: 0 idle, 1 request posted, 2 reply ready
+Int32 [0]  state: 0 idle, 1 request posted (guest asleep), 2 reply ready,
+           3 request posted (guest spinning), 4 channel closed
 Int32 [1]  syscall number (abi.ts SYS_*)
 Int32 [2]  reply: result (or -errno)
 Int32 [3]  pending-signal flag (kernel sets; guest checks after every reply)
@@ -181,10 +214,13 @@ Int32 [4..15] args (int32; 64-bit values use two slots, lo then hi)
 bytes [64..]  data area (paths, read/write buffers), size fixed at creation (default 1 MiB)
 ```
 
-The guest writes args and data, sets state=1, `postMessage('sys')` (or
-`Atomics.notify` when the kernel lives in a worker), then
-`Atomics.wait(state, 1)`. The kernel performs the async operation, writes
-the reply, sets state=2 and notifies. Transfers larger than the data area
+The guest writes args and data, sets state=3 (from 0), `Atomics.notify`s
+the state word, posts `'sys'` unless the start message said
+`wake: 'atomics'`, spins briefly while the state is 3, then
+compareExchanges 3 → 1 and `Atomics.wait(state, 1)`. The kernel performs
+the operation, writes the reply and exchanges the state to 2, notifying
+unless the previous state was 3. The guest sets 2 → 0 (compareExchange; 4
+means the channel closed). Older guests that set 1 and wait still work. Transfers larger than the data area
 are split by the guest-side library, never by the kernel.
 
 When `crossOriginIsolated` is false (no SAB), WASM guests run on the main

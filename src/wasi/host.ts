@@ -17,7 +17,7 @@ import * as A from '../kernel/abi';
 import { KernelChannel, SYS_MESSAGE, canBlock, createChannelBuffer } from '../kernel/channel';
 import type { Kernel, Runner } from '../kernel/kernel';
 import { Process } from '../kernel/process';
-import { attachThread, type GuestWorker } from '../kernel/worker-host';
+import { attachThread, serve, type GuestWorker } from '../kernel/worker-host';
 import {
   SYS_wasi_thread_spawn, SYS_wasix_exec, SYS_wasix_fork, SYS_wasix_resolve, SYS_wasix_signal,
   WASIX_HANDLER, WASIX_SIG_CATCH, WASIX_SIG_DEFAULT, WASIX_SIG_IGNORED, type SysReply, type SysRequest,
@@ -25,6 +25,7 @@ import {
 import type { WasiGuestMessage, WasiStartMessage, WasixForkState } from './guest-worker';
 import { ProcExit, WasiGuest, buildImports, type Preopen } from './wasi-guest';
 import { findMemoryImport } from './wasm-imports';
+import { createWorkerPool, type WorkerPool } from './worker-pool';
 import { dylinkLayout, readDylink } from './dylink';
 import { readFuncSigs, type FuncSigs } from './dyncall';
 
@@ -33,14 +34,25 @@ import { readFuncSigs, type FuncSigs } from './dyncall';
 export type GuestWorkerFactory = (proc: Process) => GuestWorker;
 
 let workerFactory: GuestWorkerFactory | null = null;
+let pool: WorkerPool | null = null;
 
 /** Override how guest Workers are created (tests use Node worker_threads). */
-export function setGuestWorkerFactory(f: GuestWorkerFactory | null): void { workerFactory = f; }
+export function setGuestWorkerFactory(f: GuestWorkerFactory | null): void {
+  pool?.drain();
+  pool = null;
+  workerFactory = f;
+}
 
+/** Guest Workers come from a pool (./worker-pool.ts): a process's Worker runs the next process after it. */
 async function getWorkerFactory(): Promise<GuestWorkerFactory> {
   if (!workerFactory) workerFactory = (await import('./browser-worker')).createGuestWorker;
-  return workerFactory;
+  pool ??= createWorkerPool(workerFactory);
+  const p = pool;
+  return (proc) => p.acquire(proc);
 }
+
+/** The guest Worker pool, once a WASM process has run (tests, diagnostics). */
+export function guestWorkerPool(): WorkerPool | null { return pool; }
 
 export type RunMode = 'sab' | 'jspi';
 let forcedMode: RunMode | null = null;
@@ -139,7 +151,7 @@ function installWasiSyscalls(kernel: Kernel): void {
     return spawn ? spawn(args[0]) : -A.ENOSYS;
   });
   kernel.registerSyscalls([SYS_wasix_fork], (proc) => {
-    const fork = proc.data.wasixFork as (() => number) | undefined;
+    const fork = proc.data.wasixFork as (() => number | Promise<number>) | undefined;
     return fork ? fork() : -A.ENOSYS;
   });
   kernel.registerSyscalls([SYS_wasix_exec], (proc, _nr, args, data) => {
@@ -298,7 +310,11 @@ function runWorkers(
     });
     const onGuestMessage = (m: unknown, isThread: boolean) => {
       const msg = m as WasiGuestMessage;
-      if (msg?.type === 'wasix-fork') { proc.data.wasixForkState = msg.state; return; }
+      if (msg?.type === 'wasix-fork') {
+        proc.data.wasixForkState = msg.state;
+        forkStateArrived?.();
+        return;
+      }
       if (msg?.type === 'wasix-signals') { signalInfo = msg; return; }
       if (msg?.type !== 'wasi-error' || proc.exiting) return;
       // Could not instantiate: 126 like an exec failure, or abort if a thread failed
@@ -321,6 +337,7 @@ function runWorkers(
       };
     }
 
+    let forkStateArrived: (() => void) | null = null;
     const w = factory(proc);
     const sab = createChannelBuffer();
     const channel = new KernelChannel(sab, kernel, proc);
@@ -357,7 +374,16 @@ function runWorkers(
 
     // WASIX fork: a new process with a copy of this one's memory, fds and
     // signal state, resuming from the stack the guest captured (proc_fork)
-    proc.data.wasixFork = (): number => {
+    proc.data.wasixFork = async (): Promise<number> => {
+      // The guest posts its stack before the syscall; a kernel watching the
+      // channel (not waiting for messages) can see the syscall first
+      if (!proc.data.wasixForkState && !replaced && !proc.exiting) {
+        await new Promise<void>(r => {
+          const t = setTimeout(r, 5000);
+          forkStateArrived = () => { clearTimeout(t); r(); };
+        });
+        forkStateArrived = null;
+      }
       const state = proc.data.wasixForkState as WasixForkState | undefined;
       delete proc.data.wasixForkState;
       if (!state || !memory || replaced) return -A.ENOSYS;
@@ -401,17 +427,15 @@ function runWorkers(
       resolve((async () => runner(proc, kernel))());
       return 0; // never reaches the guest: its channel is stopped
     };
-    w.onMessage((m) => {
-      if (m === SYS_MESSAGE) void channel.handle();
-      else onGuestMessage(m, false);
-    });
+    const wake = serve(channel, w);
+    w.onMessage((m) => { if (m !== SYS_MESSAGE) onGuestMessage(m, false); });
     w.onError((err) => {
       if (proc.exiting) return;
       void kernel.writeAll(proc, 2, new TextEncoder().encode(`${proc.comm}: ${(err as Error)?.message ?? err}\n`))
         .finally(() => kernel.exit(proc, A.W_TERMSIG(A.SIGABRT)));
     });
     const start: WasiStartMessage = {
-      type: 'shiro-start', sab, pid: proc.pid, argv: proc.argv, env: proc.env, cwd: proc.cwd,
+      type: 'shiro-start', sab, pid: proc.pid, argv: proc.argv, env: proc.env, cwd: proc.cwd, wake,
       wasi: { ...wasi(), ...(resume ? { resume: resume.state } : {}) },
     };
     w.postMessage(start);
@@ -430,12 +454,16 @@ async function runJspi(kernel: Kernel, proc: Process, module: WebAssembly.Module
   killedP.catch(() => { /* observed through the race below */ });
   proc.onTerminate(() => killed(new ProcExit(proc.exitStatus ?? 0)));
 
-  const call = async (req: SysRequest): Promise<SysReply> => {
+  const call = (req: SysRequest): SysReply | Promise<SysReply> => {
     const data = new Uint8Array(Math.max(req.data?.length ?? 0, req.out ?? 0, 64));
     if (req.data) data.set(req.data);
-    const ret = await Promise.race([kernel.syscall(proc, req.nr, req.args, data), killedP]);
-    if (proc.exiting) throw new ProcExit(proc.exitStatus ?? 0);
-    return { ret, data };
+    // Answered at once (ids, fstat, pipe I/O with data or room): no suspension
+    const fast = kernel.syscallSync(proc, req.nr, req.args, data);
+    if (fast !== undefined) return { ret: fast, data };
+    return Promise.race([kernel.syscall(proc, req.nr, req.args, data), killedP]).then(ret => {
+      if (proc.exiting) throw new ProcExit(proc.exitStatus ?? 0);
+      return { ret, data };
+    });
   };
   const guest = new WasiGuest({ args: proc.argv, env: proc.env, preopens, dataSize: 4 << 20 });
   const instance = await WebAssembly.instantiate(module, buildImports(guest, module, 'jspi', call));

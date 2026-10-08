@@ -150,6 +150,78 @@ Not fixed (reported for the owning workstreams):
 - src/x86 can't run Go (`fatal error: float64nan`) or static glibc
   (`Unknown two-byte opcode: 0F 62`) — known, see `X86_ENGINES.md`.
 
+## Performance log
+
+Each entry: what changed, and `node bench/compare.mjs` numbers against the
+baseline (`bench/results/integration-970831e-quick.json`, quick mode). This
+container's speed drifts between runs (`wasm.cpu_loop.native`, a gcc binary
+nothing here touches, moved ±20%), so suspicious deltas were re-run A/B
+against the baseline commit built in a worktree ("base here" column:
+`cc8539e` on this machine, same session).
+
+### unix/perf-kernel, round 1: syscall transport, Worker leak and pool, file flush
+
+`bench/results/perf-kernel-r1-quick.json`. Changes:
+
+- **SAB channel transport** (`src/kernel/channel.ts`). The kernel watches each
+  guest's state word with `Atomics.waitAsync` instead of a `'sys'`
+  postMessage per call; guests spin ~0.1 ms before sleeping and mark that in
+  the state word (`STATE_REQUEST_SPIN`), so replies to a spinning guest need
+  no `Atomics.notify` (it cost ~10–25 µs on the page). While guests make
+  calls back to back, one page-side pump polls every hot channel for 30 µs
+  after each reply (bounded to 4 ms per task, then it yields), so their next
+  request is served without an event-loop round trip.
+- **Sync fast path**: `kernel.syscallSync` answers ids, fstat, lseek, fcntl
+  get/setfd and read/write that need no waiting (new optional
+  `OpenFile.tryRead/tryWrite/statSync`: pipes, regular files, /dev/null)
+  with no microtask hops; JSPI guests skip suspension for them. A blocked
+  pipe read/write waits on `onReady` and is answered inside the call that
+  makes it ready.
+- **Worker leak**: Chromium can't terminate a Worker parked in
+  `Atomics.wait`, and every exited WASM process left its guest parked there
+  (60 Workers, ~70 MiB RSS per round of 100 processes). The kernel now closes
+  the channel (`STATE_DEAD` + notify), the guest throws `ChannelClosed`,
+  unwinds to its event loop, and the Worker is reused or terminated.
+- **Worker pool** (`src/wasi/worker-pool.ts`): an unwound guest Worker
+  reports `wasi-idle` and runs the next WASM process; up to 8 wait during
+  bursts, 2 after 10 s without spawns, one is pre-started after each spawn.
+- **Kernel file write-back** (`Inode` in `fd.ts`): flushed once writes pause
+  for 25 ms (at most every 1 s), not on a 0 ms timer after every write; each
+  flush stores the whole file, so a 4 MiB file written in 64 KiB pieces was
+  stored 64 times.
+
+| metric (isolated unless noted) | unit | baseline | base here | round 1 |
+|---|---|---|---|---|
+| kernel.syscall_rtt.sab | µs | 155 | 92.6 | **3.72** |
+| kernel.syscall_rtt.jspi (non-isolated) | µs | 10.8 | 8.00 | 5.48 |
+| kernel.pipe_throughput_512b | MB/s | 6.62 | 11.4 | **69.7** |
+| kernel.pipe_throughput_512b (non-isolated) | MB/s | 56.3 | 61.0 | 127 |
+| kernel.pipe_throughput (64 KiB) | MB/s | 355 | 495 | 759 |
+| kernel.file_write | MB/s | 14.2 | 21.6 | **236** |
+| kernel.file_read | MB/s | 496 | 757 | 2213 |
+| kernel.spawn_wait.wasm | ms | 14.5 | 8.76 | **0.53** |
+| kernel.spawn_throughput.wasm | proc/s | 128 | 198 | 364 |
+| kernel.epoll_wakeup | µs | 54.1 | 28.9 | 29.4 |
+| hygiene.procs100.workers_left | count | 60 | 88 | **2** (the idle pool) |
+| hygiene.procs100.rss_delta | MiB/round | 69.8 | 87.0 | **6.06** |
+| wasm.ripgrep.tree | ms | 1137 | 681 | **189** |
+| wasm.startup.lua / sqlite3 / ripgrep | ms | 22 / 27 / 26 | 15 / 19 / 16 | 4.8 / 6.7 / 6.1 |
+| wasm.sqlite.recursive_cte | ms | 153 | 107 | 97.9 |
+
+`compare.mjs` against the baseline: 54 improved, 5 flagged. The flagged ones
+are machine drift or noise: `wasm.cpu_loop.{native,node,shiro}` +13–18%
+(native included), `x86.blink.peak_rss.go_nethttp` +20% (Blink does not use
+the changed channel code), and non-isolated `kernel.spawn_wait.wasm`
+0.5 → 1.5 ms, which is 0.9–1.15 ms for the base commit here too (first
+samples of the metric vary 0.3–9 ms). Three interleaved A/B kernel runs had
+one real regression, isolated `spawn_throughput.builtin` −40%: the pool
+terminated surplus Workers in the middle of the benchmark's builtin rounds;
+keeping 8 idle during bursts and trimming later fixed it (7837/6620 vs base
+4941/8323 proc/s). Boot/shell/x86 A/B: no difference beyond noise.
+
+Still open: 512-byte pipe I/O is ~70 MB/s isolated (target >100); each call
+is now ~2–3 µs, near the cost of the cross-thread handoff itself.
+
 ## Results
 
 <!-- bench:table:begin -->

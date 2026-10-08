@@ -93,7 +93,8 @@ export interface GuestOptions {
 }
 
 export type SyncCall = (req: SysRequest) => SysReply;
-export type AsyncCall = (req: SysRequest) => Promise<SysReply>;
+/** A reply that is ready at once may come back directly (no suspension under JSPI). */
+export type AsyncCall = (req: SysRequest) => SysReply | Promise<SysReply>;
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -1477,14 +1478,21 @@ export function runSync<T>(gen: Sys<T>, call: SyncCall): T {
   return r.value;
 }
 
-/** The result directly when the generator never yields, else a promise. */
+/** The result directly when every call the generator makes is answered at once, else a promise. */
 export function runMaybeAsync<T>(gen: Sys<T>, call: AsyncCall): T | Promise<T> {
   let r = gen.next();
-  if (r.done) return r.value;
-  return (async () => {
-    while (!r.done) r = gen.next(await call(r.value));
-    return r.value;
-  })();
+  while (!r.done) {
+    const reply = call(r.value);
+    if (reply instanceof Promise) {
+      return (async () => {
+        r = gen.next(await reply);
+        while (!r.done) r = gen.next(await call(r.value));
+        return r.value;
+      })();
+    }
+    r = gen.next(reply);
+  }
+  return r.value;
 }
 
 const isGen = (x: any): x is Sys<any> => x && typeof x.next === 'function' && typeof x.throw === 'function';

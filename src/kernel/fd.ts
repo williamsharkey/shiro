@@ -58,6 +58,15 @@ export interface OpenFile {
   sync?(): Promise<void>;
   /** Path the description was opened with, when it has one (diagnostics, /proc). */
   path?: string;
+  /**
+   * Fast paths (Kernel.syscallSync): finish the call now when that needs no
+   * waiting and no I/O (pipe data buffered, room in the pipe, file contents
+   * in memory). `undefined` means "use the async method"; anything else is
+   * the result the async method would have returned.
+   */
+  tryRead?(buf: Uint8Array): number | undefined;
+  tryWrite?(buf: Uint8Array): number | undefined;
+  statSync?(): KStat | undefined;
 }
 
 // ── Reference counting ──────────────────────────────────────────────────────
@@ -249,6 +258,7 @@ abstract class DevFile implements OpenFile {
   onReady(cb: () => void): () => void { return this.listeners.add(cb); }
   seek(): number { return 0; }
   async stat(): Promise<KStat> { return charDevStat(this.rdev); }
+  statSync(): KStat { return charDevStat(this.rdev); }
   async close(): Promise<void> {}
 }
 
@@ -257,6 +267,8 @@ export class DevNull extends DevFile {
   constructor(flags = 2) { super(flags, '/dev/null', 0x103); }
   async read(): Promise<number> { return 0; }
   async write(buf: Uint8Array): Promise<number> { return buf.length; }
+  tryRead(): number { return 0; }
+  tryWrite(buf: Uint8Array): number { return buf.length; }
 }
 
 /** /dev/zero: endless zero bytes. */
@@ -396,10 +408,18 @@ export class BufferFile implements OpenFile {
 /**
  * File contents shared by every description open on the same path, so two
  * fds see each other's writes. Loaded on first open, written back to the
- * FileSystem shortly after each write and when the last description closes.
+ * FileSystem FLUSH_DELAY_MS after a write and when a description closes.
  * Writes made through the FileSystem API directly while a file is open are
  * not seen until every kernel description of it has closed.
  */
+/**
+ * Written data goes to the FileSystem once writes pause for FLUSH_DELAY_MS,
+ * and at least every FLUSH_MAX_DELAY_MS while they continue (close and fsync
+ * flush at once).
+ */
+const FLUSH_DELAY_MS = 25;
+const FLUSH_MAX_DELAY_MS = 1000;
+
 class Inode {
   data: Uint8Array;
   size: number;
@@ -421,9 +441,26 @@ class Inode {
   }
 
   touch() {
+    const now = Date.now();
+    if (!this.dirty) this.dirtySince = now;
     this.dirty = true;
-    this.mtimeMs = Date.now();
-    if (!this.flushTimer) this.flushTimer = setTimeout(() => { this.flushTimer = null; void this.flush(); }, 0);
+    this.mtimeMs = this.lastWrite = now;
+    // Each flush writes the whole file: wait for a burst of writes to pause (a
+    // program writing 64 KiB at a time used to store the file after every write)
+    if (!this.flushTimer) this.armFlush(FLUSH_DELAY_MS);
+  }
+
+  private dirtySince = 0;
+  private lastWrite = 0;
+
+  private armFlush(ms: number) {
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      const now = Date.now();
+      const quiet = now - this.lastWrite;
+      if (this.dirty && quiet < FLUSH_DELAY_MS && now - this.dirtySince < FLUSH_MAX_DELAY_MS) this.armFlush(FLUSH_DELAY_MS - quiet);
+      else void this.flush();
+    }, ms);
   }
 
   async flush(): Promise<void> {
@@ -479,7 +516,9 @@ export class RegularFile implements OpenFile {
 
   get path(): string { return this.ino.path; }
 
-  async read(buf: Uint8Array): Promise<number> {
+  async read(buf: Uint8Array): Promise<number> { return this.tryRead(buf); }
+
+  tryRead(buf: Uint8Array): number {
     if (!canRead(this.flags)) return -EBADF;
     const n = Math.max(0, Math.min(buf.length, this.ino.size - this.pos));
     if (n > 0) buf.set(this.ino.data.subarray(this.pos, this.pos + n));
@@ -487,7 +526,9 @@ export class RegularFile implements OpenFile {
     return n;
   }
 
-  async write(buf: Uint8Array): Promise<number> {
+  async write(buf: Uint8Array): Promise<number> { return this.tryWrite(buf); }
+
+  tryWrite(buf: Uint8Array): number {
     if (!canWrite(this.flags)) return -EBADF;
     const ino = this.ino;
     if (this.flags & O_APPEND) this.pos = ino.size;
@@ -518,7 +559,7 @@ export class RegularFile implements OpenFile {
     if (append) this.flags &= ~O_APPEND;
     try {
       if (append) this.pos = this.ino.size;
-      return await this.write(buf);
+      return this.tryWrite(buf);
     } finally {
       if (append) this.flags |= O_APPEND;
       this.pos = save;
@@ -561,7 +602,9 @@ export class RegularFile implements OpenFile {
     return -ENOTTY;
   }
 
-  async stat(): Promise<KStat> {
+  async stat(): Promise<KStat> { return this.statSync(); }
+
+  statSync(): KStat {
     const ino = this.ino;
     return {
       dev: 1, ino: inodeNumber(ino.path), mode: S_IFREG | (ino.mode & 0o7777), nlink: 1, uid: 1000, gid: 1000, rdev: 0,
