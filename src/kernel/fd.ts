@@ -12,7 +12,7 @@ import {
   type KStat, EBADF, EMFILE, EINVAL, EISDIR, ESPIPE, ENOTTY, EAGAIN, EINTR,
   O_ACCMODE, O_RDONLY, O_WRONLY, O_APPEND, O_NONBLOCK, OPEN_MAX,
   POLLIN, POLLOUT, SEEK_SET, SEEK_CUR, SEEK_END,
-  S_IFCHR, S_IFREG, S_IFDIR, FIONREAD,
+  S_IFCHR, S_IFREG, S_IFDIR, S_IFIFO, FIONREAD,
 } from './abi';
 
 export type OpenFileKind = 'file' | 'dir' | 'pipe' | 'pty' | 'socket' | 'dev' | 'epoll';
@@ -306,9 +306,13 @@ export class BufferFile implements OpenFile {
   private listeners = new ReadyListeners();
   onData?: (data: Uint8Array) => void;
 
-  constructor(input: Uint8Array | string | null = null, public flags = 2, opts: { open?: boolean } = {}) {
+  /** Reports itself as a FIFO, so isatty() is false (piped stdin) */
+  private fifo: boolean;
+
+  constructor(input: Uint8Array | string | null = null, public flags = 2, opts: { open?: boolean; fifo?: boolean } = {}) {
     this.input = typeof input === 'string' ? new TextEncoder().encode(input) : (input ?? new Uint8Array(0));
     this.ended = !opts.open;
+    this.fifo = !!opts.fifo;
   }
 
   /** Append more input (only for a BufferFile created with `{ open: true }`). */
@@ -380,7 +384,10 @@ export class BufferFile implements OpenFile {
     }
     return -ENOTTY;
   }
-  async stat(): Promise<KStat> { return charDevStat(0); }
+  async stat(): Promise<KStat> {
+    const st = charDevStat(0);
+    return this.fifo ? { ...st, mode: S_IFIFO | 0o600 } : st;
+  }
   async close(): Promise<void> { this.end(); }
 }
 

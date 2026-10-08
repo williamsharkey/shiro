@@ -745,9 +745,8 @@ echo "${DM}  Try adding a function or a loop${RS}"`,
         level: 'intermediate',
         cmd: `echo "${CY}--- WASM Packages: Real Software in the Browser ---${RS}"
 echo ""
-echo "${DM}Shiro can install real packages from the ${BD}Wasmer registry${RS}${DM}.${RS}"
-echo "${DM}These are WebAssembly binaries — compiled code running at near-native speed.${RS}"
-echo "${DM}22 packages available, cached in IndexedDB for instant re-runs.${RS}"
+echo "${DM}Shiro installs real programs compiled to ${BD}WebAssembly${RS}${DM}: built from source here or from the Wasmer registry.${RS}"
+echo "${DM}Every download is sha256-checked and installed to /usr/lib/pkg, with commands in /usr/bin.${RS}"
 echo ""
 echo "${GN}> Installing cowsay...${RS}"
 pkg install cowsay && echo "${GN}> Installing figlet...${RS}" && pkg install figlet && echo "${GN}> Installing fortune...${RS}" && pkg install fortune
@@ -761,11 +760,12 @@ echo ""
 echo "${YL}--- fortune | cowsay: chained pipeline ---${RS}"
 fortune | cowsay
 echo ""
-echo "${DM}These are real WASM binaries from cdn.wasmer.io, not JavaScript shims.${RS}"
+echo "${DM}These are real WASM binaries, not JavaScript shims (try: which cowsay; ls -l /usr/bin/cowsay).${RS}"
 echo "${DM}They run in a WASI sandbox with full stdin/stdout piping.${RS}"
 echo ""
 echo "${DM}What to try next:${RS}"
-echo "${DM}  pkg available                    (see all 22 packages)${RS}"
+echo "${DM}  pkg available                    (every package and its status)${RS}"
+echo "${DM}  apt install sqlite lua jq        (SQLite 3.50, Lua 5.4, jq 1.8 built from source)${RS}"
 echo "${DM}  pkg install qr2text && echo 'https://shiro.computer' | qr2text${RS}"
 echo "${DM}  pkg install lolcat && echo 'Rainbow text!' | lolcat${RS}"
 echo "${DM}  fortune | figlet | lolcat        (triple pipeline)${RS}"`,

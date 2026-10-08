@@ -332,6 +332,27 @@ export class WasiGuest {
         },
       },
       wasix_32v1: {
+        // WASIX libc startup asks for the inherited signal dispositions and
+        // exits 71 through proc_exit2 when that fails. None are inherited here.
+        proc_signals_sizes_get: (ptr: number) => { this.view().setUint32(ptr, 0, true); return 0; },
+        proc_signals_get: () => 0,
+        proc_exit2: g(function* (this: WasiGuest, code: number) { return yield* this.exit(code); }),
+        // path_open plus WASIX fd flags (bit 0: close-on-exec)
+        path_open2: g(function* (this: WasiGuest, dirfd: number, dirflags: number, p: number, l: number, oflags: number,
+          rb: bigint, ri: bigint, fdflags: number, fdflagsExt: number, fdPtr: number) {
+          const r = yield* this.path_open(dirfd, dirflags, p, l, oflags, rb, ri, fdflags, fdPtr);
+          if (r === 0 && (fdflagsExt & 1)) yield* this.call(A.SYS_fcntl, this.view().getUint32(fdPtr, true), A.F_SETFD, A.FD_CLOEXEC);
+          return r;
+        }),
+        fd_fdflags_get: g(function* (this: WasiGuest, fd: number, ptr: number) {
+          const r = yield* this.call(A.SYS_fcntl, fd, A.F_GETFD, 0);
+          if (r < 0) return wasiErrno(r);
+          this.view().setUint16(ptr, r & A.FD_CLOEXEC ? 1 : 0, true);
+          return 0;
+        }),
+        fd_fdflags_set: g(function* (this: WasiGuest, fd: number, flags: number) {
+          return wasiErrno(yield* this.call(A.SYS_fcntl, fd, A.F_SETFD, flags & 1 ? A.FD_CLOEXEC : 0));
+        }),
         fd_pipe: g(function* (this: WasiGuest, rp: number, wp: number) {
           const r = yield* this.sys(A.SYS_pipe2, [0], undefined, 8);
           if (r.ret < 0) return wasiErrno(r.ret);
@@ -945,7 +966,9 @@ export function buildImports(
     const ns = (imports[imp.module] ??= {});
     if (extra[imp.module]?.[imp.name] !== undefined) { ns[imp.name] = extra[imp.module][imp.name]; continue; }
     if (imp.kind !== 'function') continue;
-    const impl = impls[imp.module]?.[imp.name];
+    // Early WASIX builds (dash) import the preview1 calls under wasix_32v1
+    const impl = impls[imp.module]?.[imp.name] ??
+      (imp.module === 'wasix_32v1' ? impls.wasi_snapshot_preview1?.[imp.name] : undefined);
     if (!impl) {
       if (/^wasi|^wasix/.test(imp.module)) ns[imp.name] = () => WASI_ENOSYS;
       else ns[imp.name] = () => { throw new Error(`unresolved import ${imp.module}.${imp.name}`); };

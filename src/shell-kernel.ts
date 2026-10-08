@@ -16,6 +16,7 @@ import type { Runner, Kernel } from './kernel/kernel';
 import type { Process } from './kernel/process';
 import type { OpenFile } from './kernel/fd';
 import * as A from './kernel/abi';
+import { packageOfPath, packageShadows, packageKernelProgram } from './pkg-manager';
 
 /** Bash builtins the shell implements inline (never looked up on PATH) */
 const SHELL_BUILTINS = new Set([
@@ -40,7 +41,9 @@ const isElfBytes = (b: Uint8Array) => b.length >= 4 && b[0] === 0x7f && b[1] ===
 
 /** Should `name` be looked up as a kernel program at all? (not a builtin, function, alias or JS command) */
 export function mayBeKernelProgram(shell: Shell, name: string): boolean {
-  return !!name && !SHELL_BUILTINS.has(name) && !shell.commands.get(name) && !shell.functions[name] && !shell.aliases.has(name);
+  if (!name || SHELL_BUILTINS.has(name) || shell.functions[name] || shell.aliases.has(name)) return false;
+  // An installed package's command replaces a builtin of the same name (pkg-manager.ts)
+  return !shell.commands.get(name) || (shell.pkgShadowBypass !== name && packageShadows(shell.fs).has(name));
 }
 
 /**
@@ -66,6 +69,8 @@ export async function resolveKernelProgram(
     return null;
   }
   const base = name.slice(name.lastIndexOf('/') + 1);
+  // pkg-installed binaries carry their own arguments, preopens and kernel gate
+  if (packageOfPath(path)) return packageKernelProgram(shell.fs, path, base, args);
   const { wasmProcessMode, wasmRunner } = await import('./wasi/host');
 
   if (isWasmBytes(bytes)) {

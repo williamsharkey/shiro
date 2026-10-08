@@ -25,7 +25,7 @@ import { edCmd } from '@shiro/commands/ed';
 import { iconvCmd } from '@shiro/commands/iconv';
 import { zipCmd, unzipCmd } from '@shiro/commands/zip';
 import { wasiCmd } from '@shiro/commands/wasi';
-import { pkgCmd } from '@shiro/commands/pkg';
+import { pkgCmd, aptCmd, aptGetCmd } from '@shiro/commands/pkg';
 import { xpkgCmd } from '@shiro/commands/xpkg';
 import { bzip2Cmd, bunzip2Cmd } from '@shiro/commands/bzip2';
 import { xzCmd, unxzCmd } from '@shiro/commands/xz';
@@ -90,6 +90,8 @@ export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell 
   commands.register(unzipCmd);
   commands.register(wasiCmd);
   commands.register(pkgCmd);
+  commands.register(aptCmd);
+  commands.register(aptGetCmd);
   commands.register(xpkgCmd);
   commands.register(bzip2Cmd);
   commands.register(bunzip2Cmd);

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { existsSync, readFileSync } from 'fs';
 import { createTestShell, run } from './helpers';
 import { Shell } from '@shiro/shell';
 import { FileSystem } from '@shiro/filesystem';
@@ -12,6 +13,14 @@ import {
   findPackage, searchPackages, listAvailable, isAvailableAsPackage,
   downloadPackage, getCachedPackage, extractWasmFromWebc,
 } from '@shiro/wasi-packages';
+
+/** fetch stub: "/pkg/..." URLs (the Shiro package mirror) come from public/pkg in this repo */
+async function servePublicPkg(input: any): Promise<Response> {
+  const m = String(input).match(/^https?:\/\/[^/]+(\/pkg\/.*)$/);
+  const repo = decodeURIComponent(new URL('../../..', import.meta.url).pathname).replace(/\/$/, '');
+  if (m && existsSync(`${repo}/public${m[1]}`)) return new Response(readFileSync(`${repo}/public${m[1]}`));
+  return new Response('not found', { status: 404 });
+}
 
 // ═══════════════════════════════════════════════════════════════════
 //  A. wasi-runtime.ts unit tests
@@ -192,7 +201,7 @@ describe('WasiRT constructor', () => {
       'fd_close', 'fd_datasync', 'fd_fdstat_get', 'fd_fdstat_set_flags',
       'fd_filestat_get', 'fd_filestat_set_size', 'fd_filestat_set_times',
       'fd_pread', 'fd_prestat_get', 'fd_prestat_dir_name',
-      'fd_pwrite', 'fd_read', 'fd_readdir',
+      'fd_pwrite', 'fd_read', 'fd_readdir', 'fd_renumber',
       'fd_seek', 'fd_sync', 'fd_tell', 'fd_write',
       'path_create_directory', 'path_filestat_get', 'path_filestat_set_times',
       'path_link', 'path_open', 'path_readlink',
@@ -908,8 +917,8 @@ describe('wasi-packages', () => {
     expect(results.some(p => p.name === 'cowsay')).toBe(true);
   });
 
-  it('searchPackages("utility") returns multiple', () => {
-    const results = searchPackages('utility');
+  it('searchPackages("utils") returns multiple', () => {
+    const results = searchPackages('utils');
     expect(results.length).toBeGreaterThan(1);
   });
 
@@ -931,9 +940,9 @@ describe('wasi-packages', () => {
   it('finds packages by alias', () => {
     expect(findPackage('qjs')?.name).toBe('quickjs');
     expect(findPackage('sqlite3')?.name).toBe('sqlite');
-    expect(findPackage('hexdump')?.name).toBe('util-linux');
+    expect(findPackage('cal')?.name).toBe('util-linux');
     expect(findPackage('wat2wasm')?.name).toBe('wabt');
-    expect(findPackage('irb')?.name).toBe('ruby');
+    expect(findPackage('luac')?.name).toBe('lua');
   });
 
   it('includes new packages (bash, ruby, php, openssl, wabt, etc.)', () => {
@@ -946,44 +955,34 @@ describe('wasi-packages', () => {
     expect(findPackage('brotli')).toBeDefined();
     expect(findPackage('uuid')).toBeDefined();
     expect(findPackage('qr2text')).toBeDefined();
-    expect(findPackage('optipng')).toBeDefined();
+    expect(findPackage('coreutils')).toBeDefined();
+    expect(findPackage('jq')).toBeDefined();
   });
 
-  it('all packages have webc format and cdn.wasmer.io URLs', () => {
-    const all = listAvailable();
-    for (const pkg of all) {
-      expect(pkg.format).toBe('webc');
-      expect(pkg.url).toContain('cdn.wasmer.io/webcimages/');
+  it('registry packages are WebC from cdn.wasmer.io; Shiro builds are wasm on /pkg', () => {
+    for (const pkg of listAvailable()) {
+      if (pkg.format === 'webc') expect(pkg.url).toContain('cdn.wasmer.io/webcimages/');
+      else expect(pkg.url).toMatch(/^\/pkg\/.*\.wasm$/);
     }
+    expect(findPackage('cowsay')!.format).toBe('webc');
+    expect(findPackage('lua')!.format).toBe('wasm');
   });
 
   it('downloadPackage + getCachedPackage round-trip via IndexedDB', async () => {
-    // Mock fetch to return a fake WebC container with embedded WASM
-    // Build a fake webc: some header bytes + WASM magic + version + minimal content
-    const wasmPayload = new Uint8Array([
-      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // WASM magic + version
-      0x01, 0x04, 0x01, 0x60, 0x00, 0x00, // type section
-    ]);
-    // Wrap in a fake webc container (some random header bytes before the WASM)
-    const webcHeader = new Uint8Array([0x57, 0x45, 0x42, 0x43, 0x00, 0x00, 0x00, 0x10]);
-    const fakeWebc = new Uint8Array(webcHeader.length + wasmPayload.length);
-    fakeWebc.set(webcHeader, 0);
-    fakeWebc.set(wasmPayload, webcHeader.length);
-
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      arrayBuffer: () => Promise.resolve(fakeWebc.buffer),
-    });
-    vi.stubGlobal('fetch', mockFetch);
-
+    vi.stubGlobal('fetch', vi.fn(servePublicPkg));
     try {
-      const binary = await downloadPackage('cowsay');
-      expect(binary).toBeTruthy();
+      const binary = await downloadPackage('jq');
       expect(new Uint8Array(binary).slice(0, 4)).toEqual(new Uint8Array([0x00, 0x61, 0x73, 0x6d]));
+      expect(await getCachedPackage('jq')).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 
-      // Should now be cached
-      const cached = await getCachedPackage('cowsay');
-      expect(cached).toBeTruthy();
+  it('downloadPackage rejects bytes whose sha256 differs from the index', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(buildExitWasm(0))));
+    try {
+      await expect(downloadPackage('luac')).rejects.toThrow(/sha256 mismatch/);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1066,7 +1065,7 @@ describe('pkg command', () => {
     const { output, exitCode } = await run(shell, 'pkg info cowsay');
     expect(exitCode).toBe(0);
     expect(output).toContain('Version:');
-    expect(output).toContain('URL:');
+    expect(output).toContain('cdn.wasmer.io/webcimages/');
   });
 
   it('pkg info nonexistent exits 1', async () => {
@@ -1230,63 +1229,38 @@ describe('pkg install/remove lifecycle', () => {
     const env = await createTestShell();
     shell = env.shell;
     fs = env.fs;
-
-    // Mock fetch to return a valid WebC with embedded WASM
-    const wasmPayload = buildExitWasm(0);
-    const webcHeader = new Uint8Array([0x57, 0x45, 0x42, 0x43, 0x00, 0x00, 0x00, 0x10]);
-    const fakeWebc = new Uint8Array(webcHeader.length + wasmPayload.length);
-    fakeWebc.set(webcHeader, 0);
-    fakeWebc.set(wasmPayload, webcHeader.length);
-
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: true,
-      arrayBuffer: () => Promise.resolve(fakeWebc.buffer),
-    }));
+    vi.stubGlobal('fetch', vi.fn(servePublicPkg));
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it('pkg install downloads and caches package', async () => {
-    const { output, exitCode } = await run(shell, 'pkg install cowsay');
+  it('pkg install downloads, verifies and installs a package', async () => {
+    const { output, exitCode } = await run(shell, 'pkg install jq');
     expect(exitCode).toBe(0);
-    expect(output).toContain('cowsay');
-
-    // Check package is cached
-    const cached = await getCachedPackage('cowsay');
-    expect(cached).toBeTruthy();
+    expect(output).toContain('Setting up jq');
+    expect((await fs.stat('/usr/lib/pkg/jq/bin/jq.wasm')).type).toBe('file');
   });
 
-  it('pkg install creates PATH stubs in /usr/local/bin', async () => {
-    await run(shell, 'pkg install cowsay');
-
-    // Check that stub file exists
-    try {
-      const stubContent = await fs.readFile('/usr/local/bin/cowsay');
-      const text = typeof stubContent === 'string' ? stubContent : new TextDecoder().decode(stubContent);
-      expect(text).toContain('#!wasi-pkg');
-    } catch {
-      // readFile may return different types; just verify existence
-      const entries = await fs.readdir('/usr/local/bin');
-      expect(entries).toContain('cowsay');
-    }
+  it('pkg install links commands into /usr/bin', async () => {
+    await run(shell, 'pkg install lua');
+    expect(await fs.readlink('/usr/bin/lua')).toBe('/usr/lib/pkg/lua/bin/lua.wasm');
+    expect(await fs.readlink('/usr/bin/luac')).toBe('/usr/lib/pkg/lua/bin/luac.wasm');
   });
 
-  it('pkg remove deletes cached package and stubs', async () => {
-    // Install first
-    await run(shell, 'pkg install cowsay');
-
-    // Then remove
-    const { exitCode } = await run(shell, 'pkg remove cowsay');
+  it('pkg remove deletes the package and its links', async () => {
+    await run(shell, 'pkg install jq');
+    const { exitCode } = await run(shell, 'pkg remove jq');
     expect(exitCode).toBe(0);
+    expect(await fs.exists('/usr/bin/jq')).toBe(false);
   });
 
   it('pkg list shows installed packages', async () => {
-    await run(shell, 'pkg install cowsay');
+    await run(shell, 'pkg install jq');
     const { output, exitCode } = await run(shell, 'pkg list');
     expect(exitCode).toBe(0);
-    expect(output).toContain('cowsay');
+    expect(output).toContain('jq');
   });
 });
 

@@ -7,7 +7,14 @@
  * Uses the same IndexedDB caching pattern as build.ts (esbuild-wasm).
  */
 
-// ── Package manifest types ───────────────────────────────────────────
+import { builtinIndex, findEntry, searchIndex, resolveUrl, sha256Hex, type PkgEntry } from './pkg-manager';
+import { isWebc, parseWebc } from './webc';
+
+// ── Package view ─────────────────────────────────────────────────────
+// The package list lives in src/pkg-index.json (see pkg-manager.ts). This
+// module keeps the older single-binary API used by `wasi exec`, the `lua`
+// builtin's WASI fallback, and `#!wasi-pkg` stubs: one command's wasm,
+// cached in IndexedDB, without installing anything into the filesystem.
 
 export interface WasmPackage {
   /** Package name (used as command name) */
@@ -20,233 +27,33 @@ export interface WasmPackage {
   url: string;
   /** Size in bytes (approximate, for display) */
   size: number;
-  /** Category for search/display */
-  category: 'utility' | 'language' | 'tool' | 'game' | 'coreutil';
+  /** Category for search/display (the index section) */
+  category: string;
   /** Command aliases (alternative names this package provides) */
   aliases?: string[];
   /** Format of the download: 'wasm' (raw binary) or 'webc' (wasmer container) */
   format?: 'wasm' | 'webc';
 }
 
-// ── Package manifest ─────────────────────────────────────────────────
-// URLs point to cdn.wasmer.io webc containers. WASM is extracted at download time.
-// Verified working as of 2025-06.
+/** The file a package's main command runs, and the download it comes from. */
+function mainFile(entry: PkgEntry, cmd?: string) {
+  const bin = (cmd && entry.bin[cmd]) || entry.bin[entry.name] || Object.values(entry.bin)[0];
+  return entry.files.find(f => f.path === bin.file)!;
+}
 
-const PACKAGE_MANIFEST: WasmPackage[] = [
-  // ── Fun / Demo ───────────────────────────────────────────────────
-  {
-    name: 'cowsay',
-    description: 'Generate ASCII pictures of a cow with a message',
-    version: '0.3.0',
-    url: 'https://cdn.wasmer.io/webcimages/c7e7487ac3a41c18862f0bc76e8af0def0f12c4167d6fce5c1cc1b5d061f6bb7.webc',
-    size: 776_000,
-    category: 'utility',
-    format: 'webc',
-  },
-  {
-    name: 'fortune',
-    description: 'Random fortune cookie messages',
-    version: '0.2.0',
-    url: 'https://cdn.wasmer.io/webcimages/59c02fd68e98da2c445ee8e97098aff1038ef7aa237601b2a099e734a99ef49d.webc',
-    size: 2_417_000,
-    category: 'utility',
-    format: 'webc',
-  },
-  {
-    name: 'lolcat',
-    description: 'Rainbows and unicorns in your terminal',
-    version: '0.2.0',
-    url: 'https://cdn.wasmer.io/webcimages/b867558fee3734d9c77a9bdc38abcfc0793bfbad0e901639a192641d5a34bdb7.webc',
-    size: 2_131_000,
-    category: 'utility',
-    format: 'webc',
-  },
-  {
-    name: 'figlet',
-    description: 'Create large ASCII text banners',
-    version: '0.0.1',
-    url: 'https://cdn.wasmer.io/webcimages/9fc959de4ce58c6c2bc11b8cbaa0a1a471bcde84a0fe341cffc25a42251d91c9.webc',
-    size: 769_000,
-    category: 'utility',
-    format: 'webc',
-  },
-  // ── Core Utilities ───────────────────────────────────────────────
-  {
-    name: 'coreutils',
-    description: '90+ GNU coreutils: ls, cat, head, tail, wc, sort, base64, hashsum, etc.',
-    version: '1.0.16',
-    url: 'https://cdn.wasmer.io/webcimages/59b01ca057218b8ab51cab83546d22b729e015d6cf519b2383cc68bce67ef750.webc',
-    size: 4_796_000,
-    category: 'coreutil',
-    aliases: ['gls', 'gcat', 'ghead', 'gtail', 'gwc', 'gsort', 'guniq', 'gbase64', 'ghashsum'],
-    format: 'webc',
-  },
-  {
-    name: 'grep',
-    description: 'Search files for patterns (GNU grep)',
-    version: '3.12.0',
-    url: 'https://cdn.wasmer.io/webcimages/42a2dd5452990c94a51036cfb5eb9574899beccb5ce8f83f75995f7ac5e0e1ca.webc',
-    size: 365_000,
-    category: 'coreutil',
-    aliases: ['wasm-grep'],
-    format: 'webc',
-  },
-  {
-    name: 'sed',
-    description: 'Stream editor for text transformation (GNU sed)',
-    version: '4.9.0',
-    url: 'https://cdn.wasmer.io/webcimages/3fc12256be87f6b8b7810d68d642359a6220f63b39a2ea6ef7a2bb6d79ec1393.webc',
-    size: 263_000,
-    category: 'coreutil',
-    aliases: ['wasm-sed'],
-    format: 'webc',
-  },
-  // ── Languages ────────────────────────────────────────────────────
-  {
-    name: 'quickjs',
-    description: 'QuickJS JavaScript engine (standalone)',
-    version: '0.0.3',
-    url: 'https://cdn.wasmer.io/webcimages/430237aeffc912f4cd0981eb03ebad42a71d6b62781bd0c01903cae7d21b5733.webc',
-    size: 2_565_000,
-    category: 'language',
-    aliases: ['qjs'],
-    format: 'webc',
-  },
-  {
-    name: 'lua',
-    description: 'Lua scripting language interpreter',
-    version: '0.1.4',
-    url: 'https://cdn.wasmer.io/webcimages/44324fc895e8be1cbe46368f78053c982052d82a9dbbbc1feac8c0a75bec1176.webc',
-    size: 522_000,
-    category: 'language',
-    format: 'webc',
-  },
-  // ── Tools ────────────────────────────────────────────────────────
-  {
-    name: 'sqlite',
-    description: 'SQLite database command-line shell',
-    version: '0.2.2',
-    url: 'https://cdn.wasmer.io/webcimages/435044351ae60f7fd07ff97c1cac083f1e46d43bd9bc811b249bb376ee328725.webc',
-    size: 3_576_000,
-    category: 'tool',
-    aliases: ['sqlite3'],
-    format: 'webc',
-  },
-  {
-    name: 'viu',
-    description: 'View images in the terminal (PNG, JPG, GIF, BMP)',
-    version: '0.2.3',
-    url: 'https://cdn.wasmer.io/webcimages/b988b51ee1a395853fa402f37d69d1b379c4441b3bfca7372876098e13d4e3e9.webc',
-    size: 3_066_000,
-    category: 'tool',
-    format: 'webc',
-  },
-  {
-    name: 'util-linux',
-    description: 'Linux utilities: hexdump, cal, rev, col',
-    version: '0.0.1',
-    url: 'https://cdn.wasmer.io/webcimages/3af9902aebda64554afa9b05c8726d3d183ba5c1ac57d902637e3894f3187c98.webc',
-    size: 543_000,
-    category: 'utility',
-    aliases: ['hexdump', 'cal', 'rev'],
-    format: 'webc',
-  },
-  // ── Shells ──────────────────────────────────────────────────────────
-  {
-    name: 'dash',
-    description: 'Debian Almquist shell (POSIX-compliant, fast)',
-    version: '1.0.19',
-    url: 'https://cdn.wasmer.io/webcimages/c81513a53f11a2a23ea305fa008049d15fa1b5f52b696cedbf63554077ea5998.webc',
-    size: 335_000,
-    category: 'tool',
-    format: 'webc',
-  },
-  {
-    name: 'bash',
-    description: 'GNU Bourne-Again Shell',
-    version: '1.0.25',
-    url: 'https://cdn.wasmer.io/webcimages/059606d132e2e6bc1afe3b432ee64dcb1b1b059815c8bb213cf3b24798ef21e1.webc',
-    size: 1_200_000,
-    category: 'tool',
-    format: 'webc',
-  },
-  // ── Languages (additional) ──────────────────────────────────────────
-  {
-    name: 'ruby',
-    description: 'Ruby programming language interpreter',
-    version: '0.1.2',
-    url: 'https://cdn.wasmer.io/webcimages/036c313a707ffc5b70c700a9ac44e07bb76efe2797ef7f69c8f5d38fc6a080fc.webc',
-    size: 34_300_000,
-    category: 'language',
-    aliases: ['irb'],
-    format: 'webc',
-  },
-  {
-    name: 'php',
-    description: 'PHP 8.3 scripting language interpreter',
-    version: '8.3.403',
-    url: 'https://cdn.wasmer.io/webcimages/da8d3fcfcf02d2401787532c4af3fdaf5b680b05144a9591ca70b97131ee2f32.webc',
-    size: 10_000_000,
-    category: 'language',
-    format: 'webc',
-  },
-  // ── Developer Tools ─────────────────────────────────────────────────
-  {
-    name: 'openssl',
-    description: 'Cryptographic toolkit (md5, sha256, base64, encryption)',
-    version: '0.2.0',
-    url: 'https://cdn.wasmer.io/webcimages/ac3a7fa2a57d384fa9e4b30c935a99fa323193cd1b7421bb899dfc2864ec43cc.webc',
-    size: 1_600_000,
-    category: 'tool',
-    format: 'webc',
-  },
-  {
-    name: 'wabt',
-    description: 'WebAssembly Binary Toolkit: wat2wasm, wasm2wat, wasm-validate',
-    version: '1.0.37',
-    url: 'https://cdn.wasmer.io/webcimages/28b90a71338d161324ec4187d7afeb08df0eb98181e7e51c83f3f3f9a4cd1522.webc',
-    size: 3_400_000,
-    category: 'tool',
-    aliases: ['wat2wasm', 'wasm2wat', 'wasm-validate', 'wasm-strip'],
-    format: 'webc',
-  },
-  {
-    name: 'brotli',
-    description: 'Brotli compression and decompression',
-    version: '0.0.1',
-    url: 'https://cdn.wasmer.io/webcimages/824ad12803f95ed9a963f0e68df7ab3f1b875387f84417390ec73df52b3b2fb0.webc',
-    size: 707_000,
-    category: 'tool',
-    format: 'webc',
-  },
-  {
-    name: 'uuid',
-    description: 'Generate UUIDs (v1, v4)',
-    version: '0.3.0',
-    url: 'https://cdn.wasmer.io/webcimages/bcfcf285510b75a47156a46c8103593a44047acf892114c83344138a0dc0effc.webc',
-    size: 2_400_000,
-    category: 'utility',
-    format: 'webc',
-  },
-  {
-    name: 'qr2text',
-    description: 'Generate QR codes as ASCII text',
-    version: '0.0.1',
-    url: 'https://cdn.wasmer.io/webcimages/3741fc7486de905f87bcf8829557260473b0b789c0ec362d9374fd36f4fb62c6.webc',
-    size: 499_000,
-    category: 'utility',
-    format: 'webc',
-  },
-  {
-    name: 'optipng',
-    description: 'PNG optimizer — lossless image compression',
-    version: '0.1.2',
-    url: 'https://cdn.wasmer.io/webcimages/ee84c20006bd67d128c67877c9ccaa8ba669a7cbd94ab225fafa241c5552ba8e.webc',
-    size: 231_000,
-    category: 'tool',
-    format: 'webc',
-  },
-];
+function toWasmPackage(entry: PkgEntry): WasmPackage {
+  const f = mainFile(entry);
+  return {
+    name: entry.name,
+    description: entry.description,
+    version: entry.version,
+    url: f.url,
+    size: f.size,
+    category: entry.section,
+    aliases: Object.keys(entry.bin).filter(b => b !== entry.name),
+    format: f.webc ? 'webc' : 'wasm',
+  };
+}
 
 // ── IndexedDB cache ──────────────────────────────────────────────────
 
@@ -342,12 +149,22 @@ async function idbGetAllKeys(store: string): Promise<string[]> {
 const WASM_MAGIC = [0x00, 0x61, 0x73, 0x6d];
 
 /**
- * Extract a WASM binary from a Wasmer WebC container.
- * Scans for the WASM magic bytes (\0asm) and returns the largest
- * contiguous WASM module found. If none found, returns null.
+ * Extract a WASM binary from a Wasmer WebC container: the entrypoint atom
+ * (or the largest one) of a real WebC v2/v3 file. Anything else is scanned
+ * for the WASM magic bytes (\0asm), returning the largest module found, or
+ * null when there is none.
  */
 export function extractWasmFromWebc(webc: ArrayBuffer): ArrayBuffer | null {
   const bytes = new Uint8Array(webc);
+  if (isWebc(bytes)) {
+    try {
+      const pkg = parseWebc(bytes);
+      const entry = pkg.manifest?.entrypoint;
+      const atom = (typeof entry === 'string' && pkg.atoms.get(entry)) ||
+        [...pkg.atoms.values()].reduce<Uint8Array | null>((a, b) => (a && a.length >= b.length ? a : b), null);
+      if (atom) return atom.slice().buffer;
+    } catch { /* fall back to scanning */ }
+  }
   const candidates: ArrayBuffer[] = [];
 
   for (let i = 0; i <= bytes.length - 8; i++) {
@@ -412,25 +229,20 @@ function readLEB128(bytes: Uint8Array, offset: number): { value: number; bytesRe
 
 // ── Public API ───────────────────────────────────────────────────────
 
-/** Get package metadata from manifest by name or alias */
+/** Get package metadata by name or command name */
 export function findPackage(name: string): WasmPackage | undefined {
-  return PACKAGE_MANIFEST.find(
-    p => p.name === name || p.aliases?.includes(name)
-  );
+  const entry = findEntry(builtinIndex(), name);
+  return entry && toWasmPackage(entry);
 }
 
-/** Search packages by query string (matches name and description) */
+/** Search packages by query string (matches name, description, section, commands) */
 export function searchPackages(query: string): WasmPackage[] {
-  const q = query.toLowerCase();
-  return PACKAGE_MANIFEST.filter(
-    p => p.name.includes(q) || p.description.toLowerCase().includes(q) ||
-         p.category.includes(q) || (p.aliases || []).some(a => a.includes(q))
-  );
+  return searchIndex(builtinIndex(), query).map(toWasmPackage);
 }
 
 /** List all available packages */
 export function listAvailable(): WasmPackage[] {
-  return [...PACKAGE_MANIFEST];
+  return builtinIndex().packages.map(toWasmPackage);
 }
 
 /** Get cached WASM binary. Returns null if not cached. */
@@ -438,64 +250,62 @@ export async function getCachedPackage(name: string): Promise<ArrayBuffer | null
   return idbGet<ArrayBuffer>(PKG_CACHE_STORE, name);
 }
 
-/** Download a package, cache it, and return the binary */
+/** Download a package's main binary (sha256-verified), cache it, and return it */
 export async function downloadPackage(
   name: string,
   onProgress?: (msg: string) => void,
 ): Promise<ArrayBuffer> {
-  const pkg = findPackage(name);
-  if (!pkg) {
+  const entry = findEntry(builtinIndex(), name);
+  if (!entry) {
     throw new Error(`Package '${name}' not found in registry`);
   }
 
-  // Check cache first
-  const cached = await getCachedPackage(pkg.name);
+  const cached = await getCachedPackage(entry.name);
   if (cached) {
-    onProgress?.(`${pkg.name} (cached)`);
+    onProgress?.(`${entry.name} (cached)`);
     return cached;
   }
 
-  // Download
-  const sizeStr = pkg.size > 1_000_000
-    ? `${(pkg.size / 1_000_000).toFixed(1)}MB`
-    : `${(pkg.size / 1_000).toFixed(0)}KB`;
-  onProgress?.(`Downloading ${pkg.name} v${pkg.version} (${sizeStr})...`);
+  const file = mainFile(entry, name);
+  const sizeStr = file.size > 1_000_000
+    ? `${(file.size / 1_000_000).toFixed(1)}MB`
+    : `${(file.size / 1_000).toFixed(0)}KB`;
+  onProgress?.(`Downloading ${entry.name} v${entry.version} (${sizeStr})...`);
 
-  const resp = await fetch(pkg.url);
+  const resp = await fetch(resolveUrl(file.url));
   if (!resp.ok) {
-    throw new Error(`Failed to download ${pkg.name}: ${resp.status} ${resp.statusText}`);
+    throw new Error(`Failed to download ${entry.name}: ${resp.status} ${resp.statusText}`);
   }
-  const raw = await resp.arrayBuffer();
+  const raw = new Uint8Array(await resp.arrayBuffer());
+  const got = await sha256Hex(raw);
+  if (got !== file.sha256) {
+    throw new Error(`sha256 mismatch for ${entry.name}: expected ${file.sha256}, got ${got}`);
+  }
 
-  // Extract WASM from WebC container if needed
   let binary: ArrayBuffer;
-  if (pkg.format === 'webc') {
-    onProgress?.(`Extracting WASM from WebC container...`);
-    const extracted = extractWasmFromWebc(raw);
-    if (!extracted) {
-      throw new Error(`Failed to extract WASM binary from ${pkg.name} WebC container`);
-    }
-    binary = extracted;
+  if (file.webc?.atom) {
+    const atom = parseWebc(raw).atoms.get(file.webc.atom);
+    if (!atom) throw new Error(`No atom ${file.webc.atom} in ${entry.name} WebC container`);
+    binary = atom.slice().buffer;
   } else {
-    binary = raw;
+    binary = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
   }
 
   // Validate WASM magic
   const magic = new Uint8Array(binary, 0, 4);
   if (magic[0] !== 0x00 || magic[1] !== 0x61 || magic[2] !== 0x73 || magic[3] !== 0x6d) {
-    throw new Error(`Downloaded file for ${pkg.name} is not a valid WASM binary`);
+    throw new Error(`Downloaded file for ${entry.name} is not a valid WASM binary`);
   }
 
-  // Cache for next time
-  await idbPut(PKG_CACHE_STORE, pkg.name, binary);
-  await idbPut(PKG_META_STORE, pkg.name, {
-    name: pkg.name,
-    version: pkg.version,
+  await idbPut(PKG_CACHE_STORE, entry.name, binary);
+  await idbPut(PKG_META_STORE, entry.name, {
+    name: entry.name,
+    version: entry.version,
     installedAt: Date.now(),
     size: binary.byteLength,
   });
 
-  onProgress?.(`Installed ${pkg.name} v${pkg.version}`);
+  onProgress?.(`Cached ${entry.name} v${entry.version}`);
   return binary;
 }
 
