@@ -351,7 +351,8 @@ export class Shell {
     // Handle backslash line continuations: \<newline> joins lines
     const joined = line.replace(/\\\n/g, '');
     const trimmed = joined.trim();
-    if (!trimmed || trimmed.startsWith('#')) return 0;
+    // A comment line (a multi-line script that starts with one still runs)
+    if (!trimmed || (trimmed.startsWith('#') && !trimmed.includes('\n'))) return 0;
 
     // LINENO tracking: reset at top-level execute, track depth
     this.executeDepth++;
@@ -3023,7 +3024,7 @@ export class Shell {
     }
 
     // ${VAR:-default}, ${VAR:=default}, ${VAR:+alt}, ${VAR:?err}
-    const opMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)(:?)([-=+?])(.*)$/s);
+    const opMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!])(:?)([-=+?])(.*)$/s);
     if (opMatch) {
       const [, varName, colon, op, operand] = opMatch;
       const val = this.env[varName];
@@ -3212,7 +3213,57 @@ export class Shell {
     // Flush any remaining accumulated content
     if (accumulator) statements.push(accumulator);
 
-    return statements;
+    return this.groupCompounds(statements);
+  }
+
+  /**
+   * Join lines that belong to one compound command: a `{ … }` group or
+   * function body (kept on separate lines, so its body is split again when
+   * it runs), and multi-line if/for/while/until/case (joined with `; ` as
+   * executeShellScript does). Lines outside any compound stay separate.
+   */
+  private groupCompounds(lines: string[]): string[] {
+    const out: string[] = [];
+    let group: string[] = [];
+    let kw = 0, brace = 0, braceFirst = false;
+    for (const line of lines) {
+      const t = line.trim();
+      const bare = t.startsWith('#') ? '' : t;
+      let dk = 0;
+      for (const k of this.shellTokenScan(bare)) {
+        if (['for', 'while', 'until', 'select', 'if', 'case'].includes(k.word)) dk++;
+        if (['done', 'fi', 'esac'].includes(k.word)) dk--;
+      }
+      const db = this.braceDelta(bare);
+      if (!group.length && dk <= 0 && db <= 0) { out.push(line); continue; }
+      if (!group.length) braceFirst = db > 0 && dk <= 0;
+      group.push(line);
+      kw += dk; brace += db;
+      if (kw <= 0 && brace <= 0) {
+        out.push(braceFirst ? group.join('\n') : group.map(l => l.trim()).filter(l => l && !l.startsWith('#')).join('; '));
+        group = []; kw = 0; brace = 0;
+      }
+    }
+    if (group.length) out.push(...group); // unbalanced: leave as is
+    return out;
+  }
+
+  /** `{` and `}` used as shell words (group/function delimiters) on one line, quote-aware. */
+  private braceDelta(line: string): number {
+    let d = 0, inSQ = false, inDQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '\\' && !inSQ) { i++; continue; }
+      if (ch === "'" && !inDQ) { inSQ = !inSQ; continue; }
+      if (ch === '"' && !inSQ) { inDQ = !inDQ; continue; }
+      if (inSQ || inDQ) continue;
+      if (ch === '#' && (i === 0 || /\s/.test(line[i - 1]))) break;
+      const prev = i > 0 ? line[i - 1] : ' ';
+      const next = line[i + 1];
+      if (ch === '{' && /[\s;&|()]/.test(prev) && (next === undefined || /\s/.test(next))) d++;
+      if (ch === '}' && /[\s;]/.test(prev) && (next === undefined || /[\s;&|)]/.test(next))) d--;
+    }
+    return d;
   }
 
   /** Check if a line has an unclosed quote. Returns the quote char or null. */
@@ -4351,6 +4402,9 @@ export class Shell {
       return strip(tokens[0]) !== '' ? 0 : 1;
     }
 
+    // ! EXPR (any length: `[ ! "$a" = "$b" ]`)
+    if (tokens[0] === '!') return (await this.evalTest(tokens.slice(1).join(' '))) === 0 ? 1 : 0;
+
     if (tokens.length === 2) {
       const op = tokens[0];
       const expanded = strip(tokens[1]);
@@ -5015,7 +5069,8 @@ export class Shell {
     try {
       const real = await this.fs.realpath(filePath);
       if (packageOfPath(real)) {
-        return await runPackageBinary(real, filePath.split('/').pop() || filePath, args, ctx);
+        return await runPackageBinary(real, filePath.split('/').pop() || filePath, args, ctx,
+          filePath.startsWith('/') ? filePath : this.fs.resolvePath(filePath, this.cwd));
       }
     } catch { /* fall through to the generic path */ }
 
@@ -5117,27 +5172,22 @@ export class Shell {
       const shebang = firstLine.substring(2).trim();
       const [interpreter, ...interpArgs] = shebang.split(/\s+/);
 
-      // Handle common interpreters
-      if (interpreter === '/usr/bin/env' || interpreter === '/bin/env') {
-        // env node script.js -> node script.js
-        const realInterp = interpArgs[0];
-        if (realInterp === 'node' || realInterp === 'nodejs') {
-          return this.executeNodeScript(resolvedPath, content, args, ctx, writeStdout, writeStderr);
-        } else if (realInterp === 'sh' || realInterp === 'bash') {
-          return this.executeShellScript(content, args, ctx, writeStdout, writeStderr);
-        }
-        // Unknown interpreter via env
-        writeStderr(`shiro: cannot execute ${realInterp} scripts\r\n`);
-        return 126;
-      } else if (interpreter.endsWith('/node') || interpreter.endsWith('/nodejs')) {
+      // `#!/usr/bin/env [-S] [NAME=value...] prog args` looks prog up on PATH
+      const interpBase = interpreter.slice(interpreter.lastIndexOf('/') + 1);
+      let interp = interpreter;
+      let viaEnv = false;
+      if (interpBase === 'env') {
+        while (interpArgs.length && (interpArgs[0] === '-S' || /^[A-Za-z_][A-Za-z0-9_]*=/.test(interpArgs[0]))) interpArgs.shift();
+        interp = interpArgs.shift() || '';
+        viaEnv = true;
+      }
+      const base = interp.slice(interp.lastIndexOf('/') + 1);
+      if (base === 'node' || base === 'nodejs') {
         return this.executeNodeScript(resolvedPath, content, args, ctx, writeStdout, writeStderr);
-      } else if (interpreter.endsWith('/sh') || interpreter.endsWith('/bash')) {
+      } else if ((base === 'sh' || base === 'bash') && !packageShadows(this.fs).has(base)) {
         return this.executeShellScript(content, args, ctx, writeStdout, writeStderr);
       }
-
-      // Unknown shebang interpreter
-      writeStderr(`shiro: cannot execute ${interpreter} scripts\r\n`);
-      return 126;
+      return this.runInterpreter(interp, viaEnv, [...interpArgs, filePath, ...args], ctx, writeStdout, writeStderr);
     }
 
     // No shebang - try to detect file type
@@ -5164,6 +5214,39 @@ export class Shell {
 
     // Default to shell script
     return this.executeShellScript(content, args, ctx, writeStdout, writeStderr);
+  }
+
+  /**
+   * Run a shebang interpreter: an existing absolute path runs as itself
+   * (packages, WASM, ELF, nested scripts); otherwise its name is looked up
+   * like a command, so `#!/usr/bin/python3` and `#!/usr/bin/env python3`
+   * both reach a builtin or an installed package.
+   */
+  private async runInterpreter(
+    interp: string,
+    viaEnv: boolean,
+    argv: string[],
+    ctx: CommandContext,
+    writeStdout: (s: string) => void,
+    writeStderr: (s: string) => void,
+  ): Promise<number> {
+    if (!interp) {
+      writeStderr('shiro: env: missing interpreter in #! line\n');
+      return 126;
+    }
+    if (interp.includes('/') && !viaEnv && await this.fs.exists(interp)) {
+      return this.executeScript(interp, argv, ctx, writeStdout, writeStderr);
+    }
+    const base = interp.slice(interp.lastIndexOf('/') + 1);
+    const cmd = this.commands.get(base);
+    if (cmd && !packageShadows(this.fs).has(base)) {
+      ctx.args = argv;
+      return cmd.exec(ctx);
+    }
+    const found = cmd ? `${PKG_BIN_DIR}/${base}` : await this.findExecutableInPath(base);
+    if (found) return this.executeScript(found, argv, ctx, writeStdout, writeStderr);
+    writeStderr(`shiro: ${interp}: bad interpreter: No such file or directory\n`);
+    return 126;
   }
 
   /**
@@ -5264,7 +5347,8 @@ export class Shell {
     const lines = content.split('\n');
     let exitCode = 0;
     let buffer = '';
-    let depth = 0; // track nesting: for/while/until/if/case increment, done/fi/esac decrement
+    let depth = 0; // track nesting: for/while/until/if/case and { increment, done/fi/esac and } decrement
+    let braceBlock = false;
 
     for (const line of lines) {
       const trimmed = line.trim();
@@ -5272,13 +5356,18 @@ export class Shell {
 
       // Count opening/closing keywords (quote-aware)
       const keywords = this.shellTokenScan(trimmed);
+      let dk = 0;
       for (const kw of keywords) {
-        if (['for', 'while', 'until', 'select', 'if', 'case'].includes(kw.word)) depth++;
-        if (['done', 'fi', 'esac'].includes(kw.word)) depth--;
+        if (['for', 'while', 'until', 'select', 'if', 'case'].includes(kw.word)) dk++;
+        if (['done', 'fi', 'esac'].includes(kw.word)) dk--;
       }
+      const db = this.braceDelta(trimmed);
+      // A `{ … }` group or function body keeps its lines (see groupCompounds)
+      if (!buffer) braceBlock = db > 0 && dk <= 0;
+      depth += dk + db;
 
       if (buffer) {
-        buffer += '; ' + trimmed;
+        buffer += (braceBlock ? '\n' : '; ') + trimmed;
       } else {
         buffer = trimmed;
       }

@@ -124,6 +124,15 @@ export const myCmd: Command = {
 - Packages built here come from `scripts/pkgbuild/<name>.sh` (wasi-sdk, pinned sources) and live in `public/pkg/`; registry packages are Wasmer WebC containers read by `src/webc.ts`.
 - Packages that need kernel features (`needs`: wasix, processes, threads, sockets, ...) stay gated until the WASM process mode (`src/wasi/host.ts`) or `globalThis.__shiroKernel.features` provides them.
 
+## Languages And Toolchains
+
+- Scoreboard and per-entry tests: [docs/COMPAT.md](docs/COMPAT.md), `tests/tests/shiro-vitest/compat-dev.test.ts`.
+- `pkg install python3` is CPython 3.13 for WASI (`scripts/pkgbuild/python3.sh`, prefix `/usr/lib/pkg/python3`, stdlib in `lib/python313.zip`). It shadows the Pyodide `python3`/`python` builtins while installed. `pip` (`src/commands/pip.ts`, rules in `src/utils/pep440.ts`) resolves against PyPI's JSON API from the page and installs pure-Python wheels; `python3 -m pip|venv|ensurepip` are intercepted in `runPackageBinary`/`packageKernelProgram` (`pythonFrontend`) because WASI python has no sockets or subprocess. Without the package, `pip` is still Pyodide's micropip.
+- A package bin entry with `"argv0": "path"` gets the absolute path it was found at as argv[0] (CPython finds `pyvenv.cfg` next to it).
+- Shebangs: `executeScript` → `runInterpreter`; `#!/usr/bin/env X` and `#!/abs/X` reach builtins, packages and PATH scripts.
+- `scripts/browser-check.mjs URL 'cmd' ...` runs commands in headless Chromium against a built app (`npm run build`, `PORT=5299 STATIC_DIR=$PWD/dist node server.mjs`), in a terminal-less shell fork so kernel jobs' output is captured; it routes https through `$HTTPS_PROXY` when set.
+- Builds: `vite-plugin-inline.ts` makes the inline entry script `import "./assets/index-….js"` instead of inlining its code; inlining made two instances of every module in the entry chunk (lazy chunks import the file), with separate state.
+
 ## Build, Test, Deploy
 
 ```bash
