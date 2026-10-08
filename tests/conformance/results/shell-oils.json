@@ -693,7 +693,7 @@
    ]
   },
   "builtin-bracket": {
-   "pass": 43,
+   "pass": 44,
    "total": 50,
    "failures": [
     {
@@ -707,10 +707,6 @@
     {
      "i": 35,
      "name": "test -p named pipe"
-    },
-    {
-     "i": 37,
-     "name": "-u for setuid, -g too"
     },
     {
      "i": 39,
@@ -767,13 +763,9 @@
    ]
   },
   "builtin-type": {
-   "pass": 1,
+   "pass": 3,
    "total": 6,
    "failures": [
-    {
-     "i": 0,
-     "name": "type -> keyword builtin"
-    },
     {
      "i": 1,
      "name": "type -> alias external"
@@ -781,10 +773,6 @@
     {
      "i": 2,
      "name": "type of relative path"
-    },
-    {
-     "i": 4,
-     "name": "special builtins are called out"
     },
     {
      "i": 5,

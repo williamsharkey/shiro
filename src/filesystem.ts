@@ -152,11 +152,12 @@ class DevProvider implements VirtualFSProvider {
   }
   readFile(path: string, encoding?: 'utf8'): string | Uint8Array | null {
     if (path === '/dev/null') return encoding === 'utf8' ? '' : new Uint8Array(0);
-    if (path === '/dev/zero') return new Uint8Array(4096); // return a page of zeros
+    // A page of zeros / random bytes; as text, one char per byte (Latin-1, like other binary shell strings)
+    if (path === '/dev/zero') return encoding === 'utf8' ? '\0'.repeat(4096) : new Uint8Array(4096);
     if (path === '/dev/random' || path === '/dev/urandom') {
       const buf = new Uint8Array(256);
       crypto.getRandomValues(buf);
-      return buf;
+      return encoding === 'utf8' ? String.fromCharCode(...buf) : buf;
     }
     if (path === '/dev') return null; // directory
     return encoding === 'utf8' ? '' : new Uint8Array(0);

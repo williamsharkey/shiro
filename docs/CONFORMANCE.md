@@ -6,9 +6,9 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1287/1567 (82.1%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1290/1567 (82.3%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1275/1567 (81.4%)** |
-| [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **601/635 (94.6%)** |
+| [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **605/635 (95.3%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **146/320 (45.6%)** |
 
 How each suite runs, and what is and isn't scored, is described in
@@ -47,10 +47,10 @@ How each suite runs, and what is and isn't scored, is described in
 | builtin-eval-source | 0/23 | 19/23 | 4 |
 | builtin-getopts | 0/30 | 26/30 | 4 |
 | builtin-trap | 0/33 | 26/33 | 7 |
-| builtin-bracket | 0/50 | 43/50 | 7 |
+| builtin-bracket | 0/50 | 44/50 | 6 |
 | builtin-cd | 3/28 | 26/28 | 2 |
 | builtin-special | 1/12 | 7/12 | 5 |
-| builtin-type | 0/6 | 1/6 | 5 |
+| builtin-type | 0/6 | 3/6 | 3 |
 | builtin-vars | 0/38 | 31/38 | 7 |
 | dbracket | 1/49 | 44/49 | 5 |
 | dparen | 0/14 | 13/14 | 1 |
@@ -107,10 +107,10 @@ How each suite runs, and what is and isn't scored, is described in
 - **builtin-eval-source**: eval usage; eval YSH block with 'break continue return error'; Source with syntax error; Eval with syntax error
 - **builtin-getopts**: getopts with invalid variable name; OPTIND; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
 - **builtin-trap**: exit 1 when trap code string is invalid; trap EXIT calling exit; trap EXIT with PARSE error and explicit exit; exit codes for traps are isolated; traps are cleared in subshell (started with &); trap USR1, sleep, SIGINT: non-interactively; Remove trap with an unsigned integer
-- **builtin-bracket**: -a as unary operator (alias of -e); -k for sticky bit; test -p named pipe; -u for setuid, -g too; test -o for options; -ef; test -c
+- **builtin-bracket**: -a as unary operator (alias of -e); -k for sticky bit; test -p named pipe; test -o for options; -ef; test -c
 - **builtin-cd**: pwd in symlinked dir on shell initialization; Survey of getcwd() syscall
 - **builtin-special**: Prefix assignments persist after special builtins, like : (set -o posix); Prefix assignments persist after readonly, but NOT exported (set -o posix); Prefix binding for exec is a special case (versus e.g. readonly); bash 'type' gets confused - says 'function', but runs builtin; command, builtin - both can be redefined, not special (regression)
-- **builtin-type**: type -\> keyword builtin; type -\> alias external; type of relative path; special builtins are called out; more special builtins
+- **builtin-type**: type -\> alias external; type of relative path; more special builtins
 - **builtin-vars**: Export sets a global variable that persists after export -n; Export a local that shadows a global; Unset exported variable, then define it again.  It's NOT still exported.; Exporting a parent func variable (dynamic scope); Unset a function without -f; Unset and scope (bug #653); local after readonly
 - **dbracket**: [[ regex syntax error; [[ at runtime doesn't work; [[ with env prefix doesn't work; tilde expansion with =~ (confusing); [[ ]] with redirect
 - **dparen**: (( )) with redirect
@@ -274,11 +274,11 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 | cmp (old-style) | 1/1 | 1/1 | 0 |
 | comm | 0/8 | 8/8 | 0 |
 | cp | 0/6 | 3/6 | 3 |
-| cp (old-style) | 17/17 | 15/17 | 2 |
+| cp (old-style) | 17/17 | 16/17 | 1 |
 | cut | 0/22 | 22/22 | 0 |
 | cut (old-style) | 5/5 | 5/5 | 0 |
 | date (old-style) | 3/3 | 3/3 | 0 |
-| dd (old-style) | 6/6 | 5/6 | 1 |
+| dd (old-style) | 6/6 | 6/6 | 0 |
 | diff | 0/13 | 13/13 | 0 |
 | dirname (old-style) | 7/7 | 7/7 | 0 |
 | du (old-style) | 6/6 | 4/6 | 2 |
@@ -326,13 +326,13 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 | tail | 0/2 | 2/2 | 0 |
 | tail (old-style) | 2/2 | 2/2 | 0 |
 | tar | 0/6 | 5/6 | 1 |
-| tar (old-style) | 14/14 | 13/14 | 1 |
+| tar (old-style) | 14/14 | 14/14 | 0 |
 | tee (old-style) | 2/2 | 2/2 | 0 |
 | test | 0/16 | 16/16 | 0 |
 | touch (old-style) | 3/3 | 3/3 | 0 |
 | tr | 0/5 | 5/5 | 0 |
 | tr (old-style) | 5/5 | 5/5 | 0 |
-| true (old-style) | 2/2 | 1/2 | 1 |
+| true (old-style) | 2/2 | 2/2 | 0 |
 | tsort | 0/20 | 10/20 | 10 |
 | unexpand | 0/17 | 17/17 | 0 |
 | uniq | 0/14 | 12/14 | 2 |
@@ -347,8 +347,7 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 
 - **awk**: awk 'gcc build bug'
 - **cp**: cp -RL; cp -RH; cp -RHL
-- **cp (old-style)**: cp-does-not-copy-unreadable-file; cp-preserves-hard-links
-- **dd (old-style)**: dd-accepts-of
+- **cp (old-style)**: cp-preserves-hard-links
 - **du (old-style)**: du-s-works; du-works
 - **echo (old-style)**: echo-prints-slash_41
 - **false (old-style)**: false-is-silent
@@ -361,8 +360,6 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 - **sed**: sed subst+write
 - **sha1sum**: sha1sum: one-space separated input for -c
 - **tar**: tar --overwrite
-- **tar (old-style)**: tar-extracts-to-standard-output
-- **true (old-style)**: true-is-silent
 - **tsort**: tsort empty2; tsort singleton; tsort simple; tsort 2singleton; tsort medium; tsort std.example; tsort prefixes; tsort odd; tsort odd2; tsort cycle
 - **uniq**: uniq input outfile (two files); uniq (stdin) outfile
 

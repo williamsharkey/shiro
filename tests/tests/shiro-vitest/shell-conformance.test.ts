@@ -448,4 +448,12 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('a < b < >\napp.txt\nmade.txt\n1\nout\nerr\nrz x=unset\n');
   });
+
+  it('type and command -v/-V classify keywords, aliases, functions, builtins and files', async () => {
+    const r = await script([
+      'type while cd; type -t while cd f; f(){ :; }; type -t f; command -v cd; command -V cd',
+      'alias ll="ls -l"; type ll; type -t ll; type nosuch 2>/dev/null; echo st=$?',
+    ].join('\n'));
+    expect(r.out).toBe("while is a shell keyword\ncd is a shell builtin\nkeyword\nbuiltin\nfunction\ncd\ncd is a shell builtin\nll is aliased to `ls -l'\nalias\nst=1\n");
+  });
 });

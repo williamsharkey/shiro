@@ -98,6 +98,15 @@ const SET_O_OPTIONS = ['allexport', 'braceexpand', 'emacs', 'errexit', 'errtrace
   'history', 'ignoreeof', 'interactive-comments', 'keyword', 'monitor', 'noclobber', 'noexec', 'noglob', 'nolog', 'notify',
   'nounset', 'onecmd', 'physical', 'pipefail', 'posix', 'privileged', 'verbose', 'vi', 'xtrace'];
 
+/** bash's reserved words and builtins (what type/command -v call them) */
+const SHELL_KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'fi', 'case', 'esac', 'for', 'select', 'while', 'until',
+  'do', 'done', 'in', 'function', 'time', '{', '}', '!', '[[', ']]', 'coproc']);
+const SHELL_BUILTIN_NAMES = new Set([':', '.', '[', 'alias', 'bg', 'bind', 'break', 'builtin', 'caller', 'cd', 'command',
+  'compgen', 'complete', 'compopt', 'continue', 'declare', 'dirs', 'disown', 'echo', 'enable', 'eval', 'exec', 'exit',
+  'export', 'false', 'fc', 'fg', 'getopts', 'hash', 'help', 'history', 'jobs', 'kill', 'let', 'local', 'logout', 'mapfile',
+  'popd', 'printf', 'pushd', 'pwd', 'read', 'readarray', 'readonly', 'return', 'set', 'shift', 'shopt', 'source',
+  'suspend', 'test', 'times', 'trap', 'true', 'type', 'typeset', 'ulimit', 'umask', 'unalias', 'unset', 'wait']);
+
 /** Builtins that run in a subshell as a pipeline element (they change the shell's state) */
 const PIPELINE_SUBSHELL_BUILTINS = new Set(['cd', 'pushd', 'popd', 'eval', 'source', '.', 'exit', 'export', 'unset',
   'set', 'shift', 'declare', 'typeset', 'local', 'readonly', 'alias', 'unalias', 'trap', 'umask', 'shopt', 'hash']);
@@ -668,6 +677,23 @@ export class Shell {
     }
     // Asking about named options: the status says whether they are all on
     return status || (names.length && !valid.every(isOn) ? 1 : 0);
+  }
+
+  /** What NAME runs as, in lookup order (all: every match, else the first) */
+  private async commandKinds(name: string, all: boolean): Promise<{ kind: 'alias' | 'keyword' | 'function' | 'builtin' | 'registered' | 'file'; path?: string }[]> {
+    const out: { kind: 'alias' | 'keyword' | 'function' | 'builtin' | 'registered' | 'file'; path?: string }[] = [];
+    const done = () => !all && out.length > 0;
+    if (this.aliases.has(name)) out.push({ kind: 'alias', path: this.aliases.get(name) });
+    if (!done() && SHELL_KEYWORDS.has(name)) out.push({ kind: 'keyword' });
+    if (!done() && name in this.functions) out.push({ kind: 'function' });
+    if (!done() && SHELL_BUILTIN_NAMES.has(name)) out.push({ kind: 'builtin' });
+    // Shiro's own commands come before files on PATH (an installed package doesn't shadow them)
+    if (!done() && !name.includes('/') && this.commands.get(name) && !SHELL_BUILTIN_NAMES.has(name)) out.push({ kind: 'registered' });
+    if (!done()) {
+      const path = await this.findExecutableInPath(name).catch(() => null);
+      if (path) out.push({ kind: 'file', path });
+    }
+    return out;
   }
 
   /** $-: the set options as letters, in bash's order */
@@ -1942,21 +1968,43 @@ export class Shell {
 
         // Shell builtins: type, command -v, hash
         if (!_builtinDisabled && effectiveCmdName === 'type') {
-          for (const name of cmdArgs) {
-            if (name in this.functions) {
-              writeStdout(`${name} is a function\r\n`);
-            } else if (['cd', 'echo', 'read', 'eval', 'set', 'export', 'source', 'shift',
-                         'declare', 'local', 'typeset', 'true', 'false', 'break', 'continue',
-                         'return', 'trap', 'getopts', 'printf', 'type', 'command', 'hash',
-                         'mapfile', 'readarray', 'select', 'alias', 'unalias', 'pushd', 'popd',
-                         'dirs', 'let', 'exec', 'builtin', 'ulimit', 'umask',
-                         'complete', 'compgen', 'enable', 'disown', 'unset', 'readonly', 'time', 'caller', 'shopt', 'fc'].includes(name)) {
-              writeStdout(`${name} is a shell builtin\r\n`);
-            } else if (this.commands.get(name)) {
-              writeStdout(`${name} is a registered command\r\n`);
-            } else {
-              stderrWriter(`type: ${name}: not found\r\n`);
+          // type [-afptP] NAME...: alias, keyword, function, builtin, file (in that order)
+          let mode: 'long' | 't' | 'p' | 'P' = 'long', all = false, noFuncs = false;
+          const names: string[] = [];
+          for (const a of cmdArgs) {
+            if (!names.length && /^-[afptP]+$/.test(a)) {
+              for (const c of a.slice(1)) {
+                if (c === 'a') all = true; else if (c === 'f') noFuncs = true;
+                else if (c === 't') mode = 't'; else if (c === 'p') mode = 'p'; else if (c === 'P') mode = 'P';
+              }
+            } else if (a !== '--' || names.length) names.push(a);
+          }
+          exitCode = 0;
+          for (const name of names) {
+            let found = await this.commandKinds(name, all || mode === 'P');
+            if (noFuncs) found = found.filter((k) => k.kind !== 'function');
+            if (mode === 'P') found = found.filter((k) => k.kind === 'file');
+            if (mode === 'p' && found.length && found[0].kind !== 'file') { continue; }
+            if (!found.length) {
+              if (mode === 'long') stderrWriter(`shiro: type: ${name}: not found\r\n`);
               exitCode = 1;
+              continue;
+            }
+            for (const k of all ? found : found.slice(0, 1)) {
+              if (mode === 't') { writeStdout((k.kind === 'registered' ? 'file' : k.kind) + '\r\n'); continue; }
+              if (mode === 'p' || mode === 'P') { if (k.kind === 'file') writeStdout(k.path + '\r\n'); continue; }
+              switch (k.kind) {
+                case 'alias': writeStdout(`${name} is aliased to \`${k.path}'\r\n`); break;
+                case 'keyword': writeStdout(`${name} is a shell keyword\r\n`); break;
+                case 'function': {
+                  const body = this.functions[name].body.split('\n').map((l) => '    ' + l.trim().replace(/;$/, '')).join('\r\n');
+                  writeStdout(`${name} is a function\r\n${name} () \r\n{ \r\n${body}\r\n}\r\n`);
+                  break;
+                }
+                case 'builtin': writeStdout(`${name} is a shell builtin\r\n`); break;
+                case 'registered': writeStdout(`${name} is a registered command\r\n`); break;
+                case 'file': writeStdout(`${name} is ${k.path}\r\n`); break;
+              }
             }
           }
           this.lastExitCode = exitCode;
@@ -1964,28 +2012,22 @@ export class Shell {
           lastOutput = '';
           continue;
         }
-        if (!_builtinDisabled && effectiveCmdName === 'command') {
-          if (cmdArgs[0] === '-v') {
-            // command -v: like which
-            for (const name of cmdArgs.slice(1)) {
-              if (name in this.functions || this.commands.get(name) ||
-                  ['cd', 'echo', 'read', 'eval', 'set', 'export', 'source', 'shift',
-                   'true', 'false', 'break', 'continue', 'return', 'trap', 'printf',
-                   'type', 'command', 'hash', 'mapfile', 'readarray', 'alias', 'unalias',
-                   'pushd', 'popd', 'dirs', 'let', 'exec', 'builtin', 'ulimit', 'umask',
-                   'complete', 'compgen', 'enable', 'disown', 'unset', 'readonly', 'time', 'caller', 'shopt', 'fc'].includes(name)) {
-                writeStdout(`${name}\r\n`);
-              } else {
-                exitCode = 1;
-              }
-            }
-            this.lastExitCode = exitCode;
-            this.env['?'] = String(exitCode);
-            lastOutput = '';
-            continue;
+        if (!_builtinDisabled && effectiveCmdName === 'command' && /^-[vV]+$/.test(cmdArgs[0] ?? '')) {
+          // command -v NAME: how it would run (a path for files); -V: in words
+          const verbose = cmdArgs[0].includes('V');
+          exitCode = 0;
+          for (const name of cmdArgs.slice(1)) {
+            const [k] = await this.commandKinds(name, false);
+            if (!k) { if (verbose) stderrWriter(`shiro: command: ${name}: not found\r\n`); exitCode = 1; continue; }
+            if (!verbose) writeStdout((k.kind === 'file' ? k.path : k.kind === 'alias' ? `alias ${name}='${k.path}'` : name) + '\r\n');
+            else if (k.kind === 'file') writeStdout(`${name} is ${k.path}\r\n`);
+            else if (k.kind === 'alias') writeStdout(`${name} is aliased to \`${k.path}'\r\n`);
+            else writeStdout(`${name} is a ${k.kind === 'keyword' ? 'shell keyword' : k.kind === 'builtin' ? 'shell builtin' : k.kind === 'registered' ? 'registered command' : 'function'}\r\n`);
           }
-          // command NAME args: execute command bypassing functions
-          // Just fall through to normal execution
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
         }
         if (!_builtinDisabled && effectiveCmdName === 'hash') {
           // hash -r: clear hash table (no-op, we don't cache)

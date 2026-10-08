@@ -261,6 +261,15 @@ export const od: Command = {
     let status = 0;
     for (const f of files) {
       if (f === '-') { chunks.push(toBytes(ctx.stdin)); continue; }
+      const dev = ctx.fs.resolvePath(f, ctx.cwd);
+      if (/^\/dev\/(zero|u?random)$/.test(dev) && Number.isFinite(limit)) {
+        // An endless device: read just what -j/-N need
+        const need = Math.max(0, skip + limit - chunks.reduce((n, c) => n + c.length, 0));
+        const buf = new Uint8Array(need);
+        if (dev !== '/dev/zero') for (let i = 0; i < need; i += 65536) crypto.getRandomValues(buf.subarray(i, Math.min(need, i + 65536)));
+        chunks.push(buf);
+        continue;
+      }
       try {
         // Shiro files hold the UTF-8 form of shell strings (one char per byte)
         chunks.push(toBytes(await ctx.fs.readFile(ctx.fs.resolvePath(f, ctx.cwd), 'utf8') as string));

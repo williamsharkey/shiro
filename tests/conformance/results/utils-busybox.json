@@ -53,12 +53,9 @@
    ]
   },
   "cp (old-style)": {
-   "pass": 15,
+   "pass": 16,
    "total": 17,
    "failures": [
-    {
-     "name": "cp-does-not-copy-unreadable-file"
-    },
     {
      "name": "cp-preserves-hard-links"
     }
@@ -80,13 +77,9 @@
    "failures": []
   },
   "dd (old-style)": {
-   "pass": 5,
+   "pass": 6,
    "total": 6,
-   "failures": [
-    {
-     "name": "dd-accepts-of"
-    }
-   ]
+   "failures": []
   },
   "diff": {
    "pass": 13,
@@ -375,13 +368,9 @@
    ]
   },
   "tar (old-style)": {
-   "pass": 13,
+   "pass": 14,
    "total": 14,
-   "failures": [
-    {
-     "name": "tar-extracts-to-standard-output"
-    }
-   ]
+   "failures": []
   },
   "tee (old-style)": {
    "pass": 2,
@@ -409,13 +398,9 @@
    "failures": []
   },
   "true (old-style)": {
-   "pass": 1,
+   "pass": 2,
    "total": 2,
-   "failures": [
-    {
-     "name": "true-is-silent"
-    }
-   ]
+   "failures": []
   },
   "tsort": {
    "pass": 10,
