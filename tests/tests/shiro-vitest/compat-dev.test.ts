@@ -907,3 +907,40 @@ print(table.concat(out, " "), _VERSION)
     expect(r.out).toBe('shiro runs sqlite\n1,"x y"\n');
   }, 120_000);
 });
+
+describe('ninja and cmake (x86-64 in Blink) with clang', () => {
+  let shell: Shell;
+  let fs: FileSystem;
+  beforeAll(async () => {
+    ({ fs, shell } = await createTestShell());
+    await bootFiles(fs);
+    const r = await sh(shell, 'pkg install llvm ninja');
+    expect(r.err).toBe('');
+    expect(r.exitCode).toBe(0);
+  }, 300_000);
+
+  it('ninja builds a C program with clang, incrementally, with depfiles', async () => {
+    await fs.mkdir('/home/user/nj', { recursive: true });
+    await fs.writeFile('/home/user/nj/build.ninja', [
+      'cflags = -O2', 'rule cc', '  command = clang $cflags -MD -MF $out.d -c $in -o $out', '  depfile = $out.d', '  deps = gcc', '  description = CC $out',
+      'rule link', '  command = clang $in -o $out', '  description = LINK $out',
+      'build main.o: cc main.c', 'build util.o: cc util.c', 'build app: link main.o util.o', 'default app', ''].join('\n'));
+    await fs.writeFile('/home/user/nj/util.h', '#define GREETING "hello"\nint twice(int);\n');
+    await fs.writeFile('/home/user/nj/util.c', '#include "util.h"\nint twice(int x) { return 2 * x; }\n');
+    await fs.writeFile('/home/user/nj/main.c', '#include <stdio.h>\n#include "util.h"\nint main(void) { printf("%s %d\\n", GREETING, twice(21)); return 0; }\n');
+    let r = await sh(shell, 'cd /home/user/nj && ninja && ./app');
+    expect(r.err).toBe('');
+    expect(r.out).toMatch(/\[3\/3\] LINK app\nhello 42\n$/);
+    r = await sh(shell, 'cd /home/user/nj && ninja');
+    expect(r.out).toBe('ninja: no work to do.\n');
+    // the header is a dependency through the depfile: both objects rebuild
+    await fs.writeFile('/home/user/nj/util.h', '#define GREETING "hi"\nint twice(int);\n');
+    r = await sh(shell, 'cd /home/user/nj && ninja && ./app');
+    expect(r.out).toMatch(/\[3\/3\] LINK app\nhi 42\n$/);
+    await fs.writeFile('/home/user/nj/util.c', 'int twice(int x) { return 2 * x }\n');
+    r = await sh(shell, 'cd /home/user/nj && ninja');
+    expect(r.exitCode).not.toBe(0);
+    expect(r.out).toContain('FAILED: util.o');
+    expect(r.out).toMatch(/util\.c:1:32: error: expected ';' after return statement/);
+  }, 300_000);
+});

@@ -1046,6 +1046,40 @@
    "notes": "An x86-64 Linux binary in Blink: needs a cross-origin isolated page. Interpreted, so starting is ~1 s and big modules (POSIX) take seconds to load. No XS module loading (all core XS is built in); no pods (perldoc)."
   },
   {
+   "name": "ninja",
+   "version": "1.12.1",
+   "description": "Ninja build system (static x86-64 build run in the Blink engine)",
+   "license": "Apache-2.0",
+   "source": "https://github.com/ninja-build/ninja/tree/v1.12.1",
+   "homepage": "https://ninja-build.org/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/ninja.sh",
+   "section": "devel",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin",
+     "tar": {
+      "unpack": true,
+      "dir": "bin"
+     },
+     "url": "/pkg/ninja/1.12.1/ninja-1.12.1-x86_64.tar.gz",
+     "sha256": "a2d0d7f0aa2dbf3502e46918ebb6decb8ce5de357453a6f423a9e5aa7060cd40",
+     "size": 897165
+    }
+   ],
+   "bin": {
+    "ninja": {
+     "file": "bin/ninja"
+    }
+   },
+   "needs": [
+    "threads",
+    "processes"
+   ],
+   "notes": "An x86-64 Linux binary in Blink: needs a cross-origin isolated page. Build commands run with posix_spawn; Shiro programs (clang from the llvm package, the shell) run as kernel processes."
+  },
+  {
    "name": "fortune",
    "version": "0.2.0",
    "description": "Print a random adage",
