@@ -566,6 +566,12 @@ export class FileSystem {
     }
   }
 
+  /** Start committing queued writes now; resolves when the queue is empty
+   *  (relaxed durability). For writers that pace themselves by the commits. */
+  flushed(): Promise<void> {
+    return this._flush();
+  }
+
   /**
    * Wait until every write made so far is committed to IndexedDB (strict
    * durability). Rejects with the error of a failed background flush, once.

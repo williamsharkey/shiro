@@ -150,6 +150,66 @@ Not fixed (reported for the owning workstreams):
 - src/x86 can't run Go (`fatal error: float64nan`) or static glibc
   (`Unknown two-byte opcode: 0F 62`) — known, see `X86_ENGINES.md`.
 
+## Performance log
+
+Each entry: what changed, and `node bench/compare.mjs` medians against a
+baseline run **on the same machine** (the committed
+`integration-970831e-quick.json` was recorded on a slower/busier host; even
+untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
+metrics swing ±25% between identical runs here, so a flag on them was re-run
+3× alternating base/new before being called noise.
+
+### unix/perf-fs-shell 1 — write-behind filesystem, debounced history
+
+Baseline `bench/results/integration-970831e-quick-local.json` (unix/integration
+970831e + unix/bench, this container) → `bench/results/perf-fs-shell-1-quick.json`.
+
+- `FileSystem` (src/filesystem.ts) is write-behind: a mutation updates the
+  in-memory cache and resolves; the IndexedDB writes are queued per path
+  (latest wins) and committed in one readwrite transaction per flush, a
+  MessageChannel macrotask after the first dirty write. One flush is in
+  flight at a time. The key index (`getAllKeys`) is kept current instead of
+  being re-read after every write, and a path missing from it needs no
+  IndexedDB read (creating a file used to cost a `get` for the "existing"
+  check). Appends coalesce: 100 `echo >> f` in a loop are one put.
+- Crash safety: a write is durable when its flush commits, normally within
+  one event-loop turn. `fs.sync()` (new `sync` command, kernel `fsync`)
+  waits for that with strict durability and reports a failed background
+  flush once; the page flushes on `visibilitychange`→hidden, `pagehide` and
+  `freeze`, and `beforeunload` still warns while `pendingWrites > 0`. A flush
+  is one transaction, so a crash keeps all of it or none of it. Tests:
+  `fs-write-behind.test.ts`.
+- Shell history is written after 500 ms of quiet (and on pagehide/hidden)
+  instead of a full `~/.bash_history` rewrite per command, and loop,
+  function, `if`, `eval`, `time` and trap bodies no longer add entries (bash
+  records only the typed line).
+- The kernel inode's flush waits for `fs.flushed()`, so a file written by a
+  WASM program is still snapshotted once per IndexedDB commit rather than
+  once per syscall task.
+- Fixed on the way: node scripts could hang until the test timeout when a
+  sync fs call queued work after the exit drain (`binary-files.test.ts`
+  exposed it once writes got fast); `appendFile` through a symlink replaced
+  the link with a regular file.
+
+| metric (isolated) | base | new | change |
+|---|---:|---:|---:|
+| shell.loop_1000 | 114.3 ms | 16.5 ms | −86% (6.9×) |
+| shell.for_seq_1000 | 118.2 ms | 25.0 ms | −79% (4.7×) |
+| shell.redirect_append_100 | 108 ms | 7.7 ms | −93% |
+| shell.fs_write_after_burst | 38.1 ms | 0.04 ms | −99.9% |
+| shell.cmd_subst | 0.40 ms | 0.07 ms | −82% |
+| wasm.tree_create (until writes resolve) | 636 ms | 9.6 ms | −98.5% |
+| 2000-file tree until `fs.sync()` returns (`bench/try.mjs`, 2 runs) | 658–679 ms | 87–93 ms | ≈7× |
+| npm.install_small | 55.0 ms | 18.3 ms | −67% |
+| wasm.builtin_grep_r.tree | 23.9 ms | 18.1 ms | −24% |
+| boot.cold.first_prompt | 209 ms | 169 ms | −19% |
+
+Against the committed host baseline the loops are 324 → 16.5 ms (20×) and
+342 → 25 ms (14×). Flagged by compare and re-run: `kernel.file_write`
+(isolated 26–27 vs 27–30 MB/s over 3 runs each), `kernel.spawn_throughput.*`,
+`kernel.syscall_inpage`, `kernel.file_read`, `shell.pipeline_seq_grep_wc`,
+`boot.warm.first_command`: overlapping ranges, noise.
+
 ## Results
 
 <!-- bench:table:begin -->

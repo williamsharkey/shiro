@@ -432,7 +432,8 @@ class Inode {
     if (!this.dirty) return;
     this.dirty = false;
     const snapshot = this.data.slice(0, this.size);
-    this.flushing = this.fs.writeFile(this.path, snapshot).finally(() => { this.flushing = null; });
+    // Paced by the IndexedDB commit: writes made meanwhile go into one later snapshot
+    this.flushing = this.fs.writeFile(this.path, snapshot).then(() => this.fs.flushed()).finally(() => { this.flushing = null; });
     await this.flushing;
   }
 }
