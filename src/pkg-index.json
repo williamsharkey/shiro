@@ -436,6 +436,128 @@
    "notes": "pip installs pure-Python wheels from PyPI (no native extensions, no sdists yet); python -m venv works. No subprocess, sockets or ssl (WASI preview1); the REPL needs blocking stdin."
   },
   {
+   "name": "make",
+   "version": "4.4.1",
+   "description": "GNU make: recipes run as kernel processes (sh -c through posix_spawn)",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz",
+   "homepage": "https://www.gnu.org/software/make/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/make.sh",
+   "section": "devel",
+   "abi": "wasi_snapshot_preview1",
+   "files": [
+    {
+     "path": "bin/make.wasm",
+     "url": "/pkg/make/4.4.1/make.wasm",
+     "sha256": "38754de7d22d7ffda8ca84ad22451741d3f01e54b469be013e984b88b4f052ea",
+     "size": 258573
+    }
+   ],
+   "bin": {
+    "make": {
+     "file": "bin/make.wasm"
+    },
+    "gmake": {
+     "file": "bin/make.wasm"
+    }
+   },
+   "needs": [
+    "processes"
+   ],
+   "notes": "Built with Shiro's process shim (scripts/pkgbuild/compat/wasi-proc.c). No jobserver: -j runs one job at a time. No -O output sync, load average, guile or loadable modules."
+  },
+  {
+   "name": "llvm",
+   "version": "21.1.4",
+   "description": "Clang/LLVM 21 for WASI: clang, clang++, cc, c++, wasm-ld, llvm-ar and friends, with the wasi-libc sysroot (targets wasm32-wasip1)",
+   "license": "Apache-2.0 WITH LLVM-exception",
+   "source": "https://github.com/YoWASP/clang",
+   "homepage": "https://yowasp.org/",
+   "origin": "npm",
+   "recipe": "scripts/pkgbuild/llvm.sh",
+   "section": "devel",
+   "abi": "wasi_snapshot_preview1",
+   "files": [
+    {
+     "path": "bin/llvm.wasm",
+     "tar": {
+      "member": "package/gen/llvm.core.wasm"
+     },
+     "url": "https://registry.npmjs.org/@yowasp/clang/-/clang-21.1.4-3.tgz",
+     "sha256": "9c082ea5cac9489966adbe381529bf13bde18646126e98b8b089d83f57fe5e27",
+     "size": 26386607
+    },
+    {
+     "path": "sysroot",
+     "tar": {
+      "member": "package/gen/llvm-resources.tar",
+      "unpack": true
+     },
+     "url": "https://registry.npmjs.org/@yowasp/clang/-/clang-21.1.4-3.tgz",
+     "sha256": "9c082ea5cac9489966adbe381529bf13bde18646126e98b8b089d83f57fe5e27",
+     "size": 26386607
+    },
+    {
+     "path": "bin/clang.wasm",
+     "url": "/pkg/llvm/21.1.4/clang.wasm",
+     "sha256": "c3a56721352f0687ff454e1317f64e6d41a73c8a3f56c954304d18e703044843",
+     "size": 41753
+    }
+   ],
+   "bin": {
+    "clang": {
+     "file": "bin/clang.wasm"
+    },
+    "clang++": {
+     "file": "bin/clang.wasm"
+    },
+    "cc": {
+     "file": "bin/clang.wasm"
+    },
+    "c++": {
+     "file": "bin/clang.wasm"
+    },
+    "wasm-ld": {
+     "file": "bin/llvm.wasm"
+    },
+    "llvm-ar": {
+     "file": "bin/llvm.wasm"
+    },
+    "llvm-ranlib": {
+     "file": "bin/llvm.wasm"
+    },
+    "llvm-nm": {
+     "file": "bin/llvm.wasm"
+    },
+    "llvm-objdump": {
+     "file": "bin/llvm.wasm"
+    },
+    "llvm-strip": {
+     "file": "bin/llvm.wasm"
+    },
+    "llvm-size": {
+     "file": "bin/llvm.wasm"
+    },
+    "llvm-objcopy": {
+     "file": "bin/llvm.wasm"
+    },
+    "ar": {
+     "file": "bin/llvm.wasm"
+    },
+    "ranlib": {
+     "file": "bin/llvm.wasm"
+    },
+    "nm": {
+     "file": "bin/llvm.wasm"
+    }
+   },
+   "needs": [
+    "processes"
+   ],
+   "notes": "The compiler is YoWASP's LLVM for WASI (npm @yowasp/clang, taken from its tarball); clang's driver steps run as separate kernel processes (compat/clang-driver.c). Output is wasm32-wasip1; run it like any WASM program."
+  },
+  {
    "name": "sqlite",
    "version": "3.50.4",
    "description": "SQLite 3 command-line shell (FTS5, math functions)",

@@ -655,7 +655,11 @@ export class FileSystem {
     if (!parent) throw fsError('ENOENT', `ENOENT: no such file or directory, open '${path}'`);
     if (parent.type !== 'dir') throw fsError('ENOTDIR', `ENOTDIR: not a directory '${parentPath}'`);
 
-    const content = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+    // A view into a larger buffer is copied: IndexedDB's structured clone
+    // stores the whole underlying ArrayBuffer (an archive member written as a
+    // subarray stored the entire archive)
+    const content = typeof data === 'string' ? new TextEncoder().encode(data)
+      : (data.byteOffset !== 0 || data.byteLength !== data.buffer.byteLength) ? data.slice() : data;
     const existing = await this._get(path);
     // Prevent overwriting a directory with a file
     if (existing?.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, write '${path}'`);

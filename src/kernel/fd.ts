@@ -426,10 +426,13 @@ class Inode {
     if (!this.flushTimer) this.flushTimer = setTimeout(() => { this.flushTimer = null; void this.flush(); }, 0);
   }
 
+  /** Unlinked (or replaced by a rename) while open: contents live on in memory only */
+  detached = false;
+
   async flush(): Promise<void> {
     if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
     while (this.flushing) await this.flushing;
-    if (!this.dirty) return;
+    if (!this.dirty || this.detached) return;
     this.dirty = false;
     const snapshot = this.data.slice(0, this.size);
     this.flushing = this.fs.writeFile(this.path, snapshot).finally(() => { this.flushing = null; });
@@ -458,7 +461,46 @@ export async function openInode(fs: FileSystem, path: string): Promise<Inode> {
 async function closeInode(ino: Inode): Promise<void> {
   ino.opens--;
   await ino.flush();
-  if (ino.opens === 0) inodeTables.get(ino.fs)?.delete(ino.path);
+  const table = inodeTables.get(ino.fs);
+  if (ino.opens === 0 && table?.get(ino.path) === ino) table.delete(ino.path);
+}
+
+/**
+ * Before `from` is renamed to `to`: write back open files under `from`, so
+ * the move carries their current contents. Call inodesRenamed afterwards.
+ */
+export async function flushInodesUnder(fs: FileSystem, from: string): Promise<void> {
+  const table = inodeTables.get(fs);
+  if (!table) return;
+  for (const [p, ino] of table) if (p === from || p.startsWith(from + '/')) await ino.flush();
+}
+
+/**
+ * After a rename: open descriptions follow the file to its new path (and
+ * flush there), and a file that was open at `to` is detached, as it was
+ * replaced. Without this, later writes went back to the old path.
+ */
+export function inodesRenamed(fs: FileSystem, from: string, to: string): void {
+  const table = inodeTables.get(fs);
+  if (!table) return;
+  for (const [p, ino] of [...table]) {
+    if (p === to || p.startsWith(to + '/')) { ino.detached = true; table.delete(p); }
+  }
+  for (const [p, ino] of [...table]) {
+    if (p !== from && !p.startsWith(from + '/')) continue;
+    table.delete(p);
+    ino.path = to + p.slice(from.length);
+    table.set(ino.path, ino);
+  }
+}
+
+/** After unlink: descriptions still open keep the contents (in memory), and never recreate the file. */
+export function inodeUnlinked(fs: FileSystem, path: string): void {
+  const table = inodeTables.get(fs);
+  const ino = table?.get(path);
+  if (!ino) return;
+  ino.detached = true;
+  table!.delete(path);
 }
 
 /** Stable small inode numbers for paths (the FileSystem has none). */

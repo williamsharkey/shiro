@@ -11,10 +11,11 @@ import type { FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
 import { processTable, type ShiroProcess } from '../process-table';
+import { packageShadows, PKG_BIN_DIR } from '../pkg-manager';
 import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
-  RegularFile, DirFile, openInode, inodeNumber, canWrite, refCount,
+  RegularFile, DirFile, openInode, inodeNumber, canWrite, refCount, flushInodesUnder, inodesRenamed, inodeUnlinked,
 } from './fd';
 import { createPipe } from './pipe';
 import { Process } from './process';
@@ -210,6 +211,10 @@ export class Kernel {
     const base = path.slice(path.lastIndexOf('/') + 1);
     const inBin = !path.includes('/') || /^\/(usr\/)?(local\/)?s?bin\//.test(path);
     const cmd = inBin ? shell.commands.get(base) : undefined;
+    // An installed package's command replaces the builtin, as at the prompt
+    // (a bin-dir path can name a builtin's PATH shim, or nothing on disk)
+    const pkgBin = `${PKG_BIN_DIR}/${base}`;
+    if (cmd && this.fs && path !== pkgBin && packageShadows(this.fs).has(base)) return this.findProgram(pkgBin, _proc);
     if (cmd) return proc => this.runBuiltin(proc, cmd);
     // Scripts and other executables the shell knows how to start
     const found = path.includes('/') ? ((await this.fs?.exists(path)) ? path : null) : await shell.findExecutableInPath(path);
@@ -989,7 +994,9 @@ export class Kernel {
           if (flags & ~A.RENAME_NOREPLACE) return -A.EINVAL;
           if ((flags & A.RENAME_NOREPLACE) && (await fs().exists(to))) return -A.EEXIST;
           if (!(await fs().exists(from))) return -A.ENOENT;
+          await flushInodesUnder(fs(), from);
           await fs().rename(from, to);
+          inodesRenamed(fs(), from, to);
           return 0;
         }
         case A.SYS_mkdir:
@@ -1016,7 +1023,7 @@ export class Kernel {
           if (!rmdir && isDir) return -A.EISDIR;
           if (rmdir && !isDir) return -A.ENOTDIR;
           if (isDir) await fs().rmdir(p);
-          else await fs().unlink(p);
+          else { await flushInodesUnder(fs(), p); await fs().unlink(p); inodeUnlinked(fs(), p); }
           return 0;
         }
         case A.SYS_symlink:

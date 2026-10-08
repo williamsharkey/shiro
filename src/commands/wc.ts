@@ -35,24 +35,31 @@ export const wc: Command = {
     const showMax = flags.L || flags['max-line-length'];
     const showDefault = !showLines && !showWords && !showChars && !showBytes && !showMax;
 
+    const columns = [showDefault || showLines, showDefault || showWords, showChars, showDefault || showBytes, showMax]
+      .filter(Boolean).length;
+    // GNU widths: one count of one input is printed bare; otherwise columns
+    // are as wide as the largest file size, or 7 when reading stdin
+    let width = 1;
     const format = (c: Counts, name?: string) => {
       const parts: string[] = [];
-      if (showDefault || showLines) parts.push(String(c.lines).padStart(6));
-      if (showDefault || showWords) parts.push(String(c.words).padStart(6));
-      if (showChars) parts.push(String(c.chars).padStart(6));
-      if (showDefault || showBytes) parts.push(String(c.bytes).padStart(6));
-      if (showMax) parts.push(String(c.maxLine).padStart(6));
-      if (name !== undefined) parts.push(" " + name);
-      return parts.join(" ") + "\n";
+      const col = (n: number) => parts.push(String(n).padStart(width));
+      if (showDefault || showLines) col(c.lines);
+      if (showDefault || showWords) col(c.words);
+      if (showChars) col(c.chars);
+      if (showDefault || showBytes) col(c.bytes);
+      if (showMax) col(c.maxLine);
+      return parts.join(" ") + (name !== undefined ? " " + name : "") + "\n";
     };
 
     if (positional.length === 0) {
+      width = columns > 1 ? 7 : 1;
       ctx.stdout += format(count(new TextEncoder().encode(ctx.stdin)));
       return 0;
     }
 
     let exitCode = 0;
     const total: Counts = { lines: 0, words: 0, chars: 0, bytes: 0, maxLine: 0 };
+    const results: { c: Counts; name: string }[] = [];
     for (const name of positional) {
       let data: Uint8Array;
       try {
@@ -73,8 +80,12 @@ export const wc: Command = {
       total.chars += c.chars;
       total.bytes += c.bytes;
       total.maxLine = Math.max(total.maxLine, c.maxLine);
-      ctx.stdout += format(c, name);
+      results.push({ c, name });
     }
+    if (columns > 1 || results.length > 1) {
+      width = positional.includes('-') ? 7 : Math.max(1, String(Math.max(total.bytes, total.chars, total.lines, total.words, total.maxLine)).length);
+    }
+    for (const { c, name } of results) ctx.stdout += format(c, name);
     if (positional.length > 1) ctx.stdout += format(total, 'total');
     return exitCode;
   },

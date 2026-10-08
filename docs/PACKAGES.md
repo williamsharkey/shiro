@@ -72,7 +72,11 @@ list `pkg update` fetches).
 }
 ```
 
-A file can come out of a Wasmer WebC container instead of being the download
+A file can come out of a tarball (gzipped or not, e.g. an npm package):
+`"tar": { "member": "package/gen/llvm.core.wasm" }` takes one file, and
+`"unpack": true` extracts the (member's) tar archive into the directory
+`path` (optionally only entries under `"dir"`). The tarball is downloaded
+and checked once per install. A file can also come out of a Wasmer WebC container instead of being the download
 itself: `"webc": { "atom": "figlet" }` takes one atom, `"webc": { "volume":
 "atom", "dir": "/fonts" }` copies a volume subtree. Each container is
 downloaded once per install and checked against its sha256 (Wasmer's CDN is
@@ -115,6 +119,8 @@ works everywhere and the interactive mode needs a page that can block.
 | coreutils (uutils, 78 applets) | 0.12.0 | built here, `coreutils.sh` | preview1 | ok |
 | lua, luac | 5.4.7 | built here, `lua.sh` | preview1 | ok; the REPL reads the tty as a kernel process (checked on the pty) |
 | python3 (CPython) | 3.13.7 | built here, `python3.sh` | preview1 | ok; `pip` (Shiro) installs pure-Python wheels, `python3 -m venv` works; no subprocess/sockets |
+| make (GNU) | 4.4.1 | built here, `make.sh` | preview1 + process shim | ok; no jobserver |
+| llvm (clang, wasm-ld, llvm-ar, ...) | 21.1.4 | npm `@yowasp/clang` tarball + driver built here, `llvm.sh` | preview1 + process shim | ok; targets wasm32-wasip1 |
 | sqlite3 | 3.50.4 | built here, `sqlite.sh` | preview1 | ok; the interactive shell reads the tty as a kernel process (checked on the pty) |
 | jq | 1.8.1 | built here, `jq.sh` | preview1 | ok |
 | cowsay, cowthink | 0.3.0 | Wasmer | preview1 | ok |

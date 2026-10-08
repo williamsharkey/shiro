@@ -129,6 +129,9 @@ export const myCmd: Command = {
 - A package bin entry with `"argv0": "path"` gets the absolute path it was found at as argv[0] (CPython finds `pyvenv.cfg` next to it).
 - Shebangs: `executeScript` → `runInterpreter`; `#!/usr/bin/env X` and `#!/abs/X` reach builtins, packages and PATH scripts.
 - `scripts/browser-check.mjs URL 'cmd' ...` runs commands in headless Chromium against a built app (`npm run build`, `PORT=5299 STATIC_DIR=$PWD/dist node server.mjs`), in a terminal-less shell fork so kernel jobs' output is captured; it routes https through `$HTTPS_PROXY` when set.
+- `pkg install make llvm` gives GNU make and clang 21 (wasm32-wasip1). Programs built with wasi-sdk get processes from `scripts/pkgbuild/compat/wasi-proc.c` (posix_spawn/waitpid/pipe/dup2/exec*/system/popen over the guest's WASIX `proc_spawn3`/`proc_join`/`fd_pipe`/`fd_dup`; `setup_proc` in `common.sh`, headers in `compat/include/`). It syncs wasi-libc's cwd with the kernel's at startup. WASI LLVM can't spawn, so `compat/clang-driver.c` runs `clang -###` and then each step as `yowasp-llvm TOOL ...`.
+- Kernel inodes (`src/kernel/fd.ts`) follow renames and detach on unlink; kernel-spawned WASM without WASIX libc gets top-level preopens (`childPreopens` in `src/wasi/host.ts`); the kernel's builtin loader defers to installed packages that shadow a builtin.
+- `FileSystem.writeFile` copies a Uint8Array that is a view of a larger buffer (IndexedDB clones the whole buffer otherwise).
 - Builds: `vite-plugin-inline.ts` makes the inline entry script `import "./assets/index-….js"` instead of inlining its code; inlining made two instances of every module in the entry chunk (lazy chunks import the file), with separate state.
 
 ## Build, Test, Deploy

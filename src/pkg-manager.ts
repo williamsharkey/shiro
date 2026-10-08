@@ -21,6 +21,7 @@
 import type { FileSystem } from './filesystem';
 import type { CommandContext } from './commands/index';
 import { isWebc, parseWebc, type WebcPackage } from './webc';
+import { readTarball, type TarEntry } from './utils/tar';
 import builtinIndexJson from './pkg-index.json';
 
 // ── Index format ─────────────────────────────────────────────────────
@@ -55,6 +56,12 @@ export interface PkgFile {
   size: number;
   /** When `url` is a WebC container: the atom to take, or a volume subtree to copy */
   webc?: { atom?: string; volume?: string; dir?: string };
+  /**
+   * When `url` is a tarball (gzipped or not, e.g. an npm package): `member`
+   * takes that file out of it; `unpack` extracts the (member's) tar archive
+   * into the directory `path`, keeping only entries under `dir` if given.
+   */
+  tar?: { member?: string; unpack?: boolean; dir?: string };
 }
 
 export interface PkgBin {
@@ -144,7 +151,7 @@ export function parseIndex(doc: unknown): PkgIndex {
       if (typeof p[k] !== 'string' || !p[k]) fail(`${where}: missing ${k}`);
     }
     if (!['wasi_snapshot_preview1', 'wasi_unstable', 'wasix'].includes(p.abi)) fail(`${where}: bad abi ${p.abi}`);
-    if (!['shiro', 'wasmer'].includes(p.origin)) fail(`${where}: bad origin ${p.origin}`);
+    if (!['shiro', 'wasmer', 'npm'].includes(p.origin)) fail(`${where}: bad origin ${p.origin}`);
     if (!Array.isArray(p.files) || p.files.length === 0) fail(`${where}: no files`);
     const paths = new Set<string>();
     for (const f of p.files) {
@@ -153,6 +160,8 @@ export function parseIndex(doc: unknown): PkgIndex {
       if (typeof f.sha256 !== 'string' || !SHA_RE.test(f.sha256)) fail(`${where}: bad sha256 for ${f.path}`);
       if (typeof f.size !== 'number' || f.size < 0) fail(`${where}: bad size for ${f.path}`);
       if (f.webc && !f.webc.atom && !f.webc.volume) fail(`${where}: webc file ${f.path} names no atom or volume`);
+      if (f.tar && !f.tar.member && !f.tar.unpack) fail(`${where}: tar file ${f.path} names no member and doesn't unpack`);
+      if (f.tar?.member && !safeRelPath(f.tar.member)) fail(`${where}: bad tar member ${f.tar.member}`);
       paths.add(f.path);
     }
     if (!p.bin || typeof p.bin !== 'object') fail(`${where}: missing bin`);
@@ -363,6 +372,7 @@ async function installOne(fs: FileSystem, entry: PkgEntry, opts: PkgOptions): Pr
   const root = `${PKG_ROOT}/${entry.name}`;
   const fetched = new Map<string, Uint8Array>();
   const containers = new Map<string, WebcPackage>();
+  const tarballs = new Map<string, Promise<TarEntry[]>>();
   let size = 0;
 
   log(`Get ${entry.name} ${entry.version} (${formatSize(downloadSize(entry))})`);
@@ -373,6 +383,10 @@ async function installOne(fs: FileSystem, entry: PkgEntry, opts: PkgOptions): Pr
       fetched.set(f.sha256, bytes);
     }
     const dest = `${root}/${f.path}`;
+    if (f.tar) {
+      size += await installFromTar(fs, f, bytes, dest, tarballs, entry.name);
+      continue;
+    }
     if (!f.webc) {
       await writeFileP(fs, dest, bytes);
       size += bytes.length;
@@ -439,6 +453,48 @@ async function lstatSafe(fs: FileSystem, path: string) {
 async function writeFileP(fs: FileSystem, path: string, data: Uint8Array): Promise<void> {
   await fs.mkdir(path.substring(0, path.lastIndexOf('/')) || '/', { recursive: true });
   await fs.writeFile(path, data, { mode: path.endsWith('.wasm') ? 0o755 : 0o644 });
+}
+
+/** A file from a tarball (PkgFile.tar). Returns the bytes written. */
+async function installFromTar(
+  fs: FileSystem, f: PkgFile, download: Uint8Array, dest: string, cache: Map<string, Promise<TarEntry[]>>, pkg: string,
+): Promise<number> {
+  const t = f.tar!;
+  let bytes = download;
+  if (t.member) {
+    let entries = cache.get(f.sha256);
+    if (!entries) { entries = readTarball(download); cache.set(f.sha256, entries); }
+    const m = (await entries).find(e => e.name === t.member && e.type === '0');
+    if (!m) throw new Error(`${pkg}: no ${t.member} in ${f.url}`);
+    bytes = m.data;
+  }
+  if (!t.unpack) {
+    await writeFileP(fs, dest, bytes);
+    return bytes.length;
+  }
+  const prefix = (t.dir ?? '').replace(/^\.?\/+|\/+$/g, '');
+  let size = 0;
+  await fs.mkdir(dest, { recursive: true });
+  for (const e of await readTarball(bytes)) {
+    let rel = e.name.replace(/\/+$/, '');
+    if (prefix) {
+      if (rel !== prefix && !rel.startsWith(prefix + '/')) continue;
+      rel = rel.slice(prefix.length + 1);
+    }
+    if (!rel || !safeRelPath(rel)) continue;
+    const p = `${dest}/${rel}`;
+    if (e.type === '5') await fs.mkdir(p, { recursive: true });
+    else if (e.type === '2') {
+      await fs.mkdir(p.slice(0, p.lastIndexOf('/')), { recursive: true });
+      try { await fs.unlink(p); } catch { /* none */ }
+      await fs.symlink(e.linkname, p);
+    } else if (e.type === '0' || e.type === '7') {
+      await writeFileP(fs, p, e.data);
+      if (e.mode & 0o111) await fs.chmod(p, e.mode & 0o777);
+      size += e.data.length;
+    }
+  }
+  return size;
 }
 
 async function removeFiles(fs: FileSystem, pkg: InstalledPkg): Promise<void> {

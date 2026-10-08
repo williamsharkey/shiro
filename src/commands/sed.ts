@@ -341,7 +341,8 @@ function parseSedExpression(expr: string): SedCommand[] {
     const ch = expr[i];
     if (ch === '{') { depth++; current += ch; continue; }
     if (ch === '}') { depth--; current += ch; continue; }
-    if (ch === ';' && depth === 0) {
+    // commands are separated by ; or newlines (multi-line scripts)
+    if ((ch === ';' || ch === '\n') && depth === 0) {
       parts.push(current.trim());
       current = '';
       continue;
@@ -351,6 +352,7 @@ function parseSedExpression(expr: string): SedCommand[] {
   if (current.trim()) parts.push(current.trim());
 
   for (const part of parts) {
+    if (!part || part.startsWith('#')) continue;
     let remaining = part;
     let address: SedAddress | undefined;
 
