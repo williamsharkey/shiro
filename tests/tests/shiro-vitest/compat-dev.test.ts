@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Worker } from 'node:worker_threads';
-import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { build } from 'esbuild';
 import { createTestShell } from './helpers';
@@ -17,6 +17,7 @@ import type { GuestWorker } from '@shiro/kernel/worker-host';
 import { setGuestWorkerFactory, forceWasmProcessMode } from '@shiro/wasi/host';
 import { readTarball } from '@shiro/utils/tar';
 import { createPathShims } from '@shiro/path-shims';
+import { simpleCommandWords } from '@shiro/kernel/kernel';
 
 const here = __dirname;
 const REPO = path.resolve(here, '../../..');
@@ -681,6 +682,7 @@ describe('perl (x86-64 in Blink)', () => {
     r = await sh(shell, 'cd /home/user/pt && prove t/basic.t');
     expect(r.out).toMatch(/All tests successful/);
   }, 300_000);
+
 });
 
 describe('node-compat modules real packages rely on', () => {
@@ -924,7 +926,7 @@ print(table.concat(out, " "), _VERSION)
   }, 120_000);
 });
 
-describe('ninja and cmake (x86-64 in Blink) with clang', () => {
+describe('ninja (x86-64 in Blink) with clang', () => {
   let shell: Shell;
   let fs: FileSystem;
   beforeAll(async () => {
@@ -958,5 +960,54 @@ describe('ninja and cmake (x86-64 in Blink) with clang', () => {
     expect(r.exitCode).not.toBe(0);
     expect(r.out).toContain('FAILED: util.o');
     expect(r.out).toMatch(/util\.c:1:32: error: expected ';' after return statement/);
+  }, 300_000);
+
+});
+
+describe('git (upstream, x86-64 in Blink)', () => {
+  it('sh -c runs a simple command directly (the words it needs no shell for)', () => {
+    expect(simpleCommandWords("git-upload-pack '/home/user/r/.git'")).toEqual(['git-upload-pack', '/home/user/r/.git']);
+    expect(simpleCommandWords('exec prog "a b" c')).toEqual(['prog', 'a b', 'c']);
+    for (const s of ['a | b', 'a > f', 'echo $HOME', 'a; b', 'ls *.c', 'a && b', "x 'open"]) expect(simpleCommandWords(s)).toBeNull();
+  });
+
+  let shell: Shell;
+  let fs: FileSystem;
+  const g = (cmd: string) => sh(shell, `export GIT_PAGER=cat GIT_EDITOR=true GIT_AUTHOR_DATE=2025-01-01T00:00:00Z GIT_COMMITTER_DATE=2025-01-01T00:00:00Z; ${cmd}`);
+  beforeAll(async () => {
+    ({ fs, shell } = await createTestShell());
+    await bootFiles(fs);
+    const r = await sh(shell, 'pkg install git');
+    expect(r.exitCode).toBe(0);
+    await sh(shell, 'git config --global user.name Shiro && git config --global user.email shiro@example.com && git config --global init.defaultBranch main');
+  }, 300_000);
+
+  it('replaces the built-in git; commit, branch, merge, rebase, stash', async () => {
+    let r = await g('git --version');
+    expect(r.out).toBe('git version 2.47.1\n');
+    r = await g('mkdir -p /home/user/r && cd /home/user/r && git init -q && printf "a\\nb\\nc\\n" > f.txt && git add . && git commit -qm init && git checkout -qb feat && sed -i s/c/C/ f.txt && git commit -qam feat && git checkout -q main && sed -i s/a/A/ f.txt && git commit -qam main && git merge -q feat -m merge && cat f.txt && git log --oneline --graph | wc -l');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('Auto-merging f.txt\nA\nb\nC\n6\n');
+    r = await g('cd /home/user/r && git checkout -qb topic HEAD~2 && echo z > z.txt && git add z.txt && git commit -qm z && git rebase -q main && git log --format=%s | head -3 && ls -1');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('z\nmerge\nmain\nf.txt\nz.txt\n');
+    r = await g('cd /home/user/r && echo dirty >> f.txt && git stash -q && git status --short && git stash pop -q && git diff --stat');
+    expect(r.out).toBe(' f.txt | 1 +\n 1 file changed, 1 insertion(+)\n');
+  }, 300_000);
+
+
+  it('blame, tags, a pre-commit hook, clone and push (upload-pack/receive-pack over pipes)', async () => {
+    let r = await g('cd /home/user/r && git checkout -q main && git checkout -q -- . && git tag v1.0 && git describe --tags && git blame -s f.txt | sed "s/^[^ ]* //"');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('v1.0\n1) A\n2) b\n3) C\n');
+    await fs.writeFile('/home/user/r/.git/hooks/pre-commit', '#!/bin/sh\nif git diff --cached | grep -q TODO; then echo "no TODOs" >&2; exit 1; fi\n');
+    await fs.chmod?.('/home/user/r/.git/hooks/pre-commit', 0o755);
+    r = await g('cd /home/user/r && echo TODO >> f.txt && git commit -qam todo; echo rc=$?; git checkout -q -- f.txt');
+    expect(r.err).toContain('no TODOs');
+    expect(r.out).toBe('rc=1\n');
+    // clone runs `sh -c git-upload-pack ...` and talks to it both ways
+    r = await g('cd /tmp && git clone -q file:///home/user/r r2 && cd r2 && git log --oneline | wc -l && echo n > n.txt && git add n.txt && git commit -qm n && git push -q origin HEAD:refs/heads/from-clone && cd /home/user/r && git log --format=%s -1 from-clone');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('4\nn\n');
   }, 300_000);
 });

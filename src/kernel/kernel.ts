@@ -228,11 +228,52 @@ export class Kernel {
     // (a bin-dir path can name a builtin's PATH shim, or nothing on disk)
     const pkgBin = `${PKG_BIN_DIR}/${base}`;
     if (cmd && this.fs && path !== pkgBin && packageShadows(this.fs).has(base)) return this.findProgram(pkgBin, _proc);
+    if (cmd && SHELL_NAMES.has(base)) {
+      const direct = await this.shellCommandDirect(_proc);
+      if (direct) return direct;
+    }
     if (cmd) return proc => this.runBuiltin(proc, cmd);
     // Scripts and other executables the shell knows how to start
     const found = path.includes('/') ? ((await this.fs?.exists(path)) ? path : null) : await shell.findExecutableInPath(path);
     if (found) return proc => this.runViaShell(proc);
     return null;
+  }
+
+  /**
+   * `sh -c 'prog args'` naming a program (not a builtin), with nothing for
+   * the shell to do but start it: run the program in this process, as a
+   * real shell execs its last command. Builtins see stdin only at EOF and
+   * write their output when they return, so a program talking to its parent
+   * over pipes (git clone and git-upload-pack) can't go through one.
+   */
+  private async shellCommandDirect(probe: Process): Promise<Runner | null> {
+    const a = probe.argv;
+    if (a.length < 3 || a[1] !== '-c') return null;
+    const words = simpleCommandWords(a[2]);
+    if (!words || !words.length || words[0].includes('=')) return null;
+    const name = words[0];
+    let path: string | null = null;
+    if (name.includes('/')) {
+      const p = this.resolvePath(probe, name);
+      if (typeof p === 'string' && (await this.fs?.exists(p))) path = p;
+    } else if (this.fs && this.shell?.commands.get(name) && packageShadows(this.fs).has(name)) {
+      path = `${PKG_BIN_DIR}/${name}`; // an installed package replaces the builtin
+    } else if (!this.shell?.commands.get(name)) {
+      for (const dir of (probe.env.PATH ?? '/usr/local/bin:/usr/bin:/bin').split(':')) {
+        if (!dir) continue;
+        const p = `${dir.replace(/\/$/, '')}/${name}`;
+        if (await this.fs?.exists(p)) { path = p; break; }
+      }
+    }
+    if (!path) return null;
+    const next = new Process({ pid: -1, ppid: probe.ppid, path, argv: words, env: probe.env, cwd: probe.cwd });
+    const runner = await this.findProgram(path, next);
+    if (!runner) return null;
+    return (proc, k) => {
+      proc.path = path!;
+      proc.argv = words;
+      return runner(proc, k);
+    };
   }
 
   // ── Process lifecycle ─────────────────────────────────────────────────────
@@ -1634,3 +1675,32 @@ export function getKernel(): Kernel {
   if (w) w.__shiroKernel = singleton;
   return singleton;
 }
+
+const SHELL_NAMES = new Set(['sh', 'bash', 'dash']);
+
+/** The words of a shell command that needs no shell: plain words and quoted
+ *  strings without expansions, redirections or operators (`exec` dropped). */
+export function simpleCommandWords(script: string): string[] | null {
+  const words: string[] = [];
+  let i = 0;
+  const s = script.trim();
+  if (/[\n;&|<>()$`\\*?[\]{}~#!]/.test(s)) return null;
+  while (i < s.length) {
+    while (s[i] === ' ' || s[i] === '\t') i++;
+    if (i >= s.length) break;
+    let w = '';
+    while (i < s.length && s[i] !== ' ' && s[i] !== '\t') {
+      const c = s[i];
+      if (c === "'" || c === '"') {
+        const end = s.indexOf(c, i + 1);
+        if (end < 0) return null;
+        w += s.slice(i + 1, end);
+        i = end + 1;
+      } else { w += c; i++; }
+    }
+    words.push(w);
+  }
+  if (words[0] === 'exec') words.shift();
+  return words;
+}
+
