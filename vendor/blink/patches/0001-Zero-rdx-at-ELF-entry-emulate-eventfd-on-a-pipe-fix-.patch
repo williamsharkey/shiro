@@ -1,0 +1,314 @@
+From 80dd1622a7c23c2d071e952373d584862880a8b3 Mon Sep 17 00:00:00 2001
+From: shiro <x@x>
+Date: Wed, 7 Oct 2026 23:24:05 +0000
+Subject: [PATCH 1/6] Zero %rdx at ELF entry; emulate eventfd on a pipe; fix
+ epoll configure check
+
+---
+ blink/argv.c               |   4 +-
+ blink/eventfd.c            | 237 +++++++++++++++++++++++++++++++++++++
+ blink/syscall.c            |   2 +
+ blink/syscall.h            |   2 +
+ tool/config/epoll_pwait1.c |   2 +-
+ 5 files changed, 245 insertions(+), 2 deletions(-)
+ create mode 100644 blink/eventfd.c
+
+diff --git a/blink/argv.c b/blink/argv.c
+index 11c77c9..aa44777 100644
+--- a/blink/argv.c
++++ b/blink/argv.c
+@@ -113,7 +113,9 @@ void LoadArgv(struct Machine *m, char *execfn, char *prog, char **args,
+   while ((sp - nall * sizeof(i64)) & (STACKALIGN - 1)) --sp;
+   sp -= nall * sizeof(i64);
+   Write64(m->sp, sp);
+-  Write64(m->dx, dx);
++  // Linux zeroes %rdx at entry: glibc's _start registers it with atexit()
++  // as rtld_fini. Only Cosmopolitan programs expect the program path here.
++  Write64(m->dx, m->system->iscosmo ? dx : 0);
+   Write64(m->di, 0); /* or ape detects freebsd */
+   bytes = (u8 *)malloc(nall * 8);
+   for (i = 0; i < nall; ++i) {
+diff --git a/blink/eventfd.c b/blink/eventfd.c
+new file mode 100644
+index 0000000..02e8c1e
+--- /dev/null
++++ b/blink/eventfd.c
+@@ -0,0 +1,237 @@
++/*-*- mode:c;indent-tabs-mode:nil;c-basic-offset:2;tab-width:8;coding:utf-8 -*-│
++│ vi: set et ft=c ts=2 sts=2 sw=2 fenc=utf-8                               :vi │
++╞══════════════════════════════════════════════════════════════════════════════╡
++│ eventfd(2) emulated on top of a pipe, for hosts without eventfd (wasm, BSD). │
++│ Copyright 2026 Shiro contributors. ISC license, same terms as Blink.         │
++╚─────────────────────────────────────────────────────────────────────────────*/
++// The guest fd is the pipe's read end. The pipe holds exactly one byte
++// while the counter is nonzero, so poll()/epoll() see POLLIN exactly when
++// a read would succeed, and a blocking read() blocks in the host pipe.
++#include <errno.h>
++#include <fcntl.h>
++#include <stdlib.h>
++#include <string.h>
++#include <poll.h>
++#include <sys/uio.h>
++#include <unistd.h>
++
++#include "blink/endian.h"
++#include "blink/errno.h"
++#include "blink/fds.h"
++#include "blink/assert.h"
++#include "blink/macros.h"
++#include "blink/log.h"
++#include "blink/machine.h"
++#include "blink/syscall.h"
++#include "blink/thread.h"
++#include "blink/vfs.h"
++
++#define EFD_SEMAPHORE_LINUX 1
++#define EFD_CLOEXEC_LINUX   0x80000
++#define EFD_NONBLOCK_LINUX  0x800
++
++struct Eventfd {
++  int rfd, wfd;
++  bool semaphore;
++  u64 count;
++  struct Eventfd *next;
++};
++
++static pthread_mutex_t_ g_efd_lock = PTHREAD_MUTEX_INITIALIZER_;
++static struct Eventfd *g_efds;
++
++static struct Eventfd *FindEventfd(int fd) {
++  struct Eventfd *e;
++  for (e = g_efds; e; e = e->next) {
++    if (e->rfd == fd) return e;
++  }
++  return 0;
++}
++
++static size_t GetIovSize(const struct iovec *iov, int iovcnt) {
++  int i;
++  size_t n = 0;
++  for (i = 0; i < iovcnt; ++i) n += iov[i].iov_len;
++  return n;
++}
++
++static ssize_t CopyOut(const struct iovec *iov, int iovcnt, const u8 *p,
++                       size_t n) {
++  int i;
++  size_t k, got = 0;
++  for (i = 0; i < iovcnt && got < n; ++i) {
++    k = MIN(iov[i].iov_len, n - got);
++    memcpy(iov[i].iov_base, p + got, k);
++    got += k;
++  }
++  return got;
++}
++
++static size_t CopyIn(const struct iovec *iov, int iovcnt, u8 *p, size_t n) {
++  int i;
++  size_t k, got = 0;
++  for (i = 0; i < iovcnt && got < n; ++i) {
++    k = MIN(iov[i].iov_len, n - got);
++    memcpy(p + got, iov[i].iov_base, k);
++    got += k;
++  }
++  return got;
++}
++
++static ssize_t EventfdReadv(int fd, const struct iovec *iov, int iovcnt) {
++  u8 b, buf[8];
++  u64 val;
++  ssize_t rc;
++  struct Eventfd *e;
++  if (GetIovSize(iov, iovcnt) < 8) return einval();
++  for (;;) {
++    LOCK(&g_efd_lock);
++    if (!(e = FindEventfd(fd))) {
++      UNLOCK(&g_efd_lock);
++      return ebadf();
++    }
++    if (e->count) {
++      if (e->semaphore) {
++        val = 1;
++        --e->count;
++      } else {
++        val = e->count;
++        e->count = 0;
++      }
++      if (!e->count) unassert(read(e->rfd, &b, 1) == 1);
++      UNLOCK(&g_efd_lock);
++      Write64(buf, val);
++      return CopyOut(iov, iovcnt, buf, 8);
++    }
++    UNLOCK(&g_efd_lock);
++    // Counter is zero: wait for a writer (EAGAIN if O_NONBLOCK).
++    struct pollfd pfd = {fd, POLLIN, 0};
++    rc = poll(&pfd, 1, -1);
++    if (rc == -1) return -1;
++    if (fcntl(fd, F_GETFL) & O_NONBLOCK) {
++      LOCK(&g_efd_lock);
++      e = FindEventfd(fd);
++      rc = e && e->count;
++      UNLOCK(&g_efd_lock);
++      if (!rc) return eagain();
++    }
++  }
++}
++
++static ssize_t EventfdWritev(int fd, const struct iovec *iov, int iovcnt) {
++  u8 buf[8];
++  u64 val;
++  struct Eventfd *e;
++  if (CopyIn(iov, iovcnt, buf, 8) < 8) return einval();
++  val = Read64(buf);
++  if (val == 0xffffffffffffffff) return einval();
++  LOCK(&g_efd_lock);
++  if (!(e = FindEventfd(fd))) {
++    UNLOCK(&g_efd_lock);
++    return ebadf();
++  }
++  if (e->count + val < e->count || e->count + val == 0xffffffffffffffff) {
++    UNLOCK(&g_efd_lock);
++    return eagain();
++  }
++  if (!e->count && val) unassert(write(e->wfd, "x", 1) == 1);
++  e->count += val;
++  UNLOCK(&g_efd_lock);
++  return 8;
++}
++
++static int EventfdClose(int fd) {
++  struct Eventfd *e, **p;
++  LOCK(&g_efd_lock);
++  for (p = &g_efds; (e = *p); p = &e->next) {
++    if (e->rfd == fd) {
++      *p = e->next;
++      close(e->wfd);
++      free(e);
++      break;
++    }
++  }
++  UNLOCK(&g_efd_lock);
++  return close(fd);
++}
++
++static int EventfdPoll(struct pollfd *fds, nfds_t nfds, int timeout) {
++  nfds_t i;
++  int rc, want[64];
++  // Eventfds are always writable; the pipe read end never says so.
++  for (i = 0; i < nfds && i < 64; ++i) {
++    want[i] = fds[i].events & POLLOUT;
++    fds[i].events &= ~POLLOUT;
++    if (want[i]) timeout = 0;
++  }
++  rc = VfsPoll(fds, nfds, timeout);
++  if (rc == -1) return rc;
++  for (i = 0; i < nfds && i < 64; ++i) {
++    if (want[i]) {
++      fds[i].events |= POLLOUT;
++      if (!fds[i].revents) ++rc;
++      fds[i].revents |= POLLOUT;
++    }
++  }
++  return rc;
++}
++
++static const struct FdCb kFdCbEventfd = {
++    .close = EventfdClose,
++    .readv = EventfdReadv,
++    .writev = EventfdWritev,
++    .poll = EventfdPoll,
++    .tcgetattr = 0,
++    .tcsetattr = 0,
++    .tcgetwinsize = 0,
++    .tcsetwinsize = 0,
++};
++
++int SysEventfd2(struct Machine *m, u32 initval, i32 flags) {
++  int lim, fds[2], oflags;
++  struct Fd *fd;
++  struct Eventfd *e;
++  if (flags & ~(EFD_SEMAPHORE_LINUX | EFD_CLOEXEC_LINUX | EFD_NONBLOCK_LINUX)) {
++    return einval();
++  }
++  if (!(lim = GetFileDescriptorLimit(m->system))) return emfile();
++  if (!(e = (struct Eventfd *)calloc(1, sizeof(*e)))) return enomem();
++  if (pipe(fds) == -1) {
++    free(e);
++    return -1;
++  }
++  if (fds[0] >= lim) {
++    close(fds[0]);
++    close(fds[1]);
++    free(e);
++    return emfile();
++  }
++  oflags = O_RDWR;
++  if (flags & EFD_CLOEXEC_LINUX) {
++    oflags |= O_CLOEXEC;
++    fcntl(fds[0], F_SETFD, FD_CLOEXEC);
++  }
++  fcntl(fds[1], F_SETFD, FD_CLOEXEC);
++  if (flags & EFD_NONBLOCK_LINUX) {
++    oflags |= O_NONBLOCK;
++    fcntl(fds[0], F_SETFL, O_NONBLOCK);
++  }
++  e->rfd = fds[0];
++  e->wfd = fds[1];
++  e->semaphore = !!(flags & EFD_SEMAPHORE_LINUX);
++  e->count = initval;
++  if (initval) unassert(write(e->wfd, "x", 1) == 1);
++  LOCK(&g_efd_lock);
++  e->next = g_efds;
++  g_efds = e;
++  UNLOCK(&g_efd_lock);
++  LOCK(&m->system->fds.lock);
++  unassert(fd = AddFd(&m->system->fds, fds[0], oflags));
++  fd->cb = &kFdCbEventfd;
++  UNLOCK(&m->system->fds.lock);
++  return fds[0];
++}
++
++int SysEventfd(struct Machine *m, u32 initval) {
++  return SysEventfd2(m, initval, 0);
++}
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 34cc01c..6f38351 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -5635,6 +5635,8 @@ void OpSyscall(P) {
+     SYSCALL(1, 0x016, "pipe", SysPipe, STRACE_PIPE);
+ #ifndef DISABLE_NONPOSIX
+     SYSCALL(2, 0x125, "pipe2", SysPipe2, STRACE_PIPE2);
++    SYSCALL(1, 0x11C, "eventfd", SysEventfd, STRACE_1);
++    SYSCALL(2, 0x122, "eventfd2", SysEventfd2, STRACE_2);
+ #endif
+     SYSCALL(6, 0x038, "clone", SysClone, STRACE_CLONE);
+     SYSCALL(2, 0x0C8, "tkill", SysTkill, STRACE_TKILL);
+diff --git a/blink/syscall.h b/blink/syscall.h
+index 87a351c..f265351 100644
+--- a/blink/syscall.h
++++ b/blink/syscall.h
+@@ -63,6 +63,8 @@ int SysCloseRange(struct Machine *, u32, u32, u32);
+ int SysDup(struct Machine *, i32, i32, i32, i32);
+ int SysOpenat(struct Machine *, i32, i64, i32, i32);
+ int SysPipe2(struct Machine *, i64, i32);
++int SysEventfd(struct Machine *, u32);
++int SysEventfd2(struct Machine *, u32, i32);
+ int SysIoctl(struct Machine *, int, u64, i64);
+ _Noreturn void SysExitGroup(struct Machine *, int);
+ _Noreturn void SysExit(struct Machine *, int);
+diff --git a/tool/config/epoll_pwait1.c b/tool/config/epoll_pwait1.c
+index 524964d..4575205 100644
+--- a/tool/config/epoll_pwait1.c
++++ b/tool/config/epoll_pwait1.c
+@@ -4,6 +4,6 @@
+ int main(int argc, char *argv[]) {
+   epoll_create(-1);
+   epoll_create1(-1);
+-  epoll_pwait(-1, 0, 0, 0, 0);
++  struct epoll_event e; epoll_pwait(-1, &e, 1, 0, 0);
+   return 0;
+ }
+-- 
+2.43.0
+

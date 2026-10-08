@@ -7,3 +7,4 @@ claude-code-pkg/
 probe.jsonl
 tests/.pkg-cache/
 .pkgbuild/
+.blink-build/

@@ -1,0 +1,31 @@
+From 884c3d8df9756877da35d469664fc9138d6f2949 Mon Sep 17 00:00:00 2001
+From: shiro <x@x>
+Date: Wed, 7 Oct 2026 23:29:04 +0000
+Subject: [PATCH 2/6] emscripten: force the runtime to exit when the guest
+ exits
+
+---
+ blink/blink.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/blink/blink.c b/blink/blink.c
+index 3571b61..c8b6e75 100644
+--- a/blink/blink.c
++++ b/blink/blink.c
+@@ -351,7 +351,12 @@ static void HandleSigs(void) {
+ 
+ #if defined(__EMSCRIPTEN__)
+ void exit(int status) {
+-  // main is called multiple times - don't perform cleanup
++  // main is called multiple times - don't perform cleanup. _exit() from
++  // a PROXY_TO_PTHREAD main thread never tears the runtime down, so the
++  // embedder would wait forever; force the exit through to JavaScript.
++  fflush(stdout);
++  fflush(stderr);
++  emscripten_force_exit(status);
+   _exit(status);
+ }
+ #endif
+-- 
+2.43.0
+

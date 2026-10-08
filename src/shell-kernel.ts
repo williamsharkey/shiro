@@ -80,8 +80,10 @@ export async function resolveKernelProgram(
     return { argv: [base, ...args], run: wasmRunner(module, image) };
   }
   if (isElfBytes(bytes)) {
+    // Blink (wasm) when the page can run it, else the src/x86 interpreter
+    const { chooseElfRunner } = await import('./x86-engine');
     const { x86Runner } = await import('./x86/kernel-runner');
-    return { argv: [path, ...args], run: x86Runner(bytes, path) };
+    return { argv: [path, ...args], run: await chooseElfRunner(path, shell.env, () => x86Runner(bytes, path)) };
   }
   if (bytes[0] !== 0x23 /* # */) return null;
   const firstLine = dec.decode(bytes.subarray(0, Math.min(bytes.length, 256))).split('\n')[0];

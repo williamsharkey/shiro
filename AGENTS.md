@@ -18,7 +18,7 @@ Do not treat the dashboard or wrappers as the product. The product is the browse
 - `src/node-compat/*`: Node.js runtime shims used by `node` and Claude Code.
 - `src/wasi/*`: WASM programs as kernel processes (see "WASM Processes" below). `src/wasi-runtime.ts` is the old in-page runtime, kept as the fallback.
 - `src/pkg-manager.ts`: the package manager (`pkg`/`apt`, see "Packages"); `src/wasi-packages.ts` is the older single-binary API on top of its index.
-- `src/x86/*`: Tier 3 x86-64 emulator.
+- `src/x86-engine/*` + `public/engines/blink/` + `vendor/blink/`: x86-64 Linux ELF in Blink (wasm), as kernel processes; `src/x86/*` is the fallback interpreter when the page isn't cross-origin isolated. See `docs/X86_ENGINES.md`.
 - `src/kernel/*`: Unix kernel core (process table, fd tables, pipes, syscall dispatch, SAB syscall channel for Worker guests). Contract: `docs/KERNEL_ABI.md`; roadmap: `docs/UNIX_COMPAT.md`. `window.__shiro.kernel`; kernel processes show in `ps`.
 - `src/commands/seed.ts`, `src/commands/hc.ts`, `src/seed-runtime-context.ts`: seeded sessions, host-page access, runtime orientation.
 - `src/claude-config.ts`, `src/node-compat/preload.ts`, `src/node-compat/process.ts`: Claude bootstrap, auth persistence, startup defaults.
@@ -157,6 +157,8 @@ Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` ha
 - `kill` is one implementation (`src/commands/trap.ts`, re-exported by `ps.ts`) with bash's options; `stty` reads and sets the terminal's pty (a per-shell detached pty when there is no terminal); `tput lines/cols` use the pty size, overridden by `LINES`/`COLUMNS`.
 
 ## Gotchas
+
+- Blink engine: rebuild `public/engines/blink/blink.{mjs,wasm}` with `vendor/blink/build.sh` after changing `vendor/blink/patches/` or `shiro-net.js`; don't hand-edit the generated files. `host.mjs` is hand-written. Browsers refuse `TextDecoder.decode()` on SharedArrayBuffer views (Node doesn't), so decode a `.slice()` of channel data.
 
 - `child_process` is shimmed. There is no real process tree.
 - Most filesystem work is async under the hood even when sync APIs are emulated.

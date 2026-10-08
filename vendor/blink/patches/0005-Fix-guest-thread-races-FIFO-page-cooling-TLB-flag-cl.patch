@@ -1,0 +1,406 @@
+From baddd29482d550faef57361db9226a5e8524047b Mon Sep 17 00:00:00 2001
+From: shiro <x@x>
+Date: Thu, 8 Oct 2026 00:08:10 +0000
+Subject: [PATCH 5/6] Fix guest-thread races: FIFO page cooling, TLB flag
+ clear-then-flush, GIL
+
+- Freed pages went back on a LIFO list and were handed out again at once,
+  while other threads could still be walking a freed page table or hold
+  the page in a TLB entry they hadn't flushed yet. Freed pages now cool
+  off in a FIFO before reuse, and page tables are unlinked before freeing.
+- FindPageTableEntry() and LoadInstruction2() cleared the invalidation
+  flag after flushing, losing invalidations posted in between.
+- A global interpreter lock (blink/gil.c) runs one guest thread at a time,
+  released around blocking syscalls and every 4096 instructions. On by
+  default for emscripten (BLINK_GIL=1 elsewhere). Go net/http under the
+  software MMU went from ~1 in 5 runs faulting to 0 in 70.
+- emscripten exit() tells the embedder first (Module.shiroExit), since
+  runtime teardown could wedge on threads parked in proxied syscalls.
+---
+ blink/blink.c        |  12 +++--
+ blink/gil.c          | 113 +++++++++++++++++++++++++++++++++++++++++++
+ blink/gil.h          |  22 +++++++++
+ blink/instruction.c  |   6 +--
+ blink/machine.c      |   7 +++
+ blink/memory.c       |   8 ++-
+ blink/memorymalloc.c |  29 +++++++++--
+ blink/syscall.c      |   6 +++
+ 8 files changed, 191 insertions(+), 12 deletions(-)
+ create mode 100644 blink/gil.c
+ create mode 100644 blink/gil.h
+
+diff --git a/blink/blink.c b/blink/blink.c
+index c8b6e75..03ce188 100644
+--- a/blink/blink.c
++++ b/blink/blink.c
+@@ -49,6 +49,7 @@
+ #include "blink/util.h"
+ #include "blink/vfs.h"
+ #include "blink/web.h"
++#include "blink/gil.h"
+ #include "blink/x86.h"
+ #include "blink/xlat.h"
+ 
+@@ -352,16 +353,19 @@ static void HandleSigs(void) {
+ #if defined(__EMSCRIPTEN__)
+ void exit(int status) {
+   // main is called multiple times - don't perform cleanup. _exit() from
+-  // a PROXY_TO_PTHREAD main thread never tears the runtime down, so the
+-  // embedder would wait forever; force the exit through to JavaScript.
+-  fflush(stdout);
+-  fflush(stderr);
++  // a PROXY_TO_PTHREAD main thread never tears the runtime down, and the
++  // teardown itself can wedge on threads stuck in proxied syscalls, so
++  // first tell the embedder directly (Module.shiroExit runs on the main
++  // runtime thread), then force the exit through to JavaScript.
++  MAIN_THREAD_ASYNC_EM_ASM({ if (Module['shiroExit']) Module['shiroExit']($0); },
++                           status);
+   emscripten_force_exit(status);
+   _exit(status);
+ }
+ #endif
+ 
+ int main(int argc, char *argv[]) {
++  GilInit();
+   SetupWeb();
+   GetStartDir();
+ #ifndef NDEBUG
+diff --git a/blink/gil.c b/blink/gil.c
+new file mode 100644
+index 0000000..76811fe
+--- /dev/null
++++ b/blink/gil.c
+@@ -0,0 +1,113 @@
++/*-*- mode:c;indent-tabs-mode:nil;c-basic-offset:2;tab-width:8;coding:utf-8 -*-│
++│ vi: set et ft=c ts=2 sts=2 sw=2 fenc=utf-8                               :vi │
++╞══════════════════════════════════════════════════════════════════════════════╡
++│ Global interpreter lock for guest threads (a FIFO ticket lock).              │
++│ Copyright 2026 Shiro contributors. ISC license, same terms as Blink.         │
++╚─────────────────────────────────────────────────────────────────────────────*/
++#include "blink/gil.h"
++
++#include <pthread.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "blink/assert.h"
++#include "blink/atomic.h"
++
++bool g_gil_enabled;
++
++static pthread_mutex_t g_gil_lock = PTHREAD_MUTEX_INITIALIZER;
++static pthread_cond_t g_gil_cond = PTHREAD_COND_INITIALIZER;
++static unsigned long g_gil_next;      // next ticket to hand out
++static unsigned long g_gil_serving;   // ticket allowed to run
++static _Atomic(int) g_gil_waiters;
++static _Thread_local bool t_gil_held;
++
++void GilInit(void) {
++  const char *s = getenv("BLINK_GIL");
++#ifdef __EMSCRIPTEN__
++  g_gil_enabled = !s || strcmp(s, "0");
++#else
++  g_gil_enabled = s && strcmp(s, "0");
++#endif
++}
++
++bool GilHeld(void) {
++  return t_gil_held;
++}
++
++void GilAcquire(void) {
++  unsigned long ticket;
++  if (!g_gil_enabled || t_gil_held) return;
++  atomic_fetch_add(&g_gil_waiters, 1);
++  pthread_mutex_lock(&g_gil_lock);
++  ticket = g_gil_next++;
++  while (ticket != g_gil_serving) {
++    pthread_cond_wait(&g_gil_cond, &g_gil_lock);
++  }
++  pthread_mutex_unlock(&g_gil_lock);
++  atomic_fetch_sub(&g_gil_waiters, 1);
++  t_gil_held = true;
++}
++
++void GilRelease(void) {
++  if (!t_gil_held) return;
++  t_gil_held = false;
++  pthread_mutex_lock(&g_gil_lock);
++  ++g_gil_serving;
++  pthread_cond_broadcast(&g_gil_cond);
++  pthread_mutex_unlock(&g_gil_lock);
++}
++
++void GilYield(void) {
++  if (t_gil_held && atomic_load(&g_gil_waiters)) {
++    GilRelease();
++    GilAcquire();
++  }
++}
++
++// After fork() only the calling thread exists in the child.
++void GilAfterFork(void) {
++  bool held = t_gil_held;
++  pthread_mutex_init(&g_gil_lock, 0);
++  pthread_cond_init(&g_gil_cond, 0);
++  g_gil_next = g_gil_serving = held;
++  atomic_store(&g_gil_waiters, 0);
++}
++
++// System calls that may block and don't change the address space. These
++// run without the lock so other guest threads keep going meanwhile.
++bool GilReleasesFor(unsigned long sysno) {
++  switch (sysno) {
++    case 0x000:  // read
++    case 0x001:  // write
++    case 0x007:  // poll
++    case 0x011:  // pread64
++    case 0x012:  // pwrite64
++    case 0x013:  // readv
++    case 0x014:  // writev
++    case 0x017:  // select
++    case 0x018:  // sched_yield
++    case 0x022:  // pause
++    case 0x023:  // nanosleep
++    case 0x02A:  // connect
++    case 0x02B:  // accept
++    case 0x02C:  // sendto
++    case 0x02D:  // recvfrom
++    case 0x02E:  // sendmsg
++    case 0x02F:  // recvmsg
++    case 0x03D:  // wait4
++    case 0x080:  // rt_sigtimedwait
++    case 0x082:  // rt_sigsuspend
++    case 0x0CA:  // futex
++    case 0x0E6:  // clock_nanosleep
++    case 0x0E8:  // epoll_wait
++    case 0x10E:  // pselect6
++    case 0x10F:  // ppoll
++    case 0x119:  // epoll_pwait
++    case 0x120:  // accept4
++    case 0x1B9:  // epoll_pwait2
++      return true;
++    default:
++      return false;
++  }
++}
+diff --git a/blink/gil.h b/blink/gil.h
+new file mode 100644
+index 0000000..6a610a2
+--- /dev/null
++++ b/blink/gil.h
+@@ -0,0 +1,22 @@
++#ifndef BLINK_GIL_H_
++#define BLINK_GIL_H_
++#include <stdbool.h>
++
++// Global interpreter lock: at most one guest thread executes instructions
++// at a time. Threads give it up around blocking system calls and every
++// kGilSlice instructions, in FIFO order. On by default for emscripten
++// builds (and with BLINK_GIL=1 elsewhere): Blink's software MMU and some
++// of its bookkeeping race when guest threads really run in parallel.
++#define kGilSlice 4096
++
++extern bool g_gil_enabled;
++
++void GilInit(void);
++void GilAcquire(void);
++void GilRelease(void);
++void GilYield(void);
++void GilAfterFork(void);
++bool GilHeld(void);
++bool GilReleasesFor(unsigned long sysno);
++
++#endif /* BLINK_GIL_H_ */
+diff --git a/blink/instruction.c b/blink/instruction.c
+index c9a6607..82e8847 100644
+--- a/blink/instruction.c
++++ b/blink/instruction.c
+@@ -76,10 +76,10 @@ static int LoadInstructionSlow(struct Machine *m, u64 ip) {
+ int LoadInstruction2(struct Machine *m, u64 pc) {
+   unsigned key;
+   u8 *addr, *page;
+-  if (atomic_load_explicit(&m->opcache->invalidated, memory_order_acquire)) {
++  if (atomic_load_explicit(&m->opcache->invalidated, memory_order_acquire) &&
++      atomic_exchange_explicit(&m->opcache->invalidated, false,
++                               memory_order_acq_rel)) {
+     ResetInstructionCache(m);
+-    atomic_store_explicit(&m->opcache->invalidated, false,
+-                          memory_order_relaxed);
+   }
+   key = pc & (ARRAYLEN(m->opcache->icache) - 1);
+   m->xedd = (struct XedDecodedInst *)m->opcache->icache[key];
+diff --git a/blink/machine.c b/blink/machine.c
+index ad309eb..e669cf5 100644
+--- a/blink/machine.c
++++ b/blink/machine.c
+@@ -17,6 +17,7 @@
+ │ PERFORMANCE OF THIS SOFTWARE.                                                │
+ ╚─────────────────────────────────────────────────────────────────────────────*/
+ #include "blink/machine.h"
++#include "blink/gil.h"
+ 
+ #include <errno.h>
+ #include <limits.h>
+@@ -2231,6 +2232,7 @@ void ExecuteInstruction(struct Machine *m) {
+ }
+ 
+ void Actor(struct Machine *mm) {
++  unsigned slice = 0;
+ #ifdef __CYGWIN__
+   // TODO: Why does JIT clobber %rbx on Cygwin?
+   struct Machine *volatile m;
+@@ -2241,6 +2243,9 @@ void Actor(struct Machine *mm) {
+ #ifndef __CYGWIN__
+     STATISTIC(++interps);
+ #endif
++    if (UNLIKELY(g_gil_enabled && !(++slice & (kGilSlice - 1)))) {
++      GilYield();
++    }
+     if (!atomic_load_explicit(&m->attention, memory_order_acquire)) {
+       ExecuteInstruction(m);
+     } else {
+@@ -2254,8 +2259,10 @@ void Blink(struct Machine *m) {
+   for (;;) {
+     if (!(rc = sigsetjmp(m->onhalt, 1))) {
+       m->canhalt = true;
++      GilAcquire();
+       Actor(m);
+     }
++    GilAcquire();
+     m->sysdepth = 0;
+     m->sigdepth = 0;
+     m->canhalt = false;
+diff --git a/blink/memory.c b/blink/memory.c
+index 6c2d34c..c95e3d6 100644
+--- a/blink/memory.c
++++ b/blink/memory.c
+@@ -184,9 +184,13 @@ u64 FindPageTableEntry(struct Machine *m, u64 page) {
+   u64 entry;
+   long tlbkey;
+   unsigned level, index;
+-  if (UNLIKELY(atomic_load_explicit(&m->invalidated, memory_order_acquire))) {
++  // Clear the flag before flushing: clearing it afterwards loses an
++  // invalidation that another thread posts while we refill the TLB, and
++  // the stale entry then outlives a munmap()/madvise() of its page.
++  if (UNLIKELY(atomic_load_explicit(&m->invalidated, memory_order_acquire) &&
++               atomic_exchange_explicit(&m->invalidated, false,
++                                        memory_order_acq_rel))) {
+     ResetTlb(m);
+-    atomic_store_explicit(&m->invalidated, false, memory_order_relaxed);
+   }
+   tlbkey = (page >> 12) & (ARRAYLEN(m->tlb) - 1);
+   if (LIKELY(m->tlb[tlbkey].page == page &&
+diff --git a/blink/memorymalloc.c b/blink/memorymalloc.c
+index 7d5cc93..8329696 100644
+--- a/blink/memorymalloc.c
++++ b/blink/memorymalloc.c
+@@ -43,9 +43,18 @@
+ #include "blink/util.h"
+ #include "blink/x86.h"
+ 
++// Freed pages (data and page tables) cool off in a FIFO before reuse.
++// Other threads walk page tables without locks and may still hold a TLB
++// entry until they notice their invalidation flag, so handing a page out
++// again right away (LIFO) let them read or write someone else's memory.
++#define kCoolingPages 2048
++
+ struct Allocator {
+   pthread_mutex_t_ lock;
+   struct HostPage *pages GUARDED_BY(lock);
++  struct HostPage *cool_head GUARDED_BY(lock);
++  struct HostPage *cool_tail GUARDED_BY(lock);
++  long cool_count GUARDED_BY(lock);
+ } g_allocator = {
+     PTHREAD_MUTEX_INITIALIZER_,
+ };
+@@ -91,8 +100,20 @@ void FreeAnonymousPage(struct System *s, u8 *page) {
+   unassert((h = NewHostPage()));
+   LOCK(&g_allocator.lock);
+   h->page = page;
+-  h->next = g_allocator.pages;
+-  g_allocator.pages = h;
++  h->next = 0;
++  if (g_allocator.cool_tail) {
++    g_allocator.cool_tail->next = h;
++  } else {
++    g_allocator.cool_head = h;
++  }
++  g_allocator.cool_tail = h;
++  if (++g_allocator.cool_count > kCoolingPages) {
++    h = g_allocator.cool_head;
++    if (!(g_allocator.cool_head = h->next)) g_allocator.cool_tail = 0;
++    --g_allocator.cool_count;
++    h->next = g_allocator.pages;
++    g_allocator.pages = h;
++  }
+   UNLOCK(&g_allocator.lock);
+ }
+ 
+@@ -749,8 +770,10 @@ static void RemoveVirtual(struct System *s, i64 virt, i64 size,
+         // crawl an old pointer to a free page table. free page
+         // tables may be crawled because they always get zero'd
+         // before being put into a freelist fifo that cools off
+-        FreePageTable(s, GetPageAddress(s, LoadPte(pde), i == 39));
++        // unlink before freeing, so new walks can't reach the table
++        pt = LoadPte(pde);
+         StorePte(pde, 0);
++        FreePageTable(s, GetPageAddress(s, pt, i == 39));
+       }
+       break;
+     }
+diff --git a/blink/syscall.c b/blink/syscall.c
+index fde0c79..36a5f7c 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -59,6 +59,7 @@
+ #include "blink/debug.h"
+ #include "blink/endian.h"
+ #include "blink/errno.h"
++#include "blink/gil.h"
+ #include "blink/flag.h"
+ #include "blink/iovs.h"
+ #include "blink/limits.h"
+@@ -374,6 +375,7 @@ _Noreturn void SysExitGroup(struct Machine *m, int rc) {
+     // syscall, so waiting for the other threads only hangs or trips asserts.
+     exit(rc);
+ #endif
++    GilRelease();  // the other threads need it to notice they're killed
+     KillOtherThreads(m->system);
+ #ifdef HAVE_JIT
+     DisableJit(&m->system->jit);  // unmapping exec pages is slow
+@@ -404,6 +406,7 @@ _Noreturn void SysExit(struct Machine *m, int rc) {
+   } else {
+     ClearChildTid(m);
+     FreeMachine(m);
++    GilRelease();
+     pthread_exit(EXIT_SUCCESS);
+   }
+ #else
+@@ -456,6 +459,7 @@ static int Fork(struct Machine *m, u64 flags, u64 stack, u64 ctid) {
+     UNLOCK(&m->system->exec_lock);
+   }
+   if (!pid) {
++    GilAfterFork();
+     newpid = getpid();
+     if (stack) {
+       Put64(m->sp, stack);
+@@ -5499,6 +5503,7 @@ void OpSyscall(P) {
+   r0 = Get64(m->r10);
+   r8 = Get64(m->r8);
+   r9 = Get64(m->r9);
++  if (g_gil_enabled && GilReleasesFor(ax & 0xfff)) GilRelease();
+   switch (ax & 0xfff) {
+     SYSCALL(3, 0x000, "read", SysRead, STRACE_READ);
+     SYSCALL(3, 0x001, "write", SysWrite, STRACE_WRITE);
+@@ -5737,6 +5742,7 @@ void OpSyscall(P) {
+       ax = enosys();
+       break;
+   }
++  GilAcquire();
+   if (!m->interrupted) {
+     Put64(m->ax, ax != -1 ? ax : -(XlatErrno(errno) & 0xfff));
+   }
+-- 
+2.43.0
+

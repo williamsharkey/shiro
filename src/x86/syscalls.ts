@@ -214,13 +214,13 @@ export class LinuxSyscalls {
     const fd = Number(fdNum);
     const n = Number(count);
 
-    const sockEntry = this.fdTable.get(fd);
-    if (sockEntry?.sock || sockEntry?.legacyHttp) return this.sysRecvfrom(fdNum, buf, count, 0n, 0n, 0n);
     if (fd === 0 && this.readStdin) {
       const bytes = await this.readStdin(n);
       this.mem.writeBytes(buf, bytes);
       return BigInt(bytes.length);
     }
+    const sockEntry = this.fdTable.get(fd);
+    if (sockEntry?.sock || sockEntry?.legacyHttp) return this.sysRecvfrom(fdNum, buf, count, 0n, 0n, 0n);
 
     if (fd === 0) {
       // Read from stdin

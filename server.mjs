@@ -37,7 +37,7 @@ export function isolationHeaders() {
 
 // --- MIME types ---
 const MIME = {
-  '.html': 'text/html', '.css': 'text/css', '.js': 'application/javascript',
+  '.html': 'text/html', '.css': 'text/css', '.js': 'application/javascript', '.mjs': 'application/javascript',
   '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png',
   '.ico': 'image/x-icon', '.wasm': 'application/wasm', '.txt': 'text/plain',
   '.map': 'application/json', '.mjs': 'application/javascript',

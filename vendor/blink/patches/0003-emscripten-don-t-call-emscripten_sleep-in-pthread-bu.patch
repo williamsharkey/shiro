@@ -1,0 +1,39 @@
+From 9db325790721288b4cef7e218be4ea0a7da76326 Mon Sep 17 00:00:00 2001
+From: shiro <x@x>
+Date: Wed, 7 Oct 2026 23:39:44 +0000
+Subject: [PATCH 3/6] emscripten: don't call emscripten_sleep() in pthread
+ builds
+
+---
+ blink/syscall.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 6f38351..ea51504 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -154,7 +154,11 @@ static int SystemIoctl(int fd, unsigned long request, ...) {
+ 
+ int em_poll(struct pollfd *fds, nfds_t nfds, int timeout) {
+   int ret = VfsPoll(fds, nfds, timeout);
++#ifndef __EMSCRIPTEN_PTHREADS__
++  // With pthreads the guest runs off the main thread and poll() really
++  // waits; emscripten_sleep() would need ASYNCIFY and abort there.
+   if (ret == 0) emscripten_sleep(50);
++#endif
+   return ret;
+ }
+ 
+@@ -168,7 +172,9 @@ ssize_t em_readv(int fd, const struct iovec *iov, int iovcnt) {
+     }
+   }
+   size_t ret = VfsReadv(fd, iov, iovcnt);
++#ifndef __EMSCRIPTEN_PTHREADS__
+   if (ret == -1 && errno == EAGAIN) emscripten_sleep(50);
++#endif
+   return ret;
+ }
+ #endif
+-- 
+2.43.0
+

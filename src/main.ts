@@ -457,6 +457,8 @@ async function main() {
   const kernel = getKernel();
   kernel.attach(fs, shell);
   installNet(kernel); // socket syscalls (src/kernel/net.ts, docs/NETWORKING.md)
+  // kernel.spawn() of an x86-64 ELF runs it in Blink when the page can (src/x86-engine)
+  void import('./x86-engine/blink').then(m => m.registerBlinkLoader(kernel));
   // Signals and job control for kernel processes; /dev/ptmx and /dev/pts/N
   attachKernelTty(kernel);
 
