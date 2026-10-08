@@ -74,7 +74,9 @@ export function inlineAssets(): Plugin {
             const css = typeof asset.source === 'string'
               ? asset.source
               : new TextDecoder().decode(asset.source);
-            delete bundle[href]; // remove standalone CSS file
+            // Keep the standalone file: lazy chunks import the entry chunk
+            // file, whose preload deps list this CSS, and a missing file
+            // makes every such import fail ("Unable to preload CSS").
             return `<style>${css}</style>`;
           }
           return _match;
