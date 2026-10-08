@@ -6,3 +6,4 @@ export * from './process';
 export * from './kernel';
 export * from './channel';
 export * from './worker-host';
+export * from './epoll';

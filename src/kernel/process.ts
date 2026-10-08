@@ -46,12 +46,43 @@ export class Process {
   sigmask = new Set<number>();
   /** Handlers by signal number: 'default' | 'ignore' | guest handler address/id. signals.ts maintains it. */
   dispositions = new Map<number, 'default' | 'ignore' | number>();
+  /** sa_flags / sa_mask / sa_restorer per signal, set by rt_sigaction (the handler itself is in `dispositions`). */
+  sigactions = new Map<number, { flags: number; mask: Set<number>; restorer: number }>();
+  /** Signals that arrived while blocked; delivered when unblocked (rt_sigprocmask, rt_sigreturn). */
+  deferredSignals = new Set<number>();
+  /** Masks saved when a guest handler starts; rt_sigreturn restores the top one. */
+  signalFrames: Set<number>[] = [];
+  /** sigaltstack(2) state, recorded but not used (guests run handlers on their own stacks). */
+  altStack = { sp: 0, flags: 2 /* SS_DISABLE */, size: 0 };
   signalHook?: SignalHook;
-  /** Free-form per-runtime state (worker handle, WASI instance, ...). */
+  /** Thread ids of extra threads (worker-host attachThread); the main thread's tid is the pid. */
+  tids = new Set<number>();
+  /**
+   * Free-form per-runtime state (worker handle, WASI instance, ...).
+   * `data.onSignal(sig)` fans out to every `addSignalListener` listener; keep
+   * calling it, don't replace it.
+   */
   data: Record<string, unknown> = {};
 
   /** Aborted when a signal interrupts the process: blocked syscalls return -EINTR. */
   private interrupt = new AbortController();
+  private signalListeners = new Set<(sig: number) => void>();
+  private static bySignal = new WeakMap<AbortSignal, Process>();
+
+  /** The process whose `syscallSignal` this is (what OpenFile read/write/ioctl receive as their last argument). */
+  static fromSyscallSignal(signal: unknown): Process | undefined {
+    return signal instanceof AbortSignal ? Process.bySignal.get(signal) : undefined;
+  }
+
+  /**
+   * Called when a signal is queued for the guest (`pendingSignals`). Each
+   * syscall channel (one per thread) registers here and flags the signal in
+   * its signal word; only one channel takes each signal.
+   */
+  addSignalListener(cb: (sig: number) => void): () => void {
+    this.signalListeners.add(cb);
+    return () => this.signalListeners.delete(cb);
+  }
   private exitWaiters: ((status: number) => void)[] = [];
   private stateWaiters = new Set<() => void>();
   private terminators: (() => void)[] = [];
@@ -71,6 +102,10 @@ export class Process {
     this.cwd = init.cwd;
     this.fds = init.fds ?? new FdTable();
     if (init.umask !== undefined) this.umask = init.umask;
+    Process.bySignal.set(this.interrupt.signal, this);
+    this.data.onSignal = (sig: number) => {
+      for (const cb of [...this.signalListeners]) cb(sig);
+    };
   }
 
   /** Short command name, like /proc/PID/comm. */
@@ -88,6 +123,7 @@ export class Process {
   interruptSyscalls(): void {
     const old = this.interrupt;
     this.interrupt = new AbortController();
+    Process.bySignal.set(this.interrupt.signal, this);
     old.abort();
   }
 

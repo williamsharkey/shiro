@@ -18,6 +18,7 @@ import {
 } from './fd';
 import { createPipe } from './pipe';
 import { Process } from './process';
+import { EpollFile, waitReady } from './epoll';
 
 /** Runs a process to completion; resolves with its exit code (or nothing if it exited through the kernel). */
 export type Runner = (proc: Process, kernel: Kernel) => Promise<number | void>;
@@ -28,14 +29,37 @@ export type Loader = (path: string, proc: Process, kernel: Kernel) => Runner | n
 /** Opens a device node; registered with `kernel.registerDevice` (e.g. /dev/ptmx from pty.ts). */
 export type DeviceOpener = (proc: Process, flags: number, path: string) => OpenFile | number | Promise<OpenFile | number>;
 
+/**
+ * A syscall handler registered with `kernel.registerSyscalls`. Same
+ * arguments as Kernel.syscall; return undefined to pass the call on (to an
+ * earlier registration, then the kernel's own handler).
+ */
+export type SyscallHandler = (
+  proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array, kernel: Kernel,
+) => number | undefined | Promise<number | undefined>;
+
 export interface SpawnOptions {
   /** Program to run: a command name, or a path. */
   path: string;
   argv?: string[];
   env?: Record<string, string>;
   cwd?: string;
-  /** Explicit fd map for the child. Without it the child inherits the parent's fds 0-2 (or gets /dev/null). */
+  /**
+   * Explicit fd map for the child. Without it the child inherits every
+   * parent fd not marked close-on-exec (posix_spawn), and gets /dev/null for
+   * any of 0-2 the parent lacks.
+   */
   fds?: Record<number, OpenFile>;
+  /** With `fds`: also inherit the parent's non-cloexec fds, with `fds` installed on top. */
+  inheritFds?: boolean;
+  /**
+   * Inherit the parent's ignored signals and signal mask, as exec does
+   * (SYS_spawn sets this). Off by default for host spawns: the page and the
+   * pty leader stand in for a shell, whose own ignores children shouldn't get.
+   */
+  inheritSignals?: boolean;
+  /** Signals reset to SIG_DFL in the child (posix_spawnattr_setsigdefault). */
+  sigdefault?: number[];
   /** Parent process (default: init, pid 1). */
   parent?: Process;
   /** Process group to join (0 = a new group led by the child). Default: the parent's group. */
@@ -54,7 +78,6 @@ export interface WaitResult {
 }
 
 const enc = new TextEncoder();
-const dec = new TextDecoder();
 
 function normalize(path: string): string {
   const stack: string[] = [];
@@ -80,6 +103,8 @@ export class Kernel {
   private loaders: Loader[] = [];
   private devices = new Map<string, DeviceOpener>();
   private stateWaiters = new Set<() => void>();
+  private spawnHooks = new Set<(proc: Process) => void>();
+  private syscallTable = new Map<number, SyscallHandler[]>();
   private allocPid: () => number;
   private detachTable?: () => void;
   /** How long an unreaped child of init stays a zombie before it is reaped automatically. */
@@ -138,6 +163,38 @@ export class Kernel {
     this.devices.set(path, opener);
   }
 
+  /**
+   * Handle syscall numbers outside kernel.ts (net.ts sockets, pty.ts or
+   * signals.ts overrides, runtime-specific calls). Later registrations run
+   * first; a handler returning undefined passes the call on. `nrs` is a list
+   * of numbers or an inclusive [lo, hi] range object. Returns an unregister function.
+   */
+  registerSyscalls(nrs: number[] | { lo: number; hi: number }, handler: SyscallHandler): () => void {
+    const list = Array.isArray(nrs) ? nrs : Array.from({ length: nrs.hi - nrs.lo + 1 }, (_, i) => nrs.lo + i);
+    for (const nr of list) {
+      const hs = this.syscallTable.get(nr) ?? [];
+      hs.unshift(handler);
+      this.syscallTable.set(nr, hs);
+    }
+    return () => {
+      for (const nr of list) {
+        const hs = this.syscallTable.get(nr)?.filter(h => h !== handler) ?? [];
+        if (hs.length) this.syscallTable.set(nr, hs);
+        else this.syscallTable.delete(nr);
+      }
+    };
+  }
+
+  /**
+   * Called synchronously for every new process, after it is in the table and
+   * before its program starts (signals.ts adopts processes here). Returns an
+   * unsubscribe function.
+   */
+  onSpawn(cb: (proc: Process) => void): () => void {
+    this.spawnHooks.add(cb);
+    return () => this.spawnHooks.delete(cb);
+  }
+
   /** The Runner for `path`, or null when nothing can run it. */
   async findProgram(path: string, proc: Process): Promise<Runner | null> {
     for (const l of this.loaders) {
@@ -165,7 +222,14 @@ export class Kernel {
   spawn(opts: SpawnOptions): Process {
     const parent = opts.parent ?? this.init;
     const pid = this.allocPid();
-    const fds = new FdTable();
+    let fds: FdTable;
+    if (opts.fds && !opts.inheritFds) {
+      fds = new FdTable();
+      for (const [fd, file] of Object.entries(opts.fds)) fds.alloc(file, Number(fd));
+    } else {
+      fds = parent.fds.inherit(opts.fds ?? {});
+      if (!opts.fds) for (const fd of [0, 1, 2]) if (!fds.has(fd)) fds.alloc(new DevNull(), fd);
+    }
     const proc = new Process({
       pid,
       ppid: parent.pid,
@@ -180,15 +244,16 @@ export class Kernel {
     });
     if (opts.setsid) { proc.sid = pid; proc.pgid = pid; }
     proc.ctty = opts.setsid ? undefined : parent.ctty;
-    if (opts.fds) {
-      for (const [fd, file] of Object.entries(opts.fds)) fds.alloc(file, Number(fd));
-    } else {
-      for (const fd of [0, 1, 2]) {
-        const f = parent.fds.get(fd);
-        fds.alloc(f ?? new DevNull(), fd);
-      }
+    if (opts.inheritSignals) {
+      // Across exec caught signals reset to default; ignored stay ignored; the mask carries over
+      for (const [sig, d] of parent.dispositions) if (d === 'ignore') proc.dispositions.set(sig, 'ignore');
+      for (const sig of parent.sigmask) proc.sigmask.add(sig);
     }
+    for (const sig of opts.sigdefault ?? []) proc.dispositions.delete(sig);
     this.procs.set(pid, proc);
+    for (const h of [...this.spawnHooks]) {
+      try { h(proc); } catch (e) { console.warn('[kernel] onSpawn hook failed', e); }
+    }
     this.notify();
     void this.start(proc, opts.run);
     return proc;
@@ -240,7 +305,8 @@ export class Kernel {
     (t as any)?.unref?.();
   }
 
-  private notify(): void {
+  /** Wake waitpid() callers: call after changing a process's state outside the kernel (job-control stops). */
+  notify(): void {
     for (const w of [...this.stateWaiters]) w();
   }
 
@@ -313,11 +379,13 @@ export class Kernel {
     if (proc.signalHook?.(proc, sig)) return;
     const disp = proc.dispositions.get(sig) ?? 'default';
     if (disp === 'ignore') return;
+    if (disp === 'default' && A.defaultSignalAction(sig) === 'ignore') return;
+    if (proc.sigmask.has(sig)) { proc.deferredSignals.add(sig); return; }
     if (typeof disp === 'number') {
       // A guest handler: flag it for the guest and interrupt blocking syscalls (EINTR)
       proc.pendingSignals.add(sig);
       proc.interruptSyscalls();
-      proc.data.onSignal && (proc.data.onSignal as (s: number) => void)(sig);
+      (proc.data.onSignal as ((s: number) => void) | undefined)?.(sig);
       return;
     }
     switch (A.defaultSignalAction(sig)) {
@@ -327,13 +395,57 @@ export class Kernel {
     }
   }
 
+  /**
+   * Take the next signal for a guest handler (channels call this to fill
+   * their signal word): the lowest pending, unblocked one. Blocks the
+   * handler's sa_mask (and the signal itself, without SA_NODEFER) until the
+   * guest's rt_sigreturn. Returns 0 when none.
+   */
+  takeSignal(proc: Process): number {
+    const sig = [...proc.pendingSignals].filter(s => !proc.sigmask.has(s)).sort((a, b) => a - b)[0];
+    if (sig === undefined) return 0;
+    proc.pendingSignals.delete(sig);
+    const act = proc.sigactions.get(sig);
+    proc.signalFrames.push(new Set(proc.sigmask));
+    for (const s of act?.mask ?? []) if (s !== A.SIGKILL && s !== A.SIGSTOP) proc.sigmask.add(s);
+    if (!(act && act.flags & A.SA_NODEFER)) proc.sigmask.add(sig);
+    if (act && act.flags & A.SA_RESETHAND) { proc.dispositions.delete(sig); proc.sigactions.delete(sig); }
+    return sig;
+  }
+
+  /** The process a thread id belongs to (a process's main thread has tid = pid). */
+  processOfTid(tid: number): Process | undefined {
+    const p = this.procs.get(tid);
+    if (p) return p;
+    for (const q of this.procs.values()) if (q.tids.has(tid)) return q;
+    return undefined;
+  }
+
+  /** A new thread id for an extra thread of `proc` (worker-host attachThread). */
+  allocTid(proc: Process): number {
+    const tid = this.allocPid();
+    proc.tids.add(tid);
+    return tid;
+  }
+
+  /** Install a new signal mask and deliver whatever it unblocked. */
+  setSigmask(proc: Process, mask: Set<number>): void {
+    mask.delete(A.SIGKILL);
+    mask.delete(A.SIGSTOP);
+    proc.sigmask = mask;
+    for (const s of [...proc.deferredSignals]) {
+      if (!mask.has(s)) { proc.deferredSignals.delete(s); this.deliver(proc, s); }
+    }
+    if ([...proc.pendingSignals].some(s => !mask.has(s))) (proc.data.onSignal as ((s: number) => void) | undefined)?.(0);
+  }
+
   /** A ShiroProcess view of `p` for src/process-table.ts (ps, kill, top). */
   private view(p: Process): ShiroProcess {
     const st = p.exitStatus;
     return {
       pid: p.pid,
       command: p.argv.join(' '),
-      status: p.state === 'zombie' ? (st !== undefined && A.WIFSIGNALED(st) ? 'killed' : 'exited') : 'running',
+      status: p.state === 'zombie' ? (st !== undefined && A.WIFSIGNALED(st) ? 'killed' : 'exited') : p.state === 'stopped' ? 'stopped' : 'running',
       exitCode: st === undefined ? 0 : A.shellExitCode(st),
       startTime: p.startTime,
       windowTerminal: null,
@@ -516,7 +628,7 @@ export class Kernel {
     if (!f) return '';
     if (f.kind === 'pipe' || f.kind === 'file' || f.kind === 'socket' || f instanceof BufferFile) {
       const r = await this.readAll(proc, 0);
-      return typeof r === 'number' ? '' : dec.decode(r);
+      return typeof r === 'number' ? '' : A.decodeText(r);
     }
     return '';
   }
@@ -528,6 +640,10 @@ export class Kernel {
    * slots; `data` is the data area (in/out). Returns the result or -errno; a
    * result above 2^31 (lseek) is returned as a plain number and the channel
    * splits it.
+   *
+   * `data` may be a view of a SharedArrayBuffer (the channel's data area).
+   * Never TextDecoder.decode it directly (browsers throw on shared memory);
+   * decode copies (`decodeText`).
    */
   async syscall(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
     if (proc.state === 'stopped') await proc.waitWhileStopped();
@@ -535,13 +651,25 @@ export class Kernel {
     const sig = proc.syscallSignal;
     const fds = proc.fds;
     const str = (off: number, len: number) => {
-      if (len < 0 || off + len > data.length) throw Object.assign(new Error('EFAULT'), { errno: A.EFAULT });
-      return dec.decode(data.subarray(off, off + len));
+      if (len < 0 || off < 0 || off + len > data.length) throw Object.assign(new Error('EFAULT'), { errno: A.EFAULT });
+      return A.decodeText(data.subarray(off, off + len));
     };
     const i64 = (lo: number, hi: number) => (hi | 0) * 0x100000000 + (lo >>> 0);
     const file = (fd: number) => fds.get(fd);
+    const at = (dirfd: number, off: number, len: number) => this.resolvePath(proc, str(off, len), dirfd);
+    const fs = () => {
+      if (!this.fs) throw Object.assign(new Error('ENOSYS'), { errno: A.ENOSYS });
+      return this.fs;
+    };
 
     try {
+      const handlers = this.syscallTable.get(nr);
+      if (handlers) {
+        for (const h of handlers) {
+          const r = await h(proc, nr, args, data, this);
+          if (r !== undefined) return r;
+        }
+      }
       switch (nr) {
         case A.SYS_read: {
           const f = file(args[0]);
@@ -554,6 +682,17 @@ export class Kernel {
           const n = await f.write(data.subarray(0, Math.min(args[1] >>> 0, data.length)), sig);
           if (n === -A.EPIPE) this.deliver(proc, A.SIGPIPE);
           return n;
+        }
+        case A.SYS_pread64:
+        case A.SYS_pwrite64: {
+          const f = file(args[0]);
+          if (!f) return -A.EBADF;
+          const off = i64(args[2], args[3]);
+          if (off < 0) return -A.EINVAL;
+          const buf = data.subarray(0, Math.min(args[1] >>> 0, data.length));
+          const fn = nr === A.SYS_pread64 ? f.pread : f.pwrite;
+          if (!fn) return -A.ESPIPE;
+          return await fn.call(f, buf, off);
         }
         case A.SYS_open:
         case A.SYS_openat: {
@@ -568,12 +707,15 @@ export class Kernel {
           return await fds.close(args[0]);
         case A.SYS_stat:
         case A.SYS_lstat:
-        case A.SYS_fstat: {
+        case A.SYS_fstat:
+        case A.SYS_newfstatat: {
           let st: A.KStat | number;
-          if (nr === A.SYS_fstat) {
+          if (nr === A.SYS_fstat || (nr === A.SYS_newfstatat && args[1] === 0 && args[2] & A.AT_EMPTY_PATH)) {
             const f = file(args[0]);
             if (!f) return -A.EBADF;
             st = await f.stat();
+          } else if (nr === A.SYS_newfstatat) {
+            st = await this.statPath(proc, str(0, args[1]), !(args[2] & A.AT_SYMLINK_NOFOLLOW), args[0]);
           } else {
             st = await this.statPath(proc, str(0, args[0]), nr === A.SYS_stat);
           }
@@ -581,8 +723,41 @@ export class Kernel {
           A.encodeStat(st, data);
           return 0;
         }
+        case A.SYS_access:
+        case A.SYS_faccessat: {
+          const [dirfd, len, mode] = nr === A.SYS_access ? [A.AT_FDCWD, args[0], args[1]] : [args[0], args[1], args[2]];
+          const st = await this.statPath(proc, str(0, len), true, dirfd);
+          if (typeof st === 'number') return st;
+          if ((mode & A.X_OK) && (st.mode & A.S_IFMT) === A.S_IFREG && !(st.mode & 0o111)) return -A.EACCES;
+          return 0;
+        }
         case A.SYS_poll:
           return await this.poll(proc, data, args[0], args[1]);
+        case A.SYS_select:
+        case A.SYS_pselect6:
+          return await this.select(proc, nr, args, data);
+        case A.SYS_epoll_create:
+        case A.SYS_epoll_create1: {
+          if (nr === A.SYS_epoll_create && args[0] <= 0) return -A.EINVAL;
+          const flags = nr === A.SYS_epoll_create1 ? args[0] : 0;
+          if (flags & ~A.EPOLL_CLOEXEC) return -A.EINVAL;
+          return fds.alloc(new EpollFile(), 0, !!(flags & A.EPOLL_CLOEXEC));
+        }
+        case A.SYS_epoll_ctl: {
+          const ep = file(args[0]);
+          const f = file(args[2]);
+          if (!ep || !f) return -A.EBADF;
+          if (!(ep instanceof EpollFile)) return -A.EINVAL;
+          return ep.ctl(args[1], args[2], f, args[3] | 0, args[4] | 0, args[5] | 0);
+        }
+        case A.SYS_epoll_wait:
+        case A.SYS_epoll_pwait: {
+          const ep = file(args[0]);
+          if (!ep) return -A.EBADF;
+          if (!(ep instanceof EpollFile)) return -A.EINVAL;
+          return await this.withMask(proc, nr === A.SYS_epoll_pwait && args[3] ? A.sigsetFromWords(args[4], args[5]) : null,
+            () => ep.wait(data, args[1], args[2], proc.syscallSignal));
+        }
         case A.SYS_lseek: {
           const f = file(args[0]);
           if (!f) return -A.EBADF;
@@ -592,8 +767,16 @@ export class Kernel {
         case A.SYS_ioctl: {
           const f = file(args[0]);
           if (!f) return -A.EBADF;
+          const req = args[1] >>> 0;
+          const arg = data.subarray(0, Math.min(args[2] >>> 0, data.length));
+          if (req === A.FIOCLEX || req === A.FIONCLEX) return fds.setCloexec(args[0], req === A.FIOCLEX);
+          if (req === A.FIONBIO && arg.length >= 4) {
+            const on = new DataView(arg.buffer, arg.byteOffset, 4).getInt32(0, true) !== 0;
+            f.flags = on ? f.flags | A.O_NONBLOCK : f.flags & ~A.O_NONBLOCK;
+            if (!f.ioctl) return 0;
+          }
           if (!f.ioctl) return -A.ENOTTY;
-          return await f.ioctl(args[1] >>> 0, data.subarray(0, Math.min(args[2] >>> 0, data.length)));
+          return await f.ioctl(req, arg, sig);
         }
         case A.SYS_pipe:
         case A.SYS_pipe2: {
@@ -624,7 +807,15 @@ export class Kernel {
             sig.addEventListener('abort', onAbort, { once: true });
           });
         }
+        case A.SYS_sched_yield:
+          await new Promise(r => setTimeout(r, 0));
+          return 0;
+        case A.SYS_getrandom: {
+          const n = Math.min(args[0] >>> 0, data.length);
+          return await new DevRandom().read(data.subarray(0, n));
+        }
         case A.SYS_getpid: return proc.pid;
+        case A.SYS_gettid: return proc.pid;
         case A.SYS_getppid: return proc.ppid;
         case A.SYS_getuid: return proc.uid;
         case A.SYS_getgid: return proc.gid;
@@ -664,6 +855,81 @@ export class Kernel {
         }
         case A.SYS_kill:
           return this.kill(args[0], args[1], proc);
+        case A.SYS_tkill:
+        case A.SYS_tgkill: {
+          // Threads share their process's pid as tgid; a signal to any tid of ours goes to the process
+          const [tgid, tid, s] = nr === A.SYS_tkill ? [args[0], args[0], args[1]] : [args[0], args[1], args[2]];
+          const target = this.processOfTid(tid);
+          if (!target || (nr === A.SYS_tgkill && target.pid !== tgid)) return -A.ESRCH;
+          return this.kill(target.pid, s, proc);
+        }
+        case A.SYS_rt_sigaction:
+          return this.sigaction(proc, args[0], args[1] !== 0, args[2] !== 0, data);
+        case A.SYS_rt_sigprocmask: {
+          const old = A.sigsetToWords(proc.sigmask);
+          if (args[1]) {
+            const dv = new DataView(data.buffer, data.byteOffset, 8);
+            const set = A.sigsetFromWords(dv.getUint32(0, true), dv.getUint32(4, true));
+            const next = new Set(proc.sigmask);
+            if (args[0] === A.SIG_BLOCK) set.forEach(s => next.add(s));
+            else if (args[0] === A.SIG_UNBLOCK) set.forEach(s => next.delete(s));
+            else if (args[0] === A.SIG_SETMASK) { next.clear(); set.forEach(s => next.add(s)); }
+            else return -A.EINVAL;
+            this.setSigmask(proc, next);
+          }
+          if (args[2]) {
+            const dv = new DataView(data.buffer, data.byteOffset + 8, 8);
+            dv.setUint32(0, old[0], true);
+            dv.setUint32(4, old[1], true);
+          }
+          return 0;
+        }
+        case A.SYS_rt_sigreturn: {
+          const saved = proc.signalFrames.pop();
+          if (saved) this.setSigmask(proc, saved);
+          return 0;
+        }
+        case A.SYS_rt_sigpending: {
+          const [lo, hi] = A.sigsetToWords([...proc.deferredSignals, ...proc.pendingSignals]);
+          const dv = new DataView(data.buffer, data.byteOffset, 8);
+          dv.setUint32(0, lo, true);
+          dv.setUint32(4, hi, true);
+          return 0;
+        }
+        case A.SYS_rt_sigsuspend: {
+          const dv = new DataView(data.buffer, data.byteOffset, 8);
+          const tmp = A.sigsetFromWords(dv.getUint32(0, true), dv.getUint32(4, true));
+          const saved = new Set(proc.sigmask);
+          // The handler's frame restores the caller's mask, as on Linux
+          const wake = new Promise<void>(resolve => {
+            if (sig.aborted) resolve();
+            else sig.addEventListener('abort', () => resolve(), { once: true });
+          });
+          this.setSigmask(proc, tmp);
+          await wake;
+          if (proc.signalFrames.length) proc.signalFrames[proc.signalFrames.length - 1] = saved;
+          else this.setSigmask(proc, saved);
+          return -A.EINTR;
+        }
+        case A.SYS_sigaltstack: {
+          const dv = new DataView(data.buffer, data.byteOffset, A.STACK_T_SIZE * 2);
+          const old = { ...proc.altStack };
+          if (args[0]) {
+            const flags = dv.getInt32(8, true);
+            if (flags & ~A.SS_DISABLE) return -A.EINVAL;
+            proc.altStack = { sp: i64(dv.getUint32(0, true), dv.getUint32(4, true)), flags, size: i64(dv.getUint32(16, true), dv.getUint32(20, true)) };
+          }
+          if (args[1]) {
+            const o = A.STACK_T_SIZE;
+            dv.setUint32(o, old.sp >>> 0, true);
+            dv.setUint32(o + 4, Math.floor(old.sp / 0x100000000), true);
+            dv.setInt32(o + 8, old.flags, true);
+            dv.setInt32(o + 12, 0, true);
+            dv.setUint32(o + 16, old.size >>> 0, true);
+            dv.setUint32(o + 20, Math.floor(old.size / 0x100000000), true);
+          }
+          return 0;
+        }
         case A.SYS_fcntl:
           return this.fcntl(proc, args[0], args[1], args[2]);
         case A.SYS_fsync: {
@@ -678,6 +944,12 @@ export class Kernel {
           if (!f.truncate) return -A.EINVAL;
           return await f.truncate(i64(args[1], args[2]));
         }
+        case A.SYS_truncate: {
+          const f = await this.open(proc, str(0, args[0]), A.O_WRONLY);
+          if (typeof f === 'number') return f;
+          try { return f.truncate ? await f.truncate(i64(args[1], args[2])) : -A.EINVAL; }
+          finally { await f.close(); }
+        }
         case A.SYS_getcwd: {
           const b = enc.encode(proc.cwd + '\0');
           const cap = Math.min(args[0] >>> 0 || data.length, data.length);
@@ -685,8 +957,17 @@ export class Kernel {
           data.set(b);
           return b.length;
         }
-        case A.SYS_chdir: {
-          const p = this.resolvePath(proc, str(0, args[0]));
+        case A.SYS_chdir:
+        case A.SYS_fchdir: {
+          let p: string | number;
+          if (nr === A.SYS_fchdir) {
+            const f = file(args[0]);
+            if (!f) return -A.EBADF;
+            if (f.kind !== 'dir' || !f.path) return -A.ENOTDIR;
+            p = f.path;
+          } else {
+            p = this.resolvePath(proc, str(0, args[0]));
+          }
           if (typeof p === 'number') return p;
           const st = await this.statPath(proc, p);
           if (typeof st === 'number') return st;
@@ -695,44 +976,130 @@ export class Kernel {
           proc.env.PWD = p;
           return 0;
         }
-        case A.SYS_rename: {
-          const from = this.resolvePath(proc, str(0, args[0]));
-          const to = this.resolvePath(proc, str(args[0], args[1]));
+        case A.SYS_rename:
+        case A.SYS_renameat:
+        case A.SYS_renameat2: {
+          const [od, ol, nd, nl, flags] = nr === A.SYS_rename
+            ? [A.AT_FDCWD, args[0], A.AT_FDCWD, args[1], 0]
+            : [args[0], args[1], args[2], args[3], nr === A.SYS_renameat2 ? args[4] : 0];
+          const from = at(od, 0, ol);
+          const to = at(nd, ol, nl);
           if (typeof from === 'number') return from;
           if (typeof to === 'number') return to;
-          await this.fs!.rename(from, to);
+          if (flags & ~A.RENAME_NOREPLACE) return -A.EINVAL;
+          if ((flags & A.RENAME_NOREPLACE) && (await fs().exists(to))) return -A.EEXIST;
+          if (!(await fs().exists(from))) return -A.ENOENT;
+          await fs().rename(from, to);
           return 0;
         }
-        case A.SYS_mkdir: {
-          const p = this.resolvePath(proc, str(0, args[0]));
+        case A.SYS_mkdir:
+        case A.SYS_mkdirat: {
+          const [dirfd, len, mode] = nr === A.SYS_mkdir ? [A.AT_FDCWD, args[0], args[1]] : [args[0], args[1], args[2]];
+          const p = at(dirfd, 0, len);
           if (typeof p === 'number') return p;
-          if (await this.fs!.exists(p)) return -A.EEXIST;
-          await this.fs!.mkdir(p);
-          await this.fs!.chmod(p, args[1] & ~proc.umask & 0o7777).catch(() => {});
+          if (await fs().exists(p)) return -A.EEXIST;
+          await fs().mkdir(p);
+          await fs().chmod(p, mode & ~proc.umask & 0o7777).catch(() => {});
           return 0;
         }
         case A.SYS_rmdir:
-        case A.SYS_unlink: {
-          const p = this.resolvePath(proc, str(0, args[0]));
+        case A.SYS_unlink:
+        case A.SYS_unlinkat: {
+          const [dirfd, len, rmdir] = nr === A.SYS_unlinkat
+            ? [args[0], args[1], !!(args[2] & A.AT_REMOVEDIR)]
+            : [A.AT_FDCWD, args[0], nr === A.SYS_rmdir];
+          const p = at(dirfd, 0, len);
           if (typeof p === 'number') return p;
           const st = await this.statPath(proc, p, false);
           if (typeof st === 'number') return st;
           const isDir = (st.mode & A.S_IFMT) === A.S_IFDIR;
-          if (nr === A.SYS_unlink && isDir) return -A.EISDIR;
-          if (nr === A.SYS_rmdir && !isDir) return -A.ENOTDIR;
-          if (isDir) await this.fs!.rmdir(p);
-          else await this.fs!.unlink(p);
+          if (!rmdir && isDir) return -A.EISDIR;
+          if (rmdir && !isDir) return -A.ENOTDIR;
+          if (isDir) await fs().rmdir(p);
+          else await fs().unlink(p);
           return 0;
         }
-        case A.SYS_readlink: {
-          const p = this.resolvePath(proc, str(0, args[0]));
+        case A.SYS_symlink:
+        case A.SYS_symlinkat: {
+          const [tl, dirfd, ll] = nr === A.SYS_symlink ? [args[0], A.AT_FDCWD, args[1]] : [args[0], args[1], args[2]];
+          const target = str(0, tl);
+          const p = at(dirfd, tl, ll);
+          if (typeof p === 'number') return p;
+          if (await fs().exists(p)) return -A.EEXIST;
+          await fs().symlink(target, p);
+          return 0;
+        }
+        case A.SYS_link:
+        case A.SYS_linkat: {
+          // The filesystem has no hard links: link() makes an independent copy.
+          const [od, ol, nd, nl] = nr === A.SYS_link ? [A.AT_FDCWD, args[0], A.AT_FDCWD, args[1]] : [args[0], args[1], args[2], args[3]];
+          const from = at(od, 0, ol);
+          const to = at(nd, ol, nl);
+          if (typeof from === 'number') return from;
+          if (typeof to === 'number') return to;
+          const st = await this.statPath(proc, from, false);
+          if (typeof st === 'number') return st;
+          if ((st.mode & A.S_IFMT) === A.S_IFDIR) return -A.EPERM;
+          if (await fs().exists(to)) return -A.EEXIST;
+          await fs().writeFile(to, (await fs().readFile(from)) as Uint8Array, { mode: st.mode & 0o7777 });
+          return 0;
+        }
+        case A.SYS_readlink:
+        case A.SYS_readlinkat: {
+          const [dirfd, len, bufsiz] = nr === A.SYS_readlink ? [A.AT_FDCWD, args[0], args[1]] : [args[0], args[1], args[2]];
+          const p = at(dirfd, 0, len);
           if (typeof p === 'number') return p;
           let target: string;
-          try { target = await this.fs!.readlink(p); } catch (e) { return A.errnoFromError(e, A.EINVAL); }
+          try { target = await fs().readlink(p); } catch (e) { return A.errnoFromError(e, A.EINVAL); }
           const b = enc.encode(target);
-          const n = Math.min(b.length, args[1] >>> 0 || data.length, data.length);
+          const n = Math.min(b.length, bufsiz >>> 0 || data.length, data.length);
           data.set(b.subarray(0, n));
           return n;
+        }
+        case A.SYS_chmod:
+        case A.SYS_fchmod:
+        case A.SYS_fchmodat: {
+          let p: string | number;
+          let mode: number;
+          if (nr === A.SYS_fchmod) {
+            const f = file(args[0]);
+            if (!f) return -A.EBADF;
+            if (!f.path || (f.kind !== 'file' && f.kind !== 'dir')) return -A.EINVAL;
+            p = f.path;
+            mode = args[1];
+          } else if (nr === A.SYS_chmod) { p = at(A.AT_FDCWD, 0, args[0]); mode = args[1]; }
+          else { p = at(args[0], 0, args[1]); mode = args[2]; }
+          if (typeof p === 'number') return p;
+          await fs().chmod(await fs().realpath(p), mode & 0o7777);
+          return 0;
+        }
+        case A.SYS_utimensat: {
+          // args: dirfd, pathLen (0 with AT_EMPTY_PATH = the fd), flags, hasTimes; data: path, then 2 timespecs (32 bytes) at offset pathLen
+          let p: string | number;
+          if (args[1] === 0) {
+            const f = file(args[0]);
+            if (!f) return -A.EBADF;
+            if (!f.path) return -A.EINVAL;
+            p = f.path;
+          } else p = at(args[0], 0, args[1]);
+          if (typeof p === 'number') return p;
+          const st = await this.statPath(proc, p, !(args[2] & A.AT_SYMLINK_NOFOLLOW));
+          if (typeof st === 'number') return st;
+          const now = Date.now();
+          let atime = now, mtime = now;
+          if (args[3]) {
+            const dv = new DataView(data.buffer, data.byteOffset + args[1], 32);
+            const ts = (o: number, cur: number) => {
+              const nsec = dv.getUint32(o + 8, true);
+              if (nsec === A.UTIME_NOW) return now;
+              if (nsec === A.UTIME_OMIT) return cur;
+              return i64(dv.getUint32(o, true), dv.getUint32(o + 4, true)) * 1000 + Math.floor(nsec / 1e6);
+            };
+            atime = ts(0, st.atimeMs);
+            mtime = ts(16, st.mtimeMs);
+          }
+          await fs().utimes(await fs().realpath(p), atime, mtime);
+          return 0;
         }
         case A.SYS_umask: {
           const old = proc.umask;
@@ -755,6 +1122,57 @@ export class Kernel {
     } catch (e: any) {
       if (typeof e?.errno === 'number' && e.errno > 0) return -e.errno;
       return A.errnoFromError(e);
+    }
+  }
+
+  /** rt_sigaction: new action (struct kernel_sigaction, 32 bytes) at data[0], old one written to data[32]. */
+  private sigaction(proc: Process, signum: number, hasNew: boolean, hasOld: boolean, data: Uint8Array): number {
+    if (signum < 1 || signum >= A.NSIG) return -A.EINVAL;
+    const dv = new DataView(data.buffer, data.byteOffset, A.SIGACTION_SIZE * 2);
+    const d = proc.dispositions.get(signum) ?? 'default';
+    const extra = proc.sigactions.get(signum);
+    const oldHandler = d === 'default' ? A.SIG_DFL : d === 'ignore' ? A.SIG_IGN : d;
+    const oldMask = A.sigsetToWords(extra?.mask ?? []);
+    if (hasNew) {
+      if (signum === A.SIGKILL || signum === A.SIGSTOP) return -A.EINVAL;
+      const handler = dv.getUint32(0, true) + dv.getUint32(4, true) * 0x100000000;
+      const flags = dv.getUint32(8, true);
+      const restorer = dv.getUint32(16, true) + dv.getUint32(20, true) * 0x100000000;
+      const mask = A.sigsetFromWords(dv.getUint32(24, true), dv.getUint32(28, true));
+      if (handler === A.SIG_DFL) proc.dispositions.delete(signum);
+      else proc.dispositions.set(signum, handler === A.SIG_IGN ? 'ignore' : handler);
+      if (flags || mask.size || restorer) proc.sigactions.set(signum, { flags, mask, restorer });
+      else proc.sigactions.delete(signum);
+      // Ignoring a signal discards it if pending
+      const now = proc.dispositions.get(signum);
+      if (now === 'ignore' || (now === undefined && A.defaultSignalAction(signum) === 'ignore')) {
+        proc.deferredSignals.delete(signum);
+        proc.pendingSignals.delete(signum);
+      }
+    }
+    if (hasOld) {
+      const o = A.SIGACTION_SIZE;
+      dv.setUint32(o, oldHandler >>> 0, true);
+      dv.setUint32(o + 4, Math.floor(oldHandler / 0x100000000), true);
+      dv.setUint32(o + 8, (extra?.flags ?? 0) >>> 0, true);
+      dv.setUint32(o + 12, 0, true);
+      dv.setUint32(o + 16, (extra?.restorer ?? 0) >>> 0, true);
+      dv.setUint32(o + 20, Math.floor((extra?.restorer ?? 0) / 0x100000000), true);
+      dv.setUint32(o + 24, oldMask[0], true);
+      dv.setUint32(o + 28, oldMask[1], true);
+    }
+    return 0;
+  }
+
+  /** Run `fn` with `mask` as the signal mask (pselect/epoll_pwait/ppoll), restoring the old mask after. */
+  private async withMask<T>(proc: Process, mask: Set<number> | null, fn: () => Promise<T>): Promise<T> {
+    if (!mask) return fn();
+    const saved = new Set(proc.sigmask);
+    this.setSigmask(proc, mask);
+    try { return await fn(); }
+    finally {
+      if (proc.signalFrames.length) proc.signalFrames[proc.signalFrames.length - 1] = saved;
+      else this.setSigmask(proc, saved);
     }
   }
 
@@ -781,6 +1199,11 @@ export class Kernel {
   async poll(proc: Process, data: Uint8Array, nfds: number, timeoutMs: number): Promise<number> {
     if (nfds < 0 || nfds * A.POLLFD_SIZE > data.length) return -A.EINVAL;
     const dv = new DataView(data.buffer, data.byteOffset, nfds * A.POLLFD_SIZE);
+    const files: OpenFile[] = [];
+    for (let i = 0; i < nfds; i++) {
+      const f = proc.fds.get(dv.getInt32(i * 8, true));
+      if (f) files.push(f);
+    }
     const scan = () => {
       let ready = 0;
       for (let i = 0; i < nfds; i++) {
@@ -796,31 +1219,53 @@ export class Kernel {
       }
       return ready;
     };
-    let n = scan();
-    if (n > 0 || timeoutMs === 0) return n;
-    const sig = proc.syscallSignal;
-    const files = new Set<OpenFile>();
-    for (let i = 0; i < nfds; i++) {
-      const f = proc.fds.get(dv.getInt32(i * 8, true));
-      if (f) files.add(f);
+    return waitReady(files, scan, timeoutMs, proc.syscallSignal);
+  }
+
+  /**
+   * select / pselect6. args: nfds, which sets are present (1 read, 2 write,
+   * 4 except), then the timeout: select tvSec, tvUsec; pselect6 tvSec,
+   * tvNsec (tvSec -1 = no timeout); pselect6 also args[4..5] sigmask lo/hi
+   * and args[6] = 1 if a mask is given. Data: the three fd_set bitmaps back
+   * to back, each ceil(nfds/64)*8 bytes (laid out even when absent).
+   */
+  private async select(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
+    const nfds = args[0];
+    if (nfds < 0 || nfds > A.OPEN_MAX) return -A.EINVAL;
+    const setBytes = Math.ceil(nfds / 64) * 8;
+    if (setBytes * 3 > data.length) return -A.EINVAL;
+    const present = args[1];
+    const tvSec = args[2];
+    const timeoutMs = tvSec < 0 ? -1 : tvSec * 1000 + Math.floor(nr === A.SYS_pselect6 ? args[3] / 1e6 : args[3] / 1000);
+    const bit = (set: number, fd: number) => (data[set * setBytes + (fd >> 3)] >> (fd & 7)) & 1;
+    const want: { fd: number; r: boolean; w: boolean; x: boolean; file: OpenFile }[] = [];
+    for (let fd = 0; fd < nfds; fd++) {
+      const r = !!(present & 1) && !!bit(0, fd);
+      const w = !!(present & 2) && !!bit(1, fd);
+      const x = !!(present & 4) && !!bit(2, fd);
+      if (!r && !w && !x) continue;
+      const file = proc.fds.get(fd);
+      if (!file) return -A.EBADF;
+      want.push({ fd, r, w, x, file });
     }
-    return await new Promise<number>(resolve => {
-      const offs: (() => void)[] = [];
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const finish = (v: number) => {
-        offs.forEach(o => o());
-        if (timer) clearTimeout(timer);
-        sig.removeEventListener('abort', onAbort);
-        resolve(v);
-      };
-      const onAbort = () => finish(-A.EINTR);
-      for (const f of files) offs.push(f.onReady(() => { const r = scan(); if (r > 0) finish(r); }));
-      if (timeoutMs > 0) timer = setTimeout(() => finish(scan()), timeoutMs);
-      sig.addEventListener('abort', onAbort, { once: true });
-      // Readiness may have changed while subscribing
-      n = scan();
-      if (n > 0) finish(n);
-    });
+    const results = new Uint8Array(setBytes * 3);
+    const scan = () => {
+      results.fill(0);
+      let n = 0;
+      for (const q of want) {
+        const rev = q.file.poll(A.POLLIN | A.POLLOUT | A.POLLPRI);
+        const mark = (set: number) => { results[set * setBytes + (q.fd >> 3)] |= 1 << (q.fd & 7); n++; };
+        if (q.r && rev & (A.POLLIN | A.POLLHUP | A.POLLERR)) mark(0);
+        if (q.w && rev & (A.POLLOUT | A.POLLERR)) mark(1);
+        if (q.x && rev & A.POLLPRI) mark(2);
+      }
+      return n;
+    };
+    const mask = nr === A.SYS_pselect6 && args[6] ? A.sigsetFromWords(args[4], args[5]) : null;
+    const n = await this.withMask(proc, mask, () => waitReady(want.map(q => q.file), scan, timeoutMs, proc.syscallSignal));
+    if (n < 0) return n;
+    for (let set = 0; set < 3; set++) if (present & (1 << set)) data.set(results.subarray(set * setBytes, (set + 1) * setBytes), set * setBytes);
+    return n;
   }
 
   private async getdents(proc: Process, fd: number, out: Uint8Array): Promise<number> {
@@ -859,18 +1304,24 @@ export class Kernel {
     return off;
   }
 
-  /** SYS_spawn: posix_spawn from a guest. */
+  /**
+   * SYS_spawn: posix_spawn from a guest. Without `fds` the child inherits
+   * every non-cloexec fd; with `fds` ([child, parent] pairs) only those,
+   * unless `inherit: true`, which installs them on top of the inherited set.
+   */
   private async sysSpawn(proc: Process, req: {
     path: string; argv?: string[]; env?: Record<string, string>; cwd?: string;
-    fds?: [number, number][]; pgid?: number; setsid?: boolean;
+    fds?: [number, number][]; inherit?: boolean; pgid?: number; setsid?: boolean; sigdefault?: number[];
   }): Promise<number> {
     if (!req || typeof req.path !== 'string') return -A.EINVAL;
-    const map: Record<number, OpenFile> = {};
-    const pairs = req.fds ?? [[0, 0], [1, 1], [2, 2]];
-    for (const [child, parent] of pairs) {
-      const f = proc.fds.get(parent);
-      if (!f) return -A.EBADF;
-      map[child] = f;
+    let map: Record<number, OpenFile> | undefined;
+    if (req.fds) {
+      map = {};
+      for (const [child, parent] of req.fds) {
+        const f = proc.fds.get(parent);
+        if (!f) return -A.EBADF;
+        map[child] = f;
+      }
     }
     let cwd = proc.cwd;
     if (req.cwd) {
@@ -882,8 +1333,9 @@ export class Kernel {
     const runner = await this.findProgram(req.path, probe);
     if (!runner) return -A.ENOENT;
     const child = this.spawn({
-      path: req.path, argv: req.argv, env: req.env ?? proc.env, cwd, fds: map,
+      path: req.path, argv: req.argv, env: req.env ?? proc.env, cwd, fds: map, inheritFds: req.inherit,
       parent: proc, pgid: req.pgid, setsid: req.setsid, run: runner,
+      inheritSignals: true, sigdefault: Array.isArray(req.sigdefault) ? req.sigdefault : undefined,
     });
     return child.pid;
   }
