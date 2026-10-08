@@ -292,6 +292,9 @@ async function run(msg) {
     stderr: emit(2),
     print: () => {},
     printErr: (s) => { if (msg.debug) console.error(s); },
+    // Blink calls shiroExit on this thread as soon as the guest exits;
+    // onExit only fires if emscripten's own teardown completes.
+    shiroExit: (code) => done({ type: 'exit', code }),
     onExit: (code) => done({ type: 'exit', code }),
     onAbort: (what) => done({ type: 'error', message: 'blink aborted: ' + what }),
     preRun: [(M) => {
