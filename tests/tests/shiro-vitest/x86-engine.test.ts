@@ -10,6 +10,7 @@ import { describe, it, expect, onTestFinished, beforeAll, afterAll } from 'vites
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import type { Server } from 'node:http';
 import { join, resolve } from 'node:path';
 import { createTestShell, run } from './helpers';
 
@@ -165,6 +166,7 @@ describe.skipIf(!haveTcp)('Blink engine: real TCP through the kernel relay', () 
   let harness: ChildProcess;
   let ports: { echoPort: number; relayA: number; origin: string };
   let restore: () => void = () => {};
+  let doh: Server;
 
   beforeAll(async () => {
     const path = new URL('./fixtures/tcp-relay-harness.mjs', import.meta.url).pathname;
@@ -185,6 +187,27 @@ describe.skipIf(!haveTcp)('Blink engine: real TCP through the kernel relay', () 
     class OriginWebSocket extends WebSocket {
       constructor(url: string | URL) { super(url, { headers: { origin } } as any); }
     }
+    // A DNS-over-HTTPS endpoint that answers A queries for echo.test.
+    // node:http is polyfilled for the browser build in this config; use Node's.
+    const { createServer } = (process as any).getBuiltinModule('http') as typeof import('node:http');
+    doh = createServer((req, res) => {
+      const parts: Buffer[] = [];
+      req.on('data', (d) => parts.push(d));
+      req.on('end', () => {
+        const q = Buffer.concat(parts);
+        let off = 12;
+        while (q[off]) off += q[off] + 1;
+        const qtype = q.readUInt16BE(off + 1);
+        const question = q.subarray(12, off + 5);
+        const name = q.subarray(12, off).toString('latin1');
+        const hit = qtype === 1 && /echo.test$/.test(name.replace(/[\x00-\x1f]/g, '.'));
+        const head = Buffer.from([q[0], q[1], 0x81, hit ? 0x80 : 0x83, 0, 1, 0, hit ? 1 : 0, 0, 0, 0, 0]);
+        const answer = hit ? Buffer.from([0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 127, 0, 0, 1]) : Buffer.alloc(0);
+        res.writeHead(200, { 'content-type': 'application/dns-message' });
+        res.end(Buffer.concat([head, question, answer]));
+      });
+    });
+    const dohPort = await new Promise<number>((r) => doh.listen(0, '127.0.0.1', () => r((doh.address() as any).port)));
     const saved = { ...(netStack as any).config };
     netStack.configure({
       relayUrl: `ws://127.0.0.1:${ports.relayA}/tcp`,
@@ -193,12 +216,12 @@ describe.skipIf(!haveTcp)('Blink engine: real TCP through the kernel relay', () 
       WebSocket: OriginWebSocket as unknown as typeof WebSocket,
       relayLoopback: true,
       portHost: null,
-      dohUrl: null,
+      dohUrl: `http://127.0.0.1:${dohPort}/dns-query`,
     });
     restore = () => netStack.configure(saved);
   }, 30_000);
 
-  afterAll(() => { restore(); harness?.kill(); });
+  afterAll(() => { restore(); harness?.kill(); doh?.close(); });
 
   it('a Go client reaches a TCP server outside the page', async () => {
     const { shell } = await setup(readFileSync(tcpBin));
@@ -207,4 +230,12 @@ describe.skipIf(!haveTcp)('Blink engine: real TCP through the kernel relay', () 
     expect(r.output).toContain(`remote 127.0.0.1:${ports.echoPort}`);
     expect(r.exitCode).toBe(0);
   }, 120_000);
+
+  it('resolves a name over UDP 53 (kernel DoH) and dials it', async () => {
+    const { shell } = await setup(readFileSync(tcpBin));
+    const r = await run(shell, `./prog echo.test:${ports.echoPort}`);
+    expect(r.output).toContain('echo: ping from go');
+    expect(r.exitCode).toBe(0);
+  }, 120_000);
 });
+
