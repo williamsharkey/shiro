@@ -73,12 +73,30 @@ export interface BackgroundJob {
   status: 'running' | 'stopped' | 'done' | 'failed';
   exitCode: number;
   abortController?: AbortController;
+  /** In-page jobs: the made-up pid that $! holds */
+  pid?: number;
   /** Kernel jobs: the process group (signals, fg/bg, Ctrl-Z) and its members */
   pgid?: number;
   pids?: number[];
   /** Kernel jobs: tty modes saved when the job stopped */
   termios?: import('./kernel/pty').Termios;
 }
+
+/** Signal names by number, as trap and kill use them (0 is EXIT) */
+const SIGNALS = ['EXIT', 'HUP', 'INT', 'QUIT', 'ILL', 'TRAP', 'ABRT', 'BUS', 'FPE', 'KILL', 'USR1', 'SEGV', 'USR2',
+  'PIPE', 'ALRM', 'TERM', 'STKFLT', 'CHLD', 'CONT', 'STOP', 'TSTP', 'TTIN', 'TTOU', 'URG', 'XCPU', 'XFSZ',
+  'VTALRM', 'PROF', 'WINCH', 'IO', 'PWR', 'SYS'];
+
+/** The traps-map key for a signal spec (INT, SIGINT, 2, EXIT, 0, ERR, DEBUG, RETURN), or null */
+function trapKey(spec: string): string | null {
+  if (/^\d+$/.test(spec)) return SIGNALS[Number(spec)] ?? null;
+  const name = spec.toUpperCase().replace(/^SIG/, '');
+  if (name === 'EXIT' || name === 'ERR' || name === 'DEBUG' || name === 'RETURN') return name;
+  return SIGNALS.includes(name) ? name : null;
+}
+
+/** Pids for in-page background jobs ($!), above any kernel pid in practice */
+let nextInPagePid = 40000;
 
 // Env var names whose values should be masked in terminal output
 const SECRET_ENV_KEYS = [
@@ -415,7 +433,8 @@ export class Shell {
     child.options = new Set(this.options);
     child.arrays = new Map(Array.from(this.arrays.entries()).map(([k, v]) => [k, copyArray(v)]));
     child.assocArrays = new Map(Array.from(this.assocArrays.entries()).map(([k, v]) => [k, new Map(v)]));
-    child.traps = new Map(this.traps);
+    // A subshell starts with the traps reset, except ignored ones (trap '' SIG)
+    child.traps = new Map([...this.traps].filter(([, v]) => v === ''));
     child.aliases = new Map(this.aliases);
     child.namerefs = new Map(this.namerefs);
     child.dirStack = [...this.dirStack];
@@ -486,13 +505,17 @@ export class Shell {
   ): number {
     const jobId = this.nextJobId++;
     const stderrWriter = writeStderr || writeStdout;
+    // An in-page job has no kernel process; $! and `wait PID` use a made-up pid
+    const pid = nextInPagePid++;
     const job: BackgroundJob = {
       id: jobId,
       command,
       status: 'running',
       exitCode: 0,
+      pid,
+      // Runs in a child shell (its variables and cd stay there), output to ours.
       // No tty for in-page background work: kernel programs inside it must not take the terminal
-      promise: this.execute(command, () => {}, stderrWriter, false, this.terminal ? withoutTty(this.terminal) : undefined).then(
+      promise: this.fork().execute(command, writeStdout, stderrWriter, false, this.terminal ? withoutTty(this.terminal) : undefined).then(
         (code) => {
           job.status = code === 0 ? 'done' : 'failed';
           job.exitCode = code;
@@ -506,7 +529,9 @@ export class Shell {
       ),
     };
     this.backgroundJobs.set(jobId, job);
-    writeStdout(`[${jobId}] started\n`);
+    this.env['!'] = String(pid);
+    // An interactive shell reports the job; a script doesn't
+    if (!this.scriptShell) writeStdout(`[${jobId}] ${pid}\n`);
     return 0;
   }
 
@@ -569,6 +594,48 @@ export class Shell {
       this.errexitSuppressed = suppressed;
       if (depth === 0) this.abortController = null;
     }
+  }
+
+  /** trap [-lp] [[ACTION] SIGNAL...] */
+  private trapBuiltin(args: string[], writeStdout: (s: string) => void, writeStderr: (s: string) => void, subshell = false): number {
+    if (args[0] === '--') args = args.slice(1);
+    if (args[0] === '-l') {
+      writeStdout(SIGNALS.map((n, k) => (n ? `${k}) SIG${n}` : '')).filter(Boolean).join(' ') + '\r\n');
+      return 0;
+    }
+    const show = (keys: string[]) => {
+      for (const k of keys) {
+        const cmd = this.traps.get(k);
+        // In a pipeline trap runs in a subshell, where only ignored signals stay set
+        if (cmd === undefined || (subshell && cmd !== '')) continue;
+        writeStdout(`trap -- '${cmd.replace(/'/g, "'\\''")}' ${SIGNALS.includes(k) && k !== 'EXIT' ? 'SIG' + k : k}\r\n`);
+      }
+    };
+    if (args.length === 0 || args[0] === '-p') {
+      const keys = args.length > 1 ? args.slice(1).map(trapKey).filter((k): k is string => !!k)
+        : [...SIGNALS.filter(Boolean), 'DEBUG', 'ERR', 'RETURN'];
+      show(keys);
+      return 0;
+    }
+    // trap SIGNAL / trap N M (an unsigned integer first): reset those signals
+    let action: string | null = args[0];
+    let sigs = args.slice(1);
+    if (sigs.length === 0 || /^\d+$/.test(args[0])) {
+      if (sigs.length === 0 && !trapKey(args[0])) {
+        writeStderr('trap: usage: trap [-lp] [[arg] signal_spec ...]\r\n');
+        return 2;
+      }
+      action = null;
+      sigs = args;
+    } else if (action === '-') action = null;
+    let status = 0;
+    for (const sig of sigs) {
+      const k = trapKey(sig);
+      if (!k) { writeStderr(`trap: ${sig}: invalid signal specification\r\n`); status = 1; continue; }
+      if (action === null) this.traps.delete(k);
+      else this.traps.set(k, action);
+    }
+    return status;
   }
 
   /** Run and clear the EXIT trap */
@@ -781,7 +848,7 @@ export class Shell {
     const trimmed = statements.length === 1 ? statements[0].text : source;
 
     // Check for background execution (&)
-    if (statements.length <= 1 && trimmed.endsWith('&') && !trimmed.endsWith('&&')) {
+    if (statements.length <= 1 && /[^&]&$/.test(trimmed) && this.parseCompound(trimmed).length === 1) {
       const bgCmd = trimmed.slice(0, -1).trim();
       if (bgCmd) {
         this.executeDepth--;
@@ -870,6 +937,18 @@ export class Shell {
       if (nextOp === '&&' || nextOp === '||' || /^!\s/.test(compound.command.trim())) {
         this.errexitSuppressed++;
         suppressing = true;
+      }
+
+      // `cmd &` before more commands on the line
+      if (/[^&]&$/.test(compound.command) && compounds.length > 1) {
+        const bgCmd = compound.command.slice(0, -1).trim();
+        if (!(await this.launchKernelBackground(bgCmd, writeStdout, terminalOverride || this.terminal))) {
+          this.executeBackground(bgCmd, writeStdout, stderrWriter);
+        }
+        exitCode = 0;
+        this.lastExitCode = 0;
+        this.env['?'] = '0';
+        continue;
       }
 
       // Check for function definition in this compound
@@ -1683,58 +1762,9 @@ export class Shell {
 
         // Shell builtin: trap
         if (!_builtinDisabled && effectiveCmdName === 'trap') {
-          if (cmdArgs.length === 0 || (cmdArgs.length === 1 && cmdArgs[0] === '-p')) {
-            // List all traps
-            for (const [sig, cmd] of this.traps) {
-              writeStdout(`trap -- '${cmd}' ${sig}\r\n`);
-            }
-            exitCode = 0;
-            this.lastExitCode = 0;
-            this.env['?'] = '0';
-            lastOutput = '';
-            continue;
-          }
-          if (cmdArgs[0] === '-l') {
-            // List signal names
-            writeStdout('EXIT ERR INT TERM HUP QUIT DEBUG RETURN\r\n');
-            exitCode = 0;
-            this.lastExitCode = 0;
-            this.env['?'] = '0';
-            lastOutput = '';
-            continue;
-          }
-          // trap -p SIGNAL — show specific trap
-          if (cmdArgs[0] === '-p' && cmdArgs.length > 1) {
-            for (let si = 1; si < cmdArgs.length; si++) {
-              const sig = cmdArgs[si].toUpperCase();
-              const cmd = this.traps.get(sig);
-              if (cmd !== undefined) writeStdout(`trap -- '${cmd}' ${sig}\r\n`);
-            }
-            exitCode = 0;
-            this.lastExitCode = 0;
-            this.env['?'] = '0';
-            lastOutput = '';
-            continue;
-          }
-          if (cmdArgs.length === 1) {
-            // trap SIGNAL — reset trap
-            const sig = cmdArgs[0].toUpperCase();
-            this.traps.delete(sig);
-          } else {
-            // trap 'command' SIGNAL [SIGNAL...]
-            const cmd = cmdArgs[0];
-            for (let si = 1; si < cmdArgs.length; si++) {
-              const sig = cmdArgs[si].toUpperCase();
-              if (cmd === '' || cmd === '-') {
-                this.traps.delete(sig); // reset to default
-              } else {
-                this.traps.set(sig, cmd);
-              }
-            }
-          }
-          exitCode = 0;
-          this.lastExitCode = 0;
-          this.env['?'] = '0';
+          exitCode = this.trapBuiltin(cmdArgs, writeStdout, stderrWriter, pipeline.length > 1);
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
           lastOutput = '';
           continue;
         }
@@ -3220,6 +3250,13 @@ export class Shell {
         continue;
       }
 
+      // $! (pid of the last background job)
+      if (ch === '$' && line[i + 1] === '!') {
+        result += this.env['!'] ?? '';
+        i += 2;
+        continue;
+      }
+
       // Expand $# (number of positional parameters)
       if (ch === '$' && line[i + 1] === '#') {
         result += this.env['#'] ?? '0';
@@ -4077,6 +4114,14 @@ export class Shell {
           }
           if (ch === ';') {
             if (current.trim()) result.push({ operator: currentOp, command: current.trim() });
+            currentOp = ';';
+            current = '';
+            i++;
+            continue;
+          }
+          // `cmd & next`: cmd runs in the background (it keeps its trailing &)
+          if (ch === '&' && line[i + 1] !== '>' && !/[<>&|]/.test(line[i - 1] ?? '') && line.slice(i + 1).trim()) {
+            if (current.trim()) result.push({ operator: currentOp, command: current.trim() + ' &' });
             currentOp = ';';
             current = '';
             i++;
@@ -6018,6 +6063,8 @@ export class Shell {
       captureStdout: false, captureStderr: false, writeStdout, writeStderr: writeStdout,
       terminal: term, command, background: true, cwd: this.cwd, env: this.env,
     });
+    const job = [...this.backgroundJobs.values()].pop();
+    if (job?.pids?.length) this.env['!'] = String(job.pids[job.pids.length - 1]);
     return true;
   }
 

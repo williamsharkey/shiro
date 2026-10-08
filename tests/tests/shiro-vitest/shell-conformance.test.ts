@@ -358,4 +358,15 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe("_a_b q a\\b\ncd ef bcd d\n5 6 4 5 6\niT's t's\nset1\nunset5\nhyphen ok\nv1 v2\n");
   });
+
+  it('trap listing/reset/ignore, background jobs in a child shell with $! and wait', async () => {
+    const r = await script([
+      "trap 'echo e' EXIT; trap \"it's\" TERM; trap '' USR1; trap; trap - TERM 0; trap -p",
+      "trap foo; echo st=$?; trap 'x' 2 bogus; echo st=$?; trap 2",
+      "x=1; { x=2; echo \"in $x\"; } & wait $!; echo \"st=$? x=$x\"",
+      "for n in 1 2 3; do (exit $n) & done; wait; echo all",
+      "f() { return 7; }; f & pid=$!; wait $pid; echo \"w=$?\"",
+    ].join('\n'));
+    expect(r.out).toBe("trap -- 'echo e' EXIT\ntrap -- '' SIGUSR1\ntrap -- 'it'\\''s' SIGTERM\ntrap -- '' SIGUSR1\nst=2\nst=1\nin 2\nst=0 x=1\nall\nw=7\n");
+  });
 });

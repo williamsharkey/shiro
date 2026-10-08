@@ -6,7 +6,7 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1169/1567 (74.6%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1205/1567 (76.9%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **381/635 (60.0%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **146/399 (36.6%)** |
 
@@ -30,7 +30,7 @@ How each suite runs, and what is and isn't scored, is described in
 | var-op-patsub | 0/27 | 22/27 | 5 |
 | var-op-slice | 0/21 | 16/21 | 5 |
 | var-num | 0/7 | 5/7 | 2 |
-| vars-special | 0/37 | 18/37 | 19 |
+| vars-special | 0/37 | 19/37 | 18 |
 | arith | 2/71 | 62/71 | 9 |
 | command-sub | 0/28 | 19/28 | 9 |
 | here-doc | 0/32 | 29/32 | 3 |
@@ -45,7 +45,7 @@ How each suite runs, and what is and isn't scored, is described in
 | builtin-read | 0/64 | 64/64 | 0 |
 | builtin-eval-source | 0/23 | 11/23 | 12 |
 | builtin-getopts | 0/30 | 26/30 | 4 |
-| builtin-trap | 0/33 | 9/33 | 24 |
+| builtin-trap | 0/33 | 25/33 | 8 |
 | builtin-bracket | 0/50 | 43/50 | 7 |
 | builtin-cd | 3/28 | 14/28 | 14 |
 | builtin-special | 1/12 | 7/12 | 5 |
@@ -63,10 +63,10 @@ How each suite runs, and what is and isn't scored, is described in
 | glob | 0/23 | 18/23 | 5 |
 | pipeline | 0/25 | 17/25 | 8 |
 | exit-status | 0/11 | 5/11 | 6 |
-| errexit | 0/35 | 25/35 | 10 |
+| errexit | 0/35 | 26/35 | 9 |
 | subshell | 0/2 | 2/2 | 0 |
 | command_ | 2/16 | 7/16 | 9 |
-| posix | 2/15 | 10/15 | 5 |
+| posix | 2/15 | 11/15 | 4 |
 | alias | 1/48 | 29/48 | 19 |
 | let | 0/2 | 1/2 | 1 |
 | empty-bodies | 0/3 | 3/3 | 0 |
@@ -75,7 +75,7 @@ How each suite runs, and what is and isn't scored, is described in
 | process-sub | 0/8 | 0/8 | 8 |
 | regex | 1/37 | 35/37 | 2 |
 | temp-binding | 0/4 | 4/4 | 0 |
-| background | 3/27 | 3/27 | 24 |
+| background | 3/27 | 20/27 | 7 |
 | sh-options | 0/32 | 13/32 | 19 |
 | command-parsing | 0/2 | 2/2 | 0 |
 
@@ -93,7 +93,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **var-op-patsub**: Confusing unquoted slash matches bash (and ash); Synthesized ${x///} bug (similar to above); Replace backslash; When LC_ALL=C, pattern ? doesn't match multibyte character; Chromium from http://www.oilshell.org/blog/2016/11/07.html
 - **var-op-slice**: Cannot take length of substring slice; ${@:offset} and ${*:offset}; ${@:offset:length} and ${*:offset:length}; Permutations of implicit begin and length; ${array[@]:} vs ${array[@]: }  - bash and zsh inconsistent
 - **var-num**: Normal and braced; In function
-- **vars-special**: $PATH is set if unset at startup; Vars set interactively only: $HISTFILE; Some vars are set, even without startup file, or env: PATH, PWD; UID EUID PPID can't be changed; HOSTNAME OSTYPE can be changed; $BASHPID DOES change with subshell and command sub; Background PID $! looks like a PID; $UID and $EUID; $OSTYPE is non-empty; $LINENO is the current line, not line of function call; $LINENO in "bare" redirect arg (bug regression); $LINENO in other for loops; $_ with simple command and evaluation; $_ and ${_}; $_ with word splitting; $_ with && and \|\|; $_ is not reset with (( and [[; $_ with assignments, arrays, etc.; $_ with loop
+- **vars-special**: $PATH is set if unset at startup; Vars set interactively only: $HISTFILE; Some vars are set, even without startup file, or env: PATH, PWD; UID EUID PPID can't be changed; HOSTNAME OSTYPE can be changed; $BASHPID DOES change with subshell and command sub; $UID and $EUID; $OSTYPE is non-empty; $LINENO is the current line, not line of function call; $LINENO in "bare" redirect arg (bug regression); $LINENO in other for loops; $_ with simple command and evaluation; $_ and ${_}; $_ with word splitting; $_ with && and \|\|; $_ is not reset with (( and [[; $_ with assignments, arrays, etc.; $_ with loop
 - **arith**: Arith sub with word parts; Backticks within arith sub; Integer constant validation; Comma operator (borrowed from C); Logical Ops; Bitwise ops; Comment not allowed in the middle of multiline arithmetic; Double subscript; Invalid constant
 - **command-sub**: case in subshell; Backtick 2; Nested backticks; Making keyword out of command sub should NOT work; Command sub with here doc; Escaped quote in [[ ]]; Quoting \ within ``; Quoting \ within `` within double quotes; Syntax errors with double quotes within backticks
 - **here-doc**: Here doc with bad comsub delimiter; Here doc with line continuation, then pipe.  Syntax error.; Function def and execution with here doc
@@ -107,7 +107,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **builtin-printf**: printf with no args; printf -v a[1]; printf -v syntax error; printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8; printf invalid format; bash truncates long strftime string at 128; printf positive integer overflow; printf negative integer overflow
 - **builtin-eval-source**: eval accepts/ignores --; eval usage; eval YSH block with 'break continue return error'; source accepts/ignores --; Source with no arguments; Source with arguments; Source from a function, mutating argv and defining a local var; Source with syntax error; Eval with syntax error; source looks in PATH for files; source finds files in PATH before current dir; sourcing along PATH should ignore directories
 - **builtin-getopts**: getopts with invalid variable name; OPTIND; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
-- **builtin-trap**: trap accepts/ignores --; Register invalid trap, remove invalid trap; trap foo gives non-zero error; print trap handler with multiple lines; trap -p is like trap: it prints the handlers and full signal names; Register the same handler for multiple signals; Remove multiple handlers with trap -; trap EXIT clears the EXIT trap; trap 0 is equivalent to trap EXIT; trap 0 2 resets EXIT AND SIGINT; trap '' EXIT - printing state; exit 1 when trap code string is invalid; trap EXIT calling exit; trap EXIT with PARSE error and explicit exit; eval in the exit trap (regression for issue #293); exit codes for traps are isolated; traps are cleared in subshell (started with &); trap USR1, sleep, SIGINT: non-interactively; trap INT, sleep, SIGINT: non-interactively; trap EXIT, sleep, SIGINT: non-interactively; Remove trap with an unsigned integer; trap '' sets handler to empty string (SIG_IGN); trap '' with multiple signals; trap with command.NoOp - check internal invariant
+- **builtin-trap**: exit 1 when trap code string is invalid; trap EXIT calling exit; trap EXIT with PARSE error and explicit exit; exit codes for traps are isolated; traps are cleared in subshell (started with &); trap USR1, sleep, SIGINT: non-interactively; Remove trap with an unsigned integer; trap with command.NoOp - check internal invariant
 - **builtin-bracket**: -a as unary operator (alias of -e); -k for sticky bit; test -p named pipe; -u for setuid, -g too; test -o for options; -ef; test -c
 - **builtin-cd**: cd BAD/..; cd with 2 or more args - with strict_arg_parse; $OLDPWD; pwd with symlink and -P; setting $PWD doesn't affect the value of 'pwd' builtin; lie about PWD; pwd before any cd; pwd in symlinked dir on shell initialization; Test the current directory after 'cd ..' involving symlinks; cd away from dir that was deleted; cd permits double bare dash; cd to symlink with -L and -P; cd to relative path with -L and -P; CDPATH is respected; Survey of getcwd() syscall
 - **builtin-special**: Prefix assignments persist after special builtins, like : (set -o posix); Prefix assignments persist after readonly, but NOT exported (set -o posix); Prefix binding for exec is a special case (versus e.g. readonly); bash 'type' gets confused - says 'function', but runs builtin; command, builtin - both can be redefined, not special (regression)
@@ -124,15 +124,15 @@ How each suite runs, and what is and isn't scored, is described in
 - **glob**: Glob of unescaped [[] and []]; Glob of negated unescaped [[] and []]; \ in unquoted substitutions does not match a backslash; \ in unquoted substitutions escapes globchars; shopt -u globskipdots shows . and ..
 - **pipeline**: PIPESTATUS; PIPESTATUS is set on simple commands; PIPESTATUS with shopt -s lastpipe; \|&; ! with ( ); ! is not a command; Evaluation of argv[0] in pipeline occurs in child; SIGPIPE causes pipeline to die (regression for issue #295)
 - **exit-status**: Truncating 'return' status; subshell OverflowError https://github.com/oilshell/oil/issues/996; func subshell OverflowError https://github.com/oilshell/oil/issues/996; If subshell false -- exit code is propagated in a weird way (strict_argv prevents); Exit code when command sub evaluates to empty str, e.g. `false` (#2416); More test cases with empty argv
-- **errexit**: More && \|\|; errexit and loop; errexit and brace group { }; set errexit while it's ignored in a subshell (moot with strict_errexit); errexit double guard; background processes respect errexit; pipeline process respects errexit; simple command / assign - redir failure DOES respect errexit; bash atoms [[ (( - redir failure checked; Command sub exit code is lost
+- **errexit**: More && \|\|; errexit and loop; errexit and brace group { }; set errexit while it's ignored in a subshell (moot with strict_errexit); errexit double guard; pipeline process respects errexit; simple command / assign - redir failure DOES respect errexit; bash atoms [[ (( - redir failure checked; Command sub exit code is lost
 - **command_**: Command block; Permission denied; $PATH lookup; filling $PATH cache, then insert the same command earlier in cache; filling $PATH cache, then deleting command; Non-executable on $PATH; hash without args prints the cache; hash with args; Executing command with same name as directory in PATH (#2429)
-- **posix**: Empty for loop without in.  Do can be on the same line I guess.; Empty action for case is syntax error; Bare semi-colon not allowed; Command substitution in default; Newlines in compound lists
+- **posix**: Empty for loop without in.  Do can be on the same line I guess.; Empty action for case is syntax error; Bare semi-colon not allowed; Command substitution in default
 - **alias**: Usage of builtins; Basic alias; define and use alias on a single line; alias with trailing space causes alias expansion on second word; Recursive alias expansion of SECOND word; Alias must be an unquoted word, no expansions allowed; first and second word are the same alias, with trailing space; Syntax error after expansion; Loop split across alias in another way; Loop split across both iterative and recursive aliases; Alias with a quote in the middle is a syntax error; Two aliases in pipeline; Alias can be defined and used on a single line; alias with line continuation in the middle; alias for left brace; alias for left paren; here doc inside alias; Corner case: alias inside LHS array arithmetic expression; alias with word of multiple lines
 - **let**: let with ()
 - **shell-grammar**: If with then on same line missing semicolon
 - **process-sub**: Process sub input; Process sub from external process to stdin; Process sub from shell to stdin; Non-linear pipeline with \>(); status code is available; shopt -s process_sub_fail; process subs and pipelines together; process sub in background &
 - **regex**: Unquoted { is a regex parse error; make a lisp example
-- **background**: wait with nothing to wait for; wait -n with arguments - arguments are respected; wait with invalid arg; wait for N parallel jobs; wait for N parallel jobs and check failure; Builtin in background; External command in background; Start background pipeline, wait $pid; Start background pipeline, wait %job_spec; Wait for job and PIPESTATUS; Wait for job and PIPESTATUS - cat; Brace group in background, wait all; Wait on background process PID; Wait on multiple specific IDs returns last status; wait -n; Async for loop; Background process doesn't affect parent; Background process and then a singleton pipeline; jobs prints one line per job; jobs -p prints one line per job; No stderr spew when shell is not interactive; YSH wait --all; YSH wait --verbose; Signal message for killed background job
+- **background**: wait -n with arguments - arguments are respected; wait with invalid arg; Wait for job and PIPESTATUS; Wait for job and PIPESTATUS - cat; YSH wait --all; YSH wait --verbose; Signal message for killed background job
 - **sh-options**: $- with -c; $- and more options; $- with interactive shell; pass shopt options like sh -O nullglob; vi and emacs are mutually exclusive; interactive shell starts with emacs mode on; -n for no execution (useful with --ast-output); pipefail; shopt -p -o prints 'set' options; shopt -o prints 'set' options; shopt -p prints 'shopt' options; noclobber on \<\>; shopt allows for backward compatibility like bash; shopt -p validates option names; shopt -p -o validates option names; stubbed out bash options; Unimplemented options - print, query, set, unset; Unimplemented options - OSH shopt -s ignore_shopt_not_impl; no-ops not shown by shopt -p
 
 </details>

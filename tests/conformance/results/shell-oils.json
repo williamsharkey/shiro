@@ -324,7 +324,7 @@
    ]
   },
   "vars-special": {
-   "pass": 18,
+   "pass": 19,
    "total": 37,
    "failures": [
     {
@@ -350,10 +350,6 @@
     {
      "i": 13,
      "name": "$BASHPID DOES change with subshell and command sub"
-    },
-    {
-     "i": 14,
-     "name": "Background PID $! looks like a PID"
     },
     {
      "i": 18,
@@ -813,53 +809,9 @@
    ]
   },
   "builtin-trap": {
-   "pass": 9,
+   "pass": 25,
    "total": 33,
    "failures": [
-    {
-     "i": 1,
-     "name": "trap accepts/ignores --"
-    },
-    {
-     "i": 2,
-     "name": "Register invalid trap, remove invalid trap"
-    },
-    {
-     "i": 3,
-     "name": "trap foo gives non-zero error"
-    },
-    {
-     "i": 6,
-     "name": "print trap handler with multiple lines"
-    },
-    {
-     "i": 7,
-     "name": "trap -p is like trap: it prints the handlers and full signal names"
-    },
-    {
-     "i": 8,
-     "name": "Register the same handler for multiple signals"
-    },
-    {
-     "i": 9,
-     "name": "Remove multiple handlers with trap -"
-    },
-    {
-     "i": 10,
-     "name": "trap EXIT clears the EXIT trap"
-    },
-    {
-     "i": 11,
-     "name": "trap 0 is equivalent to trap EXIT"
-    },
-    {
-     "i": 13,
-     "name": "trap 0 2 resets EXIT AND SIGINT"
-    },
-    {
-     "i": 14,
-     "name": "trap '' EXIT - printing state"
-    },
     {
      "i": 16,
      "name": "exit 1 when trap code string is invalid"
@@ -871,10 +823,6 @@
     {
      "i": 20,
      "name": "trap EXIT with PARSE error and explicit exit"
-    },
-    {
-     "i": 23,
-     "name": "eval in the exit trap (regression for issue #293)"
     },
     {
      "i": 24,
@@ -889,24 +837,8 @@
      "name": "trap USR1, sleep, SIGINT: non-interactively"
     },
     {
-     "i": 27,
-     "name": "trap INT, sleep, SIGINT: non-interactively"
-    },
-    {
-     "i": 28,
-     "name": "trap EXIT, sleep, SIGINT: non-interactively"
-    },
-    {
      "i": 29,
      "name": "Remove trap with an unsigned integer"
-    },
-    {
-     "i": 30,
-     "name": "trap '' sets handler to empty string (SIG_IGN)"
-    },
-    {
-     "i": 31,
-     "name": "trap '' with multiple signals"
     },
     {
      "i": 32,
@@ -1476,7 +1408,7 @@
    ]
   },
   "errexit": {
-   "pass": 25,
+   "pass": 26,
    "total": 35,
    "failures": [
     {
@@ -1498,10 +1430,6 @@
     {
      "i": 24,
      "name": "errexit double guard"
-    },
-    {
-     "i": 25,
-     "name": "background processes respect errexit"
     },
     {
      "i": 26,
@@ -1569,7 +1497,7 @@
    ]
   },
   "posix": {
-   "pass": 10,
+   "pass": 11,
    "total": 15,
    "failures": [
     {
@@ -1587,10 +1515,6 @@
     {
      "i": 10,
      "name": "Command substitution in default"
-    },
-    {
-     "i": 12,
-     "name": "Newlines in compound lists"
     }
    ]
   },
@@ -1764,13 +1688,9 @@
    "failures": []
   },
   "background": {
-   "pass": 3,
+   "pass": 20,
    "total": 27,
    "failures": [
-    {
-     "i": 0,
-     "name": "wait with nothing to wait for"
-    },
     {
      "i": 1,
      "name": "wait -n with arguments - arguments are respected"
@@ -1780,76 +1700,12 @@
      "name": "wait with invalid arg"
     },
     {
-     "i": 6,
-     "name": "wait for N parallel jobs"
-    },
-    {
-     "i": 7,
-     "name": "wait for N parallel jobs and check failure"
-    },
-    {
-     "i": 8,
-     "name": "Builtin in background"
-    },
-    {
-     "i": 9,
-     "name": "External command in background"
-    },
-    {
-     "i": 10,
-     "name": "Start background pipeline, wait $pid"
-    },
-    {
-     "i": 11,
-     "name": "Start background pipeline, wait %job_spec"
-    },
-    {
      "i": 12,
      "name": "Wait for job and PIPESTATUS"
     },
     {
      "i": 13,
      "name": "Wait for job and PIPESTATUS - cat"
-    },
-    {
-     "i": 14,
-     "name": "Brace group in background, wait all"
-    },
-    {
-     "i": 15,
-     "name": "Wait on background process PID"
-    },
-    {
-     "i": 16,
-     "name": "Wait on multiple specific IDs returns last status"
-    },
-    {
-     "i": 17,
-     "name": "wait -n"
-    },
-    {
-     "i": 18,
-     "name": "Async for loop"
-    },
-    {
-     "i": 19,
-     "name": "Background process doesn't affect parent"
-    },
-    {
-     "i": 20,
-     "name": "Background process and then a singleton pipeline"
-    },
-    {
-     "i": 21,
-     "name": "jobs prints one line per job"
-    },
-    {
-     "i": 22,
-     "name": "jobs -p prints one line per job"
-    },
-    {
-     "i": 23,
-     "name": "No stderr spew when shell is not interactive"
     },
     {
      "i": 24,
