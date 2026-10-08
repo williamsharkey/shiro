@@ -549,7 +549,10 @@ export async function executeNodeScript(
           if (waitOver) return;
           const now = performance.now();
           const out = stdoutBuf.length + stderrBuf.length;
-          if (out !== outSeen || activity.pending > 0 || (_activeTimers > 0 && !timersOutlasted) || pendingPromises.length > 0) {
+          // fs work queued by sync calls after the drain above: in flight
+          // until it settles, then no longer activity
+          if (pendingPromises.length > 0) trackAsync(Promise.all(pendingPromises.splice(0)));
+          if (out !== outSeen || activity.pending > 0 || (_activeTimers > 0 && !timersOutlasted)) {
             outSeen = out;
             quietSince = now;
           }

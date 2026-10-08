@@ -88,8 +88,10 @@ export interface GuestOptions {
   tid?: number;
   /** Start a thread running wasi_thread_start(tid, startArg); returns tid or -errno. */
   threadSpawn?(startArg: number): number;
-  /** The guest registered a signal callback export that exists. */
-  onSignalCallback?(name: string): void;
+  /** The guest registered a signal callback export that exists (or null: signals are blocked). */
+  onSignalCallback?(name: string | null): void;
+  /** Absolute path of this program, run for an empty program name (LLVM tools re-run themselves that way on WASI). */
+  exe?: string;
 }
 
 export type SyncCall = (req: SysRequest) => SysReply;
@@ -350,7 +352,15 @@ export class WasiGuest {
           return 0;
         }),
         path_readlink: g(function* (this: WasiGuest, fd: number, p: number, l: number, buf: number, bufLen: number, used: number) {
-          const r = yield* this.atCall(A.SYS_readlinkat, fd, this.str(p, l), [bufLen], bufLen);
+          const rel = this.str(p, l);
+          // /proc/self/exe names this program (LLVM's getMainExecutable reads it)
+          if (this.opts.exe && this.resolve(fd, rel) === '/proc/self/exe') {
+            const b = enc.encode(this.opts.exe).subarray(0, bufLen);
+            this.u8().set(b, buf);
+            this.view().setUint32(used, b.length, true);
+            return 0;
+          }
+          const r = yield* this.atCall(A.SYS_readlinkat, fd, rel, [bufLen], bufLen);
           if (r.ret < 0) return wasiErrno(r.ret);
           this.u8().set(r.data.subarray(0, r.ret), buf);
           this.view().setUint32(used, r.ret, true);
@@ -487,9 +497,11 @@ export class WasiGuest {
           const first = this.sigCallback === null;
           this.sigCallback = this.str(p, l);
           if (first) yield* this.call(SYS_wasix_signal, WASIX_SIG_CATCH);
-          if (typeof this.exports?.[this.sigCallback] === 'function' && this.sigCallback !== this.announcedCallback) {
-            this.announcedCallback = this.sigCallback;
-            this.opts.onSignalCallback?.(this.sigCallback);
+          // The host may run the callback on a signal thread (host.ts), but not while it's "blocked"
+          const active = typeof this.exports?.[this.sigCallback] === 'function' ? this.sigCallback : null;
+          if (active !== this.announcedCallback) {
+            this.announcedCallback = active;
+            this.opts.onSignalCallback?.(active);
           }
           this.flushHeldSignals();
           return 0;
@@ -1279,6 +1291,7 @@ export class WasiGuest {
 
   /** Program path and env for a spawn/exec: a bare name without a PATH search is a file in the cwd, as for execve. */
   private execTarget(name: string, env: Record<string, string> | null, searchPath: boolean, path?: string): { path: string; env: Record<string, string> | null } {
+    if (!name && this.opts.exe) name = this.opts.exe;
     if (searchPath && path) env = { ...(env ?? this.opts.env), PATH: path };
     return { path: searchPath || name.includes('/') ? name : './' + name, env };
   }

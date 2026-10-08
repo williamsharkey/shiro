@@ -898,6 +898,11 @@ export class Pty {
         pty.masterClosed = true;
         livePtys.delete(pty);
         pty.hangup();
+        // The terminal is gone: drop /dev/pts/N and the output callback, which
+        // otherwise keep the pty and its terminal and shell (a closed pane) alive
+        for (const k of ptyKernels) k.unregisterDevice(pty.name);
+        pty.outListener = null;
+        pty.outq.length = 0;
       },
     };
     return file;

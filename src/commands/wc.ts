@@ -35,35 +35,36 @@ export const wc: Command = {
     const showMax = flags.L || flags['max-line-length'];
     const showDefault = !showLines && !showWords && !showChars && !showBytes && !showMax;
 
-    const format = (c: Counts, name?: string) => {
-      const parts: string[] = [];
-      if (showDefault || showLines) parts.push(String(c.lines).padStart(6));
-      if (showDefault || showWords) parts.push(String(c.words).padStart(6));
-      if (showChars) parts.push(String(c.chars).padStart(6));
-      if (showDefault || showBytes) parts.push(String(c.bytes).padStart(6));
-      if (showMax) parts.push(String(c.maxLine).padStart(6));
-      if (name !== undefined) parts.push(" " + name);
-      return parts.join(" ") + "\n";
+    const columns = (c: Counts): number[] => {
+      const v: number[] = [];
+      if (showDefault || showLines) v.push(c.lines);
+      if (showDefault || showWords) v.push(c.words);
+      if (showChars) v.push(c.chars);
+      if (showDefault || showBytes) v.push(c.bytes);
+      if (showMax) v.push(c.maxLine);
+      return v;
     };
 
-    if (positional.length === 0) {
-      ctx.stdout += format(count(new TextEncoder().encode(ctx.stdin)));
-      return 0;
-    }
-
+    // Read every input first: GNU pads all columns to one width (digits of the
+    // total size; at least 7 when reading a pipe), or not at all for a single count
+    const rows: { c: Counts; name?: string }[] = [];
     let exitCode = 0;
+    let fromPipe = false;
     const total: Counts = { lines: 0, words: 0, chars: 0, bytes: 0, maxLine: 0 };
-    for (const name of positional) {
+    const inputs = positional.length ? positional : [undefined];
+    for (const name of inputs) {
       let data: Uint8Array;
       try {
-        if (name === '-') {
+        if (name === undefined || name === '-') {
           data = new TextEncoder().encode(ctx.stdin);
+          fromPipe = true;
         } else {
           const raw = await ctx.fs.readFile(ctx.fs.resolvePath(name, ctx.cwd));
           data = typeof raw === 'string' ? new TextEncoder().encode(raw) : raw;
         }
       } catch (e: unknown) {
-        ctx.stderr += `wc: ${name}: ${e instanceof Error ? e.message : e}\n`;
+        const msg = e instanceof Error ? e.message : String(e);
+        ctx.stderr += `wc: ${name}: ${/ENOENT|no such/i.test(msg) ? 'No such file or directory' : /EISDIR|directory/i.test(msg) ? 'Is a directory' : msg}\n`;
         exitCode = 1;
         continue;
       }
@@ -73,9 +74,14 @@ export const wc: Command = {
       total.chars += c.chars;
       total.bytes += c.bytes;
       total.maxLine = Math.max(total.maxLine, c.maxLine);
-      ctx.stdout += format(c, name);
+      rows.push({ c, name });
     }
-    if (positional.length > 1) ctx.stdout += format(total, 'total');
+    if (positional.length > 1) rows.push({ c: total, name: 'total' });
+    const single = columns(total).length === 1 && inputs.length === 1;
+    const width = single ? 1 : Math.max(String(total.bytes).length, String(total.chars).length, fromPipe ? 7 : 1);
+    for (const r of rows) {
+      ctx.stdout += columns(r.c).map((n) => String(n).padStart(width)).join(' ') + (r.name !== undefined ? ' ' + r.name : '') + '\n';
+    }
     return exitCode;
   },
 };

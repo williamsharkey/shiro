@@ -38,6 +38,7 @@ const PACKAGES: Record<string, { sha: string; atom: string }> = {
   bash: { sha: '059606d132e2e6bc1afe3b432ee64dcb1b1b059815c8bb213cf3b24798ef21e1', atom: 'bash' },
   curl: { sha: 'ae64ae867b8272abac2d660c374220b3fae13b5e4299d25aae05e2b89607ac02', atom: 'curl' },
   python: { sha: 'a9fa8202f1bf6a4eca8d31ee5f2b1970c8f45af5c5520cc954d28a133333d8e7', atom: 'python' },
+  clang: { sha: 'c127b7bfc0041d02c94045f40be7fb4b3eeb98cede25fad96261b7b90a82f405', atom: 'clang-16-slim' },
   php: { sha: 'da8d3fcfcf02d2401787532c4af3fdaf5b680b05144a9591ca70b97131ee2f32', atom: 'php' },
 };
 
@@ -96,11 +97,12 @@ afterAll(() => {
 
 async function setup(names: string[]): Promise<{ fs: FileSystem; shell: Shell; kernel: Kernel } | null> {
   const { fs, shell } = await createTestShell();
-  await fs.mkdir('/usr/bin', { recursive: true });
+  // Not /usr/bin: test shells share one filesystem, and pkg install won't replace a regular file there
+  await fs.mkdir('/opt/wasix', { recursive: true });
   for (const n of names) {
     const wasm = await pkgWasm(n);
     if (!wasm) return null;
-    await fs.writeFile(`/usr/bin/${n}`, wasm);
+    await fs.writeFile(`/opt/wasix/${n}`, wasm);
   }
   const kernel = new Kernel({ fs, shell, registerWithProcessTable: false });
   installWasmLoader(kernel);
@@ -116,7 +118,7 @@ function collector() {
 const empty = () => new BufferFile('', 0);
 
 function spawn(kernel: Kernel, argv: string[], fds: Record<number, OpenFile>, cwd = '/home/user') {
-  return kernel.spawn({ path: argv[0], argv, env: { PATH: '/usr/bin:/bin', HOME: '/home/user' }, cwd, fds });
+  return kernel.spawn({ path: argv[0], argv, env: { PATH: '/opt/wasix:/usr/bin:/bin', HOME: '/home/user' }, cwd, fds });
 }
 
 /** Run `sh -c script` with the given shell; output and exit code. */
@@ -144,7 +146,7 @@ describe('WASIX dash', () => {
     const env = await setup(['dash']);
     if (!env) return t.skip();
     const r = await run(env.kernel, 'dash', 'cd /tmp && echo hi > f.txt && cat f.txt && wc -c < f.txt | tr -d " "; '
-      + 'ls /usr/bin | grep -c dash; /usr/bin/dash -c "echo nested; exit 2"; echo "nested $?"; ls /nope 2>/dev/null || echo missing');
+      + 'ls /opt/wasix | grep -c dash; /opt/wasix/dash -c "echo nested; exit 2"; echo "nested $?"; ls /nope 2>/dev/null || echo missing');
     expect(r.out).toBe('hi\n3\n1\nnested\nnested 2\nmissing\n');
   }, 60_000);
 
@@ -271,13 +273,64 @@ describe('WASIX python: a position-independent (dylink.0) module (62 MB, network
     const err = collector();
     const proc = env.kernel.spawn({
       path: 'python', argv: ['python', '-c', 'import json, os, sys; print(1); print(json.dumps({"v": sys.version_info[:2]}), os.getcwd())'],
-      env: { PATH: '/usr/bin', HOME: '/home/user', PYTHONHOME: '/opt/py' }, cwd: '/tmp', fds: { 0: empty(), 1: out.sink, 2: err.sink },
+      env: { PATH: '/opt/wasix:/usr/bin', HOME: '/home/user', PYTHONHOME: '/opt/py' }, cwd: '/tmp', fds: { 0: empty(), 1: out.sink, 2: err.sink },
     });
     const status = await proc.wait();
     expect(err.text).toBe('');
     expect(out.text).toBe('1\n{"v": [3, 13]} /tmp\n');
     expect(WEXITSTATUS(status)).toBe(0);
   }, 180_000);
+});
+
+describe('package mounts', () => {
+  it('pkg-installed python finds its standard library at its /nix/store prefix', async (t) => {
+    if (!(await pkgWasm('python'))) return t.skip();
+    vi.stubGlobal('fetch', vi.fn(cachedFetch));
+    try {
+      const { shell } = await createTestShell();
+      const inst = await sh(shell, 'pkg install python');
+      expect(inst.err).toBe('');
+      const r = await sh(shell, `cd /tmp && python3.13 -c 'import json, zoneinfo, sys; print(json.dumps(sys.prefix.startswith("/nix/store")), zoneinfo.ZoneInfo("Europe/Paris").key)'`);
+      expect(r.err).toBe('');
+      expect(r.out).toBe('true Europe/Paris\n');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 300_000);
+
+  it('curl reads its CA directory at /openssl', async (t) => {
+    if (!(await pkgWasm('curl'))) return t.skip();
+    vi.stubGlobal('fetch', vi.fn(cachedFetch));
+    try {
+      const { shell } = await createTestShell();
+      expect((await sh(shell, 'pkg install curl')).exitCode).toBe(0);
+      // /usr/bin/curl: the package doesn't take the name from Shiro's builtin curl
+      const r = await sh(shell, '/usr/bin/curl -sS file:///openssl/ssl/certs/002c0b4f.0 | head -1');
+      expect(r.out).toBe('-----BEGIN CERTIFICATE-----\n');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 120_000);
+});
+
+describe('WASIX clang (111 MB, network once)', () => {
+  it('compiles and links hello.c to wasm inside Shiro, and the result runs', async (t) => {
+    if (!(await pkgWasm('clang'))) return t.skip();
+    vi.stubGlobal('fetch', vi.fn(cachedFetch));
+    try {
+      const { shell, fs } = await createTestShell();
+      const inst = await sh(shell, 'pkg install clang');
+      expect(inst.err).toBe('');
+      await fs.writeFile('/tmp/hello.c', '#include <stdio.h>\nint main(int argc, char **argv) { printf("hello from clang, %d args\\n", argc); return 3; }\n');
+      const cc = await sh(shell, 'cd /tmp && clang hello.c -o hello.wasm');
+      expect(cc).toMatchObject({ err: '', exitCode: 0 });
+      const run = await sh(shell, 'cd /tmp && wasi run hello.wasm a b');
+      expect(run.out).toBe('hello from clang, 3 args\n');
+      expect(run.exitCode).toBe(3);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  }, 600_000);
 });
 
 describe('WASIX php (86 MB, network once)', () => {

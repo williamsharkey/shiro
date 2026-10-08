@@ -14,7 +14,7 @@ import { processTable, type ShiroProcess } from '../process-table';
 import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
-  RegularFile, DirFile, openInode, inodeNumber, canWrite, refCount,
+  RegularFile, DirFile, openInode, inodeNumber, canWrite, refCount, renameInodes, unlinkInode,
 } from './fd';
 import { createPipe } from './pipe';
 import { Process } from './process';
@@ -162,6 +162,11 @@ export class Kernel {
 
   registerDevice(path: string, opener: DeviceOpener): void {
     this.devices.set(path, opener);
+  }
+
+  /** Remove a device node (a closed pty's /dev/pts/N), so its opener can be collected. */
+  unregisterDevice(path: string): void {
+    this.devices.delete(path);
   }
 
   /**
@@ -1082,7 +1087,10 @@ export class Kernel {
           if (flags & ~A.RENAME_NOREPLACE) return -A.EINVAL;
           if ((flags & A.RENAME_NOREPLACE) && (await fs().exists(to))) return -A.EEXIST;
           if (!(await fs().exists(from))) return -A.ENOENT;
+          // Open files follow the rename (their buffered data must not land at the old path)
+          const moved = await renameInodes(fs(), from, to);
           await fs().rename(from, to);
+          moved();
           return 0;
         }
         case A.SYS_mkdir:
@@ -1109,7 +1117,7 @@ export class Kernel {
           if (!rmdir && isDir) return -A.EISDIR;
           if (rmdir && !isDir) return -A.ENOTDIR;
           if (isDir) await fs().rmdir(p);
-          else await fs().unlink(p);
+          else { await unlinkInode(fs(), p); await fs().unlink(p); }
           return 0;
         }
         case A.SYS_symlink:

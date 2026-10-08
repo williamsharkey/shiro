@@ -26,6 +26,8 @@ export interface WasiStartData {
   thread?: { startArg: number };
   /** Set in a forked child: `memory` is a copy of the parent's; rewind `cap` so proc_fork returns 0. */
   resume?: WasixForkState;
+  /** Absolute path of the program (GuestOptions.exe). */
+  exe?: string;
   /** Function signatures for WASIX dynamic calls, when the module imports them (./dyncall.ts). */
   funcSigs?: FuncSigs;
   /** A position-independent (dylink.0) module: where its data, stack and table go (./dylink.ts). */
@@ -47,7 +49,7 @@ export type WasiGuestMessage =
   | { type: 'wasi-error'; message: string }
   | { type: 'wasix-fork'; state: WasixForkState }
   /** The main thread registered a WASIX signal callback (host.ts can then run it on a signal thread). */
-  | { type: 'wasix-signals'; callback: string; tlsBase: number };
+  | { type: 'wasix-signals'; callback: string | null; tlsBase: number };
 
 export interface Port {
   postMessage(msg: unknown): void;
@@ -87,6 +89,7 @@ function run(port: Port, msg: WasiStartMessage): void {
     dataSize: channel.data.length, tid,
     // Threads need the shared memory; the host answers with attachThread
     threadSpawn: w.memory ? (startArg) => call({ nr: SYS_wasi_thread_spawn, args: [startArg] }).ret : undefined,
+    exe: w.exe,
     onSignalCallback: w.thread || w.signal ? undefined : (callback) => {
       const tls = guest!.exports?.__tls_base;
       if (tls instanceof WebAssembly.Global) port.postMessage({ type: 'wasix-signals', callback, tlsBase: tls.value } satisfies WasiGuestMessage);

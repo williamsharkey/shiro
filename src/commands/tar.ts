@@ -210,8 +210,9 @@ export const tar: Command = {
           const writer = cs.writable.getWriter();
           const reader = cs.readable.getReader();
           const chunks: Uint8Array[] = [];
-          writer.write(archiveData as any);
-          writer.close();
+          // A corrupt stream rejects these too; the reader below reports the error
+          writer.write(archiveData as any).catch(() => {});
+          writer.close().catch(() => {});
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
@@ -269,8 +270,9 @@ export const tar: Command = {
             const writer = ds.writable.getWriter();
             const reader = ds.readable.getReader();
             const chunks: Uint8Array[] = [];
-            writer.write(rawData as any);
-            writer.close();
+            // A corrupt stream rejects these too; the reader below reports the error
+            writer.write(rawData as any).catch(() => {});
+            writer.close().catch(() => {});
             while (true) {
               const { done, value } = await reader.read();
               if (done) break;
