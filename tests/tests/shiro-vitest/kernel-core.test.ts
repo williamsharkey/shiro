@@ -519,6 +519,23 @@ describe('kernel processes', () => {
     kernel.kill(proc.pid, A.SIGKILL);
   });
 
+  it('FIONBIO sets O_NONBLOCK on any fd, even one whose ioctl only knows tty requests', async () => {
+    // libuv (cmake's process spawns) makes every fd non-blocking with FIONBIO;
+    // /dev/null answered ENOTTY and cmake died on the error path
+    const dev: OpenFile = Object.assign(new DevNull(), { ioctl: async () => -A.ENOTTY });
+    const [r] = createPipe();
+    const proc = kernel.spawn({ path: 'nb', fds: { 0: dev, 3: r }, run: () => new Promise<number>(() => {}) });
+    const on = new Uint8Array(4); new DataView(on.buffer).setInt32(0, 1, true);
+    for (const fd of [0, 3]) {
+      expect(await kernel.syscall(proc, A.SYS_ioctl, [fd, A.FIONBIO, 4], on.slice())).toBe(0);
+      expect((await kernel.syscall(proc, A.SYS_fcntl, [fd, A.F_GETFL, 0], new Uint8Array(0))) & A.O_NONBLOCK).toBe(A.O_NONBLOCK);
+      expect(await kernel.syscall(proc, A.SYS_ioctl, [fd, A.FIONBIO, 4], new Uint8Array(4))).toBe(0);
+      expect((await kernel.syscall(proc, A.SYS_fcntl, [fd, A.F_GETFL, 0], new Uint8Array(0))) & A.O_NONBLOCK).toBe(0);
+    }
+    expect(await kernel.syscall(proc, A.SYS_ioctl, [0, A.TCGETS, 0], new Uint8Array(64))).toBe(-A.ENOTTY);
+    kernel.kill(proc.pid, A.SIGKILL);
+  });
+
   it('epoll in-page: one-shot, closed descriptions drop out', async () => {
     const ep = new EpollFile();
     const [r, w] = createPipe();

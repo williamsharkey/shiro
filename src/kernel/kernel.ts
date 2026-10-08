@@ -920,9 +920,15 @@ export class Kernel {
           const arg = data.subarray(0, Math.min(args[2] >>> 0, data.length));
           if (req === A.FIOCLEX || req === A.FIONCLEX) return fds.setCloexec(args[0], req === A.FIOCLEX);
           if (req === A.FIONBIO && arg.length >= 4) {
+            // O_NONBLOCK is the open file's flag, so this works on any fd. A
+            // file's own ioctl may also look at it (sockets), but one that
+            // doesn't know it (/dev/null, pipes, files) mustn't fail it:
+            // libuv sets every fd non-blocking this way (cmake's spawns).
             const on = new DataView(arg.buffer, arg.byteOffset, 4).getInt32(0, true) !== 0;
             f.flags = on ? f.flags | A.O_NONBLOCK : f.flags & ~A.O_NONBLOCK;
             if (!f.ioctl) return 0;
+            const r = await f.ioctl(req, arg, sig);
+            return r === -A.ENOTTY ? 0 : r;
           }
           if (!f.ioctl) return -A.ENOTTY;
           return await f.ioctl(req, arg, sig);
