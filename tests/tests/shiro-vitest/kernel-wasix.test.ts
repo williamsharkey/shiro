@@ -13,6 +13,8 @@ import { Worker } from 'node:worker_threads';
 import { readFileSync, mkdtempSync, writeFileSync, rmSync, existsSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { build } from 'esbuild';
+import { spawn as spawnChild, type ChildProcess } from 'node:child_process';
+import { NetStack, installNet } from '@shiro/kernel/net';
 import { createTestShell } from './helpers';
 import type { FileSystem } from '@shiro/filesystem';
 import type { Shell } from '@shiro/shell';
@@ -34,6 +36,7 @@ const CACHE = path.resolve(here, '../../.pkg-cache');
 const PACKAGES: Record<string, { sha: string; atom: string }> = {
   dash: { sha: 'c81513a53f11a2a23ea305fa008049d15fa1b5f52b696cedbf63554077ea5998', atom: 'dash' },
   bash: { sha: '059606d132e2e6bc1afe3b432ee64dcb1b1b059815c8bb213cf3b24798ef21e1', atom: 'bash' },
+  curl: { sha: 'ae64ae867b8272abac2d660c374220b3fae13b5e4299d25aae05e2b89607ac02', atom: 'curl' },
   php: { sha: 'da8d3fcfcf02d2401787532c4af3fdaf5b680b05144a9591ca70b97131ee2f32', atom: 'php' },
 };
 
@@ -177,6 +180,78 @@ describe('WASIX bash', () => {
       + 'export FOO=bar; bash -c \'echo "child $FOO"\'; true & wait; echo waited');
     expect(r.err).toBe('');
     expect(r.out).toBe('3 b\nglob\nf 7\nSUB\n9\nchild bar\nwaited\n');
+  }, 60_000);
+});
+
+describe('WASIX sockets: curl through the TCP relay', () => {
+  let harness: ChildProcess | undefined;
+  let P: { httpPort: number; httpsPort: number; relayPort: number; origin: string };
+
+  beforeAll(async () => {
+    const file = new URL('./fixtures/wasix-net-harness.mjs', import.meta.url).pathname;
+    harness = spawnChild('node', [file], { stdio: ['pipe', 'pipe', 'inherit'] });
+    P = await new Promise((resolve, reject) => {
+      let out = '';
+      harness!.stdout!.on('data', (d) => {
+        out += d;
+        const line = out.split('\n').find((l) => l.startsWith('{'));
+        if (line) resolve(JSON.parse(line));
+      });
+      harness!.once('exit', (c) => reject(new Error(`harness exited ${c}`)));
+    });
+  }, 30_000);
+  afterAll(() => { harness?.kill(); });
+
+  /** A kernel whose sockets go through the harness relay, like a page on its origin. */
+  async function netSetup() {
+    const env = await setup(['curl']);
+    if (!env) return null;
+    const stack = new NetStack();
+    const origin = P.origin;
+    class OriginWebSocket extends WebSocket {
+      constructor(url: string | URL) { super(url, { headers: { origin } } as any); }
+    }
+    stack.configure({
+      relayUrl: `ws://127.0.0.1:${P.relayPort}/tcp`,
+      tokenUrl: `http://127.0.0.1:${P.relayPort}/tcp/token`,
+      fetch: ((u: any, init: any = {}) => fetch(u, { ...init, headers: { ...(init.headers || {}), origin } })) as typeof fetch,
+      WebSocket: OriginWebSocket as unknown as typeof WebSocket,
+      relayLoopback: true, portHost: null, dohUrl: null,
+    });
+    installNet(env.kernel, stack);
+    return env;
+  }
+
+  async function curl(kernel: Kernel, args: string[]) {
+    const out = collector();
+    const err = collector();
+    const proc = spawn(kernel, ['curl', ...args], { 0: empty(), 1: out.sink, 2: err.sink });
+    const status = await proc.wait();
+    return { out: out.text, err: err.text, code: WEXITSTATUS(status), status };
+  }
+
+  it('fetches over HTTP, resolving the name through the relay', async (t) => {
+    const env = await netSetup();
+    if (!env) return t.skip();
+    const r = await curl(env.kernel, ['-sS', `http://web.test:${P.httpPort}/path?q=1`]);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('hello over http: GET /path?q=1\n');
+    const post = await curl(env.kernel, ['-sS', '-d', 'x=1', '-i', `http://127.0.0.1:${P.httpPort}/form`]);
+    expect(post.out).toMatch(/^HTTP\/1\.1 200 OK\r\n/);
+    expect(post.out).toContain('x-scheme: http');
+    expect(post.out).toContain('hello over http: POST /form body=x=1\n');
+    const nx = await curl(env.kernel, ['-sS', `http://nx.test:${P.httpPort}/`]);
+    expect(nx.code).toBe(6); // CURLE_COULDNT_RESOLVE_HOST
+  }, 60_000);
+
+  it('fetches over HTTPS (OpenSSL in the guest, TLS end to end through the relay)', async (t) => {
+    const env = await netSetup();
+    if (!env || !P.httpsPort) return t.skip();
+    const r = await curl(env.kernel, ['-sSk', `https://web.test:${P.httpsPort}/secure`]);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('hello over https: GET /secure\n');
+    // Without -k the self-signed certificate is refused
+    expect((await curl(env.kernel, ['-sS', `https://web.test:${P.httpsPort}/`])).code).toBe(60);
   }, 60_000);
 });
 

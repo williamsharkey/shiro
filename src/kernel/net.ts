@@ -1226,9 +1226,18 @@ export async function netSyscall(
 }
 
 /** Route the kernel's socket syscalls to `stack`; EPIPE without MSG_NOSIGNAL raises SIGPIPE. Returns the unregister function. */
+const installedStacks = new WeakMap<Kernel, NetStack>();
+
 export function installNet(kernel: Kernel, stack: NetStack = netStack): () => void {
-  return kernel.registerSyscalls(SOCKET_SYSCALLS, (proc, nr, args, data, k) =>
+  installedStacks.set(kernel, stack);
+  const off = kernel.registerSyscalls(SOCKET_SYSCALLS, (proc, nr, args, data, k) =>
     netSyscall(proc, nr, args, data, () => k.deliver(proc, SIGPIPE), stack));
+  return () => { off(); if (installedStacks.get(kernel) === stack) installedStacks.delete(kernel); };
+}
+
+/** The NetStack `installNet` gave this kernel (name resolution for runtimes with their own resolver call, like WASIX). */
+export function netStackOf(kernel: Kernel): NetStack | undefined {
+  return installedStacks.get(kernel);
 }
 
 if (typeof window !== 'undefined') (window as any).__shiroNet = netStack;

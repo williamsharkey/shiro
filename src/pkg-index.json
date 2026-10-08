@@ -1124,7 +1124,7 @@
     "threads",
     "sockets"
    ],
-   "notes": "WASIX build (wasix_32v1, shared env.memory). --version runs; transfers need WASIX sock_open/connect and the TCP relay."
+   "notes": "WASIX build (wasix_32v1, shared env.memory). HTTP and HTTPS (its own OpenSSL) through the kernel sockets and the TCP relay. Verifying real sites needs its CA certificates at /openssl (the package's share/openssl)."
   },
   {
    "name": "quickjs-ng",

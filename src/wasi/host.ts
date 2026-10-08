@@ -19,7 +19,7 @@ import type { Kernel, Runner } from '../kernel/kernel';
 import { Process } from '../kernel/process';
 import { attachThread, type GuestWorker } from '../kernel/worker-host';
 import {
-  SYS_wasi_thread_spawn, SYS_wasix_exec, SYS_wasix_fork, SYS_wasix_signal,
+  SYS_wasi_thread_spawn, SYS_wasix_exec, SYS_wasix_fork, SYS_wasix_resolve, SYS_wasix_signal,
   WASIX_HANDLER, WASIX_SIG_CATCH, WASIX_SIG_DEFAULT, WASIX_SIG_IGNORED, type SysReply, type SysRequest,
 } from './abi';
 import type { WasiGuestMessage, WasiStartMessage, WasixForkState } from './guest-worker';
@@ -149,6 +149,17 @@ function installWasiSyscalls(kernel: Kernel): void {
     return exec(req);
   });
   kernel.registerSyscalls([SYS_wasix_signal], (proc, _nr, args, _data, k) => wasixSignal(k, proc, args[0], args[1]));
+  kernel.registerSyscalls([SYS_wasix_resolve], async (_proc, _nr, args, data, k) => {
+    const host = A.decodeText(data.subarray(0, Math.min(args[0], data.length)));
+    const stack = (await import('../kernel/net')).netStackOf(k);
+    if (!stack) return -A.ENOSYS;
+    const r = await stack.resolve(host);
+    if (typeof r === 'number') return r;
+    const text = new TextEncoder().encode([...r].sort((a, b) => a.family - b.family).map(a => a.address).join('\n'));
+    if (text.length > data.length) return -A.ENOBUFS;
+    data.set(text);
+    return text.length;
+  });
   kernel.registerSyscalls([A.SYS_stat, A.SYS_lstat, A.SYS_newfstatat, A.SYS_access, A.SYS_faccessat], binCommandStat);
 }
 

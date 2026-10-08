@@ -28,7 +28,7 @@ import * as A from '../kernel/abi';
 import {
   SysReply, SysRequest, filetypeFromDtype, filetypeFromMode, wasiErrno, writeFilestat,
   FT_CHAR, WASI_EBADF, WASI_ECHILD, WASI_EINVAL, WASI_ENOSYS, WASI_ENOTSUP, WASI_EOVERFLOW, WASI_ENOTTY,
-  SYS_wasix_exec, SYS_wasix_signal, WASIX_SIG_CATCH, WASIX_SIG_DEFAULT, WASIX_SIG_IGNORED,
+  SYS_wasix_exec, SYS_wasix_resolve, SYS_wasix_signal, WASIX_SIG_CATCH, WASIX_SIG_DEFAULT, WASIX_SIG_IGNORED,
 } from './abi';
 import { Asyncify, hashCapture, type StackCapture } from './asyncify';
 
@@ -492,6 +492,75 @@ export class WasiGuest {
           const pid = yield* this.call(A.SYS_getpid);
           return wasiErrno(yield* this.call(A.SYS_tgkill, pid, tid || pid, sig));
         }),
+        // Sockets (kernel socket syscalls, src/kernel/net.ts)
+        sock_open: g(function* (this: WasiGuest, af: number, type: number, proto: number, fdPtr: number) {
+          const domain = af === 1 ? A.AF_INET : af === 2 ? A.AF_INET6 : af === 3 ? A.AF_UNIX : -1;
+          if (domain < 0) return wasiErrno(-A.EAFNOSUPPORT);
+          const r = yield* this.call(A.SYS_socket, domain, type === 2 ? A.SOCK_DGRAM : A.SOCK_STREAM, proto);
+          if (r < 0) return wasiErrno(r);
+          this.view().setUint32(fdPtr, r, true);
+          return 0;
+        }),
+        sock_connect: g(function* (this: WasiGuest, fd: number, addr: number) { return yield* this.sockAddrCall(A.SYS_connect, fd, addr); }),
+        sock_bind: g(function* (this: WasiGuest, fd: number, addr: number) { return yield* this.sockAddrCall(A.SYS_bind, fd, addr); }),
+        sock_listen: g(function* (this: WasiGuest, fd: number, backlog: number) { return wasiErrno(yield* this.call(A.SYS_listen, fd, backlog)); }),
+        sock_accept_v2: g(function* (this: WasiGuest, fd: number, fdflags: number, fdPtr: number, addr: number) {
+          const r = yield* this.sys(A.SYS_accept4, [fd, fdflags & 4 ? A.O_NONBLOCK : 0], undefined, A.SOCKADDR_ROOM);
+          if (r.ret < 0) return wasiErrno(r.ret);
+          this.writeWasiAddr(addr, r.data.slice(0, A.SOCKADDR_ROOM));
+          this.view().setUint32(fdPtr, r.ret, true);
+          return 0;
+        }),
+        sock_addr_local: g(function* (this: WasiGuest, fd: number, addr: number) { return yield* this.sockName(A.SYS_getsockname, fd, addr); }),
+        sock_addr_peer: g(function* (this: WasiGuest, fd: number, addr: number) { return yield* this.sockName(A.SYS_getpeername, fd, addr); }),
+        sock_send_to: g(this.sock_send_to),
+        sock_recv_from: g(this.sock_recv_from),
+        sock_set_opt_flag: g(function* (this: WasiGuest, fd: number, opt: number, flag: number) {
+          const o = SOCK_FLAG_OPTS[opt];
+          return o ? wasiErrno(yield* this.call(A.SYS_setsockopt, fd, o[0], o[1], flag ? 1 : 0)) : 0;
+        }),
+        sock_get_opt_flag: g(function* (this: WasiGuest, fd: number, opt: number, ret: number) {
+          const o = SOCK_FLAG_OPTS[opt] ?? (opt === 10 ? [A.SOL_SOCKET, A.SO_ACCEPTCONN] as const : undefined);
+          const r = o ? yield* this.call(A.SYS_getsockopt, fd, o[0], o[1]) : 0;
+          if (r < 0) return wasiErrno(r);
+          this.view().setUint8(ret, r ? 1 : 0);
+          return 0;
+        }),
+        sock_set_opt_time: g(function* (this: WasiGuest, fd: number, opt: number, ptr: number) {
+          const name = opt === 19 ? A.SO_RCVTIMEO : opt === 20 ? A.SO_SNDTIMEO : 0;
+          if (!name) return 0; // connect/accept timeouts: blocking calls just wait
+          const v = this.view();
+          const ms = v.getUint8(ptr) === 1 ? Math.ceil(Number(v.getBigUint64(ptr + 8, true)) / 1e6) : 0;
+          return wasiErrno(yield* this.call(A.SYS_setsockopt, fd, A.SOL_SOCKET, name, ms));
+        }),
+        sock_get_opt_time: g(function* (this: WasiGuest, fd: number, opt: number, ptr: number) {
+          const name = opt === 19 ? A.SO_RCVTIMEO : opt === 20 ? A.SO_SNDTIMEO : 0;
+          const ms = name ? yield* this.call(A.SYS_getsockopt, fd, A.SOL_SOCKET, name) : 0;
+          if (ms < 0) return wasiErrno(ms);
+          const v = this.view();
+          v.setUint8(ptr, ms > 0 ? 1 : 0);
+          v.setBigUint64(ptr + 8, BigInt(ms) * 1_000_000n, true);
+          return 0;
+        }),
+        sock_set_opt_size: g(function* (this: WasiGuest, fd: number, opt: number, size: bigint) {
+          const name = opt === 15 ? A.SO_RCVBUF : opt === 16 ? A.SO_SNDBUF : 0;
+          return name ? wasiErrno(yield* this.call(A.SYS_setsockopt, fd, A.SOL_SOCKET, name, Number(size) | 0)) : 0;
+        }),
+        sock_get_opt_size: g(function* (this: WasiGuest, fd: number, opt: number, ret: number) {
+          const o: readonly [number, number] | undefined = opt === 15 ? [A.SOL_SOCKET, A.SO_RCVBUF] : opt === 16 ? [A.SOL_SOCKET, A.SO_SNDBUF]
+            : opt === 11 ? [A.SOL_SOCKET, A.SO_ERROR] : opt === 25 ? [A.SOL_SOCKET, A.SO_TYPE] : undefined;
+          const r = o ? yield* this.call(A.SYS_getsockopt, fd, o[0], o[1]) : 0;
+          if (r < 0) return wasiErrno(r);
+          // SO_ERROR comes back as a Linux errno: report the WASI one
+          this.view().setBigUint64(ret, BigInt(opt === 11 && r > 0 ? wasiErrno(-r) : r), true);
+          return 0;
+        }),
+        sock_status: g(function* (this: WasiGuest, fd: number, ret: number) {
+          const r = yield* this.call(A.SYS_getsockopt, fd, A.SOL_SOCKET, A.SO_ERROR);
+          this.view().setUint8(ret, r < 0 ? 3 : 1); // __WASI_SOCK_STATUS_OPENED / FAILED
+          return 0;
+        }),
+        resolve: g(this.resolveHost),
         proc_signal: g(function* (this: WasiGuest, pid: number, sig: number) {
           return wasiErrno(yield* this.call(A.SYS_kill, pid | 0, sig));
         }),
@@ -516,6 +585,135 @@ export class WasiGuest {
         }),
       },
     };
+  }
+
+  // ── WASIX sockets ─────────────────────────────────────────────────
+
+  /**
+   * __wasi_addr_port_t (tag u8; port u16 @2 in host order; IPv4 bytes @4 or
+   * IPv6 bytes @4) → Linux sockaddr, or null for AF_UNSPEC.
+   */
+  private readWasiAddr(ptr: number): Uint8Array | null | number {
+    const v = this.view();
+    const tag = v.getUint8(ptr);
+    const port = v.getUint16(ptr + 2, true);
+    if (tag === 1) {
+      const sa = new Uint8Array(16);
+      const sv = new DataView(sa.buffer);
+      sv.setUint16(0, A.AF_INET, true);
+      sv.setUint16(2, port, false);
+      sa.set(this.bytes(ptr + 4, 4), 4);
+      return sa;
+    }
+    if (tag === 2) {
+      const sa = new Uint8Array(28);
+      const sv = new DataView(sa.buffer);
+      sv.setUint16(0, A.AF_INET6, true);
+      sv.setUint16(2, port, false);
+      sa.set(this.bytes(ptr + 4, 16), 8);
+      return sa;
+    }
+    return tag === 0 ? null : -A.EAFNOSUPPORT;
+  }
+
+  /** Linux sockaddr → __wasi_addr_port_t at ptr. */
+  private writeWasiAddr(ptr: number, sa: Uint8Array): void {
+    if (!ptr) return;
+    const sv = new DataView(sa.buffer, sa.byteOffset, sa.byteLength);
+    const family = sa.length >= 2 ? sv.getUint16(0, true) : 0;
+    const v = this.view();
+    const m = this.u8();
+    m.fill(0, ptr, ptr + 30);
+    if (family === A.AF_INET && sa.length >= 8) {
+      v.setUint8(ptr, 1);
+      v.setUint16(ptr + 2, sv.getUint16(2, false), true);
+      m.set(sa.subarray(4, 8), ptr + 4);
+    } else if (family === A.AF_INET6 && sa.length >= 24) {
+      v.setUint8(ptr, 2);
+      v.setUint16(ptr + 2, sv.getUint16(2, false), true);
+      m.set(sa.subarray(8, 24), ptr + 4);
+    }
+  }
+
+  private *sockAddrCall(nr: number, fd: number, addr: number): Sys {
+    const sa = this.readWasiAddr(addr);
+    if (typeof sa === 'number') return wasiErrno(sa);
+    if (!sa) return wasiErrno(-A.EAFNOSUPPORT);
+    return wasiErrno((yield* this.sys(nr, [fd, sa.length], sa)).ret);
+  }
+
+  private *sockName(nr: number, fd: number, addr: number): Sys {
+    const r = yield* this.sys(nr, [fd], undefined, A.SOCKADDR_ROOM);
+    if (r.ret < 0) return wasiErrno(r.ret);
+    this.writeWasiAddr(addr, r.data.slice(0, Math.min(r.ret, A.SOCKADDR_ROOM)));
+    return 0;
+  }
+
+  private *sock_send_to(fd: number, iovs: number, n: number, siFlags: number, addr: number, retPtr: number): Sys {
+    const sa = addr ? this.readWasiAddr(addr) : null;
+    if (typeof sa === 'number') return wasiErrno(sa);
+    const data = this.gather(this.iovs(iovs, n));
+    const room = this.opts.dataSize - A.SOCKADDR_ROOM;
+    const flags = siFlags & 4 ? A.MSG_DONTWAIT : 0;
+    let done = 0;
+    do {
+      const chunk = data.subarray(done, Math.min(data.length, done + room));
+      const buf = new Uint8Array(chunk.length + (sa?.length ?? 0));
+      buf.set(chunk);
+      if (sa) buf.set(sa, chunk.length);
+      const r = yield* this.sys(A.SYS_sendto, [fd, chunk.length, flags, sa?.length ?? 0], buf);
+      if (r.ret < 0) { if (!done) return wasiErrno(r.ret); break; }
+      done += r.ret;
+      if (r.ret < chunk.length) break;
+    } while (done < data.length);
+    this.view().setUint32(retPtr, done, true);
+    return 0;
+  }
+
+  private *sock_recv_from(fd: number, iovsPtr: number, n: number, riFlags: number, lenPtr: number, roFlagsPtr: number, addr: number): Sys {
+    const iovs = this.iovs(iovsPtr, n);
+    const total = Math.min(iovs.reduce((s, [, l]) => s + l, 0), this.opts.dataSize - A.SOCKADDR_ROOM);
+    let flags = 0;
+    if (riFlags & 1) flags |= A.MSG_PEEK;
+    if (riFlags & 2) flags |= A.MSG_WAITALL;
+    if (riFlags & 4) flags |= A.MSG_DONTWAIT;
+    const r = yield* this.sys(A.SYS_recvfrom, [fd, total, flags], undefined, total + A.SOCKADDR_ROOM);
+    if (r.ret < 0) return wasiErrno(r.ret);
+    this.scatter(iovs, r.data.subarray(0, r.ret));
+    this.writeWasiAddr(addr, r.data.slice(r.ret, r.ret + A.SOCKADDR_ROOM));
+    const v = this.view();
+    v.setUint32(lenPtr, r.ret, true);
+    v.setUint16(roFlagsPtr, 0, true);
+    return 0;
+  }
+
+  /**
+   * resolve(host, port, addrs, n, *count): __wasi_addr_ip_t entries (tag u8,
+   * address bytes @2). Only the first address is reported: early WASIX libcs
+   * (curl's) step through the array as 110-byte __wasi_addr_t, later ones as
+   * 18-byte __wasi_addr_ip_t, and the first entry reads the same either way.
+   */
+  private *resolveHost(hostPtr: number, hostLen: number, _port: number, addrs: number, naddrs: number, retPtr: number): Sys {
+    const host = this.bytes(hostPtr, hostLen);
+    const r = yield* this.sys(SYS_wasix_resolve, [host.length], host, 4096);
+    if (r.ret < 0) return wasiErrno(r.ret);
+    const list = dec.decode(r.data.slice(0, r.ret)).split('\n').filter(Boolean);
+    const v = this.view();
+    let count = 0;
+    for (const a of list.slice(0, Math.min(naddrs, 1))) {
+      const p = addrs + count * 18;
+      this.u8().fill(0, p, p + 18);
+      if (a.includes(':')) {
+        v.setUint8(p, 2);
+        ipv6Bytes(a).forEach((b, i) => v.setUint8(p + 2 + i, b));
+      } else {
+        v.setUint8(p, 1);
+        a.split('.').forEach((o, i) => v.setUint8(p + 2 + i, Number(o) & 0xff));
+      }
+      count++;
+    }
+    v.setUint32(retPtr, count, true);
+    return 0;
   }
 
   // ── stack capture (asyncify) ──────────────────────────────────────
@@ -1211,6 +1409,26 @@ function now(clockId: number): bigint {
 function canAtomicsWait(): boolean {
   // Atomics.wait throws on the browser main thread
   return typeof (globalThis as any).document === 'undefined';
+}
+
+/** WASIX socket options that are flags → [level, name]. */
+const SOCK_FLAG_OPTS: Record<number, readonly [number, number]> = {
+  1: [A.SOL_SOCKET, A.SO_REUSEPORT], 2: [A.SOL_SOCKET, A.SO_REUSEADDR], 3: [A.IPPROTO_TCP, A.TCP_NODELAY],
+  6: [A.SOL_SOCKET, A.SO_BROADCAST], 12: [A.SOL_SOCKET, A.SO_KEEPALIVE],
+};
+
+function ipv6Bytes(addr: string): number[] {
+  let a = addr.split('%')[0];
+  const v4 = /(\d+\.\d+\.\d+\.\d+)$/.exec(a);
+  if (v4) {
+    const p = v4[1].split('.').map(Number);
+    a = a.slice(0, -v4[1].length) + ((p[0] << 8) | p[1]).toString(16) + ':' + ((p[2] << 8) | p[3]).toString(16);
+  }
+  const [head, tail] = a.includes('::') ? a.split('::') : [a, null];
+  const h = head ? head.split(':').filter(Boolean).map(x => parseInt(x, 16)) : [];
+  const t = tail ? tail.split(':').filter(Boolean).map(x => parseInt(x, 16)) : [];
+  const groups = [...h, ...(tail === null ? [] : new Array(8 - h.length - t.length).fill(0)), ...t].slice(0, 8);
+  return groups.flatMap(g => [g >> 8, g & 0xff]);
 }
 
 function popcount(x: number): number {
