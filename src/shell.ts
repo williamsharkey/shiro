@@ -15,6 +15,15 @@ async function loadWasiRuntime() {
   return _wasiRuntime;
 }
 
+// shell-kernel is loaded on first use and then reached synchronously: a
+// dynamic import() per command (through Vite's preload helper) was a large
+// part of every builtin's cost
+let _shellKernel: typeof import('./shell-kernel') | null = null;
+let _shellKernelLoading: Promise<typeof import('./shell-kernel')> | null = null;
+function loadShellKernel(): Promise<typeof import('./shell-kernel')> {
+  return _shellKernelLoading ??= import('./shell-kernel').then(m => (_shellKernel = m));
+}
+
 interface Redirect {
   type: '>' | '>>' | '<' | '2>' | '2>>' | '2>&1' | '>&-';
   target: string;
@@ -50,6 +59,21 @@ interface CompletionSpec {
 }
 
 /** Sentinel thrown by `break [N]` inside loops */
+/** Quiet period before command history is written to ~/.bash_history. */
+const HISTORY_SAVE_DELAY_MS = 500;
+/** Shells with a history save scheduled, flushed together when the page hides. */
+const historySavePending = new Set<Shell>();
+let historyFlushInstalled = false;
+function installHistoryFlush(): void {
+  if (historyFlushInstalled || typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
+  historyFlushInstalled = true;
+  const flush = () => { for (const sh of [...historySavePending]) void sh.flushHistory(); };
+  window.addEventListener('pagehide', flush);
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
+  }
+}
+
 class BreakSignal { constructor(public levels: number = 1) {} }
 /** Sentinel thrown by `continue [N]` inside loops */
 class ContinueSignal { constructor(public levels: number = 1) {} }
@@ -269,6 +293,31 @@ export class Shell {
       // File doesn't exist yet, that's fine
       this.history = [];
     }
+  }
+
+  private historySaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Save history once the shell has been quiet for a moment: one write per
+   *  burst of commands instead of one full-file write per command. */
+  scheduleHistorySave(): void {
+    if (this.historySaveTimer) clearTimeout(this.historySaveTimer);
+    this.historySaveTimer = setTimeout(() => {
+      this.historySaveTimer = null;
+      historySavePending.delete(this);
+      void this.saveHistory();
+    }, HISTORY_SAVE_DELAY_MS);
+    historySavePending.add(this);
+    installHistoryFlush();
+  }
+
+  /** Write a scheduled history save now and commit it (page going away). */
+  async flushHistory(): Promise<void> {
+    if (!this.historySaveTimer) return;
+    clearTimeout(this.historySaveTimer);
+    this.historySaveTimer = null;
+    historySavePending.delete(this);
+    await this.saveHistory();
+    await this.fs.sync().catch(() => {});
   }
 
   /** Save command history to ~/.bash_history */
@@ -603,7 +652,7 @@ export class Shell {
       const sanitized = trimmed.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '').replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
       if (sanitized.trim()) {
         this.history.push(sanitized);
-        this.saveHistory(); // Persist to disk (async, don't await)
+        this.scheduleHistorySave(); // Persist to disk (debounced)
       }
     }
 
@@ -1031,7 +1080,7 @@ export class Shell {
           const start = performance.now();
           if (timeCmd) {
             this.injectedStdin = nestedStdin;
-            exitCode = await this.execute(timeCmd, writeStdout, stderrWriter);
+            exitCode = await this.execute(timeCmd, writeStdout, stderrWriter, false, undefined, true);
           }
           const elapsed = (performance.now() - start) / 1000;
           const mins = Math.floor(elapsed / 60);
@@ -1067,7 +1116,7 @@ export class Shell {
           const evalCmd = stripComments(cmdArgs.join(' '));
           if (evalCmd) {
             this.injectedStdin = nestedStdin;
-            exitCode = await this.execute(evalCmd, writeStdout, stderrWriter);
+            exitCode = await this.execute(evalCmd, writeStdout, stderrWriter, false, undefined, true);
           }
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
@@ -2350,7 +2399,7 @@ export class Shell {
           // Execute command and capture output
           let coprocOutput = '';
           const coprocPid = this.nextJobId++;
-          const coprocPromise = this.execute(coprocCmd, (s: string) => { coprocOutput += s; }, stderrWriter)
+          const coprocPromise = this.execute(coprocCmd, (s: string) => { coprocOutput += s; }, stderrWriter, false, undefined, true)
             .then((code) => {
               // Store output in the coproc array
               this.coproc = { name: coprocName, pid: coprocPid, output: coprocOutput };
@@ -2586,7 +2635,7 @@ export class Shell {
       // Fire ERR trap on non-zero exit code
       if (exitCode !== 0 && this.traps.has('ERR')) {
         const errCmd = this.traps.get('ERR')!;
-        await this.execute(errCmd, writeStdout, stderrWriter);
+        await this.execute(errCmd, writeStdout, stderrWriter, false, undefined, true);
       }
 
     }
@@ -4282,7 +4331,7 @@ export class Shell {
     // Execute body — catch ReturnSignal for `return [N]`
     let exitCode = 0;
     try {
-      exitCode = await this.execute(func.body, writeStdout, writeStderr);
+      exitCode = await this.execute(func.body, writeStdout, writeStderr, false, undefined, true);
     } catch (e) {
       if (e instanceof ReturnSignal) {
         exitCode = e.code;
@@ -4676,13 +4725,13 @@ export class Shell {
       const expandedCond = this.expandVars(await this.expandCommandSubstitution(this.expandArithmetic(branch.condition), writeStderr));
       const condResult = await this.evalCondition(expandedCond, writeStdout, writeStderr);
       if (condResult === 0) {
-        return branch.body.trim() ? this.execute(branch.body, writeStdout, writeStderr) : 0;
+        return branch.body.trim() ? this.execute(branch.body, writeStdout, writeStderr, false, undefined, true) : 0;
       }
     }
 
     // No branch matched, try else
     if (elseBody) {
-      return this.execute(elseBody, writeStdout, writeStderr);
+      return this.execute(elseBody, writeStdout, writeStderr, false, undefined, true);
     }
     return 0;
   }
@@ -4817,7 +4866,7 @@ export class Shell {
       const expandedCond = this.expandVars(await this.expandCommandSubstitution(this.expandArithmetic(parsed.condition), writeStderr));
       if ((await this.evalCondition(expandedCond, writeStdout, writeStderr)) !== 0) break;
       try {
-        if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr);
+        if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr, false, undefined, true);
       } catch (e) {
         if (e instanceof BreakSignal) { if (e.levels > 1) throw new BreakSignal(e.levels - 1); break; }
         if (e instanceof ContinueSignal) { if (e.levels > 1) throw new ContinueSignal(e.levels - 1); continue; }
@@ -4845,7 +4894,7 @@ export class Shell {
       const expandedCond = this.expandVars(await this.expandCommandSubstitution(this.expandArithmetic(parsed.condition), writeStderr));
       if ((await this.evalCondition(expandedCond, writeStdout, writeStderr)) === 0) break;
       try {
-        if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr);
+        if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr, false, undefined, true);
       } catch (e) {
         if (e instanceof BreakSignal) { if (e.levels > 1) throw new BreakSignal(e.levels - 1); break; }
         if (e instanceof ContinueSignal) { if (e.levels > 1) throw new ContinueSignal(e.levels - 1); continue; }
@@ -4877,7 +4926,7 @@ export class Shell {
         if (test && this.evalArithmetic(test) === 0) break;
         // Execute body
         try {
-          if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr);
+          if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr, false, undefined, true);
         } catch (e) {
           if (e instanceof BreakSignal) { if (e.levels > 1) throw new BreakSignal(e.levels - 1); break; }
           if (e instanceof ContinueSignal) { if (e.levels > 1) throw new ContinueSignal(e.levels - 1); /* fall through to update */ }
@@ -4901,7 +4950,7 @@ export class Shell {
     for (const item of items) {
       this.env[varName] = item;
       try {
-        if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr);
+        if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr, false, undefined, true);
       } catch (e) {
         if (e instanceof BreakSignal) { if (e.levels > 1) throw new BreakSignal(e.levels - 1); break; }
         if (e instanceof ContinueSignal) { if (e.levels > 1) throw new ContinueSignal(e.levels - 1); continue; }
@@ -4966,7 +5015,7 @@ export class Shell {
       }
 
       try {
-        if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr);
+        if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr, false, undefined, true);
       } catch (e) {
         if (e instanceof BreakSignal) { if (e.levels > 1) throw new BreakSignal(e.levels - 1); break; }
         if (e instanceof ContinueSignal) { if (e.levels > 1) throw new ContinueSignal(e.levels - 1); continue; }
@@ -5076,7 +5125,7 @@ export class Shell {
       }
       if (matched) {
         let exitCode = 0;
-        if (commands) exitCode = await this.execute(commands, writeStdout, writeStderr);
+        if (commands) exitCode = await this.execute(commands, writeStdout, writeStderr, false, undefined, true);
         const sep = clauseParts[ci].separator;
         if (sep === ';&') { fallthrough = true; continue; } // fallthrough: execute next body without checking
         if (sep === ';;&') { fallthrough = false; continue; } // continue checking remaining patterns
@@ -5098,7 +5147,7 @@ export class Shell {
     pipeline: string[], i: number, name: string, args: string[], redirects: Redirect[], ctx: CommandContext,
     hasShellStdin: boolean, writeStdout: (s: string) => void, writeStderr: (s: string) => void, terminal: any,
   ): Promise<{ lastIndex: number; redirects: Redirect[]; exitCode: number; statuses: number[]; stdout: string; stderr: string } | null> {
-    const { mayBeKernelProgram, resolveKernelProgram, builtinStage, runKernelPipeline } = await import('./shell-kernel');
+    const { mayBeKernelProgram, resolveKernelProgram, builtinStage, runKernelPipeline } = _shellKernel ?? await loadShellKernel();
     const progress = (m: string) => writeStderr(`  ${m}\r\n`);
     const stageFor = async (n: string, a: string[]) =>
       builtinStage(this, n, a) ?? (mayBeKernelProgram(this, n) ? await resolveKernelProgram(this, n, a, progress) : null);
@@ -5153,7 +5202,7 @@ export class Shell {
    */
   private async launchKernelBackground(command: string, writeStdout: (s: string) => void, term: any): Promise<boolean> {
     if (!term?.tty || /[;&]|\|\||\$\(|`/.test(command)) return false;
-    const { mayBeKernelProgram, resolveKernelProgram, runKernelPipeline } = await import('./shell-kernel');
+    const { mayBeKernelProgram, resolveKernelProgram, runKernelPipeline } = _shellKernel ?? await loadShellKernel();
     const segments = this.parsePipeline(await this.expandWords(command, () => {}));
     const programs = [];
     for (const seg of segments) {

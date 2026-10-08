@@ -34,9 +34,9 @@ describe('FileSystem IndexedDB reconnect', () => {
 
   it('tracks pending writes until they commit', async () => {
     const now = Date.now();
-    const p = (fs as any)._put({ path: '/home/user/pending.txt', type: 'file', content: new Uint8Array([120]), mode: 0o644, mtime: now, ctime: now, size: 1 });
+    await (fs as any)._put({ path: '/home/user/pending.txt', type: 'file', content: new Uint8Array([120]), mode: 0o644, mtime: now, ctime: now, size: 1 });
     expect(fs.pendingWrites).toBe(1);
-    await p;
+    await fs.sync();
     expect(fs.pendingWrites).toBe(0);
   });
 });

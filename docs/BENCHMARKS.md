@@ -150,6 +150,141 @@ Not fixed (reported for the owning workstreams):
 - src/x86 can't run Go (`fatal error: float64nan`) or static glibc
   (`Unknown two-byte opcode: 0F 62`) — known, see `X86_ENGINES.md`.
 
+## Performance log
+
+Each entry: what changed, and `node bench/compare.mjs` medians against a
+baseline run **on the same machine** (the committed
+`integration-970831e-quick.json` was recorded on a slower/busier host; even
+untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
+metrics swing ±25% between identical runs here, so a flag on them was re-run
+3× alternating base/new before being called noise.
+
+### unix/perf-fs-shell 1 — write-behind filesystem, debounced history
+
+Baseline `bench/results/integration-970831e-quick-local.json` (unix/integration
+970831e + unix/bench, this container) → `bench/results/perf-fs-shell-1-quick.json`.
+
+- `FileSystem` (src/filesystem.ts) is write-behind: a mutation updates the
+  in-memory cache and resolves; the IndexedDB writes are queued per path
+  (latest wins) and committed in one readwrite transaction per flush, a
+  MessageChannel macrotask after the first dirty write. One flush is in
+  flight at a time. The key index (`getAllKeys`) is kept current instead of
+  being re-read after every write, and a path missing from it needs no
+  IndexedDB read (creating a file used to cost a `get` for the "existing"
+  check). Appends coalesce: 100 `echo >> f` in a loop are one put.
+- Crash safety: a write is durable when its flush commits, normally within
+  one event-loop turn. `fs.sync()` (new `sync` command, kernel `fsync`)
+  waits for that with strict durability and reports a failed background
+  flush once; the page flushes on `visibilitychange`→hidden, `pagehide` and
+  `freeze`, and `beforeunload` still warns while `pendingWrites > 0`. A flush
+  is one transaction, so a crash keeps all of it or none of it. Tests:
+  `fs-write-behind.test.ts`.
+- Shell history is written after 500 ms of quiet (and on pagehide/hidden)
+  instead of a full `~/.bash_history` rewrite per command, and loop,
+  function, `if`, `eval`, `time` and trap bodies no longer add entries (bash
+  records only the typed line).
+- The kernel inode's flush waits for `fs.flushed()`, so a file written by a
+  WASM program is still snapshotted once per IndexedDB commit rather than
+  once per syscall task.
+- Fixed on the way: node scripts could hang until the test timeout when a
+  sync fs call queued work after the exit drain (`binary-files.test.ts`
+  exposed it once writes got fast); `appendFile` through a symlink replaced
+  the link with a regular file.
+
+| metric (isolated) | base | new | change |
+|---|---:|---:|---:|
+| shell.loop_1000 | 114.3 ms | 16.5 ms | −86% (6.9×) |
+| shell.for_seq_1000 | 118.2 ms | 25.0 ms | −79% (4.7×) |
+| shell.redirect_append_100 | 108 ms | 7.7 ms | −93% |
+| shell.fs_write_after_burst | 38.1 ms | 0.04 ms | −99.9% |
+| shell.cmd_subst | 0.40 ms | 0.07 ms | −82% |
+| wasm.tree_create (until writes resolve) | 636 ms | 9.6 ms | −98.5% |
+| 2000-file tree until `fs.sync()` returns (`bench/try.mjs`, 2 runs) | 658–679 ms | 87–93 ms | ≈7× |
+| npm.install_small | 55.0 ms | 18.3 ms | −67% |
+| wasm.builtin_grep_r.tree | 23.9 ms | 18.1 ms | −24% |
+| boot.cold.first_prompt | 209 ms | 169 ms | −19% |
+
+Against the committed host baseline the loops are 324 → 16.5 ms (20×) and
+342 → 25 ms (14×). Flagged by compare and re-run: `kernel.file_write`
+(isolated 26–27 vs 27–30 MB/s over 3 runs each), `kernel.spawn_throughput.*`,
+`kernel.syscall_inpage`, `kernel.file_read`, `shell.pipeline_seq_grep_wc`,
+`boot.warm.first_command`: overlapping ranges, noise.
+
+### unix/perf-fs-shell 2 — no dynamic import per command
+
+`perf-fs-shell-1-quick.json` → `perf-fs-shell-2-quick.json`. `tryKernelRun`
+(called for every simple command) did `await import('./shell-kernel')`, which
+in the build goes through Vite's `__vitePreload` helper each time (≈20% of
+`for_seq_1000`'s profile). The module is now loaded once and then used
+synchronously.
+
+| metric (isolated) | before | after | vs same-machine baseline |
+|---|---:|---:|---:|
+| shell.for_seq_1000 | 25.0 ms | 11.4 ms | 118 → 11.4 ms (10×) |
+| shell.redirect_append_100 | 7.7 ms | 3.1 ms | 108 → 3.1 ms (35×) |
+| shell.true (focused run) | 0.08 ms | 0.034 ms | 0.12 → 0.034 ms |
+
+Flagged and judged noise (in-page kernel lab, no shell involved; within the
+ranges of the 3× re-runs above): `kernel.syscall_inpage`,
+`kernel.epoll_wakeup`, `kernel.pipe_throughput_512b`,
+`kernel.spawn_throughput.wasm` (nonisolated); `wasm.startup.lua` 9.2 → 10.5 ms
+(baseline 10.5).
+
+### unix/perf-fs-shell 3 — closed panes are released
+
+`perf-fs-shell-2-quick.json` → `perf-fs-shell-3-quick.json`. Every closed
+pane stayed alive: the kernel's device table kept the pane's `/dev/pts/N`
+opener, the pty kept its output callback, and that held the `ShiroTerminal`,
+its `Shell`, xterm and the pane's DOM (`Runtime.queryObjects`: +10 terminals
+and +10 shells per round of 10). Closing the pty master now unregisters its
+device node in every kernel and drops the output callback
+(`pane-teardown.test.ts`). Two xterm 5.5 problems on the same path:
+`CoreBrowserService` never disposes its `ScreenDprMonitor`, so a window
+`resize` listener survived each pane (disposed by hand now), and the
+Viewport's `setTimeout(syncScrollArea)` queued at `open()` threw
+`Cannot read properties of undefined (reading 'dimensions')` when a pane
+closed right away (`term.dispose()` now runs one task later).
+
+| metric (isolated) | before | after |
+|---|---:|---:|
+| hygiene.panes10.dom_nodes_delta | 169.5 | 1.5 |
+| hygiene.panes10.listeners_delta | 115 | 5 |
+| hygiene.panes10.js_heap_delta | 1.42 MiB | 0.60 MiB |
+| hygiene.panes10.total_heap_growth | 2.84 MiB | 1.21 MiB |
+| live ShiroTerminal / Shell after 3 rounds (probe) | 31 / 31 | 1 / 1 |
+
+The remaining heap delta is the first round's one-off growth: in a 7-round
+probe the heap stays within ±0.1 MiB from round 2 on. Flagged and judged
+noise: kernel-lab metrics as before, `boot.warm.first_command` 5.9 → 6.6 ms
+(baseline 6.0), `wasm.tree_create` 8 → 15 ms (one sample).
+
+### unix/perf-fs-shell 4 — git and reload load on first use
+
+`perf-fs-shell-3-quick.json` → `perf-fs-shell-4-quick.json`. A source-map
+breakdown of the entry chunk (1.70 MB) put isomorphic-git (148 KiB),
+esbuild-wasm's JS API (68 KiB) and pako (48 KiB) in it, all only reachable
+from the `git` and `reload` commands, which were registered eagerly. Both are
+`lazyCommand`s now, and the `~/.gitconfig` helpers that `gh auth` uses moved
+to `src/commands/git-config.ts` so they don't pull in git. Entry chunk:
+1.70 → 1.28 MB.
+
+| metric (isolated) | before | after | same-machine baseline |
+|---|---:|---:|---:|
+| boot.cold.transfer | 1687 KiB | 1277 KiB | 1683 KiB |
+| boot.cold.first_prompt | 167.7 ms | 149.4 ms (re-runs 136, 149) | 209 ms |
+| boot.mem.uasm | 7.16 MiB | 5.90 MiB | 7.14 MiB |
+| boot.mem.js_heap | 3.83 MiB | 3.39 MiB | — |
+| boot.settled.js_heap | 3.87 MiB | 3.43 MiB | — |
+| claude.version | — | 686 ms | 761 ms |
+
+`boot.mem.renderer_rss` stays ~207 MiB: that is Chromium's renderer
+baseline plus the kernel and xterm, not the entry chunk. The background
+Claude Code install (19 MiB, `boot.settled.*`) already waits 3 s after boot
+and is what keeps `claude` startup at ~0.7 s, so it stays. Flagged and
+re-run: `shell.pipeline_seq_grep_wc` (9-run medians, 3× alternating: base
+14.1–15.7 ms, new 14.9–17.0 ms), `boot.warm.first_command` (re-runs 5.9,
+6.2 ms vs 6.6), x86/kernel metrics: noise.
+
 ## Results
 
 <!-- bench:table:begin -->

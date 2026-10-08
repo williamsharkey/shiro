@@ -13,7 +13,7 @@ import type { FileSystem } from './filesystem';
 import { createServerWindow } from './server-window';
 import { getShiroOrigin } from './utils/shiro-origin';
 import { copyText } from './utils/osc52';
-import { GLOBAL_GITCONFIG, formatGitConfig, parseGitConfig } from './commands/git';
+import { GLOBAL_GITCONFIG, formatGitConfig, parseGitConfig } from './commands/git-config';
 
 /** Client ID of the "shiro.computer" GitHub OAuth app (device flow enabled; not a secret). */
 export const GITHUB_OAUTH_CLIENT_ID = 'Ov23liznflO83ISe0lvr';

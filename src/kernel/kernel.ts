@@ -164,6 +164,11 @@ export class Kernel {
     this.devices.set(path, opener);
   }
 
+  /** Remove a device node (a closed pty's /dev/pts/N), so its opener can be collected. */
+  unregisterDevice(path: string): void {
+    this.devices.delete(path);
+  }
+
   /**
    * Handle syscall numbers outside kernel.ts (net.ts sockets, pty.ts or
    * signals.ts overrides, runtime-specific calls). Later registrations run
