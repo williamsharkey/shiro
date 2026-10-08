@@ -141,6 +141,12 @@ export interface KernelRunOptions {
   background?: boolean;
   cwd: string;
   env: Record<string, string>;
+  /**
+   * Files to use as the first stage's stdin and the last stage's stdout and
+   * stderr instead (the fds of a shell running as a kernel process,
+   * shell-stdio.ts); a missing one falls back to the options above.
+   */
+  fds?: { 0?: OpenFile; 1?: OpenFile; 2?: OpenFile };
 }
 
 export interface KernelRunResult {
@@ -172,13 +178,14 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
   let stdout = '';
   let stderr = '';
   const slave = tty ? tty.openSlave() : null;
-  const stdin0: OpenFile = opts.stdin !== undefined ? new BufferFile(opts.stdin, A.O_RDONLY) : (slave ?? new BufferFile('', A.O_RDONLY));
-  const lastOut: OpenFile = opts.captureStdout
+  const fds = opts.fds ?? {};
+  const stdin0: OpenFile = fds[0] ?? (opts.stdin !== undefined ? new BufferFile(opts.stdin, A.O_RDONLY) : (slave ?? new BufferFile('', A.O_RDONLY)));
+  const lastOut: OpenFile = fds[1] ?? (opts.captureStdout
     ? new SinkFile((t) => { stdout += t; })
-    : slave ?? new SinkFile((t) => opts.writeStdout(t));
-  const errOut: OpenFile = opts.captureStderr
+    : slave ?? new SinkFile((t) => opts.writeStdout(t)));
+  const errOut: OpenFile = fds[2] ?? (opts.captureStderr
     ? new SinkFile((t) => { stderr += t; })
-    : slave ?? new SinkFile((t) => opts.writeStderr(t));
+    : slave ?? new SinkFile((t) => opts.writeStderr(t)));
 
   const env = { ...opts.env };
   if (tty) {

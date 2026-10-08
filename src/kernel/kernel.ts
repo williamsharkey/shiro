@@ -10,6 +10,7 @@
 import type { FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
+import { KernelStdio, execLazyStdin } from '../shell-stdio';
 import { processTable, type ShiroProcess } from '../process-table';
 import { packageShadows, PKG_BIN_DIR } from '../pkg-manager';
 import * as A from './abi';
@@ -242,9 +243,8 @@ export class Kernel {
   /**
    * `sh -c 'prog args'` naming a program (not a builtin), with nothing for
    * the shell to do but start it: run the program in this process, as a
-   * real shell execs its last command. Builtins see stdin only at EOF and
-   * write their output when they return, so a program talking to its parent
-   * over pipes (git clone and git-upload-pack) can't go through one.
+   * real shell execs its last command (one process instead of two). Other
+   * scripts run in a shell that uses this process's fds (src/shell-stdio.ts).
    */
   private async shellCommandDirect(probe: Process): Promise<Runner | null> {
     const a = probe.argv;
@@ -678,28 +678,41 @@ export class Kernel {
   /**
    * Run a Shiro builtin as this process: fd 0 (when it is a pipe, file or
    * in-memory stream) becomes `ctx.stdin`, and `ctx.stdout`/`ctx.stderr`
-   * go to fds 1 and 2 when the command returns.
+   * go to fds 1 and 2 when the command returns. The shells (sh, bash, dash)
+   * use the fds themselves instead (src/shell-stdio.ts): stdin is read when
+   * a command in the script needs it, output is written as it is produced.
+   * fd 0 is read only if the command looks at ctx.stdin (execLazyStdin):
+   * `echo`, `mkdir`... leave it for the next reader.
    */
   async runBuiltin(proc: Process, cmd: Command): Promise<number> {
     const shell = this.forkShell(proc);
+    let stdio: KernelStdio | undefined;
+    if (SHELL_NAMES.has(cmd.name) || SHELL_NAMES.has(proc.argv[0]?.slice(proc.argv[0].lastIndexOf('/') + 1))) {
+      stdio = new KernelStdio(this, proc);
+      shell.kernelStdio = stdio;
+      shell.kernelStdinLive = true;
+    }
+    const lazy = !stdio;
     const ctx: CommandContext = {
       args: proc.argv.slice(1),
       fs: this.fs ?? shell.fs,
       cwd: proc.cwd,
       env: shell.env,
-      stdin: await this.stdinText(proc),
+      stdin: '',
       stdout: '',
       stderr: '',
       shell,
       stdoutIsTTY: proc.fds.get(1)?.kind === 'pty',
+      ...(stdio ? { liveStdin: true, streamStdout: stdio.out, streamStderr: stdio.err } : {}),
     };
     let code: number;
     try {
-      code = await cmd.exec(ctx);
+      code = lazy ? await execLazyStdin(cmd, ctx, () => this.stdinText(proc)) : await cmd.exec(ctx);
     } catch (e: any) {
       ctx.stderr += (e?.message ?? String(e)) + '\n';
       code = 1;
     }
+    if (stdio) await stdio.flush();
     if (proc.exiting) return code;
     if (ctx.stdout) await this.writeAll(proc, 1, enc.encode(ctx.stdout));
     if (ctx.stderr && !proc.exiting) await this.writeAll(proc, 2, enc.encode(ctx.stderr));
@@ -711,13 +724,13 @@ export class Kernel {
   private async runViaShell(proc: Process): Promise<number> {
     const shell = this.forkShell(proc);
     const line = proc.argv.length ? [proc.path, ...proc.argv.slice(1)].map(shellQuote).join(' ') : shellQuote(proc.path);
-    const stdin = await this.stdinText(proc);
-    let chain = Promise.resolve();
-    const out = (fd: number) => (s: string) => {
-      chain = chain.then(async () => { if (!proc.exiting) await this.writeAll(proc, fd, enc.encode(s.replace(/\r\n/g, '\n'))); });
-    };
-    const code = await shell.executeWithStdin(line, stdin, out(1), out(2));
-    await chain;
+    // The shell uses this process's fds as its stdio (src/shell-stdio.ts)
+    const { KernelStdio } = await import('../shell-stdio');
+    const stdio = new KernelStdio(this, proc);
+    shell.kernelStdio = stdio;
+    shell.kernelStdinLive = true;
+    const code = await shell.execute(line, stdio.out, stdio.err, false, undefined, true);
+    await stdio.flush();
     return code;
   }
 

@@ -112,6 +112,12 @@ Shell and platform fixes these needed (all with tests in the same file):
   only at EOF and write their output when they return, so a program talking
   to its parent over pipes couldn't run through `sh -c` (git clone and
   `git-upload-pack`).
+- (unix/shell-stdio) Any `sh -c SCRIPT` run as a kernel process now uses its
+  fds as its stdio (`src/shell-stdio.ts`): kernel programs in the script get
+  the pipes, `read` takes one line at a time, other builtins read stdin only
+  if they need it, output goes out as each command finishes. `git clone
+  --upload-pack='true; git-upload-pack'` works; builtins as kernel processes
+  no longer swallow stdin they don't read.
 
 Known issues found along the way (not fixed here):
 

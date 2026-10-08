@@ -4,6 +4,22 @@
 
 All changes so far are additive; nothing below renames or removes an earlier name.
 
+- **2026-10-08 (unix/shell-stdio)** — behavior of builtins run as kernel processes.
+  - `runBuiltin` no longer reads fd 0 to EOF before the command runs:
+    `ctx.stdin` is read the first time the command looks at it
+    (`execLazyStdin` in `src/shell-stdio.ts`: the first look throws
+    `NeedStdin`, then the command runs again with fd 0's contents; `node`
+    reads up front). `echo`, `mkdir`, ... leave fd 0 for the next reader.
+  - `sh`/`bash`/`dash` run by the kernel (and scripts through `runViaShell`)
+    use the process's fds as their stdio (`KernelStdio`, `Shell.kernelStdio`):
+    kernel programs in the script get fds 0-2 themselves
+    (`runKernelPipeline` option `fds`), `read` takes one record from fd 0 a
+    byte at a time, other builtins read fd 0 lazily as above, and output is
+    written to fds 1/2 as each command finishes. So a script can hold a
+    conversation with its peer over pipes (`git clone --upload-pack='…; git-upload-pack'`).
+  - `CommandContext` gained optional `liveStdin`, `streamStdout`,
+    `streamStderr` (src/commands/index.ts).
+
 - **2026-10-08 (unix/perf-kernel)** — all additive; old guests keep working.
   - **Channel transport:** the kernel serves Worker channels with
     `KernelChannel.watch()` (Atomics.waitAsync on the state word) when the
@@ -356,7 +372,8 @@ that nobody waits for is reaped 30 s after it exits.
 Existing builtins stay in-page. Until the shell itself is ported, the
 kernel exposes `kernel.runBuiltin(ctx)` adapters: a builtin's
 `ctx.stdin`/`ctx.stdout` strings are bridged to fds 0/1/2 of a kernel
-process. That way a guest's `posix_spawn("ls")` runs Shiro's `ls`, and
+process (stdin read only if the command reads it; a shell uses the fds
+directly, see `src/shell-stdio.ts`). That way a guest's `posix_spawn("ls")` runs Shiro's `ls`, and
 `cat | wasm-program | grep` streams through real pipes.
 
 ## Tests

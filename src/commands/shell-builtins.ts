@@ -200,6 +200,11 @@ export const shCmd: Command = {
       }
       argv0 = rest[0];
       positional = rest.slice(1);
+    } else if (ctx.liveStdin && ctx.shell.kernelStdio) {
+      // The script is fd 0 (a shell running as a kernel process, shell-stdio.ts)
+      script = await ctx.shell.kernelStdio.readAll();
+      argv0 = 'sh';
+      positional = [];
     } else if (ctx.stdin) {
       script = ctx.stdin;
       argv0 = 'sh';
@@ -211,8 +216,14 @@ export const shCmd: Command = {
     const child = ctx.shell.fork();
     child.setPositional(positional, argv0);
     for (const o of options) child.options.add(o);
-    // `sh -c` reads the caller's stdin; a script read from stdin has none left
-    if (commandMode || rest.length > 0) child.setInjectedStdin(ctx.stdin || '');
+    // `sh -c` reads the caller's stdin; a script read from stdin has none left.
+    // When stdin is the shell's fd 0 the child reads it as it goes.
+    if (!ctx.liveStdin && (commandMode || rest.length > 0)) child.setInjectedStdin(ctx.stdin || '');
+    else if (ctx.liveStdin && !(commandMode || rest.length > 0)) child.kernelStdinLive = false;
+    // Output goes out as each command finishes where nothing captures it
+    if (ctx.streamStdout && ctx.streamStderr) {
+      return child.runScriptText(script, ctx.terminal, ctx.streamStdout, ctx.streamStderr);
+    }
     let stdout = '';
     let stderr = '';
     const code = await child.runScriptText(script, ctx.terminal, (s) => { stdout += s; }, (s) => { stderr += s; });

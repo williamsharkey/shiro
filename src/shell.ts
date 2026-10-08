@@ -9,8 +9,10 @@ import { posixRegExp, RegexSyntaxError } from './utils/posix-regex';
 import { arrayValues, arrayTop, copyArray, splitRawWords as splitAssignWords, parseAssignWord, splitListWords, type AssignWord } from './shell-arrays';
 import { HeredocStore, extractHeredocs, hasHeredoc } from './shell-heredoc';
 import { FileSystem } from './filesystem';
-import { CommandRegistry, CommandContext } from './commands/index';
+import { CommandRegistry, CommandContext, type Command } from './commands/index';
 import type { ShiroTerminal } from './terminal';
+import type { KernelStdio } from './shell-stdio';
+import type { OpenFile } from './kernel/fd';
 import { getCompiledModule } from './wasi-packages';
 import { builtinIndex, findEntry, packageStatus, packageShadows, loadPackageShadows, packageOfPath, runPackageBinary, PKG_BIN_DIR } from './pkg-manager';
 
@@ -24,6 +26,19 @@ async function loadWasiRuntime() {
 // shell-kernel is loaded on first use and then reached synchronously: a
 // dynamic import() per command (through Vite's preload helper) was a large
 // part of every builtin's cost
+/** A writer that forwards to another (or to a file when it returns null): `writesTo` sees through it */
+const WRITER_TARGET = Symbol('writerTarget');
+/** Does `w` write straight to `to` (through `exec >&` routing)? */
+function writesTo(w: (s: string) => void, to: (s: string) => void): boolean {
+  for (let k = 0; k < 8 && w; k++) {
+    if (w === to) return true;
+    const t = (w as { [WRITER_TARGET]?: () => ((s: string) => void) | null })[WRITER_TARGET];
+    if (!t) return false;
+    w = t()!;
+  }
+  return false;
+}
+
 let _shellKernel: typeof import('./shell-kernel') | null = null;
 let _shellKernelLoading: Promise<typeof import('./shell-kernel')> | null = null;
 function loadShellKernel(): Promise<typeof import('./shell-kernel')> {
@@ -421,9 +436,16 @@ export class Shell {
   /** The parent's Ctrl-C controller, so interrupting the parent stops a forked child */
   private inheritedAbort: AbortController | null = null;
 
+  /** Set when this shell runs as a kernel process: its fds 0-2 are its stdio (shell-stdio.ts) */
+  kernelStdio?: KernelStdio;
+  /** fd 0 is still this shell's stdin (nothing handed it a string in its place) */
+  kernelStdinLive = false;
+
   fork(): Shell {
     const child = new Shell(this.fs, this.commands);
     child.inheritedAbort = this.abortController ?? this.inheritedAbort;
+    child.kernelStdio = this.kernelStdio;
+    child.kernelStdinLive = this.kernelStdinLive;
     child.heredocs = this.heredocs;
     child.userFds = new Map(this.userFds);
     child.fileDescriptors = new Map(this.fileDescriptors);
@@ -551,11 +573,20 @@ export class Shell {
       const base1 = writeStdout;
       const base2 = writeStderr || writeStdout;
       const pending = new Map<string, string>();
-      const route = (n: 1 | 2) => (s: string) => {
-        const e = this.userFds.get(n);
-        if (!e) (n === 1 ? base1 : base2)(s);
-        else if ('dup' in e) (e.dup === 1 ? base1 : base2)(s);
-        else pending.set(e.path, (pending.get(e.path) ?? '') + s);
+      const route = (n: 1 | 2) => {
+        const target = () => {
+          const e = this.userFds.get(n);
+          return !e ? (n === 1 ? base1 : base2) : 'dup' in e ? (e.dup === 1 ? base1 : base2) : null;
+        };
+        const w = (s: string) => {
+          const t = target();
+          if (t) t(s);
+          else {
+            const e = this.userFds.get(n) as { path: string };
+            pending.set(e.path, (pending.get(e.path) ?? '') + s);
+          }
+        };
+        return Object.assign(w, { [WRITER_TARGET]: target });
       };
       const flush = async () => {
         for (const [path, text] of [...pending]) {
@@ -1004,6 +1035,7 @@ export class Shell {
           // Output streams through; the child's variables, cd and exit stay inside it
           const child = this.fork();
           child.injectedStdin = heredocStdin || null;
+          if (heredocStdin) child.kernelStdinLive = false;
           exitCode = await child.execute(inner, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
@@ -1199,6 +1231,7 @@ export class Shell {
             const rest = cmdArgs.slice(cIdx + 2);
             child.setPositional(rest.slice(1), rest[0] ?? cmdName);
             child.injectedStdin = nestedStdin;
+            if (!this.liveStdin(i, heredocStdin, hereString, redirects)) child.kernelStdinLive = false;
             exitCode = await child.runScriptText(shellCmd, terminalOverride || this.terminal, writeStdout, stderrWriter);
           } else {
             // /bin/sh script.sh or /bin/sh (no args)
@@ -1207,7 +1240,8 @@ export class Shell {
               const scriptPath = this.fs.resolvePath(scripts[0], this.cwd);
               try {
                 const content = await this.fs.readFile(scriptPath, 'utf8') as string;
-                const shCtx: CommandContext = { args: scripts.slice(1), fs: this.fs, cwd: this.cwd, env: this.env, stdin: '', stdout: '', stderr: '', shell: this, terminal: terminalOverride || this.terminal };
+                const shCtx: CommandContext = { args: scripts.slice(1), fs: this.fs, cwd: this.cwd, env: this.env, stdin: nestedStdin, stdout: '', stderr: '', shell: this, terminal: terminalOverride || this.terminal,
+                  liveStdin: this.liveStdin(i, heredocStdin, hereString, redirects) };
                 exitCode = await this.executeShellScript(content, scripts.slice(1), shCtx, writeStdout, stderrWriter, scripts[0]);
               } catch (e: any) {
                 stderrWriter(`shiro: ${scripts[0]}: ${e.message}\r\n`);
@@ -1600,6 +1634,7 @@ export class Shell {
           // Read one line from stdin — prefer FD, then the command's own <<< / <,
           // then piped stdin (__PIPE_STDIN), then pipe, then heredoc
           let readInput = '';
+          let liveRead = false;
           let stdinRedirect = redirects.find(r => r.type === '<' && r.fd === undefined);
           if (stdinRedirect && fdOfRef(stdinRedirect.target) !== null) {
             // read <&N reads one line from fd N, like read -u N
@@ -1638,11 +1673,15 @@ export class Shell {
             readInput = redirectInput;
           } else if (hasPipeStdin) {
             readInput = this.env['__PIPE_STDIN'];
+          } else if (readFd < 0 && this.liveStdin(i, heredocStdin, hereString, redirects)) {
+            // One record from fd 0, leaving the rest for whatever reads it next
+            liveRead = true;
+            if (readTimeout !== 0) readInput = await this.kernelStdio!.readRecord(readDelim, readNchars, rawMode, readExact);
           } else {
             readInput = i > 0 ? lastOutput : (heredocStdin || '');
           }
           // Input from a file, pipe or here-doc (not the terminal): -t never times out
-          const hasSource = !!fdOpen || readFd >= 0 || redirectInput !== undefined || hasPipeStdin || i > 0 || !!heredocStdin;
+          const hasSource = !!fdOpen || readFd >= 0 || redirectInput !== undefined || hasPipeStdin || i > 0 || !!heredocStdin || liveRead;
           // Handle -t 0: check if input is available (non-blocking)
           if (readTimeout === 0) {
             exitCode = hasSource ? 0 : 1;
@@ -1719,6 +1758,8 @@ export class Shell {
           if (hasPipeStdin) {
             mapInput = this.env['__PIPE_STDIN'];
             delete this.env['__PIPE_STDIN'];
+          } else if (this.liveStdin(i, heredocStdin, hereString, redirects)) {
+            mapInput = await this.kernelStdio!.readAll();
           } else {
             mapInput = i > 0 ? lastOutput : (heredocStdin || '');
           }
@@ -2819,8 +2860,9 @@ export class Shell {
 
         // WASM and x86 programs, with the filter builtins piped to and from them, run as one kernel job
         const hasShellStdin = i > 0 || hereString !== undefined || (i === 0 && !!heredocStdin) || redirects.some(r => r.type === '<');
+        const live = this.liveStdin(i, heredocStdin, hereString, redirects);
         const kernelRun = await this.tryKernelRun(pipeline, i, effectiveCmdName, cmdArgs, redirects, ctx,
-          hasShellStdin, writeStdout, stderrWriter, terminalOverride || this.terminal);
+          hasShellStdin, writeStdout, stderrWriter, terminalOverride || this.terminal, live);
         if (kernelRun) {
           i = kernelRun.lastIndex;
           exitCode = kernelRun.exitCode;
@@ -2837,7 +2879,10 @@ export class Shell {
         const cmd = pkgShadowed ? undefined : this.commands.get(effectiveCmdName);
         if (cmd) {
           try {
-            exitCode = await cmd.exec(ctx);
+            exitCode = live
+              ? await this.execWithLiveStdin(cmd, ctx, i === pipeline.length - 1 && !redirects.some(r => r.type !== '<') &&
+                writesTo(writeStdout, this.kernelStdio!.out) && writesTo(stderrWriter, this.kernelStdio!.err))
+              : await cmd.exec(ctx);
           } catch (e: any) {
             ctx.stderr += e.message + '\n';
             exitCode = 1;
@@ -2849,6 +2894,7 @@ export class Shell {
             : await this.findExecutableInPath(effectiveCmdName);
           if (executable) {
             try {
+              if (live) ctx.liveStdin = true;
               exitCode = await this.executeScript(executable, cmdArgs, ctx, writeStdout, stderrWriter);
             } catch (e: any) {
               ctx.stderr += e.message + '\n';
@@ -4926,6 +4972,7 @@ export class Shell {
     writeStdout: (s: string) => void, writeStderr?: (s: string) => void,
   ): Promise<number> {
     this.injectedStdin = stdin;
+    this.kernelStdinLive = false;
     return this.execute(line, writeStdout, writeStderr, false, undefined, true);
   }
 
@@ -5060,6 +5107,7 @@ export class Shell {
       // ( list ) runs in a child shell
       const child = this.fork();
       child.injectedStdin = this.injectedStdin;
+      if (this.injectedStdin) child.kernelStdinLive = false;
       this.injectedStdin = null;
       const inner = input.slice(1, -1).trim();
       return inner ? child.execute(inner, writeStdout, writeStderr, false, this.terminal, true) : 0;
@@ -6038,6 +6086,24 @@ export class Shell {
 
   // ─── PATH EXECUTION ─────────────────────────────────────────────────────────
 
+  /** Run a registered command whose stdin is this shell's fd 0 (execLazyStdin); `stream`: give it writers to fds 1 and 2 */
+  private async execWithLiveStdin(cmd: Command, ctx: CommandContext, stream: boolean): Promise<number> {
+    const ks = this.kernelStdio!;
+    if (stream) { ctx.streamStdout = ks.out; ctx.streamStderr = ks.err; }
+    const { execLazyStdin } = await import('./shell-stdio');
+    return execLazyStdin(cmd, ctx, () => ks.readAll());
+  }
+
+  /**
+   * Does pipeline segment `i` read this shell's own stdin, fd 0 of the kernel
+   * process it runs as (shell-stdio.ts)? Not when a pipe, here-doc, here-string,
+   * `<` or an enclosing piped loop gives it a string instead.
+   */
+  private liveStdin(i: number, heredocStdin: string, hereString: string | undefined, redirects: Redirect[]): boolean {
+    return !!this.kernelStdio && this.kernelStdinLive && i === 0 && !heredocStdin && hereString === undefined &&
+      !redirects.some(r => r.type === '<') && !('__PIPE_STDIN' in this.env);
+  }
+
   /**
    * Run segment `i` (and the kernel programs piped right after it) as kernel
    * processes when it is a WASM or x86 program (src/shell-kernel.ts). Null when
@@ -6046,6 +6112,7 @@ export class Shell {
   private async tryKernelRun(
     pipeline: string[], i: number, name: string, args: string[], redirects: Redirect[], ctx: CommandContext,
     hasShellStdin: boolean, writeStdout: (s: string) => void, writeStderr: (s: string) => void, terminal: any,
+    liveStdin = false,
   ): Promise<{ lastIndex: number; redirects: Redirect[]; exitCode: number; statuses: number[]; stdout: string; stderr: string } | null> {
     const { mayBeKernelProgram, resolveKernelProgram, builtinStage, runKernelPipeline } = _shellKernel ?? await loadShellKernel();
     const progress = (m: string) => writeStderr(`  ${m}\r\n`);
@@ -6081,13 +6148,28 @@ export class Shell {
     // Only worth it when a real kernel program is involved
     if (!programs.some(p => !p.builtin)) return null;
     const crlf = (w: (s: string) => void) => (t: string) => w(t.replace(/\r?\n/g, '\r\n'));
+    const captureStdout = last < pipeline.length - 1 || hasOutRedirect(lastRedirects) || !!terminal?.captureStdout;
+    const captureStderr = hasOutRedirect(lastRedirects);
+    // In a shell that is a kernel process the programs get its own fds when
+    // nothing in between needs the data as a string (shell-stdio.ts)
+    const ks = this.kernelStdio;
+    let fds: { 0?: OpenFile; 1?: OpenFile; 2?: OpenFile } | undefined;
+    if (ks) {
+      fds = {
+        0: liveStdin && !hasShellStdin ? ks.file(0) : undefined,
+        1: !captureStdout && writesTo(writeStdout, ks.out) ? ks.file(1) : undefined,
+        2: !captureStderr && writesTo(writeStderr, ks.err) ? ks.file(2) : undefined,
+      };
+      await ks.flush();
+    }
     const r = await runKernelPipeline(this, programs, {
       stdin: hasShellStdin ? ctx.stdin : undefined,
-      captureStdout: last < pipeline.length - 1 || hasOutRedirect(lastRedirects) || !!terminal?.captureStdout,
-      captureStderr: hasOutRedirect(lastRedirects),
+      captureStdout,
+      captureStderr,
       writeStdout: crlf(writeStdout),
       writeStderr: crlf(writeStderr),
-      terminal,
+      terminal: ks ? undefined : terminal,
+      fds,
       command: pipeline.slice(i, last + 1).map(x => x.trim()).join(' | '),
       cwd: this.cwd,
       env: this.env,
@@ -6190,6 +6272,12 @@ export class Shell {
     writeStdout: (s: string) => void,
     writeStderr: (s: string) => void,
   ): Promise<number> {
+    // Only a shell script reads the shell's live fd 0 as it goes; anything else gets it as ctx.stdin
+    const fillStdin = async () => {
+      if (!ctx.liveStdin || !this.kernelStdio) return;
+      ctx.liveStdin = false;
+      ctx.stdin = await this.kernelStdio.readAll();
+    };
     // Installed packages (/usr/bin/<cmd> -> /usr/lib/pkg/<name>/...) run with
     // the arguments and preloads their package records
     try {
@@ -6197,6 +6285,7 @@ export class Shell {
       // (a package's script launchers, like ruby's gem, and x86-64 programs
       // run in Blink, like perl, take the paths below)
       if (packageOfPath(real) && await this.isWasmFile(real)) {
+        await fillStdin();
         return await runPackageBinary(real, filePath.split('/').pop() || filePath, args, ctx,
           filePath.startsWith('/') ? filePath : this.fs.resolvePath(filePath, this.cwd));
       }
@@ -6228,6 +6317,12 @@ export class Shell {
     } catch (e: any) {
       writeStderr(`shiro: ${resolvedPath}: ${e.message}\r\n`);
       return 1;
+    }
+    {
+      const m = /^#!\s*(\S+)(?:\s+(?:-S\s+)?(\S+))?/.exec(content);
+      const base = (p?: string) => p?.slice(p.lastIndexOf('/') + 1) ?? '';
+      const interp = m ? (base(m[1]) === 'env' ? base(m[2]) : base(m[1])) : '';
+      if (!((interp === 'sh' || interp === 'bash') && !packageShadows(this.fs).has(interp))) await fillStdin();
     }
 
     // Check if this is a WASM binary — run through WASI runtime
@@ -6472,12 +6567,15 @@ export class Shell {
   ): Promise<number> {
     const child = this.fork();
     child.setPositional(args, argv0);
+    // Its first command reads the script's stdin, unless that is the shell's fd 0
+    if (!ctx.liveStdin) child.setInjectedStdin(ctx.stdin);
     return child.runScriptText(content, ctx.terminal, writeStdout, writeStderr);
   }
 
   /** Stdin for the next command this shell runs (`… | sh -c CMD`) */
   setInjectedStdin(stdin: string): void {
     this.injectedStdin = stdin;
+    this.kernelStdinLive = false;
   }
 
   /** Replace $1… (and $0 when given), as on entry to a script or `set --`. */
