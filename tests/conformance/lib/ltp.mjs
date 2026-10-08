@@ -4,6 +4,8 @@
  * Shiro a test may not get to exit after printing its summary.)
  */
 export function judgeLtp(text) {
+  // eslint-disable-next-line no-control-regex
+  text = text.replace(/\x1b\[[0-9;]*m/g, '');
   const num = (k) => { const m = new RegExp(`^${k}\\s+(\\d+)`, 'm').exec(text); return m ? Number(m[1]) : null; };
   const summary = /^Summary:/m.test(text);
   const passed = num('passed'), failed = num('failed'), broken = num('broken'), skipped = num('skipped');

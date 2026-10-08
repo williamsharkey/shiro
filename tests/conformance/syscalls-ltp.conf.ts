@@ -51,6 +51,11 @@ async function runAll(): Promise<{ files: Record<string, AreaResult>; detail: Re
   const done = new Map<string, { ok: boolean; reason?: string; timeout?: boolean }>();
   if (process.env.LTP_RESUME && existsSync(journal)) {
     for (const line of readFileSync(journal, 'utf8').split('\n')) if (line) { const r = JSON.parse(line); done.set(r.name, r); }
+    // LTP_RERUN_FAILED=1: run the failures again (not the known hangs)
+    if (process.env.LTP_RERUN_FAILED) {
+      for (const [n, r] of [...done]) if (!r.ok && !hangs.includes(n)) done.delete(n);
+      writeFileSync(journal, [...done.values()].map((r) => JSON.stringify(r) + '\n').join(''));
+    }
   } else writeFileSync(journal, '');
   const record = (name: string, ok: boolean, f: Omit<Failure, 'name'> = {}) => {
     const res = (files[areaOf(name)] ??= { pass: 0, total: 0, failures: [] });
@@ -67,7 +72,7 @@ async function runAll(): Promise<{ files: Record<string, AreaResult>; detail: Re
     await fs.mkdir(dir, { recursive: true });
     const shell = new Shell(fs, base.commands);
     shell.cwd = dir;
-    Object.assign(shell.env, { PWD: dir, TMPDIR: dir, PATH: `/ltp/bin:${shell.env.PATH}` });
+    Object.assign(shell.env, { PWD: dir, TMPDIR: dir, PATH: `/ltp/bin:${shell.env.PATH}`, LTP_COLORIZE_OUTPUT: '0' });
     let out = '';
     let finished = false;
     const run = shell.execute(`/ltp/bin/${name}`, (s) => { out += s; }, (s) => { out += s; }, false, undefined, true)
@@ -90,6 +95,9 @@ async function runAll(): Promise<{ files: Record<string, AreaResult>; detail: Re
     const text = out.replace(/\r\n/g, '\n');
     const j = judgeLtp(text);
     detail[name] = text.slice(-3000);
+    // Whole output per test (a resumed run's detail JSON only has its own tests)
+    mkdirSync(join(RESULTS, 'detail', 'ltp'), { recursive: true });
+    writeFileSync(join(RESULTS, 'detail', 'ltp', `${name}.txt`), text);
     record(name, j.ok, j.ok ? {} : { reason: j.reason || 'no summary', ...(!finished && !j.summary ? { timeout: true } : {}) });
   }
   return { files, detail };
