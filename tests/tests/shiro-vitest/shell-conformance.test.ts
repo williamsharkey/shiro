@@ -436,4 +436,16 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('5 set\ny\ndflt\n[empty] []\n[plus]\nhi\n');
   });
+
+  it('quoted < > are words, redirect-only commands create files, redirections apply in order, builtins in pipelines are subshells', async () => {
+    const r = await script([
+      "cd /tmp && rm -rf rz && mkdir rz && cd rz",
+      "echo a \\< b '<' \">\"",
+      "> made.txt; >> app.txt; ls",
+      "ls /nonexist 2>&1 >/dev/null | wc -l",
+      "{ echo out; echo err >&2; } > both.txt 2>&1; cat both.txt",
+      "mkdir -p sub; echo | cd sub; echo | x=5; echo \"${PWD##*/} x=${x-unset}\"",
+    ].join('\n'));
+    expect(r.out).toBe('a < b < >\napp.txt\nmade.txt\n1\nout\nerr\nrz x=unset\n');
+  });
 });

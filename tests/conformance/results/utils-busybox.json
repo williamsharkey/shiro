@@ -38,18 +38,9 @@
    "failures": []
   },
   "cp": {
-   "pass": 0,
+   "pass": 3,
    "total": 6,
    "failures": [
-    {
-     "name": "cp -R"
-    },
-    {
-     "name": "cp -Rd"
-    },
-    {
-     "name": "cp -RP"
-    },
     {
      "name": "cp -RL"
     },
@@ -62,12 +53,9 @@
    ]
   },
   "cp (old-style)": {
-   "pass": 14,
+   "pass": 15,
    "total": 17,
    "failures": [
-    {
-     "name": "cp-RHL-does_not_preserve-links"
-    },
     {
      "name": "cp-does-not-copy-unreadable-file"
     },
@@ -137,16 +125,9 @@
    "failures": []
   },
   "expr (old-style)": {
-   "pass": 0,
+   "pass": 2,
    "total": 2,
-   "failures": [
-    {
-     "name": "expr-big"
-    },
-    {
-     "name": "expr-works"
-    }
-   ]
+   "failures": []
   },
   "factor": {
    "pass": 13,
@@ -163,19 +144,9 @@
    ]
   },
   "find": {
-   "pass": 8,
+   "pass": 11,
    "total": 11,
-   "failures": [
-    {
-     "name": "find -exec exitcode 1"
-    },
-    {
-     "name": "find -exec exitcode 2"
-    },
-    {
-     "name": "find -exec exitcode 3"
-    }
-   ]
+   "failures": []
   },
   "find (old-style)": {
    "pass": 1,
@@ -395,17 +366,11 @@
    "failures": []
   },
   "tar": {
-   "pass": 3,
+   "pass": 5,
    "total": 6,
    "failures": [
     {
      "name": "tar --overwrite"
-    },
-    {
-     "name": "tar writing into read-only dir"
-    },
-    {
-     "name": "tar Symlinks and hardlinks coexist"
     }
    ]
   },
@@ -521,16 +486,9 @@
    "failures": []
   },
   "xargs": {
-   "pass": 9,
+   "pass": 11,
    "total": 11,
-   "failures": [
-    {
-     "name": "xargs -sNUM test 1"
-    },
-    {
-     "name": "xargs -sNUM test 2"
-    }
-   ]
+   "failures": []
   },
   "xargs (old-style)": {
    "pass": 1,

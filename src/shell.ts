@@ -98,6 +98,10 @@ const SET_O_OPTIONS = ['allexport', 'braceexpand', 'emacs', 'errexit', 'errtrace
   'history', 'ignoreeof', 'interactive-comments', 'keyword', 'monitor', 'noclobber', 'noexec', 'noglob', 'nolog', 'notify',
   'nounset', 'onecmd', 'physical', 'pipefail', 'posix', 'privileged', 'verbose', 'vi', 'xtrace'];
 
+/** Builtins that run in a subshell as a pipeline element (they change the shell's state) */
+const PIPELINE_SUBSHELL_BUILTINS = new Set(['cd', 'pushd', 'popd', 'eval', 'source', '.', 'exit', 'export', 'unset',
+  'set', 'shift', 'declare', 'typeset', 'local', 'readonly', 'alias', 'unalias', 'trap', 'umask', 'shopt', 'hash']);
+
 /** Signal names by number, as trap and kill use them (0 is EXIT) */
 const SIGNALS = ['EXIT', 'HUP', 'INT', 'QUIT', 'ILL', 'TRAP', 'ABRT', 'BUS', 'FPE', 'KILL', 'USR1', 'SEGV', 'USR2',
   'PIPE', 'ALRM', 'TERM', 'STKFLT', 'CHLD', 'CONT', 'STOP', 'TSTP', 'TTIN', 'TTOU', 'URG', 'XCPU', 'XFSZ',
@@ -1230,7 +1234,24 @@ export class Shell {
 
         const { args, redirects, hereString } = this.parseSegment(segment);
 
-        if (args.length === 0) continue;
+        if (args.length === 0) {
+          // Only redirections (`> file`, `>> log`, `< in`): files are opened (created,
+          // truncated) and closed; a missing input file fails
+          if (redirects.length) {
+            exitCode = 0;
+            for (const r of redirects) {
+              if (r.type === '<' && fdOfRef(r.target) === null && !this.heredocs.lookup(r.target)) {
+                const st = await this.fs.stat(this.fs.resolvePath(r.target, this.cwd)).catch(() => null);
+                if (!st) { stderrWriter(`shiro: ${r.target}: No such file or directory\r\n`); exitCode = 1; }
+              }
+            }
+            if (exitCode === 0) await this.applyOutputRedirects('', '', redirects, false, writeStdout, stderrWriter);
+            if (this.redirectFailed) { exitCode = 1; this.redirectFailed = false; }
+            this.lastExitCode = exitCode;
+            this.env['?'] = String(exitCode);
+          }
+          continue;
+        }
 
         // Builtins and functions write straight to the writers; when this segment
         // feeds a pipe or has output redirects, collect that output instead
@@ -1256,6 +1277,17 @@ export class Shell {
 
         const cmdName = expandedArgs[0];
         const cmdArgs = expandedArgs.slice(1);
+        // A builtin that changes the shell's state (cd, eval, export, exit …) runs in a
+        // subshell when it is part of a pipeline, as in bash (lastpipe: not the last one).
+        // read and mapfile stay in this shell (`… | read v` sets v, as in zsh).
+        if (pipeline.length > 1 && !(isLastSegment && this.shoptopts.has('lastpipe'))
+          && (PIPELINE_SUBSHELL_BUILTINS.has(cmdName) || /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/.test(cmdName ?? ''))) {
+          exitCode = await this.inSubshell((sub) => sub.executeWithStdin(quoteArgsForShell(expandedArgs), nestedStdin, writeStdout, stderrWriter));
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
         // $_: the last word of the previous simple command (not of an assignment)
         if (!/^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/.test(cmdName ?? '')) this.env['_'] = expandedArgs[expandedArgs.length - 1] ?? '';
 
@@ -2999,87 +3031,63 @@ export class Shell {
     stdout: string, stderr: string, redirects: Redirect[], isLast: boolean,
     writeStdout: (s: string) => void, stderrWriter: (s: string) => void,
   ): Promise<string> {
-    // Check if stderr should be redirected to stdout (2>&1)
-    const redirectStderrToStdout = redirects.some(r => r.type === '2>&1');
-
-    // Handle stderr output and redirects
-    let stderrOutput = stderr;
-    for (const redir of redirects) {
-      if (redir.type === '2>' || redir.type === '2>>') {
-        if (redir.target === '/dev/null') {
-          stderrOutput = '';
-          continue;
-        }
-        // 2>&N: the shell's fd N
-        const ref = fdOfRef(redir.target);
-        if (ref !== null) {
-          if (!(await this.writeToFd(ref, stderrOutput, writeStdout, stderrWriter))) stderrWriter(`shiro: ${ref}: Bad file descriptor\r\n`);
-          stderrOutput = '';
-          continue;
-        }
-        // 2>/dev/stderr → default behavior (let it through)
-        if (redir.target === '/dev/stderr') continue;
-        // 2>/dev/stdout → redirect stderr to stdout
-        if (redir.target === '/dev/stdout') {
-          stdout += stderrOutput;
-          stderrOutput = '';
-          continue;
-        }
-        const targetPath = this.fs.resolvePath(redir.target, this.cwd);
-        if (redir.type === '2>' && !(await this.clobberOk(redir, targetPath, stderrWriter))) { stderrOutput = ''; continue; }
-        await this.redirectWrite(targetPath, redir.target, stderrOutput, redir.type === '2>>', stderrWriter);
-        stderrOutput = '';
+    // Where fd 1 and fd 2 point, following the redirections left to right
+    // (`2>&1 >file` leaves stderr on the old stdout; `>file 2>&1` sends both to file)
+    type Target = { kind: 'out' } | { kind: 'err' } | { kind: 'null' } | { kind: 'fd'; n: number } | { kind: 'file'; path: string; shown: string };
+    let t1: Target = { kind: 'out' };
+    let t2: Target = { kind: 'err' };
+    // Files opened (in order), each with whether it was truncated and what it gets
+    const files = new Map<string, { truncate: boolean; text: string; shown: string; ok: boolean }>();
+    const open = async (target: string, append: boolean, redir: Redirect): Promise<Target | null> => {
+      if (target === '/dev/null') return { kind: 'null' };
+      const ref = fdOfRef(target);
+      if (ref !== null) {
+        if (ref === 1) return t1;
+        if (ref === 2) return t2;
+        if (!this.resolveOutFd(ref)) { stderrWriter(`shiro: ${ref}: Bad file descriptor\r\n`); this.redirectFailed = true; return null; }
+        return { kind: 'fd', n: ref };
+      }
+      if (target === '/dev/stdout') return t1;
+      if (target === '/dev/stderr') return t2;
+      const path = this.fs.resolvePath(target, this.cwd);
+      if (!append && !(await this.clobberOk(redir, path, stderrWriter))) return null;
+      const f = files.get(path);
+      if (f) { if (!append) { f.truncate = true; f.text = ''; } }
+      else files.set(path, { truncate: !append, text: '', shown: target, ok: true });
+      return { kind: 'file', path, shown: target };
+    };
+    for (const r of redirects) {
+      if (r.type === '>' || r.type === '>>') {
+        const t = await open(r.target, r.type === '>>', r);
+        if (!t) { t1 = { kind: 'null' }; continue; }
+        t1 = t;
+      } else if (r.type === '2>' || r.type === '2>>') {
+        const t = await open(r.target, r.type === '2>>', r);
+        if (!t) { t2 = { kind: 'null' }; continue; }
+        t2 = t;
+      } else if (r.type === '2>&1') {
+        t2 = t1;
+      } else if (r.type === 'open' && r.mode !== '<') {
+        // N> file for N >= 3 on an ordinary command: the file is still created
+        await open(r.target, r.mode === '>>', r);
       }
     }
 
-    // Handle stdout redirects
-    let output = stdout;
-
-    // If 2>&1, merge stderr into stdout BEFORE processing stdout redirects
-    if (redirectStderrToStdout && stderrOutput) {
-      output += stderrOutput;
-      stderrOutput = '';
-    }
-
-    // Now write any remaining stderr to the error stream
-    if (stderrOutput) {
-      stderrWriter(stderrOutput.replace(/\n/g, '\r\n'));
-    }
-    for (const redir of redirects) {
-      if (redir.type === '>' || redir.type === '>>') {
-        if (redir.target === '/dev/null') {
-          output = '';
-          continue;
-        }
-        // >&N: the shell's fd N
-        const ref = fdOfRef(redir.target);
-        if (ref !== null) {
-          if (!(await this.writeToFd(ref, output, writeStdout, stderrWriter))) stderrWriter(`shiro: ${ref}: Bad file descriptor\r\n`);
-          output = '';
-          continue;
-        }
-        // /dev/stdout → write to stdout (default behavior, just let it through)
-        if (redir.target === '/dev/stdout') continue;
-        // /dev/stderr → redirect stdout content to stderr
-        if (redir.target === '/dev/stderr') {
-          stderrWriter(output.replace(/\n/g, '\r\n'));
-          output = '';
-          continue;
-        }
-        const targetPath = this.fs.resolvePath(redir.target, this.cwd);
-        if (redir.type === '>' && !(await this.clobberOk(redir, targetPath, stderrWriter))) { output = ''; continue; }
-        await this.redirectWrite(targetPath, redir.target, output, redir.type === '>>', stderrWriter);
-        output = '';
+    let output = '';
+    const send = async (t: Target, text: string) => {
+      if (!text) return;
+      switch (t.kind) {
+        case 'out': output += text; break;
+        case 'err': stderrWriter(text.replace(/\r?\n/g, '\r\n')); break;
+        case 'null': break;
+        case 'fd': await this.writeToFd(t.n, text, writeStdout, stderrWriter); break;
+        case 'file': files.get(t.path)!.text += text; break;
       }
-    }
-
-    // N> file for N >= 3 on an ordinary command: the file is still created
-    for (const redir of redirects) {
-      if (redir.type === 'open' && redir.mode !== '<') {
-        const path = this.fs.resolvePath(redir.target, this.cwd);
-        if (redir.mode === '>') await this.fs.writeFile(path, '');
-        else await this.fs.appendFile(path, '');
-      }
+    };
+    await send(t1, stdout);
+    await send(t2, stderr);
+    for (const [path, f] of files) {
+      await this.redirectWrite(path, f.shown, f.text, !f.truncate, stderrWriter);
     }
 
     if (isLast && output) {
@@ -4408,13 +4416,13 @@ export class Shell {
           if (next === '$' || next === '"' || next === '\\' || next === '`') {
             current += next;
           } else if (next === '*' || next === '?' || next === '[') {
-            current += '\x01' + next; // sentinel: quoted glob char
+            current += '\x01' + next; // sentinel: quoted glob char (or < >, not a redirect)
           } else {
             current += '\\' + next; // keep backslash literally
           }
         } else {
           // Outside quotes: backslash escapes the next character
-          if (next === '*' || next === '?' || next === '[') {
+          if (next === '*' || next === '?' || next === '[' || next === '<' || next === '>') {
             current += '\x01' + next; // sentinel: quoted glob char
           } else {
             current += next;
@@ -4497,7 +4505,8 @@ export class Shell {
       }
 
       // Mark glob chars inside quotes so they won't be expanded
-      if ((inSingle || inDouble) && (ch === '*' || ch === '?' || ch === '[')) {
+      // (and < > in quotes, so a quoted '<' is a word, not a redirect)
+      if ((inSingle || inDouble) && (ch === '*' || ch === '?' || ch === '[' || ch === '<' || ch === '>')) {
         current += '\x01' + ch;
         i++;
         continue;

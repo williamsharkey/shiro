@@ -290,7 +290,7 @@
    "failures": []
   },
   "vars-special": {
-   "pass": 30,
+   "pass": 31,
    "total": 37,
    "failures": [
     {
@@ -308,10 +308,6 @@
     {
      "i": 21,
      "name": "$LINENO is the current line, not line of function call"
-    },
-    {
-     "i": 22,
-     "name": "$LINENO in \"bare\" redirect arg (bug regression)"
     },
     {
      "i": 27,
@@ -426,16 +422,12 @@
    ]
   },
   "redirect": {
-   "pass": 29,
+   "pass": 32,
    "total": 39,
    "failures": [
     {
      "i": 10,
      "name": "Named file descriptor"
-    },
-    {
-     "i": 19,
-     "name": "Redirect to file descriptor that's not open"
     },
     {
      "i": 24,
@@ -456,15 +448,6 @@
     {
      "i": 29,
      "name": "<> for read/write named pipes"
-    },
-    {
-     "i": 34,
-     "name": "echo foo >&100 (OSH regression: does not fail with invalid fd 100)"
-    },
-    {
-     "i": 35,
-     "name": "echo foo >&N where N is first unused fd",
-     "timeout": true
     },
     {
      "i": 40,
@@ -676,7 +659,7 @@
    ]
   },
   "builtin-trap": {
-   "pass": 25,
+   "pass": 26,
    "total": 33,
    "failures": [
     {
@@ -706,10 +689,6 @@
     {
      "i": 29,
      "name": "Remove trap with an unsigned integer"
-    },
-    {
-     "i": 32,
-     "name": "trap with command.NoOp - check internal invariant"
     }
    ]
   },

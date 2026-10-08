@@ -6,9 +6,9 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1282/1567 (81.8%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1287/1567 (82.1%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1275/1567 (81.4%)** |
-| [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **588/635 (92.6%)** |
+| [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **601/635 (94.6%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **146/320 (45.6%)** |
 
 How each suite runs, and what is and isn't scored, is described in
@@ -31,11 +31,11 @@ How each suite runs, and what is and isn't scored, is described in
 | var-op-patsub | 0/27 | 22/27 | 5 |
 | var-op-slice | 0/21 | 16/21 | 5 |
 | var-num | 0/7 | 7/7 | 0 |
-| vars-special | 0/37 | 30/37 | 7 |
+| vars-special | 0/37 | 31/37 | 6 |
 | arith | 2/71 | 62/71 | 9 |
 | command-sub | 0/28 | 19/28 | 9 |
 | here-doc | 0/32 | 29/32 | 3 |
-| redirect | 3/39 | 29/39 | 10 |
+| redirect | 3/39 | 32/39 | 7 |
 | if_ | 0/5 | 4/5 | 1 |
 | loop | 1/28 | 21/28 | 7 |
 | case_ | 0/13 | 12/13 | 1 |
@@ -46,7 +46,7 @@ How each suite runs, and what is and isn't scored, is described in
 | builtin-read | 0/64 | 64/64 | 0 |
 | builtin-eval-source | 0/23 | 19/23 | 4 |
 | builtin-getopts | 0/30 | 26/30 | 4 |
-| builtin-trap | 0/33 | 25/33 | 8 |
+| builtin-trap | 0/33 | 26/33 | 7 |
 | builtin-bracket | 0/50 | 43/50 | 7 |
 | builtin-cd | 3/28 | 26/28 | 2 |
 | builtin-special | 1/12 | 7/12 | 5 |
@@ -92,11 +92,11 @@ How each suite runs, and what is and isn't scored, is described in
 - **var-op-len**: Unicode string length (spec/testdata/utf8-chars.txt); String length with incomplete utf-8; String length with invalid utf-8 continuation bytes; Length operator can't be followed by test operator
 - **var-op-patsub**: Confusing unquoted slash matches bash (and ash); Synthesized ${x///} bug (similar to above); Replace backslash; When LC_ALL=C, pattern ? doesn't match multibyte character; Chromium from http://www.oilshell.org/blog/2016/11/07.html
 - **var-op-slice**: Cannot take length of substring slice; ${@:offset} and ${*:offset}; ${@:offset:length} and ${*:offset:length}; Permutations of implicit begin and length; ${array[@]:} vs ${array[@]: }  - bash and zsh inconsistent
-- **vars-special**: $PATH is set if unset at startup; Vars set interactively only: $HISTFILE; Some vars are set, even without startup file, or env: PATH, PWD; $LINENO is the current line, not line of function call; $LINENO in "bare" redirect arg (bug regression); $LINENO in other for loops; $_ with assignments, arrays, etc.
+- **vars-special**: $PATH is set if unset at startup; Vars set interactively only: $HISTFILE; Some vars are set, even without startup file, or env: PATH, PWD; $LINENO is the current line, not line of function call; $LINENO in other for loops; $_ with assignments, arrays, etc.
 - **arith**: Arith sub with word parts; Backticks within arith sub; Integer constant validation; Comma operator (borrowed from C); Logical Ops; Bitwise ops; Comment not allowed in the middle of multiline arithmetic; Double subscript; Invalid constant
 - **command-sub**: case in subshell; Backtick 2; Nested backticks; Making keyword out of command sub should NOT work; Command sub with here doc; Escaped quote in [[ ]]; Quoting \ within ``; Quoting \ within `` within double quotes; Syntax errors with double quotes within backticks
 - **here-doc**: Here doc with bad comsub delimiter; Here doc with line continuation, then pipe.  Syntax error.; Function def and execution with here doc
-- **redirect**: Named file descriptor; Redirect to file descriptor that's not open; \>&word redirects stdout and stderr when word is not a number or -; 1\>&2- to move file descriptor; 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; echo foo \>&100 (OSH regression: does not fail with invalid fd 100); echo foo \>&N where N is first unused fd (hang/timeout); xtrace not affected by redirects
+- **redirect**: Named file descriptor; \>&word redirects stdout and stderr when word is not a number or -; 1\>&2- to move file descriptor; 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; xtrace not affected by redirects
 - **if_**: if break corner case
 - **loop**: while in pipe with subshell; continue at top level; continue in subshell; continue in subshell aborts with errexit; bad arg to break; top-level break/continue/return (without strict_control_flow); builtin,command break,continue,return,exit
 - **case_**: case \n bug regression
@@ -106,7 +106,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **builtin-printf**: printf with no args; printf -v a[1]; printf -v syntax error; printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8; printf invalid format; bash truncates long strftime string at 128; printf positive integer overflow; printf negative integer overflow
 - **builtin-eval-source**: eval usage; eval YSH block with 'break continue return error'; Source with syntax error; Eval with syntax error
 - **builtin-getopts**: getopts with invalid variable name; OPTIND; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
-- **builtin-trap**: exit 1 when trap code string is invalid; trap EXIT calling exit; trap EXIT with PARSE error and explicit exit; exit codes for traps are isolated; traps are cleared in subshell (started with &); trap USR1, sleep, SIGINT: non-interactively; Remove trap with an unsigned integer; trap with command.NoOp - check internal invariant
+- **builtin-trap**: exit 1 when trap code string is invalid; trap EXIT calling exit; trap EXIT with PARSE error and explicit exit; exit codes for traps are isolated; traps are cleared in subshell (started with &); trap USR1, sleep, SIGINT: non-interactively; Remove trap with an unsigned integer
 - **builtin-bracket**: -a as unary operator (alias of -e); -k for sticky bit; test -p named pipe; -u for setuid, -g too; test -o for options; -ef; test -c
 - **builtin-cd**: pwd in symlinked dir on shell initialization; Survey of getcwd() syscall
 - **builtin-special**: Prefix assignments persist after special builtins, like : (set -o posix); Prefix assignments persist after readonly, but NOT exported (set -o posix); Prefix binding for exec is a special case (versus e.g. readonly); bash 'type' gets confused - says 'function', but runs builtin; command, builtin - both can be redefined, not special (regression)
@@ -273,8 +273,8 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 | cat (old-style) | 2/2 | 2/2 | 0 |
 | cmp (old-style) | 1/1 | 1/1 | 0 |
 | comm | 0/8 | 8/8 | 0 |
-| cp | 0/6 | 0/6 | 6 |
-| cp (old-style) | 17/17 | 14/17 | 3 |
+| cp | 0/6 | 3/6 | 3 |
+| cp (old-style) | 17/17 | 15/17 | 2 |
 | cut | 0/22 | 22/22 | 0 |
 | cut (old-style) | 5/5 | 5/5 | 0 |
 | date (old-style) | 3/3 | 3/3 | 0 |
@@ -284,10 +284,10 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 | du (old-style) | 6/6 | 4/6 | 2 |
 | echo (old-style) | 11/11 | 10/11 | 1 |
 | expand | 0/1 | 1/1 | 0 |
-| expr (old-style) | 2/2 | 0/2 | 2 |
+| expr (old-style) | 2/2 | 2/2 | 0 |
 | factor | 0/13 | 13/13 | 0 |
 | false (old-style) | 2/2 | 1/2 | 1 |
-| find | 0/11 | 8/11 | 3 |
+| find | 0/11 | 11/11 | 0 |
 | find (old-style) | 1/1 | 1/1 | 0 |
 | fold | 0/3 | 3/3 | 0 |
 | grep | 0/48 | 47/48 | 1 |
@@ -325,7 +325,7 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 | sum | 0/2 | 2/2 | 0 |
 | tail | 0/2 | 2/2 | 0 |
 | tail (old-style) | 2/2 | 2/2 | 0 |
-| tar | 0/6 | 3/6 | 3 |
+| tar | 0/6 | 5/6 | 1 |
 | tar (old-style) | 14/14 | 13/14 | 1 |
 | tee (old-style) | 2/2 | 2/2 | 0 |
 | test | 0/16 | 16/16 | 0 |
@@ -339,21 +339,19 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 | uuencode | 0/0 | 0/0 | 0 |
 | wc (old-style) | 5/5 | 5/5 | 0 |
 | which (old-style) | 1/1 | 1/1 | 0 |
-| xargs | 0/11 | 9/11 | 2 |
+| xargs | 0/11 | 11/11 | 0 |
 | xargs (old-style) | 1/1 | 1/1 | 0 |
 | xxd | 0/0 | 0/0 | 0 |
 
 <details><summary>Failing cases</summary>
 
 - **awk**: awk 'gcc build bug'
-- **cp**: cp -R; cp -Rd; cp -RP; cp -RL; cp -RH; cp -RHL
-- **cp (old-style)**: cp-RHL-does_not_preserve-links; cp-does-not-copy-unreadable-file; cp-preserves-hard-links
+- **cp**: cp -RL; cp -RH; cp -RHL
+- **cp (old-style)**: cp-does-not-copy-unreadable-file; cp-preserves-hard-links
 - **dd (old-style)**: dd-accepts-of
 - **du (old-style)**: du-s-works; du-works
 - **echo (old-style)**: echo-prints-slash_41
-- **expr (old-style)**: expr-big; expr-works
 - **false (old-style)**: false-is-silent
-- **find**: find -exec exitcode 1; find -exec exitcode 2; find -exec exitcode 3
 - **grep**: grep -r on symlink to dir
 - **gunzip (old-style)**: gunzip-reads-from-standard-input
 - **md5sum (old-style)**: md5sum-verifies-non-binary-file
@@ -362,12 +360,11 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 - **rmdir (old-style)**: rmdir-removes-parent-directories
 - **sed**: sed subst+write
 - **sha1sum**: sha1sum: one-space separated input for -c
-- **tar**: tar --overwrite; tar writing into read-only dir; tar Symlinks and hardlinks coexist
+- **tar**: tar --overwrite
 - **tar (old-style)**: tar-extracts-to-standard-output
 - **true (old-style)**: true-is-silent
 - **tsort**: tsort empty2; tsort singleton; tsort simple; tsort 2singleton; tsort medium; tsort std.example; tsort prefixes; tsort odd; tsort odd2; tsort cycle
 - **uniq**: uniq input outfile (two files); uniq (stdin) outfile
-- **xargs**: xargs -sNUM test 1; xargs -sNUM test 2
 
 </details>
 
