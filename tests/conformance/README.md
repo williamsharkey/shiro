@@ -67,8 +67,10 @@ normal `npm run test:shiro` keeps them fixed.
   It passes when it prints its `Summary:` with passed > 0 and no failed or
   broken results (`lib/ltp.mjs`); a test gets 60 s, and is stopped 1.5 s
   after its summary if it doesn't exit. Leftover processes are killed.
-- Only tests that pass natively on the build host are scored
-  (`ltp/native-baseline.json`, from `scripts/conformance/ltp-native-baseline.mjs`).
+- Only tests that pass natively on the build host as uid 1000 (Shiro's
+  processes are not root) are scored (`ltp/native-baseline.json`, from
+  `scripts/conformance/ltp-native-baseline.mjs`; tests that need root don't
+  count).
 - A full run takes hours. Each finished test is journaled to
   `results/detail/syscalls-blink.jsonl` and its output saved under
   `results/detail/ltp/`; `LTP_RESUME=1` continues a run that died,

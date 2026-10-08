@@ -8,7 +8,7 @@ conformance work started (fc0af54).
 |---|---|---|
 | [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1259/1567 (80.3%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **381/635 (60.0%)** |
-| [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **146/399 (36.6%)** |
+| [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **146/320 (45.6%)** |
 
 How each suite runs, and what is and isn't scored, is described in
 [tests/conformance/README.md](../tests/conformance/README.md).
@@ -274,54 +274,49 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 
 ## Syscalls: LTP under Blink (x86-64)
 
-Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host are scored.
+Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host as an unprivileged user (uid 1000, like Shiro) are scored.
 
 | Area | Before | Now | Failing |
 |---|---|---|---|
 | accept | — | 1/3 | 2 |
-| access | — | 0/4 | 4 |
 | alarm | — | 0/5 | 5 |
-| bind | — | 0/5 | 5 |
-| chdir | — | 1/3 | 2 |
-| chmod | — | 1/7 | 6 |
-| clock_gettime | — | 0/4 | 4 |
-| clock_nanosleep | — | 2/4 | 2 |
-| clone | — | 7/10 | 3 |
+| bind | — | 0/4 | 4 |
+| chdir | — | 1/2 | 1 |
+| chmod | — | 1/2 | 1 |
+| clock_gettime | — | 0/1 | 1 |
+| clock_nanosleep | — | 2/3 | 1 |
+| clone | — | 7/8 | 1 |
 | close | — | 2/2 | 0 |
 | connect | — | 0/2 | 2 |
-| creat | — | 1/7 | 6 |
+| creat | — | 1/3 | 2 |
 | dup | — | 4/7 | 3 |
 | dup2 | — | 6/7 | 1 |
 | dup3 | — | 1/2 | 1 |
 | epoll_create | — | 3/3 | 0 |
 | epoll_create1 | — | 2/2 | 0 |
 | epoll_ctl | — | 4/7 | 3 |
-| epoll_wait | — | 5/16 | 11 |
-| execve | — | 0/3 | 3 |
+| epoll_wait | — | 5/15 | 10 |
+| execve | — | 0/2 | 2 |
 | faccessat | — | 2/2 | 0 |
-| fchdir | — | 2/3 | 1 |
-| fchmod | — | 0/6 | 6 |
-| fcntl | — | 16/38 | 22 |
+| fchdir | — | 2/2 | 0 |
+| fchmod | — | 0/1 | 1 |
+| fcntl | — | 16/36 | 20 |
 | fork | — | 5/9 | 4 |
 | fstat | — | 0/4 | 4 |
 | ftruncate | — | 4/4 | 0 |
-| futex | — | 4/19 | 15 |
+| futex | — | 4/18 | 14 |
 | getcwd | — | 2/4 | 2 |
-| getdents | — | 0/2 | 2 |
 | getpid | — | 0/1 | 1 |
 | getppid | — | 1/2 | 1 |
 | getrlimit | — | 2/3 | 1 |
 | gettimeofday | — | 1/2 | 1 |
-| kill | — | 0/5 | 5 |
-| link | — | 0/4 | 4 |
+| kill | — | 0/4 | 4 |
+| link | — | 0/2 | 2 |
 | lseek | — | 2/4 | 2 |
 | lstat | — | 2/4 | 2 |
-| mkdir | — | 0/5 | 5 |
-| mkdirat | — | 0/1 | 1 |
 | nanosleep | — | 2/3 | 1 |
-| open | — | 5/14 | 9 |
-| openat | — | 1/2 | 1 |
-| other | — | 0/1 | 1 |
+| open | — | 5/8 | 3 |
+| openat | — | 1/1 | 0 |
 | pause | — | 0/2 | 2 |
 | pipe | — | 4/12 | 8 |
 | pipe2 | — | 1/2 | 1 |
@@ -331,23 +326,21 @@ Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel
 | pselect | — | 4/6 | 2 |
 | pwrite | — | 8/8 | 0 |
 | read | — | 3/4 | 1 |
-| readlink | — | 0/2 | 2 |
 | readv | — | 1/2 | 1 |
-| rename | — | 0/12 | 12 |
-| rmdir | — | 1/3 | 2 |
+| rmdir | — | 1/1 | 0 |
 | select | — | 1/4 | 3 |
 | sendfile | — | 2/16 | 14 |
-| setrlimit | — | 1/5 | 4 |
+| setrlimit | — | 1/2 | 1 |
 | signal | — | 3/5 | 2 |
 | socket | — | 1/2 | 1 |
 | socketpair | — | 1/2 | 1 |
-| stat | — | 2/6 | 4 |
+| stat | — | 2/2 | 0 |
 | symlink | — | 2/2 | 0 |
 | time | — | 1/1 | 0 |
-| truncate | — | 2/4 | 2 |
+| truncate | — | 2/2 | 0 |
 | umask | — | 1/1 | 0 |
 | uname | — | 2/3 | 1 |
-| unlink | — | 0/5 | 5 |
+| unlink | — | 0/2 | 2 |
 | unlinkat | — | 0/1 | 1 |
 | vfork | — | 1/2 | 1 |
 | wait4 | — | 0/3 | 3 |
@@ -359,44 +352,37 @@ Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel
 <details><summary>Failing cases</summary>
 
 - **accept**: accept02 — accept02.c:116: TBROK: ioctl(3,SIOCGIFINDEX,...) failed: ENOTTY (25); accept03 — accept03.c:46: TFAIL: accept() on O_PATH file expected EBADF: ENOTSOCK (88)
-- **access**: access01 — passed 0 failed 0 broken 0; access02 — passed 0 failed 0 broken 0; access03 — passed 0 failed 0 broken 0; access04 — passed 0 failed 0 broken 0
 - **alarm**: alarm02 — alarm02.c:34: TFAIL: alarm(2147483647) invalid retval 30: SUCCESS (0); alarm03 — alarm03.c:20: TFAIL: alarm(100) invalid retval 30: SUCCESS (0); alarm05 — alarm05.c:26: TFAIL: alarm(10) invalid retval 32: SUCCESS (0); alarm06 — alarm06.c:30: TFAIL: alarm(2) invalid retval 34: SUCCESS (0); alarm07 — alarm07.c:24: TFAIL: alarm(1) invalid retval 34: SUCCESS (0)
-- **bind**: bind01 — passed 0 failed 0 broken 0; bind02 — passed 0 failed 0 broken 0; bind03 — passed 0 failed 0 broken 0; bind04 — passed 0 failed 0 broken 0; bind05 — passed 0 failed 0 broken 0
-- **chdir**: chdir01 — passed 0 failed 0 broken 0; chdir04 — chdir04.c:27: TFAIL: chdir() expected ENAMETOOLONG: ENOENT (2)
-- **chmod**: chmod01 — no summary; chmod03 — passed 0 failed 0 broken 0; chmod05 — passed 0 failed 0 broken 0; chmod06 — passed 0 failed 0 broken 0; chmod07 — passed 0 failed 0 broken 0; chmod09 — passed 0 failed 0 broken 0
-- **clock_gettime**: clock_gettime01 — passed 0 failed 0 broken 0; clock_gettime02 — passed 0 failed 0 broken 0; clock_gettime03 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; clock_gettime04 — clock_gettime04.c:161: TFAIL: CLOCK_REALTIME: Time travelled backwards (0): -64 ns
-- **clock_nanosleep**: clock_nanosleep01 — no summary; clock_nanosleep03 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config
-- **clone**: clone08 (hang/timeout) — no summary; clone09 — passed 0 failed 0 broken 0; clone11 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config
+- **bind**: bind01 — passed 0 failed 0 broken 0; bind03 — passed 0 failed 0 broken 0; bind04 — passed 0 failed 0 broken 0; bind05 — passed 0 failed 0 broken 0
+- **chdir**: chdir04 — chdir04.c:27: TFAIL: chdir() expected ENAMETOOLONG: ENOENT (2)
+- **chmod**: chmod01 — no summary
+- **clock_gettime**: clock_gettime04 — clock_gettime04.c:161: TFAIL: CLOCK_REALTIME: Time travelled backwards (0): -64 ns
+- **clock_nanosleep**: clock_nanosleep01 — no summary
+- **clone**: clone08 (hang/timeout) — no summary
 - **connect**: connect01 (hang/timeout) — no summary; connect03 — passed 0 failed 0 broken 0
-- **creat**: creat01 — creat01.c:47: TFAIL: creat() failed to truncate file to 0 bytes; creat04 — passed 0 failed 0 broken 0; creat05 — creat05.c:55: TBROK: creat(creat05_1020,0666) failed: EMFILE (24); creat06 — passed 0 failed 0 broken 0; creat08 — passed 0 failed 0 broken 0; creat09 — passed 0 failed 0 broken 0
+- **creat**: creat01 — creat01.c:47: TFAIL: creat() failed to truncate file to 0 bytes; creat05 — creat05.c:55: TBROK: creat(creat05_1020,0666) failed: EMFILE (24)
 - **dup**: dup03 — dup03.c:36: TBROK: dup(3) failed: EMFILE (24); dup05 — dup05.c:26: TBROK: mkfifo(dupfile, 0777) failed: EPERM (1); dup06 — dup06.c:58: TFAIL: Not enough files duped
 - **dup2**: dup205 — dup205.c:53: TFAIL: Not enough files duped
 - **dup3**: dup3_02 — dup3_02.c:39: TFAIL: dup3(3, 5, -1) expected EINVAL: EBADF (9)
 - **epoll_ctl**: epoll_ctl02 — epoll_ctl02.c:85: TFAIL: epoll_ctl(...) if events is NULL succeeded; epoll_ctl04 — epoll_ctl04.c:61: TFAIL: epoll_ctl(..., EPOLL_CTL_ADD, ...) with number of nesting is 5 succeeded; epoll_ctl06 — epoll_ctl06.c:69: TFAIL: epoll_ctl() on O_PATH file expected EBADF: EPERM (1)
-- **epoll_wait**: epoll_wait02 — tst_timer_test.c:292: TFAIL: epoll_wait() woken up early 230 times range: [999,304]; epoll_wait03 — epoll_wait03.c:63: TFAIL: epoll_wait() events has no write permissions invalid retval 1: SUCCESS (0); epoll_wait05 — epoll_wait05.c:41: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110); epoll_wait06 — epoll_wait06.c:78: TFAIL: write() failed invalid retval 4096: SUCCESS (0); epoll_wait08 (hang/timeout) — no summary; epoll_wait10 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; epoll_wait11 — epoll_wait11.c:48: TFAIL: epoll_wait() returned 0, expected 1: SUCCESS (0); epoll_wait12 — epoll_wait12.c:64: TFAIL: epoll_wait(efd, &ev, 1, 5000) retval 0 != 1: SUCCESS (0); epoll_wait14 — epoll_wait14.c:99: TFAIL: fd 0 reported 18 times, expected 4; epoll_wait15 — epoll_wait15.c:52: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110); epoll_wait16 — epoll_wait16.c:88: TBROK: Failed to open FILE '/proc/211/stat' for reading: ENOENT (2)
-- **execve**: execve01 — tst_test.c:543: TBROK: Invalid child (221) exit value 127; execve03 — passed 0 failed 0 broken 0; execve06 — tst_test.c:211: TBROK: Invalid shared memory region (bad magic)
-- **fchdir**: fchdir03 — passed 0 failed 0 broken 0
-- **fchmod**: fchmod01 — fchmod01.c:37: TFAIL: testfile: Incorrect modes 0644, Expected 0000; fchmod02 — passed 0 failed 0 broken 0; fchmod03 — passed 0 failed 0 broken 0; fchmod04 — passed 0 failed 0 broken 0; fchmod05 — passed 0 failed 0 broken 0; fchmod06 — passed 0 failed 0 broken 0
-- **fcntl**: fcntl13 — fcntl13.c:45: TFAIL: fcntl(1, F_SETLK, flock) succeeded; fcntl13_64 — fcntl13.c:45: TFAIL: fcntl(1, F_SETLK, flock) succeeded; fcntl14 — fcntl14.c:74: TFAIL: flock.l_pid (0) != parent_pid (239); fcntl14_64 — fcntl14.c:74: TFAIL: flock.l_pid (0) != parent_pid (246); fcntl15 — fcntl15.c:88: TFAIL: Succeeded to lock already locked region one; fcntl15_64 — fcntl15.c:88: TFAIL: Succeeded to lock already locked region one; fcntl27 — fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22); fcntl27_64 — fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22); fcntl30 — fcntl30.c:37: TBROK: Failed to open FILE '/proc/sys/fs/pipe-max-size' for reading: ENOENT (2); fcntl30_64 — fcntl30.c:37: TBROK: Failed to open FILE '/proc/sys/fs/pipe-max-size' for reading: ENOENT (2); fcntl33 — passed 0 failed 0 broken 0; fcntl33_64 — passed 0 failed 0 broken 0; fcntl34 — fcntl34.c:99: TBROK: Short read(3,0x4fffffffe8e0,4096) returned only 0; fcntl34_64 — fcntl34.c:99: TBROK: Short read(3,0x4fffffffe8d0,4096) returned only 0; fcntl37 — fcntl37.c:73: TBROK: Failed to open FILE '/proc/sys/fs/pipe-max-size' for reading: ENOENT (2); fcntl37_64 — fcntl37.c:73: TBROK: Failed to open FILE '/proc/sys/fs/pipe-max-size' for reading: ENOENT (2); fcntl38 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl38_64 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl39 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl39_64 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl40 — passed 0 failed 0 broken 0; fcntl40_64 — passed 0 failed 0 broken 0
+- **epoll_wait**: epoll_wait02 — tst_timer_test.c:292: TFAIL: epoll_wait() woken up early 230 times range: [999,304]; epoll_wait03 — epoll_wait03.c:63: TFAIL: epoll_wait() events has no write permissions invalid retval 1: SUCCESS (0); epoll_wait05 — epoll_wait05.c:41: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110); epoll_wait06 — epoll_wait06.c:78: TFAIL: write() failed invalid retval 4096: SUCCESS (0); epoll_wait08 (hang/timeout) — no summary; epoll_wait11 — epoll_wait11.c:48: TFAIL: epoll_wait() returned 0, expected 1: SUCCESS (0); epoll_wait12 — epoll_wait12.c:64: TFAIL: epoll_wait(efd, &ev, 1, 5000) retval 0 != 1: SUCCESS (0); epoll_wait14 — epoll_wait14.c:99: TFAIL: fd 0 reported 18 times, expected 4; epoll_wait15 — epoll_wait15.c:52: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110); epoll_wait16 — epoll_wait16.c:88: TBROK: Failed to open FILE '/proc/211/stat' for reading: ENOENT (2)
+- **execve**: execve01 — tst_test.c:543: TBROK: Invalid child (221) exit value 127; execve06 — tst_test.c:211: TBROK: Invalid shared memory region (bad magic)
+- **fchmod**: fchmod01 — fchmod01.c:37: TFAIL: testfile: Incorrect modes 0644, Expected 0000
+- **fcntl**: fcntl13 — fcntl13.c:45: TFAIL: fcntl(1, F_SETLK, flock) succeeded; fcntl13_64 — fcntl13.c:45: TFAIL: fcntl(1, F_SETLK, flock) succeeded; fcntl14 — fcntl14.c:74: TFAIL: flock.l_pid (0) != parent_pid (239); fcntl14_64 — fcntl14.c:74: TFAIL: flock.l_pid (0) != parent_pid (246); fcntl15 — fcntl15.c:88: TFAIL: Succeeded to lock already locked region one; fcntl15_64 — fcntl15.c:88: TFAIL: Succeeded to lock already locked region one; fcntl27 — fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22); fcntl27_64 — fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22); fcntl30 — fcntl30.c:37: TBROK: Failed to open FILE '/proc/sys/fs/pipe-max-size' for reading: ENOENT (2); fcntl30_64 — fcntl30.c:37: TBROK: Failed to open FILE '/proc/sys/fs/pipe-max-size' for reading: ENOENT (2); fcntl34 — fcntl34.c:99: TBROK: Short read(3,0x4fffffffe8e0,4096) returned only 0; fcntl34_64 — fcntl34.c:99: TBROK: Short read(3,0x4fffffffe8d0,4096) returned only 0; fcntl37 — fcntl37.c:73: TBROK: Failed to open FILE '/proc/sys/fs/pipe-max-size' for reading: ENOENT (2); fcntl37_64 — fcntl37.c:73: TBROK: Failed to open FILE '/proc/sys/fs/pipe-max-size' for reading: ENOENT (2); fcntl38 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl38_64 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl39 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl39_64 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl40 — passed 0 failed 0 broken 0; fcntl40_64 — passed 0 failed 0 broken 0
 - **fork**: fork04 — fork04.c:37: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110); fork08 (hang/timeout) — skipped: hangs Shiro; fork09 — no summary; fork14 — passed 0 failed 0 broken 0
 - **fstat**: fstat02 — fstat02.c:33: TFAIL: stat_buf.st_nlink (1) != NLINK (2); fstat02_64 — fstat02.c:33: TFAIL: stat_buf.st_nlink (1) != NLINK (2); fstat03 — fstat03.c:56: TFAIL: fstat() returned 0, expected -1; fstat03_64 — fstat03.c:56: TFAIL: fstat() returned 0, expected -1
-- **futex**: futex_cmp_requeue01 (hang/timeout) — no summary; futex_cmp_requeue02 — futex_cmp_requeue02.c:60: TFAIL: futex_cmp_requeue() failed unexpectedly, expected EAGAIN/EWOULDBLOCK: EINVAL (22); futex_cmp_requeue03 — futex_cmp_requeue03.c:71: TFAIL: uaddr unmapped expected EFAULT: EINVAL (22); futex_wait02 (hang/timeout) — no summary; futex_wait03 — futex_wait03.c:33: TBROK: Failed to open FILE '/proc/385/stat' for reading: ENOENT (2); futex_wait05 — tst_timer_test.c:292: TFAIL: futex_wait() woken up early 2 times range: [14,14]; futex_wait07 — futex_wait07.c:50: TFAIL: futex_wait(tv->fntype, futex, *futex, &timeout, 0) expected EINTR: ETIMEDOUT (110); futex_wait_bitset01 — futex_wait_bitset01.c:70: TFAIL: expected ETIMEDOUT: EINVAL (22); futex_waitv01 — passed 0 failed 0 broken 0; futex_waitv02 — passed 0 failed 0 broken 0; futex_waitv03 — passed 0 failed 0 broken 0; futex_wake02 (hang/timeout) — no summary; futex_wake03 (hang/timeout) — no summary; futex_wake04 — passed 0 failed 0 broken 0; futex_wake05 (hang/timeout) — no summary
+- **futex**: futex_cmp_requeue01 (hang/timeout) — no summary; futex_cmp_requeue02 — futex_cmp_requeue02.c:60: TFAIL: futex_cmp_requeue() failed unexpectedly, expected EAGAIN/EWOULDBLOCK: EINVAL (22); futex_cmp_requeue03 — futex_cmp_requeue03.c:71: TFAIL: uaddr unmapped expected EFAULT: EINVAL (22); futex_wait02 (hang/timeout) — no summary; futex_wait03 — futex_wait03.c:33: TBROK: Failed to open FILE '/proc/385/stat' for reading: ENOENT (2); futex_wait05 — tst_timer_test.c:292: TFAIL: futex_wait() woken up early 2 times range: [14,14]; futex_wait07 — futex_wait07.c:50: TFAIL: futex_wait(tv->fntype, futex, *futex, &timeout, 0) expected EINTR: ETIMEDOUT (110); futex_wait_bitset01 — futex_wait_bitset01.c:70: TFAIL: expected ETIMEDOUT: EINVAL (22); futex_waitv01 — passed 0 failed 0 broken 0; futex_waitv02 — passed 0 failed 0 broken 0; futex_waitv03 — passed 0 failed 0 broken 0; futex_wake02 (hang/timeout) — no summary; futex_wake03 (hang/timeout) — no summary; futex_wake05 (hang/timeout) — no summary
 - **getcwd**: getcwd03 — getcwd03.c:58: TFAIL: getcwd() got mismatched working directories (/tmp/ltp/getcwd03/LTP_getZJEjgo/getcwd1.407, /tmp/ltp/getcwd03/LTP_getZJEjgo/getcwd2.407); getcwd04 — passed 0 failed 0 broken 0
-- **getdents**: getdents01 — passed 0 failed 0 broken 0; getdents02 — passed 0 failed 0 broken 0
 - **getpid**: getpid01 — getpid01.c:18: TBROK: Failed to open FILE '/proc/sys/kernel/pid_max' for reading: ENOENT (2)
 - **getppid**: getppid01 — getppid01.c:18: TBROK: Failed to open FILE '/proc/sys/kernel/pid_max' for reading: ENOENT (2)
 - **getrlimit**: getrlimit02 — getrlimit02.c:36: TFAIL: getrlimit() with invalid resource type succeeded
 - **gettimeofday**: gettimeofday02 (hang/timeout) — no summary
-- **kill**: kill03 — tst_pid.c:46: TBROK: Failed to open FILE '/proc/sys/kernel/pid_max' for reading: ENOENT (2); kill05 — passed 0 failed 0 broken 0; kill06 (hang/timeout) — no summary; kill08 (hang/timeout) — no summary; kill11 (hang/timeout) — no summary
-- **link**: link02 — link02.c:36: TFAIL: link(oldpath,newpath) returned 0 but stat link counts do not match 1 1; link04 — passed 0 failed 0 broken 0; link05 — link05.c:45: TFAIL: link(lkfile_438, lkfile_438[1-1000]) ret 0 for 1000 files, stat values do not match 1 1; link08 — passed 0 failed 0 broken 0
+- **kill**: kill03 — tst_pid.c:46: TBROK: Failed to open FILE '/proc/sys/kernel/pid_max' for reading: ENOENT (2); kill06 (hang/timeout) — no summary; kill08 (hang/timeout) — no summary; kill11 (hang/timeout) — no summary
+- **link**: link02 — link02.c:36: TFAIL: link(oldpath,newpath) returned 0 but stat link counts do not match 1 1; link05 — link05.c:45: TFAIL: link(lkfile_438, lkfile_438[1-1000]) ret 0 for 1000 files, stat values do not match 1 1
 - **lseek**: lseek02 — lseek02.c:76: TBROK: mkfifo(tfifo1, 0777) failed: EPERM (1); lseek11 — passed 0 failed 0 broken 0
 - **lstat**: lstat02 — lstat02.c:66: TFAIL: lstat() returned 0, expected -1: SUCCESS (0); lstat02_64 — lstat02.c:66: TFAIL: lstat() returned 0, expected -1: SUCCESS (0)
-- **mkdir**: mkdir02 — passed 0 failed 0 broken 0; mkdir03 — passed 0 failed 0 broken 0; mkdir04 — passed 0 failed 0 broken 0; mkdir05 — passed 0 failed 0 broken 0; mkdir09 — passed 0 failed 0 broken 0
-- **mkdirat**: mkdirat02 — passed 0 failed 0 broken 0
 - **nanosleep**: nanosleep02 — nanosleep02.c:46: TFAIL: nanosleep was not interrupted, returned 0, expected -1
-- **open**: open02 — passed 0 failed 0 broken 0; open06 — open06.c:20: TBROK: mkfifo(tmpfile, 0644) failed: EPERM (1); open07 — open07.c:50: TBROK: creat(symdir1/testfile,0644) failed: ENOTDIR (20); open08 — passed 0 failed 0 broken 0; open10 — passed 0 failed 0 broken 0; open11 — passed 0 failed 0 broken 0; open12 — passed 0 failed 0 broken 0; open13 — open13.c:76: TFAIL: read() on original FD succeeded; open14 — passed 0 failed 0 broken 0
-- **openat**: openat02 — passed 0 failed 0 broken 0
-- **other**: leapsec01 — passed 0 failed 0 broken 0
+- **open**: open06 — open06.c:20: TBROK: mkfifo(tmpfile, 0644) failed: EPERM (1); open07 — open07.c:50: TBROK: creat(symdir1/testfile,0644) failed: ENOTDIR (20); open13 — open13.c:76: TFAIL: read() on original FD succeeded
 - **pause**: pause01 — pause01.c:21: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110); pause02 — pause02.c:16: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110)
 - **pipe**: pipe02 — pipe02.c:30: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); pipe06 — pipe06.c:29: TBROK: pipe({1022,1023}) failed: EMFILE (24); pipe07 — pipe07.c:28: TBROK: opendir(/proc/self/fd) failed: ENOENT (2); pipe08 — pipe08.c:35: TFAIL: sigpipe_cnt (0) != 1 (1); pipe10 — pipe10.c:33: TBROK: close(-1) failed: EBADF (9); pipe11 — pipe11.c:94: TBROK: close(-1) failed: EBADF (9); pipe13 — pipe13.c:57: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110); pipe15 — pipe15.c:53: TBROK: Failed to open FILE '/proc/sys/fs/pipe-user-pages-soft' for reading: ENOENT (2)
 - **pipe2**: pipe2_04 (hang/timeout) — no summary
@@ -405,20 +391,15 @@ Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel
 - **pread**: pread02 — pread02.c:42: TFAIL: pread(7, 1024, 0) file descriptor is a directory expected EISDIR: ESPIPE (29); pread02_64 — pread02.c:42: TFAIL: pread(7, 1024, 0) file descriptor is a directory expected EISDIR: ESPIPE (29)
 - **pselect**: pselect01 — tst_timer_test.c:292: TFAIL: pselect() woken up early 8 times range: [879,268]; pselect01_64 — tst_timer_test.c:292: TFAIL: pselect() woken up early 12 times range: [936,275]
 - **read**: read03 — read03.c:32: TBROK: mknod() failed: EPERM (1)
-- **readlink**: readlink01 — passed 0 failed 0 broken 0; readlink03 — passed 0 failed 0 broken 0
 - **readv**: readv02 — readv02.c:72: TFAIL: readv(3, 0x5371c0, 1) succeeded
-- **rename**: rename01 — passed 0 failed 0 broken 0; rename03 — passed 0 failed 0 broken 0; rename04 — passed 0 failed 0 broken 0; rename05 — passed 0 failed 0 broken 0; rename06 — passed 0 failed 0 broken 0; rename07 — passed 0 failed 0 broken 0; rename08 — passed 0 failed 0 broken 0; rename09 — passed 0 failed 0 broken 0; rename10 — passed 0 failed 0 broken 0; rename12 — passed 0 failed 0 broken 0; rename13 — passed 0 failed 0 broken 0; rename15 — passed 0 failed 0 broken 0
-- **rmdir**: rmdir02 — passed 0 failed 0 broken 0; rmdir03 — passed 0 failed 0 broken 0
 - **select**: select01 — select01.c:106: TBROK: mkfifo(tmpfile2, 0666) failed: EPERM (1); select02 — tst_timer_test.c:292: TFAIL: select() woken up early 11 times range: [596,325]; select03 — no summary
 - **sendfile**: sendfile03 — sendfile03.c:51: TFAIL: sendfile(..) with out_fd=-1 expected EBADF: EFAULT (14); sendfile03_64 — sendfile03.c:51: TFAIL: sendfile(..) with out_fd=-1 expected EBADF: EFAULT (14); sendfile04 — sendfile04.c:60: TFAIL: sendfile(..) with pass_mapped_buffer, protection=1 succeeded; sendfile04_64 — sendfile04.c:60: TFAIL: sendfile(..) with pass_mapped_buffer, protection=1 succeeded; sendfile05 — sendfile05.c:39: TFAIL: sendfile(out, in, &offset, ..) with offset=-1 succeeded; sendfile05_64 — sendfile05.c:39: TFAIL: sendfile(out, in, &offset, ..) with offset=-1 succeeded; sendfile06 — sendfile06.c:50: TFAIL: sendfile() failed to return expected value, expected: 26, got: -1; sendfile06_64 — sendfile06.c:50: TFAIL: sendfile() failed to return expected value, expected: 26, got: -1; sendfile07 — passed 0 failed 0 broken 0; sendfile07_64 — passed 0 failed 0 broken 0; sendfile08 — sendfile08.c:34: TBROK: sendfile() failed: EFAULT (14); sendfile08_64 — sendfile08.c:34: TBROK: sendfile() failed: EFAULT (14); sendfile09 — passed 0 failed 0 broken 0; sendfile09_64 — passed 0 failed 0 broken 0
-- **setrlimit**: setrlimit02 — passed 0 failed 0 broken 0; setrlimit03 — passed 0 failed 0 broken 0; setrlimit04 — passed 0 failed 0 broken 0; setrlimit06 — no summary
+- **setrlimit**: setrlimit06 — no summary
 - **signal**: signal01 (hang/timeout) — no summary; signal05 (hang/timeout) — skipped: hangs Shiro
 - **socket**: socket01 — socket01.c:67: TFAIL: expected EINVAL(22): EPROTONOSUPPORT (93)
 - **socketpair**: socketpair01 — socketpair01.c:73: TFAIL: expected EINVAL(22): EOPNOTSUPP (95)
-- **stat**: stat01 — passed 0 failed 0 broken 0; stat01_64 — passed 0 failed 0 broken 0; stat03 — passed 0 failed 0 broken 0; stat03_64 — passed 0 failed 0 broken 0
-- **truncate**: truncate03 — passed 0 failed 0 broken 0; truncate03_64 — passed 0 failed 0 broken 0
 - **uname**: uname04 — uname04.c:72: TBROK: persona(131072) failed: ENOSYS (38)
-- **unlink**: unlink05 — unlink05.c:29: TBROK: mkfifo(tfifo_207, 0777) failed: EPERM (1); unlink07 — unlink07.c:44: TFAIL: path contains a regular file expected ENOTDIR: ENOENT (2); unlink08 — passed 0 failed 0 broken 0; unlink09 — passed 0 failed 0 broken 0; unlink10 — passed 0 failed 0 broken 0
+- **unlink**: unlink05 — unlink05.c:29: TBROK: mkfifo(tfifo_207, 0777) failed: EPERM (1); unlink07 — unlink07.c:44: TFAIL: path contains a regular file expected ENOTDIR: ENOENT (2)
 - **unlinkat**: unlinkat01 — unlinkat01.c:80: TFAIL: unlinkat() failed: ENOTDIR (20)
 - **vfork**: vfork02 — vfork02.c:61: TBROK: SIGUSR1 is not on hold
 - **wait4**: wait401 (hang/timeout) — no summary; wait402 — wait402.c:28: TBROK: Failed to open FILE '/proc/sys/kernel/pid_max' for reading: ENOENT (2); wait403 — tst_taint.c:43: TBROK: Failed to open FILE '/proc/sys/kernel/tainted' for reading: ENOENT (2)
