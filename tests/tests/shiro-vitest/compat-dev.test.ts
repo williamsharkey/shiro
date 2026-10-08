@@ -540,3 +540,49 @@ describe('make and clang (llvm package)', () => {
     expect(r.err).toContain("bad.c:1:25: error: use of undeclared identifier 'undefined_thing'");
   }, 60_000);
 });
+
+// ── Go: the toolchain itself on wasip1, building GOOS=wasip1 programs ──
+
+describe('go (toolchain on wasip1)', () => {
+  let shell: Shell;
+  let fs: FileSystem;
+  beforeAll(async () => {
+    ({ fs, shell } = await createTestShell());
+    await bootFiles(fs);
+    const r = await sh(shell, 'pkg install go');
+    expect(r.err).toBe('');
+    expect(r.exitCode).toBe(0);
+  }, 300_000);
+
+  it('go version, go env, gofmt', async () => {
+    expect((await sh(shell, 'go version')).out).toBe('go version go1.24.7 wasip1/wasm\n');
+    expect((await sh(shell, 'go env GOROOT GOOS GOARCH GOCACHE GOTOOLCHAIN')).out)
+      .toBe('/usr/lib/pkg/go\nwasip1\nwasm\n/usr/lib/pkg/go/cache\nlocal\n');
+    await fs.writeFile('/tmp/ugly.go', 'package main\nimport "fmt"\nfunc main(){fmt.Println( "x" )}\n');
+    expect((await sh(shell, 'gofmt /tmp/ugly.go')).out).toBe('package main\n\nimport "fmt"\n\nfunc main() { fmt.Println("x") }\n');
+  }, 60_000);
+
+  it('go build: a module with two packages, from the shipped std cache; the program runs commands with os/exec', async () => {
+    const d = '/home/user/gohello';
+    await fs.mkdir(`${d}/greet`, { recursive: true });
+    await fs.writeFile(`${d}/go.mod`, 'module example.com/gohello\n\ngo 1.24\n');
+    await fs.writeFile(`${d}/greet/greet.go`, 'package greet\n\nimport "strings"\n\n// Hello greets name.\nfunc Hello(name string) string { return "hello, " + strings.ToUpper(name) }\n');
+    await fs.writeFile(`${d}/main.go`, [
+      'package main', '', 'import (', '\t"fmt"', '\t"os"', '\t"os/exec"', '\t"strings"', '', '\t"example.com/gohello/greet"', ')', '',
+      'func main() {', '\tout, err := exec.Command("echo", "from", "a", "child").Output()', '\tif err != nil {', '\t\tpanic(err)', '\t}',
+      '\tfmt.Println(greet.Hello(os.Args[1]), strings.TrimSpace(string(out)))', '}', ''].join('\n'));
+    const t0 = Date.now();
+    const r = await sh(shell, `cd ${d} && go build -o hello.wasm . && ./hello.wasm gopher`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('hello, GOPHER from a child\n');
+    expect(Date.now() - t0).toBeLessThan(60_000); // std came from the cache
+    expect((await sh(shell, `cd ${d} && go vet ./... && go run . again`)).out).toBe('hello, AGAIN from a child\n');
+  }, 240_000);
+
+  it('go test runs a package test', async () => {
+    const d = '/home/user/gohello';
+    await fs.writeFile(`${d}/greet/greet_test.go`, 'package greet\n\nimport "testing"\n\nfunc TestHello(t *testing.T) {\n\tif got := Hello("x"); got != "hello, X" {\n\t\tt.Fatalf("got %q", got)\n\t}\n}\n');
+    const r = await sh(shell, `cd ${d} && go test ./greet`);
+    expect(r.out).toMatch(/^ok\s+example\.com\/gohello\/greet\s+[\d.]+s\n$/);
+  }, 600_000);
+});

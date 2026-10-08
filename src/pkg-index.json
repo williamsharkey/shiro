@@ -558,6 +558,99 @@
    "notes": "The compiler is YoWASP's LLVM for WASI (npm @yowasp/clang, taken from its tarball); clang's driver steps run as separate kernel processes (compat/clang-driver.c). Output is wasm32-wasip1; run it like any WASM program."
   },
   {
+   "name": "go",
+   "version": "1.24.7",
+   "description": "The Go toolchain (go, gofmt, compile, link, asm, vet) running on wasip1; builds GOOS=wasip1 programs (and other targets) inside Shiro",
+   "license": "BSD-3-Clause",
+   "source": "https://go.dev/dl/go1.24.7.src.tar.gz",
+   "homepage": "https://go.dev/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/go.sh",
+   "section": "devel",
+   "abi": "wasi_snapshot_preview1",
+   "files": [
+    {
+     "path": "bin",
+     "tar": {
+      "unpack": true,
+      "dir": "bin"
+     },
+     "url": "/pkg/go/1.24.7/go-1.24.7-wasip1.tar.gz",
+     "sha256": "92b871db18bea8e43d7d940ad052b4a64cdac9a36bf5d6c195c8036f884922fd",
+     "size": 44033314
+    },
+    {
+     "path": "pkg",
+     "tar": {
+      "unpack": true,
+      "dir": "pkg"
+     },
+     "url": "/pkg/go/1.24.7/go-1.24.7-wasip1.tar.gz",
+     "sha256": "92b871db18bea8e43d7d940ad052b4a64cdac9a36bf5d6c195c8036f884922fd",
+     "size": 44033314
+    },
+    {
+     "path": "src",
+     "tar": {
+      "unpack": true,
+      "dir": "src"
+     },
+     "url": "/pkg/go/1.24.7/go-1.24.7-wasip1.tar.gz",
+     "sha256": "92b871db18bea8e43d7d940ad052b4a64cdac9a36bf5d6c195c8036f884922fd",
+     "size": 44033314
+    },
+    {
+     "path": "cache",
+     "tar": {
+      "unpack": true,
+      "dir": "cache"
+     },
+     "url": "/pkg/go/1.24.7/go-1.24.7-wasip1.tar.gz",
+     "sha256": "92b871db18bea8e43d7d940ad052b4a64cdac9a36bf5d6c195c8036f884922fd",
+     "size": 44033314
+    },
+    {
+     "path": "VERSION",
+     "tar": {
+      "member": "VERSION"
+     },
+     "url": "/pkg/go/1.24.7/go-1.24.7-wasip1.tar.gz",
+     "sha256": "92b871db18bea8e43d7d940ad052b4a64cdac9a36bf5d6c195c8036f884922fd",
+     "size": 44033314
+    },
+    {
+     "path": "go.env",
+     "tar": {
+      "member": "go.env"
+     },
+     "url": "/pkg/go/1.24.7/go-1.24.7-wasip1.tar.gz",
+     "sha256": "92b871db18bea8e43d7d940ad052b4a64cdac9a36bf5d6c195c8036f884922fd",
+     "size": 44033314
+    },
+    {
+     "path": "LICENSE",
+     "tar": {
+      "member": "LICENSE"
+     },
+     "url": "/pkg/go/1.24.7/go-1.24.7-wasip1.tar.gz",
+     "sha256": "92b871db18bea8e43d7d940ad052b4a64cdac9a36bf5d6c195c8036f884922fd",
+     "size": 44033314
+    }
+   ],
+   "bin": {
+    "go": {
+     "file": "bin/go"
+    },
+    "gofmt": {
+     "file": "bin/gofmt"
+    }
+   },
+   "needs": [
+    "processes"
+   ],
+   "notes": "Patched (scripts/pkgbuild/go/wasip1-processes.patch) so os/exec works on Shiro's kernel; the shipped std has it too. Comes with a build cache of common std packages, so small programs build in seconds; anything else in std compiles on first use. No network: GOPROXY=off, vendor modules or use replace directives."
+  },
+  {
    "name": "sqlite",
    "version": "3.50.4",
    "description": "SQLite 3 command-line shell (FTS5, math functions)",

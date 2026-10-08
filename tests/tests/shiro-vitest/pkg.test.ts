@@ -166,15 +166,18 @@ describe('package index', () => {
   it('packages built here are in public/pkg with the pinned sha256, size, and a recipe', () => {
     const own = builtinIndex().packages.filter(p => p.origin === 'shiro');
     expect(own.map(p => p.name)).toEqual(expect.arrayContaining(['coreutils', 'jq', 'lua', 'sqlite']));
+    const checked = new Set<string>();
     for (const p of own) {
       expect(existsSync(`${REPO}/${p.recipe}`), p.recipe).toBe(true);
       for (const f of p.files) {
+        if (checked.has(f.url)) continue; // several files out of one tarball
+        checked.add(f.url);
         const bytes = readFileSync(`${REPO}/public${f.url}`);
         expect(bytes.length, f.url).toBe(f.size);
         expect(sha256(bytes), f.url).toBe(f.sha256);
       }
     }
-  });
+  }, 60_000);
 
   it('wasmer downloads are pinned by content address (the URL is the sha256)', () => {
     for (const p of builtinIndex().packages.filter(p => p.origin === 'wasmer')) {

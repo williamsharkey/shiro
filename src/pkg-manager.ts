@@ -167,7 +167,9 @@ export function parseIndex(doc: unknown): PkgIndex {
     if (!p.bin || typeof p.bin !== 'object') fail(`${where}: missing bin`);
     for (const [cmd, b] of Object.entries<any>(p.bin)) {
       if (!NAME_RE.test(cmd) && !/^[a-z0-9][a-z0-9._+\[-]*$/.test(cmd)) fail(`${where}: bad command name ${cmd}`);
-      if (typeof b?.file !== 'string' || !paths.has(b.file)) fail(`${where}: command ${cmd} runs unknown file ${b?.file}`);
+      // a listed file, or one inside a directory a tarball unpacks into
+      const inUnpacked = typeof b?.file === 'string' && p.files.some((f: any) => f.tar?.unpack && b.file.startsWith(f.path + '/'));
+      if (typeof b?.file !== 'string' || !(paths.has(b.file) || inUnpacked)) fail(`${where}: command ${cmd} runs unknown file ${b?.file}`);
       if (b.args !== undefined && (!Array.isArray(b.args) || b.args.some((a: unknown) => typeof a !== 'string'))) fail(`${where}: bad args for ${cmd}`);
     }
     for (const k of ['needs', 'wants'] as const) {
@@ -462,11 +464,15 @@ async function installFromTar(
   fs: FileSystem, f: PkgFile, download: Uint8Array, dest: string, cache: Map<string, Promise<TarEntry[]>>, pkg: string,
 ): Promise<number> {
   const t = f.tar!;
-  let bytes = download;
-  if (t.member) {
+  // the download's entries, parsed once however many files come out of it
+  const downloadEntries = () => {
     let entries = cache.get(f.sha256);
     if (!entries) { entries = readTarball(download); cache.set(f.sha256, entries); }
-    const m = (await entries).find(e => e.name === t.member && e.type === '0');
+    return entries;
+  };
+  let bytes = download;
+  if (t.member) {
+    const m = (await downloadEntries()).find(e => e.name === t.member && e.type === '0');
     if (!m) throw new Error(`${pkg}: no ${t.member} in ${f.url}`);
     bytes = m.data;
   }
@@ -477,7 +483,7 @@ async function installFromTar(
   const prefix = (t.dir ?? '').replace(/^\.?\/+|\/+$/g, '');
   let size = 0;
   await fs.mkdir(dest, { recursive: true });
-  for (const e of await readTarball(bytes)) {
+  for (const e of t.member ? await readTarball(bytes) : await downloadEntries()) {
     let rel = e.name.replace(/\/+$/, '');
     if (prefix) {
       if (rel !== prefix && !rel.startsWith(prefix + '/')) continue;
