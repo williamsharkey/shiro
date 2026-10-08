@@ -3,8 +3,9 @@ import { Command } from './index';
 async function compress(data: Uint8Array): Promise<Uint8Array> {
   const cs = new CompressionStream('gzip');
   const writer = cs.writable.getWriter();
-  writer.write(data as any);
-  writer.close();
+  // A corrupt stream rejects these too; the reader below reports the error
+  writer.write(data as any).catch(() => {});
+  writer.close().catch(() => {});
   const reader = cs.readable.getReader();
   const chunks: Uint8Array[] = [];
   while (true) {
@@ -25,8 +26,9 @@ async function compress(data: Uint8Array): Promise<Uint8Array> {
 async function decompress(data: Uint8Array): Promise<Uint8Array> {
   const ds = new DecompressionStream('gzip');
   const writer = ds.writable.getWriter();
-  writer.write(data as any);
-  writer.close();
+  // A corrupt stream rejects these too; the reader below reports the error
+  writer.write(data as any).catch(() => {});
+  writer.close().catch(() => {});
   const reader = ds.readable.getReader();
   const chunks: Uint8Array[] = [];
   while (true) {
