@@ -6,8 +6,12 @@
  * terminal pty for the interactive ones: raw mode, alternate screen,
  * resize, Ctrl-C/Ctrl-Z.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { Worker } from 'node:worker_threads';
+import { build } from 'esbuild';
+import type { GuestWorker } from '@shiro/kernel/worker-host';
+import { setGuestWorkerFactory, forceWasmProcessMode } from '@shiro/wasi/host';
 import { TtySession } from '@shiro/kernel/pty';
 import { createTestShell } from './helpers';
 import { jobsCmd, fgCmd, bgCmd, waitCmd } from '@shiro/commands/jobs';
@@ -514,5 +518,83 @@ describe('bat', () => {
     expect((await sh('bat -n --color=never --paging=never hello.rs')).out).toMatch(/^ +1 fn main\(\) \{\n +2 +println/);
     expect((await sh('bat hello.rs | cat')).out).toBe('fn main() {\n    println!("hi");\n}\n');
     expect((await sh('bat --list-languages | grep -c "^Rust:"')).out).toBe('1\n');
+  }, 180_000);
+});
+
+/**
+ * WASM packages (pkg-index "abi": wasi/wasix): guests run in Node worker
+ * threads as kernel processes, as the page runs them in Web Workers.
+ */
+describe('WASM packages', () => {
+  let tmp: string;
+  beforeAll(async () => {
+    tmp = mkdtempSync(`${process.env.TMPDIR || '/tmp'}/shiro-compat-tools-`);
+    writeFileSync(`${tmp}/entry.ts`, `
+      import { parentPort } from 'node:worker_threads';
+      import { guestMain } from ${JSON.stringify(`${REPO}/src/wasi/guest-worker.ts`)};
+      const port: any = { postMessage: (m: unknown) => parentPort!.postMessage(m), onmessage: null };
+      parentPort!.on('message', (data) => port.onmessage && port.onmessage({ data }));
+      guestMain(port);
+    `);
+    await build({ entryPoints: [`${tmp}/entry.ts`], bundle: true, platform: 'node', format: 'esm', outfile: `${tmp}/guest-worker.mjs`, logLevel: 'error' });
+    setGuestWorkerFactory((): GuestWorker => {
+      const w = new Worker(`${tmp}/guest-worker.mjs`);
+      return {
+        postMessage: (m) => w.postMessage(m),
+        terminate: () => w.terminate(),
+        onMessage: (cb) => { w.on('message', cb); },
+        onError: (cb) => { w.on('error', cb); },
+      };
+    });
+    forceWasmProcessMode('sab');
+  }, 120_000);
+  afterAll(() => {
+    setGuestWorkerFactory(null);
+    forceWasmProcessMode(null);
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('jq: filters, raw output, slurp, exit status', async () => {
+    await install('jq');
+    await fs.writeFile('/home/user/w/d.json', '{"items":[{"n":"a","v":2},{"n":"b","v":5}]}\n');
+    expect((await sh("jq '[.items[].v] | add' d.json")).out).toBe('7\n');
+    expect((await sh("jq -r '.items[] | select(.v > 3) | .n' d.json")).out).toBe('b\n');
+    expect((await sh("printf '1 2 3' | jq -s -c 'map(. * 2)'")).out).toBe('[2,4,6]\n');
+    expect((await sh("echo '{\"a\":\"x1y2\"}' | jq -r '.a | gsub(\"[0-9]\"; \"#\")'")).out).toBe('x#y#\n');
+    expect((await sh('jq -e .missing d.json; echo rc=$?')).out).toBe('null\nrc=1\n');
+  }, 180_000);
+
+  it('ripgrep: recursive search, globs, types, .gitignore, counts', async () => {
+    await install('ripgrep');
+    await fs.mkdir('/home/user/w/rgp/src', { recursive: true });
+    await fs.mkdir('/home/user/w/rgp/.git', { recursive: true });
+    await fs.writeFile('/home/user/w/rgp/src/a.rs', 'fn alpha() {}\nfn beta() {}\n');
+    await fs.writeFile('/home/user/w/rgp/src/b.py', 'def alpha(): pass\n');
+    await fs.writeFile('/home/user/w/rgp/skip.log', 'alpha\n');
+    await fs.writeFile('/home/user/w/rgp/.gitignore', '*.log\n');
+    // the package is /usr/bin/rg; `rg` stays Shiro's builtin (its "shadow": false)
+    const r = await sh('cd rgp && /usr/bin/rg --sort path -n alpha');
+    expect(r.out).toBe('src/a.rs:1:fn alpha() {}\nsrc/b.py:1:def alpha(): pass\n');
+    expect((await sh('/usr/bin/rg -t py -l alpha')).out).toBe('src/b.py\n');
+    expect((await sh("/usr/bin/rg -g '*.rs' -c fn")).out).toBe('src/a.rs:2\n');
+    expect((await sh('/usr/bin/rg --version | head -1; /usr/bin/rg nothing-here; echo rc=$?')).out).toBe('ripgrep 15.2.0 (rev b05740ceb6)\nrc=1\n');
+  }, 180_000);
+
+  it('sqlite3: creates a database file, queries it, and reads SQL from stdin', async () => {
+    await install('sqlite');
+    expect((await sh("sqlite3 t.db 'create table t(a, b); insert into t values (1, \"x\"), (2, \"y\");'")).exitCode).toBe(0);
+    expect((await sh("sqlite3 t.db 'select sum(a), group_concat(b) from t'")).out).toBe('3|x,y\n');
+    expect((await sh("echo 'select count(*) from t;' | sqlite3 t.db")).out).toBe('2\n');
+    expect((await sh("sqlite3 -json t.db 'select a from t order by a'")).out).toBe('[{"a":1},\n{"a":2}]\n');
+  }, 180_000);
+
+  it('coreutils (uutils): the multi-call binary and its /usr/bin names', async () => {
+    await install('coreutils');
+    await fs.writeFile('/home/user/w/abc.txt', 'abc');
+    expect((await sh('coreutils sha256sum abc.txt')).out).toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  abc.txt\n');
+    expect((await sh('/usr/bin/factor 84')).out).toBe('84: 2 2 3 7\n');
+    expect((await sh("printf '3\\n1\\n2\\n' | /usr/bin/sort -n | /usr/bin/tr '\\n' ,")).out).toBe('1,2,3,');
+    expect((await sh('/usr/bin/numfmt --to=iec 1048576')).out).toBe('1.0M\n');
+    expect((await sh('/usr/bin/seq -s: 3')).out).toBe('1:2:3\n');
   }, 180_000);
 });

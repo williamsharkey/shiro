@@ -43,10 +43,11 @@ Shell and platform fixes these needed (all with tests in the same file):
 Smoke tests: `tests/tests/shiro-vitest/compat-tools.test.ts`, one `describe`
 per package, run from the shell as kernel processes; the interactive ones
 on a terminal pty (raw mode, alternate screen, resize, Ctrl-C/Ctrl-Z).
-Packages here are static x86-64 musl builds from `scripts/pkgbuild/x86/`
-(pinned upstream source and musl.cc toolchain), installed with `pkg install`
-and run in Blink, so they need a cross-origin isolated page
-(`"needs": ["x86"]`).
+Most packages here are static x86-64 builds, from `scripts/pkgbuild/x86/`
+(pinned upstream source and musl.cc toolchain) or upstream's own static
+releases (pinned sha256), installed with `pkg install` and run in Blink, so
+they need a cross-origin isolated page (`"needs": ["x86"]`). Rows marked
+WASI/WASIX are WASM packages run as kernel processes in workers.
 
 | Software | Version | Route | Status | Tested | Known issues |
 | --- | --- | --- | --- | --- | --- |
@@ -73,6 +74,10 @@ and run in Blink, so they need a cross-origin isolated page
 | openssl | 3.5.9 | pkg (Blink) | works | `dgst -sha256`, `enc -aes-256-cbc -pbkdf2`, `rand`, Ed25519 `genpkey`, self-signed `req -x509`, `x509 -subject` | no engines/providers beyond the default |
 | curl | 8.22.0 (OpenSSL 3.5.9, zlib) | pkg (Blink) | works | HTTP GET with headers against a loopback server on kernel sockets; connection refused is exit 7 | Remote hosts go through the server's WebSocket-to-TCP relay and DNS-over-HTTPS (not in the automated test). No HTTP/2, HTTP/3, IDN, libssh2 |
 | ca-certificates | 2026-09-25 (Mozilla, via curl.se) | pkg | works | `/etc/ssl/certs/ca-certificates.crt`, `/etc/ssl/cert.pem`; openssl and curl depend on it | |
+| jq | 1.8.1 | pkg (WASI) | works | filters, `-r`, `-s`, `gsub` (oniguruma), `-e` exit status | |
+| ripgrep | 15.2.0 | pkg (WASIX) | works as `/usr/bin/rg` | `.gitignore`, `-t`, `-g`, `-c`, `-l`, exit 1 on no match | plain `rg` is Shiro's builtin (the package doesn't take the name); no PCRE2; one search thread |
+| sqlite3 | 3.50.4 | pkg (WASI) | works | database file, queries, SQL on stdin, `-json` | interactive shell wants blocking stdin |
+| coreutils (uutils) | 0.12.0 | pkg (WASI) | works | `coreutils sha256sum`, `/usr/bin/factor`, `sort -n`, `tr`, `numfmt`, `seq` | builtins keep the plain names; use `/usr/bin/NAME` or `coreutils NAME` |
 | fd | 10.3.0 | pkg (Blink; upstream static musl release) | works | `-e`, `-t d`, `.gitignore` respected, `-u` | |
 | bat | 0.26.1 | pkg (Blink; upstream static musl release) | works | highlighting with the built-in themes (default and `--theme`), `-n`, plain output when piped, `--list-languages` | needed Blink patches 0016 (`pextrw`) and 0017 (`FUTEX_WAIT_BITSET`, `GRND_INSECURE`) and kernel `FIONBIO` on pipes |
 | fzf | 0.74.0 | pkg (Blink; upstream static Go release) | works | `-f` filter; the TUI with `--height` on the tty (cursor position report, typing narrows the list, Enter prints the pick) | Go runtime in Blink: start-up takes about a second |
