@@ -23,6 +23,8 @@ export interface RunWasiOptions {
   argv: string[];
   cwd?: string;
   env?: Record<string, string>;
+  /** Absolute directories to preopen by name besides "/" and "." (see wasmRunner) */
+  preopens?: string[];
 }
 
 const kernels = new WeakMap<FileSystem, Kernel>();
@@ -69,7 +71,7 @@ export async function runWasiProgram(ctx: CommandContext, opts: RunWasiOptions):
     fds = { 0: tty, 1: tty, 2: tty };
   } else {
     fds = {
-      0: new BufferFile(ctx.stdin || '', A.O_RDONLY),
+      0: new BufferFile(ctx.stdin || '', A.O_RDONLY, { fifo: !!ctx.stdin }),
       1: toTerminal
         ? new SinkFile((t) => term!.writeOutput(t.replace(/\r?\n/g, '\r\n')), { tty: true })
         : new SinkFile((t) => { ctx.stdout += t; }),
@@ -78,7 +80,7 @@ export async function runWasiProgram(ctx: CommandContext, opts: RunWasiOptions):
   }
 
   // Its own process group, so ^C reaches it and everything it spawns
-  const proc = kernel.spawn({ path: opts.argv[0], argv: opts.argv, env, cwd, fds, pgid: 0, run: wasmRunner(opts.module, opts.image) });
+  const proc = kernel.spawn({ path: opts.argv[0], argv: opts.argv, env, cwd, fds, pgid: 0, run: wasmRunner(opts.module, opts.image, opts.preopens) });
   pgid = proc.pgid;
   const abort = (ctx.shell as any)?.abortController as AbortController | null | undefined;
   const onAbort = () => { kernel.kill(-pgid, A.SIGINT); };

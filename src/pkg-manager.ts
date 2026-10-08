@@ -207,9 +207,11 @@ export function searchIndex(index: PkgIndex, query: string): PkgEntry[] {
 /** What the WASM process runtime (src/wasi/host.ts) can do in this page. */
 const MODE_FEATURES: Record<string, KernelFeature[]> = {
   // Worker per process/thread, blocking syscalls over SharedArrayBuffer
-  sab: ['blocking-stdin', 'tty', 'processes', 'threads', 'sync-fs', 'wasix'],
+  // ('wasix' stays out: the guest implements only its process/pipe/futex
+  // subset, and every WASIX package in the index still traps on it)
+  sab: ['blocking-stdin', 'tty', 'processes', 'threads', 'sync-fs'],
   // Main thread, imports suspend on the kernel (no shared memory, so no threads)
-  jspi: ['blocking-stdin', 'tty', 'processes', 'sync-fs', 'wasix'],
+  jspi: ['blocking-stdin', 'tty', 'processes', 'sync-fs'],
   none: [],
 };
 let runtimeMode: 'sab' | 'jspi' | 'none' | null = null;
@@ -553,9 +555,20 @@ export async function runPackageBinary(binPath: string, argv0: string, args: str
   // programs keep the in-page runtime, which adapts wasi_unstable.
   if (mode !== 'none' && entry?.abi !== 'wasi_unstable') {
     const { runWasiProgram } = await import('./wasi/run-command');
-    return runWasiProgram(ctx, { module: mod, image: bytes, argv, cwd: ctx.cwd, env: { ...ctx.env } });
+    return runWasiProgram(ctx, { module: mod, image: bytes, argv, cwd: ctx.cwd, env: { ...ctx.env }, preopens: await topLevelDirs(ctx.fs) });
   }
   return runInPage(mod, entry, argv, args, ctx);
+}
+
+/** "/usr", "/home", ...: preopened by name for libcs that don't match "/" (see wasmRunner). */
+async function topLevelDirs(fs: FileSystem): Promise<string[]> {
+  const out: string[] = [];
+  try {
+    for (const name of await fs.readdir('/')) {
+      try { if ((await fs.stat(`/${name}`)).type === 'dir') out.push(`/${name}`); } catch { /* skip */ }
+    }
+  } catch { /* none */ }
+  return out;
 }
 
 /** The older in-page runtime: files are read before the program starts. */

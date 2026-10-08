@@ -114,9 +114,9 @@ export const myCmd: Command = {
 ## Packages
 
 - `pkg` / `apt` / `apt-get` (`src/commands/pkg.ts`, `src/pkg-manager.ts`) install prebuilt WASM programs from `src/pkg-index.json`: sha256-checked downloads into `/usr/lib/pkg/<name>/`, symlinks in `/usr/bin`, state in `/var/lib/pkg/status.json`. Details, the index format and the package status table are in [docs/PACKAGES.md](docs/PACKAGES.md).
-- The shell runs anything resolving into `/usr/lib/pkg/` through `runPackageBinary`; an installed package's command wins over a builtin of the same name unless its bin entry says `"shadow": false`.
+- The shell runs anything resolving into `/usr/lib/pkg/` through `runPackageBinary`: a kernel process via `runWasiProgram` when the page can block, else the in-page `WasiRT` (always for `wasi_unstable` programs). An installed package's command wins over a builtin of the same name unless its bin entry says `"shadow": false` (coreutils applets, every WASIX command); `builtin NAME` reaches the builtin.
 - Packages built here come from `scripts/pkgbuild/<name>.sh` (wasi-sdk, pinned sources) and live in `public/pkg/`; registry packages are Wasmer WebC containers read by `src/webc.ts`.
-- Packages that need kernel features (`needs`: wasix, processes, threads, sockets, ...) stay gated until `globalThis.__shiroKernel.features` lists them.
+- Packages that need kernel features (`needs`: wasix, processes, threads, sockets, ...) stay gated until the WASM process mode (`src/wasi/host.ts`) or `globalThis.__shiroKernel.features` provides them.
 
 ## Build, Test, Deploy
 

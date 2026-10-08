@@ -9,9 +9,10 @@ setup_wasi_sdk
 cd "$SRC/src"
 # LUA_USE_POSIX-lite: no dlopen, no popen (no child processes), no readline.
 # tmpnam/system are absent from wasi-libc; loslib falls back to errors.
+# lua.c assumes stdin is a terminal unless told how to check (isatty).
 make -j"$(nproc)" a lua.o luac.o \
   CC="$CC" AR="$AR rcu" RANLIB="$RANLIB" \
-  MYCFLAGS="-O2 $SJLJ_CFLAGS $EMU_CFLAGS -DLUA_USE_C89 -Dl_system\(c\)=-1 -DLUA_TMPNAMBUFSIZE=32 -Dlua_tmpnam\(b,e\)=\{e=-1\;\}" \
+  MYCFLAGS="-O2 $SJLJ_CFLAGS $EMU_CFLAGS -include unistd.h -Dlua_stdin_is_tty\(\)=isatty\(0\) -DLUA_USE_C89 -Dl_system\(c\)=-1 -DLUA_TMPNAMBUFSIZE=32 -Dlua_tmpnam\(b,e\)=\{e=-1\;\}" \
   MYLIBS=""
 $CC -O2 -c -o wasi-compat.o "$COMPAT_SRC"
 $CC -O2 $SJLJ_CFLAGS -o lua.wasm lua.o wasi-compat.o liblua.a $SJLJ_LIBS $EMU_LIBS

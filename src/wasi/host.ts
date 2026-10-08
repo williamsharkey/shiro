@@ -122,21 +122,26 @@ export function installWasmLoader(kernel: Kernel): void {
 // ── Runners ──────────────────────────────────────────────────────────
 
 /** A Runner for `module`. `image` (the bytes) lets threaded modules get their shared memory. */
-export function wasmRunner(module: WebAssembly.Module, image?: Uint8Array): Runner {
+/**
+ * `extraPreopens`: more absolute directories to preopen under their own
+ * names. Some wasi-libc builds never match a "/" preopen against "/usr/...",
+ * so programs built with them only reach directories preopened by name.
+ */
+export function wasmRunner(module: WebAssembly.Module, image?: Uint8Array, extraPreopens: string[] = []): Runner {
   return async (proc, kernel) => {
     const mode = wasmProcessMode();
     if (mode === 'none') throw new Error('WASM processes need SharedArrayBuffer or JSPI');
     if (!proc.env.PWD) proc.env.PWD = proc.cwd;
-    const preopens = await openPreopens(kernel, proc);
+    const preopens = await openPreopens(kernel, proc, extraPreopens);
     if (typeof preopens === 'number') throw new Error(`cannot open preopened directories (errno ${-preopens})`);
     return mode === 'jspi' ? runJspi(kernel, proc, module, preopens) : runWorkers(kernel, proc, module, image, preopens);
   };
 }
 
-/** "/" and "." (the cwd) as WASI preopens, close-on-exec so children get their own. */
-async function openPreopens(kernel: Kernel, proc: Process): Promise<Preopen[] | number> {
+/** "/", any extra directories, and "." (the cwd) as WASI preopens, close-on-exec so children get their own. */
+async function openPreopens(kernel: Kernel, proc: Process, extra: string[] = []): Promise<Preopen[] | number> {
   const out: Preopen[] = [];
-  for (const [name, path] of [['/', '/'], ['.', proc.cwd]]) {
+  for (const [name, path] of [['/', '/'], ...extra.map(d => [d, d]), ['.', proc.cwd]]) {
     const f = await kernel.open(proc, path, A.O_RDONLY | A.O_DIRECTORY);
     if (typeof f === 'number') return f;
     const fd = proc.fds.alloc(f, 3, true);

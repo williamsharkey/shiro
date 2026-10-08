@@ -22,14 +22,27 @@ pkg update; pkg upgrade          # extra index lists from /etc/pkg/sources.list
 
 The shell runs anything that resolves into `/usr/lib/pkg/` through
 `runPackageBinary` (`src/pkg-manager.ts`): argv[0] is the link name (so
-multi-call binaries work), the command's recorded arguments are inserted, the
-package's data directories are preloaded, and stdin/stdout report
-`isatty() == false` when piped or redirected.
+multi-call binaries work), the command's recorded arguments are inserted, and
+stdin/stdout report `isatty() == false` when piped or redirected.
+
+When the page can block (SharedArrayBuffer, i.e. cross-origin isolated, or
+JSPI, which current Chrome has) the program runs as a kernel process through
+unix/wasi's `runWasiProgram` (`src/wasi/`): interactive stdin on a terminal,
+streamed output, files opened on demand, threads, child processes. The
+top-level directories are preopened by name as well as `/`, because some
+wasi-libc builds (uutils, figlet) never match a `/` preopen against
+`/usr/...`. Otherwise, and always for `wasi_unstable` programs (the kernel
+guest implements preview1 only), it uses the older in-page runtime
+(`src/wasi-runtime.ts`), which reads the working tree, the package's `preload`
+directories and the files named on the command line before the program
+starts.
 
 A package command takes precedence over a Shiro builtin of the same name
 (`jq`, `lua`, `sqlite3`) while it is installed; `builtin jq` still reaches the
-builtin. Commands marked `"shadow": false` (coreutils applets, so `ls` stays
-the builtin) don't. A missing command that a package provides prints
+builtin. Commands marked `"shadow": false` don't: coreutils applets (so `ls`
+stays the builtin), and every WASIX command (`grep`, `sed`, `bash`, `rg`, ...)
+until the kernel runs them, so a `--force` install can't break the shell's
+own tools. They stay reachable as `/usr/bin/<cmd>`. A missing command that a package provides prints
 `it can be installed with: pkg install <name>`.
 
 ## Index format
@@ -75,20 +88,23 @@ repo, copied to `dist/` by vite); outside a Shiro page they resolve against
 `needs` / `wants` use: `wasix`, `processes`, `threads`, `sockets`,
 `blocking-stdin`, `tty`, `sync-fs`. A package whose `needs` the kernel lacks is
 listed as `[needs kernel]`, `pkg install` refuses it without `--force`, and
-running it exits 126 unless `SHIRO_PKG_FORCE=1`. The kernel advertises what it
-supports with:
+running it exits 126 unless `SHIRO_PKG_FORCE=1`.
+
+What the kernel provides follows the WASM process mode (`wasmProcessMode()`
+in `src/wasi/host.ts`): `sab` gives blocking-stdin, tty, processes, threads and
+sync-fs; `jspi` the same without threads; `none` nothing. Other kernel parts
+can add features (`sockets` once unix/net lands, `wasix` once the guest runs
+the WASIX packages) with:
 
 ```js
-globalThis.__shiroKernel = { features: ['blocking-stdin', 'processes', ...] };
+globalThis.__shiroKernel = { features: ['sockets'] };
 ```
-
-The unix/wasi runtime should set this as features land; nothing else needs to
-change for the gated packages to become installable.
 
 ## Packages
 
-Status as of 2026-10-07, run through the shell in vitest (`pkg.test.ts`).
-"partial" means batch use works and an interactive mode waits for the kernel.
+Status as of 2026-10-08, run through the shell in vitest (`pkg.test.ts`), in
+both the in-page runtime and as kernel processes. "partial" means batch use
+works everywhere and the interactive mode needs a page that can block.
 
 | Package | Version | Source | ABI | Status |
 | --- | --- | --- | --- | --- |
@@ -117,8 +133,12 @@ Status as of 2026-10-07, run through the shell in vitest (`pkg.test.ts`).
 | clang 16, lld, llvm-ar/nm | 16 | Wasmer | WASIX | needs wasix, threads, processes, sync-fs (111 MB) |
 
 Every WASIX build on Wasmer imports `wasix_32v1` plus a shared `env.memory`
-(threads), so all of them wait on the kernel's worker processes, futexes and
-the WASIX syscall set. Not available as WASM anywhere checked: busybox, vim,
+(threads). On unix/wasi's kernel guest (forced `sab` mode, Node workers) they
+instantiate but trap at startup: grep, sed, rg and less throw a
+`WebAssembly.Exception`, and bash, dash and qjs-ng hit `unreachable`. Not
+traced further; the likely cause is a WASIX call the guest answers with ENOSYS
+(it implements only the process/pipe/futex subset). `pkg install --force grep` and `/usr/bin/grep`
+reproduce it. Not available as WASM anywhere checked: busybox, vim,
 git, make (no WASI builds; busybox and make also need processes).
 
 Dropped from the old list: Wasmer's `lua` 0.1.4 and `optipng` are emscripten

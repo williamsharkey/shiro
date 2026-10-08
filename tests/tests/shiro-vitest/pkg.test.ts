@@ -1,6 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, mkdtempSync, rmSync } from 'fs';
 import { createHash } from 'node:crypto';
+import { Worker } from 'node:worker_threads';
+import { build } from 'esbuild';
+import { setGuestWorkerFactory, forceWasmProcessMode } from '@shiro/wasi/host';
 import { createTestShell } from './helpers';
 import type { Shell } from '@shiro/shell';
 import type { FileSystem } from '@shiro/filesystem';
@@ -472,6 +475,63 @@ describe('real packages in the current runtime', () => {
     const bin = await downloadPackage('jq');
     expect(new Uint8Array(bin).slice(0, 4)).toEqual(new Uint8Array([0, 0x61, 0x73, 0x6d]));
     expect((await sh(shell, `echo '[1,2]' | wasi exec jq -c 'map(.*10)' | cat`)).out).toBe('[10,20]\n');
+  });
+});
+
+// The same packages as kernel processes (src/wasi): what a cross-origin
+// isolated page (SharedArrayBuffer) or Chrome with JSPI runs. Guests are
+// Node worker threads, as in kernel-wasi.test.ts.
+describe('real packages as kernel processes', () => {
+  let shell: Shell;
+  let fs: FileSystem;
+  let tmp: string;
+
+  beforeAll(async () => {
+    tmp = mkdtempSync(`${process.env.TMPDIR || '/tmp'}/shiro-pkg-kernel-`);
+    writeFileSync(`${tmp}/entry.ts`, `
+      import { parentPort } from 'node:worker_threads';
+      import { guestMain } from ${JSON.stringify(`${REPO}/src/wasi/guest-worker.ts`)};
+      const port: any = { postMessage: (m: unknown) => parentPort!.postMessage(m), onmessage: null };
+      parentPort!.on('message', (data) => port.onmessage && port.onmessage({ data }));
+      guestMain(port);
+    `);
+    await build({ entryPoints: [`${tmp}/entry.ts`], bundle: true, platform: 'node', format: 'esm', outfile: `${tmp}/guest.mjs`, logLevel: 'error' });
+    setGuestWorkerFactory(() => {
+      const w = new Worker(`${tmp}/guest.mjs`);
+      return {
+        postMessage: (m) => w.postMessage(m),
+        terminate: () => w.terminate(),
+        onMessage: (cb) => { w.on('message', cb); },
+        onError: (cb) => { w.on('error', cb); },
+      };
+    });
+    forceWasmProcessMode('sab');
+  });
+  afterAll(() => {
+    forceWasmProcessMode(null);
+    setGuestWorkerFactory(null);
+    rmSync(tmp, { recursive: true, force: true });
+  });
+  beforeEach(async () => {
+    ({ shell, fs } = await createTestShell());
+    vi.stubGlobal('fetch', vi.fn(fakeFetch));
+  });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('runs packages with files opened on demand, absolute paths, and piped stdin', async () => {
+    expect((await sh(shell, 'pkg install lua sqlite jq coreutils')).exitCode).toBe(0);
+    expect((await sh(shell, `echo 'print(1+1)' | lua`)).out).toBe('2\n'); // piped stdin is not a terminal
+    expect((await sh(shell, 'coreutils ls /usr/lib/pkg | cat')).out).toMatch(/^coreutils\n(.*\n)*lua\n(.*\n)*sqlite\n/);
+    await sh(shell, `cd /home/user && sqlite3 k.db "create table t(x); insert into t values (7);"`);
+    expect((await sh(shell, `cd /home/user && sqlite3 k.db 'select x * 6 from t;'`)).out).toBe('42\n');
+    expect((await sh(shell, `echo '[3,4]' | jq -c 'map(. * 2)' | cat`)).out).toBe('[6,8]\n');
+  }, 60_000);
+
+  it('WASIX stays gated even though the kernel can block', async () => {
+    const r = await sh(shell, 'pkg install grep');
+    expect(r.exitCode).toBe(100);
+    expect(r.err).toContain('wasix');
+    expect(r.err).not.toContain('threads'); // the kernel provides those now
   });
 });
 

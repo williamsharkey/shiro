@@ -354,8 +354,8 @@
     {
      "path": "bin/lua.wasm",
      "url": "/pkg/lua/5.4.7/lua.wasm",
-     "sha256": "f02fb9729d57a46430f5dc0f05947de851ad2097f53e51327e5659981acf14fe",
-     "size": 315097
+     "sha256": "fd983bcee7d32de1bd68e713b60c05dccae2b5af642c312d2ba9fd1dad85d77d",
+     "size": 315159
     },
     {
      "path": "bin/luac.wasm",
@@ -896,7 +896,8 @@
    ],
    "bin": {
     "bash": {
-     "file": "bin/bash.wasm"
+     "file": "bin/bash.wasm",
+     "shadow": false
     }
    },
    "needs": [
@@ -932,7 +933,8 @@
    ],
    "bin": {
     "dash": {
-     "file": "bin/dash.wasm"
+     "file": "bin/dash.wasm",
+     "shadow": false
     }
    },
    "needs": [
@@ -968,7 +970,8 @@
    ],
    "bin": {
     "grep": {
-     "file": "bin/grep.wasm"
+     "file": "bin/grep.wasm",
+     "shadow": false
     }
    },
    "needs": [
@@ -999,7 +1002,8 @@
    ],
    "bin": {
     "sed": {
-     "file": "bin/sed.wasm"
+     "file": "bin/sed.wasm",
+     "shadow": false
     }
    },
    "needs": [
@@ -1033,7 +1037,8 @@
    ],
    "bin": {
     "less": {
-     "file": "bin/less.wasm"
+     "file": "bin/less.wasm",
+     "shadow": false
     }
    },
    "needs": [
@@ -1066,7 +1071,8 @@
    ],
    "bin": {
     "rg": {
-     "file": "bin/rg.wasm"
+     "file": "bin/rg.wasm",
+     "shadow": false
     }
    },
    "needs": [
@@ -1107,7 +1113,8 @@
    ],
    "bin": {
     "curl": {
-     "file": "bin/curl.wasm"
+     "file": "bin/curl.wasm",
+     "shadow": false
     }
    },
    "needs": [
@@ -1139,7 +1146,8 @@
    ],
    "bin": {
     "qjs-ng": {
-     "file": "bin/qjs.wasm"
+     "file": "bin/qjs.wasm",
+     "shadow": false
     }
    },
    "needs": [
@@ -1173,7 +1181,8 @@
    ],
    "bin": {
     "php": {
-     "file": "bin/php.wasm"
+     "file": "bin/php.wasm",
+     "shadow": false
     }
    },
    "needs": [
@@ -1205,7 +1214,8 @@
    ],
    "bin": {
     "python3.13": {
-     "file": "bin/python.wasm"
+     "file": "bin/python.wasm",
+     "shadow": false
     }
    },
    "needs": [
@@ -1273,22 +1283,28 @@
    ],
    "bin": {
     "clang-16": {
-     "file": "bin/clang-16.wasm"
+     "file": "bin/clang-16.wasm",
+     "shadow": false
     },
     "clang": {
-     "file": "bin/clang-16-slim.wasm"
+     "file": "bin/clang-16-slim.wasm",
+     "shadow": false
     },
     "wasm-ld": {
-     "file": "bin/lld.wasm"
+     "file": "bin/lld.wasm",
+     "shadow": false
     },
     "lld": {
-     "file": "bin/lld.wasm"
+     "file": "bin/lld.wasm",
+     "shadow": false
     },
     "llvm-ar": {
-     "file": "bin/llvm-ar.wasm"
+     "file": "bin/llvm-ar.wasm",
+     "shadow": false
     },
     "llvm-nm": {
-     "file": "bin/llvm-nm.wasm"
+     "file": "bin/llvm-nm.wasm",
+     "shadow": false
     }
    },
    "needs": [
