@@ -6,7 +6,7 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **842/1567 (53.7%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **844/1567 (53.9%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **381/635 (60.0%)** |
 
 How each suite runs, and what is and isn't scored, is described in
@@ -48,7 +48,7 @@ How each suite runs, and what is and isn't scored, is described in
 | builtin-bracket | 0/50 | 40/50 | 10 |
 | builtin-cd | 3/28 | 14/28 | 14 |
 | builtin-special | 1/12 | 7/12 | 5 |
-| builtin-type | 0/6 | 0/6 | 6 |
+| builtin-type | 0/6 | 1/6 | 5 |
 | builtin-vars | 0/38 | 26/38 | 12 |
 | dbracket | 1/49 | 19/49 | 30 |
 | dparen | 0/14 | 6/14 | 8 |
@@ -66,7 +66,7 @@ How each suite runs, and what is and isn't scored, is described in
 | subshell | 0/2 | 2/2 | 0 |
 | command_ | 2/16 | 7/16 | 9 |
 | posix | 2/15 | 10/15 | 5 |
-| alias | 1/48 | 28/48 | 20 |
+| alias | 1/48 | 29/48 | 19 |
 | let | 0/2 | 1/2 | 1 |
 | empty-bodies | 0/3 | 3/3 | 0 |
 | whitespace | 0/0 | 0/0 | 0 |
@@ -111,7 +111,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **builtin-bracket**: -a as unary operator (alias of -e); -k for sticky bit; test -p named pipe; -u for setuid, -g too; -v to test variable (bash); test -o for options; -ef; test -c; No octal, hex, base N conversion - leading 0 is a regular decimal; Looks like octal, but digit is too big
 - **builtin-cd**: cd BAD/..; cd with 2 or more args - with strict_arg_parse; $OLDPWD; pwd with symlink and -P; setting $PWD doesn't affect the value of 'pwd' builtin; lie about PWD; pwd before any cd; pwd in symlinked dir on shell initialization; Test the current directory after 'cd ..' involving symlinks; cd away from dir that was deleted; cd permits double bare dash; cd to symlink with -L and -P; cd to relative path with -L and -P; CDPATH is respected; Survey of getcwd() syscall
 - **builtin-special**: Prefix assignments persist after special builtins, like : (set -o posix); Prefix assignments persist after readonly, but NOT exported (set -o posix); Prefix binding for exec is a special case (versus e.g. readonly); bash 'type' gets confused - says 'function', but runs builtin; command, builtin - both can be redefined, not special (regression)
-- **builtin-type**: type -\> keyword builtin; type -\> alias external; type of relative path; type -\> not found; special builtins are called out; more special builtins
+- **builtin-type**: type -\> keyword builtin; type -\> alias external; type of relative path; special builtins are called out; more special builtins
 - **builtin-vars**: Export sets a global variable that persists after export -n; Export a local that shadows a global; Unset exported variable, then define it again.  It's NOT still exported.; Exporting a parent func variable (dynamic scope); Unset a function without -f; Unset and scope (bug #653); Unset array member; unset -v assoc (related to issue #661); Unset array member with dynamic parsing; local after readonly; unset a[-1] (bf.bash regression); unset a[-1] in sparse array (bf.bash regression)
 - **dbracket**: equality; [[ regex syntax error; \|\| chain; [[ compound expressions; precedence of && and \|\| inside [[; Octal literals with -eq; \> on strings; -eq on strings; [[ with op variable (compare with test-builtin.test.sh); [[ at runtime doesn't work; [[ with env prefix doesn't work; [[ over multiple lines is OK; Argument that looks like a real operator; User array compared to "$@" (broken unless shopt -s strict_array); Array coerces to string (shopt -s strict_array to disallow); -eq does dynamic arithmetic parsing (not supported in OSH); -eq coercion produces weird results; [[ '(' foo ]] is syntax error; [[ -z ]] is syntax error; [[ -z '\>' ]]; [[ -z '\>' a ]] is syntax error; [[ ]] is syntax error; [[ && ]] is syntax error; [[ a 3\< b ]] doesn't work (bug regression); more tilde expansion; tilde expansion with =~ (confusing); [[ ]] with redirect; special chars; \(\) in pattern (regression); negative numbers - zero, decimal, octal, hex, base N
 - **dparen**: (( )) with arrays; bash and mksh: V in (( a[K] = V )) gets coerced to integer; bash: K in (( A[K] = V )) is a constant string; bash: V in (( A["K"] = V )) gets coerced to integer; (( )) with redirect; Assigning whole raray (( b = a )); set associative array; Example of incrementing associative array entry with var key (ble.sh)
@@ -128,7 +128,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **errexit**: More && \|\|; errexit and loop; errexit and brace group { }; set errexit while it's ignored in a subshell (moot with strict_errexit); errexit double guard; background processes respect errexit; pipeline process respects errexit; simple command / assign - redir failure DOES respect errexit; bash atoms [[ (( - redir failure checked; Command sub exit code is lost
 - **command_**: Command block; Permission denied; $PATH lookup; filling $PATH cache, then insert the same command earlier in cache; filling $PATH cache, then deleting command; Non-executable on $PATH; hash without args prints the cache; hash with args; Executing command with same name as directory in PATH (#2429)
 - **posix**: Empty for loop without in.  Do can be on the same line I guess.; Empty action for case is syntax error; Bare semi-colon not allowed; Command substitution in default; Newlines in compound lists
-- **alias**: Usage of builtins; Basic alias; define and use alias on a single line; unalias -a; alias with trailing space causes alias expansion on second word; Recursive alias expansion of SECOND word; Alias must be an unquoted word, no expansions allowed; first and second word are the same alias, with trailing space; Syntax error after expansion; Loop split across alias in another way; Loop split across both iterative and recursive aliases; Alias with a quote in the middle is a syntax error; Two aliases in pipeline; Alias can be defined and used on a single line; alias with line continuation in the middle; alias for left brace; alias for left paren; here doc inside alias; Corner case: alias inside LHS array arithmetic expression; alias with word of multiple lines
+- **alias**: Usage of builtins; Basic alias; define and use alias on a single line; alias with trailing space causes alias expansion on second word; Recursive alias expansion of SECOND word; Alias must be an unquoted word, no expansions allowed; first and second word are the same alias, with trailing space; Syntax error after expansion; Loop split across alias in another way; Loop split across both iterative and recursive aliases; Alias with a quote in the middle is a syntax error; Two aliases in pipeline; Alias can be defined and used on a single line; alias with line continuation in the middle; alias for left brace; alias for left paren; here doc inside alias; Corner case: alias inside LHS array arithmetic expression; alias with word of multiple lines
 - **let**: let with ()
 - **shell-grammar**: If with then on same line missing semicolon
 - **process-sub**: Process sub input; Process sub from external process to stdin; Process sub from shell to stdin; Non-linear pipeline with \>(); status code is available; shopt -s process_sub_fail; process subs and pipelines together; process sub in background &

@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Worker } from 'node:worker_threads';
-import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { build } from 'esbuild';
 import { createTestShell } from './helpers';
@@ -15,10 +15,13 @@ import type { Shell } from '@shiro/shell';
 import type { FileSystem } from '@shiro/filesystem';
 import type { GuestWorker } from '@shiro/kernel/worker-host';
 import { setGuestWorkerFactory, forceWasmProcessMode } from '@shiro/wasi/host';
+import { readTarball } from '@shiro/utils/tar';
+import { createPathShims } from '@shiro/path-shims';
 
 const here = __dirname;
 const REPO = path.resolve(here, '../../..');
 const srcWasi = path.join(REPO, 'src/wasi');
+const CACHE = `${REPO}/tests/.pkg-cache`;
 let tmp: string;
 const realFetch = globalThis.fetch;
 
@@ -52,6 +55,17 @@ beforeAll(async () => {
       const file = `${REPO}/public${m[1]}`;
       return existsSync(file) ? new Response(readFileSync(file)) : new Response('not found', { status: 404 });
     }
+    // Package downloads from npm go to the network once, then tests/.pkg-cache
+    if (url.startsWith('https://registry.npmjs.org/') && url.endsWith('.tgz')) {
+      const file = `${CACHE}/${url.split('/').pop()}`;
+      if (!existsSync(file)) {
+        const resp = await realFetch(url);
+        if (!resp.ok) return resp;
+        mkdirSync(CACHE, { recursive: true });
+        writeFileSync(file, new Uint8Array(await resp.arrayBuffer()));
+      }
+      return new Response(readFileSync(file));
+    }
     return realFetch(input, init);
   }) as typeof fetch;
 }, 120_000);
@@ -68,6 +82,26 @@ async function sh(shell: Shell, cmd: string) {
   let err = '';
   const exitCode = await shell.execute(cmd, s => { out += s; }, s => { err += s; });
   return { out: out.replace(/\r\n/g, '\n'), err: err.replace(/\r\n/g, '\n'), exitCode };
+}
+
+/** A download pinned by sha256, cached in tests/.pkg-cache. */
+async function cachedDownload(url: string, sha: string): Promise<Uint8Array> {
+  const file = `${CACHE}/${url.split('/').pop()}`;
+  if (!existsSync(file)) {
+    const resp = await realFetch(url);
+    if (!resp.ok) throw new Error(`${url}: HTTP ${resp.status}`);
+    mkdirSync(CACHE, { recursive: true });
+    writeFileSync(file, new Uint8Array(await resp.arrayBuffer()));
+  }
+  const data = new Uint8Array(readFileSync(file));
+  expect(createHash('sha256').update(data).digest('hex')).toBe(sha);
+  return data;
+}
+
+/** What boot creates that programs look for: PATH shims, /bin/sh, /usr/bin/env, /tmp */
+async function bootFiles(fs: FileSystem) {
+  await fs.mkdir('/tmp', { recursive: true });
+  await createPathShims(fs);
 }
 
 async function script(fs: FileSystem, file: string, text: string) {
@@ -413,4 +447,218 @@ describe('python3 (CPython WASI package)', () => {
     const sys = await py('/usr/bin/python3 -c "import sys; print(sys.prefix)"');
     expect(sys.out).toBe('/usr/lib/pkg/python3\n');
   }, 60_000);
+
+  it('a file renamed or unlinked while open keeps every write (kernel inodes follow renames)', async () => {
+    const r = await py(`cd /home/user && python3 -c "
+import os
+f = open('part.tmp', 'w'); f.write('x' * 5000); f.flush()
+os.rename('part.tmp', 'final.txt'); f.write('y'); f.close()
+g = open('gone.txt', 'w'); g.write('z'); os.unlink('gone.txt'); g.write('more'); g.close()
+print(os.path.getsize('final.txt'), os.path.exists('part.tmp'), os.path.exists('gone.txt'))
+"`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('5001 False False\n');
+  }, 60_000);
+});
+
+// ── C: GNU make + clang/LLVM 21 for WASI, building to wasm32-wasip1 ────
+
+describe('make and clang (llvm package)', () => {
+  let shell: Shell;
+  let fs: FileSystem;
+  beforeAll(async () => {
+    ({ fs, shell } = await createTestShell());
+    await bootFiles(fs);
+    const r = await sh(shell, 'pkg install make llvm');
+    expect(r.err).toBe('');
+    expect(r.exitCode).toBe(0);
+  }, 300_000);
+
+  it('GNU make: shell recipes, $(shell), pattern rules, -C, up-to-date checks', async () => {
+    await fs.mkdir('/home/user/mk', { recursive: true });
+    await fs.writeFile('/home/user/mk/Makefile', [
+      'NAME := world', 'SRCS := $(wildcard *.txt)', 'all: out.txt', '\t@echo built $(NAME) from $(SRCS)',
+      'out.txt: in.txt', '\tcat in.txt | tr a-z A-Z > $@', '\t@echo "in $(notdir $(CURDIR)): $(shell ls | wc -l) files"',
+      '%.up: %.txt', '\ttr a-z A-Z < $< > $@', 'clean:', '\trm -f out.txt *.up', ''].join('\n'));
+    await fs.writeFile('/home/user/mk/in.txt', 'hello\n');
+    let r = await sh(shell, 'cd /home/user/mk && make');
+    expect(r.err).toBe('');
+    // the whole recipe is expanded before its first line runs: out.txt isn't there yet
+    expect(r.out).toBe('cat in.txt | tr a-z A-Z > out.txt\nin mk: 2 files\nbuilt world from in.txt\n');
+    r = await sh(shell, 'cd /home/user/mk && cat out.txt && make && make in.up && cat in.up');
+    expect(r.out).toBe('HELLO\nbuilt world from in.txt out.txt\ntr a-z A-Z < in.txt > in.up\nHELLO\n');
+    r = await sh(shell, 'cd / && make -C /home/user/mk clean');
+    expect(r.out).toContain("make: Entering directory '/home/user/mk'\nrm -f out.txt *.up\n");
+    expect(await fs.exists('/home/user/mk/out.txt')).toBe(false);
+  }, 120_000);
+
+  it('clang compiles and links C to WASI; the program runs', async () => {
+    await fs.mkdir('/home/user/c', { recursive: true });
+    await fs.writeFile('/home/user/c/hello.c', '#include <stdio.h>\n#include <string.h>\nint main(int c, char **v) { printf("hello %s %zu\\n", c > 1 ? v[1] : "world", strlen("abc")); return 0; }\n');
+    const r = await sh(shell, 'cd /home/user/c && clang -O2 -Wall hello.c -o hello && ./hello shiro');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('hello shiro 3\n');
+    expect((await sh(shell, 'clang --version')).out).toContain('clang version 21.1.4');
+  }, 120_000);
+
+  it('a multi-file project: make, cc -c, a static library with llvm-ar, rebuild after a header changes', async () => {
+    const d = '/home/user/proj';
+    await fs.mkdir(d, { recursive: true });
+    await fs.writeFile(`${d}/Makefile`, 'CC = cc\nCFLAGS = -O2 -Wall\nOBJS = main.o libsq.a\nprog: main.o libsq.a\n\t$(CC) -o $@ main.o -L. -lsq\nlibsq.a: util.o\n\tllvm-ar rcs $@ $^\n%.o: %.c util.h\n\t$(CC) $(CFLAGS) -c $<\nclean:\n\trm -f prog *.o *.a\n');
+    await fs.writeFile(`${d}/util.h`, 'int square(int);\n');
+    await fs.writeFile(`${d}/util.c`, '#include "util.h"\nint square(int x) { return x * x; }\n');
+    await fs.writeFile(`${d}/main.c`, '#include <stdio.h>\n#include <stdlib.h>\n#include "util.h"\nint main(int argc, char **argv) { printf("%d\\n", square(argc > 1 ? atoi(argv[1]) : 12)); return 0; }\n');
+    let r = await sh(shell, `cd ${d} && make && ./prog && ./prog 7`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('cc -O2 -Wall -c main.c\ncc -O2 -Wall -c util.c\nllvm-ar rcs libsq.a util.o\ncc -o prog main.o -L. -lsq\n144\n49\n');
+    r = await sh(shell, `cd ${d} && make && touch util.h && make && llvm-nm libsq.a`);
+    expect(r.out).toBe("make: 'prog' is up to date.\ncc -O2 -Wall -c main.c\ncc -O2 -Wall -c util.c\nllvm-ar rcs libsq.a util.o\ncc -o prog main.o -L. -lsq\n\nutil.o:\n00000001 T square\n");
+  }, 180_000);
+
+  it('a real project: zlib 1.3.1 builds with its Makefile and passes its own test', async () => {
+    const tgz = await cachedDownload('https://zlib.net/fossils/zlib-1.3.1.tar.gz', '9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23');
+    for (const e of await readTarball(tgz)) {
+      if (e.type !== '0' || !/^zlib-1\.3\.1\/(test\/)?[^/]+$/.test(e.name)) continue;
+      const p = `/home/user/${e.name}`;
+      await fs.mkdir(p.slice(0, p.lastIndexOf('/')), { recursive: true });
+      await fs.writeFile(p, e.data);
+    }
+    // configure's job (it needs a shell that can pass multi-line arguments to sed)
+    const mk = 'make -f Makefile.in CC=cc "CFLAGS=-O2 -DHAVE_UNISTD_H"';
+    let r = await sh(shell, `cd /home/user/zlib-1.3.1 && ${mk} libz.a example minigzip`);
+    expect(r.exitCode).toBe(0);
+    r = await sh(shell, `cd /home/user/zlib-1.3.1 && ${mk} teststatic && echo "hello hello hello" | ./minigzip | ./minigzip -d`);
+    expect(r.out).toContain('zlib version 1.3.1');
+    expect(r.out).toContain('*** zlib test OK ***');
+    expect(r.out.endsWith('hello hello hello\n')).toBe(true);
+  }, 600_000);
+
+  it('compile errors are reported with the exit status', async () => {
+    await fs.writeFile('/home/user/c/bad.c', 'int main(void) { return undefined_thing; }\n');
+    const r = await sh(shell, 'cd /home/user/c && cc bad.c -o bad');
+    expect(r.exitCode).not.toBe(0);
+    expect(r.err).toContain("bad.c:1:25: error: use of undeclared identifier 'undefined_thing'");
+  }, 60_000);
+});
+
+// ── Go: the toolchain itself on wasip1, building GOOS=wasip1 programs ──
+
+describe('go (toolchain on wasip1)', () => {
+  let shell: Shell;
+  let fs: FileSystem;
+  beforeAll(async () => {
+    ({ fs, shell } = await createTestShell());
+    await bootFiles(fs);
+    const r = await sh(shell, 'pkg install go');
+    expect(r.err).toBe('');
+    expect(r.exitCode).toBe(0);
+  }, 300_000);
+
+  it('go version, go env, gofmt', async () => {
+    expect((await sh(shell, 'go version')).out).toBe('go version go1.24.7 wasip1/wasm\n');
+    expect((await sh(shell, 'go env GOROOT GOOS GOARCH GOCACHE GOTOOLCHAIN')).out)
+      .toBe('/usr/lib/pkg/go\nwasip1\nwasm\n/usr/lib/pkg/go/cache\nlocal\n');
+    await fs.writeFile('/tmp/ugly.go', 'package main\nimport "fmt"\nfunc main(){fmt.Println( "x" )}\n');
+    expect((await sh(shell, 'gofmt /tmp/ugly.go')).out).toBe('package main\n\nimport "fmt"\n\nfunc main() { fmt.Println("x") }\n');
+  }, 60_000);
+
+  it('go build: a module with two packages, from the shipped std cache; the program runs commands with os/exec', async () => {
+    const d = '/home/user/gohello';
+    await fs.mkdir(`${d}/greet`, { recursive: true });
+    await fs.writeFile(`${d}/go.mod`, 'module example.com/gohello\n\ngo 1.24\n');
+    await fs.writeFile(`${d}/greet/greet.go`, 'package greet\n\nimport "strings"\n\n// Hello greets name.\nfunc Hello(name string) string { return "hello, " + strings.ToUpper(name) }\n');
+    await fs.writeFile(`${d}/main.go`, [
+      'package main', '', 'import (', '\t"fmt"', '\t"os"', '\t"os/exec"', '\t"strings"', '', '\t"example.com/gohello/greet"', ')', '',
+      'func main() {', '\tout, err := exec.Command("echo", "from", "a", "child").Output()', '\tif err != nil {', '\t\tpanic(err)', '\t}',
+      '\tfmt.Println(greet.Hello(os.Args[1]), strings.TrimSpace(string(out)))', '}', ''].join('\n'));
+    const t0 = Date.now();
+    const r = await sh(shell, `cd ${d} && go build -o hello.wasm . && ./hello.wasm gopher`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('hello, GOPHER from a child\n');
+    expect(Date.now() - t0).toBeLessThan(60_000); // std came from the cache
+    expect((await sh(shell, `cd ${d} && go vet ./... && go run . again`)).out).toBe('hello, AGAIN from a child\n');
+  }, 240_000);
+
+  it('go test runs a package test', async () => {
+    const d = '/home/user/gohello';
+    await fs.writeFile(`${d}/greet/greet_test.go`, 'package greet\n\nimport "testing"\n\nfunc TestHello(t *testing.T) {\n\tif got := Hello("x"); got != "hello, X" {\n\t\tt.Fatalf("got %q", got)\n\t}\n}\n');
+    const r = await sh(shell, `cd ${d} && go test ./greet`);
+    expect(r.out).toMatch(/^ok\s+example\.com\/gohello\/greet\s+[\d.]+s\n$/);
+  }, 600_000);
+});
+
+// ── Ruby 3.4 (ruby.wasm CLI build) ─────────────────────────────────────
+
+describe('ruby', () => {
+  let shell: Shell;
+  let fs: FileSystem;
+  beforeAll(async () => {
+    ({ fs, shell } = await createTestShell());
+    await bootFiles(fs);
+    const r = await sh(shell, 'pkg install ruby');
+    expect(r.err).toBe('');
+    expect(r.exitCode).toBe(0);
+  }, 300_000);
+
+  it('ruby -e with the standard library (json, set, digest, time)', async () => {
+    const r = await sh(shell, `ruby -e 'require "json"; require "set"; require "digest"; require "time"; puts RUBY_VERSION, JSON.generate({a: [1, 2]}), Set[3, 1, 3].size, Digest::SHA256.hexdigest("x")[0, 8], Time.at(0).utc.iso8601'`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('3.4.1\n{"a":[1,2]}\n2\n2d711642\n1970-01-01T00:00:00Z\n');
+  }, 120_000);
+
+  it('#!/usr/bin/env ruby scripts with argv, stdin and files; minitest', async () => {
+    await script(fs, '/home/user/wc.rb', '#!/usr/bin/env ruby\nwords = STDIN.read.split\nFile.write(ARGV[0], words.map(&:upcase).join(" "))\nputs "#{words.size} words"\n');
+    let r = await sh(shell, 'cd /home/user && echo "a b c" | ./wc.rb out.txt && cat out.txt');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('3 words\nA B C');
+    await fs.writeFile('/home/user/calc_test.rb', 'require "minitest/autorun"\n\nclass CalcTest < Minitest::Test\n  def test_add\n    assert_equal 4, 2 + 2\n  end\n\n  def test_upcase\n    assert_equal "AB", "ab".upcase\n  end\nend\n');
+    r = await sh(shell, 'cd /home/user && ruby calc_test.rb')
+    expect(r.out).toMatch(/2 runs, 2 assertions, 0 failures, 0 errors, 0 skips/);
+  }, 120_000);
+
+  it('rake runs a Rakefile; gem lists the default gems', async () => {
+    await fs.mkdir('/home/user/rk', { recursive: true });
+    await fs.writeFile('/home/user/rk/Rakefile', 'task default: [:build]\ntask :prep do\n  puts "prep"\nend\ntask build: :prep do\n  puts "build"\nend\n');
+    let r = await sh(shell, 'cd /home/user/rk && rake');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('prep\nbuild\n');
+    r = await sh(shell, 'gem list json')
+    expect(r.out).toMatch(/^json \(.*2\.9\.1/m);
+  }, 180_000);
+});
+
+// ── Perl 5.40: static x86-64 Linux build in Blink ──────────────────────
+
+describe('perl (x86-64 in Blink)', () => {
+  let shell: Shell;
+  let fs: FileSystem;
+  beforeAll(async () => {
+    ({ fs, shell } = await createTestShell());
+    await bootFiles(fs);
+    const r = await sh(shell, 'pkg install perl');
+    expect(r.err).toBe('');
+    expect(r.exitCode).toBe(0);
+  }, 300_000);
+
+  it('perl -e, core modules, and no locale warnings', async () => {
+    const r = await sh(shell, `perl -e 'use List::Util qw(sum max); use Data::Dumper; $Data::Dumper::Terse = 1; $Data::Dumper::Indent = 0; printf "%s %d %d %s\\n", $^V, sum(1..4), max(3, 9, 2), Dumper({a => [1]})'`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe("v5.40.0 10 9 {'a' => [1]}\n");
+  }, 120_000);
+
+  it('#!/usr/bin/env perl scripts: argv, stdin, files, regexes, backticks and system()', async () => {
+    await script(fs, '/home/user/count.pl', '#!/usr/bin/env perl\nuse strict; use warnings;\nmy %n; while (<STDIN>) { $n{lc $1}++ while /(\\w+)/g }\nopen my $fh, ">", $ARGV[0] or die; print $fh join(",", map { "$_=$n{$_}" } sort keys %n), "\\n"; close $fh;\nmy $c = `cat $ARGV[0]`; print "file: $c"; system("echo", "child", "ok") == 0 or die;\n');
+    const r = await sh(shell, 'cd /home/user && printf "The cat. the dog\\n" | ./count.pl out.txt');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('file: cat=1,dog=1,the=2\nchild ok\n');
+  }, 120_000);
+
+  it('Test::More tests run (TAP), and open "-|" reads a child perl', async () => {
+    await fs.mkdir('/home/user/pt/t', { recursive: true });
+    await fs.writeFile('/home/user/pt/t/basic.t', 'use strict; use Test::More tests => 2;\nis(1 + 1, 2, "adds");\nlike("hello", qr/ell/, "matches");\n');
+    let r = await sh(shell, 'cd /home/user/pt && perl t/basic.t');
+    expect(r.out).toBe('1..2\nok 1 - adds\nok 2 - matches\n');
+    r = await sh(shell, `perl -e 'open my $fh, "-|", "perl", "-e", "print qq(from child\\n)" or die; print "got: ", <$fh>; close $fh; print "rc=$?\\n"'`);
+    expect(r.out).toBe('got: from child\nrc=0\n');
+  }, 300_000);
 });

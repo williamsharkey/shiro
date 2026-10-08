@@ -436,6 +436,221 @@
    "notes": "pip installs pure-Python wheels from PyPI (no native extensions, no sdists yet); python -m venv works. No subprocess, sockets or ssl (WASI preview1); the REPL needs blocking stdin."
   },
   {
+   "name": "make",
+   "version": "4.4.1",
+   "description": "GNU make: recipes run as kernel processes (sh -c through posix_spawn)",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz",
+   "homepage": "https://www.gnu.org/software/make/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/make.sh",
+   "section": "devel",
+   "abi": "wasi_snapshot_preview1",
+   "files": [
+    {
+     "path": "bin/make.wasm",
+     "url": "/pkg/make/4.4.1/make.wasm",
+     "sha256": "38754de7d22d7ffda8ca84ad22451741d3f01e54b469be013e984b88b4f052ea",
+     "size": 258573
+    }
+   ],
+   "bin": {
+    "make": {
+     "file": "bin/make.wasm"
+    },
+    "gmake": {
+     "file": "bin/make.wasm"
+    }
+   },
+   "needs": [
+    "processes"
+   ],
+   "notes": "Built with Shiro's process shim (scripts/pkgbuild/compat/wasi-proc.c). No jobserver: -j runs one job at a time. No -O output sync, load average, guile or loadable modules."
+  },
+  {
+   "name": "llvm",
+   "version": "21.1.4",
+   "description": "Clang/LLVM 21 for WASI: clang, clang++, cc, c++, wasm-ld, llvm-ar and friends, with the wasi-libc sysroot (targets wasm32-wasip1)",
+   "license": "Apache-2.0 WITH LLVM-exception",
+   "source": "https://github.com/YoWASP/clang",
+   "homepage": "https://yowasp.org/",
+   "origin": "npm",
+   "recipe": "scripts/pkgbuild/llvm.sh",
+   "section": "devel",
+   "abi": "wasi_snapshot_preview1",
+   "files": [
+    {
+     "path": "bin/llvm.wasm",
+     "tar": {
+      "member": "package/gen/llvm.core.wasm"
+     },
+     "url": "https://registry.npmjs.org/@yowasp/clang/-/clang-21.1.4-3.tgz",
+     "sha256": "9c082ea5cac9489966adbe381529bf13bde18646126e98b8b089d83f57fe5e27",
+     "size": 26386607
+    },
+    {
+     "path": "sysroot",
+     "tar": {
+      "member": "package/gen/llvm-resources.tar",
+      "unpack": true
+     },
+     "url": "https://registry.npmjs.org/@yowasp/clang/-/clang-21.1.4-3.tgz",
+     "sha256": "9c082ea5cac9489966adbe381529bf13bde18646126e98b8b089d83f57fe5e27",
+     "size": 26386607
+    },
+    {
+     "path": "bin/clang.wasm",
+     "url": "/pkg/llvm/21.1.4/clang.wasm",
+     "sha256": "c3a56721352f0687ff454e1317f64e6d41a73c8a3f56c954304d18e703044843",
+     "size": 41753
+    }
+   ],
+   "bin": {
+    "clang": {
+     "file": "bin/clang.wasm"
+    },
+    "clang++": {
+     "file": "bin/clang.wasm"
+    },
+    "cc": {
+     "file": "bin/clang.wasm"
+    },
+    "c++": {
+     "file": "bin/clang.wasm"
+    },
+    "wasm-ld": {
+     "file": "bin/llvm.wasm"
+    },
+    "llvm-ar": {
+     "file": "bin/llvm.wasm"
+    },
+    "llvm-ranlib": {
+     "file": "bin/llvm.wasm"
+    },
+    "llvm-nm": {
+     "file": "bin/llvm.wasm"
+    },
+    "llvm-objdump": {
+     "file": "bin/llvm.wasm"
+    },
+    "llvm-strip": {
+     "file": "bin/llvm.wasm"
+    },
+    "llvm-size": {
+     "file": "bin/llvm.wasm"
+    },
+    "llvm-objcopy": {
+     "file": "bin/llvm.wasm"
+    },
+    "ar": {
+     "file": "bin/llvm.wasm"
+    },
+    "ranlib": {
+     "file": "bin/llvm.wasm"
+    },
+    "nm": {
+     "file": "bin/llvm.wasm"
+    }
+   },
+   "needs": [
+    "processes"
+   ],
+   "notes": "The compiler is YoWASP's LLVM for WASI (npm @yowasp/clang, taken from its tarball); clang's driver steps run as separate kernel processes (compat/clang-driver.c). Output is wasm32-wasip1; run it like any WASM program."
+  },
+  {
+   "name": "go",
+   "version": "1.24.7",
+   "description": "The Go toolchain (go, gofmt, compile, link, asm, vet) running on wasip1; builds GOOS=wasip1 programs (and other targets) inside Shiro",
+   "license": "BSD-3-Clause",
+   "source": "https://go.dev/dl/go1.24.7.src.tar.gz",
+   "homepage": "https://go.dev/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/go.sh",
+   "section": "devel",
+   "abi": "wasi_snapshot_preview1",
+   "files": [
+    {
+     "path": "bin",
+     "tar": {
+      "unpack": true,
+      "dir": "bin"
+     },
+     "url": "/pkg/go/1.24.7/go-1.24.7-wasip1.tar.gz",
+     "sha256": "92b871db18bea8e43d7d940ad052b4a64cdac9a36bf5d6c195c8036f884922fd",
+     "size": 44033314
+    },
+    {
+     "path": "pkg",
+     "tar": {
+      "unpack": true,
+      "dir": "pkg"
+     },
+     "url": "/pkg/go/1.24.7/go-1.24.7-wasip1.tar.gz",
+     "sha256": "92b871db18bea8e43d7d940ad052b4a64cdac9a36bf5d6c195c8036f884922fd",
+     "size": 44033314
+    },
+    {
+     "path": "src",
+     "tar": {
+      "unpack": true,
+      "dir": "src"
+     },
+     "url": "/pkg/go/1.24.7/go-1.24.7-wasip1.tar.gz",
+     "sha256": "92b871db18bea8e43d7d940ad052b4a64cdac9a36bf5d6c195c8036f884922fd",
+     "size": 44033314
+    },
+    {
+     "path": "cache",
+     "tar": {
+      "unpack": true,
+      "dir": "cache"
+     },
+     "url": "/pkg/go/1.24.7/go-1.24.7-wasip1.tar.gz",
+     "sha256": "92b871db18bea8e43d7d940ad052b4a64cdac9a36bf5d6c195c8036f884922fd",
+     "size": 44033314
+    },
+    {
+     "path": "VERSION",
+     "tar": {
+      "member": "VERSION"
+     },
+     "url": "/pkg/go/1.24.7/go-1.24.7-wasip1.tar.gz",
+     "sha256": "92b871db18bea8e43d7d940ad052b4a64cdac9a36bf5d6c195c8036f884922fd",
+     "size": 44033314
+    },
+    {
+     "path": "go.env",
+     "tar": {
+      "member": "go.env"
+     },
+     "url": "/pkg/go/1.24.7/go-1.24.7-wasip1.tar.gz",
+     "sha256": "92b871db18bea8e43d7d940ad052b4a64cdac9a36bf5d6c195c8036f884922fd",
+     "size": 44033314
+    },
+    {
+     "path": "LICENSE",
+     "tar": {
+      "member": "LICENSE"
+     },
+     "url": "/pkg/go/1.24.7/go-1.24.7-wasip1.tar.gz",
+     "sha256": "92b871db18bea8e43d7d940ad052b4a64cdac9a36bf5d6c195c8036f884922fd",
+     "size": 44033314
+    }
+   ],
+   "bin": {
+    "go": {
+     "file": "bin/go"
+    },
+    "gofmt": {
+     "file": "bin/gofmt"
+    }
+   },
+   "needs": [
+    "processes"
+   ],
+   "notes": "Patched (scripts/pkgbuild/go/wasip1-processes.patch) so os/exec works on Shiro's kernel; the shipped std has it too. Comes with a build cache of common std packages, so small programs build in seconds; anything else in std compiles on first use. No network: GOPROXY=off, vendor modules or use replace directives."
+  },
+  {
    "name": "sqlite",
    "version": "3.50.4",
    "description": "SQLite 3 command-line shell (FTS5, math functions)",
@@ -688,33 +903,147 @@
   },
   {
    "name": "ruby",
-   "version": "0.1.2",
-   "description": "Ruby 3.2 interpreter (ruby.wasm, standard library embedded)",
+   "version": "3.4.1",
+   "description": "Ruby 3.4 (ruby.wasm CLI build): ruby, irb, gem, rake, bundle, with the standard library and default gems",
    "license": "Ruby OR BSD-2-Clause",
-   "source": "https://github.com/ruby/ruby.wasm",
-   "origin": "wasmer",
+   "source": "https://github.com/ruby/ruby.wasm/releases/tag/2.10.1",
+   "homepage": "https://www.ruby-lang.org/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/ruby.sh",
    "section": "interpreters",
    "abi": "wasi_snapshot_preview1",
    "files": [
     {
-     "path": "bin/ruby.wasm",
-     "url": "https://cdn.wasmer.io/webcimages/036c313a707ffc5b70c700a9ac44e07bb76efe2797ef7f69c8f5d38fc6a080fc.webc",
-     "sha256": "036c313a707ffc5b70c700a9ac44e07bb76efe2797ef7f69c8f5d38fc6a080fc",
-     "size": 34328971,
-     "webc": {
-      "atom": "ruby"
-     }
+     "path": "bin",
+     "tar": {
+      "unpack": true,
+      "dir": "bin"
+     },
+     "url": "/pkg/ruby/3.4.1/ruby-3.4.1-wasip1.tar.gz",
+     "sha256": "12f309412ea3b2c28d1e50e2970fba9ee812ecceb9f4a7d8b51adba79d781909",
+     "size": 15405839
+    },
+    {
+     "path": "lib",
+     "tar": {
+      "unpack": true,
+      "dir": "lib"
+     },
+     "url": "/pkg/ruby/3.4.1/ruby-3.4.1-wasip1.tar.gz",
+     "sha256": "12f309412ea3b2c28d1e50e2970fba9ee812ecceb9f4a7d8b51adba79d781909",
+     "size": 15405839
     }
    ],
    "bin": {
     "ruby": {
      "file": "bin/ruby.wasm"
+    },
+    "gem": {
+     "file": "bin/gem"
+    },
+    "irb": {
+     "file": "bin/irb"
+    },
+    "rake": {
+     "file": "bin/rake"
+    },
+    "bundle": {
+     "file": "bin/bundle"
+    },
+    "bundler": {
+     "file": "bin/bundler"
+    },
+    "erb": {
+     "file": "bin/erb"
+    },
+    "rdoc": {
+     "file": "bin/rdoc"
+    },
+    "ri": {
+     "file": "bin/ri"
     }
    },
+   "mounts": {
+    "/usr/local/lib/ruby": "lib/ruby"
+   },
+   "needs": [
+    "mounts"
+   ],
    "wants": [
     "blocking-stdin"
    ],
-   "notes": "irb needs blocking stdin; scripts and -e work."
+   "notes": "Built with prefix /usr/local: the package mounts lib/ruby there for its processes. irb needs blocking stdin. No sockets: gem install from rubygems.org doesn't work; installing local .gem files does."
+  },
+  {
+   "name": "perl",
+   "version": "5.40.0",
+   "description": "Perl 5.40 (static x86-64 build run in the Blink engine): fork, exec, system() and backticks work",
+   "license": "Artistic-1.0-Perl OR GPL-1.0-or-later",
+   "source": "https://www.cpan.org/src/5.0/perl-5.40.0.tar.gz",
+   "homepage": "https://www.perl.org/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/perl.sh",
+   "section": "interpreters",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin",
+     "tar": {
+      "unpack": true,
+      "dir": "bin"
+     },
+     "url": "/pkg/perl/5.40.0/perl-5.40.0-x86_64.tar.gz",
+     "sha256": "85349a62d4d4f40518ab0f8a5a3e1ce2172a0f67cdeceba4159dc8f45e00bf30",
+     "size": 10894643
+    },
+    {
+     "path": "lib",
+     "tar": {
+      "unpack": true,
+      "dir": "lib"
+     },
+     "url": "/pkg/perl/5.40.0/perl-5.40.0-x86_64.tar.gz",
+     "sha256": "85349a62d4d4f40518ab0f8a5a3e1ce2172a0f67cdeceba4159dc8f45e00bf30",
+     "size": 10894643
+    }
+   ],
+   "bin": {
+    "perl": {
+     "file": "bin/perl"
+    },
+    "prove": {
+     "file": "bin/prove"
+    },
+    "shasum": {
+     "file": "bin/shasum"
+    },
+    "json_pp": {
+     "file": "bin/json_pp"
+    },
+    "ptar": {
+     "file": "bin/ptar"
+    },
+    "corelist": {
+     "file": "bin/corelist"
+    },
+    "piconv": {
+     "file": "bin/piconv"
+    },
+    "pod2text": {
+     "file": "bin/pod2text"
+    },
+    "podchecker": {
+     "file": "bin/podchecker"
+    },
+    "zipdetails": {
+     "file": "bin/zipdetails"
+    }
+   },
+   "needs": [
+    "threads",
+    "processes"
+   ],
+   "notes": "An x86-64 Linux binary in Blink: needs a cross-origin isolated page. Interpreted, so starting is ~1 s and big modules (POSIX) take seconds to load. No XS module loading (all core XS is built in); no pods (perldoc)."
   },
   {
    "name": "fortune",

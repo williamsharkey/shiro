@@ -5292,7 +5292,9 @@ export class Shell {
     // the arguments and preloads their package records
     try {
       const real = await this.fs.realpath(filePath);
-      if (packageOfPath(real)) {
+      // (a package's script launchers, like ruby's gem, and x86-64 programs
+      // run in Blink, like perl, take the paths below)
+      if (packageOfPath(real) && await this.isWasmFile(real)) {
         return await runPackageBinary(real, filePath.split('/').pop() || filePath, args, ctx,
           filePath.startsWith('/') ? filePath : this.fs.resolvePath(filePath, this.cwd));
       }
@@ -5379,7 +5381,7 @@ export class Shell {
       // Blink (wasm) when the page can run it, else the built-in src/x86.
       const { runElf } = await import('./x86-engine');
       return runElf(resolvedPath, args, {
-        fs: this.fs, cwd: this.cwd, args, env: this.env,
+        fs: this.fs, cwd: this.cwd, args, env: this.env, shell: this,
         stdin: ctx.stdin || '', writeStdout: writeStdout, writeStderr: writeStderr,
       });
     }
@@ -5438,6 +5440,14 @@ export class Shell {
 
     // Default to shell script
     return this.executeShellScript(content, args, ctx, writeStdout, writeStderr, filePath);
+  }
+
+  /** Is `path` a WebAssembly module? */
+  private async isWasmFile(path: string): Promise<boolean> {
+    try {
+      const d = await this.fs.readFile(path);
+      return typeof d !== 'string' && d[0] === 0x00 && d[1] === 0x61 && d[2] === 0x73 && d[3] === 0x6d;
+    } catch { return false; }
   }
 
   /**

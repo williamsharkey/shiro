@@ -1666,7 +1666,7 @@
    ]
   },
   "builtin-type": {
-   "pass": 0,
+   "pass": 1,
    "total": 6,
    "failures": [
     {
@@ -1680,10 +1680,6 @@
     {
      "i": 2,
      "name": "type of relative path"
-    },
-    {
-     "i": 3,
-     "name": "type -> not found"
     },
     {
      "i": 4,
@@ -2813,7 +2809,7 @@
    ]
   },
   "alias": {
-   "pass": 28,
+   "pass": 29,
    "total": 48,
    "failures": [
     {
@@ -2827,10 +2823,6 @@
     {
      "i": 2,
      "name": "define and use alias on a single line"
-    },
-    {
-     "i": 7,
-     "name": "unalias -a"
     },
     {
      "i": 11,

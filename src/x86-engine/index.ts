@@ -34,7 +34,7 @@ export async function runElf(path: string, args: string[], ctx: X86Context, sign
     const { runElfWithBlink } = await import('./blink');
     return runElfWithBlink(path, args, {
       fs: ctx.fs, cwd: ctx.cwd, env: ctx.env, stdin: ctx.stdin,
-      writeStdout: ctx.writeStdout, writeStderr: ctx.writeStderr, signal,
+      writeStdout: ctx.writeStdout, writeStderr: ctx.writeStderr, signal, shell: ctx.shell,
     });
   }
   const { executeElf } = await import('../x86/runtime');
