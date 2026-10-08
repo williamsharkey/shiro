@@ -1,0 +1,362 @@
+From 2b8da93e061614d42e0fc0de4a345afa78e2ae5d Mon Sep 17 00:00:00 2001
+From: shiro <x@x>
+Date: Thu, 8 Oct 2026 01:54:49 +0000
+Subject: [PATCH 10/10] wasm speed and memory: one CPU under the GIL, one host
+ block per file mapping, native 64-bit atomics
+
+- GetCpuCount() reports 1 while the interpreter lock is on: more CPUs only
+  made runtimes like Go start threads that contend for the lock.
+- emscripten: a file-backed guest mapping is one host mmap() block whose
+  pages are reference-counted, instead of one host mmap() per 4 KiB page
+  (each of which allocated and zeroed a 64 KiB-aligned block in a proxied
+  call). gh 2.62 (59 MB): peak RSS 999 MB -> 272 MB.
+- CAN_ATOMIC64: wasm32 has lock-free 64-bit atomics, but Blink treated it
+  as a 32-bit host and wrapped every guest memory access and page-table
+  load in a mutex. Interpreter loops ~30% faster.
+---
+ blink/alu1.c         |  2 +-
+ blink/alu2.c         |  2 +-
+ blink/alui.c         |  2 +-
+ blink/builtin.h      |  9 +++++
+ blink/bus.c          |  8 ++---
+ blink/bus.h          |  6 ++--
+ blink/cmpxchg.c      |  2 +-
+ blink/cpucount.c     |  4 +++
+ blink/machine.h      |  2 +-
+ blink/memorymalloc.c | 86 ++++++++++++++++++++++++++++++++++++++++++--
+ blink/xadd.c         |  2 +-
+ blink/xchg.c         |  2 +-
+ 12 files changed, 111 insertions(+), 16 deletions(-)
+
+diff --git a/blink/alu1.c b/blink/alu1.c
+index ce23e24..e24cac7 100644
+--- a/blink/alu1.c
++++ b/blink/alu1.c
+@@ -71,7 +71,7 @@ static void AluEvqp(P, const aluop_f ops[4]) {
+   f = ops[WordLog2(rde)];
+   if (Rexw(rde)) {
+     p = GetModrmRegisterWordPointerWrite8(A);
+-#if CAN_64BIT
++#if CAN_ATOMIC64
+     if (Lock(rde) && !((uintptr_t)p & 7)) {
+       u64 x, z;
+       x = atomic_load_explicit((_Atomic(u64) *)p, memory_order_acquire);
+diff --git a/blink/alu2.c b/blink/alu2.c
+index 786dba7..732bbd6 100644
+--- a/blink/alu2.c
++++ b/blink/alu2.c
+@@ -96,7 +96,7 @@ void OpAluw(P) {
+   f = kAlu[t][RegLog2(rde)];
+   if (Rexw(rde)) {
+     p = GetModrmRegisterWordPointerWrite8(A);
+-#if CAN_64BIT
++#if CAN_ATOMIC64
+     if (Lock(rde) && !((uintptr_t)p & 7)) {
+       u64 x, y, z;
+       x = atomic_load_explicit((_Atomic(u64) *)p, memory_order_acquire);
+diff --git a/blink/alui.c b/blink/alui.c
+index 6f5e3b3..34d64e5 100644
+--- a/blink/alui.c
++++ b/blink/alui.c
+@@ -96,7 +96,7 @@ static void AluiUnlocked(P, u8 *p, aluop_f op) {
+ static void AluiLocked(P, u8 *p, aluop_f op) {
+   switch (RegLog2(rde)) {
+     case 3:
+-#if CAN_64BIT
++#if CAN_ATOMIC64
+       if (!((uintptr_t)p & 7)) {
+         u64 x, z;
+         x = atomic_load_explicit((_Atomic(u64) *)p, memory_order_acquire);
+diff --git a/blink/builtin.h b/blink/builtin.h
+index 3458213..f34ed62 100644
+--- a/blink/builtin.h
++++ b/blink/builtin.h
+@@ -244,6 +244,15 @@
+ #define CAN_64BIT 0
+ #endif
+ 
++// Lock-free 64-bit atomics. wasm32 has them (threads proposal) although its
++// pointers are 32-bit; without this every guest memory access and page
++// table load on wasm went through LockBus()/a mutex.
++#if CAN_64BIT || defined(__wasm__)
++#define CAN_ATOMIC64 1
++#else
++#define CAN_ATOMIC64 0
++#endif
++
+ #if CAN_64BIT && !defined(__STRICT_ANSI__) && \
+     ((__GNUC__ + 0) * 100 + (__GNUC_MINOR__ + 0) >= 406 || defined(__llvm__))
+ #define HAVE_INT128
+diff --git a/blink/bus.c b/blink/bus.c
+index 99af4ae..d0d29f6 100644
+--- a/blink/bus.c
++++ b/blink/bus.c
+@@ -126,7 +126,7 @@ i64 Load32(const u8 p[4]) {
+ 
+ i64 Load64(const u8 p[8]) {
+   i64 z;
+-#if CAN_64BIT
++#if CAN_ATOMIC64
+ #if defined(__x86_64__) && !defined(__SANITIZE_UNDEFINED__) && \
+     !defined(__FILC__)
+   z = atomic_load_explicit((_Atomic(u64) *)p, memory_order_relaxed);
+@@ -147,7 +147,7 @@ i64 Load64(const u8 p[8]) {
+ 
+ i64 Load64Unlocked(const u8 p[8]) {
+   i64 z;
+-#if CAN_64BIT
++#if CAN_ATOMIC64
+   z = Load64(p);
+ #else
+   z = Read64(p);
+@@ -186,7 +186,7 @@ void Store32(u8 p[4], u64 x) {
+ }
+ 
+ void Store64(u8 p[8], u64 x) {
+-#if CAN_64BIT
++#if CAN_ATOMIC64
+ #if defined(__x86_64__) && !defined(__SANITIZE_UNDEFINED__) && \
+     !defined(__FILC__)
+   atomic_store_explicit((_Atomic(u64) *)p, x, memory_order_relaxed);
+@@ -205,7 +205,7 @@ void Store64(u8 p[8], u64 x) {
+ }
+ 
+ void Store64Unlocked(u8 p[8], u64 x) {
+-#if CAN_64BIT
++#if CAN_ATOMIC64
+   Store64(p, x);
+ #else
+   Write64(p, x);
+diff --git a/blink/bus.h b/blink/bus.h
+index 030d9c1..0947119 100644
+--- a/blink/bus.h
++++ b/blink/bus.h
+@@ -73,7 +73,7 @@ bool CasPte32_(u8 *, u64, u64);
+ void StorePte32_(u8 *, u64);
+ 
+ nosideeffect static inline u64 LoadPte(const u8 *pte) {
+-#if CAN_64BIT
++#if CAN_ATOMIC64
+   return Little64(
+       atomic_load_explicit((_Atomic(u64) *)pte, memory_order_acquire));
+ #else
+@@ -82,7 +82,7 @@ nosideeffect static inline u64 LoadPte(const u8 *pte) {
+ }
+ 
+ static inline void StorePte(u8 *pte, u64 val) {
+-#if CAN_64BIT
++#if CAN_ATOMIC64
+   atomic_store_explicit((_Atomic(u64) *)pte, Little64(val),
+                         memory_order_release);
+ #else
+@@ -91,7 +91,7 @@ static inline void StorePte(u8 *pte, u64 val) {
+ }
+ 
+ static inline bool CasPte(u8 *pte, u64 oldval, u64 newval) {
+-#if CAN_64BIT
++#if CAN_ATOMIC64
+   oldval = Little64(oldval);
+   return atomic_compare_exchange_strong_explicit(
+       (_Atomic(u64) *)pte, &oldval, Little64(newval),  //
+diff --git a/blink/cmpxchg.c b/blink/cmpxchg.c
+index fcfb7f5..add49c0 100644
+--- a/blink/cmpxchg.c
++++ b/blink/cmpxchg.c
+@@ -74,7 +74,7 @@ static void Cmpxchg(struct Machine *m, u64 rde, u8 *p) {
+   q = RegRexrReg(m, rde);
+   if (Rexw(rde)) {
+     u64 x;
+-#if CAN_64BIT
++#if CAN_ATOMIC64
+     if (Lock(rde) && !((uintptr_t)p & 7)) {
+       x = atomic_load_explicit((_Atomic(u64) *)m->ax, memory_order_relaxed);
+       atomic_compare_exchange_strong_explicit(
+diff --git a/blink/cpucount.c b/blink/cpucount.c
+index 7fb40bc..c5e5968 100644
+--- a/blink/cpucount.c
++++ b/blink/cpucount.c
+@@ -20,6 +20,7 @@
+ #include <sys/types.h>
+ #include <unistd.h>
+ 
++#include "blink/gil.h"
+ #include "blink/atomic.h"
+ #include "blink/builtin.h"
+ #include "blink/macros.h"
+@@ -55,6 +56,9 @@ static int GetCpuCountImpl(void) {
+ 
+ int GetCpuCount(void) {
+   int rc;
++  // With the interpreter lock only one guest thread runs at a time; more
++  // CPUs just make runtimes like Go start threads that fight over it.
++  if (g_gil_enabled) return 1;
+   if (!(rc = g_cpucount)) {
+     if ((rc = GetCpuCountImpl()) < 1) rc = 1;
+     g_cpucount = rc;
+diff --git a/blink/machine.h b/blink/machine.h
+index be17a8a..bcc4fec 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -136,7 +136,7 @@
+ 
+ #define HasLinearMapping() (CanHaveLinearMemory() && !FLAG_nolinear)
+ 
+-#if CAN_64BIT
++#if CAN_ATOMIC64
+ #define _Atomicish(t) _Atomic(t)
+ #else
+ #define _Atomicish(t) t
+diff --git a/blink/memorymalloc.c b/blink/memorymalloc.c
+index 8329696..537b435 100644
+--- a/blink/memorymalloc.c
++++ b/blink/memorymalloc.c
+@@ -62,6 +62,56 @@ struct Allocator {
+ struct Machine g_bssmachine;
+ struct HostPages g_hostpages;
+ 
++#ifdef __EMSCRIPTEN__
++// Under emscripten every host mmap() of a file is a proxied call that
++// allocates, zeroes and copies a 64 KiB-aligned block, so mapping a file
++// one 4 KiB page at a time (how the software MMU normally does it) cost
++// seconds and hundreds of MB for a large binary. File mappings are made as
++// one host block instead; its pages are released one by one and the block
++// is unmapped with the last of them.
++struct MugBlock {
++  u8 *base;
++  size_t size;
++  long refs;
++  struct MugBlock *next;
++};
++static pthread_mutex_t_ g_mugblocks_lock = PTHREAD_MUTEX_INITIALIZER_;
++static struct MugBlock *g_mugblocks;
++
++static void AddMugBlock(u8 *base, size_t size, long pages) {
++  struct MugBlock *b;
++  unassert((b = (struct MugBlock *)malloc(sizeof(*b))));
++  b->base = base;
++  b->size = size;
++  b->refs = pages;
++  LOCK(&g_mugblocks_lock);
++  b->next = g_mugblocks;
++  g_mugblocks = b;
++  UNLOCK(&g_mugblocks_lock);
++}
++
++// Drops one page of a block; true if `page` belonged to one.
++static bool ReleaseMugPage(u8 *page) {
++  struct MugBlock *b, **p;
++  LOCK(&g_mugblocks_lock);
++  for (p = &g_mugblocks; (b = *p); p = &b->next) {
++    if (b->base <= page && page < b->base + b->size) {
++      if (!--b->refs) {
++        *p = b->next;
++        UNLOCK(&g_mugblocks_lock);
++        unassert(!Munmap(b->base, b->size));
++        free(b);
++        return true;
++      }
++      UNLOCK(&g_mugblocks_lock);
++      return true;
++    }
++  }
++  UNLOCK(&g_mugblocks_lock);
++  return false;
++}
++#endif
++
+ static void FillPage(void *p, int c) {
+   memset(p, c, 4096);
+ }
+@@ -669,8 +719,13 @@ static bool FreePage(struct System *s, i64 virt, u64 entry, u64 size,
+     u8 *real, *mug;
+     pagesize = FLAG_pagesize;
+     real = mug = FindHostPage(entry);
+-    while ((uintptr_t)mug & (pagesize - 1)) mug -= 4096;
+-    unassert(!Munmap(mug, real - mug + size));
++#ifdef __EMSCRIPTEN__
++    if (!ReleaseMugPage(real))
++#endif
++    {
++      while ((uintptr_t)mug & (pagesize - 1)) mug -= 4096;
++      unassert(!Munmap(mug, real - mug + size));
++    }
+     if (entry & PAGE_RSRV) {
+       s->memstat.reserved -= 1;
+     } else {
+@@ -969,6 +1024,23 @@ i64 ReserveVirtual(struct System *s, i64 virt, i64 size, u64 flags, int fd,
+     AddFileMapViaMap(s, virt, size, fd, offset);
+   }
+ 
++#ifdef __EMSCRIPTEN__
++  u8 *mugblock = 0;
++  long mugblockskew = 0;
++  if ((flags & PAGE_MUG) && fd != -1) {
++    off_t blockoff = ROUNDDOWN(offset, pagesize);
++    mugblockskew = offset - blockoff;
++    if (!(mugblock = (u8 *)AllocateBig(size + mugblockskew, sysprot,
++                                        shared ? MAP_SHARED : MAP_PRIVATE,
++                                        fd, blockoff))) {
++      ERRF("mmap(virt=%" PRIx64 ", size=%" PRId64 ", fd=%d) crisis: %s", virt,
++           size, fd, DescribeHostErrno(errno));
++      PanicDueToMmap();
++    }
++    AddMugBlock(mugblock, size + mugblockskew, pages);
++  }
++#endif
++
+   // add pml4t entries ensuring intermediary tables exist
+   for (result = virt, end = virt + size;;) {
+     for (pt = s->cr3, level = 39; level >= 12; level -= 9) {
+@@ -1005,6 +1077,13 @@ i64 ReserveVirtual(struct System *s, i64 virt, i64 size, u64 flags, int fd,
+             }
+             mugflags = (shared ? MAP_SHARED : MAP_PRIVATE) |
+                        (fd == -1 ? MAP_ANONYMOUS_ : 0);
++#ifdef __EMSCRIPTEN__
++            if (mugblock) {
++              real = TrackHostPage(mugblock + mugblockskew + (virt - result));
++              offset += 4096;
++              goto HaveMug;
++            }
++#endif
+             mug = AllocateBig(mugsize, sysprot, mugflags, fd, mugoff);
+             if (!mug) {
+               ERRF("mmap(virt=%" PRIx64
+@@ -1016,6 +1095,9 @@ i64 ReserveVirtual(struct System *s, i64 virt, i64 size, u64 flags, int fd,
+             }
+             real = TrackHostPage(mug + mugskew);
+             offset += 4096;
++#ifdef __EMSCRIPTEN__
++          HaveMug:;
++#endif
+           } else {
+             real = (uintptr_t)ToHost(virt);
+           }
+diff --git a/blink/xadd.c b/blink/xadd.c
+index a956c87..51215fc 100644
+--- a/blink/xadd.c
++++ b/blink/xadd.c
+@@ -58,7 +58,7 @@ void OpXaddEvqpGvqp(P) {
+   p = GetModrmRegisterWordPointerWriteOszRexw(A);
+   if (Rexw(rde)) {
+     u64 x, y, z;
+-#if CAN_64BIT
++#if CAN_ATOMIC64
+     if (Lock(rde) && !((uintptr_t)p & 7)) {
+       x = atomic_load_explicit((_Atomic(u64) *)p, memory_order_acquire);
+       y = atomic_load_explicit((_Atomic(u64) *)q, memory_order_relaxed);
+diff --git a/blink/xchg.c b/blink/xchg.c
+index f575295..dd9ea0a 100644
+--- a/blink/xchg.c
++++ b/blink/xchg.c
+@@ -49,7 +49,7 @@ void OpXchgGvqpEvqp(P) {
+   u8 *q = RegRexrReg(m, rde);
+   u8 *p = GetModrmRegisterWordPointerWriteOszRexw(A);
+   if (Rexw(rde)) {
+-#if CAN_64BIT
++#if CAN_ATOMIC64
+     if (!IsModrmRegister(rde) && !((uintptr_t)p & 7)) {
+       atomic_store_explicit(
+           (_Atomic(u64) *)q,
+-- 
+2.43.0
+

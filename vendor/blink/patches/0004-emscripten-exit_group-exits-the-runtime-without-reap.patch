@@ -1,8 +1,8 @@
 From df3ba478c5e307adec4a2e2873dba397cf86838c Mon Sep 17 00:00:00 2001
 From: shiro <x@x>
 Date: Wed, 7 Oct 2026 23:42:41 +0000
-Subject: [PATCH 4/9] emscripten: exit_group exits the runtime without reaping
- threads
+Subject: [PATCH 04/10] emscripten: exit_group exits the runtime without
+ reaping threads
 
 ---
  blink/syscall.c | 6 ++++++

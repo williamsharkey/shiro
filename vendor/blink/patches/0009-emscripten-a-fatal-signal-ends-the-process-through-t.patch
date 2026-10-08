@@ -1,7 +1,7 @@
 From 07546750e5c5919c8f5e180bc5eaede9f3c38349 Mon Sep 17 00:00:00 2001
 From: shiro <x@x>
 Date: Thu, 8 Oct 2026 01:23:42 +0000
-Subject: [PATCH 9/9] emscripten: a fatal signal ends the process through the
+Subject: [PATCH 09/10] emscripten: a fatal signal ends the process through the
  embedder
 
 TerminateSignal() reaped threads with KillOtherThreads(), which hangs under

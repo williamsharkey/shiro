@@ -1,7 +1,7 @@
 From 3505daedf8d292a880772988d71dc6e2e50ba352 Mon Sep 17 00:00:00 2001
 From: shiro <x@x>
 Date: Thu, 8 Oct 2026 01:09:40 +0000
-Subject: [PATCH 7/9] emscripten: signals reach guest threads parked in
+Subject: [PATCH 07/10] emscripten: signals reach guest threads parked in
  epoll_pwait or read
 
 Without host signals nothing interrupted these waits: epoll_pwait now
