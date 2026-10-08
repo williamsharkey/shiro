@@ -348,6 +348,43 @@ keeping 8 idle during bursts and trimming later fixed it (7837/6620 vs base
 Still open: 512-byte pipe I/O is ~70 MB/s isolated (target >100); each call
 is now ~2–3 µs, near the cost of the cross-thread handoff itself.
 
+### unix/perf-kernel, round 2: per-file cost (rg over 2000 files)
+
+`bench/results/perf-kernel-r2-quick.json` vs `integration-d286c5e-quick.json`
+(after merging unix/integration; `perf-kernel-r1m-quick.json` is round 1 on
+top of that merge). Profile of `rg -l` over 2000 files: ~11k syscalls
+(5800 read, 2100 openat, 2100 close, 627 newfstatat, 202 getdents64), and
+`FileSystem.readdir` scanning every key in the store (the Claude Code
+install included) once per directory.
+
+- `FileSystem.readdir` uses a parent → children index built from the key
+  set on first use and updated with it (no scan of every key).
+- `kernel.syscallSync` also answers `openat` of a cached file or directory
+  (no O_CREAT/O_TRUNC), `close` when nothing needs writing back
+  (`OpenFile.closeSync`), and stat/lstat/newfstatat from
+  `FileSystem.lookupCached`; getdents64 types entries from the same cache
+  instead of an awaited stat per entry. A registered handler can let these
+  through with `handler.passSync` (host.ts's `/bin/<command>` stat does).
+
+| metric (isolated) | unit | d286c5e | round 1 merged | round 2 |
+|---|---|---|---|---|
+| wasm.ripgrep.tree | ms | 1196 | 306 | **204** |
+| wasm.builtin_grep_r.tree | ms | 72.6 | 58.4 | **19.8** |
+| kernel.syscall_rtt.sab | µs | 149 | 4.61 | 8.30 |
+| kernel.pipe_throughput_512b | MB/s | 6.75 | 50.3 | 40.4 |
+| kernel.spawn_wait.wasm | ms | 15.6 | 0.77 | 1.18 |
+| hygiene.procs100.workers_left | count | 54 | 3 | 3 |
+| hygiene.procs100.rss_delta | MiB | 64.9 | 6.0 | 6.6 |
+
+The machine was markedly slower during the round 2 run (the same channel
+code measured 3.7 µs RTT earlier). `compare.mjs` flags against d286c5e
+(boot, shell, net, x86, non-isolated kernel throughput) did not hold up in
+interleaved A/B runs against d286c5e built here: e.g. non-isolated
+`spawn_throughput.builtin` came out −40%, then −9% and +22% when re-run
+with different preceding metrics, on a ~10 ms measurement with 100 µs
+timer resolution. In-page rg runs measure 170–230 ms; the first run in a
+page is slower (the pool starts Workers for rg's threads).
+
 ## Results
 
 <!-- bench:table:begin -->

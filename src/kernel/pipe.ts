@@ -191,11 +191,14 @@ export class PipeEnd implements OpenFile {
 
   async stat(): Promise<KStat> { return this.pipe.stat(); }
 
-  async close(): Promise<void> {
-    if (this.closed) return;
+  async close(): Promise<void> { this.closeSync(); }
+
+  closeSync(): boolean {
+    if (this.closed) return true;
     this.closed = true;
     if (this.end === 'r') this.pipe.closeReader();
     else this.pipe.closeWriter();
+    return true;
   }
 }
 

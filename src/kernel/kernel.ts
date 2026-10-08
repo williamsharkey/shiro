@@ -14,7 +14,7 @@ import { processTable, type ShiroProcess } from '../process-table';
 import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
-  RegularFile, DirFile, openInode, inodeNumber, canWrite, refCount, renameInodes, unlinkInode,
+  RegularFile, DirFile, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode,
 } from './fd';
 import { createPipe } from './pipe';
 import { Process } from './process';
@@ -35,9 +35,16 @@ export type DeviceOpener = (proc: Process, flags: number, path: string) => OpenF
  * arguments as Kernel.syscall; return undefined to pass the call on (to an
  * earlier registration, then the kernel's own handler).
  */
-export type SyscallHandler = (
+export type SyscallHandler = ((
   proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array, kernel: Kernel,
-) => number | undefined | Promise<number | undefined>;
+) => number | undefined | Promise<number | undefined>) & {
+  /**
+   * Optional: true when the handler would pass this call on (return
+   * undefined) without doing anything. Lets kernel.syscallSync answer it;
+   * without it, every call to the handler's numbers takes the async path.
+   */
+  passSync?: (proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array, kernel: Kernel) => boolean;
+};
 
 export interface SpawnOptions {
   /** Program to run: a command name, or a path. */
@@ -524,6 +531,47 @@ export class Kernel {
     }
   }
 
+  /**
+   * open() of a file or directory the FileSystem has in memory, without
+   * creating or truncating: the description, -errno, or undefined when it
+   * needs `open` (devices, O_CREAT/O_TRUNC, anything not cached).
+   */
+  openSync(proc: Process, path: string, flags: number, dirfd = A.AT_FDCWD): OpenFile | number | undefined {
+    const fs = this.fs;
+    if (!fs || flags & (A.O_CREAT | A.O_TRUNC)) return undefined;
+    const p = this.resolvePath(proc, path, dirfd);
+    if (typeof p === 'number') return p;
+    if (this.devices.has(p) || /^\/(?:dev|proc)\//.test(p)) return undefined;
+    const hit = fs.lookupCached(p);
+    if (hit === undefined) return undefined;
+    if (hit === null) return -A.ENOENT;
+    const statusFlags = flags & ~(A.O_CREAT | A.O_EXCL | A.O_TRUNC | A.O_CLOEXEC | A.O_NOCTTY | A.O_DIRECTORY | A.O_NOFOLLOW);
+    if (hit.node.type === 'dir') return canWrite(flags) ? -A.EISDIR : new DirFile(fs, p, statusFlags);
+    if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
+    if (hit.node.type !== 'file') return undefined;
+    return new RegularFile(openInodeSync(fs, hit.path, hit.node), statusFlags);
+  }
+
+  /** statPath from memory, encoded into `data`: 0, -errno, or undefined (use statPath). */
+  private statPathSyncInto(proc: Process, path: string, follow: boolean, dirfd: number, data: Uint8Array): number | undefined {
+    const fs = this.fs;
+    if (!fs) return undefined;
+    const p = this.resolvePath(proc, path, dirfd);
+    if (typeof p === 'number') return p;
+    if (this.devices.has(p)) return undefined;
+    const hit = fs.lookupCached(p, follow);
+    if (hit === undefined) return undefined;
+    if (hit === null) return -A.ENOENT;
+    const n = hit.node;
+    const type = n.type === 'dir' ? A.S_IFDIR : n.type === 'symlink' ? A.S_IFLNK : A.S_IFREG;
+    A.encodeStat({
+      dev: 1, ino: inodeNumber(p), mode: type | (n.mode & 0o7777), nlink: n.type === 'dir' ? 2 : 1,
+      uid: 1000, gid: 1000, rdev: 0, size: n.size, blksize: 4096, blocks: Math.ceil(n.size / 512),
+      atimeMs: n.mtime, mtimeMs: n.mtime, ctimeMs: n.ctime,
+    }, data);
+    return 0;
+  }
+
   async statPath(proc: Process, path: string, follow = true, dirfd = A.AT_FDCWD): Promise<A.KStat | number> {
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
@@ -667,8 +715,26 @@ export class Kernel {
    * Registered handlers (registerSyscalls) always take the async path.
    */
   syscallSync(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): number | undefined {
-    if (proc.state !== 'running' || proc.exiting || this.syscallTable.has(nr)) return undefined;
+    if (proc.state !== 'running' || proc.exiting) return undefined;
+    const hs = this.syscallTable.get(nr);
+    if (hs) for (const h of hs) if (!h.passSync?.(proc, nr, args, data, this)) return undefined;
     switch (nr) {
+      case A.SYS_close: return proc.fds.closeSync(args[0]);
+      case A.SYS_open:
+      case A.SYS_openat: {
+        const [dirfd, len, flags] = nr === A.SYS_open ? [A.AT_FDCWD, args[0], args[1]] : [args[0], args[1], args[2]];
+        if (len < 0 || len > data.length) return undefined;
+        const f = this.openSync(proc, A.decodeText(data.subarray(0, len)), flags, dirfd);
+        if (f === undefined || typeof f === 'number') return f;
+        const fd = proc.fds.alloc(f, 0, !!(flags & A.O_CLOEXEC));
+        if (fd < 0 && refCount(f) === 0) f.closeSync?.();
+        return fd;
+      }
+      case A.SYS_stat:
+      case A.SYS_lstat: {
+        if (args[0] < 0 || args[0] > data.length) return undefined;
+        return this.statPathSyncInto(proc, A.decodeText(data.subarray(0, args[0])), nr === A.SYS_stat, A.AT_FDCWD, data);
+      }
       case A.SYS_read: {
         const f = proc.fds.get(args[0]);
         return f?.tryRead?.(data.subarray(0, Math.min(args[1] >>> 0, data.length)));
@@ -679,7 +745,10 @@ export class Kernel {
       }
       case A.SYS_fstat:
       case A.SYS_newfstatat: {
-        if (nr === A.SYS_newfstatat && !(args[1] === 0 && args[2] & A.AT_EMPTY_PATH)) return undefined;
+        if (nr === A.SYS_newfstatat && !(args[1] === 0 && args[2] & A.AT_EMPTY_PATH)) {
+          if (args[1] <= 0 || args[1] > data.length) return undefined;
+          return this.statPathSyncInto(proc, A.decodeText(data.subarray(0, args[1])), !(args[2] & A.AT_SYMLINK_NOFOLLOW), args[0], data);
+        }
         const st = proc.fds.get(args[0])?.statSync?.();
         if (!st) return undefined;
         A.encodeStat(st, data);
@@ -1384,10 +1453,16 @@ export class Kernel {
       if (off + reclen > out.length) break;
       const full = name === '.' ? f.path! : name === '..' ? normalize(f.path! + '/..') : normalize(f.path! + '/' + name);
       let type = A.DT_UNKNOWN;
-      const st = await this.statPath(proc, full, false);
-      if (typeof st !== 'number') {
-        const t = st.mode & A.S_IFMT;
-        type = t === A.S_IFDIR ? A.DT_DIR : t === A.S_IFLNK ? A.DT_LNK : t === A.S_IFREG ? A.DT_REG : t === A.S_IFCHR ? A.DT_CHR : A.DT_UNKNOWN;
+      // The entry's node is usually in memory (the directory was just listed): no await per entry
+      const hit = this.devices.has(full) ? undefined : this.fs?.lookupCached(full, false);
+      if (hit) {
+        type = hit.node.type === 'dir' ? A.DT_DIR : hit.node.type === 'symlink' ? A.DT_LNK : A.DT_REG;
+      } else if (hit === undefined) {
+        const st = await this.statPath(proc, full, false);
+        if (typeof st !== 'number') {
+          const t = st.mode & A.S_IFMT;
+          type = t === A.S_IFDIR ? A.DT_DIR : t === A.S_IFLNK ? A.DT_LNK : t === A.S_IFREG ? A.DT_REG : t === A.S_IFCHR ? A.DT_CHR : A.DT_UNKNOWN;
+        }
       }
       dv.setUint32(off, inodeNumber(full), true);
       dv.setUint32(off + 4, 0, true);

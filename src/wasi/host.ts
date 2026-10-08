@@ -179,10 +179,21 @@ function installWasiSyscalls(kernel: Kernel): void {
     data.set(text);
     return text.length;
   });
-  kernel.registerSyscalls([A.SYS_stat, A.SYS_lstat, A.SYS_newfstatat, A.SYS_access, A.SYS_faccessat], binCommandStat);
+  kernel.registerSyscalls([A.SYS_stat, A.SYS_lstat, A.SYS_newfstatat, A.SYS_access, A.SYS_faccessat], Object.assign(binCommandStat, { passSync: binCommandPasses }));
 }
 
 const BIN_DIR = /^\/(?:usr\/)?(?:local\/)?s?bin\/([^/]+)$/;
+
+/** binCommandStat will pass the call on: it isn't about a Shiro command's /bin path (kernel.syscallSync may answer it). */
+function binCommandPasses(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array, kernel: Kernel): boolean {
+  const at = nr === A.SYS_newfstatat || nr === A.SYS_faccessat;
+  if (nr === A.SYS_newfstatat && args[1] === 0) return true;
+  const len = at ? args[1] : args[0];
+  if (len <= 0 || len > data.length) return true;
+  const p = kernel.resolvePath(proc, A.decodeText(data.subarray(0, len)), at ? args[0] : A.AT_FDCWD);
+  const m = typeof p === 'string' ? BIN_DIR.exec(p) : null;
+  return !m || !kernel.shell?.commands.get(m[1]);
+}
 
 /**
  * Shiro's commands are executables in /bin, /usr/bin, ... even without a

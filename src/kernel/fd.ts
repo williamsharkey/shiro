@@ -67,6 +67,8 @@ export interface OpenFile {
   tryRead?(buf: Uint8Array): number | undefined;
   tryWrite?(buf: Uint8Array): number | undefined;
   statSync?(): KStat | undefined;
+  /** Close now if that needs no I/O (true); false = call close(). Called instead of close(), at most once. */
+  closeSync?(): boolean;
 }
 
 // ── Reference counting ──────────────────────────────────────────────────────
@@ -85,6 +87,15 @@ export async function release(file: OpenFile): Promise<void> {
   if (n > 0) { refs.set(file, n); return; }
   refs.delete(file);
   await file.close();
+}
+
+/** release() when it needs no I/O (another reference remains, or the description closes synchronously); false = use release(). */
+export function releaseSync(file: OpenFile): boolean {
+  const n = (refs.get(file) ?? 1) - 1;
+  if (n > 0) { refs.set(file, n); return true; }
+  if (!file.closeSync?.()) return false;
+  refs.delete(file);
+  return true;
 }
 
 export function refCount(file: OpenFile): number {
@@ -147,6 +158,15 @@ export class FdTable {
     if (!e) return -EBADF;
     this.fds.delete(fd);
     await release(e.file);
+    return 0;
+  }
+
+  /** close() when it needs no I/O, else undefined (nothing changed: use close()). */
+  closeSync(fd: number): number | undefined {
+    const e = this.fds.get(fd);
+    if (!e) return -EBADF;
+    if (!releaseSync(e.file)) return undefined;
+    this.fds.delete(fd);
     return 0;
   }
 
@@ -259,6 +279,7 @@ abstract class DevFile implements OpenFile {
   seek(): number { return 0; }
   async stat(): Promise<KStat> { return charDevStat(this.rdev); }
   statSync(): KStat { return charDevStat(this.rdev); }
+  closeSync(): boolean { return true; }
   async close(): Promise<void> {}
 }
 
@@ -465,6 +486,9 @@ class Inode {
     }, ms);
   }
 
+  /** A write-back is in progress. */
+  get busy(): boolean { return !!this.flushing; }
+
   async flush(): Promise<void> {
     if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
     while (this.flushing) await this.flushing;
@@ -493,6 +517,29 @@ export async function openInode(fs: FileSystem, path: string): Promise<Inode> {
   }
   ino.opens++;
   return ino;
+}
+
+/** openInode for a file whose node the FileSystem has in memory (FileSystem.lookupCached). */
+export function openInodeSync(fs: FileSystem, path: string, node: { content: Uint8Array | null; mode: number; mtime: number; ctime: number }): Inode {
+  let table = inodeTables.get(fs);
+  if (!table) { table = new Map(); inodeTables.set(fs, table); }
+  let ino = table.get(path);
+  if (!ino) {
+    // Like readFile: the cached node's bytes, null meaning empty
+    ino = new Inode(fs, path, node.content ?? new Uint8Array(0), node.mode, node.mtime, node.ctime);
+    table.set(path, ino);
+  }
+  ino.opens++;
+  return ino;
+}
+
+/** closeInode when nothing needs to be written back; false = use closeInode. */
+function closeInodeSync(ino: Inode): boolean {
+  if (ino.dirty || ino.busy) return false;
+  ino.opens--;
+  const table = inodeTables.get(ino.fs);
+  if (ino.opens === 0 && table?.get(ino.path) === ino) table.delete(ino.path);
+  return true;
 }
 
 async function closeInode(ino: Inode): Promise<void> {
@@ -659,6 +706,13 @@ export class RegularFile implements OpenFile {
     this.closed = true;
     await closeInode(this.ino);
   }
+
+  closeSync(): boolean {
+    if (this.closed) return true;
+    if (!closeInodeSync(this.ino)) return false;
+    this.closed = true;
+    return true;
+  }
 }
 
 /** A directory stream (open(dir, O_RDONLY|O_DIRECTORY)); getdents reads it. */
@@ -692,7 +746,16 @@ export class DirFile implements OpenFile {
       atimeMs: st.mtime.getTime(), mtimeMs: st.mtime.getTime(), ctimeMs: st.ctime.getTime(),
     };
   }
+  statSync(): KStat | undefined {
+    const hit = this.fs.lookupCached(this.path);
+    if (!hit || hit.node.type !== 'dir') return undefined;
+    return {
+      dev: 1, ino: inodeNumber(this.path), mode: S_IFDIR | (hit.node.mode & 0o7777), nlink: 2, uid: 1000, gid: 1000, rdev: 0,
+      size: 4096, blksize: 4096, blocks: 8, atimeMs: hit.node.mtime, mtimeMs: hit.node.mtime, ctimeMs: hit.node.ctime,
+    };
+  }
   async close(): Promise<void> {}
+  closeSync(): boolean { return true; }
 }
 
 // ── eventfd ──────────────────────────────────────────────────────────────────
