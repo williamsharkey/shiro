@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import { build } from 'esbuild';
 import { setGuestWorkerFactory, forceWasmProcessMode } from '@shiro/wasi/host';
+import { TtySession } from '@shiro/kernel/pty';
 import { createTestShell } from './helpers';
 import type { Shell } from '@shiro/shell';
 import type { FileSystem } from '@shiro/filesystem';
@@ -187,7 +188,7 @@ describe('package index', () => {
     expect(packageStatus(bash)).toBe('blocked');
     expect(packageStatus(findEntry(builtinIndex(), 'jq')!)).toBe('ok');
     expect(packageStatus(findEntry(builtinIndex(), 'lua')!)).toBe('partial'); // REPL wants blocking stdin
-    (globalThis as any).__shiroKernel = { features: ['wasix', 'processes', 'threads'] };
+    (globalThis as any).__shiroKernel = { features: ['wasix', 'processes', 'threads', 'wasix-stack'] };
     try {
       expect(packageStatus(bash)).toBe('partial');
     } finally {
@@ -527,11 +528,74 @@ describe('real packages as kernel processes', () => {
     expect((await sh(shell, `echo '[3,4]' | jq -c 'map(. * 2)' | cat`)).out).toBe('[6,8]\n');
   }, 60_000);
 
-  it('WASIX stays gated even though the kernel can block', async () => {
-    const r = await sh(shell, 'pkg install grep');
+  it('WASIX packages needing more than the guest has stay gated, naming what is missing', async () => {
+    const r = await sh(shell, 'pkg install bash');
     expect(r.exitCode).toBe(100);
-    expect(r.err).toContain('wasix');
-    expect(r.err).not.toContain('threads'); // the kernel provides those now
+    expect(r.err).toContain('wasix-stack');
+    expect(r.err).not.toMatch(/threads|processes/); // the kernel provides those now
+  });
+
+  it('WASIX grep, sed, ripgrep and quickjs-ng run (network)', async (ctx) => {
+    try {
+      await fakeFetch('https://cdn.wasmer.io/webcimages/42a2dd5452990c94a51036cfb5eb9574899beccb5ce8f83f75995f7ac5e0e1ca.webc');
+    } catch {
+      ctx.skip();
+    }
+    expect((await sh(shell, 'pkg install grep sed ripgrep quickjs-ng')).exitCode).toBe(0);
+    await fs.writeFile('/home/user/w.txt', 'b\na\nfoo bar\n');
+    expect((await sh(shell, 'cd /home/user && /usr/bin/grep -n foo w.txt')).out).toBe('3:foo bar\n');
+    expect((await sh(shell, 'cd /home/user && /usr/bin/sed -i s/foo/FOO/ w.txt && cat w.txt')).out).toBe('b\na\nFOO bar\n');
+    expect((await sh(shell, 'echo hello | /usr/bin/sed s/l/L/g')).out).toBe('heLLo\n');
+    expect((await sh(shell, 'cd /home/user && /usr/bin/rg -n bar w.txt')).out).toBe('3:FOO bar\n');
+    expect((await sh(shell, `qjs-ng -e 'console.log(6*7)'`)).out).toBe('42\n');
+    expect((await sh(shell, 'type grep')).out).not.toContain('/usr/bin/grep'); // the builtin keeps the name
+  }, 120_000);
+
+  describe('on the terminal pty', () => {
+    /** A terminal stand-in with a pty session (as in kernel-shell.test.ts) */
+    function fakeTerminal() {
+      const tty = new TtySession();
+      let screen = '';
+      tty.pty.onOutput((b) => { screen += new TextDecoder().decode(b); });
+      return {
+        tty,
+        screen: () => screen,
+        writeOutput: (t: string) => { screen += t; },
+        enterStdinPassthrough() {}, exitStdinPassthrough() {}, enterRawMode() {}, exitRawMode() {},
+        isRawMode: () => false, onResize: () => () => {},
+        getSize: () => ({ rows: tty.pty.winsize.rows, cols: tty.pty.winsize.cols }),
+        term: null,
+      };
+    }
+    const until = async (cond: () => boolean, ms = 10_000) => {
+      const t0 = Date.now();
+      while (!cond()) {
+        if (Date.now() - t0 > ms) throw new Error('timed out');
+        await new Promise(r => setTimeout(r, 5));
+      }
+    };
+
+    it('lua and sqlite3 REPLs read the tty interactively', async () => {
+      await sh(shell, 'pkg install lua sqlite');
+      let term = fakeTerminal();
+      let r = shell.execute('lua', () => {}, () => {}, false, term);
+      await until(() => term.tty.jobInForeground && term.screen().includes('> '));
+      term.tty.pty.input('print(6*7)\r');
+      await until(() => term.screen().includes('42'));
+      term.tty.pty.input('\x04');
+      expect(await r).toBe(0);
+      expect(term.screen()).toContain('Lua 5.4.7');
+
+      term = fakeTerminal();
+      r = shell.execute('cd /home/user && sqlite3 repl.db', () => {}, () => {}, false, term);
+      await until(() => term.tty.jobInForeground && term.screen().includes('sqlite> '));
+      term.tty.pty.input('create table t(x); insert into t values (6);\r');
+      term.tty.pty.input('select x * 7 from t;\r');
+      await until(() => term.screen().includes('42'));
+      term.tty.pty.input('.quit\r');
+      expect(await r).toBe(0);
+      expect((await sh(shell, `cd /home/user && sqlite3 repl.db 'select count(*) from t;'`)).out).toBe('1\n');
+    }, 60_000);
   });
 });
 

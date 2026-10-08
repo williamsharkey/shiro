@@ -33,9 +33,14 @@ export type KernelFeature =
   | 'sockets'         // TCP through the relay
   | 'blocking-stdin'  // read() that waits for typed input (REPLs, prompts)
   | 'tty'             // termios / raw mode for full-screen programs
-  | 'sync-fs';        // on-demand synchronous file access (large trees)
+  | 'sync-fs'         // on-demand synchronous file access (large trees)
+  | 'wasix-stack'     // WASIX stack_checkpoint/stack_restore (setjmp, fork): host-side stack capture
+  | 'dynamic-linking' // modules importing env.__indirect_function_table / shared libraries
+  | 'mounts';         // package volumes mounted at fixed paths (clang's /sysroot and /lib)
 
-const KERNEL_FEATURES: KernelFeature[] = ['wasix', 'processes', 'threads', 'sockets', 'blocking-stdin', 'tty', 'sync-fs'];
+const KERNEL_FEATURES: KernelFeature[] = [
+  'wasix', 'processes', 'threads', 'sockets', 'blocking-stdin', 'tty', 'sync-fs', 'wasix-stack', 'dynamic-linking', 'mounts',
+];
 
 export type PkgAbi = 'wasi_snapshot_preview1' | 'wasi_unstable' | 'wasix';
 
@@ -207,11 +212,11 @@ export function searchIndex(index: PkgIndex, query: string): PkgEntry[] {
 /** What the WASM process runtime (src/wasi/host.ts) can do in this page. */
 const MODE_FEATURES: Record<string, KernelFeature[]> = {
   // Worker per process/thread, blocking syscalls over SharedArrayBuffer
-  // ('wasix' stays out: the guest implements only its process/pipe/futex
-  // subset, and every WASIX package in the index still traps on it)
-  sab: ['blocking-stdin', 'tty', 'processes', 'threads', 'sync-fs'],
+  // 'wasix' is the guest's subset (startup, spawn, pipes, futexes, path_open2);
+  // packages needing more name it (wasix-stack, sockets, ...)
+  sab: ['blocking-stdin', 'tty', 'processes', 'threads', 'sync-fs', 'wasix'],
   // Main thread, imports suspend on the kernel (no shared memory, so no threads)
-  jspi: ['blocking-stdin', 'tty', 'processes', 'sync-fs'],
+  jspi: ['blocking-stdin', 'tty', 'processes', 'sync-fs', 'wasix'],
   none: [],
 };
 let runtimeMode: 'sab' | 'jspi' | 'none' | null = null;

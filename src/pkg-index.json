@@ -903,9 +903,10 @@
    "needs": [
     "wasix",
     "processes",
-    "threads"
+    "threads",
+    "wasix-stack"
    ],
-   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory. Runs every command through fork/exec.",
+   "notes": "WASIX build (wasix_32v1, shared env.memory). Stops at stack_checkpoint (WASIX setjmp/fork), which the kernel guest lacks.",
    "wants": [
     "tty",
     "blocking-stdin"
@@ -940,9 +941,10 @@
    "needs": [
     "wasix",
     "processes",
-    "threads"
+    "threads",
+    "wasix-stack"
    ],
-   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory.",
+   "notes": "WASIX build (wasix_32v1, shared env.memory). Stops at stack_checkpoint (WASIX setjmp/fork), which the kernel guest lacks.",
    "wants": [
     "tty",
     "blocking-stdin"
@@ -978,7 +980,7 @@
     "wasix",
     "threads"
    ],
-   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory."
+   "notes": "WASIX build (wasix_32v1, shared env.memory). Run it as /usr/bin/grep (the builtin keeps the name). grep -r fails with ENOSYS."
   },
   {
    "name": "sed",
@@ -1010,7 +1012,7 @@
     "wasix",
     "threads"
    ],
-   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory.",
+   "notes": "WASIX build (wasix_32v1, shared env.memory). Run it as /usr/bin/sed (the builtin keeps the name).",
    "wants": [
     "processes"
    ]
@@ -1047,7 +1049,7 @@
     "tty",
     "blocking-stdin"
    ],
-   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory."
+   "notes": "WASIX build (wasix_32v1, shared env.memory). Run it as /usr/bin/less (the builtin keeps the name)."
   },
   {
    "name": "ripgrep",
@@ -1079,7 +1081,7 @@
     "wasix",
     "threads"
    ],
-   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory."
+   "notes": "WASIX build (wasix_32v1, shared env.memory). Run it as /usr/bin/rg (the builtin keeps the name)."
   },
   {
    "name": "curl",
@@ -1122,7 +1124,7 @@
     "threads",
     "sockets"
    ],
-   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory. Needs real TCP through the relay."
+   "notes": "WASIX build (wasix_32v1, shared env.memory). --version runs; transfers need WASIX sock_open/connect and the TCP relay."
   },
   {
    "name": "quickjs-ng",
@@ -1154,7 +1156,7 @@
     "wasix",
     "threads"
    ],
-   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory.",
+   "notes": "WASIX build (wasix_32v1, shared env.memory).",
    "wants": [
     "blocking-stdin"
    ]
@@ -1188,9 +1190,9 @@
    "needs": [
     "wasix",
     "threads",
-    "sockets"
+    "wasix-stack"
    ],
-   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory. 86 MB download."
+   "notes": "WASIX build (wasix_32v1, shared env.memory). 86 MB download. Stops at stack_checkpoint (WASIX setjmp)."
   },
   {
    "name": "python",
@@ -1221,9 +1223,10 @@
    "needs": [
     "wasix",
     "threads",
-    "sync-fs"
+    "sync-fs",
+    "dynamic-linking"
    ],
-   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory. The standard library is a volume read on demand. Shiro's `python` builtin (Pyodide) covers most uses meanwhile."
+   "notes": "WASIX build (wasix_32v1, shared env.memory). Imports env.__indirect_function_table (a dynamically linked build), and its standard library is a volume. Shiro's `python` builtin (Pyodide) covers most uses meanwhile."
   },
   {
    "name": "clang",
@@ -1311,9 +1314,10 @@
     "wasix",
     "threads",
     "processes",
-    "sync-fs"
+    "sync-fs",
+    "mounts"
    ],
-   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory. 111 MB download; the driver spawns lld."
+   "notes": "WASIX build (wasix_32v1, shared env.memory). 111 MB download. --version runs; compiling needs its sysroot volumes mounted at /sysroot and /lib, and the driver spawns lld."
   }
  ]
 }
