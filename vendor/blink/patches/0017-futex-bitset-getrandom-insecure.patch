@@ -1,0 +1,95 @@
+From 41f52d68e9bbe33d709c04e86565a0c827cfa21e Mon Sep 17 00:00:00 2001
+From: Shiro <shiro@localhost>
+Date: Thu, 8 Oct 2026 20:44:36 +0000
+Subject: [PATCH 17/17] futex FUTEX_WAIT_BITSET/FUTEX_WAKE_BITSET; getrandom
+ GRND_INSECURE (Rust's std uses both)
+
+---
+ blink/linux.h   |  2 ++
+ blink/syscall.c | 28 +++++++++++++++++++++++-----
+ 2 files changed, 25 insertions(+), 5 deletions(-)
+
+diff --git a/blink/linux.h b/blink/linux.h
+index 51973e2..8357d89 100644
+--- a/blink/linux.h
++++ b/blink/linux.h
+@@ -232,6 +232,7 @@
+ #define FUTEX_WAIT_LINUX           0
+ #define FUTEX_WAKE_LINUX           1
+ #define FUTEX_WAIT_BITSET_LINUX    9
++#define FUTEX_WAKE_BITSET_LINUX    10
+ #define FUTEX_PRIVATE_FLAG_LINUX   128
+ #define FUTEX_CLOCK_REALTIME_LINUX 256
+ 
+@@ -412,6 +413,7 @@
+ 
+ #define GRND_NONBLOCK_LINUX 1
+ #define GRND_RANDOM_LINUX   2
++#define GRND_INSECURE_LINUX 4
+ 
+ #define NCCS_LINUX     19
+ #define VINTR_LINUX    0
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 3206ef9..22fee21 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -685,6 +685,9 @@ static int SysFutexWait(struct Machine *m,  //
+                         i32 op,             //
+                         u32 expect,         //
+                         i64 timeout_addr) {
++  // FUTEX_WAIT_BITSET: the timeout is an absolute time on CLOCK_MONOTONIC
++  // (CLOCK_REALTIME with FUTEX_CLOCK_REALTIME); every bitset matches any waker
++  bool absolute = (op & ~FUTEX_CLOCK_REALTIME_LINUX) == FUTEX_WAIT_BITSET_LINUX;
+   int rc;
+   u8 *mem;
+   struct Futex *f;
+@@ -701,6 +704,14 @@ static int SysFutexWait(struct Machine *m,  //
+     if (!(0 <= timeout.tv_nsec && timeout.tv_nsec < 1000000000)) {
+       return einval();
+     }
++    if (absolute) {
++      struct timespec clk;
++      unassert(!clock_gettime((op & FUTEX_CLOCK_REALTIME_LINUX) ? CLOCK_REALTIME
++                                                                : CLOCK_MONOTONIC,
++                              &clk));
++      timeout = CompareTime(timeout, clk) > 0 ? SubtractTime(timeout, clk)
++                                              : GetZeroTime();
++    }
+     deadline = AddTime(now, timeout);
+   } else {
+     deadline = GetMaxTime();
+@@ -789,12 +800,13 @@ static int SysFutex(struct Machine *m,  //
+       return SysFutexWake(m, uaddr, val);
+     case FUTEX_WAIT_BITSET_LINUX:
+     case FUTEX_WAIT_BITSET_LINUX | FUTEX_CLOCK_REALTIME_LINUX:
+-      // will be supported soon
+-      // avoid logging when cosmo feature checks this
+-      if (!m->system->iscosmo) goto DefaultCase;
+-      return einval();
++      // Rust's std, glibc and Go wait with a bitset for absolute timeouts
++      if (!val3) return einval();
++      return SysFutexWait(m, uaddr, op, val, timeout_addr);
++    case FUTEX_WAKE_BITSET_LINUX:
++      if (!val3) return einval();
++      return SysFutexWake(m, uaddr, val);
+     default:
+-    DefaultCase:
+       LOGF("unsupported %s op %#x", "futex", op);
+       return einval();
+   }
+@@ -3799,6 +3811,12 @@ static ssize_t SysGetrandom(struct Machine *m, i64 a, size_t n, int f) {
+   ssize_t rc;
+   int besteffort, unsupported;
+   besteffort = GRND_NONBLOCK_LINUX | GRND_RANDOM_LINUX;
++  if (f & GRND_INSECURE_LINUX) {
++    // never blocks, and may return bytes before the pool is initialized;
++    // ours always is, so it is GRND_NONBLOCK (Rust's std asks for it first)
++    if (f & GRND_RANDOM_LINUX) return einval();
++    f = (f & ~GRND_INSECURE_LINUX) | GRND_NONBLOCK_LINUX;
++  }
+   if ((unsupported = f & ~besteffort)) {
+     LOGF("%s() flags %d not supported", "getrandom", unsupported);
+     return einval();
+-- 
+2.43.0
+

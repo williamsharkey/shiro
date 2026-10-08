@@ -2401,6 +2401,35 @@
    ]
   },
   {
+   "name": "bat",
+   "version": "0.26.1",
+   "description": "cat with syntax highlighting and Git integration (upstream static musl build)",
+   "license": "MIT OR Apache-2.0",
+   "source": "https://github.com/sharkdp/bat/releases/download/v0.26.1/bat-v0.26.1-x86_64-unknown-linux-musl.tar.gz",
+   "homepage": "https://github.com/sharkdp/bat",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/bat.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/bat",
+     "url": "/pkg/bat/0.26.1/bat.gz",
+     "sha256": "05b6f2e29abe08b019b34c37e53ff19577b8469f50af28f6568ecb7723725bd7",
+     "size": 3518050,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "bat": {
+     "file": "bin/bat"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
    "name": "fzf",
    "version": "0.74.0",
    "description": "Command-line fuzzy finder (upstream static Go build)",

@@ -208,6 +208,11 @@ in the test when `go`/`gcc` exist.
    `ShiroMmapFile`, which takes it itself (a deadlock in `file`).
 15. `madvise(MADV_DONTNEED)` zeroes touched anonymous pages, as Linux does
    (jemalloc in Rust programs such as fd checks it and warns otherwise).
+16. `pextrw` zero-extends into the whole destination register (upstream
+   wrote only the low 16 bits; Rust's miniz_oxide inflate built with LTO
+   uses it, so bat's compressed themes failed to load).
+17. `futex` `FUTEX_WAIT_BITSET` (absolute timeout) and `FUTEX_WAKE_BITSET`,
+   `getrandom(GRND_INSECURE)`: Rust's std uses both.
 
 Native Blink's own exit path (`KillOtherThreads`) still hangs after
 multi-threaded Go programs; the wasm build doesn't use it.

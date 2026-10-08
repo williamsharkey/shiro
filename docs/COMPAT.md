@@ -74,6 +74,7 @@ and run in Blink, so they need a cross-origin isolated page
 | curl | 8.22.0 (OpenSSL 3.5.9, zlib) | pkg (Blink) | works | HTTP GET with headers against a loopback server on kernel sockets; connection refused is exit 7 | Remote hosts go through the server's WebSocket-to-TCP relay and DNS-over-HTTPS (not in the automated test). No HTTP/2, HTTP/3, IDN, libssh2 |
 | ca-certificates | 2026-09-25 (Mozilla, via curl.se) | pkg | works | `/etc/ssl/certs/ca-certificates.crt`, `/etc/ssl/cert.pem`; openssl and curl depend on it | |
 | fd | 10.3.0 | pkg (Blink; upstream static musl release) | works | `-e`, `-t d`, `.gitignore` respected, `-u` | |
+| bat | 0.26.1 | pkg (Blink; upstream static musl release) | works | highlighting with the built-in themes (default and `--theme`), `-n`, plain output when piped, `--list-languages` | needed Blink patches 0016 (`pextrw`) and 0017 (`FUTEX_WAIT_BITSET`, `GRND_INSECURE`) and kernel `FIONBIO` on pipes |
 | fzf | 0.74.0 | pkg (Blink; upstream static Go release) | works | `-f` filter; the TUI with `--height` on the tty (cursor position report, typing narrows the list, Enter prints the pick) | Go runtime in Blink: start-up takes about a second |
 | yq | 4.52.1 (mikefarah) | pkg (Blink; upstream static Go release) | works | path query, `-o json`, `-i` in-place edit | |
 
@@ -107,6 +108,12 @@ Shiro changes these programs needed (tests in `x86-engine.test.ts`,
   shell exports `LANG=C.UTF-8`.
 - `mmap` of a kernel file in a Blink guest (patch 0014 fixes a deadlock it
   hit; `file` maps its magic database).
+- Blink: `pextrw` zero-extends its result (patch 0016; Rust's inflate built
+  with LTO, so every compressed asset in bat failed to load), futex
+  `FUTEX_WAIT_BITSET`/`FUTEX_WAKE_BITSET` and `getrandom(GRND_INSECURE)`
+  (patch 0017; Rust's std), `MADV_DONTNEED` (patch 0015). `x86-engine.test.ts`.
+- `ioctl(FIONBIO)` works on every file, pipes included (Rust's
+  `Command::output()`). `kernel-core.test.ts`.
 - Blink keeps its own log in its in-memory root (`-L /blink.log`), not in
   the program's working directory.
 - `link(2)` still copies (the filesystem has no hard links) but the copy

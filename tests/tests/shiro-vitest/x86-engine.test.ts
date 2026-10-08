@@ -337,3 +337,13 @@ describe('Blink engine: fork() without exec', () => {
     expect(r.output).toContain('echo child: HELLO');
   }, 60_000);
 });
+
+// Blink patches 0015-0017 (jemalloc, Rust's miniz_oxide and std need them).
+describe('Blink engine: CPU and syscall fixes', () => {
+  it('pextrw zero-extends, MADV_DONTNEED zeroes, FUTEX_WAIT_BITSET times out, GRND_INSECURE works', async () => {
+    const { shell } = await setup(readFileSync(join(FIX, 'cpu-musl')));
+    const r = await run(shell, './prog');
+    expect(r.exitCode).toBe(0);
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('pextrw 0xfffe\nmadvise 0 0 0\nfutex_wait_bitset timedout on time\nfutex_wake_bitset 0\ngetrandom 16\n');
+  }, 60_000);
+});

@@ -416,6 +416,10 @@ describe('kernel processes', () => {
     expect(await kernel.syscall(proc, A.SYS_read, [r, 10], data)).toBe(3);
     expect(dec.decode(data.subarray(0, 3))).toBe('xyz');
     expect(await kernel.syscall(proc, 4242, [], data)).toBe(-A.ENOSYS);
+    // FIONBIO on a pipe (Rust's Command::output() makes its pipes non-blocking so)
+    dv.setInt32(0, 1, true);
+    expect(await kernel.syscall(proc, A.SYS_ioctl, [r, A.FIONBIO, 4], data)).toBe(0);
+    expect(await kernel.syscall(proc, A.SYS_read, [r, 10], data)).toBe(-A.EAGAIN);
 
     await fs.mkdir('/tmp/kdir', { recursive: true });
     await fs.writeFile('/tmp/kdir/f1', '1');

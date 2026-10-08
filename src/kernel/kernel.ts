@@ -856,7 +856,7 @@ export class Kernel {
           if (req === A.FIONBIO && arg.length >= 4) {
             const on = new DataView(arg.buffer, arg.byteOffset, 4).getInt32(0, true) !== 0;
             f.flags = on ? f.flags | A.O_NONBLOCK : f.flags & ~A.O_NONBLOCK;
-            if (!f.ioctl) return 0;
+            return 0; // any file (Rust's Command::output() sets its pipes non-blocking this way)
           }
           if (!f.ioctl) return -A.ENOTTY;
           return await f.ioctl(req, arg, sig);

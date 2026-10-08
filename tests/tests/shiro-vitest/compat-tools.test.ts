@@ -502,3 +502,17 @@ describe('yq', () => {
     expect((await sh("yq -i '.a = 2' t.yaml && cat t.yaml")).out).toBe('a: 2\nb: [x, y]\n');
   }, 180_000);
 });
+
+describe('bat', () => {
+  it('highlights syntax with its built-in themes, numbers lines, and is plain when piped', async () => {
+    await install('bat');
+    await fs.writeFile('/home/user/w/hello.rs', 'fn main() {\n    println!("hi");\n}\n');
+    const c = await sh('bat --color=always --paging=never -p hello.rs');
+    expect(c.err).toBe('');
+    expect(c.out).toMatch(/\x1b\[38;[25];[\d;]+mfn\x1b\[0m/); // `fn` coloured by the default theme
+    expect((await sh('bat --color=always --paging=never --theme=GitHub -p hello.rs')).out).toContain('println');
+    expect((await sh('bat -n --color=never --paging=never hello.rs')).out).toMatch(/^ +1 fn main\(\) \{\n +2 +println/);
+    expect((await sh('bat hello.rs | cat')).out).toBe('fn main() {\n    println!("hi");\n}\n');
+    expect((await sh('bat --list-languages | grep -c "^Rust:"')).out).toBe('1\n');
+  }, 180_000);
+});
