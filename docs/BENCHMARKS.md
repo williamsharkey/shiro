@@ -210,6 +210,26 @@ Against the committed host baseline the loops are 324 → 16.5 ms (20×) and
 `kernel.syscall_inpage`, `kernel.file_read`, `shell.pipeline_seq_grep_wc`,
 `boot.warm.first_command`: overlapping ranges, noise.
 
+### unix/perf-fs-shell 2 — no dynamic import per command
+
+`perf-fs-shell-1-quick.json` → `perf-fs-shell-2-quick.json`. `tryKernelRun`
+(called for every simple command) did `await import('./shell-kernel')`, which
+in the build goes through Vite's `__vitePreload` helper each time (≈20% of
+`for_seq_1000`'s profile). The module is now loaded once and then used
+synchronously.
+
+| metric (isolated) | before | after | vs same-machine baseline |
+|---|---:|---:|---:|
+| shell.for_seq_1000 | 25.0 ms | 11.4 ms | 118 → 11.4 ms (10×) |
+| shell.redirect_append_100 | 7.7 ms | 3.1 ms | 108 → 3.1 ms (35×) |
+| shell.true (focused run) | 0.08 ms | 0.034 ms | 0.12 → 0.034 ms |
+
+Flagged and judged noise (in-page kernel lab, no shell involved; within the
+ranges of the 3× re-runs above): `kernel.syscall_inpage`,
+`kernel.epoll_wakeup`, `kernel.pipe_throughput_512b`,
+`kernel.spawn_throughput.wasm` (nonisolated); `wasm.startup.lua` 9.2 → 10.5 ms
+(baseline 10.5).
+
 ## Results
 
 <!-- bench:table:begin -->

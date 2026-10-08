@@ -11,6 +11,15 @@ async function loadWasiRuntime() {
   return _wasiRuntime;
 }
 
+// shell-kernel is loaded on first use and then reached synchronously: a
+// dynamic import() per command (through Vite's preload helper) was a large
+// part of every builtin's cost
+let _shellKernel: typeof import('./shell-kernel') | null = null;
+let _shellKernelLoading: Promise<typeof import('./shell-kernel')> | null = null;
+function loadShellKernel(): Promise<typeof import('./shell-kernel')> {
+  return _shellKernelLoading ??= import('./shell-kernel').then(m => (_shellKernel = m));
+}
+
 interface Redirect {
   type: '>' | '>>' | '<' | '2>' | '2>>' | '2>&1' | '>&-';
   target: string;
@@ -4963,7 +4972,7 @@ export class Shell {
     pipeline: string[], i: number, name: string, args: string[], redirects: Redirect[], ctx: CommandContext,
     hasShellStdin: boolean, writeStdout: (s: string) => void, writeStderr: (s: string) => void, terminal: any,
   ): Promise<{ lastIndex: number; redirects: Redirect[]; exitCode: number; statuses: number[]; stdout: string; stderr: string } | null> {
-    const { mayBeKernelProgram, resolveKernelProgram, builtinStage, runKernelPipeline } = await import('./shell-kernel');
+    const { mayBeKernelProgram, resolveKernelProgram, builtinStage, runKernelPipeline } = _shellKernel ?? await loadShellKernel();
     const progress = (m: string) => writeStderr(`  ${m}\r\n`);
     const stageFor = async (n: string, a: string[]) =>
       builtinStage(this, n, a) ?? (mayBeKernelProgram(this, n) ? await resolveKernelProgram(this, n, a, progress) : null);
@@ -5018,7 +5027,7 @@ export class Shell {
    */
   private async launchKernelBackground(command: string, writeStdout: (s: string) => void, term: any): Promise<boolean> {
     if (!term?.tty || /[;&]|\|\||\$\(|`/.test(command)) return false;
-    const { mayBeKernelProgram, resolveKernelProgram, runKernelPipeline } = await import('./shell-kernel');
+    const { mayBeKernelProgram, resolveKernelProgram, runKernelPipeline } = _shellKernel ?? await loadShellKernel();
     const segments = this.parsePipeline(await this.expandWords(command, () => {}));
     const programs = [];
     for (const seg of segments) {
