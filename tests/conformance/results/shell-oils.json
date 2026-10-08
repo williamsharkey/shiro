@@ -510,30 +510,17 @@
    ]
   },
   "sh-func": {
-   "pass": 10,
+   "pass": 11,
    "total": 11,
-   "failures": [
-    {
-     "i": 10,
-     "name": "Subshell function"
-    }
-   ]
+   "failures": []
   },
   "func-parsing": {
-   "pass": 4,
+   "pass": 6,
    "total": 12,
    "failures": [
     {
-     "i": 4,
-     "name": "Function with spaces, to see if ( and ) are separate tokens."
-    },
-    {
      "i": 6,
      "name": "Hard case, function with } token in it"
-    },
-    {
-     "i": 7,
-     "name": ". in function name"
     },
     {
      "i": 8,
@@ -1022,7 +1009,7 @@
    ]
   },
   "tilde": {
-   "pass": 7,
+   "pass": 9,
    "total": 14,
    "failures": [
     {
@@ -1034,16 +1021,8 @@
      "name": "${x//~/~root}"
     },
     {
-     "i": 8,
-     "name": "x=foo:~ has tilde expansion"
-    },
-    {
      "i": 9,
      "name": "a[x]=foo:~ has tilde expansion"
-    },
-    {
-     "i": 10,
-     "name": "tilde expansion an assignment keyword"
     },
     {
      "i": 11,

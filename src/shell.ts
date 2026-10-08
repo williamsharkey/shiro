@@ -3519,8 +3519,11 @@ export class Shell {
         const before = i === 0 ? '' : line[i - 1];
         const after = line[i + 1] || '';
         // Only expand after = in assignment context (VAR=~), not in operators like =~
-        const isAssignContext = before === '=' ? (i >= 2 && /[A-Za-z0-9_]/.test(line[i - 2])) : true;
-        if ((i === 0 || /[\s=]/.test(before)) && isAssignContext) {
+        const isAssignContext = before === '=' ? (i >= 2 && /[A-Za-z0-9_\]]/.test(line[i - 2])) : true;
+        // In an assignment's value a ~ after : expands too (PATH=$PATH:~/bin)
+        const wordStart = Math.max(line.lastIndexOf(' ', i), line.lastIndexOf('\t', i), line.lastIndexOf('\n', i)) + 1;
+        const afterColon = before === ':' && /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/.test(line.slice(wordStart, i));
+        if ((i === 0 || /[\s=]/.test(before) || afterColon) && isAssignContext) {
           // ~+ expands to $PWD, ~- expands to $OLDPWD
           if (after === '+' && (/[\/\s;|&>]/.test(line[i + 2] || '') || i + 2 >= line.length)) {
             result += this.env['PWD'] || this.cwd;
@@ -3532,7 +3535,7 @@ export class Shell {
             i += 2;
             continue;
           }
-          if (/[\/\s;|&>]/.test(after) || i + 1 >= line.length) {
+          if (/[\/\s;|&>]/.test(after) || i + 1 >= line.length || (after === ':' && (afterColon || before === '='))) {
             const home = this.env['HOME'] ?? '/home/user';
             result += splitFields(home, ''); // a tilde expansion is one field
             i++;
@@ -5000,11 +5003,23 @@ export class Shell {
   // ─── SHELL FUNCTIONS ──────────────────────────────────────────────────────
 
   private parseFunctionDef(input: string): { name: string; body: string } | null {
-    // bash allows - . : in function names (test-hyphen() { … })
-    let match = input.match(/^([A-Za-z_][\w.:-]*)\s*\(\)\s*\{([\s\S]*)\}$/);
-    if (!match) match = input.match(/^function\s+([A-Za-z_][\w.:-]*)\s*(?:\(\))?\s*\{([\s\S]*)\}$/);
-    if (match) return { name: match[1], body: match[2].trim() };
-    return null;
+    // NAME() BODY or function NAME [()] BODY; bash allows - . : in names (test-hyphen() { … }).
+    // BODY is any compound command: { … }, ( … ), a loop, if, case, [[ ]], (( )),
+    // possibly followed by redirections ({ cat; } <<EOF)
+    const m = /^(function\s+)?([A-Za-z_][\w.:-]*)\s*(\(\s*\))?\s*([\s\S]+)$/.exec(input);
+    if (!m || (!m[1] && !m[3])) return null;
+    const rest = m[4].trim();
+    if (!/^(\{\s|\(|(if|for|while|until|case|select)\s|\[\[\s)/.test(rest)) return null;
+    // A plain { … }: its inside is the body
+    if (isBraceGroup(rest) && compoundEnd(rest) === rest.length) {
+      return { name: m[2], body: rest.slice(1, rest.lastIndexOf('}')).trim().replace(/;$/, '').trim() };
+    }
+    // The compound must be all there is, apart from redirections after it
+    const end = rest.startsWith('[[') ? rest.indexOf(']]') + 2 : compoundEnd(rest);
+    if (end <= 0) return null;
+    const after = rest.slice(end).trim();
+    if (after && !/^(\d*[<>]|&>)/.test(after)) return null;
+    return { name: m[2], body: rest };
   }
 
   private async execFunction(
@@ -6924,7 +6939,9 @@ function compoundEnd(cmd: string): number {
     if (ch === '(') { paren++; i++; cmdPos = true; continue; }
     if (ch === ')') {
       if (paren > 0) paren--;
-      i++; cmdPos = false;
+      // `name()` is followed by a function body: a compound command can start
+      const emptyParens = cmd.slice(0, i).trimEnd().endsWith('(');
+      i++; cmdPos = emptyParens;
       if (subshell && paren === 0 && blocks.length === 0) return i;
       continue;
     }

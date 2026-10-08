@@ -6,7 +6,7 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1290/1567 (82.3%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1295/1567 (82.6%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1275/1567 (81.4%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **605/635 (95.3%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **146/320 (45.6%)** |
@@ -39,8 +39,8 @@ How each suite runs, and what is and isn't scored, is described in
 | if_ | 0/5 | 4/5 | 1 |
 | loop | 1/28 | 21/28 | 7 |
 | case_ | 0/13 | 12/13 | 1 |
-| sh-func | 0/11 | 10/11 | 1 |
-| func-parsing | 1/12 | 4/12 | 8 |
+| sh-func | 0/11 | 11/11 | 0 |
+| func-parsing | 1/12 | 6/12 | 6 |
 | builtin-echo | 0/27 | 25/27 | 2 |
 | builtin-printf | 0/55 | 47/55 | 8 |
 | builtin-read | 0/64 | 64/64 | 0 |
@@ -60,7 +60,7 @@ How each suite runs, and what is and isn't scored, is described in
 | array | 2/78 | 68/78 | 10 |
 | array-assoc | 0/38 | 34/38 | 4 |
 | brace-expansion | 0/55 | 51/55 | 4 |
-| tilde | 0/14 | 7/14 | 7 |
+| tilde | 0/14 | 9/14 | 5 |
 | glob | 0/23 | 18/23 | 5 |
 | pipeline | 0/25 | 19/25 | 6 |
 | exit-status | 0/11 | 5/11 | 6 |
@@ -100,8 +100,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **if_**: if break corner case
 - **loop**: while in pipe with subshell; continue at top level; continue in subshell; continue in subshell aborts with errexit; bad arg to break; top-level break/continue/return (without strict_control_flow); builtin,command break,continue,return,exit
 - **case_**: case \n bug regression
-- **sh-func**: Subshell function
-- **func-parsing**: Function with spaces, to see if ( and ) are separate tokens.; Hard case, function with } token in it; . in function name; = in function name; Function name with $; Function name with command sub; Function name with !; Break after ) is OK.
+- **func-parsing**: Hard case, function with } token in it; = in function name; Function name with $; Function name with command sub; Function name with !; Break after ) is OK.
 - **builtin-echo**: echo builtin should disallow typed args - literal; echo builtin should disallow typed args - variable
 - **builtin-printf**: printf with no args; printf -v a[1]; printf -v syntax error; printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8; printf invalid format; bash truncates long strftime string at 128; printf positive integer overflow; printf negative integer overflow
 - **builtin-eval-source**: eval usage; eval YSH block with 'break continue return error'; Source with syntax error; Eval with syntax error
@@ -119,7 +118,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **array**: space before ( in array initialization; array with invalid token; ${!a[1]} is named ref in bash; Arrays can't be used as env bindings; Associative arrays can't be used as env bindings either; Set array item to array; Multiple subscripts not allowed; Length op, index op, then transform op is not allowed; array default; a+=() modifies existing instance of BashArray
 - **array-assoc**: unset -v and assoc array; nameref and assoc array; printf -v and assoc array; bash bug: (( A["$key"] = 1 )) doesn't work
 - **brace-expansion**: expansion on RHS of assignment; no expansion with RHS assignment; Two kinds of tilde expansion; Mixed case char expansion is invalid
-- **tilde**: ${undef:-~}; ${x//~/~root}; x=foo:~ has tilde expansion; a[x]=foo:~ has tilde expansion; tilde expansion an assignment keyword; x=${undef-~:~}; temp assignment x=~ env
+- **tilde**: ${undef:-~}; ${x//~/~root}; a[x]=foo:~ has tilde expansion; x=${undef-~:~}; temp assignment x=~ env
 - **glob**: Glob of unescaped [[] and []]; Glob of negated unescaped [[] and []]; \ in unquoted substitutions does not match a backslash; \ in unquoted substitutions escapes globchars; shopt -u globskipdots shows . and ..
 - **pipeline**: PIPESTATUS is set on simple commands; \|&; ! with ( ); ! is not a command; Evaluation of argv[0] in pipeline occurs in child; SIGPIPE causes pipeline to die (regression for issue #295)
 - **exit-status**: Truncating 'return' status; subshell OverflowError https://github.com/oilshell/oil/issues/996; func subshell OverflowError https://github.com/oilshell/oil/issues/996; If subshell false -- exit code is propagated in a weird way (strict_argv prevents); Exit code when command sub evaluates to empty str, e.g. `false` (#2416); More test cases with empty argv

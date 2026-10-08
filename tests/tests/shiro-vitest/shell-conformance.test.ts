@@ -456,4 +456,26 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe("while is a shell keyword\ncd is a shell builtin\nkeyword\nbuiltin\nfunction\ncd\ncd is a shell builtin\nll is aliased to `ls -l'\nalias\nst=1\n");
   });
+
+  it('function bodies that are any compound command (subshell, loop, with a here-doc); ~ after : in assignments', async () => {
+    const r = await script([
+      "f() ( echo sub; exit 3 )",
+      "f; echo st=$?",
+      "fun() { cat; } <<EOF",
+      "heredoc body",
+      "EOF",
+      "fun",
+      "g() for i in 1 2; do echo $i; done",
+      "g",
+      "function h { echo h; }",
+      "h",
+      "k() { echo \"a;b\"; }; k",
+      "HOME=/home/bar",
+      "x=foo:~; echo $x",
+      "y=~:~/a; echo $y",
+      "echo a:~",
+      "P=/bin:~/bin:~; echo $P",
+    ].join('\n'));
+    expect(r.out).toBe('sub\nst=3\nheredoc body\n1\n2\nh\na;b\nfoo:/home/bar\n/home/bar:/home/bar/a\na:~\n/bin:/home/bar/bin:/home/bar\n');
+  });
 });
