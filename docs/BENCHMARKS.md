@@ -184,6 +184,15 @@ metrics swing ±25% between identical runs here, so a flag on them was re-run
 | x86.blink.hello_musl | 140 ms | 115 ms | −18% | 92.5 ms |
 | x86.blink.peak_rss.go_nethttp | 22.1 MiB | 25.6 MiB | +16% (noise range) | 34.1 MiB |
 
+The suite's medians exclude the first run, and for `gh` that matters: V8
+caches compiled wasm by module bytes for the whole renderer process, so the
+first `gh --version` in a page is 6.3–6.9 s and later ones ~3.2 s (also for
+a second copy of the binary). Without the JIT the first run is no slower.
+
+Bug found on the way: `cp` copied files as UTF-8 text, so a copied ELF
+binary grew (50 → 67 MB for `gh`) and didn't run; it now copies bytes and
+the mode bits (`commands.test.ts`).
+
 ### unix/perf-blink 1 — wasm JIT for Blink (x86-64 → WebAssembly)
 
 Vendor patch 0012 (`blink/wjit.c`, see `X86_ENGINES.md` "The wasm JIT"):

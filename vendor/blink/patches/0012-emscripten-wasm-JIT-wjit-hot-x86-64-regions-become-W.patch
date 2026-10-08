@@ -1,4 +1,4 @@
-From 24012652e223e78ff59f43b2cd3f324be794d9f2 Mon Sep 17 00:00:00 2001
+From 6847b828cf93a54dd10fffd0eb570be20db65aff Mon Sep 17 00:00:00 2001
 From: shiro <build@shiro>
 Date: Thu, 8 Oct 2026 04:49:59 +0000
 Subject: [PATCH] emscripten: wasm JIT (wjit): hot x86-64 regions become
@@ -18,9 +18,9 @@ or reprotecting such a page invalidates every thread's regions.
  blink/machine.h      |    4 +
  blink/memorymalloc.c |    3 +
  blink/reset.c        |    1 +
- blink/wjit.c         | 3000 ++++++++++++++++++++++++++++++++++++++++++
+ blink/wjit.c         | 3019 ++++++++++++++++++++++++++++++++++++++++++
  blink/wjit.h         |   35 +
- 7 files changed, 3055 insertions(+)
+ 7 files changed, 3074 insertions(+)
  create mode 100644 blink/wjit.c
  create mode 100644 blink/wjit.h
 
@@ -123,10 +123,10 @@ index 77dac9b..04112e3 100644
  }
 diff --git a/blink/wjit.c b/blink/wjit.c
 new file mode 100644
-index 0000000..3c61be3
+index 0000000..a38ca97
 --- /dev/null
 +++ b/blink/wjit.c
-@@ -0,0 +1,3000 @@
+@@ -0,0 +1,3019 @@
 +/*-*- mode:c;indent-tabs-mode:nil;c-basic-offset:2;tab-width:8;coding:utf-8 -*-│
 +│ vi: set et ft=c ts=2 sts=2 sw=2 fenc=utf-8                               :vi │
 +╞══════════════════════════════════════════════════════════════════════════════╡
@@ -207,6 +207,8 @@ index 0000000..3c61be3
 +static int g_wj_debug;
 +static int g_wj_off;    // BLINK_WJIT_OFF: bitmask of categories to not inline
 +static long g_wj_max;   // BLINK_WJIT_MAX: stop compiling after this many
++static long g_wj_dump = -1;
++static int g_wj_maxblk = 64;  // BLINK_WJIT_BLOCKS (at most kMaxBlocks)
 +static long g_wj_lo = -1, g_wj_hi = -1;  // BLINK_WJIT_BISECT=lo:hi (pc range)
 +static _Atomic(unsigned) g_wj_epoch;
 +
@@ -254,6 +256,12 @@ index 0000000..3c61be3
 +    HEAP32[(out >> 2) + i] = idx;
 +  }
 +  return 0;
++});
++
++// BLINK_WJIT_DUMP=<pc>: Node only, writes that region's module to /tmp
++EM_JS(void, wj_dump, (const u8 *p, int n, const char *name), {
++  var fs = globalThis.process && process.getBuiltinModule && process.getBuiltinModule('fs');
++  if (fs) fs.writeFileSync('/tmp/' + UTF8ToString(name) + '.wasm', HEAPU8.slice(p, p + n));
 +});
 +
 +EM_JS(void, wj_stats, (void), {
@@ -2607,7 +2615,7 @@ index 0000000..3c61be3
 +  struct Ins *in;
 +  struct Blk *b;
 +  i64 page = pc & -4096;
-+  if (g->nblk == kMaxBlocks || g->n > kMaxIns - kMaxIns / 8) return false;
++  if (g->nblk >= g_wj_maxblk || g->n > kMaxIns - kMaxIns / 8) return false;
 +  if (!(entry = FindPageTableEntry(m, page))) return false;
 +  // only code that can't change under us
 +  if ((entry & (PAGE_U | PAGE_RW | PAGE_XD)) != PAGE_U) return false;
@@ -2893,6 +2901,11 @@ index 0000000..3c61be3
 +    free(sub.p);
 +    Section(&m, 0, &sec);
 +  }
++  if (pc == g_wj_dump) {
++    char name[32];
++    snprintf(name, sizeof(name), "x86_%llx", (unsigned long long)pc);
++    wj_dump(m.p, m.n, name);
++  }
 +  rc = wj_install(m.p, m.n, k, out, (const int *)mod->imp, mod->nimp);
 +  g_wj_bytes += m.n;
 +  free(m.p);
@@ -3045,6 +3058,12 @@ index 0000000..3c61be3
 +  g_wj_debug = (s = getenv("BLINK_WJIT_DEBUG")) ? atoi(s) : 0;
 +  g_wj_off = (s = getenv("BLINK_WJIT_OFF")) ? strtol(s, 0, 0) : 0;
 +  g_wj_max = (s = getenv("BLINK_WJIT_MAX")) ? atol(s) : -1;
++  g_wj_dump = (s = getenv("BLINK_WJIT_DUMP")) ? strtol(s, 0, 0) : -1;
++  if ((s = getenv("BLINK_WJIT_BLOCKS"))) {
++    g_wj_maxblk = atoi(s);
++    if (g_wj_maxblk < 1) g_wj_maxblk = 1;
++    if (g_wj_maxblk > kMaxBlocks) g_wj_maxblk = kMaxBlocks;
++  }
 +  if ((s = getenv("BLINK_WJIT_BISECT"))) {
 +    g_wj_lo = strtol(s, 0, 0);
 +    g_wj_hi = strchr(s, ':') ? strtol(strchr(s, 58) + 1, 0, 0) : -1;
