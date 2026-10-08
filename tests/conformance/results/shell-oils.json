@@ -40,7 +40,7 @@
    ]
   },
   "word-split": {
-   "pass": 42,
+   "pass": 43,
    "total": 53,
    "failures": [
     {
@@ -58,10 +58,6 @@
     {
      "i": 34,
      "name": "IFS and joining arrays by assignments"
-    },
-    {
-     "i": 38,
-     "name": "IFS='' with ${a[@]} and ${a[*]} (bug #627)"
     },
     {
      "i": 41,
@@ -90,17 +86,9 @@
    ]
   },
   "word-eval": {
-   "pass": 5,
+   "pass": 7,
    "total": 8,
    "failures": [
-    {
-     "i": 1,
-     "name": "Evaluation of each part"
-    },
-    {
-     "i": 3,
-     "name": "Word joining"
-    },
     {
      "i": 5,
      "name": "Default values -- more cases"
@@ -130,13 +118,9 @@
    ]
   },
   "var-sub-quote": {
-   "pass": 25,
+   "pass": 30,
    "total": 41,
    "failures": [
-    {
-     "i": 2,
-     "name": "array with empty values"
-    },
     {
      "i": 14,
      "name": "Multiple words: outer double quotes, inner double quotes"
@@ -166,16 +150,8 @@
      "name": "Strip a string with single quotes, double quoted"
     },
     {
-     "i": 30,
-     "name": "The string to strip can be single quoted, outer is unquoted"
-    },
-    {
      "i": 31,
      "name": "Syntax error for single quote in double quote"
-    },
-    {
-     "i": 32,
-     "name": "\"${undef-'c d'}\" and \"${foo%'c d'}\" are parsed differently"
     },
     {
      "i": 33,
@@ -186,21 +162,13 @@
      "name": "# operator with single quoted arg (dash/ash and bash/mksh disagree, reported by Crestwave)"
     },
     {
-     "i": 35,
-     "name": "/ operator with single quoted arg (causes syntax error in regex in OSH, reported by Crestwave)"
-    },
-    {
-     "i": 36,
-     "name": "single quotes work inside character classes"
-    },
-    {
      "i": 38,
      "name": "Right Brace as argument (similar to #702)"
     }
    ]
   },
   "var-op-test": {
-   "pass": 16,
+   "pass": 20,
    "total": 35,
    "failures": [
     {
@@ -218,10 +186,6 @@
     {
      "i": 5,
      "name": "Assign default with array"
-    },
-    {
-     "i": 13,
-     "name": "\"${undefined[@]+foo}\" and \"${undefined[@]:+foo}\", with set -u"
     },
     {
      "i": 15,
@@ -242,18 +206,6 @@
     {
      "i": 22,
      "name": "\"$*\" (\"\" \"\") and - and + (IFS=)"
-    },
-    {
-     "i": 23,
-     "name": "assoc array and - and +"
-    },
-    {
-     "i": 28,
-     "name": "array ${arr[0]=x}"
-    },
-    {
-     "i": 29,
-     "name": "assoc array ${arr[\"k\"]=x}"
     },
     {
      "i": 30,
@@ -282,48 +234,16 @@
    ]
   },
   "var-op-strip": {
-   "pass": 14,
+   "pass": 24,
    "total": 28,
    "failures": [
-    {
-     "i": 2,
-     "name": "Remove const suffix is vectorized on user array"
-    },
     {
      "i": 3,
      "name": "Remove const suffix is vectorized on $@ array"
     },
     {
-     "i": 9,
-     "name": "Strip char class"
-    },
-    {
      "i": 10,
      "name": "Strip unicode prefix"
-    },
-    {
-     "i": 13,
-     "name": "Prepend using replacement of #"
-    },
-    {
-     "i": 14,
-     "name": "Append using replacement of %"
-    },
-    {
-     "i": 15,
-     "name": "strip unquoted and quoted ["
-    },
-    {
-     "i": 16,
-     "name": "strip unquoted and quoted []"
-    },
-    {
-     "i": 18,
-     "name": "strip unquoted and quoted [a]"
-    },
-    {
-     "i": 19,
-     "name": "Nested % and # operators (bug reported by Crestwave)"
     },
     {
      "i": 23,
@@ -332,14 +252,6 @@
     {
      "i": 26,
      "name": "Strip Right Brace (#702)"
-    },
-    {
-     "i": 27,
-     "name": "\\(\\) in pattern (regression)"
-    },
-    {
-     "i": 28,
-     "name": "extglob in pattern"
     }
    ]
   },
@@ -366,29 +278,9 @@
    ]
   },
   "var-op-patsub": {
-   "pass": 8,
+   "pass": 21,
    "total": 27,
    "failures": [
-    {
-     "i": 4,
-     "name": "Right Anchored Pattern replacement with %"
-    },
-    {
-     "i": 5,
-     "name": "Replace fixed strings"
-    },
-    {
-     "i": 7,
-     "name": "Replace char class"
-    },
-    {
-     "i": 8,
-     "name": "Replace hard glob"
-    },
-    {
-     "i": 9,
-     "name": "${v/} is empty search and replacement"
-    },
     {
      "i": 11,
      "name": "Confusing unquoted slash matches bash (and ash)"
@@ -398,52 +290,20 @@
      "name": "Synthesized ${x///} bug (similar to above)"
     },
     {
-     "i": 13,
-     "name": "${v/a} is the same as ${v/a/}  -- no replacement string"
-    },
-    {
      "i": 15,
      "name": "Replace backslash"
-    },
-    {
-     "i": 16,
-     "name": "Replace right ]"
-    },
-    {
-     "i": 17,
-     "name": "Substitute glob characters in pattern, quoted and unquoted"
-    },
-    {
-     "i": 18,
-     "name": "Substitute one unicode character (UTF-8)"
     },
     {
      "i": 19,
      "name": "When LC_ALL=C, pattern ? doesn't match multibyte character"
     },
     {
-     "i": 20,
-     "name": "${x/^} regression"
-    },
-    {
-     "i": 21,
-     "name": "\\(\\) in pattern (regression)"
-    },
-    {
      "i": 22,
      "name": "patsub with single quotes and hyphen in character class (regression)"
     },
     {
-     "i": 24,
-     "name": "[a-z] Invalid range end is syntax error"
-    },
-    {
      "i": 26,
      "name": "Chromium from http://www.oilshell.org/blog/2016/11/07.html"
-    },
-    {
-     "i": 27,
-     "name": "${x//~homedir/}"
     }
    ]
   },
@@ -516,7 +376,7 @@
    ]
   },
   "vars-special": {
-   "pass": 17,
+   "pass": 18,
    "total": 37,
    "failures": [
     {
@@ -546,10 +406,6 @@
     {
      "i": 14,
      "name": "Background PID $! looks like a PID"
-    },
-    {
-     "i": 16,
-     "name": "$PIPESTATUS"
     },
     {
      "i": 18,
@@ -602,13 +458,9 @@
    ]
   },
   "arith": {
-   "pass": 31,
+   "pass": 61,
    "total": 71,
    "failures": [
-    {
-     "i": 0,
-     "name": "Side Effect in Array Indexing"
-    },
     {
      "i": 6,
      "name": "Arith sub with word parts"
@@ -618,16 +470,8 @@
      "name": "Backticks within arith sub"
     },
     {
-     "i": 12,
-     "name": "Integer constant parsing"
-    },
-    {
      "i": 13,
      "name": "Integer constant validation"
-    },
-    {
-     "i": 19,
-     "name": "Increment and decrement array elements"
     },
     {
      "i": 21,
@@ -638,132 +482,24 @@
      "name": "Logical Ops"
     },
     {
-     "i": 25,
-     "name": "Logical Ops Short Circuit"
-    },
-    {
      "i": 26,
      "name": "Bitwise ops"
-    },
-    {
-     "i": 27,
-     "name": "Unary minus and plus"
-    },
-    {
-     "i": 28,
-     "name": "No floating point"
-    },
-    {
-     "i": 29,
-     "name": "Array indexing in arith"
-    },
-    {
-     "i": 30,
-     "name": "Constants in base 36"
-    },
-    {
-     "i": 31,
-     "name": "Constants in bases 2 to 64"
-    },
-    {
-     "i": 32,
-     "name": "Multiple digit constants with base N"
-    },
-    {
-     "i": 33,
-     "name": "Dynamic base constants"
-    },
-    {
-     "i": 34,
-     "name": "Octal constant"
-    },
-    {
-     "i": 35,
-     "name": "Dynamic octal constant"
-    },
-    {
-     "i": 36,
-     "name": "Dynamic hex constants"
-    },
-    {
-     "i": 37,
-     "name": "Hex constant with capital X"
-    },
-    {
-     "i": 39,
-     "name": "Recursive name evaluation is a result of runtime parse/eval"
-    },
-    {
-     "i": 41,
-     "name": "64-bit integer doesn't overflow"
-    },
-    {
-     "i": 44,
-     "name": "Invalid LValue that looks like array"
-    },
-    {
-     "i": 49,
-     "name": "Negative exponent"
     },
     {
      "i": 50,
      "name": "Comment not allowed in the middle of multiline arithmetic"
     },
     {
-     "i": 51,
-     "name": "Add integer to indexed array (a[0] decay)"
-    },
-    {
-     "i": 52,
-     "name": "Add integer to associative array (a[0] decay)"
-    },
-    {
      "i": 53,
      "name": "Double subscript"
-    },
-    {
-     "i": 54,
-     "name": "result of ArithSub -- array[0] decay"
-    },
-    {
-     "i": 56,
-     "name": "comma operator"
-    },
-    {
-     "i": 58,
-     "name": "array assignment with dynamic array name"
-    },
-    {
-     "i": 60,
-     "name": "unary array assignment with dynamic var name"
     },
     {
      "i": 61,
      "name": "Dynamic parsing of arithmetic"
     },
     {
-     "i": 64,
-     "name": "1 ? a=1 : b=2 ( bug fix)"
-    },
-    {
      "i": 65,
      "name": "Invalid constant"
-    },
-    {
-     "i": 68,
-     "name": "Negative numbers with bit shift"
-    },
-    {
-     "i": 71,
-     "name": "s[0] with string abc"
-    },
-    {
-     "i": 72,
-     "name": "s[0] with string 42"
-    },
-    {
-     "i": 73,
-     "name": "s[0] with string '12 34'"
     }
    ]
   },
@@ -1054,7 +790,7 @@
    ]
   },
   "builtin-printf": {
-   "pass": 45,
+   "pass": 46,
    "total": 55,
    "failures": [
     {
@@ -1072,10 +808,6 @@
     {
      "i": 6,
      "name": "dynamic declare instead of %q"
-    },
-    {
-     "i": 22,
-     "name": "unsigned / octal / hex big"
     },
     {
      "i": 38,
@@ -1100,7 +832,7 @@
    ]
   },
   "builtin-read": {
-   "pass": 26,
+   "pass": 27,
    "total": 64,
    "failures": [
     {
@@ -1214,10 +946,6 @@
     {
      "i": 53,
      "name": "\"backslash + newline\" should be swallowed regardless of \"-d <delim>\""
-    },
-    {
-     "i": 54,
-     "name": "empty input and splitting"
     },
     {
      "i": 55,
@@ -1444,7 +1172,7 @@
    ]
   },
   "builtin-bracket": {
-   "pass": 40,
+   "pass": 42,
    "total": 50,
    "failures": [
     {
@@ -1478,14 +1206,6 @@
     {
      "i": 44,
      "name": "test -c"
-    },
-    {
-     "i": 49,
-     "name": "No octal, hex, base N conversion - leading 0 is a regular decimal"
-    },
-    {
-     "i": 50,
-     "name": "Looks like octal, but digit is too big"
     }
    ]
   },
@@ -1604,7 +1324,7 @@
    ]
   },
   "builtin-vars": {
-   "pass": 26,
+   "pass": 31,
    "total": 38,
    "failures": [
     {
@@ -1632,28 +1352,8 @@
      "name": "Unset and scope (bug #653)"
     },
     {
-     "i": 30,
-     "name": "Unset array member"
-    },
-    {
-     "i": 33,
-     "name": "unset -v assoc (related to issue #661)"
-    },
-    {
-     "i": 35,
-     "name": "Unset array member with dynamic parsing"
-    },
-    {
      "i": 38,
      "name": "local after readonly"
-    },
-    {
-     "i": 39,
-     "name": "unset a[-1] (bf.bash regression)"
-    },
-    {
-     "i": 40,
-     "name": "unset a[-1] in sparse array (bf.bash regression)"
     }
    ]
   },
@@ -1784,45 +1484,17 @@
    ]
   },
   "dparen": {
-   "pass": 6,
+   "pass": 13,
    "total": 14,
    "failures": [
     {
-     "i": 4,
-     "name": "(( )) with arrays"
-    },
-    {
-     "i": 6,
-     "name": "bash and mksh: V in (( a[K] = V )) gets coerced to integer"
-    },
-    {
-     "i": 7,
-     "name": "bash: K in (( A[K] = V )) is a constant string"
-    },
-    {
-     "i": 9,
-     "name": "bash: V in (( A[\"K\"] = V )) gets coerced to integer"
-    },
-    {
      "i": 11,
      "name": "(( )) with redirect"
-    },
-    {
-     "i": 12,
-     "name": "Assigning whole raray (( b = a ))"
-    },
-    {
-     "i": 13,
-     "name": "set associative array"
-    },
-    {
-     "i": 14,
-     "name": "Example of incrementing associative array entry with var key (ble.sh)"
     }
    ]
   },
   "assign": {
-   "pass": 31,
+   "pass": 35,
    "total": 43,
    "failures": [
     {
@@ -1836,10 +1508,6 @@
     {
      "i": 10,
      "name": "Trying to run keyword 'for'"
-    },
-    {
-     "i": 21,
-     "name": "'declare -A' and then dict assignment"
     },
     {
      "i": 25,
@@ -1858,55 +1526,15 @@
      "name": "declare and glob"
     },
     {
-     "i": 37,
-     "name": "local a=loc $var c=loc"
-    },
-    {
      "i": 45,
      "name": "\"declare -a arr\" and \"readonly -a a\" creates an empty array (OSH)"
-    },
-    {
-     "i": 46,
-     "name": "\"var d = {}; declare -p d\" does not print anything (OSH)"
-    },
-    {
-     "i": 47,
-     "name": "readonly array should not be modified by a+=(1)"
     }
    ]
   },
   "append": {
-   "pass": 1,
+   "pass": 12,
    "total": 20,
    "failures": [
-    {
-     "i": 0,
-     "name": "Append string to string"
-    },
-    {
-     "i": 1,
-     "name": "Append array to array"
-    },
-    {
-     "i": 2,
-     "name": "Append string to undefined variable"
-    },
-    {
-     "i": 3,
-     "name": "Append to array to undefined variable"
-    },
-    {
-     "i": 4,
-     "name": "error: s+=(my array)"
-    },
-    {
-     "i": 5,
-     "name": "error: myarray+=s"
-    },
-    {
-     "i": 6,
-     "name": "typeset s+=(my array)"
-    },
     {
      "i": 7,
      "name": "error: typeset myarray+=s"
@@ -1916,20 +1544,8 @@
      "name": "error: append used like env prefix"
     },
     {
-     "i": 9,
-     "name": "myarray[1]+=s - Append to element"
-    },
-    {
-     "i": 10,
-     "name": "myarray[-1]+=s - Append to last element"
-    },
-    {
      "i": 11,
      "name": "Try to append list to element"
-    },
-    {
-     "i": 12,
-     "name": "Strings have value semantics, not reference semantics"
     },
     {
      "i": 13,
@@ -1950,66 +1566,25 @@
     {
      "i": 17,
      "name": "assign builtin appending array: declare d+=(d e)"
-    },
-    {
-     "i": 18,
-     "name": "export+=array disallowed (strict_array)"
     }
    ]
   },
   "array-basic": {
-   "pass": 1,
+   "pass": 5,
    "total": 5,
-   "failures": [
-    {
-     "i": 0,
-     "name": "\"${a[@]}\" and \"${a[*]}\""
-    },
-    {
-     "i": 2,
-     "name": "4 ways to interpolate empty array"
-    },
-    {
-     "i": 3,
-     "name": "empty array"
-    },
-    {
-     "i": 4,
-     "name": "Empty array with :-"
-    }
-   ]
+   "failures": []
   },
   "array": {
-   "pass": 9,
+   "pass": 60,
    "total": 78,
    "failures": [
-    {
-     "i": 0,
-     "name": "nounset / set -u with empty array (bug in bash 4.3, fixed in 4.4)"
-    },
-    {
-     "i": 1,
-     "name": "local array"
-    },
-    {
-     "i": 2,
-     "name": "Command with with word splitting in array"
-    },
     {
      "i": 3,
      "name": "space before ( in array initialization"
     },
     {
-     "i": 4,
-     "name": "array over multiple lines"
-    },
-    {
      "i": 5,
      "name": "array with invalid token"
-    },
-    {
-     "i": 7,
-     "name": "Retrieve index"
     },
     {
      "i": 9,
@@ -2020,48 +1595,8 @@
      "name": "Negative index and sparse array"
     },
     {
-     "i": 11,
-     "name": "Negative index and sparse array"
-    },
-    {
-     "i": 12,
-     "name": "Length after unset"
-    },
-    {
-     "i": 13,
-     "name": "Retrieve index that is a variable"
-    },
-    {
-     "i": 14,
-     "name": "Retrieve index that is a variable without $"
-    },
-    {
-     "i": 15,
-     "name": "Retrieve index that is a command sub"
-    },
-    {
-     "i": 16,
-     "name": "Retrieve array indices with ${!a}"
-    },
-    {
-     "i": 17,
-     "name": "Retrieve sparse array indices with ${!a}"
-    },
-    {
      "i": 18,
      "name": "${!a[1]} is named ref in bash"
-    },
-    {
-     "i": 21,
-     "name": "All elements quoted"
-    },
-    {
-     "i": 24,
-     "name": "Interpolate array into array"
-    },
-    {
-     "i": 25,
-     "name": "Exporting array doesn't do anything, not even first element"
     },
     {
      "i": 27,
@@ -2072,68 +1607,8 @@
      "name": "Associative arrays can't be used as env bindings either"
     },
     {
-     "i": 29,
-     "name": "Set element"
-    },
-    {
-     "i": 30,
-     "name": "Set element with var ref"
-    },
-    {
-     "i": 31,
-     "name": "Set element with array ref"
-    },
-    {
      "i": 32,
      "name": "Set array item to array"
-    },
-    {
-     "i": 33,
-     "name": "Slice of array with [@]"
-    },
-    {
-     "i": 34,
-     "name": "Negative slice begin"
-    },
-    {
-     "i": 35,
-     "name": "Negative slice length"
-    },
-    {
-     "i": 36,
-     "name": "Slice with arithmetic"
-    },
-    {
-     "i": 37,
-     "name": "Number of elements"
-    },
-    {
-     "i": 38,
-     "name": "Length of an element"
-    },
-    {
-     "i": 39,
-     "name": "Iteration"
-    },
-    {
-     "i": 40,
-     "name": "glob within array yields separate elements"
-    },
-    {
-     "i": 41,
-     "name": "declare array and then append"
-    },
-    {
-     "i": 43,
-     "name": "Single array with :-"
-    },
-    {
-     "i": 44,
-     "name": "Stripping a whole array unquoted"
-    },
-    {
-     "i": 45,
-     "name": "Stripping a whole array quoted"
     },
     {
      "i": 46,
@@ -2144,72 +1619,8 @@
      "name": "Length op, index op, then transform op is not allowed"
     },
     {
-     "i": 48,
-     "name": "${mystr[@]} and ${mystr[*]} are no-ops"
-    },
-    {
-     "i": 49,
-     "name": "${mystr[@]} and ${mystr[*]} disallowed with strict_array"
-    },
-    {
-     "i": 50,
-     "name": "Create a \"user\" array out of the argv array"
-    },
-    {
-     "i": 51,
-     "name": "Tilde expansion within array"
-    },
-    {
-     "i": 52,
-     "name": "Brace Expansion within Array"
-    },
-    {
      "i": 53,
      "name": "array default"
-    },
-    {
-     "i": 54,
-     "name": "Singleton Array Copy and Assign.  OSH can't index strings with ints"
-    },
-    {
-     "i": 55,
-     "name": "declare -a / local -a is empty array"
-    },
-    {
-     "i": 56,
-     "name": "Create sparse array"
-    },
-    {
-     "i": 57,
-     "name": "Create sparse array implicitly"
-    },
-    {
-     "i": 58,
-     "name": "Append sparse arrays"
-    },
-    {
-     "i": 59,
-     "name": "Slice of sparse array with [@]"
-    },
-    {
-     "i": 60,
-     "name": "Using an array itself as the index on LHS"
-    },
-    {
-     "i": 61,
-     "name": "Using an array itself as the index on RHS"
-    },
-    {
-     "i": 62,
-     "name": "a[$x$y] on LHS and RHS"
-    },
-    {
-     "i": 63,
-     "name": "Dynamic parsing of LHS a[$code]=value"
-    },
-    {
-     "i": 64,
-     "name": "Dynamic parsing of RHS ${a[$code]}"
     },
     {
      "i": 65,
@@ -2228,10 +1639,6 @@
      "name": "More arith expressions in [[ -v array[expr]] ]]"
     },
     {
-     "i": 69,
-     "name": "Regression: Assigning with out-of-range negative index"
-    },
-    {
      "i": 70,
      "name": "Regression: Negative index in [[ -v a[index] ]]"
     },
@@ -2240,119 +1647,15 @@
      "name": "a+=() modifies existing instance of BashArray"
     },
     {
-     "i": 73,
-     "name": "Regression: unset a[-2]: out-of-bound negative index should cause error"
-    },
-    {
-     "i": 74,
-     "name": "Regression: Out-of-bound negative offset for ${a[@]:offset}"
-    },
-    {
-     "i": 75,
-     "name": "Regression: Array length after unset"
-    },
-    {
-     "i": 76,
-     "name": "Regression: ${a[@]@Q} crash with `a[0]=x a[2]=y`"
-    },
-    {
      "i": 77,
      "name": "Regression: silent out-of-bound negative index in ${a[-2]} and $((a[-2]))"
     }
    ]
   },
   "array-assoc": {
-   "pass": 5,
+   "pass": 29,
    "total": 38,
    "failures": [
-    {
-     "i": 0,
-     "name": "Literal syntax ([x]=y)"
-    },
-    {
-     "i": 3,
-     "name": "create empty assoc array, put, then get"
-    },
-    {
-     "i": 5,
-     "name": "retrieve keys with !"
-    },
-    {
-     "i": 6,
-     "name": "retrieve values with ${A[@]}"
-    },
-    {
-     "i": 8,
-     "name": "${A[@]/b/B}"
-    },
-    {
-     "i": 9,
-     "name": "${A[@]#prefix}"
-    },
-    {
-     "i": 10,
-     "name": "${assoc} is like ${assoc[0]}"
-    },
-    {
-     "i": 13,
-     "name": "lookup with double quoted strings \"mykey\""
-    },
-    {
-     "i": 14,
-     "name": "lookup with single quoted string"
-    },
-    {
-     "i": 15,
-     "name": "lookup with unquoted $key and quoted \"$i$i\""
-    },
-    {
-     "i": 17,
-     "name": "bash bug: \"i+1\" and i+1 are the same key"
-    },
-    {
-     "i": 18,
-     "name": "Array stored in associative array gets converted to string (without strict_array)"
-    },
-    {
-     "i": 19,
-     "name": "Indexed array as key of associative array coerces to string (without shopt -s strict_array)"
-    },
-    {
-     "i": 20,
-     "name": "Append to associative array value A['x']+='suffix'"
-    },
-    {
-     "i": 22,
-     "name": "bash variable can have an associative array part and a string part"
-    },
-    {
-     "i": 23,
-     "name": "Associative array expressions inside (( )) with keys that look like numbers"
-    },
-    {
-     "i": 24,
-     "name": "(( A[5] += 42 ))"
-    },
-    {
-     "i": 25,
-     "name": "(( A[5] += 42 )) with empty cell"
-    },
-    {
-     "i": 26,
-     "name": "setting key to itself (from bash-bug mailing list)"
-    },
-    {
-     "i": 27,
-     "name": "readonly associative array can't be modified"
-    },
-    {
-     "i": 28,
-     "name": "associative array and brace expansion"
-    },
-    {
-     "i": 29,
-     "name": "declare -A A=() allowed"
-    },
     {
      "i": 30,
      "name": "unset -v and assoc array"
@@ -2374,10 +1677,6 @@
      "name": "bash bug: (( A[\"$key\"] = 1 )) doesn't work"
     },
     {
-     "i": 35,
-     "name": "Implicit increment of keys"
-    },
-    {
      "i": 36,
      "name": "test -v assoc[key]"
     },
@@ -2392,15 +1691,11 @@
     {
      "i": 39,
      "name": "[[ -v assoc[key] ]] syntax errors"
-    },
-    {
-     "i": 40,
-     "name": "BashAssoc a+=()"
     }
    ]
   },
   "brace-expansion": {
-   "pass": 40,
+   "pass": 41,
    "total": 55,
    "failures": [
     {
@@ -2418,10 +1713,6 @@
     {
      "i": 26,
      "name": "no expansion with RHS assignment"
-    },
-    {
-     "i": 28,
-     "name": "Tilde expansion with brace expansion"
     },
     {
      "i": 29,
@@ -2871,7 +2162,7 @@
    ]
   },
   "regex": {
-   "pass": 17,
+   "pass": 18,
    "total": 37,
    "failures": [
     {
@@ -2921,10 +2212,6 @@
     {
      "i": 19,
      "name": "Escaped {"
-    },
-    {
-     "i": 20,
-     "name": "Escaped { stored in variable first"
     },
     {
      "i": 26,

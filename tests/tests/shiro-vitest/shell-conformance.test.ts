@@ -274,4 +274,47 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('a.txt b.txt\nd1/ d2/ s p/\nd1/x.c\nd1/x.c\ns p/z.txt\n*.txt\n*.txt\n[d1/][d2/][s p/]\n*.txt\nx y\na.txt b.txt b.txt\n');
   });
+
+  it('arrays keep quoted elements, are sparse, slice, and scope with local', async () => {
+    const r = await script([
+      "a=(1 '2 3' \"$HOME\"x)",
+      'printf "[%s]" "${a[@]}"; echo " ${#a[@]} ${a[1]} ${a[-1]}"',
+      'a[5]=five; unset "a[0]"; echo "${!a[@]} | ${#a[@]} | ${a[@]:2}"',
+      'b=(x y); b+=(z); b[1]+=Y; s=str; s+=ing; echo "${b[*]} $s $b"',
+      'f() { local b=(in side); echo "${b[@]}"; }; f; echo "${b[@]}"',
+      'declare -A m=([k]=v ["two words"]=w); m[x]=1; echo "${m[k]} ${m[two words]} ${#m[@]}"',
+      'n=(1 2 3); echo "${n[@]/2/X}" "${n[@]#1}"; e=(); printf "<%s>" "${e[@]}"; echo',
+      'declare -p n',
+    ].join('\n'));
+    expect(r.out).toBe(
+      '[1][2 3][/home/userx] 3 2 3 /home/userx\n' +
+      '1 2 5 | 3 | /home/userx five\n' +
+      'x yY z string x\n' +
+      'in side\nx yY z\n' +
+      'v w 3\n' +
+      '1 X 3  2 3\n<>\n' +
+      'declare -a n=([0]="1" [1]="2" [2]="3")\n');
+  });
+
+  it('arithmetic: precedence, assignment ops, bases, short-circuit, recursion, errors', async () => {
+    const r = await script([
+      'x=5; echo $(( -2**2 )) $(( 2**3**2 )) $(( x+=2, x*3 )) $x $(( 0x10 + 010 + 2#101 + 64#_ ))',
+      'y=0; echo $(( 1 || y++ )) $y $(( 0 && y++ )) $y $(( y ? 10 : 20 ))',
+      'e="1+2"; echo $(( e * 2 )) $(( (e) * 2 ))',
+      'a=(10 20 30); i=1; echo $(( a[i] + a[i+1] )); (( a[0]++ )); echo ${a[0]}',
+      'echo $((1',
+      '+ 2))',
+      '(( 1/0 )); echo st=$?',
+      'let "z = 3 << 2" "w = z % 5"; echo $z $w',
+    ].join('\n'));
+    expect(r.out).toBe('4 512 21 7 92\n1 0 0 0 20\n6 6\n50\n11\n3\nst=1\n12 2\n');
+  });
+
+  it('${x/pat/rep} anchors, quoting and &; ${x#pat} with expanded patterns', async () => {
+    const r = await script([
+      'x=foo.bar.baz; p=ba; echo ${x/#foo/F} ${x/%baz/Z} ${x//./-} ${x/"."*/} ${x//$p/&&}',
+      'echo ${x#*.} ${x##*.} ${x%.*} ${x%%.*} ${x#"$p"} ${x%[[:alpha:]]}',
+    ].join('\n'));
+    expect(r.out).toBe('F.bar.baz foo.bar.Z foo-bar-baz foo foo.babar.babaz\nbar.baz baz foo.bar foo foo.bar.baz foo.bar.ba\n');
+  });
 });

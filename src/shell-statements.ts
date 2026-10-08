@@ -27,7 +27,7 @@ const CMD_PREFIX = new Set(['do', 'then', 'else', 'elif', 'if', 'while', 'until'
 /** A newline after these is plain whitespace */
 const JOIN_WITH_SPACE = new Set(['do', 'then', 'else', 'elif', 'if', 'while', 'until', '!', 'time', '{']);
 
-type Paren = 'sub' | 'arith';
+type Paren = 'sub' | 'arith' | 'list';
 
 export function groupStatements(src: string): Statement[] {
   const lines = src.split(/\r?\n/);
@@ -66,7 +66,9 @@ export function groupStatements(src: string): Statement[] {
     else if (quote) text += '\n';
     else if (lastWasHeredoc) text += '\n';
     else if (line.trim()) {
-      const sep = joinWithSpace(lastWord, lastWasPatternClose) || /^\s*;;/.test(line) ? ' ' : '; ';
+      // Inside $((…)) or an array literal a=(…) a newline is just a blank
+      const inWords = parens.length > 0 && parens[parens.length - 1] !== 'sub';
+      const sep = inWords || joinWithSpace(lastWord, lastWasPatternClose) || /^\s*;;/.test(line) ? ' ' : '; ';
       text += sep;
     }
 
@@ -140,7 +142,7 @@ export function groupStatements(src: string): Statement[] {
           lineOut += ch; i++; continue;
         }
         if (arith) { parens.push('arith'); parens.push('arith'); lineOut += '(('; i += 2; }
-        else { parens.push('sub'); lineOut += ch; i++; }
+        else { parens.push(line[i - 1] === '=' ? 'list' : 'sub'); lineOut += ch; i++; }
         cmdPos = true; lastWord = '('; lastWasPatternClose = false;
         continue;
       }
