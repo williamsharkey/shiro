@@ -417,7 +417,9 @@ describe('shell conformance regressions', () => {
       '}',
       'testcase x',
       'v=$(printf "\\001\\002A"); printf %s "$v" | od -An -tx1',
+      'e=()',
+      'echo "empty=${#e[@]}"',
     ].join('\n'));
-    expect(r.out).toBe('in x\n 01 02 41\n');
+    expect(r.out).toBe('in x\n 01 02 41\nempty=0\n');
   });
 });
