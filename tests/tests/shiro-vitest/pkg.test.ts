@@ -541,7 +541,7 @@ describe('real packages as kernel processes', () => {
     } catch {
       ctx.skip();
     }
-    expect((await sh(shell, 'pkg install grep sed ripgrep quickjs-ng')).exitCode).toBe(0);
+    expect((await sh(shell, 'pkg install grep-wasix sed-wasix ripgrep quickjs-ng')).exitCode).toBe(0);
     await fs.writeFile('/home/user/w.txt', 'b\na\nfoo bar\n');
     expect((await sh(shell, 'cd /home/user && /usr/bin/grep -n foo w.txt')).out).toBe('3:foo bar\n');
     expect((await sh(shell, 'cd /home/user && /usr/bin/sed -i s/foo/FOO/ w.txt && cat w.txt')).out).toBe('b\na\nFOO bar\n');

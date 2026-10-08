@@ -1,0 +1,342 @@
+From b2bf13b75253d9b417104cb9cca55766c15d444a Mon Sep 17 00:00:00 2001
+From: shiro <build@shiro>
+Date: Thu, 8 Oct 2026 04:22:31 +0000
+Subject: [PATCH] emscripten: real fork() under Shiro (process snapshot
+ restored in a new worker)
+
+fork() and clone() without CLONE_VFORK snapshot the process: every mapped
+page (reserved untouched pages as zero, file pages faulted in), the forking
+thread's registers, the signal table, brk/automap and the ELF info. The
+kernel makes the child (SYS_shiro_vfork), host.mjs hands the snapshot to the
+page, which starts a new Blink worker that rebuilds it (ShiroRestore from
+Exec) and runs with fork() returning 0. vfork and CLONE_VFORK keep the
+emulation on the calling thread.
+---
+ blink/blink.c   |  10 ++
+ blink/shiro.inc | 272 +++++++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 280 insertions(+), 2 deletions(-)
+
+diff --git a/blink/blink.c b/blink/blink.c
+index f70e04c..a7569ab 100644
+--- a/blink/blink.c
++++ b/blink/blink.c
+@@ -227,6 +227,8 @@ static void ProgramLimit(struct System *s, int hresource, int gresource) {
+ // The system the guest currently runs in, for signals sent from JavaScript.
+ static struct System *_Atomic g_shiro_system;
+ void ShiroInitSystem(struct System *, bool);
++bool ShiroIsRestore(void);
++void ShiroRestore(struct Machine *);
+ 
+ // Called by the embedder (Shiro's worker host) when the kernel signals this
+ // process: queue `sig` (Linux numbering) on a guest thread that doesn't
+@@ -271,6 +273,14 @@ static int Exec(char *execfn, char *prog, char **argv, char **envp) {
+ #endif
+   if (!old) {
+     // this is the first time a program is being loaded
++#ifdef __EMSCRIPTEN__
++    if (ShiroIsRestore()) {
++      // a fork(): the parent's snapshot instead of the program
++      ShiroRestore(m);
++      for (i = 0; i < 10; ++i) AddStdFd(&m->system->fds, i);
++      Blink(m);
++    }
++#endif
+     LoadProgram(m, execfn, prog, argv, envp, NULL);
+     SetupCod(m);
+     for (i = 0; i < 10; ++i) {
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index d827103..c3f05a4 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -881,6 +881,274 @@ static i64 ShiroExecve(struct Machine *m, i64 pa, i64 aa, i64 ea) {
+   return -ENOEXEC_LINUX;
+ }
+ 
++// ── real fork: a snapshot of this process, restored in a new worker ──────
++
++#define SHIRO_FORK_MAGIC 0x4b524f46  // "FORK"
++
++struct ShiroForkHeader {
++  u32 magic, size;
++  u8 regs[128];
++  u8 xmm[16][16];
++  u64 ip;
++  u32 flags, mxcsr;
++  struct MachineFpu fpu;
++  i64 fsbase, gsbase;
++  u64 sigmask;
++  struct sigaltstack_linux altstack;
++  u64 cloneflags;
++  i64 ctid;
++  i64 brk, automap;
++  bool iscosmo;
++  struct sigaction_linux hands[64];
++  u64 blinksigs;
++  struct rlimit_linux rlim[RLIM_NLIMITS_LINUX];
++  i64 elfbase, at_base, at_phdr, at_phent, at_entry, at_phnum;
++  u8 rng[16];
++  u32 proglen, execfnlen, interplen;
++  u64 nruns;
++};
++
++struct ShiroForkRun {
++  i64 virt;
++  u64 pages;
++  u64 key;
++  u64 hasdata;
++};
++
++struct ShiroBuf {
++  u8 *p;
++  size_t n, cap;
++};
++
++static bool ShiroPut(struct ShiroBuf *b, const void *data, size_t n) {
++  if (b->n + n > b->cap) {
++    size_t cap = MAX(b->cap * 2, b->n + n + (1 << 20));
++    u8 *p = (u8 *)realloc(b->p, cap);
++    if (!p) return false;
++    b->p = p, b->cap = cap;
++  }
++  if (data) memcpy(b->p + b->n, data, n);
++  else memset(b->p + b->n, 0, n);
++  b->n += n;
++  return true;
++}
++
++struct ShiroWalk {
++  struct Machine *m;
++  struct ShiroBuf *b;
++  size_t run;      // offset of the open run in b, or 0
++  struct ShiroForkRun cur;
++  u64 nruns;
++  bool ok;
++};
++
++static void ShiroCloseRun(struct ShiroWalk *w) {
++  if (!w->run) return;
++  memcpy(w->b->p + w->run, &w->cur, sizeof(w->cur));
++  w->run = 0;
++}
++
++static void ShiroAddPage(struct ShiroWalk *w, i64 virt, u64 key, const u8 *data) {
++  bool hasdata = !!data;
++  if (!w->ok) return;
++  if (!w->run || w->cur.key != key || w->cur.hasdata != hasdata ||
++      w->cur.virt + (i64)w->cur.pages * 4096 != virt) {
++    ShiroCloseRun(w);
++    w->run = w->b->n;
++    w->cur.virt = virt, w->cur.pages = 0, w->cur.key = key, w->cur.hasdata = hasdata;
++    w->ok &= ShiroPut(w->b, &w->cur, sizeof(w->cur));
++    ++w->nruns;
++  }
++  ++w->cur.pages;
++  if (hasdata) w->ok &= ShiroPut(w->b, data, 4096);
++}
++
++static void ShiroWalkTable(struct ShiroWalk *w, u64 entry, int level, i64 base) {
++  u8 *table = GetPageAddress(w->m->system, entry, level == 39);
++  int i;
++  if (!table) return;
++  for (i = 0; i < 512 && w->ok; ++i) {
++    u64 e = LoadPte(table + i * 8);
++    i64 virt = base | ((i64)i << level);
++    if (!(e & PAGE_V)) continue;
++    if (level == 39 && i >= 256) virt |= (i64)0xffff000000000000;
++    if (level > 12) {
++      if (e & PAGE_PS) continue;  // huge pages aren't used for user memory
++      ShiroWalkTable(w, e, level - 9, virt);
++      continue;
++    }
++    u64 key = e & (PAGE_U | PAGE_RW | PAGE_XD);
++    if (!(e & PAGE_U)) {
++      ShiroAddPage(w, virt, key, 0);  // PROT_NONE: no contents to keep
++    } else if (e & PAGE_RSRV) {
++      if (e & (PAGE_HOST | PAGE_MAP | PAGE_MUG)) {
++        u8 page[4096];  // a file page not touched yet: fault it in
++        if (CopyFromUser(w->m, page, virt, 4096) == -1) memset(page, 0, 4096);
++        ShiroAddPage(w, virt, key, page);
++      } else {
++        ShiroAddPage(w, virt, key, 0);  // reserved, still zero
++      }
++    } else {
++      ShiroAddPage(w, virt, key, GetPageAddress(w->m->system, e, false));
++    }
++  }
++}
++
++// JS (host.mjs): hand the snapshot to the page, which starts it as `pid`
++extern int shiro_fork_start(int pid, const void *snap, size_t len);
++
++static i64 ShiroForkReal(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
++  struct ShiroBuf b = {0};
++  struct ShiroForkHeader h;
++  struct ShiroWalk w;
++  struct System *s = m->system;
++  i64 pid;
++  int rc;
++  if ((pid = KS(m, K_SYS_vfork, A12(0))) < 0) return pid;
++  memset(&h, 0, sizeof(h));
++  h.magic = SHIRO_FORK_MAGIC;
++  h.size = sizeof(h);
++  memcpy(h.regs, m->beg, sizeof(h.regs));
++  Put64(h.regs, 0);  // the child's fork() returns 0 (ax is the first register)
++  if (stack) Put64(h.regs + 32, stack);  // clone() with a child stack: sp
++  memcpy(h.xmm, m->xmm, sizeof(h.xmm));
++  h.ip = m->ip;
++  h.flags = m->flags;
++  h.mxcsr = m->mxcsr;
++  memcpy(&h.fpu, &m->fpu, sizeof(h.fpu));
++  h.fsbase = m->fs.base;
++  h.gsbase = m->gs.base;
++  h.sigmask = m->sigmask;
++  memcpy(&h.altstack, &m->sigaltstack, sizeof(h.altstack));
++  h.cloneflags = flags;
++  h.ctid = ctid;
++  h.brk = s->brk;
++  h.automap = s->automap;
++  h.iscosmo = s->iscosmo;
++  LOCK(&s->sig_lock);
++  memcpy(h.hands, s->hands, sizeof(h.hands));
++  UNLOCK(&s->sig_lock);
++  h.blinksigs = s->blinksigs;
++  memcpy(h.rlim, s->rlim, sizeof(h.rlim));
++  h.elfbase = s->elf.base;
++  h.at_base = s->elf.at_base, h.at_phdr = s->elf.at_phdr, h.at_phent = s->elf.at_phent;
++  h.at_entry = s->elf.at_entry, h.at_phnum = s->elf.at_phnum;
++  memcpy(h.rng, s->elf.rng, sizeof(h.rng));
++  h.proglen = s->elf.prog ? strlen(s->elf.prog) : 0;
++  h.execfnlen = s->elf.execfn ? strlen(s->elf.execfn) : 0;
++  h.interplen = s->elf.interpreter ? strlen(s->elf.interpreter) : 0;
++  if (!ShiroPut(&b, &h, sizeof(h)) || !ShiroPut(&b, s->elf.prog, h.proglen) ||
++      !ShiroPut(&b, s->elf.execfn, h.execfnlen) ||
++      !ShiroPut(&b, s->elf.interpreter, h.interplen)) {
++    free(b.p);
++    KS(m, 62, A12(pid, 9));
++    return -ENOMEM_LINUX;
++  }
++  memset(&w, 0, sizeof(w));
++  w.m = m, w.b = &b, w.ok = true;
++  // Other guest threads are held off by the GIL (we hold it), so the
++  // snapshot is consistent; this thread becomes the child's only thread.
++  LOCK(&s->mmap_lock);
++  ShiroWalkTable(&w, s->cr3, 39, 0);
++  UNLOCK(&s->mmap_lock);
++  ShiroCloseRun(&w);
++  if (!w.ok) {
++    free(b.p);
++    KS(m, 62, A12(pid, 9));
++    return -ENOMEM_LINUX;
++  }
++  ((struct ShiroForkHeader *)b.p)->nruns = w.nruns;
++  rc = shiro_fork_start(pid, b.p, b.n);
++  free(b.p);
++  if (rc < 0) {
++    KS(m, 62, A12(pid, 9));
++    return rc;
++  }
++  return pid;
++}
++
++// The child side: set by host.mjs before main() when this worker is a fork
++static u8 *g_shiro_restore;
++static size_t g_shiro_restore_len;
++
++EMSCRIPTEN_KEEPALIVE void blink_shiro_set_restore(u8 *p, size_t n) {
++  g_shiro_restore = p;
++  g_shiro_restore_len = n;
++}
++
++bool ShiroIsRestore(void) {
++  return !!g_shiro_restore;
++}
++
++static char *ShiroDupN(const u8 *p, size_t n) {
++  char *s = (char *)malloc(n + 1);
++  memcpy(s, p, n);
++  s[n] = 0;
++  return s;
++}
++
++// Rebuild the forked process in `m` (a fresh machine from Exec).
++void ShiroRestore(struct Machine *m) {
++  struct System *s = m->system;
++  struct ShiroForkHeader h;
++  const u8 *p = g_shiro_restore, *end = p + g_shiro_restore_len;
++  u64 i;
++  memcpy(&h, p, sizeof(h));
++  unassert(h.magic == SHIRO_FORK_MAGIC && h.size == sizeof(h));
++  p += sizeof(h);
++  ResetCpu(m);
++  s->cr0 = CR0_PE | CR0_MP | CR0_ET | CR0_PG;
++  s->cr3 = AllocatePageTable(s);
++  s->elf.prog = ShiroDupN(p, h.proglen), p += h.proglen;
++  s->elf.execfn = ShiroDupN(p, h.execfnlen), p += h.execfnlen;
++  s->elf.interpreter = h.interplen ? ShiroDupN(p, h.interplen) : 0, p += h.interplen;
++  s->elf.base = h.elfbase;
++  s->elf.at_base = h.at_base, s->elf.at_phdr = h.at_phdr, s->elf.at_phent = h.at_phent;
++  s->elf.at_entry = h.at_entry, s->elf.at_phnum = h.at_phnum;
++  memcpy(s->elf.rng, h.rng, sizeof(h.rng));
++  for (i = 0; i < h.nruns && p < end; ++i) {
++    struct ShiroForkRun r;
++    memcpy(&r, p, sizeof(r));
++    p += sizeof(r);
++    // writable while we fill it, then the run's own protection
++    unassert(ReserveVirtual(s, r.virt, r.pages * 4096, r.key | (r.hasdata ? PAGE_RW | PAGE_U : 0),
++                            -1, 0, false, true) == r.virt);
++    if (r.hasdata) {
++      unassert(CopyToUser(m, r.virt, (void *)p, r.pages * 4096) != -1);
++      p += r.pages * 4096;
++      if (!(r.key & PAGE_RW)) {
++        ProtectVirtual(s, r.virt, r.pages * 4096,
++                       PROT_READ | (r.key & PAGE_XD ? 0 : PROT_EXEC), false);
++      }
++    }
++  }
++  s->brk = h.brk;
++  s->automap = h.automap;
++  s->iscosmo = h.iscosmo;
++  memcpy(s->hands, h.hands, sizeof(h.hands));
++  s->blinksigs = h.blinksigs;
++  memcpy(s->rlim, h.rlim, sizeof(h.rlim));
++  memcpy(m->beg, h.regs, sizeof(h.regs));
++  memcpy(m->xmm, h.xmm, sizeof(h.xmm));
++  m->ip = h.ip;
++  m->flags = h.flags;
++  m->mxcsr = h.mxcsr;
++  memcpy(&m->fpu, &h.fpu, sizeof(h.fpu));
++  m->fs.base = h.fsbase;
++  m->gs.base = h.gsbase;
++  m->sigmask = h.sigmask;
++  memcpy(&m->sigaltstack, &h.altstack, sizeof(h.altstack));
++  if ((h.cloneflags & CLONE_CHILD_SETTID_LINUX) && h.ctid) {
++    u8 tid[4];
++    Write32(tid, g_shiro_pid);
++    CopyToUser(m, h.ctid, tid, 4);
++  }
++  if (h.cloneflags & CLONE_CHILD_CLEARTID_LINUX) m->ctid = h.ctid;
++  s->loaded = true;
++  free(g_shiro_restore);
++  g_shiro_restore = 0;
++}
++
+ // ── mmap of kernel files ─────────────────────────────────────────────────
+ 
+ struct ShiroSharedMap {
+@@ -1213,11 +1481,11 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     case 0x074: case 0x07A: case 0x07B:                               // set*id, setgroups, setfs*id
+       r = 0;
+       break;
+-    case 0x039: r = ShiroVfork(m, 0, true); break;                    // fork
++    case 0x039: r = ShiroForkReal(m, 0, 0, 0); break;                    // fork
+     case 0x03A: r = ShiroVfork(m, 0, false); break;                   // vfork
+     case 0x038:                                                       // clone
+       if (!IsForkOrVfork(a)) return false;                           // threads stay Blink's
+-      r = ShiroVfork(m, b, !(a & CLONE_VFORK_LINUX));
++      r = a & CLONE_VFORK_LINUX ? ShiroVfork(m, b, false) : ShiroForkReal(m, a, b, d);
+       break;
+     case 0x03B: r = ShiroExecve(m, a, b, c); break;                   // execve
+     case 0x00D: {                                                     // rt_sigaction
+-- 
+2.43.0
+

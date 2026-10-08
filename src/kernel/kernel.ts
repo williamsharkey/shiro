@@ -14,7 +14,7 @@ import { processTable, type ShiroProcess } from '../process-table';
 import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
-  RegularFile, DirFile, openInode, inodeNumber, canWrite, refCount,
+  RegularFile, DirFile, openInode, inodeNumber, canWrite, refCount, renameInodes, unlinkInode,
 } from './fd';
 import { createPipe } from './pipe';
 import { Process } from './process';
@@ -79,6 +79,9 @@ export interface WaitResult {
 }
 
 const enc = new TextEncoder();
+
+/** Shell builtins that Unix systems also have as programs in /bin and /usr/bin. */
+const SHELL_PROGRAMS = new Set(['echo', 'printf', 'test', '[', 'true', 'false', 'pwd', 'kill']);
 
 function normalize(path: string): string {
   const stack: string[] = [];
@@ -211,7 +214,10 @@ export class Kernel {
     const base = path.slice(path.lastIndexOf('/') + 1);
     const inBin = !path.includes('/') || /^\/(usr\/)?(local\/)?s?bin\//.test(path);
     const cmd = inBin ? shell.commands.get(base) : undefined;
+    if (cmd && (base === 'sh' || base === 'bash')) return proc => this.runShellProcess(proc);
     if (cmd) return proc => this.runBuiltin(proc, cmd);
+    // Shell builtins that are also programs (/bin/echo, /usr/bin/test, ...)
+    if (inBin && SHELL_PROGRAMS.has(base)) return proc => this.runViaShell(proc, base);
     // Scripts and other executables the shell knows how to start
     const found = path.includes('/') ? ((await this.fs?.exists(path)) ? path : null) : await shell.findExecutableInPath(path);
     if (found) return proc => this.runViaShell(proc);
@@ -609,9 +615,67 @@ export class Kernel {
   }
 
   /** Run argv through a forked shell (scripts, node programs, anything in PATH that is not a registered command). */
-  private async runViaShell(proc: Process): Promise<number> {
+  /**
+   * `sh`/`bash` as a kernel process (a program's system(), popen(), `sh -c
+   * CMD`, `#!/bin/sh` scripts): the forked shell is the process
+   * (`shell.kernelHost`), so programs it runs get its real fds and the tty.
+   * Builtins write to fd 1/2 as they go. Stdin is read up front only for a
+   * script on stdin or one that starts with a builtin (which takes its
+   * input as a string); a program at the start reads fd 0 itself.
+   */
+  private async runShellProcess(proc: Process): Promise<number> {
     const shell = this.forkShell(proc);
-    const line = proc.argv.length ? [proc.path, ...proc.argv.slice(1)].map(shellQuote).join(' ') : shellQuote(proc.path);
+    shell.kernelHost = { kernel: this, proc };
+    const args = proc.argv.slice(1);
+    let i = 0;
+    while (i < args.length && /^-[a-zA-Z]+$/.test(args[i]) && args[i] !== '-c') i++; // -e, -x, -l ...
+    let script: string;
+    let positional: string[] = [];
+    if (args[i] === '-c') {
+      script = args[i + 1] ?? '';
+      positional = args.slice(i + 2);
+    } else if (i < args.length) {
+      try {
+        const p = this.resolvePath(proc, args[i]);
+        if (typeof p === 'number') throw new Error('bad path');
+        const raw = await this.fs!.readFile(p);
+        script = typeof raw === 'string' ? raw : A.decodeText(raw);
+      } catch {
+        await this.writeAll(proc, 2, enc.encode(`sh: ${args[i]}: No such file or directory\n`));
+        return 127;
+      }
+      positional = args.slice(i);
+    } else {
+      script = await this.stdinText(proc);
+    }
+    if (script.startsWith('#!')) script = script.slice(script.indexOf('\n') + 1);
+    const first = script.trim().split(/[\s;|&]/)[0] ?? '';
+    const { packageShadows } = await import('../pkg-manager');
+    const builtinFirst = (!!shell.commands.get(first) && !packageShadows(shell.fs).has(first)) || SHELL_PROGRAMS.has(first) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(first) ||
+      ['cd', 'read', 'while', 'if', 'for', 'case', 'until', 'exec', 'set', 'export', 'eval', '.', 'source', '{', '('].includes(first);
+    const stdin = args[i] === '-c' && builtinFirst ? await this.stdinText(proc) : '';
+    let chain = Promise.resolve();
+    const out = (fd: number) => (s: string) => {
+      chain = chain.then(async () => { if (!proc.exiting) await this.writeAll(proc, fd, enc.encode(s.replace(/\r\n/g, '\n'))); });
+    };
+    if (positional.length) shell.env['0'] = positional[0];
+    let code: number;
+    if (script.includes('\n')) {
+      // Multi-line: compound statements accumulate across lines
+      code = await shell.executeShellScript(script, positional.slice(1), { stdin } as CommandContext, out(1), out(2));
+    } else {
+      positional.slice(1).forEach((v, k) => { shell.env[String(k + 1)] = v; });
+      shell.env['#'] = String(Math.max(0, positional.length - 1));
+      shell.env['@'] = positional.slice(1).join(' ');
+      code = await shell.executeWithStdin(script, stdin, out(1), out(2));
+    }
+    await chain;
+    return code;
+  }
+
+  private async runViaShell(proc: Process, name = proc.path): Promise<number> {
+    const shell = this.forkShell(proc);
+    const line = proc.argv.length ? [name, ...proc.argv.slice(1)].map(shellQuote).join(' ') : shellQuote(name);
     const stdin = await this.stdinText(proc);
     let chain = Promise.resolve();
     const out = (fd: number) => (s: string) => {
@@ -1021,6 +1085,7 @@ export class Kernel {
           if (flags & ~A.RENAME_NOREPLACE) return -A.EINVAL;
           if ((flags & A.RENAME_NOREPLACE) && (await fs().exists(to))) return -A.EEXIST;
           if (!(await fs().exists(from))) return -A.ENOENT;
+          await renameInodes(fs(), from, to);
           await fs().rename(from, to);
           return 0;
         }
@@ -1048,7 +1113,7 @@ export class Kernel {
           if (!rmdir && isDir) return -A.EISDIR;
           if (rmdir && !isDir) return -A.ENOTDIR;
           if (isDir) await fs().rmdir(p);
-          else await fs().unlink(p);
+          else { unlinkInode(fs(), p); await fs().unlink(p); }
           return 0;
         }
         case A.SYS_symlink:
@@ -1364,6 +1429,13 @@ export class Kernel {
     return child;
   }
 
+  /** Start the program of a SYS_shiro_vfork child (an exec, or a fork's copy of its parent). */
+  startEmbryo(proc: Process, run: Runner): void {
+    if (!proc.data.embryo || proc.exiting) return;
+    delete proc.data.embryo;
+    void this.start(proc, run);
+  }
+
   /** SYS_shiro_execve (see abi.ts). */
   private async sysExecve(proc: Process, req: { path: string; argv?: string[]; env?: string[]; inproc?: boolean }, data: Uint8Array): Promise<number> {
     if (!req || typeof req.path !== 'string' || !req.path) return -A.ENOENT;
@@ -1371,7 +1443,14 @@ export class Kernel {
     if (typeof path === 'number') return path;
     const st = await this.statPath(proc, path);
     // A Shiro command under /bin, /usr/bin, ... (sh, env, ls) has no file but runs
-    const builtin = st === -A.ENOENT && /^\/(usr\/)?(local\/)?s?bin\/[^/]+$/.test(path) && !!this.shell?.commands.get(path.slice(path.lastIndexOf('/') + 1));
+    // A Shiro command with no file anywhere runs as /bin/NAME and /usr/bin/NAME.
+    // (Not /usr/local/bin/NAME: execvp tries that first and must move on to
+    // a real /usr/bin/NAME a package installed.)
+    const base = path.slice(path.lastIndexOf('/') + 1);
+    const builtin = st === -A.ENOENT && /^\/(usr\/)?s?bin\/[^/]+$/.test(path) &&
+      (!!this.shell?.commands.get(base) || SHELL_PROGRAMS.has(base)) &&
+      typeof (await this.statPath(proc, `/bin/${base}`)) === 'number' &&
+      typeof (await this.statPath(proc, `/usr/bin/${base}`)) === 'number';
     if (typeof st === 'number' && !builtin) return st;
     if (typeof st !== 'number' && (st.mode & A.S_IFMT) !== A.S_IFREG) return -A.EACCES;
     const argv = Array.isArray(req.argv) ? req.argv.map(String) : [req.path];
@@ -1402,8 +1481,7 @@ export class Kernel {
     proc.signalFrames = [];
     this.notify();
     if (embryo) {
-      delete proc.data.embryo;
-      void this.start(proc, runner!);
+      this.startEmbryo(proc, runner!);
       return 0;
     }
     if (isElf && req.inproc) {

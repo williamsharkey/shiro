@@ -951,7 +951,7 @@
    ]
   },
   {
-   "name": "grep",
+   "name": "grep-wasix",
    "version": "3.12.0",
    "description": "GNU grep (WASIX build)",
    "license": "GPL-3.0-or-later",
@@ -983,7 +983,7 @@
    "notes": "WASIX build (wasix_32v1, shared env.memory). Run it as /usr/bin/grep (the builtin keeps the name). grep -r fails with ENOSYS."
   },
   {
-   "name": "sed",
+   "name": "sed-wasix",
    "version": "4.9.0",
    "description": "GNU sed (WASIX build)",
    "license": "GPL-3.0-or-later",
@@ -1404,6 +1404,423 @@
    },
    "links": {
     "/usr/share/vim": "share/vim"
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "nano",
+   "version": "9.2",
+   "description": "GNU nano text editor (syntax highlighting; static x86-64 build)",
+   "license": "GPL-3.0-or-later",
+   "source": "https://www.nano-editor.org/dist/v9/nano-9.2.tar.xz",
+   "homepage": "https://www.nano-editor.org/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/nano.sh",
+   "section": "editors",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/nano",
+     "url": "/pkg/nano/9.2/nano.gz",
+     "sha256": "0a2a12dcee3d660d03d39ce7b46aa4b51ee11ce80fe2a60a4b20f684349db1de",
+     "size": 284554,
+     "unpack": "gzip"
+    },
+    {
+     "path": "etc",
+     "url": "/pkg/nano/9.2/etc.tar.gz",
+     "sha256": "57e9f931f0bd3d2bca05bb3db9baaf106d8d15fb41016d142ccc0d00bc331643",
+     "size": 155,
+     "unpack": "tar.gz"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/nano/9.2/share.tar.gz",
+     "sha256": "403cc279ddbe1caf6ad4b8b80c78540d7392c1c43ba9d74a1110dc9d20200823",
+     "size": 18974,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "nano": {
+     "file": "bin/nano"
+    }
+   },
+   "links": {
+    "/etc/nanorc": "etc/nanorc",
+    "/usr/share/nano": "share/nano"
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "make",
+   "version": "4.4.1",
+   "description": "GNU make",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz",
+   "homepage": "https://www.gnu.org/software/make/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/make.sh",
+   "section": "devel",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/make",
+     "url": "/pkg/make/4.4.1/make.gz",
+     "sha256": "c8bae79ffd3c64b4df22a86034032f9065337abd10c2441622c052be32212aed",
+     "size": 134748,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "make": {
+     "file": "bin/make"
+    },
+    "gmake": {
+     "file": "bin/make"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "diffutils",
+   "version": "3.12",
+   "description": "GNU diff, cmp, diff3, sdiff",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/diffutils/diffutils-3.12.tar.xz",
+   "homepage": "https://www.gnu.org/software/diffutils/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/diffutils.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/cmp",
+     "url": "/pkg/diffutils/3.12/cmp.gz",
+     "sha256": "571f2ec58f86af52693b59d21cd9b16811dbeb0333adda79b4dea55811226dfb",
+     "size": 37373,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/diff",
+     "url": "/pkg/diffutils/3.12/diff.gz",
+     "sha256": "8ee56eaf1ee4a962f5333c4b55cd47d74d28aa7737c4a95a537ffccebbd62222",
+     "size": 120064,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/diff3",
+     "url": "/pkg/diffutils/3.12/diff3.gz",
+     "sha256": "54c6ccd9651969d518c6c39b96c15551dde7c572c62e85fd49165dce99af1dd3",
+     "size": 40869,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/sdiff",
+     "url": "/pkg/diffutils/3.12/sdiff.gz",
+     "sha256": "4e6088c78a73c5ede591bbac05f22daf93c9d15298edea4ca2e418a49dd007df",
+     "size": 41217,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "diff": {
+     "file": "bin/diff"
+    },
+    "cmp": {
+     "file": "bin/cmp"
+    },
+    "diff3": {
+     "file": "bin/diff3"
+    },
+    "sdiff": {
+     "file": "bin/sdiff"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "patch",
+   "version": "2.8",
+   "description": "GNU patch: apply diffs",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/patch/patch-2.8.tar.xz",
+   "homepage": "https://www.gnu.org/software/patch/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/patch.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/patch",
+     "url": "/pkg/patch/2.8/patch.gz",
+     "sha256": "3873d3488e4376312b38aa340691cec6e618fbbedabb923d662673e5fbec51b2",
+     "size": 88181,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "patch": {
+     "file": "bin/patch"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "gawk",
+   "version": "5.4.1",
+   "description": "GNU awk",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/gawk/gawk-5.4.1.tar.xz",
+   "homepage": "https://www.gnu.org/software/gawk/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/gawk.sh",
+   "section": "text",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/gawk",
+     "url": "/pkg/gawk/5.4.1/gawk.gz",
+     "sha256": "ad88f41ffa7af3aafe6735e66b6de57fdcbab1c69da8e573b15f2f43e0e7675e",
+     "size": 353632,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "gawk": {
+     "file": "bin/gawk"
+    },
+    "awk": {
+     "file": "bin/gawk"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "sed",
+   "version": "4.10",
+   "description": "GNU sed stream editor",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/sed/sed-4.10.tar.xz",
+   "homepage": "https://www.gnu.org/software/sed/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/sed.sh",
+   "section": "text",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/sed",
+     "url": "/pkg/sed/4.10/sed.gz",
+     "sha256": "e195bc1b7f02ca27958418e579d507a6a3675f392b3ea677b95aadb925bc703a",
+     "size": 101327,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "sed": {
+     "file": "bin/sed"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "grep",
+   "version": "3.12",
+   "description": "GNU grep (also egrep, fgrep)",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/grep/grep-3.12.tar.xz",
+   "homepage": "https://www.gnu.org/software/grep/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/grep.sh",
+   "section": "text",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/grep",
+     "url": "/pkg/grep/3.12/grep.gz",
+     "sha256": "768e12b30ec7be5fd0b31bf8dc1ee8435186860a65643038680ccd7306813c89",
+     "size": 116331,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "grep": {
+     "file": "bin/grep"
+    },
+    "egrep": {
+     "file": "bin/grep",
+     "args": [
+      "-E"
+     ]
+    },
+    "fgrep": {
+     "file": "bin/grep",
+     "args": [
+      "-F"
+     ]
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "findutils",
+   "version": "4.11.0",
+   "description": "GNU find and xargs",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/findutils/findutils-4.11.0.tar.xz",
+   "homepage": "https://www.gnu.org/software/findutils/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/findutils.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/find",
+     "url": "/pkg/findutils/4.11.0/find.gz",
+     "sha256": "e2bc335397d685d3a8b0a40bcc6c2437972063698c13c3122190a1d5820e0546",
+     "size": 159069,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/xargs",
+     "url": "/pkg/findutils/4.11.0/xargs.gz",
+     "sha256": "f447533891daf3918aad5d1b1dfb99f93d0e9e991d5be96c246913182690e8a0",
+     "size": 49997,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "find": {
+     "file": "bin/find"
+    },
+    "xargs": {
+     "file": "bin/xargs"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "bc",
+   "version": "1.08.2",
+   "description": "GNU bc and dc calculators",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/bc/bc-1.08.2.tar.gz",
+   "homepage": "https://www.gnu.org/software/bc/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/bc.sh",
+   "section": "math",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/bc",
+     "url": "/pkg/bc/1.08.2/bc.gz",
+     "sha256": "221e5300183cdb159990509a0e8b28c8d332bbae7b9186186673b7d53fa83310",
+     "size": 50359,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/dc",
+     "url": "/pkg/bc/1.08.2/dc.gz",
+     "sha256": "b0519a87584254973864f87f60dfcbbd3aa697c8191383f461854083e049ed61",
+     "size": 37755,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "bc": {
+     "file": "bin/bc"
+    },
+    "dc": {
+     "file": "bin/dc"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "tar",
+   "version": "1.35",
+   "description": "GNU tar (gzip/xz/zstd/bzip2 through those programs)",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/tar/tar-1.35.tar.xz",
+   "homepage": "https://www.gnu.org/software/tar/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/tar.sh",
+   "section": "archive",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/tar",
+     "url": "/pkg/tar/1.35/tar.gz",
+     "sha256": "379da183d7628c118703ac2dd7c571659162e8ea8fb4e754e8b03985339a26ff",
+     "size": 370541,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "tar": {
+     "file": "bin/tar"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "gzip",
+   "version": "1.15",
+   "description": "GNU gzip, gunzip, zcat",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/gzip/gzip-1.15.tar.xz",
+   "homepage": "https://www.gnu.org/software/gzip/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/gzip.sh",
+   "section": "archive",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/gzip",
+     "url": "/pkg/gzip/1.15/gzip.gz",
+     "sha256": "c3d005f06a02a5e6ef70e2d12062a0ab7fb39f6dd534ee238b1f185b67f32a32",
+     "size": 71669,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "gzip": {
+     "file": "bin/gzip"
+    },
+    "gunzip": {
+     "file": "bin/gzip",
+     "args": [
+      "-d"
+     ]
+    },
+    "zcat": {
+     "file": "bin/gzip",
+     "args": [
+      "-dc"
+     ]
+    }
    },
    "needs": [
     "x86"

@@ -195,6 +195,16 @@ in the test when `go`/`gcc` exist.
    transfer) and the tty ioctls (`TIOCSCTTY`, `TIOCGPTN`, ...) are covered;
    locks (`fcntl F_SETLK`, `flock`) always succeed.
 
+12. A stop signal's default action (SIGTSTP/SIGTTIN/SIGTTOU/SIGSTOP) stops
+   the process in the kernel instead of terminating it.
+13. Real `fork()`: `fork` and `clone` without `CLONE_VFORK` snapshot the
+   process (every mapped page, the forking thread's registers, the signal
+   table, brk, ELF info); the kernel creates the child (`SYS_shiro_vfork`),
+   the page starts a new Blink worker that rebuilds the snapshot
+   (`blinkRunner(path, restore)`), and `fork` returns 0 there. Programs that
+   fork without exec (GNU tar's compressor helper, servers) work; `vfork`
+   and `posix_spawn` keep the cheaper emulation of patch 11.
+
 Native Blink's own exit path (`KillOtherThreads`) still hangs after
 multi-threaded Go programs; the wasm build doesn't use it.
 

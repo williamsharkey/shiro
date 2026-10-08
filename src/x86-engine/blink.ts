@@ -19,7 +19,7 @@ import { Kernel, getKernel, type Runner } from '../kernel/kernel';
 import { installNet } from '../kernel/net';
 import { workerRunner, webWorker, type GuestWorker } from '../kernel/worker-host';
 import { BufferFile, DevNull } from '../kernel/fd';
-import { shellExitCode, SIGKILL, CH_DATA, CH_STATE, CH_SYSNO, CH_ARGS, CH_NARGS, CH_RESULT, CH_SIGNAL, STATE_REQUEST, STATE_REPLY, ESRCH } from '../kernel/abi';
+import { type KStat, S_IFIFO, shellExitCode, SIGKILL, CH_DATA, CH_STATE, CH_SYSNO, CH_ARGS, CH_NARGS, CH_RESULT, CH_SIGNAL, STATE_REQUEST, STATE_REPLY, ESRCH } from '../kernel/abi';
 import { createChannelBuffer } from '../kernel/channel';
 import type { Process } from '../kernel/process';
 
@@ -103,8 +103,12 @@ function ensureNet(kernel: Kernel): void {
 const POOL_CHANNELS = 6;
 const POOL_DATA = 1 << 20;
 
-/** A kernel Runner that executes the ELF at absolute `path` in Blink. */
-export function blinkRunner(path: string): Runner {
+/**
+ * A kernel Runner that executes the ELF at absolute `path` in Blink. With
+ * `restore`, the worker instead rebuilds a fork()ed process from its
+ * parent's snapshot (Blink patch 0013); `path` is the parent's program.
+ */
+export function blinkRunner(path: string, restore?: ArrayBuffer): Runner {
   return async (proc: Process, kernel: Kernel) => {
     ensureNet(kernel);
     registerBlinkLoader(kernel); // ELF children of this guest run in Blink too
@@ -117,7 +121,7 @@ export function blinkRunner(path: string): Runner {
       return w;
     }, {
       // SHIRO_BLINK_DEBUG=1: the worker logs kernel syscalls and Blink's own messages to the console
-      startData: { path, moduleUrl: defaultAssetBase() + 'blink.mjs', mounts, pool, debug: proc.env.SHIRO_BLINK_DEBUG === '1' },
+      startData: { path, moduleUrl: defaultAssetBase() + 'blink.mjs', mounts, pool, restore, debug: proc.env.SHIRO_BLINK_DEBUG === '1' },
     });
     return runner(proc, kernel);
   };
@@ -187,6 +191,10 @@ function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: SharedA
     if (m?.type === 'blink-sys') {
       const sab = pool[m.ch];
       if (sab) void servePoolChannel(kernel, proc, sab, m.as | 0, busy).then((ok) => { if (ok) w.postMessage({ type: 'blink-done', ch: m.ch }); });
+    } else if (m?.type === 'blink-fork') {
+      // fork(): the child (made by SYS_shiro_vfork) runs the snapshot in its own worker
+      const child = kernel.procs.get(m.pid);
+      if (child && child.ppid === proc.pid) kernel.startEmbryo(child, blinkRunner(child.path, m.snapshot));
     } else if (m?.type === 'blink-watch') watch(m.fd);
     else if (m?.type === 'blink-unwatch') { subs.get(m.fd)?.(); subs.delete(m.fd); }
   });
@@ -237,6 +245,12 @@ class OutputSink extends DevNull {
   async write(buf: Uint8Array): Promise<number> {
     this.sink(buf.slice());
     return buf.length;
+  }
+  // A pipe to the shell, not /dev/null: programs compare their stdout with
+  // /dev/null (GNU grep then prints nothing)
+  async stat(): Promise<KStat> {
+    const now = Date.now();
+    return { dev: 2, ino: 0, mode: S_IFIFO | 0o600, nlink: 1, uid: 1000, gid: 1000, rdev: 0, size: 0, blksize: 4096, blocks: 0, atimeMs: now, mtimeMs: now, ctimeMs: now };
   }
 }
 

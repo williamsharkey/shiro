@@ -421,35 +421,8 @@ async function main() {
     }
   });
 
-  // Create PATH shims for builtins so programs can discover them via `which`, `execFile`, etc.
-  // This is how an OS advertises its commands — the PATH mechanism, not the builtin registry.
-  const shimCommands = [
-    'git', 'node', 'npm', 'npx', 'ls', 'cat', 'grep', 'sed', 'find', 'curl',
-    'mkdir', 'rm', 'cp', 'mv', 'echo', 'touch', 'chmod', 'head', 'tail',
-    'sort', 'uniq', 'wc', 'tr', 'tee', 'diff', 'env', 'which', 'test',
-    'sh', 'bash', 'vi', 'nano', 'rg', 'esbuild',
-    'mktemp', 'jq', 'tput', 'stty', 'gzip', 'gunzip', 'wget',
-    'pgrep', 'pkill', 'nproc', 'getconf', 'ed', 'iconv', 'zip', 'unzip',
-    'cc', 'gcc', 'python', 'python3', 'pip', 'sqlite3',
-  ];
-  (async () => {
-    try {
-      await fs.mkdir('/usr/local/bin', { recursive: true });
-      for (const cmd of shimCommands) {
-        const shimPath = `/usr/local/bin/${cmd}`;
-        // Don't overwrite real scripts (like claude bin stub), and leave PATH
-        // to a program a package installed (`pkg install sqlite`)
-        if (await fs.exists(shimPath) || await fs.exists(`/usr/bin/${cmd}`)) continue;
-        await fs.writeFile(shimPath, `#!/bin/sh\n${cmd} "$@"\n`);
-      }
-      // Create /bin/sh, /bin/bash, /usr/bin/env so stat() checks pass
-      await fs.mkdir('/bin', { recursive: true });
-      await fs.mkdir('/usr/bin', { recursive: true });
-      if (!await fs.exists('/bin/sh')) await fs.writeFile('/bin/sh', '#!/bin/sh\n');
-      if (!await fs.exists('/bin/bash')) await fs.writeFile('/bin/bash', '#!/bin/bash\n');
-      if (!await fs.exists('/usr/bin/env')) await fs.writeFile('/usr/bin/env', '#!/bin/sh\n');
-    } catch {}
-  })();
+  // PATH shims for builtins (src/path-shims.ts): programs find them via `which`, `execFile`, PATH searches
+  void import('./path-shims').then(m => m.installPathShims(fs)).catch(() => {});
 
   // Create shell
   const shell = new Shell(fs, commands);

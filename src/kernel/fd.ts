@@ -405,6 +405,8 @@ class Inode {
   size: number;
   opens = 0;
   dirty = false;
+  /** Unlinked (or replaced by a rename) while open: keeps its data, never written back */
+  detached = false;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private flushing: Promise<void> | null = null;
 
@@ -429,6 +431,7 @@ class Inode {
   async flush(): Promise<void> {
     if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
     while (this.flushing) await this.flushing;
+    if (this.detached) { this.dirty = false; return; }
     if (!this.dirty) return;
     this.dirty = false;
     const snapshot = this.data.slice(0, this.size);
@@ -458,7 +461,38 @@ export async function openInode(fs: FileSystem, path: string): Promise<Inode> {
 async function closeInode(ino: Inode): Promise<void> {
   ino.opens--;
   await ino.flush();
-  if (ino.opens === 0) inodeTables.get(ino.fs)?.delete(ino.path);
+  const table = inodeTables.get(ino.fs);
+  if (ino.opens === 0 && table?.get(ino.path) === ino) table.delete(ino.path);
+}
+
+/**
+ * rename(2) of a path with open files: their pending writes go out first,
+ * and later writes follow the file to its new name. A file the rename
+ * replaces stays readable through its open fds but is no longer written
+ * back (it is gone, as on Linux). Call before FileSystem.rename.
+ */
+export async function renameInodes(fs: FileSystem, from: string, to: string): Promise<void> {
+  const table = inodeTables.get(fs);
+  if (!table || from === to) return;
+  for (const [path, ino] of [...table]) {
+    if (path === to || path.startsWith(to + '/')) { ino.detached = true; table.delete(path); }
+  }
+  for (const [path, ino] of [...table]) {
+    if (path !== from && !path.startsWith(from + '/')) continue;
+    await ino.flush();
+    table.delete(path);
+    ino.path = to + path.slice(from.length);
+    table.set(ino.path, ino);
+  }
+}
+
+/** unlink(2) of a path with open files: they keep their data but are never written back. */
+export function unlinkInode(fs: FileSystem, path: string): void {
+  const table = inodeTables.get(fs);
+  const ino = table?.get(path);
+  if (!ino) return;
+  ino.detached = true;
+  table!.delete(path);
 }
 
 /** Stable small inode numbers for paths (the FileSystem has none). */

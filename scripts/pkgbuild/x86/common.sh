@@ -128,3 +128,24 @@ install_bin() {
   if file "$dst" 2>/dev/null | grep -q dynamic; then echo "$dst is not static" >&2; exit 1; fi
   sha256sum "$dst"
 }
+
+# gnu_src NAME VERSION SHA256 [EXT]: unpack ftp.gnu.org's NAME-VERSION tarball; prints the source dir
+gnu_src() {
+  local ext=${4:-tar.xz}
+  unpack "$(fetch "https://ftp.gnu.org/gnu/$1/$1-$2.$ext" "$3")" "$1-$2"
+}
+
+# configure_make SRC [configure args...]: ./configure with the musl compiler,
+# then make. The build host is x86-64 Linux like the target, so configure's
+# test programs (static musl binaries) run natively: no cross-compile guesses.
+# MAKEINFO=true: manuals aren't built.
+configure_make() {
+  local src=$1
+  shift
+  (cd "$src" && ./configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var --disable-nls "$@" \
+      >configure.log 2>&1 && make -j"$(nproc)" MAKEINFO=true >make.log 2>&1) || {
+    echo "build failed in $src (see configure.log / make.log)" >&2
+    for f in configure.log make.log; do [ -f "$src/$f" ] && tail -n 20 "$src/$f" >&2; done
+    exit 1
+  }
+}

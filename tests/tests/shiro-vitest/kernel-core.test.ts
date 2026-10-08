@@ -327,6 +327,35 @@ describe('kernel processes', () => {
     kernel.kill(proc.pid, A.SIGKILL);
   });
 
+  it('an open file follows rename(2); an unlinked or replaced one is not written back', async () => {
+    const proc = kernel.spawn({ path: 'rn', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
+    const data = new Uint8Array(4096);
+    const enc = (s: string) => { const b = new TextEncoder().encode(s); data.set(b); return b.length; };
+    const open = async (p: string, flags: number) => kernel.syscall(proc, A.SYS_openat, [A.AT_FDCWD, enc(p), flags, 0o644], data);
+    const rename = async (a: string, b: string) => { const n = enc(a); data.set(new TextEncoder().encode(b), n); return kernel.syscall(proc, A.SYS_rename, [n, b.length], data); };
+    // write a temp file, rename it over the target while still open, keep writing (GNU patch, editors)
+    await fs.writeFile('/tmp/target.txt', 'old\n');
+    const fd = await open('/tmp/tmp.XXXX', A.O_WRONLY | A.O_CREAT | A.O_TRUNC);
+    data.set(new TextEncoder().encode('new\n'));
+    expect(await kernel.syscall(proc, A.SYS_write, [fd, 4], data)).toBe(4);
+    expect(await rename('/tmp/tmp.XXXX', '/tmp/target.txt')).toBe(0);
+    data.set(new TextEncoder().encode('more\n'));
+    expect(await kernel.syscall(proc, A.SYS_write, [fd, 5], data)).toBe(5);
+    expect(await kernel.syscall(proc, A.SYS_close, [fd], data)).toBe(0);
+    expect(await fs.readFile('/tmp/target.txt', 'utf8')).toBe('new\nmore\n');
+    expect(await fs.exists('/tmp/tmp.XXXX')).toBe(false);
+    // unlink while open: still readable, never recreated
+    const fd2 = await open('/tmp/gone.txt', A.O_RDWR | A.O_CREAT);
+    data.set(new TextEncoder().encode('data'));
+    await kernel.syscall(proc, A.SYS_write, [fd2, 4], data);
+    expect(await kernel.syscall(proc, A.SYS_unlink, [enc('/tmp/gone.txt')], data)).toBe(0);
+    await kernel.syscall(proc, A.SYS_write, [fd2, 4], data);
+    expect(await kernel.syscall(proc, A.SYS_close, [fd2], data)).toBe(0);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(await fs.exists('/tmp/gone.txt')).toBe(false);
+    kernel.kill(proc.pid, A.SIGKILL);
+  });
+
   it('syscall dispatch: pipe2/dup2/fcntl/getdents in-page', async () => {
     const proc = kernel.spawn({ path: 'sc', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
     const data = new Uint8Array(4096);

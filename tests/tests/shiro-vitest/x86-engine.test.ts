@@ -325,3 +325,15 @@ describe('Blink engine: kernel processes (fork, exec, pipes)', () => {
     expect(await fs.readFile('/home/user/work/out.txt', 'utf8')).toMatch(/^child pid=\d+ ppid=\d+ arg=y\n$/);
   }, 60_000);
 });
+
+// Blink patch 0013: fork() copies the process into a new worker.
+describe('Blink engine: fork() without exec', () => {
+  it('the child gets a copy of memory and runs alongside the parent', async () => {
+    const { shell } = await setup(readFileSync(join(FIX, 'fork-musl')));
+    const r = await run(shell, './prog');
+    expect(r.exitCode).toBe(0);
+    expect(r.output).toMatch(/child: pid=\d+ ppid=\d+ counter=101 heap=heap data/);
+    expect(r.output).toContain('parent: counter=100 heap=heap data child exit=5');
+    expect(r.output).toContain('echo child: HELLO');
+  }, 60_000);
+});
