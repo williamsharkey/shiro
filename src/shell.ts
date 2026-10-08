@@ -5292,8 +5292,9 @@ export class Shell {
     // the arguments and preloads their package records
     try {
       const real = await this.fs.realpath(filePath);
-      // (a package's script launchers, like ruby's gem, take the shebang path below)
-      if (packageOfPath(real) && !(await this.isScriptFile(real))) {
+      // (a package's script launchers, like ruby's gem, and x86-64 programs
+      // run in Blink, like perl, take the paths below)
+      if (packageOfPath(real) && await this.isWasmFile(real)) {
         return await runPackageBinary(real, filePath.split('/').pop() || filePath, args, ctx,
           filePath.startsWith('/') ? filePath : this.fs.resolvePath(filePath, this.cwd));
       }
@@ -5380,7 +5381,7 @@ export class Shell {
       // Blink (wasm) when the page can run it, else the built-in src/x86.
       const { runElf } = await import('./x86-engine');
       return runElf(resolvedPath, args, {
-        fs: this.fs, cwd: this.cwd, args, env: this.env,
+        fs: this.fs, cwd: this.cwd, args, env: this.env, shell: this,
         stdin: ctx.stdin || '', writeStdout: writeStdout, writeStderr: writeStderr,
       });
     }
@@ -5441,11 +5442,11 @@ export class Shell {
     return this.executeShellScript(content, args, ctx, writeStdout, writeStderr, filePath);
   }
 
-  /** Does `path` start with "#!"? */
-  private async isScriptFile(path: string): Promise<boolean> {
+  /** Is `path` a WebAssembly module? */
+  private async isWasmFile(path: string): Promise<boolean> {
     try {
       const d = await this.fs.readFile(path);
-      return typeof d === 'string' ? d.startsWith('#!') : d[0] === 0x23 && d[1] === 0x21;
+      return typeof d !== 'string' && d[0] === 0x00 && d[1] === 0x61 && d[2] === 0x73 && d[3] === 0x6d;
     } catch { return false; }
   }
 

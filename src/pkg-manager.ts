@@ -43,7 +43,8 @@ const KERNEL_FEATURES: KernelFeature[] = [
   'wasix', 'processes', 'threads', 'sockets', 'blocking-stdin', 'tty', 'sync-fs', 'wasix-stack', 'dynamic-linking', 'mounts',
 ];
 
-export type PkgAbi = 'wasi_snapshot_preview1' | 'wasi_unstable' | 'wasix';
+/** `x86_64-linux`: static x86-64 Linux ELF programs, run in the Blink engine (src/x86-engine) */
+export type PkgAbi = 'wasi_snapshot_preview1' | 'wasi_unstable' | 'wasix' | 'x86_64-linux';
 
 export interface PkgFile {
   /** Install path relative to /usr/lib/pkg/<name>/ (a directory for webc volume extracts) */
@@ -162,7 +163,7 @@ export function parseIndex(doc: unknown): PkgIndex {
     for (const k of ['version', 'description', 'license', 'source', 'section'] as const) {
       if (typeof p[k] !== 'string' || !p[k]) fail(`${where}: missing ${k}`);
     }
-    if (!['wasi_snapshot_preview1', 'wasi_unstable', 'wasix'].includes(p.abi)) fail(`${where}: bad abi ${p.abi}`);
+    if (!['wasi_snapshot_preview1', 'wasi_unstable', 'wasix', 'x86_64-linux'].includes(p.abi)) fail(`${where}: bad abi ${p.abi}`);
     if (!['shiro', 'wasmer', 'npm'].includes(p.origin)) fail(`${where}: bad origin ${p.origin}`);
     if (!Array.isArray(p.files) || p.files.length === 0) fail(`${where}: no files`);
     const paths = new Set<string>();

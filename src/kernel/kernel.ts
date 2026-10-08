@@ -1427,7 +1427,10 @@ export class Kernel {
     }
     proc.data.execRunner = runner;
     proc.stopRunner();
-    return 0;
+    // The caller's image is gone: never reply. (A reply raced the engine's
+    // termination, and Blink then tried to load "" and returned ENOEXEC, so
+    // perl's exec of a #! script fell back to /bin/sh and failed the same way.)
+    return new Promise<number>(() => {});
   }
 
   /**

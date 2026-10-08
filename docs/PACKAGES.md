@@ -124,6 +124,7 @@ works everywhere and the interactive mode needs a page that can block.
 | make (GNU) | 4.4.1 | built here, `make.sh` | preview1 + process shim | ok; no jobserver |
 | llvm (clang, wasm-ld, llvm-ar, ...) | 21.1.4 | npm `@yowasp/clang` tarball + driver built here, `llvm.sh` | preview1 + process shim | ok; targets wasm32-wasip1 |
 | go (go, gofmt + tools) | 1.24.7 | built here, `go.sh` + patch | preview1 + WASIX processes | ok; builds wasip1 programs; no module downloads |
+| perl | 5.40.0 | built here (static x86-64), `perl.sh` | x86_64-linux (Blink) | ok; fork is vfork-like (no IPC::Open3/prove) |
 | sqlite3 | 3.50.4 | built here, `sqlite.sh` | preview1 | ok; the interactive shell reads the tty as a kernel process (checked on the pty) |
 | jq | 1.8.1 | built here, `jq.sh` | preview1 | ok |
 | cowsay, cowthink | 0.3.0 | Wasmer | preview1 | ok |

@@ -16,6 +16,7 @@ import type { FileSystem } from '@shiro/filesystem';
 import type { GuestWorker } from '@shiro/kernel/worker-host';
 import { setGuestWorkerFactory, forceWasmProcessMode } from '@shiro/wasi/host';
 import { readTarball } from '@shiro/utils/tar';
+import { createPathShims } from '@shiro/path-shims';
 
 const here = __dirname;
 const REPO = path.resolve(here, '../../..');
@@ -97,11 +98,10 @@ async function cachedDownload(url: string, sha: string): Promise<Uint8Array> {
   return data;
 }
 
-/** What boot creates that programs look for: /bin/sh, /usr/bin/env, /tmp */
+/** What boot creates that programs look for: PATH shims, /bin/sh, /usr/bin/env, /tmp */
 async function bootFiles(fs: FileSystem) {
-  for (const d of ['/bin', '/usr/bin', '/tmp']) await fs.mkdir(d, { recursive: true });
-  if (!await fs.exists('/bin/sh')) await fs.writeFile('/bin/sh', '#!/bin/sh\n');
-  if (!await fs.exists('/usr/bin/env')) await fs.writeFile('/usr/bin/env', '#!/bin/sh\n');
+  await fs.mkdir('/tmp', { recursive: true });
+  await createPathShims(fs);
 }
 
 async function script(fs: FileSystem, file: string, text: string) {
@@ -625,4 +625,40 @@ describe('ruby', () => {
     r = await sh(shell, 'gem list json')
     expect(r.out).toMatch(/^json \(.*2\.9\.1/m);
   }, 180_000);
+});
+
+// ── Perl 5.40: static x86-64 Linux build in Blink ──────────────────────
+
+describe('perl (x86-64 in Blink)', () => {
+  let shell: Shell;
+  let fs: FileSystem;
+  beforeAll(async () => {
+    ({ fs, shell } = await createTestShell());
+    await bootFiles(fs);
+    const r = await sh(shell, 'pkg install perl');
+    expect(r.err).toBe('');
+    expect(r.exitCode).toBe(0);
+  }, 300_000);
+
+  it('perl -e, core modules, and no locale warnings', async () => {
+    const r = await sh(shell, `perl -e 'use List::Util qw(sum max); use Data::Dumper; $Data::Dumper::Terse = 1; $Data::Dumper::Indent = 0; printf "%s %d %d %s\\n", $^V, sum(1..4), max(3, 9, 2), Dumper({a => [1]})'`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe("v5.40.0 10 9 {'a' => [1]}\n");
+  }, 120_000);
+
+  it('#!/usr/bin/env perl scripts: argv, stdin, files, regexes, backticks and system()', async () => {
+    await script(fs, '/home/user/count.pl', '#!/usr/bin/env perl\nuse strict; use warnings;\nmy %n; while (<STDIN>) { $n{lc $1}++ while /(\\w+)/g }\nopen my $fh, ">", $ARGV[0] or die; print $fh join(",", map { "$_=$n{$_}" } sort keys %n), "\\n"; close $fh;\nmy $c = `cat $ARGV[0]`; print "file: $c"; system("echo", "child", "ok") == 0 or die;\n');
+    const r = await sh(shell, 'cd /home/user && printf "The cat. the dog\\n" | ./count.pl out.txt');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('file: cat=1,dog=1,the=2\nchild ok\n');
+  }, 120_000);
+
+  it('Test::More tests run (TAP), and open "-|" reads a child perl', async () => {
+    await fs.mkdir('/home/user/pt/t', { recursive: true });
+    await fs.writeFile('/home/user/pt/t/basic.t', 'use strict; use Test::More tests => 2;\nis(1 + 1, 2, "adds");\nlike("hello", qr/ell/, "matches");\n');
+    let r = await sh(shell, 'cd /home/user/pt && perl t/basic.t');
+    expect(r.out).toBe('1..2\nok 1 - adds\nok 2 - matches\n');
+    r = await sh(shell, `perl -e 'open my $fh, "-|", "perl", "-e", "print qq(from child\\n)" or die; print "got: ", <$fh>; close $fh; print "rc=$?\\n"'`);
+    expect(r.out).toBe('got: from child\nrc=0\n');
+  }, 300_000);
 });

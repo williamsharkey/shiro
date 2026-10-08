@@ -975,6 +975,77 @@
    "notes": "Built with prefix /usr/local: the package mounts lib/ruby there for its processes. irb needs blocking stdin. No sockets: gem install from rubygems.org doesn't work; installing local .gem files does."
   },
   {
+   "name": "perl",
+   "version": "5.40.0",
+   "description": "Perl 5.40 (static x86-64 build run in the Blink engine): fork, exec, system() and backticks work",
+   "license": "Artistic-1.0-Perl OR GPL-1.0-or-later",
+   "source": "https://www.cpan.org/src/5.0/perl-5.40.0.tar.gz",
+   "homepage": "https://www.perl.org/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/perl.sh",
+   "section": "interpreters",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin",
+     "tar": {
+      "unpack": true,
+      "dir": "bin"
+     },
+     "url": "/pkg/perl/5.40.0/perl-5.40.0-x86_64.tar.gz",
+     "sha256": "85349a62d4d4f40518ab0f8a5a3e1ce2172a0f67cdeceba4159dc8f45e00bf30",
+     "size": 10894643
+    },
+    {
+     "path": "lib",
+     "tar": {
+      "unpack": true,
+      "dir": "lib"
+     },
+     "url": "/pkg/perl/5.40.0/perl-5.40.0-x86_64.tar.gz",
+     "sha256": "85349a62d4d4f40518ab0f8a5a3e1ce2172a0f67cdeceba4159dc8f45e00bf30",
+     "size": 10894643
+    }
+   ],
+   "bin": {
+    "perl": {
+     "file": "bin/perl"
+    },
+    "prove": {
+     "file": "bin/prove"
+    },
+    "shasum": {
+     "file": "bin/shasum"
+    },
+    "json_pp": {
+     "file": "bin/json_pp"
+    },
+    "ptar": {
+     "file": "bin/ptar"
+    },
+    "corelist": {
+     "file": "bin/corelist"
+    },
+    "piconv": {
+     "file": "bin/piconv"
+    },
+    "pod2text": {
+     "file": "bin/pod2text"
+    },
+    "podchecker": {
+     "file": "bin/podchecker"
+    },
+    "zipdetails": {
+     "file": "bin/zipdetails"
+    }
+   },
+   "needs": [
+    "threads",
+    "processes"
+   ],
+   "notes": "An x86-64 Linux binary in Blink: needs a cross-origin isolated page. Interpreted, so starting is ~1 s and big modules (POSIX) take seconds to load. No XS module loading (all core XS is built in); no pods (perldoc)."
+  },
+  {
    "name": "fortune",
    "version": "0.2.0",
    "description": "Print a random adage",
