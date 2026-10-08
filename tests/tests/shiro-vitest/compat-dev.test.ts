@@ -716,7 +716,39 @@ try { new EE().emit('error', new Error('boom')); } catch (e) { console.log('thre
       .toBe('this ok true 1\nlazy 2\nfalse 0\nthrew boom\n');
   }, 60_000);
 
-  it('package exports: require picks the require condition, import() a namespace', async () => {
+  it('timers are Timeout objects (unref), and nothing prints after process.exit()', async () => {
+    await fs.writeFile('/home/user/m/t.js', `const iv = setInterval(() => {}, 1000); iv.unref();
+setTimeout(() => console.log('never'), 60000).unref();
+const t = setTimeout(() => {}, 10); clearTimeout(t);
+console.log(typeof iv.ref, typeof +iv, t.hasRef());
+try { process.exit(3); } catch (e) { console.log('caught', e.message); }`);
+    const start = Date.now();
+    const r = await sh(shell, 'cd /home/user/m && node t.js');
+    expect(r.out).toBe('function number true\n');
+    expect(r.err).toBe('');
+    expect(r.exitCode).toBe(3);
+    expect(Date.now() - start).toBeLessThan(20_000);
+  }, 60_000);
+
+  it('fs streams: binary round trip through pipe, append, events', async () => {
+    expect(await node(`const fs = require('fs'); const { pipeline, Transform } = require('stream');
+const bin = Buffer.from([0, 255, 128, 10, 200, 1]);
+const ws = fs.createWriteStream('a.bin');
+ws.on('open', () => console.log('open'));
+ws.write(bin.subarray(0, 3)); ws.end(bin.subarray(3), () => {
+  console.log('finish', ws.bytesWritten, fs.readFileSync('a.bin').equals(bin));
+  const inc = new Transform({ transform(c, e, cb) { cb(null, Buffer.from(c.map(b => (b + 1) & 255))); } });
+  pipeline(fs.createReadStream('a.bin'), inc, fs.createWriteStream('b.bin'), (err) => {
+    console.log('piped', err, [...fs.readFileSync('b.bin')].join(','));
+    const ap = fs.createWriteStream('b.bin', { flags: 'a' }); ap.end('!', () => {
+      console.log('appended', fs.readFileSync('b.bin').length);
+      fs.createReadStream('missing').on('error', (e) => console.log('error', e.code));
+    });
+  });
+});`)).toBe('open\nfinish 6 true\npiped null 1,0,129,11,201,2\nappended 7\nerror ENOENT\n');
+  }, 60_000);
+
+  it('package exports: require picks require over import (browser first), import() a namespace', async () => {
     await fs.mkdir('/home/user/m/node_modules/dual/esm', { recursive: true });
     await fs.writeFile('/home/user/m/node_modules/dual/package.json', JSON.stringify({ name: 'dual', exports: { '.': { import: './esm/index.mjs', require: './index.cjs' }, './feature': { browser: './b.js', node: './n.js' } } }));
     await fs.writeFile('/home/user/m/node_modules/dual/index.cjs', 'module.exports = { kind: "cjs" };');
@@ -726,7 +758,7 @@ try { new EE().emit('error', new Error('boom')); } catch (e) { console.log('thre
     expect(await node(`console.log(require('dual').kind, require('dual/feature'));
 import('dual').then(ns => console.log(ns.default.kind, ns.kind));
 const dyn = new Function('m', 'return import(m)'); dyn('./node_modules/dual/n.js').then(ns => console.log(ns.default));`))
-      .toBe('cjs node\ncjs cjs\nnode\n');
+      .toBe('cjs browser\ncjs cjs\nnode\n');
   }, 60_000);
 });
 
@@ -829,4 +861,49 @@ console.log(year, plat(), again === plat);
     expect(r.exitCode).toBe(0);
   }, 180_000);
 
+});
+
+describe('lua and sqlite packages', () => {
+  let shell: Shell;
+  let fs: FileSystem;
+  beforeAll(async () => {
+    ({ fs, shell } = await createTestShell());
+    await bootFiles(fs);
+    const r = await sh(shell, 'pkg install lua sqlite');
+    expect(r.exitCode).toBe(0);
+  }, 300_000);
+
+  it('lua: #! script with stdin, argv, coroutines, string patterns; luac -p', async () => {
+    await script(fs, '/home/user/wc.lua', `#!/usr/bin/env lua
+local counts, order = {}, {}
+for line in io.lines() do
+  for w in line:lower():gmatch("%a+") do
+    if not counts[w] then counts[w] = 0; order[#order + 1] = w end
+    counts[w] = counts[w] + 1
+  end
+end
+table.sort(order, function(a, b) return counts[a] > counts[b] or (counts[a] == counts[b] and a < b) end)
+local gen = coroutine.wrap(function() for _, w in ipairs(order) do coroutine.yield(w) end end)
+local out = {}
+for i = 1, tonumber(arg[1]) do out[#out + 1] = string.format("%s=%d", gen(), counts[order[i]]) end
+print(table.concat(out, " "), _VERSION)
+`);
+    let r = await sh(shell, 'cd /home/user && printf "the cat\\nThe dog the end\\n" | ./wc.lua 2');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('the=3 cat=1\tLua 5.4\n');
+    await fs.writeFile('/home/user/bad.lua', 'local x = = 1\n');
+    r = await sh(shell, 'cd /home/user && luac -p wc.lua && echo ok; luac -p bad.lua');
+    expect(r.out).toBe('ok\n');
+    expect(r.err).toMatch(/bad\.lua:1: unexpected symbol near '='/);
+  }, 120_000);
+
+  it('sqlite3: a database file across runs, JSON, FTS5, and SQL on stdin', async () => {
+    let r = await sh(shell, `cd /home/user && sqlite3 app.db "create table t(id integer primary key, doc text); insert into t(doc) values ('{\\"n\\":1,\\"tag\\":\\"a\\"}'), ('{\\"n\\":2,\\"tag\\":\\"b\\"}');"`);
+    expect(r.exitCode).toBe(0);
+    r = await sh(shell, `cd /home/user && sqlite3 app.db "select sum(json_extract(doc, '$.n')), group_concat(json_extract(doc, '$.tag'), '') from t;"`);
+    expect(r.out).toBe('3|ab\n');
+    r = await sh(shell, `cd /home/user && printf "create virtual table f using fts5(body);\\ninsert into f values ('shiro runs sqlite'), ('nothing here');\\nselect body from f where f match 'sqlite';\\n.mode csv\\nselect 1, 'x y';\\n" | sqlite3`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('shiro runs sqlite\n1,"x y"\n');
+  }, 120_000);
 });

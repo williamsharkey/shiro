@@ -40,6 +40,12 @@ export function createFakeConsole(
     table: (...args: any[]) => { fakeConsole.log(...args); },
   };
 
+  // Nothing prints after process.exit() (catch blocks the unwinding passes through)
+  for (const k of ['log', 'info', 'warn', 'error', 'dir', 'debug', 'trace', 'table']) {
+    const orig = fakeConsole[k];
+    fakeConsole[k] = (...args: any[]) => { if (!_st.outputClosed) orig(...args); };
+  }
+
   // Console constructor — Node.js API: new console.Console(stdout, stderr)
   class FakeConsoleClass {
     _stdout: any; _stderr: any;

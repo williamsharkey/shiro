@@ -40,6 +40,26 @@ import { getShiroOrigin } from '../utils/shiro-origin';
 const PAGE_FETCH = globalThis.fetch.bind(globalThis);
 const PAGE_SET_TIMEOUT = globalThis.setTimeout.bind(globalThis) as typeof setTimeout;
 const PAGE_CLEAR_TIMEOUT = globalThis.clearTimeout.bind(globalThis) as typeof clearTimeout;
+const PAGE_SET_INTERVAL = globalThis.setInterval.bind(globalThis) as typeof setInterval;
+const PAGE_CLEAR_INTERVAL = globalThis.clearInterval.bind(globalThis) as typeof clearInterval;
+
+/** A Node Timeout object around a page timer id: ref/unref/hasRef/refresh,
+ *  and it converts to the id, so arithmetic and clearTimeout(id) both work
+ *  (yarn calls setInterval(...).unref()). */
+const TIMER_RAW = Symbol('shiro.timer');
+function nodeTimer(raw: any, opts: { onUnref?: () => void; onRef?: () => void; refresh?: () => any }): any {
+  let refed = true;
+  const t: any = {
+    [TIMER_RAW]: raw,
+    ref() { if (!refed) { refed = true; opts.onRef?.(); } return t; },
+    unref() { if (refed) { refed = false; opts.onUnref?.(); } return t; },
+    hasRef() { return refed; },
+    refresh() { if (opts.refresh) t[TIMER_RAW] = opts.refresh(); return t; },
+    [Symbol.toPrimitive]() { return typeof t[TIMER_RAW] === 'number' ? t[TIMER_RAW] : Number(t[TIMER_RAW]); },
+  };
+  return t;
+}
+const rawTimer = (t: any) => (t && typeof t === 'object' && TIMER_RAW in t) ? t[TIMER_RAW] : t;
 
 /** Quiet time after which a finished async script exits */
 const IDLE_EXIT_MS = 150;
@@ -84,6 +104,8 @@ export async function executeNodeScript(
   const _origXHR = typeof XMLHttpRequest !== 'undefined' ? XMLHttpRequest : undefined;
   const _prevST = globalThis.setTimeout;
   const _prevCT = globalThis.clearTimeout;
+  const _prevSI = globalThis.setInterval;
+  const _prevCI = globalThis.clearInterval;
   const _baseST = PAGE_SET_TIMEOUT;
   const _baseCT = PAGE_CLEAR_TIMEOUT;
 
@@ -110,6 +132,8 @@ export async function executeNodeScript(
     if (includeFetch && _st.installedFetch && globalThis.fetch === _st.installedFetch) globalThis.fetch = _restoreFetch;
     if (_st.installedSetTimeout && globalThis.setTimeout === _st.installedSetTimeout) globalThis.setTimeout = _prevST;
     if (_st.installedClearTimeout && globalThis.clearTimeout === _st.installedClearTimeout) globalThis.clearTimeout = _prevCT;
+    if (_st.installedSetInterval && globalThis.setInterval === _st.installedSetInterval) globalThis.setInterval = _prevSI;
+    if (_st.installedClearInterval && globalThis.clearInterval === _st.installedClearInterval) globalThis.clearInterval = _prevCI;
   };
 
   try {
@@ -441,31 +465,49 @@ export async function executeNodeScript(
     let _timersDone: Promise<void> | null = null;
     const _timerIds = new Set<any>();
     if (code.length <= 500000) {
+      const settle = () => { if (_activeTimers <= 0 && _timersResolve) { _timersResolve(); _timersResolve = null; _timersDone = null; } };
       globalThis.setTimeout = _st.installedSetTimeout = function(fn: any, ms?: number, ...args: any[]) {
         _activeTimers++;
         if (!_timersDone) _timersDone = new Promise(r => { _timersResolve = r; });
-        const id = _baseST(() => {
-          _timerIds.delete(id);
-          try { if (typeof fn === 'function') fn(...args); }
-          catch (e) {
-            // process.exit() from a timer ends the script (already recorded); it isn't an error
-            if (!(e instanceof ProcessExitError)) throw e;
-          }
-          finally {
-            _activeTimers--;
-            if (_activeTimers <= 0 && _timersResolve) { _timersResolve(); _timersResolve = null; _timersDone = null; }
-          }
-        }, ms);
-        _timerIds.add(id);
-        return id;
+        let counted = true; // keeps the script alive until it fires (not once unref'd)
+        const uncount = () => { if (counted) { counted = false; _activeTimers--; settle(); } };
+        const start = () => {
+          const id = _baseST(() => {
+            _timerIds.delete(timer);
+            try { if (typeof fn === 'function') fn(...args); }
+            catch (e) {
+              // process.exit() from a timer ends the script (already recorded); it isn't an error
+              if (!(e instanceof ProcessExitError)) throw e;
+            }
+            finally { uncount(); }
+          }, ms);
+          return id;
+        };
+        const timer = nodeTimer(start(), {
+          onUnref: uncount,
+          onRef: () => {
+            if (counted || !_timerIds.has(timer)) return;
+            counted = true;
+            _activeTimers++;
+            if (!_timersDone) _timersDone = new Promise(r => { _timersResolve = r; });
+          },
+          refresh: () => { _baseCT(rawTimer(timer)); return start(); },
+        });
+        _timerIds.add(timer);
+        (timer as any)._uncount = uncount;
+        return timer;
       } as typeof setTimeout;
       globalThis.clearTimeout = _st.installedClearTimeout = function(id: any) {
-        if (_timerIds.delete(id)) {
-          _activeTimers--;
-          if (_activeTimers <= 0 && _timersResolve) { _timersResolve(); _timersResolve = null; _timersDone = null; }
+        for (const t of _timerIds) {
+          if (t === id || rawTimer(t) === rawTimer(id)) { _timerIds.delete(t); t._uncount(); break; }
         }
-        _baseCT(id);
+        _baseCT(rawTimer(id));
       };
+      // Intervals never kept a script alive here; they still answer unref() etc.
+      globalThis.setInterval = _st.installedSetInterval = function(fn: any, ms?: number, ...args: any[]) {
+        return nodeTimer(PAGE_SET_INTERVAL(fn, ms, ...args), {});
+      } as typeof setInterval;
+      globalThis.clearInterval = _st.installedClearInterval = function(id: any) { PAGE_CLEAR_INTERVAL(rawTimer(id)); };
     }
 
     // Script execution timeout — scale up for large bundles (e.g. TypeScript ~5MB)
@@ -492,6 +534,8 @@ export async function executeNodeScript(
     } catch (e: any) {
       if (e instanceof ProcessExitError) {
         _st.exitCode = e.code;
+      } else if (_st.outputClosed) {
+        // process.exit() already ran; this is what a catch on the way threw
       } else if (e.message?.includes('extends value') || e.message?.includes('is not a constructor') || e.message?.includes('prototype')) {
         stderrBuf.push(e.message + '\n');
         _st.exitCode = 1;

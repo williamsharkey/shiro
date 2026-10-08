@@ -54,6 +54,10 @@ export interface NodeEnv {
 export interface SharedState {
   exitCode: number;
   exitCalled: boolean;
+  /** process.exit() ran its 'exit' listeners: in Node nothing runs after it,
+   *  here the script unwinds by an exception, and what catch blocks on the
+   *  way print is dropped */
+  outputClosed?: boolean;
   /** Stdout goes to the terminal: there is one and stdout isn't piped or redirected */
   stdoutToTerminal: boolean;
   /** Something was written to the terminal on stdout / stderr (so it isn't returned in ctx too) */
@@ -69,6 +73,8 @@ export interface SharedState {
   installedFetch?: typeof fetch;
   installedSetTimeout?: typeof setTimeout;
   installedClearTimeout?: typeof clearTimeout;
+  installedSetInterval?: typeof setInterval;
+  installedClearInterval?: typeof clearInterval;
 }
 
 /** Sync FS operation watchdog limit */

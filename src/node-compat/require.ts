@@ -438,31 +438,28 @@ export function wrapModuleBody(body: string, isAsync: boolean): string {
 }
 
 /**
- * The file a package.json "exports" value names for require(), as Node picks
- * it: the first key in the package's order that is a condition Node matches
- * (node, require, default), nested conditions and fallback arrays followed.
- * Only when none matches: import, then browser (ESM-only packages).
- * commander's "import" is an ESM wrapper of its CommonJS entry, and prettier's
- * "browser" is a standalone build without its plugins.
+ * The file a package.json "exports" value names for require(): conditions
+ * in the order browser > require > node > default > import, nested
+ * conditions and fallback arrays followed. Browser builds come first because
+ * they talk to the network with fetch (axios's node build needs a real http
+ * stack); require before import because the import entry is often an ESM
+ * wrapper around the CommonJS one (commander).
  */
-export function exportTarget(v: unknown, conds: readonly string[] = NODE_CONDITIONS): string | undefined {
+export function exportTarget(v: unknown): string | undefined {
   if (typeof v === 'string') return v;
   if (Array.isArray(v)) {
-    for (const x of v) { const t = exportTarget(x, conds); if (t) return t; }
+    for (const x of v) { const t = exportTarget(x); if (t) return t; }
     return undefined;
   }
   if (!v || typeof v !== 'object') return undefined;
   const o = v as Record<string, unknown>;
-  for (const [k, x] of Object.entries(o)) {
-    if (!conds.includes(k)) continue;
-    const t = exportTarget(x, conds);
+  for (const c of ['browser', 'require', 'node', 'default', 'import']) {
+    if (o[c] === undefined) continue;
+    const t = exportTarget(o[c]);
     if (t) return t;
   }
-  if (conds === NODE_CONDITIONS) return exportTarget(v, FALLBACK_CONDITIONS);
   return undefined;
 }
-const NODE_CONDITIONS = ['node', 'require', 'default'] as const as readonly string[];
-const FALLBACK_CONDITIONS = ['node', 'require', 'default', 'import', 'module', 'browser'] as const as readonly string[];
 
 /**
  * What import() of a module gives, from its CommonJS exports: a namespace
