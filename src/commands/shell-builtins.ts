@@ -5,7 +5,7 @@
  * Also re-exports grep/sed/diff so they override the unix.ts versions.
  */
 import { Command } from './index';
-import { grepCmd } from './grep';
+import { grepCmd, egrepCmd, fgrepCmd } from './grep';
 import { sedCmd } from './sed';
 import { diffCmd } from './diff';
 
@@ -236,10 +236,12 @@ export const shellBuiltins: Command[] = [
   cdCmd, exportCmd, helpCmd, commandCmd,
   shCmd, bashCmd,
   // Re-exports that override unix.ts versions:
-  grepCmd, sedCmd, diffCmd,
+  grepCmd, egrepCmd, fgrepCmd, sedCmd, diffCmd,
   // POSIX test bracket alias (delegates to test command)
   { name: '[', description: 'Evaluate conditional expression', async exec(ctx) {
     const testCmd = ctx.shell.commands.get('test');
+    if (ctx.args[ctx.args.length - 1] !== ']') { ctx.stderr += "[: missing ']'\n"; return 2; }
+    ctx.args = ctx.args.slice(0, -1);
     if (testCmd) return testCmd.exec(ctx);
     ctx.stderr = '[: test command not found\n';
     return 2;

@@ -34,3 +34,23 @@ normal `npm run test:shiro` keeps them fixed.
   never comes back, so the per-case timeout can't fire); they count as
   failures. Find new ones with `SPEC_PROGRESS=/tmp/p.txt`, which logs each
   case before it runs. `SPEC_FILES=a,b` and `SPEC_CASES=3,4` narrow a run.
+
+## Utilities: busybox testsuite (`utils-busybox.conf.ts`)
+
+- Not vendored (GPL-2.0): `scripts/conformance/fetch.sh` clones busybox's
+  `testsuite/` at a pinned commit into `tests/conformance/.cache/` (gitignored).
+  Without it the suite is skipped.
+- `NAME.tests` scripts (the `testing "name" "cmd" "expected" "input" "stdin"`
+  form) run under Shiro's shell. `testing` is a harness builtin: it writes the
+  `input` file, runs the command with `eval` semantics on the given stdin,
+  and compares stdout. A call with other than 5 arguments (a shell parse
+  error) fails, as upstream refuses it. Every optional feature is enabled.
+- Old-style `APPLET/CASE` scripts run as `sh -e CASE` in an empty directory;
+  exit status 0 passes. `busybox APPLET ARGS` runs Shiro's APPLET.
+- Only cases the host's GNU tools pass (`busybox/gnu-baseline.json`, from
+  `scripts/conformance/busybox-gnu-baseline.mjs`) are scored.
+  `busybox/selection.json` lists the scripts and applets used;
+  `busybox/hangs.json` lists cases not run because they hang Shiro.
+- The "before" column overstates the old-style cases: the old shell ignored
+  `sh -e` and returned the last command's status, so failing checks in the
+  middle of a case went unnoticed.

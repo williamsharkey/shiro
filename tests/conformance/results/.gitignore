@@ -1,1 +1,3 @@
 shell-oils/
+detail/
+*.partial.json

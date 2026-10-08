@@ -1,5 +1,6 @@
 import { stripComments } from './shell-comments';
 import { groupStatements } from './shell-statements';
+import { printfFormat } from './utils/printf';
 import { HeredocStore, extractHeredocs, hasHeredoc } from './shell-heredoc';
 import { FileSystem } from './filesystem';
 import { CommandRegistry, CommandContext } from './commands/index';
@@ -1613,13 +1614,15 @@ export class Shell {
               printfVarName = cmdArgs[1];
               printfCmdArgs = cmdArgs.slice(2);
             }
-            const printfResult = formatPrintf(printfCmdArgs[0], printfCmdArgs.slice(1));
+            if (printfCmdArgs[0] === '--') printfCmdArgs = printfCmdArgs.slice(1);
+            const r = printfFormat(printfCmdArgs[0] ?? '', printfCmdArgs.slice(1));
             if (printfVarName) {
-              this.env[printfVarName] = printfResult;
+              this.env[printfVarName] = r.out;
             } else {
-              writeStdout(printfResult.replace(/\n/g, '\r\n'));
+              writeStdout(r.out.replace(/\n/g, '\r\n'));
             }
-            exitCode = 0;
+            for (const e of r.errors) stderrWriter(e + '\r\n');
+            exitCode = r.errors.length ? 1 : 0;
           }
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
@@ -3038,12 +3041,12 @@ export class Shell {
     }
 
     // ${arr[@]:start:len} or ${arr[@]:start} — array slicing
-    const arrSliceMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\[[@*]\]:\s*(-?\d+)(?::(-?\d+))?$/);
+    const arrSliceMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)\[[@*]\]:(\d+|\s+-?\d+|\(\s*-?\d+\s*\))(?::(\s*-?\d+))?$/);
     if (arrSliceMatch) {
       const name = arrSliceMatch[1];
       const assoc = this.assocArrays.get(name);
       const values = assoc ? Array.from(assoc.values()) : (this.arrays.get(name) ?? []);
-      let offset = parseInt(arrSliceMatch[2]);
+      let offset = parseInt(arrSliceMatch[2].replace(/[()\s]/g, ''));
       if (offset < 0) offset = Math.max(0, values.length + offset);
       if (arrSliceMatch[3] !== undefined) {
         const len = parseInt(arrSliceMatch[3]);
@@ -3193,10 +3196,11 @@ export class Shell {
     }
 
     // ${VAR:offset} and ${VAR:offset:length} — substring
-    const subMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*):(-?\d+)(?::(-?\d+))?$/);
+    // ${x:-1} is a default value: a negative offset is written ${x: -1} or ${x:(-1)}
+    const subMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*):(\d+|\s+-?\d+|\(\s*-?\d+\s*\))(?::(\s*-?\d+))?$/);
     if (subMatch) {
       const val = this.env[subMatch[1]] ?? '';
-      let offset = parseInt(subMatch[2]);
+      let offset = parseInt(subMatch[2].replace(/[()\s]/g, ''));
       if (offset < 0) offset = Math.max(0, val.length + offset);
       if (subMatch[3] !== undefined) {
         const len = parseInt(subMatch[3]);
@@ -4005,10 +4009,17 @@ export class Shell {
   // ─── ARITHMETIC EXPANSION ─────────────────────────────────────────────────
 
   private expandArithmetic(input: string): string {
+    if (!input.includes('$((')) return input;
     let result = '';
     let i = 0;
+    let inSingle = false, inDouble = false;
     while (i < input.length) {
-      if (input[i] === '$' && input[i + 1] === '(' && input[i + 2] === '(') {
+      const ch = input[i];
+      // Nothing expands inside single quotes
+      if (ch === '\\' && !inSingle) { result += input.slice(i, i + 2); i += 2; continue; }
+      if (ch === "'" && !inDouble) { inSingle = !inSingle; result += ch; i++; continue; }
+      if (ch === '"' && !inSingle) { inDouble = !inDouble; result += ch; i++; continue; }
+      if (!inSingle && input[i] === '$' && input[i + 1] === '(' && input[i + 2] === '(') {
         let depth = 1;
         let j = i + 3;
         while (j < input.length - 1 && depth > 0) {
@@ -4016,7 +4027,9 @@ export class Shell {
           if (input[j] === ')' && input[j + 1] === ')') { depth--; if (depth === 0) break; j += 2; continue; }
           j++;
         }
-        const expr = input.slice(i + 3, j);
+        let expr = input.slice(i + 3, j);
+        // Parameter expansions inside are expanded first: $(( ${n:-0} + 1 )), $(( $((1+2)) * 2 ))
+        if (expr.includes('$')) expr = restoreExpansion(this.expandVars(this.expandArithmetic(expr), true));
         result += String(this.evalArithmetic(expr));
         i = j + 2;
       } else {
@@ -4477,23 +4490,14 @@ export class Shell {
     if (trimmed.startsWith('[[') && trimmed.endsWith(']]')) {
       return this.evalTest(trimmed.slice(2, -2).trim());
     }
-    // [ ... ] syntax
-    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
-      return this.evalTest(trimmed.slice(1, -1).trim());
-    }
-    if (trimmed.startsWith('test ')) {
-      return this.evalTest(trimmed.slice(5));
-    }
+    // `[ … ]` and `test …` run as the test command (posix-test.ts), with real argument words
     // (( expr )) — arithmetic condition
     if (trimmed.startsWith('((') && trimmed.endsWith('))')) {
       const expr = this.expandVars(trimmed.slice(2, -2).trim());
       return this.evalArithmetic(expr) !== 0 ? 0 : 1;
     }
     // Execute as command
-    const result = await this.exec(trimmed);
-    if (result.stderr) writeStderr(result.stderr);
-    if (result.stdout) writeStdout(result.stdout);
-    return result.exitCode;
+    return this.execute(trimmed, writeStdout, writeStderr, false, undefined, true);
   }
 
   private async evalTest(args: string): Promise<number> {
@@ -5631,124 +5635,9 @@ export function splitTopLevelPipes(cmd: string): string[] {
   return parts.map((p) => p.trim()).filter((p, idx, arr) => p || arr.length === 1);
 }
 
-/**
- * printf formatting shared by the `printf` command and the shell's `printf -v`.
- * Like bash, the format is reused until every argument is consumed.
- */
+/** printf formatting shared by the `printf` command and the shell's `printf -v` (src/utils/printf.ts) */
 export function formatPrintf(fmt: string, fmtArgs: string[]): string {
-  let out = '';
-  let argIdx = 0;
-  do {
-    const startIdx = argIdx;
-    const r = formatPrintfOnce(fmt, fmtArgs, argIdx);
-    out += r.result;
-    argIdx = r.argIdx;
-    if (argIdx === startIdx) break; // format consumes no arguments
-  } while (argIdx < fmtArgs.length);
-  return out;
-}
-
-function formatPrintfOnce(fmt: string, fmtArgs: string[], argIdx: number): { result: string; argIdx: number } {
-  let result = '';
-  let fi = 0;
-  while (fi < fmt.length) {
-    if (fmt[fi] === '\\') {
-      // Escape sequences
-      fi++;
-      if (fi >= fmt.length) { result += '\\'; break; }
-      switch (fmt[fi]) {
-        case 'n': result += '\n'; break;
-        case 't': result += '\t'; break;
-        case 'r': result += '\r'; break;
-        case '\\': result += '\\'; break;
-        case '"': result += '"'; break;
-        case "'": result += "'"; break;
-        case '0': {
-          // Octal
-          let oct = '';
-          fi++;
-          while (fi < fmt.length && /[0-7]/.test(fmt[fi]) && oct.length < 3) { oct += fmt[fi]; fi++; }
-          result += String.fromCharCode(parseInt(oct || '0', 8));
-          fi--;
-          break;
-        }
-        default: result += '\\' + fmt[fi];
-      }
-      fi++;
-      continue;
-    }
-    if (fmt[fi] === '%') {
-      fi++;
-      if (fi >= fmt.length) { result += '%'; break; }
-      if (fmt[fi] === '%') { result += '%'; fi++; continue; }
-      // %(fmt)T — date/time formatting
-      if (fmt[fi] === '(') {
-        const closeP = fmt.indexOf(')T', fi);
-        if (closeP > fi) {
-          const dateFmt = fmt.slice(fi + 1, closeP);
-          const ts = argIdx < fmtArgs.length ? parseInt(fmtArgs[argIdx++]) * 1000 : Date.now();
-          const d = new Date(ts === -1000 ? Date.now() : ts);
-          let dateResult = dateFmt;
-          dateResult = dateResult.replace(/%Y/g, String(d.getFullYear()));
-          dateResult = dateResult.replace(/%m/g, String(d.getMonth() + 1).padStart(2, '0'));
-          dateResult = dateResult.replace(/%d/g, String(d.getDate()).padStart(2, '0'));
-          dateResult = dateResult.replace(/%H/g, String(d.getHours()).padStart(2, '0'));
-          dateResult = dateResult.replace(/%M/g, String(d.getMinutes()).padStart(2, '0'));
-          dateResult = dateResult.replace(/%S/g, String(d.getSeconds()).padStart(2, '0'));
-          result += dateResult;
-          fi = closeP + 2;
-          continue;
-        }
-      }
-      // Parse flags, width, precision
-      let flags = '';
-      while (fi < fmt.length && '-+ 0#'.includes(fmt[fi])) { flags += fmt[fi]; fi++; }
-      let width = '';
-      while (fi < fmt.length && /\d/.test(fmt[fi])) { width += fmt[fi]; fi++; }
-      let precision = '';
-      if (fi < fmt.length && fmt[fi] === '.') {
-        fi++;
-        while (fi < fmt.length && /\d/.test(fmt[fi])) { precision += fmt[fi]; fi++; }
-      }
-      const spec = fi < fmt.length ? fmt[fi] : '';
-      fi++;
-      const arg = argIdx < fmtArgs.length ? fmtArgs[argIdx++] : '';
-      let formatted = '';
-      switch (spec) {
-        case 's': formatted = arg; break;
-        case 'b': {
-          // %b: interpret escape sequences in argument
-          formatted = arg.replace(/\\n/g, '\n').replace(/\\t/g, '\t').replace(/\\r/g, '\r')
-            .replace(/\\\\/g, '\\').replace(/\\a/g, '\x07').replace(/\\b/g, '\b')
-            .replace(/\\e/g, '\x1b').replace(/\\f/g, '\f').replace(/\\v/g, '\v');
-          break;
-        }
-        case 'd': case 'i': formatted = String(parseInt(arg) || 0); break;
-        case 'f': {
-          const num = parseFloat(arg) || 0;
-          formatted = precision ? num.toFixed(parseInt(precision)) : num.toFixed(6);
-          break;
-        }
-        case 'x': formatted = (parseInt(arg) || 0).toString(16); break;
-        case 'X': formatted = (parseInt(arg) || 0).toString(16).toUpperCase(); break;
-        case 'o': formatted = (parseInt(arg) || 0).toString(8); break;
-        case 'c': formatted = arg ? arg[0] : ''; break;
-        default: formatted = '%' + spec;
-      }
-      // Apply width
-      if (width) {
-        const w = parseInt(width);
-        if (flags.includes('-')) formatted = formatted.padEnd(w);
-        else if (flags.includes('0') && /[dioxXf]/.test(spec)) formatted = formatted.padStart(w, '0');
-        else formatted = formatted.padStart(w);
-      }
-      result += formatted;
-      continue;
-    }
-    result += fmt[fi];
-    fi++;
-  }
-  return { result, argIdx };
+  return printfFormat(fmt, fmtArgs).out;
 }
 
 export interface CompoundRedirect { op: '<' | '>' | '>>' | '&>' | '2>' | '2>>' | '2>&1'; target: string }

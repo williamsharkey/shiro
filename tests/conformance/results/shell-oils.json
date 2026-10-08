@@ -3,21 +3,9 @@
  "title": "Shell: oils spec tests",
  "files": {
   "smoke": {
-   "pass": 14,
+   "pass": 17,
    "total": 18,
    "failures": [
-    {
-     "i": 3,
-     "name": "pipeline"
-    },
-    {
-     "i": 4,
-     "name": "pipeline with builtin"
-    },
-    {
-     "i": 11,
-     "name": "Here doc with redirect"
-    },
     {
      "i": 14,
      "name": "failed command"
@@ -464,7 +452,7 @@
    ]
   },
   "var-op-slice": {
-   "pass": 6,
+   "pass": 9,
    "total": 21,
    "failures": [
     {
@@ -472,20 +460,8 @@
      "name": "Cannot take length of substring slice"
     },
     {
-     "i": 4,
-     "name": "Negative start index"
-    },
-    {
-     "i": 5,
-     "name": "Negative start index respects unicode"
-    },
-    {
      "i": 6,
      "name": "Negative second arg is position, not length!"
-    },
-    {
-     "i": 7,
-     "name": "Negative start index respects unicode"
     },
     {
      "i": 8,
@@ -544,7 +520,7 @@
    ]
   },
   "vars-special": {
-   "pass": 14,
+   "pass": 17,
    "total": 37,
    "failures": [
     {
@@ -568,10 +544,6 @@
      "name": "HOSTNAME OSTYPE can be changed"
     },
     {
-     "i": 11,
-     "name": "$$ looks like a PID"
-    },
-    {
      "i": 13,
      "name": "$BASHPID DOES change with subshell and command sub"
     },
@@ -580,16 +552,8 @@
      "name": "Background PID $! looks like a PID"
     },
     {
-     "i": 15,
-     "name": "$PPID"
-    },
-    {
      "i": 16,
      "name": "$PIPESTATUS"
-    },
-    {
-     "i": 17,
-     "name": "$RANDOM"
     },
     {
      "i": 18,
@@ -642,16 +606,12 @@
    ]
   },
   "arith": {
-   "pass": 28,
+   "pass": 31,
    "total": 71,
    "failures": [
     {
      "i": 0,
      "name": "Side Effect in Array Indexing"
-    },
-    {
-     "i": 4,
-     "name": "BracedVarSub within ArithSub"
     },
     {
      "i": 6,
@@ -774,16 +734,8 @@
      "name": "comma operator"
     },
     {
-     "i": 57,
-     "name": "assignment with dynamic var name"
-    },
-    {
      "i": 58,
      "name": "array assignment with dynamic array name"
-    },
-    {
-     "i": 59,
-     "name": "unary assignment with dynamic var name"
     },
     {
      "i": 60,
@@ -898,16 +850,12 @@
    ]
   },
   "here-doc": {
-   "pass": 28,
+   "pass": 29,
    "total": 32,
    "failures": [
     {
      "i": 6,
      "name": "Here doc with bad comsub delimiter"
-    },
-    {
-     "i": 10,
-     "name": "Here doc in middle.  And redirects in the middle."
     },
     {
      "i": 15,
@@ -920,7 +868,7 @@
    ]
   },
   "redirect": {
-   "pass": 12,
+   "pass": 13,
    "total": 39,
    "failures": [
     {
@@ -934,10 +882,6 @@
     {
      "i": 8,
      "name": "Descriptor redirect with filename"
-    },
-    {
-     "i": 9,
-     "name": "Redirect echo to stderr, and then redirect all of stdout somewhere."
     },
     {
      "i": 10,
@@ -1044,7 +988,7 @@
    ]
   },
   "loop": {
-   "pass": 17,
+   "pass": 19,
    "total": 28,
    "failures": [
     {
@@ -1078,14 +1022,6 @@
     {
      "i": 23,
      "name": "top-level break/continue/return (without strict_control_flow)"
-    },
-    {
-     "i": 26,
-     "name": "$b break, $c continue, $r return, $e exit"
-    },
-    {
-     "i": 27,
-     "name": "\\break \\continue \\return \\exit"
     },
     {
      "i": 28,
@@ -1188,13 +1124,9 @@
    ]
   },
   "builtin-echo": {
-   "pass": 7,
+   "pass": 24,
    "total": 27,
    "failures": [
-    {
-     "i": 2,
-     "name": "echo -e backslashes"
-    },
     {
      "i": 3,
      "name": "echo builtin should disallow typed args - literal"
@@ -1204,86 +1136,18 @@
      "name": "echo builtin should disallow typed args - variable"
     },
     {
-     "i": 5,
-     "name": "echo -en"
-    },
-    {
-     "i": 6,
-     "name": "echo -ez (invalid flag)"
-    },
-    {
-     "i": 8,
-     "name": "echo -e line continuation"
-    },
-    {
-     "i": 9,
-     "name": "echo -e with C escapes"
-    },
-    {
-     "i": 12,
-     "name": "\\c stops processing input"
-    },
-    {
-     "i": 15,
-     "name": "echo -e with 4 digit unicode escape"
-    },
-    {
-     "i": 16,
-     "name": "echo -e with 8 digit unicode escape"
-    },
-    {
-     "i": 17,
-     "name": "\\0377 is the highest octal byte"
-    },
-    {
-     "i": 18,
-     "name": "\\0400 is one more than the highest octal byte"
-    },
-    {
-     "i": 19,
-     "name": "\\0777 is out of range"
-    },
-    {
-     "i": 20,
-     "name": "incomplete hex escape"
-    },
-    {
-     "i": 21,
-     "name": "\\x"
-    },
-    {
-     "i": 22,
-     "name": "incomplete octal escape"
-    },
-    {
-     "i": 23,
-     "name": "incomplete unicode escape"
-    },
-    {
-     "i": 24,
-     "name": "\\u6"
-    },
-    {
-     "i": 25,
-     "name": "\\0 \\1 \\8"
-    },
-    {
      "i": 26,
      "name": "echo to redirected directory is an error"
     }
    ]
   },
   "builtin-printf": {
-   "pass": 13,
+   "pass": 45,
    "total": 55,
    "failures": [
     {
      "i": 0,
      "name": "printf with no args"
-    },
-    {
-     "i": 2,
-     "name": "printf -v %q"
     },
     {
      "i": 3,
@@ -1298,68 +1162,8 @@
      "name": "dynamic declare instead of %q"
     },
     {
-     "i": 7,
-     "name": "printf -v dynamic scope"
-    },
-    {
-     "i": 8,
-     "name": "printf with too few arguments"
-    },
-    {
-     "i": 9,
-     "name": "printf with too many arguments"
-    },
-    {
-     "i": 11,
-     "name": "printf integer"
-    },
-    {
-     "i": 12,
-     "name": "printf %6.4d -- \"precision\" does padding for integers"
-    },
-    {
-     "i": 13,
-     "name": "printf %6.4x X o"
-    },
-    {
-     "i": 14,
-     "name": "%06d zero padding vs. %6.6d"
-    },
-    {
-     "i": 17,
-     "name": "printf %6.4s does both truncation and padding"
-    },
-    {
-     "i": 18,
-     "name": "printf %6.0s and %0.0s"
-    },
-    {
-     "i": 19,
-     "name": "printf %6.s and %0.s"
-    },
-    {
-     "i": 20,
-     "name": "printf %*.*s (width/precision from args)"
-    },
-    {
-     "i": 21,
-     "name": "unsigned / octal / hex"
-    },
-    {
      "i": 22,
      "name": "unsigned / octal / hex big"
-    },
-    {
-     "i": 25,
-     "name": "Unicode char with '"
-    },
-    {
-     "i": 28,
-     "name": "negative numbers with unsigned / octal / hex"
-    },
-    {
-     "i": 31,
-     "name": "printf eE fF gG"
     },
     {
      "i": 38,
@@ -1368,34 +1172,6 @@
     {
      "i": 39,
      "name": "printf invalid format"
-    },
-    {
-     "i": 40,
-     "name": "printf %q"
-    },
-    {
-     "i": 41,
-     "name": "printf %6q (width)"
-    },
-    {
-     "i": 42,
-     "name": "printf negative numbers"
-    },
-    {
-     "i": 43,
-     "name": "printf + and space flags"
-    },
-    {
-     "i": 44,
-     "name": "printf # flag"
-    },
-    {
-     "i": 45,
-     "name": "Runtime error for invalid integer"
-    },
-    {
-     "i": 49,
-     "name": "%10.5(strftime format)T"
     },
     {
      "i": 51,
@@ -1408,42 +1184,6 @@
     {
      "i": 53,
      "name": "printf negative integer overflow"
-    },
-    {
-     "i": 54,
-     "name": "printf %b does backslash escaping"
-    },
-    {
-     "i": 55,
-     "name": "printf %b unicode escapes"
-    },
-    {
-     "i": 56,
-     "name": "printf %b respects \\c early return"
-    },
-    {
-     "i": 57,
-     "name": "printf %b supports octal escapes, both \\141 and \\0141"
-    },
-    {
-     "i": 58,
-     "name": "printf %b with truncated octal escapes"
-    },
-    {
-     "i": 59,
-     "name": "printf %d %X support hex 0x5 and octal 055"
-    },
-    {
-     "i": 60,
-     "name": "printf %d with + prefix (positive sign)"
-    },
-    {
-     "i": 61,
-     "name": "leading spaces are accepted in value given to %d %X, but not trailing spaces"
-    },
-    {
-     "i": 62,
-     "name": "Arbitrary base 64#a is rejected (unlike in shell arithmetic)"
     }
    ]
   },
@@ -1690,13 +1430,9 @@
    ]
   },
   "builtin-trap": {
-   "pass": 8,
+   "pass": 9,
    "total": 33,
    "failures": [
-    {
-     "i": 0,
-     "name": "traps are not active inside subshells $() ()  trap | cat"
-    },
     {
      "i": 1,
      "name": "trap accepts/ignores --"
@@ -1796,7 +1532,7 @@
    ]
   },
   "builtin-bracket": {
-   "pass": 25,
+   "pass": 40,
    "total": 50,
    "failures": [
     {
@@ -1804,64 +1540,12 @@
      "name": "-a as unary operator (alias of -e)"
     },
     {
-     "i": 5,
-     "name": "three args"
-    },
-    {
-     "i": 7,
-     "name": "test with extra args is syntax error"
-    },
-    {
-     "i": 8,
-     "name": "] syntax errors"
-    },
-    {
-     "i": 12,
-     "name": "( )"
-    },
-    {
-     "i": 13,
-     "name": "( ) ! -a -o with system version of ["
-    },
-    {
-     "i": 17,
-     "name": "[ with unquoted empty var"
-    },
-    {
-     "i": 19,
-     "name": "[ '(' foo ] is runtime syntax error"
-    },
-    {
-     "i": 20,
-     "name": "-z '>' implies two token lookahead"
-    },
-    {
-     "i": 24,
-     "name": "-x"
-    },
-    {
      "i": 27,
      "name": "-k for sticky bit"
     },
     {
-     "i": 28,
-     "name": "-h and -L test for symlink"
-    },
-    {
-     "i": 31,
-     "name": "-ot and -nt"
-    },
-    {
-     "i": 32,
-     "name": "[ a -eq b ]"
-    },
-    {
      "i": 35,
      "name": "test -p named pipe"
-    },
-    {
-     "i": 36,
-     "name": "-G and -O for effective user ID and group ID"
     },
     {
      "i": 37,
@@ -1884,20 +1568,12 @@
      "name": "test -c"
     },
     {
-     "i": 47,
-     "name": "negative octal numbers, etc."
-    },
-    {
      "i": 49,
      "name": "No octal, hex, base N conversion - leading 0 is a regular decimal"
     },
     {
      "i": 50,
      "name": "Looks like octal, but digit is too big"
-    },
-    {
-     "i": 51,
-     "name": "no recursive arith [ 1+2 -eq 3 ]"
     }
    ]
   },
@@ -2074,7 +1750,7 @@
    ]
   },
   "dbracket": {
-   "pass": 18,
+   "pass": 19,
    "total": 49,
    "failures": [
     {
@@ -2096,10 +1772,6 @@
     {
      "i": 12,
      "name": "precedence of && and || inside [["
-    },
-    {
-     "i": 13,
-     "name": "precedence of && and || in a command context"
     },
     {
      "i": 14,
@@ -2886,13 +2558,9 @@
    ]
   },
   "tilde": {
-   "pass": 6,
+   "pass": 7,
    "total": 14,
    "failures": [
-    {
-     "i": 4,
-     "name": "tilde expansion of word after redirect"
-    },
     {
      "i": 6,
      "name": "${undef:-~}"
@@ -2958,17 +2626,9 @@
    ]
   },
   "pipeline": {
-   "pass": 12,
+   "pass": 17,
    "total": 25,
    "failures": [
-    {
-     "i": 3,
-     "name": "Redirect in Pipeline"
-    },
-    {
-     "i": 5,
-     "name": "Exit code is last status"
-    },
     {
      "i": 7,
      "name": "PIPESTATUS"
@@ -3000,18 +2660,6 @@
     {
      "i": 22,
      "name": "SIGPIPE causes pipeline to die (regression for issue #295)"
-    },
-    {
-     "i": 23,
-     "name": "Nested pipelines"
-    },
-    {
-     "i": 24,
-     "name": "Pipeline in eval"
-    },
-    {
-     "i": 25,
-     "name": "shopt -s lastpipe and shopt -s no_last_fork interaction"
     }
    ]
   },
@@ -3165,7 +2813,7 @@
    ]
   },
   "alias": {
-   "pass": 26,
+   "pass": 28,
    "total": 48,
    "failures": [
     {
@@ -3243,14 +2891,6 @@
     {
      "i": 40,
      "name": "Corner case: alias inside LHS array arithmetic expression"
-    },
-    {
-     "i": 41,
-     "name": "Alias that is pipeline"
-    },
-    {
-     "i": 42,
-     "name": "Alias that is && || ;"
     },
     {
      "i": 47,
@@ -3520,7 +3160,7 @@
    ]
   },
   "sh-options": {
-   "pass": 8,
+   "pass": 9,
    "total": 32,
    "failures": [
     {
@@ -3566,10 +3206,6 @@
     {
      "i": 16,
      "name": "shopt -p prints 'shopt' options"
-    },
-    {
-     "i": 17,
-     "name": "shopt with no flags prints options"
     },
     {
      "i": 19,

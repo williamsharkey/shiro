@@ -61,10 +61,6 @@ export function groupStatements(src: string): Statement[] {
 
   for (let li = 0; li < lines.length; li++) {
     let line = lines[li];
-    // Backslash-newline continuation (outside single quotes): join the next line
-    while (quote !== "'" && endsWithContinuation(line) && li + 1 < lines.length) {
-      line = line.slice(0, -1) + lines[++li];
-    }
 
     if (!text) startLine = li + 1;
     else if (quote) text += '\n';
@@ -80,7 +76,8 @@ export function groupStatements(src: string): Statement[] {
     // Scan the line
     let i = 0;
     let lineOut = '';
-    const n = line.length;
+    let n = line.length;
+    for (;;) {
     while (i < n) {
       const ch = line[i];
       if (quote === "'") {
@@ -246,6 +243,16 @@ export function groupStatements(src: string): Statement[] {
       }
       cmdPos = cmdPos && CMD_PREFIX.has(word) && !glued;
       lastWord = cmdPos ? word : 'x';
+    }
+    // Backslash-newline (outside single quotes, at the line's end state) joins the next line
+    if (quote !== "'" && endsWithContinuation(line) && li + 1 < lines.length) {
+      lineOut = lineOut.slice(0, -1);
+      line = lines[++li];
+      i = 0;
+      n = line.length;
+      continue;
+    }
+    break;
     }
     text += lineOut;
 
