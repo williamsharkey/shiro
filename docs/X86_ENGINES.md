@@ -260,7 +260,7 @@ Blink's handlers are down to a few thousand executions per run (they were
 ~3M: mul/div, 16-bit cmp/mov, bt/btc, bsf, sbb), which didn't move `gh`
 much but is 15x on loops built from them. Blink's decoded-instruction cache
 had 512 direct-mapped entries, so warm code that isn't compiled yet was
-decoded on most visits; 4096 entries (patch 0020, 160 KB per thread) cut
+decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
 `gh`'s decodes from 3.2M to 1.4M.
 
 ### Patches to upstream Blink (vendor/blink/patches)
@@ -340,12 +340,16 @@ decoded on most visits; 4096 entries (patch 0020, 160 KB per thread) cut
 18. `FUTEX_WAIT_BITSET`/`FUTEX_WAKE_BITSET`; `getrandom(GRND_INSECURE)`.
 19. sendmsg/recvmsg pass control data (`SCM_RIGHTS`), `sockaddr_un`
    lengths, `SO_PEERCRED`.
-20. `lzcnt` returns the leading zero count (it returned `bsr`'s bit index);
+20. `pause()` waits like `sigsuspend` (signals the embedder queues end it);
+   Shiro `TIOCPKT`/`TIOCGPKT`.
+21. Under Shiro `CLOCK_BOOTTIME` comes from the kernel (uptime and process
+   start times match `/proc`).
+22. `lzcnt` returns the leading zero count (it returned `bsr`'s bit index);
    the 32-bit one-operand `imul` zero-extends `%rdx` (it stored the
    sign-extended high half in all 64 bits); a 4096-entry decoded-instruction
    cache (was 512).
 
-Patches 13 and 15–19 come from unix/compat-tools (15 also from
+Patches 13, 15–19 and 20–21 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.
 
 Native Blink's own exit path (`KillOtherThreads`) still hangs after

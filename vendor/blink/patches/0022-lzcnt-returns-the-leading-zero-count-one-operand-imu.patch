@@ -1,7 +1,7 @@
-From 060bdfe99b2c94a91474bd8a0960ae7c78255549 Mon Sep 17 00:00:00 2001
+From d866f981a365b2089e2d5ed21ae272eb02daa72b Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 8 Oct 2026 23:33:20 +0000
-Subject: [PATCH 20/20] lzcnt returns the leading zero count; one-operand
+Subject: [PATCH 22/22] lzcnt returns the leading zero count; one-operand
  imul32 zero-extends rdx; 4096-entry decoded-instruction cache
 
 LZCNT (F3 0F BD) returned bsr's bit index. The 32-bit one-operand IMUL

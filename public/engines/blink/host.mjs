@@ -55,7 +55,7 @@ const O_RDONLY = 0, O_WRONLY = 1, O_CREAT = 0o100, O_TRUNC = 0o1000, O_DIRECTORY
 const POLLIN = 1, POLLOUT = 4;
 const S_IFMT = 0o170000, S_IFDIR = 0o040000, S_IFREG = 0o100000, S_IFLNK = 0o120000;
 
-let i32 = null, data = null, debug = false, progPath = '';
+let i32 = null, data = null, debug = false, debugPid = 0, progPath = '';
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
@@ -426,6 +426,7 @@ function exitGuest(code) {
 
 async function run(msg) {
   debug = !!msg.debug;
+  debugPid = msg.pid;
   progPath = msg.path || '';
   i32 = new Int32Array(msg.sab, 0, CH_DATA / 4);
   data = new Uint8Array(msg.sab, CH_DATA);
@@ -467,7 +468,7 @@ async function run(msg) {
       const out = outCap ? ch.data.slice(0, Math.min(outCap, ch.data.length)) : null;
       // A signal for the guest rode on the reply: queue it, then rt_sigreturn
       while (res.sig) {
-        if (debug) console.error('[blink] signal', res.sig);
+        if (debug) console.error(`[blink] ${debugPid} signal ${res.sig}`);
         blinkModule?._blink_shiro_signal?.(res.sig);
         res = { ...res, sig: (await issue(ch, SYS.rt_sigreturn, [], 0)).sig };
       }
@@ -486,7 +487,7 @@ async function run(msg) {
       const sig = Atomics.exchange(ch.i32, CH_SIGNAL, 0);
       const done = ch.done;
       ch.done = null;
-      if (debug) console.error(`[blink] ksys ${ch.i32[CH_SYSNO]}(${Array.from(ch.i32.subarray(CH_ARGS + 1, CH_ARGS + 4)).join(',')}) = ${r}`);
+      if (debug) console.error(`[blink] ${debugPid} ksys ${ch.i32[CH_SYSNO]}(${Array.from(ch.i32.subarray(CH_ARGS + 1, CH_ARGS + 4)).join(',')}) = ${r}`);
       done?.({ r, hi, sig });
     } else if (m.type === 'blink-signal' && !exiting) {
       // The kernel signalled us: any syscall reply carries the signal word.

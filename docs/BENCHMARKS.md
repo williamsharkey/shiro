@@ -166,7 +166,7 @@ Patch 0012 now translates what `gh --version` still sent to Blink's handlers
 after): mul, imul and div/idiv with one operand (128-bit products from 32-bit
 halves; a dividend that doesn't fit, a zero divisor or an overflow calls
 Blink's handler from inside the region), neg/not, adc/sbb, bt/bts/btr/btc,
-bsf/bsr/tzcnt/lzcnt and the 16-bit ALU, mov and cmov forms. Patch 0020: a
+bsf/bsr/tzcnt/lzcnt and the 16-bit ALU, mov and cmov forms. Patch 0022: a
 4096-entry decoded-instruction cache (was 512; `gh` decodes 3.2M → 1.4M),
 and two interpreter fixes found by running the new fuzz groups natively
 (`lzcnt` returned `bsr`'s index; 32-bit one-operand `imul` sign-extended
