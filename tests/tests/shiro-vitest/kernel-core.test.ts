@@ -719,7 +719,7 @@ describe('worker guests over the SAB channel', () => {
       mkdirat: 0, pread: '3AB6', posAfterPread: 0, size: 10, mode: 0o600 & ~0o022,
       symlink: 0, readlink: 'sub/f.txt', isLink: true, rename: 0, noreplace: -A.EEXIST,
       utime: 0, mtime: 1_000_000_000_000, rmdirNotEmpty: -A.ENOTEMPTY, unlinkDir: -A.EISDIR, unlink: 0,
-      link: 0, linked: '0123AB6789',
+      link: -A.EPERM, linkExists: -A.EEXIST, linked: -A.ENOENT,
     });
   }, 20000);
 

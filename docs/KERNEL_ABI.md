@@ -37,6 +37,10 @@ All changes so far are additive; nothing below renames or removes an earlier nam
     `FileSystem.lookupCached(path, follow)`. A `SyscallHandler` may carry
     `passSync(proc, nr, args, data, kernel)`: true when it would pass the
     call on, so registering it doesn't force every call onto the async path.
+  - **Change:** link/linkat return -EPERM instead of copying the file (the
+    filesystem has no hard links). The copy had its own inode, so `git
+    clone /local/repo` died with "hardlink different from source"; with
+    EPERM git, cp -l and others fall back to copying themselves.
   - While guests make syscalls back to back the page polls their channels
     for a few tens of µs after each reply (bounded by a 4 ms slice per
     task), so the next request is served without an event-loop round trip.
@@ -295,7 +299,7 @@ offset 0. Lengths are bytes, without a trailing NUL.
 | unlinkat | dirfd, pathLen, flags (AT_REMOVEDIR) | path | 0 |
 | renameat / renameat2 | olddirfd, oldLen, newdirfd, newLen (, flags) | old, new | 0 |
 | symlink / symlinkat | targetLen, (dirfd,) linkLen | target, linkpath | 0 |
-| link / linkat | (olddirfd,) oldLen, (newdirfd,) newLen (, flags) | old, new | 0 (copies) |
+| link / linkat | (olddirfd,) oldLen, (newdirfd,) newLen (, flags) | old, new | -EPERM (no hard links; -ENOENT/-EEXIST checked first) |
 | readlinkat | dirfd, pathLen, bufsiz | path → target | length |
 | utimensat | dirfd, pathLen (0 = the fd), flags, hasTimes | path, then 2 struct timespec (32 B) at offset pathLen | 0 |
 | chmod / fchmod / fchmodat | pathLen or fd or (dirfd, pathLen), mode | path | 0 |

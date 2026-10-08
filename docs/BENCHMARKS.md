@@ -505,6 +505,17 @@ shell, net, x86 and non-isolated kernel throughput (e.g. non-isolated
 trim disabled vs enabled, and 4850 → 5508 under the profiler). It is
 100 spawns in ~20 ms and swings ±40% between identical runs.
 
+### unix/perf-kernel, round 4: link() and the integration/compat-dev merge
+
+Merged unix/integration (bd9fd87+) and unix/compat-dev (67bf3c1).
+`link`/`linkat` now return EPERM instead of copying the file: the copy had
+its own inode, so `git clone /local/repo` (git 2.47.1 package) died with
+"fatal: hardlink different from source"; with EPERM git copies the objects
+itself and the clone works (checked in the built app, isolated, both ways).
+Not a hot path; a kernel quick run after the merge is in line with round 3
+(isolated: syscall_rtt.sab 5.8 µs, pipe_throughput_512b 87 MB/s,
+file_write 173 MB/s, spawn_wait.wasm 1.07 ms).
+
 ## Results
 
 <!-- bench:table:begin -->
