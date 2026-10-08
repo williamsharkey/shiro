@@ -159,6 +159,55 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### unix/perf-blink 3 — mul/div/bit ops inline, decode cache, a fusion fix
+
+Patch 0012 now translates what `gh --version` still sent to Blink's handlers
+(BLINK_WJIT_DEBUG=2 counts executed fallbacks: ~3M before, a few thousand
+after): mul, imul and div/idiv with one operand (128-bit products from 32-bit
+halves; a dividend that doesn't fit, a zero divisor or an overflow calls
+Blink's handler from inside the region), neg/not, adc/sbb, bt/bts/btr/btc,
+bsf/bsr/tzcnt/lzcnt and the 16-bit ALU, mov and cmov forms. Patch 0020: a
+4096-entry decoded-instruction cache (was 512; `gh` decodes 3.2M → 1.4M),
+and two interpreter fixes found by running the new fuzz groups natively
+(`lzcnt` returned `bsr`'s index; 32-bit one-operand `imul` sign-extended
+into the top of `%rdx`). Correctness fix: a cmp/test fused with its jcc,
+setcc or cmov keeps the flags in wasm locals, and an instruction in between
+that leaves the region part way (page-crossing or faulting memory access)
+handed the interpreter stale flags; fusion now stops at such instructions
+(`jitfuzz.c` `cmpcross` failed on the old build, matches native now).
+
+Base = the previous engine re-run in the same session
+(`perf-blink-5-base-x86.json`); new = two runs (`perf-blink-5a-x86.json`,
+`perf-blink-5b-x86.json`), x86 suite, isolated, 5 samples each:
+
+| metric (isolated) | base | new (a) | new (b) |
+|---|---:|---:|---:|
+| x86.blink.gh_version | 2620 ms | 2473 ms | 2338 ms |
+| x86.blink.go_cpuloop_5m | 193.5 ms | 194.8 ms | 204.4 ms |
+| x86.blink.go_hello | 203.2 ms | 212 ms | 213.8 ms |
+| x86.blink.go_nethttp | 395.1 ms | 358.8 ms | 381.4 ms |
+| x86.blink.hello_musl | 89.7 ms | 94.1 ms | 97.8 ms |
+| x86.blink.hello_glibc | 99.9 ms | 117.6 ms | 113.7 ms |
+| x86.blink.peak_rss.gh_version | 153.5 MiB | 156 MiB | 156.3 MiB |
+| x86.blink.peak_rss.go_nethttp | 16.5 MiB | 24.2 MiB | 28.1 MiB |
+
+Against the committed `perf-blink-4-x86.json` (earlier the same day) every
+blink timing is 10–20% better, but so is the unchanged base re-run, so the
+suite only shows `gh` (−6 to −11%). The small programs are within noise
+(hello_glibc's base samples 92–108 ms, new 98–125 ms). Peak RSS is renderer
+RSS and swings 2x within a run (hello_musl samples 7–21 MiB, net/http base
+14–25, new 16–31); Blink's wasm heap is unchanged (64 MB for the small
+programs, 117 MB for `gh`) and the decode cache adds 160 KB per guest
+thread. Where it shows is code built from those ops: `vendor/blink/bench/arith.c`
+(10M iterations of div, mul, btc, tzcnt and 16-bit math) takes 173–190 ms
+instead of 2.5–2.8 s in the X86_ENGINES table driver (native 40 ms), and the
+table's Go loop 50M went 362 → 253 ms back to back. In Node, `gh --version`
+is 3.2–3.3 s against 3.4–3.5 s for the previous build.
+
+Full suite: 2735 passed, 1 failed: `kernel-wasi.test.ts` "reuses guest
+Workers" (`expected 4 to be ≤ 3` spare Workers) under full-suite load; it
+passes 3/3 alone and doesn't involve Blink.
+
 ### unix/perf-blink 2 — smaller generated code, forward branches, SSE moves
 
 `perf-blink-after-x86.json` → `perf-blink-2-x86.json` (x86 suite, isolated, 3 runs):

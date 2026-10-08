@@ -1,7 +1,7 @@
-From 9d2fbf38c2038a59242f2ba6fa6c6b0a7d4525a2 Mon Sep 17 00:00:00 2001
+From 8cf523c58ad7d4bc94d72466e7ad70e688dff19a Mon Sep 17 00:00:00 2001
 From: Shiro <shiro@localhost>
 Date: Thu, 8 Oct 2026 20:44:36 +0000
-Subject: [PATCH 18/19] futex FUTEX_WAIT_BITSET/FUTEX_WAKE_BITSET; getrandom
+Subject: [PATCH 18/20] futex FUTEX_WAIT_BITSET/FUTEX_WAKE_BITSET; getrandom
  GRND_INSECURE (Rust's std uses both)
 
 ---
