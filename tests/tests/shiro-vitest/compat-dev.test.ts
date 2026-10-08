@@ -926,13 +926,13 @@ print(table.concat(out, " "), _VERSION)
   }, 120_000);
 });
 
-describe('ninja (x86-64 in Blink) with clang', () => {
+describe('ninja and cmake (x86-64 in Blink) with clang', () => {
   let shell: Shell;
   let fs: FileSystem;
   beforeAll(async () => {
     ({ fs, shell } = await createTestShell());
     await bootFiles(fs);
-    const r = await sh(shell, 'pkg install llvm ninja');
+    const r = await sh(shell, 'pkg install llvm ninja make cmake');
     expect(r.err).toBe('');
     expect(r.exitCode).toBe(0);
   }, 300_000);
@@ -962,6 +962,28 @@ describe('ninja (x86-64 in Blink) with clang', () => {
     expect(r.out).toMatch(/util\.c:1:32: error: expected ';' after return statement/);
   }, 300_000);
 
+  it('cmake configures with clang and builds through ninja and make; ctest runs the tests', async () => {
+    await fs.mkdir('/home/user/cm', { recursive: true });
+    await fs.writeFile('/home/user/cm/CMakeLists.txt', [
+      'cmake_minimum_required(VERSION 3.20)', 'project(hello C)', 'include(CheckIncludeFile)',
+      'check_include_file(stdint.h HAVE_STDINT_H)', 'configure_file(config.h.in config.h)',
+      'add_library(util STATIC util.c)', 'add_executable(app main.c)', 'target_include_directories(app PRIVATE ${CMAKE_CURRENT_BINARY_DIR})',
+      'target_link_libraries(app util)', 'enable_testing()', 'add_test(NAME runs COMMAND app)',
+      'set_tests_properties(runs PROPERTIES PASS_REGULAR_EXPRESSION "twice 42")', ''].join('\n'));
+    await fs.writeFile('/home/user/cm/config.h.in', '#cmakedefine HAVE_STDINT_H 1\n');
+    await fs.writeFile('/home/user/cm/util.c', 'int twice(int x) { return 2 * x; }\n');
+    await fs.writeFile('/home/user/cm/main.c', '#include <stdio.h>\n#include "config.h"\nint twice(int);\nint main(void) {\n#ifdef HAVE_STDINT_H\n  printf("twice %d\\n", twice(21));\n#endif\n  return 0;\n}\n');
+    let r = await sh(shell, 'cd /home/user/cm && cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang');
+    expect(r.err).toBe('');
+    expect(r.out).toContain('-- The C compiler identification is Clang 21.1.4\n');
+    expect(r.out).toContain('-- Looking for stdint.h - found\n');
+    expect(r.out).toContain('-- Build files have been written to: /home/user/cm/build\n');
+    r = await sh(shell, 'cd /home/user/cm && cmake --build build && ./build/app && cd build && ctest 2>&1 | grep "tests passed"');
+    expect(r.err).toBe('');
+    expect(r.out).toMatch(/\[4\/4\] Linking C executable app\ntwice 42\n100% tests passed, 0 tests failed out of 1\n$/);
+    r = await sh(shell, 'cd /home/user/cm && cmake -S . -B mk -DCMAKE_C_COMPILER=clang > /dev/null && cmake --build mk 2>&1 | tail -1 && ./mk/app');
+    expect(r.out).toBe('[100%] Built target app\ntwice 42\n');
+  }, 1_800_000);
 });
 
 describe('git (upstream, x86-64 in Blink)', () => {

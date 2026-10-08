@@ -26,6 +26,7 @@ built app in headless Chromium, cross-origin isolated.
 | Perl | 5.40.0 | pkg `perl` (`perl.sh`: static x86-64 glibc build, all core XS linked in, `NO_LOCALE`) run in Blink — new package ABI `x86_64-linux` | works | `-e` with List::Util/Data::Dumper/POSIX, `#!/usr/bin/env perl` scripts with stdin/argv/files/regexes, backticks, `system()`, `open "-\|"`, Test::More (TAP), `prove t`, IPC::Open3, fork without exec (since Blink's real fork) | interpreted: ~1 s start, POSIX loads in seconds; no XS loading, no pods |
 | Git | 2.47.1 | pkg `git` (`git.sh`: static x86-64 glibc build, no curl) run in Blink; replaces Shiro's built-in (isomorphic-git) `git` while installed | works for local workflows | init/add/commit with combined flags, branch, merge, rebase, stash, blame, tags/describe, a pre-commit hook, `git clone file://` and `git push` (upload-pack/receive-pack over pipes) | no http(s) remotes (uninstall it for Shiro's built-in GitHub clone/push); `git clone /path` stops at "hardlink different from source" (the kernel's `link()` copies; use `file://` or `--no-hardlinks`) |
 | Ninja | 1.12.1 | pkg `ninja` (`ninja.sh`: static x86-64) run in Blink | works | a C program built with clang through rules with depfiles, no-op rebuilds, header changes rebuilding dependents, failed commands reported with clang's diagnostics | — |
+| CMake, CTest | 3.31.9 | pkg `cmake` (`x86/cmake.sh`: static x86-64 musl, no OpenSSL) run in Blink | works with the llvm package's clang | a C project with a static library, `check_include_file`, `configure_file`: compiler detection (Clang 21.1.4), build through the Ninja and Makefile generators, `ctest` | configure takes ~10 s (each compiler check is a clang run); no https `file(DOWNLOAD)`; no ccmake/cmake-gui |
 | venv | Shiro | `python3 -m venv` | works | `pyvenv.cfg`, `bin/python` symlinks, `bin/pip`, `activate`/`deactivate`; `sys.prefix` is the venv and pip installs into it (vitest and Chromium) | `--copies` ignored (always symlinks) |
 | Node.js npm CLIs and libraries | Shiro's node (`node`, `npm`, `npx`) | builtin | works | commander + chalk + dayjs + uuid CLI, mocha 10 (pass and fail exit codes), tsc 5.6 (compile and type errors), prettier 3.3 (files, stdin, `--check "src/**/*.js"`, `--write`), ES modules binding `module`/`require`/`process`; vitest and Chromium | TypeScript 7 (`typescript@7`) is a native Go binary; native addons (`.node`) don't load; yarn 1 runs and resolves packages but can't fetch them yet (its `request` download over the fetch-backed http shim, then zlib and tar streams); axios needs `window.location` (fine in the browser, not under vitest) |
 | Lua (lua, luac) | 5.4.7 | pkg `lua` (`lua.sh`) | works | `#!/usr/bin/env lua` script reading stdin with argv, patterns, coroutines, `table.sort`; `luac -p` syntax errors with locations | no `os.execute`/`io.popen`; the REPL needs blocking stdin |
@@ -35,7 +36,6 @@ Not available (yet), and why:
 
 | Software | Tried | Blocker |
 | --- | --- | --- |
-| CMake 3.31.9 | static x86-64 musl build in Blink (recipe `scripts/pkgbuild/x86/cmake.sh`) | segfaults right after libuv starts its second child process (see known issues); not published |
 | Rust (rustc, cargo) | — | no maintained WASI build of rustc to pin; the Linux toolchain is dynamically linked against librustc_driver and LLVM (~250 MB unpacked) |
 | Java (JVM) | — | a JDK image is ~200 MB and HotSpot needs its JIT (mprotect RWX code) for usable speed; Blink would interpret the interpreter |
 | Deno, Bun | — | single ~100 MB binaries around V8 / JavaScriptCore JITs; Shiro's own `node` covers the npm use case |
@@ -113,15 +113,19 @@ Shell and platform fixes these needed (all with tests in the same file):
   to its parent over pipes couldn't run through `sh -c` (git clone and
   `git-upload-pack`).
 
+- WASM programs started by a forked x86 program (cmake, ninja) inherit its
+  fds, so fd 3 can be a pipe; wasi-libc finds its preopens by scanning from
+  fd 3 to the first EBADF, found none, and every absolute path failed (clang
+  under cmake: "no such file or directory"). Fds below the last preopen now
+  answer as non-directory preopens. (The crash cmake hit earlier was the
+  kernel's FIONBIO on /dev/null, fixed on unix/perf-blink.)
+
 Known issues found along the way (not fixed here):
 
 - WASIX programs (bash, dash from unix/wasix) pass `exec` arguments as one
   newline-separated string (`proc_exec3`), so an argument containing a
   newline arrives split. Autoconf-style `configure` scripts that hand sed a
   multi-line script break that way; Shiro's own shell can't run them either.
-- CMake 3.31.9 (recipe `scripts/pkgbuild/x86/cmake.sh`, static x86-64 musl)
-  isn't published: in Blink, `cmake -S . -B build` ends with SIGSEGV
-  (status 139, no message) right after libuv starts its second child process
-  (the `uname` probes of CMakeDetermineSystem). A static glibc build already
-  faults in its malloc start-up in upstream Blink.
+- A static glibc CMake faults in its malloc start-up in Blink (upstream too);
+  the package is built against musl.
 
