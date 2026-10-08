@@ -358,8 +358,12 @@ async function main() {
     () => import('./commands/magick').then(m => m.magickCmd)), 'src/commands/magick.ts');
   registerCommand(commands, lazyCommand('wasi', 'Run WASM+WASI binaries',
     () => import('./commands/wasi').then(m => m.wasiCmd)), 'src/commands/wasi.ts');
-  registerCommand(commands, lazyCommand('pkg', 'WASM package manager',
+  registerCommand(commands, lazyCommand('pkg', 'Package manager for WebAssembly programs',
     () => import('./commands/pkg').then(m => m.pkgCmd)), 'src/commands/pkg.ts');
+  registerCommand(commands, lazyCommand('apt', 'Package manager (same as pkg)',
+    () => import('./commands/pkg').then(m => m.aptCmd)), 'src/commands/pkg.ts');
+  registerCommand(commands, lazyCommand('apt-get', 'Package manager (same as pkg)',
+    () => import('./commands/pkg').then(m => m.aptGetCmd)), 'src/commands/pkg.ts');
   registerCommand(commands, lazyCommand('xpkg', 'Binary (x86-64) package manager',
     () => import('./commands/xpkg').then(m => m.xpkgCmd)), 'src/commands/xpkg.ts');
 
@@ -428,8 +432,9 @@ async function main() {
       await fs.mkdir('/usr/local/bin', { recursive: true });
       for (const cmd of shimCommands) {
         const shimPath = `/usr/local/bin/${cmd}`;
-        // Don't overwrite real scripts (like claude bin stub)
-        if (await fs.exists(shimPath)) continue;
+        // Don't overwrite real scripts (like claude bin stub), and leave PATH
+        // to a program a package installed (`pkg install sqlite`)
+        if (await fs.exists(shimPath) || await fs.exists(`/usr/bin/${cmd}`)) continue;
         await fs.writeFile(shimPath, `#!/bin/sh\n${cmd} "$@"\n`);
       }
       // Create /bin/sh, /bin/bash, /usr/bin/env so stat() checks pass

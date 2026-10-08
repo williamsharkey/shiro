@@ -1,0 +1,1303 @@
+{
+ "format": 1,
+ "packages": [
+  {
+   "name": "coreutils",
+   "version": "0.12.0",
+   "description": "uutils coreutils: ls, cat, sort, wc, sha256sum and 70 more as one multi-call binary",
+   "license": "MIT",
+   "source": "https://static.crates.io/crates/coreutils/coreutils-0.12.0.crate",
+   "homepage": "https://uutils.github.io/coreutils/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/coreutils.sh",
+   "section": "utils",
+   "abi": "wasi_snapshot_preview1",
+   "files": [
+    {
+     "path": "bin/coreutils.wasm",
+     "url": "/pkg/coreutils/0.12.0/coreutils.wasm",
+     "sha256": "6b7d2d669eeac746b12e56e909442efa68a02604c084f70fcfafc6eaa9596d55",
+     "size": 7651813
+    }
+   ],
+   "bin": {
+    "coreutils": {
+     "file": "bin/coreutils.wasm"
+    },
+    "arch": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "base32": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "base64": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "basename": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "basenc": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "cat": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "cksum": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "b2sum": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "md5sum": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "nice": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "sha1sum": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "sha224sum": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "sha256sum": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "sha384sum": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "sha512sum": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "comm": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "cp": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "csplit": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "cut": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "date": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "dd": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "dir": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "dircolors": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "dirname": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "echo": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "expand": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "expr": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "factor": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "false": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "fmt": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "fold": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "head": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "hostid": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "join": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "link": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "ln": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "ls": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "mkdir": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "mktemp": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "mv": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "nl": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "numfmt": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "od": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "paste": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "pathchk": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "pr": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "printenv": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "printf": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "ptx": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "pwd": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "readlink": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "realpath": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "rm": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "rmdir": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "seq": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "shred": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "shuf": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "sleep": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "sort": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "split": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "sum": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "tail": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "tee": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "test": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "touch": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "tr": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "true": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "truncate": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "tsort": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "tty": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "uname": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "unexpand": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "uniq": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "unlink": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "vdir": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "wc": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "yes": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    },
+    "nproc": {
+     "file": "bin/coreutils.wasm",
+     "shadow": false
+    }
+   },
+   "notes": "Applets don't replace Shiro's builtins of the same name; run them as `coreutils ls` or /usr/bin/ls. No chmod/chown/stat/id: WASI has no owners or modes."
+  },
+  {
+   "name": "lua",
+   "version": "5.4.7",
+   "description": "Lua 5.4 interpreter and bytecode compiler (PUC-Rio)",
+   "license": "MIT",
+   "source": "https://www.lua.org/ftp/lua-5.4.7.tar.gz",
+   "homepage": "https://www.lua.org/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/lua.sh",
+   "section": "interpreters",
+   "abi": "wasi_snapshot_preview1",
+   "files": [
+    {
+     "path": "bin/lua.wasm",
+     "url": "/pkg/lua/5.4.7/lua.wasm",
+     "sha256": "f02fb9729d57a46430f5dc0f05947de851ad2097f53e51327e5659981acf14fe",
+     "size": 315097
+    },
+    {
+     "path": "bin/luac.wasm",
+     "url": "/pkg/lua/5.4.7/luac.wasm",
+     "sha256": "5fd58ec3b9d200fe5315c2ec456fb375031d144c0c4ca509a0923188b47f8174",
+     "size": 203673
+    }
+   ],
+   "bin": {
+    "lua": {
+     "file": "bin/lua.wasm"
+    },
+    "luac": {
+     "file": "bin/luac.wasm"
+    }
+   },
+   "wants": [
+    "blocking-stdin"
+   ],
+   "notes": "The interactive REPL needs blocking stdin; scripts, -e and piped input work. No os.execute/io.popen (no child processes)."
+  },
+  {
+   "name": "sqlite",
+   "version": "3.50.4",
+   "description": "SQLite 3 command-line shell (FTS5, math functions)",
+   "license": "blessing",
+   "source": "https://sqlite.org/2025/sqlite-autoconf-3500400.tar.gz",
+   "homepage": "https://sqlite.org/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/sqlite.sh",
+   "section": "database",
+   "abi": "wasi_snapshot_preview1",
+   "files": [
+    {
+     "path": "bin/sqlite3.wasm",
+     "url": "/pkg/sqlite/3.50.4/sqlite3.wasm",
+     "sha256": "a6027db5e46cd6ed367f9db52076d394c516e5c68327de6ea2abeca03c40bd7a",
+     "size": 1679802
+    }
+   ],
+   "bin": {
+    "sqlite3": {
+     "file": "bin/sqlite3.wasm"
+    }
+   },
+   "wants": [
+    "blocking-stdin"
+   ],
+   "notes": "Interactive mode needs blocking stdin; SQL as an argument or on stdin works. Single-threaded, no WAL, no extensions."
+  },
+  {
+   "name": "jq",
+   "version": "1.8.1",
+   "description": "Command-line JSON processor (with oniguruma regex)",
+   "license": "MIT",
+   "source": "https://github.com/jqlang/jq/releases/download/jq-1.8.1/jq-1.8.1.tar.gz",
+   "homepage": "https://jqlang.org/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/jq.sh",
+   "section": "utils",
+   "abi": "wasi_snapshot_preview1",
+   "files": [
+    {
+     "path": "bin/jq.wasm",
+     "url": "/pkg/jq/1.8.1/jq.wasm",
+     "sha256": "12c4896bd180e65d1548eabe559cb307aa29903bffb1c5a69714916bdb685981",
+     "size": 1074557
+    }
+   ],
+   "bin": {
+    "jq": {
+     "file": "bin/jq.wasm"
+    }
+   }
+  },
+  {
+   "name": "cowsay",
+   "version": "0.3.0",
+   "description": "Configurable talking cow (Rust port)",
+   "license": "unknown",
+   "source": "https://github.com/wapm-packages/cowsay",
+   "origin": "wasmer",
+   "section": "games",
+   "abi": "wasi_snapshot_preview1",
+   "files": [
+    {
+     "path": "bin/cowsay.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/c7e7487ac3a41c18862f0bc76e8af0def0f12c4167d6fce5c1cc1b5d061f6bb7.webc",
+     "sha256": "c7e7487ac3a41c18862f0bc76e8af0def0f12c4167d6fce5c1cc1b5d061f6bb7",
+     "size": 775917,
+     "webc": {
+      "atom": "cowsay"
+     }
+    }
+   ],
+   "bin": {
+    "cowsay": {
+     "file": "bin/cowsay.wasm"
+    },
+    "cowthink": {
+     "file": "bin/cowsay.wasm"
+    }
+   },
+   "homepage": "https://wasmer.io/syrusakbary/cowsay"
+  },
+  {
+   "name": "figlet",
+   "version": "0.0.1",
+   "description": "FIGlet 2.2.5: large letters out of ordinary text, with 57 fonts",
+   "license": "BSD-3-Clause",
+   "source": "https://github.com/wapm-packages/figlet",
+   "origin": "wasmer",
+   "section": "games",
+   "abi": "wasi_snapshot_preview1",
+   "files": [
+    {
+     "path": "bin/figlet.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/9fc959de4ce58c6c2bc11b8cbaa0a1a471bcde84a0fe341cffc25a42251d91c9.webc",
+     "sha256": "9fc959de4ce58c6c2bc11b8cbaa0a1a471bcde84a0fe341cffc25a42251d91c9",
+     "size": 769349,
+     "webc": {
+      "atom": "figlet"
+     }
+    },
+    {
+     "path": "bin/chkfont.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/9fc959de4ce58c6c2bc11b8cbaa0a1a471bcde84a0fe341cffc25a42251d91c9.webc",
+     "sha256": "9fc959de4ce58c6c2bc11b8cbaa0a1a471bcde84a0fe341cffc25a42251d91c9",
+     "size": 769349,
+     "webc": {
+      "atom": "chkfont"
+     }
+    },
+    {
+     "path": "share/fonts",
+     "url": "https://cdn.wasmer.io/webcimages/9fc959de4ce58c6c2bc11b8cbaa0a1a471bcde84a0fe341cffc25a42251d91c9.webc",
+     "sha256": "9fc959de4ce58c6c2bc11b8cbaa0a1a471bcde84a0fe341cffc25a42251d91c9",
+     "size": 769349,
+     "webc": {
+      "volume": "atom",
+      "dir": "/fonts"
+     }
+    }
+   ],
+   "bin": {
+    "figlet": {
+     "file": "bin/figlet.wasm",
+     "args": [
+      "-d",
+      "/usr/lib/pkg/figlet/share/fonts"
+     ]
+    },
+    "chkfont": {
+     "file": "bin/chkfont.wasm"
+    }
+   },
+   "preload": [
+    "share/fonts"
+   ]
+  },
+  {
+   "name": "uuid",
+   "version": "0.3.0",
+   "description": "Generate UUIDs",
+   "license": "MIT",
+   "source": "https://github.com/ken-matsui/uuid-v4-cli",
+   "origin": "wasmer",
+   "section": "utils",
+   "abi": "wasi_snapshot_preview1",
+   "files": [
+    {
+     "path": "bin/uuid.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/bcfcf285510b75a47156a46c8103593a44047acf892114c83344138a0dc0effc.webc",
+     "sha256": "bcfcf285510b75a47156a46c8103593a44047acf892114c83344138a0dc0effc",
+     "size": 2425666,
+     "webc": {
+      "atom": "uuid"
+     }
+    }
+   ],
+   "bin": {
+    "uuid": {
+     "file": "bin/uuid.wasm"
+    }
+   }
+  },
+  {
+   "name": "wabt",
+   "version": "1.0.37",
+   "description": "WebAssembly Binary Toolkit: wat2wasm, wasm2wat, wasm-validate, wasm-strip, wasm-interp",
+   "license": "Apache-2.0",
+   "source": "https://github.com/WebAssembly/wabt",
+   "origin": "wasmer",
+   "section": "devel",
+   "abi": "wasi_snapshot_preview1",
+   "files": [
+    {
+     "path": "bin/wat2wasm.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/28b90a71338d161324ec4187d7afeb08df0eb98181e7e51c83f3f3f9a4cd1522.webc",
+     "sha256": "28b90a71338d161324ec4187d7afeb08df0eb98181e7e51c83f3f3f9a4cd1522",
+     "size": 3420566,
+     "webc": {
+      "atom": "wat2wasm"
+     }
+    },
+    {
+     "path": "bin/wasm2wat.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/28b90a71338d161324ec4187d7afeb08df0eb98181e7e51c83f3f3f9a4cd1522.webc",
+     "sha256": "28b90a71338d161324ec4187d7afeb08df0eb98181e7e51c83f3f3f9a4cd1522",
+     "size": 3420566,
+     "webc": {
+      "atom": "wasm2wat"
+     }
+    },
+    {
+     "path": "bin/wasm-validate.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/28b90a71338d161324ec4187d7afeb08df0eb98181e7e51c83f3f3f9a4cd1522.webc",
+     "sha256": "28b90a71338d161324ec4187d7afeb08df0eb98181e7e51c83f3f3f9a4cd1522",
+     "size": 3420566,
+     "webc": {
+      "atom": "wasm-validate"
+     }
+    },
+    {
+     "path": "bin/wasm-strip.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/28b90a71338d161324ec4187d7afeb08df0eb98181e7e51c83f3f3f9a4cd1522.webc",
+     "sha256": "28b90a71338d161324ec4187d7afeb08df0eb98181e7e51c83f3f3f9a4cd1522",
+     "size": 3420566,
+     "webc": {
+      "atom": "wasm-strip"
+     }
+    },
+    {
+     "path": "bin/wasm-interp.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/28b90a71338d161324ec4187d7afeb08df0eb98181e7e51c83f3f3f9a4cd1522.webc",
+     "sha256": "28b90a71338d161324ec4187d7afeb08df0eb98181e7e51c83f3f3f9a4cd1522",
+     "size": 3420566,
+     "webc": {
+      "atom": "wasm-interp"
+     }
+    },
+    {
+     "path": "bin/wast2json.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/28b90a71338d161324ec4187d7afeb08df0eb98181e7e51c83f3f3f9a4cd1522.webc",
+     "sha256": "28b90a71338d161324ec4187d7afeb08df0eb98181e7e51c83f3f3f9a4cd1522",
+     "size": 3420566,
+     "webc": {
+      "atom": "wast2json"
+     }
+    }
+   ],
+   "bin": {
+    "wat2wasm": {
+     "file": "bin/wat2wasm.wasm"
+    },
+    "wasm2wat": {
+     "file": "bin/wasm2wat.wasm"
+    },
+    "wasm-validate": {
+     "file": "bin/wasm-validate.wasm"
+    },
+    "wasm-strip": {
+     "file": "bin/wasm-strip.wasm"
+    },
+    "wasm-interp": {
+     "file": "bin/wasm-interp.wasm"
+    },
+    "wast2json": {
+     "file": "bin/wast2json.wasm"
+    }
+   }
+  },
+  {
+   "name": "ruby",
+   "version": "0.1.2",
+   "description": "Ruby 3.2 interpreter (ruby.wasm, standard library embedded)",
+   "license": "Ruby OR BSD-2-Clause",
+   "source": "https://github.com/ruby/ruby.wasm",
+   "origin": "wasmer",
+   "section": "interpreters",
+   "abi": "wasi_snapshot_preview1",
+   "files": [
+    {
+     "path": "bin/ruby.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/036c313a707ffc5b70c700a9ac44e07bb76efe2797ef7f69c8f5d38fc6a080fc.webc",
+     "sha256": "036c313a707ffc5b70c700a9ac44e07bb76efe2797ef7f69c8f5d38fc6a080fc",
+     "size": 34328971,
+     "webc": {
+      "atom": "ruby"
+     }
+    }
+   ],
+   "bin": {
+    "ruby": {
+     "file": "bin/ruby.wasm"
+    }
+   },
+   "wants": [
+    "blocking-stdin"
+   ],
+   "notes": "irb needs blocking stdin; scripts and -e work."
+  },
+  {
+   "name": "fortune",
+   "version": "0.2.0",
+   "description": "Print a random adage",
+   "license": "unknown",
+   "source": "https://github.com/wapm-packages/fortune",
+   "origin": "wasmer",
+   "section": "games",
+   "abi": "wasi_unstable",
+   "files": [
+    {
+     "path": "bin/fortune.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/59c02fd68e98da2c445ee8e97098aff1038ef7aa237601b2a099e734a99ef49d.webc",
+     "sha256": "59c02fd68e98da2c445ee8e97098aff1038ef7aa237601b2a099e734a99ef49d",
+     "size": 2416516,
+     "webc": {
+      "atom": "fortune"
+     }
+    }
+   ],
+   "bin": {
+    "fortune": {
+     "file": "bin/fortune.wasm"
+    }
+   }
+  },
+  {
+   "name": "lolcat",
+   "version": "0.2.0",
+   "description": "Rainbow-colour text",
+   "license": "unknown",
+   "source": "https://github.com/wapm-packages/lolcat",
+   "origin": "wasmer",
+   "section": "games",
+   "abi": "wasi_unstable",
+   "files": [
+    {
+     "path": "bin/lolcat.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/b867558fee3734d9c77a9bdc38abcfc0793bfbad0e901639a192641d5a34bdb7.webc",
+     "sha256": "b867558fee3734d9c77a9bdc38abcfc0793bfbad0e901639a192641d5a34bdb7",
+     "size": 2131185,
+     "webc": {
+      "atom": "lolcat"
+     }
+    }
+   ],
+   "bin": {
+    "lolcat": {
+     "file": "bin/lolcat.wasm"
+    }
+   }
+  },
+  {
+   "name": "brotli",
+   "version": "0.0.1",
+   "description": "Brotli compressor and decompressor",
+   "license": "MIT",
+   "source": "https://github.com/google/brotli",
+   "origin": "wasmer",
+   "section": "utils",
+   "abi": "wasi_unstable",
+   "files": [
+    {
+     "path": "bin/brotli.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/824ad12803f95ed9a963f0e68df7ab3f1b875387f84417390ec73df52b3b2fb0.webc",
+     "sha256": "824ad12803f95ed9a963f0e68df7ab3f1b875387f84417390ec73df52b3b2fb0",
+     "size": 707459,
+     "webc": {
+      "atom": "brotli"
+     }
+    }
+   ],
+   "bin": {
+    "brotli": {
+     "file": "bin/brotli.wasm"
+    }
+   }
+  },
+  {
+   "name": "openssl",
+   "version": "0.2.0",
+   "description": "OpenSSL 1.1 command-line tool: digests, base64, symmetric ciphers, keys",
+   "license": "OpenSSL",
+   "source": "https://github.com/wapm-packages/OpenSSL",
+   "origin": "wasmer",
+   "section": "utils",
+   "abi": "wasi_unstable",
+   "files": [
+    {
+     "path": "bin/openssl.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/ac3a7fa2a57d384fa9e4b30c935a99fa323193cd1b7421bb899dfc2864ec43cc.webc",
+     "sha256": "ac3a7fa2a57d384fa9e4b30c935a99fa323193cd1b7421bb899dfc2864ec43cc",
+     "size": 1642434,
+     "webc": {
+      "atom": "openssl"
+     }
+    }
+   ],
+   "bin": {
+    "openssl": {
+     "file": "bin/openssl.wasm"
+    }
+   },
+   "notes": "No networking (s_client needs sockets)."
+  },
+  {
+   "name": "qr2text",
+   "version": "0.0.1",
+   "description": "Render a QR code as text",
+   "license": "MIT",
+   "source": "https://github.com/wapm-packages/qr2text",
+   "origin": "wasmer",
+   "section": "graphics",
+   "abi": "wasi_unstable",
+   "files": [
+    {
+     "path": "bin/qr2text.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/3741fc7486de905f87bcf8829557260473b0b789c0ec362d9374fd36f4fb62c6.webc",
+     "sha256": "3741fc7486de905f87bcf8829557260473b0b789c0ec362d9374fd36f4fb62c6",
+     "size": 498852,
+     "webc": {
+      "atom": "qr2text"
+     }
+    }
+   ],
+   "bin": {
+    "qr2text": {
+     "file": "bin/qr2text.wasm"
+    }
+   }
+  },
+  {
+   "name": "viu",
+   "version": "0.2.3",
+   "description": "Show images in the terminal",
+   "license": "MIT",
+   "source": "https://github.com/atanunq/viu",
+   "origin": "wasmer",
+   "section": "graphics",
+   "abi": "wasi_unstable",
+   "files": [
+    {
+     "path": "bin/viu.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/b988b51ee1a395853fa402f37d69d1b379c4441b3bfca7372876098e13d4e3e9.webc",
+     "sha256": "b988b51ee1a395853fa402f37d69d1b379c4441b3bfca7372876098e13d4e3e9",
+     "size": 3066430,
+     "webc": {
+      "atom": "viu"
+     }
+    }
+   ],
+   "bin": {
+    "viu": {
+     "file": "bin/viu.wasm"
+    }
+   }
+  },
+  {
+   "name": "quickjs",
+   "version": "0.0.3",
+   "description": "QuickJS JavaScript engine (2019 release)",
+   "license": "MIT",
+   "source": "https://github.com/saghul/wasi-lab",
+   "origin": "wasmer",
+   "section": "interpreters",
+   "abi": "wasi_unstable",
+   "files": [
+    {
+     "path": "bin/quickjs.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/430237aeffc912f4cd0981eb03ebad42a71d6b62781bd0c01903cae7d21b5733.webc",
+     "sha256": "430237aeffc912f4cd0981eb03ebad42a71d6b62781bd0c01903cae7d21b5733",
+     "size": 2565315,
+     "webc": {
+      "atom": "quickjs"
+     }
+    }
+   ],
+   "bin": {
+    "quickjs": {
+     "file": "bin/quickjs.wasm"
+    },
+    "qjs": {
+     "file": "bin/quickjs.wasm"
+    }
+   },
+   "wants": [
+    "blocking-stdin"
+   ]
+  },
+  {
+   "name": "util-linux",
+   "version": "0.0.1",
+   "description": "cal from util-linux: print a calendar",
+   "license": "GPL-2.0",
+   "source": "https://github.com/wapm-packages/util-linux",
+   "origin": "wasmer",
+   "section": "utils",
+   "abi": "wasi_unstable",
+   "files": [
+    {
+     "path": "bin/cal.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/3af9902aebda64554afa9b05c8726d3d183ba5c1ac57d902637e3894f3187c98.webc",
+     "sha256": "3af9902aebda64554afa9b05c8726d3d183ba5c1ac57d902637e3894f3187c98",
+     "size": 542738,
+     "webc": {
+      "atom": "cal"
+     }
+    }
+   ],
+   "bin": {
+    "cal": {
+     "file": "bin/cal.wasm"
+    }
+   },
+   "notes": "Only cal: this 2019 build's rev/hexdump/col crash or lose output in this runtime (Shiro has rev and hexdump builtins)."
+  },
+  {
+   "name": "bash",
+   "version": "1.0.25",
+   "description": "GNU Bourne-Again Shell (WASIX build)",
+   "license": "GPL-3.0-or-later",
+   "source": "https://www.gnu.org/software/bash/",
+   "origin": "wasmer",
+   "section": "shells",
+   "abi": "wasix",
+   "files": [
+    {
+     "path": "bin/bash.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/059606d132e2e6bc1afe3b432ee64dcb1b1b059815c8bb213cf3b24798ef21e1.webc",
+     "sha256": "059606d132e2e6bc1afe3b432ee64dcb1b1b059815c8bb213cf3b24798ef21e1",
+     "size": 1870786,
+     "webc": {
+      "atom": "bash"
+     }
+    }
+   ],
+   "bin": {
+    "bash": {
+     "file": "bin/bash.wasm"
+    }
+   },
+   "needs": [
+    "wasix",
+    "processes",
+    "threads"
+   ],
+   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory. Runs every command through fork/exec.",
+   "wants": [
+    "tty",
+    "blocking-stdin"
+   ]
+  },
+  {
+   "name": "dash",
+   "version": "1.0.19",
+   "description": "Debian Almquist shell (WASIX build)",
+   "license": "GPL-2.0-or-later",
+   "source": "http://gondor.apana.org.au/~herbert/dash/",
+   "origin": "wasmer",
+   "section": "shells",
+   "abi": "wasix",
+   "files": [
+    {
+     "path": "bin/dash.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/c81513a53f11a2a23ea305fa008049d15fa1b5f52b696cedbf63554077ea5998.webc",
+     "sha256": "c81513a53f11a2a23ea305fa008049d15fa1b5f52b696cedbf63554077ea5998",
+     "size": 335469,
+     "webc": {
+      "atom": "dash"
+     }
+    }
+   ],
+   "bin": {
+    "dash": {
+     "file": "bin/dash.wasm"
+    }
+   },
+   "needs": [
+    "wasix",
+    "processes",
+    "threads"
+   ],
+   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory.",
+   "wants": [
+    "tty",
+    "blocking-stdin"
+   ]
+  },
+  {
+   "name": "grep",
+   "version": "3.12.0",
+   "description": "GNU grep (WASIX build)",
+   "license": "GPL-3.0-or-later",
+   "source": "https://www.gnu.org/software/grep/",
+   "origin": "wasmer",
+   "section": "utils",
+   "abi": "wasix",
+   "files": [
+    {
+     "path": "bin/grep.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/42a2dd5452990c94a51036cfb5eb9574899beccb5ce8f83f75995f7ac5e0e1ca.webc",
+     "sha256": "42a2dd5452990c94a51036cfb5eb9574899beccb5ce8f83f75995f7ac5e0e1ca",
+     "size": 364536,
+     "webc": {
+      "atom": "grep"
+     }
+    }
+   ],
+   "bin": {
+    "grep": {
+     "file": "bin/grep.wasm"
+    }
+   },
+   "needs": [
+    "wasix",
+    "threads"
+   ],
+   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory."
+  },
+  {
+   "name": "sed",
+   "version": "4.9.0",
+   "description": "GNU sed (WASIX build)",
+   "license": "GPL-3.0-or-later",
+   "source": "https://www.gnu.org/software/sed/",
+   "origin": "wasmer",
+   "section": "utils",
+   "abi": "wasix",
+   "files": [
+    {
+     "path": "bin/sed.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/3fc12256be87f6b8b7810d68d642359a6220f63b39a2ea6ef7a2bb6d79ec1393.webc",
+     "sha256": "3fc12256be87f6b8b7810d68d642359a6220f63b39a2ea6ef7a2bb6d79ec1393",
+     "size": 262523,
+     "webc": {
+      "atom": "sed"
+     }
+    }
+   ],
+   "bin": {
+    "sed": {
+     "file": "bin/sed.wasm"
+    }
+   },
+   "needs": [
+    "wasix",
+    "threads"
+   ],
+   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory.",
+   "wants": [
+    "processes"
+   ]
+  },
+  {
+   "name": "less",
+   "version": "685.0.1",
+   "description": "less pager (WASIX build)",
+   "license": "GPL-3.0-or-later OR BSD-2-Clause",
+   "source": "https://www.greenwoodsoftware.com/less/",
+   "origin": "wasmer",
+   "section": "utils",
+   "abi": "wasix",
+   "files": [
+    {
+     "path": "bin/less.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/6a4d00fa1bc7cedd8f7561d0c539c999c778bf1708a3e3912e616b23a2aefc98.webc",
+     "sha256": "6a4d00fa1bc7cedd8f7561d0c539c999c778bf1708a3e3912e616b23a2aefc98",
+     "size": 466802,
+     "webc": {
+      "atom": "less"
+     }
+    }
+   ],
+   "bin": {
+    "less": {
+     "file": "bin/less.wasm"
+    }
+   },
+   "needs": [
+    "wasix",
+    "threads",
+    "tty",
+    "blocking-stdin"
+   ],
+   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory."
+  },
+  {
+   "name": "ripgrep",
+   "version": "15.2.1",
+   "description": "ripgrep recursive search (WASIX build)",
+   "license": "Unlicense OR MIT",
+   "source": "https://github.com/BurntSushi/ripgrep",
+   "origin": "wasmer",
+   "section": "utils",
+   "abi": "wasix",
+   "files": [
+    {
+     "path": "bin/rg.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/18fcf24a6af0dceaa72601d3c286d179b1338575a9c56bb6a48caa8d6487aea0.webc",
+     "sha256": "18fcf24a6af0dceaa72601d3c286d179b1338575a9c56bb6a48caa8d6487aea0",
+     "size": 3409081,
+     "webc": {
+      "atom": "rg"
+     }
+    }
+   ],
+   "bin": {
+    "rg": {
+     "file": "bin/rg.wasm"
+    }
+   },
+   "needs": [
+    "wasix",
+    "threads"
+   ],
+   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory."
+  },
+  {
+   "name": "curl",
+   "version": "8.4.0",
+   "description": "curl URL transfer tool (WASIX build, OpenSSL)",
+   "license": "curl",
+   "source": "https://curl.se/",
+   "origin": "wasmer",
+   "section": "net",
+   "abi": "wasix",
+   "files": [
+    {
+     "path": "bin/curl.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/ae64ae867b8272abac2d660c374220b3fae13b5e4299d25aae05e2b89607ac02.webc",
+     "sha256": "ae64ae867b8272abac2d660c374220b3fae13b5e4299d25aae05e2b89607ac02",
+     "size": 4487393,
+     "webc": {
+      "atom": "curl"
+     }
+    },
+    {
+     "path": "share/openssl",
+     "url": "https://cdn.wasmer.io/webcimages/ae64ae867b8272abac2d660c374220b3fae13b5e4299d25aae05e2b89607ac02.webc",
+     "sha256": "ae64ae867b8272abac2d660c374220b3fae13b5e4299d25aae05e2b89607ac02",
+     "size": 4487393,
+     "webc": {
+      "volume": "atom",
+      "dir": "/openssl"
+     }
+    }
+   ],
+   "bin": {
+    "curl": {
+     "file": "bin/curl.wasm"
+    }
+   },
+   "needs": [
+    "wasix",
+    "threads",
+    "sockets"
+   ],
+   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory. Needs real TCP through the relay."
+  },
+  {
+   "name": "quickjs-ng",
+   "version": "0.15.1",
+   "description": "QuickJS-ng JavaScript engine (WASIX build)",
+   "license": "MIT",
+   "source": "https://github.com/quickjs-ng/quickjs",
+   "origin": "wasmer",
+   "section": "interpreters",
+   "abi": "wasix",
+   "files": [
+    {
+     "path": "bin/qjs.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/0795ae56bbe46ac61429c42ade4f8ad69b393ff6b88f372f8298cff233d03d2c.webc",
+     "sha256": "0795ae56bbe46ac61429c42ade4f8ad69b393ff6b88f372f8298cff233d03d2c",
+     "size": 2095745,
+     "webc": {
+      "atom": "qjs"
+     }
+    }
+   ],
+   "bin": {
+    "qjs-ng": {
+     "file": "bin/qjs.wasm"
+    }
+   },
+   "needs": [
+    "wasix",
+    "threads"
+   ],
+   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory.",
+   "wants": [
+    "blocking-stdin"
+   ]
+  },
+  {
+   "name": "php",
+   "version": "8.3.403",
+   "description": "PHP 8.3 interpreter (WASIX build)",
+   "license": "PHP-3.01",
+   "source": "https://www.php.net/",
+   "origin": "wasmer",
+   "section": "interpreters",
+   "abi": "wasix",
+   "files": [
+    {
+     "path": "bin/php.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/da8d3fcfcf02d2401787532c4af3fdaf5b680b05144a9591ca70b97131ee2f32.webc",
+     "sha256": "da8d3fcfcf02d2401787532c4af3fdaf5b680b05144a9591ca70b97131ee2f32",
+     "size": 85700002,
+     "webc": {
+      "atom": "php"
+     }
+    }
+   ],
+   "bin": {
+    "php": {
+     "file": "bin/php.wasm"
+    }
+   },
+   "needs": [
+    "wasix",
+    "threads",
+    "sockets"
+   ],
+   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory. 86 MB download."
+  },
+  {
+   "name": "python",
+   "version": "3.13.20",
+   "description": "CPython 3.13 with pip (WASIX build)",
+   "license": "Python-2.0",
+   "source": "https://www.python.org/",
+   "origin": "wasmer",
+   "section": "interpreters",
+   "abi": "wasix",
+   "files": [
+    {
+     "path": "bin/python.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/a9fa8202f1bf6a4eca8d31ee5f2b1970c8f45af5c5520cc954d28a133333d8e7.webc",
+     "sha256": "a9fa8202f1bf6a4eca8d31ee5f2b1970c8f45af5c5520cc954d28a133333d8e7",
+     "size": 61744083,
+     "webc": {
+      "atom": "python"
+     }
+    }
+   ],
+   "bin": {
+    "python3.13": {
+     "file": "bin/python.wasm"
+    }
+   },
+   "needs": [
+    "wasix",
+    "threads",
+    "sync-fs"
+   ],
+   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory. The standard library is a volume read on demand. Shiro's `python` builtin (Pyodide) covers most uses meanwhile."
+  },
+  {
+   "name": "clang",
+   "version": "16.0.0",
+   "description": "clang 16, lld and llvm-ar/nm with a wasm32-wasi sysroot (WASIX build)",
+   "license": "Apache-2.0 WITH LLVM-exception",
+   "source": "https://github.com/llvm/llvm-project",
+   "origin": "wasmer",
+   "section": "devel",
+   "abi": "wasix",
+   "files": [
+    {
+     "path": "bin/clang-16.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/c127b7bfc0041d02c94045f40be7fb4b3eeb98cede25fad96261b7b90a82f405.webc",
+     "sha256": "c127b7bfc0041d02c94045f40be7fb4b3eeb98cede25fad96261b7b90a82f405",
+     "size": 110713421,
+     "webc": {
+      "atom": "clang-16"
+     }
+    },
+    {
+     "path": "bin/clang-16-slim.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/c127b7bfc0041d02c94045f40be7fb4b3eeb98cede25fad96261b7b90a82f405.webc",
+     "sha256": "c127b7bfc0041d02c94045f40be7fb4b3eeb98cede25fad96261b7b90a82f405",
+     "size": 110713421,
+     "webc": {
+      "atom": "clang-16-slim"
+     }
+    },
+    {
+     "path": "bin/lld.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/c127b7bfc0041d02c94045f40be7fb4b3eeb98cede25fad96261b7b90a82f405.webc",
+     "sha256": "c127b7bfc0041d02c94045f40be7fb4b3eeb98cede25fad96261b7b90a82f405",
+     "size": 110713421,
+     "webc": {
+      "atom": "lld"
+     }
+    },
+    {
+     "path": "bin/llvm-ar.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/c127b7bfc0041d02c94045f40be7fb4b3eeb98cede25fad96261b7b90a82f405.webc",
+     "sha256": "c127b7bfc0041d02c94045f40be7fb4b3eeb98cede25fad96261b7b90a82f405",
+     "size": 110713421,
+     "webc": {
+      "atom": "llvm-ar"
+     }
+    },
+    {
+     "path": "bin/llvm-nm.wasm",
+     "url": "https://cdn.wasmer.io/webcimages/c127b7bfc0041d02c94045f40be7fb4b3eeb98cede25fad96261b7b90a82f405.webc",
+     "sha256": "c127b7bfc0041d02c94045f40be7fb4b3eeb98cede25fad96261b7b90a82f405",
+     "size": 110713421,
+     "webc": {
+      "atom": "llvm-nm"
+     }
+    }
+   ],
+   "bin": {
+    "clang-16": {
+     "file": "bin/clang-16.wasm"
+    },
+    "clang": {
+     "file": "bin/clang-16-slim.wasm"
+    },
+    "wasm-ld": {
+     "file": "bin/lld.wasm"
+    },
+    "lld": {
+     "file": "bin/lld.wasm"
+    },
+    "llvm-ar": {
+     "file": "bin/llvm-ar.wasm"
+    },
+    "llvm-nm": {
+     "file": "bin/llvm-nm.wasm"
+    }
+   },
+   "needs": [
+    "wasix",
+    "threads",
+    "processes",
+    "sync-fs"
+   ],
+   "notes": "WASIX build: imports wasix_32v1 and a shared env.memory. 111 MB download; the driver spawns lld."
+  }
+ ]
+}

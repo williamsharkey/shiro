@@ -16,7 +16,7 @@ Do not treat the dashboard or wrappers as the product. The product is the browse
 - `src/terminal.ts`: xterm integration and input handling.
 - `src/commands/*`: one command per file or small group.
 - `src/node-compat/*`: Node.js runtime shims used by `node` and Claude Code.
-- `src/wasi-runtime.ts` + `src/wasi-packages.ts`: Tier 2 WASI support.
+- `src/wasi-runtime.ts` + `src/pkg-manager.ts`: Tier 2 WASI support and the package manager (`src/wasi-packages.ts` is the older single-binary API on top).
 - `src/x86/*`: Tier 3 x86-64 emulator.
 - `src/commands/seed.ts`, `src/commands/hc.ts`, `src/seed-runtime-context.ts`: seeded sessions, host-page access, runtime orientation.
 - `src/claude-config.ts`, `src/node-compat/preload.ts`, `src/node-compat/process.ts`: Claude bootstrap, auth persistence, startup defaults.
@@ -98,6 +98,13 @@ export const myCmd: Command = {
 - When a script exits it restores `fetch`/`setTimeout`/`clearTimeout` only if the global is still the one it installed (`restoreGlobals` in `execution.ts`). Restoring blindly let `~/.profile`-launched autostart scripts clobber Claude's Node-style `setTimeout`, and Claude crashed with `.unref is not a function` on the first message.
 - The terminal skips its startup prompt when `~/.profile` launched a command through `injectInput`; that command prints the prompt when it finishes.
 - The module transform still assigns global `setTimeout`/`setInterval` wrappers for some bundles without restoring them. It's harmless so far, but it has the same problem.
+
+## Packages
+
+- `pkg` / `apt` / `apt-get` (`src/commands/pkg.ts`, `src/pkg-manager.ts`) install prebuilt WASM programs from `src/pkg-index.json`: sha256-checked downloads into `/usr/lib/pkg/<name>/`, symlinks in `/usr/bin`, state in `/var/lib/pkg/status.json`. Details, the index format and the package status table are in [docs/PACKAGES.md](docs/PACKAGES.md).
+- The shell runs anything resolving into `/usr/lib/pkg/` through `runPackageBinary`; an installed package's command wins over a builtin of the same name unless its bin entry says `"shadow": false`.
+- Packages built here come from `scripts/pkgbuild/<name>.sh` (wasi-sdk, pinned sources) and live in `public/pkg/`; registry packages are Wasmer WebC containers read by `src/webc.ts`.
+- Packages that need kernel features (`needs`: wasix, processes, threads, sockets, ...) stay gated until `globalThis.__shiroKernel.features` lists them.
 
 ## Build, Test, Deploy
 

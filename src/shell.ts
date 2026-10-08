@@ -1,7 +1,8 @@
 import { FileSystem } from './filesystem';
 import { CommandRegistry, CommandContext } from './commands/index';
 import type { ShiroTerminal } from './terminal';
-import { isAvailableAsPackage, getCompiledModule } from './wasi-packages';
+import { getCompiledModule } from './wasi-packages';
+import { builtinIndex, findEntry, packageStatus, packageShadows, loadPackageShadows, packageOfPath, runPackageBinary, PKG_BIN_DIR } from './pkg-manager';
 
 // Lazy-load the WASI runtime (~960 lines) only when WASM execution is needed
 let _wasiRuntime: typeof import('./wasi-runtime') | null = null;
@@ -130,6 +131,8 @@ export class Shell {
   completionSpecs: Map<string, CompletionSpec> = new Map();
   /** Builtins disabled via `enable -n` */
   disabledBuiltins: Set<string> = new Set();
+  /** `builtin NAME` runs Shiro's NAME even when a package provides NAME */
+  private pkgShadowBypass: string | null = null;
   /** File descriptors for `read -u FD` and `exec N< file` */
   fileDescriptors: Map<number, { content: string; offset: number }> = new Map();
   /** Coproc state: { name, pid, output } */
@@ -146,6 +149,8 @@ export class Shell {
   constructor(fs: FileSystem, commands: CommandRegistry) {
     this.fs = fs;
     this.commands = commands;
+    // Which builtins installed packages replace (read once, kept current by pkg)
+    loadPackageShadows(fs).catch(() => {});
     this.env = {
       HOME: '/home/user',
       USER: 'user',
@@ -1819,11 +1824,17 @@ export class Shell {
         if (!_builtinDisabled && effectiveCmdName === 'builtin') {
           if (cmdArgs.length > 0) {
             const builtinCmd = quoteArgsForShell(cmdArgs);
-            // Temporarily remove function override
+            // Temporarily remove function override (and an installed package's shadowing)
             const savedFn = this.functions[cmdArgs[0]];
             delete this.functions[cmdArgs[0]];
+            const savedBypass = this.pkgShadowBypass;
+            this.pkgShadowBypass = cmdArgs[0];
             this.injectedStdin = nestedStdin;
-            exitCode = await this.execute(builtinCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
+            try {
+              exitCode = await this.execute(builtinCmd, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
+            } finally {
+              this.pkgShadowBypass = savedBypass;
+            }
             if (savedFn) this.functions[cmdArgs[0]] = savedFn;
           }
           this.lastExitCode = exitCode;
@@ -2199,7 +2210,12 @@ export class Shell {
           ctx.stderr = c.err.replace(/\r\n/g, '\n');
         }
 
-        const cmd = this.commands.get(effectiveCmdName);
+        // A package installed with `pkg install` provides the real program in
+        // place of a builtin of the same name (lua, sqlite3, jq, ...)
+        const pkgShadowed = !_builtinDisabled && this.pkgShadowBypass !== effectiveCmdName &&
+          !!this.commands.get(effectiveCmdName) &&
+          packageShadows(this.fs).has(effectiveCmdName);
+        const cmd = pkgShadowed ? undefined : this.commands.get(effectiveCmdName);
         if (cmd) {
           try {
             exitCode = await cmd.exec(ctx);
@@ -2209,7 +2225,9 @@ export class Shell {
           }
         } else {
           // Try to find executable in PATH
-          const executable = await this.findExecutableInPath(effectiveCmdName);
+          const executable = pkgShadowed
+            ? `${PKG_BIN_DIR}/${effectiveCmdName}`
+            : await this.findExecutableInPath(effectiveCmdName);
           if (executable) {
             try {
               exitCode = await this.executeScript(executable, cmdArgs, ctx, writeStdout, stderrWriter);
@@ -2218,41 +2236,16 @@ export class Shell {
               exitCode = 1;
             }
           } else {
-            // Check if a WASM package is available for this command
-            const wasmPkg = isAvailableAsPackage(effectiveCmdName);
-            if (wasmPkg) {
-              try {
-                stderrWriter(`shiro: '${effectiveCmdName}' not installed. Installing ${wasmPkg.name}...\r\n`);
-                const wasmModule = await getCompiledModule(wasmPkg.name, (msg) => {
-                  stderrWriter(`  ${msg}\r\n`);
-                });
-                const { WasiRT, WasiExit } = await loadWasiRuntime();
-                const config = {
-                  fs: this.fs,
-                  cwd: this.cwd,
-                  args: [wasmPkg.name, ...cmdArgs],
-                  env: { ...this.env },
-                  stdin: ctx.stdin || '',
-                  onStdout: (text: string) => { ctx.stdout += text; },
-                  onStderr: (text: string) => { ctx.stderr += text; },
-                  preopens: { '/': '/', '.': this.cwd },
-                };
-                const wasi = new WasiRT(config);
-                await wasi.preloadTree(this.cwd, 3, 100);
-                exitCode = await wasi.run(wasmModule);
-                // Write PATH stubs so future runs skip auto-install
-                await this.writeWasiPkgStubs(wasmPkg.name, wasmPkg.aliases);
-              } catch (e: any) {
-                const { WasiExit } = await loadWasiRuntime();
-                if (e instanceof WasiExit) {
-                  exitCode = e.code;
-                  // Still write stubs on non-zero exit — package is installed
-                  await this.writeWasiPkgStubs(wasmPkg.name, wasmPkg.aliases);
-                } else {
-                  stderrWriter(`shiro: failed to run ${wasmPkg.name}: ${e.message}\r\n`);
-                  exitCode = 1;
-                }
-              }
+            // Like Debian's command-not-found: name the package that has it
+            const provider = findEntry(builtinIndex(), effectiveCmdName);
+            if (provider && Object.prototype.hasOwnProperty.call(provider.bin, effectiveCmdName)) {
+              stderrWriter(`shiro: command not found: ${effectiveCmdName}\r\n`);
+              stderrWriter(`  it can be installed with: pkg install ${provider.name}` +
+                (packageStatus(provider) === 'blocked' ? ` (needs kernel support Shiro doesn't have yet)` : '') + '\r\n');
+              exitCode = 127;
+              this.lastExitCode = exitCode;
+              this.env['?'] = String(exitCode);
+              break;
             } else {
               stderrWriter(`shiro: command not found: ${effectiveCmdName}\r\n`);
               exitCode = 127;
@@ -4881,6 +4874,20 @@ export class Shell {
     writeStdout: (s: string) => void,
     writeStderr: (s: string) => void,
   ): Promise<number> {
+    // Installed packages (/usr/bin/<cmd> -> /usr/lib/pkg/<name>/...) run with
+    // the arguments and preloads their package records
+    try {
+      const real = await this.fs.realpath(filePath);
+      if (packageOfPath(real)) {
+        return await runPackageBinary(real, filePath.split('/').pop() || filePath, args, {
+          fs: this.fs, cwd: this.cwd, env: this.env, stdin: ctx.stdin || '',
+          stdinIsTTY: !ctx.stdin, stdoutIsTTY: ctx.stdoutIsTTY !== false,
+          onStdout: (text) => { ctx.stdout += text; },
+          onStderr: (text) => { ctx.stderr += text; },
+        });
+      }
+    } catch { /* fall through to the generic path */ }
+
     // Resolve symlinks
     let resolvedPath = filePath;
     try {
@@ -5035,24 +5042,6 @@ export class Shell {
 
     // Default to shell script
     return this.executeShellScript(content, args, ctx, writeStdout, writeStderr);
-  }
-
-  /**
-   * Write #!wasi-pkg stubs to /usr/local/bin for a package and its aliases.
-   */
-  private async writeWasiPkgStubs(pkgName: string, aliases?: string[]): Promise<void> {
-    try {
-      for (const dir of ['/usr', '/usr/local', '/usr/local/bin']) {
-        try { await this.fs.stat(dir); } catch { await this.fs.mkdir(dir); }
-      }
-      const stubContent = `#!wasi-pkg ${pkgName}\n`;
-      const names = [pkgName, ...(aliases || [])];
-      for (const name of names) {
-        await this.fs.writeFile(`/usr/local/bin/${name}`, stubContent);
-      }
-    } catch {
-      // Non-fatal — auto-install still works without stubs
-    }
   }
 
   /**

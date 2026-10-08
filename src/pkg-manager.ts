@@ -1,0 +1,578 @@
+/**
+ * pkg-manager.ts — Shiro's package manager (`pkg`, `apt`, `apt-get`)
+ *
+ * Packages are prebuilt WebAssembly programs described by an index
+ * (src/pkg-index.json, plus any lists fetched by `pkg update`). Installing a
+ * package downloads its files, checks each download's sha256, unpacks WebC
+ * containers, and writes:
+ *
+ *   /usr/lib/pkg/<name>/...        package files (bin/*.wasm, share/...)
+ *   /usr/bin/<cmd> -> ...          symlinks for every binary, so PATH and
+ *                                  `which` find them like any other program
+ *   /var/lib/pkg/status.json       what is installed (dpkg's status file)
+ *
+ * The shell runs anything under /usr/lib/pkg/ through `runPackageBinary`,
+ * which picks the WASI runtime and the arguments recorded for that binary.
+ * Packages that need kernel features the runtime lacks (WASIX, child
+ * processes, threads, sockets) are listed but refuse to install or run until
+ * a kernel advertises them (globalThis.__shiroKernel.features).
+ */
+
+import type { FileSystem } from './filesystem';
+import { isWebc, parseWebc, type WebcPackage } from './webc';
+import builtinIndexJson from './pkg-index.json';
+
+// ── Index format ─────────────────────────────────────────────────────
+
+/** Kernel features a package can depend on (see docs/UNIX_COMPAT.md). */
+export type KernelFeature =
+  | 'wasix'           // the WASIX syscall set (wasix_32v1 imports)
+  | 'processes'       // fork/exec/spawn, pipes between processes
+  | 'threads'         // shared memory + wasi-threads / futex
+  | 'sockets'         // TCP through the relay
+  | 'blocking-stdin'  // read() that waits for typed input (REPLs, prompts)
+  | 'tty'             // termios / raw mode for full-screen programs
+  | 'sync-fs';        // on-demand synchronous file access (large trees)
+
+const KERNEL_FEATURES: KernelFeature[] = ['wasix', 'processes', 'threads', 'sockets', 'blocking-stdin', 'tty', 'sync-fs'];
+
+export type PkgAbi = 'wasi_snapshot_preview1' | 'wasi_unstable' | 'wasix';
+
+export interface PkgFile {
+  /** Install path relative to /usr/lib/pkg/<name>/ (a directory for webc volume extracts) */
+  path: string;
+  /** https URL, or a path ("/pkg/...") served by the Shiro mirror */
+  url: string;
+  /** sha256 of the downloaded bytes (hex) */
+  sha256: string;
+  /** Download size in bytes */
+  size: number;
+  /** When `url` is a WebC container: the atom to take, or a volume subtree to copy */
+  webc?: { atom?: string; volume?: string; dir?: string };
+}
+
+export interface PkgBin {
+  /** File (relative to the package root) this command runs */
+  file: string;
+  /** Arguments inserted after argv[0] (e.g. a data directory) */
+  args?: string[];
+  /** false: don't take precedence over a Shiro builtin of the same name */
+  shadow?: boolean;
+}
+
+export interface PkgEntry {
+  name: string;
+  version: string;
+  description: string;
+  /** SPDX expression, or "unknown" when upstream metadata doesn't say */
+  license: string;
+  /** Upstream source (tarball or repository) */
+  source: string;
+  homepage?: string;
+  /** Where the binary comes from: "shiro" (scripts/pkgbuild recipe) or a registry */
+  origin: 'shiro' | 'wasmer';
+  /** Build recipe in this repo, for origin "shiro" */
+  recipe?: string;
+  section: string;
+  abi: PkgAbi;
+  deps?: string[];
+  files: PkgFile[];
+  bin: Record<string, PkgBin>;
+  /** Package directories preloaded for every run (WASI here reads files up front) */
+  preload?: string[];
+  /** Kernel features required to work at all (package is blocked without them) */
+  needs?: KernelFeature[];
+  /** Kernel features some modes need (e.g. an interactive REPL); batch use works */
+  wants?: KernelFeature[];
+  notes?: string;
+}
+
+export interface PkgIndex {
+  format: 1;
+  packages: PkgEntry[];
+}
+
+export interface InstalledPkg {
+  name: string;
+  version: string;
+  installedAt: number;
+  /** Bytes written under /usr/lib/pkg/<name> */
+  size: number;
+  /** Commands linked into /usr/bin */
+  bins: string[];
+  /** The index entry it was installed from (the runner reads bin args from it) */
+  entry: PkgEntry;
+}
+
+export const PKG_ROOT = '/usr/lib/pkg';
+export const PKG_BIN_DIR = '/usr/bin';
+export const PKG_STATE_DIR = '/var/lib/pkg';
+export const PKG_STATUS = `${PKG_STATE_DIR}/status.json`;
+export const PKG_LISTS_DIR = `${PKG_STATE_DIR}/lists`;
+export const PKG_SOURCES = '/etc/pkg/sources.list';
+/** Serves the "/pkg/..." URLs when the page isn't on a Shiro origin */
+export const DEFAULT_MIRROR = 'https://shiro.computer';
+
+const NAME_RE = /^[a-z0-9][a-z0-9.+_-]*$/;
+const SHA_RE = /^[0-9a-f]{64}$/;
+
+/** Validate an index document; throws an Error naming the first problem. */
+export function parseIndex(doc: unknown): PkgIndex {
+  const fail = (msg: string): never => { throw new Error(`invalid package index: ${msg}`); };
+  if (!doc || typeof doc !== 'object') fail('not an object');
+  const d = doc as any;
+  if (d.format !== 1) fail(`unsupported format ${JSON.stringify(d.format)}`);
+  if (!Array.isArray(d.packages)) fail('packages is not an array');
+  const seen = new Set<string>();
+  for (const p of d.packages) {
+    const where = `package ${JSON.stringify(p?.name)}`;
+    if (typeof p?.name !== 'string' || !NAME_RE.test(p.name)) fail(`${where}: bad name`);
+    if (seen.has(p.name)) fail(`${where}: duplicate`);
+    seen.add(p.name);
+    for (const k of ['version', 'description', 'license', 'source', 'section'] as const) {
+      if (typeof p[k] !== 'string' || !p[k]) fail(`${where}: missing ${k}`);
+    }
+    if (!['wasi_snapshot_preview1', 'wasi_unstable', 'wasix'].includes(p.abi)) fail(`${where}: bad abi ${p.abi}`);
+    if (!['shiro', 'wasmer'].includes(p.origin)) fail(`${where}: bad origin ${p.origin}`);
+    if (!Array.isArray(p.files) || p.files.length === 0) fail(`${where}: no files`);
+    const paths = new Set<string>();
+    for (const f of p.files) {
+      if (typeof f?.path !== 'string' || !safeRelPath(f.path)) fail(`${where}: bad file path ${JSON.stringify(f?.path)}`);
+      if (typeof f.url !== 'string' || !(/^https:\/\//.test(f.url) || f.url.startsWith('/'))) fail(`${where}: bad url for ${f.path}`);
+      if (typeof f.sha256 !== 'string' || !SHA_RE.test(f.sha256)) fail(`${where}: bad sha256 for ${f.path}`);
+      if (typeof f.size !== 'number' || f.size < 0) fail(`${where}: bad size for ${f.path}`);
+      if (f.webc && !f.webc.atom && !f.webc.volume) fail(`${where}: webc file ${f.path} names no atom or volume`);
+      paths.add(f.path);
+    }
+    if (!p.bin || typeof p.bin !== 'object') fail(`${where}: missing bin`);
+    for (const [cmd, b] of Object.entries<any>(p.bin)) {
+      if (!NAME_RE.test(cmd) && !/^[a-z0-9][a-z0-9._+\[-]*$/.test(cmd)) fail(`${where}: bad command name ${cmd}`);
+      if (typeof b?.file !== 'string' || !paths.has(b.file)) fail(`${where}: command ${cmd} runs unknown file ${b?.file}`);
+      if (b.args !== undefined && (!Array.isArray(b.args) || b.args.some((a: unknown) => typeof a !== 'string'))) fail(`${where}: bad args for ${cmd}`);
+    }
+    for (const k of ['needs', 'wants'] as const) {
+      if (p[k] === undefined) continue;
+      if (!Array.isArray(p[k]) || p[k].some((x: string) => !KERNEL_FEATURES.includes(x as KernelFeature))) fail(`${where}: bad ${k}`);
+    }
+    if (p.deps !== undefined && (!Array.isArray(p.deps) || p.deps.some((x: unknown) => typeof x !== 'string'))) fail(`${where}: bad deps`);
+  }
+  for (const p of d.packages) for (const dep of p.deps || []) {
+    if (!seen.has(dep)) fail(`package ${JSON.stringify(p.name)}: unknown dependency ${dep}`);
+  }
+  return d as PkgIndex;
+}
+
+function safeRelPath(p: string): boolean {
+  return !!p && !p.startsWith('/') && !p.split('/').some(s => s === '' || s === '.' || s === '..');
+}
+
+let builtinIndexCache: PkgIndex | null = null;
+
+/** The index compiled into Shiro (src/pkg-index.json). */
+export function builtinIndex(): PkgIndex {
+  return builtinIndexCache ||= parseIndex(builtinIndexJson);
+}
+
+/** Built-in index merged with lists fetched by `pkg update` (later lists win). */
+export async function loadIndex(fs: FileSystem): Promise<PkgIndex> {
+  const byName = new Map(builtinIndex().packages.map(p => [p.name, p]));
+  let lists: string[] = [];
+  try { lists = (await fs.readdir(PKG_LISTS_DIR)).filter(n => n.endsWith('.json')).sort(); } catch { /* none */ }
+  for (const file of lists) {
+    try {
+      const idx = parseIndex(JSON.parse(await fs.readFile(`${PKG_LISTS_DIR}/${file}`, 'utf8') as string));
+      for (const p of idx.packages) byName.set(p.name, p);
+    } catch { /* a bad list is reported by `pkg update`, skipped here */ }
+  }
+  return { format: 1, packages: [...byName.values()] };
+}
+
+/** Package by name, or the package providing a command of that name. */
+export function findEntry(index: PkgIndex, name: string): PkgEntry | undefined {
+  return index.packages.find(p => p.name === name) ||
+    index.packages.find(p => Object.prototype.hasOwnProperty.call(p.bin, name));
+}
+
+export function searchIndex(index: PkgIndex, query: string): PkgEntry[] {
+  const q = query.toLowerCase();
+  return index.packages.filter(p =>
+    p.name.includes(q) || p.description.toLowerCase().includes(q) || p.section.includes(q) ||
+    Object.keys(p.bin).some(b => b.includes(q)));
+}
+
+// ── Kernel capability gate ───────────────────────────────────────────
+
+/** Features the running kernel provides. The unix/wasi runtime registers them. */
+export function kernelFeatures(): Set<string> {
+  const k = (globalThis as any).__shiroKernel;
+  return new Set(Array.isArray(k?.features) ? k.features : []);
+}
+
+/** Hard requirements the current kernel doesn't meet. */
+export function missingFeatures(entry: PkgEntry, features: KernelFeature[] = entry.needs || []): KernelFeature[] {
+  const have = kernelFeatures();
+  return features.filter(f => !have.has(f));
+}
+
+export function packageStatus(entry: PkgEntry): 'ok' | 'partial' | 'blocked' {
+  if (missingFeatures(entry).length) return 'blocked';
+  if (missingFeatures(entry, entry.wants || []).length) return 'partial';
+  return 'ok';
+}
+
+// ── Downloads ────────────────────────────────────────────────────────
+
+export async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', bytes as BufferSource);
+  return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** Resolve "/pkg/..." against the page origin, or the public mirror elsewhere. */
+export function resolveUrl(url: string, env?: Record<string, string>): string {
+  if (/^https?:\/\//.test(url)) return url;
+  const origin = typeof location !== 'undefined' ? location.origin : undefined;
+  const mirror = env?.SHIRO_PKG_MIRROR || (origin && /^https?:\/\//.test(origin) ? origin : DEFAULT_MIRROR);
+  return mirror.replace(/\/$/, '') + url;
+}
+
+export interface PkgOptions {
+  /** Progress lines (no trailing newline) */
+  log?: (line: string) => void;
+  /** Install even if the kernel lacks features the package needs */
+  force?: boolean;
+  /** Reinstall packages that are already installed */
+  reinstall?: boolean;
+  env?: Record<string, string>;
+}
+
+async function download(url: string, sha256: string, opts: PkgOptions): Promise<Uint8Array> {
+  const full = resolveUrl(url, opts.env);
+  const resp = await fetch(full);
+  if (!resp.ok) throw new Error(`download failed: ${full}: ${resp.status} ${resp.statusText || ''}`.trim());
+  const bytes = new Uint8Array(await resp.arrayBuffer());
+  const got = await sha256Hex(bytes);
+  if (got !== sha256) {
+    throw new Error(`sha256 mismatch for ${full}\n  expected ${sha256}\n  got      ${got}`);
+  }
+  return bytes;
+}
+
+// ── Installed state ──────────────────────────────────────────────────
+
+export async function readStatus(fs: FileSystem): Promise<Record<string, InstalledPkg>> {
+  try {
+    return JSON.parse(await fs.readFile(PKG_STATUS, 'utf8') as string);
+  } catch {
+    return {};
+  }
+}
+
+async function writeStatus(fs: FileSystem, status: Record<string, InstalledPkg>): Promise<void> {
+  await fs.mkdir(PKG_STATE_DIR, { recursive: true });
+  await fs.writeFile(PKG_STATUS, JSON.stringify(status, null, 1) + '\n');
+  shadowSets.set(fs, shadowsOf(status));
+}
+
+/** Install order for `names` and their dependencies (dependencies first). */
+export function resolveDeps(index: PkgIndex, names: string[]): PkgEntry[] {
+  const order: PkgEntry[] = [];
+  const state = new Map<string, 'visiting' | 'done'>();
+  const visit = (name: string, from?: string) => {
+    const entry = findEntry(index, name);
+    if (!entry) throw new Error(from ? `${from} depends on unknown package ${name}` : `unable to locate package ${name}`);
+    const s = state.get(entry.name);
+    if (s === 'done') return;
+    if (s === 'visiting') throw new Error(`dependency cycle through ${entry.name}`);
+    state.set(entry.name, 'visiting');
+    for (const dep of entry.deps || []) visit(dep, entry.name);
+    state.set(entry.name, 'done');
+    order.push(entry);
+  };
+  for (const n of names) visit(n);
+  return order;
+}
+
+/** Install packages (and dependencies). Returns the names actually installed. */
+export async function installPackages(fs: FileSystem, index: PkgIndex, names: string[], opts: PkgOptions = {}): Promise<string[]> {
+  const log = opts.log || (() => {});
+  const plan = resolveDeps(index, names);
+  const status = await readStatus(fs);
+  const todo = plan.filter(p => opts.reinstall || status[p.name]?.version !== p.version);
+  for (const p of plan) {
+    if (!todo.includes(p)) log(`${p.name} is already the newest version (${p.version}).`);
+  }
+  if (!opts.force) {
+    for (const p of todo) {
+      const missing = missingFeatures(p);
+      if (missing.length) {
+        throw new Error(`${p.name} needs kernel support Shiro doesn't have yet: ${missing.join(', ')}` +
+          (p.notes ? `\n  ${p.notes}` : '') + `\n  (install anyway with --force)`);
+      }
+    }
+  }
+  for (const p of todo) {
+    if (status[p.name]) await removeFiles(fs, status[p.name]);
+    status[p.name] = await installOne(fs, p, opts);
+    await writeStatus(fs, status);
+  }
+  return todo.map(p => p.name);
+}
+
+async function installOne(fs: FileSystem, entry: PkgEntry, opts: PkgOptions): Promise<InstalledPkg> {
+  const log = opts.log || (() => {});
+  const root = `${PKG_ROOT}/${entry.name}`;
+  const fetched = new Map<string, Uint8Array>();
+  const containers = new Map<string, WebcPackage>();
+  let size = 0;
+
+  log(`Get ${entry.name} ${entry.version} (${formatSize(downloadSize(entry))})`);
+  for (const f of entry.files) {
+    let bytes = fetched.get(f.sha256);
+    if (!bytes) {
+      bytes = await download(f.url, f.sha256, opts);
+      fetched.set(f.sha256, bytes);
+    }
+    const dest = `${root}/${f.path}`;
+    if (!f.webc) {
+      await writeFileP(fs, dest, bytes);
+      size += bytes.length;
+      continue;
+    }
+    let pkg = containers.get(f.sha256);
+    if (!pkg) {
+      if (!isWebc(bytes)) throw new Error(`${f.url} is not a WebC container`);
+      pkg = parseWebc(bytes);
+      containers.set(f.sha256, pkg);
+    }
+    if (f.webc.atom) {
+      const atom = pkg.atoms.get(f.webc.atom);
+      if (!atom) throw new Error(`${entry.name}: no atom ${f.webc.atom} in ${f.url}`);
+      await writeFileP(fs, dest, atom);
+      size += atom.length;
+    } else {
+      const vol = pkg.volumes.get(f.webc.volume!);
+      if (!vol) throw new Error(`${entry.name}: no volume ${f.webc.volume} in ${f.url}`);
+      const prefix = (f.webc.dir || '/').replace(/\/$/, '');
+      await fs.mkdir(dest, { recursive: true });
+      for (const file of vol.files) {
+        if (prefix && !file.path.startsWith(prefix + '/')) continue;
+        await writeFileP(fs, dest + file.path.slice(prefix.length), file.data);
+        size += file.data.length;
+      }
+    }
+  }
+
+  await fs.mkdir(PKG_BIN_DIR, { recursive: true });
+  const bins: string[] = [];
+  for (const [cmd, b] of Object.entries(entry.bin)) {
+    const link = `${PKG_BIN_DIR}/${cmd}`;
+    const existing = await lstatSafe(fs, link);
+    if (existing && existing.type !== 'symlink') {
+      log(`warning: not replacing ${link} (a regular file)`);
+      continue;
+    }
+    if (existing && !(await fs.readlink(link)).startsWith(`${PKG_ROOT}/${entry.name}/`)) {
+      log(`warning: ${link} belonged to another package; now ${entry.name}`);
+    }
+    await fs.symlink(`${root}/${b.file}`, link);
+    bins.push(cmd);
+    // Builtins get a /usr/local/bin wrapper at boot that would win the PATH
+    // search; drop it while a package provides the real program.
+    if (b.shadow !== false) await removeBuiltinShim(fs, cmd);
+  }
+  log(`Setting up ${entry.name} (${entry.version}) ...`);
+  return { name: entry.name, version: entry.version, installedAt: Date.now(), size, bins, entry };
+}
+
+async function removeBuiltinShim(fs: FileSystem, cmd: string): Promise<void> {
+  const shim = `/usr/local/bin/${cmd}`;
+  try {
+    const text = await fs.readFile(shim, 'utf8') as string;
+    if (text === `#!/bin/sh\n${cmd} "$@"\n`) await fs.unlink(shim);
+  } catch { /* none */ }
+}
+
+async function lstatSafe(fs: FileSystem, path: string) {
+  try { return await fs.lstat(path); } catch { return null; }
+}
+
+async function writeFileP(fs: FileSystem, path: string, data: Uint8Array): Promise<void> {
+  await fs.mkdir(path.substring(0, path.lastIndexOf('/')) || '/', { recursive: true });
+  await fs.writeFile(path, data, { mode: path.endsWith('.wasm') ? 0o755 : 0o644 });
+}
+
+async function removeFiles(fs: FileSystem, pkg: InstalledPkg): Promise<void> {
+  for (const cmd of pkg.bins) {
+    const link = `${PKG_BIN_DIR}/${cmd}`;
+    try {
+      if ((await fs.readlink(link)).startsWith(`${PKG_ROOT}/${pkg.name}/`)) await fs.unlink(link);
+    } catch { /* gone or not ours */ }
+  }
+  try { await fs.rm(`${PKG_ROOT}/${pkg.name}`, { recursive: true }); } catch { /* gone */ }
+  moduleCache.forEach((_, k) => { if (k.startsWith(`${PKG_ROOT}/${pkg.name}/`)) moduleCache.delete(k); });
+}
+
+/** Remove an installed package. Returns false when it wasn't installed. */
+export async function removePackage(fs: FileSystem, name: string): Promise<boolean> {
+  const status = await readStatus(fs);
+  const pkg = status[name] || Object.values(status).find(p => p.bins.includes(name));
+  if (!pkg) return false;
+  await removeFiles(fs, pkg);
+  delete status[pkg.name];
+  await writeStatus(fs, status);
+  return true;
+}
+
+/** Installed packages whose other installed packages depend on `name`. */
+export async function reverseDeps(fs: FileSystem, name: string): Promise<string[]> {
+  const status = await readStatus(fs);
+  return Object.values(status).filter(p => (p.entry.deps || []).includes(name)).map(p => p.name);
+}
+
+export function downloadSize(entry: PkgEntry): number {
+  const seen = new Set<string>();
+  let n = 0;
+  for (const f of entry.files) if (!seen.has(f.sha256)) { seen.add(f.sha256); n += f.size; }
+  return n;
+}
+
+export function formatSize(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)} MB`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)} kB`;
+  return `${n} B`;
+}
+
+// ── Builtin shadowing ────────────────────────────────────────────────
+
+const shadowSets = new WeakMap<FileSystem, Set<string>>();
+const shadowLoads = new WeakMap<FileSystem, Promise<Set<string>>>();
+
+function shadowsOf(status: Record<string, InstalledPkg>): Set<string> {
+  const out = new Set<string>();
+  for (const pkg of Object.values(status)) {
+    for (const cmd of pkg.bins) if (pkg.entry.bin[cmd]?.shadow !== false) out.add(cmd);
+  }
+  return out;
+}
+
+/**
+ * Commands an installed package provides in place of a Shiro builtin of the
+ * same name (`lua`, `sqlite3`, `jq` once the real ones are installed).
+ * Multi-call applets mark themselves `shadow: false`. Synchronous so command
+ * dispatch doesn't gain an await: empty until `loadPackageShadows` has read
+ * the status file (the shell starts that when it's created), then kept
+ * current by install and remove.
+ */
+export function packageShadows(fs: FileSystem): Set<string> {
+  return shadowSets.get(fs) || new Set();
+}
+
+export function loadPackageShadows(fs: FileSystem): Promise<Set<string>> {
+  let p = shadowLoads.get(fs);
+  if (!p) {
+    p = readStatus(fs).then(status => {
+      if (!shadowSets.has(fs)) shadowSets.set(fs, shadowsOf(status));
+      return shadowSets.get(fs)!;
+    });
+    shadowLoads.set(fs, p);
+  }
+  return p;
+}
+
+// ── Running installed binaries ───────────────────────────────────────
+
+export interface RunContext {
+  fs: FileSystem;
+  cwd: string;
+  env: Record<string, string>;
+  stdin: string;
+  /** Whether stdin/stdout are the terminal (programs check isatty()) */
+  stdinIsTTY?: boolean;
+  stdoutIsTTY?: boolean;
+  onStdout: (s: string) => void;
+  onStderr: (s: string) => void;
+}
+
+const moduleCache = new Map<string, WebAssembly.Module>();
+
+/** Package that owns a path under /usr/lib/pkg, or null. */
+export function packageOfPath(path: string): string | null {
+  if (!path.startsWith(PKG_ROOT + '/')) return null;
+  return path.slice(PKG_ROOT.length + 1).split('/')[0] || null;
+}
+
+/**
+ * Run an installed package binary. `binPath` is the resolved file under
+ * /usr/lib/pkg, `argv0` the name it was invoked as (the /usr/bin link name).
+ */
+export async function runPackageBinary(binPath: string, argv0: string, args: string[], ctx: RunContext): Promise<number> {
+  const name = packageOfPath(binPath);
+  const status = name ? (await readStatus(ctx.fs))[name] : undefined;
+  const entry = status?.entry;
+  const rel = name ? binPath.slice(PKG_ROOT.length + name.length + 2) : '';
+  const bin = entry && (entry.bin[argv0]?.file === rel ? entry.bin[argv0] :
+    Object.values(entry.bin).find(b => b.file === rel));
+
+  if (entry) {
+    const missing = missingFeatures(entry);
+    if (missing.length && ctx.env.SHIRO_PKG_FORCE !== '1') {
+      ctx.onStderr(`${argv0}: needs kernel support Shiro doesn't have yet: ${missing.join(', ')}\n`);
+      return 126;
+    }
+  }
+
+  let mod = moduleCache.get(binPath);
+  if (!mod) {
+    const bytes = await ctx.fs.readFile(binPath) as Uint8Array;
+    mod = await WebAssembly.compile(bytes as BufferSource);
+    moduleCache.set(binPath, mod);
+  }
+
+  // Some preview1 wasi-libc builds only match a preopen when a '/' follows
+  // its name, so a lone "/" never matches "/usr/...": also preopen the
+  // top-level directories this run touches. Snapshot-0 (2019) builds resolve
+  // "/" fine but corrupt their heap with more than a couple of preopens.
+  const preopens: Record<string, string> = { '/': '/' };
+  if (entry?.abi !== 'wasi_unstable') {
+    const tops = [PKG_ROOT, ctx.cwd, ctx.env.HOME || '', ...args.filter(a => a.startsWith('/'))]
+      .map(p => p.split('/')[1]).filter(Boolean);
+    for (const top of [...new Set(tops)].slice(0, 4)) preopens[`/${top}`] = `/${top}`;
+  }
+  preopens['.'] = ctx.cwd;
+
+  const { WasiRT, WasiExit } = await import('./wasi-runtime');
+  const wasi = new WasiRT({
+    fs: ctx.fs,
+    cwd: ctx.cwd,
+    args: [argv0, ...(bin?.args || []), ...args],
+    env: { ...ctx.env },
+    stdin: ctx.stdin,
+    stdinIsTTY: ctx.stdinIsTTY,
+    stdoutIsTTY: ctx.stdoutIsTTY,
+    onStdout: ctx.onStdout,
+    onStderr: ctx.onStderr,
+    preopens,
+  });
+  // This runtime reads files before the program starts: the working tree,
+  // the package's data directories, and anything named on the command line.
+  await wasi.preloadTree(ctx.cwd, 3, 100);
+  for (const dir of entry?.preload || []) await wasi.preloadTree(`${PKG_ROOT}/${name}/${dir}`, 4, 2000);
+  if (ctx.env.HOME) await wasi.preloadDir(ctx.env.HOME);
+  for (const a of args) {
+    if (a.startsWith('-') && !a.includes('/')) continue;
+    const p = ctx.fs.resolvePath(a.replace(/^-[^=]*=/, ''), ctx.cwd);
+    try {
+      const st = await ctx.fs.stat(p);
+      if (st.type === 'dir') await wasi.preloadTree(p, 1, 200);
+      else await wasi.preloadFile(p);
+      await wasi.preloadDir(p.substring(0, p.lastIndexOf('/')) || '/');
+    } catch { /* not a path */ }
+  }
+  try {
+    return await wasi.run(mod);
+  } catch (e: any) {
+    if (e instanceof WasiExit) return e.code;
+    ctx.onStderr(`${argv0}: ${e?.message || e}\n`);
+    return 1;
+  }
+}
