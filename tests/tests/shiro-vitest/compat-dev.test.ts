@@ -586,3 +586,43 @@ describe('go (toolchain on wasip1)', () => {
     expect(r.out).toMatch(/^ok\s+example\.com\/gohello\/greet\s+[\d.]+s\n$/);
   }, 600_000);
 });
+
+// ── Ruby 3.4 (ruby.wasm CLI build) ─────────────────────────────────────
+
+describe('ruby', () => {
+  let shell: Shell;
+  let fs: FileSystem;
+  beforeAll(async () => {
+    ({ fs, shell } = await createTestShell());
+    await bootFiles(fs);
+    const r = await sh(shell, 'pkg install ruby');
+    expect(r.err).toBe('');
+    expect(r.exitCode).toBe(0);
+  }, 300_000);
+
+  it('ruby -e with the standard library (json, set, digest, time)', async () => {
+    const r = await sh(shell, `ruby -e 'require "json"; require "set"; require "digest"; require "time"; puts RUBY_VERSION, JSON.generate({a: [1, 2]}), Set[3, 1, 3].size, Digest::SHA256.hexdigest("x")[0, 8], Time.at(0).utc.iso8601'`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('3.4.1\n{"a":[1,2]}\n2\n2d711642\n1970-01-01T00:00:00Z\n');
+  }, 120_000);
+
+  it('#!/usr/bin/env ruby scripts with argv, stdin and files; minitest', async () => {
+    await script(fs, '/home/user/wc.rb', '#!/usr/bin/env ruby\nwords = STDIN.read.split\nFile.write(ARGV[0], words.map(&:upcase).join(" "))\nputs "#{words.size} words"\n');
+    let r = await sh(shell, 'cd /home/user && echo "a b c" | ./wc.rb out.txt && cat out.txt');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('3 words\nA B C');
+    await fs.writeFile('/home/user/calc_test.rb', 'require "minitest/autorun"\n\nclass CalcTest < Minitest::Test\n  def test_add\n    assert_equal 4, 2 + 2\n  end\n\n  def test_upcase\n    assert_equal "AB", "ab".upcase\n  end\nend\n');
+    r = await sh(shell, 'cd /home/user && ruby calc_test.rb')
+    expect(r.out).toMatch(/2 runs, 2 assertions, 0 failures, 0 errors, 0 skips/);
+  }, 120_000);
+
+  it('rake runs a Rakefile; gem lists the default gems', async () => {
+    await fs.mkdir('/home/user/rk', { recursive: true });
+    await fs.writeFile('/home/user/rk/Rakefile', 'task default: [:build]\ntask :prep do\n  puts "prep"\nend\ntask build: :prep do\n  puts "build"\nend\n');
+    let r = await sh(shell, 'cd /home/user/rk && rake');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('prep\nbuild\n');
+    r = await sh(shell, 'gem list json')
+    expect(r.out).toMatch(/^json \(.*2\.9\.1/m);
+  }, 180_000);
+});

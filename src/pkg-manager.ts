@@ -452,6 +452,11 @@ async function installOne(fs: FileSystem, entry: PkgEntry, opts: PkgOptions): Pr
     }
   }
 
+  // Mount points exist on disk, so programs walking the path (realpath) find them
+  for (const guest of Object.keys(entry.mounts ?? {})) {
+    try { await fs.mkdir(guest, { recursive: true }); } catch { /* a file there: leave it */ }
+  }
+
   await fs.mkdir(PKG_BIN_DIR, { recursive: true });
   const bins: string[] = [];
   for (const [cmd, b] of Object.entries(entry.bin)) {

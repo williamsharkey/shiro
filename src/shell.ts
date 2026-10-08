@@ -5292,7 +5292,8 @@ export class Shell {
     // the arguments and preloads their package records
     try {
       const real = await this.fs.realpath(filePath);
-      if (packageOfPath(real)) {
+      // (a package's script launchers, like ruby's gem, take the shebang path below)
+      if (packageOfPath(real) && !(await this.isScriptFile(real))) {
         return await runPackageBinary(real, filePath.split('/').pop() || filePath, args, ctx,
           filePath.startsWith('/') ? filePath : this.fs.resolvePath(filePath, this.cwd));
       }
@@ -5438,6 +5439,14 @@ export class Shell {
 
     // Default to shell script
     return this.executeShellScript(content, args, ctx, writeStdout, writeStderr, filePath);
+  }
+
+  /** Does `path` start with "#!"? */
+  private async isScriptFile(path: string): Promise<boolean> {
+    try {
+      const d = await this.fs.readFile(path);
+      return typeof d === 'string' ? d.startsWith('#!') : d[0] === 0x23 && d[1] === 0x21;
+    } catch { return false; }
   }
 
   /**

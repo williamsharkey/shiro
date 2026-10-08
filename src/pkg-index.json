@@ -903,33 +903,76 @@
   },
   {
    "name": "ruby",
-   "version": "0.1.2",
-   "description": "Ruby 3.2 interpreter (ruby.wasm, standard library embedded)",
+   "version": "3.4.1",
+   "description": "Ruby 3.4 (ruby.wasm CLI build): ruby, irb, gem, rake, bundle, with the standard library and default gems",
    "license": "Ruby OR BSD-2-Clause",
-   "source": "https://github.com/ruby/ruby.wasm",
-   "origin": "wasmer",
+   "source": "https://github.com/ruby/ruby.wasm/releases/tag/2.10.1",
+   "homepage": "https://www.ruby-lang.org/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/ruby.sh",
    "section": "interpreters",
    "abi": "wasi_snapshot_preview1",
    "files": [
     {
-     "path": "bin/ruby.wasm",
-     "url": "https://cdn.wasmer.io/webcimages/036c313a707ffc5b70c700a9ac44e07bb76efe2797ef7f69c8f5d38fc6a080fc.webc",
-     "sha256": "036c313a707ffc5b70c700a9ac44e07bb76efe2797ef7f69c8f5d38fc6a080fc",
-     "size": 34328971,
-     "webc": {
-      "atom": "ruby"
-     }
+     "path": "bin",
+     "tar": {
+      "unpack": true,
+      "dir": "bin"
+     },
+     "url": "/pkg/ruby/3.4.1/ruby-3.4.1-wasip1.tar.gz",
+     "sha256": "12f309412ea3b2c28d1e50e2970fba9ee812ecceb9f4a7d8b51adba79d781909",
+     "size": 15405839
+    },
+    {
+     "path": "lib",
+     "tar": {
+      "unpack": true,
+      "dir": "lib"
+     },
+     "url": "/pkg/ruby/3.4.1/ruby-3.4.1-wasip1.tar.gz",
+     "sha256": "12f309412ea3b2c28d1e50e2970fba9ee812ecceb9f4a7d8b51adba79d781909",
+     "size": 15405839
     }
    ],
    "bin": {
     "ruby": {
      "file": "bin/ruby.wasm"
+    },
+    "gem": {
+     "file": "bin/gem"
+    },
+    "irb": {
+     "file": "bin/irb"
+    },
+    "rake": {
+     "file": "bin/rake"
+    },
+    "bundle": {
+     "file": "bin/bundle"
+    },
+    "bundler": {
+     "file": "bin/bundler"
+    },
+    "erb": {
+     "file": "bin/erb"
+    },
+    "rdoc": {
+     "file": "bin/rdoc"
+    },
+    "ri": {
+     "file": "bin/ri"
     }
    },
+   "mounts": {
+    "/usr/local/lib/ruby": "lib/ruby"
+   },
+   "needs": [
+    "mounts"
+   ],
    "wants": [
     "blocking-stdin"
    ],
-   "notes": "irb needs blocking stdin; scripts and -e work."
+   "notes": "Built with prefix /usr/local: the package mounts lib/ruby there for its processes. irb needs blocking stdin. No sockets: gem install from rubygems.org doesn't work; installing local .gem files does."
   },
   {
    "name": "fortune",
