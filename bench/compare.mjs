@@ -45,7 +45,7 @@ for (const r of next.results) {
   if (status === 'REGRESSED') regressions++;
   rows.push({ status, r, b, pct });
 }
-for (const b of baseMap.values()) rows.push({ status: 'gone', r: b });
+for (const b of baseMap.values()) rows.push({ status: 'gone', r: { ...b, median: null }, b });
 
 const order = { REGRESSED: 0, broken: 1, 'worse?': 2, improved: 3, fixed: 4, new: 5, gone: 6, same: 7, 'n/a': 8 };
 rows.sort((x, y) => order[x.status] - order[y.status] || key(x.r).localeCompare(key(y.r)));
