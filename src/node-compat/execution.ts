@@ -181,7 +181,7 @@ export async function executeNodeScript(
         case 'https':
         case 'node:https': return createHttpsModule({ ctx, iframeServer, fakeConsole, getBuiltinModule });
         case 'net':
-        case 'node:net': return createNetModule();
+        case 'node:net': return createNetModule({ Buffer: FakeBuffer });
         case 'tls':
         case 'node:tls': return createTlsModule({ getBuiltinModule });
         case 'http2':

@@ -1,14 +1,17 @@
 /**
- * Shiro unified server — static files + API proxy + OAuth callback + WebSocket relay.
- * Single Node.js process, no dependencies.
+ * Shiro unified server — static files + API proxy + OAuth callback + WebSocket relay
+ * + opt-in WebSocket-to-TCP relay for kernel sockets (SHIRO_TCP_RELAY=1, see docs/NETWORKING.md).
+ * Single Node.js process; depends on `ws` (and optionally `undici`).
  */
 
 import { createServer } from 'node:http';
 import { readFile, writeFile, stat, readdir, unlink, mkdir } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { WebSocketServer } from 'ws';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHmac, timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import net from 'node:net';
+import dns from 'node:dns/promises';
 
 const PORT = process.env.PORT || 3000;
 const STATIC_DIR = process.env.STATIC_DIR || '/opt/shiro/public';
@@ -612,9 +615,409 @@ setInterval(async () => {
   } catch {}
 }, 6 * 60 * 60 * 1000).unref();
 
+// --- TCP relay (kernel sockets) ---
+// One WebSocket per TCP connection at /tcp. Opt-in with SHIRO_TCP_RELAY=1.
+// Protocol (docs/NETWORKING.md): the first frame is text JSON, either
+//   {"op":"connect","host":"example.com","port":443}  → {"op":"connected",...} | {"op":"error",...}
+//   {"op":"resolve","host":"example.com"}             → {"op":"resolved","addresses":[...]} | {"op":"error",...}
+// After "connected", binary frames are the byte stream in both directions and
+// text frames are control: client {"op":"shutdown"} (SHUT_WR), {"op":"ack","n":N}
+// (bytes consumed, opens the flow-control window); server {"op":"eof"} (peer
+// sent FIN) and {"op":"error","code":"E..."}.
+//
+// Security model: the egress policy is the boundary. Every address a host
+// resolves to is checked against the blocked ranges below, the relay connects
+// to the checked IP literal (never re-resolving, so DNS rebinding can't swap in
+// a private address between check and connect), and only allow-listed ports
+// are reachable. On top of that: Origin allow-list, a short-lived HMAC token
+// bound to the client IP (issued by POST /tcp/token), per-IP and global
+// connection caps, per-IP connect rate, per-IP bandwidth and hourly byte
+// budget, per-connection byte cap, handshake/connect/idle/lifetime timeouts,
+// and logs that record endpoints and byte counts but never payloads.
+
+const TCP_BLOCKED_V4 = [
+  ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
+  ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24],
+  ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24],
+  ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4],
+];
+// Mapped/translated forms (::ffff:0:0/96, NAT64, 6to4, Teredo) embed IPv4
+// addresses, so they are blocked outright rather than decoded.
+const TCP_BLOCKED_V6 = [
+  ['::', 96], ['::ffff:0:0', 96], ['64:ff9b::', 96], ['64:ff9b:1::', 48], ['100::', 64],
+  ['2001::', 23], ['2001:db8::', 32], ['2002::', 16], ['fc00::', 7], ['fe80::', 10],
+  ['fec0::', 10], ['ff00::', 8],
+];
+const tcpBuiltinBlockList = new net.BlockList();
+for (const [a, p] of TCP_BLOCKED_V4) tcpBuiltinBlockList.addSubnet(a, p, 'ipv4');
+for (const [a, p] of TCP_BLOCKED_V6) tcpBuiltinBlockList.addSubnet(a, p, 'ipv6');
+
+function cidrBlockList(cidrs) {
+  const list = new net.BlockList();
+  for (const c of cidrs || []) {
+    const [addr, bits] = String(c).trim().split('/');
+    const family = net.isIP(addr);
+    if (!family) continue;
+    const type = family === 6 ? 'ipv6' : 'ipv4';
+    list.addSubnet(addr, bits === undefined ? (family === 6 ? 128 : 32) : Number(bits), type);
+  }
+  return list;
+}
+
+/** True if the relay must not connect to `ip` (private, loopback, link-local, metadata, ...). */
+export function isBlockedAddress(ip, { allow, deny } = {}) {
+  const family = net.isIP(ip);
+  if (!family) return true;
+  const type = family === 6 ? 'ipv6' : 'ipv4';
+  if (allow && allow.check(ip, type)) return false;
+  if (deny && deny.check(ip, type)) return true;
+  return tcpBuiltinBlockList.check(ip, type);
+}
+
+const envList = (v) => (v ? String(v).split(',').map((x) => x.trim()).filter(Boolean) : null);
+const envInt = (v, d) => (v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : d);
+
+// 22 (ssh, git over ssh), 80/443 (http/https, the bulk of guest traffic), 9418
+// (git://). SMTP and database ports stay closed by default: an open relay to
+// 25 is a spam cannon, and nobody should reach a database through a browser.
+export const TCP_DEFAULT_PORTS = [22, 80, 443, 9418];
+
+export function tcpRelayConfigFromEnv(env = process.env) {
+  return {
+    enabled: env.SHIRO_TCP_RELAY === '1',
+    allowedOrigins: envList(env.SHIRO_TCP_ORIGINS) || ['https://shiro.computer', 'https://*.shiro.computer'],
+    ports: (envList(env.SHIRO_TCP_PORTS) || TCP_DEFAULT_PORTS).map(Number).filter((p) => p > 0 && p < 65536),
+    allowCidrs: envList(env.SHIRO_TCP_ALLOW_CIDRS) || [],
+    denyCidrs: envList(env.SHIRO_TCP_DENY_CIDRS) || [],
+    secret: env.SHIRO_TCP_SECRET || '',
+    trustProxy: env.SHIRO_TRUST_PROXY || 'loopback', // 'loopback' | 'always' | 'never'
+    tokenTtlMs: envInt(env.SHIRO_TCP_TOKEN_TTL_MS, 10 * 60_000),
+    maxConns: envInt(env.SHIRO_TCP_MAX_CONNS, 512),
+    maxConnsPerIp: envInt(env.SHIRO_TCP_MAX_CONNS_PER_IP, 16),
+    connectsPerMinute: envInt(env.SHIRO_TCP_CONNECTS_PER_MIN, 60),
+    bytesPerSecPerIp: envInt(env.SHIRO_TCP_BYTES_PER_SEC, 4 * 1024 * 1024),
+    byteBurstPerIp: envInt(env.SHIRO_TCP_BYTE_BURST, 16 * 1024 * 1024),
+    maxBytesPerIpPerHour: envInt(env.SHIRO_TCP_BYTES_PER_HOUR, 4 * 1024 ** 3),
+    maxBytesPerConn: envInt(env.SHIRO_TCP_MAX_BYTES_PER_CONN, 1024 ** 3),
+    handshakeTimeoutMs: envInt(env.SHIRO_TCP_HANDSHAKE_TIMEOUT_MS, 10_000),
+    connectTimeoutMs: envInt(env.SHIRO_TCP_CONNECT_TIMEOUT_MS, 15_000),
+    idleTimeoutMs: envInt(env.SHIRO_TCP_IDLE_TIMEOUT_MS, 5 * 60_000),
+    maxLifetimeMs: envInt(env.SHIRO_TCP_MAX_LIFETIME_MS, 4 * 60 * 60_000),
+    window: envInt(env.SHIRO_TCP_WINDOW, 512 * 1024),
+  };
+}
+
+function originAllowed(origin, allowed) {
+  if (!origin) return false;
+  for (const pat of allowed) {
+    if (pat === '*' || pat === origin) return true;
+    const star = pat.indexOf('://*.');
+    if (star !== -1) {
+      const scheme = pat.slice(0, star + 3);
+      const suffix = pat.slice(star + 4); // ".example.com"
+      if (origin.startsWith(scheme) && origin.endsWith(suffix) && !origin.slice(scheme.length, -suffix.length).includes('/')) return true;
+    }
+  }
+  return false;
+}
+
+function rejectUpgrade(socket, status, text) {
+  try {
+    socket.write(`HTTP/1.1 ${status} ${text}\r\nConnection: close\r\nContent-Type: text/plain\r\nContent-Length: ${text.length}\r\n\r\n${text}`);
+  } catch { /* socket already gone */ }
+  socket.destroy();
+}
+
+const HOSTNAME_RE = /^(?=.{1,253}$)[a-zA-Z0-9_]([a-zA-Z0-9_-]{0,62})(\.[a-zA-Z0-9_]([a-zA-Z0-9_-]{0,62}))*\.?$/;
+
+/**
+ * Create the relay. Returns { handleUpgrade(req, socket, head), handleToken(req, res), close(), stats() }.
+ * `lookup(host)` → [{address, family}] can be injected (tests); defaults to dns.lookup(all).
+ */
+export function createTcpRelay(config, { lookup, log = console.log } = {}) {
+  const cfg = { ...tcpRelayConfigFromEnv({}), ...config };
+  const secret = cfg.secret || randomBytes(32).toString('hex');
+  const allow = cidrBlockList(cfg.allowCidrs);
+  const deny = cidrBlockList(cfg.denyCidrs);
+  const ports = new Set(cfg.ports);
+  const resolve = lookup || ((host) => dns.lookup(host, { all: true, verbatim: true }));
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024, perMessageDeflate: false });
+  const perIp = new Map(); // ip -> { conns, connTokens, connAt, byteTokens, byteAt, hourBytes, hourAt }
+  const live = new Set();
+  let total = 0;
+  let nextId = 1;
+
+  const ipState = (ip) => {
+    let st = perIp.get(ip);
+    if (!st) {
+      const now = Date.now();
+      st = { conns: 0, connTokens: cfg.connectsPerMinute, connAt: now, byteTokens: cfg.byteBurstPerIp, byteAt: now, hourBytes: 0, hourAt: now };
+      perIp.set(ip, st);
+    }
+    return st;
+  };
+  const refill = (st, now = Date.now()) => {
+    st.connTokens = Math.min(cfg.connectsPerMinute, st.connTokens + ((now - st.connAt) / 60_000) * cfg.connectsPerMinute);
+    st.connAt = now;
+    st.byteTokens = Math.min(cfg.byteBurstPerIp, st.byteTokens + ((now - st.byteAt) / 1000) * cfg.bytesPerSecPerIp);
+    st.byteAt = now;
+    if (now - st.hourAt >= 3_600_000) { st.hourBytes = 0; st.hourAt = now; }
+  };
+  const sweep = setInterval(() => {
+    const now = Date.now();
+    for (const [ip, st] of perIp) {
+      refill(st, now);
+      if (st.conns === 0 && st.connTokens >= cfg.connectsPerMinute && st.byteTokens >= cfg.byteBurstPerIp && st.hourBytes === 0) perIp.delete(ip);
+    }
+  }, 60_000);
+  sweep.unref?.();
+
+  const clientIp = (req) => {
+    const peer = req.socket.remoteAddress || '';
+    const loop = peer === '127.0.0.1' || peer === '::1' || peer === '::ffff:127.0.0.1';
+    if (cfg.trustProxy === 'always' || (cfg.trustProxy === 'loopback' && loop)) {
+      const xff = String(req.headers['x-forwarded-for'] || '').split(',').map((s) => s.trim()).filter(Boolean);
+      if (xff.length) return xff[xff.length - 1];
+    }
+    return peer;
+  };
+
+  const sign = (exp, ip) => createHmac('sha256', secret).update(`shiro-tcp.${exp}.${ip}`).digest('base64url');
+  const issueToken = (ip) => {
+    const exp = Date.now() + cfg.tokenTtlMs;
+    return { token: `${exp}.${sign(exp, ip)}`, expires: exp };
+  };
+  const tokenValid = (token, ip) => {
+    const m = /^(\d{10,16})\.([A-Za-z0-9_-]{43})$/.exec(String(token || ''));
+    if (!m || Number(m[1]) < Date.now()) return false;
+    const want = Buffer.from(sign(m[1], ip));
+    const got = Buffer.from(m[2]);
+    return want.length === got.length && timingSafeEqual(want, got);
+  };
+
+  /** POST /tcp/token from an allowed Origin → { token, expires } bound to the caller's IP. */
+  function handleToken(req, res) {
+    const origin = req.headers['origin'];
+    const ok = originAllowed(origin, cfg.allowedOrigins);
+    const headers = ok ? { 'access-control-allow-origin': origin, 'vary': 'Origin', 'access-control-allow-methods': 'POST, OPTIONS' } : {};
+    if (req.method === 'OPTIONS') { res.writeHead(ok ? 204 : 403, headers); return res.end(); }
+    if (req.method !== 'POST' || !ok) {
+      res.writeHead(403, { 'content-type': 'text/plain', ...headers });
+      return res.end('Forbidden');
+    }
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers });
+    res.end(JSON.stringify(issueToken(clientIp(req))));
+  }
+
+  function handleUpgrade(req, socket, head) {
+    const url = new URL(req.url, 'http://localhost');
+    const ip = clientIp(req);
+    if (!originAllowed(req.headers['origin'], cfg.allowedOrigins)) {
+      log(`[tcp] refused ${ip}: origin ${req.headers['origin'] || '(none)'}`);
+      return rejectUpgrade(socket, 403, 'Forbidden');
+    }
+    if (!tokenValid(url.searchParams.get('t'), ip)) {
+      log(`[tcp] refused ${ip}: bad or expired token`);
+      return rejectUpgrade(socket, 401, 'Unauthorized');
+    }
+    const st = ipState(ip);
+    refill(st);
+    if (total >= cfg.maxConns) return rejectUpgrade(socket, 503, 'Relay busy');
+    if (st.conns >= cfg.maxConnsPerIp) {
+      log(`[tcp] refused ${ip}: ${st.conns} connections open`);
+      return rejectUpgrade(socket, 429, 'Too many connections');
+    }
+    if (st.connTokens < 1) {
+      log(`[tcp] refused ${ip}: connect rate`);
+      return rejectUpgrade(socket, 429, 'Too many requests');
+    }
+    st.connTokens -= 1;
+    // Reserve the slot now so concurrent handshakes can't overshoot the caps.
+    st.conns++; total++;
+    let released = false;
+    let attached = false;
+    const release = () => { if (!released) { released = true; st.conns--; total--; } };
+    socket.once('close', () => { if (!attached) release(); });
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      attached = true;
+      onConnection(ws, ip, st, release);
+    });
+  }
+
+  function onConnection(ws, ip, st, release) {
+    const id = nextId++;
+    const started = Date.now();
+    let phase = 'handshake'; // handshake → connecting → open → closed
+    let tcp = null;
+    let target = '';
+    let up = 0, down = 0;
+    let inflight = 0;          // bytes sent to the client and not yet acked
+    let tcpWriteBlocked = false;
+    let throttledUntil = 0;
+    let throttleTimer = null;
+    let reason = '';
+    live.add(ws);
+
+    const send = (obj) => { if (ws.readyState === 1) ws.send(JSON.stringify(obj)); };
+    const fail = (code, message, wsCode = 1000) => {
+      reason ||= code;
+      send({ op: 'error', code, message });
+      ws.close(wsCode, code);
+      tcp?.destroy();
+    };
+
+    const handshakeTimer = setTimeout(() => fail('ETIMEDOUT', 'no request'), cfg.handshakeTimeoutMs);
+    let idleTimer = null;
+    const touch = () => {
+      if (!cfg.idleTimeoutMs) return;
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => { reason = 'idle'; ws.close(4010, 'idle timeout'); tcp?.destroy(); }, cfg.idleTimeoutMs);
+    };
+    const lifeTimer = cfg.maxLifetimeMs ? setTimeout(() => { reason = 'lifetime'; ws.close(4011, 'lifetime limit'); tcp?.destroy(); }, cfg.maxLifetimeMs) : null;
+
+    const updateFlow = () => {
+      if (!tcp || phase !== 'open') return;
+      const throttled = throttledUntil > Date.now();
+      if (inflight > cfg.window || throttled) tcp.pause(); else tcp.resume();
+      if (tcpWriteBlocked || throttled) ws.pause(); else ws.resume();
+      if (throttled && !throttleTimer) {
+        throttleTimer = setTimeout(() => { throttleTimer = null; updateFlow(); }, throttledUntil - Date.now());
+      }
+    };
+    // Charge n bytes to the connection and the client IP; false = connection closed for a limit.
+    const account = (n) => {
+      refill(st);
+      st.hourBytes += n;
+      st.byteTokens -= n;
+      if (up + down > cfg.maxBytesPerConn) { reason = 'byte cap'; fail('EDQUOT', 'per-connection byte limit', 4008); return false; }
+      if (st.hourBytes > cfg.maxBytesPerIpPerHour) { reason = 'hourly cap'; fail('EDQUOT', 'hourly byte limit', 4008); return false; }
+      if (st.byteTokens < 0) {
+        throttledUntil = Date.now() + Math.ceil((-st.byteTokens / cfg.bytesPerSecPerIp) * 1000);
+        updateFlow();
+      }
+      touch();
+      return true;
+    };
+
+    async function start(req) {
+      const host = String(req.host || '').replace(/^\[(.*)\]$/, '$1');
+      const family = net.isIP(host);
+      if (!family && !HOSTNAME_RE.test(host)) return fail('EINVAL', 'bad host');
+      let addrs;
+      try {
+        addrs = family ? [{ address: host, family }] : await Promise.race([
+          resolve(host),
+          new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('timeout'), { code: 'EAI_AGAIN' })), cfg.connectTimeoutMs).unref?.()),
+        ]);
+      } catch (err) {
+        return fail(err?.code === 'ENOTFOUND' || err?.code === 'ENODATA' ? 'ENOTFOUND' : 'EAI_AGAIN', 'lookup failed');
+      }
+      if (ws.readyState !== 1) return;
+      const usable = addrs.filter((a) => !isBlockedAddress(a.address, { allow, deny }));
+      if (req.op === 'resolve') {
+        reason = 'resolve';
+        log(`[tcp] #${id} ${ip} resolve ${host} → ${usable.length}/${addrs.length} usable`);
+        if (!usable.length) return fail(addrs.length ? 'EACCES' : 'ENOTFOUND', addrs.length ? 'only blocked addresses' : 'no addresses');
+        send({ op: 'resolved', addresses: usable.map((a) => ({ address: a.address, family: a.family })) });
+        return ws.close(1000);
+      }
+      const port = Number(req.port);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) return fail('EINVAL', 'bad port');
+      if (!ports.has(port)) {
+        log(`[tcp] #${id} ${ip} refused ${host}:${port}: port not allowed`);
+        return fail('EACCES', `port ${port} not allowed by relay policy`);
+      }
+      if (!usable.length) {
+        log(`[tcp] #${id} ${ip} refused ${host}:${port}: ${addrs.length ? 'blocked address' : 'no address'}`);
+        return fail(addrs.length ? 'EACCES' : 'ENOTFOUND', addrs.length ? 'address blocked by relay policy' : 'no addresses');
+      }
+      const { address } = usable[0];
+      target = `${host === address ? '' : host + '→'}${address}:${port}`;
+      log(`[tcp] #${id} ${ip} connect ${target}`);
+      phase = 'connecting';
+      // Connect to the vetted IP literal: no second lookup, so no rebinding window.
+      // allowHalfOpen: the peer's FIN must not end our side; the client decides with {"op":"shutdown"}
+      tcp = net.connect({ host: address, port, timeout: cfg.connectTimeoutMs, allowHalfOpen: true });
+      tcp.setNoDelay(true);
+      tcp.once('timeout', () => { if (phase === 'connecting') fail('ETIMEDOUT', 'connect timeout'); });
+      tcp.once('connect', () => {
+        tcp.setTimeout(0);
+        if (isBlockedAddress(tcp.remoteAddress, { allow, deny })) return fail('EACCES', 'address blocked by relay policy');
+        phase = 'open';
+        touch();
+        send({ op: 'connected', remoteAddress: tcp.remoteAddress, remotePort: tcp.remotePort, family: net.isIP(tcp.remoteAddress) });
+      });
+      tcp.on('data', (chunk) => {
+        down += chunk.length;
+        inflight += chunk.length;
+        if (!account(chunk.length)) return;
+        ws.send(chunk, { binary: true });
+        updateFlow();
+      });
+      tcp.on('drain', () => { tcpWriteBlocked = false; updateFlow(); });
+      tcp.on('end', () => send({ op: 'eof' }));
+      tcp.on('error', (err) => { reason ||= err.code || 'error'; send({ op: 'error', code: err.code || 'EIO', message: 'socket error' }); });
+      tcp.on('close', () => { if (ws.readyState === 1) ws.close(1000); });
+    }
+
+    ws.on('message', (data, isBinary) => {
+      if (phase === 'handshake') {
+        clearTimeout(handshakeTimer);
+        let req;
+        try { req = !isBinary && data.length <= 1024 ? JSON.parse(data.toString()) : null; } catch { req = null; }
+        if (!req || (req.op !== 'connect' && req.op !== 'resolve')) return fail('EPROTO', 'expected connect or resolve');
+        phase = 'resolving';
+        start(req).catch(() => fail('EIO', 'relay error'));
+        return;
+      }
+      if (phase !== 'open') return fail('EPROTO', 'data before connected');
+      if (isBinary) {
+        up += data.length;
+        if (!account(data.length)) return;
+        if (!tcp.write(data)) { tcpWriteBlocked = true; updateFlow(); }
+        return;
+      }
+      let ctl;
+      try { ctl = data.length <= 256 ? JSON.parse(data.toString()) : null; } catch { ctl = null; }
+      if (ctl?.op === 'ack' && Number.isFinite(ctl.n) && ctl.n > 0) { inflight = Math.max(0, inflight - ctl.n); updateFlow(); }
+      else if (ctl?.op === 'shutdown') tcp.end();
+      else fail('EPROTO', 'bad control frame');
+    });
+
+    ws.on('close', () => {
+      phase = 'closed';
+      clearTimeout(handshakeTimer); clearTimeout(idleTimer); clearTimeout(lifeTimer); clearTimeout(throttleTimer);
+      tcp?.destroy();
+      live.delete(ws);
+      release();
+      if (target) log(`[tcp] #${id} ${ip} closed ${target} up=${up} down=${down} ms=${Date.now() - started}${reason ? ` reason=${reason}` : ''}`);
+    });
+    ws.on('error', () => { reason ||= 'ws error'; tcp?.destroy(); });
+  }
+
+  return {
+    handleUpgrade,
+    handleToken,
+    issueToken,
+    stats: () => ({ connections: total, ips: perIp.size }),
+    close() {
+      clearInterval(sweep);
+      for (const ws of live) ws.terminate();
+      wss.close();
+    },
+  };
+}
+
 // --- HTTP server ---
+const TCP_RELAY_CONFIG = tcpRelayConfigFromEnv();
+const tcpRelay = TCP_RELAY_CONFIG.enabled ? createTcpRelay(TCP_RELAY_CONFIG) : null;
+
 const server = createServer(async (req, res) => {
   const pathname = new URL(req.url, 'http://localhost').pathname;
+
+  if (pathname === '/tcp/token' && tcpRelay) {
+    return tcpRelay.handleToken(req, res);
+  }
 
   if (pathname.startsWith('/api/')) {
     return handleProxy(req, res, pathname.slice(5));
@@ -659,7 +1062,18 @@ const server = createServer(async (req, res) => {
 });
 
 // --- WebSocket relay ---
-const wss = new WebSocketServer({ server, path: /^\/channel\/[a-f0-9]{1,64}$/ });
+// Upgrades are routed by path here. (ws's own `path` option only matches exact
+// strings, so the old regex path rejected every channel handshake with 400.)
+const CHANNEL_PATH = /^\/channel\/[a-f0-9]{1,64}$/;
+const wss = new WebSocketServer({ noServer: true });
+server.on('upgrade', (req, socket, head) => {
+  const pathname = new URL(req.url, 'http://localhost').pathname;
+  if (CHANNEL_PATH.test(pathname)) {
+    return wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+  }
+  if (pathname === '/tcp' && tcpRelay) return tcpRelay.handleUpgrade(req, socket, head);
+  rejectUpgrade(socket, 404, 'Not found');
+});
 const channels = new Map(); // channelId -> Set<WebSocket>
 const rates = new WeakMap();
 
@@ -697,5 +1111,6 @@ const isDirectRun = !!process.argv[1] && import.meta.url === pathToFileURL(proce
 if (isDirectRun) {
   server.listen(PORT, () => {
     console.log(`Shiro server listening on :${PORT}`);
+    if (tcpRelay) console.log(`[tcp] relay enabled at /tcp, ports ${TCP_RELAY_CONFIG.ports.join(',')}, origins ${TCP_RELAY_CONFIG.allowedOrigins.join(',')}`);
   });
 }

@@ -21,7 +21,8 @@ Do not treat the dashboard or wrappers as the product. The product is the browse
 - `src/kernel/*`: Unix kernel core (process table, fd tables, pipes, syscall dispatch, SAB syscall channel for Worker guests). Contract: `docs/KERNEL_ABI.md`; roadmap: `docs/UNIX_COMPAT.md`. `window.__shiro.kernel`; kernel processes show in `ps`.
 - `src/commands/seed.ts`, `src/commands/hc.ts`, `src/seed-runtime-context.ts`: seeded sessions, host-page access, runtime orientation.
 - `src/claude-config.ts`, `src/node-compat/preload.ts`, `src/node-compat/process.ts`: Claude bootstrap, auth persistence, startup defaults.
-- `server.mjs`: static hosting, API proxying, OAuth callback, signaling, relay.
+- `server.mjs`: static hosting, API proxying, OAuth callback, signaling, relay, and the opt-in WebSocket-to-TCP relay (`/tcp`, `SHIRO_TCP_RELAY=1`).
+- `src/kernel/net.ts`: kernel sockets over that relay (x86 socket syscalls and node `net` use them); see `docs/NETWORKING.md` for the protocol, security model, and nginx config.
 
 ## Working Style
 
