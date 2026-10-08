@@ -4,13 +4,9 @@
  "note": "busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Shiro; only cases the host GNU tools pass are scored.",
  "files": {
   "awk": {
-   "pass": 50,
+   "pass": 51,
    "total": 51,
-   "failures": [
-    {
-     "name": "awk 'gcc build bug'"
-    }
-   ]
+   "failures": []
   },
   "basename (old-style)": {
    "pass": 2,
@@ -211,13 +207,9 @@
    "failures": []
   },
   "md5sum (old-style)": {
-   "pass": 0,
+   "pass": 1,
    "total": 1,
-   "failures": [
-    {
-     "name": "md5sum-verifies-non-binary-file"
-    }
-   ]
+   "failures": []
   },
   "mkdir (old-style)": {
    "pass": 2,

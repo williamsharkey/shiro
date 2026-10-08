@@ -8,7 +8,7 @@ conformance work started (fc0af54).
 |---|---|---|
 | [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1295/1567 (82.6%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1275/1567 (81.4%)** |
-| [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **606/635 (95.4%)** |
+| [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **608/635 (95.7%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **146/320 (45.6%)** |
 
 How each suite runs, and what is and isn't scored, is described in
@@ -266,7 +266,7 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 
 | Area | Before | Now | Failing |
 |---|---|---|---|
-| awk | 0/51 | 50/51 | 1 |
+| awk | 0/51 | 51/51 | 0 |
 | basename (old-style) | 2/2 | 2/2 | 0 |
 | cat | 0/4 | 4/4 | 0 |
 | cat (old-style) | 2/2 | 2/2 | 0 |
@@ -300,7 +300,7 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 | ls | 0/0 | 0/0 | 0 |
 | ls (old-style) | 4/4 | 4/4 | 0 |
 | md5sum | 0/0 | 0/0 | 0 |
-| md5sum (old-style) | 1/1 | 0/1 | 1 |
+| md5sum (old-style) | 1/1 | 1/1 | 0 |
 | mkdir (old-style) | 2/2 | 2/2 | 0 |
 | mv (old-style) | 14/14 | 13/14 | 1 |
 | nl | 0/3 | 3/3 | 0 |
@@ -344,14 +344,12 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 
 <details><summary>Failing cases</summary>
 
-- **awk**: awk 'gcc build bug'
 - **cp**: cp -RL; cp -RH; cp -RHL
 - **cp (old-style)**: cp-preserves-hard-links
 - **du (old-style)**: du-s-works; du-works
 - **echo (old-style)**: echo-prints-slash_41
 - **false (old-style)**: false-is-silent
 - **grep**: grep -r on symlink to dir
-- **md5sum (old-style)**: md5sum-verifies-non-binary-file
 - **mv (old-style)**: mv-preserves-hard-links
 - **readlink**: readlink -f on an invalid link
 - **rmdir (old-style)**: rmdir-removes-parent-directories

@@ -77,6 +77,7 @@ import { returnCmd } from './return';
 import { seq } from './seq';
 import { set } from './set';
 import { sha256sum } from './sha256sum';
+import { sha1sumCmd, sha384sumCmd, sha512sumCmd } from './checksum';
 import { shift } from './shift';
 import { shrine } from './shrine';
 import { sleep } from './sleep';
@@ -131,7 +132,7 @@ export const unixCommands: Command[] = [
   getopts, hash, head, heredoc, hexdump, id, install, join, kill, less, letCmd,
   ls, make, md5sum, mkdir, mv, nl, nohup, od, paste, patch, pkgConfig, pr,
   printenv, printf, processSubstitution, pwd, read, readlink, realpath, returnCmd,
-  seq, set, sha256sum, shift, shrine, sleep, sort, stat, strings, tail, tar, tee,
+  seq, set, sha256sum, sha1sumCmd, sha384sumCmd, sha512sumCmd, shift, shrine, sleep, sort, stat, strings, tail, tar, tee,
   test, time, timeout, touch, tr, trap, trueCmd, colon, tsort, type, ulimit, umask,
   unalias, unexpand, uniq, uptime, watch, wc, which, whoami, xargs, yes,
   revCmd, tacCmd, shufCmd, cmpCmd, ddCmd, xxdCmd, dcCmd, splitCmd,

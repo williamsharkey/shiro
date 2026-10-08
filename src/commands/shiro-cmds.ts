@@ -613,6 +613,7 @@ export const shiroCmds: Command[] = [
   whichCmd, typeCmd,
   rmdirCmd, revCmd,
   // cut: src/commands/cut.ts (GNU-compatible) is the registered one
-  shasumCmd, sha256sumCmd,
+  // sha256sum: src/commands/checksum.ts (registered from unix.ts)
+  shasumCmd,
   openCmd, { name: 'xdg-open', description: 'Open a URL in the browser', exec: (ctx) => openCmd.exec(ctx) },
 ];
