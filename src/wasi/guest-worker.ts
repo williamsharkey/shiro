@@ -95,6 +95,17 @@ function run(port: Port, msg: WasiStartMessage): void {
       if (tls instanceof WebAssembly.Global) port.postMessage({ type: 'wasix-signals', callback, tlsBase: tls.value } satisfies WasiGuestMessage);
     },
   });
+  guest.direct = {
+    data: channel.data,
+    call: (nr, a0, a1) => {
+      for (;;) {
+        const lo = channel.call(nr, a0, a1);
+        if (lo === -A.EINTR && guest!.takeRestart()) continue;
+        guest!.takeRestart();
+        return lo;
+      }
+    },
+  };
   const extra: Record<string, Record<string, any>> = {};
   const dylink = w.dylink ? dylinkImports(w.module, w.dylink) : null;
   if (dylink) for (const [mod, ns] of Object.entries(dylink.imports)) extra[mod] = { ...ns };
