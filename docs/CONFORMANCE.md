@@ -6,7 +6,8 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1259/1567 (80.3%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1265/1567 (80.7%)** |
+| [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1275/1567 (81.4%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **381/635 (60.0%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **146/320 (45.6%)** |
 
@@ -30,7 +31,7 @@ How each suite runs, and what is and isn't scored, is described in
 | var-op-patsub | 0/27 | 22/27 | 5 |
 | var-op-slice | 0/21 | 16/21 | 5 |
 | var-num | 0/7 | 5/7 | 2 |
-| vars-special | 0/37 | 30/37 | 7 |
+| vars-special | 0/37 | 25/37 | 12 |
 | arith | 2/71 | 62/71 | 9 |
 | command-sub | 0/28 | 19/28 | 9 |
 | here-doc | 0/32 | 29/32 | 3 |
@@ -58,14 +59,14 @@ How each suite runs, and what is and isn't scored, is described in
 | array-basic | 0/5 | 5/5 | 0 |
 | array | 2/78 | 68/78 | 10 |
 | array-assoc | 0/38 | 33/38 | 5 |
-| brace-expansion | 0/55 | 41/55 | 14 |
+| brace-expansion | 0/55 | 51/55 | 4 |
 | tilde | 0/14 | 7/14 | 7 |
 | glob | 0/23 | 18/23 | 5 |
 | pipeline | 0/25 | 19/25 | 6 |
 | exit-status | 0/11 | 5/11 | 6 |
 | errexit | 0/35 | 28/35 | 7 |
 | subshell | 0/2 | 2/2 | 0 |
-| command_ | 2/16 | 8/16 | 8 |
+| command_ | 2/16 | 9/16 | 7 |
 | posix | 2/15 | 11/15 | 4 |
 | alias | 1/48 | 30/48 | 18 |
 | let | 0/2 | 1/2 | 1 |
@@ -93,7 +94,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **var-op-patsub**: Confusing unquoted slash matches bash (and ash); Synthesized ${x///} bug (similar to above); Replace backslash; When LC_ALL=C, pattern ? doesn't match multibyte character; Chromium from http://www.oilshell.org/blog/2016/11/07.html
 - **var-op-slice**: Cannot take length of substring slice; ${@:offset} and ${*:offset}; ${@:offset:length} and ${*:offset:length}; Permutations of implicit begin and length; ${array[@]:} vs ${array[@]: }  - bash and zsh inconsistent
 - **var-num**: Normal and braced; In function
-- **vars-special**: $PATH is set if unset at startup; Vars set interactively only: $HISTFILE; Some vars are set, even without startup file, or env: PATH, PWD; $LINENO is the current line, not line of function call; $LINENO in "bare" redirect arg (bug regression); $LINENO in other for loops; $_ with assignments, arrays, etc.
+- **vars-special**: $PATH is set if unset at startup; Vars set interactively only: $HISTFILE; Some vars are set, even without startup file, or env: PATH, PWD; UID EUID PPID can't be changed; HOSTNAME OSTYPE can be changed; $BASHPID DOES change with subshell and command sub; $UID and $EUID; $OSTYPE is non-empty; $LINENO is the current line, not line of function call; $LINENO in "bare" redirect arg (bug regression); $LINENO in other for loops; $_ with assignments, arrays, etc.
 - **arith**: Arith sub with word parts; Backticks within arith sub; Integer constant validation; Comma operator (borrowed from C); Logical Ops; Bitwise ops; Comment not allowed in the middle of multiline arithmetic; Double subscript; Invalid constant
 - **command-sub**: case in subshell; Backtick 2; Nested backticks; Making keyword out of command sub should NOT work; Command sub with here doc; Escaped quote in [[ ]]; Quoting \ within ``; Quoting \ within `` within double quotes; Syntax errors with double quotes within backticks
 - **here-doc**: Here doc with bad comsub delimiter; Here doc with line continuation, then pipe.  Syntax error.; Function def and execution with here doc
@@ -119,15 +120,140 @@ How each suite runs, and what is and isn't scored, is described in
 - **append**: error: typeset myarray+=s; error: append used like env prefix; Try to append list to element; typeset s+=; typeset s${dyn}+=; export readonly +=; local +=; assign builtin appending array: declare d+=(d e)
 - **array**: space before ( in array initialization; array with invalid token; ${!a[1]} is named ref in bash; Arrays can't be used as env bindings; Associative arrays can't be used as env bindings either; Set array item to array; Multiple subscripts not allowed; Length op, index op, then transform op is not allowed; array default; a+=() modifies existing instance of BashArray
 - **array-assoc**: unset -v and assoc array; nameref and assoc array; ${!ref} and assoc array; printf -v and assoc array; bash bug: (( A["$key"] = 1 )) doesn't work
-- **brace-expansion**: partial leading expansion; partial leading expansion 2; expansion on RHS of assignment; no expansion with RHS assignment; Two kinds of tilde expansion; Ascending number range expansion with negative step is invalid; regression: -1 step disallowed; regression: 0 step disallowed; Descending number range expansion with positive step is invalid; Singleton char ranges with steps; Char range expansion with step; Char ranges with steps of the wrong sign; Mixed case char expansion is invalid; Descending char range expansion
+- **brace-expansion**: expansion on RHS of assignment; no expansion with RHS assignment; Two kinds of tilde expansion; Mixed case char expansion is invalid
 - **tilde**: ${undef:-~}; ${x//~/~root}; x=foo:~ has tilde expansion; a[x]=foo:~ has tilde expansion; tilde expansion an assignment keyword; x=${undef-~:~}; temp assignment x=~ env
 - **glob**: Glob of unescaped [[] and []]; Glob of negated unescaped [[] and []]; \ in unquoted substitutions does not match a backslash; \ in unquoted substitutions escapes globchars; shopt -u globskipdots shows . and ..
 - **pipeline**: PIPESTATUS is set on simple commands; \|&; ! with ( ); ! is not a command; Evaluation of argv[0] in pipeline occurs in child; SIGPIPE causes pipeline to die (regression for issue #295)
 - **exit-status**: Truncating 'return' status; subshell OverflowError https://github.com/oilshell/oil/issues/996; func subshell OverflowError https://github.com/oilshell/oil/issues/996; If subshell false -- exit code is propagated in a weird way (strict_argv prevents); Exit code when command sub evaluates to empty str, e.g. `false` (#2416); More test cases with empty argv
 - **errexit**: More && \|\|; set errexit while it's ignored in a subshell (moot with strict_errexit); errexit double guard; pipeline process respects errexit; simple command / assign - redir failure DOES respect errexit; bash atoms [[ (( - redir failure checked; Command sub exit code is lost
-- **command_**: Command block; Permission denied; filling $PATH cache, then insert the same command earlier in cache; filling $PATH cache, then deleting command; Non-executable on $PATH; hash without args prints the cache; hash with args; Executing command with same name as directory in PATH (#2429)
+- **command_**: Command block; Permission denied; filling $PATH cache, then insert the same command earlier in cache; filling $PATH cache, then deleting command; hash without args prints the cache; hash with args; Executing command with same name as directory in PATH (#2429)
 - **posix**: Empty for loop without in.  Do can be on the same line I guess.; Empty action for case is syntax error; Bare semi-colon not allowed; Command substitution in default
 - **alias**: Usage of builtins; define and use alias on a single line; alias with trailing space causes alias expansion on second word; Recursive alias expansion of SECOND word; Alias must be an unquoted word, no expansions allowed; first and second word are the same alias, with trailing space; Syntax error after expansion; Loop split across alias in another way; Loop split across both iterative and recursive aliases; Alias with a quote in the middle is a syntax error; Two aliases in pipeline; Alias can be defined and used on a single line; alias with line continuation in the middle; alias for left brace; alias for left paren; here doc inside alias; Corner case: alias inside LHS array arithmetic expression; alias with word of multiple lines
+- **let**: let with ()
+- **shell-grammar**: If with then on same line missing semicolon
+- **process-sub**: Process sub input; Process sub from external process to stdin; Process sub from shell to stdin; Non-linear pipeline with \>(); status code is available; shopt -s process_sub_fail; process subs and pipelines together; process sub in background &
+- **regex**: Unquoted { is a regex parse error; make a lisp example
+- **background**: wait -n with arguments - arguments are respected; wait with invalid arg; Wait for job and PIPESTATUS - cat; YSH wait --all; YSH wait --verbose; Signal message for killed background job
+- **sh-options**: $- with -c; $- with interactive shell; pass shopt options like sh -O nullglob; vi and emacs are mutually exclusive; interactive shell starts with emacs mode on; -n for no execution (useful with --ast-output); noclobber on \<\>
+
+</details>
+
+## Shell: oils spec tests in Chromium
+
+The same cases as above, run by scripts/conformance/browser-oils.mjs through the built app in headless Chromium (cross-origin isolated).
+
+| Area | Before | Now | Failing |
+|---|---|---|---|
+| smoke | — | 18/18 | 0 |
+| comments | — | 2/2 | 0 |
+| quote | — | 29/33 | 4 |
+| word-split | — | 44/53 | 9 |
+| word-eval | — | 7/8 | 1 |
+| var-sub | — | 2/6 | 4 |
+| var-sub-quote | — | 32/41 | 9 |
+| var-op-test | — | 22/35 | 13 |
+| var-op-strip | — | 25/28 | 3 |
+| var-op-len | — | 3/7 | 4 |
+| var-op-patsub | — | 22/27 | 5 |
+| var-op-slice | — | 16/21 | 5 |
+| var-num | — | 5/7 | 2 |
+| vars-special | — | 30/37 | 7 |
+| arith | — | 62/71 | 9 |
+| command-sub | — | 19/28 | 9 |
+| here-doc | — | 29/32 | 3 |
+| redirect | — | 28/39 | 11 |
+| if_ | — | 4/5 | 1 |
+| loop | — | 21/28 | 7 |
+| case_ | — | 12/13 | 1 |
+| sh-func | — | 10/11 | 1 |
+| func-parsing | — | 4/12 | 8 |
+| builtin-echo | — | 25/27 | 2 |
+| builtin-printf | — | 47/55 | 8 |
+| builtin-read | — | 64/64 | 0 |
+| builtin-eval-source | — | 19/23 | 4 |
+| builtin-getopts | — | 26/30 | 4 |
+| builtin-trap | — | 25/33 | 8 |
+| builtin-bracket | — | 43/50 | 7 |
+| builtin-cd | — | 26/28 | 2 |
+| builtin-special | — | 7/12 | 5 |
+| builtin-type | — | 1/6 | 5 |
+| builtin-vars | — | 31/38 | 7 |
+| dbracket | — | 44/49 | 5 |
+| dparen | — | 13/14 | 1 |
+| assign | — | 35/43 | 8 |
+| append | — | 12/20 | 8 |
+| array-basic | — | 5/5 | 0 |
+| array | — | 68/78 | 10 |
+| array-assoc | — | 33/38 | 5 |
+| brace-expansion | — | 51/55 | 4 |
+| tilde | — | 7/14 | 7 |
+| glob | — | 18/23 | 5 |
+| pipeline | — | 19/25 | 6 |
+| exit-status | — | 5/11 | 6 |
+| errexit | — | 29/35 | 6 |
+| subshell | — | 2/2 | 0 |
+| command_ | — | 8/16 | 8 |
+| posix | — | 12/15 | 3 |
+| alias | — | 31/48 | 17 |
+| let | — | 1/2 | 1 |
+| empty-bodies | — | 3/3 | 0 |
+| whitespace | — | 0/0 | 0 |
+| shell-grammar | — | 32/33 | 1 |
+| process-sub | — | 0/8 | 8 |
+| regex | — | 35/37 | 2 |
+| temp-binding | — | 4/4 | 0 |
+| background | — | 21/27 | 6 |
+| sh-options | — | 25/32 | 7 |
+| command-parsing | — | 2/2 | 0 |
+
+<details><summary>Failing cases</summary>
+
+- **quote**: $'' octal escapes don't have leading 0; $'' octal escapes with fewer than 3 chars; $'' supports \cA escape for Ctrl-A - mask with 0x1f; \c' is an escape, unlike bash
+- **word-split**: default value with unquoted IFS char; Empty IFS (regression for bug); Unset IFS (regression for bug); IFS and joining arrays by assignments; Bug #628 split on : with : in literal word; 4 x 3 table - with for loop; IFS=x and '' and $@ (#2); ""$A"" - empty string on both sides - derived from spec/toysh-posix #15; Regression: "${v:-AxBxC}"x should not be split
+- **word-eval**: Default values -- more cases
+- **var-sub**: Bad var sub; Braced block inside ${}; Descriptor redirect to bad "$@"; Here doc with bad "$@" delimiter
+- **var-sub-quote**: Multiple words: outer double quotes, inner double quotes; Mixed inner quotes with outer quotes; part_value tree on RHS; Multiple words: outer double quotes, inner double quotes; Multiple words: outer double quotes, inner single quotes; Strip a string with single quotes, unquoted; Strip a string with single quotes, double quoted; Syntax error for single quote in double quote; Right Brace as argument (similar to #702)
+- **var-op-test**: Lazy Evaluation of Alternative; Unquoted with array as default value; Quoted with array as default value; Assign default with array; Nix idiom ${!hooksSlice+"${!hooksSlice}"} - was workaround for obsolete bash 4.3 bug; array and - and +; $@ (empty) and - and +; $* ("" "") and - and + (IFS=); "$*" ("" "") and - and + (IFS=); "\z" as arg; op-test for ${!array} with array="a" and array="a[0]"; op-test for ${!array} with array="a[@]" or array="a[*]"; op-test for unquoted ${a[*]:-empty} with IFS=
+- **var-op-strip**: Remove const suffix is vectorized on $@ array; strip none; Strip Right Brace (#702)
+- **var-op-len**: Unicode string length (spec/testdata/utf8-chars.txt); String length with incomplete utf-8; String length with invalid utf-8 continuation bytes; Length operator can't be followed by test operator
+- **var-op-patsub**: Confusing unquoted slash matches bash (and ash); Synthesized ${x///} bug (similar to above); Replace backslash; When LC_ALL=C, pattern ? doesn't match multibyte character; Chromium from http://www.oilshell.org/blog/2016/11/07.html
+- **var-op-slice**: Cannot take length of substring slice; ${@:offset} and ${*:offset}; ${@:offset:length} and ${*:offset:length}; Permutations of implicit begin and length; ${array[@]:} vs ${array[@]: }  - bash and zsh inconsistent
+- **var-num**: Normal and braced; In function
+- **vars-special**: $PATH is set if unset at startup; Vars set interactively only: $HISTFILE; Some vars are set, even without startup file, or env: PATH, PWD; $LINENO is the current line, not line of function call; $LINENO in "bare" redirect arg (bug regression); $LINENO in other for loops; $_ with assignments, arrays, etc.
+- **arith**: Arith sub with word parts; Backticks within arith sub; Integer constant validation; Comma operator (borrowed from C); Logical Ops; Bitwise ops; Comment not allowed in the middle of multiline arithmetic; Double subscript; Invalid constant
+- **command-sub**: case in subshell; Backtick 2; Nested backticks; Making keyword out of command sub should NOT work; Command sub with here doc; Escaped quote in [[ ]]; Quoting \ within ``; Quoting \ within `` within double quotes; Syntax errors with double quotes within backticks
+- **here-doc**: Here doc with bad comsub delimiter; Here doc with line continuation, then pipe.  Syntax error.; Function def and execution with here doc
+- **redirect**: Named file descriptor; Redirect to file descriptor that's not open; \>&word redirects stdout and stderr when word is not a number or -; 1\>&2- to move file descriptor; 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; echo foo \>&100 (OSH regression: does not fail with invalid fd 100); echo foo \>&N where N is first unused fd (hang/timeout); exec {fd}\>&- (OSH regression: fails to close fd); xtrace not affected by redirects
+- **if_**: if break corner case
+- **loop**: while in pipe with subshell; continue at top level; continue in subshell; continue in subshell aborts with errexit; bad arg to break; top-level break/continue/return (without strict_control_flow); builtin,command break,continue,return,exit
+- **case_**: case \n bug regression
+- **sh-func**: Subshell function
+- **func-parsing**: Function with spaces, to see if ( and ) are separate tokens.; Hard case, function with } token in it; . in function name; = in function name; Function name with $; Function name with command sub; Function name with !; Break after ) is OK.
+- **builtin-echo**: echo builtin should disallow typed args - literal; echo builtin should disallow typed args - variable
+- **builtin-printf**: printf with no args; printf -v a[1]; printf -v syntax error; printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8; printf invalid format; bash truncates long strftime string at 128; printf positive integer overflow; printf negative integer overflow
+- **builtin-eval-source**: eval usage; eval YSH block with 'break continue return error'; Source with syntax error; Eval with syntax error
+- **builtin-getopts**: getopts with invalid variable name; OPTIND; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
+- **builtin-trap**: exit 1 when trap code string is invalid; trap EXIT calling exit; trap EXIT with PARSE error and explicit exit; exit codes for traps are isolated; traps are cleared in subshell (started with &); trap USR1, sleep, SIGINT: non-interactively; Remove trap with an unsigned integer; trap with command.NoOp - check internal invariant
+- **builtin-bracket**: -a as unary operator (alias of -e); -k for sticky bit; test -p named pipe; -u for setuid, -g too; test -o for options; -ef; test -c
+- **builtin-cd**: pwd in symlinked dir on shell initialization; Survey of getcwd() syscall
+- **builtin-special**: Prefix assignments persist after special builtins, like : (set -o posix); Prefix assignments persist after readonly, but NOT exported (set -o posix); Prefix binding for exec is a special case (versus e.g. readonly); bash 'type' gets confused - says 'function', but runs builtin; command, builtin - both can be redefined, not special (regression)
+- **builtin-type**: type -\> keyword builtin; type -\> alias external; type of relative path; special builtins are called out; more special builtins
+- **builtin-vars**: Export sets a global variable that persists after export -n; Export a local that shadows a global; Unset exported variable, then define it again.  It's NOT still exported.; Exporting a parent func variable (dynamic scope); Unset a function without -f; Unset and scope (bug #653); local after readonly
+- **dbracket**: [[ regex syntax error; [[ at runtime doesn't work; [[ with env prefix doesn't work; tilde expansion with =~ (confusing); [[ ]] with redirect
+- **dparen**: (( )) with redirect
+- **assign**: Env binding can use preceding bindings, but not subsequent ones; Env value with escaped \<; Trying to run keyword 'for'; Test above without 'local' (which is not POSIX); aliased assignment doesn't split; assign and glob; declare and glob; "declare -a arr" and "readonly -a a" creates an empty array (OSH)
+- **append**: error: typeset myarray+=s; error: append used like env prefix; Try to append list to element; typeset s+=; typeset s${dyn}+=; export readonly +=; local +=; assign builtin appending array: declare d+=(d e)
+- **array**: space before ( in array initialization; array with invalid token; ${!a[1]} is named ref in bash; Arrays can't be used as env bindings; Associative arrays can't be used as env bindings either; Set array item to array; Multiple subscripts not allowed; Length op, index op, then transform op is not allowed; array default; a+=() modifies existing instance of BashArray
+- **array-assoc**: unset -v and assoc array; nameref and assoc array; ${!ref} and assoc array; printf -v and assoc array; bash bug: (( A["$key"] = 1 )) doesn't work
+- **brace-expansion**: expansion on RHS of assignment; no expansion with RHS assignment; Two kinds of tilde expansion; Mixed case char expansion is invalid
+- **tilde**: ${undef:-~}; ${x//~/~root}; x=foo:~ has tilde expansion; a[x]=foo:~ has tilde expansion; tilde expansion an assignment keyword; x=${undef-~:~}; temp assignment x=~ env
+- **glob**: Glob of unescaped [[] and []]; Glob of negated unescaped [[] and []]; \ in unquoted substitutions does not match a backslash; \ in unquoted substitutions escapes globchars; shopt -u globskipdots shows . and ..
+- **pipeline**: PIPESTATUS is set on simple commands; \|&; ! with ( ); ! is not a command; Evaluation of argv[0] in pipeline occurs in child; SIGPIPE causes pipeline to die (regression for issue #295)
+- **exit-status**: Truncating 'return' status; subshell OverflowError https://github.com/oilshell/oil/issues/996; func subshell OverflowError https://github.com/oilshell/oil/issues/996; If subshell false -- exit code is propagated in a weird way (strict_argv prevents); Exit code when command sub evaluates to empty str, e.g. `false` (#2416); More test cases with empty argv
+- **errexit**: More && \|\|; set errexit while it's ignored in a subshell (moot with strict_errexit); errexit double guard; pipeline process respects errexit; simple command / assign - redir failure DOES respect errexit; bash atoms [[ (( - redir failure checked
+- **command_**: Command block; Permission denied; filling $PATH cache, then insert the same command earlier in cache; filling $PATH cache, then deleting command; Non-executable on $PATH; hash without args prints the cache; hash with args; Executing command with same name as directory in PATH (#2429)
+- **posix**: Empty for loop without in.  Do can be on the same line I guess.; Empty action for case is syntax error; Bare semi-colon not allowed
+- **alias**: Usage of builtins; define and use alias on a single line; alias with trailing space causes alias expansion on second word; Recursive alias expansion of SECOND word; Alias must be an unquoted word, no expansions allowed; first and second word are the same alias, with trailing space; Syntax error after expansion; Loop split across alias in another way; Loop split across both iterative and recursive aliases; Alias with a quote in the middle is a syntax error; Two aliases in pipeline; Alias can be defined and used on a single line; alias with line continuation in the middle; alias for left brace; alias for left paren; here doc inside alias; Corner case: alias inside LHS array arithmetic expression
 - **let**: let with ()
 - **shell-grammar**: If with then on same line missing semicolon
 - **process-sub**: Process sub input; Process sub from external process to stdin; Process sub from shell to stdin; Non-linear pipeline with \>(); status code is available; shopt -s process_sub_fail; process subs and pipelines together; process sub in background &
