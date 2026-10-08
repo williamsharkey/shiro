@@ -159,6 +159,37 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### unix/shell-stdio — a shell run as a kernel process uses its fds
+
+`sh -c SCRIPT` spawned by a program (and scripts run through `runViaShell`)
+now uses the process's fds as its stdio (`src/shell-stdio.ts`), and builtins
+run as kernel processes read fd 0 only if they look at `ctx.stdin`. Quick
+suite, `--suites shell,kernel`, base 2455c97 vs. 5627dae, two runs of each
+(medians of both runs pooled):
+
+| metric | base | new | change |
+|---|---:|---:|---:|
+| isolated:shell.true | 0.073 ms | 0.096 ms | noise: 0.053 → 0.055 ms over 15 runs each |
+| isolated:shell.echo | 0.081 ms | 0.085 ms | +5% |
+| isolated:shell.cmd_subst | 0.185 ms | 0.191 ms | +3% |
+| isolated:shell.loop_1000 | 105.5 ms | 84.2 ms | −20% |
+| isolated:shell.pipeline_seq_grep_wc | 68.5 ms | 49.7 ms | −27% |
+| isolated:shell.redirect_append_100 | 7.93 ms | 8.47 ms | +7% |
+| isolated:kernel.spawn_wait.builtin | 0.445 ms | 0.39 ms | −12% |
+| isolated:kernel.spawn_throughput.builtin | 4958 proc/s | 5165 proc/s | +4% |
+| nonisolated:kernel.spawn_wait.builtin | 0.3 ms | 0.3 ms | 0% |
+| nonisolated:kernel.spawn_throughput.builtin | 8197 proc/s | 8264 proc/s | +1% |
+| nonisolated:kernel.spawn_throughput.wasm | 1351 proc/s | 938 proc/s | noise, see below |
+
+The shell metrics run in-page (no kernel process), where the change only adds
+a `liveStdin()` check per segment. `spawn_throughput.wasm` doesn't reach the
+changed code (the WASM loader answers before the builtin loader) and its
+samples are bimodal at the nonisolated timer's resolution (≈1000 or ≈1900
+proc/s within one run); two further 15-run passes on the new code gave
+medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
+≈10 proc/s for its last 11 samples and did not recur in two more; worth
+watching if it shows up on other branches.
+
 ### unix/perf-blink 2 — smaller generated code, forward branches, SSE moves
 
 `perf-blink-after-x86.json` → `perf-blink-2-x86.json` (x86 suite, isolated, 3 runs):
