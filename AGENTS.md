@@ -128,6 +128,8 @@ npm run build
 npm run deploy
 ```
 
+Performance: `npm run bench:quick` (~2.5 min) before and after a performance change, `node bench/compare.mjs old.json new.json` to diff; the baseline, the ranked hotspot list and bugs found are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md), the harness in [bench/README.md](bench/README.md). It drives the pre-installed Chromium (`/opt/pw-browsers/chromium`); never run `playwright install`.
+
 Use focused vitest runs while iterating, then run the smallest meaningful verification set before deploy. For changes touching seed/Claude/bootstrap paths, relevant files usually include:
 
 - `tests/tests/shiro-vitest/seed.test.ts`
