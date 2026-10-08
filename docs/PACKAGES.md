@@ -93,10 +93,11 @@ running it exits 126 unless `SHIRO_PKG_FORCE=1`.
 
 What the kernel provides follows the WASM process mode (`wasmProcessMode()`
 in `src/wasi/host.ts`): `sab` gives blocking-stdin, tty, processes, threads,
-sync-fs and wasix (the guest's WASIX subset); `jspi` the same without threads;
+sync-fs, wasix (the guest's WASIX subset) and wasix-stack (fork, setjmp and
+exec through asyncify stack capture); `jspi` the same without threads and
+wasix-stack;
 `none` nothing. Other kernel parts
-can add features (`sockets` once unix/net lands, `wasix-stack` once the guest
-captures stacks) with:
+can add features with:
 
 ```js
 globalThis.__shiroKernel = { features: ['sockets'] };
@@ -128,9 +129,9 @@ works everywhere and the interactive mode needs a page that can block.
 | ripgrep (rg) | 15.2.1 | Wasmer | WASIX | ok as kernel processes, as `/usr/bin/rg` |
 | quickjs-ng (qjs-ng) | 0.15.1 | Wasmer | WASIX | ok as kernel processes |
 | less | 685 | Wasmer | WASIX | runs as kernel processes (`/usr/bin/less`); passthrough checked, interactive paging not yet |
-| bash | 1.0.25 | Wasmer | WASIX | needs wasix-stack |
-| dash | 1.0.19 | Wasmer | WASIX | needs wasix-stack |
-| php | 8.3 | Wasmer | WASIX | needs wasix-stack (86 MB) |
+| bash | 1.0.25 | Wasmer | WASIX | ok as kernel processes: scripts, `-c`, interactive on the pty (readline editing, ^C), fork/exec/pipelines/`$(...)`, `wait` |
+| dash | 1.0.19 | Wasmer | WASIX | ok as kernel processes, as bash; this early build's exec passes no environment, so exported variables don't reach children |
+| php | 8.3 | Wasmer | WASIX | ok as kernel processes (`php -r`, exceptions, fatal errors through zend_bailout's longjmp); 86 MB |
 | python3.13 | 3.13 | Wasmer | WASIX | needs dynamic-linking (62 MB) |
 | clang 16, lld, llvm-ar/nm | 16 | Wasmer | WASIX | `--version` runs; needs mounts for its sysroot (111 MB) |
 | curl | 8.4.0 | Wasmer | WASIX | `--version` runs; needs sockets (WASIX sock_open/connect) |
@@ -148,9 +149,10 @@ startup exits 71 through them, and then trapped), `path_open2` and
 imported under `wasix_32v1` (early builds such as dash). What still blocks the
 rest:
 
-- `wasix-stack`: bash, dash and php stop at `stack_checkpoint`, WASIX's
-  setjmp/fork primitive. The host has to capture and rewind the WASM stack
-  (asyncify-style).
+- `wasix-stack` (done): WASIX builds are asyncified, so the guest captures
+  and rewinds the stack itself (`src/wasi/asyncify.ts`): setjmp/longjmp,
+  fork (a new kernel process with a copy of the memory, fds and signal
+  state) and a real exec. See AGENTS.md "WASM Processes".
 - `dynamic-linking`: python imports `env.__indirect_function_table`.
 - `mounts`: clang's sysroot volumes belong at `/sysroot` and `/lib`.
 - `sockets`: curl transfers.

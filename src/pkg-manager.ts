@@ -214,7 +214,7 @@ const MODE_FEATURES: Record<string, KernelFeature[]> = {
   // Worker per process/thread, blocking syscalls over SharedArrayBuffer
   // 'wasix' is the guest's subset (startup, spawn, pipes, futexes, path_open2);
   // packages needing more name it (wasix-stack, sockets, ...)
-  sab: ['blocking-stdin', 'tty', 'processes', 'threads', 'sync-fs', 'wasix'],
+  sab: ['blocking-stdin', 'tty', 'processes', 'threads', 'sync-fs', 'wasix', 'wasix-stack'],
   // Main thread, imports suspend on the kernel (no shared memory, so no threads)
   jspi: ['blocking-stdin', 'tty', 'processes', 'sync-fs', 'wasix'],
   none: [],
@@ -560,7 +560,7 @@ export async function runPackageBinary(binPath: string, argv0: string, args: str
   // programs keep the in-page runtime, which adapts wasi_unstable.
   if (mode !== 'none' && entry?.abi !== 'wasi_unstable') {
     const { runWasiProgram } = await import('./wasi/run-command');
-    return runWasiProgram(ctx, { module: mod, image: bytes, argv, cwd: ctx.cwd, env: { ...ctx.env }, preopens: await topLevelDirs(ctx.fs) });
+    return runWasiProgram(ctx, { module: mod, image: bytes, argv, cwd: ctx.cwd, env: { ...ctx.env }, preopens: await topLevelDirs(ctx.fs, entry) });
   }
   return runInPage(mod, entry, argv, args, ctx);
 }
@@ -587,11 +587,16 @@ export async function packageKernelProgram(
     moduleCache.set(binPath, mod);
   }
   const { wasmRunner } = await import('./wasi/host');
-  return { argv: [argv0, ...(bin?.args || []), ...args], run: wasmRunner(mod, new Uint8Array(bytes), await topLevelDirs(fs)) };
+  return { argv: [argv0, ...(bin?.args || []), ...args], run: wasmRunner(mod, new Uint8Array(bytes), await topLevelDirs(fs, entry)) };
 }
 
-/** "/usr", "/home", ...: preopened by name for libcs that don't match "/" (see wasmRunner). */
-async function topLevelDirs(fs: FileSystem): Promise<string[]> {
+/**
+ * "/usr", "/home", ...: preopened by name for libcs that don't match "/"
+ * (see wasmRunner). Not for WASIX programs: their libc matches "/", and the
+ * early one in dash strips the wrong prefix when several preopens match.
+ */
+async function topLevelDirs(fs: FileSystem, entry?: PkgEntry): Promise<string[]> {
+  if (entry?.abi === 'wasix') return [];
   const out: string[] = [];
   try {
     for (const name of await fs.readdir('/')) {
