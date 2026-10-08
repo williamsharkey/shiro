@@ -285,6 +285,153 @@ re-run: `shell.pipeline_seq_grep_wc` (9-run medians, 3× alternating: base
 14.1–15.7 ms, new 14.9–17.0 ms), `boot.warm.first_command` (re-runs 5.9,
 6.2 ms vs 6.6), x86/kernel metrics: noise.
 
+### unix/perf-kernel, round 1: syscall transport, Worker leak and pool, file flush
+
+`bench/results/perf-kernel-r1-quick.json`, compared with `integration-970831e-quick.json` ("baseline") and with that commit (`cc8539e`) built in a worktree and run on this machine in the same session ("base here"). Changes:
+
+- **SAB channel transport** (`src/kernel/channel.ts`). The kernel watches each
+  guest's state word with `Atomics.waitAsync` instead of a `'sys'`
+  postMessage per call; guests spin ~0.1 ms before sleeping and mark that in
+  the state word (`STATE_REQUEST_SPIN`), so replies to a spinning guest need
+  no `Atomics.notify` (it cost ~10–25 µs on the page). While guests make
+  calls back to back, one page-side pump polls every hot channel for 30 µs
+  after each reply (bounded to 4 ms per task, then it yields), so their next
+  request is served without an event-loop round trip.
+- **Sync fast path**: `kernel.syscallSync` answers ids, fstat, lseek, fcntl
+  get/setfd and read/write that need no waiting (new optional
+  `OpenFile.tryRead/tryWrite/statSync`: pipes, regular files, /dev/null)
+  with no microtask hops; JSPI guests skip suspension for them. A blocked
+  pipe read/write waits on `onReady` and is answered inside the call that
+  makes it ready.
+- **Worker leak**: Chromium can't terminate a Worker parked in
+  `Atomics.wait`, and every exited WASM process left its guest parked there
+  (60 Workers, ~70 MiB RSS per round of 100 processes). The kernel now closes
+  the channel (`STATE_DEAD` + notify), the guest throws `ChannelClosed`,
+  unwinds to its event loop, and the Worker is reused or terminated.
+- **Worker pool** (`src/wasi/worker-pool.ts`): an unwound guest Worker
+  reports `wasi-idle` and runs the next WASM process; up to 8 wait during
+  bursts, 2 after 10 s without spawns, one is pre-started after each spawn.
+- **Kernel file write-back** (`Inode` in `fd.ts`): flushed once writes pause
+  for 25 ms (at most every 1 s), not on a 0 ms timer after every write; each
+  flush stores the whole file, so a 4 MiB file written in 64 KiB pieces was
+  stored 64 times.
+
+| metric (isolated unless noted) | unit | baseline | base here | round 1 |
+|---|---|---|---|---|
+| kernel.syscall_rtt.sab | µs | 155 | 92.6 | **3.72** |
+| kernel.syscall_rtt.jspi (non-isolated) | µs | 10.8 | 8.00 | 5.48 |
+| kernel.pipe_throughput_512b | MB/s | 6.62 | 11.4 | **69.7** |
+| kernel.pipe_throughput_512b (non-isolated) | MB/s | 56.3 | 61.0 | 127 |
+| kernel.pipe_throughput (64 KiB) | MB/s | 355 | 495 | 759 |
+| kernel.file_write | MB/s | 14.2 | 21.6 | **236** |
+| kernel.file_read | MB/s | 496 | 757 | 2213 |
+| kernel.spawn_wait.wasm | ms | 14.5 | 8.76 | **0.53** |
+| kernel.spawn_throughput.wasm | proc/s | 128 | 198 | 364 |
+| kernel.epoll_wakeup | µs | 54.1 | 28.9 | 29.4 |
+| hygiene.procs100.workers_left | count | 60 | 88 | **2** (the idle pool) |
+| hygiene.procs100.rss_delta | MiB/round | 69.8 | 87.0 | **6.06** |
+| wasm.ripgrep.tree | ms | 1137 | 681 | **189** |
+| wasm.startup.lua / sqlite3 / ripgrep | ms | 22 / 27 / 26 | 15 / 19 / 16 | 4.8 / 6.7 / 6.1 |
+| wasm.sqlite.recursive_cte | ms | 153 | 107 | 97.9 |
+
+`compare.mjs` against the baseline: 54 improved, 5 flagged. The flagged ones
+are machine drift or noise: `wasm.cpu_loop.{native,node,shiro}` +13–18%
+(native included), `x86.blink.peak_rss.go_nethttp` +20% (Blink does not use
+the changed channel code), and non-isolated `kernel.spawn_wait.wasm`
+0.5 → 1.5 ms, which is 0.9–1.15 ms for the base commit here too (first
+samples of the metric vary 0.3–9 ms). Three interleaved A/B kernel runs had
+one real regression, isolated `spawn_throughput.builtin` −40%: the pool
+terminated surplus Workers in the middle of the benchmark's builtin rounds;
+keeping 8 idle during bursts and trimming later fixed it (7837/6620 vs base
+4941/8323 proc/s). Boot/shell/x86 A/B: no difference beyond noise.
+
+Still open: 512-byte pipe I/O is ~70 MB/s isolated (target >100); each call
+is now ~2–3 µs, near the cost of the cross-thread handoff itself.
+
+### unix/perf-kernel, round 2: per-file cost (rg over 2000 files)
+
+`bench/results/perf-kernel-r2-quick.json` vs `integration-d286c5e-quick.json`
+(after merging unix/integration; `perf-kernel-r1m-quick.json` is round 1 on
+top of that merge). Profile of `rg -l` over 2000 files: ~11k syscalls
+(5800 read, 2100 openat, 2100 close, 627 newfstatat, 202 getdents64), and
+`FileSystem.readdir` scanning every key in the store (the Claude Code
+install included) once per directory.
+
+- `FileSystem.readdir` uses a parent → children index built from the key
+  set on first use and updated with it (no scan of every key).
+- `kernel.syscallSync` also answers `openat` of a cached file or directory
+  (no O_CREAT/O_TRUNC), `close` when nothing needs writing back
+  (`OpenFile.closeSync`), and stat/lstat/newfstatat from
+  `FileSystem.lookupCached`; getdents64 types entries from the same cache
+  instead of an awaited stat per entry. A registered handler can let these
+  through with `handler.passSync` (host.ts's `/bin/<command>` stat does).
+
+| metric (isolated) | unit | d286c5e | round 1 merged | round 2 |
+|---|---|---|---|---|
+| wasm.ripgrep.tree | ms | 1196 | 306 | **204** |
+| wasm.builtin_grep_r.tree | ms | 72.6 | 58.4 | **19.8** |
+| kernel.syscall_rtt.sab | µs | 149 | 4.61 | 8.30 |
+| kernel.pipe_throughput_512b | MB/s | 6.75 | 50.3 | 40.4 |
+| kernel.spawn_wait.wasm | ms | 15.6 | 0.77 | 1.18 |
+| hygiene.procs100.workers_left | count | 54 | 3 | 3 |
+| hygiene.procs100.rss_delta | MiB | 64.9 | 6.0 | 6.6 |
+
+The machine was markedly slower during the round 2 run (the same channel
+code measured 3.7 µs RTT earlier). `compare.mjs` flags against d286c5e
+(boot, shell, net, x86, non-isolated kernel throughput) did not hold up in
+interleaved A/B runs against d286c5e built here: e.g. non-isolated
+`spawn_throughput.builtin` came out −40%, then −9% and +22% when re-run
+with different preceding metrics, on a ~10 ms measurement with 100 µs
+timer resolution. In-page rg runs measure 170–230 ms; the first run in a
+page is slower (the pool starts Workers for rg's threads).
+
+### unix/perf-kernel, round 3: WASI read/write fast path, epoll timeouts
+
+`bench/results/perf-kernel-r3-quick.json`. A plain JS guest (GuestSys, no
+WASI layer) already did 1.5 µs RTT and 114–135 MB/s of 512-byte pipe I/O in
+the browser, so the rest of the gap was the WASI guest's per-call work: a
+new DataView per access, iovec arrays, a gather copy, three generators and
+request/reply objects per `fd_write`.
+
+- `fd_read`/`fd_write` in Worker guests go straight to the channel
+  (`WasiGuest.direct`): iovecs are gathered into / scattered from the data
+  area, one call, no generators. Memory views are cached per buffer.
+- poll/epoll/select timeouts share one timer; a wait that ends on readiness
+  only marks its deadline dead (no setTimeout/clearTimeout per call).
+
+| metric | unit | d286c5e | round 2 | round 3 |
+|---|---|---|---|---|
+| kernel.syscall_rtt.sab | µs | 149 | 8.30 | **5.62** |
+| kernel.syscall_rtt.jspi (non-isolated) | µs | 10.2 | 3.98 | 3.74 |
+| kernel.pipe_throughput_512b | MB/s | 6.75 | 40.4 | 76.5 (112, 115 in two kernel+wasm runs) |
+| kernel.pipe_throughput_512b (non-isolated) | MB/s | 45.7 | 64.3 | 80.7 |
+| kernel.pipe_throughput (64 KiB) | MB/s | 334 | 333 | 740 |
+| kernel.file_write | MB/s | 18.2 | 105 | 156 |
+| kernel.spawn_wait.wasm | ms | 15.6 | 1.18 | 0.85 |
+| kernel.spawn_throughput.wasm | proc/s | 128 | 313 | 303 |
+| kernel.epoll_wakeup | µs | 79.8 | 71.8 | 57.5 |
+| hygiene.procs100.workers_left | count | 54 | 3 | 3 |
+| hygiene.procs100.rss_delta | MiB | 64.9 | 6.6 | 6.5 |
+| wasm.ripgrep.tree | ms | 1196 | 204 | 169 |
+| wasm.builtin_grep_r.tree | ms | 72.6 | 19.8 | 20.6 |
+
+512-byte pipe I/O depends on how warm the guest Workers are: eight runs in
+one page measured 57, 48, 81, 55, 90, 116, 164, 119 MB/s (pooled Workers
+keep the guest's JIT-compiled code; the quick bench takes 3 samples).
+`epoll_wakeup` is mostly the benchmark's own timer turn: the in-page
+wait + write + read cycle measures ~17 µs (~13 µs without a timeout).
+
+RSS over many rounds (500 kbench.wasm spawns in rounds of 50, renderer RSS
+and live Workers after each round): d286c5e 316 → 376 MiB with 50–54
+Workers; this branch 234–237 MiB with 3 Workers throughout.
+
+Flags against the d286c5e file that A/B runs here did not confirm: boot,
+shell, net, x86 and non-isolated kernel throughput (e.g. non-isolated
+`file_read` −35% in this run, +25% in the interleaved A/B), and isolated
+`spawn_throughput.builtin` (−37% here; 3718 vs 4065 proc/s with the pool's
+trim disabled vs enabled, and 4850 → 5508 under the profiler). It is
+100 spawns in ~20 ms and swings ±40% between identical runs.
+
 ## Results
 
 <!-- bench:table:begin -->

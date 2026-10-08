@@ -8,12 +8,13 @@
  * filesystem or the terminal itself.
  */
 
-import { GuestChannel, SYS_MESSAGE, isStartMessage, type GuestStartMessage } from '../kernel/channel';
+import { ChannelClosed, GuestChannel, SYS_MESSAGE, isStartMessage, type GuestStartMessage } from '../kernel/channel';
 import * as A from '../kernel/abi';
 import { SYS_wasi_thread_spawn, SYS_wasix_fork, type SysReply, type SysRequest } from './abi';
 import { Asyncify, type StackCapture } from './asyncify';
 import { dylinkImports, type DylinkLayout } from './dylink';
 import { DynCalls, type FuncSigs } from './dyncall';
+import { IDLE_MESSAGE } from './worker-pool';
 import { ProcExit, WasiGuest, buildImports, runSync, type GuestForkState, type Preopen, type StackAction } from './wasi-guest';
 
 export interface WasiStartData {
@@ -43,7 +44,7 @@ export interface WasixForkState {
 
 export type WasiStartMessage = GuestStartMessage & { tid?: number; wasi: WasiStartData };
 
-/** Messages besides SYS_MESSAGE that a guest posts to the host. */
+/** Messages besides SYS_MESSAGE and IDLE_MESSAGE that a guest posts to the host. */
 export type WasiGuestMessage =
   | { type: 'wasi-error'; message: string }
   | { type: 'wasix-fork'; state: WasixForkState }
@@ -58,13 +59,19 @@ export interface Port {
 export function guestMain(port: Port): void {
   port.onmessage = (ev) => {
     const msg = ev.data;
-    if (isStartMessage(msg) && (msg as WasiStartMessage).wasi) run(port, msg as WasiStartMessage);
+    if (!isStartMessage(msg) || !(msg as WasiStartMessage).wasi) return;
+    try {
+      run(port, msg as WasiStartMessage);
+    } finally {
+      // Back in the event loop with nothing kept from that program: the host may reuse this worker (./worker-pool.ts)
+      port.postMessage(IDLE_MESSAGE);
+    }
   };
 }
 
 function run(port: Port, msg: WasiStartMessage): void {
   const w = msg.wasi;
-  const channel = new GuestChannel(msg.sab, () => port.postMessage(SYS_MESSAGE));
+  const channel = new GuestChannel(msg.sab, msg.wake === 'atomics' ? null : () => port.postMessage(SYS_MESSAGE));
   let guest: WasiGuest | undefined;
   const call = (req: SysRequest): SysReply => {
     for (;;) {
@@ -88,6 +95,17 @@ function run(port: Port, msg: WasiStartMessage): void {
       if (tls instanceof WebAssembly.Global) port.postMessage({ type: 'wasix-signals', callback, tlsBase: tls.value } satisfies WasiGuestMessage);
     },
   });
+  guest.direct = {
+    data: channel.data,
+    call: (nr, a0, a1) => {
+      for (;;) {
+        const lo = channel.call(nr, a0, a1);
+        if (lo === -A.EINTR && guest!.takeRestart()) continue;
+        guest!.takeRestart();
+        return lo;
+      }
+    },
+  };
   const extra: Record<string, Record<string, any>> = {};
   const dylink = w.dylink ? dylinkImports(w.module, w.dylink) : null;
   if (dylink) for (const [mod, ns] of Object.entries(dylink.imports)) extra[mod] = { ...ns };
@@ -149,8 +167,9 @@ function run(port: Port, msg: WasiStartMessage): void {
     if (entry) runEntry(port, guest, entry, call);
     runSync(guest.exit(0), call);
   } catch (e) {
-    if (e instanceof ProcExit) return;
-    try { runSync(guest.trap(e), call); } catch { /* ProcExit */ }
+    // ChannelClosed: the process is gone and the host is terminating this worker
+    if (e instanceof ProcExit || e instanceof ChannelClosed) return;
+    try { runSync(guest.trap(e), call); } catch { /* ProcExit, ChannelClosed */ }
   }
 }
 
