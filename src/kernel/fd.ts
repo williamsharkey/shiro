@@ -305,6 +305,8 @@ export class BufferFile implements OpenFile {
   private waiters = new Set<() => void>();
   private listeners = new ReadyListeners();
   onData?: (data: Uint8Array) => void;
+  /** Set for a /proc file (its /proc/PID/fd link). */
+  path?: string;
 
   /** Reports itself as a FIFO, so isatty() is false (piped stdin) */
   private fifo: boolean;

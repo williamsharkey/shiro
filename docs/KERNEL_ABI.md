@@ -30,6 +30,15 @@ All changes so far are additive; nothing below renames or removes an earlier nam
     `SOCKADDR_UN_MAX`. `Kernel.socketPaths`: socket files stat as `S_IFSOCK`.
     Layouts in [NETWORKING.md](NETWORKING.md).
   - `ioctl(FIONBIO)` succeeds on every file (it only sets `O_NONBLOCK`).
+  - `/proc` in the kernel (`procfs.ts`, `Kernel.procfs`): open/stat/
+    readlink/getdents of `/proc/self`, `/proc/PID/...`, `/proc/stat`,
+    `/proc/loadavg`, `/proc/uptime` come from the process table (other
+    `/proc` files are still the FileSystem's). `Process.syscalls`,
+    `kernelMs`, `inSyscall`, `exitTime`; `Kernel.lastPid`.
+  - ptys: `TIOCPKT`/`TIOCGPKT`. Stat of a device opens it `O_NOCTTY` and
+    closes it again.
+  - `sh` as a kernel process with no script on a terminal (or `-i`) runs
+    an interactive read-eval loop (`Shell.exited` marks `exit`).
   - `link(2)` copies report the source's inode number.
 
 - **2026-10-08 (unix/compat-tools)**

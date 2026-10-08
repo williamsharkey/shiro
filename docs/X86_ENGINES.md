@@ -216,6 +216,8 @@ in the test when `go`/`gcc` exist.
 18. Shiro `sendmsg`/`recvmsg` carry control data (`SCM_RIGHTS`) through the
    kernel's `SYS_sendmsg`/`SYS_recvmsg`; `sockaddr_un` lengths;
    `SO_PEERCRED` fills a `struct ucred`.
+19. `pause()` waits like `sigsuspend` (the host's `pause()` never saw
+   signals the embedder queues); Shiro `TIOCPKT`/`TIOCGPKT`.
 
 Native Blink's own exit path (`KillOtherThreads`) still hangs after
 multi-threaded Go programs; the wasm build doesn't use it.

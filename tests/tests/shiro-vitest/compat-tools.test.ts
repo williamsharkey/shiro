@@ -634,3 +634,29 @@ describe('tmux', () => {
     expect((await sh('tmux ls 2>&1; echo rc=$?')).out).toMatch(/no server running.*\nrc=1\n$/);
   }, 300_000);
 });
+
+describe('screen', () => {
+  it('runs a session on the tty: shell window, new window, detach, -ls, -X stuff, re-attach, quit', async () => {
+    await install('screen');
+    expect((await sh('screen -v')).out).toMatch(/^Screen version 5\.0\.2 /);
+    const { term, done } = onTerminal('screen -S work');
+    await until(() => term.screen.includes('user@shiro:~/w$'), 'the window shell prompt');
+    term.type('echo window-$((6*7))\r');
+    await until(() => term.screen.includes('window-42'), 'command output');
+    term.type('\x01c'); // C-a c: a second window
+    await until(() => (term.screen.match(/user@shiro:~\/w\$/g) ?? []).length >= 3, 'a second window');
+    term.type('\x01d');
+    expect(await done).toBe(0);
+    expect(term.screen).toMatch(/\[detached from \d+\.work\]/);
+    expect((await sh('screen -ls')).out).toMatch(/\d+\.work\s+\(Detached\)/);
+    await sh("screen -S work -p 0 -X stuff 'echo stuffed > /home/user/w/from-screen.txt\\n'");
+    for (let i = 0; i < 200 && !(await fs.exists('/home/user/w/from-screen.txt')); i++) await new Promise((r) => setTimeout(r, 50));
+    expect(await fs.readFile('/home/user/w/from-screen.txt', 'utf8')).toBe('stuffed\n');
+    const again = onTerminal('screen -r work');
+    await until(() => again.term.screen.includes('user@shiro:~/w$'), 'the re-attached session');
+    expect((await sh('screen -S work -X quit')).exitCode).toBe(0);
+    await again.done;
+    expect(again.term.screen).toContain('[screen is terminating]');
+    expect((await sh('screen -ls; echo rc=$?')).out).toMatch(/No Sockets found/);
+  }, 300_000);
+});

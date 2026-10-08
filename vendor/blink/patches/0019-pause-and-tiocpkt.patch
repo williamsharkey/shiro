@@ -1,0 +1,44 @@
+From 09e2e1fc3a8845ef159900abe233eda1c9ae6d39 Mon Sep 17 00:00:00 2001
+From: Shiro <shiro@localhost>
+Date: Thu, 8 Oct 2026 22:42:12 +0000
+Subject: [PATCH] emscripten: pause() waits like sigsuspend (signals the
+ embedder queues end it); Shiro TIOCPKT/TIOCGPKT
+
+---
+ blink/shiro.inc | 3 ++-
+ blink/syscall.c | 5 +++++
+ 2 files changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 666ee98..ce437a7 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -453,7 +453,8 @@ static i64 ShiroIoctl(struct Machine *m, int fd, u64 req, i64 arg) {
+     case 0x540F: case 0x5429: out = 4; break;             // TIOCGPGRP, TIOCGSID
+     case 0x5410: in = 4; break;                           // TIOCSPGRP
+     case 0x541B: case 0x5411: out = 4; break;             // FIONREAD, TIOCOUTQ
+-    case 0x5421: in = 4; break;                           // FIONBIO
++    case 0x5421: case 0x5420: in = 4; break;              // FIONBIO, TIOCPKT
++    case 0x80045438: out = 4; break;                      // TIOCGPKT
+     case 0x80045430: out = 4; break;                      // TIOCGPTN
+     case 0x40045431: in = 4; break;                       // TIOCSPTLCK
+     case 0x5412: in = 1; break;                           // TIOCSTI
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 22fee21..0bd8a25 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -5032,6 +5032,11 @@ static int SysTgkill(struct Machine *m, int pid, int tid, int sig) {
+ 
+ static int SysPause(struct Machine *m) {
+   int rc;
++#ifdef __EMSCRIPTEN__
++  // The host's pause() never sees signals the embedder queues
++  // (blink_shiro_signal): wait the way sigsuspend does, with the current mask
++  return SigsuspendPolyfill(m, m->sigmask);
++#endif
+   NORESTART(rc, pause());
+   return rc;
+ }
+-- 
+2.43.0
+

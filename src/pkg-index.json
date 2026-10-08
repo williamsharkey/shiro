@@ -2515,6 +2515,35 @@
    "needs": [
     "x86"
    ]
+  },
+  {
+   "name": "screen",
+   "version": "5.0.2",
+   "description": "GNU screen terminal multiplexer (static x86-64 build)",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/screen/screen-5.0.2.tar.gz",
+   "homepage": "https://www.gnu.org/software/screen/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/screen.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/screen",
+     "url": "/pkg/screen/5.0.2/screen.gz",
+     "sha256": "49a143f2af8da4145644c169cc09f7ba4d9cb36952226a0ed72457ac1d6b259d",
+     "size": 263344,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "screen": {
+     "file": "bin/screen"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
   }
  ]
 }

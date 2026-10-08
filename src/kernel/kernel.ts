@@ -10,6 +10,7 @@
 import type { FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
+import { ProcFs } from './procfs';
 import { processTable, type ShiroProcess } from '../process-table';
 import * as A from './abi';
 import {
@@ -112,6 +113,9 @@ export class Kernel {
   private spawnHooks = new Set<(proc: Process) => void>();
   private syscallTable = new Map<number, SyscallHandler[]>();
   private allocPid: () => number;
+  /** The last pid handed out (/proc/stat, /proc/loadavg). */
+  lastPid = 0;
+  readonly procfs = new ProcFs(this);
   private detachTable?: () => void;
   /** How long an unreaped child of init stays a zombie before it is reaped automatically. */
   initReapDelayMs = 30_000;
@@ -119,7 +123,8 @@ export class Kernel {
   constructor(opts: { fs?: FileSystem; shell?: Shell; allocPid?: () => number; registerWithProcessTable?: boolean } = {}) {
     this.fs = opts.fs ?? opts.shell?.fs;
     this.shell = opts.shell;
-    this.allocPid = opts.allocPid ?? (() => processTable.allocatePid());
+    const alloc = opts.allocPid ?? (() => processTable.allocatePid());
+    this.allocPid = () => (this.lastPid = alloc());
     this.init = new Process({
       pid: 1, ppid: 0, pgid: 1, sid: 1, path: '/sbin/init', argv: ['init'],
       env: { ...(opts.shell?.env ?? { PATH: '/usr/local/bin:/usr/bin:/bin', HOME: '/home/user' }) },
@@ -505,6 +510,12 @@ export class Kernel {
     }
     const dev = this.devices.get(p);
     if (dev) return dev(proc, flags, p);
+    if (p === '/proc' || p.startsWith('/proc/')) {
+      const link = this.procfs.linkTarget(proc, p);
+      if (link) return link === p ? -A.ELOOP : this.open(proc, link, flags, mode);
+      const pf = this.procfs.open(proc, p, flags);
+      if (pf !== undefined) return pf;
+    }
     const fs = this.fs;
     if (!fs) return -A.ENOSYS;
     const statusFlags = flags & ~(A.O_CREAT | A.O_EXCL | A.O_TRUNC | A.O_CLOEXEC | A.O_NOCTTY | A.O_DIRECTORY | A.O_NOFOLLOW);
@@ -532,13 +543,29 @@ export class Kernel {
     }
   }
 
+  /** A registered device node, or a directory that holds one (/dev, /dev/pts). */
+  isDevicePath(p: string): boolean {
+    if (this.devices.has(p)) return true;
+    for (const d of this.devices.keys()) if (d.startsWith(p + '/')) return true;
+    return false;
+  }
+
   async statPath(proc: Process, path: string, follow = true, dirfd = A.AT_FDCWD): Promise<A.KStat | number> {
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
     const dev = this.devices.get(p);
     if (dev) {
-      const f = await dev(proc, A.O_RDONLY, p);
-      return typeof f === 'number' ? f : f.stat();
+      // A description just for the stat: O_NOCTTY (stat must not make a pty the
+      // caller's controlling tty), closed after (a slave left open hides hangups)
+      const f = await dev(proc, A.O_RDONLY | A.O_NOCTTY, p);
+      if (typeof f === 'number') return f;
+      try { return await f.stat(); } finally { if (f !== proc.ctty) await f.close(); }
+    }
+    if (p === '/proc' || p.startsWith('/proc/')) {
+      const pst = this.procfs.stat(proc, p, follow);
+      if (pst !== undefined) return pst;
+      const link = follow ? this.procfs.linkTarget(proc, p) : undefined;
+      if (link) return this.statPath(proc, link, true);
     }
     const fs = this.fs;
     if (!fs) return -A.ENOSYS;
@@ -698,8 +725,9 @@ export class Kernel {
    */
   private async interactiveShell(proc: Process, shell: Shell): Promise<number> {
     const jobSignals = new Set([A.SIGINT, A.SIGQUIT, A.SIGTSTP, A.SIGTTIN, A.SIGTTOU]);
+    const outer = proc.signalHook; // job control's
     proc.signalHook = (p, sig) => {
-      if (!jobSignals.has(sig)) return false;
+      if (!jobSignals.has(sig)) return outer?.(p, sig) ?? false;
       if (sig === A.SIGINT) p.interruptSyscalls(); // a fresh prompt
       return true;
     };
@@ -787,6 +815,19 @@ export class Kernel {
    * decode copies (`decodeText`).
    */
   async syscall(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
+    // Time inside syscalls is time the process isn't computing (/proc CPU estimate)
+    const t0 = Date.now();
+    proc.syscalls++;
+    proc.inSyscall++;
+    try {
+      return await this.syscallImpl(proc, nr, args, data);
+    } finally {
+      proc.inSyscall--;
+      proc.kernelMs += Date.now() - t0;
+    }
+  }
+
+  private async syscallImpl(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
     if (proc.state === 'stopped') await proc.waitWhileStopped();
     if (proc.exiting) return -A.EINTR;
     const sig = proc.syscallSignal;
@@ -1222,7 +1263,11 @@ export class Kernel {
           const p = at(dirfd, 0, len);
           if (typeof p === 'number') return p;
           let target: string;
-          try { target = await fs().readlink(p); } catch (e) { return A.errnoFromError(e, A.EINVAL); }
+          const proct = p.startsWith('/proc/') ? this.procfs.readlink(proc, p) : undefined;
+          if (typeof proct === 'number') return proct;
+          if (proct !== undefined) target = proct;
+          else if (this.isDevicePath(p)) return -A.EINVAL; // a device node or /dev, /dev/pts: not links
+          else try { target = await fs().readlink(p); } catch (e) { return A.errnoFromError(e, A.EINVAL); }
           const b = enc.encode(target);
           const n = Math.min(b.length, bufsiz >>> 0 || data.length, data.length);
           data.set(b.subarray(0, n));

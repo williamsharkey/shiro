@@ -354,6 +354,65 @@ describe('kernel processes', () => {
     kernel.kill(proc.pid, A.SIGKILL);
   });
 
+  it('/proc: self, PID directories, fd links, stat/status/cmdline, getdents, system files', async () => {
+    const proc = kernel.spawn({ path: '/usr/bin/prog', argv: ['prog', '-x', 'a b'], cwd: '/tmp', fds: { 3: new BufferFile('') }, run: () => new Promise<number>(() => {}) });
+    const data = new Uint8Array(8192);
+    const enc2 = new TextEncoder();
+    const readlink = async (p: string) => {
+      const b = enc2.encode(p); data.set(b);
+      const n = await kernel.syscall(proc, A.SYS_readlink, [b.length, 4096], data);
+      return n < 0 ? n : new TextDecoder().decode(data.subarray(0, n));
+    };
+    const cat = async (p: string) => {
+      const f = await kernel.open(proc, p, A.O_RDONLY);
+      if (typeof f === 'number') return f;
+      const buf = new Uint8Array(8192);
+      const n = await f.read(buf);
+      await f.close();
+      return new TextDecoder().decode(buf.subarray(0, n));
+    };
+    expect(await readlink('/proc/self')).toBe(String(proc.pid));
+    expect(await readlink('/proc/self/cwd')).toBe('/tmp');
+    expect(await readlink('/proc/self/exe')).toBe('/usr/bin/prog');
+    expect(await readlink(`/proc/${proc.pid}/fd/9`)).toBe(-A.ENOENT);
+    await fs.writeFile('/tmp/procfd.txt', 'x');
+    const f = await kernel.open(proc, '/tmp/procfd.txt', A.O_RDONLY);
+    const fd = proc.fds.alloc(f as any);
+    expect(await readlink(`/proc/self/fd/${fd}`)).toBe('/tmp/procfd.txt');
+    expect(await readlink('/proc/99999/cwd')).toBe(-A.ENOENT);
+
+    const stat = (await cat(`/proc/${proc.pid}/stat`)) as string;
+    const fields = stat.trim().split(' ');
+    expect(fields.length).toBe(52);
+    expect(fields.slice(0, 2)).toEqual([String(proc.pid), '(prog)']);
+    expect(fields[2]).toMatch(/^[RS]$/);
+    expect(Number(fields[3])).toBe(proc.ppid);
+    expect(await cat('/proc/self/cmdline')).toBe('prog\0-x\0a b\0');
+    expect(await cat('/proc/self/comm')).toBe('prog\n');
+    expect(await cat('/proc/self/status')).toMatch(new RegExp(`^Name:\\tprog\n[^]*Pid:\\t${proc.pid}\n[^]*Uid:\\t1000`));
+    const pst = await kernel.statPath(proc, `/proc/${proc.pid}`);
+    expect(typeof pst !== 'number' && (pst.mode & A.S_IFMT)).toBe(A.S_IFDIR);
+    const lst = await kernel.statPath(proc, '/proc/self', false);
+    expect(typeof lst !== 'number' && (lst.mode & A.S_IFMT)).toBe(A.S_IFLNK);
+
+    // getdents of /proc lists the processes and the system files
+    const dirfd = proc.fds.alloc((await kernel.open(proc, '/proc', A.O_RDONLY | A.O_DIRECTORY)) as any);
+    const n = await kernel.syscall(proc, A.SYS_getdents64, [dirfd, 8192], data);
+    const names: string[] = [];
+    for (let off = 0; off < n;) {
+      const reclen = new DataView(data.buffer).getUint16(off + 16, true);
+      const end = data.indexOf(0, off + 19);
+      names.push(new TextDecoder().decode(data.subarray(off + 19, end)));
+      off += reclen;
+    }
+    expect(names).toEqual(expect.arrayContaining(['self', String(proc.pid), 'stat', 'meminfo', 'uptime', 'loadavg']));
+    expect(await cat('/proc/stat')).toMatch(/^cpu  \d+ 0 0 \d+ /);
+    expect(await cat('/proc/loadavg')).toMatch(/^\d+\.\d\d \d+\.\d\d \d+\.\d\d \d+\/\d+ \d+\n$/);
+    expect(await cat('/proc/uptime')).toMatch(/^\d+\.\d\d \d+\.\d\d\n$/);
+    expect(await kernel.open(proc, '/proc/self/stat', A.O_WRONLY)).toBe(-A.EACCES);
+    kernel.kill(proc.pid, A.SIGKILL);
+  });
+
   it('an open file follows rename(2); an unlinked or replaced one is not written back', async () => {
     const proc = kernel.spawn({ path: 'rn', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
     const data = new Uint8Array(4096);

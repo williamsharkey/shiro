@@ -65,6 +65,7 @@ WASI/WASIX are WASM packages run as kernel processes in workers.
 | gzip, gunzip, zcat | 1.15 (GNU) | pkg (Blink) | works | `-k`, `-c`, `-d`, `-t`, binary output redirected to a file | |
 | vim | 9.2.0000 | pkg (Blink) | works | edit + `:wq`; syntax colours from the runtime; `:help`; resize (SIGWINCH) updates `&columns`/`&lines`; Ctrl-Z stops it, `fg` resumes; `vim -es` scripting | Startup with `filetype`/`syntax` is slow (seconds): Blink interprets x86 at ~1/120 native speed. No POSIX timers (`timer_create`), so no `'redrawtime'` timeout |
 | tmux | 3.8 | pkg (Blink; libevent 2.1, ncurses 6.5) | works | `new-session` on the tty: status line, a shell in the pane, `C-b %` split, `C-b d` detach; `list-panes`, `send-keys` into a detached session; re-attach on a bigger terminal; `kill-session` | Slow to draw (emulated). After re-attaching at a new size the status line waits for the next key, which tmux then takes as input. The `tmux` builtin is replaced while the package is installed |
+| screen | 5.0.2 (GNU) | pkg (Blink; ncurses 6.5) | works | session on the tty: shell window, `C-a c` new window, `C-a d` detach; `-ls`, `-X stuff` into a detached session, `-r` re-attach, `-X quit` | no PAM/utmp; sockets in `~/.screen` (no setuid socket directory). The builtin `screen`, if any, is replaced while the package is installed |
 | tree | 2.2.1 | pkg (Blink) | works | tree drawing and counts, `-d --noreport` | |
 | file | 5.46 | pkg (Blink) | works | shell script, JSON, PNG, gzip, ELF; `--mime-type` (magic database mapped with `mmap`) | |
 | xz, xzcat, unxz | 5.8.1 | pkg (Blink) | works | `-k`, `-l`, `xzcat`; `tar -J` | single-threaded |
@@ -126,6 +127,16 @@ Shiro changes these programs needed (tests in `x86-engine.test.ts`,
   is interactive: a `PS1` prompt (default `\u@\h:\w\$ `), a line read from
   the tty in canonical mode, Ctrl-C/Ctrl-Z/Ctrl-\ left to its foreground
   children, `exit` or EOF to end.
+- A kernel `/proc` (`src/kernel/procfs.ts`): `/proc/self`, `/proc/PID/`
+  (`stat`, `status`, `cmdline`, `comm`, `environ`, `cwd`, `exe`, `fd/N`,
+  `task`), and `/proc/stat`, `/proc/loadavg`, `/proc/uptime` from the process
+  table; musl's `ttyname()` (screen's "Must be connected to a terminal")
+  reads `/proc/self/fd/0`. CPU time is estimated (wall time minus time in
+  syscalls); memory sizes read 0. `kernel-core.test.ts`.
+- ptys: `TIOCPKT` packet mode on the master; `stat()` of a tty no longer
+  makes it the caller's controlling terminal or leaves a slave open (screen's
+  windows got `fgtty: Not a tty`). Blink's `pause()` now sees signals
+  (screen's attacher waits in it). `kernel-pty.test.ts`.
 - `ioctl(FIONBIO)` works on every file, pipes included (Rust's
   `Command::output()`). `kernel-core.test.ts`.
 - Blink keeps its own log in its in-memory root (`-L /blink.log`), not in
