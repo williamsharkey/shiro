@@ -12,6 +12,7 @@
  */
 
 import type { FileSystem } from './filesystem';
+import { makePreview0Imports } from './wasi-preview0';
 
 // ── WASI errno constants ─────────────────────────────────────────────
 
@@ -55,6 +56,8 @@ export const WASI_RIGHT_FD_WRITE            = 1n << 6n;
 export const WASI_RIGHT_FD_SEEK             = 1n << 2n;
 export const WASI_RIGHT_FD_TELL             = 1n << 5n;
 export const WASI_RIGHT_FD_FILESTAT_GET     = 1n << 21n;
+/** Every right a preview1 fd can hold (bits 0..29) */
+export const WASI_RIGHTS_ALL               = (1n << 30n) - 1n;
 export const WASI_RIGHT_PATH_OPEN           = 1n << 8n;
 export const WASI_RIGHT_PATH_CREATE_FILE    = 1n << 9n;
 export const WASI_RIGHT_PATH_CREATE_DIR     = 1n << 10n;
@@ -193,6 +196,10 @@ export interface WasiConfig {
   onStderr?: (data: string) => void;
   /** Pre-opened directories: map of guest path → host path */
   preopens?: Record<string, string>;
+  /** false when stdin is a pipe or file (isatty() is then false; default true) */
+  stdinIsTTY?: boolean;
+  /** false when stdout is piped or redirected (default true) */
+  stdoutIsTTY?: boolean;
 }
 
 export class WasiRT {
@@ -209,9 +216,10 @@ export class WasiRT {
 
     // fd 0 = stdin
     const stdinData = new TextEncoder().encode(config.stdin || '');
+    // A pipe reports an unknown file type, so isatty() is false for it
     this.fds.set(0, new FD({
       path: null,
-      filetype: WASI_FILETYPE_CHARACTER_DEVICE,
+      filetype: config.stdinIsTTY === false ? WASI_FILETYPE_UNKNOWN : WASI_FILETYPE_CHARACTER_DEVICE,
       data: stdinData,
       writable: false,
       rights: WASI_RIGHT_FD_READ,
@@ -220,7 +228,7 @@ export class WasiRT {
     // fd 1 = stdout
     this.fds.set(1, new FD({
       path: null,
-      filetype: WASI_FILETYPE_CHARACTER_DEVICE,
+      filetype: config.stdoutIsTTY === false ? WASI_FILETYPE_UNKNOWN : WASI_FILETYPE_CHARACTER_DEVICE,
       writable: true,
       rights: WASI_RIGHT_FD_WRITE,
     }));
@@ -242,10 +250,9 @@ export class WasiRT {
         filetype: WASI_FILETYPE_DIRECTORY,
         writable: true,
         preopen: guestPath,
-        rights: WASI_RIGHT_PATH_OPEN | WASI_RIGHT_PATH_CREATE_FILE |
-                WASI_RIGHT_PATH_CREATE_DIR | WASI_RIGHT_PATH_READDIR |
-                WASI_RIGHT_FD_READ | WASI_RIGHT_FD_WRITE |
-                WASI_RIGHT_FD_FILESTAT_GET,
+        // Older wasi-libc refuses to open a path when the preopen's
+        // inheriting rights lack what it asks for (ENOTCAPABLE)
+        rights: WASI_RIGHTS_ALL,
       }));
     }
   }
@@ -258,53 +265,57 @@ export class WasiRT {
 
   /** Build the WASI import object for WebAssembly.instantiate */
   getImports(): WebAssembly.Imports {
+    const preview1 = {
+      args_get: this.args_get.bind(this),
+      args_sizes_get: this.args_sizes_get.bind(this),
+      environ_get: this.environ_get.bind(this),
+      environ_sizes_get: this.environ_sizes_get.bind(this),
+      clock_time_get: this.clock_time_get.bind(this),
+      clock_res_get: this.clock_res_get.bind(this),
+      fd_advise: this.fd_advise.bind(this),
+      fd_allocate: this.fd_allocate.bind(this),
+      fd_close: this.fd_close.bind(this),
+      fd_datasync: this.fd_datasync.bind(this),
+      fd_fdstat_get: this.fd_fdstat_get.bind(this),
+      fd_fdstat_set_flags: this.fd_fdstat_set_flags.bind(this),
+      fd_filestat_get: this.fd_filestat_get.bind(this),
+      fd_filestat_set_size: this.fd_filestat_set_size.bind(this),
+      fd_filestat_set_times: this.fd_filestat_set_times.bind(this),
+      fd_pread: this.fd_pread.bind(this),
+      fd_prestat_get: this.fd_prestat_get.bind(this),
+      fd_prestat_dir_name: this.fd_prestat_dir_name.bind(this),
+      fd_pwrite: this.fd_pwrite.bind(this),
+      fd_read: this.fd_read.bind(this),
+      fd_readdir: this.fd_readdir.bind(this),
+      fd_renumber: this.fd_renumber.bind(this),
+      fd_seek: this.fd_seek.bind(this),
+      fd_sync: this.fd_sync.bind(this),
+      fd_tell: this.fd_tell.bind(this),
+      fd_write: this.fd_write.bind(this),
+      path_create_directory: this.path_create_directory.bind(this),
+      path_filestat_get: this.path_filestat_get.bind(this),
+      path_filestat_set_times: this.path_filestat_set_times.bind(this),
+      path_link: this.path_link.bind(this),
+      path_open: this.path_open.bind(this),
+      path_readlink: this.path_readlink.bind(this),
+      path_remove_directory: this.path_remove_directory.bind(this),
+      path_rename: this.path_rename.bind(this),
+      path_symlink: this.path_symlink.bind(this),
+      path_unlink_file: this.path_unlink_file.bind(this),
+      poll_oneoff: this.poll_oneoff.bind(this),
+      proc_exit: this.proc_exit.bind(this),
+      proc_raise: this.proc_raise.bind(this),
+      random_get: this.random_get.bind(this),
+      sched_yield: this.sched_yield.bind(this),
+      sock_accept: this.sock_accept.bind(this),
+      sock_recv: this.sock_recv.bind(this),
+      sock_send: this.sock_send.bind(this),
+      sock_shutdown: this.sock_shutdown.bind(this),
+    };
     return {
-      wasi_snapshot_preview1: {
-        args_get: this.args_get.bind(this),
-        args_sizes_get: this.args_sizes_get.bind(this),
-        environ_get: this.environ_get.bind(this),
-        environ_sizes_get: this.environ_sizes_get.bind(this),
-        clock_time_get: this.clock_time_get.bind(this),
-        clock_res_get: this.clock_res_get.bind(this),
-        fd_advise: this.fd_advise.bind(this),
-        fd_allocate: this.fd_allocate.bind(this),
-        fd_close: this.fd_close.bind(this),
-        fd_datasync: this.fd_datasync.bind(this),
-        fd_fdstat_get: this.fd_fdstat_get.bind(this),
-        fd_fdstat_set_flags: this.fd_fdstat_set_flags.bind(this),
-        fd_filestat_get: this.fd_filestat_get.bind(this),
-        fd_filestat_set_size: this.fd_filestat_set_size.bind(this),
-        fd_filestat_set_times: this.fd_filestat_set_times.bind(this),
-        fd_pread: this.fd_pread.bind(this),
-        fd_prestat_get: this.fd_prestat_get.bind(this),
-        fd_prestat_dir_name: this.fd_prestat_dir_name.bind(this),
-        fd_pwrite: this.fd_pwrite.bind(this),
-        fd_read: this.fd_read.bind(this),
-        fd_readdir: this.fd_readdir.bind(this),
-        fd_seek: this.fd_seek.bind(this),
-        fd_sync: this.fd_sync.bind(this),
-        fd_tell: this.fd_tell.bind(this),
-        fd_write: this.fd_write.bind(this),
-        path_create_directory: this.path_create_directory.bind(this),
-        path_filestat_get: this.path_filestat_get.bind(this),
-        path_filestat_set_times: this.path_filestat_set_times.bind(this),
-        path_link: this.path_link.bind(this),
-        path_open: this.path_open.bind(this),
-        path_readlink: this.path_readlink.bind(this),
-        path_remove_directory: this.path_remove_directory.bind(this),
-        path_rename: this.path_rename.bind(this),
-        path_symlink: this.path_symlink.bind(this),
-        path_unlink_file: this.path_unlink_file.bind(this),
-        poll_oneoff: this.poll_oneoff.bind(this),
-        proc_exit: this.proc_exit.bind(this),
-        proc_raise: this.proc_raise.bind(this),
-        random_get: this.random_get.bind(this),
-        sched_yield: this.sched_yield.bind(this),
-        sock_accept: this.sock_accept.bind(this),
-        sock_recv: this.sock_recv.bind(this),
-        sock_send: this.sock_send.bind(this),
-        sock_shutdown: this.sock_shutdown.bind(this),
-      },
+      wasi_snapshot_preview1: preview1,
+      // Older WAPM packages import WASI snapshot 0
+      wasi_unstable: makePreview0Imports(preview1, () => this.memory),
     };
   }
 
@@ -596,11 +607,25 @@ export class WasiRT {
   private fd_close(fd: number): number {
     const f = this.fds.get(fd);
     if (!f) return WASI_EBADF;
-    // Preserve dirty data for flushing later (fd_close is sync, flush is async)
+    // Preserve dirty data for flushing later (fd_close is sync, flush is async),
+    // and keep it in the cache so a later open of the same path sees it
     if (f.dirty && f.path) {
-      this.closedDirtyFds.push({ path: f.path, data: new Uint8Array(f.data) });
+      const data = new Uint8Array(f.data);
+      this.closedDirtyFds.push({ path: f.path, data });
+      this.fileCache.set(f.path, { data, stat: { type: 'file', size: data.length, mtime: Date.now() } });
     }
     this.fds.delete(fd);
+    return WASI_ESUCCESS;
+  }
+
+  /** Move `from` onto `to` (closing what `to` was), like dup2 + close. */
+  private fd_renumber(from: number, to: number): number {
+    const f = this.fds.get(from);
+    if (!f || !this.fds.has(to)) return WASI_EBADF;
+    if (from === to) return WASI_ESUCCESS;
+    this.fd_close(to);
+    this.fds.set(to, f);
+    this.fds.delete(from);
     return WASI_ESUCCESS;
   }
 
@@ -897,7 +922,7 @@ export class WasiRT {
 
     if (cached) {
       const newFd = this.nextFd++;
-      const data = truncating ? new Uint8Array(0) : new Uint8Array(cached.data);
+      const data = truncating ? new Uint8Array(0) : new Uint8Array(this.openFileData(absPath) ?? cached.data);
       this.fds.set(newFd, new FD({
         path: absPath,
         filetype: WASI_FILETYPE_REGULAR_FILE,
@@ -916,7 +941,8 @@ export class WasiRT {
     }
 
     if (creating) {
-      // Create an empty file
+      // Create an empty file (cached, so stat and a second open find it)
+      this.fileCache.set(absPath, { data: new Uint8Array(0), stat: { type: 'file', size: 0, mtime: Date.now() } });
       const newFd = this.nextFd++;
       this.fds.set(newFd, new FD({
         path: absPath,
@@ -936,6 +962,14 @@ export class WasiRT {
     return WASI_ENOENT;
   }
 
+  /** Current contents of `path` if an open fd has changed it. */
+  private openFileData(path: string): Uint8Array | undefined {
+    for (const f of this.fds.values()) {
+      if (f.path === path && f.dirty && f.filetype === WASI_FILETYPE_REGULAR_FILE) return f.data;
+    }
+    return undefined;
+  }
+
   private path_create_directory(dirFd: number, pathPtr: number, pathLen: number): number {
     // Can't create dirs synchronously — the wasi command wrapper handles this
     return WASI_ESUCCESS;
@@ -950,11 +984,12 @@ export class WasiRT {
 
     if (cached) {
       const isDir = cached.stat.type === 'dir';
+      const size = this.openFileData(absPath)?.length ?? cached.stat.size;
       view.setBigUint64(bufPtr + 0, 0n, true);     // dev
       view.setBigUint64(bufPtr + 8, 0n, true);     // ino
       view.setUint8(bufPtr + 16, isDir ? WASI_FILETYPE_DIRECTORY : WASI_FILETYPE_REGULAR_FILE);
       view.setBigUint64(bufPtr + 24, 1n, true);    // nlink
-      view.setBigUint64(bufPtr + 32, BigInt(cached.stat.size), true);
+      view.setBigUint64(bufPtr + 32, BigInt(size), true);
       const mtim = BigInt(cached.stat.mtime) * 1_000_000n;
       view.setBigUint64(bufPtr + 40, mtim, true);
       view.setBigUint64(bufPtr + 48, mtim, true);

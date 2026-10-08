@@ -90,6 +90,8 @@ export const wasiCmd: Command = {
         args: [programName, ...wasmArgs],
         env: { ...ctx.env },
         stdin: ctx.stdin || '',
+      stdinIsTTY: !ctx.stdin,
+      stdoutIsTTY: ctx.stdoutIsTTY !== false,
         onStdout: (text) => { ctx.stdout += text; },
         onStderr: (text) => { ctx.stderr += text; },
         preopens: {
@@ -149,6 +151,8 @@ async function wasiExec(ctx: CommandContext): Promise<number> {
       args: [pkg.name, ...wasmArgs],
       env: { ...ctx.env },
       stdin: ctx.stdin || '',
+      stdinIsTTY: !ctx.stdin,
+      stdoutIsTTY: ctx.stdoutIsTTY !== false,
       onStdout: (text) => { ctx.stdout += text; },
       onStderr: (text) => { ctx.stderr += text; },
       preopens: { '/': '/', '.': ctx.cwd },
