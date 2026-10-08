@@ -159,53 +159,64 @@ export const shCmd: Command = {
   name: 'sh',
   description: 'Execute shell commands',
   async exec(ctx) {
-    const cIdx = ctx.args.indexOf('-c');
-    if (cIdx !== -1 && ctx.args[cIdx + 1]) {
-      const cmd = ctx.args[cIdx + 1];
-      let stdout = '';
-      let stderr = '';
-      const code = await ctx.shell.executeWithStdin(cmd, ctx.stdin || '', (s) => { stdout += s; }, (s) => { stderr += s; });
+    // Options before the command string / script: -c, -e, -u, -x, -v, -f, -o NAME, and combined (-ec, -lc)
+    const shortOpts: Record<string, string> = { e: 'errexit', u: 'nounset', x: 'xtrace', v: 'verbose', n: 'noexec', f: 'noglob' };
+    const options: string[] = [];
+    let commandMode = false;
+    let i = 0;
+    for (; i < ctx.args.length; i++) {
+      const a = ctx.args[i];
+      if (a === '--' || a === '-') { i++; break; }
+      if (a === '-o' || a === '+o') { if (a === '-o' && ctx.args[i + 1]) options.push(ctx.args[i + 1]); i++; continue; }
+      if (!/^[-+][a-zA-Z]+$/.test(a)) break;
+      for (const ch of a.slice(1)) {
+        if (ch === 'c') commandMode = true;
+        else if (a[0] === '-' && shortOpts[ch]) options.push(shortOpts[ch]);
+      }
+    }
+    const rest = ctx.args.slice(i);
+    const out = (code: number, stdout: string, stderr: string) => {
       ctx.stdout += stdout.replace(/\r\n/g, '\n');
       ctx.stderr += stderr.replace(/\r\n/g, '\n');
       return code;
-    }
+    };
 
-    if (ctx.args.length > 0 && !ctx.args[0].startsWith('-')) {
-      const scriptPath = ctx.fs.resolvePath(ctx.args[0], ctx.cwd);
-      const scriptArgs = ctx.args.slice(1);
+    let script: string;
+    let argv0: string;
+    let positional: string[];
+    if (commandMode) {
+      if (rest.length === 0) { ctx.stderr += 'sh: -c: option requires an argument\n'; return 2; }
+      script = rest[0];
+      argv0 = rest[1] ?? 'sh';
+      positional = rest.slice(2);
+    } else if (rest.length > 0) {
+      const scriptPath = ctx.fs.resolvePath(rest[0], ctx.cwd);
       try {
         const content = await ctx.fs.readFile(scriptPath, 'utf8');
-        const script = typeof content === 'string' ? content : new TextDecoder().decode(content as any);
-        let stdout = '';
-        let stderr = '';
-        const exitCode = await ctx.shell.executeShellScript(
-          script, scriptArgs, ctx,
-          (s: string) => { stdout += s; },
-          (s: string) => { stderr += s; },
-        );
-        ctx.stdout += stdout;
-        ctx.stderr += stderr;
-        return exitCode;
+        script = typeof content === 'string' ? content : new TextDecoder().decode(content as any);
       } catch (e: any) {
-        ctx.stderr += `sh: ${ctx.args[0]}: ${e.message}\n`;
-        return 1;
+        ctx.stderr += `sh: ${rest[0]}: ${e.message}\n`;
+        return 127;
       }
+      argv0 = rest[0];
+      positional = rest.slice(1);
+    } else if (ctx.stdin) {
+      script = ctx.stdin;
+      argv0 = 'sh';
+      positional = [];
+    } else {
+      return 0;
     }
 
-    if (ctx.stdin) {
-      let stdout = '';
-      let stderr = '';
-      const exitCode = await ctx.shell.executeShellScript(
-        ctx.stdin, [], ctx,
-        (s: string) => { stdout += s; },
-        (s: string) => { stderr += s; },
-      );
-      ctx.stdout += stdout;
-      ctx.stderr += stderr;
-      return exitCode;
-    }
-
-    return 0;
+    const child = ctx.shell.fork();
+    child.setPositional(positional, argv0);
+    for (const o of options) child.options.add(o);
+    // `sh -c` reads the caller's stdin; a script read from stdin has none left
+    if (commandMode || rest.length > 0) child.setInjectedStdin(ctx.stdin || '');
+    let stdout = '';
+    let stderr = '';
+    const code = await child.runScriptText(script, ctx.terminal, (s) => { stdout += s; }, (s) => { stderr += s; });
+    return out(code, stdout, stderr);
   },
 };
 

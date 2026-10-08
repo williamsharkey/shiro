@@ -8,7 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "cd tests && npx vitest run --config vitest.config.ts",
-    "deploy": "bash deploy.sh"
+    "deploy": "bash deploy.sh",
+    "conformance": "cd tests && npx vitest run --config vitest.conformance.config.ts; node ../scripts/conformance/report.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",

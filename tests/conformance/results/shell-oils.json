@@ -1,0 +1,3815 @@
+{
+ "suite": "oils spec",
+ "files": {
+  "smoke": {
+   "pass": 12,
+   "total": 18,
+   "failures": [
+    {
+     "i": 3,
+     "name": "pipeline"
+    },
+    {
+     "i": 4,
+     "name": "pipeline with builtin"
+    },
+    {
+     "i": 11,
+     "name": "Here doc with redirect"
+    },
+    {
+     "i": 12,
+     "name": "\"$@\" \"$*\""
+    },
+    {
+     "i": 14,
+     "name": "failed command"
+    },
+    {
+     "i": 15,
+     "name": "subshell"
+    }
+   ]
+  },
+  "comments": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "quote": {
+   "pass": 27,
+   "total": 33,
+   "failures": [
+    {
+     "i": 12,
+     "name": "Backslash escapes"
+    },
+    {
+     "i": 27,
+     "name": "$'' octal escapes don't have leading 0"
+    },
+    {
+     "i": 28,
+     "name": "$'' octal escapes with fewer than 3 chars"
+    },
+    {
+     "i": 31,
+     "name": "$\"\" is a synonym for \"\""
+    },
+    {
+     "i": 33,
+     "name": "$'' supports \\cA escape for Ctrl-A - mask with 0x1f"
+    },
+    {
+     "i": 34,
+     "name": "\\c' is an escape, unlike bash"
+    }
+   ]
+  },
+  "word-split": {
+   "pass": 35,
+   "total": 53,
+   "failures": [
+    {
+     "i": 7,
+     "name": "\"$@\""
+    },
+    {
+     "i": 8,
+     "name": "empty argv"
+    },
+    {
+     "i": 9,
+     "name": "$* with empty IFS"
+    },
+    {
+     "i": 23,
+     "name": "default value with unquoted IFS char"
+    },
+    {
+     "i": 30,
+     "name": "Empty IFS (regression for bug)"
+    },
+    {
+     "i": 31,
+     "name": "Unset IFS (regression for bug)"
+    },
+    {
+     "i": 33,
+     "name": "IFS and joining arrays"
+    },
+    {
+     "i": 34,
+     "name": "IFS and joining arrays by assignments"
+    },
+    {
+     "i": 36,
+     "name": "IFS='' with $@ and $* (bug #627)"
+    },
+    {
+     "i": 37,
+     "name": "IFS='' with $@ and $* and printf (bug #627)"
+    },
+    {
+     "i": 38,
+     "name": "IFS='' with ${a[@]} and ${a[*]} (bug #627)"
+    },
+    {
+     "i": 41,
+     "name": "Bug #628 split on : with : in literal word"
+    },
+    {
+     "i": 46,
+     "name": "4 x 3 table: (default IFS, IFS='', IFS=zx) x ( $* \"$*\" $@ \"$@\" )"
+    },
+    {
+     "i": 47,
+     "name": "4 x 3 table - with for loop"
+    },
+    {
+     "i": 48,
+     "name": "IFS=x and '' and $@ - same bug as spec/toysh-posix case #12"
+    },
+    {
+     "i": 51,
+     "name": "\"\"$A\"\" - empty string on both sides - derived from spec/toysh-posix #15"
+    },
+    {
+     "i": 53,
+     "name": "Regression: ${!v} should be split"
+    },
+    {
+     "i": 54,
+     "name": "Regression: \"${v:-AxBxC}\"x should not be split"
+    }
+   ]
+  },
+  "word-eval": {
+   "pass": 4,
+   "total": 8,
+   "failures": [
+    {
+     "i": 1,
+     "name": "Evaluation of each part"
+    },
+    {
+     "i": 3,
+     "name": "Word joining"
+    },
+    {
+     "i": 5,
+     "name": "Default values -- more cases"
+    },
+    {
+     "i": 7,
+     "name": "Globbing escaping"
+    }
+   ]
+  },
+  "var-sub": {
+   "pass": 2,
+   "total": 6,
+   "failures": [
+    {
+     "i": 0,
+     "name": "Bad var sub"
+    },
+    {
+     "i": 1,
+     "name": "Braced block inside ${}"
+    },
+    {
+     "i": 4,
+     "name": "Descriptor redirect to bad \"$@\""
+    },
+    {
+     "i": 5,
+     "name": "Here doc with bad \"$@\" delimiter"
+    }
+   ]
+  },
+  "var-sub-quote": {
+   "pass": 25,
+   "total": 41,
+   "failures": [
+    {
+     "i": 2,
+     "name": "array with empty values"
+    },
+    {
+     "i": 14,
+     "name": "Multiple words: outer double quotes, inner double quotes"
+    },
+    {
+     "i": 17,
+     "name": "Mixed inner quotes with outer quotes"
+    },
+    {
+     "i": 19,
+     "name": "part_value tree on RHS"
+    },
+    {
+     "i": 24,
+     "name": "Multiple words: outer double quotes, inner double quotes"
+    },
+    {
+     "i": 25,
+     "name": "Multiple words: outer double quotes, inner single quotes"
+    },
+    {
+     "i": 27,
+     "name": "Strip a string with single quotes, unquoted"
+    },
+    {
+     "i": 28,
+     "name": "Strip a string with single quotes, double quoted"
+    },
+    {
+     "i": 30,
+     "name": "The string to strip can be single quoted, outer is unquoted"
+    },
+    {
+     "i": 31,
+     "name": "Syntax error for single quote in double quote"
+    },
+    {
+     "i": 32,
+     "name": "\"${undef-'c d'}\" and \"${foo%'c d'}\" are parsed differently"
+    },
+    {
+     "i": 33,
+     "name": "$'' allowed within VarSub arguments"
+    },
+    {
+     "i": 34,
+     "name": "# operator with single quoted arg (dash/ash and bash/mksh disagree, reported by Crestwave)"
+    },
+    {
+     "i": 35,
+     "name": "/ operator with single quoted arg (causes syntax error in regex in OSH, reported by Crestwave)"
+    },
+    {
+     "i": 36,
+     "name": "single quotes work inside character classes"
+    },
+    {
+     "i": 38,
+     "name": "Right Brace as argument (similar to #702)"
+    }
+   ]
+  },
+  "var-op-test": {
+   "pass": 14,
+   "total": 35,
+   "failures": [
+    {
+     "i": 0,
+     "name": "Lazy Evaluation of Alternative"
+    },
+    {
+     "i": 3,
+     "name": "Unquoted with array as default value"
+    },
+    {
+     "i": 4,
+     "name": "Quoted with array as default value"
+    },
+    {
+     "i": 5,
+     "name": "Assign default with array"
+    },
+    {
+     "i": 13,
+     "name": "\"${undefined[@]+foo}\" and \"${undefined[@]:+foo}\", with set -u"
+    },
+    {
+     "i": 15,
+     "name": "Nix idiom ${!hooksSlice+\"${!hooksSlice}\"} - was workaround for obsolete bash 4.3 bug"
+    },
+    {
+     "i": 17,
+     "name": "array and - and +"
+    },
+    {
+     "i": 18,
+     "name": "$@ (empty) and - and +"
+    },
+    {
+     "i": 19,
+     "name": "$@ (\"\") and - and +"
+    },
+    {
+     "i": 20,
+     "name": "$@ (\"\" \"\") and - and +"
+    },
+    {
+     "i": 21,
+     "name": "$* (\"\" \"\") and - and + (IFS=)"
+    },
+    {
+     "i": 22,
+     "name": "\"$*\" (\"\" \"\") and - and + (IFS=)"
+    },
+    {
+     "i": 23,
+     "name": "assoc array and - and +"
+    },
+    {
+     "i": 28,
+     "name": "array ${arr[0]=x}"
+    },
+    {
+     "i": 29,
+     "name": "assoc array ${arr[\"k\"]=x}"
+    },
+    {
+     "i": 30,
+     "name": "\"\\z\" as arg"
+    },
+    {
+     "i": 32,
+     "name": "op-test for ${a} and ${a[0]}"
+    },
+    {
+     "i": 33,
+     "name": "op-test for ${a[@]} and ${a[*]}"
+    },
+    {
+     "i": 34,
+     "name": "op-test for ${!array} with array=\"a\" and array=\"a[0]\""
+    },
+    {
+     "i": 35,
+     "name": "op-test for ${!array} with array=\"a[@]\" or array=\"a[*]\""
+    },
+    {
+     "i": 36,
+     "name": "op-test for unquoted ${a[*]:-empty} with IFS="
+    }
+   ]
+  },
+  "var-op-strip": {
+   "pass": 14,
+   "total": 28,
+   "failures": [
+    {
+     "i": 2,
+     "name": "Remove const suffix is vectorized on user array"
+    },
+    {
+     "i": 3,
+     "name": "Remove const suffix is vectorized on $@ array"
+    },
+    {
+     "i": 9,
+     "name": "Strip char class"
+    },
+    {
+     "i": 10,
+     "name": "Strip unicode prefix"
+    },
+    {
+     "i": 13,
+     "name": "Prepend using replacement of #"
+    },
+    {
+     "i": 14,
+     "name": "Append using replacement of %"
+    },
+    {
+     "i": 15,
+     "name": "strip unquoted and quoted ["
+    },
+    {
+     "i": 16,
+     "name": "strip unquoted and quoted []"
+    },
+    {
+     "i": 18,
+     "name": "strip unquoted and quoted [a]"
+    },
+    {
+     "i": 19,
+     "name": "Nested % and # operators (bug reported by Crestwave)"
+    },
+    {
+     "i": 23,
+     "name": "strip none"
+    },
+    {
+     "i": 26,
+     "name": "Strip Right Brace (#702)"
+    },
+    {
+     "i": 27,
+     "name": "\\(\\) in pattern (regression)"
+    },
+    {
+     "i": 28,
+     "name": "extglob in pattern"
+    }
+   ]
+  },
+  "var-op-len": {
+   "pass": 3,
+   "total": 7,
+   "failures": [
+    {
+     "i": 2,
+     "name": "Unicode string length (spec/testdata/utf8-chars.txt)"
+    },
+    {
+     "i": 3,
+     "name": "String length with incomplete utf-8"
+    },
+    {
+     "i": 4,
+     "name": "String length with invalid utf-8 continuation bytes"
+    },
+    {
+     "i": 7,
+     "name": "Length operator can't be followed by test operator"
+    }
+   ]
+  },
+  "var-op-patsub": {
+   "pass": 8,
+   "total": 27,
+   "failures": [
+    {
+     "i": 4,
+     "name": "Right Anchored Pattern replacement with %"
+    },
+    {
+     "i": 5,
+     "name": "Replace fixed strings"
+    },
+    {
+     "i": 7,
+     "name": "Replace char class"
+    },
+    {
+     "i": 8,
+     "name": "Replace hard glob"
+    },
+    {
+     "i": 9,
+     "name": "${v/} is empty search and replacement"
+    },
+    {
+     "i": 11,
+     "name": "Confusing unquoted slash matches bash (and ash)"
+    },
+    {
+     "i": 12,
+     "name": "Synthesized ${x///} bug (similar to above)"
+    },
+    {
+     "i": 13,
+     "name": "${v/a} is the same as ${v/a/}  -- no replacement string"
+    },
+    {
+     "i": 15,
+     "name": "Replace backslash"
+    },
+    {
+     "i": 16,
+     "name": "Replace right ]"
+    },
+    {
+     "i": 17,
+     "name": "Substitute glob characters in pattern, quoted and unquoted"
+    },
+    {
+     "i": 18,
+     "name": "Substitute one unicode character (UTF-8)"
+    },
+    {
+     "i": 19,
+     "name": "When LC_ALL=C, pattern ? doesn't match multibyte character"
+    },
+    {
+     "i": 20,
+     "name": "${x/^} regression"
+    },
+    {
+     "i": 21,
+     "name": "\\(\\) in pattern (regression)"
+    },
+    {
+     "i": 22,
+     "name": "patsub with single quotes and hyphen in character class (regression)"
+    },
+    {
+     "i": 24,
+     "name": "[a-z] Invalid range end is syntax error"
+    },
+    {
+     "i": 26,
+     "name": "Chromium from http://www.oilshell.org/blog/2016/11/07.html"
+    },
+    {
+     "i": 27,
+     "name": "${x//~homedir/}"
+    }
+   ]
+  },
+  "var-op-slice": {
+   "pass": 6,
+   "total": 21,
+   "failures": [
+    {
+     "i": 1,
+     "name": "Cannot take length of substring slice"
+    },
+    {
+     "i": 4,
+     "name": "Negative start index"
+    },
+    {
+     "i": 5,
+     "name": "Negative start index respects unicode"
+    },
+    {
+     "i": 6,
+     "name": "Negative second arg is position, not length!"
+    },
+    {
+     "i": 7,
+     "name": "Negative start index respects unicode"
+    },
+    {
+     "i": 8,
+     "name": "String slice with math"
+    },
+    {
+     "i": 13,
+     "name": "Slice with an index that's an array -- silent a[0] decay"
+    },
+    {
+     "i": 14,
+     "name": "Slice with an assoc array"
+    },
+    {
+     "i": 15,
+     "name": "Simple ${@:offset}"
+    },
+    {
+     "i": 16,
+     "name": "${@:offset} and ${*:offset}"
+    },
+    {
+     "i": 17,
+     "name": "${@:offset:length} and ${*:offset:length}"
+    },
+    {
+     "i": 18,
+     "name": "${@:0:1}"
+    },
+    {
+     "i": 19,
+     "name": "Permutations of implicit begin and length"
+    },
+    {
+     "i": 20,
+     "name": "${array[@]:} vs ${array[@]: }  - bash and zsh inconsistent"
+    },
+    {
+     "i": 21,
+     "name": "${array[@]::} has implicit length of zero - for ble.sh"
+    }
+   ]
+  },
+  "var-num": {
+   "pass": 5,
+   "total": 7,
+   "failures": [
+    {
+     "i": 0,
+     "name": "Normal and braced"
+    },
+    {
+     "i": 1,
+     "name": "In function"
+    }
+   ]
+  },
+  "vars-special": {
+   "pass": 13,
+   "total": 37,
+   "failures": [
+    {
+     "i": 2,
+     "name": "$PATH is set if unset at startup"
+    },
+    {
+     "i": 4,
+     "name": "Vars set interactively only: $HISTFILE"
+    },
+    {
+     "i": 5,
+     "name": "Some vars are set, even without startup file, or env: PATH, PWD"
+    },
+    {
+     "i": 6,
+     "name": "UID EUID PPID can't be changed"
+    },
+    {
+     "i": 7,
+     "name": "HOSTNAME OSTYPE can be changed"
+    },
+    {
+     "i": 11,
+     "name": "$$ looks like a PID"
+    },
+    {
+     "i": 12,
+     "name": "$$ doesn't change with subshell or command sub"
+    },
+    {
+     "i": 13,
+     "name": "$BASHPID DOES change with subshell and command sub"
+    },
+    {
+     "i": 14,
+     "name": "Background PID $! looks like a PID"
+    },
+    {
+     "i": 15,
+     "name": "$PPID"
+    },
+    {
+     "i": 16,
+     "name": "$PIPESTATUS"
+    },
+    {
+     "i": 17,
+     "name": "$RANDOM"
+    },
+    {
+     "i": 18,
+     "name": "$UID and $EUID"
+    },
+    {
+     "i": 19,
+     "name": "$OSTYPE is non-empty"
+    },
+    {
+     "i": 21,
+     "name": "$LINENO is the current line, not line of function call"
+    },
+    {
+     "i": 22,
+     "name": "$LINENO in \"bare\" redirect arg (bug regression)"
+    },
+    {
+     "i": 27,
+     "name": "$LINENO in other for loops"
+    },
+    {
+     "i": 31,
+     "name": "$_ with simple command and evaluation"
+    },
+    {
+     "i": 32,
+     "name": "$_ and ${_}"
+    },
+    {
+     "i": 33,
+     "name": "$_ with word splitting"
+    },
+    {
+     "i": 35,
+     "name": "$_ with && and ||"
+    },
+    {
+     "i": 36,
+     "name": "$_ is not reset with (( and [["
+    },
+    {
+     "i": 37,
+     "name": "$_ with assignments, arrays, etc."
+    },
+    {
+     "i": 38,
+     "name": "$_ with loop"
+    }
+   ]
+  },
+  "arith": {
+   "pass": 28,
+   "total": 71,
+   "failures": [
+    {
+     "i": 0,
+     "name": "Side Effect in Array Indexing"
+    },
+    {
+     "i": 4,
+     "name": "BracedVarSub within ArithSub"
+    },
+    {
+     "i": 6,
+     "name": "Arith sub with word parts"
+    },
+    {
+     "i": 9,
+     "name": "Backticks within arith sub"
+    },
+    {
+     "i": 12,
+     "name": "Integer constant parsing"
+    },
+    {
+     "i": 13,
+     "name": "Integer constant validation"
+    },
+    {
+     "i": 19,
+     "name": "Increment and decrement array elements"
+    },
+    {
+     "i": 21,
+     "name": "Comma operator (borrowed from C)"
+    },
+    {
+     "i": 24,
+     "name": "Logical Ops"
+    },
+    {
+     "i": 25,
+     "name": "Logical Ops Short Circuit"
+    },
+    {
+     "i": 26,
+     "name": "Bitwise ops"
+    },
+    {
+     "i": 27,
+     "name": "Unary minus and plus"
+    },
+    {
+     "i": 28,
+     "name": "No floating point"
+    },
+    {
+     "i": 29,
+     "name": "Array indexing in arith"
+    },
+    {
+     "i": 30,
+     "name": "Constants in base 36"
+    },
+    {
+     "i": 31,
+     "name": "Constants in bases 2 to 64"
+    },
+    {
+     "i": 32,
+     "name": "Multiple digit constants with base N"
+    },
+    {
+     "i": 33,
+     "name": "Dynamic base constants"
+    },
+    {
+     "i": 34,
+     "name": "Octal constant"
+    },
+    {
+     "i": 35,
+     "name": "Dynamic octal constant"
+    },
+    {
+     "i": 36,
+     "name": "Dynamic hex constants"
+    },
+    {
+     "i": 37,
+     "name": "Hex constant with capital X"
+    },
+    {
+     "i": 39,
+     "name": "Recursive name evaluation is a result of runtime parse/eval"
+    },
+    {
+     "i": 41,
+     "name": "64-bit integer doesn't overflow"
+    },
+    {
+     "i": 44,
+     "name": "Invalid LValue that looks like array"
+    },
+    {
+     "i": 49,
+     "name": "Negative exponent"
+    },
+    {
+     "i": 50,
+     "name": "Comment not allowed in the middle of multiline arithmetic"
+    },
+    {
+     "i": 51,
+     "name": "Add integer to indexed array (a[0] decay)"
+    },
+    {
+     "i": 52,
+     "name": "Add integer to associative array (a[0] decay)"
+    },
+    {
+     "i": 53,
+     "name": "Double subscript"
+    },
+    {
+     "i": 54,
+     "name": "result of ArithSub -- array[0] decay"
+    },
+    {
+     "i": 56,
+     "name": "comma operator"
+    },
+    {
+     "i": 57,
+     "name": "assignment with dynamic var name"
+    },
+    {
+     "i": 58,
+     "name": "array assignment with dynamic array name"
+    },
+    {
+     "i": 59,
+     "name": "unary assignment with dynamic var name"
+    },
+    {
+     "i": 60,
+     "name": "unary array assignment with dynamic var name"
+    },
+    {
+     "i": 61,
+     "name": "Dynamic parsing of arithmetic"
+    },
+    {
+     "i": 64,
+     "name": "1 ? a=1 : b=2 ( bug fix)"
+    },
+    {
+     "i": 65,
+     "name": "Invalid constant"
+    },
+    {
+     "i": 68,
+     "name": "Negative numbers with bit shift"
+    },
+    {
+     "i": 71,
+     "name": "s[0] with string abc"
+    },
+    {
+     "i": 72,
+     "name": "s[0] with string 42"
+    },
+    {
+     "i": 73,
+     "name": "s[0] with string '12 34'"
+    }
+   ]
+  },
+  "command-sub": {
+   "pass": 10,
+   "total": 28,
+   "failures": [
+    {
+     "i": 1,
+     "name": "case in subshell"
+    },
+    {
+     "i": 4,
+     "name": "Backtick 2"
+    },
+    {
+     "i": 5,
+     "name": "Nested backticks"
+    },
+    {
+     "i": 7,
+     "name": "Making keyword out of command sub should NOT work"
+    },
+    {
+     "i": 8,
+     "name": "Command sub with here doc"
+    },
+    {
+     "i": 15,
+     "name": "Double Quotes in Command Sub in Double Quotes"
+    },
+    {
+     "i": 16,
+     "name": "Escaped quote in [[ ]]"
+    },
+    {
+     "i": 18,
+     "name": "Quoting $ within ``"
+    },
+    {
+     "i": 19,
+     "name": "Quoting $ within `` within double quotes"
+    },
+    {
+     "i": 20,
+     "name": "Quoting \\ within ``"
+    },
+    {
+     "i": 21,
+     "name": "Quoting \\ within `` within double quotes"
+    },
+    {
+     "i": 22,
+     "name": "Quoting ( within ``"
+    },
+    {
+     "i": 23,
+     "name": "Quoting ( within `` within double quotes"
+    },
+    {
+     "i": 24,
+     "name": "Quoting non-special characters within ``"
+    },
+    {
+     "i": 25,
+     "name": "Quoting non-special characters within `` within double quotes"
+    },
+    {
+     "i": 26,
+     "name": "Quoting double quotes within backticks"
+    },
+    {
+     "i": 27,
+     "name": "More levels of double quotes in backticks"
+    },
+    {
+     "i": 28,
+     "name": "Syntax errors with double quotes within backticks"
+    }
+   ]
+  },
+  "here-doc": {
+   "pass": 14,
+   "total": 32,
+   "failures": [
+    {
+     "i": 2,
+     "name": "Here redirect with explicit descriptor"
+    },
+    {
+     "i": 8,
+     "name": "< redirect and here doc -- last one wins"
+    },
+    {
+     "i": 9,
+     "name": "Here doc with var sub, command sub, arith sub"
+    },
+    {
+     "i": 10,
+     "name": "Here doc in middle.  And redirects in the middle."
+    },
+    {
+     "i": 12,
+     "name": "Here doc with quote expansion in terminator"
+    },
+    {
+     "i": 13,
+     "name": "Here doc with multiline double quoted string"
+    },
+    {
+     "i": 14,
+     "name": "Two here docs -- first is ignored; second ones wins!"
+    },
+    {
+     "i": 15,
+     "name": "Here doc with line continuation, then pipe.  Syntax error."
+    },
+    {
+     "i": 19,
+     "name": "Compound command here doc"
+    },
+    {
+     "i": 20,
+     "name": "Here doc in while condition and here doc in body"
+    },
+    {
+     "i": 21,
+     "name": "Here doc in while condition and here doc in body on multiple lines"
+    },
+    {
+     "i": 22,
+     "name": "Here doc in while loop split up more"
+    },
+    {
+     "i": 23,
+     "name": "Mixing << and <<-"
+    },
+    {
+     "i": 24,
+     "name": "Two compound commands with two here docs"
+    },
+    {
+     "i": 25,
+     "name": "Function def and execution with here doc"
+    },
+    {
+     "i": 30,
+     "name": "Here Doc in if condition"
+    },
+    {
+     "i": 31,
+     "name": "Nested here docs which are indented"
+    },
+    {
+     "i": 35,
+     "name": "Here doc escapes"
+    }
+   ]
+  },
+  "redirect": {
+   "pass": 12,
+   "total": 39,
+   "failures": [
+    {
+     "i": 0,
+     "name": ">& and <& are the same"
+    },
+    {
+     "i": 1,
+     "name": "<&"
+    },
+    {
+     "i": 8,
+     "name": "Descriptor redirect with filename"
+    },
+    {
+     "i": 9,
+     "name": "Redirect echo to stderr, and then redirect all of stdout somewhere."
+    },
+    {
+     "i": 10,
+     "name": "Named file descriptor"
+    },
+    {
+     "i": 11,
+     "name": "Double digit fd (20> file)"
+    },
+    {
+     "i": 15,
+     "name": "3>&- << EOF (OSH regression: fail to restore fds)"
+    },
+    {
+     "i": 16,
+     "name": "Open file on descriptor 3 and write to it many times"
+    },
+    {
+     "i": 17,
+     "name": "Open file on descriptor 4 and write to it many times"
+    },
+    {
+     "i": 18,
+     "name": "Redirect to empty string"
+    },
+    {
+     "i": 19,
+     "name": "Redirect to file descriptor that's not open"
+    },
+    {
+     "i": 20,
+     "name": "Open descriptor with exec"
+    },
+    {
+     "i": 21,
+     "name": "Open multiple descriptors with exec"
+    },
+    {
+     "i": 22,
+     "name": ">| to clobber"
+    },
+    {
+     "i": 23,
+     "name": "&> redirects stdout and stderr"
+    },
+    {
+     "i": 24,
+     "name": ">&word redirects stdout and stderr when word is not a number or -"
+    },
+    {
+     "i": 25,
+     "name": "1>&- to close file descriptor"
+    },
+    {
+     "i": 26,
+     "name": "1>&2- to move file descriptor"
+    },
+    {
+     "i": 27,
+     "name": "1>&2- (Bash bug: fail to restore closed fd)"
+    },
+    {
+     "i": 28,
+     "name": "<> for read/write"
+    },
+    {
+     "i": 29,
+     "name": "<> for read/write named pipes"
+    },
+    {
+     "i": 30,
+     "name": "&>> appends stdout and stderr"
+    },
+    {
+     "i": 32,
+     "name": "can't mention big file descriptor"
+    },
+    {
+     "i": 34,
+     "name": "echo foo >&100 (OSH regression: does not fail with invalid fd 100)"
+    },
+    {
+     "i": 35,
+     "name": "echo foo >&N where N is first unused fd"
+    },
+    {
+     "i": 36,
+     "name": "exec {fd}>&- (OSH regression: fails to close fd)"
+    },
+    {
+     "i": 40,
+     "name": "xtrace not affected by redirects"
+    }
+   ]
+  },
+  "if_": {
+   "pass": 4,
+   "total": 5,
+   "failures": [
+    {
+     "i": 4,
+     "name": "if break corner case"
+    }
+   ]
+  },
+  "loop": {
+   "pass": 14,
+   "total": 28,
+   "failures": [
+    {
+     "i": 0,
+     "name": "implicit for loop"
+    },
+    {
+     "i": 1,
+     "name": "empty for loop (has \"in\")"
+    },
+    {
+     "i": 5,
+     "name": "Brace Expansion within Array"
+    },
+    {
+     "i": 11,
+     "name": "while in pipe with subshell"
+    },
+    {
+     "i": 13,
+     "name": "continue at top level"
+    },
+    {
+     "i": 14,
+     "name": "continue in subshell"
+    },
+    {
+     "i": 15,
+     "name": "continue in subshell aborts with errexit"
+    },
+    {
+     "i": 16,
+     "name": "bad arg to break"
+    },
+    {
+     "i": 18,
+     "name": "break in condition of loop"
+    },
+    {
+     "i": 19,
+     "name": "break in condition of nested loop"
+    },
+    {
+     "i": 23,
+     "name": "top-level break/continue/return (without strict_control_flow)"
+    },
+    {
+     "i": 26,
+     "name": "$b break, $c continue, $r return, $e exit"
+    },
+    {
+     "i": 27,
+     "name": "\\break \\continue \\return \\exit"
+    },
+    {
+     "i": 28,
+     "name": "builtin,command break,continue,return,exit"
+    }
+   ]
+  },
+  "case_": {
+   "pass": 3,
+   "total": 13,
+   "failures": [
+    {
+     "i": 0,
+     "name": "Case statement"
+    },
+    {
+     "i": 3,
+     "name": "Case with empty condition"
+    },
+    {
+     "i": 4,
+     "name": "Match a literal with a glob character"
+    },
+    {
+     "i": 5,
+     "name": "Match a literal with a glob character with a dynamic pattern"
+    },
+    {
+     "i": 6,
+     "name": "Quoted literal in glob pattern"
+    },
+    {
+     "i": 8,
+     "name": "Pattern ? matches 1 code point (many bytes), but not multiple code points"
+    },
+    {
+     "i": 9,
+     "name": "matching the byte 0xff against empty string - DISABLED - CI only bug?"
+    },
+    {
+     "i": 10,
+     "name": "matching every byte against itself"
+    },
+    {
+     "i": 11,
+     "name": "\\(\\) in pattern (regression)"
+    },
+    {
+     "i": 12,
+     "name": "case \\n bug regression"
+    }
+   ]
+  },
+  "sh-func": {
+   "pass": 10,
+   "total": 11,
+   "failures": [
+    {
+     "i": 10,
+     "name": "Subshell function"
+    }
+   ]
+  },
+  "func-parsing": {
+   "pass": 3,
+   "total": 12,
+   "failures": [
+    {
+     "i": 4,
+     "name": "Function with spaces, to see if ( and ) are separate tokens."
+    },
+    {
+     "i": 6,
+     "name": "Hard case, function with } token in it"
+    },
+    {
+     "i": 7,
+     "name": ". in function name"
+    },
+    {
+     "i": 8,
+     "name": "= in function name"
+    },
+    {
+     "i": 9,
+     "name": "Function name with $"
+    },
+    {
+     "i": 10,
+     "name": "Function name with command sub"
+    },
+    {
+     "i": 11,
+     "name": "Function name with !"
+    },
+    {
+     "i": 12,
+     "name": "Function name with -"
+    },
+    {
+     "i": 13,
+     "name": "Break after ) is OK."
+    }
+   ]
+  },
+  "builtin-echo": {
+   "pass": 7,
+   "total": 27,
+   "failures": [
+    {
+     "i": 2,
+     "name": "echo -e backslashes"
+    },
+    {
+     "i": 3,
+     "name": "echo builtin should disallow typed args - literal"
+    },
+    {
+     "i": 4,
+     "name": "echo builtin should disallow typed args - variable"
+    },
+    {
+     "i": 5,
+     "name": "echo -en"
+    },
+    {
+     "i": 6,
+     "name": "echo -ez (invalid flag)"
+    },
+    {
+     "i": 8,
+     "name": "echo -e line continuation"
+    },
+    {
+     "i": 9,
+     "name": "echo -e with C escapes"
+    },
+    {
+     "i": 12,
+     "name": "\\c stops processing input"
+    },
+    {
+     "i": 15,
+     "name": "echo -e with 4 digit unicode escape"
+    },
+    {
+     "i": 16,
+     "name": "echo -e with 8 digit unicode escape"
+    },
+    {
+     "i": 17,
+     "name": "\\0377 is the highest octal byte"
+    },
+    {
+     "i": 18,
+     "name": "\\0400 is one more than the highest octal byte"
+    },
+    {
+     "i": 19,
+     "name": "\\0777 is out of range"
+    },
+    {
+     "i": 20,
+     "name": "incomplete hex escape"
+    },
+    {
+     "i": 21,
+     "name": "\\x"
+    },
+    {
+     "i": 22,
+     "name": "incomplete octal escape"
+    },
+    {
+     "i": 23,
+     "name": "incomplete unicode escape"
+    },
+    {
+     "i": 24,
+     "name": "\\u6"
+    },
+    {
+     "i": 25,
+     "name": "\\0 \\1 \\8"
+    },
+    {
+     "i": 26,
+     "name": "echo to redirected directory is an error"
+    }
+   ]
+  },
+  "builtin-printf": {
+   "pass": 13,
+   "total": 55,
+   "failures": [
+    {
+     "i": 0,
+     "name": "printf with no args"
+    },
+    {
+     "i": 2,
+     "name": "printf -v %q"
+    },
+    {
+     "i": 3,
+     "name": "printf -v a[1]"
+    },
+    {
+     "i": 4,
+     "name": "printf -v syntax error"
+    },
+    {
+     "i": 6,
+     "name": "dynamic declare instead of %q"
+    },
+    {
+     "i": 7,
+     "name": "printf -v dynamic scope"
+    },
+    {
+     "i": 8,
+     "name": "printf with too few arguments"
+    },
+    {
+     "i": 9,
+     "name": "printf with too many arguments"
+    },
+    {
+     "i": 11,
+     "name": "printf integer"
+    },
+    {
+     "i": 12,
+     "name": "printf %6.4d -- \"precision\" does padding for integers"
+    },
+    {
+     "i": 13,
+     "name": "printf %6.4x X o"
+    },
+    {
+     "i": 14,
+     "name": "%06d zero padding vs. %6.6d"
+    },
+    {
+     "i": 17,
+     "name": "printf %6.4s does both truncation and padding"
+    },
+    {
+     "i": 18,
+     "name": "printf %6.0s and %0.0s"
+    },
+    {
+     "i": 19,
+     "name": "printf %6.s and %0.s"
+    },
+    {
+     "i": 20,
+     "name": "printf %*.*s (width/precision from args)"
+    },
+    {
+     "i": 21,
+     "name": "unsigned / octal / hex"
+    },
+    {
+     "i": 22,
+     "name": "unsigned / octal / hex big"
+    },
+    {
+     "i": 25,
+     "name": "Unicode char with '"
+    },
+    {
+     "i": 28,
+     "name": "negative numbers with unsigned / octal / hex"
+    },
+    {
+     "i": 31,
+     "name": "printf eE fF gG"
+    },
+    {
+     "i": 38,
+     "name": "printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8"
+    },
+    {
+     "i": 39,
+     "name": "printf invalid format"
+    },
+    {
+     "i": 40,
+     "name": "printf %q"
+    },
+    {
+     "i": 41,
+     "name": "printf %6q (width)"
+    },
+    {
+     "i": 42,
+     "name": "printf negative numbers"
+    },
+    {
+     "i": 43,
+     "name": "printf + and space flags"
+    },
+    {
+     "i": 44,
+     "name": "printf # flag"
+    },
+    {
+     "i": 45,
+     "name": "Runtime error for invalid integer"
+    },
+    {
+     "i": 49,
+     "name": "%10.5(strftime format)T"
+    },
+    {
+     "i": 51,
+     "name": "bash truncates long strftime string at 128"
+    },
+    {
+     "i": 52,
+     "name": "printf positive integer overflow"
+    },
+    {
+     "i": 53,
+     "name": "printf negative integer overflow"
+    },
+    {
+     "i": 54,
+     "name": "printf %b does backslash escaping"
+    },
+    {
+     "i": 55,
+     "name": "printf %b unicode escapes"
+    },
+    {
+     "i": 56,
+     "name": "printf %b respects \\c early return"
+    },
+    {
+     "i": 57,
+     "name": "printf %b supports octal escapes, both \\141 and \\0141"
+    },
+    {
+     "i": 58,
+     "name": "printf %b with truncated octal escapes"
+    },
+    {
+     "i": 59,
+     "name": "printf %d %X support hex 0x5 and octal 055"
+    },
+    {
+     "i": 60,
+     "name": "printf %d with + prefix (positive sign)"
+    },
+    {
+     "i": 61,
+     "name": "leading spaces are accepted in value given to %d %X, but not trailing spaces"
+    },
+    {
+     "i": 62,
+     "name": "Arbitrary base 64#a is rejected (unlike in shell arithmetic)"
+    }
+   ]
+  },
+  "builtin-read": {
+   "pass": 26,
+   "total": 64,
+   "failures": [
+    {
+     "i": 3,
+     "name": "read with zero args"
+    },
+    {
+     "i": 4,
+     "name": "read builtin with no newline returns status 1"
+    },
+    {
+     "i": 5,
+     "name": "read builtin splits value across multiple vars"
+    },
+    {
+     "i": 9,
+     "name": "read -n doesn't strip whitespace (bug fix)"
+    },
+    {
+     "i": 10,
+     "name": "read -d -n - respects delimiter and splits"
+    },
+    {
+     "i": 13,
+     "name": "read without args uses $REPLY, no splitting occurs (without -n)"
+    },
+    {
+     "i": 14,
+     "name": "read -n vs. -N"
+    },
+    {
+     "i": 15,
+     "name": "read -N ignores delimiters"
+    },
+    {
+     "i": 19,
+     "name": "read with line continuation reads multiple physical lines"
+    },
+    {
+     "i": 24,
+     "name": "read multiple lines with IFS=:"
+    },
+    {
+     "i": 27,
+     "name": "dynamic scope used to set vars"
+    },
+    {
+     "i": 28,
+     "name": "read -a reads into array"
+    },
+    {
+     "i": 30,
+     "name": "read -d '' (null-separated records)"
+    },
+    {
+     "i": 31,
+     "name": "read -rd"
+    },
+    {
+     "i": 32,
+     "name": "read -d when there's no delimiter"
+    },
+    {
+     "i": 33,
+     "name": "read -t 0 tests if input is available"
+    },
+    {
+     "i": 34,
+     "name": "read -t 0.5"
+    },
+    {
+     "i": 36,
+     "name": "read -u"
+    },
+    {
+     "i": 38,
+     "name": "read -u -s"
+    },
+    {
+     "i": 39,
+     "name": "read -u 3 -d 5"
+    },
+    {
+     "i": 40,
+     "name": "read -u 3 -d b -N 6"
+    },
+    {
+     "i": 41,
+     "name": "read -N doesn't respect delimiter, while read -n does"
+    },
+    {
+     "i": 44,
+     "name": "read with smooshed args"
+    },
+    {
+     "i": 45,
+     "name": "read -r -d '' for NUL strings, e.g. find -print0"
+    },
+    {
+     "i": 50,
+     "name": "read -n and backslash escape"
+    },
+    {
+     "i": 51,
+     "name": "read -n 4 with incomplete backslash"
+    },
+    {
+     "i": 52,
+     "name": "read -n 4 with backslash + delim"
+    },
+    {
+     "i": 53,
+     "name": "\"backslash + newline\" should be swallowed regardless of \"-d <delim>\""
+    },
+    {
+     "i": 54,
+     "name": "empty input and splitting"
+    },
+    {
+     "i": 55,
+     "name": "IFS='x ' read -a: trailing spaces (unlimited split)"
+    },
+    {
+     "i": 56,
+     "name": "IFS='x ' read a b: trailing spaces (with max_split)"
+    },
+    {
+     "i": 57,
+     "name": "IFS='x ' read -a: intermediate spaces (unlimited split)"
+    },
+    {
+     "i": 58,
+     "name": "IFS='x ' incomplete backslash"
+    },
+    {
+     "i": 59,
+     "name": "IFS='\\ ' and backslash escaping"
+    },
+    {
+     "i": 60,
+     "name": "max_split and backslash escaping"
+    },
+    {
+     "i": 61,
+     "name": "IFS=x read a b <<< xxxxxx"
+    },
+    {
+     "i": 62,
+     "name": "read and \"\\ \""
+    },
+    {
+     "i": 63,
+     "name": "read bash bug"
+    }
+   ]
+  },
+  "builtin-eval-source": {
+   "pass": 11,
+   "total": 23,
+   "failures": [
+    {
+     "i": 1,
+     "name": "eval accepts/ignores --"
+    },
+    {
+     "i": 2,
+     "name": "eval usage"
+    },
+    {
+     "i": 4,
+     "name": "eval YSH block with 'break continue return error'"
+    },
+    {
+     "i": 8,
+     "name": "source accepts/ignores --"
+    },
+    {
+     "i": 10,
+     "name": "Source with no arguments"
+    },
+    {
+     "i": 11,
+     "name": "Source with arguments"
+    },
+    {
+     "i": 12,
+     "name": "Source from a function, mutating argv and defining a local var"
+    },
+    {
+     "i": 13,
+     "name": "Source with syntax error"
+    },
+    {
+     "i": 14,
+     "name": "Eval with syntax error"
+    },
+    {
+     "i": 18,
+     "name": "source looks in PATH for files"
+    },
+    {
+     "i": 19,
+     "name": "source finds files in PATH before current dir"
+    },
+    {
+     "i": 22,
+     "name": "sourcing along PATH should ignore directories"
+    }
+   ]
+  },
+  "builtin-getopts": {
+   "pass": 23,
+   "total": 30,
+   "failures": [
+    {
+     "i": 6,
+     "name": "getopts with invalid variable name"
+    },
+    {
+     "i": 7,
+     "name": "getopts with invalid flag"
+    },
+    {
+     "i": 9,
+     "name": "getopts missing required argument"
+    },
+    {
+     "i": 12,
+     "name": "OPTIND"
+    },
+    {
+     "i": 13,
+     "name": "OPTIND after multiple getopts with same spec"
+    },
+    {
+     "i": 14,
+     "name": "OPTIND after multiple getopts with different spec"
+    },
+    {
+     "i": 30,
+     "name": "getopts leaves all args after '--' as operands #2579"
+    }
+   ]
+  },
+  "builtin-trap": {
+   "pass": 7,
+   "total": 33,
+   "failures": [
+    {
+     "i": 0,
+     "name": "traps are not active inside subshells $() ()  trap | cat"
+    },
+    {
+     "i": 1,
+     "name": "trap accepts/ignores --"
+    },
+    {
+     "i": 2,
+     "name": "Register invalid trap, remove invalid trap"
+    },
+    {
+     "i": 3,
+     "name": "trap foo gives non-zero error"
+    },
+    {
+     "i": 6,
+     "name": "print trap handler with multiple lines"
+    },
+    {
+     "i": 7,
+     "name": "trap -p is like trap: it prints the handlers and full signal names"
+    },
+    {
+     "i": 8,
+     "name": "Register the same handler for multiple signals"
+    },
+    {
+     "i": 9,
+     "name": "Remove multiple handlers with trap -"
+    },
+    {
+     "i": 10,
+     "name": "trap EXIT clears the EXIT trap"
+    },
+    {
+     "i": 11,
+     "name": "trap 0 is equivalent to trap EXIT"
+    },
+    {
+     "i": 13,
+     "name": "trap 0 2 resets EXIT AND SIGINT"
+    },
+    {
+     "i": 14,
+     "name": "trap '' EXIT - printing state"
+    },
+    {
+     "i": 16,
+     "name": "exit 1 when trap code string is invalid"
+    },
+    {
+     "i": 17,
+     "name": "trap EXIT calling exit"
+    },
+    {
+     "i": 20,
+     "name": "trap EXIT with PARSE error and explicit exit"
+    },
+    {
+     "i": 22,
+     "name": "trap EXIT with command sub / subshell / pipeline"
+    },
+    {
+     "i": 23,
+     "name": "eval in the exit trap (regression for issue #293)"
+    },
+    {
+     "i": 24,
+     "name": "exit codes for traps are isolated"
+    },
+    {
+     "i": 25,
+     "name": "traps are cleared in subshell (started with &)"
+    },
+    {
+     "i": 26,
+     "name": "trap USR1, sleep, SIGINT: non-interactively"
+    },
+    {
+     "i": 27,
+     "name": "trap INT, sleep, SIGINT: non-interactively"
+    },
+    {
+     "i": 28,
+     "name": "trap EXIT, sleep, SIGINT: non-interactively"
+    },
+    {
+     "i": 29,
+     "name": "Remove trap with an unsigned integer"
+    },
+    {
+     "i": 30,
+     "name": "trap '' sets handler to empty string (SIG_IGN)"
+    },
+    {
+     "i": 31,
+     "name": "trap '' with multiple signals"
+    },
+    {
+     "i": 32,
+     "name": "trap with command.NoOp - check internal invariant"
+    }
+   ]
+  },
+  "builtin-bracket": {
+   "pass": 25,
+   "total": 50,
+   "failures": [
+    {
+     "i": 3,
+     "name": "-a as unary operator (alias of -e)"
+    },
+    {
+     "i": 5,
+     "name": "three args"
+    },
+    {
+     "i": 7,
+     "name": "test with extra args is syntax error"
+    },
+    {
+     "i": 8,
+     "name": "] syntax errors"
+    },
+    {
+     "i": 12,
+     "name": "( )"
+    },
+    {
+     "i": 13,
+     "name": "( ) ! -a -o with system version of ["
+    },
+    {
+     "i": 17,
+     "name": "[ with unquoted empty var"
+    },
+    {
+     "i": 19,
+     "name": "[ '(' foo ] is runtime syntax error"
+    },
+    {
+     "i": 20,
+     "name": "-z '>' implies two token lookahead"
+    },
+    {
+     "i": 24,
+     "name": "-x"
+    },
+    {
+     "i": 27,
+     "name": "-k for sticky bit"
+    },
+    {
+     "i": 28,
+     "name": "-h and -L test for symlink"
+    },
+    {
+     "i": 31,
+     "name": "-ot and -nt"
+    },
+    {
+     "i": 32,
+     "name": "[ a -eq b ]"
+    },
+    {
+     "i": 35,
+     "name": "test -p named pipe"
+    },
+    {
+     "i": 36,
+     "name": "-G and -O for effective user ID and group ID"
+    },
+    {
+     "i": 37,
+     "name": "-u for setuid, -g too"
+    },
+    {
+     "i": 38,
+     "name": "-v to test variable (bash)"
+    },
+    {
+     "i": 39,
+     "name": "test -o for options"
+    },
+    {
+     "i": 41,
+     "name": "-ef"
+    },
+    {
+     "i": 44,
+     "name": "test -c"
+    },
+    {
+     "i": 47,
+     "name": "negative octal numbers, etc."
+    },
+    {
+     "i": 49,
+     "name": "No octal, hex, base N conversion - leading 0 is a regular decimal"
+    },
+    {
+     "i": 50,
+     "name": "Looks like octal, but digit is too big"
+    },
+    {
+     "i": 51,
+     "name": "no recursive arith [ 1+2 -eq 3 ]"
+    }
+   ]
+  },
+  "builtin-cd": {
+   "pass": 14,
+   "total": 28,
+   "failures": [
+    {
+     "i": 1,
+     "name": "cd BAD/.."
+    },
+    {
+     "i": 2,
+     "name": "cd with 2 or more args - with strict_arg_parse"
+    },
+    {
+     "i": 5,
+     "name": "$OLDPWD"
+    },
+    {
+     "i": 8,
+     "name": "pwd with symlink and -P"
+    },
+    {
+     "i": 9,
+     "name": "setting $PWD doesn't affect the value of 'pwd' builtin"
+    },
+    {
+     "i": 12,
+     "name": "lie about PWD; pwd before any cd"
+    },
+    {
+     "i": 14,
+     "name": "pwd in symlinked dir on shell initialization"
+    },
+    {
+     "i": 15,
+     "name": "Test the current directory after 'cd ..' involving symlinks"
+    },
+    {
+     "i": 18,
+     "name": "cd away from dir that was deleted"
+    },
+    {
+     "i": 19,
+     "name": "cd permits double bare dash"
+    },
+    {
+     "i": 20,
+     "name": "cd to symlink with -L and -P"
+    },
+    {
+     "i": 21,
+     "name": "cd to relative path with -L and -P"
+    },
+    {
+     "i": 23,
+     "name": "CDPATH is respected"
+    },
+    {
+     "i": 26,
+     "name": "Survey of getcwd() syscall"
+    }
+   ]
+  },
+  "builtin-special": {
+   "pass": 7,
+   "total": 12,
+   "failures": [
+    {
+     "i": 1,
+     "name": "Prefix assignments persist after special builtins, like : (set -o posix)"
+    },
+    {
+     "i": 2,
+     "name": "Prefix assignments persist after readonly, but NOT exported (set -o posix)"
+    },
+    {
+     "i": 3,
+     "name": "Prefix binding for exec is a special case (versus e.g. readonly)"
+    },
+    {
+     "i": 10,
+     "name": "bash 'type' gets confused - says 'function', but runs builtin"
+    },
+    {
+     "i": 11,
+     "name": "command, builtin - both can be redefined, not special (regression)"
+    }
+   ]
+  },
+  "builtin-type": {
+   "pass": 0,
+   "total": 6,
+   "failures": [
+    {
+     "i": 0,
+     "name": "type -> keyword builtin"
+    },
+    {
+     "i": 1,
+     "name": "type -> alias external"
+    },
+    {
+     "i": 2,
+     "name": "type of relative path"
+    },
+    {
+     "i": 3,
+     "name": "type -> not found"
+    },
+    {
+     "i": 4,
+     "name": "special builtins are called out"
+    },
+    {
+     "i": 5,
+     "name": "more special builtins"
+    }
+   ]
+  },
+  "builtin-vars": {
+   "pass": 26,
+   "total": 38,
+   "failures": [
+    {
+     "i": 1,
+     "name": "Export sets a global variable that persists after export -n"
+    },
+    {
+     "i": 7,
+     "name": "Export a local that shadows a global"
+    },
+    {
+     "i": 9,
+     "name": "Unset exported variable, then define it again.  It's NOT still exported."
+    },
+    {
+     "i": 10,
+     "name": "Exporting a parent func variable (dynamic scope)"
+    },
+    {
+     "i": 22,
+     "name": "Unset a function without -f"
+    },
+    {
+     "i": 24,
+     "name": "Unset and scope (bug #653)"
+    },
+    {
+     "i": 30,
+     "name": "Unset array member"
+    },
+    {
+     "i": 33,
+     "name": "unset -v assoc (related to issue #661)"
+    },
+    {
+     "i": 35,
+     "name": "Unset array member with dynamic parsing"
+    },
+    {
+     "i": 38,
+     "name": "local after readonly"
+    },
+    {
+     "i": 39,
+     "name": "unset a[-1] (bf.bash regression)"
+    },
+    {
+     "i": 40,
+     "name": "unset a[-1] in sparse array (bf.bash regression)"
+    }
+   ]
+  },
+  "dbracket": {
+   "pass": 19,
+   "total": 49,
+   "failures": [
+    {
+     "i": 2,
+     "name": "equality"
+    },
+    {
+     "i": 5,
+     "name": "[[ regex syntax error"
+    },
+    {
+     "i": 10,
+     "name": "|| chain"
+    },
+    {
+     "i": 11,
+     "name": "[[ compound expressions"
+    },
+    {
+     "i": 12,
+     "name": "precedence of && and || inside [["
+    },
+    {
+     "i": 13,
+     "name": "precedence of && and || in a command context"
+    },
+    {
+     "i": 14,
+     "name": "Octal literals with -eq"
+    },
+    {
+     "i": 16,
+     "name": "> on strings"
+    },
+    {
+     "i": 18,
+     "name": "-eq on strings"
+    },
+    {
+     "i": 20,
+     "name": "[[ with op variable (compare with test-builtin.test.sh)"
+    },
+    {
+     "i": 22,
+     "name": "[[ at runtime doesn't work"
+    },
+    {
+     "i": 23,
+     "name": "[[ with env prefix doesn't work"
+    },
+    {
+     "i": 24,
+     "name": "[[ over multiple lines is OK"
+    },
+    {
+     "i": 25,
+     "name": "Argument that looks like a real operator"
+    },
+    {
+     "i": 26,
+     "name": "User array compared to \"$@\" (broken unless shopt -s strict_array)"
+    },
+    {
+     "i": 27,
+     "name": "Array coerces to string (shopt -s strict_array to disallow)"
+    },
+    {
+     "i": 30,
+     "name": "-eq does dynamic arithmetic parsing (not supported in OSH)"
+    },
+    {
+     "i": 31,
+     "name": "-eq coercion produces weird results"
+    },
+    {
+     "i": 33,
+     "name": "[[ '(' foo ]] is syntax error"
+    },
+    {
+     "i": 35,
+     "name": "[[ -z ]] is syntax error"
+    },
+    {
+     "i": 36,
+     "name": "[[ -z '>' ]]"
+    },
+    {
+     "i": 37,
+     "name": "[[ -z '>' a ]] is syntax error"
+    },
+    {
+     "i": 39,
+     "name": "[[ ]] is syntax error"
+    },
+    {
+     "i": 40,
+     "name": "[[ && ]] is syntax error"
+    },
+    {
+     "i": 41,
+     "name": "[[ a 3< b ]] doesn't work (bug regression)"
+    },
+    {
+     "i": 43,
+     "name": "more tilde expansion"
+    },
+    {
+     "i": 44,
+     "name": "tilde expansion with =~ (confusing)"
+    },
+    {
+     "i": 45,
+     "name": "[[ ]] with redirect"
+    },
+    {
+     "i": 47,
+     "name": "\\(\\) in pattern (regression)"
+    },
+    {
+     "i": 48,
+     "name": "negative numbers - zero, decimal, octal, hex, base N"
+    }
+   ]
+  },
+  "dparen": {
+   "pass": 6,
+   "total": 14,
+   "failures": [
+    {
+     "i": 4,
+     "name": "(( )) with arrays"
+    },
+    {
+     "i": 6,
+     "name": "bash and mksh: V in (( a[K] = V )) gets coerced to integer"
+    },
+    {
+     "i": 7,
+     "name": "bash: K in (( A[K] = V )) is a constant string"
+    },
+    {
+     "i": 9,
+     "name": "bash: V in (( A[\"K\"] = V )) gets coerced to integer"
+    },
+    {
+     "i": 11,
+     "name": "(( )) with redirect"
+    },
+    {
+     "i": 12,
+     "name": "Assigning whole raray (( b = a ))"
+    },
+    {
+     "i": 13,
+     "name": "set associative array"
+    },
+    {
+     "i": 14,
+     "name": "Example of incrementing associative array entry with var key (ble.sh)"
+    }
+   ]
+  },
+  "assign": {
+   "pass": 31,
+   "total": 43,
+   "failures": [
+    {
+     "i": 2,
+     "name": "Env binding can use preceding bindings, but not subsequent ones"
+    },
+    {
+     "i": 4,
+     "name": "Env value with escaped <"
+    },
+    {
+     "i": 10,
+     "name": "Trying to run keyword 'for'"
+    },
+    {
+     "i": 21,
+     "name": "'declare -A' and then dict assignment"
+    },
+    {
+     "i": 25,
+     "name": "Test above without 'local' (which is not POSIX)"
+    },
+    {
+     "i": 29,
+     "name": "aliased assignment doesn't split"
+    },
+    {
+     "i": 32,
+     "name": "assign and glob"
+    },
+    {
+     "i": 33,
+     "name": "declare and glob"
+    },
+    {
+     "i": 37,
+     "name": "local a=loc $var c=loc"
+    },
+    {
+     "i": 45,
+     "name": "\"declare -a arr\" and \"readonly -a a\" creates an empty array (OSH)"
+    },
+    {
+     "i": 46,
+     "name": "\"var d = {}; declare -p d\" does not print anything (OSH)"
+    },
+    {
+     "i": 47,
+     "name": "readonly array should not be modified by a+=(1)"
+    }
+   ]
+  },
+  "append": {
+   "pass": 1,
+   "total": 20,
+   "failures": [
+    {
+     "i": 0,
+     "name": "Append string to string"
+    },
+    {
+     "i": 1,
+     "name": "Append array to array"
+    },
+    {
+     "i": 2,
+     "name": "Append string to undefined variable"
+    },
+    {
+     "i": 3,
+     "name": "Append to array to undefined variable"
+    },
+    {
+     "i": 4,
+     "name": "error: s+=(my array)"
+    },
+    {
+     "i": 5,
+     "name": "error: myarray+=s"
+    },
+    {
+     "i": 6,
+     "name": "typeset s+=(my array)"
+    },
+    {
+     "i": 7,
+     "name": "error: typeset myarray+=s"
+    },
+    {
+     "i": 8,
+     "name": "error: append used like env prefix"
+    },
+    {
+     "i": 9,
+     "name": "myarray[1]+=s - Append to element"
+    },
+    {
+     "i": 10,
+     "name": "myarray[-1]+=s - Append to last element"
+    },
+    {
+     "i": 11,
+     "name": "Try to append list to element"
+    },
+    {
+     "i": 12,
+     "name": "Strings have value semantics, not reference semantics"
+    },
+    {
+     "i": 13,
+     "name": "typeset s+="
+    },
+    {
+     "i": 14,
+     "name": "typeset s${dyn}+="
+    },
+    {
+     "i": 15,
+     "name": "export readonly +="
+    },
+    {
+     "i": 16,
+     "name": "local +="
+    },
+    {
+     "i": 17,
+     "name": "assign builtin appending array: declare d+=(d e)"
+    },
+    {
+     "i": 18,
+     "name": "export+=array disallowed (strict_array)"
+    }
+   ]
+  },
+  "array-basic": {
+   "pass": 1,
+   "total": 5,
+   "failures": [
+    {
+     "i": 0,
+     "name": "\"${a[@]}\" and \"${a[*]}\""
+    },
+    {
+     "i": 2,
+     "name": "4 ways to interpolate empty array"
+    },
+    {
+     "i": 3,
+     "name": "empty array"
+    },
+    {
+     "i": 4,
+     "name": "Empty array with :-"
+    }
+   ]
+  },
+  "array": {
+   "pass": 9,
+   "total": 78,
+   "failures": [
+    {
+     "i": 0,
+     "name": "nounset / set -u with empty array (bug in bash 4.3, fixed in 4.4)"
+    },
+    {
+     "i": 1,
+     "name": "local array"
+    },
+    {
+     "i": 2,
+     "name": "Command with with word splitting in array"
+    },
+    {
+     "i": 3,
+     "name": "space before ( in array initialization"
+    },
+    {
+     "i": 4,
+     "name": "array over multiple lines"
+    },
+    {
+     "i": 5,
+     "name": "array with invalid token"
+    },
+    {
+     "i": 7,
+     "name": "Retrieve index"
+    },
+    {
+     "i": 9,
+     "name": "Negative index"
+    },
+    {
+     "i": 10,
+     "name": "Negative index and sparse array"
+    },
+    {
+     "i": 11,
+     "name": "Negative index and sparse array"
+    },
+    {
+     "i": 12,
+     "name": "Length after unset"
+    },
+    {
+     "i": 13,
+     "name": "Retrieve index that is a variable"
+    },
+    {
+     "i": 14,
+     "name": "Retrieve index that is a variable without $"
+    },
+    {
+     "i": 15,
+     "name": "Retrieve index that is a command sub"
+    },
+    {
+     "i": 16,
+     "name": "Retrieve array indices with ${!a}"
+    },
+    {
+     "i": 17,
+     "name": "Retrieve sparse array indices with ${!a}"
+    },
+    {
+     "i": 18,
+     "name": "${!a[1]} is named ref in bash"
+    },
+    {
+     "i": 21,
+     "name": "All elements quoted"
+    },
+    {
+     "i": 24,
+     "name": "Interpolate array into array"
+    },
+    {
+     "i": 25,
+     "name": "Exporting array doesn't do anything, not even first element"
+    },
+    {
+     "i": 27,
+     "name": "Arrays can't be used as env bindings"
+    },
+    {
+     "i": 28,
+     "name": "Associative arrays can't be used as env bindings either"
+    },
+    {
+     "i": 29,
+     "name": "Set element"
+    },
+    {
+     "i": 30,
+     "name": "Set element with var ref"
+    },
+    {
+     "i": 31,
+     "name": "Set element with array ref"
+    },
+    {
+     "i": 32,
+     "name": "Set array item to array"
+    },
+    {
+     "i": 33,
+     "name": "Slice of array with [@]"
+    },
+    {
+     "i": 34,
+     "name": "Negative slice begin"
+    },
+    {
+     "i": 35,
+     "name": "Negative slice length"
+    },
+    {
+     "i": 36,
+     "name": "Slice with arithmetic"
+    },
+    {
+     "i": 37,
+     "name": "Number of elements"
+    },
+    {
+     "i": 38,
+     "name": "Length of an element"
+    },
+    {
+     "i": 39,
+     "name": "Iteration"
+    },
+    {
+     "i": 40,
+     "name": "glob within array yields separate elements"
+    },
+    {
+     "i": 41,
+     "name": "declare array and then append"
+    },
+    {
+     "i": 43,
+     "name": "Single array with :-"
+    },
+    {
+     "i": 44,
+     "name": "Stripping a whole array unquoted"
+    },
+    {
+     "i": 45,
+     "name": "Stripping a whole array quoted"
+    },
+    {
+     "i": 46,
+     "name": "Multiple subscripts not allowed"
+    },
+    {
+     "i": 47,
+     "name": "Length op, index op, then transform op is not allowed"
+    },
+    {
+     "i": 48,
+     "name": "${mystr[@]} and ${mystr[*]} are no-ops"
+    },
+    {
+     "i": 49,
+     "name": "${mystr[@]} and ${mystr[*]} disallowed with strict_array"
+    },
+    {
+     "i": 50,
+     "name": "Create a \"user\" array out of the argv array"
+    },
+    {
+     "i": 51,
+     "name": "Tilde expansion within array"
+    },
+    {
+     "i": 52,
+     "name": "Brace Expansion within Array"
+    },
+    {
+     "i": 53,
+     "name": "array default"
+    },
+    {
+     "i": 54,
+     "name": "Singleton Array Copy and Assign.  OSH can't index strings with ints"
+    },
+    {
+     "i": 55,
+     "name": "declare -a / local -a is empty array"
+    },
+    {
+     "i": 56,
+     "name": "Create sparse array"
+    },
+    {
+     "i": 57,
+     "name": "Create sparse array implicitly"
+    },
+    {
+     "i": 58,
+     "name": "Append sparse arrays"
+    },
+    {
+     "i": 59,
+     "name": "Slice of sparse array with [@]"
+    },
+    {
+     "i": 60,
+     "name": "Using an array itself as the index on LHS"
+    },
+    {
+     "i": 61,
+     "name": "Using an array itself as the index on RHS"
+    },
+    {
+     "i": 62,
+     "name": "a[$x$y] on LHS and RHS"
+    },
+    {
+     "i": 63,
+     "name": "Dynamic parsing of LHS a[$code]=value"
+    },
+    {
+     "i": 64,
+     "name": "Dynamic parsing of RHS ${a[$code]}"
+    },
+    {
+     "i": 65,
+     "name": "Is element set?  test -v a[i]"
+    },
+    {
+     "i": 66,
+     "name": "[[ -v a[i] ]]"
+    },
+    {
+     "i": 67,
+     "name": "test -v a[i] with arith expressions"
+    },
+    {
+     "i": 68,
+     "name": "More arith expressions in [[ -v array[expr]] ]]"
+    },
+    {
+     "i": 69,
+     "name": "Regression: Assigning with out-of-range negative index"
+    },
+    {
+     "i": 70,
+     "name": "Regression: Negative index in [[ -v a[index] ]]"
+    },
+    {
+     "i": 72,
+     "name": "a+=() modifies existing instance of BashArray"
+    },
+    {
+     "i": 73,
+     "name": "Regression: unset a[-2]: out-of-bound negative index should cause error"
+    },
+    {
+     "i": 74,
+     "name": "Regression: Out-of-bound negative offset for ${a[@]:offset}"
+    },
+    {
+     "i": 75,
+     "name": "Regression: Array length after unset"
+    },
+    {
+     "i": 76,
+     "name": "Regression: ${a[@]@Q} crash with `a[0]=x a[2]=y`"
+    },
+    {
+     "i": 77,
+     "name": "Regression: silent out-of-bound negative index in ${a[-2]} and $((a[-2]))"
+    }
+   ]
+  },
+  "array-assoc": {
+   "pass": 5,
+   "total": 38,
+   "failures": [
+    {
+     "i": 0,
+     "name": "Literal syntax ([x]=y)"
+    },
+    {
+     "i": 3,
+     "name": "create empty assoc array, put, then get"
+    },
+    {
+     "i": 5,
+     "name": "retrieve keys with !"
+    },
+    {
+     "i": 6,
+     "name": "retrieve values with ${A[@]}"
+    },
+    {
+     "i": 8,
+     "name": "${A[@]/b/B}"
+    },
+    {
+     "i": 9,
+     "name": "${A[@]#prefix}"
+    },
+    {
+     "i": 10,
+     "name": "${assoc} is like ${assoc[0]}"
+    },
+    {
+     "i": 13,
+     "name": "lookup with double quoted strings \"mykey\""
+    },
+    {
+     "i": 14,
+     "name": "lookup with single quoted string"
+    },
+    {
+     "i": 15,
+     "name": "lookup with unquoted $key and quoted \"$i$i\""
+    },
+    {
+     "i": 17,
+     "name": "bash bug: \"i+1\" and i+1 are the same key"
+    },
+    {
+     "i": 18,
+     "name": "Array stored in associative array gets converted to string (without strict_array)"
+    },
+    {
+     "i": 19,
+     "name": "Indexed array as key of associative array coerces to string (without shopt -s strict_array)"
+    },
+    {
+     "i": 20,
+     "name": "Append to associative array value A['x']+='suffix'"
+    },
+    {
+     "i": 22,
+     "name": "bash variable can have an associative array part and a string part"
+    },
+    {
+     "i": 23,
+     "name": "Associative array expressions inside (( )) with keys that look like numbers"
+    },
+    {
+     "i": 24,
+     "name": "(( A[5] += 42 ))"
+    },
+    {
+     "i": 25,
+     "name": "(( A[5] += 42 )) with empty cell"
+    },
+    {
+     "i": 26,
+     "name": "setting key to itself (from bash-bug mailing list)"
+    },
+    {
+     "i": 27,
+     "name": "readonly associative array can't be modified"
+    },
+    {
+     "i": 28,
+     "name": "associative array and brace expansion"
+    },
+    {
+     "i": 29,
+     "name": "declare -A A=() allowed"
+    },
+    {
+     "i": 30,
+     "name": "unset -v and assoc array"
+    },
+    {
+     "i": 31,
+     "name": "nameref and assoc array"
+    },
+    {
+     "i": 32,
+     "name": "${!ref} and assoc array"
+    },
+    {
+     "i": 33,
+     "name": "printf -v and assoc array"
+    },
+    {
+     "i": 34,
+     "name": "bash bug: (( A[\"$key\"] = 1 )) doesn't work"
+    },
+    {
+     "i": 35,
+     "name": "Implicit increment of keys"
+    },
+    {
+     "i": 36,
+     "name": "test -v assoc[key]"
+    },
+    {
+     "i": 37,
+     "name": "test -v with dynamic parsing"
+    },
+    {
+     "i": 38,
+     "name": "[[ -v assoc[key] ]]"
+    },
+    {
+     "i": 39,
+     "name": "[[ -v assoc[key] ]] syntax errors"
+    },
+    {
+     "i": 40,
+     "name": "BashAssoc a+=()"
+    }
+   ]
+  },
+  "brace-expansion": {
+   "pass": 35,
+   "total": 55,
+   "failures": [
+    {
+     "i": 2,
+     "name": "partial leading expansion"
+    },
+    {
+     "i": 3,
+     "name": "partial leading expansion 2"
+    },
+    {
+     "i": 14,
+     "name": "expansion with command sub"
+    },
+    {
+     "i": 15,
+     "name": "expansion with arith sub"
+    },
+    {
+     "i": 16,
+     "name": "double expansion with escaped literals"
+    },
+    {
+     "i": 18,
+     "name": "quoted { in expansion"
+    },
+    {
+     "i": 21,
+     "name": "Empty alternative with empty string suffix"
+    },
+    {
+     "i": 25,
+     "name": "expansion on RHS of assignment"
+    },
+    {
+     "i": 26,
+     "name": "no expansion with RHS assignment"
+    },
+    {
+     "i": 28,
+     "name": "Tilde expansion with brace expansion"
+    },
+    {
+     "i": 29,
+     "name": "Two kinds of tilde expansion"
+    },
+    {
+     "i": 32,
+     "name": "Ascending number range expansion with negative step is invalid"
+    },
+    {
+     "i": 33,
+     "name": "regression: -1 step disallowed"
+    },
+    {
+     "i": 34,
+     "name": "regression: 0 step disallowed"
+    },
+    {
+     "i": 35,
+     "name": "Descending number range expansion with positive step is invalid"
+    },
+    {
+     "i": 38,
+     "name": "Singleton char ranges with steps"
+    },
+    {
+     "i": 40,
+     "name": "Char range expansion with step"
+    },
+    {
+     "i": 41,
+     "name": "Char ranges with steps of the wrong sign"
+    },
+    {
+     "i": 42,
+     "name": "Mixed case char expansion is invalid"
+    },
+    {
+     "i": 43,
+     "name": "Descending char range expansion"
+    }
+   ]
+  },
+  "tilde": {
+   "pass": 6,
+   "total": 14,
+   "failures": [
+    {
+     "i": 4,
+     "name": "tilde expansion of word after redirect"
+    },
+    {
+     "i": 6,
+     "name": "${undef:-~}"
+    },
+    {
+     "i": 7,
+     "name": "${x//~/~root}"
+    },
+    {
+     "i": 8,
+     "name": "x=foo:~ has tilde expansion"
+    },
+    {
+     "i": 9,
+     "name": "a[x]=foo:~ has tilde expansion"
+    },
+    {
+     "i": 10,
+     "name": "tilde expansion an assignment keyword"
+    },
+    {
+     "i": 11,
+     "name": "x=${undef-~:~}"
+    },
+    {
+     "i": 13,
+     "name": "temp assignment x=~ env"
+    }
+   ]
+  },
+  "glob": {
+   "pass": 16,
+   "total": 23,
+   "failures": [
+    {
+     "i": 26,
+     "name": "Glob of unescaped [[] and []]"
+    },
+    {
+     "i": 27,
+     "name": "Glob of negated unescaped [[] and []]"
+    },
+    {
+     "i": 28,
+     "name": "PatSub of unescaped [[] and []]"
+    },
+    {
+     "i": 29,
+     "name": "PatSub of negated unescaped [[] and []]"
+    },
+    {
+     "i": 32,
+     "name": "\\ in unquoted substitutions does not match a backslash"
+    },
+    {
+     "i": 36,
+     "name": "\\ in unquoted substitutions escapes globchars"
+    },
+    {
+     "i": 38,
+     "name": "shopt -u globskipdots shows . and .."
+    }
+   ]
+  },
+  "pipeline": {
+   "pass": 12,
+   "total": 25,
+   "failures": [
+    {
+     "i": 3,
+     "name": "Redirect in Pipeline"
+    },
+    {
+     "i": 5,
+     "name": "Exit code is last status"
+    },
+    {
+     "i": 7,
+     "name": "PIPESTATUS"
+    },
+    {
+     "i": 8,
+     "name": "PIPESTATUS is set on simple commands"
+    },
+    {
+     "i": 9,
+     "name": "PIPESTATUS with shopt -s lastpipe"
+    },
+    {
+     "i": 10,
+     "name": "|&"
+    },
+    {
+     "i": 16,
+     "name": "! with ( )"
+    },
+    {
+     "i": 17,
+     "name": "! is not a command"
+    },
+    {
+     "i": 18,
+     "name": "Evaluation of argv[0] in pipeline occurs in child"
+    },
+    {
+     "i": 22,
+     "name": "SIGPIPE causes pipeline to die (regression for issue #295)"
+    },
+    {
+     "i": 23,
+     "name": "Nested pipelines"
+    },
+    {
+     "i": 24,
+     "name": "Pipeline in eval"
+    },
+    {
+     "i": 25,
+     "name": "shopt -s lastpipe and shopt -s no_last_fork interaction"
+    }
+   ]
+  },
+  "exit-status": {
+   "pass": 5,
+   "total": 11,
+   "failures": [
+    {
+     "i": 1,
+     "name": "Truncating 'return' status"
+    },
+    {
+     "i": 2,
+     "name": "subshell OverflowError https://github.com/oilshell/oil/issues/996"
+    },
+    {
+     "i": 3,
+     "name": "func subshell OverflowError https://github.com/oilshell/oil/issues/996"
+    },
+    {
+     "i": 8,
+     "name": "If subshell false -- exit code is propagated in a weird way (strict_argv prevents)"
+    },
+    {
+     "i": 9,
+     "name": "Exit code when command sub evaluates to empty str, e.g. `false` (#2416)"
+    },
+    {
+     "i": 10,
+     "name": "More test cases with empty argv"
+    }
+   ]
+  },
+  "errexit": {
+   "pass": 23,
+   "total": 35,
+   "failures": [
+    {
+     "i": 9,
+     "name": "More && ||"
+    },
+    {
+     "i": 10,
+     "name": "errexit and loop"
+    },
+    {
+     "i": 11,
+     "name": "errexit and brace group { }"
+    },
+    {
+     "i": 17,
+     "name": "errexit with subshell"
+    },
+    {
+     "i": 21,
+     "name": "setting errexit in a subshell works but doesn't affect parent shell"
+    },
+    {
+     "i": 22,
+     "name": "set errexit while it's ignored in a subshell (moot with strict_errexit)"
+    },
+    {
+     "i": 24,
+     "name": "errexit double guard"
+    },
+    {
+     "i": 25,
+     "name": "background processes respect errexit"
+    },
+    {
+     "i": 26,
+     "name": "pipeline process respects errexit"
+    },
+    {
+     "i": 27,
+     "name": "simple command / assign - redir failure DOES respect errexit"
+    },
+    {
+     "i": 29,
+     "name": "bash atoms [[ (( - redir failure checked"
+    },
+    {
+     "i": 34,
+     "name": "Command sub exit code is lost"
+    }
+   ]
+  },
+  "subshell": {
+   "pass": 1,
+   "total": 2,
+   "failures": [
+    {
+     "i": 1,
+     "name": "Subshell with redirects"
+    }
+   ]
+  },
+  "command_": {
+   "pass": 7,
+   "total": 16,
+   "failures": [
+    {
+     "i": 0,
+     "name": "Command block"
+    },
+    {
+     "i": 1,
+     "name": "Permission denied"
+    },
+    {
+     "i": 8,
+     "name": "$PATH lookup"
+    },
+    {
+     "i": 9,
+     "name": "filling $PATH cache, then insert the same command earlier in cache"
+    },
+    {
+     "i": 10,
+     "name": "filling $PATH cache, then deleting command"
+    },
+    {
+     "i": 11,
+     "name": "Non-executable on $PATH"
+    },
+    {
+     "i": 12,
+     "name": "hash without args prints the cache"
+    },
+    {
+     "i": 13,
+     "name": "hash with args"
+    },
+    {
+     "i": 15,
+     "name": "Executing command with same name as directory in PATH (#2429)"
+    }
+   ]
+  },
+  "posix": {
+   "pass": 7,
+   "total": 15,
+   "failures": [
+    {
+     "i": 0,
+     "name": "Empty for loop is allowed"
+    },
+    {
+     "i": 1,
+     "name": "Empty for loop without in.  Do can be on the same line I guess."
+    },
+    {
+     "i": 6,
+     "name": "Empty action for case is syntax error"
+    },
+    {
+     "i": 9,
+     "name": "Bare semi-colon not allowed"
+    },
+    {
+     "i": 10,
+     "name": "Command substitution in default"
+    },
+    {
+     "i": 12,
+     "name": "Newlines in compound lists"
+    },
+    {
+     "i": 13,
+     "name": "Multiple here docs on one line"
+    },
+    {
+     "i": 14,
+     "name": "cat here doc; echo; cat here doc"
+    }
+   ]
+  },
+  "alias": {
+   "pass": 24,
+   "total": 48,
+   "failures": [
+    {
+     "i": 0,
+     "name": "Usage of builtins"
+    },
+    {
+     "i": 1,
+     "name": "Basic alias"
+    },
+    {
+     "i": 2,
+     "name": "define and use alias on a single line"
+    },
+    {
+     "i": 7,
+     "name": "unalias -a"
+    },
+    {
+     "i": 11,
+     "name": "alias with trailing space causes alias expansion on second word"
+    },
+    {
+     "i": 13,
+     "name": "Recursive alias expansion of SECOND word"
+    },
+    {
+     "i": 15,
+     "name": "Alias must be an unquoted word, no expansions allowed"
+    },
+    {
+     "i": 17,
+     "name": "first and second word are the same alias, with trailing space"
+    },
+    {
+     "i": 21,
+     "name": "Syntax error after expansion"
+    },
+    {
+     "i": 23,
+     "name": "Loop split across alias in another way"
+    },
+    {
+     "i": 24,
+     "name": "Loop split across both iterative and recursive aliases"
+    },
+    {
+     "i": 25,
+     "name": "Alias with a quote in the middle is a syntax error"
+    },
+    {
+     "i": 28,
+     "name": "Two aliases in pipeline"
+    },
+    {
+     "i": 30,
+     "name": "Alias can be defined and used on a single line"
+    },
+    {
+     "i": 34,
+     "name": "alias with line continuation in the middle"
+    },
+    {
+     "i": 35,
+     "name": "alias for left brace"
+    },
+    {
+     "i": 36,
+     "name": "alias for left paren"
+    },
+    {
+     "i": 37,
+     "name": "alias used in subshell and command sub"
+    },
+    {
+     "i": 38,
+     "name": "alias used in here doc"
+    },
+    {
+     "i": 39,
+     "name": "here doc inside alias"
+    },
+    {
+     "i": 40,
+     "name": "Corner case: alias inside LHS array arithmetic expression"
+    },
+    {
+     "i": 41,
+     "name": "Alias that is pipeline"
+    },
+    {
+     "i": 42,
+     "name": "Alias that is && || ;"
+    },
+    {
+     "i": 47,
+     "name": "alias with word of multiple lines"
+    }
+   ]
+  },
+  "let": {
+   "pass": 1,
+   "total": 2,
+   "failures": [
+    {
+     "i": 1,
+     "name": "let with ()"
+    }
+   ]
+  },
+  "empty-bodies": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "whitespace": {
+   "pass": 0,
+   "total": 0,
+   "failures": []
+  },
+  "shell-grammar": {
+   "pass": 32,
+   "total": 33,
+   "failures": [
+    {
+     "i": 23,
+     "name": "If with then on same line missing semicolon"
+    }
+   ]
+  },
+  "process-sub": {
+   "pass": 0,
+   "total": 8,
+   "failures": [
+    {
+     "i": 0,
+     "name": "Process sub input"
+    },
+    {
+     "i": 1,
+     "name": "Process sub from external process to stdin"
+    },
+    {
+     "i": 2,
+     "name": "Process sub from shell to stdin"
+    },
+    {
+     "i": 3,
+     "name": "Non-linear pipeline with >()"
+    },
+    {
+     "i": 5,
+     "name": "status code is available"
+    },
+    {
+     "i": 6,
+     "name": "shopt -s process_sub_fail"
+    },
+    {
+     "i": 7,
+     "name": "process subs and pipelines together"
+    },
+    {
+     "i": 8,
+     "name": "process sub in background &"
+    }
+   ]
+  },
+  "regex": {
+   "pass": 17,
+   "total": 37,
+   "failures": [
+    {
+     "i": 0,
+     "name": "BASH_REMATCH"
+    },
+    {
+     "i": 4,
+     "name": "Regex quoted with single quotes"
+    },
+    {
+     "i": 5,
+     "name": "Regex quoted with double quotes"
+    },
+    {
+     "i": 8,
+     "name": "Double quoting pat variable -- again bash doesn't like it."
+    },
+    {
+     "i": 10,
+     "name": "Regex with == and not =~ is parse error, different lexer mode required"
+    },
+    {
+     "i": 12,
+     "name": "Malformed regex"
+    },
+    {
+     "i": 13,
+     "name": "Regex with |"
+    },
+    {
+     "i": 14,
+     "name": "Regex to match literal brackets []"
+    },
+    {
+     "i": 15,
+     "name": "Regex to match literals . ^ $ etc."
+    },
+    {
+     "i": 16,
+     "name": "Unquoted { is a regex parse error"
+    },
+    {
+     "i": 18,
+     "name": "Quoted { and +"
+    },
+    {
+     "i": 19,
+     "name": "Escaped {"
+    },
+    {
+     "i": 20,
+     "name": "Escaped { stored in variable first"
+    },
+    {
+     "i": 26,
+     "name": "Bug: Nix idiom with closing ) next to pattern"
+    },
+    {
+     "i": 27,
+     "name": "unquoted (a  b) as pattern, (a  b|c)"
+    },
+    {
+     "i": 28,
+     "name": "Multiple adjacent () groups"
+    },
+    {
+     "i": 29,
+     "name": "unquoted [a  b] as pattern, [a  b|c]"
+    },
+    {
+     "i": 31,
+     "name": "Operator chars ; & but not |"
+    },
+    {
+     "i": 34,
+     "name": "Parse error with 2 words"
+    },
+    {
+     "i": 35,
+     "name": "make a lisp example"
+    }
+   ]
+  },
+  "temp-binding": {
+   "pass": 4,
+   "total": 4,
+   "failures": []
+  },
+  "background": {
+   "pass": 3,
+   "total": 27,
+   "failures": [
+    {
+     "i": 0,
+     "name": "wait with nothing to wait for"
+    },
+    {
+     "i": 1,
+     "name": "wait -n with arguments - arguments are respected"
+    },
+    {
+     "i": 5,
+     "name": "wait with invalid arg"
+    },
+    {
+     "i": 6,
+     "name": "wait for N parallel jobs"
+    },
+    {
+     "i": 7,
+     "name": "wait for N parallel jobs and check failure"
+    },
+    {
+     "i": 8,
+     "name": "Builtin in background"
+    },
+    {
+     "i": 9,
+     "name": "External command in background"
+    },
+    {
+     "i": 10,
+     "name": "Start background pipeline, wait $pid"
+    },
+    {
+     "i": 11,
+     "name": "Start background pipeline, wait %job_spec"
+    },
+    {
+     "i": 12,
+     "name": "Wait for job and PIPESTATUS"
+    },
+    {
+     "i": 13,
+     "name": "Wait for job and PIPESTATUS - cat"
+    },
+    {
+     "i": 14,
+     "name": "Brace group in background, wait all"
+    },
+    {
+     "i": 15,
+     "name": "Wait on background process PID"
+    },
+    {
+     "i": 16,
+     "name": "Wait on multiple specific IDs returns last status"
+    },
+    {
+     "i": 17,
+     "name": "wait -n"
+    },
+    {
+     "i": 18,
+     "name": "Async for loop"
+    },
+    {
+     "i": 19,
+     "name": "Background process doesn't affect parent"
+    },
+    {
+     "i": 20,
+     "name": "Background process and then a singleton pipeline"
+    },
+    {
+     "i": 21,
+     "name": "jobs prints one line per job"
+    },
+    {
+     "i": 22,
+     "name": "jobs -p prints one line per job"
+    },
+    {
+     "i": 23,
+     "name": "No stderr spew when shell is not interactive"
+    },
+    {
+     "i": 24,
+     "name": "YSH wait --all"
+    },
+    {
+     "i": 25,
+     "name": "YSH wait --verbose"
+    },
+    {
+     "i": 26,
+     "name": "Signal message for killed background job"
+    }
+   ]
+  },
+  "sh-options": {
+   "pass": 8,
+   "total": 32,
+   "failures": [
+    {
+     "i": 0,
+     "name": "$- with -c"
+    },
+    {
+     "i": 2,
+     "name": "$- and more options"
+    },
+    {
+     "i": 3,
+     "name": "$- with interactive shell"
+    },
+    {
+     "i": 6,
+     "name": "pass shopt options like sh -O nullglob"
+    },
+    {
+     "i": 8,
+     "name": "vi and emacs are mutually exclusive"
+    },
+    {
+     "i": 9,
+     "name": "interactive shell starts with emacs mode on"
+    },
+    {
+     "i": 12,
+     "name": "-n for no execution (useful with --ast-output)"
+    },
+    {
+     "i": 13,
+     "name": "pipefail"
+    },
+    {
+     "i": 14,
+     "name": "shopt -p -o prints 'set' options"
+    },
+    {
+     "i": 15,
+     "name": "shopt -o prints 'set' options"
+    },
+    {
+     "i": 16,
+     "name": "shopt -p prints 'shopt' options"
+    },
+    {
+     "i": 17,
+     "name": "shopt with no flags prints options"
+    },
+    {
+     "i": 19,
+     "name": "noclobber on"
+    },
+    {
+     "i": 20,
+     "name": "noclobber on <>"
+    },
+    {
+     "i": 22,
+     "name": "noclobber on &> >"
+    },
+    {
+     "i": 23,
+     "name": "noclobber on &>> >>"
+    },
+    {
+     "i": 29,
+     "name": "shopt -s strict:all"
+    },
+    {
+     "i": 30,
+     "name": "shopt allows for backward compatibility like bash"
+    },
+    {
+     "i": 31,
+     "name": "shopt -p validates option names"
+    },
+    {
+     "i": 32,
+     "name": "shopt -p -o validates option names"
+    },
+    {
+     "i": 33,
+     "name": "stubbed out bash options"
+    },
+    {
+     "i": 35,
+     "name": "Unimplemented options - print, query, set, unset"
+    },
+    {
+     "i": 36,
+     "name": "Unimplemented options - OSH shopt -s ignore_shopt_not_impl"
+    },
+    {
+     "i": 38,
+     "name": "no-ops not shown by shopt -p"
+    }
+   ]
+  },
+  "command-parsing": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  }
+ },
+ "title": "Shell: oils spec tests"
+}
