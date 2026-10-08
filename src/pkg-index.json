@@ -378,6 +378,64 @@
    "notes": "The interactive REPL needs blocking stdin; scripts, -e and piped input work. No os.execute/io.popen (no child processes)."
   },
   {
+   "name": "python3",
+   "version": "3.13.7",
+   "description": "CPython 3.13 interpreter built for WASI (stdlib, zlib, sqlite3); pip and venv are provided by Shiro",
+   "license": "PSF-2.0",
+   "source": "https://www.python.org/ftp/python/3.13.7/Python-3.13.7.tar.xz",
+   "homepage": "https://www.python.org/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/python3.sh",
+   "section": "interpreters",
+   "abi": "wasi_snapshot_preview1",
+   "files": [
+    {
+     "path": "bin/python3.wasm",
+     "url": "/pkg/python3/3.13.7/python3.wasm",
+     "sha256": "b8312e9b437b2a329b4f2a32b9aaf9cd11de64ac774e6be66b121689402f0102",
+     "size": 8217192
+    },
+    {
+     "path": "lib/python3.13/lib-dynload/.keep",
+     "url": "/pkg/python3/3.13.7/.keep",
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+     "size": 0
+    },
+    {
+     "path": "lib/python3.13/os.py",
+     "url": "/pkg/python3/3.13.7/os.py",
+     "sha256": "5e640713e89023372f493054ccedb7512ee27eb3ea6461677bc8c27c640d0605",
+     "size": 41627
+    },
+    {
+     "path": "lib/python3.13/site-packages/README.txt",
+     "url": "/pkg/python3/3.13.7/README.txt",
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+     "size": 0
+    },
+    {
+     "path": "lib/python313.zip",
+     "url": "/pkg/python3/3.13.7/python313.zip",
+     "sha256": "fad1ebdb6e82fc3c62a44c52aeeba435221d0d006d35cc019fbadd96d916ded2",
+     "size": 4321968
+    }
+   ],
+   "bin": {
+    "python3": {
+     "file": "bin/python3.wasm",
+     "argv0": "path"
+    },
+    "python": {
+     "file": "bin/python3.wasm",
+     "argv0": "path"
+    }
+   },
+   "wants": [
+    "blocking-stdin"
+   ],
+   "notes": "pip installs pure-Python wheels from PyPI (no native extensions, no sdists yet); python -m venv works. No subprocess, sockets or ssl (WASI preview1); the REPL needs blocking stdin."
+  },
+  {
    "name": "sqlite",
    "version": "3.50.4",
    "description": "SQLite 3 command-line shell (FTS5, math functions)",
@@ -906,7 +964,7 @@
     "threads",
     "wasix-stack"
    ],
-   "notes": "WASIX build (wasix_32v1, shared env.memory). Stops at stack_checkpoint (WASIX setjmp/fork), which the kernel guest lacks.",
+   "notes": "WASIX build (wasix_32v1, shared env.memory). fork, setjmp/longjmp and exec run as kernel processes (asyncify stack capture); interactive on the terminal's pty.",
    "wants": [
     "tty",
     "blocking-stdin"
@@ -944,7 +1002,7 @@
     "threads",
     "wasix-stack"
    ],
-   "notes": "WASIX build (wasix_32v1, shared env.memory). Stops at stack_checkpoint (WASIX setjmp/fork), which the kernel guest lacks.",
+   "notes": "WASIX build (wasix_32v1, shared env.memory). fork, setjmp/longjmp and exec run as kernel processes (asyncify stack capture); interactive on the terminal's pty. This early build's exec passes no environment, so exported variables don't reach child programs (bash's does).",
    "wants": [
     "tty",
     "blocking-stdin"
@@ -1124,7 +1182,7 @@
     "threads",
     "sockets"
    ],
-   "notes": "WASIX build (wasix_32v1, shared env.memory). --version runs; transfers need WASIX sock_open/connect and the TCP relay."
+   "notes": "WASIX build (wasix_32v1, shared env.memory). HTTP and HTTPS (its own OpenSSL) through the kernel sockets and the TCP relay. Verifying real sites needs its CA certificates at /openssl (the package's share/openssl)."
   },
   {
    "name": "quickjs-ng",
@@ -1192,7 +1250,7 @@
     "threads",
     "wasix-stack"
    ],
-   "notes": "WASIX build (wasix_32v1, shared env.memory). 86 MB download. Stops at stack_checkpoint (WASIX setjmp)."
+   "notes": "WASIX build (wasix_32v1, shared env.memory). 86 MB download. setjmp/longjmp (zend_bailout) through asyncify stack capture."
   },
   {
    "name": "python",
@@ -1224,9 +1282,10 @@
     "wasix",
     "threads",
     "sync-fs",
-    "dynamic-linking"
+    "dynamic-linking",
+    "mounts"
    ],
-   "notes": "WASIX build (wasix_32v1, shared env.memory). Imports env.__indirect_function_table (a dynamically linked build), and its standard library is a volume. Shiro's `python` builtin (Pyodide) covers most uses meanwhile."
+   "notes": "WASIX build (wasix_32v1, shared env.memory), a position-independent (dylink.0) module using WASIX dynamic calls. Its standard library is a volume it expects at its /nix/store prefix. Shiro's `python` builtin (Pyodide) covers most uses meanwhile."
   },
   {
    "name": "clang",

@@ -672,7 +672,11 @@ export class FileSystem {
     if (!parent) throw fsError('ENOENT', `ENOENT: no such file or directory, open '${path}'`);
     if (parent.type !== 'dir') throw fsError('ENOTDIR', `ENOTDIR: not a directory '${parentPath}'`);
 
-    const content = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+    // A view into a larger buffer is stored compactly: IndexedDB clones the
+    // whole ArrayBuffer behind a typed array (a WebC volume file would carry
+    // its entire container)
+    const content = typeof data === 'string' ? new TextEncoder().encode(data)
+      : data.byteOffset !== 0 || data.byteLength !== data.buffer.byteLength ? data.slice() : data;
     const existing = await this._get(path);
     // Prevent overwriting a directory with a file
     if (existing?.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, write '${path}'`);

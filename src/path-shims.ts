@@ -17,7 +17,7 @@ export const SHIM_COMMANDS = [
   'sh', 'bash', 'vi', 'nano', 'rg', 'esbuild',
   'mktemp', 'jq', 'tput', 'stty', 'gzip', 'gunzip', 'wget',
   'pgrep', 'pkill', 'nproc', 'getconf', 'ed', 'iconv', 'zip', 'unzip',
-  'cc', 'gcc', 'python', 'python3', 'pip', 'sqlite3',
+  'cc', 'gcc', 'python', 'python3', 'pip', 'pip3', 'sqlite3',
   // what makefiles, configure scripts and git hooks run
   'printf', 'true', 'false', 'pwd', 'sleep', 'date', 'basename', 'dirname', 'cut', 'ln',
   'readlink', 'realpath', 'xargs', 'expr', 'seq', 'yes', 'uname', 'id', 'whoami', 'hostname',

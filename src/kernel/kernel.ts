@@ -14,7 +14,7 @@ import { processTable, type ShiroProcess } from '../process-table';
 import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
-  RegularFile, DirFile, openInode, inodeNumber, canWrite, refCount, renameInodes, unlinkInode,
+  RegularFile, DirFile, openInode, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, flushInode, openInodeInfo,
 } from './fd';
 import { createPipe } from './pipe';
 import { Process } from './process';
@@ -538,10 +538,15 @@ export class Kernel {
     try {
       const st = follow ? await fs.stat(p) : await fs.lstat(p);
       const type = st.isDirectory() ? A.S_IFDIR : st.isSymbolicLink() ? A.S_IFLNK : A.S_IFREG;
+      // The same file through a symlink is the same inode; an open file may have unflushed writes
+      const real = follow && type !== A.S_IFDIR ? await fs.realpath(p).catch(() => p) : p;
+      const open = type === A.S_IFREG ? openInodeInfo(fs, real) : undefined;
+      const size = open?.size ?? st.size;
+      const mtimeMs = open?.mtimeMs ?? st.mtime.getTime();
       return {
-        dev: 1, ino: inodeNumber(p), mode: type | (st.mode & 0o7777), nlink: st.isDirectory() ? 2 : 1,
-        uid: 1000, gid: 1000, rdev: 0, size: st.size, blksize: 4096, blocks: Math.ceil(st.size / 512),
-        atimeMs: st.mtime.getTime(), mtimeMs: st.mtime.getTime(), ctimeMs: st.ctime.getTime(),
+        dev: 1, ino: inodeNumber(real), mode: type | (st.mode & 0o7777), nlink: st.isDirectory() ? 2 : 1,
+        uid: 1000, gid: 1000, rdev: 0, size, blksize: 4096, blocks: Math.ceil(size / 512),
+        atimeMs: mtimeMs, mtimeMs, ctimeMs: st.ctime.getTime(),
       };
     } catch (e) {
       return A.errnoFromError(e);
@@ -1167,7 +1172,9 @@ export class Kernel {
           } else if (nr === A.SYS_chmod) { p = at(A.AT_FDCWD, 0, args[0]); mode = args[1]; }
           else { p = at(args[0], 0, args[1]); mode = args[2]; }
           if (typeof p === 'number') return p;
-          await fs().chmod(await fs().realpath(p), mode & 0o7777);
+          const real = await fs().realpath(p);
+          await flushInode(fs(), real);
+          await fs().chmod(real, mode & 0o7777);
           return 0;
         }
         case A.SYS_utimensat: {
@@ -1195,7 +1202,9 @@ export class Kernel {
             atime = ts(0, st.atimeMs);
             mtime = ts(16, st.mtimeMs);
           }
-          await fs().utimes(await fs().realpath(p), atime, mtime);
+          const real = await fs().realpath(p);
+          await flushInode(fs(), real);
+          await fs().utimes(real, atime, mtime);
           return 0;
         }
         case A.SYS_umask: {

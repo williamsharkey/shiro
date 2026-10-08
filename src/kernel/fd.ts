@@ -486,6 +486,17 @@ export async function renameInodes(fs: FileSystem, from: string, to: string): Pr
   }
 }
 
+/** Write out pending data of an open file at `path` (before a metadata update reads and rewrites its node). */
+export async function flushInode(fs: FileSystem, path: string): Promise<void> {
+  await inodeTables.get(fs)?.get(path)?.flush();
+}
+
+/** Size and mtime of a file open at `path`, which may be ahead of the filesystem's copy. */
+export function openInodeInfo(fs: FileSystem, path: string): { size: number; mtimeMs: number } | undefined {
+  const ino = inodeTables.get(fs)?.get(path);
+  return ino && !ino.detached ? { size: ino.size, mtimeMs: ino.mtimeMs } : undefined;
+}
+
 /** unlink(2) of a path with open files: they keep their data but are never written back. */
 export function unlinkInode(fs: FileSystem, path: string): void {
   const table = inodeTables.get(fs);

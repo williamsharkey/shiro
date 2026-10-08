@@ -27,8 +27,11 @@
 import * as A from '../kernel/abi';
 import {
   SysReply, SysRequest, filetypeFromDtype, filetypeFromMode, wasiErrno, writeFilestat,
-  FT_CHAR, WASI_EBADF, WASI_ECHILD, WASI_EINVAL, WASI_ENOSYS, WASI_ENOTSUP, WASI_EOVERFLOW,
+  FT_CHAR, WASI_EBADF, WASI_ECHILD, WASI_EINVAL, WASI_ENOSYS, WASI_ENOTSUP, WASI_EOVERFLOW, WASI_ENOTTY,
+  SYS_wasix_exec, SYS_wasix_resolve, SYS_wasix_signal, WASIX_SIG_CATCH, WASIX_SIG_DEFAULT, WASIX_SIG_IGNORED,
 } from './abi';
+import { Asyncify, hashCapture, type StackCapture } from './asyncify';
+import type { DynCalls } from './dyncall';
 
 const RIGHT_FD_READ = 1n << 1n, RIGHT_FD_SEEK = 1n << 2n, RIGHT_FD_TELL = 1n << 5n,
   RIGHT_FD_WRITE = 1n << 6n, RIGHT_FD_READDIR = 1n << 14n;
@@ -40,6 +43,32 @@ type Sys<T = number> = Generator<SysRequest, T, SysReply>;
 export class ProcExit extends Error {
   constructor(readonly status: number) { super(`exit status ${status}`); this.name = 'ProcExit'; }
 }
+
+/** Thrown out of a WASIX libc default signal handler once the kernel took the default action. */
+class SignalDone extends Error {}
+
+/** What an asyncify unwind was started for (the driver in guest-worker.ts acts on it). */
+export type StackAction =
+  | { op: 'checkpoint'; snapshot: number }
+  | { op: 'restore'; cap: StackCapture; value: bigint }
+  | { op: 'fork' };
+
+/** Guest state a forked child takes over (besides memory and fds). */
+export interface GuestForkState {
+  preopens: Array<[number, string]>;
+  fdPaths: Array<[number, string]>;
+  sigCallback: string | null;
+  snapshots: Array<[string, StackCapture]>;
+}
+
+/** setjmp snapshots kept per process; equal stacks share an entry. */
+const MAX_SNAPSHOTS = 4096;
+/** Marks a jmp_buf filled by stack_checkpoint (in its `user` field). */
+const SNAPSHOT_MAGIC = 0x5348524fn; // "SHRO"
+
+// termios bits for WASIX tty_get/tty_set (Linux values, as in kernel/pty.ts)
+const T_ECHO = 0o10, T_ECHONL = 0o100, T_ICANON = 0o2, T_IGNCR = 0o200;
+const TCSETS = 0x5402, TERMIOS_SIZE = 36, WINSIZE_SIZE = 8;
 
 export interface Preopen {
   fd: number;
@@ -59,6 +88,8 @@ export interface GuestOptions {
   tid?: number;
   /** Start a thread running wasi_thread_start(tid, startArg); returns tid or -errno. */
   threadSpawn?(startArg: number): number;
+  /** The guest registered a signal callback export that exists. */
+  onSignalCallback?(name: string): void;
 }
 
 export type SyncCall = (req: SysRequest) => SysReply;
@@ -85,6 +116,23 @@ export class WasiGuest {
   private dirCache = new Map<number, Array<{ name: string; filetype: number; ino: bigint }>>();
   private argBytes: Uint8Array[];
   private envBytes: Uint8Array[];
+  /** The instance's exports (signal callbacks); set by the driver after instantiation. */
+  exports: Record<string, any> | null = null;
+  /** WASIX call_dynamic / reflect_signature / closures, when the driver set them up (./dyncall.ts). */
+  dyncalls: DynCalls | null = null;
+  /** Stack capture for an asyncified module's main thread (setjmp/longjmp, fork); null otherwise. */
+  asyncify: Asyncify | null = null;
+  /** setjmp snapshots by key (the key is written into the jmp_buf). */
+  readonly snapshots = new Map<string, StackCapture>();
+  /** Export the guest registered with callback_signal; a missing export means "blocked". */
+  sigCallback: string | null = null;
+  /** Signals that arrived while the callback was blocked or the stack was being captured. */
+  private heldSignals: number[] = [];
+  private announcedCallback: string | null = null;
+  /** The signal whose callback is running (0 outside one). */
+  private inSignal = 0;
+  /** A signal whose default action is to ignore it ran during the last syscall: restart that call. */
+  private restartCall = false;
 
   constructor(readonly opts: GuestOptions) {
     for (const p of opts.preopens) { this.preopens.set(p.fd, p.name); this.fdPaths.set(p.fd, p.path); }
@@ -332,10 +380,8 @@ export class WasiGuest {
         },
       },
       wasix_32v1: {
-        // WASIX libc startup asks for the inherited signal dispositions and
-        // exits 71 through proc_exit2 when that fails. None are inherited here.
-        proc_signals_sizes_get: (ptr: number) => { this.view().setUint32(ptr, 0, true); return 0; },
-        proc_signals_get: () => 0,
+        // WASIX libc startup asks for the inherited signal dispositions (proc_signals_get
+        // below) and exits 71 through proc_exit2 when that fails
         proc_exit2: g(function* (this: WasiGuest, code: number) { return yield* this.exit(code); }),
         // path_open plus WASIX fd flags (bit 0: close-on-exec)
         path_open2: g(function* (this: WasiGuest, dirfd: number, dirflags: number, p: number, l: number, oflags: number,
@@ -374,11 +420,13 @@ export class WasiGuest {
           const r = yield* this.sys(A.SYS_getcwd, [4096], undefined, 4096);
           if (r.ret < 0) return wasiErrno(r.ret);
           const cwd = r.data.slice(0, r.ret - 1); // without the NUL
+          // As Wasmer: the length without the NUL, ERANGE when the NUL doesn't fit too
           const v = this.view();
           const cap = v.getUint32(lenPtr, true);
           v.setUint32(lenPtr, cwd.length, true);
-          if (cwd.length > cap) return WASI_EOVERFLOW;
+          if (cwd.length >= cap) return 68; // ERANGE
           this.u8().set(cwd, ptr);
+          this.u8()[ptr + cwd.length] = 0;
           return 0;
         }),
         chdir: g(function* (this: WasiGuest, p: number, l: number) {
@@ -394,11 +442,12 @@ export class WasiGuest {
         }),
         proc_spawn2: g(this.proc_spawn2),
         proc_spawn3: g(this.proc_spawn3),
+        // proc_exec and proc_exec2 don't return: a failed exec ends the process (127 not found, else 126)
         proc_exec: g(function* (this: WasiGuest, n: number, nl: number, a: number, al: number) {
-          return yield* this.exec(this.str(n, nl), splitList(this.str(a, al)), null, true);
+          return yield* this.execOrExit(yield* this.exec(this.str(n, nl), splitList(this.str(a, al)), null, true));
         }),
         proc_exec2: g(function* (this: WasiGuest, n: number, nl: number, a: number, al: number, e: number, el: number) {
-          return yield* this.exec(this.str(n, nl), splitList(this.str(a, al)), e ? envList(splitList(this.str(e, el))) : null, true);
+          return yield* this.execOrExit(yield* this.exec(this.str(n, nl), splitList(this.str(a, al)), e ? envList(splitList(this.str(e, el))) : null, true));
         }),
         proc_exec3: g(function* (this: WasiGuest, n: number, nl: number, a: number, al: number, e: number, el: number, search: number, p: number, pl: number) {
           return yield* this.exec(this.str(n, nl), splitList(this.str(a, al)), e ? envList(splitList(this.str(e, el))) : null, !!search, p ? this.str(p, pl) : undefined);
@@ -413,9 +462,453 @@ export class WasiGuest {
           return 0;
         }),
         thread_id: (ret: number) => { this.view().setUint32(ret, this.opts.tid ?? 0, true); return 0; },
+        thread_exit: g(function* (this: WasiGuest, code: number) {
+          if (this.opts.tid && this.opts.threadSpawn) { yield* this.call(A.SYS_exit, code); throw new ProcExit(A.W_EXITCODE(code)); }
+          return yield* this.exit(code);
+        }),
         sched_yield: () => 0,
+        fd_dup2: g(function* (this: WasiGuest, fd: number, min: number, cloexec: number, ret: number) {
+          const r = yield* this.call(A.SYS_fcntl, fd, cloexec ? A.F_DUPFD_CLOEXEC : A.F_DUPFD, min);
+          if (r < 0) return wasiErrno(r);
+          const p = this.fdPaths.get(fd);
+          if (p !== undefined) this.fdPaths.set(r, p);
+          this.view().setUint32(ret, r, true);
+          return 0;
+        }),
+        tty_get: g(this.tty_get),
+        tty_set: g(this.tty_set),
+        // setjmp/longjmp and fork capture the WASM stack (./asyncify.ts)
+        stack_checkpoint: (snapshot: number, retPtr: number) => this.stackCheckpoint(snapshot, retPtr),
+        stack_restore: (snapshot: number, value: bigint) => this.stackRestore(snapshot, value),
+        proc_fork: (_copyMemory: number, pidPtr: number) => this.procFork(pidPtr),
+        // Signals: the kernel flags them for the guest, which runs the registered export
+        callback_signal: g(function* (this: WasiGuest, p: number, l: number) {
+          const first = this.sigCallback === null;
+          this.sigCallback = this.str(p, l);
+          if (first) yield* this.call(SYS_wasix_signal, WASIX_SIG_CATCH);
+          if (typeof this.exports?.[this.sigCallback] === 'function' && this.sigCallback !== this.announcedCallback) {
+            this.announcedCallback = this.sigCallback;
+            this.opts.onSignalCallback?.(this.sigCallback);
+          }
+          this.flushHeldSignals();
+          return 0;
+        }),
+        thread_signal: g(function* (this: WasiGuest, tid: number, sig: number) {
+          const pid = yield* this.call(A.SYS_getpid);
+          // WASIX libc gives the main thread the placeholder tid 0x3fffffff until thread_id is asked
+          const self = !tid || tid === 0x3fffffff || tid === (this.opts.tid ?? pid);
+          return wasiErrno(yield* this.call(A.SYS_tgkill, pid, self ? (this.opts.tid ?? pid) : tid, sig));
+        }),
+        // Sockets (kernel socket syscalls, src/kernel/net.ts)
+        sock_open: g(function* (this: WasiGuest, af: number, type: number, proto: number, fdPtr: number) {
+          const domain = af === 1 ? A.AF_INET : af === 2 ? A.AF_INET6 : af === 3 ? A.AF_UNIX : -1;
+          if (domain < 0) return wasiErrno(-A.EAFNOSUPPORT);
+          const r = yield* this.call(A.SYS_socket, domain, type === 2 ? A.SOCK_DGRAM : A.SOCK_STREAM, proto);
+          if (r < 0) return wasiErrno(r);
+          this.view().setUint32(fdPtr, r, true);
+          return 0;
+        }),
+        sock_connect: g(function* (this: WasiGuest, fd: number, addr: number) { return yield* this.sockAddrCall(A.SYS_connect, fd, addr); }),
+        sock_bind: g(function* (this: WasiGuest, fd: number, addr: number) { return yield* this.sockAddrCall(A.SYS_bind, fd, addr); }),
+        sock_listen: g(function* (this: WasiGuest, fd: number, backlog: number) { return wasiErrno(yield* this.call(A.SYS_listen, fd, backlog)); }),
+        sock_accept_v2: g(function* (this: WasiGuest, fd: number, fdflags: number, fdPtr: number, addr: number) {
+          const r = yield* this.sys(A.SYS_accept4, [fd, fdflags & 4 ? A.O_NONBLOCK : 0], undefined, A.SOCKADDR_ROOM);
+          if (r.ret < 0) return wasiErrno(r.ret);
+          this.writeWasiAddr(addr, r.data.slice(0, A.SOCKADDR_ROOM));
+          this.view().setUint32(fdPtr, r.ret, true);
+          return 0;
+        }),
+        sock_addr_local: g(function* (this: WasiGuest, fd: number, addr: number) { return yield* this.sockName(A.SYS_getsockname, fd, addr); }),
+        sock_addr_peer: g(function* (this: WasiGuest, fd: number, addr: number) { return yield* this.sockName(A.SYS_getpeername, fd, addr); }),
+        sock_send_to: g(this.sock_send_to),
+        sock_recv_from: g(this.sock_recv_from),
+        sock_set_opt_flag: g(function* (this: WasiGuest, fd: number, opt: number, flag: number) {
+          const o = SOCK_FLAG_OPTS[opt];
+          return o ? wasiErrno(yield* this.call(A.SYS_setsockopt, fd, o[0], o[1], flag ? 1 : 0)) : 0;
+        }),
+        sock_get_opt_flag: g(function* (this: WasiGuest, fd: number, opt: number, ret: number) {
+          const o = SOCK_FLAG_OPTS[opt] ?? (opt === 10 ? [A.SOL_SOCKET, A.SO_ACCEPTCONN] as const : undefined);
+          const r = o ? yield* this.call(A.SYS_getsockopt, fd, o[0], o[1]) : 0;
+          if (r < 0) return wasiErrno(r);
+          this.view().setUint8(ret, r ? 1 : 0);
+          return 0;
+        }),
+        sock_set_opt_time: g(function* (this: WasiGuest, fd: number, opt: number, ptr: number) {
+          const name = opt === 19 ? A.SO_RCVTIMEO : opt === 20 ? A.SO_SNDTIMEO : 0;
+          if (!name) return 0; // connect/accept timeouts: blocking calls just wait
+          const v = this.view();
+          const ms = v.getUint8(ptr) === 1 ? Math.ceil(Number(v.getBigUint64(ptr + 8, true)) / 1e6) : 0;
+          return wasiErrno(yield* this.call(A.SYS_setsockopt, fd, A.SOL_SOCKET, name, ms));
+        }),
+        sock_get_opt_time: g(function* (this: WasiGuest, fd: number, opt: number, ptr: number) {
+          const name = opt === 19 ? A.SO_RCVTIMEO : opt === 20 ? A.SO_SNDTIMEO : 0;
+          const ms = name ? yield* this.call(A.SYS_getsockopt, fd, A.SOL_SOCKET, name) : 0;
+          if (ms < 0) return wasiErrno(ms);
+          const v = this.view();
+          v.setUint8(ptr, ms > 0 ? 1 : 0);
+          v.setBigUint64(ptr + 8, BigInt(ms) * 1_000_000n, true);
+          return 0;
+        }),
+        sock_set_opt_size: g(function* (this: WasiGuest, fd: number, opt: number, size: bigint) {
+          const name = opt === 15 ? A.SO_RCVBUF : opt === 16 ? A.SO_SNDBUF : 0;
+          return name ? wasiErrno(yield* this.call(A.SYS_setsockopt, fd, A.SOL_SOCKET, name, Number(size) | 0)) : 0;
+        }),
+        sock_get_opt_size: g(function* (this: WasiGuest, fd: number, opt: number, ret: number) {
+          const o: readonly [number, number] | undefined = opt === 15 ? [A.SOL_SOCKET, A.SO_RCVBUF] : opt === 16 ? [A.SOL_SOCKET, A.SO_SNDBUF]
+            : opt === 11 ? [A.SOL_SOCKET, A.SO_ERROR] : opt === 25 ? [A.SOL_SOCKET, A.SO_TYPE] : undefined;
+          const r = o ? yield* this.call(A.SYS_getsockopt, fd, o[0], o[1]) : 0;
+          if (r < 0) return wasiErrno(r);
+          // SO_ERROR comes back as a Linux errno: report the WASI one
+          this.view().setBigUint64(ret, BigInt(opt === 11 && r > 0 ? wasiErrno(-r) : r), true);
+          return 0;
+        }),
+        sock_status: g(function* (this: WasiGuest, fd: number, ret: number) {
+          const r = yield* this.call(A.SYS_getsockopt, fd, A.SOL_SOCKET, A.SO_ERROR);
+          this.view().setUint8(ret, r < 0 ? 3 : 1); // __WASI_SOCK_STATUS_OPENED / FAILED
+          return 0;
+        }),
+        resolve: g(this.resolveHost),
+        // Calls through function pointers typed at run time (libffi, CPython's WASIX trampolines)
+        reflect_signature: (fid: number, ap: number, al: number, rp: number, rl: number, ret: number) =>
+          this.dyncalls ? this.dyncalls.reflect(fid, ap, al, rp, rl, ret) : WASI_ENOSYS,
+        call_dynamic: (fid: number, vp: number, vl: number, rp: number, rl: number, strict: number) =>
+          this.dyncalls ? this.dyncalls.call(fid, vp, vl, rp, rl, !!strict) : WASI_ENOSYS,
+        closure_allocate: (ret: number) => this.dyncalls ? this.dyncalls.closureAllocate(ret) : WASI_ENOSYS,
+        closure_prepare: (b: number, c: number, ap: number, al: number, rp: number, rl: number, ud: number) =>
+          this.dyncalls ? this.dyncalls.closurePrepare(b, c, ap, al, rp, rl, ud) : WASI_ENOSYS,
+        closure_free: (c: number) => this.dyncalls ? this.dyncalls.closureFree(c) : WASI_ENOSYS,
+        proc_signal: g(function* (this: WasiGuest, pid: number, sig: number) {
+          return wasiErrno(yield* this.call(A.SYS_kill, pid | 0, sig));
+        }),
+        proc_signals_sizes_get: g(function* (this: WasiGuest, ptr: number) {
+          const mask = yield* this.call(SYS_wasix_signal, WASIX_SIG_IGNORED);
+          this.view().setUint32(ptr, mask > 0 || mask < -1 ? popcount(mask) : 0, true);
+          return 0;
+        }),
+        proc_signals_get: g(function* (this: WasiGuest, buf: number) {
+          // Ignored signals carry over exec (WASIX libc applies them at startup)
+          const mask = yield* this.call(SYS_wasix_signal, WASIX_SIG_IGNORED);
+          if (mask < 0 && mask > -4096) return 0;
+          const v = this.view();
+          let i = 0;
+          for (let sig = 1; sig < 32; sig++) {
+            if (!(mask & (1 << sig))) continue;
+            v.setUint8(buf + i * 2, sig);
+            v.setUint8(buf + i * 2 + 1, 1); // __WASI_DISPOSITION_IGNORE
+            i++;
+          }
+          return 0;
+        }),
       },
     };
+  }
+
+  // ── WASIX sockets ─────────────────────────────────────────────────
+
+  /**
+   * __wasi_addr_port_t (tag u8; port u16 @2 in host order; IPv4 bytes @4 or
+   * IPv6 bytes @4) → Linux sockaddr, or null for AF_UNSPEC.
+   */
+  private readWasiAddr(ptr: number): Uint8Array | null | number {
+    const v = this.view();
+    const tag = v.getUint8(ptr);
+    const port = v.getUint16(ptr + 2, true);
+    if (tag === 1) {
+      const sa = new Uint8Array(16);
+      const sv = new DataView(sa.buffer);
+      sv.setUint16(0, A.AF_INET, true);
+      sv.setUint16(2, port, false);
+      sa.set(this.bytes(ptr + 4, 4), 4);
+      return sa;
+    }
+    if (tag === 2) {
+      const sa = new Uint8Array(28);
+      const sv = new DataView(sa.buffer);
+      sv.setUint16(0, A.AF_INET6, true);
+      sv.setUint16(2, port, false);
+      sa.set(this.bytes(ptr + 4, 16), 8);
+      return sa;
+    }
+    return tag === 0 ? null : -A.EAFNOSUPPORT;
+  }
+
+  /** Linux sockaddr → __wasi_addr_port_t at ptr. */
+  private writeWasiAddr(ptr: number, sa: Uint8Array): void {
+    if (!ptr) return;
+    const sv = new DataView(sa.buffer, sa.byteOffset, sa.byteLength);
+    const family = sa.length >= 2 ? sv.getUint16(0, true) : 0;
+    const v = this.view();
+    const m = this.u8();
+    m.fill(0, ptr, ptr + 30);
+    if (family === A.AF_INET && sa.length >= 8) {
+      v.setUint8(ptr, 1);
+      v.setUint16(ptr + 2, sv.getUint16(2, false), true);
+      m.set(sa.subarray(4, 8), ptr + 4);
+    } else if (family === A.AF_INET6 && sa.length >= 24) {
+      v.setUint8(ptr, 2);
+      v.setUint16(ptr + 2, sv.getUint16(2, false), true);
+      m.set(sa.subarray(8, 24), ptr + 4);
+    }
+  }
+
+  private *sockAddrCall(nr: number, fd: number, addr: number): Sys {
+    const sa = this.readWasiAddr(addr);
+    if (typeof sa === 'number') return wasiErrno(sa);
+    if (!sa) return wasiErrno(-A.EAFNOSUPPORT);
+    return wasiErrno((yield* this.sys(nr, [fd, sa.length], sa)).ret);
+  }
+
+  private *sockName(nr: number, fd: number, addr: number): Sys {
+    const r = yield* this.sys(nr, [fd], undefined, A.SOCKADDR_ROOM);
+    if (r.ret < 0) return wasiErrno(r.ret);
+    this.writeWasiAddr(addr, r.data.slice(0, Math.min(r.ret, A.SOCKADDR_ROOM)));
+    return 0;
+  }
+
+  private *sock_send_to(fd: number, iovs: number, n: number, siFlags: number, addr: number, retPtr: number): Sys {
+    const sa = addr ? this.readWasiAddr(addr) : null;
+    if (typeof sa === 'number') return wasiErrno(sa);
+    const data = this.gather(this.iovs(iovs, n));
+    const room = this.opts.dataSize - A.SOCKADDR_ROOM;
+    const flags = siFlags & 4 ? A.MSG_DONTWAIT : 0;
+    let done = 0;
+    do {
+      const chunk = data.subarray(done, Math.min(data.length, done + room));
+      const buf = new Uint8Array(chunk.length + (sa?.length ?? 0));
+      buf.set(chunk);
+      if (sa) buf.set(sa, chunk.length);
+      const r = yield* this.sys(A.SYS_sendto, [fd, chunk.length, flags, sa?.length ?? 0], buf);
+      if (r.ret < 0) { if (!done) return wasiErrno(r.ret); break; }
+      done += r.ret;
+      if (r.ret < chunk.length) break;
+    } while (done < data.length);
+    this.view().setUint32(retPtr, done, true);
+    return 0;
+  }
+
+  private *sock_recv_from(fd: number, iovsPtr: number, n: number, riFlags: number, lenPtr: number, roFlagsPtr: number, addr: number): Sys {
+    const iovs = this.iovs(iovsPtr, n);
+    const total = Math.min(iovs.reduce((s, [, l]) => s + l, 0), this.opts.dataSize - A.SOCKADDR_ROOM);
+    let flags = 0;
+    if (riFlags & 1) flags |= A.MSG_PEEK;
+    if (riFlags & 2) flags |= A.MSG_WAITALL;
+    if (riFlags & 4) flags |= A.MSG_DONTWAIT;
+    const r = yield* this.sys(A.SYS_recvfrom, [fd, total, flags], undefined, total + A.SOCKADDR_ROOM);
+    if (r.ret < 0) return wasiErrno(r.ret);
+    this.scatter(iovs, r.data.subarray(0, r.ret));
+    this.writeWasiAddr(addr, r.data.slice(r.ret, r.ret + A.SOCKADDR_ROOM));
+    const v = this.view();
+    v.setUint32(lenPtr, r.ret, true);
+    v.setUint16(roFlagsPtr, 0, true);
+    return 0;
+  }
+
+  /**
+   * resolve(host, port, addrs, n, *count): __wasi_addr_ip_t entries (tag u8,
+   * address bytes @2). Only the first address is reported: early WASIX libcs
+   * (curl's) step through the array as 110-byte __wasi_addr_t, later ones as
+   * 18-byte __wasi_addr_ip_t, and the first entry reads the same either way.
+   */
+  private *resolveHost(hostPtr: number, hostLen: number, _port: number, addrs: number, naddrs: number, retPtr: number): Sys {
+    const host = this.bytes(hostPtr, hostLen);
+    const r = yield* this.sys(SYS_wasix_resolve, [host.length], host, 4096);
+    if (r.ret < 0) return wasiErrno(r.ret);
+    const list = dec.decode(r.data.slice(0, r.ret)).split('\n').filter(Boolean);
+    const v = this.view();
+    let count = 0;
+    for (const a of list.slice(0, Math.min(naddrs, 1))) {
+      const p = addrs + count * 18;
+      this.u8().fill(0, p, p + 18);
+      if (a.includes(':')) {
+        v.setUint8(p, 2);
+        ipv6Bytes(a).forEach((b, i) => v.setUint8(p + 2 + i, b));
+      } else {
+        v.setUint8(p, 1);
+        a.split('.').forEach((o, i) => v.setUint8(p + 2 + i, Number(o) & 0xff));
+      }
+      count++;
+    }
+    v.setUint32(retPtr, count, true);
+    return 0;
+  }
+
+  // ── stack capture (asyncify) ──────────────────────────────────────
+
+  private stackCheckpoint(snapshot: number, retPtr: number): number {
+    const ax = this.asyncify;
+    if (!ax) return WASI_ENOTSUP;
+    if (ax.rewinding) {
+      this.view().setBigUint64(retPtr, ax.finishRewind<bigint>(), true);
+      return 0;
+    }
+    ax.startUnwind({ op: 'checkpoint', snapshot } satisfies StackAction);
+    return 0;
+  }
+
+  private stackRestore(snapshot: number, value: bigint): void {
+    const ax = this.asyncify;
+    if (!ax) throw new Error('longjmp needs stack capture (an asyncified WASIX module)');
+    const v = this.view();
+    const key = v.getBigUint64(snapshot, true) === SNAPSHOT_MAGIC
+      ? v.getBigUint64(snapshot + 8, true).toString(16).padStart(16, '0') : '';
+    const cap = this.snapshots.get(key);
+    if (!cap) throw new Error('longjmp to a jmp_buf that setjmp never filled');
+    // Most recently used last, so the oldest go first when the map is full
+    this.snapshots.delete(key);
+    this.snapshots.set(key, cap);
+    ax.startUnwind({ op: 'restore', cap, value: value || 1n } satisfies StackAction);
+  }
+
+  private procFork(pidPtr: number): number {
+    const ax = this.asyncify;
+    if (!ax) return WASI_ENOTSUP;
+    if (ax.rewinding) {
+      const pid = ax.finishRewind<number>();
+      if (pid < 0) return wasiErrno(pid);
+      this.view().setUint32(pidPtr, pid, true);
+      return 0;
+    }
+    ax.startUnwind({ op: 'fork' } satisfies StackAction);
+    return 0;
+  }
+
+  /** Record a setjmp capture and write its key into the jmp_buf (__wasi_stack_snapshot_t). */
+  saveSnapshot(snapshot: number, cap: StackCapture): void {
+    const key = hashCapture(cap);
+    this.snapshots.delete(key);
+    this.snapshots.set(key, cap);
+    if (this.snapshots.size > MAX_SNAPSHOTS) this.snapshots.delete(this.snapshots.keys().next().value!);
+    const v = this.view();
+    v.setBigUint64(snapshot, SNAPSHOT_MAGIC, true);
+    v.setBigUint64(snapshot + 8, BigInt('0x' + key), true);
+    v.setBigUint64(snapshot + 16, 0n, true);
+  }
+
+  forkState(): GuestForkState {
+    return {
+      preopens: [...this.preopens], fdPaths: [...this.fdPaths], sigCallback: this.sigCallback,
+      snapshots: [...this.snapshots],
+    };
+  }
+
+  /** In a forked child: take over the parent's guest state. */
+  adoptForkState(s: GuestForkState): void {
+    this.preopens.clear();
+    for (const [fd, n] of s.preopens) this.preopens.set(fd, n);
+    this.fdPaths.clear();
+    for (const [fd, p] of s.fdPaths) this.fdPaths.set(fd, p);
+    this.sigCallback = s.sigCallback;
+    for (const [k, c] of s.snapshots) this.snapshots.set(k, c);
+  }
+
+  // ── signals (WASIX callback_signal) ───────────────────────────────
+
+  /**
+   * Run the guest's signal callback for a signal the kernel flagged (the
+   * Worker driver calls this from GuestChannel.onSignal, i.e. after a
+   * syscall reply). Held while the callback is "blocked" (WASIX libc
+   * re-registers a missing export to block signals) or mid stack capture.
+   */
+  deliverSignal(sig: number): void {
+    // SIGCHLD & co. are ignored by default and usually caught with SA_RESTART:
+    // the call they interrupted is restarted rather than failing with EINTR
+    if (A.defaultSignalAction(sig) === 'ignore' || sig === A.SIGCONT) this.restartCall = true;
+    const fn = this.sigCallback ? this.exports?.[this.sigCallback] : undefined;
+    if (typeof fn !== 'function' || (this.asyncify && this.asyncify.state !== 0)) {
+      if (this.sigCallback && !this.heldSignals.includes(sig)) this.heldSignals.push(sig);
+      return;
+    }
+    const prevSig = this.inSignal, prevCallback = this.sigCallback;
+    this.inSignal = sig;
+    try {
+      fn(sig);
+    } catch (e) {
+      if (!(e instanceof SignalDone)) throw e;
+      // Unwound out of libc's default handler: undo its "block signals" on the way in
+      this.sigCallback = prevCallback;
+    } finally {
+      this.inSignal = prevSig;
+    }
+  }
+
+  /** After a syscall returned -EINTR: true when only restartable signals interrupted it (the caller re-issues it). */
+  takeRestart(): boolean {
+    const r = this.restartCall;
+    this.restartCall = false;
+    return r;
+  }
+
+  private flushHeldSignals(): void {
+    while (this.heldSignals.length && typeof this.exports?.[this.sigCallback ?? ''] === 'function') {
+      if (this.asyncify && this.asyncify.state !== 0) return;
+      this.deliverSignal(this.heldSignals.shift()!);
+    }
+  }
+
+  /**
+   * WASIX libc runs default signal actions itself: it prints "Program
+   * recieved <kind> signal" and aborts. Inside a signal callback, take the
+   * kernel's default action instead (exit by the signal, or stop until
+   * continued) and unwind out of the handler.
+   */
+  private *defaultSignalAction(fd: number, data: Uint8Array): Sys<boolean> {
+    if (!this.inSignal || fd !== 2 || data.length < 17) return false;
+    if (dec.decode(data.subarray(0, 17)) !== 'Program recieved ') return false;
+    yield* this.call(SYS_wasix_signal, WASIX_SIG_DEFAULT, this.inSignal);
+    throw new SignalDone();
+  }
+
+  // ── tty (WASIX tty_get/tty_set: the terminal on fds 0-2) ──────────
+
+  /** The first of fds 0-2 that is a terminal, with its termios, or null. */
+  private *ttyFd(): Sys<{ fd: number; termios: Uint8Array; tty: boolean[] } | null> {
+    let found: { fd: number; termios: Uint8Array } | null = null;
+    const tty: boolean[] = [];
+    for (const fd of [0, 1, 2]) {
+      const r = yield* this.sys(A.SYS_ioctl, [fd, A.TCGETS, TERMIOS_SIZE], new Uint8Array(TERMIOS_SIZE), TERMIOS_SIZE);
+      tty.push(r.ret === 0);
+      if (r.ret === 0 && !found) found = { fd, termios: r.data.slice(0, TERMIOS_SIZE) };
+    }
+    return found ? { ...found, tty } : null;
+  }
+
+  private *tty_get(ptr: number): Sys {
+    const t = yield* this.ttyFd();
+    const v = this.view();
+    for (let i = 0; i < 24; i++) v.setUint8(ptr + i, 0);
+    if (!t) return 0; // nothing is a terminal: all flags false
+    const tv = new DataView(t.termios.buffer);
+    const iflag = tv.getUint32(0, true), lflag = tv.getUint32(12, true);
+    const w = yield* this.sys(A.SYS_ioctl, [t.fd, A.TIOCGWINSZ, WINSIZE_SIZE], new Uint8Array(WINSIZE_SIZE), WINSIZE_SIZE);
+    if (w.ret === 0) {
+      const wv = new DataView(w.data.buffer, w.data.byteOffset, WINSIZE_SIZE);
+      v.setUint32(ptr, wv.getUint16(2, true), true);       // cols
+      v.setUint32(ptr + 4, wv.getUint16(0, true), true);   // rows
+      v.setUint32(ptr + 8, wv.getUint16(4, true), true);   // width (pixels)
+      v.setUint32(ptr + 12, wv.getUint16(6, true), true);  // height
+    }
+    v.setUint8(ptr + 16, t.tty[0] ? 1 : 0);
+    v.setUint8(ptr + 17, t.tty[1] ? 1 : 0);
+    v.setUint8(ptr + 18, t.tty[2] ? 1 : 0);
+    v.setUint8(ptr + 19, lflag & T_ECHO ? 1 : 0);
+    v.setUint8(ptr + 20, lflag & T_ICANON ? 1 : 0);
+    v.setUint8(ptr + 21, iflag & T_IGNCR ? 1 : 0);
+    return 0;
+  }
+
+  private *tty_set(ptr: number): Sys {
+    const t = yield* this.ttyFd();
+    if (!t) return WASI_ENOTTY;
+    const v = this.view();
+    const tv = new DataView(t.termios.buffer);
+    let iflag = tv.getUint32(0, true), lflag = tv.getUint32(12, true);
+    lflag = v.getUint8(ptr + 19) ? lflag | T_ECHO : lflag & ~(T_ECHO | T_ECHONL);
+    lflag = v.getUint8(ptr + 20) ? lflag | T_ICANON : lflag & ~T_ICANON;
+    iflag = v.getUint8(ptr + 21) ? iflag | T_IGNCR : iflag & ~T_IGNCR;
+    tv.setUint32(0, iflag >>> 0, true);
+    tv.setUint32(12, lflag >>> 0, true);
+    const r = yield* this.sys(A.SYS_ioctl, [t.fd, TCSETS, TERMIOS_SIZE], t.termios, TERMIOS_SIZE);
+    return wasiErrno(r.ret);
   }
 
   // ── args / env ────────────────────────────────────────────────────
@@ -437,7 +930,9 @@ export class WasiGuest {
   // ── fd_* ──────────────────────────────────────────────────────────
 
   private *fd_write(fd: number, iovs: number, n: number, nwritten: number): Sys {
-    const done = yield* this.writeAll(fd, this.gather(this.iovs(iovs, n)));
+    const data = this.gather(this.iovs(iovs, n));
+    if (this.inSignal) yield* this.defaultSignalAction(fd, data);
+    const done = yield* this.writeAll(fd, data);
     if (done < 0) return wasiErrno(done);
     this.view().setUint32(nwritten, done, true);
     return 0;
@@ -766,10 +1261,7 @@ export class WasiGuest {
       }
       if (err < 0) { yield* cleanup(); return err; }
     }
-    let env = req.env;
-    if (req.searchPath && req.path) env = { ...(env ?? this.opts.env), PATH: req.path };
-    // Without a PATH search a bare name is a file in the cwd, as for execve
-    const path = req.searchPath || req.name.includes('/') ? req.name : './' + req.name;
+    const { path, env } = this.execTarget(req.name, req.env, req.searchPath, req.path);
     const json = enc.encode(JSON.stringify({
       path, argv: req.argv.length ? req.argv : [req.name], ...(env ? { env } : {}), ...(cwd ? { cwd } : {}),
       inherit: true, fds: [...map].sort((a, b) => a[0] - b[0]),
@@ -778,6 +1270,16 @@ export class WasiGuest {
     const pid = (yield* this.sys(A.SYS_spawn, [json.length], json)).ret;
     yield* cleanup();
     return pid;
+  }
+
+  private *execOrExit(errno: number): Sys {
+    return yield* this.exit(errno === 44 /* ENOENT */ ? 127 : 126);
+  }
+
+  /** Program path and env for a spawn/exec: a bare name without a PATH search is a file in the cwd, as for execve. */
+  private execTarget(name: string, env: Record<string, string> | null, searchPath: boolean, path?: string): { path: string; env: Record<string, string> | null } {
+    if (searchPath && path) env = { ...(env ?? this.opts.env), PATH: path };
+    return { path: searchPath || name.includes('/') ? name : './' + name, env };
   }
 
   private fdOps(ptr: number, n: number): SpawnAction[] {
@@ -842,8 +1344,17 @@ export class WasiGuest {
     return yield* this.spawnReturn(pid, ret);
   }
 
-  /** exec emulated as spawn + wait + exit with the child's status. */
+  /**
+   * execve: replace this process's program (SYS_wasix_exec, same pid). Where
+   * the host can't (JSPI), emulated as spawn + wait + exit with the child's
+   * status. Returns a WASI errno only when the exec failed.
+   */
   private *exec(name: string, argv: string[], env: Record<string, string> | null, searchPath: boolean, path?: string): Sys {
+    const target = this.execTarget(name, env, searchPath, path);
+    const json = enc.encode(JSON.stringify({ path: target.path, argv: argv.length ? argv : [name], ...(target.env ? { env: target.env } : {}) }));
+    if (json.length > this.opts.dataSize) return wasiErrno(-A.E2BIG);
+    const e = (yield* this.sys(SYS_wasix_exec, [json.length], json)).ret;
+    if (e !== -A.ENOSYS) return wasiErrno(e < 0 ? e : -A.EIO);
     const pid = yield* this.spawn({ name, argv, env, searchPath, path });
     if (pid < 0) return wasiErrno(pid);
     const r = yield* this.sys(A.SYS_wait4, [pid, 0], undefined, 4);
@@ -857,14 +1368,16 @@ export class WasiGuest {
     const pid = v.getUint8(pidPtr) === 1 ? v.getUint32(pidPtr + 4, true) : -1;
     v.setUint8(pidPtr, 0); v.setUint32(pidPtr + 4, 0, true);
     v.setUint8(statusPtr, 0); v.setUint16(statusPtr + 2, 0, true);
-    const r = yield* this.sys(A.SYS_wait4, [pid, flags & 1 ? A.WNOHANG : 0], undefined, 4);
+    const opts = (flags & 1 ? A.WNOHANG : 0) | (flags & 2 ? A.WUNTRACED : 0);
+    const r = yield* this.sys(A.SYS_wait4, [pid, opts], undefined, 4);
     if (r.ret < 0) return r.ret === -A.ECHILD ? WASI_ECHILD : wasiErrno(r.ret);
-    if (r.ret === 0) return 0; // WNOHANG with nothing to report: tag Nothing
-    const status = new DataView(r.data.buffer, r.data.byteOffset, 4).getInt32(0, true);
     const w = this.view();
-    // OptionPid {tag u8, pid u32 @4}; JoinStatus {tag u8, union @2: exit code u16 | {code u16, signal u8}}
+    // OptionPid {tag u8, pid u32 @4}; JoinStatus {tag u8, union @2: exit code u16 | {code u16, signal u8} | stop signal u8}
     w.setUint8(pidPtr, 1); w.setUint32(pidPtr + 4, r.ret, true);
+    if (r.ret === 0) return 0; // WNOHANG with nothing to report: status Nothing (libc's waitpid then returns 0)
+    const status = new DataView(r.data.buffer, r.data.byteOffset, 4).getInt32(0, true);
     if (A.WIFEXITED(status)) { w.setUint8(statusPtr, 1); w.setUint16(statusPtr + 2, A.WEXITSTATUS(status), true); }
+    else if (A.WIFSTOPPED(status)) { w.setUint8(statusPtr, 3); w.setUint8(statusPtr + 2, A.WSTOPSIG(status)); }
     else { w.setUint8(statusPtr, 2); w.setUint16(statusPtr + 2, 0, true); w.setUint8(statusPtr + 4, A.WTERMSIG(status)); }
     return 0;
   }
@@ -912,6 +1425,32 @@ function now(clockId: number): bigint {
 function canAtomicsWait(): boolean {
   // Atomics.wait throws on the browser main thread
   return typeof (globalThis as any).document === 'undefined';
+}
+
+/** WASIX socket options that are flags → [level, name]. */
+const SOCK_FLAG_OPTS: Record<number, readonly [number, number]> = {
+  1: [A.SOL_SOCKET, A.SO_REUSEPORT], 2: [A.SOL_SOCKET, A.SO_REUSEADDR], 3: [A.IPPROTO_TCP, A.TCP_NODELAY],
+  6: [A.SOL_SOCKET, A.SO_BROADCAST], 12: [A.SOL_SOCKET, A.SO_KEEPALIVE],
+};
+
+function ipv6Bytes(addr: string): number[] {
+  let a = addr.split('%')[0];
+  const v4 = /(\d+\.\d+\.\d+\.\d+)$/.exec(a);
+  if (v4) {
+    const p = v4[1].split('.').map(Number);
+    a = a.slice(0, -v4[1].length) + ((p[0] << 8) | p[1]).toString(16) + ':' + ((p[2] << 8) | p[3]).toString(16);
+  }
+  const [head, tail] = a.includes('::') ? a.split('::') : [a, null];
+  const h = head ? head.split(':').filter(Boolean).map(x => parseInt(x, 16)) : [];
+  const t = tail ? tail.split(':').filter(Boolean).map(x => parseInt(x, 16)) : [];
+  const groups = [...h, ...(tail === null ? [] : new Array(8 - h.length - t.length).fill(0)), ...t].slice(0, 8);
+  return groups.flatMap(g => [g >> 8, g & 0xff]);
+}
+
+function popcount(x: number): number {
+  let n = 0;
+  for (x >>>= 0; x; x &= x - 1) n++;
+  return n;
 }
 
 /** WASIX legacy lists: entries separated by line feeds. */

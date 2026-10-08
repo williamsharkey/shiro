@@ -15,6 +15,11 @@ const LINUX_TO_WASI: Record<number, number> = {
   [A.EFBIG]: 22, [A.ENOSPC]: 51, [A.ESPIPE]: 70, [A.EROFS]: 69, [A.EPIPE]: 64, [A.ERANGE]: 68,
   [A.ENAMETOOLONG]: 37, [A.ENOSYS]: 52, [A.ENOTEMPTY]: 55, [A.ELOOP]: 32, [A.ENOTSUP]: 58,
   [A.ETIMEDOUT]: 73,
+  // sockets
+  [A.EADDRINUSE]: 3, [A.EADDRNOTAVAIL]: 4, [A.EAFNOSUPPORT]: 5, [A.EALREADY]: 7, [A.ECONNABORTED]: 13,
+  [A.ECONNREFUSED]: 14, [A.ECONNRESET]: 15, [A.EDESTADDRREQ]: 17, [A.EHOSTUNREACH]: 23, [A.EINPROGRESS]: 26,
+  [A.EISCONN]: 30, [A.EMSGSIZE]: 35, [A.ENETDOWN]: 38, [A.ENETUNREACH]: 40, [A.ENOBUFS]: 42,
+  [A.ENOPROTOOPT]: 50, [A.ENOTCONN]: 53, [A.ENOTSOCK]: 57, [A.EPROTONOSUPPORT]: 66, [A.EPROTOTYPE]: 67,
 };
 
 /** Translate a syscall result to a WASI errno (0 for success). */
@@ -25,7 +30,7 @@ export function wasiErrno(ret: number): number {
 
 // WASI errno values used directly
 export const WASI_ESUCCESS = 0, WASI_EBADF = 8, WASI_ECHILD = 12, WASI_EINVAL = 28,
-  WASI_ENOSYS = 52, WASI_ENOTSUP = 58, WASI_EOVERFLOW = 61;
+  WASI_ENOSYS = 52, WASI_ENOTSUP = 58, WASI_EOVERFLOW = 61, WASI_ENOTTY = 59;
 
 /** WASI filetypes. */
 export const FT_UNKNOWN = 0, FT_BLOCK = 1, FT_CHAR = 2, FT_DIR = 3, FT_REG = 4,
@@ -71,6 +76,45 @@ export function writeFilestat(st: A.KStat, view: DataView, ptr: number): void {
  * wasi-threads thread. args[0] = start_arg; returns the new tid or -errno.
  */
 export const SYS_wasi_thread_spawn = 1100;
+
+/**
+ * WASIX fork (host.ts): copy the calling process (memory, fds, signal
+ * state) into a new kernel process that resumes from the guest's captured
+ * stack. The guest posts a `wasix-fork` message with the state first.
+ * Returns the child pid or -errno.
+ */
+export const SYS_wasix_fork = 1101;
+
+/**
+ * WASIX exec (host.ts): replace the program of the calling process, keeping
+ * its pid, fds (minus close-on-exec) and ignored signals. data = JSON
+ * `{path, argv, env?}` (path resolved like SYS_spawn). Never returns on
+ * success; -ENOENT when nothing can run `path`, -ENOSYS when the process
+ * can't exec (then the guest emulates exec as spawn + wait + exit).
+ */
+export const SYS_wasix_exec = 1102;
+
+/**
+ * WASIX signal bookkeeping (host.ts). args[0] = op:
+ *   WASIX_SIG_CATCH: the guest registered a signal callback, so every
+ *     catchable signal not ignored goes to the guest (disposition
+ *     WASIX_HANDLER); WASIX libc runs default actions itself.
+ *   WASIX_SIG_DEFAULT (args[1] = sig): take the kernel's default action for
+ *     sig now (terminate, or stop until continued), then restore the
+ *     disposition. Used when the guest's libc would print "Program recieved
+ *     ... signal" and abort.
+ *   WASIX_SIG_IGNORED: bitmask of ignored signals 1..31 (proc_signals_get).
+ */
+export const SYS_wasix_signal = 1103;
+export const WASIX_SIG_CATCH = 0, WASIX_SIG_DEFAULT = 1, WASIX_SIG_IGNORED = 2;
+/**
+ * WASIX resolve (host.ts): data = host name; output = the addresses as
+ * text, one per line (IPv4 first). Returns the byte length or -errno.
+ */
+export const SYS_wasix_resolve = 1104;
+
+/** Disposition value standing for "the WASIX guest's libc decides". */
+export const WASIX_HANDLER = 0x5751;
 
 /** A syscall as the WASI layer issues it (transport-neutral). */
 export interface SysRequest {
