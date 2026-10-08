@@ -17,7 +17,7 @@ Do not treat the dashboard or wrappers as the product. The product is the browse
 - `src/commands/*`: one command per file or small group.
 - `src/node-compat/*`: Node.js runtime shims used by `node` and Claude Code.
 - `src/wasi-runtime.ts` + `src/wasi-packages.ts`: Tier 2 WASI support.
-- `src/x86/*`: Tier 3 x86-64 emulator.
+- `src/x86-engine/*` + `public/engines/blink/` + `vendor/blink/`: x86-64 Linux ELF in Blink (wasm), as kernel processes; `src/x86/*` is the fallback interpreter when the page isn't cross-origin isolated. See `docs/X86_ENGINES.md`.
 - `src/kernel/*`: Unix kernel core (process table, fd tables, pipes, syscall dispatch, SAB syscall channel for Worker guests). Contract: `docs/KERNEL_ABI.md`; roadmap: `docs/UNIX_COMPAT.md`. `window.__shiro.kernel`; kernel processes show in `ps`.
 - `src/commands/seed.ts`, `src/commands/hc.ts`, `src/seed-runtime-context.ts`: seeded sessions, host-page access, runtime orientation.
 - `src/claude-config.ts`, `src/node-compat/preload.ts`, `src/node-compat/process.ts`: Claude bootstrap, auth persistence, startup defaults.
@@ -121,6 +121,8 @@ Use focused vitest runs while iterating, then run the smallest meaningful verifi
 Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` handles build, upload, and restart, and it is the only place that should bump `build-number.txt`. nginx on the host sets `client_max_body_size 100m` (`/etc/nginx/sites-enabled/shiro`): the 1 MB default rejected long Claude conversations and GitHub blob uploads with 413. `deploy.sh` uploads only `server.mjs`; the host's own `/opt/shiro/package.json` holds its deps (`ws`, and `undici` so proxied model calls have no 5-minute header timeout). Each model call logs one `[proxy] messages model=… stream=… bytes=… → status headers in Nms` line (`journalctl -u shiro`).
 
 ## Gotchas
+
+- Blink engine: rebuild `public/engines/blink/blink.{mjs,wasm}` with `vendor/blink/build.sh` after changing `vendor/blink/patches/` or `shiro-net.js`; don't hand-edit the generated files. `host.mjs` is hand-written. Browsers refuse `TextDecoder.decode()` on SharedArrayBuffer views (Node doesn't), so decode a `.slice()` of channel data.
 
 - `child_process` is shimmed. There is no real process tree.
 - Most filesystem work is async under the hood even when sync APIs are emulated.

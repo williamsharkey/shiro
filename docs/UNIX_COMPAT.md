@@ -24,6 +24,10 @@ Written 2026-10-07, after the `port-agy` attempt to run Google's `agy` CLI.
 
 ## x86 emulator status (measured)
 
+Update 2026-10-08: superseded by the Blink engine, see
+[X86_ENGINES.md](X86_ENGINES.md). The notes below describe `src/x86`, which
+remains the fallback.
+
 A static Go 1.24 hello-world (`CGO_ENABLED=0`, 2.2 MB) loads and enters the Go
 runtime, then dies in `runtime.check()` with `fatal error: float64nan`.
 `UCOMISD`/`UCOMISS` are stubs that always report "equal", and there are no
@@ -92,13 +96,12 @@ map onto the existing virtual-server and `serve` machinery.
   `GOOS=wasip1` or `GOOS=js`) and run on the kernel ABI. A package
   repository of prebuilt WASM CLIs is the fastest route to "apt install
   works".
-- **Closed-source amd64 ELF:** adopt a mature engine rather than grow
-  `src/x86`. Candidates to evaluate: Blink compiled to WASM (user-mode
-  x86-64 Linux; its syscalls could map onto the kernel ABI), CheerpX/WebVM
-  (x86→WASM JIT with a full Linux userland; commercial license), v86
-  (full-system, 32-bit only). Measure startup and throughput on a static Go
-  binary first, then on `agy`. Keep `src/x86` for small static tools until
-  then.
+- **Closed-source amd64 ELF:** Blink compiled to WebAssembly, chosen after
+  measuring the alternatives ([X86_ENGINES.md](X86_ENGINES.md)). Static Go
+  (goroutines, net/http, TLS over loopback), glibc and musl binaries run as
+  kernel processes; `./binary` falls back to `src/x86` when the page isn't
+  cross-origin isolated. The open problem is speed: no JIT in wasm, ~200x
+  native.
 
 ## Running `agy` specifically
 Phases 1, 2, 4 and an engine from phase 5 that handles Go threads and
