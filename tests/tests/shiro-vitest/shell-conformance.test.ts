@@ -169,4 +169,72 @@ describe('shell conformance regressions', () => {
     await shell.execute(`sh -c 'f() { echo "$0 $# [$2]"; }; f one' prog a b`, (s) => { out += s; });
     expect(out.replace(/\r\n/g, '\n')).toBe('prog 1 []\n');
   });
+
+  it('here-docs work after done, in conditions, loops, functions and $(...), with $(cmd) in the body', async () => {
+    const r = await script([
+      'var=v',
+      'cat <<EOF',
+      `var: \${var} "q" \\$x $(echo hi) $((1+2))`,
+      'EOF',
+      'while read line; do echo "X $line"; done <<EOF',
+      '1',
+      '2',
+      'EOF',
+      'for i in 1 2; do',
+      '  cat <<-E',
+      '\ti=$i',
+      '\tE',
+      'done',
+      'if cat <<EOF; then',
+      'cond',
+      'EOF',
+      '  echo THEN',
+      'fi',
+      "x=$(cat <<'EOF'",
+      'raw $var',
+      'EOF',
+      ')',
+      'echo "$x"',
+      'f() {',
+      '  cat <<EOF',
+      'in f $1',
+      'EOF',
+      '}',
+      'f arg',
+      'cat <<EOF; echo after',
+      'one',
+      'EOF',
+    ].join('\n'));
+    expect(r.err).toBe('');
+    expect(r.out).toBe('var: v "q" $x hi 3\nX 1\nX 2\ni=1\ni=2\ncond\nTHEN\nraw $var\nin f arg\none\nafter\n');
+  });
+
+  it('"$@" keeps each argument, "$*" joins with IFS', async () => {
+    const r = await script([
+      'f() { printf "<%s>" "$@" -"$*"-; echo; }',
+      'f "a b" "c d"',
+      'f',
+      'set -- x "y z"',
+      'for a in "$@"; do echo "[$a]"; done',
+      'for a; do echo "{$a}"; done',
+    ].join('\n'));
+    expect(r.out).toBe('<a b><c d><-a b c d->\n<-->\n[x]\n[y z]\n{x}\n{y z}\n');
+  });
+
+  it('brace expansion keeps quotes; for lists glob and split like arguments', async () => {
+    const r = await script([
+      'cd /tmp && touch bx1.t bx2.t',
+      'printf "<%s>" "q r" x{a,b}y "{c,d}" $(echo {e,f}); echo',
+      'for f in bx*.t "q r" {a,b}$((1+1)); do printf "<%s>" "$f"; done; echo',
+      'for w in $(printf "a\\nb"); do printf "[%s]" $w; done; echo',
+      'for x in; do echo no; done; echo ok',
+    ].join('\n'));
+    expect(r.out).toBe('<q r><xay><xby><{c,d}><e><f>\n<bx1.t><bx2.t><q r><a2><b2>\n[a][b]\nok\n');
+  });
+
+  it('subshells take redirections and stream LF output; \\| and a trailing \\\\ are literal', async () => {
+    const r = await script('(echo 1; echo 2) > /tmp/sub.out\n(cat) < /tmp/sub.out\necho \\| \\\\\necho $"foo"\n');
+    expect(r.out).toBe('1\n2\n| \\\nfoo\n');
+    expect(await r.fs.readFile('/tmp/sub.out', 'utf8')).toBe('1\n2\n');
+  });
 });

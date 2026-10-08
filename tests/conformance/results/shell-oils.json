@@ -3,7 +3,7 @@
  "title": "Shell: oils spec tests",
  "files": {
   "smoke": {
-   "pass": 12,
+   "pass": 14,
    "total": 18,
    "failures": [
     {
@@ -19,16 +19,8 @@
      "name": "Here doc with redirect"
     },
     {
-     "i": 12,
-     "name": "\"$@\" \"$*\""
-    },
-    {
      "i": 14,
      "name": "failed command"
-    },
-    {
-     "i": 15,
-     "name": "subshell"
     }
    ]
   },
@@ -38,13 +30,9 @@
    "failures": []
   },
   "quote": {
-   "pass": 27,
+   "pass": 29,
    "total": 33,
    "failures": [
-    {
-     "i": 12,
-     "name": "Backslash escapes"
-    },
     {
      "i": 27,
      "name": "$'' octal escapes don't have leading 0"
@@ -52,10 +40,6 @@
     {
      "i": 28,
      "name": "$'' octal escapes with fewer than 3 chars"
-    },
-    {
-     "i": 31,
-     "name": "$\"\" is a synonym for \"\""
     },
     {
      "i": 33,
@@ -68,21 +52,9 @@
    ]
   },
   "word-split": {
-   "pass": 35,
+   "pass": 42,
    "total": 53,
    "failures": [
-    {
-     "i": 7,
-     "name": "\"$@\""
-    },
-    {
-     "i": 8,
-     "name": "empty argv"
-    },
-    {
-     "i": 9,
-     "name": "$* with empty IFS"
-    },
     {
      "i": 23,
      "name": "default value with unquoted IFS char"
@@ -96,20 +68,8 @@
      "name": "Unset IFS (regression for bug)"
     },
     {
-     "i": 33,
-     "name": "IFS and joining arrays"
-    },
-    {
      "i": 34,
      "name": "IFS and joining arrays by assignments"
-    },
-    {
-     "i": 36,
-     "name": "IFS='' with $@ and $* (bug #627)"
-    },
-    {
-     "i": 37,
-     "name": "IFS='' with $@ and $* and printf (bug #627)"
     },
     {
      "i": 38,
@@ -120,16 +80,12 @@
      "name": "Bug #628 split on : with : in literal word"
     },
     {
-     "i": 46,
-     "name": "4 x 3 table: (default IFS, IFS='', IFS=zx) x ( $* \"$*\" $@ \"$@\" )"
-    },
-    {
      "i": 47,
      "name": "4 x 3 table - with for loop"
     },
     {
-     "i": 48,
-     "name": "IFS=x and '' and $@ - same bug as spec/toysh-posix case #12"
+     "i": 49,
+     "name": "IFS=x and '' and $@ (#2)"
     },
     {
      "i": 51,
@@ -588,7 +544,7 @@
    ]
   },
   "vars-special": {
-   "pass": 13,
+   "pass": 14,
    "total": 37,
    "failures": [
     {
@@ -614,10 +570,6 @@
     {
      "i": 11,
      "name": "$$ looks like a PID"
-    },
-    {
-     "i": 12,
-     "name": "$$ doesn't change with subshell or command sub"
     },
     {
      "i": 13,
@@ -946,80 +898,24 @@
    ]
   },
   "here-doc": {
-   "pass": 14,
+   "pass": 28,
    "total": 32,
    "failures": [
     {
-     "i": 2,
-     "name": "Here redirect with explicit descriptor"
-    },
-    {
-     "i": 8,
-     "name": "< redirect and here doc -- last one wins"
-    },
-    {
-     "i": 9,
-     "name": "Here doc with var sub, command sub, arith sub"
+     "i": 6,
+     "name": "Here doc with bad comsub delimiter"
     },
     {
      "i": 10,
      "name": "Here doc in middle.  And redirects in the middle."
     },
     {
-     "i": 12,
-     "name": "Here doc with quote expansion in terminator"
-    },
-    {
-     "i": 13,
-     "name": "Here doc with multiline double quoted string"
-    },
-    {
-     "i": 14,
-     "name": "Two here docs -- first is ignored; second ones wins!"
-    },
-    {
      "i": 15,
      "name": "Here doc with line continuation, then pipe.  Syntax error."
     },
     {
-     "i": 19,
-     "name": "Compound command here doc"
-    },
-    {
-     "i": 20,
-     "name": "Here doc in while condition and here doc in body"
-    },
-    {
-     "i": 21,
-     "name": "Here doc in while condition and here doc in body on multiple lines"
-    },
-    {
-     "i": 22,
-     "name": "Here doc in while loop split up more"
-    },
-    {
-     "i": 23,
-     "name": "Mixing << and <<-"
-    },
-    {
-     "i": 24,
-     "name": "Two compound commands with two here docs"
-    },
-    {
      "i": 25,
      "name": "Function def and execution with here doc"
-    },
-    {
-     "i": 30,
-     "name": "Here Doc in if condition"
-    },
-    {
-     "i": 31,
-     "name": "Nested here docs which are indented"
-    },
-    {
-     "i": 35,
-     "name": "Here doc escapes"
     }
    ]
   },
@@ -1148,21 +1044,9 @@
    ]
   },
   "loop": {
-   "pass": 14,
+   "pass": 17,
    "total": 28,
    "failures": [
-    {
-     "i": 0,
-     "name": "implicit for loop"
-    },
-    {
-     "i": 1,
-     "name": "empty for loop (has \"in\")"
-    },
-    {
-     "i": 5,
-     "name": "Brace Expansion within Array"
-    },
     {
      "i": 11,
      "name": "while in pipe with subshell"
@@ -1210,7 +1094,7 @@
    ]
   },
   "case_": {
-   "pass": 3,
+   "pass": 4,
    "total": 13,
    "failures": [
     {
@@ -1232,10 +1116,6 @@
     {
      "i": 6,
      "name": "Quoted literal in glob pattern"
-    },
-    {
-     "i": 8,
-     "name": "Pattern ? matches 1 code point (many bytes), but not multiple code points"
     },
     {
      "i": 9,
@@ -1608,12 +1488,12 @@
      "name": "read with line continuation reads multiple physical lines"
     },
     {
-     "i": 24,
-     "name": "read multiple lines with IFS=:"
+     "i": 20,
+     "name": "read multiple vars spanning many lines"
     },
     {
-     "i": 27,
-     "name": "dynamic scope used to set vars"
+     "i": 24,
+     "name": "read multiple lines with IFS=:"
     },
     {
      "i": 28,
@@ -1780,7 +1660,7 @@
    ]
   },
   "builtin-getopts": {
-   "pass": 23,
+   "pass": 24,
    "total": 30,
    "failures": [
     {
@@ -1806,15 +1686,11 @@
     {
      "i": 14,
      "name": "OPTIND after multiple getopts with different spec"
-    },
-    {
-     "i": 30,
-     "name": "getopts leaves all args after '--' as operands #2579"
     }
    ]
   },
   "builtin-trap": {
-   "pass": 7,
+   "pass": 8,
    "total": 33,
    "failures": [
     {
@@ -1876,10 +1752,6 @@
     {
      "i": 20,
      "name": "trap EXIT with PARSE error and explicit exit"
-    },
-    {
-     "i": 22,
-     "name": "trap EXIT with command sub / subshell / pipeline"
     },
     {
      "i": 23,
@@ -2948,7 +2820,7 @@
    ]
   },
   "brace-expansion": {
-   "pass": 35,
+   "pass": 40,
    "total": 55,
    "failures": [
     {
@@ -2958,26 +2830,6 @@
     {
      "i": 3,
      "name": "partial leading expansion 2"
-    },
-    {
-     "i": 14,
-     "name": "expansion with command sub"
-    },
-    {
-     "i": 15,
-     "name": "expansion with arith sub"
-    },
-    {
-     "i": 16,
-     "name": "double expansion with escaped literals"
-    },
-    {
-     "i": 18,
-     "name": "quoted { in expansion"
-    },
-    {
-     "i": 21,
-     "name": "Empty alternative with empty string suffix"
     },
     {
      "i": 25,
@@ -3194,7 +3046,7 @@
    ]
   },
   "errexit": {
-   "pass": 23,
+   "pass": 25,
    "total": 35,
    "failures": [
     {
@@ -3208,14 +3060,6 @@
     {
      "i": 11,
      "name": "errexit and brace group { }"
-    },
-    {
-     "i": 17,
-     "name": "errexit with subshell"
-    },
-    {
-     "i": 21,
-     "name": "setting errexit in a subshell works but doesn't affect parent shell"
     },
     {
      "i": 22,
@@ -3248,14 +3092,9 @@
    ]
   },
   "subshell": {
-   "pass": 1,
+   "pass": 2,
    "total": 2,
-   "failures": [
-    {
-     "i": 1,
-     "name": "Subshell with redirects"
-    }
-   ]
+   "failures": []
   },
   "command_": {
    "pass": 7,
@@ -3300,13 +3139,9 @@
    ]
   },
   "posix": {
-   "pass": 7,
+   "pass": 10,
    "total": 15,
    "failures": [
-    {
-     "i": 0,
-     "name": "Empty for loop is allowed"
-    },
     {
      "i": 1,
      "name": "Empty for loop without in.  Do can be on the same line I guess."
@@ -3326,19 +3161,11 @@
     {
      "i": 12,
      "name": "Newlines in compound lists"
-    },
-    {
-     "i": 13,
-     "name": "Multiple here docs on one line"
-    },
-    {
-     "i": 14,
-     "name": "cat here doc; echo; cat here doc"
     }
    ]
   },
   "alias": {
-   "pass": 24,
+   "pass": 26,
    "total": 48,
    "failures": [
     {
@@ -3408,14 +3235,6 @@
     {
      "i": 36,
      "name": "alias for left paren"
-    },
-    {
-     "i": 37,
-     "name": "alias used in subshell and command sub"
-    },
-    {
-     "i": 38,
-     "name": "alias used in here doc"
     },
     {
      "i": 39,

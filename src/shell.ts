@@ -1,5 +1,6 @@
 import { stripComments } from './shell-comments';
 import { groupStatements } from './shell-statements';
+import { HeredocStore, extractHeredocs, hasHeredoc } from './shell-heredoc';
 import { FileSystem } from './filesystem';
 import { CommandRegistry, CommandContext } from './commands/index';
 import type { ShiroTerminal } from './terminal';
@@ -293,6 +294,8 @@ export class Shell {
    */
   /** Get positional parameters $1..$# as an array */
   private getPositionalArgs(): string[] {
+    // Callers that only set $@ (no $#/$1…) get its words
+    if (this.env['#'] === undefined && this.env['@']) return this.env['@'].split(' ');
     const count = parseInt(this.env['#'] || '0', 10);
     const args: string[] = [];
     for (let i = 1; i <= count; i++) args.push(this.env[String(i)] || '');
@@ -315,6 +318,7 @@ export class Shell {
   fork(): Shell {
     const child = new Shell(this.fs, this.commands);
     child.inheritedAbort = this.abortController ?? this.inheritedAbort;
+    child.heredocs = this.heredocs;
     child.cwd = this.cwd;
     child.env = { ...this.env };
     child.functions = { ...this.functions };
@@ -349,6 +353,16 @@ export class Shell {
    * inside it) that keeps the terminal, so kernel programs in it can use the tty
    * while their stdout is captured. $? afterwards is its status.
    */
+  /**
+   * Command text for a substitution's output: one quoted word as an assignment's
+   * value (VAR=$(…)) or inside double quotes, else field-split on IFS.
+   */
+  private substitutionText(out: string, preceding: string, inQuotes: boolean): string {
+    if (inQuotes) return protectExpansion(out);
+    if (/[A-Za-z_][A-Za-z0-9_]*=$/.test(preceding)) return '"' + protectExpansion(out) + '"';
+    return splitFields(out, this.env['IFS']);
+  }
+
   /** Status of the last command substitution while expanding the current command */
   private substStatus: number | null = null;
 
@@ -465,6 +479,42 @@ export class Shell {
     throw new ExitSignal(exitCode);
   }
 
+  /** Here-document bodies, referenced by `< MARKER` redirections */
+  heredocs = new HeredocStore();
+
+  /** Contents of an input redirection's target: a file, or a here-document (expanded now if unquoted) */
+  async readInputRedirect(target: string): Promise<string> {
+    const h = this.heredocs.lookup(target);
+    if (h) return h.expand ? this.expandHeredocBody(h.body) : h.body;
+    const data = await this.fs.readFile(this.fs.resolvePath(target, this.cwd), 'utf8');
+    return typeof data === 'string' ? data : new TextDecoder().decode(data as any);
+  }
+
+  /**
+   * Expand an unquoted here-document body: $var, ${…}, $(…), `…`, $((…)), with
+   * \$ \` \\ and \<newline> as escapes. Quotes are ordinary characters and
+   * nothing is field-split.
+   */
+  private async expandHeredocBody(body: string): Promise<string> {
+    let pre = '';
+    for (let i = 0; i < body.length; i++) {
+      const c = body[i];
+      if (c === '\\') {
+        const nx = body[i + 1];
+        if (nx === '$' || nx === '`' || nx === '\\') { pre += EXPANSION_PROTECT[nx]; i++; continue; }
+        if (nx === '\n') { i++; continue; }
+        pre += EXPANSION_PROTECT['\\'];
+        continue;
+      }
+      if (c === '"' || c === "'") { pre += EXPANSION_PROTECT[c]; continue; }
+      pre += c;
+    }
+    let expanded = this.expandArithmetic(pre);
+    expanded = await this.expandCommandSubstitution(expanded, () => {}, true);
+    expanded = this.expandVars(expanded, true);
+    return restoreExpansion(expanded);
+  }
+
   /** Aliases being expanded right now */
   private expandingAliases = new Set<string>();
 
@@ -487,11 +537,11 @@ export class Shell {
     this.injectedStdin = null;
     // Source text from the user, a script or `source` loses its comments first
     if (this.executeDepth === 0) line = stripComments(line, this.sourcing > 0 ? 'posix' : 'interactive');
-    // Handle backslash line continuations: \<newline> joins lines
-    const joined = line.replace(/\\\n/g, '');
-    const trimmed = joined.trim();
+    // Here-documents become `< MARKER` redirections (shell-heredoc.ts)
+    if (hasHeredoc(line)) line = extractHeredocs(line, this.heredocs);
+    const source = line.trim();
     // A comment line (a multi-line script that starts with one still runs)
-    if (!trimmed || (trimmed.startsWith('#') && !trimmed.includes('\n'))) return 0;
+    if (!source || (source.startsWith('#') && !source.includes('\n'))) return 0;
 
     // LINENO tracking: reset at top-level execute, track depth
     this.executeDepth++;
@@ -502,8 +552,13 @@ export class Shell {
       this.abortController = this.inheritedAbort ?? new AbortController();
     }
 
+    // Split multi-line input into complete statements (shell-statements.ts); a
+    // single statement comes back on one line, with \<newline> continuations joined
+    const statements = groupStatements(source);
+    const trimmed = statements.length === 1 ? statements[0].text : source;
+
     // Check for background execution (&)
-    if (trimmed.endsWith('&') && !trimmed.endsWith('&&')) {
+    if (statements.length <= 1 && trimmed.endsWith('&') && !trimmed.endsWith('&&')) {
       const bgCmd = trimmed.slice(0, -1).trim();
       if (bgCmd) {
         this.executeDepth--;
@@ -513,8 +568,6 @@ export class Shell {
       }
     }
 
-    // Split multi-line input into individual statements (respecting heredoc blocks)
-    const statements = groupStatements(trimmed);
     if (statements.length > 1) {
       let lastExit = 0;
       let lineOffset = isTopLevel ? 0 : this.currentLine - 1;
@@ -626,15 +679,22 @@ export class Shell {
         }
       }
 
+      // A subshell followed by redirections: (cmds) > file
+      if (/^\((?!\()/.test(trimmedCmd) && !trimmedCmd.endsWith(')') && splitCompoundRedirects(trimmedCmd).redirects.length) {
+        exitCode = await this.execControlStructure(trimmedCmd, writeStdout, stderrWriter);
+        this.lastExitCode = exitCode;
+        this.env['?'] = String(exitCode);
+        continue;
+      }
+
       // Check if compound is a subshell: (commands)
       if (trimmedCmd.startsWith('(') && trimmedCmd.endsWith(')')) {
         const inner = trimmedCmd.slice(1, -1).trim();
         if (inner) {
+          // Output streams through; the child's variables, cd and exit stay inside it
           const child = this.fork();
-          const result = await child.exec(inner);
-          if (result.stdout) writeStdout(result.stdout.replace(/\n/g, '\r\n'));
-          if (result.stderr) stderrWriter(result.stderr.replace(/\n/g, '\r\n'));
-          exitCode = result.exitCode;
+          child.injectedStdin = heredocStdin || null;
+          exitCode = await child.execute(inner, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
           continue;
@@ -1169,7 +1229,7 @@ export class Shell {
           if (redirectInput === undefined && stdinRedirect) {
             try {
               redirectInput = stdinRedirect.target === '/dev/null' ? ''
-                : await this.fs.readFile(this.fs.resolvePath(stdinRedirect.target, this.cwd), 'utf8') as string;
+                : await this.readInputRedirect(stdinRedirect.target);
             } catch (e: any) {
               stderrWriter(`shiro: ${stdinRedirect.target}: ${e.message}\r\n`);
               exitCode = 1;
@@ -2019,7 +2079,7 @@ export class Shell {
           for (const redir of redirects) {
             if (redir.fd !== undefined && redir.type === '<') {
               try {
-                const content = await this.fs.readFile(this.fs.resolvePath(redir.target, this.cwd), 'utf8') as string;
+                const content = await this.readInputRedirect(redir.target);
                 this.fileDescriptors.set(redir.fd, { content, offset: 0 });
               } catch (e: any) {
                 stderrWriter(`shiro: ${redir.target}: ${e.message}\r\n`);
@@ -2358,9 +2418,8 @@ export class Shell {
               stdin = i > 0 ? lastOutput : (heredocStdin || '');
               continue;
             }
-            const targetPath = this.fs.resolvePath(redir.target, this.cwd);
             try {
-              stdin = await this.fs.readFile(targetPath, 'utf8') as string;
+              stdin = await this.readInputRedirect(redir.target);
             } catch (e: any) {
               stderrWriter(`shiro: ${redir.target}: ${e.message}\r\n`);
               exitCode = 1;
@@ -2645,13 +2704,11 @@ export class Shell {
     }
     if (!hasUnquotedBrace) return input;
 
-    // Tokenize respecting quotes, then expand each token
-    const tokens = this.tokenize(input);
+    // Expand each word in place, keeping its quotes (they still matter to the tokenizer)
     const expanded: string[] = [];
-    for (const tok of tokens) {
-      expanded.push(...this.expandBraceToken(tok));
+    for (const word of splitRawWords(input)) {
+      expanded.push(...this.expandBraceToken(word));
     }
-    // Reconstruct: join with spaces, but preserve redirect tokens
     return expanded.join(' ');
   }
 
@@ -2770,14 +2827,14 @@ export class Shell {
     return result;
   }
 
-  private expandVars(line: string): string {
+  private expandVars(line: string, quoted = false): string {
     // Walk through the string character by character, respecting quote context.
     // In single quotes: no expansion at all (bash behavior).
     // In double quotes: expand $VAR and ${VAR} but NOT ~ or $?.
-    // Unquoted: expand everything.
+    // Unquoted: expand everything. `quoted`: the whole text is in double-quote context.
     let result = '';
     let inSingle = false;
-    let inDouble = false;
+    let inDouble = quoted;
     let i = 0;
     while (i < line.length) {
       const ch = line[i];
@@ -2791,6 +2848,9 @@ export class Shell {
 
       // Handle backslash (skip next char)
       if (ch === '\\' && i + 1 < line.length) { result += ch + line[i + 1]; i += 2; continue; }
+
+      // $"…" (locale translation) is plain "…"
+      if (ch === '$' && line[i + 1] === '"' && !inDouble) { i++; continue; }
 
       // Expand $$ (process ID)
       if (ch === '$' && line[i + 1] === '$') {
@@ -2809,17 +2869,30 @@ export class Shell {
       // Expand $@ and $* (all positional parameters)
       // Bash behavior: "$@" with no args expands to nothing (zero words)
       if (ch === '$' && (line[i + 1] === '@' || line[i + 1] === '*')) {
-        const val = this.env['@'] ?? '';
-        if (val === '' && inDouble) {
-          // Remove the opening quote already appended
-          if (result.endsWith('"')) result = result.slice(0, -1);
-          i += 2;
-          // Consume the closing quote
-          if (i < line.length && line[i] === '"') { inDouble = false; i++; }
-        } else {
-          result += val;
-          i += 2;
+        const args = this.getPositionalArgs();
+        const star = line[i + 1] === '*';
+        if (args.length === 0 && inDouble && !star) {
+          // "$@" with no arguments is no word at all
+          if (result.endsWith('"') && line[i + 2] === '"') {
+            result = result.slice(0, -1);
+            i += 3;
+            inDouble = false;
+          } else {
+            i += 2;
+          }
+          continue;
         }
+        const ifs = this.env['IFS'];
+        if (inDouble) {
+          // "$@": one word per argument (close and reopen the quotes between them);
+          // "$*": one word, joined with the first character of IFS
+          result += star
+            ? protectExpansion(args.join(ifs === undefined ? ' ' : ifs.slice(0, 1)))
+            : args.map(protectExpansion).join('" "');
+        } else {
+          result += args.map((a) => splitFields(a, ifs)).filter((f) => f !== '').join(' ');
+        }
+        i += 2;
         continue;
       }
 
@@ -3483,6 +3556,7 @@ export class Shell {
 
     for (let i = 0; i < line.length; i++) {
       const ch = line[i];
+      if (ch === '\\' && !inSingle) { current += ch + (line[i + 1] ?? ''); i++; continue; }
       if (ch === "'" && !inDouble) { inSingle = !inSingle; current += ch; continue; }
       if (ch === '"' && !inSingle) { inDouble = !inDouble; current += ch; continue; }
       // Track extglob paren depth: ?(, *(, +(, @(, !(
@@ -3776,7 +3850,7 @@ export class Shell {
 
   // ─── COMMAND SUBSTITUTION ─────────────────────────────────────────────────
 
-  private async expandCommandSubstitution(input: string, stderrWriter: (s: string) => void): Promise<string> {
+  private async expandCommandSubstitution(input: string, stderrWriter: (s: string) => void, quoted = false): Promise<string> {
     const result: string[] = [];
     let i = 0;
     // Quote context of the text around substitutions: nothing expands inside
@@ -3829,11 +3903,7 @@ export class Shell {
         // If $() appears as the RHS of a variable assignment (VAR=$(...)), wrap the
         // output in double-quotes so tokenize() preserves spaces. This matches bash
         // semantics: VAR=$(cmd) preserves spaces, bare $(cmd) word-splits.
-        subOut = protectExpansion(subOut);
-        const preceding = result.join('');
-        if (/[A-Za-z_][A-Za-z0-9_]*=$/.test(preceding)) {
-          subOut = '"' + subOut + '"';
-        }
+        subOut = this.substitutionText(subOut, result.join(''), outerDQ || quoted);
         result.push(subOut);
         i = j;
       } else if (input[i] === '`') {
@@ -3842,11 +3912,7 @@ export class Shell {
         const subCmd = input.slice(i + 1, j);
         const subResult = await this.subshellExec(subCmd);
         if (subResult.stderr) stderrWriter(subResult.stderr);
-        let subOut = protectExpansion(subResult.stdout.replace(/\r\n/g, '\n').replace(/\n+$/, ''));
-        const preceding = result.join('');
-        if (/[A-Za-z_][A-Za-z0-9_]*=$/.test(preceding)) {
-          subOut = '"' + subOut + '"';
-        }
+        const subOut = this.substitutionText(subResult.stdout.replace(/\r\n/g, '\n').replace(/\n+$/, ''), result.join(''), outerDQ || quoted);
         result.push(subOut);
         i = j + 1;
       } else {
@@ -4313,8 +4379,7 @@ export class Shell {
       const target = restoreExpansion(this.expandVars(r.target));
       if (r.op === '<') {
         try {
-          const data = await this.fs.readFile(this.fs.resolvePath(target, this.cwd), 'utf8');
-          stdin = typeof data === 'string' ? data : new TextDecoder().decode(data);
+          stdin = await this.readInputRedirect(target);
         } catch {
           writeStderr(`shiro: ${target}: No such file or directory\r\n`);
           return 1;
@@ -4350,6 +4415,14 @@ export class Shell {
     if (/^for\s+/.test(input)) return this.execFor(input, writeStdout, writeStderr);
     if (/^case\s+/.test(input)) return this.execCase(input, writeStdout, writeStderr);
     if (/^select\s+/.test(input)) return this.execSelect(input, writeStdout, writeStderr);
+    if (/^\((?!\()/.test(input) && input.endsWith(')')) {
+      // ( list ) runs in a child shell
+      const child = this.fork();
+      child.injectedStdin = this.injectedStdin;
+      this.injectedStdin = null;
+      const inner = input.slice(1, -1).trim();
+      return inner ? child.execute(inner, writeStdout, writeStderr, false, this.terminal, true) : 0;
+    }
     if (isBraceGroup(input)) {
       // { list; } runs in the current shell
       const inner = input.slice(1, input.lastIndexOf('}')).trim().replace(/;\s*$/, '');
@@ -4377,8 +4450,8 @@ export class Shell {
     // For other control structures, set __PIPE_STDIN env and delegate
     const saved = this.env['__PIPE_STDIN'];
     this.env['__PIPE_STDIN'] = pipeStdin;
-    // A brace group's first command reads the pipe too: `… | { cat; }`
-    if (isBraceGroup(input)) this.injectedStdin = pipeStdin;
+    // A brace group's or subshell's first command reads the pipe too: `… | { cat; }`
+    if (isBraceGroup(input) || /^\((?!\()/.test(input)) this.injectedStdin = pipeStdin;
     const result = await this.execControlStructureCore(input, writeStdout, writeStderr);
     if (saved === undefined) delete this.env['__PIPE_STDIN'];
     else this.env['__PIPE_STDIN'] = saved;
@@ -4813,12 +4886,14 @@ export class Shell {
     }
 
     // Parse "VAR in item1 item2 item3" from condition
-    const forMatch = parsed.condition.match(/^(\w+)\s+in\s+(.+)$/);
+    // `for NAME in WORDS`, `for NAME in` (no words) or `for NAME` ("$@")
+    const forMatch = parsed.condition.match(/^(\w+)(?:\s+in(?:\s+([\s\S]*))?)?$/);
     if (!forMatch) { writeStderr('for: syntax error\r\n'); return 1; }
 
     const varName = forMatch[1];
-    const itemsStr = await this.expandCommandSubstitution(this.expandArithmetic(forMatch[2]), writeStderr);
-    const items = this.expandVars(itemsStr).split(/\s+/).filter(Boolean).map(restoreExpansion);
+    const items = /\sin(\s|$)/.test(parsed.condition)
+      ? await this.expandWordList(forMatch[2] ?? '', writeStderr)
+      : this.getPositionalArgs();
     for (const item of items) {
       this.env[varName] = item;
       try {
@@ -4832,6 +4907,12 @@ export class Shell {
     return 0;
   }
 
+  /** The words of a `for`/`select` list, expanded like command arguments (quotes, splitting, globs) */
+  private async expandWordList(text: string, writeStderr: (s: string) => void): Promise<string[]> {
+    const expanded = await this.expandWords(text, writeStderr);
+    return (await this.expandGlobs(this.parseSegment(expanded).args, writeStderr)) ?? [];
+  }
+
   private async execSelect(
     input: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void
   ): Promise<number> {
@@ -4843,8 +4924,7 @@ export class Shell {
     if (!selMatch) { writeStderr('select: syntax error\r\n'); return 1; }
 
     const varName = selMatch[1];
-    const itemsStr = await this.expandCommandSubstitution(this.expandArithmetic(selMatch[2]), writeStderr);
-    const items = this.expandVars(itemsStr).split(/\s+/).filter(Boolean).map(restoreExpansion);
+    const items = await this.expandWordList(selMatch[2], writeStderr);
 
     // Display menu
     for (let idx = 0; idx < items.length; idx++) {
@@ -5700,6 +5780,55 @@ export function splitCompoundRedirects(cmd: string): { compound: string; redirec
 }
 
 /**
+ * Split command text on unquoted blanks into raw words, keeping quotes,
+ * backslashes and $(…)/${…}/`…` intact (for brace expansion).
+ */
+function splitRawWords(text: string): string[] {
+  const words: string[] = [];
+  let cur = '';
+  let i = 0;
+  const n = text.length;
+  const skipBalanced = (j: number, open: string, close: string): number => {
+    let depth = 0;
+    for (; j < n; j++) {
+      const c = text[j];
+      if (c === '\\') { j++; continue; }
+      if (c === "'") { const e = text.indexOf("'", j + 1); j = e === -1 ? n : e; continue; }
+      if (c === '"') { j++; while (j < n && text[j] !== '"') j += text[j] === '\\' ? 2 : 1; continue; }
+      if (c === open) depth++;
+      else if (c === close && --depth === 0) return j + 1;
+    }
+    return n;
+  };
+  while (i < n) {
+    const c = text[i];
+    if (c === ' ' || c === '\t' || c === '\n') {
+      if (cur) { words.push(cur); cur = ''; }
+      i++;
+      continue;
+    }
+    let j = i + 1;
+    if (c === '\\') j = i + 2;
+    else if (c === "'") { const e = text.indexOf("'", i + 1); j = e === -1 ? n : e + 1; }
+    else if (c === '"') {
+      j = i + 1;
+      while (j < n && text[j] !== '"') {
+        if (text[j] === '\\') { j += 2; continue; }
+        if (text[j] === '$' && text[j + 1] === '(') { j = skipBalanced(j + 1, '(', ')'); continue; }
+        j++;
+      }
+      j++;
+    } else if (c === '`') { j = i + 1; while (j < n && text[j] !== '`') j += text[j] === '\\' ? 2 : 1; j++; }
+    else if (c === '$' && text[i + 1] === '(') j = skipBalanced(i + 1, '(', ')');
+    else if (c === '$' && text[i + 1] === '{') j = skipBalanced(i + 1, '{', '}');
+    cur += text.slice(i, Math.min(j, n));
+    i = j;
+  }
+  if (cur) words.push(cur);
+  return words;
+}
+
+/**
  * `y=$x` is not word-split in bash, but this shell expands into the command text
  * before tokenizing. Double-quote simple unquoted assignment values that expand
  * something (`y=$x`, `export P=$HOME/bin:$PATH`), for leading assignments and
@@ -5733,6 +5862,8 @@ function compoundEnd(cmd: string): number {
   const OPEN: Record<string, string> = { for: 'done', while: 'done', until: 'done', select: 'done', if: 'fi', case: 'esac' };
   const blocks: string[] = [];
   let paren = 0, inSingle = false, inDouble = false, cmdPos = true;
+  // A `( … )` subshell ends at its matching paren
+  const subshell = /^\s*\((?!\()/.test(cmd);
   let i = 0;
   while (i < cmd.length) {
     const ch = cmd[i];
@@ -5742,7 +5873,12 @@ function compoundEnd(cmd: string): number {
     if (ch === "'") { inSingle = true; i++; cmdPos = false; continue; }
     if (ch === '"') { inDouble = true; i++; cmdPos = false; continue; }
     if (ch === '(') { paren++; i++; cmdPos = true; continue; }
-    if (ch === ')') { if (paren > 0) paren--; i++; cmdPos = false; continue; }
+    if (ch === ')') {
+      if (paren > 0) paren--;
+      i++; cmdPos = false;
+      if (subshell && paren === 0 && blocks.length === 0) return i;
+      continue;
+    }
     if (ch === ';' || ch === '&' || ch === '|' || ch === '\n') { i++; cmdPos = true; continue; }
     if (/\s/.test(ch)) { i++; continue; }
     let j = i;
