@@ -588,7 +588,7 @@ export const DT_REG = 8;
 export const DT_LNK = 10;
 
 // ── Syscall channel layout (see channel.ts) ─────────────────────────────────
-export const CH_STATE = 0;      // Int32 index: 0 idle, 1 request posted, 2 reply ready
+export const CH_STATE = 0;      // Int32 index: STATE_* below
 export const CH_SYSNO = 1;
 export const CH_RESULT = 2;     // result or -errno
 export const CH_SIGNAL = 3;     // pending-signal flag (kernel sets; guest checks after every reply)
@@ -600,3 +600,11 @@ export const CH_DEFAULT_DATA_SIZE = 1 << 20;
 export const STATE_IDLE = 0;
 export const STATE_REQUEST = 1;
 export const STATE_REPLY = 2;
+/**
+ * Request posted by a guest that is spinning on the state word: the kernel's
+ * reply needs no Atomics.notify (that wake-up costs ~10 µs on each side).
+ * The guest turns it into STATE_REQUEST (compareExchange) before it sleeps.
+ */
+export const STATE_REQUEST_SPIN = 3;
+/** The kernel closed the channel (process gone): a guest woken with this must unwind, not continue. */
+export const STATE_DEAD = 4;

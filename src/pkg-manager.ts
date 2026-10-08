@@ -21,8 +21,9 @@
 import type { FileSystem } from './filesystem';
 import type { CommandContext } from './commands/index';
 import { isWebc, parseWebc, type WebcPackage } from './webc';
+import { readTarball, type TarEntry } from './utils/tar';
 import builtinIndexJson from './pkg-index.json';
-import { untar, gunzip, type TarEntry } from './pkg-tar';
+import { untar, gunzip, type TarEntry as PkgTarEntry } from './pkg-tar';
 
 // ── Index format ─────────────────────────────────────────────────────
 
@@ -44,7 +45,7 @@ const KERNEL_FEATURES: KernelFeature[] = [
   'wasix', 'processes', 'threads', 'sockets', 'blocking-stdin', 'tty', 'sync-fs', 'wasix-stack', 'dynamic-linking', 'mounts', 'x86',
 ];
 
-/** x86_64-linux: static (or self-contained) x86-64 Linux ELF, run in Blink as a kernel process */
+/** `x86_64-linux`: static x86-64 Linux ELF programs, run in the Blink engine (src/x86-engine) */
 export type PkgAbi = 'wasi_snapshot_preview1' | 'wasi_unstable' | 'wasix' | 'x86_64-linux';
 
 export interface PkgFile {
@@ -64,6 +65,12 @@ export interface PkgFile {
    * download's.
    */
   unpack?: 'gzip' | 'tar.gz';
+  /**
+   * When `url` is a tarball (gzipped or not, e.g. an npm package): `member`
+   * takes that file out of it; `unpack` extracts the (member's) tar archive
+   * into the directory `path`, keeping only entries under `dir` if given.
+   */
+  tar?: { member?: string; unpack?: boolean; dir?: string };
 }
 
 export interface PkgBin {
@@ -171,7 +178,7 @@ export function parseIndex(doc: unknown): PkgIndex {
       if (typeof p[k] !== 'string' || !p[k]) fail(`${where}: missing ${k}`);
     }
     if (!['wasi_snapshot_preview1', 'wasi_unstable', 'wasix', 'x86_64-linux'].includes(p.abi)) fail(`${where}: bad abi ${p.abi}`);
-    if (!['shiro', 'wasmer'].includes(p.origin)) fail(`${where}: bad origin ${p.origin}`);
+    if (!['shiro', 'wasmer', 'npm'].includes(p.origin)) fail(`${where}: bad origin ${p.origin}`);
     if (!Array.isArray(p.files) || p.files.length === 0) fail(`${where}: no files`);
     const paths = new Set<string>();
     for (const f of p.files) {
@@ -181,14 +188,16 @@ export function parseIndex(doc: unknown): PkgIndex {
       if (typeof f.size !== 'number' || f.size < 0) fail(`${where}: bad size for ${f.path}`);
       if (f.webc && !f.webc.atom && !f.webc.volume) fail(`${where}: webc file ${f.path} names no atom or volume`);
       if (f.unpack !== undefined && f.unpack !== 'gzip' && f.unpack !== 'tar.gz') fail(`${where}: bad unpack for ${f.path}`);
+      if (f.tar && !f.tar.member && !f.tar.unpack) fail(`${where}: tar file ${f.path} names no member and doesn't unpack`);
+      if (f.tar?.member && !safeRelPath(f.tar.member)) fail(`${where}: bad tar member ${f.tar.member}`);
       paths.add(f.path);
     }
     if (!p.bin || typeof p.bin !== 'object') fail(`${where}: missing bin`);
     for (const [cmd, b] of Object.entries<any>(p.bin)) {
       if (!NAME_RE.test(cmd) && !/^[a-z0-9][a-z0-9._+\[-]*$/.test(cmd)) fail(`${where}: bad command name ${cmd}`);
-      if (typeof b?.file !== 'string' || !(paths.has(b.file) || p.files.some((f: PkgFile) => f.unpack === 'tar.gz' && b.file.startsWith(f.path + '/')))) {
-        fail(`${where}: command ${cmd} runs unknown file ${b?.file}`);
-      }
+      // a listed file, or one inside a directory a tarball unpacks into
+      const inUnpacked = typeof b?.file === 'string' && p.files.some((f: any) => (f.tar?.unpack || f.unpack === 'tar.gz') && b.file.startsWith(f.path + '/'));
+      if (typeof b?.file !== 'string' || !(paths.has(b.file) || inUnpacked)) fail(`${where}: command ${cmd} runs unknown file ${b?.file}`);
       if (b.args !== undefined && (!Array.isArray(b.args) || b.args.some((a: unknown) => typeof a !== 'string'))) fail(`${where}: bad args for ${cmd}`);
       if (b.self !== undefined && (typeof b.self !== 'string' || !p.bin[b.self])) fail(`${where}: ${cmd} names unknown self command ${b.self}`);
     }
@@ -419,6 +428,7 @@ async function installOne(fs: FileSystem, entry: PkgEntry, opts: PkgOptions): Pr
   const root = `${PKG_ROOT}/${entry.name}`;
   const fetched = new Map<string, Uint8Array>();
   const containers = new Map<string, WebcPackage>();
+  const tarballs = new Map<string, Promise<TarEntry[]>>();
   let size = 0;
 
   log(`Get ${entry.name} ${entry.version} (${formatSize(downloadSize(entry))})`);
@@ -437,6 +447,10 @@ async function installOne(fs: FileSystem, entry: PkgEntry, opts: PkgOptions): Pr
     }
     if (f.unpack === 'tar.gz') {
       size += await unpackTree(fs, dest, untar(await gunzip(bytes)));
+      continue;
+    }
+    if (f.tar) {
+      size += await installFromTar(fs, f, bytes, dest, tarballs, entry.name);
       continue;
     }
     if (!f.webc) {
@@ -477,6 +491,11 @@ async function installOne(fs: FileSystem, entry: PkgEntry, opts: PkgOptions): Pr
         if (!(await lstatSafe(fs, at))) await fs.symlink(link.target, at);
       }
     }
+  }
+
+  // Mount points exist on disk, so programs walking the path (realpath) find them
+  for (const guest of Object.keys(entry.mounts ?? {})) {
+    try { await fs.mkdir(guest, { recursive: true }); } catch { /* a file there: leave it */ }
   }
 
   await fs.mkdir(PKG_BIN_DIR, { recursive: true });
@@ -536,7 +555,7 @@ function fileMode(entry: PkgEntry, rel: string): number {
 }
 
 /** Write a tar's entries under `dest`; returns the bytes written. */
-async function unpackTree(fs: FileSystem, dest: string, entries: TarEntry[]): Promise<number> {
+async function unpackTree(fs: FileSystem, dest: string, entries: PkgTarEntry[]): Promise<number> {
   let size = 0;
   await fs.mkdir(dest, { recursive: true });
   for (const e of entries) {
@@ -551,6 +570,52 @@ async function unpackTree(fs: FileSystem, dest: string, entries: TarEntry[]): Pr
     }
     await fs.writeFile(p, e.data, { mode: e.mode & 0o777 || 0o644 });
     size += e.data.length;
+  }
+  return size;
+}
+
+/** A file from a tarball (PkgFile.tar). Returns the bytes written. */
+async function installFromTar(
+  fs: FileSystem, f: PkgFile, download: Uint8Array, dest: string, cache: Map<string, Promise<TarEntry[]>>, pkg: string,
+): Promise<number> {
+  const t = f.tar!;
+  // the download's entries, parsed once however many files come out of it
+  const downloadEntries = () => {
+    let entries = cache.get(f.sha256);
+    if (!entries) { entries = readTarball(download); cache.set(f.sha256, entries); }
+    return entries;
+  };
+  let bytes = download;
+  if (t.member) {
+    const m = (await downloadEntries()).find(e => e.name === t.member && e.type === '0');
+    if (!m) throw new Error(`${pkg}: no ${t.member} in ${f.url}`);
+    bytes = m.data;
+  }
+  if (!t.unpack) {
+    await writeFileP(fs, dest, bytes);
+    return bytes.length;
+  }
+  const prefix = (t.dir ?? '').replace(/^\.?\/+|\/+$/g, '');
+  let size = 0;
+  await fs.mkdir(dest, { recursive: true });
+  for (const e of t.member ? await readTarball(bytes) : await downloadEntries()) {
+    let rel = e.name.replace(/\/+$/, '');
+    if (prefix) {
+      if (rel !== prefix && !rel.startsWith(prefix + '/')) continue;
+      rel = rel.slice(prefix.length + 1);
+    }
+    if (!rel || !safeRelPath(rel)) continue;
+    const p = `${dest}/${rel}`;
+    if (e.type === '5') await fs.mkdir(p, { recursive: true });
+    else if (e.type === '2') {
+      await fs.mkdir(p.slice(0, p.lastIndexOf('/')), { recursive: true });
+      try { await fs.unlink(p); } catch { /* none */ }
+      await fs.symlink(e.linkname, p);
+    } else if (e.type === '0' || e.type === '7') {
+      await writeFileP(fs, p, e.data);
+      if (e.mode & 0o111) await fs.chmod(p, e.mode & 0o777);
+      size += e.data.length;
+    }
   }
   return size;
 }
@@ -761,6 +826,22 @@ export async function packageMountsForPath(fs: FileSystem, path: string): Promis
   if (!name) return undefined;
   const entry = (await readStatus(fs))[name]?.entry;
   return entry ? entryMounts(entry, name) : undefined;
+}
+
+/**
+ * The arguments an installed command inserts after argv[0] (`egrep` is
+ * `grep -E`, `zcat` is `gzip -dc`), when `path` is its /usr/bin link: what
+ * the kernel adds when a program execs the command by path.
+ */
+export async function packageArgsForPath(fs: FileSystem, path: string): Promise<string[] | undefined> {
+  if (!path.startsWith(PKG_BIN_DIR + '/')) return undefined;
+  const cmd = path.slice(PKG_BIN_DIR.length + 1);
+  if (!packageShadows(fs).has(cmd) && !(await loadPackageShadows(fs)).has(cmd)) return undefined;
+  for (const pkg of Object.values(await readStatus(fs))) {
+    const args = pkg.entry?.bin[cmd]?.args;
+    if (args?.length) return args;
+  }
+  return undefined;
 }
 
 /**

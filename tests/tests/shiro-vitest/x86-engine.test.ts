@@ -37,6 +37,12 @@ const haveTcp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', tcpBin,
 const ttyBin = join(out, 'tty');
 const haveTty = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', ttyBin, 'tty.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const haveGlibc = tryBuild('gcc', ['-static', '-Os', '-o', glibcBin, 'hello.c']);
+const jitBin = join(out, 'jit');
+const haveJit = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', jitBin, 'jit.c']);
+const forkBin = join(out, 'forkcopy');
+const haveFork = tryBuild('gcc', ['-static', '-O1', '-o', forkBin, 'forkcopy.c']);
+const fuzzBin = join(out, 'jitfuzz');
+const haveFuzz = tryBuild('gcc', ['-static', '-O1', '-o', fuzzBin, 'jitfuzz.c']);
 
 async function setup(bin: Uint8Array) {
   const { fs, shell } = await createTestShell();
@@ -89,6 +95,74 @@ describe.skipIf(!haveGlibc)('Blink engine: static C (glibc)', () => {
     const r = await run(shell, 'echo x | ./prog q');
     expect(r.output).toContain('hello from c');
     expect(r.output).toContain('arg1=q');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+});
+
+// The wasm JIT (vendor/blink patch 0012) against the interpreter (BLINK_WJIT=0).
+describe.skipIf(!haveJit || !haveFuzz)('Blink engine: wasm JIT', () => {
+  it('computes the same results and flags as the interpreter', async () => {
+    const { shell } = await setup(readFileSync(fuzzBin));
+    const jit = await run(shell, './prog 3000');
+    const interp = await run(shell, 'BLINK_WJIT=0 ./prog 3000');
+    expect(jit.exitCode).toBe(0);
+    expect(interp.exitCode).toBe(0);
+    expect(jit.output.split('\n').length).toBeGreaterThan(100);
+    expect(jit.output).toBe(interp.output);
+  }, 120_000);
+
+  it('sees code rewritten after mprotect, in RWX pages and after munmap', async () => {
+    const { shell } = await setup(readFileSync(jitBin));
+    const r = await run(shell, './prog smc');
+    expect(r.output).toContain('smc 100350000 200350000 300350000 400350000 500350000');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  it('runs signal handlers while a compiled loop spins', async () => {
+    const { shell } = await setup(readFileSync(jitBin));
+    const r = await run(shell, './prog signal');
+    expect(r.output).toContain('signal ticks=5 spun=yes');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  it('resumes a compiled loop after a SIGSEGV handler fixes the page', async () => {
+    const { shell } = await setup(readFileSync(jitBin));
+    const r = await run(shell, './prog fault; BLINK_WJIT=0 ./prog fault');
+    const lines = r.output.trim().split(/\r?\n/);
+    expect(lines[0]).toMatch(/^fault faults=3 sum=\d+$/);
+    expect(lines[1]).toBe(lines[0]);
+  }, 60_000);
+
+  it('runs compiled code on four threads', async () => {
+    const { shell } = await setup(readFileSync(jitBin));
+    const r = await run(shell, './prog threads');
+    expect(r.output).toContain('threads counter=800000 plain=300000,300000,300000,300000 locked=784');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+});
+
+// fork() makes a copy of the guest in a new Blink (patch 0014); it used to
+// run the child on the parent's thread with vfork semantics.
+describe.skipIf(!haveFork)('Blink engine: fork', () => {
+  it('gives the child its own memory; a child that never execs exits with its status', async () => {
+    const { shell } = await setup(readFileSync(forkBin));
+    const r = await run(shell, './prog copy');
+    expect(r.output).toContain('child sees 100 c child');
+    expect(r.output).toContain('parent sees 1 p parent status 7');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  it('pipe + fork + dup2 + exec in the child (perl open STDOUT ">&W"; exec)', async () => {
+    const { shell } = await setup(readFileSync(forkBin));
+    const r = await run(shell, './prog pipe');
+    expect(r.output).toContain('pipe got: from-exec');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  it('a fork child forks again', async () => {
+    const { shell } = await setup(readFileSync(forkBin));
+    const r = await run(shell, './prog nested');
+    expect(r.output).toContain('nested status 44 counter 1');
     expect(r.exitCode).toBe(0);
   }, 60_000);
 });
@@ -326,7 +400,7 @@ describe('Blink engine: kernel processes (fork, exec, pipes)', () => {
   }, 60_000);
 });
 
-// Blink patch 0013: fork() copies the process into a new worker.
+// Blink patch 0014: fork() copies the process into a new worker.
 describe('Blink engine: fork() without exec', () => {
   it('the child gets a copy of memory and runs alongside the parent', async () => {
     const { shell } = await setup(readFileSync(join(FIX, 'fork-musl')));
@@ -338,7 +412,7 @@ describe('Blink engine: fork() without exec', () => {
   }, 60_000);
 });
 
-// Blink patches 0015-0017 (jemalloc, Rust's miniz_oxide and std need them).
+// Blink patches 0016-0018 (jemalloc, Rust's miniz_oxide and std need them).
 describe('Blink engine: CPU and syscall fixes', () => {
   it('pextrw zero-extends, MADV_DONTNEED zeroes, FUTEX_WAIT_BITSET times out, GRND_INSECURE works', async () => {
     const { shell } = await setup(readFileSync(join(FIX, 'cpu-musl')));

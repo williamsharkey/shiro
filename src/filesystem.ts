@@ -647,6 +647,73 @@ export class FileSystem {
     return cur || '/';
   }
 
+  /** _get from memory: the node, null when it surely doesn't exist, undefined when only IndexedDB knows. */
+  private _getCached(path: string): FSNode | null | undefined {
+    if (this.cache.has(path)) return this.cache.get(path) ?? null;
+    if (this._allKeys && !this._allKeys.has(path)) return null;
+    return undefined;
+  }
+
+  /**
+   * stat() answered from memory, for synchronous fast paths (the kernel's
+   * syscallSync): `{ path, node }` with symlinks in the final component
+   * followed, null when the path doesn't exist, undefined when that needs
+   * IndexedDB (or a virtual provider, or a symlink loop: use stat()).
+   */
+  lookupCached(path: string, follow = true): { path: string; node: FSNode } | null | undefined {
+    for (const vp of this.virtualProviders) if (vp.handles(path)) return undefined;
+    // Symlinks in directory components are followed, as _canon does
+    const parts = path.split('/').filter(Boolean);
+    let cur = '';
+    let hops = 0;
+    for (let i = 0; i < parts.length; i++) {
+      if (parts[i] === '.' || parts[i] === '..') { cur = this.resolvePath(`${cur}/${parts[i]}`, '/'); continue; }
+      let next = `${cur}/${parts[i]}`;
+      const last = i === parts.length - 1;
+      for (;;) {
+        const node = this._getCached(next);
+        if (!node) return node; // missing (null) or unknown here (undefined)
+        if (node.type !== 'symlink' || (last && !follow)) {
+          if (last) return { path: next, node };
+          if (node.type !== 'dir') return undefined; // ENOTDIR: let stat() say so
+          break;
+        }
+        if (++hops > 40) return undefined;
+        const target = node.symlinkTarget || new TextDecoder().decode(node.content!);
+        next = target.startsWith('/') ? this.resolvePath(target, '/') : this.resolvePath(target, cur || '/');
+      }
+      cur = next;
+    }
+    const root = this._getCached('/');
+    return root ? { path: '/', node: root } : root;
+  }
+
+  /** makeStat for a node from lookupCached. */
+  statOf(node: FSNode): StatResult { return makeStat(node); }
+
+  /** Follow symlinks to their final target path (up to 40 hops). */
+  private async _resolve(path: string): Promise<string> {
+    const seen = new Set<string>();
+    let current = path;
+    for (let i = 0; i < 40; i++) {
+      const node = await this._get(current);
+      if (!node || node.type !== 'symlink') return current;
+      if (seen.has(current)) {
+        throw fsError('ELOOP', `ELOOP: too many levels of symbolic links, '${path}'`);
+      }
+      seen.add(current);
+      const target = node.symlinkTarget || new TextDecoder().decode(node.content!);
+      // Resolve relative symlink targets against the symlink's parent directory
+      if (target.startsWith('/')) {
+        current = target;
+      } else {
+        const parent = current.substring(0, current.lastIndexOf('/')) || '/';
+        current = this.resolvePath(target, parent);
+      }
+    }
+    throw fsError('ELOOP', `ELOOP: too many levels of symbolic links, '${path}'`);
+  }
+
   /** `path` with every symlink followed, in directories and at the end (realpath(3)). */
   async realpath(path: string): Promise<string> {
     return this._canon(path, true);
@@ -682,11 +749,41 @@ export class FileSystem {
   private _keysJournal: Array<[string, boolean]> | null = null;
   private _keysLoading: Promise<Set<string>> | null = null;
 
+  /** Child names by parent directory, built from _allKeys on first readdir and kept up to date with it. */
+  private _children: Map<string, Set<string>> | null = null;
+
+  private _indexChild(path: string, present: boolean): void {
+    const i = path.lastIndexOf('/');
+    if (i < 0 || path === '/') return;
+    const parent = i === 0 ? '/' : path.slice(0, i);
+    const name = path.slice(i + 1);
+    if (!name) return;
+    let set = this._children!.get(parent);
+    if (present) {
+      if (!set) this._children!.set(parent, set = new Set());
+      set.add(name);
+    } else if (set) {
+      set.delete(name);
+      if (set.size === 0) this._children!.delete(parent);
+    }
+  }
+
+  /** Names directly under `dir` (keys only; the caller checks that `dir` is a directory). */
+  private async _childNames(dir: string): Promise<Iterable<string>> {
+    await this._getAllKeys();
+    if (!this._children) {
+      this._children = new Map();
+      for (const key of this._allKeys!) this._indexChild(key, true);
+    }
+    return this._children.get(dir) ?? [];
+  }
+
   private _noteKey(path: string, present: boolean): void {
     if (this._allKeys) {
       if (present ? !this._allKeys.has(path) : this._allKeys.has(path)) {
         if (present) this._allKeys.add(path); else this._allKeys.delete(path);
         this._allKeysArr = null;
+        if (this._children) this._indexChild(path, present);
       }
     }
     if (this._keysJournal) this._keysJournal.push([path, present]);
@@ -708,6 +805,7 @@ export class FileSystem {
             for (const [p, present] of journal) { if (present) set.add(p); else set.delete(p); }
             this._allKeys = set;
             this._allKeysArr = null;
+            this._children = null;
             return set;
           })
           .finally(() => { this._keysJournal = null; this._keysLoading = null; });
@@ -742,6 +840,12 @@ export class FileSystem {
     return node.symlinkTarget || new TextDecoder().decode(node.content!);
   }
 
+  /** Whether the in-memory cache holds path as a directory (an empty one
+   *  included, which readdirCached can't tell from "not cached"). */
+  isDirCached(path: string): boolean {
+    return this.cache.get(path)?.type === 'dir';
+  }
+
   /** Synchronously list directory entries from the in-memory cache. */
   readdirCached(path: string): string[] | undefined {
     const node = this.cache.get(path);
@@ -764,6 +868,7 @@ export class FileSystem {
     this.cache.clear();
     this._allKeys = null;
     this._allKeysArr = null;
+    this._children = null;
     // Writes not yet in IndexedDB live only here: keep them visible
     for (const batch of [this._inflight, this._dirty]) {
       if (!batch) continue;
@@ -955,18 +1060,7 @@ export class FileSystem {
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, readdir '${shown}'`);
     if (node.type !== 'dir') throw fsError('ENOTDIR', `ENOTDIR: not a directory '${path}'`);
 
-    const allKeys = await this._getAllKeys();
-    const prefix = path === '/' ? '/' : path + '/';
-    const entries: string[] = [];
-
-    for (const key of allKeys) {
-      if (key === path) continue;
-      if (!key.startsWith(prefix)) continue;
-      const rest = key.slice(prefix.length);
-      if (!rest.includes('/')) {
-        entries.push(rest);
-      }
-    }
+    const entries: string[] = [...await this._childNames(path)];
 
     // For root directory, add virtual top-level dirs
     if (path === '/') {

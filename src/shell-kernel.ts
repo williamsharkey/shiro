@@ -70,7 +70,7 @@ export async function resolveKernelProgram(
   }
   const base = name.slice(name.lastIndexOf('/') + 1);
   // pkg-installed binaries carry their own arguments, preopens and kernel gate
-  if (packageOfPath(path)) return packageKernelProgram(shell.fs, path, base, args, found.startsWith('/') ? found : shell.fs.resolvePath(found, shell.cwd));
+  if (packageOfPath(path) && (isWasmBytes(bytes) || isElfBytes(bytes))) return packageKernelProgram(shell.fs, path, base, args, found.startsWith('/') ? found : shell.fs.resolvePath(found, shell.cwd));
   const { wasmProcessMode, wasmRunner } = await import('./wasi/host');
 
   if (isWasmBytes(bytes)) {

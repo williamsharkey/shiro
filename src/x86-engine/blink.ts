@@ -14,6 +14,7 @@
  *   the command's stdin and streams its stdout/stderr back.
  */
 
+import type { Shell } from '../shell';
 import type { FileSystem } from '../filesystem';
 import { Kernel, getKernel, type Runner } from '../kernel/kernel';
 import { installNet } from '../kernel/net';
@@ -32,6 +33,8 @@ export interface BlinkRunOptions {
   writeStderr: (s: string) => void;
   /** Kill the guest (SIGKILL); resolves with 128+9. */
   signal?: AbortSignal;
+  /** The shell builtins run in when the guest execs them (sh, cat, ...) */
+  shell?: Shell;
 }
 
 let assetBase: string | null = null;
@@ -106,7 +109,7 @@ const POOL_DATA = 1 << 20;
 /**
  * A kernel Runner that executes the ELF at absolute `path` in Blink. With
  * `restore`, the worker instead rebuilds a fork()ed process from its
- * parent's snapshot (Blink patch 0013); `path` is the parent's program.
+ * parent's snapshot (Blink patch 0014); `path` is the parent's program.
  */
 export function blinkRunner(path: string, restore?: ArrayBuffer): Runner {
   return async (proc: Process, kernel: Kernel) => {
@@ -227,15 +230,16 @@ export function registerBlinkLoader(kernel: Kernel): void {
 const kernels = new WeakMap<FileSystem, Kernel>();
 
 /** The page kernel when it serves `fs` (attaching it if nothing has), else a private one. */
-function kernelFor(fs: FileSystem): Kernel {
+function kernelFor(fs: FileSystem, shell?: Shell): Kernel {
   const k = getKernel();
   if (!k.fs) k.attach(fs);
-  if (k.fs === fs) return k;
-  let own = kernels.get(fs);
+  let own = k.fs === fs ? k : kernels.get(fs);
   if (!own) {
     own = new Kernel({ fs, registerWithProcessTable: false });
     kernels.set(fs, own);
   }
+  // Without a shell the kernel can't run the builtins a guest execs (/bin/sh)
+  if (!own.shell && shell) own.shell = shell;
   return own;
 }
 
@@ -260,7 +264,7 @@ class OutputSink extends DevNull {
  * there). Resolves with the shell exit code.
  */
 export async function runElfWithBlink(path: string, args: string[], opts: BlinkRunOptions, argv0 = path): Promise<number> {
-  const kernel = kernelFor(opts.fs);
+  const kernel = kernelFor(opts.fs, opts.shell);
   const decoder = (write: (s: string) => void) => {
     const d = new TextDecoder();
     return (bytes: Uint8Array) => { const s = d.decode(bytes, { stream: true }); if (s) write(s); };

@@ -474,6 +474,74 @@ describe('kernel processes', () => {
     kernel.kill(proc.pid, A.SIGKILL);
   });
 
+  it('a burst of file writes is stored once it pauses, not after every write', async () => {
+    const proc = kernel.spawn({ path: 'holder', cwd: '/tmp', run: () => new Promise<number>(() => {}) });
+    const f = (await kernel.open(proc, 'kburst.bin', A.O_CREAT | A.O_WRONLY | A.O_TRUNC)) as OpenFile;
+    const real = fs.writeFile.bind(fs);
+    let stores = 0;
+    (fs as any).writeFile = (...a: Parameters<typeof fs.writeFile>) => { stores++; return real(...a); };
+    try {
+      // Timers get to run between writes, as they do for a Worker guest
+      for (let i = 0; i < 40; i++) {
+        expect(await f.write(new Uint8Array(1024).fill(i))).toBe(1024);
+        await new Promise(res => setTimeout(res, 0));
+      }
+      expect(stores).toBeLessThanOrEqual(2);
+      await new Promise(res => setTimeout(res, 60)); // writes paused: stored now
+      const st = await fs.stat('/tmp/kburst.bin');
+      expect(st.size).toBe(40 * 1024);
+      await f.close();
+    } finally {
+      (fs as any).writeFile = real;
+      kernel.kill(proc.pid, A.SIGKILL);
+    }
+  });
+
+  it('syscallSync answers open/stat/close of cached files like the async path', async () => {
+    await fs.mkdir('/tmp/ksync', { recursive: true });
+    await fs.writeFile('/tmp/ksync/a.txt', 'hello');
+    await fs.symlink('/tmp/ksync/a.txt', '/tmp/ksync/link');
+    await fs.readdir('/tmp/ksync'); // loads the key index
+    const proc = kernel.spawn({ path: 'holder', cwd: '/tmp/ksync', run: () => new Promise<number>(() => {}) });
+    const data = new Uint8Array(4096);
+    const put = (s: string) => { const b = bytes(s); data.set(b); return b.length; };
+    const fd = kernel.syscallSync(proc, A.SYS_openat, [A.AT_FDCWD, put('link'), A.O_RDONLY, 0], data)!;
+    expect(fd).toBeGreaterThanOrEqual(0);
+    expect(kernel.syscallSync(proc, A.SYS_read, [fd, 100], data)).toBe(5);
+    expect(dec.decode(data.subarray(0, 5))).toBe('hello');
+    expect(kernel.syscallSync(proc, A.SYS_newfstatat, [A.AT_FDCWD, put('a.txt'), 0], data)).toBe(0);
+    expect(A.decodeStat(data).size).toBe(5);
+    expect(kernel.syscallSync(proc, A.SYS_newfstatat, [A.AT_FDCWD, put('link'), A.AT_SYMLINK_NOFOLLOW], data)).toBe(0);
+    expect(A.decodeStat(data).mode & A.S_IFMT).toBe(A.S_IFLNK);
+    expect(kernel.syscallSync(proc, A.SYS_openat, [A.AT_FDCWD, put('nope'), A.O_RDONLY, 0], data)).toBe(-A.ENOENT);
+    expect(kernel.syscallSync(proc, A.SYS_openat, [A.AT_FDCWD, put('a.txt'), A.O_RDONLY | A.O_DIRECTORY, 0], data)).toBe(-A.ENOTDIR);
+    // O_CREAT and O_TRUNC take the async path
+    expect(kernel.syscallSync(proc, A.SYS_openat, [A.AT_FDCWD, put('b.txt'), A.O_CREAT | A.O_WRONLY, 0o644], data)).toBeUndefined();
+    expect(kernel.syscallSync(proc, A.SYS_close, [fd], data)).toBe(0);
+    expect(kernel.syscallSync(proc, A.SYS_close, [fd], data)).toBe(-A.EBADF);
+    // A file with unwritten data closes through the async path, which stores it
+    const w = (await kernel.open(proc, 'a.txt', A.O_WRONLY | A.O_APPEND)) as OpenFile;
+    const wfd = proc.fds.alloc(w);
+    await w.write(bytes(' world'));
+    expect(kernel.syscallSync(proc, A.SYS_close, [wfd], data)).toBeUndefined();
+    expect(await kernel.syscall(proc, A.SYS_close, [wfd], data)).toBe(0);
+    expect(await fs.readFile('/tmp/ksync/a.txt', 'utf8')).toBe('hello world');
+    kernel.kill(proc.pid, A.SIGKILL);
+  });
+
+  it('readdir keeps its directory index current across create, unlink and rename', async () => {
+    await fs.mkdir('/tmp/kidx/sub', { recursive: true });
+    await fs.writeFile('/tmp/kidx/one', '1');
+    expect(await fs.readdir('/tmp/kidx')).toEqual(['one', 'sub']);
+    await fs.writeFile('/tmp/kidx/two', '2');
+    await fs.unlink('/tmp/kidx/one');
+    await fs.rename('/tmp/kidx/two', '/tmp/kidx/sub/three');
+    expect(await fs.readdir('/tmp/kidx')).toEqual(['sub']);
+    expect(await fs.readdir('/tmp/kidx/sub')).toEqual(['three']);
+    await fs.rmdir('/tmp/kidx/sub').catch(async () => { await fs.unlink('/tmp/kidx/sub/three'); await fs.rmdir('/tmp/kidx/sub'); });
+    expect(await fs.readdir('/tmp/kidx')).toEqual([]);
+  });
+
   it('syscall dispatch: pipe2/dup2/fcntl/getdents in-page', async () => {
     const proc = kernel.spawn({ path: 'sc', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
     const data = new Uint8Array(4096);

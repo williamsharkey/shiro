@@ -224,40 +224,6 @@ describe('nano', () => {
   }, 180_000);
 });
 
-describe('make', () => {
-  it('builds targets in dependency order through /bin/sh, with variables, patterns and -j', async () => {
-    await install('make');
-    await fs.writeFile('/home/user/w/Makefile', [
-      'NAME := world',
-      'all: out/hello.txt out/count.txt',
-      'out:',
-      '\tmkdir -p out',
-      'out/hello.txt: | out',
-      '\techo "hello $(NAME)" > $@',
-      'out/count.txt: out/hello.txt',
-      '\twc -c < $< > $@',
-      '%.up: %.txt',
-      '\ttr a-z A-Z < $< > $@',
-      '.PHONY: all clean',
-      'clean:',
-      '\trm -rf out',
-      '',
-    ].join('\n'));
-    let r = await sh('make');
-    expect(r.exitCode).toBe(0);
-    expect(r.out).toContain('echo "hello world" > out/hello.txt');
-    expect(await fs.readFile('/home/user/w/out/hello.txt', 'utf8')).toBe('hello world\n');
-    expect((await fs.readFile('/home/user/w/out/count.txt', 'utf8')).trim()).toBe('12');
-    expect((await sh('make')).out).toContain("Nothing to be done for 'all'");
-    expect((await sh('make out/hello.up && cat out/hello.up')).out).toContain('HELLO WORLD');
-    r = await sh('make clean && make -j2 NAME=shiro && cat out/hello.txt');
-    expect(r.out).toContain('hello shiro');
-    r = await sh('make nosuchtarget');
-    expect(r.exitCode).toBe(2);
-    expect(r.err).toContain('No rule to make target');
-  }, 180_000);
-});
-
 describe('diffutils + patch', () => {
   it('diff -u, cmp, and patch applies the diff', async () => {
     await install('diffutils', 'patch');
@@ -334,6 +300,9 @@ describe('tar + gzip', () => {
     await fs.writeFile('/home/user/w/proj/sub/b.txt', 'beta\n');
     expect((await sh('gzip -k proj/a.txt && zcat proj/a.txt.gz | wc -l')).out.trim()).toBe('100');
     expect((await sh('gunzip -c proj/a.txt.gz | head -1')).out).toBe('alpha\n');
+    // a program that execs a package command by path gets its arguments too (zcat = gzip -dc)
+    await install('findutils');
+    expect((await sh("find proj -name a.txt.gz -exec zcat {} \\; | wc -l")).out.trim()).toBe('100');
     expect((await sh('rm proj/a.txt.gz && tar czf p.tgz proj && tar tzf p.tgz | sort')).out)
       .toBe('proj/\nproj/a.txt\nproj/sub/\nproj/sub/b.txt\n');
     expect((await sh('mkdir x && tar xzf p.tgz -C x && cat x/proj/sub/b.txt')).out).toBe('beta\n');

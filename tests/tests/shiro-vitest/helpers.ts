@@ -31,6 +31,7 @@ import { bzip2Cmd, bunzip2Cmd } from '@shiro/commands/bzip2';
 import { xzCmd, unxzCmd } from '@shiro/commands/xz';
 import { zstdCmd, unzstdCmd } from '@shiro/commands/zstd';
 import { historyCmd } from '@shiro/commands/history';
+import { jobsCmd, fgCmd, bgCmd, waitCmd } from '@shiro/commands/jobs';
 import { speakCmd } from '@shiro/commands/speak';
 import { listenCmd } from '@shiro/commands/listen';
 import { notifyCmd } from '@shiro/commands/notify';
@@ -65,6 +66,8 @@ export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell 
 
   // Register additional Shiro commands
   commands.register(gitCmd);
+  // Job control (main.ts registers these too)
+  commands.registerAll([jobsCmd, fgCmd, bgCmd, waitCmd]);
   commands.register(globCmd);
   commands.register(jsEvalCmd);
   commands.register(nodeCmd);

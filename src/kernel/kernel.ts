@@ -12,10 +12,11 @@ import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
 import { ProcFs, bootMs } from './procfs';
 import { processTable, type ShiroProcess } from '../process-table';
+import { packageShadows, packageArgsForPath, PKG_BIN_DIR } from '../pkg-manager';
 import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
-  RegularFile, DirFile, openInode, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, flushInode, openInodeInfo, shareInodeNumber, forgetInodeNumber,
+  RegularFile, DirFile, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, flushInode, openInodeInfo, shareInodeNumber, forgetInodeNumber,
 } from './fd';
 import { createPipe } from './pipe';
 import { Process } from './process';
@@ -36,9 +37,16 @@ export type DeviceOpener = (proc: Process, flags: number, path: string) => OpenF
  * arguments as Kernel.syscall; return undefined to pass the call on (to an
  * earlier registration, then the kernel's own handler).
  */
-export type SyscallHandler = (
+export type SyscallHandler = ((
   proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array, kernel: Kernel,
-) => number | undefined | Promise<number | undefined>;
+) => number | undefined | Promise<number | undefined>) & {
+  /**
+   * Optional: true when the handler would pass this call on (return
+   * undefined) without doing anything. Lets kernel.syscallSync answer it;
+   * without it, every call to the handler's numbers takes the async path.
+   */
+  passSync?: (proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array, kernel: Kernel) => boolean;
+};
 
 export interface SpawnOptions {
   /** Program to run: a command name, or a path. */
@@ -215,9 +223,20 @@ export class Kernel {
   async findProgram(path: string, proc: Process): Promise<Runner | null> {
     for (const l of this.loaders) {
       const r = await l(path, proc, this);
-      if (r) return r;
+      if (r) return this.withPackageArgs(path, r);
     }
     return null;
+  }
+
+  /** An installed command's own arguments (`egrep` runs `grep -E`) go in after argv[0]. */
+  private async withPackageArgs(path: string, run: Runner): Promise<Runner> {
+    if (!this.fs || !path.startsWith(PKG_BIN_DIR + '/')) return run;
+    const args = await packageArgsForPath(this.fs, path);
+    if (!args) return run;
+    return (p, k) => {
+      p.argv = [p.argv[0] ?? path, ...args, ...p.argv.slice(1)];
+      return run(p, k);
+    };
   }
 
   private async builtinLoader(path: string, _proc: Process): Promise<Runner | null> {
@@ -227,6 +246,10 @@ export class Kernel {
     const inBin = !path.includes('/') || /^\/(usr\/)?(local\/)?s?bin\//.test(path);
     const cmd = inBin ? shell.commands.get(base) : undefined;
     if (cmd && (base === 'sh' || base === 'bash')) return proc => this.runShellProcess(proc);
+    // An installed package's command replaces the builtin, as at the prompt
+    // (a bin-dir path can name a builtin's PATH shim, or nothing on disk)
+    const pkgBin = `${PKG_BIN_DIR}/${base}`;
+    if (cmd && this.fs && path !== pkgBin && packageShadows(this.fs).has(base)) return this.findProgram(pkgBin, _proc);
     if (cmd) return proc => this.runBuiltin(proc, cmd);
     // Shell builtins that are also programs (/bin/echo, /usr/bin/test, ...)
     if (inBin && SHELL_PROGRAMS.has(base)) return proc => this.runViaShell(proc, base);
@@ -550,6 +573,47 @@ export class Kernel {
     return false;
   }
 
+  /**
+   * open() of a file or directory the FileSystem has in memory, without
+   * creating or truncating: the description, -errno, or undefined when it
+   * needs `open` (devices, O_CREAT/O_TRUNC, anything not cached).
+   */
+  openSync(proc: Process, path: string, flags: number, dirfd = A.AT_FDCWD): OpenFile | number | undefined {
+    const fs = this.fs;
+    if (!fs || flags & (A.O_CREAT | A.O_TRUNC)) return undefined;
+    const p = this.resolvePath(proc, path, dirfd);
+    if (typeof p === 'number') return p;
+    if (this.devices.has(p) || /^\/(?:dev|proc)\//.test(p)) return undefined;
+    const hit = fs.lookupCached(p);
+    if (hit === undefined) return undefined;
+    if (hit === null) return -A.ENOENT;
+    const statusFlags = flags & ~(A.O_CREAT | A.O_EXCL | A.O_TRUNC | A.O_CLOEXEC | A.O_NOCTTY | A.O_DIRECTORY | A.O_NOFOLLOW);
+    if (hit.node.type === 'dir') return canWrite(flags) ? -A.EISDIR : new DirFile(fs, p, statusFlags);
+    if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
+    if (hit.node.type !== 'file') return undefined;
+    return new RegularFile(openInodeSync(fs, hit.path, hit.node), statusFlags);
+  }
+
+  /** statPath from memory, encoded into `data`: 0, -errno, or undefined (use statPath). */
+  private statPathSyncInto(proc: Process, path: string, follow: boolean, dirfd: number, data: Uint8Array): number | undefined {
+    const fs = this.fs;
+    if (!fs) return undefined;
+    const p = this.resolvePath(proc, path, dirfd);
+    if (typeof p === 'number') return p;
+    if (this.devices.has(p) || p === '/proc' || p.startsWith('/proc/') || this.socketPaths?.has(p)) return undefined;
+    const hit = fs.lookupCached(p, follow);
+    if (hit === undefined) return undefined;
+    if (hit === null) return -A.ENOENT;
+    const n = hit.node;
+    const type = n.type === 'dir' ? A.S_IFDIR : n.type === 'symlink' ? A.S_IFLNK : A.S_IFREG;
+    A.encodeStat({
+      dev: 1, ino: inodeNumber(p), mode: type | (n.mode & 0o7777), nlink: n.type === 'dir' ? 2 : 1,
+      uid: 1000, gid: 1000, rdev: 0, size: n.size, blksize: 4096, blocks: Math.ceil(n.size / 512),
+      atimeMs: n.mtime, mtimeMs: n.mtime, ctimeMs: n.ctime,
+    }, data);
+    return 0;
+  }
+
   async statPath(proc: Process, path: string, follow = true, dirfd = A.AT_FDCWD): Promise<A.KStat | number> {
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
@@ -814,6 +878,89 @@ export class Kernel {
    * Never TextDecoder.decode it directly (browsers throw on shared memory);
    * decode copies (`decodeText`).
    */
+  /**
+   * The synchronous subset of `syscall`: the result when the call can finish
+   * right now without waiting or I/O (ids, fstat, pipe/file I/O that needs
+   * no wait), else undefined (use `syscall`). Channels try it first: the
+   * reply then goes out without a trip through the microtask queue.
+   * Registered handlers (registerSyscalls) always take the async path.
+   */
+  syscallSync(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): number | undefined {
+    if (proc.state !== 'running' || proc.exiting) return undefined;
+    proc.syscalls++; // (/proc CPU estimate: these take no time)
+    const hs = this.syscallTable.get(nr);
+    if (hs) for (const h of hs) if (!h.passSync?.(proc, nr, args, data, this)) return undefined;
+    switch (nr) {
+      case A.SYS_close: return proc.fds.closeSync(args[0]);
+      case A.SYS_open:
+      case A.SYS_openat: {
+        const [dirfd, len, flags] = nr === A.SYS_open ? [A.AT_FDCWD, args[0], args[1]] : [args[0], args[1], args[2]];
+        if (len < 0 || len > data.length) return undefined;
+        const f = this.openSync(proc, A.decodeText(data.subarray(0, len)), flags, dirfd);
+        if (f === undefined || typeof f === 'number') return f;
+        const fd = proc.fds.alloc(f, 0, !!(flags & A.O_CLOEXEC));
+        if (fd < 0 && refCount(f) === 0) f.closeSync?.();
+        return fd;
+      }
+      case A.SYS_stat:
+      case A.SYS_lstat: {
+        if (args[0] < 0 || args[0] > data.length) return undefined;
+        return this.statPathSyncInto(proc, A.decodeText(data.subarray(0, args[0])), nr === A.SYS_stat, A.AT_FDCWD, data);
+      }
+      case A.SYS_read: {
+        const f = proc.fds.get(args[0]);
+        return f?.tryRead?.(data.subarray(0, Math.min(args[1] >>> 0, data.length)));
+      }
+      case A.SYS_write: {
+        const f = proc.fds.get(args[0]);
+        return f?.tryWrite?.(data.subarray(0, Math.min(args[1] >>> 0, data.length)));
+      }
+      case A.SYS_fstat:
+      case A.SYS_newfstatat: {
+        if (nr === A.SYS_newfstatat && !(args[1] === 0 && args[2] & A.AT_EMPTY_PATH)) {
+          if (args[1] <= 0 || args[1] > data.length) return undefined;
+          return this.statPathSyncInto(proc, A.decodeText(data.subarray(0, args[1])), !(args[2] & A.AT_SYMLINK_NOFOLLOW), args[0], data);
+        }
+        const st = proc.fds.get(args[0])?.statSync?.();
+        if (!st) return undefined;
+        A.encodeStat(st, data);
+        return 0;
+      }
+      case A.SYS_lseek: {
+        const f = proc.fds.get(args[0]);
+        if (!f) return undefined;
+        if (!f.seek) return -A.ESPIPE;
+        return f.seek((args[2] | 0) * 0x100000000 + (args[1] >>> 0), args[3]);
+      }
+      case A.SYS_fcntl: {
+        const cmd = args[1];
+        if (cmd !== A.F_GETFL && cmd !== A.F_GETFD && cmd !== A.F_SETFD) return undefined;
+        const r = this.fcntl(proc, args[0], cmd, args[2]);
+        return typeof r === 'number' ? r : undefined;
+      }
+      case A.SYS_getpid: return proc.pid;
+      case A.SYS_getppid: return proc.ppid;
+      case A.SYS_getuid: return proc.uid;
+      case A.SYS_getgid: return proc.gid;
+      case A.SYS_getpgrp: return proc.pgid;
+      default: return undefined;
+    }
+  }
+
+  /**
+   * For a read or write that syscallSync couldn't finish: the description
+   * to wait on with onReady before trying syscallSync again (pipes and
+   * other files with tryRead/tryWrite), or undefined to use `syscall`.
+   * Writes over PIPE_BUF can complete partially, so they take `syscall`.
+   */
+  readinessFile(proc: Process, nr: number, args: ArrayLike<number>): OpenFile | undefined {
+    if ((nr !== A.SYS_read && nr !== A.SYS_write) || proc.state !== 'running' || proc.exiting || this.syscallTable.has(nr)) return undefined;
+    const f = proc.fds.get(args[0]);
+    if (!f || f.flags & A.O_NONBLOCK) return undefined;
+    if (nr === A.SYS_read) return f.tryRead ? f : undefined;
+    return f.tryWrite && (args[1] >>> 0) <= A.PIPE_BUF ? f : undefined;
+  }
+
   async syscall(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
     // Time inside syscalls is time the process isn't computing (/proc CPU estimate)
     const t0 = Date.now();
@@ -1515,10 +1662,16 @@ export class Kernel {
       if (off + reclen > out.length) break;
       const full = name === '.' ? f.path! : name === '..' ? normalize(f.path! + '/..') : normalize(f.path! + '/' + name);
       let type = A.DT_UNKNOWN;
-      const st = await this.statPath(proc, full, false);
-      if (typeof st !== 'number') {
-        const t = st.mode & A.S_IFMT;
-        type = t === A.S_IFDIR ? A.DT_DIR : t === A.S_IFLNK ? A.DT_LNK : t === A.S_IFREG ? A.DT_REG : t === A.S_IFCHR ? A.DT_CHR : A.DT_UNKNOWN;
+      // The entry's node is usually in memory (the directory was just listed): no await per entry
+      const hit = this.devices.has(full) ? undefined : this.fs?.lookupCached(full, false);
+      if (hit) {
+        type = hit.node.type === 'dir' ? A.DT_DIR : hit.node.type === 'symlink' ? A.DT_LNK : A.DT_REG;
+      } else if (hit === undefined) {
+        const st = await this.statPath(proc, full, false);
+        if (typeof st !== 'number') {
+          const t = st.mode & A.S_IFMT;
+          type = t === A.S_IFDIR ? A.DT_DIR : t === A.S_IFLNK ? A.DT_LNK : t === A.S_IFREG ? A.DT_REG : t === A.S_IFCHR ? A.DT_CHR : A.DT_UNKNOWN;
+        }
       }
       dv.setUint32(off, inodeNumber(full), true);
       dv.setUint32(off + 4, 0, true);
@@ -1564,7 +1717,11 @@ export class Kernel {
     return child;
   }
 
-  /** Start the program of a SYS_shiro_vfork child (an exec, or a fork's copy of its parent). */
+  /**
+   * Starts `run` in a child made by vfork() that has nothing running yet:
+   * a real fork, whose engine copied the parent's memory into the child
+   * (Blink patch 0014).
+   */
   startEmbryo(proc: Process, run: Runner): void {
     if (!proc.data.embryo || proc.exiting) return;
     delete proc.data.embryo;
@@ -1602,8 +1759,11 @@ export class Kernel {
     const isElf = head.length === 4 && head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46;
     const probe = new Process({ pid: -1, ppid: proc.pid, path, argv, env, cwd: proc.cwd });
     const embryo = !!proc.data.embryo;
-    const runner = embryo || !(isElf && req.inproc) ? await this.findProgram(path, probe) : null;
-    if ((embryo || !(isElf && req.inproc)) && !runner) return -A.ENOEXEC;
+    // A package command with its own arguments (zcat = gzip -dc) can't be
+    // reloaded in place with the caller's argv: start it like any program
+    const inproc = isElf && !!req.inproc && !(this.fs && (await packageArgsForPath(this.fs, path)));
+    const runner = embryo || !inproc ? await this.findProgram(path, probe) : null;
+    if ((embryo || !inproc) && !runner) return -A.ENOEXEC;
     // The point of no return: exec bookkeeping, as Linux does it
     await proc.fds.closeOnExec();
     proc.path = path;
@@ -1619,7 +1779,7 @@ export class Kernel {
       this.startEmbryo(proc, runner!);
       return 0;
     }
-    if (isElf && req.inproc) {
+    if (inproc) {
       const b = enc.encode(path);
       if (b.length > data.length) return -A.ENAMETOOLONG;
       data.set(b);
@@ -1627,7 +1787,10 @@ export class Kernel {
     }
     proc.data.execRunner = runner;
     proc.stopRunner();
-    return 0;
+    // The caller's image is gone: never reply. (A reply raced the engine's
+    // termination, and Blink then tried to load "" and returned ENOEXEC, so
+    // perl's exec of a #! script fell back to /bin/sh and failed the same way.)
+    return new Promise<number>(() => {});
   }
 
   /**

@@ -61,6 +61,19 @@ describe('Commands', () => {
       const content = await fs.readFile('/home/user/dst.txt', 'utf8');
       expect(content).toBe('copy me');
     });
+
+    it('copies binary files byte for byte and keeps the mode', async () => {
+      const bytes = new Uint8Array(70000);
+      for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 31 + 7) & 255;
+      await fs.writeFile('/home/user/prog', bytes, { mode: 0o755 });
+      await run(shell, 'cp prog prog2 && mkdir -p d && cp -r prog d');
+      for (const p of ['/home/user/prog2', '/home/user/d/prog']) {
+        const copy = (await fs.readFile(p)) as Uint8Array;
+        expect(copy.length).toBe(bytes.length);
+        expect(Buffer.from(copy).equals(Buffer.from(bytes))).toBe(true);
+        expect((await fs.stat(p)).mode & 0o777).toBe(0o755);
+      }
+    });
   });
 
   describe('mv', () => {

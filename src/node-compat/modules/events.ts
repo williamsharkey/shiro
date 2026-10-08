@@ -1,27 +1,82 @@
 export function createEventsModule(): any {
-  class EventEmitter {
-    _events: Record<string, Function[]> = {};
-    _maxListeners: number = 10;
-    on(event: string, fn: Function) { (this._events[event] ??= []).push(fn); return this; }
-    addListener(event: string, fn: Function) { return this.on(event, fn); }
-    off(event: string, fn: Function) { this._events[event] = (this._events[event] || []).filter(f => f !== fn); return this; }
-    removeListener(event: string, fn: Function) { return this.off(event, fn); }
-    emit(event: string, ...args: any[]) { (this._events[event] || []).forEach(fn => fn(...args)); return true; }
-    once(event: string, fn: Function) {
-      const wrapper = (...args: any[]) => { this.off(event, wrapper); fn(...args); };
-      return this.on(event, wrapper);
+  // A function constructor, as in Node: pre-class code inherits with
+  // `EventEmitter.call(this)` + util.inherits, and subclasses that never call
+  // it (mocha's Suite) still work because the listener table is made lazily.
+  type Listener = Function & { listener?: Function };
+  const table = (self: any): Record<string, Listener[]> => {
+    if (!self._events || !Object.prototype.hasOwnProperty.call(self, '_events')) {
+      Object.defineProperty(self, '_events', { value: Object.create(null), writable: true, configurable: true });
     }
-    prependListener(event: string, fn: Function) { (this._events[event] ??= []).unshift(fn); return this; }
-    removeAllListeners(event?: string) { if (event) delete this._events[event]; else this._events = {}; return this; }
-    listeners(event: string) { return [...(this._events[event] || [])]; }
-    rawListeners(event: string) { return [...(this._events[event] || [])]; }
-    listenerCount(event: string) { return (this._events[event] || []).length; }
-    eventNames() { return Object.keys(this._events); }
-    setMaxListeners(n: number) { this._maxListeners = n; return this; }
-    getMaxListeners() { return this._maxListeners; }
+    return self._events;
+  };
+  function EventEmitter(this: any) {
+    if (!(this instanceof EventEmitter)) return;
+    table(this);
   }
+  const P: any = EventEmitter.prototype;
+  P.on = P.addListener = function (event: string | symbol, fn: Function) {
+    const t = table(this);
+    if (t.newListener) this.emit('newListener', event, (fn as Listener).listener ?? fn);
+    ((t as any)[event] ??= []).push(fn);
+    return this;
+  };
+  P.prependListener = function (event: string | symbol, fn: Function) {
+    const t = table(this);
+    if (t.newListener) this.emit('newListener', event, (fn as Listener).listener ?? fn);
+    ((t as any)[event] ??= []).unshift(fn);
+    return this;
+  };
+  P.off = P.removeListener = function (event: string | symbol, fn: Function) {
+    const t: any = table(this);
+    const list: Listener[] | undefined = t[event];
+    if (!list) return this;
+    const i = list.findIndex(f => f === fn || f.listener === fn);
+    if (i < 0) return this;
+    list.splice(i, 1);
+    if (!list.length) delete t[event];
+    if (t.removeListener) this.emit('removeListener', event, fn);
+    return this;
+  };
+  P.once = function (event: string | symbol, fn: Function) {
+    const self = this;
+    const wrapper: Listener = function (this: any, ...args: any[]) { self.off(event, wrapper); return fn.apply(this, args); };
+    wrapper.listener = fn;
+    return this.on(event, wrapper);
+  };
+  P.prependOnceListener = function (event: string | symbol, fn: Function) {
+    const self = this;
+    const wrapper: Listener = function (this: any, ...args: any[]) { self.off(event, wrapper); return fn.apply(this, args); };
+    wrapper.listener = fn;
+    return this.prependListener(event, wrapper);
+  };
+  P.emit = function (event: string | symbol, ...args: any[]) {
+    const list: Listener[] | undefined = (table(this) as any)[event];
+    if (!list || !list.length) {
+      if (event === 'error') {
+        const err = args[0];
+        throw err instanceof Error ? err : new Error(`Unhandled error. (${String(err)})`);
+      }
+      return false;
+    }
+    for (const fn of [...list]) fn.apply(this, args);
+    return true;
+  };
+  P.removeAllListeners = function (event?: string | symbol) {
+    if (event === undefined) this._events = Object.create(null);
+    else delete (table(this) as any)[event];
+    return this;
+  };
+  P.listeners = function (event: string | symbol) {
+    return ((table(this) as any)[event] || []).map((f: Listener) => f.listener ?? f);
+  };
+  P.rawListeners = function (event: string | symbol) { return [...((table(this) as any)[event] || [])]; };
+  P.listenerCount = function (event: string | symbol) { return ((table(this) as any)[event] || []).length; };
+  P.eventNames = function () { return Reflect.ownKeys(table(this)); };
+  P.setMaxListeners = function (n: number) { this._maxListeners = n; return this; };
+  P.getMaxListeners = function () { return this._maxListeners ?? 10; };
   // The events module default export IS EventEmitter (allows `class Foo extends require('events')`)
   const mod: any = EventEmitter;
+  mod.prototype = P;
   mod.EventEmitter = EventEmitter;
   mod.default = EventEmitter;
   // Static helpers used by some libraries

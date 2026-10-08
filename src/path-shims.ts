@@ -41,3 +41,6 @@ export async function installPathShims(fs: FileSystem, commands: { get(name: str
   if (!await fs.exists('/bin/bash')) await fs.writeFile('/bin/bash', '#!/bin/bash\n', { mode: 0o755 });
   if (!await fs.exists('/usr/bin/env')) await fs.writeFile('/usr/bin/env', '#!/bin/sh\n', { mode: 0o755 });
 }
+
+/** The name main.ts and other branches use. */
+export const createPathShims = (fs: FileSystem): Promise<void> => installPathShims(fs);

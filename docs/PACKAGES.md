@@ -73,7 +73,11 @@ list `pkg update` fetches).
 }
 ```
 
-A file can come out of a Wasmer WebC container instead of being the download
+A file can come out of a tarball (gzipped or not, e.g. an npm package):
+`"tar": { "member": "package/gen/llvm.core.wasm" }` takes one file, and
+`"unpack": true` extracts the (member's) tar archive into the directory
+`path` (optionally only entries under `"dir"`). The tarball is downloaded
+and checked once per install. A file can also come out of a Wasmer WebC container instead of being the download
 itself: `"webc": { "atom": "figlet" }` takes one atom, `"webc": { "volume":
 "atom", "dir": "/fonts" }` copies a volume subtree. Each container is
 downloaded once per install and checked against its sha256 (Wasmer's CDN is
@@ -117,13 +121,17 @@ works everywhere and the interactive mode needs a page that can block.
 | coreutils (uutils, 78 applets) | 0.12.0 | built here, `coreutils.sh` | preview1 | ok |
 | lua, luac | 5.4.7 | built here, `lua.sh` | preview1 | ok; the REPL reads the tty as a kernel process (checked on the pty) |
 | python3 (CPython) | 3.13.7 | built here, `python3.sh` | preview1 | ok; `pip` (Shiro) installs pure-Python wheels, `python3 -m venv` works; no subprocess/sockets |
+| make (GNU) | 4.4.1 | built here, `make.sh` | preview1 + process shim | ok; no jobserver |
+| llvm (clang, wasm-ld, llvm-ar, ...) | 21.1.4 | npm `@yowasp/clang` tarball + driver built here, `llvm.sh` | preview1 + process shim | ok; targets wasm32-wasip1 |
+| go (go, gofmt + tools) | 1.24.7 | built here, `go.sh` + patch | preview1 + WASIX processes | ok; builds wasip1 programs; no module downloads |
+| perl | 5.40.0 | built here (static x86-64), `perl.sh` | x86_64-linux (Blink) | ok; fork is vfork-like (no IPC::Open3/prove) |
 | sqlite3 | 3.50.4 | built here, `sqlite.sh` | preview1 | ok; the interactive shell reads the tty as a kernel process (checked on the pty) |
 | jq | 1.8.1 | built here, `jq.sh` | preview1 | ok |
 | cowsay, cowthink | 0.3.0 | Wasmer | preview1 | ok |
 | figlet, chkfont (+57 fonts) | 0.0.1 (FIGlet 2.2.5) | Wasmer | preview1 | ok |
 | uuid | 0.3.0 | Wasmer | preview1 | ok |
 | wabt (wat2wasm, wasm2wat, ...) | 1.0.37 | Wasmer | preview1 | ok |
-| ruby | 0.1.2 (Ruby 3.2.0dev) | Wasmer | preview1 | partial: irb needs blocking stdin |
+| ruby (ruby, irb, gem, rake, bundle) | 3.4.1 | ruby.wasm release, repacked, `ruby.sh` | preview1 + mounts | ok; no sockets or threads (stubs); irb needs blocking stdin |
 | fortune, lolcat, brotli, qr2text, viu | | Wasmer | wasi_unstable | ok |
 | openssl-wasm (openssl) | 0.2.0 (OpenSSL 1.1) | Wasmer | wasi_unstable | ok (no s_client: sockets). The `openssl` package is now OpenSSL 3.5 as an x86-64 build ([COMPAT.md](COMPAT.md)) |
 | quickjs (qjs) | 0.0.3 | Wasmer | wasi_unstable | partial: REPL |

@@ -70,6 +70,7 @@ import { cvCmd } from './commands/cv';
 import { spiritCmd } from './commands/spirit';
 // wasi and pkg are lazy-loaded (pulls in ~960-line wasi-runtime.ts)
 import { processTable } from './process-table';
+import { createPathShims } from './path-shims';
 import { getKernel } from './kernel/kernel';
 import { installNet } from './kernel/net';
 import { attachKernelTty } from './kernel/pty';
@@ -426,8 +427,10 @@ async function main() {
     }
   });
 
-  // PATH shims for builtins (src/path-shims.ts): programs find them via `which`, `execFile`, PATH searches
-  void import('./path-shims').then(m => m.installPathShims(fs)).catch(() => {});
+  // Create PATH shims for builtins so programs can discover them via `which`, `execFile`, etc.
+  // This is how an OS advertises its commands — the PATH mechanism, not the builtin registry.
+  // PATH shims for builtins, /bin/sh, /usr/bin/env (src/path-shims.ts)
+  void createPathShims(fs).catch(() => {});
 
   // Create shell
   const shell = new Shell(fs, commands);

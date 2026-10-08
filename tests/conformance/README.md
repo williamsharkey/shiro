@@ -54,3 +54,24 @@ normal `npm run test:shiro` keeps them fixed.
 - The "before" column overstates the old-style cases: the old shell ignored
   `sh -e` and returned the last command's status, so failing checks in the
   middle of a case went unnoticed.
+
+## Syscalls: LTP under Blink (`syscalls-ltp.conf.ts`)
+
+- Not vendored (GPL-2.0): `scripts/conformance/build-ltp.sh` clones the
+  [Linux Test Project](https://github.com/linux-test-project/ltp) at a pinned
+  commit and builds the syscall tests listed in `ltp/dirs.txt` as static
+  x86-64 binaries into `tests/conformance/.cache/ltp-bin` (needs gcc, make,
+  autoconf). Without them the suite is skipped.
+- Each test runs through Shiro's shell (`/ltp/bin/NAME` in its own temp
+  directory), so it executes under the Blink engine as a kernel process.
+  It passes when it prints its `Summary:` with passed > 0 and no failed or
+  broken results (`lib/ltp.mjs`); a test gets 60 s, and is stopped 1.5 s
+  after its summary if it doesn't exit. Leftover processes are killed.
+- Only tests that pass natively on the build host are scored
+  (`ltp/native-baseline.json`, from `scripts/conformance/ltp-native-baseline.mjs`).
+- A full run takes hours. Each finished test is journaled to
+  `results/detail/syscalls-blink.jsonl` and its output saved under
+  `results/detail/ltp/`; `LTP_RESUME=1` continues a run that died,
+  `LTP_RESUME=1 LTP_RERUN_FAILED=1` runs only the previous failures again,
+  `LTP_ONLY=read,write01` narrows a run. `ltp/hangs.json` lists tests that
+  crash the test worker; they count as failures.

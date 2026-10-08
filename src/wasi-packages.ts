@@ -41,6 +41,9 @@ function mainFile(entry: PkgEntry, cmd?: string) {
   return entry.files.find(f => f.path === bin.file)!;
 }
 
+/** Packages this single-binary API can fetch: the main command is one file, not part of a tarball. */
+const singleFile = (entry: PkgEntry) => { const f = entry.files.find(x => x.path === ((entry.bin[entry.name] || Object.values(entry.bin)[0])?.file)); return !!f && !f.tar; };
+
 function toWasmPackage(entry: PkgEntry): WasmPackage {
   const f = mainFile(entry);
   return {
@@ -238,17 +241,17 @@ function wasmIndex() {
 /** Get package metadata by name or command name */
 export function findPackage(name: string): WasmPackage | undefined {
   const entry = findEntry(wasmIndex(), name);
-  return entry && toWasmPackage(entry);
+  return entry && singleFile(entry) ? toWasmPackage(entry) : undefined;
 }
 
 /** Search packages by query string (matches name, description, section, commands) */
 export function searchPackages(query: string): WasmPackage[] {
-  return searchIndex(wasmIndex(), query).map(toWasmPackage);
+  return searchIndex(wasmIndex(), query).filter(singleFile).map(toWasmPackage);
 }
 
 /** List all available packages */
 export function listAvailable(): WasmPackage[] {
-  return wasmIndex().packages.map(toWasmPackage);
+  return wasmIndex().packages.filter(singleFile).map(toWasmPackage);
 }
 
 /** Get cached WASM binary. Returns null if not cached. */
