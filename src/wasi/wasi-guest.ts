@@ -31,6 +31,7 @@ import {
   SYS_wasix_exec, SYS_wasix_resolve, SYS_wasix_signal, WASIX_SIG_CATCH, WASIX_SIG_DEFAULT, WASIX_SIG_IGNORED,
 } from './abi';
 import { Asyncify, hashCapture, type StackCapture } from './asyncify';
+import type { DynCalls } from './dyncall';
 
 const RIGHT_FD_READ = 1n << 1n, RIGHT_FD_SEEK = 1n << 2n, RIGHT_FD_TELL = 1n << 5n,
   RIGHT_FD_WRITE = 1n << 6n, RIGHT_FD_READDIR = 1n << 14n;
@@ -117,6 +118,8 @@ export class WasiGuest {
   private envBytes: Uint8Array[];
   /** The instance's exports (signal callbacks); set by the driver after instantiation. */
   exports: Record<string, any> | null = null;
+  /** WASIX call_dynamic / reflect_signature / closures, when the driver set them up (./dyncall.ts). */
+  dyncalls: DynCalls | null = null;
   /** Stack capture for an asyncified module's main thread (setjmp/longjmp, fork); null otherwise. */
   asyncify: Asyncify | null = null;
   /** setjmp snapshots by key (the key is written into the jmp_buf). */
@@ -417,11 +420,13 @@ export class WasiGuest {
           const r = yield* this.sys(A.SYS_getcwd, [4096], undefined, 4096);
           if (r.ret < 0) return wasiErrno(r.ret);
           const cwd = r.data.slice(0, r.ret - 1); // without the NUL
+          // As Wasmer: the length without the NUL, ERANGE when the NUL doesn't fit too
           const v = this.view();
           const cap = v.getUint32(lenPtr, true);
           v.setUint32(lenPtr, cwd.length, true);
-          if (cwd.length > cap) return WASI_EOVERFLOW;
+          if (cwd.length >= cap) return 68; // ERANGE
           this.u8().set(cwd, ptr);
+          this.u8()[ptr + cwd.length] = 0;
           return 0;
         }),
         chdir: g(function* (this: WasiGuest, p: number, l: number) {
@@ -490,7 +495,9 @@ export class WasiGuest {
         }),
         thread_signal: g(function* (this: WasiGuest, tid: number, sig: number) {
           const pid = yield* this.call(A.SYS_getpid);
-          return wasiErrno(yield* this.call(A.SYS_tgkill, pid, tid || pid, sig));
+          // WASIX libc gives the main thread the placeholder tid 0x3fffffff until thread_id is asked
+          const self = !tid || tid === 0x3fffffff || tid === (this.opts.tid ?? pid);
+          return wasiErrno(yield* this.call(A.SYS_tgkill, pid, self ? (this.opts.tid ?? pid) : tid, sig));
         }),
         // Sockets (kernel socket syscalls, src/kernel/net.ts)
         sock_open: g(function* (this: WasiGuest, af: number, type: number, proto: number, fdPtr: number) {
@@ -561,6 +568,15 @@ export class WasiGuest {
           return 0;
         }),
         resolve: g(this.resolveHost),
+        // Calls through function pointers typed at run time (libffi, CPython's WASIX trampolines)
+        reflect_signature: (fid: number, ap: number, al: number, rp: number, rl: number, ret: number) =>
+          this.dyncalls ? this.dyncalls.reflect(fid, ap, al, rp, rl, ret) : WASI_ENOSYS,
+        call_dynamic: (fid: number, vp: number, vl: number, rp: number, rl: number, strict: number) =>
+          this.dyncalls ? this.dyncalls.call(fid, vp, vl, rp, rl, !!strict) : WASI_ENOSYS,
+        closure_allocate: (ret: number) => this.dyncalls ? this.dyncalls.closureAllocate(ret) : WASI_ENOSYS,
+        closure_prepare: (b: number, c: number, ap: number, al: number, rp: number, rl: number, ud: number) =>
+          this.dyncalls ? this.dyncalls.closurePrepare(b, c, ap, al, rp, rl, ud) : WASI_ENOSYS,
+        closure_free: (c: number) => this.dyncalls ? this.dyncalls.closureFree(c) : WASI_ENOSYS,
         proc_signal: g(function* (this: WasiGuest, pid: number, sig: number) {
           return wasiErrno(yield* this.call(A.SYS_kill, pid | 0, sig));
         }),

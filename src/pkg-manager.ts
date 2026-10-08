@@ -215,7 +215,8 @@ const MODE_FEATURES: Record<string, KernelFeature[]> = {
   // 'wasix' is the guest's subset (startup, spawn, pipes, futexes, path_open2);
   // packages needing more name it (wasix-stack, sockets, ...)
   // (and the WASIX socket calls, over the kernel sockets of src/kernel/net.ts)
-  sab: ['blocking-stdin', 'tty', 'processes', 'threads', 'sync-fs', 'wasix', 'wasix-stack', 'sockets'],
+  // and position-independent (dylink.0) main modules, with WASIX dynamic calls
+  sab: ['blocking-stdin', 'tty', 'processes', 'threads', 'sync-fs', 'wasix', 'wasix-stack', 'sockets', 'dynamic-linking'],
   // Main thread, imports suspend on the kernel (no shared memory, so no threads)
   jspi: ['blocking-stdin', 'tty', 'processes', 'sync-fs', 'wasix', 'sockets'],
   none: [],

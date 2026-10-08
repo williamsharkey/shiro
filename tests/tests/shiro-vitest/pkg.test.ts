@@ -531,7 +531,8 @@ describe('real packages as kernel processes', () => {
   it('WASIX packages needing more than the guest has stay gated, naming what is missing', async () => {
     const r = await sh(shell, 'pkg install python');
     expect(r.exitCode).toBe(100);
-    expect(r.err).toContain('dynamic-linking');
+    expect(r.err).toContain('mounts');
+    expect(r.err).not.toContain('dynamic-linking');
     expect(r.err).not.toMatch(/threads|processes/); // the kernel provides those now
   });
 

@@ -25,6 +25,8 @@ import {
 import type { WasiGuestMessage, WasiStartMessage, WasixForkState } from './guest-worker';
 import { ProcExit, WasiGuest, buildImports, type Preopen } from './wasi-guest';
 import { findMemoryImport } from './wasm-imports';
+import { dylinkLayout, readDylink } from './dylink';
+import { readFuncSigs, type FuncSigs } from './dyncall';
 
 // ── Workers and mode ─────────────────────────────────────────────────
 
@@ -261,6 +263,18 @@ async function openPreopens(kernel: Kernel, proc: Process, extra: string[] = [])
   return out;
 }
 
+const sigCache = new WeakMap<WebAssembly.Module, FuncSigs | undefined>();
+const DYNCALL_IMPORTS = new Set(['call_dynamic', 'reflect_signature', 'closure_prepare']);
+
+/** Function signatures, for modules that make WASIX dynamic calls (once per module). */
+function moduleFuncSigs(module: WebAssembly.Module, image: Uint8Array): FuncSigs | undefined {
+  if (sigCache.has(module)) return sigCache.get(module);
+  const uses = WebAssembly.Module.imports(module).some(i => i.module === 'wasix_32v1' && DYNCALL_IMPORTS.has(i.name));
+  const sigs = uses ? readFuncSigs(image) ?? undefined : undefined;
+  sigCache.set(module, sigs);
+  return sigs;
+}
+
 /** A forked child's start: a copy of the parent's memory and the guest state to resume from. */
 interface ForkResume { memory: WebAssembly.Memory; state: WasixForkState }
 
@@ -270,11 +284,16 @@ function runWorkers(
 ): Promise<number | void> {
   return getWorkerFactory().then(factory => new Promise<number | void>((resolve) => {
     const memImport = image ? findMemoryImport(image) : null;
+    // Position-independent modules get their data, stack and table placed here (./dylink.ts)
+    const dyInfo = readDylink(module);
+    const dylink = dyInfo ? dylinkLayout(dyInfo) : undefined;
+    const initial = Math.max(memImport?.initial ?? 0, dylink?.minPages ?? 0);
     const memory = resume?.memory ?? (memImport?.shared
-      ? new WebAssembly.Memory({ initial: memImport.initial, maximum: memImport.maximum ?? memImport.initial, shared: true } as WebAssembly.MemoryDescriptor)
+      ? new WebAssembly.Memory({ initial, maximum: Math.max(initial, memImport.maximum ?? memImport.initial), shared: true } as WebAssembly.MemoryDescriptor)
       : undefined);
+    const funcSigs = image ? moduleFuncSigs(module, image) : undefined;
     const wasi = (thread?: { startArg: number }) => ({
-      module, preopens, memory, thread,
+      module, preopens, memory, thread, dylink, funcSigs,
       memoryImport: memImport ? { module: memImport.module, name: memImport.name } : undefined,
     });
     const onGuestMessage = (m: unknown, isThread: boolean) => {

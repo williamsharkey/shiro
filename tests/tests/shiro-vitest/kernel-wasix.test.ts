@@ -37,6 +37,7 @@ const PACKAGES: Record<string, { sha: string; atom: string }> = {
   dash: { sha: 'c81513a53f11a2a23ea305fa008049d15fa1b5f52b696cedbf63554077ea5998', atom: 'dash' },
   bash: { sha: '059606d132e2e6bc1afe3b432ee64dcb1b1b059815c8bb213cf3b24798ef21e1', atom: 'bash' },
   curl: { sha: 'ae64ae867b8272abac2d660c374220b3fae13b5e4299d25aae05e2b89607ac02', atom: 'curl' },
+  python: { sha: 'a9fa8202f1bf6a4eca8d31ee5f2b1970c8f45af5c5520cc954d28a133333d8e7', atom: 'python' },
   php: { sha: 'da8d3fcfcf02d2401787532c4af3fdaf5b680b05144a9591ca70b97131ee2f32', atom: 'php' },
 };
 
@@ -253,6 +254,30 @@ describe('WASIX sockets: curl through the TCP relay', () => {
     // Without -k the self-signed certificate is refused
     expect((await curl(env.kernel, ['-sS', `https://web.test:${P.httpsPort}/`])).code).toBe(60);
   }, 60_000);
+});
+
+describe('WASIX python: a position-independent (dylink.0) module (62 MB, network once)', () => {
+  it('runs -c and imports stdlib modules (PYTHONHOME on a copy of its library volume)', async (t) => {
+    const env = await setup(['python']);
+    if (!env) return t.skip();
+    const sha = PACKAGES.python.sha;
+    const vol = [...parseWebc(new Uint8Array(readFileSync(path.join(CACHE, `${sha}.webc`)))).volumes.entries()]
+      .find(([n]) => n.includes('python3-static'))![1];
+    for (const f of vol.files) {
+      await env.fs.mkdir(path.posix.dirname(`/opt/py${f.path}`), { recursive: true });
+      await env.fs.writeFile(`/opt/py${f.path}`, f.data);
+    }
+    const out = collector();
+    const err = collector();
+    const proc = env.kernel.spawn({
+      path: 'python', argv: ['python', '-c', 'import json, os, sys; print(1); print(json.dumps({"v": sys.version_info[:2]}), os.getcwd())'],
+      env: { PATH: '/usr/bin', HOME: '/home/user', PYTHONHOME: '/opt/py' }, cwd: '/tmp', fds: { 0: empty(), 1: out.sink, 2: err.sink },
+    });
+    const status = await proc.wait();
+    expect(err.text).toBe('');
+    expect(out.text).toBe('1\n{"v": [3, 13]} /tmp\n');
+    expect(WEXITSTATUS(status)).toBe(0);
+  }, 180_000);
 });
 
 describe('WASIX php (86 MB, network once)', () => {
