@@ -722,13 +722,9 @@
    "failures": []
   },
   "builtin-eval-source": {
-   "pass": 11,
+   "pass": 19,
    "total": 23,
    "failures": [
-    {
-     "i": 1,
-     "name": "eval accepts/ignores --"
-    },
     {
      "i": 2,
      "name": "eval usage"
@@ -738,40 +734,12 @@
      "name": "eval YSH block with 'break continue return error'"
     },
     {
-     "i": 8,
-     "name": "source accepts/ignores --"
-    },
-    {
-     "i": 10,
-     "name": "Source with no arguments"
-    },
-    {
-     "i": 11,
-     "name": "Source with arguments"
-    },
-    {
-     "i": 12,
-     "name": "Source from a function, mutating argv and defining a local var"
-    },
-    {
      "i": 13,
      "name": "Source with syntax error"
     },
     {
      "i": 14,
      "name": "Eval with syntax error"
-    },
-    {
-     "i": 18,
-     "name": "source looks in PATH for files"
-    },
-    {
-     "i": 19,
-     "name": "source finds files in PATH before current dir"
-    },
-    {
-     "i": 22,
-     "name": "sourcing along PATH should ignore directories"
     }
    ]
   },
@@ -870,33 +838,9 @@
    ]
   },
   "builtin-cd": {
-   "pass": 14,
+   "pass": 25,
    "total": 28,
    "failures": [
-    {
-     "i": 1,
-     "name": "cd BAD/.."
-    },
-    {
-     "i": 2,
-     "name": "cd with 2 or more args - with strict_arg_parse"
-    },
-    {
-     "i": 5,
-     "name": "$OLDPWD"
-    },
-    {
-     "i": 8,
-     "name": "pwd with symlink and -P"
-    },
-    {
-     "i": 9,
-     "name": "setting $PWD doesn't affect the value of 'pwd' builtin"
-    },
-    {
-     "i": 12,
-     "name": "lie about PWD; pwd before any cd"
-    },
     {
      "i": 14,
      "name": "pwd in symlinked dir on shell initialization"
@@ -904,26 +848,6 @@
     {
      "i": 15,
      "name": "Test the current directory after 'cd ..' involving symlinks"
-    },
-    {
-     "i": 18,
-     "name": "cd away from dir that was deleted"
-    },
-    {
-     "i": 19,
-     "name": "cd permits double bare dash"
-    },
-    {
-     "i": 20,
-     "name": "cd to symlink with -L and -P"
-    },
-    {
-     "i": 21,
-     "name": "cd to relative path with -L and -P"
-    },
-    {
-     "i": 23,
-     "name": "CDPATH is respected"
     },
     {
      "i": 26,
@@ -1695,7 +1619,7 @@
    ]
   },
   "sh-options": {
-   "pass": 15,
+   "pass": 25,
    "total": 32,
    "failures": [
     {
@@ -1723,48 +1647,8 @@
      "name": "-n for no execution (useful with --ast-output)"
     },
     {
-     "i": 14,
-     "name": "shopt -p -o prints 'set' options"
-    },
-    {
-     "i": 15,
-     "name": "shopt -o prints 'set' options"
-    },
-    {
-     "i": 16,
-     "name": "shopt -p prints 'shopt' options"
-    },
-    {
      "i": 20,
      "name": "noclobber on <>"
-    },
-    {
-     "i": 30,
-     "name": "shopt allows for backward compatibility like bash"
-    },
-    {
-     "i": 31,
-     "name": "shopt -p validates option names"
-    },
-    {
-     "i": 32,
-     "name": "shopt -p -o validates option names"
-    },
-    {
-     "i": 33,
-     "name": "stubbed out bash options"
-    },
-    {
-     "i": 35,
-     "name": "Unimplemented options - print, query, set, unset"
-    },
-    {
-     "i": 36,
-     "name": "Unimplemented options - OSH shopt -s ignore_shopt_not_impl"
-    },
-    {
-     "i": 38,
-     "name": "no-ops not shown by shopt -p"
     }
    ]
   },

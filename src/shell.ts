@@ -82,6 +82,22 @@ export interface BackgroundJob {
   termios?: import('./kernel/pty').Termios;
 }
 
+/** bash's shopt options, and those on by default in a non-interactive bash */
+const SHOPT_OPTIONS = ['autocd', 'assoc_expand_once', 'cdable_vars', 'cdspell', 'checkhash', 'checkjobs', 'checkwinsize',
+  'cmdhist', 'compat31', 'compat32', 'compat40', 'compat41', 'compat42', 'compat43', 'compat44', 'complete_fullquote',
+  'direxpand', 'dirspell', 'dotglob', 'execfail', 'expand_aliases', 'extdebug', 'extglob', 'extquote', 'failglob',
+  'force_fignore', 'globasciiranges', 'globskipdots', 'globstar', 'gnu_errfmt', 'histappend', 'histreedit', 'histverify',
+  'hostcomplete', 'huponexit', 'inherit_errexit', 'interactive_comments', 'lastpipe', 'lithist', 'localvar_inherit',
+  'localvar_unset', 'login_shell', 'mailwarn', 'no_empty_cmd_completion', 'nocaseglob', 'nocasematch',
+  'noexpand_translation', 'nullglob', 'patsub_replacement', 'progcomp', 'progcomp_alias', 'promptvars',
+  'restricted_shell', 'shift_verbose', 'sourcepath', 'varredir_close', 'xpg_echo'];
+const SHOPT_DEFAULTS = ['checkwinsize', 'cmdhist', 'complete_fullquote', 'extquote', 'force_fignore', 'globasciiranges',
+  'globskipdots', 'hostcomplete', 'interactive_comments', 'patsub_replacement', 'progcomp', 'promptvars', 'sourcepath'];
+/** set -o option names */
+const SET_O_OPTIONS = ['allexport', 'braceexpand', 'emacs', 'errexit', 'errtrace', 'functrace', 'hashall', 'histexpand',
+  'history', 'ignoreeof', 'interactive-comments', 'keyword', 'monitor', 'noclobber', 'noexec', 'noglob', 'nolog', 'notify',
+  'nounset', 'onecmd', 'physical', 'pipefail', 'posix', 'privileged', 'verbose', 'vi', 'xtrace'];
+
 /** Signal names by number, as trap and kill use them (0 is EXIT) */
 const SIGNALS = ['EXIT', 'HUP', 'INT', 'QUIT', 'ILL', 'TRAP', 'ABRT', 'BUS', 'FPE', 'KILL', 'USR1', 'SEGV', 'USR2',
   'PIPE', 'ALRM', 'TERM', 'STKFLT', 'CHLD', 'CONT', 'STOP', 'TSTP', 'TTIN', 'TTOU', 'URG', 'XCPU', 'XFSZ',
@@ -265,7 +281,9 @@ export class Shell {
   functions: Record<string, { body: string }> = {};
   backgroundJobs: Map<number, BackgroundJob> = new Map();
   /** Shell options: errexit (-e), xtrace (-x), nounset (-u), verbose (-v) */
-  options: Set<string> = new Set(['hashall', 'braceexpand']);
+  options: Set<string> = new Set(['hashall', 'braceexpand', 'interactive-comments']);
+  /** The logical working directory cd set (symlinks kept), which pwd prints; null: use cwd */
+  logicalPwd: string | null = null;
   /** Bash-style indexed arrays */
   arrays: Map<string, string[]> = new Map();
   /** Bash-style associative arrays (declare -A) */
@@ -285,7 +303,8 @@ export class Shell {
   /** Call stack for BASH_SOURCE/caller: {funcName, source} */
   callStack: { funcName: string; source: string }[] = [];
   /** Bash shopt options: extglob, nocaseglob, nullglob, dotglob, globstar, etc. */
-  shoptopts: Set<string> = new Set();
+  /** shopt options that are on (bash's non-interactive defaults to start) */
+  shoptopts: Set<string> = new Set(SHOPT_DEFAULTS);
   /** Programmable completion specs: command name → spec */
   completionSpecs: Map<string, CompletionSpec> = new Map();
   /** Builtins disabled via `enable -n` */
@@ -431,6 +450,7 @@ export class Shell {
     child.env = { ...this.env };
     child.functions = { ...this.functions };
     child.options = new Set(this.options);
+    child.logicalPwd = this.logicalPwd;
     child.arrays = new Map(Array.from(this.arrays.entries()).map(([k, v]) => [k, copyArray(v)]));
     child.assocArrays = new Map(Array.from(this.assocArrays.entries()).map(([k, v]) => [k, new Map(v)]));
     // A subshell starts with the traps reset, except ignored ones (trap '' SIG)
@@ -594,6 +614,41 @@ export class Shell {
       this.errexitSuppressed = suppressed;
       if (depth === 0) this.abortController = null;
     }
+  }
+
+  /** shopt [-pqsu] [-o] [NAME...] */
+  private shoptBuiltin(args: string[], writeStdout: (s: string) => void, writeStderr: (s: string) => void): number {
+    let set: boolean | null = null, print = false, quiet = false, setO = false;
+    const names: string[] = [];
+    for (const a of args) {
+      if (names.length === 0 && /^-[psuqo]+$/.test(a)) {
+        for (const c of a.slice(1)) {
+          if (c === 's') set = true; else if (c === 'u') set = false; else if (c === 'p') print = true;
+          else if (c === 'q') quiet = true; else setO = true;
+        }
+      } else if (a !== '--' || names.length) names.push(a);
+    }
+    const all = setO ? SET_O_OPTIONS : SHOPT_OPTIONS;
+    const isOn = (n: string) => (setO ? this.options : this.shoptopts).has(n);
+    let status = 0;
+    for (const n of names) if (!all.includes(n)) { writeStderr(`shopt: ${n}: invalid ${setO ? '' : 'shell '}option name\r\n`); status = 1; }
+    const valid = names.filter((n) => all.includes(n));
+    if (set !== null && names.length) {
+      for (const n of valid) {
+        if (setO) { if (set) this.options.add(n); else this.options.delete(n); }
+        else if (set) this.shoptopts.add(n); else this.shoptopts.delete(n);
+      }
+      return status;
+    }
+    if (quiet) return status || (valid.every(isOn) ? 0 : 1);
+    const shown = names.length ? valid : all.filter((n) => set === null || isOn(n) === set);
+    for (const n of shown) {
+      const on = isOn(n);
+      if (print) writeStdout(setO ? `set ${on ? '-' : '+'}o ${n}\r\n` : `shopt ${on ? '-s' : '-u'} ${n}\r\n`);
+      else writeStdout(`${n.padEnd(15)}\t${on ? 'on' : 'off'}\r\n`);
+    }
+    // Asking about named options: the status says whether they are all on
+    return status || (names.length && !valid.every(isOn) ? 1 : 0);
   }
 
   /** $-: the set options as letters, in bash's order */
@@ -1350,7 +1405,6 @@ export class Shell {
           }
           if (this.arrays.has(key) || this.assocArrays.has(key)) this.setVar(key, val);
           else this.env[key] = val;
-          if (key === 'PWD') this.cwd = val;
           // An assignment-only command's status is that of its last $(...)
           exitCode = this.substStatus ?? 0;
           // `a=1 b=2` assigns both
@@ -1416,7 +1470,8 @@ export class Shell {
         // Shell builtins: eval, setopt, shopt
         if (!_builtinDisabled && effectiveCmdName === 'eval') {
           // Execute remaining args as a shell command
-          const evalCmd = stripComments(cmdArgs.join(' '));
+          exitCode = 0;
+          const evalCmd = stripComments((cmdArgs[0] === '--' ? cmdArgs.slice(1) : cmdArgs).join(' '));
           if (evalCmd) {
             this.injectedStdin = nestedStdin;
             exitCode = await this.execute(evalCmd, writeStdout, stderrWriter, false, undefined, true);
@@ -1431,42 +1486,7 @@ export class Shell {
           continue;
         }
         if (!_builtinDisabled && effectiveCmdName === 'shopt') {
-          const allShopts = ['extglob', 'nocaseglob', 'nullglob', 'dotglob', 'globstar',
-            'failglob', 'nocasematch', 'lastpipe', 'expand_aliases', 'sourcepath',
-            'checkwinsize', 'histappend', 'cmdhist', 'lithist', 'xpg_echo'];
-          let mode: 's' | 'u' | 'p' | 'q' | null = null;
-          const optNames: string[] = [];
-          for (const a of cmdArgs) {
-            if (a === '-s') mode = 's';
-            else if (a === '-u') mode = 'u';
-            else if (a === '-p') mode = 'p';
-            else if (a === '-q') mode = 'q';
-            else optNames.push(a);
-          }
-          if (mode === 's') {
-            for (const opt of optNames) {
-              if (!allShopts.includes(opt)) { stderrWriter(`shopt: ${opt}: invalid shell option name\r\n`); exitCode = 1; continue; }
-              this.shoptopts.add(opt);
-            }
-          } else if (mode === 'u') {
-            for (const opt of optNames) {
-              if (!allShopts.includes(opt)) { stderrWriter(`shopt: ${opt}: invalid shell option name\r\n`); exitCode = 1; continue; }
-              this.shoptopts.delete(opt);
-            }
-          } else if (mode === 'q') {
-            // Query: exit 0 if all named options are set, 1 otherwise
-            exitCode = 0;
-            for (const opt of optNames) {
-              if (!this.shoptopts.has(opt)) { exitCode = 1; break; }
-            }
-          } else {
-            // Print: -p or default (no mode flag)
-            const toShow = optNames.length > 0 ? optNames : allShopts;
-            for (const opt of toShow) {
-              if (!allShopts.includes(opt)) { stderrWriter(`shopt: ${opt}: invalid shell option name\r\n`); exitCode = 1; continue; }
-              writeStdout(`${opt}\t\t${this.shoptopts.has(opt) ? 'on' : 'off'}\r\n`);
-            }
-          }
+          exitCode = this.shoptBuiltin(cmdArgs, writeStdout, stderrWriter);
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
           lastOutput = '';
@@ -2315,9 +2335,10 @@ export class Shell {
               if (arg === '-o' || arg === '+o') {
                 const optName = cmdArgs[++si];
                 if (!optName) {
-                  const allOpts = ['allexport', 'errexit', 'noclobber', 'noexec', 'noglob', 'nounset', 'pipefail', 'verbose', 'xtrace'];
-                  for (const opt of allOpts) {
-                    writeStdout(`${opt}\t\t${this.options.has(opt) ? 'on' : 'off'}\r\n`);
+                  // set -o: a table; set +o: commands that recreate the settings
+                  for (const opt of SET_O_OPTIONS) {
+                    const on = this.options.has(opt);
+                    writeStdout(arg === '-o' ? `${opt.padEnd(15)}\t${on ? 'on' : 'off'}\r\n` : `set ${on ? '-' : '+'}o ${opt}\r\n`);
                   }
                 } else {
                   const optMap: Record<string, string> = {
@@ -2326,7 +2347,7 @@ export class Shell {
                     // accepted, no effect here
                     monitor: 'monitor', notify: 'notify', hashall: 'hashall', ignoreeof: 'ignoreeof', emacs: 'emacs', vi: 'vi',
                     posix: 'posix', physical: 'physical', braceexpand: 'braceexpand', histexpand: 'histexpand', history: 'history',
-                    interactive_comments: 'interactive_comments', keyword: 'keyword', nolog: 'nolog', onecmd: 'onecmd',
+                    'interactive-comments': 'interactive-comments', keyword: 'keyword', nolog: 'nolog', onecmd: 'onecmd',
                     errtrace: 'errtrace', functrace: 'functrace', privileged: 'privileged',
                   };
                   const mapped = optMap[optName];
@@ -2366,11 +2387,23 @@ export class Shell {
 
         // Shell builtin: source / . — execute script in current shell scope
         if (!_builtinDisabled && effectiveCmdName === 'source') {
-          if (cmdArgs.length === 0) {
-            stderrWriter('source: filename argument required\r\n');
-            exitCode = 1;
+          const srcArgs = cmdArgs[0] === '--' ? cmdArgs.slice(1) : cmdArgs;
+          if (srcArgs.length === 0) {
+            stderrWriter('source: filename argument required\r\nsource: usage: source filename [arguments]\r\n');
+            exitCode = 2;
           } else {
-            const scriptPath = this.fs.resolvePath(cmdArgs[0], this.cwd);
+            // A name without / is looked up in PATH first (files, not directories), then here
+            let scriptPath = this.fs.resolvePath(srcArgs[0], this.cwd);
+            if (!srcArgs[0].includes('/')) {
+              for (const dir of (this.env['PATH'] ?? '').split(':').filter(Boolean)) {
+                const p = this.fs.resolvePath(srcArgs[0], this.fs.resolvePath(dir, this.cwd));
+                const st = await this.fs.stat(p).catch(() => null);
+                if (st && !st.isDirectory()) { scriptPath = p; break; }
+              }
+            }
+            // source FILE ARGS: the arguments are $@ while it runs
+            const savedPositional = srcArgs.length > 1 ? this.getPositionalArgs() : null;
+            if (savedPositional) this.setPositional(srcArgs.slice(1));
             try {
               const raw = await this.fs.readFile(scriptPath);
               const content = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
@@ -2392,8 +2425,10 @@ export class Shell {
               this.env['LINENO'] = String(this.currentLine);
             } catch (e: any) {
               if (isControlSignal(e)) throw e;
-              stderrWriter(`source: ${cmdArgs[0]}: ${e.message}\r\n`);
+              stderrWriter(`source: ${srcArgs[0]}: ${/ENOENT/.test(e.message) ? 'No such file or directory' : e.message}\r\n`);
               exitCode = 1;
+            } finally {
+              if (savedPositional) this.setPositional(savedPositional);
             }
           }
           this.lastExitCode = exitCode;
@@ -2767,6 +2802,7 @@ export class Shell {
           stdin = hereString;
         }
 
+        const pwdBefore = this.env['PWD'], cwdBefore = this.cwd;
         const ctx: CommandContext = {
           args: cmdArgs,
           fs: this.fs,
@@ -2880,8 +2916,8 @@ export class Shell {
         lastOutput = output;
         pipeExitCodes.push(exitCode);
 
-        // Update cwd from env
-        this.cwd = this.env['PWD'] || this.cwd;
+        // A command that changed $PWD (not cwd) moved the shell
+        if (this.env['PWD'] && this.env['PWD'] !== pwdBefore && this.cwd === cwdBefore) this.cwd = this.env['PWD'];
       }
 
       await flushCapture();

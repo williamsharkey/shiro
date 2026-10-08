@@ -6,7 +6,7 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1214/1567 (77.5%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1243/1567 (79.3%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **381/635 (60.0%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **146/399 (36.6%)** |
 
@@ -43,11 +43,11 @@ How each suite runs, and what is and isn't scored, is described in
 | builtin-echo | 0/27 | 25/27 | 2 |
 | builtin-printf | 0/55 | 47/55 | 8 |
 | builtin-read | 0/64 | 64/64 | 0 |
-| builtin-eval-source | 0/23 | 11/23 | 12 |
+| builtin-eval-source | 0/23 | 19/23 | 4 |
 | builtin-getopts | 0/30 | 26/30 | 4 |
 | builtin-trap | 0/33 | 25/33 | 8 |
 | builtin-bracket | 0/50 | 43/50 | 7 |
-| builtin-cd | 3/28 | 14/28 | 14 |
+| builtin-cd | 3/28 | 25/28 | 3 |
 | builtin-special | 1/12 | 7/12 | 5 |
 | builtin-type | 0/6 | 1/6 | 5 |
 | builtin-vars | 0/38 | 31/38 | 7 |
@@ -76,7 +76,7 @@ How each suite runs, and what is and isn't scored, is described in
 | regex | 1/37 | 35/37 | 2 |
 | temp-binding | 0/4 | 4/4 | 0 |
 | background | 3/27 | 21/27 | 6 |
-| sh-options | 0/32 | 15/32 | 17 |
+| sh-options | 0/32 | 25/32 | 7 |
 | command-parsing | 0/2 | 2/2 | 0 |
 
 <details><summary>Failing cases</summary>
@@ -105,11 +105,11 @@ How each suite runs, and what is and isn't scored, is described in
 - **func-parsing**: Function with spaces, to see if ( and ) are separate tokens.; Hard case, function with } token in it; . in function name; = in function name; Function name with $; Function name with command sub; Function name with !; Break after ) is OK.
 - **builtin-echo**: echo builtin should disallow typed args - literal; echo builtin should disallow typed args - variable
 - **builtin-printf**: printf with no args; printf -v a[1]; printf -v syntax error; printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8; printf invalid format; bash truncates long strftime string at 128; printf positive integer overflow; printf negative integer overflow
-- **builtin-eval-source**: eval accepts/ignores --; eval usage; eval YSH block with 'break continue return error'; source accepts/ignores --; Source with no arguments; Source with arguments; Source from a function, mutating argv and defining a local var; Source with syntax error; Eval with syntax error; source looks in PATH for files; source finds files in PATH before current dir; sourcing along PATH should ignore directories
+- **builtin-eval-source**: eval usage; eval YSH block with 'break continue return error'; Source with syntax error; Eval with syntax error
 - **builtin-getopts**: getopts with invalid variable name; OPTIND; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
 - **builtin-trap**: exit 1 when trap code string is invalid; trap EXIT calling exit; trap EXIT with PARSE error and explicit exit; exit codes for traps are isolated; traps are cleared in subshell (started with &); trap USR1, sleep, SIGINT: non-interactively; Remove trap with an unsigned integer; trap with command.NoOp - check internal invariant
 - **builtin-bracket**: -a as unary operator (alias of -e); -k for sticky bit; test -p named pipe; -u for setuid, -g too; test -o for options; -ef; test -c
-- **builtin-cd**: cd BAD/..; cd with 2 or more args - with strict_arg_parse; $OLDPWD; pwd with symlink and -P; setting $PWD doesn't affect the value of 'pwd' builtin; lie about PWD; pwd before any cd; pwd in symlinked dir on shell initialization; Test the current directory after 'cd ..' involving symlinks; cd away from dir that was deleted; cd permits double bare dash; cd to symlink with -L and -P; cd to relative path with -L and -P; CDPATH is respected; Survey of getcwd() syscall
+- **builtin-cd**: pwd in symlinked dir on shell initialization; Test the current directory after 'cd ..' involving symlinks; Survey of getcwd() syscall
 - **builtin-special**: Prefix assignments persist after special builtins, like : (set -o posix); Prefix assignments persist after readonly, but NOT exported (set -o posix); Prefix binding for exec is a special case (versus e.g. readonly); bash 'type' gets confused - says 'function', but runs builtin; command, builtin - both can be redefined, not special (regression)
 - **builtin-type**: type -\> keyword builtin; type -\> alias external; type of relative path; special builtins are called out; more special builtins
 - **builtin-vars**: Export sets a global variable that persists after export -n; Export a local that shadows a global; Unset exported variable, then define it again.  It's NOT still exported.; Exporting a parent func variable (dynamic scope); Unset a function without -f; Unset and scope (bug #653); local after readonly
@@ -133,7 +133,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **process-sub**: Process sub input; Process sub from external process to stdin; Process sub from shell to stdin; Non-linear pipeline with \>(); status code is available; shopt -s process_sub_fail; process subs and pipelines together; process sub in background &
 - **regex**: Unquoted { is a regex parse error; make a lisp example
 - **background**: wait -n with arguments - arguments are respected; wait with invalid arg; Wait for job and PIPESTATUS - cat; YSH wait --all; YSH wait --verbose; Signal message for killed background job
-- **sh-options**: $- with -c; $- with interactive shell; pass shopt options like sh -O nullglob; vi and emacs are mutually exclusive; interactive shell starts with emacs mode on; -n for no execution (useful with --ast-output); shopt -p -o prints 'set' options; shopt -o prints 'set' options; shopt -p prints 'shopt' options; noclobber on \<\>; shopt allows for backward compatibility like bash; shopt -p validates option names; shopt -p -o validates option names; stubbed out bash options; Unimplemented options - print, query, set, unset; Unimplemented options - OSH shopt -s ignore_shopt_not_impl; no-ops not shown by shopt -p
+- **sh-options**: $- with -c; $- with interactive shell; pass shopt options like sh -O nullglob; vi and emacs are mutually exclusive; interactive shell starts with emacs mode on; -n for no execution (useful with --ast-output); noclobber on \<\>
 
 </details>
 

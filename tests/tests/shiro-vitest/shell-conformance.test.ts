@@ -382,4 +382,17 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('a\nst=0 ps=3 4 0\npf=2\nx=1\nflags\nhello\nquoted-not-alias\n');
   });
+
+  it('cd -L/-P/-/--/CDPATH with symlinks, pwd ignores $PWD assignment, shopt -p/-q/-o, source ARGS', async () => {
+    const r = await script([
+      "cd /tmp && rm -rf cdt && mkdir -p cdt/real/sub && cd cdt && ln -s real link",
+      "cd link/sub && pwd && pwd -P && cd .. && pwd && cd - && echo \"old=$OLDPWD\"",
+      "PWD=foo; pwd; cd BAD/.. 2>/dev/null; echo st=$?",
+      "CDPATH=/tmp/cdt cd real && cd -- /tmp && pwd",
+      "shopt -s nullglob; shopt -p nullglob; shopt -q extglob || echo noext; shopt -po errexit; shopt -u nullglob",
+      "printf 'echo \"args: $*\"\\n' > /tmp/s.sh; set -- outer; source /tmp/s.sh a b; echo \"after: $*\"; eval -- 'echo ev'",
+    ].join('\n'));
+    expect(r.out).toBe('/tmp/cdt/link/sub\n/tmp/cdt/real/sub\n/tmp/cdt/link\n/tmp/cdt/link/sub\nold=/tmp/cdt/link\n/tmp/cdt/link/sub\nst=1\n' +
+      '/tmp/cdt/real\n/tmp\nshopt -s nullglob\nnoext\nset +o errexit\nargs: a b\nafter: outer\nev\n');
+  });
 });
