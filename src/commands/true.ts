@@ -9,3 +9,12 @@ const trueCmd: Command = {
 };
 
 export { trueCmd as true };
+
+/** `:` — the null command: arguments are expanded (: ${x:=default}), status 0 */
+export const colon: Command = {
+  name: ":",
+  description: "Null command (return success)",
+  async exec() {
+    return 0;
+  },
+};

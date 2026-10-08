@@ -92,7 +92,7 @@ import { timeout } from './timeout';
 import { touch } from './touch';
 import { tr } from './tr';
 import { kill, trap } from './trap';
-import { true as trueCmd } from './true';
+import { true as trueCmd, colon } from './true';
 import { tsort } from './tsort';
 import { type } from './type';
 import { ulimit } from './ulimit';
@@ -131,7 +131,7 @@ export const unixCommands: Command[] = [
   ls, make, md5sum, mkdir, mv, nl, nohup, od, paste, patch, pkgConfig, pr,
   printenv, printf, processSubstitution, pwd, read, readlink, realpath, returnCmd,
   seq, set, sha256sum, shift, shrine, sleep, sort, stat, strings, tail, tar, tee,
-  test, time, timeout, touch, tr, trap, trueCmd, tsort, type, ulimit, umask,
+  test, time, timeout, touch, tr, trap, trueCmd, colon, tsort, type, ulimit, umask,
   unalias, unexpand, uniq, uptime, watch, wc, which, whoami, xargs, yes,
   revCmd, tacCmd, shufCmd, cmpCmd, ddCmd, xxdCmd, dcCmd, splitCmd,
   factorCmd, cksumCmd, base32Cmd, numfmtCmd, csplitCmd,
