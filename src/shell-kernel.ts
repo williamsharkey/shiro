@@ -30,6 +30,8 @@ const SHELL_BUILTINS = new Set([
 export interface KernelProgram {
   argv: string[];
   run: Runner;
+  /** A Shiro builtin run through kernel.runBuiltin (not a WASM/x86 program) */
+  builtin?: boolean;
 }
 
 const dec = new TextDecoder();
@@ -94,6 +96,27 @@ export async function resolveKernelProgram(
     return { argv: [argv0, ...args], run: x86Runner(elf, argv0) };
   }
   return null;
+}
+
+/**
+ * Registered commands that are plain stdin→stdout filters. Next to a kernel
+ * program in a pipeline they run as kernel processes too (kernel.runBuiltin),
+ * so the whole pipeline is one job joined by real pipes. Anything that wants
+ * the terminal (less, vi, node, claude, ...) is left out and stays in-page.
+ */
+const PIPE_FILTERS = new Set([
+  'cat', 'tac', 'grep', 'egrep', 'fgrep', 'rg', 'sed', 'awk', 'tr', 'wc', 'head', 'tail', 'sort', 'uniq', 'cut',
+  'paste', 'rev', 'nl', 'fold', 'fmt', 'expand', 'unexpand', 'column', 'tee', 'base64', 'md5sum', 'sha1sum',
+  'sha256sum', 'od', 'hexdump', 'xxd', 'strings', 'jq', 'echo', 'printf', 'seq', 'yes', 'comm', 'join',
+  'gzip', 'gunzip', 'zcat', 'iconv',
+]);
+
+/** A pipe-filter builtin as a kernel stage, or null */
+export function builtinStage(shell: Shell, name: string, args: string[]): KernelProgram | null {
+  if (!PIPE_FILTERS.has(name) || shell.functions[name] || shell.aliases.has(name)) return null;
+  const cmd = shell.commands.get(name);
+  if (!cmd) return null;
+  return { argv: [name, ...args], run: (proc, kernel) => kernel.runBuiltin(proc, cmd), builtin: true };
 }
 
 export interface KernelRunOptions {

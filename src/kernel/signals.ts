@@ -16,7 +16,7 @@
  * state changes are reported as job events.
  */
 import type { Kernel } from './kernel';
-import type { Process } from './process';
+import { Process } from './process';
 import { processTable } from '../process-table';
 
 // ── Linux signal numbers ────────────────────────────────────────────────────
@@ -185,7 +185,11 @@ const EINVAL = 22;
 export class SignalState {
   protected actions = new Map<number, SigAction>();
   private maskBits: bigint = 0n;
-  pending: bigint = 0n;
+  private pendingBits: bigint = 0n;
+
+  /** Pending signals held back by the mask */
+  get pending(): bigint { return this.pendingBits; }
+  set pending(v: bigint) { this.pendingBits = v; }
 
   /** Blocked signals (sigprocmask) */
   get mask(): bigint { return this.maskBits; }
@@ -730,6 +734,17 @@ export function brokenPipe(writer: SignalTarget | undefined, jc: JobControl = jo
 class ProcessSignalState extends SignalState {
   constructor(private proc: Process) { super(); }
 
+  /** Blocked signals wait in the kernel's deferredSignals; kernel.setSigmask delivers them on unblock */
+  get pending(): bigint {
+    let m = 0n;
+    for (const s of this.proc.deferredSignals) m = sigset.add(m, s);
+    return m;
+  }
+  set pending(v: bigint) {
+    this.proc.deferredSignals = new Set();
+    for (let s = 1; s < NSIG; s++) if (sigset.has(v, s)) this.proc.deferredSignals.add(s);
+  }
+
   get mask(): bigint {
     let m = 0n;
     for (const s of this.proc.sigmask) m = sigset.add(m, s);
@@ -765,7 +780,7 @@ const attached = new WeakMap<Kernel, JobControl>();
 
 /** The job-control view of a kernel process (adopted by `attachKernel`). */
 function kernelTarget(kernel: Kernel, proc: Process, jc: JobControl): SignalTarget {
-  const notify = () => (kernel as unknown as { notify?: () => void }).notify?.();
+  const notify = () => kernel.notify();
   return {
     get pid() { return proc.pid; },
     get ppid() { return proc.ppid; },
@@ -829,23 +844,17 @@ export function attachKernel(kernel: Kernel, jc: JobControl = jobControl): () =>
   };
   for (const p of kernel.procs.values()) adopt(p);
 
-  // Adopt before the program starts (Kernel.start defers a microtask after spawn)
-  const origSpawn = kernel.spawn;
-  kernel.spawn = function (this: Kernel, opts) {
-    const p = origSpawn.call(this, opts);
-    adopt(p);
-    return p;
-  };
+  // Adopted synchronously, before the program starts
+  const unspawn = kernel.onSpawn(adopt);
 
-  // read/write get the caller's syscall AbortSignal: map it back to the process
+  // read/write/ioctl get the caller's syscall AbortSignal: map it back to the process
   const unresolve = jc.addCallerResolver((hint) => {
-    if (!(hint instanceof AbortSignal)) return undefined;
-    for (const p of kernel.procs.values()) if (p.syscallSignal === hint) return jc.get(p.pid);
-    return undefined;
+    const p = Process.fromSyscallSignal(hint);
+    return p && kernel.procs.get(p.pid) === p ? jc.get(p.pid) : undefined;
   });
 
   return () => {
-    kernel.spawn = origSpawn;
+    unspawn();
     unresolve();
     attached.delete(kernel);
   };

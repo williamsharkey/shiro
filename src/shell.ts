@@ -2221,6 +2221,18 @@ export class Shell {
           ctx.stderr = c.err.replace(/\r\n/g, '\n');
         }
 
+        // WASM and x86 programs, with the filter builtins piped to and from them, run as one kernel job
+        const hasShellStdin = i > 0 || hereString !== undefined || (i === 0 && !!heredocStdin) || redirects.some(r => r.type === '<');
+        const kernelRun = await this.tryKernelRun(pipeline, i, effectiveCmdName, cmdArgs, redirects, ctx,
+          hasShellStdin, writeStdout, stderrWriter, terminalOverride || this.terminal);
+        if (kernelRun) {
+          i = kernelRun.lastIndex;
+          exitCode = kernelRun.exitCode;
+          lastOutput = await this.applyOutputRedirects(kernelRun.stdout, kernelRun.stderr, kernelRun.redirects,
+            i === pipeline.length - 1, writeStdout, stderrWriter);
+          pipeExitCodes.push(...kernelRun.statuses);
+          continue;
+        }
         const cmd = this.commands.get(effectiveCmdName);
         if (cmd) {
           try {
@@ -2230,18 +2242,6 @@ export class Shell {
             exitCode = 1;
           }
         } else {
-          // WASM and x86 programs (and kernel programs piped after them) run as kernel processes
-          const hasShellStdin = i > 0 || hereString !== undefined || (i === 0 && !!heredocStdin) || redirects.some(r => r.type === '<');
-          const kernelRun = await this.tryKernelRun(pipeline, i, effectiveCmdName, cmdArgs, redirects, ctx,
-            hasShellStdin, writeStdout, stderrWriter, terminalOverride || this.terminal);
-          if (kernelRun) {
-            i = kernelRun.lastIndex;
-            exitCode = kernelRun.exitCode;
-            lastOutput = await this.applyOutputRedirects(kernelRun.stdout, kernelRun.stderr, kernelRun.redirects,
-              i === pipeline.length - 1, writeStdout, stderrWriter);
-            pipeExitCodes.push(...kernelRun.statuses);
-            continue;
-          }
           // Try to find executable in PATH
           const executable = await this.findExecutableInPath(effectiveCmdName);
           if (executable) {
@@ -4850,10 +4850,15 @@ export class Shell {
     pipeline: string[], i: number, name: string, args: string[], redirects: Redirect[], ctx: CommandContext,
     hasShellStdin: boolean, writeStdout: (s: string) => void, writeStderr: (s: string) => void, terminal: any,
   ): Promise<{ lastIndex: number; redirects: Redirect[]; exitCode: number; statuses: number[]; stdout: string; stderr: string } | null> {
-    const { mayBeKernelProgram, resolveKernelProgram, runKernelPipeline } = await import('./shell-kernel');
-    if (!mayBeKernelProgram(this, name)) return null;
+    const { mayBeKernelProgram, resolveKernelProgram, builtinStage, runKernelPipeline } = await import('./shell-kernel');
     const progress = (m: string) => writeStderr(`  ${m}\r\n`);
-    const first = await resolveKernelProgram(this, name, args, progress);
+    const stageFor = async (n: string, a: string[]) =>
+      builtinStage(this, n, a) ?? (mayBeKernelProgram(this, n) ? await resolveKernelProgram(this, n, a, progress) : null);
+    // Cheap exit for the common case: neither a filter builtin nor something to look up on PATH
+    const firstIsFilter = !!builtinStage(this, name, args);
+    if (!firstIsFilter && !mayBeKernelProgram(this, name)) return null;
+    if (firstIsFilter && i === pipeline.length - 1) return null;
+    const first = await stageFor(name, args);
     if (!first) return null;
     const hasOutRedirect = (r: Redirect[]) => r.some(x => x.type !== '<');
     const programs = [first];
@@ -4867,8 +4872,8 @@ export class Shell {
         if (parsed.args.length === 0 || parsed.hereString !== undefined || parsed.redirects.some(r => r.type === '<')) break;
         if (parsed.args.some(a => /^[<>]\(/.test(a))) break; // process substitution
         const words = await this.expandGlobs(parsed.args);
-        if (!words || !mayBeKernelProgram(this, words[0])) break;
-        const prog = await resolveKernelProgram(this, words[0], words.slice(1), progress);
+        if (!words) break;
+        const prog = await stageFor(words[0], words.slice(1));
         if (!prog) break;
         programs.push(prog);
         last = j;
@@ -4876,6 +4881,8 @@ export class Shell {
         if (hasOutRedirect(parsed.redirects)) break;
       }
     }
+    // Only worth it when a real kernel program is involved
+    if (!programs.some(p => !p.builtin)) return null;
     const crlf = (w: (s: string) => void) => (t: string) => w(t.replace(/\r?\n/g, '\r\n'));
     const r = await runKernelPipeline(this, programs, {
       stdin: hasShellStdin ? ctx.stdin : undefined,

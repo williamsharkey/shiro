@@ -663,6 +663,42 @@ describe('kernel processes on a pty', () => {
     expect(jc.get(p.pid)).toBeUndefined();
   });
 
+  it('a background tcsetattr through the ioctl syscall gets SIGTTOU (the kernel passes the caller)', async () => {
+    const p = tty.spawnJob(kernel, {
+      path: 'bg-ioctl',
+      run: async (proc, k) => {
+        const data = new Uint8Array(64);
+        await k.syscall(proc, A.SYS_ioctl, [0, TCGETS, TERMIOS_SIZE], data);
+        return await k.syscall(proc, A.SYS_ioctl, [0, TCSETS, TERMIOS_SIZE], data) === 0 ? 0 : 1;
+      },
+    });
+    expect(await jc.waitJob(p.pgid)).toEqual({ type: 'stopped', sig: SIGTTOU });
+    const f = tty.foreground({ pgid: p.pgid }, true);
+    expect(await f).toEqual({ type: 'exited', status: 0 });
+  });
+
+  it('TIOCSCTTY through the syscall layer uses the caller', async () => {
+    const other = new TtySession({ jc });
+    const p = kernel.spawn({ path: 'leader', setsid: true, fds: { 0: other.openSlave() }, run: () => new Promise<number>(() => {}) });
+    other.pty.release(); // let the new session take it
+    const data = new Uint8Array(4);
+    expect(await kernel.syscall(p, A.SYS_ioctl, [0, TIOCSCTTY, 4], data)).toBe(0);
+    expect(other.pty.sid).toBe(p.pid);
+    jc.kill(p.pid, 9);
+  });
+
+  it('signals blocked with sigprocmask wait and arrive on unblock', async () => {
+    const p = tty.spawnJob(kernel, { path: 'masked', run: () => new Promise<number>(() => {}) });
+    kernel.setSigmask(p, new Set([SIGTERM]));
+    jc.kill(p.pid, SIGTERM);
+    await tick();
+    expect(p.state).toBe('running');
+    expect(p.deferredSignals.has(SIGTERM)).toBe(true);
+    kernel.setSigmask(p, new Set());
+    await tick();
+    expect(p.state).toBe('zombie');
+  });
+
   it('/dev/ptmx opens a new pty whose slave is /dev/pts/N', async () => {
     const p = kernel.spawn({ path: 'opener', fds: {}, run: () => new Promise<number>(() => {}) });
     const m = await kernel.open(p, '/dev/ptmx', A.O_RDWR) as PtyFile;

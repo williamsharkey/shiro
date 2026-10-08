@@ -104,6 +104,14 @@ describe('kernel programs from the prompt (no terminal)', () => {
     expect((await run('wseq 4 | upper | wc -l')).out.trim()).toBe('4');
   });
 
+  it('filter builtins around kernel programs share real pipes', async () => {
+    await run('printf "a\\nb\\nc\\n" > /tmp/in.txt');
+    expect((await run('cat /tmp/in.txt | upper 2>/dev/null | tr A Z')).out).toBe('Z\nB\nC\n');
+    expect((await run('wseq 3 | grep 2 | upper 2>/dev/null')).out).toBe('LINE 2\n');
+    expect((await run('echo ${PIPESTATUS[@]}')).out).toBe('0 0 0\n');
+    expect((await run('wseq 3 | grep nomatch')).exitCode).toBe(1);
+  });
+
   it('x86 | wasm', async () => {
     expect((await run('hello | upper 2>/dev/null')).out).toBe('HELLO, WORLD!\n');
   });
@@ -184,9 +192,25 @@ describe('kernel programs on the terminal pty', () => {
     expect((await r).exitCode).toBe(130);
   });
 
-  it('kernel output piped to a builtin goes through the shell', async () => {
+  it('kernel | filter builtin is one job: the builtin runs as a kernel process and writes to the tty', async () => {
     const r = await sh('wseq 3 | grep 2');
-    expect(r.out).toBe('line 2\n');
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toBe('');
+    expect(term.screen()).toContain('line 2\r\n');
+  });
+
+  it('Ctrl-Z stops every stage of a mixed pipeline', async () => {
+    const r = sh('readloop | cat');
+    await until(() => term.tty.jobInForeground);
+    term.tty.pty.input('\x1a');
+    expect((await r).exitCode).toBe(148);
+    const job = shell.backgroundJobs.get(1)!;
+    expect(job.pids!.length).toBe(2);
+    const fg = sh('fg');
+    await until(() => term.tty.jobInForeground);
+    term.tty.pty.input('z\r\x04');
+    expect((await fg).exitCode).toBe(0);
+    expect(term.screen()).toContain('got: z');
   });
 
   it('prog & is a background job; reading the tty stops it with SIGTTIN', async () => {
