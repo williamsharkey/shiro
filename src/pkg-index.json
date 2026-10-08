@@ -795,7 +795,7 @@
    }
   },
   {
-   "name": "openssl",
+   "name": "openssl-wasm",
    "version": "0.2.0",
    "description": "OpenSSL 1.1 command-line tool: digests, base64, symmetric ciphers, keys",
    "license": "OpenSSL",
@@ -819,7 +819,7 @@
      "file": "bin/openssl.wasm"
     }
    },
-   "notes": "No networking (s_client needs sockets)."
+   "notes": "No networking (s_client needs sockets). The `openssl` package is now OpenSSL 3.5 as a static x86-64 build (needs a cross-origin isolated page)."
   },
   {
    "name": "qr2text",
@@ -1142,7 +1142,7 @@
    "notes": "WASIX build (wasix_32v1, shared env.memory). Run it as /usr/bin/rg (the builtin keeps the name)."
   },
   {
-   "name": "curl",
+   "name": "curl-wasix",
    "version": "8.4.0",
    "description": "curl URL transfer tool (WASIX build, OpenSSL)",
    "license": "curl",
@@ -1182,7 +1182,7 @@
     "threads",
     "sockets"
    ],
-   "notes": "WASIX build (wasix_32v1, shared env.memory). HTTP and HTTPS (its own OpenSSL) through the kernel sockets and the TCP relay. Verifying real sites needs its CA certificates at /openssl (the package's share/openssl)."
+   "notes": "WASIX build (wasix_32v1, shared env.memory). HTTP and HTTPS (its own OpenSSL) through the kernel sockets and the TCP relay. Verifying real sites needs its CA certificates at /openssl (the package's share/openssl). The `curl` package is now curl 8.22 as a static x86-64 build (needs a cross-origin isolated page)."
   },
   {
    "name": "quickjs-ng",
@@ -1879,6 +1879,475 @@
      "args": [
       "-dc"
      ]
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "tree",
+   "version": "2.2.1",
+   "description": "List directories as a tree",
+   "license": "GPL-2.0-or-later",
+   "source": "https://gitlab.com/OldManProgrammer/unix-tree/-/archive/2.2.1/unix-tree-2.2.1.tar.gz",
+   "homepage": "https://oldmanprogrammer.net/source.php?dir=projects/tree",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/tree.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/tree",
+     "url": "/pkg/tree/2.2.1/tree.gz",
+     "sha256": "b772a8cfd49be5fc82b125cad674eb511734e0333dd5ede31f17fad1a3a940db",
+     "size": 57337,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "tree": {
+     "file": "bin/tree"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "file",
+   "version": "5.46",
+   "description": "Determine file types (libmagic, with its magic database)",
+   "license": "BSD-2-Clause",
+   "source": "https://astron.com/pub/file/file-5.46.tar.gz",
+   "homepage": "https://www.darwinsys.com/file/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/file.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/file",
+     "url": "/pkg/file/5.46/file.gz",
+     "sha256": "3b719ec27c8ae5daf6d30e3a153714a0d8825385bba0577f043a33707c631107",
+     "size": 141204,
+     "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/file/5.46/share.tar.gz",
+     "sha256": "6d26f7f641ef9c5e576683f60642f83ed7a1200163943d7d3db44156f95de54f",
+     "size": 445125,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "file": {
+     "file": "bin/file"
+    }
+   },
+   "links": {
+    "/usr/share/misc/magic.mgc": "share/misc/magic.mgc"
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "xz",
+   "version": "5.8.1",
+   "description": "XZ Utils: xz, unxz, xzcat, lzma",
+   "license": "0BSD",
+   "source": "https://github.com/tukaani-project/xz/releases/download/v5.8.1/xz-5.8.1.tar.gz",
+   "homepage": "https://tukaani.org/xz/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/xz.sh",
+   "section": "archive",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/xz",
+     "url": "/pkg/xz/5.8.1/xz.gz",
+     "sha256": "23fdc6815cc494d030733d69a4f3f001bc3b7588f7f70743e36dc3a8c86572a1",
+     "size": 129108,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "xz": {
+     "file": "bin/xz"
+    },
+    "unxz": {
+     "file": "bin/xz",
+     "args": [
+      "-d"
+     ]
+    },
+    "xzcat": {
+     "file": "bin/xz",
+     "args": [
+      "-dc"
+     ]
+    },
+    "lzma": {
+     "file": "bin/xz",
+     "args": [
+      "--format=lzma"
+     ]
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "zstd",
+   "version": "1.5.7",
+   "description": "Zstandard compression: zstd, unzstd, zstdcat",
+   "license": "BSD-3-Clause OR GPL-2.0-only",
+   "source": "https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz",
+   "homepage": "https://facebook.github.io/zstd/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/zstd.sh",
+   "section": "archive",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/zstd",
+     "url": "/pkg/zstd/1.5.7/zstd.gz",
+     "sha256": "7e2563c9206ea6fc179fabff89fce258fe76f309b65bf04622ecc55c62627122",
+     "size": 289114,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "zstd": {
+     "file": "bin/zstd"
+    },
+    "unzstd": {
+     "file": "bin/zstd",
+     "args": [
+      "-d"
+     ]
+    },
+    "zstdcat": {
+     "file": "bin/zstd",
+     "args": [
+      "-dc"
+     ]
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "zip",
+   "version": "3.0",
+   "description": "Info-ZIP zip (with Debian patches)",
+   "license": "Info-ZIP",
+   "source": "https://deb.debian.org/debian/pool/main/z/zip/zip_3.0.orig.tar.gz",
+   "homepage": "https://infozip.sourceforge.net/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/zip.sh",
+   "section": "archive",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/zip",
+     "url": "/pkg/zip/3.0/zip.gz",
+     "sha256": "99ce8c822a667dfc774dd1ec594cf7c5a4a0e0ed97a43b1ed72d6887b2fdf7aa",
+     "size": 109429,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "zip": {
+     "file": "bin/zip"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "unzip",
+   "version": "6.0",
+   "description": "Info-ZIP unzip and zipinfo (with Debian security patches)",
+   "license": "Info-ZIP",
+   "source": "https://deb.debian.org/debian/pool/main/u/unzip/unzip_6.0.orig.tar.gz",
+   "homepage": "https://infozip.sourceforge.net/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/unzip.sh",
+   "section": "archive",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/unzip",
+     "url": "/pkg/unzip/6.0/unzip.gz",
+     "sha256": "8ece210ad1eaafb29617a5bafdb9401c37e75b924ff7ee758565c7c5b49be58e",
+     "size": 82772,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "unzip": {
+     "file": "bin/unzip"
+    },
+    "zipinfo": {
+     "file": "bin/unzip"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "ca-certificates",
+   "version": "2026-09-25",
+   "description": "Mozilla's CA certificate bundle (as extracted by curl)",
+   "license": "MPL-2.0",
+   "source": "https://curl.se/ca/cacert-2026-09-25.pem",
+   "homepage": "https://curl.se/docs/caextract.html",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/ca-certificates.sh",
+   "section": "net",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "etc",
+     "url": "/pkg/ca-certificates/2026-09-25/etc.tar.gz",
+     "sha256": "0520125b9deff3eeb31986503f8d6e7796f6446b9fe1deda09ca16cc85f5ce15",
+     "size": 108442,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {},
+   "links": {
+    "/etc/ssl/certs/ca-certificates.crt": "etc/ssl/certs/ca-certificates.crt",
+    "/etc/ssl/cert.pem": "etc/ssl/certs/ca-certificates.crt"
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "openssl",
+   "version": "3.5.9",
+   "description": "OpenSSL 3.5 LTS command-line tool (static x86-64 build)",
+   "license": "Apache-2.0",
+   "source": "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz",
+   "homepage": "https://openssl-library.org/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/openssl.sh",
+   "section": "net",
+   "abi": "x86_64-linux",
+   "deps": [
+    "ca-certificates"
+   ],
+   "files": [
+    {
+     "path": "bin/openssl",
+     "url": "/pkg/openssl/3.5.9/openssl.gz",
+     "sha256": "c13cee6b42da44bde781fbfeb14df6af92620a075bbc666b5119a262dad4f298",
+     "size": 2243346,
+     "unpack": "gzip"
+    },
+    {
+     "path": "etc",
+     "url": "/pkg/openssl/3.5.9/etc.tar.gz",
+     "sha256": "929fb6d84d86fdb003f34b4101446f3011661af16bf16185df7fbdb83cd39664",
+     "size": 4662,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "openssl": {
+     "file": "bin/openssl"
+    }
+   },
+   "links": {
+    "/etc/ssl/openssl.cnf": "etc/ssl/openssl.cnf"
+   },
+   "needs": [
+    "x86"
+   ],
+   "notes": "s_client and other network commands use kernel sockets: TCP leaves the page through the relay (SHIRO_TCP_RELAY)."
+  },
+  {
+   "name": "curl",
+   "version": "8.22.0",
+   "description": "curl: transfer URLs (HTTP/HTTPS/FTP...; OpenSSL, zlib; static x86-64 build)",
+   "license": "curl",
+   "source": "https://curl.se/download/curl-8.22.0.tar.xz",
+   "homepage": "https://curl.se/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/curl.sh",
+   "section": "net",
+   "abi": "x86_64-linux",
+   "deps": [
+    "ca-certificates"
+   ],
+   "files": [
+    {
+     "path": "bin/curl",
+     "url": "/pkg/curl/8.22.0/curl.gz",
+     "sha256": "bb3d6b3cb842cfdb7b928f609ed8cbef545644c9d1d1a9967ad38798522ffd88",
+     "size": 2223324,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "curl": {
+     "file": "bin/curl"
+    }
+   },
+   "needs": [
+    "x86"
+   ],
+   "notes": "Connections go through the kernel's sockets: the TCP relay for the internet, the page for localhost."
+  },
+  {
+   "name": "git",
+   "version": "2.56.0",
+   "description": "Git distributed version control (real git: libcurl/OpenSSL for https remotes)",
+   "license": "GPL-2.0-only",
+   "source": "https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.56.0.tar.xz",
+   "homepage": "https://git-scm.com/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/git.sh",
+   "section": "vcs",
+   "abi": "x86_64-linux",
+   "deps": [
+    "ca-certificates"
+   ],
+   "files": [
+    {
+     "path": "bin/git",
+     "url": "/pkg/git/2.56.0/git.gz",
+     "sha256": "37074fef8114f3e5aa984ff0743551638d485a74ca0949967520b966001e19a6",
+     "size": 1661177,
+     "unpack": "gzip"
+    },
+    {
+     "path": "libexec",
+     "url": "/pkg/git/2.56.0/libexec.tar.gz",
+     "sha256": "5f61027e4dafc1181ebf1152ed6739cc3841a5d4f01175a616c61e329b75cbd1",
+     "size": 4133863,
+     "unpack": "tar.gz"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/git/2.56.0/share.tar.gz",
+     "sha256": "3b35d3ad338cc4b6530492e74b646c0c80113861a34da7f1e9d9affae2c4da21",
+     "size": 10077,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "git": {
+     "file": "bin/git"
+    },
+    "git-upload-pack": {
+     "file": "bin/git"
+    },
+    "git-receive-pack": {
+     "file": "bin/git"
+    },
+    "git-upload-archive": {
+     "file": "bin/git"
+    }
+   },
+   "links": {
+    "/usr/libexec/git-core": "libexec/git-core",
+    "/usr/share/git-core": "share/git-core"
+   },
+   "needs": [
+    "x86"
+   ],
+   "notes": "Replaces Shiro's built-in git (isomorphic-git) while installed; `builtin git` still reaches it. Remotes over https need the TCP relay."
+  },
+  {
+   "name": "fd",
+   "version": "10.3.0",
+   "description": "Simple, fast alternative to find (upstream static musl build)",
+   "license": "MIT OR Apache-2.0",
+   "source": "https://github.com/sharkdp/fd/releases/download/v10.3.0/fd-v10.3.0-x86_64-unknown-linux-musl.tar.gz",
+   "homepage": "https://github.com/sharkdp/fd",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/fd.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/fd",
+     "url": "/pkg/fd/10.3.0/fd.gz",
+     "sha256": "0385d29cbb9fb58e6e4cbc0faf89c69b4d5fab21bcd7af9ad08a4f6b74fabeef",
+     "size": 1706074,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "fd": {
+     "file": "bin/fd"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "fzf",
+   "version": "0.74.0",
+   "description": "Command-line fuzzy finder (upstream static Go build)",
+   "license": "MIT",
+   "source": "https://github.com/junegunn/fzf/releases/download/v0.74.0/fzf-0.74.0-linux_amd64.tar.gz",
+   "homepage": "https://github.com/junegunn/fzf",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/fzf.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/fzf",
+     "url": "/pkg/fzf/0.74.0/fzf.gz",
+     "sha256": "0d0a9d0c4d8017675b4fe2a53bb486d009770cd387f58bcb11732899e3883e30",
+     "size": 1964408,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "fzf": {
+     "file": "bin/fzf"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "yq",
+   "version": "4.52.1",
+   "description": "YAML, JSON, XML and TOML processor (mikefarah/yq, upstream static Go build)",
+   "license": "MIT",
+   "source": "https://github.com/mikefarah/yq/releases/download/v4.52.1/yq_linux_amd64.tar.gz",
+   "homepage": "https://github.com/mikefarah/yq",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/yq.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/yq",
+     "url": "/pkg/yq/4.52.1/yq.gz",
+     "sha256": "f699fd3c9da635b055ae0e0043b9850e006b68660a98feb592809d58098e21e6",
+     "size": 5374164,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "yq": {
+     "file": "bin/yq"
     }
    },
    "needs": [

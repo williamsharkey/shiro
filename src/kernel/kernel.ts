@@ -14,7 +14,7 @@ import { processTable, type ShiroProcess } from '../process-table';
 import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
-  RegularFile, DirFile, openInode, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, flushInode, openInodeInfo,
+  RegularFile, DirFile, openInode, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, flushInode, openInodeInfo, shareInodeNumber, forgetInodeNumber,
 } from './fd';
 import { createPipe } from './pipe';
 import { Process } from './process';
@@ -1092,6 +1092,8 @@ export class Kernel {
           if (!(await fs().exists(from))) return -A.ENOENT;
           await renameInodes(fs(), from, to);
           await fs().rename(from, to);
+          shareInodeNumber(from, to);
+          forgetInodeNumber(from);
           return 0;
         }
         case A.SYS_mkdir:
@@ -1118,7 +1120,7 @@ export class Kernel {
           if (!rmdir && isDir) return -A.EISDIR;
           if (rmdir && !isDir) return -A.ENOTDIR;
           if (isDir) await fs().rmdir(p);
-          else { unlinkInode(fs(), p); await fs().unlink(p); }
+          else { unlinkInode(fs(), p); await fs().unlink(p); forgetInodeNumber(p); }
           return 0;
         }
         case A.SYS_symlink:
@@ -1133,7 +1135,8 @@ export class Kernel {
         }
         case A.SYS_link:
         case A.SYS_linkat: {
-          // The filesystem has no hard links: link() makes an independent copy.
+          // The filesystem has no hard links: link() makes an independent copy
+          // (with the source's inode number, see shareInodeNumber).
           const [od, ol, nd, nl] = nr === A.SYS_link ? [A.AT_FDCWD, args[0], A.AT_FDCWD, args[1]] : [args[0], args[1], args[2], args[3]];
           const from = at(od, 0, ol);
           const to = at(nd, ol, nl);
@@ -1144,6 +1147,7 @@ export class Kernel {
           if ((st.mode & A.S_IFMT) === A.S_IFDIR) return -A.EPERM;
           if (await fs().exists(to)) return -A.EEXIST;
           await fs().writeFile(to, (await fs().readFile(from)) as Uint8Array, { mode: st.mode & 0o7777 });
+          shareInodeNumber(await fs().realpath(from), to);
           return 0;
         }
         case A.SYS_readlink:

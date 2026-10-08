@@ -78,7 +78,8 @@ setup_musl() {
   export MUSL_CROSS
   export PATH="$MUSL_CROSS/bin:$PATH"
   HOST=x86_64-linux-musl
-  export CC="$HOST-gcc" CXX="$HOST-g++" AR="$HOST-ar" RANLIB="$HOST-ranlib" STRIP="$HOST-strip"
+  # -static in CC too: libtool drops it from LDFLAGS
+  export CC="$HOST-gcc -static" CXX="$HOST-g++ -static" AR="$HOST-ar" RANLIB="$HOST-ranlib" STRIP="$HOST-strip"
   export CFLAGS="-Os -fno-pie -no-pie" LDFLAGS="-static -s -no-pie"
   # Static dependencies (ncurses, zlib, ...) are installed here by deps_* below
   SYSROOT="$PKG_WORK/sysroot-x86_64"
@@ -138,14 +139,52 @@ gnu_src() {
 # configure_make SRC [configure args...]: ./configure with the musl compiler,
 # then make. The build host is x86-64 Linux like the target, so configure's
 # test programs (static musl binaries) run natively: no cross-compile guesses.
-# MAKEINFO=true: manuals aren't built.
+# MAKEINFO=true: manuals aren't built. MAKE_ARGS: extra make arguments
+# (libtool projects need LDFLAGS=-all-static to link statically).
 configure_make() {
   local src=$1
   shift
   (cd "$src" && ./configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var --disable-nls "$@" \
-      >configure.log 2>&1 && make -j"$(nproc)" MAKEINFO=true >make.log 2>&1) || {
+      >configure.log 2>&1 && make -j"$(nproc)" MAKEINFO=true ${MAKE_ARGS:+"$MAKE_ARGS"} >make.log 2>&1) || {
     echo "build failed in $src (see configure.log / make.log)" >&2
     for f in configure.log make.log; do [ -f "$src/$f" ] && tail -n 20 "$src/$f" >&2; done
     exit 1
   }
+}
+
+# deps_openssl: static libssl/libcrypto 3.5 (LTS) into $SYSROOT; OPENSSLDIR=/etc/ssl
+OPENSSL_VERSION=3.5.9
+deps_openssl() {
+  [ -f "$SYSROOT/lib/libssl.a" ] && return 0
+  local src
+  src=$(unpack "$(fetch https://github.com/openssl/openssl/releases/download/openssl-$OPENSSL_VERSION/openssl-$OPENSSL_VERSION.tar.gz 603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a)" openssl-$OPENSSL_VERSION)
+  (cd "$src" && ./Configure linux-x86_64 no-shared no-tests no-docs no-module no-dso no-afalgeng no-engine \
+      --prefix="$SYSROOT" --libdir=lib --openssldir=/etc/ssl -static $CFLAGS >configure.log 2>&1 &&
+    make -j"$(nproc)" >make.log 2>&1 && make install_sw >install.log 2>&1) || { echo "openssl build failed in $src" >&2; exit 1; }
+}
+
+# deps_curl: static libcurl (OpenSSL, zlib) into $SYSROOT, for git
+CURL_VERSION=8.22.0
+deps_curl() {
+  [ -f "$SYSROOT/lib/libcurl.a" ] && return 0
+  deps_zlib
+  deps_openssl
+  local src
+  src=$(unpack "$(fetch https://curl.se/download/curl-$CURL_VERSION.tar.xz f7ef3ae8a22e521f289803fe93543eb64c329b58aa73a9e224dfd915a2a5f4f7)" curl-$CURL_VERSION)
+  (cd "$src" && ./configure --prefix="$SYSROOT" --disable-shared --enable-static --with-openssl="$SYSROOT" --with-zlib="$SYSROOT" \
+      --with-ca-bundle=/etc/ssl/certs/ca-certificates.crt --with-ca-path=/etc/ssl/certs \
+      --without-libpsl --without-nghttp2 --without-brotli --without-zstd --without-libidn2 --without-librtmp --disable-ldap \
+      --disable-manual --disable-docs --enable-ipv6 >configure.log 2>&1 &&
+    make -j"$(nproc)" LDFLAGS="$LDFLAGS -all-static" >make.log 2>&1 && make install >install.log 2>&1) || { echo "curl build failed in $src" >&2; exit 1; }
+}
+
+# install_prebuilt FILE PKG/PATH: install an upstream static release binary
+# as shipped (not stripped, so it still matches the release)
+install_prebuilt() {
+  local src=$1 dst="$PKG_OUT/$2"
+  mkdir -p "$(dirname "$dst")"
+  cp "$src" "$dst"
+  chmod 755 "$dst"
+  if file "$dst" 2>/dev/null | grep -q dynamic; then echo "$dst is not static" >&2; exit 1; fi
+  sha256sum "$dst"
 }

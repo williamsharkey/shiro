@@ -63,6 +63,19 @@ and run in Blink, so they need a cross-origin isolated page
 | tar | 1.35 (GNU) | pkg (Blink) | works | `czf` (gzip run as a child through `/bin/sh`), `tzf`, `xzf -C` | |
 | gzip, gunzip, zcat | 1.15 (GNU) | pkg (Blink) | works | `-k`, `-c`, `-d`, `-t`, binary output redirected to a file | |
 | vim | 9.2.0000 | pkg (Blink) | works | edit + `:wq`; syntax colours from the runtime; `:help`; resize (SIGWINCH) updates `&columns`/`&lines`; Ctrl-Z stops it, `fg` resumes; `vim -es` scripting | Startup with `filetype`/`syntax` is slow (seconds): Blink interprets x86 at ~1/120 native speed. No POSIX timers (`timer_create`), so no `'redrawtime'` timeout |
+| tree | 2.2.1 | pkg (Blink) | works | tree drawing and counts, `-d --noreport` | |
+| file | 5.46 | pkg (Blink) | works | shell script, JSON, PNG, gzip, ELF; `--mime-type` (magic database mapped with `mmap`) | |
+| xz, xzcat, unxz | 5.8.1 | pkg (Blink) | works | `-k`, `-l`, `xzcat`; `tar -J` | single-threaded |
+| zstd, zstdcat, unzstd | 1.5.7 | pkg (Blink) | works | `-19`, `zstdcat`; `tar --zstd` | |
+| zip | 3.0 (Info-ZIP) | pkg (Blink) | works | `zip -qr` | no bzip2 method |
+| unzip, zipinfo | 6.0 (Info-ZIP, Debian patches) | pkg (Blink) | works | `-l`, `-t`, `-d`, `zipinfo -1` | no bzip2 method |
+| git | 2.56.0 | pkg (Blink) | works | init, add, commit, log, diff, branch, checkout, merge, stash, tag, describe, status; `git clone` of a local repository | Perl/Python/Tcl parts left out (`git add -i` is the C version; no `git svn`, `gitk`, `send-email`). Remote clones need https through the network relay (curl is linked in) — not in the automated test. Slow on big repositories |
+| openssl | 3.5.9 | pkg (Blink) | works | `dgst -sha256`, `enc -aes-256-cbc -pbkdf2`, `rand`, Ed25519 `genpkey`, self-signed `req -x509`, `x509 -subject` | no engines/providers beyond the default |
+| curl | 8.22.0 (OpenSSL 3.5.9, zlib) | pkg (Blink) | works | HTTP GET with headers against a loopback server on kernel sockets; connection refused is exit 7 | Remote hosts go through the server's WebSocket-to-TCP relay and DNS-over-HTTPS (not in the automated test). No HTTP/2, HTTP/3, IDN, libssh2 |
+| ca-certificates | 2026-09-25 (Mozilla, via curl.se) | pkg | works | `/etc/ssl/certs/ca-certificates.crt`, `/etc/ssl/cert.pem`; openssl and curl depend on it | |
+| fd | 10.3.0 | pkg (Blink; upstream static musl release) | works | `-e`, `-t d`, `.gitignore` respected, `-u` | |
+| fzf | 0.74.0 | pkg (Blink; upstream static Go release) | works | `-f` filter; the TUI with `--height` on the tty (cursor position report, typing narrows the list, Enter prints the pick) | Go runtime in Blink: start-up takes about a second |
+| yq | 4.52.1 (mikefarah) | pkg (Blink; upstream static Go release) | works | path query, `-o json`, `-i` in-place edit | |
 
 Shiro changes these programs needed (tests in `x86-engine.test.ts`,
 `kernel-core.test.ts` and the smoke tests):
@@ -92,6 +105,13 @@ Shiro changes these programs needed (tests in `x86-engine.test.ts`,
   trees, links outside the package root (`"links"`), executable modes.
 - `/etc/passwd`, `/etc/group`, `/etc/hosts`, `/etc/hostname` exist; the
   shell exports `LANG=C.UTF-8`.
+- `mmap` of a kernel file in a Blink guest (patch 0014 fixes a deadlock it
+  hit; `file` maps its magic database).
+- Blink keeps its own log in its in-memory root (`-L /blink.log`), not in
+  the program's working directory.
+- `link(2)` still copies (the filesystem has no hard links) but the copy
+  reports the source's inode number, which git's local clone checks.
+  `kernel-core.test.ts`.
 
 Building and publishing one of these packages:
 

@@ -204,6 +204,10 @@ in the test when `go`/`gcc` exist.
    (`blinkRunner(path, restore)`), and `fork` returns 0 there. Programs that
    fork without exec (GNU tar's compressor helper, servers) work; `vfork`
    and `posix_spawn` keep the cheaper emulation of patch 11.
+14. `mmap` of a kernel fd no longer takes `mmap_lock` around
+   `ShiroMmapFile`, which takes it itself (a deadlock in `file`).
+15. `madvise(MADV_DONTNEED)` zeroes touched anonymous pages, as Linux does
+   (jemalloc in Rust programs such as fd checks it and warns otherwise).
 
 Native Blink's own exit path (`KillOtherThreads`) still hangs after
 multi-threaded Go programs; the wasm build doesn't use it.

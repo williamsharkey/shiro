@@ -123,7 +123,7 @@ works everywhere and the interactive mode needs a page that can block.
 | wabt (wat2wasm, wasm2wat, ...) | 1.0.37 | Wasmer | preview1 | ok |
 | ruby | 0.1.2 (Ruby 3.2.0dev) | Wasmer | preview1 | partial: irb needs blocking stdin |
 | fortune, lolcat, brotli, qr2text, viu | | Wasmer | wasi_unstable | ok |
-| openssl | 0.2.0 (OpenSSL 1.1) | Wasmer | wasi_unstable | ok (no s_client: sockets) |
+| openssl-wasm (openssl) | 0.2.0 (OpenSSL 1.1) | Wasmer | wasi_unstable | ok (no s_client: sockets). The `openssl` package is now OpenSSL 3.5 as an x86-64 build ([COMPAT.md](COMPAT.md)) |
 | quickjs (qjs) | 0.0.3 | Wasmer | wasi_unstable | partial: REPL |
 | util-linux (cal only) | 0.0.1 | Wasmer | wasi_unstable | ok; exits 1 after correct output |
 | grep (GNU 3.12), sed (GNU 4.9) | | Wasmer | WASIX | ok as kernel processes, as `/usr/bin/grep` and `/usr/bin/sed`; `grep -r` fails with ENOSYS |
@@ -135,7 +135,7 @@ works everywhere and the interactive mode needs a page that can block.
 | php | 8.3 | Wasmer | WASIX | ok as kernel processes (`php -r`, exceptions, fatal errors through zend_bailout's longjmp); 86 MB |
 | python3.13 | 3.13 | Wasmer | WASIX | runs as a kernel process (`-c`, stdlib imports) given its standard library; the package needs mounts for that (62 MB) |
 | clang 16, lld, llvm-ar/nm | 16 | Wasmer | WASIX | `--version` runs; needs mounts for its sysroot (111 MB) |
-| curl | 8.4.0 | Wasmer | WASIX | ok as kernel processes: HTTP and HTTPS (OpenSSL in the guest) through the kernel sockets and the TCP relay; real sites need its CA certificates mounted at `/openssl` |
+| curl-wasix (curl) | 8.4.0 | Wasmer | WASIX | The `curl` package is now curl 8.22 as an x86-64 build ([COMPAT.md](COMPAT.md)). ok as kernel processes: HTTP and HTTPS (OpenSSL in the guest) through the kernel sockets and the TCP relay; real sites need its CA certificates mounted at `/openssl` |
 
 "Ok as kernel processes" means installable and working where WASM processes
 can use threads (`sab` mode: a cross-origin isolated page). Without that, WASIX

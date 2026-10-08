@@ -571,8 +571,9 @@ async function run(msg) {
     }
     const argv = msg.argv && msg.argv.length ? msg.argv : [msg.path];
     // blink -0 PROGRAM ARGV0 ARGS...: load PROGRAM (the resolved path, never
-    // a PATH search of argv[0]) and give the guest argv[0] as invoked
-    M.callMain([...(msg.debug && msg.env?.SHIRO_BLINK_STRACE ? ['-s', '-e'] : []), '-0', msg.path || argv[0], argv[0], ...argv.slice(1)]);
+    // a PATH search of argv[0]) and give the guest argv[0] as invoked.
+    // Blink's own log goes to the in-memory root, not the guest's cwd.
+    M.callMain([...(msg.debug && msg.env?.SHIRO_BLINK_STRACE ? ['-s', '-e'] : []), '-L', '/blink.log', '-0', msg.path || argv[0], argv[0], ...argv.slice(1)]);
   } catch (e) {
     if (e && e.name === 'ExitStatus') exitGuest(e.status);
     else if (e !== 'unwind') fail(String((e && e.stack) || e), 134);

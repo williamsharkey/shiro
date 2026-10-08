@@ -45,7 +45,12 @@ function fakeTerminal(rows = 24, cols = 80) {
   const tty = new TtySession();
   tty.resize(rows, cols);
   let screen = '';
-  tty.pty.onOutput((b) => { screen += new TextDecoder().decode(b); });
+  tty.pty.onOutput((b) => {
+    const s = new TextDecoder().decode(b);
+    screen += s;
+    // answer cursor position reports as xterm.js does (fzf --height asks)
+    if (s.includes('\x1b[6n')) queueMicrotask(() => tty.pty.input(`\x1b[${tty.pty.winsize.rows};1R`));
+  });
   return {
     tty,
     get screen() { return screen; },
@@ -323,5 +328,177 @@ describe('tar + gzip', () => {
       .toBe('proj/\nproj/a.txt\nproj/sub/\nproj/sub/b.txt\n');
     expect((await sh('mkdir x && tar xzf p.tgz -C x && cat x/proj/sub/b.txt')).out).toBe('beta\n');
     expect((await sh('tar --version | head -1')).out).toBe('tar (GNU tar) 1.35\n');
+  }, 180_000);
+});
+
+describe('tree', () => {
+  it('draws a directory tree with counts', async () => {
+    await install('tree');
+    await fs.mkdir('/home/user/w/t/a/b', { recursive: true });
+    await fs.writeFile('/home/user/w/t/a/b/f.txt', 'x');
+    await fs.writeFile('/home/user/w/t/top.md', 'y');
+    const r = await sh('tree t');
+    // tree 2 indents with no-break spaces in a UTF-8 locale
+    expect(r.out.replace(/\u00a0/g, ' ')).toBe('t\n├── a\n│   └── b\n│       └── f.txt\n└── top.md\n\n3 directories, 2 files\n');
+    expect((await sh('tree -d --noreport t')).out.replace(/\u00a0/g, ' ')).toBe('t\n└── a\n    └── b\n');
+  }, 180_000);
+});
+
+describe('file', () => {
+  it('identifies files with its magic database', async () => {
+    await install('file', 'gzip');
+    await fs.writeFile('/home/user/w/s.sh', '#!/bin/sh\necho hi\n');
+    await fs.writeFile('/home/user/w/d.json', '{"a": [1, 2]}\n');
+    await fs.writeFile('/home/user/w/p.png', new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 16, 0, 0, 0, 8, 8, 6, 0, 0, 0]));
+    const r = await sh('gzip -k s.sh && file s.sh d.json p.png s.sh.gz /usr/lib/pkg/file/bin/file');
+    expect(r.out).toContain('s.sh:');
+    expect(r.out).toMatch(/s\.sh: +POSIX shell script, ASCII text executable/);
+    expect(r.out).toMatch(/d\.json: +JSON (text )?data/);
+    expect(r.out).toMatch(/p\.png: +PNG image data, 16 x 8, 8-bit\/color RGBA/);
+    expect(r.out).toMatch(/s\.sh\.gz: +gzip compressed data/);
+    expect(r.out).toMatch(/file: +ELF 64-bit LSB executable, x86-64, .*statically linked/);
+    expect((await sh('file -b --mime-type d.json')).out).toBe('application/json\n');
+  }, 180_000);
+});
+
+describe('xz, zstd', () => {
+  it('compress and decompress, and tar uses them for -J and --zstd', async () => {
+    await install('xz', 'zstd', 'tar');
+    await fs.mkdir('/home/user/w/data', { recursive: true });
+    await fs.writeFile('/home/user/w/data/big.txt', 'shiro '.repeat(5000));
+    expect((await sh('xz -k data/big.txt && xz -l data/big.txt.xz | tail -1')).out).toMatch(/1 +1 +[\d.]+ (KiB|B) +29\.\d KiB/);
+    expect((await sh('xzcat data/big.txt.xz | wc -c')).out.trim()).toBe('30000');
+    expect((await sh('zstd -q -19 data/big.txt -o big.zst && zstdcat big.zst | wc -c')).out.trim()).toBe('30000');
+    expect((await sh('rm data/big.txt.xz && tar cJf d.tar.xz data && tar tJf d.tar.xz')).out).toBe('data/\ndata/big.txt\n');
+    expect((await sh('tar --zstd -cf d.tar.zst data && tar --zstd -tf d.tar.zst')).out).toBe('data/\ndata/big.txt\n');
+  }, 180_000);
+});
+
+describe('zip, unzip', () => {
+  it('zip -r, list, test and extract', async () => {
+    await install('zip', 'unzip');
+    await fs.mkdir('/home/user/w/z/sub', { recursive: true });
+    await fs.writeFile('/home/user/w/z/a.txt', 'alpha\n');
+    await fs.writeFile('/home/user/w/z/sub/b.txt', 'beta\n'.repeat(50));
+    expect((await sh('zip -qr z.zip z && unzip -l z.zip')).out).toMatch(/z\/sub\/b\.txt\n[ -]+\n +\d+ +4 files\n$/);
+    expect((await sh('unzip -tq z.zip')).out).toContain('No errors detected');
+    expect((await sh('mkdir zout && unzip -q z.zip -d zout && cat zout/z/a.txt')).out).toBe('alpha\n');
+    expect((await sh('zipinfo -1 z.zip | sort')).out).toBe('z/\nz/a.txt\nz/sub/\nz/sub/b.txt\n');
+  }, 180_000);
+});
+
+describe('git', () => {
+  it('init, add, commit, log, diff, branch, merge, status, tag; clone over the local transport', async () => {
+    await install('git');
+    const g = async (cmd: string) => {
+      const r = await sh(cmd);
+      if (r.exitCode !== 0) throw new Error(`${cmd} -> ${r.exitCode}\n${r.out}${r.err}`);
+      return r.out;
+    };
+    expect(await g('git --version')).toBe('git version 2.56.0\n');
+    await g('git config --global user.name "Shiro Tester" && git config --global user.email t@shiro.computer && git config --global init.defaultBranch main');
+    await g('mkdir repo && cd repo && git init -q && echo one > a.txt && git add a.txt && git commit -qm first');
+    await sh('cd /home/user/w/repo');
+    await g('echo two >> a.txt && git commit -qam second && git checkout -qb feature && echo f > f.txt && git add f.txt && git commit -qm feature');
+    expect(await g('git log --format=%s')).toBe('feature\nsecond\nfirst\n');
+    await g('git checkout -q main && echo three >> a.txt && git commit -qam third');
+    expect(await g('git merge -q --no-edit feature && git log --format=%s -1')).toBe("Merge branch 'feature'\n");
+    expect(await g('ls')).toContain('f.txt');
+    await g('echo four >> a.txt');
+    expect(await g('git status --short')).toBe(' M a.txt\n');
+    expect(await g('git diff')).toContain('@@ -1,3 +1,4 @@\n one\n two\n three\n+four\n');
+    await g('git stash -q && git tag v1');
+    expect(await g('git status --porcelain')).toBe('');
+    expect(await g('git describe --tags')).toBe('v1\n');
+    await sh('cd /home/user/w');
+    await g('git clone -q repo copy');
+    expect((await g('cd copy && git log --oneline | wc -l')).trim()).toBe('5');
+    expect(await g('git branch -a')).toContain('remotes/origin/feature');
+  }, 300_000);
+});
+
+describe('openssl', () => {
+  it('hashes, encrypts, makes an Ed25519 key and a self-signed certificate', async () => {
+    await install('openssl');
+    await fs.writeFile('/home/user/w/m.txt', 'abc');
+    expect((await sh('openssl dgst -sha256 m.txt')).out).toBe('SHA2-256(m.txt)= ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad\n');
+    expect((await sh('openssl enc -aes-256-cbc -pbkdf2 -k pw -in m.txt -out m.enc && openssl enc -d -aes-256-cbc -pbkdf2 -k pw -in m.enc')).out).toBe('abc');
+    expect((await sh('openssl rand -hex 8')).out).toMatch(/^[0-9a-f]{16}\n$/);
+    const r = await sh('openssl genpkey -algorithm ed25519 -out k.pem && openssl req -new -x509 -key k.pem -subj /CN=shiro.test -days 1 -out c.pem && openssl x509 -in c.pem -noout -subject');
+    expect(r.out).toBe('subject=CN=shiro.test\n');
+    expect((await sh('openssl version')).out).toMatch(/^OpenSSL 3\.5\.9 /);
+  }, 180_000);
+});
+
+describe('curl', () => {
+  it('fetches from a loopback HTTP server through kernel sockets', async () => {
+    await install('curl');
+    const { netStack } = await import('@shiro/kernel/net');
+    const { AF_INET, SOCK_STREAM } = await import('@shiro/kernel/abi');
+    const l = netStack.socket(AF_INET, SOCK_STREAM, 0) as any;
+    expect(l.bind({ family: AF_INET, address: '127.0.0.1', port: 18080 })).toBe(0);
+    expect(l.listen(4)).toBe(0);
+    const served = (async () => {
+      const c = await l.accept();
+      const buf = new Uint8Array(4096);
+      let req = '';
+      while (!req.includes('\r\n\r\n')) {
+        const n = await c.read(buf);
+        if (n <= 0) break;
+        req += new TextDecoder().decode(buf.subarray(0, n));
+      }
+      const body = '{"ok":true}';
+      await c.write(new TextEncoder().encode(`HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n${body}`));
+      await c.close();
+      return req;
+    })();
+    const r = await sh('curl -s -H "X-Test: 1" http://127.0.0.1:18080/hello');
+    expect(r.out).toBe('{"ok":true}');
+    const req = await served;
+    expect(req).toMatch(/^GET \/hello HTTP\/1\.1\r\n/);
+    expect(req).toContain('X-Test: 1');
+    await l.close();
+    expect((await sh('curl --version | head -1')).out).toMatch(/^curl 8\.22\.0 .*OpenSSL\/3\.5\.9/);
+    expect((await sh('curl -s http://127.0.0.1:18081/; echo "rc=$?"')).out).toBe('rc=7\n'); // connection refused
+  }, 180_000);
+});
+
+describe('fd', () => {
+  it('finds files by extension, type and pattern, honouring .gitignore', async () => {
+    await install('fd');
+    await fs.mkdir('/home/user/w/fdproj/src/sub', { recursive: true });
+    await fs.mkdir('/home/user/w/fdproj/.git', { recursive: true });
+    await fs.writeFile('/home/user/w/fdproj/src/main.rs', 'fn main() {}\n');
+    await fs.writeFile('/home/user/w/fdproj/src/sub/a.py', 'x = 1\n');
+    await fs.writeFile('/home/user/w/fdproj/build.log', 'log\n');
+    await fs.writeFile('/home/user/w/fdproj/.gitignore', '*.log\n');
+    const r = await sh('cd fdproj && fd -e rs && fd -t d && fd -u log && fd log; echo rc=$?');
+    expect(r.err).toBe(''); // no jemalloc MADV_DONTNEED warning
+    expect(r.out).toBe('src/main.rs\nsrc/\nsrc/sub/\nbuild.log\nrc=0\n');
+  }, 180_000);
+});
+
+describe('fzf', () => {
+  it('filters non-interactively and picks a line in its TUI', async () => {
+    await install('fzf');
+    expect((await sh("printf 'apple\\nbanana\\ncherry\\n' | fzf -f an")).out).toBe('banana\n');
+    await fs.writeFile('/home/user/w/fruit.txt', 'apple\nbanana\ncherry\n');
+    const { term, done } = onTerminal('fzf --height=10 < fruit.txt > picked.txt');
+    await until(() => term.screen.includes('3/3'), 'the item list');
+    term.type('chr');
+    await until(() => term.screen.includes('1/3'), 'the filtered list');
+    term.type('\r');
+    expect(await done).toBe(0);
+    expect(await fs.readFile('/home/user/w/picked.txt', 'utf8')).toBe('cherry\n');
+  }, 180_000);
+});
+
+describe('yq', () => {
+  it('queries and converts YAML', async () => {
+    await install('yq');
+    await fs.writeFile('/home/user/w/t.yaml', 'a: 1\nb: [x, y]\n');
+    expect((await sh("yq '.b[1]' t.yaml")).out).toBe('y\n');
+    expect((await sh('yq -o json -I0 t.yaml')).out).toBe('{"a":1,"b":["x","y"]}\n');
+    expect((await sh("yq -i '.a = 2' t.yaml && cat t.yaml")).out).toBe('a: 2\nb: [x, y]\n');
   }, 180_000);
 });

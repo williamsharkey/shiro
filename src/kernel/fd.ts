@@ -508,10 +508,23 @@ export function unlinkInode(fs: FileSystem, path: string): void {
 
 /** Stable small inode numbers for paths (the FileSystem has none). */
 const inoNumbers = new Map<string, number>();
+let nextIno = 2;
 export function inodeNumber(path: string): number {
   let n = inoNumbers.get(path);
-  if (!n) { n = inoNumbers.size + 2; inoNumbers.set(path, n); }
+  if (!n) { n = nextIno++; inoNumbers.set(path, n); }
   return n;
+}
+
+/**
+ * link() copies (no hard links), but the copy reports its source's inode
+ * number, as a hard link would: git's local clone checks that. A path that
+ * is removed or replaced gets a fresh number.
+ */
+export function shareInodeNumber(from: string, to: string): void {
+  inoNumbers.set(to, inodeNumber(from));
+}
+export function forgetInodeNumber(path: string): void {
+  inoNumbers.delete(path);
 }
 
 export class RegularFile implements OpenFile {

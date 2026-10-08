@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # publish.sh NAME VERSION: copy an x86 recipe's output ($PKG_OUT/NAME/) into
 # public/pkg/NAME/VERSION/ (served at /pkg/... by shiro.computer), compressed:
-# every program in bin/ (and sbin/, libexec/) as its own .gz, every other
-# top-level directory (share/, etc/, ...) as one reproducible .tar.gz.
+# every program in bin/ (and sbin/) as its own .gz, every other top-level
+# directory (libexec/, share/, etc/, ...) as one reproducible .tar.gz, which
+# keeps symlinks and modes.
 # Prints the index "files" entries for src/pkg-index.json; with --index, also
 # writes them into the package's entry there (which must exist).
 set -euo pipefail
@@ -23,7 +24,7 @@ entry() { # path file unpack
 ENTRIES=$(mktemp)
 trap 'rm -f "$ENTRIES"' EXIT
 exec 3>&1 >"$ENTRIES"
-for dir in bin sbin libexec; do
+for dir in bin sbin; do
   [ -d "$dir" ] || continue
   find "$dir" -type f | sort | while read -r f; do
     out="$DEST/$(basename "$f").gz"
@@ -32,7 +33,7 @@ for dir in bin sbin libexec; do
   done
 done
 for dir in $(find . -mindepth 1 -maxdepth 1 -type d | sed 's|^\./||' | sort); do
-  case $dir in bin|sbin|libexec) continue ;; esac
+  case $dir in bin|sbin) continue ;; esac
   out="$DEST/$dir.tar.gz"
   tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -C "$dir" -cf - . | gzip -9n >"$out"
   entry "$dir" "$out" tar.gz
