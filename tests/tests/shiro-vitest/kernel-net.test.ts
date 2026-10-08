@@ -6,7 +6,7 @@
  * SHIRO_TCP_RELAY=1. The kernel side runs here with Node's WebSocket/fetch.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import {
   NetStack, KSocket, KDatagramSocket, AF_INET, AF_INET6, SOCK_STREAM, SOCK_DGRAM, SOCK_NONBLOCK,
   POLLIN, POLLOUT, SOL_SOCKET, SO_ERROR, SO_TYPE, SHUT_WR, EACCES, EAGAIN, EINPROGRESS, ENETUNREACH,
@@ -222,6 +222,18 @@ describe('kernel sockets over the TCP relay', () => {
     });
     expect(otherIp).toBe(false);
     expect(await opened(`${base}?t=${token}`, P.origin)).toBe(true);
+  });
+
+  it('blocks private ranges without blocking public IPv4 (BlockList matches IPv4 against ::ffff:0:0/96)', async () => {
+    // Plain Node (vitest's polyfilled modules can't load server.mjs)
+    const server = new URL('../../../server.mjs', import.meta.url).href;
+    const addrs = ['8.8.8.8', '93.184.215.14', '172.66.147.243', '2606:4700::1111',
+      '10.0.0.1', '127.0.0.1', '169.254.169.254', '172.16.5.4', '::ffff:8.8.8.8', '::ffff:127.0.0.1', '64:ff9b::808:808', 'fd00:ec2::254'];
+    const out = execFileSync('node', ['--input-type=module', '-e',
+      `const m = await import(${JSON.stringify(server)}); console.log(JSON.stringify(${JSON.stringify(addrs)}.map((a) => m.isBlockedAddress(a)))); process.exit(0);`,
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const blocked = JSON.parse(out.trim().split('\n').pop()!);
+    expect(Object.fromEntries(addrs.map((a, i) => [a, blocked[i]]))).toEqual(Object.fromEntries(addrs.map((a, i) => [a, i >= 4])));
   });
 
   it('fails cleanly when no relay is configured', async () => {
