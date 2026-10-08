@@ -144,8 +144,8 @@ function wireWorker(proc: Process, w: GuestWorker): void {
     if (m?.type === 'blink-watch') watch(m.fd);
     else if (m?.type === 'blink-unwatch') { subs.get(m.fd)?.(); subs.delete(m.fd); }
   });
-  proc.data.onSignal = (sig: number) => w.postMessage({ type: 'blink-signal', sig });
-  proc.onTerminate(() => { for (const off of subs.values()) off(); subs.clear(); });
+  const unlisten = proc.addSignalListener((sig: number) => { if (sig > 0) w.postMessage({ type: 'blink-signal', sig }); });
+  proc.onTerminate(() => { unlisten(); for (const off of subs.values()) off(); subs.clear(); });
 }
 
 /** True when the file at `path` starts with the ELF magic. */

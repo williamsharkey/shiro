@@ -1,7 +1,7 @@
 From baddd29482d550faef57361db9226a5e8524047b Mon Sep 17 00:00:00 2001
 From: shiro <x@x>
 Date: Thu, 8 Oct 2026 00:08:10 +0000
-Subject: [PATCH 5/6] Fix guest-thread races: FIFO page cooling, TLB flag
+Subject: [PATCH 5/9] Fix guest-thread races: FIFO page cooling, TLB flag
  clear-then-flush, GIL
 
 - Freed pages went back on a LIFO list and were handed out again at once,

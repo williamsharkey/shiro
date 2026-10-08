@@ -1,7 +1,7 @@
 From 884c3d8df9756877da35d469664fc9138d6f2949 Mon Sep 17 00:00:00 2001
 From: shiro <x@x>
 Date: Wed, 7 Oct 2026 23:29:04 +0000
-Subject: [PATCH 2/6] emscripten: force the runtime to exit when the guest
+Subject: [PATCH 2/9] emscripten: force the runtime to exit when the guest
  exits
 
 ---

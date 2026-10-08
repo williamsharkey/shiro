@@ -1,0 +1,42 @@
+From 07546750e5c5919c8f5e180bc5eaede9f3c38349 Mon Sep 17 00:00:00 2001
+From: shiro <x@x>
+Date: Thu, 8 Oct 2026 01:23:42 +0000
+Subject: [PATCH 9/9] emscripten: a fatal signal ends the process through the
+ embedder
+
+TerminateSignal() reaped threads with KillOtherThreads(), which hangs under
+emscripten. It now hands the signal to Module.shiroKill (the embedder
+re-raises it with the default action, so the parent sees WTERMSIG), falling
+back to exit(128 + sig).
+---
+ blink/blink.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/blink/blink.c b/blink/blink.c
+index faa64b3..b4626c6 100644
+--- a/blink/blink.c
++++ b/blink/blink.c
+@@ -151,6 +151,20 @@ void TerminateSignal(struct Machine *m, int sig, int code) {
+   int syssig;
+   struct sigaction sa;
+   unassert(!IsSignalIgnoredByDefault(sig));
++#ifdef __EMSCRIPTEN__
++  // Reaping threads hangs here (see SysExitGroup); let the embedder end
++  // the process with the signal (Module.shiroKill), else exit 128+sig.
++  if (IsSignalSerious(sig)) {
++    ERRF("terminating due to %s (rip=%#" PRIx64 " code=%d faultaddr=%#" PRIx64 ")",
++         DescribeSignal(sig), m->ip, code, m->faultaddr);
++    PrintDiagnostics(m);
++  }
++  MAIN_THREAD_ASYNC_EM_ASM({
++    if (Module['shiroKill']) Module['shiroKill']($0);
++    else if (Module['shiroExit']) Module['shiroExit'](128 + $0);
++  }, sig);
++  emscripten_force_exit(128 + sig);
++#endif
+   KillOtherThreads(m->system);
+ #ifdef HAVE_JIT
+   DisableJit(&m->system->jit);  // unmapping exec pages is slow
+-- 
+2.43.0
+

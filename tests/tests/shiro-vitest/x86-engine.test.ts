@@ -34,6 +34,8 @@ const haveGo = tryBuild(goExe, ['build', '-ldflags=-s', '-o', goBin, 'hello.go']
 const haveHttp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', httpBin, 'nethttp.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const tcpBin = join(out, 'tcpecho');
 const haveTcp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', tcpBin, 'tcpecho.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
+const ttyBin = join(out, 'tty');
+const haveTty = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', ttyBin, 'tty.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const haveGlibc = tryBuild('gcc', ['-static', '-Os', '-o', glibcBin, 'hello.c']);
 
 async function setup(bin: Uint8Array) {
@@ -239,3 +241,64 @@ describe.skipIf(!haveTcp)('Blink engine: real TCP through the kernel relay', () 
   }, 120_000);
 });
 
+
+describe.skipIf(!haveTty)('Blink engine: interactive program on a kernel pty', () => {
+  it('sees a tty, its size, raw keys without echo, SIGWINCH and Ctrl-C', async () => {
+    const { fs } = await setup(readFileSync(ttyBin));
+    const { Kernel } = await import('@shiro/kernel/kernel');
+    const { TtySession, attachKernelTty } = await import('@shiro/kernel/pty');
+    const { JobControl } = await import('@shiro/kernel/signals');
+    const { blinkRunner } = await import('@shiro/x86-engine/blink');
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    const jc = new JobControl();
+    attachKernelTty(kernel, jc);
+    const tty = new TtySession({ jc });
+    let screen = '';
+    tty.pty.onOutput((b: Uint8Array) => { screen += new TextDecoder().decode(b); });
+    tty.resize(33, 101);
+    const until = async (re: RegExp, ms = 30_000) => {
+      const t0 = Date.now();
+      while (!re.test(screen)) {
+        if (Date.now() - t0 > ms) throw new Error(`timed out waiting for ${re}; screen: ${JSON.stringify(screen)}`);
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    };
+    const p = tty.spawnJob(kernel, { path: '/home/user/work/prog', argv: ['prog'], cwd: '/home/user/work', run: blinkRunner('/home/user/work/prog') });
+    const done = tty.foreground({ pgid: p.pgid });
+    await until(/raw: press a key/);
+    expect(screen).toContain('tty rows=33 cols=101');
+    tty.pty.input('x');
+    await until(/key='x'/);
+    expect(screen).not.toMatch(/key\r?\nx|^x/m);       // raw mode: no echo
+    await until(/waiting for signals/);
+    tty.resize(40, 120);
+    await until(/got window changed/);
+    tty.pty.input('\x03');
+    await until(/got interrupt/);
+    expect(await done).toEqual({ type: 'exited', status: 0 });
+  }, 120_000);
+
+  it('Ctrl-C ends a C program blocked reading the tty (no handler)', async () => {
+    const { fs } = await setup(readFileSync(join(FIX, 'hello-musl')));
+    const { Kernel } = await import('@shiro/kernel/kernel');
+    const { TtySession, attachKernelTty } = await import('@shiro/kernel/pty');
+    const { JobControl } = await import('@shiro/kernel/signals');
+    const { shellExitCode } = await import('@shiro/kernel/abi');
+    const { blinkRunner } = await import('@shiro/x86-engine/blink');
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    const jc = new JobControl();
+    attachKernelTty(kernel, jc);
+    const tty = new TtySession({ jc });
+    let screen = '';
+    tty.pty.onOutput((b: Uint8Array) => { screen += new TextDecoder().decode(b); });
+    const p = tty.spawnJob(kernel, { path: '/home/user/work/prog', argv: ['prog'], cwd: '/home/user/work', run: blinkRunner('/home/user/work/prog') });
+    const done = tty.foreground({ pgid: p.pgid });
+    const t0 = Date.now();
+    while (!/read=/.test(screen) && Date.now() - t0 < 30_000) await new Promise((r) => setTimeout(r, 20));
+    await new Promise((r) => setTimeout(r, 300)); // now blocked in fgets(stdin)
+    tty.pty.input('\x03');
+    const r = await done;
+    expect(r.type).toBe('exited');
+    expect(shellExitCode((r as any).status)).toBe(130);
+  }, 120_000);
+});

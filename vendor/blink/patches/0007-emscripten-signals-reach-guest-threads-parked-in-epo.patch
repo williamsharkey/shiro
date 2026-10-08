@@ -1,0 +1,89 @@
+From 3505daedf8d292a880772988d71dc6e2e50ba352 Mon Sep 17 00:00:00 2001
+From: shiro <x@x>
+Date: Thu, 8 Oct 2026 01:09:40 +0000
+Subject: [PATCH 7/9] emscripten: signals reach guest threads parked in
+ epoll_pwait or read
+
+Without host signals nothing interrupted these waits: epoll_pwait now
+waits in kPollingMs slices and checks for signals, a blocking read's poll
+loop returns EINTR when a signal is queued, and blink_shiro_signal()
+prefers a thread that isn't in a syscall.
+---
+ blink/blink.c   | 11 ++++++++---
+ blink/syscall.c | 23 ++++++++++++++++++++++-
+ 2 files changed, 30 insertions(+), 4 deletions(-)
+
+diff --git a/blink/blink.c b/blink/blink.c
+index 0b7d6fb..faa64b3 100644
+--- a/blink/blink.c
++++ b/blink/blink.c
+@@ -213,17 +213,22 @@ static struct System *_Atomic g_shiro_system;
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal(int sig) {
+   struct Dll *e;
+   struct System *s;
+-  struct Machine *m, *pick = 0;
++  struct Machine *m, *pick = 0, *busy = 0, *any = 0;
+   if (!(s = g_shiro_system) || sig < 1 || sig > 64) return;
+   LOCK(&s->machines_lock);
++  // Prefer a thread running guest code that doesn't block the signal, then
++  // one in a syscall (blocking waits poll for signals), then anyone.
+   for (e = dll_first(s->machines); e; e = dll_next(s->machines, e)) {
+     m = MACHINE_CONTAINER(e);
+-    if (!pick) pick = m;
+-    if (!(m->sigmask & ((u64)1 << (sig - 1)))) {
++    if (!any) any = m;
++    if (m->sigmask & ((u64)1 << (sig - 1))) continue;
++    if (!m->insyscall) {
+       pick = m;
+       break;
+     }
++    if (!busy) busy = m;
+   }
++  if (!pick) pick = busy ? busy : any;
+   if (pick) EnqueueSignal(pick, sig);
+   UNLOCK(&s->machines_lock);
+ }
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 36a5f7c..fa96ea0 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -170,6 +170,12 @@ ssize_t em_readv(int fd, const struct iovec *iov, int iovcnt) {
+     pfd.fd = fd;
+     pfd.events = POLLIN;
+     while (em_poll(&pfd, 1, 50) == 0) {
++      // A signal for this thread ends the wait (SysRead restarts or
++      // delivers it, like a host EINTR would).
++      if (g_machine && (g_machine->signals & ~g_machine->sigmask)) {
++        errno = EINTR;
++        return -1;
++      }
+     }
+   }
+   size_t ret = VfsReadv(fd, iov, iovcnt);
+@@ -5391,7 +5397,22 @@ static i32 EpollPwait(struct Machine *m, i32 epfd, i64 eventsaddr,
+       } else {
+         waitfor = GetZeroTime();
+       }
+-#if defined(HAVE_EPOLL_PWAIT2) && !defined(MUSL_CROSS_MAKE)
++#ifdef __EMSCRIPTEN__
++      // No host signal interrupts this wait under emscripten: wait in
++      // slices so signals queued by blink_shiro_signal() are noticed.
++      if (CompareTime(waitfor, FromMilliseconds(kPollingMs)) > 0) {
++        waitfor = FromMilliseconds(kPollingMs);
++      }
++      rc = epoll_pwait(epfd, events, maxevents,
++                       ConvertTimeToInt(ToMilliseconds(waitfor)), &oldmask);
++      if (!rc && CompareTime(GetTime(), deadline) < 0) {
++        if (CheckInterrupt(m, false)) {
++          rc = -1;
++          break;
++        }
++        continue;
++      }
++#elif defined(HAVE_EPOLL_PWAIT2) && !defined(MUSL_CROSS_MAKE)
+       rc = epoll_pwait2(epfd, events, maxevents, &waitfor, &oldmask);
+ #else
+       rc = epoll_pwait(epfd, events, maxevents,
+-- 
+2.43.0
+

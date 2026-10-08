@@ -1,7 +1,7 @@
 From 80dd1622a7c23c2d071e952373d584862880a8b3 Mon Sep 17 00:00:00 2001
 From: shiro <x@x>
 Date: Wed, 7 Oct 2026 23:24:05 +0000
-Subject: [PATCH 1/6] Zero %rdx at ELF entry; emulate eventfd on a pipe; fix
+Subject: [PATCH 1/9] Zero %rdx at ELF entry; emulate eventfd on a pipe; fix
  epoll configure check
 
 ---
