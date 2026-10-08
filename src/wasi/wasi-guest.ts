@@ -19,9 +19,9 @@
  * a wasi or wasix module resolves to a stub returning ENOSYS, so binaries
  * that import more than they use still instantiate.
  *
- * The kernel only has openat among the *at calls, so for the other path
- * operations the guest turns (dirfd, relative path) into an absolute path
- * itself, from the paths of the preopens and of directories it opened.
+ * Path operations map onto the kernel's *at syscalls with the WASI dirfd;
+ * preview1 sockets (sock_accept/recv/send/shutdown) onto accept4/recvfrom/
+ * sendto/shutdown.
  */
 
 import * as A from '../kernel/abi';
@@ -143,6 +143,32 @@ export class WasiGuest {
     const b = enc.encode(path);
     return yield* this.sys(nr, [b.length, ...args], b, out);
   }
+  /** *at syscall: (dirfd, pathLen, ...args) with the path at data offset 0. */
+  private *atCall(nr: number, dirfd: number, path: string, args: number[] = [], out?: number): Sys<SysReply> {
+    const b = enc.encode(path);
+    return yield* this.sys(nr, [dirfd, b.length, ...args], b, out);
+  }
+  /** Two paths back to back, with their byte lengths. */
+  private twoPaths(x: string, y: string): [Uint8Array, number, number] {
+    const a = enc.encode(x), b = enc.encode(y);
+    const data = new Uint8Array(a.length + b.length);
+    data.set(a); data.set(b, a.length);
+    return [data, a.length, b.length];
+  }
+  /** utimensat for WASI fst_flags (ATIM=1, ATIM_NOW=2, MTIM=4, MTIM_NOW=8); empty path = the fd itself. */
+  private *utimens(dirfd: number, path: string, atim: bigint, mtim: bigint, fst: number, flags: number): Sys {
+    const p = enc.encode(path);
+    const data = new Uint8Array(p.length + 32);
+    data.set(p);
+    const v = new DataView(data.buffer, p.length, 32);
+    const put = (off: number, t: bigint, set: boolean, now: boolean) => {
+      v.setBigUint64(off, set ? t / 1_000_000_000n : 0n, true);
+      v.setBigUint64(off + 8, BigInt(now ? A.UTIME_NOW : set ? Number(t % 1_000_000_000n) : A.UTIME_OMIT), true);
+    };
+    put(0, atim, !!(fst & 1), !!(fst & 2));
+    put(16, mtim, !!(fst & 4), !!(fst & 8));
+    return wasiErrno((yield* this.sys(A.SYS_utimensat, [dirfd, p.length, flags, 1], data)).ret);
+  }
   private *writeAll(fd: number, data: Uint8Array): Sys<number> {
     let done = 0;
     const max = this.opts.dataSize;
@@ -163,7 +189,7 @@ export class WasiGuest {
     return yield* this.call(A.SYS_lseek, fd, off >>> 0, Math.floor(off / 0x100000000), whence);
   }
 
-  /** Absolute path for `path` relative to `dirfd`, or -errno. */
+  /** Absolute path for `path` relative to a dirfd we opened, or -errno (only fchdir spawn actions need it). */
   private resolve(dirfd: number, path: string): string | number {
     if (!path) return -A.ENOENT;
     if (path.startsWith('/')) return normalize(path);
@@ -210,14 +236,33 @@ export class WasiGuest {
         fd_fdstat_set_rights: () => 0,
         fd_advise: () => 0,
         fd_allocate: () => 0,
-        fd_filestat_set_times: () => 0,
-        path_filestat_set_times: () => 0,
-        path_link: () => WASI_ENOTSUP,
-        path_symlink: () => WASI_ENOTSUP,
-        sock_accept: () => WASI_ENOTSUP,
-        sock_recv: () => WASI_ENOTSUP,
-        sock_send: () => WASI_ENOTSUP,
-        sock_shutdown: () => WASI_ENOTSUP,
+        fd_filestat_set_times: g(function* (this: WasiGuest, fd: number, atim: bigint, mtim: bigint, fst: number) {
+          return yield* this.utimens(fd, '', atim, mtim, fst, 0);
+        }),
+        path_filestat_set_times: g(function* (this: WasiGuest, fd: number, flags: number, p: number, l: number, atim: bigint, mtim: bigint, fst: number) {
+          return yield* this.utimens(fd, this.str(p, l), atim, mtim, fst, flags & 1 ? 0 : A.AT_SYMLINK_NOFOLLOW);
+        }),
+        path_link: g(function* (this: WasiGuest, ofd: number, oflags: number, op: number, ol: number, nfd: number, np: number, nl: number) {
+          const [data, a, b] = this.twoPaths(this.str(op, ol), this.str(np, nl));
+          return wasiErrno((yield* this.sys(A.SYS_linkat, [ofd, a, nfd, b, oflags & 1 ? A.AT_SYMLINK_FOLLOW : 0], data)).ret);
+        }),
+        path_symlink: g(function* (this: WasiGuest, op: number, ol: number, fd: number, np: number, nl: number) {
+          const [data, a, b] = this.twoPaths(this.str(op, ol), this.str(np, nl));
+          return wasiErrno((yield* this.sys(A.SYS_symlinkat, [a, fd, b], data)).ret);
+        }),
+        sock_accept: g(function* (this: WasiGuest, fd: number, flags: number, ret: number) {
+          const r = yield* this.sys(A.SYS_accept4, [fd, flags & 4 ? A.O_NONBLOCK : 0], undefined, A.SOCKADDR_ROOM);
+          if (r.ret < 0) return wasiErrno(r.ret);
+          this.view().setUint32(ret, r.ret, true);
+          return 0;
+        }),
+        sock_recv: g(this.sock_recv),
+        sock_send: g(this.sock_send),
+        sock_shutdown: g(function* (this: WasiGuest, fd: number, how: number) {
+          // WASI sdflags RD=1, WR=2 → SHUT_RD=0, SHUT_WR=1, SHUT_RDWR=2
+          if (!(how & 3)) return WASI_EINVAL;
+          return wasiErrno(yield* this.call(A.SYS_shutdown, fd, (how & 3) - 1));
+        }),
         fd_write: g(this.fd_write),
         fd_read: g(this.fd_read),
         fd_pwrite: g(this.fd_pwrite),
@@ -247,46 +292,30 @@ export class WasiGuest {
         fd_renumber: g(this.fd_renumber),
         path_open: g(this.path_open),
         path_create_directory: g(function* (this: WasiGuest, fd: number, p: number, l: number) {
-          const path = this.resolve(fd, this.str(p, l));
-          if (typeof path === 'number') return wasiErrno(path);
-          return wasiErrno((yield* this.pathCall(A.SYS_mkdir, path, [0o777])).ret);
+          return wasiErrno((yield* this.atCall(A.SYS_mkdirat, fd, this.str(p, l), [0o777])).ret);
         }),
         path_filestat_get: g(function* (this: WasiGuest, fd: number, flags: number, p: number, l: number, buf: number) {
-          const path = this.resolve(fd, this.str(p, l));
-          if (typeof path === 'number') return wasiErrno(path);
-          const r = yield* this.pathCall(flags & 1 ? A.SYS_stat : A.SYS_lstat, path, [], A.STAT_SIZE);
+          const r = yield* this.atCall(A.SYS_newfstatat, fd, this.str(p, l), [flags & 1 ? 0 : A.AT_SYMLINK_NOFOLLOW], A.STAT_SIZE);
           if (r.ret < 0) return wasiErrno(r.ret);
           writeFilestat(A.decodeStat(r.data), this.view(), buf);
           return 0;
         }),
         path_readlink: g(function* (this: WasiGuest, fd: number, p: number, l: number, buf: number, bufLen: number, used: number) {
-          const path = this.resolve(fd, this.str(p, l));
-          if (typeof path === 'number') return wasiErrno(path);
-          const r = yield* this.pathCall(A.SYS_readlink, path, [bufLen], bufLen);
+          const r = yield* this.atCall(A.SYS_readlinkat, fd, this.str(p, l), [bufLen], bufLen);
           if (r.ret < 0) return wasiErrno(r.ret);
           this.u8().set(r.data.subarray(0, r.ret), buf);
           this.view().setUint32(used, r.ret, true);
           return 0;
         }),
         path_remove_directory: g(function* (this: WasiGuest, fd: number, p: number, l: number) {
-          const path = this.resolve(fd, this.str(p, l));
-          if (typeof path === 'number') return wasiErrno(path);
-          return wasiErrno((yield* this.pathCall(A.SYS_rmdir, path)).ret);
+          return wasiErrno((yield* this.atCall(A.SYS_unlinkat, fd, this.str(p, l), [A.AT_REMOVEDIR])).ret);
         }),
         path_unlink_file: g(function* (this: WasiGuest, fd: number, p: number, l: number) {
-          const path = this.resolve(fd, this.str(p, l));
-          if (typeof path === 'number') return wasiErrno(path);
-          return wasiErrno((yield* this.pathCall(A.SYS_unlink, path)).ret);
+          return wasiErrno((yield* this.atCall(A.SYS_unlinkat, fd, this.str(p, l), [0])).ret);
         }),
         path_rename: g(function* (this: WasiGuest, fd: number, op: number, ol: number, nfd: number, np: number, nl: number) {
-          const from = this.resolve(fd, this.str(op, ol));
-          const to = this.resolve(nfd, this.str(np, nl));
-          if (typeof from === 'number') return wasiErrno(from);
-          if (typeof to === 'number') return wasiErrno(to);
-          const a = enc.encode(from), b = enc.encode(to);
-          const data = new Uint8Array(a.length + b.length);
-          data.set(a); data.set(b, a.length);
-          return wasiErrno((yield* this.sys(A.SYS_rename, [a.length, b.length], data)).ret);
+          const [data, a, b] = this.twoPaths(this.str(op, ol), this.str(np, nl));
+          return wasiErrno((yield* this.sys(A.SYS_renameat, [fd, a, nfd, b], data)).ret);
         }),
         poll_oneoff: g(this.poll_oneoff),
         proc_exit: g(function* (this: WasiGuest, code: number) { return yield* this.exit(code); }),
@@ -404,37 +433,60 @@ export class WasiGuest {
     return 0;
   }
 
-  /** pread/pwrite: the kernel has neither, so seek there and back. */
-  private *atOffset(fd: number, offset: bigint, op: () => Sys<number>): Sys<number> {
-    const saved = yield* this.lseek(fd, 0, A.SEEK_CUR);
-    if (saved < 0) return saved;
-    const r = yield* this.lseek(fd, Number(offset), A.SEEK_SET);
-    if (r < 0) return r;
-    const n = yield* op();
-    yield* this.lseek(fd, saved, A.SEEK_SET);
-    return n;
-  }
-
   private *fd_pread(fd: number, iovsPtr: number, n: number, offset: bigint, nread: number): Sys {
     const iovs = this.iovs(iovsPtr, n);
     const total = Math.min(iovs.reduce((s, [, l]) => s + l, 0), this.opts.dataSize);
-    const self = this;
-    const got = yield* this.atOffset(fd, offset, function* () {
-      const r = yield* self.sys(A.SYS_read, [fd, total], undefined, total);
-      if (r.ret > 0) self.scatter(iovs, r.data.subarray(0, r.ret));
-      return r.ret;
-    });
-    if (got < 0) return wasiErrno(got);
-    this.view().setUint32(nread, got, true);
+    const r = yield* this.sys(A.SYS_pread64, [fd, total, Number(offset & 0xffffffffn), Number(offset >> 32n)], undefined, total);
+    if (r.ret < 0) return wasiErrno(r.ret);
+    this.scatter(iovs, r.data.subarray(0, r.ret));
+    this.view().setUint32(nread, r.ret, true);
     return 0;
   }
 
   private *fd_pwrite(fd: number, iovs: number, n: number, offset: bigint, nwritten: number): Sys {
     const data = this.gather(this.iovs(iovs, n));
-    const self = this;
-    const done = yield* this.atOffset(fd, offset, function* () { return yield* self.writeAll(fd, data); });
-    if (done < 0) return wasiErrno(done);
+    let done = 0;
+    while (done < data.length) {
+      const chunk = data.subarray(done, Math.min(data.length, done + this.opts.dataSize));
+      const off = offset + BigInt(done);
+      const r = yield* this.sys(A.SYS_pwrite64, [fd, chunk.length, Number(off & 0xffffffffn), Number(off >> 32n)], chunk);
+      if (r.ret < 0) { if (!done) return wasiErrno(r.ret); break; }
+      if (r.ret === 0) break;
+      done += r.ret;
+    }
     this.view().setUint32(nwritten, done, true);
+    return 0;
+  }
+
+  // ── sockets (preview1) ────────────────────────────────────────────
+
+  private *sock_recv(fd: number, iovsPtr: number, n: number, riFlags: number, lenPtr: number, roFlagsPtr: number): Sys {
+    const iovs = this.iovs(iovsPtr, n);
+    const total = Math.min(iovs.reduce((s, [, l]) => s + l, 0), this.opts.dataSize - A.SOCKADDR_ROOM);
+    let flags = 0;
+    if (riFlags & 1) flags |= A.MSG_PEEK;
+    if (riFlags & 2) flags |= A.MSG_WAITALL;
+    const r = yield* this.sys(A.SYS_recvfrom, [fd, total, flags], undefined, total + A.SOCKADDR_ROOM);
+    if (r.ret < 0) return wasiErrno(r.ret);
+    this.scatter(iovs, r.data.subarray(0, r.ret));
+    const v = this.view();
+    v.setUint32(lenPtr, r.ret, true);
+    v.setUint16(roFlagsPtr, 0, true);
+    return 0;
+  }
+
+  private *sock_send(fd: number, iovs: number, n: number, _siFlags: number, lenPtr: number): Sys {
+    const data = this.gather(this.iovs(iovs, n));
+    const room = this.opts.dataSize - A.SOCKADDR_ROOM;
+    let done = 0;
+    while (done < data.length) {
+      const chunk = data.subarray(done, Math.min(data.length, done + room));
+      const r = yield* this.sys(A.SYS_sendto, [fd, chunk.length, 0, 0], chunk);
+      if (r.ret < 0) { if (!done) return wasiErrno(r.ret); break; }
+      if (r.ret === 0) break;
+      done += r.ret;
+    }
+    this.view().setUint32(lenPtr, done, true);
     return 0;
   }
 
@@ -651,24 +703,34 @@ export class WasiGuest {
   // ── WASIX processes ───────────────────────────────────────────────
 
   /**
-   * posix_spawn through SYS_spawn. The kernel gives the child exactly the fds
-   * in the map, so WASIX file actions are applied to a map that starts as
-   * 0,1,2 inherited; 'open' actions open the file here first.
+   * posix_spawn through SYS_spawn. The child inherits our non-cloexec fds
+   * (`inherit: true`); WASIX file actions become fd overrides (dup2, open)
+   * and, for close, the parent fd is marked close-on-exec just for the spawn.
    */
   private *spawn(req: {
     name: string; argv: string[]; env: Record<string, string> | null; searchPath: boolean; path?: string;
     actions?: SpawnAction[];
   }): Sys<number> {
-    const map = new Map<number, number>([[0, 0], [1, 1], [2, 2]]);
+    const map = new Map<number, number>();
     const temps: number[] = [];
+    const cloexecSet: number[] = [];
     let cwd: string | undefined;
-    const cleanup = function* (this: WasiGuest) { for (const t of temps) yield* this.call(A.SYS_close, t); }.bind(this);
+    const self = this;
+    function* cleanup() {
+      for (const t of temps) yield* self.call(A.SYS_close, t);
+      for (const fd of cloexecSet) yield* self.call(A.SYS_fcntl, fd, A.F_SETFD, 0);
+    }
     for (const act of req.actions ?? []) {
       let err = 0;
-      if (act.op === 'close') map.delete(act.fd);
-      else if (act.op === 'dup2') {
-        const src = map.has(act.src) ? map.get(act.src)! : act.src;
-        map.set(act.fd, src);
+      if (act.op === 'close') {
+        map.delete(act.fd);
+        const fl = yield* this.call(A.SYS_fcntl, act.fd, A.F_GETFD, 0);
+        if (fl >= 0 && !(fl & A.FD_CLOEXEC)) {
+          yield* this.call(A.SYS_fcntl, act.fd, A.F_SETFD, A.FD_CLOEXEC);
+          cloexecSet.push(act.fd);
+        }
+      } else if (act.op === 'dup2') {
+        map.set(act.fd, map.has(act.src) ? map.get(act.src)! : act.src);
       } else if (act.op === 'open') {
         // Relative to the child's cwd so far (a chdir action), else ours
         const p = act.path.startsWith('/') || !cwd ? act.path : normalize(cwd + '/' + act.path);
@@ -678,8 +740,8 @@ export class WasiGuest {
       } else if (act.op === 'chdir') {
         cwd = act.path.startsWith('/') || !cwd ? act.path : normalize(cwd + '/' + act.path);
       } else if (act.op === 'fchdir') {
-        const p = this.fdPaths.get(act.src);
-        if (p === undefined) err = -A.EBADF; else cwd = p;
+        const p = this.resolve(act.src, '.');
+        if (typeof p === 'number') err = p; else cwd = p;
       }
       if (err < 0) { yield* cleanup(); return err; }
     }
@@ -689,7 +751,7 @@ export class WasiGuest {
     const path = req.searchPath || req.name.includes('/') ? req.name : './' + req.name;
     const json = enc.encode(JSON.stringify({
       path, argv: req.argv.length ? req.argv : [req.name], ...(env ? { env } : {}), ...(cwd ? { cwd } : {}),
-      fds: [...map].sort((a, b) => a[0] - b[0]),
+      inherit: true, fds: [...map].sort((a, b) => a[0] - b[0]),
     }));
     if (json.length > this.opts.dataSize) { yield* cleanup(); return -A.E2BIG; }
     const pid = (yield* this.sys(A.SYS_spawn, [json.length], json)).ret;

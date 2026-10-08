@@ -66,6 +66,12 @@ export function writeFilestat(st: A.KStat, view: DataView, ptr: number): void {
   view.setBigUint64(ptr + 56, ns(st.ctimeMs), true);
 }
 
+/**
+ * Shiro syscall registered by host.ts (kernel.registerSyscalls): start a
+ * wasi-threads thread. args[0] = start_arg; returns the new tid or -errno.
+ */
+export const SYS_wasi_thread_spawn = 1100;
+
 /** A syscall as the WASI layer issues it (transport-neutral). */
 export interface SysRequest {
   nr: number;

@@ -287,8 +287,12 @@ describe('kernel WASI processes', () => {
       const out = collector();
       const proc = spawn(kernel, ['gotest', 'ls', '/tmp/gd'], { 0: empty(), 1: out.sink, 2: out.sink }, '/tmp/gd');
       expect(await proc.wait()).toBe(W_EXITCODE(0));
-      expect(out.text).toBe('a.txt,b.txt,rel.txt\nwd: /tmp/gd\nrel: "relative!" <nil>\n');
+      expect(out.text).toBe('a.txt,b.txt,rel.txt\nwd: /tmp/gd\nrel: "relative!" <nil>\n'
+        + 'readlink: made-by-go.txt <nil>\nsub dir: true <nil>\n');
       expect(await fs.readFile('/tmp/gd/made-by-go.txt', 'utf8')).toBe('hi from go\n');
+      expect(await fs.readlink('/tmp/gd/link.txt')).toBe('made-by-go.txt');
+      expect(await fs.readFile('/tmp/gd/renamed.txt', 'utf8')).toBe('relative!');
+      expect(await fs.exists('/tmp/gd/rel.txt')).toBe(false);
     }, 30_000);
   });
 });
