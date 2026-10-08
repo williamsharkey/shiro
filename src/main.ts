@@ -61,6 +61,7 @@ import { gzipCmd, gunzipCmd } from './commands/gzip';
 import { wgetCmd } from './commands/wget';
 import { pgrepCmd, pkillCmd } from './commands/pgrep';
 import { nprocCmd } from './commands/nproc';
+import { syncCmd } from './commands/sync';
 import { getconfCmd } from './commands/getconf';
 import { iconvCmd } from './commands/iconv';
 import { speakCmd } from './commands/speak';
@@ -317,6 +318,7 @@ async function main() {
   registerCommand(commands, pgrepCmd, 'src/commands/pgrep.ts');
   registerCommand(commands, pkillCmd, 'src/commands/pgrep.ts');
   registerCommand(commands, nprocCmd, 'src/commands/nproc.ts');
+  registerCommand(commands, syncCmd, 'src/commands/sync.ts');
   registerCommand(commands, getconfCmd, 'src/commands/getconf.ts');
   registerCommand(commands, lazyCommand('ed', 'Line editor',
     () => import('./commands/ed').then(m => m.edCmd)), 'src/commands/ed.ts');

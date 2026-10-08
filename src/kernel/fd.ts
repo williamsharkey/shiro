@@ -548,7 +548,8 @@ export class RegularFile implements OpenFile {
     return 0;
   }
 
-  async sync(): Promise<void> { await this.ino.flush(); }
+  // fsync: the inode's snapshot into the fs, then the fs's write-behind queue to IndexedDB
+  async sync(): Promise<void> { await this.ino.flush(); await this.ino.fs.sync(); }
 
   poll(events: number): number { return events & (POLLIN | POLLOUT); }
   onReady(cb: () => void): () => void { return this.listeners.add(cb); }
