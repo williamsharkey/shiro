@@ -16,12 +16,17 @@
 import * as A from '../kernel/abi';
 import { KernelChannel, SYS_MESSAGE, canBlock, createChannelBuffer } from '../kernel/channel';
 import type { Kernel, Runner } from '../kernel/kernel';
-import type { Process } from '../kernel/process';
+import { Process } from '../kernel/process';
 import { attachThread, type GuestWorker } from '../kernel/worker-host';
-import { SYS_wasi_thread_spawn, type SysReply, type SysRequest } from './abi';
-import type { WasiGuestMessage, WasiStartMessage } from './guest-worker';
+import {
+  SYS_wasi_thread_spawn, SYS_wasix_exec, SYS_wasix_fork, SYS_wasix_resolve, SYS_wasix_signal,
+  WASIX_HANDLER, WASIX_SIG_CATCH, WASIX_SIG_DEFAULT, WASIX_SIG_IGNORED, type SysReply, type SysRequest,
+} from './abi';
+import type { WasiGuestMessage, WasiStartMessage, WasixForkState } from './guest-worker';
 import { ProcExit, WasiGuest, buildImports, type Preopen } from './wasi-guest';
 import { findMemoryImport } from './wasm-imports';
+import { dylinkLayout, readDylink } from './dylink';
+import { readFuncSigs, type FuncSigs } from './dyncall';
 
 // ── Workers and mode ─────────────────────────────────────────────────
 
@@ -121,7 +126,11 @@ export function installWasmLoader(kernel: Kernel): void {
 
 const syscallsInstalled = new WeakSet<Kernel>();
 
-/** SYS_wasi_thread_spawn: the running WASM process's thread launcher, if it has one. */
+/**
+ * Shiro syscalls for WASM processes (src/wasi/abi.ts): wasi-threads spawn,
+ * WASIX fork and exec (answered by the running process's runner, which
+ * installs proc.data hooks), and WASIX signal bookkeeping.
+ */
 function installWasiSyscalls(kernel: Kernel): void {
   if (syscallsInstalled.has(kernel)) return;
   syscallsInstalled.add(kernel);
@@ -129,6 +138,96 @@ function installWasiSyscalls(kernel: Kernel): void {
     const spawn = proc.data.wasiThreadSpawn as ((startArg: number) => number) | undefined;
     return spawn ? spawn(args[0]) : -A.ENOSYS;
   });
+  kernel.registerSyscalls([SYS_wasix_fork], (proc) => {
+    const fork = proc.data.wasixFork as (() => number) | undefined;
+    return fork ? fork() : -A.ENOSYS;
+  });
+  kernel.registerSyscalls([SYS_wasix_exec], (proc, _nr, args, data) => {
+    const exec = proc.data.wasixExec as ((req: ExecRequest) => Promise<number>) | undefined;
+    if (!exec) return -A.ENOSYS;
+    let req: ExecRequest;
+    try { req = JSON.parse(A.decodeText(data.subarray(0, args[0]))); } catch { return -A.EINVAL; }
+    if (typeof req?.path !== 'string' || !Array.isArray(req.argv)) return -A.EINVAL;
+    return exec(req);
+  });
+  kernel.registerSyscalls([SYS_wasix_signal], (proc, _nr, args, _data, k) => wasixSignal(k, proc, args[0], args[1]));
+  kernel.registerSyscalls([SYS_wasix_resolve], async (_proc, _nr, args, data, k) => {
+    const host = A.decodeText(data.subarray(0, Math.min(args[0], data.length)));
+    const stack = (await import('../kernel/net')).netStackOf(k);
+    if (!stack) return -A.ENOSYS;
+    const r = await stack.resolve(host);
+    if (typeof r === 'number') return r;
+    const text = new TextEncoder().encode([...r].sort((a, b) => a.family - b.family).map(a => a.address).join('\n'));
+    if (text.length > data.length) return -A.ENOBUFS;
+    data.set(text);
+    return text.length;
+  });
+  kernel.registerSyscalls([A.SYS_stat, A.SYS_lstat, A.SYS_newfstatat, A.SYS_access, A.SYS_faccessat], binCommandStat);
+}
+
+const BIN_DIR = /^\/(?:usr\/)?(?:local\/)?s?bin\/([^/]+)$/;
+
+/**
+ * Shiro's commands are executables in /bin, /usr/bin, ... even without a
+ * file there (the kernel's builtin loader runs them by those paths), so
+ * shells that stat each PATH entry (dash, bash) find `ls`, `cat`, ...: a
+ * stat or access of a missing file named after a command reports an empty
+ * executable file.
+ */
+async function binCommandStat(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array, kernel: Kernel): Promise<number | undefined> {
+  const at = nr === A.SYS_newfstatat || nr === A.SYS_faccessat;
+  if (nr === A.SYS_newfstatat && args[1] === 0) return undefined; // fstat of the dirfd itself
+  const len = at ? args[1] : args[0];
+  if (len <= 0 || len > data.length) return undefined;
+  const p = kernel.resolvePath(proc, A.decodeText(data.subarray(0, len)), at ? args[0] : A.AT_FDCWD);
+  const m = typeof p === 'string' ? BIN_DIR.exec(p) : null;
+  if (!m || !kernel.shell?.commands.get(m[1])) return undefined;
+  if ((await kernel.statPath(proc, p as string, false)) !== -A.ENOENT) return undefined;
+  if (nr === A.SYS_access || nr === A.SYS_faccessat) return 0;
+  const now = Date.now();
+  A.encodeStat({
+    dev: 1, ino: 0x5000000 + m[1].length * 7919 + m[1].charCodeAt(0), mode: A.S_IFREG | 0o755, nlink: 1, uid: 0, gid: 0, rdev: 0,
+    size: 0, blksize: 4096, blocks: 0, atimeMs: now, mtimeMs: now, ctimeMs: now,
+  }, data);
+  return 0;
+}
+
+interface ExecRequest { path: string; argv: string[]; env?: Record<string, string> }
+
+/** Signals a WASIX guest can't catch, or that only matter to the kernel. */
+const UNCATCHABLE = new Set([A.SIGKILL, A.SIGSTOP, A.SIGURG]);
+
+async function wasixSignal(kernel: Kernel, proc: Process, op: number, sig: number): Promise<number> {
+  switch (op) {
+    case WASIX_SIG_CATCH:
+      // WASIX libc keeps its handler table to itself and runs default actions in
+      // its callback, so everything it doesn't ignore goes to the guest
+      for (let s = 1; s < 32; s++) {
+        if (!UNCATCHABLE.has(s) && proc.dispositions.get(s) !== 'ignore') proc.dispositions.set(s, WASIX_HANDLER);
+      }
+      return 0;
+    case WASIX_SIG_DEFAULT: {
+      if (sig <= 0 || sig >= A.NSIG) return -A.EINVAL;
+      const disp = proc.dispositions.get(sig);
+      const masked = proc.sigmask.has(sig);
+      proc.dispositions.delete(sig);
+      proc.sigmask.delete(sig);
+      kernel.deliver(proc, sig);
+      if (proc.state === 'stopped') await proc.waitWhileStopped();
+      if (!proc.exiting) {
+        if (disp !== undefined && !proc.dispositions.has(sig)) proc.dispositions.set(sig, disp);
+        if (masked) proc.sigmask.add(sig);
+      }
+      return 0;
+    }
+    case WASIX_SIG_IGNORED: {
+      let mask = 0;
+      for (const [s, d] of proc.dispositions) if (d === 'ignore' && s < 32) mask |= 1 << s;
+      return mask;
+    }
+    default:
+      return -A.EINVAL;
+  }
 }
 
 // ── Runners ──────────────────────────────────────────────────────────
@@ -164,20 +263,43 @@ async function openPreopens(kernel: Kernel, proc: Process, extra: string[] = [])
   return out;
 }
 
+const sigCache = new WeakMap<WebAssembly.Module, FuncSigs | undefined>();
+const DYNCALL_IMPORTS = new Set(['call_dynamic', 'reflect_signature', 'closure_prepare']);
+
+/** Function signatures, for modules that make WASIX dynamic calls (once per module). */
+function moduleFuncSigs(module: WebAssembly.Module, image: Uint8Array): FuncSigs | undefined {
+  if (sigCache.has(module)) return sigCache.get(module);
+  const uses = WebAssembly.Module.imports(module).some(i => i.module === 'wasix_32v1' && DYNCALL_IMPORTS.has(i.name));
+  const sigs = uses ? readFuncSigs(image) ?? undefined : undefined;
+  sigCache.set(module, sigs);
+  return sigs;
+}
+
+/** A forked child's start: a copy of the parent's memory and the guest state to resume from. */
+interface ForkResume { memory: WebAssembly.Memory; state: WasixForkState }
+
 function runWorkers(
   kernel: Kernel, proc: Process, module: WebAssembly.Module, image: Uint8Array | undefined, preopens: Preopen[],
+  resume?: ForkResume,
 ): Promise<number | void> {
   return getWorkerFactory().then(factory => new Promise<number | void>((resolve) => {
     const memImport = image ? findMemoryImport(image) : null;
-    const memory = memImport?.shared
-      ? new WebAssembly.Memory({ initial: memImport.initial, maximum: memImport.maximum ?? memImport.initial, shared: true } as WebAssembly.MemoryDescriptor)
-      : undefined;
+    // Position-independent modules get their data, stack and table placed here (./dylink.ts)
+    const dyInfo = readDylink(module);
+    const dylink = dyInfo ? dylinkLayout(dyInfo) : undefined;
+    const initial = Math.max(memImport?.initial ?? 0, dylink?.minPages ?? 0);
+    const memory = resume?.memory ?? (memImport?.shared
+      ? new WebAssembly.Memory({ initial, maximum: Math.max(initial, memImport.maximum ?? memImport.initial), shared: true } as WebAssembly.MemoryDescriptor)
+      : undefined);
+    const funcSigs = image ? moduleFuncSigs(module, image) : undefined;
     const wasi = (thread?: { startArg: number }) => ({
-      module, preopens, memory, thread,
+      module, preopens, memory, thread, dylink, funcSigs,
       memoryImport: memImport ? { module: memImport.module, name: memImport.name } : undefined,
     });
     const onGuestMessage = (m: unknown, isThread: boolean) => {
       const msg = m as WasiGuestMessage;
+      if (msg?.type === 'wasix-fork') { proc.data.wasixForkState = msg.state; return; }
+      if (msg?.type === 'wasix-signals') { signalInfo = msg; return; }
       if (msg?.type !== 'wasi-error' || proc.exiting) return;
       // Could not instantiate: 126 like an exec failure, or abort if a thread failed
       void kernel.writeAll(proc, 2, new TextEncoder().encode(`${proc.comm}: ${msg.message}\n`)).finally(() => {
@@ -202,11 +324,83 @@ function runWorkers(
     const w = factory(proc);
     const sab = createChannelBuffer();
     const channel = new KernelChannel(sab, kernel, proc);
+    let replaced = false;
+
+    // WASIX libc's sigsuspend returns at once, so a program waiting for SIGCHLD
+    // (dash's `wait`) spins in WASM without syscalls and never sees the signal
+    // its channel holds. After a moment, run such a signal (one that is ignored
+    // by default, whose handlers just record it) on a signal thread: same memory
+    // and TLS, its own stack in a page grown for it.
+    let signalInfo: { callback: string; tlsBase: number } | null = null;
+    let signalStack = 0;
+    const runStuckSignal = () => {
+      if (replaced || proc.exiting || !signalInfo || !memory) return;
+      if (Atomics.load(channel.i32, A.CH_STATE) !== A.STATE_IDLE) return; // in a syscall: the reply delivers it
+      const sig = Atomics.load(channel.i32, A.CH_SIGNAL);
+      if (!sig || A.defaultSignalAction(sig) !== 'ignore') return;
+      if (Atomics.compareExchange(channel.i32, A.CH_SIGNAL, sig, 0) !== sig) return;
+      if (!signalStack) signalStack = (memory.grow(2) + 2) * 65536 - 16;
+      const info = signalInfo;
+      attachThread(kernel, proc, (p) => {
+        const t = factory(p);
+        t.onMessage((m) => { if (m !== SYS_MESSAGE) onGuestMessage(m, true); });
+        return t;
+      }, { startData: { wasi: { ...wasi(), signal: { sig, callback: info.callback, tlsBase: info.tlsBase, stackTop: signalStack } } } });
+    };
+    const offStuck = proc.addSignalListener(() => { setTimeout(runStuckSignal, 50); });
     proc.onTerminate(() => {
+      offStuck();
       channel.stop();
       try { void w.terminate(); } catch { /* already gone */ }
-      resolve();
+      if (!replaced) resolve();
     });
+
+    // WASIX fork: a new process with a copy of this one's memory, fds and
+    // signal state, resuming from the stack the guest captured (proc_fork)
+    proc.data.wasixFork = (): number => {
+      const state = proc.data.wasixForkState as WasixForkState | undefined;
+      delete proc.data.wasixForkState;
+      if (!state || !memory || replaced) return -A.ENOSYS;
+      const src = new Uint8Array(memory.buffer);
+      const pages = src.byteLength / 65536;
+      const copy = new WebAssembly.Memory({ initial: pages, maximum: Math.max(pages, memImport?.maximum ?? pages), shared: true } as WebAssembly.MemoryDescriptor);
+      new Uint8Array(copy.buffer).set(src);
+      const child = kernel.spawn({
+        path: proc.path, argv: [...proc.argv], env: { ...proc.env }, cwd: proc.cwd, parent: proc, fds: {},
+        run: (p, k) => runWorkers(k, p, module, image, preopens, { memory: copy, state }),
+      });
+      // fork(2) keeps every fd (close-on-exec ones too) and the signal state; the program starts after a microtask
+      void child.fds.closeAll();
+      child.fds = proc.fds.fork();
+      child.umask = proc.umask;
+      for (const [s, d] of proc.dispositions) child.dispositions.set(s, d);
+      for (const [s, a] of proc.sigactions) child.sigactions.set(s, { ...a, mask: new Set(a.mask) });
+      for (const s of proc.sigmask) child.sigmask.add(s);
+      return child.pid;
+    };
+
+    // WASIX exec: replace this program, keeping the process (pid, fds without close-on-exec, ignored signals)
+    proc.data.wasixExec = async (req: ExecRequest): Promise<number> => {
+      if (replaced || proc.exiting) return -A.EINTR;
+      const probe = new Process({ pid: -1, ppid: proc.pid, path: req.path, argv: req.argv, env: req.env ?? proc.env, cwd: proc.cwd });
+      const runner = await kernel.findProgram(req.path, probe);
+      if (!runner) return -A.ENOENT;
+      if (proc.exiting) return -A.EINTR;
+      replaced = true;
+      offStuck();
+      channel.stop();
+      try { void w.terminate(); } catch { /* already gone */ }
+      for (const k of ['wasiThreadSpawn', 'wasixFork', 'wasixExec', 'wasixForkState']) delete proc.data[k];
+      proc.path = req.path;
+      proc.argv = req.argv;
+      if (req.env) proc.env = { ...req.env };
+      await proc.fds.closeOnExec();
+      for (const [s, d] of [...proc.dispositions]) if (d !== 'ignore') proc.dispositions.delete(s);
+      proc.sigactions.clear();
+      proc.pendingSignals.clear();
+      resolve((async () => runner(proc, kernel))());
+      return 0; // never reaches the guest: its channel is stopped
+    };
     w.onMessage((m) => {
       if (m === SYS_MESSAGE) void channel.handle();
       else onGuestMessage(m, false);
@@ -217,7 +411,8 @@ function runWorkers(
         .finally(() => kernel.exit(proc, A.W_TERMSIG(A.SIGABRT)));
     });
     const start: WasiStartMessage = {
-      type: 'shiro-start', sab, pid: proc.pid, argv: proc.argv, env: proc.env, cwd: proc.cwd, wasi: wasi(),
+      type: 'shiro-start', sab, pid: proc.pid, argv: proc.argv, env: proc.env, cwd: proc.cwd,
+      wasi: { ...wasi(), ...(resume ? { resume: resume.state } : {}) },
     };
     w.postMessage(start);
   }));
