@@ -41,6 +41,8 @@ const jitBin = join(out, 'jit');
 const haveJit = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', jitBin, 'jit.c']);
 const forkBin = join(out, 'forkcopy');
 const haveFork = tryBuild('gcc', ['-static', '-O1', '-o', forkBin, 'forkcopy.c']);
+const fionbioBin = join(out, 'fionbio');
+const haveFionbio = tryBuild('gcc', ['-static', '-O1', '-o', fionbioBin, 'fionbio.c']);
 const fuzzBin = join(out, 'jitfuzz');
 const haveFuzz = tryBuild('gcc', ['-static', '-O1', '-o', fuzzBin, 'jitfuzz.c']);
 
@@ -419,5 +421,16 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const r = await run(shell, './prog');
     expect(r.exitCode).toBe(0);
     expect(r.output.replace(/\r\n/g, '\n')).toBe('pextrw 0xfffe\nmadvise 0 0 0\nfutex_wait_bitset timedout on time\nfutex_wake_bitset 0\ngetrandom 16\n');
+  }, 60_000);
+});
+
+// libuv makes every fd non-blocking with ioctl(FIONBIO); on /dev/null the
+// kernel answered ENOTTY and cmake died (exit 139) in its uname probes.
+describe.skipIf(!haveFionbio)('Blink engine: FIONBIO', () => {
+  it('sets O_NONBLOCK on /dev/null, a pipe and a file', async () => {
+    const { shell } = await setup(readFileSync(fionbioBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('devnull 0 1 0 0\npipe 0 1 0 0\nfile 0 1 0 0\n');
+    expect(r.exitCode).toBe(0);
   }, 60_000);
 });
