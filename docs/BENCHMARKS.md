@@ -189,6 +189,13 @@ caches compiled wasm by module bytes for the whole renderer process, so the
 first `gh --version` in a page is 6.3–6.9 s and later ones ~3.2 s (also for
 a second copy of the binary). Without the JIT the first run is no slower.
 
+Quick suite against the integration baseline
+(`integration-d286c5e-quick.json` → `perf-blink-3-quick.json`): x86.blink.go_hello
+267 → 217 ms, go_nethttp 498 → 424 ms, hello_musl 115 → 93 ms. Flagged
+elsewhere (kernel.spawn_throughput.builtin, syscall_inpage, shell redirects,
+sqlite CTE, file_read): code this branch doesn't touch, within the run-to-run
+swing noted at the top of this log.
+
 Bug found on the way: `cp` copied files as UTF-8 text, so a copied ELF
 binary grew (50 → 67 MB for `gh`) and didn't run; it now copies bytes and
 the mode bits (`commands.test.ts`).
