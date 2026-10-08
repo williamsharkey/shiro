@@ -4,6 +4,24 @@
 
 All changes so far are additive; nothing below renames or removes an earlier name.
 
+- **2026-10-08 (unix/wasix)** (additive)
+  - **Fix:** renaming or unlinking a file that is still open. Open
+    descriptions share an `Inode` that writes back to its path; after a
+    rename it wrote to the old path (recreating the temp file and leaving the
+    new one short: clang's object files came out empty), and after an unlink
+    it brought the file back. `fd.ts` exports `renameInodes(fs, from, to)`
+    (flush, then re-key) and `unlinkInode(fs, path)`; kernel.ts's
+    rename/unlink call them. Code that renames through the FileSystem API
+    directly should do the same.
+  - `netStackOf(kernel)` (net.ts): the NetStack `installNet` gave a kernel.
+  - Shiro syscalls 1101–1104 (`src/wasi/abi.ts`, registered by `host.ts`):
+    `SYS_wasix_fork`, `SYS_wasix_exec`, `SYS_wasix_signal`,
+    `SYS_wasix_resolve`. A stat/access of a missing `/bin`, `/usr/bin`,
+    `/usr/local/bin`... entry named after a Shiro command reports an
+    executable file (`binCommandStat`).
+  - `FileSystem.writeFile` stores a compact copy of a typed-array view
+    (IndexedDB cloned the whole underlying buffer).
+
 - **2026-10-08 (unix/kernel, round 2)**
   - **Fix:** `Kernel.syscall` (and the guest library) decoded paths and
     spawn JSON with `TextDecoder` straight from the SharedArrayBuffer data

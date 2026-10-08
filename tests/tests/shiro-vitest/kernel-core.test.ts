@@ -299,6 +299,33 @@ describe('kernel processes', () => {
     expect(err.text()).toContain('command not found');
   });
 
+  it('rename and unlink of a file that is still open (temp file + rename, as compilers do)', async () => {
+    const proc = kernel.spawn({ path: 'holder', cwd: '/tmp', run: () => new Promise<number>(() => {}) });
+    const enc = new TextEncoder();
+    const call = (nr: number, a: number[], paths: string[]) => {
+      const data = new Uint8Array(4096);
+      let off = 0;
+      for (const p of paths) { const b = enc.encode(p); data.set(b, off); off += b.length; }
+      return kernel.syscall(proc, nr, a, data);
+    };
+    const f = (await kernel.open(proc, 'obj.tmp', A.O_CREAT | A.O_RDWR | A.O_TRUNC)) as OpenFile;
+    await f.write(enc.encode('first half, '));
+    expect(await call(A.SYS_rename, [7, 5], ['obj.tmp', 'obj.o'])).toBe(0);
+    await f.write(enc.encode('second half'));
+    await f.close();
+    expect(await fs.readFile('/tmp/obj.o', 'utf8')).toBe('first half, second half');
+    expect(await fs.exists('/tmp/obj.tmp')).toBe(false);
+
+    // Unlinked while open: the fd keeps working, and nothing brings the file back
+    const g = (await kernel.open(proc, 'gone.txt', A.O_CREAT | A.O_RDWR | A.O_TRUNC)) as OpenFile;
+    await g.write(enc.encode('data'));
+    expect(await call(A.SYS_unlink, [8], ['gone.txt'])).toBe(0);
+    await g.write(enc.encode(' more'));
+    await g.close();
+    expect(await fs.exists('/tmp/gone.txt')).toBe(false);
+    await kernel.exit(proc, 0);
+  });
+
   it('open: files, O_CREAT|O_EXCL, O_APPEND, O_TRUNC, directories, /dev', async () => {
     const proc = kernel.spawn({ path: 'holder', cwd: '/tmp', run: () => new Promise<number>(() => {}) });
     const f = await kernel.open(proc, 'kopen.txt', A.O_CREAT | A.O_RDWR | A.O_TRUNC);

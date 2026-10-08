@@ -64,7 +64,8 @@ list `pkg update` fetches).
     "files": [{ "path": "bin/sqlite3.wasm",
                 "url": "/pkg/sqlite/3.50.4/sqlite3.wasm",  // or https://
                 "sha256": "a602...", "size": 1679802 }],
-    "bin": { "sqlite3": { "file": "bin/sqlite3.wasm" } },  // + "args", "shadow"
+    "bin": { "sqlite3": { "file": "bin/sqlite3.wasm" } },  // + "args", "shadow", "self"
+    "mounts": { "/sysroot": "share/sysroot" }, // guest path → package dir (per process)
     "needs": [],                              // kernel features required at all
     "wants": ["blocking-stdin"],              // features some modes need
     "notes": "Interactive mode needs blocking stdin; ..."
@@ -132,9 +133,9 @@ works everywhere and the interactive mode needs a page that can block.
 | bash | 1.0.25 | Wasmer | WASIX | ok as kernel processes: scripts, `-c`, interactive on the pty (readline editing, ^C), fork/exec/pipelines/`$(...)`, `wait` |
 | dash | 1.0.19 | Wasmer | WASIX | ok as kernel processes, as bash; this early build's exec passes no environment, so exported variables don't reach children |
 | php | 8.3 | Wasmer | WASIX | ok as kernel processes (`php -r`, exceptions, fatal errors through zend_bailout's longjmp); 86 MB |
-| python3.13 | 3.13 | Wasmer | WASIX | runs as a kernel process (`-c`, stdlib imports) given its standard library; the package needs mounts for that (62 MB) |
-| clang 16, lld, llvm-ar/nm | 16 | Wasmer | WASIX | `--version` runs; needs mounts for its sysroot (111 MB) |
-| curl | 8.4.0 | Wasmer | WASIX | ok as kernel processes: HTTP and HTTPS (OpenSSL in the guest) through the kernel sockets and the TCP relay; real sites need its CA certificates mounted at `/openssl` |
+| python3.13 | 3.13 | Wasmer | WASIX | ok as kernel processes: `-c`, stdlib imports (json, zoneinfo, ...) with its volumes mounted at their `/nix/store` paths; no side modules (dlopen) (62 MB) |
+| clang 16, lld, llvm-ar/nm | 16 | Wasmer | WASIX | ok as kernel processes: `clang hello.c -o hello.wasm` compiles and links (the driver runs `clang-16 -cc1` and `wasm-ld` as child processes, sysroot mounted at `/sysroot`, headers at `/lib`), and the output runs (111 MB) |
+| curl | 8.4.0 | Wasmer | WASIX | ok as kernel processes: HTTP and HTTPS (OpenSSL in the guest, CA certificates mounted at `/openssl`) through the kernel sockets and the TCP relay; `/usr/bin/curl` (the builtin keeps the name) |
 
 "Ok as kernel processes" means installable and working where WASM processes
 can use threads (`sab` mode: a cross-origin isolated page). Without that, WASIX
@@ -157,7 +158,9 @@ rest:
   module; `src/wasi/dylink.ts` lays it out and `src/wasi/dyncall.ts` serves
   the WASIX dynamic calls its trampolines use. Loading side modules (dlopen)
   is not implemented. Python still needs `mounts` for its standard library.
-- `mounts`: clang's sysroot volumes belong at `/sysroot` and `/lib`.
+- `mounts` (done): an entry's `mounts` map guest paths to package
+  directories, applied per process as WASI preopens named after the guest
+  path (also for package programs another program starts by path).
 - `sockets` (done): the guest implements the WASIX socket calls and
   `resolve` over the kernel sockets (src/kernel/net.ts), so sab and jspi
   mode provide it.
