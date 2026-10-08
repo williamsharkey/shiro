@@ -213,6 +213,34 @@ static void loops(u64 a, u64 b) {
   mix(c);
 }
 
+// SSE moves and xors (memmove/memclr in Go and libc use them)
+static unsigned char sbuf[8192] __attribute__((aligned(16)));
+static void sse_moves(u64 a, u64 b) {
+  int off = (int)(b % 4060), off2 = (int)((a >> 7) % 4040) + 4096;
+  u64 r0, r1;
+  memcpy(sbuf + off, &a, 8);
+  memcpy(sbuf + off + 8, &b, 8);
+  asm volatile("movups (%2), %%xmm1\n\t"
+               "movdqu %%xmm1, (%3)\n\t"
+               "movsd 8(%2), %%xmm2\n\t"
+               "pxor %%xmm1, %%xmm2\n\t"
+               "movaps %%xmm2, %%xmm3\n\t"
+               "xorps %%xmm1, %%xmm3\n\t"
+               "movupd %%xmm3, 16(%3)\n\t"
+               "movsd %%xmm2, 32(%3)\n\t"
+               "movdqu 16(%3), %%xmm4\n\t"
+               "movq %%xmm4, %0\n\t"
+               "movhlps %%xmm4, %%xmm4\n\t"
+               "movq %%xmm4, %1"
+               : "=&r"(r0), "=&r"(r1)
+               : "r"(sbuf + off), "r"(sbuf + off2)
+               : "xmm1", "xmm2", "xmm3", "xmm4", "memory");
+  mix(r0);
+  mix(r1);
+  memcpy(&r0, sbuf + off2 + 32, 8);
+  mix(r0);
+}
+
 typedef void (*op_f)(u64, u64);
 static const struct {
   const char *name;
@@ -238,7 +266,7 @@ static const struct {
     E(set_l),  E(set_ge),  E(set_le), E(set_g),  E(j_o),     E(j_no),
     E(j_b),    E(j_ae),    E(j_e),    E(j_ne),   E(j_be),    E(j_a),
     E(j_s),    E(j_ns),    E(j_p),    E(j_np),   E(j_l),     E(j_ge),
-    E(j_le),   E(j_g),     E(memops), E(crossing), E(calls), E(loops),
+    E(j_le),   E(j_g),     E(memops), E(crossing), E(calls), E(loops), E(sse_moves),
 };
 
 int main(int argc, char **argv) {

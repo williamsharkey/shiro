@@ -1,4 +1,4 @@
-From 59712bab588d41cc1a5394062b90982b79a30fd1 Mon Sep 17 00:00:00 2001
+From 24012652e223e78ff59f43b2cd3f324be794d9f2 Mon Sep 17 00:00:00 2001
 From: shiro <build@shiro>
 Date: Thu, 8 Oct 2026 04:49:59 +0000
 Subject: [PATCH] emscripten: wasm JIT (wjit): hot x86-64 regions become
@@ -18,9 +18,9 @@ or reprotecting such a page invalidates every thread's regions.
  blink/machine.h      |    4 +
  blink/memorymalloc.c |    3 +
  blink/reset.c        |    1 +
- blink/wjit.c         | 2804 ++++++++++++++++++++++++++++++++++++++++++
+ blink/wjit.c         | 3000 ++++++++++++++++++++++++++++++++++++++++++
  blink/wjit.h         |   35 +
- 7 files changed, 2859 insertions(+)
+ 7 files changed, 3055 insertions(+)
  create mode 100644 blink/wjit.c
  create mode 100644 blink/wjit.h
 
@@ -123,10 +123,10 @@ index 77dac9b..04112e3 100644
  }
 diff --git a/blink/wjit.c b/blink/wjit.c
 new file mode 100644
-index 0000000..645db25
+index 0000000..3c61be3
 --- /dev/null
 +++ b/blink/wjit.c
-@@ -0,0 +1,2804 @@
+@@ -0,0 +1,3000 @@
 +/*-*- mode:c;indent-tabs-mode:nil;c-basic-offset:2;tab-width:8;coding:utf-8 -*-│
 +│ vi: set et ft=c ts=2 sts=2 sw=2 fenc=utf-8                               :vi │
 +╞══════════════════════════════════════════════════════════════════════════════╡
@@ -358,6 +358,8 @@ index 0000000..645db25
 +  TY_I64_II,  // (i32 i64) -> i64       (unused)
 +  TY_V_II,    // (i32 i32) -> ()         region bodies
 +  TY_I_IL,    // (i32 i64) -> i32        WjCall
++  TY_V_ILII,  // (i32 i64 i32 i32) -> () WjXmm*Slow
++  TY_XLAT,    // (i32 i64 i32 i32) -> i32 WjXlat
 +  TY_COUNT
 +};
 +
@@ -435,7 +437,9 @@ index 0000000..645db25
 +#define L_E      28
 +#define L_BUDGET 29
 +#define L_N      30
-+#define kNumI32  4
++#define L_HR     31  // host address of the read operand
++#define L_HW     32  // host address of the written operand
++#define kNumI32  6
 +
 +enum { HOW_INLINE, HOW_CALL, HOW_CALL_BRANCH };
 +
@@ -554,7 +558,6 @@ index 0000000..645db25
 +  u64 entry;
 +  u8 *host;
 +  struct WjTlb *t;
-+  if ((v & 4095) > 4096 - 8) return;  // keep it simple: whole-page entries
 +  if (!(entry = FindPageTableEntry(m, v & -4096))) return;
 +  if (!(entry & PAGE_U)) return;
 +  if (write && !(entry & PAGE_RW)) return;
@@ -595,6 +598,39 @@ index 0000000..645db25
 +  m->oplen = 0;
 +  WjFill(m, v, false);
 +  return x;
++}
++
++// Fills the translation cache for an access of n bytes at v; returns the
++// host address, or 0 if the access crosses a page or would fault (the
++// caller then lets the interpreter run the instruction). Never longjmps.
++static u32 WjXlat(struct Machine *m, i64 v, int n, int write) {
++  struct WjTlb *t;
++  if ((v & 4095) + n > 4096) return 0;
++  WjFill(m, v, write);
++  t = (write ? m->wjw : m->wjr) + ((v >> 12) & (WJ_TLB_SIZE - 1));
++  if (t->tag != (v & -4096)) return 0;
++  return t->host + (v & 4095);
++}
++
++// xmm register `r` <-> n bytes of guest memory, the slow way (misses,
++// page crossings, faults); a 8-byte load zeroes the upper half (movsd)
++static void WjXmmLoadSlow(struct Machine *m, i64 v, int r, int n) {
++  u8 *p = ReserveAddress(m, v, n, false);
++  memcpy(m->xmm[r], p, n);
++  if (n == 8) memset(m->xmm[r] + 8, 0, 8);
++  if (m->stashaddr) CommitStash(m);
++  m->reserving = false;
++  m->oplen = 0;
++  WjFill(m, v, false);
++}
++
++static void WjXmmStoreSlow(struct Machine *m, i64 v, int r, int n) {
++  u8 *p = ReserveAddress(m, v, n, true);
++  memcpy(p, m->xmm[r], n);
++  if (m->stashaddr) CommitStash(m);
++  m->reserving = false;
++  m->oplen = 0;
++  WjFill(m, v, true);
 +}
 +
 +static void WjWriteSlow(struct Machine *m, i64 v, int n, u64 x) {
@@ -765,35 +801,30 @@ index 0000000..645db25
 +  Mem(g, W_I32_STORE8, 0, OFF(oplen));
 +}
 +
-+// leaves the block: state written back, ip = constant
-+static void ExitTo(struct Cg *g, i64 ip) {
-+  StoreIp(g, ip);
-+  Flush(g);
-+  Op(g, W_RETURN);
++// Every exit goes through one epilogue after the region's outer block,
++// which stores m->ip = L_T and writes the registers back.
++static void BrExit(struct Cg *g) {
++  B(&g->b, W_BR);
++  U(&g->b, g->base + g->depth + 1);
 +}
 +
-+// state written back, ip = L_T
++// leaves the region: ip = constant
++static void ExitTo(struct Cg *g, i64 ip) {
++  I64(g, ip);
++  Set(g, L_T);
++  BrExit(g);
++}
++
++// leaves the region: ip = L_T
++static void ExitToT(struct Cg *g) {
++  BrExit(g);
++}
++
++// state written back, ip = L_T (for calls out of the region)
 +static void ExitIpT(struct Cg *g) {
 +  Get(g, L_M);
 +  Get(g, L_T);
 +  Mem(g, W_I64_STORE, 3, OFF(ip));
-+  Flush(g);
-+}
-+
-+// leaves the block: state written back, ip = L_T
-+static void ExitToT(struct Cg *g) {
-+  Get(g, L_M);
-+  Get(g, L_T);
-+  Mem(g, W_I64_STORE, 3, OFF(ip));
-+  Flush(g);
-+  Op(g, W_RETURN);
-+}
-+
-+// state needed before calling something that may fault: the instruction
-+// being executed is `ins` (RestoreIp() rewinds m->ip by m->oplen)
-+static void PrepareFault(struct Cg *g, struct Ins *in) {
-+  StoreIp(g, in->pc + in->len);
-+  StoreOplen(g, in->len);
 +  Flush(g);
 +}
 +
@@ -899,38 +930,101 @@ index 0000000..645db25
 +                               W_I64_STORE32, 0, 0, 0, W_I64_STORE};
 +static const u8 kAlign[9] = {0, 0, 1, 0, 2, 0, 0, 0, 3};
 +
-+// pushes the zero-extended w-byte value at L_EA
-+static void LoadEa(struct Cg *g, struct Ins *in, int w) {
-+  u32 table = OFF(wjr);
++// Resolves L_EA (w bytes) to a host address in L_HR or L_HW. On a miss the
++// translation cache is refilled; if the access would fault or crosses a
++// page, the region exits *before* this instruction (nothing it does has
++// happened yet: every translator resolves its memory operands before it
++// changes any state) and the interpreter runs it, faults included.
++static void Resolve(struct Cg *g, struct Ins *in, int w, bool write) {
++  u32 table = write ? OFF(wjw) : OFF(wjr);
++  int l = write ? L_HW : L_HR;
 +  TlbCheck(g, w, table);
-+  If(g, T_I64);
++  If(g, T_I32);
 +  HostAddr(g, table);
-+  Mem(g, kLoadOp[w], kAlign[w], 0);
 +  Else(g);
-+  PrepareFault(g, in);
 +  Get(g, L_M);
 +  Get(g, L_EA);
 +  I32(g, w);
-+  CallImport(g, (void *)WjReadSlow, TY_READ);
++  I32(g, write);
++  CallImport(g, (void *)WjXlat, TY_XLAT);
++  Tee(g, l);
++  Op(g, W_I32_EQZ);
++  If(g, T_VOID);
++  Get(g, L_M);  // m->wjhot = 0: the interpreter runs the next instruction
++  I32(g, 0);
++  Mem(g, W_I32_STORE8, 0, OFF(wjhot));
++  ExitTo(g, in->pc);
 +  End(g);
++  Get(g, l);
++  End(g);
++  Set(g, l);
 +}
 +
-+// stores L_T (w bytes) at L_EA
-+static void Store(struct Cg *g, struct Ins *in, int w) {
-+  u32 table = OFF(wjw);
-+  TlbCheck(g, w, table);
-+  If(g, T_VOID);
-+  HostAddr(g, table);
++// pushes the zero-extended w-byte value at L_EA
++static void LoadEa(struct Cg *g, struct Ins *in, int w) {
++  Resolve(g, in, w, false);
++  Get(g, L_HR);
++  Mem(g, kLoadOp[w], kAlign[w], 0);
++}
++
++// the same through an address already resolved for writing
++static void LoadHw(struct Cg *g, int w) {
++  Get(g, L_HW);
++  Mem(g, kLoadOp[w], kAlign[w], 0);
++}
++
++// stores L_T (w bytes) at L_HW
++static void StoreHw(struct Cg *g, int w) {
++  Get(g, L_HW);
 +  Get(g, L_T);
 +  Mem(g, kStoreOp[w], kAlign[w], 0);
-+  Else(g);
-+  PrepareFault(g, in);
++}
++
++#define W_SIMD     0xfd
++#define V128_LOAD  0x00
++#define V128_STORE 0x0b
++#define V128_XOR   0x51
++
++static void Simd(struct Cg *g, int op, u32 off) {
++  B(&g->b, W_SIMD);
++  U(&g->b, op);
++  if (op == V128_LOAD || op == V128_STORE) {
++    U(&g->b, 0);
++    U(&g->b, off);
++  }
++}
++
++#define XMM(r) (OFF(xmm) + (r) * 16)
++
++// xmm[r] = n bytes at L_EA (n = 16, or 8 with the upper half zeroed)
++static void XmmLoad(struct Cg *g, struct Ins *in, int r, int n) {
++  Resolve(g, in, n, false);
 +  Get(g, L_M);
-+  Get(g, L_EA);
-+  I32(g, w);
-+  Get(g, L_T);
-+  CallImport(g, (void *)WjWriteSlow, TY_WRITE);
-+  End(g);
++  Get(g, L_HR);
++  if (n == 16) {
++    Simd(g, V128_LOAD, 0);
++    Simd(g, V128_STORE, XMM(r));
++  } else {
++    Mem(g, W_I64_LOAD, 0, 0);
++    Mem(g, W_I64_STORE, 3, XMM(r));
++    Get(g, L_M);
++    I64(g, 0);
++    Mem(g, W_I64_STORE, 3, XMM(r) + 8);
++  }
++}
++
++// n bytes at L_EA = xmm[r]
++static void XmmStore(struct Cg *g, struct Ins *in, int r, int n) {
++  Resolve(g, in, n, true);
++  Get(g, L_HW);
++  Get(g, L_M);
++  if (n == 16) {
++    Simd(g, V128_LOAD, XMM(r));
++    Simd(g, V128_STORE, 0);
++  } else {
++    Mem(g, W_I64_LOAD, 3, XMM(r));
++    Mem(g, W_I64_STORE, 0, 0);
++  }
 +}
 +
 +// pushes the zero-extended r/m operand
@@ -950,8 +1044,8 @@ index 0000000..645db25
 +  }
 +}
 +
-+// pops a value into the r/m operand (L_EA must already hold the address
-+// if it's memory and `haveea` is set)
++// pops a value into the r/m operand; with `haveea`, a memory operand was
++// already resolved for writing (GetRmForUpdate)
 +static void PutRm(struct Cg *g, struct Ins *in, int w, bool haveea) {
 +  u64 rde = in->rde;
 +  if (IsModrmRegister(rde)) {
@@ -964,8 +1058,23 @@ index 0000000..645db25
 +    }
 +  } else {
 +    Set(g, L_T);
-+    if (!haveea) Ea(g, in, true);
-+    Store(g, in, w);
++    if (!haveea) {
++      Ea(g, in, true);
++      Resolve(g, in, w, true);
++    }
++    StoreHw(g, w);
++  }
++}
++
++// pushes the r/m operand of a read-modify-write instruction; a memory
++// operand is resolved for writing first, so the store can't fault later
++static void GetRmForUpdate(struct Cg *g, struct Ins *in, int w) {
++  if (IsModrmRegister(in->rde)) {
++    GetRm(g, in, w);
++  } else {
++    Ea(g, in, true);
++    Resolve(g, in, w, true);
++    LoadHw(g, w);
 +  }
 +}
 +
@@ -1611,6 +1720,26 @@ index 0000000..645db25
 +      if (w == 2) goto Call;
 +      in->fw = CF | OF;
 +      return;
++    case 0x110:  // movups/movupd/movsd Vx,Wx (not movss)
++    case 0x111:  // ... Wx,Vx
++      if ((Rep(rde) | Osz(rde)) == 3) goto Call;
++      if (Rep(rde) == 2 && IsModrmRegister(rde)) goto Call;  // merges
++      return;
++    case 0x128:  // movaps/movapd Vx,Wx (register form: no alignment check)
++    case 0x129:
++      if (!IsModrmRegister(rde)) goto Call;
++      return;
++    case 0x16F:  // movdqa/movdqu Vx,Wx
++    case 0x17F:
++      if (!Osz(rde) && Rep(rde) != 3) goto Call;  // mmx movq
++      if (Osz(rde) && !IsModrmRegister(rde)) goto Call;  // aligned
++      return;
++    case 0x1EF:  // pxor xmm (register form)
++      if (!Osz(rde) || !IsModrmRegister(rde)) goto Call;
++      return;
++    case 0x157:  // xorps/xorpd (register form)
++      if (Rep(rde) || !IsModrmRegister(rde)) goto Call;
++      return;
 +    default:
 +      if (IsJcc(op)) {
 +        in->fr = CondFlags(op & 15);
@@ -1653,6 +1782,7 @@ index 0000000..645db25
 +  if (op == 0x1AF || op == 0x069 || op == 0x06B) return 11;
 +  if (0x140 <= op && op <= 0x14F) return 12;
 +  if (0x190 <= op && op <= 0x19F) return 13;
++  if (op >= 0x110) return 17;  // sse
 +  return 4;  // moves, nops
 +}
 +
@@ -1852,7 +1982,9 @@ index 0000000..645db25
 +    switch (form) {
 +      case 0:  // Eb,Gb
 +      case 1:  // Ev,Gv
-+        if (mem) {
++        if (mem && aop != 7) {
++          GetRmForUpdate(g, in, w);
++        } else if (mem) {
 +          Ea(g, in, true);
 +          LoadEa(g, in, w);
 +        } else {
@@ -1896,7 +2028,9 @@ index 0000000..645db25
 +  // 80 81 82 83: Ev,imm
 +  aop = ModrmReg(rde);
 +  w = (op == 0x080 || op == 0x082) ? 1 : Width(rde);
-+  if (mem) {
++  if (mem && aop != 7) {
++    GetRmForUpdate(g, in, w);
++  } else if (mem) {
 +    Ea(g, in, true);
 +    LoadEa(g, in, w);
 +  } else {
@@ -1938,13 +2072,7 @@ index 0000000..645db25
 +  u64 rde = in->rde;
 +  int w = Mopcode(rde) == 0x0FE ? 1 : Width(rde);
 +  bool dec = ModrmReg(rde) == 1;
-+  bool mem = !IsModrmRegister(rde);
-+  if (mem) {
-+    Ea(g, in, true);
-+    LoadEa(g, in, w);
-+  } else {
-+    GetRm(g, in, w);
-+  }
++  GetRmForUpdate(g, in, w);
 +  Tee(g, L_CX);
 +  I64(g, 1);
 +  Op(g, dec ? W_I64_SUB : W_I64_ADD);
@@ -1967,12 +2095,8 @@ index 0000000..645db25
 +  bool mem = !IsModrmRegister(rde);
 +  bool dyn = op == 0x0D3;
 +  int count;
-+  if (mem) {
-+    Ea(g, in, true);
-+    LoadEa(g, in, w);
-+  } else {
-+    GetRm(g, in, w);
-+  }
++  (void)mem;
++  GetRmForUpdate(g, in, w);
 +  Set(g, L_CX);
 +  if (dyn) {
 +    UseReg(g, 1);
@@ -2090,15 +2214,17 @@ index 0000000..645db25
 +}
 +
 +static void Push64(struct Cg *g, struct Ins *in) {
-+  // value in L_T; rsp -= 8; [rsp] = value
++  // value in L_T; [rsp - 8] = value; rsp -= 8
 +  UseReg(g, 4);
 +  Get(g, L_R(4));
 +  I64(g, 8);
 +  Op(g, W_I64_SUB);
-+  Tee(g, L_EA);
++  Set(g, L_EA);
++  Resolve(g, in, 8, true);
++  StoreHw(g, 8);
++  Get(g, L_EA);
 +  Set(g, L_R(4));
 +  g->wregs |= 1u << 4;
-+  Store(g, in, 8);
 +}
 +
 +static void Pop64(struct Cg *g, struct Ins *in) {
@@ -2106,12 +2232,12 @@ index 0000000..645db25
 +  UseReg(g, 4);
 +  Get(g, L_R(4));
 +  Set(g, L_EA);
++  LoadEa(g, in, 8);
 +  Get(g, L_R(4));
 +  I64(g, 8);
 +  Op(g, W_I64_ADD);
 +  Set(g, L_R(4));
 +  g->wregs |= 1u << 4;
-+  LoadEa(g, in, 8);
 +}
 +
 +// the instruction is executed by Blink's handler
@@ -2152,8 +2278,7 @@ index 0000000..645db25
 +  Mem(g, W_I32_ATOMIC_LOAD8_U, 0, OFF(attention));
 +  Op(g, W_I32_OR);
 +  If(g, T_VOID);
-+  Flush(g);  // nothing dirty now, but keep it symmetric
-+  Op(g, W_RETURN);
++  Op(g, W_RETURN);  // the state in memory is current
 +  End(g);
 +}
 +
@@ -2170,7 +2295,13 @@ index 0000000..645db25
 +// loop (unless we're out of budget or were signalled), otherwise an exit
 +static void Goto(struct Cg *g, i64 target) {
 +  int k = FindBlk(g, target);
-+  if (k >= 0) {
++  if (k > g->cur) {
++    // forward: blocks are laid out by address and block k's code starts
++    // right after the end of its wasm `block`, which encloses ours
++    B(&g->b, W_BR);
++    U(&g->b, g->depth + (k - g->cur - 1));
++  } else if (k >= 0) {
++    // backward: through the dispatch loop, spending the budget
 +    Get(g, L_BUDGET);
 +    I32(g, 1);
 +    Op(g, W_I32_SUB);
@@ -2423,6 +2554,41 @@ index 0000000..645db25
 +    case 0x06B:
 +      TranslateImul(g, in);
 +      return;
++    case 0x110:
++    case 0x111:
++    case 0x128:
++    case 0x129:
++    case 0x16F:
++    case 0x17F: {
++      bool store = op == 0x111 || op == 0x129 || op == 0x17F;
++      int n = Rep(rde) == 2 ? 8 : 16;
++      int reg = RexrReg(rde);
++      if (IsModrmRegister(rde)) {  // 16-byte register move
++        int src = store ? reg : RexbRm(rde), dst = store ? RexbRm(rde) : reg;
++        Get(g, L_M);
++        Get(g, L_M);
++        Simd(g, V128_LOAD, XMM(src));
++        Simd(g, V128_STORE, XMM(dst));
++      } else {
++        Ea(g, in, true);
++        if (store) {
++          XmmStore(g, in, reg, n);
++        } else {
++          XmmLoad(g, in, reg, n);
++        }
++      }
++      return;
++    }
++    case 0x1EF:
++    case 0x157:
++      Get(g, L_M);
++      Get(g, L_M);
++      Simd(g, V128_LOAD, XMM(RexrReg(rde)));
++      Get(g, L_M);
++      Simd(g, V128_LOAD, XMM(RexbRm(rde)));
++      Simd(g, V128_XOR, 0);
++      Simd(g, V128_STORE, XMM(RexrReg(rde)));
++      return;
 +    default:
 +      abort();
 +  }
@@ -2483,6 +2649,20 @@ index 0000000..645db25
 +  return true;
 +}
 +
++// lays the blocks out by address, so fallthroughs are adjacent and most
++// branches go forward (insertion sort: at most kMaxBlocks)
++static void SortBlocks(struct Cg *g) {
++  int i, j;
++  struct Blk t;
++  for (i = 1; i < g->nblk; ++i) {
++    t = g->blk[i];
++    for (j = i; j > 0 && g->blk[j - 1].start > t.start; --j) {
++      g->blk[j] = g->blk[j - 1];
++    }
++    g->blk[j] = t;
++  }
++}
++
 +// collects the blocks reachable from `pc` through direct branches
 +static bool Discover(struct Cg *g, i64 pc) {
 +  int k, op, head = 0;
@@ -2526,6 +2706,8 @@ index 0000000..645db25
 +  for (pass = 0; pass < 2; ++pass) {
 +    g->b.n = 0;
 +    g->depth = 0;
++    B(&g->b, W_BLOCK);  // exits branch out of this
++    B(&g->b, T_VOID);
 +    B(&g->b, W_LOOP);
 +    B(&g->b, T_VOID);
 +    for (k = 0; k < g->nblk; ++k) {
@@ -2552,6 +2734,12 @@ index 0000000..645db25
 +      Goto(g, b->end);
 +    }
 +    B(&g->b, W_END);  // loop
++    B(&g->b, W_END);  // exit block
++    // the epilogue: m->ip = L_T, registers written back
++    Get(g, L_M);
++    Get(g, L_T);
++    Mem(g, W_I64_STORE, 3, OFF(ip));
++    Flush(g);
 +    B(&g->b, W_END);  // function
 +    g->regs |= g->wregs;
 +  }
@@ -2634,6 +2822,10 @@ index 0000000..645db25
 +  B(&sec, 0x60), U(&sec, 2), B(&sec, T_I32), B(&sec, T_I32), U(&sec, 0);
 +  B(&sec, 0x60), U(&sec, 2), B(&sec, T_I32), B(&sec, T_I64), U(&sec, 1),
 +      B(&sec, T_I32);
++  B(&sec, 0x60), U(&sec, 4), B(&sec, T_I32), B(&sec, T_I64), B(&sec, T_I32),
++      B(&sec, T_I32), U(&sec, 0);
++  B(&sec, 0x60), U(&sec, 4), B(&sec, T_I32), B(&sec, T_I64), B(&sec, T_I32),
++      B(&sec, T_I32), U(&sec, 1), B(&sec, T_I32);
 +  Section(&m, 1, &sec);
 +  // imports: the shared memory and the C functions the code calls
 +  U(&sec, 1 + mod->nimp);
@@ -2718,8 +2910,8 @@ index 0000000..645db25
 +  wj_stats();
 +  fprintf(stderr,
 +          "wjit: %ld regions %ld insns %ld inline; this thread ran %ld "
-+          "regions\n",
-+          (long)g_wj_blocks, (long)g_wj_insns, (long)g_wj_inline, t_runs);
++          "regions; %ld KB of wasm\n",
++          (long)g_wj_blocks, (long)g_wj_insns, (long)g_wj_inline, t_runs, (long)g_wj_bytes / 1024);
 +  for (j = 0; j < 12; ++j) {
 +    for (best = 0, i = 1; i < 0x400; ++i) {
 +      if (g_wj_callops[i] > g_wj_callops[best]) best = i;
@@ -2750,11 +2942,15 @@ index 0000000..645db25
 +    ++g_wj_failed;
 +    return -1;
 +  }
++  SortBlocks(g);
 +  Plan(g);
 +  Body(g);
 +  if (!Assemble(&mod, &g->b, g->nblk, out, pc)) {
-+    fn = out[0];
-+    for (k = 1; k < g->nblk; ++k) {
++    for (k = 0; k < g->nblk; ++k) {
++      if (g->blk[k].start == pc) {
++        fn = out[k];
++        continue;
++      }
 +      if (!(e = Find(g->blk[k].start))) e = Insert(g->blk[k].start);
 +      SetEntry(e, out[k]);
 +    }
@@ -2923,7 +3119,7 @@ index 0000000..645db25
 +    if (!(e = Find(m->ip)) || e->fn <= 0) break;
 +    ++t_runs;
 +    ((wj_f)(uintptr_t)e->fn)(m);
-+    if (t_unwind) break;
++    if (t_unwind || !m->wjhot) break;
 +  }
 +  --t_depth;
 +  return m->ip == ret && !t_unwind;

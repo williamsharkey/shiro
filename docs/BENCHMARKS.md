@@ -159,6 +159,31 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### unix/perf-blink 2 — smaller generated code, forward branches, SSE moves
+
+`perf-blink-after-x86.json` → `perf-blink-2-x86.json` (x86 suite, isolated, 3 runs):
+
+- A memory access that misses the JIT's translation cache calls a helper that
+  refills it and never faults; on a fault or a page-crossing access the
+  region exits *before* the instruction (every translator resolves its memory
+  operands before changing state) and the interpreter runs it. All exits
+  share one epilogue. Generated code for `gh --version` went from 17.2 MB to
+  9.8 MB of wasm.
+- Blocks are laid out by address: fallthroughs are free and forward branches
+  are direct `br`s; only backward branches go through the dispatch loop and
+  its budget/signal check.
+- movups/movupd/movdqu/movsd loads and stores, register movaps/movdqa,
+  pxor/xorps are inline (v128 loads/stores); Go's memmove/memclr use them.
+
+| metric (isolated) | JIT v1 | JIT v2 | change | vs. no JIT |
+|---|---:|---:|---:|---:|
+| x86.blink.gh_version | 5153 ms | 3231 ms | −37% | 31974 ms (9.9×) |
+| x86.blink.go_cpuloop_5m | 267 ms | 227 ms | −15% | 2001 ms |
+| x86.blink.go_hello | 266 ms | 215 ms | −19% | 220 ms |
+| x86.blink.go_nethttp | 601 ms | 487 ms | −19% | 459 ms |
+| x86.blink.hello_musl | 140 ms | 115 ms | −18% | 92.5 ms |
+| x86.blink.peak_rss.go_nethttp | 22.1 MiB | 25.6 MiB | +16% (noise range) | 34.1 MiB |
+
 ### unix/perf-blink 1 — wasm JIT for Blink (x86-64 → WebAssembly)
 
 Vendor patch 0012 (`blink/wjit.c`, see `X86_ENGINES.md` "The wasm JIT"):
