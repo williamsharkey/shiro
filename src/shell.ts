@@ -265,7 +265,7 @@ export class Shell {
   functions: Record<string, { body: string }> = {};
   backgroundJobs: Map<number, BackgroundJob> = new Map();
   /** Shell options: errexit (-e), xtrace (-x), nounset (-u), verbose (-v) */
-  options: Set<string> = new Set();
+  options: Set<string> = new Set(['hashall', 'braceexpand']);
   /** Bash-style indexed arrays */
   arrays: Map<string, string[]> = new Map();
   /** Bash-style associative arrays (declare -A) */
@@ -594,6 +594,14 @@ export class Shell {
       this.errexitSuppressed = suppressed;
       if (depth === 0) this.abortController = null;
     }
+  }
+
+  /** $-: the set options as letters, in bash's order */
+  private optionFlags(): string {
+    const order: [string, string][] = [['allexport', 'a'], ['notify', 'b'], ['errexit', 'e'], ['noglob', 'f'], ['hashall', 'h'],
+      ['monitor', 'm'], ['noexec', 'n'], ['nounset', 'u'], ['verbose', 'v'], ['xtrace', 'x'], ['braceexpand', 'B'],
+      ['noclobber', 'C'], ['errtrace', 'E'], ['histexpand', 'H'], ['physical', 'P'], ['functrace', 'T']];
+    return order.filter(([o]) => this.options.has(o)).map(([, c]) => c).join('') + (this.scriptShell ? '' : 'i');
   }
 
   /** trap [-lp] [[ACTION] SIGNAL...] */
@@ -1128,7 +1136,13 @@ export class Shell {
           const pipeStdin = i > 0 ? lastOutput : '';
           lastOutput = '';
           if (i < pipeline.length - 1) startCapture([], false);
-          exitCode = await this.execControlStructurePiped(segment.trim(), pipeStdin, writeStdout, stderrWriter);
+          // An element of a pipeline runs in a subshell: exit, cd and variables stay there
+          // (shopt -s lastpipe: the last one runs in this shell)
+          if (pipeline.length > 1 && !(i === pipeline.length - 1 && this.shoptopts.has('lastpipe'))) {
+            exitCode = await this.inSubshell((sub) => sub.execControlStructurePiped(segment.trim(), pipeStdin, writeStdout, stderrWriter));
+          } else {
+            exitCode = await this.execControlStructurePiped(segment.trim(), pipeStdin, writeStdout, stderrWriter);
+          }
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
           continue;
@@ -1227,7 +1241,9 @@ export class Shell {
         }
 
         // Alias expansion: if cmdName matches an alias, replace it
-        if (this.aliases.has(cmdName) && !this.expandingAliases.has(cmdName)) {
+        // (only an unquoted command word: 'hi' and \hi are not aliases)
+        if (this.aliases.has(cmdName) && !this.expandingAliases.has(cmdName)
+          && segment.replace(/^\s*(?:\d*(?:>>?|<|&>>?|>\|)\s*[^\s'"]+\s+)*/, '').startsWith(cmdName)) {
           const aliasValue = this.aliases.get(cmdName)!;
           const fullCmd = aliasValue + (cmdArgs.length > 0 ? ' ' + quoteArgsForShell(cmdArgs) : '');
           this.injectedStdin = nestedStdin;
@@ -2948,11 +2964,7 @@ export class Shell {
         }
         const targetPath = this.fs.resolvePath(redir.target, this.cwd);
         if (redir.type === '2>' && !(await this.clobberOk(redir, targetPath, stderrWriter))) { stderrOutput = ''; continue; }
-        if (redir.type === '2>') {
-          await this.fs.writeFile(targetPath, stderrOutput);
-        } else {
-          await this.fs.appendFile(targetPath, stderrOutput);
-        }
+        await this.redirectWrite(targetPath, redir.target, stderrOutput, redir.type === '2>>', stderrWriter);
         stderrOutput = '';
       }
     }
@@ -2993,11 +3005,7 @@ export class Shell {
         }
         const targetPath = this.fs.resolvePath(redir.target, this.cwd);
         if (redir.type === '>' && !(await this.clobberOk(redir, targetPath, stderrWriter))) { output = ''; continue; }
-        if (redir.type === '>') {
-          await this.fs.writeFile(targetPath, output);
-        } else {
-          await this.fs.appendFile(targetPath, output);
-        }
+        await this.redirectWrite(targetPath, redir.target, output, redir.type === '>>', stderrWriter);
         output = '';
       }
     }
@@ -3015,6 +3023,19 @@ export class Shell {
       writeStdout(output.replace(/\n/g, '\r\n'));
     }
     return output;
+  }
+
+  /** Write a redirect's file; a failure (a directory, a bad path) is reported and fails the command */
+  private async redirectWrite(path: string, shown: string, text: string, append: boolean, writeStderr: (s: string) => void): Promise<void> {
+    try {
+      if (append) await this.fs.appendFile(path, text);
+      else await this.fs.writeFile(path, text);
+    } catch (e: any) {
+      const msg = e?.code === 'EISDIR' || /EISDIR/.test(e?.message ?? '') ? 'Is a directory'
+        : e?.code === 'ENOENT' || /ENOENT/.test(e?.message ?? '') ? 'No such file or directory' : (e?.message ?? String(e));
+      writeStderr(`shiro: ${shown}: ${msg}\r\n`);
+      this.redirectFailed = true;
+    }
   }
 
   /** set -o noclobber: `>` (not `>|`) refuses to overwrite an existing regular file */
@@ -3246,6 +3267,13 @@ export class Shell {
         } else {
           result += args.map((a) => splitFields(a, ifs)).filter((f) => f !== '').join(' ');
         }
+        i += 2;
+        continue;
+      }
+
+      // $- (the shell's single-letter options)
+      if (ch === '$' && line[i + 1] === '-') {
+        result += this.optionFlags();
         i += 2;
         continue;
       }
@@ -4075,7 +4103,7 @@ export class Shell {
         if (ch === '{') {
           // Only count as depth if preceded by whitespace/; (not in ${VAR})
           const prevBrace = i > 0 ? line[i - 1] : ' ';
-          if (/[\s;)]/.test(prevBrace) || i === 0) { depth++; braceDepth++; }
+          if (/[\s;)|&]/.test(prevBrace) || i === 0) { depth++; braceDepth++; }
           current += ch; i++; continue;
         }
         if (ch === '}') {
@@ -4914,17 +4942,47 @@ export class Shell {
       captured = result.stdout;
       if (result.stderr) writeStderr(result.stderr.replace(/\n/g, '\r\n'));
       code = result.exitCode;
-    } else if (stdin) {
-      code = await this.execControlStructurePiped(head, stdin, capture, writeStderr);
     } else {
-      code = await this.execControlStructure(head, capture, writeStderr);
+      // Every element of a pipeline is a subshell: exit, cd and variables stay in it
+      code = await this.inSubshell((sub) => stdin
+        ? sub.execControlStructurePiped(head, stdin, capture, writeStderr)
+        : sub.execControlStructure(head, capture, writeStderr));
     }
     if (this.abortController?.signal.aborted) return 130;
-    this.injectedStdin = captured.replace(/\r\n/g, '\n');
-    const rest = parts.slice(1).join('|');
-    const restCode = await this.execute(rest, writeStdout, writeStderr, false, terminalOverride || this.terminal, true);
-    this.injectedStdin = null;
-    return this.options.has('pipefail') && code !== 0 && restCode === 0 ? code : restCode;
+    const rest = parts.slice(1).map((p) => p.trim()).join(' | ');
+    let restCode: number;
+    if (parts.length === 2 && (this.isControlStructure(parts[1].trim()) || /^\((?!\()/.test(parts[1].trim()))) {
+      const last = parts[1].trim();
+      const input = captured.replace(/\r\n/g, '\n');
+      const lastpipe = this.shoptopts.has('lastpipe') && !last.startsWith('(');
+      restCode = lastpipe ? await this.execControlStructurePiped(last, input, writeStdout, writeStderr) : await this.inSubshell((sub) => (last.startsWith('(')
+        ? sub.executeWithStdin(last.slice(1, -1), input, writeStdout, writeStderr)
+        : sub.execControlStructurePiped(last, input, writeStdout, writeStderr)));
+      this.arrays.set('PIPESTATUS', [String(code), String(restCode)]);
+    } else {
+      this.injectedStdin = captured.replace(/\r\n/g, '\n');
+      restCode = await this.execute(rest, writeStdout, writeStderr, false, terminalOverride || this.terminal, true);
+      this.injectedStdin = null;
+      this.arrays.set('PIPESTATUS', [String(code), ...(this.arrays.get('PIPESTATUS') ?? [String(restCode)])]);
+    }
+    if (this.options.has('pipefail')) {
+      const all = this.arrays.get('PIPESTATUS')!.map(Number);
+      const lastBad = [...all].reverse().find((c) => c !== 0);
+      return lastBad ?? 0;
+    }
+    return restCode;
+  }
+
+  /** Run fn on a forked child; exit (and a stray break/continue) end only the child */
+  private async inSubshell(fn: (sub: Shell) => Promise<number>): Promise<number> {
+    const child = this.fork();
+    try {
+      return await fn(child);
+    } catch (e) {
+      if (e instanceof ExitSignal) return e.code;
+      if (e instanceof BreakSignal || e instanceof ContinueSignal) return 0;
+      throw e;
+    }
   }
 
   private isControlStructure(input: string): boolean {

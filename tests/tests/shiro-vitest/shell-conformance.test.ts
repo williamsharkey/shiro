@@ -369,4 +369,17 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe("trap -- 'echo e' EXIT\ntrap -- '' SIGUSR1\ntrap -- 'it'\\''s' SIGTERM\ntrap -- '' SIGUSR1\nst=2\nst=1\nin 2\nst=0 x=1\nall\nw=7\n");
   });
+
+  it('pipeline elements are subshells (exit, variables), PIPESTATUS, pipefail, $-, quoted alias', async () => {
+    const r = await script([
+      "{ echo a; exit 3; } | { cat; exit 4; } | { cat; }; echo \"st=$? ps=${PIPESTATUS[*]}\"",
+      "set -o pipefail; { exit 9; } | { exit 2; } | { :; }; echo \"pf=$?\"; set +o pipefail",
+      "x=1; echo | { x=2; }; echo \"x=$x\"",
+      "set -eu; case $- in *e*u*) echo flags ;; esac; set +eu",
+      "shopt -s expand_aliases; alias hi='echo hello'",
+      "hi",
+      "'hi' 2>/dev/null || echo quoted-not-alias",
+    ].join('\n'));
+    expect(r.out).toBe('a\nst=0 ps=3 4 0\npf=2\nx=1\nflags\nhello\nquoted-not-alias\n');
+  });
 });
