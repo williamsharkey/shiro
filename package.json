@@ -11,7 +11,8 @@
     "bench": "node bench/run.mjs",
     "bench:quick": "node bench/run.mjs --quick",
     "bench:compare": "node bench/compare.mjs",
-    "deploy": "bash deploy.sh"
+    "deploy": "bash deploy.sh",
+    "conformance": "(sh scripts/conformance/fetch.sh || echo \"conformance: could not fetch external suites; they will be skipped\") && cd tests && npx vitest run --config vitest.conformance.config.ts; node ../scripts/conformance/report.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
