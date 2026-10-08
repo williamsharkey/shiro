@@ -1177,7 +1177,7 @@ export class FileSystem {
       // Prevent renaming a file over a directory
       const existing = await this._get(newPath);
       if (existing?.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, rename '${newPath}'`);
-      await this._put({ ...node, path: newPath, mtime: Date.now() });
+      await this._put({ ...node, path: newPath, ctime: Date.now() }); // rename keeps mtime (rsync -a, make)
       await this._delete(oldPath);
     }
     this._emitChange('rename', oldPath, newPath);

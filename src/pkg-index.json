@@ -2982,6 +2982,129 @@
    "needs": [
     "x86"
    ]
+  },
+  {
+   "name": "wget",
+   "version": "1.25.0",
+   "description": "GNU wget: non-interactive downloader (OpenSSL, zlib; static x86-64 build)",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/wget/wget-1.25.0.tar.gz",
+   "homepage": "https://www.gnu.org/software/wget/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/wget.sh",
+   "section": "net",
+   "abi": "x86_64-linux",
+   "deps": [
+    "ca-certificates"
+   ],
+   "files": [
+    {
+     "path": "bin/wget",
+     "url": "/pkg/wget/1.25.0/wget.gz",
+     "sha256": "d59f17b701adc44a1e05dcfcc005d4f0c98ebbfa06bc1303403bb8f24534d0d0",
+     "size": 2188313,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "wget": {
+     "file": "bin/wget"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "rsync",
+   "version": "3.5.1",
+   "description": "rsync: fast incremental file copy (static x86-64 build)",
+   "license": "GPL-3.0-or-later",
+   "source": "https://download.samba.org/pub/rsync/src/rsync-3.5.1.tar.gz",
+   "homepage": "https://rsync.samba.org/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/rsync.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/rsync",
+     "url": "/pkg/rsync/3.5.1/rsync.gz",
+     "sha256": "6c19c0911a980cfa696a96fd60b2b6b8b59a0075ae02cbf77340f7fccbe05332",
+     "size": 426549,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "rsync": {
+     "file": "bin/rsync"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "mandoc",
+   "version": "1.14.6",
+   "description": "mandoc: man, apropos, whatis and the mdoc/man formatter (static x86-64 build)",
+   "license": "ISC",
+   "source": "https://mandoc.bsd.lv/snapshots/mandoc-1.14.6.tar.gz",
+   "homepage": "https://mandoc.bsd.lv/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/mandoc.sh",
+   "section": "doc",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/mandoc",
+     "url": "/pkg/mandoc/1.14.6/mandoc.gz",
+     "sha256": "2689b01b6ad33543cbf08590e555fcd80b6145691d53af499a753eff747db16b",
+     "size": 256920,
+     "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/mandoc/1.14.6/share.tar.gz",
+     "sha256": "163f5ec06e967a1e159d2f20719574ec1773ec4aabfeb89cf4b24c4d0d9c2186",
+     "size": 86744,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "man": {
+     "file": "bin/mandoc"
+    },
+    "mandoc": {
+     "file": "bin/mandoc"
+    },
+    "apropos": {
+     "file": "bin/mandoc"
+    },
+    "whatis": {
+     "file": "bin/mandoc"
+    },
+    "makewhatis": {
+     "file": "bin/mandoc"
+    }
+   },
+   "links": {
+    "/usr/share/man/man1/apropos.1": "share/man/man1/apropos.1",
+    "/usr/share/man/man1/man.1": "share/man/man1/man.1",
+    "/usr/share/man/man1/mandoc.1": "share/man/man1/mandoc.1",
+    "/usr/share/man/man5/man.conf.5": "share/man/man5/man.conf.5",
+    "/usr/share/man/man5/mandoc.db.5": "share/man/man5/mandoc.db.5",
+    "/usr/share/man/man7/eqn.7": "share/man/man7/eqn.7",
+    "/usr/share/man/man7/man.7": "share/man/man7/man.7",
+    "/usr/share/man/man7/mandoc_char.7": "share/man/man7/mandoc_char.7",
+    "/usr/share/man/man7/mdoc.7": "share/man/man7/mdoc.7",
+    "/usr/share/man/man7/roff.7": "share/man/man7/roff.7",
+    "/usr/share/man/man7/tbl.7": "share/man/man7/tbl.7",
+    "/usr/share/man/man8/makewhatis.8": "share/man/man8/makewhatis.8"
+   },
+   "needs": [
+    "x86"
+   ]
   }
  ]
 }

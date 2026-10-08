@@ -662,3 +662,65 @@ describe('htop', () => {
     expect(await done).toBe(0);
   }, 180_000);
 });
+
+describe('wget', () => {
+  it('downloads from a loopback HTTP server to a file and to stdout', async () => {
+    await install('wget');
+    const { netStack } = await import('@shiro/kernel/net');
+    const { AF_INET, SOCK_STREAM } = await import('@shiro/kernel/abi');
+    const l = netStack.socket(AF_INET, SOCK_STREAM, 0) as any;
+    expect(l.bind({ family: AF_INET, address: '127.0.0.1', port: 18090 })).toBe(0);
+    expect(l.listen(4)).toBe(0);
+    const serve = async (body: string) => {
+      const c = await l.accept();
+      const buf = new Uint8Array(4096);
+      let req = '';
+      while (!req.includes('\r\n\r\n')) {
+        const n = await c.read(buf);
+        if (n <= 0) break;
+        req += new TextDecoder().decode(buf.subarray(0, n));
+      }
+      await c.write(new TextEncoder().encode(`HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n${body}`));
+      await c.close();
+      return req;
+    };
+    let served = serve('file body\n');
+    expect((await sh('wget -q http://127.0.0.1:18090/wget-f.txt && cat wget-f.txt')).out).toBe('file body\n');
+    expect(await served).toMatch(/^GET \/wget-f\.txt HTTP\/1\.1\r\n[^]*User-Agent: Wget\/1\.25\.0/);
+    served = serve('to stdout');
+    expect((await sh('wget -qO- http://127.0.0.1:18090/x')).out).toBe('to stdout');
+    await served;
+    await l.close();
+    expect((await sh('wget -q --tries=1 http://127.0.0.1:18091/; echo rc=$?')).out).toBe('rc=4\n'); // network failure
+  }, 180_000);
+});
+
+describe('rsync', () => {
+  it('copies trees, updates only what changed, deletes, and dry-runs', async () => {
+    await install('rsync');
+    await fs.mkdir('/home/user/w/rs/src/sub', { recursive: true });
+    await fs.writeFile('/home/user/w/rs/src/a.txt', 'one\n');
+    await fs.writeFile('/home/user/w/rs/src/sub/b.txt', 'two\n');
+    expect((await sh('cd rs && rsync -a src/ dst/ && find dst -type f | sort')).out).toBe('dst/a.txt\ndst/sub/b.txt\n');
+    await fs.writeFile('/home/user/w/rs/src/a.txt', 'changed\n');
+    await fs.writeFile('/home/user/w/rs/dst/extra.txt', 'x');
+    const r = await sh('rsync -ai --delete src/ dst/');
+    expect(r.out).toMatch(/^\*deleting +extra\.txt\n>f[.a-zA-Z+]{9,10} a\.txt\n$/);
+    expect(await fs.readFile('/home/user/w/rs/dst/a.txt', 'utf8')).toBe('changed\n');
+    expect((await sh('rsync -ain src/ dst/')).out).toBe('');
+    expect((await sh('rsync --version | head -1')).out).toMatch(/^rsync +version 3\.5\.1 /);
+  }, 180_000);
+});
+
+describe('man (mandoc)', () => {
+  it('formats manual pages, finds them with -w, and indexes them with makewhatis for apropos', async () => {
+    await install('mandoc');
+    expect((await sh('man -w man')).out).toBe('/usr/share/man/man1/man.1\n/usr/share/man/man7/man.7\n');
+    const page = await sh('MANWIDTH=70 man -T ascii mandoc');
+    expect(page.err).toBe('');
+    expect(page.out.replace(/.\x08/g, '')).toMatch(/^MANDOC\(1\) +General Commands Manual +MANDOC\(1\)\n\nNAME\n +mandoc - format manual pages\n/);
+    expect((await sh('apropos mandoc 2>&1; echo rc=$?')).out).toMatch(/rc=[1-9]\n$/); // no database yet
+    expect((await sh('makewhatis /usr/share/man && whatis mandoc')).out).toMatch(/^mandoc\(1\) - format manual pages\n/m);
+    expect((await sh('apropos -s 7 roff')).out).toMatch(/roff\(7\) - roff language reference/);
+  }, 180_000);
+});

@@ -140,6 +140,9 @@ WASI/WASIX are WASM packages run as kernel processes in workers.
 | openssl | 3.5.9 | pkg (Blink) | works | `dgst -sha256`, `enc -aes-256-cbc -pbkdf2`, `rand`, Ed25519 `genpkey`, self-signed `req -x509`, `x509 -subject` | no engines/providers beyond the default |
 | curl | 8.22.0 (OpenSSL 3.5.9, zlib) | pkg (Blink) | works | HTTP GET with headers against a loopback server on kernel sockets; connection refused is exit 7 | Remote hosts go through the server's WebSocket-to-TCP relay and DNS-over-HTTPS (not in the automated test). No HTTP/2, HTTP/3, IDN, libssh2 |
 | ca-certificates | 2026-09-25 (Mozilla, via curl.se) | pkg | works | `/etc/ssl/certs/ca-certificates.crt`, `/etc/ssl/cert.pem`; openssl and curl depend on it | |
+| wget | 1.25.0 (GNU; OpenSSL 3.5.9, zlib) | pkg (Blink) | works | download to a file and `-O-` from a loopback HTTP server; exit 4 on a network failure | remote hosts through the TCP relay (as curl); no IRI/IDN, PSL, metalink |
+| rsync | 3.5.1 | pkg (Blink) | works | `-a` copy, `-i` itemized delta with `--delete`, `-n` dry run finds nothing after a sync | local copies only until there is an ssh; no xxhash/zstd/lz4, ACLs or xattrs |
+| man, apropos, whatis, makewhatis | 1.14.6 (mandoc) | pkg (Blink) | works | `man -w`, formatting `man(1)`/`mandoc(1)`, `makewhatis` then `whatis`/`apropos` | only pages packages install (mandoc's own so far); pager is `less` (`pkg install less`) |
 | jq | 1.8.1 | pkg (WASI) | works | filters, `-r`, `-s`, `gsub` (oniguruma), `-e` exit status | |
 | ripgrep | 15.2.0 | pkg (WASIX) | works as `/usr/bin/rg` | `.gitignore`, `-t`, `-g`, `-c`, `-l`, exit 1 on no match | plain `rg` is Shiro's builtin (the package doesn't take the name); no PCRE2; one search thread |
 | sqlite3 | 3.50.4 | pkg (WASI) | works | database file, queries, SQL on stdin, `-json` | interactive shell wants blocking stdin |
@@ -209,6 +212,8 @@ Shiro changes these programs needed (tests in `x86-engine.test.ts`,
   `Command::output()`). `kernel-core.test.ts`.
 - Blink keeps its own log in its in-memory root (`-L /blink.log`), not in
   the program's working directory.
+- `rename` keeps a file's modification time (it set it to now): `rsync -a`
+  sets times on a temp file and renames it. `filesystem.test.ts`.
 - `link(2)` still copies (the filesystem has no hard links) but the copy
   reports the source's inode number, which git's local clone checks.
   `kernel-core.test.ts`.
