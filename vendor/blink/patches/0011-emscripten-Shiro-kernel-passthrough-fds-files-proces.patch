@@ -1,0 +1,1334 @@
+From 792600c6822e0620603fc270513579104fed249d Mon Sep 17 00:00:00 2001
+From: shiro <build@shiro>
+Date: Thu, 8 Oct 2026 03:30:25 +0000
+Subject: [PATCH] emscripten: Shiro kernel passthrough (fds, files, processes,
+ vfork/exec)
+
+Under Shiro the guest's fd, filesystem and process syscalls go to the Shiro
+kernel through shiro_ksys() (vendor/blink/shiro-kernel.js): guest fd N is
+kernel fd N. fork/vfork/clone(CLONE_VFORK) run the child on this thread
+until it execs or exits (the kernel makes the child process); fork saves the
+parent's live stack. execve of an ELF reloads in this Blink after the
+kernel's exec bookkeeping; anything else replaces the worker.
+---
+ blink/blink.c   |    2 +
+ blink/shiro.inc | 1243 +++++++++++++++++++++++++++++++++++++++++++++++
+ blink/syscall.c |   18 +
+ 3 files changed, 1263 insertions(+)
+ create mode 100644 blink/shiro.inc
+
+diff --git a/blink/blink.c b/blink/blink.c
+index b4626c6..1284ec3 100644
+--- a/blink/blink.c
++++ b/blink/blink.c
+@@ -220,6 +220,7 @@ static void ProgramLimit(struct System *s, int hresource, int gresource) {
+ #ifdef __EMSCRIPTEN__
+ // The system the guest currently runs in, for signals sent from JavaScript.
+ static struct System *_Atomic g_shiro_system;
++void ShiroInitSystem(struct System *, bool);
+ 
+ // Called by the embedder (Shiro's worker host) when the kernel signals this
+ // process: queue `sig` (Linux numbering) on a guest thread that doesn't
+@@ -260,6 +261,7 @@ static int Exec(char *execfn, char *prog, char **argv, char **envp) {
+   m->system->exec = Exec;
+ #ifdef __EMSCRIPTEN__
+   g_shiro_system = m->system;
++  ShiroInitSystem(m->system, !old);
+ #endif
+   if (!old) {
+     // this is the first time a program is being loaded
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+new file mode 100644
+index 0000000..af01b37
+--- /dev/null
++++ b/blink/shiro.inc
+@@ -0,0 +1,1243 @@
++// Shiro kernel passthrough for the Blink wasm build (included by syscall.c).
++//
++// Under Shiro (https://shiro.computer), the guest's file descriptors,
++// filesystem, process and signal bookkeeping live in the Shiro kernel
++// (src/kernel/), not in emscripten's in-worker FS. The embedder
++// (public/engines/blink/host.mjs) calls blink_shiro_enable() before main(),
++// and from then on ShiroSyscall() forwards these syscalls to the kernel
++// through shiro_ksys(), a JavaScript import served by host.mjs over a pool
++// of kernel channels:
++//
++//   - every fd syscall (read/write/open/close/stat/poll/epoll/ioctl/pipe/
++//     sockets/...): guest fd N is kernel fd N, so pipes, the terminal
++//     (/dev/tty, /dev/ptmx), files and sockets are shared with every other
++//     Shiro process;
++//   - process calls: wait4/waitid, kill, getppid, setpgid/setsid, ...;
++//   - fork/vfork/clone(CLONE_VFORK): vfork semantics. The kernel creates the
++//     child process (a copy of our fd table); this thread then runs the
++//     child's code, its syscalls applying to the child, until it calls
++//     execve (the kernel starts the program in the child) or _exit; then the
++//     saved parent registers come back and fork returns the child's pid;
++//   - execve: an ELF image is re-loaded in this Blink (after the kernel did
++//     the exec bookkeeping); anything else (WASM, scripts, Shiro builtins)
++//     replaces this worker in the same process.
++//
++// Memory, threads, futexes, signal delivery and timing stay Blink's.
++
++int g_shiro_pid;  // kernel pid; 0 = not running under Shiro
++static int g_shiro_chunk = 65536;
++static u64 g_shiro_ignored;  // signals ignored at startup (inherited)
++
++// One kernel syscall (docs/KERNEL_ABI.md). args: 12 int32 slots; on return
++// args[0] holds the high word of the result. data: inlen bytes in, up to
++// outcap bytes out. as: run it as this pid (a vfork child), 0 = ourselves.
++extern int shiro_ksys(int nr, int *args, int as, void *data, int inlen,
++                      int outcap);
++
++EMSCRIPTEN_KEEPALIVE void blink_shiro_enable(int pid, int chunk, u32 ign_lo,
++                                             u32 ign_hi) {
++  g_shiro_pid = pid;
++  if (chunk > 4096) g_shiro_chunk = chunk;
++  g_shiro_ignored = (u64)ign_hi << 32 | ign_lo;
++}
++
++void ShiroInitSystem(struct System *s, bool first) {
++  int sig;
++  if (!g_shiro_pid) return;
++  s->pid = g_shiro_pid;
++  if (!first) return;
++  for (sig = 1; sig <= 64; ++sig) {
++    if (g_shiro_ignored & ((u64)1 << (sig - 1))) {
++      Write64(s->hands[sig - 1].handler, SIG_IGN_LINUX);
++    }
++  }
++}
++
++#define K_SYS_vfork   1010
++#define K_SYS_execve  1011
++#define K_FWD_HANDLER 0x5348  // kernel disposition: "the guest catches it"
++
++struct ShiroVfork {
++  struct ShiroVfork *prev;
++  int pid;
++  u8 regs[128];
++  u8 xmm[16][16];
++  u64 ip;
++  u32 flags;
++  u64 sigmask;
++  i64 fsbase, gsbase;
++  struct MachineFpu fpu;
++  u32 mxcsr;
++  // fork() (not vfork): the child returns through the caller's frames and
++  // overwrites them, so the parent's live stack is saved and put back
++  i64 stackaddr;
++  u8 *stack;
++  size_t stacksize;
++  struct sigaction_linux hands[64];
++};
++static _Thread_local struct ShiroVfork *t_vfork;
++
++static i64 ShiroErr(void) {
++  return -(XlatErrno(errno) & 0xfff);
++}
++
++static void *ShiroAlloc(struct Machine *m, size_t n) {
++  return AddToFreeList(m, calloc(1, n ? n : 1));
++}
++
++// Calls the kernel. `restart` and `intr` pick what an -EINTR means: with
++// `intr`, a signal for the guest is delivered (CheckInterrupt) and the call
++// restarts when the handler allows it (SA_RESTART) or no handler ran.
++static i64 ShiroCall(struct Machine *m, int nr, const int a[12], void *data,
++                     int inlen, int outcap, bool restart, bool intr) {
++  int args[12], r, as;
++  bool held;
++  i64 res;
++  as = t_vfork ? t_vfork->pid : 0;
++  for (;;) {
++    memcpy(args, a, sizeof(args));
++    held = GilHeld();
++    if (held) GilRelease();
++    r = shiro_ksys(nr, args, as, data, inlen, outcap);
++    if (held) GilAcquire();
++    res = (i64)(u64)(u32)r | (i64)args[0] << 32;
++    if (res == -EINTR_LINUX && intr && !as) {
++      if (CheckInterrupt(m, restart)) return -EINTR_LINUX;
++      continue;
++    }
++    return res;
++  }
++}
++
++#define A12(...) ((const int[12]){__VA_ARGS__})
++
++static i64 KS(struct Machine *m, int nr, const int a[12]) {
++  return ShiroCall(m, nr, a, 0, 0, 0, false, false);
++}
++
++// A path argument copied to `buf + off`; returns its length or -errno.
++static int ShiroPath(struct Machine *m, i64 addr, char *buf, int off) {
++  char *s;
++  size_t n;
++  if (!addr) return -EFAULT_LINUX;
++  if (!(s = LoadStr(m, addr))) return -EFAULT_LINUX;
++  n = strlen(s);
++  if (n >= 4096) return -ENAMETOOLONG_LINUX;
++  memcpy(buf + off, s, n);
++  return n;
++}
++
++static int ShiroDirfd(i64 fd) {
++  return (int)fd;
++}
++
++// ── read / write ─────────────────────────────────────────────────────────
++
++static i64 ShiroRead(struct Machine *m, int fd, i64 addr, u64 len) {
++  i64 r;
++  u8 *buf;
++  int n = len < (u64)g_shiro_chunk ? (int)len : g_shiro_chunk;
++  if (!len) return KS(m, 0, A12(fd, 0));
++  buf = (u8 *)ShiroAlloc(m, n);
++  r = ShiroCall(m, 0, A12(fd, n), buf, 0, n, true, true);
++  if (r > 0 && CopyToUserWrite(m, addr, buf, r) == -1) return -EFAULT_LINUX;
++  return r;
++}
++
++static i64 ShiroWrite(struct Machine *m, int fd, i64 addr, u64 len) {
++  u64 done = 0;
++  i64 r;
++  u8 *buf;
++  int n;
++  if (!len) return ShiroCall(m, 1, A12(fd, 0), 0, 0, 0, true, true);
++  buf = (u8 *)ShiroAlloc(m, MIN(len, (u64)g_shiro_chunk));
++  while (done < len) {
++    n = MIN(len - done, (u64)g_shiro_chunk);
++    if (CopyFromUserRead(m, buf, addr + done, n) == -1) {
++      return done ? (i64)done : -EFAULT_LINUX;
++    }
++    r = ShiroCall(m, 1, A12(fd, n), buf, n, 0, true, !done);
++    if (r < 0) return done ? (i64)done : r;
++    done += r;
++    if (r < n) break;
++  }
++  return done;
++}
++
++static i64 ShiroPread(struct Machine *m, int nr, int fd, i64 addr, u64 len,
++                      i64 off) {
++  i64 r;
++  u8 *buf;
++  int n = len < (u64)g_shiro_chunk ? (int)len : g_shiro_chunk;
++  if (off < 0) return -EINVAL_LINUX;
++  buf = (u8 *)ShiroAlloc(m, n);
++  if (nr == 18) {  // pwrite64
++    u64 done = 0;
++    while (done < len) {
++      n = MIN(len - done, (u64)g_shiro_chunk);
++      if (CopyFromUserRead(m, buf, addr + done, n) == -1) return -EFAULT_LINUX;
++      r = ShiroCall(m, 18, A12(fd, n, (int)(off + done), (int)((off + done) >> 32)),
++                    buf, n, 0, true, !done);
++      if (r < 0) return done ? (i64)done : r;
++      done += r;
++      if (r < n) break;
++    }
++    return done;
++  }
++  r = ShiroCall(m, 17, A12(fd, n, (int)off, (int)(off >> 32)), buf, 0, n, true,
++                true);
++  if (r > 0 && CopyToUserWrite(m, addr, buf, r) == -1) return -EFAULT_LINUX;
++  return r;
++}
++
++// readv/writev/preadv/pwritev: gathered into one transfer (a pipe or tty
++// reader must see a writev as one write). off < 0: the file position.
++static i64 ShiroIov(struct Machine *m, bool write, int fd, i64 iovaddr,
++                    int iovcnt, i64 off) {
++  const u8 *iov;
++  u64 total = 0, len, done;
++  i64 r;
++  int i;
++  u8 *buf;
++  if (iovcnt < 0 || iovcnt > 1024) return -EINVAL_LINUX;
++  if (!iovcnt) return 0;
++  if (!(iov = (const u8 *)SchlepR(m, iovaddr, iovcnt * 16))) return -EFAULT_LINUX;
++  for (i = 0; i < iovcnt; ++i) total += Read64(iov + i * 16 + 8);
++  if (total > (u64)g_shiro_chunk) total = g_shiro_chunk;
++  buf = (u8 *)ShiroAlloc(m, total);
++  if (write) {
++    for (done = 0, i = 0; i < iovcnt && done < total; ++i) {
++      len = MIN(Read64(iov + i * 16 + 8), total - done);
++      if (len && CopyFromUserRead(m, buf + done, Read64(iov + i * 16), len) == -1) return -EFAULT_LINUX;
++      done += len;
++    }
++    for (done = 0; done < total; done += r) {
++      if (off >= 0) {
++        r = ShiroCall(m, 18, A12(fd, (int)(total - done), (int)(off + done), (int)((off + done) >> 32)),
++                      buf + done, total - done, 0, true, !done);
++      } else {
++        r = ShiroCall(m, 1, A12(fd, (int)(total - done)), buf + done, total - done, 0, true, !done);
++      }
++      if (r < 0) return done ? (i64)done : r;
++      if (!r) break;
++    }
++    return done;
++  }
++  if (off >= 0) {
++    r = ShiroCall(m, 17, A12(fd, (int)total, (int)off, (int)(off >> 32)), buf, 0, total, true, true);
++  } else {
++    r = ShiroCall(m, 0, A12(fd, (int)total), buf, 0, total, true, true);
++  }
++  if (r <= 0) return r;
++  for (done = 0, i = 0; i < iovcnt && done < (u64)r; ++i) {
++    len = MIN(Read64(iov + i * 16 + 8), r - done);
++    if (len && CopyToUserWrite(m, Read64(iov + i * 16), buf + done, len) == -1) return -EFAULT_LINUX;
++    done += len;
++  }
++  return r;
++}
++
++// ── paths, stat ──────────────────────────────────────────────────────────
++
++static i64 ShiroPathCall(struct Machine *m, int nr, i64 path, int a1, int a2,
++                         int a3) {
++  char *buf = (char *)ShiroAlloc(m, 4096);
++  int n = ShiroPath(m, path, buf, 0);
++  if (n < 0) return n;
++  return ShiroCall(m, nr, A12(n, a1, a2, a3), buf, n, 0, true, true);
++}
++
++static i64 ShiroAtCall(struct Machine *m, int nr, int dirfd, i64 path, int a2,
++                       int a3) {
++  char *buf = (char *)ShiroAlloc(m, 4096);
++  int n = ShiroPath(m, path, buf, 0);
++  if (n < 0) return n;
++  return ShiroCall(m, nr, A12(dirfd, n, a2, a3), buf, n, 0, true, true);
++}
++
++static i64 ShiroTwoPaths(struct Machine *m, int nr, int d1, i64 p1, int d2,
++                         i64 p2, int flags, bool dirs) {
++  char *buf = (char *)ShiroAlloc(m, 8192);
++  int a = ShiroPath(m, p1, buf, 0), b;
++  if (a < 0) return a;
++  if ((b = ShiroPath(m, p2, buf, a)) < 0) return b;
++  if (dirs) return ShiroCall(m, nr, A12(d1, a, d2, b, flags), buf, a + b, 0, true, true);
++  return ShiroCall(m, nr, A12(a, b), buf, a + b, 0, true, true);
++}
++
++// stat family: the kernel writes the x86-64 struct stat (144 bytes).
++static i64 ShiroStatAt(struct Machine *m, int dirfd, i64 path, i64 st,
++                       int flags, u8 *out) {
++  char *buf = (char *)ShiroAlloc(m, 4096);
++  int n = 0;
++  i64 r;
++  if (path) {
++    if ((n = ShiroPath(m, path, buf, 0)) < 0) return n;
++  } else {
++    flags |= 0x1000;  // AT_EMPTY_PATH
++  }
++  if (!n && !(flags & 0x1000)) return -ENOENT_LINUX;
++  r = ShiroCall(m, 262, A12(dirfd, n, flags), buf, n, 144, true, true);
++  if (r < 0) return r;
++  if (out) memcpy(out, buf, 144);
++  if (st && CopyToUserWrite(m, st, buf, 144) == -1) return -EFAULT_LINUX;
++  return 0;
++}
++
++static i64 ShiroStatx(struct Machine *m, int dirfd, i64 path, int flags,
++                      i64 out) {
++  u8 st[144], sx[256];
++  i64 r;
++  if ((r = ShiroStatAt(m, dirfd, path, 0, flags & (0x100 | 0x1000), st)) < 0) {
++    return r;
++  }
++  memset(sx, 0, sizeof(sx));
++  Write32(sx + 0, 0x7ff);                       // STATX_BASIC_STATS
++  Write32(sx + 4, Read64(st + 56));             // blksize
++  Write32(sx + 16, Read64(st + 16));            // nlink
++  Write32(sx + 20, Read32(st + 28));            // uid
++  Write32(sx + 24, Read32(st + 32));            // gid
++  Write16(sx + 28, Read32(st + 24));            // mode
++  Write64(sx + 32, Read64(st + 8));             // ino
++  Write64(sx + 40, Read64(st + 48));            // size
++  Write64(sx + 48, Read64(st + 64));            // blocks
++  Write64(sx + 64, Read64(st + 72));            // atime
++  Write32(sx + 72, Read64(st + 80));
++  Write64(sx + 80, Read64(st + 104));           // btime = ctime
++  Write32(sx + 88, Read64(st + 112));
++  Write64(sx + 96, Read64(st + 104));           // ctime
++  Write32(sx + 104, Read64(st + 112));
++  Write64(sx + 112, Read64(st + 88));           // mtime
++  Write32(sx + 120, Read64(st + 96));
++  Write32(sx + 128, Read64(st + 40) >> 8);      // rdev major/minor
++  Write32(sx + 132, Read64(st + 40) & 0xff);
++  Write32(sx + 136, Read64(st + 0) >> 8);       // dev major/minor
++  Write32(sx + 140, Read64(st + 0) & 0xff);
++  if (CopyToUserWrite(m, out, sx, sizeof(sx)) == -1) return -EFAULT_LINUX;
++  return 0;
++}
++
++static i64 ShiroStatfs(struct Machine *m, i64 out) {
++  u8 b[120];
++  memset(b, 0, sizeof(b));
++  Write64(b + 0, 0x01021994);   // f_type: TMPFS_MAGIC
++  Write64(b + 8, 4096);         // f_bsize
++  Write64(b + 16, 1 << 20);     // f_blocks
++  Write64(b + 24, 1 << 19);     // f_bfree
++  Write64(b + 32, 1 << 19);     // f_bavail
++  Write64(b + 40, 1 << 20);     // f_files
++  Write64(b + 48, 1 << 19);     // f_ffree
++  Write64(b + 64, 255);         // f_namelen
++  Write64(b + 72, 4096);        // f_frsize
++  if (CopyToUserWrite(m, out, b, sizeof(b)) == -1) return -EFAULT_LINUX;
++  return 0;
++}
++
++static i64 ShiroReadlinkAt(struct Machine *m, int dirfd, i64 path, i64 out,
++                           i64 size) {
++  char *buf = (char *)ShiroAlloc(m, 4096);
++  int n;
++  i64 r;
++  if (size <= 0) return -EINVAL_LINUX;
++  if ((n = ShiroPath(m, path, buf, 0)) < 0) return n;
++  if (n == 14 && !memcmp(buf, "/proc/self/exe", 14) && m->system->elf.execfn) {
++    const char *exe = m->system->elf.prog ? m->system->elf.prog : m->system->elf.execfn;
++    r = MIN((i64)strlen(exe), size);
++    if (CopyToUserWrite(m, out, (void *)exe, r) == -1) return -EFAULT_LINUX;
++    return r;
++  }
++  r = ShiroCall(m, 267, A12(dirfd, n, (int)MIN(size, 4096)), buf, n, 4096, true, true);
++  if (r > 0 && CopyToUserWrite(m, out, buf, r) == -1) return -EFAULT_LINUX;
++  return r;
++}
++
++static i64 ShiroUtimens(struct Machine *m, int dirfd, i64 path, i64 times,
++                        int flags, int timeval) {
++  char *buf = (char *)ShiroAlloc(m, 4096 + 32);
++  int n = 0, i;
++  if (path && (n = ShiroPath(m, path, buf, 0)) < 0) return n;
++  if (times) {
++    for (i = 0; i < 2; ++i) {
++      u8 t[16];
++      if (CopyFromUserRead(m, t, times + i * 16, 16) == -1) return -EFAULT_LINUX;
++      if (timeval) Write64(t + 8, Read64(t + 8) * 1000);  // usec → nsec
++      memcpy(buf + n + i * 16, t, 16);
++    }
++  }
++  return ShiroCall(m, 280, A12(dirfd, n, flags, times != 0), buf, n + 32, 0,
++                   true, true);
++}
++
++// ── poll / select / epoll ────────────────────────────────────────────────
++
++static i64 ShiroPoll(struct Machine *m, i64 fds, u64 nfds, int timeout) {
++  u8 *buf;
++  i64 r;
++  if (nfds > 4096) return -EINVAL_LINUX;
++  buf = (u8 *)ShiroAlloc(m, nfds * 8);
++  if (nfds && CopyFromUserRead(m, buf, fds, nfds * 8) == -1) return -EFAULT_LINUX;
++  r = ShiroCall(m, 7, A12((int)nfds, timeout), buf, nfds * 8, nfds * 8, false, true);
++  if (r >= 0 && nfds && CopyToUserWrite(m, fds, buf, nfds * 8) == -1) return -EFAULT_LINUX;
++  return r;
++}
++
++static int ShiroTimeoutMs(struct Machine *m, i64 tsaddr, bool nsec, int *ms) {
++  u8 t[16];
++  i64 sec, frac;
++  if (!tsaddr) { *ms = -1; return 0; }
++  if (CopyFromUserRead(m, t, tsaddr, 16) == -1) return -EFAULT_LINUX;
++  sec = Read64(t);
++  frac = Read64(t + 8);
++  if (sec < 0 || frac < 0) return -EINVAL_LINUX;
++  frac = nsec ? (frac + 999999) / 1000000 : (frac + 999) / 1000;
++  *ms = sec > 2000000 ? 2000000000 : (int)(sec * 1000 + frac);
++  return 0;
++}
++
++static i64 ShiroSelect(struct Machine *m, int nfds, i64 r, i64 w, i64 x,
++                       i64 tsaddr, bool nsec) {
++  int setbytes, present = 0, ms, err;
++  u8 *buf;
++  i64 res;
++  i64 sets[3] = {r, w, x};
++  if (nfds < 0 || nfds > 1024) return -EINVAL_LINUX;
++  if ((err = ShiroTimeoutMs(m, tsaddr, nsec, &ms)) < 0) return err;
++  setbytes = (nfds + 63) / 64 * 8;
++  buf = (u8 *)ShiroAlloc(m, setbytes * 3);
++  for (int i = 0; i < 3; ++i) {
++    if (!sets[i]) continue;
++    present |= 1 << i;
++    if (CopyFromUserRead(m, buf + i * setbytes, sets[i], (nfds + 7) / 8) == -1) {
++      return -EFAULT_LINUX;
++    }
++  }
++  if (ms < 0) {
++    res = ShiroCall(m, 23, A12(nfds, present, -1, 0), buf, setbytes * 3,
++                    setbytes * 3, false, true);
++  } else {
++    res = ShiroCall(m, 23, A12(nfds, present, ms / 1000, (ms % 1000) * 1000),
++                    buf, setbytes * 3, setbytes * 3, false, true);
++  }
++  if (res < 0) return res;
++  for (int i = 0; i < 3; ++i) {
++    if (sets[i] && CopyToUserWrite(m, sets[i], buf + i * setbytes, (nfds + 7) / 8) == -1) {
++      return -EFAULT_LINUX;
++    }
++  }
++  return res;
++}
++
++static i64 ShiroEpollWait(struct Machine *m, int epfd, i64 events, int max,
++                          int timeout) {
++  u8 *buf;
++  i64 r;
++  if (max <= 0 || max > 4096) return -EINVAL_LINUX;
++  buf = (u8 *)ShiroAlloc(m, max * 12);
++  r = ShiroCall(m, 232, A12(epfd, max, timeout), buf, 0, max * 12, false, true);
++  if (r > 0 && CopyToUserWrite(m, events, buf, r * 12) == -1) return -EFAULT_LINUX;
++  return r;
++}
++
++// ── ioctl ────────────────────────────────────────────────────────────────
++
++static i64 ShiroIoctl(struct Machine *m, int fd, u64 req, i64 arg) {
++  int in = 0, out = 0, value = 0;
++  u8 buf[64];
++  i64 r;
++  memset(buf, 0, sizeof(buf));
++  switch ((u32)req) {
++    case 0x5401: out = 36; break;                         // TCGETS
++    case 0x5402: case 0x5403: case 0x5404: in = 36; break;  // TCSETS*
++    case 0x5413: out = 8; break;                          // TIOCGWINSZ
++    case 0x5414: in = 8; break;                           // TIOCSWINSZ
++    case 0x540F: case 0x5429: out = 4; break;             // TIOCGPGRP, TIOCGSID
++    case 0x5410: in = 4; break;                           // TIOCSPGRP
++    case 0x541B: case 0x5411: out = 4; break;             // FIONREAD, TIOCOUTQ
++    case 0x5421: in = 4; break;                           // FIONBIO
++    case 0x80045430: out = 4; break;                      // TIOCGPTN
++    case 0x40045431: in = 4; break;                       // TIOCSPTLCK
++    case 0x5412: in = 1; break;                           // TIOCSTI
++    case 0x540E: case 0x540B: case 0x540A: case 0x5409:   // TIOCSCTTY TCFLSH TCXONC TCSBRK
++      value = 1;
++      Write32(buf, (u32)arg);
++      break;
++    case 0x5422: case 0x5451: case 0x5450:                // TIOCNOTTY FIOCLEX FIONCLEX
++    case 0x540C: case 0x540D:                             // TIOCEXCL TIOCNXCL
++      break;
++    case 0x5425: case 0x5426: case 0x5427: case 0x5428:   // TCSBRKP, TIOCSBRK, TIOCCBRK
++      return 0;
++    case 0x5432:                                          // TCGETS2: not supported
++    default:
++      return -ENOTTY_LINUX;
++  }
++  if (in && CopyFromUserRead(m, buf, arg, in) == -1) return -EFAULT_LINUX;
++  r = ShiroCall(m, 16, A12(fd, (int)req, value ? 4 : MAX(in, out)), buf,
++                value ? 4 : in, out, true, true);
++  if (r >= 0 && out && CopyToUserWrite(m, arg, buf, out) == -1) return -EFAULT_LINUX;
++  return r;
++}
++
++// ── fcntl ────────────────────────────────────────────────────────────────
++
++static i64 ShiroFcntl(struct Machine *m, int fd, int cmd, i64 arg) {
++  switch (cmd) {
++    case 0: case 1: case 2: case 3: case 4: case 1030:
++      return KS(m, 72, A12(fd, cmd, (int)arg));
++    case 5: case 36: {  // F_GETLK, F_OFD_GETLK: nobody else holds a lock
++      u8 *fl;
++      i64 r = KS(m, 72, A12(fd, 1, 0));
++      if (r < 0) return r;
++      if (!(fl = (u8 *)SchlepRW(m, arg, 32))) return -EFAULT_LINUX;
++      Write16(fl, 2);  // F_UNLCK
++      return 0;
++    }
++    case 6: case 7: case 37: case 38:  // F_SETLK(W), F_OFD_SETLK(W): granted
++      return KS(m, 72, A12(fd, 1, 0)) < 0 ? -EBADF_LINUX : 0;
++    case 8: case 9: case 10: case 11: case 15: case 16:  // owner/sig
++      return 0;
++    case 1031: case 1032:  // F_SETPIPE_SZ / F_GETPIPE_SZ
++      return 65536;
++    case 1033: case 1034:  // F_ADD_SEALS / F_GET_SEALS
++      return -EINVAL_LINUX;
++    default:
++      return -EINVAL_LINUX;
++  }
++}
++
++// ── sockets ──────────────────────────────────────────────────────────────
++
++static int ShiroAddrLen(const u8 *sa) {
++  switch (Read16(sa)) {
++    case 2: return 16;   // AF_INET
++    case 10: return 28;  // AF_INET6
++    case 1: return 2;    // AF_UNIX (unnamed)
++    default: return 0;
++  }
++}
++
++static int ShiroPutAddr(struct Machine *m, const u8 *sa, i64 addr, i64 lenp) {
++  u8 *lp;
++  u32 cap, n;
++  if (!addr || !lenp) return 0;
++  if (!(lp = (u8 *)SchlepRW(m, lenp, 4))) return -EFAULT_LINUX;
++  cap = Read32(lp);
++  n = ShiroAddrLen(sa);
++  if (CopyToUserWrite(m, addr, (void *)sa, MIN(cap, n)) == -1) return -EFAULT_LINUX;
++  Write32(lp, n);
++  return 0;
++}
++
++static i64 ShiroAddrCall(struct Machine *m, int nr, int fd, i64 addr, u32 len) {
++  u8 buf[128];
++  if (len > sizeof(buf)) len = sizeof(buf);
++  if (CopyFromUserRead(m, buf, addr, len) == -1) return -EFAULT_LINUX;
++  return ShiroCall(m, nr, A12(fd, (int)len), buf, len, 0, true, true);
++}
++
++static i64 ShiroAccept(struct Machine *m, int fd, i64 addr, i64 lenp, int flags) {
++  u8 buf[128];
++  i64 r;
++  memset(buf, 0, sizeof(buf));
++  r = ShiroCall(m, 288, A12(fd, flags), buf, 0, 28, true, true);
++  if (r >= 0) ShiroPutAddr(m, buf, addr, lenp);
++  return r;
++}
++
++static i64 ShiroSockName(struct Machine *m, int nr, int fd, i64 addr, i64 lenp) {
++  u8 buf[128];
++  i64 r;
++  memset(buf, 0, sizeof(buf));
++  r = ShiroCall(m, nr, A12(fd), buf, 0, 28, false, false);
++  if (r < 0) return r;
++  return ShiroPutAddr(m, buf, addr, lenp);
++}
++
++static i64 ShiroSendto(struct Machine *m, int fd, i64 data, u64 len, int flags,
++                       i64 addr, u32 alen) {
++  u8 *buf;
++  int n = len < (u64)g_shiro_chunk - 128 ? (int)len : g_shiro_chunk - 128;
++  if (alen > 112) alen = 112;
++  buf = (u8 *)ShiroAlloc(m, n + 128);
++  if (n && CopyFromUserRead(m, buf, data, n) == -1) return -EFAULT_LINUX;
++  if (addr && alen && CopyFromUserRead(m, buf + n, addr, alen) == -1) return -EFAULT_LINUX;
++  return ShiroCall(m, 44, A12(fd, n, flags, addr ? (int)alen : 0), buf,
++                   n + (addr ? alen : 0), 0, true, true);
++}
++
++static i64 ShiroRecvfrom(struct Machine *m, int fd, i64 data, u64 len,
++                         int flags, i64 addr, i64 lenp) {
++  u8 *buf;
++  i64 r;
++  int n = len < (u64)g_shiro_chunk - 64 ? (int)len : g_shiro_chunk - 64;
++  buf = (u8 *)ShiroAlloc(m, n + 64);
++  r = ShiroCall(m, 45, A12(fd, n, flags), buf, 0, n + 28, true, true);
++  if (r < 0) return r;
++  if (r > 0 && CopyToUserWrite(m, data, buf, r) == -1) return -EFAULT_LINUX;
++  ShiroPutAddr(m, buf + n, addr, lenp);
++  return r;
++}
++
++static i64 ShiroMsg(struct Machine *m, bool send, int fd, i64 msg, int flags) {
++  u8 *hdr, *iov;
++  i64 total = 0, r;
++  u64 i, iovlen;
++  u8 *buf;
++  if (!(hdr = (u8 *)SchlepRW(m, msg, 56))) return -EFAULT_LINUX;
++  iovlen = Read64(hdr + 24);
++  if (iovlen > 1024) return -EMSGSIZE_LINUX;
++  if (!(iov = (u8 *)SchlepR(m, Read64(hdr + 16), iovlen * 16))) return -EFAULT_LINUX;
++  for (i = 0; i < iovlen; ++i) total += Read64(iov + i * 16 + 8);
++  if (total > g_shiro_chunk - 128) total = g_shiro_chunk - 128;
++  buf = (u8 *)ShiroAlloc(m, total + 128);
++  if (send) {
++    i64 off = 0;
++    u32 alen = Read32(hdr + 8);
++    for (i = 0; i < iovlen && off < total; ++i) {
++      i64 n = MIN((i64)Read64(iov + i * 16 + 8), total - off);
++      if (CopyFromUserRead(m, buf + off, Read64(iov + i * 16), n) == -1) return -EFAULT_LINUX;
++      off += n;
++    }
++    if (alen > 112) alen = 112;
++    if (Read64(hdr) && alen) {
++      if (CopyFromUserRead(m, buf + total, Read64(hdr), alen) == -1) return -EFAULT_LINUX;
++    } else {
++      alen = 0;
++    }
++    return ShiroCall(m, 44, A12(fd, (int)total, flags, (int)alen), buf, total + alen, 0, true, true);
++  }
++  r = ShiroCall(m, 45, A12(fd, (int)total, flags), buf, 0, total + 28, true, true);
++  if (r < 0) return r;
++  {
++    i64 off = 0;
++    for (i = 0; i < iovlen && off < r; ++i) {
++      i64 n = MIN((i64)Read64(iov + i * 16 + 8), r - off);
++      if (CopyToUserWrite(m, Read64(iov + i * 16), buf + off, n) == -1) return -EFAULT_LINUX;
++      off += n;
++    }
++  }
++  if (Read64(hdr)) {
++    u32 cap = Read32(hdr + 8), n = ShiroAddrLen(buf + total);
++    CopyToUserWrite(m, Read64(hdr), buf + total, MIN(cap, n));
++    Write32(hdr + 8, n);
++  }
++  Write64(hdr + 40, 0);  // no ancillary data
++  Write32(hdr + 48, 0);
++  return r;
++}
++
++static i64 ShiroSetsockopt(struct Machine *m, int fd, int level, int name,
++                           i64 val, u32 len) {
++  u8 b[16];
++  int v = 0;
++  memset(b, 0, sizeof(b));
++  if (val && len && CopyFromUserRead(m, b, val, MIN(len, 16)) == -1) return -EFAULT_LINUX;
++  if (level == 1 && (name == 20 || name == 21) && len >= 16) {  // SO_RCVTIMEO/SNDTIMEO
++    v = (int)(Read64(b) * 1000 + Read64(b + 8) / 1000);
++  } else if (len >= 4) {
++    v = Read32(b);
++  } else {
++    v = b[0];
++  }
++  return KS(m, 54, A12(fd, level, name, v));
++}
++
++static i64 ShiroGetsockopt(struct Machine *m, int fd, int level, int name,
++                           i64 val, i64 lenp) {
++  u8 *lp, b[16];
++  i64 r = KS(m, 55, A12(fd, level, name));
++  u32 cap;
++  if (r < 0) return r;
++  if (!val || !lenp) return 0;
++  if (!(lp = (u8 *)SchlepRW(m, lenp, 4))) return -EFAULT_LINUX;
++  cap = Read32(lp);
++  memset(b, 0, sizeof(b));
++  if (level == 1 && (name == 20 || name == 21)) {
++    Write64(b, r / 1000);
++    Write64(b + 8, r % 1000 * 1000);
++    CopyToUserWrite(m, val, b, MIN(cap, 16));
++    Write32(lp, 16);
++  } else {
++    Write32(b, r);
++    CopyToUserWrite(m, val, b, MIN(cap, 4));
++    Write32(lp, 4);
++  }
++  return 0;
++}
++
++// ── processes ────────────────────────────────────────────────────────────
++
++static i64 ShiroWait4(struct Machine *m, int pid, i64 status, int options,
++                      i64 rusage) {
++  u8 buf[8];
++  i64 r;
++  memset(buf, 0, sizeof(buf));
++  r = ShiroCall(m, 61, A12(pid, options), buf, 0, 4, true, true);
++  if (r > 0 && status && CopyToUserWrite(m, status, buf, 4) == -1) return -EFAULT_LINUX;
++  if (r >= 0 && rusage) {
++    u8 ru[144];
++    memset(ru, 0, sizeof(ru));
++    CopyToUserWrite(m, rusage, ru, sizeof(ru));
++  }
++  return r;
++}
++
++static i64 ShiroWaitid(struct Machine *m, int idtype, int id, i64 info,
++                       int options, i64 rusage) {
++  u8 buf[8], si[128];
++  int pid, st, code, status;
++  i64 r;
++  switch (idtype) {
++    case 0: pid = -1; break;   // P_ALL
++    case 1: pid = id; break;   // P_PID
++    case 2: pid = id ? -id : 0; break;  // P_PGID
++    default: return -EINVAL_LINUX;
++  }
++  // WEXITED is implied; WSTOPPED is WUNTRACED; WNOHANG, WCONTINUED, WNOWAIT pass
++  options = (options & (1 | 8 | 0x01000000)) | (options & 2 ? 2 : 0);
++  memset(buf, 0, sizeof(buf));
++  r = ShiroCall(m, 61, A12(pid, options), buf, 0, 4, true, true);
++  if (r < 0) return r;
++  memset(si, 0, sizeof(si));
++  if (r > 0) {
++    st = Read32(buf);
++    if ((st & 0xff) == 0x7f) {
++      code = 5, status = (st >> 8) & 0xff;  // CLD_STOPPED
++    } else if (st == 0xffff) {
++      code = 6, status = 18;  // CLD_CONTINUED, SIGCONT
++    } else if (st & 0x7f) {
++      code = st & 0x80 ? 3 : 2, status = st & 0x7f;  // CLD_DUMPED / CLD_KILLED
++    } else {
++      code = 1, status = (st >> 8) & 0xff;  // CLD_EXITED
++    }
++    Write32(si + 0, 17);  // SIGCHLD
++    Write32(si + 8, code);
++    Write32(si + 16, r);
++    Write32(si + 20, 1000);
++    Write32(si + 24, status);
++  }
++  if (info && CopyToUserWrite(m, info, si, sizeof(si)) == -1) return -EFAULT_LINUX;
++  if (rusage) {
++    u8 ru[144];
++    memset(ru, 0, sizeof(ru));
++    CopyToUserWrite(m, rusage, ru, sizeof(ru));
++  }
++  return 0;
++}
++
++// The kernel's view of a guest handler: caught signals are forwarded here.
++static i64 ShiroMirrorSigaction(struct Machine *m, int sig, u64 handler) {
++  u8 act[64];
++  memset(act, 0, sizeof(act));
++  if (sig == 9 || sig == 19) return 0;
++  Write64(act, handler == SIG_DFL_LINUX ? 0 : handler == SIG_IGN_LINUX ? 1 : K_FWD_HANDLER);
++  return ShiroCall(m, 13, A12(sig, 1, 0), act, 64, 0, false, false);
++}
++
++static i64 ShiroVforkSigaction(struct Machine *m, int sig, i64 act, i64 old,
++                               u64 size) {
++  struct sigaction_linux *h;
++  if (sig < 1 || sig > 64 || sig == 9 || sig == 19) return -EINVAL_LINUX;
++  h = &t_vfork->hands[sig - 1];
++  if (old && CopyToUserWrite(m, old, h, sizeof(*h)) == -1) return -EFAULT_LINUX;
++  if (act) {
++    if (CopyFromUserRead(m, h, act, sizeof(*h)) == -1) return -EFAULT_LINUX;
++    ShiroMirrorSigaction(m, sig, Read64(h->handler));
++  }
++  return 0;
++}
++
++// fork/vfork: the kernel makes the child; this thread runs it until execve
++// or _exit (see the top of this file).
++static i64 ShiroVfork(struct Machine *m, i64 stack, bool copystack) {
++  struct ShiroVfork *v;
++  i64 pid = KS(m, K_SYS_vfork, A12(0));
++  if (pid < 0) return pid;
++  if (!(v = (struct ShiroVfork *)calloc(1, sizeof(*v)))) return -ENOMEM_LINUX;
++  v->pid = pid;
++  memcpy(v->regs, m->beg, sizeof(v->regs));
++  memcpy(v->xmm, m->xmm, sizeof(v->xmm));
++  v->ip = m->ip;
++  v->flags = m->flags;
++  v->sigmask = m->sigmask;
++  v->fsbase = m->fs.base;
++  v->gsbase = m->gs.base;
++  memcpy(&v->fpu, &m->fpu, sizeof(v->fpu));
++  v->mxcsr = m->mxcsr;
++  if (copystack) {
++    i64 sp = Read64(m->sp) - 128, top;  // and the red zone
++    for (top = sp & -4096; top - sp < (8 << 20) &&
++                           IsValidMemory(m, top, 4096, PROT_READ | PROT_WRITE);
++         top += 4096) {
++    }
++    if (top > sp && (v->stack = (u8 *)malloc(top - sp))) {
++      if (CopyFromUser(m, v->stack, sp, top - sp) != -1) {
++        v->stackaddr = sp;
++        v->stacksize = top - sp;
++      } else {
++        free(v->stack);
++        v->stack = 0;
++      }
++    }
++  }
++  if (t_vfork) {
++    memcpy(v->hands, t_vfork->hands, sizeof(v->hands));
++  } else {
++    LOCK(&m->system->sig_lock);
++    memcpy(v->hands, m->system->hands, sizeof(v->hands));
++    UNLOCK(&m->system->sig_lock);
++  }
++  v->prev = t_vfork;
++  t_vfork = v;
++  if (stack) Put64(m->sp, stack);
++  return 0;
++}
++
++// The vfork child exec'd or exited: become the parent again; fork returns
++// the child's pid.
++static i64 ShiroVforkReturn(struct Machine *m) {
++  struct ShiroVfork *v = t_vfork;
++  i64 pid = v->pid;
++  t_vfork = v->prev;
++  memcpy(m->beg, v->regs, sizeof(v->regs));
++  memcpy(m->xmm, v->xmm, sizeof(v->xmm));
++  m->ip = v->ip;
++  m->flags = v->flags;
++  m->sigmask = v->sigmask;
++  m->fs.base = v->fsbase;
++  m->gs.base = v->gsbase;
++  memcpy(&m->fpu, &v->fpu, sizeof(m->fpu));
++  m->mxcsr = v->mxcsr;
++  if (v->stack) {
++    CopyToUser(m, v->stackaddr, v->stack, v->stacksize);
++    free(v->stack);
++  }
++  free(v);
++  atomic_store_explicit(&m->attention, true, memory_order_release);
++  return pid;
++}
++
++static char *ShiroJsonStr(char *p, const char *s) {
++  *p++ = '"';
++  for (; *s; ++s) {
++    unsigned char c = *s;
++    if (c == '"' || c == '\\') {
++      *p++ = '\\', *p++ = c;
++    } else if (c < 0x20) {
++      p += sprintf(p, "\\u%04x", c);
++    } else {
++      *p++ = c;
++    }
++  }
++  *p++ = '"';
++  return p;
++}
++
++static i64 ShiroExecve(struct Machine *m, i64 pa, i64 aa, i64 ea) {
++  char *prog, **argv, **envp, *json, *p;
++  size_t need = 64;
++  int i;
++  i64 r;
++  if (!(prog = CopyStr(m, pa))) return -EFAULT_LINUX;
++  if (!(argv = CopyStrList(m, aa))) return -EFAULT_LINUX;
++  if (!(envp = CopyStrList(m, ea))) return -EFAULT_LINUX;
++  need += strlen(prog) * 6;
++  for (i = 0; argv[i]; ++i) need += strlen(argv[i]) * 6 + 4;
++  for (i = 0; envp[i]; ++i) need += strlen(envp[i]) * 6 + 4;
++  if (need > (size_t)g_shiro_chunk) return -E2BIG_LINUX;
++  json = p = (char *)ShiroAlloc(m, MAX(need, 4096));
++  p += sprintf(p, "{\"inproc\":%s,\"path\":", t_vfork ? "false" : "true");
++  p = ShiroJsonStr(p, prog);
++  p += sprintf(p, ",\"argv\":[");
++  for (i = 0; argv[i]; ++i) {
++    if (i) *p++ = ',';
++    p = ShiroJsonStr(p, argv[i]);
++  }
++  p += sprintf(p, "],\"env\":[");
++  for (i = 0; envp[i]; ++i) {
++    if (i) *p++ = ',';
++    p = ShiroJsonStr(p, envp[i]);
++  }
++  p += sprintf(p, "]}");
++  r = ShiroCall(m, K_SYS_execve, A12((int)(p - json)), json, p - json, 4096,
++                false, false);
++  if (r < 0) return r;
++  if (t_vfork) return ShiroVforkReturn(m);  // the child is running
++  // r == length of the resolved path of an ELF to load here
++  json[r] = 0;
++  LOCK(&m->system->exec_lock);
++  ExecveBlink(m, json, argv, envp);
++  UNLOCK(&m->system->exec_lock);
++  return -ENOEXEC_LINUX;
++}
++
++// ── mmap of kernel files ─────────────────────────────────────────────────
++
++struct ShiroSharedMap {
++  struct ShiroSharedMap *next;
++  i64 addr, size, off;
++  int fd;  // a kernel dup of the mapped fd
++};
++static struct ShiroSharedMap *g_shiro_maps;
++static pthread_mutex_t_ g_shiro_maps_lock = PTHREAD_MUTEX_INITIALIZER_;
++
++static void ShiroWriteBack(struct Machine *m, struct ShiroSharedMap *s, i64 addr,
++                           i64 size) {
++  u8 *buf = (u8 *)malloc(g_shiro_chunk);
++  i64 lo = MAX(addr, s->addr), hi = MIN(addr + size, s->addr + s->size), o;
++  for (o = lo; buf && o < hi; o += g_shiro_chunk) {
++    int n = MIN(hi - o, (i64)g_shiro_chunk);
++    i64 at = s->off + (o - s->addr);
++    if (CopyFromUser(m, buf, o, n) == -1) break;
++    ShiroCall(m, 18, A12(s->fd, n, (int)at, (int)(at >> 32)), buf, n, 0, false, false);
++  }
++  free(buf);
++}
++
++static void ShiroSyncMaps(struct Machine *m, i64 addr, i64 size, bool drop) {
++  struct ShiroSharedMap **pp, *s;
++  LOCK(&g_shiro_maps_lock);
++  for (pp = &g_shiro_maps; (s = *pp);) {
++    if (s->addr < addr + size && addr < s->addr + s->size) {
++      ShiroWriteBack(m, s, addr, size);
++      if (drop && addr <= s->addr && s->addr + s->size <= addr + size) {
++        *pp = s->next;
++        KS(m, 3, A12(s->fd));
++        free(s);
++        continue;
++      }
++    }
++    pp = &s->next;
++  }
++  UNLOCK(&g_shiro_maps_lock);
++}
++
++static i64 ShiroMmapFile(struct Machine *m, i64 virt, u64 size, int prot,
++                         int flags, int fd, i64 off) {
++  u8 st[144], *buf;
++  i64 addr, fsize, o, r;
++  bool shared = (flags & 3) == 1 || (flags & 3) == 3;
++  if (off < 0 || (off & 4095)) return -EINVAL_LINUX;
++  if ((r = ShiroStatAt(m, fd, 0, 0, 0x1000, st)) < 0) return r;
++  if ((Read32(st + 24) & 0170000) == 0040000) return -ENODEV_LINUX;
++  fsize = Read64(st + 48);
++  addr = SysMmap(m, virt, size, prot | 3 /* RW while we fill it */,
++                 (flags & ~3 & ~0x08000000) | 2 | 0x20 /* PRIVATE|ANONYMOUS */, -1, 0);
++  if (addr == -1) return ShiroErr();
++  buf = (u8 *)malloc(g_shiro_chunk);
++  for (o = 0; buf && o < (i64)size && off + o < fsize; o += r) {
++    int n = MIN(MIN((i64)size - o, fsize - off - o), (i64)g_shiro_chunk);
++    r = ShiroCall(m, 17, A12(fd, n, (int)(off + o), (int)((off + o) >> 32)),
++                  buf, 0, n, false, false);
++    if (r <= 0) break;
++    if (CopyToUser(m, addr + o, buf, r) == -1) break;
++  }
++  free(buf);
++  if (!(prot & 2) || !(prot & 1)) {
++    SysMprotect(m, addr, size, prot);
++  }
++  if (shared && (prot & 2)) {
++    struct ShiroSharedMap *s = (struct ShiroSharedMap *)calloc(1, sizeof(*s));
++    if (s) {
++      s->addr = addr, s->size = size, s->off = off;
++      s->fd = KS(m, 72, A12(fd, 1030, 3));
++      LOCK(&g_shiro_maps_lock);
++      s->next = g_shiro_maps;
++      g_shiro_maps = s;
++      UNLOCK(&g_shiro_maps_lock);
++    }
++  }
++  return addr;
++}
++
++// ── the dispatcher ───────────────────────────────────────────────────────
++
++static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
++                         u64 d, u64 e, u64 f, i64 *res) {
++  i64 r;
++  if (!g_shiro_pid) return false;
++  if (t_vfork) {
++    // The vfork child: its own pid, signal table and exit
++    switch (nr) {
++      case 0x027:  // getpid
++        *res = t_vfork->pid;
++        return true;
++      case 0x00D:  // rt_sigaction
++        *res = ShiroVforkSigaction(m, a, b, c, d);
++        return true;
++      case 0x03C:  // exit
++      case 0x0E7:  // exit_group
++        KS(m, 231, A12((int)a & 255));
++        *res = ShiroVforkReturn(m);
++        return true;
++      default:
++        break;
++    }
++  }
++  switch (nr) {
++    case 0x000: r = ShiroRead(m, a, b, c); break;
++    case 0x001: r = ShiroWrite(m, a, b, c); break;
++    case 0x011: r = ShiroPread(m, 17, a, b, c, d); break;
++    case 0x012: r = ShiroPread(m, 18, a, b, c, d); break;
++    case 0x013: r = ShiroIov(m, false, a, b, c, -1); break;
++    case 0x014: r = ShiroIov(m, true, a, b, c, -1); break;
++    case 0x127: r = ShiroIov(m, false, a, b, c, d); break;           // preadv
++    case 0x128: r = ShiroIov(m, true, a, b, c, d); break;            // pwritev
++    case 0x147: r = ShiroIov(m, false, a, b, c, (i64)d); break;      // preadv2
++    case 0x148: r = ShiroIov(m, true, a, b, c, (i64)d); break;       // pwritev2
++    case 0x002: r = ShiroAtCall(m, 257, -100, a, b, c); break;       // open
++    case 0x055: r = ShiroAtCall(m, 257, -100, a, 0101 | 01000, b); break;  // creat
++    case 0x101: r = ShiroAtCall(m, 257, ShiroDirfd(a), b, c, d); break;    // openat
++    case 0x003: r = KS(m, 3, A12(a)); break;                          // close
++    case 0x1B4: r = KS(m, 436, A12(a, b, c)); break;                  // close_range
++    case 0x004: r = ShiroStatAt(m, -100, a, b, 0, 0); break;          // stat
++    case 0x006: r = ShiroStatAt(m, -100, a, b, 0x100, 0); break;      // lstat
++    case 0x005: r = ShiroStatAt(m, a, 0, b, 0x1000, 0); break;        // fstat
++    case 0x106:                                                       // newfstatat
++      if (b && !(d & 0x1000)) {
++        char *s = LoadStr(m, b);
++        if (s && !*s) { r = -ENOENT_LINUX; break; }
++      }
++      r = ShiroStatAt(m, a, b, c, d & (0x100 | 0x1000), 0);
++      break;
++    case 0x14C: r = ShiroStatx(m, a, b, c, e); break;                // statx
++    case 0x089: case 0x08A: r = ShiroStatfs(m, b); break;            // statfs, fstatfs
++    case 0x015: r = ShiroPathCall(m, 21, a, b, 0, 0); break;          // access
++    case 0x10D: case 0x1B7: r = ShiroAtCall(m, 269, a, b, c, 0); break;  // faccessat(2)
++    case 0x007: r = ShiroPoll(m, a, b, (int)c); break;
++    case 0x10F: {                                                     // ppoll
++      int ms;
++      if ((r = ShiroTimeoutMs(m, c, true, &ms)) < 0) break;
++      r = ShiroPoll(m, a, b, ms);
++      break;
++    }
++    case 0x017: r = ShiroSelect(m, a, b, c, d, e, false); break;
++    case 0x10E: r = ShiroSelect(m, a, b, c, d, e, true); break;      // pselect6
++    case 0x008: r = KS(m, 8, A12(a, (int)b, (int)((i64)b >> 32), c)); break;  // lseek
++    case 0x010: r = ShiroIoctl(m, a, b, c); break;
++    case 0x048: r = ShiroFcntl(m, a, b, c); break;
++    case 0x049: r = KS(m, 72, A12(a, 1, 0)) < 0 ? -EBADF_LINUX : 0; break;  // flock
++    case 0x04A: case 0x04B: r = KS(m, 74, A12(a)); break;            // fsync, fdatasync
++    case 0x0A2: case 0x132: r = 0; break;                            // sync, syncfs
++    case 0x0DD: case 0x0BB: case 0x115: r = 0; break;                // fadvise, readahead, sync_file_range
++    case 0x04C: r = ShiroPathCall(m, 76, a, (int)b, (int)((i64)b >> 32), 0); break;  // truncate
++    case 0x04D: r = KS(m, 77, A12(a, (int)b, (int)((i64)b >> 32))); break;       // ftruncate
++    case 0x04F: {                                                     // getcwd
++      char *buf = (char *)ShiroAlloc(m, 4097);
++      r = ShiroCall(m, 79, A12(4096), buf, 0, 4096, false, false);
++      if (r > 0) {
++        if ((u64)r > b) { r = -ERANGE_LINUX; break; }
++        if (CopyToUserWrite(m, a, buf, r) == -1) r = -EFAULT_LINUX;
++      }
++      break;
++    }
++    case 0x050: r = ShiroPathCall(m, 80, a, 0, 0, 0); break;          // chdir
++    case 0x051: r = KS(m, 81, A12(a)); break;                         // fchdir
++    case 0x052: r = ShiroTwoPaths(m, 82, 0, a, 0, b, 0, false); break;   // rename
++    case 0x108: r = ShiroTwoPaths(m, 264, a, b, c, d, 0, true); break;   // renameat
++    case 0x13C: r = ShiroTwoPaths(m, 316, a, b, c, d, e, true); break;   // renameat2
++    case 0x053: r = ShiroPathCall(m, 83, a, b, 0, 0); break;          // mkdir
++    case 0x102: r = ShiroAtCall(m, 258, a, b, c, 0); break;           // mkdirat
++    case 0x054: r = ShiroPathCall(m, 84, a, 0, 0, 0); break;          // rmdir
++    case 0x057: r = ShiroPathCall(m, 87, a, 0, 0, 0); break;          // unlink
++    case 0x107: r = ShiroAtCall(m, 263, a, b, c, 0); break;           // unlinkat
++    case 0x056: r = ShiroTwoPaths(m, 86, 0, a, 0, b, 0, false); break;   // link
++    case 0x109: r = ShiroTwoPaths(m, 265, a, b, c, d, e, true); break;   // linkat
++    case 0x058: r = ShiroTwoPaths(m, 88, 0, a, 0, b, 0, false); break;   // symlink
++    case 0x10A: {                                                     // symlinkat
++      char *buf = (char *)ShiroAlloc(m, 8192);
++      int x = ShiroPath(m, a, buf, 0), y;
++      if (x < 0) { r = x; break; }
++      if ((y = ShiroPath(m, c, buf, x)) < 0) { r = y; break; }
++      r = ShiroCall(m, 266, A12(x, (int)b, y), buf, x + y, 0, true, true);
++      break;
++    }
++    case 0x059: r = ShiroReadlinkAt(m, -100, a, b, c); break;         // readlink
++    case 0x10B: r = ShiroReadlinkAt(m, a, b, c, d); break;            // readlinkat
++    case 0x05A: r = ShiroPathCall(m, 90, a, b, 0, 0); break;          // chmod
++    case 0x05B: r = KS(m, 91, A12(a, b)); break;                      // fchmod
++    case 0x10C: case 0x1C4: r = ShiroAtCall(m, 268, a, b, c, 0); break;  // fchmodat(2)
++    case 0x05C: case 0x05E: r = ShiroPathCall(m, 21, a, 0, 0, 0); break;  // chown, lchown
++    case 0x05D: r = KS(m, 72, A12(a, 1, 0)) < 0 ? -EBADF_LINUX : 0; break;  // fchown
++    case 0x104: r = 0; break;                                         // fchownat
++    case 0x05F: r = KS(m, 95, A12(a)); break;                         // umask
++    case 0x084: {                                                     // utime
++      u8 t[32];
++      i64 tv = 0;
++      if (b) {
++        u8 u[16];
++        if (CopyFromUserRead(m, u, b, 16) == -1) { r = -EFAULT_LINUX; break; }
++        memset(t, 0, 32);
++        Write64(t, Read64(u)), Write64(t + 16, Read64(u + 8));
++        tv = 1;
++      }
++      if (tv) {
++        char *buf = (char *)ShiroAlloc(m, 4096 + 32);
++        int n = ShiroPath(m, a, buf, 0);
++        if (n < 0) { r = n; break; }
++        memcpy(buf + n, t, 32);
++        r = ShiroCall(m, 280, A12(-100, n, 0, 1), buf, n + 32, 0, true, true);
++      } else {
++        r = ShiroUtimens(m, -100, a, 0, 0, 0);
++      }
++      break;
++    }
++    case 0x0EB: r = ShiroUtimens(m, -100, a, b, 0, 1); break;         // utimes
++    case 0x105: r = ShiroUtimens(m, a, b, c, 0, 1); break;            // futimesat
++    case 0x118: r = ShiroUtimens(m, a, b, c, d, 0); break;            // utimensat
++    case 0x0D9: {                                                     // getdents64
++      int n = MIN(c, (u64)g_shiro_chunk);
++      u8 *buf = (u8 *)ShiroAlloc(m, n);
++      r = ShiroCall(m, 217, A12(a, n), buf, 0, n, true, true);
++      if (r > 0 && CopyToUserWrite(m, b, buf, r) == -1) r = -EFAULT_LINUX;
++      break;
++    }
++    case 0x04E: r = -ENOSYS_LINUX; break;                             // getdents
++    case 0x016: case 0x125: {                                         // pipe, pipe2
++      u8 fds[8];
++      r = ShiroCall(m, 293, A12(nr == 0x016 ? 0 : (int)b), fds, 0, 8, false, false);
++      if (r >= 0 && CopyToUserWrite(m, a, fds, 8) == -1) r = -EFAULT_LINUX;
++      break;
++    }
++    case 0x020: r = KS(m, 32, A12(a)); break;                         // dup
++    case 0x021: r = KS(m, 33, A12(a, b)); break;                      // dup2
++    case 0x124: r = KS(m, 292, A12(a, b, c)); break;                  // dup3
++    case 0x11C: r = KS(m, 290, A12(a, 0)); break;                     // eventfd
++    case 0x122: r = KS(m, 290, A12(a, b)); break;                     // eventfd2
++    case 0x0D5: r = KS(m, 213, A12(a)); break;                        // epoll_create
++    case 0x123: r = KS(m, 291, A12(a)); break;                        // epoll_create1
++    case 0x0E9: {                                                     // epoll_ctl
++      u8 ev[12];
++      memset(ev, 0, sizeof(ev));
++      if (d && CopyFromUserRead(m, ev, d, 12) == -1) { r = -EFAULT_LINUX; break; }
++      r = KS(m, 233, A12(a, b, c, Read32(ev), Read32(ev + 4), Read32(ev + 8)));
++      break;
++    }
++    case 0x0E8: r = ShiroEpollWait(m, a, b, c, d); break;             // epoll_wait
++    case 0x119: r = ShiroEpollWait(m, a, b, c, d); break;             // epoll_pwait
++    case 0x1B9: {                                                     // epoll_pwait2
++      int ms;
++      if ((r = ShiroTimeoutMs(m, d, true, &ms)) < 0) break;
++      r = ShiroEpollWait(m, a, b, c, ms);
++      break;
++    }
++    case 0x029: r = KS(m, 41, A12(a, b, c)); break;                   // socket
++    case 0x035: {                                                     // socketpair
++      u8 sv[8];
++      r = ShiroCall(m, 53, A12(a, b, c), sv, 0, 8, false, false);
++      if (r >= 0 && CopyToUserWrite(m, d, sv, 8) == -1) r = -EFAULT_LINUX;
++      break;
++    }
++    case 0x02A: r = ShiroAddrCall(m, 42, a, b, c); break;             // connect
++    case 0x031: r = ShiroAddrCall(m, 49, a, b, c); break;             // bind
++    case 0x032: r = KS(m, 50, A12(a, b)); break;                      // listen
++    case 0x02B: r = ShiroAccept(m, a, b, c, 0); break;                // accept
++    case 0x120: r = ShiroAccept(m, a, b, c, d); break;                // accept4
++    case 0x033: r = ShiroSockName(m, 51, a, b, c); break;             // getsockname
++    case 0x034: r = ShiroSockName(m, 52, a, b, c); break;             // getpeername
++    case 0x02C: r = ShiroSendto(m, a, b, c, d, e, f); break;          // sendto
++    case 0x02D: r = ShiroRecvfrom(m, a, b, c, d, e, f); break;        // recvfrom
++    case 0x02E: r = ShiroMsg(m, true, a, b, c); break;                // sendmsg
++    case 0x02F: r = ShiroMsg(m, false, a, b, c); break;               // recvmsg
++    case 0x030: r = KS(m, 48, A12(a, b)); break;                      // shutdown
++    case 0x036: r = ShiroSetsockopt(m, a, b, c, d, e); break;
++    case 0x037: r = ShiroGetsockopt(m, a, b, c, d, e); break;
++    case 0x028: {                                                     // sendfile
++      u8 *buf;
++      i64 off = -1, done = 0, n;
++      u8 offb[8];
++      if (d) {
++        if (CopyFromUserRead(m, offb, c, 8) == -1) { r = -EFAULT_LINUX; break; }
++        off = Read64(offb);
++      }
++      buf = (u8 *)ShiroAlloc(m, g_shiro_chunk);
++      r = 0;
++      while ((u64)done < d) {
++        int want = MIN(d - done, (u64)g_shiro_chunk);
++        if (off >= 0) {
++          n = ShiroCall(m, 17, A12(b, want, (int)(off + done), (int)((off + done) >> 32)), buf, 0, want, true, true);
++        } else {
++          n = ShiroCall(m, 0, A12(b, want), buf, 0, want, true, true);
++        }
++        if (n <= 0) { if (n < 0 && !done) r = n; break; }
++        n = ShiroCall(m, 1, A12(a, (int)n), buf, n, 0, true, true);
++        if (n <= 0) { if (n < 0 && !done) r = n; break; }
++        done += n;
++      }
++      if (r >= 0) {
++        r = done;
++        if (c && off >= 0) {
++          Write64(offb, off + done);
++          CopyToUserWrite(m, c, offb, 8);
++        }
++      }
++      break;
++    }
++    case 0x146: r = -ENOSYS_LINUX; break;                             // copy_file_range
++    case 0x13F: r = -ENOSYS_LINUX; break;                             // memfd_create
++    case 0x085: case 0x103: r = -EPERM_LINUX; break;                  // mknod(at)
++    case 0x0FD: case 0x0FE: case 0x0FF: case 0x126: r = -ENOSYS_LINUX; break;  // inotify
++    case 0x11B: case 0x11D: case 0x11E: case 0x11F: r = -ENOSYS_LINUX; break;  // timerfd, fallocate...
++    case 0x1B2: case 0x1A8: r = -ENOSYS_LINUX; break;                 // pidfd_open, pidfd_send_signal
++    case 0x03D: r = ShiroWait4(m, a, b, c, d); break;                 // wait4
++    case 0x0F7: r = ShiroWaitid(m, a, b, c, d, e); break;             // waitid
++    case 0x03E: r = KS(m, 62, A12(a, b)); break;                      // kill
++    case 0x06E: r = KS(m, 110, A12(0)); break;                        // getppid
++    case 0x06F: r = KS(m, 111, A12(0)); break;                        // getpgrp
++    case 0x079: r = KS(m, 121, A12(a)); break;                        // getpgid
++    case 0x07C: r = KS(m, 124, A12(a)); break;                        // getsid
++    case 0x06D: r = KS(m, 109, A12(a, b)); break;                     // setpgid
++    case 0x070: r = KS(m, 112, A12(0)); break;                        // setsid
++    case 0x066: case 0x06B: r = KS(m, 102, A12(0)); break;            // getuid, geteuid
++    case 0x068: case 0x06C: r = KS(m, 104, A12(0)); break;            // getgid, getegid
++    case 0x076: case 0x078: {                                         // getresuid/gid
++      u8 id[4];
++      i64 v = KS(m, nr == 0x076 ? 102 : 104, A12(0));
++      Write32(id, v);
++      r = 0;
++      if ((a && CopyToUserWrite(m, a, id, 4) == -1) || (b && CopyToUserWrite(m, b, id, 4) == -1) ||
++          (c && CopyToUserWrite(m, c, id, 4) == -1)) r = -EFAULT_LINUX;
++      break;
++    }
++    case 0x069: case 0x06A: case 0x071: case 0x072: case 0x075: case 0x077:
++    case 0x074: case 0x07A: case 0x07B:                               // set*id, setgroups, setfs*id
++      r = 0;
++      break;
++    case 0x039: r = ShiroVfork(m, 0, true); break;                    // fork
++    case 0x03A: r = ShiroVfork(m, 0, false); break;                   // vfork
++    case 0x038:                                                       // clone
++      if (!IsForkOrVfork(a)) return false;                           // threads stay Blink's
++      r = ShiroVfork(m, b, !(a & CLONE_VFORK_LINUX));
++      break;
++    case 0x03B: r = ShiroExecve(m, a, b, c); break;                   // execve
++    case 0x00D: {                                                     // rt_sigaction
++      r = SysSigaction(m, a, b, c, d);
++      r = r == -1 ? ShiroErr() : r;
++      if (r == 0 && b && a >= 1 && a <= 64) {
++        LOCK(&m->system->sig_lock);
++        u64 h = Read64(m->system->hands[a - 1].handler);
++        UNLOCK(&m->system->sig_lock);
++        ShiroMirrorSigaction(m, a, h);
++      }
++      break;
++    }
++    case 0x009:                                                       // mmap
++      if ((d & 0x20) || (i64)e < 0) return false;
++      BEGIN_NO_PAGE_FAULTS;
++      LOCK(&m->system->mmap_lock);
++      r = ShiroMmapFile(m, a, b, c, d, e, f);
++      UNLOCK(&m->system->mmap_lock);
++      END_NO_PAGE_FAULTS;
++      break;
++    case 0x00B:                                                       // munmap
++      if (g_shiro_maps) ShiroSyncMaps(m, a, b, true);
++      return false;
++    case 0x01A:                                                       // msync
++      if (g_shiro_maps) ShiroSyncMaps(m, a, b, false);
++      r = 0;
++      break;
++    default:
++      return false;
++  }
++  *res = r;
++  return true;
++}
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 6595eda..d075ada 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -5484,6 +5484,11 @@ static int SysEpollWait(struct Machine *m, i32 epfd, i64 eventsaddr,
+ 
+ #endif /* HAVE_EPOLL_PWAIT1 */
+ 
++#ifdef __EMSCRIPTEN__
++#include <emscripten.h>
++#include "blink/shiro.inc"
++#endif
++
+ void OpSyscall(P) {
+   size_t mark;
+   u64 ax, di, si, dx, r0, r8, r9;
+@@ -5533,6 +5538,16 @@ void OpSyscall(P) {
+   // handler (rt_sigreturn) must not leave an outer blocking wait holding it.
+   bool gil = GilHeld();
+   if (gil && GilReleasesFor(ax & 0xfff)) GilRelease();
++#ifdef __EMSCRIPTEN__
++  {
++    i64 shres;
++    if (ShiroSyscall(m, ax & 0xfff, di, si, dx, r0, r8, r9, &shres)) {
++      if (gil) GilAcquire();
++      if (!m->interrupted) Put64(m->ax, shres);
++      goto ShiroDone;
++    }
++  }
++#endif
+   switch (ax & 0xfff) {
+     SYSCALL(3, 0x000, "read", SysRead, STRACE_READ);
+     SYSCALL(3, 0x001, "write", SysWrite, STRACE_WRITE);
+@@ -5775,6 +5790,9 @@ void OpSyscall(P) {
+   if (!m->interrupted) {
+     Put64(m->ax, ax != -1 ? ax : -(XlatErrno(errno) & 0xfff));
+   }
++#ifdef __EMSCRIPTEN__
++ShiroDone:
++#endif
+   unassert(--m->sysdepth >= 0);
+   CollectPageLocks(m);
+   unassert(!m->pagelocks.i || m->sysdepth);
+-- 
+2.43.0
+

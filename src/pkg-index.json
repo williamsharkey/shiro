@@ -1304,7 +1304,7 @@
     "threads",
     "sockets"
    ],
-   "notes": "WASIX build (wasix_32v1, shared env.memory). --version runs; transfers need WASIX sock_open/connect and the TCP relay."
+   "notes": "WASIX build (wasix_32v1, shared env.memory). HTTP and HTTPS (its own OpenSSL) through the kernel sockets and the TCP relay. Verifying real sites needs its CA certificates at /openssl (the package's share/openssl)."
   },
   {
    "name": "quickjs-ng",
@@ -1404,9 +1404,10 @@
     "wasix",
     "threads",
     "sync-fs",
-    "dynamic-linking"
+    "dynamic-linking",
+    "mounts"
    ],
-   "notes": "WASIX build (wasix_32v1, shared env.memory). Imports env.__indirect_function_table (a dynamically linked build), and its standard library is a volume. Shiro's `python` builtin (Pyodide) covers most uses meanwhile."
+   "notes": "WASIX build (wasix_32v1, shared env.memory), a position-independent (dylink.0) module using WASIX dynamic calls. Its standard library is a volume it expects at its /nix/store prefix. Shiro's `python` builtin (Pyodide) covers most uses meanwhile."
   },
   {
    "name": "clang",

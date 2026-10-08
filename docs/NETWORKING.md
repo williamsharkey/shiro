@@ -41,7 +41,9 @@ guest (x86 / WASM / node net)                         server.mjs                
   accept/accept4, send/recv[from|msg], shutdown, bind, listen, get*name,
   socketpair, get/setsockopt, poll/ppoll, read/write/readv/writev, fcntl and
   FIONBIO for O_NONBLOCK, fstat S_IFSOCK) and node-compat `net`
-  (`net.connect`, `net.Socket`, `net.createServer`). With no relay configured,
+  (`net.connect`, `net.Socket`, `net.createServer`), and WASM processes
+  (preview1 `sock_*` and the WASIX socket calls plus `resolve`, through
+  `netStackOf(kernel)`; curl runs HTTP/HTTPS this way). With no relay configured,
   x86 port-80 connects fall back to the old fetch-based HTTP emulation.
 - `tls` in the Node shim stays inert: there is no userspace TLS there, and
   sending plaintext to a TLS port would be worse. Guests that bring their own

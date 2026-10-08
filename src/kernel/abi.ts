@@ -89,6 +89,12 @@ export const SYS_utimensat = 280;
 export const SYS_epoll_pwait = 281;
 export const SYS_epoll_create1 = 291;
 export const SYS_renameat2 = 316;
+export const SYS_geteuid = 107;
+export const SYS_getegid = 108;
+export const SYS_eventfd = 284;
+export const SYS_eventfd2 = 290;
+export const SYS_close_range = 436;
+export const EFD_SEMAPHORE = 1;
 
 // Sockets (handlers live in net.ts, registered through kernel.registerSyscalls)
 export const SYS_socket = 41;
@@ -119,6 +125,24 @@ export const SOCKET_SYSCALLS = [41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 
 export const SYS_spawn = 1000;
 /** Shiro: environment of the calling process as JSON `{argv, env, cwd, pid}` written to the data area; returns byte length. */
 export const SYS_getenv = 1001;
+/**
+ * Shiro: vfork for engines that run the child's code on the parent's thread
+ * (Blink). Creates the child process (a fork of the caller's fd table, cwd,
+ * env, signal state) without starting anything in it; the caller then makes
+ * the child's syscalls on its behalf until SYS_shiro_execve or exit_group
+ * for it. Returns the child pid.
+ */
+export const SYS_shiro_vfork = 1010;
+/**
+ * Shiro: execve. Data area: JSON `{ path, argv, env: ["K=V", ...], inproc? }`.
+ * For a SYS_shiro_vfork child the program starts in it and the result is 0.
+ * Otherwise the exec bookkeeping is done (close-on-exec fds closed, argv and
+ * env replaced, caught signals reset) and then: when `inproc` and the file
+ * is an ELF image, the resolved path is written to the data area and its
+ * length returned (the engine loads it itself); else the caller's runner is
+ * stopped and the new program runs in the same process.
+ */
+export const SYS_shiro_execve = 1011;
 
 // ── errno (Linux) ──────────────────────────────────────────────────────────
 export const EPERM = 1;
@@ -275,6 +299,8 @@ export const POLLFD_SIZE = 8;
 export const WNOHANG = 1;
 export const WUNTRACED = 2;
 export const WCONTINUED = 8;
+/** waitid(2)'s WNOWAIT: report without reaping (also accepted by SYS_wait4 here). */
+export const WNOWAIT = 0x01000000;
 
 /** Linux wait-status encoding. */
 export const W_EXITCODE = (code: number) => (code & 0xff) << 8;

@@ -12,6 +12,8 @@ import { GuestChannel, SYS_MESSAGE, isStartMessage, type GuestStartMessage } fro
 import * as A from '../kernel/abi';
 import { SYS_wasi_thread_spawn, SYS_wasix_fork, type SysReply, type SysRequest } from './abi';
 import { Asyncify, type StackCapture } from './asyncify';
+import { dylinkImports, type DylinkLayout } from './dylink';
+import { DynCalls, type FuncSigs } from './dyncall';
 import { ProcExit, WasiGuest, buildImports, runSync, type GuestForkState, type Preopen, type StackAction } from './wasi-guest';
 
 export interface WasiStartData {
@@ -23,6 +25,10 @@ export interface WasiStartData {
   thread?: { startArg: number };
   /** Set in a forked child: `memory` is a copy of the parent's; rewind `cap` so proc_fork returns 0. */
   resume?: WasixForkState;
+  /** Function signatures for WASIX dynamic calls, when the module imports them (./dyncall.ts). */
+  funcSigs?: FuncSigs;
+  /** A position-independent (dylink.0) module: where its data, stack and table go (./dylink.ts). */
+  dylink?: DylinkLayout;
   /** Set for a signal thread: run the WASIX signal callback on an alternate stack, then end. */
   signal?: { sig: number; callback: string; tlsBase: number; stackTop: number };
 }
@@ -80,7 +86,9 @@ function run(port: Port, msg: WasiStartMessage): void {
     },
   });
   const extra: Record<string, Record<string, any>> = {};
-  if (w.memory && w.memoryImport) extra[w.memoryImport.module] = { [w.memoryImport.name]: w.memory };
+  const dylink = w.dylink ? dylinkImports(w.module, w.dylink) : null;
+  if (dylink) for (const [mod, ns] of Object.entries(dylink.imports)) extra[mod] = { ...ns };
+  if (w.memory && w.memoryImport) (extra[w.memoryImport.module] ??= {})[w.memoryImport.name] = w.memory;
 
   let instance: WebAssembly.Instance;
   try {
@@ -92,6 +100,21 @@ function run(port: Port, msg: WasiStartMessage): void {
   const exp = instance.exports as Record<string, any>;
   guest.memory = w.memory ?? exp.memory;
   guest.exports = exp;
+  if (w.funcSigs) {
+    const table = (dylink?.imports.env.__indirect_function_table ?? exp.__indirect_function_table) as WebAssembly.Table | undefined;
+    const sp = (dylink?.imports.env.__stack_pointer ?? exp.__stack_pointer) as WebAssembly.Global | undefined;
+    guest.dyncalls = new DynCalls(w.funcSigs, () => table, () => guest!.memory, () => sp);
+  }
+  if (dylink) {
+    dylink.relocate(exp);
+    // Relocations patch shared memory: once per process, by the main thread of a fresh one.
+    // __wasm_init_memory set up the main thread's TLS block but left its relocations
+    // (threads get theirs from __wasm_init_tls)
+    if (!w.thread && !w.resume && !w.signal) {
+      exp.__wasm_apply_data_relocs?.();
+      exp.__wasm_apply_tls_relocs?.();
+    }
+  }
   // setjmp/longjmp and fork capture the main thread's stack (asyncified WASIX modules)
   if (!w.thread) guest.asyncify = Asyncify.attach(exp, () => guest.memory);
   channel.onSignal = (sig) => guest.deliverSignal(sig);

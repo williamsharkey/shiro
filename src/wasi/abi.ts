@@ -15,6 +15,11 @@ const LINUX_TO_WASI: Record<number, number> = {
   [A.EFBIG]: 22, [A.ENOSPC]: 51, [A.ESPIPE]: 70, [A.EROFS]: 69, [A.EPIPE]: 64, [A.ERANGE]: 68,
   [A.ENAMETOOLONG]: 37, [A.ENOSYS]: 52, [A.ENOTEMPTY]: 55, [A.ELOOP]: 32, [A.ENOTSUP]: 58,
   [A.ETIMEDOUT]: 73,
+  // sockets
+  [A.EADDRINUSE]: 3, [A.EADDRNOTAVAIL]: 4, [A.EAFNOSUPPORT]: 5, [A.EALREADY]: 7, [A.ECONNABORTED]: 13,
+  [A.ECONNREFUSED]: 14, [A.ECONNRESET]: 15, [A.EDESTADDRREQ]: 17, [A.EHOSTUNREACH]: 23, [A.EINPROGRESS]: 26,
+  [A.EISCONN]: 30, [A.EMSGSIZE]: 35, [A.ENETDOWN]: 38, [A.ENETUNREACH]: 40, [A.ENOBUFS]: 42,
+  [A.ENOPROTOOPT]: 50, [A.ENOTCONN]: 53, [A.ENOTSOCK]: 57, [A.EPROTONOSUPPORT]: 66, [A.EPROTOTYPE]: 67,
 };
 
 /** Translate a syscall result to a WASI errno (0 for success). */
@@ -102,6 +107,12 @@ export const SYS_wasix_exec = 1102;
  */
 export const SYS_wasix_signal = 1103;
 export const WASIX_SIG_CATCH = 0, WASIX_SIG_DEFAULT = 1, WASIX_SIG_IGNORED = 2;
+/**
+ * WASIX resolve (host.ts): data = host name; output = the addresses as
+ * text, one per line (IPv4 first). Returns the byte length or -errno.
+ */
+export const SYS_wasix_resolve = 1104;
+
 /** Disposition value standing for "the WASIX guest's libc decides". */
 export const WASIX_HANDLER = 0x5751;
 

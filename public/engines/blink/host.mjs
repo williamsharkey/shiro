@@ -4,23 +4,22 @@
 //
 // One worker runs one guest process, as a kernel process (src/kernel): the
 // page starts it with the kernel's start message
-//   { type: 'shiro-start', sab, pid, argv, env, cwd, path, moduleUrl, mounts }
-// and every request from here is a kernel syscall over `sab` (the channel in
-// docs/KERNEL_ABI.md). This worker blocks in Atomics.wait while the kernel
-// works; Blink's own threads are emscripten pthreads whose libc calls are
-// proxied to this thread.
+//   { type: 'shiro-start', sab, pid, argv, env, cwd, path, moduleUrl, mounts, pool }
 //
-// - fds 0/1/2 of the guest are the process's kernel fds 0/1/2 (pipes, files,
-//   the terminal): reads poll first, so a guest waiting for input doesn't
-//   stall the other guest threads' proxied syscalls.
-// - Every top-level Shiro directory in `mounts` is mounted as SHIROFS, a
-//   MEMFS whose nodes are faulted in through kernel syscalls on first
-//   lookup/open and written back on close.
-// - Sockets are kernel sockets (vendor/blink/shiro-net.js via
-//   Module.shiroKernel): TCP through the relay, loopback, DNS over UDP 53.
-//   The page pings this worker when a watched kernel fd changes readiness.
-// - Termios/winsize ioctls on fds 0-2 go to the kernel (the pty). Signals
-//   the kernel delivers (Ctrl-C, SIGWINCH, kill) are queued in the guest.
+// - The guest's fd, filesystem and process syscalls go straight to the
+//   kernel (Blink patch 0011, vendor/blink/shiro-kernel.js): guest fd N is
+//   kernel fd N, so files, pipes, the terminal (/dev/tty, /dev/ptmx),
+//   sockets, fork/exec/wait and job control are the same as for every other
+//   Shiro process. Guest threads' calls arrive here as proxied calls and run
+//   on `pool`, a set of kernel channels the page serves on request
+//   ('blink-sys' → 'blink-done'), so a call blocked on one channel (a read
+//   from the tty) doesn't hold up the others.
+// - `sab` is this worker's own channel, used synchronously for what the
+//   engine itself needs: every top-level Shiro directory in `mounts` is
+//   mounted as SHIROFS, a MEMFS faulted in through kernel syscalls, from
+//   which Blink loads programs and their ELF interpreters.
+// - Signals the kernel hands to the guest (a reply's signal word) are queued
+//   in Blink, which runs the guest's handler; then rt_sigreturn.
 // - The guest's exit status goes to the kernel as exit_group.
 
 const isNode = typeof process !== 'undefined' && !!process.versions?.node && typeof self === 'undefined';
@@ -434,31 +433,86 @@ async function run(msg) {
     if (!exiting) writeFd(2, enc.encode(`blink: ${text}\n`));
     exitGuest(code);
   };
-  // The page tells us when a kernel fd may have become readable, so a guest
-  // blocked in poll()/epoll on stdin wakes without waiting for its timeout.
   let M = null;
+
+  // ── The channel pool for the guest's own syscalls (shiro-kernel.js) ──
+  const pool = (msg.pool || []).map((sab) => ({
+    i32: new Int32Array(sab, 0, CH_DATA / 4), data: new Uint8Array(sab, CH_DATA), busy: false, done: null,
+  }));
+  const chunk = pool.length ? pool[0].data.length : 0;
+  const waiting = [];
+  const acquire = () => new Promise((resolve) => {
+    const ch = pool.find((c) => !c.busy);
+    if (ch) { ch.busy = true; resolve(ch); } else waiting.push(resolve);
+  });
+  const release = (ch) => {
+    const next = waiting.shift();
+    if (next) next(ch); else ch.busy = false;
+  };
+  // One request on `ch`; the page serves it and posts 'blink-done'.
+  const issue = (ch, nr, args, as) => new Promise((resolve) => {
+    for (let i = 0; i < CH_NARGS; i++) ch.i32[CH_ARGS + i] = args[i] ?? 0;
+    ch.i32[CH_SYSNO] = nr;
+    ch.done = resolve;
+    Atomics.store(ch.i32, CH_STATE, 1);
+    post({ type: 'blink-sys', ch: pool.indexOf(ch), as });
+  });
+  const call = async (nr, args, as, input, outCap) => {
+    if (exiting) return new Promise(() => {}); // the kernel ends this worker
+    const ch = await acquire();
+    try {
+      if (input.length > ch.data.length) return { r: -7 /* E2BIG */, hi: -1, out: null };
+      ch.data.set(input);
+      let res = await issue(ch, nr, args, as);
+      const out = outCap ? ch.data.slice(0, Math.min(outCap, ch.data.length)) : null;
+      // A signal for the guest rode on the reply: queue it, then rt_sigreturn
+      while (res.sig) {
+        if (debug) console.error('[blink] signal', res.sig);
+        blinkModule?._blink_shiro_signal?.(res.sig);
+        res = { ...res, sig: (await issue(ch, SYS.rt_sigreturn, [], 0)).sig };
+      }
+      return { r: res.r, hi: res.hi, out };
+    } finally {
+      release(ch);
+    }
+  };
   onMessage((m) => {
-    if (!m || exiting) return;
-    if (m.type === 'blink-ready') {
-      const node = watched.get(m.fd);
-      if (node) node.notifyListeners(pollFd(m.fd, POLLIN | POLLOUT | 0x2000) || POLLIN);
-    } else if (m.type === 'blink-signal') {
+    if (!m) return;
+    if (m.type === 'blink-done') {
+      const ch = pool[m.ch];
+      if (!ch || Atomics.load(ch.i32, CH_STATE) !== 2) return;
+      const r = ch.i32[CH_RESULT], hi = ch.i32[CH_ARGS];
+      Atomics.store(ch.i32, CH_STATE, 0);
+      const sig = Atomics.exchange(ch.i32, CH_SIGNAL, 0);
+      const done = ch.done;
+      ch.done = null;
+      if (debug) console.error(`[blink] ksys ${ch.i32[CH_SYSNO]} = ${r}`);
+      done?.({ r, hi, sig });
+    } else if (m.type === 'blink-signal' && !exiting) {
       // The kernel signalled us: any syscall reply carries the signal word.
       sys(SYS.getpid);
     }
   });
-  // Kernel signals: SIGPIPE ignored (Blink reports EPIPE to the guest);
-  // the forwarded ones get a handler, so the kernel hands them to us.
   const sigaction = (sig, handler) => {
     const dv = new DataView(data.buffer, data.byteOffset, 64);
     for (let i = 0; i < 64; i++) data[i] = 0;
     dv.setUint32(0, handler, true);
     sys(SYS.rt_sigaction, sig, 1, 0);
   };
-  sigaction(SIGPIPE, SIG_IGN);
-  for (const sig of FORWARDED_SIGNALS) sigaction(sig, FORWARD_HANDLER);
+  // Signals this process starts out ignoring (nohup, background jobs): the
+  // guest inherits them, as across exec on Linux.
+  let ignLo = 0, ignHi = 0;
+  for (let sig = 1; sig < 64; sig++) {
+    if (sig === 9 || sig === 19) continue;
+    for (let i = 0; i < 64; i++) data[i] = 0;
+    if (sys(SYS.rt_sigaction, sig, 0, 1) < 0) continue;
+    if (new DataView(data.buffer, data.byteOffset + 32, 8).getUint32(0, true) === SIG_IGN) {
+      if (sig <= 32) ignLo |= 1 << (sig - 1); else ignHi |= 1 << (sig - 33);
+    }
+  }
   const kernel = {
     sys,
+    call,
     get data() { return data; },
     poll: (kfd, events, timeoutMs = 0) => pollFd(kfd, events, timeoutMs),
     watch(kfd, node) { watched.set(kfd, node); post({ type: 'blink-watch', fd: kfd }); },
@@ -489,7 +543,6 @@ async function run(msg) {
       preRun: [(M) => {
         const FS = M.FS;
         FS.init(() => null, () => {}, () => {});
-        installKernelStdio(FS);
         const SHIROFS = makeShiroFS(FS);
         for (const dir of msg.mounts || []) {
           if (!/^\/[^/]+$/.test(dir) || dir === '/dev' || dir === '/proc') continue;
@@ -503,6 +556,7 @@ async function run(msg) {
       }],
     });
     blinkModule = M;
+    if (pool.length) M._blink_shiro_enable(msg.pid, chunk, ignLo >>> 0, ignHi >>> 0);
     const argv = msg.argv && msg.argv.length ? msg.argv : [msg.path];
     M.callMain([...(msg.debug && msg.env?.SHIRO_BLINK_STRACE ? ['-s', '-e'] : []), '-0', argv[0], msg.path || argv[0], ...argv.slice(1)]);
   } catch (e) {

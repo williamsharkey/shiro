@@ -20,6 +20,7 @@ import {
 import { createPipe } from './pipe';
 import { Process } from './process';
 import { EpollFile, waitReady } from './epoll';
+import { EventFile } from './fd';
 
 /** Runs a process to completion; resolves with its exit code (or nothing if it exited through the kernel). */
 export type Runner = (proc: Process, kernel: Kernel) => Promise<number | void>;
@@ -275,6 +276,12 @@ export class Kernel {
         code = 127;
       } else {
         code = await runner(proc, this);
+        // execve that swapped programs (SYS_shiro_execve): run the next one in this process
+        while (!proc.exiting && proc.data.execRunner) {
+          const next = proc.data.execRunner as Runner;
+          delete proc.data.execRunner;
+          code = await next(proc, this);
+        }
       }
     } catch (e: any) {
       await this.writeAll(proc, 2, enc.encode(`${proc.comm}: ${e?.message ?? e}\n`)).catch(() => {});
@@ -334,8 +341,10 @@ export class Kernel {
       if (kids.length === 0) return { pid: -A.ECHILD, status: 0 };
       for (const k of kids) {
         if (k.state === 'zombie') {
-          this.procs.delete(k.pid);
-          this.notify();
+          if (!(options & A.WNOWAIT)) {
+            this.procs.delete(k.pid);
+            this.notify();
+          }
           return { pid: k.pid, status: k.exitStatus! };
         }
       }
@@ -343,7 +352,7 @@ export class Kernel {
         const r = k.pendingStopReport;
         if (r === undefined) continue;
         if ((r === 0xffff && options & A.WCONTINUED) || (r !== 0xffff && options & A.WUNTRACED)) {
-          k.pendingStopReport = undefined;
+          if (!(options & A.WNOWAIT)) k.pendingStopReport = undefined;
           return { pid: k.pid, status: r };
         }
       }
@@ -819,6 +828,29 @@ export class Kernel {
           const n = Math.min(args[0] >>> 0, data.length);
           return await new DevRandom().read(data.subarray(0, n));
         }
+        case A.SYS_geteuid: return proc.uid;
+        case A.SYS_getegid: return proc.gid;
+        case A.SYS_eventfd:
+        case A.SYS_eventfd2: {
+          const flags = nr === A.SYS_eventfd2 ? args[1] : 0;
+          if (flags & ~(A.O_NONBLOCK | A.O_CLOEXEC | A.EFD_SEMAPHORE)) return -A.EINVAL;
+          return fds.alloc(new EventFile(args[0], A.O_RDWR | (flags & A.O_NONBLOCK), !!(flags & A.EFD_SEMAPHORE)), 0, !!(flags & A.O_CLOEXEC));
+        }
+        case A.SYS_close_range: {
+          const first = args[0] >>> 0;
+          const last = Math.min(args[1] >>> 0, A.OPEN_MAX - 1);
+          if (first > (args[1] >>> 0)) return -A.EINVAL;
+          for (const [fd] of fds.entries()) {
+            if (fd < first || fd > last) continue;
+            if (args[2] & 4 /* CLOSE_RANGE_CLOEXEC */) fds.setCloexec(fd, true);
+            else await fds.close(fd);
+          }
+          return 0;
+        }
+        case A.SYS_shiro_vfork:
+          return this.vfork(proc).pid;
+        case A.SYS_shiro_execve:
+          return await this.sysExecve(proc, JSON.parse(str(0, args[0])), data);
         case A.SYS_getpid: return proc.pid;
         case A.SYS_gettid: return proc.pid;
         case A.SYS_getppid: return proc.ppid;
@@ -1309,6 +1341,87 @@ export class Kernel {
     if (used === 0 && entries.length > 0) return -A.EINVAL;
     f.consume(used);
     return off;
+  }
+
+  /**
+   * The child of SYS_shiro_vfork: a copy of `parent` (fd table, cwd, env,
+   * signal dispositions and mask) with nothing running in it yet. Its
+   * program starts at SYS_shiro_execve; until then the parent's engine makes
+   * syscalls on its behalf.
+   */
+  vfork(parent: Process): Process {
+    const pid = this.allocPid();
+    const child = new Process({
+      pid, ppid: parent.pid, pgid: parent.pgid, sid: parent.sid,
+      path: parent.path, argv: [...parent.argv], env: { ...parent.env }, cwd: parent.cwd,
+      fds: parent.fds.fork(), umask: parent.umask,
+    });
+    child.ctty = parent.ctty;
+    child.uid = parent.uid;
+    child.gid = parent.gid;
+    child.data.embryo = true;
+    this.procs.set(pid, child);
+    for (const h of [...this.spawnHooks]) {
+      try { h(child); } catch (e) { console.warn('[kernel] onSpawn hook failed', e); }
+    }
+    for (const [sig, d] of parent.dispositions) child.dispositions.set(sig, d);
+    for (const [sig, a] of parent.sigactions) child.sigactions.set(sig, { ...a, mask: new Set(a.mask) });
+    for (const sig of parent.sigmask) child.sigmask.add(sig);
+    this.notify();
+    return child;
+  }
+
+  /** SYS_shiro_execve (see abi.ts). */
+  private async sysExecve(proc: Process, req: { path: string; argv?: string[]; env?: string[]; inproc?: boolean }, data: Uint8Array): Promise<number> {
+    if (!req || typeof req.path !== 'string' || !req.path) return -A.ENOENT;
+    const path = this.resolvePath(proc, req.path);
+    if (typeof path === 'number') return path;
+    const st = await this.statPath(proc, path);
+    // A Shiro command under /bin, /usr/bin, ... (sh, env, ls) has no file but runs
+    const builtin = st === -A.ENOENT && /^\/(usr\/)?(local\/)?s?bin\/[^/]+$/.test(path) && !!this.shell?.commands.get(path.slice(path.lastIndexOf('/') + 1));
+    if (typeof st === 'number' && !builtin) return st;
+    if (typeof st !== 'number' && (st.mode & A.S_IFMT) !== A.S_IFREG) return -A.EACCES;
+    const argv = Array.isArray(req.argv) ? req.argv.map(String) : [req.path];
+    const env: Record<string, string> = {};
+    for (const kv of Array.isArray(req.env) ? req.env : []) {
+      const i = String(kv).indexOf('=');
+      if (i > 0) env[String(kv).slice(0, i)] = String(kv).slice(i + 1);
+    }
+    let head: Uint8Array = new Uint8Array(0);
+    if (!builtin) try {
+      const raw = await this.fs!.readFile(path);
+      head = typeof raw === 'string' ? enc.encode(raw.slice(0, 4)) : raw.subarray(0, 4);
+    } catch { /* unreadable: let the loaders decide */ }
+    const isElf = head.length === 4 && head[0] === 0x7f && head[1] === 0x45 && head[2] === 0x4c && head[3] === 0x46;
+    const probe = new Process({ pid: -1, ppid: proc.pid, path, argv, env, cwd: proc.cwd });
+    const embryo = !!proc.data.embryo;
+    const runner = embryo || !(isElf && req.inproc) ? await this.findProgram(path, probe) : null;
+    if ((embryo || !(isElf && req.inproc)) && !runner) return -A.ENOEXEC;
+    // The point of no return: exec bookkeeping, as Linux does it
+    await proc.fds.closeOnExec();
+    proc.path = path;
+    proc.argv = argv;
+    proc.env = env;
+    for (const [sig, d] of [...proc.dispositions]) {
+      if (typeof d === 'number') { proc.dispositions.delete(sig); proc.sigactions.delete(sig); }
+    }
+    proc.pendingSignals.clear();
+    proc.signalFrames = [];
+    this.notify();
+    if (embryo) {
+      delete proc.data.embryo;
+      void this.start(proc, runner!);
+      return 0;
+    }
+    if (isElf && req.inproc) {
+      const b = enc.encode(path);
+      if (b.length > data.length) return -A.ENAMETOOLONG;
+      data.set(b);
+      return b.length;
+    }
+    proc.data.execRunner = runner;
+    proc.stopRunner();
+    return 0;
   }
 
   /**

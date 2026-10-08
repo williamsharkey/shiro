@@ -97,9 +97,9 @@ running it exits 126 unless `SHIRO_PKG_FORCE=1`.
 
 What the kernel provides follows the WASM process mode (`wasmProcessMode()`
 in `src/wasi/host.ts`): `sab` gives blocking-stdin, tty, processes, threads,
-sync-fs, wasix (the guest's WASIX subset) and wasix-stack (fork, setjmp and
-exec through asyncify stack capture); `jspi` the same without threads and
-wasix-stack;
+sync-fs, wasix (the guest's WASIX subset), wasix-stack (fork, setjmp and
+exec through asyncify stack capture) and sockets; `jspi` the same without
+threads and wasix-stack;
 `none` nothing. Other kernel parts
 can add features with:
 
@@ -139,9 +139,9 @@ works everywhere and the interactive mode needs a page that can block.
 | bash | 1.0.25 | Wasmer | WASIX | ok as kernel processes: scripts, `-c`, interactive on the pty (readline editing, ^C), fork/exec/pipelines/`$(...)`, `wait` |
 | dash | 1.0.19 | Wasmer | WASIX | ok as kernel processes, as bash; this early build's exec passes no environment, so exported variables don't reach children |
 | php | 8.3 | Wasmer | WASIX | ok as kernel processes (`php -r`, exceptions, fatal errors through zend_bailout's longjmp); 86 MB |
-| python3.13 | 3.13 | Wasmer | WASIX | needs dynamic-linking (62 MB) |
+| python3.13 | 3.13 | Wasmer | WASIX | runs as a kernel process (`-c`, stdlib imports) given its standard library; the package needs mounts for that (62 MB) |
 | clang 16, lld, llvm-ar/nm | 16 | Wasmer | WASIX | `--version` runs; needs mounts for its sysroot (111 MB) |
-| curl | 8.4.0 | Wasmer | WASIX | `--version` runs; needs sockets (WASIX sock_open/connect) |
+| curl | 8.4.0 | Wasmer | WASIX | ok as kernel processes: HTTP and HTTPS (OpenSSL in the guest) through the kernel sockets and the TCP relay; real sites need its CA certificates mounted at `/openssl` |
 
 "Ok as kernel processes" means installable and working where WASM processes
 can use threads (`sab` mode: a cross-origin isolated page). Without that, WASIX
@@ -160,9 +160,14 @@ rest:
   and rewinds the stack itself (`src/wasi/asyncify.ts`): setjmp/longjmp,
   fork (a new kernel process with a copy of the memory, fds and signal
   state) and a real exec. See AGENTS.md "WASM Processes".
-- `dynamic-linking`: python imports `env.__indirect_function_table`.
+- `dynamic-linking` (done, sab mode): python is a position-independent
+  module; `src/wasi/dylink.ts` lays it out and `src/wasi/dyncall.ts` serves
+  the WASIX dynamic calls its trampolines use. Loading side modules (dlopen)
+  is not implemented. Python still needs `mounts` for its standard library.
 - `mounts`: clang's sysroot volumes belong at `/sysroot` and `/lib`.
-- `sockets`: curl transfers.
+- `sockets` (done): the guest implements the WASIX socket calls and
+  `resolve` over the kernel sockets (src/kernel/net.ts), so sab and jspi
+  mode provide it.
 
 Not available as WASM anywhere checked: busybox, vim,
 git, make (no WASI builds; busybox and make also need processes).
