@@ -18,7 +18,7 @@
  */
 
 import type { KStat } from './abi';
-import type { FdTable, OpenFile } from './fd';
+import { retain, release, type FdTable, type OpenFile } from './fd';
 import type { Kernel } from './kernel';
 import {
   EPERM, EINTR, EIO, EBADF, EAGAIN, EACCES, EFAULT, EINVAL, EPIPE, ETIMEDOUT, EPROTO, ENOTSOCK, EDESTADDRREQ,
@@ -32,7 +32,8 @@ import {
   TCP_NODELAY, TCP_KEEPIDLE, TCP_KEEPINTVL, TCP_KEEPCNT, IPV6_V6ONLY, FIONREAD, FIONBIO, SYS_socket,
   SYS_connect, SYS_accept, SYS_sendto, SYS_recvfrom, SYS_shutdown, SYS_bind, SYS_listen, SYS_getsockname,
   SYS_getpeername, SYS_socketpair, SYS_setsockopt, SYS_getsockopt, SYS_accept4, SOCKET_SYSCALLS,
-  SOCKADDR_ROOM, SIGPIPE,
+  SOCKADDR_ROOM, SIGPIPE, ENOENT, SO_PEERCRED, SCM_RIGHTS, MSG_CTRUNC, MSG_CMSG_CLOEXEC, SYS_sendmsg,
+  SYS_recvmsg, SOCKADDR_UN_MAX, ENAMETOOLONG,
 } from './abi';
 
 // Socket constants live in abi.ts (the shared ABI); re-exported for net.ts users.
@@ -67,8 +68,9 @@ export const errnoName = (e: number): string =>
 // ── Types ──
 
 export interface SockAddr {
-  family: number;   // AF_INET | AF_INET6
-  address: string;  // dotted quad or IPv6 text (no brackets)
+  family: number;   // AF_INET | AF_INET6 | AF_UNIX
+  /** dotted quad or IPv6 text (no brackets); AF_UNIX: the path, "\0name" when abstract, "" unnamed */
+  address: string;
   port: number;
 }
 
@@ -160,8 +162,16 @@ export function formatIpv6(groups: number[]): string {
   return `${hex.slice(0, best).join(':')}::${hex.slice(best + bestLen).join(':')}`;
 }
 
-/** Encode a sockaddr_in / sockaddr_in6 (Linux layout, network byte order port). */
+/** Encode a sockaddr_in / sockaddr_in6 (Linux layout, network byte order port) / sockaddr_un. */
 export function encodeSockaddr(sa: SockAddr): Uint8Array {
+  if (sa.family === AF_UNIX) {
+    // sun_path NUL-terminated (an abstract name starts with its NUL)
+    const path = new TextEncoder().encode(sa.address);
+    const b = new Uint8Array(Math.min(SOCKADDR_UN_MAX, 2 + path.length + (path.length && path[0] !== 0 ? 1 : 0)));
+    b[0] = AF_UNIX;
+    b.set(path.subarray(0, b.length - 2), 2);
+    return b;
+  }
   if (sa.family === AF_INET6) {
     const b = new Uint8Array(28);
     const dv = new DataView(b.buffer);
@@ -196,6 +206,14 @@ export function decodeSockaddr(b: Uint8Array): SockAddr | number {
       return { family, port: dv.getUint16(2, false), address: `::ffff:${g[6] >> 8}.${g[6] & 0xff}.${g[7] >> 8}.${g[7] & 0xff}` };
     }
     return { family, port: dv.getUint16(2, false), address: formatIpv6(g) };
+  }
+  if (family === AF_UNIX) {
+    const path = b.subarray(2, Math.min(b.length, SOCKADDR_UN_MAX));
+    if (!path.length) return { family, address: '', port: 0 };
+    // abstract: every byte up to the length given; a path: up to its NUL
+    const end = path[0] === 0 ? path.length : (path.indexOf(0) < 0 ? path.length : path.indexOf(0));
+    if (path[0] !== 0 && end === path.length && b.length > SOCKADDR_UN_MAX) return -ENAMETOOLONG;
+    return { family, address: new TextDecoder().decode(path.subarray(0, end)), port: 0 };
   }
   return -EAFNOSUPPORT;
 }
@@ -233,7 +251,8 @@ class WaitQueue {
 
 /** What a connected stream socket talks to: the relay, or the other end of a loopback pair. */
 interface StreamPeer {
-  send(data: Uint8Array): void;
+  /** `fds` (AF_UNIX SCM_RIGHTS) arrive with the first byte of `data`; the peer owns one reference to each. */
+  send(data: Uint8Array, fds?: OpenFile[]): void;
   shutdownWrite(): void;
   close(): void;
   /** The application consumed n received bytes. */
@@ -244,7 +263,7 @@ interface StreamPeer {
 
 class LoopbackPeer implements StreamPeer {
   constructor(private self: KSocket, private other: KSocket) {}
-  send(data: Uint8Array) { this.other._deliver(data.slice()); }
+  send(data: Uint8Array, fds?: OpenFile[]) { this.other._deliver(data.slice(), fds); }
   shutdownWrite() { this.other._eof(); }
   close() { this.other._eof(); this.other._peerGone(); }
   consumed() { this.other._wake(); } // the writer on the other side may be waiting for room
@@ -287,7 +306,8 @@ class RelayPeer implements StreamPeer {
     ws.onerror = () => { this.sock._error(ECONNRESET); };
   }
 
-  send(data: Uint8Array) {
+  send(data: Uint8Array, fds?: OpenFile[]) {
+    for (const f of fds ?? []) void release(f); // no fd passing over TCP
     if (this.ws.readyState !== 1) return;
     // The relay caps frames at 256 KiB
     for (let off = 0; off < data.length; off += 64 * 1024) this.ws.send(data.slice(off, off + 64 * 1024));
@@ -333,8 +353,16 @@ export class KSocket implements OpenFile {
   remote: SockAddr | null = null;
   readonly ino: number;
 
+  /** AF_UNIX: the registry key (resolved path, or "\0name") this socket is bound to. */
+  unixKey: string | null = null;
+  /** Pid of the process that made the socket (SO_PEERCRED of its peer), and of the peer's. */
+  ownerPid = 0;
+  peerPid = 0;
+
   private q = new WaitQueue();
   private rx: Uint8Array[] = [];
+  /** Received chunks that carry passed descriptions (SCM_RIGHTS), each holding one reference. */
+  private rxFds = new Map<Uint8Array, OpenFile[]>();
   private rxLen = 0;
   private rxEof = false;
   private rdShut = false;
@@ -355,9 +383,11 @@ export class KSocket implements OpenFile {
   private get nonblock() { return (this.flags & O_NONBLOCK) !== 0; }
 
   // ── events from the peer ──
-  /** @internal */ _deliver(data: Uint8Array) {
-    if (this.rdShut || !data.length) return;
-    this.rx.push(data); this.rxLen += data.length; this.q.notify();
+  /** @internal */ _deliver(data: Uint8Array, fds?: OpenFile[]) {
+    if (this.rdShut || this.state === 'closed' || !data.length) { for (const f of fds ?? []) void release(f); return; }
+    this.rx.push(data); this.rxLen += data.length;
+    if (fds?.length) this.rxFds.set(data, fds);
+    this.q.notify();
   }
   /** @internal */ _eof() { if (!this.rxEof) { this.rxEof = true; this.q.notify(); } }
   /** @internal */ _error(errno: number) { this.soError = errno; this.q.notify(); }
@@ -380,14 +410,17 @@ export class KSocket implements OpenFile {
   read(buf: Uint8Array, signal?: AbortSignal): Promise<number> { return this.recv(buf, 0, signal); }
   write(buf: Uint8Array, signal?: AbortSignal): Promise<number> { return this.send(buf, 0, signal); }
 
-  async recv(buf: Uint8Array, msgFlags = 0, signal?: AbortSignal): Promise<number> {
+  /** Receive into `buf`; passed descriptions (SCM_RIGHTS) go to `fdsOut`, or are closed without it. */
+  async recv(buf: Uint8Array, msgFlags = 0, signal?: AbortSignal, fdsOut?: OpenFile[]): Promise<number> {
     const dontwait = this.nonblock || (msgFlags & MSG_DONTWAIT) !== 0;
     const timeout = this.opts.get(`${SOL_SOCKET}:${SO_RCVTIMEO}`) || 0;
     let got = 0;
     for (;;) {
       if (this.rxLen > 0 && got < buf.length) {
-        got += this.take(buf.subarray(got), (msgFlags & MSG_PEEK) !== 0);
+        const before = fdsOut?.length ?? 0;
+        got += this.take(buf.subarray(got), (msgFlags & MSG_PEEK) !== 0, fdsOut);
         if (!(msgFlags & MSG_WAITALL) || got === buf.length || (msgFlags & MSG_PEEK)) return got;
+        if ((fdsOut?.length ?? 0) > before) return got; // descriptions end a message
         continue;
       }
       if (got > 0 && (this.rxEof || this.rdShut || this.soError)) return got;
@@ -404,16 +437,24 @@ export class KSocket implements OpenFile {
     }
   }
 
-  private take(out: Uint8Array, peek: boolean): number {
+  private take(out: Uint8Array, peek: boolean, fdsOut?: OpenFile[]): number {
     let n = 0;
     let i = 0;
     while (n < out.length && i < this.rx.length) {
       const chunk = this.rx[i];
+      // Bytes that carry descriptions start a message of their own (as on Linux)
+      const fds = this.rxFds.get(chunk);
+      if (fds && n > 0) break;
       const k = Math.min(chunk.length, out.length - n);
       out.set(chunk.subarray(0, k), n);
       n += k;
-      if (peek) { i++; continue; }
+      if (fds && !peek) {
+        this.rxFds.delete(chunk);
+        if (fdsOut) fdsOut.push(...fds); else for (const f of fds) void release(f);
+      }
+      if (peek) { i++; if (fds) break; continue; }
       if (k === chunk.length) this.rx.shift(); else this.rx[0] = chunk.subarray(k);
+      if (fds) break;
     }
     if (!peek) { this.rxLen -= n; this.peer?.consumed(n); }
     return n;
@@ -421,7 +462,14 @@ export class KSocket implements OpenFile {
 
   private takeError(): number { const e = this.soError; this.soError = 0; return e; }
 
-  async send(buf: Uint8Array, msgFlags = 0, signal?: AbortSignal): Promise<number> {
+  /** Send `buf`; `fds` (AF_UNIX SCM_RIGHTS, one reference each owned by the call) go with it, or are released on failure. */
+  async send(buf: Uint8Array, msgFlags = 0, signal?: AbortSignal, fds?: OpenFile[]): Promise<number> {
+    const n = await this.sendSome(buf, msgFlags, signal, fds);
+    if (n <= 0) for (const f of fds ?? []) void release(f);
+    return n;
+  }
+
+  private async sendSome(buf: Uint8Array, msgFlags: number, signal?: AbortSignal, fds?: OpenFile[]): Promise<number> {
     const dontwait = this.nonblock || (msgFlags & MSG_DONTWAIT) !== 0;
     for (;;) {
       if (this.soError) return -this.takeError();
@@ -444,7 +492,7 @@ export class KSocket implements OpenFile {
       }
       // Blocking sockets take the whole buffer (like Linux); nonblocking take what fits.
       const n = dontwait ? Math.min(room, buf.length) : buf.length;
-      this.peer.send(buf.subarray(0, n));
+      this.peer.send(buf.subarray(0, n), fds);
       return n;
     }
   }
@@ -493,12 +541,19 @@ export class KSocket implements OpenFile {
     this.state = 'closed';
     if (wasListening) {
       this.unpublish?.(); this.unpublish = null;
-      this.stack.listeners.delete(this.local!.port);
+      if (this.domain === AF_UNIX) {
+        if (this.stack.unixListeners.get(this.unixKey!) === this) this.stack.unixListeners.delete(this.unixKey!);
+      } else {
+        this.stack.listeners.delete(this.local!.port);
+      }
       for (const s of this.backlog.splice(0)) await s.close();
     }
-    if (this.local) this.stack.releasePort(this.local.port, this);
+    if (this.unixKey?.startsWith('\0') && this.stack.unixNames.get(this.unixKey) === this) this.stack.unixNames.delete(this.unixKey);
+    if (this.local && this.domain !== AF_UNIX) this.stack.releasePort(this.local.port, this);
     this.peer?.close();
     this.peer = null;
+    for (const fds of this.rxFds.values()) for (const f of fds) void release(f);
+    this.rxFds.clear();
     this.rx = []; this.rxLen = 0;
     this.q.notify();
   }
@@ -588,6 +643,13 @@ export class KSocket implements OpenFile {
   listen(backlog = 128): number {
     if (this.state === 'listening') { this.backlogMax = Math.max(1, Math.min(backlog, 4096)); return 0; }
     if (this.state !== 'unbound' && this.state !== 'bound') return -EINVAL;
+    if (this.domain === AF_UNIX) {
+      if (!this.unixKey) return -EINVAL; // (Linux would autobind an abstract name)
+      this.backlogMax = Math.max(1, Math.min(backlog || 1, 4096));
+      this.state = 'listening';
+      this.stack.unixListeners.set(this.unixKey, this);
+      return 0;
+    }
     if (!this.local) {
       this.local = this.stack.autobindAddr(this.domain, this, this.domain === AF_INET6 ? '::' : '0.0.0.0');
     }
@@ -624,6 +686,7 @@ export class KSocket implements OpenFile {
   }
 
   getsockname(): SockAddr {
+    if (this.domain === AF_UNIX) return this.local ? { ...this.local } : { family: AF_UNIX, address: '', port: 0 };
     return this.local ? { ...this.local } : { family: this.domain, address: this.domain === AF_INET6 ? '::' : '0.0.0.0', port: 0 };
   }
 
@@ -639,7 +702,9 @@ export class KSocket implements OpenFile {
         case SO_ERROR: return this.takeError();
         case SO_TYPE: return SOCK_STREAM;
         case SO_DOMAIN: return this.domain;
-        case SO_PROTOCOL: return IPPROTO_TCP;
+        case SO_PROTOCOL: return this.domain === AF_UNIX ? 0 : IPPROTO_TCP;
+        // the peer's pid (the ucred's uid/gid are every process's: one user)
+        case SO_PEERCRED: return this.domain === AF_UNIX && this.state === 'connected' ? this.peerPid : -ENOTCONN;
         case SO_ACCEPTCONN: return this.state === 'listening' ? 1 : 0;
         case SO_SNDBUF: return this.opts.get(`${level}:${name}`) ?? this.stack.config.sndbuf;
         case SO_RCVBUF: return this.opts.get(`${level}:${name}`) ?? 512 * 1024;
@@ -857,6 +922,12 @@ export class NetStack {
   config: NetConfig = defaultConfig();
   /** port → listening socket */
   readonly listeners = new Map<number, KSocket>();
+  /** AF_UNIX: resolved path (or "\0name") → listening socket */
+  readonly unixListeners = new Map<string, KSocket>();
+  /** AF_UNIX: bound abstract names (paths are files in the filesystem) */
+  readonly unixNames = new Map<string, KSocket>();
+  /** AF_UNIX: resolved paths of socket files made by bind() (they stat as sockets) */
+  readonly unixPaths = new Set<string>();
   private bound = new Map<number, KSocket>();
   private nextEphemeral = 32768;
   nextIno = 1;
@@ -870,9 +941,14 @@ export class NetStack {
   }
 
   socket(domain: number, type: number, protocol = 0): KSocket | KDatagramSocket | number {
-    if (domain !== AF_INET && domain !== AF_INET6) return -EAFNOSUPPORT;
     const base = type & 0xf;
     const flags = type & SOCK_NONBLOCK ? O_NONBLOCK : 0;
+    if (domain === AF_UNIX) {
+      if (base !== SOCK_STREAM) return -EPROTONOSUPPORT; // no AF_UNIX datagrams yet
+      if (protocol !== 0) return -EPROTONOSUPPORT;
+      return new KSocket(this, AF_UNIX, 0, flags);
+    }
+    if (domain !== AF_INET && domain !== AF_INET6) return -EAFNOSUPPORT;
     if (base === SOCK_STREAM) {
       if (protocol !== 0 && protocol !== IPPROTO_TCP) return -EPROTONOSUPPORT;
       return new KSocket(this, domain, protocol, flags);
@@ -894,6 +970,66 @@ export class NetStack {
     a._attach(new LoopbackPeer(a, b), addr, addr);
     b._attach(new LoopbackPeer(b, a), addr, addr);
     return [a, b];
+  }
+
+  /** bind(2) of an AF_UNIX socket: a path makes a socket file; "\0name" is abstract. */
+  async bindUnix(s: KSocket, addr: SockAddr, ops: UnixOps): Promise<number> {
+    if (s.state === 'closed') return -EBADF;
+    if (s.local || s.state !== 'unbound') return -EINVAL;
+    let key: string;
+    if (addr.address === '') {
+      key = `\0${(this.nextIno++).toString(16).padStart(5, '0')}`; // autobind
+      addr = { family: AF_UNIX, address: key, port: 0 };
+    } else {
+      key = addr.address;
+    }
+    if (key.startsWith('\0')) {
+      if (this.unixNames.has(key)) return -EADDRINUSE;
+      this.unixNames.set(key, s);
+    } else {
+      const p = ops.resolve(key);
+      if (typeof p === 'number') return p;
+      if (await ops.exists(p)) return -EADDRINUSE;
+      const r = await ops.create(p);
+      if (r < 0) return r;
+      key = p;
+      this.unixPaths.add(p);
+    }
+    s.unixKey = key;
+    s.local = { family: AF_UNIX, address: addr.address, port: 0 };
+    s.state = 'bound';
+    return 0;
+  }
+
+  /** connect(2) of an AF_UNIX stream socket to a listener in this kernel. */
+  async connectUnix(s: KSocket, addr: SockAddr, ops: UnixOps): Promise<number> {
+    if (s.state === 'connected' || s.state === 'listening') return s.state === 'connected' ? -EISCONN : -EINVAL;
+    if (s.state === 'closed') return -EBADF;
+    if (addr.address === '') return -EINVAL;
+    let key = addr.address;
+    if (!key.startsWith('\0')) {
+      const p = ops.resolve(key);
+      if (typeof p === 'number') return p;
+      if (!(await ops.exists(p))) return -ENOENT;
+      key = p;
+    }
+    const listener = this.unixListeners.get(key);
+    if (!listener || listener.state !== 'listening') return -ECONNREFUSED;
+    const server = new KSocket(this, AF_UNIX, 0, 0);
+    server.ownerPid = listener.ownerPid;
+    server.unixKey = listener.unixKey;
+    if (!listener._enqueue(server)) return -EAGAIN;
+    const local = s.local ?? { family: AF_UNIX, address: '', port: 0 };
+    server.peerPid = s.ownerPid;
+    s.peerPid = listener.ownerPid;
+    server._attach(new LoopbackPeer(server, s), { ...listener.local! }, { ...local });
+    s._attach(new LoopbackPeer(s, server), local, { ...listener.local! });
+    return 0;
+  }
+
+  /** A socket file was unlinked: it no longer stats as a socket. */
+  forgetUnixPath(path: string): void {
+    this.unixPaths.delete(path);
   }
 
   ephemeral(): number {
@@ -1085,6 +1221,15 @@ export class NetStack {
 /** The kernel's network stack. */
 export const netStack = new NetStack();
 
+/** Filesystem access for AF_UNIX path sockets, in the calling process's view. */
+export interface UnixOps {
+  /** Absolute path for `path` (relative to the cwd), or -errno. */
+  resolve(path: string): string | number;
+  exists(path: string): Promise<boolean>;
+  /** Make the socket file; 0 or -errno. */
+  create(path: string): Promise<number>;
+}
+
 // ── Channel syscalls (docs/NETWORKING.md "Kernel syscalls") ──
 
 type AnySocket = KSocket | KDatagramSocket;
@@ -1096,12 +1241,13 @@ type AnySocket = KSocket | KDatagramSocket;
  * without MSG_NOSIGNAL.
  */
 export async function netSyscall(
-  proc: { fds: FdTable; syscallSignal?: AbortSignal },
+  proc: { fds: FdTable; syscallSignal?: AbortSignal; pid?: number },
   nr: number,
   args: ArrayLike<number>,
   data: Uint8Array,
   onSigpipe?: () => void,
   stack: NetStack = netStack,
+  unix?: UnixOps,
 ): Promise<number | undefined> {
   const sig = proc.syscallSignal;
   const sockOf = (fd: number): AnySocket | number => {
@@ -1109,12 +1255,15 @@ export async function netSyscall(
     if (!f) return -EBADF;
     return f instanceof KSocket || f instanceof KDatagramSocket ? f : -ENOTSOCK;
   };
-  const addrIn = (off: number, len: number) => decodeSockaddr(data.subarray(off, off + Math.min(len, SOCKADDR_ROOM)));
-  const addrOut = (sa: SockAddr, off = 0) => {
-    const b = sa.family === AF_UNIX ? new Uint8Array([AF_UNIX, 0]) : encodeSockaddr(sa);
+  const addrIn = (off: number, len: number) => decodeSockaddr(data.subarray(off, off + Math.min(len, SOCKADDR_UN_MAX)));
+  /** Write `sa` at `off`; one that doesn't fit `room` (a long AF_UNIX path) goes out unnamed. */
+  const addrOut = (sa: SockAddr, off = 0, room = data.length - off) => {
+    let b = encodeSockaddr(sa);
+    if (b.length > room) b = new Uint8Array([AF_UNIX, 0]);
     data.set(b, off);
     return b.length;
   };
+  const noUnix: UnixOps = { resolve: () => -EOPNOTSUPP, exists: async () => false, create: async () => -EOPNOTSUPP };
   const install = async (s: AnySocket, cloexec: boolean) => {
     const fd = proc.fds.alloc(s, 0, cloexec);
     if (fd < 0) await s.close();
@@ -1124,12 +1273,15 @@ export async function netSyscall(
   switch (nr) {
     case SYS_socket: { // domain, type, protocol
       const s = stack.socket(args[0], args[1], args[2]);
-      return typeof s === 'number' ? s : install(s, (args[1] & SOCK_CLOEXEC) !== 0);
+      if (typeof s === 'number') return s;
+      if (s instanceof KSocket) s.ownerPid = proc.pid ?? 0;
+      return install(s, (args[1] & SOCK_CLOEXEC) !== 0);
     }
     case SYS_socketpair: { // domain, type → int32 sv[2]
       if (args[0] !== AF_UNIX) return args[0] === AF_INET || args[0] === AF_INET6 ? -EOPNOTSUPP : -EAFNOSUPPORT;
       const pair = stack.socketpair(args[1]);
       if (typeof pair === 'number') return pair;
+      for (const p of pair) p.ownerPid = p.peerPid = proc.pid ?? 0;
       const a = await install(pair[0], (args[1] & SOCK_CLOEXEC) !== 0);
       if (a < 0) { await pair[1].close(); return a; }
       const b = await install(pair[1], (args[1] & SOCK_CLOEXEC) !== 0);
@@ -1144,6 +1296,10 @@ export async function netSyscall(
       if (typeof s === 'number') return s;
       const sa = addrIn(0, args[1]);
       if (typeof sa === 'number') return sa;
+      if (s instanceof KSocket && s.domain === AF_UNIX) {
+        if (sa.family !== AF_UNIX) return -EINVAL;
+        return nr === SYS_bind ? stack.bindUnix(s, sa, unix ?? noUnix) : stack.connectUnix(s, sa, unix ?? noUnix);
+      }
       if (nr === SYS_bind) return s.bind(sa);
       return s instanceof KSocket ? s.connect(sa, sig) : s.connect(sa);
     }
@@ -1161,7 +1317,7 @@ export async function netSyscall(
       const c = await s.accept(flags, sig);
       if (typeof c === 'number') return c;
       const peer = c.getpeername();
-      if (typeof peer !== 'number') addrOut(peer);
+      if (typeof peer !== 'number') addrOut(peer, 0, SOCKADDR_ROOM);
       return install(c, (flags & SOCK_CLOEXEC) !== 0);
     }
     case SYS_getsockname:
@@ -1198,14 +1354,93 @@ export async function netSyscall(
         const r = await s.recvfrom(data.subarray(0, len), args[2], sig);
         if (typeof r === 'number') return r;
         data.fill(0, len, len + SOCKADDR_ROOM);
-        addrOut(r.from, len);
+        addrOut(r.from, len, SOCKADDR_ROOM);
         return r.n;
       }
       const n = await s.recv(data.subarray(0, len), args[2], sig);
       if (n >= 0) {
         data.fill(0, len, len + SOCKADDR_ROOM);
         const peer = s.getpeername();
-        if (typeof peer !== 'number') addrOut(peer, len);
+        if (typeof peer !== 'number') addrOut(peer, len, SOCKADDR_ROOM);
+      }
+      return n;
+    }
+    case SYS_sendmsg: { // fd, len, flags, addrLen, ctrlLen; data = bytes, sockaddr, control (Linux cmsg layout)
+      const s = sockOf(args[0]);
+      if (typeof s === 'number') return s;
+      const len = Math.min(args[1] >>> 0, data.length);
+      const alen = Math.max(0, args[3] | 0);
+      const clen = Math.max(0, Math.min(args[4] | 0, data.length - len - alen));
+      const ctrl = data.subarray(len + alen, len + alen + clen);
+      // SCM_RIGHTS: take a reference to each description for the trip
+      const files: OpenFile[] = [];
+      const dv = new DataView(ctrl.buffer, ctrl.byteOffset, ctrl.byteLength);
+      for (let off = 0; off + 16 <= ctrl.length;) {
+        const cl = Number(dv.getBigUint64(off, true));
+        if (cl < 16 || off + cl > ctrl.length) break;
+        if (dv.getInt32(off + 8, true) === SOL_SOCKET && dv.getInt32(off + 12, true) === SCM_RIGHTS) {
+          for (let p = off + 16; p + 4 <= off + cl; p += 4) {
+            const f = proc.fds.get(dv.getInt32(p, true));
+            if (!f) { for (const g of files) void release(g); return -EBADF; }
+            files.push(retain(f));
+          }
+        }
+        off += (cl + 7) & ~7;
+      }
+      if (files.length && !(s instanceof KSocket && s.domain === AF_UNIX)) { for (const g of files) void release(g); return -EOPNOTSUPP; }
+      let n: number;
+      if (s instanceof KDatagramSocket) {
+        let to: SockAddr | null = null;
+        if (alen > 0) {
+          const sa = addrIn(len, alen);
+          if (typeof sa === 'number') return sa;
+          to = sa;
+        }
+        n = await s.sendto(data.subarray(0, len), args[2], to);
+      } else {
+        n = await s.send(data.subarray(0, len), args[2], sig, files.length ? files : undefined);
+      }
+      if (n === -EPIPE && !(args[2] & MSG_NOSIGNAL)) onSigpipe?.();
+      return n;
+    }
+    case SYS_recvmsg: { // fd, len, flags, ctrlCap → data = bytes, sockaddr (SOCKADDR_ROOM), u32 controllen, u32 msg_flags, control
+      const s = sockOf(args[0]);
+      if (typeof s === 'number') return s;
+      const cap = Math.max(0, args[3] | 0);
+      const len = Math.min(args[1] >>> 0, Math.max(0, data.length - SOCKADDR_ROOM - 8 - cap));
+      const meta = len + SOCKADDR_ROOM;
+      data.fill(0, len, meta + 8);
+      if (s instanceof KDatagramSocket) {
+        const r = await s.recvfrom(data.subarray(0, len), args[2], sig);
+        if (typeof r === 'number') return r;
+        addrOut(r.from, len, SOCKADDR_ROOM);
+        return r.n;
+      }
+      const fds: OpenFile[] = [];
+      const n = await s.recv(data.subarray(0, len), args[2], sig, fds);
+      if (n < 0) return n;
+      const peer = s.getpeername();
+      if (typeof peer !== 'number') addrOut(peer, len, SOCKADDR_ROOM);
+      const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      if (fds.length) {
+        // As many as fit the caller's control buffer; the rest are closed (MSG_CTRUNC)
+        const fit = Math.max(0, Math.min(fds.length, Math.floor((cap - 16) / 4)));
+        const ctrl = meta + 8;
+        let k = 0;
+        for (const f of fds.slice(0, fit)) {
+          const fd = proc.fds.alloc(f, 0, (args[2] & MSG_CMSG_CLOEXEC) !== 0);
+          if (fd < 0) break;
+          dv.setInt32(ctrl + 16 + k * 4, fd, true);
+          k++;
+        }
+        for (const f of fds) void release(f); // the trip's references (the table took its own)
+        if (k) {
+          dv.setBigUint64(ctrl, BigInt(16 + k * 4), true);
+          dv.setInt32(ctrl + 8, SOL_SOCKET, true);
+          dv.setInt32(ctrl + 12, SCM_RIGHTS, true);
+          dv.setUint32(meta, Math.min(cap, (16 + k * 4 + 7) & ~7), true);
+        }
+        if (k < fds.length) dv.setUint32(meta + 4, MSG_CTRUNC, true);
       }
       return n;
     }
@@ -1231,8 +1466,27 @@ const installedStacks = new WeakMap<Kernel, NetStack>();
 export function installNet(kernel: Kernel, stack: NetStack = netStack): () => void {
   installedStacks.set(kernel, stack);
   const off = kernel.registerSyscalls(SOCKET_SYSCALLS, (proc, nr, args, data, k) =>
-    netSyscall(proc, nr, args, data, () => k.deliver(proc, SIGPIPE), stack));
+    netSyscall(proc, nr, args, data, () => k.deliver(proc, SIGPIPE), stack, unixOpsFor(k, proc)));
+  kernel.socketPaths = stack.unixPaths;
   return () => { off(); if (installedStacks.get(kernel) === stack) installedStacks.delete(kernel); };
+}
+
+/** AF_UNIX path sockets in `proc`'s view of the kernel's filesystem. */
+function unixOpsFor(k: Kernel, proc: Parameters<Kernel['resolvePath']>[0]): UnixOps {
+  return {
+    resolve: (path) => k.resolvePath(proc, path),
+    exists: async (path) => !!k.fs && (await k.fs.exists(path)),
+    create: async (path) => {
+      if (!k.fs) return -EOPNOTSUPP;
+      try {
+        await k.fs.writeFile(path, new Uint8Array(0));
+        return 0;
+      } catch (e) {
+        const code = (e as { code?: string }).code;
+        return code === 'ENOENT' ? -ENOENT : code === 'ENOTDIR' ? -20 : code === 'EACCES' ? -EACCES : -EIO;
+      }
+    },
+  };
 }
 
 /** The NetStack `installNet` gave this kernel (name resolution for runtimes with their own resolver call, like WASIX). */

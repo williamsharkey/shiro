@@ -22,6 +22,16 @@ All changes so far are additive; nothing below renames or removes an earlier nam
   - `FileSystem.writeFile` stores a compact copy of a typed-array view
     (IndexedDB cloned the whole underlying buffer).
 
+- **2026-10-09 (unix/compat-tools)** (additive)
+  - AF_UNIX stream sockets bound to paths and abstract names; `SYS_sendmsg`
+    (46) and `SYS_recvmsg` (47) in the kernel, with `SCM_RIGHTS`;
+    `getsockopt(SO_PEERCRED)` returns the peer's pid. Constants `SO_PEERCRED`,
+    `SCM_RIGHTS`, `SCM_CREDENTIALS`, `MSG_CTRUNC`, `MSG_CMSG_CLOEXEC`,
+    `SOCKADDR_UN_MAX`. `Kernel.socketPaths`: socket files stat as `S_IFSOCK`.
+    Layouts in [NETWORKING.md](NETWORKING.md).
+  - `ioctl(FIONBIO)` succeeds on every file (it only sets `O_NONBLOCK`).
+  - `link(2)` copies report the source's inode number.
+
 - **2026-10-08 (unix/compat-tools)**
   - **New syscalls:** `SYS_shiro_vfork` (1010) creates a child process with
     nothing running in it (fd table forked, signal state copied); the

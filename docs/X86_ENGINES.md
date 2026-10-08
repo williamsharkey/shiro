@@ -213,6 +213,9 @@ in the test when `go`/`gcc` exist.
    uses it, so bat's compressed themes failed to load).
 17. `futex` `FUTEX_WAIT_BITSET` (absolute timeout) and `FUTEX_WAKE_BITSET`,
    `getrandom(GRND_INSECURE)`: Rust's std uses both.
+18. Shiro `sendmsg`/`recvmsg` carry control data (`SCM_RIGHTS`) through the
+   kernel's `SYS_sendmsg`/`SYS_recvmsg`; `sockaddr_un` lengths;
+   `SO_PEERCRED` fills a `struct ucred`.
 
 Native Blink's own exit path (`KillOtherThreads`) still hangs after
 multi-threaded Go programs; the wasm build doesn't use it.

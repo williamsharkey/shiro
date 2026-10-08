@@ -1,0 +1,115 @@
+From a4c693a52fdc4ea5fcbcfc00e6c6f057a07a08f5 Mon Sep 17 00:00:00 2001
+From: Shiro <shiro@localhost>
+Date: Thu, 8 Oct 2026 21:03:06 +0000
+Subject: [PATCH] emscripten: Shiro sendmsg/recvmsg pass control data
+ (SCM_RIGHTS), sockaddr_un lengths, SO_PEERCRED
+
+---
+ blink/shiro.inc | 49 +++++++++++++++++++++++++++++++++++++++++--------
+ 1 file changed, 41 insertions(+), 8 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 57014fc..666ee98 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -510,7 +510,15 @@ static int ShiroAddrLen(const u8 *sa) {
+   switch (Read16(sa)) {
+     case 2: return 16;   // AF_INET
+     case 10: return 28;  // AF_INET6
+-    case 1: return 2;    // AF_UNIX (unnamed)
++    case 1: {            // AF_UNIX: unnamed, a NUL-terminated path, or an abstract name
++      int n;
++      if (!sa[2]) {
++        for (n = 3; n < 110 && sa[n]; ++n) {}
++        return n == 3 ? 2 : n;
++      }
++      for (n = 2; n < 110 && sa[n]; ++n) {}
++      return n < 110 ? n + 1 : 110;
++    }
+     default: return 0;
+   }
+ }
+@@ -547,7 +555,7 @@ static i64 ShiroSockName(struct Machine *m, int nr, int fd, i64 addr, i64 lenp)
+   u8 buf[128];
+   i64 r;
+   memset(buf, 0, sizeof(buf));
+-  r = ShiroCall(m, nr, A12(fd), buf, 0, 28, false, false);
++  r = ShiroCall(m, nr, A12(fd), buf, 0, 110, false, false);
+   if (r < 0) return r;
+   return ShiroPutAddr(m, buf, addr, lenp);
+ }
+@@ -580,14 +588,15 @@ static i64 ShiroRecvfrom(struct Machine *m, int fd, i64 data, u64 len,
+ static i64 ShiroMsg(struct Machine *m, bool send, int fd, i64 msg, int flags) {
+   u8 *hdr, *iov;
+   i64 total = 0, r;
+-  u64 i, iovlen;
++  u64 i, iovlen, clen, ccap = 0;
+   u8 *buf;
+   if (!(hdr = (u8 *)SchlepRW(m, msg, 56))) return -EFAULT_LINUX;
+   iovlen = Read64(hdr + 24);
+   if (iovlen > 1024) return -EMSGSIZE_LINUX;
+   if (!(iov = (u8 *)SchlepR(m, Read64(hdr + 16), iovlen * 16))) return -EFAULT_LINUX;
+   for (i = 0; i < iovlen; ++i) total += Read64(iov + i * 16 + 8);
+-  if (total > g_shiro_chunk - 128) total = g_shiro_chunk - 128;
++  // room in the kernel channel for the address and up to 1 KiB of control data
++  if (total > g_shiro_chunk - 128 - 1024 - 36) total = g_shiro_chunk - 128 - 1024 - 36;
+   buf = (u8 *)ShiroAlloc(m, total + 128);
+   if (send) {
+     i64 off = 0;
+@@ -603,9 +612,22 @@ static i64 ShiroMsg(struct Machine *m, bool send, int fd, i64 msg, int flags) {
+     } else {
+       alen = 0;
+     }
+-    return ShiroCall(m, 44, A12(fd, (int)total, flags, (int)alen), buf, total + alen, 0, true, true);
++    // control messages (SCM_RIGHTS) follow the address
++    clen = Read64(hdr + 40);
++    if (!Read64(hdr + 32)) clen = 0;
++    if (clen > 1024) return -ENOBUFS_LINUX;
++    if (clen) {
++      u8 *b2 = (u8 *)ShiroAlloc(m, total + alen + clen);
++      memcpy(b2, buf, total + alen);
++      buf = b2;
++      if (CopyFromUserRead(m, buf + total + alen, Read64(hdr + 32), clen) == -1) return -EFAULT_LINUX;
++    }
++    return ShiroCall(m, 46, A12(fd, (int)total, flags, (int)alen, (int)clen), buf, total + alen + clen, 0, true, true);
+   }
+-  r = ShiroCall(m, 45, A12(fd, (int)total, flags), buf, 0, total + 28, true, true);
++  ccap = Read64(hdr + 32) ? Read64(hdr + 40) : 0;
++  if (ccap > 1024) ccap = 1024;
++  buf = (u8 *)ShiroAlloc(m, total + 28 + 8 + ccap);
++  r = ShiroCall(m, 47, A12(fd, (int)total, flags, (int)ccap), buf, 0, total + 28 + 8 + ccap, true, true);
+   if (r < 0) return r;
+   {
+     i64 off = 0;
+@@ -620,8 +642,13 @@ static i64 ShiroMsg(struct Machine *m, bool send, int fd, i64 msg, int flags) {
+     CopyToUserWrite(m, Read64(hdr), buf + total, MIN(cap, n));
+     Write32(hdr + 8, n);
+   }
+-  Write64(hdr + 40, 0);  // no ancillary data
+-  Write32(hdr + 48, 0);
++  {
++    u32 got = Read32(buf + total + 28), mflags = Read32(buf + total + 32);
++    if (got > ccap) got = ccap;
++    if (got && CopyToUserWrite(m, Read64(hdr + 32), buf + total + 36, got) == -1) return -EFAULT_LINUX;
++    Write64(hdr + 40, got);
++    Write32(hdr + 48, mflags);
++  }
+   return r;
+ }
+ 
+@@ -656,6 +683,12 @@ static i64 ShiroGetsockopt(struct Machine *m, int fd, int level, int name,
+     Write64(b + 8, r % 1000 * 1000);
+     CopyToUserWrite(m, val, b, MIN(cap, 16));
+     Write32(lp, 16);
++  } else if (level == 1 && name == 17) {  // SO_PEERCRED: struct ucred
++    Write32(b, r);
++    Write32(b + 4, KS(m, 102, A12(0)));
++    Write32(b + 8, KS(m, 104, A12(0)));
++    CopyToUserWrite(m, val, b, MIN(cap, 12));
++    Write32(lp, 12);
+   } else {
+     Write32(b, r);
+     CopyToUserWrite(m, val, b, MIN(cap, 4));
+-- 
+2.43.0
+

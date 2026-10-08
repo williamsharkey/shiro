@@ -100,6 +100,8 @@ function shellQuote(s: string): string {
 
 export class Kernel {
   fs?: FileSystem;
+  /** Paths of AF_UNIX socket files (net.ts bind); they stat as sockets. */
+  socketPaths?: Set<string>;
   /** The page's shell: builtins run in forks of it. */
   shell?: Shell;
   readonly procs = new Map<number, Process>();
@@ -542,9 +544,10 @@ export class Kernel {
     if (!fs) return -A.ENOSYS;
     try {
       const st = follow ? await fs.stat(p) : await fs.lstat(p);
-      const type = st.isDirectory() ? A.S_IFDIR : st.isSymbolicLink() ? A.S_IFLNK : A.S_IFREG;
+      let type = st.isDirectory() ? A.S_IFDIR : st.isSymbolicLink() ? A.S_IFLNK : A.S_IFREG;
       // The same file through a symlink is the same inode; an open file may have unflushed writes
       const real = follow && type !== A.S_IFDIR ? await fs.realpath(p).catch(() => p) : p;
+      if (type === A.S_IFREG && this.socketPaths?.has(real)) type = A.S_IFSOCK;
       const open = type === A.S_IFREG ? openInodeInfo(fs, real) : undefined;
       const size = open?.size ?? st.size;
       const mtimeMs = open?.mtimeMs ?? st.mtime.getTime();
@@ -1101,6 +1104,7 @@ export class Kernel {
           moved();
           shareInodeNumber(from, to);
           forgetInodeNumber(from);
+          if (this.socketPaths?.delete(from)) this.socketPaths.add(to);
           return 0;
         }
         case A.SYS_mkdir:
@@ -1127,7 +1131,7 @@ export class Kernel {
           if (!rmdir && isDir) return -A.EISDIR;
           if (rmdir && !isDir) return -A.ENOTDIR;
           if (isDir) await fs().rmdir(p);
-          else { await unlinkInode(fs(), p); await fs().unlink(p); forgetInodeNumber(p); }
+          else { await unlinkInode(fs(), p); await fs().unlink(p); forgetInodeNumber(p); this.socketPaths?.delete(p); }
           return 0;
         }
         case A.SYS_symlink:

@@ -347,3 +347,13 @@ describe('Blink engine: CPU and syscall fixes', () => {
     expect(r.output.replace(/\r\n/g, '\n')).toBe('pextrw 0xfffe\nmadvise 0 0 0\nfutex_wait_bitset timedout on time\nfutex_wake_bitset 0\ngetrandom 16\n');
   }, 60_000);
 });
+
+// AF_UNIX path sockets with SCM_RIGHTS through Blink's sendmsg/recvmsg (tmux, screen).
+describe('Blink engine: AF_UNIX sockets', () => {
+  it('a server and a forked client talk over a path socket and pass an fd', async () => {
+    const { shell } = await setup(readFileSync(join(FIX, 'unix-musl')));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe("server: 2 bytes 'hi' fd ok peercred ok socket file ok\nclient: via the passed fd\n");
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+});

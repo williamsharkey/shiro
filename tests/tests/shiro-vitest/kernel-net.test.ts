@@ -644,3 +644,127 @@ describe('sockets in the kernel: registerSyscalls, epoll, SIGPIPE', () => {
     expect(await sc(233, BigInt(ep), 1n, 0n, EV)).toBe(-1); // stdin is not a kernel file: EPERM
   });
 });
+
+describe('AF_UNIX path sockets and SCM_RIGHTS (tmux, screen)', () => {
+  it('bind makes a socket file; connect/accept by path; fds pass with SCM_RIGHTS; SO_PEERCRED', async () => {
+    const A = await import('@shiro/kernel/abi');
+    const { Kernel } = await import('@shiro/kernel/kernel');
+    const { installNet } = await import('@shiro/kernel/net');
+    const { createTestShell } = await import('./helpers');
+    const { fs, shell } = await createTestShell();
+    await fs.mkdir('/tmp/tmux-1000', { recursive: true });
+    const kernel = new Kernel({ fs, shell, registerWithProcessTable: false });
+    const stack = new NetStack();
+    stack.configure({ relayUrl: null, tokenUrl: null, dohUrl: null, portHost: null });
+    const off = installNet(kernel, stack);
+    const server = kernel.spawn({ path: 'srv', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
+    const client = kernel.spawn({ path: 'cli', cwd: '/tmp/tmux-1000', fds: {}, run: () => new Promise<number>(() => {}) });
+    const data = new Uint8Array(4096);
+    const dv = new DataView(data.buffer);
+    const sys = (p: typeof server, nr: number, args: number[]) => kernel.syscall(p, nr, args, data);
+    const un = (path: string) => encodeSockaddr({ family: A.AF_UNIX, address: path, port: 0 });
+
+    const l = await sys(server, A.SYS_socket, [A.AF_UNIX, A.SOCK_STREAM | A.SOCK_CLOEXEC, 0]);
+    expect(l).toBeGreaterThanOrEqual(0);
+    let sa = un('tmux-1000/default'); // relative to the server's cwd
+    data.set(sa);
+    expect(await sys(server, A.SYS_bind, [l, sa.length])).toBe(0);
+    expect(await sys(server, A.SYS_bind, [l, sa.length])).toBe(-A.EINVAL);
+    const st = await kernel.statPath(server, '/tmp/tmux-1000/default');
+    expect(typeof st !== 'number' && (st.mode & A.S_IFMT)).toBe(A.S_IFSOCK);
+
+    // nobody listening yet: ECONNREFUSED; a missing path: ENOENT
+    const c = await sys(client, A.SYS_socket, [A.AF_UNIX, A.SOCK_STREAM, 0]);
+    sa = un('default');
+    data.set(sa);
+    expect(await sys(client, A.SYS_connect, [c, sa.length])).toBe(-A.ECONNREFUSED);
+    expect(await sys(server, A.SYS_listen, [l, 8])).toBe(0);
+    sa = un('/tmp/tmux-1000/nope');
+    data.set(sa);
+    expect(await sys(client, A.SYS_connect, [c, sa.length])).toBe(-A.ENOENT);
+    sa = un('default');
+    data.set(sa);
+    expect(await sys(client, A.SYS_connect, [c, sa.length])).toBe(0);
+    const a = await sys(server, A.SYS_accept4, [l, A.SOCK_CLOEXEC]);
+    expect(a).toBeGreaterThanOrEqual(0);
+    // a second bind of the path while the file exists
+    const l2 = await sys(server, A.SYS_socket, [A.AF_UNIX, A.SOCK_STREAM, 0]);
+    sa = un('/tmp/tmux-1000/default');
+    data.set(sa);
+    expect(await sys(server, A.SYS_bind, [l2, sa.length])).toBe(-A.EADDRINUSE);
+
+    // getsockname / getpeername / SO_PEERCRED
+    let n = await sys(server, A.SYS_getsockname, [l]);
+    expect(dec.decode(data.subarray(2, n - 1))).toBe('tmux-1000/default');
+    n = await sys(client, A.SYS_getpeername, [c]);
+    expect(dec.decode(data.subarray(2, n - 1))).toBe('tmux-1000/default');
+    expect(await sys(client, A.SYS_getsockopt, [c, A.SOL_SOCKET, A.SO_PEERCRED])).toBe(server.pid);
+    expect(await sys(server, A.SYS_getsockopt, [a, A.SOL_SOCKET, A.SO_PEERCRED])).toBe(client.pid);
+
+    // the client passes the write end of a pipe; the server writes into it
+    expect(await sys(client, A.SYS_pipe2, [0])).toBe(0);
+    const [pr, pw] = [dv.getInt32(0, true), dv.getInt32(4, true)];
+    data.set(enc.encode('id'));
+    const cmsg = 2;
+    dv.setBigUint64(cmsg, 20n, true);
+    dv.setInt32(cmsg + 8, A.SOL_SOCKET, true);
+    dv.setInt32(cmsg + 12, A.SCM_RIGHTS, true);
+    dv.setInt32(cmsg + 16, pw, true);
+    expect(await sys(client, A.SYS_sendmsg, [c, 2, 0, 0, 24])).toBe(2);
+    expect(await sys(client, A.SYS_close, [pw])).toBe(0); // the message holds its own reference
+    data.set(enc.encode('more'));
+    expect(await sys(client, A.SYS_sendto, [c, 4, 0, 0])).toBe(4);
+    data.fill(0);
+    // descriptions end a message: "id" comes alone, with the fd
+    n = await sys(server, A.SYS_recvmsg, [a, 64, A.MSG_CMSG_CLOEXEC, 64]);
+    expect(n).toBe(2);
+    expect(dec.decode(data.subarray(0, 2))).toBe('id');
+    const meta = 64 + A.SOCKADDR_ROOM;
+    expect(dv.getUint32(meta, true)).toBe(24); // CMSG_SPACE(4)
+    expect(dv.getUint32(meta + 4, true)).toBe(0);
+    expect(Number(dv.getBigUint64(meta + 8, true))).toBe(20);
+    expect(dv.getInt32(meta + 16, true)).toBe(A.SOL_SOCKET);
+    expect(dv.getInt32(meta + 20, true)).toBe(A.SCM_RIGHTS);
+    const got = dv.getInt32(meta + 24, true);
+    expect(server.fds.getCloexec(got)).toBe(true);
+    expect(await sys(server, A.SYS_recvfrom, [a, 64, 0])).toBe(4);
+    data.set(enc.encode('hello through a passed fd'));
+    expect(await sys(server, A.SYS_write, [got, 25])).toBe(25);
+    expect(await sys(server, A.SYS_close, [got])).toBe(0);
+    data.fill(0);
+    expect(await sys(client, A.SYS_read, [pr, 64])).toBe(25);
+    expect(dec.decode(data.subarray(0, 25))).toBe('hello through a passed fd');
+    expect(await sys(client, A.SYS_read, [pr, 64])).toBe(0); // every write end closed
+
+    // too small a control buffer: MSG_CTRUNC, the fd is closed
+    expect(await sys(client, A.SYS_pipe2, [0])).toBe(0);
+    const pw2 = dv.getInt32(4, true);
+    data.set(enc.encode('x'));
+    dv.setBigUint64(1, 20n, true); dv.setInt32(9, A.SOL_SOCKET, true); dv.setInt32(13, A.SCM_RIGHTS, true); dv.setInt32(17, pw2, true);
+    expect(await sys(client, A.SYS_sendmsg, [c, 1, 0, 0, 24])).toBe(1);
+    expect(await sys(server, A.SYS_recvmsg, [a, 64, 0, 0])).toBe(1);
+    expect(dv.getUint32(meta + 4, true)).toBe(A.MSG_CTRUNC);
+    expect(client.fds.has(pw2)).toBe(true); // the sender's own fd stays open
+
+    // unlink: connect sees ENOENT; closing the listener: ECONNREFUSED on a new file
+    expect(await sys(server, A.SYS_close, [l])).toBe(0);
+    const c2 = await sys(client, A.SYS_socket, [A.AF_UNIX, A.SOCK_STREAM, 0]);
+    sa = un('/tmp/tmux-1000/default');
+    data.set(sa);
+    expect(await sys(client, A.SYS_connect, [c2, sa.length])).toBe(-A.ECONNREFUSED);
+    data.set(enc.encode('/tmp/tmux-1000/default\0'));
+    expect(await sys(server, A.SYS_unlink, [22])).toBe(0);
+    expect(await fs.exists('/tmp/tmux-1000/default')).toBe(false);
+    data.set(sa);
+    expect(await sys(client, A.SYS_connect, [c2, sa.length])).toBe(-A.ENOENT);
+
+    // abstract names live outside the filesystem
+    const l3 = await sys(server, A.SYS_socket, [A.AF_UNIX, A.SOCK_STREAM, 0]);
+    sa = un('\0shiro-abstract');
+    data.set(sa);
+    expect(await sys(server, A.SYS_bind, [l3, sa.length])).toBe(0);
+    expect(await sys(server, A.SYS_listen, [l3, 1])).toBe(0);
+    expect(await sys(client, A.SYS_connect, [c2, sa.length])).toBe(0);
+    off();
+  });
+});
