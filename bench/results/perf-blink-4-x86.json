@@ -1,0 +1,328 @@
+{
+ "format": 1,
+ "env": {
+  "date": "2026-10-08T22:02:16.934Z",
+  "git": {
+   "sha": "33b8e9edd426dcc31ee57a4a461ab886c37c0e1e",
+   "short": "33b8e9e",
+   "branch": "unix/perf-blink",
+   "dirty": true
+  },
+  "node": "v22.22.0",
+  "chromium": "141.0.7390.37",
+  "os": "Linux 6.18.44-fc-v80 x64",
+  "cpu": {
+   "model": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+   "count": 4
+  },
+  "memoryGiB": 15.7,
+  "quick": false,
+  "runs": 3,
+  "durationSec": 36,
+  "netcache": {
+   "hits": 1,
+   "misses": 0,
+   "failed": 0
+  }
+ },
+ "results": [
+  {
+   "name": "x86.blink.hello_musl",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 120.1,
+   "p90": 145.7,
+   "min": 107.2,
+   "max": 145.7,
+   "n": 3,
+   "samples": [
+    120.1,
+    107.2,
+    145.7
+   ],
+   "notes": "`./hello-musl` wall time at the prompt; first run 199 ms"
+  },
+  {
+   "name": "x86.blink.peak_rss.hello_musl",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 15.3,
+   "p90": 18.96,
+   "min": 7.504,
+   "max": 18.96,
+   "n": 3,
+   "samples": [
+    7.504,
+    15.3,
+    18.96
+   ],
+   "notes": "renderer RSS peak above the pre-run level"
+  },
+  {
+   "name": "x86.blink.hello_glibc",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 127.6,
+   "p90": 134.5,
+   "min": 121.6,
+   "max": 134.5,
+   "n": 3,
+   "samples": [
+    127.6,
+    121.6,
+    134.5
+   ],
+   "notes": "`./hello-glibc` wall time at the prompt; first run 169 ms"
+  },
+  {
+   "name": "x86.blink.peak_rss.hello_glibc",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 18.27,
+   "p90": 19.08,
+   "min": 15.53,
+   "max": 19.08,
+   "n": 3,
+   "samples": [
+    15.53,
+    19.08,
+    18.27
+   ],
+   "notes": "renderer RSS peak above the pre-run level"
+  },
+  {
+   "name": "x86.blink.go_hello",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 232.2,
+   "p90": 254.2,
+   "min": 219.1,
+   "max": 254.2,
+   "n": 3,
+   "samples": [
+    219.1,
+    232.2,
+    254.2
+   ],
+   "notes": "`./hello-go a b` wall time at the prompt; first run 254 ms"
+  },
+  {
+   "name": "x86.blink.peak_rss.go_hello",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 24.5,
+   "p90": 27.63,
+   "min": 23.99,
+   "max": 27.63,
+   "n": 3,
+   "samples": [
+    24.5,
+    23.99,
+    27.63
+   ],
+   "notes": "renderer RSS peak above the pre-run level"
+  },
+  {
+   "name": "x86.blink.go_cpuloop_5m",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 236.2,
+   "p90": 264.2,
+   "min": 209.5,
+   "max": 264.2,
+   "n": 3,
+   "samples": [
+    236.2,
+    264.2,
+    209.5
+   ],
+   "notes": "`./cpuloop 5000000` wall time at the prompt; first run 257 ms; in-guest loop 19 ms"
+  },
+  {
+   "name": "x86.blink.peak_rss.go_cpuloop_5m",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 16.58,
+   "p90": 18.87,
+   "min": 13.19,
+   "max": 18.87,
+   "n": 3,
+   "samples": [
+    13.19,
+    16.58,
+    18.87
+   ],
+   "notes": "renderer RSS peak above the pre-run level"
+  },
+  {
+   "name": "x86.blink.go_nethttp",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 401,
+   "p90": 453.8,
+   "min": 342,
+   "max": 453.8,
+   "n": 3,
+   "samples": [
+    453.8,
+    401,
+    342
+   ],
+   "notes": "`./nethttp` wall time at the prompt; first run 564 ms"
+  },
+  {
+   "name": "x86.blink.peak_rss.go_nethttp",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 26.23,
+   "p90": 45.98,
+   "min": 23.6,
+   "max": 45.98,
+   "n": 3,
+   "samples": [
+    45.98,
+    23.6,
+    26.23
+   ],
+   "notes": "renderer RSS peak above the pre-run level"
+  },
+  {
+   "name": "x86.blink.gh_version",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 2704,
+   "p90": 2737,
+   "min": 2689,
+   "max": 2737,
+   "n": 3,
+   "samples": [
+    2737,
+    2689,
+    2704
+   ],
+   "notes": "`./gh --version` wall time at the prompt; first run 5863 ms"
+  },
+  {
+   "name": "x86.blink.peak_rss.gh_version",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 156.1,
+   "p90": 166.4,
+   "min": 155.1,
+   "max": 166.4,
+   "n": 3,
+   "samples": [
+    166.4,
+    155.1,
+    156.1
+   ],
+   "notes": "renderer RSS peak above the pre-run level"
+  },
+  {
+   "name": "x86.x86.hello_musl",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 19.61,
+   "p90": 21.46,
+   "min": 15.75,
+   "max": 21.46,
+   "n": 3,
+   "samples": [
+    19.61,
+    21.46,
+    15.75
+   ],
+   "notes": "`SHIRO_X86_ENGINE=x86 ./hello-musl` wall time at the prompt; first run 33 ms"
+  },
+  {
+   "name": "x86.x86.peak_rss.hello_musl",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 0.074,
+   "p90": 1.918,
+   "min": 0,
+   "max": 1.918,
+   "n": 3,
+   "samples": [
+    1.918,
+    0,
+    0.074
+   ],
+   "notes": "renderer RSS peak above the pre-run level"
+  },
+  {
+   "name": "x86.x86.hello_glibc",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": null,
+   "p90": null,
+   "n": 0,
+   "samples": [],
+   "notes": "failed: exit 1: shiro: /home/user/x/hello-glibc: Unknown two-byte opcode: 0F 62 at 0x4031a3",
+   "error": true
+  },
+  {
+   "name": "x86.x86.go_hello",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": null,
+   "p90": null,
+   "n": 0,
+   "samples": [],
+   "notes": "failed: exit 2: fatal error: float64nan",
+   "error": true
+  },
+  {
+   "name": "x86.x86.go_cpuloop_5m",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": null,
+   "p90": null,
+   "n": 0,
+   "samples": [],
+   "notes": "failed: exit 2: fatal error: float64nan",
+   "error": true
+  },
+  {
+   "name": "x86.x86.go_nethttp",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": null,
+   "p90": null,
+   "n": 0,
+   "samples": [],
+   "notes": "failed: exit 2: fatal error: float64nan",
+   "error": true
+  },
+  {
+   "name": "x86.x86.gh_version",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": null,
+   "p90": null,
+   "n": 0,
+   "samples": [],
+   "notes": "not attempted on src/x86 (Go)",
+   "error": true
+  }
+ ]
+}

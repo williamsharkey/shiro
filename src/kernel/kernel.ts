@@ -1513,6 +1513,17 @@ export class Kernel {
     return child;
   }
 
+  /**
+   * Starts `run` in a child made by vfork() that has nothing running yet:
+   * a real fork, whose engine copied the parent's memory into the child
+   * (Blink patch 0014).
+   */
+  startEmbryo(proc: Process, run: Runner): void {
+    if (!proc.data.embryo || proc.exiting) return;
+    delete proc.data.embryo;
+    void this.start(proc, run);
+  }
+
   /** SYS_shiro_execve (see abi.ts). */
   private async sysExecve(proc: Process, req: { path: string; argv?: string[]; env?: string[]; inproc?: boolean }, data: Uint8Array): Promise<number> {
     if (!req || typeof req.path !== 'string' || !req.path) return -A.ENOENT;
