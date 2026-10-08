@@ -5,3 +5,5 @@ dist/
 .DS_Store
 claude-code-pkg/
 probe.jsonl
+tests/.pkg-cache/
+.pkgbuild/
