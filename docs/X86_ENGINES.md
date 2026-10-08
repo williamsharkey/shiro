@@ -285,7 +285,7 @@ target), ~770 regions compiled ≈0.35 s.
    fd N is kernel fd N. `vfork`/`clone(CLONE_VFORK)` run the child on
    the calling thread until it calls `execve` or `_exit` (vfork semantics; the
    kernel creates the child with `SYS_shiro_vfork`). `fork` worked the same
-   way until patch 13. `execve` goes through `SYS_shiro_execve`: an ELF is reloaded
+   way until patch 14. `execve` goes through `SYS_shiro_execve`: an ELF is reloaded
    in this Blink, anything else (WASM, scripts, Shiro builtins like
    `/bin/sh`) replaces the worker in the same process. `rt_sigaction`
    mirrors the guest's dispositions into the kernel (caught signals are
@@ -296,20 +296,32 @@ target), ~770 regions compiled ≈0.35 s.
    transfer) and the tty ioctls (`TIOCSCTTY`, `TIOCGPTN`, ...) are covered;
    locks (`fcntl F_SETLK`, `flock`) always succeed.
 12. The wasm JIT (`blink/wjit.c`), described above.
-13. A real `fork()` (and `clone()` without `CLONE_VM`): the guest is written
-   out as an image (registers, signal state, brk, every mapped page with its
-   protection and contents; untouched anonymous pages without contents, so
-   Go's reserved arenas cost nothing), handed to the page through
-   `shiro_fork()`; `src/x86-engine/blink.ts` makes the child with
-   `kernel.vfork()` (a copy of the fd table) and starts a Blink for it that
-   loads the program, replaces its memory with the image and returns 0 from
-   fork (`CLONE_CHILD_SETTID`/`CLEARTID` honored). Before, the child ran on
-   the parent's thread and memory, so code between fork and exec changed the
-   parent and a child that never exec'd broke it (perl's `fork; open STDOUT,
-   ">&W"; exec`, IPC::Open3 and `prove` got no output). Only the calling
-   thread exists in the child, as on Linux; a `MAP_SHARED` file mapping
-   becomes a private copy in the child. Tests: `fixtures/x86/fork.c` in
-   `x86-engine.test.ts`, the perl cases in `compat-dev.test.ts`.
+13. Under Shiro a stop signal's default action stops the process.
+14. A real `fork()` (and `clone()` without `CLONE_VM`): the process is
+   snapshotted (every mapped page, untouched anonymous pages without
+   contents and untouched file pages faulted in; the forking thread's
+   registers; the signal table; brk/automap; the ELF info), the kernel makes
+   the child (`SYS_shiro_vfork`, a copy of the fd table) and host.mjs hands
+   the snapshot to the page, which starts a Blink worker for the child that
+   rebuilds it and returns 0 from fork. Before, the child ran on the
+   parent's thread and memory, so code between fork and exec changed the
+   parent and a child that never exec'd broke it (perl's `fork; open
+   STDOUT, ">&W"; exec`, IPC::Open3 and `prove` got no output). vfork and
+   `CLONE_VFORK` keep running the child on the calling thread. Only the
+   calling thread exists in the child; a `MAP_SHARED` file mapping becomes
+   a private copy. Tests: `fixtures/x86/fork.c` (fork-musl) and
+   `forkcopy.c` in `x86-engine.test.ts`, the perl cases in
+   `compat-dev.test.ts`.
+15. File mmap of a kernel fd no longer takes `mmap_lock` twice (it
+   deadlocked every such mmap).
+16. `madvise(MADV_DONTNEED)` zeroes private anonymous pages (jemalloc).
+17. `pextrw` zero-extends into the whole destination register.
+18. `FUTEX_WAIT_BITSET`/`FUTEX_WAKE_BITSET`; `getrandom(GRND_INSECURE)`.
+19. sendmsg/recvmsg pass control data (`SCM_RIGHTS`), `sockaddr_un`
+   lengths, `SO_PEERCRED`.
+
+Patches 13 and 15–19 come from unix/compat-tools (15 also from
+unix/conformance); this branch is where the series is kept now.
 
 Native Blink's own exit path (`KillOtherThreads`) still hangs after
 multi-threaded Go programs; the wasm build doesn't use it.

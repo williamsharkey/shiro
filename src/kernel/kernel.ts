@@ -1514,12 +1514,14 @@ export class Kernel {
   }
 
   /**
-   * Starts `runner` in a child made by vfork() that has nothing running yet:
-   * a real fork, whose engine copied the parent's memory into the child.
+   * Starts `run` in a child made by vfork() that has nothing running yet:
+   * a real fork, whose engine copied the parent's memory into the child
+   * (Blink patch 0014).
    */
-  startEmbryo(child: Process, runner: Runner): void {
-    delete child.data.embryo;
-    void this.start(child, runner);
+  startEmbryo(proc: Process, run: Runner): void {
+    if (!proc.data.embryo || proc.exiting) return;
+    delete proc.data.embryo;
+    void this.start(proc, run);
   }
 
   /** SYS_shiro_execve (see abi.ts). */

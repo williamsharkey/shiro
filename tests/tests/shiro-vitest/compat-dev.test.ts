@@ -666,7 +666,7 @@ describe('perl (x86-64 in Blink)', () => {
     expect(r.out).toBe('got: from child\nrc=0\n');
   }, 300_000);
 
-  // fork() is a real copy (Blink patch 0013): code between fork and exec
+  // fork() is a real copy (Blink patch 0014): code between fork and exec
   // used to run on the parent's memory, and a fork without exec broke it
   it('fork: a child that dups a pipe onto stdout and execs; fork without exec', async () => {
     let r = await sh(shell, `perl -e 'pipe R,W; if(!fork){close R; open STDOUT,">&W"; exec "perl","-e","print 1"} close W; print <R>'`);

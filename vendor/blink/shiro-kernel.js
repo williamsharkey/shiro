@@ -28,15 +28,13 @@ var ShiroKernelLibrary = {
     });
   },
 
-  // fork(): hand the guest's image (Blink patch 0013) to the page, which
-  // makes the child process and starts a Blink that loads it. Returns the
-  // child's pid or -errno.
-  shiro_fork__proxy: 'sync',
-  shiro_fork__async: 'auto',
-  shiro_fork: (ptr, len) => {
+  // fork(): hand the process snapshot (blink/shiro.inc) to the page, which
+  // starts it in a new worker as `pid`
+  shiro_fork_start__proxy: 'sync',
+  shiro_fork_start: (pid, ptr, len) => {
     var K = Module['shiroKernel'];
     if (!K || !K.fork) return -38; // ENOSYS
-    return K.fork(HEAPU8.slice(ptr, ptr + len));
+    return K.fork(pid, HEAPU8.slice(ptr, ptr + len));
   },
 };
 

@@ -486,12 +486,8 @@ async function run(msg) {
       const sig = Atomics.exchange(ch.i32, CH_SIGNAL, 0);
       const done = ch.done;
       ch.done = null;
-      if (debug) console.error(`[blink] ksys ${ch.i32[CH_SYSNO]} = ${r}`);
+      if (debug) console.error(`[blink] ksys ${ch.i32[CH_SYSNO]}(${Array.from(ch.i32.subarray(CH_ARGS + 1, CH_ARGS + 4)).join(',')}) = ${r}`);
       done?.({ r, hi, sig });
-    } else if (m.type === 'blink-forked') {
-      const resolve = forkWaiters.get(m.id);
-      forkWaiters.delete(m.id);
-      resolve?.(m.pid);
     } else if (m.type === 'blink-signal' && !exiting) {
       // The kernel signalled us: any syscall reply carries the signal word.
       sys(SYS.getpid);
@@ -514,18 +510,14 @@ async function run(msg) {
       if (sig <= 32) ignLo |= 1 << (sig - 1); else ignHi |= 1 << (sig - 33);
     }
   }
-  // fork(): the page makes the child and answers 'blink-forked'
-  let forkSeq = 0;
-  const forkWaiters = new Map();
-  const fork = (image) => new Promise((resolve) => {
-    const id = ++forkSeq;
-    forkWaiters.set(id, resolve);
-    port.postMessage({ type: 'blink-fork', id, image: image.buffer }, [image.buffer]);
-  });
   const kernel = {
     sys,
     call,
-    fork,
+    // fork(): the page starts the snapshot as the kernel's child `pid`
+    fork(pid, bytes) {
+      port.postMessage({ type: 'blink-fork', pid, snapshot: bytes.buffer }, [bytes.buffer]);
+      return 0;
+    },
     get data() { return data; },
     poll: (kfd, events, timeoutMs = 0) => pollFd(kfd, events, timeoutMs),
     watch(kfd, node) { watched.set(kfd, node); post({ type: 'blink-watch', fd: kfd }); },
@@ -570,13 +562,18 @@ async function run(msg) {
     });
     blinkModule = M;
     if (pool.length) M._blink_shiro_enable(msg.pid, chunk, ignLo >>> 0, ignHi >>> 0);
-    if (msg.forkImage) {
-      // a fork child: Blink loads the program, then the parent's image over it
-      const img = new Uint8Array(msg.forkImage);
-      M.HEAPU8.set(img, M._blink_shiro_fork_image(img.length));
+    if (msg.restore) {
+      // This process is a fork(): Blink rebuilds the parent's snapshot instead of loading the program
+      const snap = new Uint8Array(msg.restore);
+      const ptr = M._malloc(snap.length);
+      M.HEAPU8.set(snap, ptr);
+      M._blink_shiro_set_restore(ptr, snap.length);
     }
     const argv = msg.argv && msg.argv.length ? msg.argv : [msg.path];
-    M.callMain([...(msg.debug && msg.env?.SHIRO_BLINK_STRACE ? ['-s', '-e'] : []), '-0', argv[0], msg.path || argv[0], ...argv.slice(1)]);
+    // blink -0 PROGRAM ARGV0 ARGS...: load PROGRAM (the resolved path, never
+    // a PATH search of argv[0]) and give the guest argv[0] as invoked.
+    // Blink's own log goes to the in-memory root, not the guest's cwd.
+    M.callMain([...(msg.debug && msg.env?.SHIRO_BLINK_STRACE ? ['-s', '-e'] : []), '-L', '/blink.log', '-0', msg.path || argv[0], argv[0], ...argv.slice(1)]);
   } catch (e) {
     if (e && e.name === 'ExitStatus') exitGuest(e.status);
     else if (e !== 'unwind') fail(String((e && e.stack) || e), 134);

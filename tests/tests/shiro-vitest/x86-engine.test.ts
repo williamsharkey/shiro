@@ -39,8 +39,8 @@ const haveTty = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', ttyBin,
 const haveGlibc = tryBuild('gcc', ['-static', '-Os', '-o', glibcBin, 'hello.c']);
 const jitBin = join(out, 'jit');
 const haveJit = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', jitBin, 'jit.c']);
-const forkBin = join(out, 'fork');
-const haveFork = tryBuild('gcc', ['-static', '-O1', '-o', forkBin, 'fork.c']);
+const forkBin = join(out, 'forkcopy');
+const haveFork = tryBuild('gcc', ['-static', '-O1', '-o', forkBin, 'forkcopy.c']);
 const fuzzBin = join(out, 'jitfuzz');
 const haveFuzz = tryBuild('gcc', ['-static', '-O1', '-o', fuzzBin, 'jitfuzz.c']);
 
@@ -141,7 +141,7 @@ describe.skipIf(!haveJit || !haveFuzz)('Blink engine: wasm JIT', () => {
   }, 60_000);
 });
 
-// fork() makes a copy of the guest in a new Blink (patch 0013); it used to
+// fork() makes a copy of the guest in a new Blink (patch 0014); it used to
 // run the child on the parent's thread with vfork semantics.
 describe.skipIf(!haveFork)('Blink engine: fork', () => {
   it('gives the child its own memory; a child that never execs exits with its status', async () => {
@@ -397,5 +397,27 @@ describe('Blink engine: kernel processes (fork, exec, pipes)', () => {
     expect((await run(shell, './prog child x | od -c | head -3')).output).toContain('a   r   g   =   x  \\n');
     expect((await run(shell, './prog child y > out.txt 2>/dev/null; echo $?')).output.trim()).toBe('7');
     expect(await fs.readFile('/home/user/work/out.txt', 'utf8')).toMatch(/^child pid=\d+ ppid=\d+ arg=y\n$/);
+  }, 60_000);
+});
+
+// Blink patch 0014: fork() copies the process into a new worker.
+describe('Blink engine: fork() without exec', () => {
+  it('the child gets a copy of memory and runs alongside the parent', async () => {
+    const { shell } = await setup(readFileSync(join(FIX, 'fork-musl')));
+    const r = await run(shell, './prog');
+    expect(r.exitCode).toBe(0);
+    expect(r.output).toMatch(/child: pid=\d+ ppid=\d+ counter=101 heap=heap data/);
+    expect(r.output).toContain('parent: counter=100 heap=heap data child exit=5');
+    expect(r.output).toContain('echo child: HELLO');
+  }, 60_000);
+});
+
+// Blink patches 0016-0018 (jemalloc, Rust's miniz_oxide and std need them).
+describe('Blink engine: CPU and syscall fixes', () => {
+  it('pextrw zero-extends, MADV_DONTNEED zeroes, FUTEX_WAIT_BITSET times out, GRND_INSECURE works', async () => {
+    const { shell } = await setup(readFileSync(join(FIX, 'cpu-musl')));
+    const r = await run(shell, './prog');
+    expect(r.exitCode).toBe(0);
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('pextrw 0xfffe\nmadvise 0 0 0\nfutex_wait_bitset timedout on time\nfutex_wake_bitset 0\ngetrandom 16\n');
   }, 60_000);
 });
