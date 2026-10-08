@@ -6,7 +6,7 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **842/1567 (53.7%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **869/1567 (55.5%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **381/635 (60.0%)** |
 
 How each suite runs, and what is and isn't scored, is described in
@@ -20,7 +20,7 @@ How each suite runs, and what is and isn't scored, is described in
 | comments | 0/2 | 2/2 | 0 |
 | quote | 0/33 | 29/33 | 4 |
 | word-split | 1/53 | 42/53 | 11 |
-| word-eval | 0/8 | 4/8 | 4 |
+| word-eval | 0/8 | 5/8 | 3 |
 | var-sub | 0/6 | 2/6 | 4 |
 | var-sub-quote | 0/41 | 25/41 | 16 |
 | var-op-test | 1/35 | 16/35 | 19 |
@@ -33,22 +33,22 @@ How each suite runs, and what is and isn't scored, is described in
 | arith | 2/71 | 31/71 | 40 |
 | command-sub | 0/28 | 10/28 | 18 |
 | here-doc | 0/32 | 29/32 | 3 |
-| redirect | 3/39 | 13/39 | 26 |
+| redirect | 3/39 | 26/39 | 13 |
 | if_ | 0/5 | 4/5 | 1 |
 | loop | 1/28 | 19/28 | 9 |
-| case_ | 0/13 | 4/13 | 9 |
+| case_ | 0/13 | 12/13 | 1 |
 | sh-func | 0/11 | 10/11 | 1 |
 | func-parsing | 1/12 | 3/12 | 9 |
 | builtin-echo | 0/27 | 24/27 | 3 |
 | builtin-printf | 0/55 | 45/55 | 10 |
 | builtin-read | 0/64 | 26/64 | 38 |
-| builtin-eval-source | 0/23 | 11/23 | 12 |
-| builtin-getopts | 0/30 | 24/30 | 6 |
+| builtin-eval-source | 0/23 | 9/23 | 14 |
+| builtin-getopts | 0/30 | 26/30 | 4 |
 | builtin-trap | 0/33 | 9/33 | 24 |
 | builtin-bracket | 0/50 | 40/50 | 10 |
 | builtin-cd | 3/28 | 14/28 | 14 |
 | builtin-special | 1/12 | 7/12 | 5 |
-| builtin-type | 0/6 | 0/6 | 6 |
+| builtin-type | 0/6 | 1/6 | 5 |
 | builtin-vars | 0/38 | 26/38 | 12 |
 | dbracket | 1/49 | 19/49 | 30 |
 | dparen | 0/14 | 6/14 | 8 |
@@ -66,7 +66,7 @@ How each suite runs, and what is and isn't scored, is described in
 | subshell | 0/2 | 2/2 | 0 |
 | command_ | 2/16 | 7/16 | 9 |
 | posix | 2/15 | 10/15 | 5 |
-| alias | 1/48 | 28/48 | 20 |
+| alias | 1/48 | 29/48 | 19 |
 | let | 0/2 | 1/2 | 1 |
 | empty-bodies | 0/3 | 3/3 | 0 |
 | whitespace | 0/0 | 0/0 | 0 |
@@ -75,7 +75,7 @@ How each suite runs, and what is and isn't scored, is described in
 | regex | 1/37 | 17/37 | 20 |
 | temp-binding | 0/4 | 4/4 | 0 |
 | background | 3/27 | 3/27 | 24 |
-| sh-options | 0/32 | 9/32 | 23 |
+| sh-options | 0/32 | 12/32 | 20 |
 | command-parsing | 0/2 | 2/2 | 0 |
 
 <details><summary>Failing cases</summary>
@@ -83,7 +83,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **smoke**: failed command
 - **quote**: $'' octal escapes don't have leading 0; $'' octal escapes with fewer than 3 chars; $'' supports \cA escape for Ctrl-A - mask with 0x1f; \c' is an escape, unlike bash
 - **word-split**: default value with unquoted IFS char; Empty IFS (regression for bug); Unset IFS (regression for bug); IFS and joining arrays by assignments; IFS='' with ${a[@]} and ${a[*]} (bug #627); Bug #628 split on : with : in literal word; 4 x 3 table - with for loop; IFS=x and '' and $@ (#2); ""$A"" - empty string on both sides - derived from spec/toysh-posix #15; Regression: ${!v} should be split; Regression: "${v:-AxBxC}"x should not be split
-- **word-eval**: Evaluation of each part; Word joining; Default values -- more cases; Globbing escaping
+- **word-eval**: Evaluation of each part; Word joining; Default values -- more cases
 - **var-sub**: Bad var sub; Braced block inside ${}; Descriptor redirect to bad "$@"; Here doc with bad "$@" delimiter
 - **var-sub-quote**: array with empty values; Multiple words: outer double quotes, inner double quotes; Mixed inner quotes with outer quotes; part_value tree on RHS; Multiple words: outer double quotes, inner double quotes; Multiple words: outer double quotes, inner single quotes; Strip a string with single quotes, unquoted; Strip a string with single quotes, double quoted; The string to strip can be single quoted, outer is unquoted; Syntax error for single quote in double quote; "${undef-'c d'}" and "${foo%'c d'}" are parsed differently; $'' allowed within VarSub arguments; # operator with single quoted arg (dash/ash and bash/mksh disagree, reported by Crestwave); / operator with single quoted arg (causes syntax error in regex in OSH, reported by Crestwave); single quotes work inside character classes; Right Brace as argument (similar to #702)
 - **var-op-test**: Lazy Evaluation of Alternative; Unquoted with array as default value; Quoted with array as default value; Assign default with array; "${undefined[@]+foo}" and "${undefined[@]:+foo}", with set -u; Nix idiom ${!hooksSlice+"${!hooksSlice}"} - was workaround for obsolete bash 4.3 bug; array and - and +; $@ (empty) and - and +; $* ("" "") and - and + (IFS=); "$*" ("" "") and - and + (IFS=); assoc array and - and +; array ${arr[0]=x}; assoc array ${arr["k"]=x}; "\z" as arg; op-test for ${a} and ${a[0]}; op-test for ${a[@]} and ${a[*]}; op-test for ${!array} with array="a" and array="a[0]"; op-test for ${!array} with array="a[@]" or array="a[*]"; op-test for unquoted ${a[*]:-empty} with IFS=
@@ -96,22 +96,22 @@ How each suite runs, and what is and isn't scored, is described in
 - **arith**: Side Effect in Array Indexing; Arith sub with word parts; Backticks within arith sub; Integer constant parsing; Integer constant validation; Increment and decrement array elements; Comma operator (borrowed from C); Logical Ops; Logical Ops Short Circuit; Bitwise ops; Unary minus and plus; No floating point; Array indexing in arith; Constants in base 36; Constants in bases 2 to 64; Multiple digit constants with base N; Dynamic base constants; Octal constant; Dynamic octal constant; Dynamic hex constants; Hex constant with capital X; Recursive name evaluation is a result of runtime parse/eval; 64-bit integer doesn't overflow; Invalid LValue that looks like array; Negative exponent; Comment not allowed in the middle of multiline arithmetic; Add integer to indexed array (a[0] decay); Add integer to associative array (a[0] decay); Double subscript; result of ArithSub -- array[0] decay; comma operator; array assignment with dynamic array name; unary array assignment with dynamic var name; Dynamic parsing of arithmetic; 1 ? a=1 : b=2 ( bug fix); Invalid constant; Negative numbers with bit shift; s[0] with string abc; s[0] with string 42; s[0] with string '12 34'
 - **command-sub**: case in subshell; Backtick 2; Nested backticks; Making keyword out of command sub should NOT work; Command sub with here doc; Double Quotes in Command Sub in Double Quotes; Escaped quote in [[ ]]; Quoting $ within ``; Quoting $ within `` within double quotes; Quoting \ within ``; Quoting \ within `` within double quotes; Quoting ( within ``; Quoting ( within `` within double quotes; Quoting non-special characters within ``; Quoting non-special characters within `` within double quotes; Quoting double quotes within backticks; More levels of double quotes in backticks; Syntax errors with double quotes within backticks
 - **here-doc**: Here doc with bad comsub delimiter; Here doc with line continuation, then pipe.  Syntax error.; Function def and execution with here doc
-- **redirect**: \>& and \<& are the same; \<&; Descriptor redirect with filename; Named file descriptor; Double digit fd (20\> file); 3\>&- \<\< EOF (OSH regression: fail to restore fds); Open file on descriptor 3 and write to it many times; Open file on descriptor 4 and write to it many times; Redirect to empty string; Redirect to file descriptor that's not open; Open descriptor with exec; Open multiple descriptors with exec; \>\| to clobber; &\> redirects stdout and stderr; \>&word redirects stdout and stderr when word is not a number or -; 1\>&- to close file descriptor; 1\>&2- to move file descriptor; 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; &\>\> appends stdout and stderr; can't mention big file descriptor; echo foo \>&100 (OSH regression: does not fail with invalid fd 100); echo foo \>&N where N is first unused fd; exec {fd}\>&- (OSH regression: fails to close fd); xtrace not affected by redirects
+- **redirect**: Descriptor redirect with filename; Named file descriptor; Redirect to empty string; Redirect to file descriptor that's not open; \>&word redirects stdout and stderr when word is not a number or -; 1\>&2- to move file descriptor; 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; echo foo \>&100 (OSH regression: does not fail with invalid fd 100); echo foo \>&N where N is first unused fd; exec {fd}\>&- (OSH regression: fails to close fd); xtrace not affected by redirects
 - **if_**: if break corner case
 - **loop**: while in pipe with subshell; continue at top level; continue in subshell; continue in subshell aborts with errexit; bad arg to break; break in condition of loop; break in condition of nested loop; top-level break/continue/return (without strict_control_flow); builtin,command break,continue,return,exit
-- **case_**: Case statement; Case with empty condition; Match a literal with a glob character; Match a literal with a glob character with a dynamic pattern; Quoted literal in glob pattern; matching the byte 0xff against empty string - DISABLED - CI only bug?; matching every byte against itself; \(\) in pattern (regression); case \n bug regression
+- **case_**: case \n bug regression
 - **sh-func**: Subshell function
 - **func-parsing**: Function with spaces, to see if ( and ) are separate tokens.; Hard case, function with } token in it; . in function name; = in function name; Function name with $; Function name with command sub; Function name with !; Function name with -; Break after ) is OK.
 - **builtin-echo**: echo builtin should disallow typed args - literal; echo builtin should disallow typed args - variable; echo to redirected directory is an error
 - **builtin-printf**: printf with no args; printf -v a[1]; printf -v syntax error; dynamic declare instead of %q; unsigned / octal / hex big; printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8; printf invalid format; bash truncates long strftime string at 128; printf positive integer overflow; printf negative integer overflow
 - **builtin-read**: read with zero args; read builtin with no newline returns status 1; read builtin splits value across multiple vars; read -n doesn't strip whitespace (bug fix); read -d -n - respects delimiter and splits; read without args uses $REPLY, no splitting occurs (without -n); read -n vs. -N; read -N ignores delimiters; read with line continuation reads multiple physical lines; read multiple vars spanning many lines; read multiple lines with IFS=:; read -a reads into array; read -d '' (null-separated records); read -rd; read -d when there's no delimiter; read -t 0 tests if input is available; read -t 0.5; read -u; read -u -s; read -u 3 -d 5; read -u 3 -d b -N 6; read -N doesn't respect delimiter, while read -n does; read with smooshed args; read -r -d '' for NUL strings, e.g. find -print0; read -n and backslash escape; read -n 4 with incomplete backslash; read -n 4 with backslash + delim; "backslash + newline" should be swallowed regardless of "-d \<delim\>"; empty input and splitting; IFS='x ' read -a: trailing spaces (unlimited split); IFS='x ' read a b: trailing spaces (with max_split); IFS='x ' read -a: intermediate spaces (unlimited split); IFS='x ' incomplete backslash; IFS='\ ' and backslash escaping; max_split and backslash escaping; IFS=x read a b \<\<\< xxxxxx; read and "\ "; read bash bug
-- **builtin-eval-source**: eval accepts/ignores --; eval usage; eval YSH block with 'break continue return error'; source accepts/ignores --; Source with no arguments; Source with arguments; Source from a function, mutating argv and defining a local var; Source with syntax error; Eval with syntax error; source looks in PATH for files; source finds files in PATH before current dir; sourcing along PATH should ignore directories
-- **builtin-getopts**: getopts with invalid variable name; getopts with invalid flag; getopts missing required argument; OPTIND; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
+- **builtin-eval-source**: eval accepts/ignores --; eval usage; eval YSH block with 'break continue return error'; source accepts/ignores --; Source with no arguments; Source with arguments; Source from a function, mutating argv and defining a local var; Source with syntax error; Eval with syntax error; Eval in does tilde expansion; Eval in bash does tilde expansion in array; source looks in PATH for files; source finds files in PATH before current dir; sourcing along PATH should ignore directories
+- **builtin-getopts**: getopts with invalid variable name; OPTIND; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
 - **builtin-trap**: trap accepts/ignores --; Register invalid trap, remove invalid trap; trap foo gives non-zero error; print trap handler with multiple lines; trap -p is like trap: it prints the handlers and full signal names; Register the same handler for multiple signals; Remove multiple handlers with trap -; trap EXIT clears the EXIT trap; trap 0 is equivalent to trap EXIT; trap 0 2 resets EXIT AND SIGINT; trap '' EXIT - printing state; exit 1 when trap code string is invalid; trap EXIT calling exit; trap EXIT with PARSE error and explicit exit; eval in the exit trap (regression for issue #293); exit codes for traps are isolated; traps are cleared in subshell (started with &); trap USR1, sleep, SIGINT: non-interactively; trap INT, sleep, SIGINT: non-interactively; trap EXIT, sleep, SIGINT: non-interactively; Remove trap with an unsigned integer; trap '' sets handler to empty string (SIG_IGN); trap '' with multiple signals; trap with command.NoOp - check internal invariant
 - **builtin-bracket**: -a as unary operator (alias of -e); -k for sticky bit; test -p named pipe; -u for setuid, -g too; -v to test variable (bash); test -o for options; -ef; test -c; No octal, hex, base N conversion - leading 0 is a regular decimal; Looks like octal, but digit is too big
 - **builtin-cd**: cd BAD/..; cd with 2 or more args - with strict_arg_parse; $OLDPWD; pwd with symlink and -P; setting $PWD doesn't affect the value of 'pwd' builtin; lie about PWD; pwd before any cd; pwd in symlinked dir on shell initialization; Test the current directory after 'cd ..' involving symlinks; cd away from dir that was deleted; cd permits double bare dash; cd to symlink with -L and -P; cd to relative path with -L and -P; CDPATH is respected; Survey of getcwd() syscall
 - **builtin-special**: Prefix assignments persist after special builtins, like : (set -o posix); Prefix assignments persist after readonly, but NOT exported (set -o posix); Prefix binding for exec is a special case (versus e.g. readonly); bash 'type' gets confused - says 'function', but runs builtin; command, builtin - both can be redefined, not special (regression)
-- **builtin-type**: type -\> keyword builtin; type -\> alias external; type of relative path; type -\> not found; special builtins are called out; more special builtins
+- **builtin-type**: type -\> keyword builtin; type -\> alias external; type of relative path; special builtins are called out; more special builtins
 - **builtin-vars**: Export sets a global variable that persists after export -n; Export a local that shadows a global; Unset exported variable, then define it again.  It's NOT still exported.; Exporting a parent func variable (dynamic scope); Unset a function without -f; Unset and scope (bug #653); Unset array member; unset -v assoc (related to issue #661); Unset array member with dynamic parsing; local after readonly; unset a[-1] (bf.bash regression); unset a[-1] in sparse array (bf.bash regression)
 - **dbracket**: equality; [[ regex syntax error; \|\| chain; [[ compound expressions; precedence of && and \|\| inside [[; Octal literals with -eq; \> on strings; -eq on strings; [[ with op variable (compare with test-builtin.test.sh); [[ at runtime doesn't work; [[ with env prefix doesn't work; [[ over multiple lines is OK; Argument that looks like a real operator; User array compared to "$@" (broken unless shopt -s strict_array); Array coerces to string (shopt -s strict_array to disallow); -eq does dynamic arithmetic parsing (not supported in OSH); -eq coercion produces weird results; [[ '(' foo ]] is syntax error; [[ -z ]] is syntax error; [[ -z '\>' ]]; [[ -z '\>' a ]] is syntax error; [[ ]] is syntax error; [[ && ]] is syntax error; [[ a 3\< b ]] doesn't work (bug regression); more tilde expansion; tilde expansion with =~ (confusing); [[ ]] with redirect; special chars; \(\) in pattern (regression); negative numbers - zero, decimal, octal, hex, base N
 - **dparen**: (( )) with arrays; bash and mksh: V in (( a[K] = V )) gets coerced to integer; bash: K in (( A[K] = V )) is a constant string; bash: V in (( A["K"] = V )) gets coerced to integer; (( )) with redirect; Assigning whole raray (( b = a )); set associative array; Example of incrementing associative array entry with var key (ble.sh)
@@ -128,13 +128,13 @@ How each suite runs, and what is and isn't scored, is described in
 - **errexit**: More && \|\|; errexit and loop; errexit and brace group { }; set errexit while it's ignored in a subshell (moot with strict_errexit); errexit double guard; background processes respect errexit; pipeline process respects errexit; simple command / assign - redir failure DOES respect errexit; bash atoms [[ (( - redir failure checked; Command sub exit code is lost
 - **command_**: Command block; Permission denied; $PATH lookup; filling $PATH cache, then insert the same command earlier in cache; filling $PATH cache, then deleting command; Non-executable on $PATH; hash without args prints the cache; hash with args; Executing command with same name as directory in PATH (#2429)
 - **posix**: Empty for loop without in.  Do can be on the same line I guess.; Empty action for case is syntax error; Bare semi-colon not allowed; Command substitution in default; Newlines in compound lists
-- **alias**: Usage of builtins; Basic alias; define and use alias on a single line; unalias -a; alias with trailing space causes alias expansion on second word; Recursive alias expansion of SECOND word; Alias must be an unquoted word, no expansions allowed; first and second word are the same alias, with trailing space; Syntax error after expansion; Loop split across alias in another way; Loop split across both iterative and recursive aliases; Alias with a quote in the middle is a syntax error; Two aliases in pipeline; Alias can be defined and used on a single line; alias with line continuation in the middle; alias for left brace; alias for left paren; here doc inside alias; Corner case: alias inside LHS array arithmetic expression; alias with word of multiple lines
+- **alias**: Usage of builtins; Basic alias; define and use alias on a single line; alias with trailing space causes alias expansion on second word; Recursive alias expansion of SECOND word; Alias must be an unquoted word, no expansions allowed; first and second word are the same alias, with trailing space; Syntax error after expansion; Loop split across alias in another way; Loop split across both iterative and recursive aliases; Alias with a quote in the middle is a syntax error; Two aliases in pipeline; Alias can be defined and used on a single line; alias with line continuation in the middle; alias for left brace; alias for left paren; here doc inside alias; Corner case: alias inside LHS array arithmetic expression; alias with word of multiple lines
 - **let**: let with ()
 - **shell-grammar**: If with then on same line missing semicolon
 - **process-sub**: Process sub input; Process sub from external process to stdin; Process sub from shell to stdin; Non-linear pipeline with \>(); status code is available; shopt -s process_sub_fail; process subs and pipelines together; process sub in background &
 - **regex**: BASH_REMATCH; Regex quoted with single quotes; Regex quoted with double quotes; Double quoting pat variable -- again bash doesn't like it.; Regex with == and not =~ is parse error, different lexer mode required; Malformed regex; Regex with \|; Regex to match literal brackets []; Regex to match literals . ^ $ etc.; Unquoted { is a regex parse error; Quoted { and +; Escaped {; Escaped { stored in variable first; Bug: Nix idiom with closing ) next to pattern; unquoted (a  b) as pattern, (a  b\|c); Multiple adjacent () groups; unquoted [a  b] as pattern, [a  b\|c]; Operator chars ; & but not \|; Parse error with 2 words; make a lisp example
 - **background**: wait with nothing to wait for; wait -n with arguments - arguments are respected; wait with invalid arg; wait for N parallel jobs; wait for N parallel jobs and check failure; Builtin in background; External command in background; Start background pipeline, wait $pid; Start background pipeline, wait %job_spec; Wait for job and PIPESTATUS; Wait for job and PIPESTATUS - cat; Brace group in background, wait all; Wait on background process PID; Wait on multiple specific IDs returns last status; wait -n; Async for loop; Background process doesn't affect parent; Background process and then a singleton pipeline; jobs prints one line per job; jobs -p prints one line per job; No stderr spew when shell is not interactive; YSH wait --all; YSH wait --verbose; Signal message for killed background job
-- **sh-options**: $- with -c; $- and more options; $- with interactive shell; pass shopt options like sh -O nullglob; vi and emacs are mutually exclusive; interactive shell starts with emacs mode on; -n for no execution (useful with --ast-output); pipefail; shopt -p -o prints 'set' options; shopt -o prints 'set' options; shopt -p prints 'shopt' options; noclobber on; noclobber on \<\>; noclobber on &\> \>; noclobber on &\>\> \>\>; shopt -s strict:all; shopt allows for backward compatibility like bash; shopt -p validates option names; shopt -p -o validates option names; stubbed out bash options; Unimplemented options - print, query, set, unset; Unimplemented options - OSH shopt -s ignore_shopt_not_impl; no-ops not shown by shopt -p
+- **sh-options**: $- with -c; $- and more options; $- with interactive shell; pass shopt options like sh -O nullglob; vi and emacs are mutually exclusive; interactive shell starts with emacs mode on; -n for no execution (useful with --ast-output); pipefail; shopt -p -o prints 'set' options; shopt -o prints 'set' options; shopt -p prints 'shopt' options; noclobber on \<\>; shopt -s strict:all; shopt allows for backward compatibility like bash; shopt -p validates option names; shopt -p -o validates option names; stubbed out bash options; Unimplemented options - print, query, set, unset; Unimplemented options - OSH shopt -s ignore_shopt_not_impl; no-ops not shown by shopt -p
 
 </details>
 

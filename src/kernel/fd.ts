@@ -425,7 +425,12 @@ class Inode {
   touch() {
     this.dirty = true;
     this.mtimeMs = Date.now();
-    if (!this.flushTimer) this.flushTimer = setTimeout(() => { this.flushTimer = null; void this.flush(); }, 0);
+    // Each flush copies the whole file, so a big file flushes less often (up to
+    // every 0.5 s at 32 MB); otherwise many small writes copy O(n^2) bytes.
+    // close() and fsync() still flush at once.
+    if (!this.flushTimer) {
+      this.flushTimer = setTimeout(() => { this.flushTimer = null; void this.flush(); }, Math.min(500, this.size >> 16));
+    }
   }
 
   async flush(): Promise<void> {

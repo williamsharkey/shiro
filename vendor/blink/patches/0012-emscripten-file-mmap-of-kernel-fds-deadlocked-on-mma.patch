@@ -1,0 +1,33 @@
+From 7d8ccaf3160e58b92f67dfabe352d0a3ef8f61ad Mon Sep 17 00:00:00 2001
+From: shiro <build@shiro>
+Date: Thu, 8 Oct 2026 20:14:34 +0000
+Subject: [PATCH] emscripten: file mmap of kernel fds deadlocked on mmap_lock
+
+ShiroSyscall held m->system->mmap_lock around ShiroMmapFile, which calls
+SysMmap (and SysMprotect), and those take the same non-recursive lock, so
+any mmap of a kernel file hung the guest (LTP's IPC region, mmap'd
+files).
+---
+ blink/shiro.inc | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index af01b37..ea3f1c3 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -1222,10 +1222,10 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     }
+     case 0x009:                                                       // mmap
+       if ((d & 0x20) || (i64)e < 0) return false;
++      // No mmap_lock here: SysMmap/SysMprotect take it themselves, and
++      // holding it deadlocked every file mmap (it isn't recursive)
+       BEGIN_NO_PAGE_FAULTS;
+-      LOCK(&m->system->mmap_lock);
+       r = ShiroMmapFile(m, a, b, c, d, e, f);
+-      UNLOCK(&m->system->mmap_lock);
+       END_NO_PAGE_FAULTS;
+       break;
+     case 0x00B:                                                       // munmap
+-- 
+2.43.0
+

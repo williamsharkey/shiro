@@ -237,4 +237,41 @@ describe('shell conformance regressions', () => {
     expect(r.out).toBe('1\n2\n| \\\nfoo\n');
     expect(await r.fs.readFile('/tmp/sub.out', 'utf8')).toBe('1\n2\n');
   });
+
+  it('case: dynamic and quoted patterns, empty word, ;&, nested case', async () => {
+    const r = await script([
+      'for x in a b; do case $x in $x) echo loop;; *) echo star;; esac; done',
+      "case $empty in ''|foo) echo match;; *) echo no;; esac",
+      'x="*.py"; case "$x" in "*.py") echo lit;; esac',
+      'x=b.py; pat="[ab].py"; case "$x" in $pat) echo glob;; esac',
+      'x="[ab].py"; case "$x" in "$pat") echo quoted;; esac',
+      's="foo()"; case $s in *\\(\\)) echo paren; esac',
+      'case abc in a*) echo one;& b*) echo two;; c*) echo three;; esac',
+      'case a in a) case b in b) echo nested;; esac;; esac',
+    ].join('\n'));
+    expect(r.out).toBe('loop\nloop\nmatch\nlit\nglob\nquoted\nparen\none\ntwo\nnested\n');
+  });
+
+  it('numbered fds: exec N>file, >&N, exec N<file + read <&N, exec N>&1, &>, noclobber, exec >log', async () => {
+    const r = await script([
+      'cd /tmp',
+      'exec 3> fd3.txt; echo hello >&3; echo world 1>&3; exec 3>&-; cat fd3.txt',
+      'echo foo51 > in.txt; exec 6< in.txt; read line <&6; echo "[$line]"',
+      'exec 4>&1; echo four >&4; x=$(echo sub); echo $x',
+      'echo both &> both.txt; cat both.txt',
+      'set -o noclobber; echo YY > fd3.txt; echo st=$?; echo ZZ >| fd3.txt; cat fd3.txt; set +o noclobber',
+      'exec 5>&1; exec >> log.txt; echo to-log; exec >&5; echo back; cat log.txt',
+    ].join('\n'));
+    expect(r.out).toBe('hello\nworld\n[foo51]\nfour\nsub\nboth\nst=1\nZZ\nback\nto-log\n');
+  });
+
+  it('globs match directories, keep quoted parts literal, honour set -f and nullglob', async () => {
+    const r = await script([
+      'cd /tmp && mkdir -p g/d1 g/d2 "g/s p" && touch g/a.txt g/b.txt g/.h g/d1/x.c "g/s p/z.txt" && cd g',
+      'echo *.txt; echo */; echo d*/*.c; dir=d1; echo "$dir"/*; echo "s p"/*; echo \\*.txt; echo "*.txt"',
+      'for d in */; do printf "[%s]" "$d"; done; echo',
+      'set -f; echo *.txt; set +f; shopt -s nullglob; echo x *.none y; shopt -u nullglob; echo [ab].txt [!a].txt',
+    ].join('\n'));
+    expect(r.out).toBe('a.txt b.txt\nd1/ d2/ s p/\nd1/x.c\nd1/x.c\ns p/z.txt\n*.txt\n*.txt\n[d1/][d2/][s p/]\n*.txt\nx y\na.txt b.txt b.txt\n');
+  });
 });

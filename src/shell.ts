@@ -25,10 +25,40 @@ function loadShellKernel(): Promise<typeof import('./shell-kernel')> {
 }
 
 interface Redirect {
-  type: '>' | '>>' | '<' | '2>' | '2>>' | '2>&1' | '>&-';
+  /** 'dup': fd `fd` becomes a copy of fd `target` (exec N>&M, N<&M) */
+  type: '>' | '>>' | '<' | '2>' | '2>>' | '2>&1' | '>&-' | 'dup' | 'open';
   target: string;
   fd?: number;
+  /** 'open' (N> file, N>> file, N< file for N >= 3): how the file is opened */
+  mode?: '>' | '>>' | '<';
+  /** >| : write even with noclobber */
+  force?: boolean;
 }
+
+/** Does a word have a glob character the tokenizer didn't mark as quoted (\x01)? */
+function hasUnquotedGlob(word: string, extglob: boolean): boolean {
+  for (let i = 0; i < word.length; i++) {
+    const c = word[i];
+    if (c === '\x01') { i++; continue; }
+    if (c === '*' || c === '?') return true;
+    if (c === '[' && word.indexOf(']', i + 2) > i) return true;
+    if (extglob && '+@!'.includes(c) && word[i + 1] === '(') return true;
+  }
+  return false;
+}
+
+const POSIX_CLASSES: Record<string, string> = {
+  alpha: 'a-zA-Z', digit: '0-9', alnum: '0-9a-zA-Z', upper: 'A-Z', lower: 'a-z', space: '\\s',
+  blank: ' \\t', punct: '!-\\/:-@\\[-`{-~', xdigit: '0-9A-Fa-f', print: ' -~', graph: '!-~', cntrl: '\\x00-\\x1f',
+};
+
+/** Redirect target naming an open shell fd (`>&3`, `<&6`) rather than a file */
+const FD_REF = '\uE020';
+const fdRef = (n: number) => FD_REF + n;
+const fdOfRef = (target: string): number | null => (target.startsWith(FD_REF) ? Number(target.slice(1)) : null);
+
+/** An output fd of the shell: a file, or a copy of the shell's own stdout/stderr */
+type OutFd = { path: string } | { dup: 1 | 2 };
 
 export interface BackgroundJob {
   id: number;
@@ -369,6 +399,8 @@ export class Shell {
     const child = new Shell(this.fs, this.commands);
     child.inheritedAbort = this.abortController ?? this.inheritedAbort;
     child.heredocs = this.heredocs;
+    child.userFds = new Map(this.userFds);
+    child.fileDescriptors = new Map(this.fileDescriptors);
     child.cwd = this.cwd;
     child.env = { ...this.env };
     child.functions = { ...this.functions };
@@ -410,7 +442,7 @@ export class Shell {
   private substitutionText(out: string, preceding: string, inQuotes: boolean): string {
     if (inQuotes) return protectExpansion(out);
     if (/[A-Za-z_][A-Za-z0-9_]*=$/.test(preceding)) return '"' + protectExpansion(out) + '"';
-    return splitFields(out, this.env['IFS']);
+    return splitFields(out, this.fieldIFS());
   }
 
   /** Status of the last command substitution while expanding the current command */
@@ -419,6 +451,7 @@ export class Shell {
   private async subshellExec(cmd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const child = this.fork();
     child.terminal = this.terminal;
+    child.userFds.delete(1); // inside $(...) stdout is the capture
     const r = await child.exec(cmd);
     this.substStatus = r.exitCode;
     return r;
@@ -479,6 +512,36 @@ export class Shell {
   ): Promise<number> {
     const depth = this.executeDepth;
     const suppressed = this.errexitSuppressed;
+    // After `exec >file` / `exec 2>file`, default output goes there. The outermost
+    // call routes it, looking the fds up at write time (exec can change them mid-line)
+    if (!this.fdRouting) {
+      const base1 = writeStdout;
+      const base2 = writeStderr || writeStdout;
+      const pending = new Map<string, string>();
+      const route = (n: 1 | 2) => (s: string) => {
+        const e = this.userFds.get(n);
+        if (!e) (n === 1 ? base1 : base2)(s);
+        else if ('dup' in e) (e.dup === 1 ? base1 : base2)(s);
+        else pending.set(e.path, (pending.get(e.path) ?? '') + s);
+      };
+      const flush = async () => {
+        for (const [path, text] of [...pending]) {
+          pending.delete(path);
+          await this.fs.appendFile(path, text.replace(/\r\n/g, '\n'));
+        }
+      };
+      this.fdRouting = true;
+      this.flushFdWrites = flush;
+      try {
+        return await this.execute(line, route(1), route(2), remote, terminalOverride, skipHistory);
+      } finally {
+        this.fdRouting = false;
+        this.flushFdWrites = null;
+        await flush();
+      }
+    }
+    // A file write per statement keeps output in order for the commands that read it
+    if (this.flushFdWrites) await this.flushFdWrites();
     try {
       return await this.executeImpl(line, writeStdout, writeStderr, remote, terminalOverride, skipHistory);
     } catch (e) {
@@ -534,6 +597,15 @@ export class Shell {
 
   /** Contents of an input redirection's target: a file, or a here-document (expanded now if unquoted) */
   async readInputRedirect(target: string): Promise<string> {
+    const ref = fdOfRef(target);
+    if (ref !== null) {
+      // <&N: the rest of the shell's input fd N
+      const f = this.fileDescriptors.get(ref);
+      if (!f) throw new Error(`${ref}: Bad file descriptor`);
+      const rest = f.content.slice(f.offset);
+      f.offset = f.content.length;
+      return rest;
+    }
     const h = this.heredocs.lookup(target);
     if (h) return h.expand ? this.expandHeredocBody(h.body) : h.body;
     const data = await this.fs.readFile(this.fs.resolvePath(target, this.cwd), 'utf8');
@@ -563,6 +635,97 @@ export class Shell {
     expanded = await this.expandCommandSubstitution(expanded, () => {}, true);
     expanded = this.expandVars(expanded, true);
     return restoreExpansion(expanded);
+  }
+
+  /** Set while execute() routes default output through exec'd fds (nested calls don't re-route) */
+  private fdRouting = false;
+  private flushFdWrites: (() => Promise<void>) | null = null;
+
+  /** Output fds opened by exec (1 and 2 too, after `exec >file`) */
+  userFds = new Map<number, OutFd>();
+
+  /** Where output to fd n goes: a file, or the shell's stdout/stderr; null if not open */
+  resolveOutFd(n: number): OutFd | null {
+    const e = this.userFds.get(n);
+    if (e) return e;
+    if (n === 1) return { dup: 1 };
+    if (n === 2) return { dup: 2 };
+    return null;
+  }
+
+  /** exec with only redirections: update the shell's fd tables */
+  private async applyExecRedirects(redirects: Redirect[]): Promise<string | null> {
+    if (this.flushFdWrites) await this.flushFdWrites();
+    const pending: Promise<unknown>[] = [];
+    const openOut = (fd: number, target: string, truncate: boolean): string | null => {
+      const ref = fdOfRef(target);
+      if (ref !== null) {
+        const e = this.resolveOutFd(ref);
+        if (!e) return `${ref}: Bad file descriptor`;
+        this.userFds.set(fd, e);
+        return null;
+      }
+      if (target === '/dev/stdout') { this.userFds.set(fd, this.resolveOutFd(1)!); return null; }
+      if (target === '/dev/stderr') { this.userFds.set(fd, this.resolveOutFd(2)!); return null; }
+      const path = this.fs.resolvePath(target, this.cwd);
+      if (truncate) pending.push(this.fs.writeFile(path, ''));
+      else pending.push(this.fs.appendFile(path, ''));
+      this.userFds.set(fd, { path });
+      return null;
+    };
+    for (const r of redirects) {
+      let err: string | null = null;
+      switch (r.type) {
+        case '>': case '>>': err = openOut(r.fd ?? 1, r.target, r.type === '>'); break;
+        case '2>': case '2>>': err = openOut(2, r.target, r.type === '2>'); break;
+        case '2>&1': this.userFds.set(2, this.resolveOutFd(1)!); break;
+        case 'open':
+          if (r.mode === '<') {
+            const fd = r.fd!;
+            pending.push(this.readInputRedirect(r.target).then((content) => { this.fileDescriptors.set(fd, { content, offset: 0 }); }));
+          } else err = openOut(r.fd!, r.target, r.mode === '>');
+          break;
+        case 'dup': {
+          const to = Number(r.target);
+          if (this.fileDescriptors.has(to)) this.fileDescriptors.set(r.fd!, this.fileDescriptors.get(to)!);
+          else {
+            const e = this.resolveOutFd(to);
+            if (!e) err = `${to}: Bad file descriptor`;
+            else this.userFds.set(r.fd!, e);
+          }
+          break;
+        }
+        case '>&-': this.userFds.delete(r.fd!); this.fileDescriptors.delete(r.fd!); break;
+        case '<':
+          if (fdOfRef(r.target) === null) {
+            pending.push(this.readInputRedirect(r.target).then((content) => { this.fileDescriptors.set(0, { content, offset: 0 }); }));
+          }
+          break;
+      }
+      if (err) return err;
+    }
+    try {
+      await Promise.all(pending);
+    } catch (e: any) {
+      return e?.message ?? String(e);
+    }
+    return null;
+  }
+
+  /** File writes started by exec redirections (truncation), awaited before the next write */
+  private pendingFdOps: Promise<void> = Promise.resolve();
+
+  /** Write command output to fd n's target */
+  private async writeToFd(n: number, text: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void): Promise<boolean> {
+    const e = this.resolveOutFd(n);
+    if (!e) return false;
+    if ('dup' in e) {
+      (e.dup === 1 ? writeStdout : writeStderr)(text.replace(/\r?\n/g, '\r\n'));
+      return true;
+    }
+    await this.pendingFdOps;
+    if (text) await this.fs.appendFile(e.path, text.replace(/\r\n/g, '\n'));
+    return true;
   }
 
   /** Aliases being expanded right now */
@@ -1274,7 +1437,12 @@ export class Shell {
           // Read one line from stdin — prefer FD, then the command's own <<< / <,
           // then piped stdin (__PIPE_STDIN), then pipe, then heredoc
           let readInput = '';
-          const stdinRedirect = redirects.find(r => r.type === '<' && r.fd === undefined);
+          let stdinRedirect = redirects.find(r => r.type === '<' && r.fd === undefined);
+          if (stdinRedirect && fdOfRef(stdinRedirect.target) !== null) {
+            // read <&N reads one line from fd N, like read -u N
+            readFd = fdOfRef(stdinRedirect.target)!;
+            stdinRedirect = undefined;
+          }
           let redirectInput: string | undefined = hereString;
           if (redirectInput === undefined && stdinRedirect) {
             try {
@@ -2049,12 +2217,20 @@ export class Shell {
               if (arg === '-o' || arg === '+o') {
                 const optName = cmdArgs[++si];
                 if (!optName) {
-                  const allOpts = ['errexit', 'nounset', 'xtrace', 'verbose', 'noexec', 'pipefail'];
+                  const allOpts = ['allexport', 'errexit', 'noclobber', 'noexec', 'noglob', 'nounset', 'pipefail', 'verbose', 'xtrace'];
                   for (const opt of allOpts) {
                     writeStdout(`${opt}\t\t${this.options.has(opt) ? 'on' : 'off'}\r\n`);
                   }
                 } else {
-                  const optMap: Record<string, string> = { errexit: 'errexit', nounset: 'nounset', xtrace: 'xtrace', verbose: 'verbose', noexec: 'noexec', pipefail: 'pipefail' };
+                  const optMap: Record<string, string> = {
+                    errexit: 'errexit', nounset: 'nounset', xtrace: 'xtrace', verbose: 'verbose', noexec: 'noexec', pipefail: 'pipefail',
+                    noclobber: 'noclobber', noglob: 'noglob', allexport: 'allexport',
+                    // accepted, no effect here
+                    monitor: 'monitor', notify: 'notify', hashall: 'hashall', ignoreeof: 'ignoreeof', emacs: 'emacs', vi: 'vi',
+                    posix: 'posix', physical: 'physical', braceexpand: 'braceexpand', histexpand: 'histexpand', history: 'history',
+                    interactive_comments: 'interactive_comments', keyword: 'keyword', nolog: 'nolog', onecmd: 'onecmd',
+                    errtrace: 'errtrace', functrace: 'functrace', privileged: 'privileged',
+                  };
                   const mapped = optMap[optName];
                   if (mapped) {
                     if (arg === '-o') this.options.add(mapped);
@@ -2066,7 +2242,10 @@ export class Shell {
                 }
                 continue;
               }
-              const shortMap: Record<string, string> = { e: 'errexit', u: 'nounset', x: 'xtrace', v: 'verbose', n: 'noexec' };
+              const shortMap: Record<string, string> = {
+                e: 'errexit', u: 'nounset', x: 'xtrace', v: 'verbose', n: 'noexec', C: 'noclobber', f: 'noglob', a: 'allexport',
+                m: 'monitor', b: 'notify', h: 'hashall', B: 'braceexpand', H: 'histexpand', P: 'physical', E: 'errtrace', T: 'functrace',
+              };
               if (arg.startsWith('-') && arg.length > 1 && arg[1] !== '-') {
                 for (let j = 1; j < arg.length; j++) {
                   const mapped = shortMap[arg[j]];
@@ -2127,19 +2306,18 @@ export class Shell {
 
         // Shell builtin: exec — replace shell with command (in browser, just execute)
         if (!_builtinDisabled && effectiveCmdName === 'exec') {
-          // Handle FD redirects: exec N< file, exec N> file, exec N<&-
-          for (const redir of redirects) {
-            if (redir.fd !== undefined && redir.type === '<') {
-              try {
-                const content = await this.readInputRedirect(redir.target);
-                this.fileDescriptors.set(redir.fd, { content, offset: 0 });
-              } catch (e: any) {
-                stderrWriter(`shiro: ${redir.target}: ${e.message}\r\n`);
-                exitCode = 1;
-              }
-            } else if (redir.fd !== undefined && redir.type === '>&-') {
-              this.fileDescriptors.delete(redir.fd);
-            }
+          // Without a command, exec's redirections change the shell's own fds
+          // (exec 3>log, exec >>log 2>&1, exec 3>&1, exec 6<in, exec 3>&-)
+          if (cmdArgs.length === 0) {
+            const err = await this.applyExecRedirects(redirects);
+            if (err) { stderrWriter(err + '\r\n'); exitCode = 1; }
+            else exitCode = 0;
+            this.lastExitCode = exitCode;
+            this.env['?'] = String(exitCode);
+            lastOutput = '';
+            // The redirects now belong to the shell: don't apply them to this (empty) output
+            redirects.length = 0;
+            continue;
           }
           if (cmdArgs.length > 0) {
             const execCmd = quoteArgsForShell(cmdArgs);
@@ -2615,6 +2793,8 @@ export class Shell {
         else this.env[key] = value;
       }
 
+      if (this.redirectFailed) { exitCode = 1; this.redirectFailed = false; }
+
       // pipefail: use last non-zero exit code from any pipe segment
       if (this.options.has('pipefail') && pipeExitCodes.length > 1) {
         const lastNonZero = [...pipeExitCodes].reverse().find(c => c !== 0);
@@ -2669,6 +2849,13 @@ export class Shell {
           stderrOutput = '';
           continue;
         }
+        // 2>&N: the shell's fd N
+        const ref = fdOfRef(redir.target);
+        if (ref !== null) {
+          if (!(await this.writeToFd(ref, stderrOutput, writeStdout, stderrWriter))) stderrWriter(`shiro: ${ref}: Bad file descriptor\r\n`);
+          stderrOutput = '';
+          continue;
+        }
         // 2>/dev/stderr → default behavior (let it through)
         if (redir.target === '/dev/stderr') continue;
         // 2>/dev/stdout → redirect stderr to stdout
@@ -2678,6 +2865,7 @@ export class Shell {
           continue;
         }
         const targetPath = this.fs.resolvePath(redir.target, this.cwd);
+        if (redir.type === '2>' && !(await this.clobberOk(redir, targetPath, stderrWriter))) { stderrOutput = ''; continue; }
         if (redir.type === '2>') {
           await this.fs.writeFile(targetPath, stderrOutput);
         } else {
@@ -2706,6 +2894,13 @@ export class Shell {
           output = '';
           continue;
         }
+        // >&N: the shell's fd N
+        const ref = fdOfRef(redir.target);
+        if (ref !== null) {
+          if (!(await this.writeToFd(ref, output, writeStdout, stderrWriter))) stderrWriter(`shiro: ${ref}: Bad file descriptor\r\n`);
+          output = '';
+          continue;
+        }
         // /dev/stdout → write to stdout (default behavior, just let it through)
         if (redir.target === '/dev/stdout') continue;
         // /dev/stderr → redirect stdout content to stderr
@@ -2715,6 +2910,7 @@ export class Shell {
           continue;
         }
         const targetPath = this.fs.resolvePath(redir.target, this.cwd);
+        if (redir.type === '>' && !(await this.clobberOk(redir, targetPath, stderrWriter))) { output = ''; continue; }
         if (redir.type === '>') {
           await this.fs.writeFile(targetPath, output);
         } else {
@@ -2724,11 +2920,35 @@ export class Shell {
       }
     }
 
+    // N> file for N >= 3 on an ordinary command: the file is still created
+    for (const redir of redirects) {
+      if (redir.type === 'open' && redir.mode !== '<') {
+        const path = this.fs.resolvePath(redir.target, this.cwd);
+        if (redir.mode === '>') await this.fs.writeFile(path, '');
+        else await this.fs.appendFile(path, '');
+      }
+    }
+
     if (isLast && output) {
       writeStdout(output.replace(/\n/g, '\r\n'));
     }
     return output;
   }
+
+  /** set -o noclobber: `>` (not `>|`) refuses to overwrite an existing regular file */
+  private async clobberOk(redir: Redirect, path: string, writeStderr: (s: string) => void): Promise<boolean> {
+    if (redir.force || !this.options.has('noclobber')) return true;
+    const st = await this.fs.stat(path).catch(() => null);
+    if (st && !st.isDirectory() && st.isFile()) {
+      writeStderr(`shiro: ${redir.target}: cannot overwrite existing file\r\n`);
+      this.redirectFailed = true;
+      return false;
+    }
+    return true;
+  }
+
+  /** A redirection failed while applying the current command's output (its status becomes 1) */
+  private redirectFailed = false;
 
   /**
    * Expand brace expressions: {a,b,c} → a b c, {1..5} → 1 2 3 4 5
@@ -2958,7 +3178,7 @@ export class Shell {
       // Expand $0-$9 (positional parameters)
       if (ch === '$' && line[i + 1] >= '0' && line[i + 1] <= '9') {
         const v = this.env[line[i + 1]] ?? '';
-        result += inDouble ? protectExpansion(v) : splitFields(v, this.env['IFS']);
+        result += inDouble ? protectExpansion(v) : splitFields(v, this.fieldIFS());
         i += 2;
         continue;
       }
@@ -2984,7 +3204,7 @@ export class Shell {
           const expanded = this.expandParamExpression(inner);
           if (expanded !== null) {
             result += /^[A-Za-z_][A-Za-z0-9_]*$/.test(inner)
-              ? (inDouble ? protectExpansion(expanded) : splitFields(expanded, this.env['IFS']))
+              ? (inDouble ? protectExpansion(expanded) : splitFields(expanded, this.fieldIFS()))
               : expanded;
             i = j + 1;
             continue;
@@ -3009,7 +3229,7 @@ export class Shell {
           // Resolve namerefs: if varName is a nameref, follow it
           const resolved = this.namerefs.has(varName) ? this.namerefs.get(varName)! : varName;
           const v = this.env[resolved] ?? '';
-          result += inDouble ? protectExpansion(v) : splitFields(v, this.env['IFS']);
+          result += inDouble ? protectExpansion(v) : splitFields(v, this.fieldIFS());
           i += m[0].length;
           continue;
         }
@@ -3648,35 +3868,52 @@ export class Shell {
     let hereString: string | undefined;
 
     for (let i = 0; i < tokens.length; i++) {
-      if (tokens[i] === '2>&1') {
-        redirects.push({ type: '2>&1', target: '' });
-      } else if (tokens[i] === '<<<' && i + 1 < tokens.length) {
+      const tok = tokens[i];
+      if (tok === '<<<' && i + 1 < tokens.length) {
         // Here-string: <<< "string" — set as stdin
         hereString = tokens[i + 1].replace(/\x01/g, '') + '\n';
         i++;
-      } else if ((tokens[i] === '>' || tokens[i] === '>>' || tokens[i] === '<' || tokens[i] === '2>' || tokens[i] === '2>>') && i + 1 < tokens.length) {
-        // >&2 / >&1 duplicate onto stderr/stdout rather than naming a file
-        const rawTarget = tokens[i + 1].replace(/\x01/g, '');
-        let target = rawTarget === '&2' ? '/dev/stderr' : rawTarget === '&1' ? '/dev/stdout' : rawTarget;
-        if (rawTarget === '&2') {
+        continue;
+      }
+      if ((tok === '&>' || tok === '&>>') && i + 1 < tokens.length) {
+        redirects.push({ type: tok === '&>' ? '>' : '>>', target: tokens[++i].replace(/\x01/g, '') });
+        redirects.push({ type: '2>&1', target: '' });
+        continue;
+      }
+      const m = /^(\d*)(>>|>\||>|<>|<)(?:&(\d+|-))?$/.exec(tok);
+      if (!m || (m[3] === undefined && i + 1 >= tokens.length)) { args.push(tok); continue; }
+      const op = m[2];
+      const fd = m[1] !== '' ? parseInt(m[1], 10) : op === '<' || op === '<>' ? 0 : 1;
+      let dupOf: string | undefined = m[3];
+      let target = '';
+      if (dupOf === undefined) {
+        target = tokens[++i].replace(/\x01/g, '');
+        // `> &2` / `>& 2` written apart, or bash's `>&file` (= &> file)
+        const t = /^&(\d+|-)$/.exec(target);
+        if (t) dupOf = t[1];
+      }
+      if (dupOf === '-') { redirects.push({ type: '>&-', target: '', fd }); continue; }
+      if (dupOf !== undefined) {
+        const to = parseInt(dupOf, 10);
+        if (fd === 1 && to === 2 && op !== '<') {
           // Redirects apply left to right: `2>x >&2` sends stdout to x too
           const stderrRedir = [...redirects].reverse().find(r => r.type === '2>' || r.type === '2>>');
-          if (stderrRedir) target = stderrRedir.target;
-        }
-        redirects.push({ type: tokens[i] as Redirect['type'], target });
-        i++;
-      } else if (/^\d+<$/.test(tokens[i]) && i + 1 < tokens.length) {
-        // FD redirect: N< file
-        const fd = parseInt(tokens[i], 10);
-        redirects.push({ type: '<', target: tokens[i + 1].replace(/\x01/g, ''), fd });
-        i++;
-      } else if (/^\d+>&-$/.test(tokens[i])) {
-        // Close FD: N>&-
-        const fd = parseInt(tokens[i], 10);
-        redirects.push({ type: '>&-', target: '', fd });
-      } else {
-        args.push(tokens[i]);
+          redirects.push({ type: '>', target: stderrRedir ? stderrRedir.target : '/dev/stderr' });
+        } else if (fd === 2 && to === 1) redirects.push({ type: '2>&1', target: '' });
+        else if (fd === to) { /* N>&N: nothing */ }
+        else if (fd === 1 && to === 0) { /* >&0: the terminal */ }
+        else if (fd === 1) redirects.push({ type: '>>', target: fdRef(to) });
+        else if (fd === 2) redirects.push({ type: '2>>', target: fdRef(to) });
+        else if (fd === 0) redirects.push({ type: '<', target: fdRef(to) });
+        else redirects.push({ type: 'dup', fd, target: String(to) });
+        continue;
       }
+      const force = op === '>|';
+      const kind = op === '>|' ? '>' : op === '<>' ? '<' : op;
+      if (fd === 2 && kind !== '<') redirects.push({ type: kind === '>>' ? '2>>' : '2>', target, force });
+      else if (fd === 1 && kind !== '<') redirects.push({ type: kind as '>' | '>>', target, force });
+      else if (fd === 0 && kind === '<') redirects.push({ type: '<', target });
+      else redirects.push({ type: 'open', mode: kind as '>' | '>>' | '<', target, fd, force });
     }
 
     return {
@@ -3815,44 +4052,26 @@ export class Shell {
         continue;
       }
 
-      // Handle 2>&1, 2>>, and 2> stderr redirects
-      if (ch === '2' && !inSingle && !inDouble && (input[i + 1] === '>')) {
+      // &> FILE / &>> FILE: stdout and stderr
+      if (ch === '&' && input[i + 1] === '>' && !inSingle && !inDouble) {
         if (current || quoted) { tokens.push(current); current = ''; } quoted = false;
-        if (input[i + 2] === '&' && input[i + 3] === '1') {
-          tokens.push('2>&1');
-          i += 4;
-        } else if (input[i + 2] === '>') {
-          tokens.push('2>>');
-          i += 3;
-        } else {
-          tokens.push('2>');
-          i += 2;
-        }
+        const two = input[i + 2] === '>';
+        tokens.push(two ? '&>>' : '&>');
+        i += two ? 3 : 2;
         continue;
       }
 
-      // Handle >>, >| and > redirects (>| is zsh clobber, treated as >)
+      // >, >>, >| and N>, N>>, N>&M, N>&-, >&M (an all-digit word right before > is the fd)
       if (ch === '>' && !inSingle && !inDouble) {
-        // FD close: N>&- (current is digits)
-        if (current && /^\d+$/.test(current) && input[i + 1] === '&' && input[i + 2] === '-') {
-          tokens.push(current + '>&-');
-          current = '';
-          i += 3;
-          continue;
-        }
-        // `1>` is the explicit form of `>`; the 1 is an fd, not an argument
-        if (current === '1') current = '';
+        const fdPrefix = !quoted && /^\d+$/.test(current) ? current : '';
+        if (fdPrefix) current = '';
         if (current || quoted) { tokens.push(current); current = ''; } quoted = false;
-        if (input[i + 1] === '>') {
-          tokens.push('>>');
-          i += 2;
-        } else if (input[i + 1] === '|') {
-          tokens.push('>');
-          i += 2;
-        } else {
-          tokens.push('>');
-          i++;
-        }
+        let op = '>';
+        i++;
+        if (input[i] === '>') { op = '>>'; i++; } else if (input[i] === '|') { op = '>|'; i++; }
+        const dup = input[i] === '&' ? /^&(\d+|-)/.exec(input.slice(i)) : null;
+        if (dup && op !== '>|') { tokens.push(fdPrefix + op + dup[0]); i += dup[0].length; continue; }
+        tokens.push(fdPrefix + op);
         continue;
       }
 
@@ -3880,16 +4099,16 @@ export class Shell {
           i = j;
           continue;
         }
-        // FD redirect: N< file (current is digits)
-        if (current && /^\d+$/.test(current)) {
-          tokens.push(current + '<');
-          current = '';
-          i++;
-          continue;
-        }
+        // <, N<, <&M, N<&M, N<&-, <> (an all-digit word right before < is the fd)
+        const fdPrefix = !quoted && /^\d+$/.test(current) ? current : '';
+        if (fdPrefix) current = '';
         if (current || quoted) { tokens.push(current); current = ''; } quoted = false;
-        tokens.push('<');
         i++;
+        let op = '<';
+        if (input[i] === '>') { op = '<>'; i++; }
+        const dup = op === '<' && input[i] === '&' ? /^&(\d+|-)/.exec(input.slice(i)) : null;
+        if (dup) { tokens.push(fdPrefix + op + dup[0]); i += dup[0].length; continue; }
+        tokens.push(fdPrefix + op);
         continue;
       }
 
@@ -4015,44 +4234,111 @@ export class Shell {
   private async expandGlobs(args: string[], writeStderr?: (s: string) => void): Promise<string[] | null> {
     const result: string[] = [];
     for (const arg of args) {
-      // Check for sentinel-marked (quoted) glob chars
-      const hasSentinel = arg.includes('\x01');
-      // Check for real (unquoted) glob chars (including extglob patterns)
-      const hasGlob = !hasSentinel && (/[*?[]/.test(arg) ||
-        (this.shoptopts.has('extglob') && /[?*+@!]\(/.test(arg)));
-
-      if (hasGlob) {
-        try {
-          // If globstar is not set, collapse ** to * so it won't recurse directories
-          let globPattern = arg;
-          if (!this.shoptopts.has('globstar')) {
-            globPattern = globPattern.replace(/\*\*/g, '*');
-          }
-          const matches = await this.fs.glob(globPattern, this.cwd, {
-            caseInsensitive: this.shoptopts.has('nocaseglob'),
-            dotglob: this.shoptopts.has('dotglob'),
-          });
-          if (matches.length > 0) {
-            result.push(...matches);
-          } else {
-            if (this.shoptopts.has('failglob')) {
-              if (writeStderr) writeStderr(`-bash: no match: ${arg}\r\n`);
-              return null;
-            }
-            // nullglob: return nothing; default: keep literal
-            if (!this.shoptopts.has('nullglob')) {
-              result.push(arg);
-            }
-          }
-        } catch {
-          result.push(arg);
-        }
-      } else {
-        // Strip sentinel markers and keep literal
-        result.push(arg.replace(/\x01/g, ''));
+      const literal = arg.replace(/\x01/g, '');
+      if (this.options.has('noglob') || !hasUnquotedGlob(arg, this.shoptopts.has('extglob'))) {
+        result.push(literal);
+        continue;
       }
+      let matches: string[] = [];
+      try {
+        matches = await this.globPath(arg);
+      } catch { /* treat as no match */ }
+      if (matches.length > 0) { result.push(...matches); continue; }
+      if (this.shoptopts.has('failglob')) {
+        if (writeStderr) writeStderr(`-bash: no match: ${literal}\r\n`);
+        return null;
+      }
+      // nullglob: nothing; default: the pattern itself
+      if (!this.shoptopts.has('nullglob')) result.push(literal);
     }
     return result;
+  }
+
+  /**
+   * Pathname expansion of one word, directory by directory: `*`, `?`, `[…]`
+   * (and extglob), with quoted characters (marked \x01 by the tokenizer)
+   * literal. Matches directories too; a trailing `/` matches only them;
+   * names starting with `.` need a literal `.` (or dotglob); `**` with
+   * globstar crosses directories. Results are sorted.
+   */
+  private async globPath(word: string): Promise<string[]> {
+    const absolute = word.startsWith('/');
+    const parts = word.split('/');
+    if (absolute) parts.shift();
+    const trailingSlash = parts.length > 1 && parts[parts.length - 1] === '';
+    if (trailingSlash) parts.pop();
+    const extglob = this.shoptopts.has('extglob');
+    const nocase = this.shoptopts.has('nocaseglob');
+    const dotglob = this.shoptopts.has('dotglob');
+    const isDir = async (p: string) => (await this.fs.stat(p).catch(() => null))?.isDirectory() ?? false;
+    // Each candidate: the path shown, and the absolute path behind it
+    let cands: { shown: string; abs: string }[] = [{ shown: absolute ? '/' : '', abs: absolute ? '/' : this.cwd }];
+    const join = (base: string, name: string) => (base === '' ? name : base.endsWith('/') ? base + name : base + '/' + name);
+    for (let pi = 0; pi < parts.length; pi++) {
+      const seg = parts[pi];
+      const last = pi === parts.length - 1;
+      const next: { shown: string; abs: string }[] = [];
+      if (!hasUnquotedGlob(seg, extglob)) {
+        const name = seg.replace(/\x01/g, '');
+        for (const c of cands) next.push({ shown: join(c.shown, name), abs: join(c.abs, name) });
+      } else if (seg === '**' && this.shoptopts.has('globstar')) {
+        // Zero or more directories
+        const walk = async (c: { shown: string; abs: string }) => {
+          next.push(c);
+          const names = (await this.fs.readdir(c.abs).catch(() => [] as string[])).filter((n) => dotglob || !n.startsWith('.')).sort();
+          for (const n of names) {
+            const child = { shown: join(c.shown, n), abs: join(c.abs, n) };
+            if (await isDir(child.abs)) await walk(child);
+            else if (last) next.push(child);
+          }
+        };
+        for (const c of cands) await walk(c);
+      } else {
+        const re = new RegExp('^' + this.globSegmentRegex(seg) + '$', nocase ? 'is' : 's');
+        const explicitDot = seg.replace(/\x01/g, '').startsWith('.');
+        for (const c of cands) {
+          const names = await this.fs.readdir(c.abs).catch(() => [] as string[]);
+          for (const n of [...names].sort()) {
+            if (n.startsWith('.') && !explicitDot && !dotglob) continue;
+            if (!re.test(n)) continue;
+            next.push({ shown: join(c.shown, n), abs: join(c.abs, n) });
+          }
+        }
+      }
+      // Only directories lead further (or end a pattern written with a trailing /)
+      const needDir = !last || trailingSlash;
+      cands = [];
+      for (const c of next) {
+        if (needDir ? await isDir(c.abs) : await this.fs.exists(c.abs)) cands.push(c);
+      }
+      if (!cands.length) return [];
+    }
+    const out = cands.map((c) => (trailingSlash ? c.shown + '/' : c.shown));
+    return [...new Set(out)].sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
+  }
+
+  /** Regex source for one path segment of a glob; \x01-marked characters are literal */
+  private globSegmentRegex(seg: string): string {
+    if (this.shoptopts.has('extglob') && !seg.includes('\x01')) return this.globToRegex(seg).replace(/\.\*/g, '[^/]*');
+    let out = '';
+    for (let i = 0; i < seg.length; i++) {
+      const c = seg[i];
+      if (c === '\x01') { out += (seg[i + 1] ?? '').replace(/[.*+?^${}()|[\]\\/]/g, '\\$&'); i++; continue; }
+      if (c === '*') { out += '[^/]*'; continue; }
+      if (c === '?') { out += '[^/]'; continue; }
+      if (c === '[') {
+        const end = seg.indexOf(']', i + (seg[i + 1] === ']' || (seg[i + 1] === '!' && seg[i + 2] === ']') ? 3 : 2));
+        if (end > i) {
+          let body = seg.slice(i + 1, end).replace(/\x01/g, '');
+          if (body.startsWith('!')) body = '^' + body.slice(1);
+          out += '[' + body.replace(/\\/g, '\\\\').replace(/\[:(\w+):\]/g, (_m, k) => POSIX_CLASSES[k] ?? '') + ']';
+          i = end;
+          continue;
+        }
+      }
+      out += c.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+    }
+    return out;
   }
 
   // ─── ARITHMETIC EXPANSION ─────────────────────────────────────────────────
@@ -5029,111 +5315,219 @@ export class Shell {
     return 0;
   }
 
+  /** >0 while expanding words that are never field-split (case words and patterns) */
+  private suppressSplit = 0;
+
+  /** IFS for field splitting: '' (no splitting) inside case words and patterns */
+  private fieldIFS(): string | undefined {
+    return this.suppressSplit > 0 ? '' : this.env['IFS'];
+  }
+
+  /** Expand $…, ${…}, $(…), `…`, $((…)) in quote-free text: no field splitting or globbing */
+  private async expandFragment(text: string): Promise<string> {
+    if (!/[$`]/.test(text)) return text;
+    this.suppressSplit++;
+    try {
+      let t = this.expandArithmetic(text);
+      t = await this.expandCommandSubstitution(t, () => {}, true);
+      t = this.expandVars(t, true);
+      return restoreExpansion(t);
+    } finally {
+      this.suppressSplit--;
+    }
+  }
+
+  /**
+   * Split a case word or pattern into parts: quoted text is literal; unquoted
+   * text is a glob (in a pattern), with $-expansions expanded and still glob.
+   */
+  private async caseParts(raw: string): Promise<{ text: string; literal: boolean }[]> {
+    const parts: { text: string; literal: boolean }[] = [];
+    let i = 0;
+    const n = raw.length;
+    let glob = '';
+    const flushGlob = () => { if (glob) { parts.push({ text: glob, literal: false }); glob = ''; } };
+    while (i < n) {
+      const c = raw[i];
+      if (c === '\\' && i + 1 < n) { flushGlob(); parts.push({ text: raw[i + 1], literal: true }); i += 2; continue; }
+      if (c === "'") {
+        const e = raw.indexOf("'", i + 1);
+        const end = e < 0 ? n : e;
+        flushGlob();
+        parts.push({ text: raw.slice(i + 1, end), literal: true });
+        i = end + 1;
+        continue;
+      }
+      if (c === '$' && raw[i + 1] === "'") {
+        let j = i + 2;
+        while (j < n && raw[j] !== "'") j += raw[j] === '\\' ? 2 : 1;
+        flushGlob();
+        parts.push({ text: this.tokenize(raw.slice(i, j + 1)).join(''), literal: true });
+        i = j + 1;
+        continue;
+      }
+      if (c === '"') {
+        let j = i + 1;
+        let inner = '';
+        while (j < n && raw[j] !== '"') {
+          if (raw[j] === '\\' && '$`"\\'.includes(raw[j + 1] ?? '')) { inner += EXPANSION_PROTECT[raw[j + 1]] ?? raw[j + 1]; j += 2; continue; }
+          if (raw[j] === '$' && raw[j + 1] === '(') { const e = this.skipBalancedParen(raw, j + 1); inner += raw.slice(j, e); j = e; continue; }
+          inner += raw[j];
+          j++;
+        }
+        flushGlob();
+        parts.push({ text: await this.expandFragment(inner), literal: true });
+        i = j + 1;
+        continue;
+      }
+      if (c === '$' || c === '`') {
+        // An unquoted expansion: its value is still a pattern
+        let j = i + 1;
+        if (c === '`') { while (j < n && raw[j] !== '`') j += raw[j] === '\\' ? 2 : 1; j++; }
+        else if (raw[j] === '(') j = this.skipBalancedParen(raw, j);
+        else if (raw[j] === '{') { let d = 0; for (; j < n; j++) { if (raw[j] === '{') d++; else if (raw[j] === '}' && --d === 0) { j++; break; } } }
+        else if (/[A-Za-z_]/.test(raw[j] ?? '')) { while (j < n && /\w/.test(raw[j])) j++; }
+        else if (j < n) j++;
+        flushGlob();
+        parts.push({ text: await this.expandFragment(raw.slice(i, j)), literal: false });
+        i = j;
+        continue;
+      }
+      if (c === '~' && i === 0 && (n === 1 || raw[1] === '/')) { glob += this.env['HOME'] || '/home/user'; i++; continue; }
+      glob += c;
+      i++;
+    }
+    flushGlob();
+    return parts;
+  }
+
+  /** Index just past the `)` matching the `(` at s[j] */
+  private skipBalancedParen(s: string, j: number): number {
+    let depth = 0;
+    for (; j < s.length; j++) {
+      const c = s[j];
+      if (c === '\\') { j++; continue; }
+      if (c === "'") { const e = s.indexOf("'", j + 1); j = e < 0 ? s.length : e; continue; }
+      if (c === '"') { j++; while (j < s.length && s[j] !== '"') j += s[j] === '\\' ? 2 : 1; continue; }
+      if (c === '(') depth++;
+      else if (c === ')' && --depth === 0) return j + 1;
+    }
+    return s.length;
+  }
+
+  /**
+   * case WORD in [(]PATTERN[|PATTERN]...) LIST ;; ... esac — the word and the
+   * patterns are expanded when matched (no field splitting); quoted parts of
+   * a pattern match literally. ;& falls through, ;;& keeps testing.
+   */
   private async execCase(
     input: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void
   ): Promise<number> {
-    // Normalize newlines to semicolons (preserve ;; clause separators)
-    const joined = input.replace(/\r?\n/g, '; ');
+    const src = input.trim();
+    const n = src.length;
+    let i = 4; // after `case`
+    const skipBlanks = (alsoSemis: boolean) => {
+      while (i < n && (/\s/.test(src[i]) || (alsoSemis && src[i] === ';'))) i++;
+    };
+    // A shell word: up to an unquoted blank (or `;`/`)`/`|` when stopAt says so)
+    const readWord = (stop: RegExp): string => {
+      const start = i;
+      while (i < n && !stop.test(src[i])) {
+        const c = src[i];
+        if (c === '\\') { i += 2; continue; }
+        if (c === "'") { const e = src.indexOf("'", i + 1); i = e < 0 ? n : e + 1; continue; }
+        if (c === '"') { i++; while (i < n && src[i] !== '"') i += src[i] === '\\' ? 2 : 1; i++; continue; }
+        if (c === '`') { i++; while (i < n && src[i] !== '`') i += src[i] === '\\' ? 2 : 1; i++; continue; }
+        if (c === '$' && (src[i + 1] === '(' || src[i + 1] === '{')) {
+          if (src[i + 1] === '(') { i = this.skipBalancedParen(src, i + 1); continue; }
+          let d = 0;
+          for (i++; i < n; i++) { if (src[i] === '{') d++; else if (src[i] === '}' && --d === 0) { i++; break; } }
+          continue;
+        }
+        if (c === '(' && this.shoptopts.has('extglob') && i > start && '?*+@!'.includes(src[i - 1])) { i = this.skipBalancedParen(src, i); continue; }
+        i++;
+      }
+      return src.slice(start, i);
+    };
+    skipBlanks(false);
+    const rawWord = readWord(/[\s;]/);
+    skipBlanks(true);
+    if (!rawWord || src.slice(i, i + 2) !== 'in' || /[^\s;]/.test(src[i + 2] ?? ' ')) {
+      writeStderr(`${this.env['0'] || 'sh'}: syntax error near unexpected token \`${src.slice(i, i + 10)}'\r\n`);
+      return 2;
+    }
+    i += 2;
+    const word = (await this.caseParts(rawWord)).map((p) => p.text).join('');
 
-    // Parse: case WORD in ... esac
-    const caseMatch = joined.match(/^case\s+(.+?)\s+in\b/);
-    if (!caseMatch) { writeStderr('case: syntax error\r\n'); return 1; }
-
-    const rawWord = caseMatch[1].trim();
-    const word = restoreExpansion(this.expandVars(rawWord).replace(/^["']|["']$/g, ''));
-
-    // Get the body between 'in' and 'esac'
-    const inPos = joined.indexOf(' in', caseMatch.index! + 4) + 3;
-    const tokens = this.shellTokenScan(joined);
-    const esacTok = tokens.find(t => t.word === 'esac');
-    const body = joined.slice(inPos, esacTok ? esacTok.pos : joined.length).trim();
-
-    // Split body into clauses, tracking separator type (;;, ;&, ;;&)
-    const clauseParts: { text: string; separator: string }[] = [];
-    let remaining = body;
-    while (remaining) {
-      // Find next separator: ;;&, ;&, or ;;
-      const sepMatch = remaining.match(/(;;&|;&|;;)/);
-      if (sepMatch) {
-        clauseParts.push({ text: remaining.slice(0, sepMatch.index!).trim(), separator: sepMatch[1] });
-        remaining = remaining.slice(sepMatch.index! + sepMatch[1].length).trim();
-      } else {
-        if (remaining.trim()) clauseParts.push({ text: remaining.trim(), separator: ';;' });
+    let exitCode = 0;
+    let fallthrough = false;
+    for (;;) {
+      skipBlanks(true);
+      if (i >= n) break;
+      if (src.startsWith('esac', i) && !/[\w]/.test(src[i + 4] ?? '')) break;
+      if (src[i] === '(') i++;
+      // Patterns up to the clause's `)`
+      const patterns: string[] = [];
+      for (;;) {
+        skipBlanks(false);
+        patterns.push(readWord(/[\s|)]/));
+        skipBlanks(false);
+        if (src[i] === '|') { i++; continue; }
         break;
       }
-    }
-
-    let fallthrough = false;
-    for (let ci = 0; ci < clauseParts.length; ci++) {
-      const clause = clauseParts[ci].text;
-      if (!clause) continue;
-      // Parse: pattern[|pattern]) commands — extglob-aware: don't split on ) inside ?()/*()/etc.
-      let clausePatterns = '';
-      let clauseCommands = '';
-      let parenDepth = 0;
-      let foundClauseSplit = false;
-      for (let ci2 = 0; ci2 < clause.length; ci2++) {
-        const c = clause[ci2];
-        if (this.shoptopts.has('extglob') && '?*+@!'.includes(c) && clause[ci2 + 1] === '(') {
-          parenDepth++;
-          clausePatterns += c + '(';
-          ci2++; // skip the '(' — handled as unit with prefix
+      if (src[i] !== ')') { writeStderr(`${this.env['0'] || 'sh'}: syntax error in case pattern\r\n`); return 2; }
+      i++;
+      // The clause's commands, up to ;; ;& ;;& or esac (skipping nested case, quotes, parens)
+      const bodyStart = i;
+      let sep = '';
+      let depth = 0;
+      let nested = 0;
+      let cmdPos = true;
+      while (i < n) {
+        const c = src[i];
+        if (c === '\\') { i += 2; cmdPos = false; continue; }
+        if (c === "'" || c === '"' || c === '`') {
+          if (c === "'") { const e = src.indexOf("'", i + 1); i = e < 0 ? n : e + 1; }
+          else { i++; while (i < n && src[i] !== c) i += src[i] === '\\' ? 2 : 1; i++; }
+          cmdPos = false;
           continue;
         }
-        if (parenDepth > 0 && c === '(') { parenDepth++; clausePatterns += c; continue; }
-        if (parenDepth > 0 && c === ')') { parenDepth--; clausePatterns += c; continue; }
-        if (c === ')' && parenDepth === 0) {
-          clauseCommands = clause.slice(ci2 + 1);
-          foundClauseSplit = true;
+        if (c === '$' && src[i + 1] === '(') { i = this.skipBalancedParen(src, i + 1); cmdPos = false; continue; }
+        if (c === ';' && depth === 0 && nested === 0 && (src[i + 1] === ';' || src[i + 1] === '&')) {
+          sep = src.startsWith(';;&', i) ? ';;&' : src.startsWith(';;', i) ? ';;' : ';&';
           break;
         }
-        clausePatterns += c;
+        if (c === '(') { depth++; i++; cmdPos = true; continue; }
+        if (c === ')') { if (depth > 0) depth--; i++; cmdPos = nested > 0; continue; }
+        if (/[;&|\n]/.test(c)) { i++; cmdPos = true; continue; }
+        if (/\s/.test(c)) { i++; continue; }
+        const m = /^[^\s;&|()<>'"`\\]+/.exec(src.slice(i));
+        const w = m ? m[0] : c;
+        if (cmdPos && depth === 0 && w === 'esac') {
+          if (nested === 0) break;
+          nested--;
+        } else if (cmdPos && w === 'case') nested++;
+        cmdPos = cmdPos && ['do', 'then', 'else', 'elif', 'if', 'while', 'until', '!', '{', 'time', 'in'].includes(w);
+        if (w === 'in' && nested > 0) cmdPos = false;
+        i += w.length;
       }
-      if (!foundClauseSplit) continue;
-      // Split patterns on top-level | (not inside extglob parens)
-      const patterns: string[] = [];
-      let patBuf = '';
-      let patParenDepth = 0;
-      for (let pi = 0; pi < clausePatterns.length; pi++) {
-        const pc = clausePatterns[pi];
-        if (this.shoptopts.has('extglob') && '?*+@!'.includes(pc) && clausePatterns[pi + 1] === '(') {
-          patParenDepth++;
-          patBuf += pc + '(';
-          pi++; // skip the '(' — handled as unit with prefix
-          continue;
-        }
-        if (patParenDepth > 0 && pc === '(') { patParenDepth++; patBuf += pc; continue; }
-        if (patParenDepth > 0 && pc === ')') { patParenDepth--; patBuf += pc; continue; }
-        if (pc === '|' && patParenDepth === 0) {
-          patterns.push(patBuf.trim().replace(/^\(/, ''));
-          patBuf = '';
-          continue;
-        }
-        patBuf += pc;
-      }
-      patterns.push(patBuf.trim().replace(/^\(/, ''));
-      const commands = clauseCommands.trim().replace(/^;\s*/, '').replace(/;\s*$/, '');
+      const body = src.slice(bodyStart, i).trim().replace(/;\s*$/, '');
+      if (sep) i += sep.length;
 
       let matched = fallthrough;
-      if (!matched) {
-        for (const p of patterns) {
-          if (p === '*') { matched = true; break; }
-          if (word === p) { matched = true; break; }
-          const re = new RegExp('^' + this.globToRegex(p) + '$');
-          if (re.test(word)) { matched = true; break; }
-        }
+      for (const p of matched ? [] : patterns) {
+        const parts = await this.caseParts(p);
+        const re = new RegExp('^' + parts.map((x) => (x.literal ? x.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : this.globToRegex(x.text))).join('') + '$', 's');
+        if (re.test(word)) { matched = true; break; }
       }
-      if (matched) {
-        let exitCode = 0;
-        if (commands) exitCode = await this.execute(commands, writeStdout, writeStderr, false, undefined, true);
-        const sep = clauseParts[ci].separator;
-        if (sep === ';&') { fallthrough = true; continue; } // fallthrough: execute next body without checking
-        if (sep === ';;&') { fallthrough = false; continue; } // continue checking remaining patterns
-        return exitCode; // ;; — done
-      }
+      if (!matched) continue;
+      exitCode = body ? await this.execute(body, writeStdout, writeStderr, false, undefined, true) : 0;
+      if (sep === ';&') { fallthrough = true; continue; }
       fallthrough = false;
+      if (sep === ';;&') continue;
+      return exitCode;
     }
-    return 0;
+    return exitCode;
   }
 
   // ─── PATH EXECUTION ─────────────────────────────────────────────────────────

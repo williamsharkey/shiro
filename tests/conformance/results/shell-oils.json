@@ -90,7 +90,7 @@
    ]
   },
   "word-eval": {
-   "pass": 4,
+   "pass": 5,
    "total": 8,
    "failures": [
     {
@@ -104,10 +104,6 @@
     {
      "i": 5,
      "name": "Default values -- more cases"
-    },
-    {
-     "i": 7,
-     "name": "Globbing escaping"
     }
    ]
   },
@@ -868,17 +864,9 @@
    ]
   },
   "redirect": {
-   "pass": 13,
+   "pass": 26,
    "total": 39,
    "failures": [
-    {
-     "i": 0,
-     "name": ">& and <& are the same"
-    },
-    {
-     "i": 1,
-     "name": "<&"
-    },
     {
      "i": 8,
      "name": "Descriptor redirect with filename"
@@ -886,22 +874,6 @@
     {
      "i": 10,
      "name": "Named file descriptor"
-    },
-    {
-     "i": 11,
-     "name": "Double digit fd (20> file)"
-    },
-    {
-     "i": 15,
-     "name": "3>&- << EOF (OSH regression: fail to restore fds)"
-    },
-    {
-     "i": 16,
-     "name": "Open file on descriptor 3 and write to it many times"
-    },
-    {
-     "i": 17,
-     "name": "Open file on descriptor 4 and write to it many times"
     },
     {
      "i": 18,
@@ -912,28 +884,8 @@
      "name": "Redirect to file descriptor that's not open"
     },
     {
-     "i": 20,
-     "name": "Open descriptor with exec"
-    },
-    {
-     "i": 21,
-     "name": "Open multiple descriptors with exec"
-    },
-    {
-     "i": 22,
-     "name": ">| to clobber"
-    },
-    {
-     "i": 23,
-     "name": "&> redirects stdout and stderr"
-    },
-    {
      "i": 24,
      "name": ">&word redirects stdout and stderr when word is not a number or -"
-    },
-    {
-     "i": 25,
-     "name": "1>&- to close file descriptor"
     },
     {
      "i": 26,
@@ -950,14 +902,6 @@
     {
      "i": 29,
      "name": "<> for read/write named pipes"
-    },
-    {
-     "i": 30,
-     "name": "&>> appends stdout and stderr"
-    },
-    {
-     "i": 32,
-     "name": "can't mention big file descriptor"
     },
     {
      "i": 34,
@@ -1030,41 +974,9 @@
    ]
   },
   "case_": {
-   "pass": 4,
+   "pass": 12,
    "total": 13,
    "failures": [
-    {
-     "i": 0,
-     "name": "Case statement"
-    },
-    {
-     "i": 3,
-     "name": "Case with empty condition"
-    },
-    {
-     "i": 4,
-     "name": "Match a literal with a glob character"
-    },
-    {
-     "i": 5,
-     "name": "Match a literal with a glob character with a dynamic pattern"
-    },
-    {
-     "i": 6,
-     "name": "Quoted literal in glob pattern"
-    },
-    {
-     "i": 9,
-     "name": "matching the byte 0xff against empty string - DISABLED - CI only bug?"
-    },
-    {
-     "i": 10,
-     "name": "matching every byte against itself"
-    },
-    {
-     "i": 11,
-     "name": "\\(\\) in pattern (regression)"
-    },
     {
      "i": 12,
      "name": "case \\n bug regression"
@@ -1346,7 +1258,7 @@
    ]
   },
   "builtin-eval-source": {
-   "pass": 11,
+   "pass": 9,
    "total": 23,
    "failures": [
     {
@@ -1386,6 +1298,14 @@
      "name": "Eval with syntax error"
     },
     {
+     "i": 15,
+     "name": "Eval in does tilde expansion"
+    },
+    {
+     "i": 16,
+     "name": "Eval in bash does tilde expansion in array"
+    },
+    {
      "i": 18,
      "name": "source looks in PATH for files"
     },
@@ -1400,20 +1320,12 @@
    ]
   },
   "builtin-getopts": {
-   "pass": 24,
+   "pass": 26,
    "total": 30,
    "failures": [
     {
      "i": 6,
      "name": "getopts with invalid variable name"
-    },
-    {
-     "i": 7,
-     "name": "getopts with invalid flag"
-    },
-    {
-     "i": 9,
-     "name": "getopts missing required argument"
     },
     {
      "i": 12,
@@ -1666,7 +1578,7 @@
    ]
   },
   "builtin-type": {
-   "pass": 0,
+   "pass": 1,
    "total": 6,
    "failures": [
     {
@@ -1680,10 +1592,6 @@
     {
      "i": 2,
      "name": "type of relative path"
-    },
-    {
-     "i": 3,
-     "name": "type -> not found"
     },
     {
      "i": 4,
@@ -2813,7 +2721,7 @@
    ]
   },
   "alias": {
-   "pass": 28,
+   "pass": 29,
    "total": 48,
    "failures": [
     {
@@ -2827,10 +2735,6 @@
     {
      "i": 2,
      "name": "define and use alias on a single line"
-    },
-    {
-     "i": 7,
-     "name": "unalias -a"
     },
     {
      "i": 11,
@@ -3160,7 +3064,7 @@
    ]
   },
   "sh-options": {
-   "pass": 9,
+   "pass": 12,
    "total": 32,
    "failures": [
     {
@@ -3208,20 +3112,8 @@
      "name": "shopt -p prints 'shopt' options"
     },
     {
-     "i": 19,
-     "name": "noclobber on"
-    },
-    {
      "i": 20,
      "name": "noclobber on <>"
-    },
-    {
-     "i": 22,
-     "name": "noclobber on &> >"
-    },
-    {
-     "i": 23,
-     "name": "noclobber on &>> >>"
     },
     {
      "i": 29,
