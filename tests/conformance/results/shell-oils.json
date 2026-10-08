@@ -156,7 +156,7 @@
    ]
   },
   "var-op-test": {
-   "pass": 22,
+   "pass": 17,
    "total": 35,
    "failures": [
     {
@@ -174,6 +174,10 @@
     {
      "i": 5,
      "name": "Assign default with array"
+    },
+    {
+     "i": 12,
+     "name": "\"${array[@]} with set -u (bash is outlier)"
     },
     {
      "i": 15,
@@ -196,8 +200,24 @@
      "name": "\"$*\" (\"\" \"\") and - and + (IFS=)"
     },
     {
+     "i": 28,
+     "name": "array ${arr[0]=x}"
+    },
+    {
+     "i": 29,
+     "name": "assoc array ${arr[\"k\"]=x}"
+    },
+    {
      "i": 30,
      "name": "\"\\z\" as arg"
+    },
+    {
+     "i": 32,
+     "name": "op-test for ${a} and ${a[0]}"
+    },
+    {
+     "i": 33,
+     "name": "op-test for ${a[@]} and ${a[*]}"
     },
     {
      "i": 34,
@@ -856,7 +876,7 @@
    ]
   },
   "builtin-vars": {
-   "pass": 31,
+   "pass": 30,
    "total": 38,
    "failures": [
     {
@@ -882,6 +902,10 @@
     {
      "i": 24,
      "name": "Unset and scope (bug #653)"
+    },
+    {
+     "i": 33,
+     "name": "unset -v assoc (related to issue #661)"
     },
     {
      "i": 38,
@@ -1002,14 +1026,27 @@
    ]
   },
   "array-basic": {
-   "pass": 5,
+   "pass": 3,
    "total": 5,
-   "failures": []
+   "failures": [
+    {
+     "i": 3,
+     "name": "empty array"
+    },
+    {
+     "i": 4,
+     "name": "Empty array with :-"
+    }
+   ]
   },
   "array": {
-   "pass": 68,
+   "pass": 63,
    "total": 78,
    "failures": [
+    {
+     "i": 0,
+     "name": "nounset / set -u with empty array (bug in bash 4.3, fixed in 4.4)"
+    },
     {
      "i": 3,
      "name": "space before ( in array initialization"
@@ -1017,6 +1054,10 @@
     {
      "i": 5,
      "name": "array with invalid token"
+    },
+    {
+     "i": 17,
+     "name": "Retrieve sparse array indices with ${!a}"
     },
     {
      "i": 18,
@@ -1047,15 +1088,31 @@
      "name": "array default"
     },
     {
+     "i": 56,
+     "name": "Create sparse array"
+    },
+    {
+     "i": 58,
+     "name": "Append sparse arrays"
+    },
+    {
+     "i": 71,
+     "name": "Regression: Negative out-of-range index in [[ -v a[index] ]]"
+    },
+    {
      "i": 72,
      "name": "a+=() modifies existing instance of BashArray"
     }
    ]
   },
   "array-assoc": {
-   "pass": 33,
+   "pass": 32,
    "total": 38,
    "failures": [
+    {
+     "i": 29,
+     "name": "declare -A A=() allowed"
+    },
     {
      "i": 30,
      "name": "unset -v and assoc array"

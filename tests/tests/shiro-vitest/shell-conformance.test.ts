@@ -408,4 +408,16 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('one\nloop-st=1\ngroup-st=1\nafter-break\nuntil=2\nhi world\nworld\nfoobar\nmycmd-ran\nhas-ostype\n');
   });
+
+  it('function body on the next line; a \x01 byte survives command substitution', async () => {
+    const r = await script([
+      'testcase()',
+      '{',
+      '  echo "in $1"',
+      '}',
+      'testcase x',
+      'v=$(printf "\\001\\002A"); printf %s "$v" | od -An -tx1',
+    ].join('\n'));
+    expect(r.out).toBe('in x\n 01 02 41\n');
+  });
 });

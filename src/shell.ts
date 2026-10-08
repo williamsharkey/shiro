@@ -216,6 +216,8 @@ const yieldToEventLoop = () => new Promise<void>((resolve) => setTimeout(resolve
 const EXPANSION_PROTECT: Record<string, string> = {
   '"': '\uE000', "'": '\uE001', '\\': '\uE002', '$': '\uE003', '`': '\uE004',
   '|': '\uE005', '<': '\uE006', '>': '\uE007', '&': '\uE008', ';': '\uE009',
+  // \x01 marks quoted glob characters inside the shell; a \x01 in data is kept apart
+  '\x01': '\uE00D',
 };
 /** Blanks inside one field of an unquoted expansion (IFS doesn't split them) */
 const BLANK_PROTECT: Record<string, string> = { ' ': '\uE00A', '\t': '\uE00B', '\n': '\uE00C' };
@@ -260,10 +262,20 @@ export function splitFields(value: string, ifs: string | undefined): string {
   return fields.map((f) => (f === '' ? "''" : protect(f))).join(' ');
 }
 export function protectExpansion(value: string): string {
-  return /["'\\$`|<>&;]/.test(value) ? value.replace(/["'\\$`|<>&;]/g, (c) => EXPANSION_PROTECT[c]) : value;
+  return /["'\\$`|<>&;\x01]/.test(value) ? value.replace(/["'\\$`|<>&;\x01]/g, (c) => EXPANSION_PROTECT[c]) : value;
 }
 export function restoreExpansion(text: string): string {
-  return /[\uE000-\uE00C]/.test(text) ? text.replace(/[\uE000-\uE00C]/g, (c) => EXPANSION_RESTORE[c]) : text;
+  return /[\uE000-\uE00D]/.test(text) ? text.replace(/[\uE000-\uE00D]/g, (c) => EXPANSION_RESTORE[c]) : text;
+}
+
+/** restoreExpansion for tokenized words, where \x01 marks the next character as quoted: a data \x01 is itself marked */
+function restoreWord(text: string): string {
+  return restoreExpansion(text.replace(/\uE00D/g, '\x01\uE00D'));
+}
+
+/** A tokenized word without its quote markers (\x01 + char is that char) */
+function unmark(word: string): string {
+  return word.includes('\x01') ? word.replace(/\x01([\s\S])?/g, '$1') : word;
 }
 
 /** Re-quote already-parsed args so a command can be run again verbatim (time, env, exec, aliases). */
@@ -1357,7 +1369,7 @@ export class Shell {
             }
             const newElems = elements.trim() ? this.tokenize(elements) : [];
             const existing = this.arrays.get(arrName) || [];
-            existing.push(...newElems.map(a => a.replace(/\x01/g, '')));
+            existing.push(...newElems.map(a => unmark(a)));
             this.arrays.set(arrName, existing);
             continue;
           }
@@ -1374,7 +1386,7 @@ export class Shell {
               elements = closeIdx >= 0 ? fullVal.slice(1, closeIdx) : fullVal.slice(1);
             }
             const arr = elements.trim() ? this.tokenize(elements) : [];
-            this.arrays.set(key, arr.map(a => a.replace(/\x01/g, '')));
+            this.arrays.set(key, arr.map(a => unmark(a)));
             continue;
           }
 
@@ -4272,12 +4284,12 @@ export class Shell {
       const tok = tokens[i];
       if (tok === '<<<' && i + 1 < tokens.length) {
         // Here-string: <<< "string" — set as stdin
-        hereString = tokens[i + 1].replace(/\x01/g, '') + '\n';
+        hereString = unmark(tokens[i + 1]) + '\n';
         i++;
         continue;
       }
       if ((tok === '&>' || tok === '&>>') && i + 1 < tokens.length) {
-        redirects.push({ type: tok === '&>' ? '>' : '>>', target: tokens[++i].replace(/\x01/g, '') });
+        redirects.push({ type: tok === '&>' ? '>' : '>>', target: unmark(tokens[++i]) });
         redirects.push({ type: '2>&1', target: '' });
         continue;
       }
@@ -4288,7 +4300,7 @@ export class Shell {
       let dupOf: string | undefined = m[3];
       let target = '';
       if (dupOf === undefined) {
-        target = tokens[++i].replace(/\x01/g, '');
+        target = unmark(tokens[++i]);
         // `> &2` / `>& 2` written apart, or bash's `>&file` (= &> file)
         const t = /^&(\d+|-)$/.exec(target);
         if (t) dupOf = t[1];
@@ -4318,9 +4330,9 @@ export class Shell {
     }
 
     return {
-      args: args.map(restoreExpansion),
-      redirects: redirects.map((r) => ({ ...r, target: restoreExpansion(r.target) })),
-      hereString: hereString === undefined ? undefined : restoreExpansion(hereString),
+      args: args.map(restoreWord),
+      redirects: redirects.map((r) => ({ ...r, target: restoreWord(r.target) })),
+      hereString: hereString === undefined ? undefined : restoreWord(hereString),
     };
   }
 
@@ -4638,7 +4650,7 @@ export class Shell {
   private async expandGlobs(args: string[], writeStderr?: (s: string) => void): Promise<string[] | null> {
     const result: string[] = [];
     for (const arg of args) {
-      const literal = arg.replace(/\x01/g, '');
+      const literal = unmark(arg);
       if (this.options.has('noglob') || !hasUnquotedGlob(arg, this.shoptopts.has('extglob'))) {
         result.push(literal);
         continue;
@@ -4683,7 +4695,7 @@ export class Shell {
       const last = pi === parts.length - 1;
       const next: { shown: string; abs: string }[] = [];
       if (!hasUnquotedGlob(seg, extglob)) {
-        const name = seg.replace(/\x01/g, '');
+        const name = unmark(seg);
         for (const c of cands) next.push({ shown: join(c.shown, name), abs: join(c.abs, name) });
       } else if (seg === '**' && this.shoptopts.has('globstar')) {
         // Zero or more directories
@@ -4699,7 +4711,7 @@ export class Shell {
         for (const c of cands) await walk(c);
       } else {
         const re = new RegExp('^' + this.globSegmentRegex(seg) + '$', nocase ? 'is' : 's');
-        const explicitDot = seg.replace(/\x01/g, '').startsWith('.');
+        const explicitDot = unmark(seg).startsWith('.');
         for (const c of cands) {
           const names = await this.fs.readdir(c.abs).catch(() => [] as string[]);
           for (const n of [...names].sort()) {
@@ -4733,7 +4745,7 @@ export class Shell {
       if (c === '[') {
         const end = seg.indexOf(']', i + (seg[i + 1] === ']' || (seg[i + 1] === '!' && seg[i + 2] === ']') ? 3 : 2));
         if (end > i) {
-          let body = seg.slice(i + 1, end).replace(/\x01/g, '');
+          let body = unmark(seg.slice(i + 1, end));
           if (body.startsWith('!')) body = '^' + body.slice(1);
           out += '[' + body.replace(/\\/g, '\\\\').replace(/\[:(\w+):\]/g, (_m, k) => POSIX_CLASSES[k] ?? '') + ']';
           i = end;
@@ -5710,7 +5722,7 @@ export class Shell {
     this.suppressSplit++;
     try {
       const args = this.parseSegment(await this.expandWords(raw, writeStderr)).args;
-      return args.map((a) => a.replace(/\x01/g, '')).join(' ');
+      return args.map((a) => unmark(a)).join(' ');
     } finally {
       this.suppressSplit--;
     }
