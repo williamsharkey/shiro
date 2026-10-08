@@ -210,9 +210,11 @@ export class ShiroTerminal {
       document.body.appendChild(this.iframeContainer);
     }
 
+    const ttyDecoder = new TextDecoder();
     this.tty = new TtySession({
       winsize: { rows: this.term.rows, cols: this.term.cols },
-      onOutput: (bytes) => this.term.write(bytes),
+      // Through writeOutput, so secret masking applies to kernel programs too
+      onOutput: (bytes) => this.writeOutput(ttyDecoder.decode(bytes, { stream: true })),
     });
 
     // Refit on window resize
