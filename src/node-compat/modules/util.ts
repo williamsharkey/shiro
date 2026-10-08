@@ -50,6 +50,7 @@ export function createUtilModule(): any {
     },
     inspect: _inspect,
     format: _format,
+    formatWithOptions: (_opts: any, fmt: any, ...args: any[]) => _format(fmt, ...args),
     types: {
       isDate: (v: any) => v instanceof Date,
       isRegExp: (v: any) => v instanceof RegExp,

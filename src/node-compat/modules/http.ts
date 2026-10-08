@@ -326,6 +326,14 @@ function _createHttpOrHttpsModule(deps: HttpDeps, isHttps: boolean): any {
         res.statusMessage = resp.statusText;
         res.headers = resHeaders;
         res.httpVersion = '1.1';
+        // The browser did TLS (and checked the certificate): request/yarn
+        // refuse an https response whose socket isn't authorized
+        const secure = protocol === 'https:';
+        res.socket = res.connection = {
+          authorized: secure, encrypted: secure, authorizationError: null, remoteAddress: host,
+          setTimeout() { return this; }, setNoDelay() { return this; }, setKeepAlive() { return this; },
+          on() { return this; }, once() { return this; }, removeListener() { return this; }, destroy() {}, ref() {}, unref() {},
+        };
 
         const resEvents: Record<string, Function[]> = {};
         res.on = (ev: string, fn: Function) => { (resEvents[ev] ??= []).push(fn); return res; };

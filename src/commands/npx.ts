@@ -1,4 +1,5 @@
 import { Command, CommandContext } from './index';
+import { quoteArgsForShell } from '../shell';
 
 /**
  * npx: Execute npm package binaries
@@ -70,21 +71,25 @@ export const npxCmd: Command = {
       }
     }
 
+    // Output of a nested execute() is terminal-style (\r\n); ours is a plain
+    // stream again, converted once by whoever shows it
+    const out = (s: string) => { ctx.stdout += s.replace(/\r\n/g, '\n'); };
+    const err = (s: string) => { ctx.stderr += s.replace(/\r\n/g, '\n'); };
+    const run = (line: string) => ctx.shell.execute(line, out, err, false, ctx.terminal, true);
+    // The package's command reads npx's own (piped) stdin
+    const runBin = (line: string) => ctx.stdin ? ctx.shell.executeWithStdin(line, ctx.stdin, out, err) : run(line);
+
     // Check if binary already exists in PATH
     const existingBin = await ctx.shell.findExecutableInPath(binName);
     if (existingBin) {
       // Execute directly
       const cmdLine = buildCmdLine(binName, passthrough);
-      return ctx.shell.execute(cmdLine, (s) => ctx.stdout += s, (s) => ctx.stderr += s);
+      return runBin(cmdLine);
     }
 
     // Install the package first
     ctx.stdout += `Installing ${installSpec}...\n`;
-    const installCode = await ctx.shell.execute(
-      `npm install ${installSpec}`,
-      (s) => ctx.stdout += s,
-      (s) => ctx.stderr += s,
-    );
+    const installCode = await run(`npm install ${installSpec}`);
     if (installCode !== 0) {
       ctx.stderr += `npx: npm install failed with exit code ${installCode}\n`;
       return installCode;
@@ -92,15 +97,11 @@ export const npxCmd: Command = {
 
     // Now execute the binary
     const cmdLine = buildCmdLine(binName, passthrough);
-    return ctx.shell.execute(cmdLine, (s) => ctx.stdout += s, (s) => ctx.stderr += s);
+    return runBin(cmdLine);
   },
 };
 
 function buildCmdLine(binName: string, passthrough: string[]): string {
-  return [binName, ...passthrough].map(a => {
-    if (a.includes(' ') || a.includes('"') || a.includes("'")) {
-      return `"${a.replace(/"/g, '\\"')}"`;
-    }
-    return a;
-  }).join(' ');
+  // Arguments run again through the shell verbatim: a quoted glob or $ stays as given
+  return quoteArgsForShell([binName, ...passthrough]);
 }

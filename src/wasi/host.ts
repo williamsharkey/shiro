@@ -136,9 +136,32 @@ export function installWasmLoader(kernel: Kernel): void {
       if (kk.fs) {
         try { mounts = await (await import('../pkg-manager')).packageMountsForPath(kk.fs, found.path); } catch { /* none */ }
       }
-      return wasmRunner(module, found.image, [], mounts)(p, kk);
+      return wasmRunner(module, found.image, await childPreopens(kk, module), mounts)(p, kk);
     };
   });
+}
+
+/** The WASIX calls Shiro's process shim for wasi-libc programs uses (scripts/pkgbuild/compat/wasi-proc.c). */
+const SHIM_WASIX = new Set(['proc_spawn3', 'proc_join', 'fd_pipe', 'fd_dup', 'getcwd']);
+
+/**
+ * "/usr", "/home", ...: preopened by name for a spawned WASM program, as
+ * runPackageBinary does at the prompt, because some wasi-libc builds never
+ * match a "/" preopen against "/usr/...". Not for WASIX-libc programs (their
+ * libc matches "/", and dash's strips the wrong prefix when several match);
+ * wasi-libc programs that only use the process shim's calls still get them.
+ */
+async function childPreopens(kernel: Kernel, module: WebAssembly.Module): Promise<string[]> {
+  const wasixLibc = WebAssembly.Module.imports(module).some(i => i.module === 'wasix_32v1' && !SHIM_WASIX.has(i.name));
+  const fs = kernel.fs;
+  if (wasixLibc || !fs) return [];
+  const out: string[] = [];
+  try {
+    for (const name of await fs.readdir('/')) {
+      try { if ((await fs.stat(`/${name}`)).type === 'dir') out.push(`/${name}`); } catch { /* skip */ }
+    }
+  } catch { /* none */ }
+  return out;
 }
 
 const syscallsInstalled = new WeakSet<Kernel>();

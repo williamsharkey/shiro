@@ -1314,9 +1314,15 @@ export class WasiGuest {
       for (const t of temps) yield* self.call(A.SYS_close, t);
       for (const fd of cloexecSet) yield* self.call(A.SYS_fcntl, fd, A.F_SETFD, 0);
     }
+    // A close of fd 0xffffffff (Shiro extension, like closefrom): the child
+    // gets only the fds dup2 actions name. Go on wasip1 needs it: it can't
+    // mark its own fds close-on-exec, so every child inherited every pipe.
+    let onlyMapped = false;
     for (const act of req.actions ?? []) {
       let err = 0;
-      if (act.op === 'close') {
+      if (act.op === 'close' && act.fd === 0xffffffff) {
+        onlyMapped = true;
+      } else if (act.op === 'close') {
         map.delete(act.fd);
         const fl = yield* this.call(A.SYS_fcntl, act.fd, A.F_GETFD, 0);
         if (fl >= 0 && !(fl & A.FD_CLOEXEC)) {
@@ -1342,7 +1348,7 @@ export class WasiGuest {
     const { path, env } = this.execTarget(req.name, req.env, req.searchPath, req.path);
     const json = enc.encode(JSON.stringify({
       path, argv: req.argv.length ? req.argv : [req.name], ...(env ? { env } : {}), ...(cwd ? { cwd } : {}),
-      inherit: true, fds: [...map].sort((a, b) => a[0] - b[0]),
+      inherit: !onlyMapped, fds: [...map].sort((a, b) => a[0] - b[0]),
     }));
     if (json.length > this.opts.dataSize) { yield* cleanup(); return -A.E2BIG; }
     const pid = (yield* this.sys(A.SYS_spawn, [json.length], json)).ret;

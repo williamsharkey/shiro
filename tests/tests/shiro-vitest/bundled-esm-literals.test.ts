@@ -19,7 +19,7 @@ describe('bundled ESM transform leaves literals alone', () => {
       'export default f;',
     ].join('\n');
     const out = transformBundledESM(src);
-    expect(out).toContain('const { a } = require("./a.js");');
+    expect(out).toContain('const { a } = __shiro_require("./a.js");');
     expect(out).toContain('"Cannot use \'export import\' on a type"');
     expect(out).toContain("'Did you mean typeof import(\"x\")? import.meta too'");
     expect(out).toContain('`Consider \'import * as ns from "mod"\' ${ __import_meta.url } and import "y"`');
@@ -29,7 +29,7 @@ describe('bundled ESM transform leaves literals alone', () => {
     expect(out).toContain('var e = (__import_meta.url)');
     expect(out).toContain('__dynamic_import("./lazy.js")');
     expect(out).toContain('function f() { return "export const no"; }');
-    expect(out).toContain('module.exports = f;');
+    expect(out).toContain('__shiro_module.exports = f;');
     expect(() => new Function('module', 'exports', 'require', '__import_meta', '__dynamic_import', out)).not.toThrow();
   });
 

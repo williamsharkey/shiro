@@ -11,6 +11,7 @@ import type { FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
 import { processTable, type ShiroProcess } from '../process-table';
+import { packageShadows, PKG_BIN_DIR } from '../pkg-manager';
 import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
@@ -223,6 +224,10 @@ export class Kernel {
     const base = path.slice(path.lastIndexOf('/') + 1);
     const inBin = !path.includes('/') || /^\/(usr\/)?(local\/)?s?bin\//.test(path);
     const cmd = inBin ? shell.commands.get(base) : undefined;
+    // An installed package's command replaces the builtin, as at the prompt
+    // (a bin-dir path can name a builtin's PATH shim, or nothing on disk)
+    const pkgBin = `${PKG_BIN_DIR}/${base}`;
+    if (cmd && this.fs && path !== pkgBin && packageShadows(this.fs).has(base)) return this.findProgram(pkgBin, _proc);
     if (cmd) return proc => this.runBuiltin(proc, cmd);
     // Scripts and other executables the shell knows how to start
     const found = path.includes('/') ? ((await this.fs?.exists(path)) ? path : null) : await shell.findExecutableInPath(path);
@@ -1558,7 +1563,10 @@ export class Kernel {
     }
     proc.data.execRunner = runner;
     proc.stopRunner();
-    return 0;
+    // The caller's image is gone: never reply. (A reply raced the engine's
+    // termination, and Blink then tried to load "" and returned ENOEXEC, so
+    // perl's exec of a #! script fell back to /bin/sh and failed the same way.)
+    return new Promise<number>(() => {});
   }
 
   /**

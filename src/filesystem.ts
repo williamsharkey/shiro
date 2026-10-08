@@ -784,6 +784,12 @@ export class FileSystem {
     return node.symlinkTarget || new TextDecoder().decode(node.content!);
   }
 
+  /** Whether the in-memory cache holds path as a directory (an empty one
+   *  included, which readdirCached can't tell from "not cached"). */
+  isDirCached(path: string): boolean {
+    return this.cache.get(path)?.type === 'dir';
+  }
+
   /** Synchronously list directory entries from the in-memory cache. */
   readdirCached(path: string): string[] | undefined {
     const node = this.cache.get(path);
