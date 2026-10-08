@@ -427,4 +427,13 @@ describe('shell conformance regressions', () => {
     const r = await script('echo }_{a,b} {x}_{a,b} -{a..e..2}- -{e..a..-2}- {a..a..2}- {1..8..-3} {5..1..2}');
     expect(r.out).toBe('}_a }_b {x}_a {x}_b -a- -c- -e- -e- -c- -a- a- 1 4 7 5 3 1\n');
   });
+
+  it('${!ref-word} indirection with operators and array refs, ${@-word}, exec {fd}>file', async () => {
+    const r = await script([
+      "r=a; a=5; echo \"${!r-none} ${!r:+set}\"; arr=(x y); r2=\"arr[1]\"; echo \"${!r2}\"; unset nope; r3=nope; echo \"${!r3-dflt}\"",
+      "set --; echo \"[${@-empty}] [${*:+plus}]\"; set -- a; echo \"[${@:+plus}]\"",
+      "cd /tmp && exec {myfd}>nf.txt && echo hi >&$myfd && exec {myfd}>&- && cat nf.txt",
+    ].join('\n'));
+    expect(r.out).toBe('5 set\ny\ndflt\n[empty] []\n[plus]\nhi\n');
+  });
 });

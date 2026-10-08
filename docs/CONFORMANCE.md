@@ -6,7 +6,7 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1269/1567 (81.0%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1277/1567 (81.5%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1275/1567 (81.4%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **381/635 (60.0%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **146/320 (45.6%)** |
@@ -25,17 +25,17 @@ How each suite runs, and what is and isn't scored, is described in
 | word-eval | 0/8 | 7/8 | 1 |
 | var-sub | 0/6 | 2/6 | 4 |
 | var-sub-quote | 0/41 | 32/41 | 9 |
-| var-op-test | 1/35 | 22/35 | 13 |
+| var-op-test | 1/35 | 26/35 | 9 |
 | var-op-strip | 0/28 | 24/28 | 4 |
 | var-op-len | 0/7 | 3/7 | 4 |
 | var-op-patsub | 0/27 | 22/27 | 5 |
 | var-op-slice | 0/21 | 16/21 | 5 |
-| var-num | 0/7 | 5/7 | 2 |
+| var-num | 0/7 | 7/7 | 0 |
 | vars-special | 0/37 | 30/37 | 7 |
 | arith | 2/71 | 62/71 | 9 |
 | command-sub | 0/28 | 19/28 | 9 |
 | here-doc | 0/32 | 29/32 | 3 |
-| redirect | 3/39 | 28/39 | 11 |
+| redirect | 3/39 | 29/39 | 10 |
 | if_ | 0/5 | 4/5 | 1 |
 | loop | 1/28 | 21/28 | 7 |
 | case_ | 0/13 | 12/13 | 1 |
@@ -58,7 +58,7 @@ How each suite runs, and what is and isn't scored, is described in
 | append | 1/20 | 12/20 | 8 |
 | array-basic | 0/5 | 5/5 | 0 |
 | array | 2/78 | 68/78 | 10 |
-| array-assoc | 0/38 | 33/38 | 5 |
+| array-assoc | 0/38 | 34/38 | 4 |
 | brace-expansion | 0/55 | 51/55 | 4 |
 | tilde | 0/14 | 7/14 | 7 |
 | glob | 0/23 | 18/23 | 5 |
@@ -88,17 +88,16 @@ How each suite runs, and what is and isn't scored, is described in
 - **word-eval**: Default values -- more cases
 - **var-sub**: Bad var sub; Braced block inside ${}; Descriptor redirect to bad "$@"; Here doc with bad "$@" delimiter
 - **var-sub-quote**: Multiple words: outer double quotes, inner double quotes; Mixed inner quotes with outer quotes; part_value tree on RHS; Multiple words: outer double quotes, inner double quotes; Multiple words: outer double quotes, inner single quotes; Strip a string with single quotes, unquoted; Strip a string with single quotes, double quoted; Syntax error for single quote in double quote; Right Brace as argument (similar to #702)
-- **var-op-test**: Lazy Evaluation of Alternative; Unquoted with array as default value; Quoted with array as default value; Assign default with array; Nix idiom ${!hooksSlice+"${!hooksSlice}"} - was workaround for obsolete bash 4.3 bug; array and - and +; $@ (empty) and - and +; $* ("" "") and - and + (IFS=); "$*" ("" "") and - and + (IFS=); "\z" as arg; op-test for ${!array} with array="a" and array="a[0]"; op-test for ${!array} with array="a[@]" or array="a[*]"; op-test for unquoted ${a[*]:-empty} with IFS=
+- **var-op-test**: Lazy Evaluation of Alternative; Unquoted with array as default value; Quoted with array as default value; Assign default with array; Nix idiom ${!hooksSlice+"${!hooksSlice}"} - was workaround for obsolete bash 4.3 bug; array and - and +; $* ("" "") and - and + (IFS=); "\z" as arg; op-test for unquoted ${a[*]:-empty} with IFS=
 - **var-op-strip**: Remove const suffix is vectorized on $@ array; Strip unicode prefix; strip none; Strip Right Brace (#702)
 - **var-op-len**: Unicode string length (spec/testdata/utf8-chars.txt); String length with incomplete utf-8; String length with invalid utf-8 continuation bytes; Length operator can't be followed by test operator
 - **var-op-patsub**: Confusing unquoted slash matches bash (and ash); Synthesized ${x///} bug (similar to above); Replace backslash; When LC_ALL=C, pattern ? doesn't match multibyte character; Chromium from http://www.oilshell.org/blog/2016/11/07.html
 - **var-op-slice**: Cannot take length of substring slice; ${@:offset} and ${*:offset}; ${@:offset:length} and ${*:offset:length}; Permutations of implicit begin and length; ${array[@]:} vs ${array[@]: }  - bash and zsh inconsistent
-- **var-num**: Normal and braced; In function
 - **vars-special**: $PATH is set if unset at startup; Vars set interactively only: $HISTFILE; Some vars are set, even without startup file, or env: PATH, PWD; $LINENO is the current line, not line of function call; $LINENO in "bare" redirect arg (bug regression); $LINENO in other for loops; $_ with assignments, arrays, etc.
 - **arith**: Arith sub with word parts; Backticks within arith sub; Integer constant validation; Comma operator (borrowed from C); Logical Ops; Bitwise ops; Comment not allowed in the middle of multiline arithmetic; Double subscript; Invalid constant
 - **command-sub**: case in subshell; Backtick 2; Nested backticks; Making keyword out of command sub should NOT work; Command sub with here doc; Escaped quote in [[ ]]; Quoting \ within ``; Quoting \ within `` within double quotes; Syntax errors with double quotes within backticks
 - **here-doc**: Here doc with bad comsub delimiter; Here doc with line continuation, then pipe.  Syntax error.; Function def and execution with here doc
-- **redirect**: Named file descriptor; Redirect to file descriptor that's not open; \>&word redirects stdout and stderr when word is not a number or -; 1\>&2- to move file descriptor; 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; echo foo \>&100 (OSH regression: does not fail with invalid fd 100); echo foo \>&N where N is first unused fd (hang/timeout); exec {fd}\>&- (OSH regression: fails to close fd); xtrace not affected by redirects
+- **redirect**: Named file descriptor; Redirect to file descriptor that's not open; \>&word redirects stdout and stderr when word is not a number or -; 1\>&2- to move file descriptor; 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; echo foo \>&100 (OSH regression: does not fail with invalid fd 100); echo foo \>&N where N is first unused fd (hang/timeout); xtrace not affected by redirects
 - **if_**: if break corner case
 - **loop**: while in pipe with subshell; continue at top level; continue in subshell; continue in subshell aborts with errexit; bad arg to break; top-level break/continue/return (without strict_control_flow); builtin,command break,continue,return,exit
 - **case_**: case \n bug regression
@@ -119,7 +118,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **assign**: Env binding can use preceding bindings, but not subsequent ones; Env value with escaped \<; Trying to run keyword 'for'; Test above without 'local' (which is not POSIX); aliased assignment doesn't split; assign and glob; declare and glob; "declare -a arr" and "readonly -a a" creates an empty array (OSH)
 - **append**: error: typeset myarray+=s; error: append used like env prefix; Try to append list to element; typeset s+=; typeset s${dyn}+=; export readonly +=; local +=; assign builtin appending array: declare d+=(d e)
 - **array**: space before ( in array initialization; array with invalid token; ${!a[1]} is named ref in bash; Arrays can't be used as env bindings; Associative arrays can't be used as env bindings either; Set array item to array; Multiple subscripts not allowed; Length op, index op, then transform op is not allowed; array default; a+=() modifies existing instance of BashArray
-- **array-assoc**: unset -v and assoc array; nameref and assoc array; ${!ref} and assoc array; printf -v and assoc array; bash bug: (( A["$key"] = 1 )) doesn't work
+- **array-assoc**: unset -v and assoc array; nameref and assoc array; printf -v and assoc array; bash bug: (( A["$key"] = 1 )) doesn't work
 - **brace-expansion**: expansion on RHS of assignment; no expansion with RHS assignment; Two kinds of tilde expansion; Mixed case char expansion is invalid
 - **tilde**: ${undef:-~}; ${x//~/~root}; x=foo:~ has tilde expansion; a[x]=foo:~ has tilde expansion; tilde expansion an assignment keyword; x=${undef-~:~}; temp assignment x=~ env
 - **glob**: Glob of unescaped [[] and []]; Glob of negated unescaped [[] and []]; \ in unquoted substitutions does not match a backslash; \ in unquoted substitutions escapes globchars; shopt -u globskipdots shows . and ..

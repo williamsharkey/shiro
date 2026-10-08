@@ -3390,7 +3390,14 @@ export class Shell {
           j++;
         }
         if (depth === 0 && j < line.length) {
-          const inner = line.slice(i + 2, j); // content between ${ and }
+          let inner = line.slice(i + 2, j); // content between ${ and }
+          // ${!ref…}: the variable named by $ref (ref=a, a[0] or a[@]) with the rest applied
+          const ind = /^!([A-Za-z_][A-Za-z0-9_]*|[0-9]+)((?![@*]$)[\s\S]*)$/.exec(inner);
+          if (ind && !/^\[[@*]\]$/.test(ind[2]) && !this.namerefs.has(ind[1])) {
+            const target = this.getVar(ind[1]) ?? '';
+            if (/^([A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?|[0-9]+|[@*#?$!-])$/.test(target)) inner = target + ind[2];
+            else if (ind[2] === '') { i = j + 1; continue; } // ${!x} with x empty or not a name: nothing
+          }
           const ref = this.expandArrayRef(inner);
           if (ref && 'list' in ref) {
             const vals = ref.list;
@@ -3502,6 +3509,16 @@ export class Shell {
     if (names) {
       const all = new Set([...Object.keys(this.env), ...this.arrays.keys(), ...this.assocArrays.keys()]);
       return { list: [...all].filter((k) => k.startsWith(names[1]) && /^[A-Za-z_]/.test(k)).sort(), star: names[2] === '*' };
+    }
+    // ${@-word} ${@:-word} ${*+word} …: set means at least one parameter
+    const pdef = /^([@*])(:?)([-+])([\s\S]*)$/.exec(inner);
+    if (pdef) {
+      const args = this.getPositionalArgs();
+      const star = pdef[1] === '*';
+      const unset = args.length === 0;
+      const check = pdef[2] ? unset || args.join(star ? (this.env['IFS'] ?? ' ').slice(0, 1) : ' ') === '' : unset;
+      if (pdef[3] === '+') return { text: check ? '' : this.expandVars(pdef[4]), raw: true };
+      return check ? { text: this.expandVars(pdef[4]), raw: true } : { list: args, star };
     }
     // ${@:off:len} / ${*:off:len}: offset 0 is $0
     if (/^[@*]:(?![-=+?])/.test(inner)) {
@@ -3939,7 +3956,7 @@ export class Shell {
     }
 
     // Simple ${VAR}
-    const simpleMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)$/);
+    const simpleMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*|[0-9]+)$/);
     if (simpleMatch) {
       return this.env[simpleMatch[1]] ?? this.scalarOf(simpleMatch[1]) ?? '';
     }
@@ -4303,10 +4320,21 @@ export class Shell {
         redirects.push({ type: '2>&1', target: '' });
         continue;
       }
-      const m = /^(\d*)(>>|>\||>|<>|<)(?:&(\d+|-))?$/.exec(tok);
+      const m = /^(\d*|\{[A-Za-z_][A-Za-z0-9_]*\})(>>|>\||>|<>|<)(?:&(\d+|-))?$/.exec(tok);
       if (!m || (m[3] === undefined && i + 1 >= tokens.length)) { args.push(tok); continue; }
       const op = m[2];
-      const fd = m[1] !== '' ? parseInt(m[1], 10) : op === '<' || op === '<>' ? 0 : 1;
+      let fd = m[1] !== '' ? parseInt(m[1], 10) : op === '<' || op === '<>' ? 0 : 1;
+      if (m[1].startsWith('{')) {
+        // {name}>file: a new fd (10 and up) whose number goes into $name; {name}>&- closes $name
+        const name = m[1].slice(1, -1);
+        if (m[3] === '-') fd = parseInt(this.getVar(name) ?? '', 10);
+        else {
+          fd = 10;
+          while (this.userFds.has(fd) || this.fileDescriptors.has(fd)) fd++;
+          this.setVar(name, String(fd));
+        }
+        if (isNaN(fd)) { args.push(tok); continue; }
+      }
       let dupOf: string | undefined = m[3];
       let target = '';
       if (dupOf === undefined) {
@@ -4486,7 +4514,7 @@ export class Shell {
 
       // >, >>, >| and N>, N>>, N>&M, N>&-, >&M (an all-digit word right before > is the fd)
       if (ch === '>' && !inSingle && !inDouble) {
-        const fdPrefix = !quoted && /^\d+$/.test(current) ? current : '';
+        const fdPrefix = !quoted && /^(\d+|\{[A-Za-z_][A-Za-z0-9_]*\})$/.test(current) ? current : '';
         if (fdPrefix) current = '';
         if (current || quoted) { tokens.push(current); current = ''; } quoted = false;
         let op = '>';
@@ -4523,7 +4551,7 @@ export class Shell {
           continue;
         }
         // <, N<, <&M, N<&M, N<&-, <> (an all-digit word right before < is the fd)
-        const fdPrefix = !quoted && /^\d+$/.test(current) ? current : '';
+        const fdPrefix = !quoted && /^(\d+|\{[A-Za-z_][A-Za-z0-9_]*\})$/.test(current) ? current : '';
         if (fdPrefix) current = '';
         if (current || quoted) { tokens.push(current); current = ''; } quoted = false;
         i++;

@@ -156,7 +156,7 @@
    ]
   },
   "var-op-test": {
-   "pass": 22,
+   "pass": 26,
    "total": 35,
    "failures": [
     {
@@ -184,28 +184,12 @@
      "name": "array and - and +"
     },
     {
-     "i": 18,
-     "name": "$@ (empty) and - and +"
-    },
-    {
      "i": 21,
      "name": "$* (\"\" \"\") and - and + (IFS=)"
     },
     {
-     "i": 22,
-     "name": "\"$*\" (\"\" \"\") and - and + (IFS=)"
-    },
-    {
      "i": 30,
      "name": "\"\\z\" as arg"
-    },
-    {
-     "i": 34,
-     "name": "op-test for ${!array} with array=\"a\" and array=\"a[0]\""
-    },
-    {
-     "i": 35,
-     "name": "op-test for ${!array} with array=\"a[@]\" or array=\"a[*]\""
     },
     {
      "i": 36,
@@ -310,18 +294,9 @@
    ]
   },
   "var-num": {
-   "pass": 5,
+   "pass": 7,
    "total": 7,
-   "failures": [
-    {
-     "i": 0,
-     "name": "Normal and braced"
-    },
-    {
-     "i": 1,
-     "name": "In function"
-    }
-   ]
+   "failures": []
   },
   "vars-special": {
    "pass": 30,
@@ -460,7 +435,7 @@
    ]
   },
   "redirect": {
-   "pass": 28,
+   "pass": 29,
    "total": 39,
    "failures": [
     {
@@ -499,10 +474,6 @@
      "i": 35,
      "name": "echo foo >&N where N is first unused fd",
      "timeout": true
-    },
-    {
-     "i": 36,
-     "name": "exec {fd}>&- (OSH regression: fails to close fd)"
     },
     {
      "i": 40,
@@ -1053,7 +1024,7 @@
    ]
   },
   "array-assoc": {
-   "pass": 33,
+   "pass": 34,
    "total": 38,
    "failures": [
     {
@@ -1063,10 +1034,6 @@
     {
      "i": 31,
      "name": "nameref and assoc array"
-    },
-    {
-     "i": 32,
-     "name": "${!ref} and assoc array"
     },
     {
      "i": 33,
