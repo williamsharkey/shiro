@@ -251,6 +251,10 @@ export const pipCmd: Command = {
   name: 'pip',
   description: 'Python package manager',
   async exec(ctx: CommandContext) {
+    // With the WASI python package, pip installs real wheels from PyPI
+    const pip = await import('./pip');
+    if (await pip.havePython(ctx.fs)) return pip.pipMain(ctx, ctx.args, await pip.pipTarget(ctx));
+
     const args = ctx.args;
     if (args[0] !== 'install' || !args[1]) {
       ctx.stderr = 'usage: pip install <package> [<package>...]\n';

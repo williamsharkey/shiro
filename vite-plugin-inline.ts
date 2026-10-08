@@ -37,29 +37,11 @@ export function inlineAssets(): Plugin {
         (_match, src) => {
           const chunk = bundle[src];
           if (chunk && chunk.type === 'chunk' && chunk.isEntry) {
-            // Resolve Vite's module preload dep markers. Vite's internal
-            // buildImportAnalysisPlugin replaces __VITE_PRELOAD__ with actual
-            // dep arrays after all plugins' generateBundle hooks — but we're
-            // inlining the code now, before that pass runs. Our lazy chunks
-            // have no CSS/shared deps, so `void 0` (no deps) is correct.
-            let code = chunk.code;
-            if (code.includes('__VITE_PRELOAD__')) {
-              code = code.replace(/__VITE_PRELOAD__/g, 'void 0');
-            }
-            // The entry chunk was in assets/ alongside lazy chunks, so its
-            // dynamic imports use "./chunk.js". Now that it's inlined into
-            // index.html (one level up), rewrite to "./assets/chunk.js".
-            const assetDir = src.split('/')[0]; // e.g. "assets"
-            if (assetDir) {
-              code = code.replace(
-                /import\("\.\/([^"]+\.js)"\)/g,
-                (_m, file) => `import("./${assetDir}/${file}")`,
-              );
-            }
-            // Keep the entry chunk file — lazy chunks import shared code
-            // from it (e.g. import {...} from "./index-xxx.js"). We inline
-            // it into HTML for fast boot, but it must also stay as a file.
-            return `<script type="module">${code}</script>`;
+            // The entry stays a file that the inline script imports. Inlining
+            // its code as well made two instances of every module in it: the
+            // inline copy, and the file that lazy chunks import shared code
+            // from, each with its own module state (caches, kernel singletons).
+            return `<script type="module">import "./${src}";</script>`;
           }
           return _match;
         }
@@ -74,7 +56,8 @@ export function inlineAssets(): Plugin {
             const css = typeof asset.source === 'string'
               ? asset.source
               : new TextDecoder().decode(asset.source);
-            delete bundle[href]; // remove standalone CSS file
+            // Keep the file too: lazy chunks that import other lazy chunks
+            // list it as a preload dependency, and a 404 there rejects import()
             return `<style>${css}</style>`;
           }
           return _match;
