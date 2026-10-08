@@ -48,7 +48,6 @@ async function ensureLua(ctx: CommandContext): Promise<any> {
  */
 async function runWasiLua(ctx: CommandContext): Promise<number> {
   const { findPackage, getCompiledModule } = await import('../wasi-packages');
-  const { WasiRT, WasiExit } = await import('../wasi-runtime');
 
   const pkg = findPackage('lua');
   if (!pkg) {
@@ -69,20 +68,8 @@ async function runWasiLua(ctx: CommandContext): Promise<number> {
       ctx.stderr += `  ${msg}\n`;
     });
 
-    const config = {
-      fs: ctx.fs,
-      cwd: ctx.cwd,
-      args: wasiArgs,
-      env: { ...ctx.env },
-      stdin: ctx.stdin || '',
-      onStdout: (text: string) => { ctx.stdout += text; },
-      onStderr: (text: string) => { ctx.stderr += text; },
-      preopens: { '/': '/', '.': ctx.cwd } as Record<string, string>,
-    };
-
-    const wasi = new WasiRT(config);
-    await wasi.preloadTree(ctx.cwd, 3, 100);
-    return await wasi.run(wasmModule);
+    const { runWasiProgram } = await import('../wasi/run-command');
+    return await runWasiProgram(ctx, { module: wasmModule, argv: wasiArgs });
   } catch (e: any) {
     if (e && typeof e === 'object' && 'code' in e) return (e as any).code;
     ctx.stderr += `lua: ${e.message}\n`;

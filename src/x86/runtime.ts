@@ -20,6 +20,21 @@ export interface X86Context {
   stdin: string;
   writeStdout: (s: string) => void;
   writeStderr: (s: string) => void;
+  /** Kernel processes: blocking stdin reads (stdin is then ignored) */
+  readStdin?: (n: number) => Promise<Uint8Array>;
+  /** Kernel processes: awaited before each syscall (a stopped process waits here) */
+  checkpoint?: () => Promise<void>;
+  /** Kernel processes: aborted when the process is killed; the loop also yields periodically */
+  signal?: AbortSignal;
+}
+
+/** Thrown out of the emulator loop when ctx.signal aborts */
+export class X86Killed extends Error {}
+
+/** Let the page breathe between long instruction runs of a kernel process, and honour kills. */
+async function yieldPoint(ctx: X86Context, pause: boolean): Promise<void> {
+  if (pause) await new Promise((r) => setTimeout(r, 0));
+  if (ctx.signal?.aborted) throw new X86Killed('killed');
 }
 
 export interface DebugOptions {
@@ -145,6 +160,7 @@ export async function executeElfFromBytes(
     ctx.writeStdout, ctx.writeStderr,
     ctx.stdin,
   );
+  if (ctx.readStdin) syscalls.readStdin = ctx.readStdin;
 
   decoder.onSyscall = () => {
     (decoder as any)._pendingSyscall = true;
@@ -156,8 +172,11 @@ export async function executeElfFromBytes(
       (decoder as any)._pendingSyscall = false;
       decoder.step();
       instructionCount++;
+      if (ctx.signal && (instructionCount & 0xfffff) === 0) await yieldPoint(ctx, true);
 
       if ((decoder as any)._pendingSyscall) {
+        if (ctx.checkpoint) await ctx.checkpoint();
+        if (ctx.signal) await yieldPoint(ctx, false);
         await syscalls.handleSyscall();
       }
     }
@@ -170,6 +189,7 @@ export async function executeElfFromBytes(
     if (e instanceof X86Exit) {
       return e.code;
     }
+    if (e instanceof X86Killed) throw e;
     ctx.writeStderr(`shiro: ${argv0}: ${e.message}\r\n`);
     return 1;
   }

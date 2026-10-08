@@ -73,6 +73,7 @@ import { spiritCmd } from './commands/spirit';
 import { processTable } from './process-table';
 import { getKernel } from './kernel/kernel';
 import { installNet } from './kernel/net';
+import { attachKernelTty } from './kernel/pty';
 import { iframeServer } from './iframe-server';
 import { unixCommands } from './commands/unix';
 import { ShiroTerminal } from './terminal';
@@ -451,6 +452,8 @@ async function main() {
   const kernel = getKernel();
   kernel.attach(fs, shell);
   installNet(kernel); // socket syscalls (src/kernel/net.ts, docs/NETWORKING.md)
+  // Signals and job control for kernel processes; /dev/ptmx and /dev/pts/N
+  attachKernelTty(kernel);
 
   // Populate API keys from localStorage so `claude` CLI picks them up
   const storedAnthropicKey = localStorage.getItem('shiro_anthropic_key') || localStorage.getItem('shiro_api_key');
