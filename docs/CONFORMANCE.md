@@ -8,7 +8,7 @@ conformance work started (fc0af54).
 |---|---|---|
 | [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1295/1567 (82.6%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1275/1567 (81.4%)** |
-| [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **605/635 (95.3%)** |
+| [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **606/635 (95.4%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **146/320 (45.6%)** |
 
 How each suite runs, and what is and isn't scored, is described in
@@ -290,7 +290,7 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 | find (old-style) | 1/1 | 1/1 | 0 |
 | fold | 0/3 | 3/3 | 0 |
 | grep | 0/48 | 47/48 | 1 |
-| gunzip (old-style) | 1/1 | 0/1 | 1 |
+| gunzip (old-style) | 1/1 | 1/1 | 0 |
 | gzip (old-style) | 3/3 | 3/3 | 0 |
 | head | 0/3 | 3/3 | 0 |
 | hexdump | 0/0 | 0/0 | 0 |
@@ -351,7 +351,6 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 - **echo (old-style)**: echo-prints-slash_41
 - **false (old-style)**: false-is-silent
 - **grep**: grep -r on symlink to dir
-- **gunzip (old-style)**: gunzip-reads-from-standard-input
 - **md5sum (old-style)**: md5sum-verifies-non-binary-file
 - **mv (old-style)**: mv-preserves-hard-links
 - **readlink**: readlink -f on an invalid link

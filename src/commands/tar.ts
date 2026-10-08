@@ -138,7 +138,7 @@ function sniff(d: Uint8Array): Compression {
 
 async function decompress(d: Uint8Array, c: Compression): Promise<Uint8Array> {
   switch (c) {
-    case 'gzip': return streamTransform(d, new (globalThis as any).DecompressionStream('gzip'));
+    case 'gzip': return (await import('./compress/gzip-codec')).gunzip(d); // multi-member .tgz too
     case 'bzip2': return (await import('./bzip2')).bzip2Decompress(d);
     case 'xz': return (await import('./xz')).xzDecompress(d);
     case 'zstd': return (await import('./zstd')).zstdDecompress(d);

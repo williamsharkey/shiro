@@ -161,13 +161,9 @@
    ]
   },
   "gunzip (old-style)": {
-   "pass": 0,
+   "pass": 1,
    "total": 1,
-   "failures": [
-    {
-     "name": "gunzip-reads-from-standard-input"
-    }
-   ]
+   "failures": []
   },
   "gzip (old-style)": {
    "pass": 3,
