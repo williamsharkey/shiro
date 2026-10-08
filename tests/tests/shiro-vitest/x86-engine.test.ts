@@ -48,6 +48,13 @@ describe('x86 engine selection', () => {
     expect(await chooseX86Engine({})).toBe('blink');
     expect(await chooseX86Engine({ SHIRO_X86_ENGINE: 'x86' })).toBe('x86');
   });
+
+  it('chooseElfRunner falls back when the old engine is forced', async () => {
+    const { chooseElfRunner } = await import('@shiro/x86-engine');
+    const fallback = async () => 7;
+    expect(await chooseElfRunner('/bin/x', { SHIRO_X86_ENGINE: 'x86' }, () => fallback)).toBe(fallback);
+    expect(await chooseElfRunner('/bin/x', {}, () => fallback)).not.toBe(fallback);
+  });
 });
 
 describe('Blink engine: static C (musl)', () => {

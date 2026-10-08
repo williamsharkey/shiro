@@ -15,6 +15,7 @@
  */
 
 import type { X86Context } from '../x86/runtime';
+import type { Runner } from '../kernel/kernel';
 
 export type X86EngineName = 'blink' | 'x86';
 
@@ -38,4 +39,17 @@ export async function runElf(path: string, args: string[], ctx: X86Context, sign
   }
   const { executeElf } = await import('../x86/runtime');
   return executeElf(path, args, ctx);
+}
+
+/**
+ * Kernel Runner for the ELF at `path`: Blink when this page can run it,
+ * otherwise `fallback()` (e.g. unix/pty's src/x86 x86Runner). For callers
+ * that pick a runner themselves instead of going through kernel loaders.
+ */
+export async function chooseElfRunner(path: string, env: Record<string, string>, fallback: () => Runner | Promise<Runner>): Promise<Runner> {
+  if ((await chooseX86Engine(env)) === 'blink') {
+    const { blinkRunner } = await import('./blink');
+    return blinkRunner(path);
+  }
+  return fallback();
 }
