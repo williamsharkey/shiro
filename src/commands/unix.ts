@@ -114,6 +114,7 @@ import { dcCmd } from './dc';
 import { splitCmd } from './split';
 import { factorCmd } from './factor';
 import { cksumCmd } from './cksum';
+import { sumCmd } from './sum';
 import { base32Cmd } from './base32';
 import { numfmtCmd } from './numfmt';
 import { csplitCmd } from './csplit';
@@ -134,7 +135,7 @@ export const unixCommands: Command[] = [
   test, time, timeout, touch, tr, trap, trueCmd, colon, tsort, type, ulimit, umask,
   unalias, unexpand, uniq, uptime, watch, wc, which, whoami, xargs, yes,
   revCmd, tacCmd, shufCmd, cmpCmd, ddCmd, xxdCmd, dcCmd, splitCmd,
-  factorCmd, cksumCmd, base32Cmd, numfmtCmd, csplitCmd,
+  factorCmd, cksumCmd, sumCmd, base32Cmd, numfmtCmd, csplitCmd,
   niceCmd, wCmd, whoCmd, usersCmd, lsofCmd, dos2unixCmd, unix2dosCmd,
 ];
 

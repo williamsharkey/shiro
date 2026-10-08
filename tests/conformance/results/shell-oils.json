@@ -3,14 +3,9 @@
  "title": "Shell: oils spec tests",
  "files": {
   "smoke": {
-   "pass": 17,
+   "pass": 18,
    "total": 18,
-   "failures": [
-    {
-     "i": 14,
-     "name": "failed command"
-    }
-   ]
+   "failures": []
   },
   "comments": {
    "pass": 2,
@@ -198,16 +193,12 @@
    ]
   },
   "var-op-strip": {
-   "pass": 24,
+   "pass": 25,
    "total": 28,
    "failures": [
     {
      "i": 3,
      "name": "Remove const suffix is vectorized on $@ array"
-    },
-    {
-     "i": 10,
-     "name": "Strip unicode prefix"
     },
     {
      "i": 23,
@@ -757,16 +748,12 @@
    ]
   },
   "builtin-cd": {
-   "pass": 25,
+   "pass": 26,
    "total": 28,
    "failures": [
     {
      "i": 14,
      "name": "pwd in symlinked dir on shell initialization"
-    },
-    {
-     "i": 15,
-     "name": "Test the current directory after 'cd ..' involving symlinks"
     },
     {
      "i": 26,
@@ -1188,7 +1175,7 @@
    ]
   },
   "errexit": {
-   "pass": 28,
+   "pass": 29,
    "total": 35,
    "failures": [
     {
@@ -1214,10 +1201,6 @@
     {
      "i": 29,
      "name": "bash atoms [[ (( - redir failure checked"
-    },
-    {
-     "i": 34,
-     "name": "Command sub exit code is lost"
     }
    ]
   },
@@ -1287,7 +1270,7 @@
    ]
   },
   "alias": {
-   "pass": 30,
+   "pass": 31,
    "total": 48,
    "failures": [
     {
@@ -1357,10 +1340,6 @@
     {
      "i": 40,
      "name": "Corner case: alias inside LHS array arithmetic expression"
-    },
-    {
-     "i": 47,
-     "name": "alias with word of multiple lines"
     }
    ]
   },

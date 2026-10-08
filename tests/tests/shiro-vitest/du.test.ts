@@ -7,6 +7,6 @@ it('du sums file sizes through subdirectories', async () => {
   await fs.writeFile('/tmp/d/a.txt', 'x'.repeat(5000));
   await fs.writeFile('/tmp/d/sub/b.txt', 'y'.repeat(3000));
   expect((await run(shell, 'du -s /tmp/d')).output.trim()).toBe('8\t/tmp/d');
-  expect((await run(shell, 'du -sh /tmp/d')).output.trim()).toBe('8K\t/tmp/d');
+  expect((await run(shell, 'du -sh /tmp/d')).output.trim()).toBe('8.0K\t/tmp/d'); // GNU: one decimal below 10 (8.0K)
   expect((await run(shell, 'du -a /tmp/d')).output).toContain('/tmp/d/sub/b.txt');
 });

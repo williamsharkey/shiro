@@ -1,373 +1,714 @@
+import type { Command, CommandContext } from './index';
 
-import type { Command } from './index';
-import { parseArgs, readFileText, readdirEntries, statEntry } from './flags';
+/**
+ * tar — GNU tar-compatible (GNU format archives: ustar headers with
+ * ././@LongLink entries for long names).
+ *
+ *   tar -c|-x|-t|-r [OPTIONS] [-f ARCHIVE] [FILE...]
+ *
+ * Old-style bundled options (`tar czf a.tgz dir`, `tar Ox`) are accepted.
+ * -f - (the default) is stdin/stdout. Options: -C DIR, -v, -z -j -J --zstd
+ * -a, -O, -k, --overwrite, -m, -p, -h, -P, -X FILE, --exclude=PAT, -T FILE,
+ * --strip-components=N, --no-recursion, --wildcards. Regular files,
+ * directories, symlinks and hard links (extracted as copies; the filesystem
+ * has none) are supported. Errors follow GNU: exit 2 with "Exiting with
+ * failure status due to previous errors".
+ */
 
-// POSIX ustar 512-byte block format
-const BLOCK_SIZE = 512;
+const BLOCK = 512;
+const enc = new TextEncoder();
+const dec = new TextDecoder();
 
-function makeUstarHeader(
-  name: string, size: number, mtime: number, isDir: boolean, prefix?: string,
-): Uint8Array {
-  const header = new Uint8Array(BLOCK_SIZE);
-  const enc = new TextEncoder();
-
-  // Handle long names via prefix field (ustar)
-  let fileName = name;
-  let filePrefix = prefix || '';
-  if (fileName.length > 100 && !filePrefix) {
-    const slash = fileName.lastIndexOf('/', 155);
-    if (slash > 0) {
-      filePrefix = fileName.slice(0, slash);
-      fileName = fileName.slice(slash + 1);
-    }
-  }
-
-  // name (100 bytes)
-  const nameBytes = enc.encode(fileName.slice(0, 100));
-  header.set(nameBytes, 0);
-
-  // mode (8 bytes octal)
-  const mode = isDir ? '0000755' : '0000644';
-  header.set(enc.encode(mode.padStart(7, '0') + '\0'), 100);
-
-  // uid (8 bytes)
-  header.set(enc.encode('0001000\0'), 108);
-
-  // gid (8 bytes)
-  header.set(enc.encode('0001000\0'), 116);
-
-  // size (12 bytes octal)
-  const sizeOctal = isDir ? '00000000000' : size.toString(8).padStart(11, '0');
-  header.set(enc.encode(sizeOctal + '\0'), 124);
-
-  // mtime (12 bytes octal)
-  const mtimeOctal = Math.floor(mtime / 1000).toString(8).padStart(11, '0');
-  header.set(enc.encode(mtimeOctal + '\0'), 136);
-
-  // Initially fill checksum with spaces for calculation
-  for (let i = 148; i < 156; i++) header[i] = 0x20;
-
-  // typeflag (1 byte): '5' = directory, '0' = regular file
-  header[156] = isDir ? 0x35 : 0x30;
-
-  // magic (6 bytes) "ustar\0"
-  header.set(enc.encode('ustar\0'), 257);
-
-  // version (2 bytes) "00"
-  header.set(enc.encode('00'), 263);
-
-  // uname (32 bytes)
-  header.set(enc.encode('user'), 265);
-
-  // gname (32 bytes)
-  header.set(enc.encode('user'), 297);
-
-  // prefix (155 bytes)
-  if (filePrefix) {
-    header.set(enc.encode(filePrefix.slice(0, 155)), 345);
-  }
-
-  // Calculate checksum (sum of all bytes, treating checksum field as spaces)
-  let cksum = 0;
-  for (let i = 0; i < BLOCK_SIZE; i++) cksum += header[i];
-  const cksumStr = cksum.toString(8).padStart(6, '0') + '\0 ';
-  header.set(enc.encode(cksumStr), 148);
-
-  return header;
+interface Header {
+  name: string;
+  mode: number;
+  uid: number;
+  gid: number;
+  size: number;
+  mtime: number; // seconds
+  type: string; // '0' file, '1' hard link, '2' symlink, '5' dir, ...
+  linkname: string;
+  uname: string;
+  gname: string;
 }
 
-function parseUstarHeader(block: Uint8Array): {
-  name: string; size: number; mtime: number; isDir: boolean; isEnd: boolean;
-} {
-  // Check for end-of-archive (two zero blocks)
-  let allZero = true;
-  for (let i = 0; i < BLOCK_SIZE; i++) {
-    if (block[i] !== 0) { allZero = false; break; }
-  }
-  if (allZero) return { name: '', size: 0, mtime: 0, isDir: false, isEnd: true };
+function octal(n: number, width: number): string {
+  return Math.max(0, Math.floor(n)).toString(8).padStart(width - 1, '0') + '\0';
+}
 
-  const dec = new TextDecoder();
-  const readField = (off: number, len: number) => {
-    const slice = block.slice(off, off + len);
-    const nullIdx = slice.indexOf(0);
-    return dec.decode(nullIdx >= 0 ? slice.slice(0, nullIdx) : slice);
+function rawHeader(h: Header): Uint8Array {
+  const b = new Uint8Array(BLOCK);
+  const put = (s: string | Uint8Array, off: number, len: number) => b.set((typeof s === 'string' ? enc.encode(s) : s).slice(0, len), off);
+  put(h.name, 0, 100);
+  put(octal(h.mode & 0o7777, 8), 100, 8);
+  put(octal(h.uid, 8), 108, 8);
+  put(octal(h.gid, 8), 116, 8);
+  put(octal(h.size, 12), 124, 12);
+  put(octal(h.mtime, 12), 136, 12);
+  b.fill(0x20, 148, 156);
+  b[156] = h.type.charCodeAt(0);
+  put(h.linkname, 157, 100);
+  put('ustar  \0', 257, 8); // GNU magic + version
+  put(h.uname, 265, 32);
+  put(h.gname, 297, 32);
+  let sum = 0;
+  for (let i = 0; i < BLOCK; i++) sum += b[i];
+  put(sum.toString(8).padStart(6, '0') + '\0 ', 148, 8);
+  return b;
+}
+
+/** Header blocks for an entry, with GNU long name/link records when needed */
+function headerBlocks(h: Header): Uint8Array[] {
+  const out: Uint8Array[] = [];
+  const long = (type: 'L' | 'K', text: string) => {
+    const data = enc.encode(text + '\0');
+    out.push(rawHeader({ name: '././@LongLink', mode: 0o644, uid: 0, gid: 0, size: data.length, mtime: 0, type, linkname: '', uname: 'root', gname: 'root' }));
+    out.push(...dataBlocks(data));
   };
-
-  const prefix = readField(345, 155);
-  const name = (prefix ? prefix + '/' : '') + readField(0, 100);
-  const size = parseInt(readField(124, 12), 8) || 0;
-  const mtime = (parseInt(readField(136, 12), 8) || 0) * 1000;
-  const typeflag = block[156];
-  const isDir = typeflag === 0x35 || name.endsWith('/');
-
-  return { name, size, mtime, isDir, isEnd: false };
+  if (enc.encode(h.linkname).length > 100) long('K', h.linkname);
+  if (enc.encode(h.name).length > 100) long('L', h.name);
+  out.push(rawHeader(h));
+  return out;
 }
 
-function padToBlock(data: Uint8Array): Uint8Array {
-  const remainder = data.length % BLOCK_SIZE;
-  if (remainder === 0) return data;
-  const padded = new Uint8Array(data.length + (BLOCK_SIZE - remainder));
+function dataBlocks(data: Uint8Array): Uint8Array[] {
+  if (!data.length) return [];
+  const padded = new Uint8Array(Math.ceil(data.length / BLOCK) * BLOCK);
   padded.set(data);
-  return padded;
+  return [padded];
 }
+
+function field(b: Uint8Array, off: number, len: number): string {
+  const s = b.subarray(off, off + len);
+  const z = s.indexOf(0);
+  return dec.decode(z >= 0 ? s.subarray(0, z) : s);
+}
+
+function parseOctal(b: Uint8Array, off: number, len: number): number {
+  // base-256 (GNU) for large values
+  if (b[off] & 0x80) {
+    let n = b[off] & 0x7f;
+    for (let i = 1; i < len; i++) n = n * 256 + b[off + i];
+    return n;
+  }
+  const s = field(b, off, len).trim();
+  return s ? parseInt(s, 8) || 0 : 0;
+}
+
+function checksumOk(b: Uint8Array): boolean {
+  let sum = 0;
+  for (let i = 0; i < BLOCK; i++) sum += i >= 148 && i < 156 ? 0x20 : b[i];
+  const stored = parseOctal(b, 148, 8);
+  return stored === sum;
+}
+
+function isZero(b: Uint8Array): boolean {
+  for (let i = 0; i < b.length; i++) if (b[i]) return false;
+  return true;
+}
+
+class TarFatal extends Error {}
+
+async function streamTransform(data: Uint8Array, stream: any): Promise<Uint8Array> {
+  const writer = stream.writable.getWriter();
+  writer.write(data as any).catch(() => {});
+  writer.close().catch(() => {});
+  const reader = stream.readable.getReader();
+  const chunks: Uint8Array[] = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+  let o = 0;
+  for (const c of chunks) { out.set(c, o); o += c.length; }
+  return out;
+}
+
+type Compression = 'gzip' | 'bzip2' | 'xz' | 'zstd' | null;
+
+function sniff(d: Uint8Array): Compression {
+  if (d[0] === 0x1f && d[1] === 0x8b) return 'gzip';
+  if (d[0] === 0x42 && d[1] === 0x5a && d[2] === 0x68) return 'bzip2';
+  if (d[0] === 0xfd && d[1] === 0x37 && d[2] === 0x7a && d[3] === 0x58) return 'xz';
+  if (d[0] === 0x28 && d[1] === 0xb5 && d[2] === 0x2f && d[3] === 0xfd) return 'zstd';
+  return null;
+}
+
+async function decompress(d: Uint8Array, c: Compression): Promise<Uint8Array> {
+  switch (c) {
+    case 'gzip': return streamTransform(d, new (globalThis as any).DecompressionStream('gzip'));
+    case 'bzip2': return (await import('./bzip2')).bzip2Decompress(d);
+    case 'xz': return (await import('./xz')).xzDecompress(d);
+    case 'zstd': return (await import('./zstd')).zstdDecompress(d);
+    default: return d;
+  }
+}
+
+async function compress(d: Uint8Array, c: Compression): Promise<Uint8Array> {
+  switch (c) {
+    case 'gzip': return streamTransform(d, new (globalThis as any).CompressionStream('gzip'));
+    case 'bzip2': return new Uint8Array((await import('./bzip2')).bzip2Compress(d));
+    case 'xz': case 'zstd': throw new TarFatal(`${c} compression is not supported`);
+    default: return d;
+  }
+}
+
+/** Bytes of stdin text: latin1 when that makes an archive (binary piped from gzip), else UTF-8 */
+function stdinBytes(s: string): Uint8Array {
+  let latin = true;
+  for (let i = 0; i < s.length && latin; i++) if (s.charCodeAt(i) > 0xff) latin = false;
+  if (latin) {
+    const b = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i);
+    if (sniff(b) || (b.length >= BLOCK && checksumOk(b.subarray(0, BLOCK)))) return b;
+  }
+  return enc.encode(s);
+}
+
+function latin1(b: Uint8Array): string {
+  let s = '';
+  for (let i = 0; i < b.length; i += 8192) s += String.fromCharCode(...b.subarray(i, i + 8192));
+  return s;
+}
+
+/** fnmatch-style glob (with GNU tar's defaults: '*' matches '/') */
+function globRe(p: string): RegExp {
+  let re = '';
+  for (let i = 0; i < p.length; i++) {
+    const c = p[i];
+    if (c === '\\' && i + 1 < p.length) { re += '\\' + p[++i]; continue; }
+    if (c === '*') re += '.*';
+    else if (c === '?') re += '.';
+    else if (c === '[') {
+      const end = p.indexOf(']', i + 2);
+      if (end < 0) { re += '\\['; continue; }
+      let body = p.slice(i + 1, end);
+      if (body[0] === '!') body = '^' + body.slice(1);
+      re += `[${body.replace(/\\/g, '\\\\')}]`;
+      i = end;
+    } else re += /[.+^${}()|\\/]/.test(c) ? '\\' + c : c;
+  }
+  return new RegExp(`^${re}$`);
+}
+
+const MODE_CHARS = (type: string, mode: number) => {
+  const t = type === '5' ? 'd' : type === '2' ? 'l' : type === '1' ? 'h' : type === '3' ? 'c' : type === '4' ? 'b' : type === '6' ? 'p' : '-';
+  const rwx = (b: number, s: boolean, sc: string) => `${b & 4 ? 'r' : '-'}${b & 2 ? 'w' : '-'}${s ? (b & 1 ? sc : sc.toUpperCase()) : b & 1 ? 'x' : '-'}`;
+  return (t === 'h' ? '-' : t) + rwx((mode >> 6) & 7, !!(mode & 0o4000), 's') + rwx((mode >> 3) & 7, !!(mode & 0o2000), 's') + rwx(mode & 7, !!(mode & 0o1000), 't');
+};
+
+const p2 = (n: number) => String(n).padStart(2, '0');
 
 export const tar: Command = {
   name: "tar",
-  description: "Archive utility (ustar format)",
+  description: "Archive utility (GNU tar format)",
   async exec(ctx) {
-    const args = ctx.args;
-    // Support combined flags without leading dash: tar czf → tar -czf
-    let processedArgs = args;
-    if (args.length > 0 && /^[a-zA-Z]{2,}$/.test(args[0]) && !args[0].startsWith('-')) {
-      processedArgs = ['-' + args[0], ...args.slice(1)];
-    }
-    const { flags, values, positional } = parseArgs(processedArgs, ["f", "C"]);
-
-    const create = flags.c || flags.create;
-    const extract = flags.x || flags.extract;
-    const list = flags.t || flags.list;
-    const verbose = flags.v || flags.verbose;
-    const gzip = flags.z;
-    const bzip2Flag = flags.j;
-    const xzFlag = flags.J;
-    const zstdFlag = flags.zstd;
-    const file = values.f;
-    const changeDir = values.C;
-
-    let workingDir = ctx.cwd;
-    if (changeDir) {
-      workingDir = ctx.fs.resolvePath(changeDir, ctx.cwd);
-    }
-
-    const modes = [create, extract, list].filter(Boolean).length;
-    if (modes === 0) {
-      ctx.stderr += "tar: You must specify one of -c, -x, or -t\n";
-      return 1;
-    }
-    if (modes > 1) {
-      ctx.stderr += "tar: You may not specify more than one -c, -x, or -t\n";
-      return 1;
-    }
-
     try {
-      if (create) {
-        if (!file) {
-          ctx.stderr += "tar: Refusing to write archive to terminal (missing -f option?)\n";
-          return 1;
-        }
-
-        const filesToArchive = positional;
-        if (filesToArchive.length === 0) {
-          ctx.stderr += "tar: Cowardly refusing to create an empty archive\n";
-          return 1;
-        }
-
-        const blocks: Uint8Array[] = [];
-        const encoder = new TextEncoder();
-
-        async function collectFiles(path: string, archivePath: string) {
-          const resolved = ctx.fs.resolvePath(path, workingDir);
-          const stat = await statEntry(ctx.fs, resolved);
-
-          if (stat.type === "dir") {
-            const dirPath = archivePath.endsWith('/') ? archivePath : archivePath + '/';
-            blocks.push(makeUstarHeader(dirPath, 0, stat.mtime || Date.now(), true));
-            if (verbose) ctx.stdout += dirPath + '\n';
-
-            const items = await readdirEntries(ctx.fs, resolved);
-            for (const item of items) {
-              await collectFiles(resolved + "/" + item.name, archivePath + "/" + item.name);
-            }
-          } else {
-            const content = await readFileText(ctx.fs, resolved);
-            const contentBytes = encoder.encode(content);
-            blocks.push(makeUstarHeader(archivePath, contentBytes.length, stat.mtime || Date.now(), false));
-            blocks.push(padToBlock(contentBytes));
-            if (verbose) ctx.stdout += archivePath + '\n';
-          }
-        }
-
-        for (const f of filesToArchive) {
-          await collectFiles(f, f);
-        }
-
-        // Two zero blocks at end
-        blocks.push(new Uint8Array(BLOCK_SIZE));
-        blocks.push(new Uint8Array(BLOCK_SIZE));
-
-        // Concatenate all blocks
-        const totalSize = blocks.reduce((s, b) => s + b.length, 0);
-        let archiveData = new Uint8Array(totalSize);
-        let offset = 0;
-        for (const block of blocks) {
-          archiveData.set(block, offset);
-          offset += block.length;
-        }
-
-        // Compress if requested
-        if (gzip && typeof CompressionStream !== 'undefined') {
-          const cs = new CompressionStream('gzip');
-          const writer = cs.writable.getWriter();
-          const reader = cs.readable.getReader();
-          const chunks: Uint8Array[] = [];
-          // A corrupt stream rejects these too; the reader below reports the error
-          writer.write(archiveData as any).catch(() => {});
-          writer.close().catch(() => {});
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            chunks.push(value);
-          }
-          const compressedSize = chunks.reduce((s, c) => s + c.length, 0);
-          archiveData = new Uint8Array(compressedSize);
-          let off = 0;
-          for (const chunk of chunks) {
-            archiveData.set(chunk, off);
-            off += chunk.length;
-          }
-        } else if (bzip2Flag) {
-          const { bzip2Compress } = await import('./bzip2');
-          archiveData = new Uint8Array(bzip2Compress(archiveData));
-        }
-
-        const archivePath = ctx.fs.resolvePath(file, ctx.cwd);
-        await ctx.fs.writeFile(archivePath, archiveData);
-        return 0;
+      return await runTar(ctx);
+    } catch (e: any) {
+      if (e instanceof TarFatal) {
+        ctx.stderr += `tar: ${e.message}\n`;
+        return 2;
       }
-
-      if (extract || list) {
-        if (!file) {
-          ctx.stderr += `tar: Refusing to read archive from terminal (missing -f option?)\n`;
-          return 1;
-        }
-
-        const archivePath = ctx.fs.resolvePath(file, ctx.cwd);
-        let rawData: Uint8Array;
-        const rawContent = await ctx.fs.readFile(archivePath);
-        if (rawContent instanceof Uint8Array) {
-          rawData = rawContent;
-        } else {
-          // Check for old FLUFFY-TAR-V1 format
-          const strContent = rawContent as string;
-          if (strContent.startsWith('FLUFFY-TAR-V1')) {
-            return extract
-              ? await extractOldFormat(strContent, ctx, workingDir, verbose)
-              : listOldFormat(strContent, ctx);
-          }
-          rawData = new TextEncoder().encode(strContent);
-        }
-
-        // Decompress if needed — auto-detect by magic bytes or flag
-        let archiveData = rawData;
-        const isGzip = gzip || (rawData[0] === 0x1f && rawData[1] === 0x8b);
-        const isBzip2 = bzip2Flag || (rawData[0] === 0x42 && rawData[1] === 0x5A && rawData[2] === 0x68);
-        const isXz = xzFlag || (rawData[0] === 0xFD && rawData[1] === 0x37 && rawData[2] === 0x7A);
-        const isZstd = zstdFlag || (rawData[0] === 0x28 && rawData[1] === 0xB5 && rawData[2] === 0x2F && rawData[3] === 0xFD);
-
-        if (isGzip) {
-          if (typeof DecompressionStream !== 'undefined') {
-            const ds = new DecompressionStream('gzip');
-            const writer = ds.writable.getWriter();
-            const reader = ds.readable.getReader();
-            const chunks: Uint8Array[] = [];
-            // A corrupt stream rejects these too; the reader below reports the error
-            writer.write(rawData as any).catch(() => {});
-            writer.close().catch(() => {});
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              chunks.push(value);
-            }
-            const size = chunks.reduce((s, c) => s + c.length, 0);
-            archiveData = new Uint8Array(size);
-            let off = 0;
-            for (const chunk of chunks) {
-              archiveData.set(chunk, off);
-              off += chunk.length;
-            }
-          }
-        } else if (isBzip2) {
-          const { bzip2Decompress } = await import('./bzip2');
-          archiveData = bzip2Decompress(rawData);
-        } else if (isXz) {
-          const { xzDecompress } = await import('./xz');
-          archiveData = xzDecompress(rawData);
-        } else if (isZstd) {
-          const { zstdDecompress } = await import('./zstd');
-          archiveData = zstdDecompress(rawData);
-        }
-
-        // Also check if it's old format in binary form
-        const dec = new TextDecoder();
-        const firstLine = dec.decode(archiveData.slice(0, 14));
-        if (firstLine === 'FLUFFY-TAR-V1\n' || firstLine.startsWith('FLUFFY-TAR-V1')) {
-          const strContent = dec.decode(archiveData);
-          return extract
-            ? await extractOldFormat(strContent, ctx, workingDir, verbose)
-            : listOldFormat(strContent, ctx);
-        }
-
-        // Parse ustar blocks
-        let pos = 0;
-        const extracted: string[] = [];
-
-        while (pos + BLOCK_SIZE <= archiveData.length) {
-          const headerBlock = archiveData.slice(pos, pos + BLOCK_SIZE);
-          const hdr = parseUstarHeader(headerBlock);
-          if (hdr.isEnd) break;
-          pos += BLOCK_SIZE;
-
-          if (list) {
-            if (verbose) {
-              const typeChar = hdr.isDir ? 'd' : '-';
-              const sizeStr = String(hdr.size).padStart(8);
-              const d = new Date(hdr.mtime);
-              const dateStr = d.toISOString().slice(0, 16).replace('T', ' ');
-              ctx.stdout += `${typeChar}rw-r--r-- user/user ${sizeStr} ${dateStr} ${hdr.name}\n`;
-            } else {
-              ctx.stdout += hdr.name + '\n';
-            }
-          }
-
-          if (extract) {
-            const targetPath = ctx.fs.resolvePath(hdr.name, workingDir);
-
-            if (hdr.isDir) {
-              await ctx.fs.mkdir(targetPath, { recursive: true });
-            } else {
-              // Ensure parent exists
-              const lastSlash = targetPath.lastIndexOf('/');
-              if (lastSlash > 0) {
-                try { await ctx.fs.mkdir(targetPath.slice(0, lastSlash), { recursive: true }); } catch {}
-              }
-              const content = archiveData.slice(pos, pos + hdr.size);
-              await ctx.fs.writeFile(targetPath, new TextDecoder().decode(content));
-            }
-            extracted.push(hdr.name);
-            if (verbose) ctx.stdout += hdr.name + '\n';
-          }
-
-          // Skip content blocks
-          if (hdr.size > 0) {
-            const contentBlocks = Math.ceil(hdr.size / BLOCK_SIZE);
-            pos += contentBlocks * BLOCK_SIZE;
-          }
-        }
-
-        return 0;
-      }
-
-      ctx.stderr += "tar: Unknown error\n";
-      return 1;
-    } catch (e: unknown) {
-      ctx.stderr += `tar: ${e instanceof Error ? e.message : e}\n`;
-      return 1;
+      ctx.stderr += `tar: ${e?.message ?? e}\n`;
+      return 2;
     }
   },
 };
 
+async function runTar(ctx: CommandContext): Promise<number> {
+  let args = [...ctx.args];
+  // Old-style bundled options: the first word without '-' holds letters whose
+  // arguments follow in order (tar cvf out.tar dir)
+  if (args.length && !args[0].startsWith('-') && /^[A-Za-z]+$/.test(args[0])) {
+    const letters = args[0];
+    const rest = args.slice(1);
+    const expanded: string[] = [];
+    for (const c of letters) {
+      expanded.push('-' + c);
+      if ('fCXTbgLNV'.includes(c)) {
+        if (!rest.length) throw new TarFatal(`Old option '${c}' requires an argument.\nTry 'tar --help' or 'tar --usage' for more information.`);
+        expanded.push(rest.shift()!);
+      }
+    }
+    args = [...expanded, ...rest];
+  }
+
+  let mode: 'c' | 'x' | 't' | 'r' | null = null;
+  let modeCount = 0;
+  let file: string | null = null;
+  let verbose = 0;
+  let compression: Compression = null;
+  let autoCompress = false;
+  let toStdout = false;
+  let keepOld = false;
+  let noMtime = false;
+  let derefLinks = false;
+  let absoluteNames = false;
+  let strip = 0;
+  let noRecursion = false;
+  let wildcards = false;
+  let globalDir: string | null = null;
+  let status = 0;
+  const excludes: RegExp[] = [];
+  // operands with the -C directory in effect when they were given
+  const operands: { name: string; dir: string }[] = [];
+  let curDir = ctx.cwd;
+  const fs = ctx.fs;
+  const warn = (msg: string) => { ctx.stderr += `tar: ${msg}\n`; };
+  const setMode = (m: typeof mode) => { if (mode !== m) modeCount++; mode = m; };
+  const readList = async (path: string): Promise<string[]> => {
+    let text: string;
+    if (path === '-') text = ctx.stdin || '';
+    else {
+      try { text = await fs.readFile(fs.resolvePath(path, ctx.cwd), 'utf8') as string; }
+      catch { throw new TarFatal(`${path}: Cannot open: No such file or directory`); }
+    }
+    return text.split('\n').filter((l) => l !== '');
+  };
+
+  let opts = true;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (!opts || a === '-' || !a.startsWith('-')) { operands.push({ name: a, dir: curDir }); continue; }
+    if (a === '--') { opts = false; continue; }
+    if (a.startsWith('--')) {
+      const eq = a.indexOf('=');
+      const name = eq >= 0 ? a.slice(2, eq) : a.slice(2);
+      const val = () => {
+        if (eq >= 0) return a.slice(eq + 1);
+        if (i + 1 >= args.length) throw new TarFatal(`option '--${name}' requires an argument`);
+        return args[++i];
+      };
+      switch (name) {
+        case 'create': setMode('c'); break;
+        case 'extract': case 'get': setMode('x'); break;
+        case 'list': setMode('t'); break;
+        case 'append': setMode('r'); break;
+        case 'file': file = val(); break;
+        case 'directory': curDir = fs.resolvePath(val(), curDir); globalDir = curDir; break;
+        case 'verbose': verbose++; break;
+        case 'gzip': case 'gunzip': case 'ungzip': compression = 'gzip'; break;
+        case 'bzip2': compression = 'bzip2'; break;
+        case 'xz': compression = 'xz'; break;
+        case 'zstd': compression = 'zstd'; break;
+        case 'auto-compress': autoCompress = true; break;
+        case 'to-stdout': toStdout = true; break;
+        case 'keep-old-files': case 'skip-old-files': keepOld = true; break;
+        case 'overwrite': case 'overwrite-dir': case 'unlink-first': case 'recursive-unlink': keepOld = false; break;
+        case 'touch': noMtime = true; break;
+        case 'dereference': derefLinks = true; break;
+        case 'absolute-names': absoluteNames = true; break;
+        case 'strip-components': strip = parseInt(val(), 10) || 0; break;
+        case 'no-recursion': noRecursion = true; break;
+        case 'recursion': noRecursion = false; break;
+        case 'wildcards': wildcards = true; break;
+        case 'no-wildcards': wildcards = false; break;
+        case 'exclude': excludes.push(globRe(val())); break;
+        case 'exclude-from': for (const l of await readList(val())) excludes.push(globRe(l)); break;
+        case 'files-from': for (const l of await readList(val())) operands.push({ name: l, dir: curDir }); break;
+        case 'preserve-permissions': case 'same-permissions': case 'same-owner': case 'no-same-owner':
+        case 'no-same-permissions': case 'numeric-owner': case 'preserve-order': case 'same-order':
+        case 'verify': case 'totals': case 'sparse': case 'ignore-zeros': case 'no-overwrite-dir':
+        case 'format': case 'owner': case 'group': case 'mode': case 'mtime': case 'blocking-factor':
+        case 'record-size': case 'checkpoint': case 'warning': case 'sort': case 'atime-preserve':
+        case 'delay-directory-restore': case 'no-delay-directory-restore': case 'one-file-system':
+          if (eq < 0 && ['format', 'owner', 'group', 'mode', 'mtime', 'blocking-factor', 'record-size'].includes(name)) val();
+          break;
+        default: throw new TarFatal(`unrecognized option '${a}'\nTry 'tar --help' or 'tar --usage' for more information.`);
+      }
+      continue;
+    }
+    for (let j = 1; j < a.length; j++) {
+      const c = a[j];
+      const need = () => {
+        const rest = a.slice(j + 1);
+        j = a.length;
+        if (rest) return rest;
+        if (i + 1 >= args.length) throw new TarFatal(`option requires an argument -- '${c}'\nTry 'tar --help' or 'tar --usage' for more information.`);
+        return args[++i];
+      };
+      switch (c) {
+        case 'c': setMode('c'); break;
+        case 'x': setMode('x'); break;
+        case 't': setMode('t'); break;
+        case 'r': case 'u': setMode('r'); break;
+        case 'f': file = need(); break;
+        case 'C': curDir = fs.resolvePath(need(), curDir); globalDir = curDir; break;
+        case 'v': verbose++; break;
+        case 'z': compression = 'gzip'; break;
+        case 'j': compression = 'bzip2'; break;
+        case 'J': compression = 'xz'; break;
+        case 'a': autoCompress = true; break;
+        case 'O': toStdout = true; break;
+        case 'k': keepOld = true; break;
+        case 'm': noMtime = true; break;
+        case 'h': derefLinks = true; break;
+        case 'P': absoluteNames = true; break;
+        case 'X': for (const l of await readList(need())) excludes.push(globRe(l)); break;
+        case 'T': for (const l of await readList(need())) operands.push({ name: l, dir: curDir }); break;
+        case 'b': need(); break;
+        case 'p': case 'o': case 'W': case 'S': case 'U': case 's': case 'B': case 'w': case 'l': case 'M': break;
+        default: throw new TarFatal(`invalid option -- '${c}'\nTry 'tar --help' or 'tar --usage' for more information.`);
+      }
+    }
+  }
+
+  if (modeCount === 0 || !mode) throw new TarFatal(`You must specify one of the '-Acdtrux', '--delete' or '--test-label' options\nTry 'tar --help' or 'tar --usage' for more information.`);
+  if (modeCount > 1) throw new TarFatal(`You may not specify more than one '-Acdtrux', '--delete' or  '--test-label' option\nTry 'tar --help' or 'tar --usage' for more information.`);
+  const archive = file ?? '-';
+  if (autoCompress && archive !== '-' && !compression) {
+    if (/\.(tgz|taz|tar\.gz|gz)$/.test(archive)) compression = 'gzip';
+    else if (/\.(tbz2?|tar\.bz2|bz2)$/.test(archive)) compression = 'bzip2';
+    else if (/\.(txz|tar\.xz|xz)$/.test(archive)) compression = 'xz';
+    else if (/\.(tzst|tar\.zst|zst)$/.test(archive)) compression = 'zstd';
+  }
+  const excluded = (name: string) => {
+    if (!excludes.length) return false;
+    const parts = name.replace(/\/+$/, '').split('/');
+    // GNU (unanchored): any run of whole path components matches
+    for (let s = 0; s < parts.length; s++) {
+      for (let e = s + 1; e <= parts.length; e++) {
+        const sub = parts.slice(s, e).join('/');
+        if (excludes.some((re) => re.test(sub))) return true;
+      }
+    }
+    return false;
+  };
+  const fail = () => {
+    if (status) warn('Exiting with failure status due to previous errors');
+    return status;
+  };
+
+  // ── create / append ─────────────────────────────────────────────
+  if (mode === 'c' || mode === 'r') {
+    if (mode === 'c' && !operands.length) throw new TarFatal('Cowardly refusing to create an empty archive\nTry \'tar --help\' or \'tar --usage\' for more information.');
+    const blocks: Uint8Array[] = [];
+    // verbose listing goes to stderr when the archive is stdout
+    const vout = (s: string) => { if (archive === '-') ctx.stderr += s; else ctx.stdout += s; };
+    let warnedSlash = false;
+    const user = ctx.env.USER || 'user';
+    const addPath = async (shown: string, abs: string, _top: boolean) => {
+      let st: any;
+      try { st = derefLinks ? await fs.stat(abs) : await fs.lstat(abs); }
+      catch {
+        try { st = await fs.lstat(abs); } catch {
+          warn(`${shown}: Cannot stat: No such file or directory`);
+          status = 2;
+          return;
+        }
+      }
+      let name = shown;
+      if (!absoluteNames && name.startsWith('/')) {
+        name = name.replace(/^\/+/, '');
+        if (!warnedSlash) { warn(`Removing leading \`/' from member names`); warnedSlash = true; }
+      }
+      name = name.replace(/^(\.\/)+(?=.)/, (m) => m); // keep ./ prefixes as given
+      if (excluded(name)) return;
+      const mtime = Math.floor((st.mtime?.getTime?.() ?? Date.now()) / 1000);
+      const base: Header = { name, mode: st.mode & 0o7777, uid: st.uid ?? 1000, gid: st.gid ?? 1000, size: 0, mtime, type: '0', linkname: '', uname: user, gname: user };
+      if (st.isSymbolicLink()) {
+        const target = await fs.readlink(abs);
+        blocks.push(...headerBlocks({ ...base, mode: 0o777, type: '2', linkname: target }));
+        if (verbose) vout(verbose > 1 ? verboseLine({ ...base, mode: 0o777, type: '2', linkname: target }, verbose) : name + '\n');
+        return;
+      }
+      if (st.isDirectory()) {
+        const dname = name === '' ? '' : name.endsWith('/') ? name : name + '/';
+        if (dname) {
+          blocks.push(...headerBlocks({ ...base, name: dname, type: '5' }));
+          if (verbose) vout(verbose > 1 ? verboseLine({ ...base, name: dname, type: '5' }, verbose) : dname + '\n');
+        }
+        if (noRecursion) return;
+        let names: string[] = [];
+        try { names = await fs.readdir(await fs.realpath(abs).catch(() => abs)); } catch { warn(`${shown}: Cannot open: Permission denied`); status = 2; return; }
+        names.sort();
+        for (const n of names) {
+          const childShown = shown.endsWith('/') ? shown + n : `${shown}/${n}`;
+          await addPath(childShown, abs === '/' ? `/${n}` : `${abs}/${n}`, false);
+        }
+        return;
+      }
+      if (!(st.mode & 0o400)) {
+        warn(`${shown}: Cannot open: Permission denied`);
+        status = 2;
+        return;
+      }
+      let data: Uint8Array;
+      try { data = await fs.readFile(abs) as Uint8Array; } catch { warn(`${shown}: Cannot open: No such file or directory`); status = 2; return; }
+      if (typeof data === 'string') data = enc.encode(data);
+      blocks.push(...headerBlocks({ ...base, size: data.length }), ...dataBlocks(data));
+      if (verbose) vout(verbose > 1 ? verboseLine({ ...base, size: data.length }, verbose) : name + '\n');
+    };
+
+    for (const op of operands) {
+      await addPath(op.name, fs.resolvePath(op.name, op.dir), true);
+    }
+
+    let existing = new Uint8Array(0);
+    if (mode === 'r') {
+      if (compression) throw new TarFatal('Cannot update compressed archives');
+      if (archive !== '-') {
+        try {
+          const d = await fs.readFile(fs.resolvePath(archive, ctx.cwd)) as Uint8Array;
+          // keep everything before the end-of-archive marker
+          let pos = 0;
+          while (pos + BLOCK <= d.length && !isZero(d.subarray(pos, pos + BLOCK))) {
+            const h = d.subarray(pos, pos + BLOCK);
+            const size = parseOctal(h, 124, 12);
+            pos += BLOCK + Math.ceil(size / BLOCK) * BLOCK;
+          }
+          existing = d.slice(0, pos);
+        } catch { /* new archive */ }
+      }
+    }
+    blocks.unshift(existing);
+    blocks.push(new Uint8Array(BLOCK * 2));
+    let total = blocks.reduce((n, b) => n + b.length, 0);
+    // GNU pads to a whole record (20 blocks)
+    const RECORD = BLOCK * 20;
+    if (total % RECORD) blocks.push(new Uint8Array(RECORD - (total % RECORD)));
+    total = blocks.reduce((n, b) => n + b.length, 0);
+    let data: Uint8Array = new Uint8Array(total);
+    let o = 0;
+    for (const b of blocks) { data.set(b, o); o += b.length; }
+    data = await compress(data, compression);
+    if (archive === '-') {
+      ctx.stdout += compression ? latin1(data) : dec.decode(data);
+    } else {
+      try { await fs.writeFile(fs.resolvePath(archive, ctx.cwd), data); }
+      catch (e: any) { throw new TarFatal(`${archive}: Cannot open: ${/ENOENT/.test(e?.message) ? 'No such file or directory' : e?.message}`); }
+    }
+    return fail();
+  }
+
+  // ── list / extract ──────────────────────────────────────────────
+  let raw: Uint8Array;
+  if (archive === '-') raw = stdinBytes(ctx.stdin || '');
+  else {
+    try {
+      const d = await fs.readFile(fs.resolvePath(archive, ctx.cwd));
+      raw = typeof d === 'string' ? enc.encode(d) : d;
+    } catch {
+      warn(`${archive}: Cannot open: No such file or directory`);
+      warn('Error is not recoverable: exiting now');
+      return 2;
+    }
+  }
+  const detected = sniff(raw);
+  let data = raw;
+  if (detected || compression) {
+    try { data = await decompress(raw, detected ?? compression); }
+    catch (e: any) { throw new TarFatal(`Child returned status 1\ntar: Error is not recoverable: exiting now`); }
+  }
+
+  // Legacy Shiro archives
+  if (dec.decode(data.subarray(0, 13)) === 'FLUFFY-TAR-V1') {
+    const text = dec.decode(data);
+    return mode === 'x' ? extractOldFormat(text, ctx, globalDir ?? ctx.cwd, verbose > 0) : listOldFormat(text, ctx);
+  }
+
+  const outDir = globalDir ?? ctx.cwd;
+  if (mode === 'x' && globalDir !== null && !toStdout) {
+    const st = await fs.stat(globalDir).catch(() => null);
+    if (!st || !st.isDirectory()) {
+      const shown = args[args.findIndex((a, k) => k > 0 && (args[k - 1] === '-C' || args[k - 1] === '--directory'))] ?? globalDir;
+      throw new TarFatal(`${shown}: Cannot open: ${st ? 'Not a directory' : 'No such file or directory'}\ntar: Error is not recoverable: exiting now`);
+    }
+  }
+  const members = operands.map((o) => o.name.replace(/\/+$/, ''));
+  const memberRes = wildcards ? members.map(globRe) : null;
+  const found = new Set<number>();
+  const selected = (name: string): boolean => {
+    if (!members.length) return true;
+    const n = name.replace(/\/+$/, '');
+    for (let k = 0; k < members.length; k++) {
+      const m = members[k];
+      const hit = memberRes ? memberRes[k].test(n) || n.startsWith(m + '/') : n === m || n.startsWith(m + '/');
+      if (hit) { found.add(k); return true; }
+    }
+    return false;
+  };
+
+  const delayedDirs: { path: string; mode: number; mtime: number }[] = [];
+  let pos = 0;
+  let longName: string | null = null;
+  let longLink: string | null = null;
+  let entries = 0;
+  if (data.length < BLOCK && data.length > 0) {
+    warn('This does not look like a tar archive');
+    status = 2;
+    return fail();
+  }
+  if (data.length === 0) {
+    warn('This does not look like a tar archive');
+    status = 2;
+    return fail();
+  }
+  while (pos + BLOCK <= data.length) {
+    const hb = data.subarray(pos, pos + BLOCK);
+    if (isZero(hb)) break;
+    if (!checksumOk(hb)) {
+      if (entries === 0) { warn('This does not look like a tar archive'); warn('Skipping to next header'); }
+      else warn('Skipping to next header');
+      status = 2;
+      break;
+    }
+    entries++;
+    pos += BLOCK;
+    const size = parseOctal(hb, 124, 12);
+    const type = String.fromCharCode(hb[156] || 0x30);
+    const body = data.subarray(pos, pos + size);
+    pos += Math.ceil(size / BLOCK) * BLOCK;
+    if (type === 'L') { longName = dec.decode(body).replace(/\0.*$/s, ''); continue; }
+    if (type === 'K') { longLink = dec.decode(body).replace(/\0.*$/s, ''); continue; }
+    if (type === 'x' || type === 'g') {
+      // pax: honour path/linkpath
+      const text = dec.decode(body);
+      for (const rec of text.split('\n')) {
+        const m = /^\d+ (path|linkpath)=(.*)$/.exec(rec);
+        if (m && type === 'x') { if (m[1] === 'path') longName = m[2]; else longLink = m[2]; }
+      }
+      continue;
+    }
+    const magic = field(hb, 257, 6);
+    const prefix = magic === 'ustar' ? field(hb, 345, 155) : '';
+    const h: Header = {
+      name: longName ?? ((prefix ? prefix + '/' : '') + field(hb, 0, 100)),
+      mode: parseOctal(hb, 100, 8),
+      uid: parseOctal(hb, 108, 8),
+      gid: parseOctal(hb, 116, 8),
+      size,
+      mtime: parseOctal(hb, 136, 12),
+      type: type === '\0' ? '0' : type,
+      linkname: longLink ?? field(hb, 157, 100),
+      uname: field(hb, 265, 32),
+      gname: field(hb, 297, 32),
+    };
+    longName = longLink = null;
+    if (h.type === '0' && h.name.endsWith('/')) h.type = '5';
+    if (!selected(h.name) || excluded(h.name)) continue;
+
+    if (mode === 't') {
+      ctx.stdout += verbose ? verboseLine(h, verbose) : h.name + '\n';
+      continue;
+    }
+
+    // extract
+    if (toStdout) {
+      if (h.type === '0' || h.type === '7') ctx.stdout += dec.decode(body);
+      if (verbose) ctx.stderr += h.name + '\n';
+      continue;
+    }
+    let name = h.name;
+    if (strip) {
+      const parts = name.split('/').filter((p, k, arr) => p !== '' || k === arr.length - 1);
+      if (parts.length <= strip) continue;
+      name = parts.slice(strip).join('/');
+    }
+    if (!absoluteNames) {
+      if (name.startsWith('/')) name = name.replace(/^\/+/, '');
+      if (name.split('/').includes('..')) {
+        warn(`${h.name}: Member name contains '..'`);
+        status = 2;
+        continue;
+      }
+    }
+    if (name === '' || name === '.' || name === './') {
+      if (verbose) ctx.stdout += verbose > 1 ? verboseLine(h, verbose) : h.name + '\n';
+      continue;
+    }
+    if (verbose) ctx.stdout += verbose > 1 ? verboseLine(h, verbose) : h.name + '\n';
+    const target = fs.resolvePath(name, outDir);
+    const parent = target.slice(0, target.lastIndexOf('/')) || '/';
+    try {
+      const pst = await fs.stat(parent).catch(() => null);
+      if (!pst) await fs.mkdir(parent, { recursive: true });
+    } catch (e: any) {
+      warn(`${name}: Cannot open: No such file or directory`);
+      status = 2;
+      continue;
+    }
+    const existing = await fs.lstat(target).catch(() => null);
+    if (h.type === '5') {
+      if (existing && !existing.isDirectory()) {
+        try { await fs.unlink(target); } catch {}
+      }
+      if (!existing || !existing.isDirectory()) {
+        try { await fs.mkdir(target, { recursive: true }); } catch (e: any) { warn(`${name}: Cannot mkdir: ${e.message}`); status = 2; continue; }
+      }
+      // permissions and times are applied after the contents (a read-only dir must stay writable meanwhile)
+      delayedDirs.push({ path: target, mode: h.mode & 0o7777, mtime: h.mtime });
+      continue;
+    }
+    if (existing) {
+      if (keepOld) {
+        warn(`${name}: Cannot open: File exists`);
+        status = 2;
+        continue;
+      }
+      if (existing.isDirectory()) {
+        if (h.type !== '5') {
+          try { await fs.rmdir(target); } catch { warn(`${name}: Cannot open: Is a directory`); status = 2; continue; }
+        }
+      } else {
+        try { await fs.unlink(target); } catch {}
+      }
+    }
+    try {
+      if (h.type === '2') {
+        await fs.symlink(h.linkname, target);
+      } else if (h.type === '1') {
+        // hard link: a copy of the already extracted target
+        const src = fs.resolvePath(h.linkname.replace(/^\/+/, ''), outDir);
+        const sst = await fs.lstat(src).catch(() => null);
+        if (!sst) { warn(`${name}: Cannot hard link to '${h.linkname}': No such file or directory`); status = 2; continue; }
+        if (sst.isSymbolicLink()) await fs.symlink(await fs.readlink(src), target);
+        else {
+          await fs.writeFile(target, await fs.readFile(src) as Uint8Array, { mode: sst.mode & 0o7777 });
+        }
+      } else if (h.type === '0' || h.type === '7') {
+        await fs.writeFile(target, body.slice(), { mode: h.mode & 0o7777 });
+        await fs.chmod(target, h.mode & 0o7777).catch(() => {});
+        if (!noMtime) await fs.utimes(target, h.mtime * 1000, h.mtime * 1000).catch(() => {});
+      } else {
+        warn(`${name}: Unknown file type '${h.type}', extracted as normal file`);
+        await fs.writeFile(target, body.slice(), { mode: h.mode & 0o7777 });
+      }
+    } catch (e: any) {
+      warn(`${name}: Cannot open: ${/ENOENT/.test(e?.message) ? 'No such file or directory' : e?.message}`);
+      status = 2;
+    }
+  }
+  if (mode === 'x') {
+    for (const d of delayedDirs.reverse()) {
+      await fs.chmod(d.path, d.mode).catch(() => {});
+      if (!noMtime) await fs.utimes(d.path, d.mtime * 1000, d.mtime * 1000).catch(() => {});
+    }
+  }
+  members.forEach((m, k) => {
+    if (!found.has(k)) { warn(`${m}: Not found in archive`); status = 2; }
+  });
+  return fail();
+}
+
+function verboseLine(h: Header, verbose: number): string {
+  const d = new Date(h.mtime * 1000);
+  const when = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  const owner = `${h.uname || h.uid}/${h.gname || h.gid}`;
+  const size = String(h.type === '5' || h.type === '2' || h.type === '1' ? 0 : h.size);
+  const pad = owner.length + 1 + size.length;
+  const width = Math.max(19, pad);
+  let line = `${MODE_CHARS(h.type, h.mode)} ${owner} ${size.padStart(width - pad + size.length)} ${when} ${h.name}`;
+  if (h.type === '2') line += ` -> ${h.linkname}`;
+  if (h.type === '1') line += ` link to ${h.linkname}`;
+  return line + '\n';
+}
+
 // Backward compatibility: old FLUFFY-TAR-V1 format
-async function extractOldFormat(content: string, ctx: any, workingDir: string, verbose: boolean): Promise<number> {
+async function extractOldFormat(content: string, ctx: CommandContext, workingDir: string, verbose: boolean): Promise<number> {
   const lines = content.split('\n');
   let i = 1;
   const extracted: string[] = [];
@@ -399,7 +740,7 @@ async function extractOldFormat(content: string, ctx: any, workingDir: string, v
   return 0;
 }
 
-function listOldFormat(content: string, ctx: any): number {
+function listOldFormat(content: string, ctx: CommandContext): number {
   const lines = content.split('\n');
   const fileList: string[] = [];
   for (let i = 1; i < lines.length; i++) {

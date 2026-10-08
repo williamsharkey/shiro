@@ -6,9 +6,9 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1277/1567 (81.5%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1282/1567 (81.8%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1275/1567 (81.4%)** |
-| [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **381/635 (60.0%)** |
+| [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **588/635 (92.6%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **146/320 (45.6%)** |
 
 How each suite runs, and what is and isn't scored, is described in
@@ -18,7 +18,7 @@ How each suite runs, and what is and isn't scored, is described in
 
 | Area | Before | Now | Failing |
 |---|---|---|---|
-| smoke | 0/18 | 17/18 | 1 |
+| smoke | 0/18 | 18/18 | 0 |
 | comments | 0/2 | 2/2 | 0 |
 | quote | 0/33 | 29/33 | 4 |
 | word-split | 1/53 | 44/53 | 9 |
@@ -26,7 +26,7 @@ How each suite runs, and what is and isn't scored, is described in
 | var-sub | 0/6 | 2/6 | 4 |
 | var-sub-quote | 0/41 | 32/41 | 9 |
 | var-op-test | 1/35 | 26/35 | 9 |
-| var-op-strip | 0/28 | 24/28 | 4 |
+| var-op-strip | 0/28 | 25/28 | 3 |
 | var-op-len | 0/7 | 3/7 | 4 |
 | var-op-patsub | 0/27 | 22/27 | 5 |
 | var-op-slice | 0/21 | 16/21 | 5 |
@@ -48,7 +48,7 @@ How each suite runs, and what is and isn't scored, is described in
 | builtin-getopts | 0/30 | 26/30 | 4 |
 | builtin-trap | 0/33 | 25/33 | 8 |
 | builtin-bracket | 0/50 | 43/50 | 7 |
-| builtin-cd | 3/28 | 25/28 | 3 |
+| builtin-cd | 3/28 | 26/28 | 2 |
 | builtin-special | 1/12 | 7/12 | 5 |
 | builtin-type | 0/6 | 1/6 | 5 |
 | builtin-vars | 0/38 | 31/38 | 7 |
@@ -64,11 +64,11 @@ How each suite runs, and what is and isn't scored, is described in
 | glob | 0/23 | 18/23 | 5 |
 | pipeline | 0/25 | 19/25 | 6 |
 | exit-status | 0/11 | 5/11 | 6 |
-| errexit | 0/35 | 28/35 | 7 |
+| errexit | 0/35 | 29/35 | 6 |
 | subshell | 0/2 | 2/2 | 0 |
 | command_ | 2/16 | 8/16 | 8 |
 | posix | 2/15 | 11/15 | 4 |
-| alias | 1/48 | 30/48 | 18 |
+| alias | 1/48 | 31/48 | 17 |
 | let | 0/2 | 1/2 | 1 |
 | empty-bodies | 0/3 | 3/3 | 0 |
 | whitespace | 0/0 | 0/0 | 0 |
@@ -82,14 +82,13 @@ How each suite runs, and what is and isn't scored, is described in
 
 <details><summary>Failing cases</summary>
 
-- **smoke**: failed command
 - **quote**: $'' octal escapes don't have leading 0; $'' octal escapes with fewer than 3 chars; $'' supports \cA escape for Ctrl-A - mask with 0x1f; \c' is an escape, unlike bash
 - **word-split**: default value with unquoted IFS char; Empty IFS (regression for bug); Unset IFS (regression for bug); IFS and joining arrays by assignments; Bug #628 split on : with : in literal word; 4 x 3 table - with for loop; IFS=x and '' and $@ (#2); ""$A"" - empty string on both sides - derived from spec/toysh-posix #15; Regression: "${v:-AxBxC}"x should not be split
 - **word-eval**: Default values -- more cases
 - **var-sub**: Bad var sub; Braced block inside ${}; Descriptor redirect to bad "$@"; Here doc with bad "$@" delimiter
 - **var-sub-quote**: Multiple words: outer double quotes, inner double quotes; Mixed inner quotes with outer quotes; part_value tree on RHS; Multiple words: outer double quotes, inner double quotes; Multiple words: outer double quotes, inner single quotes; Strip a string with single quotes, unquoted; Strip a string with single quotes, double quoted; Syntax error for single quote in double quote; Right Brace as argument (similar to #702)
 - **var-op-test**: Lazy Evaluation of Alternative; Unquoted with array as default value; Quoted with array as default value; Assign default with array; Nix idiom ${!hooksSlice+"${!hooksSlice}"} - was workaround for obsolete bash 4.3 bug; array and - and +; $* ("" "") and - and + (IFS=); "\z" as arg; op-test for unquoted ${a[*]:-empty} with IFS=
-- **var-op-strip**: Remove const suffix is vectorized on $@ array; Strip unicode prefix; strip none; Strip Right Brace (#702)
+- **var-op-strip**: Remove const suffix is vectorized on $@ array; strip none; Strip Right Brace (#702)
 - **var-op-len**: Unicode string length (spec/testdata/utf8-chars.txt); String length with incomplete utf-8; String length with invalid utf-8 continuation bytes; Length operator can't be followed by test operator
 - **var-op-patsub**: Confusing unquoted slash matches bash (and ash); Synthesized ${x///} bug (similar to above); Replace backslash; When LC_ALL=C, pattern ? doesn't match multibyte character; Chromium from http://www.oilshell.org/blog/2016/11/07.html
 - **var-op-slice**: Cannot take length of substring slice; ${@:offset} and ${*:offset}; ${@:offset:length} and ${*:offset:length}; Permutations of implicit begin and length; ${array[@]:} vs ${array[@]: }  - bash and zsh inconsistent
@@ -109,7 +108,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **builtin-getopts**: getopts with invalid variable name; OPTIND; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
 - **builtin-trap**: exit 1 when trap code string is invalid; trap EXIT calling exit; trap EXIT with PARSE error and explicit exit; exit codes for traps are isolated; traps are cleared in subshell (started with &); trap USR1, sleep, SIGINT: non-interactively; Remove trap with an unsigned integer; trap with command.NoOp - check internal invariant
 - **builtin-bracket**: -a as unary operator (alias of -e); -k for sticky bit; test -p named pipe; -u for setuid, -g too; test -o for options; -ef; test -c
-- **builtin-cd**: pwd in symlinked dir on shell initialization; Test the current directory after 'cd ..' involving symlinks; Survey of getcwd() syscall
+- **builtin-cd**: pwd in symlinked dir on shell initialization; Survey of getcwd() syscall
 - **builtin-special**: Prefix assignments persist after special builtins, like : (set -o posix); Prefix assignments persist after readonly, but NOT exported (set -o posix); Prefix binding for exec is a special case (versus e.g. readonly); bash 'type' gets confused - says 'function', but runs builtin; command, builtin - both can be redefined, not special (regression)
 - **builtin-type**: type -\> keyword builtin; type -\> alias external; type of relative path; special builtins are called out; more special builtins
 - **builtin-vars**: Export sets a global variable that persists after export -n; Export a local that shadows a global; Unset exported variable, then define it again.  It's NOT still exported.; Exporting a parent func variable (dynamic scope); Unset a function without -f; Unset and scope (bug #653); local after readonly
@@ -124,10 +123,10 @@ How each suite runs, and what is and isn't scored, is described in
 - **glob**: Glob of unescaped [[] and []]; Glob of negated unescaped [[] and []]; \ in unquoted substitutions does not match a backslash; \ in unquoted substitutions escapes globchars; shopt -u globskipdots shows . and ..
 - **pipeline**: PIPESTATUS is set on simple commands; \|&; ! with ( ); ! is not a command; Evaluation of argv[0] in pipeline occurs in child; SIGPIPE causes pipeline to die (regression for issue #295)
 - **exit-status**: Truncating 'return' status; subshell OverflowError https://github.com/oilshell/oil/issues/996; func subshell OverflowError https://github.com/oilshell/oil/issues/996; If subshell false -- exit code is propagated in a weird way (strict_argv prevents); Exit code when command sub evaluates to empty str, e.g. `false` (#2416); More test cases with empty argv
-- **errexit**: More && \|\|; set errexit while it's ignored in a subshell (moot with strict_errexit); errexit double guard; pipeline process respects errexit; simple command / assign - redir failure DOES respect errexit; bash atoms [[ (( - redir failure checked; Command sub exit code is lost
+- **errexit**: More && \|\|; set errexit while it's ignored in a subshell (moot with strict_errexit); errexit double guard; pipeline process respects errexit; simple command / assign - redir failure DOES respect errexit; bash atoms [[ (( - redir failure checked
 - **command_**: Command block; Permission denied; filling $PATH cache, then insert the same command earlier in cache; filling $PATH cache, then deleting command; Non-executable on $PATH; hash without args prints the cache; hash with args; Executing command with same name as directory in PATH (#2429)
 - **posix**: Empty for loop without in.  Do can be on the same line I guess.; Empty action for case is syntax error; Bare semi-colon not allowed; Command substitution in default
-- **alias**: Usage of builtins; define and use alias on a single line; alias with trailing space causes alias expansion on second word; Recursive alias expansion of SECOND word; Alias must be an unquoted word, no expansions allowed; first and second word are the same alias, with trailing space; Syntax error after expansion; Loop split across alias in another way; Loop split across both iterative and recursive aliases; Alias with a quote in the middle is a syntax error; Two aliases in pipeline; Alias can be defined and used on a single line; alias with line continuation in the middle; alias for left brace; alias for left paren; here doc inside alias; Corner case: alias inside LHS array arithmetic expression; alias with word of multiple lines
+- **alias**: Usage of builtins; define and use alias on a single line; alias with trailing space causes alias expansion on second word; Recursive alias expansion of SECOND word; Alias must be an unquoted word, no expansions allowed; first and second word are the same alias, with trailing space; Syntax error after expansion; Loop split across alias in another way; Loop split across both iterative and recursive aliases; Alias with a quote in the middle is a syntax error; Two aliases in pipeline; Alias can be defined and used on a single line; alias with line continuation in the middle; alias for left brace; alias for left paren; here doc inside alias; Corner case: alias inside LHS array arithmetic expression
 - **let**: let with ()
 - **shell-grammar**: If with then on same line missing semicolon
 - **process-sub**: Process sub input; Process sub from external process to stdin; Process sub from shell to stdin; Non-linear pipeline with \>(); status code is available; shopt -s process_sub_fail; process subs and pipelines together; process sub in background &
@@ -268,132 +267,107 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 
 | Area | Before | Now | Failing |
 |---|---|---|---|
-| awk | 0/51 | 9/51 | 42 |
-| basename (old-style) | 2/2 | 1/2 | 1 |
+| awk | 0/51 | 50/51 | 1 |
+| basename (old-style) | 2/2 | 2/2 | 0 |
 | cat | 0/4 | 4/4 | 0 |
 | cat (old-style) | 2/2 | 2/2 | 0 |
 | cmp (old-style) | 1/1 | 1/1 | 0 |
-| comm | 0/8 | 0/8 | 8 |
+| comm | 0/8 | 8/8 | 0 |
 | cp | 0/6 | 0/6 | 6 |
-| cp (old-style) | 17/17 | 9/17 | 8 |
-| cut | 0/22 | 12/22 | 10 |
-| cut (old-style) | 5/5 | 4/5 | 1 |
-| date (old-style) | 3/3 | 1/3 | 2 |
-| dd (old-style) | 6/6 | 4/6 | 2 |
-| diff | 0/13 | 0/13 | 13 |
-| dirname (old-style) | 7/7 | 5/7 | 2 |
-| du (old-style) | 6/6 | 3/6 | 3 |
+| cp (old-style) | 17/17 | 14/17 | 3 |
+| cut | 0/22 | 22/22 | 0 |
+| cut (old-style) | 5/5 | 5/5 | 0 |
+| date (old-style) | 3/3 | 3/3 | 0 |
+| dd (old-style) | 6/6 | 5/6 | 1 |
+| diff | 0/13 | 13/13 | 0 |
+| dirname (old-style) | 7/7 | 7/7 | 0 |
+| du (old-style) | 6/6 | 4/6 | 2 |
 | echo (old-style) | 11/11 | 10/11 | 1 |
-| expand | 0/1 | 0/1 | 1 |
+| expand | 0/1 | 1/1 | 0 |
 | expr (old-style) | 2/2 | 0/2 | 2 |
-| factor | 0/13 | 1/13 | 12 |
+| factor | 0/13 | 13/13 | 0 |
 | false (old-style) | 2/2 | 1/2 | 1 |
-| find | 0/11 | 5/11 | 6 |
+| find | 0/11 | 8/11 | 3 |
 | find (old-style) | 1/1 | 1/1 | 0 |
-| fold | 0/3 | 1/3 | 2 |
+| fold | 0/3 | 3/3 | 0 |
 | grep | 0/48 | 47/48 | 1 |
 | gunzip (old-style) | 1/1 | 0/1 | 1 |
 | gzip (old-style) | 3/3 | 3/3 | 0 |
 | head | 0/3 | 3/3 | 0 |
 | hexdump | 0/0 | 0/0 | 0 |
-| hostname (old-style) | 4/4 | 3/4 | 1 |
+| hostname (old-style) | 4/4 | 4/4 | 0 |
 | id (old-style) | 4/4 | 4/4 | 0 |
-| ln (old-style) | 6/6 | 3/6 | 3 |
+| ln (old-style) | 6/6 | 6/6 | 0 |
 | ls | 0/0 | 0/0 | 0 |
-| ls (old-style) | 4/4 | 0/4 | 4 |
+| ls (old-style) | 4/4 | 4/4 | 0 |
 | md5sum | 0/0 | 0/0 | 0 |
 | md5sum (old-style) | 1/1 | 0/1 | 1 |
 | mkdir (old-style) | 2/2 | 2/2 | 0 |
-| mv (old-style) | 14/14 | 10/14 | 4 |
-| nl | 0/3 | 0/3 | 3 |
-| od | 0/21 | 3/21 | 18 |
-| paste (old-style) | 5/5 | 2/5 | 3 |
-| patch | 0/6 | 4/6 | 2 |
+| mv (old-style) | 14/14 | 13/14 | 1 |
+| nl | 0/3 | 3/3 | 0 |
+| od | 0/21 | 21/21 | 0 |
+| paste (old-style) | 5/5 | 5/5 | 0 |
+| patch | 0/6 | 6/6 | 0 |
 | printf | 0/20 | 20/20 | 0 |
 | pwd (old-style) | 1/1 | 1/1 | 0 |
 | readlink | 0/6 | 5/6 | 1 |
-| realpath | 0/10 | 4/10 | 6 |
+| realpath | 0/10 | 10/10 | 0 |
 | rev | 0/3 | 3/3 | 0 |
 | rm (old-style) | 1/1 | 1/1 | 0 |
 | rmdir (old-style) | 1/1 | 0/1 | 1 |
 | sed | 0/93 | 92/93 | 1 |
-| seq | 0/24 | 20/24 | 4 |
+| seq | 0/24 | 24/24 | 0 |
 | sha1sum | 0/1 | 0/1 | 1 |
 | sha256sum | 0/0 | 0/0 | 0 |
 | sha512sum | 0/0 | 0/0 | 0 |
-| sort | 0/25 | 17/25 | 8 |
+| sort | 0/25 | 25/25 | 0 |
 | strings (old-style) | 0/0 | 0/0 | 0 |
-| sum | 0/2 | 0/2 | 2 |
+| sum | 0/2 | 2/2 | 0 |
 | tail | 0/2 | 2/2 | 0 |
 | tail (old-style) | 2/2 | 2/2 | 0 |
-| tar | 0/6 | 1/6 | 5 |
-| tar (old-style) | 14/14 | 8/14 | 6 |
+| tar | 0/6 | 3/6 | 3 |
+| tar (old-style) | 14/14 | 13/14 | 1 |
 | tee (old-style) | 2/2 | 2/2 | 0 |
 | test | 0/16 | 16/16 | 0 |
 | touch (old-style) | 3/3 | 3/3 | 0 |
-| tr | 0/5 | 3/5 | 2 |
-| tr (old-style) | 5/5 | 4/5 | 1 |
+| tr | 0/5 | 5/5 | 0 |
+| tr (old-style) | 5/5 | 5/5 | 0 |
 | true (old-style) | 2/2 | 1/2 | 1 |
-| tsort | 0/20 | 2/20 | 18 |
-| unexpand | 0/17 | 0/17 | 17 |
-| uniq | 0/14 | 9/14 | 5 |
+| tsort | 0/20 | 10/20 | 10 |
+| unexpand | 0/17 | 17/17 | 0 |
+| uniq | 0/14 | 12/14 | 2 |
 | uuencode | 0/0 | 0/0 | 0 |
 | wc (old-style) | 5/5 | 5/5 | 0 |
 | which (old-style) | 1/1 | 1/1 | 0 |
-| xargs | 0/11 | 1/11 | 10 |
-| xargs (old-style) | 1/1 | 0/1 | 1 |
+| xargs | 0/11 | 9/11 | 2 |
+| xargs (old-style) | 1/1 | 1/1 | 0 |
 | xxd | 0/0 | 0/0 | 0 |
 
 <details><summary>Failing cases</summary>
 
-- **awk**: awk -F case 0; awk -F case 1; awk -F case 2; awk -F case 3; awk -F case 4; awk -F case 5; awk -F case 6; awk -F case 7; awk handles empty function f(arg){}; awk handles empty function f(){}; awk properly handles function from other scope; awk 'v (a)' is not a function call, it is a concatenation; awk floating const with leading zeroes; awk -F handles escapes; awk 'gcc build bug'; awk NF in BEGIN; awk string cast (bug 725); awk handles whitespace before array subscript; awk 'delete a[v--]' evaluates v-- once; awk FS assignment; awk large integer; awk length(array); awk length(); awk print length, 1; awk print length 1; awk length == 0; awk if (length == 0); awk -f and ARGC; awk printf('%c') can output NUL; awk printf('%-10c') can output NUL; awk do not allow "str"++; awk FS regex which can match empty string; awk $NF is empty; awk exit N propagates through END's exit; awk print + redirect; awk "cmd" \| getline; awk backslash+newline eaten with no trace; awk assign while assign; awk does not split on CR (char 13); awk = and ?: precedence; awk references to empty fields; awk gsub erroneous word start match
-- **basename (old-style)**: basename-does-not-remove-identical-extension
-- **comm**: comm test 1; comm test 2; comm test 3; comm test 4; comm test 5; comm test 6; comm unterminated line 1; comm unterminated line 2
+- **awk**: awk 'gcc build bug'
 - **cp**: cp -R; cp -Rd; cp -RP; cp -RL; cp -RH; cp -RHL
-- **cp (old-style)**: cp-RHL-does_not_preserve-links; cp-a-files-to-dir; cp-a-preserves-links; cp-d-files-to-dir; cp-does-not-copy-unreadable-file; cp-parents; cp-preserves-hard-links; cp-preserves-links
-- **cut**: cut '-' (stdin) and multi file handling; cut -b a,a,a; cut -b overlaps; -b encapsulated; cut -c a-; cut -f a-; cut show whole line with no delim; cut with -d -f( ) -s; cut empty field; cut empty field 2
-- **cut (old-style)**: cut-cuts-an-unclosed-range
-- **date (old-style)**: date-@-works; date-timezone
-- **dd (old-style)**: dd-accepts-of; dd-count-bytes
-- **diff**: diff of stdin; diff of stdin, no newline in the file; diff of stdin, twice; diff of empty file against stdin; diff of empty file against nonempty one; diff -b treats EOF as whitespace; diff -b treats all spaces as equal; diff -B ignores changes whose lines are all blank; diff -B does not ignore changes whose lines are not all blank; diff -B ignores blank single line change; diff -B does not ignore non-blank single line change; diff always takes context from old file; diff dir dir2/file/-
-- **dirname (old-style)**: dirname-handles-multiple-slashes; dirname-handles-root
-- **du (old-style)**: du-h-works; du-l-works; du-m-works
+- **cp (old-style)**: cp-RHL-does_not_preserve-links; cp-does-not-copy-unreadable-file; cp-preserves-hard-links
+- **dd (old-style)**: dd-accepts-of
+- **du (old-style)**: du-s-works; du-works
 - **echo (old-style)**: echo-prints-slash_41
-- **expand**: expand
 - **expr (old-style)**: expr-big; expr-works
-- **factor**: factor '  0'; factor +1; factor ' +2'; factor 2^61-1; factor 2^62-1; factor 2^64-1; factor $((2*3*5*7*11*13*17*19*23*29*31*37*41*43*47)); factor 2 * 3037000493 * 3037000493; factor 3 * 2479700513 * 2479700513; factor 3 * 37831 * 37831 * 37831 * 37831; factor 3 * 13^16; factor 13^16
 - **false (old-style)**: false-is-silent
-- **find**: find -exec exitcode 1; find -exec exitcode 2; find -exec exitcode 3; find / -maxdepth 0 -name /; find // -maxdepth 0 -name /; find ./// -name .
-- **fold**: fold -s; fold with NULs
+- **find**: find -exec exitcode 1; find -exec exitcode 2; find -exec exitcode 3
 - **grep**: grep -r on symlink to dir
 - **gunzip (old-style)**: gunzip-reads-from-standard-input
-- **hostname (old-style)**: hostname-d-works
-- **ln (old-style)**: ln-creates-hard-links; ln-force-creates-hard-links; ln-preserves-soft-links
-- **ls (old-style)**: ls-1-works; ls-h-works; ls-l-works; ls-s-works
 - **md5sum (old-style)**: md5sum-verifies-non-binary-file
-- **mv (old-style)**: mv-files-to-dir-2; mv-moves-hardlinks; mv-preserves-hard-links; mv-refuses-mv-dir-to-subdir
-- **nl**: nl numbers all lines; nl numbers non-empty lines; nl numbers no lines
-- **od**: od (little-endian); od -a (DESKTOP); od -B; od -o (little-endian); od -b; od -c; od -d (little-endian); od -D (little-endian); od -f (little-endian); od -H (little-endian); od -X (little-endian); od -h (little-endian); od -x (little-endian); od -i (little-endian); od -O (little-endian); od -I (little-endian); od -L (little-endian); od -l (little-endian)
-- **paste (old-style)**: paste-back-cuted-lines; paste-multi-stdin; paste-pairs
-- **patch**: patch -R with nonexistent old_file; patch FILE PATCH
+- **mv (old-style)**: mv-preserves-hard-links
 - **readlink**: readlink -f on an invalid link
-- **realpath**: realpath on non-existent absolute path 1; realpath on non-existent absolute path 2; realpath on non-existent absolute path 3; realpath on non-existent local file 1; realpath on link to non-existent file 1; realpath on link to non-existent file 3
 - **rmdir (old-style)**: rmdir-removes-parent-directories
 - **sed**: sed subst+write
-- **seq**: seq one argument with padding; seq two arguments with padding; seq count down by 3 with padding; seq count by .3 with padding 2
 - **sha1sum**: sha1sum: one-space separated input for -c
-- **sort**: sort key range with numeric option; sort key range with numeric option and global reverse; sort key range with multiple options; sort -z outputs NUL terminated lines; sort file in place; sort -sr (stable and reverse) does NOT reverse 'stable' ordering; sort -h; sort -k2,2M
-- **sum**: sum -r file file does print both names; sum -s file does print file's name
-- **tar**: tar Two zeroed blocks is a ('truncated') empty tarball; tar Twenty zeroed blocks is an empty tarball; tar --overwrite; tar writing into read-only dir; tar Symlinks and hardlinks coexist
-- **tar (old-style)**: tar-complains-about-missing-file; tar-extracts-from-standard-input; tar-extracts-to-standard-output; tar-handles-exclude-and-extract-lists; tar-handles-multiple-X-options; tar-handles-nested-exclude
-- **tr**: tr understands [:xdigit:]; tr has correct xdigit sequence
-- **tr (old-style)**: tr-works
+- **tar**: tar --overwrite; tar writing into read-only dir; tar Symlinks and hardlinks coexist
+- **tar (old-style)**: tar-extracts-to-standard-output
 - **true (old-style)**: true-is-silent
-- **tsort**: tsort; tsort -; tsort input; tsort input (w/o eol); tsort /dev/null; tsort empty; tsort blank; tsort blanks; tsort empty2; tsort singleton; tsort simple; tsort 2singleton; tsort medium; tsort std.example; tsort prefixes; tsort odd; tsort odd2; tsort cycle
-- **unexpand**: unexpand case 1; unexpand case 2; unexpand case 3; unexpand case 4; unexpand case 5; unexpand case 6; unexpand case 8; unexpand flags ; unexpand flags -t8 --first-only; unexpand flags -a; unexpand flags -t8; unexpand flags -a -t8; unexpand flags -t4; unexpand flags -a -t4; unexpand flags -t4 -a; unexpand flags -t4 --first-only; unexpand flags --first-only -t4
-- **uniq**: uniq - (specify stdin); uniq input outfile (two files); uniq (stdin) outfile; uniq input - (specify stdout); uniq -f -s (skip fields and chars)
-- **xargs**: xargs -E _ stops on underscore; xargs -E ''; xargs -e without param; xargs does not stop on underscore ('new' GNU behavior); xargs -s7 can take one-char input; xargs -sNUM test 1; xargs -sNUM test 2; xargs -n1; xargs -n2; xargs -I skips empty lines and leading whitespace
-- **xargs (old-style)**: xargs-works
+- **tsort**: tsort empty2; tsort singleton; tsort simple; tsort 2singleton; tsort medium; tsort std.example; tsort prefixes; tsort odd; tsort odd2; tsort cycle
+- **uniq**: uniq input outfile (two files); uniq (stdin) outfile
+- **xargs**: xargs -sNUM test 1; xargs -sNUM test 2
 
 </details>
 
