@@ -532,3 +532,103 @@ describe('kernel channel syscalls (netSyscall)', () => {
     expect(stack.listeners.has(4242)).toBe(false);
   });
 });
+
+describe('sockets in the kernel: registerSyscalls, epoll, SIGPIPE', () => {
+  it('kernel.syscall reaches net.ts through installNet, and epoll sees socket readiness', async () => {
+    const A = await import('@shiro/kernel/abi');
+    const { Kernel } = await import('@shiro/kernel/kernel');
+    const { installNet } = await import('@shiro/kernel/net');
+    const kernel = new Kernel({ registerWithProcessTable: false });
+    const stack = new NetStack();
+    stack.configure({ relayUrl: null, tokenUrl: null, dohUrl: null, portHost: null });
+    const off = installNet(kernel, stack);
+    const proc = kernel.spawn({ path: 'net', fds: {}, run: () => new Promise<number>(() => {}) });
+    const data = new Uint8Array(4096);
+    const sys = (nr: number, args: number[]) => kernel.syscall(proc, nr, args, data);
+
+    const l = await sys(A.SYS_socket, [A.AF_INET, A.SOCK_STREAM, 0]);
+    data.set(encodeSockaddr(v4('0.0.0.0', 6060)));
+    expect(await sys(A.SYS_bind, [l, 16])).toBe(0);
+    expect(await sys(A.SYS_listen, [l, 8])).toBe(0);
+    const c = await sys(A.SYS_socket, [A.AF_INET, A.SOCK_STREAM | A.SOCK_NONBLOCK, 0]);
+    data.set(encodeSockaddr(v4('127.0.0.1', 6060)));
+    expect(await sys(A.SYS_connect, [c, 16])).toBe(0);
+    const a = await sys(A.SYS_accept4, [l, 0]);
+    expect(a).toBeGreaterThanOrEqual(0);
+
+    // epoll: edge-triggered EPOLLIN on the client socket
+    const ep = await sys(A.SYS_epoll_create1, [0]);
+    expect(await sys(A.SYS_epoll_ctl, [ep, A.EPOLL_CTL_ADD, c, A.EPOLLIN | A.EPOLLET, 77, 0])).toBe(0);
+    expect(await sys(A.SYS_epoll_wait, [ep, 8, 0])).toBe(0);
+    const waiting = sys(A.SYS_epoll_wait, [ep, 8, 5000]);
+    await new Promise((r) => setTimeout(r, 10));
+    const wdata = new Uint8Array(64);
+    wdata.set(enc.encode('wake'));
+    expect(await kernel.syscall(proc, A.SYS_write, [a, 4], wdata)).toBe(4);
+    expect(await waiting).toBe(1);
+    const dv = new DataView(data.buffer);
+    expect(dv.getUint32(0, true) & A.EPOLLIN).toBe(A.EPOLLIN);
+    expect(dv.getUint32(4, true)).toBe(77);
+    expect(await sys(A.SYS_epoll_wait, [ep, 8, 0])).toBe(0); // ET: no new edge
+    expect(await sys(A.SYS_read, [c, 64])).toBe(4);
+    expect(await sys(A.SYS_read, [c, 64])).toBe(-EAGAIN);
+
+    // send after the peer is gone: EPIPE and SIGPIPE (unless MSG_NOSIGNAL)
+    expect(await sys(A.SYS_close, [a])).toBe(0);
+    const delivered: number[] = [];
+    const realDeliver = kernel.deliver.bind(kernel);
+    kernel.deliver = (p: any, sig: number) => { delivered.push(sig); if (sig !== A.SIGPIPE) realDeliver(p, sig); };
+    expect(await sys(A.SYS_sendto, [c, 1, A.MSG_NOSIGNAL, 0])).toBe(-A.EPIPE);
+    expect(delivered).toEqual([]);
+    expect(await sys(A.SYS_sendto, [c, 1, 0, 0])).toBe(-A.EPIPE);
+    expect(delivered).toEqual([A.SIGPIPE]);
+    kernel.deliver = realDeliver;
+
+    off();
+    expect(await sys(A.SYS_socket, [A.AF_INET, A.SOCK_STREAM, 0])).toBe(-A.ENOSYS);
+    kernel.kill(proc.pid, A.SIGKILL);
+  });
+
+  it('x86 epoll_create1/epoll_ctl/epoll_wait over socket fds', async () => {
+    const { LinuxSyscalls } = await import('@shiro/x86/syscalls');
+    const { CPU, RAX, RDI, RSI, RDX, R8, R9, R10 } = await import('@shiro/x86/cpu');
+    const { VirtualMemory } = await import('@shiro/x86/memory');
+    const { FileSystem } = await import('@shiro/filesystem');
+    const cpu = new CPU();
+    const mem = new VirtualMemory();
+    const fs = new FileSystem();
+    await fs.init();
+    const sys = new LinuxSyscalls(cpu, mem, fs, '/home/user', () => {}, () => {});
+    const stack = new NetStack();
+    stack.configure({ relayUrl: null, tokenUrl: null, dohUrl: null, portHost: null });
+    sys.net = stack;
+    const base = 0x700000n;
+    mem.allocatePages(base, 4);
+    const sc = async (nr: number, ...args: bigint[]) => {
+      cpu.setReg64(RAX, BigInt(nr));
+      [RDI, RSI, RDX, R10, R8, R9].forEach((r, i) => cpu.setReg64(r, args[i] ?? 0n));
+      await sys.handleSyscall();
+      return Number(BigInt.asIntN(64, cpu.getReg64(RAX)));
+    };
+    const SV = base, EV = base + 0x40n, OUT = base + 0x100n, BUF = base + 0x400n;
+    expect(await sc(53, 1n, 1n, 0n, SV)).toBe(0); // socketpair
+    const [x, y] = [mem.read32(SV), mem.read32(SV + 4n)];
+    const ep = await sc(291, 0n);
+    expect(ep).toBeGreaterThan(y);
+    mem.write32(EV, POLLIN); mem.write32(EV + 4n, 0xabc); mem.write32(EV + 8n, 0);
+    expect(await sc(233, BigInt(ep), 1n, BigInt(x), EV)).toBe(0); // EPOLL_CTL_ADD
+    expect(await sc(232, BigInt(ep), OUT, 4n, 0n)).toBe(0);
+    mem.writeBytes(BUF, enc.encode('e'));
+    expect(await sc(1, BigInt(y), BUF, 1n)).toBe(1);
+    expect(await sc(232, BigInt(ep), OUT, 4n, 1000n)).toBe(1);
+    expect(mem.read32(OUT) & POLLIN).toBe(POLLIN);
+    expect(mem.read32(OUT + 4n)).toBe(0xabc);
+    // A dup keeps the socket alive in the interest list; closing every fd drops it
+    const d = await sc(32, BigInt(x));
+    expect(await sc(3, BigInt(x))).toBe(0);
+    expect(await sc(232, BigInt(ep), OUT, 4n, 0n)).toBe(1);
+    expect(await sc(3, BigInt(d))).toBe(0);
+    expect(await sc(232, BigInt(ep), OUT, 4n, 0n)).toBe(0);
+    expect(await sc(233, BigInt(ep), 1n, 0n, EV)).toBe(-1); // stdin is not a kernel file: EPERM
+  });
+});

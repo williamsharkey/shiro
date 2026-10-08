@@ -72,6 +72,7 @@ import { spiritCmd } from './commands/spirit';
 // wasi and pkg are lazy-loaded (pulls in ~960-line wasi-runtime.ts)
 import { processTable } from './process-table';
 import { getKernel } from './kernel/kernel';
+import { installNet } from './kernel/net';
 import { iframeServer } from './iframe-server';
 import { unixCommands } from './commands/unix';
 import { ShiroTerminal } from './terminal';
@@ -447,6 +448,7 @@ async function main() {
   // Kernel processes (worker guests, spawned builtins) run against this fs and fork this shell
   const kernel = getKernel();
   kernel.attach(fs, shell);
+  installNet(kernel); // socket syscalls (src/kernel/net.ts, docs/NETWORKING.md)
 
   // Populate API keys from localStorage so `claude` CLI picks them up
   const storedAnthropicKey = localStorage.getItem('shiro_anthropic_key') || localStorage.getItem('shiro_api_key');

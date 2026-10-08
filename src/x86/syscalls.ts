@@ -11,6 +11,8 @@ import {
   AF_UNIX, O_NONBLOCK, POLLIN, POLLOUT, POLLNVAL, SOL_SOCKET, SO_RCVTIMEO, SO_SNDTIMEO, SO_LINGER, FIONREAD,
   ENOTSOCK, EOPNOTSUPP, EAFNOSUPPORT as NET_EAFNOSUPPORT,
 } from '../kernel/net';
+import { retain, release, type OpenFile } from '../kernel/fd';
+import { EpollFile } from '../kernel/epoll';
 
 // Linux error codes (negated — syscalls return -ERRNO)
 const ENOENT = 2;
@@ -34,6 +36,7 @@ interface FDEntry {
   flags: number;
   pipe?: PipeBuffer;  // if this FD is a pipe endpoint
   sock?: KSocket | KDatagramSocket;  // if this FD is a kernel socket (src/kernel/net.ts)
+  epoll?: EpollFile;  // if this FD is an epoll instance (src/kernel/epoll.ts)
   legacyHttp?: LegacyHttp;  // port-80 fetch emulation when no TCP relay is configured
 }
 
@@ -182,11 +185,14 @@ export class LinuxSyscalls {
       case 202: result = 0n; break; // futex — stub (return success)
       case 204: result = 0n; break; // sched_getaffinity — stub
       case 217: result = this.sysGetdents64(arg0, arg1, arg2); break;
-      case 233: result = -BigInt(ENOSYS); break; // epoll_ctl
+      case 233: result = this.sysEpollCtl(arg0, arg1, arg2, arg3); break; // epoll_ctl
+      case 232: result = await this.sysEpollWait(arg0, arg1, arg2, arg3); break; // epoll_wait
+      case 281: result = await this.sysEpollWait(arg0, arg1, arg2, arg3); break; // epoll_pwait (sigmask ignored)
+      case 213: result = this.sysEpollCreate(Number(arg0) > 0 ? 0n : -1n); break; // epoll_create
       case 234: result = -BigInt(ENOSYS); break; // tgkill
       case 267: result = this.sysReadlinkat(arg0, arg1, arg2, arg3); break;
       case 273: result = 0n; break; // set_robust_list — stub
-      case 291: result = -BigInt(ENOSYS); break; // epoll_create1
+      case 291: result = this.sysEpollCreate(arg0); break; // epoll_create1
       case 293: result = this.sysPipe2(arg0, arg1); break; // pipe2
       case 228: result = this.sysClockGettime(arg0, arg1); break;
       case 231: throw new X86Exit(Number(arg0 & 0xFFn)); // exit_group
@@ -492,6 +498,8 @@ export class LinuxSyscalls {
     if (!entry) return -BigInt(EBADF);
     const newFd = this.nextFd++;
     this.fdTable.set(newFd, { ...entry });
+    const kf = this.kfile(entry);
+    if (kf) retain(kf);
     return BigInt(newFd);
   }
 
@@ -504,6 +512,8 @@ export class LinuxSyscalls {
     const replaced = this.fdTable.get(nfd);
     this.fdTable.delete(nfd);
     this.fdTable.set(nfd, { ...entry });
+    const kf = this.kfile(entry);
+    if (kf) retain(kf);
     this.releaseSock(replaced);
     return BigInt(nfd);
   }
@@ -885,8 +895,13 @@ export class LinuxSyscalls {
 
   private allocSock(sock: KSocket | KDatagramSocket): bigint {
     const fd = this.nextFd++;
-    this.fdTable.set(fd, { path: `socket:[${sock.ino}]`, offset: 0, content: null, flags: 2, sock });
+    this.fdTable.set(fd, { path: `socket:[${sock.ino}]`, offset: 0, content: null, flags: 2, sock: retain(sock) as typeof sock });
     return BigInt(fd);
+  }
+
+  /** The kernel OpenFile behind an fd, if any (sockets, epoll). Each fd entry holds one reference. */
+  private kfile(entry: FDEntry | undefined): OpenFile | undefined {
+    return entry?.sock ?? entry?.epoll;
   }
 
   private sockEntry(fdNum: bigint): FDEntry | bigint {
@@ -896,12 +911,10 @@ export class LinuxSyscalls {
     return entry;
   }
 
-  /** Close the socket once no fd refers to it any more. */
+  /** Drop an fd's reference to its socket/epoll; the last one closes it. */
   private releaseSock(entry: FDEntry | undefined): void {
-    const sock = entry?.sock;
-    if (!sock) return;
-    for (const e of this.fdTable.values()) if (e.sock === sock) return;
-    void sock.close();
+    const f = this.kfile(entry);
+    if (f) void release(f);
   }
 
   private readSockaddr(addr: bigint, len: bigint): SockAddr | bigint {
@@ -1147,16 +1160,17 @@ export class LinuxSyscalls {
     const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : 0;
     for (;;) {
       let ready = 0;
-      const socks: (KSocket | KDatagramSocket)[] = [];
+      const socks: OpenFile[] = [];
       for (let i = 0; i < nfds; i++) {
         const p = fdsPtr + BigInt(i * 8);
         const fd = this.mem.read32(p) | 0;
         if (fd < 0) { this.mem.write16(p + 6n, 0); continue; }
         const entry = this.fdTable.get(fd);
-        if (entry?.sock) socks.push(entry.sock);
+        const kf = this.kfile(entry);
+        if (kf) socks.push(kf);
         const events = this.mem.read16(p + 4n);
         const rev = !entry ? POLLNVAL
-          : entry.sock ? entry.sock.poll(events)
+          : kf ? kf.poll(events)
           : entry.legacyHttp ? events & (POLLIN | POLLOUT)
           : 0;
         this.mem.write16(p + 6n, rev);
@@ -1179,6 +1193,45 @@ export class LinuxSyscalls {
     const timeout = tsp === 0n ? -1
       : Number(this.mem.read64(tsp)) * 1000 + Math.ceil(Number(this.mem.read64(tsp + 8n)) / 1e6);
     return this.sysPoll(fdsPtr, Number(nfds), timeout);
+  }
+
+  // ─── epoll (src/kernel/epoll.ts) over socket and epoll fds ────────────────
+
+  private sysEpollCreate(flags: bigint): bigint {
+    if (flags !== 0n && flags !== 0o2000000n) return -BigInt(EINVAL); // only EPOLL_CLOEXEC
+    const ep = retain(new EpollFile()) as EpollFile;
+    const fd = this.nextFd++;
+    this.fdTable.set(fd, { path: 'anon_inode:[eventpoll]', offset: 0, content: null, flags: 2, epoll: ep });
+    return BigInt(fd);
+  }
+
+  // struct epoll_event is packed on x86-64: u32 events, u64 data (12 bytes)
+  private sysEpollCtl(epfd: bigint, op: bigint, fdNum: bigint, event: bigint): bigint {
+    const ep = this.fdTable.get(Number(epfd))?.epoll;
+    if (!this.fdTable.has(Number(epfd))) return -BigInt(EBADF);
+    if (!ep) return -BigInt(EINVAL);
+    const entry = this.fdTable.get(Number(fdNum));
+    if (!entry) return -BigInt(EBADF);
+    const file = this.kfile(entry);
+    if (!file) return -BigInt(EPERM); // emulator-local files and pipes aren't pollable kernel files
+    const o = Number(op);
+    if (o !== 2 && event === 0n) return -BigInt(EFAULT); // EPOLL_CTL_DEL may pass NULL
+    const events = event === 0n ? 0 : this.mem.read32(event);
+    const lo = event === 0n ? 0 : this.mem.read32(event + 4n);
+    const hi = event === 0n ? 0 : this.mem.read32(event + 8n);
+    return BigInt(ep.ctl(o, Number(fdNum), file, events, lo, hi));
+  }
+
+  private async sysEpollWait(epfd: bigint, events: bigint, maxevents: bigint, timeout: bigint): Promise<bigint> {
+    const entry = this.fdTable.get(Number(epfd));
+    if (!entry) return -BigInt(EBADF);
+    if (!entry.epoll) return -BigInt(EINVAL);
+    const max = Number(BigInt.asIntN(32, maxevents));
+    if (max <= 0) return -BigInt(EINVAL);
+    const out = new Uint8Array(Math.min(max, 1024) * 12);
+    const n = await entry.epoll.wait(out, max, Number(BigInt.asIntN(32, timeout)));
+    if (n > 0) this.mem.writeBytes(events, out.subarray(0, n * 12));
+    return BigInt(n);
   }
 
   /** The pre-relay behavior: buffer an HTTP request, answer it with fetch(). */

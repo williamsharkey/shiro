@@ -19,40 +19,40 @@
 
 import type { KStat } from './abi';
 import type { FdTable, OpenFile } from './fd';
+import type { Kernel } from './kernel';
 import {
-  EPERM, EINTR, EIO, EBADF, EAGAIN, EACCES, EFAULT, EINVAL, EPIPE, ETIMEDOUT,
-  O_NONBLOCK, POLLIN, POLLPRI, POLLOUT, POLLERR, POLLHUP, POLLNVAL, S_IFSOCK,
+  EPERM, EINTR, EIO, EBADF, EAGAIN, EACCES, EFAULT, EINVAL, EPIPE, ETIMEDOUT, EPROTO, ENOTSOCK, EDESTADDRREQ,
+  EMSGSIZE, ENOPROTOOPT, EPROTONOSUPPORT, EOPNOTSUPP, EAFNOSUPPORT, EADDRINUSE, EADDRNOTAVAIL, ENETDOWN,
+  ENETUNREACH, ECONNABORTED, ECONNRESET, ENOBUFS, EISCONN, ENOTCONN, ECONNREFUSED, EHOSTUNREACH, EALREADY,
+  EINPROGRESS, O_NONBLOCK, POLLIN, POLLPRI, POLLOUT, POLLERR, POLLHUP, POLLNVAL, POLLRDHUP, S_IFSOCK,
+  AF_UNIX, AF_INET, AF_INET6, SOCK_STREAM, SOCK_DGRAM, SOCK_NONBLOCK, SOCK_CLOEXEC, SHUT_RD, SHUT_WR,
+  SHUT_RDWR, MSG_PEEK, MSG_WAITALL, MSG_DONTWAIT, MSG_NOSIGNAL, SOL_SOCKET, IPPROTO_IP, IPPROTO_TCP,
+  IPPROTO_UDP, IPPROTO_IPV6, SO_REUSEADDR, SO_TYPE, SO_ERROR, SO_BROADCAST, SO_SNDBUF, SO_RCVBUF,
+  SO_KEEPALIVE, SO_LINGER, SO_REUSEPORT, SO_RCVTIMEO, SO_SNDTIMEO, SO_ACCEPTCONN, SO_PROTOCOL, SO_DOMAIN,
+  TCP_NODELAY, TCP_KEEPIDLE, TCP_KEEPINTVL, TCP_KEEPCNT, IPV6_V6ONLY, FIONREAD, FIONBIO, SYS_socket,
+  SYS_connect, SYS_accept, SYS_sendto, SYS_recvfrom, SYS_shutdown, SYS_bind, SYS_listen, SYS_getsockname,
+  SYS_getpeername, SYS_socketpair, SYS_setsockopt, SYS_getsockopt, SYS_accept4, SOCKET_SYSCALLS,
+  SOCKADDR_ROOM, SIGPIPE,
 } from './abi';
 
+// Socket constants live in abi.ts (the shared ABI); re-exported for net.ts users.
 export {
-  EPERM, EINTR, EIO, EBADF, EAGAIN, EACCES, EFAULT, EINVAL, EPIPE, ETIMEDOUT,
-  O_NONBLOCK, POLLIN, POLLPRI, POLLOUT, POLLERR, POLLHUP, POLLNVAL, S_IFSOCK,
-};
+  EPERM, EINTR, EIO, EBADF, EAGAIN, EACCES, EFAULT, EINVAL, EPIPE, ETIMEDOUT, EPROTO, ENOTSOCK, EDESTADDRREQ,
+  EMSGSIZE, ENOPROTOOPT, EPROTONOSUPPORT, EOPNOTSUPP, EAFNOSUPPORT, EADDRINUSE, EADDRNOTAVAIL, ENETDOWN,
+  ENETUNREACH, ECONNABORTED, ECONNRESET, ENOBUFS, EISCONN, ENOTCONN, ECONNREFUSED, EHOSTUNREACH, EALREADY,
+  EINPROGRESS, O_NONBLOCK, POLLIN, POLLPRI, POLLOUT, POLLERR, POLLHUP, POLLNVAL, POLLRDHUP, S_IFSOCK,
+  AF_UNIX, AF_INET, AF_INET6, SOCK_STREAM, SOCK_DGRAM, SOCK_NONBLOCK, SOCK_CLOEXEC, SHUT_RD, SHUT_WR,
+  SHUT_RDWR, MSG_PEEK, MSG_WAITALL, MSG_DONTWAIT, MSG_NOSIGNAL, SOL_SOCKET, IPPROTO_IP, IPPROTO_TCP,
+  IPPROTO_UDP, IPPROTO_IPV6, SO_REUSEADDR, SO_TYPE, SO_ERROR, SO_BROADCAST, SO_SNDBUF, SO_RCVBUF,
+  SO_KEEPALIVE, SO_LINGER, SO_REUSEPORT, SO_RCVTIMEO, SO_SNDTIMEO, SO_ACCEPTCONN, SO_PROTOCOL, SO_DOMAIN,
+  TCP_NODELAY, TCP_KEEPIDLE, TCP_KEEPINTVL, TCP_KEEPCNT, IPV6_V6ONLY, FIONREAD, FIONBIO, SYS_socket,
+  SYS_connect, SYS_accept, SYS_sendto, SYS_recvfrom, SYS_shutdown, SYS_bind, SYS_listen, SYS_getsockname,
+  SYS_getpeername, SYS_socketpair, SYS_setsockopt, SYS_getsockopt, SYS_accept4, SOCKET_SYSCALLS,
+  SOCKADDR_ROOM,
+} from './abi';
 
-// ── Socket ABI constants (Linux x86-64 values) not in abi.ts ──
-
-export const AF_UNIX = 1, AF_INET = 2, AF_INET6 = 10;
-export const SOCK_STREAM = 1, SOCK_DGRAM = 2, SOCK_NONBLOCK = 0o4000, SOCK_CLOEXEC = 0o2000000;
-export const POLLRDHUP = 0x2000;
-export const SHUT_RD = 0, SHUT_WR = 1, SHUT_RDWR = 2;
-export const MSG_PEEK = 0x2, MSG_WAITALL = 0x100, MSG_DONTWAIT = 0x40, MSG_NOSIGNAL = 0x4000;
-export const SOL_SOCKET = 1, IPPROTO_IP = 0, IPPROTO_TCP = 6, IPPROTO_UDP = 17, IPPROTO_IPV6 = 41;
-export const SO_REUSEADDR = 2, SO_TYPE = 3, SO_ERROR = 4, SO_BROADCAST = 6, SO_SNDBUF = 7, SO_RCVBUF = 8,
-  SO_KEEPALIVE = 9, SO_LINGER = 13, SO_REUSEPORT = 15, SO_RCVTIMEO = 20, SO_SNDTIMEO = 21,
-  SO_ACCEPTCONN = 30, SO_PROTOCOL = 38, SO_DOMAIN = 39;
-export const TCP_NODELAY = 1, TCP_KEEPIDLE = 4, TCP_KEEPINTVL = 5, TCP_KEEPCNT = 6;
-export const IPV6_V6ONLY = 26;
-export const FIONREAD = 0x541b, FIONBIO = 0x5421;
-
-export const SYS_socket = 41, SYS_connect = 42, SYS_accept = 43, SYS_sendto = 44, SYS_recvfrom = 45,
-  SYS_shutdown = 48, SYS_bind = 49, SYS_listen = 50, SYS_getsockname = 51, SYS_getpeername = 52,
-  SYS_socketpair = 53, SYS_setsockopt = 54, SYS_getsockopt = 55, SYS_accept4 = 288;
-
-export const EPROTO = 71, ENOTSOCK = 88, EDESTADDRREQ = 89, EMSGSIZE = 90, ENOPROTOOPT = 92, EPROTONOSUPPORT = 93,
-  EOPNOTSUPP = 95, EAFNOSUPPORT = 97, EADDRINUSE = 98, EADDRNOTAVAIL = 99, ENETDOWN = 100, ENETUNREACH = 101,
-  ECONNABORTED = 103, ECONNRESET = 104, ENOBUFS = 105, EISCONN = 106, ENOTCONN = 107,
-  ECONNREFUSED = 111, EHOSTUNREACH = 113, EALREADY = 114, EINPROGRESS = 115, EDQUOT = 122;
-
+// Relay quota errors; not in abi.ts
+export const EDQUOT = 122;
 /** errno names the relay sends → numbers (unknown names map to EIO). */
 const ERRNO_BY_NAME: Record<string, number> = {
   EPERM, EIO, EACCES, EINVAL, EPIPE, EPROTO, ENETDOWN, ENETUNREACH, ECONNABORTED, ECONNRESET, ENOBUFS,
@@ -1087,9 +1087,6 @@ export const netStack = new NetStack();
 
 // ── Channel syscalls (docs/NETWORKING.md "Kernel syscalls") ──
 
-/** Room reserved after the payload for a sockaddr (sockaddr_in6 is 28 bytes). */
-export const SOCKADDR_ROOM = 28;
-
 type AnySocket = KSocket | KDatagramSocket;
 
 /**
@@ -1226,6 +1223,12 @@ export async function netSyscall(
     }
   }
   return undefined;
+}
+
+/** Route the kernel's socket syscalls to `stack`; EPIPE without MSG_NOSIGNAL raises SIGPIPE. Returns the unregister function. */
+export function installNet(kernel: Kernel, stack: NetStack = netStack): () => void {
+  return kernel.registerSyscalls(SOCKET_SYSCALLS, (proc, nr, args, data, k) =>
+    netSyscall(proc, nr, args, data, () => k.deliver(proc, SIGPIPE), stack));
 }
 
 if (typeof window !== 'undefined') (window as any).__shiroNet = netStack;

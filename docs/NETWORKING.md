@@ -186,23 +186,25 @@ per-IP connection cap and connect rate, Origin/token checks, refusal of
 private/loopback/link-local/metadata targets including names that resolve
 into them, loopback listen/accept, and the iframeServer HTTP bridge.
 
-## Asks for unix/kernel
+## Kernel integration
 
-- `kernel.syscall`: in `default:`, `return (await netSyscall(proc, nr, args, data, () => this.deliver(proc, SIGPIPE))) ?? -ENOSYS`.
-- `abi.ts`: the `SYS_socket`… numbers above (net.ts exports them for now), the
-  socket errnos (`ENOTSOCK` 88 … `EINPROGRESS` 115), `AF_*`, `SOCK_*`, `SOL_*`,
-  `SO_*`, `MSG_*`, `POLLRDHUP`; net.ts would re-export them from there.
-- `GuestSys` in `channel.ts`: socket wrappers that reserve `SOCKADDR_ROOM`
-  after the payload for recvfrom.
-- `kernel.poll` waits on `OpenFile.onReady`, which sockets fire; epoll/select
-  should be built on the same pair.
+- `installNet(kernel)` (called in `main.ts`) registers `netSyscall` for
+  `SOCKET_SYSCALLS` via `kernel.registerSyscalls`; a send that fails with
+  `EPIPE` without `MSG_NOSIGNAL` raises `SIGPIPE`. sendmsg/recvmsg fall through
+  to `-ENOSYS` (guest libraries wrap sendto/recvfrom).
+- Socket constants come from `abi.ts`; `net.ts` re-exports them.
+- Sockets fire `onReady` on every readiness change (data, FIN, error, accept
+  backlog, send-buffer drain), so `poll`, `select` and `epoll` (including
+  `EPOLLET`) in `src/kernel/epoll.ts` work on them.
+- The x86 emulator has `epoll_create`/`epoll_create1`/`epoll_ctl`/
+  `epoll_wait`/`epoll_pwait` over socket and epoll fds using the kernel's
+  `EpollFile`; its own files and pipes aren't kernel files, so adding them
+  returns `EPERM`. Its socket/epoll fds hold kernel references
+  (`retain`/`release`), so dup'd fds keep a description alive.
 
 ## Not done yet
 
-- `SIGPIPE` on `EPIPE` (sockets return `-EPIPE`; raising the signal is the
-  kernel's job unless `MSG_NOSIGNAL`).
-- `epoll`/`select` (only `poll`/`ppoll` in the x86 emulator); they belong in
-  the kernel's poll layer over `OpenFile.poll`/`onReady`.
+- `SIGPIPE` in the x86 emulator (it has no signal delivery; sends return `-EPIPE`).
 - AF_UNIX path sockets (only `socketpair`).
 - UDP beyond DNS.
 - `net.connect` to a port served by `http.createServer` (that server is not a
