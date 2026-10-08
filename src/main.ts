@@ -337,6 +337,8 @@ async function main() {
     () => import('./commands/python').then(m => m.python3Cmd)), 'src/commands/python.ts');
   registerCommand(commands, lazyCommand('pip', 'Python package manager',
     () => import('./commands/python').then(m => m.pipCmd)), 'src/commands/python.ts');
+  registerCommand(commands, lazyCommand('pip3', 'Python package manager',
+    () => import('./commands/python').then(m => ({ ...m.pipCmd, name: 'pip3' }))), 'src/commands/python.ts');
   registerCommand(commands, lazyCommand('sqlite3', 'SQLite database engine',
     () => import('./commands/sqlite').then(m => m.sqlite3Cmd)), 'src/commands/sqlite.ts');
   registerCommand(commands, lazyCommand('finder', 'Visual file manager',
@@ -430,7 +432,7 @@ async function main() {
     'sh', 'bash', 'vi', 'nano', 'rg', 'esbuild',
     'mktemp', 'jq', 'tput', 'stty', 'gzip', 'gunzip', 'wget',
     'pgrep', 'pkill', 'nproc', 'getconf', 'ed', 'iconv', 'zip', 'unzip',
-    'cc', 'gcc', 'python', 'python3', 'pip', 'sqlite3',
+    'cc', 'gcc', 'python', 'python3', 'pip', 'pip3', 'sqlite3',
   ];
   (async () => {
     try {

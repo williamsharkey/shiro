@@ -8,3 +8,5 @@ probe.jsonl
 tests/.pkg-cache/
 .pkgbuild/
 .blink-build/
+bench/.cache/
+.bench-seeds/

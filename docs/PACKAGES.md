@@ -93,10 +93,11 @@ running it exits 126 unless `SHIRO_PKG_FORCE=1`.
 
 What the kernel provides follows the WASM process mode (`wasmProcessMode()`
 in `src/wasi/host.ts`): `sab` gives blocking-stdin, tty, processes, threads,
-sync-fs and wasix (the guest's WASIX subset); `jspi` the same without threads;
+sync-fs, wasix (the guest's WASIX subset), wasix-stack (fork, setjmp and
+exec through asyncify stack capture) and sockets; `jspi` the same without
+threads and wasix-stack;
 `none` nothing. Other kernel parts
-can add features (`sockets` once unix/net lands, `wasix-stack` once the guest
-captures stacks) with:
+can add features with:
 
 ```js
 globalThis.__shiroKernel = { features: ['sockets'] };
@@ -113,6 +114,7 @@ works everywhere and the interactive mode needs a page that can block.
 | --- | --- | --- | --- | --- |
 | coreutils (uutils, 78 applets) | 0.12.0 | built here, `coreutils.sh` | preview1 | ok |
 | lua, luac | 5.4.7 | built here, `lua.sh` | preview1 | ok; the REPL reads the tty as a kernel process (checked on the pty) |
+| python3 (CPython) | 3.13.7 | built here, `python3.sh` | preview1 | ok; `pip` (Shiro) installs pure-Python wheels, `python3 -m venv` works; no subprocess/sockets |
 | sqlite3 | 3.50.4 | built here, `sqlite.sh` | preview1 | ok; the interactive shell reads the tty as a kernel process (checked on the pty) |
 | jq | 1.8.1 | built here, `jq.sh` | preview1 | ok |
 | cowsay, cowthink | 0.3.0 | Wasmer | preview1 | ok |
@@ -128,12 +130,12 @@ works everywhere and the interactive mode needs a page that can block.
 | ripgrep (rg) | 15.2.1 | Wasmer | WASIX | ok as kernel processes, as `/usr/bin/rg` |
 | quickjs-ng (qjs-ng) | 0.15.1 | Wasmer | WASIX | ok as kernel processes |
 | less | 685 | Wasmer | WASIX | runs as kernel processes (`/usr/bin/less`); passthrough checked, interactive paging not yet |
-| bash | 1.0.25 | Wasmer | WASIX | needs wasix-stack |
-| dash | 1.0.19 | Wasmer | WASIX | needs wasix-stack |
-| php | 8.3 | Wasmer | WASIX | needs wasix-stack (86 MB) |
-| python3.13 | 3.13 | Wasmer | WASIX | needs dynamic-linking (62 MB) |
+| bash | 1.0.25 | Wasmer | WASIX | ok as kernel processes: scripts, `-c`, interactive on the pty (readline editing, ^C), fork/exec/pipelines/`$(...)`, `wait` |
+| dash | 1.0.19 | Wasmer | WASIX | ok as kernel processes, as bash; this early build's exec passes no environment, so exported variables don't reach children |
+| php | 8.3 | Wasmer | WASIX | ok as kernel processes (`php -r`, exceptions, fatal errors through zend_bailout's longjmp); 86 MB |
+| python3.13 | 3.13 | Wasmer | WASIX | runs as a kernel process (`-c`, stdlib imports) given its standard library; the package needs mounts for that (62 MB) |
 | clang 16, lld, llvm-ar/nm | 16 | Wasmer | WASIX | `--version` runs; needs mounts for its sysroot (111 MB) |
-| curl | 8.4.0 | Wasmer | WASIX | `--version` runs; needs sockets (WASIX sock_open/connect) |
+| curl | 8.4.0 | Wasmer | WASIX | ok as kernel processes: HTTP and HTTPS (OpenSSL in the guest) through the kernel sockets and the TCP relay; real sites need its CA certificates mounted at `/openssl` |
 
 "Ok as kernel processes" means installable and working where WASM processes
 can use threads (`sab` mode: a cross-origin isolated page). Without that, WASIX
@@ -148,12 +150,18 @@ startup exits 71 through them, and then trapped), `path_open2` and
 imported under `wasix_32v1` (early builds such as dash). What still blocks the
 rest:
 
-- `wasix-stack`: bash, dash and php stop at `stack_checkpoint`, WASIX's
-  setjmp/fork primitive. The host has to capture and rewind the WASM stack
-  (asyncify-style).
-- `dynamic-linking`: python imports `env.__indirect_function_table`.
+- `wasix-stack` (done): WASIX builds are asyncified, so the guest captures
+  and rewinds the stack itself (`src/wasi/asyncify.ts`): setjmp/longjmp,
+  fork (a new kernel process with a copy of the memory, fds and signal
+  state) and a real exec. See AGENTS.md "WASM Processes".
+- `dynamic-linking` (done, sab mode): python is a position-independent
+  module; `src/wasi/dylink.ts` lays it out and `src/wasi/dyncall.ts` serves
+  the WASIX dynamic calls its trampolines use. Loading side modules (dlopen)
+  is not implemented. Python still needs `mounts` for its standard library.
 - `mounts`: clang's sysroot volumes belong at `/sysroot` and `/lib`.
-- `sockets`: curl transfers.
+- `sockets` (done): the guest implements the WASIX socket calls and
+  `resolve` over the kernel sockets (src/kernel/net.ts), so sab and jspi
+  mode provide it.
 
 Not available as WASM anywhere checked: busybox, vim,
 git, make (no WASI builds; busybox and make also need processes).

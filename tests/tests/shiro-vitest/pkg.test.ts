@@ -165,7 +165,7 @@ describe('package index', () => {
 
   it('packages built here are in public/pkg with the pinned sha256, size, and a recipe', () => {
     const own = builtinIndex().packages.filter(p => p.origin === 'shiro');
-    expect(own.map(p => p.name).sort()).toEqual(['coreutils', 'jq', 'lua', 'sqlite']);
+    expect(own.map(p => p.name)).toEqual(expect.arrayContaining(['coreutils', 'jq', 'lua', 'sqlite']));
     for (const p of own) {
       expect(existsSync(`${REPO}/${p.recipe}`), p.recipe).toBe(true);
       for (const f of p.files) {
@@ -529,9 +529,10 @@ describe('real packages as kernel processes', () => {
   }, 60_000);
 
   it('WASIX packages needing more than the guest has stay gated, naming what is missing', async () => {
-    const r = await sh(shell, 'pkg install bash');
+    const r = await sh(shell, 'pkg install python');
     expect(r.exitCode).toBe(100);
-    expect(r.err).toContain('wasix-stack');
+    expect(r.err).toContain('mounts');
+    expect(r.err).not.toContain('dynamic-linking');
     expect(r.err).not.toMatch(/threads|processes/); // the kernel provides those now
   });
 

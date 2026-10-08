@@ -64,6 +64,11 @@ export interface PkgBin {
   args?: string[];
   /** false: don't take precedence over a Shiro builtin of the same name */
   shadow?: boolean;
+  /**
+   * "path": argv[0] is the absolute path the command was found at (not the
+   * name typed), as CPython needs to find a venv's pyvenv.cfg.
+   */
+  argv0?: 'path';
 }
 
 export interface PkgEntry {
@@ -214,9 +219,11 @@ const MODE_FEATURES: Record<string, KernelFeature[]> = {
   // Worker per process/thread, blocking syscalls over SharedArrayBuffer
   // 'wasix' is the guest's subset (startup, spawn, pipes, futexes, path_open2);
   // packages needing more name it (wasix-stack, sockets, ...)
-  sab: ['blocking-stdin', 'tty', 'processes', 'threads', 'sync-fs', 'wasix'],
+  // (and the WASIX socket calls, over the kernel sockets of src/kernel/net.ts)
+  // and position-independent (dylink.0) main modules, with WASIX dynamic calls
+  sab: ['blocking-stdin', 'tty', 'processes', 'threads', 'sync-fs', 'wasix', 'wasix-stack', 'sockets', 'dynamic-linking'],
   // Main thread, imports suspend on the kernel (no shared memory, so no threads)
-  jspi: ['blocking-stdin', 'tty', 'processes', 'sync-fs', 'wasix'],
+  jspi: ['blocking-stdin', 'tty', 'processes', 'sync-fs', 'wasix', 'sockets'],
   none: [],
 };
 let runtimeMode: 'sab' | 'jspi' | 'none' | null = null;
@@ -530,7 +537,7 @@ export function packageOfPath(path: string): string | null {
  * Output goes to ctx.stdout/ctx.stderr (or the terminal, for kernel
  * processes writing to it).
  */
-export async function runPackageBinary(binPath: string, argv0: string, args: string[], ctx: CommandContext): Promise<number> {
+export async function runPackageBinary(binPath: string, argv0: string, args: string[], ctx: CommandContext, invokedPath?: string): Promise<number> {
   const name = packageOfPath(binPath);
   const status = name ? (await readStatus(ctx.fs))[name] : undefined;
   const entry = status?.entry;
@@ -538,6 +545,11 @@ export async function runPackageBinary(binPath: string, argv0: string, args: str
   const bin = entry && (entry.bin[argv0]?.file === rel ? entry.bin[argv0] :
     Object.values(entry.bin).find(b => b.file === rel));
   const mode = await refreshRuntimeMode();
+  if (name === 'python3' && pythonFrontend(args)) {
+    const { runPythonFrontend } = await import('./commands/python-wasi');
+    return runPythonFrontend(ctx, args, invokedPath ?? binPath);
+  }
+  if (bin?.argv0 === 'path' && invokedPath) argv0 = invokedPath;
 
   if (entry) {
     const missing = missingFeatures(entry);
@@ -560,7 +572,7 @@ export async function runPackageBinary(binPath: string, argv0: string, args: str
   // programs keep the in-page runtime, which adapts wasi_unstable.
   if (mode !== 'none' && entry?.abi !== 'wasi_unstable') {
     const { runWasiProgram } = await import('./wasi/run-command');
-    return runWasiProgram(ctx, { module: mod, image: bytes, argv, cwd: ctx.cwd, env: { ...ctx.env }, preopens: await topLevelDirs(ctx.fs) });
+    return runWasiProgram(ctx, { module: mod, image: bytes, argv, cwd: ctx.cwd, env: { ...ctx.env }, preopens: await topLevelDirs(ctx.fs, entry) });
   }
   return runInPage(mod, entry, argv, args, ctx);
 }
@@ -572,14 +584,17 @@ export async function runPackageBinary(binPath: string, argv0: string, args: str
  * this page can't run WASM processes.
  */
 export async function packageKernelProgram(
-  fs: FileSystem, binPath: string, argv0: string, args: string[],
+  fs: FileSystem, binPath: string, argv0: string, args: string[], invokedPath?: string,
 ): Promise<{ argv: string[]; run: import('./kernel/kernel').Runner } | null> {
   const name = packageOfPath(binPath);
   const entry = name ? (await readStatus(fs))[name]?.entry : undefined;
   if (!entry || entry.abi === 'wasi_unstable') return null;
   if (await refreshRuntimeMode() === 'none' || missingFeatures(entry).length) return null;
+  // `python -m pip/venv` are Shiro's (runPackageBinary)
+  if (name === 'python3' && pythonFrontend(args)) return null;
   const rel = binPath.slice(PKG_ROOT.length + entry.name.length + 2);
   const bin = entry.bin[argv0]?.file === rel ? entry.bin[argv0] : Object.values(entry.bin).find(b => b.file === rel);
+  if (bin?.argv0 === 'path' && invokedPath) argv0 = invokedPath;
   const bytes = await fs.readFile(binPath) as Uint8Array;
   let mod = moduleCache.get(binPath);
   if (!mod) {
@@ -587,11 +602,32 @@ export async function packageKernelProgram(
     moduleCache.set(binPath, mod);
   }
   const { wasmRunner } = await import('./wasi/host');
-  return { argv: [argv0, ...(bin?.args || []), ...args], run: wasmRunner(mod, new Uint8Array(bytes), await topLevelDirs(fs)) };
+  return { argv: [argv0, ...(bin?.args || []), ...args], run: wasmRunner(mod, new Uint8Array(bytes), await topLevelDirs(fs, entry)) };
 }
 
-/** "/usr", "/home", ...: preopened by name for libcs that don't match "/" (see wasmRunner). */
-async function topLevelDirs(fs: FileSystem): Promise<string[]> {
+/**
+ * `python [opts] -m pip|venv|ensurepip ...`: modules Shiro provides itself,
+ * because WASI python has no sockets (pip) or subprocess (venv's ensurepip).
+ */
+export function pythonFrontend(args: string[]): 'pip' | 'venv' | 'ensurepip' | null {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '-m') {
+      const m = args[i + 1];
+      return m === 'pip' || m === 'venv' || m === 'ensurepip' ? m : null;
+    }
+    if (!/^-[IEsSuBqObvxdR]+$/.test(a)) return null;
+  }
+  return null;
+}
+
+/**
+ * "/usr", "/home", ...: preopened by name for libcs that don't match "/"
+ * (see wasmRunner). Not for WASIX programs: their libc matches "/", and the
+ * early one in dash strips the wrong prefix when several preopens match.
+ */
+async function topLevelDirs(fs: FileSystem, entry?: PkgEntry): Promise<string[]> {
+  if (entry?.abi === 'wasix') return [];
   const out: string[] = [];
   try {
     for (const name of await fs.readdir('/')) {

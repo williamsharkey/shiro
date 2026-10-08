@@ -1,5 +1,6 @@
 {
  "suite": "oils spec",
+ "title": "Shell: oils spec tests",
  "files": {
   "smoke": {
    "pass": 12,
@@ -259,7 +260,7 @@
    ]
   },
   "var-op-test": {
-   "pass": 14,
+   "pass": 16,
    "total": 35,
    "failures": [
     {
@@ -293,14 +294,6 @@
     {
      "i": 18,
      "name": "$@ (empty) and - and +"
-    },
-    {
-     "i": 19,
-     "name": "$@ (\"\") and - and +"
-    },
-    {
-     "i": 20,
-     "name": "$@ (\"\" \"\") and - and +"
     },
     {
      "i": 21,
@@ -2209,7 +2202,7 @@
    ]
   },
   "dbracket": {
-   "pass": 19,
+   "pass": 18,
    "total": 49,
    "failures": [
     {
@@ -2323,6 +2316,10 @@
     {
      "i": 45,
      "name": "[[ ]] with redirect"
+    },
+    {
+     "i": 46,
+     "name": "special chars"
     },
     {
      "i": 47,
@@ -3810,6 +3807,5 @@
    "total": 2,
    "failures": []
   }
- },
- "title": "Shell: oils spec tests"
+ }
 }

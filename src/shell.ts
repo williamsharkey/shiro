@@ -490,7 +490,8 @@ export class Shell {
     // Handle backslash line continuations: \<newline> joins lines
     const joined = line.replace(/\\\n/g, '');
     const trimmed = joined.trim();
-    if (!trimmed || trimmed.startsWith('#')) return 0;
+    // A comment line (a multi-line script that starts with one still runs)
+    if (!trimmed || (trimmed.startsWith('#') && !trimmed.includes('\n'))) return 0;
 
     // LINENO tracking: reset at top-level execute, track depth
     this.executeDepth++;
@@ -3201,7 +3202,7 @@ export class Shell {
     }
 
     // ${VAR:-default}, ${VAR:=default}, ${VAR:+alt}, ${VAR:?err}
-    const opMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*)(:?)([-=+?])(.*)$/s);
+    const opMatch = inner.match(/^([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!])(:?)([-=+?])(.*)$/s);
     if (opMatch) {
       const [, varName, colon, op, operand] = opMatch;
       const val = this.env[varName];
@@ -3325,97 +3326,6 @@ export class Shell {
     }
     alts.push(s.slice(start));
     return alts;
-  }
-
-  /** Split multi-line input into statements, keeping heredoc blocks and quoted strings intact. */
-  private splitStatements(input: string): string[] {
-    const lines = input.split(/\r?\n/);
-    if (lines.length <= 1) return [input];
-
-    const statements: string[] = [];
-    let i = 0;
-    let accumulator = '';
-    let quoteChar: string | null = null; // track open quote across lines
-
-    while (i < lines.length) {
-      const line = lines[i];
-
-      // If we're inside an open quote from a previous line, accumulate
-      if (quoteChar) {
-        accumulator += '\n' + line;
-        // Check if this line closes the quote
-        if (this.lineClosesQuote(line, quoteChar)) {
-          quoteChar = null;
-          // Check if MORE quotes open after the close on this line
-          const afterClose = this.unclosedQuote(accumulator);
-          if (afterClose) quoteChar = afterClose;
-        }
-        if (!quoteChar) {
-          statements.push(accumulator);
-          accumulator = '';
-        }
-        i++;
-        continue;
-      }
-
-      // Check if this line starts a heredoc
-      const heredocMatch = line.match(/<<-?\s*(?:'([^']+)'|"([^"]+)"|(\S+))/);
-      if (heredocMatch) {
-        const delimiter = heredocMatch[1] || heredocMatch[2] || heredocMatch[3];
-        let block = line;
-        i++;
-        while (i < lines.length) {
-          block += '\n' + lines[i];
-          if (lines[i].trim() === delimiter) break;
-          i++;
-        }
-        statements.push(block);
-        i++;
-        continue;
-      }
-
-      // Check if this line has an unclosed quote
-      const openQuote = this.unclosedQuote(line);
-      if (openQuote) {
-        accumulator = line;
-        quoteChar = openQuote;
-        i++;
-        continue;
-      }
-
-      statements.push(line);
-      i++;
-    }
-
-    // Flush any remaining accumulated content
-    if (accumulator) statements.push(accumulator);
-
-    return statements;
-  }
-
-  /** Check if a line has an unclosed quote. Returns the quote char or null. */
-  private unclosedQuote(line: string): string | null {
-    let inSingle = false;
-    let inDouble = false;
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '\\' && inDouble) { i++; continue; }
-      if (ch === "'" && !inDouble) inSingle = !inSingle;
-      else if (ch === '"' && !inSingle) inDouble = !inDouble;
-    }
-    if (inSingle) return "'";
-    if (inDouble) return '"';
-    return null;
-  }
-
-  /** Check if a line closes a specific quote character. */
-  private lineClosesQuote(line: string, quote: string): boolean {
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '\\' && quote === '"') { i++; continue; }
-      if (ch === quote) return true;
-    }
-    return false;
   }
 
   private parseHeredoc(input: string): { command: string; body: string } | null {
@@ -4545,6 +4455,9 @@ export class Shell {
       return strip(tokens[0]) !== '' ? 0 : 1;
     }
 
+    // ! EXPR (any length: `[ ! "$a" = "$b" ]`)
+    if (tokens[0] === '!') return (await this.evalTest(tokens.slice(1).join(' '))) === 0 ? 1 : 0;
+
     if (tokens.length === 2) {
       const op = tokens[0];
       const expanded = strip(tokens[1]);
@@ -5247,7 +5160,8 @@ export class Shell {
     try {
       const real = await this.fs.realpath(filePath);
       if (packageOfPath(real)) {
-        return await runPackageBinary(real, filePath.split('/').pop() || filePath, args, ctx);
+        return await runPackageBinary(real, filePath.split('/').pop() || filePath, args, ctx,
+          filePath.startsWith('/') ? filePath : this.fs.resolvePath(filePath, this.cwd));
       }
     } catch { /* fall through to the generic path */ }
 
@@ -5349,27 +5263,22 @@ export class Shell {
       const shebang = firstLine.substring(2).trim();
       const [interpreter, ...interpArgs] = shebang.split(/\s+/);
 
-      // Handle common interpreters
-      if (interpreter === '/usr/bin/env' || interpreter === '/bin/env') {
-        // env node script.js -> node script.js
-        const realInterp = interpArgs[0];
-        if (realInterp === 'node' || realInterp === 'nodejs') {
-          return this.executeNodeScript(resolvedPath, content, args, ctx, writeStdout, writeStderr);
-        } else if (realInterp === 'sh' || realInterp === 'bash') {
-          return this.executeShellScript(content, args, ctx, writeStdout, writeStderr, filePath);
-        }
-        // Unknown interpreter via env
-        writeStderr(`shiro: cannot execute ${realInterp} scripts\r\n`);
-        return 126;
-      } else if (interpreter.endsWith('/node') || interpreter.endsWith('/nodejs')) {
+      // `#!/usr/bin/env [-S] [NAME=value...] prog args` looks prog up on PATH
+      const interpBase = interpreter.slice(interpreter.lastIndexOf('/') + 1);
+      let interp = interpreter;
+      let viaEnv = false;
+      if (interpBase === 'env') {
+        while (interpArgs.length && (interpArgs[0] === '-S' || /^[A-Za-z_][A-Za-z0-9_]*=/.test(interpArgs[0]))) interpArgs.shift();
+        interp = interpArgs.shift() || '';
+        viaEnv = true;
+      }
+      const base = interp.slice(interp.lastIndexOf('/') + 1);
+      if (base === 'node' || base === 'nodejs') {
         return this.executeNodeScript(resolvedPath, content, args, ctx, writeStdout, writeStderr);
-      } else if (interpreter.endsWith('/sh') || interpreter.endsWith('/bash')) {
+      } else if ((base === 'sh' || base === 'bash') && !packageShadows(this.fs).has(base)) {
         return this.executeShellScript(content, args, ctx, writeStdout, writeStderr, filePath);
       }
-
-      // Unknown shebang interpreter
-      writeStderr(`shiro: cannot execute ${interpreter} scripts\r\n`);
-      return 126;
+      return this.runInterpreter(interp, viaEnv, [...interpArgs, filePath, ...args], ctx, writeStdout, writeStderr);
     }
 
     // No shebang - try to detect file type
@@ -5396,6 +5305,39 @@ export class Shell {
 
     // Default to shell script
     return this.executeShellScript(content, args, ctx, writeStdout, writeStderr, filePath);
+  }
+
+  /**
+   * Run a shebang interpreter: an existing absolute path runs as itself
+   * (packages, WASM, ELF, nested scripts); otherwise its name is looked up
+   * like a command, so `#!/usr/bin/python3` and `#!/usr/bin/env python3`
+   * both reach a builtin or an installed package.
+   */
+  private async runInterpreter(
+    interp: string,
+    viaEnv: boolean,
+    argv: string[],
+    ctx: CommandContext,
+    writeStdout: (s: string) => void,
+    writeStderr: (s: string) => void,
+  ): Promise<number> {
+    if (!interp) {
+      writeStderr('shiro: env: missing interpreter in #! line\n');
+      return 126;
+    }
+    if (interp.includes('/') && !viaEnv && await this.fs.exists(interp)) {
+      return this.executeScript(interp, argv, ctx, writeStdout, writeStderr);
+    }
+    const base = interp.slice(interp.lastIndexOf('/') + 1);
+    const cmd = this.commands.get(base);
+    if (cmd && !packageShadows(this.fs).has(base)) {
+      ctx.args = argv;
+      return cmd.exec(ctx);
+    }
+    const found = cmd ? `${PKG_BIN_DIR}/${base}` : await this.findExecutableInPath(base);
+    if (found) return this.executeScript(found, argv, ctx, writeStdout, writeStderr);
+    writeStderr(`shiro: ${interp}: bad interpreter: No such file or directory\n`);
+    return 126;
   }
 
   /**
