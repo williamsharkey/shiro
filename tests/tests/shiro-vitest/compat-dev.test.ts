@@ -84,6 +84,10 @@ async function sh(shell: Shell, cmd: string) {
   return { out: out.replace(/\r\n/g, '\n'), err: err.replace(/\r\n/g, '\n'), exitCode };
 }
 
+/** Without colour codes: Shiro's shell exports FORCE_COLOR, so chalk and
+ *  supports-color colour even into a pipe */
+const plain = (t: string) => t.replace(/\x1b\[[0-9;]*m/g, '');
+
 /** A download pinned by sha256, cached in tests/.pkg-cache. */
 async function cachedDownload(url: string, sha: string): Promise<Uint8Array> {
   const file = `${CACHE}/${url.split('/').pop()}`;
@@ -677,4 +681,245 @@ describe('perl (x86-64 in Blink)', () => {
     r = await sh(shell, 'cd /home/user/pt && prove t/basic.t');
     expect(r.out).toMatch(/All tests successful/);
   }, 300_000);
+});
+
+describe('node-compat modules real packages rely on', () => {
+  let shell: Shell;
+  let fs: FileSystem;
+  beforeAll(async () => {
+    ({ fs, shell } = await createTestShell());
+    await fs.mkdir('/home/user/m', { recursive: true });
+  });
+  const node = async (code: string) => {
+    await fs.writeFile('/home/user/m/t.js', code);
+    const r = await sh(shell, 'cd /home/user/m && node t.js');
+    expect(r.err).toBe('');
+    return r.out;
+  };
+
+  it('path follows Node (relative paths stay relative)', async () => {
+    expect(await node(`const p = require('path');
+console.log(JSON.stringify([p.dirname('a'), p.dirname('/a'), p.dirname('a/b/'), p.join('a', '../b', './c'), p.join(''), p.normalize('./x/../y/'),
+  p.resolve('/a', 'b', '../c'), p.relative('/a/b', '/a/c/d'), p.relative('/a', '/a'), p.extname('.bashrc'), p.extname('a.b.c'), p.basename('/x/y.js', '.js'),
+  p.parse('f.txt').dir, p.parse('/d/f.txt').dir, p.posix.dirname('*.jsa'), p.resolve('q') === process.cwd() + '/q']));`))
+      .toBe('["." ,"/","a","b/c",".","y/","/a/c","../c/d","","",".c","y","","/d",".",true]\n'.replace(' ,', ','));
+  }, 60_000);
+
+  it('streams: Readable/Transform/Writable, pipe, pipeline, async iteration, objectMode, without new', async () => {
+    expect(await node(`const { Readable, Transform, Writable, PassThrough, pipeline } = require('stream');
+const upper = new Transform({ transform(c, e, cb) { cb(null, String(c).toUpperCase()); } });
+let got = '';
+const sink = new Writable({ write(c, e, cb) { got += c; setTimeout(cb, 1); } });
+pipeline(Readable.from(['a', 'b', 'c']), upper, sink, (err) => {
+  console.log('pipeline', err, got);
+  const pt = PassThrough({ objectMode: true });
+  (async () => { const seen = []; for await (const x of pt) seen.push(x.n); console.log('iter', seen.join(',')); })();
+  pt.write({ n: 1 }); pt.write({ n: 2 }); pt.end();
+  const r = new Readable({ read() {} });
+  r.on('readable', () => { let c; while ((c = r.read()) !== null) console.log('read', String(c)); });
+  r.on('end', () => console.log('end'));
+  r.push('x'); r.push(null);
+});`).then(o => o.split('\n').sort().join('\n'))).toBe('\nend\niter 1,2\npipeline null ABC\nread x');
+  }, 60_000);
+
+  it('EventEmitter: pre-class inheritance, listener this, once, error without listener throws', async () => {
+    expect(await node(`const EE = require('events'); const util = require('util');
+function Old() { EE.call(this); } util.inherits(Old, EE);
+function Lazy() {} util.inherits(Lazy, EE);
+const o = new Old(); o.on('x', function (v) { console.log('this ok', this === o, v); }); o.emit('x', 1);
+const l = new Lazy(); l.once('y', (v) => console.log('lazy', v)); l.emit('y', 2); console.log(l.emit('y', 3), l.listenerCount('y'));
+try { new EE().emit('error', new Error('boom')); } catch (e) { console.log('threw', e.message); }`))
+      .toBe('this ok true 1\nlazy 2\nfalse 0\nthrew boom\n');
+  }, 60_000);
+
+  it('timers are Timeout objects (unref), and nothing prints after process.exit()', async () => {
+    await fs.writeFile('/home/user/m/t.js', `const iv = setInterval(() => {}, 1000); iv.unref();
+setTimeout(() => console.log('never'), 60000).unref();
+const t = setTimeout(() => {}, 10); clearTimeout(t);
+console.log(typeof iv.ref, typeof +iv, t.hasRef());
+try { process.exit(3); } catch (e) { console.log('caught', e.message); }`);
+    const start = Date.now();
+    const r = await sh(shell, 'cd /home/user/m && node t.js');
+    expect(r.out).toBe('function number true\n');
+    expect(r.err).toBe('');
+    expect(r.exitCode).toBe(3);
+    expect(Date.now() - start).toBeLessThan(20_000);
+  }, 60_000);
+
+  it('fs streams: binary round trip through pipe, append, events', async () => {
+    expect(await node(`const fs = require('fs'); const { pipeline, Transform } = require('stream');
+const bin = Buffer.from([0, 255, 128, 10, 200, 1]);
+const ws = fs.createWriteStream('a.bin');
+ws.on('open', () => console.log('open'));
+ws.write(bin.subarray(0, 3)); ws.end(bin.subarray(3), () => {
+  console.log('finish', ws.bytesWritten, fs.readFileSync('a.bin').equals(bin));
+  const inc = new Transform({ transform(c, e, cb) { cb(null, Buffer.from(c.map(b => (b + 1) & 255))); } });
+  pipeline(fs.createReadStream('a.bin'), inc, fs.createWriteStream('b.bin'), (err) => {
+    console.log('piped', err, [...fs.readFileSync('b.bin')].join(','));
+    const ap = fs.createWriteStream('b.bin', { flags: 'a' }); ap.end('!', () => {
+      console.log('appended', fs.readFileSync('b.bin').length);
+      fs.createReadStream('missing').on('error', (e) => console.log('error', e.code));
+    });
+  });
+});`)).toBe('open\nfinish 6 true\npiped null 1,0,129,11,201,2\nappended 7\nerror ENOENT\n');
+  }, 60_000);
+
+  it('package exports: require picks require over import (browser first), import() a namespace', async () => {
+    await fs.mkdir('/home/user/m/node_modules/dual/esm', { recursive: true });
+    await fs.writeFile('/home/user/m/node_modules/dual/package.json', JSON.stringify({ name: 'dual', exports: { '.': { import: './esm/index.mjs', require: './index.cjs' }, './feature': { browser: './b.js', node: './n.js' } } }));
+    await fs.writeFile('/home/user/m/node_modules/dual/index.cjs', 'module.exports = { kind: "cjs" };');
+    await fs.writeFile('/home/user/m/node_modules/dual/esm/index.mjs', 'export const kind = "esm";');
+    await fs.writeFile('/home/user/m/node_modules/dual/n.js', 'module.exports = "node";');
+    await fs.writeFile('/home/user/m/node_modules/dual/b.js', 'module.exports = "browser";');
+    expect(await node(`console.log(require('dual').kind, require('dual/feature'));
+import('dual').then(ns => console.log(ns.default.kind, ns.kind));
+const dyn = new Function('m', 'return import(m)'); dyn('./node_modules/dual/n.js').then(ns => console.log(ns.default));`))
+      .toBe('cjs browser\ncjs cjs\nnode\n');
+  }, 60_000);
+});
+
+describe('node: real npm packages', () => {
+  let shell: Shell;
+  let fs: FileSystem;
+  beforeAll(async () => {
+    ({ fs, shell } = await createTestShell());
+    await bootFiles(fs);
+    await fs.mkdir('/home/user/app/test', { recursive: true });
+    const r = await sh(shell, 'cd /home/user/app && npm init -y > /dev/null && npm install commander@12.1.0 chalk@4.1.2 dayjs@1.11.13 uuid@10.0.0 mocha@10.8.2 typescript@5.6.3 prettier@3.3.3');
+    expect(r.exitCode).toBe(0);
+  }, 300_000);
+
+  it('a CLI on commander, chalk, dayjs and uuid', async () => {
+    // commander declares `const process = require('node:process')` at top level
+    await fs.writeFile('/home/user/app/cli.js', `const { program } = require('commander');
+program.name('greet').option('-n, --name <name>', 'who', 'world').option('-l, --loud');
+program.parse();
+const o = program.opts();
+const chalk = require('chalk');
+const dayjs = require('dayjs');
+const { v4, validate } = require('uuid');
+console.log(o.loud ? ('hello ' + o.name).toUpperCase() : 'hello ' + o.name, chalk.red('x').length > 0, dayjs('2024-01-31').add(1, 'month').format('YYYY-MM-DD'), validate(v4()));
+console.log('%s has %d items (%j)', 'list', 3, { a: 1 });
+`);
+    const r = await sh(shell, 'cd /home/user/app && node cli.js --name shiro -l');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('HELLO SHIRO true 2024-02-29 true\nlist has 3 items ({"a":1})\n');
+  }, 60_000);
+
+  it('mocha runs a spec (pass and fail exit codes)', async () => {
+    await fs.writeFile('/home/user/app/test/a.spec.js', `const assert = require('assert');
+describe('math', () => {
+  it('adds', () => assert.strictEqual(1 + 1, 2));
+  it('waits', async () => { await new Promise(r => setTimeout(r, 5)); });
+});
+`);
+    let r = await sh(shell, 'cd /home/user/app && npx mocha test/a.spec.js');
+    expect(plain(r.out)).toMatch(/math\n {4}✔ adds\n {4}✔ waits\n[\s\S]*2 passing/);
+    expect(r.exitCode).toBe(0);
+    await fs.writeFile('/home/user/app/test/b.spec.js', `const assert = require('assert');
+describe('broken', () => { it('fails', () => assert.strictEqual(1, 2)); });
+`);
+    r = await sh(shell, 'cd /home/user/app && npx mocha test/b.spec.js');
+    expect(plain(r.out)).toMatch(/0 passing[\s\S]*1 failing/);
+    expect(r.exitCode).not.toBe(0);
+  }, 120_000);
+
+  it('ES modules may bind module, require and process themselves', async () => {
+    await fs.writeFile('/home/user/app/lib.mjs', `import module from 'node:module';
+import process from 'node:process';
+const require = module.createRequire(import.meta.url);
+const dayjs = require('dayjs');
+export const year = dayjs('2020-05-05').year();
+export default function plat() { return typeof process.platform; }
+`);
+    await fs.writeFile('/home/user/app/main.mjs', `import plat, { year } from './lib.mjs';
+const { default: again } = await import(new URL('./lib.mjs', import.meta.url));
+console.log(year, plat(), again === plat);
+`);
+    const r = await sh(shell, 'cd /home/user/app && node main.mjs');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('2020 string true\n');
+  }, 60_000);
+
+  it('tsc type-checks and compiles', async () => {
+    await fs.writeFile('/home/user/app/hello.ts', 'export function greet(name: string): string { return `hi ${name}`; }\nconsole.log(greet("ts"));\n');
+    let r = await sh(shell, 'cd /home/user/app && npx tsc --version | od -c; node node_modules/typescript/bin/tsc --version | od -c');
+    console.log(r.out);
+    r = await sh(shell, 'cd /home/user/app && npx tsc --version');
+    expect(r.out).toBe('Version 5.6.3\n');
+    r = await sh(shell, 'cd /home/user/app && npx tsc --target es2020 --module commonjs hello.ts && node hello.js');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('hi ts\n');
+    await fs.writeFile('/home/user/app/bad.ts', 'const n: number = "str";\n');
+    r = await sh(shell, 'cd /home/user/app && npx tsc --noEmit bad.ts');
+    expect(r.out).toContain("error TS2322: Type 'string' is not assignable to type 'number'");
+    expect(r.exitCode).not.toBe(0);
+  }, 300_000);
+
+  it('prettier formats files, stdin, and globs (--check, --write)', async () => {
+    await fs.mkdir('/home/user/app/src/lib', { recursive: true });
+    await fs.writeFile('/home/user/app/src/ugly.js', 'const a = {b:1,c:[1,2,3]}\nfunction f( x ){return x*2}\n');
+    await fs.writeFile('/home/user/app/src/lib/fine.js', 'export const ok = true;\n');
+    const pretty = 'const a = { b: 1, c: [1, 2, 3] };\nfunction f(x) {\n  return x * 2;\n}\n';
+    let r = await sh(shell, 'cd /home/user/app && npx prettier src/ugly.js');
+    expect(r.err).toBe('');
+    expect(r.out).toBe(pretty);
+    r = await sh(shell, 'cd /home/user/app && npx prettier --stdin-filepath x.js < src/ugly.js');
+    expect(r.out).toBe(pretty);
+    // a glob walks the tree (fast-glob), skipping node_modules
+    r = await sh(shell, 'cd /home/user/app && npx prettier --check "src/**/*.js"');
+    expect(plain(r.err)).toContain('[warn] src/ugly.js');
+    expect(r.err).not.toContain('fine.js');
+    expect(r.exitCode).toBe(1);
+    r = await sh(shell, 'cd /home/user/app && npx prettier --write src && cat src/ugly.js');
+    expect(r.out).toContain(pretty);
+    r = await sh(shell, 'cd /home/user/app && npx prettier --check src');
+    expect(r.exitCode).toBe(0);
+  }, 180_000);
+
+});
+
+describe('lua and sqlite packages', () => {
+  let shell: Shell;
+  let fs: FileSystem;
+  beforeAll(async () => {
+    ({ fs, shell } = await createTestShell());
+    await bootFiles(fs);
+    const r = await sh(shell, 'pkg install lua sqlite');
+    expect(r.exitCode).toBe(0);
+  }, 300_000);
+
+  it('lua: #! script with stdin, argv, coroutines, string patterns; luac -p', async () => {
+    await script(fs, '/home/user/wc.lua', `#!/usr/bin/env lua
+local counts, order = {}, {}
+for line in io.lines() do
+  for w in line:lower():gmatch("%a+") do
+    if not counts[w] then counts[w] = 0; order[#order + 1] = w end
+    counts[w] = counts[w] + 1
+  end
+end
+table.sort(order, function(a, b) return counts[a] > counts[b] or (counts[a] == counts[b] and a < b) end)
+local gen = coroutine.wrap(function() for _, w in ipairs(order) do coroutine.yield(w) end end)
+local out = {}
+for i = 1, tonumber(arg[1]) do out[#out + 1] = string.format("%s=%d", gen(), counts[order[i]]) end
+print(table.concat(out, " "), _VERSION)
+`);
+    let r = await sh(shell, 'cd /home/user && printf "the cat\\nThe dog the end\\n" | ./wc.lua 2');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('the=3 cat=1\tLua 5.4\n');
+    await fs.writeFile('/home/user/bad.lua', 'local x = = 1\n');
+    r = await sh(shell, 'cd /home/user && luac -p wc.lua && echo ok; luac -p bad.lua');
+    expect(r.out).toBe('ok\n');
+    expect(r.err).toMatch(/bad\.lua:1: unexpected symbol near '='/);
+  }, 120_000);
+
+  it('sqlite3: a database file across runs, JSON, FTS5, and SQL on stdin', async () => {
+    let r = await sh(shell, `cd /home/user && sqlite3 app.db "create table t(id integer primary key, doc text); insert into t(doc) values ('{\\"n\\":1,\\"tag\\":\\"a\\"}'), ('{\\"n\\":2,\\"tag\\":\\"b\\"}');"`);
+    expect(r.exitCode).toBe(0);
+    r = await sh(shell, `cd /home/user && sqlite3 app.db "select sum(json_extract(doc, '$.n')), group_concat(json_extract(doc, '$.tag'), '') from t;"`);
+    expect(r.out).toBe('3|ab\n');
+    r = await sh(shell, `cd /home/user && printf "create virtual table f using fts5(body);\\ninsert into f values ('shiro runs sqlite'), ('nothing here');\\nselect body from f where f match 'sqlite';\\n.mode csv\\nselect 1, 'x y';\\n" | sqlite3`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('shiro runs sqlite\n1,"x y"\n');
+  }, 120_000);
 });

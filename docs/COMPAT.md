@@ -25,6 +25,9 @@ built app in headless Chromium, cross-origin isolated.
 | Ruby (ruby, irb, gem, rake, bundle) | 3.4.1 | pkg `ruby` (`ruby.sh`: the official ruby.wasm wasip1 "full" CLI build, repacked; stdlib mounted at its /usr/local prefix) | works | `-e` with json/set/digest/time, `#!/usr/bin/env ruby` scripts with argv/stdin/files, minitest, rake with task dependencies, `gem list`, `gem build` + `gem install --local` + require | no sockets (`gem install` from rubygems.org, net/http connections fail; a `socket.rb` stub lets them load), no threads (minitest runs serially: `MT_CPU=0`), irb needs blocking stdin |
 | Perl | 5.40.0 | pkg `perl` (`perl.sh`: static x86-64 glibc build, all core XS linked in, `NO_LOCALE`) run in Blink — new package ABI `x86_64-linux` | works | `-e` with List::Util/Data::Dumper/POSIX, `#!/usr/bin/env perl` scripts with stdin/argv/files/regexes, backticks, `system()`, `open "-\|"`, Test::More (TAP) | interpreted: ~1 s start, POSIX loads in seconds; Blink's `fork()` is vfork-like (the child shares the parent's memory until `exec`), so IPC::Open3 / `prove` / fork-without-exec don't work; no XS loading, no pods |
 | venv | Shiro | `python3 -m venv` | works | `pyvenv.cfg`, `bin/python` symlinks, `bin/pip`, `activate`/`deactivate`; `sys.prefix` is the venv and pip installs into it (vitest and Chromium) | `--copies` ignored (always symlinks) |
+| Node.js npm CLIs and libraries | Shiro's node (`node`, `npm`, `npx`) | builtin | works | commander + chalk + dayjs + uuid CLI, mocha 10 (pass and fail exit codes), tsc 5.6 (compile and type errors), prettier 3.3 (files, stdin, `--check "src/**/*.js"`, `--write`), ES modules binding `module`/`require`/`process`; vitest and Chromium | TypeScript 7 (`typescript@7`) is a native Go binary; native addons (`.node`) don't load; yarn 1 runs and resolves packages but can't fetch them yet (its `request` download over the fetch-backed http shim, then zlib and tar streams); axios needs `window.location` (fine in the browser, not under vitest) |
+| Lua (lua, luac) | 5.4.7 | pkg `lua` (`lua.sh`) | works | `#!/usr/bin/env lua` script reading stdin with argv, patterns, coroutines, `table.sort`; `luac -p` syntax errors with locations | no `os.execute`/`io.popen`; the REPL needs blocking stdin |
+| SQLite shell | 3.50.4 | pkg `sqlite` (`sqlite.sh`) | works | a database file reused across runs, JSON functions, FTS5, SQL and dot-commands on stdin (`.mode csv`) | single-threaded, no WAL or loadable extensions; interactive mode needs blocking stdin |
 
 Shell and platform fixes these needed (all with tests in the same file):
 
@@ -66,6 +69,30 @@ Shell and platform fixes these needed (all with tests in the same file):
   from its file by lazy chunks, so every module in it existed twice with
   separate state (`pkg install` updated one copy of the package cache, the
   shell read the other). The inline script now only imports the file.
+
+- Node: module bodies get their own function scope, so a top-level
+  `const process`/`module`/`require` shadows the wrapper's parameters, and
+  the ESM transform's own require/exports use internal names; `import()` of
+  computed specifiers (and prettier's `new Function("m", "return import(m)")`)
+  resolves relative to the module and gives a namespace with `default`;
+  package `exports` prefer `require` to `import` (commander's `import` entry
+  is an ESM wrapper), after `browser` as before (axios's browser build uses
+  fetch). `stream` was stubs (`push`/`write` did nothing;
+  fast-glob hung) and is now a working Readable/Writable/Duplex/Transform with
+  pipe/pipeline/finished/async iteration; `path` follows Node's algorithms
+  (`dirname("a")` was `/`); `events` works with `EventEmitter.call(this)`
+  and subclasses that never call it; `fs.promises` has all of `fs/promises`,
+  empty directories are directories, fd writes land in order (tsc's output
+  was empty); `'exit'` listeners run at a natural end (mocha's exit code);
+  `process.stdin` is async-iterable; `console.log` formats `%s %d %j`; npx
+  passes stdin and quotes arguments verbatim (a quoted glob stayed a glob).
+  For yarn: timers are Node `Timeout` objects (`unref()`; unref'd timeouts
+  don't keep a script alive), `process.binding('natives'|'constants')`, the
+  std streams have every EventEmitter method, https responses carry an
+  authorized `socket`, output after `process.exit()` is dropped (a CLI's
+  catch-all printed `Error: process.exit(0)`), and `fs.createReadStream` /
+  `createWriteStream` are real streams over bytes (binary was decoded as
+  text).
 
 Known issues found along the way (not fixed here):
 

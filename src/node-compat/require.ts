@@ -145,8 +145,7 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
                 const subpathKey = `./${subpath}`;
                 const exp = pkg.exports[subpathKey];
                 if (exp) {
-                  const target = typeof exp === 'string' ? exp
-                    : (exp.browser || exp.import || exp.require || exp.default);
+                  const target = exportTarget(exp);
                   if (target) {
                     subpathResolved = `${pkgDir}/${target.replace(/^\.\//, '')}`;
                   }
@@ -158,8 +157,7 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
                       const regex = new RegExp(`^${pattern}$`);
                       const match = subpath.match(regex);
                       if (match) {
-                        const target = typeof value === 'string' ? value
-                          : ((value as any).browser || (value as any).import || (value as any).require || (value as any).default);
+                        const target = exportTarget(value);
                         if (target) {
                           subpathResolved = `${pkgDir}/${target.replace(/^\.\//, '').replace('*', match[1])}`;
                           break;
@@ -197,18 +195,9 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
                   main = exp;
                 } else if (exp['.']) {
                   const dotExport = exp['.'];
-                  if (typeof dotExport === 'string') {
-                    main = dotExport;
-                  } else {
-                    // Conditional exports: prefer browser > import > require > default > node
-                    main = dotExport.browser || dotExport.import || dotExport.require || dotExport.default || dotExport.node;
-                    // Handle nested conditional (e.g., { default: { import: "..." } })
-                    if (typeof main === 'object') {
-                      main = (main as any).browser || (main as any).import || (main as any).require || (main as any).default;
-                    }
-                  }
-                } else if (exp.browser || exp.import || exp.require || exp.default) {
-                  main = exp.browser || exp.import || exp.require || exp.default;
+                  main = exportTarget(dotExport);
+                } else {
+                  main = exportTarget(exp);
                 }
               }
 
@@ -277,13 +266,7 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
               if (pkg.exports) {
                 const exp = pkg.exports;
                 if (typeof exp === 'string') main = exp;
-                else if (exp['.']) {
-                  const dotExport = exp['.'];
-                  main = typeof dotExport === 'string' ? dotExport
-                    : (dotExport.browser || dotExport.import || dotExport.require || dotExport.default);
-                } else if (exp.browser || exp.import || exp.require || exp.default) {
-                  main = exp.browser || exp.import || exp.require || exp.default;
-                }
+                else main = exportTarget(exp['.'] ?? exp);
               }
               if (!main) main = pkg.main || pkg.module || 'index.js';
               if (typeof main !== 'string') main = 'index.js';
@@ -320,14 +303,7 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
               if (pkg.exports) {
                 const exp = pkg.exports;
                 if (typeof exp === 'string') main = exp;
-                else if (exp['.']) {
-                  const dotExport = exp['.'];
-                  main = typeof dotExport === 'string' ? dotExport
-                    : (dotExport.browser || dotExport.import || dotExport.require || dotExport.default);
-                } else if (exp.browser || exp.import || exp.require || exp.default) {
-                  main = exp.browser || exp.import || exp.require || exp.default;
-                }
-                if (typeof main === 'object') main = (main as any).browser || (main as any).import || (main as any).require || (main as any).default;
+                else main = exportTarget(exp['.'] ?? exp);
               }
               if (!main) main = pkg.main || pkg.module || 'index.js';
               if (typeof main !== 'string') main = 'index.js';
@@ -395,22 +371,30 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
       const fnParams = [
         'module', 'exports', 'require', '__filename', '__dirname',
         'console', 'process', 'global', 'Buffer', '__import_meta',
+        '__shiro_module', '__shiro_require', '__dynamic_import',
       ];
+      const dynamicImport = async (specifier: unknown) => {
+        let spec = String(specifier);
+        if (/^(?:https?|data|blob):/.test(spec)) return import(/* @vite-ignore */ spec);
+        if (spec.startsWith('file://')) spec = decodeURIComponent(spec.slice(7));
+        return esmNamespace(nestedRequire(spec));
+      };
       const fnArgs = [mod, mod.exports, nestedRequire, resolved, modDir,
-        fakeConsole, fakeProcess, globalThis, FakeBuffer, modImportMeta];
+        fakeConsole, fakeProcess, globalThis, FakeBuffer, modImportMeta,
+        mod, nestedRequire, dynamicImport];
 
       // Try synchronous execution first — most npm packages don't use top-level await.
       // This ensures module.exports is populated before require() returns,
       // fixing ESM-only packages like chalk v5 that export via `export default`.
       try {
-        const syncFn = new Function(...fnParams, transformedContent);
-        syncFn(...fnArgs);
+        const syncFn = new Function(...fnParams, wrapModuleBody(transformedContent, false));
+        syncFn.apply(mod.exports, fnArgs);
       } catch (syncErr: any) {
         // SyntaxError from top-level `await` -> fall back to AsyncFunction
         if (syncErr instanceof SyntaxError && /\bawait\b/.test(transformedContent)) {
           const AsyncFn = Object.getPrototypeOf(async function(){}).constructor;
-          const wrapped = new AsyncFn(...fnParams, transformedContent);
-          const execPromise = wrapped(...fnArgs);
+          const wrapped = new AsyncFn(...fnParams, wrapModuleBody(transformedContent, true));
+          const execPromise = wrapped.apply(mod.exports, fnArgs);
           pendingPromises.push(execPromise.catch((e: any) => {
             if (!(e instanceof ProcessExitError)) {
               console.error(`Error in module ${resolved}:`, e.message, e.stack?.slice(0, 300));
@@ -441,4 +425,59 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
   }
 
   return requireModule;
+}
+
+/**
+ * A module body inside its own function, so the body's top-level declarations
+ * shadow the wrapper's parameters instead of colliding with them (commander
+ * has `const process = require('node:process')`; Node's own wrapper is a
+ * function scope too). `this` is passed through (module.exports).
+ */
+export function wrapModuleBody(body: string, isAsync: boolean): string {
+  return `return (${isAsync ? 'async ' : ''}function () {\n${body}\n}).call(this);`;
+}
+
+/**
+ * The file a package.json "exports" value names for require(): conditions
+ * in the order browser > require > node > default > import, nested
+ * conditions and fallback arrays followed. Browser builds come first because
+ * they talk to the network with fetch (axios's node build needs a real http
+ * stack); require before import because the import entry is often an ESM
+ * wrapper around the CommonJS one (commander).
+ */
+export function exportTarget(v: unknown): string | undefined {
+  if (typeof v === 'string') return v;
+  if (Array.isArray(v)) {
+    for (const x of v) { const t = exportTarget(x); if (t) return t; }
+    return undefined;
+  }
+  if (!v || typeof v !== 'object') return undefined;
+  const o = v as Record<string, unknown>;
+  for (const c of ['browser', 'require', 'node', 'default', 'import']) {
+    if (o[c] === undefined) continue;
+    const t = exportTarget(o[c]);
+    if (t) return t;
+  }
+  return undefined;
+}
+
+/**
+ * What import() of a module gives, from its CommonJS exports: a namespace
+ * with `default` (the exports) and the named exports, as Node does for
+ * CommonJS modules. Exports that already have a default (transformed ES
+ * modules with a default export, __esModule builds) are returned as they are.
+ */
+export function esmNamespace(exp: any): any {
+  if (exp === null || (typeof exp !== 'object' && typeof exp !== 'function')) return { default: exp };
+  if ('default' in exp) return exp;
+  const fnOwn = new Set<PropertyKey>(['length', 'name', 'prototype', 'arguments', 'caller']);
+  const has = (k: PropertyKey) => k === 'default' || k in exp;
+  return new Proxy(Object.create(null), {
+    get: (_t, k) => k === 'default' ? exp : k === Symbol.toStringTag ? 'Module' : exp[k],
+    has: (_t, k) => has(k),
+    ownKeys: () => ['default', ...Reflect.ownKeys(exp).filter(k => k !== 'default' && !(typeof exp === 'function' && fnOwn.has(k)))],
+    getOwnPropertyDescriptor: (_t, k) => has(k)
+      ? { value: k === 'default' ? exp : exp[k], enumerable: true, configurable: true, writable: false }
+      : undefined,
+  });
 }

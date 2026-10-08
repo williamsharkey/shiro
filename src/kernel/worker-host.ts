@@ -6,7 +6,7 @@
 
 import type { Kernel, Runner, SpawnOptions } from './kernel';
 import type { Process } from './process';
-import { KernelChannel, createChannelBuffer, SYS_MESSAGE, type GuestStartMessage } from './channel';
+import { KernelChannel, canWatch, createChannelBuffer, SYS_MESSAGE, type GuestStartMessage } from './channel';
 import { W_EXITCODE } from './abi';
 
 /** The parts of a Worker the host needs; adapters below wrap browser and Node workers. */
@@ -50,20 +50,35 @@ export function workerRunner(createWorker: (proc: Process) => GuestWorker, opts:
       try { void worker.terminate(); } catch { /* already gone */ }
       resolve();
     });
-    worker.onMessage(m => {
-      if (m === SYS_MESSAGE) void channel.handle();
-    });
+    const wake = serve(channel, worker);
     worker.onError(err => {
+      if (proc.exiting) return;
       const msg = (err as Error)?.message ?? String(err);
       void kernel.writeAll(proc, 2, new TextEncoder().encode(`${proc.comm}: ${msg}\n`)).finally(() => resolve(1));
     });
     worker.onExit?.(code => resolve(code));
     const start: GuestStartMessage = {
-      type: 'shiro-start', sab, pid: proc.pid, argv: proc.argv, env: proc.env, cwd: proc.cwd,
+      type: 'shiro-start', sab, pid: proc.pid, argv: proc.argv, env: proc.env, cwd: proc.cwd, wake,
       ...(opts.startData ?? {}),
     };
     worker.postMessage(start);
   });
+}
+
+/**
+ * Serve `channel` for `worker`: with Atomics.waitAsync the kernel watches the
+ * state word (faster, and the guest posts nothing per request); otherwise it
+ * answers each SYS_MESSAGE. Returns the start message's `wake` field.
+ */
+export function serve(channel: KernelChannel, worker: GuestWorker): 'atomics' | 'message' {
+  if (canWatch()) {
+    void channel.watch();
+    return 'atomics';
+  }
+  worker.onMessage(m => {
+    if (m === SYS_MESSAGE) void channel.handle();
+  });
+  return 'message';
 }
 
 export interface GuestThread {
@@ -104,10 +119,9 @@ export function attachThread(
   };
   const channel: KernelChannel = new KernelChannel(sab, kernel, proc, { tid, onThreadExit: code => end(code) });
   proc.onTerminate(() => end(undefined));
-  worker.onMessage(m => {
-    if (m === SYS_MESSAGE) void channel.handle();
-  });
+  const wake = serve(channel, worker);
   worker.onError(err => {
+    if (done || proc.exiting) return;
     // An uncaught error in any thread takes the process down, as a crash would
     const msg = (err as Error)?.message ?? String(err);
     void kernel.writeAll(proc, 2, new TextEncoder().encode(`${proc.comm}[${tid}]: ${msg}\n`))
@@ -115,7 +129,7 @@ export function attachThread(
   });
   worker.onExit?.(() => end(undefined));
   const start: GuestStartMessage & { tid: number } = {
-    type: 'shiro-start', sab, pid: proc.pid, tid, argv: proc.argv, env: proc.env, cwd: proc.cwd,
+    type: 'shiro-start', sab, pid: proc.pid, tid, argv: proc.argv, env: proc.env, cwd: proc.cwd, wake,
     ...(opts.startData ?? {}),
   };
   worker.postMessage(start);

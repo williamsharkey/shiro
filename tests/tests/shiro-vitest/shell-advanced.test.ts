@@ -2124,7 +2124,8 @@ describe('Shell Advanced', () => {
     });
 
     it('while read loop counts lines', async () => {
-      shell.env['__PIPE_STDIN'] = 'apple\nbanana\ncherry';
+      // (bash's read fails on a last line with no newline, so the input ends with one)
+      shell.env['__PIPE_STDIN'] = 'apple\nbanana\ncherry\n';
       const { output } = await run(shell, 'count=0; while read fruit; do count=$((count + 1)); done; echo "counted $count fruits"');
       expect(output.replace(/\r/g, '').trim()).toBe('counted 3 fruits');
     });
@@ -2557,11 +2558,10 @@ describe('Shell Advanced', () => {
       expect(output.trim()).toBe('matched');
     });
 
-    it('extglob disabled by default', async () => {
-      // Without extglob, ?(b) should NOT be treated as extended glob
+    it('extglob is always on for [[ == ]] patterns', async () => {
+      // bash: the right side of == in [[ ]] matches "as if the extglob shell option were enabled"
       const { exitCode } = await run(shell, '[[ "abc" == a?(b)c ]]');
-      // Without extglob, this is a literal pattern match that should fail
-      expect(exitCode).toBe(1);
+      expect(exitCode).toBe(0);
     });
 
     it('extglob with alternations', async () => {

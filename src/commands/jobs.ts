@@ -315,7 +315,7 @@ export const waitCmd: Command = {
         if (arg.startsWith('%')) entry = resolveJobSpec(shell, arg);
         else {
           const n = parseInt(arg, 10);
-          entry = [...shell.backgroundJobs.entries()].find(([, j]) => j.pgid === n || (j.pids ?? []).includes(n))
+          entry = [...shell.backgroundJobs.entries()].find(([, j]) => j.pid === n || j.pgid === n || (j.pids ?? []).includes(n))
             ?? (shell.backgroundJobs.has(n) ? [n, shell.backgroundJobs.get(n)!] : undefined);
           if (!entry && jobControl.get(n)) {
             const r = await jobControl.waitJob(jobControl.get(n)!.pgid, [n]);

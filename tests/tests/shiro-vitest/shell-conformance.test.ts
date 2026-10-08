@@ -237,4 +237,136 @@ describe('shell conformance regressions', () => {
     expect(r.out).toBe('1\n2\n| \\\nfoo\n');
     expect(await r.fs.readFile('/tmp/sub.out', 'utf8')).toBe('1\n2\n');
   });
+
+  it('case: dynamic and quoted patterns, empty word, ;&, nested case', async () => {
+    const r = await script([
+      'for x in a b; do case $x in $x) echo loop;; *) echo star;; esac; done',
+      "case $empty in ''|foo) echo match;; *) echo no;; esac",
+      'x="*.py"; case "$x" in "*.py") echo lit;; esac',
+      'x=b.py; pat="[ab].py"; case "$x" in $pat) echo glob;; esac',
+      'x="[ab].py"; case "$x" in "$pat") echo quoted;; esac',
+      's="foo()"; case $s in *\\(\\)) echo paren; esac',
+      'case abc in a*) echo one;& b*) echo two;; c*) echo three;; esac',
+      'case a in a) case b in b) echo nested;; esac;; esac',
+    ].join('\n'));
+    expect(r.out).toBe('loop\nloop\nmatch\nlit\nglob\nquoted\nparen\none\ntwo\nnested\n');
+  });
+
+  it('numbered fds: exec N>file, >&N, exec N<file + read <&N, exec N>&1, &>, noclobber, exec >log', async () => {
+    const r = await script([
+      'cd /tmp',
+      'exec 3> fd3.txt; echo hello >&3; echo world 1>&3; exec 3>&-; cat fd3.txt',
+      'echo foo51 > in.txt; exec 6< in.txt; read line <&6; echo "[$line]"',
+      'exec 4>&1; echo four >&4; x=$(echo sub); echo $x',
+      'echo both &> both.txt; cat both.txt',
+      'set -o noclobber; echo YY > fd3.txt; echo st=$?; echo ZZ >| fd3.txt; cat fd3.txt; set +o noclobber',
+      'exec 5>&1; exec >> log.txt; echo to-log; exec >&5; echo back; cat log.txt',
+    ].join('\n'));
+    expect(r.out).toBe('hello\nworld\n[foo51]\nfour\nsub\nboth\nst=1\nZZ\nback\nto-log\n');
+  });
+
+  it('globs match directories, keep quoted parts literal, honour set -f and nullglob', async () => {
+    const r = await script([
+      'cd /tmp && mkdir -p g/d1 g/d2 "g/s p" && touch g/a.txt g/b.txt g/.h g/d1/x.c "g/s p/z.txt" && cd g',
+      'echo *.txt; echo */; echo d*/*.c; dir=d1; echo "$dir"/*; echo "s p"/*; echo \\*.txt; echo "*.txt"',
+      'for d in */; do printf "[%s]" "$d"; done; echo',
+      'set -f; echo *.txt; set +f; shopt -s nullglob; echo x *.none y; shopt -u nullglob; echo [ab].txt [!a].txt',
+    ].join('\n'));
+    expect(r.out).toBe('a.txt b.txt\nd1/ d2/ s p/\nd1/x.c\nd1/x.c\ns p/z.txt\n*.txt\n*.txt\n[d1/][d2/][s p/]\n*.txt\nx y\na.txt b.txt b.txt\n');
+  });
+
+  it('arrays keep quoted elements, are sparse, slice, and scope with local', async () => {
+    const r = await script([
+      "a=(1 '2 3' \"$HOME\"x)",
+      'printf "[%s]" "${a[@]}"; echo " ${#a[@]} ${a[1]} ${a[-1]}"',
+      'a[5]=five; unset "a[0]"; echo "${!a[@]} | ${#a[@]} | ${a[@]:2}"',
+      'b=(x y); b+=(z); b[1]+=Y; s=str; s+=ing; echo "${b[*]} $s $b"',
+      'f() { local b=(in side); echo "${b[@]}"; }; f; echo "${b[@]}"',
+      'declare -A m=([k]=v ["two words"]=w); m[x]=1; echo "${m[k]} ${m[two words]} ${#m[@]}"',
+      'n=(1 2 3); echo "${n[@]/2/X}" "${n[@]#1}"; e=(); printf "<%s>" "${e[@]}"; echo',
+      'declare -p n',
+    ].join('\n'));
+    expect(r.out).toBe(
+      '[1][2 3][/home/userx] 3 2 3 /home/userx\n' +
+      '1 2 5 | 3 | /home/userx five\n' +
+      'x yY z string x\n' +
+      'in side\nx yY z\n' +
+      'v w 3\n' +
+      '1 X 3  2 3\n<>\n' +
+      'declare -a n=([0]="1" [1]="2" [2]="3")\n');
+  });
+
+  it('arithmetic: precedence, assignment ops, bases, short-circuit, recursion, errors', async () => {
+    const r = await script([
+      'x=5; echo $(( -2**2 )) $(( 2**3**2 )) $(( x+=2, x*3 )) $x $(( 0x10 + 010 + 2#101 + 64#_ ))',
+      'y=0; echo $(( 1 || y++ )) $y $(( 0 && y++ )) $y $(( y ? 10 : 20 ))',
+      'e="1+2"; echo $(( e * 2 )) $(( (e) * 2 ))',
+      'a=(10 20 30); i=1; echo $(( a[i] + a[i+1] )); (( a[0]++ )); echo ${a[0]}',
+      'echo $((1',
+      '+ 2))',
+      '(( 1/0 )); echo st=$?',
+      'let "z = 3 << 2" "w = z % 5"; echo $z $w',
+    ].join('\n'));
+    expect(r.out).toBe('4 512 21 7 92\n1 0 0 0 20\n6 6\n50\n11\n3\nst=1\n12 2\n');
+  });
+
+  it('${x/pat/rep} anchors, quoting and &; ${x#pat} with expanded patterns', async () => {
+    const r = await script([
+      'x=foo.bar.baz; p=ba; echo ${x/#foo/F} ${x/%baz/Z} ${x//./-} ${x/"."*/} ${x//$p/&&}',
+      'echo ${x#*.} ${x##*.} ${x%.*} ${x%%.*} ${x#"$p"} ${x%[[:alpha:]]}',
+    ].join('\n'));
+    expect(r.out).toBe('F.bar.baz foo.bar.Z foo-bar-baz foo foo.babar.babaz\nbar.baz baz foo.bar foo foo.bar.baz foo.bar.ba\n');
+  });
+
+  it('read: backslashes, IFS splitting, -n/-N/-d/-a/-u, piped subshells', async () => {
+    const r = await script([
+      "echo '  a b  ' | (read; echo \"[$REPLY]\")",
+      "printf 'A\\t\\tB C D E \\nFG\\n' | { read x y z; echo \"[$x/$y/$z]\"; }",
+      "IFS=: read a b <<< \"x:y:\"; echo \"[$a][$b]\"",
+      "printf 'one\\\\\\ntwo three\\n' | { read -r p q; read -a arr <<< \" 1  2 3 \"; echo \"[$p][$q] ${#arr[@]}\"; }",
+      "printf 'abcdef' | { read -n 3 c; read -N 2 d; echo \"$c $d\"; read e; echo \"e=$e st=$?\"; }",
+      "printf 'v1\\0v2\\0' | { read -r -d '' v; echo \"$v\"; }",
+      "read -u 3 r 3<<< \"from3\"; echo \"$r\"",
+    ].join('\n'));
+    expect(r.out).toBe('[  a b  ]\n[A/B/C D E]\n[x][y]\n[one\\][] 3\nabc de\ne=f st=1\nv1\nfrom3\n');
+  });
+
+  it('[[ ]]: operators inside, patterns, =~ with BASH_REMATCH, arithmetic, -v, multi-line', async () => {
+    const r = await script([
+      "[[ ''||! (1 == 2)&&(2 == 2)]] && echo compound",
+      "x='a b'; [[ $x == a* && $x != \"a*\" ]] && echo pat",
+      "[[ foo123 =~ ^([a-z]+)([0-9]+)$ ]] && echo \"${BASH_REMATCH[1]}-${BASH_REMATCH[2]}\"",
+      "re='a.c'; [[ abc =~ $re ]] && echo re1; [[ abc =~ \"$re\" ]] || echo re2",
+      "[[ 017 -eq 15 && 2 -lt 10 && b > a ]] && echo arith",
+      "[[ -v x && ! -v nope ]] && echo setvar",
+      "[[ foo == foo",
+      "&& bar == bar",
+      "]] && echo multiline",
+    ].join('\n'));
+    expect(r.out).toBe('compound\npat\nfoo-123\nre1\nre2\narith\nsetvar\nmultiline\n');
+  });
+
+  it('backtick escapes, ${x:off:len} with arithmetic, ${@:off}, test -v, f-name(), ${!prefix@}', async () => {
+    const r = await script([
+      "X=/a/b; echo `echo \\$X | tr / _` \"`echo \\\"q\\\"`\" `echo a\\\\\\\\b`",
+      "s=abcdef; i=1; echo ${s:i+1:2} ${s: -2} ${s:1:-2} ${s:(-3):1}",
+      "set -- 4 5 6; echo \"${@:2}\" \"${*:1:2}\" \"${@: -1}\"",
+      "x=\"it's\"; echo ${x/t/T} \"${x#i}\"",
+      "a=(1 2); test -v 'a[1]' && echo set1; test -v 'a[5]' || echo unset5",
+      "my-func() { echo hyphen \"$1\"; }; my-func ok",
+      "v1=1 v2=2; echo ${!v@}",
+    ].join('\n'));
+    expect(r.out).toBe("_a_b q a\\b\ncd ef bcd d\n5 6 4 5 6\niT's t's\nset1\nunset5\nhyphen ok\nv1 v2\n");
+  });
+
+  it('trap listing/reset/ignore, background jobs in a child shell with $! and wait', async () => {
+    const r = await script([
+      "trap 'echo e' EXIT; trap \"it's\" TERM; trap '' USR1; trap; trap - TERM 0; trap -p",
+      "trap foo; echo st=$?; trap 'x' 2 bogus; echo st=$?; trap 2",
+      "x=1; { x=2; echo \"in $x\"; } & wait $!; echo \"st=$? x=$x\"",
+      "for n in 1 2 3; do (exit $n) & done; wait; echo all",
+      "f() { return 7; }; f & pid=$!; wait $pid; echo \"w=$?\"",
+    ].join('\n'));
+    expect(r.out).toBe("trap -- 'echo e' EXIT\ntrap -- '' SIGUSR1\ntrap -- 'it'\\''s' SIGTERM\ntrap -- '' SIGUSR1\nst=2\nst=1\nin 2\nst=0 x=1\nall\nw=7\n");
+  });
 });

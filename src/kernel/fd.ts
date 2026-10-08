@@ -58,6 +58,17 @@ export interface OpenFile {
   sync?(): Promise<void>;
   /** Path the description was opened with, when it has one (diagnostics, /proc). */
   path?: string;
+  /**
+   * Fast paths (Kernel.syscallSync): finish the call now when that needs no
+   * waiting and no I/O (pipe data buffered, room in the pipe, file contents
+   * in memory). `undefined` means "use the async method"; anything else is
+   * the result the async method would have returned.
+   */
+  tryRead?(buf: Uint8Array): number | undefined;
+  tryWrite?(buf: Uint8Array): number | undefined;
+  statSync?(): KStat | undefined;
+  /** Close now if that needs no I/O (true); false = call close(). Called instead of close(), at most once. */
+  closeSync?(): boolean;
 }
 
 // ── Reference counting ──────────────────────────────────────────────────────
@@ -76,6 +87,15 @@ export async function release(file: OpenFile): Promise<void> {
   if (n > 0) { refs.set(file, n); return; }
   refs.delete(file);
   await file.close();
+}
+
+/** release() when it needs no I/O (another reference remains, or the description closes synchronously); false = use release(). */
+export function releaseSync(file: OpenFile): boolean {
+  const n = (refs.get(file) ?? 1) - 1;
+  if (n > 0) { refs.set(file, n); return true; }
+  if (!file.closeSync?.()) return false;
+  refs.delete(file);
+  return true;
 }
 
 export function refCount(file: OpenFile): number {
@@ -138,6 +158,15 @@ export class FdTable {
     if (!e) return -EBADF;
     this.fds.delete(fd);
     await release(e.file);
+    return 0;
+  }
+
+  /** close() when it needs no I/O, else undefined (nothing changed: use close()). */
+  closeSync(fd: number): number | undefined {
+    const e = this.fds.get(fd);
+    if (!e) return -EBADF;
+    if (!releaseSync(e.file)) return undefined;
+    this.fds.delete(fd);
     return 0;
   }
 
@@ -249,6 +278,8 @@ abstract class DevFile implements OpenFile {
   onReady(cb: () => void): () => void { return this.listeners.add(cb); }
   seek(): number { return 0; }
   async stat(): Promise<KStat> { return charDevStat(this.rdev); }
+  statSync(): KStat { return charDevStat(this.rdev); }
+  closeSync(): boolean { return true; }
   async close(): Promise<void> {}
 }
 
@@ -257,6 +288,8 @@ export class DevNull extends DevFile {
   constructor(flags = 2) { super(flags, '/dev/null', 0x103); }
   async read(): Promise<number> { return 0; }
   async write(buf: Uint8Array): Promise<number> { return buf.length; }
+  tryRead(): number { return 0; }
+  tryWrite(buf: Uint8Array): number { return buf.length; }
 }
 
 /** /dev/zero: endless zero bytes. */
@@ -396,10 +429,18 @@ export class BufferFile implements OpenFile {
 /**
  * File contents shared by every description open on the same path, so two
  * fds see each other's writes. Loaded on first open, written back to the
- * FileSystem shortly after each write and when the last description closes.
+ * FileSystem FLUSH_DELAY_MS after a write and when a description closes.
  * Writes made through the FileSystem API directly while a file is open are
  * not seen until every kernel description of it has closed.
  */
+/**
+ * Written data goes to the FileSystem once writes pause for FLUSH_DELAY_MS,
+ * and at least every FLUSH_MAX_DELAY_MS while they continue (close and fsync
+ * flush at once).
+ */
+const FLUSH_DELAY_MS = 25;
+const FLUSH_MAX_DELAY_MS = 1000;
+
 class Inode {
   data: Uint8Array;
   size: number;
@@ -423,10 +464,30 @@ class Inode {
   }
 
   touch() {
+    const now = Date.now();
+    if (!this.dirty) this.dirtySince = now;
     this.dirty = true;
-    this.mtimeMs = Date.now();
-    if (!this.flushTimer) this.flushTimer = setTimeout(() => { this.flushTimer = null; void this.flush(); }, 0);
+    this.mtimeMs = this.lastWrite = now;
+    // Each flush writes the whole file: wait for a burst of writes to pause (a
+    // program writing 64 KiB at a time used to store the file after every write)
+    if (!this.flushTimer) this.armFlush(FLUSH_DELAY_MS);
   }
+
+  private dirtySince = 0;
+  private lastWrite = 0;
+
+  private armFlush(ms: number) {
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      const now = Date.now();
+      const quiet = now - this.lastWrite;
+      if (this.dirty && quiet < FLUSH_DELAY_MS && now - this.dirtySince < FLUSH_MAX_DELAY_MS) this.armFlush(FLUSH_DELAY_MS - quiet);
+      else void this.flush();
+    }, ms);
+  }
+
+  /** A write-back is in progress. */
+  get busy(): boolean { return !!this.flushing; }
 
   async flush(): Promise<void> {
     if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
@@ -456,6 +517,29 @@ export async function openInode(fs: FileSystem, path: string): Promise<Inode> {
   }
   ino.opens++;
   return ino;
+}
+
+/** openInode for a file whose node the FileSystem has in memory (FileSystem.lookupCached). */
+export function openInodeSync(fs: FileSystem, path: string, node: { content: Uint8Array | null; mode: number; mtime: number; ctime: number }): Inode {
+  let table = inodeTables.get(fs);
+  if (!table) { table = new Map(); inodeTables.set(fs, table); }
+  let ino = table.get(path);
+  if (!ino) {
+    // Like readFile: the cached node's bytes, null meaning empty
+    ino = new Inode(fs, path, node.content ?? new Uint8Array(0), node.mode, node.mtime, node.ctime);
+    table.set(path, ino);
+  }
+  ino.opens++;
+  return ino;
+}
+
+/** closeInode when nothing needs to be written back; false = use closeInode. */
+function closeInodeSync(ino: Inode): boolean {
+  if (ino.dirty || ino.busy) return false;
+  ino.opens--;
+  const table = inodeTables.get(ino.fs);
+  if (ino.opens === 0 && table?.get(ino.path) === ino) table.delete(ino.path);
+  return true;
 }
 
 async function closeInode(ino: Inode): Promise<void> {
@@ -519,7 +603,9 @@ export class RegularFile implements OpenFile {
 
   get path(): string { return this.ino.path; }
 
-  async read(buf: Uint8Array): Promise<number> {
+  async read(buf: Uint8Array): Promise<number> { return this.tryRead(buf); }
+
+  tryRead(buf: Uint8Array): number {
     if (!canRead(this.flags)) return -EBADF;
     const n = Math.max(0, Math.min(buf.length, this.ino.size - this.pos));
     if (n > 0) buf.set(this.ino.data.subarray(this.pos, this.pos + n));
@@ -527,7 +613,9 @@ export class RegularFile implements OpenFile {
     return n;
   }
 
-  async write(buf: Uint8Array): Promise<number> {
+  async write(buf: Uint8Array): Promise<number> { return this.tryWrite(buf); }
+
+  tryWrite(buf: Uint8Array): number {
     if (!canWrite(this.flags)) return -EBADF;
     const ino = this.ino;
     if (this.flags & O_APPEND) this.pos = ino.size;
@@ -558,7 +646,7 @@ export class RegularFile implements OpenFile {
     if (append) this.flags &= ~O_APPEND;
     try {
       if (append) this.pos = this.ino.size;
-      return await this.write(buf);
+      return this.tryWrite(buf);
     } finally {
       if (append) this.flags |= O_APPEND;
       this.pos = save;
@@ -602,7 +690,9 @@ export class RegularFile implements OpenFile {
     return -ENOTTY;
   }
 
-  async stat(): Promise<KStat> {
+  async stat(): Promise<KStat> { return this.statSync(); }
+
+  statSync(): KStat {
     const ino = this.ino;
     return {
       dev: 1, ino: inodeNumber(ino.path), mode: S_IFREG | (ino.mode & 0o7777), nlink: 1, uid: 1000, gid: 1000, rdev: 0,
@@ -615,6 +705,13 @@ export class RegularFile implements OpenFile {
     if (this.closed) return;
     this.closed = true;
     await closeInode(this.ino);
+  }
+
+  closeSync(): boolean {
+    if (this.closed) return true;
+    if (!closeInodeSync(this.ino)) return false;
+    this.closed = true;
+    return true;
   }
 }
 
@@ -649,7 +746,16 @@ export class DirFile implements OpenFile {
       atimeMs: st.mtime.getTime(), mtimeMs: st.mtime.getTime(), ctimeMs: st.ctime.getTime(),
     };
   }
+  statSync(): KStat | undefined {
+    const hit = this.fs.lookupCached(this.path);
+    if (!hit || hit.node.type !== 'dir') return undefined;
+    return {
+      dev: 1, ino: inodeNumber(this.path), mode: S_IFDIR | (hit.node.mode & 0o7777), nlink: 2, uid: 1000, gid: 1000, rdev: 0,
+      size: 4096, blksize: 4096, blocks: 8, atimeMs: hit.node.mtime, mtimeMs: hit.node.mtime, ctimeMs: hit.node.ctime,
+    };
+  }
   async close(): Promise<void> {}
+  closeSync(): boolean { return true; }
 }
 
 // ── eventfd ──────────────────────────────────────────────────────────────────

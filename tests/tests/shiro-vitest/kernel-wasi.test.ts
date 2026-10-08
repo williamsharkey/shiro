@@ -20,7 +20,7 @@ import { createPipe } from '@shiro/kernel/pipe';
 import { BufferFile, type OpenFile } from '@shiro/kernel/fd';
 import type { GuestWorker } from '@shiro/kernel/worker-host';
 import { shellExitCode, W_EXITCODE, WEXITSTATUS, SIGINT } from '@shiro/kernel/abi';
-import { installWasmLoader, setGuestWorkerFactory, forceWasmProcessMode } from '@shiro/wasi/host';
+import { installWasmLoader, setGuestWorkerFactory, forceWasmProcessMode, guestWorkerPool } from '@shiro/wasi/host';
 import { SinkFile, TtyFile } from '@shiro/wasi/stdio';
 
 // node:url and node:os are browser-polyfilled in this vitest config
@@ -41,6 +41,19 @@ function findGo(): string | null {
   return null;
 }
 
+let workersStarted = 0;
+let workersTerminated = 0;
+function nodeGuestWorker(): GuestWorker {
+  const w = new Worker(workerFile);
+  workersStarted++;
+  return {
+    postMessage: (m) => w.postMessage(m),
+    terminate: () => { workersTerminated++; return w.terminate(); },
+    onMessage: (cb) => { w.on('message', cb); },
+    onError: (cb) => { w.on('error', cb); },
+  };
+}
+
 beforeAll(async () => {
   tmp = mkdtempSync(path.join(process.env.TMPDIR || '/tmp', 'shiro-kwasi-'));
   const entry = path.join(tmp, 'entry.ts');
@@ -53,15 +66,7 @@ beforeAll(async () => {
   `);
   workerFile = path.join(tmp, 'guest-worker.mjs');
   await build({ entryPoints: [entry], bundle: true, platform: 'node', format: 'esm', outfile: workerFile, logLevel: 'error' });
-  setGuestWorkerFactory((): GuestWorker => {
-    const w = new Worker(workerFile);
-    return {
-      postMessage: (m) => w.postMessage(m),
-      terminate: () => w.terminate(),
-      onMessage: (cb) => { w.on('message', cb); },
-      onError: (cb) => { w.on('error', cb); },
-    };
-  });
+  setGuestWorkerFactory(nodeGuestWorker);
   forceWasmProcessMode('sab');
 
   const go = findGo();
@@ -225,6 +230,47 @@ describe('kernel WASI processes', () => {
     kernel.kill(proc.pid, SIGINT);
     expect(shellExitCode(await proc.wait())).toBe(130);
     await w.close();
+  });
+
+  it('reuses guest Workers: every exited process\'s Worker unwinds and goes back to the pool', async () => {
+    // Chromium can't terminate a Worker parked in Atomics.wait, and every exited
+    // WASM process used to leave its Worker parked there. Now the kernel closes
+    // the channel, the guest unwinds and reports idle, and the pool reuses it.
+    const { kernel } = await setup();
+    setGuestWorkerFactory(nodeGuestWorker); // a fresh pool
+    const started = workersStarted, terminated = workersTerminated;
+    for (let i = 0; i < 6; i++) {
+      const out = collector();
+      const p = spawn(kernel, ['seq', '3'], { 0: new BufferFile(new Uint8Array(0)), 1: out.sink, 2: out.sink });
+      expect(await p.wait()).toBe(W_EXITCODE(0));
+      expect(out.text).toBe('line 1\nline 2\nline 3\n');
+      // Killed while blocked in read: the guest unwinds too
+      const [r, w] = createPipe();
+      const q = spawn(kernel, ['readloop'], { 0: r, 1: out.sink, 2: out.sink });
+      await new Promise(res => setTimeout(res, 20));
+      kernel.kill(q.pid, SIGINT);
+      expect(shellExitCode(await q.wait())).toBe(130);
+      await w.close();
+      await until(() => (guestWorkerPool()?.idleCount ?? 0) >= 1);
+    }
+    // 12 processes; a spare is started ahead, and nothing waits for a 1 s idle timeout
+    expect(workersStarted - started).toBeLessThanOrEqual(3);
+    expect(workersTerminated - terminated).toBe(0);
+    expect(guestWorkerPool()!.size).toBeLessThanOrEqual(4);
+  });
+
+  it('a guest computing when its process is killed is terminated, not reused', async () => {
+    const { kernel } = await setup();
+    setGuestWorkerFactory(nodeGuestWorker);
+    const terminated = workersTerminated;
+    const out = collector();
+    // seq writing to a sink that never blocks: SIGINT arrives while it runs
+    const p = spawn(kernel, ['seq', '100000000'], { 0: new BufferFile(new Uint8Array(0)), 1: out.sink, 2: out.sink });
+    await until(() => out.text.length > 1000);
+    kernel.kill(p.pid, SIGINT);
+    expect(shellExitCode(await p.wait())).toBe(130);
+    // Its next syscall finds the channel closed, so it unwinds and is reused (or terminated after the timeout)
+    await until(() => (guestWorkerPool()?.idleCount ?? 0) >= 1 || workersTerminated > terminated, 3000);
   });
 
   it('`wasi run` uses a kernel process: piped stdin and buffered stdout', async () => {

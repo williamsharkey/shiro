@@ -8,6 +8,10 @@ import { CLAUDE_CODE_DEFAULT_MODEL } from '../claude-code-version';
  * Create the fake process object for the Node.js compat layer.
  * Mirrors Node.js process with stdout, stderr, stdin, env, lifecycle methods.
  */
+const BUILTIN_NAMES = ['assert', 'async_hooks', 'buffer', 'child_process', 'constants', 'crypto', 'dns', 'events', 'fs',
+  'http', 'https', 'module', 'net', 'os', 'path', 'perf_hooks', 'process', 'querystring', 'readline', 'stream',
+  'string_decoder', 'timers', 'tls', 'tty', 'url', 'util', 'v8', 'vm', 'worker_threads', 'zlib'];
+
 export function createFakeProcess(
   ctx: CommandContext,
   fileArgs: string[],
@@ -60,6 +64,7 @@ export function createFakeProcess(
       _st.exitCalled = true;
       // Fire 'exit' event handlers (CLI registers cleanup here)
       try { (processEvents['exit'] || []).forEach(fn => fn(_st.exitCode)); } catch (_) {}
+      if (!_st.isInteractiveMode) _st.outputClosed = true;
       _st.deferredExitResolve?.(_st.exitCode);
       throw new ProcessExitError(_st.exitCode);
     },
@@ -150,7 +155,20 @@ export function createFakeProcess(
     features: { inspector: false, debug: false, uv: true, ipv6: true, tls_alpn: true, tls_sni: true, tls_ocsp: true, tls: true },
     release: { name: 'node', sourceUrl: '', headersUrl: '', libUrl: '' },
     report: { getReport: () => ({}), directory: '', filename: '' },
-    binding: (_name: string) => { throw new Error(`process.binding is not supported`); },
+    // The legacy internal bindings old tools still read (yarn 1: natives,
+    // constants; safe-buffer: buffer)
+    binding: (name: string) => {
+      switch (name) {
+        case 'natives': return Object.fromEntries(BUILTIN_NAMES.map(n => [n, '']));
+        case 'constants': return {
+          os: { errno: { ENOENT: 2, EBADF: 9, EEXIST: 17, ENOTDIR: 20, EISDIR: 21, EINVAL: 22, EACCES: 13, EPERM: 1 }, signals: { SIGINT: 2, SIGTERM: 15, SIGKILL: 9, SIGHUP: 1 } },
+          fs: { O_RDONLY: 0, O_WRONLY: 1, O_RDWR: 2, O_CREAT: 64, O_EXCL: 128, O_TRUNC: 512, O_APPEND: 1024, S_IFMT: 61440, S_IFREG: 32768, S_IFDIR: 16384, S_IFLNK: 40960 },
+        };
+        case 'buffer': return { kMaxLength: 2 ** 32, kStringMaxLength: 2 ** 29 - 24 };
+        case 'util': return {};
+        default: throw new Error(`No such module: ${name}`);
+      }
+    },
     _linkedBinding: (_name: string) => { throw new Error(`process._linkedBinding is not supported`); },
     allowedNodeEnvironmentFlags: new Set<string>(),
     debugPort: 9229,
@@ -162,7 +180,7 @@ export function createFakeProcess(
   // Add exitCode as a getter/setter (CLI reads and writes process.exitCode)
   Object.defineProperty(fp, 'exitCode', {
     get: () => _st.exitCalled ? _st.exitCode : undefined,
-    set: (v: number | undefined) => { if (v !== undefined) _st.exitCode = v; },
+    set: (v: number | undefined) => { if (v !== undefined && !_st.outputClosed) _st.exitCode = v; },
     configurable: true,
     enumerable: true,
   });
@@ -175,6 +193,7 @@ function createStdout(ctx: CommandContext, stdoutBuf: string[], _st: SharedState
   const stdoutEvents: Record<string, Function[]> = {};
   const stdoutObj: any = {
     write: (s: string | Uint8Array, encodingOrCb?: string | Function, cb?: Function) => {
+      if (_st.outputClosed) return true;
       let str = typeof s === 'string' ? s : new TextDecoder().decode(s);
       // Detect OAuth URL in Claude Code login flow and append a clickable link
       // Fix redirect_uri from localhost to manual code flow
@@ -270,7 +289,7 @@ function createStdout(ctx: CommandContext, stdoutBuf: string[], _st: SharedState
     cork: () => {},
     uncork: () => {},
   };
-  return stdoutObj;
+  return completeEmitter(stdoutObj, stdoutEvents);
 }
 
 /** Create process.stderr stream */
@@ -278,6 +297,7 @@ function createStderr(ctx: CommandContext, stderrBuf: string[], _st: SharedState
   const stderrEvts: Record<string, Function[]> = {};
   const stderrObj: any = {
     write: (s: string | Uint8Array, encodingOrCb?: string | Function, cb?: Function) => {
+      if (_st.outputClosed) return true;
       const str = typeof s === 'string' ? s : new TextDecoder().decode(s);
       stderrBuf.push(str);
       if (ctx.terminal) {
@@ -315,7 +335,7 @@ function createStderr(ctx: CommandContext, stderrBuf: string[], _st: SharedState
     listenerCount: (ev: string) => (stderrEvts[ev] || []).length,
     setMaxListeners: () => stderrObj,
   };
-  return stderrObj;
+  return completeEmitter(stderrObj, stderrEvts);
 }
 
 /** Create process.stdin stream */
@@ -323,6 +343,8 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
   const stdinEvents: Record<string, Function[]> = {};
   let stdinEnded = false;
   let stdinRawMode = false;
+  let stdinEncoding: string | null = null;
+  let stdinDataTaken = false; // piped input already went to 'data' listeners
   const stdinReadBuffer: string[] = [];
   const stdinObj: any = {
     isTTY: !!ctx.terminal,
@@ -334,6 +356,7 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
         queueMicrotask(() => {
           if (ctx.stdin) {
             stdinReadBuffer.push(ctx.stdin);
+            if (stdinEvents['data']?.length) stdinDataTaken = true;
             (stdinEvents['data'] || []).forEach(f => f(ctx.stdin));
             (stdinEvents['readable'] || []).forEach(f => f());
           }
@@ -415,7 +438,44 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
       return stdinObj;
     },
     get isRaw() { return stdinRawMode; },
-    setEncoding: () => stdinObj,
+    setEncoding: (enc?: string) => { stdinEncoding = enc || 'utf8'; return stdinObj; },
+    // for await (const chunk of process.stdin): prettier's and get-stdin's way
+    [Symbol.asyncIterator]: () => {
+      const chunks: any[] = [];
+      let done = false;
+      let wake: (() => void) | null = null;
+      const onData = (d: any) => {
+        chunks.push(stdinEncoding || typeof d !== 'string' ? d : new TextEncoder().encode(d));
+        wake?.();
+      };
+      const onEnd = () => { done = true; wake?.(); };
+      if (!ctx.terminal && stdinEnded) {
+        // piped input that an earlier 'end' listener set flowing: what no
+        // 'data' listener took is still unread
+        if (ctx.stdin && !stdinDataTaken) { stdinDataTaken = true; stdinReadBuffer.length = 0; onData(ctx.stdin); }
+        done = true;
+      } else {
+        stdinObj.on('data', onData);
+        stdinObj.on('end', onEnd);
+        stdinObj.resume();
+      }
+      return {
+        next: async (): Promise<IteratorResult<any>> => {
+          while (!chunks.length && !done) await new Promise<void>(r => { wake = r; });
+          wake = null;
+          if (chunks.length) return { value: chunks.shift(), done: false };
+          stdinObj.off('data', onData);
+          stdinObj.off('end', onEnd);
+          return { value: undefined, done: true };
+        },
+        return: async (): Promise<IteratorResult<any>> => {
+          stdinObj.off('data', onData);
+          stdinObj.off('end', onEnd);
+          return { value: undefined, done: true };
+        },
+        [Symbol.asyncIterator]() { return this; },
+      };
+    },
     destroy: () => {
       if (ctx.terminal) ctx.terminal.exitStdinPassthrough();
       stdinEnded = true;
@@ -434,5 +494,33 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
     getMaxListeners: () => 10,
     addListener: (event: string, fn: Function) => stdinObj.on(event, fn),
   };
-  return stdinObj;
+  return completeEmitter(stdinObj, stdinEvents);
+}
+
+/** The EventEmitter methods a std stream lacks (yarn calls
+ *  process.stdout.prependListener), over the stream's own listener table;
+ *  once() listeners run once. */
+function completeEmitter(obj: any, table: Record<string, Function[]>): any {
+  obj.once = (ev: string, fn: Function) => {
+    const w = (...a: any[]) => { obj.off(ev, w); fn(...a); };
+    (w as any).listener = fn;
+    return obj.on(ev, w);
+  };
+  const add: Record<string, Function> = {
+    addListener: (ev: string, fn: Function) => obj.on(ev, fn),
+    prependListener: (ev: string, fn: Function) => { (table[ev] ??= []).unshift(fn); return obj; },
+    prependOnceListener: (ev: string, fn: Function) => {
+      const w = (...a: any[]) => { obj.off(ev, w); fn(...a); };
+      (table[ev] ??= []).unshift(w);
+      return obj;
+    },
+    listeners: (ev: string) => (table[ev] || []).map((f: any) => f.listener ?? f),
+    rawListeners: (ev: string) => [...(table[ev] || [])],
+    listenerCount: (ev: string) => (table[ev] || []).length,
+    eventNames: () => Object.keys(table).filter(k => table[k]?.length),
+    setMaxListeners: () => obj,
+    getMaxListeners: () => 10,
+  };
+  for (const [k, f] of Object.entries(add)) if (typeof obj[k] !== 'function') obj[k] = f;
+  return obj;
 }
