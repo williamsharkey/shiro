@@ -250,7 +250,16 @@ export class ShiroTerminal {
   dispose(): void {
     this.teardown?.();
     ShiroTerminal.instances.delete(this);
-    try { this.term.dispose(); } catch { /* already gone */ }
+    const term = this.term;
+    // One task later: xterm's Viewport runs a setTimeout(syncScrollArea) queued
+    // at open(), which throws on a disposed terminal (a pane closed right after
+    // opening)
+    setTimeout(() => {
+      // xterm 5.5 never disposes CoreBrowserService's ScreenDprMonitor: its window
+      // 'resize' and DPR media-query listeners outlived every closed pane
+      try { (term as any)._core?._coreBrowserService?._screenDprMonitor?.dispose(); } catch { /* internals moved */ }
+      try { term.dispose(); } catch { /* already gone */ }
+    }, 0);
   }
 
   /** Start an extra pane's shell: prompt only, no banner and no ~/.profile (it may autostart things). */

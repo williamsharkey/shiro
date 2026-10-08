@@ -1,19 +1,18 @@
-
 import type { Command } from './index';
 import type { FileSystem } from '../filesystem';
-import { statEntry } from './flags';
 
+/**
+ * test / [ (POSIX, with the bash/coreutils extensions -nt -ot -ef < >).
+ * Exit 0 true, 1 false, 2 on a usage error. With 1–4 arguments the POSIX
+ * rules by argument count apply (so `test ! = x` and `test -n` work); longer
+ * expressions are parsed with ( ), ! (binding tighter than -a), -a, -o.
+ */
 export const test: Command = {
   name: "test",
   description: "Evaluate conditional expression",
   async exec(ctx) {
-    const args = ctx.args;
-    // Remove trailing ] if called as [
-    const exprs = args[args.length - 1] === "]" ? args.slice(0, -1) : [...args];
-
     try {
-      const result = await evaluate(exprs, ctx.fs, ctx.cwd);
-      return result ? 0 : 1;
+      return (await new TestEval(ctx.args, ctx.fs, ctx.cwd).run()) ? 0 : 1;
     } catch (e: unknown) {
       ctx.stderr += `test: ${e instanceof Error ? e.message : e}\n`;
       return 2;
@@ -21,99 +20,151 @@ export const test: Command = {
   },
 };
 
-async function evaluate(
-  args: string[],
-  fs: FileSystem,
-  cwd: string,
-): Promise<boolean> {
-  if (args.length === 0) return false;
-  if (args.length === 1) return args[0] !== "";
+const UNARY = new Set(['-b', '-c', '-d', '-e', '-f', '-g', '-G', '-h', '-k', '-L', '-n', '-N', '-O', '-p', '-r', '-s', '-S', '-t', '-u', '-w', '-x', '-z']);
+const BINARY = new Set(['=', '==', '!=', '<', '>', '-eq', '-ne', '-lt', '-le', '-gt', '-ge', '-nt', '-ot', '-ef']);
 
-  // Unary operators
-  if (args.length === 2) {
-    const [op, val] = args;
-    switch (op) {
-      // String tests
-      case "-z": return val === "";
-      case "-n": return val !== "";
-      case "!": return val === "";
+class TestEval {
+  private pos = 0;
+  constructor(private args: string[], private fs: FileSystem, private cwd: string) {}
 
-      // File existence and type tests
-      case "-e": case "-f": case "-d": case "-L": case "-h": case "-S": case "-p": case "-b": case "-c": {
-        try {
-          const resolved = fs.resolvePath(val, cwd);
-          const stat = await statEntry(fs, resolved);
-          if (op === "-f") return stat.type === "file";
-          if (op === "-d") return stat.type === "dir";
-          if (op === "-L" || op === "-h") return stat.type === "symlink";
-          if (op === "-S") return (stat.type as string) === "socket";
-          if (op === "-p") return (stat.type as string) === "fifo";
-          if (op === "-b") return (stat.type as string) === "block";
-          if (op === "-c") return (stat.type as string) === "char";
-          return true; // -e: exists
-        } catch { return false; }
-      }
+  async run(): Promise<boolean> {
+    const a = this.args;
+    switch (a.length) {
+      case 0: return false;
+      case 1: return a[0] !== '';
+      case 2:
+        if (a[0] === '!') return a[1] === '';
+        if (UNARY.has(a[0])) return this.unary(a[0], a[1]);
+        throw new Error(`${a[0]}: unary operator expected`);
+      case 3:
+        if (BINARY.has(a[1])) return this.binary(a[0], a[1], a[2]);
+        if (a[0] === '!') return !(await new TestEval(a.slice(1), this.fs, this.cwd).run());
+        if (a[0] === '(' && a[2] === ')') return a[1] !== '';
+        if (a[1] === '-a') return a[0] !== '' && a[2] !== '';
+        if (a[1] === '-o') return a[0] !== '' || a[2] !== '';
+        throw new Error(`${a[1]}: binary operator expected`);
+      case 4:
+        if (a[0] === '!') return !(await new TestEval(a.slice(1), this.fs, this.cwd).run());
+        if (a[0] === '(' && a[3] === ')') return new TestEval(a.slice(1, 3), this.fs, this.cwd).run();
+    }
+    const v = await this.or();
+    if (this.pos < a.length) throw new Error(`${a[this.pos]}: unexpected argument`);
+    return v;
+  }
 
-      // File permissions (simplified - always return false in browser)
-      case "-r": case "-w": case "-x": case "-s": case "-u": case "-g": case "-k": {
-        try {
-          const resolved = fs.resolvePath(val, cwd);
-          await statEntry(fs, resolved);
-          // -s: file exists and has size > 0
-          if (op === "-s") {
-            try {
-              const content = await (fs as any).readFile?.(resolved);
-              return content && content.length > 0;
-            } catch {
-              return false;
-            }
-          }
-          // In browser context, we can't check real permissions
-          // Return true for basic permission checks if file exists
-          return op === "-r" || op === "-w";
-        } catch { return false; }
-      }
+  private peek(): string | undefined { return this.args[this.pos]; }
 
-      // Terminal tests (always false in browser)
-      case "-t": return false;
+  private async or(): Promise<boolean> {
+    let v = await this.and();
+    while (this.peek() === '-o') { this.pos++; const r = await this.and(); v = v || r; }
+    return v;
+  }
+
+  private async and(): Promise<boolean> {
+    let v = await this.not();
+    while (this.peek() === '-a') { this.pos++; const r = await this.not(); v = v && r; }
+    return v;
+  }
+
+  private async not(): Promise<boolean> {
+    if (this.peek() === '!' && this.pos + 1 < this.args.length) { this.pos++; return !(await this.not()); }
+    return this.primary();
+  }
+
+  private async primary(): Promise<boolean> {
+    const a = this.args;
+    const t = a[this.pos];
+    if (t === undefined) throw new Error('argument expected');
+    // A binary expression wins over a leading ( or unary operator: `test ( = (`
+    if (this.pos + 2 < a.length && BINARY.has(a[this.pos + 1])) {
+      const r = await this.binary(t, a[this.pos + 1], a[this.pos + 2]);
+      this.pos += 3;
+      return r;
+    }
+    if (t === '(') {
+      this.pos++;
+      const v = await this.or();
+      if (a[this.pos] !== ')') throw new Error("missing ')'");
+      this.pos++;
+      return v;
+    }
+    if (UNARY.has(t) && this.pos + 1 < a.length) {
+      this.pos += 2;
+      return this.unary(t, a[this.pos - 1]);
+    }
+    this.pos++;
+    return t !== '';
+  }
+
+  private async stat(path: string, follow = true) {
+    const p = this.fs.resolvePath(path, this.cwd);
+    try {
+      return follow ? await this.fs.stat(p) : await this.fs.lstat(p);
+    } catch {
+      return null;
     }
   }
 
-  // Negation
-  if (args[0] === "!" && args.length > 1) {
-    return !(await evaluate(args.slice(1), fs, cwd));
-  }
-
-  // Binary operators
-  if (args.length === 3) {
-    const [left, op, right] = args;
+  private async unary(op: string, val: string): Promise<boolean> {
     switch (op) {
-      case "=": case "==": return left === right;
-      case "!=": return left !== right;
-      case "-eq": return parseInt(left) === parseInt(right);
-      case "-ne": return parseInt(left) !== parseInt(right);
-      case "-lt": return parseInt(left) < parseInt(right);
-      case "-le": return parseInt(left) <= parseInt(right);
-      case "-gt": return parseInt(left) > parseInt(right);
-      case "-ge": return parseInt(left) >= parseInt(right);
+      case '-z': return val === '';
+      case '-n': return val !== '';
+      case '-t': return false; // no fd is a terminal from a builtin's point of view
     }
+    if (val === '') return false;
+    const s = await this.stat(val, op !== '-L' && op !== '-h');
+    if (!s) return false;
+    const mode = (s as any).mode ?? 0;
+    switch (op) {
+      case '-e': return true;
+      case '-f': return s.isFile();
+      case '-d': return s.isDirectory();
+      case '-L': case '-h': return s.isSymbolicLink();
+      case '-s': return (s.size ?? 0) > 0;
+      case '-r': return true;
+      case '-w': return true;
+      case '-x': return s.isDirectory() || (mode & 0o111) !== 0;
+      case '-u': return (mode & 0o4000) !== 0;
+      case '-g': return (mode & 0o2000) !== 0;
+      case '-k': return (mode & 0o1000) !== 0;
+      case '-O': case '-G': return true;
+      case '-N': return false;
+      case '-p': return (s as any).isFIFO?.() ?? false;
+      case '-S': return (s as any).isSocket?.() ?? false;
+      case '-b': return (s as any).isBlockDevice?.() ?? false;
+      case '-c': return (s as any).isCharacterDevice?.() ?? false;
+    }
+    return false;
   }
 
-  // Compound: -a (AND), -o (OR)
-  const aIdx = args.indexOf("-a");
-  if (aIdx > 0) {
-    return (
-      (await evaluate(args.slice(0, aIdx), fs, cwd)) &&
-      (await evaluate(args.slice(aIdx + 1), fs, cwd))
-    );
-  }
-  const oIdx = args.indexOf("-o");
-  if (oIdx > 0) {
-    return (
-      (await evaluate(args.slice(0, oIdx), fs, cwd)) ||
-      (await evaluate(args.slice(oIdx + 1), fs, cwd))
-    );
+  private int(s: string): bigint {
+    if (!/^\s*[+-]?\d+\s*$/.test(s)) throw new Error(`${s}: integer expression expected`);
+    return BigInt(s.trim());
   }
 
-  return false;
+  private async binary(l: string, op: string, r: string): Promise<boolean> {
+    switch (op) {
+      case '=': case '==': return l === r;
+      case '!=': return l !== r;
+      case '<': return l < r;
+      case '>': return l > r;
+      case '-eq': return this.int(l) === this.int(r);
+      case '-ne': return this.int(l) !== this.int(r);
+      case '-lt': return this.int(l) < this.int(r);
+      case '-le': return this.int(l) <= this.int(r);
+      case '-gt': return this.int(l) > this.int(r);
+      case '-ge': return this.int(l) >= this.int(r);
+      case '-nt': case '-ot': {
+        const a = await this.stat(l), b = await this.stat(r);
+        if (op === '-nt') return !!a && (!b || a.mtime.getTime() > b.mtime.getTime());
+        return !!b && (!a || a.mtime.getTime() < b.mtime.getTime());
+      }
+      case '-ef': {
+        const rl = await this.fs.realpath(this.fs.resolvePath(l, this.cwd)).catch(() => null);
+        const rr = await this.fs.realpath(this.fs.resolvePath(r, this.cwd)).catch(() => null);
+        return !!rl && rl === rr;
+      }
+    }
+    return false;
+  }
 }

@@ -324,10 +324,64 @@ const BASE_ETC_FILES: Record<string, string> = {
   '/etc/shells': '/bin/sh\n/bin/bash\n',
 };
 
+/** Run fn as a macrotask without timer clamping/throttling (MessageChannel),
+ *  falling back to setTimeout where there is none. */
+const scheduleMacrotask: (fn: () => void) => void = (() => {
+  if (typeof MessageChannel === 'undefined') return (fn: () => void) => { setTimeout(fn, 0); };
+  const queue: Array<() => void> = [];
+  let ch: MessageChannel | null = null;
+  return (fn: () => void) => {
+    if (!ch) {
+      ch = new MessageChannel();
+      ch.port1.onmessage = () => { const f = queue.shift(); f?.(); };
+      // Node (vitest): don't keep the process alive for an idle port
+      (ch.port1 as any).unref?.();
+      (ch.port2 as any).unref?.();
+    }
+    queue.push(fn);
+    ch.port2.postMessage(0);
+  };
+})();
+
+/** The node as IndexedDB should store it: a view into a larger buffer is
+ *  copied out, since IndexedDB clones the whole ArrayBuffer behind it. */
+function storableNode(node: FSNode): FSNode {
+  const c = node.content;
+  if (c && (c.byteOffset !== 0 || c.byteLength !== c.buffer.byteLength)) return { ...node, content: c.slice() };
+  return node;
+}
+
+/**
+ * IndexedDB-backed filesystem with an in-memory node cache and write-behind.
+ *
+ * Mutations update the cache immediately and resolve; the IndexedDB writes are
+ * queued (`_dirty`, latest value per path wins) and committed in ONE readwrite
+ * transaction per flush. A flush is scheduled as a macrotask after the first
+ * dirty write, so a burst of writes (npm install, `echo >> f` in a loop, a
+ * shell history update per command) costs one transaction instead of one per
+ * write. Only one flush transaction is in flight at a time; writes made while
+ * it commits go into the next one.
+ *
+ * Crash safety: a write is durable once the flush that carries it commits,
+ * normally within one event-loop turn. `sync()` (the `sync` command, kernel
+ * fsync) waits for that with strict durability. The page flushes on
+ * `visibilitychange` → hidden, `pagehide` and `freeze`, and `beforeunload`
+ * warns while `pendingWrites > 0`. A tab or browser crash can lose writes
+ * from the last moment before the flush (unlike a real disk's page cache, not
+ * seconds' worth). Each flush is one transaction, so after a crash either
+ * all of its writes are on disk or none are.
+ */
 export class FileSystem {
   private db: IDBDatabase | null = null;
   private cache: Map<string, FSNode | undefined> = new Map();
-  private cacheEnabled = true;
+  /** Writes not yet handed to IndexedDB: path → node, or null for a delete. */
+  private _dirty: Map<string, FSNode | null> = new Map();
+  /** The batch being committed by the in-flight flush transaction. */
+  private _inflight: Map<string, FSNode | null> | null = null;
+  private _flushing: Promise<void> | null = null;
+  private _flushScheduled = false;
+  /** First error from a failed background flush, reported by the next sync(). */
+  private _flushError: unknown = null;
   private _changeListeners: Set<FSChangeListener> = new Set();
   private virtualProviders: VirtualFSProvider[] = [new DevProvider(), new ProcProvider(), new VarLogProvider()];
 
@@ -345,6 +399,7 @@ export class FileSystem {
 
   async init(): Promise<void> {
     this.db = await this._openDb();
+    this._installLifecycleFlush();
 
     // Ensure root directory exists
     const root = await this._get('/');
@@ -380,10 +435,22 @@ export class FileSystem {
   }
 
   private _opening: Promise<IDBDatabase> | null = null;
-  private _pendingWrites = 0;
+  private _lifecycleInstalled = false;
 
-  /** Writes issued but not yet acknowledged by IndexedDB. */
-  get pendingWrites(): number { return this._pendingWrites; }
+  /** Writes made but not yet committed to IndexedDB. */
+  get pendingWrites(): number { return this._dirty.size + (this._inflight?.size ?? 0); }
+
+  /** Flush when the page may be about to go away: hidden (tab switch, mobile
+   *  backgrounding — often the last chance before a kill), pagehide, freeze. */
+  private _installLifecycleFlush(): void {
+    if (this._lifecycleInstalled || typeof window === 'undefined' || typeof document === 'undefined') return;
+    if (typeof window.addEventListener !== 'function' || typeof document.addEventListener !== 'function') return;
+    this._lifecycleInstalled = true;
+    const flush = () => { if (this.pendingWrites > 0) void this.sync().catch(() => {}); };
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('freeze', flush);
+  }
 
   private _openDb(): Promise<IDBDatabase> {
     if (this._opening) return this._opening;
@@ -428,7 +495,7 @@ export class FileSystem {
   private async _request<T>(mode: IDBTransactionMode, make: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       try {
-        const db = await this._getDb();
+        const db = this.db ?? await this._getDb();
         return await new Promise<T>((resolve, reject) => {
           const tx = db.transaction(STORE_NAME, mode);
           const req = make(tx.objectStore(STORE_NAME));
@@ -448,23 +515,108 @@ export class FileSystem {
     }
   }
 
-  private async _write<T>(make: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
-    this._pendingWrites++;
-    try {
-      return await this._request('readwrite', make);
-    } finally {
-      this._pendingWrites--;
+  /** Queue a put (node) or delete (null) for the next flush. */
+  private _queue(path: string, node: FSNode | null): void {
+    this._dirty.set(path, node);
+    if (!this._flushScheduled && !this._flushing) {
+      this._flushScheduled = true;
+      scheduleMacrotask(() => { this._flushScheduled = false; void this._flush(); });
+    }
+  }
+
+  /** Commit everything dirty in one transaction; loops while new writes arrive. */
+  private _flush(durability: 'default' | 'strict' | 'relaxed' = 'relaxed'): Promise<void> {
+    if (this._flushing) return this._flushing;
+    if (this._dirty.size === 0) return Promise.resolve();
+    const run = async () => {
+      while (this._dirty.size > 0) {
+        const batch = this._dirty;
+        this._dirty = new Map();
+        this._inflight = batch;
+        try {
+          await this._commit(batch, durability);
+        } catch (e) {
+          // Keep the cache (the session goes on with what the user wrote) but
+          // report it; the next sync() rejects with it.
+          console.error('[fs] IndexedDB write failed:', e);
+          if (!this._flushError) this._flushError = e;
+        } finally {
+          this._inflight = null;
+        }
+      }
+    };
+    this._flushing = run().finally(() => { this._flushing = null; });
+    return this._flushing;
+  }
+
+  private async _commit(batch: Map<string, FSNode | null>, durability: 'default' | 'strict' | 'relaxed'): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const db = this.db ?? await this._getDb();
+        await new Promise<void>((resolve, reject) => {
+          let tx: IDBTransaction;
+          try {
+            tx = db.transaction(STORE_NAME, 'readwrite', { durability });
+          } catch (e) {
+            // Engines without the options bag
+            if ((e as any)?.name !== 'TypeError') throw e;
+            tx = db.transaction(STORE_NAME, 'readwrite');
+          }
+          const store = tx.objectStore(STORE_NAME);
+          for (const [path, node] of batch) {
+            if (node) store.put(storableNode(node));
+            else store.delete(path);
+          }
+          tx.oncomplete = () => resolve();
+          tx.onabort = () => reject(tx.error || new DOMException('Transaction aborted', 'AbortError'));
+        });
+        return;
+      } catch (e) {
+        if (attempt > 0 || !FileSystem._isClosedError(e)) throw e;
+        console.warn('[fs] IndexedDB connection lost, reopening:', (e as any)?.message);
+        if (this.db) { try { this.db.close(); } catch {} }
+        this.db = null;
+      }
+    }
+  }
+
+  /** Start committing queued writes now; resolves when the queue is empty
+   *  (relaxed durability). For writers that pace themselves by the commits. */
+  flushed(): Promise<void> {
+    return this._flush();
+  }
+
+  /**
+   * Wait until every write made so far is committed to IndexedDB (strict
+   * durability). Rejects with the error of a failed background flush, once.
+   */
+  async sync(): Promise<void> {
+    while (this._flushing || this._dirty.size > 0) {
+      if (this._flushing) await this._flushing;
+      else await this._flush('strict');
+    }
+    if (this._flushError) {
+      const e = this._flushError;
+      this._flushError = null;
+      throw e;
     }
   }
 
   private async _get(path: string): Promise<FSNode | undefined> {
-    if (this.cacheEnabled && this.cache.has(path)) {
+    if (this.cache.has(path)) {
       return this.cache.get(path);
     }
-    const result = await this._request('readonly', store => store.get(path) as IDBRequest<FSNode | undefined>);
-    if (this.cacheEnabled) {
-      this.cache.set(path, result);
+    // The key index is complete once loaded: a path not in it doesn't exist
+    // (creating a file then needs no IndexedDB read for the "existing" check)
+    if (this._allKeys) {
+      if (!this._allKeys.has(path)) { this.cache.set(path, undefined); return undefined; }
+    } else if (!this._keysLoading) {
+      void this._getAllKeys().catch(() => {});
     }
+    const result = await this._request('readonly', store => store.get(path) as IDBRequest<FSNode | undefined>);
+    // A write or delete made while the read was pending is newer than what it returned
+    if (this.cache.has(path)) return this.cache.get(path);
+    this.cache.set(path, result);
     return result;
   }
 
@@ -501,33 +653,69 @@ export class FileSystem {
   }
 
   private async _put(node: FSNode): Promise<void> {
-    await this._write(store => store.put(node));
-    if (this.cacheEnabled) {
-      this.cache.set(node.path, node);
-      // Invalidate allKeys cache
-      this._allKeysCache = null;
-    }
+    this._putNow(node);
   }
 
   private async _delete(path: string): Promise<void> {
-    await this._write(store => store.delete(path));
-    if (this.cacheEnabled) {
-      this.cache.delete(path);
-      this._allKeysCache = null;
-    }
+    this._deleteNow(path);
   }
 
-  private _allKeysCache: string[] | null = null;
+  /** Synchronous part of a put: cache + key index now, IndexedDB on the next flush. */
+  private _putNow(node: FSNode): void {
+    this.cache.set(node.path, node);
+    this._noteKey(node.path, true);
+    this._queue(node.path, node);
+  }
+
+  private _deleteNow(path: string): void {
+    // Remember the miss: IndexedDB still has the node until the flush commits
+    this.cache.set(path, undefined);
+    this._noteKey(path, false);
+    this._queue(path, null);
+  }
+
+  /** Every key in the store (plus queued writes), once loaded; kept up to date
+   *  by puts/deletes instead of being re-read after each write. */
+  private _allKeys: Set<string> | null = null;
+  private _allKeysArr: string[] | null = null;
+  /** Key changes made while _getAllKeys is reading the store. */
+  private _keysJournal: Array<[string, boolean]> | null = null;
+  private _keysLoading: Promise<Set<string>> | null = null;
+
+  private _noteKey(path: string, present: boolean): void {
+    if (this._allKeys) {
+      if (present ? !this._allKeys.has(path) : this._allKeys.has(path)) {
+        if (present) this._allKeys.add(path); else this._allKeys.delete(path);
+        this._allKeysArr = null;
+      }
+    }
+    if (this._keysJournal) this._keysJournal.push([path, present]);
+  }
 
   private async _getAllKeys(): Promise<string[]> {
-    if (this.cacheEnabled && this._allKeysCache) {
-      return this._allKeysCache;
+    if (!this._allKeys) {
+      if (!this._keysLoading) {
+        const journal: Array<[string, boolean]> = [];
+        this._keysJournal = journal;
+        // Writes queued before the read started and not yet issued: the read
+        // won't see them. (An in-flight flush transaction was created before
+        // this readonly one, so IndexedDB orders the read after it.)
+        const queued = [...this._dirty];
+        this._keysLoading = this._request('readonly', store => store.getAllKeys())
+          .then((keys) => {
+            const set = new Set(keys as string[]);
+            for (const [p, n] of queued) { if (n) set.add(p); else set.delete(p); }
+            for (const [p, present] of journal) { if (present) set.add(p); else set.delete(p); }
+            this._allKeys = set;
+            this._allKeysArr = null;
+            return set;
+          })
+          .finally(() => { this._keysJournal = null; this._keysLoading = null; });
+      }
+      await this._keysLoading;
     }
-    const result = await this._request('readonly', store => store.getAllKeys()) as string[];
-    if (this.cacheEnabled) {
-      this._allKeysCache = result;
-    }
-    return result;
+    if (!this._allKeysArr) this._allKeysArr = [...this._allKeys!];
+    return this._allKeysArr;
   }
 
   /** Synchronously read file content from the in-memory cache (no IndexedDB round-trip).
@@ -574,16 +762,25 @@ export class FileSystem {
   /** Clear the in-memory cache (useful after external DB modifications) */
   clearCache(): void {
     this.cache.clear();
-    this._allKeysCache = null;
+    this._allKeys = null;
+    this._allKeysArr = null;
+    // Writes not yet in IndexedDB live only here: keep them visible
+    for (const batch of [this._inflight, this._dirty]) {
+      if (!batch) continue;
+      for (const [path, node] of batch) this.cache.set(path, node ?? undefined);
+    }
   }
 
   /** Export all filesystem nodes from IndexedDB */
   async exportAll(): Promise<FSNode[]> {
+    await this.sync().catch(() => {});
     return this._request('readonly', store => store.getAll() as IDBRequest<FSNode[]>);
   }
 
   /** Import filesystem nodes, replacing all existing data */
   async importAll(nodes: FSNode[]): Promise<void> {
+    // Queued writes must not land on top of the imported tree
+    await this.sync().catch(() => {});
     const tx = (await this._getDb()).transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
     store.clear();
@@ -694,6 +891,8 @@ export class FileSystem {
     this._emitChange('write', path);
   }
 
+  /** Append to a file (created if missing). Appends in one flush window are
+   *  committed as a single put of the final content. */
   async appendFile(path: string, data: Uint8Array | string): Promise<void> {
     let existing: Uint8Array;
     try {
@@ -705,7 +904,9 @@ export class FileSystem {
     const combined = new Uint8Array(existing.length + append.length);
     combined.set(existing);
     combined.set(append, existing.length);
-    await this.writeFile(path, combined);
+    // Through a symlink, append to its target rather than replacing the link
+    const target = this.virtualProviders.some(vp => vp.handles(path)) ? path : await this._canon(path, true);
+    await this.writeFile(target, combined);
   }
 
   async mkdir(path: string, options?: { recursive?: boolean }): Promise<void> {
@@ -788,15 +989,13 @@ export class FileSystem {
    * callers (node's fs.writeFileSync of binary data) that read the file right back.
    */
   writeNow(path: string, content: Uint8Array): Promise<void> {
-    if (this.cacheEnabled) {
-      const prev = this.cache.get(path);
-      const now = Date.now();
-      this.cache.set(path, {
-        path, type: 'file', content,
-        mode: prev?.mode ?? 0o644, mtime: now, ctime: prev?.ctime ?? now, size: content.length,
-      } as FSNode);
-      this._allKeysCache = null;
-    }
+    const prev = this.cache.get(path);
+    const now = Date.now();
+    this.cache.set(path, {
+      path, type: 'file', content,
+      mode: prev?.mode ?? 0o644, mtime: now, ctime: prev?.ctime ?? now, size: content.length,
+    } as FSNode);
+    this._noteKey(path, true);
     return this.writeFile(path, content);
   }
 
@@ -805,13 +1004,11 @@ export class FileSystem {
    * callers (node's fs.unlinkSync) that list or stat the directory right after.
    */
   unlinkNow(path: string): Promise<void> {
-    // Take the cached node before it is dropped below
-    const cached = this.cacheEnabled ? this.cache.get(path) : undefined;
+    // Take the cached node before it is dropped below (unlink() canonicalizes asynchronously)
+    const cached = this.cache.get(path);
     const done = cached ? this._unlinkNode(path, cached) : this.unlink(path);
-    if (this.cacheEnabled) {
-      this.cache.set(path, undefined);
-      this._allKeysCache = null;
-    }
+    this.cache.set(path, undefined);
+    this._noteKey(path, false);
     return done;
   }
 

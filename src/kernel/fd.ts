@@ -405,10 +405,10 @@ class Inode {
   size: number;
   opens = 0;
   dirty = false;
-  /** Unlinked (or replaced by a rename) while open: keeps its data, never written back */
-  detached = false;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private flushing: Promise<void> | null = null;
+  /** The path was unlinked while open: the data lives on for the open fds only. */
+  unlinked = false;
 
   constructor(public fs: FileSystem, public path: string, initial: Uint8Array, public mode: number, public mtimeMs: number, public ctimeMs: number) {
     this.data = initial;
@@ -431,11 +431,11 @@ class Inode {
   async flush(): Promise<void> {
     if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
     while (this.flushing) await this.flushing;
-    if (this.detached) { this.dirty = false; return; }
-    if (!this.dirty) return;
+    if (!this.dirty || this.unlinked) return;
     this.dirty = false;
     const snapshot = this.data.slice(0, this.size);
-    this.flushing = this.fs.writeFile(this.path, snapshot).finally(() => { this.flushing = null; });
+    // Paced by the IndexedDB commit: writes made meanwhile go into one later snapshot
+    this.flushing = this.fs.writeFile(this.path, snapshot).then(() => this.fs.flushed()).finally(() => { this.flushing = null; });
     await this.flushing;
   }
 }
@@ -466,24 +466,39 @@ async function closeInode(ino: Inode): Promise<void> {
 }
 
 /**
- * rename(2) of a path with open files: their pending writes go out first,
- * and later writes follow the file to its new name. A file the rename
- * replaces stays readable through its open fds but is no longer written
- * back (it is gone, as on Linux). Call before FileSystem.rename.
+ * Call before renaming `from` to `to` in the FileSystem: writes back what
+ * open descriptions hold for `from` (and anything under it), and afterwards
+ * (the returned function) moves those inodes to their new paths, so a later
+ * flush doesn't recreate `from` (compilers write a temp file and rename it
+ * while it is still open). An inode open at `to` is replaced, as by unlink.
  */
-export async function renameInodes(fs: FileSystem, from: string, to: string): Promise<void> {
+export async function renameInodes(fs: FileSystem, from: string, to: string): Promise<() => void> {
   const table = inodeTables.get(fs);
-  if (!table || from === to) return;
-  for (const [path, ino] of [...table]) {
-    if (path === to || path.startsWith(to + '/')) { ino.detached = true; table.delete(path); }
-  }
-  for (const [path, ino] of [...table]) {
-    if (path !== from && !path.startsWith(from + '/')) continue;
-    await ino.flush();
-    table.delete(path);
-    ino.path = to + path.slice(from.length);
-    table.set(ino.path, ino);
-  }
+  if (!table) return () => {};
+  const moved = [...table.values()].filter(ino => ino.path === from || ino.path.startsWith(from + '/'));
+  for (const ino of moved) await ino.flush();
+  return () => {
+    const old = table.get(to);
+    if (old && !moved.includes(old)) { old.unlinked = true; table.delete(to); }
+    for (const ino of moved) {
+      table.delete(ino.path);
+      ino.path = to + ino.path.slice(from.length);
+      table.set(ino.path, ino);
+    }
+  };
+}
+
+/**
+ * Call before unlinking `path`: open descriptions keep its data but never
+ * write it back (this waits out a write-back already under way).
+ */
+export async function unlinkInode(fs: FileSystem, path: string): Promise<void> {
+  const table = inodeTables.get(fs);
+  const ino = table?.get(path);
+  if (!ino || !table) return;
+  ino.unlinked = true;
+  table.delete(path);
+  await ino.flush();
 }
 
 /** Write out pending data of an open file at `path` (before a metadata update reads and rewrites its node). */
@@ -494,16 +509,7 @@ export async function flushInode(fs: FileSystem, path: string): Promise<void> {
 /** Size and mtime of a file open at `path`, which may be ahead of the filesystem's copy. */
 export function openInodeInfo(fs: FileSystem, path: string): { size: number; mtimeMs: number } | undefined {
   const ino = inodeTables.get(fs)?.get(path);
-  return ino && !ino.detached ? { size: ino.size, mtimeMs: ino.mtimeMs } : undefined;
-}
-
-/** unlink(2) of a path with open files: they keep their data but are never written back. */
-export function unlinkInode(fs: FileSystem, path: string): void {
-  const table = inodeTables.get(fs);
-  const ino = table?.get(path);
-  if (!ino) return;
-  ino.detached = true;
-  table!.delete(path);
+  return ino && !ino.unlinked ? { size: ino.size, mtimeMs: ino.mtimeMs } : undefined;
 }
 
 /** Stable small inode numbers for paths (the FileSystem has none). */
@@ -606,7 +612,8 @@ export class RegularFile implements OpenFile {
     return 0;
   }
 
-  async sync(): Promise<void> { await this.ino.flush(); }
+  // fsync: the inode's snapshot into the fs, then the fs's write-behind queue to IndexedDB
+  async sync(): Promise<void> { await this.ino.flush(); await this.ino.fs.sync(); }
 
   poll(events: number): number { return events & (POLLIN | POLLOUT); }
   onReady(cb: () => void): () => void { return this.listeners.add(cb); }

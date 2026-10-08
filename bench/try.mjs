@@ -15,6 +15,7 @@ await h.eval(async () => { await window.__bench.fetchInto('/__bench/kbench.wasm'
 globalThis.tcp = tcp;
 for (const c of process.argv.slice(2)) {
   if (c.startsWith('js:')) console.log(c, '→', JSON.stringify(await h.eval(new Function('return (async () => {' + c.slice(3) + '})()'))));
+  else if (c === 'workers') console.log('workers →', h.page.workers().length);
   else console.log(c, '→', JSON.stringify(await h.sh(c)));
 }
 await h.close(); await server.close(); await tcp.close();

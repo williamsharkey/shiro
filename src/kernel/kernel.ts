@@ -167,6 +167,11 @@ export class Kernel {
     this.devices.set(path, opener);
   }
 
+  /** Remove a device node (a closed pty's /dev/pts/N), so its opener can be collected. */
+  unregisterDevice(path: string): void {
+    this.devices.delete(path);
+  }
+
   /**
    * Handle syscall numbers outside kernel.ts (net.ts sockets, pty.ts or
    * signals.ts overrides, runtime-specific calls). Later registrations run
@@ -1090,8 +1095,10 @@ export class Kernel {
           if (flags & ~A.RENAME_NOREPLACE) return -A.EINVAL;
           if ((flags & A.RENAME_NOREPLACE) && (await fs().exists(to))) return -A.EEXIST;
           if (!(await fs().exists(from))) return -A.ENOENT;
-          await renameInodes(fs(), from, to);
+          // Open files follow the rename (their buffered data must not land at the old path)
+          const moved = await renameInodes(fs(), from, to);
           await fs().rename(from, to);
+          moved();
           shareInodeNumber(from, to);
           forgetInodeNumber(from);
           return 0;
@@ -1120,7 +1127,7 @@ export class Kernel {
           if (!rmdir && isDir) return -A.EISDIR;
           if (rmdir && !isDir) return -A.ENOTDIR;
           if (isDir) await fs().rmdir(p);
-          else { unlinkInode(fs(), p); await fs().unlink(p); forgetInodeNumber(p); }
+          else { await unlinkInode(fs(), p); await fs().unlink(p); forgetInodeNumber(p); }
           return 0;
         }
         case A.SYS_symlink:

@@ -119,7 +119,12 @@ export function installWasmLoader(kernel: Kernel): void {
     if (!found) return null;
     return async (p, kk) => {
       const module = await compileCached(found.path, found.image);
-      return wasmRunner(module, found.image)(p, kk);
+      // A package's program keeps its mounts when started by path (clang's driver running wasm-ld)
+      let mounts: Record<string, string> | undefined;
+      if (kk.fs) {
+        try { mounts = await (await import('../pkg-manager')).packageMountsForPath(kk.fs, found.path); } catch { /* none */ }
+      }
+      return wasmRunner(module, found.image, [], mounts)(p, kk);
     };
   });
 }
@@ -238,24 +243,39 @@ async function wasixSignal(kernel: Kernel, proc: Process, op: number, sig: numbe
  * names. Some wasi-libc builds never match a "/" preopen against "/usr/...",
  * so programs built with them only reach directories preopened by name.
  */
-export function wasmRunner(module: WebAssembly.Module, image?: Uint8Array, extraPreopens: string[] = []): Runner {
+/**
+ * `mounts`: guest path → absolute directory, preopened under the guest path
+ * (a per-process view, like a mount namespace: WASI libcs resolve an absolute
+ * path through the longest matching preopen).
+ */
+export function wasmRunner(
+  module: WebAssembly.Module, image?: Uint8Array, extraPreopens: string[] = [], mounts?: Record<string, string>,
+  /** The program's own path (/proc/self/exe, an empty-name exec); default: `proc.path` found on PATH */
+  exe?: string,
+): Runner {
   return async (proc, kernel) => {
     const mode = wasmProcessMode();
     if (mode === 'none') throw new Error('WASM processes need SharedArrayBuffer or JSPI');
     if (!proc.env.PWD) proc.env.PWD = proc.cwd;
     installWasiSyscalls(kernel);
-    const preopens = await openPreopens(kernel, proc, extraPreopens);
+    const preopens = await openPreopens(kernel, proc, extraPreopens, mounts);
     if (typeof preopens === 'number') throw new Error(`cannot open preopened directories (errno ${-preopens})`);
-    return mode === 'jspi' ? runJspi(kernel, proc, module, preopens) : runWorkers(kernel, proc, module, image, preopens);
+    if (mode === 'jspi') return runJspi(kernel, proc, module, preopens);
+    const self = exe ?? (await findWasm(kernel, proc, proc.path).catch(() => null))?.path;
+    return runWorkers(kernel, proc, module, image, preopens, undefined, self);
   };
 }
 
 /** "/", any extra directories, and "." (the cwd) as WASI preopens, close-on-exec so children get their own. */
-async function openPreopens(kernel: Kernel, proc: Process, extra: string[] = []): Promise<Preopen[] | number> {
+async function openPreopens(kernel: Kernel, proc: Process, extra: string[] = [], mounts: Record<string, string> = {}): Promise<Preopen[] | number> {
   const out: Preopen[] = [];
-  for (const [name, path] of [['/', '/'], ...extra.map(d => [d, d]), ['.', proc.cwd]]) {
+  const mountList = Object.entries(mounts).filter(([guest]) => guest !== '/' && !extra.includes(guest));
+  for (const [name, path] of [['/', '/'], ...extra.map(d => [d, d]), ...mountList, ['.', proc.cwd]]) {
     const f = await kernel.open(proc, path, A.O_RDONLY | A.O_DIRECTORY);
-    if (typeof f === 'number') return f;
+    if (typeof f === 'number') {
+      if (mounts[name] === path) continue; // a mount whose directory is missing: leave the path as it is
+      return f;
+    }
     const fd = proc.fds.alloc(f, 3, true);
     if (fd < 0) { await f.close(); return fd; }
     out.push({ fd, name, path });
@@ -280,7 +300,7 @@ interface ForkResume { memory: WebAssembly.Memory; state: WasixForkState }
 
 function runWorkers(
   kernel: Kernel, proc: Process, module: WebAssembly.Module, image: Uint8Array | undefined, preopens: Preopen[],
-  resume?: ForkResume,
+  resume?: ForkResume, exe?: string,
 ): Promise<number | void> {
   return getWorkerFactory().then(factory => new Promise<number | void>((resolve) => {
     const memImport = image ? findMemoryImport(image) : null;
@@ -293,13 +313,13 @@ function runWorkers(
       : undefined);
     const funcSigs = image ? moduleFuncSigs(module, image) : undefined;
     const wasi = (thread?: { startArg: number }) => ({
-      module, preopens, memory, thread, dylink, funcSigs,
+      module, preopens, memory, thread, dylink, funcSigs, exe,
       memoryImport: memImport ? { module: memImport.module, name: memImport.name } : undefined,
     });
     const onGuestMessage = (m: unknown, isThread: boolean) => {
       const msg = m as WasiGuestMessage;
       if (msg?.type === 'wasix-fork') { proc.data.wasixForkState = msg.state; return; }
-      if (msg?.type === 'wasix-signals') { signalInfo = msg; return; }
+      if (msg?.type === 'wasix-signals') { signalInfo = msg.callback ? { callback: msg.callback, tlsBase: msg.tlsBase } : null; return; }
       if (msg?.type !== 'wasi-error' || proc.exiting) return;
       // Could not instantiate: 126 like an exec failure, or abort if a thread failed
       void kernel.writeAll(proc, 2, new TextEncoder().encode(`${proc.comm}: ${msg.message}\n`)).finally(() => {
@@ -367,7 +387,7 @@ function runWorkers(
       new Uint8Array(copy.buffer).set(src);
       const child = kernel.spawn({
         path: proc.path, argv: [...proc.argv], env: { ...proc.env }, cwd: proc.cwd, parent: proc, fds: {},
-        run: (p, k) => runWorkers(k, p, module, image, preopens, { memory: copy, state }),
+        run: (p, k) => runWorkers(k, p, module, image, preopens, { memory: copy, state }, exe),
       });
       // fork(2) keeps every fd (close-on-exec ones too) and the signal state; the program starts after a microtask
       void child.fds.closeAll();

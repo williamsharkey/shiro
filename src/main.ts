@@ -17,7 +17,6 @@ import { registry } from './registry';
 import { lazyCommand } from './utils/lazy-command';
 import { shellBuiltins } from './commands/shell-builtins';
 import { shiroCmds } from './commands/shiro-cmds';
-import { gitCmd } from './commands/git';
 import { grepCmd } from './commands/grep';
 import { sedCmd } from './commands/sed';
 import { fetchCmd, curlCmd } from './commands/fetch';
@@ -31,7 +30,6 @@ import { sourceCmd, dotCmd } from './commands/source';
 import { jobsCmd, fgCmd, bgCmd, waitCmd } from './commands/jobs';
 import { hcCmd } from './commands/hc';
 import { testCmd } from './commands/test';
-import { reloadCmd } from './commands/reload';
 import { serveCmd, serversCmd } from './commands/serve';
 import { clipReportCmd } from './commands/clip-report';
 import { remoteCmd, getPersistedRemoteCode, startRemoteWithCode } from './commands/remote';
@@ -61,6 +59,7 @@ import { gzipCmd, gunzipCmd } from './commands/gzip';
 import { wgetCmd } from './commands/wget';
 import { pgrepCmd, pkillCmd } from './commands/pgrep';
 import { nprocCmd } from './commands/nproc';
+import { syncCmd } from './commands/sync';
 import { getconfCmd } from './commands/getconf';
 import { iconvCmd } from './commands/iconv';
 import { speakCmd } from './commands/speak';
@@ -237,7 +236,9 @@ async function main() {
 
   // Register additional Shiro commands
   // These are registered in both CommandRegistry and ModuleRegistry for hot-reload
-  registerCommand(commands, gitCmd, 'src/commands/git.ts');
+  // Lazy: git.ts pulls in isomorphic-git (~150 KB), reload.ts esbuild-wasm's JS API
+  registerCommand(commands, lazyCommand('git', 'Version control system',
+    () => import('./commands/git').then(m => m.gitCmd)), 'src/commands/git.ts');
   registerCommand(commands, grepCmd, 'src/commands/grep.ts');
   registerCommand(commands, sedCmd, 'src/commands/sed.ts');
   registerCommand(commands, fetchCmd, 'src/commands/fetch.ts');
@@ -263,7 +264,8 @@ async function main() {
   registerCommand(commands, waitCmd, 'src/commands/jobs.ts');
   registerCommand(commands, hcCmd, 'src/commands/hc.ts');
   registerCommand(commands, testCmd, 'src/commands/test.ts');
-  registerCommand(commands, reloadCmd, 'src/commands/reload.ts');
+  registerCommand(commands, lazyCommand('reload', 'Hot-reload modules from virtual filesystem',
+    () => import('./commands/reload').then(m => m.reloadCmd)), 'src/commands/reload.ts');
   registerCommand(commands, lazyCommand('termcast', 'Record terminal sessions in asciicast format',
     () => import('./commands/termcast').then(m => m.termcastCmd)), 'src/commands/termcast.ts');
   registerCommand(commands, serveCmd, 'src/commands/serve.ts');
@@ -317,6 +319,7 @@ async function main() {
   registerCommand(commands, pgrepCmd, 'src/commands/pgrep.ts');
   registerCommand(commands, pkillCmd, 'src/commands/pgrep.ts');
   registerCommand(commands, nprocCmd, 'src/commands/nproc.ts');
+  registerCommand(commands, syncCmd, 'src/commands/sync.ts');
   registerCommand(commands, getconfCmd, 'src/commands/getconf.ts');
   registerCommand(commands, lazyCommand('ed', 'Line editor',
     () => import('./commands/ed').then(m => m.edCmd)), 'src/commands/ed.ts');

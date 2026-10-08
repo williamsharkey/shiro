@@ -64,7 +64,8 @@ list `pkg update` fetches).
     "files": [{ "path": "bin/sqlite3.wasm",
                 "url": "/pkg/sqlite/3.50.4/sqlite3.wasm",  // or https://
                 "sha256": "a602...", "size": 1679802 }],
-    "bin": { "sqlite3": { "file": "bin/sqlite3.wasm" } },  // + "args", "shadow"
+    "bin": { "sqlite3": { "file": "bin/sqlite3.wasm" } },  // + "args", "shadow", "self"
+    "mounts": { "/sysroot": "share/sysroot" }, // guest path → package dir (per process)
     "needs": [],                              // kernel features required at all
     "wants": ["blocking-stdin"],              // features some modes need
     "notes": "Interactive mode needs blocking stdin; ..."
@@ -105,9 +106,10 @@ globalThis.__shiroKernel = { features: ['sockets'] };
 
 ## Packages
 
-Status as of 2026-10-08 (kernel round 2, unix/pty merged), run through the
-shell in vitest (`pkg.test.ts`), in both the in-page runtime and as kernel
-processes. "partial" means batch use
+Status as of 2026-10-08 (unix/wasix), run through the shell in vitest
+(`pkg.test.ts`, and `kernel-wasix.test.ts` for bash, dash, php, python,
+clang and curl), in both the in-page runtime and as kernel processes; the
+WASIX ones also at the prompt in Chromium on a cross-origin isolated page. "partial" means batch use
 works everywhere and the interactive mode needs a page that can block.
 
 | Package | Version | Source | ABI | Status |
@@ -126,16 +128,16 @@ works everywhere and the interactive mode needs a page that can block.
 | openssl-wasm (openssl) | 0.2.0 (OpenSSL 1.1) | Wasmer | wasi_unstable | ok (no s_client: sockets). The `openssl` package is now OpenSSL 3.5 as an x86-64 build ([COMPAT.md](COMPAT.md)) |
 | quickjs (qjs) | 0.0.3 | Wasmer | wasi_unstable | partial: REPL |
 | util-linux (cal only) | 0.0.1 | Wasmer | wasi_unstable | ok; exits 1 after correct output |
-| grep (GNU 3.12), sed (GNU 4.9) | | Wasmer | WASIX | ok as kernel processes, as `/usr/bin/grep` and `/usr/bin/sed`; `grep -r` fails with ENOSYS |
+| grep-wasix, sed-wasix (GNU grep 3.12, sed 4.9) | | Wasmer | WASIX | ok as kernel processes, as `/usr/bin/grep` and `/usr/bin/sed`; `grep -r` fails with ENOSYS. The `grep` and `sed` packages are now x86-64 builds ([COMPAT.md](COMPAT.md)) |
 | ripgrep (rg) | 15.2.1 | Wasmer | WASIX | ok as kernel processes, as `/usr/bin/rg` |
 | quickjs-ng (qjs-ng) | 0.15.1 | Wasmer | WASIX | ok as kernel processes |
 | less-wasix (less) | 685 | Wasmer | WASIX | runs as kernel processes; passthrough checked, interactive paging not yet. The `less` package is now the x86-64 build ([COMPAT.md](COMPAT.md)) |
 | bash | 1.0.25 | Wasmer | WASIX | ok as kernel processes: scripts, `-c`, interactive on the pty (readline editing, ^C), fork/exec/pipelines/`$(...)`, `wait` |
 | dash | 1.0.19 | Wasmer | WASIX | ok as kernel processes, as bash; this early build's exec passes no environment, so exported variables don't reach children |
 | php | 8.3 | Wasmer | WASIX | ok as kernel processes (`php -r`, exceptions, fatal errors through zend_bailout's longjmp); 86 MB |
-| python3.13 | 3.13 | Wasmer | WASIX | runs as a kernel process (`-c`, stdlib imports) given its standard library; the package needs mounts for that (62 MB) |
-| clang 16, lld, llvm-ar/nm | 16 | Wasmer | WASIX | `--version` runs; needs mounts for its sysroot (111 MB) |
-| curl-wasix (curl) | 8.4.0 | Wasmer | WASIX | The `curl` package is now curl 8.22 as an x86-64 build ([COMPAT.md](COMPAT.md)). ok as kernel processes: HTTP and HTTPS (OpenSSL in the guest) through the kernel sockets and the TCP relay; real sites need its CA certificates mounted at `/openssl` |
+| python3.13 | 3.13 | Wasmer | WASIX | ok as kernel processes: `-c`, stdlib imports (json, zoneinfo, ...) with its volumes mounted at their `/nix/store` paths; no side modules (dlopen) (62 MB) |
+| clang 16, lld, llvm-ar/nm | 16 | Wasmer | WASIX | ok as kernel processes: `clang hello.c -o hello.wasm` compiles and links (the driver runs `clang-16 -cc1` and `wasm-ld` as child processes, sysroot mounted at `/sysroot`, headers at `/lib`), and the output runs (111 MB) |
+| curl-wasix (curl) | 8.4.0 | Wasmer | WASIX | The `curl` package is now curl 8.22 as an x86-64 build ([COMPAT.md](COMPAT.md)). ok as kernel processes: HTTP and HTTPS (OpenSSL in the guest, CA certificates mounted at `/openssl`) through the kernel sockets and the TCP relay; `/usr/bin/curl` (the builtin keeps the name) |
 
 "Ok as kernel processes" means installable and working where WASM processes
 can use threads (`sab` mode: a cross-origin isolated page). Without that, WASIX
@@ -147,8 +149,8 @@ What the WASIX packages needed from the kernel guest (`src/wasi/wasi-guest.ts`):
 `proc_signals_sizes_get`/`proc_signals_get` and `proc_exit2` (WASIX libc
 startup exits 71 through them, and then trapped), `path_open2` and
 `fd_fdflags_get/set` (GNU tools open files with them), and preview1 calls
-imported under `wasix_32v1` (early builds such as dash). What still blocks the
-rest:
+imported under `wasix_32v1` (early builds such as dash). The four features
+that kept the rest gated, now provided in `sab` mode:
 
 - `wasix-stack` (done): WASIX builds are asyncified, so the guest captures
   and rewinds the stack itself (`src/wasi/asyncify.ts`): setjmp/longjmp,
@@ -157,11 +159,18 @@ rest:
 - `dynamic-linking` (done, sab mode): python is a position-independent
   module; `src/wasi/dylink.ts` lays it out and `src/wasi/dyncall.ts` serves
   the WASIX dynamic calls its trampolines use. Loading side modules (dlopen)
-  is not implemented. Python still needs `mounts` for its standard library.
-- `mounts`: clang's sysroot volumes belong at `/sysroot` and `/lib`.
+  is not implemented: programs see dlopen fail (ENOSYS).
+- `mounts` (done): an entry's `mounts` map guest paths to package
+  directories, applied per process as WASI preopens named after the guest
+  path (also for package programs another program starts by path).
 - `sockets` (done): the guest implements the WASIX socket calls and
   `resolve` over the kernel sockets (src/kernel/net.ts), so sab and jspi
   mode provide it.
+
+Known gaps: dash's early WASIX libc execs without an environment (exported
+variables don't reach its children; bash is fine); dlopen of WASM side
+modules; `jspi` mode (no SharedArrayBuffer) has neither threads nor stack
+capture, so WASIX packages need a cross-origin isolated page.
 
 Not available as WASM anywhere checked: busybox, vim,
 git, make (no WASI builds; busybox and make also need processes).
