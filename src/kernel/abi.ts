@@ -46,6 +46,7 @@ export const SYS_setsid = 112;
 export const SYS_getpgid = 121;
 export const SYS_getsid = 124;
 export const SYS_getdents64 = 217;
+export const SYS_clock_gettime = 228;
 export const SYS_exit_group = 231;
 export const SYS_openat = 257;
 export const SYS_dup3 = 292;

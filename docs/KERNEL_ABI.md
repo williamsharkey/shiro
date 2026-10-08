@@ -35,6 +35,9 @@ All changes so far are additive; nothing below renames or removes an earlier nam
     `/proc/loadavg`, `/proc/uptime` come from the process table (other
     `/proc` files are still the FileSystem's). `Process.syscalls`,
     `kernelMs`, `inSyscall`, `exitTime`; `Kernel.lastPid`.
+  - `SYS_clock_gettime` (228) for `CLOCK_REALTIME`, the monotonic clocks
+    and `CLOCK_BOOTTIME`, all counting from the kernel's boot (`procfs.ts`
+    `bootMs`) except realtime.
   - ptys: `TIOCPKT`/`TIOCGPKT`. Stat of a device opens it `O_NOCTTY` and
     closes it again.
   - `sh` as a kernel process with no script on a terminal (or `-i`) runs

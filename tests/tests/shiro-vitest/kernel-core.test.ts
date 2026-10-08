@@ -410,6 +410,20 @@ describe('kernel processes', () => {
     expect(await cat('/proc/loadavg')).toMatch(/^\d+\.\d\d \d+\.\d\d \d+\.\d\d \d+\/\d+ \d+\n$/);
     expect(await cat('/proc/uptime')).toMatch(/^\d+\.\d\d \d+\.\d\d\n$/);
     expect(await kernel.open(proc, '/proc/self/stat', A.O_WRONLY)).toBe(-A.EACCES);
+    // a /proc file kept open and rewound reads fresh text (top's refresh)
+    const up = (await kernel.open(proc, '/proc/uptime', A.O_RDONLY)) as OpenFile;
+    const b1 = new Uint8Array(64);
+    const first = new TextDecoder().decode(b1.subarray(0, await up.read(b1)));
+    expect(await up.read(b1)).toBe(0);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(up.seek!(0, A.SEEK_SET)).toBe(0);
+    const second = new TextDecoder().decode(b1.subarray(0, await up.read(b1)));
+    expect(parseFloat(second)).toBeGreaterThan(parseFloat(first));
+    // CLOCK_BOOTTIME counts from the same boot as /proc/uptime
+    expect(await kernel.syscall(proc, A.SYS_clock_gettime, [7], data)).toBe(0);
+    const bootSecs = Number(new DataView(data.buffer).getBigInt64(0, true));
+    expect(Math.abs(bootSecs - parseFloat(second))).toBeLessThanOrEqual(1);
+    expect(await kernel.syscall(proc, A.SYS_clock_gettime, [99], data)).toBe(-A.EINVAL);
     kernel.kill(proc.pid, A.SIGKILL);
   });
 

@@ -15,7 +15,7 @@
  * the kernel and read as 0.
  */
 import * as A from './abi';
-import { BufferFile, DirFile, type OpenFile } from './fd';
+import { DirFile, ReadyListeners, type OpenFile } from './fd';
 import type { FileSystem } from '../filesystem';
 import type { Kernel } from './kernel';
 import type { Process } from './process';
@@ -23,7 +23,7 @@ import type { Process } from './process';
 /** USER_HZ: the clock ticks /proc counts in. */
 const HZ = 100;
 /** When this page "booted": /proc/uptime, btime and process start times count from here. */
-const bootMs = Date.now();
+export const bootMs = Date.now();
 const PAGE = 4096;
 
 type Node =
@@ -49,6 +49,54 @@ class ProcDirFile extends DirFile {
   override async stat(): Promise<A.KStat> { return dirStat(this.path); }
 }
 
+/**
+ * A generated /proc file: its text is taken when first read after open or a
+ * seek back to the start, so programs that keep it open and rewind it
+ * (procps' /proc/stat, top's refresh) see fresh values, as on Linux.
+ */
+class ProcFile implements OpenFile {
+  kind = 'file' as const;
+  private data: Uint8Array | null = null;
+  private pos = 0;
+  private listeners = new ReadyListeners();
+  constructor(public path: string, public flags: number, private text: () => string) {}
+  private snapshot(): Uint8Array {
+    this.data ??= new TextEncoder().encode(this.text());
+    return this.data;
+  }
+  async read(buf: Uint8Array): Promise<number> {
+    const d = this.snapshot();
+    const n = Math.max(0, Math.min(buf.length, d.length - this.pos));
+    buf.set(d.subarray(this.pos, this.pos + n));
+    this.pos += n;
+    return n;
+  }
+  async pread(buf: Uint8Array, off: number): Promise<number> {
+    const d = off === 0 ? (this.data = new TextEncoder().encode(this.text())) : this.snapshot();
+    const n = Math.max(0, Math.min(buf.length, d.length - off));
+    buf.set(d.subarray(off, off + n));
+    return n;
+  }
+  async write(): Promise<number> { return -A.EBADF; }
+  seek(off: number, whence: number): number {
+    const base = whence === A.SEEK_SET ? 0 : whence === A.SEEK_CUR ? this.pos : whence === A.SEEK_END ? this.snapshot().length : -1;
+    if (base < 0 || base + off < 0) return -A.EINVAL;
+    this.pos = base + off;
+    if (this.pos === 0) this.data = null; // regenerate on the next read
+    return this.pos;
+  }
+  poll(events: number): number { return events & (A.POLLIN | A.POLLOUT); }
+  onReady(cb: () => void): () => void { return this.listeners.add(cb); }
+  async stat(): Promise<A.KStat> {
+    const now = Date.now();
+    return {
+      dev: 4, ino: procIno(this.path), mode: A.S_IFREG | 0o444, nlink: 1, uid: 1000, gid: 1000, rdev: 0,
+      size: 0, blksize: 1024, blocks: 0, atimeMs: now, mtimeMs: now, ctimeMs: now,
+    };
+  }
+  async close(): Promise<void> {}
+}
+
 function dirStat(path: string): A.KStat {
   return {
     dev: 4, ino: procIno(path), mode: A.S_IFDIR | 0o555, nlink: 2, uid: 1000, gid: 1000, rdev: 0,
@@ -70,6 +118,29 @@ function encodeDev(major: number, minor: number): number {
 
 export class ProcFs {
   constructor(private kernel: Kernel) {}
+
+  /** CPU time of processes gone from the table, and the last value seen per pid (counters only grow). */
+  private retiredMs = 0;
+  private seenMs = new Map<number, number>();
+  /** The last /proc/stat counters handed out: top and vmstat reject counters that go backwards. */
+  private lastUser = 0;
+  private lastIdle = 0;
+
+  /** Total CPU ms of every process so far, alive or not. */
+  private totalCpuMs(now: number): number {
+    let live = 0;
+    const alive = new Set<number>();
+    for (const p of this.live()) {
+      const ms = ProcFs.cpuMs(p, now);
+      live += ms;
+      alive.add(p.pid);
+      this.seenMs.set(p.pid, ms);
+    }
+    for (const [pid, ms] of this.seenMs) {
+      if (!alive.has(pid)) { this.retiredMs += ms; this.seenMs.delete(pid); }
+    }
+    return this.retiredMs + live;
+  }
 
   /** CPU time of `p` in ms (see the file comment). */
   static cpuMs(p: Process, now = Date.now()): number {
@@ -102,6 +173,7 @@ export class ProcFs {
     if (parts.length !== 1) return undefined;
     switch (head) {
       case 'stat': return { type: 'file', text: () => this.statText() };
+      case 'vmstat': return { type: 'file', text: () => VMSTAT_KEYS.map((k) => `${k} 0`).join('\n') + '\n' };
       case 'loadavg': return { type: 'file', text: () => this.loadavgText() };
       case 'uptime': return { type: 'file', text: () => {
         const up = (Date.now() - bootMs) / 1000;
@@ -203,8 +275,8 @@ export class ProcFs {
     const n = this.ncpu();
     const ticks = (ms: number) => Math.floor(ms / (1000 / HZ));
     const procs = this.live();
-    const user = procs.reduce((s, p) => s + ticks(ProcFs.cpuMs(p, now)), 0);
-    const idle = Math.max(0, ticks((now - bootMs) * n) - user);
+    const user = this.lastUser = Math.max(this.lastUser, ticks(this.totalCpuMs(now)));
+    const idle = this.lastIdle = Math.max(this.lastIdle, ticks((now - bootMs) * n) - user);
     const line = (name: string, u: number, i: number) => `${name} ${u} 0 0 ${i} 0 0 0 0 0 0`;
     const lines = [line('cpu ', user, idle)];
     for (let c = 0; c < n; c++) lines.push(line(`cpu${c}`, Math.floor(user / n), Math.floor(idle / n)));
@@ -264,9 +336,7 @@ export class ProcFs {
     if ((flags & A.O_ACCMODE) !== A.O_RDONLY) return -A.EACCES;
     if (n.type === 'dir') return new ProcDirFile(this.kernel.fs!, path, flags, n.list);
     if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
-    const f = new BufferFile(n.text(), flags);
-    f.path = path;
-    return f;
+    return new ProcFile(path, flags, n.text);
   }
 
   /** /proc/PID/... and /proc/self/... are wholly ours (a missing entry is ENOENT, not the FileSystem's). */
@@ -275,6 +345,13 @@ export class ProcFs {
     return /^\d+$/.test(head) || head === 'self' || head === 'thread-self';
   }
 }
+
+/** /proc/vmstat: the counters vmstat(8) reads, all 0 (there is no paging to count). */
+const VMSTAT_KEYS = [
+  'nr_free_pages', 'nr_inactive_anon', 'nr_active_anon', 'nr_inactive_file', 'nr_active_file', 'nr_dirty', 'nr_writeback',
+  'pgpgin', 'pgpgout', 'pswpin', 'pswpout', 'pgfault', 'pgmajfault', 'pgfree', 'pgsteal_kswapd', 'pgsteal_direct',
+  'pgscan_kswapd', 'pgscan_direct', 'pgalloc_normal', 'pgactivate', 'pgdeactivate',
+];
 
 const PID_ENTRIES = ['cmdline', 'comm', 'cwd', 'environ', 'exe', 'fd', 'io', 'mounts', 'root', 'stat', 'statm', 'status', 'task'];
 

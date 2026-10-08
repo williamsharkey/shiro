@@ -218,6 +218,8 @@ in the test when `go`/`gcc` exist.
    `SO_PEERCRED` fills a `struct ucred`.
 19. `pause()` waits like `sigsuspend` (the host's `pause()` never saw
    signals the embedder queues); Shiro `TIOCPKT`/`TIOCGPKT`.
+20. Shiro `clock_gettime(CLOCK_BOOTTIME)` comes from the kernel (procps'
+   uptime and start times line up with `/proc`).
 
 Native Blink's own exit path (`KillOtherThreads`) still hangs after
 multi-threaded Go programs; the wasm build doesn't use it.

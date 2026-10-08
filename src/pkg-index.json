@@ -2544,6 +2544,147 @@
    "needs": [
     "x86"
    ]
+  },
+  {
+   "name": "htop",
+   "version": "3.5.3",
+   "description": "Interactive process viewer (static x86-64 build)",
+   "license": "GPL-2.0-or-later",
+   "source": "https://github.com/htop-dev/htop/releases/download/3.5.3/htop-3.5.3.tar.xz",
+   "homepage": "https://htop.dev/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/htop.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/htop",
+     "url": "/pkg/htop/3.5.3/htop.gz",
+     "sha256": "f3d4ff1b8f2b283162979e808606be17ddf3d93ac5fec37afde36bd81353270d",
+     "size": 256209,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "htop": {
+     "file": "bin/htop"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "procps",
+   "version": "4.0.7",
+   "description": "procps-ng: top, ps, free, uptime, pgrep/pkill, pidof, watch, vmstat, w (static x86-64 build)",
+   "license": "GPL-2.0-or-later",
+   "source": "https://downloads.sourceforge.net/project/procps-ng/Production/procps-ng-4.0.7.tar.xz",
+   "homepage": "https://gitlab.com/procps-ng/procps",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/procps.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/free",
+     "url": "/pkg/procps/4.0.7/free.gz",
+     "sha256": "7e8dc98afbf951a0c917b07af9c1eca866a96c2e48d19bc8b08f35b1e56115ec",
+     "size": 37348,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/pgrep",
+     "url": "/pkg/procps/4.0.7/pgrep.gz",
+     "sha256": "d498ee9204930dfbafede344a3bf3aa892582e73c8e8bb47e9058697e899e83d",
+     "size": 83382,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/pidof",
+     "url": "/pkg/procps/4.0.7/pidof.gz",
+     "sha256": "6126295e4c447f2193d023b332b002f2ab04118dfa18d3037626b0306b323b05",
+     "size": 56675,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/ps",
+     "url": "/pkg/procps/4.0.7/ps.gz",
+     "sha256": "0b38aa7968a4ad4cec6682019e610de4ba4a9e3fea0bc72c82115d56c66c0165",
+     "size": 111589,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/top",
+     "url": "/pkg/procps/4.0.7/top.gz",
+     "sha256": "b1a91506932afd8aa4d3fb75db1874f5801987de8fe3b7c25cbd52476b53a2c2",
+     "size": 161749,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/uptime",
+     "url": "/pkg/procps/4.0.7/uptime.gz",
+     "sha256": "2ea5f4685c11cb58c9703ad41259d64e930c9c4bb6c8401182a9180c3dbdf48e",
+     "size": 59881,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/vmstat",
+     "url": "/pkg/procps/4.0.7/vmstat.gz",
+     "sha256": "42370f1742a00b80122802ddc3e605b8050cb81316e0c6df6692eff106da549f",
+     "size": 88468,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/w",
+     "url": "/pkg/procps/4.0.7/w.gz",
+     "sha256": "52d530a9a7713c7c3fc0eb128db8aa472d782d827a8c5e4a19c667537fcb8323",
+     "size": 70369,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/watch",
+     "url": "/pkg/procps/4.0.7/watch.gz",
+     "sha256": "cf03e9a7c2fae99e84447548d81090187b9bc6e0ab5a675ef5063f2936f65e12",
+     "size": 149858,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "top": {
+     "file": "bin/top"
+    },
+    "ps": {
+     "file": "bin/ps"
+    },
+    "free": {
+     "file": "bin/free"
+    },
+    "uptime": {
+     "file": "bin/uptime"
+    },
+    "pgrep": {
+     "file": "bin/pgrep"
+    },
+    "pidof": {
+     "file": "bin/pidof"
+    },
+    "watch": {
+     "file": "bin/watch"
+    },
+    "vmstat": {
+     "file": "bin/vmstat"
+    },
+    "w": {
+     "file": "bin/w"
+    },
+    "pkill": {
+     "file": "bin/pgrep"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
   }
  ]
 }

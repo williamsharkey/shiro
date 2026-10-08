@@ -10,7 +10,7 @@
 import type { FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
-import { ProcFs } from './procfs';
+import { ProcFs, bootMs } from './procfs';
 import { processTable, type ShiroProcess } from '../process-table';
 import * as A from './abi';
 import {
@@ -1326,6 +1326,17 @@ export class Kernel {
           const old = proc.umask;
           proc.umask = args[0] & 0o777;
           return old;
+        }
+        case A.SYS_clock_gettime: { // clockid → struct timespec; the clocks that count from boot
+          const id = args[0];
+          let ms: number;
+          if (id === 0 || id === 5) ms = Date.now(); // REALTIME(_COARSE)
+          else if (id === 1 || id === 4 || id === 6 || id === 7) ms = Date.now() - bootMs; // MONOTONIC*, BOOTTIME
+          else return -A.EINVAL;
+          const dv = new DataView(data.buffer, data.byteOffset, 16);
+          dv.setBigInt64(0, BigInt(Math.floor(ms / 1000)), true);
+          dv.setBigInt64(8, BigInt(Math.floor((ms % 1000) * 1e6)), true);
+          return 0;
         }
         case A.SYS_getdents64:
           return await this.getdents(proc, args[0], data.subarray(0, Math.min(args[1] >>> 0, data.length)));

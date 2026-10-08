@@ -660,3 +660,36 @@ describe('screen', () => {
     expect((await sh('screen -ls; echo rc=$?')).out).toMatch(/No Sockets found/);
   }, 300_000);
 });
+
+describe('procps (ps, top, free, uptime, vmstat, pgrep/pkill, watch)', () => {
+  it('reads the kernel /proc', async () => {
+    await install('procps');
+    expect((await sh('ps -o pid,ppid,comm')).out).toMatch(/^ +PID +PPID COMMAND\n +1 +0 init\n[^]* ps\n$/);
+    expect((await sh('ps -ef')).out).toMatch(/^UID +PID +PPID +C STIME TTY +TIME CMD\nuser +1 +0 +0 \d\d:\d\d \? +00:00:00 init\n/);
+    expect((await sh('free -m')).out).toMatch(/^ +total +used +free +shared +buff\/cache +available\nMem: +\d+/);
+    expect((await sh('uptime')).out).toMatch(/^ \d\d:\d\d:\d\d up +\d+ min, +0 users, +load average: \d+\.\d\d, \d+\.\d\d, \d+\.\d\d\n$/);
+    expect((await sh('vmstat')).out).toMatch(/\n r +b +swpd +free[^\n]*\n +\d+ +\d+ +0 +\d+/);
+    // top refreshes by rewinding /proc/stat: two iterations
+    const top = (await sh('top -b -n 2 -d 0.2')).out;
+    expect(top.match(/^top - \d\d:\d\d:\d\d up/gm)?.length).toBe(2);
+    expect(top).toMatch(/Tasks: +\d+ total/);
+    expect(top).toMatch(/ +PID USER +PR +NI[^\n]*COMMAND\n +1 user/);
+    // pgrep/pkill a running program
+    const bg = sh('vmstat 1 > /dev/null');
+    for (let i = 0; i < 100 && !/vmstat/.test((await sh('pgrep -l vmstat')).out); i++) await new Promise((r) => setTimeout(r, 50));
+    expect((await sh('pgrep -l vmstat')).out).toMatch(/^\d+ vmstat\n$/);
+    expect((await sh('pkill vmstat; echo rc=$?')).out).toBe('rc=0\n');
+    expect((await bg).exitCode).toBe(143); // SIGTERM
+  }, 180_000);
+});
+
+describe('htop', () => {
+  it('shows meters and the process list on the tty, and quits with q', async () => {
+    await install('htop');
+    const { term, done } = onTerminal('htop');
+    await until(() => term.screen.includes('Load average') && term.screen.includes('Uptime'), 'the meters');
+    await until(() => /PID USER +PRI/.test(term.screen) && term.screen.includes('htop') && term.screen.includes('init'), 'the process list');
+    term.type('q');
+    expect(await done).toBe(0);
+  }, 180_000);
+});
