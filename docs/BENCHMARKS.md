@@ -65,18 +65,21 @@ Measured while recording the baseline; the profiles come from
    spin briefly on the guest side before `Atomics.wait`, batch the kernel's
    replies, and answer pure queries (fstat of stdio, getpid, clock) in the
    guest.
-3. **Worker / wasm-memory leak in isolated mode.** `hygiene.procs100`:
-   **91 live Workers** left after 300 short processes, renderer RSS
-   +17–87 MiB per 100 processes (non-isolated: 0 Workers, +0.1 MiB). After
-   ~200 WASM spawns in one page new processes fail with
+3. **Exited WASM processes' Workers linger (isolated mode).**
+   `hygiene.procs100`: **91 live Workers** after 300 short processes,
+   renderer RSS +17–87 MiB per 100 processes (non-isolated: 0 Workers,
+   +0.1 MiB). The host does call `worker.terminate()` when the process exits,
+   but the Workers stay alive for seconds afterwards (20 sequential
+   `kbench nop` spawns → 20 Workers still listed 1 s later; they drain
+   slowly while other work runs). Under bursty spawning they pile up, and
+   after ~200 spawns in one page new processes fail with
    `WebAssembly.Instance(): Out of memory: Cannot allocate Wasm memory for
-   new instance` (seen in `kernel.file_write` before suites got fresh
-   pages). `runWorkers`/`workerRunner` call `worker.terminate()` from
-   `proc.onTerminate`, so look for the paths that don't (the shell's
-   kernel-job and pipeline spawns, threads, errors before `onTerminate` is
-   wired) and for the inline-worker blob URL created per Worker
-   (`?worker&inline`, never revoked). Real users hit this: a long Claude
-   Code session runs hundreds of processes.
+   new instance` (seen in `kernel.file_write` before suites got fresh pages).
+   Each Worker also holds its own wasm memory reservation and a blob URL
+   from `?worker&inline` that is never revoked. A long Claude Code session
+   runs hundreds of processes, so this is user-visible. Reusing Workers
+   (hotspot 5) fixes both; short of that, terminate from inside the guest
+   (`self.close()` after `proc_exit`) and revoke the blob URL.
 4. **WASM writes to a file are quadratic.** `kernel.file_write` 8.5 MB/s
    isolated (JSPI 205 MB/s, reads 808 MB/s). `RegularFile.touch()` schedules
    `flush()` on `setTimeout(0)`, and `flush()` writes a full snapshot of the
