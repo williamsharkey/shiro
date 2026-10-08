@@ -302,3 +302,26 @@ describe.skipIf(!haveTty)('Blink engine: interactive program on a kernel pty', (
     expect(shellExitCode((r as any).status)).toBe(130);
   }, 120_000);
 });
+
+// Blink patch 0011: the guest's fds and processes are the kernel's.
+describe('Blink engine: kernel processes (fork, exec, pipes)', () => {
+  it('fork+exec+wait, posix_spawn over a pipe, popen and system through /bin/sh', async () => {
+    const { shell } = await setup(readFileSync(join(FIX, 'proc-musl')));
+    const r = await run(shell, './prog');
+    expect(r.exitCode).toBe(0);
+    expect(r.output).toMatch(/child pid=\d+ ppid=\d+ arg=forked/);
+    expect(r.output).toContain('fork: pid>0=1 exit=7');
+    expect(r.output).toMatch(/spawn read: child pid=\d+ ppid=\d+ arg=spawned\r?\nspawn exit=7/);
+    expect(r.output).toContain('popen: HELLO FROM SH');
+    expect(r.output).toContain('pclose=0');
+    expect(r.output).toContain('system=3');
+    expect(r.output).toContain('execfail exit=42');
+  }, 60_000);
+
+  it('a writev is one write on a pipe; the guest sees kernel files and /dev/null', async () => {
+    const { shell, fs } = await setup(readFileSync(join(FIX, 'proc-musl')));
+    expect((await run(shell, './prog child x | od -c | head -3')).output).toContain('a   r   g   =   x  \\n');
+    expect((await run(shell, './prog child y > out.txt 2>/dev/null; echo $?')).output.trim()).toBe('7');
+    expect(await fs.readFile('/home/user/work/out.txt', 'utf8')).toMatch(/^child pid=\d+ ppid=\d+ arg=y\n$/);
+  }, 60_000);
+});

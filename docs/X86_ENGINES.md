@@ -101,14 +101,16 @@ in the test when `go`/`gcc` exist.
 - `vendor/blink/`: pinned upstream commit, our patches, `build.sh`
   (emsdk → `public/engines/blink/blink.{mjs,wasm}`, committed so
   `npm run build` needs no emscripten), `shiro-net.js` (sockets), `bench/`.
-- `public/engines/blink/host.mjs`: the Worker. It is a kernel guest: every
-  file and stdio request is a kernel syscall over the SAB channel
-  ([KERNEL_ABI.md](KERNEL_ABI.md)). Shiro directories are mounted as SHIROFS,
-  a MEMFS faulted in with `lstat`/`openat`/`read`/`getdents64` and written
-  back on close. fds 0/1/2 are the process's kernel fds, so pipes and
-  redirections stream; stdin reads poll first so a waiting reader doesn't
-  stall the other guest threads, and the page pings the worker when fd 0
-  becomes readable.
+- `public/engines/blink/host.mjs`: the Worker. It is a kernel guest. The
+  guest's own syscalls (patch 0011) arrive as emscripten calls proxied from
+  the guest's pthreads to the worker's main thread, which runs each on a
+  pool of kernel channels (`POOL_CHANNELS` in `src/x86-engine/blink.ts`,
+  1 MiB data areas): it posts `blink-sys`, the page runs the syscall
+  (`servePoolChannel`) and answers `blink-done`. A call blocked on one
+  channel (a read from the tty, `wait4`) doesn't hold up other threads.
+  Blink itself loads programs and ELF interpreters from SHIROFS, a MEMFS
+  over the worker's own channel, faulted in with
+  `lstat`/`openat`/`read`/`getdents64`.
 - `src/x86-engine/`: `chooseX86Engine` (Blink when SharedArrayBuffer is
   usable, else src/x86; `SHIRO_X86_ENGINE=x86` forces the old one),
   `runElfWithBlink` (the shell's `./binary` path) and `registerBlinkLoader`
@@ -174,6 +176,24 @@ in the test when `go`/`gcc` exist.
    emscripten a file mapping is one host block shared by its pages
    (`MugBlock`, refcounted); 64-bit atomics are native when the target has
    them (`CAN_ATOMIC64`).
+
+11. Kernel passthrough (`blink/shiro.inc`, included by `syscall.c`): under
+   Shiro the guest's fd, filesystem and process syscalls go to the Shiro
+   kernel through `shiro_ksys()` (`vendor/blink/shiro-kernel.js`), so guest
+   fd N is kernel fd N. `fork`/`vfork`/`clone(CLONE_VFORK)` run the child on
+   the calling thread until it calls `execve` or `_exit` (vfork semantics; the
+   kernel creates the child with `SYS_shiro_vfork`, and `fork` also saves and
+   restores the parent's live stack, which the child's return through libc
+   overwrites). `execve` goes through `SYS_shiro_execve`: an ELF is reloaded
+   in this Blink, anything else (WASM, scripts, Shiro builtins like
+   `/bin/sh`) replaces the worker in the same process. `rt_sigaction`
+   mirrors the guest's dispositions into the kernel (caught signals are
+   forwarded, ignored ones stay ignored across exec). File `mmap` reads the
+   file through the kernel into an anonymous mapping (`MAP_SHARED` writable
+   ones are written back on `msync`/`munmap`). `statx`, `waitid` (with
+   `WNOWAIT`), `eventfd`, `close_range`, `sendfile`, `readv`/`writev` (one
+   transfer) and the tty ioctls (`TIOCSCTTY`, `TIOCGPTN`, ...) are covered;
+   locks (`fcntl F_SETLK`, `flock`) always succeed.
 
 Native Blink's own exit path (`KillOtherThreads`) still hangs after
 multi-threaded Go programs; the wasm build doesn't use it.
