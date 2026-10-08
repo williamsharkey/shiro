@@ -964,7 +964,7 @@
     "threads",
     "wasix-stack"
    ],
-   "notes": "WASIX build (wasix_32v1, shared env.memory). Stops at stack_checkpoint (WASIX setjmp/fork), which the kernel guest lacks.",
+   "notes": "WASIX build (wasix_32v1, shared env.memory). fork, setjmp/longjmp and exec run as kernel processes (asyncify stack capture); interactive on the terminal's pty.",
    "wants": [
     "tty",
     "blocking-stdin"
@@ -1002,7 +1002,7 @@
     "threads",
     "wasix-stack"
    ],
-   "notes": "WASIX build (wasix_32v1, shared env.memory). Stops at stack_checkpoint (WASIX setjmp/fork), which the kernel guest lacks.",
+   "notes": "WASIX build (wasix_32v1, shared env.memory). fork, setjmp/longjmp and exec run as kernel processes (asyncify stack capture); interactive on the terminal's pty. This early build's exec passes no environment, so exported variables don't reach child programs (bash's does).",
    "wants": [
     "tty",
     "blocking-stdin"
@@ -1250,7 +1250,7 @@
     "threads",
     "wasix-stack"
    ],
-   "notes": "WASIX build (wasix_32v1, shared env.memory). 86 MB download. Stops at stack_checkpoint (WASIX setjmp)."
+   "notes": "WASIX build (wasix_32v1, shared env.memory). 86 MB download. setjmp/longjmp (zend_bailout) through asyncify stack capture."
   },
   {
    "name": "python",
