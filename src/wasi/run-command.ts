@@ -52,10 +52,26 @@ export async function runWasiProgram(ctx: CommandContext, opts: RunWasiOptions):
   const snapshot0 = WebAssembly.Module.imports(opts.module).some(i => i.module === 'wasi_unstable');
   if (wasmProcessMode() === 'none' || snapshot0) return runLegacy(ctx, opts, cwd, env);
 
-  const kernel = kernelForContext(ctx);
   const term = ctx.terminal;
   const toTerminal = !!term && ctx.stdoutIsTTY !== false;
   const interactive = toTerminal && !ctx.stdin;
+  // A terminal with a pty session: run as a foreground job on its tty (job control, termios, SIGWINCH)
+  if (toTerminal && term!.tty && ctx.shell) {
+    const { runKernelPipeline } = await import('../shell-kernel');
+    const r = await runKernelPipeline(ctx.shell, [{ argv: opts.argv, run: wasmRunner(opts.module, opts.image) }], {
+      stdin: ctx.stdin ? ctx.stdin : undefined,
+      captureStdout: false,
+      captureStderr: false,
+      writeStdout: (t) => { ctx.stdout += t; },
+      writeStderr: (t) => { ctx.stderr += t; },
+      terminal: term,
+      command: opts.argv.join(' '),
+      cwd,
+      env,
+    });
+    return r.exitCode;
+  }
+  const kernel = kernelForContext(ctx);
   let pgid = 0;
   let tty: TtyFile | null = null;
   let fds: Record<number, OpenFile>;

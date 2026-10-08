@@ -9,9 +9,12 @@ import { installOsc52 } from './utils/osc52';
 import type { TerminalLike } from './commands/index';
 import { bufferToString } from './utils/copy-utils';
 import { setActiveTerminal } from './active-terminal';
+import { TtySession } from './kernel/pty';
 
 export class WindowTerminal implements TerminalLike {
   term: Terminal;
+  /** Controlling tty for kernel jobs run in this window */
+  tty: TtySession;
   private fitAddon: FitAddon;
   private container: HTMLDivElement;
   private stdinPassthrough: ((data: string) => void) | null = null;
@@ -84,6 +87,13 @@ export class WindowTerminal implements TerminalLike {
       if (!this.disposed) this.fitAddon.fit();
     });
 
+    const ttyDecoder = new TextDecoder();
+    this.tty = new TtySession({
+      winsize: { rows: this.term.rows, cols: this.term.cols },
+      // Through writeOutput, so secret masking applies to kernel programs too
+      onOutput: (bytes) => this.writeOutput(ttyDecoder.decode(bytes, { stream: true })),
+    });
+
     // Route input
     this.term.onData((data) => this.handleInput(data));
 
@@ -97,6 +107,7 @@ export class WindowTerminal implements TerminalLike {
       if (this.disposed) return;
       this.fitAddon.fit();
       const { rows, cols } = this.getSize();
+      this.tty.resize(rows, cols);
       for (const cb of this.resizeCallbacks) cb(cols, rows);
     });
     this.resizeObserver.observe(container);
@@ -157,6 +168,12 @@ export class WindowTerminal implements TerminalLike {
   }
 
   private handleInput(data: string): void {
+    // A kernel job in the foreground reads the pty
+    if (this.tty.jobInForeground) {
+      this.tty.pty.input(data);
+      return;
+    }
+
     // Stdin passthrough takes priority (used by ink/Claude Code)
     if (this.stdinPassthrough) {
       // Double Ctrl+C force exit
@@ -280,6 +297,7 @@ export class WindowTerminal implements TerminalLike {
     this.stdinPassthrough = null;
     this.forceExitCallback = null;
     this.rawModeCallback = null;
+    this.tty.dispose();
     this.term.dispose();
   }
 }

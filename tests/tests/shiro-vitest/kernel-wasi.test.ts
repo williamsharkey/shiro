@@ -247,14 +247,15 @@ describe('kernel WASI processes', () => {
     terminal.writeOutput = (t: string) => { screen += t; orig(t); };
     let out = '';
     const done = shell.execute('wasi run /opt/wasi/readloop.wasm', (s) => { out += s; });
-    await until(() => (terminal as any).stdinPassthrough !== null && (terminal as any).stdinPassthrough !== undefined);
+    // The program runs as the foreground job on the terminal's pty (keystrokes go through its line discipline)
+    await until(() => (terminal as any).tty.jobInForeground);
     type('hi there\r');
     await until(() => screen.includes('got: hi there\r\n'));
     type('\x04');
     expect(await done).toBe(1);
     expect(screen).toContain('hi there\r\n');   // echoed by the line discipline
     expect(screen).toContain('lines: 1\r\n');
-    expect((terminal as any).stdinPassthrough).toBeNull();
+    expect((terminal as any).tty.jobInForeground).toBe(false);
   });
 
   describe('a Go (GOOS=wasip1) program', () => {

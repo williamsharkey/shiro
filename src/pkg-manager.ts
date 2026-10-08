@@ -560,6 +560,31 @@ export async function runPackageBinary(binPath: string, argv0: string, args: str
   return runInPage(mod, entry, argv, args, ctx);
 }
 
+/**
+ * A pkg-installed binary as a kernel program for a shell job (shell-kernel.ts),
+ * or null to leave it to runPackageBinary: the package is gated (it prints
+ * why), it is a snapshot-0 program (the kernel guest is preview1 only), or
+ * this page can't run WASM processes.
+ */
+export async function packageKernelProgram(
+  fs: FileSystem, binPath: string, argv0: string, args: string[],
+): Promise<{ argv: string[]; run: import('./kernel/kernel').Runner } | null> {
+  const name = packageOfPath(binPath);
+  const entry = name ? (await readStatus(fs))[name]?.entry : undefined;
+  if (!entry || entry.abi === 'wasi_unstable') return null;
+  if (await refreshRuntimeMode() === 'none' || missingFeatures(entry).length) return null;
+  const rel = binPath.slice(PKG_ROOT.length + entry.name.length + 2);
+  const bin = entry.bin[argv0]?.file === rel ? entry.bin[argv0] : Object.values(entry.bin).find(b => b.file === rel);
+  const bytes = await fs.readFile(binPath) as Uint8Array;
+  let mod = moduleCache.get(binPath);
+  if (!mod) {
+    mod = await WebAssembly.compile(bytes as BufferSource);
+    moduleCache.set(binPath, mod);
+  }
+  const { wasmRunner } = await import('./wasi/host');
+  return { argv: [argv0, ...(bin?.args || []), ...args], run: wasmRunner(mod, new Uint8Array(bytes), await topLevelDirs(fs)) };
+}
+
 /** "/usr", "/home", ...: preopened by name for libcs that don't match "/" (see wasmRunner). */
 async function topLevelDirs(fs: FileSystem): Promise<string[]> {
   const out: string[] = [];

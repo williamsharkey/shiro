@@ -72,6 +72,7 @@ import { spiritCmd } from './commands/spirit';
 // wasi and pkg are lazy-loaded (pulls in ~960-line wasi-runtime.ts)
 import { processTable } from './process-table';
 import { getKernel } from './kernel/kernel';
+import { attachKernelTty } from './kernel/pty';
 import { iframeServer } from './iframe-server';
 import { unixCommands } from './commands/unix';
 import { ShiroTerminal } from './terminal';
@@ -452,6 +453,8 @@ async function main() {
   // Kernel processes (worker guests, spawned builtins) run against this fs and fork this shell
   const kernel = getKernel();
   kernel.attach(fs, shell);
+  // Signals and job control for kernel processes; /dev/ptmx and /dev/pts/N
+  attachKernelTty(kernel);
 
   // Populate API keys from localStorage so `claude` CLI picks them up
   const storedAnthropicKey = localStorage.getItem('shiro_anthropic_key') || localStorage.getItem('shiro_api_key');

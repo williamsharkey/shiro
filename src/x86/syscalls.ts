@@ -75,6 +75,8 @@ export class LinuxSyscalls {
   onStdout: (data: string) => void;
   onStderr: (data: string) => void;
   stdinBuffer: string;
+  /** Blocking stdin (kernel processes): replaces stdinBuffer when set */
+  readStdin?: (n: number) => Promise<Uint8Array>;
 
   constructor(
     cpu: CPU, mem: VirtualMemory, fs: FileSystem, cwd: string,
@@ -151,7 +153,7 @@ export class LinuxSyscalls {
       case 7:   result = 0n; break; // poll — stub
       case 17:  result = await this.sysPread64(arg0, arg1, arg2, arg3); break;
       case 18:  result = await this.sysPwrite64(arg0, arg1, arg2, arg3); break;
-      case 19:  result = this.sysReadv(arg0, arg1, arg2); break;
+      case 19:  result = await this.sysReadv(arg0, arg1, arg2); break;
       case 28:  result = 0n; break; // madvise — no-op
       case 35:  result = this.sysNanosleep(arg0, arg1); break;
       case 41:  result = this.sysSocket(arg0, arg1, arg2); break; // socket
@@ -202,6 +204,12 @@ export class LinuxSyscalls {
   private async sysRead(fdNum: bigint, buf: bigint, count: bigint): Promise<bigint> {
     const fd = Number(fdNum);
     const n = Number(count);
+
+    if (fd === 0 && this.readStdin) {
+      const bytes = await this.readStdin(n);
+      this.mem.writeBytes(buf, bytes);
+      return BigInt(bytes.length);
+    }
 
     if (fd === 0) {
       // Read from stdin
@@ -712,7 +720,7 @@ export class LinuxSyscalls {
     return BigInt(n);
   }
 
-  private sysReadv(fdNum: bigint, iovAddr: bigint, iovcnt: bigint): bigint {
+  private async sysReadv(fdNum: bigint, iovAddr: bigint, iovcnt: bigint): Promise<bigint> {
     const fd = Number(fdNum);
     const cnt = Number(iovcnt);
     let totalRead = 0;
@@ -723,7 +731,13 @@ export class LinuxSyscalls {
       const bufLen = Number(this.mem.read64(base + 8n));
       if (bufLen === 0) continue;
 
-      if (fd === 0) {
+      if (fd === 0 && this.readStdin) {
+        // One blocking read, like readv on a tty: return what arrived
+        const bytes = await this.readStdin(bufLen);
+        this.mem.writeBytes(bufAddr, bytes);
+        totalRead += bytes.length;
+        if (bytes.length < bufLen) break;
+      } else if (fd === 0) {
         const data = this.stdinBuffer.slice(0, bufLen);
         this.stdinBuffer = this.stdinBuffer.slice(bufLen);
         const encoded = new TextEncoder().encode(data);
