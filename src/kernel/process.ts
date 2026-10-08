@@ -165,6 +165,17 @@ export class Process {
     return true;
   }
 
+  /**
+   * execve that replaces the runner: stop the current one (its terminators
+   * run, e.g. worker.terminate()) without ending the process.
+   */
+  stopRunner(): void {
+    this.interruptSyscalls();
+    for (const t of this.terminators.splice(0)) {
+      try { t(); } catch { /* ignore */ }
+    }
+  }
+
   /** Second half of exit, after the kernel has closed the fds: become a zombie and wake waiters. */
   markExited(status: number): void {
     if (this.state === 'zombie') return;
