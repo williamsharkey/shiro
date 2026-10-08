@@ -73,6 +73,21 @@ export function splitEnvPrefix(segment: string): { assignments: [string, string]
   return { assignments, rest: rest.trimStart() };
 }
 
+/**
+ * The terminal for a command whose stdout the caller collects ($(...), exec()):
+ * kernel jobs keep the tty for stdin and stderr, as in bash, but their stdout
+ * is captured instead of going to the screen.
+ */
+function capturingStdout<T extends object>(term: T): T {
+  return new Proxy(term, {
+    get(t, k) {
+      if (k === 'captureStdout') return true;
+      const v = Reflect.get(t, k, t);
+      return typeof v === 'function' ? v.bind(t) : v;
+    },
+  });
+}
+
 /** The terminal minus its pty session (for background work that must not become the foreground job) */
 function withoutTty<T extends object>(term: T): T {
   return new Proxy(term, {
@@ -286,6 +301,7 @@ export class Shell {
       (s) => { stdout += s; },
       (s) => { stderr += s; },
       remote,
+      this.terminal ? capturingStdout(this.terminal) : undefined,
     );
     return { stdout, stderr, exitCode };
   }
@@ -4889,7 +4905,7 @@ export class Shell {
     const crlf = (w: (s: string) => void) => (t: string) => w(t.replace(/\r?\n/g, '\r\n'));
     const r = await runKernelPipeline(this, programs, {
       stdin: hasShellStdin ? ctx.stdin : undefined,
-      captureStdout: last < pipeline.length - 1 || hasOutRedirect(lastRedirects),
+      captureStdout: last < pipeline.length - 1 || hasOutRedirect(lastRedirects) || !!terminal?.captureStdout,
       captureStderr: hasOutRedirect(lastRedirects),
       writeStdout: crlf(writeStdout),
       writeStderr: crlf(writeStderr),

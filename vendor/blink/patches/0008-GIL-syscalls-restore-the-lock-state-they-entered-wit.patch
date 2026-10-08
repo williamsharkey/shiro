@@ -1,0 +1,55 @@
+From 56bc190aab5e676aa70bf9f150a3cca892e40032 Mon Sep 17 00:00:00 2001
+From: shiro <x@x>
+Date: Thu, 8 Oct 2026 01:17:17 +0000
+Subject: [PATCH 08/10] GIL: syscalls restore the lock state they entered with
+
+A signal handler run from inside a blocking syscall that had released the
+GIL re-acquired it through its own rt_sigreturn, so the interrupted wait
+went back to sleep holding the lock and every other guest thread stalled.
+Syscalls now give the lock back only if they took it, and recursive signal
+delivery holds the lock while the handler runs.
+---
+ blink/syscall.c | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/blink/syscall.c b/blink/syscall.c
+index fa96ea0..6595eda 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -264,7 +264,12 @@ bool DeliverSignalRecursively(struct Machine *m, int sig) {
+   }
+   m->restored = false;
+   m->insyscall = false;
++  // The handler is guest code: it needs the interpreter lock even when the
++  // interrupted syscall gave it up; hand it back afterwards.
++  bool gil = GilHeld();
++  GilAcquire();
+   SignalActor(m);
++  if (!gil) GilRelease();
+   m->insyscall = true;
+   m->restored = false;
+   if (issigsuspend) {
+@@ -5524,7 +5529,10 @@ void OpSyscall(P) {
+   r0 = Get64(m->r10);
+   r8 = Get64(m->r8);
+   r9 = Get64(m->r9);
+-  if (g_gil_enabled && GilReleasesFor(ax & 0xfff)) GilRelease();
++  // Restore the lock state we entered with: a syscall nested in a signal
++  // handler (rt_sigreturn) must not leave an outer blocking wait holding it.
++  bool gil = GilHeld();
++  if (gil && GilReleasesFor(ax & 0xfff)) GilRelease();
+   switch (ax & 0xfff) {
+     SYSCALL(3, 0x000, "read", SysRead, STRACE_READ);
+     SYSCALL(3, 0x001, "write", SysWrite, STRACE_WRITE);
+@@ -5763,7 +5771,7 @@ void OpSyscall(P) {
+       ax = enosys();
+       break;
+   }
+-  GilAcquire();
++  if (gil) GilAcquire();
+   if (!m->interrupted) {
+     Put64(m->ax, ax != -1 ? ax : -(XlatErrno(errno) & 0xfff));
+   }
+-- 
+2.43.0
+

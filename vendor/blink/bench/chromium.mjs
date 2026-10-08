@@ -4,7 +4,7 @@
 // The page must be cross-origin isolated for the Blink engine (serve with
 // COOP same-origin + COEP credentialless). Needs playwright-core.
 import { chromium } from 'playwright-core';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 const url = process.argv[2] || 'http://localhost:5199/';
 const bins = {
   'hello-go': process.env.BENCH_DIR + '/hello-go',
@@ -14,6 +14,7 @@ const bins = {
   'cpuloop': process.env.BENCH_DIR + '/cpuloop',
   'cloop': process.env.BENCH_DIR + '/cloop',
   'go-tls': process.env.BENCH_DIR + '/go-tls',
+  'gh': process.env.BENCH_DIR + '/gh',
 };
 const cmds = (process.argv[3] || 'hello-musl;hello-glibc;hello-go a b;nethttp;cpuloop 2000000').split(';');
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', args: ['--no-sandbox'] });
@@ -24,6 +25,7 @@ await page.goto(url);
 await page.waitForFunction(() => window.__shiro && window.__shiro.shell, null, { timeout: 60000 });
 console.log('crossOriginIsolated =', await page.evaluate(() => crossOriginIsolated));
 for (const [name, path] of Object.entries(bins)) {
+  if (!existsSync(path)) continue;
   const b64 = readFileSync(path).toString('base64');
   await page.evaluate(async ([name, b64]) => {
     const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));

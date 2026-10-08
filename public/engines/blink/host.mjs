@@ -37,7 +37,7 @@ const onMessage = (fn) => (isNode ? port.on('message', fn) : port.addEventListen
 // ── Kernel channel (docs/KERNEL_ABI.md; constants from src/kernel/abi.ts) ──
 const CH_STATE = 0, CH_SYSNO = 1, CH_RESULT = 2, CH_SIGNAL = 3, CH_ARGS = 4, CH_NARGS = 12, CH_DATA = 64;
 const SYS = {
-  read: 0, write: 1, close: 3, lstat: 6, poll: 7, rt_sigaction: 13, ioctl: 16, rename: 82, mkdir: 83, rmdir: 84,
+  read: 0, write: 1, close: 3, lstat: 6, poll: 7, rt_sigaction: 13, rt_sigreturn: 15, ioctl: 16, getpid: 39, kill: 62, rename: 82, mkdir: 83, rmdir: 84,
   unlink: 87, readlink: 89, getdents64: 217, exit_group: 231, openat: 257,
 };
 // Negative Linux errno → emscripten's (WASI) errno numbering.
@@ -69,11 +69,22 @@ function sys(nr, ...args) {
   while (Atomics.load(i32, CH_STATE) === 1) Atomics.wait(i32, CH_STATE, 1);
   const r = i32[CH_RESULT];
   Atomics.store(i32, CH_STATE, 0);
+  const sig = Atomics.exchange(i32, CH_SIGNAL, 0);
   if (debug) console.error(`[blink] sys ${nr}(${args.join(', ')}) = ${r}` + (args.length && nr !== 0 && nr !== 1 ? ` ${JSON.stringify(dec.decode(data.slice(0, Math.min(args[nr === 257 ? 1 : 0] > 0 ? args[nr === 257 ? 1 : 0] : 0, 200))))}` : ''));
-  // Kernel signals aren't forwarded into the guest yet (Blink has its own).
-  Atomics.exchange(i32, CH_SIGNAL, 0);
+  if (sig) takeSignal(sig);
   return r;
 }
+// A caught signal the kernel handed over in a reply's signal word: queue it
+// in the guest (Blink runs the guest's handler or default action), then
+// rt_sigreturn so the kernel unblocks it again.
+// (One that arrives before the guest is loaded is dropped.)
+let blinkModule = null;
+function takeSignal(sig) {
+  if (debug) console.error('[blink] signal', sig);
+  blinkModule?._blink_shiro_signal?.(sig);
+  sys(SYS.rt_sigreturn);
+}
+
 function putStr(s, off = 0) {
   const b = enc.encode(s);
   if (off + b.length > data.length) return -36; // ENAMETOOLONG
@@ -432,7 +443,8 @@ async function run(msg) {
       const node = watched.get(m.fd);
       if (node) node.notifyListeners(pollFd(m.fd, POLLIN | POLLOUT | 0x2000) || POLLIN);
     } else if (m.type === 'blink-signal') {
-      M?._blink_shiro_signal?.(m.sig);
+      // The kernel signalled us: any syscall reply carries the signal word.
+      sys(SYS.getpid);
     }
   });
   // Kernel signals: SIGPIPE ignored (Blink reports EPIPE to the guest);
@@ -464,6 +476,14 @@ async function run(msg) {
       // Blink calls shiroExit on this thread as soon as the guest exits;
       // onExit only fires if emscripten's own teardown completes.
       shiroExit: (code) => exitGuest(code),
+      // A signal's default action killed the guest: die of it in the kernel
+      // too (default disposition, then kill self), so waitpid sees WTERMSIG.
+      shiroKill: (sig) => {
+        if (exiting) return;
+        sigaction(sig, 0 /* SIG_DFL */);
+        if (sys(SYS.kill, msg.pid, sig) < 0) exitGuest(128 + sig);
+        exiting = true;
+      },
       onExit: (code) => exitGuest(code),
       onAbort: (what) => fail('aborted: ' + what, 134),
       preRun: [(M) => {
@@ -482,8 +502,9 @@ async function run(msg) {
         try { FS.chdir(msg.cwd || '/'); } catch { /* cwd missing: stay at / */ }
       }],
     });
+    blinkModule = M;
     const argv = msg.argv && msg.argv.length ? msg.argv : [msg.path];
-    M.callMain(['-0', argv[0], msg.path || argv[0], ...argv.slice(1)]);
+    M.callMain([...(msg.debug && msg.env?.SHIRO_BLINK_STRACE ? ['-s', '-e'] : []), '-0', argv[0], msg.path || argv[0], ...argv.slice(1)]);
   } catch (e) {
     if (e && e.name === 'ExitStatus') exitGuest(e.status);
     else if (e !== 'unwind') fail(String((e && e.stack) || e), 134);
