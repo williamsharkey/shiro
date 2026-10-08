@@ -12,6 +12,7 @@
  */
 
 import type { FileSystem } from './filesystem';
+import { WasiTTY, jspiAvailable } from './wasi-tty';
 
 // ── WASI errno constants ─────────────────────────────────────────────
 
@@ -19,6 +20,7 @@ export const WASI_ESUCCESS      = 0;
 export const WASI_E2BIG         = 1;
 export const WASI_EACCES        = 2;
 export const WASI_EADDRINUSE    = 3;
+export const WASI_EAGAIN        = 6;
 export const WASI_EBADF         = 8;
 export const WASI_EEXIST        = 20;
 export const WASI_EFAULT        = 21;
@@ -105,6 +107,8 @@ export class FD {
   rights: bigint;
   /** Whether this fd has been modified (needs writeback) */
   dirty: boolean = false;
+  /** fdflags set by fd_fdstat_set_flags (e.g. WASI_FDFLAG_NONBLOCK) */
+  fdflags: number = 0;
 
   constructor(opts: {
     path: string | null;
@@ -193,6 +197,14 @@ export interface WasiConfig {
   onStderr?: (data: string) => void;
   /** Pre-opened directories: map of guest path → host path */
   preopens?: Record<string, string>;
+  /**
+   * Interactive stdin. When set and JSPI is available, fd 0 reads and
+   * poll_oneoff suspend the program until keystrokes or timers arrive,
+   * instead of reading the fixed `stdin` string.
+   */
+  tty?: WasiTTY;
+  /** Current terminal size, for the `shiro.tty_size` import. */
+  ttySize?: () => { cols: number; rows: number };
 }
 
 export class WasiRT {
@@ -203,6 +215,13 @@ export class WasiRT {
   private stderrBuf: string = '';
   private memory!: WebAssembly.Memory;
   private instance!: WebAssembly.Instance;
+  /** Streaming decoders so a UTF-8 character split across writes stays intact. */
+  private decoders = new Map<number, TextDecoder>();
+
+  /** True when this run suspends on real input/timers (tty + JSPI). */
+  get interactive(): boolean {
+    return !!this.config.tty && jspiAvailable();
+  }
 
   constructor(config: WasiConfig) {
     this.config = config;
@@ -258,7 +277,35 @@ export class WasiRT {
 
   /** Build the WASI import object for WebAssembly.instantiate */
   getImports(): WebAssembly.Imports {
+    const imports = this.syncImports();
+    if (this.interactive) {
+      const W = WebAssembly as any;
+      const wasi = imports.wasi_snapshot_preview1 as Record<string, unknown>;
+      wasi.fd_read = new W.Suspending(this.fd_read_async.bind(this));
+      wasi.poll_oneoff = new W.Suspending(this.poll_oneoff_async.bind(this));
+    }
+    return imports;
+  }
+
+  private syncImports(): WebAssembly.Imports {
     return {
+      // Optional Shiro extensions; programs import them with //go:wasmimport or
+      // __attribute__((import_module("shiro"))). Unused imports are ignored.
+      shiro: {
+        tty_set_raw: (on: number): number => {
+          if (!this.config.tty) return WASI_ENOSYS;
+          this.config.tty.raw = on !== 0;
+          return WASI_ESUCCESS;
+        },
+        tty_size: (colsPtr: number, rowsPtr: number): number => {
+          const size = this.config.ttySize?.();
+          if (!size) return WASI_ENOSYS;
+          const view = this.getView();
+          view.setUint32(colsPtr, size.cols, true);
+          view.setUint32(rowsPtr, size.rows, true);
+          return WASI_ESUCCESS;
+        },
+      },
       wasi_snapshot_preview1: {
         args_get: this.args_get.bind(this),
         args_sizes_get: this.args_sizes_get.bind(this),
@@ -319,7 +366,11 @@ export class WasiRT {
       if (!start) {
         throw new Error('WASM module has no _start export');
       }
-      start();
+      if (this.interactive) {
+        await (WebAssembly as any).promising(start)();
+      } else {
+        start();
+      }
       // Flush any dirty file descriptors back to Shiro FS
       await this.flushAll();
       return 0;
@@ -609,14 +660,17 @@ export class WasiRT {
     if (!f) return WASI_EBADF;
     const view = this.getView();
     view.setUint8(bufPtr, f.filetype);        // fs_filetype
-    view.setUint16(bufPtr + 2, 0, true);      // fs_flags
+    view.setUint16(bufPtr + 2, f.fdflags, true); // fs_flags
     view.setBigUint64(bufPtr + 8, f.rights, true);  // fs_rights_base
     view.setBigUint64(bufPtr + 16, f.rights, true);  // fs_rights_inheriting
     return WASI_ESUCCESS;
   }
 
-  private fd_fdstat_set_flags(_fd: number, _flags: number): number {
-    return WASI_ESUCCESS; // no-op
+  private fd_fdstat_set_flags(fd: number, flags: number): number {
+    const f = this.fds.get(fd);
+    if (!f) return WASI_EBADF;
+    f.fdflags = flags;
+    return WASI_ESUCCESS;
   }
 
   private fd_filestat_get(fd: number, bufPtr: number): number {
@@ -658,6 +712,25 @@ export class WasiRT {
   private fd_read(fd: number, iovsPtr: number, iovsLen: number, nreadPtr: number): number {
     const f = this.fds.get(fd);
     if (!f) return WASI_EBADF;
+    const tty = fd === 0 ? this.config.tty : undefined;
+    if (tty && this.interactive) {
+      // Interactive stdin: deliver what is queued. An empty queue at EOF reads
+      // 0 bytes; otherwise it is EAGAIN (fd_read_async waits before calling here
+      // unless the program asked for non-blocking reads).
+      if (!tty.readable()) return WASI_EAGAIN;
+      const view = this.getView();
+      let total = 0;
+      for (let i = 0; i < iovsLen; i++) {
+        const bufPtr = view.getUint32(iovsPtr + i * 8, true);
+        const bufLen = view.getUint32(iovsPtr + i * 8 + 4, true);
+        const chunk = tty.read(bufLen);
+        this.getU8().set(chunk, bufPtr);
+        total += chunk.length;
+        if (chunk.length < bufLen) break;
+      }
+      this.getView().setUint32(nreadPtr, total, true);
+      return WASI_ESUCCESS;
+    }
     const view = this.getView();
     const mem = this.getU8();
     let totalRead = 0;
@@ -673,6 +746,16 @@ export class WasiRT {
 
     view.setUint32(nreadPtr, totalRead, true);
     return WASI_ESUCCESS;
+  }
+
+  /** JSPI fd_read: a blocking stdin read waits for input instead of returning EAGAIN. */
+  private async fd_read_async(fd: number, iovsPtr: number, iovsLen: number, nreadPtr: number): Promise<number> {
+    const f = this.fds.get(fd);
+    const tty = fd === 0 ? this.config.tty : undefined;
+    if (f && tty && !(f.fdflags & WASI_FDFLAG_NONBLOCK)) {
+      while (!tty.readable()) await tty.wait();
+    }
+    return this.fd_read(fd, iovsPtr, iovsLen, nreadPtr);
   }
 
   private fd_pread(fd: number, iovsPtr: number, iovsLen: number, offset: bigint, nreadPtr: number): number {
@@ -699,7 +782,9 @@ export class WasiRT {
 
       // Stdio: stream to callbacks
       if (fd === 1 || fd === 2) {
-        const text = new TextDecoder().decode(chunk);
+        let decoder = this.decoders.get(fd);
+        if (!decoder) { decoder = new TextDecoder(); this.decoders.set(fd, decoder); }
+        const text = decoder.decode(chunk, { stream: true });
         if (fd === 1) {
           this.stdoutBuf += text;
           this.config.onStdout?.(text);
@@ -1079,6 +1164,67 @@ export class WasiRT {
     }
 
     view.setUint32(neventsPtr, nsubscriptions, true);
+    return WASI_ESUCCESS;
+  }
+
+  /**
+   * JSPI poll_oneoff: honors clock timeouts and waits for stdin readability.
+   * Subscriptions are 48 bytes (userdata u64, tag u8 at 8, then the clock or
+   * fd payload at 16); events are 32 bytes. Only ready subscriptions produce
+   * events, as in WASI preview1.
+   */
+  private async poll_oneoff_async(inPtr: number, outPtr: number, nsubscriptions: number, neventsPtr: number): Promise<number> {
+    const tty = this.config.tty!;
+    type Sub = { userdata: bigint; tag: number; fd: number; deadlineMs: number };
+    const subs: Sub[] = [];
+    const now = performance.now();
+    const view0 = this.getView();
+    for (let i = 0; i < nsubscriptions; i++) {
+      const base = inPtr + i * 48;
+      const userdata = view0.getBigUint64(base, true);
+      const tag = view0.getUint8(base + 8);
+      if (tag === 0) {
+        const clockId = view0.getUint32(base + 16, true);
+        const timeoutNs = view0.getBigUint64(base + 24, true);
+        const abs = (view0.getUint16(base + 40, true) & 1) === 1;
+        let deadlineMs: number;
+        if (!abs) deadlineMs = now + Number(timeoutNs) / 1e6;
+        else if (clockId === WASI_CLOCK_REALTIME) deadlineMs = now + (Number(timeoutNs) / 1e6 - Date.now());
+        else deadlineMs = Number(timeoutNs) / 1e6;
+        subs.push({ userdata, tag, fd: -1, deadlineMs });
+      } else {
+        subs.push({ userdata, tag, fd: view0.getUint32(base + 16, true), deadlineMs: Infinity });
+      }
+    }
+    const ready = (s: Sub, t: number): boolean => {
+      if (s.tag === 0) return t >= s.deadlineMs;
+      if (s.tag === 1 && s.fd === 0) return tty.readable();
+      return true; // other fds (files, stdout) never block
+    };
+    let t = performance.now();
+    if (!subs.some(s => ready(s, t))) {
+      const deadline = Math.min(...subs.map(s => s.deadlineMs));
+      const waitsOnStdin = subs.some(s => s.tag === 1 && s.fd === 0);
+      const timeout = deadline === Infinity ? undefined : deadline - t;
+      if (waitsOnStdin) await tty.wait(timeout);
+      else if (timeout !== undefined) await new Promise(r => setTimeout(r, Math.max(0, timeout)));
+      t = performance.now();
+    }
+    const view = this.getView();
+    let n = 0;
+    for (const s of subs) {
+      if (!ready(s, t)) continue;
+      const ev = outPtr + n * 32;
+      view.setBigUint64(ev, s.userdata, true);
+      view.setUint16(ev + 8, WASI_ESUCCESS, true);
+      view.setUint8(ev + 10, s.tag);
+      if (s.tag !== 0) {
+        view.setBigUint64(ev + 16, s.fd === 0 && s.tag === 1 ? 1n : 65536n, true);
+        view.setUint16(ev + 24, s.fd === 0 && tty.isEOF() ? 1 : 0, true); // 1 = hangup
+      }
+      n++;
+    }
+    view.setUint32(neventsPtr, n, true);
     return WASI_ESUCCESS;
   }
 
