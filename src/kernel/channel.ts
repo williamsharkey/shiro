@@ -39,7 +39,12 @@ export const SYS_MESSAGE = 'sys';
 export class GuestChannel {
   readonly i32: Int32Array;
   readonly data: Uint8Array;
-  /** Called after every reply whose signal word is non-zero (signals.ts installs the handler runner). */
+  /**
+   * Runs the guest's handler for a signal the kernel flagged in the signal
+   * word (checked after every reply). The kernel blocked the handler's mask
+   * when it flagged the signal; `call` sends rt_sigreturn after this returns
+   * (also when no onSignal is set) so the mask is restored.
+   */
   onSignal?: (sig: number) => void;
 
   /** `notify` tells the kernel a request is posted: postMessage('sys') to the page, or nothing when the kernel waits on the SAB itself. */
@@ -60,8 +65,15 @@ export class GuestChannel {
     while (Atomics.load(i32, A.CH_STATE) === A.STATE_REQUEST) Atomics.wait(i32, A.CH_STATE, A.STATE_REQUEST);
     const result = i32[A.CH_RESULT];
     Atomics.store(i32, A.CH_STATE, A.STATE_IDLE);
+    const hi = i32[A.CH_ARGS];
     const sig = Atomics.exchange(i32, A.CH_SIGNAL, 0);
-    if (sig && this.onSignal) this.onSignal(sig);
+    if (sig) {
+      try { this.onSignal?.(sig); }
+      finally {
+        this.call(A.SYS_rt_sigreturn);
+        i32[A.CH_ARGS] = hi; // keep result64() valid across the handler's syscalls
+      }
+    }
     return result;
   }
 
@@ -72,7 +84,7 @@ export class GuestChannel {
 }
 
 const enc = new TextEncoder();
-const dec = new TextDecoder();
+const decode = A.decodeText;
 
 /** Thrown by GuestSys helpers on -errno results. */
 export class SysError extends Error {
@@ -181,7 +193,7 @@ export class GuestSys {
 
   getcwd(): string | number {
     const r = this.ch.call(A.SYS_getcwd, this.ch.data.length);
-    return r < 0 ? r : dec.decode(this.ch.data.slice(0, r - 1));
+    return r < 0 ? r : decode(this.ch.data.subarray(0, r - 1));
   }
 
   chdir(path: string): number {
@@ -189,8 +201,11 @@ export class GuestSys {
     return len < 0 ? len : this.ch.call(A.SYS_chdir, len);
   }
 
-  /** posix_spawn. `fds` maps child fd → parent fd (default 0,1,2 inherited). Returns the pid or -errno. */
-  spawn(path: string, argv: string[] = [path], opts: { env?: Record<string, string>; cwd?: string; fds?: [number, number][]; pgid?: number } = {}): number {
+  /**
+   * posix_spawn. Without `fds` the child inherits every non-cloexec fd; `fds`
+   * maps child fd → parent fd (only those, unless `inherit`). Returns the pid or -errno.
+   */
+  spawn(path: string, argv: string[] = [path], opts: { env?: Record<string, string>; cwd?: string; fds?: [number, number][]; inherit?: boolean; pgid?: number; setsid?: boolean; sigdefault?: number[] } = {}): number {
     const len = this.putStr(JSON.stringify({ path, argv, ...opts }));
     return len < 0 ? -A.E2BIG : this.ch.call(A.SYS_spawn, len);
   }
@@ -213,11 +228,297 @@ export class GuestSys {
     return { ready, revents: fds.map((_, i) => dv.getInt16(i * 8 + 6, true)) };
   }
 
+  // ── Files: *at forms and positional I/O ──
+
+  private putTwo(a: string, b: string): [number, number] | number {
+    const la = this.putStr(a);
+    if (la < 0) return la;
+    const lb = this.putStr(b, la);
+    return lb < 0 ? lb : [la, lb];
+  }
+
+  openat(dirfd: number, path: string, flags = A.O_RDONLY, mode = 0o666): number {
+    const len = this.putStr(path);
+    return len < 0 ? len : this.ch.call(A.SYS_openat, dirfd, len, flags, mode);
+  }
+
+  fstatat(dirfd: number, path: string, flags = 0): A.KStat | number {
+    const len = path === '' ? 0 : this.putStr(path);
+    if (len < 0) return len;
+    const r = this.ch.call(A.SYS_newfstatat, dirfd, len, flags);
+    return r < 0 ? r : A.decodeStat(this.ch.data);
+  }
+
+  mkdirat(dirfd: number, path: string, mode = 0o777): number {
+    const len = this.putStr(path);
+    return len < 0 ? len : this.ch.call(A.SYS_mkdirat, dirfd, len, mode);
+  }
+  mkdir(path: string, mode = 0o777): number { return this.mkdirat(A.AT_FDCWD, path, mode); }
+
+  unlinkat(dirfd: number, path: string, flags = 0): number {
+    const len = this.putStr(path);
+    return len < 0 ? len : this.ch.call(A.SYS_unlinkat, dirfd, len, flags);
+  }
+  unlink(path: string): number { return this.unlinkat(A.AT_FDCWD, path); }
+  rmdir(path: string): number { return this.unlinkat(A.AT_FDCWD, path, A.AT_REMOVEDIR); }
+
+  renameat(olddirfd: number, from: string, newdirfd: number, to: string, flags = 0): number {
+    const l = this.putTwo(from, to);
+    return typeof l === 'number' ? l : this.ch.call(A.SYS_renameat2, olddirfd, l[0], newdirfd, l[1], flags);
+  }
+  rename(from: string, to: string): number { return this.renameat(A.AT_FDCWD, from, A.AT_FDCWD, to); }
+
+  symlinkat(target: string, dirfd: number, path: string): number {
+    const l = this.putTwo(target, path);
+    return typeof l === 'number' ? l : this.ch.call(A.SYS_symlinkat, l[0], dirfd, l[1]);
+  }
+  symlink(target: string, path: string): number { return this.symlinkat(target, A.AT_FDCWD, path); }
+
+  linkat(olddirfd: number, from: string, newdirfd: number, to: string, flags = 0): number {
+    const l = this.putTwo(from, to);
+    return typeof l === 'number' ? l : this.ch.call(A.SYS_linkat, olddirfd, l[0], newdirfd, l[1], flags);
+  }
+
+  readlinkat(dirfd: number, path: string): string | number {
+    const len = this.putStr(path);
+    if (len < 0) return len;
+    const r = this.ch.call(A.SYS_readlinkat, dirfd, len, this.ch.data.length);
+    return r < 0 ? r : decode(this.ch.data.subarray(0, r));
+  }
+  readlink(path: string): string | number { return this.readlinkat(A.AT_FDCWD, path); }
+
+  /** utimensat; times in ms (undefined = now). */
+  utimensat(dirfd: number, path: string, atimeMs?: number, mtimeMs?: number, flags = 0): number {
+    const len = path === '' ? 0 : this.putStr(path);
+    if (len < 0) return len;
+    const has = atimeMs !== undefined || mtimeMs !== undefined;
+    if (has) {
+      const dv = new DataView(this.ch.sab, A.CH_DATA + len, 32);
+      const put = (o: number, ms?: number) => {
+        if (ms === undefined) { dv.setUint32(o, 0, true); dv.setUint32(o + 4, 0, true); dv.setUint32(o + 8, A.UTIME_NOW, true); dv.setUint32(o + 12, 0, true); return; }
+        const sec = Math.floor(ms / 1000);
+        dv.setUint32(o, sec >>> 0, true);
+        dv.setUint32(o + 4, Math.floor(sec / 0x100000000), true);
+        dv.setUint32(o + 8, Math.round((ms % 1000) * 1e6), true);
+        dv.setUint32(o + 12, 0, true);
+      };
+      put(0, atimeMs);
+      put(16, mtimeMs);
+    }
+    return this.ch.call(A.SYS_utimensat, dirfd, len, flags, has ? 1 : 0);
+  }
+
+  pread(fd: number, buf: Uint8Array, off: number): number {
+    const n = Math.min(buf.length, this.ch.data.length);
+    const r = this.ch.call(A.SYS_pread64, fd, n, off >>> 0, Math.floor(off / 0x100000000));
+    if (r > 0) buf.set(this.ch.data.subarray(0, r));
+    return r;
+  }
+
+  pwrite(fd: number, data: Uint8Array, off: number): number {
+    let done = 0;
+    while (done < data.length) {
+      const n = Math.min(data.length - done, this.ch.data.length);
+      this.ch.data.set(data.subarray(done, done + n));
+      const at = off + done;
+      const r = this.ch.call(A.SYS_pwrite64, fd, n, at >>> 0, Math.floor(at / 0x100000000));
+      if (r < 0) return done > 0 ? done : r;
+      if (r === 0) break;
+      done += r;
+    }
+    return done;
+  }
+
+  // ── Signals ──
+
+  /**
+   * rt_sigaction. `handler` is SIG_DFL, SIG_IGN or any other number the
+   * guest uses to find its handler (the kernel only stores it). Returns the
+   * previous action or -errno.
+   */
+  sigaction(sig: number, act?: { handler: number; flags?: number; mask?: number[] }): { handler: number; flags: number; mask: number[] } | number {
+    const dv = new DataView(this.ch.sab, A.CH_DATA, A.SIGACTION_SIZE * 2);
+    if (act) {
+      const [lo, hi] = A.sigsetToWords(act.mask ?? []);
+      dv.setUint32(0, act.handler >>> 0, true);
+      dv.setUint32(4, Math.floor(act.handler / 0x100000000), true);
+      dv.setUint32(8, (act.flags ?? 0) >>> 0, true);
+      dv.setUint32(12, 0, true);
+      dv.setUint32(16, 0, true);
+      dv.setUint32(20, 0, true);
+      dv.setUint32(24, lo, true);
+      dv.setUint32(28, hi, true);
+    }
+    const r = this.ch.call(A.SYS_rt_sigaction, sig, act ? 1 : 0, 1);
+    if (r < 0) return r;
+    const o = A.SIGACTION_SIZE;
+    return {
+      handler: dv.getUint32(o, true) + dv.getUint32(o + 4, true) * 0x100000000,
+      flags: dv.getUint32(o + 8, true),
+      mask: [...A.sigsetFromWords(dv.getUint32(o + 24, true), dv.getUint32(o + 28, true))],
+    };
+  }
+
+  /** rt_sigprocmask; returns the old mask or -errno. */
+  sigprocmask(how: number, set?: number[]): number[] | number {
+    const dv = new DataView(this.ch.sab, A.CH_DATA, 16);
+    if (set) {
+      const [lo, hi] = A.sigsetToWords(set);
+      dv.setUint32(0, lo, true);
+      dv.setUint32(4, hi, true);
+    }
+    const r = this.ch.call(A.SYS_rt_sigprocmask, how, set ? 1 : 0, 1);
+    return r < 0 ? r : [...A.sigsetFromWords(dv.getUint32(8, true), dv.getUint32(12, true))];
+  }
+
+  sigpending(): number[] {
+    this.ch.call(A.SYS_rt_sigpending);
+    const dv = new DataView(this.ch.sab, A.CH_DATA, 8);
+    return [...A.sigsetFromWords(dv.getUint32(0, true), dv.getUint32(4, true))];
+  }
+
+  /** Wait for a signal with `mask` temporarily installed; always -EINTR. */
+  sigsuspend(mask: number[]): number {
+    const [lo, hi] = A.sigsetToWords(mask);
+    const dv = new DataView(this.ch.sab, A.CH_DATA, 8);
+    dv.setUint32(0, lo, true);
+    dv.setUint32(4, hi, true);
+    return this.ch.call(A.SYS_rt_sigsuspend, 8);
+  }
+
+  gettid(): number { return this.ch.call(A.SYS_gettid); }
+  tgkill(tgid: number, tid: number, sig: number): number { return this.ch.call(A.SYS_tgkill, tgid, tid, sig); }
+
+  // ── poll layer: select / epoll ──
+
+  /** select(2); sets are fd lists. timeoutMs < 0 waits forever. Returns ready fds per set, or -errno. */
+  select(nfds: number, read: number[] = [], write: number[] = [], except: number[] = [], timeoutMs = -1):
+    { n: number; read: number[]; write: number[]; except: number[] } | number {
+    const setBytes = Math.ceil(nfds / 64) * 8;
+    if (setBytes * 3 > this.ch.data.length) return -A.EINVAL;
+    const d = this.ch.data;
+    d.fill(0, 0, setBytes * 3);
+    [read, write, except].forEach((fds, set) => fds.forEach(fd => { d[set * setBytes + (fd >> 3)] |= 1 << (fd & 7); }));
+    const present = (read.length ? 1 : 0) | (write.length ? 2 : 0) | (except.length ? 4 : 0);
+    const sec = timeoutMs < 0 ? -1 : Math.floor(timeoutMs / 1000);
+    const r = this.ch.call(A.SYS_select, nfds, present, sec, timeoutMs < 0 ? 0 : (timeoutMs % 1000) * 1000);
+    if (r < 0) return r;
+    const out = (set: number) => {
+      const fds: number[] = [];
+      for (let fd = 0; fd < nfds; fd++) if ((d[set * setBytes + (fd >> 3)] >> (fd & 7)) & 1) fds.push(fd);
+      return fds;
+    };
+    return { n: r, read: present & 1 ? out(0) : [], write: present & 2 ? out(1) : [], except: present & 4 ? out(2) : [] };
+  }
+
+  epollCreate(flags = 0): number { return this.ch.call(A.SYS_epoll_create1, flags); }
+
+  /** epoll_ctl; `data` is the 64-bit user data (default: the fd). */
+  epollCtl(epfd: number, op: number, fd: number, events = 0, data = fd): number {
+    return this.ch.call(A.SYS_epoll_ctl, epfd, op, fd, events | 0, data >>> 0, Math.floor(data / 0x100000000));
+  }
+
+  /** epoll_wait; returns the ready events or -errno. */
+  epollWait(epfd: number, maxEvents: number, timeoutMs = -1): { events: number; data: number }[] | number {
+    const max = Math.min(maxEvents, Math.floor(this.ch.data.length / A.EPOLL_EVENT_SIZE));
+    const r = this.ch.call(A.SYS_epoll_wait, epfd, max, timeoutMs);
+    if (r < 0) return r;
+    const dv = new DataView(this.ch.sab, A.CH_DATA, r * A.EPOLL_EVENT_SIZE);
+    return Array.from({ length: r }, (_, i) => ({
+      events: dv.getUint32(i * 12, true),
+      data: dv.getUint32(i * 12 + 4, true) + dv.getUint32(i * 12 + 8, true) * 0x100000000,
+    }));
+  }
+
+  // ── Sockets (served by net.ts through the syscall registry) ──
+  // Addresses are raw struct sockaddr bytes (sockaddr_in / sockaddr_in6 / sockaddr_un).
+
+  socket(domain: number, type: number, protocol = 0): number { return this.ch.call(A.SYS_socket, domain, type, protocol); }
+
+  socketpair(domain: number, type: number, protocol = 0): [number, number] | number {
+    const r = this.ch.call(A.SYS_socketpair, domain, type, protocol);
+    if (r < 0) return r;
+    const dv = new DataView(this.ch.sab, A.CH_DATA, 8);
+    return [dv.getInt32(0, true), dv.getInt32(4, true)];
+  }
+
+  connect(fd: number, addr: Uint8Array): number {
+    this.ch.data.set(addr);
+    return this.ch.call(A.SYS_connect, fd, addr.length);
+  }
+
+  bind(fd: number, addr: Uint8Array): number {
+    this.ch.data.set(addr);
+    return this.ch.call(A.SYS_bind, fd, addr.length);
+  }
+
+  listen(fd: number, backlog = 128): number { return this.ch.call(A.SYS_listen, fd, backlog); }
+
+  /** accept4; the peer address comes back as raw sockaddr bytes. */
+  accept(fd: number, flags = 0): { fd: number; addr: Uint8Array } | number {
+    const r = this.ch.call(A.SYS_accept4, fd, flags);
+    return r < 0 ? r : { fd: r, addr: this.ch.data.slice(0, A.SOCKADDR_ROOM) };
+  }
+
+  /** send/sendto: loops until everything is sent (stream sockets) or one datagram went out. */
+  sendto(fd: number, data: Uint8Array | string, flags = 0, addr?: Uint8Array): number {
+    const bytes = typeof data === 'string' ? enc.encode(data) : data;
+    const room = this.ch.data.length - A.SOCKADDR_ROOM;
+    if (addr) {
+      if (bytes.length > room) return -A.EMSGSIZE;
+      this.ch.data.set(bytes);
+      this.ch.data.set(addr, bytes.length);
+      return this.ch.call(A.SYS_sendto, fd, bytes.length, flags, addr.length);
+    }
+    let off = 0;
+    while (off < bytes.length) {
+      const n = Math.min(bytes.length - off, room);
+      this.ch.data.set(bytes.subarray(off, off + n));
+      const r = this.ch.call(A.SYS_sendto, fd, n, flags, 0);
+      if (r < 0) return off > 0 ? off : r;
+      if (r === 0) break;
+      off += r;
+    }
+    return off;
+  }
+  send(fd: number, data: Uint8Array | string, flags = 0): number { return this.sendto(fd, data, flags); }
+
+  /** recvfrom: bytes received into `buf`, and the sender address (SOCKADDR_ROOM bytes after the payload). */
+  recvfrom(fd: number, buf: Uint8Array, flags = 0): { n: number; addr: Uint8Array } | number {
+    const n = Math.min(buf.length, this.ch.data.length - A.SOCKADDR_ROOM);
+    const r = this.ch.call(A.SYS_recvfrom, fd, n, flags);
+    if (r < 0) return r;
+    buf.set(this.ch.data.subarray(0, r));
+    return { n: r, addr: this.ch.data.slice(n, n + A.SOCKADDR_ROOM) };
+  }
+  recv(fd: number, buf: Uint8Array, flags = 0): number {
+    const r = this.recvfrom(fd, buf, flags);
+    return typeof r === 'number' ? r : r.n;
+  }
+
+  shutdown(fd: number, how: number): number { return this.ch.call(A.SYS_shutdown, fd, how); }
+  setsockopt(fd: number, level: number, name: number, value: number): number { return this.ch.call(A.SYS_setsockopt, fd, level, name, value); }
+  getsockopt(fd: number, level: number, name: number): number { return this.ch.call(A.SYS_getsockopt, fd, level, name); }
+
+  private sockname(nr: number, fd: number): Uint8Array | number {
+    const r = this.ch.call(nr, fd);
+    return r < 0 ? r : this.ch.data.slice(0, r);
+  }
+  getsockname(fd: number): Uint8Array | number { return this.sockname(A.SYS_getsockname, fd); }
+  getpeername(fd: number): Uint8Array | number { return this.sockname(A.SYS_getpeername, fd); }
+
   /** argv/env/cwd/pid of this process. */
   procInfo(): { argv: string[]; env: Record<string, string>; cwd: string; pid: number } {
     const r = this.ch.call(A.SYS_getenv);
     if (r < 0) throw new SysError(r, 'getenv');
-    return JSON.parse(dec.decode(this.ch.data.slice(0, r)));
+    return JSON.parse(decode(this.ch.data.subarray(0, r)));
+  }
+
+  /** End only the calling thread (SYS_exit from an attachThread worker; the main thread's exit ends the process). */
+  exitThread(code: number): never {
+    this.ch.call(A.SYS_exit, code);
+    const park = new Int32Array(new SharedArrayBuffer(4));
+    for (;;) Atomics.wait(park, 0, 0);
   }
 
   /** exit_group; does not return. */
@@ -234,6 +535,8 @@ export interface GuestStartMessage {
   type: 'shiro-start';
   sab: SharedArrayBuffer;
   pid: number;
+  /** Set for an extra thread (worker-host attachThread). */
+  tid?: number;
   argv: string[];
   env: Record<string, string>;
   cwd: string;
@@ -264,19 +567,43 @@ export class KernelChannel {
   private busy = false;
   private stopped = false;
 
-  constructor(readonly sab: SharedArrayBuffer, readonly kernel: Kernel, readonly proc: Process) {
+  /** Thread id served by this channel (the pid for the main thread). */
+  readonly tid: number;
+  private unlisten: () => void;
+
+  /**
+   * One channel per guest thread. Extra threads of a process pass `tid` and
+   * `onThreadExit` (worker-host attachThread does): their SYS_exit ends only
+   * that thread, and gettid returns their tid.
+   */
+  constructor(readonly sab: SharedArrayBuffer, readonly kernel: Kernel, readonly proc: Process,
+    private opts: { tid?: number; onThreadExit?: (code: number) => void } = {}) {
     this.i32 = new Int32Array(sab, 0, A.CH_DATA / 4);
     this.data = new Uint8Array(sab, A.CH_DATA);
-    proc.data.onSignal = () => this.flagSignals();
+    this.tid = opts.tid ?? proc.pid;
+    this.unlisten = proc.addSignalListener(() => this.flagSignals());
   }
 
-  /** Mirror the process's pending signals into the channel's signal word (lowest first). */
+  get isThread(): boolean { return this.tid !== this.proc.pid; }
+
+  /** Move the next deliverable guest signal (kernel.takeSignal) into this channel's signal word if it is free. */
   flagSignals(): void {
-    const next = [...this.proc.pendingSignals].sort((a, b) => a - b)[0];
-    if (next !== undefined && Atomics.load(this.i32, A.CH_SIGNAL) === 0) {
-      this.proc.pendingSignals.delete(next);
-      Atomics.store(this.i32, A.CH_SIGNAL, next);
+    if (this.stopped || Atomics.load(this.i32, A.CH_SIGNAL) !== 0) return;
+    const sig = this.kernel.takeSignal(this.proc);
+    if (sig) Atomics.store(this.i32, A.CH_SIGNAL, sig);
+  }
+
+  private reply(result: number): void {
+    if (result > 0x7fffffff || result < -0x80000000) {
+      this.i32[A.CH_ARGS] = Math.floor(result / 0x100000000);
+      result = result >>> 0;
+    } else {
+      this.i32[A.CH_ARGS] = result < 0 ? -1 : 0;
     }
+    this.i32[A.CH_RESULT] = result | 0;
+    this.flagSignals();
+    Atomics.store(this.i32, A.CH_STATE, A.STATE_REPLY);
+    Atomics.notify(this.i32, A.CH_STATE);
   }
 
   async handle(): Promise<void> {
@@ -286,18 +613,15 @@ export class KernelChannel {
     try {
       const nr = this.i32[A.CH_SYSNO];
       const args = Array.from(this.i32.subarray(A.CH_ARGS, A.CH_ARGS + A.CH_NARGS));
-      let result = await this.kernel.syscall(this.proc, nr, args, this.data);
-      if (this.stopped || this.proc.exiting) return;
-      if (result > 0x7fffffff || result < -0x80000000) {
-        this.i32[A.CH_ARGS] = Math.floor(result / 0x100000000);
-        result = result >>> 0;
-      } else {
-        this.i32[A.CH_ARGS] = result < 0 ? -1 : 0;
+      if (nr === A.SYS_gettid) { this.reply(this.tid); return; }
+      if (nr === A.SYS_exit && this.isThread) {
+        this.stop();
+        this.opts.onThreadExit?.(args[0]);
+        return;
       }
-      this.i32[A.CH_RESULT] = result | 0;
-      this.flagSignals();
-      Atomics.store(this.i32, A.CH_STATE, A.STATE_REPLY);
-      Atomics.notify(this.i32, A.CH_STATE);
+      const result = await this.kernel.syscall(this.proc, nr, args, this.data);
+      if (this.stopped || this.proc.exiting) return;
+      this.reply(result);
     } finally {
       this.busy = false;
     }
@@ -317,6 +641,7 @@ export class KernelChannel {
 
   stop(): void {
     this.stopped = true;
+    this.unlisten();
   }
 }
 
