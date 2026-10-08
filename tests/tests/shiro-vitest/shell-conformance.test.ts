@@ -395,4 +395,17 @@ describe('shell conformance regressions', () => {
     expect(r.out).toBe('/tmp/cdt/link/sub\n/tmp/cdt/real/sub\n/tmp/cdt/link\n/tmp/cdt/link/sub\nold=/tmp/cdt/link\n/tmp/cdt/link/sub\nst=1\n' +
       '/tmp/cdt/real\n/tmp\nshopt -s nullglob\nnoext\nset +o errexit\nargs: a b\nafter: outer\nev\n');
   });
+
+  it('loop statuses and set -e, break in a condition, $_, relative PATH entries, OSTYPE', async () => {
+    const r = await script([
+      "set -e; for x in 1 2; do test $x = 1 && echo \"one\"; done || echo \"loop-st=$?\"",
+      "{ test no = yes && echo hi; }; echo \"group-st=$?\"; set +e",
+      "while break; do echo x; done; echo after-break",
+      "i=0; until [ $i -ge 2 ]; do i=$((i+1)); done; echo \"until=$i\"",
+      "echo hi world; echo \"$_\"; : 'foo'\"bar\"; echo $_",
+      "cd /tmp && rm -rf pp && mkdir -p pp/bin && printf 'echo mycmd-ran\\n' > pp/bin/mycmd && chmod +x pp/bin/mycmd && PATH=\"pp/bin:$PATH\" mycmd",
+      "case $OSTYPE in linux*) echo has-ostype;; esac",
+    ].join('\n'));
+    expect(r.out).toBe('one\nloop-st=1\ngroup-st=1\nafter-break\nuntil=2\nhi world\nworld\nfoobar\nmycmd-ran\nhas-ostype\n');
+  });
 });

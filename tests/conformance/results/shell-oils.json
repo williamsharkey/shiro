@@ -324,7 +324,7 @@
    ]
   },
   "vars-special": {
-   "pass": 19,
+   "pass": 30,
    "total": 37,
    "failures": [
     {
@@ -340,26 +340,6 @@
      "name": "Some vars are set, even without startup file, or env: PATH, PWD"
     },
     {
-     "i": 6,
-     "name": "UID EUID PPID can't be changed"
-    },
-    {
-     "i": 7,
-     "name": "HOSTNAME OSTYPE can be changed"
-    },
-    {
-     "i": 13,
-     "name": "$BASHPID DOES change with subshell and command sub"
-    },
-    {
-     "i": 18,
-     "name": "$UID and $EUID"
-    },
-    {
-     "i": 19,
-     "name": "$OSTYPE is non-empty"
-    },
-    {
      "i": 21,
      "name": "$LINENO is the current line, not line of function call"
     },
@@ -372,32 +352,8 @@
      "name": "$LINENO in other for loops"
     },
     {
-     "i": 31,
-     "name": "$_ with simple command and evaluation"
-    },
-    {
-     "i": 32,
-     "name": "$_ and ${_}"
-    },
-    {
-     "i": 33,
-     "name": "$_ with word splitting"
-    },
-    {
-     "i": 35,
-     "name": "$_ with && and ||"
-    },
-    {
-     "i": 36,
-     "name": "$_ is not reset with (( and [["
-    },
-    {
      "i": 37,
      "name": "$_ with assignments, arrays, etc."
-    },
-    {
-     "i": 38,
-     "name": "$_ with loop"
     }
    ]
   },
@@ -565,7 +521,7 @@
    ]
   },
   "loop": {
-   "pass": 19,
+   "pass": 21,
    "total": 28,
    "failures": [
     {
@@ -587,14 +543,6 @@
     {
      "i": 16,
      "name": "bad arg to break"
-    },
-    {
-     "i": 18,
-     "name": "break in condition of loop"
-    },
-    {
-     "i": 19,
-     "name": "break in condition of nested loop"
     },
     {
      "i": 23,
@@ -1313,20 +1261,12 @@
    ]
   },
   "errexit": {
-   "pass": 26,
+   "pass": 28,
    "total": 35,
    "failures": [
     {
      "i": 9,
      "name": "More && ||"
-    },
-    {
-     "i": 10,
-     "name": "errexit and loop"
-    },
-    {
-     "i": 11,
-     "name": "errexit and brace group { }"
     },
     {
      "i": 22,
@@ -1360,7 +1300,7 @@
    "failures": []
   },
   "command_": {
-   "pass": 7,
+   "pass": 8,
    "total": 16,
    "failures": [
     {
@@ -1370,10 +1310,6 @@
     {
      "i": 1,
      "name": "Permission denied"
-    },
-    {
-     "i": 8,
-     "name": "$PATH lookup"
     },
     {
      "i": 9,

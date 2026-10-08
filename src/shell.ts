@@ -282,6 +282,8 @@ export class Shell {
   backgroundJobs: Map<number, BackgroundJob> = new Map();
   /** Shell options: errexit (-e), xtrace (-x), nounset (-u), verbose (-v) */
   options: Set<string> = new Set(['hashall', 'braceexpand', 'interactive-comments']);
+  /** $BASHPID: 1 (= $$) in the top shell, a new number in each subshell */
+  bashPid = 1;
   /** The logical working directory cd set (symlinks kept), which pwd prints; null: use cwd */
   logicalPwd: string | null = null;
   /** Bash-style indexed arrays */
@@ -451,6 +453,7 @@ export class Shell {
     child.functions = { ...this.functions };
     child.options = new Set(this.options);
     child.logicalPwd = this.logicalPwd;
+    child.bashPid = nextInPagePid++;
     child.arrays = new Map(Array.from(this.arrays.entries()).map(([k, v]) => [k, copyArray(v)]));
     child.assocArrays = new Map(Array.from(this.assocArrays.entries()).map(([k, v]) => [k, new Map(v)]));
     // A subshell starts with the traps reset, except ignored ones (trap '' SIG)
@@ -723,12 +726,22 @@ export class Shell {
    * && or ||, negated with !, or runs inside a condition.
    */
   private checkErrexit(compounds: { operator: string; command: string }[], idx: number, exitCode: number): void {
-    if (exitCode === 0 || !this.options.has('errexit') || this.errexitSuppressed > 0) return;
+    const ignoredBefore = this.failureIgnored;
+    this.failureIgnored = false;
+    if (exitCode === 0 || !this.options.has('errexit')) return;
     const nextOp = compounds[idx + 1]?.operator;
-    if (nextOp === '&&' || nextOp === '||') return;
-    if (/^!\s/.test(compounds[idx].command.trim())) return;
+    const cmd = compounds[idx].command.trim();
+    if (this.errexitSuppressed > 0 || nextOp === '&&' || nextOp === '||' || /^!\s/.test(cmd)) {
+      this.failureIgnored = true;
+      return;
+    }
+    // A { group } whose status is a failure set -e ignored inside it doesn't exit either
+    if (ignoredBefore && isBraceGroup(cmd)) { this.failureIgnored = true; return; }
     throw new ExitSignal(exitCode);
   }
+
+  /** The last status checked by set -e was a failure it ignored (&&, ||, !, a condition) */
+  private failureIgnored = false;
 
   /** Here-document bodies, referenced by `< MARKER` redirections */
   heredocs = new HeredocStore();
@@ -1231,6 +1244,8 @@ export class Shell {
 
         const cmdName = expandedArgs[0];
         const cmdArgs = expandedArgs.slice(1);
+        // $_: the last word of the previous simple command (not of an assignment)
+        if (!/^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/.test(cmdName ?? '')) this.env['_'] = expandedArgs[expandedArgs.length - 1] ?? '';
 
         // Handle [[ ... ]] as inline test command
         if (cmdName === '[[') {
@@ -3401,8 +3416,12 @@ export class Shell {
           // Dynamic special variables
           if (varName === 'RANDOM') { result += String(Math.floor(Math.random() * 32768)); i += m[0].length; continue; }
           if (varName === 'BASH_VERSION') { result += '5.0.0'; i += m[0].length; continue; }
-          if (varName === 'HOSTNAME') { result += 'shiro'; i += m[0].length; continue; }
+          if (varName === 'HOSTNAME' && this.env['HOSTNAME'] === undefined) { result += 'shiro'; i += m[0].length; continue; }
+          if (varName === 'OSTYPE' && this.env['OSTYPE'] === undefined) { result += 'linux-gnu'; i += m[0].length; continue; }
+          // Read-only: an assignment or the environment doesn't change them
           if (varName === 'PPID') { result += '0'; i += m[0].length; continue; }
+          if (varName === 'UID' || varName === 'EUID') { result += '1000'; i += m[0].length; continue; }
+          if (varName === 'BASHPID') { result += String(this.bashPid); i += m[0].length; continue; }
           if (varName === 'LINENO') { result += (this.env['LINENO'] || '1'); i += m[0].length; continue; }
           if (varName === 'SECONDS') { result += String(Math.floor(performance.now() / 1000)); i += m[0].length; continue; }
           if (varName === 'EPOCHSECONDS') { result += String(Math.floor(Date.now() / 1000)); i += m[0].length; continue; }
@@ -5473,27 +5492,41 @@ export class Shell {
       this.env['__PIPE_STDIN'] = pipeStdin;
     }
 
-    let iter = 0;
-    while (iter++ < LOOP_ITERATION_LIMIT) {
-      if (iter % 1000 === 0) await yieldToEventLoop(); // keep the page responsive in long loops
-      // Expand vars in condition each iteration (loop vars like $X change)
-      const expandedCond = this.expandVars(await this.expandCommandSubstitution(this.expandArithmetic(parsed.condition), writeStderr));
-      if ((await this.evalCondition(expandedCond, writeStdout, writeStderr)) !== 0) break;
-      try {
-        if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr, false, undefined, true);
-      } catch (e) {
-        if (e instanceof BreakSignal) { if (e.levels > 1) throw new BreakSignal(e.levels - 1); break; }
-        if (e instanceof ContinueSignal) { if (e.levels > 1) throw new ContinueSignal(e.levels - 1); continue; }
-        throw e;
-      }
-    }
+    const status = await this.runCondLoop(parsed, false, writeStdout, writeStderr);
 
     // Restore
     if (pipeStdin !== undefined) {
       if (savedPipeStdin === undefined) delete this.env['__PIPE_STDIN'];
       else this.env['__PIPE_STDIN'] = savedPipeStdin;
     }
-    return 0;
+    return status;
+  }
+
+  /**
+   * The iterations of while (until: untilMode) — break and continue may come
+   * from the condition too. The status is the body's last (0 if it never ran).
+   */
+  private async runCondLoop(
+    parsed: { condition: string; body: string }, untilMode: boolean,
+    writeStdout: (s: string) => void, writeStderr: (s: string) => void,
+  ): Promise<number> {
+    let status = 0;
+    let iter = 0;
+    while (iter++ < LOOP_ITERATION_LIMIT) {
+      if (iter % 1000 === 0) await yieldToEventLoop(); // keep the page responsive in long loops
+      try {
+        // Expand vars in condition each iteration (loop vars like $X change)
+        const expandedCond = this.expandVars(await this.expandCommandSubstitution(this.expandArithmetic(parsed.condition), writeStderr));
+        if (((await this.evalCondition(expandedCond, writeStdout, writeStderr)) === 0) === untilMode) break;
+        status = 0;
+        if (parsed.body.trim()) status = await this.execute(parsed.body, writeStdout, writeStderr, false, undefined, true);
+      } catch (e) {
+        if (e instanceof BreakSignal) { if (e.levels > 1) throw new BreakSignal(e.levels - 1); status = 0; break; }
+        if (e instanceof ContinueSignal) { if (e.levels > 1) throw new ContinueSignal(e.levels - 1); status = 0; continue; }
+        throw e;
+      }
+    }
+    return status;
   }
 
   private async execUntil(
@@ -5502,20 +5535,7 @@ export class Shell {
     const parsed = this.parseLoopConstruct(input, 'until');
     if (!parsed) { writeStderr('until: syntax error\r\n'); return 1; }
 
-    let iter = 0;
-    while (iter++ < LOOP_ITERATION_LIMIT) {
-      if (iter % 1000 === 0) await yieldToEventLoop();
-      const expandedCond = this.expandVars(await this.expandCommandSubstitution(this.expandArithmetic(parsed.condition), writeStderr));
-      if ((await this.evalCondition(expandedCond, writeStdout, writeStderr)) === 0) break;
-      try {
-        if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr, false, undefined, true);
-      } catch (e) {
-        if (e instanceof BreakSignal) { if (e.levels > 1) throw new BreakSignal(e.levels - 1); break; }
-        if (e instanceof ContinueSignal) { if (e.levels > 1) throw new ContinueSignal(e.levels - 1); continue; }
-        throw e;
-      }
-    }
-    return 0;
+    return this.runCondLoop(parsed, true, writeStdout, writeStderr);
   }
 
   private async execFor(
@@ -5532,7 +5552,8 @@ export class Shell {
       const [init, test, update] = parts;
       // Execute init expression
       this.evalArithmetic(init);
-      // Loop
+      // Loop (its status is the body's last; 0 if the body never ran)
+      let status = 0;
       let iter = 0;
       while (iter++ < LOOP_ITERATION_LIMIT) {
         if (iter % 1000 === 0) await yieldToEventLoop();
@@ -5540,16 +5561,16 @@ export class Shell {
         if (test && this.evalArithmetic(test) === 0) break;
         // Execute body
         try {
-          if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr, false, undefined, true);
+          if (parsed.body.trim()) status = await this.execute(parsed.body, writeStdout, writeStderr, false, undefined, true);
         } catch (e) {
-          if (e instanceof BreakSignal) { if (e.levels > 1) throw new BreakSignal(e.levels - 1); break; }
-          if (e instanceof ContinueSignal) { if (e.levels > 1) throw new ContinueSignal(e.levels - 1); /* fall through to update */ }
+          if (e instanceof BreakSignal) { if (e.levels > 1) throw new BreakSignal(e.levels - 1); status = 0; break; }
+          if (e instanceof ContinueSignal) { if (e.levels > 1) throw new ContinueSignal(e.levels - 1); status = 0; /* fall through to update */ }
           else throw e;
         }
         // Execute update
         if (update) this.evalArithmetic(update);
       }
-      return 0;
+      return status;
     }
 
     // Parse "VAR in item1 item2 item3" from condition
@@ -5561,17 +5582,18 @@ export class Shell {
     const items = /\sin(\s|$)/.test(parsed.condition)
       ? await this.expandWordList(forMatch[2] ?? '', writeStderr)
       : this.getPositionalArgs();
+    let status = 0;
     for (const item of items) {
       this.env[varName] = item;
       try {
-        if (parsed.body.trim()) await this.execute(parsed.body, writeStdout, writeStderr, false, undefined, true);
+        if (parsed.body.trim()) status = await this.execute(parsed.body, writeStdout, writeStderr, false, undefined, true);
       } catch (e) {
-        if (e instanceof BreakSignal) { if (e.levels > 1) throw new BreakSignal(e.levels - 1); break; }
-        if (e instanceof ContinueSignal) { if (e.levels > 1) throw new ContinueSignal(e.levels - 1); continue; }
+        if (e instanceof BreakSignal) { if (e.levels > 1) throw new BreakSignal(e.levels - 1); status = 0; break; }
+        if (e instanceof ContinueSignal) { if (e.levels > 1) throw new ContinueSignal(e.levels - 1); status = 0; continue; }
         throw e;
       }
     }
-    return 0;
+    return status;
   }
 
   /** The words of a `for`/`select` list, expanded like command arguments (quotes, splitting, globs) */
@@ -6201,7 +6223,8 @@ export class Shell {
     // Search each directory (also check for .wasm extension)
     for (const pathDir of pathDirs) {
       for (const suffix of ['', '.wasm']) {
-        const candidate = `${pathDir}/${name}${suffix}`;
+        // (a relative PATH entry is relative to the current directory)
+        const candidate = this.fs.resolvePath(`${pathDir}/${name}${suffix}`, this.cwd);
         try {
           const stat = await this.fs.stat(candidate);
           if (stat.type === 'file' || stat.type === 'symlink') {
