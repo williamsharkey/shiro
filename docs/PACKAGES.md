@@ -106,9 +106,10 @@ globalThis.__shiroKernel = { features: ['sockets'] };
 
 ## Packages
 
-Status as of 2026-10-08 (kernel round 2, unix/pty merged), run through the
-shell in vitest (`pkg.test.ts`), in both the in-page runtime and as kernel
-processes. "partial" means batch use
+Status as of 2026-10-08 (unix/wasix), run through the shell in vitest
+(`pkg.test.ts`, and `kernel-wasix.test.ts` for bash, dash, php, python,
+clang and curl), in both the in-page runtime and as kernel processes; the
+WASIX ones also at the prompt in Chromium on a cross-origin isolated page. "partial" means batch use
 works everywhere and the interactive mode needs a page that can block.
 
 | Package | Version | Source | ABI | Status |
@@ -147,8 +148,8 @@ What the WASIX packages needed from the kernel guest (`src/wasi/wasi-guest.ts`):
 `proc_signals_sizes_get`/`proc_signals_get` and `proc_exit2` (WASIX libc
 startup exits 71 through them, and then trapped), `path_open2` and
 `fd_fdflags_get/set` (GNU tools open files with them), and preview1 calls
-imported under `wasix_32v1` (early builds such as dash). What still blocks the
-rest:
+imported under `wasix_32v1` (early builds such as dash). The four features
+that kept the rest gated, now provided in `sab` mode:
 
 - `wasix-stack` (done): WASIX builds are asyncified, so the guest captures
   and rewinds the stack itself (`src/wasi/asyncify.ts`): setjmp/longjmp,
@@ -157,13 +158,18 @@ rest:
 - `dynamic-linking` (done, sab mode): python is a position-independent
   module; `src/wasi/dylink.ts` lays it out and `src/wasi/dyncall.ts` serves
   the WASIX dynamic calls its trampolines use. Loading side modules (dlopen)
-  is not implemented. Python still needs `mounts` for its standard library.
+  is not implemented: programs see dlopen fail (ENOSYS).
 - `mounts` (done): an entry's `mounts` map guest paths to package
   directories, applied per process as WASI preopens named after the guest
   path (also for package programs another program starts by path).
 - `sockets` (done): the guest implements the WASIX socket calls and
   `resolve` over the kernel sockets (src/kernel/net.ts), so sab and jspi
   mode provide it.
+
+Known gaps: dash's early WASIX libc execs without an environment (exported
+variables don't reach its children; bash is fine); dlopen of WASM side
+modules; `jspi` mode (no SharedArrayBuffer) has neither threads nor stack
+capture, so WASIX packages need a cross-origin isolated page.
 
 Not available as WASM anywhere checked: busybox, vim,
 git, make (no WASI builds; busybox and make also need processes).
