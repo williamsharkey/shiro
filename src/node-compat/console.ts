@@ -14,17 +14,17 @@ export function createFakeConsole(
 ): any {
   const fakeConsole: any = {
     log: (...args: any[]) => {
-      const s = args.map(formatArg).join(' ');
+      const s = formatLog(args);
       stdoutBuf.push(s + '\n');
       if (_st.stdoutToTerminal && ctx.terminal) { _st.streamedToTerminal = true; ctx.terminal.writeOutput(s.replace(/\n/g, '\r\n') + '\r\n'); }
     },
     info: (...args: any[]) => {
-      const s = args.map(formatArg).join(' ');
+      const s = formatLog(args);
       stdoutBuf.push(s + '\n');
       if (_st.stdoutToTerminal && ctx.terminal) { _st.streamedToTerminal = true; ctx.terminal.writeOutput(s.replace(/\n/g, '\r\n') + '\r\n'); }
     },
-    warn: (...args: any[]) => { stderrBuf.push(args.map(formatArg).join(' ') + '\n'); },
-    error: (...args: any[]) => { stderrBuf.push(args.map(formatArg).join(' ') + '\n'); },
+    warn: (...args: any[]) => { stderrBuf.push(formatLog(args) + '\n'); },
+    error: (...args: any[]) => { stderrBuf.push(formatLog(args) + '\n'); },
     dir: (obj: any) => {
       const s = JSON.stringify(obj, null, 2);
       stdoutBuf.push(s + '\n');
@@ -52,9 +52,9 @@ export function createFakeConsole(
         this._stderr = stderr || stdoutOrOpts || _st.fakeProcess?.stderr;
       }
     }
-    log(...args: any[]) { const s = args.map(formatArg).join(' ') + '\n'; if (this._stdout?.write) this._stdout.write(s); else { stdoutBuf.push(s); if (_st.stdoutToTerminal && ctx.terminal) { _st.streamedToTerminal = true; ctx.terminal.writeOutput(s.replace(/\n/g, '\r\n')); } } }
+    log(...args: any[]) { const s = formatLog(args) + '\n'; if (this._stdout?.write) this._stdout.write(s); else { stdoutBuf.push(s); if (_st.stdoutToTerminal && ctx.terminal) { _st.streamedToTerminal = true; ctx.terminal.writeOutput(s.replace(/\n/g, '\r\n')); } } }
     info(...args: any[]) { this.log(...args); }
-    warn(...args: any[]) { const s = args.map(formatArg).join(' ') + '\n'; if (this._stderr?.write) this._stderr.write(s); else { stderrBuf.push(s); } }
+    warn(...args: any[]) { const s = formatLog(args) + '\n'; if (this._stderr?.write) this._stderr.write(s); else { stderrBuf.push(s); } }
     error(...args: any[]) { this.warn(...args); }
     dir(obj: any) { this.log(obj); }
     debug(...args: any[]) { this.log(...args); }
@@ -69,4 +69,32 @@ export function createFakeConsole(
   fakeConsole.Console = FakeConsoleClass;
 
   return fakeConsole;
+}
+
+/** console.log's arguments as Node prints them: printf-style %s %d %i %f %j
+ *  %o %O %c %% in a leading string (mocha's reporters use them), then the
+ *  rest separated by spaces. */
+export function formatLog(args: any[]): string {
+  if (typeof args[0] !== 'string' || !args[0].includes('%') || args.length < 2) {
+    return args.map(formatArg).join(' ');
+  }
+  let i = 1;
+  const head = args[0].replace(/%([sdifjoOc%])/g, (m: string, c: string) => {
+    if (c === '%') return '%';
+    if (i >= args.length) return m;
+    const v = args[i++];
+    switch (c) {
+      case 's': return typeof v === 'string' ? v : formatArg(v);
+      case 'd': case 'i': {
+        if (typeof v === 'bigint') return `${v}n`;
+        const n = Number(v);
+        return String(c === 'i' ? Math.trunc(n) : n);
+      }
+      case 'f': return String(parseFloat(v));
+      case 'j': try { return JSON.stringify(v); } catch { return '[Circular]'; }
+      case 'c': return '';
+      default: return formatArg(v);
+    }
+  });
+  return [head, ...args.slice(i).map(formatArg)].join(' ');
 }

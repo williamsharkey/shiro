@@ -323,6 +323,8 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
   const stdinEvents: Record<string, Function[]> = {};
   let stdinEnded = false;
   let stdinRawMode = false;
+  let stdinEncoding: string | null = null;
+  let stdinDataTaken = false; // piped input already went to 'data' listeners
   const stdinReadBuffer: string[] = [];
   const stdinObj: any = {
     isTTY: !!ctx.terminal,
@@ -334,6 +336,7 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
         queueMicrotask(() => {
           if (ctx.stdin) {
             stdinReadBuffer.push(ctx.stdin);
+            if (stdinEvents['data']?.length) stdinDataTaken = true;
             (stdinEvents['data'] || []).forEach(f => f(ctx.stdin));
             (stdinEvents['readable'] || []).forEach(f => f());
           }
@@ -415,7 +418,44 @@ function createStdin(ctx: CommandContext, _st: SharedState, processEvents: Recor
       return stdinObj;
     },
     get isRaw() { return stdinRawMode; },
-    setEncoding: () => stdinObj,
+    setEncoding: (enc?: string) => { stdinEncoding = enc || 'utf8'; return stdinObj; },
+    // for await (const chunk of process.stdin): prettier's and get-stdin's way
+    [Symbol.asyncIterator]: () => {
+      const chunks: any[] = [];
+      let done = false;
+      let wake: (() => void) | null = null;
+      const onData = (d: any) => {
+        chunks.push(stdinEncoding || typeof d !== 'string' ? d : new TextEncoder().encode(d));
+        wake?.();
+      };
+      const onEnd = () => { done = true; wake?.(); };
+      if (!ctx.terminal && stdinEnded) {
+        // piped input that an earlier 'end' listener set flowing: what no
+        // 'data' listener took is still unread
+        if (ctx.stdin && !stdinDataTaken) { stdinDataTaken = true; stdinReadBuffer.length = 0; onData(ctx.stdin); }
+        done = true;
+      } else {
+        stdinObj.on('data', onData);
+        stdinObj.on('end', onEnd);
+        stdinObj.resume();
+      }
+      return {
+        next: async (): Promise<IteratorResult<any>> => {
+          while (!chunks.length && !done) await new Promise<void>(r => { wake = r; });
+          wake = null;
+          if (chunks.length) return { value: chunks.shift(), done: false };
+          stdinObj.off('data', onData);
+          stdinObj.off('end', onEnd);
+          return { value: undefined, done: true };
+        },
+        return: async (): Promise<IteratorResult<any>> => {
+          stdinObj.off('data', onData);
+          stdinObj.off('end', onEnd);
+          return { value: undefined, done: true };
+        },
+        [Symbol.asyncIterator]() { return this; },
+      };
+    },
     destroy: () => {
       if (ctx.terminal) ctx.terminal.exitStdinPassthrough();
       stdinEnded = true;

@@ -18,7 +18,7 @@ import { createFileCache } from './file-cache';
 import { preloadEnvironment } from './preload';
 import { isClaudeCodeScript, patchClaudeCodeSource } from '../claude-code-version';
 import { createAutoStubFactory } from './auto-stub';
-import { createRequireFunction } from './require';
+import { createRequireFunction, wrapModuleBody, esmNamespace } from './require';
 import { createExpressFactory } from './shims/express';
 import { createSqliteShim } from './shims/sqlite';
 import { createPathModule } from './modules/path';
@@ -169,11 +169,11 @@ export async function executeNodeScript(
         case 'url':
         case 'node:url': return createUrlModule();
         case 'stream':
-        case 'node:stream': return createStreamModule();
+        case 'node:stream': return createStreamModule(getBuiltinModule('events'));
         case 'stream/promises':
-        case 'node:stream/promises': return createStreamModule().promises;
+        case 'node:stream/promises': return getBuiltinModule('stream').promises;
         case 'stream/consumers':
-        case 'node:stream/consumers': return createStreamModule().consumers;
+        case 'node:stream/consumers': return getBuiltinModule('stream').consumers;
         case 'crypto':
         case 'node:crypto': return createCryptoModule({ sha256sync, sha1sync, fnvHash, FakeBuffer });
         case 'http':
@@ -230,7 +230,8 @@ export async function executeNodeScript(
     const wrappedCode = printResult ? `return (${transformedCode})` : transformedCode;
     const fn = new AsyncFunction(
       'console', 'process', 'require', 'Buffer', '__filename', '__dirname', 'shiro', '__import_meta', 'module', 'exports', '__dynamic_import',
-      wrappedCode
+      '__shiro_module', '__shiro_require',
+      wrapModuleBody(wrappedCode, true)
     );
 
     // Fake import.meta for ES modules
@@ -256,11 +257,13 @@ export async function executeNodeScript(
     const entryRequire = (moduleName: string) => requireModule(moduleName, entryDirname);
 
     // Dynamic import() shim
-    const dynamicImport = async (moduleName: string) => {
+    const dynamicImport = async (specifier: unknown) => {
+      let moduleName = String(specifier);
       // A URL (CDN ES module) is loaded by the browser itself
       if (/^(?:https?|data|blob):/.test(moduleName)) return import(/* @vite-ignore */ moduleName);
+      if (moduleName.startsWith('file://')) moduleName = decodeURIComponent(moduleName.slice(7));
       try {
-        return requireModule(moduleName, entryDirname);
+        return esmNamespace(requireModule(moduleName, entryDirname));
       } catch (e: any) {
         const msg = e?.message || String(e);
         throw new Error(`Failed to dynamically import '${moduleName}': ${msg}`);
@@ -483,7 +486,7 @@ export async function executeNodeScript(
           shell: ctx.shell,
           env: ctx.env,
           cwd: ctx.cwd,
-        }, fakeImportMeta, fakeModule, fakeExports, dynamicImport),
+        }, fakeImportMeta, fakeModule, fakeExports, dynamicImport, fakeModule, entryRequire),
         timeoutPromise,
       ]);
     } catch (e: any) {
@@ -578,6 +581,17 @@ export async function executeNodeScript(
         const current = [...pendingPromises];
         pendingPromises.length = 0;
         await Promise.all(current);
+      }
+    }
+    // The script ended on its own: 'exit' listeners run, and may set
+    // process.exitCode (mocha reports failures that way)
+    if (!_st.exitCalled && !scriptTimedOut && !_st.isInteractiveMode && processEvents['exit']?.length) {
+      _st.exitCalled = true;
+      try {
+        for (const fn of [...processEvents['exit']]) fn(_st.exitCode);
+      } catch (e: any) {
+        if (e instanceof ProcessExitError) _st.exitCode = e.code;
+        else { stderrBuf.push((e?.stack || String(e)) + '\n'); _st.exitCode = 1; }
       }
     }
     if (!_st.isInteractiveMode) restoreGlobals(false);

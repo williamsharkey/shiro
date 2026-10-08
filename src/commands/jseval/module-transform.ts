@@ -784,7 +784,7 @@ export function transformBundledESM(src: string): string {
     const namedMatch = rest.match(/^import\s*\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]\s*;?\s*/);
     if (namedMatch) {
       const fixed = namedMatch[1].replace(/([\w$]+)\s+as\s+([\w$]+)/g, '$1: $2');
-      parts.push(`const {${fixed}} = require("${namedMatch[2]}");`);
+      parts.push(`const {${fixed}} = __shiro_require("${namedMatch[2]}");`);
       pos += namedMatch[0].length;
       matched = true;
     }
@@ -794,7 +794,7 @@ export function transformBundledESM(src: string): string {
       const combinedMatch = rest.match(/^import\s+([\w$]+)\s*,\s*\{([^}]+)\}\s*from\s*['"]([^'"]+)['"]\s*;?\s*/);
       if (combinedMatch) {
         const fixed = combinedMatch[2].replace(/([\w$]+)\s+as\s+([\w$]+)/g, '$1: $2');
-        parts.push(`const ${combinedMatch[1]} = require("${combinedMatch[3]}"); const {${fixed}} = require("${combinedMatch[3]}");`);
+        parts.push(`const ${combinedMatch[1]} = __shiro_require("${combinedMatch[3]}"); const {${fixed}} = __shiro_require("${combinedMatch[3]}");`);
         pos += combinedMatch[0].length;
         matched = true;
       }
@@ -804,7 +804,7 @@ export function transformBundledESM(src: string): string {
       // import x from "module"
       const defaultMatch = rest.match(/^import\s+([\w$]+)\s+from\s*['"]([^'"]+)['"]\s*;?\s*/);
       if (defaultMatch) {
-        parts.push(`const ${defaultMatch[1]} = require("${defaultMatch[2]}");`);
+        parts.push(`const ${defaultMatch[1]} = __shiro_require("${defaultMatch[2]}");`);
         pos += defaultMatch[0].length;
         matched = true;
       }
@@ -814,7 +814,7 @@ export function transformBundledESM(src: string): string {
       // import * as x from "module"
       const starMatch = rest.match(/^import\s*\*\s*as\s+([\w$]+)\s*from\s*['"]([^'"]+)['"]\s*;?\s*/);
       if (starMatch) {
-        parts.push(`const ${starMatch[1]} = require("${starMatch[2]}");`);
+        parts.push(`const ${starMatch[1]} = __shiro_require("${starMatch[2]}");`);
         pos += starMatch[0].length;
         matched = true;
       }
@@ -824,7 +824,7 @@ export function transformBundledESM(src: string): string {
       // import "module" (side-effect)
       const sideEffectMatch = rest.match(/^import\s+['"]([^'"]+)['"]\s*;?\s*/);
       if (sideEffectMatch) {
-        parts.push(`require("${sideEffectMatch[1]}");`);
+        parts.push(`__shiro_require("${sideEffectMatch[1]}");`);
         pos += sideEffectMatch[0].length;
         matched = true;
       }
@@ -858,30 +858,30 @@ export function transformBundledESM(src: string): string {
   replaceInCode(ms, /\bimport\s+([\w$]+)\s*,\s*\{([^}]+)\}\s*from\s*(['"])([^'"]+)\3\s*;?/g,
     (_, defaultName, namedImports, q, mod) => {
       const fixed = namedImports.replace(/([\w$]+)\s+as\s+([\w$]+)/g, '$1: $2');
-      return `const ${defaultName} = require(${q}${mod}${q}); const {${fixed}} = require(${q}${mod}${q});`;
+      return `const ${defaultName} = __shiro_require(${q}${mod}${q}); const {${fixed}} = __shiro_require(${q}${mod}${q});`;
     });
 
   // import { x as y } from "module"  (handles minified: import{x}from"m")
   replaceInCode(ms, /\bimport\s*\{([^}]+)\}\s*from\s*(['"])([^'"]+)\2\s*;?/g,
     (_, imports, q, mod) => {
       const fixed = imports.replace(/([\w$]+)\s+as\s+([\w$]+)/g, '$1: $2');
-      return `const {${fixed}} = require(${q}${mod}${q});`;
+      return `const {${fixed}} = __shiro_require(${q}${mod}${q});`;
     });
 
   // import x from "module"
   replaceInCode(ms, /\bimport\s+([\w$]+)\s+from\s*(['"])([^'"]+)\2\s*;?/g,
-    (_, name, q, mod) => `const ${name} = require(${q}${mod}${q});`);
+    (_, name, q, mod) => `const ${name} = __shiro_require(${q}${mod}${q});`);
 
   // import * as x from "module"  (handles minified: import*as x from"m")
   replaceInCode(ms, /\bimport\s*\*\s*as\s+([\w$]+)\s*from\s*(['"])([^'"]+)\2\s*;?/g,
-    (_, name, q, mod) => `const ${name} = require(${q}${mod}${q});`);
+    (_, name, q, mod) => `const ${name} = __shiro_require(${q}${mod}${q});`);
 
   // import "module" (side-effect only)
   replaceInCode(ms, /\bimport\s*(['"])([^'"]+)\1\s*;?/g,
-    (_, q, mod) => `require(${q}${mod}${q});`);
+    (_, q, mod) => `__shiro_require(${q}${mod}${q});`);
 
   // 5. Strip 'export' keyword from declarations (safe, no quotes introduced).
-  replaceInCode(ms, /\bexport\s+default\s+/g, 'module.exports = ');
+  replaceInCode(ms, /\bexport\s+default\s+/g, '__shiro_module.exports = ');
   replaceInCode(ms, /\bexport\s+async\s+function\s+/g, 'async function ');
   replaceInCode(ms, /\bexport\s+function\s+/g, 'function ');
   replaceInCode(ms, /\bexport\s+class\s+/g, 'class ');
@@ -894,26 +894,26 @@ export function transformBundledESM(src: string): string {
       const items = exports.split(',').map((s: string) => s.trim()).filter((s: string) => s);
       return items.map((item: string) => {
         const asMatch = item.match(/^([\w$]+)\s+as\s+([\w$]+)$/);
-        if (asMatch) return `module.exports.${asMatch[2]} = require(${q}${mod}${q}).${asMatch[1]};`;
-        return `module.exports.${item} = require(${q}${mod}${q}).${item};`;
+        if (asMatch) return `__shiro_module.exports.${asMatch[2]} = __shiro_require(${q}${mod}${q}).${asMatch[1]};`;
+        return `__shiro_module.exports.${item} = __shiro_require(${q}${mod}${q}).${item};`;
       }).join(' ');
     });
 
   // export * as name from "module"
   replaceInCode(ms, /\bexport\s*\*\s*as\s+([\w$]+)\s*from\s*(['"])([^'"]+)\2\s*;?/g,
-    (_, name, q, mod) => `module.exports.${name} = require(${q}${mod}${q});`);
+    (_, name, q, mod) => `__shiro_module.exports.${name} = __shiro_require(${q}${mod}${q});`);
 
   // export * from "module"
   replaceInCode(ms, /\bexport\s*\*\s*from\s*(['"])([^'"]+)\1\s*;?/g,
-    (_, q, mod) => `Object.assign(module.exports, require(${q}${mod}${q}));`);
+    (_, q, mod) => `Object.assign(__shiro_module.exports, __shiro_require(${q}${mod}${q}));`);
 
   // export { x as y } (local re-exports, no from)
   replaceInCode(ms, /\bexport\s*\{([^}]+)\}\s*;?/g, (_, exports) => {
     const items = exports.split(',').map((s: string) => s.trim()).filter((s: string) => s && /^[\w$]/.test(s));
     return items.map((item: string) => {
       const asMatch = item.match(/^([\w$]+)\s+as\s+([\w$]+)$/);
-      if (asMatch) return `module.exports.${asMatch[2]} = ${asMatch[1]};`;
-      return `module.exports.${item} = ${item};`;
+      if (asMatch) return `__shiro_module.exports.${asMatch[2]} = ${asMatch[1]};`;
+      return `__shiro_module.exports.${item} = ${item};`;
     }).join(' ');
   });
 
@@ -976,7 +976,21 @@ export function transformBundledESM(src: string): string {
  *  loads the same 13 MB cli.js, and the transform takes about a second. */
 const bundleCache = new Map<string, string>();
 
+/**
+ * `new Function("m", "return import(m)")`, the idiom CommonJS builds use to
+ * keep a real dynamic import (prettier's CLI, TypeScript-compiled code): the
+ * native import() would resolve against the page, so it becomes the module's
+ * __dynamic_import.
+ */
+export function rewriteFunctionImport(src: string): string {
+  if (!src.includes('Function(')) return src;
+  return src.replace(
+    /\bnew\s+Function\(\s*(['"])([\w$]+)\1\s*,\s*(['"])return\s+import\(\s*\2\s*\);?\3\s*\)/g,
+    (_, _q, name) => `((${name}) => __dynamic_import(${name}))`);
+}
+
 export function transformESModules(src: string): string {
+  src = rewriteFunctionImport(src);
   // Fast path for large bundled files (>500KB)
   if (src.length > 500000) {
     const cached = bundleCache.get(src);
@@ -999,11 +1013,16 @@ export function transformESModules(src: string): string {
     return `___COMMENT_${comments.length - 1}___`;
   });
 
-  // Dynamic import() → Promise.resolve(require()) - must be before other import transforms
-  // Handles: await import("./path") or import("./path").then(...)
-  // URLs (a CDN module) stay native import(): the browser loads them, require() can't
-  src = src.replace(/\bimport\s*\(\s*(['"`])([^'"`]+)\1\s*\)/g, (m, q, spec) =>
-    /^(?:https?|data|blob):/.test(spec) ? m : `Promise.resolve(require(${q}${spec}${q}))`);
+  // Dynamic import() → __dynamic_import() (must be before other import
+  // transforms): resolved like require, relative to the module, giving a
+  // namespace object; only in code (not in strings: prettier builds one with
+  // new Function). URLs (a CDN module) stay native import(): the browser loads
+  // them, and a native import() of anything else resolves against the page.
+  {
+    const ms: MaskedSource = { src, mask: codeMask(src) };
+    replaceInCode(ms, /(?<![\w$.])import\s*\((?!\s*['"`](?:https?|data|blob):)/g, '__dynamic_import(');
+    src = ms.src;
+  }
 
   // import.meta → __import_meta (must be before import statement transforms)
   src = src.replace(/import\.meta/g, '__import_meta');
@@ -1013,12 +1032,12 @@ export function transformESModules(src: string): string {
     (_, defaultName, namedImports, mod) => {
       const cleanImports = namedImports.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
       const fixed = cleanImports.replace(/(\w+)\s+as\s+(\w+)/g, '$1: $2');
-      return `const ${defaultName} = require("${mod}"); const {${fixed}} = require("${mod}");`;
+      return `const ${defaultName} = __shiro_require("${mod}"); const {${fixed}} = __shiro_require("${mod}");`;
     });
 
   // import x from 'y' → const x = require('y')
   src = src.replace(/import\s+(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?/g,
-    'const $1 = require("$2");');
+    'const $1 = __shiro_require("$2");');
 
   // import { a, b } from 'y' → const { a, b } = require('y')
   // Also handles: import { a as b } → const { a: b }
@@ -1027,19 +1046,19 @@ export function transformESModules(src: string): string {
       // Strip comments and fix 'as' syntax
       const cleanImports = imports.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
       const fixed = cleanImports.replace(/(\w+)\s+as\s+(\w+)/g, '$1: $2');
-      return `const {${fixed}} = require("${mod}");`;
+      return `const {${fixed}} = __shiro_require("${mod}");`;
     });
 
   // import * as x from 'y' → const x = require('y')
   src = src.replace(/import\s+\*\s+as\s+(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?/g,
-    'const $1 = require("$2");');
+    'const $1 = __shiro_require("$2");');
 
   // import 'y' → require('y')
   src = src.replace(/import\s+['"]([^'"]+)['"]\s*;?/g,
-    'require("$1");');
+    '__shiro_require("$1");');
 
   // export default x → module.exports = x
-  src = src.replace(/export\s+default\s+/g, 'module.exports = ');
+  src = src.replace(/export\s+default\s+/g, '__shiro_module.exports = ');
 
   // export { x, y } from 'z' or export { x as y } from 'z' (handles multiline and comments)
   // Note: \s* allows no space between export and { (e.g., export{x})
@@ -1051,20 +1070,20 @@ export function transformESModules(src: string): string {
       const assigns = items.map((item: string) => {
         const asMatch = item.match(/^(\w+)\s+as\s+(\w+)$/);
         if (asMatch) {
-          return `module.exports.${asMatch[2]} = require("${mod}").${asMatch[1]};`;
+          return `__shiro_module.exports.${asMatch[2]} = __shiro_require("${mod}").${asMatch[1]};`;
         }
-        return `module.exports.${item} = require("${mod}").${item};`;
+        return `__shiro_module.exports.${item} = __shiro_require("${mod}").${item};`;
       }).join(' ');
       return assigns;
     });
 
   // export * as name from 'z' → module.exports.name = require('z')
   src = src.replace(/export\s+\*\s+as\s+(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?/g,
-    'module.exports.$1 = require("$2");');
+    '__shiro_module.exports.$1 = __shiro_require("$2");');
 
   // export * from 'z' → Object.assign(module.exports, require('z'))
   src = src.replace(/export\s+\*\s+from\s+['"]([^'"]+)['"]\s*;?/g,
-    'Object.assign(module.exports, require("$1"));');
+    'Object.assign(__shiro_module.exports, __shiro_require("$1"));');
 
   // export { x, y } or export { x as y } → module.exports.x = x; module.exports.y = y;
   // Note: \s* allows no space between export and { (e.g., export{x as y})
@@ -1076,10 +1095,10 @@ export function transformESModules(src: string): string {
       const asMatch = item.match(/^(\w+)\s+as\s+(\w+)$/);
       if (asMatch) {
         // export { local as exported }
-        return `module.exports.${asMatch[2]} = ${asMatch[1]};`;
+        return `__shiro_module.exports.${asMatch[2]} = ${asMatch[1]};`;
       }
       // export { x }
-      return `module.exports.${item} = ${item};`;
+      return `__shiro_module.exports.${item} = ${item};`;
     }).join(' ');
   });
 
@@ -1118,7 +1137,7 @@ export function transformESModules(src: string): string {
 
   // Add module.exports for all tracked named exports at the end
   if (namedExports.length > 0) {
-    src += '\n' + namedExports.map(n => `module.exports.${n} = ${n};`).join('\n');
+    src += '\n' + namedExports.map(n => `__shiro_module.exports.${n} = ${n};`).join('\n');
   }
 
   // Remove __filename/__dirname/Buffer declarations (we provide these as parameters)
@@ -1154,8 +1173,8 @@ export function transformESModules(src: string): string {
       const items = cleanNames.split(',').map((s: string) => s.trim()).filter((s: string) => s && /^\w/.test(s));
       return items.map((item: string) => {
         const asMatch = item.match(/^(\w+)\s+as\s+(\w+)$/);
-        if (asMatch) return `module.exports.${asMatch[2]} = ${asMatch[1]};`;
-        return `module.exports.${item} = ${item};`;
+        if (asMatch) return `__shiro_module.exports.${asMatch[2]} = ${asMatch[1]};`;
+        return `__shiro_module.exports.${item} = ${item};`;
       }).join(' ');
     });
   }

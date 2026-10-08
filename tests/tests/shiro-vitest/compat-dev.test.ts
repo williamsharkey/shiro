@@ -84,6 +84,10 @@ async function sh(shell: Shell, cmd: string) {
   return { out: out.replace(/\r\n/g, '\n'), err: err.replace(/\r\n/g, '\n'), exitCode };
 }
 
+/** Without colour codes: Shiro's shell exports FORCE_COLOR, so chalk and
+ *  supports-color colour even into a pipe */
+const plain = (t: string) => t.replace(/\x1b\[[0-9;]*m/g, '');
+
 /** A download pinned by sha256, cached in tests/.pkg-cache. */
 async function cachedDownload(url: string, sha: string): Promise<Uint8Array> {
   const file = `${CACHE}/${url.split('/').pop()}`;
@@ -661,4 +665,168 @@ describe('perl (x86-64 in Blink)', () => {
     r = await sh(shell, `perl -e 'open my $fh, "-|", "perl", "-e", "print qq(from child\\n)" or die; print "got: ", <$fh>; close $fh; print "rc=$?\\n"'`);
     expect(r.out).toBe('got: from child\nrc=0\n');
   }, 300_000);
+});
+
+describe('node-compat modules real packages rely on', () => {
+  let shell: Shell;
+  let fs: FileSystem;
+  beforeAll(async () => {
+    ({ fs, shell } = await createTestShell());
+    await fs.mkdir('/home/user/m', { recursive: true });
+  });
+  const node = async (code: string) => {
+    await fs.writeFile('/home/user/m/t.js', code);
+    const r = await sh(shell, 'cd /home/user/m && node t.js');
+    expect(r.err).toBe('');
+    return r.out;
+  };
+
+  it('path follows Node (relative paths stay relative)', async () => {
+    expect(await node(`const p = require('path');
+console.log(JSON.stringify([p.dirname('a'), p.dirname('/a'), p.dirname('a/b/'), p.join('a', '../b', './c'), p.join(''), p.normalize('./x/../y/'),
+  p.resolve('/a', 'b', '../c'), p.relative('/a/b', '/a/c/d'), p.relative('/a', '/a'), p.extname('.bashrc'), p.extname('a.b.c'), p.basename('/x/y.js', '.js'),
+  p.parse('f.txt').dir, p.parse('/d/f.txt').dir, p.posix.dirname('*.jsa'), p.resolve('q') === process.cwd() + '/q']));`))
+      .toBe('["." ,"/","a","b/c",".","y/","/a/c","../c/d","","",".c","y","","/d",".",true]\n'.replace(' ,', ','));
+  }, 60_000);
+
+  it('streams: Readable/Transform/Writable, pipe, pipeline, async iteration, objectMode, without new', async () => {
+    expect(await node(`const { Readable, Transform, Writable, PassThrough, pipeline } = require('stream');
+const upper = new Transform({ transform(c, e, cb) { cb(null, String(c).toUpperCase()); } });
+let got = '';
+const sink = new Writable({ write(c, e, cb) { got += c; setTimeout(cb, 1); } });
+pipeline(Readable.from(['a', 'b', 'c']), upper, sink, (err) => {
+  console.log('pipeline', err, got);
+  const pt = PassThrough({ objectMode: true });
+  (async () => { const seen = []; for await (const x of pt) seen.push(x.n); console.log('iter', seen.join(',')); })();
+  pt.write({ n: 1 }); pt.write({ n: 2 }); pt.end();
+  const r = new Readable({ read() {} });
+  r.on('readable', () => { let c; while ((c = r.read()) !== null) console.log('read', String(c)); });
+  r.on('end', () => console.log('end'));
+  r.push('x'); r.push(null);
+});`).then(o => o.split('\n').sort().join('\n'))).toBe('\nend\niter 1,2\npipeline null ABC\nread x');
+  }, 60_000);
+
+  it('EventEmitter: pre-class inheritance, listener this, once, error without listener throws', async () => {
+    expect(await node(`const EE = require('events'); const util = require('util');
+function Old() { EE.call(this); } util.inherits(Old, EE);
+function Lazy() {} util.inherits(Lazy, EE);
+const o = new Old(); o.on('x', function (v) { console.log('this ok', this === o, v); }); o.emit('x', 1);
+const l = new Lazy(); l.once('y', (v) => console.log('lazy', v)); l.emit('y', 2); console.log(l.emit('y', 3), l.listenerCount('y'));
+try { new EE().emit('error', new Error('boom')); } catch (e) { console.log('threw', e.message); }`))
+      .toBe('this ok true 1\nlazy 2\nfalse 0\nthrew boom\n');
+  }, 60_000);
+
+  it('package exports: require picks the require condition, import() a namespace', async () => {
+    await fs.mkdir('/home/user/m/node_modules/dual/esm', { recursive: true });
+    await fs.writeFile('/home/user/m/node_modules/dual/package.json', JSON.stringify({ name: 'dual', exports: { '.': { import: './esm/index.mjs', require: './index.cjs' }, './feature': { browser: './b.js', node: './n.js' } } }));
+    await fs.writeFile('/home/user/m/node_modules/dual/index.cjs', 'module.exports = { kind: "cjs" };');
+    await fs.writeFile('/home/user/m/node_modules/dual/esm/index.mjs', 'export const kind = "esm";');
+    await fs.writeFile('/home/user/m/node_modules/dual/n.js', 'module.exports = "node";');
+    await fs.writeFile('/home/user/m/node_modules/dual/b.js', 'module.exports = "browser";');
+    expect(await node(`console.log(require('dual').kind, require('dual/feature'));
+import('dual').then(ns => console.log(ns.default.kind, ns.kind));
+const dyn = new Function('m', 'return import(m)'); dyn('./node_modules/dual/n.js').then(ns => console.log(ns.default));`))
+      .toBe('cjs node\ncjs cjs\nnode\n');
+  }, 60_000);
+});
+
+describe('node: real npm packages', () => {
+  let shell: Shell;
+  let fs: FileSystem;
+  beforeAll(async () => {
+    ({ fs, shell } = await createTestShell());
+    await bootFiles(fs);
+    await fs.mkdir('/home/user/app/test', { recursive: true });
+    const r = await sh(shell, 'cd /home/user/app && npm init -y > /dev/null && npm install commander@12.1.0 chalk@4.1.2 dayjs@1.11.13 uuid@10.0.0 mocha@10.8.2 typescript@5.6.3 prettier@3.3.3');
+    expect(r.exitCode).toBe(0);
+  }, 300_000);
+
+  it('a CLI on commander, chalk, dayjs and uuid', async () => {
+    // commander declares `const process = require('node:process')` at top level
+    await fs.writeFile('/home/user/app/cli.js', `const { program } = require('commander');
+program.name('greet').option('-n, --name <name>', 'who', 'world').option('-l, --loud');
+program.parse();
+const o = program.opts();
+const chalk = require('chalk');
+const dayjs = require('dayjs');
+const { v4, validate } = require('uuid');
+console.log(o.loud ? ('hello ' + o.name).toUpperCase() : 'hello ' + o.name, chalk.red('x').length > 0, dayjs('2024-01-31').add(1, 'month').format('YYYY-MM-DD'), validate(v4()));
+console.log('%s has %d items (%j)', 'list', 3, { a: 1 });
+`);
+    const r = await sh(shell, 'cd /home/user/app && node cli.js --name shiro -l');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('HELLO SHIRO true 2024-02-29 true\nlist has 3 items ({"a":1})\n');
+  }, 60_000);
+
+  it('mocha runs a spec (pass and fail exit codes)', async () => {
+    await fs.writeFile('/home/user/app/test/a.spec.js', `const assert = require('assert');
+describe('math', () => {
+  it('adds', () => assert.strictEqual(1 + 1, 2));
+  it('waits', async () => { await new Promise(r => setTimeout(r, 5)); });
+});
+`);
+    let r = await sh(shell, 'cd /home/user/app && npx mocha test/a.spec.js');
+    expect(plain(r.out)).toMatch(/math\n {4}✔ adds\n {4}✔ waits\n[\s\S]*2 passing/);
+    expect(r.exitCode).toBe(0);
+    await fs.writeFile('/home/user/app/test/b.spec.js', `const assert = require('assert');
+describe('broken', () => { it('fails', () => assert.strictEqual(1, 2)); });
+`);
+    r = await sh(shell, 'cd /home/user/app && npx mocha test/b.spec.js');
+    expect(plain(r.out)).toMatch(/0 passing[\s\S]*1 failing/);
+    expect(r.exitCode).not.toBe(0);
+  }, 120_000);
+
+  it('ES modules may bind module, require and process themselves', async () => {
+    await fs.writeFile('/home/user/app/lib.mjs', `import module from 'node:module';
+import process from 'node:process';
+const require = module.createRequire(import.meta.url);
+const dayjs = require('dayjs');
+export const year = dayjs('2020-05-05').year();
+export default function plat() { return typeof process.platform; }
+`);
+    await fs.writeFile('/home/user/app/main.mjs', `import plat, { year } from './lib.mjs';
+const { default: again } = await import(new URL('./lib.mjs', import.meta.url));
+console.log(year, plat(), again === plat);
+`);
+    const r = await sh(shell, 'cd /home/user/app && node main.mjs');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('2020 string true\n');
+  }, 60_000);
+
+  it('tsc type-checks and compiles', async () => {
+    await fs.writeFile('/home/user/app/hello.ts', 'export function greet(name: string): string { return `hi ${name}`; }\nconsole.log(greet("ts"));\n');
+    let r = await sh(shell, 'cd /home/user/app && npx tsc --version | od -c; node node_modules/typescript/bin/tsc --version | od -c');
+    console.log(r.out);
+    r = await sh(shell, 'cd /home/user/app && npx tsc --version');
+    expect(r.out).toBe('Version 5.6.3\n');
+    r = await sh(shell, 'cd /home/user/app && npx tsc --target es2020 --module commonjs hello.ts && node hello.js');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('hi ts\n');
+    await fs.writeFile('/home/user/app/bad.ts', 'const n: number = "str";\n');
+    r = await sh(shell, 'cd /home/user/app && npx tsc --noEmit bad.ts');
+    expect(r.out).toContain("error TS2322: Type 'string' is not assignable to type 'number'");
+    expect(r.exitCode).not.toBe(0);
+  }, 300_000);
+
+  it('prettier formats files, stdin, and globs (--check, --write)', async () => {
+    await fs.mkdir('/home/user/app/src/lib', { recursive: true });
+    await fs.writeFile('/home/user/app/src/ugly.js', 'const a = {b:1,c:[1,2,3]}\nfunction f( x ){return x*2}\n');
+    await fs.writeFile('/home/user/app/src/lib/fine.js', 'export const ok = true;\n');
+    const pretty = 'const a = { b: 1, c: [1, 2, 3] };\nfunction f(x) {\n  return x * 2;\n}\n';
+    let r = await sh(shell, 'cd /home/user/app && npx prettier src/ugly.js');
+    expect(r.err).toBe('');
+    expect(r.out).toBe(pretty);
+    r = await sh(shell, 'cd /home/user/app && npx prettier --stdin-filepath x.js < src/ugly.js');
+    expect(r.out).toBe(pretty);
+    // a glob walks the tree (fast-glob), skipping node_modules
+    r = await sh(shell, 'cd /home/user/app && npx prettier --check "src/**/*.js"');
+    expect(plain(r.err)).toContain('[warn] src/ugly.js');
+    expect(r.err).not.toContain('fine.js');
+    expect(r.exitCode).toBe(1);
+    r = await sh(shell, 'cd /home/user/app && npx prettier --write src && cat src/ugly.js');
+    expect(r.out).toContain(pretty);
+    r = await sh(shell, 'cd /home/user/app && npx prettier --check src');
+    expect(r.exitCode).toBe(0);
+  }, 180_000);
+
 });
