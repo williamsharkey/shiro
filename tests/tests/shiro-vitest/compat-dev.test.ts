@@ -665,6 +665,22 @@ describe('perl (x86-64 in Blink)', () => {
     r = await sh(shell, `perl -e 'open my $fh, "-|", "perl", "-e", "print qq(from child\\n)" or die; print "got: ", <$fh>; close $fh; print "rc=$?\\n"'`);
     expect(r.out).toBe('got: from child\nrc=0\n');
   }, 300_000);
+
+  // fork() is a real copy (Blink patch 0014): code between fork and exec
+  // used to run on the parent's memory, and a fork without exec broke it
+  it('fork: a child that dups a pipe onto stdout and execs; fork without exec', async () => {
+    let r = await sh(shell, `perl -e 'pipe R,W; if(!fork){close R; open STDOUT,">&W"; exec "perl","-e","print 1"} close W; print <R>'`);
+    expect(r.out).toBe('1');
+    r = await sh(shell, `perl -e 'my $x = "parent"; my $pid = fork; if (!$pid) { $x = "child"; exit 3 } waitpid($pid, 0); print "$x ", $? >> 8, "\n"'`);
+    expect(r.out).toBe('parent 3\n');
+  }, 120_000);
+
+  it('IPC::Open3 and prove get the child output', async () => {
+    let r = await sh(shell, `perl -e 'use IPC::Open3; my $pid = open3(my $in, my $out, undef, "perl", "-e", "print scalar <STDIN>; print STDERR qq(e\n)"); print $in "hi\n"; close $in; my @l = sort <$out>; waitpid($pid, 0); print "open3: @l"'`);
+    expect(r.out).toBe('open3: e\n hi\n'); // stderr unbuffered, stdout at exit: sorted
+    r = await sh(shell, 'cd /home/user/pt && prove t/basic.t');
+    expect(r.out).toMatch(/All tests successful/);
+  }, 300_000);
 });
 
 describe('node-compat modules real packages rely on', () => {

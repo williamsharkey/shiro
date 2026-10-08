@@ -1,6 +1,6 @@
 
 import type { Command } from './index';
-import { parseArgs, readFileText, readdirEntries, statEntry } from './flags';
+import { parseArgs, readdirEntries, statEntry } from './flags';
 export const cp: Command = {
   name: "cp",
   description: "Copy files and directories",
@@ -28,9 +28,12 @@ export const cp: Command = {
       return 1;
     }
 
+    // Bytes, not text (a UTF-8 round trip corrupts binaries such as ELF
+    // programs), and the permission bits, as GNU cp does for a new file.
     async function copyFile(src: string, dst: string): Promise<void> {
-      const content = await readFileText(ctx.fs, src);
-      await ctx.fs.writeFile(dst, content);
+      const content = await ctx.fs.readFile(src);
+      const mode = (await ctx.fs.stat(src)).mode & 0o7777;
+      await ctx.fs.writeFile(dst, content, { mode });
     }
 
     async function copyDir(src: string, dst: string): Promise<void> {

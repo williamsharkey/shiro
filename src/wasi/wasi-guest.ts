@@ -95,7 +95,8 @@ export interface GuestOptions {
 }
 
 export type SyncCall = (req: SysRequest) => SysReply;
-export type AsyncCall = (req: SysRequest) => Promise<SysReply>;
+/** A reply that is ready at once may come back directly (no suspension under JSPI). */
+export type AsyncCall = (req: SysRequest) => SysReply | Promise<SysReply>;
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -144,8 +145,71 @@ export class WasiGuest {
 
   // ── memory helpers ────────────────────────────────────────────────
 
-  private view(): DataView { return new DataView(this.memory.buffer); }
-  private u8(): Uint8Array { return new Uint8Array(this.memory.buffer); }
+  private viewCache: DataView | null = null;
+  private u8Cache: Uint8Array | null = null;
+  // Views are cached per buffer (memory.grow replaces it)
+  private view(): DataView {
+    const b = this.memory.buffer;
+    if (this.viewCache?.buffer !== b) this.viewCache = new DataView(b);
+    return this.viewCache;
+  }
+  private u8(): Uint8Array {
+    const b = this.memory.buffer;
+    if (this.u8Cache?.buffer !== b) this.u8Cache = new Uint8Array(b);
+    return this.u8Cache;
+  }
+
+  /**
+   * Set by a Worker driver (./guest-worker.ts): the channel's data area and a
+   * blocking call on it (EINTR restarts handled). fd_read/fd_write use it
+   * directly, without the generator path's per-call allocations: those two
+   * are most of a pipeline's syscalls.
+   */
+  direct?: { data: Uint8Array; call(nr: number, a0: number, a1: number): number };
+
+  /** fd_write on `direct`: gather the iovecs straight into the data area. Undefined: take the generator path. */
+  private fastWrite(fd: number, iovs: number, n: number, nwritten: number): number | undefined {
+    const d = this.direct!;
+    const v = this.view(), m = this.u8();
+    let total = 0;
+    for (let i = 0; i < n; i++) {
+      const len = v.getUint32(iovs + i * 8 + 4, true);
+      if (total + len > d.data.length) return undefined;
+      const p = v.getUint32(iovs + i * 8, true);
+      d.data.set(m.subarray(p, p + len), total);
+      total += len;
+    }
+    let done = 0;
+    while (done < total) {
+      if (done > 0) d.data.copyWithin(0, done, total);
+      const r = d.call(A.SYS_write, fd, total - done);
+      if (r < 0) { if (done === 0) return wasiErrno(r); break; }
+      if (r === 0) break;
+      done += r;
+    }
+    this.view().setUint32(nwritten, done, true);
+    return 0;
+  }
+
+  /** fd_read on `direct`: one read, scattered from the data area into the iovecs. */
+  private fastRead(fd: number, iovs: number, n: number, nread: number): number {
+    const d = this.direct!;
+    const v = this.view();
+    let total = 0;
+    for (let i = 0; i < n; i++) total += v.getUint32(iovs + i * 8 + 4, true);
+    total = Math.min(total, d.data.length);
+    const r = d.call(A.SYS_read, fd, total);
+    if (r < 0) return wasiErrno(r);
+    const m = this.u8();
+    for (let i = 0, off = 0; i < n && off < r; i++) {
+      const p = this.view().getUint32(iovs + i * 8, true);
+      const k = Math.min(this.view().getUint32(iovs + i * 8 + 4, true), r - off);
+      m.set(d.data.subarray(off, off + k), p);
+      off += k;
+    }
+    this.view().setUint32(nread, r, true);
+    return 0;
+  }
   /** Copy bytes out of guest memory (never a view: memory may be shared). */
   private bytes(ptr: number, len: number): Uint8Array { return this.u8().slice(ptr, ptr + len); }
   private str(ptr: number, len: number): string { return dec.decode(this.bytes(ptr, len)); }
@@ -313,8 +377,10 @@ export class WasiGuest {
           if (!(how & 3)) return WASI_EINVAL;
           return wasiErrno(yield* this.call(A.SYS_shutdown, fd, (how & 3) - 1));
         }),
-        fd_write: g(this.fd_write),
-        fd_read: g(this.fd_read),
+        fd_write: (fd: number, iovs: number, n: number, nw: number) =>
+          (this.direct && !this.inSignal ? this.fastWrite(fd, iovs, n, nw) : undefined) ?? this.fd_write(fd, iovs, n, nw),
+        fd_read: (fd: number, iovs: number, n: number, nr: number) =>
+          this.direct ? this.fastRead(fd, iovs, n, nr) : this.fd_read(fd, iovs, n, nr),
         fd_pwrite: g(this.fd_pwrite),
         fd_pread: g(this.fd_pread),
         fd_seek: g(this.fd_seek),
@@ -1496,14 +1562,21 @@ export function runSync<T>(gen: Sys<T>, call: SyncCall): T {
   return r.value;
 }
 
-/** The result directly when the generator never yields, else a promise. */
+/** The result directly when every call the generator makes is answered at once, else a promise. */
 export function runMaybeAsync<T>(gen: Sys<T>, call: AsyncCall): T | Promise<T> {
   let r = gen.next();
-  if (r.done) return r.value;
-  return (async () => {
-    while (!r.done) r = gen.next(await call(r.value));
-    return r.value;
-  })();
+  while (!r.done) {
+    const reply = call(r.value);
+    if (reply instanceof Promise) {
+      return (async () => {
+        r = gen.next(await reply);
+        while (!r.done) r = gen.next(await call(r.value));
+        return r.value;
+      })();
+    }
+    r = gen.next(reply);
+  }
+  return r.value;
 }
 
 const isGen = (x: any): x is Sys<any> => x && typeof x.next === 'function' && typeof x.throw === 'function';
