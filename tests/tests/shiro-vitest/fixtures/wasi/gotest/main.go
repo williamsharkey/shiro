@@ -28,6 +28,19 @@ func main() {
 		if err := os.WriteFile(os.Args[2]+"/made-by-go.txt", []byte("hi from go\n"), 0644); err != nil {
 			fmt.Println("write:", err)
 		}
+		if err := os.Symlink("made-by-go.txt", "link.txt"); err != nil {
+			fmt.Println("symlink:", err)
+		}
+		target, err := os.Readlink("link.txt")
+		fmt.Printf("readlink: %s %v\n", target, err)
+		if err := os.Rename("rel.txt", "renamed.txt"); err != nil {
+			fmt.Println("rename:", err)
+		}
+		if err := os.Mkdir("sub", 0755); err != nil {
+			fmt.Println("mkdir:", err)
+		}
+		st, err := os.Stat("sub")
+		fmt.Printf("sub dir: %v %v\n", err == nil && st.IsDir(), err)
 		return
 	}
 	sc := bufio.NewScanner(os.Stdin)

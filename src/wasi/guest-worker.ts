@@ -10,28 +10,22 @@
 
 import { GuestChannel, SYS_MESSAGE, isStartMessage, type GuestStartMessage } from '../kernel/channel';
 import * as A from '../kernel/abi';
-import type { SysReply, SysRequest } from './abi';
+import { SYS_wasi_thread_spawn, type SysReply, type SysRequest } from './abi';
 import { ProcExit, WasiGuest, buildImports, runSync, type Preopen } from './wasi-guest';
-import { ARG_REPLY_LEN } from './kernel-channel';
 
 export interface WasiStartData {
   module: WebAssembly.Module;
   preopens: Preopen[];
   memory?: WebAssembly.Memory;
   memoryImport?: { module: string; name: string };
-  /** Int32[0]: next thread id, shared by every thread of the process. */
-  tids?: SharedArrayBuffer;
-  /** Set for wasi-threads threads: run wasi_thread_start(tid, startArg). */
-  thread?: { tid: number; startArg: number };
+  /** Set for wasi-threads threads: run wasi_thread_start(tid, startArg); tid is the message's. */
+  thread?: { startArg: number };
 }
 
-export type WasiStartMessage = GuestStartMessage & { wasi: WasiStartData };
+export type WasiStartMessage = GuestStartMessage & { tid?: number; wasi: WasiStartData };
 
 /** Messages besides SYS_MESSAGE that a guest posts to the host. */
-export type WasiGuestMessage =
-  | { type: 'wasi-thread-spawn'; tid: number; startArg: number }
-  | { type: 'wasi-thread-exit'; tid: number }
-  | { type: 'wasi-error'; message: string };
+export type WasiGuestMessage = { type: 'wasi-error'; message: string };
 
 export interface Port {
   postMessage(msg: unknown): void;
@@ -50,23 +44,15 @@ function run(port: Port, msg: WasiStartMessage): void {
   const channel = new GuestChannel(msg.sab, () => port.postMessage(SYS_MESSAGE));
   const call = (req: SysRequest): SysReply => {
     if (req.data) channel.data.set(req.data);
-    // Request and reply sizes ride in spare arg slots (see kernel-channel.ts)
-    const args = req.args.slice(0, ARG_REPLY_LEN);
-    while (args.length < ARG_REPLY_LEN) args.push(0);
-    args.push(Math.min(req.out ?? 0, channel.data.length), req.data?.length ?? 0);
-    const lo = channel.call(req.nr, ...args);
+    const lo = channel.call(req.nr, ...req.args);
     return { ret: channel.result64(lo), data: channel.data };
   };
-  const tids = w.tids ? new Int32Array(w.tids) : null;
+  const tid = msg.tid ?? msg.pid;
   const guest = new WasiGuest({
     args: msg.argv, env: msg.env, preopens: w.preopens,
-    dataSize: channel.data.length, tid: w.thread?.tid ?? 0,
-    threadSpawn: tids ? (startArg) => {
-      const tid = Atomics.add(tids, 0, 1);
-      if (tid >= 1 << 29) return -A.EAGAIN;
-      port.postMessage({ type: 'wasi-thread-spawn', tid, startArg } satisfies WasiGuestMessage);
-      return tid;
-    } : undefined,
+    dataSize: channel.data.length, tid,
+    // Threads need the shared memory; the host answers with attachThread
+    threadSpawn: w.memory ? (startArg) => call({ nr: SYS_wasi_thread_spawn, args: [startArg] }).ret : undefined,
   });
   const extra: Record<string, Record<string, any>> = {};
   if (w.memory && w.memoryImport) extra[w.memoryImport.module] = { [w.memoryImport.name]: w.memory };
@@ -83,8 +69,8 @@ function run(port: Port, msg: WasiStartMessage): void {
 
   try {
     if (w.thread) {
-      exp.wasi_thread_start(w.thread.tid, w.thread.startArg);
-      port.postMessage({ type: 'wasi-thread-exit', tid: w.thread.tid } satisfies WasiGuestMessage);
+      exp.wasi_thread_start(tid, w.thread.startArg);
+      call({ nr: A.SYS_exit, args: [0] }); // ends this thread only; the kernel stops the worker
       return;
     }
     if (typeof exp._start === 'function') exp._start();

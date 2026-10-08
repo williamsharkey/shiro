@@ -3,7 +3,7 @@
  * processes, and real Worker guests making blocking syscalls over the SAB
  * channel (Node worker threads have SharedArrayBuffer + Atomics.wait).
  */
-import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { Worker } from 'node:worker_threads';
 import { build } from 'esbuild';
 import { createTestShell } from './helpers';
@@ -14,7 +14,9 @@ import { FdTable, BufferFile, DevNull, DevZero, DevRandom, refCount, type OpenFi
 import { createPipe } from '@shiro/kernel/pipe';
 import { Kernel } from '@shiro/kernel/kernel';
 import { canBlock } from '@shiro/kernel/channel';
-import { startWorker, type GuestWorker } from '@shiro/kernel/worker-host';
+import { startWorker, attachThread, type GuestWorker } from '@shiro/kernel/worker-host';
+import { Process } from '@shiro/kernel/process';
+import { EpollFile } from '@shiro/kernel/epoll';
 import { processTable } from '@shiro/process-table';
 
 const enc = new TextEncoder();
@@ -361,6 +363,101 @@ describe('kernel processes', () => {
     kernel.kill(proc.pid, A.SIGKILL);
   });
 
+  it('registerSyscalls: handlers run first and can pass calls on', async () => {
+    const proc = kernel.spawn({ path: 'r', fds: {}, run: () => new Promise<number>(() => {}) });
+    const seen: number[] = [];
+    const off = kernel.registerSyscalls({ lo: 2000, hi: 2001 }, (_p, nr, args) => { seen.push(nr); return nr === 2000 ? args[0] * 2 : undefined; });
+    const offGetpid = kernel.registerSyscalls([A.SYS_getpid], () => undefined);
+    const data = new Uint8Array(16);
+    expect(await kernel.syscall(proc, 2000, [21], data)).toBe(42);
+    expect(await kernel.syscall(proc, 2001, [], data)).toBe(-A.ENOSYS);
+    expect(await kernel.syscall(proc, A.SYS_getpid, [], data)).toBe(proc.pid);
+    off();
+    offGetpid();
+    expect(await kernel.syscall(proc, 2000, [21], data)).toBe(-A.ENOSYS);
+    expect(seen).toEqual([2000, 2001]);
+    // socket numbers fall through to ENOSYS until net.ts registers them
+    expect(await kernel.syscall(proc, A.SYS_socket, [A.AF_INET, A.SOCK_STREAM, 0], data)).toBe(-A.ENOSYS);
+    kernel.kill(proc.pid, A.SIGKILL);
+  });
+
+  it('onSpawn sees processes before they run; spawn inherits non-cloexec fds', async () => {
+    const order: string[] = [];
+    const off = kernel.onSpawn(p => order.push(`spawn ${p.argv[0]}`));
+    const keep = new BufferFile();
+    const secret = new BufferFile();
+    const parent = kernel.spawn({ path: 'parent', fds: { 0: new DevNull(), 1: keep, 2: keep }, run: () => new Promise<number>(() => {}) });
+    parent.fds.alloc(new BufferFile(), 5);
+    parent.fds.alloc(secret, 6, true);
+    const child = kernel.spawn({ path: 'child', parent, run: async () => { order.push('run child'); return 0; } });
+    expect(order).toEqual(['spawn parent', 'spawn child']);
+    expect(child.fds.get(1)).toBe(keep);
+    expect(child.fds.has(5)).toBe(true);
+    expect(child.fds.has(6)).toBe(false);
+    const mapped = kernel.spawn({ path: 'm', parent, fds: { 1: secret }, inheritFds: true, run: async () => 0 });
+    expect(mapped.fds.get(1)).toBe(secret);
+    expect(mapped.fds.get(0)).toBe(parent.fds.get(0));
+    expect(mapped.fds.has(6)).toBe(false);
+    await child.wait();
+    expect(order).toContain('run child');
+    off();
+    kernel.kill(parent.pid, A.SIGKILL);
+  });
+
+  it('stopped processes show as stopped in the process table', async () => {
+    const p = kernel.spawn({ path: 'stopme', run: () => new Promise<number>(() => {}) });
+    kernel.kill(p.pid, A.SIGTSTP);
+    expect(processTable.get(p.pid)?.status).toBe('stopped');
+    kernel.kill(p.pid, A.SIGCONT);
+    expect(processTable.get(p.pid)?.status).toBe('running');
+    kernel.kill(p.pid, A.SIGKILL);
+  });
+
+  it('ioctl receives the caller, and Process.fromSyscallSignal maps it back', async () => {
+    let caller: Process | undefined;
+    const dev: OpenFile = Object.assign(new DevNull(), {
+      ioctl: async (_req: number, _arg: Uint8Array, sig?: AbortSignal) => { caller = Process.fromSyscallSignal(sig); return 0; },
+    });
+    const proc = kernel.spawn({ path: 'io', fds: { 0: dev }, run: () => new Promise<number>(() => {}) });
+    expect(await kernel.syscall(proc, A.SYS_ioctl, [0, A.TCGETS, 0], new Uint8Array(64))).toBe(0);
+    expect(caller).toBe(proc);
+    kernel.kill(proc.pid, A.SIGKILL);
+  });
+
+  it('epoll in-page: one-shot, closed descriptions drop out', async () => {
+    const ep = new EpollFile();
+    const [r, w] = createPipe();
+    const t = new FdTable();
+    t.alloc(r, 3);
+    t.alloc(w, 4);
+    expect(ep.ctl(A.EPOLL_CTL_ADD, 3, r, A.EPOLLIN | A.EPOLLONESHOT, 3, 0)).toBe(0);
+    const out = new Uint8Array(120);
+    const waiting = ep.wait(out, 10, -1);
+    await w.write(bytes('z'));
+    expect(await waiting).toBe(1);
+    expect(await ep.wait(out, 10, 0)).toBe(0); // one-shot: disabled until MOD
+    expect(ep.ctl(A.EPOLL_CTL_MOD, 3, r, A.EPOLLIN, 3, 0)).toBe(0);
+    expect(await ep.wait(out, 10, 0)).toBe(1);
+    expect(ep.poll(A.POLLIN)).toBe(A.POLLIN);
+    await t.close(3);
+    expect(await ep.wait(out, 10, 0)).toBe(0);
+    expect(ep.ctl(A.EPOLL_CTL_DEL, 3, r, 0, 0, 0)).toBe(-A.ENOENT);
+  });
+
+  it('rt_sigprocmask defers default-action signals until unblocked', async () => {
+    const p = kernel.spawn({ path: 'masked', fds: {}, run: () => new Promise<number>(() => {}) });
+    const data = new Uint8Array(16);
+    new DataView(data.buffer).setUint32(0, 1 << (A.SIGTERM - 1), true);
+    expect(await kernel.syscall(p, A.SYS_rt_sigprocmask, [A.SIG_BLOCK, 1, 0], data)).toBe(0);
+    kernel.kill(p.pid, A.SIGTERM);
+    await new Promise(r => setTimeout(r, 5));
+    expect(p.state).toBe('running');
+    expect(await kernel.syscall(p, A.SYS_rt_sigpending, [], data)).toBe(0);
+    expect(new DataView(data.buffer).getUint32(0, true)).toBe(1 << (A.SIGTERM - 1));
+    expect(await kernel.syscall(p, A.SYS_rt_sigprocmask, [A.SIG_UNBLOCK, 1, 0], data)).toBe(0);
+    expect(A.WTERMSIG(await p.wait())).toBe(A.SIGTERM);
+  });
+
   it('SIGPIPE kills a writer whose reader is gone', async () => {
     const [r, w] = createPipe();
     await r.close();
@@ -390,6 +487,23 @@ describe('worker guests over the SAB channel', () => {
   };
   const guest = (argv: string[], fds: Record<number, OpenFile>, opts: { dataSize?: number; cwd?: string } = {}) =>
     startWorker(kernel, nodeWorker, { path: '/bin/kernel-guest', argv: ['kernel-guest', ...argv], fds, cwd: opts.cwd }, { dataSize: opts.dataSize });
+
+  // Browsers throw on TextDecoder.decode of SharedArrayBuffer views; Node
+  // doesn't. Make the kernel side behave like a browser for these tests (the
+  // guest fixture does the same in its worker).
+  const realDecode = TextDecoder.prototype.decode;
+  let sharedDecodes = 0;
+  beforeAll(() => {
+    TextDecoder.prototype.decode = function (input?: AllowSharedBufferSource, o?: TextDecodeOptions) {
+      const buf = input && ArrayBuffer.isView(input) ? input.buffer : input;
+      if (buf instanceof SharedArrayBuffer) { sharedDecodes++; throw new TypeError('decode of SharedArrayBuffer-backed input'); }
+      return realDecode.call(this, input, o);
+    };
+  });
+  afterAll(() => {
+    TextDecoder.prototype.decode = realDecode;
+    expect(sharedDecodes).toBe(0);
+  });
 
   beforeAll(async () => {
     ({ fs, shell } = await createTestShell());
@@ -485,6 +599,91 @@ describe('worker guests over the SAB channel', () => {
     expect(A.WEXITSTATUS(await p.wait())).toBe(0);
     expect(got.length).toBe(size);
     expect(got.every((b, i) => b === (i & 0xff))).toBe(true);
+  }, 20000);
+
+  it('the decode trap catches shared-memory decodes', () => {
+    const shared = new Uint8Array(new SharedArrayBuffer(4));
+    expect(() => new TextDecoder().decode(shared)).toThrow();
+    sharedDecodes--; // that one was on purpose
+    expect(A.decodeText(shared)).toBe('\0\0\0\0');
+  });
+
+  it('path syscalls decode copies of the shared data area', async () => {
+    const out = new BufferFile();
+    const p = guest(['paths'], { 1: out, 2: out }, { cwd: '/tmp' });
+    expect(A.WEXITSTATUS(await p.wait())).toBe(0);
+    expect(out.text()).toBe('true 2 /tmp\n');
+  }, 20000);
+
+  it('*at syscalls, symlinks, rename, utimensat, link, pread/pwrite', async () => {
+    await fs.rm('/tmp/kat', { recursive: true }).catch(() => {});
+    const out = new BufferFile();
+    const p = guest(['at'], { 1: out, 2: out });
+    expect(A.WEXITSTATUS(await p.wait())).toBe(0);
+    expect(JSON.parse(out.text())).toEqual({
+      mkdirat: 0, pread: '3AB6', posAfterPread: 0, size: 10, mode: 0o600 & ~0o022,
+      symlink: 0, readlink: 'sub/f.txt', isLink: true, rename: 0, noreplace: -A.EEXIST,
+      utime: 0, mtime: 1_000_000_000_000, rmdirNotEmpty: -A.ENOTEMPTY, unlinkDir: -A.EISDIR, unlink: 0,
+      link: 0, linked: '0123AB6789',
+    });
+  }, 20000);
+
+  it('rt_sigaction handlers run with the signal masked; blocked signals wait; EINTR', async () => {
+    const out = new BufferFile();
+    const p = guest(['signals'], { 1: out, 2: out });
+    for (let i = 0; i < 300 && !out.text().includes(']'); i++) await new Promise(res => setTimeout(res, 10));
+    expect(JSON.parse(out.text().split('\n')[0])).toEqual([
+      'old 0',
+      `handler ${A.SIGUSR1} masked=true`,
+      'after masked=false',
+      `pending ${A.SIGUSR2}`,
+      `handler ${A.SIGUSR2} masked=true`,
+      'unblocked',
+      `kill-handler ${-A.EINVAL}`,
+    ]);
+    // The guest is now blocked reading an empty pipe: a caught signal interrupts it
+    await new Promise(res => setTimeout(res, 20));
+    expect(kernel.kill(p.pid, A.SIGUSR1)).toBe(0);
+    expect(A.WEXITSTATUS(await p.wait())).toBe(0);
+    expect(out.text().split('\n')[1]).toBe(`read ${-A.EINTR}`);
+  }, 20000);
+
+  it('epoll (level, edge, modify, delete) and select', async () => {
+    const out = new BufferFile();
+    const p = guest(['epoll'], { 1: out, 2: out });
+    expect(A.WEXITSTATUS(await p.wait())).toBe(0);
+    const r = 0, w = 3; // fds 1 and 2 are taken
+    expect(JSON.parse(out.text())).toEqual({
+      ctl: 0, dup: -A.EEXIST, empty: [], ready: [{ events: A.EPOLLIN, data: 1234 }], edgeConsumed: [],
+      edgeAgain: 1, mod: 0, level1: 1, level2: 1, regular: -A.EPERM,
+      select: { n: 2, read: [r], write: [w] }, selectTimeout: 0, selectBad: -A.EBADF, del: 0, delAgain: -A.ENOENT,
+    });
+  }, 20000);
+
+  it('posix_spawn without an fd map inherits non-cloexec fds', async () => {
+    const out = new BufferFile();
+    const p = guest(['spawn-inherit'], { 0: new DevNull(), 1: out, 2: out });
+    expect(A.WEXITSTATUS(await p.wait())).toBe(0);
+    expect(out.text()).toBe('inherited\n');
+  }, 20000);
+
+  it('attachThread runs a second Worker as a thread of the same process', async () => {
+    const [r] = createPipe();
+    const out = new BufferFile();
+    const p = guest(['block'], { 0: r, 1: out });
+    for (let i = 0; i < 200 && !out.text(); i++) await new Promise(res => setTimeout(res, 10));
+    const t = attachThread(kernel, p, () => nodeWorker());
+    expect(await t.exited).toBe(0);
+    expect(out.text()).toBe(`blocking\nthread tid=${t.tid} pid=${p.pid} start=${t.tid}\n`);
+    expect(p.state).toBe('running');
+    expect(p.tids.has(t.tid)).toBe(false);
+    expect(kernel.processOfTid(p.pid)).toBe(p);
+    // a second thread dies with the process
+    const t2 = attachThread(kernel, p, () => nodeWorker());
+    expect(kernel.processOfTid(t2.tid)).toBe(p);
+    kernel.kill(p.pid, A.SIGKILL);
+    await p.wait();
+    expect([undefined, 0]).toContain(await t2.exited);
   }, 20000);
 
   it('poll times out, then wakes when input arrives; nanosleep sleeps', async () => {

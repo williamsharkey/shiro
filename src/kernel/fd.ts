@@ -15,8 +15,15 @@ import {
   S_IFCHR, S_IFREG, S_IFDIR, S_IFIFO, FIONREAD,
 } from './abi';
 
-export type OpenFileKind = 'file' | 'dir' | 'pipe' | 'pty' | 'socket' | 'dev';
+export type OpenFileKind = 'file' | 'dir' | 'pipe' | 'pty' | 'socket' | 'dev' | 'epoll';
 
+/**
+ * Buffers passed to read/write/ioctl may be views of a SharedArrayBuffer
+ * (the syscall channel's data area) and are only valid during the call.
+ * Copy what you keep (`buf.slice()`), and never `TextDecoder.decode` a view
+ * directly: browsers reject shared memory there (Node doesn't, so tests
+ * won't catch it). Use `decodeText` from abi.ts.
+ */
 export interface OpenFile {
   kind: OpenFileKind;
   /** O_* status flags (access mode, O_NONBLOCK, O_APPEND, ...). F_SETFL may change O_NONBLOCK/O_APPEND. */
@@ -33,7 +40,11 @@ export interface OpenFile {
   poll(events: number): number;
   /** Called whenever readiness may have changed; returns an unsubscribe function. */
   onReady(cb: () => void): () => void;
-  ioctl?(req: number, arg: Uint8Array): Promise<number>;
+  /** `caller` is the calling process's syscall AbortSignal, as for read/write (Process.fromSyscallSignal maps it back). */
+  ioctl?(req: number, arg: Uint8Array, caller?: AbortSignal): Promise<number>;
+  /** Positional read/write (pread64/pwrite64): don't move the offset. Seekable files only. */
+  pread?(buf: Uint8Array, off: number): Promise<number>;
+  pwrite?(buf: Uint8Array, off: number): Promise<number>;
   /** New offset or -errno. */
   seek?(off: number, whence: number): number;
   stat(): Promise<KStat>;
@@ -145,6 +156,20 @@ export class FdTable {
   fork(): FdTable {
     const t = new FdTable();
     for (const [fd, e] of this.fds) t.fds.set(fd, { file: retain(e.file), cloexec: e.cloexec });
+    return t;
+  }
+
+  /**
+   * The table a spawned child gets (posix_spawn): every fd not marked
+   * close-on-exec, with `overrides` (child fd → description) installed on
+   * top. Synchronous; nothing is closed in this table.
+   */
+  inherit(overrides: Record<number, OpenFile> = {}): FdTable {
+    const t = new FdTable();
+    for (const [fd, e] of this.fds) {
+      if (!e.cloexec && !(fd in overrides)) t.fds.set(fd, { file: retain(e.file), cloexec: false });
+    }
+    for (const [fd, file] of Object.entries(overrides)) t.fds.set(Number(fd), { file: retain(file), cloexec: false });
     return t;
   }
 
@@ -474,6 +499,30 @@ export class RegularFile implements OpenFile {
     this.pos = end;
     ino.touch();
     return buf.length;
+  }
+
+  async pread(buf: Uint8Array, off: number): Promise<number> {
+    if (!canRead(this.flags)) return -EBADF;
+    if (off < 0) return -EINVAL;
+    const n = Math.max(0, Math.min(buf.length, this.ino.size - off));
+    if (n > 0) buf.set(this.ino.data.subarray(off, off + n));
+    return n;
+  }
+
+  async pwrite(buf: Uint8Array, off: number): Promise<number> {
+    if (!canWrite(this.flags)) return -EBADF;
+    if (off < 0) return -EINVAL;
+    const save = this.pos;
+    const append = this.flags & O_APPEND; // Linux: pwrite on O_APPEND appends
+    this.pos = off;
+    if (append) this.flags &= ~O_APPEND;
+    try {
+      if (append) this.pos = this.ino.size;
+      return await this.write(buf);
+    } finally {
+      if (append) this.flags |= O_APPEND;
+      this.pos = save;
+    }
   }
 
   seek(off: number, whence: number): number {

@@ -14,15 +14,14 @@
  */
 
 import * as A from '../kernel/abi';
-import { SYS_MESSAGE, canBlock, createChannelBuffer } from '../kernel/channel';
+import { KernelChannel, SYS_MESSAGE, canBlock, createChannelBuffer } from '../kernel/channel';
 import type { Kernel, Runner } from '../kernel/kernel';
 import type { Process } from '../kernel/process';
-import type { GuestWorker } from '../kernel/worker-host';
-import type { SysReply, SysRequest } from './abi';
+import { attachThread, type GuestWorker } from '../kernel/worker-host';
+import { SYS_wasi_thread_spawn, type SysReply, type SysRequest } from './abi';
 import type { WasiGuestMessage, WasiStartMessage } from './guest-worker';
 import { ProcExit, WasiGuest, buildImports, type Preopen } from './wasi-guest';
 import { findMemoryImport } from './wasm-imports';
-import { CopyingKernelChannel } from './kernel-channel';
 
 // ── Workers and mode ─────────────────────────────────────────────────
 
@@ -108,6 +107,7 @@ const installed = new WeakSet<Kernel>();
 export function installWasmLoader(kernel: Kernel): void {
   if (installed.has(kernel)) return;
   installed.add(kernel);
+  installWasiSyscalls(kernel);
   kernel.addLoader(async (path, proc, k) => {
     if (wasmProcessMode() === 'none') return null;
     const found = await findWasm(k, proc, path);
@@ -116,6 +116,18 @@ export function installWasmLoader(kernel: Kernel): void {
       const module = await compileCached(found.path, found.image);
       return wasmRunner(module, found.image)(p, kk);
     };
+  });
+}
+
+const syscallsInstalled = new WeakSet<Kernel>();
+
+/** SYS_wasi_thread_spawn: the running WASM process's thread launcher, if it has one. */
+function installWasiSyscalls(kernel: Kernel): void {
+  if (syscallsInstalled.has(kernel)) return;
+  syscallsInstalled.add(kernel);
+  kernel.registerSyscalls([SYS_wasi_thread_spawn], (proc, _nr, args) => {
+    const spawn = proc.data.wasiThreadSpawn as ((startArg: number) => number) | undefined;
+    return spawn ? spawn(args[0]) : -A.ENOSYS;
   });
 }
 
@@ -132,6 +144,7 @@ export function wasmRunner(module: WebAssembly.Module, image?: Uint8Array, extra
     const mode = wasmProcessMode();
     if (mode === 'none') throw new Error('WASM processes need SharedArrayBuffer or JSPI');
     if (!proc.env.PWD) proc.env.PWD = proc.cwd;
+    installWasiSyscalls(kernel);
     const preopens = await openPreopens(kernel, proc, extraPreopens);
     if (typeof preopens === 'number') throw new Error(`cannot open preopened directories (errno ${-preopens})`);
     return mode === 'jspi' ? runJspi(kernel, proc, module, preopens) : runWorkers(kernel, proc, module, image, preopens);
@@ -159,48 +172,54 @@ function runWorkers(
     const memory = memImport?.shared
       ? new WebAssembly.Memory({ initial: memImport.initial, maximum: memImport.maximum ?? memImport.initial, shared: true } as WebAssembly.MemoryDescriptor)
       : undefined;
-    const tids = memory ? new SharedArrayBuffer(4) : undefined;
-    if (tids) new Int32Array(tids)[0] = 1;
-    const workers = new Map<GuestWorker, CopyingKernelChannel>();
-    const stop = (w: GuestWorker) => {
-      workers.get(w)?.stop();
-      workers.delete(w);
-      try { void w.terminate(); } catch { /* already gone */ }
-    };
-    proc.onTerminate(() => { for (const w of [...workers.keys()]) stop(w); resolve(); });
-    const fail = (text: string, status: number) => {
-      void kernel.writeAll(proc, 2, new TextEncoder().encode(text)).finally(() => {
-        if (A.WIFSIGNALED(status)) void kernel.exit(proc, status);
-        else resolve(A.WEXITSTATUS(status));
+    const wasi = (thread?: { startArg: number }) => ({
+      module, preopens, memory, thread,
+      memoryImport: memImport ? { module: memImport.module, name: memImport.name } : undefined,
+    });
+    const onGuestMessage = (m: unknown, isThread: boolean) => {
+      const msg = m as WasiGuestMessage;
+      if (msg?.type !== 'wasi-error' || proc.exiting) return;
+      // Could not instantiate: 126 like an exec failure, or abort if a thread failed
+      void kernel.writeAll(proc, 2, new TextEncoder().encode(`${proc.comm}: ${msg.message}\n`)).finally(() => {
+        if (isThread) void kernel.exit(proc, A.W_TERMSIG(A.SIGABRT));
+        else resolve(126);
       });
     };
 
-    const launch = (thread?: { tid: number; startArg: number }) => {
-      const w = factory(proc);
-      const sab = createChannelBuffer();
-      const channel = new CopyingKernelChannel(sab, kernel, proc);
-      workers.set(w, channel);
-      w.onMessage((m) => {
-        if (m === SYS_MESSAGE) { void channel.handle(); return; }
-        const msg = m as WasiGuestMessage;
-        if (msg?.type === 'wasi-thread-spawn') { if (!proc.exiting) launch({ tid: msg.tid, startArg: msg.startArg }); }
-        else if (msg?.type === 'wasi-thread-exit') stop(w);
-        else if (msg?.type === 'wasi-error') fail(`${proc.comm}: ${msg.message}\n`, thread ? A.W_TERMSIG(A.SIGABRT) : A.W_EXITCODE(126));
-      });
-      w.onError((err) => {
-        if (proc.exiting) return;
-        fail(`${proc.comm}: ${(err as Error)?.message ?? err}\n`, A.W_TERMSIG(A.SIGABRT));
-      });
-      const start: WasiStartMessage = {
-        type: 'shiro-start', sab, pid: proc.pid, argv: proc.argv, env: proc.env, cwd: proc.cwd,
-        wasi: {
-          module, preopens, memory, tids, thread,
-          memoryImport: memImport ? { module: memImport.module, name: memImport.name } : undefined,
-        },
+    // wasi-threads: each thread is a Worker attached to this process (own channel and tid)
+    if (memory) {
+      proc.data.wasiThreadSpawn = (startArg: number) => {
+        if (proc.exiting) return -A.EAGAIN;
+        const t = attachThread(kernel, proc, (p) => {
+          const w = factory(p);
+          w.onMessage((m) => { if (m !== SYS_MESSAGE) onGuestMessage(m, true); });
+          return w;
+        }, { startData: { wasi: wasi({ startArg }) } });
+        return t.tid;
       };
-      w.postMessage(start);
+    }
+
+    const w = factory(proc);
+    const sab = createChannelBuffer();
+    const channel = new KernelChannel(sab, kernel, proc);
+    proc.onTerminate(() => {
+      channel.stop();
+      try { void w.terminate(); } catch { /* already gone */ }
+      resolve();
+    });
+    w.onMessage((m) => {
+      if (m === SYS_MESSAGE) void channel.handle();
+      else onGuestMessage(m, false);
+    });
+    w.onError((err) => {
+      if (proc.exiting) return;
+      void kernel.writeAll(proc, 2, new TextEncoder().encode(`${proc.comm}: ${(err as Error)?.message ?? err}\n`))
+        .finally(() => kernel.exit(proc, A.W_TERMSIG(A.SIGABRT)));
+    });
+    const start: WasiStartMessage = {
+      type: 'shiro-start', sab, pid: proc.pid, argv: proc.argv, env: proc.env, cwd: proc.cwd, wasi: wasi(),
     };
-    launch();
+    w.postMessage(start);
   }));
 }
 

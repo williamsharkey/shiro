@@ -8,7 +8,7 @@ import type { ServerWindow } from './server-window';
 export interface ShiroProcess {
   pid: number;
   command: string;
-  status: 'running' | 'exited' | 'killed';
+  status: 'running' | 'stopped' | 'exited' | 'killed';
   exitCode: number;
   startTime: number;
   windowTerminal: WindowTerminal | null;

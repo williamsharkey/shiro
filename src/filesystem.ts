@@ -864,6 +864,13 @@ export class FileSystem {
     await this._put({ ...node, mode });
   }
 
+  /** Set modification time (utimensat). There is no separate atime; it follows mtime. */
+  async utimes(path: string, _atimeMs: number, mtimeMs: number): Promise<void> {
+    const node = await this._get(path);
+    if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, utime '${path}'`);
+    await this._put({ ...node, mtime: mtimeMs });
+  }
+
   // isomorphic-git compatibility: symlink support
   async symlink(target: string, path: string): Promise<void> {
     const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
