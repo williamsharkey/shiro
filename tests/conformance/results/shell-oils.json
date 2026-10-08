@@ -1079,17 +1079,9 @@
    ]
   },
   "brace-expansion": {
-   "pass": 41,
+   "pass": 51,
    "total": 55,
    "failures": [
-    {
-     "i": 2,
-     "name": "partial leading expansion"
-    },
-    {
-     "i": 3,
-     "name": "partial leading expansion 2"
-    },
     {
      "i": 25,
      "name": "expansion on RHS of assignment"
@@ -1103,40 +1095,8 @@
      "name": "Two kinds of tilde expansion"
     },
     {
-     "i": 32,
-     "name": "Ascending number range expansion with negative step is invalid"
-    },
-    {
-     "i": 33,
-     "name": "regression: -1 step disallowed"
-    },
-    {
-     "i": 34,
-     "name": "regression: 0 step disallowed"
-    },
-    {
-     "i": 35,
-     "name": "Descending number range expansion with positive step is invalid"
-    },
-    {
-     "i": 38,
-     "name": "Singleton char ranges with steps"
-    },
-    {
-     "i": 40,
-     "name": "Char range expansion with step"
-    },
-    {
-     "i": 41,
-     "name": "Char ranges with steps of the wrong sign"
-    },
-    {
      "i": 42,
      "name": "Mixed case char expansion is invalid"
-    },
-    {
-     "i": 43,
-     "name": "Descending char range expansion"
     }
    ]
   },

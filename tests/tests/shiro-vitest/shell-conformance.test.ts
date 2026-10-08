@@ -422,4 +422,9 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('in x\n 01 02 41\nempty=0\n');
   });
+
+  it('brace expansion: leading }, {x} literal, char ranges with steps, step sign ignored', async () => {
+    const r = await script('echo }_{a,b} {x}_{a,b} -{a..e..2}- -{e..a..-2}- {a..a..2}- {1..8..-3} {5..1..2}');
+    expect(r.out).toBe('}_a }_b {x}_a {x}_b -a- -c- -e- -e- -c- -a- a- 1 4 7 5 3 1\n');
+  });
 });

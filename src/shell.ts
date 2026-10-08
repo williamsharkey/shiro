@@ -3185,9 +3185,16 @@ export class Shell {
       if (ch === '{') {
         if (depth === 0) braceStart = i;
         depth++;
-      } else if (ch === '}') {
+      } else if (ch === '}' && depth > 0) {
+        // (a } before any { is an ordinary character: }_{a,b})
         depth--;
-        if (depth === 0) { braceEnd = i; break; }
+        if (depth === 0) {
+          // {x} (no comma, no ..) is literal: keep looking for a later brace
+          const inner = token.slice(braceStart + 1, i);
+          if (!/\.\.|,/.test(inner)) { braceStart = -1; continue; }
+          braceEnd = i;
+          break;
+        }
       }
     }
     if (braceStart < 0 || braceEnd < 0) return [token];
@@ -3201,7 +3208,9 @@ export class Shell {
     if (rangeMatch) {
       const start = parseInt(rangeMatch[1]);
       const end = parseInt(rangeMatch[2]);
-      const step = rangeMatch[3] ? parseInt(rangeMatch[3]) : (start <= end ? 1 : -1);
+      // The step's sign is ignored (and 0 is 1): the direction comes from start and end
+      const mag = Math.abs(rangeMatch[3] ? parseInt(rangeMatch[3]) : 1) || 1;
+      const step = start <= end ? mag : -mag;
       const padLen = Math.max(rangeMatch[1].length, rangeMatch[2].length);
       const shouldPad = rangeMatch[1].startsWith('0') || rangeMatch[2].startsWith('0');
       const items: string[] = [];
@@ -3222,11 +3231,12 @@ export class Shell {
     }
 
     // Char range: {a..z}
-    const charRange = body.match(/^([a-zA-Z])\.\.([a-zA-Z])$/);
+    const charRange = body.match(/^([a-zA-Z])\.\.([a-zA-Z])(?:\.\.(-?\d+))?$/);
     if (charRange) {
       const startCode = charRange[1].charCodeAt(0);
       const endCode = charRange[2].charCodeAt(0);
-      const step = startCode <= endCode ? 1 : -1;
+      const mag = Math.abs(charRange[3] ? parseInt(charRange[3]) : 1) || 1;
+      const step = startCode <= endCode ? mag : -mag;
       const items: string[] = [];
       for (let c = startCode; step > 0 ? c <= endCode : c >= endCode; c += step) {
         items.push(String.fromCharCode(c));
