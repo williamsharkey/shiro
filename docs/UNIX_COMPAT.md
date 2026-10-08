@@ -62,6 +62,11 @@ work. First audit what this breaks: CDN imports (Pyodide, esm), `seed blob`
 cross-origin embedding, server windows, OAuth popups (COOP severs
 `window.opener`). Behind a flag until the audit is green. When the page is
 not isolated, fall back to JSPI (`WebAssembly.Suspending`) for WASM guests.
+Status (branch `unix/isolation`): done in `server.mjs` and `vite.config.ts`,
+on by default, `SHIRO_ISOLATION=0` to disable. Verified in Chromium:
+`crossOriginIsolated` is true, `Atomics.wait` works in a worker, and boot,
+Pyodide, npm install, esbuild-wasm and the Claude Code install all work. Carve-outs are listed
+in AGENTS.md ("Cross-origin isolation").
 
 ### 2. A kernel and worker processes
 A main-thread (or dedicated-worker) kernel owns the filesystem, the fd tables,

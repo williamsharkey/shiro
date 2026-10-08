@@ -147,7 +147,7 @@ function buildSnippet(url: string, ndjson: string, storage: string, stats: SeedS
   var iframe=document.createElement('iframe');iframe.src='${url}';
   var is=iframe.style;is.border='none';is.width='100%';is.flex='1';is.display='block';is.pointerEvents='auto';is.background='#0a0a1a';
   iframe.tabIndex=0;iframe.title='Shiro';
-  iframe.allow='clipboard-read; clipboard-write';
+  iframe.allow='clipboard-read; clipboard-write; cross-origin-isolated';
   var rh=document.createElement('div');var rs=rh.style;
   rs.position='absolute';rs.bottom='0';rs.right='0';rs.width='16px';rs.height='16px';
   rs.cursor='nwse-resize';rs.background='linear-gradient(135deg,transparent 50%,#555 50%)';
@@ -423,7 +423,7 @@ function buildBlobSnippet(compressedHtmlB64: string, compressedFsB64: string, co
   var iframe=document.createElement('iframe');iframe.src=blobUrl;
   var is=iframe.style;is.border='none';is.width='100%';is.flex='1';is.display='block';is.pointerEvents='auto';is.background='#0a0a1a';
   iframe.tabIndex=0;iframe.title='Shiro';
-  iframe.allow='clipboard-read; clipboard-write';
+  iframe.allow='clipboard-read; clipboard-write; cross-origin-isolated';
   var rh=document.createElement('div');var rs=rh.style;
   rs.position='absolute';rs.bottom='0';rs.right='0';rs.width='16px';rs.height='16px';
   rs.cursor='nwse-resize';rs.background='linear-gradient(135deg,transparent 50%,#555 50%)';

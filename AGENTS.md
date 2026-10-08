@@ -120,6 +120,14 @@ Use focused vitest runs while iterating, then run the smallest meaningful verifi
 
 Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` handles build, upload, and restart, and it is the only place that should bump `build-number.txt`. nginx on the host sets `client_max_body_size 100m` (`/etc/nginx/sites-enabled/shiro`): the 1 MB default rejected long Claude conversations and GitHub blob uploads with 413. `deploy.sh` uploads only `server.mjs`; the host's own `/opt/shiro/package.json` holds its deps (`ws`, and `undici` so proxied model calls have no 5-minute header timeout). Each model call logs one `[proxy] messages model=… stream=… bytes=… → status headers in Nms` line (`journalctl -u shiro`).
 
+### Cross-origin isolation
+
+- `server.mjs` sends `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: credentialless` on the app shell (`index.html`, including SPA fallbacks like `/s/:id`), on `.js`/`.mjs` (so same-origin Workers can start), and on `/oauth/callback`. The page is then `crossOriginIsolated`, so `SharedArrayBuffer` and `Atomics.wait` work. `vite.config.ts` sends the same pair for `npm run dev`/`vite preview`. `SHIRO_ISOLATION=0` turns both off (set it in the systemd unit for the server). `isIsolated()` in `src/utils/isolation.ts` is the runtime check, and boot logs one `[shiro] Cross-origin isolated…` / `Not cross-origin isolated…` line.
+- nginx proxies everything to node, so it passes these headers through and needs no change. If nginx ever serves `dist/` itself, it needs `add_header Cross-Origin-Opener-Policy same-origin always;` and `add_header Cross-Origin-Embedder-Policy credentialless always;` on `index.html` and `*.js`.
+- `credentialless` (not `require-corp`) lets no-cors CDN loads (scripts, CSS, images, fonts) through without CORP; they go out without cookies. CORS loads (Pyodide, esm.sh, jsdelivr, unpkg, the npm registry) are unaffected.
+- Carve-outs: a cross-origin `<iframe>` inside the app is blocked (`ERR_BLOCKED_BY_RESPONSE`) unless the framed site sends COEP/CORP or the iframe has the `credentialless` attribute. This applies to user pages in server windows that embed third-party frames. srcdoc/blob/about:blank frames inherit isolation. The `public/*.html` docs pages are not isolated. `seed blob` runs in the host page's origin, so it is isolated only if the host is. URL-mode `seed` iframes carry `allow="cross-origin-isolated"`, so they are isolated only when the host page is.
+- COOP severs `window.opener` once a popup visits another origin. The `/oauth/callback` page falls back to the `shiro-oauth-callback` BroadcastChannel, which `main.ts` also listens on. Claude sign-in and `gh auth login` use pasted codes or the device flow and don't depend on the opener.
+
 ## Gotchas
 
 - `child_process` is shimmed. There is no real process tree.

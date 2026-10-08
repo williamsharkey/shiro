@@ -13,12 +13,31 @@ import { pathToFileURL } from 'node:url';
 const PORT = process.env.PORT || 3000;
 const STATIC_DIR = process.env.STATIC_DIR || '/opt/shiro/public';
 
+// --- Cross-origin isolation ---
+// COOP same-origin + COEP credentialless make the app page crossOriginIsolated,
+// which turns on SharedArrayBuffer and Atomics.wait (needed for blocking
+// syscalls from worker processes; see docs/UNIX_COMPAT.md). credentialless
+// (not require-corp) lets no-cors CDN loads (Pyodide, esm.sh, fonts) through
+// without CORP headers; they just go out without cookies.
+// SHIRO_ISOLATION=0 turns it off.
+export function isolationEnabled() {
+  return process.env.SHIRO_ISOLATION !== '0';
+}
+
+export function isolationHeaders() {
+  if (!isolationEnabled()) return {};
+  return {
+    'cross-origin-opener-policy': 'same-origin',
+    'cross-origin-embedder-policy': 'credentialless',
+  };
+}
+
 // --- MIME types ---
 const MIME = {
   '.html': 'text/html', '.css': 'text/css', '.js': 'application/javascript',
   '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png',
   '.ico': 'image/x-icon', '.wasm': 'application/wasm', '.txt': 'text/plain',
-  '.map': 'application/json',
+  '.map': 'application/json', '.mjs': 'application/javascript',
 };
 
 // --- API proxy ---
@@ -246,12 +265,24 @@ function handleOAuthCallback(req, res) {
 <script>
 (function() {
   var params = ${JSON.stringify(params)};
+  var msg = {
+    type: 'shiro-oauth-callback',
+    code: params.code || '', state: params.state || '',
+    port: params.port || '', params: params
+  };
+  // COOP same-origin on Shiro severs window.opener once the popup has been to
+  // the provider's origin, so also post on a same-origin BroadcastChannel.
+  var sent = false;
   if (window.opener) {
-    window.opener.postMessage({
-      type: 'shiro-oauth-callback',
-      code: params.code || '', state: params.state || '',
-      port: params.port || '', params: params
-    }, window.location.origin);
+    try { window.opener.postMessage(msg, window.location.origin); sent = true; } catch (e) {}
+  }
+  if (!sent && typeof BroadcastChannel !== 'undefined') {
+    var bc = new BroadcastChannel('shiro-oauth-callback');
+    bc.postMessage(msg);
+    bc.close();
+    sent = true;
+  }
+  if (sent) {
     document.body.innerHTML = '<p>Authentication complete. You can close this window.</p>';
     setTimeout(function() { window.close(); }, 1000);
   } else {
@@ -260,7 +291,7 @@ function handleOAuthCallback(req, res) {
 })();
 </script></body></html>`;
 
-  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', ...isolationHeaders() });
   res.end(html);
 }
 
@@ -295,7 +326,13 @@ async function handleStatic(req, res) {
   try {
     const data = await readFile(filePath);
     const ext = extname(filePath);
-    res.writeHead(200, { 'content-type': MIME[ext] || 'application/octet-stream', ...staticHeaders });
+    // Isolation headers go on the app shell (index.html, also the SPA fallback for
+    // /s/:id) and on scripts, which a same-origin Worker needs to start inside an
+    // isolated page. The public/*.html docs pages stay unisolated: they embed
+    // the app in iframes and need nothing from SharedArrayBuffer.
+    const isAppShell = filePath === join(STATIC_DIR, 'index.html');
+    const isolation = isAppShell || ext === '.js' || ext === '.mjs' ? isolationHeaders() : {};
+    res.writeHead(200, { 'content-type': MIME[ext] || 'application/octet-stream', ...staticHeaders, ...isolation });
     res.end(data);
   } catch {
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', ...staticHeaders });
@@ -313,7 +350,7 @@ setInterval(() => {
   for (const [code, entry] of offers) {
     if (now - entry.created > OFFER_TTL) offers.delete(code);
   }
-}, 60_000);
+}, 60_000).unref();
 
 async function handleSignaling(req, res, pathname) {
   const origin = req.headers['origin'];
@@ -573,7 +610,7 @@ setInterval(async () => {
       } catch {}
     }
   } catch {}
-}, 6 * 60 * 60 * 1000);
+}, 6 * 60 * 60 * 1000).unref();
 
 // --- HTTP server ---
 const server = createServer(async (req, res) => {

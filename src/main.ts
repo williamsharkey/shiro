@@ -92,6 +92,7 @@ import {
   writeRuntimeContextFiles,
 } from './seed-runtime-context';
 import { getShiroOrigin } from './utils/shiro-origin';
+import { logIsolationStatus } from './utils/isolation';
 
 /**
  * Register a command in both the CommandRegistry (for execution) and
@@ -104,6 +105,7 @@ function registerCommand(commands: CommandRegistry, cmd: Command, sourcePath?: s
 
 async function main() {
   console.log(`[shiro] Starting... (build #${buildNumber.trim()})`);
+  logIsolationStatus();
 
   // Request persistent storage so browser never evicts IndexedDB data (credentials, etc.)
   navigator.storage?.persist?.().then(granted => {
@@ -496,7 +498,7 @@ async function main() {
   };
 
   // OAuth callback bridge: receive auth codes from /oauth/callback popup
-  window.addEventListener('message', (event) => {
+  const onOAuthCallback = (event: MessageEvent) => {
     if (event.origin !== getShiroOrigin()) return;
     if (event.data?.type !== 'shiro-oauth-callback') return;
     const { code, state, params } = event.data;
@@ -519,7 +521,13 @@ async function main() {
     }
     const path = '/oauth/callback?' + callbackParams.toString();
     iframeServer.fetch(parseInt(port, 10), path).catch(() => {});
-  });
+  };
+  window.addEventListener('message', onOAuthCallback);
+  // Under COOP the popup loses window.opener after visiting the provider, so
+  // the callback page also posts here (same-origin only)
+  if (typeof BroadcastChannel !== 'undefined') {
+    new BroadcastChannel('shiro-oauth-callback').addEventListener('message', onOAuthCallback);
+  }
 
   // Cleanup iframe servers on page unload (hot reload)
   window.addEventListener('beforeunload', (e) => {
