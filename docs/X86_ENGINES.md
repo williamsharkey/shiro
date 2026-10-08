@@ -12,14 +12,15 @@ emscripten pthreads, patched for Shiro and wired to the kernel (src/kernel).
 It is the only candidate that is user-mode (syscall level, so it can share
 Shiro's files, pipes, processes and network), runs amd64, has a permissive
 license, and passed every functional test. Its weak point is speed: the wasm
-build has no JIT, so CPU-bound code runs about 120x slower than native, and a
-large Go binary needs about 20 s to start. See "What agy still needs".
+build now has its own JIT (patch 0012, x86-64 to WebAssembly): a hot Go loop
+runs at about 2–3x native and `gh --version` takes 4 s in Chromium (it was
+27 s on the same machine). See "The wasm JIT" and "What agy still needs".
 
 ## Candidates
 
 | Engine | amd64 | Kind | License / can Shiro ship it | SAB needed | Go hello | Go cpuloop 50M (native 107 ms) | Go net/http (loopback) |
 |---|---|---|---|---|---|---|---|
-| **Blink → wasm (this branch)** | yes | user-mode syscalls | ISC, yes (self-hosted, 448 KB wasm) | yes (pthreads) | **0.15–0.16 s** per process | **12.8 s (~120x)** | **works**, 0.32–0.48 s |
+| **Blink → wasm (this branch)** | yes | user-mode syscalls | ISC, yes (self-hosted, 550 KB wasm) | yes (pthreads) | **0.15–0.16 s** per process | **0.46 s wall, loop ≈0.25 s (2–3x) with the wasm JIT**; 12.8 s (~120x) interpreted | **works**, 0.32–0.48 s |
 | src/x86 (current built-in) | partial | user-mode, TS interpreter | ours | no | fails: `fatal error: float64nan` | fails (same) | fails (same) |
 | container2wasm (Bochs, WASI) | yes | full system: Linux 6.1 + runc | Apache-2.0 / LGPL-2.1 / GPL | no (1 vCPU) | 60–85 ms *inside a booted VM* (boot ≈ 3 s) | 9.0 s (~84x) | fails: `lo` down in the container |
 | JSLinux x86_64 (Bellard) | yes | full system: Linux 6.19 | **closed source, no license** | no | 0.13 s inside the VM (boot ≈ 14 s) | 7.6 s (~71x) | works, 0.57 s |
@@ -50,18 +51,32 @@ Measured end to end through Shiro's shell (`./binary`, a kernel process in a
 Worker), in Chromium on a cross-origin isolated page, three runs each. The
 "before" column is the round-1 build (patches 0001–0005).
 
-| Program | Blink-wasm, Chromium | before | Native | src/x86, Chromium |
-|---|---|---|---|---|
-| static musl C hello (38 KB) | 80–96 ms (first run 258 ms) | 92–132 ms | 1 ms | 25–88 ms |
-| static glibc C hello (785 KB) | 85–115 ms | 123–149 ms | 1 ms | fails: `Unknown two-byte opcode: 0F 62` |
-| static Go hello (1.4 MB) | 151–164 ms | 477–620 ms | 2 ms | fails: `float64nan` |
-| Go goroutines + net/http server and 4 clients | 317–483 ms | 1.1–1.6 s | 5 ms | fails: `float64nan` |
-| Go TLS 1.3 handshake + 3 HTTPS requests over loopback (9.5 MB) | 714–806 ms (setup 116 ms, requests 424 ms) | 1.6–1.8 s (requests 715 ms) | 5 ms | — |
-| C loop, 5M iterations (in-process time) | 1.12 s | 1.57–1.70 s | 10 ms | 29.8 s |
-| Go loop, 5M iterations (in-process time) | 1.18 s | 1.91–2.04 s | 10 ms | fails |
-| Go loop, 50M iterations | 12.8 s | 21.7 s | 107 ms | fails |
-| `gh --version`, GitHub CLI 2.62 (59 MB static Go) | 20.3–20.9 s | — | 71–79 ms | — |
-| same, Node (vitest host), wall / peak RSS | 22.9 s / 275 MB | 32.7 s / 999 MB | | |
+| Program | Blink-wasm + JIT, Chromium | interpreter only (same machine) | round 1 | Native | src/x86, Chromium |
+|---|---|---|---|---|---|
+| static musl C hello (38 KB) | 97–112 ms (first run 224 ms) | 102–107 ms | 92–132 ms | 1 ms | 25–88 ms |
+| static glibc C hello (785 KB) | 133–138 ms | 116 ms | 123–149 ms | 1 ms | fails: `Unknown two-byte opcode: 0F 62` |
+| static Go hello (1.4 MB) | 231–234 ms | 237–245 ms | 477–620 ms | 2 ms | fails: `float64nan` |
+| Go goroutines + net/http server and 4 clients | 480–498 ms | 470–487 ms | 1.1–1.6 s | 5 ms | fails: `float64nan` |
+| Go TLS 1.3 handshake + 3 HTTPS requests over loopback (9.5 MB) | 824 ms | 0.96–1.06 s | 1.6–1.8 s | 5 ms | — |
+| C loop, 5M iterations (wall at the prompt) | 131 ms | 1.41 s | 1.57–1.70 s | 10 ms | 29.8 s |
+| Go loop, 5M iterations (wall at the prompt) | 236 ms | 1.82 s | 1.91–2.04 s | 10 ms | fails |
+| Go loop, 50M iterations (wall at the prompt) | 457 ms | 14.4 s | 21.7 s | 107 ms | fails |
+| `gh --version`, GitHub CLI 2.62 (59 MB static Go) | 4.05 s (first run 8.6 s) | 26.6–26.7 s | — | 71–79 ms | — |
+| same, Node (`run.mjs`-style host, no kernel), wall / peak RSS | 5.8 s / 426 MB | 28.5 s / 278 MB | 32.7 s / 999 MB | | |
+
+The first two columns were measured back to back on 2026-10-08 in a 4-vCPU
+container (`vendor/blink/bench/chromium.mjs`, one Chromium page, runs in the
+order listed, so the first run of a binary includes copying it into the page's
+filesystem); this machine is slower than the one the round-1 column (and the
+older numbers in this file) came from: the interpreter took 26.7 s for `gh`
+here against 20.3–20.9 s there. `npm run bench -- --suites x86` agrees:
+`gh_version` 31974 → 5153 ms, `go_cpuloop_5m` 2001 → 267 ms
+(`bench/results/perf-blink-{before,after}-x86.json`). Short programs that
+don't get hot (hello, net/http) are unchanged within noise or a few ms
+slower: the module is 90 KB bigger and the interpreter loop does one more
+compare per instruction. Node's peak RSS for `gh` grows by the V8 code of
+~1,500 compiled regions (Chromium's renderer peak for the same run stayed at
+160 MB above idle).
 
 For reference, native Blink on the same machine: Go hello 80 ms, Go loop 50M
 737 ms with its x86-64 JIT and about 9.8 s without (`-j`; 983 ms for 5M), `gh --version` 1.3 s
@@ -140,6 +155,67 @@ in the test when `go`/`gcc` exist.
   before, any kernel program inside `$(...)` wrote to the tty.
 - `SHIRO_BLINK_STRACE=1` adds Blink's own syscall trace.
 
+### The wasm JIT (patch 0012, `blink/wjit.c`)
+
+Blink's own JIT emits x86-64/aarch64 machine code, which a wasm host can't
+run, so the wasm build interpreted everything. Patch 0012 adds a translator
+from x86-64 to WebAssembly, modeled on what qemu-wasm's TCG backend and v86
+do (small modules compiled at run time that share the memory):
+
+- The interpreter loop counts executions of branch targets. At 200 (env
+  `BLINK_WJIT_THRESHOLD`), the *region* around the target is compiled: the
+  basic blocks reachable from it through direct jumps and conditional
+  branches, plus the return points of its calls (up to 64 blocks / 640
+  instructions). The region becomes one wasm function, a loop around a
+  `br_table`, so its branches never leave wasm; each block also gets a
+  two-instruction exported entry, `f_k(m) = body(m, k)`.
+- `new WebAssembly.Module` + `Instance`, importing the shared memory and
+  the C functions the code calls (not the function table: importing the
+  table made every later `table.set` cost O(instances)). The entries go in
+  the function table (grown 256 slots at a time), so C calls them like any
+  function pointer. Each pthread has its own table, so each thread compiles
+  its own regions.
+- Guest registers live in wasm locals inside a region; they are written
+  back on exit, before calling into C and before a slow-path memory access
+  (which may fault and deliver a signal with the right state).
+- Inline: mov/movzx/movsx/lea, add/sub/and/or/xor/cmp/test, inc/dec,
+  shl/shr/sar, imul, push/pop, call/ret/jmp/jcc/indirect call and jmp,
+  setcc/cmovcc, cqo/cltq, 8/32/64-bit forms (16-bit and adc/sbb go to
+  Blink). Memory goes through a 256-entry per-thread translation cache
+  (`Machine::wjr/wjw`, guest page → host page); misses, page crossings and
+  faults take Blink's normal path. Every other instruction calls Blink's own
+  op handler with its decoded operands (no decode or dispatch left).
+- Flags: liveness over the region, and a flag crawler for code outside it
+  (stricter than Blink's: hand-written assembly returns results in flags, so
+  `call`/`ret`/syscalls end the crawl as "unknown"); cmp/test+jcc, setcc and
+  cmov become one wasm comparison.
+- A call from compiled code to compiled code runs the callee from a C helper
+  and resumes the caller's region in wasm when the guest returns to it (up
+  to 48 deep), instead of two trips through the interpreter loop.
+- Jumps inside a region spend a budget (1024) and check `m->attention`, so
+  signals, the GIL and other threads get their turn while a loop spins.
+- Safety: code is compiled only from pages that aren't writable. Unmapping
+  such a page or changing its protection bumps a global epoch and every
+  thread drops all its regions (self-modifying code in RWX pages stays in
+  the interpreter, which rechecks instruction bytes). A pending TLB
+  invalidation from another thread is honored at region entry.
+- `BLINK_WJIT=0` turns it off; `BLINK_WJIT_DEBUG=1` prints statistics
+  (regions, compile/instantiate time, the ops still going through Blink);
+  `BLINK_WJIT_OFF=<bitmask>`, `BLINK_WJIT_MAX=n` and
+  `BLINK_WJIT_BISECT=lo:hi` (guest pc range) bisect a miscompile.
+
+Tests: `x86-engine.test.ts` runs `fixtures/x86/jitfuzz.c` (about 120 groups of
+instruction forms on edge-case inputs, flags included) with and without the
+JIT and requires identical output, and `fixtures/x86/jit.c` for code
+rewritten after `mprotect`, in an RWX page and after `munmap`+`mmap`; signal
+handlers running while a compiled loop spins; a SIGSEGV in a compiled loop
+that the handler repairs; four threads running compiled code.
+
+Where `gh --version` still spends its time (Node profile, 6.8 s): ~1,500
+regions compiled (≈0.9 s in `WebAssembly.Module`/`Instance`), generated
+code ≈3.5 s, the main thread waiting on the GIL or in blocking syscalls
+≈1.1 s, ~9M region entries from the interpreter loop.
+
 ### Patches to upstream Blink (vendor/blink/patches)
 
 1. `%rdx` is zero at `_start` for non-Cosmopolitan ELF. Blink passed the
@@ -194,6 +270,7 @@ in the test when `go`/`gcc` exist.
    `WNOWAIT`), `eventfd`, `close_range`, `sendfile`, `readv`/`writev` (one
    transfer) and the tty ioctls (`TIOCSCTTY`, `TIOCGPTN`, ...) are covered;
    locks (`fcntl F_SETLK`, `flock`) always succeed.
+12. The wasm JIT (`blink/wjit.c`), described above.
 
 Native Blink's own exit path (`KillOtherThreads`) still hangs after
 multi-threaded Go programs; the wasm build doesn't use it.
@@ -203,8 +280,10 @@ multi-threaded Go programs; the wasm build doesn't use it.
 - Needs `crossOriginIsolated` (pthreads and the kernel channel use
   SharedArrayBuffer). On shiro.computer that depends on the unix/isolation
   branch; until then `./binary` uses src/x86.
-- No JIT: ~120x native on CPU-bound code. Startup of large Go binaries is
-  dominated by runtime and package init running in the interpreter.
+- The JIT compiles per thread and per run (nothing is cached across
+  processes yet), and cold code still runs in the interpreter; 16-bit
+  arithmetic, adc/sbb, most SSE/x87 and string ops still call Blink's
+  handlers.
 - Memory: wasm32, 4 GB max. File mappings are now one copy inside Blink, but
   the binary is still copied on its way in (Shiro's FS, the kernel read,
   MEMFS).
@@ -225,20 +304,19 @@ Honest estimate for a ~200 MB static Go CLI that talks TLS to Google APIs:
    DNS and TLS run over the kernel's sockets, tested against a local relay);
    the relay itself has to run somewhere.
 3. Interactive use works today (tty, raw mode, SIGWINCH, Ctrl-C).
-4. **Speed** is the remaining problem. `gh` (59 MB) now takes 20–21 s to
-   print its version in Chromium (it was 30–37 s). agy is 3–4x larger, so
-   expect about a minute of startup, and ~120x native for anything
-   CPU-heavy (a TLS handshake plus three HTTPS requests takes 0.4 s).
-   Options, roughly in order of payoff:
-   - a wasm code generator for Blink's JIT (emitting small wasm modules per
-     hot path, as qemu-wasm does for TCG, is the 10x+ lever; weeks of work);
-   - snapshotting a guest after runtime init (needs Go's threads, futexes
-     and kernel fds recreated; see above);
-   - more interpreter profiling (software page-table walks dominate now).
+4. **Speed**: with the wasm JIT, `gh` (59 MB) prints its version in 4 s in
+   Chromium on a machine where the interpreter took 27 s (20 s on the
+   faster machine of earlier rounds). Startup scales with the code that runs
+   rather than the file size, so agy (3–4x larger) should start in roughly
+   10–20 s (an estimate, not measured), and hot CPU-bound code runs at
+   2–5x native instead of ~120x.
+   Next levers: caching compiled regions across runs (IndexedDB, keyed by
+   binary hash), cheaper region compilation, inlining SSE and string ops,
+   and snapshotting a guest after runtime init.
 5. Memory headroom: about 300 MB peak for `gh`, so a 200 MB binary plus Go
    heap should fit inside 4 GB.
 
-Blink makes agy *possible* in Shiro, with a minute-long start.
+Blink makes agy *possible* in Shiro; with the wasm JIT its start should be measured in seconds rather than a minute.
 
 ## Reproducing
 

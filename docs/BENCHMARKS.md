@@ -159,6 +159,38 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### unix/perf-blink 1 — wasm JIT for Blink (x86-64 → WebAssembly)
+
+Vendor patch 0012 (`blink/wjit.c`, see `X86_ENGINES.md` "The wasm JIT"):
+hot x86-64 regions are compiled to WebAssembly modules that share Blink's
+memory, keep guest registers in wasm locals, inline integer ops, memory
+accesses and fused compare+branch, and call Blink's op handlers for the rest.
+
+Full x86 suite, isolated, 3 runs, original build →
+`bench/results/perf-blink-before-x86.json` vs JIT build →
+`bench/results/perf-blink-after-x86.json` (same machine, same tree):
+
+| metric (isolated) | base | new | change |
+|---|---:|---:|---:|
+| x86.blink.gh_version | 31974 ms | 5153 ms | −84% (6.2×) |
+| x86.blink.go_cpuloop_5m (wall; in-guest loop 26 ms) | 2001 ms | 267 ms | −87% (7.5×) |
+| x86.blink.peak_rss.go_nethttp | 34.1 MiB | 22.1 MiB | −35% |
+| x86.blink.peak_rss.gh_version | 159.5 MiB | 159.9 MiB | same |
+| x86.blink.go_hello | 220 ms | 266 ms | +21% (see below) |
+| x86.blink.go_nethttp | 459 ms | 601 ms | +31% (see below) |
+| x86.blink.hello_musl | 92.5 ms | 140 ms | +51% (see below) |
+
+The short-program flags are mostly noise between runs: re-run 6× each
+after merging unix/integration d286c5e (`--only`, both builds back to back)
+they were hello_musl 105 → 120 ms, hello_glibc 128 → 155–193 ms, go_hello
+289 → 297 ms, nethttp 540 → 555 ms, and with `BLINK_WJIT=0` vs the JIT on the
+same build hello_glibc was 166 vs 155 ms and hello_musl 122 vs 114 ms — the
+JIT itself costs nothing there; what remains is the 90 KB larger module and
+one more compare per interpreted instruction. `vendor/blink/bench/chromium.mjs`
+(X86_ENGINES.md table, one page, back to back): `gh --version` 26.6 s → 4.05 s,
+Go loop 50M 14.4 s → 0.46 s, C loop 5M 1.41 s → 0.13 s, Go TLS 1.0 s → 0.82 s,
+Go hello 237–245 → 231–234 ms.
+
 ### unix/perf-fs-shell 1 — write-behind filesystem, debounced history
 
 Baseline `bench/results/integration-970831e-quick-local.json` (unix/integration
