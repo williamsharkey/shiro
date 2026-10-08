@@ -648,9 +648,12 @@ const TCP_BLOCKED_V6 = [
   ['2001::', 23], ['2001:db8::', 32], ['2002::', 16], ['fc00::', 7], ['fe80::', 10],
   ['fec0::', 10], ['ff00::', 8],
 ];
-const tcpBuiltinBlockList = new net.BlockList();
-for (const [a, p] of TCP_BLOCKED_V4) tcpBuiltinBlockList.addSubnet(a, p, 'ipv4');
-for (const [a, p] of TCP_BLOCKED_V6) tcpBuiltinBlockList.addSubnet(a, p, 'ipv6');
+// Separate lists per family: node's BlockList matches an IPv4 address against
+// the IPv6 subnet ::ffff:0:0/96, so one shared list blocked every IPv4 address.
+const tcpBuiltinBlockV4 = new net.BlockList();
+const tcpBuiltinBlockV6 = new net.BlockList();
+for (const [a, p] of TCP_BLOCKED_V4) tcpBuiltinBlockV4.addSubnet(a, p, 'ipv4');
+for (const [a, p] of TCP_BLOCKED_V6) tcpBuiltinBlockV6.addSubnet(a, p, 'ipv6');
 
 function cidrBlockList(cidrs) {
   const list = new net.BlockList();
@@ -671,7 +674,7 @@ export function isBlockedAddress(ip, { allow, deny } = {}) {
   const type = family === 6 ? 'ipv6' : 'ipv4';
   if (allow && allow.check(ip, type)) return false;
   if (deny && deny.check(ip, type)) return true;
-  return tcpBuiltinBlockList.check(ip, type);
+  return (family === 6 ? tcpBuiltinBlockV6 : tcpBuiltinBlockV4).check(ip, type);
 }
 
 const envList = (v) => (v ? String(v).split(',').map((x) => x.trim()).filter(Boolean) : null);

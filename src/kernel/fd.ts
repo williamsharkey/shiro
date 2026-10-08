@@ -649,3 +649,47 @@ export class DirFile implements OpenFile {
   }
   async close(): Promise<void> {}
 }
+
+// ── eventfd ──────────────────────────────────────────────────────────────────
+
+/** eventfd(2): a 64-bit counter. Reads return and clear it (or take 1 with EFD_SEMAPHORE); writes add. */
+export class EventFile implements OpenFile {
+  kind: OpenFileKind = 'dev';
+  private count: bigint;
+  private listeners = new ReadyListeners();
+  private waiters = new Set<() => void>();
+  constructor(initval: number, public flags: number, private semaphore = false) {
+    this.count = BigInt(initval >>> 0);
+  }
+  private wake(): void {
+    for (const w of [...this.waiters]) w();
+    this.listeners.fire();
+  }
+  async read(buf: Uint8Array, signal?: AbortSignal): Promise<number> {
+    if (buf.length < 8) return -EINVAL;
+    while (this.count === 0n) {
+      if (this.flags & O_NONBLOCK) return -EAGAIN;
+      if (!(await abortableWait(this.waiters, signal))) return -EINTR;
+    }
+    const v = this.semaphore ? 1n : this.count;
+    this.count -= v;
+    new DataView(buf.buffer, buf.byteOffset, 8).setBigUint64(0, v, true);
+    this.wake();
+    return 8;
+  }
+  async write(buf: Uint8Array): Promise<number> {
+    if (buf.length < 8) return -EINVAL;
+    const v = new DataView(buf.buffer, buf.byteOffset, 8).getBigUint64(0, true);
+    if (v === 0xffffffffffffffffn) return -EINVAL;
+    this.count += v;
+    if (this.count > 0xfffffffffffffffen) this.count = 0xfffffffffffffffen;
+    this.wake();
+    return 8;
+  }
+  poll(events: number): number {
+    return ((this.count > 0n ? POLLIN : 0) | POLLOUT) & events;
+  }
+  onReady(cb: () => void): () => void { return this.listeners.add(cb); }
+  async stat(): Promise<KStat> { return charDevStat(0); }
+  async close(): Promise<void> { this.wake(); }
+}

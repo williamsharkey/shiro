@@ -70,6 +70,11 @@ export interface PkgBin {
    * the full clang-16 for -cc1, as Wasmer's "exec-name" does.
    */
   self?: string;
+  /**
+   * "path": argv[0] is the absolute path the command was found at (not the
+   * name typed), as CPython needs to find a venv's pyvenv.cfg.
+   */
+  argv0?: 'path';
 }
 
 export interface PkgEntry {
@@ -564,7 +569,7 @@ export function packageOfPath(path: string): string | null {
  * Output goes to ctx.stdout/ctx.stderr (or the terminal, for kernel
  * processes writing to it).
  */
-export async function runPackageBinary(binPath: string, argv0: string, args: string[], ctx: CommandContext): Promise<number> {
+export async function runPackageBinary(binPath: string, argv0: string, args: string[], ctx: CommandContext, invokedPath?: string): Promise<number> {
   const name = packageOfPath(binPath);
   const status = name ? (await readStatus(ctx.fs))[name] : undefined;
   const entry = status?.entry;
@@ -572,6 +577,11 @@ export async function runPackageBinary(binPath: string, argv0: string, args: str
   const bin = entry && (entry.bin[argv0]?.file === rel ? entry.bin[argv0] :
     Object.values(entry.bin).find(b => b.file === rel));
   const mode = await refreshRuntimeMode();
+  if (name === 'python3' && pythonFrontend(args)) {
+    const { runPythonFrontend } = await import('./commands/python-wasi');
+    return runPythonFrontend(ctx, args, invokedPath ?? binPath);
+  }
+  if (bin?.argv0 === 'path' && invokedPath) argv0 = invokedPath;
 
   if (entry) {
     const missing = missingFeatures(entry);
@@ -610,14 +620,17 @@ export async function runPackageBinary(binPath: string, argv0: string, args: str
  * this page can't run WASM processes.
  */
 export async function packageKernelProgram(
-  fs: FileSystem, binPath: string, argv0: string, args: string[],
+  fs: FileSystem, binPath: string, argv0: string, args: string[], invokedPath?: string,
 ): Promise<{ argv: string[]; run: import('./kernel/kernel').Runner } | null> {
   const name = packageOfPath(binPath);
   const entry = name ? (await readStatus(fs))[name]?.entry : undefined;
   if (!entry || entry.abi === 'wasi_unstable') return null;
   if (await refreshRuntimeMode() === 'none' || missingFeatures(entry).length) return null;
+  // `python -m pip/venv` are Shiro's (runPackageBinary)
+  if (name === 'python3' && pythonFrontend(args)) return null;
   const rel = binPath.slice(PKG_ROOT.length + entry.name.length + 2);
   const bin = entry.bin[argv0]?.file === rel ? entry.bin[argv0] : Object.values(entry.bin).find(b => b.file === rel);
+  if (bin?.argv0 === 'path' && invokedPath) argv0 = invokedPath;
   const bytes = await fs.readFile(binPath) as Uint8Array;
   let mod = moduleCache.get(binPath);
   if (!mod) {
@@ -651,6 +664,22 @@ export async function packageMountsForPath(fs: FileSystem, path: string): Promis
   if (!name) return undefined;
   const entry = (await readStatus(fs))[name]?.entry;
   return entry ? entryMounts(entry, name) : undefined;
+}
+
+/**
+ * `python [opts] -m pip|venv|ensurepip ...`: modules Shiro provides itself,
+ * because WASI python has no sockets (pip) or subprocess (venv's ensurepip).
+ */
+export function pythonFrontend(args: string[]): 'pip' | 'venv' | 'ensurepip' | null {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '-m') {
+      const m = args[i + 1];
+      return m === 'pip' || m === 'venv' || m === 'ensurepip' ? m : null;
+    }
+    if (!/^-[IEsSuBqObvxdR]+$/.test(a)) return null;
+  }
+  return null;
 }
 
 /**

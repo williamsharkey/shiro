@@ -10,16 +10,41 @@ export const awk: Command = {
   name: "awk",
   description: "Pattern scanning and processing language",
   async exec(ctx) {
-    const args = ctx.args;
+    // -f progfile (repeatable): the program comes from files, and every
+    // operand is an input file. `#!/usr/bin/awk -f` scripts depend on it.
+    const args: string[] = [];
+    const progFiles: string[] = [];
+    for (let i = 0; i < ctx.args.length; i++) {
+      const a = ctx.args[i];
+      if (a === '--') { args.push(...ctx.args.slice(i)); break; }
+      if (a === '-f' && i + 1 < ctx.args.length) progFiles.push(ctx.args[++i]);
+      else if (a.startsWith('-f') && a.length > 2 && !a.startsWith('-f=')) progFiles.push(a.slice(2));
+      else args.push(a);
+    }
     const { values, positional, flags } = parseArgs(args, ["F", "v"]);
 
-    if (positional.length === 0) {
+    let fileProgram: string | undefined;
+    if (progFiles.length) {
+      const parts: string[] = [];
+      for (const f of progFiles) {
+        try {
+          parts.push(await ctx.fs.readFile(ctx.fs.resolvePath(f, ctx.cwd), 'utf8') as string);
+        } catch {
+          ctx.stderr += `awk: can't open file ${f}\n`;
+          return 2;
+        }
+      }
+      // drop a #! line and full-line comments, which the evaluator doesn't parse
+      fileProgram = parts.join('\n').split('\n').filter(l => !/^\s*#/.test(l)).join('\n');
+    }
+
+    if (fileProgram === undefined && positional.length === 0) {
       ctx.stderr += "awk: missing program\n";
       return 1;
     }
 
-    const program = positional[0];
-    const files = positional.slice(1);
+    const program = fileProgram ?? positional[0];
+    const files = fileProgram !== undefined ? positional : positional.slice(1);
 
     const awkCtx: AwkContext = {
       FS: values.F || " ",

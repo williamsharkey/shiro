@@ -75,15 +75,13 @@ describe.skipIf(!hasDist)('Build Output Validation', () => {
     }
   });
 
-  it('dynamic imports should reference assets/ directory', () => {
+  it('the inline script imports the entry chunk file (one instance of its modules)', () => {
     html = html || readFile(indexPath);
-    // After inlining, dynamic imports must point to ./assets/ not ./
-    // (entry chunk moved from assets/ to index.html root)
-    const imports = html.match(/import\("[^"]*\.js"\)/g) || [];
-    expect(imports.length).toBeGreaterThanOrEqual(10);
-    for (const imp of imports) {
-      expect(imp).toMatch(/import\("\.\/assets\//);
-    }
+    // Inlining the entry's code too made lazy chunks (which import shared
+    // code from the file) see a second copy of every module's state.
+    const m = html.match(/<script type="module">import "\.\/assets\/(index-[^"]+\.js)";<\/script>/);
+    expect(m).toBeTruthy();
+    expect(listJsFiles(distDir + '/assets')).toContain(m![1]);
   });
 
   it('should not have other unresolved Vite markers', () => {

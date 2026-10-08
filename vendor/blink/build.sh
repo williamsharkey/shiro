@@ -46,7 +46,7 @@ emcc -O2 o//blink/blink.o o//blink/blink.a -lm -pthread \
   -sALLOW_MEMORY_GROWTH -sINITIAL_MEMORY=64MB -sMAXIMUM_MEMORY=4GB \
   -sPTHREAD_POOL_SIZE=4 -sSTACK_SIZE=1MB \
   -sEXPORTED_RUNTIME_METHODS=callMain,FS,ENV \
-  --js-library "$HERE/shiro-net.js" \
+  --js-library "$HERE/shiro-net.js" --js-library "$HERE/shiro-kernel.js" \
   -fno-builtin-exit 2> >(grep -v 'Wpthreads-mem-growth' >&2)
 
 ls -la "$OUT"

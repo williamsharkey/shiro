@@ -116,6 +116,7 @@ works everywhere and the interactive mode needs a page that can block.
 | --- | --- | --- | --- | --- |
 | coreutils (uutils, 78 applets) | 0.12.0 | built here, `coreutils.sh` | preview1 | ok |
 | lua, luac | 5.4.7 | built here, `lua.sh` | preview1 | ok; the REPL reads the tty as a kernel process (checked on the pty) |
+| python3 (CPython) | 3.13.7 | built here, `python3.sh` | preview1 | ok; `pip` (Shiro) installs pure-Python wheels, `python3 -m venv` works; no subprocess/sockets |
 | sqlite3 | 3.50.4 | built here, `sqlite.sh` | preview1 | ok; the interactive shell reads the tty as a kernel process (checked on the pty) |
 | jq | 1.8.1 | built here, `jq.sh` | preview1 | ok |
 | cowsay, cowthink | 0.3.0 | Wasmer | preview1 | ok |

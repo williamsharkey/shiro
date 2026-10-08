@@ -19,7 +19,8 @@ import { Kernel, getKernel, type Runner } from '../kernel/kernel';
 import { installNet } from '../kernel/net';
 import { workerRunner, webWorker, type GuestWorker } from '../kernel/worker-host';
 import { BufferFile, DevNull } from '../kernel/fd';
-import { shellExitCode, SIGKILL } from '../kernel/abi';
+import { shellExitCode, SIGKILL, CH_DATA, CH_STATE, CH_SYSNO, CH_ARGS, CH_NARGS, CH_RESULT, CH_SIGNAL, STATE_REQUEST, STATE_REPLY, ESRCH } from '../kernel/abi';
+import { createChannelBuffer } from '../kernel/channel';
 import type { Process } from '../kernel/process';
 
 export interface BlinkRunOptions {
@@ -98,22 +99,63 @@ function ensureNet(kernel: Kernel): void {
   if (table && !table.has(41 /* SYS_socket */)) installNet(kernel);
 }
 
+/** Channels per Blink process for the guest's own syscalls (host.mjs `pool`), and their data area. */
+const POOL_CHANNELS = 6;
+const POOL_DATA = 1 << 20;
+
 /** A kernel Runner that executes the ELF at absolute `path` in Blink. */
 export function blinkRunner(path: string): Runner {
   return async (proc: Process, kernel: Kernel) => {
     ensureNet(kernel);
+    registerBlinkLoader(kernel); // ELF children of this guest run in Blink too
     const create = await workerFactory();
     const mounts = kernel.fs ? (await kernel.fs.readdir('/')).map((n) => '/' + n) : [];
+    const pool = Array.from({ length: POOL_CHANNELS }, () => createChannelBuffer(POOL_DATA));
     const runner = workerRunner((p) => {
       const w = create();
-      wireWorker(p, w);
+      wireWorker(p, w, kernel, pool);
       return w;
     }, {
       // SHIRO_BLINK_DEBUG=1: the worker logs kernel syscalls and Blink's own messages to the console
-      startData: { path, moduleUrl: defaultAssetBase() + 'blink.mjs', mounts, debug: proc.env.SHIRO_BLINK_DEBUG === '1' },
+      startData: { path, moduleUrl: defaultAssetBase() + 'blink.mjs', mounts, pool, debug: proc.env.SHIRO_BLINK_DEBUG === '1' },
     });
     return runner(proc, kernel);
   };
+}
+
+/**
+ * Serve one request on a pool channel (blink-sys from host.mjs). `as` names
+ * the process the call is for: the guest's vfork child runs on this
+ * worker's thread until it execs (Blink patch 0011), 0 = the guest itself.
+ */
+async function servePoolChannel(kernel: Kernel, proc: Process, sab: SharedArrayBuffer, as: number, busy: Set<SharedArrayBuffer>): Promise<boolean> {
+  const i32 = new Int32Array(sab, 0, CH_DATA / 4);
+  if (busy.has(sab) || Atomics.load(i32, CH_STATE) !== STATE_REQUEST) return false;
+  busy.add(sab);
+  try {
+    const data = new Uint8Array(sab, CH_DATA);
+    const nr = i32[CH_SYSNO];
+    const args = Array.from(i32.subarray(CH_ARGS, CH_ARGS + CH_NARGS));
+    const target = as ? kernel.procs.get(as) : proc;
+    let result = target ? await kernel.syscall(target, nr, args, data) : -ESRCH;
+    if (!as && proc.exiting) return false;
+    if (result > 0x7fffffff || result < -0x80000000) {
+      i32[CH_ARGS] = Math.floor(result / 0x100000000);
+      result >>>= 0;
+    } else {
+      i32[CH_ARGS] = result < 0 ? -1 : 0;
+    }
+    i32[CH_RESULT] = result | 0;
+    if (Atomics.load(i32, CH_SIGNAL) === 0) {
+      const sig = kernel.takeSignal(proc);
+      if (sig) Atomics.store(i32, CH_SIGNAL, sig);
+    }
+    Atomics.store(i32, CH_STATE, STATE_REPLY);
+    Atomics.notify(i32, CH_STATE);
+    return true;
+  } finally {
+    busy.delete(sab);
+  }
 }
 
 /**
@@ -123,7 +165,8 @@ export function blinkRunner(path: string): Runner {
  * poll()/epoll wakes at once. Signals the kernel delivers to the process
  * (the worker installs handlers for them) are posted as `blink-signal`.
  */
-function wireWorker(proc: Process, w: GuestWorker): void {
+function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: SharedArrayBuffer[]): void {
+  const busy = new Set<SharedArrayBuffer>();
   const subs = new Map<number, () => void>();
   const pending = new Set<number>();
   const ping = (fd: number) => {
@@ -141,11 +184,14 @@ function wireWorker(proc: Process, w: GuestWorker): void {
   };
   watch(0);
   w.onMessage((m: any) => {
-    if (m?.type === 'blink-watch') watch(m.fd);
+    if (m?.type === 'blink-sys') {
+      const sab = pool[m.ch];
+      if (sab) void servePoolChannel(kernel, proc, sab, m.as | 0, busy).then((ok) => { if (ok) w.postMessage({ type: 'blink-done', ch: m.ch }); });
+    } else if (m?.type === 'blink-watch') watch(m.fd);
     else if (m?.type === 'blink-unwatch') { subs.get(m.fd)?.(); subs.delete(m.fd); }
   });
-  proc.data.onSignal = (sig: number) => w.postMessage({ type: 'blink-signal', sig });
-  proc.onTerminate(() => { for (const off of subs.values()) off(); subs.clear(); });
+  const unlisten = proc.addSignalListener((sig: number) => { if (sig > 0) w.postMessage({ type: 'blink-signal', sig }); });
+  proc.onTerminate(() => { unlisten(); for (const off of subs.values()) off(); subs.clear(); });
 }
 
 /** True when the file at `path` starts with the ELF magic. */

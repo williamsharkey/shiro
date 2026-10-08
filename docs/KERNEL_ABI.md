@@ -22,6 +22,21 @@ All changes so far are additive; nothing below renames or removes an earlier nam
   - `FileSystem.writeFile` stores a compact copy of a typed-array view
     (IndexedDB cloned the whole underlying buffer).
 
+- **2026-10-08 (unix/compat-tools)**
+  - **New syscalls:** `SYS_shiro_vfork` (1010) creates a child process with
+    nothing running in it (fd table forked, signal state copied); the
+    caller's engine then issues the child's syscalls on its behalf (Blink's
+    pool channels name it with `as`) until `SYS_shiro_execve` (1011) or
+    `exit_group` for it. `SYS_shiro_execve` takes JSON `{path, argv, env:
+    ["K=V"], inproc?}`: it does the exec bookkeeping (close-on-exec fds,
+    argv/env, caught signals reset), then starts the program in a vfork
+    child, returns the resolved path of an ELF for `inproc` engines, or
+    stops the caller's runner and runs the new program in the same process
+    (`Process.stopRunner()`, `proc.data.execRunner`). `/bin/NAME` paths of
+    Shiro commands exec even though no file exists.
+  - Also: `eventfd`/`eventfd2` (`EventFile` in fd.ts), `close_range`,
+    `geteuid`/`getegid`, and `WNOWAIT` for `wait4` (report without reaping).
+
 - **2026-10-08 (unix/kernel, round 2)**
   - **Fix:** `Kernel.syscall` (and the guest library) decoded paths and
     spawn JSON with `TextDecoder` straight from the SharedArrayBuffer data

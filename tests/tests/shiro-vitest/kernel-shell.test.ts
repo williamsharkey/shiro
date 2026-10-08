@@ -192,6 +192,13 @@ describe('kernel programs on the terminal pty', () => {
     expect((await r).exitCode).toBe(130);
   });
 
+  it('$(kernel program) captures its stdout instead of writing to the tty', async () => {
+    (shell as any).terminal = term; // the page shell's own terminal, as at the prompt
+    const r = await sh('X=$(wseq 2); echo "got [$X]"');
+    expect(r.out).toMatch(/got \[line 1\s+line 2\]/);
+    expect(term.screen()).not.toContain('line 1');
+  });
+
   it('kernel | filter builtin is one job: the builtin runs as a kernel process and writes to the tty', async () => {
     const r = await sh('wseq 3 | grep 2');
     expect(r.exitCode).toBe(0);

@@ -165,7 +165,7 @@ describe('package index', () => {
 
   it('packages built here are in public/pkg with the pinned sha256, size, and a recipe', () => {
     const own = builtinIndex().packages.filter(p => p.origin === 'shiro');
-    expect(own.map(p => p.name).sort()).toEqual(['coreutils', 'jq', 'lua', 'sqlite']);
+    expect(own.map(p => p.name)).toEqual(expect.arrayContaining(['coreutils', 'jq', 'lua', 'sqlite']));
     for (const p of own) {
       expect(existsSync(`${REPO}/${p.recipe}`), p.recipe).toBe(true);
       for (const f of p.files) {

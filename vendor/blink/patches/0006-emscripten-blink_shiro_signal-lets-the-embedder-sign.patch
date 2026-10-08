@@ -1,8 +1,8 @@
 From df6417bb61cf32e9e204eaedbb1b1ee04a0d680a Mon Sep 17 00:00:00 2001
 From: shiro <x@x>
 Date: Thu, 8 Oct 2026 00:53:39 +0000
-Subject: [PATCH 6/6] emscripten: blink_shiro_signal() lets the embedder signal
- the guest
+Subject: [PATCH 06/10] emscripten: blink_shiro_signal() lets the embedder
+ signal the guest
 
 ---
  blink/blink.c | 29 +++++++++++++++++++++++++++++
