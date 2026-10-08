@@ -1,0 +1,2977 @@
+From 59712bab588d41cc1a5394062b90982b79a30fd1 Mon Sep 17 00:00:00 2001
+From: shiro <build@shiro>
+Date: Thu, 8 Oct 2026 04:49:59 +0000
+Subject: [PATCH] emscripten: wasm JIT (wjit): hot x86-64 regions become
+ WebAssembly functions
+
+Hot regions (basic blocks reachable through direct branches from a hot
+branch target) are translated into wasm functions that keep guest registers
+in locals, inline common integer ops, memory accesses (through a per-thread
+translation cache) and fused compare+branch, and call Blink's own op
+handlers for everything else. Modules import the shared memory and the C
+helpers they call and are installed in the function table; the interpreter
+loop calls them. Code is compiled only from non-writable pages; unmapping
+or reprotecting such a page invalidates every thread's regions.
+---
+ blink/blink.c        |    3 +
+ blink/machine.c      |    9 +
+ blink/machine.h      |    4 +
+ blink/memorymalloc.c |    3 +
+ blink/reset.c        |    1 +
+ blink/wjit.c         | 2804 ++++++++++++++++++++++++++++++++++++++++++
+ blink/wjit.h         |   35 +
+ 7 files changed, 2859 insertions(+)
+ create mode 100644 blink/wjit.c
+ create mode 100644 blink/wjit.h
+
+diff --git a/blink/blink.c b/blink/blink.c
+index 1284ec3..879bffd 100644
+--- a/blink/blink.c
++++ b/blink/blink.c
+@@ -416,6 +416,9 @@ void exit(int status) {
+ 
+ int main(int argc, char *argv[]) {
+   GilInit();
++#ifdef HAVE_WJIT
++  WjInit();
++#endif
+   SetupWeb();
+   GetStartDir();
+ #ifndef NDEBUG
+diff --git a/blink/machine.c b/blink/machine.c
+index e669cf5..45b80b3 100644
+--- a/blink/machine.c
++++ b/blink/machine.c
+@@ -2247,7 +2247,16 @@ void Actor(struct Machine *mm) {
+       GilYield();
+     }
+     if (!atomic_load_explicit(&m->attention, memory_order_acquire)) {
++#ifdef HAVE_WJIT
++      // compiled code is entered at branch targets (where wjhot is set)
++      if (!m->wjhot || !WjExecute(m)) {
++        u64 ip = m->ip;
++        ExecuteInstruction(m);
++        m->wjhot = g_wj_enabled && m->ip - ip != m->xedd->length;
++      }
++#else
+       ExecuteInstruction(m);
++#endif
+     } else {
+       CheckForSignals(m);
+     }
+diff --git a/blink/machine.h b/blink/machine.h
+index bcc4fec..06f640e 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -22,6 +22,7 @@
+ #include "blink/tsan.h"
+ #include "blink/tunables.h"
+ #include "blink/x86.h"
++#include "blink/wjit.h"
+ 
+ #define EXIT_FAILURE_EXEC_FAILED 127
+ #define EXIT_FAILURE_WITH_SIGNAL(sig) 128 + sig
+@@ -450,6 +451,9 @@ struct Machine {               //
+   struct Dll elem;                       //
+   struct SmcQueue smcqueue;              //
+   struct OpCache opcache[1];             //
++  bool wjhot;                            // at a branch target (wasm jit)
++  struct WjTlb wjr[WJ_TLB_SIZE];         // wasm jit read translations
++  struct WjTlb wjw[WJ_TLB_SIZE];         // wasm jit write translations
+ };  //
+ 
+ extern struct HostPages g_hostpages;
+diff --git a/blink/memorymalloc.c b/blink/memorymalloc.c
+index 537b435..57923da 100644
+--- a/blink/memorymalloc.c
++++ b/blink/memorymalloc.c
+@@ -469,6 +469,7 @@ struct Machine *NewMachine(struct System *system, struct Machine *parent) {
+     memset(m, 0, sizeof(*m));
+     ResetCpu(m);
+   }
++  WjResetTlb(m);
+   m->ctid = 0;
+   m->oplen = 0;
+   m->system = system;
+@@ -701,6 +702,7 @@ static bool FreePage(struct System *s, i64 virt, u64 entry, u64 size,
+   if (entry & PAGE_FILE) UnmarkFilePage(s, virt);
+   if (!(entry & PAGE_XD) && !(entry & PAGE_RSRV)) {
+     *executable_code_was_made_non_executable = true;
++    WjPageChanged(virt);
+ #ifndef DISABLE_JIT
+     if (!IsJitDisabled(&s->jit)) {
+       ResetJitPage(&s->jit, virt);
+@@ -1341,6 +1343,7 @@ int ProtectVirtual(struct System *s, i64 virt, i64 size, int prot,
+               goto MemoryDisappeared;
+             }
+           }
++          if (!(pt & PAGE_XD) && pt2 != pt) WjPageChanged(virt);
+           // check for exec -> non-exec
+           if (!(pt & PAGE_XD) && (pt2 & PAGE_XD) && !(pt & PAGE_RSRV)) {
+             executable_code_was_made_non_executable = true;
+diff --git a/blink/reset.c b/blink/reset.c
+index 77dac9b..04112e3 100644
+--- a/blink/reset.c
++++ b/blink/reset.c
+@@ -101,6 +101,7 @@ void ResetCpu(struct Machine *m) {
+ void ResetTlb(struct Machine *m) {
+   STATISTIC(++tlb_resets);
+   memset(m->tlb, 0, sizeof(m->tlb));
++  WjResetTlb(m);
+   m->opcache->codevirt = 0;
+   m->opcache->codehost = 0;
+ }
+diff --git a/blink/wjit.c b/blink/wjit.c
+new file mode 100644
+index 0000000..645db25
+--- /dev/null
++++ b/blink/wjit.c
+@@ -0,0 +1,2804 @@
++/*-*- mode:c;indent-tabs-mode:nil;c-basic-offset:2;tab-width:8;coding:utf-8 -*-│
++│ vi: set et ft=c ts=2 sts=2 sw=2 fenc=utf-8                               :vi │
++╞══════════════════════════════════════════════════════════════════════════════╡
++│ Copyright 2026 Shiro contributors                                            │
++│                                                                              │
++│ Permission to use, copy, modify, and/or distribute this software for         │
++│ any purpose with or without fee is hereby granted, provided that the         │
++│ above copyright notice and this permission notice appear in all copies.      │
++│                                                                              │
++│ THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL                │
++│ WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED                │
++│ WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE             │
++│ AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL         │
++│ DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR        │
++│ PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER               │
++│ TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR             │
++│ PERFORMANCE OF THIS SOFTWARE.                                                │
++╚─────────────────────────────────────────────────────────────────────────────*/
++#include "blink/wjit.h"
++
++#ifdef __EMSCRIPTEN__
++#include <emscripten.h>
++#include <pthread.h>
++#include <stdatomic.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "blink/biosrom.h"
++#include "blink/bus.h"
++#include "blink/endian.h"
++#include "blink/flags.h"
++#include "blink/machine.h"
++#include "blink/modrm.h"
++#include "blink/rde.h"
++#include "blink/x86.h"
++
++/*
++ * WebAssembly JIT ("wjit") for the emscripten build.
++ *
++ * Blink's own JIT emits x86-64/aarch64 machine code, which a wasm host
++ * can't run. Here, when a block start gets hot (counted by the interpreter
++ * loop at branch targets), the region around it -- the basic blocks
++ * reachable through direct jumps and conditional branches, plus the return
++ * points of its calls -- is translated into one wasm function `void
++ * body(struct Machine *m, int block)`: a loop around a br_table, so branches
++ * inside the region never leave wasm. The module imports the shared memory
++ * and the C functions it calls, and exports one `f_k(m) = body(m, k)` per
++ * block, which go in the function table, so C calls them through ordinary
++ * function pointers.
++ *
++ * - Guest registers live in wasm locals for the duration of a region and
++ *   are written back on exit, before any call into C, and before a
++ *   slow-path memory access (which may fault and deliver a signal).
++ * - Common integer instructions are translated inline. Everything else
++ *   calls Blink's own op handler for that instruction (call threading), so
++ *   decoding and dispatch are gone even for ops we don't translate.
++ * - Flags: liveness over the region (and a flag crawler for code outside
++ *   it) skips flags nobody reads; cmp/test + jcc, setcc and cmov are fused
++ *   into one wasm comparison.
++ * - Memory: an inline lookup in a per-thread translation cache (struct
++ *   Machine::wjr/wjw) maps the guest page to its host page; misses, page
++ *   crossings and faults go through Blink's normal path.
++ * - Jumps inside a region spend a budget and check m->attention, so the
++ *   GIL, signals and other threads still get a turn.
++ * - Wasm tables aren't shared between pthreads, so each thread compiles
++ *   and keeps its own regions. Code is only compiled from pages that are
++ *   not writable; when such a page is unmapped or its protection changes,
++ *   a global epoch makes every thread drop its regions.
++ *
++ * BLINK_WJIT=0 turns it off. BLINK_WJIT_THRESHOLD sets the hotness,
++ * BLINK_WJIT_DEBUG=1 prints statistics; BLINK_WJIT_OFF, _MAX and _BISECT
++ * help find a miscompiled instruction or region.
++ */
++
++bool g_wj_enabled;
++static int g_wj_thresh = 200;
++static int g_wj_debug;
++static int g_wj_off;    // BLINK_WJIT_OFF: bitmask of categories to not inline
++static long g_wj_max;   // BLINK_WJIT_MAX: stop compiling after this many
++static long g_wj_lo = -1, g_wj_hi = -1;  // BLINK_WJIT_BISECT=lo:hi (pc range)
++static _Atomic(unsigned) g_wj_epoch;
++
++// statistics
++static long g_wj_callops[0x400];
++static _Thread_local long t_runs;
++static _Thread_local int t_depth, t_slice;
++static _Thread_local bool t_unwind;
++static _Atomic(long) g_wj_blocks, g_wj_bytes, g_wj_failed, g_wj_insns,
++    g_wj_inline;
++
++////////////////////////////////////////////////////////////////////////////////
++// JavaScript glue
++
++EM_JS(int, wj_install,
++      (const u8 *p, int n, int k, int *out, const int *imp, int nimp), {
++  var st = Module['wjStats'] || (Module['wjStats'] = {c : 0, i : 0, n : 0});
++  var env = {m : wasmMemory};
++  for (var j = 0; j < nimp; j++) env[j] = wasmTable.get(HEAP32[(imp >> 2) + j]);
++  var inst;
++  try {
++    var t0 = performance.now();
++    var mod = new WebAssembly.Module(HEAPU8.slice(p, p + n));
++    var t1 = performance.now();
++    inst = new WebAssembly.Instance(mod, {e : env});
++    st.c += t1 - t0;
++    st.i += performance.now() - t1;
++    st.n++;
++  } catch (e) {
++    err('wjit: ' + e);
++    return -1;
++  }
++  var free = Module['wjFree'] || (Module['wjFree'] = []);
++  var all = Module['wjAll'] || (Module['wjAll'] = []);
++  if (free.length < k) {
++    var grow = Math.max(k, 256), base = wasmTable.grow(grow);
++    for (var g = grow - 1; g >= 0; g--) {
++      free.push(base + g);
++      all.push(base + g);
++    }
++  }
++  for (var i = 0; i < k; i++) {
++    var idx = free.pop();
++    wasmTable.set(idx, inst.exports['f' + i]);
++    HEAP32[(out >> 2) + i] = idx;
++  }
++  return 0;
++});
++
++EM_JS(void, wj_stats, (void), {
++  var st = Module['wjStats'];
++  if (st) err('wjit: ' + st.n + ' modules, compile ' + st.c.toFixed(1) + ' ms, instantiate ' + st.i.toFixed(1) + ' ms');
++});
++
++// drops every function this worker installed (new thread, or an epoch flip)
++EM_JS(void, wj_release_all, (void), {
++  var all = Module['wjAll'] || [];
++  for (var i = 0; i < all.length; i++) wasmTable.set(all[i], null);
++  Module['wjFree'] = all.slice();
++});
++
++////////////////////////////////////////////////////////////////////////////////
++// wasm encoding
++
++enum {
++  W_UNREACHABLE = 0x00,
++  W_BLOCK = 0x02,
++  W_LOOP = 0x03,
++  W_IF = 0x04,
++  W_ELSE = 0x05,
++  W_END = 0x0b,
++  W_BR = 0x0c,
++  W_BR_IF = 0x0d,
++  W_RETURN = 0x0f,
++  W_CALL_INDIRECT = 0x11,
++  W_DROP = 0x1a,
++  W_SELECT = 0x1b,
++  W_LGET = 0x20,
++  W_LSET = 0x21,
++  W_LTEE = 0x22,
++  W_I32_LOAD = 0x28,
++  W_I64_LOAD = 0x29,
++  W_I32_LOAD8_U = 0x2d,
++  W_I64_LOAD8_U = 0x31,
++  W_I64_LOAD16_U = 0x33,
++  W_I64_LOAD32_U = 0x35,
++  W_I32_STORE = 0x36,
++  W_I64_STORE = 0x37,
++  W_I32_STORE8 = 0x3a,
++  W_I64_STORE8 = 0x3c,
++  W_I64_STORE16 = 0x3d,
++  W_I64_STORE32 = 0x3e,
++  W_I32_CONST = 0x41,
++  W_I64_CONST = 0x42,
++  W_I32_EQZ = 0x45,
++  W_I32_EQ = 0x46,
++  W_I32_NE = 0x47,
++  W_I32_LT_U = 0x49,
++  W_I32_LE_U = 0x4d,
++  W_I64_EQZ = 0x50,
++  W_I64_EQ = 0x51,
++  W_I64_NE = 0x52,
++  W_I64_LT_S = 0x53,
++  W_I64_LT_U = 0x54,
++  W_I64_GT_S = 0x55,
++  W_I64_GT_U = 0x56,
++  W_I64_LE_S = 0x57,
++  W_I64_LE_U = 0x58,
++  W_I64_GE_S = 0x59,
++  W_I64_GE_U = 0x5a,
++  W_I32_POPCNT = 0x69,
++  W_I32_ADD = 0x6a,
++  W_I32_SUB = 0x6b,
++  W_I32_AND = 0x71,
++  W_I32_OR = 0x72,
++  W_I32_XOR = 0x73,
++  W_I32_SHL = 0x74,
++  W_I32_SHR_U = 0x76,
++  W_I64_ADD = 0x7c,
++  W_I64_SUB = 0x7d,
++  W_I64_MUL = 0x7e,
++  W_I64_DIV_S = 0x7f,
++  W_I64_AND = 0x83,
++  W_I64_OR = 0x84,
++  W_I64_XOR = 0x85,
++  W_I64_SHL = 0x86,
++  W_I64_SHR_S = 0x87,
++  W_I64_SHR_U = 0x88,
++  W_I32_WRAP_I64 = 0xa7,
++  W_I64_EXTEND_I32_S = 0xac,
++  W_I64_EXTEND_I32_U = 0xad,
++  W_I64_EXTEND8_S = 0xc2,
++  W_I64_EXTEND16_S = 0xc3,
++  W_I64_EXTEND32_S = 0xc4,
++  W_ATOMIC = 0xfe,
++  W_I32_ATOMIC_LOAD8_U = 0x12,
++};
++
++#define T_I32  0x7f
++#define T_I64  0x7e
++#define T_VOID 0x40
++
++// function types in every module
++enum {
++  TY_V_I,     // (i32) -> ()            blocks, CommitStash, helpers
++  TY_OP,      // (i32 i64 i64 i64) -> () op handlers
++  TY_READ,    // (i32 i64 i32) -> i64   WjReadSlow
++  TY_WRITE,   // (i32 i64 i32 i64) -> () WjWriteSlow
++  TY_I64_II,  // (i32 i64) -> i64       (unused)
++  TY_V_II,    // (i32 i32) -> ()         region bodies
++  TY_I_IL,    // (i32 i64) -> i32        WjCall
++  TY_COUNT
++};
++
++struct Buf {
++  u8 *p;
++  long n, c;
++};
++
++static void Reserve(struct Buf *b, long k) {
++  if (b->n + k > b->c) {
++    b->c = (b->n + k) * 2 + 256;
++    if (!(b->p = (u8 *)realloc(b->p, b->c))) abort();
++  }
++}
++
++static void B(struct Buf *b, u8 x) {
++  Reserve(b, 1);
++  b->p[b->n++] = x;
++}
++
++static void Bytes(struct Buf *b, const void *p, long n) {
++  Reserve(b, n);
++  memcpy(b->p + b->n, p, n);
++  b->n += n;
++}
++
++static void U(struct Buf *b, u64 x) {
++  do {
++    u8 c = x & 127;
++    x >>= 7;
++    if (x) c |= 128;
++    B(b, c);
++  } while (x);
++}
++
++static void S(struct Buf *b, i64 x) {
++  for (;;) {
++    u8 c = x & 127;
++    x >>= 7;
++    if ((x == 0 && !(c & 64)) || (x == -1 && (c & 64))) {
++      B(b, c);
++      break;
++    }
++    B(b, c | 128);
++  }
++}
++
++static void Name(struct Buf *b, const char *s) {
++  U(b, strlen(s));
++  Bytes(b, s, strlen(s));
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// code generator state
++
++#define kMaxIns    640
++#define kMaxBlocks 64
++#define kAllFlags  (CF | PF | AF | ZF | SF | OF)
++
++// locals of a region function (params: machine, entry block)
++#define L_M      0
++#define L_BI     1
++#define L_R(r)   (2 + (r))
++#define L_EA     18
++#define L_X      19
++#define L_Y      20
++#define L_Z      21
++#define L_T      22
++#define L_CX     23
++#define L_CY     24
++#define L_CZ     25
++#define L_V      26
++#define kNumI64  25  // locals 2..26
++#define L_F      27
++#define L_E      28
++#define L_BUDGET 29
++#define L_N      30
++#define kNumI32  4
++
++enum { HOW_INLINE, HOW_CALL, HOW_CALL_BRANCH };
++
++// kinds of flag producers that a jcc/setcc/cmov can fuse with
++enum { CC_NONE, CC_SUB, CC_ADD, CC_LOGIC, CC_INCDEC };
++
++struct Ins {
++  u64 rde;
++  i64 disp;
++  u64 uimm0;
++  i64 pc;
++  int len;
++  int how;
++  int fr;    // flags read from F
++  int fw;    // flags written to F
++  int live;  // flags live after this instruction
++  int cck;   // for flag producers: kind; for consumers: kind fused with
++  int ccw;   // width in bytes of the producer
++};
++
++#define kMaxImports 255
++
++struct Mod {
++  int nimp;
++  u32 imp[kMaxImports];   // C function pointers (table indices)
++  u8 imptype[kMaxImports];
++};
++
++// a basic block of a region
++struct Blk {
++  i64 start, end;
++  int first, n;  // instructions in[first..first+n)
++  int livein;
++  int liveout;
++};
++
++struct Cg {
++  struct Mod *mod;
++  struct Blk blk[kMaxBlocks];
++  int nblk;
++  int cur;   // block being translated
++  int base;  // br depth from the current block's code to the region loop
++  struct Buf b;
++  struct Machine *m;
++  struct Ins in[kMaxIns];
++  int n;
++  u32 regs;   // guest registers the inline code reads or writes
++  u32 wregs;  // ... writes
++  bool flags; // F local in use
++  bool stat;  // count fallbacks (second pass)
++  int depth;  // wasm block nesting, for br to the loop
++};
++
++static inline void Op(struct Cg *g, u8 x) {
++  B(&g->b, x);
++}
++static inline void Get(struct Cg *g, int l) {
++  B(&g->b, W_LGET);
++  U(&g->b, l);
++}
++static inline void Set(struct Cg *g, int l) {
++  B(&g->b, W_LSET);
++  U(&g->b, l);
++}
++static inline void Tee(struct Cg *g, int l) {
++  B(&g->b, W_LTEE);
++  U(&g->b, l);
++}
++static inline void I32(struct Cg *g, i32 x) {
++  B(&g->b, W_I32_CONST);
++  S(&g->b, x);
++}
++static inline void I64(struct Cg *g, i64 x) {
++  B(&g->b, W_I64_CONST);
++  S(&g->b, x);
++}
++static inline void Mem(struct Cg *g, u8 op, int align, u32 off) {
++  B(&g->b, op);
++  U(&g->b, align);
++  U(&g->b, off);
++}
++static inline void If(struct Cg *g, u8 type) {
++  B(&g->b, W_IF);
++  B(&g->b, type);
++  ++g->depth;
++}
++static inline void Else(struct Cg *g) {
++  B(&g->b, W_ELSE);
++}
++static inline void End(struct Cg *g) {
++  B(&g->b, W_END);
++  --g->depth;
++}
++static int Import(struct Mod *mod, void *fn, int type) {
++  int i;
++  for (i = 0; i < mod->nimp; ++i) {
++    if (mod->imp[i] == (u32)(uintptr_t)fn) return i;
++  }
++  if (mod->nimp == kMaxImports) abort();  // callers keep well below this
++  mod->imp[i] = (u32)(uintptr_t)fn;
++  mod->imptype[i] = type;
++  return mod->nimp++;
++}
++
++static void CallImport(struct Cg *g, void *fn, int type) {
++  B(&g->b, 0x10);  // call
++  U(&g->b, Import(g->mod, fn, type));
++}
++
++#define OFF(f) ((u32)offsetof(struct Machine, f))
++
++////////////////////////////////////////////////////////////////////////////////
++// runtime helpers called from generated code
++
++static void WjFill(struct Machine *m, i64 v, bool write) {
++  u64 entry;
++  u8 *host;
++  struct WjTlb *t;
++  if ((v & 4095) > 4096 - 8) return;  // keep it simple: whole-page entries
++  if (!(entry = FindPageTableEntry(m, v & -4096))) return;
++  if (!(entry & PAGE_U)) return;
++  if (write && !(entry & PAGE_RW)) return;
++  if (!(host = GetPageAddress(m->system, entry, false))) return;
++  if (IsRomAddress(m, host)) return;
++  t = write ? m->wjw : m->wjr;
++  t += (v >> 12) & (WJ_TLB_SIZE - 1);
++  t->tag = v & -4096;
++  t->host = (u32)(uintptr_t)host;
++  if (!write && (entry & PAGE_RW)) {
++    // a readable+writable page can go in both caches
++    t = m->wjw + ((v >> 12) & (WJ_TLB_SIZE - 1));
++    t->tag = v & -4096;
++    t->host = (u32)(uintptr_t)host;
++  }
++}
++
++static u64 WjReadSlow(struct Machine *m, i64 v, int n) {
++  u8 *p;
++  u64 x;
++  p = ReserveAddress(m, v, n, false);
++  switch (n) {
++    case 1:
++      x = Load8(p);
++      break;
++    case 2:
++      x = Load16(p);
++      break;
++    case 4:
++      x = Load32(p);
++      break;
++    default:
++      x = Load64(p);
++      break;
++  }
++  if (m->stashaddr) CommitStash(m);
++  m->reserving = false;
++  m->oplen = 0;
++  WjFill(m, v, false);
++  return x;
++}
++
++static void WjWriteSlow(struct Machine *m, i64 v, int n, u64 x) {
++  u8 *p;
++  p = ReserveAddress(m, v, n, true);
++  switch (n) {
++    case 1:
++      Store8(p, x);
++      break;
++    case 2:
++      Store16(p, x);
++      break;
++    case 4:
++      Store32(p, x);
++      break;
++    default:
++      Store64(p, x);
++      break;
++  }
++  if (m->stashaddr) CommitStash(m);
++  m->reserving = false;
++  m->oplen = 0;
++  WjFill(m, v, true);
++}
++
++// the TLB was invalidated by another thread (munmap, mprotect, ...)
++static void WjSyncTlb(struct Machine *m) {
++  if (atomic_exchange_explicit(&m->invalidated, false, memory_order_acq_rel)) {
++    ResetTlb(m);
++  }
++}
++
++static void WjCommitStash(struct Machine *m) {
++  CommitStash(m);
++}
++
++void WjResetTlb(struct Machine *m) {
++  memset(m->wjr, -1, sizeof(m->wjr));
++  memset(m->wjw, -1, sizeof(m->wjw));
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// translation: registers, flags, memory
++
++static int Width(u64 rde) {
++  return Rexw(rde) ? 8 : Osz(rde) ? 2 : 4;
++}
++
++static u64 Mask(int w) {
++  return w == 8 ? -1ull : (1ull << (w * 8)) - 1;
++}
++
++static void UseReg(struct Cg *g, int r) {
++  g->regs |= 1u << r;
++}
++
++// pushes the zero-extended value of a w-byte register; for w == 1, `r` is
++// an index into kByteReg (so legacy %ah..%bh work)
++static void GetReg(struct Cg *g, int r, int w) {
++  int b;
++  if (w == 1) {
++    b = kByteReg[r];
++    Get(g, L_R(b >> 3));
++    if (b & 1) {
++      I64(g, 8);
++      Op(g, W_I64_SHR_U);
++    }
++    I64(g, 0xff);
++    Op(g, W_I64_AND);
++    return;
++  }
++  Get(g, L_R(r));
++  if (w != 8) {
++    I64(g, Mask(w));
++    Op(g, W_I64_AND);
++  }
++}
++
++// pops an i64 into a w-byte register with x86 semantics (32-bit writes
++// zero-extend, 8/16-bit writes merge)
++static void PutReg(struct Cg *g, int r, int w) {
++  int b, k;
++  if (w == 8) {
++    Set(g, L_R(r));
++    g->wregs |= 1u << r;
++    return;
++  }
++  if (w == 4) {
++    I64(g, 0xffffffff);
++    Op(g, W_I64_AND);
++    Set(g, L_R(r));
++    g->wregs |= 1u << r;
++    return;
++  }
++  if (w == 1) {
++    b = kByteReg[r];
++    k = b >> 3;
++    Set(g, L_V);
++    Get(g, L_R(k));
++    I64(g, (b & 1) ? ~0xff00ll : ~0xffll);
++    Op(g, W_I64_AND);
++    Get(g, L_V);
++    I64(g, 0xff);
++    Op(g, W_I64_AND);
++    if (b & 1) {
++      I64(g, 8);
++      Op(g, W_I64_SHL);
++    }
++    Op(g, W_I64_OR);
++    Set(g, L_R(k));
++    g->wregs |= 1u << k;
++    return;
++  }
++  Set(g, L_V);
++  Get(g, L_R(r));
++  I64(g, ~0xffffll);
++  Op(g, W_I64_AND);
++  Get(g, L_V);
++  I64(g, 0xffff);
++  Op(g, W_I64_AND);
++  Op(g, W_I64_OR);
++  Set(g, L_R(r));
++  g->wregs |= 1u << r;
++}
++
++// writes back dirty state so C code (op handlers, signal delivery) sees it
++static void Flush(struct Cg *g) {
++  int r;
++  for (r = 0; r < 16; ++r) {
++    if (g->wregs & (1u << r)) {
++      Get(g, L_M);
++      Get(g, L_R(r));
++      Mem(g, W_I64_STORE, 3, OFF(weg) + r * 8);
++    }
++  }
++  if (g->flags) {
++    Get(g, L_M);
++    Get(g, L_F);
++    Mem(g, W_I32_STORE, 2, OFF(flags));
++  }
++}
++
++static void Reload(struct Cg *g) {
++  int r;
++  for (r = 0; r < 16; ++r) {
++    if (g->regs & (1u << r)) {
++      Get(g, L_M);
++      Mem(g, W_I64_LOAD, 3, OFF(weg) + r * 8);
++      Set(g, L_R(r));
++    }
++  }
++  if (g->flags) {
++    Get(g, L_M);
++    Mem(g, W_I32_LOAD, 2, OFF(flags));
++    Set(g, L_F);
++  }
++}
++
++static void StoreIp(struct Cg *g, i64 ip) {
++  Get(g, L_M);
++  I64(g, ip);
++  Mem(g, W_I64_STORE, 3, OFF(ip));
++}
++
++static void StoreOplen(struct Cg *g, int n) {
++  Get(g, L_M);
++  I32(g, n);
++  Mem(g, W_I32_STORE8, 0, OFF(oplen));
++}
++
++// leaves the block: state written back, ip = constant
++static void ExitTo(struct Cg *g, i64 ip) {
++  StoreIp(g, ip);
++  Flush(g);
++  Op(g, W_RETURN);
++}
++
++// state written back, ip = L_T
++static void ExitIpT(struct Cg *g) {
++  Get(g, L_M);
++  Get(g, L_T);
++  Mem(g, W_I64_STORE, 3, OFF(ip));
++  Flush(g);
++}
++
++// leaves the block: state written back, ip = L_T
++static void ExitToT(struct Cg *g) {
++  Get(g, L_M);
++  Get(g, L_T);
++  Mem(g, W_I64_STORE, 3, OFF(ip));
++  Flush(g);
++  Op(g, W_RETURN);
++}
++
++// state needed before calling something that may fault: the instruction
++// being executed is `ins` (RestoreIp() rewinds m->ip by m->oplen)
++static void PrepareFault(struct Cg *g, struct Ins *in) {
++  StoreIp(g, in->pc + in->len);
++  StoreOplen(g, in->len);
++  Flush(g);
++}
++
++// computes the effective address of the modrm memory operand into L_EA
++static void Ea(struct Cg *g, struct Ins *in, bool seg) {
++  u64 rde = in->rde;
++  bool any = false;
++  if (!SibExists(rde)) {
++    if (IsRipRelative(rde)) {
++      I64(g, in->pc + in->len + in->disp);
++      any = true;
++    } else {
++      UseReg(g, RexbRm(rde));
++      Get(g, L_R(RexbRm(rde)));
++      if (in->disp) {
++        I64(g, in->disp);
++        Op(g, W_I64_ADD);
++      }
++      any = true;
++    }
++  } else {
++    if (SibHasBase(rde)) {
++      UseReg(g, RexbBase(rde));
++      Get(g, L_R(RexbBase(rde)));
++      any = true;
++    }
++    if (SibHasIndex(rde)) {
++      int x = Rexx(rde) << 3 | SibIndex(rde);
++      UseReg(g, x);
++      Get(g, L_R(x));
++      if (SibScale(rde)) {
++        I64(g, SibScale(rde));
++        Op(g, W_I64_SHL);
++      }
++      if (any) Op(g, W_I64_ADD);
++      any = true;
++    }
++    if (!any) {
++      I64(g, in->disp);
++      any = true;
++    } else if (in->disp) {
++      I64(g, in->disp);
++      Op(g, W_I64_ADD);
++    }
++  }
++  if (Eamode(rde) == XED_MODE_LEGACY) {
++    I64(g, 0xffffffff);
++    Op(g, W_I64_AND);
++  }
++  if (seg && Sego(rde)) {
++    Get(g, L_M);
++    Mem(g, W_I64_LOAD, 3,
++        OFF(seg) + (Sego(rde) - 1) * sizeof(struct DescriptorCache) +
++            offsetof(struct DescriptorCache, base));
++    Op(g, W_I64_ADD);
++  }
++  Set(g, L_EA);
++}
++
++// pushes the i32 condition "L_EA hits the cache and doesn't cross a page"
++// and leaves the entry's address in L_E
++static void TlbCheck(struct Cg *g, int w, u32 table) {
++  Get(g, L_EA);
++  I64(g, 12);
++  Op(g, W_I64_SHR_U);
++  Op(g, W_I32_WRAP_I64);
++  I32(g, WJ_TLB_SIZE - 1);
++  Op(g, W_I32_AND);
++  I32(g, 4);
++  Op(g, W_I32_SHL);
++  Get(g, L_M);
++  Op(g, W_I32_ADD);
++  Tee(g, L_E);
++  Mem(g, W_I64_LOAD, 3, table);
++  Get(g, L_EA);
++  I64(g, -4096);
++  Op(g, W_I64_AND);
++  Op(g, W_I64_EQ);
++  if (w > 1) {
++    Get(g, L_EA);
++    Op(g, W_I32_WRAP_I64);
++    I32(g, 4095);
++    Op(g, W_I32_AND);
++    I32(g, 4096 - w);
++    Op(g, W_I32_LE_U);
++    Op(g, W_I32_AND);
++  }
++}
++
++static void HostAddr(struct Cg *g, u32 table) {
++  Get(g, L_E);
++  Mem(g, W_I32_LOAD, 2, table + 8);
++  Get(g, L_EA);
++  Op(g, W_I32_WRAP_I64);
++  I32(g, 4095);
++  Op(g, W_I32_AND);
++  Op(g, W_I32_ADD);
++}
++
++static const u8 kLoadOp[9] = {0, W_I64_LOAD8_U, W_I64_LOAD16_U, 0,
++                              W_I64_LOAD32_U, 0, 0, 0, W_I64_LOAD};
++static const u8 kStoreOp[9] = {0, W_I64_STORE8, W_I64_STORE16, 0,
++                               W_I64_STORE32, 0, 0, 0, W_I64_STORE};
++static const u8 kAlign[9] = {0, 0, 1, 0, 2, 0, 0, 0, 3};
++
++// pushes the zero-extended w-byte value at L_EA
++static void LoadEa(struct Cg *g, struct Ins *in, int w) {
++  u32 table = OFF(wjr);
++  TlbCheck(g, w, table);
++  If(g, T_I64);
++  HostAddr(g, table);
++  Mem(g, kLoadOp[w], kAlign[w], 0);
++  Else(g);
++  PrepareFault(g, in);
++  Get(g, L_M);
++  Get(g, L_EA);
++  I32(g, w);
++  CallImport(g, (void *)WjReadSlow, TY_READ);
++  End(g);
++}
++
++// stores L_T (w bytes) at L_EA
++static void Store(struct Cg *g, struct Ins *in, int w) {
++  u32 table = OFF(wjw);
++  TlbCheck(g, w, table);
++  If(g, T_VOID);
++  HostAddr(g, table);
++  Get(g, L_T);
++  Mem(g, kStoreOp[w], kAlign[w], 0);
++  Else(g);
++  PrepareFault(g, in);
++  Get(g, L_M);
++  Get(g, L_EA);
++  I32(g, w);
++  Get(g, L_T);
++  CallImport(g, (void *)WjWriteSlow, TY_WRITE);
++  End(g);
++}
++
++// pushes the zero-extended r/m operand
++static void GetRm(struct Cg *g, struct Ins *in, int w) {
++  u64 rde = in->rde;
++  if (IsModrmRegister(rde)) {
++    if (w == 1) {
++      UseReg(g, kByteReg[RexRexb(rde)] >> 3);
++      GetReg(g, RexRexb(rde), 1);
++    } else {
++      UseReg(g, RexbRm(rde));
++      GetReg(g, RexbRm(rde), w);
++    }
++  } else {
++    Ea(g, in, true);
++    LoadEa(g, in, w);
++  }
++}
++
++// pops a value into the r/m operand (L_EA must already hold the address
++// if it's memory and `haveea` is set)
++static void PutRm(struct Cg *g, struct Ins *in, int w, bool haveea) {
++  u64 rde = in->rde;
++  if (IsModrmRegister(rde)) {
++    if (w == 1) {
++      UseReg(g, kByteReg[RexRexb(rde)] >> 3);
++      PutReg(g, RexRexb(rde), 1);
++    } else {
++      UseReg(g, RexbRm(rde));
++      PutReg(g, RexbRm(rde), w);
++    }
++  } else {
++    Set(g, L_T);
++    if (!haveea) Ea(g, in, true);
++    Store(g, in, w);
++  }
++}
++
++static void GetRegField(struct Cg *g, struct Ins *in, int w) {
++  if (w == 1) {
++    UseReg(g, kByteReg[RexRexr(in->rde)] >> 3);
++    GetReg(g, RexRexr(in->rde), 1);
++  } else {
++    UseReg(g, RexrReg(in->rde));
++    GetReg(g, RexrReg(in->rde), w);
++  }
++}
++
++static void PutRegField(struct Cg *g, struct Ins *in, int w) {
++  if (w == 1) {
++    UseReg(g, kByteReg[RexRexr(in->rde)] >> 3);
++    PutReg(g, RexRexr(in->rde), 1);
++  } else {
++    UseReg(g, RexrReg(in->rde));
++    PutReg(g, RexrReg(in->rde), w);
++  }
++}
++
++// sign-extends the w-byte value on the stack to i64
++static void SignExtend(struct Cg *g, int w) {
++  switch (w) {
++    case 1:
++      Op(g, W_I64_EXTEND8_S);
++      break;
++    case 2:
++      Op(g, W_I64_EXTEND16_S);
++      break;
++    case 4:
++      Op(g, W_I64_EXTEND32_S);
++      break;
++    default:
++      break;
++  }
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// flags
++
++// pushes bit `b` (0/1, as i32) of (x) >> (w*8-1), x a local
++static void Msb(struct Cg *g, int w) {
++  I64(g, w * 8 - 1);
++  Op(g, W_I64_SHR_U);
++  I64(g, 1);
++  Op(g, W_I64_AND);
++  Op(g, W_I32_WRAP_I64);
++}
++
++// updates the live flags of F from CX, CY, CZ (zero-extended, w bytes) for
++// a producer of the given kind; `sub` selects subtraction for CC_SUB-like
++// math (cmp/sub/dec/neg)
++enum { F_ADD, F_SUB, F_LOGIC, F_INC, F_DEC, F_SHL, F_SHR, F_SAR };
++
++static void ComputeFlags(struct Cg *g, int kind, int w, int live) {
++  u32 clear = 0;
++  int written;
++  switch (kind) {
++    case F_INC:
++    case F_DEC:
++      written = PF | AF | ZF | SF | OF;
++      break;
++    default:
++      written = kAllFlags;
++      break;
++  }
++  live &= written;
++  if (!live) return;
++  if (live & CF) clear |= CF;
++  if (live & PF) clear |= 0xff000000u;
++  if (live & AF) clear |= AF;
++  if (live & ZF) clear |= ZF;
++  if (live & SF) clear |= SF;
++  if (live & OF) clear |= OF;
++  g->flags = true;
++  Get(g, L_F);
++  I32(g, ~clear);
++  Op(g, W_I32_AND);
++  if (live & ZF) {
++    Get(g, L_CZ);
++    Op(g, W_I64_EQZ);
++    I32(g, FLAGS_ZF);
++    Op(g, W_I32_SHL);
++    Op(g, W_I32_OR);
++  }
++  if (live & SF) {
++    Get(g, L_CZ);
++    Msb(g, w);
++    I32(g, FLAGS_SF);
++    Op(g, W_I32_SHL);
++    Op(g, W_I32_OR);
++  }
++  if (live & PF) {
++    Get(g, L_CZ);
++    Op(g, W_I32_WRAP_I64);
++    I32(g, 24);
++    Op(g, W_I32_SHL);
++    Op(g, W_I32_OR);
++  }
++  if (live & CF) {
++    switch (kind) {
++      case F_ADD:  // z < y
++        Get(g, L_CZ);
++        Get(g, L_CY);
++        Op(g, W_I64_LT_U);
++        Op(g, W_I32_OR);
++        break;
++      case F_SUB:  // x < y
++        Get(g, L_CX);
++        Get(g, L_CY);
++        Op(g, W_I64_LT_U);
++        Op(g, W_I32_OR);
++        break;
++      case F_SHL:  // (x >> (w*8 - y)) & 1
++        Get(g, L_CX);
++        I64(g, w * 8);
++        Get(g, L_CY);
++        Op(g, W_I64_SUB);
++        Op(g, W_I64_SHR_U);
++        I64(g, 1);
++        Op(g, W_I64_AND);
++        Op(g, W_I32_WRAP_I64);
++        Op(g, W_I32_OR);
++        break;
++      case F_SHR:  // (x >> (y - 1)) & 1
++      case F_SAR:  // same on the sign-extended value
++        Get(g, L_CX);
++        if (kind == F_SAR) SignExtend(g, w);
++        Get(g, L_CY);
++        I64(g, 1);
++        Op(g, W_I64_SUB);
++        Op(g, kind == F_SAR ? W_I64_SHR_S : W_I64_SHR_U);
++        I64(g, 1);
++        Op(g, W_I64_AND);
++        Op(g, W_I32_WRAP_I64);
++        Op(g, W_I32_OR);
++        break;
++      default:
++        break;
++    }
++  }
++  if (live & AF) {
++    switch (kind) {
++      case F_ADD:
++      case F_SUB:
++        Get(g, L_CX);
++        Get(g, L_CY);
++        Op(g, W_I64_XOR);
++        Get(g, L_CZ);
++        Op(g, W_I64_XOR);
++        Op(g, W_I32_WRAP_I64);
++        I32(g, AF);
++        Op(g, W_I32_AND);
++        Op(g, W_I32_OR);
++        break;
++      case F_INC:  // (z & 15) == 0
++        Get(g, L_CZ);
++        Op(g, W_I32_WRAP_I64);
++        I32(g, 15);
++        Op(g, W_I32_AND);
++        Op(g, W_I32_EQZ);
++        I32(g, FLAGS_AF);
++        Op(g, W_I32_SHL);
++        Op(g, W_I32_OR);
++        break;
++      case F_DEC:  // (z & 15) == 15
++        Get(g, L_CZ);
++        Op(g, W_I32_WRAP_I64);
++        I32(g, 15);
++        Op(g, W_I32_AND);
++        I32(g, 15);
++        Op(g, W_I32_EQ);
++        I32(g, FLAGS_AF);
++        Op(g, W_I32_SHL);
++        Op(g, W_I32_OR);
++        break;
++      default:
++        break;
++    }
++  }
++  if (live & OF) {
++    switch (kind) {
++      case F_ADD:  // ((z ^ x) & (z ^ y)) msb
++        Get(g, L_CZ);
++        Get(g, L_CX);
++        Op(g, W_I64_XOR);
++        Get(g, L_CZ);
++        Get(g, L_CY);
++        Op(g, W_I64_XOR);
++        Op(g, W_I64_AND);
++        Msb(g, w);
++        break;
++      case F_SUB:  // ((x ^ y) & (z ^ x)) msb
++        Get(g, L_CX);
++        Get(g, L_CY);
++        Op(g, W_I64_XOR);
++        Get(g, L_CZ);
++        Get(g, L_CX);
++        Op(g, W_I64_XOR);
++        Op(g, W_I64_AND);
++        Msb(g, w);
++        break;
++      case F_INC:  // z == signmin
++        Get(g, L_CZ);
++        I64(g, (i64)(1ull << (w * 8 - 1)));
++        Op(g, W_I64_EQ);
++        break;
++      case F_DEC:  // x == signmin
++        Get(g, L_CX);
++        I64(g, (i64)(1ull << (w * 8 - 1)));
++        Op(g, W_I64_EQ);
++        break;
++      case F_SHL:  // msb(z) ^ cf
++        Get(g, L_CZ);
++        Msb(g, w);
++        Get(g, L_CX);
++        I64(g, w * 8);
++        Get(g, L_CY);
++        Op(g, W_I64_SUB);
++        Op(g, W_I64_SHR_U);
++        I64(g, 1);
++        Op(g, W_I64_AND);
++        Op(g, W_I32_WRAP_I64);
++        Op(g, W_I32_XOR);
++        break;
++      case F_SHR:  // msb(z ^ (z << 1))
++        Get(g, L_CZ);
++        Get(g, L_CZ);
++        I64(g, 1);
++        Op(g, W_I64_SHL);
++        Op(g, W_I64_XOR);
++        Msb(g, w);
++        break;
++      default:
++        I32(g, 0);
++        break;
++    }
++    I32(g, FLAGS_OF);
++    Op(g, W_I32_SHL);
++    Op(g, W_I32_OR);
++  }
++  Set(g, L_F);
++}
++
++// pushes condition code `cc` (0..15) evaluated from F as an i32 0/1
++static void CondFromFlags(struct Cg *g, int cc) {
++  g->flags = true;
++  switch (cc >> 1) {
++    case 0:  // O
++      Get(g, L_F);
++      I32(g, FLAGS_OF);
++      Op(g, W_I32_SHR_U);
++      break;
++    case 1:  // B
++      Get(g, L_F);
++      break;
++    case 2:  // E
++      Get(g, L_F);
++      I32(g, FLAGS_ZF);
++      Op(g, W_I32_SHR_U);
++      break;
++    case 3:  // BE
++      Get(g, L_F);
++      I32(g, FLAGS_ZF);
++      Op(g, W_I32_SHR_U);
++      Get(g, L_F);
++      Op(g, W_I32_OR);
++      break;
++    case 4:  // S
++      Get(g, L_F);
++      I32(g, FLAGS_SF);
++      Op(g, W_I32_SHR_U);
++      break;
++    case 5:  // P: even parity of the lazy byte
++      Get(g, L_F);
++      I32(g, 24);
++      Op(g, W_I32_SHR_U);
++      Op(g, W_I32_POPCNT);
++      I32(g, 1);
++      Op(g, W_I32_XOR);
++      break;
++    case 6:  // L: SF != OF
++      Get(g, L_F);
++      I32(g, FLAGS_SF);
++      Op(g, W_I32_SHR_U);
++      Get(g, L_F);
++      I32(g, FLAGS_OF);
++      Op(g, W_I32_SHR_U);
++      Op(g, W_I32_XOR);
++      break;
++    case 7:  // LE: ZF || SF != OF
++      Get(g, L_F);
++      I32(g, FLAGS_SF);
++      Op(g, W_I32_SHR_U);
++      Get(g, L_F);
++      I32(g, FLAGS_OF);
++      Op(g, W_I32_SHR_U);
++      Op(g, W_I32_XOR);
++      Get(g, L_F);
++      I32(g, FLAGS_ZF);
++      Op(g, W_I32_SHR_U);
++      Op(g, W_I32_OR);
++      break;
++  }
++  I32(g, 1);
++  Op(g, W_I32_AND);
++  if (cc & 1) {
++    I32(g, 1);
++    Op(g, W_I32_XOR);
++  }
++}
++
++// can condition `cc` be computed from the operands of producer `cck`?
++static bool CanFuse(int cck, int cc) {
++  switch (cck) {
++    case CC_SUB:
++      return (cc >> 1) != 0 && (cc >> 1) != 5;  // not O, P
++    case CC_LOGIC:
++      return (cc >> 1) != 5;
++    case CC_ADD:
++    case CC_INCDEC:
++      return (cc >> 1) == 2 || (cc >> 1) == 4;  // E, S
++    default:
++      return false;
++  }
++}
++
++static void PushSx(struct Cg *g, int l, int w) {
++  Get(g, l);
++  SignExtend(g, w);
++}
++
++// pushes condition `cc` from the producer's operands (CX, CY, CZ)
++static void CondFused(struct Cg *g, int cck, int w, int cc) {
++  int c = cc >> 1;
++  bool neg = cc & 1;
++  if (cck == CC_SUB) {
++    switch (c) {
++      case 1:  // B
++        Get(g, L_CX);
++        Get(g, L_CY);
++        Op(g, neg ? W_I64_GE_U : W_I64_LT_U);
++        return;
++      case 2:  // E
++        Get(g, L_CX);
++        Get(g, L_CY);
++        Op(g, neg ? W_I64_NE : W_I64_EQ);
++        return;
++      case 3:  // BE
++        Get(g, L_CX);
++        Get(g, L_CY);
++        Op(g, neg ? W_I64_GT_U : W_I64_LE_U);
++        return;
++      case 4:  // S
++        PushSx(g, L_CZ, w);
++        I64(g, 0);
++        Op(g, neg ? W_I64_GE_S : W_I64_LT_S);
++        return;
++      case 6:  // L
++        PushSx(g, L_CX, w);
++        PushSx(g, L_CY, w);
++        Op(g, neg ? W_I64_GE_S : W_I64_LT_S);
++        return;
++      case 7:  // LE
++        PushSx(g, L_CX, w);
++        PushSx(g, L_CY, w);
++        Op(g, neg ? W_I64_GT_S : W_I64_LE_S);
++        return;
++      default:
++        break;
++    }
++  } else if (cck == CC_LOGIC) {
++    switch (c) {
++      case 0:  // O: never
++      case 1:  // B: never
++        I32(g, neg);
++        return;
++      case 2:  // E
++      case 3:  // BE
++        Get(g, L_CZ);
++        Op(g, W_I64_EQZ);
++        if (neg) Op(g, W_I32_EQZ);
++        return;
++      case 4:  // S
++      case 6:  // L
++        PushSx(g, L_CZ, w);
++        I64(g, 0);
++        Op(g, neg ? W_I64_GE_S : W_I64_LT_S);
++        return;
++      case 7:  // LE
++        PushSx(g, L_CZ, w);
++        I64(g, 0);
++        Op(g, neg ? W_I64_GT_S : W_I64_LE_S);
++        return;
++      default:
++        break;
++    }
++  } else {
++    switch (c) {
++      case 2:
++        Get(g, L_CZ);
++        Op(g, W_I64_EQZ);
++        if (neg) Op(g, W_I32_EQZ);
++        return;
++      case 4:
++        PushSx(g, L_CZ, w);
++        I64(g, 0);
++        Op(g, neg ? W_I64_GE_S : W_I64_LT_S);
++        return;
++      default:
++        break;
++    }
++  }
++  abort();
++}
++
++static void Cond(struct Cg *g, struct Ins *in, int cc) {
++  if (in->cck != CC_NONE) {
++    CondFused(g, in->cck, in->ccw, cc);
++  } else {
++    CondFromFlags(g, cc);
++  }
++}
++
++static int CondFlags(int cc) {
++  switch (cc >> 1) {
++    case 0:
++      return OF;
++    case 1:
++      return CF;
++    case 2:
++      return ZF;
++    case 3:
++      return CF | ZF;
++    case 4:
++      return SF;
++    case 5:
++      return PF;
++    case 6:
++      return SF | OF;
++    default:
++      return SF | OF | ZF;
++  }
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// instruction analysis
++
++// ALU op number (0 add, 1 or, 4 and, 5 sub, 6 xor, 7 cmp) to producer info
++static bool AluOk(int aop) {
++  return aop != 2 && aop != 3;  // adc, sbb go through Blink
++}
++
++static int AluCck(int aop) {
++  switch (aop) {
++    case 0:
++      return CC_ADD;
++    case 5:
++    case 7:
++      return CC_SUB;
++    default:
++      return CC_LOGIC;
++  }
++}
++
++static int ShiftKind(int reg) {
++  switch (reg) {
++    case 4:
++    case 6:
++      return F_SHL;
++    case 5:
++      return F_SHR;
++    case 7:
++      return F_SAR;
++    default:
++      return -1;
++  }
++}
++
++static bool IsJcc(int op) {
++  return (0x070 <= op && op <= 0x07F) || (0x180 <= op && op <= 0x18F);
++}
++
++// classifies an instruction: whether it's translated inline, which flags it
++// reads and writes, and what kind of flag producer it is
++static void Analyze(struct Ins *in) {
++  u64 rde = in->rde;
++  int op = Mopcode(rde);
++  int w = Width(rde);
++  in->how = HOW_INLINE;
++  in->fr = 0;
++  in->fw = 0;
++  in->cck = CC_NONE;
++  in->ccw = 0;
++  if (Lock(rde) || Mode(rde) != XED_MODE_LONG || Eamode(rde) == XED_MODE_REAL) {
++    goto Call;
++  }
++  if (op < 0x40 && (op & 7) <= 5) {
++    int aop = op >> 3;
++    if (!AluOk(aop)) goto Call;
++    if ((op & 7) == 1 || (op & 7) == 3 || (op & 7) == 5) {
++      if (w == 2) goto Call;
++    }
++    in->fw = kAllFlags;
++    in->cck = AluCck(aop);
++    in->ccw = (op & 1) ? w : 1;
++    return;
++  }
++  switch (op) {
++    case 0x080:
++    case 0x081:
++    case 0x082:
++    case 0x083:
++      if (!AluOk(ModrmReg(rde))) goto Call;
++      if (op != 0x080 && op != 0x082 && w == 2) goto Call;
++      in->fw = kAllFlags;
++      in->cck = AluCck(ModrmReg(rde));
++      in->ccw = (op == 0x080 || op == 0x082) ? 1 : w;
++      return;
++    case 0x084:
++    case 0x085:
++    case 0x0A8:
++    case 0x0A9:
++      if ((op & 1) && w == 2) goto Call;
++      in->fw = kAllFlags;
++      in->cck = CC_LOGIC;
++      in->ccw = (op & 1) ? w : 1;
++      return;
++    case 0x0F6:
++    case 0x0F7:
++      if (ModrmReg(rde) > 1) goto Call;  // only test
++      if ((op & 1) && w == 2) goto Call;
++      in->fw = kAllFlags;
++      in->cck = CC_LOGIC;
++      in->ccw = (op & 1) ? w : 1;
++      return;
++    case 0x0FE:
++    case 0x0FF:
++      if (ModrmReg(rde) > 1) {
++        if (op == 0x0FF && (ModrmReg(rde) == 2 || ModrmReg(rde) == 4) &&
++            !Osz(rde)) {
++          return;  // indirect call/jmp
++        }
++        goto Call;
++      }
++      if (op == 0x0FF && w == 2) goto Call;
++      in->fw = PF | AF | ZF | SF | OF;
++      in->cck = CC_INCDEC;
++      in->ccw = op == 0x0FE ? 1 : w;
++      return;
++    case 0x0C0:
++    case 0x0C1:
++    case 0x0D0:
++    case 0x0D1:
++    case 0x0D3:
++      if (ShiftKind(ModrmReg(rde)) < 0) goto Call;
++      if ((op & 1) && w == 2) goto Call;
++      in->fw = kAllFlags;  // conditionally, when the count is nonzero
++      in->fr = op == 0x0D3 ? kAllFlags : 0;
++      if ((op == 0x0C0 || op == 0x0C1) && !(in->uimm0 & ((op & 1) && w == 8 ? 63 : 31))) {
++        in->fw = 0;
++      }
++      return;
++    case 0x088:
++    case 0x08A:
++    case 0x0C6:
++    case 0x0B0:
++    case 0x0B1:
++    case 0x0B2:
++    case 0x0B3:
++    case 0x0B4:
++    case 0x0B5:
++    case 0x0B6:
++    case 0x0B7:
++      if (op == 0x0C6 && ModrmReg(rde)) goto Call;
++      return;
++    case 0x089:
++    case 0x08B:
++    case 0x0C7:
++      if (op == 0x0C7 && ModrmReg(rde)) goto Call;
++      if (w == 2) goto Call;
++      return;
++    case 0x08D:
++      if (w == 2 || IsModrmRegister(rde)) goto Call;
++      return;
++    case 0x0B8:
++    case 0x0B9:
++    case 0x0BA:
++    case 0x0BB:
++    case 0x0BC:
++    case 0x0BD:
++    case 0x0BE:
++    case 0x0BF:
++      if (w == 2) goto Call;
++      return;
++    case 0x090:
++      if (RexbSrm(rde)) goto Call;  // xchg %r8,%rax
++      return;
++    case 0x11F:  // nopl
++      return;
++    case 0x050:
++    case 0x051:
++    case 0x052:
++    case 0x053:
++    case 0x054:
++    case 0x055:
++    case 0x056:
++    case 0x057:
++    case 0x058:
++    case 0x059:
++    case 0x05A:
++    case 0x05B:
++    case 0x05C:
++    case 0x05D:
++    case 0x05E:
++    case 0x05F:
++      if (Osz(rde)) goto Call;
++      return;
++    case 0x0E8:
++    case 0x0C3:
++      if (Osz(rde)) goto Call;
++      return;
++    case 0x0E9:
++    case 0x0EB:
++      return;
++    case 0x1B6:
++    case 0x1B7:
++    case 0x1BE:
++    case 0x1BF:
++    case 0x063:
++      if (w == 2) goto Call;
++      return;
++    case 0x098:
++    case 0x099:
++      if (w == 2) goto Call;
++      return;
++    case 0x1AF:
++    case 0x069:
++    case 0x06B:
++      if (w == 2) goto Call;
++      in->fw = CF | OF;
++      return;
++    default:
++      if (IsJcc(op)) {
++        in->fr = CondFlags(op & 15);
++        return;
++      }
++      if (0x140 <= op && op <= 0x14F) {  // cmov
++        if (w == 2) goto Call;
++        in->fr = CondFlags(op & 15);
++        return;
++      }
++      if (0x190 <= op && op <= 0x19F) {  // setcc
++        in->fr = CondFlags(op & 15);
++        return;
++      }
++      break;
++  }
++Call:
++  in->how = ClassifyOp(rde) == kOpBranching ? HOW_CALL_BRANCH : HOW_CALL;
++  in->fr = kAllFlags;
++  in->fw = kAllFlags;
++}
++
++// category of an inlined instruction, for BLINK_WJIT_OFF bisection
++static int Category(int op, u64 rde) {
++  if (op < 0x40 || (0x080 <= op && op <= 0x083)) return 0;
++  if (op == 0x084 || op == 0x085 || op == 0x0A8 || op == 0x0A9 ||
++      op == 0x0F6 || op == 0x0F7)
++    return 1;
++  if (op == 0x0FE || op == 0x0FF) return ModrmReg(rde) < 2 ? 2 : 7;
++  if (op == 0x0C0 || op == 0x0C1 || op == 0x0D0 || op == 0x0D1 ||
++      op == 0x0D3)
++    return 3;
++  if (op == 0x08D) return 5;
++  if (0x050 <= op && op <= 0x05F) return 6;
++  if (op == 0x0E8 || op == 0x0C3) return 7;
++  if (IsJcc(op) || op == 0x0E9 || op == 0x0EB) return 8;
++  if (op == 0x1B6 || op == 0x1B7 || op == 0x1BE || op == 0x1BF || op == 0x063)
++    return 9;
++  if (op == 0x098 || op == 0x099) return 10;
++  if (op == 0x1AF || op == 0x069 || op == 0x06B) return 11;
++  if (0x140 <= op && op <= 0x14F) return 12;
++  if (0x190 <= op && op <= 0x19F) return 13;
++  return 4;  // moves, nops
++}
++
++static bool IsFlagConsumer(int op) {
++  return IsJcc(op) || (0x140 <= op && op <= 0x14F) ||
++         (0x190 <= op && op <= 0x19F);
++}
++
++// Flags read by the code at `pc` before it overwrites them. This is Blink's
++// CrawlFlags() without its calling-convention assumption: Blink treats call
++// and ret as clobbering every flag, but hand-written assembly (Go's runtime,
++// libc string functions) does return results in flags, so here call and ret
++// end the crawl as "unknown".
++static int Crawl(struct Machine *m, i64 pc, int flags, int *look, int depth) {
++  int op, need = 0, deps;
++  u64 rde;
++  for (;;) {
++    if (--*look < 0 || depth > 4) return -1;
++    if (LoadInstruction2(m, pc)) return -1;
++    rde = m->xedd->op.rde;
++    op = Mopcode(rde);
++    if (op == 0x0E8 || op == 0x0C3 || op == 0x0C2) return -1;
++    // syscalls preserve the flags on Linux; Blink assumes they don't
++    if (ClassifyOp(rde) != kOpNormal && op != 0x0E9 && op != 0x0EB &&
++        !IsJcc(op)) {
++      return -1;
++    }
++    deps = GetFlagDeps(rde);
++    if (deps < 0) return -1;
++    need |= deps & flags;
++    pc += Oplength(rde);
++    // a shift by %cl leaves the flags alone when %cl is zero
++    if (op != 0x0D2 && op != 0x0D3 && !(flags &= ~GetFlagClobbers(rde))) {
++      return need;
++    }
++    if (op == 0x0E9 || op == 0x0EB) {
++      pc += m->xedd->op.disp;
++    } else if (IsJcc(op)) {
++      deps = Crawl(m, pc + m->xedd->op.disp, flags, look, depth + 1);
++      if (deps < 0) return -1;
++      need |= deps;
++    } else if (ClassifyOp(rde) != kOpNormal) {
++      return -1;
++    }
++  }
++}
++
++static int NeededAt(struct Machine *m, i64 pc) {
++  int look = 32;
++  int need = Crawl(m, pc, kAllFlags, &look, 0);
++  return need < 0 ? kAllFlags : need & kAllFlags;
++}
++
++static int FindBlk(struct Cg *, i64);
++
++// what the successors of block `b` need; internal successors use their
++// live-in from the previous iteration
++static int LiveOut(struct Cg *g, struct Blk *b) {
++  int k, op;
++  i64 t[2];
++  int nt = 0, live = 0, i;
++  struct Ins *last = &g->in[b->first + b->n - 1];
++  op = Mopcode(last->rde);
++  if (last->how == HOW_CALL_BRANCH || op == 0x0C3 || op == 0x0FF) {
++    return kAllFlags;
++  } else if (last->how == HOW_INLINE && IsJcc(op)) {
++    t[nt++] = last->pc + last->len + last->disp;
++    t[nt++] = b->end;
++  } else if (last->how == HOW_INLINE &&
++             (op == 0x0E8 || op == 0x0E9 || op == 0x0EB)) {
++    t[nt++] = last->pc + last->len + last->disp;
++  } else {
++    t[nt++] = b->end;
++  }
++  for (i = 0; i < nt; ++i) {
++    if ((k = FindBlk(g, t[i])) >= 0) {
++      live |= g->blk[k].livein;
++    } else {
++      live |= NeededAt(g->m, t[i]);
++    }
++  }
++  if (g_wj_off & (1 << 15)) live = kAllFlags;
++  return live;
++}
++
++static int BackwardLive(struct Cg *g, struct Blk *b, int live, bool record) {
++  int i, op;
++  struct Ins *in;
++  for (i = b->first + b->n - 1; i >= b->first; --i) {
++    in = &g->in[i];
++    if (record) in->live = live;
++    if (in->how != HOW_INLINE) {
++      live = kAllFlags;
++      continue;
++    }
++    op = Mopcode(in->rde);
++    // shifts by a variable count may not write; imul only CF/OF
++    if (op != 0x0D3) live &= ~in->fw;
++    live |= in->fr;
++  }
++  return live;
++}
++
++// decides fusion and computes flag liveness over the region
++static void Plan(struct Cg *g) {
++  int i, k, op, cck, ccw, iter, live;
++  bool changed;
++  struct Ins *in;
++  struct Blk *b;
++  // forward, per block: which producer reaches each consumer
++  for (k = 0; k < g->nblk; ++k) {
++    b = &g->blk[k];
++    cck = CC_NONE;
++    ccw = 0;
++    for (i = b->first; i < b->first + b->n; ++i) {
++      in = &g->in[i];
++      op = Mopcode(in->rde);
++      if (in->how != HOW_INLINE) {
++        cck = CC_NONE;
++        continue;
++      }
++      if (IsFlagConsumer(op)) {
++        if (cck != CC_NONE && CanFuse(cck, op & 15) &&
++            !(g_wj_off & (1 << 14))) {
++          in->cck = cck;
++          in->ccw = ccw;
++          in->fr = 0;
++        } else {
++          in->cck = CC_NONE;
++        }
++        continue;
++      }
++      if (in->fw) {
++        if (in->cck != CC_NONE) {
++          cck = in->cck;
++          ccw = in->ccw;
++        } else {
++          cck = CC_NONE;
++        }
++      }
++    }
++  }
++  // backward to a fixed point (live-ins only grow)
++  for (k = 0; k < g->nblk; ++k) g->blk[k].livein = 0;
++  for (iter = 0; iter < 32; ++iter) {
++    changed = false;
++    for (k = g->nblk - 1; k >= 0; --k) {
++      b = &g->blk[k];
++      b->liveout = LiveOut(g, b);
++      live = BackwardLive(g, b, b->liveout, false);
++      if (live != b->livein) {
++        b->livein |= live;
++        changed = true;
++      }
++    }
++    if (!changed) break;
++  }
++  for (k = 0; k < g->nblk; ++k) {
++    b = &g->blk[k];
++    if (iter == 32) b->liveout = kAllFlags;
++    BackwardLive(g, b, b->liveout, true);
++  }
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// instruction translation
++
++static void LiveFlags(struct Cg *g, struct Ins *in, int kind, int w) {
++  ComputeFlags(g, kind, w, in->live);
++}
++
++// x = CX, y = CY: computes CZ = x op y (masked) and the flags
++static void Alu(struct Cg *g, struct Ins *in, int aop, int w) {
++  static const u8 kOps[8] = {W_I64_ADD, W_I64_OR,  0,         0,
++                             W_I64_AND, W_I64_SUB, W_I64_XOR, W_I64_SUB};
++  Get(g, L_CX);
++  Get(g, L_CY);
++  Op(g, kOps[aop]);
++  if (w != 8 && (aop == 0 || aop == 5 || aop == 7)) {
++    I64(g, Mask(w));
++    Op(g, W_I64_AND);
++  }
++  Set(g, L_CZ);
++  LiveFlags(g, in, aop == 0 ? F_ADD : (aop == 5 || aop == 7) ? F_SUB : F_LOGIC,
++            w);
++}
++
++static void TranslateAlu(struct Cg *g, struct Ins *in) {
++  u64 rde = in->rde;
++  int op = Mopcode(rde);
++  int aop, w, form;
++  bool mem = !IsModrmRegister(rde);
++  if (op < 0x40) {
++    aop = op >> 3;
++    form = op & 7;
++    w = (form & 1) ? Width(rde) : 1;
++    switch (form) {
++      case 0:  // Eb,Gb
++      case 1:  // Ev,Gv
++        if (mem) {
++          Ea(g, in, true);
++          LoadEa(g, in, w);
++        } else {
++          GetRm(g, in, w);
++        }
++        Set(g, L_CX);
++        GetRegField(g, in, w);
++        Set(g, L_CY);
++        Alu(g, in, aop, w);
++        if (aop != 7) {
++          Get(g, L_CZ);
++          PutRm(g, in, w, true);
++        }
++        return;
++      case 2:  // Gb,Eb
++      case 3:  // Gv,Ev
++        GetRegField(g, in, w);
++        Set(g, L_CX);
++        GetRm(g, in, w);
++        Set(g, L_CY);
++        Alu(g, in, aop, w);
++        if (aop != 7) {
++          Get(g, L_CZ);
++          PutRegField(g, in, w);
++        }
++        return;
++      default:  // AL,Ib / rAX,Iz
++        UseReg(g, 0);
++        GetReg(g, 0, w);
++        Set(g, L_CX);
++        I64(g, in->uimm0 & Mask(w));
++        Set(g, L_CY);
++        Alu(g, in, aop, w);
++        if (aop != 7) {
++          Get(g, L_CZ);
++          PutReg(g, 0, w);
++        }
++        return;
++    }
++  }
++  // 80 81 82 83: Ev,imm
++  aop = ModrmReg(rde);
++  w = (op == 0x080 || op == 0x082) ? 1 : Width(rde);
++  if (mem) {
++    Ea(g, in, true);
++    LoadEa(g, in, w);
++  } else {
++    GetRm(g, in, w);
++  }
++  Set(g, L_CX);
++  I64(g, in->uimm0 & Mask(w));
++  Set(g, L_CY);
++  Alu(g, in, aop, w);
++  if (aop != 7) {
++    Get(g, L_CZ);
++    PutRm(g, in, w, true);
++  }
++}
++
++static void TranslateTest(struct Cg *g, struct Ins *in) {
++  u64 rde = in->rde;
++  int op = Mopcode(rde);
++  int w = (op & 1) ? Width(rde) : 1;
++  if (op == 0x0A8 || op == 0x0A9) {
++    UseReg(g, 0);
++    GetReg(g, 0, w);
++    Set(g, L_CX);
++    I64(g, in->uimm0 & Mask(w));
++  } else if (op == 0x0F6 || op == 0x0F7) {
++    GetRm(g, in, w);
++    Set(g, L_CX);
++    I64(g, in->uimm0 & Mask(w));
++  } else {
++    GetRm(g, in, w);
++    Set(g, L_CX);
++    GetRegField(g, in, w);
++  }
++  Set(g, L_CY);
++  Alu(g, in, 4, w);
++}
++
++static void TranslateIncDec(struct Cg *g, struct Ins *in) {
++  u64 rde = in->rde;
++  int w = Mopcode(rde) == 0x0FE ? 1 : Width(rde);
++  bool dec = ModrmReg(rde) == 1;
++  bool mem = !IsModrmRegister(rde);
++  if (mem) {
++    Ea(g, in, true);
++    LoadEa(g, in, w);
++  } else {
++    GetRm(g, in, w);
++  }
++  Tee(g, L_CX);
++  I64(g, 1);
++  Op(g, dec ? W_I64_SUB : W_I64_ADD);
++  if (w != 8) {
++    I64(g, Mask(w));
++    Op(g, W_I64_AND);
++  }
++  Set(g, L_CZ);
++  LiveFlags(g, in, dec ? F_DEC : F_INC, w);
++  Get(g, L_CZ);
++  PutRm(g, in, w, true);
++}
++
++static void TranslateShift(struct Cg *g, struct Ins *in) {
++  u64 rde = in->rde;
++  int op = Mopcode(rde);
++  int w = (op & 1) ? Width(rde) : 1;
++  int kind = ShiftKind(ModrmReg(rde));
++  int cmask = w == 8 ? 63 : 31;
++  bool mem = !IsModrmRegister(rde);
++  bool dyn = op == 0x0D3;
++  int count;
++  if (mem) {
++    Ea(g, in, true);
++    LoadEa(g, in, w);
++  } else {
++    GetRm(g, in, w);
++  }
++  Set(g, L_CX);
++  if (dyn) {
++    UseReg(g, 1);
++    Get(g, L_R(1));
++    I64(g, cmask);
++    Op(g, W_I64_AND);
++    Set(g, L_CY);
++  } else {
++    count = (op == 0x0D0 || op == 0x0D1) ? 1 : (int)(in->uimm0 & cmask);
++    I64(g, count);
++    Set(g, L_CY);
++    if (!count) {
++      // no flags; the value is written back (32-bit zero-extends)
++      Get(g, L_CX);
++      PutRm(g, in, w, true);
++      return;
++    }
++  }
++  // z = x op y, masked
++  if (kind == F_SAR) {
++    Get(g, L_CX);
++    SignExtend(g, w);
++    Get(g, L_CY);
++    Op(g, W_I64_SHR_S);
++  } else {
++    Get(g, L_CX);
++    Get(g, L_CY);
++    Op(g, kind == F_SHL ? W_I64_SHL : W_I64_SHR_U);
++  }
++  if (w != 8) {
++    I64(g, Mask(w));
++    Op(g, W_I64_AND);
++  }
++  Set(g, L_CZ);
++  if (dyn) {
++    if (in->live & kAllFlags) {
++      Get(g, L_CY);
++      Op(g, W_I64_EQZ);
++      Op(g, W_I32_EQZ);
++      If(g, T_VOID);
++      LiveFlags(g, in, kind, w);
++      End(g);
++    }
++  } else {
++    LiveFlags(g, in, kind, w);
++  }
++  Get(g, L_CZ);
++  PutRm(g, in, w, true);
++}
++
++static void TranslateImul(struct Cg *g, struct Ins *in) {
++  u64 rde = in->rde;
++  int op = Mopcode(rde);
++  int w = Width(rde);
++  int live = in->live & (CF | OF);
++  if (op == 0x1AF) {
++    GetRegField(g, in, w);
++  } else {
++    I64(g, in->uimm0);
++  }
++  SignExtend(g, w);
++  Set(g, L_CY);
++  GetRm(g, in, w);
++  SignExtend(g, w);
++  Set(g, L_CX);
++  Get(g, L_CX);
++  Get(g, L_CY);
++  Op(g, W_I64_MUL);
++  Set(g, L_CZ);
++  if (live) {
++    g->flags = true;
++    // of = the product doesn't fit
++    if (w == 8) {
++      // x && (z / x != y || (x == -1 && y == INT64_MIN))
++      Get(g, L_CX);
++      Op(g, W_I64_EQZ);
++      If(g, T_I32);
++      I32(g, 0);
++      Else(g);
++      Get(g, L_CX);
++      I64(g, -1);
++      Op(g, W_I64_EQ);
++      If(g, T_I32);
++      Get(g, L_CY);
++      I64(g, INT64_MIN);
++      Op(g, W_I64_EQ);
++      Else(g);
++      Get(g, L_CZ);
++      Get(g, L_CX);
++      Op(g, W_I64_DIV_S);
++      Get(g, L_CY);
++      Op(g, W_I64_NE);
++      End(g);
++      End(g);
++    } else {
++      Get(g, L_CZ);
++      Get(g, L_CZ);
++      Op(g, W_I64_EXTEND32_S);
++      Op(g, W_I64_NE);
++    }
++    Set(g, L_E);
++    Get(g, L_F);
++    I32(g, ~(CF | OF));
++    Op(g, W_I32_AND);
++    Get(g, L_E);
++    Op(g, W_I32_OR);
++    Get(g, L_E);
++    I32(g, FLAGS_OF);
++    Op(g, W_I32_SHL);
++    Op(g, W_I32_OR);
++    Set(g, L_F);
++  }
++  Get(g, L_CZ);
++  PutRegField(g, in, w);
++}
++
++static void Push64(struct Cg *g, struct Ins *in) {
++  // value in L_T; rsp -= 8; [rsp] = value
++  UseReg(g, 4);
++  Get(g, L_R(4));
++  I64(g, 8);
++  Op(g, W_I64_SUB);
++  Tee(g, L_EA);
++  Set(g, L_R(4));
++  g->wregs |= 1u << 4;
++  Store(g, in, 8);
++}
++
++static void Pop64(struct Cg *g, struct Ins *in) {
++  // pushes [rsp]; rsp += 8
++  UseReg(g, 4);
++  Get(g, L_R(4));
++  Set(g, L_EA);
++  Get(g, L_R(4));
++  I64(g, 8);
++  Op(g, W_I64_ADD);
++  Set(g, L_R(4));
++  g->wregs |= 1u << 4;
++  LoadEa(g, in, 8);
++}
++
++// the instruction is executed by Blink's handler
++static void CallOp(struct Cg *g, struct Ins *in) {
++  i64 next = in->pc + in->len;
++  if (g->stat) ++g_wj_callops[Mopcode(in->rde) & 0x3ff];
++  Flush(g);
++  StoreIp(g, next);
++  StoreOplen(g, in->len);
++  Get(g, L_M);
++  I64(g, in->rde);
++  I64(g, in->disp);
++  I64(g, in->uimm0);
++  CallImport(g, (void *)GetOp(Mopcode(in->rde)), TY_OP);
++  // EndOp(): commit a page-crossing store
++  Get(g, L_M);
++  Mem(g, W_I64_LOAD, 3, OFF(stashaddr));
++  Op(g, W_I64_EQZ);
++  Op(g, W_I32_EQZ);
++  If(g, T_VOID);
++  Get(g, L_M);
++  CallImport(g, (void *)WjCommitStash, TY_V_I);
++  End(g);
++  StoreOplen(g, 0);
++  if (in->how == HOW_CALL_BRANCH) {
++    // registers are already in memory and m->ip was set by the handler
++    Op(g, W_RETURN);
++    return;
++  }
++  Reload(g);
++  // string ops and the like rewind ip; signals want our attention
++  Get(g, L_M);
++  Mem(g, W_I64_LOAD, 3, OFF(ip));
++  I64(g, next);
++  Op(g, W_I64_NE);
++  Get(g, L_M);
++  B(&g->b, W_ATOMIC);
++  Mem(g, W_I32_ATOMIC_LOAD8_U, 0, OFF(attention));
++  Op(g, W_I32_OR);
++  If(g, T_VOID);
++  Flush(g);  // nothing dirty now, but keep it symmetric
++  Op(g, W_RETURN);
++  End(g);
++}
++
++// taken branch to `target`: a loop back-edge or an exit
++static int FindBlk(struct Cg *g, i64 pc) {
++  int i;
++  for (i = 0; i < g->nblk; ++i) {
++    if (g->blk[i].start == pc) return i;
++  }
++  return -1;
++}
++
++// transfer to `target`: inside the region it's a jump back to the dispatch
++// loop (unless we're out of budget or were signalled), otherwise an exit
++static void Goto(struct Cg *g, i64 target) {
++  int k = FindBlk(g, target);
++  if (k >= 0) {
++    Get(g, L_BUDGET);
++    I32(g, 1);
++    Op(g, W_I32_SUB);
++    Tee(g, L_BUDGET);
++    Op(g, W_I32_EQZ);
++    Get(g, L_M);
++    B(&g->b, W_ATOMIC);
++    Mem(g, W_I32_ATOMIC_LOAD8_U, 0, OFF(attention));
++    Op(g, W_I32_OR);
++    If(g, T_VOID);
++    ExitTo(g, target);
++    End(g);
++    I32(g, k);
++    Set(g, L_BI);
++    B(&g->b, W_BR);
++    U(&g->b, g->base + g->depth);
++  } else {
++    ExitTo(g, target);
++  }
++}
++
++static int WjCall(struct Machine *, i64);
++
++// a call whose return point is in the region: run the callee from here
++// (WjCall dispatches compiled code until the guest returns to `ret`) and
++// continue in the region; anything else (an uncompiled callee, a signal,
++// a longjmp elsewhere) leaves with the state already in memory
++static void CallAndResume(struct Cg *g, struct Ins *in, i64 ret) {
++  ExitIpT(g);  // m->ip = L_T, registers written back
++  Get(g, L_M);
++  I64(g, ret);
++  CallImport(g, (void *)WjCall, TY_I_IL);
++  Reload(g);
++  Op(g, W_I32_EQZ);
++  If(g, T_VOID);
++  Op(g, W_RETURN);
++  End(g);
++  Goto(g, ret);
++}
++
++static void Translate(struct Cg *g, struct Ins *in) {
++  u64 rde = in->rde;
++  int op = Mopcode(rde);
++  int w = Width(rde);
++  i64 next = in->pc + in->len;
++  if (in->how != HOW_INLINE) {
++    CallOp(g, in);
++    return;
++  }
++  if (op < 0x40 || (0x080 <= op && op <= 0x083)) {
++    TranslateAlu(g, in);
++    return;
++  }
++  if (IsJcc(op)) {
++    Cond(g, in, op & 15);
++    If(g, T_VOID);
++    Goto(g, next + in->disp);
++    End(g);
++    // fallthrough: the block ends here (it's the last instruction)
++    return;
++  }
++  if (0x140 <= op && op <= 0x14F) {  // cmovcc Gv,Ev
++    Cond(g, in, op & 15);
++    If(g, T_I64);
++    GetRm(g, in, w);
++    Else(g);
++    UseReg(g, RexrReg(rde));
++    Get(g, L_R(RexrReg(rde)));
++    End(g);
++    PutRegField(g, in, w);
++    return;
++  }
++  if (0x190 <= op && op <= 0x19F) {  // setcc Eb
++    Cond(g, in, op & 15);
++    Op(g, W_I64_EXTEND_I32_U);
++    PutRm(g, in, 1, false);
++    return;
++  }
++  switch (op) {
++    case 0x084:
++    case 0x085:
++    case 0x0A8:
++    case 0x0A9:
++    case 0x0F6:
++    case 0x0F7:
++      TranslateTest(g, in);
++      return;
++    case 0x0FE:
++    case 0x0FF:
++      if (op == 0x0FF && ModrmReg(rde) == 2) {  // call *Ev
++        GetRm(g, in, 8);
++        Set(g, L_X);
++        I64(g, next);
++        Set(g, L_T);
++        Push64(g, in);
++        Get(g, L_X);
++        Set(g, L_T);
++        if (FindBlk(g, next) >= 0 && !(g_wj_off & (1 << 16))) {
++          CallAndResume(g, in, next);
++        } else {
++          ExitToT(g);
++        }
++        return;
++      }
++      if (op == 0x0FF && ModrmReg(rde) == 4) {  // jmp *Ev
++        GetRm(g, in, 8);
++        Set(g, L_T);
++        ExitToT(g);
++        return;
++      }
++      TranslateIncDec(g, in);
++      return;
++    case 0x0C0:
++    case 0x0C1:
++    case 0x0D0:
++    case 0x0D1:
++    case 0x0D3:
++      TranslateShift(g, in);
++      return;
++    case 0x088:  // mov Eb,Gb
++    case 0x089:  // mov Ev,Gv
++      GetRegField(g, in, op == 0x088 ? 1 : w);
++      PutRm(g, in, op == 0x088 ? 1 : w, false);
++      return;
++    case 0x08A:  // mov Gb,Eb
++    case 0x08B:  // mov Gv,Ev
++      GetRm(g, in, op == 0x08A ? 1 : w);
++      PutRegField(g, in, op == 0x08A ? 1 : w);
++      return;
++    case 0x0C6:  // mov Eb,Ib
++      I64(g, in->uimm0 & 0xff);
++      PutRm(g, in, 1, false);
++      return;
++    case 0x0C7:  // mov Ev,Iz
++      I64(g, in->uimm0 & Mask(w));
++      PutRm(g, in, w, false);
++      return;
++    case 0x0B0:
++    case 0x0B1:
++    case 0x0B2:
++    case 0x0B3:
++    case 0x0B4:
++    case 0x0B5:
++    case 0x0B6:
++    case 0x0B7:
++      UseReg(g, kByteReg[RexRexbSrm(rde)] >> 3);
++      I64(g, in->uimm0 & 0xff);
++      PutReg(g, RexRexbSrm(rde), 1);
++      return;
++    case 0x0B8:
++    case 0x0B9:
++    case 0x0BA:
++    case 0x0BB:
++    case 0x0BC:
++    case 0x0BD:
++    case 0x0BE:
++    case 0x0BF:
++      UseReg(g, RexbSrm(rde));
++      I64(g, in->uimm0);
++      PutReg(g, RexbSrm(rde), w);
++      return;
++    case 0x08D:  // lea
++      Ea(g, in, false);
++      Get(g, L_EA);
++      PutRegField(g, in, w);
++      return;
++    case 0x090:
++    case 0x11F:
++      return;
++    case 0x050:
++    case 0x051:
++    case 0x052:
++    case 0x053:
++    case 0x054:
++    case 0x055:
++    case 0x056:
++    case 0x057:
++      UseReg(g, RexbSrm(rde));
++      Get(g, L_R(RexbSrm(rde)));
++      Set(g, L_T);
++      Push64(g, in);
++      return;
++    case 0x058:
++    case 0x059:
++    case 0x05A:
++    case 0x05B:
++    case 0x05C:
++    case 0x05D:
++    case 0x05E:
++    case 0x05F:
++      Pop64(g, in);
++      UseReg(g, RexbSrm(rde));
++      PutReg(g, RexbSrm(rde), 8);
++      return;
++    case 0x0E8:  // call rel
++      I64(g, next);
++      Set(g, L_T);
++      Push64(g, in);
++      if (FindBlk(g, next + in->disp) < 0 && FindBlk(g, next) >= 0 &&
++          !(g_wj_off & (1 << 16))) {
++        I64(g, next + in->disp);
++        Set(g, L_T);
++        CallAndResume(g, in, next);
++      } else {
++        Goto(g, next + in->disp);
++      }
++      return;
++    case 0x0C3:  // ret
++      Pop64(g, in);
++      Set(g, L_T);
++      ExitToT(g);
++      return;
++    case 0x0E9:
++    case 0x0EB:
++      Goto(g, next + in->disp);
++      return;
++    case 0x1B6:  // movzbl
++    case 0x1B7:  // movzwl
++      GetRm(g, in, op == 0x1B6 ? 1 : 2);
++      PutRegField(g, in, w);
++      return;
++    case 0x1BE:  // movsbl
++    case 0x1BF:  // movswl
++      GetRm(g, in, op == 0x1BE ? 1 : 2);
++      SignExtend(g, op == 0x1BE ? 1 : 2);
++      PutRegField(g, in, w);
++      return;
++    case 0x063:  // movslq
++      GetRm(g, in, 4);
++      if (Rexw(rde)) SignExtend(g, 4);
++      PutRegField(g, in, w);
++      return;
++    case 0x098:  // cltq / cwtl
++      UseReg(g, 0);
++      Get(g, L_R(0));
++      SignExtend(g, w / 2);
++      PutReg(g, 0, w);
++      return;
++    case 0x099:  // cqto / cltd
++      UseReg(g, 0);
++      UseReg(g, 2);
++      Get(g, L_R(0));
++      SignExtend(g, w);
++      I64(g, 63);
++      Op(g, W_I64_SHR_S);
++      PutReg(g, 2, w);
++      return;
++    case 0x1AF:
++    case 0x069:
++    case 0x06B:
++      TranslateImul(g, in);
++      return;
++    default:
++      abort();
++  }
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// block discovery, module assembly, cache
++
++// decodes the basic block at `pc` into g->in; false if it's empty
++static bool DecodeBlock(struct Cg *g, i64 pc) {
++  int len;
++  u64 entry;
++  u8 *host;
++  struct XedDecodedInst x;
++  struct Machine *m = g->m;
++  struct Ins *in;
++  struct Blk *b;
++  i64 page = pc & -4096;
++  if (g->nblk == kMaxBlocks || g->n > kMaxIns - kMaxIns / 8) return false;
++  if (!(entry = FindPageTableEntry(m, page))) return false;
++  // only code that can't change under us
++  if ((entry & (PAGE_U | PAGE_RW | PAGE_XD)) != PAGE_U) return false;
++  if (!(host = GetPageAddress(m->system, entry, false))) return false;
++  if (IsRomAddress(m, host)) return false;
++  b = &g->blk[g->nblk];
++  b->start = pc;
++  b->first = g->n;
++  b->n = 0;
++  while (b->n < 48 && g->n < kMaxIns) {
++    if ((pc & -4096) != page) break;
++    len = 4096 - (pc & 4095);
++    if (DecodeInstruction(&x, host + (pc & 4095), len < 15 ? len : 15,
++                          m->mode.omode)) {
++      break;
++    }
++    if ((pc & 4095) + x.length > 4096) break;
++    if (ClassifyOp(x.op.rde) == kOpPrecious) break;
++    in = &g->in[g->n++];
++    ++b->n;
++    in->rde = x.op.rde;
++    in->disp = x.op.disp;
++    in->uimm0 = x.op.uimm0;
++    in->pc = pc;
++    in->len = x.length;
++    pc += x.length;
++    Analyze(in);
++    if (in->how == HOW_INLINE &&
++        (g_wj_off & (1 << Category(Mopcode(in->rde), in->rde)))) {
++      in->how = ClassifyOp(in->rde) == kOpBranching ? HOW_CALL_BRANCH : HOW_CALL;
++      in->fr = in->fw = kAllFlags;
++      in->cck = CC_NONE;
++    }
++    if (ClassifyOp(x.op.rde) == kOpBranching) break;
++  }
++  b->end = pc;
++  if (!b->n) return false;
++  ++g->nblk;
++  return true;
++}
++
++// collects the blocks reachable from `pc` through direct branches
++static bool Discover(struct Cg *g, i64 pc) {
++  int k, op, head = 0;
++  i64 q[kMaxBlocks * 2 + 2];
++  int nq = 0;
++  struct Ins *last;
++  q[nq++] = pc;
++  while (head < nq) {
++    pc = q[head++];
++    if (FindBlk(g, pc) >= 0) continue;
++    if (!DecodeBlock(g, pc)) {
++      if (!g->nblk) return false;
++      continue;
++    }
++    k = g->nblk - 1;
++    last = &g->in[g->blk[k].first + g->blk[k].n - 1];
++    op = Mopcode(last->rde);
++    if (nq > kMaxBlocks * 2 - 2) continue;
++    if (last->how == HOW_CALL_BRANCH) continue;
++    if (IsJcc(op)) {
++      q[nq++] = last->pc + last->len + last->disp;
++      q[nq++] = g->blk[k].end;
++    } else if (op == 0x0E9 || op == 0x0EB) {
++      q[nq++] = last->pc + last->len + last->disp;
++    } else if (op == 0x0E8) {
++      q[nq++] = g->blk[k].end;  // where the callee returns to
++    } else if (op != 0x0C3 && op != 0x0FF) {
++      q[nq++] = g->blk[k].end;
++    }
++  }
++  return g->nblk > 0;
++}
++
++static void Body(struct Cg *g) {
++  int i, k, r, pass;
++  struct Ins *in;
++  struct Blk *b;
++  struct Buf code = {0};
++  // translate twice: the first pass finds the registers and flags in use,
++  // which every write-back and reload in the second pass has to cover
++  for (pass = 0; pass < 2; ++pass) {
++    g->b.n = 0;
++    g->depth = 0;
++    B(&g->b, W_LOOP);
++    B(&g->b, T_VOID);
++    for (k = 0; k < g->nblk; ++k) {
++      B(&g->b, W_BLOCK);
++      B(&g->b, T_VOID);
++    }
++    Get(g, L_BI);
++    B(&g->b, 0x0e);  // br_table
++    U(&g->b, g->nblk - 1);
++    for (k = 0; k < g->nblk; ++k) U(&g->b, k);
++    for (k = 0; k < g->nblk; ++k) {
++      B(&g->b, W_END);
++      b = &g->blk[k];
++      g->cur = k;
++      g->base = g->nblk - 1 - k;
++      g->depth = 0;
++      for (i = b->first; i < b->first + b->n; ++i) {
++        in = &g->in[i];
++        if (pass && in->how == HOW_INLINE) ++g_wj_inline;
++        g->stat = pass;
++        Translate(g, in);
++      }
++      // falling off the end (dead after an unconditional transfer)
++      Goto(g, b->end);
++    }
++    B(&g->b, W_END);  // loop
++    B(&g->b, W_END);  // function
++    g->regs |= g->wregs;
++  }
++  g_wj_insns += g->n;
++  // prologue: locals, loads, entry checks
++  U(&code, 2);
++  U(&code, kNumI64);
++  B(&code, T_I64);
++  U(&code, kNumI32);
++  B(&code, T_I32);
++  // pending TLB invalidation from another thread
++  B(&code, W_LGET);
++  U(&code, L_M);
++  B(&code, W_ATOMIC);
++  B(&code, W_I32_ATOMIC_LOAD8_U);
++  U(&code, 0);
++  U(&code, OFF(invalidated));
++  B(&code, W_IF);
++  B(&code, T_VOID);
++  B(&code, W_LGET);
++  U(&code, L_M);
++  B(&code, 0x10);
++  U(&code, Import(g->mod, (void *)WjSyncTlb, TY_V_I));
++  B(&code, W_END);
++  for (r = 0; r < 16; ++r) {
++    if (g->regs & (1u << r)) {
++      B(&code, W_LGET);
++      U(&code, L_M);
++      B(&code, W_I64_LOAD);
++      U(&code, 3);
++      U(&code, OFF(weg) + r * 8);
++      B(&code, W_LSET);
++      U(&code, L_R(r));
++    }
++  }
++  if (g->flags) {
++    B(&code, W_LGET);
++    U(&code, L_M);
++    B(&code, W_I32_LOAD);
++    U(&code, 2);
++    U(&code, OFF(flags));
++    B(&code, W_LSET);
++    U(&code, L_F);
++  }
++  B(&code, W_I32_CONST);
++  S(&code, 1024);
++  B(&code, W_LSET);
++  U(&code, L_BUDGET);
++  Bytes(&code, g->b.p, g->b.n);
++  free(g->b.p);
++  g->b = code;
++}
++
++static void Section(struct Buf *mod, int id, struct Buf *sec) {
++  B(mod, id);
++  U(mod, sec->n);
++  Bytes(mod, sec->p, sec->n);
++  sec->n = 0;
++}
++
++// module: imports, one region body (f[nimp]) and one exported entry per
++// block, `fK(m) = body(m, K)`
++static int Assemble(struct Mod *mod, struct Buf *body, int k, int *out,
++                    i64 pc) {
++  int i, rc;
++  struct Buf m = {0}, sec = {0};
++  static const u8 kMagic[8] = {0, 'a', 's', 'm', 1, 0, 0, 0};
++  Bytes(&m, kMagic, 8);
++  // types
++  U(&sec, TY_COUNT);
++  B(&sec, 0x60), U(&sec, 1), B(&sec, T_I32), U(&sec, 0);
++  B(&sec, 0x60), U(&sec, 4), B(&sec, T_I32), B(&sec, T_I64), B(&sec, T_I64),
++      B(&sec, T_I64), U(&sec, 0);
++  B(&sec, 0x60), U(&sec, 3), B(&sec, T_I32), B(&sec, T_I64), B(&sec, T_I32),
++      U(&sec, 1), B(&sec, T_I64);
++  B(&sec, 0x60), U(&sec, 4), B(&sec, T_I32), B(&sec, T_I64), B(&sec, T_I32),
++      B(&sec, T_I64), U(&sec, 0);
++  B(&sec, 0x60), U(&sec, 2), B(&sec, T_I32), B(&sec, T_I64), U(&sec, 1),
++      B(&sec, T_I64);
++  B(&sec, 0x60), U(&sec, 2), B(&sec, T_I32), B(&sec, T_I32), U(&sec, 0);
++  B(&sec, 0x60), U(&sec, 2), B(&sec, T_I32), B(&sec, T_I64), U(&sec, 1),
++      B(&sec, T_I32);
++  Section(&m, 1, &sec);
++  // imports: the shared memory and the C functions the code calls
++  U(&sec, 1 + mod->nimp);
++  Name(&sec, "e");
++  Name(&sec, "m");
++  B(&sec, 2);     // memory
++  B(&sec, 0x03);  // shared, has max
++  U(&sec, 0);
++  U(&sec, 65536);
++  for (i = 0; i < mod->nimp; ++i) {
++    char name[8];
++    snprintf(name, sizeof(name), "%d", i);
++    Name(&sec, "e");
++    Name(&sec, name);
++    B(&sec, 0);  // func
++    U(&sec, mod->imptype[i]);
++  }
++  Section(&m, 2, &sec);
++  // functions
++  U(&sec, 1 + k);
++  U(&sec, TY_V_II);
++  for (i = 0; i < k; ++i) U(&sec, TY_V_I);
++  Section(&m, 3, &sec);
++  // exports
++  U(&sec, k);
++  for (i = 0; i < k; ++i) {
++    char name[16];
++    snprintf(name, sizeof(name), "f%d", i);
++    Name(&sec, name);
++    B(&sec, 0);
++    U(&sec, mod->nimp + 1 + i);
++  }
++  Section(&m, 7, &sec);
++  // code
++  U(&sec, 1 + k);
++  U(&sec, body->n);
++  Bytes(&sec, body->p, body->n);
++  for (i = 0; i < k; ++i) {
++    struct Buf t = {0};
++    U(&t, 0);  // no locals
++    B(&t, W_LGET);
++    U(&t, 0);
++    B(&t, W_I32_CONST);
++    S(&t, i);
++    B(&t, 0x10);
++    U(&t, mod->nimp);
++    B(&t, W_END);
++    U(&sec, t.n);
++    Bytes(&sec, t.p, t.n);
++    free(t.p);
++  }
++  Section(&m, 10, &sec);
++  // name section: the region body is called x86_<pc> in profiles
++  {
++    char name[32];
++    struct Buf sub = {0};
++    snprintf(name, sizeof(name), "x86_%llx", (unsigned long long)pc);
++    Name(&sec, "name");
++    U(&sub, 1);  // one function name
++    U(&sub, mod->nimp);
++    Name(&sub, name);
++    B(&sec, 1);
++    U(&sec, sub.n);
++    Bytes(&sec, sub.p, sub.n);
++    free(sub.p);
++    Section(&m, 0, &sec);
++  }
++  rc = wj_install(m.p, m.n, k, out, (const int *)mod->imp, mod->nimp);
++  g_wj_bytes += m.n;
++  free(m.p);
++  free(sec.p);
++  return rc;
++}
++
++struct WjEnt;
++static struct WjEnt *Find(i64);
++static struct WjEnt *Insert(i64);
++static void SetEntry(struct WjEnt *, int);
++
++static void Stats(void) {
++  int i, j, best;
++  wj_stats();
++  fprintf(stderr,
++          "wjit: %ld regions %ld insns %ld inline; this thread ran %ld "
++          "regions\n",
++          (long)g_wj_blocks, (long)g_wj_insns, (long)g_wj_inline, t_runs);
++  for (j = 0; j < 12; ++j) {
++    for (best = 0, i = 1; i < 0x400; ++i) {
++      if (g_wj_callops[i] > g_wj_callops[best]) best = i;
++    }
++    if (!g_wj_callops[best]) break;
++    fprintf(stderr, "  fallback %#x x%ld\n", best, g_wj_callops[best]);
++    g_wj_callops[best] = -g_wj_callops[best];
++  }
++  for (i = 0; i < 0x400; ++i) {
++    if (g_wj_callops[i] < 0) g_wj_callops[i] = -g_wj_callops[i];
++  }
++}
++
++// compiles the region around `pc` and registers each of its blocks;
++// returns the entry for `pc`
++static int Compile(struct Machine *m, i64 pc) {
++  int k, fn = -1;
++  int out[kMaxBlocks];
++  struct Cg *g;
++  struct Mod mod;
++  struct WjEnt *e;
++  if (!(g = (struct Cg *)calloc(1, sizeof(*g)))) return -1;
++  mod.nimp = 0;
++  g->mod = &mod;
++  g->m = m;
++  if (!Discover(g, pc)) {
++    free(g);
++    ++g_wj_failed;
++    return -1;
++  }
++  Plan(g);
++  Body(g);
++  if (!Assemble(&mod, &g->b, g->nblk, out, pc)) {
++    fn = out[0];
++    for (k = 1; k < g->nblk; ++k) {
++      if (!(e = Find(g->blk[k].start))) e = Insert(g->blk[k].start);
++      SetEntry(e, out[k]);
++    }
++    ++g_wj_blocks;
++  }
++  if (g_wj_debug > 1) {
++    fprintf(stderr, "wjit: %#llx %d blocks %d insns -> %d (%ld bytes)\n",
++            (long long)pc, g->nblk, g->n, fn, g->b.n);
++  }
++  if (g_wj_debug && !(g_wj_blocks & 255)) Stats();
++  free(g->b.p);
++  free(g);
++  return fn;
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// per-thread block cache
++
++struct WjEnt {
++  i64 pc;
++  int fn;  // 0: counting, -1: can't compile, else table index
++  int count;
++};
++
++static _Thread_local struct WjEnt *t_tab;
++static _Thread_local unsigned t_mask;
++static _Thread_local unsigned t_used;
++static _Thread_local unsigned t_epoch;
++static _Thread_local bool t_ready;
++
++static inline unsigned Hash(i64 pc) {
++  return (unsigned)(((u64)pc * 0x9E3779B97F4A7C15ull) >> 40);
++}
++
++static void Clear(void) {
++  free(t_tab);
++  t_mask = 4095;
++  t_used = 0;
++  t_tab = (struct WjEnt *)calloc(t_mask + 1, sizeof(struct WjEnt));
++  wj_release_all();
++}
++
++static void SetEntry(struct WjEnt *e, int fn) {
++  if (e->fn <= 0) e->fn = fn;  // an existing region keeps its entry
++}
++
++static struct WjEnt *Find(i64 pc) {
++  unsigned i;
++  for (i = Hash(pc) & t_mask;; i = (i + 1) & t_mask) {
++    if (t_tab[i].pc == pc && (pc || t_tab[i].fn || t_tab[i].count)) {
++      return t_tab + i;
++    }
++    if (!t_tab[i].pc && !t_tab[i].fn && !t_tab[i].count) return 0;
++  }
++}
++
++static struct WjEnt *Insert(i64 pc) {
++  unsigned i, j, n;
++  struct WjEnt *old;
++  if ((t_used + 1) * 2 > t_mask) {
++    old = t_tab;
++    n = t_mask + 1;
++    t_mask = n * 2 - 1;
++    t_used = 0;
++    t_tab = (struct WjEnt *)calloc(t_mask + 1, sizeof(struct WjEnt));
++    for (j = 0; j < n; ++j) {
++      if (old[j].pc || old[j].fn || old[j].count) {
++        for (i = Hash(old[j].pc) & t_mask; t_tab[i].pc || t_tab[i].fn ||
++                                           t_tab[i].count;
++             i = (i + 1) & t_mask) {
++        }
++        t_tab[i] = old[j];
++        ++t_used;
++      }
++    }
++    free(old);
++  }
++  for (i = Hash(pc) & t_mask; t_tab[i].pc || t_tab[i].fn || t_tab[i].count;
++       i = (i + 1) & t_mask) {
++  }
++  t_tab[i].pc = pc;
++  t_tab[i].count = 1;  // nonzero marks the slot used, even for pc 0
++  ++t_used;
++  return t_tab + i;
++}
++
++void WjInit(void) {
++  const char *s;
++  g_wj_enabled = !(s = getenv("BLINK_WJIT")) || strcmp(s, "0");
++  if ((s = getenv("BLINK_WJIT_THRESHOLD"))) g_wj_thresh = atoi(s);
++  if (g_wj_thresh < 1) g_wj_thresh = 1;
++  g_wj_debug = (s = getenv("BLINK_WJIT_DEBUG")) ? atoi(s) : 0;
++  g_wj_off = (s = getenv("BLINK_WJIT_OFF")) ? strtol(s, 0, 0) : 0;
++  g_wj_max = (s = getenv("BLINK_WJIT_MAX")) ? atol(s) : -1;
++  if ((s = getenv("BLINK_WJIT_BISECT"))) {
++    g_wj_lo = strtol(s, 0, 0);
++    g_wj_hi = strchr(s, ':') ? strtol(strchr(s, 58) + 1, 0, 0) : -1;
++  }
++}
++
++// a page that held code changed (munmap, mprotect, ...): drop everything
++void WjPageChanged(i64 virt) {
++  (void)virt;
++  if (g_wj_enabled) {
++    atomic_fetch_add(&g_wj_epoch, 1);
++    if (g_wj_debug) fprintf(stderr, "wjit: page %#llx changed, epoch %u\n", (long long)virt, g_wj_epoch);
++  }
++}
++
++typedef void (*wj_f)(struct Machine *);
++
++bool WjExecute(struct Machine *m) {
++  int fn;
++  unsigned epoch;
++  struct WjEnt *e;
++  if (!g_wj_enabled) return false;
++  epoch = atomic_load_explicit(&g_wj_epoch, memory_order_acquire);
++  if (UNLIKELY(!t_ready || t_epoch != epoch)) {
++    Clear();
++    t_epoch = epoch;
++    t_ready = true;
++  }
++  t_depth = 0;  // a longjmp may have left nested calls behind
++  t_unwind = false;
++  t_slice = 0;
++  if ((e = Find(m->ip)) && e->fn > 0) {
++    ((wj_f)(uintptr_t)e->fn)(m);
++    ++t_runs;
++    return true;
++  }
++  if (!e) {
++    e = Insert(m->ip);
++    return false;
++  }
++  if (e->fn || ++e->count < g_wj_thresh) return false;
++  if ((g_wj_max >= 0 && g_wj_blocks >= g_wj_max) ||
++      (g_wj_lo >= 0 && !(g_wj_lo <= m->ip && m->ip < g_wj_hi))) {
++    e->fn = -1;
++    return false;
++  }
++  fn = Compile(m, m->ip);
++  // Compile() may have grown the table
++  e = Find(m->ip);
++  e->fn = fn;
++  if (e->fn > 0) {
++    ((wj_f)(uintptr_t)e->fn)(m);
++    return true;
++  }
++  return false;
++}
++
++// Runs compiled code for a call made from compiled code, until the guest
++// returns to `ret`. Returns 0 to make the caller leave instead: no code for
++// m->ip, a signal, an epoch change, the nesting limit, or the time slice.
++static int WjCall(struct Machine *m, i64 ret) {
++  struct WjEnt *e;
++  if (t_depth >= 48 || t_unwind) return 0;
++  ++t_depth;
++  while (m->ip != ret) {
++    if (atomic_load_explicit(&m->attention, memory_order_acquire) ||
++        t_epoch != atomic_load_explicit(&g_wj_epoch, memory_order_relaxed) ||
++        ++t_slice >= 512) {
++      t_unwind = true;
++      break;
++    }
++    if (!(e = Find(m->ip)) || e->fn <= 0) break;
++    ++t_runs;
++    ((wj_f)(uintptr_t)e->fn)(m);
++    if (t_unwind) break;
++  }
++  --t_depth;
++  return m->ip == ret && !t_unwind;
++}
++
++
++#endif /* __EMSCRIPTEN__ */
+diff --git a/blink/wjit.h b/blink/wjit.h
+new file mode 100644
+index 0000000..a673b3f
+--- /dev/null
++++ b/blink/wjit.h
+@@ -0,0 +1,35 @@
++#ifndef BLINK_WJIT_H_
++#define BLINK_WJIT_H_
++#include <stdbool.h>
++
++#include "blink/types.h"
++
++// x86-64 to WebAssembly translator for the emscripten build (blink/wjit.c).
++// Hot basic blocks become small wasm modules that share the guest memory
++// and the function table; the interpreter loop (Actor) calls them.
++
++#define WJ_TLB_BITS 8
++#define WJ_TLB_SIZE (1 << WJ_TLB_BITS)
++
++struct WjTlb {
++  i64 tag;   // guest page, or -1
++  u32 host;  // host address of the page
++  u32 pad;
++};
++
++struct Machine;
++struct System;
++
++#ifdef __EMSCRIPTEN__
++#define HAVE_WJIT
++extern bool g_wj_enabled;
++void WjInit(void);
++bool WjExecute(struct Machine *);
++void WjResetTlb(struct Machine *);
++void WjPageChanged(i64);
++#else
++#define WjResetTlb(m)     (void)0
++#define WjPageChanged(v)  (void)0
++#endif
++
++#endif /* BLINK_WJIT_H_ */
+-- 
+2.43.0
+
