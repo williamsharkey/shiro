@@ -1,0 +1,60 @@
+From df6417bb61cf32e9e204eaedbb1b1ee04a0d680a Mon Sep 17 00:00:00 2001
+From: shiro <x@x>
+Date: Thu, 8 Oct 2026 00:53:39 +0000
+Subject: [PATCH 6/6] emscripten: blink_shiro_signal() lets the embedder signal
+ the guest
+
+---
+ blink/blink.c | 29 +++++++++++++++++++++++++++++
+ 1 file changed, 29 insertions(+)
+
+diff --git a/blink/blink.c b/blink/blink.c
+index 03ce188..0b7d6fb 100644
+--- a/blink/blink.c
++++ b/blink/blink.c
+@@ -203,6 +203,32 @@ static void ProgramLimit(struct System *s, int hresource, int gresource) {
+   }
+ }
+ 
++#ifdef __EMSCRIPTEN__
++// The system the guest currently runs in, for signals sent from JavaScript.
++static struct System *_Atomic g_shiro_system;
++
++// Called by the embedder (Shiro's worker host) when the kernel signals this
++// process: queue `sig` (Linux numbering) on a guest thread that doesn't
++// block it. Blocking syscalls notice within kPollingMs.
++EMSCRIPTEN_KEEPALIVE void blink_shiro_signal(int sig) {
++  struct Dll *e;
++  struct System *s;
++  struct Machine *m, *pick = 0;
++  if (!(s = g_shiro_system) || sig < 1 || sig > 64) return;
++  LOCK(&s->machines_lock);
++  for (e = dll_first(s->machines); e; e = dll_next(s->machines, e)) {
++    m = MACHINE_CONTAINER(e);
++    if (!pick) pick = m;
++    if (!(m->sigmask & ((u64)1 << (sig - 1)))) {
++      pick = m;
++      break;
++    }
++  }
++  if (pick) EnqueueSignal(pick, sig);
++  UNLOCK(&s->machines_lock);
++}
++#endif
++
+ static int Exec(char *execfn, char *prog, char **argv, char **envp) {
+   int i;
+   sigset_t oldmask;
+@@ -213,6 +239,9 @@ static int Exec(char *execfn, char *prog, char **argv, char **envp) {
+   if (FLAG_nojit) DisableJit(&m->system->jit);
+ #endif
+   m->system->exec = Exec;
++#ifdef __EMSCRIPTEN__
++  g_shiro_system = m->system;
++#endif
+   if (!old) {
+     // this is the first time a program is being loaded
+     LoadProgram(m, execfn, prog, argv, envp, NULL);
+-- 
+2.43.0
+

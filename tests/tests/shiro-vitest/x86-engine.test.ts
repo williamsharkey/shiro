@@ -6,8 +6,8 @@
  * glibc builds of the same programs are made in beforeAll when `go` / `gcc`
  * are available, and those cases are skipped otherwise.
  */
-import { describe, it, expect, onTestFinished } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { describe, it, expect, onTestFinished, beforeAll, afterAll } from 'vitest';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -31,6 +31,8 @@ const glibcBin = join(out, 'hello-glibc');
 const goExe = existsSync('/usr/local/go/bin/go') ? '/usr/local/go/bin/go' : 'go';
 const haveGo = tryBuild(goExe, ['build', '-ldflags=-s', '-o', goBin, 'hello.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const haveHttp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', httpBin, 'nethttp.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
+const tcpBin = join(out, 'tcpecho');
+const haveTcp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', tcpBin, 'tcpecho.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const haveGlibc = tryBuild('gcc', ['-static', '-Os', '-o', glibcBin, 'hello.c']);
 
 async function setup(bin: Uint8Array) {
@@ -157,4 +159,52 @@ describe('Blink engine: kernel processes', () => {
     expect(await p.wait()).toBe(0);
     expect(out.text()).toContain('stdin=late line');
   }, 60_000);
+});
+
+describe.skipIf(!haveTcp)('Blink engine: real TCP through the kernel relay', () => {
+  let harness: ChildProcess;
+  let ports: { echoPort: number; relayA: number; origin: string };
+  let restore: () => void = () => {};
+
+  beforeAll(async () => {
+    const path = new URL('./fixtures/tcp-relay-harness.mjs', import.meta.url).pathname;
+    harness = spawn('node', [path], { stdio: ['pipe', 'pipe', 'inherit'] });
+    ports = await new Promise((resolve, reject) => {
+      let buf = '';
+      harness.stdout!.on('data', (d) => {
+        buf += d;
+        const line = buf.split('\n').find((l) => l.startsWith('{'));
+        if (line) resolve(JSON.parse(line));
+      });
+      harness.once('exit', (c) => reject(new Error(`harness exited ${c}`)));
+    });
+    // Point the kernel's network stack at relay A (which may dial 127.0.0.1),
+    // talking like a page on the allowed origin.
+    const { netStack } = await import('@shiro/kernel/net');
+    const origin = ports.origin;
+    class OriginWebSocket extends WebSocket {
+      constructor(url: string | URL) { super(url, { headers: { origin } } as any); }
+    }
+    const saved = { ...(netStack as any).config };
+    netStack.configure({
+      relayUrl: `ws://127.0.0.1:${ports.relayA}/tcp`,
+      tokenUrl: `http://127.0.0.1:${ports.relayA}/tcp/token`,
+      fetch: ((u: any, init: any = {}) => fetch(u, { ...init, headers: { ...(init.headers || {}), origin } })) as typeof fetch,
+      WebSocket: OriginWebSocket as unknown as typeof WebSocket,
+      relayLoopback: true,
+      portHost: null,
+      dohUrl: null,
+    });
+    restore = () => netStack.configure(saved);
+  }, 30_000);
+
+  afterAll(() => { restore(); harness?.kill(); });
+
+  it('a Go client reaches a TCP server outside the page', async () => {
+    const { shell } = await setup(readFileSync(tcpBin));
+    const r = await run(shell, `./prog 127.0.0.1:${ports.echoPort}`);
+    expect(r.output).toContain('echo: ping from go');
+    expect(r.output).toContain(`remote 127.0.0.1:${ports.echoPort}`);
+    expect(r.exitCode).toBe(0);
+  }, 120_000);
 });

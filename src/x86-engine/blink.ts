@@ -16,6 +16,7 @@
 
 import type { FileSystem } from '../filesystem';
 import { Kernel, getKernel, type Runner } from '../kernel/kernel';
+import { installNet } from '../kernel/net';
 import { workerRunner, webWorker, type GuestWorker } from '../kernel/worker-host';
 import { BufferFile, DevNull } from '../kernel/fd';
 import { shellExitCode, SIGKILL } from '../kernel/abi';
@@ -91,16 +92,21 @@ async function workerFactory(): Promise<() => GuestWorker> {
   return () => webWorker(new Worker(url, { type: 'module', name: 'blink' }));
 }
 
+/** Socket syscalls for a kernel nothing gave them to (main.ts does for the page kernel). */
+function ensureNet(kernel: Kernel): void {
+  const table = (kernel as any).syscallTable as Map<number, unknown> | undefined;
+  if (table && !table.has(41 /* SYS_socket */)) installNet(kernel);
+}
+
 /** A kernel Runner that executes the ELF at absolute `path` in Blink. */
 export function blinkRunner(path: string): Runner {
   return async (proc: Process, kernel: Kernel) => {
+    ensureNet(kernel);
     const create = await workerFactory();
     const mounts = kernel.fs ? (await kernel.fs.readdir('/')).map((n) => '/' + n) : [];
     const runner = workerRunner((p) => {
       const w = create();
-      // Wake a guest blocked in poll()/epoll on stdin as soon as input arrives.
-      const off = p.fds.get(0)?.onReady(() => w.postMessage({ type: 'blink-ready', fd: 0 }));
-      if (off) p.onTerminate(off);
+      wireWorker(p, w);
       return w;
     }, {
       // SHIRO_BLINK_DEBUG=1: the worker logs kernel syscalls and Blink's own messages to the console
@@ -108,6 +114,38 @@ export function blinkRunner(path: string): Runner {
     });
     return runner(proc, kernel);
   };
+}
+
+/**
+ * Readiness pings and signals between the kernel and a Blink worker. The
+ * worker asks to watch the kernel fds it polls (stdin, sockets); each
+ * readiness change posts one coalesced `blink-ready`, so a guest parked in
+ * poll()/epoll wakes at once. Signals the kernel delivers to the process
+ * (the worker installs handlers for them) are posted as `blink-signal`.
+ */
+function wireWorker(proc: Process, w: GuestWorker): void {
+  const subs = new Map<number, () => void>();
+  const pending = new Set<number>();
+  const ping = (fd: number) => {
+    if (pending.has(fd)) return;
+    pending.add(fd);
+    queueMicrotask(() => {
+      pending.delete(fd);
+      w.postMessage({ type: 'blink-ready', fd });
+    });
+  };
+  const watch = (fd: number) => {
+    subs.get(fd)?.();
+    const off = proc.fds.get(fd)?.onReady(() => ping(fd));
+    if (off) subs.set(fd, off);
+  };
+  watch(0);
+  w.onMessage((m: any) => {
+    if (m?.type === 'blink-watch') watch(m.fd);
+    else if (m?.type === 'blink-unwatch') { subs.get(m.fd)?.(); subs.delete(m.fd); }
+  });
+  proc.data.onSignal = (sig: number) => w.postMessage({ type: 'blink-signal', sig });
+  proc.onTerminate(() => { for (const off of subs.values()) off(); subs.clear(); });
 }
 
 /** True when the file at `path` starts with the ELF magic. */

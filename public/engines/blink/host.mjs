@@ -16,7 +16,11 @@
 // - Every top-level Shiro directory in `mounts` is mounted as SHIROFS, a
 //   MEMFS whose nodes are faulted in through kernel syscalls on first
 //   lookup/open and written back on close.
-// - Sockets are in-process loopback (vendor/blink/shiro-net.js).
+// - Sockets are kernel sockets (vendor/blink/shiro-net.js via
+//   Module.shiroKernel): TCP through the relay, loopback, DNS over UDP 53.
+//   The page pings this worker when a watched kernel fd changes readiness.
+// - Termios/winsize ioctls on fds 0-2 go to the kernel (the pty). Signals
+//   the kernel delivers (Ctrl-C, SIGWINCH, kill) are queued in the guest.
 // - The guest's exit status goes to the kernel as exit_group.
 
 const isNode = typeof process !== 'undefined' && !!process.versions?.node && typeof self === 'undefined';
@@ -33,9 +37,21 @@ const onMessage = (fn) => (isNode ? port.on('message', fn) : port.addEventListen
 // ── Kernel channel (docs/KERNEL_ABI.md; constants from src/kernel/abi.ts) ──
 const CH_STATE = 0, CH_SYSNO = 1, CH_RESULT = 2, CH_SIGNAL = 3, CH_ARGS = 4, CH_NARGS = 12, CH_DATA = 64;
 const SYS = {
-  read: 0, write: 1, close: 3, lstat: 6, poll: 7, rename: 82, mkdir: 83, rmdir: 84,
+  read: 0, write: 1, close: 3, lstat: 6, poll: 7, rt_sigaction: 13, ioctl: 16, rename: 82, mkdir: 83, rmdir: 84,
   unlink: 87, readlink: 89, getdents64: 217, exit_group: 231, openat: 257,
 };
+// Negative Linux errno → emscripten's (WASI) errno numbering.
+const LINUX_TO_WASI = {
+  1: 63, 2: 44, 4: 27, 5: 29, 9: 8, 11: 6, 12: 48, 13: 2, 14: 21, 17: 20, 20: 54, 21: 31, 22: 28, 24: 33,
+  25: 59, 28: 51, 30: 69, 32: 64, 36: 37, 38: 52, 39: 55, 40: 32, 88: 57, 89: 17, 90: 35, 91: 67, 92: 50,
+  93: 66, 95: 138, 97: 5, 98: 3, 99: 4, 100: 38, 101: 40, 103: 13, 104: 15, 105: 42, 106: 30, 107: 53,
+  110: 73, 111: 14, 113: 23, 114: 7, 115: 26,
+};
+const wasiErrno = (res) => LINUX_TO_WASI[-res] || 29;
+// Signals the kernel forwards into the guest; SIGPIPE stays the guest's business.
+const FORWARDED_SIGNALS = [1, 2, 3, 10, 12, 15, 28]; // HUP INT QUIT USR1 USR2 TERM WINCH
+const SIGPIPE = 13, SIG_IGN = 1, FORWARD_HANDLER = 0x5348; // any value but SIG_DFL/SIG_IGN
+const TCGETS = 0x5401, TIOCGWINSZ = 0x5413;
 const O_RDONLY = 0, O_WRONLY = 1, O_CREAT = 0o100, O_TRUNC = 0o1000, O_DIRECTORY = 0o200000, AT_FDCWD = -100;
 const POLLIN = 1, POLLOUT = 4;
 const S_IFMT = 0o170000, S_IFDIR = 0o040000, S_IFREG = 0o100000, S_IFLNK = 0o120000;
@@ -72,12 +88,12 @@ const openPath = (path, flags, mode = 0) => {
   const len = putStr(path);
   return len < 0 ? len : sys(SYS.openat, AT_FDCWD, len, flags, mode);
 };
-function pollFd(fd, events) {
+function pollFd(fd, events, timeoutMs = 0) {
   const dv = new DataView(data.buffer, data.byteOffset, 8);
   dv.setInt32(0, fd, true);
   dv.setInt16(4, events, true);
   dv.setInt16(6, 0, true);
-  const r = sys(SYS.poll, 1, 0);
+  const r = sys(SYS.poll, 1, timeoutMs);
   return r > 0 ? dv.getInt16(6, true) : 0;
 }
 function lstat(path) {
@@ -161,10 +177,7 @@ function writeWhole(path, bytes, mode) {
 // ── SHIROFS: MEMFS nodes faulted in from the kernel ─────────────────────────
 function makeShiroFS(FS) {
   const MEMFS = FS.filesystems.MEMFS;
-  // The kernel answers with negative Linux errno; emscripten's FS uses the
-  // WASI numbering (ENOENT is 44, not 2).
-  const LINUX_TO_WASI = { 1: 63, 2: 44, 5: 29, 9: 8, 13: 2, 17: 20, 20: 54, 21: 31, 22: 28, 28: 51, 30: 69, 36: 37, 38: 52, 39: 55, 40: 32 };
-  const err = (res) => new FS.ErrnoError(LINUX_TO_WASI[-res] || 29);
+  const err = (res) => new FS.ErrnoError(wasiErrno(res));
   const check = (res) => { if (typeof res === 'number' && res < 0) throw err(res); return res; };
   const isOurs = (node) => node && node.mount && node.mount.type === SHIROFS;
   const pathOf = (node) => FS.getPath(node);
@@ -299,7 +312,46 @@ function makeShiroFS(FS) {
 }
 
 // ── fds 0/1/2: the kernel process's own fds ────────────────────────────────
+// Kernel fd → FS node, for the page's readiness pings (stdio and sockets).
+const watched = new Map();
+
+function termiosFromKernel(b) {
+  const dv = new DataView(b.buffer, b.byteOffset, 36);
+  const c_cc = [];
+  for (let i = 0; i < 32; i++) c_cc.push(i < 19 ? b[17 + i] : 0);
+  return { c_iflag: dv.getUint32(0, true), c_oflag: dv.getUint32(4, true), c_cflag: dv.getUint32(8, true), c_lflag: dv.getUint32(12, true), c_cc };
+}
+
 function installKernelStdio(FS) {
+  // emscripten's ioctl(2) only does termios for streams with a `tty`;
+  // these hooks pass TCGETS/TCSETS*/TIOCGWINSZ to the kernel (ENOTTY when
+  // the kernel fd isn't a terminal).
+  const tty = {
+    ops: {
+      ioctl_tcgets(stream) {
+        const r = sys(SYS.ioctl, stream.node.kfd, TCGETS, 36);
+        if (r < 0) throw new FS.ErrnoError(wasiErrno(r));
+        return termiosFromKernel(data);
+      },
+      ioctl_tcsets(t, op, termios) {
+        const dv = new DataView(data.buffer, data.byteOffset, 36);
+        dv.setUint32(0, termios.c_iflag >>> 0, true);
+        dv.setUint32(4, termios.c_oflag >>> 0, true);
+        dv.setUint32(8, termios.c_cflag >>> 0, true);
+        dv.setUint32(12, termios.c_lflag >>> 0, true);
+        data[16] = 0;
+        for (let i = 0; i < 19; i++) data[17 + i] = termios.c_cc[i] & 255;
+        const r = sys(SYS.ioctl, t.kfd, op, 36);
+        return r < 0 ? -wasiErrno(r) : 0;
+      },
+      ioctl_tiocgwinsz(t) {
+        const r = sys(SYS.ioctl, t.kfd, TIOCGWINSZ, 8);
+        if (r < 0) throw new FS.ErrnoError(wasiErrno(r));
+        const dv = new DataView(data.buffer, data.byteOffset, 8);
+        return [dv.getUint16(0, true), dv.getUint16(2, true)];
+      },
+    },
+  };
   const nodes = {};
   const ops = {
     read(stream, buffer, offset, length) {
@@ -334,7 +386,9 @@ function installKernelStdio(FS) {
       FS.streams[fd] = stream;
     }
     stream.node.kfd = fd;
+    stream.tty = { ...tty, kfd: fd };
     nodes[fd] = stream.node;
+    watched.set(fd, stream.node);
   }
   return nodes;
 }
@@ -365,19 +419,44 @@ async function run(msg) {
   progPath = msg.path || '';
   i32 = new Int32Array(msg.sab, 0, CH_DATA / 4);
   data = new Uint8Array(msg.sab, CH_DATA);
-  let stdioNodes = {};
   const fail = (text, code) => {
     if (!exiting) writeFd(2, enc.encode(`blink: ${text}\n`));
     exitGuest(code);
   };
   // The page tells us when a kernel fd may have become readable, so a guest
   // blocked in poll()/epoll on stdin wakes without waiting for its timeout.
+  let M = null;
   onMessage((m) => {
-    if (m && m.type === 'blink-ready' && stdioNodes[m.fd]) stdioNodes[m.fd].notifyListeners(POLLIN);
+    if (!m || exiting) return;
+    if (m.type === 'blink-ready') {
+      const node = watched.get(m.fd);
+      if (node) node.notifyListeners(pollFd(m.fd, POLLIN | POLLOUT | 0x2000) || POLLIN);
+    } else if (m.type === 'blink-signal') {
+      M?._blink_shiro_signal?.(m.sig);
+    }
   });
+  // Kernel signals: SIGPIPE ignored (Blink reports EPIPE to the guest);
+  // the forwarded ones get a handler, so the kernel hands them to us.
+  const sigaction = (sig, handler) => {
+    const dv = new DataView(data.buffer, data.byteOffset, 64);
+    for (let i = 0; i < 64; i++) data[i] = 0;
+    dv.setUint32(0, handler, true);
+    sys(SYS.rt_sigaction, sig, 1, 0);
+  };
+  sigaction(SIGPIPE, SIG_IGN);
+  for (const sig of FORWARDED_SIGNALS) sigaction(sig, FORWARD_HANDLER);
+  const kernel = {
+    sys,
+    get data() { return data; },
+    poll: (kfd, events, timeoutMs = 0) => pollFd(kfd, events, timeoutMs),
+    watch(kfd, node) { watched.set(kfd, node); post({ type: 'blink-watch', fd: kfd }); },
+    unwatch(kfd) { watched.delete(kfd); post({ type: 'blink-unwatch', fd: kfd }); },
+    errno: wasiErrno,
+  };
   try {
     const { default: createBlink } = await import(msg.moduleUrl || './blink.mjs');
-    const M = await createBlink({
+    M = await createBlink({
+      shiroKernel: kernel,
       thisProgram: 'blink',
       noInitialRun: true,
       print: () => {},
@@ -390,7 +469,7 @@ async function run(msg) {
       preRun: [(M) => {
         const FS = M.FS;
         FS.init(() => null, () => {}, () => {});
-        stdioNodes = installKernelStdio(FS);
+        installKernelStdio(FS);
         const SHIROFS = makeShiroFS(FS);
         for (const dir of msg.mounts || []) {
           if (!/^\/[^/]+$/.test(dir) || dir === '/dev' || dir === '/proc') continue;

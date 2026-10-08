@@ -1,7 +1,7 @@
 From 9db325790721288b4cef7e218be4ea0a7da76326 Mon Sep 17 00:00:00 2001
 From: shiro <x@x>
 Date: Wed, 7 Oct 2026 23:39:44 +0000
-Subject: [PATCH 3/5] emscripten: don't call emscripten_sleep() in pthread
+Subject: [PATCH 3/6] emscripten: don't call emscripten_sleep() in pthread
  builds
 
 ---
