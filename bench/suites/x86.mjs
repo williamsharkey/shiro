@@ -56,4 +56,20 @@ export async function run(h) {
       });
     }
   }
+
+  // Vim's startup in Blink: sourcing defaults.vim (filetype.vim is most of it),
+  // what the dock's Vim and `vi` pay before the first screen. A package, not a fixture.
+  const vim = 'x86.blink.vim_defaults';
+  if (h.isolated && !h.quick && h.wants(vim)) {
+    await h.try(vim, 'ms', async () => {
+      const inst = await h.eval((c) => window.__bench.shLimit(c, 120_000), 'pkg install vim > /dev/null 2>&1; echo "exit=$?"');
+      if (!/exit=0/.test(inst.out)) throw new Error(`pkg install vim: ${inst.out.trim().slice(-160)}`);
+      const cmd = `vim -es -c 'source $VIMRUNTIME/defaults.vim' -c q x.txt`;
+      const first = await runOnce(h, cmd);
+      if (first.code !== 0) throw new Error(`exit ${first.code}: ${first.out.trim().slice(-160)}`);
+      const res = [];
+      for (let i = 0; i < h.runs; i++) res.push(await runOnce(h, cmd));
+      h.sample(vim, res.map((r) => r.ms), 'ms', { notes: `\`${cmd}\` wall time at the prompt; first run ${Math.round(first.ms)} ms` });
+    });
+  }
 }
