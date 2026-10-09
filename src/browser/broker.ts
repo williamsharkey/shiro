@@ -271,7 +271,9 @@ export class Broker {
       const setCookies = res.headers.filter(([k]) => k.toLowerCase() === 'set-cookie').map(([, v]) => v);
       if (setCookies.length && withCookies(url)) this.o.jar.setFromResponse(url, setCookies, rctx);
       const location = headerGet(res.headers, 'location');
-      if ([301, 302, 303, 307, 308].includes(res.status) && location && msg.redirect !== 'manual') {
+      // Navigations are always 'manual' at the SW: their redirects go back to the shell as browse URLs
+      // (handing the real Location to the browser would leave the proxy)
+      if ([301, 302, 303, 307, 308].includes(res.status) && location && (msg.navigation || msg.redirect !== 'manual')) {
         void res.body.cancel().catch(() => {});
         const next = new URL(location, url);
         if (msg.navigation) return { type: 'redirect', id: msg.id, location: next.href };

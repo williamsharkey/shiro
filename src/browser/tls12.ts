@@ -167,7 +167,7 @@ export async function tls12Connect(raw: ByteStream, host: string, roots: RootCer
         }
       }
       const r = await rec.next();
-      if (!r) throw new Error('connection closed during the TLS 1.2 handshake');
+      if (!r) throw new Error(`connection closed during the TLS 1.2 handshake (after ${transcript.length} messages)`);
       if (r.type === 21) throw new Error(`TLS alert ${r.body[1]}`);
       if (r.type !== 22) throw new Error(`unexpected TLS record type ${r.type}`);
       hsBuf = cat(hsBuf, r.body);

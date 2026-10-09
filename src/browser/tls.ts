@@ -25,11 +25,16 @@ function roots(): Promise<RootDb> {
 }
 
 export class TlsError extends Error {
+  /** The server closed the connection without answering at all. */
+  silent = false;
   constructor(message: string, readonly code: 'tls-handshake' | 'tls-cert' | 'tls-version') { super(message); }
 }
 
 /** Hosts that refused TLS 1.3 (for this page's lifetime): they go straight to TLS 1.2. */
 const tls12Hosts = new Set<string>();
+
+/** Go straight to TLS 1.2 for `host` (tests, diagnostics). */
+export function preferTls12(host: string): void { tls12Hosts.add(host); }
 
 /**
  * TLS for `host` over `raw`: 1.3 (subtls) first; when the server refuses it and
@@ -38,7 +43,13 @@ const tls12Hosts = new Set<string>();
 export async function tlsConnect(raw: ByteStream, host: string, redial?: () => Promise<ByteStream>): Promise<ByteStream> {
   if (redial && tls12Hosts.has(host)) return tls12(raw, host);
   try {
-    return await tls13Connect(raw, host);
+    try {
+      return await tls13Connect(raw, host);
+    } catch (e) {
+      // A hang-up before any answer is either a 1.2-only server or a dropped connection: try 1.3 once more
+      if (!(e instanceof TlsError) || !e.silent || !redial) throw e;
+      return await tls13Connect(await redial(), host);
+    }
   } catch (e) {
     // Any 1.3 failure that isn't about the certificate (no 1.3, a HelloRetryRequest subtls can't do, an
     // odd extension) retries as 1.2; a certificate failure never does. An attacker who can drop packets
@@ -75,7 +86,9 @@ async function tls13Connect(raw: ByteStream, host: string): Promise<ByteStream> 
     const code = received === 0 ? 'tls-version'
       : /cert|signature|root|trust|expired|subject/i.test(msg) ? 'tls-cert'
       : /version|alert|Unexpected TLS record|0x0303|supported_versions|Expected 771, got 76[89]/i.test(msg) ? 'tls-version' : 'tls-handshake';
-    throw new TlsError(received === 0 ? `${host} closed the connection on a TLS 1.3 handshake (it may only speak TLS 1.2)` : `TLS with ${host} failed: ${msg}`, code);
+    const err = new TlsError(received === 0 ? `${host} closed the connection on a TLS 1.3 handshake (it may only speak TLS 1.2)` : `TLS with ${host} failed: ${msg}`, code);
+    err.silent = received === 0;
+    throw err;
   }
   let closed = false;
   return {
