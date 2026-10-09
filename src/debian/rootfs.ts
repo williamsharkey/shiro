@@ -291,23 +291,16 @@ export async function prefetchPaths(fs: FileSystem, paths: string[]): Promise<nu
 
 /**
  * Environment every Debian program gets in Shiro (the shell exports it in
- * Debian mode). glibc.malloc.top_pad: the wasm build of Blink places mmaps
- * directly above the program break and lets brk grow over them, so malloc's
- * heap overwrote apt's package cache; reserving heap ahead keeps mappings
- * clear of it. Remove once the Blink fix lands (docs/DEBIAN.md "Known gaps").
+ * Debian mode). Empty since Blink patch 0028 (brk no longer grows over
+ * mmaps; the glibc.malloc.top_pad workaround is gone).
  */
-export const DEBIAN_ENV: Record<string, string> = {
-  GLIBC_TUNABLES: 'glibc.malloc.top_pad=268435456',
-};
+export const DEBIAN_ENV: Record<string, string> = {};
 
 /** apt settings that work around engine gaps; rewritten by every install. */
 export async function writeEngineWorkarounds(fs: FileSystem): Promise<void> {
   await fs.mkdir('/etc/apt/apt.conf.d', { recursive: true });
   await fs.writeFile('/etc/apt/apt.conf.d/91shiro-engine', [
     '// Written by Shiro (src/debian/rootfs.ts); see docs/DEBIAN.md "Known gaps".',
-    "// Blink can't mremap() a growing anonymous map yet, so apt's cache never",
-    '// grows: start it big enough for trixie + updates + security (~45 MB used).',
-    'APT::Cache-Start "150000000";',
     "// apt's pty for dpkg's output: its child's ioctl(TIOCSCTTY) is refused in",
     '// some runs (not reproduced outside apt yet); dpkg output goes straight through.',
     'Dpkg::Use-Pty "false";',
