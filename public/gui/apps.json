@@ -1,5 +1,62 @@
 {
  "apps": {
+  "dillo": {
+   "bin": "/usr/bin/dillo",
+   "closureSize": 17702388,
+   "description": "Tiny web browser (FLTK)",
+   "dropped": [
+    "openssl",
+    "gcc-12-base",
+    "wget",
+    "libuuid1",
+    "libpsl5",
+    "libunistring2",
+    "libidn2-0",
+    "libpcre2-8-0",
+    "libnettle8",
+    "libgnutls30",
+    "libtasn1-6",
+    "libp11-kit0",
+    "libffi8",
+    "libhogweed6",
+    "libgmp10"
+   ],
+   "icon": "gui/icons/dillo.png",
+   "packages": [
+    "ca-certificates",
+    "libssl3",
+    "libc6",
+    "libgcc-s1",
+    "dillo",
+    "zlib1g",
+    "libx11-6",
+    "libx11-data",
+    "libxcb1",
+    "libxdmcp6",
+    "libbsd0",
+    "libmd0",
+    "libxau6",
+    "libstdc++6",
+    "libpng16-16",
+    "libjpeg62-turbo",
+    "libfltk1.3",
+    "libxrender1",
+    "libxinerama1",
+    "libxext6",
+    "libxft2",
+    "libfreetype6",
+    "libbrotli1",
+    "libfontconfig1",
+    "fontconfig-config",
+    "fonts-dejavu-core",
+    "libexpat1",
+    "libxfixes3",
+    "libxcursor1"
+   ],
+   "pkg": "dillo",
+   "size": 11376660,
+   "toolkit": "fltk"
+  },
   "featherpad": {
    "bin": "/usr/bin/featherpad",
    "closureSize": 84343452,
@@ -72,6 +129,7 @@
     "libavahi-common-data",
     "libavahi-client3"
    ],
+   "icon": "gui/icons/featherpad.svg",
    "packages": [
     "featherpad",
     "libx11-6",
@@ -314,6 +372,7 @@
     "libabsl20220623",
     "libann0"
    ],
+   "icon": "gui/icons/gimp.png",
    "packages": [
     "libglib2.0-bin",
     "libglib2.0-0",
@@ -463,6 +522,7 @@
     "libgpg-error0",
     "libcap2"
    ],
+   "icon": "gui/icons/gpicview.png",
    "packages": [
     "shared-mime-info",
     "zlib1g",
@@ -533,6 +593,194 @@
    "size": 26768896,
    "toolkit": "gtk2"
   },
+  "inkscape": {
+   "bin": "/usr/bin/inkscape",
+   "closureSize": 95064920,
+   "description": "Vector graphics editor (GTK3)",
+   "dropped": [
+    "gcc-12-base",
+    "libelf1",
+    "libssl3",
+    "glib-networking",
+    "gsettings-desktop-schemas",
+    "dconf-gsettings-backend",
+    "libdconf1",
+    "glib-networking-common",
+    "glib-networking-services",
+    "libproxy1v5",
+    "libgnutls30",
+    "libtasn1-6",
+    "libp11-kit0",
+    "libnettle8",
+    "libhogweed6",
+    "libgmp10",
+    "fontconfig",
+    "libwebpmux3",
+    "libwebpdemux2",
+    "libheif1",
+    "libx265-199",
+    "libnuma1",
+    "libde265-0",
+    "libdav1d6",
+    "libaom3",
+    "libcups2",
+    "libavahi-common3",
+    "libavahi-common-data",
+    "libavahi-client3",
+    "libcolord2",
+    "libudev1",
+    "gtk-update-icon-cache",
+    "libhunspell-1.7-0",
+    "libaspell15",
+    "libtext-iconv-perl"
+   ],
+   "icon": "gui/icons/inkscape.svg",
+   "packages": [
+    "shared-mime-info",
+    "libxml2",
+    "zlib1g",
+    "libc6",
+    "libgcc-s1",
+    "liblzma5",
+    "libicu72",
+    "libstdc++6",
+    "libglib2.0-0",
+    "libselinux1",
+    "libpcre2-8-0",
+    "libmount1",
+    "libblkid1",
+    "libffi8",
+    "libglib2.0-bin",
+    "libglib2.0-data",
+    "inkscape",
+    "libxslt1.1",
+    "libgcrypt20",
+    "libgpg-error0",
+    "libx11-6",
+    "libx11-data",
+    "libxcb1",
+    "libxdmcp6",
+    "libbsd0",
+    "libmd0",
+    "libxau6",
+    "libwpg-0.3-3",
+    "libwpd-0.10-10",
+    "librevenge-0.0-0",
+    "libvisio-0.1-1",
+    "libsoup2.4-1",
+    "libsqlite3-0",
+    "libpsl5",
+    "libunistring2",
+    "libidn2-0",
+    "libgssapi-krb5-2",
+    "libkrb5support0",
+    "libkrb5-3",
+    "libkeyutils1",
+    "libk5crypto3",
+    "libcom-err2",
+    "libbrotli1",
+    "libsoup2.4-common",
+    "libsigc++-2.0-0v5",
+    "libreadline8",
+    "libtinfo6",
+    "readline-common",
+    "libpotrace0",
+    "libpoppler126",
+    "libtiff6",
+    "libzstd1",
+    "libwebp7",
+    "liblerc4",
+    "libjpeg62-turbo",
+    "libjbig0",
+    "libdeflate0",
+    "libpng16-16",
+    "libopenjp2-7",
+    "libnss3",
+    "libnspr4",
+    "liblcms2-2",
+    "libfreetype6",
+    "libfontconfig1",
+    "fontconfig-config",
+    "fonts-dejavu-core",
+    "libexpat1",
+    "libpoppler-glib8",
+    "libcairo2",
+    "libxrender1",
+    "libxext6",
+    "libxcb-shm0",
+    "libxcb-render0",
+    "libpixman-1-0",
+    "libpangomm-1.4-1v5",
+    "libpangocairo-1.0-0",
+    "libpangoft2-1.0-0",
+    "libpango-1.0-0",
+    "libthai0",
+    "libdatrie1",
+    "libthai-data",
+    "libharfbuzz0b",
+    "libgraphite2-3",
+    "libfribidi0",
+    "libglibmm-2.4-1v5",
+    "libcairomm-1.0-1v5",
+    "libmagick++-6.q16-8",
+    "libmagickwand-6.q16-6",
+    "imagemagick-6-common",
+    "libmagickcore-6.q16-6",
+    "libltdl7",
+    "liblqr-1-0",
+    "libgomp1",
+    "libfftw3-double3",
+    "libbz2-1.0",
+    "libgtkmm-3.0-1v5",
+    "libgtk-3-0",
+    "libgtk-3-common",
+    "libxrandr2",
+    "libxkbcommon0",
+    "xkb-data",
+    "libxinerama1",
+    "libxi6",
+    "libxfixes3",
+    "libxdamage1",
+    "libxcursor1",
+    "libxcomposite1",
+    "libwayland-egl1",
+    "libwayland-cursor0",
+    "libwayland-client0",
+    "libgdk-pixbuf-2.0-0",
+    "libgdk-pixbuf2.0-common",
+    "libepoxy0",
+    "libdbus-1-3",
+    "libsystemd0",
+    "liblz4-1",
+    "libcap2",
+    "libcairo-gobject2",
+    "libatk1.0-0",
+    "at-spi2-common",
+    "libatk-bridge2.0-0",
+    "libatspi2.0-0",
+    "hicolor-icon-theme",
+    "adwaita-icon-theme",
+    "libatkmm-1.6-1v5",
+    "libgspell-1-2",
+    "libenchant-2-2",
+    "hunspell-en-us",
+    "dictionaries-common",
+    "emacsen-common",
+    "libgspell-1-common",
+    "libgsl27",
+    "libgslcblas0",
+    "libgc1",
+    "libcdr-0.1-1",
+    "libboost-filesystem1.74.0",
+    "lib2geom1.2.0",
+    "libdouble-conversion3",
+    "librsvg2-common",
+    "librsvg2-2"
+   ],
+   "pkg": "inkscape",
+   "size": 83033708,
+   "toolkit": "gtk3"
+  },
   "l3afpad": {
    "bin": "/usr/bin/l3afpad",
    "closureSize": 50992188,
@@ -569,6 +817,7 @@
     "liblcms2-2",
     "gtk-update-icon-cache"
    ],
+   "icon": "gui/icons/l3afpad.png",
    "packages": [
     "shared-mime-info",
     "zlib1g",
@@ -720,6 +969,7 @@
     "libmenu-cache-bin",
     "libfm-extra4"
    ],
+   "icon": "gui/icons/lximage-qt.png",
    "packages": [
     "lximage-qt",
     "libxfixes3",
@@ -853,6 +1103,7 @@
     "libtext-iconv-perl",
     "libgspell-1-common"
    ],
+   "icon": "gui/icons/mousepad.png",
    "packages": [
     "shared-mime-info",
     "libxml2",
@@ -945,6 +1196,145 @@
    "size": 44635224,
    "toolkit": "gtk3"
   },
+  "netsurf": {
+   "bin": "/usr/bin/netsurf-gtk",
+   "closureSize": 60376880,
+   "description": "Small web browser (GTK3)",
+   "dropped": [
+    "gcc-12-base",
+    "libelf1",
+    "openssl",
+    "fontconfig",
+    "dconf-gsettings-backend",
+    "libdconf1",
+    "libcups2",
+    "libavahi-common3",
+    "libavahi-common-data",
+    "libavahi-client3",
+    "libcolord2",
+    "libudev1",
+    "liblcms2-2",
+    "gtk-update-icon-cache",
+    "libsasl2-modules-db",
+    "libdb5.3"
+   ],
+   "icon": "gui/icons/netsurf.png",
+   "packages": [
+    "shared-mime-info",
+    "libxml2",
+    "zlib1g",
+    "libc6",
+    "libgcc-s1",
+    "liblzma5",
+    "libicu72",
+    "libstdc++6",
+    "libglib2.0-0",
+    "libselinux1",
+    "libpcre2-8-0",
+    "libmount1",
+    "libblkid1",
+    "libffi8",
+    "libglib2.0-bin",
+    "libglib2.0-data",
+    "netsurf-gtk",
+    "netsurf-common",
+    "fonts-dejavu",
+    "fonts-dejavu-extra",
+    "fonts-dejavu-core",
+    "ca-certificates",
+    "libssl3",
+    "librsvg2-2",
+    "libpangocairo-1.0-0",
+    "libpangoft2-1.0-0",
+    "libpango-1.0-0",
+    "libthai0",
+    "libdatrie1",
+    "libthai-data",
+    "libharfbuzz0b",
+    "libgraphite2-3",
+    "libfreetype6",
+    "libpng16-16",
+    "libbrotli1",
+    "libfribidi0",
+    "fontconfig-config",
+    "libfontconfig1",
+    "libexpat1",
+    "libcairo2",
+    "libxrender1",
+    "libx11-6",
+    "libx11-data",
+    "libxcb1",
+    "libxdmcp6",
+    "libbsd0",
+    "libmd0",
+    "libxau6",
+    "libxext6",
+    "libxcb-shm0",
+    "libxcb-render0",
+    "libpixman-1-0",
+    "libgdk-pixbuf-2.0-0",
+    "libtiff6",
+    "libzstd1",
+    "libwebp7",
+    "liblerc4",
+    "libjpeg62-turbo",
+    "libjbig0",
+    "libdeflate0",
+    "libgdk-pixbuf2.0-common",
+    "libcairo-gobject2",
+    "libgtk-3-0",
+    "libgtk-3-common",
+    "libxrandr2",
+    "libxkbcommon0",
+    "xkb-data",
+    "libxinerama1",
+    "libxi6",
+    "libxfixes3",
+    "libxdamage1",
+    "libxcursor1",
+    "libxcomposite1",
+    "libwayland-egl1",
+    "libwayland-cursor0",
+    "libwayland-client0",
+    "libepoxy0",
+    "libgssapi-krb5-2",
+    "libkrb5support0",
+    "libkrb5-3",
+    "libkeyutils1",
+    "libk5crypto3",
+    "libcom-err2",
+    "libgnutls30",
+    "libunistring2",
+    "libtasn1-6",
+    "libp11-kit0",
+    "libnettle8",
+    "libidn2-0",
+    "libhogweed6",
+    "libgmp10",
+    "libdbus-1-3",
+    "libsystemd0",
+    "liblz4-1",
+    "libgcrypt20",
+    "libgpg-error0",
+    "libcap2",
+    "libatk1.0-0",
+    "at-spi2-common",
+    "libatk-bridge2.0-0",
+    "libatspi2.0-0",
+    "hicolor-icon-theme",
+    "adwaita-icon-theme",
+    "libcurl4",
+    "libssh2-1",
+    "librtmp1",
+    "libpsl5",
+    "libnghttp2-14",
+    "libldap-2.5-0",
+    "libsasl2-2"
+   ],
+   "pkg": "netsurf-gtk",
+   "size": 56607744,
+   "toolkit": "gtk3"
+  },
   "ristretto": {
    "bin": "/usr/bin/ristretto",
    "closureSize": 53120068,
@@ -982,6 +1372,7 @@
     "liblcms2-2",
     "gtk-update-icon-cache"
    ],
+   "icon": "gui/icons/ristretto.png",
    "packages": [
     "libmagic-mgc",
     "shared-mime-info",
@@ -1296,6 +1687,7 @@
    "dropped": [
     "gcc-12-base"
    ],
+   "icon": "gui/icons/xterm.svg",
    "packages": [
     "xterm",
     "libxt6",
@@ -1344,6 +1736,31 @@
    "sha256": "7952cd327a94f4ab744dfbf861fd68b71712d8ef3d9d8d2b74639bfb020a3f6b",
    "size": 147932,
    "when": "shared-mime-info"
+  },
+  {
+   "path": "/usr/share/icons/Adwaita/icon-theme.cache",
+   "sha256": "fb3aa2e903d9fe49372465feba79c0a4b5151386829b7bc754307ad81654fd03",
+   "size": 124080,
+   "when": "adwaita-icon-theme"
+  },
+  {
+   "path": "/etc/ssl/certs/ca-certificates.crt",
+   "sha256": "a3413a37a8e09cc21b2c11c9ffb23d92d2fc9d1933c9e7617f5c4fba4f72d37d",
+   "size": 216591,
+   "when": "ca-certificates"
+  },
+  {
+   "path": "/",
+   "sha256": "8d6afe7fc2bd1c4ee0a58e4ee79abd87d0e54327d3bc88e6e94ca62292c8ebce",
+   "size": 153600,
+   "tar": true,
+   "when": "ca-certificates"
+  },
+  {
+   "path": "/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache",
+   "sha256": "273aa524347270aafe5966ed9824b2261d0719932f313cc18c2571f7a41a3ecd",
+   "size": 2653,
+   "when": "libgdk-pixbuf-2.0-0"
   }
  ],
  "packages": {
@@ -1359,6 +1776,30 @@
    "size": 161668,
    "version": "2.46.0-5"
   },
+  "ca-certificates": {
+   "filename": "pool/main/c/ca-certificates/ca-certificates_20230311+deb12u1_all.deb",
+   "sha256": "0d5f444f594e48c1e16a41d8fc628a09b24c658916a1274025c2330f2a802bed",
+   "size": 155260,
+   "version": "20230311+deb12u1"
+  },
+  "dictionaries-common": {
+   "filename": "pool/main/d/dictionaries-common/dictionaries-common_1.29.5_all.deb",
+   "sha256": "02ca70ec75d8752dfb2641ef7be63a51eb4232dbd10c42b96528506e028a0139",
+   "size": 183816,
+   "version": "1.29.5"
+  },
+  "dillo": {
+   "filename": "pool/main/d/dillo/dillo_3.0.5-7+b1_amd64.deb",
+   "sha256": "2b88b0bfe6ddf9684555208e54ce24e94c3e6b51c32dd59f462a9580d41ebddd",
+   "size": 505692,
+   "version": "3.0.5-7+b1"
+  },
+  "emacsen-common": {
+   "filename": "pool/main/e/emacsen-common/emacsen-common_3.0.5_all.deb",
+   "sha256": "74d972556adf85fbbfb0b3b10dcf16687547a9ef521c7c86f5cda454e11a60df",
+   "size": 12296,
+   "version": "3.0.5"
+  },
   "featherpad": {
    "filename": "pool/main/f/featherpad/featherpad_1.3.5-1_amd64.deb",
    "sha256": "3f8d648df651e3c87e2b53e495e1a6c539fe3939cd3b56ca9575e483c3c40aa7",
@@ -1371,10 +1812,22 @@
    "size": 314864,
    "version": "2.14.1-4"
   },
+  "fonts-dejavu": {
+   "filename": "pool/main/f/fonts-dejavu/fonts-dejavu_2.37-6_all.deb",
+   "sha256": "6fb58c7dcea9b205db47478e117de29dcc86189b1a9782b25e63524689590430",
+   "size": 27772,
+   "version": "2.37-6"
+  },
   "fonts-dejavu-core": {
    "filename": "pool/main/f/fonts-dejavu/fonts-dejavu-core_2.37-6_all.deb",
    "sha256": "8892669e51aab4dc56682c8e39d8ddb7d70fad83c369344e1e240bf3ca22bb76",
    "size": 1067728,
+   "version": "2.37-6"
+  },
+  "fonts-dejavu-extra": {
+   "filename": "pool/main/f/fonts-dejavu/fonts-dejavu-extra_2.37-6_all.deb",
+   "sha256": "6cb7ed32de6df209c065e9e5cc5154a2f36d4c334d9a0af534fabb67d38ab75b",
+   "size": 1985032,
    "version": "2.37-6"
   },
   "gimp": {
@@ -1401,11 +1854,35 @@
    "size": 11396,
    "version": "0.17-2"
   },
+  "hunspell-en-us": {
+   "filename": "pool/main/s/scowl/hunspell-en-us_2020.12.07-2_all.deb",
+   "sha256": "04fdf8f6d3171d72980e8ebe4cb1a00c8100e609025cabb65dfb8f7170e65e07",
+   "size": 268780,
+   "version": "1:2020.12.07-2"
+  },
+  "imagemagick-6-common": {
+   "filename": "pool/main/i/imagemagick/imagemagick-6-common_6.9.11.60+dfsg-1.6+deb12u11_all.deb",
+   "sha256": "47d1a9a5ac4de5813b6ca7013cc9babadd5d26fed9055181b910652370debd86",
+   "size": 173508,
+   "version": "8:6.9.11.60+dfsg-1.6+deb12u11"
+  },
+  "inkscape": {
+   "filename": "pool/main/i/inkscape/inkscape_1.2.2-2+b1_amd64.deb",
+   "sha256": "5e767932868c0e6909400986d5df7dbad540c9716512c1449bb7b8c6e864a3a8",
+   "size": 20647512,
+   "version": "1.2.2-2+b1"
+  },
   "l3afpad": {
    "filename": "pool/main/l/l3afpad/l3afpad_0.8.18.1.11-4_amd64.deb",
    "sha256": "46ff5da0d7b2df6ce7a7b4c9fc1bf1f10923b303d06c55d367100e26a6924fca",
    "size": 148680,
    "version": "0.8.18.1.11-4"
+  },
+  "lib2geom1.2.0": {
+   "filename": "pool/main/lib2/lib2geom/lib2geom1.2.0_1.2.2-3_amd64.deb",
+   "sha256": "ae8117ed448497e1c19196d714ae6fc953f7577f3a16eeddaa2e5dd65467681a",
+   "size": 366836,
+   "version": "1.2.2-3"
   },
   "libatk-bridge2.0-0": {
    "filename": "pool/main/a/at-spi2-core/libatk-bridge2.0-0_2.46.0-5_amd64.deb",
@@ -1418,6 +1895,12 @@
    "sha256": "909dd661e03760a9ba1529bfc772f259cec8431999ee38b7c5521186237cdd98",
    "size": 49628,
    "version": "2.46.0-5"
+  },
+  "libatkmm-1.6-1v5": {
+   "filename": "pool/main/a/atkmm1.6/libatkmm-1.6-1v5_2.28.3-1_amd64.deb",
+   "sha256": "f98c29a1962bb98d147c72e05a92eeba36f829ff1538eaaed550301a841fad95",
+   "size": 81840,
+   "version": "2.28.3-1"
   },
   "libatspi2.0-0": {
    "filename": "pool/main/a/at-spi2-core/libatspi2.0-0_2.46.0-5_amd64.deb",
@@ -1436,6 +1919,12 @@
    "sha256": "5a083377f29191cafcdf0f91ec124349b4a7895b531556633a136e43c6d53943",
    "size": 147380,
    "version": "2.38.1-5+deb12u3"
+  },
+  "libboost-filesystem1.74.0": {
+   "filename": "pool/main/b/boost1.74/libboost-filesystem1.74.0_1.74.0+ds1-21_amd64.deb",
+   "sha256": "3e80caec26a4ee663dc2e4fdaf10b0f03308284f7e44248290b8dd18de4ca237",
+   "size": 257792,
+   "version": "1.74.0+ds1-21"
   },
   "libbrotli1": {
    "filename": "pool/main/b/brotli/libbrotli1_1.0.9-2+b6_amd64.deb",
@@ -1473,17 +1962,35 @@
    "size": 574676,
    "version": "1.16.0-7"
   },
+  "libcairomm-1.0-1v5": {
+   "filename": "pool/main/c/cairomm/libcairomm-1.0-1v5_1.14.4-2_amd64.deb",
+   "sha256": "6cb05750d23a03c4a3161e023e44051240bb27458da06c316fbe0c31b9807a49",
+   "size": 56548,
+   "version": "1.14.4-2"
+  },
   "libcap2": {
    "filename": "pool/main/libc/libcap2/libcap2_2.66-4+deb12u3+b1_amd64.deb",
    "sha256": "8d684c673e7483802a5c447834b0df6fce006eb3a7109e1be412f5ad425bb24f",
    "size": 27708,
    "version": "1:2.66-4+deb12u3+b1"
   },
+  "libcdr-0.1-1": {
+   "filename": "pool/main/libc/libcdr/libcdr-0.1-1_0.1.6-2+b2_amd64.deb",
+   "sha256": "c167f597d058bbbed4655d1ee6d385581a732d3edc529f699cb61523a7f1df17",
+   "size": 391604,
+   "version": "0.1.6-2+b2"
+  },
   "libcom-err2": {
    "filename": "pool/main/e/e2fsprogs/libcom-err2_1.47.0-2+b2_amd64.deb",
    "sha256": "a2bac7015e78fbc0c504df3e441f3a22292f1d2d77f9ccda760057f3690e22f2",
    "size": 20044,
    "version": "1.47.0-2+b2"
+  },
+  "libcurl4": {
+   "filename": "pool/main/c/curl/libcurl4_7.88.1-10+deb12u15_amd64.deb",
+   "sha256": "3042904de01f9c4fbdcf1452b8f81abedcf2b015f9b9deba109063322b5bd68b",
+   "size": 392184,
+   "version": "7.88.1-10+deb12u15"
   },
   "libdatrie1": {
    "filename": "pool/main/libd/libdatrie/libdatrie1_0.2.13-2+b1_amd64.deb",
@@ -1508,6 +2015,12 @@
    "sha256": "802b880ed900e4a8d54bab77b7551a7f3408b04891c3e5650fdc2368cc1fbc0a",
    "size": 41460,
    "version": "3.2.1-1"
+  },
+  "libenchant-2-2": {
+   "filename": "pool/main/e/enchant-2/libenchant-2-2_2.3.3-2_amd64.deb",
+   "sha256": "714f0f8fecae1faace4f23b7eb60524360b46e7a9842d2b365fa355dc2199c05",
+   "size": 46996,
+   "version": "2.3.3-2"
   },
   "libepoxy0": {
    "filename": "pool/main/libe/libepoxy/libepoxy0_1.5.10-1_amd64.deb",
@@ -1539,6 +2052,18 @@
    "size": 22856,
    "version": "3.4.4-1"
   },
+  "libfftw3-double3": {
+   "filename": "pool/main/f/fftw3/libfftw3-double3_3.3.10-1_amd64.deb",
+   "sha256": "e5d8c553fa9b5856436dbea6b7fb6845343d615185c8bb3ef5206cfee68c5734",
+   "size": 775768,
+   "version": "3.3.10-1"
+  },
+  "libfltk1.3": {
+   "filename": "pool/main/f/fltk1.3/libfltk1.3_1.3.8-5_amd64.deb",
+   "sha256": "703f71611b4a81e87453e1d82135c2428005734f1a4f9d4735176dff67d2a652",
+   "size": 569340,
+   "version": "1.3.8-5"
+  },
   "libfm-qt12": {
    "filename": "pool/main/libf/libfm-qt/libfm-qt12_1.2.1-1+b1_amd64.deb",
    "sha256": "3fce0ba86d4b5d86f0e3344183b1fe78ac7cb4526fea63aacd185ee73c3a1275",
@@ -1562,6 +2087,12 @@
    "sha256": "87fce56627aab7b2968501d370aa3ed6d1c792119efa765e71a690bdfe570e62",
    "size": 64952,
    "version": "1.0.8-2.1"
+  },
+  "libgc1": {
+   "filename": "pool/main/libg/libgc/libgc1_8.2.2-3_amd64.deb",
+   "sha256": "c7fecfc533d31980e93faeb9bc529dc2d393fc066100550c0e28a760a2eab72e",
+   "size": 245116,
+   "version": "1:8.2.2-3"
   },
   "libgcc-s1": {
    "filename": "pool/main/g/gcc-12/libgcc-s1_12.2.0-14+deb12u1_amd64.deb",
@@ -1635,6 +2166,12 @@
    "size": 1211164,
    "version": "2.74.6-2+deb12u9"
   },
+  "libglibmm-2.4-1v5": {
+   "filename": "pool/main/g/glibmm2.4/libglibmm-2.4-1v5_2.66.5-2_amd64.deb",
+   "sha256": "a11c03dd8f9b454eaeae38ce782ceb45d9b52f5695d86d1d262c9062c678a2ba",
+   "size": 607180,
+   "version": "2.66.5-2"
+  },
   "libglvnd0": {
    "filename": "pool/main/libg/libglvnd/libglvnd0_1.6.0-1_amd64.deb",
    "sha256": "b6da5b153dd62d8b5e5fbe25242db1fc05c068707c365db49abda8c2427c75f8",
@@ -1646,6 +2183,18 @@
    "sha256": "95f568df73dedf43ae66834a75502112e0d4f3ad7124f3dbfa790b739383b896",
    "size": 34384,
    "version": "1.6.0-1"
+  },
+  "libgmp10": {
+   "filename": "pool/main/g/gmp/libgmp10_6.2.1+dfsg1-1.1_amd64.deb",
+   "sha256": "187aedef2ed763f425c1e523753b9719677633c7eede660401739e9c893482bd",
+   "size": 562588,
+   "version": "2:6.2.1+dfsg1-1.1"
+  },
+  "libgnutls30": {
+   "filename": "pool/main/g/gnutls28/libgnutls30_3.7.9-2+deb12u7_amd64.deb",
+   "sha256": "30abec8c824feb1d2d7e9000a34083cccd19d139625e1b21547e3ac53b922f8e",
+   "size": 1409084,
+   "version": "3.7.9-2+deb12u7"
   },
   "libgomp1": {
    "filename": "pool/main/g/gcc-12/libgomp1_12.2.0-14+deb12u1_amd64.deb",
@@ -1664,6 +2213,30 @@
    "sha256": "c19a7f6ba9298db7eef041ae27b08985f2c02009e418063f8bccdb5bc5e858dc",
    "size": 74564,
    "version": "1.3.14-1+deb12u1"
+  },
+  "libgsl27": {
+   "filename": "pool/main/g/gsl/libgsl27_2.7.1+dfsg-5+deb12u1_amd64.deb",
+   "sha256": "7a2ac4431a1bfa2e1776961d4f3d82d6b660fc3fa62e7bfbc4a14aaf013fa422",
+   "size": 940700,
+   "version": "2.7.1+dfsg-5+deb12u1"
+  },
+  "libgslcblas0": {
+   "filename": "pool/main/g/gsl/libgslcblas0_2.7.1+dfsg-5+deb12u1_amd64.deb",
+   "sha256": "46bd7671bbf548b0d13be8523a8ac7e453009fd2e7a480d07458aad99828f393",
+   "size": 108140,
+   "version": "2.7.1+dfsg-5+deb12u1"
+  },
+  "libgspell-1-2": {
+   "filename": "pool/main/g/gspell/libgspell-1-2_1.12.0-1+b2_amd64.deb",
+   "sha256": "e41114d0f8ea1a813f33087645e002fa0a0544a74629e7a38fc8465483a14dd4",
+   "size": 52564,
+   "version": "1.12.0-1+b2"
+  },
+  "libgspell-1-common": {
+   "filename": "pool/main/g/gspell/libgspell-1-common_1.12.0-1_all.deb",
+   "sha256": "9b69970bac4d86bb3ed2a0c8d40ebbb3228b6e727a822bef2cbcf7f3c77443e5",
+   "size": 32868,
+   "version": "1.12.0-1"
   },
   "libgssapi-krb5-2": {
    "filename": "pool/main/k/krb5/libgssapi-krb5-2_1.20.1-2+deb12u5_amd64.deb",
@@ -1695,6 +2268,12 @@
    "size": 2659900,
    "version": "2.24.33-2+deb12u1"
   },
+  "libgtkmm-3.0-1v5": {
+   "filename": "pool/main/g/gtkmm3.0/libgtkmm-3.0-1v5_3.24.7-1_amd64.deb",
+   "sha256": "449adc076c3c7be573fea0d298ad3eae0e400ccd3d55c071b151d170fc68d931",
+   "size": 986392,
+   "version": "3.24.7-1"
+  },
   "libgtksourceview-4-0": {
    "filename": "pool/main/g/gtksourceview4/libgtksourceview-4-0_4.8.4-4_amd64.deb",
    "sha256": "a49f7c365bb24ae03260de6594c84042e1f18c2833b57baced87800c8f2a8c66",
@@ -1719,6 +2298,12 @@
    "size": 1945396,
    "version": "6.0.0+dfsg-3"
   },
+  "libhogweed6": {
+   "filename": "pool/main/n/nettle/libhogweed6_3.8.1-2_amd64.deb",
+   "sha256": "ed8185c28b2cb519744a5a462dcd720d3b332c9b88a1d0002eac06dc8550cb94",
+   "size": 327524,
+   "version": "3.8.1-2"
+  },
   "libhunspell-1.7-0": {
    "filename": "pool/main/h/hunspell/libhunspell-1.7-0_1.7.1-1_amd64.deb",
    "sha256": "3c858f6fb27a1c73920115dfb05e06d88093c3ee889d33800fd93d111228094b",
@@ -1736,6 +2321,12 @@
    "sha256": "f7f6f99c6d7b025914df2447fc93e11d22c44c0c8bdd8b6f36691c9e7ddcef88",
    "size": 9376124,
    "version": "72.1-3+deb12u1"
+  },
+  "libidn2-0": {
+   "filename": "pool/main/libi/libidn2/libidn2-0_2.3.3-1+b1_amd64.deb",
+   "sha256": "d50716d5824083d667427817d506b45d3f59dc77e1ca52de000f3f62d4918afa",
+   "size": 123636,
+   "version": "2.3.3-1+b1"
   },
   "libjbig0": {
    "filename": "pool/main/j/jbigkit/libjbig0_2.1-6.1_amd64.deb",
@@ -1797,11 +2388,29 @@
    "size": 153540,
    "version": "2.14-2+deb12u1"
   },
+  "libldap-2.5-0": {
+   "filename": "pool/main/o/openldap/libldap-2.5-0_2.5.13+dfsg-5_amd64.deb",
+   "sha256": "4b6c30f6554149c594628d945edc6003f0eea8d0cc1341638c0e71375db147ed",
+   "size": 183248,
+   "version": "2.5.13+dfsg-5"
+  },
   "liblerc4": {
    "filename": "pool/main/l/lerc/liblerc4_4.0.0+ds-2_amd64.deb",
    "sha256": "771f5c47ca69f24ca61e4be0c98c5912b182ce442f921697d17a472f3ded5c9c",
    "size": 170368,
    "version": "4.0.0+ds-2"
+  },
+  "liblqr-1-0": {
+   "filename": "pool/main/libl/liblqr/liblqr-1-0_0.4.2-2.1_amd64.deb",
+   "sha256": "8a9080533fab9e1c6b64b14450edeca82b56a8886c24285da05743fbd26f19dc",
+   "size": 29116,
+   "version": "0.4.2-2.1"
+  },
+  "libltdl7": {
+   "filename": "pool/main/libt/libtool/libltdl7_2.4.7-7~deb12u1_amd64.deb",
+   "sha256": "8070b550321d4bd1c298f52f75374898d39112b709026d2ea5362ef1277b775a",
+   "size": 393000,
+   "version": "2.4.7-7~deb12u1"
   },
   "liblz4-1": {
    "filename": "pool/main/l/lz4/liblz4-1_1.9.4-1_amd64.deb",
@@ -1826,6 +2435,24 @@
    "sha256": "a241c2adc7438a7e217f32544028489981768a349d3e48673392703255c7b88e",
    "size": 103752,
    "version": "1:5.44-3"
+  },
+  "libmagick++-6.q16-8": {
+   "filename": "pool/main/i/imagemagick/libmagick++-6.q16-8_6.9.11.60+dfsg-1.6+deb12u11_amd64.deb",
+   "sha256": "c1bbcd38ea8d94a68d2fd70f4f47c11c22cd5631b812dd56d9cec643ef4b644c",
+   "size": 250584,
+   "version": "8:6.9.11.60+dfsg-1.6+deb12u11"
+  },
+  "libmagickcore-6.q16-6": {
+   "filename": "pool/main/i/imagemagick/libmagickcore-6.q16-6_6.9.11.60+dfsg-1.6+deb12u11_amd64.deb",
+   "sha256": "4d6a6da6c756f5fda4a8f3caf024ee18f76f7195a2097b76c361335d5013718b",
+   "size": 1807012,
+   "version": "8:6.9.11.60+dfsg-1.6+deb12u11"
+  },
+  "libmagickwand-6.q16-6": {
+   "filename": "pool/main/i/imagemagick/libmagickwand-6.q16-6_6.9.11.60+dfsg-1.6+deb12u11_amd64.deb",
+   "sha256": "a7bbf5403ab28051fd1137ee8b0b987e5bec7f45577ed236370cff34f7e9f09c",
+   "size": 415764,
+   "version": "8:6.9.11.60+dfsg-1.6+deb12u11"
   },
   "libmd0": {
    "filename": "pool/main/libm/libmd/libmd0_1.0.4-2_amd64.deb",
@@ -1869,6 +2496,42 @@
    "size": 140436,
    "version": "1.6.0-2"
   },
+  "libnettle8": {
+   "filename": "pool/main/n/nettle/libnettle8_3.8.1-2_amd64.deb",
+   "sha256": "45922e6e289ffd92f0f92d2bb9159e84236ff202d552a461bf10e5335b3f0261",
+   "size": 287764,
+   "version": "3.8.1-2"
+  },
+  "libnghttp2-14": {
+   "filename": "pool/main/n/nghttp2/libnghttp2-14_1.52.0-1+deb12u3_amd64.deb",
+   "sha256": "5a5736cee57e51c1baed869979e6ecdbc6495e939e33203d6cfe3b6e5a149e3f",
+   "size": 72404,
+   "version": "1.52.0-1+deb12u3"
+  },
+  "libnspr4": {
+   "filename": "pool/main/n/nspr/libnspr4_4.35-1_amd64.deb",
+   "sha256": "6cca09767e94e4b5d2888ef31ad797bd3e7cec27fbbe98b49b10d4884746ce77",
+   "size": 113108,
+   "version": "2:4.35-1"
+  },
+  "libnss3": {
+   "filename": "pool/main/n/nss/libnss3_3.87.1-1+deb12u2_amd64.deb",
+   "sha256": "bb4339de2e76be9862225447c6c24b9d759baba5ee861d86dfb558ebf4474d14",
+   "size": 1332396,
+   "version": "2:3.87.1-1+deb12u2"
+  },
+  "libopenjp2-7": {
+   "filename": "pool/main/o/openjpeg2/libopenjp2-7_2.5.0-2+deb12u3_amd64.deb",
+   "sha256": "a127e2f1741d66bdddb6393a718e3cbec327d53f88c89b859b1f8d73f64cf635",
+   "size": 189312,
+   "version": "2.5.0-2+deb12u3"
+  },
+  "libp11-kit0": {
+   "filename": "pool/main/p/p11-kit/libp11-kit0_0.24.1-2_amd64.deb",
+   "sha256": "251330faddbf013f060fcdb41f4b0c037c8a6e89ba7c09b04bfcc4e3f0807b22",
+   "size": 345080,
+   "version": "0.24.1-2"
+  },
   "libpango-1.0-0": {
    "filename": "pool/main/p/pango1.0/libpango-1.0-0_1.50.12+ds-1_amd64.deb",
    "sha256": "851720de07441ae6bb6a7f51fc0f2edb4db7aa6f25b5bf1bf7b72dcab8947b7f",
@@ -1886,6 +2549,12 @@
    "sha256": "78da3f494109f6e7a39c4626aaae7571c600c5854cecda0bc0c902224986a63b",
    "size": 47384,
    "version": "1.50.12+ds-1"
+  },
+  "libpangomm-1.4-1v5": {
+   "filename": "pool/main/p/pangomm/libpangomm-1.4-1v5_2.46.3-1_amd64.deb",
+   "sha256": "3bcb2bb2c7dece7be81cd12f0c2eb25a0964642ba1e62e7a98264cb0ab4cde9e",
+   "size": 64908,
+   "version": "2.46.3-1"
   },
   "libpcre2-16-0": {
    "filename": "pool/main/p/pcre2/libpcre2-16-0_10.42-1_amd64.deb",
@@ -1910,6 +2579,30 @@
    "sha256": "a56d64bfaa9da12aafb83347909e62e6fd5fd251e6b34c194065911a30359978",
    "size": 276660,
    "version": "1.6.39-2+deb12u5"
+  },
+  "libpoppler-glib8": {
+   "filename": "pool/main/p/poppler/libpoppler-glib8_22.12.0-2+deb12u2_amd64.deb",
+   "sha256": "8d01bfeabd0f4b862d3a9ad74e0c184f9a945a47840abee159d1ebfc27ccacb2",
+   "size": 132924,
+   "version": "22.12.0-2+deb12u2"
+  },
+  "libpoppler126": {
+   "filename": "pool/main/p/poppler/libpoppler126_22.12.0-2+deb12u2_amd64.deb",
+   "sha256": "2d0b5fab03d5e074c3c6e4aeede1235652ddc3a093f51575f319c0ccf693d117",
+   "size": 1854444,
+   "version": "22.12.0-2+deb12u2"
+  },
+  "libpotrace0": {
+   "filename": "pool/main/p/potrace/libpotrace0_1.16-2_amd64.deb",
+   "sha256": "7c71d3ef2681073c9989e633cb16313e6843688881ac04fcd1afb08d8fd47ebd",
+   "size": 26248,
+   "version": "1.16-2"
+  },
+  "libpsl5": {
+   "filename": "pool/main/libp/libpsl/libpsl5_0.21.2-1_amd64.deb",
+   "sha256": "4f0d35610204e4e754b057748719744114621f2f6f4202d846c314860a981afb",
+   "size": 58684,
+   "version": "0.21.2-1"
   },
   "libqt5core5a": {
    "filename": "pool/main/q/qtbase-opensource-src/libqt5core5a_5.15.8+dfsg-11+deb12u3_amd64.deb",
@@ -1959,17 +2652,89 @@
    "size": 10328,
    "version": "5.15.8-2"
   },
+  "libreadline8": {
+   "filename": "pool/main/r/readline/libreadline8_8.2-1.3_amd64.deb",
+   "sha256": "e02ebbd3701cf468dbf98d6d917fbe0325e881f07fe8b316150c8d2a64486e66",
+   "size": 165760,
+   "version": "8.2-1.3"
+  },
+  "librevenge-0.0-0": {
+   "filename": "pool/main/libr/librevenge/librevenge-0.0-0_0.0.5-3_amd64.deb",
+   "sha256": "306d14e0403461cbc5958bab9bc72cd514a133ca05469d4501db8fd82d91f7eb",
+   "size": 286592,
+   "version": "0.0.5-3"
+  },
+  "librsvg2-2": {
+   "filename": "pool/main/libr/librsvg/librsvg2-2_2.54.7+dfsg-1~deb12u1_amd64.deb",
+   "sha256": "090f2ffbedb57727ee9b264e6ea6e66fe09773629739dd406931264b1bf14dc8",
+   "size": 2620240,
+   "version": "2.54.7+dfsg-1~deb12u1"
+  },
+  "librsvg2-common": {
+   "filename": "pool/main/libr/librsvg/librsvg2-common_2.54.7+dfsg-1~deb12u1_amd64.deb",
+   "sha256": "2e84a584acc49ee426c40737fff89a0585619328dfec4a8c5e216bc1c9599915",
+   "size": 21384,
+   "version": "2.54.7+dfsg-1~deb12u1"
+  },
+  "librtmp1": {
+   "filename": "pool/main/r/rtmpdump/librtmp1_2.4+20151223.gitfa8646d.1-2+b2_amd64.deb",
+   "sha256": "e1f69020dc2c466e421ec6a58406b643be8b5c382abf0f8989011c1d3df91c87",
+   "size": 60824,
+   "version": "2.4+20151223.gitfa8646d.1-2+b2"
+  },
+  "libsasl2-2": {
+   "filename": "pool/main/c/cyrus-sasl2/libsasl2-2_2.1.28+dfsg-10_amd64.deb",
+   "sha256": "11ee190ad39f8d7af441d2c8347388b9449434c73acc67b4b372445ac4152efa",
+   "size": 59712,
+   "version": "2.1.28+dfsg-10"
+  },
   "libselinux1": {
    "filename": "pool/main/libs/libselinux/libselinux1_3.4-1+b6_amd64.deb",
    "sha256": "2b07f5287b9105f40158b56e4d70cc1652dac56a408f3507b4ab3d061eed425f",
    "size": 73720,
    "version": "3.4-1+b6"
   },
+  "libsigc++-2.0-0v5": {
+   "filename": "pool/main/libs/libsigc++-2.0/libsigc++-2.0-0v5_2.12.0-1_amd64.deb",
+   "sha256": "60d62e980e199094e37a09c5896f736fc64354c0b0b9dbefb1b588ec26bc0bf9",
+   "size": 25732,
+   "version": "2.12.0-1"
+  },
   "libsm6": {
    "filename": "pool/main/libs/libsm/libsm6_1.2.3-1_amd64.deb",
    "sha256": "22a420890489023346f30fecef14ea900a0788e7bf959ef826aabb83944fccfb",
    "size": 35108,
    "version": "2:1.2.3-1"
+  },
+  "libsoup2.4-1": {
+   "filename": "pool/main/libs/libsoup2.4/libsoup2.4-1_2.74.3-1+deb12u1_amd64.deb",
+   "sha256": "d3eac276ef1db0230cba32b68f510eb694d25fd35b7c970c965d8fcc3398d319",
+   "size": 269304,
+   "version": "2.74.3-1+deb12u1"
+  },
+  "libsoup2.4-common": {
+   "filename": "pool/main/libs/libsoup2.4/libsoup2.4-common_2.74.3-1+deb12u1_all.deb",
+   "sha256": "5bcfb97f0ad0dcc2ec64c22cafd71acec5c557fb8b7d1e00fdcc2db6d8742585",
+   "size": 56240,
+   "version": "2.74.3-1+deb12u1"
+  },
+  "libsqlite3-0": {
+   "filename": "pool/main/s/sqlite3/libsqlite3-0_3.40.1-2+deb12u2_amd64.deb",
+   "sha256": "a8d78b40e9b4e422224aeebfe0e4dfc243f6acf3532490b0c05480d4283d41e2",
+   "size": 838808,
+   "version": "3.40.1-2+deb12u2"
+  },
+  "libssh2-1": {
+   "filename": "pool/main/libs/libssh2/libssh2-1_1.10.0-3+b1_amd64.deb",
+   "sha256": "d20a3ee34fa84ad8bd381e8be6e9c2c2ea32347cff5e1169c10e978d43f54f24",
+   "size": 178704,
+   "version": "1.10.0-3+b1"
+  },
+  "libssl3": {
+   "filename": "pool/main/o/openssl/libssl3_3.0.20-1~deb12u2_amd64.deb",
+   "sha256": "89be24b41bff568ee6e7caf5680a3d808e80315ed92e407056ce0fa7a5bda025",
+   "size": 2036016,
+   "version": "3.0.20-1~deb12u2"
   },
   "libstartup-notification0": {
    "filename": "pool/main/s/startup-notification/libstartup-notification0_0.12-6+b1_amd64.deb",
@@ -1988,6 +2753,12 @@
    "sha256": "013c07514a9e4933b2d5c098018695a6aa42d085dbc483ce2c094a954c8a1b0a",
    "size": 332372,
    "version": "252.39-1~deb12u2"
+  },
+  "libtasn1-6": {
+   "filename": "pool/main/libt/libtasn1-6/libtasn1-6_4.19.0-2+deb12u1_amd64.deb",
+   "sha256": "2c27c613b69be248d09432839ea3d3382f6ee27fabaa65987aa2d884cd00afda",
+   "size": 48596,
+   "version": "4.19.0-2+deb12u1"
   },
   "libthai-data": {
    "filename": "pool/main/libt/libthai/libthai-data_0.1.29-1_all.deb",
@@ -2019,6 +2790,12 @@
    "size": 108880,
    "version": "252.39-1~deb12u2"
   },
+  "libunistring2": {
+   "filename": "pool/main/libu/libunistring/libunistring2_1.0-2_amd64.deb",
+   "sha256": "d466bbfe011d764d793c1d9d777cad9c7cf65b938e11598f27408171ad95a951",
+   "size": 436708,
+   "version": "1.0-2"
+  },
   "libutempter0": {
    "filename": "pool/main/libu/libutempter/libutempter0_1.2.1-3_amd64.deb",
    "sha256": "e2bf3c7fb0ebd7d7966166d98320767adcd35a6d1eabc32220d8219c9efb1c0f",
@@ -2030,6 +2807,12 @@
    "sha256": "5fff398321da62d28a842bcbabd193d72ae21724962c029dc32b1dc6b2deaeaf",
    "size": 28784,
    "version": "2.38.1-5+deb12u3"
+  },
+  "libvisio-0.1-1": {
+   "filename": "pool/main/libv/libvisio/libvisio-0.1-1_0.1.7-1+b3_amd64.deb",
+   "sha256": "12e575aa936b7014cf99f4201d9761a10c58ac08dfa8d84349149a83740f709b",
+   "size": 304092,
+   "version": "0.1.7-1+b3"
   },
   "libwayland-client0": {
    "filename": "pool/main/w/wayland/libwayland-client0_1.21.0-1_amd64.deb",
@@ -2054,6 +2837,18 @@
    "sha256": "7259b7ce46444694ce536360ad53acb68eb3b47a7ff81d7b1b8a3939b2ac9918",
    "size": 285512,
    "version": "1.2.4-0.2+deb12u1"
+  },
+  "libwpd-0.10-10": {
+   "filename": "pool/main/libw/libwpd/libwpd-0.10-10_0.10.3-2+b1_amd64.deb",
+   "sha256": "5db2889c0d20c608837159e1c8ce11dd1d5031da82b0a201cf6ad682c939fd8f",
+   "size": 261340,
+   "version": "0.10.3-2+b1"
+  },
+  "libwpg-0.3-3": {
+   "filename": "pool/main/libw/libwpg/libwpg-0.3-3_0.3.3-1_amd64.deb",
+   "sha256": "c628e9e6dd1ee9600a681a1bce7a935baba77c208402ac0ca3a61524c2afa5bd",
+   "size": 76312,
+   "version": "0.3.3-1"
   },
   "libx11-6": {
    "filename": "pool/main/libx/libx11/libx11-6_1.8.4-2+deb12u2_amd64.deb",
@@ -2319,6 +3114,12 @@
    "size": 33228,
    "version": "1:0.9.10-1.1"
   },
+  "libxslt1.1": {
+   "filename": "pool/main/libx/libxslt/libxslt1.1_1.1.35-1+deb12u4_amd64.deb",
+   "sha256": "5bf795dc6374f744906d39a786024d98b2cb6b885c7776f5dc64eb4092b550a6",
+   "size": 231508,
+   "version": "1.1.35-1+deb12u4"
+  },
   "libxt6": {
    "filename": "pool/main/libx/libxt/libxt6_1.2.1-1.1_amd64.deb",
    "sha256": "f736fe003286af34935460662f52d32267703d6a1931580ca01641aedf00e8dd",
@@ -2342,6 +3143,24 @@
    "sha256": "98a8800dd1693dcf7e4fa3723c21de65be54a95800b6d6b734624fe1e5f6543b",
    "size": 520460,
    "version": "0.5.10-2"
+  },
+  "netsurf-common": {
+   "filename": "pool/main/n/netsurf/netsurf-common_3.10-1_all.deb",
+   "sha256": "cf63515c89b3473827348bb17f90528dd37dba8583b9b6d504763d065d83f31a",
+   "size": 164160,
+   "version": "3.10-1"
+  },
+  "netsurf-gtk": {
+   "filename": "pool/main/n/netsurf/netsurf-gtk_3.10-1+b3_amd64.deb",
+   "sha256": "b3c68c26f7122d908b0e755e0daa61a0ea1cd4b84d866422c4ff37cfffc5d559",
+   "size": 1418688,
+   "version": "3.10-1+b3"
+  },
+  "readline-common": {
+   "filename": "pool/main/r/readline/readline-common_8.2-1.3_all.deb",
+   "sha256": "69317523fe56429aa361545416ad339d138c1500e5a604856a80dd9074b4e35c",
+   "size": 68988,
+   "version": "8.2-1.3"
   },
   "ristretto": {
    "filename": "pool/main/r/ristretto/ristretto_0.12.4-1_amd64.deb",

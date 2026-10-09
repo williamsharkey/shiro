@@ -388,7 +388,8 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    symlink (dpkg lchowns NAME.dpkg-new links before their targets exist),
    and `fchownat` fails for a missing path. Ownership isn't kept; they
    check existence. Test: `fixtures/x86/lchown.c`.
-31. Same-instance fork, behind `BLINK_SAME_INSTANCE_FORK=1`: the fork child
+31. Same-instance fork (the default since patch 48; `BLINK_SAME_INSTANCE_FORK=0`
+   opts out): the fork child
    is a new System with its own guest thread in the parent's Blink instance
    (same wasm memory). Private pages are copied; pages of writable
    `MAP_SHARED` mappings move onto host pages both processes map
@@ -480,6 +481,51 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    read/poll/epoll when it expires, counting interval expirations. Blink
    passes milliseconds and its own realtime/monotonic "now", so absolute
    times are read on the timer's clock. Test: `fixtures/x86/timerfd.c`.
+46. Debugging aid: with `SHIRO_BLINK_CRASH=1` in a guest's environment a
+   fatal signal is reported on its stderr through the kernel (signal, rip,
+   fault address, the mapping rip is in, the code there, the words before
+   the return address, registers, Blink's backtrace); `=2` also keeps the
+   interpreter's last 1024 instructions (snapshot at the first fault or
+   signal) and the signal deliveries, and `SHIRO_BLINK_PROBE=addr,...`
+   logs registers and stack words at those addresses. Run with
+   `BLINK_WJIT=0` to see every instruction. Test: `fixtures/x86/segv.c`.
+47. `pop` to memory addressed through `%rsp` (`pop 0x88(%rsp)` in V8's
+   builtins) computes the address after the pop moves the stack pointer;
+   Blink computed it before (two arguments of one call, in an order up to
+   the compiler) and wrote 8 bytes low, over a return address: Debian's
+   `nodejs` crashed on any script (found with patch 46). Test:
+   `fixtures/x86/popmem.c` (native output).
+48. Same-instance fork is on by default (`BLINK_SAME_INSTANCE_FORK=0` gives
+   the old fork: a new worker from a snapshot, or a vfork-style child on
+   the parent's thread while writable `MAP_SHARED` memory is mapped).
+   LTP's syscalls with it on: 197/320 against 155/320 (unix/conformance's
+   A/B, no new failures or hangs).
+49. `CLOCK_REALTIME` and `gettimeofday` have sub-ms resolution
+   (`performance.now()` anchored to `Date.now()`, per thread). emscripten
+   reads them from `Date.now()`, whole ms, so two reads microseconds apart
+   could differ by 1 ms. vim's typeahead check (`inchar_loop` with
+   `wtime` 0) then computes its wait as `0 - elapsed = -1`, which blocks
+   until the next key with the typed one not yet shown: the vim stall
+   (4/30 runs of shell-stdio's `vim-keys.mjs`, 2/60 after this patch; the
+   rest are real ≥1 ms pauses between the two reads, which only a fix in
+   vim avoids). `SHIRO_BLINK_PROBE` prints all 16 registers. Test:
+   `fixtures/x86/realtime.c`.
+50. `nanosleep`, `clock_nanosleep` and `pause`/`sigsuspend` (which Blink
+   sleeps itself) show the process sleeping in `/proc/PID/stat`, as futex
+   waits do (patch 36): LTP waits for `S` before signalling a child
+   (pause01, signal01). Test: `fixtures/x86/sleepstate.c`.
+51. A `FUTEX_WAKE` grant goes only to a waiter that was waiting at the
+   wake. A thread or process that woke its peer and then waited on the same
+   word at once (LTP checkpoints: the value never changes) could take its
+   own grant and return, leaving the peer to time out (fork04, waitpid13).
+   Test: `fixtures/x86/futexpingpong.c`.
+
+The guest's kernel calls go over a pool of channels (`src/x86-engine/blink.ts`
+→ `public/engines/blink/host.mjs`). It starts at 6, and host.mjs asks the
+page for another (up to 64) while all are busy. Before, more threads or
+same-instance fork children blocked in the kernel than channels held up
+every other call of the instance (epoll_wait15/16). Test:
+`fixtures/x86/blockedkids.c`.
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.

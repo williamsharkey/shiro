@@ -1,0 +1,225 @@
+{
+ "format": 1,
+ "env": {
+  "date": "2026-10-09T10:22:52.598Z",
+  "git": {
+   "sha": "a5e66fb8519254f10baa40e7cb080041bf6f202f",
+   "short": "a5e66fb",
+   "branch": "unix/perf-fs-shell",
+   "dirty": false
+  },
+  "node": "v22.22.0",
+  "chromium": "141.0.7390.37",
+  "os": "Linux 6.18.44-fc-v80 x64",
+  "cpu": {
+   "model": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+   "count": 4
+  },
+  "memoryGiB": 15.7,
+  "quick": false,
+  "runs": 1,
+  "durationSec": 410,
+  "netcache": {
+   "hits": 3,
+   "misses": 0,
+   "failed": 0
+  }
+ },
+ "results": [
+  {
+   "name": "debian.rootfs.install",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 547.4,
+   "p90": 547.4,
+   "min": 547.4,
+   "max": 547.4,
+   "n": 1,
+   "samples": [
+    547.4
+   ],
+   "notes": "`debian install`: manifest + index fetch, placeholders for every path"
+  },
+  {
+   "name": "debian.rootfs.first_bash",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 922.8,
+   "p90": 922.8,
+   "min": 922.8,
+   "max": 922.8,
+   "n": 1,
+   "samples": [
+    922.8
+   ],
+   "notes": "first `/usr/bin/bash -c true` after install: fetches bash, libc, libtinfo chunks"
+  },
+  {
+   "name": "debian.rootfs.first_dpkg_list",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 4391,
+   "p90": 4391,
+   "min": 4391,
+   "max": 4391,
+   "n": 1,
+   "samples": [
+    4391
+   ],
+   "notes": "then `dpkg -l` (dpkg, its libraries, the status file)"
+  },
+  {
+   "name": "debian.rootfs.fetched",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MB",
+   "median": 4.8,
+   "p90": 4.8,
+   "min": 4.8,
+   "max": 4.8,
+   "n": 1,
+   "samples": [
+    4.8
+   ],
+   "notes": "chunk bytes fetched for the two commands (compressed)"
+  },
+  {
+   "name": "debian.rootfs.storage",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 14.63,
+   "p90": 14.63,
+   "min": 14.63,
+   "max": 14.63,
+   "n": 1,
+   "samples": [
+    14.63
+   ],
+   "notes": "navigator.storage.estimate().usage after install + those commands (IndexedDB + chunk cache)"
+  },
+  {
+   "name": "debian.warm.first_prompt",
+   "mode": "isolated",
+   "cache": "warm",
+   "unit": "ms",
+   "median": 207.8,
+   "p90": 207.8,
+   "min": 207.8,
+   "max": 207.8,
+   "n": 1,
+   "samples": [
+    207.8
+   ],
+   "notes": "reload of a Debian-mode page: navigation → prompt"
+  },
+  {
+   "name": "debian.warm.first_bash",
+   "mode": "isolated",
+   "cache": "warm",
+   "unit": "ms",
+   "median": 330.5,
+   "p90": 330.5,
+   "min": 330.5,
+   "max": 330.5,
+   "n": 1,
+   "samples": [
+    330.5
+   ],
+   "notes": "`/usr/bin/bash -c true` after the reload"
+  },
+  {
+   "name": "debian.warm.chunks_fetched",
+   "mode": "isolated",
+   "cache": "warm",
+   "unit": "count",
+   "median": 1,
+   "p90": 1,
+   "min": 1,
+   "max": 1,
+   "n": 1,
+   "samples": [
+    1
+   ],
+   "notes": "chunks fetched after the reload (0 = no network)"
+  },
+  {
+   "name": "debian.apt.update",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 82460,
+   "p90": 82460,
+   "min": 82460,
+   "max": 82460,
+   "n": 1,
+   "samples": [
+    82460
+   ],
+   "notes": "trixie + updates + security indexes (10 MB) from the mirror cache; one sample"
+  },
+  {
+   "name": "debian.apt.install.hello",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 58708,
+   "p90": 58708,
+   "min": 58708,
+   "max": 58708,
+   "n": 1,
+   "samples": [
+    58708
+   ],
+   "notes": "`apt-get install -y hello` incl. dependencies; then `hello` 214 ms; one sample"
+  },
+  {
+   "name": "debian.apt.install.jq",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 60188,
+   "p90": 60188,
+   "min": 60188,
+   "max": 60188,
+   "n": 1,
+   "samples": [
+    60188
+   ],
+   "notes": "`apt-get install -y jq` incl. dependencies; then `jq --version` 231 ms; one sample"
+  },
+  {
+   "name": "debian.apt.install.python3-minimal",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 161299,
+   "p90": 161299,
+   "min": 161299,
+   "max": 161299,
+   "n": 1,
+   "samples": [
+    161299
+   ],
+   "notes": "`apt-get install -y python3-minimal` incl. dependencies; then `python3 -c \"print(1)\"` 3482 ms; one sample"
+  },
+  {
+   "name": "debian.apt.storage",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 307.6,
+   "p90": 307.6,
+   "min": 307.6,
+   "max": 307.6,
+   "n": 1,
+   "samples": [
+    307.6
+   ],
+   "notes": "storage after update + the three installs"
+  }
+ ]
+}

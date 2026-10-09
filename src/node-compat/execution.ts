@@ -173,7 +173,7 @@ export async function executeNodeScript(
         case 'node:path': return createPathModule(ctx);
         case 'fs':
         case 'node:fs': {
-          const fsMod = createFsModule({ ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir });
+          const fsMod = createFsModule({ ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir, trackAsync });
           fsMod.promises = trackModule(fsMod.promises);
           return fsMod;
         }
@@ -244,11 +244,15 @@ export async function executeNodeScript(
       const parentPort: any = mainWT._makeEmitter({});
       let alive = true;
       const clone = (v: any) => { try { return structuredClone(v); } catch { return v; } };
-      parentPort.postMessage = (v: any) => { const c = clone(v); _baseST(() => { if (!worker._exited) worker.emit('message', c); }, 0); };
+      // A message between the threads is activity from post to handler (pnpm
+      // unref()s its workers; under load the hop outlasted the idle window and
+      // pnpm exited mid-install)
+      const deliver = (fn: () => void) => { trackAsync(new Promise<void>((done) => { _baseST(() => { try { fn(); } finally { done(); } }, 0); })); };
+      parentPort.postMessage = (v: any) => { const c = clone(v); deliver(() => { if (!worker._exited) worker.emit('message', c); }); };
       parentPort.start = () => {};
       parentPort.close = () => { alive = false; };
       parentPort.ref = parentPort.unref = () => parentPort;
-      worker._toWorker = (v: any) => { const c = clone(v); _baseST(() => { if (alive) parentPort.emit('message', c); }, 0); };
+      worker._toWorker = (v: any) => { const c = clone(v); deliver(() => { if (alive) parentPort.emit('message', c); }); };
       worker._terminate = () => { alive = false; parentPort.removeAllListeners(); };
       const workerWT = { ...mainWT, isMainThread: false, parentPort, workerData: clone(options.workerData), threadId: worker.threadId };
       const workerBuiltin = (name: string) => (name === 'worker_threads' || name === 'node:worker_threads') ? workerWT : getBuiltinModule(name);

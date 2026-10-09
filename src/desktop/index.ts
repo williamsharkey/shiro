@@ -18,6 +18,8 @@ import { WindowManager, isDesktopShortcut, type AppDescriptor, type DesktopWindo
 import { ICONS, GLYPHS, appIcon } from './icons';
 import { TerminalView, takeParkedMain, hasParkedMain, applyTerminalTheme, useMonoFont, allTerminalViews, terminalTheme, TERMINAL_FONT } from './terminal-app';
 import { initNetwork } from './network';
+import { loadSession, place, restoreSession, trackSession } from './session';
+import { maybeShowTour, showTour } from './tour';
 import { BRAND } from '../brand';
 
 export interface DesktopDeps {
@@ -103,10 +105,13 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   const appBtn = el('button', 'sd-mb-item sd-mb-app', 'Terminal');
   const menusEl = el('div', 'sd-mb-menus');
   const spacer = el('div', 'sd-mb-spacer');
+  const searchBtn = el('button', 'sd-mb-item sd-mb-status', GLYPHS.search);
+  searchBtn.title = 'Search apps, commands and files (Ctrl+Space)';
+  searchBtn.setAttribute('aria-label', 'Search');
   const themeBtn = el('button', 'sd-mb-item sd-mb-status');
   const netBtn = el('button', 'sd-mb-item sd-mb-status');
   const clock = el('div', 'sd-mb-item sd-mb-clock');
-  menubar.append(logoBtn, appBtn, menusEl, spacer, themeBtn, netBtn, clock);
+  menubar.append(logoBtn, appBtn, menusEl, spacer, searchBtn, themeBtn, netBtn, clock);
 
   // ── Dock ──
   const dockWrap = el('div', 'sd-dock-wrap');
@@ -167,7 +172,8 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   // Terminals start in the desktop's palette and font (no re-theme, re-measure later)
   ShiroTerminal.optionOverrides = { theme: terminalTheme(wm.theme()), fontFamily: TERMINAL_FONT };
 
-  // The first window: the main terminal, front and center
+  // The first window: the main terminal, front and center (or where it was last time)
+  const session = wm.compact ? [] : loadSession();
   const first = (() => {
     const wa = wm.workArea();
     const width = Math.min(860, Math.max(320, wa.width - 100));
@@ -180,6 +186,8 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     const view = new TerminalView(win, wm, termDeps, win.body);
     (win as { content?: unknown }).content = view;
     view.adoptMain(deps.terminalEl, null);
+    const saved = session.find(s => s.id === 'terminal');
+    if (saved) place(win, saved, wa);
     return { win, view };
   })();
 
@@ -335,11 +343,17 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
       { label: 'Zoom', shortcut: 'Alt+Shift+↑', disabled: !w, action: () => w?.zoom() },
       { label: 'Tile Left', shortcut: 'Alt+Shift+←', disabled: !w, action: () => w?.snap('left') },
       { label: 'Tile Right', shortcut: 'Alt+Shift+→', disabled: !w, action: () => w?.snap('right') },
+      { label: 'Top Left Quarter', shortcut: 'Ctrl+Alt+U', disabled: !w, action: () => w?.snap('top-left') },
+      { label: 'Top Right Quarter', shortcut: 'Ctrl+Alt+I', disabled: !w, action: () => w?.snap('top-right') },
+      { label: 'Bottom Left Quarter', shortcut: 'Ctrl+Alt+J', disabled: !w, action: () => w?.snap('bottom-left') },
+      { label: 'Bottom Right Quarter', shortcut: 'Ctrl+Alt+K', disabled: !w, action: () => w?.snap('bottom-right') },
       { label: 'Cycle Windows', shortcut: 'Alt+`', action: () => wm.cycle() },
       'separator',
       ...wm.visibleOrder().map(x => ({ label: x.title || x.appId || x.id, checked: x === w, action: () => x.focus() })),
     ] };
     const help: MenuSpec = { title: 'Help', items: [
+      { label: 'Search…', shortcut: 'Ctrl+Space', action: () => openSpotlight() },
+      { label: 'Welcome Tour', action: () => showTour(ctx) },
       { label: 'Getting Started', action: () => openTerminal({ command: 'help' }) },
       { label: 'Keyboard Shortcuts', action: () => showToast(root, SHORTCUTS_HTML, 9000) },
       { label: 'Desktop & /dom docs', action: () => window.open('https://github.com/williamsharkey/shiro/blob/main/docs/DESKTOP.md', '_blank', 'noopener') },
@@ -454,7 +468,15 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     const w = wm.focused();
     let handled = true;
     if (e.code === 'Backquote') wm.cycle(e.shiftKey);
-    else switch (e.code) {
+    else if (e.code === 'Space') openSpotlight();
+    else if (e.metaKey) {
+      if (e.code === 'KeyN') openTerminal({ cwd: '/home/user' });
+      else if (e.code === 'KeyW') w?.close();
+      else handled = false;
+    } else if (e.ctrlKey && e.altKey) {
+      const q = ({ KeyU: 'top-left', KeyI: 'top-right', KeyJ: 'bottom-left', KeyK: 'bottom-right' } as const)[e.code as 'KeyU'];
+      if (q) w?.snap(q); else handled = false;
+    } else switch (e.code) {
       case 'Enter': openTerminal({ cwd: '/home/user' }); break;
       case 'KeyT': termView() ? termView()!.newTab() : openTerminal({ cwd: '/home/user' }); break;
       case 'KeyW': w?.close(); break;
@@ -472,6 +494,10 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
 
   window.addEventListener('resize', () => { tick(); });
 
+  // The launcher is its own chunk, loaded on first use
+  const openSpotlight = () => { void import('./spotlight').then(m => m.toggleSpotlight(ctx)); };
+  searchBtn.addEventListener('click', (e) => { e.stopPropagation(); openSpotlight(); });
+
   return {
     wm,
     ctx,
@@ -485,6 +511,13 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
       idle(() => useMonoFont(() => [...new Set([term, ...allTerminalViews().flatMap(v => v.terminals())])]), { timeout: 1500 });
       // Focusing forces a layout of the whole desktop: do it with the first frame
       requestAnimationFrame(() => term.term.focus());
+      // Last time's other windows, then keep the session saved; a first visit gets the tour
+      idle(() => {
+        void restoreSession(wm, session, openTerminal).finally(() => {
+          trackSession(wm);
+          setTimeout(() => maybeShowTour(ctx), 1200);
+        });
+      }, { timeout: 2000 });
     },
   };
 }
@@ -495,8 +528,8 @@ function prefersReducedMotion(): boolean {
 
 const SHORTCUTS_HTML = `<b>Keyboard shortcuts</b><div class="sd-small sd-muted" style="margin-top:6px;line-height:1.7">
 Alt+Shift+Enter — new terminal window<br>Alt+Shift+T — new tab<br>Alt+Shift+W — close window<br>
-Alt+Shift+M — minimize · Alt+Shift+↑ zoom<br>Alt+Shift+← / → — tile left / right<br>Alt+\` — cycle windows<br>
-Alt+Shift+F — Files · Alt+Shift+, — Settings</div>`;
+Alt+Shift+M — minimize · Alt+Shift+↑ zoom<br>Alt+Shift+← / → — tile left / right<br>Ctrl+Alt+U / I / J / K — quarters<br>Alt+\` — cycle windows<br>
+Ctrl+Space — search · Alt+Shift+F — Files · Alt+Shift+, — Settings<br>Cmd+N, Cmd+W, Cmd+\` too, where the browser lets them through</div>`;
 
 export function showToast(root: HTMLElement, html: string, ms = 5000): void {
   const t = el('div', 'sd-toast', html);

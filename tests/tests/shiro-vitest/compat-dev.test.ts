@@ -915,8 +915,10 @@ lockfileVersion: '9.0'
     expect(r.exitCode).toBe(0);
     expect(r.out).toMatch(/> semver 1\.2\.3 -r \^1\n\n1\.2\.3\n1\.3\.0\n2\.0\.0\n$/);
     // A reinstall from the store, offline
-    r = await sh(shell, `cd /home/user/pq && rm -rf node_modules && ${pnpm} install --offline > /dev/null && node app.js`);
-    expect(r.out).toContain('true false true');
+    r = await sh(shell, `cd /home/user/pq && rm -rf node_modules && ${pnpm} install --offline; echo "rc=$?"`);
+    expect(r.out, r.out + r.err).toMatch(/rc=0\n$/);
+    r = await sh(shell, 'cd /home/user/pq && ls node_modules node_modules/.pnpm; node app.js; echo "rc=$?"');
+    expect(r.out, r.out + r.err).toContain('true false true');
   }, 300_000);
 
   it('yarn 1: add from the registry, lockfile, run, bins, offline reinstall from its cache', async () => {

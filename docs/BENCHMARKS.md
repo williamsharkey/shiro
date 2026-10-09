@@ -261,6 +261,30 @@ and writing files dominates. Start-up is Blink loading ~70–100 shared
 libraries and toolkit init, so a warm start is barely faster than the first.
 GTK 3 needed Blink patch 0029 (it spun in cairo/pixman SSE compares).
 
+#### First launch, click to window (fresh profile)
+
+`tests/browser/gui-first-launch.mjs`: each app opened like a click
+(`desktop.openApp`) in a fresh browser profile, Chromium 141, 4 vCPUs, local
+server with its .deb cache warm. Before = the installer above (one xz decode
+at a time on the page's thread, triggers in sequence); after = decoding in up
+to 4 workers, largest packages first, triggers only when needed and in
+parallel, icon/loader caches as overlays (docs/GUI.md).
+
+| app | download | install before → after | window before → after | warm window |
+|---|---:|---:|---:|---:|
+| L3afpad | 33 MB | 11.4 → 4.9 s | 20.9 → 12.5 s | 4.9 s |
+| Mousepad | 42 MB | 13.4 → 6.2 s | 33.5 → 24.2 s | 17.1 s |
+| Ristretto | 32 MB | 9.9 → 4.9 s | 21.0 → 14.8 s | 7.0 s |
+| GIMP (main window) | 51 MB | 19 → 6.3 s | 290 → 247 s | 63 s |
+| Inkscape (welcome dialog) | 83 MB | — → 15 s | — → 61 s | — |
+| NetSurf (page rendered) | 57 MB | — | — → 24.7 s | — |
+
+Packages from tabcomputer.com's mirror instead (`--debs`, a real network):
+L3afpad 13.0 s, Ristretto 15.3 s to the window. Boot is unchanged except
+the dock: one "Apps" entry (inline SVG) instead of five GUI app icons; app
+icons (`public/gui/icons/`) load only for installed apps and in the Apps
+window.
+
 ### unix/desktop — the desktop shell (menu bar, dock, windows) on the boot path
 
 The Unix edition boots to the desktop (docs/DESKTOP.md); shiro.computer keeps
@@ -305,6 +329,12 @@ three `data:` SVGs (traffic-light glyphs) that CDP counts. The +22 MiB RSS is
 composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
+
+### unix/shell-stdio 5 — execute() with a sink collects kernel programs' output
+
+`node bench/ab.mjs HEAD~1 HEAD --suites shell,kernel --quick` (e00d371 →
+ede6ae6, 3 rounds × 5 runs, alpha 0.01): all 24 metrics unchanged (the
+terminal resolution added to every execute() costs nothing measurable).
 
 ### unix/shell-stdio 4 — job control in a kernel sh; kernel background jobs
 
@@ -972,6 +1002,92 @@ commit before: no shell metric is outside noise (`redirect_append_100`
 within 8%; `pipeline_seq_grep_wc` 41 → 32 ms and `ls_la_1000` 4.0 → 4.8 ms
 have overlapping runs).
 
+### unix/perf-kernel, round 8: Blink memory (big binaries, teardown)
+
+Where a big Blink process's memory goes (`gh --version`, a 50 MB Go binary;
+the renderer idles at ~350 MiB):
+
+- wasm memory peaks at 117 MiB (vim: 64 MiB). Most of it is the mapped
+  binary plus the Go heap.
+- SHIROFS (host.mjs) loaded the whole file into a JS array on open. MEMFS
+  `mmap` then copied the mapped ranges into wasm memory, so the binary was
+  held twice at the peak.
+- The main thread holds the file once: the FileSystem cache and the kernel
+  inode share one buffer, so the VFS doesn't double it.
+- After exit, the Worker tree lingered 4–8 s. Chromium takes 2 s to
+  terminate a Worker blocked in a wait or a loop, while one idle in its event
+  loop goes in ~13 ms. host.mjs parked in `Atomics.wait` after exit_group,
+  and Blink's pthread Workers (the guest's threads, parked in futex waits) are
+  only terminated once their parent is gone. That is 2 s, then another 2 s.
+
+Changes, all in public/engines/blink/host.mjs:
+
+- SHIROFS reads and maps files of 1 MiB or more through `pread64`. A mapping
+  gets a fresh MEMFS block filled straight from the kernel, and peeking reads
+  (ELF headers) go to the kernel too. A stream that has read 1 MiB gets the
+  file loaded as before, and writes, truncation and `msync` load it first.
+  A test reads, maps and writes a 3 MiB file every way from a static C
+  program.
+- After exit_group, host.mjs `throw 'unwind'`s back to its event loop
+  (messages are ignored from then on) instead of parking.
+- Not done: terminating the pthread Workers from host.mjs at exit. It left
+  zombie Workers and about 100 MiB per run. Blink waking its own threads at
+  exit would cut the remaining 2 s; that is with perf-blink. Read-only file
+  mappings can't be shared across processes: each Blink process has its own
+  wasm memory.
+
+New bench metrics: `x86.blink.release_ms.gh_version` (time after exit until
+the renderer has given back 3/4 of the peak) and
+`x86.blink.peak_rss.vim_startup`.
+
+Interleaved A/B on the same build, host.mjs swapped (three suite passes,
+5 runs each; files `perf-kernel-r8-base.json` / `perf-kernel-r8.json` are
+the third pass):
+
+| metric | before | after |
+|---|---|---|
+| `peak_rss.gh_version` | 219 / 217 / 201 MiB | 175 / 165 / 176 MiB |
+| `release_ms.gh_version` | 4093 / 4092 / 4095 ms | 2077 / 2077 / 2075 ms |
+| `peak_rss.vim_startup` | 42 / 32 / 41 MiB | 24 / 17 / 30 MiB |
+| `gh_version` | 5027 / 5950 / 5253 ms | 5068 / 5339 / 5116 ms |
+| `vim_startup` | 1352 / 1529 / 1487 ms | 1613 / 1767 / 1442 ms |
+| `go_hello` | 165 / 204 / 184 ms | 166 / 168 / 151 ms |
+
+The vim_startup outliers in the first two passes did not reproduce: alone,
+10 runs, twice, base 1399 / 1462 ms and new 1364 / 1391 ms.
+
+Other measurements:
+
+- Five `gh --version` runs back to back: steady renderer RSS 723 → ~500 MiB,
+  and the Worker count stays at 4 (both variants free everything within
+  6 s).
+- `bench/.cache/mem.mjs` probe, renderer RSS: gh peak +238 → +190 MiB;
+  vim +91 → +93 MiB (its binary is small).
+- `codex --version` not measured: running that downloaded binary is not
+  cleared in this session.
+
+### unix/perf-kernel, round 9: epoll_wakeup and pty_echo after a5e66fb → 7382bdc
+
+The coordinator's `ab.mjs a5e66fb 7382bdc` showed `kernel.epoll_wakeup`
+37.2 → 47.4 µs and `kernel.pty_echo.kernel` 0.13 → 0.14 ms.
+
+- **epoll_wakeup:** conformance's EPOLLEXCLUSIVE and fairness work added
+  three costs to every epoll_wait: a `.finally()` promise hop, a
+  reported-files array per collect, and a copy of the interest map per
+  scan. The waiter count is now kept in try/finally, and the array is
+  allocated only when something is reported. Rotation happens only when more
+  than one file is watched, and the map is scanned in place. A test covers
+  the rotation (a full events array still reports every ready fd).
+  - A/B against 7382bdc, 5 rounds: 109 → 87.5 µs (−23%, every round).
+- **pty_echo.kernel:** bisected along integration's first-parent merges
+  (5 rounds per step, against a5e66fb). Every merge was within ±2%
+  (p ≥ 0.18). The last one (7382bdc, a subshell change in shell.ts) was −4%
+  against its parent. No single merge carries the regression, and pty.ts
+  didn't change in the range.
+- **Both, a5e66fb → this branch, 5 rounds:** `epoll_wakeup` 100.1 → 96.8 µs
+  (−3%, p 0.41) and `pty_echo.kernel` 0.245 → 0.245 ms. Both are back
+  within noise.
+
 ### unix/perf-fs-shell 7 — 1d9582a → bb39a38 regressions: shell-stdio's per-command pass; ab.mjs decides on rounds
 
 The coordinator's `ab.mjs 1d9582a bb39a38 --suites boot,kernel,shell,wasm
@@ -1012,6 +1128,78 @@ Browser A/B (`ab.mjs origin/unix/integration --suites shell`, 5 rounds × 7):
 94.5 ms, others within noise; none significant at the bootstrap level, as
 expected for a shift this size. Full suite and conformance (shell-spec,
 busybox) green.
+
+### unix/perf-fs-shell 8 — apt: native `store` method (index decompression)
+
+Where apt's time goes in Chromium (integration ecd719e, per-process timeline
+from temporary kernel instrumentation; the main thread is >90% idle, so the
+cost is CPU inside the x86 engine, not Shiro's kernel or IndexedDB):
+
+| `apt-get update` (72 s) | s |
+|---|---:|
+| fetch + InRelease signature checks (`methods/sqv`, `sqv`) | ~9 |
+| `methods/store`: xz-decode trixie's 9.7 MB `Packages.xz` to 56 MB and hash it | 33 |
+| "Reading package lists": pkgcache.bin + srcpkgcache.bin build (apt CPU) | 28 |
+
+| `apt-get install -y hello` (49 s) | s |
+|---|---:|
+| apt cache load + resolve | 14 |
+| `dpkg-preconfigure --apt` (apt-utils' debconf hook: Perl + apt-extracttemplates) | 20 |
+| dpkg unpack | 4 |
+| configure + apt's post-run cache reads | 7 |
+
+Filesystem syscalls (openat/newfstatat/read/fsync) total under 1 s per
+install; dpkg's 24 fsyncs cost 15 ms, so batching dpkg's writes would not
+help. Asking apt for uncompressed indexes doesn't work either
+(`Acquire::CompressionTypes::Order` with `uncompressed` first, even after
+`#clear`: apt still fetches `Packages.xz` by hash).
+
+Change: `/usr/lib/apt/methods/store` is diverted (overlay policy, like the
+http method) to `shiro-apt-store` (`src/debian/apt-store.ts`), which speaks
+apt's method protocol and decodes with Shiro's xz/gz/bz2/zstd codecs and
+`crypto.subtle` hashes in the page; apt still checks size and hashes against
+the signed Release. Lists are byte-identical. `apt-store.test.ts` covers
+the protocol (gz, xz, plain, GzipIndexes-style copy, missing file).
+
+`bench/run.mjs --suites debian --modes isolated`, one sample each
+(`integration-ecd719e-debian-local.json` → `perf-fs-shell-8-debian.json`):
+
+| metric | before | after |
+|---|---:|---:|
+| debian.apt.update | 82.5 s | 45.6 s (1.8×) |
+| debian.apt.install.hello | 58.7 s | 48.7 s |
+| debian.apt.install.jq | 60.2 s | 52.9 s |
+| debian.apt.install.python3-minimal | 161.3 s | 152.8 s |
+
+The rest is not Shiro-side I/O: the package cache build and dependency
+resolution are apt's own CPU under Blink (perf-blink), and `dpkg-preconfigure`
+(20 s per install, a no-op under `DEBIAN_FRONTEND=noninteractive`) is a
+Debian-config decision proposed to the debian workstream.
+
+### unix/perf-fs-shell 9 — apt: dpkg-preconfigure is a no-op under DEBIAN_FRONTEND=noninteractive
+
+apt-utils' 70debconf hook runs `dpkg-preconfigure --apt` before every dpkg
+run: ~20 s per install under the x86 engine (Perl, debconf,
+apt-extracttemplates re-reading apt's cache), with nothing to ask under
+`DEBIAN_FRONTEND=noninteractive`. As agreed with the debian workstream,
+`/usr/sbin/dpkg-preconfigure` is diverted (overlay policy, stub) to
+`shiro-dpkg-preconfigure` (`src/debian/preconfigure.ts`): with that
+variable set it reads apt's list to EOF and exits 0 (templates and config
+scripts load at configure time through debconf's confmodule, Debian's path
+without apt-utils); any other frontend runs Debian's script, kept as
+`dpkg-preconfigure.debian`, with the same arguments and stdio. Tests:
+`dpkg-preconfigure.test.ts`.
+
+`bench/run.mjs --suites debian --modes isolated`, one sample each, against
+the same baseline as entry 8 (`perf-fs-shell-9-debian.json`, with the native
+store method too):
+
+| metric | baseline | entry 8 | now |
+|---|---:|---:|---:|
+| debian.apt.update | 82.5 s | 45.6 s | 48.8 s |
+| debian.apt.install.hello | 58.7 s | 48.7 s | 26.6 s (2.2×) |
+| debian.apt.install.jq | 60.2 s | 52.9 s | 32.6 s (1.8×) |
+| debian.apt.install.python3-minimal | 161.3 s | 152.8 s | 141.5 s |
 
 ## Results
 

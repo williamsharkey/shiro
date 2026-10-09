@@ -28,6 +28,19 @@ describe('Node.js Module Compatibility', () => {
 
   // ─── fs module (~15 tests) ──────────────────────────────────────────────
 
+  describe('require resolution', () => {
+    it("tries .json as Node does (uvu's CLI: require('./package')), and the exact file first", async () => {
+      await fs.mkdir('/tmp/nc-req', { recursive: true });
+      await fs.writeFile('/tmp/nc-req/package.json', '{"version":"1.2.3"}');
+      await fs.writeFile('/tmp/nc-req/tool', 'module.exports = "exact";');
+      await fs.writeFile('/tmp/nc-req/tool.js', 'module.exports = "with .js";');
+      await fs.writeFile('/tmp/nc-req/main.js', 'console.log(require("./package").version, require("./tool"));');
+      const ctx = createCtx(shell, fs, ['/tmp/nc-req/main.js']);
+      expect(await nodeCmd.exec(ctx)).toBe(0);
+      expect(ctx.stdout).toContain('1.2.3 exact');
+    });
+  });
+
   describe('fs', () => {
     it('readFileSync with utf8 encoding', async () => {
       await fs.writeFile('/tmp/nc-fs-read.txt', 'hello fs');

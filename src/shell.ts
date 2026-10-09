@@ -387,7 +387,7 @@ export function splitEnvPrefix(segment: string): { assignments: ([string, string
  * kernel jobs keep the tty for stdin and stderr, as in bash, but their stdout
  * is captured instead of going to the screen.
  */
-function capturingStdout<T extends object>(term: T): T {
+export function capturingStdout<T extends object>(term: T): T {
   return new Proxy(term, {
     get(t, k) {
       if (k === 'captureStdout') return true;
@@ -929,8 +929,7 @@ export class Shell {
     let stderr = '';
     const out = (s: string) => { stdout += s; };
     const err = (s: string) => { stderr += s; };
-    let exitCode = await child.execute(cmd, out, err, false, this.terminal ? capturingStdout(this.terminal) : undefined);
-    exitCode = await child.finishSubshell(exitCode, out, err);
+    const exitCode = await child.runSubshell(cmd, out, err, this.terminal ? capturingStdout(this.terminal) : undefined);
     this.substStatus = exitCode;
     return { stdout, stderr, exitCode };
   }
@@ -1019,6 +1018,50 @@ export class Shell {
     remote: boolean = false,
     terminalOverride?: any,
     skipHistory: boolean = false,
+  ): Promise<number> {
+    // No terminal given: a nested call made by the shell itself (a function,
+    // loop or if body) runs on the terminal of the call around it; a builtin
+    // calling back with its own sink collects the output like $(...), kernel
+    // programs included (their stdout doesn't go to the screen)
+    if (terminalOverride === undefined) {
+      terminalOverride = this.inCommand > 0
+        ? (this.terminal ? capturingStdout(this.terminal) : undefined)
+        : this.activeTerminal;
+    }
+    const outerTerminal = this.activeTerminal;
+    const outerInCommand = this.inCommand;
+    this.activeTerminal = terminalOverride;
+    this.inCommand = 0;
+    try {
+      return await this.executeOn(line, writeStdout, writeStderr, remote, terminalOverride, skipHistory);
+    } finally {
+      this.activeTerminal = outerTerminal;
+      this.inCommand = outerInCommand;
+    }
+  }
+
+  /** The terminal of the execute() in progress (undefined: the shell's own) */
+  private activeTerminal: any = undefined;
+  /** A builtin (Command.exec) is running: an execute() it makes is its own */
+  private inCommand = 0;
+
+  /** Run a builtin; execute() calls it makes without a terminal collect their output */
+  private async runCommand(cmd: { exec(ctx: CommandContext): Promise<number> }, ctx: CommandContext): Promise<number> {
+    this.inCommand++;
+    try {
+      return await cmd.exec(ctx);
+    } finally {
+      this.inCommand--;
+    }
+  }
+
+  private async executeOn(
+    line: string,
+    writeStdout: (s: string) => void,
+    writeStderr: ((s: string) => void) | undefined,
+    remote: boolean,
+    terminalOverride: any,
+    skipHistory: boolean,
   ): Promise<number> {
     const depth = this.executeDepth;
     const suppressed = this.errexitSuppressed;
@@ -1658,15 +1701,7 @@ export class Shell {
           const child = this.fork();
           child.injectedStdin = heredocStdin || null;
           if (heredocStdin) child.kernelStdinLive = false;
-          try {
-            exitCode = await child.execute(inner, writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
-            exitCode = await child.finishSubshell(exitCode, writeStdout, stderrWriter);
-          } catch (e) {
-            // An expansion error (${x?msg}, bad substitution) ends just the subshell
-            if (e instanceof ExitSignal || e instanceof ReturnSignal) exitCode = e.code;
-            else if (e instanceof Error && e.name !== 'AbortError') { stderrWriter(`shiro: ${e.message}\r\n`); exitCode = 1; }
-            else throw e;
-          }
+          exitCode = await child.runSubshell(inner, writeStdout, stderrWriter, terminalOverride || this.terminal);
           this.lastExitCode = exitCode;
           this.env['?'] = String(exitCode);
           continue;
@@ -1863,6 +1898,13 @@ export class Shell {
             }
             if (exitCode === 0) await this.applyOutputRedirects('', '', redirects, false, writeStdout, stderrWriter);
             if (this.redirectFailed) { exitCode = 1; this.redirectFailed = false; }
+            // `x=$(cmd) >file`: assignments with no command stay set; the status is the last $(…)'s
+            if (envPrefix) {
+              prefixPersists = true;
+              if (exitCode === 0) exitCode = this.substStatus ?? 0;
+              // ...as plain assignments: a new or unexported variable stays unexported
+              for (const [k, v] of prefixEnvSaved) if (v === undefined || prefixWasLocal.has(k)) this.localVars.add(k);
+            }
             this.lastExitCode = exitCode;
             this.env['?'] = String(exitCode);
           }
@@ -3732,7 +3774,7 @@ export class Shell {
             exitCode = live
               ? await this.execWithLiveStdin(cmd, ctx, i === pipeline.length - 1 && !redirects.some(r => r.type !== '<') &&
                 writesTo(writeStdout, this.kernelStdio!.out) && writesTo(stderrWriter, this.kernelStdio!.err))
-              : await cmd.exec(ctx);
+              : await this.runCommand(cmd, ctx);
           } catch (e: any) {
             ctx.stderr += e.message + '\n';
             exitCode = 1;
@@ -6149,6 +6191,17 @@ export class Shell {
   }
 
   /** A subshell has finished with `code`: its EXIT trap runs now (an `exit` in it already ran it) */
+  /** Run `inner` as this (forked) shell's ( … ) body: an expansion error (set -u, ${x?msg}, bad substitution) ends just the subshell */
+  async runSubshell(inner: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void, terminal = this.terminal): Promise<number> {
+    try {
+      return await this.finishSubshell(await this.execute(inner, writeStdout, writeStderr, false, terminal, true), writeStdout, writeStderr);
+    } catch (e) {
+      if (e instanceof ExitSignal || e instanceof ReturnSignal) return e.code;
+      if (e instanceof Error && e.name !== 'AbortError') { writeStderr(`shiro: ${e.message}\r\n`); return 1; }
+      throw e;
+    }
+  }
+
   async finishSubshell(code: number, writeStdout: (s: string) => void, writeStderr: (s: string) => void): Promise<number> {
     if (this.traps.has('EXIT')) {
       this.lastExitCode = code;
@@ -6301,7 +6354,7 @@ export class Shell {
       if (this.injectedStdin) child.kernelStdinLive = false;
       this.injectedStdin = null;
       const inner = input.slice(1, -1).trim();
-      return inner ? child.finishSubshell(await child.execute(inner, writeStdout, writeStderr, false, this.terminal, true), writeStdout, writeStderr) : 0;
+      return inner ? child.runSubshell(inner, writeStdout, writeStderr, this.terminal) : 0;
     }
     if (isBraceGroup(input)) {
       // { list; } runs in the current shell
@@ -7316,7 +7369,7 @@ export class Shell {
     const ks = this.kernelStdio!;
     if (stream) { ctx.streamStdout = ks.out; ctx.streamStderr = ks.err; }
     const { execLazyStdin } = await import('./shell-stdio');
-    return execLazyStdin(cmd, ctx, () => ks.readAll());
+    return this.runCommand({ exec: (c) => execLazyStdin(cmd, c, () => ks.readAll()) }, ctx);
   }
 
   /**
@@ -7736,7 +7789,7 @@ export class Shell {
     const cmd = this.commands.get(base);
     if (cmd && !packageShadows(this.fs).has(base)) {
       ctx.args = argv;
-      return cmd.exec(ctx);
+      return this.runCommand(cmd, ctx);
     }
     const found = cmd ? `${PKG_BIN_DIR}/${base}` : await this.findExecutableInPath(base);
     if (found) return this.executeScript(found, argv, ctx, writeStdout, writeStderr);

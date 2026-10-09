@@ -11,6 +11,30 @@ Blink engine.
 
 ## Languages and toolchains (unix/compat-dev)
 
+**Scoreboard** (each target as a user would reach it; details in the tables below):
+
+| Target | Route | Result |
+| --- | --- | --- |
+| python3, venv | `pkg install python3` (CPython 3.13.7 WASI) | works |
+| pip | builtin (PyPI over fetch) / Debian `python3-pip` | works for pure-Python wheels / works with the TCP relay |
+| node, npm, npx | builtin | works (commander, mocha, tsc 5, prettier) |
+| pnpm 9 | `npm install pnpm` | works (add, store, symlinks, run, exec, bins) |
+| yarn 1 | `npm install yarn` | works (add, lockfile, run, bins, offline) |
+| ruby, gem, rake | `pkg install ruby` (ruby.wasm 3.4.1) | works (no sockets) |
+| perl | `pkg install perl` (x86-64 in Blink) | works |
+| lua | `pkg install lua` | works |
+| go | `pkg install go` (wasip1) / Debian `golang-go` | builds and runs / fails: link step (Blink `fallocate`, reported) |
+| clang, make, ninja, cmake | `pkg install llvm make ninja cmake` | works (zlib's own build, CMake → Ninja/Make, CTest) |
+| gcc, make (Debian) | `apt install build-essential` | works: hello.c with gcc and through make |
+| node (Debian) | `apt install nodejs` | works (Blink patch 0047), 22–26 s per script; `builtin node` runs Shiro's |
+| sqlite | `pkg install sqlite` | works |
+| git | `pkg install git` (x86-64 in Blink) | works for local workflows, file:// clone/push |
+| php | — | owned by unix/wasix |
+| rustc, cargo (Debian) | `apt install cargo` | works: cargo new, build, run |
+| ruby (Debian) | `apt install ruby` | works (3.3.8) |
+| php (Debian) | `apt install php-cli` | works (8.4.26) |
+| java, deno, bun | — | not available (see "Not available") |
+
 Smoke tests: `tests/tests/shiro-vitest/compat-dev.test.ts` (kernel processes
 in Node worker threads). Browser checks: `scripts/browser-check.mjs` against a
 built app in headless Chromium, cross-origin isolated.
@@ -38,10 +62,46 @@ Not available (yet), and why:
 
 | Software | Tried | Blocker |
 | --- | --- | --- |
-| Rust (rustc, cargo) | — | no maintained WASI build of rustc to pin; the Linux toolchain is dynamically linked against librustc_driver and LLVM (~250 MB unpacked) |
+| Rust (rustc, cargo) as a pkg | — | no maintained WASI build of rustc to pin; use Debian's (`apt install cargo`, above) |
 | Java (JVM) | — | a JDK image is ~200 MB and HotSpot needs its JIT (mprotect RWX code) for usable speed; Blink would interpret the interpreter |
 | Deno, Bun | — | single ~100 MB binaries around V8 / JavaScriptCore JITs; Shiro's own `node` covers the npm use case |
 | PHP | — | owned by unix/wasix (WASIX build in `pkg`) |
+
+### Developer story on Debian packages (`apt`)
+
+Real Debian 13 packages in Debian mode ([DEBIAN.md](DEBIAN.md)), in headless
+Chromium against the built app (`server.mjs` with its package mirror and, for
+pip, `SHIRO_TCP_RELAY=1`). One page, one session; times are wall clock from
+the page (`apt-get update` ≈2m20s first).
+
+| Step | Result | Time | Notes |
+| --- | --- | --- | --- |
+| `sudo apt-get install -y build-essential` | pass | 5m50s–7m10s | gcc 14.2, g++, make 4.4.1, libc6-dev, dpkg-dev |
+| `gcc -O0 -o hello hello.c && ./hello` | pass | 10.7s compile+link | the x86-64 binary runs in Blink |
+| `make hello` (`$(CC)` = `cc`) | pass (after fix) | 10.9s | failed at first: Shiro's commands look like files in the bin directories to a PATH search, so make took a made-up `/usr/local/bin/cc` for its compiler; now an installed program replaces that (below) |
+| `sudo apt-get install -y python3-pip` | pass | 9m00s–10m05s | pip 25.1.1, Python 3.13.5; `python3` at the prompt is then Debian's |
+| `pip3 install --user --break-system-packages six` + import | pass (after fixes) | 1m30s install, 2.8s import | needs the TCP relay. Fixed on the way: socket `ioctl(FIONBIO)` was EINVAL (CPython's `setblocking(False)`); glibc's parallel A+AAAA lookup failed in Blink (`sendmmsg` → EBADF, fixed by perf-blink in patch 0043), then its address sort aborted on a connected UDP socket with no source address (fixed in the kernel). In this sandbox pip also needed `--cert` for its TLS-intercepting egress proxy, which a normal deployment doesn't have |
+| `sudo apt-get install -y nodejs` | installs | 2m25s | Debian's node 20.19.2 |
+| node: which wins | Debian's | — | in Debian mode a program file on PATH replaces the builtin of that name, so `node` is `/usr/bin/node` once nodejs is installed (22–26 s per script under emulation); `builtin node` still runs Shiro's (0.2 s) |
+| `node -e` / `node script.js` (Debian's node) | pass | 22–26s per run | crashed in Blink until patch 0047 (`pop m64` addressed relative to the old `rsp`, overwriting V8's CEntry return address); JS, `require`, `os` and fs work, slowly (emulated V8) |
+| `sudo apt-get install -y golang-go` | installs | 5m05s–10m40s | go1.24.4 linux/amd64 |
+| `go run hello.go` | **fail** (Blink) | 35m to the link step | the compile of `fmt` and its std dependencies under Blink finishes (into GOCACHE, kept for later runs), then cmd/link stops: "mapping output file failed: function not implemented" (Blink answers `fallocate` with ENOSYS; Go tolerates only EOPNOTSUPP; sent to perf-blink). Shiro's own `pkg install go` (wasip1 toolchain) builds and runs Go programs |
+| `sudo apt-get install -y cargo` | installs | 9m35s | cargo 1.85.1, rustc 1.85.1 |
+| `cargo new hello_rs && cargo build && cargo run` | pass (after fix) | `new` 2.3s, `build` 54s, `run` 1.9s | failed at first: Rust's `std::process::Command` makes an AF_UNIX `SOCK_SEQPACKET` socketpair for every spawn, which the kernel refused (EOPNOTSUPP), so cargo couldn't start rustc nor rustc its linker |
+| `sudo apt-get install -y ruby` | installs | 2m43s | ruby 3.3.8 (`ruby` is `/usr/bin/ruby`) |
+| `ruby -e 'require "json"; …'` | pass | 17.6s | |
+| `sudo apt-get install -y php-cli` | installs | 26m46s | PHP 8.4.26 (slowest install of the set; not profiled) |
+| `php -r 'echo json_encode(…);'` | pass | 2.2s | |
+
+Shiro-side fixes from this (tests in `debian.test.ts`, `kernel-net.test.ts`):
+`binCommandStat` (src/wasi/host.ts) no longer makes up a `/bin/NAME` file for
+a builtin that an installed program replaces; Debian shadows count a program
+symlink whose target isn't unpacked yet (dpkg unpacks `gcc -> gcc-14` first);
+sockets accept `FIONBIO`; a connected UDP socket reports a source address
+in the peer's family (`::ffff:10.0.2.15` toward a mapped peer: glibc's
+getaddrinfo sort asserts on it); AF_UNIX `SOCK_SEQPACKET` socketpairs keep
+records whole (Rust's `Command`). The interim `options single-request` in
+resolv.conf is gone again (removed from earlier installs).
 
 Shell and platform fixes these needed (all with tests in the same file):
 
@@ -88,7 +148,12 @@ Shell and platform fixes these needed (all with tests in the same file):
   parent waiting on a child `node` (pnpm run → node app.js) kept the child
   from ever looking idle, and each waited on the other for the 10-minute
   cap. The cap on a script's async phase is 10 minutes (was 10 s, which
-  killed pnpm during its retry back-off).
+  killed pnpm during its retry back-off). An fs callback still to come
+  counts as activity too (for up to 30 s), as fs.promises calls did: under
+  load the 150 ms idle window could fall between two of pnpm's calls. So
+  does a worker_threads message, from post to handler: pnpm `unref()`s its
+  import workers, and under CPU load the hop outlasted the idle window and
+  pnpm exited (status 0) mid-install, with no root symlinks.
 
 
 - Shebangs: `#!/usr/bin/env NAME` (with `-S` and `VAR=value`) and absolute
@@ -194,6 +259,19 @@ releases (pinned sha256), installed with `pkg install` and run in Blink, so
 they need a cross-origin isolated page (`"needs": ["x86"]`). Rows marked
 WASI/WASIX are WASM packages run as kernel processes in workers.
 
+Terminal fidelity in the real app (`tests/browser/tui.mjs`, Chromium, the
+desktop terminal):
+
+| Feature | Status |
+| --- | --- |
+| `TERM=xterm-256color`, `COLORTERM=truecolor`; terminfo | ncurses programs use the entries compiled into them (no terminfo database is installed); vim reports 256 colors; `tput colors/cols/lines` |
+| Resize | every xterm size change (window drag, refit, font) reaches the pty: SIGWINCH and a redraw in vim, htop, less, tmux and screen windows; `stty size`/`tput` in a kernel sh read the pty |
+| Alternate screen | vim, less, htop restore the shell's screen |
+| Mouse | SGR (1006) reports reach vim (`set mouse=a`); X10 (1000) reports reach programs too (xterm sends them as binary). htop's clicks don't work: under Blink its ncurses enables only 1000 and misparses the reports (natively the same binary uses 1006); a Blink issue |
+| Bracketed paste | vim gets pasted text literally (no autoindent cascade) |
+| 256-color, truecolor | passed through to xterm |
+| Unicode width | xterm uses Unicode 11 widths (`@xterm/addon-unicode11`), as programs' wcwidth does: CJK and emoji take two cells |
+
 Browser checks: `scripts/browser-tui.mjs` drives the built app in headless
 Chromium (cross-origin isolated) through xterm.js's own keyboard input and
 reads the rendered screen. Verified there on 2026-10-09: vim (insert, `:wq`,
@@ -217,7 +295,7 @@ EIO (the browser's `TextDecoder` refuses the shared syscall buffer).
 | bc, dc | 1.08.2 (GNU) | pkg (Blink) | works | `bc -l` 20 digits of π, bignums, `dc` | |
 | tar | 1.35 (GNU) | pkg (Blink) | works | `czf` (gzip run as a child through `/bin/sh`), `tzf`, `xzf -C` | |
 | gzip, gunzip, zcat | 1.15 (GNU) | pkg (Blink) | works | `-k`, `-c`, `-d`, `-t`, binary output redirected to a file | |
-| vim | 9.2.0000 | pkg (Blink) | works | edit + `:wq`; syntax colours from the runtime; `:help`; resize (SIGWINCH) updates `&columns`/`&lines`; Ctrl-Z stops it, `fg` resumes; `vim -es` scripting | Startup with `filetype`/`syntax` is slow (seconds): Blink interprets x86 at ~1/120 native speed. No POSIX timers (`timer_create`), so no `'redrawtime'` timeout |
+| vim | 9.2.0000-1 | pkg (Blink) | works | edit + `:wq`; syntax colours from the runtime; `:help`; resize (SIGWINCH) updates `&columns`/`&lines`; Ctrl-Z stops it, `fg` resumes; `vim -es` scripting | Startup with `filetype`/`syntax` is slow (seconds): Blink interprets x86 at ~1/120 native speed. No POSIX timers (`timer_create`), so no `'redrawtime'` timeout. Patched (`-1`): `inchar_loop()` could wait forever with a typed key unhandled (a negative wait after a 0 ms poll), see [docs/upstream](upstream/vim-inchar-negative-wait.md) |
 | nvim (Neovim) | 0.12.5 (PUC Lua 5.1) | pkg (Blink) | works | headless `:s` + `:wq`, Lua (`vim.inspect`), treesitter parsing and `:help` highlighting, editing on the tty, a shell in `:terminal` (pty) | built with PUC Lua instead of LuaJIT (its JIT would be translated twice); the bundled parsers (c, lua, vim, vimdoc, query, markdown) are linked into the static binary, so `parser/*.so` from plugins can't load; no translations |
 | emacs (-nw), emacsclient, etags | 31.1 (GNU) | pkg (Blink; ncurses 6.5) | works | batch Lisp, the portable dump, `org`; editing and C-x C-s on the tty, `M-x shell` (pty) | terminal only: no GUI, TLS (`--with-gnutls=no`), images, native compilation or tree-sitter; byte-compiled Lisp without sources (`find-function` shows no source); no Japanese input-method dictionary |
 | tmux | 3.8 | pkg (Blink; libevent 2.1, ncurses 6.5) | works | `new-session` on the tty: status line, a shell in the pane, `C-b %` split, `C-b d` detach; `list-panes`, `send-keys` into a detached session; re-attach on a bigger terminal (the status line comes back without a key press); `#{host}` is the kernel hostname; `kill-session`; in Chromium too | Slow to draw (emulated). Built with a 2 s format-expansion budget (upstream 100 ms cut the status line short when emulation was slow). The `tmux` builtin is replaced while the package is installed |
@@ -321,20 +399,103 @@ Shiro changes these programs needed (tests in `x86-engine.test.ts`,
 - `rename` keeps a file's modification time (it set it to now): `rsync -a`
   sets times on a temp file and renames it. `filesystem.test.ts`.
 - `link(2)` still copies (the filesystem has no hard links) but the copy
-  reports the source's inode number, which git's local clone checks.
-  `kernel-core.test.ts`.
+  reports the source's inode number, which git's local clone checks, and
+  both names report a link count of 2 (shadow's lock files: `groupadd`,
+  `useradd` in openssh-client's and other postinsts). `kernel-core.test.ts`.
+- Files keep no owner, so `stat` reports them as the caller's (root's in a
+  root shell): git refused root's own repositories ("dubious ownership").
+- Shiro's commands look like files only where exec runs them (`/bin`,
+  `/usr/bin` and the sbin ones, when no real file has that name): GNU make
+  took `/usr/local/bin/echo` from its own PATH search and failed with
+  "echo: No such file or directory". `debian.test.ts`.
+- `systemctl` accepts what Debian's maintainer scripts run (`--root=/
+  preset`, `daemon-reload`, `is-enabled`, ...).
+
+### Popular CLI tools from Debian (apt)
+
+Debian mode (`debian install`, a root shell) with
+`apt-get install -y --no-install-recommends PKG`, then a non-interactive
+smoke test, on 2026-10-09 (vitest, the mirror cache served by `server.mjs`).
+The install column is the whole `apt-get install` (download, unpack,
+maintainer scripts, triggers) in Blink: about a minute even for jq, most
+of it apt's dependency resolution and dpkg-preconfigure (perf-fs-shell's
+profile: 14 s and 20 s for `hello`), which unix/perf-fs-shell is cutting.
+In Chromium (the built desktop, `debian install`, `sudo apt-get install`,
+2026-10-09) Debian's TUIs work on the pty: htop (meters, `q`), nano (type,
+`^O` save, `^X`), tmux (a command, `C-b %` split, `exit`), ncdu (scan of
+`/etc`, `q`), fzf (filtering a pipe). There `sudo apt-get … | tail -2` used
+to print all of apt's output on the terminal (sudo gave its programs the
+tty for stdout); fixed. emacs -nw from Debian has only had the batch check.
+
+| Tool (package) | Version | Status | Install | Smoke test | Notes |
+| --- | --- | --- | --- | --- | --- |
+| jq | 1.7.1 | works | 69 s | `jq -c '.a\|add'` | |
+| ripgrep (`rg`) | 14.1 | works | 61 s | `rg -n` | |
+| fd (`fd-find`, `fdfind`) | 10.2 | works | 61 s | `fdfind -e txt` | Debian names it `fdfind` |
+| bat (`batcat`) | 0.25 | works | 109 s | `batcat --paging=never -p` | Debian names it `batcat` |
+| fzf | 0.60 | works | 61 s | `fzf -f` filter | |
+| tmux | 3.5a | works | 80 s | `tmux -V` | |
+| less | 668 | works | 63 s | `less -F` | |
+| man (`man-db`) | 2.13 | broken (fix in progress) | 138 s | `man -P cat 7 man`: "No manual entry" | the rootfs excluded `/usr/share/man` (dpkg `path-exclude`, as Docker's slim images do), so no package had pages; unix/debian is dropping the exclusion for packages installed from now on |
+| curl | 8.14.1 | works (local) | 113 s | `curl --version`, `file://` | network through Shiro's relay not tried here |
+| wget | 1.25 | works (local) | 59 s | `--version` | network not tried |
+| ssh, ssh-keygen (`openssh-client`) | 10.0p1 | works | 90 s | `ssh -V`, `ssh-keygen -t ed25519` | its postinst failed (`groupadd _ssh`: link count), fixed |
+| rsync | 3.5.0 | works | 93 s | `rsync -a` | |
+| zip, unzip | 3.0, 6.0 | works | 71 s | zip + `unzip -l` | |
+| make | 4.4.1 | works | 69 s | a Makefile | recipes failed ("echo: No such file"), fixed |
+| gcc (+ `libc6-dev`) | 14.2 | works, slow | 357 s | compile + run hello.c | |
+| strace | 6.13 | broken | 85 s | — | Blink has no `ptrace` |
+| file | 5.46 | works | 87 s | `file` on text and ELF | |
+| tree | 2.2 | works | 75 s | `tree -L 1` | |
+| ncdu | 1.22 | works | 84 s | `ncdu -o` export | |
+| nano | 8.4 | works | 82 s | `--version` | |
+| emacs (`emacs-nox`) | 30.1 | works, slow | 399 s | `emacs --batch --eval` | |
+| htop | 3.4.1 | works | 76 s | `--version` | |
+| git | 2.47.3 | works | 280 s | init + commit + log as root | "dubious ownership" as root, fixed |
+| sqlite3 | 3.46 | works | 102 s | `select 6*7` | |
+| bc | 1.07.1 | works | 76 s | `2^20` | |
+| gawk | 5.2.1 | works | 97 s | `BEGIN{print 6*7}` | |
+| xz, zstd (`xz-utils`, `zstd`) | 5.8.1, 1.5.7 | works | 106 s | compress + decompress through pipes | |
+| lsof | 4.99.4 | works | 135 s | `lsof -p` lists cwd, root, fds | |
+| nc (`netcat-openbsd`) | 1.229 | works (local) | 83 s | `nc -h` | connections not tried |
+| ps, pstree, free (`procps`, `psmisc`) | 4.0.4, 23.7 | works | 121 s | `ps -e`, `pstree`, `free -m` | memory figures are nominal |
+| python3 (`python3-minimal`) | 3.13.5 | works | 219 s | `python3 -c` | Debian's CPython in Blink (Shiro's own `python3` package is WASI) |
 
 Building and publishing one of these packages:
 
 ```bash
 export PKG_WORK=$PWD/.pkgbuild          # downloads, toolchain, build trees
 bash scripts/pkgbuild/x86/vim.sh        # -> $PKG_WORK/out/vim/{bin,share}
-bash scripts/pkgbuild/x86/publish.sh vim 9.2.0000   # -> public/pkg/vim/9.2.0000/*.gz, prints index entries
+bash scripts/pkgbuild/x86/publish.sh vim 9.2.0000-1 # -> public/pkg/vim/9.2.0000-1/*.gz, prints index entries
 ```
 
 ncurses-based programs are linked against a static ncurses 6.5 with
 `xterm-256color`, `xterm`, `screen*`, `tmux*`, `linux`, `vt100`, `vt220` and
 `dumb` compiled in, so they work without a terminfo database.
+
+### Developer workflows
+
+`tests/browser/dev-workflows.mjs [URL]`: each workflow from a fresh browser
+profile, typed into the terminal of the built desktop in Chromium, every step
+timed (2026-10-09, local build; GitHub, npm and PyPI reached through the
+container's proxy).
+
+| Workflow | Repository | Status | Time | Steps (time) | Notes |
+| --- | --- | --- | --- | --- | --- |
+| git clone, edit, commit, log | octocat/Hello-World | works | 4 s | clone 1.4 s, config, commit 0.9 s, `git log`, `git status` | over the server's git proxy; on tabcomputer.com every clone failed on 2026-10-09 (the proxy's POST got "fetch failed" on the live host; reported) |
+| `npm install && npm test` | jshttp/mime-types | works | 22 s | clone 1.3 s, `npm install` 14.9 s (mocha, eslint, nyc and their dependencies), `npm test` 4.8 s (mocha) | lukeed/kleur fails: its tests load through the `esm` package, which patches Node's module internals |
+| venv, `pip install pytest requests`, `pytest` | benjaminp/six | works | 16 s | clone 1.3 s, `python3 -m venv` + activate 1.0 s (installs the CPython package first), pip 5.1 s, `pytest` 4.8 s: 181 passed | 2 tests deselected: `test_getoutput` needs subprocess, the `HTTPSHandler` move needs ssl (WASI CPython has neither); dbader/schedule can't run (`time.tzset`) |
+| `make test` | zserge/jsmn | works | 12 s | `pkg install make llvm` 4.4 s, clone 2.8 s, `make test` 4.0 s (four builds with clang and runs) | programs are wasm32-wasi |
+| `ssh -T git@github.com` | — | not verified | — | `pkg install openssh` 1.9 s | needs the server's TCP relay: tabcomputer.com issues a relay token but refused the WebSocket from this container (the token is bound to the client IP, and the container's egress proxy uses another one); the local server can't reach port 22 |
+
+Fixed for these: git found its repository only in the current directory
+(a subdirectory or a failed clone's leftover directory gave a JS TypeError),
+and a failed clone left its directory behind; `require('./package')` didn't
+try `.json`; `python3 -m venv` without the CPython package ran Pyodide, which
+took `venv` for a script; pytest needs `dup()` (output capture,
+faulthandler) and `umask()` (its cache), which WASI lacks, so the CPython
+package sets `PYTEST_ADDOPTS="--capture=sys -p no:faulthandler -p
+no:cacheprovider"`.
 
 ## Claude Code native binary (unix/perf-kernel)
 
@@ -471,8 +632,9 @@ the X11 server in the page, into desktop windows ([GUI.md](GUI.md)). Route
 use (sha256-checked, cached by hash), then the ELF runs as a kernel process
 with `DISPLAY=:0`. Smoke tests: `x11.test.ts` (protocol, and a raw-protocol
 x86-64 client over the kernel's AF_UNIX socket), `gui-apps.test.ts`
-(install + launch); browser runs with `scripts/gui/shoot.mjs` (headless
-Chromium, screenshots in `docs/screenshots/gui-*.png`). Times: first launch
+(install + launch); browser runs with `scripts/gui/shoot.mjs` and
+`tests/browser/gui-first-launch.mjs` (headless Chromium, screenshots in
+`docs/screenshots/gui-*.png`). Times: first launch
 of an installed app → first frame, in Chromium.
 
 | Software | Version | Route | Status | Tested | Known issues |
@@ -484,9 +646,11 @@ of an installed app → first frame, in Chromium.
 | xterm | 379 | gui (9.3 MB) | works | Shiro's shell in xterm's pty, typing, output, core fonts; 2.5–2.7 s | no XKB (core keymap), UTF-8 locale falls back to C (Xlib has no C.UTF-8 entry) |
 | FeatherPad | 1.3.5 (Qt 5.15.8) | gui (35 MB of an 84 MB closure) | works | menus, toolbar icons, typing text; 10.5–16 s | Qt warns about missing XKB; no GLX (Mesa never downloaded) |
 | GPicView | 0.2.5 (GTK 2.24.33) | gui (26.8 MB) | works | opens a PNG at 512×512; 6.9–9.7 s | some stock toolbar icons missing |
-| L3afpad | 0.8.18.1.11 (GTK 3.24.38) | gui (33.1 MB of a 51 MB closure) | works | Adwaita theme, menus, typing text; 12.9 s | needed Blink patch 0029 (SSE compares) |
-| Mousepad | 0.5.10 (GTK 3, Xfce) | gui (44.6 MB) | works | editor window and menus; 32 s | slow start: waits on D-Bus / xfconf, which aren't there |
-| Ristretto | 0.12.4 (GTK 3, Xfce) | gui (35.1 MB) | works | opens a PNG; 14–15.5 s | no thumbnails (tumbler over D-Bus) |
+| L3afpad | 0.8.18.1.11 (GTK 3.24.38) | gui (33.1 MB of a 51 MB closure) | works | Adwaita theme, menus, typing text; click to window 12.5 s from a fresh profile (install 4.9 s), warm 4.9 s | needed Blink patch 0029 (SSE compares) |
+| Mousepad | 0.5.10 (GTK 3, Xfce) | gui (44.6 MB) | works | editor window and menus; click to window 24.2 s (install 6.2 s), warm 17 s | slow start: syscall-free guest compute (GtkSourceView), reported to perf-blink |
+| Ristretto | 0.12.4 (GTK 3, Xfce) | gui (35.1 MB) | works | opens a PNG; click to window 14.8 s (install 4.9 s), warm 7.0 s | no thumbnails (tumbler over D-Bus) |
 | LXImage-Qt | 1.2.0 (Qt 5) | gui (36.8 MB) | exits | — | without a D-Bus session bus its single-instance check fails and it quits (status 0) |
-| GIMP | 2.10.34 (GTK 2) | gui (53.2 MB of a 141 MB closure) | works (slow) | main window, menus; first start 290 s, later starts 84 s | first start queries ~100 plug-ins one Blink process each; 22 plug-ins whose libraries are left out (PDF, HEIF, help browser...) are removed; no MIDI/ALSA, no D-Bus |
-| Inkscape | 1.2 (GTK 3) | — | not packaged | — | 94 MB closure; next to try |
+| GIMP | 2.10.34 (GTK 2) | gui (53.2 MB of a 141 MB closure) | works (slow) | main window, menus; install 6.3 s, splash 36 s, main window 247 s on first start, 63 s later | first start queries ~100 plug-ins one Blink process each; 22 plug-ins whose libraries are left out (PDF, HEIF, help browser...) are removed; no MIDI/ALSA, no D-Bus |
+| Inkscape | 1.2.2 (GTK 3, gtkmm) | gui (83 MB of a 95 MB closure) | works (slow) | fresh profile: install 15 s, welcome dialog 61 s after the click, main window ~60 s after closing it; ellipse tool draws on the canvas (`gui-inkscape.png`) | no Python extensions (python3 not shipped), no spell checking; first start is long |
+| NetSurf | 3.10 (GTK 3) | gui (56.6 MB; most shared with other GTK 3 apps) | works | welcome page 24.7 s after the click from a fresh profile; https://www.debian.org/ with images and CSS in 26 s (`gui-netsurf-web.png`) | needs the TCP relay (on at tabcomputer.com); no JavaScript (NetSurf's own limit) |
+| Dillo | 3.0.5 (FLTK 1.3) | gui (11.4 MB) | works | install 1.4 s, window 4.1 s; http and https pages (`gui-dillo-web.png`) | needs the TCP relay; no CSS layout beyond Dillo's own |

@@ -72,7 +72,7 @@ import { startDisplay } from './x11/display';
 import { installNet } from './kernel/net';
 import { attachKernelTty } from './kernel/pty';
 import { sudoCmd } from './commands/sudo';
-import { shiroAptMethodCmd } from './commands/debian';
+import { shiroAptMethodCmd, shiroAptStoreCmd, shiroPreconfigureCmd } from './commands/debian';
 import { iframeServer } from './iframe-server';
 import { unixCommands } from './commands/unix';
 import { ShiroTerminal } from './terminal';
@@ -404,6 +404,8 @@ async function main() {
   registerCommand(commands, lazyCommand('shiro-alternatives', "Choose Shiro's or Debian's implementation of a program",
     () => import('./commands/debian').then(m => m.shiroAlternativesCmd)), 'src/commands/debian.ts');
   registerCommand(commands, shiroAptMethodCmd, 'src/commands/debian.ts');
+  registerCommand(commands, shiroAptStoreCmd, 'src/commands/debian.ts');
+  registerCommand(commands, shiroPreconfigureCmd, 'src/commands/debian.ts');
   registerCommand(commands, sudoCmd, 'src/commands/sudo.ts');
   registerCommand(commands, lazyCommand('xpkg', 'Binary (x86-64) package manager',
     () => import('./commands/xpkg').then(m => m.xpkgCmd)), 'src/commands/xpkg.ts');

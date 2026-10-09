@@ -67,6 +67,24 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     expect((await run(shell, 'dpkg-divert --list /usr/bin/env')).output.trim()).toBe('');
   }, 120000);
 
+  it('a PATH search in a Debian program finds an installed program, not a made-up /usr/local/bin file for the builtin', async () => {
+    // As dpkg unpacks gcc: /usr/bin/gcc -> gcc-14 renamed into place before
+    // gcc-14 (here with curl, a builtin of the test shell)
+    const settle = () => new Promise((r) => setTimeout(r, 50));
+    await fs.symlink('curl-8', '/usr/bin/curl.dpkg-new');
+    await fs.rename('/usr/bin/curl.dpkg-new', '/usr/bin/curl');
+    await settle();
+    await fs.writeFile('/usr/bin/curl-8', '#!/bin/sh\necho "debian curl $*"\n', { mode: 0o755 });
+    await settle();
+    // bash, like GNU make, stats each PATH entry: Shiro's commands look like
+    // files in the bin directories, but not one an installed program replaces
+    // (make ran the made-up /usr/local/bin/cc and failed)
+    expect((await run(shell, '/usr/bin/bash -c "type -P curl; type -P ls"')).output.replace(/\r\n/g, '\n')).toMatch(/^\/usr\/bin\/curl\n\/(usr\/)?(local\/)?bin\/ls\n$/);
+    expect((await run(shell, '/usr/bin/bash -c "curl -V"')).output).toContain('debian curl -V');
+    await fs.unlink('/usr/bin/curl');
+    await fs.unlink('/usr/bin/curl-8');
+  });
+
   it('sudo runs kernel programs as uid 0', async () => {
     expect((await run(shell, '/usr/bin/id -u')).output.trim()).toBe('1000');
     expect((await run(shell, 'sudo /usr/bin/id -u')).output.trim()).toBe('0');
@@ -80,6 +98,13 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     await fs.writeFile('/tmp/linksrc', 'hello');
     expect((await run(shell, '/usr/bin/ln /tmp/linksrc /tmp/linkdst && /usr/bin/cat /tmp/linkdst')).output).toContain('hello');
   }, 60000);
+
+  it('keeps English man pages of packages installed later (dpkg path-include)', async () => {
+    const cfg = await fs.readFile('/etc/dpkg/dpkg.cfg.d/90shiro-slim', 'utf8') as string;
+    expect(cfg).toMatch(/path-exclude \/usr\/share\/man\/\*\npath-include \/usr\/share\/man\/man\[1-9\]\*\/\*\n/);
+    expect(cfg).toContain('path-exclude /usr/share/doc/*');
+    expect(await fs.exists('/etc/apt/apt.conf.d/91shiro-engine')).toBe(false);
+  });
 
   it("bash's PATH search finds builtins and Debian's programs (no phantom /usr/local/sbin/NAME)", async () => {
     // id: Debian's file in /usr/bin; tail: diverted to Shiro's (no file); /usr/local/sbin comes first

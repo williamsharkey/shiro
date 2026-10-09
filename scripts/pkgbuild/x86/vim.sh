@@ -4,6 +4,9 @@
 . "$(dirname "$0")/common.sh"
 TAG=v9.2.0000
 SRC=$(fetch_git https://github.com/vim/vim.git $TAG e7e21018fc0b60c153c8e668f696d95e574cc5a4 vim-${TAG#v})
+# inchar_loop could wait -1 ms (forever) for input after a 0 ms timed wait,
+# leaving a typed key unhandled until the next one (upstream: docs/upstream/vim-inchar-negative-wait.md)
+git -C "$SRC" apply "$(cd "$(dirname "$0")" && pwd)/vim/inchar-negative-wait.patch"
 setup_musl
 deps_ncurses
 cd "$SRC"

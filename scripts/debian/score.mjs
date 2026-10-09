@@ -46,8 +46,10 @@ const CATEGORIES = [
   ['blink-lchown', /error setting ownership of symlink/],
   ['not-in-trixie', /Unable to locate package|has no installation candidate|is not available, but is referred to/],
   ['timeout', /^SCORE-TIMEOUT/m],
-  ['engine-crash', /terminating due to SIG|Segmentation fault|Illegal instruction|Bus error|core dumped|returned error exit status 1[34]\d\b|SIGSEGV|SIGILL|SIGBUS/],
+  ['engine-crash', /blink: aborted|terminating due to SIG|Segmentation fault|Illegal instruction|Bus error|core dumped|returned error exit status 1[34]\d\b|SIGSEGV|SIGILL|SIGBUS/],
+  ['kernel-netlink', /Unable to initialize Netlink socket|Cannot open netlink socket/],
   ['missing-syscall', /Function not implemented|ENOSYS|missing syscall|Operation not supported/],
+  ['storage-full', /unable to fsync .*Input\/output error|QuotaExceededError/],
   ['download', /Failed to fetch|Hash Sum mismatch|Could not connect to the package mirror/],
   ['dependencies', /unmet dependencies|Unable to correct problems|held broken packages/],
   ['maintainer-script', /installed (?:\S+ )?(?:package )?(?:post-installation|pre-installation|pre-removal|post-removal) script subprocess returned error|subprocess .* returned error exit status/],
@@ -138,11 +140,18 @@ async function smoke(m, pkg) {
   const list = (await m.run(`dpkg -L ${pkg} 2>/dev/null`)).out.split('\n').filter(Boolean);
   const diverted = (await m.run(`dpkg-divert --list 2>/dev/null`)).out;
   // A diverted program (the overlay's Shiro default) runs by its path as Shiro's: test that side
-  const bins = list.filter((f) => /^\/(?:usr\/)?s?bin\/[^/]+$/.test(f));
+  let bins = list.filter((f) => /^\/(?:usr\/)?s?bin\/[^/]+$/.test(f));
+  // Programs only: /usr/bin/X11 is a symlink to its own directory (x11-common)
+  if (bins.length) {
+    const files = (await m.run(`for f in ${bins.map((b) => `'${b}'`).join(' ')}; do [ -f "$f" ] && echo "$f"; done`)).out.split('\n').filter(Boolean);
+    const diverted0 = bins.filter((b) => diverted.includes(`of ${b} `));
+    bins = bins.filter((b) => files.includes(b) || diverted0.includes(b));
+  }
   const who = (bin) => (diverted.includes(`of ${bin} `) ? ' [Shiro\'s]' : '');
   // The program named like the package first, then the rest
   bins.sort((a, b) => (b.endsWith('/' + pkg) ? 1 : 0) - (a.endsWith('/' + pkg) ? 1 : 0));
   const tried = [];
+  let lastOut = '';
   let ran; // a run that loaded and exited normally without printing a version or usage
   let undeclared; // a perl program needing a module no installed package has (dh_bash-completion: debhelper)
   // Shells have no --version (dash): run a command instead
@@ -156,6 +165,7 @@ async function smoke(m, pkg) {
       const r = await m.run(`timeout 120 ${bin} ${flagArg} </dev/null 2>&1`, 180);
       const crashed = /terminating due to SIG|Segmentation fault|Illegal instruction|SCORE-TIMEOUT/.test(r.out) || (r.code >= 128 && r.code < 255) || r.code === 124; // 255: exit(-1), an ordinary error (ip --version)
       tried.push(`${bin} ${flagArg}: exit ${r.code}`);
+      lastOut = r.out;
       if (r.code === 0 && r.out.trim()) return { ok: true, how: `${bin} ${flagArg}${who(bin)}`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
       // Tools without --version print their usage and exit 1 or 2: it ran, which is what we check
       const broken = /error while loading shared libraries|Exec format error|cannot execute|not found|Can't locate|No such file/i.test(r.out);
@@ -169,10 +179,17 @@ async function smoke(m, pkg) {
   }
   if (ran) return { ok: true, how: `${ran.bin} ${ran.flagArg} (ran, exit ${ran.r.code}${ran.r.out.trim() ? '' : ', no output'})`, ms: ran.r.ms, sample: ran.r.out.trim().split('\n')[0].slice(0, 100) };
   if (undeclared) return { ok: true, how: `installed; ${undeclared.bin} needs ${undeclared.mod}, which no dependency provides (as on Debian)`, ms: 0 };
-  if (bins.length) return { ok: false, how: tried.join('; '), category: 'smoke-failed', error: tried[0] };
-  const libs = list.filter((f) => /^\/usr\/lib\/x86_64-linux-gnu\/(?:[\w.+-]+\/)?[^/]+\.so(\.\d+)*$/.test(f));
+  if (bins.length) {
+    const cat = categorize(lastOut);
+    return { ok: false, how: tried.join('; '), category: cat === 'other' ? 'smoke-failed' : cat, error: cat === 'other' ? tried[0] : firstError(lastOut) };
+  }
+  // Public libraries first; a private one (systemd/libsystemd-core) finds its
+  // siblings through its programs' RUNPATH, so give ld.so its directory
+  const libs = list.filter((f) => /^\/usr\/lib\/x86_64-linux-gnu\/(?:[\w.+-]+\/)?[^/]+\.so(\.\d+)*$/.test(f))
+    .sort((a, b) => a.split('/').length - b.split('/').length);
   if (libs.length) {
-    const r = await m.run(`/lib64/ld-linux-x86-64.so.2 --list ${libs[0]} 2>&1`, 180);
+    const dir = libs[0].slice(0, libs[0].lastIndexOf('/'));
+    const r = await m.run(`/lib64/ld-linux-x86-64.so.2 --library-path ${dir} --list ${libs[0]} 2>&1`, 180);
     return r.code === 0 ? { ok: true, how: `ld.so --list ${libs[0]}`, ms: r.ms }
       : { ok: false, how: `ld.so --list ${libs[0]}`, category: categorize(r.out) === 'other' ? 'smoke-failed' : categorize(r.out), error: firstError(r.out) };
   }
@@ -287,6 +304,16 @@ async function main() {
         try {
           // A dpkg left half-configured by an earlier failure fails everything after it
           // ("dpkg was interrupted": its journal, /var/lib/dpkg/updates, isn't empty)
+          // A headless context's storage quota is far below a real profile's: start over before it fills
+          // (dpkg's fsync of a full IndexedDB is EIO)
+          if (m) {
+            const st = await m.page.evaluate(() => navigator.storage.estimate()).catch(() => null);
+            if (st && st.quota && st.usage / st.quota > 0.6) {
+              log(`storage ${Math.round(st.usage / 2 ** 20)} of ${Math.round(st.quota / 2 ** 20)} MiB; new machine`);
+              await m.context.close().catch(() => {});
+              m = null;
+            }
+          }
           if (m && (await m.run('dpkg --audit 2>&1; ls -A /var/lib/dpkg/updates 2>/dev/null')).out.trim()) {
             log('dpkg --audit reports problems (or dpkg was interrupted); new machine');
             await m.context.close().catch(() => {});
@@ -359,6 +386,8 @@ function report() {
 const CAT_MEANING = {
   'blink-lchown': "Blink's lchown follows symlinks, so dpkg can't set the owner of a symlink whose target isn't unpacked yet (reported to unix/perf-blink)",
   'not-in-trixie': 'popcon counts every release and architecture; no such amd64 package in trixie',
+  'storage-full': "the browser's storage quota ran out mid-install (the scoreboard's headless profile has a small one)",
+  'kernel-netlink': "the program needs an AF_NETLINK socket (nft, and iproute2 beyond -V); Shiro's kernel has none",
   'engine-crash': 'a program died of a signal in Blink (an unimplemented instruction or an emulation bug)',
   'missing-syscall': 'a system call Shiro or Blink does not implement',
   'maintainer-script': "a package's postinst/preinst failed",

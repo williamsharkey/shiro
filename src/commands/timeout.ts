@@ -1,5 +1,5 @@
 import type { Command } from './index';
-import { quoteArgsForShell } from '../shell';
+import { quoteArgsForShell, capturingStdout } from '../shell';
 
 /**
  * timeout [OPTION] DURATION COMMAND [ARG]...
@@ -50,7 +50,8 @@ export const timeout: Command = {
     }
 
     const child = ctx.shell.fork();
-    if (ctx.terminal) child.setTerminal(ctx.terminal as any);
+    // Piped or redirected: programs keep the tty for input, their stdout comes back here
+    if (ctx.terminal) child.setTerminal((ctx.stdoutIsTTY === false ? capturingStdout(ctx.terminal) : ctx.terminal) as any);
     child.cwd = ctx.cwd;
     let out = '';
     let err = '';

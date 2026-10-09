@@ -72,7 +72,9 @@ try {
       await page.evaluate(() => window.__shiro.terminal.term.clear());
       await typeKeys(arg + '\r');
       // the line holding the command no longer ends in "$": a later one does
-      await until((s) => s.includes(arg) && promptCount(s) > 0, `the prompt after ${arg}`);
+      // (whitespace ignored: a long command line wraps)
+      const bare = (t) => t.replace(/\s+/g, '');
+      await until((s) => bare(s).includes(bare(arg)) && promptCount(s) > 0, `the prompt after ${arg}`);
     } else if (op === 'type') await typeKeys(unescape(arg));
     else if (op === 'wait') await until((s) => s.includes(unescape(arg)), JSON.stringify(arg));
     else if (op === 'gone') await until((s) => !s.includes(unescape(arg)), `${JSON.stringify(arg)} to go`);

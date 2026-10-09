@@ -297,10 +297,31 @@ export async function prefetchPaths(fs: FileSystem, paths: string[]): Promise<nu
 export const DEBIAN_ENV: Record<string, string> = {};
 
 /**
- * apt settings that worked around engine gaps, none needed now (Dpkg::Use-Pty
+ * Settings that work around engine gaps. apt's needed none now (Dpkg::Use-Pty
  * "false" went when the kernel released a dead session leader's tty): an
- * older install's file is removed.
+ * older install's file is removed, as is the resolv.conf option below.
  */
 export async function writeEngineWorkarounds(fs: FileSystem): Promise<void> {
   await fs.unlink('/etc/apt/apt.conf.d/91shiro-engine').catch(() => {});
+  // Earlier installs got `options single-request` (Blink failed glibc's
+  // parallel A+AAAA sendmmsg until patch 0043): take it out again
+  try {
+    const conf = await fs.readFile('/etc/resolv.conf', 'utf8') as string;
+    if (/^options single-request$/m.test(conf)) {
+      await fs.writeFile('/etc/resolv.conf', conf.replace(/^options single-request\n?/m, ''));
+    }
+  } catch { /* no resolv.conf */ }
+  await keepManPages(fs);
+}
+
+/**
+ * Packages installed from now on keep their English man pages (`man` is no
+ * use without them); translations stay out. Images built before this had
+ * all of /usr/share/man excluded (scripts/debian/build-rootfs.sh).
+ */
+export async function keepManPages(fs: FileSystem): Promise<void> {
+  const p = '/etc/dpkg/dpkg.cfg.d/90shiro-slim';
+  const text = await fs.readFile(p, 'utf8').catch(() => null);
+  if (typeof text !== 'string' || text.includes('path-include /usr/share/man/')) return;
+  await fs.writeFile(p, text.replace('path-exclude /usr/share/man/*\n', 'path-exclude /usr/share/man/*\npath-include /usr/share/man/man[1-9]*/*\n'));
 }

@@ -6,6 +6,7 @@
  * (WM_DELETE_WINDOW), moves and resizes go back and forth like a window
  * manager would do them.
  */
+import { appIdAliases, pidAppIds } from './app-ids';
 import type { XServer, XWindow, XCursor } from './server';
 import type { CanvasWindow, GuiInputEvent, WindowHost } from '../gui/window-host';
 import { composeTop } from './compose';
@@ -121,7 +122,7 @@ export class Rootless {
       transientFor: this.transientFor(w) ? this.tops.get(this.transientFor(w)!)?.cw ?? null : null,
       minWidth: hints.minW || undefined, minHeight: hints.minH || undefined,
       resizable: !(hints.maxW && hints.maxW === hints.minW && hints.maxH === hints.minH),
-      appId: this.wmClass(w),
+      appId: this.appId(w),
     });
     t.cw = cw;
     // The host may have placed or clamped the window: tell the client where it is
@@ -155,13 +156,24 @@ export class Rootless {
     return tw && tw.parent === this.server.root ? tw : null;
   }
 
+  /** The desktop app id: the app that started the client (_NET_WM_PID), else its WM_CLASS */
+  private appId(w: XWindow): string | undefined {
+    const pid = this.server.prop(w, '_NET_WM_PID');
+    if (pid && pid.data.length >= 4) {
+      const id = pidAppIds.get(new DataView(pid.data.buffer, pid.data.byteOffset, 4).getUint32(0, true));
+      if (id) return id;
+    }
+    return this.wmClass(w);
+  }
+
   private wmClass(w: XWindow): string | undefined {
     const p = this.server.prop(w, 'WM_CLASS');
     if (!p) return undefined;
     // the instance name (argv[0] of most apps: "xterm", "l3afpad") is the desktop app id
     const parts = new TextDecoder('latin1').decode(p.data).split('\0');
     // ... without a version suffix ("gimp-2.10" → "gimp")
-    return (parts[0] || parts[1] || '').toLowerCase().replace(/-\d+(\.\d+)*$/, '') || undefined;
+    const id = (parts[0] || parts[1] || '').toLowerCase().replace(/-\d+(\.\d+)*$/, '') || undefined;
+    return id && (appIdAliases.get(id) ?? id);
   }
 
   private destroyed(w: XWindow): void {
