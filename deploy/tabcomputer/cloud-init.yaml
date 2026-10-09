@@ -25,6 +25,8 @@ write_files:
       Environment=PORT=3000
       Environment=STATIC_DIR=/opt/tabcomputer/current/public
       Environment=SEED_DIR=/opt/tabcomputer/seeds
+      # Server settings ship with each release (deploy/tabcomputer/server.env)
+      EnvironmentFile=-/opt/tabcomputer/current/server.env
       ExecStart=/usr/bin/node /opt/tabcomputer/current/server.mjs
       Restart=always
       RestartSec=2
@@ -56,19 +58,10 @@ write_files:
       cd "$SRC"
       git fetch --depth 1 origin "$BRANCH"
       git checkout -q -f FETCH_HEAD
-      if ! { npm ci --no-audit --no-fund && npm run build; }; then
+      # The release steps live in the repo, so they change with a push.
+      if ! bash deploy/tabcomputer/release.sh "$SRC" "$ROOT" "$want"; then
         echo "$want" > "$ROOT/FAILED_SHA"; echo "build failed for $want"; exit 1
       fi
-      rel=$ROOT/releases/$want
-      rm -rf "$rel"; mkdir -p "$rel/public"
-      rsync -a dist/ "$rel/public/"
-      cp server.mjs "$rel/server.mjs"
-      echo "$want" > "$rel/DEPLOYED_SHA"
-      echo "$want" > "$rel/public/deployed.txt"
-      ln -sfn "$rel" "$ROOT/current.new" && mv -T "$ROOT/current.new" "$ROOT/current"
-      systemctl restart tabcomputer
-      ls -1dt $ROOT/releases/* | tail -n +4 | xargs -r rm -rf
-      echo "deployed $want"
 
   - path: /etc/systemd/system/tabcomputer-deploy.service
     content: |
