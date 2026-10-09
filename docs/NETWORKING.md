@@ -235,6 +235,14 @@ receives that token. See docs/DESKTOP.md, "Network sign-in".
 
 ## Checking it from a tab
 
+When a connection fails, curl and git only say they couldn't connect.
+`dmesg` (the kernel log, src/kernel/klog.ts) says why: e.g.
+`net: relay refused connect to github.com:443: sign-in required (token 401)`,
+`... handshake refused (close 1006) after token refresh`, `... no relay
+configured`, or the relay's own `op:error` code (`EACCES (address blocked by
+relay policy)`). Identical lines are rate-limited.
+
+
 `doctor` (src/commands/doctor.ts) requests a relay token (this site's
 `/tcp/token`, or the token URL of the user's own relay) and connects a kernel
 socket to example.com:443, printing each result and its latency.

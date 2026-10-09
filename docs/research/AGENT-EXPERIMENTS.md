@@ -19,7 +19,8 @@ native Claude Code and aider all reach their APIs from tabcomputer.
 
 **Fixed since this was written:** git's background maintenance is off by
 default (`pkg` git 2.56.0-1 ships `maintenance.auto=false`, `gc.auto=0`), and
-the builtin `wget -O -` writes to stdout.
+the builtin `wget -O -` writes to stdout, and relay refusals are logged to
+the kernel log (`dmesg`).
 
 Legend: **verified** = I ran it in tabcomputer and quote the result;
 **read** = from docs or the web, not run.

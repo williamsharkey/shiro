@@ -129,7 +129,8 @@ the relay.
 
 Run `doctor` (also `tabinfo`). It prints one line each for the build, cross-origin isolation,
 the x86 engine, the internet relay, sign-ins, Debian, storage and the kernel, and warns when
-the tab is older than the server's deploy. It never prints tokens, so you can paste its output
+the tab is older than the server's deploy. `dmesg` shows the kernel log, including why the
+relay refused a connection. `doctor` never prints tokens, so you can paste its output
 into an issue at [github.com/williamsharkey/tabcomputer/issues](https://github.com/williamsharkey/tabcomputer/issues).
 
 ## Development

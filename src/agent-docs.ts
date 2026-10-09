@@ -126,6 +126,8 @@ ${bootSection(ctx, name)}
 - \`doctor\` prints one OK/WARN/FAIL line per subsystem: the build, browser
   isolation, the x86 engine, the network relay, sign-ins, Debian, storage and
   the kernel. It never prints secrets. Run it first.
+- \`dmesg\` shows the kernel log; relay refusals land there when curl or git
+  only say "Could not connect".
 - \`console -g PATTERN\` searches the page's console log (\`--prev\` includes the
   load before the last reload).
 - Report bugs at ${source}/issues (\`gh issue create\` works here): the command,

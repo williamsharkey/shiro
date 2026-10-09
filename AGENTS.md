@@ -17,6 +17,7 @@ Page (everything under `src/` is the engine; products are profiles):
 - `src/main.ts`: boot, filesystem init, command registration, the profile's preinstall, seeded runtime hydration.
 - `src/profile.ts` + `profiles/<id>/profile.json`: product profiles. Code asks `activeProfile()`, never the hostname. [docs/PROFILES.md](docs/PROFILES.md).
 - `src/kernel/*`: the Unix kernel: process table (`process.ts`), fd tables (`fd.ts`), pipes, ptys (`pty.ts`), signals and job control (`signals.ts`), epoll, file locks, `/proc` (`procfs.ts`), sockets (`net.ts`, `netlink.ts`), the SharedArrayBuffer syscall channel for Worker guests (`channel.ts`, `worker-host.ts`). Contract: [docs/KERNEL_ABI.md](docs/KERNEL_ABI.md). `window.__tabcomputer.kernel`; kernel processes show in `ps`.
+- Kernel log (`src/kernel/klog.ts`): `dmesg` (builtin; Debian's util-linux dmesg replaces it in Debian mode and reads the same log through `/dev/kmsg`), `/dev/kmsg`, `syslog(2)`. Engines and subsystems log with `klog.log`/`klog.logRatelimited` (`net: ...`, `traps: comm[pid] ...`); relay refusals (token, handshake, `op:error`, no relay) land there, so check `dmesg` when curl/git only say "Could not connect".
 - `src/filesystem.ts`: the IndexedDB-backed POSIX-like filesystem (lazy placeholders for Debian, virtual providers such as `/dom`).
 - `src/shell.ts` + `src/shell-*.ts`: the bash-compatible shell. `src/shell-kernel.ts` runs WASM/ELF pipeline stages as kernel processes.
 - `src/terminal.ts` (xterm.js, the classic HUD banner), `src/window-terminal.ts`, `src/panes.ts`.

@@ -4,6 +4,39 @@
 
 All changes so far are additive; nothing below renames or removes an earlier name.
 
+- **2026-10-09 (unix/kernel)** — kernel log, additive.
+  - `src/kernel/klog.ts`: the kernel ring buffer (64 KiB or 1000 records;
+    the oldest go). Records carry seq, µs since boot (procfs `bootMs`, the
+    /proc/uptime clock), facility and level. One per page (`klog`, also
+    `globalThis.__tabcomputerKlog`), shared by every Kernel. Log with
+    `klog.log(level, text, facility?)` or `klog.logRatelimited(...)`
+    (identical text: 5 per 5 s, then one "N similar messages suppressed").
+    Prefix lines by subsystem: `net: ...`, `traps: comm[pid] ...`.
+  - `/dev/kmsg` (`KmsgFile`): one `prio,seq,usec,-;text\n` record per read,
+    blocks unless O_NONBLOCK (EAGAIN), EPIPE once after overwritten
+    records, EINVAL for a buffer smaller than the record; lseek SEEK_SET /
+    SEEK_DATA (after the last clear) / SEEK_END; writes log as LOG_USER
+    (`<N>` prefix sets the priority).
+  - `SYS_syslog` (103): args `type, len`; READ/READ_ALL/READ_CLEAR write
+    `<prio>[ secs.usecs] text\n` records (the newest that fit) to the data
+    area. READ_ALL, SIZE_BUFFER, SIZE_UNREAD, OPEN and CLOSE are open to
+    everyone (dmesg_restrict=0); the rest need uid 0 (EPERM).
+  - `kernel.reportFatal(proc, message)`: engines call it when a guest dies
+    abnormally (worker error, wasm trap, Blink abort); out-of-memory
+    messages log as `Out of memory: Killed process PID (comm): ...`, the
+    rest as `traps: comm[pid] ...`. `Kernel.exit` logs `traps: comm[pid]
+    segfault, killed by SIGSEGV` for SIGSEGV/SIGBUS/SIGILL/SIGFPE deaths
+    (`proc.data.trapReason` adds detail), once per process.
+  - net.ts logs every relay failure (`NetStack.relayLog`): no relay
+    configured, token request failed (network error, 401 sign-in, 403
+    origin, other status), handshake refused (close code when the browser
+    gives one; "after token refresh" when the retry failed too), relay
+    `op:error` replies (code and message), and the relay closing before
+    replying.
+  - Blink: `syslog(2)` needs patch 0055 (sent to unix/x86-engine; not yet in
+    blink.wasm), until then Blink answers ENOSYS and util-linux `dmesg -S`
+    fails. Plain `dmesg` reads /dev/kmsg and works.
+
 - **2026-10-09 (unix/gui)** — behavior fix, additive.
   - `/dev/tty` (registered by `attachKernelTty`) also resolves to the pty a
     session leader acquired after spawn, by opening its slave without
