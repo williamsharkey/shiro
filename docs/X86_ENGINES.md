@@ -428,6 +428,10 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    `CAP_AMBIENT` are recorded and reported back, not enforced;
    `PR_CAPBSET_DROP` is accepted under emscripten. Test:
    `fixtures/x86/prctlcap.c`.
+38. Under Shiro `mknod`/`mknodat` go to the kernel's `mknodat`, which
+   makes FIFOs (and regular files) and refuses devices; with a kernel
+   that has no `mknodat` they stay EPERM. Test: `fixtures/x86/mkfifo.c`
+   (runs once the kernel defines `SYS_mknodat`).
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.

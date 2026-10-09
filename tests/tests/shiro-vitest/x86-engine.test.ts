@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import type { Server } from 'node:http';
 import { join, resolve } from 'node:path';
 import { createTestShell, run } from './helpers';
+import * as Abi from '@shiro/kernel/abi';
 
 const FIX = resolve(__dirname, 'fixtures/x86');
 
@@ -59,6 +60,8 @@ const forkSharedBin = join(out, 'forkshared');
 const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
 const mremapBin = join(out, 'mremap');
 const haveMremap = tryBuild('gcc', ['-static', '-O1', '-o', mremapBin, 'mremap.c']);
+const mkfifoBin = join(out, 'mkfifo');
+const haveMkfifo = tryBuild('gcc', ['-static', '-O1', '-o', mkfifoBin, 'mkfifo.c']);
 const prctlcapBin = join(out, 'prctlcap');
 const havePrctlcap = tryBuild('gcc', ['-static', '-O1', '-o', prctlcapBin, 'prctlcap.c']);
 const lchownBin = join(out, 'lchown');
@@ -532,6 +535,15 @@ describe('Blink engine: CPU and syscall fixes', () => {
       'wake(2)=2 woken=2\nwake(1)=1 woken=3\nwake(100)=3 woken=6\nwake(none)=0\n' +
       'monotonic bitset wait=-1 timedout=1 early=0\nrealtime bitset wait=-1 timedout=1 early=0\n');
     expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // mkfifo for shell-stdio; needs the kernel's FIFOs (mknodat, unix/perf-kernel)
+  it.skipIf(!haveMkfifo || !('SYS_mknodat' in Abi))('mkfifo and mknod(at) create kernel FIFOs; devices are EPERM', async () => {
+    const { shell } = await setup(readFileSync(mkfifoBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'mkfifo=0  fifo=1\nmknod=0  fifo=1\nmknodat=0  fifo=1\n' +
+      'chardev=-1 Operation not permitted\nagain=-1 File exists\n');
   }, 60_000);
 
   // LTP fstat03
