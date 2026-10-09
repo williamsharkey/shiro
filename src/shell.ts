@@ -370,6 +370,8 @@ export class Shell {
   dirStack: string[] = [];
   /** Local variable frames for function scoping — stack of {varName → savedValue|undefined} */
   private localVarStack: Map<string, { env?: string; arr?: string[]; assoc?: Map<string, string> }>[] = [];
+  /** Loops being run (break/continue only act inside one; a subshell starts at 0) */
+  private loopDepth = 0;
   /** Readonly variable names */
   readonlyVars: Set<string> = new Set();
   /** Call stack for BASH_SOURCE/caller: {funcName, source} */
@@ -533,6 +535,7 @@ export class Shell {
     child.dirStack = [...this.dirStack];
     child.history = this.history; // share history array reference
     child.completionSpecs = new Map(this.completionSpecs);
+    child.inheritedReturn = this.canReturn();
     return child;
   }
 
@@ -979,6 +982,11 @@ export class Shell {
 
   /** `source` nesting: exit inside a sourced file leaves the sourcing shell too */
   private sourcing = 0;
+  /** A subshell of a function or sourced script: `return` leaves the subshell */
+  private inheritedReturn = false;
+  private canReturn(): boolean {
+    return this.inheritedReturn || this.localVarStack.length > 0 || this.sourcing > 0;
+  }
 
   private async executeImpl(
     line: string,
@@ -1917,13 +1925,18 @@ export class Shell {
         }
 
         // Shell builtins: break and continue (throw sentinels caught by loop handlers)
-        if (effectiveCmdName === 'break') {
-          const levels = cmdArgs.length > 0 ? parseInt(cmdArgs[0], 10) || 1 : 1;
-          throw new BreakSignal(levels);
-        }
-        if (effectiveCmdName === 'continue') {
-          const levels = cmdArgs.length > 0 ? parseInt(cmdArgs[0], 10) || 1 : 1;
-          throw new ContinueSignal(levels);
+        // Outside a loop (also in a subshell inside one) break and continue do nothing
+        if (effectiveCmdName === 'break' || effectiveCmdName === 'continue') {
+          if (this.loopDepth > 0) {
+            const levels = cmdArgs.length > 0 ? parseInt(cmdArgs[0], 10) || 1 : 1;
+            throw effectiveCmdName === 'break' ? new BreakSignal(levels) : new ContinueSignal(levels);
+          }
+          stderrWriter(`shiro: ${effectiveCmdName}: only meaningful in a \`for', \`while', or \`until' loop\r\n`);
+          exitCode = 0;
+          this.lastExitCode = 0;
+          this.env['?'] = '0';
+          lastOutput = '';
+          continue;
         }
 
         // Shell builtin: exit (unwinds to the shell's outermost execute())
@@ -1942,6 +1955,14 @@ export class Shell {
         }
 
         // Shell builtin: return (throw sentinel caught by execFunction)
+        if (effectiveCmdName === 'return' && !this.canReturn()) {
+          stderrWriter('shiro: return: can only `return\' from a function or sourced script\r\n');
+          exitCode = 2;
+          this.lastExitCode = 2;
+          this.env['?'] = '2';
+          lastOutput = '';
+          continue;
+        }
         if (effectiveCmdName === 'return') {
           // (a status is 0-255: return 257 is 1, return -1 is 255)
           const n = cmdArgs.length > 0 ? parseInt(cmdArgs[0], 10) || 0 : this.lastExitCode;
@@ -5230,8 +5251,11 @@ export class Shell {
     // Push local variable frame for `local` declarations
     this.localVarStack.push(new Map());
 
-    // Execute body — catch ReturnSignal for `return [N]`
+    // Execute body — catch ReturnSignal for `return [N]`. Like bash, break and
+    // continue in a function don't reach the caller's loops.
     let exitCode = 0;
+    const outerLoopDepth = this.loopDepth;
+    this.loopDepth = 0;
     try {
       exitCode = await this.execute(func.body, writeStdout, writeStderr, false, undefined, true);
     } catch (e) {
@@ -5249,6 +5273,8 @@ export class Shell {
         }
         throw e;
       }
+    } finally {
+      this.loopDepth = outerLoopDepth;
     }
 
     // Pop local variable frame — restore saved values
@@ -5408,11 +5434,21 @@ export class Shell {
     input: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void
   ): Promise<number> {
     if (/^if\s+/.test(input)) return this.execIf(input, writeStdout, writeStderr);
-    if (/^while\s+/.test(input)) return this.execWhile(input, writeStdout, writeStderr);
-    if (/^until\s+/.test(input)) return this.execUntil(input, writeStdout, writeStderr);
-    if (/^for\s+/.test(input)) return this.execFor(input, writeStdout, writeStderr);
+    if (/^(while|until|for)\s+/.test(input)) {
+      this.loopDepth++;
+      try {
+        if (/^while\s+/.test(input)) return await this.execWhile(input, writeStdout, writeStderr);
+        if (/^until\s+/.test(input)) return await this.execUntil(input, writeStdout, writeStderr);
+        return await this.execFor(input, writeStdout, writeStderr);
+      } finally {
+        this.loopDepth--;
+      }
+    }
     if (/^case\s+/.test(input)) return this.execCase(input, writeStdout, writeStderr);
-    if (/^select\s+/.test(input)) return this.execSelect(input, writeStdout, writeStderr);
+    if (/^select\s+/.test(input)) {
+      this.loopDepth++;
+      try { return await this.execSelect(input, writeStdout, writeStderr); } finally { this.loopDepth--; }
+    }
     if (/^\((?!\()/.test(input) && input.endsWith(')')) {
       // ( list ) runs in a child shell
       const child = this.fork();
@@ -5444,7 +5480,10 @@ export class Shell {
     input: string, pipeStdin: string,
     writeStdout: (s: string) => void, writeStderr: (s: string) => void
   ): Promise<number> {
-    if (/^while\s+/.test(input)) return this.execWhile(input, writeStdout, writeStderr, pipeStdin);
+    if (/^while\s+/.test(input)) {
+      this.loopDepth++;
+      try { return await this.execWhile(input, writeStdout, writeStderr, pipeStdin); } finally { this.loopDepth--; }
+    }
     // For other control structures, set __PIPE_STDIN env and delegate
     const saved = this.env['__PIPE_STDIN'];
     this.env['__PIPE_STDIN'] = pipeStdin;

@@ -536,4 +536,18 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('r=1\ne=2\nn=255\n1\nneg=0\nbi\nco\nco2\nbi2\nafter\n');
   });
+
+  it('break/continue outside a loop, return outside a function, test -a/-o', async () => {
+    const r = await script([
+      'continue; echo one; break; echo two',
+      'for i in a b; do ( if true; then continue; fi; echo "sub $i" ); done',
+      'g() { break; }; f() { for x in 1 2; do g; echo x$x; done; }; f',
+      'while true; do while true; do break 2; done; done; echo after',
+      'return; echo rc=$?',
+      'h() ( return 42; ); h; echo h=$?',
+      'test -a /tmp; echo $?; test -a /nonexist; echo $?',
+      'set -o errexit; test -o errexit; echo $?; set +o errexit; test -o nounset; echo $?',
+    ].join('\n'));
+    expect(r.out).toBe('one\ntwo\nsub a\nsub b\nx1\nx2\nafter\nrc=2\nh=42\n0\n1\n0\n1\n');
+  });
 });
