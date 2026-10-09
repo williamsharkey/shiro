@@ -1298,6 +1298,8 @@ export class Kernel {
     // Its fds are the process's (KernelStdio, adoptFds), not whatever exec did in the page's shell
     shell.userFds = new Map();
     shell.fileDescriptors = new Map();
+    // A new process: only the page shell's `export -f` functions come along
+    shell.dropUnexportedFunctions();
     proc.onTerminate(() => shell.abortController?.abort());
     return shell;
   }

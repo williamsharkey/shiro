@@ -210,12 +210,12 @@ export interface VirtualFSProvider {
 /** /dev virtual provider */
 class DevProvider implements VirtualFSProvider {
   handles(path: string): boolean {
-    return path === '/dev/null' || path === '/dev/zero' || path === '/dev/random' || path === '/dev/urandom' || path === '/dev' || path === '/dev/stdin' || path === '/dev/stdout' || path === '/dev/stderr' || path === '/dev/fd';
+    return path === '/dev/null' || path === '/dev/zero' || path === '/dev/full' || path === '/dev/random' || path === '/dev/urandom' || path === '/dev' || path === '/dev/stdin' || path === '/dev/stdout' || path === '/dev/stderr' || path === '/dev/fd';
   }
   readFile(path: string, encoding?: 'utf8'): string | Uint8Array | null {
     if (path === '/dev/null') return encoding === 'utf8' ? '' : new Uint8Array(0);
     // A page of zeros / random bytes; as text, byte-exact (src/utils/byte-text.ts)
-    if (path === '/dev/zero') return encoding === 'utf8' ? '\0'.repeat(4096) : new Uint8Array(4096);
+    if (path === '/dev/zero' || path === '/dev/full') return encoding === 'utf8' ? '\0'.repeat(4096) : new Uint8Array(4096);
     if (path === '/dev/random' || path === '/dev/urandom') {
       const buf = new Uint8Array(256);
       crypto.getRandomValues(buf);
@@ -231,12 +231,14 @@ class DevProvider implements VirtualFSProvider {
   }
   readdir(path: string): string[] | null {
     // shm: a real directory (shm_open's files), the rest synthetic
-    if (path === '/dev') return ['null', 'zero', 'random', 'urandom', 'stdin', 'stdout', 'stderr', 'fd', 'shm'];
+    if (path === '/dev') return ['null', 'zero', 'full', 'random', 'urandom', 'stdin', 'stdout', 'stderr', 'fd', 'shm'];
     return null;
   }
   exists(path: string): boolean { return this.handles(path); }
   writeFile(path: string): boolean {
     if (path === '/dev/null') return true; // silently discard
+    // /dev/full: every write fails (`echo hi >/dev/full` exits 1, as on Linux)
+    if (path === '/dev/full') throw fsError('ENOSPC', "ENOSPC: no space left on device, write '/dev/full'");
     return this.handles(path); // other dev files: accept but discard
   }
 }
