@@ -156,8 +156,9 @@ export class Rootless {
   private wmClass(w: XWindow): string | undefined {
     const p = this.server.prop(w, 'WM_CLASS');
     if (!p) return undefined;
+    // the instance name (argv[0] of most apps: "xterm", "l3afpad") is the desktop app id
     const parts = new TextDecoder('latin1').decode(p.data).split('\0');
-    return parts[1] || parts[0] || undefined;
+    return (parts[0] || parts[1] || '').toLowerCase() || undefined;
   }
 
   private destroyed(w: XWindow): void {
@@ -304,8 +305,13 @@ export class Rootless {
         if (!down) return; // the press sent press+release
         const k = s.keymap.keycodeForChar(e.key);
         if (k.remapped) s.mappingNotify(1, k.keycode, 1);
-        s.key(true, k.keycode);
-        s.key(false, k.keycode);
+        this.tap(k.keycode, k.shift);
+        return;
+      }
+      // The character needs Shift but no Shift is down (synthetic input, some
+      // on-screen keyboards): press it around this key
+      if (sym === shifted && sym !== plain && !(s.mods & 1)) {
+        if (down) this.tap(kc, true);
         return;
       }
     }
@@ -315,6 +321,16 @@ export class Rootless {
       this.held.add(kc);
     } else this.held.delete(kc);
     s.key(down, kc);
+  }
+
+  /** Press and release a keycode, with Shift around it when needed and not held. */
+  private tap(kc: number, shift: boolean): void {
+    const s = this.server;
+    const wrap = shift && !(s.mods & 1);
+    if (wrap) s.key(true, 50);
+    s.key(true, kc);
+    s.key(false, kc);
+    if (wrap) s.key(false, 50);
   }
 
   /** Type text (paste) as key events. */

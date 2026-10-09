@@ -47,6 +47,7 @@ it.skipIf(!ROOT)('probe', async () => {
   const { composeTop } = await import('@shiro/x11/compose');
   const kernel = new Kernel({ fs, registerWithProcessTable: false });
   registerBlinkLoader(kernel);
+  (await import('@shiro/kernel/pty')).attachKernelTty(kernel);
   await startDisplay(kernel, 0);
   const lastCall = new Map<number, string>();
   const origSys = kernel.syscall.bind(kernel);

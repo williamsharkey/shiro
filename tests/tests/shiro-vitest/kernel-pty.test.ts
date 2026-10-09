@@ -764,4 +764,18 @@ describe('kernel processes on a pty', () => {
     expect(await readStr(m)).toBe('ping\r\n');
     jc.kill(p.pid, 9);
   });
+
+  it('a session leader that opens a pty slave gets it as /dev/tty (xterm\'s child)', async () => {
+    const p = kernel.spawn({ path: 'leader', setsid: true, fds: {}, run: () => new Promise<number>(() => {}) });
+    expect(await kernel.open(p, '/dev/tty', A.O_RDWR)).toBe(-A.ENXIO);
+    const m = await kernel.open(p, '/dev/ptmx', A.O_RDWR) as PtyFile;
+    const n = new Uint8Array(4);
+    await m.ioctl(0x80045430, n); // TIOCGPTN
+    await kernel.open(p, `/dev/pts/${new DataView(n.buffer).getInt32(0, true)}`, A.O_RDWR); // no O_NOCTTY: acquires it
+    const tty = await kernel.open(p, '/dev/tty', A.O_RDWR) as PtyFile;
+    expect(tty.kind).toBe('pty');
+    await tty.write(enc.encode('via /dev/tty\n'));
+    expect(await readStr(m)).toBe('via /dev/tty\r\n');
+    jc.kill(p.pid, 9);
+  });
 });

@@ -32,7 +32,7 @@ class DesktopCanvasWindow implements CanvasWindow {
     const parent = opts.transientFor instanceof DesktopCanvasWindow ? opts.transientFor.win.id : undefined;
     const options: WindowOptions = {
       title: opts.title,
-      appId: opts.appId ? `x11-${opts.appId}` : 'x11',
+      appId: opts.appId || 'x11',
       width: opts.width,
       height: opts.height,
       x: opts.x,

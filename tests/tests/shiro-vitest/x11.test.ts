@@ -305,6 +305,30 @@ describe('X11 protocol', () => {
     expect((g >> 8) & 0xff).toBe(255);
   });
 
+  it('maps browser keys: physical codes, Shift synthesized for shifted characters, other layouts by character', async () => {
+    const { Rootless } = await import('@shiro/x11/rootless');
+    const { server, c } = await newServer();
+    const rootless = new Rootless(server, { name: 'test', createCanvasWindow: () => { throw new Error('unused'); }, desktopSize: () => ({ width: 1024, height: 768 }) });
+    const wid = c.id(1);
+    createWindow(c, wid, 0, 0, 50, 50, 1 | 2);
+    c.send(8, 0, (w) => w.u32(wid));
+    c.send(42, 1, (w) => w.u32(wid).u32(0));
+    await c.events();
+    const keys = async () => (await c.events()).filter((e) => e[0] === 2 || e[0] === 3).map((e) => `${e[0] === 2 ? '+' : '-'}${e[1]}`);
+    rootless.keyEvent(true, { code: 'KeyA', key: 'a' });
+    rootless.keyEvent(false, { code: 'KeyA', key: 'a' });
+    expect(await keys()).toEqual(['+38', '-38']);
+    rootless.keyEvent(true, { code: 'Backslash', key: '|' });   // no Shift keydown came first
+    rootless.keyEvent(false, { code: 'Backslash', key: '|' });
+    expect(await keys()).toEqual(['+50', '+51', '-51', '-50']);
+    rootless.keyEvent(true, { code: 'KeyY', key: 'z' });         // German layout: the char wins
+    expect(await keys()).toEqual(['+52', '-52']);
+    rootless.keyEvent(true, { code: '', key: 'é' });             // not on the keymap: a spare keycode
+    const evs = await c.events();
+    expect(evs.some((e) => e[0] === 34)).toBe(true);              // MappingNotify
+    expect(server.keymap.keysyms(evs.find((e) => e[0] === 2)![1])[0]).toBe(0xe9);
+  });
+
   it('looks up X color names', () => {
     expect(lookupColor('red')).toBe(0xff0000);
     expect(lookupColor('Light Steel Blue')).toBe(0xb0c4de);

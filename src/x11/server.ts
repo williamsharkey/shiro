@@ -229,6 +229,9 @@ export class XServer {
     this.resources.set(ROOT_ID, { kind: 'window', owner: null, free() {}, value: this.root });
     this.resources.set(COLORMAP_ID, { kind: 'colormap', owner: null, free() {}, value: { visual: VISUAL_24 } });
     this.resources.set(CMAP_32, { kind: 'colormap', owner: null, free() {}, value: { visual: VISUAL_32 } });
+    // What a desktop session's xrdb would load: toolkits take their DPI and font rendering from it
+    const rdb = 'Xft.dpi:\t96\nXft.antialias:\t1\nXft.hinting:\t1\nXft.hintstyle:\thintslight\nXft.rgba:\tnone\nXcursor.size:\t24\n';
+    this.root.props.set(23 /* RESOURCE_MANAGER */, { type: P.ATOM_STRING, format: 8, data: new TextEncoder().encode(rdb) });
     this.addExtension('BIG-REQUESTS', 0, 0, (c, minor) => {
       if (minor !== 0) throw new XError(P.BadRequest);
       c.bigRequests = true;

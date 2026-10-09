@@ -317,6 +317,8 @@ async function main() {
     () => import('./commands/gh').then(m => m.ghCmd)), 'src/commands/gh.ts');
   registerCommand(commands, lazyCommand('x86', 'Run x86-64 ELF binaries',
     () => import('./commands/x86').then(m => m.x86Cmd)), 'src/commands/x86.ts');
+  registerCommand(commands, lazyCommand('gui', 'Linux GUI apps (xterm, GTK, Qt) from Debian, streamed on first use',
+    () => import('./commands/gui').then(m => m.guiCmd)), 'src/commands/gui.ts');
   registerCommand(commands, lazyCommand('xserver', 'In-page X11 display server (Xshiro): status, start, stop',
     () => import('./commands/xserver').then(m => m.xserverCmd)), 'src/commands/xserver.ts');
   registerCommand(commands, mkTempCmd, 'src/commands/mktemp.ts');
@@ -499,6 +501,8 @@ async function main() {
   // Connect terminal to shell for interactive commands (vi, etc.)
   shell.setTerminal(terminal);
   desktop?.attachMainTerminal(terminal);
+  // Debian GUI apps (xterm, GTK, Qt) in the dock, installed on first click (src/gui/apps.ts)
+  if (desktop) void import('./gui/desktop-apps').then(m => m.registerGuiApps(desktop.wm, fs, kernel)).catch(e => console.warn('[gui]', e));
 
   // Listen for font size changes from parent (seed snippet)
   window.addEventListener('message', (e) => {
