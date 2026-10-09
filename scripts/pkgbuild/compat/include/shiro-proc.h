@@ -34,6 +34,9 @@ int mkstemp(char *);
 mode_t umask(mode_t);
 /* Signal sets and masks: accepted, not enforced (signals come from the kernel) */
 #include <signal.h>
+/* sigset_t even under -std=c11 (no _BSD_SOURCE), as CPython builds */
+#define __NEED_sigset_t
+#include <bits/alltypes.h>
 #ifndef SIG_BLOCK
 #define SIG_BLOCK 0
 #define SIG_UNBLOCK 1

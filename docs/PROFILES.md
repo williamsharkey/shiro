@@ -39,7 +39,7 @@ value forgets it. `?ui=` still overrides the profile's UI mode on its own.
 | `shims.tabSsh` | `ssh CODE` is the tab-to-tab ssh over WebRTC (`remote start`); off, every `ssh` is OpenSSH | on | on |
 | `shims.binCommandStat` | builtins stat as executables in `/bin`, `/usr/bin` for WASM and x86 programs searching PATH | on | on |
 | `shims.debianOverlay` | Debian mode diverts hot programs to the builtins by default (`src/debian/overlay-policy.json`); off, Debian's own stay | on | on |
-| `shims.python` | `pyodide`: `python`/`python3`/`pip` are the Pyodide builtins until a package shadows them; `package`: only `pkg`/`apt` python3 | pyodide | pyodide |
+| `shims.python` | `cpython`: `python`/`python3`/`pip` install the CPython package (`pkg install python3`) on first use and run it, after which its links shadow them; `pyodide`: they are the Pyodide builtins until a package shadows them; `package`: only `pkg`/`apt` python3. Pyodide is `pyodide` in every case | cpython | cpython |
 
 Checks per product: the full suite runs as the default profile (`tabcomputer`;
 `setActiveProfile` switches it, `profiles.test.ts` turns each shim off), and

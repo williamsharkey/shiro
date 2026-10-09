@@ -382,7 +382,16 @@ async function main() {
 
   // Lazy-loaded new capabilities (WASM runtimes from CDN). Pyodide python is
   // the profile's python shim; without it python3 comes from pkg/apt only.
-  if (activeProfile().shims.python === 'pyodide') {
+  registerCommand(commands, lazyCommand('pyodide', 'Python interpreter (Pyodide: numpy, pandas, ... in WebAssembly)',
+    () => import('./commands/python').then(m => ({ ...m.pythonCmd, name: 'pyodide' }))), 'src/commands/python.ts');
+  if (activeProfile().shims.python === 'cpython') {
+    for (const [name, key, desc] of [
+      ['python', 'cpythonCmd', 'Python 3 interpreter (CPython)'], ['python3', 'cpython3Cmd', 'Python 3 interpreter (CPython)'],
+      ['pip', 'cpipCmd', 'Python package manager'], ['pip3', 'cpip3Cmd', 'Python package manager'],
+    ] as const) {
+      registerCommand(commands, lazyCommand(name, desc, () => import('./commands/python-default').then(m => m[key])), 'src/commands/python-default.ts');
+    }
+  } else if (activeProfile().shims.python === 'pyodide') {
     registerCommand(commands, lazyCommand('python', 'Python interpreter (Pyodide)',
       () => import('./commands/python').then(m => m.pythonCmd)), 'src/commands/python.ts');
     registerCommand(commands, lazyCommand('python3', 'Python 3 interpreter (Pyodide)',
