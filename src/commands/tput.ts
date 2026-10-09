@@ -1,4 +1,5 @@
 import { Command } from './index';
+import { ptyOf } from './tty-of';
 
 export const tputCmd: Command = {
   name: 'tput',
@@ -14,7 +15,7 @@ export const tputCmd: Command = {
     }
 
     // Size comes from the controlling tty (TIOCGWINSZ); LINES/COLUMNS override it, as in ncurses
-    const ws = ctx.terminal?.tty?.pty.winsize ?? ctx.terminal?.getSize() ?? { cols: 80, rows: 24 };
+    const ws = ptyOf(ctx, [1, 2, 0])?.winsize ?? ctx.terminal?.getSize() ?? { cols: 80, rows: 24 };
     const envInt = (name: string) => (/^\d+$/.test(ctx.env[name] ?? '') ? parseInt(ctx.env[name], 10) : 0);
     const size = { cols: envInt('COLUMNS') || ws.cols, rows: envInt('LINES') || ws.rows };
     const num = (i: number) => parseInt(args[i] || '0', 10) || 0;

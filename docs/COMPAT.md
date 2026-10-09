@@ -194,6 +194,19 @@ releases (pinned sha256), installed with `pkg install` and run in Blink, so
 they need a cross-origin isolated page (`"needs": ["x86"]`). Rows marked
 WASI/WASIX are WASM packages run as kernel processes in workers.
 
+Terminal fidelity in the real app (`tests/browser/tui.mjs`, Chromium, the
+desktop terminal):
+
+| Feature | Status |
+| --- | --- |
+| `TERM=xterm-256color`, `COLORTERM=truecolor`; terminfo | ncurses programs use the entries compiled into them (no terminfo database is installed); vim reports 256 colors; `tput colors/cols/lines` |
+| Resize | every xterm size change (window drag, refit, font) reaches the pty: SIGWINCH and a redraw in vim, htop, less, tmux and screen windows; `stty size`/`tput` in a kernel sh read the pty |
+| Alternate screen | vim, less, htop restore the shell's screen |
+| Mouse | SGR (1006) reports reach vim (`set mouse=a`); X10 (1000) reports reach programs too (xterm sends them as binary). htop's clicks don't work: under Blink its ncurses enables only 1000 and misparses the reports (natively the same binary uses 1006); a Blink issue |
+| Bracketed paste | vim gets pasted text literally (no autoindent cascade) |
+| 256-color, truecolor | passed through to xterm |
+| Unicode width | xterm uses Unicode 11 widths (`@xterm/addon-unicode11`), as programs' wcwidth does: CJK and emoji take two cells |
+
 Browser checks: `scripts/browser-tui.mjs` drives the built app in headless
 Chromium (cross-origin isolated) through xterm.js's own keyboard input and
 reads the rendered screen. Verified there on 2026-10-09: vim (insert, `:wq`,
