@@ -348,6 +348,8 @@ async function clientHello(host: string, o: TlsOptions): Promise<HelloParts> {
 const HRR_RANDOM = new Uint8Array([0xcf, 0x21, 0xad, 0x74, 0xe5, 0x9a, 0x61, 0x11, 0xbe, 0x1d, 0x8c, 0x02, 0x1e, 0x65, 0xb8, 0x91,
   0xc2, 0xa2, 0x11, 0x16, 0x7a, 0xbb, 0x8c, 0x5e, 0x07, 0x9e, 0x09, 0xe2, 0xc8, 0xa8, 0x33, 0x9c]);
 
+const DOWNGRADE_12 = te.encode('DOWNGRD\x01');
+
 interface ServerHello { version: number; random: Uint8Array; suite: number; exts: Map<number, Uint8Array>; raw: Uint8Array }
 
 function parseServerHello(msg: Uint8Array): ServerHello {
@@ -442,7 +444,11 @@ export async function tlsHandshake(raw: ByteStream, host: string, roots: RootCer
   transcript.push(shMsg);
 
   if (sh.version === 0x0304) return tls13(raw, rec, hs, host, roots, sh, shares, transcript, o);
-  if (sh.version === 0x0303) return tls12(raw, rec, hs, host, roots, sh, hello.random, transcript, nextPlain);
+  if (sh.version === 0x0303) {
+    // We offered 1.3, so a 1.3 server answering 1.2 marks its random (RFC 8446 4.1.3): a downgrade
+    if (eq(sh.random.subarray(24), DOWNGRADE_12)) throw new Error('TLS downgrade detected');
+    return tls12(raw, rec, hs, host, roots, sh, hello.random, transcript, nextPlain);
+  }
   throw new Error(`server chose TLS version 0x${sh.version.toString(16)}`);
 }
 

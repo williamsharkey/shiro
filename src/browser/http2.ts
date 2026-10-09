@@ -29,10 +29,7 @@ interface Stream {
   error: Error | null;
   sendWindow: number;
   windowWaiters: (() => void)[];
-  headerBlock: Uint8Array[] | null;
   headersDone: boolean;
-  /** END_STREAM came on the HEADERS frame whose block is still being continued */
-  endAfterHeaders: boolean;
   finish: ((ok: boolean) => void) | null;
 }
 
@@ -48,7 +45,12 @@ const u32 = (n: number) => { const b = new Uint8Array(4); new DataView(b.buffer)
 
 export class H2Session {
   private next = 1;
-  private streams = new Map<number, Stream>();
+  private slotWaiters: (() => void)[] = [];
+  /** Open streams; a stream leaving makes room for a request waiting in slot(). */
+  private streams = new (class extends Map<number, Stream> {
+    constructor(private onFree: () => void) { super(); }
+    override delete(id: number): boolean { const had = super.delete(id); if (had) this.onFree(); return had; }
+  })(() => this.slotWaiters.shift()?.());
   private decoder = new HpackDecoder(65536, 65536);
   private peerMaxFrame = 16384;
   private peerInitialWindow = 65535;
@@ -60,6 +62,9 @@ export class H2Session {
   closed = false;
   goingAway = false;
   private lastUsed = Date.now();
+  private headerBlock: Uint8Array[] | null = null;
+  /** END_STREAM came on the HEADERS frame whose block is still being continued */
+  private headerEndsStream = false;
 
   constructor(private s: ByteStream, private authority: string) {}
 
@@ -73,6 +78,10 @@ export class H2Session {
   /** Room for another request on this connection. */
   get available(): boolean { return !this.closed && !this.goingAway && this.streams.size < this.maxConcurrent && this.next < 0x7fffffff; }
   get active(): number { return this.streams.size; }
+  /** Usable later: only at the peer's stream limit, so a request should wait for slot() rather than dial. */
+  get full(): boolean { return !this.closed && !this.goingAway && this.streams.size >= this.maxConcurrent; }
+  /** Resolves when a stream ends (or the session does). */
+  slot(): Promise<void> { return new Promise((r) => this.slotWaiters.push(r)); }
   get idleFor(): number { return this.streams.size ? 0 : Date.now() - this.lastUsed; }
 
   private send(...frames: Uint8Array[]): Promise<void> {
@@ -99,6 +108,11 @@ export class H2Session {
       if (n === 'cookie') for (const c of v.split(/;\s*/)) regular.push(['cookie', c]); // RFC 9113 8.2.3: crumbs compress better
       else regular.push([n, v]);
     }
+    // As Chrome does: a known body length is sent (some servers answer 411 without it), 0 for an empty POST/PUT/PATCH
+    if (!regular.some(([k]) => k === 'content-length')) {
+      if (body instanceof Uint8Array && (body.length || !['GET', 'HEAD', 'OPTIONS', 'DELETE'].includes(method))) regular.push(['content-length', String(body.length)]);
+      else if (body === null && ['POST', 'PUT', 'PATCH'].includes(method)) regular.push(['content-length', '0']);
+    }
     const block = hpackEncode([...pseudo, ...regular]);
     const hasBody = body !== null && !(body instanceof Uint8Array && body.length === 0);
     let resolveHead!: (h: { status: number; headers: HeaderList }) => void;
@@ -106,7 +120,7 @@ export class H2Session {
     const headP = new Promise<{ status: number; headers: HeaderList }>((res, rej) => { resolveHead = res; rejectHead = rej; });
     const st: Stream = {
       id, head: resolveHead, fail: (e) => { rejectHead(e); }, ctrl: null, queued: [], ended: false, error: null,
-      sendWindow: this.peerInitialWindow, windowWaiters: [], headerBlock: null, headersDone: false, endAfterHeaders: false, finish: null,
+      sendWindow: this.peerInitialWindow, windowWaiters: [], headersDone: false, finish: null,
     };
     const reusable = new Promise<boolean>((res) => { st.finish = res; });
     this.streams.set(id, st);
@@ -127,7 +141,15 @@ export class H2Session {
     const bodyStream = new ReadableStream<Uint8Array>({
       start: (ctrl) => { st.ctrl = ctrl; this.flush(st); },
       pull: () => { this.flush(st); },
-      cancel: () => { this.resetStream(id, 8, null); st.finish?.(false); },
+      cancel: () => {
+        this.resetStream(id, 8, null);
+        st.finish?.(false);
+        st.finish = null;
+        st.ctrl = null;
+        // What arrived but will never be read still counts against the connection's window
+        const dropped = st.queued.splice(0).reduce((n, c) => n + c.length, 0);
+        if (dropped) this.consumed(id, dropped);
+      },
     }, { highWaterMark: 1 << 20, size: (c) => c.byteLength });
     return { status: head.status, statusText: '', headers: head.headers, body: bodyStream, reusable };
   }
@@ -248,19 +270,21 @@ export class H2Session {
         return;
       }
       case HEADERS: case CONTINUATION: {
-        if (!st) return;
         let block = type === HEADERS ? unpad(p) : p;
         if (type === HEADERS && flags & PRIORITY_FLAG) block = block.subarray(5);
-        st.headerBlock = [...(type === CONTINUATION ? st.headerBlock ?? [] : []), block.slice()];
-        if (type === HEADERS) st.endAfterHeaders = !!(flags & END_STREAM);
+        // Collected per connection (CONTINUATION must follow at once) and always decoded, even for a
+        // stream we already reset: skipping a block would desynchronise the HPACK table for the rest
+        this.headerBlock = [...(type === CONTINUATION ? this.headerBlock ?? [] : []), block.slice()];
+        if (type === HEADERS) this.headerEndsStream = !!(flags & END_STREAM);
         if (!(flags & END_HEADERS)) return;
-        const all = st.headerBlock;
-        st.headerBlock = null;
+        const all = this.headerBlock;
+        this.headerBlock = null;
         const total = new Uint8Array(all.reduce((n, b) => n + b.length, 0));
         let o = 0;
         for (const b of all) { total.set(b, o); o += b.length; }
         const fields = this.decoder.decode(total);
-        const endAfter = st.endAfterHeaders;
+        if (!st) return;
+        const endAfter = this.headerEndsStream;
         if (!st.headersDone) {
           const status = Number(fields.find(([k]) => k === ':status')?.[1]);
           if (status >= 100 && status < 200) return; // informational
@@ -316,6 +340,7 @@ export class H2Session {
     for (const st of this.streams.values()) this.failStream(st, err);
     this.streams.clear();
     for (const w of this.connWaiters.splice(0)) w();
+    for (const w of this.slotWaiters.splice(0)) w();
     this.s.close();
   }
 

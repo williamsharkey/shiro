@@ -17,8 +17,9 @@ How well it works is measured in [WEB_SCORE.md](WEB_SCORE.md)
   (the app) and `browser-passwords.ts`, `scripts/build-browse.mjs`, the
   browse-host routes in `server.mjs`.
 - Tests: `tests/tests/shiro-vitest/browser-core.test.ts` (origin map, HTTP/1.1,
-  TLS 1.3 against a local server, keep-alive, PSL, cookie jar, WebSocket
-  framing), `browser-rewrite.test.ts`, `browser-broker.test.ts` (credential, CORS, partition, navigation and framing rules), `browser-passwords.test.ts`,
+  TLS 1.3/1.2 against local servers incl. HelloRetryRequest and the Chrome
+  hello's shape, HTTP/2 and HPACK against `node:http2`, keep-alive, PSL,
+  cookie jar, WebSocket framing), `browser-rewrite.test.ts`, `browser-broker.test.ts` (credential, CORS, partition, navigation and framing rules), `browser-passwords.test.ts`,
   `browse-server.test.ts`, and the scoreboard.
 
 ## Moving parts
@@ -27,8 +28,8 @@ How well it works is measured in [WEB_SCORE.md](WEB_SCORE.md)
  desktop page (tabcomputer.com, cross-origin isolated)                       server.mjs
  ┌──────────────────────────────────────────────────────────┐
  │ Browser app ── Broker ── cookie jar (partitioned, IDB)    │
- │   tabs         │  HTTP/1.1 ── subtls TLS 1.3 ── kernel ───┼── WebSocket ──▶ /tcp relay ── TCP ──▶ site:443
- │   history      │  (keep-alive pool)            TCP socket │   (ciphertext only)
+ │   tabs         │  HTTP/2|1.1 ─ TLS (ours) ──── kernel ───┼── WebSocket ──▶ /tcp relay ── TCP ──▶ site:443
+ │   history      │  (h2 session or h1 pool)      TCP socket │   (ciphertext only)
  │   vault        │                                          │
  │  ┌─────────────┼───── MessagePort per document ─────────┐ │
  │  │ iframe https://en-wikipedia-org.web.tabcomputer.com/…  │ │  first visit: bootstrap page + /__tc/{sw,boot,client}.js
@@ -129,9 +130,9 @@ rules) is ever guessed from a URL or a header the page controls.
 
 ### Network: TLS in the page
 
-The broker speaks HTTP/1.1 (`http1.ts`) over TLS 1.3 done in the page
-(`tls.ts`), over kernel TCP sockets through the existing relay
-(`kernel/net.ts`, docs/NETWORKING.md). So:
+The broker speaks HTTP/2 (`http2.ts`, `hpack.ts`) or HTTP/1.1 (`http1.ts`)
+over TLS done in the page (`tlsclient.ts`, `tls.ts`), over kernel TCP sockets
+through the existing relay (`kernel/net.ts`, docs/NETWORKING.md). So:
 
 - **The server only ever sees ciphertext**, exactly as for `curl` in the
   terminal today. The relay's egress policy (no private, loopback or
@@ -139,44 +140,54 @@ The broker speaks HTTP/1.1 (`http1.ts`) over TLS 1.3 done in the page
 - Certificates are verified against Mozilla's root store (`public/browse/cacert.pem`
   from curl.se) plus any roots the user adds in the app (a company proxy's;
   the scoreboard adds its sandbox's egress CA that way).
-- TLS is **subtls** (MIT; TypeScript TLS 1.3 on WebCrypto), vendored in
-  `src/browser/vendor/subtls/` with four marked patches:
-  1. the TLS 1.3 ChangeCipherSpec is optional, as RFC 8446 allows;
-  2. ECDSA P-384 and RSA-PSS SHA-384/512 CertificateVerify are accepted
-     (CNN's certificate, for one);
-  3. a CA needs `keyCertSign`, not `digitalSignature`;
-  4. `keyUsage` bits are read in RFC 5280 order. Upstream read them backwards,
-     so it refused most real CA chains and passed some by accident.
-
-  Patches 3 and 4 came from the scoreboard's real certificate chains. Its
-  remaining limits are a P-256 key share only (no HelloRetryRequest),
-  AES-128-GCM only, and no chain building.
-- **TLS 1.2** (`tls12.ts`, ours): when a 1.3 handshake fails for any reason
-  other than the certificate, the broker redials with a TLS 1.2 ClientHello
-  and remembers the host. That covers TLS 1.2-only servers (Craigslist,
-  weather.com's image CDN, ad hosts) and 1.3 servers that want X25519.
-  - It is deliberately narrow: ECDHE (P-256/P-384) with AES-GCM only, the
-    extended master secret required, and no RSA key exchange, CBC,
-    renegotiation, resumption or client certificates. Certificates get the
-    same chain checks as 1.3.
-  - There is no RFC 8446 downgrade-sentinel check: the 1.2 hello doesn't offer
-    1.3, so every 1.3-capable server sets the sentinel. An attacker who forces
-    the fallback still only gets ECDHE + AEAD + EMS.
-- Hardening path: rustls compiled to WASM, built by us (Apache/MIT), to
-  replace both. epoxy-tls, which does exactly this, is AGPL.
-- **TLS fingerprint**: neither ClientHello looks like Chrome's (no GREASE,
-  no ALPN/h2, few suites), so bot defenses that fingerprint TLS block us
-  where the direct tab gets through (Reddit: "blocked by network security").
-  A Chrome-shaped ClientHello needs X25519, ALPN and ideally HTTP/2: rustls
-  again.
-- Connections are pooled per origin (6, idle 60 s, `netfetch.ts`). That
-  matters twice over: every new connection costs a relay WebSocket and a TLS
-  handshake, and the relay rate-limits connects per client IP (300/min and 64
-  concurrent by default, raised from 60 and 16 for browsing; owner decision).
+- **TLS is ours** (`tlsclient.ts`, on WebCrypto): TLS 1.3 and 1.2 negotiated
+  from one ClientHello.
+  - TLS 1.3: X25519, P-256 and P-384 key shares with HelloRetryRequest,
+    AES-128-GCM and AES-256-GCM, ECDSA and RSA-PSS CertificateVerify,
+    KeyUpdate, ALPN.
+  - TLS 1.2: ECDHE (X25519, P-256, P-384) with AES-GCM; the extended master
+    secret whenever the server offers it. No RSA key exchange, CBC,
+    renegotiation, resumption or client certificates. That covers 1.2-only
+    servers (Craigslist, weather.com's image CDN, ad hosts).
+  - Certificate parsing and chain checks still come from **subtls** (MIT),
+    vendored in `src/browser/vendor/subtls/` with five marked patches: an
+    optional TLS 1.3 ChangeCipherSpec; P-384 and RSA-PSS SHA-384/512
+    signatures; a CA needs `keyCertSign`; `keyUsage` bits read in RFC 5280
+    order (upstream read them backwards); and `verifyCerts` exported. Its
+    handshake code is no longer used. There is no chain building
+    (intermediates must be sent, as almost every server does).
+- **The ClientHello is shaped like Chrome's**: GREASE (suite, group, key
+  share, version, two extensions), Chrome's suite, group and signature lists,
+  `status_request`, SCT, session ticket, ALPN `h2` + `http/1.1`, and the
+  extension order shuffled per connection. It offers a few things we can't do
+  (ChaCha20, CBC and RSA key exchange in 1.2). A server that picks one, hangs
+  up or refuses the hello gets one **narrow retry** (only what we implement)
+  on a fresh connection, and the host is remembered for the page's lifetime.
+  A certificate failure never retries. The shape gets Reddit's front door
+  past "blocked by network security" to its JS challenge.
+  - Still missing next to current Chrome: the X25519MLKEM768 post-quantum
+    share, `compress_certificate`, ALPS and ECH GREASE. So JA3/JA4-style
+    fingerprints are close, not identical. Cloudflare's challenge
+    (Stack Overflow) still answers 403.
+- **HTTP/2** when ALPN says `h2`: HPACK (static and dynamic tables, Huffman),
+  Chrome's SETTINGS and connection window (15 MiB), flow control, PING,
+  GOAWAY with retry on a fresh session, and CONTINUATION. There is one
+  session per origin, multiplexing every request, so a page like Wikipedia's
+  needs 5 connections instead of up to 6 per origin. Requests beyond the
+  server's stream limit queue on the session, as in browsers (Discord's
+  login page: 1,050 requests on one connection). Header blocks are decoded
+  even for streams we already reset, or the HPACK table would drift. Origins that answer
+  `http/1.1` (or no ALPN) are remembered and use the HTTP/1.1 pool.
+- HTTP/1.1 connections are pooled per origin (6, idle 60 s, `netfetch.ts`).
+  That matters twice over: every new connection costs a relay WebSocket and
+  a TLS handshake, and the relay rate-limits connects per client IP (300/min
+  and 64 concurrent by default, raised from 60 and 16 for browsing; owner
+  decision).
 - gzip and deflate are decoded with `DecompressionStream`. Brotli is too,
   where the browser has it; otherwise the broker doesn't advertise `br`.
-- No HTTP/2 yet. Sites work over HTTP/1.1, but only with 6 parallel
-  connections per origin.
+- Hardening path: rustls compiled to WASM, built by us (Apache/MIT), in
+  place of our TLS code and subtls's certificate checks. epoxy-tls, which
+  does exactly this, is AGPL.
 
 The alternative is the server fetching for the page, which would see every
 page and password in plaintext. It exists only as a local comparison
@@ -220,6 +231,59 @@ Responses lose `Set-Cookie` (it goes to the jar), HSTS, Alt-Svc, COOP/COEP/CORP
   `frame-ancestors`, checked against its ancestors' real origins, because the
   host browser now only sees our frame-ancestors. A tab's top document is
   never refused: the app is the browser.
+- **Scripts**: see the next section.
+
+### Scripts: `location` and `top`
+
+A page on `https://login-live-com.web.tabcomputer.com/` that reads
+`location.hostname` should see `login.live.com`. Sign-in pages check this,
+and so do analytics and routers. `Location`'s properties can't be redefined
+(they are `[LegacyUnforgeable]`), and neither can `window.top`. That `top`
+matters because a tab's top document has the desktop above it, so frame
+checks (`top !== self`) and reads of `top.location` fail.
+
+UV and Scramjet rewrite every script for this. We do the same, narrowly
+(`jsrewrite.ts`, with acorn, MIT). Script responses (`script`, `worker`,
+`sharedworker`), inline `<script>`s, `on*` attributes, `javascript:` links,
+scripts a page inserts, and direct `eval` sources get these changes:
+
+| In the script | Becomes | At run time (`shim.ts`) |
+|---|---|---|
+| `location`, `x.location` | `__tcLocation`, `x.__tcLocation` | An `Object.prototype` accessor: a real `Location` comes back as a stand-in that reports the real URL and origin and navigates through the real one; anything else is `x.location` unchanged. |
+| `top`, `window.top` | `__tcTop`, `window.__tcTop` | For a window, the tab's top document (found from `ancestorOrigins` and the app origin); else `x.top`. `.top` is only rewritten on window-like expressions, so `rect.top` and `style.top` stay. |
+| `w.postMessage(m, origin)` | `w.postMessage(m, __tcPMO(origin))` | A real target origin becomes its browse origin. Without this, a message to `https://www.youtube.com` from a page that built it from `location` is dropped by the browser. |
+| `eval(src)` | `eval(__tcJS(src))` | Still a direct eval; the source gets the same rewrite. |
+
+- Every *binding* named `location` or `top` is renamed the same way, so a
+  local variable or parameter with that name keeps working. Object keys,
+  class members, labels, string keys (`x["location"]`) and module export
+  names are left alone, so data shapes don't change. A shorthand `{top}`
+  becomes `{top: __tcTop}`.
+- A script that doesn't parse goes through unchanged, and so does one with
+  no candidate names. Rewrites are cached by URL and content (32 MB).
+- A worker starts with `importScripts("/__tc/shim.js")` (or `import` for a
+  module worker), placed after any `"use strict"` prologue.
+- **Subresource integrity**: a rewritten script no longer matches its
+  hash. The broker takes `integrity` off `<script src>` and `<link>` in the
+  page and checks those hashes itself on the original bytes; a mismatch is
+  a network error, as in a browser. A request that carries `integrity` (set
+  by script) is passed through unrewritten, so the browser's own check
+  still holds.
+- A rewritten inline script gets the runtime's nonce, so a page whose CSP
+  allows it by hash still runs it.
+- Elsewhere in the runtime: `self.origin`, `document.URL`/`documentURI`/
+  `baseURI`/`domain`, and link `href`/`origin`/`host` report real URLs.
+  `history.pushState` and `new Worker()` accept real URLs. A tab's top
+  document is its own `parent`, and same-origin frames (`about:blank`) get
+  the shim when the page first touches them.
+
+Not covered: `new Function`, string `setTimeout`, `document.write` of
+scripts, computed access (`window["location"]`), `with` scopes, and
+null-prototype objects with a `location` property (their reads through the
+accessor see `undefined`). Code in a cross-origin frame that reads
+`parent.location` now gets a SecurityError for the accessor instead of a
+cross-origin Location, which only matters for scripts that write
+`parent.location.href`.
 
 ### The page runtime (`client.ts`)
 
@@ -237,9 +301,10 @@ and doing so gains nothing beyond what its browse origin already has.
 - `WebSocket` is a shim that goes through the broker. The broker dials the
   real server through the relay with TLS in the page and does RFC 6455 itself
   (`websocket.ts`), sending the real `Origin` and the jar's cookies.
-- `MessageEvent.origin` and `document.referrer` report real origins. The
-  page's own `navigator.serviceWorker.register` is refused, because a site
-  worker on the same scope would replace ours.
+- `MessageEvent.origin` and `document.referrer` report real origins, and so
+  do rewritten scripts' `location` (previous section). The page's own
+  `navigator.serviceWorker.register` is refused, because a site worker on
+  the same scope would replace ours.
 - Passkeys: a `navigator.credentials.get/create` call with `publicKey` is
   refused and reported, and the app shows its fallback banner. Conditional
   (autofill) requests just stay pending, as in a browser with no passkeys, so
@@ -248,12 +313,8 @@ and doing so gains nothing beyond what its browse origin already has.
   Fill"), fills only when the app says so, and reports submitted logins so
   the app can offer to save them.
 
-Known gaps: `location.hostname`/`origin` show the browse origin, since
-`location` can't be redefined. UV and Scramjet rewrite all JavaScript to
-work around this (Scramjet with a Rust/WASM rewriter), and it is the largest
-compatibility lever left. Also missing: `postMessage` with a real-origin
-`targetOrigin` to *another* window is dropped by the browser,
-`document.domain`, and `window.opener` for popups (we open app tabs instead).
+Known gaps: `window.opener` for popups (we open app tabs instead), and
+the script cases listed above.
 
 ### Cookies
 
@@ -348,7 +409,8 @@ the web.
 | The server sees decrypted traffic (a fetch-through-server design) | Only with `TABCOMPUTER_BROWSE_SERVER_FETCH=1`, for local measurement; never in production (owner decision). | — |
 | One instance's Browser reads another's site storage (music.tabcomputer.com vs art.tabcomputer.com) | Cookies and passwords live in each instance's own broker. | Browse-origin storage (a site's `localStorage`, IndexedDB, and our service worker) is partitioned by top-level *site*, and every instance is the same site, so instances share it. A fix would put an instance tag in the key (`www-example-com---i…`). |
 | Cookie tossing from browse origins onto `.tabcomputer.com` | The page runtime's `document.cookie` never writes host cookies. | A page can still set a real cookie on `Domain=tabcomputer.com` through a pristine `Document.prototype`. The desktop and server use no cookies today, so that must stay true, or a separate domain must be used. |
-| Untrusted TLS code | subtls verifies chains, names, validity and CA key usage. The tests check that an untrusted chain, a name mismatch and a CA without `keyCertSign` are refused. | subtls is "not intended for production" and unaudited, and the scoreboard already found two bugs in its certificate checks (patched). Replacing it (rustls/WASM) comes before shipping. |
+| Untrusted TLS code | Our TLS client checks every transcript MAC/signature; subtls's code verifies chains, names, validity and CA key usage. The tests check that an untrusted chain, a name mismatch and a CA without `keyCertSign` are refused. | Both are unaudited: our handshake is new, and the scoreboard already found two bugs in subtls's certificate checks (patched). Replacing them (rustls/WASM) comes before shipping. |
+| TLS downgrade | Both hellos offer TLS 1.3, and a 1.2 answer carrying the RFC 8446 downgrade sentinel is refused. The narrow retry offers only AEAD suites, so forcing it gains an attacker nothing. | A server that negotiates 1.2 without the sentinel is trusted at 1.2, as in any browser. |
 | Proxy abuse (using tabcomputer as an open proxy) | The same relay policy and limits as `curl`. Optional GitHub sign-in (`TABCOMPUTER_TCP_REQUIRE_SIGNIN`). | Browsing raises connect rates; limits need tuning, not removing. |
 
 ## Prior art
@@ -413,13 +475,15 @@ the web.
 
 Ordered by what the scoreboard says matters:
 
-1. **A browser-shaped TLS client** (rustls/WASM: X25519, ALPN, GREASE, more
-   suites), plus **HTTP/2**. Fingerprinting bot defenses (Reddit, Cloudflare
-   challenges) block today's ClientHello, and HTTP/1.1 caps each origin at
-   6 parallel requests.
-2. **`location`/`origin` rewriting** (a targeted JS rewrite, or a proxy over
-   `location` for scripts that read it). Sign-in pages that check their own
-   hostname (Microsoft's) break without it.
-3. **A multiplexed relay** (Wisp-like).
-4. **An HTTP cache.** There is none yet, so every visit refetches.
-5. Popups with `opener` (OAuth), downloads, and the per-instance storage tag.
+1. **A brotli decoder** (WASM or JS, loaded on demand). Chromium's
+   `DecompressionStream` has no brotli, and some servers send it unasked
+   (pre-compressed `.br` files on S3/CloudFront, such as Amplitude's SDK on
+   zoom.com). A service worker's constructed response is never decoded by
+   the browser, so such a script arrives as bytes.
+2. **Script rewriting off the main thread** (a worker in the app), and the
+   remaining script cases (`new Function`, `document.write`).
+3. **An HTTP cache.** There is none yet, so every visit refetches.
+4. **A multiplexed relay** (Wisp-like); with HTTP/2 it matters less.
+5. The rest of Chrome's hello (X25519MLKEM768, certificate compression,
+   ALPS) for Cloudflare-style fingerprinting.
+6. Popups with `opener` (OAuth), downloads, and the per-instance storage tag.

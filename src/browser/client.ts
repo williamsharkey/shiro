@@ -8,9 +8,12 @@
 // - navigations to other origins go to their browse origins (Navigation API),
 //   new windows become app tabs, iframes get browse-origin src
 // - WebSocket tunnels through the broker
-// - MessageEvent.origin and document.referrer show real origins
+// - MessageEvent.origin and document.referrer show real origins, and so do
+//   rewritten scripts' `location` (shim.ts) and document.URL/domain/baseURI
 // - WebAuthn/passkeys report a fallback ("Open in a real tab")
 import { OriginMap, templateFromBrowseOrigin } from './origin-map';
+import { installShim } from './shim';
+import { rewriteJs } from './jsrewrite';
 import type { BrokerToClient, ClientMsg } from './protocol';
 
 (() => {
@@ -173,6 +176,80 @@ import type { BrokerToClient, ClientMsg } from './protocol';
     configurable: true,
     get() { const o = originDesc.get!.call(this); return map.realOrigin(o) ?? o; },
   });
+  installShim(window, map, APP);
+  // A tab's top document is the top of its world: its parent is itself, not the desktop
+  if (location.ancestorOrigins?.[0] === APP) {
+    try { Object.defineProperty(window, 'parent', { configurable: true, get: () => window }); } catch { /* not replaceable */ }
+  }
+  const realGetter = (proto: object, name: string, f: (v: string) => string) => {
+    const d = Object.getOwnPropertyDescriptor(proto, name);
+    if (!d?.get) return;
+    Object.defineProperty(proto, name, { ...d, get() { const v = d.get!.call(this); return typeof v === 'string' ? f(v) : v; } });
+  };
+  for (const name of ['URL', 'documentURI']) realGetter(Document.prototype, name, realOf);
+  realGetter(Node.prototype, 'baseURI', realOf);
+  realGetter(Document.prototype, 'domain', (d) => { const r = map.realOrigin(`${location.protocol}//${d}${location.port ? ':' + location.port : ''}`); return r ? new URL(r).hostname : d; });
+  // Same-origin frames (about:blank, srcdoc) run the parent's rewritten scripts against their own globals
+  for (const name of ['contentWindow', 'contentDocument'] as const) {
+    const d = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, name)!;
+    Object.defineProperty(HTMLIFrameElement.prototype, name, {
+      ...d,
+      get() {
+        const v = d.get!.call(this);
+        try { const win = name === 'contentWindow' ? v : v?.defaultView; if (win && win.Object) installShim(win, map, APP); } catch { /* cross-origin */ }
+        return v;
+      },
+    });
+  }
+  // Links report real URLs (routers compare them with location.origin to tell internal links)
+  for (const proto of [HTMLAnchorElement.prototype, HTMLAreaElement.prototype]) {
+    const href = Object.getOwnPropertyDescriptor(proto, 'href')!;
+    Object.defineProperty(proto, 'href', { ...href, get() { return realOf(href.get!.call(this)); } });
+    for (const part of ['origin', 'protocol', 'host', 'hostname', 'port'] as const) {
+      const d = Object.getOwnPropertyDescriptor(proto, part);
+      if (!d?.get) continue;
+      Object.defineProperty(proto, part, {
+        ...d,
+        get() { const raw = href.get!.call(this) as string; if (!raw) return d.get!.call(this); try { return new URL(realOf(raw))[part]; } catch { return d.get!.call(this); } },
+      });
+    }
+  }
+  // History entries and workers take real URLs from scripts that build them from location
+  for (const k of ['pushState', 'replaceState'] as const) {
+    const orig = History.prototype[k];
+    History.prototype[k] = function (this: History, state: unknown, title: string, url?: string | URL | null) {
+      return url == null ? orig.call(this, state, title) : orig.call(this, state, title, proxied(url));
+    };
+  }
+  for (const name of ['Worker', 'SharedWorker'] as const) {
+    const W = w[name];
+    if (!W) continue;
+    w[name] = class extends W { constructor(url: string | URL, opts?: unknown) { super(proxied(url), opts); } };
+  }
+  // Inline scripts a page creates get the same rewrite as the ones it was served with
+  const JS_TYPE = /^\s*(text\/javascript|application\/javascript|module|text\/ecmascript|application\/ecmascript)?\s*$/i;
+  const seen = new WeakSet<HTMLScriptElement>();
+  const fixScript = (sc: HTMLScriptElement) => {
+    if (seen.has(sc) || sc.hasAttribute('src') || !JS_TYPE.test(sc.type)) return;
+    seen.add(sc);
+    const text = sc.text;
+    const r = rewriteJs(text, /module/i.test(sc.type) ? 'module' : 'script');
+    if (r.changed) sc.text = r.code;
+  };
+  const fixNode = (n: unknown) => {
+    if (n instanceof HTMLScriptElement) fixScript(n);
+    else if (n instanceof Element || n instanceof DocumentFragment) for (const sc of n.querySelectorAll('script')) fixScript(sc);
+  };
+  const hook = (proto: any, names: string[]) => {
+    for (const name of names) {
+      const orig = proto[name];
+      if (typeof orig !== 'function') continue;
+      proto[name] = function (this: unknown, ...args: unknown[]) { for (const a of args) fixNode(a); return orig.apply(this, args); };
+    }
+  };
+  hook(Node.prototype, ['appendChild', 'insertBefore', 'replaceChild']);
+  hook(Element.prototype, ['append', 'prepend', 'before', 'after', 'replaceWith', 'insertAdjacentElement']);
+  hook(DocumentFragment.prototype, ['append', 'prepend']);
   const refDesc = Object.getOwnPropertyDescriptor(Document.prototype, 'referrer')!;
   Object.defineProperty(Document.prototype, 'referrer', { configurable: true, get() { const r = refDesc.get!.call(this); return r ? realOf(r) : r; } });
 
