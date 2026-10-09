@@ -186,7 +186,7 @@ describe('uiMode', () => {
   });
 });
 
-describe('brand (src/brand.json)', () => {
+describe('brand (profiles/tabcomputer/profile.json)', () => {
   it('server.mjs titles the app shell and adds meta tags, except on shiro.computer', async () => {
     const { execFileSync } = await import('node:child_process');
     // Plain Node (vitest's polyfilled modules can't load server.mjs)
@@ -224,5 +224,98 @@ describe('"Use my own connection" (net-signin)', () => {
     expect(ns.ownRelay()).toBeNull();
     expect(seen.length).toBe(3);
     off();
+  });
+});
+
+describe('quarters, launcher matching, session', () => {
+  it('snap() takes quarters; drags to corners pick them', async () => {
+    const { snapZone } = await import('@shiro/desktop/wm');
+    const w = wm.createWindow({ x: 100, y: 100, width: 400, height: 300 });
+    w.snap('bottom-right');
+    expect(w.state).toBe('snapped-bottom-right');
+    const g = w.geometry();
+    expect(g.x).toBeGreaterThan(400);
+    expect(g.y + g.height + 38).toBeLessThanOrEqual(600);
+    w.snap('top-left');
+    expect(w.geometry().x).toBe(6);
+    expect(w.geometry().y).toBe(6);
+    expect(snapZone(1, 10, 1000, 600)).toBe('snapped-top-left');
+    expect(snapZone(999, 590, 1000, 600)).toBe('snapped-bottom-right');
+    expect(snapZone(500, 1, 1000, 600)).toBe('maximized');
+    expect(snapZone(1, 300, 1000, 600)).toBe('snapped-left');
+    expect(snapZone(500, 300, 1000, 600)).toBeNull();
+  });
+
+  it('fuzzy matching ranks exact, prefix, substring, then subsequence', async () => {
+    const { fuzzyScore } = await import('@shiro/desktop/spotlight');
+    expect(fuzzyScore('vim', 'vim')).toBeGreaterThan(fuzzyScore('vim', 'vimdiff'));
+    expect(fuzzyScore('vim', 'vimdiff')).toBeGreaterThan(fuzzyScore('vim', 'nvim'));
+    expect(fuzzyScore('set', 'Settings')).toBeGreaterThan(fuzzyScore('set', 'reset-terminal'));
+    expect(fuzzyScore('gco', 'git checkout')).toBeGreaterThan(0);
+    expect(fuzzyScore('xyz', 'git checkout')).toBe(-1);
+  });
+
+  it('saves restorable windows and puts them back', async () => {
+    const s = await import('@shiro/desktop/session');
+    localStorage.removeItem(s.SESSION_KEY);
+    const stop = s.trackSession(wm);
+    const t = wm.createWindow({ id: 'terminal', appId: 'terminal', title: 'Terminal', x: 20, y: 30, width: 500, height: 300 });
+    (t as any).content = { cwd: () => '/home/user/src' };
+    const f = wm.createWindow({ appId: 'files', x: 40, y: 50, width: 400, height: 250 });
+    (f as any).content = { path: () => '/usr/bin' };
+    f.snap('right');
+    wm.createWindow({ appId: 'vim', title: 'Vim' }); // a program: not restored
+    await new Promise(r => setTimeout(r, 500));
+    stop();
+    const saved = s.loadSession();
+    expect(saved.map(w => w.app)).toEqual(['terminal', 'files']);
+    expect(saved[0]).toMatchObject({ id: 'terminal', cwd: '/home/user/src', g: { x: 20, y: 30, width: 500, height: 300 } });
+    expect(saved[1]).toMatchObject({ app: 'files', path: '/usr/bin', state: 'snapped-right' });
+    const opened: unknown[] = [];
+    wm.registerApp({ id: 'files', name: 'Files', launch: (a) => { opened.push(a); return wm.createWindow({ appId: 'files' }); } });
+    await s.restoreSession(wm, saved, () => null);
+    expect(opened).toEqual([{ newWindow: true, path: '/usr/bin' }]);
+    expect(wm.windows().filter(w => w.appId === 'files').pop()!.state).toBe('snapped-right');
+  });
+});
+
+describe('dock stacks and the touch key bar (v1.2)', () => {
+  it('registerGroup() lists groups by order and announces apps-changed', () => {
+    let changed = 0;
+    wm.on('apps-changed', () => { changed++; });
+    wm.registerGroup({ id: 'b', name: 'B', order: 30 });
+    wm.registerGroup({ id: 'a', name: 'A', order: 10, maxLoose: 2 });
+    expect(wm.groups().map(g => g.id)).toEqual(['a', 'b']);
+    expect(changed).toBe(2);
+    wm.registerGroup({ id: 'b', name: 'B2', order: 5 }); // same id: replaced
+    expect(wm.groups().map(g => g.name)).toEqual(['B2', 'A']);
+    wm.registerApp({ id: 'x', name: 'X', group: 'a', launch: () => null });
+    expect(wm.app('x')!.group).toBe('a');
+  });
+
+  it('ctrlChar() maps letters to control characters', async () => {
+    const { ctrlChar } = await import('@shiro/desktop/mobile');
+    expect(ctrlChar('c')).toBe('\x03');
+    expect(ctrlChar('C')).toBe('\x03');
+    expect(ctrlChar('[')).toBe('\x1b');
+    expect(ctrlChar(' ')).toBe('\x00');
+    expect(ctrlChar('?')).toBe('\x7f');
+    expect(ctrlChar('1')).toBe('1');
+  });
+
+  it('key bar mode is remembered and announced', async () => {
+    const m = await import('@shiro/desktop/mobile');
+    localStorage.removeItem(m.KEYBAR_KEY);
+    expect(m.keybarMode()).toBe('auto');
+    const seen: string[] = [];
+    const off = m.onKeybarMode((x) => seen.push(x));
+    m.setKeybarMode('pinned');
+    expect(m.keybarMode()).toBe('pinned');
+    m.setKeybarMode('off');
+    off();
+    m.setKeybarMode('auto');
+    expect(seen).toEqual(['pinned', 'off']);
+    // Two rows of nine fit a 375 px phone
+    expect(m.KEY_ROWS.map(r => r.length)).toEqual([9, 9]);
   });
 });

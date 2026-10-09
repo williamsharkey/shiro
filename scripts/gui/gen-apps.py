@@ -52,6 +52,12 @@ APPS = {
                    'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so'], [], 'Qt5 text editor', 'qt5'),
     'lximage-qt': (['lximage-qt'], ['/usr/bin/lximage-qt'], ['usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so',
                    'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so'], [], 'LXQt image viewer (Qt5)', 'qt5'),
+    'netsurf': (['netsurf-gtk'], ['/usr/bin/netsurf-gtk'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'],
+                ['libglib2.0-bin', 'shared-mime-info'], 'Small web browser (GTK3)', 'gtk3'),
+    'dillo': (['dillo'], ['/usr/bin/dillo'], ['usr/lib/x86_64-linux-gnu/dillo/dpi/*/*.dpi', 'usr/libexec/dillo/dpid'],
+              ['ca-certificates'], 'Tiny web browser (FLTK)', 'fltk'),
+    'inkscape': (['inkscape'], ['/usr/bin/inkscape'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'],
+                 ['libglib2.0-bin', 'shared-mime-info'], 'Vector graphics editor (GTK3)', 'gtk3'),
 }
 
 # Kept whenever they are in the closure: glibc dlopens libgcc_s; fontconfig needs /etc/fonts.
@@ -61,7 +67,7 @@ ALWAYS = {'libgcc-s1', 'fontconfig-config'}
 # others are deleted at install (GIMP queries every plug-in on first start).
 OPTIONAL = {'gimp': ['usr/lib/gimp/2.0/plug-ins/*/*', 'usr/lib/x86_64-linux-gnu/gegl-0.4/*.so']}
 
-LIBDIRS = ['lib/x86_64-linux-gnu', 'usr/lib/x86_64-linux-gnu', 'lib', 'usr/lib', 'lib64']
+LIBDIRS = ['lib/x86_64-linux-gnu', 'usr/lib/x86_64-linux-gnu', 'lib', 'usr/lib', 'lib64', 'usr/lib/x86_64-linux-gnu/inkscape']
 
 
 def load_index(path):
@@ -123,6 +129,36 @@ def needed(path):
     except Exception:
         return []
     return [l.split('[')[1].split(']')[0] for l in out.splitlines() if '(NEEDED)' in l]
+
+
+def app_icon(root, binary, out_dir, app):
+    """The app's icon (its .desktop file's Icon=) for the desktop's Apps sheet and
+    dock: public/gui/icons/APP.(png|svg), or None (x11-apps have none)."""
+    apps_dir = os.path.join(root, 'usr/share/applications')
+    name = None
+    if os.path.isdir(apps_dir):
+        for d in sorted(os.listdir(apps_dir)):
+            text = open(os.path.join(apps_dir, d), errors='replace').read()
+            execs = [l.split('=', 1)[1].split()[0] for l in text.splitlines() if l.startswith('Exec=')]
+            icons = [l.split('=', 1)[1].strip() for l in text.splitlines() if l.startswith('Icon=')]
+            if icons and any(os.path.basename(e) == os.path.basename(binary) for e in execs):
+                name = icons[0]; break
+    if not name: return None
+    name = name[:-4] if name.endswith(('.png', '.svg', '.xpm')) else name
+    base = os.path.join(root, 'usr/share/icons/hicolor')
+    for sub, ext, limit in (('128x128', 'png', 40000), ('scalable', 'svg', 40000), ('256x256', 'png', 40000),
+                            ('96x96', 'png', 40000), ('64x64', 'png', 40000), ('48x48', 'png', 40000)):
+        f = os.path.join(base, sub, 'apps', f'{name}.{ext}')
+        if os.path.isfile(f) and os.path.getsize(f) <= limit:
+            os.makedirs(out_dir, exist_ok=True)
+            shutil.copyfile(f, os.path.join(out_dir, f'{app}.{ext}'))
+            return f'gui/icons/{app}.{ext}'
+    f = os.path.join(root, 'usr/share/pixmaps', f'{name}.png')
+    if os.path.isfile(f) and os.path.getsize(f) <= 40000:
+        os.makedirs(out_dir, exist_ok=True)
+        shutil.copyfile(f, os.path.join(out_dir, f'{app}.png'))
+        return f'gui/icons/{app}.png'
+    return None
 
 
 def main():
@@ -198,6 +234,7 @@ def main():
             'size': sum(int(db[n]['Size']) for n in keep),
             'closureSize': sum(int(db[n]['Size']) for n in names),
             'dropped': dropped,
+            **({'icon': icon} if (icon := app_icon(root, bins[0], os.path.join(os.path.dirname(out), 'icons'), app)) else {}),
             **({'remove': sorted(set(remove))} if remove else {}),
         }
         for n in keep:
@@ -221,9 +258,63 @@ def main():
         os.makedirs(os.path.join(os.path.dirname(out), 'overlay'), exist_ok=True)
         open(os.path.join(os.path.dirname(out), 'overlay', h), 'wb').write(data)
         overlays.append({'path': '/usr/share/mime/mime.cache', 'sha256': h, 'size': len(data), 'when': 'shared-mime-info'})
+    # GTK reads a theme's icon-theme.cache instead of scanning its directories
+    # (~0.7 s of every GTK 3 start in Blink); update-icon-caches makes it from
+    # adwaita-icon-theme's postinst trigger. Not hicolor: apps add icons there.
+    icon_app = next((a for a in apps if 'adwaita-icon-theme' in apps[a]['packages']), None)
+    if icon_app:
+        tmp = os.path.join(work, '_icons')
+        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.copytree(os.path.join(work, icon_app, 'usr/share/icons/Adwaita'), tmp, symlinks=True)
+        subprocess.run(['gtk-update-icon-cache', '--force', '--quiet', tmp], check=True)
+        data = open(os.path.join(tmp, 'icon-theme.cache'), 'rb').read()
+        h = hashlib.sha256(data).hexdigest()
+        open(os.path.join(os.path.dirname(out), 'overlay', h), 'wb').write(data)
+        overlays.append({'path': '/usr/share/icons/Adwaita/icon-theme.cache', 'sha256': h, 'size': len(data), 'when': 'adwaita-icon-theme'})
+    # The CA bundle update-ca-certificates builds from ca-certificates' Mozilla
+    # certificates (its postinst): libcurl/OpenSSL read only the bundle.
+    ca_app = next((a for a in apps if 'ca-certificates' in apps[a]['packages']), None)
+    if ca_app:
+        moz = os.path.join(work, ca_app, 'usr/share/ca-certificates/mozilla')
+        data = b''.join(open(os.path.join(moz, f), 'rb').read().rstrip(b'\n') + b'\n' for f in sorted(os.listdir(moz)) if f.endswith('.crt'))
+        h = hashlib.sha256(data).hexdigest()
+        open(os.path.join(os.path.dirname(out), 'overlay', h), 'wb').write(data)
+        overlays.append({'path': '/etc/ssl/certs/ca-certificates.crt', 'sha256': h, 'size': len(data), 'when': 'ca-certificates'})
+        # ... and its hashed-name links (`openssl rehash`), for OpenSSL users that
+        # only look certificates up by subject hash in /etc/ssl/certs (Dillo):
+        # a tar overlay of symlinks, unpacked like a package.
+        import io, tarfile
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode='w', format=tarfile.USTAR_FORMAT) as tar:
+            seen = {}
+            for f in sorted(os.listdir(moz)):
+                if not f.endswith('.crt'): continue
+                pem = f[:-4] + '.pem'
+                hsh = subprocess.run(['openssl', 'x509', '-subject_hash', '-noout', '-in', os.path.join(moz, f)],
+                                     check=True, capture_output=True, text=True).stdout.strip()
+                n = seen.get(hsh, 0); seen[hsh] = n + 1
+                for name, target in ((f'etc/ssl/certs/{pem}', f'/usr/share/ca-certificates/mozilla/{f}'), (f'etc/ssl/certs/{hsh}.{n}', pem)):
+                    ti = tarfile.TarInfo(name); ti.type = tarfile.SYMTYPE; ti.linkname = target; ti.mode = 0o777
+                    tar.addfile(ti)
+        data = buf.getvalue()
+        h = hashlib.sha256(data).hexdigest()
+        open(os.path.join(os.path.dirname(out), 'overlay', h), 'wb').write(data)
+        overlays.append({'path': '/', 'tar': True, 'sha256': h, 'size': len(data), 'when': 'ca-certificates'})
+    # gdk-pixbuf's loaders.cache for libgdk-pixbuf-2.0-0's own loaders (the only
+    # ones any app here has): gdk-pixbuf-query-loaders dlopen()s each loader, so
+    # it is made in Blink (`gui install gpicview`, then copy
+    # /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache) and kept in
+    # scripts/gui/overlays/. Regenerate it when libgdk-pixbuf-2.0-0 changes.
+    lc = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'overlays', 'gdk-pixbuf-loaders.cache')
+    if os.path.exists(lc) and any('libgdk-pixbuf-2.0-0' in a['packages'] for a in apps.values()):
+        data = open(lc, 'rb').read()
+        h = hashlib.sha256(data).hexdigest()
+        open(os.path.join(os.path.dirname(out), 'overlay', h), 'wb').write(data)
+        overlays.append({'path': '/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache', 'sha256': h, 'size': len(data), 'when': 'libgdk-pixbuf-2.0-0'})
     json.dump({'suite': SUITE, 'overlays': overlays, 'arch': 'amd64', 'mirror': 'https://deb.debian.org/debian/',
                'snapshot': 'https://snapshot.debian.org/archive/debian/20260712T000000Z/',
                'packages': packages, 'apps': apps}, open(out, 'w'), indent=1, sort_keys=True)
 
 
-main()
+if __name__ == "__main__":
+    main()

@@ -1,4 +1,4 @@
-/** About This Computer */
+/** About This Computer: what this is, measured status, what's real and what's emulated. */
 
 import type { AppContext } from '../index';
 import type { DesktopWindow } from '../wm';
@@ -6,28 +6,61 @@ import { ICONS } from '../icons';
 import { BRAND } from '../../brand';
 import buildNumber from '../../../build-number.txt?raw';
 
+const REPO = 'https://github.com/williamsharkey/shiro/blob/main/docs';
+
+/**
+ * Measured numbers, each with the document that records it. Update these
+ * with the docs: they are claims a visitor will check.
+ */
+const STATUS = [
+  { label: 'Debian 13 top-200 packages', value: '200/200', note: 'install with apt and run (popcon ranks 1–200)', doc: 'DEBIAN_SCORE.md' },
+  { label: 'LTP syscall tests, x86-64', value: '197/320', note: 'pass under the x86-64 engine', doc: 'X86_ENGINES.md' },
+];
+
 export function open(ctx: AppContext): DesktopWindow {
   const { wm, kernel } = ctx;
   const root = document.createElement('div');
-  root.className = 'sd-app';
+  root.className = 'sd-app sd-about';
   root.tabIndex = -1;
-  root.style.cssText = 'align-items:center;justify-content:center;text-align:center;padding:24px';
   const isolated = !!(globalThis as any).crossOriginIsolated;
   root.innerHTML = `
-    <div style="width:84px;height:84px">${ICONS.about}</div>
-    <h2 style="font-size:22px;font-weight:700;margin-top:10px;letter-spacing:-.01em">${BRAND.name}</h2>
-    <div class="sd-muted sd-small">Build #${buildNumber.trim()} · Shiro kernel</div>
-    <div class="sd-card sd-small" style="margin-top:16px;text-align:left;min-width:280px">
-      <div class="sd-row"><span class="sd-grow sd-muted">Processes</span><span data-k="procs">${kernel.procs.size}</span></div>
-      <div class="sd-row"><span class="sd-grow sd-muted">Programs</span>WASI · WASIX · x86-64 Linux</div>
-      <div class="sd-row"><span class="sd-grow sd-muted">Syscalls from workers</span>${isolated ? 'SharedArrayBuffer' : 'JSPI / in-page'}</div>
-      <div class="sd-row"><span class="sd-grow sd-muted">Threads</span>${navigator.hardwareConcurrency || '?'}</div>
-      <div class="sd-row"><span class="sd-grow sd-muted">Disk used</span><span data-k="disk">…</span></div>
-    </div>
-    <div class="sd-small sd-muted" style="margin-top:14px">Everything runs in this tab. Files live in your browser's storage.</div>`;
+    <div class="sd-scroll"><div class="sd-panel" style="max-width:none">
+      <div style="display:flex;gap:16px;align-items:center">
+        <div style="width:64px;height:64px;flex:none">${ICONS.about}</div>
+        <div><h2>${BRAND.name}</h2><div class="sd-muted sd-small">${BRAND.tagline} · build #${buildNumber.trim()}</div></div>
+      </div>
+      <h3>Status</h3>
+      <div class="sd-card">
+        ${STATUS.map(s => `<div class="sd-row"><span class="sd-grow">${s.label}<div class="sd-small sd-muted">${s.note} · <a class="sd-link" href="${REPO}/${s.doc}" target="_blank" rel="noopener">${s.doc}</a></div></span><b style="font-variant-numeric:tabular-nums">${s.value}</b></div>`).join('')}
+      </div>
+      <h3>What's real</h3>
+      <p class="sd-small sd-muted" style="line-height:1.6">A Unix kernel written for the browser: processes, file descriptors, pipes, ptys,
+        signals, job control and sockets. Programs are real binaries: WebAssembly (WASI/WASIX) builds, and Debian's own
+        x86-64 Linux programs (glibc, apt, dpkg) after <code>debian install</code>. Everything runs in this tab, on this device.</p>
+      <h3>What's emulated</h3>
+      <p class="sd-small sd-muted" style="line-height:1.6">The x86-64 CPU (Blink, compiled to WebAssembly, with a JIT). The disk: files live in this
+        browser's IndexedDB. The network: TCP goes through a WebSocket relay (this site's, or your own in Settings → Network).
+        Graphical Linux apps draw through an X server inside the page.</p>
+      <h3>Not here</h3>
+      <p class="sd-small sd-muted" style="line-height:1.6">Hardware devices, kernel modules, and any access to your own machine: the browser's
+        sandbox holds everything. Some programs still fail; the scoreboards list which and why.</p>
+      <h3>This tab</h3>
+      <div class="sd-card sd-small">
+        <div class="sd-row"><span class="sd-grow sd-muted">Kernel processes</span><span data-k="procs">${kernel.procs.size}</span></div>
+        <div class="sd-row"><span class="sd-grow sd-muted">Syscalls from workers</span>${isolated ? 'SharedArrayBuffer (blocking)' : 'JSPI / in-page'}</div>
+        <div class="sd-row"><span class="sd-grow sd-muted">Processor threads</span>${navigator.hardwareConcurrency || '?'}</div>
+        <div class="sd-row"><span class="sd-grow sd-muted">Disk used</span><span data-k="disk">…</span></div>
+      </div>
+      <div class="sd-row" style="margin-top:14px;gap:14px;border:0">
+        <a class="sd-link" href="${REPO}/DESKTOP.md" target="_blank" rel="noopener">Desktop &amp; /dom</a>
+        <a class="sd-link" href="${REPO}/DEBIAN.md" target="_blank" rel="noopener">Debian</a>
+        <a class="sd-link" href="${REPO}/CONFORMANCE.md" target="_blank" rel="noopener">Conformance</a>
+        <a class="sd-link" href="${REPO}/BENCHMARKS.md" target="_blank" rel="noopener">Benchmarks</a>
+      </div>
+    </div></div>`;
   navigator.storage?.estimate?.().then(e => {
     const d = root.querySelector('[data-k=disk]');
     if (d) d.textContent = `${((e.usage ?? 0) / 1048576).toFixed(1)} MB of ${((e.quota ?? 0) / 1073741824).toFixed(0)} GB`;
   }).catch(() => {});
-  return wm.createWindow({ appId: 'about', title: 'About This Computer', width: 380, height: 400, resizable: false, content: { kind: 'dom', element: root } });
+  return wm.createWindow({ appId: 'about', title: 'About This Computer', width: 520, height: 560, minWidth: 360, content: { kind: 'dom', element: root } });
 }

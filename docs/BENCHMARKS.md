@@ -159,6 +159,18 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### unix/desktop 4 — phones: key bar, visual viewport, dock stacks
+
+The touch layer (`src/desktop/mobile.ts`: extra-keys bar, `visualViewport`
+layout, keyboard crossfade) is its own 3.6 KiB chunk, imported only under
+`pointer: coarse`; the classic `mobile-input.ts` toolbar no longer starts in
+desktop mode. Dock stacks, the globe icon and the phone CSS stay in the
+desktop chunk.
+
+`node bench/ab.mjs origin/unix/integration --quick --suites boot --rounds 4`
+(0fa56a5 vs this, desktop page, desktop pointer): no timing metric changed;
+boot transfer 1548 → 1554 KiB (+6 KiB, +0.4%), DOM nodes 329 → 330.
+
 ### unix/desktop 3 — the terminal's first layout: system font lookups
 
 perf-fs-shell's cold-boot profile showed `new ShiroTerminal` dominated by
@@ -260,6 +272,30 @@ Reinstalling from the browser's Cache Storage (by sha256, no network): xeyes
 and writing files dominates. Start-up is Blink loading ~70–100 shared
 libraries and toolkit init, so a warm start is barely faster than the first.
 GTK 3 needed Blink patch 0029 (it spun in cairo/pixman SSE compares).
+
+#### First launch, click to window (fresh profile)
+
+`tests/browser/gui-first-launch.mjs`: each app opened like a click
+(`desktop.openApp`) in a fresh browser profile, Chromium 141, 4 vCPUs, local
+server with its .deb cache warm. Before = the installer above (one xz decode
+at a time on the page's thread, triggers in sequence); after = decoding in up
+to 4 workers, largest packages first, triggers only when needed and in
+parallel, icon/loader caches as overlays (docs/GUI.md).
+
+| app | download | install before → after | window before → after | warm window |
+|---|---:|---:|---:|---:|
+| L3afpad | 33 MB | 11.4 → 4.9 s | 20.9 → 12.5 s | 4.9 s |
+| Mousepad | 42 MB | 13.4 → 6.2 s | 33.5 → 24.2 s | 17.1 s |
+| Ristretto | 32 MB | 9.9 → 4.9 s | 21.0 → 14.8 s | 7.0 s |
+| GIMP (main window) | 51 MB | 19 → 6.3 s | 290 → 247 s | 63 s |
+| Inkscape (welcome dialog) | 83 MB | — → 15 s | — → 61 s | — |
+| NetSurf (page rendered) | 57 MB | — | — → 24.7 s | — |
+
+Packages from tabcomputer.com's mirror instead (`--debs`, a real network):
+L3afpad 13.0 s, Ristretto 15.3 s to the window. Boot is unchanged except
+the dock: one "Apps" entry (inline SVG) instead of five GUI app icons; app
+icons (`public/gui/icons/`) load only for installed apps and in the Apps
+window.
 
 ### unix/desktop — the desktop shell (menu bar, dock, windows) on the boot path
 
@@ -379,6 +415,27 @@ proc/s within one run); two further 15-run passes on the new code gave
 medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
 ≈10 proc/s for its last 11 samples and did not recur in two more; worth
 watching if it shows up on other branches.
+
+### unix/perf-blink 5 — threads end before the worker is terminated
+
+After a guest exited, Chromium took ~2 s to terminate its worker
+(`x86.blink.release_ms`): a Worker with a thread parked in a wait is
+terminated only after a 2 s grace period, against ~15 ms once its threads
+are back in their event loops (unix/perf-kernel's measurements). The thread
+that called `exit_group` was the one parked: Blink's `exit()` proxied
+emscripten's exit to the main runtime thread, which had already unwound in
+`exitGuest` and never answered. Patch 0053 returns that thread to its event
+loop instead, and first ends the guest's other threads (killed, futex
+waiters woken, kernel calls in flight answered EINTR by host.mjs, sleeps in
+10 ms slices), waiting up to 0.5 s for them.
+
+`node bench/ab.mjs 5a4e756 <0053> --suites x86 --only 'release_ms|gh_version'
+--gh` (isolated, medians of 15 runs, alpha 0.01):
+
+| metric (isolated) | base 5a4e756 | new | shift | p | verdict |
+|---|---:|---:|---:|---:|---|
+| x86.blink.release_ms.gh_version | 2080 ms | 104 ms | -95.8% | 0.0000034 | improved (all 3 rounds) |
+| x86.blink.gh_version | 4575 ms | 4576 ms | -0.2% | 1 | same (first visit, Liftoff) |
 
 ### unix/perf-blink 4 — page-straddling instructions, rep movs/stos by page
 
@@ -1042,6 +1099,28 @@ Other measurements:
 - `codex --version` not measured: running that downloaded binary is not
   cleared in this session.
 
+### unix/perf-kernel, round 9: epoll_wakeup and pty_echo after a5e66fb → 7382bdc
+
+The coordinator's `ab.mjs a5e66fb 7382bdc` showed `kernel.epoll_wakeup`
+37.2 → 47.4 µs and `kernel.pty_echo.kernel` 0.13 → 0.14 ms.
+
+- **epoll_wakeup:** conformance's EPOLLEXCLUSIVE and fairness work added
+  three costs to every epoll_wait: a `.finally()` promise hop, a
+  reported-files array per collect, and a copy of the interest map per
+  scan. The waiter count is now kept in try/finally, and the array is
+  allocated only when something is reported. Rotation happens only when more
+  than one file is watched, and the map is scanned in place. A test covers
+  the rotation (a full events array still reports every ready fd).
+  - A/B against 7382bdc, 5 rounds: 109 → 87.5 µs (−23%, every round).
+- **pty_echo.kernel:** bisected along integration's first-parent merges
+  (5 rounds per step, against a5e66fb). Every merge was within ±2%
+  (p ≥ 0.18). The last one (7382bdc, a subshell change in shell.ts) was −4%
+  against its parent. No single merge carries the regression, and pty.ts
+  didn't change in the range.
+- **Both, a5e66fb → this branch, 5 rounds:** `epoll_wakeup` 100.1 → 96.8 µs
+  (−3%, p 0.41) and `pty_echo.kernel` 0.245 → 0.245 ms. Both are back
+  within noise.
+
 ### unix/perf-fs-shell 7 — 1d9582a → bb39a38 regressions: shell-stdio's per-command pass; ab.mjs decides on rounds
 
 The coordinator's `ab.mjs 1d9582a bb39a38 --suites boot,kernel,shell,wasm
@@ -1154,6 +1233,136 @@ store method too):
 | debian.apt.install.hello | 58.7 s | 48.7 s | 26.6 s (2.2×) |
 | debian.apt.install.jq | 60.2 s | 52.9 s | 32.6 s (1.8×) |
 | debian.apt.install.python3-minimal | 161.3 s | 152.8 s | 141.5 s |
+
+### unix/perf-fs-shell 10 — storage reliability: quota, persistence, crash safety
+
+**Quota.** A QuotaExceededError used to be logged while the failed batch was
+dropped: the session kept files the disk never got, and a later commit could
+land on top of the gap. Debian's scoreboard saw this as dpkg's "unable to
+fsync updated status: Input/output error". Now the batch stays queued, with
+newer writes over it. One transaction means none of it is on disk; the disk
+stays at the last good commit. While storage is full:
+- writes that need space (new nodes, growing files) fail at once with
+  `ENOSPC: no space left on device (browser storage is full)`;
+- shrinking writes, chmod, rename and deletes still go through;
+- a burst of deletes retries the queued batch together with them;
+- `sync()`, `flushed()`, fsync(2) and close(2) report ENOSPC; the fd is
+  released and no inode is left in the table.
+
+The terminal and the desktop say storage is full, and say so again when it
+recovers. Settings → Storage shows usage, quota, persistence (with a button)
+and the full state.
+
+**Persistence.** `navigator.storage.persist()` is no longer called on every
+boot, which meant a Firefox prompt on every load. It is now called on
+`debian install`, on the first 64 MiB written in a page load, or on boot
+when 64 MiB is already stored (src/storage.ts).
+
+**Crash safety and footprint.** Measured with `bench/crash-check.mjs`
+(fresh headless profile, local mirror cache, so "fetched" is the bytes the
+page loaded). Footprint:
+
+| step | time | fetched | storage after |
+|---|---:|---:|---:|
+| boot (fresh profile) | | 1.5 MiB | 0.0 MiB |
+| `debian install` | 0.3 s | 0.5 MiB | 1.2 MiB |
+| first `/usr/bin/bash -c true` | 0.7 s | 2.7 MiB | 6.2 MiB |
+| `sudo apt-get update` | 29–42 s | 37.8 MiB | 178 MiB |
+| `apt-get install -y tree` | 28.8 s | 3.5 MiB | 209 MiB |
+| `apt-get install -y bc` | 43.6 s¹ | 4.8 MiB | 244 MiB |
+
+¹ The full test suite was running at the same time.
+
+Crash results:
+- **During `apt-get install -y jq`:** the renderer was killed (CDP
+  `Page.crash`) at 4, 12 and 25 s, then booted again in the same profile.
+  After each crash `dpkg --audit` was clean, `apt-get check` passed, and
+  reinstalling gave a working `jq-1.7`.
+- **During a 200 MB write:** a file synced before the crash was intact. The
+  big file was absent (nothing written back yet), and the FS was writable.
+- **Out of storage:** a persistent profile on a 120 MB tmpfs gives a 72 MiB
+  quota. Chromium doesn't enforce `Storage.overrideQuotaForOrigin` on
+  IndexedDB: 63 MB went into a 30 MiB override. Writing 8 MiB files filled
+  it at 64 MiB:
+  - `dd` and `sync` reported ENOSPC, and `echo x > new` failed;
+  - after `rm` the queued writes committed;
+  - after a reload, the files written before and after were intact.
+
+Tests: `storage-quota.test.ts` (ENOSPC, the batch kept, recovery after a
+delete, a second instance reading only committed data, close and fsync
+returning -ENOSPC).
+
+**Benchmark.** `bench/ab.mjs origin/unix/perf-fs-shell HEAD --quick --rounds 3`:
+- 82 metrics the same;
+- boot bundle +3 KiB (+0.19%: src/storage.ts and the full-state code);
+- `kernel.spawn_wait.builtin` and `wasm.tree_create` improved (noise-level);
+- `net.tcp_download` was flagged +9% at the edge of its CI. Re-run over 5
+  rounds it went 64.3 → 70.0 MB/s, "same", per-round direction `++--+`.
+
+Not fixed here:
+- **head/tail on binary data.** The builtins work on strings, so
+  `head -c N /dev/urandom` writes about 1.5·N bytes (bytes ≥ 0x80 come out
+  UTF-8 encoded).
+- **Storage gap.** The debian session sees about 659 MiB after
+  update plus one batch in long-lived profiles, versus 178 MiB here. That
+  points at rewritten files (apt's pkgcache.bin and srcpkgcache.bin, about
+  89 MB per rewrite) still occupying LevelDB until it compacts.
+
+### unix/perf-fs-shell 11 — binary data through string stdio; the real Debian footprint
+
+**Byte-exact text.** Builtins exchange data as strings. File contents,
+builtin stdin and stdout used to decode with a plain TextDecoder, which turns
+each byte that isn't valid UTF-8 into U+FFFD (3 bytes when written back):
+- `cat bin > copy` turned 1000 bytes into 1976;
+- `cat | tee`, `dd … > f` and `wc -c` were wrong the same way;
+- `head -c N /dev/urandom` wrote about 1.5·N bytes.
+
+src/utils/byte-text.ts decodes invalid bytes to lone surrogates
+U+DC80–U+DCFF and encodes them back (Python's surrogateescape). Valid UTF-8
+is unchanged and keeps the native fast paths (one fatal TextDecoder; one
+`isWellFormed()` scan before TextEncoder). It is used by:
+- FileSystem text read and write;
+- builtin stdio, both as a kernel process and in a kernel shell script.
+
+`head`/`tail -c`, `cut -b` and `wc -c` count bytes of the data.
+gzip/bzip2/tar output and `/dev/urandom` as text are byte-exact, so
+`gzip -c f > f.gz` writes the real archive (`unmangle()` stays for files
+written before this). od, sum and the archivers read both forms: the older
+latin1 byte strings (`printf '\xff'`, `xxd -r`) and byte-exact text.
+
+Not covered:
+- **`\r\n` in kernel shell scripts:** builtin output written from a kernel
+  shell script still has `\r\n` folded to `\n`.
+- **Latin1 producers:** `printf '\xff' > f` still writes C3 BF, as before.
+
+Tests: `byte-text.test.ts` (codec round trips, every command above, a builtin
+as a kernel process, gzip/tar via `>`) and an `apt-store` case.
+`bench/ab.mjs origin/unix/perf-fs-shell HEAD --quick --rounds 3`: 86 metrics
+the same, boot bundle +1 KiB.
+
+**Debian footprint on a real profile.** Headless incognito contexts, used by
+bench/run.mjs, crash-check and the debian scoreboard, keep IndexedDB in
+memory and over-report. From there it looked like 178 MiB after `apt-get
+update` and +30 MiB per install, and the scoreboard saw ~659 MiB.
+`bench/footprint.mjs` measures a persistent on-disk profile, as users have.
+Chrome compresses the values on disk. Rewriting pkgcache.bin leaves no
+garbage: idling and reloading changed nothing.
+
+| after | storage usage | live FS bytes | IndexedDB on disk |
+|---|---:|---:|---:|
+| `debian install` | 3.3 MiB | 0.0 MiB | 2.9 MiB |
+| `apt-get update` (28 s) | 95.5 MiB | 164 MiB | 82.6 MiB |
+| + tree, bc, jq (26–31 s each) | 118.8 MiB | 183 MiB | 97.9 MiB |
+
+Three files are 139 MB of the 183 MB live: the trixie Packages list (54 MB),
+pkgcache.bin and srcpkgcache.bin (42.5 MB each). Options measured:
+- **Drop srcpkgcache.bin** (`Dir::Cache::srcpkgcache ""`): 68.6 MiB instead
+  of 118.8, but installs take +14 s and `apt-cache policy` goes 1.8 → 19.8 s
+  (pkgcache is rebuilt from the lists). Not worth it.
+- **`Acquire::GzipIndexes`:** apt asks the store method for `.lz4` lists. It
+  used to write the plain list under that name, and `apt-get update` failed.
+  It now refuses cleanly. Keeping lists compressed would need an lz4 encoder
+  in the store method, for about −40 MiB; not done.
 
 ## Results
 

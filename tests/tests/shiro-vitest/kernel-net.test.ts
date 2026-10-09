@@ -13,6 +13,7 @@ import {
   ECONNREFUSED, EDQUOT, EHOSTUNREACH, ENOTCONN, EISCONN, decodeSockaddr, encodeSockaddr, parseHttpResponse,
   type PortHost, type VirtualHttpRequest, type VirtualHttpResponse,
 } from '@shiro/kernel/net';
+import { MSG_PEEK, MSG_TRUNC } from '@shiro/kernel/abi';
 
 interface Ports { echoPort: number; firehosePort: number; relayA: number; relayB: number; relayC: number; relayD: number; mainPort: number; origin: string }
 
@@ -128,6 +129,62 @@ describe('kernel sockets over the TCP relay', () => {
     await new Promise<void>((r) => { const off = s.onReady(() => { if (s.poll(POLLIN)) { off(); r(); } }); if (s.poll(POLLIN)) r(); });
     expect(dec.decode(buf.subarray(0, await s.read(buf)))).toBe('ping');
     await s.close();
+  });
+
+  it("a connected datagram socket has a source address in the peer's family (glibc's getaddrinfo sort)", async () => {
+    const stack = stackFor(P.relayA);
+    const src = (domain: number, to: { family: number; address: string; port: number }) => {
+      const d = stack.socket(domain, SOCK_DGRAM) as KDatagramSocket;
+      expect(d.connect(to)).toBe(0);
+      const a = d.getsockname().address;
+      void d.close();
+      return a;
+    };
+    expect(src(AF_INET6, { family: AF_INET6, address: '::ffff:151.101.0.223', port: 0 })).toBe('::ffff:10.0.2.15');
+    expect(src(AF_INET6, { family: AF_INET6, address: '2a04:4e42::223', port: 0 })).toBe('fd00::15');
+    expect(src(AF_INET, v4('151.101.0.223', 0))).toBe('10.0.2.15');
+    expect(src(AF_INET, v4('127.0.0.1', 53))).toBe('127.0.0.1');
+  });
+
+  it('AF_UNIX SOCK_SEQPACKET socketpairs keep records whole (Rust std::process::Command)', async () => {
+    const stack = stackFor(P.relayA);
+    const pair = stack.socketpair(5) as [KSocket, KSocket];
+    expect(Array.isArray(pair)).toBe(true);
+    const [a, b] = pair;
+    expect(a.getsockopt(SOL_SOCKET, SO_TYPE)).toBe(5);
+    await a.write(enc.encode('abc')); await a.write(enc.encode('de')); await a.write(enc.encode('hello'));
+    const buf = new Uint8Array(10);
+    expect(dec.decode(buf.subarray(0, await b.read(buf)))).toBe('abc');
+    expect(dec.decode(buf.subarray(0, await b.read(buf)))).toBe('de');
+    const small = new Uint8Array(2);
+    expect(dec.decode(small.subarray(0, await b.read(small)))).toBe('he'); // the rest of the record is dropped
+    await a.close();
+    expect(await b.read(buf)).toBe(0);
+    await b.close();
+  });
+
+  it('AF_UNIX message sockets: MSG_TRUNC gives the whole length, MSG_PEEK keeps the message, SCM_RIGHTS stay with their message', async () => {
+    const stack = stackFor(P.relayA);
+    for (const type of [SOCK_DGRAM, 5]) {
+      const [a, b] = stack.socketpair(type) as [KSocket, KSocket];
+      expect(a.getsockopt(SOL_SOCKET, SO_TYPE)).toBe(type);
+      await a.write(enc.encode('hello world'));
+      const small = new Uint8Array(5);
+      expect(await b.recv(small, MSG_PEEK)).toBe(5);
+      expect(await b.recv(small, MSG_TRUNC)).toBe(11); // the rest is dropped, its length reported
+      expect(dec.decode(small)).toBe('hello');
+      // descriptions passed with a message arrive with that message, not the next
+      const [x, y] = stack.socketpair(SOCK_STREAM) as [KSocket, KSocket];
+      await a.send(enc.encode('m1'), 0, undefined, [x]);
+      await a.send(enc.encode('m2'));
+      const fds: unknown[] = [];
+      const buf = new Uint8Array(8);
+      expect(await b.recv(buf, 0, undefined, fds as never)).toBe(2);
+      expect(fds.length).toBe(1);
+      expect(await b.recv(buf, 0, undefined, fds as never)).toBe(2);
+      expect(fds.length).toBe(1);
+      for (const s of [a, b, y]) await s.close();
+    }
   });
 
   it('FIONBIO is accepted on stream and datagram sockets (CPython setblocking(False))', async () => {

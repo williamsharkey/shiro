@@ -1,0 +1,17 @@
+{
+  "id": "shiro",
+  "description": "shiro.computer: the full-page terminal, Claude Code first; keeps its own name (no brand on the app shell).",
+  "hosts": ["shiro.computer", "*.shiro.computer"],
+  "ui": "terminal",
+  "brand": null,
+  "banner": "hud",
+  "preinstall": ["claude-code"],
+  "shims": {
+    "claude": "npm",
+    "claudeInstallSh": true,
+    "tabSsh": true,
+    "binCommandStat": true,
+    "debianOverlay": true,
+    "python": "pyodide"
+  }
+}

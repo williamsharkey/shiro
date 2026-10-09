@@ -94,14 +94,15 @@ describe('FileSystem write-behind', () => {
     const db = (fs as any).db as IDBDatabase;
     const orig = (db as any).transaction;
     (db as any).transaction = (store: any, mode?: IDBTransactionMode, opts?: any) => {
-      if (mode === 'readwrite') throw new DOMException('quota', 'QuotaExceededError');
+      // (quota errors are handled apart: storage-quota.test.ts)
+      if (mode === 'readwrite') throw new DOMException('disk error', 'UnknownError');
       return orig(store, mode, opts);
     };
     const err = console.error;
     console.error = () => {};
     try {
       await fs.writeFile('/tmp/wb-q', 'x');
-      await expect(fs.sync()).rejects.toThrow('quota');
+      await expect(fs.sync()).rejects.toThrow('disk error');
       await expect(fs.sync()).resolves.toBeUndefined();
       // The session keeps what was written
       expect(await fs.readFile('/tmp/wb-q', 'utf8')).toBe('x');

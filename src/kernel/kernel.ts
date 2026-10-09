@@ -7,6 +7,7 @@
  * `top` see kernel processes.
  */
 
+import { decodeBytes, encodeText } from '../utils/byte-text';
 import { addProcInfoSource, type FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
@@ -849,6 +850,30 @@ export class Kernel {
   }
 
   /** A registered device node, or a directory that holds one (/dev, /dev/pts). */
+  /**
+   * /proc/<pid>/exe as Linux gives it: absolute and resolved. A process
+   * started by name ("perl") or by a relative path has that as its path;
+   * glibc's ld.so asserts the link is absolute when it expands $ORIGIN.
+   */
+  private async exePath(caller: Process, procPath: string, target: string): Promise<string> {
+    const fs = this.fs;
+    if (!fs) return target;
+    let abs = target;
+    if (!abs.startsWith('/')) {
+      const pid = procPath.split('/')[2];
+      const owner = pid === 'self' || pid === 'thread-self' ? caller : this.procs.get(Number(pid)) ?? caller;
+      if (abs.includes('/')) abs = fs.resolvePath(abs, owner.cwd);
+      else {
+        for (const dir of (owner.env.PATH || '/usr/local/bin:/usr/bin:/bin').split(':').filter(Boolean)) {
+          const c = `${dir.replace(/\/$/, '')}/${abs}`;
+          if (await fs.exists(c).catch(() => false)) { abs = c; break; }
+        }
+        if (!abs.startsWith('/')) abs = fs.resolvePath(abs, owner.cwd);
+      }
+    }
+    return fs.realpath(abs).catch(() => abs);
+  }
+
   isDevicePath(p: string): boolean {
     if (this.devices.has(p)) return true;
     for (const d of this.devices.keys()) if (d.startsWith(p + '/')) return true;
@@ -1034,7 +1059,8 @@ export class Kernel {
     }
     if (stdio) await stdio.flush();
     if (proc.exiting) return code;
-    if (ctx.stdout) await this.writeAll(proc, 1, enc.encode(ctx.stdout));
+    // Byte-exact (src/utils/byte-text.ts): binary output of a builtin keeps its bytes
+    if (ctx.stdout) await this.writeAll(proc, 1, encodeText(ctx.stdout));
     if (ctx.stderr && !proc.exiting) await this.writeAll(proc, 2, enc.encode(ctx.stderr));
     if (shell.cwd !== proc.cwd) proc.cwd = shell.cwd;
     return code;
@@ -1120,7 +1146,7 @@ export class Kernel {
     shell.env.PS1 ??= '\\u@\\h:\\w\\$ ';
     let chain = Promise.resolve();
     const out = (fd: number) => (s: string) => {
-      chain = chain.then(async () => { if (!proc.exiting) await this.writeAll(proc, fd, enc.encode(s.replace(/\r\n/g, '\n'))); });
+      chain = chain.then(async () => { if (!proc.exiting) await this.writeAll(proc, fd, encodeText(s.replace(/\r\n/g, '\n'))); });
     };
     // Jobs get process groups of their own and the terminal while they run (Ctrl-Z, fg, bg, jobs)
     const f0 = proc.fds.get(0);
@@ -1198,7 +1224,7 @@ export class Kernel {
     if (!f) return '';
     if (f.kind === 'pipe' || f.kind === 'file' || f.kind === 'socket' || f instanceof BufferFile) {
       const r = await this.readAll(proc, 0);
-      return typeof r === 'number' ? '' : A.decodeText(r);
+      return typeof r === 'number' ? '' : decodeBytes(r);
     }
     return '';
   }
@@ -1618,6 +1644,8 @@ export class Kernel {
         case A.SYS_wait4: {
           // WNOHANG, WUNTRACED, WCONTINUED, WNOWAIT (waitid comes through here), __WNOTHREAD/__WALL/__WCLONE
           if ((args[1] >>> 0) & ~(A.WNOHANG | A.WUNTRACED | A.WCONTINUED | A.WNOWAIT | 0xe0000000)) return -A.EINVAL;
+          // pid INT_MIN can't be negated into a process group
+          if ((args[0] | 0) === -0x80000000) return -A.ESRCH;
           const r = await this.waitpid(args[0], args[1], proc, sig);
           if (r.pid > 0) new DataView(data.buffer, data.byteOffset, 4).setInt32(0, r.status, true);
           return r.pid;
@@ -1704,7 +1732,7 @@ export class Kernel {
         case A.SYS_fsync: {
           const f = file(args[0]);
           if (!f) return -A.EBADF;
-          await f.sync?.();
+          try { await f.sync?.(); } catch (e) { return A.errnoFromError(e); }
           return 0;
         }
         case A.SYS_ftruncate: {
@@ -1809,6 +1837,7 @@ export class Kernel {
         case A.SYS_rmdir:
         case A.SYS_unlink:
         case A.SYS_unlinkat: {
+          if (nr === A.SYS_unlinkat && (args[2] & ~A.AT_REMOVEDIR)) return -A.EINVAL;
           const [dirfd, len, rmdir] = nr === A.SYS_unlinkat
             ? [args[0], args[1], !!(args[2] & A.AT_REMOVEDIR)]
             : [A.AT_FDCWD, args[0], nr === A.SYS_rmdir];
@@ -1885,8 +1914,12 @@ export class Kernel {
           let target: string;
           const proct = p.startsWith('/proc/') ? this.procfs.readlink(proc, p) : undefined;
           if (typeof proct === 'number') return proct;
-          if (proct !== undefined) target = proct;
-          else if (this.isDevicePath(p)) return -A.EINVAL; // a device node or /dev, /dev/pts: not links
+          if (proct !== undefined) {
+            target = proct;
+            // /proc/<pid>/exe is the resolved path, as on Linux (ld.so's $ORIGIN;
+            // a venv's bin/python is a symlink). procfs only resolves from the cache.
+            if (/^\/proc\/[^/]+\/exe$/.test(p)) target = await this.exePath(proc, p, target);
+          } else if (this.isDevicePath(p)) return -A.EINVAL; // a device node or /dev, /dev/pts: not links
           else try { target = await fs().readlink(p); } catch (e) { return A.errnoFromError(e, A.EINVAL); }
           const b = enc.encode(target);
           const n = Math.min(b.length, bufsiz >>> 0 || data.length, data.length);
@@ -2175,7 +2208,7 @@ export class Kernel {
     if (setBytes * 3 > data.length) return -A.EINVAL;
     const present = args[1];
     const tvSec = args[2];
-    const timeoutMs = tvSec < 0 ? -1 : tvSec * 1000 + Math.floor(nr === A.SYS_pselect6 ? args[3] / 1e6 : args[3] / 1000);
+    const timeoutMs = tvSec < 0 ? -1 : tvSec * 1000 + (nr === A.SYS_pselect6 ? args[3] / 1e6 : args[3] / 1000); // fractional: never wake early
     const bit = (set: number, fd: number) => (data[set * setBytes + (fd >> 3)] >> (fd & 7)) & 1;
     const want: { fd: number; r: boolean; w: boolean; x: boolean; file: OpenFile }[] = [];
     for (let fd = 0; fd < nfds; fd++) {

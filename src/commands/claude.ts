@@ -22,6 +22,7 @@ import {
   isClaudeCodeInstalled,
 } from '../claude-code-version';
 import { hasClaudeCredentials, openClaudeSignIn } from '../claude-signin';
+import { activeProfile } from '../profile';
 
 // Flags that make Claude print something and exit instead of starting a session
 const INFO_FLAGS = new Set(['-v', '--version', '-h', '--help']);
@@ -60,6 +61,12 @@ async function runNative(ctx: Parameters<Command['exec']>[0], args: string[]): P
       + '(CLAUDE_NATIVE_PATH picks another path). Without --native, claude runs the npm build.\n';
     return 1;
   }
+  // Same settings cleanup as the npm build's start (e.g. drop the "mcp__*"
+  // allow rule older Shiro seeded, which current Claude Code warns about)
+  try {
+    const { ensureClaudeBootstrap } = await import('../claude-config');
+    await ensureClaudeBootstrap(ctx.fs, { homeDir: ctx.env.HOME || '/home/user' });
+  } catch { /* settings are Claude's own business; never block the run */ }
   // JSC's JIT costs more than it saves under Blink: -p took 85 s without it
   // and 107 s with it (musl build, docs/COMPAT.md). Export BUN_JSC_useJIT=1 to keep it.
   const jit = ctx.env.BUN_JSC_useJIT === undefined ? 'BUN_JSC_useJIT=0 ' : '';
@@ -72,7 +79,11 @@ export const claudeCmd: Command = {
   description: 'Run Claude Code (installed and signed in automatically)',
   async exec(ctx) {
     const args = [...ctx.args];
-    if (args[0] === '--native' || ctx.env.CLAUDE_NATIVE === '1') {
+    // --native, CLAUDE_NATIVE=1, or a profile whose `claude` is the native build
+    // (CLAUDE_NATIVE=0 or --npm then picks the npm build)
+    const npm = args[0] === '--npm' || ctx.env.CLAUDE_NATIVE === '0';
+    if (args[0] === '--npm') args.shift();
+    if (!npm && (args[0] === '--native' || ctx.env.CLAUDE_NATIVE === '1' || activeProfile().shims.claude === 'native')) {
       if (args[0] === '--native') args.shift();
       return runNative(ctx, args);
     }

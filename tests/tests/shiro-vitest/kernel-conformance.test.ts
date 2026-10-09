@@ -212,4 +212,106 @@ describe('kernel syscalls found by LTP', () => {
     await kernel.syscall(proc, A.SYS_write, [w, 1], new Uint8Array([1]));
     expect((await Promise.all(waits)).sort()).toEqual([0, 0, 1]);
   });
+
+  it('unlinkat01/wait403/epoll_ctl06: bad unlinkat flags EINVAL, wait4(INT_MIN) ESRCH, /dev/zero not pollable', async () => {
+    expect(await call(A.SYS_unlinkat, [A.AT_FDCWD, L('file'), 9999], 'file')).toBe(-A.EINVAL);
+    expect(await fs.exists('/tmp/kc/file')).toBe(true);
+    expect(await call(A.SYS_wait4, [-0x80000000, 0])).toBe(-A.ESRCH);
+    const ep = await call(A.SYS_epoll_create1, [0]);
+    for (const dev of ['/dev/zero', '/dev/null']) {
+      const fd = await open(dev, A.O_RDONLY);
+      expect(fd).toBeGreaterThanOrEqual(0);
+      expect(await call(A.SYS_epoll_ctl, [ep, A.EPOLL_CTL_ADD, fd, A.EPOLLIN, 0, 0])).toBe(-A.EPERM);
+    }
+  });
+
+  it('poll02/select02/pselect01: a timeout never ends early (sub-millisecond select timeouts too)', async () => {
+    const [r] = await pipe();
+    const pfd = new Uint8Array(8);
+    new DataView(pfd.buffer).setInt32(0, r, true);
+    new DataView(pfd.buffer).setInt16(4, A.POLLIN, true);
+    for (let i = 0; i < 10; i++) {
+      const t0 = performance.now();
+      expect(await kernel.syscall(proc, A.SYS_poll, [1, 3], pfd)).toBe(0);
+      expect(performance.now() - t0).toBeGreaterThanOrEqual(3);
+      const t1 = performance.now();
+      // select(0, …, {0 s, 1500 µs}): no fds, just the timeout
+      expect(await kernel.syscall(proc, A.SYS_select, [0, 0, 0, 1500], new Uint8Array(64))).toBe(0);
+      expect(performance.now() - t1).toBeGreaterThanOrEqual(1.5);
+    }
+  });
+
+  it('socket01/socketpair01/bind04/connect03: AF_UNIX SOCK_DGRAM keeps message boundaries; named datagram sockets; EPROTOTYPE', async () => {
+    const stack = new NetStack();
+    stack.configure({ relayUrl: null, tokenUrl: null, dohUrl: null, portHost: null });
+    const off = installNet(kernel, stack);
+    const sv = new Uint8Array(8);
+    expect(await kernel.syscall(proc, A.SYS_socketpair, [A.AF_UNIX, A.SOCK_DGRAM, 0], sv)).toBe(0);
+    const [a, b] = [new DataView(sv.buffer).getInt32(0, true), new DataView(sv.buffer).getInt32(4, true)];
+    expect(await kernel.syscall(proc, A.SYS_write, [a, 3], enc.encode('abc'))).toBe(3);
+    expect(await kernel.syscall(proc, A.SYS_write, [a, 4], enc.encode('defg'))).toBe(4);
+    const buf = new Uint8Array(16);
+    expect(await kernel.syscall(proc, A.SYS_read, [b, 2], buf)).toBe(2); // "ab"; the "c" is dropped
+    expect(await kernel.syscall(proc, A.SYS_read, [b, 16], buf)).toBe(4);
+    expect(new TextDecoder().decode(buf.subarray(0, 4))).toBe('defg');
+    // A named datagram socket: sendto it, or connect and write; a stream socket can't connect to it
+    const s = await call(A.SYS_socket, [A.AF_UNIX, A.SOCK_DGRAM, 0]);
+    const sun = new Uint8Array(110);
+    sun[0] = A.AF_UNIX;
+    sun.set(enc.encode('/tmp/kc/dg'), 2);
+    expect(await kernel.syscall(proc, A.SYS_bind, [s, 110], sun)).toBe(0);
+    expect(await call(A.SYS_listen, [s, 1])).toBe(-A.EOPNOTSUPP);
+    const c = await call(A.SYS_socket, [A.AF_UNIX, A.SOCK_DGRAM, 0]);
+    const csun = new Uint8Array(110);
+    csun[0] = A.AF_UNIX;
+    csun.set(enc.encode('/tmp/kc/dg2'), 2);
+    expect(await kernel.syscall(proc, A.SYS_bind, [c, 110], csun)).toBe(0);
+    const msg = new Uint8Array(2 + 110);
+    msg.set(enc.encode('hi'));
+    msg.set(sun, 2);
+    expect(await kernel.syscall(proc, A.SYS_sendto, [c, 2, 0, 110], msg)).toBe(2);
+    expect(await kernel.syscall(proc, A.SYS_connect, [c, 110], sun)).toBe(0);
+    expect(await kernel.syscall(proc, A.SYS_write, [c, 3], enc.encode('bye'))).toBe(3);
+    // recvfrom names the (bound) sender, so a reply can go back (bind05)
+    const rf = new Uint8Array(16 + 128);
+    expect(await kernel.syscall(proc, A.SYS_recvfrom, [s, 16, 0], rf)).toBe(2);
+    expect(new TextDecoder().decode(rf.subarray(18, 29))).toBe('/tmp/kc/dg2');
+    expect(await kernel.syscall(proc, A.SYS_read, [s, 16], buf)).toBe(3);
+    // With an address room (recvfrom's 4th argument), its last 4 bytes give the address length:
+    // an abstract sender bound with the whole sockaddr_un keeps its 108-byte name
+    const ab = await call(A.SYS_socket, [A.AF_UNIX, A.SOCK_DGRAM, 0]);
+    const asun = new Uint8Array(110);
+    asun[0] = A.AF_UNIX;
+    asun.set(enc.encode('\0abs'), 2);
+    expect(await kernel.syscall(proc, A.SYS_bind, [ab, 110], asun)).toBe(0);
+    msg.set(enc.encode('yo'));
+    expect(await kernel.syscall(proc, A.SYS_sendto, [ab, 2, 0, 110], msg)).toBe(2);
+    const roomy = new Uint8Array(16 + 128);
+    expect(await kernel.syscall(proc, A.SYS_recvfrom, [s, 16, 0, 128], roomy)).toBe(2);
+    expect(new DataView(roomy.buffer).getUint32(16 + 124, true)).toBe(110);
+    expect(roomy.subarray(18, 22)).toEqual(enc.encode('\0abs'));
+    await call(A.SYS_close, [ab]);
+    const st = await call(A.SYS_socket, [A.AF_UNIX, A.SOCK_STREAM, 0]);
+    expect(await kernel.syscall(proc, A.SYS_connect, [st, 110], sun)).toBe(-A.EPROTOTYPE);
+    for (const fd of [a, b, s, c, st]) await call(A.SYS_close, [fd]);
+    off();
+  });
+
+  it('epoll_wait: a full events array rotates, so every ready fd gets reported (no starvation)', async () => {
+    const ep = await call(A.SYS_epoll_create1, [0]);
+    const reads: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const [r, w] = await pipe();
+      await kernel.syscall(proc, A.SYS_write, [w, 1], new Uint8Array([1]));
+      expect(await call(A.SYS_epoll_ctl, [ep, A.EPOLL_CTL_ADD, r, A.EPOLLIN, i, 0])).toBe(0);
+      reads.push(r);
+    }
+    const ev = new Uint8Array(A.EPOLL_EVENT_SIZE);
+    const seen: number[] = [];
+    for (let k = 0; k < 3; k++) {
+      expect(await kernel.syscall(proc, A.SYS_epoll_wait, [ep, 1, 0], ev)).toBe(1);
+      seen.push(new DataView(ev.buffer).getUint32(4, true));
+    }
+    expect(seen.sort()).toEqual([0, 1, 2]);
+  });
 });

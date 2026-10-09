@@ -531,10 +531,24 @@ async function run(msg) {
   }));
   const chunk = pool.length ? pool[0].data.length : 0;
   const waiting = [];
+  // Every channel busy (threads or same-instance fork children blocked in
+  // the kernel: epoll_wait, a pipe read): ask the page for another one
+  // rather than queue behind them, up to its cap ('blink-grow' → 'blink-channel')
+  let growing = false;
   const acquire = () => new Promise((resolve) => {
     const ch = pool.find((c) => !c.busy);
-    if (ch) { ch.busy = true; resolve(ch); } else waiting.push(resolve);
+    if (ch) { ch.busy = true; resolve(ch); return; }
+    waiting.push(resolve);
+    if (!growing && pool.length) { growing = true; post({ type: 'blink-grow' }); }
   });
+  const addChannel = (sab) => {
+    growing = false;
+    if (!sab) return; // at the cap: the waiters queue for a free channel
+    const ch = { i32: new Int32Array(sab, 0, CH_DATA / 4), data: new Uint8Array(sab, CH_DATA), busy: true, done: null };
+    pool.push(ch);
+    release(ch);
+    if (waiting.length && !growing) { growing = true; post({ type: 'blink-grow' }); }
+  };
   const release = (ch) => {
     const next = waiting.shift();
     if (next) next(ch); else ch.busy = false;
@@ -548,9 +562,24 @@ async function run(msg) {
     Atomics.store(ch.i32, CH_STATE, 1);
     post({ type: 'blink-sys', ch: pool.indexOf(ch), as });
   });
+  // The guest is exiting (Blink's ShiroQuiesce): the calls its other threads
+  // have in flight, and any they make now, end with EINTR so the threads get
+  // back to Blink, which ends them before the kernel hears exit_group.
+  let dying = false;
+  const EINTR_REPLY = { r: -4, hi: -1, out: null };
+  const shiroDying = () => {
+    dying = true;
+    for (const ch of pool) {
+      const done = ch.done;
+      ch.done = null;
+      done?.({ r: -4, hi: -1, sig: 0 });
+    }
+  };
   const call = async (nr, args, as, input, outCap) => {
     if (exiting) return new Promise(() => {}); // the kernel ends this worker
+    if (dying) return EINTR_REPLY;
     const ch = await acquire();
+    if (dying) { release(ch); return EINTR_REPLY; }
     try {
       if (input.length > ch.data.length) return { r: -7 /* E2BIG */, hi: -1, out: null };
       ch.data.set(input);
@@ -583,6 +612,8 @@ async function run(msg) {
       ch.done = null;
       if (debug) console.error(`[blink] ${debugPid} ksys ${ch.i32[CH_SYSNO]}(${Array.from(ch.i32.subarray(CH_ARGS + 1, CH_ARGS + 4)).join(',')}) = ${r}`);
       done?.({ r, hi, sig });
+    } else if (m.type === 'blink-channel') {
+      addChannel(m.sab);
     } else if (m.type === 'blink-signal' && !exiting) {
       // The kernel signalled us: any syscall reply carries the signal word.
       if (m.pid) void call(SYS.getpid, [], m.pid, new Uint8Array(0), 0);
@@ -639,6 +670,7 @@ async function run(msg) {
       // Blink calls shiroExit on this thread as soon as the guest exits;
       // onExit only fires if emscripten's own teardown completes.
       shiroExit: (code) => exitGuest(code),
+      shiroDying: () => shiroDying(),
       // A signal's default action killed the guest: die of it in the kernel
       // too (default disposition, then kill self), so waitpid sees WTERMSIG.
       shiroKill: (sig) => {

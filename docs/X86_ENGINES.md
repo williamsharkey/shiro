@@ -500,6 +500,56 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    the parent's thread while writable `MAP_SHARED` memory is mapped).
    LTP's syscalls with it on: 197/320 against 155/320 (unix/conformance's
    A/B, no new failures or hangs).
+49. `CLOCK_REALTIME` and `gettimeofday` have sub-ms resolution
+   (`performance.now()` anchored to `Date.now()`, per thread). emscripten
+   reads them from `Date.now()`, whole ms, so two reads microseconds apart
+   could differ by 1 ms. vim's typeahead check (`inchar_loop` with
+   `wtime` 0) then computes its wait as `0 - elapsed = -1`, which blocks
+   until the next key with the typed one not yet shown: the vim stall
+   (4/30 runs of shell-stdio's `vim-keys.mjs`, 2/60 after this patch; the
+   rest are real ≥1 ms pauses between the two reads, which only a fix in
+   vim avoids). `SHIRO_BLINK_PROBE` prints all 16 registers. Test:
+   `fixtures/x86/realtime.c`.
+50. `nanosleep`, `clock_nanosleep` and `pause`/`sigsuspend` (which Blink
+   sleeps itself) show the process sleeping in `/proc/PID/stat`, as futex
+   waits do (patch 36): LTP waits for `S` before signalling a child
+   (pause01, signal01). Test: `fixtures/x86/sleepstate.c`.
+51. A `FUTEX_WAKE` grant goes only to a waiter that was waiting at the
+   wake. A thread or process that woke its peer and then waited on the same
+   word at once (LTP checkpoints: the value never changes) could take its
+   own grant and return, leaving the peer to time out (fork04, waitpid13).
+   Test: `fixtures/x86/futexpingpong.c`.
+52. `getsockname`/`getpeername` take the kernel's address length, so an
+   abstract `AF_UNIX` name keeps its trailing NULs (LTP bind04/05);
+   `AF_NETLINK` addresses are 12 bytes (nft's libmnl, glibc's
+   `getifaddrs`, which looped forever); `readlink("/proc/self/exe")` asks
+   the kernel, which resolves symlinks (ld.so's `$ORIGIN`: uv's Python
+   venvs, aider); `fallocate` is `EOPNOTSUPP` (Go's linker falls back).
+   Test: `fixtures/x86/sockaddrs.c`.
+53. Exit: the guest's other threads end before the kernel hears
+   `exit_group` (killed, futex waiters woken, kernel calls in flight
+   answered `EINTR` by host.mjs's `shiroDying`, up to 0.5 s), and the
+   exiting thread goes back to its event loop rather than proxy
+   emscripten's exit to a main thread that never answers. A Worker with a
+   thread parked in a wait takes Chromium 2 s to terminate: memory after
+   `gh --version` comes back in ~0.1 s instead of ~2.1 s. `nanosleep`,
+   `clock_nanosleep` and `pause` sleep in slices and end on a handled
+   signal (with the time left: LTP nanosleep02). Test:
+   `fixtures/x86/sleepintr.c`.
+54. Sleeps keep time on `CLOCK_MONOTONIC` (emscripten's `CLOCK_REALTIME`
+   counts whole ms, and glibc's `nanosleep` is
+   `clock_nanosleep(CLOCK_REALTIME)`; an absolute realtime deadline is
+   converted), and patch 50's sleeping mark is only taken for sleeps over
+   5 ms, with its kernel round trips inside the sleep (off 3 ms before the
+   deadline). LTP nanosleep01 and clock_nanosleep02 pass all rows again
+   (they slept 0.4-1.3 ms too long).
+
+The guest's kernel calls go over a pool of channels (`src/x86-engine/blink.ts`
+→ `public/engines/blink/host.mjs`). It starts at 6, and host.mjs asks the
+page for another (up to 64) while all are busy. Before, more threads or
+same-instance fork children blocked in the kernel than channels held up
+every other call of the instance (epoll_wait15/16). Test:
+`fixtures/x86/blockedkids.c`.
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.

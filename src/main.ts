@@ -1,4 +1,5 @@
 // Console capture - must be first before any other code runs (bounded ring buffer)
+import { toolkitScaleEnv } from './gui/display-scale';
 import { queryConsole, clearConsoleLog } from './console-log';
 
 // Old capture API, kept as a view over the bounded log (console command, clip-report)
@@ -85,6 +86,7 @@ import { initFileAssociations } from './file-associations';
 import { setActiveTerminal } from './active-terminal';
 import { initPanes } from './panes';
 import { uiMode } from './ui-mode';
+import { activeProfile } from './profile';
 import type { Desktop } from './desktop/index';
 import { installDomFs } from './dom-fs';
 import { desktopCmd } from './commands/desktop';
@@ -98,6 +100,7 @@ import {
 } from './seed-runtime-context';
 import { getShiroOrigin } from './utils/shiro-origin';
 import { logIsolationStatus } from './utils/isolation';
+import { requestPersistentStorage, storageInfo } from './storage';
 
 /**
  * Register a command in both the CommandRegistry (for execution) and
@@ -108,23 +111,26 @@ function registerCommand(commands: CommandRegistry, cmd: Command, sourcePath?: s
   registry.register(`commands/${cmd.name}`, cmd, sourcePath);
 }
 
+/** Ask for persistent storage once this much is stored (src/storage.ts). */
+const PERSIST_AFTER_BYTES = 64 << 20;
+
 async function main() {
   console.log(`[shiro] Starting... (build #${buildNumber.trim()})`);
   logIsolationStatus();
 
   // The desktop (src/desktop) is its own chunk: shiro.computer's terminal UI
   // never loads it, and the desktop's download overlaps IndexedDB opening
+  const profile = activeProfile();
   const mode = uiMode();
   const desktopModule = mode === 'desktop' ? import('./desktop/index') : null;
-
-  // Request persistent storage so browser never evicts IndexedDB data (credentials, etc.)
-  navigator.storage?.persist?.().then(granted => {
-    if (granted) console.log('[shiro] Persistent storage granted');
-  }).catch(() => {});
 
   // Initialize filesystem
   const fs = new FileSystem();
   await fs.init();
+  // Persistent storage (no eviction under storage pressure) once the machine
+  // holds a lot: Firefox asks the user, so not for a page that stores little
+  fs.onBigWrite(PERSIST_AFTER_BYTES, () => void requestPersistentStorage('large write'));
+  void storageInfo().then(s => { if ((s.usage ?? 0) >= PERSIST_AFTER_BYTES) void requestPersistentStorage('stored data'); });
   const runtimeContext = (() => {
     if (window.parent === window) return defaultRuntimeContext();
     try {
@@ -358,15 +364,18 @@ async function main() {
   registerCommand(commands, lazyCommand('gcc', 'C compiler (alias for cc)',
     () => import('./commands/cc').then(m => m.gccCmd)), 'src/commands/cc.ts');
 
-  // Lazy-loaded new capabilities (WASM runtimes from CDN)
-  registerCommand(commands, lazyCommand('python', 'Python interpreter (Pyodide)',
-    () => import('./commands/python').then(m => m.pythonCmd)), 'src/commands/python.ts');
-  registerCommand(commands, lazyCommand('python3', 'Python 3 interpreter (Pyodide)',
-    () => import('./commands/python').then(m => m.python3Cmd)), 'src/commands/python.ts');
-  registerCommand(commands, lazyCommand('pip', 'Python package manager',
-    () => import('./commands/python').then(m => m.pipCmd)), 'src/commands/python.ts');
-  registerCommand(commands, lazyCommand('pip3', 'Python package manager',
-    () => import('./commands/python').then(m => ({ ...m.pipCmd, name: 'pip3' }))), 'src/commands/python.ts');
+  // Lazy-loaded new capabilities (WASM runtimes from CDN). Pyodide python is
+  // the profile's python shim; without it python3 comes from pkg/apt only.
+  if (activeProfile().shims.python === 'pyodide') {
+    registerCommand(commands, lazyCommand('python', 'Python interpreter (Pyodide)',
+      () => import('./commands/python').then(m => m.pythonCmd)), 'src/commands/python.ts');
+    registerCommand(commands, lazyCommand('python3', 'Python 3 interpreter (Pyodide)',
+      () => import('./commands/python').then(m => m.python3Cmd)), 'src/commands/python.ts');
+    registerCommand(commands, lazyCommand('pip', 'Python package manager',
+      () => import('./commands/python').then(m => m.pipCmd)), 'src/commands/python.ts');
+    registerCommand(commands, lazyCommand('pip3', 'Python package manager',
+      () => import('./commands/python').then(m => ({ ...m.pipCmd, name: 'pip3' }))), 'src/commands/python.ts');
+  }
   registerCommand(commands, lazyCommand('sqlite3', 'SQLite database engine',
     () => import('./commands/sqlite').then(m => m.sqlite3Cmd)), 'src/commands/sqlite.ts');
   registerCommand(commands, lazyCommand('finder', 'Visual file manager',
@@ -453,6 +462,10 @@ async function main() {
     () => import('./commands/cron').then(m => m.journalctlCmd)), 'src/commands/cron.ts');
   registerCommand(commands, lazyCommand('ssh', 'Connect to remote Shiro via WebRTC',
     () => import('./commands/ssh').then(m => m.sshCmd)), 'src/commands/ssh.ts');
+  registerCommand(commands, lazyCommand('doctor', 'Check this tab (deploy, browser, engine, network, sign-ins, storage) for a bug report',
+    () => import('./commands/doctor').then(m => m.doctorCmd)), 'src/commands/doctor.ts');
+  registerCommand(commands, lazyCommand('tabinfo', 'Same as doctor',
+    () => import('./commands/doctor').then(m => m.tabinfoCmd)), 'src/commands/doctor.ts');
   registerCommand(commands, lazyCommand('scp', 'Copy files over WebRTC',
     () => import('./commands/scp').then(m => m.scpCmd)), 'src/commands/scp.ts');
 
@@ -493,6 +506,8 @@ async function main() {
   // X11 display :0 (src/x11, docs/GUI.md): `Xshiro :0` listens on /tmp/.X11-unix/X0 now;
   // the server and its fonts load on the first client, windows open on the desktop
   shell.env['DISPLAY'] ??= ':0';
+  // HiDPI: X apps started from the shell scale like the dock's (src/gui/display-scale.ts)
+  for (const [k, v] of Object.entries(toolkitScaleEnv())) shell.env[k] ??= v;
   void startDisplay(kernel, 0).catch(e => console.warn('[Xshiro]', e));
 
   // Populate API keys from localStorage so `claude` CLI picks them up
@@ -539,7 +554,14 @@ async function main() {
 
   // Connect terminal to shell for interactive commands (vi, etc.)
   shell.setTerminal(terminal);
+  fs.onStorageFull((full) => {
+    terminal.term.writeln(full
+      ? '\r\n\x1b[31mshiro: browser storage is full: writes fail with "No space left on device" until files are deleted (apt clean, rm).\x1b[0m'
+      : '\r\n\x1b[32mshiro: storage is no longer full; pending writes are saved.\x1b[0m');
+  });
   desktop?.attachMainTerminal(terminal);
+  // The profile's banner: the desktop sets its compact welcome; 'hud' keeps the full one
+  if (profile.banner === 'hud') terminal.banner = undefined;
   // Debian GUI apps (xterm, GTK, Qt) in the dock, installed on first click (src/gui/apps.ts)
   // Registered once the page is idle: their dock icons aren't needed for the first prompt
   if (desktop) {
@@ -575,6 +597,7 @@ async function main() {
     kernel, // Process table, fds, pipes and syscalls for worker guests (src/kernel)
     desktop: desktop?.wm ?? null, // Window manager API (docs/DESKTOP.md), null in the classic UI
     uiMode: mode,
+    profile, // The product profile (src/profile.ts, docs/PROFILES.md)
     unbecome: deactivateBecomeMode, // Exit app mode from browser console
     closeSplit: closeSplitView, // Close split pane from browser console
     lastSeedGif: null as Uint8Array | null, // Last generated seed GIF bytes (for demos/drag)
@@ -778,14 +801,14 @@ async function main() {
   // Initialize drag-and-drop seed GIF import
   initDropHandler(terminal, fs);
 
-  // Initialize mobile virtual keys and voice input
-  initMobileInput(terminal);
+  // Initialize mobile virtual keys and voice input (the desktop has its own: src/desktop/mobile.ts)
+  if (!desktop) initMobileInput(terminal);
 
   // Initialize dynamic favicon (32x32 minimap of terminal content)
   initFaviconUpdater(terminal.term);
 
   // Initialize dynamic title (shows recent commands)
-  // The desktop titles the tab with the product name (src/brand.json)
+  // The desktop titles the tab with the product name (the profile's brand)
   if (!desktop) initTitle();
 
   // Auto-reconnect remote session if one was active before page reload
@@ -798,9 +821,9 @@ async function main() {
     }
   }
 
-  // Have Claude Code ready before anyone types `claude`. Waits a few seconds
-  // so the 18 MB tarball download doesn't compete with boot.
-  setTimeout(() => {
+  // Have Claude Code ready before anyone types `claude` (the profile's preinstall
+  // list). Waits a few seconds so the 18 MB tarball download doesn't compete with boot.
+  if (profile.preinstall.includes('claude-code')) setTimeout(() => {
     ensureClaudeCodeInstalled(fs)
       .then(() => console.log('[shiro] Claude Code ready'))
       .catch((e) => console.warn('[shiro] Claude Code background install failed:', e?.message || e));
