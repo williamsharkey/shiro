@@ -171,9 +171,8 @@ The broker speaks HTTP/1.1 (`http1.ts`) over TLS 1.3 done in the page
   again.
 - Connections are pooled per origin (6, idle 60 s, `netfetch.ts`). That
   matters twice over: every new connection costs a relay WebSocket and a TLS
-  handshake, and the relay rate-limits connects per client IP (60/min by
-  default). A news site touching 40 hosts gets close to that limit, so
-  production needs browse-specific limits (an owner decision; see below).
+  handshake, and the relay rate-limits connects per client IP (300/min and 64
+  concurrent by default, raised from 60 and 16 for browsing; owner decision).
 - gzip and deflate are decoded with `DecompressionStream`. Brotli is too,
   where the browser has it; otherwise the broker doesn't advertise `br`.
 - No HTTP/2 yet. Sites work over HTTP/1.1, but only with 6 parallel
@@ -402,10 +401,12 @@ the web.
 2. **Server-side decrypting fetch: local measurement only**, behind
    `TABCOMPUTER_BROWSE_SERVER_FETCH=1`, never in production. TLS in the page over
    `/tcp` is the product path.
-3. Open: **relay limits for browsing.** 60 connects/min and 16 concurrent per
-   IP are tight for news sites. Options: higher limits for signed-in users, or
-   multiplexing (Wisp-like) so one WebSocket carries many TCP streams.
-4. User-facing strings stay brand-neutral ("the Browser app"), so the move to
+3. **Relay limits** were raised for everyone to 300 connects/min and 64
+   concurrent per IP. A multiplexed relay can come later.
+4. **Browse-origin storage stays shared between instances.**
+5. **The relay's upstream CONNECT proxy** (`TABCOMPUTER_TCP_UPSTREAM_PROXY`)
+   is kept.
+6. User-facing strings stay brand-neutral ("the Browser app"), so the move to
    the tabcomputer repo is a rename.
 
 ## Next steps
@@ -419,6 +420,6 @@ Ordered by what the scoreboard says matters:
 2. **`location`/`origin` rewriting** (a targeted JS rewrite, or a proxy over
    `location` for scripts that read it). Sign-in pages that check their own
    hostname (Microsoft's) break without it.
-3. **A multiplexed relay** (Wisp-like), or browse-specific relay limits.
+3. **A multiplexed relay** (Wisp-like).
 4. **An HTTP cache.** There is none yet, so every visit refetches.
 5. Popups with `opener` (OAuth), downloads, and the per-instance storage tag.

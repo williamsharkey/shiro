@@ -138,8 +138,8 @@ The egress policy is the security boundary; everything else limits abuse.
   not stop a non-browser client that fakes an Origin, which is why the egress
   policy and limits are what actually bound the relay.
 - **Limits** (env, defaults): concurrent connections per IP
-  (`TABCOMPUTER_TCP_MAX_CONNS_PER_IP`, 16) and total (`TABCOMPUTER_TCP_MAX_CONNS`, 512),
-  connection attempts per IP per minute (`TABCOMPUTER_TCP_CONNECTS_PER_MIN`, 60,
+  (`TABCOMPUTER_TCP_MAX_CONNS_PER_IP`, 64) and total (`TABCOMPUTER_TCP_MAX_CONNS`, 512),
+  connection attempts per IP per minute (`TABCOMPUTER_TCP_CONNECTS_PER_MIN`, 300,
   resolves included), per-IP bandwidth (`TABCOMPUTER_TCP_BYTES_PER_SEC`, 4 MiB/s,
   burst `TABCOMPUTER_TCP_BYTE_BURST` 16 MiB; excess is throttled, not dropped),
   per-IP hourly bytes (`TABCOMPUTER_TCP_BYTES_PER_HOUR`, 4 GiB), per-connection

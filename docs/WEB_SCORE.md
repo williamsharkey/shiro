@@ -22,7 +22,7 @@ node tests/browser/web-score.mjs --from-json /tmp/web.json --md docs/WEB_SCORE.m
   the broker doing cookies and headers, and TLS in the page over the relay.
 - **tab-server**: the same app with the server doing the fetches, so the
   server sees plaintext. It's a local comparison only
-  (`SHIRO_BROWSE_SERVER_FETCH=1`, never in production; BROWSER.md,
+  (`TABCOMPUTER_BROWSE_SERVER_FETCH=1`, never in production; BROWSER.md,
   "Decisions").
 - **NetSurf / Dillo in the VM** (unix/gui's Linux GUI browsers, in Blink)
   are measured separately, on a small subset, below. They render about one
@@ -61,8 +61,8 @@ page; it shows up as part of the desktop's heap.
   allows (BBC, Reddit, Stack Overflow, …). Without it, the tab column lost
   those sites to the environment rather than to the Browser.
 - **The relay ran with raised limits** (`TABCOMPUTER_TCP_CONNECTS_PER_MIN=3000`,
-  `TABCOMPUTER_TCP_MAX_CONNS_PER_IP=256`). With the production defaults (60/min,
-  16 concurrent) a news site alone exhausts them; see BROWSER.md, "Decisions".
+  `TABCOMPUTER_TCP_MAX_CONNS_PER_IP=256`). The production defaults are now 300/min
+  and 64 concurrent (raised for browsing; BROWSER.md, "Decisions").
 
 
 ## NetSurf and Dillo in the VM
