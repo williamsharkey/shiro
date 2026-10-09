@@ -559,20 +559,12 @@
    ]
   },
   "builtin-printf": {
-   "pass": 47,
+   "pass": 49,
    "total": 55,
    "failures": [
     {
      "i": 0,
      "name": "printf with no args"
-    },
-    {
-     "i": 3,
-     "name": "printf -v a[1]"
-    },
-    {
-     "i": 4,
-     "name": "printf -v syntax error"
     },
     {
      "i": 38,
@@ -965,7 +957,7 @@
    ]
   },
   "array-assoc": {
-   "pass": 34,
+   "pass": 35,
    "total": 38,
    "failures": [
     {
@@ -975,10 +967,6 @@
     {
      "i": 31,
      "name": "nameref and assoc array"
-    },
-    {
-     "i": 33,
-     "name": "printf -v and assoc array"
     },
     {
      "i": 34,
@@ -1216,24 +1204,12 @@
    ]
   },
   "alias": {
-   "pass": 31,
+   "pass": 35,
    "total": 48,
    "failures": [
     {
-     "i": 0,
-     "name": "Usage of builtins"
-    },
-    {
      "i": 2,
      "name": "define and use alias on a single line"
-    },
-    {
-     "i": 11,
-     "name": "alias with trailing space causes alias expansion on second word"
-    },
-    {
-     "i": 13,
-     "name": "Recursive alias expansion of SECOND word"
     },
     {
      "i": 15,
@@ -1258,10 +1234,6 @@
     {
      "i": 25,
      "name": "Alias with a quote in the middle is a syntax error"
-    },
-    {
-     "i": 28,
-     "name": "Two aliases in pipeline"
     },
     {
      "i": 30,

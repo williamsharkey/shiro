@@ -488,4 +488,21 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('1\n2\nx=1\ngot a\ngot b\nst=1\nHI\n');
   });
+
+  it('alias ending in a blank expands the next word; alias/unalias --; printf -v a[i]', async () => {
+    const r = await script([
+      "shopt -s expand_aliases",
+      "alias hi=\"echo hello world \"",
+      "alias punct=\"!!!\"",
+      "hi punct",
+      "alias e=\"echo \"",
+      "alias x=\"X\"",
+      "e x y",
+      "alias -- q=quux; alias q; unalias -- q; alias q 2>/dev/null || echo gone",
+      "alias s=\"echo it's\"; alias s",
+      "a=(x y z); printf -v \"a[1]\" \"%s-\" B; echo \"${a[@]}\"",
+      "printf -v \"bad name\" x; echo st=$?",
+    ].join('\n'));
+    expect(r.out).toBe("hello world !!!\nX y\nalias q='quux'\ngone\nalias s='echo it'\\''s'\nx B- z\nst=2\n");
+  });
 });

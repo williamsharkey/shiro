@@ -1417,8 +1417,16 @@ export class Shell {
         // (only an unquoted command word: 'hi' and \hi are not aliases)
         if (this.aliases.has(cmdName) && !this.expandingAliases.has(cmdName)
           && segment.replace(/^\s*(?:\d*(?:>>?|<|&>>?|>\|)\s*[^\s'"]+\s+)*/, '').startsWith(cmdName)) {
-          const aliasValue = this.aliases.get(cmdName)!;
-          const fullCmd = aliasValue + (cmdArgs.length > 0 ? ' ' + quoteArgsForShell(cmdArgs) : '');
+          let aliasValue = this.aliases.get(cmdName)!;
+          // An alias ending in a blank makes the next word an alias position too (alias sudo='sudo ')
+          let rest = cmdArgs;
+          const seen = new Set([cmdName]);
+          while (/\s$/.test(aliasValue) && rest.length && this.aliases.has(rest[0]) && !seen.has(rest[0])) {
+            seen.add(rest[0]);
+            aliasValue += this.aliases.get(rest[0])!;
+            rest = rest.slice(1);
+          }
+          const fullCmd = aliasValue + (rest.length > 0 ? (/\s$/.test(aliasValue) ? '' : ' ') + quoteArgsForShell(rest) : '');
           this.injectedStdin = nestedStdin;
           // An alias is not expanded again inside its own expansion (alias ls='ls -F')
           this.expandingAliases.add(cmdName);
@@ -2088,7 +2096,12 @@ export class Shell {
             if (printfCmdArgs[0] === '--') printfCmdArgs = printfCmdArgs.slice(1);
             const r = printfFormat(printfCmdArgs[0] ?? '', printfCmdArgs.slice(1));
             if (printfVarName) {
-              this.env[printfVarName] = r.out;
+              // -v NAME or NAME[SUB]
+              const vm = /^([A-Za-z_][A-Za-z0-9_]*)(?:\[([\s\S]*)\])?$/.exec(printfVarName);
+              if (!vm) { stderrWriter(`shiro: printf: \`${printfVarName}': not a valid identifier\r\n`); exitCode = 2; this.lastExitCode = 2; this.env['?'] = '2'; lastOutput = ''; continue; }
+              let err: string | null = null;
+              try { err = this.setVar(vm[1], r.out, vm[2]); } catch (e) { if (e instanceof ArithError) err = e.message; else throw e; }
+              if (err) r.errors.push(`shiro: printf: ${err}`);
             } else {
               writeStdout(r.out.replace(/\n/g, '\r\n'));
             }
@@ -2175,10 +2188,12 @@ export class Shell {
 
         // Shell builtin: alias / unalias
         if (!_builtinDisabled && effectiveCmdName === 'alias') {
+          if (cmdArgs[0] === '--') cmdArgs.shift();
+          if (cmdArgs[0] === '-p') cmdArgs.shift();
           if (cmdArgs.length === 0) {
             // List all aliases
             for (const [name, value] of this.aliases) {
-              writeStdout(`alias ${name}='${value}'\r\n`);
+              writeStdout(`alias ${name}='${value.replace(/'/g, "'\\''")}'\r\n`);
             }
           } else {
             for (const arg of cmdArgs) {
@@ -2188,9 +2203,9 @@ export class Shell {
               } else {
                 const val = this.aliases.get(arg);
                 if (val !== undefined) {
-                  writeStdout(`alias ${arg}='${val}'\r\n`);
+                  writeStdout(`alias ${arg}='${val.replace(/'/g, "'\\''")}'\r\n`);
                 } else {
-                  stderrWriter(`alias: ${arg}: not found\r\n`);
+                  stderrWriter(`shiro: alias: ${arg}: not found\r\n`);
                   exitCode = 1;
                 }
               }
@@ -2202,6 +2217,7 @@ export class Shell {
           continue;
         }
         if (!_builtinDisabled && effectiveCmdName === 'unalias') {
+          if (cmdArgs[0] === '--') cmdArgs.shift();
           if (cmdArgs.length === 0) {
             stderrWriter('unalias: usage: unalias [-a] name ...\r\n');
             exitCode = 1;
