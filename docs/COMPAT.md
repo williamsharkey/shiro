@@ -311,8 +311,52 @@ Shiro changes these programs needed (tests in `x86-engine.test.ts`,
 - `rename` keeps a file's modification time (it set it to now): `rsync -a`
   sets times on a temp file and renames it. `filesystem.test.ts`.
 - `link(2)` still copies (the filesystem has no hard links) but the copy
-  reports the source's inode number, which git's local clone checks.
-  `kernel-core.test.ts`.
+  reports the source's inode number, which git's local clone checks, and
+  both names report a link count of 2 (shadow's lock files: `groupadd`,
+  `useradd` in openssh-client's and other postinsts). `kernel-core.test.ts`.
+- Files keep no owner, so `stat` reports them as the caller's (root's in a
+  root shell): git refused root's own repositories ("dubious ownership").
+- Shiro's commands look like files only where exec runs them (`/bin`,
+  `/usr/bin` and the sbin ones, when no real file has that name): GNU make
+  took `/usr/local/bin/echo` from its own PATH search and failed with
+  "echo: No such file or directory". `debian.test.ts`.
+- `systemctl` accepts what Debian's maintainer scripts run (`--root=/
+  preset`, `daemon-reload`, `is-enabled`, ...).
+
+### Popular CLI tools from Debian (apt)
+
+Debian mode (`debian install`, a root shell) with
+`apt-get install -y --no-install-recommends PKG`, then a non-interactive
+smoke test, on 2026-10-09 (vitest, the mirror cache served by `server.mjs`).
+The install column is the whole `apt-get install` (download, unpack,
+maintainer scripts, triggers) in Blink.
+
+| Tool (package) | Version | Status | Install | Smoke test | Notes |
+| --- | --- | --- | --- | --- | --- |
+| jq | 1.7.1 | works | 69 s | `jq -c '.a\|add'` | |
+| ripgrep (`rg`) | 14.1 | works | 61 s | `rg -n` | |
+| fd (`fd-find`, `fdfind`) | 10.2 | works | 61 s | `fdfind -e txt` | Debian names it `fdfind` |
+| bat (`batcat`) | 0.25 | works | 109 s | `batcat --paging=never -p` | Debian names it `batcat` |
+| fzf | 0.60 | works | 61 s | `fzf -f` filter | |
+| tmux | 3.5a | works | 80 s | `tmux -V` | |
+| less | 668 | works | 63 s | `less -F` | |
+| man (`man-db`) | 2.13 | broken | 138 s | `man -P cat 7 man`: "No manual entry" | the rootfs excludes `/usr/share/man` (dpkg `path-exclude`, as Docker's slim images do), so no package has pages; Shiro's own `pkg` man pages still work outside Debian mode |
+| curl | 8.14.1 | works (local) | 113 s | `curl --version`, `file://` | network through Shiro's relay not tried here |
+| wget | 1.25 | works (local) | 59 s | `--version` | network not tried |
+| ssh, ssh-keygen (`openssh-client`) | 10.0p1 | works | 90 s | `ssh -V`, `ssh-keygen -t ed25519` | its postinst failed (`groupadd _ssh`: link count), fixed |
+| rsync | 3.5.0 | works | 93 s | `rsync -a` | |
+| zip, unzip | 3.0, 6.0 | works | 71 s | zip + `unzip -l` | |
+| make | 4.4.1 | works | 69 s | a Makefile | recipes failed ("echo: No such file"), fixed |
+| gcc (+ `libc6-dev`) | 14.2 | works, slow | 357 s | compile + run hello.c | |
+| strace | 6.13 | broken | 85 s | — | Blink has no `ptrace` |
+| file | 5.46 | works | 87 s | `file` on text and ELF | |
+| tree | 2.2 | works | 75 s | `tree -L 1` | |
+| ncdu | 1.22 | works | 84 s | `ncdu -o` export | |
+| nano | 8.4 | works | 82 s | `--version` | |
+| emacs (`emacs-nox`) | 30.1 | works, slow | 399 s | `emacs --batch --eval` | |
+| htop | 3.4.1 | works | 76 s | `--version` | |
+| git | 2.47.3 | works | 280 s | init + commit + log as root | "dubious ownership" as root, fixed |
+| sqlite3 | 3.46 | works | 102 s | `select 6*7` | |
 
 Building and publishing one of these packages:
 
