@@ -503,6 +503,22 @@ function rmTree(FS, path) {
 }
 
 let exiting = false;
+let failGuest = null; // run()'s fail, once the guest is starting
+
+// An engine abort after an await (in an async syscall's continuation) is a
+// rejected promise, and a worker's unhandled rejection fires no 'error' event
+// on the page's Worker: the kernel never heard the process end and its parent
+// (dpkg under apt) waited forever with no CPU. End the guest as any abort does.
+const onRejection = (reason) => {
+  if (reason === 'unwind' || exiting) return;
+  if (reason && reason.name === 'ExitStatus') { try { exitGuest(reason.status); } catch { /* unwind */ } return; }
+  const text = String((reason && reason.stack) || reason);
+  if (failGuest) { try { failGuest(text, 134); } catch { /* unwind */ } return; }
+  setTimeout(() => { throw reason instanceof Error ? reason : new Error(text); }); // the page's onError
+};
+if (isNode) process.on('unhandledRejection', onRejection);
+else self.addEventListener('unhandledrejection', (e) => { e.preventDefault(); onRejection(e.reason); });
+
 function exitGuest(code) {
   if (exiting) return;
   exiting = true;
@@ -525,6 +541,7 @@ async function run(msg) {
     if (!exiting) writeFd(2, enc.encode(`blink: ${text}\n`));
     exitGuest(code);
   };
+  failGuest = fail;
   let M = null;
 
   // ── The channel pool for the guest's own syscalls (shiro-kernel.js) ──

@@ -19,6 +19,18 @@
       "stub": true,
       "why": "apt-utils' 70debconf hook runs this before every dpkg run; under DEBIAN_FRONTEND=noninteractive it has nothing to ask but cost ~20 s per install under the x86 engine (Perl, debconf, apt-extracttemplates). tabcomputer's drains apt's list and exits 0 then (templates load at configure time through the confmodule, as without apt-utils) and runs Debian's script, kept as dpkg-preconfigure.debian, for any other frontend."
     },
+    "/usr/bin/apt-get": {
+      "default": "shiro",
+      "command": "shiro-apt",
+      "stub": true,
+      "why": "apt keeps working after an install stopped part-way (a closed tab, a transient engine fault): before a command that changes packages tabcomputer's runs `dpkg --configure -a` when dpkg was interrupted and `apt-get -f install` when packages were left half-installed, and an install that fails part-way is recovered and retried once (its downloaded archives are reused). Everything else, and the commands themselves, are Debian's apt, kept as apt-get.debian."
+    },
+    "/usr/bin/apt": {
+      "default": "shiro",
+      "command": "shiro-apt",
+      "stub": true,
+      "why": "apt keeps working after an install stopped part-way (a closed tab, a transient engine fault): before a command that changes packages tabcomputer's runs `dpkg --configure -a` when dpkg was interrupted and `apt-get -f install` when packages were left half-installed, and an install that fails part-way is recovered and retried once (its downloaded archives are reused). Everything else, and the commands themselves, are Debian's apt, kept as apt.debian."
+    },
     "/usr/bin/base64": {
       "default": "shiro",
       "command": "base64",

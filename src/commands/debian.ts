@@ -167,6 +167,23 @@ export const shiroPreconfigureCmd: Command = {
   },
 };
 
+/** apt and apt-get with recovery from an install that stopped part-way (src/debian/apt-guard.ts). */
+export const shiroAptCmd: Command = {
+  name: 'shiro-apt',
+  description: "Debian's apt, recovering an interrupted dpkg first",
+  // Run from Shiro's shell (the stub's interpreter as a builtin): args are [script, ...its args]
+  async exec(ctx) {
+    const [script = '/usr/bin/apt-get', ...args] = ctx.args;
+    const q = (a: string) => `'${a.replace(/'/g, `'\\''`)}'`;
+    return ctx.shell.fork().executeWithStdin([script + '.debian', ...args].map(q).join(' '), ctx.stdin,
+      (t) => { ctx.stdout += t; }, (t) => { ctx.stderr += t; });
+  },
+  async program(proc, kernel) {
+    const { aptGuardProgram } = await import('../debian/apt-guard');
+    return aptGuardProgram(proc, kernel);
+  },
+};
+
 /** apt's `store` method (decompress + hash downloaded indexes) run natively (src/debian/apt-store.ts). */
 export const shiroAptStoreCmd: Command = {
   name: 'shiro-apt-store',
