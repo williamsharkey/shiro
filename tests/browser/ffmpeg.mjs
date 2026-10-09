@@ -67,6 +67,9 @@ try {
   await step('ffmpeg -version', /^ffmpeg version \S+/m);
   await step('ffmpeg -y -f lavfi -i testsrc=duration=1:size=64x48:rate=5 -pix_fmt yuv420p /tmp/clip.mp4', /Output: \/tmp\/clip\.mp4 \(\d/);
   await step('ffmpeg -y -i /tmp/clip.mp4 -vf scale=32:-1 /tmp/clip.gif && ls -l /tmp/clip.gif && head -c 6 /tmp/clip.gif; echo', /GIF89a/);
+  // Again on the same input: its bytes must not have been handed off (detached) the first time
+  await step('ffmpeg -y -i /tmp/clip.mp4 -vf scale=16:-1 /tmp/clip2.gif && head -c 6 /tmp/clip2.gif; echo', /GIF89a/);
+  await step('ffmpeg -y -i /tmp/clip.mp4 -c copy /tmp/copy.mp4 && cmp /tmp/clip.mp4 /tmp/clip.mp4 && ls /tmp/copy.mp4', /copy\.mp4/);
   if (foreign.length) throw new Error(`cross-origin ffmpeg requests: ${foreign.join(', ')}`);
   if (errors.length) throw new Error(`page errors: ${errors.join('; ')}`);
   console.log('ok   ffmpeg');
