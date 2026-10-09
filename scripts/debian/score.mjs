@@ -187,10 +187,14 @@ async function smoke(m, pkg) {
   // Public libraries first; a private one (systemd/libsystemd-core) finds its
   // siblings through its programs' RUNPATH, so give ld.so its directory
   const libs = list.filter((f) => /^\/usr\/lib\/x86_64-linux-gnu\/(?:[\w.+-]+\/)?[^/]+\.so(\.\d+)*$/.test(f))
-    .sort((a, b) => a.split('/').length - b.split('/').length);
+    .sort((a, b) => a.split('/').length - b.split('/').length || (/\.so\.\d/.test(b) ? 1 : 0) - (/\.so\.\d/.test(a) ? 1 : 0));
   if (libs.length) {
     const dir = libs[0].slice(0, libs[0].lastIndexOf('/'));
     const r = await m.run(`/lib64/ld-linux-x86-64.so.2 --library-path ${dir} --list ${libs[0]} 2>&1`, 180);
+    // A -dev package's lib.so can be a GNU ld script (libc6-dev's libc.so), not an ELF
+    if (r.code !== 0 && /invalid ELF header/.test(r.out) && /GNU ld script|^\s*(INPUT|GROUP)\s*\(/m.test((await m.run(`head -c 256 '${libs[0]}'`)).out)) {
+      return { ok: true, how: `installed; ${libs[0]} is a linker script`, ms: r.ms };
+    }
     return r.code === 0 ? { ok: true, how: `ld.so --list ${libs[0]}`, ms: r.ms }
       : { ok: false, how: `ld.so --list ${libs[0]}`, category: categorize(r.out) === 'other' ? 'smoke-failed' : categorize(r.out), error: firstError(r.out) };
   }
