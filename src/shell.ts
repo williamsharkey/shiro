@@ -1671,6 +1671,21 @@ export class Shell {
         continue;
       }
 
+      // time [-p] PIPELINE: times the whole pipeline (( … ), { …; }, a | b) and
+      // reports on stderr after it (a bare `time` is the builtin below)
+      const timed = /^time(\s+-p)?\s+(?=\S)/.exec(trimmedCmd);
+      if (timed && !this.disabledBuiltins.has('time')) {
+        const start = performance.now();
+        exitCode = await this.execute(trimmedCmd.slice(timed[0].length), writeStdout, stderrWriter, false, terminalOverride, true);
+        const elapsed = (performance.now() - start) / 1000;
+        stderrWriter(timed[1]
+          ? `real ${elapsed.toFixed(2)}\r\nuser 0.00\r\nsys 0.00\r\n`
+          : `\r\nreal\t${Math.floor(elapsed / 60)}m${(elapsed % 60).toFixed(3)}s\r\nuser\t0m0.000s\r\nsys\t0m0.000s\r\n`);
+        this.lastExitCode = exitCode;
+        this.env['?'] = String(exitCode);
+        continue;
+      }
+
       // ! PIPELINE: run it and negate its status (! ( … ), ! { …; }, ! a | b)
       if (/^!\s+\S/.test(trimmedCmd) && !/^!\s+\[\[/.test(trimmedCmd)) {
         exitCode = await this.execute(trimmedCmd.replace(/^!\s+/, ''), writeStdout, stderrWriter, false, terminalOverride, true);

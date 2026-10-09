@@ -30,6 +30,15 @@ describe('shell conformance regressions', () => {
     expect(r.err.replace(/\r\n/g, '\n')).toBe('to-stderr\n');
   });
 
+  it('time times a whole pipeline, subshell or group and reports after it', async () => {
+    const r = await script('time (echo a; echo b)\ntime { echo c; }\ntime echo d | tr d D\ntime -p false; echo rc=$?\n');
+    expect(r.out).toBe('a\nb\nc\nD\nrc=1\n');
+    const err = r.err.replace(/\r\n/g, '\n');
+    expect(err.match(/^real\t\dm\d+\.\d{3}s$/gm)).toHaveLength(3);
+    expect(err).toMatch(/^real \d+\.\d\d\nuser 0\.00\nsys 0\.00$/m);
+    expect(err).not.toMatch(/not found/);
+  });
+
   it("piped stdin reaches every statement of a script, read by read (not just the first)", async () => {
     const { fs, shell } = await createTestShell();
     await fs.writeFile('/tmp/r.sh', 'exec 3>&1\nread a\nread b\necho "a=$a b=$b"\n');
