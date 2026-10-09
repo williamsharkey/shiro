@@ -54,7 +54,8 @@ APPS = {
                    'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so'], [], 'LXQt image viewer (Qt5)', 'qt5'),
     'netsurf': (['netsurf-gtk'], ['/usr/bin/netsurf-gtk'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'],
                 ['libglib2.0-bin', 'shared-mime-info'], 'Small web browser (GTK3)', 'gtk3'),
-    'dillo': (['dillo'], ['/usr/bin/dillo'], [], [], 'Tiny web browser (FLTK)', 'fltk'),
+    'dillo': (['dillo'], ['/usr/bin/dillo'], ['usr/lib/x86_64-linux-gnu/dillo/dpi/*/*.dpi', 'usr/libexec/dillo/dpid'],
+              ['ca-certificates'], 'Tiny web browser (FLTK)', 'fltk'),
     'inkscape': (['inkscape'], ['/usr/bin/inkscape'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'],
                  ['libglib2.0-bin', 'shared-mime-info'], 'Vector graphics editor (GTK3)', 'gtk3'),
 }
@@ -270,6 +271,35 @@ def main():
         h = hashlib.sha256(data).hexdigest()
         open(os.path.join(os.path.dirname(out), 'overlay', h), 'wb').write(data)
         overlays.append({'path': '/usr/share/icons/Adwaita/icon-theme.cache', 'sha256': h, 'size': len(data), 'when': 'adwaita-icon-theme'})
+    # The CA bundle update-ca-certificates builds from ca-certificates' Mozilla
+    # certificates (its postinst): libcurl/OpenSSL read only the bundle.
+    ca_app = next((a for a in apps if 'ca-certificates' in apps[a]['packages']), None)
+    if ca_app:
+        moz = os.path.join(work, ca_app, 'usr/share/ca-certificates/mozilla')
+        data = b''.join(open(os.path.join(moz, f), 'rb').read().rstrip(b'\n') + b'\n' for f in sorted(os.listdir(moz)) if f.endswith('.crt'))
+        h = hashlib.sha256(data).hexdigest()
+        open(os.path.join(os.path.dirname(out), 'overlay', h), 'wb').write(data)
+        overlays.append({'path': '/etc/ssl/certs/ca-certificates.crt', 'sha256': h, 'size': len(data), 'when': 'ca-certificates'})
+        # ... and its hashed-name links (`openssl rehash`), for OpenSSL users that
+        # only look certificates up by subject hash in /etc/ssl/certs (Dillo):
+        # a tar overlay of symlinks, unpacked like a package.
+        import io, tarfile
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode='w', format=tarfile.USTAR_FORMAT) as tar:
+            seen = {}
+            for f in sorted(os.listdir(moz)):
+                if not f.endswith('.crt'): continue
+                pem = f[:-4] + '.pem'
+                hsh = subprocess.run(['openssl', 'x509', '-subject_hash', '-noout', '-in', os.path.join(moz, f)],
+                                     check=True, capture_output=True, text=True).stdout.strip()
+                n = seen.get(hsh, 0); seen[hsh] = n + 1
+                for name, target in ((f'etc/ssl/certs/{pem}', f'/usr/share/ca-certificates/mozilla/{f}'), (f'etc/ssl/certs/{hsh}.{n}', pem)):
+                    ti = tarfile.TarInfo(name); ti.type = tarfile.SYMTYPE; ti.linkname = target; ti.mode = 0o777
+                    tar.addfile(ti)
+        data = buf.getvalue()
+        h = hashlib.sha256(data).hexdigest()
+        open(os.path.join(os.path.dirname(out), 'overlay', h), 'wb').write(data)
+        overlays.append({'path': '/', 'tar': True, 'sha256': h, 'size': len(data), 'when': 'ca-certificates'})
     # gdk-pixbuf's loaders.cache for libgdk-pixbuf-2.0-0's own loaders (the only
     # ones any app here has): gdk-pixbuf-query-loaders dlopen()s each loader, so
     # it is made in Blink (`gui install gpicview`, then copy
