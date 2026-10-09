@@ -41,6 +41,12 @@ const jitBin = join(out, 'jit');
 const haveJit = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', jitBin, 'jit.c']);
 const forkBin = join(out, 'forkcopy');
 const haveFork = tryBuild('gcc', ['-static', '-O1', '-o', forkBin, 'forkcopy.c']);
+const shfutexBin = join(out, 'shfutex');
+const haveShfutex = tryBuild('gcc', ['-static', '-O1', '-o', shfutexBin, 'shfutex.c']);
+const orphanBin = join(out, 'orphan');
+const haveOrphan = tryBuild('gcc', ['-static', '-O1', '-o', orphanBin, 'orphan.c']);
+const alarmforkBin = join(out, 'alarmfork');
+const haveAlarmfork = tryBuild('gcc', ['-static', '-O1', '-o', alarmforkBin, 'alarmfork.c']);
 const forkSharedBin = join(out, 'forkshared');
 const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
 const mremapBin = join(out, 'mremap');
@@ -186,6 +192,42 @@ describe.skipIf(!haveFork)('Blink engine: fork', () => {
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('anon shared 42\nfile shared 7\nprivate after unmap 100\n');
     expect(r.exitCode).toBe(0);
+  }, 60_000);
+});
+
+// BLINK_SAME_INSTANCE_FORK=1 (patch 0031): the child is a System in the
+// parent's Blink instance, sharing MAP_SHARED pages and running alongside
+describe.skipIf(!haveFork || !haveForkShared || !haveShfutex || !haveOrphan || !haveAlarmfork)('Blink engine: same-instance fork', () => {
+  const sif = 'BLINK_SAME_INSTANCE_FORK=1 ./prog';
+  it('copies private memory; pipes, exec and nested forks work', async () => {
+    const { shell } = await setup(readFileSync(forkBin));
+    expect((await run(shell, `${sif} copy`)).output).toContain('parent sees 1 p parent status 7');
+    expect((await run(shell, `${sif} pipe`)).output).toContain('pipe got: from-exec');
+    expect((await run(shell, `${sif} nested`)).output).toContain('nested status 44 counter 1');
+  }, 60_000);
+
+  it('shares MAP_SHARED memory and its futexes with a child running alongside', async () => {
+    const { shell } = await setup(readFileSync(forkSharedBin));
+    expect((await run(shell, sif)).output.replace(/\r\n/g, '\n')).toBe('anon shared 42\nfile shared 7\nprivate after unmap 100\n');
+    const f = await setup(readFileSync(shfutexBin));
+    expect((await run(f.shell, sif)).output).toContain('futex across fork: child wrote 2, exit 3');
+  }, 60_000);
+
+  it('kills children, and a child outlives its parent', async () => {
+    const { shell } = await setup(readFileSync(orphanBin));
+    expect((await run(shell, sif)).output.replace(/\r\n/g, '\n')).toBe(
+      'killed spinning child: signaled=1 sig=9\nSIGTERM to pausing child: signaled=1 sig=15\n');
+    await run(shell, 'rm -f /tmp/orphan.out');
+    await run(shell, `${sif} x`);
+    await run(shell, 'sleep 1');
+    expect((await run(shell, 'cat /tmp/orphan.out')).output).toContain('child outlived parent');
+  }, 60_000);
+
+  it('keeps alarms per process (here and with the default fork)', async () => {
+    const { shell } = await setup(readFileSync(alarmforkBin));
+    const want = "first alarm 0, child ok 1, parent's alarm still set 1";
+    expect((await run(shell, sif)).output).toContain(want);
+    expect((await run(shell, './prog')).output).toContain(want);
   }, 60_000);
 });
 

@@ -388,6 +388,53 @@ export class Kernel {
     if (!proc.exiting) await this.exit(proc, A.W_EXITCODE(typeof code === 'number' ? code : 0));
   }
 
+  /** ITIMER_REAL of `proc`: milliseconds left and the reload interval. */
+  realTimer(proc: Process): { value: number; interval: number } {
+    const t = proc.data.realTimer as { deadline: number; interval: number } | undefined;
+    if (!t) return { value: 0, interval: 0 };
+    return { value: Math.max(0, t.deadline - Date.now()), interval: t.interval };
+  }
+
+  /**
+   * setitimer(ITIMER_REAL)/alarm: SIGALRM to `proc` in `valueMs` (0 disarms),
+   * then every `intervalMs`. Returns the old setting. Not inherited by fork
+   * children; kept across exec (it lives on the process).
+   */
+  setRealTimer(proc: Process, valueMs: number, intervalMs: number): { value: number; interval: number } {
+    const old = this.realTimer(proc);
+    const t = proc.data.realTimer as { handle?: ReturnType<typeof setTimeout>; deadline: number; interval: number } | undefined;
+    if (t?.handle) clearTimeout(t.handle);
+    if (!(valueMs > 0)) {
+      delete proc.data.realTimer;
+      return old;
+    }
+    const timer: { handle?: ReturnType<typeof setTimeout>; deadline: number; interval: number } = { deadline: Date.now() + valueMs, interval: intervalMs > 0 ? intervalMs : 0 };
+    const arm = (ms: number) => {
+      timer.handle = setTimeout(() => {
+        if (proc.exiting || proc.data.realTimer !== timer) return;
+        if (timer.interval > 0) {
+          timer.deadline = Date.now() + timer.interval;
+          arm(timer.interval);
+        } else {
+          delete proc.data.realTimer;
+        }
+        this.deliver(proc, A.SIGALRM);
+      }, Math.max(0, ms));
+      (timer.handle as any)?.unref?.();
+    };
+    proc.data.realTimer = timer;
+    if (!proc.data.realTimerCleanup) {
+      proc.data.realTimerCleanup = true;
+      proc.onTerminate(() => {
+        const cur = proc.data.realTimer as { handle?: ReturnType<typeof setTimeout> } | undefined;
+        if (cur?.handle) clearTimeout(cur.handle);
+        delete proc.data.realTimer;
+      });
+    }
+    arm(valueMs);
+    return old;
+  }
+
   /** Terminate `proc` with a wait status: close its fds, reparent its children, notify its parent. */
   async exit(proc: Process, status: number): Promise<void> {
     if (proc.pid === 1 || !proc.beginExit()) return;
@@ -1271,6 +1318,28 @@ export class Kernel {
           return this.vfork(proc).pid;
         case A.SYS_shiro_execve:
           return await this.sysExecve(proc, JSON.parse(str(0, args[0])), data);
+        case A.SYS_alarm: {
+          // seconds left on the old alarm, rounded like Linux
+          const old = this.setRealTimer(proc, (args[0] >>> 0) * 1000, 0);
+          return old.value > 0 ? Math.max(1, Math.round(old.value / 1000)) : 0;
+        }
+        case A.SYS_getitimer:
+        case A.SYS_setitimer: {
+          // ITIMER_REAL only (the engine keeps the CPU-time timers); struct
+          // itimerval in data: interval then value, each {i64 sec, i64 usec}
+          if (args[0] !== 0) return -A.EINVAL;
+          const dv = new DataView(data.buffer, data.byteOffset, 32);
+          const ms = (o: number) => Number(dv.getBigInt64(o, true)) * 1000 + Number(dv.getBigInt64(o + 8, true)) / 1000;
+          const put = (o: number, v: number) => {
+            const us = Math.max(0, Math.round(v * 1000));
+            dv.setBigInt64(o, BigInt(Math.floor(us / 1e6)), true);
+            dv.setBigInt64(o + 8, BigInt(us % 1e6), true);
+          };
+          const old = nr === A.SYS_setitimer ? this.setRealTimer(proc, ms(16), ms(0)) : this.realTimer(proc);
+          put(0, old.interval);
+          put(16, old.value);
+          return 0;
+        }
         case A.SYS_getpid: return proc.pid;
         case A.SYS_gettid: return proc.pid;
         case A.SYS_getppid: return proc.ppid;
