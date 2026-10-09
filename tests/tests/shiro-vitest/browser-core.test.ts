@@ -80,6 +80,8 @@ describe('origin map', () => {
     expect(m.toBrowse('https://www.example.com/a/b?c=1#d')).toBe('http://www-example-com.localhost:5299/a/b?c=1#d');
     expect(m.toReal('http://www-example-com.localhost:5299/a/b?c=1#d')).toBe('https://www.example.com/a/b?c=1#d');
     expect(m.toReal('https://cdn.other.net/x.js')).toBe('https://cdn.other.net/x.js');
+    // a page that writes 'https://' + location.host on an http template still means its own origin
+    expect(m.toReal('https://www-example-com.localhost:5299/api')).toBe('https://www.example.com/api');
     expect(m.isBrowseOrigin('http://localhost:5299')).toBe(false);
     expect(m.isBrowseOrigin('http://evil.localhost:5299')).toBe(false); // no dot: not a key
     expect(m.isBrowseOrigin('http://www-example-com.localhost:5300')).toBe(false);
@@ -257,6 +259,19 @@ describe('fetch over TLS 1.3 in JS (subtls) with keep-alive', () => {
       srv.close();
       setTrustRoots(async () => '', caPem);
     }
+  }, 20000);
+
+  it('calls a server that hangs up on the ClientHello a TLS-version problem (the fallback case)', async () => {
+    const { TlsError } = await import('@shiro/browser/tls');
+    const srv = net.createServer((c: any) => { c.once('data', () => c.destroy()); });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+    const p = (srv.address() as NetT.AddressInfo).port;
+    try {
+      const f = new NetFetcher({ dial: (_h, q) => nodeDial('127.0.0.1', q) });
+      const err = await f.fetch({ url: `https://tls12.test:${p}/`, method: 'GET', headers: [], body: null }).catch((e) => e);
+      expect(err).toBeInstanceOf(TlsError);
+      expect(err.code).toBe('tls-version');
+    } finally { srv.close(); }
   }, 20000);
 
   it('refuses a name mismatch', async () => {

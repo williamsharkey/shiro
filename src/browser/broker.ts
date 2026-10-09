@@ -198,6 +198,7 @@ export class Broker {
       reply = { type: 'error', id: msg.id, message: String((e as Error)?.message ?? e), fallback };
       if (msg.navigation && !ctx.nested && fallback) ctx.tab.onFallback(fallback, msg.url);
     }
+    if (reply.type === 'error') console.debug('[browser]', msg.navigation ? 'navigation' : msg.destination || 'fetch', msg.method, msg.url, '→', reply.message);
     const transfer: Transferable[] = [];
     if (reply.type === 'response' && reply.body && typeof reply.body === 'object') transfer.push(reply.body as unknown as Transferable);
     try { port.postMessage(reply, transfer); } catch {

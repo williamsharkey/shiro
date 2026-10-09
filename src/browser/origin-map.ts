@@ -83,7 +83,9 @@ export class OriginMap {
 
   /** The real origin a browse origin stands for, or null when `origin` isn't one. */
   realOrigin(browseOrigin: string): string | null {
-    const m = this.re.exec(browseOrigin.toLowerCase());
+    // Pages sometimes build `https://` + location.host: a browse host under the other scheme is still ours
+    const lower = browseOrigin.toLowerCase();
+    const m = this.re.exec(lower) ?? this.re.exec(lower.replace(/^https?:/, this.template.startsWith('https:') ? 'https:' : 'http:'));
     if (!m) return null;
     const o = decodeOriginKey(m[1]);
     return o ? originString(o) : null;

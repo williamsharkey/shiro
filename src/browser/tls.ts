@@ -30,7 +30,8 @@ export class TlsError extends Error {
 /** Wrap a connected stream in TLS 1.3 for `host`; resolves once the handshake verified the server. */
 export async function tlsConnect(raw: ByteStream, host: string): Promise<ByteStream> {
   const db = await roots();
-  const q = new LazyReadFunctionReadQueue(() => raw.read());
+  let received = 0;
+  const q = new LazyReadFunctionReadQueue(async () => { const d = await raw.read(); received += d?.length ?? 0; return d; });
   let session: Awaited<ReturnType<typeof startTls>>;
   try {
     session = await startTls(host, db, q.read.bind(q), (d: Uint8Array) => { void raw.write(d).catch(() => {}); });
@@ -38,9 +39,11 @@ export async function tlsConnect(raw: ByteStream, host: string): Promise<ByteStr
     raw.close();
     const msg = String((e as Error)?.message ?? e);
     // subtls speaks only TLS 1.3: a 1.2-only server answers with a 1.2 ServerHello or a protocol_version alert
-    const code = /cert|signature|root|trust|expired|subject/i.test(msg) ? 'tls-cert'
-      : /version|alert|Unexpected TLS record|0x0303|supported_versions/i.test(msg) ? 'tls-version' : 'tls-handshake';
-    throw new TlsError(`TLS with ${host} failed: ${msg}`, code);
+    // A TLS 1.2-only server often just hangs up on a 1.3-only ClientHello (Craigslist does)
+    const code = received === 0 ? 'tls-version'
+      : /cert|signature|root|trust|expired|subject/i.test(msg) ? 'tls-cert'
+      : /version|alert|Unexpected TLS record|0x0303|supported_versions|Expected 771, got 76[89]/i.test(msg) ? 'tls-version' : 'tls-handshake';
+    throw new TlsError(received === 0 ? `${host} closed the connection on a TLS 1.3 handshake (it may only speak TLS 1.2)` : `TLS with ${host} failed: ${msg}`, code);
   }
   let closed = false;
   return {
