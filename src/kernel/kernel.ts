@@ -20,7 +20,7 @@ import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
   RegularFile, DirFile, abortableWait, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
-  shareInodeNumber, forgetInodeNumber, linkCount,
+  shareInodeNumber, forgetInodeNumber, renameLinkName, linkCount,
 } from './fd';
 import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
 import type { PtyFile } from './pty';
@@ -849,7 +849,9 @@ export class Kernel {
         if ((flags & A.O_CREAT) && (flags & A.O_EXCL)) return -A.EEXIST;
         if (st.isDirectory()) {
           if (canWrite(flags)) return -A.EISDIR;
-          return new DirFile(fs, p, statusFlags);
+          // The physical directory, as on Linux: fstat, getdents d_ino, /proc/self/fd and
+          // *at() through this fd agree with stat of it when it was opened through a symlink
+          return new DirFile(fs, await fs.realpath(p), statusFlags);
         }
         if (mustBeDir) return -A.ENOTDIR;
         if (st.isFIFO?.()) return await this.openFifo(proc, await fs.realpath(target), flags);
@@ -946,7 +948,7 @@ export class Kernel {
     if (hit === undefined) return undefined;
     if (hit === null) return -A.ENOENT;
     const statusFlags = flags & ~(A.O_CREAT | A.O_EXCL | A.O_TRUNC | A.O_CLOEXEC | A.O_NOCTTY | A.O_DIRECTORY | A.O_NOFOLLOW);
-    if (hit.node.type === 'dir') return canWrite(flags) ? -A.EISDIR : new DirFile(fs, p, statusFlags);
+    if (hit.node.type === 'dir') return canWrite(flags) ? -A.EISDIR : new DirFile(fs, hit.path, statusFlags);
     if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
     if (hit.node.type !== 'file' || hit.node.lazy || hit.node.special) return undefined; // lazy: open() fetches it; FIFOs block
     return new RegularFile(openInodeSync(fs, hit.path, hit.node), statusFlags);
@@ -965,10 +967,10 @@ export class Kernel {
     const n = hit.node;
     const open = n.type === 'file' ? inodeStat(fs, hit.path) : undefined;
     // The inode belongs to the resolved path: /bin and /usr/bin (a link to it) are one directory
-    if (open) { A.encodeStat(statFor(proc, { ...open, ino: inodeNumber(hit.path) }), data); return 0; }
+    if (open) { A.encodeStat(statFor(proc, { ...open, ino: inodeNumber(this.fs, hit.path) }), data); return 0; }
     const type = n.type === 'dir' ? A.S_IFDIR : n.type === 'symlink' ? A.S_IFLNK : n.special === 'fifo' ? A.S_IFIFO : A.S_IFREG;
     A.encodeStat(statFor(proc, {
-      dev: 1, ino: inodeNumber(hit.path), mode: type | (n.mode & 0o7777), nlink: n.type === 'dir' ? 2 : linkCount(hit.path),
+      dev: 1, ino: inodeNumber(this.fs, hit.path), mode: type | (n.mode & 0o7777), nlink: n.type === 'dir' ? 2 : linkCount(this.fs, hit.path),
       uid: 1000, gid: 1000, rdev: 0, size: n.size, blksize: 4096, blocks: Math.ceil(n.size / 512),
       atimeMs: n.atime ?? n.mtime, mtimeMs: n.mtime, ctimeMs: n.ctime,
       atimeNs: n.atime === undefined ? n.mtimeNs : n.atimeNs, mtimeNs: n.mtimeNs,
@@ -1024,9 +1026,9 @@ export class Kernel {
       if (type === A.S_IFREG && this.socketPaths?.has(real)) type = A.S_IFSOCK;
       // A file open here: its size and times as the open descriptions see them
       const open = type === A.S_IFREG && hasOpenInodes(fs) ? inodeStat(fs, real) : undefined;
-      if (open) return { ...open, ino: inodeNumber(real) };
+      if (open) return { ...open, ino: inodeNumber(this.fs, real) };
       return {
-        dev: 1, ino: inodeNumber(real), mode: type | (st.mode & 0o7777), nlink: st.isDirectory() ? 2 : linkCount(real),
+        dev: 1, ino: inodeNumber(this.fs, real), mode: type | (st.mode & 0o7777), nlink: st.isDirectory() ? 2 : linkCount(this.fs, real),
         uid: 1000, gid: 1000, rdev: 0, size: st.size, blksize: 4096, blocks: Math.ceil(st.size / 512),
         atimeMs: st.atimeMs ?? st.mtime.getTime(), mtimeMs: st.mtime.getTime(), ctimeMs: st.ctime.getTime(),
         atimeNs: st.atimeNs, mtimeNs: st.mtimeNs,
@@ -1857,8 +1859,8 @@ export class Kernel {
           const moved = await renameInodes(fs(), from, to);
           await fs().rename(from, to);
           moved();
-          shareInodeNumber(from, to);
-          forgetInodeNumber(from);
+          forgetInodeNumber(fs(), to);
+          renameLinkName(from, to);
           if (this.socketPaths?.delete(from)) this.socketPaths.add(to);
           return 0;
         }
@@ -1905,7 +1907,7 @@ export class Kernel {
             return typeof t !== 'number' && (t.mode & A.S_IFMT) === A.S_IFDIR ? -A.EISDIR : -A.ENOTDIR;
           }
           if (isDir) await fs().rmdir(p);
-          else { await unlinkInode(fs(), p); await fs().unlink(p); forgetInodeNumber(p); this.socketPaths?.delete(p); this.fifos.delete(p); }
+          else { await unlinkInode(fs(), p); await fs().unlink(p); forgetInodeNumber(fs(), p); this.socketPaths?.delete(p); this.fifos.delete(p); }
           return 0;
         }
         case A.SYS_symlink:
@@ -1951,7 +1953,7 @@ export class Kernel {
               const bytes = typeof raw === 'string' ? enc.encode(raw) : raw.slice();
               await fs().writeFile(to, bytes, { mode: st.mode & 0o7777, times: { mtime: st.mtimeMs, mtimeNs: st.mtimeNs } });
             }
-            shareInodeNumber(src, to);
+            shareInodeNumber(fs(), src, to);
           } catch (e) {
             return A.errnoFromError(e);
           }
@@ -2324,8 +2326,9 @@ export class Kernel {
           type = t === A.S_IFDIR ? A.DT_DIR : t === A.S_IFLNK ? A.DT_LNK : t === A.S_IFREG ? A.DT_REG : t === A.S_IFCHR ? A.DT_CHR : A.DT_UNKNOWN;
         }
       }
-      dv.setUint32(off, inodeNumber(full), true);
-      dv.setUint32(off + 4, 0, true);
+      const dino = inodeNumber(this.fs, full);
+      dv.setUint32(off, dino >>> 0, true);
+      dv.setUint32(off + 4, Math.floor(dino / 0x100000000), true);
       dv.setUint32(off + 8, used + 1, true);
       dv.setUint32(off + 12, 0, true);
       dv.setUint16(off + 16, reclen, true);
