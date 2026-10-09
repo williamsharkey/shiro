@@ -211,14 +211,14 @@ async function scoreBatch(m, batch, onResult) {
   const logs = new Map();
   const timing = new Map();
   if (todo.length) {
-    const r = await m.run(`apt-get install -y ${todo.map((b) => b.p.name).join(' ')} 2>&1`, INSTALL_TIMEOUT_S);
+    const r = await m.run(`apt-get install -y ${todo.map((b) => b.p.name).join(' ')}`, INSTALL_TIMEOUT_S);
     writeFileSync(join(OUT_DIR, `batch-${todo[0].p.name}.log`), `exit ${r.code} after ${r.ms} ms\n` + r.out);
     for (const b of todo) { logs.set(b.p.name, r.out); timing.set(b.p.name, Math.round(r.ms / todo.length)); }
     if (r.code !== 0 && todo.length > 1) {
       await recover(m);
       for (const b of todo) {
         if ((await installedStatus(m, [b.p.name])).has(b.p.name)) continue;
-        const one = await m.run(`apt-get install -y ${b.p.name} 2>&1`, INSTALL_TIMEOUT_S);
+        const one = await m.run(`apt-get install -y ${b.p.name}`, INSTALL_TIMEOUT_S);
         logs.set(b.p.name, one.out); timing.set(b.p.name, one.ms);
         if (one.code !== 0) await recover(m);
       }
