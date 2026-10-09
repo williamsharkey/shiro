@@ -15,6 +15,9 @@ import { join, resolve } from 'node:path';
 import { createTestShell, run } from './helpers';
 import * as Abi from '@shiro/kernel/abi';
 
+// fixtures/x86/bitscan.c on an x86-64 host
+const NATIVE_BITSCAN = 'bsf  zero64   reg dst=0x1122334455667788 zf=1\nbsf  zero64   mem dst=0x1122334455667788 zf=1\nbsr  zero64   reg dst=0x1122334455667788 zf=1\nbsr  zero64   mem dst=0x1122334455667788 zf=1\nbsf  val64    reg dst=0x8 zf=0\nbsf  val64    mem dst=0x8 zf=0\nbsr  val64    reg dst=0x34 zf=0\nbsr  val64    mem dst=0x34 zf=0\nbsf  zero32   reg dst=0x1122334455667788 zf=1\nbsf  zero32   mem dst=0x1122334455667788 zf=1\nbsr  zero32   reg dst=0x1122334455667788 zf=1\nbsr  zero32   mem dst=0x1122334455667788 zf=1\nbsf  val32    reg dst=0x8 zf=0\nbsf  val32    mem dst=0x8 zf=0\nbsr  val32    reg dst=0x14 zf=0\nbsr  val32    mem dst=0x14 zf=0\nbsf  zero16   reg dst=0x1122334455667788 zf=1\nbsf  zero16   mem dst=0x1122334455667788 zf=1\nbsr  zero16   reg dst=0x1122334455667788 zf=1\nbsr  zero16   mem dst=0x1122334455667788 zf=1\nbsf  val16    reg dst=0x1122334455660004 zf=0\nbsf  val16    mem dst=0x1122334455660004 zf=0\nbsr  val16    reg dst=0x1122334455660008 zf=0\nbsr  val16    mem dst=0x1122334455660008 zf=0\nclz64(0)=64 clz64(1)=63 clz64(1<<40)=23\nloop sum=5953906\n';
+
 const FIX = resolve(__dirname, 'fixtures/x86');
 
 function tryBuild(cmd: string, args: string[], env: Record<string, string> = {}): boolean {
@@ -60,6 +63,8 @@ const forkSharedBin = join(out, 'forkshared');
 const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
 const mremapBin = join(out, 'mremap');
 const haveMremap = tryBuild('gcc', ['-static', '-O1', '-o', mremapBin, 'mremap.c']);
+const bitscanBin = join(out, 'bitscan');
+const haveBitscan = tryBuild('gcc', ['-static', '-O1', '-o', bitscanBin, 'bitscan.c']);
 const mkfifoBin = join(out, 'mkfifo');
 const haveMkfifo = tryBuild('gcc', ['-static', '-O1', '-o', mkfifoBin, 'mkfifo.c']);
 const prctlcapBin = join(out, 'prctlcap');
@@ -535,6 +540,13 @@ describe('Blink engine: CPU and syscall fixes', () => {
       'wake(2)=2 woken=2\nwake(1)=1 woken=3\nwake(100)=3 woken=6\nwake(none)=0\n' +
       'monotonic bitset wait=-1 timedout=1 early=0\nrealtime bitset wait=-1 timedout=1 early=0\n');
     expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // Rust's leading_zeros (LLVM: mov $127,%r8; bsr %rax,%r8): xAI's grok CLI
+  it.skipIf(!haveBitscan)('bsf/bsr with a zero source leave the destination unchanged', async () => {
+    const { shell } = await setup(readFileSync(bitscanBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(NATIVE_BITSCAN);
   }, 60_000);
 
   // mkfifo for shell-stdio; needs the kernel's FIFOs (mknodat, unix/perf-kernel)

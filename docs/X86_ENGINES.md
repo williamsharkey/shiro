@@ -432,6 +432,12 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    makes FIFOs (and regular files) and refuses devices; with a kernel
    that has no `mknodat` they stay EPERM. Test: `fixtures/x86/mkfifo.c`
    (runs once the kernel defines `SYS_mknodat`).
+39. `bsf`/`bsr` with a zero source leave the destination unchanged, all 64
+   bits at every operand size, as hardware does (Blink wrote 0); LLVM's
+   `ctlz`/`cttz` rely on it (`mov $127,%r8; bsr %rax,%r8; xor $63,%r8`),
+   so Rust's `0u64.leading_zeros()` was 63 and xAI's grok CLI panicked.
+   Interpreter, Blink's path JIT and the wasm JIT. Test:
+   `fixtures/x86/bitscan.c` (native output).
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.
