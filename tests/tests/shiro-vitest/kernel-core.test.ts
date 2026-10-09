@@ -350,6 +350,44 @@ describe('kernel processes', () => {
     await kernel.exit(proc, 0);
   });
 
+  it('set*id: root drops to another user for good (su, runuser, initdb); unprivileged swaps follow Linux', async () => {
+    const proc = kernel.spawn({ path: 'holder', cwd: '/tmp', uid: 0, run: () => new Promise<number>(() => {}) });
+    const data = new Uint8Array(64);
+    const sys = (nr: number, a: number[]) => kernel.syscall(proc, nr, a, data);
+    const res = async (nr: number) => { expect(await sys(nr, [])).toBe(0); const dv = new DataView(data.buffer); return [0, 4, 8].map((o) => dv.getUint32(o, true)); };
+    expect(await sys(A.SYS_getuid, [])).toBe(0);
+    // setgroups, then gid, then uid: what su/runuser/setpriv do
+    new DataView(data.buffer).setUint32(0, 65534, true);
+    expect(await sys(A.SYS_setgroups, [1])).toBe(0);
+    expect(await sys(A.SYS_setresgid, [65534, 65534, 65534])).toBe(0);
+    expect(await sys(A.SYS_setresuid, [65534, 65534, 65534])).toBe(0);
+    expect(await sys(A.SYS_getuid, [])).toBe(65534);
+    expect(await sys(A.SYS_geteuid, [])).toBe(65534);
+    expect(await sys(A.SYS_getegid, [])).toBe(65534);
+    expect(await res(A.SYS_getresuid)).toEqual([65534, 65534, 65534]);
+    expect(await sys(A.SYS_getgroups, [0])).toBe(1);
+    // Dropped for good: no way back to root, no more setgroups
+    expect(await sys(A.SYS_setuid, [0])).toBe(-A.EPERM);
+    expect(await sys(A.SYS_setresuid, [-1, 0, -1])).toBe(-A.EPERM);
+    expect(await sys(A.SYS_setgroups, [0])).toBe(-A.EPERM);
+    // A child keeps the ids
+    const child = kernel.spawn({ path: 'c', parent: proc, run: () => new Promise<number>(() => {}) } as any);
+    expect(child.uid).toBe(65534);
+    expect(child.ruid).toBe(65534);
+    expect(child.groups).toEqual([65534]);
+
+    // Unprivileged: effective id may swap between real and saved (a setuid program's dance)
+    const p2 = kernel.spawn({ path: 'h2', cwd: '/tmp', uid: 0, run: () => new Promise<number>(() => {}) });
+    const sys2 = (nr: number, a: number[]) => kernel.syscall(p2, nr, a, data);
+    expect(await sys2(A.SYS_setresuid, [1000, 0, 0])).toBe(0);      // real 1000, effective and saved root
+    expect(await sys2(A.SYS_setresuid, [-1, 1000, -1])).toBe(0);    // drop effective
+    expect(await sys2(A.SYS_geteuid, [])).toBe(1000);
+    expect(await sys2(A.SYS_setuid, [0])).toBe(0);                  // back to the saved root: allowed
+    expect(await sys2(A.SYS_geteuid, [])).toBe(0);
+    expect(await sys2(A.SYS_getuid, [])).toBe(1000);
+    await kernel.exit(proc, 0); await kernel.exit(p2, 0); await kernel.exit(child, 0);
+  });
+
   it("link() counts names in st_nlink (shadow's lock: link(group.PID, group.lock), then nlink == 2)", async () => {
     const proc = kernel.spawn({ path: 'holder', cwd: '/tmp', run: () => new Promise<number>(() => {}) });
     const enc = new TextEncoder();

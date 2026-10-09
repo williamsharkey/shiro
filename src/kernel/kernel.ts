@@ -462,6 +462,7 @@ export class Kernel {
     proc.uid = opts.uid ?? parent.uid;
     // sudo's root gets root's group too; dropping back to the user gets the user's
     proc.gid = opts.uid === undefined ? parent.gid : opts.uid === 0 ? 0 : 1000;
+    if (opts.uid === undefined) copyCredentials(parent, proc);
     proc.ctty = opts.setsid ? undefined : parent.ctty;
     if (opts.inheritSignals) {
       // Across exec caught signals reset to default; ignored stay ignored; the mask carries over
@@ -1380,8 +1381,8 @@ export class Kernel {
       }
       case A.SYS_getpid: return proc.pid;
       case A.SYS_getppid: return proc.ppid;
-      case A.SYS_getuid: return proc.uid;
-      case A.SYS_getgid: return proc.gid;
+      case A.SYS_getuid: return proc.ruid ?? proc.uid;
+      case A.SYS_getgid: return proc.rgid ?? proc.gid;
       case A.SYS_getpgrp: return proc.pgid;
       default: return undefined;
     }
@@ -1601,6 +1602,10 @@ export class Kernel {
         }
         case A.SYS_geteuid: return proc.uid;
         case A.SYS_getegid: return proc.gid;
+        case A.SYS_setuid: case A.SYS_setgid: case A.SYS_setreuid: case A.SYS_setregid:
+        case A.SYS_setresuid: case A.SYS_setresgid: case A.SYS_getresuid: case A.SYS_getresgid:
+        case A.SYS_getgroups: case A.SYS_setgroups: case A.SYS_setfsuid: case A.SYS_setfsgid:
+          return setCredentials(proc, nr, args, data);
         case A.SYS_eventfd:
         case A.SYS_eventfd2: {
           const flags = nr === A.SYS_eventfd2 ? args[1] : 0;
@@ -1701,8 +1706,8 @@ export class Kernel {
         case A.SYS_getpid: return proc.pid;
         case A.SYS_gettid: return proc.pid;
         case A.SYS_getppid: return proc.ppid;
-        case A.SYS_getuid: return proc.uid;
-        case A.SYS_getgid: return proc.gid;
+        case A.SYS_getuid: return proc.ruid ?? proc.uid;
+        case A.SYS_getgid: return proc.rgid ?? proc.gid;
         case A.SYS_getpgrp: return proc.pgid;
         case A.SYS_getpgid:
         case A.SYS_getsid: {
@@ -2397,6 +2402,7 @@ export class Kernel {
     child.ctty = parent.ctty;
     child.uid = parent.uid;
     child.gid = parent.gid;
+    copyCredentials(parent, child);
     child.data.embryo = true;
     child.data.forkParent = parent.pid; // startForkChild: the parent may have exited (and the child been reparented) by then
     this.procs.set(pid, child);
@@ -2581,3 +2587,81 @@ export function simpleCommandWords(script: string): string[] | null {
   return words;
 }
 
+
+/** fork and spawn without a new uid: the child has the parent's real, saved and supplementary ids. */
+function copyCredentials(from: Process, to: Process): void {
+  to.ruid = from.ruid; to.suid = from.suid; to.rgid = from.rgid; to.sgid = from.sgid;
+  to.groups = from.groups ? [...from.groups] : undefined;
+}
+
+/**
+ * set*id/get*id/setgroups as Linux does them, with CAP_SETUID/CAP_SETGID
+ * meaning an effective uid of 0 (su, runuser, setpriv, daemons dropping
+ * root). -1 leaves an id unchanged. Data: getres*id writes three u32s,
+ * getgroups up to args[0] u32s, setgroups reads args[0] u32s.
+ */
+function setCredentials(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): number {
+  const priv = proc.uid === 0;
+  const u = { r: proc.ruid ?? proc.uid, e: proc.uid, s: proc.suid ?? proc.uid };
+  const g = { r: proc.rgid ?? proc.gid, e: proc.gid, s: proc.sgid ?? proc.gid };
+  const id = (v: number) => (v | 0) === -1 ? -1 : v >>> 0;
+  const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const apply = (kind: 'u' | 'g', c: { r: number; e: number; s: number }) => {
+    if (kind === 'u') { proc.uid = c.e; proc.ruid = c.r; proc.suid = c.s; } else { proc.gid = c.e; proc.rgid = c.r; proc.sgid = c.s; }
+    return 0;
+  };
+  const one = (kind: 'u' | 'g', cur: { r: number; e: number; s: number }, v: number) => {
+    // setuid/setgid: privileged sets all three; otherwise only the effective id, to the real or saved one
+    if (priv) return apply(kind, { r: v, e: v, s: v });
+    if (v !== cur.r && v !== cur.s) return -A.EPERM;
+    return apply(kind, { ...cur, e: v });
+  };
+  const res = (kind: 'u' | 'g', cur: { r: number; e: number; s: number }, r: number, e: number, s: number) => {
+    const allowed = (v: number) => v === -1 || priv || v === cur.r || v === cur.e || v === cur.s;
+    if (!allowed(r) || !allowed(e) || !allowed(s)) return -A.EPERM;
+    return apply(kind, { r: r === -1 ? cur.r : r, e: e === -1 ? cur.e : e, s: s === -1 ? cur.s : s });
+  };
+  const re = (kind: 'u' | 'g', cur: { r: number; e: number; s: number }, r: number, e: number) => {
+    if (!priv && ((r !== -1 && r !== cur.r && r !== cur.e) || (e !== -1 && e !== cur.r && e !== cur.e && e !== cur.s))) return -A.EPERM;
+    const next = { r: r === -1 ? cur.r : r, e: e === -1 ? cur.e : e, s: cur.s };
+    // The saved id follows a changed real id, or an effective id set to something but the old real id
+    if (r !== -1 || (e !== -1 && e !== cur.r)) next.s = next.e;
+    return apply(kind, next);
+  };
+  switch (nr) {
+    case A.SYS_setuid: return one('u', u, id(args[0]));
+    case A.SYS_setgid: return one('g', g, id(args[0]));
+    case A.SYS_setresuid: return res('u', u, id(args[0]), id(args[1]), id(args[2]));
+    case A.SYS_setresgid: return res('g', g, id(args[0]), id(args[1]), id(args[2]));
+    case A.SYS_setreuid: return re('u', u, id(args[0]), id(args[1]));
+    case A.SYS_setregid: return re('g', g, id(args[0]), id(args[1]));
+    case A.SYS_getresuid: case A.SYS_getresgid: {
+      if (data.length < 12) return -A.EFAULT;
+      const c = nr === A.SYS_getresuid ? u : g;
+      dv.setUint32(0, c.r, true); dv.setUint32(4, c.e, true); dv.setUint32(8, c.s, true);
+      return 0;
+    }
+    case A.SYS_getgroups: {
+      const groups = proc.groups ?? [proc.gid];
+      const size = args[0] | 0;
+      if (size < 0) return -A.EINVAL;
+      if (size === 0) return groups.length;
+      if (size < groups.length) return -A.EINVAL;
+      if (data.length < groups.length * 4) return -A.EFAULT;
+      groups.forEach((x, i) => dv.setUint32(i * 4, x, true));
+      return groups.length;
+    }
+    case A.SYS_setgroups: {
+      if (!priv) return -A.EPERM;
+      const n = args[0] | 0;
+      if (n < 0 || n > 65536) return -A.EINVAL;
+      if (data.length < n * 4) return -A.EFAULT;
+      proc.groups = Array.from({ length: n }, (_, i) => dv.getUint32(i * 4, true));
+      return 0;
+    }
+    // setfsuid/setfsgid: the filesystem id is the effective id here; the call returns the old one
+    case A.SYS_setfsuid: return u.e;
+    case A.SYS_setfsgid: return g.e;
+  }
+  return -A.ENOSYS;
+}
