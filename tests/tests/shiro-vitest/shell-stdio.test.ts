@@ -202,3 +202,50 @@ describe('fds 3-9 are inherited as they are', () => {
     expect(st).toBe(0);
   });
 });
+
+describe('the debconf confmodule protocol through a kernel-run sh', () => {
+  it('exec 3>&1 1>&2, then commands on fd 3 and replies read from stdin', async () => {
+    // What /usr/share/debconf/confmodule does; the frontend (here: this test)
+    // reads commands from the script's fd 3 and answers on its stdin
+    const script = [
+      'exec 3>&1',
+      'exec 1>&2',
+      '_db_cmd () { printf "%s\\n" "$*" >&3; read -r line; RET="${line#[! \t][ \t]}"; return ${line%%[ \t]*}; }',
+      'db_get () { _db_cmd "GET $@"; }',
+      'db_input () { _db_cmd "INPUT $@"; }',
+      'db_get adduser/homedir-permission; echo "stderr: $RET"',
+      'db_input low adduser/x || true',
+      'printf "%s\\n" "result $RET" >&3',
+    ].join('\n');
+    const [toShR, toShW] = createPipe();
+    const [fromShR, fromShW] = createPipe();
+    let err = '';
+    const sh = await spawn(['sh', '-c', script], { 0: toShR, 1: fromShW, 2: new SinkFile((t) => { err += t; }) });
+    const enc = new TextEncoder();
+    const dec = new TextDecoder();
+    const buf = new Uint8Array(256);
+    const commands: string[] = [];
+    let pending = '';
+    const readLine = async (): Promise<string | null> => {
+      for (;;) {
+        const nl = pending.indexOf('\n');
+        if (nl >= 0) { const l = pending.slice(0, nl); pending = pending.slice(nl + 1); return l; }
+        const n = await fromShR.read(buf);
+        if (n <= 0) return null;
+        pending += dec.decode(buf.subarray(0, n));
+      }
+    };
+    const frontend = (async () => {
+      for (let l = await readLine(); l !== null; l = await readLine()) {
+        commands.push(l);
+        if (l.startsWith('GET')) await toShW.write(enc.encode('0 true\n'));
+        else if (l.startsWith('INPUT')) await toShW.write(enc.encode('30 question skipped\n'));
+      }
+    })();
+    await withTimeout(sh.wait(), 20_000);
+    await toShW.close();
+    await withTimeout(frontend, 5_000);
+    expect(commands).toEqual(['GET adduser/homedir-permission', 'INPUT low adduser/x', 'result 30 question skipped']);
+    expect(err).toBe('stderr: true\n');
+  }, 30_000);
+});
