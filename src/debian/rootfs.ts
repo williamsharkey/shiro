@@ -312,4 +312,17 @@ export async function writeEngineWorkarounds(fs: FileSystem): Promise<void> {
       await fs.writeFile('/etc/resolv.conf', `${conf.replace(/\n?$/, '\n')}options single-request\n`);
     }
   } catch { /* no resolv.conf: nothing to tune */ }
+  await keepManPages(fs);
+}
+
+/**
+ * Packages installed from now on keep their English man pages (`man` is no
+ * use without them); translations stay out. Images built before this had
+ * all of /usr/share/man excluded (scripts/debian/build-rootfs.sh).
+ */
+export async function keepManPages(fs: FileSystem): Promise<void> {
+  const p = '/etc/dpkg/dpkg.cfg.d/90shiro-slim';
+  const text = await fs.readFile(p, 'utf8').catch(() => null);
+  if (typeof text !== 'string' || text.includes('path-include /usr/share/man/')) return;
+  await fs.writeFile(p, text.replace('path-exclude /usr/share/man/*\n', 'path-exclude /usr/share/man/*\npath-include /usr/share/man/man[1-9]*/*\n'));
 }
