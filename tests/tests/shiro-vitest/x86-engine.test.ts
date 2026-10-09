@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import type { Server } from 'node:http';
 import { join, resolve } from 'node:path';
 import { createTestShell, run } from './helpers';
+import * as Abi from '@shiro/kernel/abi';
 
 const FIX = resolve(__dirname, 'fixtures/x86');
 
@@ -51,12 +52,16 @@ const shfutexBin = join(out, 'shfutex');
 const haveShfutex = tryBuild('gcc', ['-static', '-O1', '-o', shfutexBin, 'shfutex.c']);
 const orphanBin = join(out, 'orphan');
 const haveOrphan = tryBuild('gcc', ['-static', '-O1', '-o', orphanBin, 'orphan.c']);
+const futexintrBin = join(out, 'futexintr');
+const haveFutexintr = tryBuild('gcc', ['-static', '-O1', '-o', futexintrBin, 'futexintr.c']);
 const alarmforkBin = join(out, 'alarmfork');
 const haveAlarmfork = tryBuild('gcc', ['-static', '-O1', '-o', alarmforkBin, 'alarmfork.c']);
 const forkSharedBin = join(out, 'forkshared');
 const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
 const mremapBin = join(out, 'mremap');
 const haveMremap = tryBuild('gcc', ['-static', '-O1', '-o', mremapBin, 'mremap.c']);
+const mkfifoBin = join(out, 'mkfifo');
+const haveMkfifo = tryBuild('gcc', ['-static', '-O1', '-o', mkfifoBin, 'mkfifo.c']);
 const prctlcapBin = join(out, 'prctlcap');
 const havePrctlcap = tryBuild('gcc', ['-static', '-O1', '-o', prctlcapBin, 'prctlcap.c']);
 const lchownBin = join(out, 'lchown');
@@ -242,6 +247,19 @@ describe.skipIf(!haveFork || !haveForkShared || !haveShfutex || !haveOrphan || !
     const want = "first alarm 0, child ok 1, parent's alarm still set 1";
     expect((await run(shell, sif)).output).toContain(want);
     expect((await run(shell, './prog')).output).toContain(want);
+  }, 60_000);
+
+  // LTP futex_wait07
+  it.skipIf(!haveFutexintr)('a caught signal interrupts a futex wait (here and with the default fork)', async () => {
+    const { shell } = await setup(readFileSync(futexintrBin));
+    const want = 'main tid is pid 1\nalarm: Interrupted system call\nchild tid is pid 1\nchild state S\nkill: Interrupted system call\nchild exit 0\n';
+    expect((await run(shell, sif)).output.replace(/\r\n/g, '\n')).toBe(want);
+    expect((await run(shell, `${sif} nested`)).output.replace(/\r\n/g, '\n')).toBe(want);
+    // the default fork runs a child sharing memory on the parent's thread:
+    // the parent can't signal it before it's done
+    const r = (await run(shell, './prog')).output.replace(/\r\n/g, '\n');
+    expect(r).toMatch(/^main tid is pid 1\nalarm: Interrupted system call\nchild tid is pid 1\n/);
+    expect(r).toContain('child exit 0\n');
   }, 60_000);
 });
 
@@ -519,6 +537,15 @@ describe('Blink engine: CPU and syscall fixes', () => {
     expect(r.exitCode).toBe(0);
   }, 60_000);
 
+  // mkfifo for shell-stdio; needs the kernel's FIFOs (mknodat, unix/perf-kernel)
+  it.skipIf(!haveMkfifo || !('SYS_mknodat' in Abi))('mkfifo and mknod(at) create kernel FIFOs; devices are EPERM', async () => {
+    const { shell } = await setup(readFileSync(mkfifoBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'mkfifo=0  fifo=1\nmknod=0  fifo=1\nmknodat=0  fifo=1\n' +
+      'chardev=-1 Operation not permitted\nagain=-1 File exists\n');
+  }, 60_000);
+
   // LTP fstat03
   it.skipIf(!haveStatnull)('the stat family with a NULL buffer is EFAULT once the file is found', async () => {
     const { shell } = await setup(readFileSync(statnullBin));
@@ -528,14 +555,16 @@ describe('Blink engine: CPU and syscall fixes', () => {
       'stat(missing, NULL)=-1 No such file or directory\nlstat(file, NULL)=-1 Bad address\nnewfstatat(file, NULL)=-1 Bad address\n');
   }, 60_000);
 
-  // perl's $0 = ... (Debian's addgroup); libcap's cap_get_proc (ping)
+  // perl's $0 = ... (Debian's addgroup); libcap's cap_get_proc and iputils' PR_SET_KEEPCAPS (ping)
   it.skipIf(!havePrctlcap)('prctl PR_SET_NAME/PR_GET_NAME/PR_CAPBSET_READ, capget/capset', async () => {
     const { shell } = await setup(readFileSync(prctlcapBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe(
       'default name prog\nset 0 name renamed-thread-\ncapbset_read(0)=1 capbset_read(40)=1\n' +
       'capbset_read(64)=-1 Invalid argument\ncapget(version 0)=0 , version 0x20080522\n' +
-      'capget=0 full=0\ncapset=0\n');
+      'capget=0 full=0\ncapset=0\n' +
+      'keepcaps 0 set=0 now 1, set(2)=-1 Invalid argument\npdeathsig set=0 now 15\ndumpable 1 set=0\n' +
+      'subreaper set=0 now 1\nno_new_privs 0 set=0 now 1\nambient is_set=0\n');
     expect(r.exitCode).toBe(0);
   }, 60_000);
 
