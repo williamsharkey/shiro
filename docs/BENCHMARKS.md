@@ -972,6 +972,70 @@ commit before: no shell metric is outside noise (`redirect_append_100`
 within 8%; `pipeline_seq_grep_wc` 41 → 32 ms and `ls_la_1000` 4.0 → 4.8 ms
 have overlapping runs).
 
+### unix/perf-kernel, round 8: Blink memory (big binaries, teardown)
+
+Where a big Blink process's memory goes (`gh --version`, a 50 MB Go binary;
+the renderer idles at ~350 MiB):
+
+- wasm memory peaks at 117 MiB (vim: 64 MiB). Most of it is the mapped
+  binary plus the Go heap.
+- SHIROFS (host.mjs) loaded the whole file into a JS array on open. MEMFS
+  `mmap` then copied the mapped ranges into wasm memory, so the binary was
+  held twice at the peak.
+- The main thread holds the file once: the FileSystem cache and the kernel
+  inode share one buffer, so the VFS doesn't double it.
+- After exit, the Worker tree lingered 4–8 s. Chromium takes 2 s to
+  terminate a Worker blocked in a wait or a loop, while one idle in its event
+  loop goes in ~13 ms. host.mjs parked in `Atomics.wait` after exit_group,
+  and Blink's pthread Workers (the guest's threads, parked in futex waits) are
+  only terminated once their parent is gone. That is 2 s, then another 2 s.
+
+Changes, all in public/engines/blink/host.mjs:
+
+- SHIROFS reads and maps files of 1 MiB or more through `pread64`. A mapping
+  gets a fresh MEMFS block filled straight from the kernel, and peeking reads
+  (ELF headers) go to the kernel too. A stream that has read 1 MiB gets the
+  file loaded as before, and writes, truncation and `msync` load it first.
+  A test reads, maps and writes a 3 MiB file every way from a static C
+  program.
+- After exit_group, host.mjs `throw 'unwind'`s back to its event loop
+  (messages are ignored from then on) instead of parking.
+- Not done: terminating the pthread Workers from host.mjs at exit. It left
+  zombie Workers and about 100 MiB per run. Blink waking its own threads at
+  exit would cut the remaining 2 s; that is with perf-blink. Read-only file
+  mappings can't be shared across processes: each Blink process has its own
+  wasm memory.
+
+New bench metrics: `x86.blink.release_ms.gh_version` (time after exit until
+the renderer has given back 3/4 of the peak) and
+`x86.blink.peak_rss.vim_startup`.
+
+Interleaved A/B on the same build, host.mjs swapped (three suite passes,
+5 runs each; files `perf-kernel-r8-base.json` / `perf-kernel-r8.json` are
+the third pass):
+
+| metric | before | after |
+|---|---|---|
+| `peak_rss.gh_version` | 219 / 217 / 201 MiB | 175 / 165 / 176 MiB |
+| `release_ms.gh_version` | 4093 / 4092 / 4095 ms | 2077 / 2077 / 2075 ms |
+| `peak_rss.vim_startup` | 42 / 32 / 41 MiB | 24 / 17 / 30 MiB |
+| `gh_version` | 5027 / 5950 / 5253 ms | 5068 / 5339 / 5116 ms |
+| `vim_startup` | 1352 / 1529 / 1487 ms | 1613 / 1767 / 1442 ms |
+| `go_hello` | 165 / 204 / 184 ms | 166 / 168 / 151 ms |
+
+The vim_startup outliers in the first two passes did not reproduce: alone,
+10 runs, twice, base 1399 / 1462 ms and new 1364 / 1391 ms.
+
+Other measurements:
+
+- Five `gh --version` runs back to back: steady renderer RSS 723 → ~500 MiB,
+  and the Worker count stays at 4 (both variants free everything within
+  6 s).
+- `bench/.cache/mem.mjs` probe, renderer RSS: gh peak +238 → +190 MiB;
+  vim +91 → +93 MiB (its binary is small).
+- `codex --version` not measured: running that downloaded binary is not
+  cleared in this session.
+
 ### unix/perf-fs-shell 7 — 1d9582a → bb39a38 regressions: shell-stdio's per-command pass; ab.mjs decides on rounds
 
 The coordinator's `ab.mjs 1d9582a bb39a38 --suites boot,kernel,shell,wasm
