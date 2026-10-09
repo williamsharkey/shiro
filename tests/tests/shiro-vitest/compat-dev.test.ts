@@ -715,6 +715,19 @@ describe('node-compat modules real packages rely on', () => {
     return r.out;
   };
 
+  it('an unhandled rejection ends the script with exit code 1, unless a process listener takes it', async () => {
+    await fs.writeFile('/home/user/m/rej.js', `Promise.reject(new Error('boom'))`);
+    let r = await sh(shell, 'cd /home/user/m && node rej.js; echo "a=$?"');
+    expect(r.out).toContain('a=1');
+    expect(r.out + r.err).toContain('boom');
+    await fs.writeFile('/home/user/m/rej2.js', `process.on('unhandledRejection', (e) => console.log('caught', e.message)); Promise.reject(new Error('boom'))`);
+    r = await sh(shell, 'cd /home/user/m && node rej2.js; echo "b=$?"');
+    expect(r.out).toBe('caught boom\nb=0\n');
+    await fs.writeFile('/home/user/m/rej3.js', `(async () => { await new Promise((r) => setTimeout(r, 50)); throw new Error('late'); })(); setTimeout(() => console.log('not reached'), 500)`);
+    r = await sh(shell, 'cd /home/user/m && node rej3.js; echo "c=$?"');
+    expect(r.out).toBe('c=1\n');
+  }, 60_000);
+
   it('path follows Node (relative paths stay relative)', async () => {
     expect(await node(`const p = require('path');
 console.log(JSON.stringify([p.dirname('a'), p.dirname('/a'), p.dirname('a/b/'), p.join('a', '../b', './c'), p.join(''), p.normalize('./x/../y/'),

@@ -12,6 +12,16 @@ const _origEmit = process.emit.bind(process);
     if (reason?.message === 'unreachable' || reason?._isProcessExit) {
       return true; // Suppress — known artifact of process shim
     }
+    // As in a browser, the page's 'unhandledrejection' listeners see it first
+    // (node scripts' process.on('unhandledRejection') and exit code 1 hang off it)
+    const w = (globalThis as any).window;
+    if (w?.dispatchEvent) {
+      const ev: any = new w.Event('unhandledrejection', { cancelable: true });
+      ev.reason = reason;
+      ev.promise = args[1];
+      w.dispatchEvent(ev);
+      if (ev.defaultPrevented) return true;
+    }
   }
   return _origEmit(event, ...args);
 };

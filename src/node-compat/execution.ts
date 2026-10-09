@@ -63,6 +63,8 @@ const IDLE_EXIT_SYNC_MS = 60;
 /** ...and as many quiet turns of the 20 ms idle poll (see idleExit) */
 const IDLE_EXIT_POLLS = 8;
 const IDLE_EXIT_SYNC_POLLS = 3;
+/** Node scripts running now (an unhandled rejection is only attributable when there is one) */
+let runningScripts = 0;
 
 /**
  * Execute a Node.js script in Shiro's browser-based JS VM.
@@ -77,14 +79,19 @@ export async function executeNodeScript(
 ): Promise<number> {
   // Suppress unhandled rejections from CLI force-exit patterns
   let _nodeStderrBuf: string[] | null = null;
+  /** process 'unhandledRejection' listeners, else node's exit 1 (set once the process exists) */
+  let onUnhandled: ((reason: any, promise: Promise<any>) => boolean) | null = null;
+  let uncountScript: (() => void) | null = null;
   const suppressRejection = (event: PromiseRejectionEvent) => {
     const msg = event.reason?.message || String(event.reason || '');
     if (event.reason?._isProcessExit || msg === 'unreachable' || msg.startsWith('Aborted(') || msg === 'need dylink section') {
       event.preventDefault();
+    } else if (onUnhandled?.(event.reason, event.promise)) {
+      event.preventDefault();
     } else {
       const errStr = msg || 'Unknown error';
       console.warn('[node] unhandled rejection:', event.reason?.stack || errStr);
-      _nodeStderrBuf?.push(`UnhandledPromiseRejection: ${errStr}`);
+      _nodeStderrBuf?.push(`UnhandledPromiseRejection: ${errStr}\n`);
       // Don't paint over a fullscreen TUI (Claude Code): its screen is on the
       // alternate buffer and stray text lands in its input box.
       const altScreen = (ctx.terminal as any)?.term?.buffer?.active?.type === 'alternate';
@@ -347,6 +354,26 @@ export async function executeNodeScript(
     if (typeof window !== 'undefined') {
       window.addEventListener('unhandledrejection', suppressRejection);
     }
+    runningScripts++;
+    let counted = true;
+    uncountScript = () => { if (counted) { counted = false; runningScripts--; } };
+    // As node: the process's 'unhandledRejection' listeners take it, or the
+    // script ends with exit code 1. The page's event can't say whose promise
+    // it was, so a script ends this way only while it is the only one running
+    // (overlapping scripts, such as Claude and its tools, just print it).
+    onUnhandled = (reason, promise) => {
+      const listeners = processEvents['unhandledRejection'];
+      if (listeners?.length) {
+        for (const fn of [...listeners]) { try { fn(reason, promise); } catch { /* ignore */ } }
+        return true;
+      }
+      if (runningScripts === 1 && !_st.exitCalled && !_st.isInteractiveMode) {
+        _st.exitCode = 1;
+        _st.exitCalled = true;
+        _st.deferredExitResolve?.(1);
+      }
+      return false;
+    };
 
     // CORS proxy setup
     const corsProxyOrigin = typeof window !== 'undefined' ? getShiroOrigin() : '';
@@ -638,9 +665,11 @@ export async function executeNodeScript(
     // Wait for pending timers (max 5s)
     // Timers still pending after this cap (a 60s timeout) don't keep the script alive
     let timersOutlasted = false;
-    if (_activeTimers > 0 && _timersDone && !_st.isInteractiveMode) {
+    if (_activeTimers > 0 && _timersDone && !_st.isInteractiveMode && !_st.exitCalled) {
       try {
-        await Promise.race([_timersDone, new Promise((_, rej) => _baseST(() => rej('timer-wait-timeout'), 5000))]);
+        // (an exit meanwhile ends the wait: process.exit() or an unhandled
+        // rejection in async code, and the timers left go with the script)
+        await Promise.race([_timersDone, deferredExitPromise, new Promise((_, rej) => _baseST(() => rej('timer-wait-timeout'), 5000))]);
       } catch { timersOutlasted = true; }
     }
 
@@ -752,6 +781,7 @@ export async function executeNodeScript(
     }
 
     // Clean up
+    uncountScript?.();
     if (ctx.terminal && _st.ownsStdinPassthrough) ctx.terminal.exitStdinPassthrough();
     if (typeof window !== 'undefined') {
       setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
@@ -762,6 +792,7 @@ export async function executeNodeScript(
     return _st.exitCode;
   } catch (e: any) {
     // Clean up on error
+    uncountScript?.();
     if (ctx.terminal && _st.ownsStdinPassthrough) ctx.terminal.exitStdinPassthrough();
     if (typeof window !== 'undefined') {
       setTimeout(() => window.removeEventListener('unhandledrejection', suppressRejection), 1000);
