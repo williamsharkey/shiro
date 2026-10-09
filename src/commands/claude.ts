@@ -9,7 +9,8 @@
  *   claude                   # Interactive session
  *   claude -p "fix the bug"  # Print mode
  *   claude login             # Sign in (or switch accounts) via the panel
- *   claude --native ...      # Run the native binary instead (CLAUDE_NATIVE=1 too)
+ *   claude --native ...      # Run the native binary instead (CLAUDE_NATIVE=1 too; experimental)
+ *   claude install --native  # Download it (claude-native.ts)
  */
 
 import { Command } from './index';
@@ -42,8 +43,8 @@ const quote = (a: string) => `'${a.replace(/'/g, `'\\''`)}'`;
  * `claude --native` / CLAUDE_NATIVE=1: run Anthropic's native build in Blink
  * instead of the pinned npm one. The linux-x64-musl build works (it needs
  * musl's loader at /lib/ld-musl-x86_64.so.1); the glibc build still crashes
- * at startup in Blink. Neither download host allows CORS, so Shiro doesn't
- * fetch them: the user puts the binary in place. docs/COMPAT.md "Agent CLIs".
+ * at startup in Blink. `claude install --native` downloads it from inside
+ * the guest (claude-native.ts). docs/COMPAT.md "Agent CLIs".
  */
 async function runNative(ctx: Parameters<Command['exec']>[0], args: string[]): Promise<number> {
   const path = nativeClaudePath(ctx.env);
@@ -54,11 +55,21 @@ async function runNative(ctx: Parameters<Command['exec']>[0], args: string[]): P
   } catch { /* missing */ }
   if (!elf) {
     ctx.stderr += `claude: no native Claude Code binary at ${path}\n`
-      + 'Put the linux-x64-musl build there (from downloads.claude.ai/claude-code-releases/<version>/linux-x64-musl/claude)\n'
-      + 'and musl\'s loader at /lib/ld-musl-x86_64.so.1, or set CLAUDE_NATIVE_PATH. Without --native, claude runs the npm build.\n';
+      + 'Install it with `claude install --native` (experimental: it runs in the x86-64 emulator, about 2 minutes\n'
+      + 'per request), or put the linux-x64-musl build there yourself with musl\'s loader at /lib/ld-musl-x86_64.so.1\n'
+      + '(CLAUDE_NATIVE_PATH picks another path). Without --native, claude runs the npm build.\n';
     return 1;
   }
-  const line = [path, ...args].map(quote).join(' ');
+  // Same settings cleanup as the npm build's start (e.g. drop the "mcp__*"
+  // allow rule older Shiro seeded, which current Claude Code warns about)
+  try {
+    const { ensureClaudeBootstrap } = await import('../claude-config');
+    await ensureClaudeBootstrap(ctx.fs, { homeDir: ctx.env.HOME || '/home/user' });
+  } catch { /* settings are Claude's own business; never block the run */ }
+  // JSC's JIT costs more than it saves under Blink: -p took 85 s without it
+  // and 107 s with it (musl build, docs/COMPAT.md). Export BUN_JSC_useJIT=1 to keep it.
+  const jit = ctx.env.BUN_JSC_useJIT === undefined ? 'BUN_JSC_useJIT=0 ' : '';
+  const line = jit + [path, ...args].map(quote).join(' ');
   return ctx.shell.execute(line, (s) => { ctx.stdout += s.replace(/\r\n/g, '\n'); }, (s) => { ctx.stderr += s.replace(/\r\n/g, '\n'); }, false, ctx.terminal, true);
 }
 
@@ -76,9 +87,15 @@ export const claudeCmd: Command = {
       else ctx.stderr += s;
     };
 
+    if (args[0] === 'install' && args.includes('--native')) {
+      const version = args.slice(1).find((a) => !a.startsWith('-'));
+      const { installNativeClaude } = await import('./claude-native');
+      return installNativeClaude(ctx, nativeClaudePath(ctx.env), version);
+    }
     if (args[0] === 'update' || args[0] === 'upgrade' || args[0] === 'install') {
       ctx.stdout += `Claude Code in Shiro is pinned to ${CLAUDE_CODE_VERSION}, the last release that ships as JavaScript\n`
-        + `(later releases are native binaries). It reports itself as ${CLAUDE_CODE_REPORTED_VERSION} so current models work.\n`;
+        + `(later releases are native binaries). It reports itself as ${CLAUDE_CODE_REPORTED_VERSION} so current models work.\n`
+        + 'The native build can run in the x86-64 emulator (experimental, slow): claude install --native, then claude --native.\n';
       return 0;
     }
 

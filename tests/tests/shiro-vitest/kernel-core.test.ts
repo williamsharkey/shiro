@@ -426,6 +426,13 @@ describe('kernel processes', () => {
     const fd = proc.fds.alloc(f as any);
     expect(await readlink(`/proc/self/fd/${fd}`)).toBe('/tmp/procfd.txt');
     expect(await readlink('/proc/99999/cwd')).toBe(-A.ENOENT);
+    // exe is the resolved path, as on Linux (ld.so's $ORIGIN for a venv's bin/python symlink)
+    await fs.mkdir('/tmp/real/bin', { recursive: true }); await fs.mkdir('/tmp/venv/bin', { recursive: true });
+    await fs.writeFile('/tmp/real/bin/python3.12', 'x');
+    await fs.symlink('/tmp/real/bin/python3.12', '/tmp/venv/bin/python').catch(() => {});
+    const viaLink = kernel.spawn({ path: '/tmp/venv/bin/python', argv: ['python'], cwd: '/tmp', run: () => new Promise<number>(() => {}) });
+    expect(await readlink(`/proc/${viaLink.pid}/exe`)).toBe('/tmp/real/bin/python3.12');
+    kernel.kill(viaLink.pid, A.SIGKILL);
 
     const stat = (await cat(`/proc/${proc.pid}/stat`)) as string;
     const fields = stat.trim().split(' ');
@@ -548,6 +555,21 @@ describe('kernel processes', () => {
     expect(await kernel.syscall(proc, A.SYS_close, [fd2], data)).toBe(0);
     await new Promise((r) => setTimeout(r, 10));
     expect(await fs.exists('/tmp/gone.txt')).toBe(false);
+    kernel.kill(proc.pid, A.SIGKILL);
+  });
+
+  it("files are the stat caller's own: no owner is stored (root's git checks)", async () => {
+    const proc = kernel.spawn({ path: 'own', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
+    const data = new Uint8Array(4096);
+    const stat = async (p: string) => {
+      const b = new TextEncoder().encode(p); data.set(b);
+      expect(await kernel.syscall(proc, A.SYS_stat, [b.length], data)).toBe(0);
+      const dv = new DataView(data.buffer);
+      return { uid: dv.getUint32(28, true), gid: dv.getUint32(32, true) };
+    };
+    expect(await stat('/tmp')).toEqual({ uid: 1000, gid: 1000 });
+    proc.uid = 0; proc.gid = 0;
+    expect(await stat('/tmp')).toEqual({ uid: 0, gid: 0 });
     kernel.kill(proc.pid, A.SIGKILL);
   });
 

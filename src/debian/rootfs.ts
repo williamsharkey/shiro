@@ -297,10 +297,32 @@ export async function prefetchPaths(fs: FileSystem, paths: string[]): Promise<nu
 export const DEBIAN_ENV: Record<string, string> = {};
 
 /**
- * apt settings that worked around engine gaps, none needed now (Dpkg::Use-Pty
+ * Settings that work around engine gaps. apt's needed none now (Dpkg::Use-Pty
  * "false" went when the kernel released a dead session leader's tty): an
- * older install's file is removed.
+ * older install's file is removed. resolv.conf gets single-request (below).
  */
 export async function writeEngineWorkarounds(fs: FileSystem): Promise<void> {
   await fs.unlink('/etc/apt/apt.conf.d/91shiro-engine').catch(() => {});
+  // glibc asks for A and AAAA at once with sendmmsg(), which Blink fails with
+  // EBADF on a kernel socket (getaddrinfo(AF_UNSPEC): "Temporary failure in
+  // name resolution", so pip couldn't reach PyPI); one query at a time works
+  try {
+    const conf = await fs.readFile('/etc/resolv.conf', 'utf8') as string;
+    if (!/^options .*single-request/m.test(conf)) {
+      await fs.writeFile('/etc/resolv.conf', `${conf.replace(/\n?$/, '\n')}options single-request\n`);
+    }
+  } catch { /* no resolv.conf: nothing to tune */ }
+  await keepManPages(fs);
+}
+
+/**
+ * Packages installed from now on keep their English man pages (`man` is no
+ * use without them); translations stay out. Images built before this had
+ * all of /usr/share/man excluded (scripts/debian/build-rootfs.sh).
+ */
+export async function keepManPages(fs: FileSystem): Promise<void> {
+  const p = '/etc/dpkg/dpkg.cfg.d/90shiro-slim';
+  const text = await fs.readFile(p, 'utf8').catch(() => null);
+  if (typeof text !== 'string' || text.includes('path-include /usr/share/man/')) return;
+  await fs.writeFile(p, text.replace('path-exclude /usr/share/man/*\n', 'path-exclude /usr/share/man/*\npath-include /usr/share/man/man[1-9]*/*\n'));
 }
