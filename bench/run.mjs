@@ -3,10 +3,11 @@
 //   npm run bench                 full run, both modes, writes bench/results/ and docs/BENCHMARKS.md
 //   npm run bench -- --quick      key metrics only (~3 min)
 //   node bench/run.mjs --suites shell,kernel --modes isolated --runs 7 --no-build
+//   node bench/run.mjs --src ../other-checkout ...   measure another tree's build with this harness (bench/ab.mjs)
 import { execFileSync, execSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
-import { join, dirname, relative } from 'node:path';
+import { join, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Harness, CHROMIUM } from './lib/harness.mjs';
 import { NetCache } from './lib/netcache.mjs';
@@ -24,7 +25,7 @@ const NONISOLATED_SUITES = ['boot', 'shell', 'kernel', 'wasm', 'x86', 'hygiene']
 const QUICK_NONISOLATED_SUITES = ['kernel'];
 
 function parseArgs(argv) {
-  const a = { quick: false, runs: null, build: true, modes: ['isolated', 'nonisolated'], suites: null, only: null, offline: false, out: null, docs: null, gh: true };
+  const a = { quick: false, runs: null, build: true, modes: ['isolated', 'nonisolated'], suites: null, only: null, offline: false, out: null, docs: null, gh: true, src: null };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i], v = () => argv[++i];
     if (k === '--quick') a.quick = true;
@@ -38,17 +39,21 @@ function parseArgs(argv) {
     else if (k === '--no-docs') a.docs = false;
     else if (k === '--docs') a.docs = true;
     else if (k === '--no-gh') a.gh = false;
+    else if (k === '--src') a.src = v();
     else if (k === '-h' || k === '--help') { console.log(readFileSync(join(BENCH, 'README.md'), 'utf8')); process.exit(0); }
     else throw new Error(`unknown option ${k}`);
   }
   a.runs ??= 5;
   if (a.quick) a.gh = false;
-  // Partial runs don't overwrite the committed table unless asked
-  a.docs ??= !a.suites && !a.only && !a.quick;
+  // Partial runs (and other trees' builds) don't overwrite the committed table unless asked
+  a.docs ??= !a.suites && !a.only && !a.quick && !a.src;
   return a;
 }
 
-function sh(cmd) { try { return execSync(cmd, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return null; } }
+/** The tree being measured: this checkout, or --src (its dist/ and git state; the harness is always this one) */
+let SRC = ROOT;
+
+function sh(cmd) { try { return execSync(cmd, { cwd: SRC, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return null; } }
 
 function environment(args, chromiumVersion) {
   const cpus = os.cpus();
@@ -67,13 +72,14 @@ function environment(args, chromiumVersion) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.src) SRC = resolve(args.src);
   const t0 = Date.now();
   const log = (s) => console.log(s);
   const cacheDir = join(BENCH, '.cache');
-  const dist = join(ROOT, 'dist');
+  const dist = join(SRC, 'dist');
   if (args.build || !existsSync(join(dist, 'index.html'))) {
     log('[bench] vite build');
-    execFileSync('npx', ['vite', 'build', '--logLevel', 'warn'], { cwd: ROOT, stdio: 'inherit' });
+    execFileSync('npx', ['vite', 'build', '--logLevel', 'warn'], { cwd: SRC, stdio: 'inherit' });
   }
   const publish = join(dist, '__bench');
   const fixtures = prepareFixtures({ cacheDir, publishDir: publish, log });
