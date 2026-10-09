@@ -480,6 +480,20 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    read/poll/epoll when it expires, counting interval expirations. Blink
    passes milliseconds and its own realtime/monotonic "now", so absolute
    times are read on the timer's clock. Test: `fixtures/x86/timerfd.c`.
+46. Debugging aid: with `SHIRO_BLINK_CRASH=1` in a guest's environment a
+   fatal signal is reported on its stderr through the kernel (signal, rip,
+   fault address, the mapping rip is in, the code there, the words before
+   the return address, registers, Blink's backtrace); `=2` also keeps the
+   interpreter's last 1024 instructions (snapshot at the first fault or
+   signal) and the signal deliveries, and `SHIRO_BLINK_PROBE=addr,...`
+   logs registers and stack words at those addresses. Run with
+   `BLINK_WJIT=0` to see every instruction. Test: `fixtures/x86/segv.c`.
+47. `pop` to memory addressed through `%rsp` (`pop 0x88(%rsp)` in V8's
+   builtins) computes the address after the pop moves the stack pointer;
+   Blink computed it before (two arguments of one call, in an order up to
+   the compiler) and wrote 8 bytes low, over a return address: Debian's
+   `nodejs` crashed on any script (found with patch 46). Test:
+   `fixtures/x86/popmem.c` (native output).
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.

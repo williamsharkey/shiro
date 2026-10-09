@@ -69,6 +69,10 @@ const forkSharedBin = join(out, 'forkshared');
 const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
 const mremapBin = join(out, 'mremap');
 const haveMremap = tryBuild('gcc', ['-static', '-O1', '-o', mremapBin, 'mremap.c']);
+const popmemBin = join(out, 'popmem');
+const havePopmem = tryBuild('gcc', ['-static', '-O1', '-o', popmemBin, 'popmem.c']);
+const segvBin = join(out, 'segv');
+const haveSegv = tryBuild('gcc', ['-static', '-O1', '-o', segvBin, 'segv.c']);
 const timerfdBin = join(out, 'timerfd');
 const haveTimerfd = tryBuild('gcc', ['-static', '-O1', '-o', timerfdBin, 'timerfd.c']);
 const mapsBin = join(out, 'maps');
@@ -600,6 +604,25 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(bitscanBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe(NATIVE_BITSCAN);
+  }, 60_000);
+
+  // V8's builtins (Debian's nodejs crashed on every script): pop 0x88(%rsp)
+  it.skipIf(!havePopmem)('pop to memory addressed through rsp uses the popped rsp', async () => {
+    const { shell } = await setup(readFileSync(popmemBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'pop 8(%rsp): rsp at s+16, s[1..3] = 0x11 0x22 0x11\npop (%rsp): s[2..3] = 0x55 0x55\npopw 2(%rsp): w[6..7] = 0x1234 0x7777\n');
+  }, 60_000);
+
+  it.skipIf(!haveSegv)('SHIRO_BLINK_CRASH=1 reports a fatal signal on stderr', async () => {
+    const { shell } = await setup(readFileSync(segvBin));
+    const quiet = await run(shell, './prog; echo status=$?');
+    expect(quiet.output).not.toContain('blink:');
+    expect(quiet.output).toContain('status=139');
+    const r = await run(shell, 'SHIRO_BLINK_CRASH=1 ./prog; echo status=$?');
+    expect(r.output).toMatch(/blink: pid \d+ tid \d+: SIGSEGV .* fault address 0x8/);
+    expect(r.output).toMatch(/blink: rax [0-9a-f]{16}/);
+    expect(r.output).toContain('status=139');
   }, 60_000);
 
   // uSockets' us_create_timer (Bun: opencode)
