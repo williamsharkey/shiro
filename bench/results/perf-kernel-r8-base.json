@@ -1,0 +1,187 @@
+{
+ "format": 1,
+ "env": {
+  "date": "2026-10-09T10:56:29.072Z",
+  "git": {
+   "sha": "8cdd44e487c886919cee1b7c173374187b52b30b",
+   "short": "8cdd44e",
+   "branch": "unix/perf-kernel",
+   "dirty": false
+  },
+  "node": "v22.22.0",
+  "chromium": "141.0.7390.37",
+  "os": "Linux 6.18.44-fc-v80 x64",
+  "cpu": {
+   "model": "Intel(R) Xeon(R) Processor @ 2.10GHz",
+   "count": 4
+  },
+  "memoryGiB": 15.7,
+  "quick": false,
+  "runs": 5,
+  "durationSec": 74,
+  "netcache": {
+   "hits": 1,
+   "misses": 0,
+   "failed": 0
+  }
+ },
+ "results": [
+  {
+   "name": "x86.blink.go_hello",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 183.7,
+   "p90": 194.7,
+   "min": 151.2,
+   "max": 194.7,
+   "n": 5,
+   "samples": [
+    151.2,
+    191.8,
+    183.7,
+    160.6,
+    194.7
+   ],
+   "notes": "`./hello-go a b` wall time at the prompt; first run 387 ms"
+  },
+  {
+   "name": "x86.blink.peak_rss.go_hello",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 24.02,
+   "p90": 25.96,
+   "min": 13.14,
+   "max": 25.96,
+   "n": 5,
+   "samples": [
+    13.14,
+    24.02,
+    17.64,
+    25.96,
+    25.55
+   ],
+   "notes": "renderer RSS peak above the pre-run level"
+  },
+  {
+   "name": "x86.blink.gh_version",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 5253,
+   "p90": 5426,
+   "min": 4912,
+   "max": 5426,
+   "n": 5,
+   "samples": [
+    5319,
+    5253,
+    5194,
+    5426,
+    4912
+   ],
+   "notes": "`./gh --version` wall time at the prompt; first run 5024 ms"
+  },
+  {
+   "name": "x86.blink.peak_rss.gh_version",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 201,
+   "p90": 218.5,
+   "min": 72.15,
+   "max": 218.5,
+   "n": 5,
+   "samples": [
+    92.14,
+    72.15,
+    201,
+    218.5,
+    218.4
+   ],
+   "notes": "renderer RSS peak above the pre-run level"
+  },
+  {
+   "name": "x86.blink.release_ms.gh_version",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 4095,
+   "p90": 4112,
+   "min": 4046,
+   "max": 4112,
+   "n": 5,
+   "samples": [
+    4046,
+    4056,
+    4112,
+    4112,
+    4095
+   ],
+   "notes": "after exit, until the renderer RSS gave back 3/4 of the peak (Workers and wasm memory freed)"
+  },
+  {
+   "name": "x86.x86.go_hello",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": null,
+   "p90": null,
+   "n": 0,
+   "samples": [],
+   "notes": "failed: exit 2: fatal error: float64nan",
+   "error": true
+  },
+  {
+   "name": "x86.x86.gh_version",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": null,
+   "p90": null,
+   "n": 0,
+   "samples": [],
+   "notes": "not attempted on src/x86 (Go)",
+   "error": true
+  },
+  {
+   "name": "x86.blink.vim_startup",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "ms",
+   "median": 1487,
+   "p90": 1528,
+   "min": 1418,
+   "max": 1528,
+   "n": 5,
+   "samples": [
+    1523,
+    1418,
+    1480,
+    1528,
+    1487
+   ],
+   "notes": "`vim --not-a-term -c qa x.c` wall time at the prompt (Blink); first run 2995 ms"
+  },
+  {
+   "name": "x86.blink.peak_rss.vim_startup",
+   "mode": "isolated",
+   "cache": null,
+   "unit": "MiB",
+   "median": 40.54,
+   "p90": 52.54,
+   "min": 19.95,
+   "max": 52.54,
+   "n": 5,
+   "samples": [
+    52.54,
+    46.44,
+    40.54,
+    28.43,
+    19.95
+   ],
+   "notes": "renderer RSS peak above the pre-run level"
+  }
+ ]
+}
