@@ -6,7 +6,7 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1310/1567 (83.6%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1314/1567 (83.9%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1275/1567 (81.4%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **608/635 (95.7%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **0/320 (0.0%)** |
@@ -38,7 +38,7 @@ How each suite runs, and what is and isn't scored, is described in
 | here-doc | 0/32 | 29/32 | 3 |
 | redirect | 3/39 | 32/39 | 7 |
 | if_ | 0/5 | 4/5 | 1 |
-| loop | 1/28 | 21/28 | 7 |
+| loop | 1/28 | 22/28 | 6 |
 | case_ | 0/13 | 12/13 | 1 |
 | sh-func | 0/11 | 11/11 | 0 |
 | func-parsing | 1/12 | 6/12 | 6 |
@@ -63,8 +63,8 @@ How each suite runs, and what is and isn't scored, is described in
 | brace-expansion | 0/55 | 51/55 | 4 |
 | tilde | 0/14 | 9/14 | 5 |
 | glob | 0/23 | 18/23 | 5 |
-| pipeline | 0/25 | 19/25 | 6 |
-| exit-status | 0/11 | 5/11 | 6 |
+| pipeline | 0/25 | 20/25 | 5 |
+| exit-status | 0/11 | 7/11 | 4 |
 | errexit | 0/35 | 29/35 | 6 |
 | subshell | 0/2 | 2/2 | 0 |
 | command_ | 2/16 | 8/16 | 8 |
@@ -99,7 +99,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **here-doc**: Here doc with bad comsub delimiter; Here doc with line continuation, then pipe.  Syntax error.; Function def and execution with here doc
 - **redirect**: Named file descriptor; \>&word redirects stdout and stderr when word is not a number or -; 1\>&2- to move file descriptor; 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; xtrace not affected by redirects
 - **if_**: if break corner case
-- **loop**: while in pipe with subshell; continue at top level; continue in subshell; continue in subshell aborts with errexit; bad arg to break; top-level break/continue/return (without strict_control_flow); builtin,command break,continue,return,exit
+- **loop**: while in pipe with subshell; continue at top level; continue in subshell; continue in subshell aborts with errexit; bad arg to break; top-level break/continue/return (without strict_control_flow)
 - **case_**: case \n bug regression
 - **func-parsing**: Hard case, function with } token in it; = in function name; Function name with $; Function name with command sub; Function name with !; Break after ) is OK.
 - **builtin-echo**: echo builtin should disallow typed args - literal; echo builtin should disallow typed args - variable
@@ -121,8 +121,8 @@ How each suite runs, and what is and isn't scored, is described in
 - **brace-expansion**: expansion on RHS of assignment; no expansion with RHS assignment; Two kinds of tilde expansion; Mixed case char expansion is invalid
 - **tilde**: ${undef:-~}; ${x//~/~root}; a[x]=foo:~ has tilde expansion; x=${undef-~:~}; temp assignment x=~ env
 - **glob**: Glob of unescaped [[] and []]; Glob of negated unescaped [[] and []]; \ in unquoted substitutions does not match a backslash; \ in unquoted substitutions escapes globchars; shopt -u globskipdots shows . and ..
-- **pipeline**: PIPESTATUS is set on simple commands; \|&; ! with ( ); ! is not a command; Evaluation of argv[0] in pipeline occurs in child; SIGPIPE causes pipeline to die (regression for issue #295)
-- **exit-status**: Truncating 'return' status; subshell OverflowError https://github.com/oilshell/oil/issues/996; func subshell OverflowError https://github.com/oilshell/oil/issues/996; If subshell false -- exit code is propagated in a weird way (strict_argv prevents); Exit code when command sub evaluates to empty str, e.g. `false` (#2416); More test cases with empty argv
+- **pipeline**: PIPESTATUS is set on simple commands; \|&; ! is not a command; Evaluation of argv[0] in pipeline occurs in child; SIGPIPE causes pipeline to die (regression for issue #295)
+- **exit-status**: subshell OverflowError https://github.com/oilshell/oil/issues/996; If subshell false -- exit code is propagated in a weird way (strict_argv prevents); Exit code when command sub evaluates to empty str, e.g. `false` (#2416); More test cases with empty argv
 - **errexit**: More && \|\|; set errexit while it's ignored in a subshell (moot with strict_errexit); errexit double guard; pipeline process respects errexit; simple command / assign - redir failure DOES respect errexit; bash atoms [[ (( - redir failure checked
 - **command_**: Command block; Permission denied; filling $PATH cache, then insert the same command earlier in cache; filling $PATH cache, then deleting command; Non-executable on $PATH; hash without args prints the cache; hash with args; Executing command with same name as directory in PATH (#2429)
 - **posix**: Empty for loop without in.  Do can be on the same line I guess.; Empty action for case is syntax error; Bare semi-colon not allowed; Command substitution in default

@@ -446,7 +446,7 @@
    ]
   },
   "loop": {
-   "pass": 21,
+   "pass": 22,
    "total": 28,
    "failures": [
     {
@@ -472,10 +472,6 @@
     {
      "i": 23,
      "name": "top-level break/continue/return (without strict_control_flow)"
-    },
-    {
-     "i": 28,
-     "name": "builtin,command break,continue,return,exit"
     }
    ]
   },
@@ -1029,7 +1025,7 @@
    ]
   },
   "pipeline": {
-   "pass": 19,
+   "pass": 20,
    "total": 25,
    "failures": [
     {
@@ -1039,10 +1035,6 @@
     {
      "i": 10,
      "name": "|&"
-    },
-    {
-     "i": 16,
-     "name": "! with ( )"
     },
     {
      "i": 17,
@@ -1059,20 +1051,12 @@
    ]
   },
   "exit-status": {
-   "pass": 5,
+   "pass": 7,
    "total": 11,
    "failures": [
     {
-     "i": 1,
-     "name": "Truncating 'return' status"
-    },
-    {
      "i": 2,
      "name": "subshell OverflowError https://github.com/oilshell/oil/issues/996"
-    },
-    {
-     "i": 3,
-     "name": "func subshell OverflowError https://github.com/oilshell/oil/issues/996"
     },
     {
      "i": 8,

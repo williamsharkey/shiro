@@ -521,4 +521,19 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('number B\n');
   });
+
+  it('return status mod 256, |&, ! ( … ), command NAME skips functions', async () => {
+    const r = await script([
+      "f() { return 257; }; f; echo r=$?",
+      "(exit 258); echo e=$?",
+      "f2() { return -1; }; f2; echo n=$?",
+      "ls /nonexist |& wc -l",
+      "! ( false ); echo neg=$?",
+      "builtin echo bi",
+      "command echo co",
+      "echo() { printf \"fn\\n\"; }; command echo co2; builtin echo bi2; unset -f echo",
+      "for i in 1 2; do command break; done; echo after",
+    ].join('\n'));
+    expect(r.out).toBe('r=1\ne=2\nn=255\n1\nneg=0\nbi\nco\nco2\nbi2\nafter\n');
+  });
 });

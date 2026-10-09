@@ -151,6 +151,21 @@ function hideProcSubs(text: string, out: string[]): string {
   return res;
 }
 
+/** Rewrite each unquoted `|&` as ` 2>&1 |` */
+function pipeAmpToRedirect(text: string): string {
+  let out = '';
+  let q = '';
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { out += c; if (c === '\\' && q === '"') out += text[++i] ?? ''; else if (c === q) q = ''; continue; }
+    if (c === '\\') { out += c + (text[i + 1] ?? ''); i++; continue; }
+    if (c === "'" || c === '"') { q = c; out += c; continue; }
+    if (c === '|' && text[i + 1] === '&' && text[i - 1] !== '|') { out += ' 2>&1 |'; i++; continue; }
+    out += c;
+  }
+  return out;
+}
+
 /** Distinct names for process-substitution files */
 let procSubCounter = 0;
 
@@ -1070,7 +1085,8 @@ export class Shell {
     // e.g., "if [ $x -eq 1 ]; then break; fi; echo $x" → two compounds.
 
     // Split into compound commands: &&, ||, ;
-    const compounds = this.parseCompound(effectiveLine);
+    // `a |& b` is `a 2>&1 | b`
+    const compounds = this.parseCompound(effectiveLine.includes('|&') ? pipeAmpToRedirect(effectiveLine) : effectiveLine);
     let exitCode = 0;
     let lastRan = -1; // index of the last compound that ran, for errexit
     let suppressing = false;
@@ -1158,6 +1174,15 @@ export class Shell {
       // (control structures handle their own expansion internally to support loop variables)
       if (this.isControlStructure(trimmedCmd)) {
         exitCode = await this.execControlStructure(trimmedCmd, writeStdout, stderrWriter);
+        this.lastExitCode = exitCode;
+        this.env['?'] = String(exitCode);
+        continue;
+      }
+
+      // ! PIPELINE: run it and negate its status (! ( … ), ! { …; }, ! a | b)
+      if (/^!\s+\S/.test(trimmedCmd) && !/^!\s+\[\[/.test(trimmedCmd)) {
+        exitCode = await this.execute(trimmedCmd.replace(/^!\s+/, ''), writeStdout, stderrWriter, false, terminalOverride, true);
+        exitCode = exitCode === 0 ? 1 : 0;
         this.lastExitCode = exitCode;
         this.env['?'] = String(exitCode);
         continue;
@@ -1918,8 +1943,9 @@ export class Shell {
 
         // Shell builtin: return (throw sentinel caught by execFunction)
         if (effectiveCmdName === 'return') {
-          const code = cmdArgs.length > 0 ? parseInt(cmdArgs[0], 10) || 0 : this.lastExitCode;
-          throw new ReturnSignal(code);
+          // (a status is 0-255: return 257 is 1, return -1 is 255)
+          const n = cmdArgs.length > 0 ? parseInt(cmdArgs[0], 10) || 0 : this.lastExitCode;
+          throw new ReturnSignal(((n % 256) + 256) % 256);
         }
 
         // Shell builtin: trap
@@ -2630,6 +2656,27 @@ export class Shell {
         }
 
         // Shell builtin: builtin — run builtin ignoring functions
+        // command [-p] NAME ARGS: run NAME skipping functions and aliases
+        if (!_builtinDisabled && effectiveCmdName === 'command' && cmdArgs.length && !/^-[vV]+$/.test(cmdArgs[0])) {
+          const rest = cmdArgs[0] === '-p' || cmdArgs[0] === '--' ? cmdArgs.slice(1) : cmdArgs;
+          if (rest.length) {
+            const savedFn = this.functions[rest[0]];
+            delete this.functions[rest[0]];
+            const savedAlias = this.aliases.get(rest[0]);
+            this.aliases.delete(rest[0]);
+            this.injectedStdin = nestedStdin;
+            try {
+              exitCode = await this.execute(quoteArgsForShell(rest), writeStdout, stderrWriter, false, terminalOverride || this.terminal, true);
+            } finally {
+              if (savedFn) this.functions[rest[0]] = savedFn;
+              if (savedAlias !== undefined) this.aliases.set(rest[0], savedAlias);
+            }
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
+          lastOutput = '';
+          continue;
+        }
         if (!_builtinDisabled && effectiveCmdName === 'builtin') {
           if (cmdArgs.length > 0) {
             const builtinCmd = quoteArgsForShell(cmdArgs);
