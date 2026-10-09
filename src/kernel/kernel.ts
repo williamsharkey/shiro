@@ -119,6 +119,15 @@ function shellQuote(s: string): string {
   return /^[A-Za-z0-9_@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
+/**
+ * A stat as `proc` sees it. Files keep no owner (chown isn't stored), so one
+ * reported as the default user's is the caller's: root's git and ssh find
+ * their own files theirs.
+ */
+function statFor(proc: Process, st: A.KStat): A.KStat {
+  return st.uid === 1000 && proc.uid !== 1000 ? { ...st, uid: proc.uid, gid: proc.gid } : st;
+}
+
 export class Kernel {
   fs?: FileSystem;
   /** Paths of AF_UNIX socket files (net.ts bind); they stat as sockets. */
@@ -837,14 +846,14 @@ export class Kernel {
     const n = hit.node;
     const open = n.type === 'file' ? inodeStat(fs, hit.path) : undefined;
     // The inode belongs to the resolved path: /bin and /usr/bin (a link to it) are one directory
-    if (open) { A.encodeStat({ ...open, ino: inodeNumber(hit.path) }, data); return 0; }
+    if (open) { A.encodeStat(statFor(proc, { ...open, ino: inodeNumber(hit.path) }), data); return 0; }
     const type = n.type === 'dir' ? A.S_IFDIR : n.type === 'symlink' ? A.S_IFLNK : n.special === 'fifo' ? A.S_IFIFO : A.S_IFREG;
-    A.encodeStat({
+    A.encodeStat(statFor(proc, {
       dev: 1, ino: inodeNumber(hit.path), mode: type | (n.mode & 0o7777), nlink: n.type === 'dir' ? 2 : linkCount(hit.path),
       uid: 1000, gid: 1000, rdev: 0, size: n.size, blksize: 4096, blocks: Math.ceil(n.size / 512),
       atimeMs: n.atime ?? n.mtime, mtimeMs: n.mtime, ctimeMs: n.ctime,
       atimeNs: n.atime === undefined ? n.mtimeNs : n.atimeNs, mtimeNs: n.mtimeNs,
-    }, data);
+    }), data);
     return 0;
   }
 
@@ -1194,7 +1203,7 @@ export class Kernel {
         }
         const st = proc.fds.get(args[0])?.statSync?.();
         if (!st) return undefined;
-        A.encodeStat(st, data);
+        A.encodeStat(statFor(proc, st), data);
         return 0;
       }
       case A.SYS_lseek: {
@@ -1320,7 +1329,7 @@ export class Kernel {
             st = await this.statPath(proc, str(0, args[0]), nr === A.SYS_stat);
           }
           if (typeof st === 'number') return st;
-          A.encodeStat(st, data);
+          A.encodeStat(statFor(proc, st), data);
           return 0;
         }
         case A.SYS_access:

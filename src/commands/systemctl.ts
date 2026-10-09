@@ -12,7 +12,10 @@ export const systemctlCmd: Command = {
   description: 'Control the system service manager',
 
   async exec(ctx: CommandContext): Promise<number> {
-    const args = ctx.args;
+    // Options anywhere (Debian's deb-systemd-helper: `systemctl --root=/
+    // --preset-mode=enable-only preset -- ssh-agent.socket`) are accepted and ignored
+    const help = ctx.args.includes('--help') || ctx.args.includes('-h');
+    const args = help ? ['--help'] : ctx.args.filter(a => !a.startsWith('-'));
 
     if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
       ctx.stdout += 'Usage: systemctl <command> [service]\n';
@@ -122,6 +125,28 @@ export const systemctlCmd: Command = {
         // No-op for now — just acknowledge
         ctx.stdout += `${subcommand === 'enable' ? 'Created' : 'Removed'} symlink for ${serviceName}.service\n`;
         return 0;
+      }
+
+      // What package maintainer scripts run: nothing to change for Shiro's services
+      case 'preset':
+      case 'preset-all':
+      case 'daemon-reload':
+      case 'daemon-reexec':
+      case 'mask':
+      case 'unmask':
+      case 'reenable':
+      case 'try-restart':
+      case 'reload-or-restart':
+        return 0;
+
+      case 'is-enabled':
+        if (!ctx.args.includes('--quiet') && !ctx.args.includes('-q')) ctx.stdout += 'disabled\n';
+        return 1;
+
+      case 'is-active': {
+        const active = !!serviceName && serviceManager.getStatus(serviceName)?.status === 'active';
+        if (!ctx.args.includes('--quiet') && !ctx.args.includes('-q')) ctx.stdout += active ? 'active\n' : 'inactive\n';
+        return active ? 0 : 3;
       }
 
       default: {

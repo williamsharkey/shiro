@@ -551,6 +551,21 @@ describe('kernel processes', () => {
     kernel.kill(proc.pid, A.SIGKILL);
   });
 
+  it("files are the stat caller's own: no owner is stored (root's git checks)", async () => {
+    const proc = kernel.spawn({ path: 'own', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
+    const data = new Uint8Array(4096);
+    const stat = async (p: string) => {
+      const b = new TextEncoder().encode(p); data.set(b);
+      expect(await kernel.syscall(proc, A.SYS_stat, [b.length], data)).toBe(0);
+      const dv = new DataView(data.buffer);
+      return { uid: dv.getUint32(28, true), gid: dv.getUint32(32, true) };
+    };
+    expect(await stat('/tmp')).toEqual({ uid: 1000, gid: 1000 });
+    proc.uid = 0; proc.gid = 0;
+    expect(await stat('/tmp')).toEqual({ uid: 0, gid: 0 });
+    kernel.kill(proc.pid, A.SIGKILL);
+  });
+
   it('a burst of file writes is stored once it pauses, not after every write', async () => {
     const proc = kernel.spawn({ path: 'holder', cwd: '/tmp', run: () => new Promise<number>(() => {}) });
     const f = (await kernel.open(proc, 'kburst.bin', A.O_CREAT | A.O_WRONLY | A.O_TRUNC)) as OpenFile;
