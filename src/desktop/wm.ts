@@ -543,6 +543,8 @@ class WindowImpl implements DesktopWindow {
         b.title = label;
         b.setAttribute('aria-label', label);
         b.addEventListener('pointerdown', e => e.stopPropagation());
+        // A click leaves keyboard focus where it was (typing after Zoom reaches the terminal)
+        b.addEventListener('mousedown', e => e.preventDefault());
         b.addEventListener('click', e => { e.stopPropagation(); fn(); });
         lights.appendChild(b);
       };
