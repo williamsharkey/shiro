@@ -101,14 +101,14 @@ What stands out:
   of an update goes: index decompression, `apt-get`'s own sorting, or
   syscalls). Debian storage after these three commands is 327 MiB.
 - **First runs are expensive in memory, not time.** ffmpeg's first run loads
-  its core in 0.22 s but adds +111 MiB. `claude --npm --version` takes 2.9 s
-  the first time and peaks at **+412 MiB** (+184 MiB warm).
+  its core in 0.25 s but adds +110 MiB. `claude --npm --version` takes 2.9 s
+  the first time and peaks at **+414 MiB** (+184 MiB warm, 0.99 s).
 - **Python in Debian starts in ~2.9 s** cold and warm alike. The cost is
   CPython's startup in the interpreter, not first-use fetching.
 - **git clone over the relay** of a 41-file, 5-commit repo takes 2.8 s
   (3.7 s for the page's first clone). It's `pkg git` in Blink speaking
   `git://` to a local daemon through server.mjs's TCP relay.
-- Boot is fine: the desktop is revealed at 248 ms cold and 241 ms warm,
+- Boot is fine: the desktop is revealed at 255 ms cold and 231 ms warm,
   with 216 MiB renderer RSS once it's up.
 
 ## Hotspots (ranked by expected payoff)
