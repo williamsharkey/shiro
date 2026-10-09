@@ -1,4 +1,5 @@
 // Console capture - must be first before any other code runs (bounded ring buffer)
+import { toolkitScaleEnv } from './gui/display-scale';
 import { queryConsole, clearConsoleLog } from './console-log';
 
 // Old capture API, kept as a view over the bounded log (console command, clip-report)
@@ -505,6 +506,8 @@ async function main() {
   // X11 display :0 (src/x11, docs/GUI.md): `Xshiro :0` listens on /tmp/.X11-unix/X0 now;
   // the server and its fonts load on the first client, windows open on the desktop
   shell.env['DISPLAY'] ??= ':0';
+  // HiDPI: X apps started from the shell scale like the dock's (src/gui/display-scale.ts)
+  for (const [k, v] of Object.entries(toolkitScaleEnv())) shell.env[k] ??= v;
   void startDisplay(kernel, 0).catch(e => console.warn('[Xshiro]', e));
 
   // Populate API keys from localStorage so `claude` CLI picks them up

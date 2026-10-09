@@ -16,6 +16,7 @@ import type { FileSystem } from '../filesystem';
 import type { Kernel } from '../kernel/kernel';
 import { untar, type TarEntry } from '../pkg-tar';
 import { debEntriesOffThread } from './deb';
+import { toolkitScaleEnv } from './display-scale';
 export { arMembers, debEntries } from './deb';
 
 export interface DebPackage { version: string; filename: string; sha256: string; size: number }
@@ -260,6 +261,7 @@ async function runQuiet(kernel: Kernel, argv: string[], env: Record<string, stri
 /** Environment GUI apps start with. */
 export function appEnv(extra: Record<string, string> = {}): Record<string, string> {
   return {
+    ...toolkitScaleEnv(),
     DISPLAY: ':0', HOME: '/home/user', USER: 'user', LANG: 'C.UTF-8', PATH: '/usr/local/bin:/usr/bin:/bin',
     XDG_RUNTIME_DIR: '/tmp/runtime-user', NO_AT_BRIDGE: '1', GTK_A11Y: 'none',
     // no session bus: fail fast instead of GDBus autolaunch
