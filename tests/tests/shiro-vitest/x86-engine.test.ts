@@ -43,6 +43,10 @@ const forkBin = join(out, 'forkcopy');
 const haveFork = tryBuild('gcc', ['-static', '-O1', '-o', forkBin, 'forkcopy.c']);
 const forkSharedBin = join(out, 'forkshared');
 const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
+const mremapBin = join(out, 'mremap');
+const haveMremap = tryBuild('gcc', ['-static', '-O1', '-o', mremapBin, 'mremap.c']);
+const getgroupsBin = join(out, 'getgroups');
+const haveGetgroups = tryBuild('gcc', ['-static', '-O1', '-o', getgroupsBin, 'getgroups.c']);
 const fionbioBin = join(out, 'fionbio');
 const haveFionbio = tryBuild('gcc', ['-static', '-O1', '-o', fionbioBin, 'fionbio.c']);
 const fuzzBin = join(out, 'jitfuzz');
@@ -431,6 +435,24 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const r = await run(shell, './prog');
     expect(r.exitCode).toBe(0);
     expect(r.output.replace(/\r\n/g, '\n')).toBe('pextrw 0xfffe\nmadvise 0 0 0\nfutex_wait_bitset timedout on time\nfutex_wake_bitset 0\ngetrandom 16\n');
+  }, 60_000);
+
+  // apt's DynamicMMap grows its package cache with mremap(MREMAP_MAYMOVE)
+  it.skipIf(!haveMremap)('mremap grows (in place or moving), shrinks and moves to a fixed place', async () => {
+    const { shell } = await setup(readFileSync(mremapBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'no MAYMOVE: Cannot allocate memory\nmoved=1 first=7 mid=7 last=9\nold range free=1\n' +
+      'shrunk same=1 tail free=1 last=7\nfixed at=1 first=7\nreadonly moved=1 byte=42\n');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // coreutils id: "failed to get groups for the current process"
+  it.skipIf(!haveGetgroups)('getgroups reports the process gid, and its count for size 0', async () => {
+    const { shell } = await setup(readFileSync(getgroupsBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('getgroups(0)=1 getgroups(64)=1 is-gid=1\n');
+    expect(r.exitCode).toBe(0);
   }, 60_000);
 });
 
