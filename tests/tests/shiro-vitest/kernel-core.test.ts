@@ -350,6 +350,28 @@ describe('kernel processes', () => {
     await kernel.exit(proc, 0);
   });
 
+  it("link() counts names in st_nlink (shadow's lock: link(group.PID, group.lock), then nlink == 2)", async () => {
+    const proc = kernel.spawn({ path: 'holder', cwd: '/tmp', run: () => new Promise<number>(() => {}) });
+    const enc = new TextEncoder();
+    const call = (nr: number, paths: string[]) => {
+      const data = new Uint8Array(4096);
+      let off = 0;
+      const lens = paths.map((p) => { const b = enc.encode(p); data.set(b, off); off += b.length; return b.length; });
+      return kernel.syscall(proc, nr, lens, data);
+    };
+    const nlink = async (p: string) => ((await kernel.statPath(proc, p)) as { nlink: number }).nlink;
+    await fs.writeFile('/tmp/group.123', '123');
+    expect(await nlink('/tmp/group.123')).toBe(1);
+    expect(await call(A.SYS_link, ['/tmp/group.123', '/tmp/group.lock'])).toBe(0);
+    expect(await nlink('/tmp/group.123')).toBe(2);
+    expect(await nlink('/tmp/group.lock')).toBe(2);
+    expect(await call(A.SYS_rename, ['/tmp/group.lock', '/tmp/group.lck'])).toBe(0);
+    expect(await nlink('/tmp/group.123')).toBe(2);
+    expect(await call(A.SYS_unlink, ['/tmp/group.123'])).toBe(0);
+    expect(await nlink('/tmp/group.lck')).toBe(1);
+    await kernel.exit(proc, 0);
+  });
+
   it('open: files, O_CREAT|O_EXCL, O_APPEND, O_TRUNC, directories, /dev', async () => {
     const proc = kernel.spawn({ path: 'holder', cwd: '/tmp', run: () => new Promise<number>(() => {}) });
     const f = await kernel.open(proc, 'kopen.txt', A.O_CREAT | A.O_RDWR | A.O_TRUNC);
