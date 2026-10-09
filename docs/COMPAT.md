@@ -141,6 +141,16 @@ releases (pinned sha256), installed with `pkg install` and run in Blink, so
 they need a cross-origin isolated page (`"needs": ["x86"]`). Rows marked
 WASI/WASIX are WASM packages run as kernel processes in workers.
 
+Browser checks: `scripts/browser-tui.mjs` drives the built app in headless
+Chromium (cross-origin isolated) through xterm.js's own keyboard input and
+reads the rendered screen. Verified there on 2026-10-09: vim (insert, `:wq`,
+type-ahead), nano (`^O`, `^X`), less (paging, `/` search, type-ahead), htop,
+top, tmux (split, detach, `ls`), screen (detach), fzf (filter, pick), nvim
+(edit, `:help`), emacs -nw (edit, C-x C-s), man (through less), gpg
+(pinentry-curses dialog). Two bugs only the browser showed are fixed: keys
+typed while a command started were dropped, and AF_UNIX connect failed with
+EIO (the browser's `TextDecoder` refuses the shared syscall buffer).
+
 | Software | Version | Route | Status | Tested | Known issues |
 | --- | --- | --- | --- | --- | --- |
 | less | 710 | pkg (Blink) | works | pages a file on the tty (alternate screen), `/search`, `G`, `q`; `seq \| less` reads the pipe and takes keys from /dev/tty; plain output when piped | |
@@ -155,7 +165,9 @@ WASI/WASIX are WASM packages run as kernel processes in workers.
 | tar | 1.35 (GNU) | pkg (Blink) | works | `czf` (gzip run as a child through `/bin/sh`), `tzf`, `xzf -C` | |
 | gzip, gunzip, zcat | 1.15 (GNU) | pkg (Blink) | works | `-k`, `-c`, `-d`, `-t`, binary output redirected to a file | |
 | vim | 9.2.0000 | pkg (Blink) | works | edit + `:wq`; syntax colours from the runtime; `:help`; resize (SIGWINCH) updates `&columns`/`&lines`; Ctrl-Z stops it, `fg` resumes; `vim -es` scripting | Startup with `filetype`/`syntax` is slow (seconds): Blink interprets x86 at ~1/120 native speed. No POSIX timers (`timer_create`), so no `'redrawtime'` timeout |
-| tmux | 3.8 | pkg (Blink; libevent 2.1, ncurses 6.5) | works | `new-session` on the tty: status line, a shell in the pane, `C-b %` split, `C-b d` detach; `list-panes`, `send-keys` into a detached session; re-attach on a bigger terminal; `kill-session` | Slow to draw (emulated). After re-attaching at a new size the status line waits for the next key, which tmux then takes as input. The `tmux` builtin is replaced while the package is installed |
+| nvim (Neovim) | 0.12.5 (PUC Lua 5.1) | pkg (Blink) | works | headless `:s` + `:wq`, Lua (`vim.inspect`), treesitter parsing and `:help` highlighting, editing on the tty, a shell in `:terminal` (pty) | built with PUC Lua instead of LuaJIT (its JIT would be translated twice); the bundled parsers (c, lua, vim, vimdoc, query, markdown) are linked into the static binary, so `parser/*.so` from plugins can't load; no translations |
+| emacs (-nw), emacsclient, etags | 31.1 (GNU) | pkg (Blink; ncurses 6.5) | works | batch Lisp, the portable dump, `org`; editing and C-x C-s on the tty, `M-x shell` (pty) | terminal only: no GUI, TLS (`--with-gnutls=no`), images, native compilation or tree-sitter; byte-compiled Lisp without sources (`find-function` shows no source); no Japanese input-method dictionary |
+| tmux | 3.8 | pkg (Blink; libevent 2.1, ncurses 6.5) | works | `new-session` on the tty: status line, a shell in the pane, `C-b %` split, `C-b d` detach; `list-panes`, `send-keys` into a detached session; re-attach on a bigger terminal (the status line comes back without a key press); `#{host}` is the kernel hostname; `kill-session`; in Chromium too | Slow to draw (emulated). The `tmux` builtin is replaced while the package is installed |
 | screen | 5.0.2 (GNU) | pkg (Blink; ncurses 6.5) | works | session on the tty: shell window, `C-a c` new window, `C-a d` detach; `-ls`, `-X stuff` into a detached session, `-r` re-attach, `-X quit` | no PAM/utmp; sockets in `~/.screen` (no setuid socket directory). The builtin `screen`, if any, is replaced while the package is installed |
 | htop | 3.5.3 | pkg (Blink; ncurses 6.5) | works | CPU, memory, load and uptime meters; the process list from the kernel `/proc`; `q` quits | CPU% is an estimate (wall time minus time in syscalls); memory per process reads 0; one CPU meter per `navigator.hardwareConcurrency` |
 | top, ps, free, uptime, vmstat, pgrep, pkill, pidof, watch, w | 4.0.7 (procps-ng) | pkg (Blink; ncurses 6.5) | works | `ps -ef`/`-o`, `free -m`, `uptime`, `vmstat`, `top -b` over two refreshes, `pgrep`/`pkill` of a running program | `w` lists no users (no utmp); no `kill` (the shell's builtin) |
@@ -170,8 +182,10 @@ WASI/WASIX are WASM packages run as kernel processes in workers.
 | curl | 8.22.0 (OpenSSL 3.5.9, zlib) | pkg (Blink) | works | HTTP GET with headers against a loopback server on kernel sockets; connection refused is exit 7 | Remote hosts go through the server's WebSocket-to-TCP relay and DNS-over-HTTPS (not in the automated test). No HTTP/2, HTTP/3, IDN, libssh2 |
 | ca-certificates | 2026-09-25 (Mozilla, via curl.se) | pkg | works | `/etc/ssl/certs/ca-certificates.crt`, `/etc/ssl/cert.pem`; openssl and curl depend on it | |
 | wget | 1.25.0 (GNU; OpenSSL 3.5.9, zlib) | pkg (Blink) | works | download to a file and `-O-` from a loopback HTTP server; exit 4 on a network failure | remote hosts through the TCP relay (as curl); no IRI/IDN, PSL, metalink |
-| rsync | 3.5.1 | pkg (Blink) | works | `-a` copy, `-i` itemized delta with `--delete`, `-n` dry run finds nothing after a sync | local copies only until there is an ssh; no xxhash/zstd/lz4, ACLs or xattrs |
-| man, apropos, whatis, makewhatis | 1.14.6 (mandoc) | pkg (Blink) | works | `man -w`, formatting `man(1)`/`mandoc(1)`, `makewhatis` then `whatis`/`apropos` | only pages packages install (mandoc's own so far); pager is `less` (`pkg install less`) |
+| rsync | 3.5.1 | pkg (Blink) | works | `-a` copy, `-i` itemized delta with `--delete`, `-n` dry run finds nothing after a sync | remote copies need `-e ssh` and a reachable server; no xxhash/zstd/lz4, ACLs or xattrs |
+| ssh, scp, sftp, ssh-keygen, ssh-agent, ssh-add | 10.6p1 (OpenSSH portable; OpenSSL 3.5.9, zlib) | pkg (Blink) | works (client) | `ssh-keygen` Ed25519 key (0600, `-l`, `-y`), `ssh-agent -s` + `ssh-add`/`-l` on an AF_UNIX socket, `ssh -G` config, identification exchange with a server on a kernel socket, connection refused | no sshd, so a full login isn't covered by the automated test; remote hosts go through the TCP relay as curl does. `rsync -e ssh` needs a reachable server |
+| gpg, gpgv, gpg-agent, gpgsm, gpgtar, gpgconf, gpg-connect-agent, pinentry | 2.5.24 (GnuPG; libgcrypt 1.12.4) | pkg (Blink) | works | Ed25519/Cv25519 key generation, detached and clear signatures, `gpgv`, a bad signature fails, public-key and symmetric encryption, the agent over its AF_UNIX socket, `gpg-connect-agent`, passphrase entry in pinentry-curses on the tty | no dirmngr (keyserver and WKD lookups), keyboxd, scdaemon (smartcards) or TOFU; `pinentry` is pinentry-curses (pinentry-tty also installed) |
+| man, apropos, whatis, makewhatis | 1.14.6 (mandoc) | pkg (Blink) | works | `man -w`, formatting `man(1)`/`mandoc(1)`, `makewhatis` then `whatis`/`apropos`; pages from other packages (`xz`, alias `xzcat` via `.so`, procps' `vmstat(8)`) | pages come with the packages here (recipes' `install_man`; publish.sh links them into /usr/share/man), except git, openssl, curl, gnupg and fzf, whose pages are generated with tools the builds leave out; pager is `less` (`pkg install less`) |
 | jq | 1.8.1 | pkg (WASI) | works | filters, `-r`, `-s`, `gsub` (oniguruma), `-e` exit status | |
 | ripgrep | 15.2.0 | pkg (WASIX) | works as `/usr/bin/rg` | `.gitignore`, `-t`, `-g`, `-c`, `-l`, exit 1 on no match | plain `rg` is Shiro's builtin (the package doesn't take the name); no PCRE2; one search thread |
 | sqlite3 | 3.50.4 | pkg (WASI) | works | database file, queries, SQL on stdin, `-json` | interactive shell wants blocking stdin |

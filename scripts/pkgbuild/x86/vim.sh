@@ -28,3 +28,9 @@ rm -rf "$RT" && mkdir -p "$RT"
 # Leave out the test suites, translations and spell files (the latter download on demand in vim)
 rm -rf "$RT/syntax/testdir" "$RT/indent/testdir" "$RT/lang" "$RT/spell"/*.{spl,sug} "$RT/tutor"/*.??.* 2>/dev/null || true
 (cd "$PKG_OUT/vim" && "$SRC/src/vim" -u NONE -es -c 'helptags share/vim/vim92/doc' -c q >/dev/null 2>&1 || true)
+
+# Manual pages (man, from pkg install mandoc)
+install_man vim "$SRC/runtime/doc/vim.1" "$SRC/runtime/doc/vimdiff.1"
+man_alias vim vi.1 vim.1
+man_alias vim view.1 vim.1
+man_alias vim ex.1 vim.1

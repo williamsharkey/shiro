@@ -6,3 +6,6 @@ setup_musl
 configure_make "$SRC"
 install_bin "$SRC/bc/bc" bc/bin/bc
 install_bin "$SRC/dc/dc" bc/bin/dc
+
+# Manual pages (man, from pkg install mandoc)
+install_man bc "$SRC/doc/bc.1" "$SRC/doc/dc.1"

@@ -12,3 +12,6 @@ configure_make "$SRC" --enable-static --disable-utf8proc \
   LIBEVENT_CORE_CFLAGS="-I$SYSROOT/include" LIBEVENT_CORE_LIBS="-levent_core" \
   LIBNCURSES_CFLAGS="-I$SYSROOT/include/ncursesw" LIBNCURSES_LIBS="-lncursesw"
 install_bin "$SRC/tmux" tmux/bin/tmux
+
+# Manual pages (man, from pkg install mandoc)
+install_man tmux "$SRC/tmux.1"

@@ -646,6 +646,22 @@ describe('sockets in the kernel: registerSyscalls, epoll, SIGPIPE', () => {
 });
 
 describe('AF_UNIX path sockets and SCM_RIGHTS (tmux, screen)', () => {
+  it('decodes a socket path from a shared buffer (browsers refuse to TextDecoder.decode one)', async () => {
+    const A = await import('@shiro/kernel/abi');
+    const shared = new Uint8Array(new SharedArrayBuffer(128));
+    shared.set(encodeSockaddr({ family: A.AF_UNIX, address: '/tmp/tmux-1000/default', port: 0 }));
+    const decode = TextDecoder.prototype.decode;
+    TextDecoder.prototype.decode = function (this: TextDecoder, input?: AllowSharedBufferSource, opts?: TextDecodeOptions) {
+      if (input && ArrayBuffer.isView(input) && input.buffer instanceof SharedArrayBuffer) throw new TypeError('The provided ArrayBufferView value must not be shared.');
+      return decode.call(this, input, opts);
+    };
+    try {
+      expect(decodeSockaddr(shared.subarray(0, 110))).toEqual({ family: A.AF_UNIX, address: '/tmp/tmux-1000/default', port: 0 });
+    } finally {
+      TextDecoder.prototype.decode = decode;
+    }
+  });
+
   it('bind makes a socket file; connect/accept by path; fds pass with SCM_RIGHTS; SO_PEERCRED', async () => {
     const A = await import('@shiro/kernel/abi');
     const { Kernel } = await import('@shiro/kernel/kernel');

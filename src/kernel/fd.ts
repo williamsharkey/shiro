@@ -84,7 +84,13 @@ export function retain(file: OpenFile): OpenFile {
 /** Drop a reference; closes the description when the count reaches zero. */
 export async function release(file: OpenFile): Promise<void> {
   const n = (refs.get(file) ?? 1) - 1;
-  if (n > 0) { refs.set(file, n); return; }
+  if (n > 0) {
+    refs.set(file, n);
+    // what a process wrote is in the FileSystem once it has closed it (or
+    // exited), even when a forked child still holds the description
+    if (file instanceof RegularFile) await file.writeBack();
+    return;
+  }
   refs.delete(file);
   await file.close();
 }
@@ -92,6 +98,7 @@ export async function release(file: OpenFile): Promise<void> {
 /** release() when it needs no I/O (another reference remains, or the description closes synchronously); false = use release(). */
 export function releaseSync(file: OpenFile): boolean {
   const n = (refs.get(file) ?? 1) - 1;
+  if (n > 0 && file instanceof RegularFile && file.dirty) return false;
   if (n > 0) { refs.set(file, n); return true; }
   if (!file.closeSync?.()) return false;
   refs.delete(file);
@@ -699,6 +706,12 @@ export class RegularFile implements OpenFile {
     ino.touch();
     return 0;
   }
+
+  /** Unwritten data, or a write-back under way. */
+  get dirty(): boolean { return this.ino.dirty || this.ino.busy; }
+
+  /** Write pending data back to the FileSystem (not to IndexedDB, as sync does). */
+  async writeBack(): Promise<void> { if (this.ino.dirty) await this.ino.flush(); }
 
   // fsync: the inode's snapshot into the fs, then the fs's write-behind queue to IndexedDB
   async sync(): Promise<void> { await this.ino.flush(); await this.ino.fs.sync(); }

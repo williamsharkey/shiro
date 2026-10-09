@@ -9,3 +9,6 @@ configure_make "$SRC" --disable-xxhash --disable-zstd --disable-lz4 --disable-op
   --disable-xattr-support --disable-idn --with-included-popt --without-included-zlib --disable-locale \
   CPPFLAGS="-I$SYSROOT/include" LDFLAGS="-L$SYSROOT/lib -static -no-pie"
 install_bin "$SRC/rsync" rsync/bin/rsync
+
+# Manual pages (man, from pkg install mandoc)
+install_man rsync "$SRC/rsync.1" "$SRC/rsyncd.conf.5"

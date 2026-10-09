@@ -6,3 +6,6 @@ SRC=$(unpack "$(fetch https://gitlab.com/OldManProgrammer/unix-tree/-/archive/$V
 setup_musl
 make -C "$SRC" -j"$(nproc)" CC="$CC" CFLAGS="$CFLAGS -DLINUX -D_LARGEFILE64_SOURCE -D_FILE_OFFSET_BITS=64" LDFLAGS="$LDFLAGS" >"$SRC/make.log" 2>&1
 install_bin "$SRC/tree" tree/bin/tree
+
+# Manual pages (man, from pkg install mandoc)
+install_man tree "$SRC/doc/tree.1"

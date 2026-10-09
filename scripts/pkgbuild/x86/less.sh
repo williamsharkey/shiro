@@ -9,3 +9,6 @@ cd "$SRC"
 ./configure --host=$HOST --prefix=/usr --sysconfdir=/etc --with-regex=posix >configure.log
 make -j"$(nproc)" less lessecho >make.log
 for b in less lessecho; do install_bin $b less/bin/$b; done
+
+# Manual pages (man, from pkg install mandoc)
+install_man less "$SRC/less.nro:less.1" "$SRC/lessecho.nro:lessecho.1"

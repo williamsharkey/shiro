@@ -12,3 +12,6 @@ cp "$SRC"/syntax/*.nanorc "$PKG_OUT/nano/share/nano/"
 # Highlighting on by default, as distributions ship it
 mkdir -p "$PKG_OUT/nano/etc"
 printf 'include "/usr/share/nano/*.nanorc"\nset linenumbers\n' >"$PKG_OUT/nano/etc/nanorc"
+
+# Manual pages (man, from pkg install mandoc)
+install_man nano "$SRC/doc/nano.1" "$SRC/doc/nanorc.5"

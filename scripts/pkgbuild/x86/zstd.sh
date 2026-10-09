@@ -6,3 +6,8 @@ SRC=$(unpack "$(fetch https://github.com/facebook/zstd/releases/download/v$VERSI
 setup_musl
 make -C "$SRC/programs" -j"$(nproc)" zstd CC="$CC" CFLAGS="$CFLAGS" LDFLAGS="$LDFLAGS" HAVE_ZLIB=0 HAVE_LZMA=0 HAVE_LZ4=0 HAVE_THREAD=1 >"$SRC/make.log" 2>&1
 install_bin "$SRC/programs/zstd" zstd/bin/zstd
+
+# Manual pages (man, from pkg install mandoc)
+install_man zstd "$SRC/programs/zstd.1"
+man_alias zstd unzstd.1 zstd.1
+man_alias zstd zstdcat.1 zstd.1

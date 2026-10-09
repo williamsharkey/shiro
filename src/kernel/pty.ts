@@ -1008,6 +1008,12 @@ export class TtySession {
     if (opts.onOutput) this.pty.onOutput(opts.onOutput);
   }
 
+  /**
+   * Called when a job takes the terminal (`foreground`): the page's terminal
+   * hands it what was typed while the command was starting, as a tty would.
+   */
+  onJobForeground?: () => void;
+
   /** True while a job (not the shell) owns the terminal */
   get jobInForeground(): boolean {
     return this.pty.fgPgrp !== 0 && this.pty.fgPgrp !== this.leader.pgid;
@@ -1093,6 +1099,7 @@ export class TtySession {
     this.shellTermios = cloneTermios(this.pty.termios);
     if (job.termios) this.pty.setTermios(job.termios);
     this.pty.setForeground(job.pgid);
+    this.onJobForeground?.();
     if (cont) this.jc.kill(-job.pgid, SIGCONT);
     const r = await this.jc.waitJob(job.pgid, job.pids);
     this.pty.setForeground(this.leader.pgid);

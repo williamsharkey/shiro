@@ -9,3 +9,6 @@ MAKE_ARGS="LDFLAGS=$LDFLAGS -all-static" configure_make "$SRC" --disable-shared 
 install_bin "$SRC/src/file" file/bin/file
 mkdir -p "$PKG_OUT/file/share/misc"
 cp "$SRC/magic/magic.mgc" "$PKG_OUT/file/share/misc/magic.mgc"
+
+# Manual pages (man, from pkg install mandoc)
+install_man file "$SRC/doc/file.1"

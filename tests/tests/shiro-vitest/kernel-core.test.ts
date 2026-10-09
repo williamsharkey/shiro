@@ -427,6 +427,19 @@ describe('kernel processes', () => {
     kernel.kill(proc.pid, A.SIGKILL);
   });
 
+  it('uname(2) reports the kernel hostname', async () => {
+    const proc = kernel.spawn({ path: 'un', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
+    const data = new Uint8Array(4096).fill(0xff);
+    const field = (i: number) => new TextDecoder().decode(data.subarray(i * 65, i * 65 + 65)).replace(/\0.*$/s, '');
+    expect(await kernel.syscall(proc, A.SYS_uname, [], data)).toBe(0);
+    expect([field(0), field(1), field(5)]).toEqual(['Linux', 'shiro', '(none)']);
+    kernel.hostname = 'box';
+    expect(await kernel.syscall(proc, A.SYS_uname, [], data)).toBe(0);
+    expect(field(1)).toBe('box');
+    expect(await kernel.syscall(proc, A.SYS_uname, [], new Uint8Array(100))).toBe(-A.EFAULT);
+    kernel.kill(proc.pid, A.SIGKILL);
+  });
+
   it('an open file follows rename(2); an unlinked or replaced one is not written back', async () => {
     const proc = kernel.spawn({ path: 'rn', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
     const data = new Uint8Array(4096);
@@ -477,6 +490,22 @@ describe('kernel processes', () => {
       (fs as any).writeFile = real;
       kernel.kill(proc.pid, A.SIGKILL);
     }
+  });
+
+  it("a process's writes reach the FileSystem when it exits, though a forked child still holds the file", async () => {
+    const parent = kernel.spawn({ path: 'agent', cwd: '/tmp', run: () => new Promise<number>(() => {}) });
+    const f = (await kernel.open(parent, 'kshared.txt', A.O_CREAT | A.O_WRONLY | A.O_TRUNC)) as OpenFile;
+    const data = new Uint8Array(64);
+    const fd = parent.fds.alloc(f);
+    const child = kernel.vfork(parent); // shares the description, as ssh-agent's daemon does
+    expect(await f.write(new TextEncoder().encode('one\n'))).toBe(4);
+    expect(await f.write(new TextEncoder().encode('two\n'))).toBe(4);
+    expect(kernel.syscallSync(parent, A.SYS_close, [fd], data)).toBeUndefined(); // dirty: needs a write-back
+    expect(await kernel.syscall(parent, A.SYS_close, [fd], data)).toBe(0);
+    expect(await fs.readFile('/tmp/kshared.txt', 'utf8')).toBe('one\ntwo\n');
+    expect(refCount(f)).toBe(1);
+    kernel.kill(child.pid, A.SIGKILL);
+    kernel.kill(parent.pid, A.SIGKILL);
   });
 
   it('syscallSync answers open/stat/close of cached files like the async path', async () => {

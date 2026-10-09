@@ -16,3 +16,6 @@ for p in src/top/top src/ps/pscommand src/free src/uptime src/pgrep src/pidof sr
   name=$(basename "$p"); [ "$name" = pscommand ] && name=ps
   install_bin "$SRC/$p" procps/bin/$name
 done
+
+# Manual pages (man, from pkg install mandoc)
+install_man procps "$SRC/man/ps.1" "$SRC/man/top.1" "$SRC/man/free.1" "$SRC/man/uptime.1" "$SRC/man/pgrep.1" "$SRC/man/pkill.1" "$SRC/man/pidof.1" "$SRC/man/watch.1" "$SRC/man/vmstat.8" "$SRC/man/w.1"

@@ -327,6 +327,21 @@ describe('kernel pty: job control', () => {
     expect(tty.jobInForeground).toBe(false);
   });
 
+  it('onJobForeground: keys typed while the job was starting reach its read', async () => {
+    const p = tty.createJobProcess();
+    const slave = tty.openSlave();
+    const typedAhead = ['ls -l\r'];
+    let calls = 0;
+    // what the page's terminal does: queued keys go into the pty once the job has the tty
+    tty.onJobForeground = () => { calls++; for (const d of typedAhead.splice(0)) tty.pty.input(d); };
+    const fg = tty.foreground({ pgid: p.pgid });
+    expect(calls).toBe(1);
+    expect(tty.jobInForeground).toBe(true);
+    expect(await readStr(slave, p)).toBe('ls -l\n');
+    p.finish(0);
+    await fg;
+  });
+
   it('Ctrl-Z stops the job; fg (SIGCONT + foreground) resumes its read', async () => {
     const p = tty.createJobProcess();
     const slave = tty.openSlave();
