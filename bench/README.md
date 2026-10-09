@@ -4,6 +4,7 @@
 npm run bench                  # full run, both modes: bench/results/<date>-<sha>.json + docs/BENCHMARKS.md
 npm run bench:quick            # key metrics, ~2.5 min (isolated + JSPI kernel), doesn't touch docs/
 node bench/compare.mjs bench/results/A.json bench/results/B.json   # flags >10% regressions, exit 1 if any
+node bench/ab.mjs origin/unix/integration                          # A/B: that ref vs the working tree, with a significance test
 node bench/report.mjs bench/results/X.json                          # regenerate the docs table from a file
 ```
 
@@ -19,6 +20,7 @@ Options for `node bench/run.mjs`:
 | `--no-build` | reuse `dist/` (otherwise `vite build` first) |
 | `--no-gh` | skip the 59 MB `gh --version` x86 fixture |
 | `--offline` | never fetch; external requests must be in `bench/.cache/net` |
+| `--src dir` | measure another checkout's `dist/` (and record its git state) with this harness; `ab.mjs` uses it |
 | `--out file` | results path; `--docs` / `--no-docs` force the docs table on/off |
 
 Env: `BENCH_PATH=/?ui=terminal` (page to boot, default `/`: on localhost that is the desktop), `BENCH_VERBOSE=1` (time per metric), `BENCH_CONSOLE=1` (page console),
@@ -32,6 +34,46 @@ pre-installed Chromium.
 `node bench/try.mjs 'cmd' 'js:return 1+1'` boots one page (MODE=nonisolated,
 SETTLE=1 to wait for the background install) and runs shell commands or page
 JS: handy for poking at something a benchmark flagged.
+
+## A/B (`bench/ab.mjs`)
+
+Two runs of the same commit here differ by up to ~25% on many metrics, and
+a metric can cross a fixed 10% threshold in one run and not the next, so a single
+`compare.mjs` of two result files can't tell a regression from noise. `ab.mjs`
+does the whole comparison in one command:
+
+```bash
+node bench/ab.mjs <base-ref> [<new-ref>] [--rounds 3] [--runs 5] [--suites shell,wasm] [--only re,re]
+                  [--modes isolated] [--quick] [--alpha 0.01] [--min-effect 3] [--out file.json] [--gh]
+node bench/ab.mjs 68dbbbc 1d9582a --suites shell,wasm --only 'shell.loop_1000|wasm.startup|wasm.peak_rss' --runs 7
+node bench/ab.mjs origin/unix/integration --quick          # integration vs your uncommitted tree
+```
+
+- `<new-ref>` defaults to the working tree as it is, uncommitted changes
+  included (built in place). Any other ref is checked out once per commit
+  under `bench/.cache/ab/<sha>` (git worktree, `node_modules` symlinked from
+  here) and built there; later A/Bs reuse the build. Remove old ones with
+  `git worktree remove --force bench/.cache/ab/<sha>`.
+- Both sides run with **this** checkout's harness (`run.mjs --src`), so
+  metric definitions are identical. Each round runs base and new back to
+  back, alternating which goes first; `--runs` samples per metric per round
+  (single-sample metrics such as `wasm.tree_create` get one per round).
+- Per metric it pools the samples of all rounds and reports both medians,
+  the Hodges–Lehmann shift (median of pairwise differences) as a percent of
+  the base median with `+` meaning worse, a two-sided Mann–Whitney U p-value
+  (exact for small samples without ties, normal approximation otherwise),
+  and each round's direction (`+-+`).
+- A metric is **regressed**/**improved** only when p < `--alpha` (0.01), the
+  shift is at least `--min-effect` percent (3), and every round moved the
+  same way. Significant but split rounds print as **inconsistent**;
+  everything else is **same** (`AB_ALL=1` lists those too). Metrics whose
+  samples are all identical on each side (request counts, decoded bytes,
+  DOM nodes) are compared exactly: any difference is reported.
+- Exit status 1 when anything regressed. The summary goes to
+  `bench/.cache/ab/runs/<time>/ab.json` (or `--out`), next to every raw
+  per-round result file.
+- A 3-sample metric per side can't reach p < 0.01 (exact minimum 0.1), so
+  use `--rounds 5` or more for one-sample-per-run metrics.
 
 ## How it works
 

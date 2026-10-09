@@ -744,6 +744,18 @@ and re-run 3× alternating (7 runs each): `kernel.pipe_throughput*`,
 `shell.pipeline_seq_grep_wc`, `wasm.startup.*`: overlapping ranges, noise.
 `boot.settled.time` 6.3 s on the other host is 3.9 s here on both.
 
+### A/B tooling: `bench/ab.mjs` (no product change)
+
+`node bench/ab.mjs <base> [<new>]` builds each ref once in its own worktree,
+interleaves base/new runs over several rounds and flags a metric only when a
+Mann–Whitney test, a minimum shift and every round's direction agree (see
+bench/README.md "A/B"). First use: the suspected 68dbbbc → 1d9582a
+regression (`--suites shell,wasm --only 'shell.loop_1000|wasm.startup|wasm.peak_rss'`,
+3 rounds × 7 runs, isolated). All 15 metrics: **same**. `peak_rss.quickjs_ng`
+2.06 → 1.74 MiB, p = 0.90, rounds `-+-`; `shell.loop_1000` 95 → 99 ms,
+p = 0.60, rounds `++-`; `startup.lua` 7.6 → 6.6 ms, `startup.sqlite3`
+9.8 → 8.6 ms (both p > 0.01, split rounds).
+
 ## Results
 
 <!-- bench:table:begin -->
