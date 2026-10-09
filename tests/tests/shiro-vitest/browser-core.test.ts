@@ -315,6 +315,122 @@ describe('fetch over TLS 1.3 in JS (subtls) with keep-alive', () => {
     } finally { cbc.close(); setTrustRoots(async () => '', caPem); }
   }, 30000);
 
+  it('TLS 1.3 with HelloRetryRequest (server wants P-384), AES-256-GCM-SHA384, an RSA certificate and ALPN', async () => {
+    if (!haveOpenssl) return;
+    const { tlsHandshake } = await import('@shiro/browser/tlsclient');
+    const { TrustedCert } = await import('@shiro/browser/vendor/subtls/index.js');
+    const dir = mkdtempSync(path.join(tmpdir(), 'tc-tls13-'));
+    const o = (...a: string[]) => execFileSync('openssl', a, { cwd: dir, stdio: 'pipe' });
+    o('req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'rca.key', '-sha256', '-days', '2', '-subj', '/CN=RSA Root 13', '-out', 'rca.pem',
+      '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,keyCertSign,cRLSign');
+    o('req', '-newkey', 'rsa:2048', '-nodes', '-keyout', 'leaf.key', '-subj', '/CN=tls.test', '-out', 'leaf.csr');
+    writeFileSync(path.join(dir, 'ext.cnf'), 'subjectAltName=DNS:tls.test\nextendedKeyUsage=serverAuth\nkeyUsage=critical,digitalSignature\n');
+    o('x509', '-req', '-in', 'leaf.csr', '-CA', 'rca.pem', '-CAkey', 'rca.key', '-CAcreateserial', '-days', '2', '-sha256', '-extfile', 'ext.cnf', '-out', 'leaf.pem');
+    const db = await TrustedCert.databaseFromPEM(readFileSync(path.join(dir, 'rca.pem'), 'utf8'));
+    const srv = tls.createServer({
+      key: readFileSync(path.join(dir, 'leaf.key')), cert: readFileSync(path.join(dir, 'leaf.pem')),
+      minVersion: 'TLSv1.3', ecdhCurve: 'P-384', ciphersuites: 'TLS_AES_256_GCM_SHA384', ALPNProtocols: ['h2', 'http/1.1'],
+    }, (sock: any) => { sock.on('data', (d: Buffer) => sock.end(`echo ${d} via ${sock.alpnProtocol}`)); });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+    const p = (srv.address() as NetT.AddressInfo).port;
+    try {
+      for (const shape of ['chrome', 'narrow'] as const) {
+        const s = await tlsHandshake(await nodeDial('127.0.0.1', p), 'tls.test', db, { shape, alpn: ['h2', 'http/1.1'] });
+        expect([s.version, s.cipher, s.alpn]).toEqual(['1.3', 0x1302, 'h2']);
+        await s.write(te.encode('hi'));
+        let got = '';
+        for (let d; (d = await s.read());) got += td.decode(d);
+        expect(got).toBe('echo hi via h2');
+        s.close();
+      }
+    } finally { srv.close(); }
+  }, 30000);
+
+  it('shapes the ClientHello like Chrome: GREASE, its suites and groups, ALPN, shuffled extensions', async () => {
+    const { tlsHandshake } = await import('@shiro/browser/tlsclient');
+    const hellos: Uint8Array[] = [];
+    for (let i = 0; i < 2; i++) {
+      const stream = { async read() { return undefined; }, async write(d: Uint8Array) { hellos.push(d); }, close() {} };
+      await tlsHandshake(stream, 'example.com', {} as any, { shape: 'chrome', alpn: ['h2', 'http/1.1'] }).catch(() => {});
+    }
+    const parse = (rec: Uint8Array) => {
+      let o = 5 + 4 + 2 + 32;
+      o += 1 + rec[o];
+      const nSuites = (rec[o] << 8) | rec[o + 1];
+      const suites = Array.from({ length: nSuites / 2 }, (_, i) => (rec[o + 2 + 2 * i] << 8) | rec[o + 3 + 2 * i]);
+      o += 2 + nSuites;
+      o += 1 + rec[o];
+      const end = o + 2 + ((rec[o] << 8) | rec[o + 1]);
+      const exts: number[] = [];
+      for (o += 2; o < end;) { exts.push((rec[o] << 8) | rec[o + 1]); o += 4 + ((rec[o + 2] << 8) | rec[o + 3]); }
+      return { suites, exts };
+    };
+    const a = parse(hellos[0]), b = parse(hellos[1]);
+    const isGrease = (v: number) => (v & 0x0f0f) === 0x0a0a && (v >> 8) === (v & 0xff);
+    expect(isGrease(a.suites[0])).toBe(true);
+    expect(a.suites.slice(1, 8)).toEqual([0x1301, 0x1302, 0x1303, 0xc02b, 0xc02f, 0xc02c, 0xc030]);
+    expect(isGrease(a.exts[0]) && isGrease(a.exts[a.exts.length - 1])).toBe(true);
+    for (const t of [0, 5, 10, 11, 13, 16, 18, 23, 35, 43, 45, 51, 0xff01]) expect(a.exts).toContain(t);
+    expect(new Set(a.exts.slice(1, -1).map(String))).toEqual(new Set(b.exts.slice(1, -1).map(String)));
+    // the order differs between connections (2 of 13! orders agreeing by chance: negligible)
+    expect(a.exts.slice(1, -1).join()).not.toBe(b.exts.slice(1, -1).join());
+  });
+
+  it('speaks HTTP/2 when the server picks h2: one connection, concurrent streams, bodies, flow control, big headers', async () => {
+    if (!haveOpenssl) return;
+    const http2 = nodeRequire('node:http2');
+    const ecdsaDir = (globalThis as any).__ecdsaDir as string;
+    let sessions = 0;
+    const srv = http2.createSecureServer({ key: readFileSync(path.join(ecdsaDir, 'leaf.key')), cert: readFileSync(path.join(ecdsaDir, 'leaf.pem')), allowHTTP1: true });
+    srv.on('session', () => { sessions++; });
+    srv.on('stream', (stream: any, headers: any) => {
+      const p = headers[':path'];
+      if (p === '/big') { stream.respond({ ':status': 200 }); stream.end(Buffer.alloc(3 * 1024 * 1024, 0x61)); return; }
+      if (p === '/headers') { stream.respond({ ':status': 200, 'x-long': 'v'.repeat(40000), 'set-cookie': ['a=1', 'b=2'] }); stream.end('ok'); return; }
+      let body = '';
+      stream.on('data', (d: Buffer) => { body += d; });
+      stream.on('end', () => {
+        stream.respond({ ':status': 201, 'content-type': 'text/plain', 'x-proto': 'h2' });
+        stream.end(`${headers[':method']} ${p} ${headers['user-agent'] ?? ''} ${headers.cookie ?? ''} ${body}`);
+      });
+    });
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+    const port = (srv.address() as NetT.AddressInfo).port;
+    setTrustRoots(async () => '', caPem);
+    const f = new NetFetcher({ dial: (_h, q) => nodeDial('127.0.0.1', q) });
+    try {
+      const get = (p: string, init: { method?: string; body?: Uint8Array; headers?: [string, string][] } = {}) =>
+        f.fetch({ url: `https://tls.test:${port}${p}`, method: init.method ?? 'GET', headers: init.headers ?? [['User-Agent', 'tc']], body: init.body ?? null });
+      const rs = await Promise.all(Array.from({ length: 12 }, (_, i) => get(`/n${i}`)));
+      const texts = await Promise.all(rs.map((r) => new Response(r.body).text()));
+      expect(texts[3]).toBe('GET /n3 tc  ');
+      expect(rs[0].status).toBe(201);
+      expect(rs[0].headers).toContainEqual(['x-proto', 'h2']);
+      const post = await get('/p', { method: 'POST', body: te.encode('x'.repeat(100000)), headers: [['User-Agent', 'tc'], ['Cookie', 'a=1; b=2']] });
+      expect(await new Response(post.body).text()).toBe(`POST /p tc a=1; b=2 ${'x'.repeat(100000)}`);
+      const big = await get('/big');
+      expect((await new Response(big.body).arrayBuffer()).byteLength).toBe(3 * 1024 * 1024);
+      expect(big.wireBytes()).toBeGreaterThan(3 * 1024 * 1024);
+      const h = await get('/headers');
+      expect(h.headers.find(([k]) => k === 'x-long')?.[1].length).toBe(40000);
+      expect(h.headers.filter(([k]) => k === 'set-cookie').map(([, v]) => v)).toEqual(['a=1', 'b=2']);
+      await new Response(h.body).text();
+      expect(sessions).toBe(1);
+      expect(f.stats.h2Sessions).toBe(1);
+      expect(f.stats.connects).toBe(1);
+    } finally { f.closeAll(); srv.close(); }
+  }, 30000);
+
+  it('HPACK: decodes RFC 7541 C.4 (Huffman) and round-trips our encoder', async () => {
+    const { HpackDecoder, hpackEncode } = await import('@shiro/browser/hpack');
+    const hex = (h: string) => new Uint8Array(h.match(/../g)!.map((b) => parseInt(b, 16)));
+    const d = new HpackDecoder();
+    expect(d.decode(hex('828684418cf1e3c2e5f23a6ba0ab90f4ff'))).toEqual([[':method', 'GET'], [':scheme', 'http'], [':path', '/'], [':authority', 'www.example.com']]);
+    expect(d.decode(hex('828684be5886a8eb10649cbf'))).toEqual([[':method', 'GET'], [':scheme', 'http'], [':path', '/'], [':authority', 'www.example.com'], ['cache-control', 'no-cache']]);
+    const hs: [string, string][] = [[':method', 'POST'], [':path', '/x?y=1'], ['user-agent', 'tc'], ['x-custom', 'ü'.normalize()], ['accept', '*/*']];
+    expect(new HpackDecoder().decode(hpackEncode(hs)).map(([k, v]) => [k, k === 'x-custom' ? new TextDecoder().decode(new Uint8Array([...v].map((c) => c.charCodeAt(0)))) : v])).toEqual(hs);
+  });
+
   it('refuses a name mismatch', async () => {
     if (!haveOpenssl) return;
     const f = new NetFetcher({ dial: (_h, p) => nodeDial('127.0.0.1', p) });

@@ -1,22 +1,20 @@
-// TLS in the page (docs/BROWSER.md, "Network"): subtls (MIT, TLS 1.3 on
-// WebCrypto) over a ByteStream, so the relay only ever carries ciphertext.
+// TLS in the page (docs/BROWSER.md, "Network"): our own TLS 1.3/1.2 client
+// (tlsclient.ts) over a ByteStream, so the relay only ever carries ciphertext.
 //
 // Trust: Mozilla's root store (public/browse/cacert.pem, from curl.se) plus any
-// roots the user added (Settings in the Browser app, e.g. a company proxy's CA;
-// the scoreboard adds its sandbox egress CA the same way).
-import { LazyReadFunctionReadQueue, startTls, TrustedCert } from './vendor/subtls/index.js';
+// roots the user added (the Browser app's menu, e.g. a company proxy's CA; the
+// scoreboard adds its sandbox egress CA the same way).
+import { TrustedCert } from './vendor/subtls/index.js';
 import type { ByteStream } from './http1';
-import { tls12Connect } from './tls12';
+import { tlsHandshake, type TlsSession } from './tlsclient';
 
 type RootDb = Awaited<ReturnType<typeof TrustedCert.databaseFromPEM>>;
 
 let rootsPromise: Promise<RootDb> | null = null;
-let extraPem = '';
 
 /** Load the root store once: the bundled Mozilla roots plus `extra` PEM text. */
 export function setTrustRoots(load: () => Promise<string>, extra = ''): void {
-  extraPem = extra;
-  rootsPromise = load().then((pem) => TrustedCert.databaseFromPEM(pem + '\n' + extraPem));
+  rootsPromise = load().then((pem) => TrustedCert.databaseFromPEM(pem + '\n' + extra));
 }
 
 function roots(): Promise<RootDb> {
@@ -30,73 +28,47 @@ export class TlsError extends Error {
   constructor(message: string, readonly code: 'tls-handshake' | 'tls-cert' | 'tls-version') { super(message); }
 }
 
-/** Hosts that refused TLS 1.3 (for this page's lifetime): they go straight to TLS 1.2. */
-const tls12Hosts = new Set<string>();
+/** Hosts where the Chrome-shaped hello failed and the narrow one worked (for this page's lifetime). */
+const narrowHosts = new Set<string>();
 
-/** Go straight to TLS 1.2 for `host` (tests, diagnostics). */
-export function preferTls12(host: string): void { tls12Hosts.add(host); }
+/** Use the narrow hello for `host` straight away (tests, diagnostics). */
+export function preferNarrowHello(host: string): void { narrowHosts.add(host); }
+
+const CERT_RE = /certificate|subjectAltName|trusted root|keyUsage|not valid now|signature does not verify|chain/i;
+
+function classify(e: unknown, host: string): TlsError {
+  if (e instanceof TlsError) return e;
+  const msg = String((e as Error)?.message ?? e);
+  const silent = !!(e as { silent?: boolean })?.silent;
+  const code = CERT_RE.test(msg) ? 'tls-cert' : 'tls-version';
+  const err = new TlsError(silent ? `${host} closed the connection on the TLS handshake` : `TLS with ${host} failed: ${msg}`, code);
+  err.silent = silent;
+  return err;
+}
 
 /**
- * TLS for `host` over `raw`: 1.3 (subtls) first; when the server refuses it and
- * `redial` can open a fresh connection, 1.2 (tls12.ts), remembered per host.
+ * TLS for `host` over `raw`. The first hello looks like Chrome's; if the server
+ * picks something only Chrome can do, hangs up, or refuses it, and `redial`
+ * can open a fresh connection, a narrow hello (only what we implement) is
+ * tried and remembered for the host. A certificate failure never retries.
  */
-export async function tlsConnect(raw: ByteStream, host: string, redial?: () => Promise<ByteStream>): Promise<ByteStream> {
-  if (redial && tls12Hosts.has(host)) return tls12(raw, host);
-  try {
-    try {
-      return await tls13Connect(raw, host);
-    } catch (e) {
-      // A hang-up before any answer is either a 1.2-only server or a dropped connection: try 1.3 once more
-      if (!(e instanceof TlsError) || !e.silent || !redial) throw e;
-      return await tls13Connect(await redial(), host);
-    }
-  } catch (e) {
-    // Any 1.3 failure that isn't about the certificate (no 1.3, a HelloRetryRequest subtls can't do, an
-    // odd extension) retries as 1.2; a certificate failure never does. An attacker who can drop packets
-    // could force the retry too; it still lands on ECDHE + AEAD + extended master secret.
-    if (!(e instanceof TlsError) || e.code === 'tls-cert' || !redial) throw e;
-    const s = await tls12(await redial(), host);
-    tls12Hosts.add(host);
-    return s;
-  }
-}
-
-async function tls12(raw: ByteStream, host: string): Promise<ByteStream> {
-  try {
-    return await tls12Connect(raw, host, await roots());
-  } catch (e) {
-    raw.close();
-    const msg = String((e as Error)?.message ?? e);
-    throw new TlsError(`TLS 1.2 with ${host} failed: ${msg}`, /certificate|chain|signature|trusted/i.test(msg) ? 'tls-cert' : 'tls-version');
-  }
-}
-
-async function tls13Connect(raw: ByteStream, host: string): Promise<ByteStream> {
+export async function tlsConnect(raw: ByteStream, host: string, redial?: () => Promise<ByteStream>, alpn: string[] = ['http/1.1']): Promise<TlsSession> {
   const db = await roots();
-  let received = 0;
-  const q = new LazyReadFunctionReadQueue(async () => { const d = await raw.read(); received += d?.length ?? 0; return d; });
-  let session: Awaited<ReturnType<typeof startTls>>;
+  const narrow = narrowHosts.has(host);
   try {
-    session = await startTls(host, db, q.read.bind(q), (d: Uint8Array) => { void raw.write(d).catch(() => {}); });
+    return await tlsHandshake(raw, host, db, { shape: narrow ? 'narrow' : 'chrome', alpn });
   } catch (e) {
     raw.close();
-    const msg = String((e as Error)?.message ?? e);
-    // subtls speaks only TLS 1.3: a 1.2-only server answers with a 1.2 ServerHello or a protocol_version alert
-    // A TLS 1.2-only server often just hangs up on a 1.3-only ClientHello (Craigslist does)
-    const code = received === 0 ? 'tls-version'
-      : /cert|signature|root|trust|expired|subject/i.test(msg) ? 'tls-cert'
-      : /version|alert|Unexpected TLS record|0x0303|supported_versions|Expected 771, got 76[89]/i.test(msg) ? 'tls-version' : 'tls-handshake';
-    const err = new TlsError(received === 0 ? `${host} closed the connection on a TLS 1.3 handshake (it may only speak TLS 1.2)` : `TLS with ${host} failed: ${msg}`, code);
-    err.silent = received === 0;
-    throw err;
+    const err = classify(e, host);
+    if (err.code === 'tls-cert' || narrow || !redial) throw err;
   }
-  let closed = false;
-  return {
-    async read() {
-      if (closed) return undefined;
-      try { return await session.read(); } catch (e) { if (closed) return undefined; throw e; }
-    },
-    write: (d) => session.write(d),
-    close() { closed = true; raw.close(); },
-  };
+  const raw2 = await redial();
+  try {
+    const s = await tlsHandshake(raw2, host, db, { shape: 'narrow', alpn });
+    narrowHosts.add(host);
+    return s;
+  } catch (e) {
+    raw2.close();
+    throw classify(e, host);
+  }
 }

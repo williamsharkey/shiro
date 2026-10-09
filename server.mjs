@@ -932,8 +932,8 @@ export function tcpRelayConfigFromEnv(env = process.env) {
     // connection (proxy pools, iCloud Private Relay, dual-stack) fail with it on.
     tokenBindIp: env.TABCOMPUTER_TCP_TOKEN_BIND_IP !== '0',
     maxConns: envInt(env.TABCOMPUTER_TCP_MAX_CONNS, 512),
-    maxConnsPerIp: envInt(env.TABCOMPUTER_TCP_MAX_CONNS_PER_IP, 16),
-    connectsPerMinute: envInt(env.TABCOMPUTER_TCP_CONNECTS_PER_MIN, 60),
+    maxConnsPerIp: envInt(env.TABCOMPUTER_TCP_MAX_CONNS_PER_IP, 64),
+    connectsPerMinute: envInt(env.TABCOMPUTER_TCP_CONNECTS_PER_MIN, 300),
     bytesPerSecPerIp: envInt(env.TABCOMPUTER_TCP_BYTES_PER_SEC, 4 * 1024 * 1024),
     byteBurstPerIp: envInt(env.TABCOMPUTER_TCP_BYTE_BURST, 16 * 1024 * 1024),
     maxBytesPerIpPerHour: envInt(env.TABCOMPUTER_TCP_BYTES_PER_HOUR, 4 * 1024 ** 3),
