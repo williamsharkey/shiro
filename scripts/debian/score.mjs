@@ -170,9 +170,13 @@ async function smoke(m, pkg) {
   if (ran) return { ok: true, how: `${ran.bin} ${ran.flagArg} (ran, exit ${ran.r.code}${ran.r.out.trim() ? '' : ', no output'})`, ms: ran.r.ms, sample: ran.r.out.trim().split('\n')[0].slice(0, 100) };
   if (undeclared) return { ok: true, how: `installed; ${undeclared.bin} needs ${undeclared.mod}, which no dependency provides (as on Debian)`, ms: 0 };
   if (bins.length) return { ok: false, how: tried.join('; '), category: 'smoke-failed', error: tried[0] };
-  const libs = list.filter((f) => /^\/usr\/lib\/x86_64-linux-gnu\/(?:[\w.+-]+\/)?[^/]+\.so(\.\d+)*$/.test(f));
+  // Public libraries first; a private one (systemd/libsystemd-core) finds its
+  // siblings through its programs' RUNPATH, so give ld.so its directory
+  const libs = list.filter((f) => /^\/usr\/lib\/x86_64-linux-gnu\/(?:[\w.+-]+\/)?[^/]+\.so(\.\d+)*$/.test(f))
+    .sort((a, b) => a.split('/').length - b.split('/').length);
   if (libs.length) {
-    const r = await m.run(`/lib64/ld-linux-x86-64.so.2 --list ${libs[0]} 2>&1`, 180);
+    const dir = libs[0].slice(0, libs[0].lastIndexOf('/'));
+    const r = await m.run(`/lib64/ld-linux-x86-64.so.2 --library-path ${dir} --list ${libs[0]} 2>&1`, 180);
     return r.code === 0 ? { ok: true, how: `ld.so --list ${libs[0]}`, ms: r.ms }
       : { ok: false, how: `ld.so --list ${libs[0]}`, category: categorize(r.out) === 'other' ? 'smoke-failed' : categorize(r.out), error: firstError(r.out) };
   }
