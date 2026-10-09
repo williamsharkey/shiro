@@ -3,7 +3,7 @@
  *
  * A harness process (fixtures/tcp-relay-harness.mjs) runs a TCP echo server,
  * relays built from server.mjs's createTcpRelay, and server.mjs itself with
- * SHIRO_TCP_RELAY=1. The kernel side runs here with Node's WebSocket/fetch.
+ * TABCOMPUTER_TCP_RELAY=1. The kernel side runs here with Node's WebSocket/fetch.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
@@ -15,7 +15,7 @@ import {
 } from '@shiro/kernel/net';
 import { MSG_PEEK, MSG_TRUNC } from '@shiro/kernel/abi';
 
-interface Ports { echoPort: number; firehosePort: number; relayA: number; relayB: number; relayC: number; relayD: number; mainPort: number; origin: string }
+interface Ports { echoPort: number; firehosePort: number; relayA: number; relayB: number; relayC: number; relayD: number; relayE: number; mainPort: number; origin: string }
 
 let harness: ChildProcess;
 let P: Ports;
@@ -291,6 +291,25 @@ describe('kernel sockets over the TCP relay', () => {
     expect(await opened(`${base}?t=${token}`, P.origin)).toBe(true);
   });
 
+  it('with tokenBindIp off, a token works from another IP (rotating-IP clients); the origin check stays', async () => {
+    const xff = (n: number) => `203.0.113.${n}`;
+    const { token } = await (await fetch(`http://127.0.0.1:${P.relayE}/tcp/token`, { method: 'POST', headers: { origin: P.origin, 'x-forwarded-for': xff(1) } })).json();
+    const open = (ip: string, origin = P.origin) => new Promise<boolean>((resolve) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${P.relayE}/tcp?t=${token}`, { headers: { origin, 'x-forwarded-for': ip } } as any);
+      ws.onopen = () => { ws.close(); resolve(true); };
+      ws.onerror = () => resolve(false);
+    });
+    for (let i = 2; i < 5; i++) expect(await open(xff(i))).toBe(true); // one after another
+    expect(await Promise.all([5, 6, 7].map((i) => open(xff(i))))).toEqual([true, true, true]); // in parallel
+    expect(await open(xff(8), 'https://evil.example')).toBe(false);
+    // The deployed default stays bound; TABCOMPUTER_TCP_TOKEN_BIND_IP=0 turns it off
+    const server = new URL('../../../server.mjs', import.meta.url).href;
+    const out = execFileSync('node', ['--input-type=module', '-e',
+      `const m = await import(${JSON.stringify(server)}); console.log(JSON.stringify([m.tcpRelayConfigFromEnv({}).tokenBindIp, m.tcpRelayConfigFromEnv({ TABCOMPUTER_TCP_TOKEN_BIND_IP: '0' }).tokenBindIp])); process.exit(0);`,
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    expect(JSON.parse(out.trim().split('\n').pop()!)).toEqual([true, false]);
+  });
+
   it('blocks private ranges without blocking public IPv4 (BlockList matches IPv4 against ::ffff:0:0/96)', async () => {
     // Plain Node (vitest's polyfilled modules can't load server.mjs)
     const server = new URL('../../../server.mjs', import.meta.url).href;
@@ -326,7 +345,7 @@ describe('kernel sockets over the TCP relay', () => {
     const store = new Map<string, string>();
     (globalThis as any).localStorage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); }, removeItem: (k: string) => { store.delete(k); } };
     try {
-      store.set('shiro_github_token', 'good-token');
+      store.set('tabcomputer_github_token', 'good-token');
       const s2 = stream(stackFor(P.relayD));
       expect(await s2.connect(v4('127.0.0.1', P.echoPort))).toBe(0);
       await s2.write(enc.encode('hi'));

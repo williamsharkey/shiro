@@ -59,7 +59,7 @@ async function crashDuring(cmd, afterMs) {
   const page = h.page, context = h.context;
   const running = h.eval(([c]) => window.__bench.shLimit(c, 1800000), [cmd]).catch((e) => ({ crashed: String(e).slice(0, 80) }));
   await page.waitForTimeout(afterMs);
-  const pending = await h.eval(() => window.__shiro?.fs?.pendingWrites ?? null).catch(() => null);
+  const pending = await h.eval(() => window.__tabcomputer?.fs?.pendingWrites ?? null).catch(() => null);
   log(`crashing ${afterMs} ms into ${cmd}`);
   const crashed = new Promise((r) => page.once('crash', r));
   void h.cdp.send('Page.crash').catch(() => {});
@@ -152,7 +152,7 @@ if (only.includes('quota')) {
     console.log(`  fill (${await est()}): ${fill.split('\n').slice(-5).join(' | ')}`);
     check(/No space left on device/i.test(fill), 'running out of storage reports ENOSPC');
     check(/new-exit=[1-9]/.test(fill), 'new files are refused while full');
-    check(await page.evaluate(() => window.__shiro.fs.storageFull) === true, 'FileSystem.storageFull is set');
+    check(await page.evaluate(() => window.__tabcomputer.fs.storageFull) === true, 'FileSystem.storageFull is set');
     const freed = await psh('rm -f /tmp/cc/fill*; sync; echo "sync-exit=$?"; echo x > /tmp/cc/new; echo "new-exit=$?"; sync');
     check(/sync-exit=0/.test(freed) && /new-exit=0/.test(freed), `deleting frees it: ${freed.replace(/\n/g, ' | ')}`);
     await page.close();

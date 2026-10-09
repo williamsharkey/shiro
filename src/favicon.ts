@@ -10,6 +10,7 @@
  */
 
 import type { Terminal, IBufferCell } from '@xterm/xterm';
+import { activeProfile } from './profile';
 
 // === Favicon state ===
 let lastUpdate = 0;
@@ -219,8 +220,8 @@ function getCellFgColor(cell: IBufferCell, theme: any, defaultFg: string): strin
 
 /**
  * Set the tab title to the host Shiro is served from (e.g. "shiro.computer"),
- * or plain "shiro" when there is none (file://).
+ * or plain "tabcomputer" when there is none (file://).
  */
 export function initTitle(): void {
-  document.title = window.location.hostname || 'shiro';
+  document.title = window.location.hostname || activeProfile().name;
 }

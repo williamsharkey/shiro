@@ -5,12 +5,12 @@ pixels, without knowing it? Real text in the page would be sharp at any zoom
 or pixel density, selectable and copyable, findable with Ctrl+F, and readable
 by screen readers, which a canvas is not.
 
-Short answer: **for text, yes, today, for Xlib/Xaw-era apps** (prototype
-below). Modern toolkits never send text to the X server: they rasterize it
-client-side and send pixels. For those, the semantics have to be taken from
-inside the client (Pango or GSK) or from its accessibility tree. The
-recommendation at the end picks GTK 3 apps, through a Pango hook feeding the
-same text layer, as the next target.
+Short answer: **for text, yes, for Xlib/Xaw-era apps through the X
+protocol, and for GTK 2/3 apps through a preloaded hook** (both below).
+Modern toolkits never send text to the X server: they rasterize it
+client-side and send pixels. For them the semantics have to be taken from
+inside the client, here from Pango and cairo, or from the accessibility
+tree.
 
 ## The prototype: core X text as `<span>`s
 
@@ -117,6 +117,75 @@ Xft in the client and sends **images**: not even RENDER glyphs, which would
 at least be glyph IDs. So the X wire has nothing to recover for them, and
 any route to their text has to start inside the client.
 
+## GTK 2/3: the Pango hook (implemented)
+
+Following recommendation 2 below, GTK apps now report their text too, in
+`overlay` mode: pixels unchanged, transparent spans on top.
+
+**`libshiro-text-hook.so`** (`scripts/gui/text-hook/`, 17 KB, built with
+`build.sh`; needs GLIBC 2.34, Debian 12 has 2.36) is loaded with
+`LD_PRELOAD` into GTK apps by the installer's launcher when the text mode
+isn't `pixels` (`src/gui/apps.ts`, copied to
+`/usr/lib/shiro/libshiro-text-hook.so`). Every function it calls is looked
+up with `dlsym`, so one build serves GTK 2 and 3. It interposes functions
+that one library calls in another, which is what `LD_PRELOAD` can reach:
+
+- `cairo_surface_has_show_text_glyphs` answers yes, so libpangocairo passes
+  the UTF-8 text with its glyphs, as it does for PDF output. GTK 3 draws
+  labels with `pango_cairo_show_layout` and text views with
+  `pango_cairo_show_glyph_item`; both end in
+- `cairo_show_text_glyphs`, which records the text, its device position
+  (CTM × GTK's integer window scale), the font's ascent and descent and the
+  source colour, then draws exactly as before (cairo falls back to plain
+  glyphs on image and Xlib surfaces);
+- GTK 2 draws most text with `gdk_draw_layout`, whose renderer passes
+  glyphs only: that is interposed too, and the lines come from the
+  PangoLayout (iterator extents and baseline);
+- `gdk_window_begin_draw_frame`/`end_draw_frame` (GTK 3) and
+  `gdk_window_begin_paint_region`/`end_paint` (GTK 2) mark the frames. When
+  a frame ends, its runs are appended to the painted window's
+  `_SHIRO_TEXT` property as `x baseline width ascent descent rrggbb\ttext`
+  lines. They travel on the app's own X connection, after the frame's
+  pixels, so the PutImage's damage clears the old spans first and the new
+  ones land on top.
+
+Xshiro consumes `_SHIRO_TEXT` instead of storing it (`server.ts`
+`clientText`), offsets each run by the window's position in its toplevel,
+and hands it to the same `TextLayer` with `overlay: true`. Two details made
+GTK 2 work:
+
+- spans remember the window they were drawn on, and drawing removes only
+  the text of that window and its ancestors. X clips a window's drawing to
+  exclude its children, and GTK 2 uses real child windows (a file
+  chooser's sidebar, list header and buttons), so a parent's repaint used
+  to wipe its children's text;
+- GTK 2 paints child windows into the toplevel's "implicit paint" pixmap
+  and copies it to the screen when the toplevel's paint ends, inside GDK
+  where no interposition reaches. So runs reported by the app are applied
+  on the next animation frame, after the damage of the pixels they go
+  with. Overlay spans
+keep their real colour for the selection highlight and hide their glyphs
+with `-webkit-text-fill-color: transparent` (Chromium paints no selection
+for `color: transparent` text).
+
+Results in Chromium, `?xtext=overlay` (`tests`: x11.test.ts "takes text runs
+from GTK apps"):
+
+| App | Spans after typing three lines | Accessibility tree | Alt + drag, copy | Visual change |
+|---|---|---|---|---|
+| L3afpad (GTK 3) | menu bar (File … Help) + the three lines | menu items and the lines as text | exactly the three lines, with line breaks | none: a pixel diff against `pixels` mode differs only in a 3 px column (the scrollbar fading out) |
+| L3afpad at 2× (GDK_SCALE=2) | same, same positions in CSS px | same | same | — |
+| Mousepad (GTK 3, GtkSourceView) | menu bar + the three lines | same | same | — |
+| GPicView's Open dialog (GTK 2) | all 12 labels: Places, Search, Recently Used, user, File System, Name, Size, Modified, the filter, Open, Cancel | — | — | — |
+
+![L3afpad: GTK text selected through the DOM layer](screenshots/dom-text-gtk-l3afpad.png)
+
+![Mousepad](screenshots/dom-text-gtk-mousepad.png)
+
+Not covered yet: text a GTK app draws outside a frame (rare), widgets
+drawing with `cairo_show_text` directly (toy text API, not Pango), and
+stacking (a menu's spans over a covered window still answer selection).
+
 ## Survey: where else the semantics survive
 
 | Source | What it carries | Reach | Cost / gaps |
@@ -135,14 +204,13 @@ any route to their text has to start inside the client.
    default candidate for Xlib/Xaw apps once stacking is handled (hide spans
    of covered windows, drop them under XOR drawing). It costs nothing in
    fidelity and makes xterm's scrollback selectable and accessible.
-2. **Target GTK 3 next, through a Pango hook** feeding the same `TextLayer`
-   in `overlay` mode. One small preload library reaches every GTK 2/3 app
-   we ship, including the big ones (GIMP, Inkscape, the text editors, NetSurf),
-   without patching them. Pixels stay exact, and text becomes selectable,
-   findable and accessible. Steps: build `libshiro-pango-hook.so` (x86-64,
-   interposing `pango_renderer_draw_glyph_item`), ship it as an overlay,
-   set `LD_PRELOAD` in `appEnv`, carry runs over a kernel pipe tagged with
-   the drawable XID, and reuse `TextLayer`.
+2. **GTK 3 next, through a Pango hook** feeding the same `TextLayer` in
+   `overlay` mode: **done** ("GTK 2/3: the Pango hook" above). The
+   interception point turned out to be cairo's text-glyphs entry points
+   rather than `pango_renderer_draw_glyph_item` (internal to libpango, so
+   out of `LD_PRELOAD`'s reach), and the channel is an X property on the
+   painted window rather than a pipe, which keeps the runs ordered with the
+   pixels. Next: make `overlay` the default once stacking is handled.
 3. **Then AT-SPI** for structure (roles, focus, buttons, menus) as an ARIA
    tree over the canvas, which needs the session bus (also wanted for
    lximage-qt and Mousepad, GUI.md).

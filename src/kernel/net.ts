@@ -138,17 +138,6 @@ export function ipFamily(addr: string): 0 | 4 | 6 {
   return 0;
 }
 
-/** The local address a socket of `domain` sends to `dest` from: loopback, or eth0's (10.0.2.15, fd00::15; see netlink.ts). */
-export function sourceFor(domain: number, dest: string): string {
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(dest)?.[1];
-  const v4 = mapped ?? (/^\d+\.\d+\.\d+\.\d+$/.test(dest) ? dest : null);
-  if (v4 !== null) {
-    const src = /^127\./.test(v4) ? '127.0.0.1' : '10.0.2.15';
-    return domain === AF_INET6 ? `::ffff:${src}` : src;
-  }
-  return dest === '::1' ? '::1' : 'fd00::15';
-}
-
 export function isLoopback(addr: string): boolean {
   return /^127\./.test(addr) || addr === '::1' || addr === '0.0.0.0' || addr === '::' || /^::ffff:127\./i.test(addr);
 }
@@ -250,6 +239,8 @@ export function decodeSockaddr(b: Uint8Array): SockAddr | number {
     }
     return { family, port: dv.getUint16(2, false), address: formatIpv6(g) };
   }
+  // AF_UNSPEC: connect() with it disconnects a datagram socket
+  if (family === 0) return { family, address: '', port: 0 };
   if (family === AF_NETLINK) {
     if (b.length < 12) return -EINVAL;
     return { family, address: '', port: dv.getUint32(4, true) };
@@ -637,7 +628,8 @@ export class KSocket implements OpenFile {
       if (this.domain === AF_UNIX) {
         if (this.stack.unixListeners.get(this.unixKey!) === this) this.stack.unixListeners.delete(this.unixKey!);
       } else {
-        this.stack.listeners.delete(this.local!.port);
+        const rest = (this.stack.listeners.get(this.local!.port) ?? []).filter((l) => l !== this);
+        if (rest.length) this.stack.listeners.set(this.local!.port, rest); else this.stack.listeners.delete(this.local!.port);
       }
       for (const s of this.backlog.splice(0)) await s.close();
     }
@@ -684,7 +676,7 @@ export class KSocket implements OpenFile {
   private async finishConnect(host: string, port: number, remoteOf: (info?: RelayConnected) => SockAddr, signal?: AbortSignal): Promise<number> {
     const stack = this.stack;
     // Loopback: only sockets listening in this kernel
-    const listener = isLoopback(host) ? stack.listeners.get(port) : undefined;
+    const listener = isLoopback(host) ? stack.listenerFor(port, host) : undefined;
     if (isLoopback(host) && !listener && !stack.config.relayLoopback) return -ECONNREFUSED;
     if (listener) {
       const local = this.local ?? stack.autobindAddr(this.domain === AF_INET6 && host.includes(':') ? AF_INET6 : AF_INET, this, host);
@@ -729,7 +721,7 @@ export class KSocket implements OpenFile {
     if (!isLoopback(addr.address) && addr.address !== '10.0.2.15') return -EADDRNOTAVAIL;
     let port = addr.port;
     if (port === 0) port = this.stack.ephemeral();
-    else if (!this.stack.claimPort(port, this, this.getOpt(SOL_SOCKET, SO_REUSEADDR) !== 0)) return -EADDRINUSE;
+    else if (!this.stack.claimPort(port, this, this.getOpt(SOL_SOCKET, SO_REUSEADDR) !== 0, { family: addr.family, address: addr.address, v6only: this.v6only })) return -EADDRINUSE;
     this.local = { family: addr.family, address: addr.address, port };
     if (this.state === 'unbound') this.state = 'bound';
     return 0;
@@ -749,10 +741,11 @@ export class KSocket implements OpenFile {
     if (!this.local) {
       this.local = this.stack.autobindAddr(this.domain, this, this.domain === AF_INET6 ? '::' : '0.0.0.0');
     }
-    if (this.stack.listeners.has(this.local.port)) return -EADDRINUSE;
+    const others = this.stack.listeners.get(this.local.port) ?? [];
+    if (others.some((l) => portsOverlap(l.portUse(), this.portUse()))) return -EADDRINUSE;
     this.backlogMax = Math.max(1, Math.min(backlog || 1, 4096));
     this.state = 'listening';
-    this.stack.listeners.set(this.local.port, this);
+    this.stack.listeners.set(this.local.port, [...others, this]);
     this.unpublish = this.stack.publish(this);
     return 0;
   }
@@ -791,6 +784,10 @@ export class KSocket implements OpenFile {
   }
 
   private getOpt(level: number, name: number) { return this.opts.get(`${level}:${name}`) ?? 0; }
+  /** IPV6_V6ONLY: an AF_INET6 socket that takes no IPv4 */
+  get v6only(): boolean { return this.domain === AF_INET6 && this.getOpt(IPPROTO_IPV6, IPV6_V6ONLY) !== 0; }
+  /** @internal What this socket's port binding covers */
+  portUse(): PortUse { return { family: this.local?.family ?? this.domain, address: this.local?.address ?? (this.domain === AF_INET6 ? '::' : '0.0.0.0'), v6only: this.v6only }; }
 
   getsockopt(level: number, name: number): number {
     if (level === SOL_SOCKET) {
@@ -863,6 +860,24 @@ export class KDatagramSocket implements OpenFile {
   bind(addr: SockAddr): number {
     if (this.local) return -EINVAL;
     this.local = { ...addr, port: addr.port || this.stack.ephemeral() };
+    this.boundAddr = addr.address !== '::' && addr.address !== '0.0.0.0';
+    this.boundPort = addr.port !== 0;
+    return 0;
+  }
+
+  /** bind() named the address / the port (a disconnect keeps them) */
+  private boundAddr = false;
+  private boundPort = false;
+
+  /**
+   * connect(AF_UNSPEC): no peer any more. A source address the route chose
+   * goes back to the wildcard, and a port nobody bound is released, as in
+   * Linux's __udp_disconnect.
+   */
+  disconnect(): number {
+    this.remote = null;
+    if (this.local && !this.boundAddr && !this.boundPort) this.local = null;
+    else if (this.local && !this.boundAddr) this.local = { ...this.local, address: this.domain === AF_INET6 ? '::' : '0.0.0.0' };
     return 0;
   }
 
@@ -916,11 +931,10 @@ export class KDatagramSocket implements OpenFile {
   }
   onReady(cb: () => void) { return this.q.onReady(cb); }
   getsockname(): SockAddr {
-    if (this.local) return { ...this.local };
-    // connect() picks the source address the route would (glibc's getaddrinfo
+    // connect() set the source address the route would use (glibc's getaddrinfo
     // sorts its answers by these, RFC 3484, and asserts a v4-mapped source
     // for a v4-mapped destination)
-    if (this.remote) return { family: this.domain, address: sourceFor(this.domain, this.remote.address), port: 0 };
+    if (this.local) return { ...this.local };
     return { family: this.domain, address: this.domain === AF_INET6 ? '::' : '0.0.0.0', port: 0 };
   }
   getpeername(): SockAddr | number { return this.remote ? { ...this.remote } : -ENOTCONN; }
@@ -1029,10 +1043,35 @@ export function parseHttpResponse(raw: Uint8Array, eof: boolean, method = 'GET')
 
 // ── Stack ──
 
+/** Who holds a TCP port: a v4 and a v6-only socket can share one */
+interface PortUse { family: number; address: string; v6only: boolean }
+
+/** The IPv4 addresses `u` takes: '*' for all of them, one address, or none (v6-only, or a non-mapped v6 address) */
+function v4Part(u: PortUse): string | null {
+  if (u.family === AF_INET) return u.address === '0.0.0.0' ? '*' : u.address;
+  if (u.v6only) return null;
+  if (u.address === '::') return '*';
+  const m = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(u.address);
+  return m ? (m[1] === '0.0.0.0' ? '*' : m[1]) : null;
+}
+function v6Part(u: PortUse): string | null {
+  if (u.family !== AF_INET6 || /^::ffff:/i.test(u.address)) return null;
+  return u.address === '::' ? '*' : u.address.toLowerCase();
+}
+/**
+ * Do two bindings of one port overlap? As Linux with bindv6only=0: a v4
+ * socket takes IPv4, a v6 socket IPv6 and (unless IPV6_V6ONLY) IPv4 too, a
+ * wildcard all of its family. Redis binds 0.0.0.0:6379 then [::]:6379 v6-only.
+ */
+function portsOverlap(a: PortUse, b: PortUse): boolean {
+  const meets = (x: string | null, y: string | null) => x !== null && y !== null && (x === '*' || y === '*' || x === y);
+  return meets(v4Part(a), v4Part(b)) || meets(v6Part(a), v6Part(b));
+}
+
 export class NetStack {
   config: NetConfig = defaultConfig();
-  /** port → listening socket */
-  readonly listeners = new Map<number, KSocket>();
+  /** port → listening sockets (a v4 and a v6-only one can share a port) */
+  readonly listeners = new Map<number, KSocket[]>();
   /** AF_UNIX: resolved path (or "\0name") → listening socket */
   readonly unixListeners = new Map<string, KSocket>();
   /** AF_UNIX: bound abstract names (paths are files in the filesystem) */
@@ -1041,7 +1080,7 @@ export class NetStack {
   readonly unixDgram = new Map<string, KSocket>();
   /** AF_UNIX: resolved paths of socket files made by bind() (they stat as sockets) */
   readonly unixPaths = new Set<string>();
-  private bound = new Map<number, KSocket>();
+  private bound = new Map<number, { s: KSocket; use: PortUse }[]>();
   private nextEphemeral = 32768;
   nextIno = 1;
   private token: { token: string; expires: number } | null = null;
@@ -1196,19 +1235,31 @@ export class NetStack {
 
   /** @internal */ autobindAddr(family: number, s: KSocket, address: string): SockAddr {
     const port = this.ephemeral();
-    this.bound.set(port, s);
+    this.bound.set(port, [{ s, use: { family, address, v6only: s.v6only } }]);
     return { family, address, port };
   }
 
-  /** @internal */ claimPort(port: number, s: KSocket, reuse: boolean): boolean {
-    const holder = this.bound.get(port);
-    if (holder && holder !== s && !(reuse && holder.state !== 'listening')) return false;
-    this.bound.set(port, s);
+  /** @internal Take `port` for `s` bound to `use`; false if an overlapping binding holds it (EADDRINUSE). */
+  claimPort(port: number, s: KSocket, reuse: boolean, use: PortUse): boolean {
+    const holders = (this.bound.get(port) ?? []).filter((h) => h.s !== s);
+    for (const h of holders) {
+      if (portsOverlap(h.use, use) && !(reuse && h.s.state !== 'listening')) return false;
+    }
+    this.bound.set(port, [...holders, { s, use }]);
     return true;
   }
 
   /** @internal */ releasePort(port: number, s: KSocket): void {
-    if (this.bound.get(port) === s) this.bound.delete(port);
+    const rest = (this.bound.get(port) ?? []).filter((h) => h.s !== s);
+    if (rest.length) this.bound.set(port, rest); else this.bound.delete(port);
+  }
+
+  /** @internal The listener on `port` that takes a connection to `host` (one of the port's, if none binds that address) */
+  listenerFor(port: number, host: string): KSocket | undefined {
+    const ls = this.listeners.get(port);
+    if (!ls?.length) return undefined;
+    const to: PortUse = { family: host.includes(':') ? AF_INET6 : AF_INET, address: host, v6only: false };
+    return ls.find((l) => portsOverlap(l.portUse(), to)) ?? ls.find((l) => !(l.v6only && to.family === AF_INET));
   }
 
   private async portHost(): Promise<PortHost | null> {
@@ -1490,7 +1541,8 @@ export async function netSyscall(
         return nr === SYS_bind ? stack.bindUnix(s, sa, unix ?? noUnix) : stack.connectUnix(s, sa, unix ?? noUnix);
       }
       if (sa.family === AF_UNIX) return -EAFNOSUPPORT; // an AF_UNIX address on an inet socket
-      if (nr === SYS_bind) return s.bind(sa);
+      if (nr === SYS_bind) return sa.family === 0 ? -EAFNOSUPPORT : s.bind(sa);
+      if (sa.family === 0) return s instanceof KDatagramSocket ? s.disconnect() : -EAFNOSUPPORT;
       return s instanceof KSocket ? s.connect(sa, sig) : s.connect(sa);
     }
     case SYS_listen: { // fd, backlog

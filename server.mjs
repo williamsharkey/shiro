@@ -1,6 +1,6 @@
 /**
  * Shiro unified server — static files + API proxy + OAuth callback + WebSocket relay
- * + opt-in WebSocket-to-TCP relay for kernel sockets (SHIRO_TCP_RELAY=1, see docs/NETWORKING.md).
+ * + opt-in WebSocket-to-TCP relay for kernel sockets (TABCOMPUTER_TCP_RELAY=1, see docs/NETWORKING.md).
  * Single Node.js process; depends on `ws` (and optionally `undici`).
  */
 
@@ -18,7 +18,7 @@ import https from 'node:https';
 import http from 'node:http';
 
 const PORT = process.env.PORT || 3000;
-const STATIC_DIR = process.env.STATIC_DIR || '/opt/shiro/public';
+const STATIC_DIR = process.env.STATIC_DIR || '/opt/tabcomputer/public';
 
 // --- Cross-origin isolation ---
 // COOP same-origin + COEP credentialless make the app page crossOriginIsolated,
@@ -26,9 +26,9 @@ const STATIC_DIR = process.env.STATIC_DIR || '/opt/shiro/public';
 // syscalls from worker processes; see docs/UNIX_COMPAT.md). credentialless
 // (not require-corp) lets no-cors CDN loads (Pyodide, esm.sh, fonts) through
 // without CORP headers; they just go out without cookies.
-// SHIRO_ISOLATION=0 turns it off.
+// TABCOMPUTER_ISOLATION=0 turns it off.
 export function isolationEnabled() {
-  return process.env.SHIRO_ISOLATION !== '0';
+  return process.env.TABCOMPUTER_ISOLATION !== '0';
 }
 
 export function isolationHeaders() {
@@ -438,20 +438,20 @@ async function handleStatic(req, res) {
 // --- Debian package mirror (docs/DEBIAN.md "Package mirror") ---
 // apt inside the page fetches http://HOST/PATH as /debian/mirror/HOST/PATH
 // (src/debian/apt-method.ts), so it needs no TCP relay. Only the hosts in
-// SHIRO_DEBIAN_MIRRORS are served ("host=https://upstream,host2=..."; by
+// TABCOMPUTER_DEBIAN_MIRRORS are served ("host=https://upstream,host2=..."; by
 // default deb.debian.org and security.debian.org from their own CDNs), and
 // only archive paths (dists/, pool/). apt verifies everything against the
 // signed InRelease, so the mirror needs no trust (the GUI apps check each
 // .deb's sha256 themselves). Files under pool/ and by-hash/ are immutable and
-// kept in SHIRO_DEBIAN_CACHE (default: $TMPDIR/shiro-debian) forever; other
-// index files for SHIRO_DEBIAN_INDEX_TTL seconds (default 600). A deb.debian.org
-// pool file the mirror no longer has comes from SHIRO_DEBIAN_SNAPSHOT.
+// kept in TABCOMPUTER_DEBIAN_CACHE (default: $TMPDIR/shiro-debian) forever; other
+// index files for TABCOMPUTER_DEBIAN_INDEX_TTL seconds (default 600). A deb.debian.org
+// pool file the mirror no longer has comes from TABCOMPUTER_DEBIAN_SNAPSHOT.
 // /debian/pool/PATH (the GUI apps' URL) is /debian/mirror/deb.debian.org/debian/pool/PATH.
 function debianMirrorConfig() {
   const upstreams = new Map([['deb.debian.org', 'https://deb.debian.org'], ['security.debian.org', 'https://security.debian.org']]);
-  if (process.env.SHIRO_DEBIAN_MIRRORS) {
+  if (process.env.TABCOMPUTER_DEBIAN_MIRRORS) {
     upstreams.clear();
-    for (const part of process.env.SHIRO_DEBIAN_MIRRORS.split(',')) {
+    for (const part of process.env.TABCOMPUTER_DEBIAN_MIRRORS.split(',')) {
       const i = part.indexOf('=');
       if (i > 0) upstreams.set(part.slice(0, i).trim(), part.slice(i + 1).trim().replace(/\/+$/, ''));
     }
@@ -460,9 +460,9 @@ function debianMirrorConfig() {
     upstreams,
     // Pool files a point release removed from deb.debian.org (the GUI apps pin
     // versions): fetched from snapshot.debian.org instead
-    snapshot: (process.env.SHIRO_DEBIAN_SNAPSHOT || 'https://snapshot.debian.org/archive/debian/20260712T000000Z/').replace(/\/+$/, ''),
-    cacheDir: process.env.SHIRO_DEBIAN_CACHE || process.env.SHIRO_DEB_CACHE || join(tmpdir(), 'shiro-debian'),
-    indexTtl: Number(process.env.SHIRO_DEBIAN_INDEX_TTL || 600) * 1000,
+    snapshot: (process.env.TABCOMPUTER_DEBIAN_SNAPSHOT || 'https://snapshot.debian.org/archive/debian/20260712T000000Z/').replace(/\/+$/, ''),
+    cacheDir: process.env.TABCOMPUTER_DEBIAN_CACHE || process.env.TABCOMPUTER_DEB_CACHE || join(tmpdir(), 'shiro-debian'),
+    indexTtl: Number(process.env.TABCOMPUTER_DEBIAN_INDEX_TTL || 600) * 1000,
   };
 }
 const DEBIAN_MIRROR = debianMirrorConfig();
@@ -730,7 +730,7 @@ async function handleGitProxy(req, res, targetUrl) {
 }
 
 // --- Seed sharing ---
-const SEED_DIR = process.env.SEED_DIR || '/opt/shiro/seeds';
+const SEED_DIR = process.env.SEED_DIR || '/opt/tabcomputer/seeds';
 const SEED_MAX_SIZE = 512 * 1024; // 512KB max per seed (gzipped)
 const SEED_RATE_LIMIT = 200; // per IP per month
 
@@ -845,7 +845,7 @@ setInterval(async () => {
 }, 6 * 60 * 60 * 1000).unref();
 
 // --- TCP relay (kernel sockets) ---
-// One WebSocket per TCP connection at /tcp. Opt-in with SHIRO_TCP_RELAY=1.
+// One WebSocket per TCP connection at /tcp. Opt-in with TABCOMPUTER_TCP_RELAY=1.
 // Protocol (docs/NETWORKING.md): the first frame is text JSON, either
 //   {"op":"connect","host":"example.com","port":443}  → {"op":"connected",...} | {"op":"error",...}
 //   {"op":"resolve","host":"example.com"}             → {"op":"resolved","addresses":[...]} | {"op":"error",...}
@@ -916,28 +916,31 @@ export const TCP_DEFAULT_PORTS = [22, 80, 443, 9418];
 
 export function tcpRelayConfigFromEnv(env = process.env) {
   return {
-    enabled: env.SHIRO_TCP_RELAY === '1',
-    allowedOrigins: envList(env.SHIRO_TCP_ORIGINS) || ['https://shiro.computer', 'https://*.shiro.computer'],
-    ports: (envList(env.SHIRO_TCP_PORTS) || TCP_DEFAULT_PORTS).map(Number).filter((p) => p > 0 && p < 65536),
-    allowCidrs: envList(env.SHIRO_TCP_ALLOW_CIDRS) || [],
-    denyCidrs: envList(env.SHIRO_TCP_DENY_CIDRS) || [],
-    secret: env.SHIRO_TCP_SECRET || '',
+    enabled: env.TABCOMPUTER_TCP_RELAY === '1',
+    allowedOrigins: envList(env.TABCOMPUTER_TCP_ORIGINS) || ['https://shiro.computer', 'https://*.shiro.computer'],
+    ports: (envList(env.TABCOMPUTER_TCP_PORTS) || TCP_DEFAULT_PORTS).map(Number).filter((p) => p > 0 && p < 65536),
+    allowCidrs: envList(env.TABCOMPUTER_TCP_ALLOW_CIDRS) || [],
+    denyCidrs: envList(env.TABCOMPUTER_TCP_DENY_CIDRS) || [],
+    secret: env.TABCOMPUTER_TCP_SECRET || '',
     // Token requests need a GitHub sign-in (Authorization: Bearer <github token>); docs/DESKTOP.md
-    requireSignin: env.SHIRO_TCP_REQUIRE_SIGNIN === '1',
-    trustProxy: env.SHIRO_TRUST_PROXY || 'loopback', // 'loopback' | 'always' | 'never'
-    tokenTtlMs: envInt(env.SHIRO_TCP_TOKEN_TTL_MS, 10 * 60_000),
-    maxConns: envInt(env.SHIRO_TCP_MAX_CONNS, 512),
-    maxConnsPerIp: envInt(env.SHIRO_TCP_MAX_CONNS_PER_IP, 16),
-    connectsPerMinute: envInt(env.SHIRO_TCP_CONNECTS_PER_MIN, 60),
-    bytesPerSecPerIp: envInt(env.SHIRO_TCP_BYTES_PER_SEC, 4 * 1024 * 1024),
-    byteBurstPerIp: envInt(env.SHIRO_TCP_BYTE_BURST, 16 * 1024 * 1024),
-    maxBytesPerIpPerHour: envInt(env.SHIRO_TCP_BYTES_PER_HOUR, 4 * 1024 ** 3),
-    maxBytesPerConn: envInt(env.SHIRO_TCP_MAX_BYTES_PER_CONN, 1024 ** 3),
-    handshakeTimeoutMs: envInt(env.SHIRO_TCP_HANDSHAKE_TIMEOUT_MS, 10_000),
-    connectTimeoutMs: envInt(env.SHIRO_TCP_CONNECT_TIMEOUT_MS, 15_000),
-    idleTimeoutMs: envInt(env.SHIRO_TCP_IDLE_TIMEOUT_MS, 5 * 60_000),
-    maxLifetimeMs: envInt(env.SHIRO_TCP_MAX_LIFETIME_MS, 4 * 60 * 60_000),
-    window: envInt(env.SHIRO_TCP_WINDOW, 512 * 1024),
+    requireSignin: env.TABCOMPUTER_TCP_REQUIRE_SIGNIN === '1',
+    trustProxy: env.TABCOMPUTER_TRUST_PROXY || 'loopback', // 'loopback' | 'always' | 'never'
+    tokenTtlMs: envInt(env.TABCOMPUTER_TCP_TOKEN_TTL_MS, 10 * 60_000),
+    // Tie each token to the IP that fetched it. Clients whose outgoing IP changes per
+    // connection (proxy pools, iCloud Private Relay, dual-stack) fail with it on.
+    tokenBindIp: env.TABCOMPUTER_TCP_TOKEN_BIND_IP !== '0',
+    maxConns: envInt(env.TABCOMPUTER_TCP_MAX_CONNS, 512),
+    maxConnsPerIp: envInt(env.TABCOMPUTER_TCP_MAX_CONNS_PER_IP, 16),
+    connectsPerMinute: envInt(env.TABCOMPUTER_TCP_CONNECTS_PER_MIN, 60),
+    bytesPerSecPerIp: envInt(env.TABCOMPUTER_TCP_BYTES_PER_SEC, 4 * 1024 * 1024),
+    byteBurstPerIp: envInt(env.TABCOMPUTER_TCP_BYTE_BURST, 16 * 1024 * 1024),
+    maxBytesPerIpPerHour: envInt(env.TABCOMPUTER_TCP_BYTES_PER_HOUR, 4 * 1024 ** 3),
+    maxBytesPerConn: envInt(env.TABCOMPUTER_TCP_MAX_BYTES_PER_CONN, 1024 ** 3),
+    handshakeTimeoutMs: envInt(env.TABCOMPUTER_TCP_HANDSHAKE_TIMEOUT_MS, 10_000),
+    connectTimeoutMs: envInt(env.TABCOMPUTER_TCP_CONNECT_TIMEOUT_MS, 15_000),
+    idleTimeoutMs: envInt(env.TABCOMPUTER_TCP_IDLE_TIMEOUT_MS, 5 * 60_000),
+    maxLifetimeMs: envInt(env.TABCOMPUTER_TCP_MAX_LIFETIME_MS, 4 * 60 * 60_000),
+    window: envInt(env.TABCOMPUTER_TCP_WINDOW, 512 * 1024),
   };
 }
 
@@ -1035,7 +1038,7 @@ export function createTcpRelay(config, { lookup, log = console.log, verifySignin
   };
 
   const verify = verifySignin || githubSigninVerifier();
-  const sign = (exp, ip) => createHmac('sha256', secret).update(`shiro-tcp.${exp}.${ip}`).digest('base64url');
+  const sign = (exp, ip) => createHmac('sha256', secret).update(`shiro-tcp.${exp}.${cfg.tokenBindIp ? ip : '*'}`).digest('base64url');
   const issueToken = (ip) => {
     const exp = Date.now() + cfg.tokenTtlMs;
     return { token: `${exp}.${sign(exp, ip)}`, expires: exp };
@@ -1048,7 +1051,7 @@ export function createTcpRelay(config, { lookup, log = console.log, verifySignin
     return want.length === got.length && timingSafeEqual(want, got);
   };
 
-  /** POST /tcp/token from an allowed Origin → { token, expires } bound to the caller's IP. */
+  /** POST /tcp/token from an allowed Origin → { token, expires }, bound to the caller's IP unless tokenBindIp is off. */
   function handleToken(req, res) {
     const origin = req.headers['origin'];
     const ok = originAllowed(origin, cfg.allowedOrigins);

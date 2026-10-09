@@ -41,7 +41,12 @@ async function buildCheck(): Promise<Check> {
     const r = await fetch('/deployed.txt', { cache: 'no-store' });
     const text = r.ok ? (await r.text()).trim() : '';
     // (a dev server answers unknown paths with the app's index.html)
-    if (/^[0-9a-f]{7,40}$/.test(text)) deploy = ` · deploy ${text.slice(0, 12)}`;
+    const page = typeof __BUILD_SHA__ === 'string' ? __BUILD_SHA__ : '';
+    if (/^[0-9a-f]{7,40}$/.test(text)) {
+      deploy = ` · deploy ${text.slice(0, 12)}`;
+      // This tab was loaded before the server's latest deploy: reload to get it
+      if (page && page !== text) { deploy = ` · this tab ${page.slice(0, 12)}, server ${text.slice(0, 12)} (reload to update)`; status = 'WARN'; }
+    }
     else { deploy = ' · no /deployed.txt (dev server?)'; status = 'WARN'; }
   } catch {
     deploy = ' · /deployed.txt unreachable';

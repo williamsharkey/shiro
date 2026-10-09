@@ -52,6 +52,7 @@ export async function executeElf(
   path: string,
   args: string[],
   ctx: X86Context,
+  argv0: string = path,
 ): Promise<number> {
   // Read the ELF binary
   let elfData: Uint8Array;
@@ -65,7 +66,7 @@ export async function executeElf(
       elfData = encoder.encode(raw as string);
     }
   } catch (e: any) {
-    ctx.writeStderr(`shiro: ${path}: ${e.message}\r\n`);
+    ctx.writeStderr(`tabcomputer: ${path}: ${e.message}\r\n`);
     return 1;
   }
 
@@ -74,8 +75,8 @@ export async function executeElf(
   const mem = new VirtualMemory();
   const decoder = new Decoder(cpu, mem);
 
-  // Build argv (program name + args)
-  const argv = [path, ...args];
+  // Build argv (the name it was run by + args)
+  const argv = [argv0, ...args];
 
   // Build envp from shell environment
   const envp = Object.entries(ctx.env).map(([k, v]) => `${k}=${v}`);
@@ -84,11 +85,11 @@ export async function executeElf(
   try {
     const info = loadElf(elfData, mem, cpu, argv, envp);
     if (!info.isStaticLinked) {
-      ctx.writeStderr(`shiro: ${path}: dynamically-linked ELF binaries are not supported (need static linking)\r\n`);
+      ctx.writeStderr(`tabcomputer: ${path}: dynamically-linked ELF binaries are not supported (need static linking)\r\n`);
       return 126;
     }
   } catch (e: any) {
-    ctx.writeStderr(`shiro: ${path}: ${e.message}\r\n`);
+    ctx.writeStderr(`tabcomputer: ${path}: ${e.message}\r\n`);
     return 126;
   }
 
@@ -118,14 +119,14 @@ export async function executeElf(
     }
 
     if (instructionCount >= MAX_INSTRUCTIONS) {
-      ctx.writeStderr(`shiro: ${path}: exceeded instruction limit (${MAX_INSTRUCTIONS})\r\n`);
+      ctx.writeStderr(`tabcomputer: ${path}: exceeded instruction limit (${MAX_INSTRUCTIONS})\r\n`);
       return 1;
     }
   } catch (e: any) {
     if (e instanceof X86Exit) {
       return e.code;
     }
-    ctx.writeStderr(`shiro: ${path}: ${e.message}\r\n`);
+    ctx.writeStderr(`tabcomputer: ${path}: ${e.message}\r\n`);
     return 1;
   }
 
@@ -149,11 +150,11 @@ export async function executeElfFromBytes(
   try {
     const info = loadElf(elfData, mem, cpu, argv, envp);
     if (!info.isStaticLinked) {
-      ctx.writeStderr(`shiro: ${argv0}: dynamically-linked ELF binaries are not supported (need static linking)\r\n`);
+      ctx.writeStderr(`tabcomputer: ${argv0}: dynamically-linked ELF binaries are not supported (need static linking)\r\n`);
       return 126;
     }
   } catch (e: any) {
-    ctx.writeStderr(`shiro: ${argv0}: ${e.message}\r\n`);
+    ctx.writeStderr(`tabcomputer: ${argv0}: ${e.message}\r\n`);
     return 126;
   }
 
@@ -184,7 +185,7 @@ export async function executeElfFromBytes(
     }
 
     if (instructionCount >= MAX_INSTRUCTIONS) {
-      ctx.writeStderr(`shiro: ${argv0}: exceeded instruction limit (${MAX_INSTRUCTIONS})\r\n`);
+      ctx.writeStderr(`tabcomputer: ${argv0}: exceeded instruction limit (${MAX_INSTRUCTIONS})\r\n`);
       return 1;
     }
   } catch (e: any) {
@@ -192,7 +193,7 @@ export async function executeElfFromBytes(
       return e.code;
     }
     if (e instanceof X86Killed) throw e;
-    ctx.writeStderr(`shiro: ${argv0}: ${e.message}\r\n`);
+    ctx.writeStderr(`tabcomputer: ${argv0}: ${e.message}\r\n`);
     return 1;
   }
 
@@ -255,7 +256,7 @@ export async function debugElf(
     if (raw instanceof Uint8Array) elfData = raw;
     else elfData = new TextEncoder().encode(raw as string);
   } catch (e: any) {
-    ctx.writeStderr(`shiro: ${path}: ${e.message}\r\n`);
+    ctx.writeStderr(`tabcomputer: ${path}: ${e.message}\r\n`);
     return 1;
   }
 
@@ -269,7 +270,7 @@ export async function debugElf(
   try {
     loadElf(elfData, mem, cpu, argv, envp);
   } catch (e: any) {
-    ctx.writeStderr(`shiro: ${path}: ${e.message}\r\n`);
+    ctx.writeStderr(`tabcomputer: ${path}: ${e.message}\r\n`);
     return 126;
   }
 

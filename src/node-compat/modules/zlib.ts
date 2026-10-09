@@ -96,7 +96,7 @@ export function createZlibModule(getBuiltinModule: (name: string) => any): any {
     mod[name.slice(6)] = function (this: any, opts?: any) { return makeStream(mode, opts); };
   }
 
-  const noBrotli = () => { throw Object.assign(new Error('Brotli is not available in Shiro\'s zlib'), { code: 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM' }); };
+  const noBrotli = () => { throw Object.assign(new Error('Brotli is not available in tabcomputer\'s zlib'), { code: 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM' }); };
   for (const n of ['brotliCompressSync', 'brotliDecompressSync', 'createBrotliCompress', 'createBrotliDecompress']) mod[n] = noBrotli;
   mod.brotliCompress = mod.brotliDecompress = (_d: any, a?: any, b?: any) => {
     const cb = typeof a === 'function' ? a : b;

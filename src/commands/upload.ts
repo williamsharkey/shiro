@@ -245,8 +245,8 @@ async function showFileBrowser(ctx: import('./index').CommandContext): Promise<n
 }
 
 export const shiroConfigCmd: Command = {
-  name: 'shiro',
-  description: 'Shiro OS configuration',
+  name: 'tabcomputer',
+  description: 'tabcomputer configuration',
   async exec(ctx) {
     // Helper to mask API keys for display
     const maskKey = (key: string, prefix: string) => {
@@ -256,75 +256,75 @@ export const shiroConfigCmd: Command = {
 
     // Anthropic API key
     if (ctx.args[0] === 'config' && ctx.args[1] === 'set' && ctx.args[2] === 'anthropic_key' && ctx.args[3]) {
-      localStorage.setItem('shiro_anthropic_key', ctx.args[3]);
+      localStorage.setItem('tabcomputer_anthropic_key', ctx.args[3]);
       ctx.env['ANTHROPIC_API_KEY'] = ctx.args[3];
       ctx.stdout = 'Anthropic API key saved.\n';
       return 0;
     }
     if (ctx.args[0] === 'config' && ctx.args[1] === 'get' && ctx.args[2] === 'anthropic_key') {
-      const key = localStorage.getItem('shiro_anthropic_key') || '';
+      const key = localStorage.getItem('tabcomputer_anthropic_key') || '';
       ctx.stdout = maskKey(key, 'sk-ant-') + '\n';
       return 0;
     }
 
     // OpenAI API key
     if (ctx.args[0] === 'config' && ctx.args[1] === 'set' && ctx.args[2] === 'openai_key' && ctx.args[3]) {
-      localStorage.setItem('shiro_openai_key', ctx.args[3]);
+      localStorage.setItem('tabcomputer_openai_key', ctx.args[3]);
       ctx.env['OPENAI_API_KEY'] = ctx.args[3];
       ctx.stdout = 'OpenAI API key saved.\n';
       return 0;
     }
     if (ctx.args[0] === 'config' && ctx.args[1] === 'get' && ctx.args[2] === 'openai_key') {
-      const key = localStorage.getItem('shiro_openai_key') || '';
+      const key = localStorage.getItem('tabcomputer_openai_key') || '';
       ctx.stdout = maskKey(key, 'sk-') + '\n';
       return 0;
     }
 
     // Google API key
     if (ctx.args[0] === 'config' && ctx.args[1] === 'set' && ctx.args[2] === 'google_key' && ctx.args[3]) {
-      localStorage.setItem('shiro_google_key', ctx.args[3]);
+      localStorage.setItem('tabcomputer_google_key', ctx.args[3]);
       ctx.env['GOOGLE_API_KEY'] = ctx.args[3];
       ctx.stdout = 'Google API key saved.\n';
       return 0;
     }
     if (ctx.args[0] === 'config' && ctx.args[1] === 'get' && ctx.args[2] === 'google_key') {
-      const key = localStorage.getItem('shiro_google_key') || '';
+      const key = localStorage.getItem('tabcomputer_google_key') || '';
       ctx.stdout = maskKey(key, 'AIza') + '\n';
       return 0;
     }
 
     // Legacy api_key (for backwards compatibility, maps to Anthropic)
     if (ctx.args[0] === 'config' && ctx.args[1] === 'set' && ctx.args[2] === 'api_key' && ctx.args[3]) {
-      localStorage.setItem('shiro_anthropic_key', ctx.args[3]);
+      localStorage.setItem('tabcomputer_anthropic_key', ctx.args[3]);
       ctx.env['ANTHROPIC_API_KEY'] = ctx.args[3];
       ctx.stdout = 'Anthropic API key saved.\n';
       return 0;
     }
     if (ctx.args[0] === 'config' && ctx.args[1] === 'get' && ctx.args[2] === 'api_key') {
-      const key = localStorage.getItem('shiro_anthropic_key') || localStorage.getItem('shiro_api_key') || '';
+      const key = localStorage.getItem('tabcomputer_anthropic_key') || localStorage.getItem('tabcomputer_api_key') || '';
       ctx.stdout = maskKey(key, 'sk-ant-') + '\n';
       return 0;
     }
 
     // GitHub token (for git push/pull)
     if (ctx.args[0] === 'config' && ctx.args[1] === 'set' && ctx.args[2] === 'github_token' && ctx.args[3]) {
-      localStorage.setItem('shiro_github_token', ctx.args[3]);
+      localStorage.setItem('tabcomputer_github_token', ctx.args[3]);
       ctx.env['GITHUB_TOKEN'] = ctx.args[3];
       ctx.stdout = 'GitHub token saved. You can now use git push/pull.\n';
       return 0;
     }
     if (ctx.args[0] === 'config' && ctx.args[1] === 'get' && ctx.args[2] === 'github_token') {
-      const token = localStorage.getItem('shiro_github_token') || '';
+      const token = localStorage.getItem('tabcomputer_github_token') || '';
       ctx.stdout = maskKey(token, 'ghp_') + '\n';
       return 0;
     }
 
     // List all config
     if (ctx.args[0] === 'config' && ctx.args[1] === 'list') {
-      const anthropicKey = localStorage.getItem('shiro_anthropic_key') || localStorage.getItem('shiro_api_key') || '';
-      const openaiKey = localStorage.getItem('shiro_openai_key') || '';
-      const googleKey = localStorage.getItem('shiro_google_key') || '';
-      const ghToken = localStorage.getItem('shiro_github_token') || '';
+      const anthropicKey = localStorage.getItem('tabcomputer_anthropic_key') || localStorage.getItem('tabcomputer_api_key') || '';
+      const openaiKey = localStorage.getItem('tabcomputer_openai_key') || '';
+      const googleKey = localStorage.getItem('tabcomputer_google_key') || '';
+      const ghToken = localStorage.getItem('tabcomputer_github_token') || '';
       ctx.stdout = 'Configuration:\n';
       ctx.stdout += `  anthropic_key: ${maskKey(anthropicKey, 'sk-ant-')}\n`;
       ctx.stdout += `  openai_key:    ${maskKey(openaiKey, 'sk-')}\n`;
@@ -335,12 +335,12 @@ export const shiroConfigCmd: Command = {
 
     ctx.stdout = [
       'Usage:',
-      '  shiro config set anthropic_key <key>  Set Anthropic (Claude) API key',
-      '  shiro config set openai_key <key>     Set OpenAI (GPT) API key',
-      '  shiro config set google_key <key>     Set Google (Gemini) API key',
-      '  shiro config set github_token <tok>   Set GitHub token for git push/pull',
-      '  shiro config get <key_name>           Show a config value',
-      '  shiro config list                     Show all configuration',
+      '  tabcomputer config set anthropic_key <key>  Set Anthropic (Claude) API key',
+      '  tabcomputer config set openai_key <key>     Set OpenAI (GPT) API key',
+      '  tabcomputer config set google_key <key>     Set Google (Gemini) API key',
+      '  tabcomputer config set github_token <tok>   Set GitHub token for git push/pull',
+      '  tabcomputer config get <key_name>           Show a config value',
+      '  tabcomputer config list                     Show all configuration',
       '',
       'Get API keys at:',
       '  Anthropic: https://console.anthropic.com/settings/keys',

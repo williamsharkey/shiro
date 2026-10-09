@@ -6,14 +6,14 @@ import { ICONS } from '../icons';
 import { BRAND } from '../../brand';
 import buildNumber from '../../../build-number.txt?raw';
 
-const REPO = 'https://github.com/williamsharkey/shiro/blob/main/docs';
+const REPO = 'https://github.com/williamsharkey/tabcomputer/blob/main/docs';
 
 /**
  * Measured numbers, each with the document that records it. Update these
  * with the docs: they are claims a visitor will check.
  */
 const STATUS = [
-  { label: 'Debian 13 top-200 packages', value: '200/200', note: 'install with apt and run (popcon ranks 1–200)', doc: 'DEBIAN_SCORE.md' },
+  { label: 'Debian 13 top-300 packages', value: '298/300', note: 'install with apt and run (popcon ranks 1–300)', doc: 'DEBIAN_SCORE.md' },
   { label: 'LTP syscall tests, x86-64', value: '197/320', note: 'pass under the x86-64 engine', doc: 'X86_ENGINES.md' },
 ];
 

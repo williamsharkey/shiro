@@ -28,7 +28,7 @@ function createCtx(shell: Shell, fs: FileSystem, args: string[]): CommandContext
 }
 
 /**
- * FileSystem always opens the same IndexedDB ('shiro-fs'), so tests in a file
+ * FileSystem always opens the same IndexedDB ('tabcomputer-fs'), so tests in a file
  * share state. Wipe the install locations explicitly — without this, a cli.js
  * left behind by one test makes the next test's install look healthy, which is
  * the exact failure mode these tests exist to catch.

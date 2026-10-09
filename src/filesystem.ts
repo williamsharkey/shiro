@@ -1,4 +1,5 @@
 import { decodeBytes, encodeText } from './utils/byte-text';
+import { activeProfile } from './profile';
 
 function globPatternToRegex(pattern: string, base: string, caseInsensitive?: boolean): RegExp {
   // Resolve the pattern relative to base
@@ -50,7 +51,7 @@ function globPatternToRegex(pattern: string, base: string, caseInsensitive?: boo
   return new RegExp(regex, caseInsensitive ? 'i' : undefined);
 }
 
-const DB_NAME = 'shiro-fs';
+const DB_NAME = 'tabcomputer-fs';
 const DB_VERSION = 1;
 const STORE_NAME = 'files';
 
@@ -288,7 +289,7 @@ class ProcProvider implements VirtualFSProvider {
       const cores = navigator?.hardwareConcurrency || 4;
       return Array.from({ length: cores }, (_, i) => [
         `processor\t: ${i}`,
-        `model name\t: Shiro Virtual CPU`,
+        `model name\t: tabcomputer Virtual CPU`,
         `cpu MHz\t\t: 3000.000`,
         `cache size\t: 8192 KB`,
       ].join('\n')).join('\n\n') + '\n';
@@ -409,14 +410,18 @@ class VarLogProvider implements VirtualFSProvider {
   writeFile(): boolean { return false; }
 }
 
-/** Files every Unix system has, created when missing. */
-const BASE_ETC_FILES: Record<string, string> = {
-  '/etc/passwd': 'root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:Shiro User:/home/user:/bin/sh\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n',
-  '/etc/group': 'root:x:0:\ntty:x:5:user\nuser:x:1000:\nnogroup:x:65534:\n',
-  '/etc/hostname': 'shiro\n',
-  '/etc/hosts': '127.0.0.1\tlocalhost shiro\n::1\tlocalhost ip6-localhost ip6-loopback\n',
-  '/etc/shells': '/bin/sh\n/bin/bash\n',
-};
+/** Files every Unix system has, created when missing (named after the profile's machine). */
+function baseEtcFiles(): Record<string, string> {
+  const { hostname, name } = activeProfile();
+  return {
+    '/etc/passwd': `root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:${name} user:/home/user:/bin/sh\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n`,
+    '/etc/group': 'root:x:0:\ntty:x:5:user\nuser:x:1000:\nnogroup:x:65534:\n',
+    '/etc/hostname': `${hostname}\n`,
+    '/etc/hosts': `127.0.0.1\tlocalhost ${hostname}\n::1\tlocalhost ip6-localhost ip6-loopback\n`,
+    '/etc/shells': '/bin/sh\n/bin/bash\n',
+    '/etc/os-release': `NAME="${name}"\nPRETTY_NAME="${name}"\nID=${hostname}\nID_LIKE=debian\nHOME_URL="https://${activeProfile().brand?.domain ?? 'shiro.computer'}/"\n`,
+  };
+}
 
 /** Run fn as a macrotask without timer clamping/throttling (MessageChannel),
  *  falling back to setTimeout where there is none. */
@@ -554,7 +559,7 @@ export class FileSystem {
     }
     // The account database Unix programs look themselves up in (getpwuid:
     // ssh, git, vim's ~ expansion). The kernel runs everything as uid 1000.
-    for (const [path, text] of Object.entries(BASE_ETC_FILES)) {
+    for (const [path, text] of Object.entries(baseEtcFiles())) {
       if (!(await this._get(path))) await this._put(this._makeNode(path, 'file', new TextEncoder().encode(text)));
     }
   }

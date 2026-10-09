@@ -13,7 +13,7 @@ export interface ShiroRuntimeContext {
   createdAt: string;
 }
 
-export const SHIRO_RUNTIME_CONTEXT_SESSION_KEY = 'shiro_runtime_context_v1';
+export const SHIRO_RUNTIME_CONTEXT_SESSION_KEY = 'tabcomputer_runtime_context_v1';
 export const SHIRO_RUNTIME_CONTEXT_MD_PATH = '/home/user/NEO.md';
 export const SHIRO_RUNTIME_CONTEXT_JSON_PATH = '/home/user/.shiro-context.json';
 
@@ -66,11 +66,11 @@ export function buildNeoMd(context: ShiroRuntimeContext): string {
   if (!context.injected) {
     return `# NEO.md
 
-This file describes the runtime context for this Shiro boot.
+This file describes the runtime context for this tabcomputer boot.
 
 - Mode: standalone
 - Host page DOM bridge: unavailable
-- \`hc live\` inspects Shiro's own DOM
+- \`hc live\` inspects tabcomputer's own DOM
 - \`hc outer\` is not expected to work in this boot
 `;
   }
@@ -83,7 +83,7 @@ This file describes the runtime context for this Shiro boot.
 
   return `# NEO.md
 
-This Shiro instance was spawned from a host page.
+This tabcomputer instance was spawned from a host page.
 
 - Mode: ${modeLabel}
 - Host page: ${hostUrl}
@@ -99,7 +99,7 @@ Start with:
 
 Notes:
 
-- \`hc live\` inspects Shiro's own DOM, not the host page
+- \`hc live\` inspects tabcomputer's own DOM, not the host page
 - Prefer \`hc outer\` for host-page inspection even in blob mode
 - Machine-readable details are in \`${SHIRO_RUNTIME_CONTEXT_JSON_PATH}\`
 `;

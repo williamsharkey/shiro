@@ -1,7 +1,7 @@
 // Test harness for kernel-net.test.ts (runs in plain Node, outside vitest's transforms).
 // Starts a TCP echo server, a "firehose" server that writes 1 MiB per connection,
 // two relays built with server.mjs's createTcpRelay, and server.mjs itself with
-// SHIRO_TCP_RELAY=1. Prints one JSON line with the ports, then runs until killed.
+// TABCOMPUTER_TCP_RELAY=1. Prints one JSON line with the ports, then runs until killed.
 import { createServer } from 'node:http';
 import net from 'node:net';
 import { spawn } from 'node:child_process';
@@ -61,10 +61,13 @@ const relayB = await mount({ ports: [echoPort, 80, 443] }, {
 // C: tight connect rate
 const relayC = await mount({ ports: [echoPort], allowCidrs: ['127.0.0.1/32'], connectsPerMinute: 2 });
 
-// D: requires a GitHub sign-in (SHIRO_TCP_REQUIRE_SIGNIN); the verifier accepts the token "good-token"
+// D: requires a GitHub sign-in (TABCOMPUTER_TCP_REQUIRE_SIGNIN); the verifier accepts the token "good-token"
 const relayD = await mount({ ports: [echoPort], allowCidrs: ['127.0.0.1/32'], requireSignin: true }, {
   verifySignin: async (t) => (t === 'good-token' ? 'octocat' : null),
 });
+
+// E: tokens not bound to the client IP (TABCOMPUTER_TCP_TOKEN_BIND_IP=0, tabcomputer.com)
+const relayE = await mount({ ports: [echoPort], allowCidrs: ['127.0.0.1/32'], tokenBindIp: false });
 
 // server.mjs as deployed, configured only through the environment
 const mainPort = await new Promise((r) => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
@@ -74,10 +77,10 @@ const child = spawn(process.execPath, [serverPath], {
     PORT: String(mainPort),
     STATIC_DIR: mkdtempSync(join(tmpdir(), 'shiro-static-')),
     SEED_DIR: mkdtempSync(join(tmpdir(), 'shiro-seeds-')),
-    SHIRO_TCP_RELAY: '1',
-    SHIRO_TCP_ORIGINS: ORIGIN,
-    SHIRO_TCP_PORTS: String(echoPort),
-    SHIRO_TCP_ALLOW_CIDRS: '127.0.0.1/32',
+    TABCOMPUTER_TCP_RELAY: '1',
+    TABCOMPUTER_TCP_ORIGINS: ORIGIN,
+    TABCOMPUTER_TCP_PORTS: String(echoPort),
+    TABCOMPUTER_TCP_ALLOW_CIDRS: '127.0.0.1/32',
   },
   stdio: ['ignore', 'pipe', 'inherit'],
 });
@@ -93,4 +96,4 @@ process.on('SIGINT', stop);
 process.stdin.on('end', stop); // parent went away
 process.stdin.resume();
 
-console.log(JSON.stringify({ echoPort, firehosePort, relayA, relayB, relayC, relayD, mainPort, origin: ORIGIN }));
+console.log(JSON.stringify({ echoPort, firehosePort, relayA, relayB, relayC, relayD, relayE, mainPort, origin: ORIGIN }));

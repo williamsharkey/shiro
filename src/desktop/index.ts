@@ -529,7 +529,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     { label: 'Settings…', shortcut: 'Alt+Shift+,', action: () => void wm.openApp('settings') },
     { label: 'Activity', action: () => void wm.openApp('activity') },
     'separator',
-    { label: 'Classic Terminal', action: () => { try { localStorage.setItem('shiro-ui', 'terminal'); } catch {} location.reload(); } },
+    { label: 'Classic Terminal', action: () => { try { localStorage.setItem('tabcomputer-ui', 'terminal'); } catch {} location.reload(); } },
     { label: 'Restart', action: () => location.reload() },
   ] });
   const termView = (): TerminalView | null => {
@@ -574,7 +574,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
       { label: 'Welcome Tour', action: () => showTour(ctx) },
       { label: 'Getting Started', action: () => openTerminal({ command: 'help' }) },
       { label: 'Keyboard Shortcuts', action: () => showToast(root, SHORTCUTS_HTML, 9000) },
-      { label: 'Desktop & /dom docs', action: () => window.open('https://github.com/williamsharkey/shiro/blob/main/docs/DESKTOP.md', '_blank', 'noopener') },
+      { label: 'Desktop & /dom docs', action: () => window.open('https://github.com/williamsharkey/tabcomputer/blob/main/docs/DESKTOP.md', '_blank', 'noopener') },
     ] };
     return [file, edit, view, windowMenu, ...(focusedApp()?.menus?.() ?? []), help];
   };

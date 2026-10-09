@@ -8,7 +8,7 @@
 //   node tests/browser/gui-first-launch.mjs [URL] [--json FILE] [--no-warm] [--debs URL] [APP...]
 //
 // Default apps: l3afpad mousepad ristretto gimp. The server's shared .deb cache
-// (SHIRO_DEBIAN_CACHE) is whatever it is: run twice to see cold vs warm server.
+// (TABCOMPUTER_DEBIAN_CACHE) is whatever it is: run twice to see cold vs warm server.
 // Exits 1 if any app fails. Needs playwright (NODE_PATH=/opt/node-tools/node_modules
 // in the cloud containers) and Chromium (CHROMIUM, default the pre-installed one).
 import { createRequire } from 'node:module';
@@ -33,9 +33,9 @@ const READY = { gimp: 'GNU Image Manipulation Program' };
 
 /** ms from `t0` until the app has a mapped X window, then until it has drawn (two pixel values), then its READY window */
 async function waitWindow(page, app, t0) {
-  const mapped = await page.waitForFunction((app) => window.__shiro.desktop.windows().some((w) => w.appId === app && w.surface), app, { timeout: LIMIT, polling: 50 }).then(() => Date.now() - t0);
+  const mapped = await page.waitForFunction((app) => window.__tabcomputer.desktop.windows().some((w) => w.appId === app && w.surface), app, { timeout: LIMIT, polling: 50 }).then(() => Date.now() - t0);
   const drawn = await page.waitForFunction((app) => {
-    const w = window.__shiro.desktop.windows().find((w) => w.appId === app && w.surface);
+    const w = window.__tabcomputer.desktop.windows().find((w) => w.appId === app && w.surface);
     if (!w) return false;
     const c = w.surface.canvas;
     const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
@@ -47,13 +47,13 @@ async function waitWindow(page, app, t0) {
     return false;
   }, app, { timeout: LIMIT, polling: 100 }).then(() => Date.now() - t0);
   if (!READY[app]) return { mapped, drawn };
-  const ready = await page.waitForFunction(([app, title]) => window.__shiro.desktop.windows().some((w) => w.appId === app && w.surface && w.title.includes(title)), [app, READY[app]], { timeout: LIMIT, polling: 200 }).then(() => Date.now() - t0);
+  const ready = await page.waitForFunction(([app, title]) => window.__tabcomputer.desktop.windows().some((w) => w.appId === app && w.surface && w.title.includes(title)), [app, READY[app]], { timeout: LIMIT, polling: 200 }).then(() => Date.now() - t0);
   return { mapped, drawn, ready };
 }
 
 const closeApp = (page, app) => page.evaluate(async (app) => {
-  for (const w of window.__shiro.desktop.windows()) if (w.appId === app) w.close();
-  for (let i = 0; i < 300 && window.__shiro.desktop.windows().some((w) => w.appId === app); i++) await new Promise((r) => setTimeout(r, 100));
+  for (const w of window.__tabcomputer.desktop.windows()) if (w.appId === app) w.close();
+  for (let i = 0; i < 300 && window.__tabcomputer.desktop.windows().some((w) => w.appId === app); i++) await new Promise((r) => setTimeout(r, 100));
 }, app);
 
 const proxy = /^https:/.test(url) && process.env.HTTPS_PROXY ? process.env.HTTPS_PROXY.replace(/^\w+:\/\//, '').replace(/\/$/, '') : '';
@@ -75,11 +75,11 @@ for (const app of apps) {
   page.on('requestfinished', async (r) => { if (/\/debian\/pool\//.test(r.url())) { requests++; bytes += (await r.sizes().catch(() => null))?.responseBodySize ?? 0; } });
   try {
     await page.goto(url + (url.includes('?') ? '&' : '?') + 'ui=desktop');
-    await page.waitForFunction(() => window.__shiro?.desktop && window.__shiro.kernel, null, { timeout: 90_000 });
-    await page.waitForFunction((app) => window.__shiro.desktop.apps().some((a) => a.id === app), app, { timeout: 30_000 }); // registered when the page is idle
+    await page.waitForFunction(() => window.__tabcomputer?.desktop && window.__tabcomputer.kernel, null, { timeout: 90_000 });
+    await page.waitForFunction((app) => window.__tabcomputer.desktop.apps().some((a) => a.id === app), app, { timeout: 30_000 }); // registered when the page is idle
     await page.waitForTimeout(500);
     const t0 = Date.now();
-    await page.evaluate((app) => { void window.__shiro.desktop.openApp(app); }, app);
+    await page.evaluate((app) => { void window.__tabcomputer.desktop.openApp(app); }, app);
     const first = await waitWindow(page, app, t0);
     const install = await page.evaluate(() => window.__guiInstall ?? null);
     const r = { first, install: install && { ms: install.ms, packages: install.packages, fetched: install.fetched, cached: install.cached, bytes: install.bytes }, requests, mb: +(bytes / 1e6).toFixed(1) };
@@ -87,7 +87,7 @@ for (const app of apps) {
       await closeApp(page, app);
       await page.waitForTimeout(500);
       const t1 = Date.now();
-      await page.evaluate((app) => { void window.__shiro.desktop.openApp(app); }, app);
+      await page.evaluate((app) => { void window.__tabcomputer.desktop.openApp(app); }, app);
       r.warm = await waitWindow(page, app, t1);
     }
     if (errors.length) throw new Error(`page errors: ${errors.join('; ')}`);

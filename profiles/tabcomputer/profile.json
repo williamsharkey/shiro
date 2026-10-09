@@ -1,7 +1,12 @@
 {
   "id": "tabcomputer",
+  "name": "tabcomputer",
+  "hostname": "tabcomputer",
   "description": "The Unix edition: the desktop UI, the TCP relay on, Debian and native programs to the fore.",
-  "hosts": ["tabcomputer.com", "*.tabcomputer.com"],
+  "hosts": [
+    "tabcomputer.com",
+    "*.tabcomputer.com"
+  ],
   "default": true,
   "ui": "desktop",
   "brand": {
@@ -12,9 +17,11 @@
     "favicon": "/tabcomputer-favicon.svg"
   },
   "banner": "desktop",
-  "preinstall": ["claude-code"],
+  "preinstall": [
+    "claude-code"
+  ],
   "shims": {
-    "claude": "npm",
+    "claude": "native",
     "claudeInstallSh": true,
     "tabSsh": true,
     "binCommandStat": true,

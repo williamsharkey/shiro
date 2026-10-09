@@ -3,8 +3,10 @@ import { Command, CommandContext } from './index';
 /**
  * ffmpeg: Video/audio processing via ffmpeg.wasm (WebAssembly)
  *
- * Downloads ffmpeg-core.wasm (~25MB) on first use, browser-cached.
- * Single-threaded mode — no COOP/COEP headers required.
+ * ffmpeg.wasm's module, its worker and the single-threaded core (~31 MB of
+ * wasm) are bundled and served from the page's own origin: a cross-origin
+ * worker can't be started at all, and under COEP a cross-origin core needs
+ * CORP headers. The core is only fetched the first time ffmpeg runs.
  * Bridges Shiro's IndexedDB filesystem to ffmpeg's in-memory FS.
  *
  * Usage:
@@ -15,9 +17,6 @@ import { Command, CommandContext } from './index';
  *   ffmpeg -version                                         # show version
  */
 
-const FFMPEG_CDN = 'https://esm.sh/@ffmpeg/ffmpeg@0.12.15';
-const CORE_CDN = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm';
-
 let ffmpeg: any = null;
 let loadPromise: Promise<any> | null = null;
 
@@ -26,10 +25,14 @@ async function ensureFFmpeg(ctx: CommandContext): Promise<any> {
   if (loadPromise) return loadPromise;
 
   loadPromise = (async () => {
-    ctx.stdout += 'Loading FFmpeg (25MB WASM, first time only)... ';
+    ctx.stderr += 'Loading FFmpeg (31 MB of WASM, first time only)... ';
 
-    const mod = await import(/* @vite-ignore */ FFMPEG_CDN);
-    const FFmpeg = mod.FFmpeg || mod.default?.FFmpeg;
+    const [mod, { default: coreURL }, { default: wasmURL }] = await Promise.all([
+      import('@ffmpeg/ffmpeg'),
+      import('@ffmpeg/core?url'),
+      import('@ffmpeg/core/wasm?url'),
+    ]);
+    const FFmpeg = mod.FFmpeg;
     if (!FFmpeg) throw new Error('Failed to load FFmpeg module');
 
     ffmpeg = new FFmpeg();
@@ -39,12 +42,13 @@ async function ensureFFmpeg(ctx: CommandContext): Promise<any> {
       // Progress events during processing — we use these in exec
     });
 
+    // Absolute: the worker resolves them against its own URL
     await ffmpeg.load({
-      coreURL: `${CORE_CDN}/ffmpeg-core.js`,
-      wasmURL: `${CORE_CDN}/ffmpeg-core.wasm`,
+      coreURL: new URL(coreURL, location.href).href,
+      wasmURL: new URL(wasmURL, location.href).href,
     });
 
-    ctx.stdout += 'done.\n';
+    ctx.stderr += 'done.\n';
     return ffmpeg;
   })();
 
@@ -91,7 +95,7 @@ export const ffmpegCmd: Command = {
 
     if (args.length === 0) {
       ctx.stdout = [
-        'ffmpeg (Shiro) — powered by ffmpeg.wasm',
+        'ffmpeg (tabcomputer) — powered by ffmpeg.wasm',
         '',
         'Usage: ffmpeg [options] [[infile options] -i infile]... {[outfile options] outfile}...',
         '',
@@ -106,27 +110,35 @@ export const ffmpegCmd: Command = {
       return 0;
     }
 
-    // Handle -version
-    if (args.includes('-version') || args.includes('--version')) {
-      ctx.stdout = 'ffmpeg version 7.1 (ffmpeg.wasm 0.12.15) -- browser WebAssembly build\n';
-      return 0;
-    }
-
     // Load ffmpeg
     let ff: any;
     try {
       ff = await ensureFFmpeg(ctx);
     } catch (err: any) {
-      ctx.stderr = `ffmpeg: failed to load: ${err.message}\n`;
+      ctx.stderr += `ffmpeg: failed to load: ${err.message}\n`;
       return 1;
+    }
+
+    // -version, -buildconf, -codecs, ...: ffmpeg's own report, from the core
+    if (args.length === 1 && /^-(version|buildconf|formats|codecs|encoders|decoders|filters|pix_fmts|protocols)$/.test(args[0])) {
+      const lines: string[] = [];
+      const collect = ({ message }: { message: string }) => { lines.push(message); };
+      ff.on('log', collect);
+      try { await ff.exec(args); } finally { ff.off('log', collect); }
+      ctx.stdout += lines.filter((l) => l !== 'Aborted()').join('\n') + '\n';
+      return 0;
     }
 
     // Parse input/output file paths
     const { inputs, output } = parseFilePaths(args);
 
-    // Bridge input files: Shiro FS → ffmpeg MEMFS
+    // Bridge input files: Shiro FS → ffmpeg MEMFS. An input that isn't a file
+    // (-f lavfi -i testsrc=..., a URL) goes to ffmpeg as it is.
+    const bridged = new Set<string>();
     for (const inputPath of inputs) {
       const resolved = ctx.fs.resolvePath(inputPath, ctx.cwd);
+      if (!(await ctx.fs.exists(resolved))) continue;
+      bridged.add(inputPath);
       try {
         const data = await ctx.fs.readFile(resolved);
         const uint8 = data instanceof Uint8Array
@@ -136,7 +148,7 @@ export const ffmpegCmd: Command = {
         const name = inputPath.split('/').pop() || inputPath;
         await ff.writeFile(name, uint8);
       } catch (err: any) {
-        ctx.stderr = `ffmpeg: ${inputPath}: ${err.message}\n`;
+        ctx.stderr += `ffmpeg: ${inputPath}: ${err.message}\n`;
         return 1;
       }
     }
@@ -145,7 +157,7 @@ export const ffmpegCmd: Command = {
     const ffArgs = args.map((arg, i) => {
       // If this arg follows -i, use just the filename
       if (i > 0 && args[i - 1] === '-i') {
-        return arg.split('/').pop() || arg;
+        return bridged.has(arg) ? arg.split('/').pop() || arg : arg;
       }
       // If this is the output (last non-flag arg), use just the filename
       if (arg === output && output) {
@@ -180,7 +192,7 @@ export const ffmpegCmd: Command = {
       ff.off('progress', progressHandler);
 
       if (ret !== 0) {
-        ctx.stderr = `ffmpeg: exited with code ${ret}\n`;
+        ctx.stderr += `ffmpeg: exited with code ${ret}\n`;
         // Show last few log lines for debugging
         const tail = logs.slice(-10).join('\n');
         if (tail) ctx.stderr += tail + '\n';
@@ -189,7 +201,7 @@ export const ffmpegCmd: Command = {
     } catch (err: any) {
       ff.off('log', logHandler);
       ff.off('progress', progressHandler);
-      ctx.stderr = `ffmpeg: ${err.message}\n`;
+      ctx.stderr += `ffmpeg: ${err.message}\n`;
       return 1;
     }
 
@@ -209,7 +221,7 @@ export const ffmpegCmd: Command = {
         const sizeKB = (outputData.length / 1024).toFixed(1);
         ctx.stdout += `Output: ${output} (${sizeKB} KB)\n`;
       } catch (err: any) {
-        ctx.stderr = `ffmpeg: failed to write output: ${err.message}\n`;
+        ctx.stderr += `ffmpeg: failed to write output: ${err.message}\n`;
         return 1;
       }
 
@@ -218,7 +230,7 @@ export const ffmpegCmd: Command = {
     }
 
     // Clean up input files from ffmpeg's MEMFS
-    for (const inputPath of inputs) {
+    for (const inputPath of bridged) {
       const name = inputPath.split('/').pop() || inputPath;
       try { await ff.deleteFile(name); } catch { /* ignore */ }
     }

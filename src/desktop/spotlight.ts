@@ -78,7 +78,7 @@ async function recentCommands(ctx: AppContext): Promise<string[]> {
 
 async function programNames(ctx: AppContext): Promise<string[]> {
   const names = new Set<string>();
-  for (const c of ((globalThis as any).__shiro?.commands?.list?.() ?? []) as { name: string }[]) names.add(c.name);
+  for (const c of ((globalThis as any).__tabcomputer?.commands?.list?.() ?? []) as { name: string }[]) names.add(c.name);
   for (const dir of ['/usr/bin', '/usr/local/bin', '/bin']) {
     try { for (const n of await ctx.fs.readdir(dir)) names.add(n); } catch {}
   }

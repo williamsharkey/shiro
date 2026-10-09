@@ -149,7 +149,7 @@ describe('window manager', () => {
     wm.setTheme('light');
     expect(wm.theme()).toBe('light');
     expect(wm.root.dataset.theme).toBe('light');
-    expect(localStorage.getItem('shiro-desktop-theme')).toBe('light');
+    expect(localStorage.getItem('tabcomputer-desktop-theme')).toBe('light');
     wm.setTheme('dark');
     expect(wm.theme()).toBe('dark');
     expect(n).toBe(2);
@@ -166,7 +166,7 @@ describe('window manager', () => {
 
 describe('uiMode', () => {
   const loc = (search: string, hostname: string) => ({ search, hostname });
-  beforeEach(() => localStorage.removeItem('shiro-ui'));
+  beforeEach(() => localStorage.removeItem('tabcomputer-ui'));
 
   it('shiro.computer keeps the terminal; other hosts get the desktop', () => {
     expect(uiMode(loc('', 'shiro.computer'), false)).toBe('terminal');
@@ -180,7 +180,7 @@ describe('uiMode', () => {
     expect(uiMode(loc('', 'shiro.computer'), false)).toBe('desktop');
     expect(uiMode(loc('?ui=terminal', 'unix.computer'), false)).toBe('terminal');
     expect(uiMode(loc('', 'unix.computer'), false)).toBe('terminal');
-    localStorage.removeItem('shiro-ui');
+    localStorage.removeItem('tabcomputer-ui');
     expect(uiMode(loc('', 'unix.computer'), true)).toBe('terminal');
     expect(uiMode(loc('?demo=1', 'unix.computer'), false)).toBe('terminal');
   });

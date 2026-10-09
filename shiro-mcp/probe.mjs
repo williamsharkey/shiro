@@ -10,7 +10,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 
 const CODE = process.argv[2];
-const SIGNAL = process.env.SHIRO_SIGNALING_URL || 'https://shiro.computer';
+const SIGNAL = process.env.TABCOMPUTER_SIGNALING_URL || 'https://shiro.computer';
 const LOG = process.env.PROBE_LOG || 'probe.jsonl';
 const INTERVAL = +(process.env.PROBE_INTERVAL || 2000);
 if (!CODE) { console.error('usage: node probe.mjs <remote-code>'); process.exit(1); }
@@ -26,7 +26,7 @@ const INSTALL = `(() => {
       }
     }).observe({ type: 'longtask', buffered: true });
   } catch (e) { P.errors.push('no longtask observer: ' + e.message); }
-  const proto = Object.getPrototypeOf(window.__shiro.fs);
+  const proto = Object.getPrototypeOf(window.__tabcomputer.fs);
   for (const m of ['readFile','writeFile','appendFile','readdir','stat','lstat','exists','unlink','mkdir','rename','rmdir','glob']) {
     const orig = proto[m];
     if (typeof orig !== 'function' || orig.__probed) continue;
@@ -49,7 +49,7 @@ const INSTALL = `(() => {
   }
   // Every shell command with its duration; unfinished ones reveal hangs
   P.exec = [];
-  const shellProto = Object.getPrototypeOf(window.__shiro.shell);
+  const shellProto = Object.getPrototypeOf(window.__tabcomputer.shell);
   if (!shellProto.__probeExec) {
     const origExecute = shellProto.execute;
     shellProto.execute = async function (line, ...rest) {
@@ -79,8 +79,8 @@ const SAMPLE = `(async () => {
     running: P.exec.filter((e) => e.ms === null && Date.now() - e.t > 30000).map((e) => Math.round((Date.now() - e.t) / 1000) + 's ' + e.line.slice(0, 200)),
     slowDone: P.exec.filter((e) => e.ms !== null && e.ms > 10000 && !e.reported && (e.reported = true)).map((e) => e.ms + 'ms ' + e.line.slice(0, 200)),
     fs: Object.fromEntries(Object.entries(P.fs).map(([k, v]) => [k, [v.n, Math.round(v.ms), Math.round(v.max), v.bytes, v.maxPath]])),
-    procs: window.__shiro.processTable.list().map((p) => p.pid + ':' + p.command.slice(0, 40) + ':' + p.status),
-    scrollback: window.__shiro.terminal.term.buffer.normal.length,
+    procs: window.__tabcomputer.processTable.list().map((p) => p.pid + ':' + p.command.slice(0, 40) + ':' + p.status),
+    scrollback: window.__tabcomputer.terminal.term.buffer.normal.length,
     dom: document.getElementsByTagName('*').length,
   };
   P.lastSample = now;

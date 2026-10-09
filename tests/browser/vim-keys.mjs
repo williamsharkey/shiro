@@ -33,7 +33,7 @@ const exe = process.env.CHROMIUM || '/opt/pw-browsers/chromium-1194/chrome-linux
 const browser = await chromium.launch({ executablePath: exe, args: ['--no-sandbox'] });
 const page = await (await browser.newContext({ viewport: { width: 1280, height: 860 } })).newPage();
 const screen = () => page.evaluate(() => {
-  const t = window.__shiro?.terminal?.term;
+  const t = window.__tabcomputer?.terminal?.term;
   if (!t) return '';
   const b = t.buffer.active;
   const r = [];
@@ -60,8 +60,8 @@ if (!await until((s) => prompt(s) && !/pkg install/.test(s), 240_000)) throw new
 
 if (trace) {
   await page.evaluate(() => {
-    const pty = window.__shiro.terminal.tty.pty;
-    const k = window.__shiro.kernel;
+    const pty = window.__tabcomputer.terminal.tty.pty;
+    const k = window.__tabcomputer.kernel;
     const w = window;
     w.__trace = [];
     const t = () => performance.now() | 0;
