@@ -316,27 +316,39 @@ export const whichCmd: Command = {
   name: 'which',
   description: 'Locate a command',
   async exec(ctx) {
-    if (ctx.args.length === 0) {
+    // which [-a] NAME...: a line per name found (-a: every match on PATH); 1 if any is missing
+    let all = false;
+    const names: string[] = [];
+    for (const a of ctx.args) {
+      if (a === '-a') all = true;
+      else if (a === '-s' || a === '--') continue;
+      else names.push(a);
+    }
+    if (names.length === 0) {
       ctx.stderr = 'which: missing argument\n';
       return 1;
     }
-    const name = ctx.args[0];
-    const execPath = await ctx.shell.findExecutableInPath(name);
-    if (execPath) {
-      ctx.stdout = `${execPath}\n`;
-      return 0;
+    let missing = 0;
+    for (const name of names) {
+      const found: string[] = [];
+      if (all && !name.includes('/')) {
+        for (const dir of (ctx.env.PATH ?? '').split(':')) {
+          const p = `${dir || '.'}/${name}`;
+          try {
+            const st = await ctx.fs.stat(ctx.fs.resolvePath(p, ctx.cwd));
+            if (!st.isDirectory()) found.push(p);
+          } catch { /* not there */ }
+        }
+      } else {
+        const execPath = await ctx.shell.findExecutableInPath(name);
+        if (execPath) found.push(execPath);
+      }
+      if (!found.length && ctx.shell.commands.get(name)) found.push(name);
+      if (!found.length && ctx.shell.functions?.[name]) found.push(`${name}: shell function`);
+      if (found.length) ctx.stdout += found.map((f) => f + '\n').join('');
+      else { ctx.stderr += `${name} not found\n`; missing++; }
     }
-    const cmd = ctx.shell.commands.get(name);
-    if (cmd) {
-      ctx.stdout = `${name}\n`;
-      return 0;
-    }
-    if (ctx.shell.functions?.[name]) {
-      ctx.stdout = `${name}: shell function\n`;
-      return 0;
-    }
-    ctx.stderr = `${name} not found\n`;
-    return 1;
+    return missing ? 1 : 0;
   },
 };
 
