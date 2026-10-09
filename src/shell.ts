@@ -133,7 +133,8 @@ const fdRef = (n: number) => FD_REF + n;
 const fdOfRef = (target: string): number | null => (target.startsWith(FD_REF) ? Number(target.slice(1)) : null);
 
 /** An output fd of the shell: a file, or a copy of the shell's own stdout/stderr */
-type OutFd = { path: string } | { dup: 1 | 2 };
+/** `fifo`: a named pipe's write end this shell opened (exec N>fifo); `owned` closes it when the entry goes. */
+type OutFd = { path: string; fifo?: import('./kernel/fd').OpenFile; owner?: Shell } | { dup: 1 | 2 };
 
 export interface BackgroundJob {
   id: number;
@@ -1246,7 +1247,10 @@ export class Shell {
     // `< <(cmd)`: the output of cmd
     const ps = /^<\(([\s\S]+)\)$/.exec(target);
     if (ps) return this.procSubOutput(ps[1], () => {});
-    const data = await this.fs.readFile(this.fs.resolvePath(target, this.cwd), 'utf8');
+    const path = this.fs.resolvePath(target, this.cwd);
+    const fifo = await import('./shell-fifo');
+    if (await fifo.isFifo(this, path)) return fifo.readFifo(this, path);
+    const data = await this.fs.readFile(path, 'utf8');
     return typeof data === 'string' ? data : new TextDecoder().decode(data as any);
   }
 
@@ -1307,6 +1311,12 @@ export class Shell {
     return null;
   }
 
+  /** Fd n is being replaced or closed: close a named pipe end this shell opened for it */
+  private dropFd(n: number, keep?: OutFd): void {
+    const e = this.userFds.get(n);
+    if (e && 'fifo' in e && e.fifo && e.owner === this && e !== keep) void e.fifo.close();
+  }
+
   /** exec with only redirections: update the shell's fd tables */
   private async applyExecRedirects(redirects: Redirect[]): Promise<string | null> {
     if (this.flushFdWrites) await this.flushFdWrites();
@@ -1316,15 +1326,23 @@ export class Shell {
       if (ref !== null) {
         const e = this.resolveOutFd(ref);
         if (!e) return `${ref}: Bad file descriptor`;
-        this.userFds.set(fd, e);
+        this.dropFd(fd, e);
+        this.userFds.set(fd, 'fifo' in e ? { ...e, owner: undefined } : e);
         return null;
       }
       if (target === '/dev/stdout') { this.userFds.set(fd, this.resolveOutFd(1)!); return null; }
       if (target === '/dev/stderr') { this.userFds.set(fd, this.resolveOutFd(2)!); return null; }
       const path = this.fs.resolvePath(target, this.cwd);
-      if (truncate) pending.push(this.fs.writeFile(path, ''));
-      else pending.push(this.fs.appendFile(path, ''));
+      this.dropFd(fd);
       this.userFds.set(fd, { path });
+      pending.push((async () => {
+        const fifo = await import('./shell-fifo');
+        if (await fifo.isFifo(this, path)) {
+          // A named pipe: open its write end now (it waits for a reader), as exec does
+          this.userFds.set(fd, { path, fifo: await fifo.openFifoEnd(this, path, 'w'), owner: this });
+        } else if (truncate) await this.fs.writeFile(path, '');
+        else await this.fs.appendFile(path, '');
+      })());
       return null;
     };
     for (const r of redirects) {
@@ -1345,11 +1363,11 @@ export class Shell {
           else {
             const e = this.resolveOutFd(to);
             if (!e) err = `${to}: Bad file descriptor`;
-            else this.userFds.set(r.fd!, e);
+            else { this.dropFd(r.fd!, e); this.userFds.set(r.fd!, 'fifo' in e ? { ...e, owner: undefined } : e); }
           }
           break;
         }
-        case '>&-': this.userFds.delete(r.fd!); this.fileDescriptors.delete(r.fd!); break;
+        case '>&-': this.dropFd(r.fd!); this.userFds.delete(r.fd!); this.fileDescriptors.delete(r.fd!); break;
         case '<':
           if (fdOfRef(r.target) === null) {
             pending.push(this.readInputRedirect(r.target).then((content) => { this.fileDescriptors.set(0, { content, offset: 0 }); }));
@@ -1378,6 +1396,10 @@ export class Shell {
       return true;
     }
     await this.pendingFdOps;
+    if (e.fifo) {
+      if (text) await (await import('./shell-fifo')).writeOpenFifo(e.fifo, text.replace(/\r\n/g, '\n'));
+      return true;
+    }
     if (text) await this.fs.appendFile(e.path, text.replace(/\r\n/g, '\n'));
     return true;
   }
@@ -3829,7 +3851,9 @@ export class Shell {
   /** Write a redirect's file; a failure (a directory, a bad path) is reported and fails the command */
   private async redirectWrite(path: string, shown: string, text: string, append: boolean, writeStderr: (s: string) => void): Promise<void> {
     try {
-      if (append) await this.fs.appendFile(path, text);
+      const fifo = await import('./shell-fifo');
+      if (await fifo.isFifo(this, path)) await fifo.writeFifo(this, path, text);
+      else if (append) await this.fs.appendFile(path, text);
       else await this.fs.writeFile(path, text);
     } catch (e: any) {
       const msg = e?.code === 'EISDIR' || /EISDIR/.test(e?.message ?? '') ? 'Is a directory'
@@ -3843,7 +3867,7 @@ export class Shell {
   private async clobberOk(redir: Redirect, path: string, writeStderr: (s: string) => void): Promise<boolean> {
     if (redir.force || !this.options.has('noclobber')) return true;
     const st = await this.fs.stat(path).catch(() => null);
-    if (st && !st.isDirectory() && st.isFile()) {
+    if (st && !st.isDirectory() && st.isFile() && !st.isFIFO?.()) {
       writeStderr(`shiro: ${redir.target}: cannot overwrite existing file\r\n`);
       this.redirectFailed = true;
       return false;
@@ -6112,6 +6136,7 @@ export class Shell {
     }
     const restoreFds = () => {
       for (const [n, s] of fdSaved) {
+        this.dropFd(n, s.out);
         if (s.inp === undefined) this.fileDescriptors.delete(n); else this.fileDescriptors.set(n, s.inp);
         if (s.out === undefined) this.userFds.delete(n); else this.userFds.set(n, s.out);
       }

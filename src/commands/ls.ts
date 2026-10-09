@@ -73,7 +73,7 @@ function human(bytes: number, base: number): string {
 }
 
 function modeString(it: Item): string {
-  const t = it.type === 'dir' ? 'd' : it.type === 'symlink' ? 'l' : '-';
+  const t = it.type === 'dir' ? 'd' : it.type === 'symlink' ? 'l' : it.st?.isFIFO?.() ? 'p' : '-';
   const m = it.type === 'symlink' ? 0o777 : (it.st?.mode ?? 0o644);
   const rwx = (b: number, s: boolean, sc: string) => `${b & 4 ? 'r' : '-'}${b & 2 ? 'w' : '-'}${s ? (b & 1 ? sc : sc.toUpperCase()) : b & 1 ? 'x' : '-'}`;
   return t + rwx((m >> 6) & 7, !!(m & 0o4000), 's') + rwx((m >> 3) & 7, !!(m & 0o2000), 's') + rwx(m & 7, !!(m & 0o1000), 't');

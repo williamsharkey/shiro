@@ -221,6 +221,24 @@ describe('kernel WASI processes', () => {
     expect(out2.text).toBe('spawn failed: 44\n'); // WASI ENOENT
   });
 
+  it('a WASM program opens a named pipe by path and reads until the last writer closes', async () => {
+    const { fs, kernel } = await setup();
+    await fs.mkdir('/tmp/wfifo', { recursive: true });
+    await fs.mkfifo('/tmp/wfifo/p');
+    const out = collector();
+    const proc = spawn(kernel, ['cat', '/tmp/wfifo/p'], { 0: new BufferFile(new Uint8Array(0)), 1: out.sink, 2: out.sink });
+    await new Promise(res => setTimeout(res, 50));
+    expect(proc.exiting).toBe(false); // its open waits for a writer
+    const holder = kernel.spawn({ path: 'holder', run: () => new Promise<number>(() => {}) });
+    const w = await kernel.open(holder, '/tmp/wfifo/p', 1 /* O_WRONLY */) as OpenFile;
+    await w.write(new TextEncoder().encode('via fifo\n'));
+    await until(() => out.text.includes('via fifo'));
+    await w.close();
+    expect(await proc.wait()).toBe(W_EXITCODE(0));
+    expect(out.text).toBe('via fifo\n');
+    kernel.kill(holder.pid, 9);
+  });
+
   it('kill terminates a process blocked in read', async () => {
     const { kernel } = await setup();
     const [r, w] = createPipe();
