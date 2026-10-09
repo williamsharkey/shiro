@@ -1,3 +1,5 @@
+import { decodeBytes, encodeText } from './utils/byte-text';
+
 function globPatternToRegex(pattern: string, base: string, caseInsensitive?: boolean): RegExp {
   // Resolve the pattern relative to base
   let fullPattern: string;
@@ -1094,7 +1096,7 @@ export class FileSystem {
   readCached(path: string): string | undefined {
     const node = this.cache.get(path);
     if (!node || node.type !== 'file' || !node.content) return undefined;
-    return new TextDecoder().decode(node.content);
+    return decodeBytes(node.content);
   }
 
   /** Synchronously read a file's raw bytes from the in-memory cache. */
@@ -1242,9 +1244,8 @@ export class FileSystem {
     if (node.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, read '${path}'`);
     if (node.lazy) node = await this._materialize(node);
     const data = node.content || new Uint8Array(0);
-    if (encoding === 'utf8') {
-      return new TextDecoder().decode(data);
-    }
+    // Byte-exact: invalid UTF-8 survives a round trip through the string (src/utils/byte-text.ts)
+    if (encoding === 'utf8') return decodeBytes(data);
     return data;
   }
 
@@ -1265,7 +1266,7 @@ export class FileSystem {
     // A view into a larger buffer is stored compactly: IndexedDB clones the
     // whole ArrayBuffer behind a typed array (a WebC volume file would carry
     // its entire container)
-    const content = typeof data === 'string' ? new TextEncoder().encode(data)
+    const content = typeof data === 'string' ? encodeText(data)
       : data.byteOffset !== 0 || data.byteLength !== data.buffer.byteLength ? data.slice() : data;
     const existing = await this._get(path);
     // Prevent overwriting a directory with a file
@@ -1294,7 +1295,7 @@ export class FileSystem {
     } catch {
       existing = new Uint8Array(0);
     }
-    const append = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+    const append = typeof data === 'string' ? encodeText(data) : data;
     const combined = new Uint8Array(existing.length + append.length);
     combined.set(existing);
     combined.set(append, existing.length);

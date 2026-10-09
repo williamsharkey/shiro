@@ -12,8 +12,7 @@ import type { Kernel } from './kernel/kernel';
 import type { Process } from './kernel/process';
 import type { OpenFile } from './kernel/fd';
 import type { Command, CommandContext } from './commands/index';
-
-const enc = new TextEncoder();
+import { decodeBytes, encodeText } from './utils/byte-text';
 
 export class KernelStdio {
   private chain: Promise<void> = Promise.resolve();
@@ -43,7 +42,7 @@ export class KernelStdio {
 
   private write(fd: number, s: string): void {
     if (!s) return;
-    const bytes = enc.encode(s.replace(/\r\n/g, '\n'));
+    const bytes = encodeText(s.replace(/\r\n/g, '\n'));
     this.chain = this.chain.then(async () => {
       if (!this.proc.exiting) await this.kernel.writeAll(this.proc, fd, bytes);
     });
@@ -61,7 +60,7 @@ export class KernelStdio {
   /** Read fd 0 to EOF */
   async readAll(): Promise<string> {
     const r = await this.kernel.readAll(this.proc, 0);
-    return typeof r === 'number' ? '' : new TextDecoder().decode(r);
+    return typeof r === 'number' ? '' : decodeBytes(r);
   }
 
   private async readByte(): Promise<number> {
@@ -102,7 +101,7 @@ export class KernelStdio {
       if (b === d && !escaped) break;
       escaped = false;
     }
-    return new TextDecoder().decode(new Uint8Array(bytes));
+    return decodeBytes(new Uint8Array(bytes));
   }
 }
 
