@@ -33,6 +33,8 @@ export interface KernelProgram {
   run: Runner;
   /** A Shiro builtin run through kernel.runBuiltin (not a WASM/x86 program) */
   builtin?: boolean;
+  /** Environment defaults from the package (the job's own values win) */
+  env?: Record<string, string>;
 }
 
 const dec = new TextDecoder();
@@ -231,7 +233,7 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
     if (i === programs.length - 1) out = lastOut;
     else [nextInput, out] = createPipe();
     const spawn = {
-      path: p.argv[0], argv: p.argv, env, cwd: opts.cwd,
+      path: p.argv[0], argv: p.argv, env: p.env ? { ...p.env, ...env } : env, cwd: opts.cwd,
       fds: { 0: input, 1: out, 2: errOut }, run: p.run,
       // children of a hosted shell stay in its process group, under it
       pgid: host ? undefined : procs.length ? procs[0].pgid : 0,

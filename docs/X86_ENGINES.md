@@ -404,6 +404,17 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    capability for uid 0 and none otherwise (Linux's version handshake), and
    `capset` accepts (libcap's `cap_get_proc` failed with ENOSYS). Test:
    `fixtures/x86/prctlcap.c`.
+34. Futexes are keyed by host address, so a same-instance fork child and
+   its parent meet on a `MAP_SHARED` futex; a same-instance child's extra
+   threads end with it (`exit_group`, a kill); under Shiro `stat` and
+   friends with a NULL buffer are EFAULT once the file is found (LTP
+   fstat03). Tests: `fixtures/x86/shfutex.c`, `mtchild.c`, `statnull.c`.
+35. `FUTEX_WAKE` wakes at most `count` waiters and returns how many (it
+   woke every waiter and returned the waiter count; LTP futex_wake02), and
+   a timed futex wait ends by the guest's clock, the absolute timeout's
+   own clock for `FUTEX_WAIT_BITSET`, not by the condition variable's
+   coarser realtime ticks (LTP futex_wait_bitset01 saw it end early).
+   Test: `fixtures/x86/futexwake.c`.
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.

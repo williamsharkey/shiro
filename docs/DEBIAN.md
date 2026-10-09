@@ -87,7 +87,12 @@ Debian's apt and dpkg run unmodified. What Shiro provides around them:
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `SHIRO_DEBIAN_MIRRORS` | `deb.debian.org=https://deb.debian.org,security.debian.org=https://security.debian.org` | archive host names apt uses → upstream base URL. Only these hosts and only `…/dists/…` and `…/pool/…` paths are served (not an open proxy). Point a host at a local mirror or `https://snapshot.debian.org/archive/debian/<ts>` to pin. |
-| `SHIRO_DEBIAN_CACHE` | unset (no disk cache) | directory for a disk cache. `pool/` and `by-hash/` files are immutable and kept forever; other index files for `SHIRO_DEBIAN_INDEX_TTL` seconds (600). |
+| `SHIRO_DEBIAN_CACHE` | `$TMPDIR/shiro-debian` | disk cache (`SHIRO_DEB_CACHE` is the old name). `pool/` and `by-hash/` files are immutable and kept forever; other index files for `SHIRO_DEBIAN_INDEX_TTL` seconds (600). |
+| `SHIRO_DEBIAN_SNAPSHOT` | `https://snapshot.debian.org/archive/debian/20260712T000000Z/` | where a `deb.debian.org` pool file the mirror no longer has (removed by a point release) is fetched from instead |
+
+The GUI apps (src/gui/apps.ts, docs/GUI.md) fetch their pinned .debs as
+`/debian/pool/PATH`, which is the same mirror (`/debian/mirror/deb.debian.org/debian/pool/PATH`)
+and the same cache; they check each file's sha256 themselves.
 
 Responses are same-origin, so no CORS or COEP issues. Traffic per user is
 what apt fetches: `apt update` is ≈10 MB (trixie's Packages.xz, plus the

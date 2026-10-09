@@ -1,0 +1,142 @@
+From 3239868290517908b9867550a0de1378f1083e21 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 06:56:53 +0000
+Subject: [PATCH 35/35] FUTEX_WAKE wakes at most count waiters; futex timeouts
+ end by the guest's clock
+
+---
+ blink/bus.h     |  1 +
+ blink/syscall.c | 64 ++++++++++++++++++++++++++++++-------------------
+ 2 files changed, 40 insertions(+), 25 deletions(-)
+
+diff --git a/blink/bus.h b/blink/bus.h
+index 0947119..5a30435 100644
+--- a/blink/bus.h
++++ b/blink/bus.h
+@@ -18,6 +18,7 @@
+ struct Futex {
+   i64 addr;
+   int waiters;
++  int wakeups;  // FUTEX_WAKE grants not yet taken by a waiter
+   struct Dll elem;
+   pthread_cond_t_ cond;
+   pthread_mutex_t_ lock;
+diff --git a/blink/syscall.c b/blink/syscall.c
+index d0cab65..d4b01e2 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -342,16 +342,13 @@ static int SysFutexWake(struct Machine *m, i64 uaddr, u32 count) {
+     LOCK(&f->lock);
+   }
+   UNLOCK(&g_bus->futexes.lock);
+-  if (f && f->waiters) {
+-    THR_LOGF("pid=%d tid=%d is waking %d waiters at address %#" PRIx64,
+-             m->system->pid, m->tid, f->waiters, uaddr);
+-    if (count == 1) {
+-      unassert(!pthread_cond_signal(&f->cond));
+-      rc = 1;
+-    } else {
+-      unassert(!pthread_cond_broadcast(&f->cond));
+-      rc = f->waiters;
+-    }
++  if (f && f->waiters > f->wakeups) {
++    // wake at most `count` waiters: each takes one grant (see SysFutexWait)
++    rc = MIN((u32)(f->waiters - f->wakeups), count);
++    THR_LOGF("pid=%d tid=%d is waking %d of %d waiters at address %#" PRIx64,
++             m->system->pid, m->tid, rc, f->waiters, uaddr);
++    f->wakeups += rc;
++    unassert(!pthread_cond_broadcast(&f->cond));
+     UNLOCK(&f->lock);
+   } else {
+     if (f) UNLOCK(&f->lock);
+@@ -664,6 +661,7 @@ static struct Futex *NewFutex(i64 addr) {
+   dll_remove(&g_bus->futexes.free, e);
+   f = FUTEX_CONTAINER(e);
+   f->waiters = 1;
++  f->wakeups = 0;
+   f->addr = addr;
+   return f;
+ }
+@@ -709,7 +707,11 @@ static int SysFutexWait(struct Machine *m,  //
+   u8 *mem;
+   struct Futex *f;
+   const struct timespec_linux *gtimeout;
+-  struct timespec now, tick, timeout, deadline;
++  // the wait ends by the guest's clock (CLOCK_MONOTONIC, or the absolute
++  // timeout's own clock), not by the condition variable's realtime ticks:
++  // those can be coarser than what the guest reads and end it early
++  clockid_t clk = CLOCK_MONOTONIC;
++  struct timespec now, tick, timeout, deadline, cnow, cend;
+   now = tick = GetTime();
+   if (timeout_addr) {
+     if (!(gtimeout = (const struct timespec_linux *)SchlepR(
+@@ -721,17 +723,19 @@ static int SysFutexWait(struct Machine *m,  //
+     if (!(0 <= timeout.tv_nsec && timeout.tv_nsec < 1000000000)) {
+       return einval();
+     }
++    if (absolute && (op & FUTEX_CLOCK_REALTIME_LINUX)) clk = CLOCK_REALTIME;
++    unassert(!clock_gettime(clk, &cnow));
+     if (absolute) {
+-      struct timespec clk;
+-      unassert(!clock_gettime((op & FUTEX_CLOCK_REALTIME_LINUX) ? CLOCK_REALTIME
+-                                                                : CLOCK_MONOTONIC,
+-                              &clk));
+-      timeout = CompareTime(timeout, clk) > 0 ? SubtractTime(timeout, clk)
+-                                              : GetZeroTime();
++      cend = timeout;
++      timeout = CompareTime(cend, cnow) > 0 ? SubtractTime(cend, cnow)
++                                            : GetZeroTime();
++    } else {
++      cend = AddTime(cnow, timeout);
+     }
+     deadline = AddTime(now, timeout);
+   } else {
+-    deadline = GetMaxTime();
++    deadline = cend = GetMaxTime();
++    cnow = GetZeroTime();
+   }
+   if (!(mem = LookupAddress(m, uaddr))) return -1;
+   LOCK(&g_bus->futexes.lock);
+@@ -769,22 +773,32 @@ static int SysFutexWait(struct Machine *m,  //
+       break;
+     }
+     LOCK(&f->lock);
+-    if (Load32(mem) != expect) {
++    if (f->wakeups > 0) {
++      --f->wakeups;  // a FUTEX_WAKE picked us
+       rc = 0;
++    } else if (Load32(mem) != expect) {
++      rc = 0;  // changed (polling stands in for a wake we couldn't see)
+     } else {
+       tick = AddTime(tick, FromMilliseconds(kPollingMs));
+       if (CompareTime(tick, deadline) > 0) tick = deadline;
+       rc = pthread_cond_timedwait(&f->cond, &f->lock, &tick);
+-      if (rc == ETIMEDOUT) {
+-        THR_LOGF("futex wait timed out");
+-      } else {
+-        THR_LOGF("futex wait returned %s", DescribeHostErrno(rc));
+-      }
++      if (rc != ETIMEDOUT) rc = ETIMEDOUT;  // look for a grant next round
++      else THR_LOGF("futex wait timed out");
+     }
+     UNLOCK(&f->lock);
+-  } while (rc == ETIMEDOUT && CompareTime(tick, deadline) < 0);
++    if (rc == ETIMEDOUT && timeout_addr) {
++      unassert(!clock_gettime(clk, &cnow));
++      // past the realtime deadline but not the guest's: poll again shortly
++      if (CompareTime(tick, deadline) >= 0) deadline = AddTime(tick, FromMilliseconds(1));
++    }
++  } while (rc == ETIMEDOUT && CompareTime(cnow, cend) < 0);
+   LOCK(&g_bus->futexes.lock);
+   LOCK(&f->lock);
++  if (rc == ETIMEDOUT && f->wakeups > 0) {
++    --f->wakeups;  // woken just as the wait ran out: count it as a wake
++    rc = 0;
++  }
++  if (f->wakeups > f->waiters - 1) f->wakeups = f->waiters - 1;
+   if (!--f->waiters) {
+     dll_remove(&g_bus->futexes.active, &f->elem);
+     UNLOCK(&f->lock);
+-- 
+2.43.0
+
