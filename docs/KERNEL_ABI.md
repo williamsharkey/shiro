@@ -4,6 +4,16 @@
 
 All changes so far are additive; nothing below renames or removes an earlier name.
 
+- **2026-10-09 (unix/desktop)** (additive)
+  - `FileSystem.addVirtualProvider(vp)`; `VirtualFSProvider.mountPoint`
+    names a top-level directory `ls /` shows. `makeStat` is exported.
+    `/dom` (src/dom-fs.ts) uses both; kernel `open` reaches it through the
+    FileSystem as for `/proc` files, and `/dom/events/<type>` are registered
+    devices (`kernel.registerDevice`) whose reads block until an event.
+  - `NetStack` relay token request sends `Authorization: Bearer <GitHub
+    token>` when one is saved and, on 401, calls `requireNetworkSignIn()`
+    (src/net-signin.ts) once and retries. See docs/DESKTOP.md.
+
 - **2026-10-08 (unix/shell-stdio)** — behavior of builtins run as kernel processes.
   - `runBuiltin` no longer reads fd 0 to EOF before the command runs:
     `ctx.stdin` is read the first time the command looks at it
@@ -101,6 +111,10 @@ All changes so far are additive; nothing below renames or removes an earlier nam
   - `sh` as a kernel process with no script on a terminal (or `-i`) runs
     an interactive read-eval loop (`Shell.exited` marks `exit`).
   - `link(2)` copies report the source's inode number.
+  - `Kernel.startForkChild(parent, pid, run)` starts a fork child by who
+    forked it (`data.forkParent`), not its ppid: a parent that exits right
+    after fork() (daemon()) reparented the child to init first, which then
+    never started (tmux's server, now and then).
   - `SYS_uname` (63) writes a `struct utsname` whose nodename is
     `Kernel.hostname` ("shiro"); Blink takes the host and domain names
     from it. Constant `UTSNAME_FIELD`.

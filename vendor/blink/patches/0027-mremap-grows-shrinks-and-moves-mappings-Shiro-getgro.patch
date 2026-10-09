@@ -1,0 +1,159 @@
+From 8313911de0b50f8c65f24048523f677b937f5fc1 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 03:52:21 +0000
+Subject: [PATCH 27/27] mremap grows, shrinks and moves mappings; Shiro
+ getgroups answers the process's gid
+
+mremap always failed with ENOMEM. apt's DynamicMMap grows its package
+cache with MREMAP_MAYMOVE ("Dynamic MMap ran out of room"). Now: a
+shrink unmaps the tail; a grow maps the pages after the mapping when
+they're free, otherwise (MREMAP_MAYMOVE) maps a new region with the same
+protection, copies and unmaps the old one; MREMAP_FIXED moves to the given
+place. The copy takes no page locks (the syscall's would outlive the
+munmap that follows).
+
+getgroups(0, NULL) reached emscripten and failed with EINVAL (coreutils
+id); under Shiro it reports one group, the kernel's gid for the process.
+---
+ blink/shiro.inc | 13 +++++++
+ blink/syscall.c | 98 ++++++++++++++++++++++++++++++++++++++++++++++---
+ 2 files changed, 106 insertions(+), 5 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 3b79547..4ae1e04 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -1564,6 +1564,19 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+           (c && CopyToUserWrite(m, c, id, 4) == -1)) r = -EFAULT_LINUX;
+       break;
+     }
++    case 0x073: {                                                     // getgroups
++      // one supplementary group: the process's gid (the kernel's)
++      u8 g[4];
++      if ((i64)(i32)a < 0) {
++        r = -EINVAL_LINUX;
++      } else if (!(i32)a) {
++        r = 1;
++      } else {
++        Write32(g, KS(m, 104, A12(0)));
++        r = CopyToUserWrite(m, b, g, 4) == -1 ? -EFAULT_LINUX : 1;
++      }
++      break;
++    }
+     case 0x069: case 0x06A: case 0x071: case 0x072: case 0x075: case 0x077:
+     case 0x074: case 0x07A: case 0x07B:                               // set*id, setgroups, setfs*id
+       r = 0;
+diff --git a/blink/syscall.c b/blink/syscall.c
+index da37b8b..c883ba2 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -1341,13 +1341,101 @@ static i64 SysMmap(struct Machine *m, i64 virt, u64 size, int prot, int flags,
+   return res;
+ }
+ 
++#define MREMAP_MAYMOVE_LINUX 1
++#define MREMAP_FIXED_LINUX   2
++
++// the page table entry of a mapped page, without taking a page lock
++static u64 PeekPte(struct System *s, i64 virt) {
++  u64 pt;
++  int i;
++  for (pt = s->cr3, i = 39;; i -= 9) {
++    pt = LoadPte(GetPageAddress(s, pt, i == 39) + ((virt >> i) & 511) * 8);
++    if (!(pt & PAGE_V) || i == 12) return pt;
++  }
++}
++
++// copies guest memory to guest memory; the syscall's page locks would
++// outlive the munmap that follows, so none are taken
++static bool CopyGuest(struct Machine *m, i64 dst, i64 src, i64 n) {
++  bool ok = true, insyscall = m->insyscall;
++  u8 *buf;
++  i64 k;
++  if (!(buf = (u8 *)malloc(1 << 20))) return false;
++  m->insyscall = false;
++  for (; ok && n > 0; n -= k, src += k, dst += k) {
++    k = MIN(n, 1 << 20);
++    ok = CopyFromUser(m, buf, src, k) != -1 && CopyToUser(m, dst, buf, k) != -1;
++  }
++  m->insyscall = insyscall;
++  free(buf);
++  return ok;
++}
++
++// Grows or shrinks a mapping, in place or (MREMAP_MAYMOVE) by mapping a
++// new region with the same protection, copying, and unmapping the old one
++// (apt's DynamicMMap grows its cache this way).
+ static i64 SysMremap(struct Machine *m, i64 old_address, u64 old_size,
+                      u64 new_size, int flags, i64 new_address) {
+-  // would be nice to have
+-  // avoid being noisy in the logs
+-  // hope program has fallback for failure
+-  LOG_ONCE(MEM_LOGF("mremap() not supported yet"));
+-  return enomem();
++  u64 entry;
++  i64 virt;
++  int prot, mflags = MAP_PRIVATE_LINUX | MAP_ANONYMOUS_LINUX;
++  bool fixed = flags & MREMAP_FIXED_LINUX;
++  if (flags & ~(MREMAP_MAYMOVE_LINUX | MREMAP_FIXED_LINUX)) return einval();
++  if (fixed && !(flags & MREMAP_MAYMOVE_LINUX)) return einval();
++  if ((old_address & 4095) || (fixed && (new_address & 4095))) return einval();
++  old_size = ROUNDUP(old_size, 4096);
++  new_size = ROUNDUP(new_size, 4096);
++  if (!old_size || !new_size) return einval();  // (no duplicating shared maps)
++  if (!IsValidAddrSize(old_address, old_size) ||
++      (fixed && !IsValidAddrSize(new_address, new_size))) {
++    return einval();
++  }
++  if (fixed && new_address < old_address + (i64)old_size &&
++      old_address < new_address + (i64)new_size) {
++    return einval();
++  }
++  if (!IsFullyMapped(m->system, old_address, old_size)) return efault();
++  entry = PeekPte(m->system, old_address);
++  prot = (entry & PAGE_U ? PROT_READ_LINUX : 0) |
++         (entry & PAGE_RW ? PROT_WRITE_LINUX : 0) |
++         (entry & PAGE_XD ? 0 : PROT_EXEC_LINUX);
++#ifdef __EMSCRIPTEN__
++  for (int i = 0; i < m->system->nshared; ++i) {
++    if (m->system->shared[i][0] < old_address + (i64)old_size &&
++        old_address < m->system->shared[i][0] + m->system->shared[i][1]) {
++      mflags = MAP_SHARED_LINUX | MAP_ANONYMOUS_LINUX;
++    }
++  }
++#endif
++  if (!fixed && new_size <= old_size) {
++    if (new_size < old_size &&
++        SysMunmap(m, old_address + new_size, old_size - new_size) == -1) {
++      return -1;
++    }
++    return old_address;
++  }
++  if (!fixed &&
++      IsFullyUnmapped(m->system, old_address + old_size, new_size - old_size) &&
++      SysMmap(m, old_address + old_size, new_size - old_size, prot,
++              mflags | MAP_FIXED_LINUX, -1, 0) != -1) {
++    return old_address;
++  }
++  if (!(flags & MREMAP_MAYMOVE_LINUX)) return enomem();
++  if ((virt = SysMmap(m, fixed ? new_address : 0, new_size,
++                      prot | PROT_READ_LINUX | PROT_WRITE_LINUX,
++                      mflags | (fixed ? MAP_FIXED_LINUX : 0), -1, 0)) == -1) {
++    return -1;
++  }
++  if (!CopyGuest(m, virt, old_address, MIN(old_size, new_size))) {
++    SysMunmap(m, virt, new_size);
++    return enomem();
++  }
++  if ((prot & (PROT_READ_LINUX | PROT_WRITE_LINUX)) !=
++      (PROT_READ_LINUX | PROT_WRITE_LINUX)) {
++    SysMprotect(m, virt, new_size, prot);
++  }
++  SysMunmap(m, old_address, old_size);
++  return virt;
+ }
+ 
+ static int XlatMsyncFlags(int flags) {
+-- 
+2.43.0
+

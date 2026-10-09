@@ -647,4 +647,28 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('3 0 -4\n14 3\nst=1\n');
   });
+
+  it('function names and bodies: } as an argument, foo!bar(), name ( ) before a newline', async () => {
+    const r = await script([
+      'rbrace() { echo }; }; rbrace',
+      'foo!bar() { echo bang; }; foo!bar',
+      'fun ( )',
+      '{ echo in-func; }',
+      'fun',
+      'echo {a,b} { x }',
+    ].join('\n'));
+    expect(r.out).toBe('}\nbang\nin-func\na b { x }\n');
+  });
+
+  it('/bin/NAME runs Shiro NAME; (( )) and redirects; set -e in conditions; printf errors', async () => {
+    const r = await script([
+      "sh -c 'set -e; false || /bin/false; echo bad'; echo s1=$?",
+      '/usr/bin/printf "%s\\n" hi',
+      '(( 2 + 2 )) > /tmp/ar.txt; echo s2=$?; (( 0 )) > /tmp/ar.txt; echo s3=$?',
+      "sh -c 'set -e; (( 42 )) > /; echo bad'; echo s4=$?",
+      'set -e; if ( false; echo still ); then echo cond; fi; if { false; true; } then echo brace; fi; set +e',
+      'printf; echo p1=$?; printf "a%yb"; echo p2=$?',
+    ].join('\n'));
+    expect(r.out).toBe('s1=1\nhi\ns2=0\ns3=1\ns4=1\nstill\ncond\nbrace\np1=2\nap2=1\n');
+  });
 });

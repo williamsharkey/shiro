@@ -7,7 +7,13 @@ classic full-page terminal of shiro.computer is still there behind a flag.
 - Code: `src/desktop/` (window manager `wm.ts`, shell `index.ts`, Terminal
   `terminal-app.ts`, network sheet `network.ts`, lazy apps in `apps/`),
   `src/dom-fs.ts` (/dom), `src/net-signin.ts` (sign-in hook), `src/ui-mode.ts`.
-- Screenshots: [docs/screenshots/](screenshots/).
+- Screenshots (1440×900, and phone width at 390 px):
+
+  | | |
+  |---|---|
+  | ![first visit, dark](screenshots/desktop-dark.png) | ![light: cowsay just installed, Files](screenshots/desktop-light.png) |
+  | ![htop (x86-64, Blink) from the dock, next to Activity](screenshots/apps-dark.png) | ![driving windows through /dom](screenshots/dom-dark.png) |
+  | ![the network sign-in sheet](screenshots/signin-sheet.png) | ![phone width](screenshots/phone-dark.png) ![phone width, light](screenshots/phone-light.png) |
 
 ## Changelog (API)
 

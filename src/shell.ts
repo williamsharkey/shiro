@@ -606,6 +606,8 @@ export class Shell {
     child.dirStack = [...this.dirStack];
     child.history = this.history; // share history array reference
     child.completionSpecs = new Map(this.completionSpecs);
+    // A subshell in an if/while condition ignores set -e too
+    child.errexitSuppressed = this.errexitSuppressed;
     child.inheritedReturn = this.canReturn();
     child.kernelHost = this.kernelHost;
     return child;
@@ -1259,8 +1261,8 @@ export class Shell {
         }
       }
 
-      // A subshell followed by redirections: (cmds) > file
-      if (/^\((?!\()/.test(trimmedCmd) && !trimmedCmd.endsWith(')') && splitCompoundRedirects(trimmedCmd).redirects.length) {
+      // A subshell or (( … )) followed by redirections: (cmds) > file
+      if (/^\(/.test(trimmedCmd) && !trimmedCmd.endsWith(')') && splitCompoundRedirects(trimmedCmd).redirects.length) {
         exitCode = await this.execControlStructure(trimmedCmd, writeStdout, stderrWriter);
         this.lastExitCode = exitCode;
         this.env['?'] = String(exitCode);
@@ -3251,7 +3253,10 @@ export class Shell {
         const pkgShadowed = !_builtinDisabled && this.pkgShadowBypass !== effectiveCmdName &&
           !!this.commands.get(effectiveCmdName) &&
           packageShadows(this.fs).has(effectiveCmdName);
-        const cmd = pkgShadowed ? undefined : this.commands.get(effectiveCmdName);
+        // /bin/NAME, /usr/bin/NAME, …: Shiro's NAME when no such file exists (the kernel stats them the same way)
+        const binPath = /^\/(?:usr\/)?(?:local\/)?s?bin\/([^/]+)$/.exec(effectiveCmdName);
+        const cmd = pkgShadowed ? undefined : this.commands.get(effectiveCmdName)
+          ?? (binPath && !(await this.fs.exists(effectiveCmdName)) ? this.commands.get(binPath[1]) : undefined);
         if (cmd) {
           try {
             exitCode = live
@@ -4613,14 +4618,16 @@ export class Shell {
 
         // Track {/} brace groups and function bodies
         if (ch === '{') {
-          // Only count as depth if preceded by whitespace/; (not in ${VAR})
+          // A brace group's { is a word of its own (not ${VAR} or {a,b})
           const prevBrace = i > 0 ? line[i - 1] : ' ';
-          if (/[\s;)|&]/.test(prevBrace) || i === 0) { depth++; braceDepth++; }
+          if ((/[\s;)|&]/.test(prevBrace) || i === 0) && /^[\s]/.test(line[i + 1] ?? '')) { depth++; braceDepth++; }
           current += ch; i++; continue;
         }
         if (ch === '}') {
-          // Only decrement if we have a matching brace-group { (not ${VAR})
-          if (braceDepth > 0) { depth--; braceDepth--; }
+          // Its } ends a command list (`{ echo }; }`: the first } is an argument)
+          const before = current.replace(/[ \t]+$/, '');
+          const closes = /(^|[;&\n{}]|\bdone|\bfi|\besac)$/.test(before) && /^($|[\s;&|)<>])/.test(line.slice(i + 1));
+          if (braceDepth > 0 && closes) { depth--; braceDepth--; }
           current += ch; i++; continue;
         }
 
@@ -5435,7 +5442,7 @@ export class Shell {
     // NAME() BODY or function NAME [()] BODY; bash allows - . : in names (test-hyphen() { … }).
     // BODY is any compound command: { … }, ( … ), a loop, if, case, [[ ]], (( )),
     // possibly followed by redirections ({ cat; } <<EOF)
-    const m = /^(function\s+)?([A-Za-z_][\w.:-]*)\s*(\(\s*\))?\s*([\s\S]+)$/.exec(input);
+    const m = /^(function\s+)?([^\s()<>;&|'"`$\\{}]+)\s*(\(\s*\))?\s*([\s\S]+)$/.exec(input);
     if (!m || (!m[1] && !m[3])) return null;
     const rest = m[4].trim();
     if (!/^(\{\s|\(|(if|for|while|until|case|select)\s|\[\[\s)/.test(rest)) return null;
@@ -5652,8 +5659,13 @@ export class Shell {
       : await this.execControlStructureWithStdin(compound, stdin, out, err);
     if (outFile) {
       const text = captured.replace(/\r\n/g, '\n');
-      if (outFile.append) await this.fs.appendFile(outFile.path, text);
-      else await this.fs.writeFile(outFile.path, text);
+      try {
+        if (outFile.append) await this.fs.appendFile(outFile.path, text);
+        else await this.fs.writeFile(outFile.path, text);
+      } catch (e: any) {
+        writeStderr(`shiro: ${outFile.path}: ${/EISDIR/.test(e?.message ?? '') ? 'Is a directory' : /ENOENT/.test(e?.message ?? '') ? 'No such file or directory' : e?.message ?? e}\r\n`);
+        return 1;
+      }
     }
     return code;
   }
@@ -5677,6 +5689,7 @@ export class Shell {
       this.loopDepth++;
       try { return await this.execSelect(input, writeStdout, writeStderr); } finally { this.loopDepth--; }
     }
+    if (input.startsWith('((') && input.endsWith('))')) return this.arithStatus([input.slice(2, -2).trim()], writeStderr);
     if (/^\((?!\()/.test(input) && input.endsWith(')')) {
       // ( list ) runs in a child shell
       const child = this.fork();
@@ -6043,7 +6056,8 @@ export class Shell {
         results.push({ word, pos: i });
         if (word === 'for' || word === 'case' || word === 'select') wordsSinceHeader = 0;
       }
-      cmdPos = cmdPos && !glued && leadsToCommand.has(word);
+      // (a brace group's } may be followed by a reserved word: `if { …; } then`)
+      cmdPos = cmdPos && !glued && (leadsToCommand.has(word) || word === '}');
       i = j;
     }
     return results;
@@ -7488,7 +7502,7 @@ function compoundEnd(cmd: string): number {
   const blocks: string[] = [];
   let paren = 0, inSingle = false, inDouble = false, cmdPos = true;
   // A `( … )` subshell ends at its matching paren
-  const subshell = /^\s*\((?!\()/.test(cmd);
+  const subshell = /^\s*\(/.test(cmd); // (also (( … )))
   let i = 0;
   while (i < cmd.length) {
     const ch = cmd[i];

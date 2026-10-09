@@ -1,0 +1,67 @@
+From 83fb42dcf3baa8155b74fbee5ebc13222db92312 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 04:09:58 +0000
+Subject: [PATCH 28/28] brk doesn't grow over a mapping; mmap(0) leaves 1 GB
+ above the break
+
+In the wasm build the automap range scales down to the program's
+neighborhood, so mmap(0) could return the program break itself, and the
+next brk reserved the same pages again, replacing the mapping: apt's
+120 MB cache (mmap at the break) was overwritten by malloc's heap ("Ran
+out of allocation pools", SIGSEGV in FindInCache). brk now fails, like
+Linux, when the new range overlaps a mapping (glibc's malloc falls back
+to mmap), and an automatic placement that would land within kBrkGap
+(1 GB) above the break moves past it, like Linux's gap below mmap_base.
+---
+ blink/syscall.c  | 15 ++++++++++++++-
+ blink/tunables.h |  1 +
+ 2 files changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/blink/syscall.c b/blink/syscall.c
+index c883ba2..d50f450 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -1157,7 +1157,11 @@ static i64 SysBrk(struct Machine *m, i64 addr) {
+     if (addr > m->system->brk) {
+       size = addr - m->system->brk;
+       CleanseMemory(m->system, size);
+-      if (m->system->rss < GetMaxRss(m->system)) {
++      if (!IsFullyUnmapped(m->system, m->system->brk, size)) {
++        // like Linux: the heap doesn't grow over a mapping (glibc's malloc
++        // falls back to mmap); Blink's ReserveVirtual would replace it
++        MEM_LOGF("brk(%#" PRIx64 ") would overlap a mapping", addr);
++      } else if (m->system->rss < GetMaxRss(m->system)) {
+         if (size / 4096 + m->system->vss < GetMaxVss(m->system)) {
+           if (ReserveVirtual(m->system, m->system->brk, addr - m->system->brk,
+                              PAGE_FILE | PAGE_RW | PAGE_U | PAGE_XD, -1, 0, 0,
+@@ -1285,6 +1289,15 @@ static i64 SysMmapImpl(struct Machine *m, i64 virt, i64 size, int prot,
+     if ((virt = FindVirtual(m->system, m->system->automap, size)) == -1) {
+       goto Finished;
+     }
++    // leave room above the program break for the heap, like Linux's gap
++    // below mmap_base: where the automap range is scaled down to the
++    // program's neighborhood (wasm), mmap(0) would otherwise land right at
++    // the break
++    if (m->system->brk && virt < m->system->brk + kBrkGap &&
++        virt + size > m->system->brk &&
++        (virt = FindVirtual(m->system, m->system->brk + kBrkGap, size)) == -1) {
++      goto Finished;
++    }
+     newautomap = ROUNDUP(virt + size, FLAG_pagesize);
+     if (newautomap >= FLAG_automapend) {
+       newautomap = FLAG_automapstart;
+diff --git a/blink/tunables.h b/blink/tunables.h
+index a9f19f8..ba6229a 100644
+--- a/blink/tunables.h
++++ b/blink/tunables.h
+@@ -27,6 +27,7 @@
+ #define kImageStart    0x110001000000
+ #define kAutomapStart  0x200000000000
+ #define kAutomapEnd    0x400000000000
++#define kBrkGap        0x40000000  // room for brk() above the break
+ #define kDynInterpAddr 0x454000000000
+ #define kStackTop      0x500000000000
+ 
+-- 
+2.43.0
+
