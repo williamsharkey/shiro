@@ -1,6 +1,7 @@
 /**
  * Shell conformance: oils spec tests (tests/conformance/oils) run through
- * Shiro's shell, one fresh Shell per case, as `sh case.sh` in an empty
+ * Shiro's shell, one fresh Shell per case, as `bash case.sh` (the judge is bash: as `sh`, Shiro
+ * follows POSIX where bash's own mode differs) in an empty
  * directory. Only cases real bash passes (bash-baseline.json) are scored.
  * Results go to tests/conformance/results/shell-oils.json, which
  * scripts/conformance/report.mjs turns into docs/CONFORMANCE.md.
@@ -64,14 +65,14 @@ async function runFile(file: string): Promise<CaseResult[]> {
     const script = `/spec-cases/${file}-${i}.sh`;
     await fs.writeFile(script, c.code);
     const shell = new Shell(fs, base.commands);
-    Object.assign(shell.env, { TMP: tmp, SH: 'sh', REPO_ROOT: '/oils', HOME: tmp, PWD: tmp });
+    Object.assign(shell.env, { TMP: tmp, SH: 'bash', REPO_ROOT: '/oils', HOME: tmp, PWD: tmp });
     shell.cwd = tmp;
     let stdout = '';
     let stderr = '';
     let timedOut = false;
     let timer: any;
     const status = await Promise.race([
-      shell.execute(`sh ${script}`, (s) => { stdout += s; }, (s) => { stderr += s; }, false, undefined, true).catch((e: any) => {
+      shell.execute(`bash ${script}`, (s) => { stdout += s; }, (s) => { stderr += s; }, false, undefined, true).catch((e: any) => {
         stderr += `[harness] threw: ${e?.message ?? e}\n`;
         return -1;
       }),

@@ -306,6 +306,29 @@ composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
 
+### unix/shell-stdio 2 — POSIX shell fixes (smoosh suite)
+
+Signals to the shell, $$/$PPID/$!, exported vs unexported variables,
+subshell EXIT traps, set -u, bracket expressions and the other fixes found by
+the smoosh POSIX suite (docs/CONFORMANCE.md). Quick shell suite, isolated,
+base unix/integration c14344d vs. 3107d0c, three runs of each alternating
+(medians per run, ms):
+
+| metric | base | new |
+|---|---|---|
+| shell.true | 0.075 / 0.080 / 0.080 | 0.068 / 0.090 / 0.072 |
+| shell.cmd_subst | 0.268 / 0.205 / 0.170 | 0.205 / 0.194 / 0.223 |
+| shell.loop_1000 | 86.7 / 96.3 / 93.7 | 110.2 / 86.7 / 98.2 |
+| shell.for_seq_1000 | 36.5 / 35.8 / 39.1 | 36.3 / 38.6 / 38.2 |
+| shell.pipeline_seq_grep_wc | 31.7 / 33.4 / 38.1 | 54.3 / 41.3 / 38.0 |
+| shell.redirect_append_100 | 6.26 / 6.46 / 7.65 | 6.92 / 7.41 / 7.42 |
+
+compare.mjs flagged loop_1000, pipeline_seq_grep_wc and redirect_append_100
+on the first pair; the runs overlap after that. A CPU profile of
+pipeline_seq_grep_wc on both builds has the same top functions (seq's number
+formatting, wc's count, grep), none of them changed here, so the difference
+is taken as noise. Worth re-measuring on a quieter host.
+
 ### unix/shell-stdio — a shell run as a kernel process uses its fds
 
 `sh -c SCRIPT` spawned by a program (and scripts run through `runViaShell`)
@@ -857,6 +880,48 @@ regression (`--suites shell,wasm --only 'shell.loop_1000|wasm.startup|wasm.peak_
 2.06 → 1.74 MiB, p = 0.90, rounds `-+-`; `shell.loop_1000` 95 → 99 ms,
 p = 0.60, rounds `++-`; `startup.lua` 7.6 → 6.6 ms, `startup.sqlite3`
 9.8 → 8.6 ms (both p > 0.01, split rounds).
+
+### Cold boot to first prompt: where the time goes (investigation, no product change)
+
+Integration 045feaa (desktop UI, isolated, this container; cold first prompt
+~255–275 ms here). Timeline from a CPU profile plus `performance.mark`s in
+`main()`, in ms from navigation:
+
+| step | ms |
+|---|---:|
+| entry `index-*.js` requested (HTML parse and the harness's request routing) | 79 |
+| entry downloaded | 104 |
+| `main()` starts: entry compile and top-level evaluation (27 ms, of which xterm's module wrapper is 14.5 ms) | 177 |
+| `fs.init` (IndexedDB open) | 178–189 |
+| desktop built | 197–205 |
+| `new ShiroTerminal`: xterm `open()`, whose first forced layouts are `_measure` 42 ms and Viewport `_innerRefresh` 25 ms in the profile | 205–260 |
+| `terminal.start()`, first prompt in the buffer | 261–300 |
+
+Moving the Debian rootfs boot / PATH shims, X display :0 and the Blink
+loader behind the first prompt (they are fire-and-forget imports that load
+at 194–211 ms) made no measurable difference:
+`ab.mjs HEAD --suites boot`, 4 rounds × 5 runs: cold first prompt
+270.8 → 275.5 ms, p = 0.97, so it was not committed. Loading
+`pkg-index.json` as text instead of JSON saves only a ~1 ms
+`JSON.parse` (Vite already emits large JSON as `JSON.parse`) and adds
+22 KiB, also not committed. The remaining levers are the entry's size
+(compile) and the cost of the desktop's first layout, which xterm forces.
+
+### unix/perf-fs-shell 6 — npm, upload/download/shiro, hc, remote, cw and the template palette load on first use
+
+Entry chunk 1405 → 1291 KB. `ab.mjs HEAD --suites boot`, 6 rounds × 5 runs,
+isolated, against integration 045feaa:
+
+| metric | base | new | |
+|---|---:|---:|---|
+| boot.cold.transfer | 1576 KiB | 1464 KiB | −7.1% (exact) |
+| boot.mem.uasm | 6.83 MiB | 6.51 MiB | −4.7%, p = 3e-11, all rounds |
+| boot.mem.js_heap | 3.9 MiB | 3.8 MiB | −2.6%, p = 7e-12 (under the 3% bar) |
+| boot.cold.first_prompt | 270.6 ms | 262.0 ms | −3.6%, p = 0.15: not significant |
+| boot.settled.requests | 12 | 13 | the split-out chunk fetched once used |
+
+The remote-session auto-reconnect reads its localStorage key directly and
+loads `commands/remote` only when there is a session to resume.
 
 ## Results
 

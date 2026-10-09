@@ -1,0 +1,241 @@
+{
+ "suite": "smoosh",
+ "title": "Shell: smoosh POSIX tests",
+ "note": "POSIX sh cases from [smoosh](https://github.com/mgree/smoosh) (tests/shell), judged on stdout and exit status; scored where host dash or bash --posix passes. \"Before\" is unix/integration c14344d.",
+ "files": {
+  "benchmark": {
+   "pass": 0,
+   "total": 2,
+   "failures": [
+    {
+     "name": "benchmark.fact5",
+     "reason": "status 2, want 0"
+    },
+    {
+     "name": "benchmark.while",
+     "reason": "status 2, want 0"
+    }
+   ]
+  },
+  "builtin": {
+   "pass": 38,
+   "total": 59,
+   "failures": [
+    {
+     "name": "builtin.command.exec",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "builtin.exec.modernish.mkfifo.loop",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "builtin.exec.true",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "builtin.export",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "builtin.export.override",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "builtin.export.unset",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "builtin.hash.nonposix",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "builtin.jobs",
+     "reason": "status 5, want 0"
+    },
+    {
+     "name": "builtin.kill.signame",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "builtin.kill0",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "builtin.readonly.assign.interactive",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "builtin.readonly.assign.noninteractive",
+     "reason": "status 0, want 1"
+    },
+    {
+     "name": "builtin.source.nonexistent.earlyexit",
+     "reason": "status 0, want 1"
+    },
+    {
+     "name": "builtin.special.redir.error",
+     "reason": "status 0, want 1"
+    },
+    {
+     "name": "builtin.trap.chained",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "builtin.trap.exit3",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "builtin.trap.false",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "builtin.trap.nested",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "builtin.trap.redirect",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "builtin.trap.subshell.false",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "builtin.trap.supershell",
+     "reason": "stdout differs"
+    }
+   ]
+  },
+  "parse": {
+   "pass": 2,
+   "total": 3,
+   "failures": [
+    {
+     "name": "parse.eval.error",
+     "reason": "status 1, want 0"
+    }
+   ]
+  },
+  "semantics": {
+   "pass": 67,
+   "total": 91,
+   "failures": [
+    {
+     "name": "semantics.background.pid",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "semantics.background.pipe.pid",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "semantics.case.ec",
+     "reason": "status 2, want 0"
+    },
+    {
+     "name": "semantics.command-subst.newline",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "semantics.defun.ec",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "semantics.dot.glob",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "semantics.escaping.backslash.modernish",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "semantics.escaping.quote",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "semantics.evalorder.fun",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "semantics.for.readonly",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "semantics.kill.traps",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "semantics.pattern.bracket.quoted",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "semantics.pattern.hyphen",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "semantics.pattern.modernish",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "semantics.pattern.rightbracket",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "semantics.quote.backslash",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "semantics.redir.close",
+     "reason": "status 0, want 1"
+    },
+    {
+     "name": "semantics.special.assign.visible.nonposix",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "semantics.subshell.break",
+     "reason": "status 127, want 0"
+    },
+    {
+     "name": "semantics.tilde.quoted",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "semantics.traps.async",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "semantics.var.dashu",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "semantics.var.star.format",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "semantics.wait.alreadydead",
+     "timeout": true
+    }
+   ]
+  },
+  "sh": {
+   "pass": 4,
+   "total": 7,
+   "failures": [
+    {
+     "name": "sh.env.ppid",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "sh.monitor.bg",
+     "reason": "status 3, want 0"
+    },
+    {
+     "name": "sh.set.ifs",
+     "reason": "stdout differs"
+    }
+   ]
+  }
+ }
+}

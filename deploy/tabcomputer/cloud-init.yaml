@@ -40,10 +40,6 @@ write_files:
       # Build and switch to the head of deploy/tabcomputer if it moved.
       set -euo pipefail
       exec 9>/run/tabcomputer-deploy.lock; flock -n 9 || exit 0
-      # The last run's output is public at /_deploy/log (no secrets live on this box).
-      mkdir -p /var/www/tabdeploy
-      exec > >(tee /var/www/tabdeploy/log.new) 2>&1
-      trap 'mv -f /var/www/tabdeploy/log.new /var/www/tabdeploy/log' EXIT
       REPO=https://github.com/williamsharkey/shiro.git
       BRANCH=deploy/tabcomputer
       ROOT=/opt/tabcomputer
@@ -53,6 +49,11 @@ write_files:
       have=$(cat "$ROOT/current/DEPLOYED_SHA" 2>/dev/null || true)
       [ "$want" != "$have" ] || exit 0
       [ "$want" != "$(cat $ROOT/FAILED_SHA 2>/dev/null || true)" ] || exit 0
+      # This run's output is public at /_deploy/log.new, then /_deploy/log
+      # (no secrets live on this box). Idle checks above leave the last log alone.
+      mkdir -p /var/www/tabdeploy
+      exec > >(tee /var/www/tabdeploy/log.new) 2>&1
+      trap 'mv -f /var/www/tabdeploy/log.new /var/www/tabdeploy/log' EXIT
       echo "deploying $want (was ${have:-none})"
       if [ ! -d "$SRC/.git" ]; then git clone --depth 1 --branch "$BRANCH" "$REPO" "$SRC"; fi
       cd "$SRC"

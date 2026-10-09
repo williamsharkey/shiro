@@ -399,16 +399,12 @@
    "failures": []
   },
   "builtin-eval-source": {
-   "pass": 19,
+   "pass": 20,
    "total": 23,
    "failures": [
     {
      "i": 2,
      "name": "eval usage"
-    },
-    {
-     "i": 4,
-     "name": "eval YSH block with 'break continue return error'"
     },
     {
      "i": 13,
@@ -443,20 +439,12 @@
    ]
   },
   "builtin-trap": {
-   "pass": 29,
+   "pass": 31,
    "total": 33,
    "failures": [
     {
      "i": 16,
      "name": "exit 1 when trap code string is invalid"
-    },
-    {
-     "i": 24,
-     "name": "exit codes for traps are isolated"
-    },
-    {
-     "i": 25,
-     "name": "traps are cleared in subshell (started with &)"
     },
     {
      "i": 26,
@@ -527,7 +515,7 @@
    ]
   },
   "builtin-type": {
-   "pass": 3,
+   "pass": 4,
    "total": 6,
    "failures": [
     {
@@ -537,10 +525,6 @@
     {
      "i": 2,
      "name": "type of relative path"
-    },
-    {
-     "i": 5,
-     "name": "more special builtins"
     }
    ]
   },
@@ -571,7 +555,7 @@
    ]
   },
   "dbracket": {
-   "pass": 44,
+   "pass": 45,
    "total": 49,
    "failures": [
     {
@@ -585,10 +569,6 @@
     {
      "i": 23,
      "name": "[[ with env prefix doesn't work"
-    },
-    {
-     "i": 44,
-     "name": "tilde expansion with =~ (confusing)"
     },
     {
      "i": 45,
@@ -643,7 +623,7 @@
    "failures": []
   },
   "array": {
-   "pass": 75,
+   "pass": 76,
    "total": 78,
    "failures": [
     {
@@ -653,10 +633,6 @@
     {
      "i": 5,
      "name": "array with invalid token"
-    },
-    {
-     "i": 72,
-     "name": "a+=() modifies existing instance of BashArray"
     }
    ]
   },
@@ -727,17 +703,9 @@
    ]
   },
   "glob": {
-   "pass": 18,
+   "pass": 21,
    "total": 23,
    "failures": [
-    {
-     "i": 26,
-     "name": "Glob of unescaped [[] and []]"
-    },
-    {
-     "i": 27,
-     "name": "Glob of negated unescaped [[] and []]"
-    },
     {
      "i": 32,
      "name": "\\ in unquoted substitutions does not match a backslash"
@@ -745,10 +713,6 @@
     {
      "i": 36,
      "name": "\\ in unquoted substitutions escapes globchars"
-    },
-    {
-     "i": 38,
-     "name": "shopt -u globskipdots shows . and .."
     }
    ]
   },
@@ -960,7 +924,7 @@
    ]
   },
   "process-sub": {
-   "pass": 3,
+   "pass": 6,
    "total": 8,
    "failures": [
     {
@@ -970,18 +934,6 @@
     {
      "i": 3,
      "name": "Non-linear pipeline with >()"
-    },
-    {
-     "i": 5,
-     "name": "status code is available"
-    },
-    {
-     "i": 6,
-     "name": "shopt -s process_sub_fail"
-    },
-    {
-     "i": 7,
-     "name": "process subs and pipelines together"
     }
    ]
   },
@@ -1005,7 +957,7 @@
    "failures": []
   },
   "background": {
-   "pass": 21,
+   "pass": 23,
    "total": 27,
    "failures": [
     {
@@ -1019,14 +971,6 @@
     {
      "i": 13,
      "name": "Wait for job and PIPESTATUS - cat"
-    },
-    {
-     "i": 24,
-     "name": "YSH wait --all"
-    },
-    {
-     "i": 25,
-     "name": "YSH wait --verbose"
     },
     {
      "i": 26,

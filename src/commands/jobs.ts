@@ -180,7 +180,7 @@ export const jobsCmd: Command = {
       if (runningOnly && job.status !== 'running') continue;
       if (stoppedOnly && job.status !== 'stopped') continue;
       if (pOnly) {
-        ctx.stdout += `${job.pgid ?? id}\n`;
+        ctx.stdout += `${job.pgid ?? job.pid ?? id}\n`;
         continue;
       }
       const mark = id === current ? '+' : id === previous ? '-' : ' ';
@@ -194,7 +194,7 @@ export const jobsCmd: Command = {
           : job.status === 'done' ? `Done (${job.exitCode})`
           : `Failed (${job.exitCode})`;
         ctx.stdout += longFormat
-          ? `[${id}] ${id}\t${status}\t${job.command}\n`
+          ? `[${id}] ${job.pid ?? id}\t${status}\t${job.command}\n`
           : `[${id}] ${status}\t${job.command}\n`;
       }
     }
