@@ -44,7 +44,8 @@ write_files:
       BRANCH=deploy
       ROOT=/opt/tabcomputer
       SRC=$ROOT/src
-      want=$(git ls-remote "$REPO" "refs/heads/$BRANCH" | cut -f1)
+      # Bounded so a stalled connection can't hold the deploy lock (and every later deploy)
+      want=$(timeout 60 git ls-remote "$REPO" "refs/heads/$BRANCH" | cut -f1)
       [ -n "$want" ] || { echo "no $BRANCH yet"; exit 0; }
       have=$(cat "$ROOT/current/DEPLOYED_SHA" 2>/dev/null || true)
       [ "$want" != "$have" ] || exit 0
@@ -55,9 +56,9 @@ write_files:
       exec > >(tee /var/www/tabdeploy/log.new) 2>&1
       trap 'mv -f /var/www/tabdeploy/log.new /var/www/tabdeploy/log' EXIT
       echo "deploying $want (was ${have:-none})"
-      if [ ! -d "$SRC/.git" ]; then git clone --depth 1 --branch "$BRANCH" "$REPO" "$SRC"; fi
+      if [ ! -d "$SRC/.git" ]; then timeout 600 git clone --depth 1 --branch "$BRANCH" "$REPO" "$SRC"; fi
       cd "$SRC"
-      git fetch --depth 1 origin "$BRANCH"
+      timeout 600 git fetch --depth 1 origin "$BRANCH"
       git checkout -q -f FETCH_HEAD
       # The release steps live in the repo, so they change with a push.
       if ! bash deploy/tabcomputer/release.sh "$SRC" "$ROOT" "$want"; then

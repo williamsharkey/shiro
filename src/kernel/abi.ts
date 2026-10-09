@@ -53,6 +53,9 @@ export const SYS_clock_gettime = 228;
 export const SYS_uname = 63;
 /** syslog(2): args [type, len]; the read actions write text to the data area (klog.ts). */
 export const SYS_syslog = 103;
+export const SYS_sysinfo = 99;
+/** sizeof(struct sysinfo) on x86-64 */
+export const SYSINFO_SIZE = 112;
 /** struct utsname: six NUL-padded 65-byte fields */
 export const UTSNAME_FIELD = 65;
 export const SYS_exit_group = 231;
