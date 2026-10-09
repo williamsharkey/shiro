@@ -753,12 +753,27 @@ export class Shell {
     shellsByPid.set(pid, new WeakRef(this));
   }
 
+  /** `hash`: command name → where it was found, and how often it ran */
+  hashTable = new Map<string, { path: string; hits: number }>();
+
+  /** Where a command name resolves for `hash`: a file on PATH, or a registered command's /usr/bin name */
+  private async commandPath(name: string): Promise<string | null> {
+    if (SHELL_BUILTIN_NAMES.has(name)) return null;
+    const file = await this.findExecutableInPath(name).catch(() => null);
+    return file ?? (this.commands.get(name) ? `/usr/bin/${name}` : null);
+  }
+
+  /** Errors that end a non-interactive POSIX shell (sh, or set -o posix) do so here */
+  posixFatal(): boolean {
+    return this.scriptShell && !this.interactiveFlag && (this.invokedAsSh || this.options.has('posix'));
+  }
+
   /**
    * Assigning to a readonly variable ends a non-interactive POSIX shell
    * (2.8.1; dash, bash --posix); bash itself goes on. As `sh` we exit.
    */
   readonlyAssignFailed(): void {
-    if (this.scriptShell && (this.invokedAsSh || this.options.has('posix'))) {
+    if (this.posixFatal()) {
       this.lastExitCode = 1;
       this.env['?'] = '1';
       throw new ExitSignal(1);
@@ -825,6 +840,8 @@ export class Shell {
     child.bashPid = nextInPagePid++;
     child.isSubshell = true;
     child.scriptShell = this.scriptShell; // a subshell of a script is non-interactive too
+    child.interactiveFlag = this.interactiveFlag;
+    child.hashTable = new Map([...this.hashTable].map(([k, v]) => [k, { ...v }]));
     child.lastExitCode = this.lastExitCode; // $? in a subshell or $(…) is the caller's
     child.forkParentPid = this.bashPid;
     child.shellPid = this.shellPid;
@@ -930,7 +947,12 @@ export class Shell {
     const child = this.fork();
     child.bashPid = pid;
     // A shell run as the job's only command gets the job's pid as its $$, as if exec'd
-    if (!/[;&|]/.test(command)) { child.execPid = pid; child.execPpid = this.bashPid; }
+    // (in a pipeline $! is its last element: the earlier ones must not start a shell themselves)
+    const parts = splitTopLevelPipes(command);
+    if (!/[;&]/.test(command) && parts.slice(0, -1).every((p) => !/^(\S*\/)?(sh|bash)\b|^\$/.test(p.trim()))) {
+      child.execPid = pid;
+      child.execPpid = this.bashPid;
+    }
     const abort = new AbortController();
     const outer = this.abortController ?? this.inheritedAbort;
     outer?.signal.addEventListener('abort', () => abort.abort(), { once: true });
@@ -1637,7 +1659,8 @@ export class Shell {
           pipeline.push(keepRaw(seg) ? seg.trim() : await this.expandWords(seg, stderrWriter));
         }
       } else {
-        pipeline = this.parsePipeline(await this.expandWords(quoteAssignmentValues(compound.command), stderrWriter));
+        const ordered = rawSegments.length === 1 ? await this.expandPrefixAssignments(compound.command, stderrWriter) : null;
+        pipeline = this.parsePipeline(ordered ?? await this.expandWords(quoteAssignmentValues(compound.command), stderrWriter));
       }
 
       // Check for ! negation prefix
@@ -1658,6 +1681,8 @@ export class Shell {
       const prefixEnvSaved = new Map<string, string | undefined>();
       // ...and which of them were unexported (the prefix exports them to the command)
       const prefixWasLocal = new Set<string>();
+      // As sh, assignments before a special builtin stay (POSIX 2.14)
+      let prefixPersists = false;
       // Output of a builtin/function/loop that must be piped on or redirected
       let capture: { out: string; err: string; redirects: Redirect[]; isLast: boolean } | null = null;
       const flushCapture = async () => {
@@ -1701,6 +1726,9 @@ export class Shell {
             this.env[key] = append ? (this.getVar(key) ?? '') + value : value;
           }
           segment = envPrefix.rest;
+          // (not unset or eval: `x=tmp unset x` removes the temporary x and the old one is back, as in bash)
+          const sb = segment.trim().split(/\s+/)[0];
+          if (POSIX_SPECIAL_BUILTINS.has(sb) && sb !== 'unset' && sb !== 'eval' && (this.invokedAsSh || this.options.has('posix'))) prefixPersists = true;
         }
 
         // A subshell after a pipe: `echo abc | (cat)`
@@ -2044,7 +2072,12 @@ export class Shell {
           // Execute remaining args as a shell command
           exitCode = 0;
           const evalCmd = stripComments((cmdArgs[0] === '--' ? cmdArgs.slice(1) : cmdArgs).join(' '));
-          if (evalCmd) {
+          if (evalCmd && !this.compoundsBalanced(evalCmd)) {
+            // `eval "if"`: a syntax error; as sh it ends the script (eval is a special builtin)
+            stderrWriter('shiro: eval: syntax error: unexpected end of file\r\n');
+            exitCode = 2;
+            if (this.posixFatal()) throw new ExitSignal(2);
+          } else if (evalCmd) {
             this.injectedStdin = nestedStdin;
             exitCode = await this.execute(evalCmd, writeStdout, stderrWriter, false, undefined, true);
           }
@@ -2548,11 +2581,24 @@ export class Shell {
           continue;
         }
         if (!_builtinDisabled && effectiveCmdName === 'hash') {
-          // hash -r: clear hash table (no-op, we don't cache)
-          writeStdout('hash: hash table empty\r\n');
+          // The commands this shell has run (or looked up) and where they are; -r forgets them
           exitCode = 0;
-          this.lastExitCode = 0;
-          this.env['?'] = '0';
+          const names = cmdArgs.filter((a) => !a.startsWith('-'));
+          if (cmdArgs.includes('-r')) this.hashTable.clear();
+          for (const name of names) {
+            const path = await this.commandPath(name);
+            if (path) this.hashTable.set(name, { path, hits: 0 });
+            else { stderrWriter(`shiro: hash: ${name}: not found\r\n`); exitCode = 1; }
+          }
+          if (!names.length && !cmdArgs.includes('-r')) {
+            if (!this.hashTable.size) writeStdout('hash: hash table empty\r\n');
+            else {
+              writeStdout('hits\tcommand\r\n');
+              for (const { path, hits } of this.hashTable.values()) writeStdout(`${String(hits).padStart(4)}\t${path}\r\n`);
+            }
+          }
+          this.lastExitCode = exitCode;
+          this.env['?'] = String(exitCode);
           lastOutput = '';
           continue;
         }
@@ -3032,7 +3078,7 @@ export class Shell {
                     stderrWriter(`set: ${optName}: invalid option name\r\n`);
                     exitCode = 2;
                     // set is a special builtin: a POSIX (sh) script ends on its error
-                    if (this.scriptShell && (this.invokedAsSh || this.options.has('posix'))) throw new ExitSignal(2);
+                    if (this.posixFatal()) throw new ExitSignal(2);
                   }
                 }
                 continue;
@@ -3105,7 +3151,7 @@ export class Shell {
               stderrWriter(`source: ${srcArgs[0]}: ${missing ? 'No such file or directory' : e.message}\r\n`);
               exitCode = 1;
               // `.` is a special builtin: a POSIX shell (sh) script ends when it fails
-              if (missing && this.scriptShell && (this.invokedAsSh || this.options.has('posix'))) throw new ExitSignal(1);
+              if (missing && this.posixFatal()) throw new ExitSignal(1);
             } finally {
               if (savedPositional) this.setPositional(savedPositional);
             }
@@ -3588,6 +3634,12 @@ export class Shell {
         const binPath = /^\/(?:usr\/)?(?:local\/)?s?bin\/([^/]+)$/.exec(effectiveCmdName);
         const cmd = pkgShadowed ? undefined : this.commands.get(effectiveCmdName)
           ?? (binPath && !(await this.fs.exists(effectiveCmdName)) ? this.commands.get(binPath[1]) : undefined);
+        // Commands found by name (not shell builtins) go in the table `hash` shows
+        if (!SHELL_BUILTIN_NAMES.has(effectiveCmdName) && !effectiveCmdName.includes('/')) {
+          const h = this.hashTable.get(effectiveCmdName);
+          if (h) h.hits++;
+          else this.hashTable.set(effectiveCmdName, { path: cmd ? `/usr/bin/${effectiveCmdName}` : (await this.findExecutableInPath(effectiveCmdName)) ?? `/usr/bin/${effectiveCmdName}`, hits: 1 });
+        }
         if (cmd) {
           try {
             exitCode = live
@@ -3644,7 +3696,7 @@ export class Shell {
       await flushCapture();
       if (this.pendingOutSubs.length) await this.runOutSubs(outerStdout, outerStderr);
 
-      for (const [key, value] of prefixEnvSaved) {
+      for (const [key, value] of prefixPersists ? [] : prefixEnvSaved) {
         if (value === undefined) delete this.env[key];
         else this.env[key] = value;
         if (prefixWasLocal.has(key) && value !== undefined) this.localVars.add(key);
@@ -3655,7 +3707,7 @@ export class Shell {
         this.redirectFailed = false;
         // A redirection error of a special builtin ends a POSIX (sh) script (2.8.1)
         const first = pipeline.length === 1 ? pipeline[0].trim().split(/\s+/)[0] : '';
-        if (POSIX_SPECIAL_BUILTINS.has(first) && this.scriptShell && (this.invokedAsSh || this.options.has('posix'))) throw new ExitSignal(1);
+        if (POSIX_SPECIAL_BUILTINS.has(first) && this.posixFatal()) throw new ExitSignal(1);
       }
 
       // pipefail: use last non-zero exit code from any pipe segment
@@ -4081,6 +4133,12 @@ export class Shell {
           let inner = line.slice(i + 2, j); // content between ${ and }
           if (!validParamExpansion(inner)) throw new LineAbort(`\${${inner}}: bad substitution`);
           if (this.options.has('nounset')) this.checkBound(inner);
+          // ${#} ${?} ${$} ${!} ${-}: the special parameters, braced
+          if (/^[#?$!-]$/.test(inner)) {
+            result += this.expandVars('$' + inner, inDouble);
+            i = j + 1;
+            continue;
+          }
           // ${!ref…}: the variable named by $ref (ref=a, a[0] or a[@]) with the rest applied
           const ind = /^!([A-Za-z_][A-Za-z0-9_]*(?:\[(?![@*]\])[^\]]*\])?|[0-9]+)((?![@*]$)[\s\S]*)$/.exec(inner);
           if (ind && !/^\[[@*]\]$/.test(ind[2]) && !/^![A-Za-z_][A-Za-z0-9_]*[@*]$/.test(inner) && !this.namerefs.has(ind[1])) {
@@ -4146,12 +4204,19 @@ export class Shell {
             i = j + 1;
             continue;
           }
+          // ${x-word} and friends: is the word used (shell text) or the variable's value (data)?
+          const wo = /^([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-])(:?)([-=+?])/.exec(inner);
+          let wordUsed = !!wo;
+          if (wo && /^([A-Za-z_][A-Za-z0-9_]*|[0-9]+)$/.test(wo[1])) {
+            const v = this.getVar(wo[1]);
+            const set = v !== undefined && (wo[2] === '' || v !== '');
+            wordUsed = wo[3] === '+' ? set : !set;
+          }
           const expanded = this.expandParamExpression(inner);
           if (expanded !== null) {
             // The value is data, except for ${x-word} ${x=word} ${x+word} ${x?word},
             // whose word was expanded as shell text (its quotes still to be removed)
-            const wordOp = /^(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-]):?[-=+?]/.test(inner);
-            result += wordOp ? (inDouble ? expanded : this.splitWordText(expanded))
+            result += wordUsed ? (inDouble ? expanded : this.splitWordText(expanded))
               : inDouble ? protectExpansion(expanded) : splitFields(expanded, this.fieldIFS());
             i = j + 1;
             continue;
@@ -5942,6 +6007,48 @@ export class Shell {
     throw new UnboundVariable(name);
   }
 
+  /**
+   * `a=1 b=$a cmd` (or just `a=1 b=$a`): the other words are expanded first,
+   * then each assignment's value in order, seeing the ones before it (POSIX
+   * 2.9.1). Returns the expanded command text, or null when there's nothing
+   * to order (fewer than two assignments, or none uses an expansion).
+   */
+  private async expandPrefixAssignments(cmd: string, writeStderr: (s: string) => void): Promise<string | null> {
+    const words = splitAssignWords(cmd.trim());
+    if (!words) return null;
+    let k = 0;
+    while (k < words.length && /^[A-Za-z_][A-Za-z0-9_]*\+?=(?!\()/.test(words[k])) k++;
+    if (k < 2 || !words.slice(1, k).some((w) => /[$`]/.test(w))) return null;
+    const rest = k < words.length ? await this.expandWords(words.slice(k).join(' '), writeStderr) : '';
+    const saved = new Map<string, string | undefined>();
+    const parts: string[] = [];
+    try {
+      for (const w of words.slice(0, k)) {
+        const text = await this.expandWords(quoteAssignmentValues(w), writeStderr);
+        parts.push(text);
+        const m = /^([A-Za-z_][A-Za-z0-9_]*)(\+?)=([\s\S]*)$/.exec(text);
+        if (!m) continue;
+        if (!saved.has(m[1])) saved.set(m[1], this.env[m[1]]);
+        const value = restoreExpansion(removeQuoting(m[3]));
+        this.env[m[1]] = m[2] ? (this.env[m[1]] ?? '') + value : value;
+      }
+    } finally {
+      for (const [n, v] of saved) { if (v === undefined) delete this.env[n]; else this.env[n] = v; }
+    }
+    return rest ? parts.join(' ') + ' ' + rest : parts.join(' ');
+  }
+
+  /** Does every for/while/until/select/if/case in `src` have its done/fi/esac (and nothing close what isn't open)? */
+  private compoundsBalanced(src: string): boolean {
+    const close: Record<string, string> = { for: 'done', while: 'done', until: 'done', select: 'done', if: 'fi', case: 'esac' };
+    const stack: string[] = [];
+    for (const { word } of this.shellTokenScan(src)) {
+      if (close[word]) stack.push(close[word]);
+      else if (word === 'done' || word === 'fi' || word === 'esac') { if (stack.pop() !== word) return false; }
+    }
+    return stack.length === 0;
+  }
+
   /** A subshell has finished with `code`: its EXIT trap runs now (an `exit` in it already ran it) */
   async finishSubshell(code: number, writeStdout: (s: string) => void, writeStderr: (s: string) => void): Promise<number> {
     if (!this.traps.has('EXIT')) return code;
@@ -5997,7 +6104,24 @@ export class Shell {
     let out = writeStdout, err = writeStderr;
     let outFile: { path: string; append: boolean } | null = null;
     let captured = '';
+    // Descriptors 3-9 redirected for the compound: set with exec, put back after it
+    const fdSaved = new Map<number, { inp: any; out: any }>();
     for (const r of redirects) {
+      if (r.op !== 'fd' || fdSaved.has(r.fd!)) continue;
+      fdSaved.set(r.fd!, { inp: this.fileDescriptors.get(r.fd!), out: this.userFds.get(r.fd!) });
+    }
+    const restoreFds = () => {
+      for (const [n, s] of fdSaved) {
+        if (s.inp === undefined) this.fileDescriptors.delete(n); else this.fileDescriptors.set(n, s.inp);
+        if (s.out === undefined) this.userFds.delete(n); else this.userFds.set(n, s.out);
+      }
+    };
+    for (const r of redirects) {
+      if (r.op === 'fd') {
+        const code = await this.execute(`exec ${r.target}`, writeStdout, writeStderr, false, undefined, true);
+        if (code !== 0) { restoreFds(); return code; }
+        continue;
+      }
       const target = restoreExpansion(this.expandVars(r.target));
       if (r.op === '<') {
         try {
@@ -6017,9 +6141,14 @@ export class Shell {
         out = (s) => { captured += s; };
       }
     }
-    const code = stdin === undefined
-      ? await this.execControlStructureCore(compound, out, err)
-      : await this.execControlStructureWithStdin(compound, stdin, out, err);
+    let code: number;
+    try {
+      code = stdin === undefined
+        ? await this.execControlStructureCore(compound, out, err)
+        : await this.execControlStructureWithStdin(compound, stdin, out, err);
+    } finally {
+      restoreFds();
+    }
     if (outFile) {
       const text = captured.replace(/\r\n/g, '\n');
       try {
@@ -7729,7 +7858,8 @@ export function formatPrintf(fmt: string, fmtArgs: string[]): string {
   return printfFormat(fmt, fmtArgs).out;
 }
 
-export interface CompoundRedirect { op: '<' | '>' | '>>' | '&>' | '2>' | '2>>' | '2>&1'; target: string }
+/** A redirection after a compound command; `fd` is any other `N<…`/`N>…`/`N<&-` (target: its text, fd: N) */
+export interface CompoundRedirect { op: '<' | '>' | '>>' | '&>' | '2>' | '2>>' | '2>&1' | 'fd'; target: string; fd?: number }
 
 /**
  * Split redirections off the end of a compound command:
@@ -7742,9 +7872,18 @@ export function splitCompoundRedirects(cmd: string): { compound: string; redirec
   const redirects: CompoundRedirect[] = [];
   // (a target may be a process substitution: `done < <(cmd)`)
   const re = /\s*(2>&1|&>|2>>|2>|>>|>|<)\s*([<>]\((?:[^()]|\([^()]*\))*\)|'[^']*'|"[^"]*"|[^\s<>]+)?/y;
+  // N<file, N>file, N>>file, N<&M, N>&M, N<&-, N>&- for a descriptor other than 0-2
+  const fdRe = /\s*(([3-9])(?:<&-|>&-|<&\d|>&\d|>>|<|>)\s*(?:'[^']*'|"[^"]*"|[^\s<>&]+)?)/y;
   let pos = 0;
   while (pos < suffix.length) {
     if (!suffix.slice(pos).trim()) break;
+    fdRe.lastIndex = pos;
+    const f = fdRe.exec(suffix);
+    if (f) {
+      redirects.push({ op: 'fd', target: f[1].trim(), fd: Number(f[2]) });
+      pos = fdRe.lastIndex;
+      continue;
+    }
     re.lastIndex = pos;
     const m = re.exec(suffix);
     if (!m) return { compound: cmd, redirects: [] }; // not just redirections: leave it alone

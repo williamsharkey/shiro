@@ -213,3 +213,31 @@ describe('more POSIX details', () => {
     expect(r.status).toBe(2);
   });
 });
+
+describe('assignment order, fds of compounds, eval, hash', () => {
+  it('a=1 b=$a: values expand in order; as sh, prefixes of special builtins stay', async () => {
+    const r = await script('x=5 y=$((x+2)) :\necho "[$x] [$y]"\nunset x y\na=1 b=$a sh -c \'echo "in: $a $b"\'\nc=1 d=$c; echo "[$c $d]"\nx=old; x=new echo $x\n');
+    expect(r.out).toBe('[5] [7]\nin: 1 1\n[1 1]\nold\n');
+  });
+
+  it('fds 3-9 redirected on a compound are put back after it', async () => {
+    const r = await script('echo hi >/tmp/f7\n{ read l <&7; echo "got $l"; } 7</tmp/f7\nread m <&7 2>/dev/null; echo "after $?"\n{ exec 8</dev/null; } 8<&-; : <&8 2>/dev/null; echo "closed $?"\n{ echo to7 >&7; } 7>/tmp/g7; cat /tmp/g7\n');
+    expect(r.out).toBe('got hi\nafter 1\nclosed 1\nto7\n');
+  });
+
+  it('"${x-w}" keeps the value\'s backslashes; ${#} is $#', async () => {
+    const r = await script("y='a\\\\b'\necho \"${y-u}\" ${y-u}\nset -- 1 2\necho ${#}\n");
+    expect(r.out).toBe('a\\\\b a\\\\b\n2\n');
+  });
+
+  it('eval with an unfinished compound is a syntax error (fatal as sh)', async () => {
+    const r = await script('eval "if"\necho lived\n');
+    expect(r.out).toBe('');
+    expect(r.status).toBe(2);
+  });
+
+  it('hash lists commands run by name; -r forgets them', async () => {
+    const r = await script('ls >/dev/null\nhash | grep -c ls\nhash -r\nhash | grep -c ls; true\n');
+    expect(r.out).toBe('1\n0\n');
+  });
+});

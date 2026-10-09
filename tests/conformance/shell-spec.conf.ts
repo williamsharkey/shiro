@@ -1,7 +1,6 @@
 /**
  * Shell conformance: oils spec tests (tests/conformance/oils) run through
- * Shiro's shell, one fresh Shell per case, as `bash case.sh` (the judge is bash: as `sh`, Shiro
- * follows POSIX where bash's own mode differs) in an empty
+ * Shiro's shell, one fresh Shell per case, as `bash case.sh` (SH=bash: the cases are judged against bash) in an empty
  * directory. Only cases real bash passes (bash-baseline.json) are scored.
  * Results go to tests/conformance/results/shell-oils.json, which
  * scripts/conformance/report.mjs turns into docs/CONFORMANCE.md.
