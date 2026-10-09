@@ -4,7 +4,7 @@
 // Trust: Mozilla's root store (public/browse/cacert.pem, from curl.se) plus any
 // roots the user added (Settings in the Browser app, e.g. a company proxy's CA;
 // the scoreboard adds its sandbox egress CA the same way).
-import { LazyReadFunctionReadQueue, startTls, TrustedCert } from 'subtls';
+import { LazyReadFunctionReadQueue, startTls, TrustedCert } from './vendor/subtls/index.js';
 import type { ByteStream } from './http1';
 
 type RootDb = Awaited<ReturnType<typeof TrustedCert.databaseFromPEM>>;

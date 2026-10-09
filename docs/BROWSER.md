@@ -137,9 +137,18 @@ The broker speaks HTTP/1.1 (`http1.ts`) over TLS 1.3 done in the page
 - Certificates are verified against Mozilla's root store (`public/browse/cacert.pem`
   from curl.se) plus any roots the user adds in the app (a company proxy's;
   the scoreboard adds its sandbox's egress CA that way).
-- TLS is **subtls** (MIT; TypeScript TLS 1.3 on WebCrypto). Its limits are the
-  spike's biggest known gap: TLS 1.3 only, P-256 key share, AES-128-GCM, a
-  few signature algorithms, and no chain building. A TLS 1.2-only site (Hacker
+- TLS is **subtls** (MIT; TypeScript TLS 1.3 on WebCrypto), vendored in
+  `src/browser/vendor/subtls/` with four marked patches:
+  1. the TLS 1.3 ChangeCipherSpec is optional, as RFC 8446 allows;
+  2. ECDSA P-384 and RSA-PSS SHA-384/512 CertificateVerify are accepted
+     (CNN's certificate, for one);
+  3. a CA needs `keyCertSign`, not `digitalSignature`;
+  4. `keyUsage` bits are read in RFC 5280 order. Upstream read them backwards,
+     so it refused most real CA chains and passed some by accident.
+
+  Patches 3 and 4 came from the scoreboard's real certificate chains. Its
+  remaining limits are still the spike's biggest known gap: TLS 1.3 only,
+  P-256 key share, AES-128-GCM, and no chain building. A TLS 1.2-only site (Hacker
   News was one when subtls was written) fails with `tls-version`, and the app
   offers a real tab. Hardening path: rustls compiled to WASM, built by us
   (Apache/MIT); epoxy-tls, which does exactly this, is AGPL.
@@ -323,7 +332,7 @@ the web.
 | The server sees decrypted traffic (a fetch-through-server design) | Only with `SHIRO_BROWSE_SERVER_FETCH=1`, for local measurement; never in production (owner decision). | — |
 | One instance's Browser reads another's site storage (music.tabcomputer.com vs art.tabcomputer.com) | Cookies and passwords live in each instance's own broker. | Browse-origin storage (a site's `localStorage`, IndexedDB, and our service worker) is partitioned by top-level *site*, and every instance is the same site, so instances share it. A fix would put an instance tag in the key (`www-example-com---i…`). |
 | Cookie tossing from browse origins onto `.tabcomputer.com` | The page runtime's `document.cookie` never writes host cookies. | A page can still set a real cookie on `Domain=tabcomputer.com` through a pristine `Document.prototype`. The desktop and server use no cookies today, so that must stay true, or a separate domain must be used. |
-| Untrusted TLS code | subtls verifies chains, names and validity, and the tests check that a bad chain and a name mismatch are refused. | subtls is "not intended for production" and unaudited. Replacing it (rustls/WASM) comes before shipping. |
+| Untrusted TLS code | subtls verifies chains, names, validity and CA key usage. The tests check that an untrusted chain, a name mismatch and a CA without `keyCertSign` are refused. | subtls is "not intended for production" and unaudited, and the scoreboard already found two bugs in its certificate checks (patched). Replacing it (rustls/WASM) comes before shipping. |
 | Proxy abuse (using tabcomputer as an open proxy) | The same relay policy and limits as `curl`. Optional GitHub sign-in (`SHIRO_TCP_REQUIRE_SIGNIN`). | Browsing raises connect rates; limits need tuning, not removing. |
 
 ## Prior art

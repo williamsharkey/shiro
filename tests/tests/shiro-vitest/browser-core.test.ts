@@ -235,6 +235,30 @@ describe('fetch over TLS 1.3 in JS (subtls) with keep-alive', () => {
     setTrustRoots(async () => '', caPem);
   }, 20000);
 
+  it('refuses a chain whose CA may not sign certificates (keyUsage without keyCertSign)', async () => {
+    if (!haveOpenssl) return;
+    const dir = mkdtempSync(path.join(tmpdir(), 'tc-tls-bad-'));
+    const o = (...a: string[]) => execFileSync('openssl', a, { cwd: dir, stdio: 'pipe' });
+    o('ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', 'ca.key');
+    o('req', '-x509', '-new', '-key', 'ca.key', '-sha256', '-days', '2', '-subj', '/CN=Not A Signer', '-out', 'ca.pem',
+      '-addext', 'basicConstraints=critical,CA:TRUE', '-addext', 'keyUsage=critical,digitalSignature');
+    o('ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', 'leaf.key');
+    o('req', '-new', '-key', 'leaf.key', '-subj', '/CN=tls.test', '-out', 'leaf.csr');
+    writeFileSync(path.join(dir, 'ext.cnf'), 'subjectAltName=DNS:tls.test\nextendedKeyUsage=serverAuth\nkeyUsage=critical,digitalSignature\n');
+    o('x509', '-req', '-in', 'leaf.csr', '-CA', 'ca.pem', '-CAkey', 'ca.key', '-CAcreateserial', '-days', '2', '-sha256', '-extfile', 'ext.cnf', '-out', 'leaf.pem');
+    const srv = tls.createServer({ key: readFileSync(path.join(dir, 'leaf.key')), cert: readFileSync(path.join(dir, 'leaf.pem')), minVersion: 'TLSv1.3' }, (s: any) => s.end());
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', () => r()));
+    const badPort = (srv.address() as NetT.AddressInfo).port;
+    setTrustRoots(async () => '', readFileSync(path.join(dir, 'ca.pem'), 'utf8'));
+    try {
+      const f = new NetFetcher({ dial: (_h, p) => nodeDial('127.0.0.1', p) });
+      await expect(f.fetch({ url: `https://tls.test:${badPort}/`, method: 'GET', headers: [], body: null })).rejects.toThrow(/keyCertSign/);
+    } finally {
+      srv.close();
+      setTrustRoots(async () => '', caPem);
+    }
+  }, 20000);
+
   it('refuses a name mismatch', async () => {
     if (!haveOpenssl) return;
     const f = new NetFetcher({ dial: (_h, p) => nodeDial('127.0.0.1', p) });

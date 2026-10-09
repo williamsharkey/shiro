@@ -42,13 +42,13 @@ page; it shows up as part of the desktop's heap.
 
 ## Caveats of the sandbox this ran in
 
-- **The sandbox re-signs TLS.** Its egress gateway terminates TLS for every
-  host with its own CA, so `--extra-roots` adds that CA to the Browser's trust
-  store, as a user would add a company proxy's. That means the subtls
-  numbers here are TLS 1.3 against *the gateway*, not against each site.
-  Real-world TLS compatibility (TLS 1.2-only servers, unusual chain
-  algorithms) has to be measured on tabcomputer.com: the same command works
-  there without `--extra-roots`.
+- **TLS is mostly real.** The relay dials through the sandbox's HTTP proxy
+  (below). For most hosts that proxy passes the site's own certificate chain
+  through (BBC, Google, CNN, HN: GlobalSign, Google Trust Services, Let's
+  Encrypt). For some hosts (GitHub, …) it re-signs with its own CA, which
+  `--extra-roots` adds to the Browser's trust store, as a user would add a
+  company proxy's. So TLS failures here are, for most sites, the in-page TLS
+  meeting the real server.
 - **Headless Chromium meets bot checks** (Amazon's captcha page, 403s). They
   hit both columns, which is why the direct column is there.
 - **The relay dialed through the sandbox's HTTP proxy**
