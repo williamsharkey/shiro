@@ -356,8 +356,12 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    of a writable shared kernel-file mapping no longer hangs (its write-back
    took page locks that the `munmap` then waited for). Test:
    `fixtures/x86/forkshared.c`.
+24. Blink keeps every resource limit (`setrlimit(RLIMIT_CORE, 0)` succeeds,
+   so ssh-agent survives its daemonizing fork; `RLIMIT_STACK` reads 8 MiB).
+25. `mlock`/`munlock`/`mlockall`/`munlockall` succeed (wasm memory is never
+   paged out; gnupg locks its secure memory).
 
-Patches 13, 15–19 and 20–21 come from unix/compat-tools (15 also from
+Patches 13, 15–21 and 24–25 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.
 
 Native Blink's own exit path (`KillOtherThreads`) still hangs after
