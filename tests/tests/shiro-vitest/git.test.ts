@@ -3,6 +3,7 @@ import { FileSystem } from '@shiro/filesystem';
 import { Shell } from '@shiro/shell';
 import { CommandRegistry } from '@shiro/commands/index';
 import { gitCmd } from '@shiro/commands/git';
+import { createTestShell } from './helpers';
 
 describe('git commands', () => {
   let fs: FileSystem;
@@ -83,6 +84,49 @@ describe('git commands', () => {
     await shell.execute('git remote -v', (s) => { stdout += s; }, (e) => { stderr += e; });
     expect(stdout).toContain('https://github.com/new/repo.git');
     expect(stdout).not.toContain('https://github.com/old/repo.git');
+  });
+
+  const sh = async (cmd: string) => {
+    let out = '', err = '';
+    if (!full) ({ fs, shell } = full = await createTestShell());
+    const code = await shell.execute(cmd, (s) => { out += s; }, (e) => { err += e; });
+    return { code, out: out.replace(/\r\n/g, '\n'), err: err.replace(/\r\n/g, '\n') };
+  };
+
+  let full: { fs: FileSystem; shell: Shell } | null = null;
+  beforeEach(() => { full = null; });
+
+  it('outside a repository: "not a git repository", not a crash', async () => {
+    await sh('true');
+    await fs.mkdir('/tmp/norepo', { recursive: true });
+    const r = await sh('cd /tmp/norepo && git commit -m x');
+    expect(r.code).toBe(128);
+    expect(r.err).toContain('fatal: not a git repository');
+  });
+
+  it('works from a subdirectory: the repository is the nearest .git up, paths are relative to here', async () => {
+    await sh('true');
+    await sh('mkdir -p /tmp/repo/src && cd /tmp/repo && git init -q && git config user.name a && git config user.email a@b');
+    await fs.writeFile('/tmp/repo/src/a.txt', 'a');
+    await fs.writeFile('/tmp/repo/top.txt', 't');
+    const r = await sh('cd /tmp/repo/src && git add a.txt && git commit -m "from src" && git log --oneline');
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('from src');
+    const st = await sh('cd /tmp/repo/src && git status');
+    expect(st.out).toContain('top.txt'); // still untracked: only src/a.txt was added
+  });
+
+  it('clone refuses a non-empty destination and leaves nothing behind when it fails', async () => {
+    await sh('true');
+    await fs.mkdir('/tmp/c/full', { recursive: true });
+    await fs.writeFile('/tmp/c/full/x', 'x');
+    const r = await sh('cd /tmp/c && git clone https://example.invalid/r.git full');
+    expect(r.code).toBe(128);
+    expect(r.err).toContain("destination path 'full' already exists and is not an empty directory");
+    const g = await sh('cd /tmp/c && GIT_CORS_PROXY=http://127.0.0.1:9/nope git clone https://example.invalid/gone.git');
+    expect(g.code).toBe(128);
+    expect(g.err).toContain("Cloning into 'gone'");
+    expect(await fs.exists('/tmp/c/gone')).toBe(false);
   });
 
 });
