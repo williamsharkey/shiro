@@ -159,6 +159,36 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### unix/desktop 6 — dock icon sets
+
+Twelve icon sets plus Classic (docs/DESKTOP.md "Icon sets"), Drafting by
+default. Sizes (`npm run build`, bytes / gzip):
+
+| chunk | before | after |
+|---|---|---|
+| entry (`index-*.js`) | 1,374,705 / 419,120 | 1,374,705 / 419,114 |
+| desktop (`index-*.js`, src/desktop) | 94,413 / 28,458 | 118,440 / 34,934 |
+| of which the static sets' CSS | — | 15,283 / 3,638 |
+| `iconset-gl` (Pearl, Holo foil), on demand | — | 7,225 / 3,124 |
+| `iconset-glass`, on demand | — | 4,463 / 2,345 |
+| `three`, on demand | — | 459,957 / 115,333 |
+
+`node bench/ab.mjs origin/unix/integration --quick --suites boot --rounds 4`
+(6619ea3 vs this): no timing metric changed. Boot requests 10 → 11: the
+Debian GUI app list (`desktop-apps`, 3.7 KB), which unix/desktop 5 moved
+before the reveal so the dock is complete in its first frame. DOM nodes
+352 → 366 (the SVG filters Drafting draws with), transfer +25 KiB (the
+desktop chunk, uncompressed here), renderer RSS 242 → 219 MiB.
+
+`tests/browser/icon-sets.mjs` (headless Chromium without a GPU: WebGL is
+SwiftShader on the CPU): every static and live swap 0 long animation frames
+during the crossfade, CLS 0, dock box unchanged. Before the crossfade, a
+live set's preparation runs on the main thread: Pearl/Holo foil ~70–90 ms,
+Liquid glass ~1.3 s + 0.6 s (three.js shader compile and PMREM) on the CPU
+renderer here. Steady state on the CPU renderer: Pearl/Holo foil ~48 fps,
+Liquid glass ~12 fps (80 ms frames); not measured on a GPU here. A View Transition crossfade cost one 60–80 ms frame per swap
+here (capture), so the crossfade is a fading copy of the old dock instead.
+
 ### unix/desktop 5 — one draw at load
 
 The desktop is built hidden and appears in one frame once fonts, the dock's

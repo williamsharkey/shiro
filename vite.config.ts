@@ -33,6 +33,10 @@ export default defineConfig({
     target: 'es2022',
     rollupOptions: {
       external: [],
+      output: {
+        // three.js (the Liquid glass icon set, src/desktop/iconset-glass.ts) is its own chunk
+        manualChunks: (id) => (id.includes('/node_modules/three/') ? 'three' : undefined),
+      },
     },
   },
   // module workers (src/gui/deb-worker.ts) that import code-split chunks

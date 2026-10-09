@@ -1,23 +1,36 @@
 /**
- * Settings: Appearance (theme), Network (connection status, Sign in with
- * GitHub, other ways to connect), Storage (browser quota, persistence), and About.
+ * Settings, laid out like a system settings app: a searchable sidebar of
+ * grouped panes, the pane on the right. Appearance (theme, extra keys), Dock &
+ * Icons (the icon set picker, iconsets.ts), Network (connection status, Sign in
+ * with GitHub, other ways to connect), Storage (browser quota, persistence), About.
  */
 
 import { keybarMode, setKeybarMode, type KeybarMode } from '../mobile';
 import type { AppContext } from '../index';
 import type { DesktopWindow } from '../wm';
 import { GLYPHS, ICONS } from '../icons';
+import { ICON_SETS, appIconIn, glyphFor, paintPixelTiles, type IconSetId } from '../iconsets';
 import { networkCredential, networkStatus, onNetworkStatus, ownRelay, setOwnRelay } from '../../net-signin';
 import { openSignIn, probeRelay, signedInAccount, signOut, statusText, testOwnRelay } from '../network';
 import { BRAND } from '../../brand';
 import buildNumber from '../../../build-number.txt?raw';
 import { formatBytes, storageInfo } from '../../storage';
 
+/** A pane's sidebar icon: a white glyph (24-unit, iconsets.ts) on a colored rounded square */
+const paneIcon = (d: string, color: string) =>
+  `<span class="sd-set-ico" style="background:${color}"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg></span>`;
+const DOCK_D = 'M3.5 17.5h17M6 14.5h3v-3H6zM10.5 14.5h3v-3h-3zM15 14.5h3v-3h-3z';
+const SUN_D = 'M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 1 0 0-7zM12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4';
+const DISK_D = 'M4 7.5h16v9H4zM7.5 12h.01M16.5 12h-4';
+const INFO_D = 'M12 3a9 9 0 1 0 0 18 9 9 0 1 0 0-18zM12 11v5.5M12 7.8h.01';
+
+/** Panes in sidebar groups; `words` widen the search */
 const PANES = [
-  { id: 'appearance', label: 'Appearance', glyph: GLYPHS.sun },
-  { id: 'network', label: 'Network', glyph: GLYPHS.net },
-  { id: 'storage', label: 'Storage', glyph: GLYPHS.folder },
-  { id: 'about', label: 'About', glyph: GLYPHS.file },
+  { id: 'appearance', label: 'Appearance', group: 0, icon: paneIcon(SUN_D, '#2b2b30'), words: 'theme light dark mode system keys keyboard motion classic terminal' },
+  { id: 'dock', label: 'Dock & Icons', group: 0, icon: paneIcon(DOCK_D, '#5b4fd6'), words: 'icon icons set theme drafting classic pearl glass foil vaporwave aurora clay swiss brutalist risograph one-bit pixel paper' },
+  { id: 'network', label: 'Network', group: 1, icon: paneIcon(glyphFor('browser')!, '#2f7cf6'), words: 'internet relay github sign in account connection tcp' },
+  { id: 'storage', label: 'Storage', group: 1, icon: paneIcon(DISK_D, '#8e8e93'), words: 'disk quota space persistent indexeddb files' },
+  { id: 'about', label: 'About', group: 2, icon: paneIcon(INFO_D, '#8e8e93'), words: 'version build processor' },
 ] as const;
 type PaneId = typeof PANES[number]['id'];
 
@@ -30,19 +43,39 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
   const root = document.createElement('div');
   root.className = 'sd-app';
   root.tabIndex = -1;
-  root.innerHTML = `<div class="sd-app-split"><aside class="sd-sidebar"></aside><section class="sd-main"><div class="sd-scroll"><div class="sd-panel"></div></div></section></div>`;
+  root.innerHTML = `<div class="sd-app-split sd-settings"><aside class="sd-sidebar">
+      <label class="sd-set-search">${GLYPHS.search}<input type="search" placeholder="Search" aria-label="Search settings" spellcheck="false"></label>
+    </aside><section class="sd-main"><div class="sd-scroll"><div class="sd-panel"></div></div></section></div>`;
   const side = root.querySelector('.sd-sidebar')!;
   const panel = root.querySelector<HTMLElement>('.sd-panel')!;
+  const search = root.querySelector<HTMLInputElement>('.sd-set-search input')!;
   const buttons = new Map<PaneId, HTMLButtonElement>();
+  const groups: HTMLElement[] = [];
   for (const p of PANES) {
+    let g = groups[p.group];
+    if (!g) { g = groups[p.group] = document.createElement('div'); g.className = 'sd-set-group'; side.appendChild(g); }
     const b = document.createElement('button');
-    b.className = 'sd-side-item';
-    b.innerHTML = `${p.glyph}<span>${p.label}</span>`;
+    b.className = 'sd-side-item sd-set-item';
+    b.innerHTML = `${p.icon}<span>${esc(p.label)}</span>`;
     b.addEventListener('click', () => show(p.id));
-    side.appendChild(b);
+    g.appendChild(b);
     buttons.set(p.id, b);
   }
-  const win = wm.createWindow({ appId: 'settings', title: 'Settings', width: 680, height: 470, minWidth: 380, content: { kind: 'dom', element: root } });
+  // Search: panes whose name or keywords match every word typed; Enter opens the first
+  const matches = () => {
+    const q = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return PANES.filter(p => q.every(w => `${p.label} ${p.words}`.toLowerCase().includes(w)));
+  };
+  search.addEventListener('input', () => {
+    const hit = new Set(matches().map(p => p.id));
+    for (const [id, b] of buttons) b.hidden = !hit.has(id);
+    for (const g of groups) g.hidden = ![...g.children].some(c => !(c as HTMLElement).hidden);
+  });
+  search.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { const m = matches()[0]; if (m) show(m.id); }
+    if (e.key === 'Escape' && search.value) { search.value = ''; search.dispatchEvent(new Event('input')); e.stopPropagation(); }
+  });
+  const win = wm.createWindow({ appId: 'settings', title: 'Settings', width: 720, height: 500, minWidth: 380, content: { kind: 'dom', element: root } });
   let cleanup: (() => void) | null = null;
 
   let current: PaneId = 'appearance';
@@ -54,6 +87,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
     for (const [k, b] of buttons) b.classList.toggle('sd-active', k === id);
     win.setTitle(`Settings — ${PANES.find(p => p.id === id)!.label}`);
     if (id === 'appearance') appearance();
+    else if (id === 'dock') dockPane();
     else if (id === 'network') network();
     else if (id === 'storage') storage();
     else about();
@@ -95,6 +129,46 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
       try { localStorage.setItem('shiro-ui', 'terminal'); } catch {}
       location.href = location.pathname + '?ui=terminal';
     });
+  }
+
+  /** Dock & Icons: the icon set picker. Each card is a still mini dock (no WebGL, even for live sets) */
+  function dockPane(): void {
+    const PREVIEW = ['terminal', 'files', 'browser', 'settings', 'activity'];
+    const apps = PREVIEW.map(id => wm.app(id) ?? { id, name: id, icon: undefined });
+    const render = () => {
+      const cur = ctx.iconSet();
+      panel.innerHTML = `
+        <h2>Dock &amp; Icons</h2><p class="sd-muted">One set of glyphs, many materials. The set follows light and dark.</p>
+        <h3>Icon set</h3>
+        <div class="sd-iconsets" role="radiogroup" aria-label="Icon set">${ICON_SETS.map(set => `
+          <button class="sd-iconset-card${set.id === cur ? ' sd-active' : ''}" role="radio" aria-checked="${set.id === cur}" data-set="${set.id}">
+            <span class="sd-iconset-mini" data-iconset="${set.id}" style="--n:${apps.length}">${apps.map((a, i) => `<span class="sd-iconset-slot">${appIconIn(set.id, a.id, a.name, a.icon, i)}</span>`).join('')}</span>
+            <span class="sd-iconset-name">${esc(set.name)}${set.kind === 'live' ? '<span class="sd-iconset-live">Live</span>' : ''}<span class="sd-iconset-check" aria-hidden="true">${set.id === cur ? '✓' : ''}</span></span>
+            <span class="sd-iconset-blurb">${esc(set.blurb)}</span>
+          </button>`).join('')}
+        </div>
+        <p class="sd-small sd-muted" style="margin-top:12px">Live sets draw with WebGL and pause when the dock is hidden or motion is reduced; the others are plain SVG and CSS.</p>`;
+      const px = panel.querySelector<HTMLElement>('[data-iconset=pixel]');
+      if (px) paintPixelTiles(px, wm.theme(), id => wm.app(id)?.name ?? id);
+      for (const b of panel.querySelectorAll<HTMLButtonElement>('[data-set]')) {
+        b.addEventListener('click', () => {
+          const id = b.dataset.set as IconSetId;
+          // The check moves at once; the dock crossfades when the set is ready
+          for (const o of panel.querySelectorAll<HTMLButtonElement>('[data-set]')) {
+            const on = o === b;
+            o.classList.toggle('sd-active', on);
+            o.setAttribute('aria-checked', String(on));
+            o.querySelector('.sd-iconset-check')!.textContent = on ? '✓' : '';
+          }
+          void ctx.setIconSet(id);
+        });
+      }
+    };
+    render();
+    // Theme changes repaint One-bit's bitmaps; a change made elsewhere moves the check
+    const offTheme = wm.on('theme-changed', () => { const px = panel.querySelector<HTMLElement>('[data-iconset=pixel]'); if (px) paintPixelTiles(px, wm.theme(), id => wm.app(id)?.name ?? id); });
+    const offSet = ctx.onIconSet(() => { if (current === 'dock') render(); });
+    cleanup = () => { offTheme?.(); offSet(); };
   }
 
   function network(): void {
