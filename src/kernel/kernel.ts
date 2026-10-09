@@ -1105,6 +1105,9 @@ export class Kernel {
     shell.cwd = proc.cwd;
     shell.env = { ...proc.env, PWD: proc.cwd };
     shell.uid = proc.uid;
+    // Its fds are the process's (KernelStdio, adoptFds), not whatever exec did in the page's shell
+    shell.userFds = new Map();
+    shell.fileDescriptors = new Map();
     proc.onTerminate(() => shell.abortController?.abort());
     return shell;
   }
