@@ -24,13 +24,16 @@ const SUN_D = 'M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 1 0 0-7zM12 3v2M12 19v2M3 12h
 const DISK_D = 'M4 7.5h16v9H4zM7.5 12h.01M16.5 12h-4';
 const INFO_D = 'M12 3a9 9 0 1 0 0 18 9 9 0 1 0 0-18zM12 11v5.5M12 7.8h.01';
 
+const PERSON_D = 'M12 4a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 1 0 0-7.2zM5 20c.8-3.8 3.6-6 7-6s6.2 2.2 7 6';
+
 /** Panes in sidebar groups; `words` widen the search */
 const PANES = [
-  { id: 'appearance', label: 'Appearance', group: 0, icon: paneIcon(SUN_D, '#2b2b30'), words: 'theme light dark mode system keys keyboard motion classic terminal' },
-  { id: 'dock', label: 'Dock & Icons', group: 0, icon: paneIcon(DOCK_D, '#5b4fd6'), words: 'icon icons set theme drafting classic pearl glass foil vaporwave aurora clay swiss brutalist risograph one-bit pixel paper' },
-  { id: 'network', label: 'Network', group: 1, icon: paneIcon(glyphFor('browser')!, '#2f7cf6'), words: 'internet relay github sign in account connection tcp' },
-  { id: 'storage', label: 'Storage', group: 1, icon: paneIcon(DISK_D, '#8e8e93'), words: 'disk quota space persistent indexeddb files' },
-  { id: 'about', label: 'About', group: 2, icon: paneIcon(INFO_D, '#8e8e93'), words: 'version build processor' },
+  { id: 'accounts', label: 'Accounts', group: 0, icon: paneIcon(PERSON_D, '#2f7cf6'), words: 'account sign in sign out login logout github claude code subscription plan credentials' },
+  { id: 'appearance', label: 'Appearance', group: 1, icon: paneIcon(SUN_D, '#2b2b30'), words: 'theme light dark mode system keys keyboard motion classic terminal' },
+  { id: 'dock', label: 'Dock & Icons', group: 1, icon: paneIcon(DOCK_D, '#5b4fd6'), words: 'icon icons set theme drafting classic pearl glass foil vaporwave aurora clay swiss brutalist risograph one-bit pixel paper' },
+  { id: 'network', label: 'Network', group: 2, icon: paneIcon(glyphFor('browser')!, '#1f9d8b'), words: 'internet relay github sign in account connection tcp' },
+  { id: 'storage', label: 'Storage', group: 2, icon: paneIcon(DISK_D, '#8e8e93'), words: 'disk quota space persistent indexeddb files' },
+  { id: 'about', label: 'About', group: 3, icon: paneIcon(INFO_D, '#8e8e93'), words: 'version build processor' },
 ] as const;
 type PaneId = typeof PANES[number]['id'];
 
@@ -86,7 +89,8 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
     panel.onclick = null;
     for (const [k, b] of buttons) b.classList.toggle('sd-active', k === id);
     win.setTitle(`Settings — ${PANES.find(p => p.id === id)!.label}`);
-    if (id === 'appearance') appearance();
+    if (id === 'accounts') accounts();
+    else if (id === 'appearance') appearance();
     else if (id === 'dock') dockPane();
     else if (id === 'network') network();
     else if (id === 'storage') storage();
@@ -171,6 +175,19 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
     cleanup = () => { offTheme?.(); offSet(); };
   }
 
+  /** Accounts: GitHub and Claude, each signed in or out (accounts.ts) */
+  function accounts(): void {
+    panel.innerHTML = `
+      <h2>Accounts</h2><p class="sd-muted">Accounts this computer signs in with. Their credentials stay in this browser.</p>
+      <div class="sd-card sd-accounts"></div>
+      <p class="sd-small sd-muted" style="margin-top:12px">GitHub lets programs reach the internet through this site's relay, and is what <code>git</code> and <code>gh</code> use. Claude is what Claude Code (<code>claude</code>) uses; it can also sign in from the terminal.</p>`;
+    const host = panel.querySelector<HTMLElement>('.sd-accounts')!;
+    let off: (() => void) | null = null;
+    let gone = false;
+    void import('../accounts').then((m) => { if (!gone) off = m.renderAccounts(host, { wm, fs: ctx.fs }); });
+    cleanup = () => { gone = true; off?.(); };
+  }
+
   function network(): void {
     let account: string | null = null;
     /** Relay form state survives re-renders (status changes) while editing */
@@ -214,7 +231,8 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
             <div class="sd-small sd-muted">${signed ? "Programs connect through this site's relay without asking. git and gh use the same sign-in." : "When this site's relay needs a sign-in you'll be asked once; later visits connect silently."}</div></span>
             ${signed ? '<button class="sd-btn" data-act="signout">Sign out</button>' : '<button class="sd-btn sd-primary" data-act="signin">Sign in with GitHub</button>'}
           </div>
-        </div>`;
+        </div>
+        <p class="sd-small" style="margin-top:10px"><button class="sd-link" data-act="accounts" type="button">All accounts (GitHub, Claude)…</button></p>`;
     };
     const readDraft = () => {
       draft = {
@@ -231,6 +249,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
       if (el.dataset.mode === 'site') { mode = 'site'; relayMsg = ''; if (ownRelay()) setOwnRelay(null); render(); return; }
       if (el.dataset.mode === 'own') { mode = 'own'; render(); panel.querySelector<HTMLInputElement>('#sd-relay-url')?.focus(); return; }
       const act = el.dataset.act;
+      if (act === 'accounts') { show('accounts'); return; }
       if (act === 'signin') { await openSignIn(); account = await signedInAccount(); render(); }
       if (act === 'signout') { signOut(); account = null; render(); }
       if (act === 'check') { await probeRelay(); render(); }
