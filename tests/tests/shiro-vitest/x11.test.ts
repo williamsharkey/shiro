@@ -269,7 +269,7 @@ describe('X11 protocol', () => {
     const runs: { x: number; y: number; text: string; width: number; fg: number; bg: number | null; font: string }[] = [];
     const copies: unknown[][] = [];
     server.hooks.text = (_top, run) => runs.push(run);
-    server.hooks.copy = (_top, ...args) => copies.push(args);
+    server.hooks.copy = (_top, ...args) => copies.push(args.slice(0, 7));
     const wid = c.id(1), gc = c.id(2), fid = c.id(3);
     createWindow(c, wid, 0, 0, 100, 40, 0);
     c.send(8, 0, (w) => w.u32(wid));
@@ -287,6 +287,27 @@ describe('X11 protocol', () => {
     // no glyph pixels: ImageText painted its (white) background only
     for (let x = 2; x < 14; x++) for (let y = 4; y < 17; y++) expect(pixelAt(tops[0], x, y)).toBe(0xffffff);
     expect(copies).toEqual([['begin', 0, 20, 100, 20, 0, 5], ['end', 0, 20, 100, 20, 0, 5]]);
+  });
+
+  it('takes text runs from GTK apps (_SHIRO_TEXT) as overlay text instead of a property', async () => {
+    const { server, c } = await newServer();
+    server.domText = true;
+    const runs: { x: number; y: number; text: string; width: number; overlay?: boolean }[] = [];
+    server.hooks.text = (_top, run) => runs.push(run);
+    const top = c.id(1), child = c.id(2);
+    createWindow(c, top, 0, 0, 200, 100, 0);
+    c.send(1, 0, (q) => q.u32(child).u32(top).i16(10).i16(20).u16(100).u16(50).u16(0).u16(1).u32(0).u32(0));
+    c.send(8, 0, (w) => w.u32(child));
+    c.send(8, 0, (w) => w.u32(top));
+    c.send(16, 0, (w) => w.u16(11).u16(0).str('_SHIRO_TEXT'));
+    const prop = (await c.reply()).skip(8).u32();
+    const lines = '3 15 60 11 3 1a2b3c\tHello, GTK\nbad line\n4 30 0 11 3 000000\tzero width\n';
+    const data = new TextEncoder().encode(lines);
+    c.send(18, 2, (w) => w.u32(child).u32(prop).u32(31).u8(8).zero(3).u32(data.length).bytes(data).zero((4 - data.length % 4) % 4));
+    c.send(20, 0, (w) => w.u32(child).u32(prop).u32(0).u32(0).u32(1000)); // GetProperty: nothing kept
+    const r = await c.reply();
+    expect(r.skip(1).u8()).toBe(0); // format 0: no such property
+    expect(runs).toEqual([{ x: 13, y: 35, width: 60, ascent: 11, descent: 3, text: 'Hello, GTK', font: 'pango', fg: 0x1a2b3c, bg: null, overlay: true, win: child }]);
   });
 
   it('transfers a selection between two clients', async () => {
