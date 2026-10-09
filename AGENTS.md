@@ -65,10 +65,8 @@ export const myCmd: Command = {
 
 ## Seeded Sessions And Inner Claude
 
-- Seeded boots write runtime context to `/home/user/NEO.md` and `/home/user/.shiro-context.json`.
-- If a seeded session has host-page access, inner Claude should learn that from `NEO.md` and usually start with `hc outer`.
-- Keep seeded agent guidance compact and current in `src/claude-md-seed.ts`.
-- `CLAUDE.md` is still written for compatibility, but it should only redirect to `AGENTS.md` plus `NEO.md`.
+- Every boot seeds `~/AGENTS.md` for agents on the machine (`src/agent-docs.ts`): what the machine is, what works and what doesn't, `doctor`, where the source lives (not checked out), and this boot's context (an injected `seed` boot says to start with `hc outer`). `~/CLAUDE.md` is `@AGENTS.md`, so Claude Code imports it directly.
+- Seeding never overwrites a file the user edited: `/var/lib/tabcomputer/seeded.json` holds the hash of what was written, and older installs are recognized by the exact texts earlier builds seeded. The retired `~/NEO.md` and `~/.shiro-context.json` are removed the same way. Keep the text accurate when behavior changes; it is what an agent here believes about the machine.
 
 ## Claude Code In tabcomputer
 
@@ -176,7 +174,7 @@ Performance: `npm run bench:quick` (~2.5 min) before and after a performance cha
 Use focused vitest runs while iterating, then run the smallest meaningful verification set before deploy. For changes touching seed/Claude/bootstrap paths, relevant files usually include:
 
 - `tests/tests/shiro-vitest/seed.test.ts`
-- `tests/tests/shiro-vitest/seed-runtime-context.test.ts`
+- `tests/tests/shiro-vitest/agent-docs.test.ts`
 - `tests/tests/shiro-vitest/claude-bootstrap.test.ts`
 - `tests/tests/shiro-vitest/node-runtime.test.ts`
 - `tests/tests/shiro-vitest/new-features.test.ts`
