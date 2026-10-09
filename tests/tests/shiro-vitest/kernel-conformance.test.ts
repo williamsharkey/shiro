@@ -277,6 +277,20 @@ describe('kernel syscalls found by LTP', () => {
     expect(await kernel.syscall(proc, A.SYS_recvfrom, [s, 16, 0], rf)).toBe(2);
     expect(new TextDecoder().decode(rf.subarray(18, 29))).toBe('/tmp/kc/dg2');
     expect(await kernel.syscall(proc, A.SYS_read, [s, 16], buf)).toBe(3);
+    // With an address room (recvfrom's 4th argument), its last 4 bytes give the address length:
+    // an abstract sender bound with the whole sockaddr_un keeps its 108-byte name
+    const ab = await call(A.SYS_socket, [A.AF_UNIX, A.SOCK_DGRAM, 0]);
+    const asun = new Uint8Array(110);
+    asun[0] = A.AF_UNIX;
+    asun.set(enc.encode('\0abs'), 2);
+    expect(await kernel.syscall(proc, A.SYS_bind, [ab, 110], asun)).toBe(0);
+    msg.set(enc.encode('yo'));
+    expect(await kernel.syscall(proc, A.SYS_sendto, [ab, 2, 0, 110], msg)).toBe(2);
+    const roomy = new Uint8Array(16 + 128);
+    expect(await kernel.syscall(proc, A.SYS_recvfrom, [s, 16, 0, 128], roomy)).toBe(2);
+    expect(new DataView(roomy.buffer).getUint32(16 + 124, true)).toBe(110);
+    expect(roomy.subarray(18, 22)).toEqual(enc.encode('\0abs'));
+    await call(A.SYS_close, [ab]);
     const st = await call(A.SYS_socket, [A.AF_UNIX, A.SOCK_STREAM, 0]);
     expect(await kernel.syscall(proc, A.SYS_connect, [st, 110], sun)).toBe(-A.EPROTOTYPE);
     for (const fd of [a, b, s, c, st]) await call(A.SYS_close, [fd]);

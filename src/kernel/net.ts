@@ -1397,6 +1397,21 @@ export async function netSyscall(
     data.set(b, off);
     return b.length;
   };
+  /**
+   * A peer/sender address for accept, recvfrom and recvmsg. Callers that pass
+   * an address room (`room` > 4; the call's last argument) get an area of that
+   * size whose last 4 bytes hold the address's length (an abstract AF_UNIX
+   * name keeps its trailing NULs, a long path fits); without it, the legacy
+   * SOCKADDR_ROOM bytes and no length.
+   */
+  const roomOf = (v: number | undefined) => ((v ?? 0) | 0) > 4 ? Math.min((v ?? 0) | 0, 256) : 0;
+  const peerOut = (sa: SockAddr, off: number, room: number) => {
+    if (!room) { addrOut(sa, off, SOCKADDR_ROOM); return; }
+    let b = encodeSockaddr(sa);
+    if (b.length > room - 4) b = new Uint8Array([AF_UNIX, 0]);
+    data.set(b, off);
+    new DataView(data.buffer, data.byteOffset + off + room - 4, 4).setUint32(0, b.length, true);
+  };
   const noUnix: UnixOps = { resolve: () => -EOPNOTSUPP, exists: async () => false, create: async () => -EOPNOTSUPP };
   const install = async (s: AnySocket, cloexec: boolean) => {
     const fd = proc.fds.alloc(s, 0, cloexec);
@@ -1452,7 +1467,7 @@ export async function netSyscall(
       return s instanceof KSocket ? s.listen(args[1]) : -EOPNOTSUPP;
     }
     case SYS_accept:
-    case SYS_accept4: { // fd, flags → data = peer sockaddr
+    case SYS_accept4: { // fd, flags, room → data = peer sockaddr (see peerOut)
       const s = sockOf(args[0]);
       if (typeof s === 'number') return s;
       if (!(s instanceof KSocket) || s.type === SOCK_DGRAM) return -EOPNOTSUPP;
@@ -1460,7 +1475,9 @@ export async function netSyscall(
       const c = await s.accept(flags, sig);
       if (typeof c === 'number') return c;
       const peer = c.getpeername();
-      if (typeof peer !== 'number') addrOut(peer, 0, SOCKADDR_ROOM);
+      const room = roomOf(args[2]);
+      if (room) data.fill(0, 0, room);
+      if (typeof peer !== 'number') peerOut(peer, 0, room);
       return install(c, (flags & SOCK_CLOEXEC) !== 0);
     }
     case SYS_getsockname:
@@ -1493,23 +1510,25 @@ export async function netSyscall(
       if (n === -EPIPE && !(args[2] & MSG_NOSIGNAL)) onSigpipe?.();
       return n;
     }
-    case SYS_recvfrom: { // fd, len, flags → data = bytes, sender sockaddr at offset len (SOCKADDR_ROOM bytes)
+    case SYS_recvfrom: { // fd, len, flags, room → data = bytes, sender sockaddr at offset len (SOCKADDR_ROOM bytes, or room: see peerOut)
       const s = sockOf(args[0]);
       if (typeof s === 'number') return s;
-      const len = Math.min(args[1] >>> 0, Math.max(0, data.length - SOCKADDR_ROOM));
+      const room = roomOf(args[3]);
+      const area = room || SOCKADDR_ROOM;
+      const len = Math.min(args[1] >>> 0, Math.max(0, data.length - area));
       if (s instanceof KDatagramSocket) {
         const r = await s.recvfrom(data.subarray(0, len), args[2], sig);
         if (typeof r === 'number') return r;
-        data.fill(0, len, len + SOCKADDR_ROOM);
-        addrOut(r.from, len, SOCKADDR_ROOM);
+        data.fill(0, len, len + area);
+        peerOut(r.from, len, room);
         return r.n;
       }
       const n = await s.recv(data.subarray(0, len), args[2], sig);
       if (n >= 0) {
-        data.fill(0, len, len + SOCKADDR_ROOM);
+        data.fill(0, len, len + area);
         // An AF_UNIX datagram's sender (unnamed when it isn't bound)
         const peer = s.domain === AF_UNIX && s.type === SOCK_DGRAM ? s.lastFrom ?? { family: AF_UNIX, address: '', port: 0 } : s.getpeername();
-        if (typeof peer !== 'number') addrOut(peer, len, SOCKADDR_ROOM);
+        if (typeof peer !== 'number') peerOut(peer, len, room);
       }
       return n;
     }
@@ -1555,24 +1574,26 @@ export async function netSyscall(
       if (n === -EPIPE && !(args[2] & MSG_NOSIGNAL)) onSigpipe?.();
       return n;
     }
-    case SYS_recvmsg: { // fd, len, flags, ctrlCap → data = bytes, sockaddr (SOCKADDR_ROOM), u32 controllen, u32 msg_flags, control
+    case SYS_recvmsg: { // fd, len, flags, ctrlCap, room → data = bytes, sockaddr (SOCKADDR_ROOM, or room: see peerOut), u32 controllen, u32 msg_flags, control
       const s = sockOf(args[0]);
       if (typeof s === 'number') return s;
       const cap = Math.max(0, args[3] | 0);
-      const len = Math.min(args[1] >>> 0, Math.max(0, data.length - SOCKADDR_ROOM - 8 - cap));
-      const meta = len + SOCKADDR_ROOM;
+      const room = roomOf(args[4]);
+      const area = room || SOCKADDR_ROOM;
+      const len = Math.min(args[1] >>> 0, Math.max(0, data.length - area - 8 - cap));
+      const meta = len + area;
       data.fill(0, len, meta + 8);
       if (s instanceof KDatagramSocket) {
         const r = await s.recvfrom(data.subarray(0, len), args[2], sig);
         if (typeof r === 'number') return r;
-        addrOut(r.from, len, SOCKADDR_ROOM);
+        peerOut(r.from, len, room);
         return r.n;
       }
       const fds: OpenFile[] = [];
       const n = await s.recv(data.subarray(0, len), args[2], sig, fds);
       if (n < 0) return n;
       const peer = s.domain === AF_UNIX && s.type === SOCK_DGRAM ? s.lastFrom ?? { family: AF_UNIX, address: '', port: 0 } : s.getpeername();
-      if (typeof peer !== 'number') addrOut(peer, len, SOCKADDR_ROOM);
+      if (typeof peer !== 'number') peerOut(peer, len, room);
       const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
       // A message longer than the buffer: the rest was dropped (MSG_TRUNC in msg_flags)
       if (s.type !== SOCK_STREAM && s.lastMsgLen > Math.min(n, len)) dv.setUint32(meta + 4, MSG_TRUNC, true);
