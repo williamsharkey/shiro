@@ -202,6 +202,31 @@ describe('kernel programs on the terminal pty', () => {
     expect(term.screen()).not.toContain('line 1');
   });
 
+  it('a builtin calling shell.execute() with its own sink collects kernel programs\' output (x86 and WASM)', async () => {
+    (shell as any).terminal = term; // the page shell's own terminal, as at the prompt
+    shell.commands.register({
+      name: 'capt', description: 'collect a command\'s output',
+      async exec(ctx) {
+        let got = '';
+        const code = await ctx.shell.execute(ctx.args.join(' '), (t) => { got += t; }, (t) => { ctx.stderr += t; }, false, undefined, true);
+        ctx.stdout = `got [${got.replace(/\r?\n/g, '|')}] ${code}\n`;
+        return 0;
+      },
+    });
+    let r = await sh('capt hello');
+    expect(r.out).toBe('got [Hello, world!|] 0\n');
+    r = await sh('capt wseq 2');
+    expect(r.out).toBe('got [line 1|line 2|] 0\n');
+    // a function body and a loop inside the collected command collect too
+    r = await sh('f() { for i in 1; do hello; done; }; capt f');
+    expect(r.out).toBe('got [Hello, world!|] 0\n');
+    expect(term.screen()).not.toContain('Hello');
+    expect(term.screen()).not.toContain('line 1');
+    // at the prompt the same programs still write to the terminal
+    await sh('hello');
+    expect(term.screen()).toContain('Hello, world!');
+  });
+
   it('kernel | filter builtin is one job: the builtin runs as a kernel process and writes to the tty', async () => {
     const r = await sh('wseq 3 | grep 2');
     expect(r.exitCode).toBe(0);

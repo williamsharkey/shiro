@@ -84,6 +84,7 @@ async function runTestSuite(ctx: any): Promise<number> {
         `git clone https://github.com/${label} ${cloneDir}`,
         (s: string) => ctx.terminal?.term.write(s.replace(/\n/g, '\r\n')),
         (s: string) => ctx.terminal?.term.write(s.replace(/\n/g, '\r\n')),
+        false, ctx.terminal,
       );
       result.cloneOk = cloneCode === 0;
 

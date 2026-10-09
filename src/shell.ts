@@ -1020,6 +1020,50 @@ export class Shell {
     terminalOverride?: any,
     skipHistory: boolean = false,
   ): Promise<number> {
+    // No terminal given: a nested call made by the shell itself (a function,
+    // loop or if body) runs on the terminal of the call around it; a builtin
+    // calling back with its own sink collects the output like $(...), kernel
+    // programs included (their stdout doesn't go to the screen)
+    if (terminalOverride === undefined) {
+      terminalOverride = this.inCommand > 0
+        ? (this.terminal ? capturingStdout(this.terminal) : undefined)
+        : this.activeTerminal;
+    }
+    const outerTerminal = this.activeTerminal;
+    const outerInCommand = this.inCommand;
+    this.activeTerminal = terminalOverride;
+    this.inCommand = 0;
+    try {
+      return await this.executeOn(line, writeStdout, writeStderr, remote, terminalOverride, skipHistory);
+    } finally {
+      this.activeTerminal = outerTerminal;
+      this.inCommand = outerInCommand;
+    }
+  }
+
+  /** The terminal of the execute() in progress (undefined: the shell's own) */
+  private activeTerminal: any = undefined;
+  /** A builtin (Command.exec) is running: an execute() it makes is its own */
+  private inCommand = 0;
+
+  /** Run a builtin; execute() calls it makes without a terminal collect their output */
+  private async runCommand(cmd: { exec(ctx: CommandContext): Promise<number> }, ctx: CommandContext): Promise<number> {
+    this.inCommand++;
+    try {
+      return await cmd.exec(ctx);
+    } finally {
+      this.inCommand--;
+    }
+  }
+
+  private async executeOn(
+    line: string,
+    writeStdout: (s: string) => void,
+    writeStderr: ((s: string) => void) | undefined,
+    remote: boolean,
+    terminalOverride: any,
+    skipHistory: boolean,
+  ): Promise<number> {
     const depth = this.executeDepth;
     const suppressed = this.errexitSuppressed;
     // After `exec >file` / `exec 2>file`, default output goes there. The outermost
@@ -3732,7 +3776,7 @@ export class Shell {
             exitCode = live
               ? await this.execWithLiveStdin(cmd, ctx, i === pipeline.length - 1 && !redirects.some(r => r.type !== '<') &&
                 writesTo(writeStdout, this.kernelStdio!.out) && writesTo(stderrWriter, this.kernelStdio!.err))
-              : await cmd.exec(ctx);
+              : await this.runCommand(cmd, ctx);
           } catch (e: any) {
             ctx.stderr += e.message + '\n';
             exitCode = 1;
@@ -7316,7 +7360,7 @@ export class Shell {
     const ks = this.kernelStdio!;
     if (stream) { ctx.streamStdout = ks.out; ctx.streamStderr = ks.err; }
     const { execLazyStdin } = await import('./shell-stdio');
-    return execLazyStdin(cmd, ctx, () => ks.readAll());
+    return this.runCommand({ exec: (c) => execLazyStdin(cmd, c, () => ks.readAll()) }, ctx);
   }
 
   /**
@@ -7736,7 +7780,7 @@ export class Shell {
     const cmd = this.commands.get(base);
     if (cmd && !packageShadows(this.fs).has(base)) {
       ctx.args = argv;
-      return cmd.exec(ctx);
+      return this.runCommand(cmd, ctx);
     }
     const found = cmd ? `${PKG_BIN_DIR}/${base}` : await this.findExecutableInPath(base);
     if (found) return this.executeScript(found, argv, ctx, writeStdout, writeStderr);
