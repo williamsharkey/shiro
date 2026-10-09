@@ -12,7 +12,7 @@ import {
   EPOLL_CTL_ADD, EPOLL_CTL_DEL, EPOLL_CTL_MOD, EPOLLET, EPOLLONESHOT, EPOLLERR, EPOLLHUP, EPOLLEXCLUSIVE,
   EPOLL_EVENT_SIZE, POLLIN, S_IFCHR,
 } from './abi';
-import { type OpenFile, type OpenFileKind, ReadyListeners, refCount } from './fd';
+import { type OpenFile, type OpenFileKind, ReadyListeners, refCount, DevNull, DevZero } from './fd';
 
 /**
  * One setTimeout for every pending poll/epoll/select deadline. A wait that
@@ -26,6 +26,32 @@ let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
 let deadlineAt = Infinity;
 let cancelled = 0;
 
+/** Run `cb` on a following turn of the event loop (sooner than setTimeout's whole milliseconds) */
+const setImmediateFn = (globalThis as { setImmediate?: (cb: () => void) => unknown }).setImmediate;
+const nextTurn: (cb: () => void) => void = setImmediateFn ? (cb) => { setImmediateFn(cb); } : (() => {
+  const ch = new MessageChannel();
+  const queue: (() => void)[] = [];
+  ch.port1.onmessage = () => queue.shift()?.();
+  return (cb: () => void) => { queue.push(cb); ch.port2.postMessage(0); };
+})();
+
+function fireDue(): void {
+  deadlineTimer = null;
+  deadlineAt = Infinity;
+  const now = performance.now();
+  while (deadlines.length && (deadlines[0].dead || deadlines[0].at <= now)) {
+    const d = deadlines.shift()!;
+    if (!d.dead) { d.dead = true; d.fire(); }
+  }
+  armDeadlines();
+}
+
+/**
+ * Deadlines are on performance.now() (Date.now()'s whole milliseconds let a
+ * wait end up to 1 ms early). setTimeout runs to 1.5-4 ms before the first
+ * one, then event-loop turns take it the rest of the way, so a wait ends
+ * neither early nor a millisecond late (LTP's timer tests check both).
+ */
 function armDeadlines(): void {
   while (deadlines.length && deadlines[0].dead) deadlines.shift();
   const next = deadlines[0]?.at ?? Infinity;
@@ -34,22 +60,17 @@ function armDeadlines(): void {
   deadlineTimer = null;
   deadlineAt = next;
   if (next === Infinity) return;
-  deadlineTimer = setTimeout(() => {
-    deadlineTimer = null;
-    deadlineAt = Infinity;
-    const now = Date.now();
-    while (deadlines.length && (deadlines[0].dead || deadlines[0].at <= now)) {
-      const d = deadlines.shift()!;
-      if (!d.dead) { d.dead = true; d.fire(); }
-    }
-    armDeadlines();
-  }, Math.max(0, next - Date.now()));
+  const left = next - performance.now();
+  // (setTimeout runs later the longer it is set for: stop short by 1.5-4 ms)
+  const margin = Math.min(4, Math.max(1.5, left * 0.05));
+  if (left <= margin + 0.5) { nextTurn(() => { if (deadlineAt === next && !deadlineTimer) fireDue(); }); return; }
+  deadlineTimer = setTimeout(fireDue, Math.floor(left - margin));
   (deadlineTimer as any)?.unref?.();
 }
 
 /** Call `fire` after `ms`; returns a cancel function. */
 function addDeadline(ms: number, fire: () => void): () => void {
-  const d: Deadline = { at: Date.now() + ms, fire, dead: false };
+  const d: Deadline = { at: performance.now() + ms, fire, dead: false };
   let i = deadlines.length;
   while (i > 0 && deadlines[i - 1].at > d.at) i--;
   deadlines.splice(i, 0, d);
@@ -132,7 +153,8 @@ export class EpollFile implements OpenFile {
   /** epoll_ctl. `fd` is the caller's fd for `file` (reported back and used as the key, with the description). */
   ctl(op: number, fd: number, file: OpenFile, events: number, dataLo: number, dataHi: number): number {
     if (file === this) return -EINVAL;
-    if (file.kind === 'file' || file.kind === 'dir') return -EPERM;
+    // Files, directories and devices without a poll method (/dev/null, /dev/zero) can't be watched
+    if (file.kind === 'file' || file.kind === 'dir' || file instanceof DevNull || file instanceof DevZero) return -EPERM;
     if (file instanceof EpollFile && file.watches(this)) return -ELOOP;
     // At most 5 epolls deep, like Linux (EP_MAX_NESTS)
     if (op === EPOLL_CTL_ADD && file instanceof EpollFile && file.depth() >= 5) return -EINVAL;
@@ -211,22 +233,26 @@ export class EpollFile implements OpenFile {
 
   /** Collect up to `max` ready events, applying ET/ONESHOT bookkeeping when `consume`. */
   collect(max: number, consume = true): EpollEvent[] {
-    const reported: OpenFile[] = [];
-    const out = this.scanReady(max, consume, reported);
+    const out: EpollEvent[] = [];
+    const reported = this.scanReady(max, consume, out);
     // Reported entries go to the back, so a full events array doesn't starve the rest (like Linux's ready list)
-    for (const f of reported) {
-      const m = this.interest.get(f);
-      if (m) { this.interest.delete(f); this.interest.set(f, m); }
+    if (reported && this.interest.size > 1) {
+      for (const f of reported) {
+        const m = this.interest.get(f);
+        if (m) { this.interest.delete(f); this.interest.set(f, m); }
+      }
     }
     return out;
   }
 
-  private scanReady(max: number, consume: boolean, reported: OpenFile[]): EpollEvent[] {
-    const out: EpollEvent[] = [];
-    for (const [file, m] of [...this.interest]) {
+  /** Ready events into `out`; the files reported (when `consume`), null for none. */
+  private scanReady(max: number, consume: boolean, out: EpollEvent[]): OpenFile[] | null {
+    let reported: OpenFile[] | null = null;
+    // (a Map may lose entries while it is iterated: drop() deletes)
+    for (const [file, m] of this.interest) {
       if (refCount(file) === 0) { for (const e of [...m.values()]) this.drop(e); continue; }
       for (const e of m.values()) {
-        if (out.length >= max) return out;
+        if (out.length >= max) return reported;
         if (e.disabled) continue;
         if ((e.events & EPOLLET) && !e.armed) continue;
         const ready = file.poll(e.events & 0xffff) & ((e.events & 0xffff) | EPOLLERR | EPOLLHUP);
@@ -239,11 +265,11 @@ export class EpollFile implements OpenFile {
         if (consume) {
           if (e.events & EPOLLET) e.armed = false;
           if (e.events & EPOLLONESHOT) e.disabled = true;
-          reported.push(file);
+          (reported ??= []).push(file);
         }
       }
     }
-    return out;
+    return reported;
   }
 
   /** epoll_wait: events written to `out` (EPOLL_EVENT_SIZE each); returns the count or -errno. */
@@ -252,16 +278,21 @@ export class EpollFile implements OpenFile {
     max = Math.min(max, Math.floor(out.length / EPOLL_EVENT_SIZE));
     if (max <= 0) return -EINVAL;
     let got: EpollEvent[] = [];
+    let n: number;
     this.waiting++;
-    const n = await waitReady([this], () => { got = this.collect(max); return got.length; }, timeoutMs, signal)
-      .finally(() => { this.waiting--; });
+    try {
+      n = await waitReady([this], () => { got = this.collect(max); return got.length; }, timeoutMs, signal);
+    } finally {
+      this.waiting--;
+    }
     if (n < 0) return n;
     const dv = new DataView(out.buffer, out.byteOffset, got.length * EPOLL_EVENT_SIZE);
-    got.forEach((e, i) => {
+    for (let i = 0; i < got.length; i++) {
+      const e = got[i];
       dv.setUint32(i * 12, e.events >>> 0, true);
       dv.setUint32(i * 12 + 4, e.dataLo >>> 0, true);
       dv.setUint32(i * 12 + 8, e.dataHi >>> 0, true);
-    });
+    }
     return got.length;
   }
 

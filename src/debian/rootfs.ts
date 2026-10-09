@@ -299,19 +299,18 @@ export const DEBIAN_ENV: Record<string, string> = {};
 /**
  * Settings that work around engine gaps. apt's needed none now (Dpkg::Use-Pty
  * "false" went when the kernel released a dead session leader's tty): an
- * older install's file is removed. resolv.conf gets single-request (below).
+ * older install's file is removed, as is the resolv.conf option below.
  */
 export async function writeEngineWorkarounds(fs: FileSystem): Promise<void> {
   await fs.unlink('/etc/apt/apt.conf.d/91shiro-engine').catch(() => {});
-  // glibc asks for A and AAAA at once with sendmmsg(), which Blink fails with
-  // EBADF on a kernel socket (getaddrinfo(AF_UNSPEC): "Temporary failure in
-  // name resolution", so pip couldn't reach PyPI); one query at a time works
+  // Earlier installs got `options single-request` (Blink failed glibc's
+  // parallel A+AAAA sendmmsg until patch 0043): take it out again
   try {
     const conf = await fs.readFile('/etc/resolv.conf', 'utf8') as string;
-    if (!/^options .*single-request/m.test(conf)) {
-      await fs.writeFile('/etc/resolv.conf', `${conf.replace(/\n?$/, '\n')}options single-request\n`);
+    if (/^options single-request$/m.test(conf)) {
+      await fs.writeFile('/etc/resolv.conf', conf.replace(/^options single-request\n?/m, ''));
     }
-  } catch { /* no resolv.conf: nothing to tune */ }
+  } catch { /* no resolv.conf */ }
   await keepManPages(fs);
 }
 

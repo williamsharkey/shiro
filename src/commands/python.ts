@@ -83,6 +83,18 @@ export const pythonCmd: Command = {
   name: 'python',
   description: 'Python interpreter (Pyodide)',
   async exec(ctx: CommandContext) {
+    // -m venv / pip / ensurepip are the CPython package's (wheels install into
+    // its site-packages): fetch it once, then run the command with it
+    const { pythonFrontend } = await import('../pkg-manager');
+    if (pythonFrontend(ctx.args) && ctx.shell) {
+      const { quoteArgsForShell } = await import('../shell');
+      const out = (s: string) => { ctx.stdout += s.replace(/\r\n/g, '\n'); };
+      const err = (s: string) => { ctx.stderr += s.replace(/\r\n/g, '\n'); };
+      err('python3 -m venv and -m pip need the CPython package: pkg install python3\n');
+      const code = await ctx.shell.execute('pkg install python3 >/dev/null', out, err);
+      if (code !== 0) return code;
+      return ctx.shell.execute(`/usr/bin/python3 ${quoteArgsForShell(ctx.args)}`, out, err);
+    }
     let py: any;
     try {
       py = await ensurePyodide(ctx);

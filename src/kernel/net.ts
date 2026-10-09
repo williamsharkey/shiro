@@ -21,29 +21,30 @@ import { networkCredential, requireNetworkSignIn, setNetworkStatus } from '../ne
 import type { KStat } from './abi';
 import { retain, release, type FdTable, type OpenFile } from './fd';
 import type { Kernel } from './kernel';
+import { AF_NETLINK, KNetlinkSocket, netlinkSocket } from './netlink';
 import {
   EPERM, EINTR, EIO, EBADF, EAGAIN, EACCES, EFAULT, EINVAL, ENOTTY, EPIPE, ETIMEDOUT, EPROTO, ENOTSOCK, EDESTADDRREQ,
-  EMSGSIZE, ENOPROTOOPT, EPROTONOSUPPORT, EOPNOTSUPP, EAFNOSUPPORT, EADDRINUSE, EADDRNOTAVAIL, ENETDOWN,
+  EMSGSIZE, ENOPROTOOPT, EPROTONOSUPPORT, EPROTOTYPE, EOPNOTSUPP, EAFNOSUPPORT, EADDRINUSE, EADDRNOTAVAIL, ENETDOWN,
   ENETUNREACH, ECONNABORTED, ECONNRESET, ENOBUFS, EISCONN, ENOTCONN, ECONNREFUSED, EHOSTUNREACH, EALREADY,
   EINPROGRESS, O_NONBLOCK, POLLIN, POLLPRI, POLLOUT, POLLERR, POLLHUP, POLLNVAL, POLLRDHUP, S_IFSOCK,
-  AF_UNIX, AF_INET, AF_INET6, SOCK_STREAM, SOCK_DGRAM, SOCK_NONBLOCK, SOCK_CLOEXEC, SHUT_RD, SHUT_WR,
+  AF_UNIX, AF_INET, AF_INET6, SOCK_STREAM, SOCK_DGRAM, SOCK_SEQPACKET, SOCK_NONBLOCK, SOCK_CLOEXEC, SHUT_RD, SHUT_WR,
   SHUT_RDWR, MSG_PEEK, MSG_WAITALL, MSG_DONTWAIT, MSG_NOSIGNAL, SOL_SOCKET, IPPROTO_IP, IPPROTO_TCP,
   IPPROTO_UDP, IPPROTO_IPV6, SO_REUSEADDR, SO_TYPE, SO_ERROR, SO_BROADCAST, SO_SNDBUF, SO_RCVBUF,
   SO_KEEPALIVE, SO_LINGER, SO_REUSEPORT, SO_RCVTIMEO, SO_SNDTIMEO, SO_ACCEPTCONN, SO_PROTOCOL, SO_DOMAIN,
   TCP_NODELAY, TCP_KEEPIDLE, TCP_KEEPINTVL, TCP_KEEPCNT, IPV6_V6ONLY, FIONREAD, FIONBIO, SYS_socket,
   SYS_connect, SYS_accept, SYS_sendto, SYS_recvfrom, SYS_shutdown, SYS_bind, SYS_listen, SYS_getsockname,
   SYS_getpeername, SYS_socketpair, SYS_setsockopt, SYS_getsockopt, SYS_accept4, SOCKET_SYSCALLS,
-  SOCKADDR_ROOM, SIGPIPE, ENOENT, SO_PEERCRED, SCM_RIGHTS, MSG_CTRUNC, MSG_CMSG_CLOEXEC, SYS_sendmsg,
+  SOCKADDR_ROOM, SIGPIPE, ENOENT, SO_PEERCRED, SCM_RIGHTS, MSG_CTRUNC, MSG_TRUNC, MSG_CMSG_CLOEXEC, SYS_sendmsg,
   SYS_recvmsg, SOCKADDR_UN_MAX, ENAMETOOLONG, decodeText,
 } from './abi';
 
 // Socket constants live in abi.ts (the shared ABI); re-exported for net.ts users.
 export {
   EPERM, EINTR, EIO, EBADF, EAGAIN, EACCES, EFAULT, EINVAL, EPIPE, ETIMEDOUT, EPROTO, ENOTSOCK, EDESTADDRREQ,
-  EMSGSIZE, ENOPROTOOPT, EPROTONOSUPPORT, EOPNOTSUPP, EAFNOSUPPORT, EADDRINUSE, EADDRNOTAVAIL, ENETDOWN,
+  EMSGSIZE, ENOPROTOOPT, EPROTONOSUPPORT, EPROTOTYPE, EOPNOTSUPP, EAFNOSUPPORT, EADDRINUSE, EADDRNOTAVAIL, ENETDOWN,
   ENETUNREACH, ECONNABORTED, ECONNRESET, ENOBUFS, EISCONN, ENOTCONN, ECONNREFUSED, EHOSTUNREACH, EALREADY,
   EINPROGRESS, O_NONBLOCK, POLLIN, POLLPRI, POLLOUT, POLLERR, POLLHUP, POLLNVAL, POLLRDHUP, S_IFSOCK,
-  AF_UNIX, AF_INET, AF_INET6, SOCK_STREAM, SOCK_DGRAM, SOCK_NONBLOCK, SOCK_CLOEXEC, SHUT_RD, SHUT_WR,
+  AF_UNIX, AF_INET, AF_INET6, SOCK_STREAM, SOCK_DGRAM, SOCK_SEQPACKET, SOCK_NONBLOCK, SOCK_CLOEXEC, SHUT_RD, SHUT_WR,
   SHUT_RDWR, MSG_PEEK, MSG_WAITALL, MSG_DONTWAIT, MSG_NOSIGNAL, SOL_SOCKET, IPPROTO_IP, IPPROTO_TCP,
   IPPROTO_UDP, IPPROTO_IPV6, SO_REUSEADDR, SO_TYPE, SO_ERROR, SO_BROADCAST, SO_SNDBUF, SO_RCVBUF,
   SO_KEEPALIVE, SO_LINGER, SO_REUSEPORT, SO_RCVTIMEO, SO_SNDTIMEO, SO_ACCEPTCONN, SO_PROTOCOL, SO_DOMAIN,
@@ -141,6 +142,21 @@ export function isLoopback(addr: string): boolean {
   return /^127\./.test(addr) || addr === '::1' || addr === '0.0.0.0' || addr === '::' || /^::ffff:127\./i.test(addr);
 }
 
+/**
+ * The page's own address for talking to `remote`: loopback for loopback,
+ * else 10.0.2.15, as IPv4-mapped (::ffff:10.0.2.15) toward an IPv4-mapped
+ * peer and fd00::15 toward IPv6. glibc's getaddrinfo sorts its answers by
+ * connect()ing a UDP socket to each and asserts that an IPv6 socket sent to
+ * a mapped address reports a mapped source ("::" aborted every AF_UNSPEC
+ * lookup with two families of answers).
+ */
+export function localAddressFor(remote: SockAddr): string {
+  const a = remote.address;
+  if (isLoopback(a) && a !== '0.0.0.0' && a !== '::') return /^::ffff:/i.test(a) ? '::ffff:127.0.0.1' : a.includes(':') ? '::1' : '127.0.0.1';
+  if (remote.family !== AF_INET6) return '10.0.2.15';
+  return /^::ffff:/i.test(a) ? '::ffff:10.0.2.15' : 'fd00::15';
+}
+
 /** Expand an IPv6 address to 8 16-bit groups (handles :: and an embedded IPv4 tail). */
 export function ipv6Groups(addr: string): number[] {
   let a = addr.toLowerCase();
@@ -172,6 +188,14 @@ export function formatIpv6(groups: number[]): string {
 
 /** Encode a sockaddr_in / sockaddr_in6 (Linux layout, network byte order port) / sockaddr_un. */
 export function encodeSockaddr(sa: SockAddr): Uint8Array {
+  if (sa.family === AF_NETLINK) {
+    // sockaddr_nl: family, pad, nl_pid (port), nl_groups
+    const b = new Uint8Array(12);
+    const dv = new DataView(b.buffer);
+    dv.setUint16(0, AF_NETLINK, true);
+    dv.setUint32(4, sa.port, true);
+    return b;
+  }
   if (sa.family === AF_UNIX) {
     // sun_path NUL-terminated (an abstract name starts with its NUL)
     const path = new TextEncoder().encode(sa.address);
@@ -214,6 +238,10 @@ export function decodeSockaddr(b: Uint8Array): SockAddr | number {
       return { family, port: dv.getUint16(2, false), address: `::ffff:${g[6] >> 8}.${g[6] & 0xff}.${g[7] >> 8}.${g[7] & 0xff}` };
     }
     return { family, port: dv.getUint16(2, false), address: formatIpv6(g) };
+  }
+  if (family === AF_NETLINK) {
+    if (b.length < 12) return -EINVAL;
+    return { family, address: '', port: dv.getUint32(4, true) };
   }
   if (family === AF_UNIX) {
     const path = b.subarray(2, Math.min(b.length, SOCKADDR_UN_MAX));
@@ -277,6 +305,16 @@ class LoopbackPeer implements StreamPeer {
   close() { this.other._eof(); this.other._peerGone(); }
   consumed() { this.other._wake(); } // the writer on the other side may be waiting for room
   buffered() { return this.other._rxBytes(); }
+}
+
+/** A connected AF_UNIX SOCK_DGRAM socket's default destination: a bound datagram socket */
+class DgramPeer implements StreamPeer {
+  constructor(private target: KSocket, private self: KSocket) {}
+  send(data: Uint8Array, fds?: OpenFile[]) { this.target._deliver(data.slice(), fds, this.self.local); }
+  shutdownWrite() {}
+  close() {}
+  consumed() {}
+  buffered() { return this.target._rxBytes(); }
 }
 
 interface RelayConnected { remoteAddress: string; remotePort: number; family: number }
@@ -355,7 +393,6 @@ const sockStat = (ino: number): KStat => {
 
 export class KSocket implements OpenFile {
   readonly kind = 'socket' as const;
-  readonly type = SOCK_STREAM;
   flags: number;
   state: StreamState = 'unbound';
   local: SockAddr | null = null;
@@ -372,6 +409,11 @@ export class KSocket implements OpenFile {
   private rx: Uint8Array[] = [];
   /** Received chunks that carry passed descriptions (SCM_RIGHTS), each holding one reference. */
   private rxFds = new Map<Uint8Array, OpenFile[]>();
+  /** AF_UNIX datagrams: who sent each one (a bound sender's address), and the last one read (recvfrom) */
+  private rxFrom = new Map<Uint8Array, SockAddr>();
+  lastFrom: SockAddr | null = null;
+  /** DGRAM/SEQPACKET: the whole length of the last message read (MSG_TRUNC) */
+  lastMsgLen = 0;
   private rxLen = 0;
   private rxEof = false;
   private rdShut = false;
@@ -384,18 +426,25 @@ export class KSocket implements OpenFile {
   private unpublish: (() => void) | null = null;
   private opts = new Map<string, number>();
 
-  constructor(private stack: NetStack, readonly domain: number, readonly protocol = 0, flags = 0) {
+  /**
+   * `type` SOCK_DGRAM/SOCK_SEQPACKET (AF_UNIX only): messages keep their
+   * boundaries (each send is one chunk, a read takes at most one and drops
+   * what doesn't fit, a send is never split).
+   */
+  constructor(private stack: NetStack, readonly domain: number, readonly protocol = 0, flags = 0, readonly type = SOCK_STREAM) {
     this.flags = flags;
     this.ino = stack.nextIno++;
   }
 
   private get nonblock() { return (this.flags & O_NONBLOCK) !== 0; }
+  private get messages() { return this.type !== SOCK_STREAM; }
 
   // ── events from the peer ──
-  /** @internal */ _deliver(data: Uint8Array, fds?: OpenFile[]) {
+  /** @internal */ _deliver(data: Uint8Array, fds?: OpenFile[], from?: SockAddr | null) {
     if (this.rdShut || this.state === 'closed' || !data.length) { for (const f of fds ?? []) void release(f); return; }
     this.rx.push(data); this.rxLen += data.length;
     if (fds?.length) this.rxFds.set(data, fds);
+    if (from) this.rxFrom.set(data, { ...from });
     this.q.notify();
   }
   /** @internal */ _eof() { if (!this.rxEof) { this.rxEof = true; this.q.notify(); } }
@@ -428,6 +477,8 @@ export class KSocket implements OpenFile {
       if (this.rxLen > 0 && got < buf.length) {
         const before = fdsOut?.length ?? 0;
         got += this.take(buf.subarray(got), (msgFlags & MSG_PEEK) !== 0, fdsOut);
+        // One message per receive; MSG_TRUNC returns its whole length, as Linux does
+        if (this.messages) return msgFlags & MSG_TRUNC ? this.lastMsgLen : got;
         if (!(msgFlags & MSG_WAITALL) || got === buf.length || (msgFlags & MSG_PEEK)) return got;
         if ((fdsOut?.length ?? 0) > before) return got; // descriptions end a message
         continue;
@@ -437,7 +488,7 @@ export class KSocket implements OpenFile {
       if (this.soError) return -this.takeError();
       if (this.rxEof || this.rdShut) return 0;
       if (this.state === 'closed') return -EBADF;
-      if (this.state !== 'connected' && this.state !== 'connecting') return -ENOTCONN;
+      if (this.state !== 'connected' && this.state !== 'connecting' && !(this.type === SOCK_DGRAM && this.state === 'bound')) return -ENOTCONN;
       if (dontwait) return got || -EAGAIN;
       if (signal?.aborted) return got || -EINTR;
       const t0 = Date.now();
@@ -447,6 +498,22 @@ export class KSocket implements OpenFile {
   }
 
   private take(out: Uint8Array, peek: boolean, fdsOut?: OpenFile[]): number {
+    if (this.messages) {
+      // One message; the part that doesn't fit is dropped
+      const chunk = this.rx[0];
+      const k = Math.min(chunk.length, out.length);
+      out.set(chunk.subarray(0, k));
+      this.lastFrom = this.rxFrom.get(chunk) ?? null;
+      this.lastMsgLen = chunk.length;
+      if (peek) return k;
+      this.rxFrom.delete(chunk);
+      const fds = this.rxFds.get(chunk);
+      if (fds) { this.rxFds.delete(chunk); if (fdsOut) fdsOut.push(...fds); else for (const f of fds) void release(f); }
+      this.rx.shift();
+      this.rxLen -= chunk.length;
+      this.peer?.consumed(chunk.length);
+      return k;
+    }
     let n = 0;
     let i = 0;
     while (n < out.length && i < this.rx.length) {
@@ -492,15 +559,16 @@ export class KSocket implements OpenFile {
       if (this.wrShut) return -EPIPE;
       if (this.state !== 'connected' || !this.peer) return this.everConnected ? -EPIPE : -ENOTCONN;
       if (buf.length === 0) return 0;
+      if (this.messages && buf.length > this.stack.config.sndbuf) return -EMSGSIZE;
       const room = this.stack.config.sndbuf - this.peer.buffered();
-      if (room <= 0) {
+      if (room <= 0 || (this.messages && room < buf.length)) {
         if (dontwait) return -EAGAIN;
         if (signal?.aborted) return -EINTR;
         await this.q.wait(50, signal);
         continue;
       }
       // Blocking sockets take the whole buffer (like Linux); nonblocking take what fits.
-      const n = dontwait ? Math.min(room, buf.length) : buf.length;
+      const n = dontwait && !this.messages ? Math.min(room, buf.length) : buf.length;
       this.peer.send(buf.subarray(0, n), fds);
       return n;
     }
@@ -509,6 +577,8 @@ export class KSocket implements OpenFile {
   poll(events: number): number {
     let r = 0;
     if (this.soError) r |= POLLERR;
+    // A bound, unconnected datagram socket: readable when a message is queued
+    if (this.type === SOCK_DGRAM && this.state === 'bound') return (r | (this.rxLen > 0 ? POLLIN : 0) | POLLOUT) & (events | POLLERR);
     switch (this.state) {
       case 'listening':
         if (this.backlog.length) r |= POLLIN;
@@ -561,11 +631,13 @@ export class KSocket implements OpenFile {
       for (const s of this.backlog.splice(0)) await s.close();
     }
     if (this.unixKey?.startsWith('\0') && this.stack.unixNames.get(this.unixKey) === this) this.stack.unixNames.delete(this.unixKey);
+    if (this.unixKey && this.stack.unixDgram.get(this.unixKey) === this) this.stack.unixDgram.delete(this.unixKey);
     if (this.local && this.domain !== AF_UNIX) this.stack.releasePort(this.local.port, this);
     this.peer?.close();
     this.peer = null;
     for (const fds of this.rxFds.values()) for (const f of fds) void release(f);
     this.rxFds.clear();
+    this.rxFrom.clear();
     this.rx = []; this.rxLen = 0;
     this.q.notify();
   }
@@ -618,7 +690,7 @@ export class KSocket implements OpenFile {
       ({ peer, info }) => {
         if (this.state !== 'connecting') { peer.close(); return 0; }
         const remote = remoteOf(info);
-        const local = this.local ?? { family: remote.family, address: remote.family === AF_INET6 ? 'fd00::15' : '10.0.2.15', port: stack.ephemeral() };
+        const local = this.local ?? { family: remote.family, address: localAddressFor(remote), port: stack.ephemeral() };
         this._attach(peer, local, remote);
         return 0;
       },
@@ -653,6 +725,7 @@ export class KSocket implements OpenFile {
   }
 
   listen(backlog = 128): number {
+    if (this.type === SOCK_DGRAM) return -EOPNOTSUPP;
     if (this.state === 'listening') { this.backlogMax = Math.max(1, Math.min(backlog, 4096)); return 0; }
     if (this.state !== 'unbound' && this.state !== 'bound') return -EINVAL;
     if (this.domain === AF_UNIX) {
@@ -712,7 +785,7 @@ export class KSocket implements OpenFile {
     if (level === SOL_SOCKET) {
       switch (name) {
         case SO_ERROR: return this.takeError();
-        case SO_TYPE: return SOCK_STREAM;
+        case SO_TYPE: return this.type;
         case SO_DOMAIN: return this.domain;
         case SO_PROTOCOL: return this.domain === AF_UNIX ? 0 : IPPROTO_TCP;
         // the peer's pid (the ucred's uid/gid are every process's: one user)
@@ -768,7 +841,14 @@ export class KDatagramSocket implements OpenFile {
     return this.remote ? this.sendto(buf, 0, this.remote) : Promise.resolve(-EDESTADDRREQ);
   }
 
-  connect(addr: SockAddr): number { this.remote = { ...addr }; return 0; }
+  connect(addr: SockAddr): number {
+    this.remote = { ...addr };
+    // A connected datagram socket has a source address (getsockname)
+    if (!this.local || this.local.address === '::' || this.local.address === '0.0.0.0') {
+      this.local = { family: this.domain, address: localAddressFor({ ...addr, family: this.domain }), port: this.local?.port || this.stack.ephemeral() };
+    }
+    return 0;
+  }
   bind(addr: SockAddr): number {
     if (this.local) return -EINVAL;
     this.local = { ...addr, port: addr.port || this.stack.ephemeral() };
@@ -939,6 +1019,8 @@ export class NetStack {
   readonly unixListeners = new Map<string, KSocket>();
   /** AF_UNIX: bound abstract names (paths are files in the filesystem) */
   readonly unixNames = new Map<string, KSocket>();
+  /** Bound AF_UNIX SOCK_DGRAM sockets, by the same keys */
+  readonly unixDgram = new Map<string, KSocket>();
   /** AF_UNIX: resolved paths of socket files made by bind() (they stat as sockets) */
   readonly unixPaths = new Set<string>();
   private bound = new Map<number, KSocket>();
@@ -953,16 +1035,17 @@ export class NetStack {
     if ('portHost' in c) this.portHostPromise = null;
   }
 
-  socket(domain: number, type: number, protocol = 0): KSocket | KDatagramSocket | number {
+  socket(domain: number, type: number, protocol = 0): KSocket | KDatagramSocket | KNetlinkSocket | number {
     const base = type & 0xf;
     const flags = type & SOCK_NONBLOCK ? O_NONBLOCK : 0;
     // A type outside SOCK_STREAM..SOCK_PACKET (or unknown flag bits) is EINVAL, like Linux
     if (base < 1 || base > 10 || (type & ~(0xf | SOCK_NONBLOCK | SOCK_CLOEXEC))) return -EINVAL;
     if (domain === AF_UNIX) {
-      if (base !== SOCK_STREAM) return -EPROTONOSUPPORT; // no AF_UNIX datagrams yet
+      if (base !== SOCK_STREAM && base !== SOCK_DGRAM && base !== SOCK_SEQPACKET) return -EPROTONOSUPPORT;
       if (protocol !== 0) return -EPROTONOSUPPORT;
-      return new KSocket(this, AF_UNIX, 0, flags);
+      return new KSocket(this, AF_UNIX, 0, flags, base);
     }
+    if (domain === AF_NETLINK) return netlinkSocket(type, protocol, flags);
     if (domain !== AF_INET && domain !== AF_INET6) return -EAFNOSUPPORT;
     if (base === SOCK_STREAM) {
       if (protocol !== 0 && protocol !== IPPROTO_TCP) return -EPROTONOSUPPORT;
@@ -977,10 +1060,13 @@ export class NetStack {
 
   /** socketpair(2): two connected stream sockets (AF_UNIX-like; they report AF_UNIX). */
   socketpair(type = SOCK_STREAM): [KSocket, KSocket] | number {
-    if ((type & 0xf) !== SOCK_STREAM) return -EOPNOTSUPP;
+    // SOCK_SEQPACKET: Rust's std::process::Command makes one for every spawn
+    // (cargo couldn't start rustc, nor rustc its linker: EOPNOTSUPP)
+    const base = type & 0xf;
+    if (base !== SOCK_STREAM && base !== SOCK_DGRAM && base !== SOCK_SEQPACKET) return -EOPNOTSUPP;
     const flags = type & SOCK_NONBLOCK ? O_NONBLOCK : 0;
-    const a = new KSocket(this, AF_UNIX, 0, flags);
-    const b = new KSocket(this, AF_UNIX, 0, flags);
+    const a = new KSocket(this, AF_UNIX, 0, flags, base);
+    const b = new KSocket(this, AF_UNIX, 0, flags, base);
     const addr = { family: AF_UNIX, address: '', port: 0 };
     a._attach(new LoopbackPeer(a, b), addr, addr);
     b._attach(new LoopbackPeer(b, a), addr, addr);
@@ -1012,12 +1098,44 @@ export class NetStack {
     }
     s.unixKey = key;
     s.local = { family: AF_UNIX, address: addr.address, port: 0 };
-    s.state = 'bound';
+    if (s.state === 'unbound') s.state = 'bound';
+    if (s.type === SOCK_DGRAM) this.unixDgram.set(key, s);
     return 0;
+  }
+
+  /** The registry key `addr` names (a resolved socket file path, or "\0name"), or -errno */
+  private async unixKeyOf(addr: SockAddr, ops: UnixOps): Promise<string | number> {
+    if (addr.address === '') return -EINVAL;
+    if (addr.address.startsWith('\0')) return addr.address;
+    const p = ops.resolve(addr.address);
+    if (typeof p === 'number') return p;
+    if (!(await ops.exists(p))) return -ENOENT;
+    return p;
+  }
+
+  /** sendto(2) of an AF_UNIX datagram to a bound datagram socket */
+  async sendtoUnix(data: Uint8Array, addr: SockAddr, ops: UnixOps, from: SockAddr | null): Promise<number> {
+    const key = await this.unixKeyOf(addr, ops);
+    if (typeof key === 'number') return key;
+    const target = this.unixDgram.get(key);
+    if (!target) return this.unixListeners.has(key) ? -EPROTOTYPE : -ECONNREFUSED;
+    if (data.length > this.config.sndbuf) return -EMSGSIZE;
+    target._deliver(data.slice(), undefined, from);
+    return data.length;
   }
 
   /** connect(2) of an AF_UNIX stream socket to a listener in this kernel. */
   async connectUnix(s: KSocket, addr: SockAddr, ops: UnixOps): Promise<number> {
+    if (s.type === SOCK_DGRAM) {
+      // A datagram socket's connect sets where its messages go
+      if (s.state === 'closed') return -EBADF;
+      const key = await this.unixKeyOf(addr, ops);
+      if (typeof key === 'number') return key;
+      const target = this.unixDgram.get(key);
+      if (!target) return this.unixListeners.has(key) ? -EPROTOTYPE : -ECONNREFUSED;
+      s._attach(new DgramPeer(target, s), s.local ?? { family: AF_UNIX, address: '', port: 0 }, { ...target.local! });
+      return 0;
+    }
     if (s.state === 'connected' || s.state === 'listening') return s.state === 'connected' ? -EISCONN : -EINVAL;
     if (s.state === 'closed') return -EBADF;
     if (addr.address === '') return -EINVAL;
@@ -1029,8 +1147,10 @@ export class NetStack {
       key = p;
     }
     const listener = this.unixListeners.get(key);
+    if (!listener && this.unixDgram.has(key)) return -EPROTOTYPE;
     if (!listener || listener.state !== 'listening') return -ECONNREFUSED;
-    const server = new KSocket(this, AF_UNIX, 0, 0);
+    if (listener.type !== s.type) return -EPROTOTYPE;
+    const server = new KSocket(this, AF_UNIX, 0, 0, s.type);
     server.ownerPid = listener.ownerPid;
     server.unixKey = listener.unixKey;
     if (!listener._enqueue(server)) return -EAGAIN;
@@ -1260,7 +1380,7 @@ export interface UnixOps {
 
 // ── Channel syscalls (docs/NETWORKING.md "Kernel syscalls") ──
 
-type AnySocket = KSocket | KDatagramSocket;
+type AnySocket = KSocket | KDatagramSocket | KNetlinkSocket;
 
 /**
  * Socket syscalls in the SAB-channel form of docs/KERNEL_ABI.md. `kernel.syscall`
@@ -1281,7 +1401,7 @@ export async function netSyscall(
   const sockOf = (fd: number): AnySocket | number => {
     const f = proc.fds.get(fd);
     if (!f) return -EBADF;
-    return f instanceof KSocket || f instanceof KDatagramSocket ? f : -ENOTSOCK;
+    return f instanceof KSocket || f instanceof KDatagramSocket || f instanceof KNetlinkSocket ? f : -ENOTSOCK;
   };
   const addrIn = (off: number, len: number) => decodeSockaddr(data.subarray(off, off + Math.min(len, SOCKADDR_UN_MAX)));
   /** Write `sa` at `off`; one that doesn't fit `room` (a long AF_UNIX path) goes out unnamed. */
@@ -1349,7 +1469,7 @@ export async function netSyscall(
     case SYS_accept4: { // fd, flags → data = peer sockaddr
       const s = sockOf(args[0]);
       if (typeof s === 'number') return s;
-      if (!(s instanceof KSocket)) return -EOPNOTSUPP;
+      if (!(s instanceof KSocket) || s.type === SOCK_DGRAM) return -EOPNOTSUPP;
       const flags = nr === SYS_accept4 ? args[1] : 0;
       const c = await s.accept(flags, sig);
       if (typeof c === 'number') return c;
@@ -1369,7 +1489,7 @@ export async function netSyscall(
       if (typeof s === 'number') return s;
       const len = Math.min(args[1] >>> 0, data.length);
       let n: number;
-      if (s instanceof KDatagramSocket) {
+      if (s instanceof KDatagramSocket || s instanceof KNetlinkSocket) {
         let to: SockAddr | null = null;
         if (args[3] > 0) {
           const sa = addrIn(len, args[3]);
@@ -1377,6 +1497,10 @@ export async function netSyscall(
           to = sa;
         }
         n = await s.sendto(data.subarray(0, len), args[2], to);
+      } else if (s.domain === AF_UNIX && s.type === SOCK_DGRAM && args[3] > 0 && s.state !== 'connected') {
+        const sa = addrIn(len, args[3]);
+        if (typeof sa === 'number') return sa;
+        n = await stack.sendtoUnix(data.subarray(0, len), sa, unix ?? noUnix, s.local);
       } else {
         n = await s.send(data.subarray(0, len), args[2], sig);
       }
@@ -1387,7 +1511,7 @@ export async function netSyscall(
       const s = sockOf(args[0]);
       if (typeof s === 'number') return s;
       const len = Math.min(args[1] >>> 0, Math.max(0, data.length - SOCKADDR_ROOM));
-      if (s instanceof KDatagramSocket) {
+      if (s instanceof KDatagramSocket || s instanceof KNetlinkSocket) {
         const r = await s.recvfrom(data.subarray(0, len), args[2], sig);
         if (typeof r === 'number') return r;
         data.fill(0, len, len + SOCKADDR_ROOM);
@@ -1397,7 +1521,8 @@ export async function netSyscall(
       const n = await s.recv(data.subarray(0, len), args[2], sig);
       if (n >= 0) {
         data.fill(0, len, len + SOCKADDR_ROOM);
-        const peer = s.getpeername();
+        // An AF_UNIX datagram's sender (unnamed when it isn't bound)
+        const peer = s.domain === AF_UNIX && s.type === SOCK_DGRAM ? s.lastFrom ?? { family: AF_UNIX, address: '', port: 0 } : s.getpeername();
         if (typeof peer !== 'number') addrOut(peer, len, SOCKADDR_ROOM);
       }
       return n;
@@ -1426,7 +1551,7 @@ export async function netSyscall(
       }
       if (files.length && !(s instanceof KSocket && s.domain === AF_UNIX)) { for (const g of files) void release(g); return -EOPNOTSUPP; }
       let n: number;
-      if (s instanceof KDatagramSocket) {
+      if (s instanceof KDatagramSocket || s instanceof KNetlinkSocket) {
         let to: SockAddr | null = null;
         if (alen > 0) {
           const sa = addrIn(len, alen);
@@ -1434,6 +1559,10 @@ export async function netSyscall(
           to = sa;
         }
         n = await s.sendto(data.subarray(0, len), args[2], to);
+      } else if (s.domain === AF_UNIX && s.type === SOCK_DGRAM && args[3] > 0 && s.state !== 'connected') {
+        const sa = addrIn(len, args[3]);
+        if (typeof sa === 'number') return sa;
+        n = await stack.sendtoUnix(data.subarray(0, len), sa, unix ?? noUnix, s.local);
       } else {
         n = await s.send(data.subarray(0, len), args[2], sig, files.length ? files : undefined);
       }
@@ -1447,7 +1576,7 @@ export async function netSyscall(
       const len = Math.min(args[1] >>> 0, Math.max(0, data.length - SOCKADDR_ROOM - 8 - cap));
       const meta = len + SOCKADDR_ROOM;
       data.fill(0, len, meta + 8);
-      if (s instanceof KDatagramSocket) {
+      if (s instanceof KDatagramSocket || s instanceof KNetlinkSocket) {
         const r = await s.recvfrom(data.subarray(0, len), args[2], sig);
         if (typeof r === 'number') return r;
         addrOut(r.from, len, SOCKADDR_ROOM);
@@ -1456,9 +1585,11 @@ export async function netSyscall(
       const fds: OpenFile[] = [];
       const n = await s.recv(data.subarray(0, len), args[2], sig, fds);
       if (n < 0) return n;
-      const peer = s.getpeername();
+      const peer = s.domain === AF_UNIX && s.type === SOCK_DGRAM ? s.lastFrom ?? { family: AF_UNIX, address: '', port: 0 } : s.getpeername();
       if (typeof peer !== 'number') addrOut(peer, len, SOCKADDR_ROOM);
       const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      // A message longer than the buffer: the rest was dropped (MSG_TRUNC in msg_flags)
+      if (s.type !== SOCK_STREAM && s.lastMsgLen > Math.min(n, len)) dv.setUint32(meta + 4, MSG_TRUNC, true);
       if (fds.length) {
         // As many as fit the caller's control buffer; the rest are closed (MSG_CTRUNC)
         const fit = Math.max(0, Math.min(fds.length, Math.floor((cap - 16) / 4)));
@@ -1477,7 +1608,7 @@ export async function netSyscall(
           dv.setInt32(ctrl + 12, SCM_RIGHTS, true);
           dv.setUint32(meta, Math.min(cap, (16 + k * 4 + 7) & ~7), true);
         }
-        if (k < fds.length) dv.setUint32(meta + 4, MSG_CTRUNC, true);
+        if (k < fds.length) dv.setUint32(meta + 4, dv.getUint32(meta + 4, true) | MSG_CTRUNC, true);
       }
       return n;
     }

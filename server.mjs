@@ -75,7 +75,12 @@ const PROXY_ALLOWED_PATHS = {
 };
 
 const SKIP_REQUEST_HEADERS = new Set([
+  // hop-by-hop: fetch rejects upgrade/expect (UND_ERR_INVALID_ARG/NOT_SUPPORTED),
+  // and nginx adds Upgrade for the /tcp WebSocket, which broke git-proxy POSTs
   'host', 'connection', 'keep-alive', 'transfer-encoding', 'accept-encoding',
+  'upgrade', 'expect', 'te', 'trailer', 'proxy-connection', 'proxy-authorization',
+  // fetch sets Content-Length from the body; newer Node rejects a caller's
+  'content-length',
   'origin', 'referer', 'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site',
   'sec-fetch-user', 'anthropic-dangerous-direct-browser-access',
   'user-agent',  // Browser UA causes API to reject OAuth tokens
@@ -170,7 +175,6 @@ async function handleProxy(req, res, pathAfterApi) {
   headers['host'] = new URL(base).host;
   // Replace browser UA with Node.js-like UA to avoid API rejecting OAuth from browsers
   headers['user-agent'] = 'node-fetch/1.0 (+https://github.com/node-fetch/node-fetch)';
-  if (body.length) headers['content-length'] = String(body.length);
 
   try {
     const url = new URL(rest, base);
@@ -626,7 +630,6 @@ async function handleGitProxy(req, res, targetUrl) {
   for (const [k, v] of Object.entries(req.headers)) {
     if (!SKIP_REQUEST_HEADERS.has(k.toLowerCase())) headers[k] = v;
   }
-  if (body.length) headers['content-length'] = String(body.length);
 
   try {
     // Redirects are followed here, each hop re-checked, so a public URL can't
@@ -674,7 +677,8 @@ async function handleGitProxy(req, res, targetUrl) {
     }
   } catch (err) {
     res.writeHead(502, { 'content-type': 'application/json', ...cors });
-    res.end(JSON.stringify({ error: err.message }));
+    console.warn('[git-proxy]', targetUrl, err.message, err.cause || '');
+    res.end(JSON.stringify({ error: err.message, cause: err.cause ? [err.cause.code, err.cause.message].filter(Boolean).join(': ') || String(err.cause) : undefined }));
   }
 }
 

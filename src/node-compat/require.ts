@@ -78,10 +78,13 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
   }
 
   function tryResolveExtensions(base: string): string | undefined {
-    for (const ext of ['.ts', '.tsx', '.js', '.jsx']) {
+    // As Node: the file itself, then with an extension (require('./package')
+    // is package.json: uvu's CLI), then a directory's index
+    if (fileCache.has(base)) return base;
+    for (const ext of ['.ts', '.tsx', '.js', '.jsx', '.json']) {
       if (fileCache.has(base + ext)) return base + ext;
     }
-    for (const idx of ['/index.ts', '/index.tsx', '/index.js', '/index.jsx']) {
+    for (const idx of ['/index.ts', '/index.tsx', '/index.js', '/index.jsx', '/index.json']) {
       if (fileCache.has(base + idx)) return base + idx;
     }
     return undefined;

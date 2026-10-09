@@ -425,21 +425,23 @@
      "file": "bin/python3.wasm",
      "argv0": "path",
      "env": {
-      "PYTHON_BASIC_REPL": "1"
+      "PYTHON_BASIC_REPL": "1",
+      "PYTEST_ADDOPTS": "--capture=sys -p no:faulthandler -p no:cacheprovider"
      }
     },
     "python": {
      "file": "bin/python3.wasm",
      "argv0": "path",
      "env": {
-      "PYTHON_BASIC_REPL": "1"
+      "PYTHON_BASIC_REPL": "1",
+      "PYTEST_ADDOPTS": "--capture=sys -p no:faulthandler -p no:cacheprovider"
      }
     }
    },
    "wants": [
     "blocking-stdin"
    ],
-   "notes": "pip installs pure-Python wheels from PyPI (no native extensions, no sdists yet); python -m venv works. No subprocess, sockets or ssl (WASI preview1); the REPL needs blocking stdin. The REPL is the basic one (PYTHON_BASIC_REPL=1): the new one needs termios, which WASI lacks."
+   "notes": "pip installs pure-Python wheels from PyPI (no native extensions, no sdists yet); python -m venv works. No subprocess, sockets or ssl (WASI preview1); the REPL needs blocking stdin. The REPL is the basic one (PYTHON_BASIC_REPL=1): the new one needs termios, which WASI lacks. pytest runs with --capture=sys -p no:faulthandler -p no:cacheprovider (PYTEST_ADDOPTS): its fd capture and faulthandler need dup(), its cache os.umask(), which WASI lacks."
   },
   {
    "name": "make",
