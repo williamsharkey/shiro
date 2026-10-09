@@ -149,6 +149,11 @@ describe.skipIf(!haveRootfs)('toolchain layers', () => {
     expect(again.installed).toEqual([]);
     expect(again.kept).toEqual(['tc-hello', 'tc-lib']);
 
+    // apt sees the layer's packages as installed: installing one is a no-op
+    const noop = await run(shell, 'sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tc-hello 2>&1');
+    expect(noop.output).toMatch(/tc-hello is already the newest version \(1\.0-1\)/);
+    expect(noop.output).toMatch(/0 upgraded, 0 newly installed/);
+
     // apt installs one more package, whose dependency the layer provides
     const pkg = '/tmp/tc-extra';
     await fs.mkdir(`${pkg}/DEBIAN`, { recursive: true });
