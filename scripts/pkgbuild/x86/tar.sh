@@ -6,3 +6,6 @@ setup_musl
 export FORCE_UNSAFE_CONFIGURE=1
 configure_make "$SRC" --without-selinux --without-posix-acls --without-xattrs
 install_bin "$SRC/src/tar" tar/bin/tar
+
+# Manual pages (man, from pkg install mandoc)
+install_man tar "$SRC/doc/tar.1"

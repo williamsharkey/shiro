@@ -13,3 +13,6 @@ configure_make "$SRC" --with-ssl=openssl --with-openssl=yes --without-libpsl --d
   CPPFLAGS="-I$SYSROOT/include" LDFLAGS="-L$SYSROOT/lib -static -no-pie" LIBS="-lssl -lcrypto -lz"
 install_bin "$SRC/src/wget" wget/bin/wget
 # wget's own CA default is OpenSSL's: /etc/ssl/cert.pem and /etc/ssl/certs, which ca-certificates provides
+
+# Manual pages (man, from pkg install mandoc)
+install_man wget "$SRC/doc/wget.1"

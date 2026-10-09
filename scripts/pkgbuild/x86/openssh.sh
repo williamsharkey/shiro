@@ -14,3 +14,6 @@ configure_make "$SRC" --sysconfdir=/etc/ssh --with-ssl-dir="$SYSROOT" --with-zli
   CPPFLAGS="-I$SYSROOT/include" LDFLAGS="-L$SYSROOT/lib -static -no-pie"
 rm -rf "$PKG_OUT/openssh"
 for p in ssh scp sftp ssh-keygen ssh-agent ssh-add ssh-keyscan; do install_bin "$SRC/$p" openssh/bin/$p; done
+
+# Manual pages (man, from pkg install mandoc)
+install_man openssh "$SRC/ssh.1" "$SRC/scp.1" "$SRC/sftp.1" "$SRC/ssh-keygen.1" "$SRC/ssh-agent.1" "$SRC/ssh-add.1" "$SRC/ssh-keyscan.1" "$SRC/ssh_config.5"

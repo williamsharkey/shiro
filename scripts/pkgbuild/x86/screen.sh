@@ -9,3 +9,6 @@ deps_ncurses
 configure_make "$SRC" --disable-pam --disable-utmp --disable-socket-dir --with-system_screenrc=/etc/screenrc \
   CPPFLAGS="-I$SYSROOT/include -I$SYSROOT/include/ncursesw" LDFLAGS="-L$SYSROOT/lib -static -no-pie" LIBS="-lncursesw"
 install_bin "$SRC/screen" screen/bin/screen
+
+# Manual pages (man, from pkg install mandoc)
+install_man screen "$SRC/doc/screen.1"

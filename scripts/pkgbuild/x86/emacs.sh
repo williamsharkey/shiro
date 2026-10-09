@@ -33,3 +33,6 @@ done
 # (4 MB) and the bootstrap autoloads aren't needed either
 rm -rf "$PKG_OUT/emacs/share/emacs/$VERSION/etc/images" "$PKG_OUT/emacs/share/emacs/$VERSION/etc/refcards" \
   "$PKG_OUT/emacs/share/emacs/$VERSION/lisp/leim/ja-dic" "$PKG_OUT/emacs/share/emacs/$VERSION/lisp/ldefs-boot.el"
+
+# Manual pages (man, from pkg install mandoc)
+install_man emacs "$SRC/doc/man/emacs.1" "$SRC/doc/man/emacsclient.1" "$SRC/doc/man/etags.1" "$SRC/doc/man/ebrowse.1"

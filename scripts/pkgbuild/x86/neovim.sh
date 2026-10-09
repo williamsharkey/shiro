@@ -89,3 +89,6 @@ mkdir -p "$PKG_OUT/neovim/share"
 cp -r "$SRC/stage/usr/share/nvim" "$PKG_OUT/neovim/share/"
 # No translations, desktop files or icons
 rm -rf "$PKG_OUT/neovim/share/nvim/runtime/lang"
+
+# Manual pages (man, from pkg install mandoc)
+install_man neovim "$SRC/src/man/nvim.1"

@@ -725,6 +725,11 @@ describe('man (mandoc)', () => {
     expect((await sh('apropos mandoc 2>&1; echo rc=$?')).out).toMatch(/rc=[1-9]\n$/); // no database yet
     expect((await sh('makewhatis /usr/share/man && whatis mandoc')).out).toMatch(/^mandoc\(1\) - format manual pages\n/m);
     expect((await sh('apropos -s 7 roff')).out).toMatch(/roff\(7\) - roff language reference/);
+    // other packages bring their pages; aliases are .so redirects
+    await install('xz', 'procps');
+    expect((await sh('man -w xz vmstat')).out).toBe('/usr/share/man/man1/xz.1\n/usr/share/man/man8/vmstat.8\n');
+    expect((await sh('MANWIDTH=70 man -T ascii xzcat')).out.replace(/.\x08/g, '')).toMatch(/^XZ\(1\) +XZ Utils +XZ\(1\)\n/);
+    expect((await sh('makewhatis /usr/share/man && whatis ps')).out).toMatch(/^ps\(1\) - report a snapshot of the current processes/m);
   }, 180_000);
 });
 

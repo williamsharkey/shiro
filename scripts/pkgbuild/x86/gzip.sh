@@ -5,3 +5,6 @@ SRC=$(gnu_src gzip 1.15 9aa0cc780dec156b8282844833b342ab7cb08c25d2cd9a1869cdd0df
 setup_musl
 configure_make "$SRC"
 install_bin "$SRC/gzip" gzip/bin/gzip
+
+# Manual pages (man, from pkg install mandoc)
+install_man gzip "$SRC/gzip.1" "$SRC/gunzip.1" "$SRC/zcat.1"
