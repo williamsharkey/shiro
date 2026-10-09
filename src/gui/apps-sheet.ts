@@ -53,6 +53,9 @@ export function openAppsSheet(wm: DesktopAPI, fs: FileSystem, kernel: Kernel, li
       return;
     }
     listEl.textContent = '';
+    // after any install, every card's download size can shrink (shared packages)
+    const refreshers: (() => Promise<void>)[] = [];
+    const refreshAll = () => { for (const r of refreshers) void r(); };
     for (const a of list) {
       const info = m.apps[a.id];
       if (!info) continue;
@@ -98,7 +101,8 @@ export function openAppsSheet(wm: DesktopAPI, fs: FileSystem, kernel: Kernel, li
         if (a.note) facts.push(a.note);
         meta.textContent = facts.join(' · ');
       };
-      unsubs.push(apps.watchInstall(a.id, showProgress));
+      refreshers.push(async () => { if (!apps.installInProgress(a.id)) await showState(); });
+      unsubs.push(apps.watchInstall(a.id, (p) => { showProgress(p); if (p.phase === 'done') setTimeout(refreshAll, 0); }));
       const running = apps.installInProgress(a.id);
       if (running) void running.then(showState, showState); else void showState();
 
@@ -108,7 +112,7 @@ export function openAppsSheet(wm: DesktopAPI, fs: FileSystem, kernel: Kernel, li
         try {
           await apps.installApp(fs, kernel, a.id);
           onInstalled(a.id);
-          await showState();
+          refreshAll();
         } catch (e) {
           btn.disabled = false;
           meta.textContent = `Could not install: ${(e as Error).message}`;
