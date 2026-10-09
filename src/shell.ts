@@ -3717,7 +3717,17 @@ export class Shell {
           if (executable) {
             try {
               if (live) ctx.liveStdin = true;
-              exitCode = await this.executeScript(executable, cmdArgs, ctx, writeStdout, stderrWriter);
+              // A script whose output is redirected or piped writes into ctx like
+              // a builtin, for the redirects and the next stage to take; only the
+              // last stage's unredirected output streams (`./s.sh > /dev/null`
+              // and `./s.sh | tr` printed straight to the terminal)
+              const outRedirected = redirects.some(r => r.type !== '<' && !(r.type === 'open' && r.mode === '<'));
+              // (the shell's writers end lines with \r\n for the terminal)
+              const toCtxOut = (t: string) => { ctx.stdout += t.replace(/\r\n/g, '\n'); };
+              const toCtxErr = (t: string) => { ctx.stderr += t.replace(/\r\n/g, '\n'); };
+              exitCode = await this.executeScript(executable, cmdArgs, ctx,
+                outRedirected || i !== pipeline.length - 1 ? toCtxOut : writeStdout,
+                outRedirected ? toCtxErr : stderrWriter);
             } catch (e: any) {
               ctx.stderr += e.message + '\n';
               exitCode = 1;
