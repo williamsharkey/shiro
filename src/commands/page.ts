@@ -38,7 +38,7 @@ function findIframe(port?: number): HTMLIFrameElement | null {
   // hidden, empty iframe tagged with the same port before the window's own,
   // so prefer the ones that are rendered.
   const tagged = Array.from(document.querySelectorAll('[data-virtual-port]')) as HTMLIFrameElement[];
-  const shown = tagged.filter(el => el.getClientRects().length > 0);
+  const shown = tagged.filter(el => typeof el.getClientRects === 'function' && el.getClientRects().length > 0);
   const all = shown.length ? shown : tagged;
 
   if (port) {
