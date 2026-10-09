@@ -1,7 +1,7 @@
 {
  "suite": "LTP syscalls",
  "title": "Syscalls: LTP under Blink (x86-64)",
- "note": "Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host as an unprivileged user (uid 1000, like Shiro) are scored. Blink forks within one instance by default (patch 0048), so the child shares MAP_SHARED pages, where LTP keeps its result counts and checkpoints; with BLINK_SAME_INSTANCE_FORK=0 (snapshot fork) they are not shared, so when the Summary reads all zeros the TPASS/TFAIL/TBROK lines are counted instead (tests/conformance/lib/ltp.mjs). Trend: 146 (first run) → 172 → 148 (TBROK/TFAIL lines counted, snapshot fork) → 197 (same-instance fork opt-in, A/B against 155 without it) → 222 (same-instance fork the default, Blink 0034–0048, kernel O_PATH/locks/pipe sizes/epoll/errno fixes) → 229 (AF_UNIX DGRAM/SEQPACKET sockets, timeouts that never end early, unlinkat/wait4 errnos; bind04 now reaches its abstract-name cases, which Blink truncates).",
+ "note": "Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host as an unprivileged user (uid 1000, like Shiro) are scored. Blink forks within one instance by default (patch 0048), so the child shares MAP_SHARED pages, where LTP keeps its result counts and checkpoints; with BLINK_SAME_INSTANCE_FORK=0 (snapshot fork) they are not shared, so when the Summary reads all zeros the TPASS/TFAIL/TBROK lines are counted instead (tests/conformance/lib/ltp.mjs). Trend: 146 (first run) → 172 → 148 (TBROK/TFAIL lines counted, snapshot fork) → 197 (same-instance fork opt-in, A/B against 155 without it) → 222 (same-instance fork the default, Blink 0034–0048, kernel O_PATH/locks/pipe sizes/epoll/errno fixes) → 229 (AF_UNIX DGRAM/SEQPACKET sockets, timeouts that never end early, unlinkat/wait4 errnos; bind04 now reaches its abstract-name cases, which Blink truncates) → 237 (Blink 0050–0054: same-instance children no longer stall each other, sleeps show S and end on signals, abstract AF_UNIX names keep their length).",
  "files": {
   "accept": {
    "pass": 1,
@@ -23,16 +23,12 @@
    "failures": []
   },
   "bind": {
-   "pass": 2,
+   "pass": 3,
    "total": 4,
    "failures": [
     {
-     "name": "bind04",
-     "reason": "bind04.c:95: TBROK: connect(5, (no pathname bound), 12) failed: ECONNREFUSED (111)"
-    },
-    {
      "name": "bind05",
-     "reason": "bind05.c:105: TBROK: connect(5, (no pathname bound), 12) failed: ECONNREFUSED (111)"
+     "reason": "bind05.c:106: TBROK: write(5,0x80801214,4) failed: ENETUNREACH (101)"
     }
    ]
   },
@@ -52,7 +48,7 @@
    "failures": [
     {
      "name": "clock_gettime04",
-     "reason": "clock_gettime04.c:161: TFAIL: CLOCK_REALTIME: Time travelled backwards (0): -64 ns"
+     "reason": "clock_gettime04.c:161: TFAIL: CLOCK_REALTIME: Time travelled backwards (3): -917937 ns"
     }
    ]
   },
@@ -62,7 +58,7 @@
    "failures": [
     {
      "name": "clock_nanosleep01",
-     "reason": "clock_nanosleep01.c:195: TFAIL: The clock_nanosleep() haven't updated timespec or it's not valid: SUCCESS (0)"
+     "reason": "clock_nanosleep01.c:212: TFAIL: returned 0, expected -1, expected errno: EINVAL (22): SUCCESS (0)"
     }
    ]
   },
@@ -155,28 +151,24 @@
    ]
   },
   "epoll_wait": {
-   "pass": 10,
+   "pass": 11,
    "total": 15,
    "failures": [
+    {
+     "name": "epoll_wait02",
+     "reason": "tst_timer_test.c:314: TFAIL: epoll_wait() slept for too long"
+    },
     {
      "name": "epoll_wait03",
      "reason": "epoll_wait03.c:63: TFAIL: epoll_wait() events has no write permissions invalid retval 1: SUCCESS (0)"
     },
     {
      "name": "epoll_wait05",
-     "reason": "epoll_wait05.c:58: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)"
+     "reason": "epoll_wait05.c:81: TFAIL: Wrong number of events reported 0"
     },
     {
      "name": "epoll_wait06",
      "reason": "epoll_wait06.c:78: TFAIL: write() failed invalid retval 4096: SUCCESS (0)"
-    },
-    {
-     "name": "epoll_wait15",
-     "reason": "tst_test.c:1969: TBROK: Test killed! (timeout?)"
-    },
-    {
-     "name": "epoll_wait16",
-     "reason": "tst_test.c:1969: TBROK: Test killed! (timeout?)"
     }
    ]
   },
@@ -223,11 +215,11 @@
     },
     {
      "name": "fcntl14",
-     "reason": "fcntl14.c:74: TFAIL: flock.l_pid (0) != parent_pid (175)"
+     "reason": "fcntl14.c:74: TFAIL: flock.l_pid (0) != parent_pid (153)"
     },
     {
      "name": "fcntl14_64",
-     "reason": "fcntl14.c:74: TFAIL: flock.l_pid (0) != parent_pid (184)"
+     "reason": "fcntl14.c:74: TFAIL: flock.l_pid (0) != parent_pid (160)"
     },
     {
      "name": "fcntl15",
@@ -297,13 +289,9 @@
    ]
   },
   "fork": {
-   "pass": 7,
+   "pass": 8,
    "total": 9,
    "failures": [
-    {
-     "name": "fork04",
-     "reason": "fork04.c:37: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)"
-    },
     {
      "name": "fork14",
      "reason": "no summary",
@@ -356,7 +344,7 @@
     },
     {
      "name": "futex_wake02",
-     "reason": "futex_wake02.c:79: TFAIL: futex_wake() woken up 5 threads, expected 9: SUCCESS (0)"
+     "reason": "futex_wake02.c:79: TFAIL: futex_wake() woken up 7 threads, expected 10: SUCCESS (0)"
     },
     {
      "name": "futex_wake03",
@@ -438,8 +426,8 @@
    "total": 3,
    "failures": [
     {
-     "name": "nanosleep02",
-     "reason": "nanosleep02.c:46: TFAIL: nanosleep was not interrupted, returned 0, expected -1"
+     "name": "nanosleep04",
+     "reason": "nanosleep04.c:30: TFAIL: nanosleep() returned 0, expected -1"
     }
    ]
   },
@@ -459,14 +447,9 @@
    "failures": []
   },
   "pause": {
-   "pass": 1,
+   "pass": 2,
    "total": 2,
-   "failures": [
-    {
-     "name": "pause01",
-     "reason": "tst_test.c:1969: TBROK: Test killed! (timeout?)"
-    }
-   ]
+   "failures": []
   },
   "pipe": {
    "pass": 8,
@@ -521,15 +504,11 @@
    "failures": []
   },
   "pselect": {
-   "pass": 4,
+   "pass": 5,
    "total": 6,
    "failures": [
     {
      "name": "pselect01",
-     "reason": "tst_timer_test.c:314: TFAIL: pselect() slept for too long"
-    },
-    {
-     "name": "pselect01_64",
      "reason": "tst_timer_test.c:314: TFAIL: pselect() slept for too long"
     }
    ]
@@ -629,14 +608,9 @@
    ]
   },
   "signal": {
-   "pass": 4,
+   "pass": 5,
    "total": 5,
-   "failures": [
-    {
-     "name": "signal01",
-     "reason": "tst_test.c:1969: TBROK: Test killed! (timeout?)"
-    }
-   ]
+   "failures": []
   },
   "socket": {
    "pass": 2,
@@ -719,7 +693,7 @@
    ]
   },
   "waitpid": {
-   "pass": 6,
+   "pass": 8,
    "total": 11,
    "failures": [
     {
@@ -735,16 +709,6 @@
     {
      "name": "waitpid07",
      "reason": "skipped: hangs Shiro",
-     "timeout": true
-    },
-    {
-     "name": "waitpid08",
-     "reason": "no summary",
-     "timeout": true
-    },
-    {
-     "name": "waitpid13",
-     "reason": "no summary",
      "timeout": true
     }
    ]
