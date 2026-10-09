@@ -1,4 +1,25 @@
-import type { Command } from './index';
+import type { Command, CommandContext } from './index';
+import { domProvider } from '../dom-fs';
+
+/**
+ * Follow /dom/events/<type> live when the output reaches a terminal or a
+ * stream (until Ctrl-C). Returns null when it can't stream: the caller then
+ * prints the recent events instead.
+ */
+async function followDomEvents(ctx: CommandContext, path: string): Promise<number | null> {
+  const dp = domProvider();
+  const type = dp?.streamType(path);
+  const signal = ctx.shell.abortController?.signal;
+  if (!dp || !type || !signal || signal.aborted) return null;
+  const out = ctx.streamStdout ?? (ctx.terminal && ctx.stdoutIsTTY !== false
+    ? (s: string) => ctx.terminal!.writeOutput(s.replace(/\n/g, '\r\n')) : null);
+  if (!out) return null;
+  await new Promise<void>((resolve) => {
+    const off = dp.subscribe(type, (line) => out(line + '\n'));
+    signal.addEventListener('abort', () => { off(); resolve(); }, { once: true });
+  });
+  return 130;
+}
 
 /**
  * cat, as GNU coreutils: `-` (or no operand) is stdin; -n numbers lines,
@@ -64,6 +85,10 @@ export const cat: Command = {
           const path = ctx.fs.resolvePath(f, ctx.cwd);
           const st = await ctx.fs.stat(path);
           if (st.isDirectory()) { ctx.stderr += `cat: ${f}: Is a directory\n`; status = 1; continue; }
+          if (plain && files.length === 1 && path.startsWith('/dom/events/')) {
+            const followed = await followDomEvents(ctx, path);
+            if (followed !== null) return followed;
+          }
           text = await ctx.fs.readFile(path, 'utf8') as string;
         } catch {
           ctx.stderr += `cat: ${f}: No such file or directory\n`;
