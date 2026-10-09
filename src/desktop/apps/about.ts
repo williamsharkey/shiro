@@ -9,6 +9,7 @@ export function open(ctx: AppContext): DesktopWindow {
   const { wm, kernel } = ctx;
   const root = document.createElement('div');
   root.className = 'sd-app';
+  root.tabIndex = -1;
   root.style.cssText = 'align-items:center;justify-content:center;text-align:center;padding:24px';
   const isolated = !!(globalThis as any).crossOriginIsolated;
   root.innerHTML = `

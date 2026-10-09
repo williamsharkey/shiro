@@ -667,7 +667,7 @@ class WindowImpl implements DesktopWindow {
     this.wm.setFocus(this);
     // Give keyboard focus to the content unless it already has it
     if (!this.element.contains(document.activeElement)) {
-      const target = this.body.querySelector<HTMLElement>('[data-autofocus], textarea.xterm-helper-textarea, canvas.sd-surface, iframe, input, textarea, button, [tabindex]');
+      const target = this.body.querySelector<HTMLElement>('[data-autofocus], textarea.xterm-helper-textarea, canvas.sd-surface, iframe, [tabindex]');
       try { target?.focus({ preventScroll: true }); } catch {}
     }
   }
