@@ -67,11 +67,24 @@ normal `npm run test:shiro` keeps them fixed.
   It passes when it prints its `Summary:` with passed > 0 and no failed or
   broken results (`lib/ltp.mjs`); a test gets 60 s, and is stopped 1.5 s
   after its summary if it doesn't exit. Leftover processes are killed.
-- Only tests that pass natively on the build host are scored
-  (`ltp/native-baseline.json`, from `scripts/conformance/ltp-native-baseline.mjs`).
+- Only tests that pass natively on the build host as uid 1000 (Shiro's
+  processes are not root) are scored (`ltp/native-baseline.json`, from
+  `scripts/conformance/ltp-native-baseline.mjs`; tests that need root don't
+  count).
 - A full run takes hours. Each finished test is journaled to
   `results/detail/syscalls-blink.jsonl` and its output saved under
   `results/detail/ltp/`; `LTP_RESUME=1` continues a run that died,
   `LTP_RESUME=1 LTP_RERUN_FAILED=1` runs only the previous failures again,
   `LTP_ONLY=read,write01` narrows a run. `ltp/hangs.json` lists tests that
   crash the test worker; they count as failures.
+
+## Shell in Chromium (`scripts/conformance/browser-oils.mjs`)
+
+The oils spec cases again, in the real app: builds it (`--no-build` reuses
+`dist/`), serves it with `server.mjs` (cross-origin isolated), loads it in the
+pre-installed Chromium through playwright-core (never `playwright install`;
+`CHROMIUM` overrides `/opt/pw-browsers/chromium`) and runs each scored case
+through the page's shell the same way as the vitest harness. `--files a,b`
+narrows a run (written as a `.partial.json`). Results:
+`results/shell-oils-browser.json`. Not part of `npm run conformance` (it takes
+a build and a browser); run it before updating the scoreboard.

@@ -35,6 +35,8 @@ export class Process {
   /** Controlling terminal (pty.ts sets it; /dev/tty opens it). */
   ctty?: OpenFile;
   state: ProcessState = 'running';
+  /** Syscalls in progress (a blocked one makes the process "sleeping") */
+  inSyscall = 0;
   /** Linux wait status once the process has exited. */
   exitStatus?: number;
   /** A stop/continue the parent has not collected with waitpid(WUNTRACED/WCONTINUED). */
@@ -45,7 +47,6 @@ export class Process {
   /** Syscalls made through kernel.syscall, the time spent in them, and how many are in progress (/proc CPU estimate). */
   syscalls = 0;
   kernelMs = 0;
-  inSyscall = 0;
   /** Pending signals not yet seen by the guest (also mirrored in the channel's signal word). */
   pendingSignals = new Set<number>();
   /** Blocked signals (sigprocmask); signals.ts maintains it. */

@@ -3,14 +3,9 @@
  "title": "Shell: oils spec tests",
  "files": {
   "smoke": {
-   "pass": 17,
+   "pass": 18,
    "total": 18,
-   "failures": [
-    {
-     "i": 14,
-     "name": "failed command"
-    }
-   ]
+   "failures": []
   },
   "comments": {
    "pass": 2,
@@ -156,7 +151,7 @@
    ]
   },
   "var-op-test": {
-   "pass": 22,
+   "pass": 26,
    "total": 35,
    "failures": [
     {
@@ -184,28 +179,12 @@
      "name": "array and - and +"
     },
     {
-     "i": 18,
-     "name": "$@ (empty) and - and +"
-    },
-    {
      "i": 21,
      "name": "$* (\"\" \"\") and - and + (IFS=)"
     },
     {
-     "i": 22,
-     "name": "\"$*\" (\"\" \"\") and - and + (IFS=)"
-    },
-    {
      "i": 30,
      "name": "\"\\z\" as arg"
-    },
-    {
-     "i": 34,
-     "name": "op-test for ${!array} with array=\"a\" and array=\"a[0]\""
-    },
-    {
-     "i": 35,
-     "name": "op-test for ${!array} with array=\"a[@]\" or array=\"a[*]\""
     },
     {
      "i": 36,
@@ -214,16 +193,12 @@
    ]
   },
   "var-op-strip": {
-   "pass": 24,
+   "pass": 25,
    "total": 28,
    "failures": [
     {
      "i": 3,
      "name": "Remove const suffix is vectorized on $@ array"
-    },
-    {
-     "i": 10,
-     "name": "Strip unicode prefix"
     },
     {
      "i": 23,
@@ -310,21 +285,12 @@
    ]
   },
   "var-num": {
-   "pass": 5,
+   "pass": 7,
    "total": 7,
-   "failures": [
-    {
-     "i": 0,
-     "name": "Normal and braced"
-    },
-    {
-     "i": 1,
-     "name": "In function"
-    }
-   ]
+   "failures": []
   },
   "vars-special": {
-   "pass": 19,
+   "pass": 31,
    "total": 37,
    "failures": [
     {
@@ -340,64 +306,16 @@
      "name": "Some vars are set, even without startup file, or env: PATH, PWD"
     },
     {
-     "i": 6,
-     "name": "UID EUID PPID can't be changed"
-    },
-    {
-     "i": 7,
-     "name": "HOSTNAME OSTYPE can be changed"
-    },
-    {
-     "i": 13,
-     "name": "$BASHPID DOES change with subshell and command sub"
-    },
-    {
-     "i": 18,
-     "name": "$UID and $EUID"
-    },
-    {
-     "i": 19,
-     "name": "$OSTYPE is non-empty"
-    },
-    {
      "i": 21,
      "name": "$LINENO is the current line, not line of function call"
-    },
-    {
-     "i": 22,
-     "name": "$LINENO in \"bare\" redirect arg (bug regression)"
     },
     {
      "i": 27,
      "name": "$LINENO in other for loops"
     },
     {
-     "i": 31,
-     "name": "$_ with simple command and evaluation"
-    },
-    {
-     "i": 32,
-     "name": "$_ and ${_}"
-    },
-    {
-     "i": 33,
-     "name": "$_ with word splitting"
-    },
-    {
-     "i": 35,
-     "name": "$_ with && and ||"
-    },
-    {
-     "i": 36,
-     "name": "$_ is not reset with (( and [["
-    },
-    {
      "i": 37,
      "name": "$_ with assignments, arrays, etc."
-    },
-    {
-     "i": 38,
-     "name": "$_ with loop"
     }
    ]
   },
@@ -504,16 +422,12 @@
    ]
   },
   "redirect": {
-   "pass": 28,
+   "pass": 32,
    "total": 39,
    "failures": [
     {
      "i": 10,
      "name": "Named file descriptor"
-    },
-    {
-     "i": 19,
-     "name": "Redirect to file descriptor that's not open"
     },
     {
      "i": 24,
@@ -536,19 +450,6 @@
      "name": "<> for read/write named pipes"
     },
     {
-     "i": 34,
-     "name": "echo foo >&100 (OSH regression: does not fail with invalid fd 100)"
-    },
-    {
-     "i": 35,
-     "name": "echo foo >&N where N is first unused fd",
-     "timeout": true
-    },
-    {
-     "i": 36,
-     "name": "exec {fd}>&- (OSH regression: fails to close fd)"
-    },
-    {
      "i": 40,
      "name": "xtrace not affected by redirects"
     }
@@ -565,7 +466,7 @@
    ]
   },
   "loop": {
-   "pass": 19,
+   "pass": 21,
    "total": 28,
    "failures": [
     {
@@ -589,14 +490,6 @@
      "name": "bad arg to break"
     },
     {
-     "i": 18,
-     "name": "break in condition of loop"
-    },
-    {
-     "i": 19,
-     "name": "break in condition of nested loop"
-    },
-    {
      "i": 23,
      "name": "top-level break/continue/return (without strict_control_flow)"
     },
@@ -617,30 +510,17 @@
    ]
   },
   "sh-func": {
-   "pass": 10,
+   "pass": 11,
    "total": 11,
-   "failures": [
-    {
-     "i": 10,
-     "name": "Subshell function"
-    }
-   ]
+   "failures": []
   },
   "func-parsing": {
-   "pass": 4,
+   "pass": 6,
    "total": 12,
    "failures": [
     {
-     "i": 4,
-     "name": "Function with spaces, to see if ( and ) are separate tokens."
-    },
-    {
      "i": 6,
      "name": "Hard case, function with } token in it"
-    },
-    {
-     "i": 7,
-     "name": ". in function name"
     },
     {
      "i": 8,
@@ -722,13 +602,9 @@
    "failures": []
   },
   "builtin-eval-source": {
-   "pass": 11,
+   "pass": 19,
    "total": 23,
    "failures": [
-    {
-     "i": 1,
-     "name": "eval accepts/ignores --"
-    },
     {
      "i": 2,
      "name": "eval usage"
@@ -738,40 +614,12 @@
      "name": "eval YSH block with 'break continue return error'"
     },
     {
-     "i": 8,
-     "name": "source accepts/ignores --"
-    },
-    {
-     "i": 10,
-     "name": "Source with no arguments"
-    },
-    {
-     "i": 11,
-     "name": "Source with arguments"
-    },
-    {
-     "i": 12,
-     "name": "Source from a function, mutating argv and defining a local var"
-    },
-    {
      "i": 13,
      "name": "Source with syntax error"
     },
     {
      "i": 14,
      "name": "Eval with syntax error"
-    },
-    {
-     "i": 18,
-     "name": "source looks in PATH for files"
-    },
-    {
-     "i": 19,
-     "name": "source finds files in PATH before current dir"
-    },
-    {
-     "i": 22,
-     "name": "sourcing along PATH should ignore directories"
     }
    ]
   },
@@ -798,7 +646,7 @@
    ]
   },
   "builtin-trap": {
-   "pass": 25,
+   "pass": 26,
    "total": 33,
    "failures": [
     {
@@ -828,15 +676,11 @@
     {
      "i": 29,
      "name": "Remove trap with an unsigned integer"
-    },
-    {
-     "i": 32,
-     "name": "trap with command.NoOp - check internal invariant"
     }
    ]
   },
   "builtin-bracket": {
-   "pass": 43,
+   "pass": 44,
    "total": 50,
    "failures": [
     {
@@ -850,10 +694,6 @@
     {
      "i": 35,
      "name": "test -p named pipe"
-    },
-    {
-     "i": 37,
-     "name": "-u for setuid, -g too"
     },
     {
      "i": 39,
@@ -870,60 +710,12 @@
    ]
   },
   "builtin-cd": {
-   "pass": 14,
+   "pass": 26,
    "total": 28,
    "failures": [
     {
-     "i": 1,
-     "name": "cd BAD/.."
-    },
-    {
-     "i": 2,
-     "name": "cd with 2 or more args - with strict_arg_parse"
-    },
-    {
-     "i": 5,
-     "name": "$OLDPWD"
-    },
-    {
-     "i": 8,
-     "name": "pwd with symlink and -P"
-    },
-    {
-     "i": 9,
-     "name": "setting $PWD doesn't affect the value of 'pwd' builtin"
-    },
-    {
-     "i": 12,
-     "name": "lie about PWD; pwd before any cd"
-    },
-    {
      "i": 14,
      "name": "pwd in symlinked dir on shell initialization"
-    },
-    {
-     "i": 15,
-     "name": "Test the current directory after 'cd ..' involving symlinks"
-    },
-    {
-     "i": 18,
-     "name": "cd away from dir that was deleted"
-    },
-    {
-     "i": 19,
-     "name": "cd permits double bare dash"
-    },
-    {
-     "i": 20,
-     "name": "cd to symlink with -L and -P"
-    },
-    {
-     "i": 21,
-     "name": "cd to relative path with -L and -P"
-    },
-    {
-     "i": 23,
-     "name": "CDPATH is respected"
     },
     {
      "i": 26,
@@ -958,13 +750,9 @@
    ]
   },
   "builtin-type": {
-   "pass": 1,
+   "pass": 3,
    "total": 6,
    "failures": [
-    {
-     "i": 0,
-     "name": "type -> keyword builtin"
-    },
     {
      "i": 1,
      "name": "type -> alias external"
@@ -972,10 +760,6 @@
     {
      "i": 2,
      "name": "type of relative path"
-    },
-    {
-     "i": 4,
-     "name": "special builtins are called out"
     },
     {
      "i": 5,
@@ -1181,7 +965,7 @@
    ]
   },
   "array-assoc": {
-   "pass": 33,
+   "pass": 34,
    "total": 38,
    "failures": [
     {
@@ -1191,10 +975,6 @@
     {
      "i": 31,
      "name": "nameref and assoc array"
-    },
-    {
-     "i": 32,
-     "name": "${!ref} and assoc array"
     },
     {
      "i": 33,
@@ -1207,17 +987,9 @@
    ]
   },
   "brace-expansion": {
-   "pass": 41,
+   "pass": 51,
    "total": 55,
    "failures": [
-    {
-     "i": 2,
-     "name": "partial leading expansion"
-    },
-    {
-     "i": 3,
-     "name": "partial leading expansion 2"
-    },
     {
      "i": 25,
      "name": "expansion on RHS of assignment"
@@ -1231,45 +1003,13 @@
      "name": "Two kinds of tilde expansion"
     },
     {
-     "i": 32,
-     "name": "Ascending number range expansion with negative step is invalid"
-    },
-    {
-     "i": 33,
-     "name": "regression: -1 step disallowed"
-    },
-    {
-     "i": 34,
-     "name": "regression: 0 step disallowed"
-    },
-    {
-     "i": 35,
-     "name": "Descending number range expansion with positive step is invalid"
-    },
-    {
-     "i": 38,
-     "name": "Singleton char ranges with steps"
-    },
-    {
-     "i": 40,
-     "name": "Char range expansion with step"
-    },
-    {
-     "i": 41,
-     "name": "Char ranges with steps of the wrong sign"
-    },
-    {
      "i": 42,
      "name": "Mixed case char expansion is invalid"
-    },
-    {
-     "i": 43,
-     "name": "Descending char range expansion"
     }
    ]
   },
   "tilde": {
-   "pass": 7,
+   "pass": 9,
    "total": 14,
    "failures": [
     {
@@ -1281,16 +1021,8 @@
      "name": "${x//~/~root}"
     },
     {
-     "i": 8,
-     "name": "x=foo:~ has tilde expansion"
-    },
-    {
      "i": 9,
      "name": "a[x]=foo:~ has tilde expansion"
-    },
-    {
-     "i": 10,
-     "name": "tilde expansion an assignment keyword"
     },
     {
      "i": 11,
@@ -1389,20 +1121,12 @@
    ]
   },
   "errexit": {
-   "pass": 26,
+   "pass": 29,
    "total": 35,
    "failures": [
     {
      "i": 9,
      "name": "More && ||"
-    },
-    {
-     "i": 10,
-     "name": "errexit and loop"
-    },
-    {
-     "i": 11,
-     "name": "errexit and brace group { }"
     },
     {
      "i": 22,
@@ -1423,10 +1147,6 @@
     {
      "i": 29,
      "name": "bash atoms [[ (( - redir failure checked"
-    },
-    {
-     "i": 34,
-     "name": "Command sub exit code is lost"
     }
    ]
   },
@@ -1436,7 +1156,7 @@
    "failures": []
   },
   "command_": {
-   "pass": 7,
+   "pass": 8,
    "total": 16,
    "failures": [
     {
@@ -1446,10 +1166,6 @@
     {
      "i": 1,
      "name": "Permission denied"
-    },
-    {
-     "i": 8,
-     "name": "$PATH lookup"
     },
     {
      "i": 9,
@@ -1500,7 +1216,7 @@
    ]
   },
   "alias": {
-   "pass": 30,
+   "pass": 31,
    "total": 48,
    "failures": [
     {
@@ -1570,10 +1286,6 @@
     {
      "i": 40,
      "name": "Corner case: alias inside LHS array arithmetic expression"
-    },
-    {
-     "i": 47,
-     "name": "alias with word of multiple lines"
     }
    ]
   },
@@ -1695,7 +1407,7 @@
    ]
   },
   "sh-options": {
-   "pass": 15,
+   "pass": 25,
    "total": 32,
    "failures": [
     {
@@ -1723,48 +1435,8 @@
      "name": "-n for no execution (useful with --ast-output)"
     },
     {
-     "i": 14,
-     "name": "shopt -p -o prints 'set' options"
-    },
-    {
-     "i": 15,
-     "name": "shopt -o prints 'set' options"
-    },
-    {
-     "i": 16,
-     "name": "shopt -p prints 'shopt' options"
-    },
-    {
      "i": 20,
      "name": "noclobber on <>"
-    },
-    {
-     "i": 30,
-     "name": "shopt allows for backward compatibility like bash"
-    },
-    {
-     "i": 31,
-     "name": "shopt -p validates option names"
-    },
-    {
-     "i": 32,
-     "name": "shopt -p -o validates option names"
-    },
-    {
-     "i": 33,
-     "name": "stubbed out bash options"
-    },
-    {
-     "i": 35,
-     "name": "Unimplemented options - print, query, set, unset"
-    },
-    {
-     "i": 36,
-     "name": "Unimplemented options - OSH shopt -s ignore_shopt_not_impl"
-    },
-    {
-     "i": 38,
-     "name": "no-ops not shown by shopt -p"
     }
    ]
   },

@@ -9,17 +9,87 @@ import { grepCmd, egrepCmd, fgrepCmd } from './grep';
 import { sedCmd } from './sed';
 import { diffCmd } from './diff';
 
+/** PATH with every symlink resolved (cd -P, pwd -P) */
+export async function physicalPath(fs: any, path: string): Promise<string> {
+  let cur = '/';
+  const parts = path.split('/').filter(Boolean);
+  for (let i = 0; i < parts.length; i++) {
+    cur = fs.resolvePath(parts[i], cur);
+    const real = await fs.realpath(cur).catch(() => cur);
+    if (real !== cur) cur = real.split('/').length > 2 && i < 40 ? await physicalPath(fs, real) : real;
+  }
+  return cur;
+}
+
+/**
+ * cd [-L|-P] [--] [DIR]: no DIR is $HOME, - is $OLDPWD (printed), a relative
+ * DIR is looked up in $CDPATH (printed when found there). -L (the default)
+ * keeps symlinks in $PWD, -P resolves them. Sets PWD and OLDPWD.
+ */
 export const cdCmd: Command = {
   name: 'cd',
   description: 'Change directory',
   async exec(ctx) {
-    const target = ctx.args[0] || ctx.env['HOME'] || '/';
-    const resolved = ctx.fs.resolvePath(target === '~' ? (ctx.env['HOME'] || '/') : target, ctx.cwd);
-    const stat = await ctx.fs.stat(resolved).catch(() => null);
-    if (!stat) { ctx.stderr = `cd: no such file or directory: ${target}\n`; return 1; }
-    if (!stat.isDirectory()) { ctx.stderr = `cd: not a directory: ${target}\n`; return 1; }
-    ctx.shell.cwd = resolved;
+    let physical = false;
+    const args = [...ctx.args];
+    while (args.length && /^-[LPe@]+$/.test(args[0])) {
+      for (const c of args.shift()!.slice(1)) if (c === 'P') physical = true; else if (c === 'L') physical = false;
+    }
+    if (args[0] === '--') args.shift();
+    if (args.length > 1) { ctx.stderr = 'cd: too many arguments\n'; return 1; }
+    let target = args[0];
+    let print = false;
+    if (target === undefined) {
+      target = ctx.env['HOME'];
+      if (target === undefined) { ctx.stderr = 'cd: HOME not set\n'; return 1; }
+      if (target === '') return 0;
+    } else if (target === '-') {
+      target = ctx.env['OLDPWD'];
+      if (!target) { ctx.stderr = 'cd: OLDPWD not set\n'; return 1; }
+      print = true;
+    }
+    // (the filesystem follows a symlink only as the last component, so check the physical path)
+    const isDir = async (p: string) => (await ctx.fs.stat(await physicalPath(ctx.fs, p)).catch(() => null))?.isDirectory() ?? false;
+    const oldPwd = ctx.env['PWD'] || ctx.cwd;
+    // Logical: relative to $PWD, with .. taken lexically (each step must exist)
+    const logical = async (t: string, base: string): Promise<string | null> => {
+      const parts = t.startsWith('/') ? t.split('/') : [...base.split('/'), ...t.split('/')];
+      const stack: string[] = [];
+      for (const part of parts) {
+        if (part === '' || part === '.') continue;
+        if (part === '..') {
+          if (!(await isDir('/' + stack.join('/')))) return null;
+          stack.pop();
+        } else stack.push(part);
+      }
+      const p = '/' + stack.join('/');
+      return (await isDir(p)) ? p : null;
+    };
+    let resolved: string | null = null;
+    // $CDPATH for a relative DIR that doesn't start with . or ..
+    const cdpath = ctx.env['CDPATH'];
+    if (cdpath && !target.startsWith('/') && !/^\.\.?(\/|$)/.test(target)) {
+      for (const dir of cdpath.split(':')) {
+        const base = dir ? ctx.fs.resolvePath(dir, oldPwd) : oldPwd;
+        const r = await logical(target, base);
+        if (r) { resolved = r; if (dir) print = true; break; }
+      }
+    }
+    if (!resolved) resolved = await logical(target, oldPwd);
+    if (!resolved) {
+      const p = ctx.fs.resolvePath(target, oldPwd);
+      const st = await ctx.fs.stat(p).catch(() => null);
+      ctx.stderr = `cd: ${target}: ${st && !st.isDirectory() ? 'Not a directory' : 'No such file or directory'}\n`;
+      return 1;
+    }
+    const real = await physicalPath(ctx.fs, resolved);
+    if (physical) resolved = real;
+    // The working directory is the physical path; $PWD keeps the logical one
+    ctx.shell.cwd = real;
+    ctx.shell.logicalPwd = resolved;
+    ctx.shell.env['OLDPWD'] = oldPwd;
     ctx.shell.env['PWD'] = resolved;
+    if (print) ctx.stdout += resolved + '\n';
     return 0;
   },
 };

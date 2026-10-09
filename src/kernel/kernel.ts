@@ -7,7 +7,7 @@
  * `top` see kernel processes.
  */
 
-import type { FileSystem } from '../filesystem';
+import { addProcInfoSource, type FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
 import { ProcFs, bootMs } from './procfs';
@@ -139,6 +139,13 @@ export class Kernel {
       cwd: opts.shell?.cwd ?? '/',
     });
     this.procs.set(1, this.init);
+    // /proc/PID/stat and status for kernel processes
+    addProcInfoSource((pid) => {
+      const p = this.procs.get(pid);
+      if (!p || pid === 1) return undefined;
+      const state = p.state === 'zombie' ? 'Z' : p.state === 'stopped' ? 'T' : p.inSyscall > 0 ? 'S' : 'R';
+      return { pid, ppid: p.ppid, pgid: p.pgid, sid: p.sid, comm: p.comm, state, cmdline: p.argv };
+    });
     this.registerDevice('/dev/null', (_p, f) => new DevNull(f));
     this.registerDevice('/dev/zero', (_p, f) => new DevZero(f));
     this.registerDevice('/dev/full', (_p, f) => new DevFull(f));
@@ -1006,6 +1013,7 @@ export class Kernel {
     // Time inside syscalls is time the process isn't computing (/proc CPU estimate)
     const t0 = Date.now();
     proc.syscalls++;
+    // While in a syscall the process counts as sleeping (S in /proc/PID/stat)
     proc.inSyscall++;
     try {
       return await this.syscallImpl(proc, nr, args, data);

@@ -61,7 +61,9 @@ export async function headTail(ctx: CommandContext, which: 'head' | 'tail'): Pro
       try {
         const p = ctx.fs.resolvePath(f, ctx.cwd);
         if ((await ctx.fs.stat(p)).isDirectory()) { ctx.stderr += `${which}: error reading '${f}': Is a directory\n`; status = 1; continue; }
-        text = await ctx.fs.readFile(p, 'utf8') as string;
+        text = INFINITE_DEV.test(p) && which === 'head' && sign !== '-'
+          ? readInfiniteDevice(p, bytes, n)
+          : await ctx.fs.readFile(p, 'utf8') as string;
       } catch {
         ctx.stderr += `${which}: cannot open '${f}' for reading: No such file or directory\n`;
         status = 1;
@@ -75,6 +77,32 @@ export async function headTail(ctx: CommandContext, which: 'head' | 'tail'): Pro
     ctx.stdout += select(text, which, bytes, sign, n);
   }
   return status;
+}
+
+/** Endless devices: read only as much as head needs */
+const INFINITE_DEV = /^\/dev\/(zero|u?random)$/;
+
+/** N bytes of a device, as one char per byte */
+function deviceBytes(path: string, len: number): string {
+  if (path === '/dev/zero') return '\0'.repeat(len);
+  const buf = new Uint8Array(len);
+  for (let i = 0; i < len; i += 65536) crypto.getRandomValues(buf.subarray(i, Math.min(len, i + 65536)));
+  let s = '';
+  for (let i = 0; i < len; i += 8192) s += String.fromCharCode(...buf.subarray(i, i + 8192));
+  return s;
+}
+
+/** What `head -c N` / `head -n N` reads from an endless device (lines stop at 1 MiB: /dev/zero has none) */
+function readInfiniteDevice(path: string, bytes: boolean, n: number): string {
+  if (bytes) return deviceBytes(path, n);
+  let text = '';
+  let lines = 0;
+  while (lines < n && text.length < 1 << 20) {
+    const chunk = deviceBytes(path, 65536);
+    for (let i = chunk.indexOf('\n'); i >= 0; i = chunk.indexOf('\n', i + 1)) lines++;
+    text += chunk;
+  }
+  return text;
 }
 
 function select(text: string, which: 'head' | 'tail', bytes: boolean, sign: string, n: number): string {

@@ -6,8 +6,8 @@
  * src/kernel).
  *
  * A test passes when it prints its Summary with passed > 0 and nothing failed
- * or broken (lib/ltp.mjs). Only tests that pass natively on the build host
- * (ltp/native-baseline.json) are scored. Results: results/syscalls-blink.json.
+ * or broken (lib/ltp.mjs). Only tests that pass natively on the build host as
+ * uid 1000 (ltp/native-baseline.json) are scored. Results: results/syscalls-blink.json.
  */
 import { describe, it } from 'vitest';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, appendFileSync } from 'node:fs';
@@ -113,7 +113,7 @@ describe.skipIf(!existsSync(BIN))('LTP syscall tests under Blink', () => {
     writeFileSync(join(RESULTS, name), JSON.stringify({
       suite: 'LTP syscalls',
       title: 'Syscalls: LTP under Blink (x86-64)',
-      note: 'Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host are scored.',
+      note: 'Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host as an unprivileged user (uid 1000, like Shiro) are scored.',
       files: sorted,
     }, null, 1) + '\n');
   }, 7_200_000);
