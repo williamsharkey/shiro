@@ -1,6 +1,7 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { installOsc52 } from './utils/osc52';
+import { useUnicode11 } from './utils/term-unicode';
 import { Shell } from './shell';
 import buildNumber from '../build-number.txt?raw';
 import { bufferToString } from './utils/copy-utils';
@@ -69,6 +70,7 @@ export class ShiroTerminal {
     ShiroTerminal.instances.add(this);
     this.shell = shell;
     this.term = new Terminal({
+      allowProposedApi: true, // term.unicode (useUnicode11)
       theme: {
         background: '#1a1a2e',
         foreground: '#e0e0e0',
@@ -190,6 +192,7 @@ export class ShiroTerminal {
     this.fitAddon = new FitAddon();
     this.term.loadAddon(this.fitAddon);
     installOsc52(this.term);
+    useUnicode11(this.term);
     this.term.open(container);
     this.fitAddon.fit();
 
@@ -227,11 +230,18 @@ export class ShiroTerminal {
       for (const d of pending) this.tty.pty.input(d);
     };
 
+    // Every size change reaches the pty (SIGWINCH to the foreground job), whatever
+    // resized xterm: a refit, the desktop window, a font change
+    this.term.onResize(({ cols, rows }) => {
+      this.tty.resize(rows, cols);
+      this.resizeCallbacks.forEach(cb => cb(cols, rows));
+    });
+    // (the size may have changed between the TtySession's creation and now)
+    this.tty.resize(this.term.rows, this.term.cols);
+
     // Refit on window resize
     const refit = () => {
       this.fitAddon.fit();
-      this.tty.resize(this.term.rows, this.term.cols); // SIGWINCH to the foreground job
-      this.resizeCallbacks.forEach(cb => cb(this.term.cols, this.term.rows));
     };
     window.addEventListener('resize', refit);
 
@@ -246,6 +256,12 @@ export class ShiroTerminal {
     };
 
     this.term.onData((data: string) => this.handleInput(data));
+    // X10-encoded mouse reports (mode 1000 without 1006: htop, mc) come as
+    // bytes, not text; a kernel job reads them raw from the pty
+    this.term.onBinary((data: string) => {
+      if (this.tty.jobInForeground) this.tty.pty.input(Uint8Array.from(data, (c) => c.charCodeAt(0) & 0xff));
+      else void this.handleInput(data);
+    });
 
     // Register as active terminal (default on startup)
     setActiveTerminal(this);

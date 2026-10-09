@@ -48,6 +48,21 @@ export async function installNativeClaude(ctx: CommandContext, target: string, v
   const envPrefix = PASS_ENV.filter((k) => ctx.env[k]).map((k) => `${k}=${quote(ctx.env[k])} `).join('');
   const curl = (args: string) => `${envPrefix}${CURL} -fsSL --retry 2 ${args}`;
   const fail = (msg: string) => { ctx.stderr += `claude install --native: ${msg}\n`; return 1; };
+  // Small text fetches go through a file too: in the page terminal a guest
+  // program's stdout reaches the terminal, not a capture sink
+  const fetchText = async (url: string): Promise<{ code: number; out: string }> => {
+    const tmp = `/tmp/claude-native-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    const r = await sh(curl(`-o ${quote(tmp)} ${quote(url)}`));
+    let out = '';
+    if (r.code === 0) {
+      try {
+        const data = await ctx.fs.readFile(tmp);
+        out = typeof data === 'string' ? data : new TextDecoder().decode(data as Uint8Array);
+      } catch { /* empty */ }
+    }
+    await ctx.fs.unlink(tmp).catch(() => {});
+    return { code: r.code, out };
+  };
 
   say('Installing native Claude Code (experimental: about 2 minutes per request in Blink)\n');
   if (!(await ctx.fs.exists(CURL).catch(() => false))) {
@@ -56,7 +71,7 @@ export async function installNativeClaude(ctx: CommandContext, target: string, v
   }
 
   if (!version) {
-    const r = await sh(curl(`${RELEASES}/latest`), true);
+    const r = await fetchText(`${RELEASES}/latest`);
     version = r.out.trim();
     if (r.code !== 0 || !/^\d+\.\d+\.\d+/.test(version)) {
       return fail(`could not reach ${RELEASES}/latest (curl exit ${r.code}).\n`
@@ -64,7 +79,7 @@ export async function installNativeClaude(ctx: CommandContext, target: string, v
         + '(check with `curl -sI https://example.com`), or the network sign-in was declined.');
     }
   }
-  const m = await sh(curl(`${RELEASES}/${version}/manifest.json`), true);
+  const m = await fetchText(`${RELEASES}/${version}/manifest.json`);
   let entry: { checksum?: string; size?: number } | undefined;
   try { entry = JSON.parse(m.out).platforms?.[PLATFORM]; } catch { /* below */ }
   if (m.code !== 0 || !entry?.checksum) return fail(`no ${PLATFORM} build in ${RELEASES}/${version}/manifest.json`);
