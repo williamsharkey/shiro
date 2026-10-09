@@ -109,6 +109,8 @@ const ssecmpBin = join(out, 'ssecmp');
 const haveSsecmp = tryBuild('gcc', ['-static', '-O1', '-o', ssecmpBin, 'ssecmp.c', '-lm']);
 const brkmapBin = join(out, 'brkmap');
 const haveBrkmap = tryBuild('gcc', ['-static', '-O1', '-o', brkmapBin, 'brkmap.c']);
+const rawepollBin = join(out, 'rawepoll');
+const haveRawepoll = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', rawepollBin, 'rawepoll.c']);
 const bigfileBin = join(out, 'bigfile');
 const haveBigfile = tryBuild('gcc', ['-static', '-O1', '-o', bigfileBin, 'bigfile.c']);
 const getgroupsBin = join(out, 'getgroups');
@@ -503,6 +505,45 @@ describe.skipIf(!haveTty)('Blink engine: interactive program on a kernel pty', (
     await until(/got window changed/);
     tty.pty.input('\x03');
     await until(/got interrupt/);
+    expect(await done).toEqual({ type: 'exited', status: 0 });
+  }, 120_000);
+
+  // Bun's and libuv's input loop (native Claude Code): raw, O_NONBLOCK stdin
+  // waited on with epoll, SIGWINCH through a self-pipe
+  it.skipIf(!haveRawepoll).each(['', 'threads', 'offmain', 'reopen'])('raw non-blocking epoll reads of the tty see keys; a resize wakes it with the new size (%s)', async (mode) => {
+    const { fs } = await setup(readFileSync(rawepollBin));
+    const { Kernel } = await import('@shiro/kernel/kernel');
+    const { TtySession, attachKernelTty } = await import('@shiro/kernel/pty');
+    const { JobControl } = await import('@shiro/kernel/signals');
+    const { blinkRunner } = await import('@shiro/x86-engine/blink');
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    const jc = new JobControl();
+    attachKernelTty(kernel, jc);
+    const tty = new TtySession({ jc });
+    let screen = '';
+    tty.pty.onOutput((b: Uint8Array) => { screen += new TextDecoder().decode(b); });
+    tty.resize(30, 90);
+    const until = async (re: RegExp, ms = 30_000) => {
+      const t0 = Date.now();
+      while (!re.test(screen)) {
+        if (Date.now() - t0 > ms) throw new Error(`timed out waiting for ${re}; screen: ${JSON.stringify(screen)}`);
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    };
+    const p = tty.spawnJob(kernel, { path: '/home/user/work/prog', argv: mode ? ['prog', mode] : ['prog'], cwd: '/home/user/work', run: blinkRunner('/home/user/work/prog') });
+    const done = tty.foreground({ pgid: p.pgid });
+    await until(/ready/);
+    expect(screen).toContain('size 30x90');
+    await new Promise((r) => setTimeout(r, 200)); // blocked in epoll_wait
+    tty.pty.input('a');
+    await until(/key 97/);
+    await new Promise((r) => setTimeout(r, 200));
+    tty.pty.input('bc');
+    await until(/key 99/);
+    tty.resize(41, 132);
+    await until(/winch 41x132/);
+    tty.pty.input('q');
+    await until(/bye/);
     expect(await done).toEqual({ type: 'exited', status: 0 });
   }, 120_000);
 
