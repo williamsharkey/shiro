@@ -18,6 +18,7 @@ import { getCompiledModule } from './wasi-packages';
 import { builtinIndex, findEntry, packageStatus, packageShadows, pkgOwnShadows, loadPackageShadows, packageOfPath, runPackageBinary, PKG_BIN_DIR } from './pkg-manager';
 import { activeProfile } from './profile';
 import { BUILTIN_SHIM_INTERP } from './path-shims';
+import { parseShellArgs } from './shell-args';
 
 // Lazy-load the WASI runtime (~960 lines) only when WASM execution is needed
 let _wasiRuntime: typeof import('./wasi-runtime') | null = null;
@@ -1974,15 +1975,19 @@ export class Shell {
 
         // Handle /bin/sh, /bin/bash, /bin/zsh — dispatch to shell
         if (/^\/bin\/(sh|bash|zsh)$/.test(cmdName)) {
-          const cIdx = cmdArgs.findIndex(a => /^-\w*c$/.test(a));
-          if (cIdx >= 0 && cIdx + 1 < cmdArgs.length) {
-            // /bin/sh -c "command" → execute command
+          // Options parse as the sh builtin's do: `/bin/sh -c -l CMD` (Claude
+          // Code's Bash tool) took -l for the command
+          const parsedSh = parseShellArgs(cmdArgs);
+          if (parsedSh.command && parsedSh.rest.length) {
             // `sh -c CMD [NAME ARGS...]`: only CMD is the command string
-            const shellCmd = cmdArgs[cIdx + 1];
+            const shellCmd = parsedSh.rest[0];
             const child = this.fork();
             child.startProcess();
-            const rest = cmdArgs.slice(cIdx + 2);
+            const rest = parsedSh.rest.slice(1);
             child.setPositional(rest.slice(1), rest[0] ?? cmdName);
+            for (const o of parsedSh.on) child.options.add(o);
+            for (const o of parsedSh.off) child.options.delete(o);
+            child.commandStringFlag = true;
             child.injectedStdin = nestedStdin;
             if (!this.liveStdin(i, heredocStdin, hereString, redirects)) child.kernelStdinLive = false;
             exitCode = await child.runScriptText(shellCmd, terminalOverride || this.terminal, writeStdout, stderrWriter);
