@@ -1,0 +1,164 @@
+{
+ "suite": "wasi-testsuite",
+ "title": "Syscalls: wasi-testsuite (wasm32-wasip1)",
+ "note": "WebAssembly/wasi-testsuite prebuilt wasip1 modules (C, Rust, AssemblyScript) run as Shiro WASI processes with their root directory preopened as \"/\", judged like the suite's own runner (exit code, stdout when given). Wasmtime passes all of them.",
+ "files": {
+  "assemblyscript": {
+   "pass": 12,
+   "total": 12,
+   "failures": []
+  },
+  "c": {
+   "pass": 9,
+   "total": 14,
+   "failures": [
+    {
+     "name": "fdopendir-with-access",
+     "reason": "exit 1, expected 0 — Assertion failed: inodes[0] != inodes[1] (tests/c/src/fdopendir-with-access.c: main: 47) unreachable"
+    },
+    {
+     "name": "pwrite-with-append",
+     "reason": "exit 1, expected 0 — Assertion failed: lseek(fd, 0, SEEK_CUR) == 4 (tests/c/src/pwrite-with-append.c: main: 21) unreachable"
+    },
+    {
+     "name": "sock_shutdown-invalid_fd",
+     "reason": "exit 1, expected 0 — Assertion failed: errno == EBADF (tests/c/src/sock_shutdown-invalid_fd.c: main: 10) unreachable"
+    },
+    {
+     "name": "sock_shutdown-not_sock",
+     "reason": "exit 1, expected 0 — Assertion failed: errno == ENOTSOCK (tests/c/src/sock_shutdown-not_sock.c: main: 9) unreachable"
+    },
+    {
+     "name": "stat-dev-ino",
+     "reason": "exit 1, expected 0 — Assertion failed: a_stat.st_ino != b_stat.st_ino (tests/c/src/stat-dev-ino.c: main: 29) unreachable"
+    }
+   ]
+  },
+  "rust": {
+   "pass": 16,
+   "total": 46,
+   "failures": [
+    {
+     "name": "dir_fd_op_failures",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/dir_fd_op_failures.rs:19:14: fd_prestat_dir_name error: () note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "directory_seek",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/directory_seek.rs:28:48: seek on a directory: 0 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "fd_advise",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/fd_advise.rs:48:13: assertion `left == right` failed: file size should be 200 left: 100 right: 200 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "fd_fdstat_set_rights",
+     "reason": "exit 1, expected 0 — WebAssembly.instantiate(): Import #4 module=\"wasi_snapshot_preview1\" function=\"fd_fdstat_set_rights\": function import requires a callable"
+    },
+    {
+     "name": "fd_filestat_set",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/fd_filestat_set.rs:45:5: assertion `left == right` failed: mtim should change left: 1791504213873000000 right: 1791504213872999900 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "fd_flags_set",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/fd_flags_set.rs:80:5: assertion `left == right` failed: should read 100 bytes left: 0 right: 100 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "fd_readdir",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/fd_readdir.rs:76:5: assertion `left == right` failed: expected two entries in an empty directory left: 0 right: 2 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "file_allocate",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/file_allocate.rs:32:13: assertion `left == right` failed: file size should be 100 left: 0 right: 100 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "file_seek_tell",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/file_seek_tell.rs:61:14: seeking before byte 0 should be an error: 0 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "file_unbuffered_write",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/file_unbuffered_write.rs:46:5: assertion `left == right` failed: nread bytes check left: 0 right: 1 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "fstflags_validate",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/fstflags_validate.rs:25:5: bad error: Ok(()) note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "interesting_paths",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/interesting_paths.rs:17:5: expected errno PERM or NOTCAPABLE; got NOENT note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "nofollow_errors",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/nofollow_errors.rs:10:53: creating a symlink: Errno { code: 52, name: \"NOSYS\", message: \"Function not supported.\" } note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "path_exists",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/path_exists.rs:10:66: reading file stats: Errno { code: 44, name: \"NOENT\", message: \"No such file or directory.\" } note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "path_filestat",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/path_filestat.rs:7:5: assertion `left != right` failed: the scratch directory should have RIGHT_PATH_FILESTAT_GET as base right left: 0 right: 0 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "path_link",
+     "reason": "exit 1, expected 0 — WebAssembly.instantiate(): Import #6 module=\"wasi_snapshot_preview1\" function=\"fd_fdstat_set_rights\": function import requires a callable"
+    },
+    {
+     "name": "path_open_create_existing",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/path_open_create_existing.rs:17:10: trying to create a file that already exists: 8 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "path_open_dirfd_not_dir",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/path_open_dirfd_not_dir.rs:10:5: expected errno NOTDIR or NOTCAPABLE; got BADF note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "path_open_preopen",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/path_open_preopen.rs:105:10: open with O_DIRECTORY and read/write should fail note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "path_open_read_write",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/path_open_read_write.rs:18:5: readonly does not have write right note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "path_rename",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/path_rename.rs:16:14: opening a nonexistent path as a directory should fail: 7 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "path_symlink_trailing_slashes",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/path_symlink_trailing_slashes.rs:8:9: expected errno NOENT; got NOSYS note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "poll_oneoff_stdio",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/poll_oneoff_stdio.rs:114:21: timed out with the following pending subs: {} note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "readlink",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/readlink.rs:10:53: creating a symlink: Errno { code: 52, name: \"NOSYS\", message: \"Function not supported.\" } note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "remove_directory_trailing_slashes",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/remove_directory_trailing_slashes.rs:33:14: remove_directory without a trailing slash on a file should fail: () note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "remove_nonempty_directory",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/remove_nonempty_directory.rs:15:14: remove_directory on a directory should return ENOTEMPTY: () note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "symlink_create",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/symlink_create.rs:12:53: creating a symlink: Errno { code: 52, name: \"NOSYS\", message: \"Function not supported.\" } note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "symlink_filestat",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/symlink_filestat.rs:7:5: assertion `left != right` failed: the scratch directory should have RIGHT_PATH_FILESTAT_GET as base right left: 0 right: 0 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    },
+    {
+     "name": "truncation_rights",
+     "reason": "exit 1, expected 0 — WebAssembly.instantiate(): Import #4 module=\"wasi_snapshot_preview1\" function=\"fd_fdstat_set_rights\": function import requires a callable"
+    },
+    {
+     "name": "unlink_file_trailing_slashes",
+     "reason": "exit 1, expected 0 — thread 'main' (1) panicked at tests/rust/wasm32-wasip1/src/bin/unlink_file_trailing_slashes.rs:12:14: unlink_file on a directory should fail: () note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace unreachable"
+    }
+   ]
+  }
+ }
+}

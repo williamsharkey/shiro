@@ -125,7 +125,7 @@ async function runLegacy(ctx: CommandContext, opts: RunWasiOptions, cwd: string,
     stdoutIsTTY: ctx.stdoutIsTTY !== false,
     onStdout: (text) => { ctx.stdout += text; },
     onStderr: (text) => { ctx.stderr += text; },
-    preopens: { '/': '/', '.': cwd },
+    preopens: { '/': opts.mounts?.['/'] ?? '/', '.': cwd },
   });
   try {
     await wasi.preloadTree(cwd, 3, 100);

@@ -316,7 +316,8 @@ export function wasmRunner(
 async function openPreopens(kernel: Kernel, proc: Process, extra: string[] = [], mounts: Record<string, string> = {}): Promise<Preopen[] | number> {
   const out: Preopen[] = [];
   const mountList = Object.entries(mounts).filter(([guest]) => guest !== '/' && !extra.includes(guest));
-  for (const [name, path] of [['/', '/'], ...extra.map(d => [d, d]), ...mountList, ['.', proc.cwd]]) {
+  // (a '/' mount replaces the root preopen: the program sees that directory as /)
+  for (const [name, path] of [['/', mounts['/'] ?? '/'], ...extra.map(d => [d, d]), ...mountList, ['.', proc.cwd]]) {
     const f = await kernel.open(proc, path, A.O_RDONLY | A.O_DIRECTORY);
     if (typeof f === 'number') {
       if (mounts[name] === path) continue; // a mount whose directory is missing: leave the path as it is
