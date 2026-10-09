@@ -239,6 +239,8 @@ export function decodeSockaddr(b: Uint8Array): SockAddr | number {
     }
     return { family, port: dv.getUint16(2, false), address: formatIpv6(g) };
   }
+  // AF_UNSPEC: connect() with it disconnects a datagram socket
+  if (family === 0) return { family, address: '', port: 0 };
   if (family === AF_NETLINK) {
     if (b.length < 12) return -EINVAL;
     return { family, address: '', port: dv.getUint32(4, true) };
@@ -852,6 +854,24 @@ export class KDatagramSocket implements OpenFile {
   bind(addr: SockAddr): number {
     if (this.local) return -EINVAL;
     this.local = { ...addr, port: addr.port || this.stack.ephemeral() };
+    this.boundAddr = addr.address !== '::' && addr.address !== '0.0.0.0';
+    this.boundPort = addr.port !== 0;
+    return 0;
+  }
+
+  /** bind() named the address / the port (a disconnect keeps them) */
+  private boundAddr = false;
+  private boundPort = false;
+
+  /**
+   * connect(AF_UNSPEC): no peer any more. A source address the route chose
+   * goes back to the wildcard, and a port nobody bound is released, as in
+   * Linux's __udp_disconnect.
+   */
+  disconnect(): number {
+    this.remote = null;
+    if (this.local && !this.boundAddr && !this.boundPort) this.local = null;
+    else if (this.local && !this.boundAddr) this.local = { ...this.local, address: this.domain === AF_INET6 ? '::' : '0.0.0.0' };
     return 0;
   }
 
@@ -1478,7 +1498,8 @@ export async function netSyscall(
         return nr === SYS_bind ? stack.bindUnix(s, sa, unix ?? noUnix) : stack.connectUnix(s, sa, unix ?? noUnix);
       }
       if (sa.family === AF_UNIX) return -EAFNOSUPPORT; // an AF_UNIX address on an inet socket
-      if (nr === SYS_bind) return s.bind(sa);
+      if (nr === SYS_bind) return sa.family === 0 ? -EAFNOSUPPORT : s.bind(sa);
+      if (sa.family === 0) return s instanceof KDatagramSocket ? s.disconnect() : -EAFNOSUPPORT;
       return s instanceof KSocket ? s.connect(sa, sig) : s.connect(sa);
     }
     case SYS_listen: { // fd, backlog
