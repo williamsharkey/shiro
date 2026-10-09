@@ -304,6 +304,9 @@ function installHistoryFlush(): void {
   }
 }
 
+/** Cheap pre-check for expandPrefixAssignments: starts with NAME= and has another NAME= later (a superset: false hits just take the full pass) */
+const ORDERED_PREFIX_RE = /^\s*[A-Za-z_][A-Za-z0-9_]*\+?=[\s\S]*\s[A-Za-z_][A-Za-z0-9_]*\+?=/;
+
 class BreakSignal { constructor(public levels: number = 1) {} }
 /** Sentinel thrown by `continue [N]` inside loops */
 class ContinueSignal { constructor(public levels: number = 1) {} }
@@ -1718,7 +1721,10 @@ export class Shell {
           pipeline.push(keepRaw(seg) ? seg.trim() : await this.expandWords(seg, stderrWriter));
         }
       } else {
-        const ordered = rawSegments.length === 1 ? await this.expandPrefixAssignments(compound.command, stderrWriter) : null;
+        // Only `a=1 b=$a cmd` (two or more leading assignments, one expanding) needs the ordered pass;
+        // checking that first keeps a tokenizer pass and an await off every other command
+        const ordered = rawSegments.length === 1 && ORDERED_PREFIX_RE.test(compound.command) && /[$`]/.test(compound.command)
+          ? await this.expandPrefixAssignments(compound.command, stderrWriter) : null;
         pipeline = this.parsePipeline(ordered ?? await this.expandWords(quoteAssignmentValues(compound.command), stderrWriter));
       }
 
