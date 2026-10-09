@@ -69,6 +69,8 @@ const forkSharedBin = join(out, 'forkshared');
 const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
 const mremapBin = join(out, 'mremap');
 const haveMremap = tryBuild('gcc', ['-static', '-O1', '-o', mremapBin, 'mremap.c']);
+const sendfileBin = join(out, 'sendfile');
+const haveSendfile = tryBuild('gcc', ['-static', '-O1', '-o', sendfileBin, 'sendfile.c']);
 const stropsBin = join(out, 'strops');
 const haveStrops = tryBuild('gcc', ['-static', '-O1', '-o', stropsBin, 'strops.c']);
 const sse4Bin = join(out, 'sse4');
@@ -580,6 +582,14 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(bitscanBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe(NATIVE_BITSCAN);
+  }, 60_000);
+
+  // systemd's copy_bytes (sysusers backing up /etc/group): sendfile(out, in, NULL, n)
+  it.skipIf(!haveSendfile)('sendfile with a NULL offset uses the file position', async () => {
+    const { shell } = await setup(readFileSync(sendfileBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'null off: 15 pos 21\noff: 5 off 5 pos 21\nzero: 0\nout: sendfile world\nhello');
   }, 60_000);
 
   // mkfifo for shell-stdio; needs the kernel's FIFOs (mknodat, unix/perf-kernel)

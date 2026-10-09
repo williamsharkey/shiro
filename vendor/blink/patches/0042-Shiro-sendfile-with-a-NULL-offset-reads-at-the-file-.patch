@@ -1,0 +1,26 @@
+From 477bf6999d6d13454744c20a29bb4b95914245ad Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 09:36:14 +0000
+Subject: [PATCH 42/42] Shiro: sendfile with a NULL offset reads at the file
+ position (it read *NULL: EFAULT)
+
+---
+ blink/shiro.inc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index ae9066a..e282cc5 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -1833,7 +1833,7 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       u8 *buf;
+       i64 off = -1, done = 0, n;
+       u8 offb[8];
+-      if (d) {
++      if (c) {  // an offset to read at (else the file position)
+         if (CopyFromUserRead(m, offb, c, 8) == -1) { r = -EFAULT_LINUX; break; }
+         off = Read64(offb);
+       }
+-- 
+2.43.0
+
