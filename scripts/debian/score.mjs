@@ -129,6 +129,12 @@ async function smoke(m, pkg) {
   // The program named like the package first, then the rest
   bins.sort((a, b) => (b.endsWith('/' + pkg) ? 1 : 0) - (a.endsWith('/' + pkg) ? 1 : 0));
   const tried = [];
+  // Shells have no --version (dash): run a command instead
+  const shell = bins.find((b) => /\/(?:da|ba|z|k|mk|c|tc|fi)?sh$/.test(b));
+  if (shell) {
+    const r = await m.run(`timeout 120 ${shell} -c 'echo smoke-ok' </dev/null 2>&1`, 180);
+    if (r.code === 0 && r.out.includes('smoke-ok')) return { ok: true, how: `${shell} -c 'echo smoke-ok'`, ms: r.ms };
+  }
   for (const bin of bins.slice(0, 3)) {
     for (const flagArg of ['--version', '--help', '-V', '-h']) {
       const r = await m.run(`timeout 120 ${bin} ${flagArg} </dev/null 2>&1`, 180);
