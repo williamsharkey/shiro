@@ -15,6 +15,11 @@ import { join, resolve } from 'node:path';
 import { createTestShell, run } from './helpers';
 import * as Abi from '@shiro/kernel/abi';
 
+// fixtures/x86/sse4.c on an x86-64 host (Intel)
+const NATIVE_SSE4 = 'blendv     e4abc65e766ee19d\nptest      7ba00a6efd7a4874\npmovx      b625e06221fbec95\nint        9681ac88d1b48510\nround      15342966be7d2f10\nblend      1772b0668d5f0605\ninsext     1ed641595d55738e\ninsertps   07a824bc4eee852a\ndp         b92c2b618267d645\nmpsadbw    732e9d86324c3735\ncrc32      ed946d3299e3b67d\npcmpestr   f9d8e2fd9893018c\npcmpistr   97a98d5fb234df8d\npcmpstr64  1141d2a07ff9295d\npinsrq 1\npcmpestri 5\ncrc32 0x1900b8ca\n';
+// fixtures/x86/bitscan.c on an x86-64 host
+const NATIVE_BITSCAN = 'bsf  zero64   reg dst=0x1122334455667788 zf=1\nbsf  zero64   mem dst=0x1122334455667788 zf=1\nbsr  zero64   reg dst=0x1122334455667788 zf=1\nbsr  zero64   mem dst=0x1122334455667788 zf=1\nbsf  val64    reg dst=0x8 zf=0\nbsf  val64    mem dst=0x8 zf=0\nbsr  val64    reg dst=0x34 zf=0\nbsr  val64    mem dst=0x34 zf=0\nbsf  zero32   reg dst=0x1122334455667788 zf=1\nbsf  zero32   mem dst=0x1122334455667788 zf=1\nbsr  zero32   reg dst=0x1122334455667788 zf=1\nbsr  zero32   mem dst=0x1122334455667788 zf=1\nbsf  val32    reg dst=0x8 zf=0\nbsf  val32    mem dst=0x8 zf=0\nbsr  val32    reg dst=0x14 zf=0\nbsr  val32    mem dst=0x14 zf=0\nbsf  zero16   reg dst=0x1122334455667788 zf=1\nbsf  zero16   mem dst=0x1122334455667788 zf=1\nbsr  zero16   reg dst=0x1122334455667788 zf=1\nbsr  zero16   mem dst=0x1122334455667788 zf=1\nbsf  val16    reg dst=0x1122334455660004 zf=0\nbsf  val16    mem dst=0x1122334455660004 zf=0\nbsr  val16    reg dst=0x1122334455660008 zf=0\nbsr  val16    mem dst=0x1122334455660008 zf=0\nclz64(0)=64 clz64(1)=63 clz64(1<<40)=23\nloop sum=5953906\n';
+
 const FIX = resolve(__dirname, 'fixtures/x86');
 
 function tryBuild(cmd: string, args: string[], env: Record<string, string> = {}): boolean {
@@ -32,6 +37,8 @@ const httpBin = join(out, 'nethttp');
 const glibcBin = join(out, 'hello-glibc');
 const goExe = existsSync('/usr/local/go/bin/go') ? '/usr/local/go/bin/go' : 'go';
 const haveGo = tryBuild(goExe, ['build', '-ldflags=-s', '-o', goBin, 'hello.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
+const goV2Bin = join(out, 'hello-go-v2');
+const haveGoV2 = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', goV2Bin, 'hello.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOAMD64: 'v2', GOCACHE: join(out, 'gocache') });
 const haveHttp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', httpBin, 'nethttp.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const tcpBin = join(out, 'tcpecho');
 const haveTcp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', tcpBin, 'tcpecho.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
@@ -60,6 +67,10 @@ const forkSharedBin = join(out, 'forkshared');
 const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
 const mremapBin = join(out, 'mremap');
 const haveMremap = tryBuild('gcc', ['-static', '-O1', '-o', mremapBin, 'mremap.c']);
+const sse4Bin = join(out, 'sse4');
+const haveSse4 = tryBuild('gcc', ['-static', '-O1', '-msse4.2', '-o', sse4Bin, 'sse4.c']);
+const bitscanBin = join(out, 'bitscan');
+const haveBitscan = tryBuild('gcc', ['-static', '-O1', '-o', bitscanBin, 'bitscan.c']);
 const mkfifoBin = join(out, 'mkfifo');
 const haveMkfifo = tryBuild('gcc', ['-static', '-O1', '-o', mkfifoBin, 'mkfifo.c']);
 const prctlcapBin = join(out, 'prctlcap');
@@ -535,6 +546,29 @@ describe('Blink engine: CPU and syscall fixes', () => {
       'wake(2)=2 woken=2\nwake(1)=1 woken=3\nwake(100)=3 woken=6\nwake(none)=0\n' +
       'monotonic bitset wait=-1 timedout=1 early=0\nrealtime bitset wait=-1 timedout=1 early=0\n');
     expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // x86-64-v2: Bun (Claude Code's native build, opencode), GOAMD64=v2 Go
+  it.skipIf(!haveSse4)('SSE4.1 and SSE4.2 match native', async () => {
+    const { shell } = await setup(readFileSync(sse4Bin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(NATIVE_SSE4);
+    expect(r.exitCode).toBe(0);
+  }, 120_000);
+
+  it.skipIf(!haveGoV2)('runs Go built for x86-64-v2 (GOAMD64=v2)', async () => {
+    const { shell } = await setup(readFileSync(goV2Bin));
+    const r = await run(shell, './prog a b');
+    expect(r.output).toContain('args: [a b]');
+    expect(r.output).toContain('goroutines=344015.127');
+    expect(r.exitCode).toBe(0);
+  }, 120_000);
+
+  // Rust's leading_zeros (LLVM: mov $127,%r8; bsr %rax,%r8): xAI's grok CLI
+  it.skipIf(!haveBitscan)('bsf/bsr with a zero source leave the destination unchanged', async () => {
+    const { shell } = await setup(readFileSync(bitscanBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(NATIVE_BITSCAN);
   }, 60_000);
 
   // mkfifo for shell-stdio; needs the kernel's FIFOs (mknodat, unix/perf-kernel)

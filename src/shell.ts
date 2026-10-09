@@ -304,6 +304,9 @@ function installHistoryFlush(): void {
   }
 }
 
+/** Cheap pre-check for expandPrefixAssignments: starts with NAME= and has another NAME= later (a superset: false hits just take the full pass) */
+const ORDERED_PREFIX_RE = /^\s*[A-Za-z_][A-Za-z0-9_]*\+?=[\s\S]*\s[A-Za-z_][A-Za-z0-9_]*\+?=/;
+
 class BreakSignal { constructor(public levels: number = 1) {} }
 /** Sentinel thrown by `continue [N]` inside loops */
 class ContinueSignal { constructor(public levels: number = 1) {} }
@@ -1679,6 +1682,21 @@ export class Shell {
         continue;
       }
 
+      // time [-p] PIPELINE: times the whole pipeline (( … ), { …; }, a | b) and
+      // reports on stderr after it (a bare `time` is the builtin below)
+      const timed = /^time(\s+-p)?\s+(?=\S)/.exec(trimmedCmd);
+      if (timed && !this.disabledBuiltins.has('time')) {
+        const start = performance.now();
+        exitCode = await this.execute(trimmedCmd.slice(timed[0].length), writeStdout, stderrWriter, false, terminalOverride, true);
+        const elapsed = (performance.now() - start) / 1000;
+        stderrWriter(timed[1]
+          ? `real ${elapsed.toFixed(2)}\r\nuser 0.00\r\nsys 0.00\r\n`
+          : `\r\nreal\t${Math.floor(elapsed / 60)}m${(elapsed % 60).toFixed(3)}s\r\nuser\t0m0.000s\r\nsys\t0m0.000s\r\n`);
+        this.lastExitCode = exitCode;
+        this.env['?'] = String(exitCode);
+        continue;
+      }
+
       // ! PIPELINE: run it and negate its status (! ( … ), ! { …; }, ! a | b)
       if (/^!\s+\S/.test(trimmedCmd) && !/^!\s+\[\[/.test(trimmedCmd)) {
         exitCode = await this.execute(trimmedCmd.replace(/^!\s+/, ''), writeStdout, stderrWriter, false, terminalOverride, true);
@@ -1724,7 +1742,10 @@ export class Shell {
           pipeline.push(keepRaw(seg) ? seg.trim() : await this.expandWords(seg, stderrWriter));
         }
       } else {
-        const ordered = rawSegments.length === 1 ? await this.expandPrefixAssignments(compound.command, stderrWriter) : null;
+        // Only `a=1 b=$a cmd` (two or more leading assignments, one expanding) needs the ordered pass;
+        // checking that first keeps a tokenizer pass and an await off every other command
+        const ordered = rawSegments.length === 1 && ORDERED_PREFIX_RE.test(compound.command) && /[$`]/.test(compound.command)
+          ? await this.expandPrefixAssignments(compound.command, stderrWriter) : null;
         pipeline = this.parsePipeline(ordered ?? await this.expandWords(quoteAssignmentValues(compound.command), stderrWriter));
       }
 

@@ -280,8 +280,9 @@ async function main() {
         next += batch.length;
         try {
           // A dpkg left half-configured by an earlier failure fails everything after it
-          if (m && (await m.run('dpkg --audit 2>&1')).out.trim()) {
-            log('dpkg --audit reports problems; new machine');
+          // ("dpkg was interrupted": its journal, /var/lib/dpkg/updates, isn't empty)
+          if (m && (await m.run('dpkg --audit 2>&1; ls -A /var/lib/dpkg/updates 2>/dev/null')).out.trim()) {
+            log('dpkg --audit reports problems (or dpkg was interrupted); new machine');
             await m.context.close().catch(() => {});
             m = null;
           }
