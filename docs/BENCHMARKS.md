@@ -331,6 +331,14 @@ Harness fixes found on the way:
   Blink, not the interpreter: the old build ignores
   `TABCOMPUTER_X86_ENGINE`.
 
+### unix/desktop 7 — Developer and AI agents stacks, Git
+
+`node bench/ab.mjs origin/unix/integration --quick --suites boot --rounds 4`
+(9a5c7bd vs this): no timing metric changed; transfer +9 KiB (the catalog and
+dock code in the desktop chunk; Files' git code, the sheets and the Git app
+are lazy chunks); DOM nodes 366 → 460 (+94): the dock's new tiles, five loose
+(nano, Vim, Code, Git, Claude Code) and two stacks of four mini glyphs each.
+
 ### unix/desktop 6 — dock icon sets
 
 Twelve icon sets plus Classic (docs/DESKTOP.md "Icon sets"), Drafting by
@@ -643,6 +651,32 @@ proc/s within one run); two further 15-run passes on the new code gave
 medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
 ≈10 proc/s for its last 11 samples and did not recur in two more; worth
 watching if it shows up on other branches.
+
+### unix/perf-blink 7 — direct kernel channels (opt-in)
+
+Blink patch 0065: with `TABCOMPUTER_BLINK_DIRECT=1` a Blink thread's own
+kernel calls go through four channels in its wasm memory that the page
+watches, skipping emscripten's proxy to host.mjs's thread and its two
+messages. getppid's round trip in Node falls from ~110 µs to ~10 µs.
+
+`node bench/ab.mjs HEAD --suites x86 --only 'x86\.blink\.' --rounds 3`,
+direct channels on (64 KiB channels) against off:
+
+| metric (isolated) | off | on | shift | verdict |
+|---|---:|---:|---:|---|
+| x86.blink.go_hello | 246 ms | 221 ms | -12.2% | improved (p=1.1e-4) |
+| x86.blink.go_nethttp | 529 ms | 441 ms | -16.8% | improved (p=1.6e-5) |
+| x86.blink.vim_defaults | 1247 ms | 1101 ms | -13.7% | improved (p=8.6e-7) |
+| x86.blink.vim_startup | 2717 ms | 2409 ms | -10.7% | improved (p=9.6e-5) |
+| x86.blink.peak_rss.go_nethttp | 22.5 MiB | 34.2 MiB | +49.7% | regressed (p=1.2e-5) |
+| x86.blink.peak_rss.vim_startup | 12.5 MiB | 29.9 MiB | +135% | regressed (p=3.4e-5) |
+
+With the channels at 1 MiB each (the pool's size), hello_musl and go_hello
+peak RSS regressed too (+6, +13 MiB). Not the page's hot-channel pump:
+with the channels never hot, the RSS was the same and go_nethttp lost its
+gain. The likely cause (not yet proven): the page holds the worker's
+wasm memory for the channels, so it is released at the page's next GC
+rather than with the worker. Off by default until that's solved.
 
 ### unix/perf-blink 6 — content-hashed engine wasm
 
@@ -1665,6 +1699,84 @@ Before the fix, the 4 symlinked-dir checks failed.
 
 `kernel-net` "dials through an upstream CONNECT proxy" fails about 3 runs in
 4 on origin/unix/integration too; it is not from this change.
+
+### unix/perf-fs-shell 13 — apt from the VFS side: close no longer waits for IndexedDB
+
+Profile of one `apt-get install -y python3` (after update and cowsay) in
+Chromium, with the main thread's CPU profile, FileSystem call timing and RSS
+sampled every 2 s (scratch probe):
+- **CPU:** the main thread, which runs the kernel, FileSystem and IndexedDB,
+  is 88% idle for the 174 s. Kernel, VFS and IndexedDB CPU together is about
+  20 s, most of it postMessage and IndexedDB `put`. The time is in the Blink
+  workers (perf-blink's side).
+- **Waiting:** 1712 `fs.flushed()` waits, 7.3 s of wall time. Every close
+  of a written file waited for its IndexedDB commit (~4 ms each).
+- **Write amplification:** 228 MB committed for 88 MB written, in 5655
+  transactions. dpkg writes `file.dpkg-new` and renames it, and a rename
+  stores the content again under the new key.
+- **Memory:** peak RSS +829 MiB. The FileSystem cache held 276 MiB of
+  content (3592 files: apt's lists, pkgcache.bin, the .debs until apt deletes
+  them at the end, libraries). The rest is the Blink workers.
+
+Change:
+- **close (and rename, unlink)** writes the data back to the FileSystem
+  without waiting for the IndexedDB commit, as close(2) doesn't wait for the
+  disk. fsync still commits strictly.
+- **Backpressure:** close waits again only past a 16 MiB backlog of
+  uncommitted bytes (`FileSystem.pendingBytes`). The write-back timer of a
+  file still being written stays paced by the commit.
+
+`bench/ab.mjs origin/unix/integration HEAD --suites workloads-slow --rounds 2 --runs 1`:
+
+| metric | before | after | |
+|---|---:|---:|---|
+| `workload.apt.install_cowsay` | 43.8 s | 39.2 s | −10.5% |
+| `workload.peak_rss.apt_cowsay` | 825 MiB | 781 MiB | −5.2% |
+| `workload.peak_rss.apt_update` | 748 MiB | 688 MiB | −8.1% |
+| `workload.apt.install_python3` | 176.6 s | 171.2 s | −3.1% (rounds disagree) |
+| `workload.peak_rss.apt_python3` | 823 MiB | 802 MiB | same |
+| `workload.apt.update`, `debian.*`, `debian.storage` | | | same |
+
+Quick suite (`--rounds 3`):
+- 97 metrics the same;
+- `wasm.tree_create` −25%;
+- `npm.install_small` was flagged +20%. Re-run over 5 rounds the repeat
+  installs are "same" and the first install is +4.6%
+  (86.6 → 90.6 ms, CI +0.8..+10.9%).
+
+Tried and dropped:
+- **Evicting apt's big files** (`/var/cache/apt`, `/var/lib/apt/lists`)
+  from the cache over a 32 MiB budget, reloading them from IndexedDB. The
+  cache halved (276 → 135 MiB), but the install's peak RSS rose
+  (+807 → +876 MiB): each reload allocates new buffers faster than GC frees
+  the old ones.
+- **A 20 ms delay before background commits**, so a write and its rename
+  share one transaction. IndexedDB bytes fell from 201 to 75 MB, but cowsay
+  went 39 → 74 s and python3 171 → 212 s. `sync()` waited on the bigger
+  batches, and more besides.
+
+**Durability.** Because close no longer waits for IndexedDB, the page
+lifecycle flush (`visibilitychange` → hidden, `pagehide`, `freeze`) first
+writes back the kernel's open-file buffers (`FileSystem.addWriteBackHook`,
+`writeBackAll`), then commits strictly (`FileSystem.flushAll`, bounded at
+5 s). These await the same before reloading or navigating:
+- Restart, Hard Restart and Classic Terminal (desktop menu);
+- Settings' classic switch;
+- `desktop <mode>`.
+
+Test: `storage-quota.test.ts` (an open fd's unsaved write and a pending
+commit reach a second FileSystem after `flushAll`). Quick A/B for this push:
+- 97 metrics the same; boot +1–2 KiB;
+- `boot.settled.time` +5.3%;
+- `wasm.tree_create` +16%. It is one sample per run and moved −25..+38%
+  across today's runs.
+
+Left:
+- **Rename amplification:** storing content under an inode key rather than
+  the path would make a rename rewrite only the small path record (an
+  IndexedDB schema change).
+- **.debs at the peak:** dropping a .deb's cached content once dpkg has
+  unpacked it (the debian session's suggestion).
 
 ## Results
 

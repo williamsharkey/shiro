@@ -11,7 +11,7 @@
 // Inlined into this chunk and injected at boot: one request fewer than a CSS file
 import desktopCss from './desktop.css?inline';
 import iconsetsCss from './iconsets.css?inline';
-import { appIconIn, ensureIconDefs, iconSet, setAppGlyph, loadLiveEngine, paintPixelTiles, savedIconSet, saveIconSet, type IconSetId, type LiveIconEngine } from './iconsets';
+import { appIconIn, ensureIconDefs, glyphClassicTile, iconSet, setAppGlyph, loadLiveEngine, paintPixelTiles, savedIconSet, saveIconSet, type IconSetId, type LiveIconEngine } from './iconsets';
 import type { FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
 import { ShiroTerminal } from '../terminal';
@@ -23,7 +23,9 @@ import { initNetwork } from './network';
 import { loadSession, place, restoreSession, trackSession } from './session';
 import { maybeShowTour, showTour } from './tour';
 import { BRAND } from '../brand';
+import { DEV_GROUPS, DEV_TOOLS, TOOL_PATH, launchScript, type DevTool } from './devtools';
 import { setClaudeSignInUI } from '../claude-signin-ui';
+import { flushStorage, reloadAfterFlush } from '../storage';
 
 export interface DesktopDeps {
   fs: FileSystem;
@@ -47,6 +49,8 @@ export interface AppContext {
   setIconSet(id: IconSetId): Promise<void>;
   /** Called after each icon set change */
   onIconSet(cb: (id: IconSetId) => void): () => void;
+  /** A menu at a point (the menu bar's look), for apps' own pop-up menus */
+  openMenu?: (spec: MenuSpec, x: number, y: number, above?: boolean) => void;
 }
 
 /** Phone layout inputs (src/desktop/mobile.ts sets them from the visual viewport) */
@@ -77,18 +81,13 @@ export interface Desktop {
 /** The longest the desktop stays hidden waiting for fonts, the dock's contents and the session */
 const REVEAL_CAP_MS = 1500;
 
-/** Programs shown in the dock as terminal apps (installed or one click from it) */
+/** Programs shown in the dock as terminal apps (installed or one click from it); editors and agents are in devtools.ts */
 const FEATURED_PACKAGES: { pkg: string; cmd: string; name: string }[] = [
-  { pkg: 'vim', cmd: 'vim', name: 'Vim' },
   { pkg: 'htop', cmd: 'htop', name: 'htop' },
   { pkg: 'python3', cmd: 'python3', name: 'Python' },
 ];
 /** Shown too once installed */
 const OPTIONAL_PACKAGES: { pkg: string; cmd: string; name: string }[] = [
-  { pkg: 'neovim', cmd: 'nvim', name: 'Neovim' },
-  { pkg: 'emacs', cmd: 'emacs', name: 'Emacs' },
-  { pkg: 'nano', cmd: 'nano', name: 'nano' },
-  { pkg: 'tmux', cmd: 'tmux', name: 'tmux' },
   { pkg: 'lua', cmd: 'lua', name: 'Lua' },
   { pkg: 'sqlite', cmd: 'sqlite3', name: 'SQLite' },
 ];
@@ -290,6 +289,52 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   hold(refreshInstalled());
   deps.fs.onChange((_ev, path) => { if (path === PKG_STATUS) void refreshInstalled(); });
 
+  // Developer and AI agents stacks (devtools.ts): install on first use, in a Terminal window
+  const toolMissing = new Set<string>();
+  const toolInstalling = new Set<string>();
+  const toolInstalled = async (t: DevTool) => {
+    if (!t.install || !t.bins.length) return true;
+    for (const dir of TOOL_PATH) for (const b of t.bins) if (await deps.fs.exists(`${dir}/${b}`).catch(() => false)) return true;
+    return false;
+  };
+  const refreshTools = async () => {
+    let changed = false;
+    for (const t of DEV_TOOLS) {
+      const missing = !(await toolInstalled(t));
+      if (missing !== toolMissing.has(t.id)) { changed = true; if (missing) toolMissing.add(t.id); else toolMissing.delete(t.id); }
+      if (!missing && toolInstalling.delete(t.id)) changed = true;
+    }
+    if (changed) queueDock();
+  };
+  const launchTool = (t: DevTool) => {
+    if (t.window) {
+      // A builtin that opens its own window (code): run it without a Terminal
+      const sh = deps.makeShell();
+      sh.cwd = '/home/user';
+      void sh.execute(t.run, () => {}, () => {});
+      return null;
+    }
+    if (toolMissing.has(t.id)) { toolInstalling.add(t.id); queueDock(); }
+    const win = openTerminal({ title: t.name, appId: t.id, cwd: '/home/user', command: launchScript(t) });
+    win?.on?.('close', () => { if (toolInstalling.delete(t.id)) queueDock(); });
+    return win;
+  };
+  for (const g of DEV_GROUPS) wm.registerGroup({ id: g.id, name: g.name, order: g.order, maxLoose: g.maxLoose, loose: [...g.loose] });
+  const openGit = focusOrLaunch('git', lazy(() => import('./apps/git')));
+  for (const t of DEV_TOOLS) {
+    // Classic: the existing art where there is one (vim), else the glyph on a tile in the group's colors
+    const icon = ICONS[t.id] ?? glyphClassicTile(t.id, ...(t.group === 'agents' ? ['#e08a5f', '#a24a2a'] : ['#4b5468', '#1e2330']) as [string, string]);
+    wm.registerApp({ id: t.id, name: t.name, icon, order: t.order, group: t.group, launch: t.id === 'git' ? openGit : () => launchTool(t) });
+  }
+  hold(refreshTools());
+  // pkg, npm -g and the install scripts write executables into TOOL_PATH (debounced: an install writes many files)
+  let toolTimer: ReturnType<typeof setTimeout> | null = null;
+  deps.fs.onChange((_ev, path) => {
+    if (path !== PKG_STATUS && !TOOL_PATH.some(d => path.startsWith(d + '/'))) return;
+    if (toolTimer) clearTimeout(toolTimer);
+    toolTimer = setTimeout(() => { toolTimer = null; void refreshTools(); }, 400);
+  });
+
   // ── Dock rendering ──
   // Dock stacks (wm.registerGroup): these stay loose so the best demos are one tap away
   wm.registerGroup({ id: 'system', name: 'System', order: 10 });
@@ -328,7 +373,14 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
       b.innerHTML = iconHtml(id, name, icon) + `<span class="sd-dock-tip">${name}</span>`;
       tileN++;
       if (running.has(id)) b.classList.add('sd-running');
-      if (FEATURED_PACKAGES.some(p => p.pkg === id) && !installed.has(id)) {
+      if (toolInstalling.has(id)) {
+        b.classList.add('sd-installing');
+        b.querySelector('.sd-dock-tip')!.textContent = `${name} — installing…`;
+      } else if (toolMissing.has(id)) {
+        b.classList.add('sd-not-installed');
+        const t = DEV_TOOLS.find(x => x.id === id);
+        b.querySelector('.sd-dock-tip')!.textContent = `${name} — click to install${t?.time ? ` (${t.time})` : ''}`;
+      } else if (FEATURED_PACKAGES.some(p => p.pkg === id) && !installed.has(id)) {
         b.classList.add('sd-not-installed');
         b.querySelector('.sd-dock-tip')!.textContent = `${name} — click to install`;
       }
@@ -387,12 +439,22 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     // Stack groups when the dock would not fit, or a group outgrew maxLoose
     const groups = new Map((wm.groups?.() ?? []).map(g => [g.id, g]));
     const perItem = wm.compact ? 50 : 56;
-    const crowded = (docked.length + 2) * perItem > window.innerWidth - 32;
+    const bigGroup = (gid: string) => {
+      const g = groups.get(gid)!;
+      return g.collapse === 'always' || docked.filter(a => groupOf(a) === gid).length > (g.maxLoose ?? 4);
+    };
+    // Crowded: even with the usual stacks (big groups stacked, their `loose` members beside them),
+    // the dock wouldn't fit: then every group stacks (phones)
+    const usualTiles = new Set(docked.map(a => {
+      const gid = groupOf(a);
+      const g = gid ? groups.get(gid) : undefined;
+      return g && bigGroup(gid!) && !g.loose?.includes(a.id) ? `group:${gid}` : a.id;
+    })).size;
+    const crowded = (usualTiles + 2) * perItem > window.innerWidth - 32;
     const stacked = (gid: string | undefined) => {
       const g = gid ? groups.get(gid) : undefined;
       if (!g) return false;
-      if (g.collapse === 'always' || crowded) return true;
-      return docked.filter(a => groupOf(a) === gid).length > (g.maxLoose ?? 4);
+      return crowded || bigGroup(gid!);
     };
     const emitted = new Set<string>();
     let lastSide: 'core' | 'rest' | null = null;
@@ -401,10 +463,14 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
       if (lastSide && side !== lastSide) dock.append(el('div', 'sd-dock-sep'));
       lastSide = side;
       const gid = groupOf(a);
-      if (gid && stacked(gid)) {
+      // A stacked group's `loose` members keep their own tiles (not on a crowded phone dock)
+      const keepLoose = (x: AppDescriptor) => !crowded && !!groups.get(groupOf(x) ?? '')?.loose?.includes(x.id);
+      if (gid && stacked(gid) && !keepLoose(a)) {
         if (emitted.has(gid)) continue;
         emitted.add(gid);
-        addStack(groups.get(gid)!, docked.filter(x => groupOf(x) === gid));
+        const rest = docked.filter(x => groupOf(x) === gid && !keepLoose(x));
+        if (rest.length > 1) addStack(groups.get(gid)!, rest);
+        else add(a.id, a.name, a.icon, () => void wm.openApp(a.id));
       } else add(a.id, a.name, a.icon, () => void wm.openApp(a.id));
     }
     if (extra.length) {
@@ -530,8 +596,8 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     { label: 'Settings…', shortcut: 'Alt+Shift+,', action: () => void wm.openApp('settings') },
     { label: 'Activity', action: () => void wm.openApp('activity') },
     'separator',
-    { label: 'Classic Terminal', action: () => { try { localStorage.setItem('tabcomputer-ui', 'terminal'); } catch {} location.reload(); } },
-    { label: 'Restart', action: () => location.reload() },
+    { label: 'Classic Terminal', action: () => { try { localStorage.setItem('tabcomputer-ui', 'terminal'); } catch {} reloadAfterFlush(); } },
+    { label: 'Restart', action: () => reloadAfterFlush() },
     { label: 'Hard Restart', action: () => void hardRestart() },
   ] });
   const termView = (): TerminalView | null => {
@@ -544,6 +610,9 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
       { label: 'New Terminal Window', shortcut: 'Alt+Shift+Enter', action: () => openTerminal({ cwd: '/home/user' }) },
       { label: 'New Tab', shortcut: 'Alt+Shift+T', disabled: !termView(), action: () => termView()?.newTab() },
       { label: 'New Files Window', shortcut: 'Alt+Shift+F', action: () => void wm.openApp('files') },
+      'separator',
+      { label: 'Clone Repository…', action: () => void import('./gitsheets').then(m => m.openCloneSheet(ctx)) },
+      { label: 'Git', action: () => void wm.openApp('git') },
       'separator',
       { label: 'Close Window', shortcut: 'Alt+Shift+W', disabled: !w, action: () => w?.close() },
     ] };
@@ -620,7 +689,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     openBarButton?.classList.remove('sd-open');
     openBarButton = null;
   };
-  const openMenu = (spec: MenuSpec, x: number, y: number, above = false) => {
+  const openMenu = ctx.openMenu = (spec: MenuSpec, x: number, y: number, above = false) => {
     closeMenu();
     const m = el('div', 'sd-menu');
     m.setAttribute('role', 'menu');
@@ -819,7 +888,8 @@ function drawWelcome(t: ShiroTerminal): void {
  * (Cache Storage) are untouched.
  */
 export async function hardRestart(): Promise<void> {
-  try { await fetch(location.href, { cache: 'reload' }); } catch { /* offline: reload anyway */ }
+  // Files written so far reach storage first (close doesn't wait for IndexedDB)
+  await Promise.all([flushStorage(), fetch(location.href, { cache: 'reload' }).catch(() => { /* offline: reload anyway */ })]);
   const url = new URL(location.href);
   url.searchParams.set('reload', Date.now().toString(36));
   location.replace(url.toString());

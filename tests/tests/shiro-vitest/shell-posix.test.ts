@@ -274,3 +274,10 @@ describe('read in a pipeline inside a script', () => {
     expect(r.out).toBe('status=0\nline=hi\n');
   });
 });
+
+describe('/dev/full', () => {
+  it('writes fail (exit 1), reads give zeros', async () => {
+    const r = await script('echo hi >/dev/full 2>/dev/null || echo failed\nhead -c 3 /dev/full | od -An -tx1\n');
+    expect(r.out).toBe('failed\n 00 00 00\n');
+  });
+});

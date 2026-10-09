@@ -133,6 +133,11 @@ ${bootSection(ctx, name)}
   \`python\`, \`node\`, \`java\`, \`classic\` (gfortran, gnucobol, fpc, gnat) or \`tex\`
   applies a prebuilt set of Debian packages (dpkg knows them; apt works on top).
   \`toolchain list\` shows them. It runs \`debian install\` first if needed.
+- Whole toolchains: \`toolchain install c\` (gcc, g++, make, gdb, cmake), \`python\`,
+  \`tex\`, \`classic\` (Fortran, COBOL, Pascal, Ada), \`node\` or \`java\` puts the
+  Debian packages in place in seconds instead of apt's minutes; dpkg knows them, so
+  apt keeps working. \`toolchain list\` shows the sets. The first run of each program
+  downloads it (gcc's hello world takes about 9 s from a fresh tab).
 - Prebuilt: \`pkg install NAME\` installs one of ${name}'s 72 prebuilt programs
   (WebAssembly or static x86-64: vim, htop, git, python3, jq, curl, make, clang,
   go, ...) in about a second, and they start faster than Debian's. \`pkg available\`

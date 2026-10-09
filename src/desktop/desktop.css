@@ -161,6 +161,14 @@ body.sd-active #shiro-layout { display: none; }
   border-radius: 50%; background: var(--sd-text); opacity: 0; transition: opacity .2s;
 }
 .sd-dock-item.sd-running::after { opacity: .75; }
+/* A tool installing on first use (devtools.ts): a ring that goes round until it's there */
+.sd-dock-item.sd-installing::before {
+  content: ''; position: absolute; inset: -3px; border-radius: 28%; z-index: 1; pointer-events: none;
+  border: 2px solid transparent; border-top-color: var(--sd-accent); border-right-color: var(--sd-accent);
+  animation: sd-spin 1s linear infinite;
+}
+@keyframes sd-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .sd-dock-item.sd-installing::before { animation: none; border-color: var(--sd-accent); } }
 .sd-dock-tip {
   position: absolute; bottom: calc(100% + 14px); left: 50%; transform: translateX(-50%);
   padding: 3px 10px; border-radius: 7px; white-space: nowrap; font-size: 12px; font-weight: 500;
@@ -412,6 +420,47 @@ body.sd-active #shiro-layout { display: none; }
 
 /* Accounts (accounts.ts): Settings → Accounts and the menu bar popover */
 .sd-btn.sd-danger { background: #e5484d; border-color: transparent; color: #fff; }
+
+/* Git: Files' badges and chip, the clone/branch sheets, the Git app */
+.sd-git-badge { display: inline-grid; place-items: center; min-width: 16px; height: 16px; padding: 0 3px; margin-left: 8px; border-radius: 4px; font: 700 10px/1 var(--sd-mono); color: #fff; flex: none; }
+.sd-git-m { background: #d29922; } .sd-git-a { background: #2da44e; } .sd-git-d { background: #cf222e; } .sd-git-u { background: #8c959f; }
+.sd-git-repo:empty { display: none; }
+.sd-git-repo { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; }
+.sd-git-tag { display: inline-flex; align-items: center; gap: 3px; padding: 1px 6px; border-radius: 9px; font-size: 11px; color: var(--sd-text-2); background: var(--sd-field); border: 1px solid var(--sd-sep); }
+.sd-git-tag svg, .sd-git-branch svg { width: 12px; height: 12px; flex: none; }
+.sd-ahead, .sd-behind { font: 600 11px var(--sd-mono); }
+.sd-ahead { color: #2da44e; } .sd-behind { color: #d29922; }
+.sd-git-chip[hidden], [data-act=branchfolder][hidden] { display: none; }
+.sd-git-branch { gap: 5px; max-width: 220px; }
+.sd-git-branch span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sd-git-form { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.sd-git-dest { min-height: 16px; }
+.sd-gitui .sd-app-split { flex: 1; min-height: 0; }
+.sd-git-side { flex: 0 0 300px; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--sd-sep); background: color-mix(in srgb, var(--sd-window-bar) 50%, transparent); }
+.sd-git-files { flex: 1; min-height: 0; overflow: auto; padding: 6px; }
+.sd-git-sec { display: flex; align-items: center; gap: 8px; padding: 8px 6px 4px; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; color: var(--sd-text-2); }
+.sd-git-sec .sd-link { text-transform: none; letter-spacing: 0; font-weight: 500; }
+.sd-git-file { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 6px; border-radius: 6px; font-size: 12px; cursor: default; }
+.sd-git-file .sd-git-badge { margin-left: 0; }
+.sd-git-file:hover { background: var(--sd-hover); }
+.sd-git-file.sd-selected { background: var(--sd-active); }
+.sd-git-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--sd-mono); font-size: 11.5px; }
+.sd-git-toggle { width: 20px; height: 20px; flex: none; border: 1px solid var(--sd-sep); border-radius: 5px; background: var(--sd-window); color: var(--sd-text); font: 600 13px/1 var(--sd-font); visibility: hidden; }
+.sd-git-file:hover .sd-git-toggle, .sd-git-file.sd-selected .sd-git-toggle, .sd-git-toggle:focus-visible { visibility: visible; }
+.sd-git-commit { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-top: 1px solid var(--sd-sep); }
+.sd-git-commit textarea { resize: vertical; min-height: 54px; font: 12.5px/1.4 var(--sd-font); }
+.sd-git-tabs { display: flex; gap: 2px; padding: 6px 10px 0; border-bottom: 1px solid var(--sd-sep); }
+.sd-git-tabs button { border: 0; background: none; color: var(--sd-text-2); font: inherit; padding: 6px 10px; border-bottom: 2px solid transparent; }
+.sd-git-tabs button[aria-selected='true'] { color: var(--sd-text); border-bottom-color: var(--sd-accent); }
+.sd-git-diff { margin: 0; padding: 10px 14px; font: 12px/1.5 var(--sd-mono); white-space: pre; user-select: text; }
+.sd-git-diff .sd-add { background: color-mix(in srgb, #2da44e 16%, transparent); }
+.sd-git-diff .sd-del { background: color-mix(in srgb, #cf222e 14%, transparent); }
+.sd-git-diff .sd-hunk { color: var(--sd-accent); }
+.sd-git-commitrow { padding: 6px 0; border-bottom: 1px solid var(--sd-sep); white-space: normal; }
+.sd-git-oid { color: var(--sd-accent); }
+.sd-git-newbranch { display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--sd-sep); }
+.sd-git-newbranch .sd-input { flex: 1; }
+.sd-compact .sd-git-side { flex-basis: 46%; }
 .sd-acct-row { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 0; }
 .sd-acct-row + .sd-acct-row, .sd-acct-confirm + .sd-acct-row { border-top: 1px solid var(--sd-sep); }
 .sd-acct-ico { width: 28px; height: 28px; border-radius: 7px; }

@@ -14,7 +14,8 @@ import {
 import { KNetlinkSocket } from '../kernel/netlink';
 import { retain, release, type OpenFile } from '../kernel/fd';
 import { EpollFile } from '../kernel/epoll';
-import { activeProfile } from '../profile';
+import { activeProfile, unameRelease, UNAME_VERSION } from '../profile';
+import { memoryInfo } from '../utils/sysinfo';
 
 // Linux error codes (negated — syscalls return -ERRNO)
 const ENOENT = 2;
@@ -628,7 +629,7 @@ export class LinuxSyscalls {
   private sysUname(buf: bigint): bigint {
     // struct utsname: 5 fields × 65 bytes each
     const host = activeProfile().hostname;
-    const fields = ['Linux', host, `6.1.0-${host}`, '#1 SMP', 'x86_64'];
+    const fields = ['Linux', host, unameRelease(host), UNAME_VERSION, 'x86_64'];
     for (let i = 0; i < fields.length; i++) {
       this.mem.writeString(buf + BigInt(i * 65), fields[i]);
     }
@@ -855,12 +856,13 @@ export class LinuxSyscalls {
     for (let i = 0; i < 112; i++) this.mem.write8(buf + BigInt(i), 0);
     const uptime = BigInt(Math.floor((performance.now() - this.startTime) / 1000));
     this.mem.write64(buf, uptime);          // uptime
-    this.mem.write64(buf + 32n, 268435456n); // totalram (256MB)
-    this.mem.write64(buf + 40n, 134217728n); // freeram (128MB)
-    this.mem.write64(buf + 48n, 134217728n); // sharedram
+    const mem = memoryInfo();
+    this.mem.write64(buf + 32n, BigInt(mem.total)); // totalram (as free and /proc/meminfo)
+    this.mem.write64(buf + 40n, BigInt(mem.free));  // freeram
+    this.mem.write64(buf + 48n, 0n);         // sharedram
     this.mem.write64(buf + 56n, 0n);         // bufferram
-    this.mem.write64(buf + 64n, 268435456n); // totalswap
-    this.mem.write64(buf + 72n, 268435456n); // freeswap
+    this.mem.write64(buf + 64n, 0n);         // totalswap
+    this.mem.write64(buf + 72n, 0n);         // freeswap
     this.mem.write16(buf + 80n, 0);          // procs
     this.mem.write32(buf + 104n, 1);         // mem_unit
     return 0n;

@@ -37,6 +37,14 @@ var ShiroKernelLibrary = {
     if (K && K.hosted) K.hosted(pid);
   },
 
+  // a thread waiting on a direct channel has a signal to take: ask the page
+  // to interrupt the process's blocking calls (it answers with EINTR)
+  shiro_kick__proxy: 'async',
+  shiro_kick: () => {
+    var K = Module['shiroKernel'];
+    if (K && K.kick) K.kick();
+  },
+
   shiro_fork_start__proxy: 'sync',
   shiro_fork_start: (pid, ptr, len) => {
     var K = Module['shiroKernel'];

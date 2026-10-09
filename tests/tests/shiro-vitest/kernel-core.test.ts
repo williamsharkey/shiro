@@ -18,6 +18,7 @@ import { startWorker, attachThread, type GuestWorker } from '@shiro/kernel/worke
 import { Process } from '@shiro/kernel/process';
 import { EpollFile } from '@shiro/kernel/epoll';
 import { processTable } from '@shiro/process-table';
+import { memoryInfo } from '@shiro/utils/sysinfo';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -567,6 +568,19 @@ describe('kernel processes', () => {
     expect(await run('')).toEqual({ status: 0, out: '' }); // an empty one ends at once (Linux: ENOEXEC, then sh)
     expect(await run('echo hi\n')).toEqual({ status: 0, out: 'hi\n' });
     expect(await run('read x; echo got:$x\n', 'line\n')).toEqual({ status: 0, out: 'got:line\n' });
+  });
+
+  it('sysinfo(2) reports the memory free and /proc/meminfo do (tabcomputer#8)', async () => {
+    const proc = kernel.spawn({ path: 'si', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
+    const data = new Uint8Array(A.SYSINFO_SIZE).fill(0xff);
+    expect(await kernel.syscall(proc, A.SYS_sysinfo, [], data)).toBe(0);
+    const v = new DataView(data.buffer);
+    const mem = memoryInfo();
+    expect([v.getBigUint64(32, true), v.getBigUint64(40, true), v.getUint32(104, true)]).toEqual([BigInt(mem.total), BigInt(mem.free), 1]);
+    expect(v.getBigUint64(64, true)).toBe(0n); // no swap
+    expect(v.getUint16(80, true)).toBeGreaterThanOrEqual(2);
+    expect(await kernel.syscall(proc, A.SYS_sysinfo, [], new Uint8Array(100))).toBe(-A.EFAULT);
+    kernel.kill(proc.pid, A.SIGKILL);
   });
 
   it('uname(2) reports the kernel hostname', async () => {

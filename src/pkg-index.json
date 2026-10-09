@@ -379,8 +379,8 @@
   },
   {
    "name": "python3",
-   "version": "3.13.7",
-   "description": "CPython 3.13 interpreter built for WASI (stdlib, zlib, sqlite3); pip and venv are provided by Shiro",
+   "version": "3.13.7-1",
+   "description": "CPython 3.13 interpreter built for WASI (stdlib, zlib, sqlite3, OpenSSL 3.5: ssl/hashlib); pip and venv are provided by Shiro",
    "license": "PSF-2.0",
    "source": "https://www.python.org/ftp/python/3.13.7/Python-3.13.7.tar.xz",
    "homepage": "https://www.python.org/",
@@ -391,33 +391,33 @@
    "files": [
     {
      "path": "bin/python3.wasm",
-     "url": "/pkg/python3/3.13.7/python3.wasm",
-     "sha256": "b8312e9b437b2a329b4f2a32b9aaf9cd11de64ac774e6be66b121689402f0102",
-     "size": 8217192
+     "url": "/pkg/python3/3.13.7-1/python3.wasm",
+     "sha256": "e5301cd3379330cd16c2d9d685b7100e3d43b9b503110c23b6e5468a07fe62b0",
+     "size": 11101761
     },
     {
      "path": "lib/python3.13/lib-dynload/.keep",
-     "url": "/pkg/python3/3.13.7/.keep",
+     "url": "/pkg/python3/3.13.7-1/.keep",
      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
      "size": 0
     },
     {
      "path": "lib/python3.13/os.py",
-     "url": "/pkg/python3/3.13.7/os.py",
+     "url": "/pkg/python3/3.13.7-1/os.py",
      "sha256": "5e640713e89023372f493054ccedb7512ee27eb3ea6461677bc8c27c640d0605",
      "size": 41627
     },
     {
      "path": "lib/python3.13/site-packages/README.txt",
-     "url": "/pkg/python3/3.13.7/README.txt",
+     "url": "/pkg/python3/3.13.7-1/README.txt",
      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
      "size": 0
     },
     {
      "path": "lib/python313.zip",
-     "url": "/pkg/python3/3.13.7/python313.zip",
-     "sha256": "fad1ebdb6e82fc3c62a44c52aeeba435221d0d006d35cc019fbadd96d916ded2",
-     "size": 4321968
+     "url": "/pkg/python3/3.13.7-1/python313.zip",
+     "sha256": "6421349b4cb9f3fe3d710311d67b3d17a6bd79a7457ebf421d4b1b79a511a20a",
+     "size": 4323612
     }
    ],
    "bin": {
@@ -439,9 +439,14 @@
     }
    },
    "wants": [
-    "blocking-stdin"
+    "blocking-stdin",
+    "processes",
+    "sockets"
    ],
-   "notes": "pip installs pure-Python wheels from PyPI (no native extensions, no sdists yet); python -m venv works. No subprocess, sockets or ssl (WASI preview1); the REPL needs blocking stdin. The REPL is the basic one (PYTHON_BASIC_REPL=1): the new one needs termios, which WASI lacks. pytest runs with --capture=sys -p no:faulthandler -p no:cacheprovider (PYTEST_ADDOPTS): its fd capture and faulthandler need dup(), its cache os.umask(), which WASI lacks."
+   "notes": "pip installs pure-Python wheels from PyPI (no native extensions, no sdists yet); python -m venv works. subprocess runs programs through os.posix_spawn (no preexec_fn or uid/gid changes); sockets, getaddrinfo and ssl (OpenSSL 3.5, CA bundle at /etc/ssl/cert.pem from ca-certificates) go through the kernel's sockets and the TCP relay, so urllib fetches http:// and https:// URLs. The REPL needs blocking stdin, and is the basic one (PYTHON_BASIC_REPL=1): the new one needs termios, which WASI lacks. pytest runs with --capture=sys -p no:faulthandler -p no:cacheprovider (PYTEST_ADDOPTS).",
+   "deps": [
+    "ca-certificates"
+   ]
   },
   {
    "name": "make",
@@ -2912,10 +2917,7 @@
    "links": {
     "/etc/ssl/certs/ca-certificates.crt": "etc/ssl/certs/ca-certificates.crt",
     "/etc/ssl/cert.pem": "etc/ssl/certs/ca-certificates.crt"
-   },
-   "needs": [
-    "x86"
-   ]
+   }
   },
   {
    "name": "openssl",
@@ -3162,6 +3164,83 @@
     "fzf": {
      "file": "bin/fzf"
     }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "lazygit",
+   "version": "0.55.1",
+   "description": "Terminal UI for git commands (upstream static Go build)",
+   "license": "MIT",
+   "source": "https://github.com/jesseduffield/lazygit/releases/download/v0.55.1/lazygit_0.55.1_linux_x86_64.tar.gz",
+   "homepage": "https://github.com/jesseduffield/lazygit",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/lazygit.sh",
+   "section": "vcs",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/lazygit",
+     "url": "/pkg/lazygit/0.55.1/lazygit.gz",
+     "sha256": "e3c2cd7d4f6d7ce67675e779efc423e9d199f4670c975867372b456460e73d13",
+     "size": 7761135,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "lazygit": {
+     "file": "bin/lazygit"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "tig",
+   "version": "2.5.12",
+   "description": "Text-mode interface for git (static x86-64 build)",
+   "license": "GPL-2.0-or-later",
+   "source": "https://github.com/jonas/tig/releases/download/tig-2.5.12/tig-2.5.12.tar.gz",
+   "homepage": "https://jonas.github.io/tig/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/tig.sh",
+   "section": "vcs",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/tig",
+     "url": "/pkg/tig/2.5.12/tig.gz",
+     "sha256": "85e44d47114cd1c7d12236fc811ec42981e62f8411f40a8c4669bfe79bb7870f",
+     "size": 468023,
+     "unpack": "gzip"
+    },
+    {
+     "path": "etc",
+     "url": "/pkg/tig/2.5.12/etc.tar.gz",
+     "sha256": "86dd13a59404fd17abb27b8fdf633204f54867b8b390eff9b5a979097761b2f0",
+     "size": 5956,
+     "unpack": "tar.gz"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/tig/2.5.12/share.tar.gz",
+     "sha256": "685f8c70263f7a60afeb6849c52253f0bd1c21ab6fba38a3150ad1c4886acb1f",
+     "size": 17603,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "tig": {
+     "file": "bin/tig"
+    }
+   },
+   "links": {
+    "/etc/tigrc": "etc/tigrc",
+    "/usr/share/man/man1/tig.1": "share/man/man1/tig.1",
+    "/usr/share/man/man5/tigrc.5": "share/man/man5/tigrc.5"
    },
    "needs": [
     "x86"

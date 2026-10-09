@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, onTestFinished, beforeAll, afterAll } from 'vitest';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import type { Server } from 'node:http';
 import { join, resolve } from 'node:path';
@@ -34,6 +34,8 @@ function tryBuild(cmd: string, args: string[], env: Record<string, string> = {})
 }
 
 const out = mkdtempSync(join(tmpdir(), 'shiro-x86-engine-'));
+// the fixture builds (~160 MB with Go's cache) go with the file's last test
+afterAll(() => rmSync(out, { recursive: true, force: true }));
 const goBin = join(out, 'hello-go');
 const httpBin = join(out, 'nethttp');
 const glibcBin = join(out, 'hello-glibc');
@@ -98,6 +100,10 @@ const niceBin = join(out, 'nice');
 const haveNice = tryBuild('gcc', ['-static', '-O1', '-o', niceBin, 'nice.c']);
 const idsBin = join(out, 'ids');
 const haveIds = 'SYS_setresuid' in Abi && tryBuild('gcc', ['-static', '-O1', '-o', idsBin, 'ids.c']);
+const sigchldBin = join(out, 'sigchldwait');
+const haveSigchld = tryBuild('gcc', ['-static', '-O1', '-o', sigchldBin, 'sigchldwait.c']);
+const getcpuBin = join(out, 'getcpu');
+const haveGetcpu = tryBuild('gcc', ['-static', '-O1', '-o', getcpuBin, 'getcpu.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -182,6 +188,23 @@ describe('Blink engine: static C (musl)', () => {
     const { shell } = await setup(readFileSync(join(FIX, 'hello-musl')));
     const r = await run(shell, './prog fail < /dev/null; echo "status=$?"');
     expect(r.output).toContain('status=7');
+  }, 60_000);
+
+  // The shell's executeScript path (a builtin Debian's program shadows): the
+  // guest's stdout/stderr are OutputSinks, whose writes Blink's direct
+  // channels (patch 0065, opt-in) serve synchronously, not through write()
+  it('runElf delivers stdout and stderr to the callbacks', async () => {
+    const { fs, shell } = await setup(readFileSync(join(FIX, 'hello-musl')));
+    const { runElf } = await import('@shiro/x86-engine');
+    let out = '', err = '';
+    const code = await runElf('/home/user/work/prog', ['a'], {
+      fs, cwd: '/home/user/work', args: ['a'], env: { ...shell.env, TABCOMPUTER_BLINK_DIRECT: '1' }, shell, stdin: 'in\n',
+      writeStdout: (s: string) => { out += s; }, writeStderr: (s: string) => { err += s; },
+    });
+    expect(code).toBe(0);
+    expect(out).toContain('hello from c\narg1=a\n');
+    expect(out).toContain('stdin=in\n');
+    expect(err).toBe('to stderr\n');
   }, 60_000);
 });
 
@@ -817,6 +840,32 @@ describe('Blink engine: CPU and syscall fixes', () => {
       'setresgid 0 setresuid 0: uid 65534 euid 65534 saved 0 gid 65534 egid 65534\n' +
       'seteuid(0) via saved 0: euid 0 uid 65534\n' +
       'dropped 0: setuid(0) -1 EPERM\n');
+  }, 60_000);
+
+  // cmake hung in epoll_wait: SIGCHLD reached the kernel before the call did
+  it.skipIf(!haveSigchld)('a SIGCHLD that races epoll_wait still ends the wait', async () => {
+    const { shell } = await setup(readFileSync(sigchldBin));
+    const r = await run(shell, 'TABCOMPUTER_BLINK_DIRECT=1 ./prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('rounds 60 timeouts 0\n');
+  }, 120_000);
+
+  // HotSpot's sched_getcpu fallback calls the vsyscall page (java -version)
+  it.skipIf(!haveGetcpu)('getcpu, the vsyscall page and a family 6 CPUID signature', async () => {
+    const { shell } = await setup(readFileSync(getcpuBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('sched_getcpu 0\nvsyscall getcpu 0 cpu 0 node 0\nvsyscall time ok 1\n' +
+      'vsyscall gettimeofday 0 ok 1\ncpuid family 6 sse2 1\n');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // LibreOffice's soffice.bin: Blink took *.bin for a flat binary
+  it('an ELF named *.bin runs as an ELF', async () => {
+    const { fs, shell } = await setup(readFileSync(join(FIX, 'hello-musl')));
+    await fs.writeFile('/home/user/work/prog.bin', readFileSync(join(FIX, 'hello-musl')), { mode: 0o755 });
+    const r = await run(shell, './prog.bin x < /dev/null');
+    expect(r.output).toContain('hello from c');
+    expect(r.output).toContain('arg1=x');
+    expect(r.exitCode).toBe(0);
   }, 60_000);
 
   // vim's typeahead check blocked for a key when two reads straddled a ms tick

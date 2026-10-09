@@ -1,0 +1,212 @@
+From d92d2483fd0b1f6e52cfcfeee8d847f86b2486c6 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 20:09:45 +0000
+Subject: [PATCH 65/67] Shiro: direct channels: Blink's threads make their own
+ kernel calls
+
+A kernel call went from the Blink thread through emscripten's proxy to
+host.mjs's thread, then by message to the page and back by message
+(~110 us for getppid in Node). host.mjs now gives Blink a few channels in
+its own wasm memory (blink_shiro_direct) and the page serves them by
+watching their state words (KernelChannel.watch, the WASI guests'
+protocol): the thread posts the request, spins briefly, then sleeps on
+the word. A signal on the reply is queued, then rt_sigreturn, as before.
+Calls for other processes in this instance, or with every direct channel
+busy or closed, use the pool as before; at exit (ShiroQuiesce) waiting
+calls give up.
+---
+ blink/blink.c   |   3 ++
+ blink/shiro.inc | 137 +++++++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 139 insertions(+), 1 deletion(-)
+
+diff --git a/blink/blink.c b/blink/blink.c
+index 72ff88f..1840fea 100644
+--- a/blink/blink.c
++++ b/blink/blink.c
+@@ -240,6 +240,8 @@ void ShiroRestore(struct Machine *);
+ // Called by the embedder (Shiro's worker host) when the kernel signals this
+ // process: queue `sig` (Linux numbering) on a guest thread that doesn't
+ // block it. Blocking syscalls notice within kPollingMs.
++void ShiroDirectWake(void);
++
+ void ShiroSignalSystem(struct System *s, int sig) {
+   struct Dll *e;
+   struct Machine *m, *pick = 0, *busy = 0, *any = 0;
+@@ -260,6 +262,7 @@ void ShiroSignalSystem(struct System *s, int sig) {
+   if (!pick) pick = busy ? busy : any;
+   if (pick) EnqueueSignal(pick, sig);
+   UNLOCK(&s->machines_lock);
++  ShiroDirectWake();
+ }
+ 
+ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal(int sig) {
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index ee242b0..4f54fd2 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -108,6 +108,128 @@ static void *ShiroAlloc(struct Machine *m, size_t n) {
+ // restarts when the handler allows it (SA_RESTART) or no handler ran.
+ static void ShiroSyncMask(struct Machine *);
+ 
++// ── direct channels ─────────────────────────────────────────────────────
++// Channels in this wasm memory that Blink's threads use themselves: host.mjs
++// allocates them and the page serves them by watching their state words
++// (KernelChannel.watch), the same protocol as a WASI guest's channel. A
++// call skips emscripten's proxy to host.mjs's thread and its two messages
++// (getppid in Node: ~110 us -> ~10 us). The process's own calls only (`as` 0);
++// when all are busy or the page closed them, shiro_ksys's pool as before.
++#define SHIRO_DCH_MAX 8
++#include <emscripten/threading.h>
++void blink_shiro_signal(int);
++static u8 *g_dch[SHIRO_DCH_MAX];
++static _Atomic(int) g_dch_busy[SHIRO_DCH_MAX];
++static int g_dch_n, g_dch_size;
++static _Atomic(bool) g_dch_dead, g_dch_dying;
++
++EMSCRIPTEN_KEEPALIVE void blink_shiro_direct(u8 *base, int n, int stride, int size) {
++  int i;
++  if (n > SHIRO_DCH_MAX) n = SHIRO_DCH_MAX;
++  for (i = 0; i < n; ++i) g_dch[i] = base + i * stride;
++  g_dch_size = size;
++  g_dch_n = n;
++}
++
++extern void shiro_kick(void);  // host.mjs: the page interrupts our blocking calls
++
++// a signal was queued for one of our threads (ShiroSignalSystem): threads
++// waiting on a direct channel look whether it's theirs
++void ShiroDirectWake(void) {
++  int i;
++  for (i = 0; i < g_dch_n; ++i) emscripten_futex_wake(g_dch[i], INT_MAX);
++}
++
++// the guest's process is ending (ShiroQuiesce): calls waiting on a direct
++// channel give up, as host.mjs answers the pool's with EINTR
++static void ShiroDirectDying(void) {
++  int i;
++  atomic_store(&g_dch_dying, true);
++  for (i = 0; i < g_dch_n; ++i) emscripten_futex_wake(g_dch[i], INT_MAX);
++}
++
++// One call on a free direct channel: false if there is none (or they're
++// closed). Sets *r, args[0] (the high word) and *sig as the channel does.
++static bool ShiroDirectCall(int nr, int args[12], void *data, int inlen,
++                            int outcap, int *r, int *sig) {
++  int i, k = -1, st;
++  i32 *ch;
++  _Atomic(int) *w;
++  double end;
++  if (!g_dch_n || atomic_load(&g_dch_dead) || inlen > g_dch_size || outcap > g_dch_size) return false;
++  for (i = 0; i < g_dch_n; ++i) {
++    int z = 0;
++    if (atomic_compare_exchange_strong(&g_dch_busy[i], &z, 1)) { k = i; break; }
++  }
++  if (k < 0) return false;
++  ch = (i32 *)g_dch[k];
++  w = (_Atomic(int) *)ch;
++  if (inlen) memcpy(g_dch[k] + 64, data, inlen);
++  ch[1] = nr;
++  for (i = 0; i < 12; ++i) ch[4 + i] = args[i];
++  st = 0;
++  if (!atomic_compare_exchange_strong(w, &st, 3)) {  // STATE_DEAD: the page closed them
++    atomic_store(&g_dch_dead, true);
++    atomic_store(&g_dch_busy[k], 0);
++    return false;
++  }
++  emscripten_futex_wake((void *)w, INT_MAX);  // the page's watch() waits on it
++  // spin briefly (no wake-up needed for a quick reply), then sleep
++  end = emscripten_get_now() + 0.1;
++  while (atomic_load(w) == 3 && emscripten_get_now() < end) {}
++  st = 3;
++  if (atomic_compare_exchange_strong(w, &st, 1)) {
++    while (atomic_load(w) == 1) {
++      if (atomic_load(&g_dch_dying)) {  // abandoned: the channel stays busy
++        *r = -EINTR_LINUX, args[0] = -1, *sig = 0;
++        return true;
++      }
++      // A signal for this thread came while the call is in the kernel: it
++      // may have reached the kernel before the call did (so nothing
++      // interrupted it). Ask the page to interrupt it, until it ends.
++      if (g_machine && (g_machine->signals & ~g_machine->sigmask)) {
++        shiro_kick();
++        emscripten_futex_wait((void *)w, 1, 5);
++      } else {
++        emscripten_futex_wait((void *)w, 1, 100);  // ShiroDirectWake ends it early
++      }
++    }
++  }
++  if (atomic_load(w) == 4) {  // closed while we waited: the process is gone
++    atomic_store(&g_dch_dead, true);
++    *r = -EINTR_LINUX, args[0] = -1, *sig = 0;
++    return true;
++  }
++  *r = ch[2];
++  args[0] = ch[4];
++  st = 2;
++  atomic_compare_exchange_strong(w, &st, 0);
++  *sig = atomic_exchange((_Atomic(int) *)&ch[3], 0);
++  if (outcap) memcpy(data, g_dch[k] + 64, outcap);
++  atomic_store(&g_dch_busy[k], 0);
++  return true;
++}
++
++static int ShiroKsys(int nr, int args[12], int as, void *data, int inlen, int outcap) {
++  int r, sig, hi, a2[12];
++  if (as || !ShiroDirectCall(nr, args, data, inlen, outcap, &r, &sig)) {
++    return shiro_ksys(nr, args, as, data, inlen, outcap);
++  }
++  // a signal for the guest rode on the reply: queue it, then rt_sigreturn
++  // (as GuestChannel.call and host.mjs's pool do)
++  hi = args[0];
++  while (sig) {
++    blink_shiro_signal(sig);
++    memset(a2, 0, sizeof(a2));
++    if (!ShiroDirectCall(15, a2, 0, 0, 0, &(int){0}, &sig)) {
++      shiro_ksys(15, a2, 0, 0, 0, 0);
++      sig = 0;
++    }
++  }
++  args[0] = hi;
++  return r;
++}
++
+ static i64 ShiroCall(struct Machine *m, int nr, const int a[12], void *data,
+                      int inlen, int outcap, bool restart, bool intr) {
+   int args[12], r, as;
+@@ -120,12 +242,24 @@ static i64 ShiroCall(struct Machine *m, int nr, const int a[12], void *data,
+     memcpy(args, a, sizeof(args));
+     held = GilHeld();
+     if (held) GilRelease();
+-    r = shiro_ksys(nr, args, as, data, inlen, outcap);
++    r = ShiroKsys(nr, args, as, data, inlen, outcap);
+     if (held) GilAcquire();
+     res = (i64)(u64)(u32)r | (i64)args[0] << 32;
+     if (res == -EINTR_LINUX && intr && !as) {
++      int k;
+       if (m && atomic_load_explicit(&m->killed, memory_order_acquire)) return res;
+       if (CheckInterrupt(m, restart)) return -EINTR_LINUX;
++      // The kernel ended the call for a signal that host.mjs is about to
++      // queue (its message can come after a direct channel's reply): give it
++      // a moment before calling again, or the call would sleep through it
++      for (k = 0; k < 50; ++k) {
++        held = GilHeld();
++        if (held) GilRelease();
++        usleep(100);
++        if (held) GilAcquire();
++        if (CheckInterrupt(m, restart)) return -EINTR_LINUX;
++        if (m && (m->signals & ~m->sigmask)) break;
++      }
+       continue;
+     }
+     return res;
+@@ -1888,6 +2022,7 @@ void ShiroQuiesce(struct Machine *m) {
+   int i, others;
+   if (!g_shiro_pid) return;
+   ShiroKillSiblings(m);
++  ShiroDirectDying();
+   MAIN_THREAD_ASYNC_EM_ASM({ if (Module['shiroDying']) Module['shiroDying'](); });
+   GilRelease();
+   for (i = 0; i < 500; ++i) {
+-- 
+2.43.0
+
