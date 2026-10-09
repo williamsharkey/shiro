@@ -283,7 +283,7 @@ describe('Demo 3: Node.js Compat Deep Exercise', () => {
     expect(exitCode).toBe(0);
     expect(output).toContain('platform:linux');
     expect(output).toContain('arch:x64');
-    expect(output).toContain('version:v20.0.0');
+    expect(output).toContain('version:v22.12.0');
   });
 
   it('require missing npm package suggests npm install', async () => {

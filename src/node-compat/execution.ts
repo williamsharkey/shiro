@@ -30,7 +30,7 @@ import { createFsModule, createFsPromisesModule } from './modules/fs';
 import { createChildProcessModule } from './modules/child-process';
 import { createStreamModule } from './modules/stream';
 import { createCryptoModule } from './modules/crypto';
-import { createProcessGlobal } from './process-global';
+import { createProcessGlobal, createProcessFunction } from './process-global';
 import { createHttpModule, createHttpsModule, createHttp2Module } from './modules/http';
 import { createNetModule, createTlsModule } from './modules/net-tls';
 import { createMiscModule } from './modules/misc';
@@ -174,6 +174,7 @@ export async function executeNodeScript(
     const FakeBuffer = createFakeBuffer();
     // The process's own globalThis (its writes stay its own; globalThis.process is its process)
     const processGlobal = createProcessGlobal({ process: fakeProcess, Buffer: FakeBuffer });
+    const processFunction = createProcessFunction(processGlobal, fakeProcess, FakeBuffer);
 
     // Built-in module registry with caching
     const _builtinCache = new Map<string, any>();
@@ -241,7 +242,7 @@ export async function executeNodeScript(
     // Require function (module resolver + loader)
     const requireModule = createRequireFunction({
       ctx, fileCache, fileMtimes, moduleCache, pendingPromises, processEvents,
-      getBuiltinModule, fakeConsole, fakeProcess, FakeBuffer, processGlobal,
+      getBuiltinModule, fakeConsole, fakeProcess, FakeBuffer, processGlobal, processFunction,
       createExpressShim: expressFactory,
       createSqliteShim: () => createSqliteShim({ ctx }),
       createAutoStub,
@@ -311,7 +312,7 @@ export async function executeNodeScript(
     const wrappedCode = printResult ? `return (${transformedCode})` : transformedCode;
     const fn = compileAsyncModule(AsyncFunction, [
       'console', 'process', 'require', 'Buffer', '__filename', '__dirname', 'shiro', '__import_meta', 'module', 'exports', '__dynamic_import',
-      '__shiro_module', '__shiro_require', 'global', '__shiro_require_ready', 'globalThis',
+      '__shiro_module', '__shiro_require', 'global', '__shiro_require_ready', 'globalThis', 'Function',
     ], wrappedCode);
 
     // Fake import.meta for ES modules
@@ -635,7 +636,7 @@ export async function executeNodeScript(
           env: ctx.env,
           cwd: ctx.cwd,
         }, fakeImportMeta, fakeModule, fakeExports, dynamicImport, fakeModule, entryRequire, processGlobal,
-        (p: string) => requireModule.ready(p, entryDirname, entryFilename), processGlobal),
+        (p: string) => requireModule.ready(p, entryDirname, entryFilename), processGlobal, processFunction),
         timeoutPromise,
       ]);
     } catch (e: any) {

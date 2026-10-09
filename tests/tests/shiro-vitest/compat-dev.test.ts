@@ -745,7 +745,11 @@ out.push(globalThis.performance.now());
 out.push(typeof globalThis.setTimeout(() => {}, 0) !== 'undefined', typeof atob === 'function' && globalThis.atob('aGk='));
 delete globalThis.fromEntry;
 out.push(globalThis.fromEntry, 'fromEntry' in globalThis);
-console.log(JSON.stringify(out));`)).toBe('[true,true,true,true,"entry","yes",7,"function",42,true,"hi",null,false]\n');
+// code compiled at run time sees the process's globals too (esbuild-wasm runs Go's wasm_exec this way)
+const f = new Function('a', 'return [typeof process, process === globalThis.process, Buffer === globalThis.Buffer, a]');
+const g = Function('process', '"use strict"; return process');
+out.push(...f(1), g('own'), f instanceof Function, Function.prototype === Object.getPrototypeOf(f));
+console.log(JSON.stringify(out));`)).toBe('[true,true,true,true,"entry","yes",7,"function",42,true,"hi",null,false,"object",true,true,1,"own",true,true]\n');
     // The page's own crypto and performance, and a next script, never saw those
     expect(typeof (globalThis as any).crypto?.subtle).toBe('object');
     expect(await node(`console.log(typeof globalThis.crypto.subtle, typeof globalThis.performance.timeOrigin, typeof globalThis.sharedByModules, typeof globalThis.fromEntry)`))
@@ -1666,5 +1670,21 @@ describe('ES module transform: minified imports, and import text in strings left
     expect(out).toContain("`import react from '@vitejs/plugin-react'\nexport default defineConfig({})`");
     expect(out).toContain('__shiro_module.exports.x = tpl; __shiro_module.exports.e = e;');
     expect(out).toContain('__shiro_module.exports = 1;');
+  });
+});
+
+import { liveEsbuildChunk } from '@shiro/commands/jseval/esm-live';
+
+describe('live bindings for code-split chunks: an import named like a member keyword', () => {
+  it("keeps `get name() {}` an accessor when `get` is an imported binding (vite 7's config chunk)", () => {
+    const src = 'import { __toESM as t, get, set } from "./chunk.js";\n'
+      + 'const o = { a: 1, get clients() { return get(1); }, set value(v) { set(v); }, get };\n'
+      + 'class C { static get x() { return get; } get y() { return 1; } }\n';
+    const out = liveEsbuildChunk(src);
+    expect(out).toContain('get clients() { return (0, __shiro_live');
+    expect(out).toContain('set value(v) { (0, __shiro_live');
+    expect(out).toContain('static get x() { return __shiro_live');
+    expect(out).toContain('get y() { return 1; }');
+    expect(out).toMatch(/get: __shiro_live\d+\.get \}/);
   });
 });

@@ -113,3 +113,28 @@ export function createProcessGlobal(own: Record<string, unknown>): any {
   self = new Proxy(target, handler);
   return self;
 }
+
+/**
+ * `Function` for a process's modules: code compiled at run time sees the
+ * process's `process`, `Buffer`, `global` and `globalThis`, as in node where
+ * those are true globals. esbuild-wasm runs Go's wasm_exec_node.js through
+ * `new Function('require', 'WebAssembly', code)`, and that code uses bare
+ * `process`. The page's Function, so `instanceof Function` and
+ * Function.prototype are unchanged; the body is compiled inside a closure
+ * that supplies the names (a nested function, so a strict body with those
+ * names as parameters is still valid).
+ */
+export function createProcessFunction(processGlobal: any, proc: unknown, buffer: unknown): FunctionConstructor {
+  const PageFunction = Function;
+  const compile = (args: unknown[]) => {
+    const body = args.length ? String(args[args.length - 1]) : '';
+    const params = args.slice(0, -1).map(String).join(',');
+    const outer = PageFunction('process', 'Buffer', 'global', 'globalThis',
+      `return function anonymous(${params}\n) {\n${body}\n}`);
+    return outer(proc, buffer, processGlobal, processGlobal);
+  };
+  return new Proxy(PageFunction, {
+    construct: (_t, args) => compile(args),
+    apply: (_t, _this, args) => compile(args),
+  });
+}
