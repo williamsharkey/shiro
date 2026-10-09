@@ -26,6 +26,6 @@
     "tabSsh": true,
     "binCommandStat": true,
     "debianOverlay": true,
-    "python": "pyodide"
+    "python": "cpython"
   }
 }

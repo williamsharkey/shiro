@@ -1403,7 +1403,7 @@ function browseHeaders(cfg) {
   };
 }
 
-const BROWSE_SCRIPTS = new Set(['sw.js', 'boot.js', 'client.js']);
+const BROWSE_SCRIPTS = new Set(['sw.js', 'boot.js', 'client.js', 'shim.js']);
 
 async function handleBrowseHost(req, res, cfg) {
   const pathname = new URL(req.url, 'http://localhost').pathname;

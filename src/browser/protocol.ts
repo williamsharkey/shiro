@@ -17,6 +17,8 @@ export interface FetchMsg {
   redirect: RequestRedirect;
   referrer: string;         // real URL, or '' / 'about:client'
   referrerPolicy: ReferrerPolicy;
+  /** Subresource integrity the request carries (the broker then leaves the body as it is). */
+  integrity?: string;
   /** A navigation of the document this port is bound to. */
   navigation: boolean;
 }

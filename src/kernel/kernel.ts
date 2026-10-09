@@ -13,7 +13,7 @@ import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
 import { KernelStdio, execLazyStdin } from '../shell-stdio';
 import { parseShellArgs } from '../shell-args';
-import { ProcFs, bootMs } from './procfs';
+import { ProcFs, bootMs, fdTarget } from './procfs';
 import { klog, KmsgFile, LOG_ERR, LOG_INFO, SYSLOG_ACTION_READ_ALL, SYSLOG_ACTION_SIZE_BUFFER, SYSLOG_ACTION_SIZE_UNREAD } from './klog';
 import { processTable, type ShiroProcess } from '../process-table';
 import { packageShadows, pkgOwnShadows, packageArgsForPath, PKG_BIN_DIR } from '../pkg-manager';
@@ -32,6 +32,7 @@ import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending } from './signalfd';
 import { EventFile, TimerFile } from './fd';
 import { activeProfile, unameRelease, UNAME_VERSION } from '../profile';
+import { memoryInfo } from '../utils/sysinfo';
 
 /** Runs a process to completion; resolves with its exit code (or nothing if it exited through the kernel). */
 export type Runner = (proc: Process, kernel: Kernel) => Promise<number | void>;
@@ -208,11 +209,19 @@ export class Kernel {
     });
     this.procs.set(1, this.init);
     // /proc/PID/stat and status for kernel processes
-    addProcInfoSource((pid) => {
-      const p = this.procs.get(pid);
-      if (!p || pid === 1) return undefined;
-      const state = p.state === 'zombie' ? 'Z' : p.state === 'stopped' ? 'T' : p.sleeping() ? 'S' : 'R';
-      return { pid, ppid: p.ppid, pgid: p.pgid, sid: p.sid, comm: p.comm, state, cmdline: p.argv };
+    addProcInfoSource({
+      get: (pid) => {
+        const p = this.procs.get(pid);
+        if (!p) return undefined;
+        const state = p.state === 'zombie' ? 'Z' : p.state === 'stopped' ? 'T' : p.sleeping() ? 'S' : 'R';
+        return {
+          pid, ppid: p.ppid, pgid: p.pgid, sid: p.sid, comm: p.comm, state, cmdline: p.argv,
+          cwd: p.cwd, environ: p.env, exe: typeof p.data.exe === 'string' ? p.data.exe : p.path,
+          fds: p.fds.entries().map(([fd, f]) => [fd, fdTarget(f)] as [number, string]),
+          startMs: p.startTime, uid: p.uid, gid: p.gid,
+        };
+      },
+      list: () => [...this.procs.keys()],
     });
     this.registerDevice('/dev/null', (_p, f) => new DevNull(f));
     this.registerDevice('/dev/zero', (_p, f) => new DevZero(f));
@@ -773,6 +782,7 @@ export class Kernel {
       promise: p.wait().then(A.shellExitCode),
       kill: () => { this.kill(p.pid, A.SIGKILL); },
       abortController: null,
+      zombie: p.state === 'zombie',
     };
   }
 
@@ -2133,9 +2143,23 @@ export class Kernel {
           if (!open && proc.uid !== 0) return -A.EPERM;
           return await klog.syslogAction(type, data, args[1] | 0, sig);
         }
+        case A.SYS_sysinfo: { // → struct sysinfo: the memory free and /proc/meminfo report (src/utils/sysinfo.ts)
+          if (data.length < A.SYSINFO_SIZE) return -A.EFAULT;
+          const v = new DataView(data.buffer, data.byteOffset, A.SYSINFO_SIZE);
+          data.fill(0, 0, A.SYSINFO_SIZE);
+          const mem = memoryInfo();
+          const load = BigInt(Math.round(this.procfs.running() * 65536));
+          v.setBigInt64(0, BigInt(Math.floor((Date.now() - bootMs) / 1000)), true); // uptime
+          for (let i = 0; i < 3; i++) v.setBigUint64(8 + i * 8, load, true); // loads[3], 1<<16 fixed point
+          v.setBigUint64(32, BigInt(mem.total), true); // totalram
+          v.setBigUint64(40, BigInt(mem.free), true); // freeram
+          v.setUint16(80, Math.min(0xffff, this.procs.size), true); // procs
+          v.setUint32(104, 1, true); // mem_unit
+          return 0;
+        }
         case A.SYS_uname: { // → struct utsname (engines that report their own machine take the names from here)
           if (data.length < A.UTSNAME_FIELD * 6) return -A.EFAULT;
-          const fields = ['Linux', this.hostname, unameRelease(this.hostname), UNAME_VERSION, 'wasm32', '(none)'];
+          const fields = ['Linux', this.hostname, unameRelease(this.hostname), UNAME_VERSION, 'x86_64', '(none)'];
           data.fill(0, 0, A.UTSNAME_FIELD * 6);
           fields.forEach((f, i) => data.set(enc.encode(f).subarray(0, A.UTSNAME_FIELD - 1), i * A.UTSNAME_FIELD));
           return 0;

@@ -3154,8 +3154,8 @@ describe('Shell Advanced', () => {
     it('cat /proc/self/status shows process info', async () => {
       const { output, exitCode } = await run(shell, 'cat /proc/self/status');
       expect(exitCode).toBe(0);
-      expect(output).toContain('Name:');
-      expect(output).toContain('shiro');
+      expect(output).toMatch(/^Name:\t(sh|bash)\r?$/m);
+      expect(output).toMatch(/^Pid:\t\d+\r?$/m);
     });
 
     it('test -f /proc/version is true', async () => {

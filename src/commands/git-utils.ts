@@ -69,16 +69,18 @@ export function unifiedDiff(oldLines: string[], newLines: string[]): string {
         break;
       }
     }
-    let oldStart = 1, newStart = 1, oldCount = 0, newCount = 0;
-    let first = true;
-    for (let j = hunkStart; j < hunkEnd; j++) {
-      if (first && edits[j].oldIdx != null) { oldStart = edits[j].oldIdx! + 1; first = false; }
-      if (first && edits[j].newIdx != null) { newStart = edits[j].newIdx! + 1; first = false; }
-      if (edits[j].type <= 0 && edits[j].oldIdx != null) oldCount++;
-      if (edits[j].type >= 0 && edits[j].newIdx != null) newCount++;
+    let oldCount = 0, newCount = 0, oldBefore = 0, newBefore = 0;
+    for (let j = 0; j < hunkStart; j++) {
+      if (edits[j].type <= 0) oldBefore++;
+      if (edits[j].type >= 0) newBefore++;
     }
-    if (first) { oldStart = 1; newStart = 1; }
-    out += `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@\n`;
+    for (let j = hunkStart; j < hunkEnd; j++) {
+      if (edits[j].type <= 0) oldCount++;
+      if (edits[j].type >= 0) newCount++;
+    }
+    // as git writes it: "-5" for one line, "-4,0" (the line before) for none
+    const range = (before: number, count: number) => `${count ? before + 1 : before}${count === 1 ? '' : ',' + count}`;
+    out += `@@ -${range(oldBefore, oldCount)} +${range(newBefore, newCount)} @@\n`;
     for (let j = hunkStart; j < hunkEnd; j++) {
       const e = edits[j];
       if (e.type === 0) out += ` ${e.old}\n`;
