@@ -72,6 +72,11 @@ export interface FSNode {
    * read fetches it through the registered lazy loader and stores it.
    */
   lazy?: LazyRef;
+  /**
+   * A special file: 'fifo' is a named pipe (mkfifo). It is stored like an
+   * empty regular file; the kernel attaches opens of it to a pipe.
+   */
+  special?: 'fifo';
 }
 
 /** Where a lazy file's bytes are: `len` bytes at `off` in chunk `chunk` of source `src`. */
@@ -94,6 +99,8 @@ export interface StatResult {
   isFile(): boolean;
   isDirectory(): boolean;
   isSymbolicLink(): boolean;
+  /** A named pipe (FSNode.special === 'fifo'). */
+  isFIFO(): boolean;
 }
 
 export function makeStat(node: FSNode): StatResult {
@@ -127,7 +134,7 @@ export function makeStat(node: FSNode): StatResult {
     isSymbolicLink() { return node.type === 'symlink'; },
     isBlockDevice() { return false; },
     isCharacterDevice() { return false; },
-    isFIFO() { return false; },
+    isFIFO() { return node.special === 'fifo'; },
     isSocket() { return false; },
   } as any;
 }
@@ -1215,6 +1222,20 @@ export class FileSystem {
     // Through a symlink, append to its target rather than replacing the link
     const target = this.virtualProviders.some(vp => vp.handles(path)) ? path : await this._canon(path, true);
     await this.writeFile(target, combined);
+  }
+
+  /** Create a named pipe (mkfifo(3)). EEXIST if `path` exists; the parent must exist. */
+  async mkfifo(path: string, mode = 0o644): Promise<void> {
+    if (await this._get(path)) throw fsError('EEXIST', `EEXIST: file already exists, mkfifo '${path}'`);
+    const parent = path.substring(0, path.lastIndexOf('/')) || '/';
+    const dir = await this._get(parent);
+    if (!dir) throw fsError('ENOENT', `ENOENT: no such file or directory, mkfifo '${path}'`);
+    if (dir.type !== 'dir') throw fsError('ENOTDIR', `ENOTDIR: not a directory, mkfifo '${path}'`);
+    const node = this._makeNode(path, 'file');
+    node.special = 'fifo';
+    node.mode = mode & 0o7777;
+    await this._put(node);
+    this._emitChange('write', path);
   }
 
   async mkdir(path: string, options?: { recursive?: boolean }): Promise<void> {
