@@ -149,7 +149,9 @@ export function groupStatements(src: string): Statement[] {
       if (ch === ')') {
         lineOut += ch; i++;
         if (parens.length) {
-          const wasEmpty = line[i - 2] === '(' && line[i - 3] !== '='; // name() — not an empty array a=()
+          // name() or name ( ) — not an empty array a=()
+          const open = lineOut.lastIndexOf('(', lineOut.length - 2);
+          const wasEmpty = open >= 0 && !lineOut.slice(open + 1, -1).trim() && lineOut[open - 1] !== '=';
           parens.pop();
           // `name()` is followed by the function body, a compound command
           cmdPos = wasEmpty;

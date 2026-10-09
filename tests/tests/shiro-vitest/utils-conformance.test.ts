@@ -127,4 +127,15 @@ describe('utilities conformance regressions', () => {
     const r = await sh('cd /tmp; mkdir -p gr/foo; echo bar > gr/foo/file; ln -s foo gr/symfoo; grep -r . gr; grep -r . gr/symfoo; grep -R . gr | sort');
     expect(r.out).toBe('gr/foo/file:bar\ngr/symfoo/file:bar\ngr/foo/file:bar\ngr/symfoo/file:bar\n');
   });
+
+  it('readlink -f/-e/-m need existing components; rmdir -p; sha1sum -c with one space', async () => {
+    const r = await sh([
+      'cd /tmp; mkdir -p rt/d; touch rt/d/f; ln -s d/f rt/l; ln -s nowhere rt/dang',
+      'readlink -f ./rt/rt/x; echo st=$?; readlink -f rt/l rt/nonexist rt/dang; readlink -e rt/nonexist; echo st3=$?',
+      'readlink -m rt/a/b; readlink rt/l; readlink rt/d/f; echo st4=$?; readlink -f rt/d/../l',
+      'mkdir -p p1/p2/p3; rmdir -p p1/p2/p3; test -d p1 || echo gone',
+      'touch EMPTY; echo "da39a3ee5e6b4b0d3255bfef95601890afd80709 EMPTY" | sha1sum -c',
+    ].join('; '));
+    expect(r.out).toBe('st=1\n/tmp/rt/d/f\n/tmp/rt/nonexist\n/tmp/rt/nowhere\nst3=1\n/tmp/rt/a/b\nd/f\nst4=1\n/tmp/rt/d/f\ngone\nEMPTY: OK\n');
+  });
 });

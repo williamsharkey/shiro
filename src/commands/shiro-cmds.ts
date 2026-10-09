@@ -370,12 +370,44 @@ export const rmdirCmd: Command = {
   name: 'rmdir',
   description: 'Remove empty directories',
   async exec(ctx) {
-    for (const arg of ctx.args) {
-      const resolved = ctx.fs.resolvePath(arg, ctx.cwd);
-      try { await ctx.fs.rmdir(resolved); }
-      catch (e: any) { ctx.stderr += `rmdir: ${e.message}\n`; return 1; }
+    // -p: also each parent named in the operand (a/b/c, then a/b, then a)
+    let parents = false, ignoreNonEmpty = false, verbose = false;
+    const dirs: string[] = [];
+    let opts = true;
+    for (const a of ctx.args) {
+      if (opts && a === '--') { opts = false; continue; }
+      if (opts && a === '--parents') { parents = true; continue; }
+      if (opts && a === '--ignore-fail-on-non-empty') { ignoreNonEmpty = true; continue; }
+      if (opts && a === '--verbose') { verbose = true; continue; }
+      if (opts && /^-[pv]+$/.test(a)) { parents ||= a.includes('p'); verbose ||= a.includes('v'); continue; }
+      dirs.push(a);
     }
-    return 0;
+    if (!dirs.length) { ctx.stderr += 'rmdir: missing operand\n'; return 1; }
+    let rc = 0;
+    for (const arg of dirs) {
+      let d = arg.replace(/\/+$/, '') || arg;
+      for (;;) {
+        try {
+          await ctx.fs.rmdir(ctx.fs.resolvePath(d, ctx.cwd));
+          if (verbose) ctx.stdout += `rmdir: removing directory, '${d}'\n`;
+        } catch (e: any) {
+          const msg = /ENOTEMPTY|not empty/i.test(e?.message ?? '') ? 'Directory not empty'
+            : /ENOENT/.test(e?.message ?? '') ? 'No such file or directory'
+            : /ENOTDIR/.test(e?.message ?? '') ? 'Not a directory' : e?.message ?? String(e);
+          if (!(ignoreNonEmpty && msg === 'Directory not empty')) {
+            ctx.stderr += `rmdir: failed to remove '${d}': ${msg}\n`;
+            rc = 1;
+          }
+          break;
+        }
+        if (!parents) break;
+        const slash = d.lastIndexOf('/');
+        if (slash <= 0) break;
+        d = d.slice(0, slash).replace(/\/+$/, '');
+        if (!d) break;
+      }
+    }
+    return rc;
   },
 };
 
