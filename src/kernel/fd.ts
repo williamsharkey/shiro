@@ -585,12 +585,36 @@ export async function unlinkInode(fs: FileSystem, path: string): Promise<void> {
   await ino.flush();
 }
 
+/** Write out pending data of an open file at `path` (before a metadata update reads and rewrites its node). */
+export async function flushInode(fs: FileSystem, path: string): Promise<void> {
+  await inodeTables.get(fs)?.get(path)?.flush();
+}
+
+/** Size and mtime of a file open at `path`, which may be ahead of the filesystem's copy. */
+export function openInodeInfo(fs: FileSystem, path: string): { size: number; mtimeMs: number } | undefined {
+  const ino = inodeTables.get(fs)?.get(path);
+  return ino && !ino.unlinked ? { size: ino.size, mtimeMs: ino.mtimeMs } : undefined;
+}
+
 /** Stable small inode numbers for paths (the FileSystem has none). */
 const inoNumbers = new Map<string, number>();
+let nextIno = 2;
 export function inodeNumber(path: string): number {
   let n = inoNumbers.get(path);
-  if (!n) { n = inoNumbers.size + 2; inoNumbers.set(path, n); }
+  if (!n) { n = nextIno++; inoNumbers.set(path, n); }
   return n;
+}
+
+/**
+ * link() copies (no hard links), but the copy reports its source's inode
+ * number, as a hard link would: git's local clone checks that. A path that
+ * is removed or replaced gets a fresh number.
+ */
+export function shareInodeNumber(from: string, to: string): void {
+  inoNumbers.set(to, inodeNumber(from));
+}
+export function forgetInodeNumber(path: string): void {
+  inoNumbers.delete(path);
 }
 
 export class RegularFile implements OpenFile {

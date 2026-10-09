@@ -24,6 +24,14 @@ guest (x86 / WASM / node net)                         server.mjs                
 - Loopback (`127.0.0.0/8`, `::1`, `localhost`) never leaves the page: it
   reaches a socket listening in the same kernel. `socketpair()` gives two
   connected ends.
+- AF_UNIX stream sockets: `bind()` to a path makes the socket file (it stats
+  as `S_IFSOCK`; `kernel.socketPaths`), `"\0name"` is an abstract name;
+  `connect()` finds the listener in the same kernel (`-ENOENT` when the file
+  is gone, `-ECONNREFUSED` when nothing listens). `sendmsg` with
+  `SCM_RIGHTS` passes open file descriptions: the bytes that carry them start
+  a message of their own and the descriptions arrive with them (`recvmsg`),
+  or are closed by a plain `recv`. `SO_PEERCRED` gives the peer's pid.
+  No AF_UNIX datagrams yet.
 - `listen()` also publishes the port on Shiro's virtual-server table
   (`iframeServer.serve`, the table `http.createServer` uses). Each virtual HTTP
   request (preview pane, `iframeServer.fetch`) becomes an accepted connection
@@ -71,10 +79,14 @@ when `proc.syscallSignal` aborts.
 | recvfrom (45) | fd, len, flags | → bytes, sender sockaddr at offset len (28 bytes reserved) | n, 0 = EOF |
 | shutdown (48) | fd, how | | 0 |
 | setsockopt (54) | fd, level, name, value (int; SO_RCVTIMEO/SO_SNDTIMEO in ms) | | 0 |
-| getsockopt (55) | fd, level, name | | value ≥ 0 or -errno |
+| getsockopt (55) | fd, level, name | | value ≥ 0 or -errno (SO_PEERCRED: the peer's pid) |
+| sendmsg (46) | fd, len, flags, addrLen, ctrlLen | bytes, sockaddr, control (Linux `cmsghdr` layout; `SCM_RIGHTS`) | n |
+| recvmsg (47) | fd, len, flags (`MSG_CMSG_CLOEXEC`), ctrlCap | → bytes, sockaddr (28 bytes reserved), u32 controllen, u32 msg_flags (`MSG_CTRUNC`), control | n, 0 = EOF |
 
-sendmsg/recvmsg are left to the guest library (gather/scatter around
-sendto/recvfrom); the x86 emulator implements them itself.
+bind/connect/getsockname take a `sockaddr_un` whole (up to 110 bytes);
+accept and recvfrom report an AF_UNIX peer that doesn't fit their 28 bytes as
+unnamed. Guest libraries without fd passing can still do sendmsg/recvmsg as
+gather/scatter around sendto/recvfrom.
 
 ## Relay protocol (`/tcp`)
 
@@ -207,7 +219,7 @@ into them, loopback listen/accept, and the iframeServer HTTP bridge.
 ## Not done yet
 
 - `SIGPIPE` in the x86 emulator (it has no signal delivery; sends return `-EPIPE`).
-- AF_UNIX path sockets (only `socketpair`).
+- AF_UNIX datagram and seqpacket sockets.
 - UDP beyond DNS.
 - `net.connect` to a port served by `http.createServer` (that server is not a
   kernel socket).

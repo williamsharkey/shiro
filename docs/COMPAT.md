@@ -100,3 +100,132 @@ Known issues found along the way (not fixed here):
   newline-separated string (`proc_exec3`), so an argument containing a
   newline arrives split. Autoconf-style `configure` scripts that hand sed a
   multi-line script break that way; Shiro's own shell can't run them either.
+
+## CLI tools, editors and TUIs (unix/compat-tools)
+
+Smoke tests: `tests/tests/shiro-vitest/compat-tools.test.ts`, one `describe`
+per package, run from the shell as kernel processes; the interactive ones
+on a terminal pty (raw mode, alternate screen, resize, Ctrl-C/Ctrl-Z).
+Most packages here are static x86-64 builds, from `scripts/pkgbuild/x86/`
+(pinned upstream source and musl.cc toolchain) or upstream's own static
+releases (pinned sha256), installed with `pkg install` and run in Blink, so
+they need a cross-origin isolated page (`"needs": ["x86"]`). Rows marked
+WASI/WASIX are WASM packages run as kernel processes in workers.
+
+| Software | Version | Route | Status | Tested | Known issues |
+| --- | --- | --- | --- | --- | --- |
+| less | 710 | pkg (Blink) | works | pages a file on the tty (alternate screen), `/search`, `G`, `q`; `seq \| less` reads the pipe and takes keys from /dev/tty; plain output when piped | |
+| nano | 9.2 | pkg (Blink) | works | edit, `^O` save, `^X` quit on the tty; C syntax colours from /usr/share/nano | |
+| diff, cmp, diff3, sdiff | 3.12 (GNU diffutils) | pkg (Blink) | works | `diff -u` exit codes, `cmp` | |
+| patch | 2.8 (GNU) | pkg (Blink) | works | applies a unified diff | |
+| awk (gawk) | 5.4.1 | pkg (Blink) | works | fields, arrays, `asorti`, `gensub`, printf | no extensions, no MPFR |
+| sed | 4.10 (GNU) | pkg (Blink) | works | `s///g`, `-n p`, `-E`, `-i` | |
+| grep | 3.12 (GNU) | pkg (Blink) | works | `-r` over directories, `-n -c -i -v -o`, `egrep`, exit 1 on no match | no PCRE (`-P`) |
+| find, xargs | 4.11.0 (GNU findutils) | pkg (Blink) | works | `-name -type -exec {} \;`, `-print0 \| xargs -0` | |
+| bc, dc | 1.08.2 (GNU) | pkg (Blink) | works | `bc -l` 20 digits of π, bignums, `dc` | |
+| tar | 1.35 (GNU) | pkg (Blink) | works | `czf` (gzip run as a child through `/bin/sh`), `tzf`, `xzf -C` | |
+| gzip, gunzip, zcat | 1.15 (GNU) | pkg (Blink) | works | `-k`, `-c`, `-d`, `-t`, binary output redirected to a file | |
+| vim | 9.2.0000 | pkg (Blink) | works | edit + `:wq`; syntax colours from the runtime; `:help`; resize (SIGWINCH) updates `&columns`/`&lines`; Ctrl-Z stops it, `fg` resumes; `vim -es` scripting | Startup with `filetype`/`syntax` is slow (seconds): Blink interprets x86 at ~1/120 native speed. No POSIX timers (`timer_create`), so no `'redrawtime'` timeout |
+| tmux | 3.8 | pkg (Blink; libevent 2.1, ncurses 6.5) | works | `new-session` on the tty: status line, a shell in the pane, `C-b %` split, `C-b d` detach; `list-panes`, `send-keys` into a detached session; re-attach on a bigger terminal; `kill-session` | Slow to draw (emulated). After re-attaching at a new size the status line waits for the next key, which tmux then takes as input. The `tmux` builtin is replaced while the package is installed |
+| screen | 5.0.2 (GNU) | pkg (Blink; ncurses 6.5) | works | session on the tty: shell window, `C-a c` new window, `C-a d` detach; `-ls`, `-X stuff` into a detached session, `-r` re-attach, `-X quit` | no PAM/utmp; sockets in `~/.screen` (no setuid socket directory). The builtin `screen`, if any, is replaced while the package is installed |
+| htop | 3.5.3 | pkg (Blink; ncurses 6.5) | works | CPU, memory, load and uptime meters; the process list from the kernel `/proc`; `q` quits | CPU% is an estimate (wall time minus time in syscalls); memory per process reads 0; one CPU meter per `navigator.hardwareConcurrency` |
+| top, ps, free, uptime, vmstat, pgrep, pkill, pidof, watch, w | 4.0.7 (procps-ng) | pkg (Blink; ncurses 6.5) | works | `ps -ef`/`-o`, `free -m`, `uptime`, `vmstat`, `top -b` over two refreshes, `pgrep`/`pkill` of a running program | `w` lists no users (no utmp); no `kill` (the shell's builtin) |
+| tree | 2.2.1 | pkg (Blink) | works | tree drawing and counts, `-d --noreport` | |
+| file | 5.46 | pkg (Blink) | works | shell script, JSON, PNG, gzip, ELF; `--mime-type` (magic database mapped with `mmap`) | |
+| xz, xzcat, unxz | 5.8.1 | pkg (Blink) | works | `-k`, `-l`, `xzcat`; `tar -J` | single-threaded |
+| zstd, zstdcat, unzstd | 1.5.7 | pkg (Blink) | works | `-19`, `zstdcat`; `tar --zstd` | |
+| zip | 3.0 (Info-ZIP) | pkg (Blink) | works | `zip -qr` | no bzip2 method |
+| unzip, zipinfo | 6.0 (Info-ZIP, Debian patches) | pkg (Blink) | works | `-l`, `-t`, `-d`, `zipinfo -1` | no bzip2 method |
+| git | 2.56.0 | pkg (Blink) | works | init, add, commit, log, diff, branch, checkout, merge, stash, tag, describe, status; `git clone` of a local repository | Perl/Python/Tcl parts left out (`git add -i` is the C version; no `git svn`, `gitk`, `send-email`). Remote clones need https through the network relay (curl is linked in) — not in the automated test. Slow on big repositories |
+| openssl | 3.5.9 | pkg (Blink) | works | `dgst -sha256`, `enc -aes-256-cbc -pbkdf2`, `rand`, Ed25519 `genpkey`, self-signed `req -x509`, `x509 -subject` | no engines/providers beyond the default |
+| curl | 8.22.0 (OpenSSL 3.5.9, zlib) | pkg (Blink) | works | HTTP GET with headers against a loopback server on kernel sockets; connection refused is exit 7 | Remote hosts go through the server's WebSocket-to-TCP relay and DNS-over-HTTPS (not in the automated test). No HTTP/2, HTTP/3, IDN, libssh2 |
+| ca-certificates | 2026-09-25 (Mozilla, via curl.se) | pkg | works | `/etc/ssl/certs/ca-certificates.crt`, `/etc/ssl/cert.pem`; openssl and curl depend on it | |
+| wget | 1.25.0 (GNU; OpenSSL 3.5.9, zlib) | pkg (Blink) | works | download to a file and `-O-` from a loopback HTTP server; exit 4 on a network failure | remote hosts through the TCP relay (as curl); no IRI/IDN, PSL, metalink |
+| rsync | 3.5.1 | pkg (Blink) | works | `-a` copy, `-i` itemized delta with `--delete`, `-n` dry run finds nothing after a sync | local copies only until there is an ssh; no xxhash/zstd/lz4, ACLs or xattrs |
+| man, apropos, whatis, makewhatis | 1.14.6 (mandoc) | pkg (Blink) | works | `man -w`, formatting `man(1)`/`mandoc(1)`, `makewhatis` then `whatis`/`apropos` | only pages packages install (mandoc's own so far); pager is `less` (`pkg install less`) |
+| jq | 1.8.1 | pkg (WASI) | works | filters, `-r`, `-s`, `gsub` (oniguruma), `-e` exit status | |
+| ripgrep | 15.2.0 | pkg (WASIX) | works as `/usr/bin/rg` | `.gitignore`, `-t`, `-g`, `-c`, `-l`, exit 1 on no match | plain `rg` is Shiro's builtin (the package doesn't take the name); no PCRE2; one search thread |
+| sqlite3 | 3.50.4 | pkg (WASI) | works | database file, queries, SQL on stdin, `-json` | interactive shell wants blocking stdin |
+| coreutils (uutils) | 0.12.0 | pkg (WASI) | works | `coreutils sha256sum`, `/usr/bin/factor`, `sort -n`, `tr`, `numfmt`, `seq` | builtins keep the plain names; use `/usr/bin/NAME` or `coreutils NAME` |
+| fd | 10.3.0 | pkg (Blink; upstream static musl release) | works | `-e`, `-t d`, `.gitignore` respected, `-u` | |
+| bat | 0.26.1 | pkg (Blink; upstream static musl release) | works | highlighting with the built-in themes (default and `--theme`), `-n`, plain output when piped, `--list-languages` | needed Blink patches 0017 (`pextrw`) and 0018 (`FUTEX_WAIT_BITSET`, `GRND_INSECURE`) and kernel `FIONBIO` on pipes |
+| fzf | 0.74.0 | pkg (Blink; upstream static Go release) | works | `-f` filter; the TUI with `--height` on the tty (cursor position report, typing narrows the list, Enter prints the pick) | Go runtime in Blink: start-up takes about a second |
+| yq | 4.52.1 (mikefarah) | pkg (Blink; upstream static Go release) | works | path query, `-o json`, `-i` in-place edit | |
+
+Shiro changes these programs needed (tests in `x86-engine.test.ts`,
+`kernel-core.test.ts` and the smoke tests):
+
+- Real `fork()` for Blink guests (patch 0014): a snapshot of the process is
+  rebuilt in a new worker, so a child can run alongside its parent without
+  exec (GNU tar's compressor helper). `x86-engine.test.ts`.
+- `/bin/sh` as a kernel process (`system()`, `popen()`, `sh -c`, tar's
+  `-z`): the forked Shiro shell is that process, and programs it starts get
+  its real fds and process group (`Shell.kernelHost`), so binary data and the
+  tty pass through.
+- `prog > file`, `>> file`, `2> file`, `2>&1` on kernel programs: the kernel
+  opens the file and the program writes it directly (binary-safe, streamed).
+- Builtins run as programs: PATH shims for more of them
+  (`src/path-shims.ts`, also used at boot), `/bin/echo`-style paths of shell
+  builtins, and an installed package's program wins over a filter builtin
+  in pipelines too (`gzip`, `sort`, ...). `sort -z`.
+- Blink guests use the kernel's fds and processes (Blink patch 0011): the
+  terminal is the real pty (`/dev/tty`, termios, `TIOCGWINSZ`), pipes are
+  kernel pipes, `fork`/`vfork`/`posix_spawn` + `execve` + `wait4` work
+  (vfork semantics), signals a program catches are delivered to it and
+  stop signals stop it in the kernel (patch 0013). `x86-engine.test.ts`.
+- The filesystem follows symlinks in directory components
+  (`/usr/share/vim/vim92/...` through the `/usr/share/vim` link vim's package
+  installs).
+- `pkg` installs x86-64 packages: gzip-compressed binaries, `.tar.gz` data
+  trees, links outside the package root (`"links"`), executable modes.
+- `/etc/passwd`, `/etc/group`, `/etc/hosts`, `/etc/hostname` exist; the
+  shell exports `LANG=C.UTF-8`.
+- `mmap` of a kernel file in a Blink guest (patch 0015 fixes a deadlock it
+  hit; `file` maps its magic database).
+- Blink: `pextrw` zero-extends its result (patch 0017; Rust's inflate built
+  with LTO, so every compressed asset in bat failed to load), futex
+  `FUTEX_WAIT_BITSET`/`FUTEX_WAKE_BITSET` and `getrandom(GRND_INSECURE)`
+  (patch 0018; Rust's std), `MADV_DONTNEED` (patch 0016). `x86-engine.test.ts`.
+- AF_UNIX path sockets, `sendmsg`/`recvmsg` with `SCM_RIGHTS` and
+  `SO_PEERCRED` in the kernel (Blink patch 0019): the tmux client and server
+  talk over `/tmp/tmux-1000/default` and the client hands over its tty.
+  `kernel-net.test.ts`, `x86-engine.test.ts`.
+- `sh` run as a program on a terminal with no script (a tmux pane, or `-i`)
+  is interactive: a `PS1` prompt (default `\u@\h:\w\$ `), a line read from
+  the tty in canonical mode, Ctrl-C/Ctrl-Z/Ctrl-\ left to its foreground
+  children, `exit` or EOF to end.
+- A kernel `/proc` (`src/kernel/procfs.ts`): `/proc/self`, `/proc/PID/`
+  (`stat`, `status`, `cmdline`, `comm`, `environ`, `cwd`, `exe`, `fd/N`,
+  `task`), and `/proc/stat`, `/proc/loadavg`, `/proc/uptime` from the process
+  table; musl's `ttyname()` (screen's "Must be connected to a terminal")
+  reads `/proc/self/fd/0`. CPU time is estimated (wall time minus time in
+  syscalls); memory sizes read 0. `kernel-core.test.ts`.
+- `/proc` files regenerate when rewound (procps keeps `/proc/stat` open),
+  counters in `/proc/stat` never go backwards, `/proc/vmstat` exists, and
+  `CLOCK_BOOTTIME` comes from the kernel (Blink patch 0021; kernel
+  `clock_gettime`), so uptime and process start times agree with `/proc`.
+- ptys: `TIOCPKT` packet mode on the master; `stat()` of a tty no longer
+  makes it the caller's controlling terminal or leaves a slave open (screen's
+  windows got `fgtty: Not a tty`). Blink's `pause()` now sees signals (patch 0020)
+  (screen's attacher waits in it). `kernel-pty.test.ts`.
+- `ioctl(FIONBIO)` works on every file, pipes included (Rust's
+  `Command::output()`). `kernel-core.test.ts`.
+- Blink keeps its own log in its in-memory root (`-L /blink.log`), not in
+  the program's working directory.
+- `rename` keeps a file's modification time (it set it to now): `rsync -a`
+  sets times on a temp file and renames it. `filesystem.test.ts`.
+- `link(2)` still copies (the filesystem has no hard links) but the copy
+  reports the source's inode number, which git's local clone checks.
+  `kernel-core.test.ts`.
+
+Building and publishing one of these packages:
+
+```bash
+export PKG_WORK=$PWD/.pkgbuild          # downloads, toolchain, build trees
+bash scripts/pkgbuild/x86/vim.sh        # -> $PKG_WORK/out/vim/{bin,share}
+bash scripts/pkgbuild/x86/publish.sh vim 9.2.0000   # -> public/pkg/vim/9.2.0000/*.gz, prints index entries
+```
+
+ncurses-based programs are linked against a static ncurses 6.5 with
+`xterm-256color`, `xterm`, `screen*`, `tmux*`, `linux`, `vt100`, `vt220` and
+`dumb` compiled in, so they work without a terminfo database.

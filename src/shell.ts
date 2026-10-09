@@ -262,6 +262,8 @@ export class Shell {
   history: string[] = [];
   commands: CommandRegistry;
   lastExitCode: number = 0;
+  /** The `exit` builtin ended this shell (an interactive loop stops reading). */
+  exited = false;
   functions: Record<string, { body: string }> = {};
   backgroundJobs: Map<number, BackgroundJob> = new Map();
   /** Shell options: errexit (-e), xtrace (-x), nounset (-u), verbose (-v) */
@@ -292,6 +294,13 @@ export class Shell {
   disabledBuiltins: Set<string> = new Set();
   /** `builtin NAME` runs Shiro's NAME even when a package provides NAME */
   pkgShadowBypass: string | null = null;
+  /**
+   * Set when this shell runs as a kernel process (`sh -c CMD` exec'd by a
+   * program, kernel.ts runShellProcess): kernel programs it starts get that
+   * process's real fds 0-2 (binary-safe, the tty) and stay in its process
+   * group, as a real non-interactive sh would do it.
+   */
+  kernelHost: { kernel: import('./kernel/kernel').Kernel; proc: import('./kernel/process').Process } | null = null;
   /** File descriptors for `read -u FD` and `exec N< file` */
   fileDescriptors: Map<number, { content: string; offset: number }> = new Map();
   /** Coproc state: { name, pid, output } */
@@ -317,6 +326,8 @@ export class Shell {
     this.env = {
       HOME: '/home/user',
       USER: 'user',
+      LOGNAME: 'user',
+      LANG: 'C.UTF-8',
       SHELL: '/bin/sh',
       PATH: '/usr/local/bin:/usr/bin:/bin',
       PWD: '/home/user',
@@ -440,6 +451,7 @@ export class Shell {
     child.dirStack = [...this.dirStack];
     child.history = this.history; // share history array reference
     child.completionSpecs = new Map(this.completionSpecs);
+    child.kernelHost = this.kernelHost;
     return child;
   }
 
@@ -582,6 +594,7 @@ export class Shell {
       // a subshell or $(...) each run in their own Shell), which runs the EXIT trap
       if (e instanceof ExitSignal && depth === 0 && this.sourcing === 0) {
         this.executeDepth = 0;
+        this.exited = true;
         await this.runExitTrap(writeStdout, writeStderr || writeStdout, terminalOverride);
         this.lastExitCode = e.code;
         this.env['?'] = String(e.code);
@@ -6080,10 +6093,28 @@ export class Shell {
     }
     // Only worth it when a real kernel program is involved
     if (!programs.some(p => !p.builtin)) return null;
+    // `> file`, `>> file`, `2> file`, `2>&1` on the last stage: the kernel opens
+    // the files and the programs write them directly (binary-safe, streamed)
+    let stdoutTo: { path: string; append: boolean } | undefined;
+    let stderrTo: { path: string; append: boolean } | 'stdout' | undefined;
+    let handled = false;
+    if (lastRedirects.length && lastRedirects.every(x =>
+      x.type === '2>&1' || ((x.type === '>' || x.type === '>>' || x.type === '2>' || x.type === '2>>') && x.target && !x.target.startsWith('&') && (x.fd === undefined || x.fd === 1 || x.fd === 2)))) {
+      handled = true;
+      for (const x of lastRedirects) {
+        const file = { path: this.fs.resolvePath(x.target, this.cwd), append: x.type.endsWith('>>') };
+        if (x.type === '2>&1') { if (stdoutTo) stderrTo = 'stdout'; else handled = false; }
+        else if (x.type.startsWith('2') || x.fd === 2) stderrTo = file;
+        else stdoutTo = file;
+      }
+      if (!handled) { stdoutTo = undefined; stderrTo = undefined; }
+    }
+    if (handled) lastRedirects = [];
     const crlf = (w: (s: string) => void) => (t: string) => w(t.replace(/\r?\n/g, '\r\n'));
     const r = await runKernelPipeline(this, programs, {
       stdin: hasShellStdin ? ctx.stdin : undefined,
-      captureStdout: last < pipeline.length - 1 || hasOutRedirect(lastRedirects) || !!terminal?.captureStdout,
+      stdoutTo, stderrTo,
+      captureStdout: last < pipeline.length - 1 || hasOutRedirect(lastRedirects) || (!stdoutTo && !!terminal?.captureStdout),
       captureStderr: hasOutRedirect(lastRedirects),
       writeStdout: crlf(writeStdout),
       writeStderr: crlf(writeStderr),

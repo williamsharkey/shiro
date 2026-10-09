@@ -57,6 +57,7 @@ export const TCSBRK = 0x5409, TCXONC = 0x540a, TCFLSH = 0x540b;
 export const TIOCEXCL = 0x540c, TIOCNXCL = 0x540d, TIOCSCTTY = 0x540e, TIOCGPGRP = 0x540f, TIOCSPGRP = 0x5410;
 export const TIOCOUTQ = 0x5411, TIOCSTI = 0x5412, TIOCGWINSZ = 0x5413, TIOCSWINSZ = 0x5414;
 export const FIONREAD = 0x541b, TIOCINQ = FIONREAD, TIOCNOTTY = 0x5422, FIONBIO = 0x5421, TIOCGSID = 0x5429;
+export const TIOCPKT = 0x5420, TIOCGPKT = 0x80045438;
 export const TIOCGPTN = 0x80045430, TIOCSPTLCK = 0x40045431, TIOCGPTPEER = 0x5441;
 export const TCOOFF = 0, TCOON = 1, TCIOFF = 2, TCION = 3;
 export const TCIFLUSH = 0, TCOFLUSH = 1, TCIOFLUSH = 2;
@@ -201,6 +202,8 @@ export class Pty {
   sid = 0;
   /** Foreground process group (0 = none) */
   fgPgrp = 0;
+  /** TIOCPKT: master reads start with a status byte (0 = data). */
+  packetMode = false;
   readonly master: PtyFile;
 
   private rawq: number[] = [];
@@ -753,6 +756,15 @@ export class Pty {
         if (!need(4)) return -EFAULT;
         writeInt(arg, isMaster ? this.outq.reduce((n, c) => n + c.length, 0) : this.inputAvailable());
         return 0;
+      case TIOCPKT:
+        if (!isMaster) return -ENOTTY;
+        if (!need(4)) return -EFAULT;
+        this.packetMode = readInt(arg) !== 0;
+        return 0;
+      case TIOCGPKT:
+        if (!need(4)) return -EFAULT;
+        writeInt(arg, this.packetMode ? 1 : 0);
+        return 0;
       case TIOCOUTQ:
         if (!need(4)) return -EFAULT;
         writeInt(arg, isMaster ? 0 : this.outq.reduce((n, c) => n + c.length, 0));
@@ -858,7 +870,9 @@ export class Pty {
         const abort = hint instanceof AbortSignal ? hint : undefined;
         for (;;) {
           if (pty.outq.length) {
-            let n = 0;
+            // Packet mode: a TIOCPKT_DATA byte, then the data
+            let n = pty.packetMode ? 1 : 0;
+            if (n) { if (buf.length < 2) return -EINVAL; buf[0] = 0; }
             while (pty.outq.length && n < buf.length) {
               const chunk = pty.outq[0];
               const take = Math.min(chunk.length, buf.length - n);

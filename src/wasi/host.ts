@@ -302,6 +302,7 @@ export function wasmRunner(
   return async (proc, kernel) => {
     const mode = wasmProcessMode();
     if (mode === 'none') throw new Error('WASM processes need SharedArrayBuffer or JSPI');
+    if (exe) proc.data.exe = exe; // /proc/PID/exe (procfs), however the guest spells the path
     if (!proc.env.PWD) proc.env.PWD = proc.cwd;
     installWasiSyscalls(kernel);
     const preopens = await openPreopens(kernel, proc, extraPreopens, mounts);

@@ -143,7 +143,7 @@ export const sort: Command = {
     let delim: string | null = null;
     let numeric = false, reverse = false, unique = false, stable = false;
     let ignoreCase = false, humanNumeric = false, versionSort = false;
-    let ignoreBlanks = false, checkSorted = false;
+    let ignoreBlanks = false, checkSorted = false, zero = false;
     const positional: string[] = [];
 
     let i = 0;
@@ -157,6 +157,8 @@ export const sort: Command = {
         delim = args[++i];
       } else if (arg.startsWith('-t') && arg.length > 2) {
         delim = arg.slice(2);
+      } else if (arg === '--zero-terminated') {
+        zero = true;
       } else if (arg === '--') {
         positional.push(...args.slice(i + 1));
         break;
@@ -171,6 +173,7 @@ export const sort: Command = {
           else if (ch === 'V') versionSort = true;
           else if (ch === 'b') ignoreBlanks = true;
           else if (ch === 'c') checkSorted = true;
+          else if (ch === 'z') zero = true;
         }
       } else {
         positional.push(arg);
@@ -182,7 +185,9 @@ export const sort: Command = {
       const { content } = await readInput(
         positional, ctx.stdin, ctx.fs, ctx.cwd, ctx.fs.resolvePath
       );
-      let lines = content.split("\n").filter(Boolean);
+      // -z: records end with NUL instead of newline
+      const sep = zero ? "\0" : "\n";
+      let lines = content.split(sep).filter(Boolean);
 
       const cmp = makeComparator(keys, delim, numeric, false, ignoreCase, humanNumeric, versionSort, ignoreBlanks);
 
@@ -216,7 +221,7 @@ export const sort: Command = {
         if (!anyKeyReverse) lines.reverse();
       }
 
-      ctx.stdout += lines.join("\n") + "\n";
+      ctx.stdout += lines.length ? lines.join(sep) + sep : "";
       return 0;
     } catch (e: unknown) {
       ctx.stderr += `sort: ${e instanceof Error ? e.message : e}\n`;

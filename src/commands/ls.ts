@@ -164,7 +164,13 @@ export const ls: Command = {
         continue;
       }
 
-      if (stat.type === "file" || stat.type === "symlink") {
+      // A symlink to a directory named on the command line is listed as the
+      // directory (coreutils ls without -l/-d/-F follows it)
+      let isDirLink = false;
+      if (stat.type === "symlink" && !longFormat && !classify) {
+        try { isDirLink = (await ctx.fs.stat(resolved)).type === "dir"; } catch { /* dangling */ }
+      }
+      if (stat.type === "file" || (stat.type === "symlink" && !isDirLink)) {
         const baseName = resolved.split("/").pop()!;
         const name = colorize(baseName, stat, useColor) + (classify ? typeIndicator(stat) : '');
         results.push(longFormat ? formatLong(name, stat, humanReadable) : name);

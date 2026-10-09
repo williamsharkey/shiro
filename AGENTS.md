@@ -123,6 +123,7 @@ export const myCmd: Command = {
 - `pkg` / `apt` / `apt-get` (`src/commands/pkg.ts`, `src/pkg-manager.ts`) install prebuilt WASM programs from `src/pkg-index.json`: sha256-checked downloads into `/usr/lib/pkg/<name>/`, symlinks in `/usr/bin`, state in `/var/lib/pkg/status.json`. Details, the index format and the package status table are in [docs/PACKAGES.md](docs/PACKAGES.md).
 - The shell runs anything resolving into `/usr/lib/pkg/` through `runPackageBinary`: a kernel process via `runWasiProgram` when the page can block, else the in-page `WasiRT` (always for `wasi_unstable` programs). An installed package's command wins over a builtin of the same name unless its bin entry says `"shadow": false` (coreutils applets, every WASIX command); `builtin NAME` reaches the builtin.
 - Packages built here come from `scripts/pkgbuild/<name>.sh` (wasi-sdk, pinned sources) and live in `public/pkg/`; registry packages are Wasmer WebC containers read by `src/webc.ts`.
+- x86-64 packages (`abi: x86_64-linux`, recipes in `scripts/pkgbuild/x86/`) are static musl builds run in Blink; [docs/COMPAT.md](docs/COMPAT.md) is the scoreboard of popular tools (less, vim, ...) with a smoke test each in `compat-tools.test.ts`.
 - Packages that need kernel features (`needs`: wasix, processes, threads, sockets, ...) stay gated until the WASM process mode (`src/wasi/host.ts`) or `globalThis.__shiroKernel.features` provides them.
 
 ## Languages And Toolchains
@@ -180,6 +181,8 @@ Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` ha
 
 ## Gotchas
 
+- Blink guests (patch 0011) make their fd/file/process syscalls in the kernel: guest fd N is kernel fd N, `vfork`/`posix_spawn` run the child on the parent's thread until `execve`/`_exit`; `fork()` itself copies the process into a new worker (patch 0013).
+- Filesystem paths resolve symlinks in directory components (`_canon` in filesystem.ts); `lstat`/`unlink`/`readlink` don't follow the last one.
 - `vite-plugin-inline.ts` inlines the entry CSS into index.html but must keep the `.css` file: lazy chunks preload it, and the 404 made every such `import()` (WASM processes, the kernel shell) reject in production builds.
 - Blink engine: rebuild `public/engines/blink/blink.{mjs,wasm}` with `vendor/blink/build.sh` after changing `vendor/blink/patches/` or `shiro-net.js`; don't hand-edit the generated files. `host.mjs` is hand-written. Browsers refuse `TextDecoder.decode()` on SharedArrayBuffer views (Node doesn't), so decode a `.slice()` of channel data.
 

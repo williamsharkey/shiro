@@ -303,8 +303,8 @@ describe('package mounts', () => {
     vi.stubGlobal('fetch', vi.fn(cachedFetch));
     try {
       const { shell } = await createTestShell();
-      expect((await sh(shell, 'pkg install curl')).exitCode).toBe(0);
-      // /usr/bin/curl: the package doesn't take the name from Shiro's builtin curl
+      expect((await sh(shell, 'pkg install curl-wasix')).exitCode).toBe(0);
+      // curl-wasix (`curl` is the x86-64 build); /usr/bin/curl: the package doesn't take the name from Shiro's builtin curl
       const r = await sh(shell, '/usr/bin/curl -sS file:///openssl/ssl/certs/002c0b4f.0 | head -1');
       expect(r.out).toBe('-----BEGIN CERTIFICATE-----\n');
     } finally {

@@ -354,6 +354,126 @@ describe('kernel processes', () => {
     kernel.kill(proc.pid, A.SIGKILL);
   });
 
+  it('/proc: self, PID directories, fd links, stat/status/cmdline, getdents, system files', async () => {
+    const proc = kernel.spawn({ path: '/usr/bin/prog', argv: ['prog', '-x', 'a b'], cwd: '/tmp', fds: { 3: new BufferFile('') }, run: () => new Promise<number>(() => {}) });
+    const data = new Uint8Array(8192);
+    const enc2 = new TextEncoder();
+    const readlink = async (p: string) => {
+      const b = enc2.encode(p); data.set(b);
+      const n = await kernel.syscall(proc, A.SYS_readlink, [b.length, 4096], data);
+      return n < 0 ? n : new TextDecoder().decode(data.subarray(0, n));
+    };
+    const cat = async (p: string) => {
+      const f = await kernel.open(proc, p, A.O_RDONLY);
+      if (typeof f === 'number') return f;
+      const buf = new Uint8Array(8192);
+      const n = await f.read(buf);
+      await f.close();
+      return new TextDecoder().decode(buf.subarray(0, n));
+    };
+    expect(await readlink('/proc/self')).toBe(String(proc.pid));
+    expect(await readlink('/proc/self/cwd')).toBe('/tmp');
+    expect(await readlink('/proc/self/exe')).toBe('/usr/bin/prog');
+    expect(await readlink(`/proc/${proc.pid}/fd/9`)).toBe(-A.ENOENT);
+    await fs.writeFile('/tmp/procfd.txt', 'x');
+    const f = await kernel.open(proc, '/tmp/procfd.txt', A.O_RDONLY);
+    const fd = proc.fds.alloc(f as any);
+    expect(await readlink(`/proc/self/fd/${fd}`)).toBe('/tmp/procfd.txt');
+    expect(await readlink('/proc/99999/cwd')).toBe(-A.ENOENT);
+
+    const stat = (await cat(`/proc/${proc.pid}/stat`)) as string;
+    const fields = stat.trim().split(' ');
+    expect(fields.length).toBe(52);
+    expect(fields.slice(0, 2)).toEqual([String(proc.pid), '(prog)']);
+    expect(fields[2]).toMatch(/^[RS]$/);
+    expect(Number(fields[3])).toBe(proc.ppid);
+    expect(await cat('/proc/self/cmdline')).toBe('prog\0-x\0a b\0');
+    expect(await cat('/proc/self/comm')).toBe('prog\n');
+    expect(await cat('/proc/self/status')).toMatch(new RegExp(`^Name:\\tprog\n[^]*Pid:\\t${proc.pid}\n[^]*Uid:\\t1000`));
+    const pst = await kernel.statPath(proc, `/proc/${proc.pid}`);
+    expect(typeof pst !== 'number' && (pst.mode & A.S_IFMT)).toBe(A.S_IFDIR);
+    const lst = await kernel.statPath(proc, '/proc/self', false);
+    expect(typeof lst !== 'number' && (lst.mode & A.S_IFMT)).toBe(A.S_IFLNK);
+
+    // getdents of /proc lists the processes and the system files
+    const dirfd = proc.fds.alloc((await kernel.open(proc, '/proc', A.O_RDONLY | A.O_DIRECTORY)) as any);
+    const n = await kernel.syscall(proc, A.SYS_getdents64, [dirfd, 8192], data);
+    const names: string[] = [];
+    for (let off = 0; off < n;) {
+      const reclen = new DataView(data.buffer).getUint16(off + 16, true);
+      const end = data.indexOf(0, off + 19);
+      names.push(new TextDecoder().decode(data.subarray(off + 19, end)));
+      off += reclen;
+    }
+    expect(names).toEqual(expect.arrayContaining(['self', String(proc.pid), 'stat', 'meminfo', 'uptime', 'loadavg']));
+    expect(await cat('/proc/stat')).toMatch(/^cpu  \d+ 0 0 \d+ /);
+    expect(await cat('/proc/loadavg')).toMatch(/^\d+\.\d\d \d+\.\d\d \d+\.\d\d \d+\/\d+ \d+\n$/);
+    expect(await cat('/proc/uptime')).toMatch(/^\d+\.\d\d \d+\.\d\d\n$/);
+    expect(await kernel.open(proc, '/proc/self/stat', A.O_WRONLY)).toBe(-A.EACCES);
+    // a /proc file kept open and rewound reads fresh text (top's refresh)
+    const up = (await kernel.open(proc, '/proc/uptime', A.O_RDONLY)) as OpenFile;
+    const b1 = new Uint8Array(64);
+    const first = new TextDecoder().decode(b1.subarray(0, await up.read(b1)));
+    expect(await up.read(b1)).toBe(0);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(up.seek!(0, A.SEEK_SET)).toBe(0);
+    const second = new TextDecoder().decode(b1.subarray(0, await up.read(b1)));
+    expect(parseFloat(second)).toBeGreaterThan(parseFloat(first));
+    // CLOCK_BOOTTIME counts from the same boot as /proc/uptime
+    expect(await kernel.syscall(proc, A.SYS_clock_gettime, [7], data)).toBe(0);
+    const bootSecs = Number(new DataView(data.buffer).getBigInt64(0, true));
+    expect(Math.abs(bootSecs - parseFloat(second))).toBeLessThanOrEqual(1);
+    expect(await kernel.syscall(proc, A.SYS_clock_gettime, [99], data)).toBe(-A.EINVAL);
+    kernel.kill(proc.pid, A.SIGKILL);
+  });
+
+  it('an open file follows rename(2); an unlinked or replaced one is not written back', async () => {
+    const proc = kernel.spawn({ path: 'rn', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
+    const data = new Uint8Array(4096);
+    const enc = (s: string) => { const b = new TextEncoder().encode(s); data.set(b); return b.length; };
+    const open = async (p: string, flags: number) => kernel.syscall(proc, A.SYS_openat, [A.AT_FDCWD, enc(p), flags, 0o644], data);
+    const rename = async (a: string, b: string) => { const n = enc(a); data.set(new TextEncoder().encode(b), n); return kernel.syscall(proc, A.SYS_rename, [n, b.length], data); };
+    // write a temp file, rename it over the target while still open, keep writing (GNU patch, editors)
+    await fs.writeFile('/tmp/target.txt', 'old\n');
+    const fd = await open('/tmp/tmp.XXXX', A.O_WRONLY | A.O_CREAT | A.O_TRUNC);
+    data.set(new TextEncoder().encode('new\n'));
+    expect(await kernel.syscall(proc, A.SYS_write, [fd, 4], data)).toBe(4);
+    expect(await rename('/tmp/tmp.XXXX', '/tmp/target.txt')).toBe(0);
+    data.set(new TextEncoder().encode('more\n'));
+    expect(await kernel.syscall(proc, A.SYS_write, [fd, 5], data)).toBe(5);
+    expect(await kernel.syscall(proc, A.SYS_close, [fd], data)).toBe(0);
+    expect(await fs.readFile('/tmp/target.txt', 'utf8')).toBe('new\nmore\n');
+    expect(await fs.exists('/tmp/tmp.XXXX')).toBe(false);
+    // unlink while open: still readable, never recreated
+    const fd2 = await open('/tmp/gone.txt', A.O_RDWR | A.O_CREAT);
+    data.set(new TextEncoder().encode('data'));
+    await kernel.syscall(proc, A.SYS_write, [fd2, 4], data);
+    expect(await kernel.syscall(proc, A.SYS_unlink, [enc('/tmp/gone.txt')], data)).toBe(0);
+    await kernel.syscall(proc, A.SYS_write, [fd2, 4], data);
+    expect(await kernel.syscall(proc, A.SYS_close, [fd2], data)).toBe(0);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(await fs.exists('/tmp/gone.txt')).toBe(false);
+    kernel.kill(proc.pid, A.SIGKILL);
+  });
+
+  it('link(2) copies the file but reports the source inode number (git local clone checks it)', async () => {
+    const proc = kernel.spawn({ path: 'ln', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
+    const data = new Uint8Array(4096);
+    const two = (a: string, b: string) => { const x = new TextEncoder().encode(a); data.set(x); data.set(new TextEncoder().encode(b), x.length); return [x.length, b.length]; };
+    const ino = async (p: string) => ((await (kernel as any).statPath(proc, p, false)) as { ino: number }).ino;
+    await fs.writeFile('/tmp/lsrc', 'content');
+    expect(await kernel.syscall(proc, A.SYS_link, two('/tmp/lsrc', '/tmp/ldst'), data)).toBe(0);
+    expect(await fs.readFile('/tmp/ldst', 'utf8')).toBe('content');
+    expect(await ino('/tmp/ldst')).toBe(await ino('/tmp/lsrc'));
+    expect(await kernel.syscall(proc, A.SYS_link, two('/tmp/lsrc', '/tmp/ldst'), data)).toBe(-A.EEXIST);
+    // a removed and recreated path is a new inode
+    const n = new TextEncoder().encode('/tmp/ldst'); data.set(n);
+    expect(await kernel.syscall(proc, A.SYS_unlink, [n.length], data)).toBe(0);
+    await fs.writeFile('/tmp/ldst', 'other');
+    expect(await ino('/tmp/ldst')).not.toBe(await ino('/tmp/lsrc'));
+    kernel.kill(proc.pid, A.SIGKILL);
+  });
+
   it('a burst of file writes is stored once it pauses, not after every write', async () => {
     const proc = kernel.spawn({ path: 'holder', cwd: '/tmp', run: () => new Promise<number>(() => {}) });
     const f = (await kernel.open(proc, 'kburst.bin', A.O_CREAT | A.O_WRONLY | A.O_TRUNC)) as OpenFile;
@@ -437,6 +557,10 @@ describe('kernel processes', () => {
     expect(await kernel.syscall(proc, A.SYS_read, [r, 10], data)).toBe(3);
     expect(dec.decode(data.subarray(0, 3))).toBe('xyz');
     expect(await kernel.syscall(proc, 4242, [], data)).toBe(-A.ENOSYS);
+    // FIONBIO on a pipe (Rust's Command::output() makes its pipes non-blocking so)
+    dv.setInt32(0, 1, true);
+    expect(await kernel.syscall(proc, A.SYS_ioctl, [r, A.FIONBIO, 4], data)).toBe(0);
+    expect(await kernel.syscall(proc, A.SYS_read, [r, 10], data)).toBe(-A.EAGAIN);
 
     await fs.mkdir('/tmp/kdir', { recursive: true });
     await fs.writeFile('/tmp/kdir/f1', '1');

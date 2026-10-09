@@ -133,19 +133,19 @@ works everywhere and the interactive mode needs a page that can block.
 | wabt (wat2wasm, wasm2wat, ...) | 1.0.37 | Wasmer | preview1 | ok |
 | ruby (ruby, irb, gem, rake, bundle) | 3.4.1 | ruby.wasm release, repacked, `ruby.sh` | preview1 + mounts | ok; no sockets or threads (stubs); irb needs blocking stdin |
 | fortune, lolcat, brotli, qr2text, viu | | Wasmer | wasi_unstable | ok |
-| openssl | 0.2.0 (OpenSSL 1.1) | Wasmer | wasi_unstable | ok (no s_client: sockets) |
+| openssl-wasm (openssl) | 0.2.0 (OpenSSL 1.1) | Wasmer | wasi_unstable | ok (no s_client: sockets). The `openssl` package is now OpenSSL 3.5 as an x86-64 build ([COMPAT.md](COMPAT.md)) |
 | quickjs (qjs) | 0.0.3 | Wasmer | wasi_unstable | partial: REPL |
 | util-linux (cal only) | 0.0.1 | Wasmer | wasi_unstable | ok; exits 1 after correct output |
-| grep (GNU 3.12), sed (GNU 4.9) | | Wasmer | WASIX | ok as kernel processes, as `/usr/bin/grep` and `/usr/bin/sed`; `grep -r` fails with ENOSYS |
+| grep-wasix, sed-wasix (GNU grep 3.12, sed 4.9) | | Wasmer | WASIX | ok as kernel processes, as `/usr/bin/grep` and `/usr/bin/sed`; `grep -r` fails with ENOSYS. The `grep` and `sed` packages are now x86-64 builds ([COMPAT.md](COMPAT.md)) |
 | ripgrep (rg) | 15.2.1 | Wasmer | WASIX | ok as kernel processes, as `/usr/bin/rg` |
 | quickjs-ng (qjs-ng) | 0.15.1 | Wasmer | WASIX | ok as kernel processes |
-| less | 685 | Wasmer | WASIX | runs as kernel processes (`/usr/bin/less`); passthrough checked, interactive paging not yet |
+| less-wasix (less) | 685 | Wasmer | WASIX | runs as kernel processes; passthrough checked, interactive paging not yet. The `less` package is now the x86-64 build ([COMPAT.md](COMPAT.md)) |
 | bash | 1.0.25 | Wasmer | WASIX | ok as kernel processes: scripts, `-c`, interactive on the pty (readline editing, ^C), fork/exec/pipelines/`$(...)`, `wait` |
 | dash | 1.0.19 | Wasmer | WASIX | ok as kernel processes, as bash; this early build's exec passes no environment, so exported variables don't reach children |
 | php | 8.3 | Wasmer | WASIX | ok as kernel processes (`php -r`, exceptions, fatal errors through zend_bailout's longjmp); 86 MB |
 | python3.13 | 3.13 | Wasmer | WASIX | ok as kernel processes: `-c`, stdlib imports (json, zoneinfo, ...) with its volumes mounted at their `/nix/store` paths; no side modules (dlopen) (62 MB) |
 | clang 16, lld, llvm-ar/nm | 16 | Wasmer | WASIX | ok as kernel processes: `clang hello.c -o hello.wasm` compiles and links (the driver runs `clang-16 -cc1` and `wasm-ld` as child processes, sysroot mounted at `/sysroot`, headers at `/lib`), and the output runs (111 MB) |
-| curl | 8.4.0 | Wasmer | WASIX | ok as kernel processes: HTTP and HTTPS (OpenSSL in the guest, CA certificates mounted at `/openssl`) through the kernel sockets and the TCP relay; `/usr/bin/curl` (the builtin keeps the name) |
+| curl-wasix (curl) | 8.4.0 | Wasmer | WASIX | The `curl` package is now curl 8.22 as an x86-64 build ([COMPAT.md](COMPAT.md)). ok as kernel processes: HTTP and HTTPS (OpenSSL in the guest, CA certificates mounted at `/openssl`) through the kernel sockets and the TCP relay; `/usr/bin/curl` (the builtin keeps the name) |
 
 "Ok as kernel processes" means installable and working where WASM processes
 can use threads (`sab` mode: a cross-origin isolated page). Without that, WASIX
@@ -186,6 +186,25 @@ git, make (no WASI builds; busybox and make also need processes).
 Dropped from the old list: Wasmer's `lua` 0.1.4 and `optipng` are emscripten
 builds (`env`/`asm2wasm` imports), not WASI; `sqlite` 0.2.2 is replaced by the
 3.50.4 build.
+
+## x86-64 packages (`"abi": "x86_64-linux"`)
+
+Static x86-64 musl builds of popular tools (less, vim, ...) run in Blink as
+kernel processes; [COMPAT.md](COMPAT.md) has the scoreboard. Index
+additions they use:
+
+- `"needs": ["x86"]`: the `x86` feature is present when Blink can run
+  (SharedArrayBuffer).
+- File `"unpack": "gzip"` (one compressed file) or `"tar.gz"` (a tree
+  unpacked into the directory `path`); sha256/size are the download's.
+  Programs under `bin/`, `sbin/` and `libexec/` are installed executable.
+- `"links": { "/usr/share/vim": "share/vim" }`: symlinks outside the package
+  root, made at install and removed with the package.
+
+Recipes are in `scripts/pkgbuild/x86/` (musl.cc toolchain and sources pinned
+by sha256, or by commit for git sources); `scripts/pkgbuild/x86/publish.sh
+NAME VERSION` writes the compressed files to `public/pkg/` and prints index
+entries.
 
 ## Building packages (`scripts/pkgbuild/`)
 
