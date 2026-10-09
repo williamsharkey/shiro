@@ -134,12 +134,9 @@ Debian's.
 
 ## Known gaps
 
-- `apt install` sometimes stops for good after dpkg-preconfigure prints
-  "Preconfiguring packages ...", when the set includes a package with a
-  debconf `config` script (adduser, ucf). Running the same confmodule script
-  under `debconf`, or a perl/sh pipe pair, works; the scoreboard records
-  these as `harness` (the batch's machine stopped answering). Same-instance
-  fork (`BLINK_SAME_INSTANCE_FORK=1`) does not change it.
+- systemd's postinst (systemd-sysusers, pulled in by cron, udev, logrotate)
+  fails with "Failed to backup /etc/group: Bad address": Blink's `sendfile`
+  rejects a NULL offset (reported to unix/perf-blink).
 - `/etc/apt/apt.conf.d/91shiro-engine` sets `Dpkg::Use-Pty "false"`: in apt
   runs, the child's `ioctl(TIOCSCTTY)` on its pty is sometimes refused with
   EPERM. The same sequence (fork, close master, setsid, open slave,
