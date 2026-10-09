@@ -18,7 +18,7 @@
    ]
   },
   "builtin": {
-   "pass": 49,
+   "pass": 53,
    "total": 59,
    "failures": [
     {
@@ -30,10 +30,6 @@
      "reason": "stdout differs"
     },
     {
-     "name": "builtin.exec.true",
-     "reason": "status 1, want 0"
-    },
-    {
      "name": "builtin.hash.nonposix",
      "reason": "status 1, want 0"
     },
@@ -42,23 +38,11 @@
      "reason": "status 1, want 0"
     },
     {
-     "name": "builtin.source.nonexistent.earlyexit",
-     "reason": "status 0, want 1"
-    },
-    {
      "name": "builtin.special.redir.error",
      "reason": "status 0, want 1"
     },
     {
-     "name": "builtin.trap.nested",
-     "reason": "stdout differs"
-    },
-    {
-     "name": "builtin.trap.redirect",
-     "reason": "stdout differs"
-    },
-    {
-     "name": "builtin.trap.supershell",
+     "name": "builtin.trap.subshell.quiet",
      "reason": "stdout differs"
     }
    ]
@@ -74,7 +58,7 @@
    ]
   },
   "semantics": {
-   "pass": 77,
+   "pass": 83,
    "total": 92,
    "failures": [
     {
@@ -82,20 +66,8 @@
      "reason": "status 1, want 0"
     },
     {
-     "name": "semantics.case.ec",
-     "reason": "status 2, want 0"
-    },
-    {
-     "name": "semantics.command-subst.newline",
-     "reason": "stdout differs"
-    },
-    {
      "name": "semantics.command.argv0",
      "reason": "status 1, want 0"
-    },
-    {
-     "name": "semantics.defun.ec",
-     "reason": "stdout differs"
     },
     {
      "name": "semantics.dot.glob",
@@ -124,18 +96,6 @@
     {
      "name": "semantics.special.assign.visible.nonposix",
      "reason": "stdout differs"
-    },
-    {
-     "name": "semantics.subshell.break",
-     "reason": "status 127, want 0"
-    },
-    {
-     "name": "semantics.var.dashu",
-     "reason": "status 1, want 0"
-    },
-    {
-     "name": "semantics.var.format.tilde",
-     "reason": "status 1, want 0"
     }
    ]
   },

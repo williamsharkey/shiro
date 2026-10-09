@@ -399,7 +399,7 @@
    "failures": []
   },
   "builtin-eval-source": {
-   "pass": 19,
+   "pass": 18,
    "total": 23,
    "failures": [
     {
@@ -409,6 +409,10 @@
     {
      "i": 4,
      "name": "eval YSH block with 'break continue return error'"
+    },
+    {
+     "i": 9,
+     "name": "Source nonexistent"
     },
     {
      "i": 13,

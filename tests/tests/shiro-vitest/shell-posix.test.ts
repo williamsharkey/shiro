@@ -143,3 +143,47 @@ describe('patterns, quoting and expansions', () => {
     expect(r.out).toBe('[ \t\n]');
   });
 });
+
+describe('traps, set -u, exec and loops', () => {
+  it('a subshell runs its own EXIT trap; plain trap in a subshell lists the parent\'s', async () => {
+    const r = await script([
+      "trap 'echo bye' EXIT",
+      '(trap)',
+      "(trap 'echo so long' EXIT; trap)",
+      "x=$(trap 'echo in-sub' EXIT; echo body); echo \"[$x]\"",
+      "f() { (trap \"echo $var\" EXIT); }; var=ok f",
+    ].join('\n'));
+    expect(r.out).toBe("trap -- 'echo bye' EXIT\ntrap -- 'echo so long' EXIT\nso long\n[body\nin-sub]\nok\nbye\n");
+  });
+
+  it('set -u: an unset parameter ends the script (127) or the subshell (1); ${x-…} forms are fine', async () => {
+    const r = await script('set -u\necho "${nonesuch-d}${nonesuch:+x} $#"\n(echo $zz); echo "sub=$?"\necho $((zz + 1))\necho unreached\n');
+    expect(r.out).toBe('d 0\nsub=1\n');
+    expect(r.status).toBe(127);
+    expect(r.err).toContain('zz: unbound variable');
+  });
+
+  it('exec CMD ends a script with its status; a function definition sets $? to 0', async () => {
+    let r = await script('(exec echo hi; echo no); echo after\nfalse\nf() { :; }\necho $?\nexec false\necho unreached\n');
+    expect(r.out).toBe('hi\nafter\n0\n');
+    expect(r.status).toBe(1);
+    r = await script('. /nonexistent\necho unreached\n');
+    expect(r.out).toBe('');
+    expect(r.status).toBe(1);
+  });
+
+  it('$? in $(…) is the caller\'s; $?>file is a word and a redirect', async () => {
+    const r = await script('(exit 5)\nx=$(echo $?>/tmp/ec); cat /tmp/ec\n(exit 6)\ncase a$(echo $?>/tmp/ec2) in b) ;; esac; cat /tmp/ec2\n');
+    expect(r.out).toBe('5\n6\n');
+  });
+
+  it('break N inside a subshell leaves only the subshell\'s loops; nested loops parse', async () => {
+    const r = await script('for x in a b; do ( for y in c d; do break 2; done; echo $x ); done\nfor x in 1 2; do for y in 3 4; do continue 2; done; echo no; done; echo end\n');
+    expect(r.out).toBe('a\nb\nend\n');
+  });
+
+  it('here-docs: $(…) inside keeps its own quoting; ${x=word} assigns without quotes', async () => {
+    const r = await script('cat <<END\n[$(echo "")] $(echo "q" \'r\') "lit"\nEND\n: ${x:="a b"}; echo "[$x]"\n');
+    expect(r.out).toBe('[] q r "lit"\n[a b]\n');
+  });
+});
