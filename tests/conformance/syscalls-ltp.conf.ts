@@ -113,7 +113,7 @@ describe.skipIf(!existsSync(BIN))('LTP syscall tests under Blink', () => {
     writeFileSync(join(RESULTS, name), JSON.stringify({
       suite: 'LTP syscalls',
       title: 'Syscalls: LTP under Blink (x86-64)',
-      note: 'Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host as an unprivileged user (uid 1000, like Shiro) are scored.',
+      note: 'Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel processes in the Blink engine; only tests that pass natively on the build host as an unprivileged user (uid 1000, like Shiro) are scored. The snapshot fork of Blink does not share MAP_SHARED pages, where LTP keeps its result counts, so when the Summary reads all zeros the TPASS/TFAIL/TBROK lines are counted instead (tests/conformance/lib/ltp.mjs); tests that synchronize through shared memory (tst_checkpoint) still fail.',
       files: sorted,
     }, null, 1) + '\n');
   }, 7_200_000);
