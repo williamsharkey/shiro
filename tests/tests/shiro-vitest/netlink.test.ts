@@ -137,6 +137,37 @@ describe('netlink sockets', () => {
     expect(await name('::1')).toBe('::1');
   });
 
+  it('a UDP source stays across connects; connect(AF_UNSPEC) clears one the route chose (Linux __udp_disconnect)', async () => {
+    const { data, sys } = setup();
+    const connect = async (fd: number, dest: string) => {
+      data.set(encodeSockaddr({ family: A.AF_INET6, address: dest, port: 53 }));
+      return sys(A.SYS_connect, [fd, 28]);
+    };
+    const local = async (fd: number) => {
+      const n = await sys(A.SYS_getsockname, [fd]);
+      const sa = decodeSockaddr(data.slice(0, n));
+      return typeof sa === 'number' ? sa : `${sa.address} ${sa.port > 0 ? 'port' : 0}`;
+    };
+    const unspec = async (fd: number) => { data.fill(0, 0, 16); return sys(A.SYS_connect, [fd, 16]); };
+    const fd = await sys(A.SYS_socket, [A.AF_INET6, A.SOCK_DGRAM, 0]);
+    expect(await connect(fd, '::ffff:93.184.216.34')).toBe(0);
+    expect(await connect(fd, '::ffff:127.0.0.1')).toBe(0);
+    expect(await local(fd)).toBe('::ffff:10.0.2.15 port'); // the first route's source stays
+    expect(await unspec(fd)).toBe(0);
+    expect(await local(fd)).toBe(':: 0');
+    expect(await connect(fd, '::ffff:127.0.0.1')).toBe(0);
+    expect(await local(fd)).toBe('::ffff:127.0.0.1 port');
+    // a bound address and port survive the disconnect; binding AF_UNSPEC is EAFNOSUPPORT
+    const b = await sys(A.SYS_socket, [A.AF_INET6, A.SOCK_DGRAM, 0]);
+    data.fill(0, 0, 16);
+    expect(await sys(A.SYS_bind, [b, 16])).toBe(-A.EAFNOSUPPORT);
+    data.set(encodeSockaddr({ family: A.AF_INET6, address: '::1', port: 5353 }));
+    expect(await sys(A.SYS_bind, [b, 28])).toBe(0);
+    expect(await connect(b, '::1')).toBe(0);
+    expect(await unspec(b)).toBe(0);
+    expect(await local(b)).toBe('::1 port');
+  });
+
   it('other socket families stay unsupported', async () => {
     const { sys } = setup();
     expect(await sys(A.SYS_socket, [17 /* AF_PACKET */, SOCK_RAW, 0])).toBe(-A.EAFNOSUPPORT);
