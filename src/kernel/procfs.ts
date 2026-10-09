@@ -201,6 +201,7 @@ export class ProcFs {
       // A runner can name the program the process reports as itself (a WASI package's "self")
       // Linux gives the resolved path: glibc's ld.so expands $ORIGIN from it, and a
       // venv's bin/python is a symlink to an interpreter with RUNPATH $ORIGIN/../lib
+      // (readlink also resolves what isn't cached)
       case 'exe': return { type: 'link', target: () => {
         const exe = typeof p.data.exe === 'string' ? p.data.exe : p.path;
         return (exe.startsWith('/') && this.kernel.fs?.realpathCached?.(exe)) || exe;
