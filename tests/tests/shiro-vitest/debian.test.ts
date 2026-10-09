@@ -93,8 +93,9 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     expect(r.output).toMatch(/^\[ *\d+\.\d{6}\] net: relay refused connect to github\.com:443: debian-dmesg-test$/m);
     const x = await run(shell, '/usr/bin/dmesg -x --level=warn');
     expect(x.output).toMatch(/^kern  :warn  : \[ *\d+\.\d{6}\] net: relay refused connect to github\.com:443: debian-dmesg-test$/m);
-    // dmesg -S (syslog(2)) needs Blink patch 0055 (forward syslog to the kernel); until blink.wasm is
-    // rebuilt with it, Blink answers ENOSYS. The kernel side is covered in kernel-klog.test.ts.
+    // dmesg -S reads the same log through syslog(2) (Blink patch 0055)
+    const s = await run(shell, '/usr/bin/dmesg -S');
+    expect(s.output).toContain('net: relay refused connect to github.com:443: debian-dmesg-test');
   }, 120000);
 
   it('sudo runs kernel programs as uid 0', async () => {

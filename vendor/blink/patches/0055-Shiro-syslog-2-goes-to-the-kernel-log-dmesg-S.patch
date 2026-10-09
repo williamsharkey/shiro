@@ -1,0 +1,42 @@
+From 169fcc7c2ef3a872117dea346cbda043a14207a0 Mon Sep 17 00:00:00 2001
+From: shiro <build@shiro>
+Date: Fri, 9 Oct 2026 17:38:54 +0000
+Subject: [PATCH] Shiro: syslog(2) goes to the kernel log (dmesg -S)
+
+util-linux dmesg reads /dev/kmsg, which already reaches the Shiro kernel;
+dmesg -S (and klogctl callers) use syslog(2), which Blink answered with
+ENOSYS. It now forwards to the kernel's SYS_syslog: args type, len; the
+read actions copy the text out of the data area.
+---
+ blink/shiro.inc | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 23657f8..2cf9c0a 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2108,6 +2108,22 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       }
+       break;
+     }
++    case 0x067: {                                                     // syslog
++      // The Shiro kernel's log (util-linux dmesg -S): the read actions
++      // (READ, READ_ALL, READ_CLEAR) copy its text out; the others pass
++      // `len` through as their argument (CONSOLE_LEVEL's level)
++      int type = (int)a, len = (int)c;
++      bool rd = type == 2 || type == 3 || type == 4;
++      char *buf = 0;
++      if (rd && len > 0) {
++        len = MIN(len, g_shiro_chunk);
++        buf = (char *)ShiroAlloc(m, len);
++      }
++      r = ShiroCall(m, 103, A12(type, len), buf, 0, rd && len > 0 ? len : 0,
++                    type == 2, type == 2);
++      if (r > 0 && rd && CopyToUserWrite(m, b, buf, r) == -1) r = -EFAULT_LINUX;
++      break;
++    }
+     case 0x050: r = ShiroPathCall(m, 80, a, 0, 0, 0); break;          // chdir
+     case 0x051: r = KS(m, 81, A12(a)); break;                         // fchdir
+     case 0x052: r = ShiroTwoPaths(m, 82, 0, a, 0, b, 0, false); break;   // rename
+-- 
+2.43.0
