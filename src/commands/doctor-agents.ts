@@ -7,6 +7,8 @@
  *           Blink: the syscalls the native Claude binary makes
  *   node    the same steps through the Node runtime (what the npm build uses)
  *
+ * The child step runs `sh -c -l 'echo hi'`, the form Claude Code's Bash tool uses.
+ *
  * Each step is a line, OK or FAIL with the errno, so a broken layer shows
  * up as the one runtime failing. No network.
  */
@@ -65,15 +67,15 @@ function child() {
   const outf = path.join(deep, 'child.out');
   return new Promise((resolve) => {
     let fd; try { fd = fs.openSync(outf, 'w'); } catch (e) { resolve(fail('child', e, 'open the output file')); return; }
-    let c; try { c = cp.spawn('sh', ['-c', 'echo hi'], { stdio: ['ignore', fd, 'pipe'] }); } catch (e) { resolve(fail('child', e, 'spawn')); return; }
+    let c; try { c = cp.spawn('sh', ['-c', '-l', 'echo hi'], { stdio: ['ignore', fd, 'pipe'] }); } catch (e) { resolve(fail('child', e, 'spawn')); return; }
     const t = setTimeout(() => resolve(fail('child', null, 'sh -c did not exit in 10 s')), 10000);
     c.on('error', (e) => { clearTimeout(t); resolve(fail('child', e, 'spawn')); });
     c.on('close', (code) => {
       clearTimeout(t);
       try { fs.closeSync(fd); } catch {}
       let s = ''; try { s = fs.readFileSync(outf, 'utf8'); } catch (e) { resolve(fail('child', e, 'read the output file')); return; }
-      if (code !== 0 || s !== 'hi\n') resolve(fail('child', null, "sh -c 'echo hi' exited " + code + ', the file holds ' + JSON.stringify(s)));
-      else { ok('child', "spawn sh -c 'echo hi' with stdout on a file"); resolve(0); }
+      if (code !== 0 || s !== 'hi\n') resolve(fail('child', null, "sh -c -l 'echo hi' exited " + code + ', the file holds ' + JSON.stringify(s)));
+      else { ok('child', "spawn sh -c -l 'echo hi' (Claude Code's form) with stdout on a file"); resolve(0); }
     });
   });
 }

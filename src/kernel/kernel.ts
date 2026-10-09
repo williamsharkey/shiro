@@ -12,6 +12,7 @@ import { addProcInfoSource, type FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
 import { KernelStdio, execLazyStdin } from '../shell-stdio';
+import { parseShellArgs } from '../shell-args';
 import { ProcFs, bootMs } from './procfs';
 import { klog, KmsgFile, LOG_ERR, LOG_INFO, SYSLOG_ACTION_READ_ALL, SYSLOG_ACTION_SIZE_BUFFER, SYSLOG_ACTION_SIZE_UNREAD } from './klog';
 import { processTable, type ShiroProcess } from '../process-table';
@@ -401,9 +402,10 @@ export class Kernel {
    * scripts run in a shell that uses this process's fds (src/shell-stdio.ts).
    */
   private async shellCommandDirect(probe: Process): Promise<Runner | null> {
-    const a = probe.argv;
-    if (a.length < 3 || a[1] !== '-c') return null;
-    const words = simpleCommandWords(a[2]);
+    // Only a plain -c (login and the like don't matter to one simple command; -e, -x, -o ... do)
+    const opts = parseShellArgs(probe.argv.slice(1));
+    if (!opts.command || opts.error || opts.on.length || opts.off.length || opts.shopts.length || opts.interactive || !opts.rest.length) return null;
+    const words = simpleCommandWords(opts.rest[0]);
     if (!words || !words.length || words[0].includes('=')) return null;
     const name = words[0];
     let path: string | null = null;
@@ -1132,29 +1134,44 @@ export class Kernel {
   private async runShellProcess(proc: Process): Promise<number> {
     const shell = this.forkShell(proc);
     shell.kernelHost = { kernel: this, proc };
-    const args = proc.argv.slice(1);
-    let i = 0;
-    while (i < args.length && /^-[a-zA-Z]+$/.test(args[i]) && args[i] !== '-c') i++; // -e, -x, -l ...
+    // bash's options, before or after -c: `sh -c -l 'cmd'` (Claude Code), `bash -l -c 'cmd' a b`
+    const name = (proc.argv[0] ?? 'sh').replace(/^.*\//, '').replace(/^-/, '') || 'sh';
+    const opts = parseShellArgs(proc.argv.slice(1));
+    if (opts.error) {
+      await this.writeAll(proc, 2, enc.encode(`${name}: ${opts.error}\n`));
+      return 2;
+    }
+    for (const o of opts.on) shell.options.add(o);
+    for (const o of opts.off) shell.options.delete(o);
+    for (const [o, on] of opts.shopts) { if (on) shell.shoptopts.add(o); else shell.shoptopts.delete(o); }
+    if (opts.posix) shell.options.add('posix');
+    const args = opts.rest;
     let script: string | undefined;
     let positional: string[] = [];
-    // No script and a terminal (or -i): an interactive shell (a tmux pane, screen window, `sh` from a program)
-    if (args[i] !== '-c' && (args.slice(0, i).includes('-i') || (i >= args.length && proc.fds.get(0)?.kind === 'pty'))) {
+    // No command or script, and a terminal (or -i): an interactive shell (a tmux pane, screen window, `sh` from a program)
+    if (!opts.command && (opts.interactive || ((args.length === 0 || opts.stdin) && proc.fds.get(0)?.kind === 'pty'))) {
       return this.interactiveShell(proc, shell);
     }
-    if (args[i] === '-c') {
-      script = args[i + 1] ?? '';
-      positional = args.slice(i + 2);
-    } else if (i < args.length) {
+    if (opts.command) {
+      if (!args.length) {
+        await this.writeAll(proc, 2, enc.encode(`${name}: -c: option requires an argument\n`));
+        return 2;
+      }
+      script = args[0];
+      positional = args.length > 1 ? args.slice(1) : [];
+    } else if (args.length && !opts.stdin) {
       try {
-        const p = this.resolvePath(proc, args[i]);
+        const p = this.resolvePath(proc, args[0]);
         if (typeof p === 'number') throw new Error('bad path');
         const raw = await this.fs!.readFile(p);
         script = typeof raw === 'string' ? raw : A.decodeText(raw);
       } catch {
-        await this.writeAll(proc, 2, enc.encode(`sh: ${args[i]}: No such file or directory\n`));
+        await this.writeAll(proc, 2, enc.encode(`${name}: ${args[0]}: No such file or directory\n`));
         return 127;
       }
-      positional = args.slice(i);
+      positional = args;
+    } else if (opts.stdin && args.length) {
+      positional = [name, ...args]; // sh -s ARGS: $0 is the shell, the rest $1…
     }
     const stdio = new KernelStdio(this, proc);
     shell.kernelStdio = stdio;

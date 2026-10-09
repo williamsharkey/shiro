@@ -179,7 +179,8 @@ static int check_child(char **envp) {
     i64 fd = sys(SYS_open, (i64)outf, O_WRONLY | O_CREAT | O_TRUNC, 0600, 0);
     if (fd < 0) sys(SYS_exit, 120, 0, 0, 0);
     sys(SYS_dup2, fd, 1, 0, 0);
-    char *argv[] = { "sh", "-c", "echo hi", 0 };
+    /* Claude Code's Bash tool form: options after -c */
+    char *argv[] = { "sh", "-c", "-l", "echo hi", 0 };
     i64 r = sys(SYS_execve, (i64)"/bin/sh", (i64)argv, (i64)envp, 0);
     sys(SYS_exit, r == -2 ? 127 : 126, 0, 0, 0);
   }
@@ -187,7 +188,7 @@ static int check_child(char **envp) {
   i64 r = sys(SYS_wait4, pid, (i64)&status, 0, 0);
   if (r < 0) return fail("child", r, "wait4");
   if ((status & 0x7f) != 0 || ((status >> 8) & 0xff) != 0) {
-    char *d = scat(buf, "sh -c 'echo hi' exited, wait status 0x"); num(d, status, 16);
+    char *d = scat(buf, "sh -c -l 'echo hi' exited, wait status 0x"); num(d, status, 16);
     return fail("child", 0, buf);
   }
   i64 fd = sys(SYS_open, (i64)outf, O_RDONLY, 0, 0);
@@ -196,7 +197,7 @@ static int check_child(char **envp) {
   i64 n = sys(SYS_read, fd, (i64)b, sizeof b, 0);
   sys(SYS_close, fd, 0, 0, 0);
   if (n != 3 || b[0] != 'h' || b[1] != 'i' || b[2] != '\n') return fail("child", n < 0 ? n : 0, "the output file doesn't hold \"hi\"");
-  ok("child", "fork, execve /bin/sh -c 'echo hi' > file, wait4");
+  ok("child", "fork, execve /bin/sh -c -l 'echo hi' > file, wait4");
   return 0;
 }
 
