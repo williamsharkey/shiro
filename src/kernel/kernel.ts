@@ -26,6 +26,7 @@ import { LockTable, F_RDLCK, F_WRLCK, F_UNLCK } from './locks';
 import { Process } from './process';
 import { EpollFile, waitReady } from './epoll';
 import { EventFile, TimerFile } from './fd';
+import { activeProfile } from '../profile';
 
 /** Runs a process to completion; resolves with its exit code (or nothing if it exited through the kernel). */
 export type Runner = (proc: Process, kernel: Kernel) => Promise<number | void>;
@@ -166,7 +167,7 @@ export class Kernel {
   /** The page's shell: builtins run in forks of it. */
   shell?: Shell;
   /** uname(2) nodename (the prompt's \h). */
-  hostname = 'shiro';
+  hostname = activeProfile().hostname;
   readonly procs = new Map<number, Process>();
   readonly init: Process;
   private loaders: Loader[] = [];
@@ -1157,7 +1158,7 @@ export class Kernel {
       const home = shell.env.HOME || '/home/user';
       const cwd = shell.cwd === home ? '~' : shell.cwd.startsWith(home + '/') ? '~' + shell.cwd.slice(home.length) : shell.cwd;
       return (shell.env.PS1 ?? '').replace(/\\([uhHwW$n\\])/g, (_, c: string) => ({
-        u: shell.env.USER || 'user', h: 'shiro', H: 'shiro', w: cwd, W: cwd === '~' ? '~' : cwd.slice(cwd.lastIndexOf('/') + 1) || '/',
+        u: shell.env.USER || 'user', h: this.hostname, H: this.hostname, w: cwd, W: cwd === '~' ? '~' : cwd.slice(cwd.lastIndexOf('/') + 1) || '/',
         $: '$', n: '\n', '\\': '\\',
       } as Record<string, string>)[c]);
     };

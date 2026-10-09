@@ -16,6 +16,7 @@ import type { KernelStdio } from './shell-stdio';
 import type { OpenFile } from './kernel/fd';
 import { getCompiledModule } from './wasi-packages';
 import { builtinIndex, findEntry, packageStatus, packageShadows, pkgOwnShadows, loadPackageShadows, packageOfPath, runPackageBinary, PKG_BIN_DIR } from './pkg-manager';
+import { activeProfile } from './profile';
 
 // Lazy-load the WASI runtime (~960 lines) only when WASM execution is needed
 let _wasiRuntime: typeof import('./wasi-runtime') | null = null;
@@ -4372,7 +4373,7 @@ export class Shell {
           // Dynamic special variables
           if (varName === 'RANDOM') { result += String(Math.floor(Math.random() * 32768)); i += m[0].length; continue; }
           if (varName === 'BASH_VERSION') { result += '5.0.0'; i += m[0].length; continue; }
-          if (varName === 'HOSTNAME' && this.env['HOSTNAME'] === undefined) { result += 'shiro'; i += m[0].length; continue; }
+          if (varName === 'HOSTNAME' && this.env['HOSTNAME'] === undefined) { result += activeProfile().hostname; i += m[0].length; continue; }
           if (varName === 'OSTYPE' && this.env['OSTYPE'] === undefined) { result += 'linux-gnu'; i += m[0].length; continue; }
           // Read-only: an assignment or the environment doesn't change them
           if (varName === 'PPID') { result += String(this.parentPid); i += m[0].length; continue; }
@@ -4458,7 +4459,7 @@ export class Shell {
     // ${@:off:len} / ${*:off:len}: offset 0 is $0
     if (/^[@*]:(?![-=+?])/.test(inner)) {
       const args = this.getPositionalArgs();
-      const pairs: [number, string][] = [[0, this.env['0'] ?? 'shiro'], ...args.map((a, k): [number, string] => [k + 1, a])];
+      const pairs: [number, string][] = [[0, this.env['0'] ?? activeProfile().hostname], ...args.map((a, k): [number, string] => [k + 1, a])];
       return { list: this.sliceList(pairs, args.length + 1, inner.slice(2)), star: inner[0] === '*' };
     }
     const m = /^([!#]?)([A-Za-z_][A-Za-z0-9_]*)\[/.exec(inner);

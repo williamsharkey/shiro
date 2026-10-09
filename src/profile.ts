@@ -33,6 +33,10 @@ export interface ProfileShims {
 
 export interface Profile {
   id: string;
+  /** The product's name in messages, help and banners ("tabcomputer" is always lowercase) */
+  name: string;
+  /** The machine's hostname: the prompt's \h, uname, /etc/hostname, os.hostname() */
+  hostname: string;
   description: string;
   /** Host patterns this profile serves ("example.com", "*.example.com") */
   hosts: string[];

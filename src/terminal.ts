@@ -9,6 +9,7 @@ import { setActiveTerminal } from './active-terminal';
 import { createHudPanel, HudPanel } from './hud-panel';
 import { spawnInWindow } from './commands/spawn';
 import { TtySession } from './kernel/pty';
+import { activeProfile } from './profile';
 
 /**
  * HUD (Heads-Up Display) state for dynamic banner updates.
@@ -1176,7 +1177,7 @@ export class ShiroTerminal {
   private getHostDisplay(): string {
     const hostname = typeof window !== 'undefined' ? window.location.hostname : 'shiro.computer';
     const subdomainMatch = hostname.match(/^([^.]+)\.shiro\.computer$/);
-    return subdomainMatch ? subdomainMatch[1] : 'shiro';
+    return subdomainMatch ? subdomainMatch[1] : activeProfile().hostname;
   }
 
   private promptVisualLength(): number {

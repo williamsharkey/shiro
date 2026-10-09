@@ -10,6 +10,7 @@ import { ShiroTerminal } from '../terminal';
 import { setActiveTerminal } from '../active-terminal';
 import type { DesktopWindow, WindowManager } from './wm';
 import { GLYPHS } from './icons';
+import { activeProfile } from '../profile';
 
 export interface TerminalDeps {
   makeShell: () => Shell;
@@ -182,7 +183,7 @@ export class TerminalView {
       const home = shell.env['HOME'] || '/home/user';
       const cwd = shell.cwd;
       const shown = cwd === home ? '~' : cwd.startsWith(home + '/') ? '~' + cwd.slice(home.length) : cwd;
-      title = `${shell.env['USER'] || 'user'}@shiro: ${shown}`;
+      title = `${shell.env['USER'] || 'user'}@${activeProfile().hostname}: ${shown}`;
     }
     const label = tab.tabEl.querySelector('.sd-tab-title');
     if (label && label.textContent !== title) label.textContent = title;

@@ -7,6 +7,7 @@
  */
 
 import type { Shell } from './shell';
+import { activeProfile } from './profile';
 
 export interface HudPanel {
   show(): void;
@@ -53,7 +54,7 @@ export function createHudPanel(shell: Shell): HudPanel {
   logo.style.cssText = 'font-size: 14px; color: #fff; line-height: 1;';
 
   const label = document.createElement('span');
-  label.textContent = 'shiro';
+  label.textContent = activeProfile().name;
   label.style.cssText = 'font-size: 13px; color: rgba(255,255,255,0.7); font-weight: 500;';
 
   const expandBtn = document.createElement('span');

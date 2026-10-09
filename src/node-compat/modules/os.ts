@@ -1,4 +1,5 @@
 import type { CommandContext } from '../../commands/index';
+import { activeProfile } from '../../profile';
 
 export function createOsModule(ctx: CommandContext): any {
   return {
@@ -6,8 +7,8 @@ export function createOsModule(ctx: CommandContext): any {
     arch: () => 'x64',
     homedir: () => ctx.env['HOME'] || '/home/user',
     tmpdir: () => '/tmp',
-    hostname: () => 'shiro',
-    type: () => 'Shiro',
+    hostname: () => activeProfile().hostname,
+    type: () => 'Linux',
     release: () => '0.1.0',
     cpus: () => {
       const count = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 4;
