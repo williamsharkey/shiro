@@ -91,12 +91,11 @@ import type { Desktop } from './desktop/index';
 import { installDomFs } from './dom-fs';
 import { desktopCmd } from './commands/desktop';
 import buildNumber from '../build-number.txt?raw';
-import { AGENTS_MD, CLAUDE_MD } from './claude-md-seed';
+import { seedAgentDocs } from './agent-docs';
 import {
   defaultRuntimeContext,
   parseRuntimeContext,
   SHIRO_RUNTIME_CONTEXT_SESSION_KEY,
-  writeRuntimeContextFiles,
 } from './seed-runtime-context';
 import { getShiroOrigin } from './utils/shiro-origin';
 import { logIsolationStatus } from './utils/isolation';
@@ -139,13 +138,11 @@ async function main() {
       return defaultRuntimeContext();
     }
   })();
-  // Seed agent instructions for internal Claude Code (always update to latest version)
+  // ~/AGENTS.md and ~/CLAUDE.md for coding agents (src/agent-docs.ts): kept
+  // current, except where the user edited them
   try {
-    await fs.mkdir('/home/user', { recursive: true });
-    await fs.writeFile('/home/user/AGENTS.md', AGENTS_MD);
-    await fs.writeFile('/home/user/CLAUDE.md', CLAUDE_MD);
-    await writeRuntimeContextFiles(fs, runtimeContext);
-  } catch {}
+    for (const line of await seedAgentDocs(fs, runtimeContext)) console.log(`[agent-docs] ${line}`);
+  } catch (e) { console.warn('[agent-docs]', e); }
   console.log('[tabcomputer] Filesystem initialized');
 
   // Initialize file associations (extension → command mappings for `open`)

@@ -1,0 +1,203 @@
+/**
+ * The instructions a coding agent finds in the home directory: one file,
+ * ~/AGENTS.md, describing the machine it is actually on, and ~/CLAUDE.md,
+ * which imports it (`@AGENTS.md`), so Claude Code reads it with no extra hop.
+ *
+ * Seeded on every boot, but never over a file the user changed: the hashes of
+ * what was seeded are kept in /var/lib/tabcomputer/seeded.json, and a file is
+ * replaced only while it still hashes to what we wrote. Installs from before
+ * that manifest are recognized by the exact texts older builds seeded. Those
+ * builds also wrote ~/NEO.md and ~/.shiro-context.json, which are removed when
+ * they are still as written and left alone otherwise.
+ */
+import type { FileSystem } from './filesystem';
+import { activeProfile } from './profile';
+import { type ShiroRuntimeContext, parseRuntimeContext } from './seed-runtime-context';
+
+export const AGENTS_PATH = '/home/user/AGENTS.md';
+export const CLAUDE_PATH = '/home/user/CLAUDE.md';
+export const MANIFEST_PATH = '/var/lib/tabcomputer/seeded.json';
+const OLD_NEO_PATH = '/home/user/NEO.md';
+const OLD_CONTEXT_PATH = '/home/user/.shiro-context.json';
+
+/** Where each product's source lives (not checked out on the machine). */
+const SOURCE: Record<string, string> = {
+  shiro: 'https://github.com/williamsharkey/shiro',
+  tabcomputer: 'https://github.com/williamsharkey/tabcomputer',
+};
+
+/** sha256 of the AGENTS.md and CLAUDE.md texts earlier builds seeded. */
+const OLD_SEEDED = new Set([
+  '48d10c82579a06f3264a6703cb3a32b4951da31900ff2713769db2f01f5a4eec', // AGENTS.md, "running inside Shiro Browser OS"
+  'efcb97c487e617e44606b520e4f7da8a876a86c43b9f8c12e396e6b6214a799c', // AGENTS.md, the same renamed
+  '7c740cab9e4ae89d026900d8fc02575164c8773bc2e1708f2b7daf7f605679ce', // CLAUDE.md, "Deprecated. Read AGENTS.md, then NEO.md"
+]);
+
+function bootSection(ctx: ShiroRuntimeContext, name: string): string {
+  if (!ctx.injected) {
+    return `This boot runs on its own page (not injected into another site). \`hc live\` inspects ${name}'s own page.`;
+  }
+  return [
+    `This boot was injected into a host page by \`seed${ctx.mode === 'seed-blob' ? ' blob' : ''}\`:`,
+    '',
+    `- Host page: ${ctx.hostUrl || '(unknown)'} (origin ${ctx.hostOrigin || 'unknown'}, title "${ctx.hostTitle || ''}")`,
+    `- Same-origin access to the host's DOM: ${ctx.sameOriginParentAccess ? 'yes' : 'no'}`,
+    '',
+    'Start with `hc outer` to inspect the host page, then `hc s`, `hc look`, `hc q <selector>`, `hc @0`.',
+    `\`hc live\` inspects ${name}'s own page, not the host.`,
+  ].join('\n');
+}
+
+/** ~/AGENTS.md for this boot. */
+export function buildAgentsMd(ctx: ShiroRuntimeContext): string {
+  const p = activeProfile();
+  const name = p.name;
+  const site = p.brand?.domain ?? 'shiro.computer';
+  const source = SOURCE[p.id] ?? SOURCE.tabcomputer;
+  return `# AGENTS.md
+
+You are on ${name} (${site}): a Unix-like computer that runs entirely inside a
+browser tab. The kernel, filesystem, shell and programs all run in this page;
+there is no VM or server-side machine behind it.
+
+## This boot
+
+${bootSection(ctx, name)}
+
+## The machine
+
+- Home is \`/home/user\`. Files persist in this browser's storage for this site
+  across reloads. They are not synced anywhere else: commit and push work you
+  want to keep.
+- The shell is ${name}'s own bash-compatible shell, with pipes, redirects,
+  functions, job control and ptys. About 220 commands are built in: coreutils,
+  grep/sed/awk, \`rg\`, \`jq\`, \`git\`, \`gh\`, \`curl\`, \`vi\`, \`tmux\`, and more.
+- \`node\`, \`npm\` and \`npx\` are a Node.js-compatible runtime built into the page,
+  not real Node. Most pure-JS npm packages work. Native addons (\`.node\`) don't.
+- Real Linux programs: \`apt install <package>\` installs Debian 13 packages (the
+  first install streams Debian in; \`debian status\` shows it). They run in an
+  x86-64 emulator: correct, but much slower than native. Big programs (CPython,
+  compilers) can take many seconds to start.
+- \`python3\` is Pyodide until Debian's python3 is installed.
+- Network: outbound HTTP(S) works. Linux programs also get TCP (git over ssh,
+  pip, ssh) through the site's relay when it is enabled. Nothing on the internet
+  can connect in: servers you start are reachable only from this tab (\`serve DIR\`
+  opens a preview window).
+- \`/dom\` is the page itself as files (\`ls /dom\`).
+
+## What doesn't work
+
+- Docker, VMs, kernel modules, GPU access.
+- \`sudo\` runs commands as root inside ${name}, but nothing escapes the tab.
+- \`systemctl\` is a small built-in service manager, not systemd.
+- Everything stops when the tab is closed or reloaded, including background jobs.
+- Many processes or agents at once is slow. Prefer doing one thing at a time.
+
+## When something is wrong
+
+- \`doctor\` prints one OK/WARN/FAIL line per subsystem: the build, browser
+  isolation, the x86 engine, the network relay, sign-ins, Debian, storage and
+  the kernel. Include its output when you report a problem.
+- \`console -g PATTERN\` searches the page's console log (\`--prev\` includes the
+  load before the last reload).
+
+## Source
+
+${name} is open source: ${source}. The source is not checked out on this
+machine; \`git clone ${source}\` if you need to read it. Report bugs there.
+
+## Claude Code here
+
+- \`claude\` runs Claude Code. \`claude --native\` runs Anthropic's native binary in the x86 emulator.
+- Credentials are in \`~/.claude/.credentials.json\`; never print them or any other token.
+`;
+}
+
+/** ~/CLAUDE.md: Claude Code imports AGENTS.md from it. */
+export const CLAUDE_MD = '@AGENTS.md\n';
+
+async function sha256(text: string): Promise<string> {
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** ~/NEO.md as builds before AGENTS.md held the boot context wrote it. */
+function oldNeoMd(ctx: ShiroRuntimeContext, name: string): string {
+  if (!ctx.injected) {
+    return `# NEO.md\n\nThis file describes the runtime context for this ${name} boot.\n\n- Mode: standalone\n- Host page DOM bridge: unavailable\n- \`hc live\` inspects ${name}'s own DOM\n- \`hc outer\` is not expected to work in this boot\n`;
+  }
+  return `# NEO.md
+
+This ${name} instance was spawned from a host page.
+
+- Mode: ${ctx.mode === 'seed-blob' ? 'seed blob injection' : 'seed injection'}
+- Host page: ${ctx.hostUrl || '(unknown)'}
+- Host origin: ${ctx.hostOrigin || '(unknown)'}
+- Host title: ${ctx.hostTitle || '(untitled)'}
+- Host DOM bridge: available via \`hc outer\`
+- Same-origin parent DOM access: ${ctx.sameOriginParentAccess ? 'yes' : 'no'}
+
+Start with:
+
+1. Run \`hc outer\`
+2. Then use \`hc s\`, \`hc look\`, \`hc q <selector>\`, \`hc @0\`
+
+Notes:
+
+- \`hc live\` inspects ${name}'s own DOM, not the host page
+- Prefer \`hc outer\` for host-page inspection even in blob mode
+- Machine-readable details are in \`/home/user/.shiro-context.json\`
+`;
+}
+
+type SeedFS = Pick<FileSystem, 'mkdir' | 'readFile' | 'writeFile' | 'unlink'>;
+
+async function readText(fs: SeedFS, path: string): Promise<string | null> {
+  try { return await fs.readFile(path, 'utf8') as string; } catch { return null; }
+}
+
+/**
+ * Write AGENTS.md and CLAUDE.md, replacing earlier seeded versions but never a
+ * file the user edited; remove the retired NEO.md/.shiro-context.json the same
+ * way. Returns what it did, one line per file it touched or left alone.
+ */
+export async function seedAgentDocs(fs: SeedFS, ctx: ShiroRuntimeContext): Promise<string[]> {
+  const log: string[] = [];
+  let manifest: Record<string, string> = {};
+  try { manifest = JSON.parse((await readText(fs, MANIFEST_PATH)) ?? '{}') ?? {}; } catch { manifest = {}; }
+  const seededByUs = async (path: string, text: string) => {
+    const h = await sha256(text);
+    return h === manifest[path] || OLD_SEEDED.has(h);
+  };
+
+  // Retired files: NEO.md is recognized by regenerating it from the context
+  // file written next to it; the context file is machine-written JSON.
+  const oldJson = await readText(fs, OLD_CONTEXT_PATH);
+  const oldCtx = oldJson === null ? null : parseRuntimeContext(oldJson);
+  const jsonIsOurs = oldJson !== null && JSON.stringify(oldCtx, null, 2) === oldJson;
+  const neo = await readText(fs, OLD_NEO_PATH);
+  if (neo !== null) {
+    const basis = jsonIsOurs ? oldCtx! : { ...ctx, injected: false };
+    if (['Shiro', 'tabcomputer'].some((n) => oldNeoMd(basis, n) === neo)) {
+      await fs.unlink(OLD_NEO_PATH);
+      log.push(`removed ${OLD_NEO_PATH} (now part of AGENTS.md)`);
+    } else log.push(`kept ${OLD_NEO_PATH} (edited)`);
+  }
+  if (oldJson !== null) {
+    if (jsonIsOurs) { await fs.unlink(OLD_CONTEXT_PATH); log.push(`removed ${OLD_CONTEXT_PATH}`); }
+    else log.push(`kept ${OLD_CONTEXT_PATH} (edited)`);
+  }
+
+  await fs.mkdir('/home/user', { recursive: true });
+  for (const [path, text] of [[AGENTS_PATH, buildAgentsMd(ctx)], [CLAUDE_PATH, CLAUDE_MD]] as const) {
+    const have = await readText(fs, path);
+    if (have === text) { manifest[path] = await sha256(text); continue; }
+    if (have !== null && !(await seededByUs(path, have))) { log.push(`kept ${path} (edited)`); continue; }
+    await fs.writeFile(path, text);
+    manifest[path] = await sha256(text);
+    log.push(`${have === null ? 'wrote' : 'updated'} ${path}`);
+  }
+  await fs.mkdir('/var/lib/tabcomputer', { recursive: true });
+  await fs.writeFile(MANIFEST_PATH, JSON.stringify(manifest, null, 2) + '\n');
+  return log;
+}
