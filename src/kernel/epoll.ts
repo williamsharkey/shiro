@@ -12,7 +12,7 @@ import {
   EPOLL_CTL_ADD, EPOLL_CTL_DEL, EPOLL_CTL_MOD, EPOLLET, EPOLLONESHOT, EPOLLERR, EPOLLHUP, EPOLLEXCLUSIVE,
   EPOLL_EVENT_SIZE, POLLIN, S_IFCHR,
 } from './abi';
-import { type OpenFile, type OpenFileKind, ReadyListeners, refCount } from './fd';
+import { type OpenFile, type OpenFileKind, ReadyListeners, refCount, DevNull, DevZero } from './fd';
 
 /**
  * One setTimeout for every pending poll/epoll/select deadline. A wait that
@@ -132,7 +132,8 @@ export class EpollFile implements OpenFile {
   /** epoll_ctl. `fd` is the caller's fd for `file` (reported back and used as the key, with the description). */
   ctl(op: number, fd: number, file: OpenFile, events: number, dataLo: number, dataHi: number): number {
     if (file === this) return -EINVAL;
-    if (file.kind === 'file' || file.kind === 'dir') return -EPERM;
+    // Files, directories and devices without a poll method (/dev/null, /dev/zero) can't be watched
+    if (file.kind === 'file' || file.kind === 'dir' || file instanceof DevNull || file instanceof DevZero) return -EPERM;
     if (file instanceof EpollFile && file.watches(this)) return -ELOOP;
     // At most 5 epolls deep, like Linux (EP_MAX_NESTS)
     if (op === EPOLL_CTL_ADD && file instanceof EpollFile && file.depth() >= 5) return -EINVAL;

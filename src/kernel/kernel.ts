@@ -1618,6 +1618,8 @@ export class Kernel {
         case A.SYS_wait4: {
           // WNOHANG, WUNTRACED, WCONTINUED, WNOWAIT (waitid comes through here), __WNOTHREAD/__WALL/__WCLONE
           if ((args[1] >>> 0) & ~(A.WNOHANG | A.WUNTRACED | A.WCONTINUED | A.WNOWAIT | 0xe0000000)) return -A.EINVAL;
+          // pid INT_MIN can't be negated into a process group
+          if ((args[0] | 0) === -0x80000000) return -A.ESRCH;
           const r = await this.waitpid(args[0], args[1], proc, sig);
           if (r.pid > 0) new DataView(data.buffer, data.byteOffset, 4).setInt32(0, r.status, true);
           return r.pid;
@@ -1809,6 +1811,7 @@ export class Kernel {
         case A.SYS_rmdir:
         case A.SYS_unlink:
         case A.SYS_unlinkat: {
+          if (nr === A.SYS_unlinkat && (args[2] & ~A.AT_REMOVEDIR)) return -A.EINVAL;
           const [dirfd, len, rmdir] = nr === A.SYS_unlinkat
             ? [args[0], args[1], !!(args[2] & A.AT_REMOVEDIR)]
             : [A.AT_FDCWD, args[0], nr === A.SYS_rmdir];

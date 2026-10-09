@@ -212,4 +212,16 @@ describe('kernel syscalls found by LTP', () => {
     await kernel.syscall(proc, A.SYS_write, [w, 1], new Uint8Array([1]));
     expect((await Promise.all(waits)).sort()).toEqual([0, 0, 1]);
   });
+
+  it('unlinkat01/wait403/epoll_ctl06: bad unlinkat flags EINVAL, wait4(INT_MIN) ESRCH, /dev/zero not pollable', async () => {
+    expect(await call(A.SYS_unlinkat, [A.AT_FDCWD, L('file'), 9999], 'file')).toBe(-A.EINVAL);
+    expect(await fs.exists('/tmp/kc/file')).toBe(true);
+    expect(await call(A.SYS_wait4, [-0x80000000, 0])).toBe(-A.ESRCH);
+    const ep = await call(A.SYS_epoll_create1, [0]);
+    for (const dev of ['/dev/zero', '/dev/null']) {
+      const fd = await open(dev, A.O_RDONLY);
+      expect(fd).toBeGreaterThanOrEqual(0);
+      expect(await call(A.SYS_epoll_ctl, [ep, A.EPOLL_CTL_ADD, fd, A.EPOLLIN, 0, 0])).toBe(-A.EPERM);
+    }
+  });
 });
