@@ -101,11 +101,9 @@ function pathIno(path: string): number {
   return ((a >>> 0) & 0xfffff) * 0x100000000 + (b >>> 0) || 3;
 }
 
-/** A fresh random 52-bit inode number. */
+/** A fresh random 52-bit inode number (unique enough; not a secret, so no crypto: one per created file) */
 function newIno(): number {
-  const r = new Uint32Array(2);
-  crypto.getRandomValues(r);
-  return (r[0] & 0xfffff) * 0x100000000 + r[1] || 3;
+  return Math.floor(Math.random() * 0x10000000000000) || 3;
 }
 
 /** Where a lazy file's bytes are: `len` bytes at `off` in chunk `chunk` of source `src`. */
