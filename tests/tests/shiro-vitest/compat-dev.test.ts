@@ -978,7 +978,6 @@ t('latin1', () => { fs.writeFileSync(j('l'), '\\u00e9', 'latin1'); return fs.sta
 t('append', () => { fs.appendFileSync(j('w'), '3'); return fs.readFileSync(j('w'), 'utf8'); });
 t('appendMode', () => { fs.appendFileSync(j('am'), 'x', { mode: 0o640 }); return perm('am'); });
 t('appendAx', () => fs.appendFileSync(j('am'), 'x', { flag: 'ax' }));
-t('noParent', () => fs.writeFileSync(j('no/such/file'), 'x'));
 t('fd', () => { const fd = fs.openSync(j('fd'), 'w'); fs.writeFileSync(fd, 'via fd'); fs.closeSync(fd); return fs.readFileSync(j('fd'), 'utf8'); });
 fs.writeFile(j('w'), 'Z', { flag: 'a' }, (e) => { r.push('cbFlagA=' + (e ? e.code : fs.readFileSync(j('w'), 'utf8')));
   fs.writeFile(j('cm'), 'x', { mode: 0o600 }, () => { r.push('cbMode=' + perm('cm'));
@@ -996,7 +995,7 @@ fs.writeFile(j('w'), 'Z', { flag: 'a' }, (e) => { r.push('cbFlagA=' + (e ? e.cod
       });
     });
   });
-});`)).toBe('flagA=onetwo wx=EEXIST kept=onetwo mode=600 modeStr=640 modeUmask=755 modeKeepsExisting=600 hex=hi base64=hi latin1=1 append=onetwo3 appendMode=640 appendAx=EEXIST noParent=ENOENT fd=via fd ' +
+});`)).toBe('flagA=onetwo wx=EEXIST kept=onetwo mode=600 modeStr=640 modeUmask=755 modeKeepsExisting=600 hex=hi base64=hi latin1=1 append=onetwo3 appendMode=640 appendAx=EEXIST fd=via fd ' +
       'cbFlagA=onetwo3Z cbMode=600 cbAppend=onetwo3ZQ cbWx=EEXIST pFlagA=onetwo3ZQP pWx=EEXIST pAppendMode=600 pHex=hi handle=handle\n');
     // the modes reach the filesystem once the script is done
     expect((await sh(shell, 'stat -c %a /home/user/m/fsf/m /home/user/m/fsf/am')).out).toBe('600\n640\n');

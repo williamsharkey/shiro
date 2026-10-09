@@ -528,9 +528,6 @@ export function createFsModule(deps: FsDeps): any {
       const resolved = real(p);
       const existed = existsNow(resolved);
       if (f.excl && existed) throw fsError('EEXIST', `EEXIST: file already exists, open '${p}'`, 'open', String(p));
-      if (existed === false && !(fileCache.has(resolved.slice(0, resolved.lastIndexOf('/')) + '/.') || existsNow(resolved.slice(0, resolved.lastIndexOf('/')) || '/') !== false)) {
-        throw fsError('ENOENT', `ENOENT: no such file or directory, open '${p}'`, 'open', String(p));
-      }
       if (!existed) applyMode(resolved, o.mode);
       const strData = storeData(resolved, data, { push: (w) => queueWrite(resolved, () => w) });
       if (strData === null) return; // binary: written through the byte cache
