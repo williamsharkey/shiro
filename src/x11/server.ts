@@ -1229,24 +1229,59 @@ export class XServer {
 
   selectionOwner(name: string): XWindow | null { return this.selections.get(this.existingAtom(name))?.win ?? null; }
 
-  /** The host (browser clipboard bridge) takes a selection; requests then go to `serve`. */
-  hostOwnSelection(name: string, owner: XWindow): void {
-    const sel = this.atom(name);
-    const old = this.selections.get(sel);
-    const t = this.time();
-    if (old && old.win !== owner) this.event(old.client, (e) => e.u8(P.SelectionClear).u8(0).u16(0).u32(t).u32(old.win.id).u32(sel));
-    if (owner.owner) this.selections.set(sel, { win: owner, client: owner.owner, time: t });
-  }
-
   private convertSelection(c: Client, r: Reader): void {
     const requestor = this.win(r.u32()); const sel = r.u32(); const target = r.u32(); const prop = r.u32(); const time = r.u32();
     if (!this.atomName(sel)) throw new XError(P.BadAtom, sel);
+    this.requestSelection(c, requestor, sel, target, prop, time);
+  }
+
+  private requestSelection(c: Client, requestor: XWindow, sel: number, target: number, prop: number, time: number): void {
     const o = this.selections.get(sel);
     if (o && !o.client.closed) {
       this.event(o.client, (e) => e.u8(P.SelectionRequest).u8(0).u16(0).u32(time).u32(o.win.id).u32(requestor.id).u32(sel).u32(target).u32(prop));
       return;
     }
     this.event(c, (e) => e.u8(P.SelectionNotify).u8(0).u16(0).u32(time).u32(requestor.id).u32(sel).u32(target).u32(0));
+  }
+
+  // ── server-side clients (the clipboard bridge) ──
+
+  /**
+   * A client inside the server: it gets events as 32-byte messages (replies
+   * never come, it doesn't send requests) and acts through the methods below.
+   */
+  internalClient(onEvent: (e: Uint8Array) => void): Client {
+    return this.connect({
+      write: (d) => { for (let o = 0; o + 32 <= d.length; o += 32) onEvent(d.subarray(o, o + 32)); },
+      close: () => {},
+    });
+  }
+
+  /** An unmapped InputOnly window of the root owned by an internal client. */
+  internalWindow(c: Client): XWindow {
+    const id = c.base | (0x1000 + this.internalWindows++);
+    const w = new XWindow(id, this.root, -1, -1, 1, 1, 0, P.InputOnly, 0, VISUAL_24, c);
+    this.resources.set(id, { kind: 'window', owner: c, value: w, free: () => {} });
+    this.root.children.unshift(w);
+    return w;
+  }
+  private internalWindows = 0;
+
+  /** SetSelectionOwner for an internal client. */
+  ownSelection(c: Client, w: XWindow | null, name: string): void {
+    this.setSelectionOwner(c, w ? w.id : 0, this.atom(name), 0);
+  }
+
+  /** ConvertSelection for an internal client: the owner answers with SelectionNotify to `w`. */
+  convertSelectionFor(c: Client, w: XWindow, selection: string, target: string, property: string): void {
+    this.requestSelection(c, w, this.atom(selection), this.atom(target), this.atom(property), this.time());
+  }
+
+  /** Send a SelectionNotify (the answer to a SelectionRequest) to a requestor. */
+  selectionNotify(requestorId: number, selection: number, target: number, property: number, time: number): void {
+    const w = this.winOrNull(requestorId);
+    if (!w?.owner) return;
+    this.event(w.owner, (e) => e.u8(P.SelectionNotify).u8(0).u16(0).u32(time).u32(w.id).u32(selection).u32(target).u32(property));
   }
 
   // ── SendEvent ──

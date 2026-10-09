@@ -278,3 +278,60 @@ bash scripts/pkgbuild/x86/publish.sh vim 9.2.0000   # -> public/pkg/vim/9.2.0000
 ncurses-based programs are linked against a static ncurses 6.5 with
 `xterm-256color`, `xterm`, `screen*`, `tmux*`, `linux`, `vt100`, `vt220` and
 `dumb` compiled in, so they work without a terminfo database.
+
+## Claude Code native binary (unix/perf-kernel)
+
+Status: **not run yet** (static analysis only; running the downloaded
+binary under Blink needs the user's go-ahead in this environment).
+
+What the official native installer (`claude.ai/install.sh`) installs, as of
+2.1.295 (`downloads.claude.ai/claude-code-releases/<version>/<platform>/claude`,
+sha256-checked against `manifest.json`):
+
+- A **Bun single-file executable**: Bun's runtime (`.text` 60 MB, JSC
+  included) plus the app in a `.bun` section (160 MB). linux-x64 is
+  256 MB, linux-x64-musl 250 MB; both are **dynamically linked** (glibc
+  2.26+: `libc`, `libm`, `libpthread`, `libdl`, `librt` and
+  `/lib64/ld-linux-x86-64.so.2`; or musl's `/lib/ld-musl-x86_64.so.1`).
+- Mapped image: R 23 MB + RX 60 MB + RW 161 MB, a 12.5 MB main stack
+  (`PT_GNU_STACK`), TLS 22 KB. That is ~250 MB of guest memory before JSC
+  starts, inside Blink's 4 GB wasm memory.
+- Imports that matter for Blink and the kernel: raw `syscall()` (Bun's
+  io_uring/futex/memfd/statx calls go through it, so the set is only
+  visible at run time), `epoll_create1`/`epoll_pwait`, `eventfd`,
+  `signalfd`, `inotify_init1`, `splice`, `sendfile`, `prctl`,
+  `sched_getaffinity`, `posix_spawn*` (with `addchdir`), `mmap`/
+  `mprotect`/`madvise` (JSC's JIT and its large virtual reservations).
+
+To try it (once allowed): put the binary and the five glibc libraries plus
+the loader in the VFS (Blink loads the ELF interpreter from SHIROFS), then
+run `claude --version` and `claude -p "say hi"` with a dummy key, with and
+without `BUN_JSC_useJIT=0`.
+
+## Linux GUI apps (unix/gui)
+
+Unmodified Debian bookworm amd64 programs in Blink, drawing through Xshiro,
+the X11 server in the page, into desktop windows ([GUI.md](GUI.md)). Route
+**gui** = `gui APP` / the dock: the app's Debian packages are fetched on first
+use (sha256-checked, cached by hash), then the ELF runs as a kernel process
+with `DISPLAY=:0`. Smoke tests: `x11.test.ts` (protocol, and a raw-protocol
+x86-64 client over the kernel's AF_UNIX socket), `gui-apps.test.ts`
+(install + launch); browser runs with `scripts/gui/shoot.mjs` (headless
+Chromium, screenshots in `docs/screenshots/gui-*.png`). Times: first launch
+of an installed app → first frame, in Chromium.
+
+| Software | Version | Route | Status | Tested | Known issues |
+| --- | --- | --- | --- | --- | --- |
+| xeyes | x11-apps 7.7+9 | gui (7.5 MB) | works | shaped window, pupils follow the pointer; first frame 0.9–1.3 s, warm 0.5 s | — |
+| xeyes (Debian mode) | trixie x11-apps | `debian install`, then `gui xeyes` = real `apt-get install` in Blink | works | apt update + install 384 s; window 1.0 s after launch | apt is slow (interpreted/JIT x86) |
+| xclock | x11-apps 7.7+9 | gui (8.9 MB) | works | analog clock with RENDER antialiasing; 2.6–2.8 s | — |
+| xcalc, xedit | x11-apps 7.7+9 | gui | not checked | — | — |
+| xterm | 379 | gui (9.3 MB) | works | Shiro's shell in xterm's pty, typing, output, core fonts; 2.5–2.7 s | no XKB (core keymap), UTF-8 locale falls back to C (Xlib has no C.UTF-8 entry) |
+| FeatherPad | 1.3.5 (Qt 5.15.8) | gui (35 MB of an 84 MB closure) | works | menus, toolbar icons, typing text; 10.5–16 s | Qt warns about missing XKB; no GLX (Mesa never downloaded) |
+| GPicView | 0.2.5 (GTK 2.24.33) | gui (26.8 MB) | works | opens a PNG at 512×512; 6.9–9.7 s | some stock toolbar icons missing |
+| L3afpad | 0.8.18.1.11 (GTK 3.24.38) | gui (33.1 MB of a 51 MB closure) | works | Adwaita theme, menus, typing text; 12.9 s | needed Blink patch 0029 (SSE compares) |
+| Mousepad | 0.5.10 (GTK 3, Xfce) | gui (44.6 MB) | works | editor window and menus; 32 s | slow start: waits on D-Bus / xfconf, which aren't there |
+| Ristretto | 0.12.4 (GTK 3, Xfce) | gui (35.1 MB) | works | opens a PNG; 14–15.5 s | no thumbnails (tumbler over D-Bus) |
+| LXImage-Qt | 1.2.0 (Qt 5) | gui (36.8 MB) | exits | — | without a D-Bus session bus its single-instance check fails and it quits (status 0) |
+| GIMP | 2.10.34 (GTK 2) | gui (53.2 MB of a 141 MB closure) | works (slow) | main window, menus; first start 290 s, later starts 84 s | first start queries ~100 plug-ins one Blink process each; 22 plug-ins whose libraries are left out (PDF, HEIF, help browser...) are removed; no MIDI/ALSA, no D-Bus |
+| Inkscape | 1.2 (GTK 3) | — | not packaged | — | 94 MB closure; next to try |

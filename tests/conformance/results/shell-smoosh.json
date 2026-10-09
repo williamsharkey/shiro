@@ -1,0 +1,84 @@
+{
+ "suite": "smoosh",
+ "title": "Shell: smoosh POSIX tests",
+ "note": "POSIX sh cases from [smoosh](https://github.com/mgree/smoosh) (tests/shell), judged on stdout and exit status; scored where host dash or bash --posix passes. \"Before\" is unix/integration c14344d.",
+ "files": {
+  "benchmark": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "builtin": {
+   "pass": 56,
+   "total": 59,
+   "failures": [
+    {
+     "name": "builtin.exec.modernish.mkfifo.loop",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "builtin.hash.nonposix",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "builtin.readonly.assign.interactive",
+     "reason": "status 1, want 0"
+    }
+   ]
+  },
+  "parse": {
+   "pass": 2,
+   "total": 3,
+   "failures": [
+    {
+     "name": "parse.eval.error",
+     "reason": "status 1, want 0"
+    }
+   ]
+  },
+  "semantics": {
+   "pass": 84,
+   "total": 91,
+   "failures": [
+    {
+     "name": "semantics.background.pipe.pid",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "semantics.dot.glob",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "semantics.escaping.backslash.modernish",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "semantics.evalorder.fun",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "semantics.pattern.modernish",
+     "reason": "status 1, want 0"
+    },
+    {
+     "name": "semantics.redir.close",
+     "reason": "status 0, want 1"
+    },
+    {
+     "name": "semantics.special.assign.visible.nonposix",
+     "reason": "stdout differs"
+    }
+   ]
+  },
+  "sh": {
+   "pass": 6,
+   "total": 7,
+   "failures": [
+    {
+     "name": "sh.monitor.bg",
+     "reason": "status 3, want 0"
+    }
+   ]
+  }
+ }
+}

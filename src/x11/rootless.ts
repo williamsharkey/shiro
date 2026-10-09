@@ -37,6 +37,8 @@ export class Rootless {
   /** Keys held down, so a blur can release them. */
   private held = new Set<number>();
   onTitle: ((w: XWindow, title: string) => void) | null = null;
+  /** An X toplevel got keyboard focus (the clipboard bridge offers the browser clipboard). */
+  onFocusIn: (() => void) | null = null;
 
   constructor(readonly server: XServer, readonly host: WindowHost) {
     server.hooks = {
@@ -101,7 +103,7 @@ export class Rootless {
     const t: Top = { win: w, cw: null, img: null, dirty: null, frame: 0, hints, cleanup: [] };
     this.tops.set(w, t);
     const decorated = !this.undecorated(w);
-    let x = w.x, y = w.y;
+    let x: number | undefined = w.x, y: number | undefined = w.y;
     if (decorated) {
       const userPos = (hints.flags & 1) || ((hints.flags & 4) && (x || y));
       const transient = this.transientFor(w);
@@ -109,13 +111,13 @@ export class Rootless {
         x = Math.round(transient.x + (transient.width - w.width) / 2);
         y = Math.round(transient.y + (transient.height - w.height) / 3);
       } else if (!userPos) {
-        const p = this.host.placeWindow?.(w.width, w.height) ?? { x: 80, y: 80 };
-        x = p.x; y = p.y;
+        // the host's placement (centered, cascading); position() reports it below
+        const p = this.host.placeWindow?.(w.width, w.height);
+        x = p?.x; y = p?.y;
       }
-      if (x !== w.x || y !== w.y) this.server.hostMoved(w, x, y);
     }
     const cw = this.host.createCanvasWindow({
-      title: this.title(w) || 'X11', x, y, width: w.width, height: w.height, decorated, override: w.overrideRedirect,
+      title: this.title(w) || (this.transientFor(w) ? this.title(this.transientFor(w)!) : '') || this.wmClass(w) || 'X11', x, y, width: w.width, height: w.height, decorated, override: w.overrideRedirect,
       transientFor: this.transientFor(w) ? this.tops.get(this.transientFor(w)!)?.cw ?? null : null,
       minWidth: hints.minW || undefined, minHeight: hints.minH || undefined,
       resizable: !(hints.maxW && hints.maxW === hints.minW && hints.maxH === hints.minH),
@@ -158,7 +160,8 @@ export class Rootless {
     if (!p) return undefined;
     // the instance name (argv[0] of most apps: "xterm", "l3afpad") is the desktop app id
     const parts = new TextDecoder('latin1').decode(p.data).split('\0');
-    return (parts[0] || parts[1] || '').toLowerCase() || undefined;
+    // ... without a version suffix ("gimp-2.10" → "gimp")
+    return (parts[0] || parts[1] || '').toLowerCase().replace(/-\d+(\.\d+)*$/, '') || undefined;
   }
 
   private destroyed(w: XWindow): void {
@@ -246,6 +249,7 @@ export class Rootless {
 
   private focusIn(w: XWindow): void {
     if (!w.mapped || w.destroyed) return;
+    this.onFocusIn?.();
     this.server.raiseTop(w);
     const hints = this.server.prop(w, 'WM_HINTS');
     let input = true;

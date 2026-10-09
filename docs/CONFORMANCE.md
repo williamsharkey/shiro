@@ -6,8 +6,9 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1393/1567 (88.9%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1407/1567 (89.8%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1394/1567 (89.0%)** |
+| [Shell: smoosh POSIX tests](#shell-smoosh-posix-tests) | 111/162 (68.5%) | **150/162 (92.6%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **625/635 (98.4%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **148/320 (46.3%)** |
 | [Syscalls: wasi-testsuite (wasm32-wasip1)](#syscalls-wasi-testsuite-wasm32-wasip1) | — | **71/72 (98.6%)** |
@@ -45,24 +46,24 @@ How each suite runs, and what is and isn't scored, is described in
 | builtin-echo | 0/27 | 25/27 | 2 |
 | builtin-printf | 0/55 | 51/55 | 4 |
 | builtin-read | 0/64 | 64/64 | 0 |
-| builtin-eval-source | 0/23 | 19/23 | 4 |
+| builtin-eval-source | 0/23 | 20/23 | 3 |
 | builtin-getopts | 0/30 | 26/30 | 4 |
-| builtin-trap | 0/33 | 29/33 | 4 |
+| builtin-trap | 0/33 | 31/33 | 2 |
 | builtin-bracket | 0/50 | 46/50 | 4 |
 | builtin-cd | 3/28 | 26/28 | 2 |
 | builtin-special | 1/12 | 7/12 | 5 |
-| builtin-type | 0/6 | 3/6 | 3 |
+| builtin-type | 0/6 | 4/6 | 2 |
 | builtin-vars | 0/38 | 33/38 | 5 |
-| dbracket | 1/49 | 44/49 | 5 |
+| dbracket | 1/49 | 45/49 | 4 |
 | dparen | 0/14 | 13/14 | 1 |
 | assign | 2/43 | 38/43 | 5 |
 | append | 1/20 | 20/20 | 0 |
 | array-basic | 0/5 | 5/5 | 0 |
-| array | 2/78 | 75/78 | 3 |
+| array | 2/78 | 76/78 | 2 |
 | array-assoc | 0/38 | 35/38 | 3 |
 | brace-expansion | 0/55 | 51/55 | 4 |
 | tilde | 0/14 | 9/14 | 5 |
-| glob | 0/23 | 18/23 | 5 |
+| glob | 0/23 | 21/23 | 2 |
 | pipeline | 0/25 | 20/25 | 5 |
 | exit-status | 0/11 | 8/11 | 3 |
 | errexit | 0/35 | 34/35 | 1 |
@@ -74,10 +75,10 @@ How each suite runs, and what is and isn't scored, is described in
 | empty-bodies | 0/3 | 3/3 | 0 |
 | whitespace | 0/0 | 0/0 | 0 |
 | shell-grammar | 29/33 | 32/33 | 1 |
-| process-sub | 0/8 | 3/8 | 5 |
+| process-sub | 0/8 | 6/8 | 2 |
 | regex | 1/37 | 35/37 | 2 |
 | temp-binding | 0/4 | 4/4 | 0 |
-| background | 3/27 | 21/27 | 6 |
+| background | 3/27 | 23/27 | 4 |
 | sh-options | 0/32 | 31/32 | 1 |
 | command-parsing | 0/2 | 2/2 | 0 |
 
@@ -101,22 +102,22 @@ How each suite runs, and what is and isn't scored, is described in
 - **func-parsing**: = in function name; Function name with $; Function name with command sub
 - **builtin-echo**: echo builtin should disallow typed args - literal; echo builtin should disallow typed args - variable
 - **builtin-printf**: printf %c unicode - prints the first BYTE of a string - it does not respect UTF-8; bash truncates long strftime string at 128; printf positive integer overflow; printf negative integer overflow
-- **builtin-eval-source**: eval usage; eval YSH block with 'break continue return error'; Source with syntax error; Eval with syntax error
+- **builtin-eval-source**: eval usage; Source with syntax error; Eval with syntax error
 - **builtin-getopts**: getopts with invalid variable name; OPTIND; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
-- **builtin-trap**: exit 1 when trap code string is invalid; exit codes for traps are isolated; traps are cleared in subshell (started with &); trap USR1, sleep, SIGINT: non-interactively
+- **builtin-trap**: exit 1 when trap code string is invalid; trap USR1, sleep, SIGINT: non-interactively
 - **builtin-bracket**: -k for sticky bit; test -p named pipe; -ef; test -c
 - **builtin-cd**: pwd in symlinked dir on shell initialization; Survey of getcwd() syscall
 - **builtin-special**: Prefix assignments persist after special builtins, like : (set -o posix); Prefix assignments persist after readonly, but NOT exported (set -o posix); Prefix binding for exec is a special case (versus e.g. readonly); bash 'type' gets confused - says 'function', but runs builtin; command, builtin - both can be redefined, not special (regression)
-- **builtin-type**: type -\> alias external; type of relative path; more special builtins
+- **builtin-type**: type -\> alias external; type of relative path
 - **builtin-vars**: Export sets a global variable that persists after export -n; Export a local that shadows a global; Unset exported variable, then define it again.  It's NOT still exported.; Exporting a parent func variable (dynamic scope); local after readonly
-- **dbracket**: [[ regex syntax error; [[ at runtime doesn't work; [[ with env prefix doesn't work; tilde expansion with =~ (confusing); [[ ]] with redirect
+- **dbracket**: [[ regex syntax error; [[ at runtime doesn't work; [[ with env prefix doesn't work; [[ ]] with redirect
 - **dparen**: (( )) with redirect
 - **assign**: Env binding can use preceding bindings, but not subsequent ones; Trying to run keyword 'for'; Test above without 'local' (which is not POSIX); aliased assignment doesn't split; "declare -a arr" and "readonly -a a" creates an empty array (OSH)
-- **array**: space before ( in array initialization; array with invalid token; a+=() modifies existing instance of BashArray
+- **array**: space before ( in array initialization; array with invalid token
 - **array-assoc**: unset -v and assoc array; nameref and assoc array; bash bug: (( A["$key"] = 1 )) doesn't work
 - **brace-expansion**: expansion on RHS of assignment; no expansion with RHS assignment; Two kinds of tilde expansion; Mixed case char expansion is invalid
 - **tilde**: ${undef:-~}; ${x//~/~root}; a[x]=foo:~ has tilde expansion; x=${undef-~:~}; temp assignment x=~ env
-- **glob**: Glob of unescaped [[] and []]; Glob of negated unescaped [[] and []]; \ in unquoted substitutions does not match a backslash; \ in unquoted substitutions escapes globchars; shopt -u globskipdots shows . and ..
+- **glob**: \ in unquoted substitutions does not match a backslash; \ in unquoted substitutions escapes globchars
 - **pipeline**: PIPESTATUS is set on simple commands; \|&; ! is not a command; Evaluation of argv[0] in pipeline occurs in child; SIGPIPE causes pipeline to die (regression for issue #295)
 - **exit-status**: If subshell false -- exit code is propagated in a weird way (strict_argv prevents); Exit code when command sub evaluates to empty str, e.g. `false` (#2416); More test cases with empty argv
 - **errexit**: pipeline process respects errexit
@@ -125,9 +126,9 @@ How each suite runs, and what is and isn't scored, is described in
 - **alias**: define and use alias on a single line; Alias must be an unquoted word, no expansions allowed; first and second word are the same alias, with trailing space; Syntax error after expansion; Loop split across alias in another way; Loop split across both iterative and recursive aliases; Alias with a quote in the middle is a syntax error; Alias can be defined and used on a single line; alias with line continuation in the middle; alias for left brace; alias for left paren; here doc inside alias; Corner case: alias inside LHS array arithmetic expression
 - **let**: let with ()
 - **shell-grammar**: If with then on same line missing semicolon
-- **process-sub**: Process sub from shell to stdin; Non-linear pipeline with \>(); status code is available; shopt -s process_sub_fail; process subs and pipelines together
+- **process-sub**: Process sub from shell to stdin; Non-linear pipeline with \>()
 - **regex**: Unquoted { is a regex parse error; make a lisp example
-- **background**: wait -n with arguments - arguments are respected; wait with invalid arg; Wait for job and PIPESTATUS - cat; YSH wait --all; YSH wait --verbose; Signal message for killed background job
+- **background**: wait -n with arguments - arguments are respected; wait with invalid arg; Wait for job and PIPESTATUS - cat; Signal message for killed background job
 - **sh-options**: noclobber on \<\>
 
 </details>
@@ -248,6 +249,27 @@ The same cases as above, run by scripts/conformance/browser-oils.mjs through the
 - **regex**: Unquoted { is a regex parse error; make a lisp example
 - **background**: wait -n with arguments - arguments are respected; wait with invalid arg; Wait for job and PIPESTATUS - cat; YSH wait --all; YSH wait --verbose; Signal message for killed background job
 - **sh-options**: noclobber on \<\>
+
+</details>
+
+## Shell: smoosh POSIX tests
+
+POSIX sh cases from [smoosh](https://github.com/mgree/smoosh) (tests/shell), judged on stdout and exit status; scored where host dash or bash --posix passes. "Before" is unix/integration c14344d.
+
+| Area | Before | Now | Failing |
+|---|---|---|---|
+| benchmark | 0/2 | 2/2 | 0 |
+| builtin | 38/59 | 56/59 | 3 |
+| parse | 2/3 | 2/3 | 1 |
+| semantics | 67/91 | 84/91 | 7 |
+| sh | 4/7 | 6/7 | 1 |
+
+<details><summary>Failing cases</summary>
+
+- **builtin**: builtin.exec.modernish.mkfifo.loop — stdout differs; builtin.hash.nonposix — status 1, want 0; builtin.readonly.assign.interactive — status 1, want 0
+- **parse**: parse.eval.error — status 1, want 0
+- **semantics**: semantics.background.pipe.pid — status 1, want 0; semantics.dot.glob — stdout differs; semantics.escaping.backslash.modernish — status 1, want 0; semantics.evalorder.fun — status 1, want 0; semantics.pattern.modernish — status 1, want 0; semantics.redir.close — status 0, want 1; semantics.special.assign.visible.nonposix — stdout differs
+- **sh**: sh.monitor.bg — status 3, want 0
 
 </details>
 

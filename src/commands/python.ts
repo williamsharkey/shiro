@@ -175,7 +175,8 @@ sys.stderr = _shiro_err
       term.writeOutput(prompt);
 
       term.enterRawMode((key: string) => {
-        if (key === '\r' || key === '\n') {
+        // The terminal's raw mode hands over key names ('Enter', 'Ctrl+C', ...)
+        if (key === 'Enter' || key === '\r' || key === '\n') {
           term.writeOutput('\r\n');
           const input = line.trim();
           line = '';
@@ -217,22 +218,22 @@ except SyntaxError:
           }
 
           term.writeOutput(prompt);
-        } else if (key === '\x7f' || key === '\b') {
+        } else if (key === 'Backspace' || key === '\x7f' || key === '\b') {
           if (line.length > 0) {
             line = line.slice(0, -1);
             term.writeOutput('\b \b');
           }
-        } else if (key === '\x03') {
+        } else if (key === 'Ctrl+C' || key === '\x03') {
           // Ctrl+C
           term.writeOutput('^C\r\n');
           line = '';
           term.writeOutput(prompt);
-        } else if (key === '\x04') {
+        } else if (key === 'Ctrl+D' || key === '\x04') {
           // Ctrl+D
           term.writeOutput('\r\n');
           term.exitRawMode();
           resolve(0);
-        } else if (key.charCodeAt(0) >= 32) {
+        } else if (key.length === 1 && key.charCodeAt(0) >= 32) {
           line += key;
           term.writeOutput(key);
         }

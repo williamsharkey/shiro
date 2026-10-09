@@ -223,3 +223,12 @@ into them, loopback listen/accept, and the iframeServer HTTP bridge.
 - UDP beyond DNS.
 - `net.connect` to a port served by `http.createServer` (that server is not a
   kernel socket).
+
+## Sign-in and other relays (desktop)
+
+`NetConfig.credentials` (default true) sends the saved GitHub sign-in with
+token requests and asks `requireNetworkSignIn()` (src/net-signin.ts) once on a
+401, for this site's relay. A relay the user chose in the desktop's Settings
+("Use my own connection") is configured with `credentials: false`, so it never
+receives that token. See docs/DESKTOP.md, "Network sign-in".
+

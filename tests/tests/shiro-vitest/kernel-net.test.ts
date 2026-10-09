@@ -267,6 +267,14 @@ describe('kernel sockets over the TCP relay', () => {
       expect(dec.decode(buf.subarray(0, await s2.read(buf)))).toBe('hi');
       await s2.close();
       expect(signin.networkStatus()).toBe('signed-in');
+      // A relay the user chose (credentials: false) never gets the GitHub token
+      // and never opens the sign-in sheet, even when it answers 401
+      const asked2: unknown[] = [];
+      const off2 = signin.setNetworkSignInHandler(async (need) => { asked2.push(need); return 'good-token'; });
+      const s3 = stream(stackFor(P.relayD, P.origin, { credentials: false }));
+      expect(await s3.connect(v4('127.0.0.1', P.echoPort))).toBeLessThan(0);
+      expect(asked2).toEqual([]);
+      off2();
     } finally {
       delete (globalThis as any).localStorage;
     }
