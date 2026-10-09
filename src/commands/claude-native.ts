@@ -10,6 +10,7 @@
  * - musl's dynamic loader, from Debian's `musl` package (pinned by sha256),
  *   as /lib/ld-musl-x86_64.so.1.
  */
+import { activeProfile } from '../profile';
 import type { CommandContext } from './index';
 import { sha256Hex } from '../pkg-manager';
 
@@ -117,6 +118,7 @@ export async function installNativeClaude(ctx: CommandContext, target: string, v
     await ctx.fs.mkdir('/lib', { recursive: true }).catch(() => {});
     await ctx.fs.symlink('/' + muslDeb.libc, MUSL_LOADER).catch(() => {});
   }
-  say(`Installed Claude Code ${version} (native, ${PLATFORM}) at ${target}.\nRun it with: claude --native   (plain \`claude\` stays the npm build)\n`);
+  say(`Installed Claude Code ${version} (native, ${PLATFORM}) at ${target}.\n`
+    + (activeProfile().shims.claude === 'native' ? 'Run it with: claude   (claude --npm runs the npm build)\n' : 'Run it with: claude --native   (plain `claude` stays the npm build)\n'));
   return 0;
 }
