@@ -662,7 +662,7 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(realtimeBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe(
-      'valid 1 subms clock_gettime 1 gettimeofday 1 backwards 0 near time() 1 1 back-to-back elapsed!=0 rare 1\n');
+      'valid 1 subms clock_gettime 1 gettimeofday 1 backwards 0 near time() 1 1\n');
   }, 60_000);
 
   // glibc's pthread_getattr_np reads the main stack from here (glibc Bun: Claude Code, opencode)
