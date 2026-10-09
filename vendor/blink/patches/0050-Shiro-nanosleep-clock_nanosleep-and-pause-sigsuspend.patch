@@ -1,0 +1,89 @@
+From aff711846ff706922689a8c8e43a04ecf29b40ff Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 13:18:40 +0000
+Subject: [PATCH 50/50] Shiro: nanosleep, clock_nanosleep and pause/sigsuspend
+ show the process sleeping
+
+Blink sleeps these itself, so the kernel saw the process running (R in
+/proc/PID/stat). LTP's TST_PROCESS_STATE_WAIT(pid, 'S') then waits
+forever for a child in pause() or a sleep (pause01, signal01), the way
+futex waits did before ShiroSleeping.
+---
+ blink/syscall.c | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/blink/syscall.c b/blink/syscall.c
+index dd1d7d8..6db6538 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -4206,6 +4206,7 @@ static int SysSetitimer(struct Machine *m, int which, i64 neuaddr,
+ }
+ 
+ static int SysNanosleep(struct Machine *m, i64 req, i64 rem) {
++  bool sleeping;
+   struct timespec_linux gt;
+   const struct timespec_linux *gtp;
+   struct timespec ts, now, deadline;
+@@ -4219,13 +4220,17 @@ static int SysNanosleep(struct Machine *m, i64 req, i64 rem) {
+   if (ts.tv_sec < 0) return einval();
+   if (!(0 <= ts.tv_nsec && ts.tv_nsec < 1000000000)) return einval();
+   deadline = AddTime(now, ts);
++  // the kernel shows the process sleeping (state S) meanwhile
++  sleeping = CompareTime(ts, FromMilliseconds(2)) >= 0;
++  if (sleeping) ShiroSleeping(m, 1);
+   for (;;) {
+-    if (CompareTime(now, deadline) >= 0) return 0;
++    if (CompareTime(now, deadline) >= 0) break;
+     ts = SubtractTime(deadline, now);
+     if (nanosleep(&ts, 0)) {
+       unassert(errno == EINTR);
+       // this may run a guest signal handler before returning
+       if (CheckInterrupt(m, false)) {
++        if (sleeping) ShiroSleeping(m, -1);
+         // a signal was delivered or is about to be delivered
+         if (rem) {
+           // rem is only updated when -1 w/ eintr is returned
+@@ -4246,6 +4251,8 @@ static int SysNanosleep(struct Machine *m, i64 req, i64 rem) {
+     // even if nanosleep() claims it slept the full time we check
+     now = GetTime();
+   }
++  if (sleeping) ShiroSleeping(m, -1);
++  return 0;
+ }
+ 
+ static int SysClockNanosleep(struct Machine *m, int clock, int flags,
+@@ -4261,6 +4268,7 @@ static int SysClockNanosleep(struct Machine *m, int clock, int flags,
+   }
+   req.tv_sec = Read64(gtimespec.sec);
+   req.tv_nsec = Read64(gtimespec.nsec);
++  ShiroSleeping(m, 1);
+ TryAgain:
+ #if defined(TIMER_ABSTIME) && !defined(__OpenBSD__)
+   flags = flags & TIMER_ABSTIME_LINUX ? TIMER_ABSTIME : 0;
+@@ -4301,6 +4309,7 @@ TryAgain:
+       goto TryAgain;
+     }
+   }
++  ShiroSleeping(m, -1);
+   return rc;
+ }
+ 
+@@ -4329,6 +4338,7 @@ static int SigsuspendPolyfill(struct Machine *m, u64 mask) {
+   oldmask = m->sigmask;
+   m->sigmask = mask;
+   nanos = 1;
++  ShiroSleeping(m, 1);
+   while (!CheckInterrupt(m, false)) {
+     if (nanos > 256) {
+       if (nanos < 10 * 1000) {
+@@ -4347,6 +4357,7 @@ static int SigsuspendPolyfill(struct Machine *m, u64 mask) {
+       nanos <<= 1;
+     }
+   }
++  ShiroSleeping(m, -1);
+   m->sigmask = oldmask;
+   return -1;
+ }
+-- 
+2.43.0
+

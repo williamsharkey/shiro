@@ -510,6 +510,22 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    rest are real ≥1 ms pauses between the two reads, which only a fix in
    vim avoids). `SHIRO_BLINK_PROBE` prints all 16 registers. Test:
    `fixtures/x86/realtime.c`.
+50. `nanosleep`, `clock_nanosleep` and `pause`/`sigsuspend` (which Blink
+   sleeps itself) show the process sleeping in `/proc/PID/stat`, as futex
+   waits do (patch 36): LTP waits for `S` before signalling a child
+   (pause01, signal01). Test: `fixtures/x86/sleepstate.c`.
+51. A `FUTEX_WAKE` grant goes only to a waiter that was waiting at the
+   wake. A thread or process that woke its peer and then waited on the same
+   word at once (LTP checkpoints: the value never changes) could take its
+   own grant and return, leaving the peer to time out (fork04, waitpid13).
+   Test: `fixtures/x86/futexpingpong.c`.
+
+The guest's kernel calls go over a pool of channels (`src/x86-engine/blink.ts`
+→ `public/engines/blink/host.mjs`). It starts at 6, and host.mjs asks the
+page for another (up to 64) while all are busy. Before, more threads or
+same-instance fork children blocked in the kernel than channels held up
+every other call of the instance (epoll_wait15/16). Test:
+`fixtures/x86/blockedkids.c`.
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.
