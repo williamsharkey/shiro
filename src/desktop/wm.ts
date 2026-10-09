@@ -217,6 +217,8 @@ export interface DockGroup {
   collapse?: 'always' | 'auto';
   /** With 'auto': stack once the group has more apps than this (default 4) */
   maxLoose?: number;
+  /** Members that keep their own dock tile when the rest is stacked (not on a crowded phone dock) */
+  loose?: string[];
 }
 
 export interface MenuItem {

@@ -111,6 +111,38 @@ What stands out:
 - Boot is fine: the desktop is revealed at 255 ms cold and 231 ms warm,
   with 216 MiB renderer RSS once it's up.
 
+## Toolchain layers
+
+`toolchain install ID` (docs/DEBIAN.md "Toolchain layers") against apt for
+the same packages. Measured with `bench/suites/toolchains.mjs` (`node
+bench/run.mjs --suites toolchains`, isolated page, headless Chromium) on
+machine `e57125c23b92`, 2026-10-09, branch unix/toolchains. Layers are
+served by server.mjs from `.toolchain-build/layers`. apt's packages came
+from the mirror's disk cache. Each sample starts from a fresh profile:
+`debian install`, then `toolchain install ID`, then the first real use.
+Layer rows are medians of 2 samples; apt rows are 1 sample.
+
+| set | first use | layer: install | layer: first use | layer: fresh profile → working | apt: fresh profile → working |
+|---|---|---:|---:|---:|---:|
+| `c` | `gcc hello.c && ./a.out` | 1.3 s | 7.2 s | **8.9 s** | > 60 min (timed out unpacking package 100 of 115) |
+| `python` | `python3 -c 'import json; ...'` | 0.9 s | 5.3 s | **6.6 s** | **17.8 min** (+1.5 GiB renderer RSS peak) |
+| `tex` | `pdflatex` on a one-line article | 1.5 s | 5.1 s | **7.0 s** | 33 min (README, earlier run) |
+| `classic` | `gfortran h.f90 && ./hf` | 0.9 s | 9.2 s | **10.5 s** | not measured |
+| `node` | `/usr/bin/node -e` | 6.8 s | 17.0 s | **24.3 s** | not measured |
+| `java` | `javac Hello.java && java Hello` | installs | JVM aborts | — | — |
+
+- First use is the programs' own start-up in Blink plus fetching their
+  chunks. Warm runs are 15–20 % faster (gcc 5.9 s, python 4.5 s, pdflatex
+  4.1 s, gfortran 7.1 s, node 14.5 s).
+- Renderer RSS peaks above the pre-run level: install +0 to +160 MiB (node,
+  383 packages). First use +138 MiB (pdflatex) to +596 MiB (node). Browser
+  storage after the first use is 26–107 MiB; apt's python3 set left 412 MiB.
+- The apt `c` run overlapped with other browser checks on the machine for
+  part of its hour. Even so, it was still unpacking when it timed out.
+- `java`: the layer installs and dpkg is consistent, but HotSpot falls back
+  to the legacy vsyscall `getcpu` page when glibc's `sched_getcpu()` fails
+  (Blink has no getcpu syscall) and gets SIGSEGV. That needs an engine fix.
+
 ## Hotspots (ranked by expected payoff)
 
 Measured while recording the baseline; the profiles come from
@@ -236,6 +268,74 @@ baseline run **on the same machine** (the committed
 untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
+
+### Integration 1d9582a → 9bb1a06: A/B-confirmed candidates (unix/bench)
+
+`node bench/compare.mjs bench/results/integration-1d9582a-quick.json
+bench/results/integration-9bb1a06-quick.json`, on machine `e57125c23b92`,
+the same machine as both files. It ran `ab.mjs` on the candidates, 5 rounds
+× 5 runs, quick:
+
+| candidate | quick run | A/B (99% CI, rounds) | verdict |
+|---|---|---|---|
+| `x86.blink.go_hello` | 164.6 → 249.2 ms | 153 → 240 ms, +62% (+46…+82%, `+++++`) | **regressed** |
+| `x86.blink.go_nethttp` | 306.5 → 533.9 ms | 292 → 529 ms, +80% (+60…+95%, `+++++`) | **regressed** |
+| `shell.for_seq_1000` | 20.9 → 26.7 ms | not significant | noise |
+| `boot.warm.first_command` | 8.0 → 9.5 ms | not significant | noise |
+| `kernel.spawn_throughput.wasm` (not isolated) | 1463 → 1316 proc/s | 1596 → 1200, CI −18…+49%, rounds `-+---` | not confirmed (too noisy) |
+| `claude.version` | 1006 ms → failed | works with `claude --npm --version` | harness fix (plain `claude` is native on the tabcomputer profile) |
+
+The same A/B also measured small exact boot changes that weren't
+candidates. The entry chunk grew by +52 KiB (1572 → 1624 KiB decoded), and
+the main-thread heap at boot grew by +7.7% (3.90 → 4.20 MiB). Renderer RSS
+at boot fell 10% (244 → 219 MiB).
+
+**Bisect of the go_* regression.** Medians of go_hello / go_nethttp, 5 runs
+each:
+
+| commit | go_hello / go_nethttp (ms) |
+|---|---|
+| 30a9352 (patches 0050–51) | 139 / 276 |
+| 5a4e756 (0052) | 134 / 290 |
+| **799a50f (0053)** | **250 / 505** |
+| 9d1f49f (0054) | 217 / 488 |
+| 9dc7d3b (0055–58) | 217 / 456 |
+| fdf3bcb (0062) | 215 / 465 |
+
+`ab.mjs 5a4e756 799a50f`, 3 rounds, every round worse:
+
+| metric | before → after | shift (99% CI) |
+|---|---|---|
+| go_hello | 149 → 234 ms | +58% (+40…+76%) |
+| go_nethttp | 281 → 473 ms | +68% (+52…+90%) |
+| hello_musl | 92 → 125 ms | +33% (+16…+57%) |
+
+Patch 0053 ends a guest's threads before the worker is terminated, waiting
+up to 0.5 s for them, and makes sleeps slice so that signals end them.
+Single-threaded C pays about +33 ms too, so the cost is on the
+per-process exit path. Reported to unix/perf-blink.
+
+Harness fixes found on the way:
+
+- **Pre-rename builds.** The rename's hard cut made the harness read only
+  `window.__tabcomputer`, so every A/B against a build before c676e9f
+  silently measured nothing. `inpage.js` now also accepts the old name.
+- **Group names in `--only`.** compare.mjs's `--only` didn't match the
+  group names that suites gate on (`kernel.spawn_throughput` records
+  `.builtin` and `.wasm`).
+- **Empty A/B side.** An A/B side without samples is now reported as
+  `unconfirmed`, not `noise`.
+- **`x86.x86.*` metrics.** Against builds before the rename, these run in
+  Blink, not the interpreter: the old build ignores
+  `TABCOMPUTER_X86_ENGINE`.
+
+### unix/desktop 7 — Developer and AI agents stacks, Git
+
+`node bench/ab.mjs origin/unix/integration --quick --suites boot --rounds 4`
+(9a5c7bd vs this): no timing metric changed; transfer +9 KiB (the catalog and
+dock code in the desktop chunk; Files' git code, the sheets and the Git app
+are lazy chunks); DOM nodes 366 → 460 (+94): the dock's new tiles, five loose
+(nano, Vim, Code, Git, Claude Code) and two stacks of four mini glyphs each.
 
 ### unix/desktop 6 — dock icon sets
 
@@ -549,6 +649,32 @@ proc/s within one run); two further 15-run passes on the new code gave
 medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
 ≈10 proc/s for its last 11 samples and did not recur in two more; worth
 watching if it shows up on other branches.
+
+### unix/perf-blink 7 — direct kernel channels (opt-in)
+
+Blink patch 0065: with `TABCOMPUTER_BLINK_DIRECT=1` a Blink thread's own
+kernel calls go through four channels in its wasm memory that the page
+watches, skipping emscripten's proxy to host.mjs's thread and its two
+messages. getppid's round trip in Node falls from ~110 µs to ~10 µs.
+
+`node bench/ab.mjs HEAD --suites x86 --only 'x86\.blink\.' --rounds 3`,
+direct channels on (64 KiB channels) against off:
+
+| metric (isolated) | off | on | shift | verdict |
+|---|---:|---:|---:|---|
+| x86.blink.go_hello | 246 ms | 221 ms | -12.2% | improved (p=1.1e-4) |
+| x86.blink.go_nethttp | 529 ms | 441 ms | -16.8% | improved (p=1.6e-5) |
+| x86.blink.vim_defaults | 1247 ms | 1101 ms | -13.7% | improved (p=8.6e-7) |
+| x86.blink.vim_startup | 2717 ms | 2409 ms | -10.7% | improved (p=9.6e-5) |
+| x86.blink.peak_rss.go_nethttp | 22.5 MiB | 34.2 MiB | +49.7% | regressed (p=1.2e-5) |
+| x86.blink.peak_rss.vim_startup | 12.5 MiB | 29.9 MiB | +135% | regressed (p=3.4e-5) |
+
+With the channels at 1 MiB each (the pool's size), hello_musl and go_hello
+peak RSS regressed too (+6, +13 MiB). Not the page's hot-channel pump:
+with the channels never hot, the RSS was the same and go_nethttp lost its
+gain. The likely cause (not yet proven): the page holds the worker's
+wasm memory for the channels, so it is released at the page's next GC
+rather than with the worker. Off by default until that's solved.
 
 ### unix/perf-blink 6 — content-hashed engine wasm
 
@@ -1571,6 +1697,84 @@ Before the fix, the 4 symlinked-dir checks failed.
 
 `kernel-net` "dials through an upstream CONNECT proxy" fails about 3 runs in
 4 on origin/unix/integration too; it is not from this change.
+
+### unix/perf-fs-shell 13 — apt from the VFS side: close no longer waits for IndexedDB
+
+Profile of one `apt-get install -y python3` (after update and cowsay) in
+Chromium, with the main thread's CPU profile, FileSystem call timing and RSS
+sampled every 2 s (scratch probe):
+- **CPU:** the main thread, which runs the kernel, FileSystem and IndexedDB,
+  is 88% idle for the 174 s. Kernel, VFS and IndexedDB CPU together is about
+  20 s, most of it postMessage and IndexedDB `put`. The time is in the Blink
+  workers (perf-blink's side).
+- **Waiting:** 1712 `fs.flushed()` waits, 7.3 s of wall time. Every close
+  of a written file waited for its IndexedDB commit (~4 ms each).
+- **Write amplification:** 228 MB committed for 88 MB written, in 5655
+  transactions. dpkg writes `file.dpkg-new` and renames it, and a rename
+  stores the content again under the new key.
+- **Memory:** peak RSS +829 MiB. The FileSystem cache held 276 MiB of
+  content (3592 files: apt's lists, pkgcache.bin, the .debs until apt deletes
+  them at the end, libraries). The rest is the Blink workers.
+
+Change:
+- **close (and rename, unlink)** writes the data back to the FileSystem
+  without waiting for the IndexedDB commit, as close(2) doesn't wait for the
+  disk. fsync still commits strictly.
+- **Backpressure:** close waits again only past a 16 MiB backlog of
+  uncommitted bytes (`FileSystem.pendingBytes`). The write-back timer of a
+  file still being written stays paced by the commit.
+
+`bench/ab.mjs origin/unix/integration HEAD --suites workloads-slow --rounds 2 --runs 1`:
+
+| metric | before | after | |
+|---|---:|---:|---|
+| `workload.apt.install_cowsay` | 43.8 s | 39.2 s | −10.5% |
+| `workload.peak_rss.apt_cowsay` | 825 MiB | 781 MiB | −5.2% |
+| `workload.peak_rss.apt_update` | 748 MiB | 688 MiB | −8.1% |
+| `workload.apt.install_python3` | 176.6 s | 171.2 s | −3.1% (rounds disagree) |
+| `workload.peak_rss.apt_python3` | 823 MiB | 802 MiB | same |
+| `workload.apt.update`, `debian.*`, `debian.storage` | | | same |
+
+Quick suite (`--rounds 3`):
+- 97 metrics the same;
+- `wasm.tree_create` −25%;
+- `npm.install_small` was flagged +20%. Re-run over 5 rounds the repeat
+  installs are "same" and the first install is +4.6%
+  (86.6 → 90.6 ms, CI +0.8..+10.9%).
+
+Tried and dropped:
+- **Evicting apt's big files** (`/var/cache/apt`, `/var/lib/apt/lists`)
+  from the cache over a 32 MiB budget, reloading them from IndexedDB. The
+  cache halved (276 → 135 MiB), but the install's peak RSS rose
+  (+807 → +876 MiB): each reload allocates new buffers faster than GC frees
+  the old ones.
+- **A 20 ms delay before background commits**, so a write and its rename
+  share one transaction. IndexedDB bytes fell from 201 to 75 MB, but cowsay
+  went 39 → 74 s and python3 171 → 212 s. `sync()` waited on the bigger
+  batches, and more besides.
+
+**Durability.** Because close no longer waits for IndexedDB, the page
+lifecycle flush (`visibilitychange` → hidden, `pagehide`, `freeze`) first
+writes back the kernel's open-file buffers (`FileSystem.addWriteBackHook`,
+`writeBackAll`), then commits strictly (`FileSystem.flushAll`, bounded at
+5 s). These await the same before reloading or navigating:
+- Restart, Hard Restart and Classic Terminal (desktop menu);
+- Settings' classic switch;
+- `desktop <mode>`.
+
+Test: `storage-quota.test.ts` (an open fd's unsaved write and a pending
+commit reach a second FileSystem after `flushAll`). Quick A/B for this push:
+- 97 metrics the same; boot +1–2 KiB;
+- `boot.settled.time` +5.3%;
+- `wasm.tree_create` +16%. It is one sample per run and moved −25..+38%
+  across today's runs.
+
+Left:
+- **Rename amplification:** storing content under an inode key rather than
+  the path would make a rename rewrite only the small path record (an
+  IndexedDB schema change).
+- **.debs at the peak:** dropping a .deb's cached content once dpkg has
+  unpacked it (the debian session's suggestion).
 
 ## Results
 

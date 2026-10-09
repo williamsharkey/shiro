@@ -16,6 +16,8 @@ export interface ShiroProcess {
   promise: Promise<number>;
   kill: () => void;
   abortController: AbortController | null;
+  /** Exited but not yet waited for (a kernel zombie); ps shows it until it is reaped */
+  zombie?: boolean;
 }
 
 /** Another registry whose processes ps/kill/top should see (the kernel's process table). */

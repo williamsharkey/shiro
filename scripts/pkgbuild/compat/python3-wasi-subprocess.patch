@@ -1,0 +1,72 @@
+--- a/Lib/subprocess.py
++++ b/Lib/subprocess.py
+@@ -76,6 +76,11 @@
+ 
+ # some platforms do not support subprocesses
+ _can_fork_exec = sys.platform not in {"emscripten", "wasi", "ios", "tvos", "watchos"}
++# tabcomputer's WASI CPython: processes through os.posix_spawn (the kernel's
++# WASIX proc_spawn), with no fork; see _wasi_fork_exec below
++_wasi_spawn = sys.platform == "wasi" and hasattr(os, "posix_spawn")
++if _wasi_spawn:
++    _can_fork_exec = True
+ 
+ if _mswindows:
+     import _winapi
+@@ -102,8 +107,56 @@
+                     "CREATE_NO_WINDOW", "DETACHED_PROCESS",
+                     "CREATE_DEFAULT_ERROR_MODE", "CREATE_BREAKAWAY_FROM_JOB"])
+ else:
+-    if _can_fork_exec:
++    if _wasi_spawn:
++        def _fork_exec(args, executable_list, close_fds, fds_to_keep, cwd, env_list,
++                       p2cread, p2cwrite, c2pread, c2pwrite, errread, errwrite,
++                       errpipe_read, errpipe_write, restore_signals, start_new_session,
++                       process_group, gid, gids, uid, umask, preexec_fn, allow_vfork):
++            """_posixsubprocess.fork_exec on os.posix_spawn: there is no fork
++            to run code in the child, so preexec_fn and the like are refused
++            and exec errors are raised here rather than through errpipe."""
++            if preexec_fn is not None:
++                raise SubprocessError("preexec_fn is not supported on WASI")
++            if gid is not None or gids is not None or uid is not None:
++                raise SubprocessError("user and group changes are not supported on WASI")
++            actions = []
++            for fd in (p2cwrite, c2pread, errread, errpipe_read, errpipe_write):
++                if fd != -1:
++                    actions.append((os.POSIX_SPAWN_CLOSE, fd))
++            for fd, fd2 in ((p2cread, 0), (c2pwrite, 1), (errwrite, 2)):
++                if fd != -1:
++                    actions.append((os.POSIX_SPAWN_DUP2, fd, fd2))
++            if env_list is not None:
++                env = dict(e.split(b"=", 1) for e in env_list)
++            else:
++                env = os.environ
++            kwargs = {"file_actions": actions}
++            if start_new_session:
++                kwargs["setsid"] = True
++            if process_group is not None and process_group >= 0:
++                kwargs["setpgroup"] = process_group
++            old_umask = os.umask(umask) if umask >= 0 else -1
++            old_cwd = None
++            if cwd is not None:
++                # children start in this process's directory
++                old_cwd = os.getcwd()
++                os.chdir(cwd)
++            try:
++                err = None
++                for executable in executable_list:
++                    try:
++                        return os.posix_spawn(executable, args, env, **kwargs)
++                    except (FileNotFoundError, NotADirectoryError) as e:
++                        err = err or e
++                raise err or FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), args[0])
++            finally:
++                if old_cwd is not None:
++                    os.chdir(old_cwd)
++                if old_umask >= 0:
++                    os.umask(old_umask)
++    if _can_fork_exec and not _wasi_spawn:
+         from _posixsubprocess import fork_exec as _fork_exec
++    if _can_fork_exec:
+         # used in methods that are called by __del__
+         class _del_safe:
+             waitpid = os.waitpid

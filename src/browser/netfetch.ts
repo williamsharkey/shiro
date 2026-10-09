@@ -158,6 +158,9 @@ export class NetFetcher implements Fetcher {
     for (let attempt = 0; ; attempt++) {
       // HTTP/2: an existing session, or wait for the origin's first connection to say whether it is h2
       let session = u.protocol === 'https:' ? this.h2For(key) : null;
+      // At the server's stream limit: queue on the session, as browsers do, rather than open more connections
+      const busy = u.protocol === 'https:' && !session ? this.h2.get(key) : undefined;
+      if (busy?.full) { await busy.slot(); attempt--; continue; }
       if (!session && u.protocol === 'https:' && this.opts.http2 && !this.h1Origins.has(key)) {
         const pending = this.opening.get(key);
         if (pending) { await pending.catch(() => {}); continue; }

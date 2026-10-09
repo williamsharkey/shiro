@@ -27,10 +27,12 @@ const handler = (scheme) => (req, res) => {
 
 const httpPort = await listen(createServer(handler('http')));
 let httpsPort = 0;
+let certFile = '';
 try {
   const dir = mkdtempSync(join(tmpdir(), 'shiro-tls-'));
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-subj', '/CN=web.test',
     '-keyout', join(dir, 'key.pem'), '-out', join(dir, 'cert.pem')], { stdio: 'ignore' });
+  certFile = join(dir, 'cert.pem');
   httpsPort = await listen(createHttpsServer({ key: readFileSync(join(dir, 'key.pem')), cert: readFileSync(join(dir, 'cert.pem')) }, handler('https')));
 } catch { /* no openssl: HTTPS tests skip */ }
 
@@ -49,4 +51,4 @@ const srv = createServer((req, res) => {
 });
 srv.on('upgrade', (req, socket, head) => relay.handleUpgrade(req, socket, head));
 const relayPort = await listen(srv);
-console.log(JSON.stringify({ httpPort, httpsPort, relayPort, origin: ORIGIN }));
+console.log(JSON.stringify({ httpPort, httpsPort, relayPort, origin: ORIGIN, certFile }));

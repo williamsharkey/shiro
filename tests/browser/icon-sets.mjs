@@ -114,7 +114,7 @@ const check = (name, ok, detail = '') => { results.push({ name, ok, detail }); c
 {
   const { ctx, page } = await boot(browser);
   let s = await state(page);
-  const tiles = await page.$$eval('.sd-dock > .sd-dock-item', els => els.map(e => !!e.querySelector(':scope > .sd-ic')));
+  const tiles = await page.$$eval('.sd-dock > .sd-dock-item:not(.sd-stack-tile)', els => els.map(e => !!e.querySelector(':scope > .sd-ic')));
   check('default is Drafting', s.set === 'drafting' && tiles.length > 0 && tiles.every(Boolean), `set ${s.set}, ${tiles.filter(Boolean).length}/${tiles.length} glyph tiles`);
   const idleRaf = await rafOver(page);
   check('static set: no live chunk, no WebGL, no frames, no dock pointer listeners', !s.chunks.length && !s.allGl && !idleRaf && !s.dockPointer,

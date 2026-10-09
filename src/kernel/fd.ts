@@ -448,6 +448,8 @@ export class BufferFile implements OpenFile {
  */
 const FLUSH_DELAY_MS = 25;
 const FLUSH_MAX_DELAY_MS = 1000;
+/** Uncommitted bytes in the FileSystem beyond which a close waits for the commit (Inode.flush). */
+const WRITE_BACKLOG_BYTES = 16 << 20;
 
 class Inode {
   data: Uint8Array;
@@ -503,25 +505,36 @@ class Inode {
       const pause = Math.max(FLUSH_DELAY_MS, mb * 20);
       const most = Math.max(FLUSH_MAX_DELAY_MS, mb * 500);
       if (this.dirty && quiet < pause && now - this.dirtySince < most) this.armFlush(pause - quiet);
-      else void this.flush();
+      else void this.flush(true);
     }, ms);
   }
 
   /** A write-back is in progress. */
   get busy(): boolean { return !!this.flushing; }
 
-  async flush(): Promise<void> {
+  /**
+   * Write the data back to the FileSystem. `paced` (the write-back timer, a
+   * file still being written) also waits for the IndexedDB commit, so a
+   * growing file isn't snapshotted again before the last copy is stored.
+   * close, rename and the like don't wait for the commit, as close(2) doesn't
+   * wait for the disk (dpkg closed ~1700 files per python3 install, ~4 ms each);
+   * fsync does (RegularFile.sync).
+   */
+  async flush(paced = false): Promise<void> {
     if (this.flushTimer) { clearTimeout(this.flushTimer); this.flushTimer = null; }
     while (this.flushing) await this.flushing;
     if (!this.dirty || this.unlinked) return;
     this.dirty = false;
     const snapshot = this.data.slice(0, this.size);
-    // Paced by the IndexedDB commit: writes made meanwhile go into one later snapshot
     // With the times this inode reports (the last write's, or utimensat's), not the write-back's
     const times = { mtime: this.mtimeMs, mtimeNs: this.mtimeNs, ...(this.atimeMs === null ? {} : { atime: this.atimeMs, atimeNs: this.atimeNs }) };
     // Refused (storage full: ENOSPC): the data stays here for a retry by fsync or close
-    this.flushing = this.fs.writeFile(this.path, snapshot, { times }).catch((e) => { this.dirty = true; throw e; })
-      .then(() => this.fs.flushed()).finally(() => { this.flushing = null; });
+    const written = this.fs.writeFile(this.path, snapshot, { times }).catch((e) => { this.dirty = true; throw e; });
+    // Paced: writes made meanwhile go into one later snapshot. Past a backlog of
+    // uncommitted data a close waits too, or a fast writer (dpkg unpacking)
+    // holds it all in memory (python3's install peaked 150 MiB higher)
+    const wait = paced || this.fs.pendingBytes > WRITE_BACKLOG_BYTES;
+    this.flushing = (wait ? written.then(() => this.fs.flushed()) : written).finally(() => { this.flushing = null; });
     await this.flushing;
   }
 }
@@ -559,6 +572,12 @@ export function openInodeSync(fs: FileSystem, path: string, node: {
   }
   ino.opens++;
   return ino;
+}
+
+/** Write back every open file of `fs` holding data not yet in it (the page going away: FileSystem.flushAll). */
+export async function writeBackAll(fs: FileSystem): Promise<void> {
+  const table = inodeTables.get(fs);
+  if (table) await Promise.all([...table.values()].filter((ino) => ino.dirty).map((ino) => ino.flush()));
 }
 
 /** closeInode when nothing needs to be written back; false = use closeInode. */

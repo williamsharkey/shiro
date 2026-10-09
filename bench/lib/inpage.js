@@ -5,6 +5,12 @@
 (() => {
   if (window.__bench) return;
   const B = (window.__bench = { marks: {}, longTasks: [], sabs: [], memories: [] });
+  // Builds from before the tabcomputer rename (c676e9f) expose window.__shiro;
+  // ab.mjs runs this harness against them, so read either name.
+  let tc;
+  try {
+    Object.defineProperty(window, '__tabcomputer', { configurable: true, get: () => tc ?? window.__shiro, set: (v) => { tc = v; } });
+  } catch {}
   try { performance.setResourceTimingBufferSize(100000); } catch {}
   try {
     new PerformanceObserver((list) => {

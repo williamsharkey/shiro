@@ -100,7 +100,7 @@ import {
 } from './seed-runtime-context';
 import { getShiroOrigin } from './utils/shiro-origin';
 import { logIsolationStatus } from './utils/isolation';
-import { requestPersistentStorage, storageInfo } from './storage';
+import { requestPersistentStorage, setActiveFileSystem, storageInfo } from './storage';
 
 /**
  * Register a command in both the CommandRegistry (for execution) and
@@ -141,6 +141,7 @@ async function main() {
   // Initialize filesystem
   const fs = new FileSystem();
   await fs.init();
+  setActiveFileSystem(fs);
   // Persistent storage (no eviction under storage pressure) once the machine
   // holds a lot: Firefox asks the user, so not for a page that stores little
   fs.onBigWrite(PERSIST_AFTER_BYTES, () => void requestPersistentStorage('large write'));
@@ -382,7 +383,16 @@ async function main() {
 
   // Lazy-loaded new capabilities (WASM runtimes from CDN). Pyodide python is
   // the profile's python shim; without it python3 comes from pkg/apt only.
-  if (activeProfile().shims.python === 'pyodide') {
+  registerCommand(commands, lazyCommand('pyodide', 'Python interpreter (Pyodide: numpy, pandas, ... in WebAssembly)',
+    () => import('./commands/python').then(m => ({ ...m.pythonCmd, name: 'pyodide' }))), 'src/commands/python.ts');
+  if (activeProfile().shims.python === 'cpython') {
+    for (const [name, key, desc] of [
+      ['python', 'cpythonCmd', 'Python 3 interpreter (CPython)'], ['python3', 'cpython3Cmd', 'Python 3 interpreter (CPython)'],
+      ['pip', 'cpipCmd', 'Python package manager'], ['pip3', 'cpip3Cmd', 'Python package manager'],
+    ] as const) {
+      registerCommand(commands, lazyCommand(name, desc, () => import('./commands/python-default').then(m => m[key])), 'src/commands/python-default.ts');
+    }
+  } else if (activeProfile().shims.python === 'pyodide') {
     registerCommand(commands, lazyCommand('python', 'Python interpreter (Pyodide)',
       () => import('./commands/python').then(m => m.pythonCmd)), 'src/commands/python.ts');
     registerCommand(commands, lazyCommand('python3', 'Python 3 interpreter (Pyodide)',
@@ -426,6 +436,8 @@ async function main() {
     () => import('./commands/pkg').then(m => m.aptGetCmd)), 'src/commands/pkg.ts');
   registerCommand(commands, lazyCommand('debian', 'Install and manage the streamed Debian system',
     () => import('./commands/debian').then(m => m.debianCmd)), 'src/commands/debian.ts');
+  registerCommand(commands, lazyCommand('toolchain', 'Install prebuilt compilers and runtimes (C, Python, Node, Java, LaTeX, ...) in seconds',
+    () => import('./commands/toolchain').then(m => m.toolchainCmd)), 'src/commands/toolchain.ts');
   registerCommand(commands, lazyCommand('tabcomputer-alternatives', "Choose tabcomputer's or Debian's implementation of a program",
     () => import('./commands/debian').then(m => m.shiroAlternativesCmd)), 'src/commands/debian.ts');
   registerCommand(commands, lazyCommand('shiro-alternatives', 'Old name of tabcomputer-alternatives',
@@ -483,6 +495,24 @@ async function main() {
     () => import('./commands/dmesg').then(m => m.dmesgCmd)), 'src/commands/dmesg.ts');
   registerCommand(commands, lazyCommand('ssh', 'Connect to remote tabcomputer via WebRTC',
     () => import('./commands/ssh').then(m => m.sshCmd)), 'src/commands/ssh.ts');
+  registerCommand(commands, lazyCommand('envsubst', 'Substitute environment variables in stdin',
+    () => import('./commands/base-utils').then(m => m.envsubstCmd)), 'src/commands/base-utils.ts');
+  registerCommand(commands, lazyCommand('groups', 'Print the groups a user is in',
+    () => import('./commands/base-utils').then(m => m.groupsCmd)), 'src/commands/base-utils.ts');
+  registerCommand(commands, lazyCommand('locale', 'Show locale settings',
+    () => import('./commands/base-utils').then(m => m.localeCmd)), 'src/commands/base-utils.ts');
+  registerCommand(commands, lazyCommand('getent', 'Get entries from passwd, group, hosts',
+    () => import('./commands/base-utils').then(m => m.getentCmd)), 'src/commands/base-utils.ts');
+  registerCommand(commands, lazyCommand('nslookup', 'Look up a host name',
+    () => import('./commands/base-utils').then(m => m.nslookupCmd)), 'src/commands/base-utils.ts');
+  registerCommand(commands, lazyCommand('dig', 'Look up A/AAAA records',
+    () => import('./commands/base-utils').then(m => m.digCmd)), 'src/commands/base-utils.ts');
+  registerCommand(commands, lazyCommand('flock', 'Run a command holding an advisory lock',
+    () => import('./commands/base-utils').then(m => m.flockCmd)), 'src/commands/base-utils.ts');
+  registerCommand(commands, lazyCommand('ping', "ICMP isn't available in a browser (try curl)",
+    () => import('./commands/base-utils').then(m => m.pingCmd)), 'src/commands/base-utils.ts');
+  registerCommand(commands, lazyCommand('strace', "Trace a kernel program's system calls",
+    () => import('./commands/base-utils').then(m => m.straceCmd)), 'src/commands/base-utils.ts');
   registerCommand(commands, lazyCommand('doctor', 'Check this tab (deploy, browser, engine, network, sign-ins, storage) for a bug report',
     () => import('./commands/doctor').then(m => m.doctorCmd)), 'src/commands/doctor.ts');
   registerCommand(commands, lazyCommand('tabinfo', 'Same as doctor',
@@ -508,6 +538,7 @@ async function main() {
   const debianBoot = import('./debian/rootfs').then(async (m) => {
     const st = await m.bootRootfs(fs);
     if (!st) { void createPathShims(fs).catch(() => {}); return; } // no Debian: nothing for commands to wait for
+    await import('./debian/layers').then((l) => l.bootLayers(fs)); // toolchain layers' lazy files
     void installAlwaysShims(fs).catch(() => {}); // xdg-open, xclip, ... on PATH in Debian mode too
     const ov = await import('./debian/overlay');
     await ov.enableDebianShadows(fs, (n) => !!commands.get(n));

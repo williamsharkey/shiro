@@ -1,0 +1,347 @@
+From 552b654e1ac86c9abbd3db34c378c819ffa52b69 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 20:50:10 +0000
+Subject: [PATCH 66/67] Shiro: SHIRO_BLINK_PROFILE: per-thread GIL time, hot
+ addresses, interpreted opcodes
+
+Per thread: time holding the GIL, waiting for it, in syscalls and futex,
+compiled blocks entered and instructions interpreted. A 1-ms sample of
+where the GIL holder is (a block's entry or an interpreted instruction),
+the most interpreted addresses and opcodes. The stdin label also fires on
+TCSETS of fd 0 and on epoll_ctl(ADD, 0).
+---
+ blink/gil.c     |  15 ++++
+ blink/machine.c |   5 +-
+ blink/machine.h |   2 +
+ blink/shiro.inc | 178 +++++++++++++++++++++++++++++++++++++++++++++---
+ blink/syscall.c |   5 +-
+ 5 files changed, 194 insertions(+), 11 deletions(-)
+
+diff --git a/blink/gil.c b/blink/gil.c
+index 76811fe..008f832 100644
+--- a/blink/gil.c
++++ b/blink/gil.c
+@@ -13,6 +13,12 @@
+ #include "blink/assert.h"
+ #include "blink/atomic.h"
+ 
++#ifdef __EMSCRIPTEN__
++#include <emscripten.h>
++extern bool g_shiro_prof;
++void ShiroProfGil(bool, double);
++#endif
++
+ bool g_gil_enabled;
+ 
+ static pthread_mutex_t g_gil_lock = PTHREAD_MUTEX_INITIALIZER;
+@@ -38,6 +44,9 @@ bool GilHeld(void) {
+ void GilAcquire(void) {
+   unsigned long ticket;
+   if (!g_gil_enabled || t_gil_held) return;
++#ifdef __EMSCRIPTEN__
++  double t0 = g_shiro_prof ? emscripten_get_now() : 0;
++#endif
+   atomic_fetch_add(&g_gil_waiters, 1);
+   pthread_mutex_lock(&g_gil_lock);
+   ticket = g_gil_next++;
+@@ -47,10 +56,16 @@ void GilAcquire(void) {
+   pthread_mutex_unlock(&g_gil_lock);
+   atomic_fetch_sub(&g_gil_waiters, 1);
+   t_gil_held = true;
++#ifdef __EMSCRIPTEN__
++  if (t0) ShiroProfGil(true, t0);  // SHIRO_BLINK_PROFILE: time held, time waited
++#endif
+ }
+ 
+ void GilRelease(void) {
+   if (!t_gil_held) return;
++#ifdef __EMSCRIPTEN__
++  if (g_shiro_prof) ShiroProfGil(false, 0);
++#endif
+   t_gil_held = false;
+   pthread_mutex_lock(&g_gil_lock);
+   ++g_gil_serving;
+diff --git a/blink/machine.c b/blink/machine.c
+index 006bb74..77cdb4f 100644
+--- a/blink/machine.c
++++ b/blink/machine.c
+@@ -2342,14 +2342,17 @@ void Actor(struct Machine *mm) {
+     if (!atomic_load_explicit(&m->attention, memory_order_acquire)) {
+ #ifdef HAVE_WJIT
+       // compiled code is entered at branch targets (where wjhot is set)
++      u64 ip = m->ip;
+       if (!m->wjhot || !WjExecute(m)) {
+-        u64 ip = m->ip;
+         if (UNLIKELY(g_shiro_trace)) {
+           g_shiro_ring[g_shiro_ringi++ & 1023] = ip;
+           if (g_shiro_probes[0]) ShiroProbe(m, ip);
+         }
+         ExecuteInstruction(m);
+         m->wjhot = g_wj_enabled && m->ip - ip != m->xedd->length;
++        if (UNLIKELY(g_shiro_prof)) ShiroProfStep(m, ip, false);
++      } else if (UNLIKELY(g_shiro_prof)) {
++        ShiroProfStep(m, ip, true);
+       }
+ #else
+       ExecuteInstruction(m);
+diff --git a/blink/machine.h b/blink/machine.h
+index 33d48e7..3486d2b 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -667,6 +667,8 @@ void OpRetf(P);
+ void OpRetIw(P);
+ void OpSsePclmulqdq(P);
+ extern bool g_shiro_trace;
++extern bool g_shiro_prof;
++void ShiroProfStep(struct Machine *, u64, bool);
+ extern u64 g_shiro_ring[1024];
+ extern unsigned g_shiro_ringi;
+ extern u64 g_shiro_ring0[1024], g_shiro_fault0;
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 4f54fd2..cd53e14 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -982,7 +982,155 @@ static double g_shiro_prof_t0, g_shiro_prof_last, g_shiro_prof_jit;
+ static long g_shiro_prof_jitn;
+ static struct { long n; double ms, max; } g_shiro_prof_sys[512];
+ static pthread_mutex_t_ g_shiro_prof_lock = PTHREAD_MUTEX_INITIALIZER_;
+-static bool g_shiro_prof_stdin;
++static bool g_shiro_prof_stdin, g_shiro_prof_tty, g_shiro_prof_epoll;
++
++// Per thread: time holding the GIL (running guest code, the JIT, Blink),
++// time waiting for it, in syscalls (futex apart), compiled blocks entered
++// and instructions interpreted. Guest threads only touch these and the
++// tables below with the GIL held.
++struct ShiroProfThr {
++  int tid;
++  double since, run, gilwait, sys, futex;
++  long blocks, interp;
++};
++static struct ShiroProfThr g_shiro_prof_thr[64], g_shiro_prof_thr_rest;
++static _Atomic(int) g_shiro_prof_nthr;
++static _Thread_local struct ShiroProfThr *t_shiro_prof;
++static _Thread_local double t_shiro_prof_sample;
++static _Thread_local unsigned t_shiro_prof_tick;
++
++// Guest addresses: a sample of where the GIL holder is each ms (a compiled
++// block's entry or an interpreted instruction), and every interpreted
++// instruction with its opcode
++#define SHIRO_PROF_HOT 8192
++static struct {
++  u64 ip;
++  u32 jit, interp;  // time samples
++  u64 n;            // instructions interpreted here
++  u16 op;
++} g_shiro_prof_hot[SHIRO_PROF_HOT];
++static long g_shiro_prof_op[4096];
++
++static struct ShiroProfThr *ShiroProfThr(void) {
++  struct ShiroProfThr *t;
++  int i;
++  if ((t = t_shiro_prof)) {
++    if (!t->tid && g_machine) t->tid = g_machine->tid;  // set once Actor runs
++    return t;
++  }
++  i = atomic_fetch_add(&g_shiro_prof_nthr, 1);
++  t = i < 64 ? &g_shiro_prof_thr[i] : &g_shiro_prof_thr_rest;
++  t->tid = g_machine ? g_machine->tid : 0;
++  return t_shiro_prof = t;
++}
++
++void ShiroProfGil(bool held, double t0) {
++  struct ShiroProfThr *t = ShiroProfThr();
++  double now = emscripten_get_now();
++  if (held) {
++    t->gilwait += now - t0;
++    t->since = now;
++  } else if (t->since) {
++    t->run += now - t->since;
++    t->since = 0;
++  }
++}
++
++static unsigned ShiroProfSlot(u64 ip) {
++  unsigned i = (ip * 0x9E3779B97F4A7C15ull) >> 51, k;
++  for (k = 0; k < 64; ++k, i = (i + 1) & (SHIRO_PROF_HOT - 1)) {
++    if (g_shiro_prof_hot[i].ip == ip) return i;
++    if (!g_shiro_prof_hot[i].ip) {
++      g_shiro_prof_hot[i].ip = ip;
++      return i;
++    }
++  }
++  return 0;  // full around here: lumped with whatever is in slot 0
++}
++
++// after each compiled block (at `ip`) or interpreted instruction
++void ShiroProfStep(struct Machine *m, u64 ip, bool jit) {
++  struct ShiroProfThr *t = ShiroProfThr();
++  unsigned i;
++  double now;
++  if (jit) {
++    ++t->blocks;
++  } else {
++    int op = Mopcode(m->xedd->op.rde) & 4095;
++    ++t->interp;
++    ++g_shiro_prof_op[op];
++    i = ShiroProfSlot(ip);
++    ++g_shiro_prof_hot[i].n;
++    g_shiro_prof_hot[i].op = op;
++  }
++  if (!(++t_shiro_prof_tick & 31) && (now = emscripten_get_now()) - t_shiro_prof_sample >= 1) {
++    t_shiro_prof_sample = now;
++    i = ShiroProfSlot(ip);
++    if (jit) ++g_shiro_prof_hot[i].jit;
++    else ++g_shiro_prof_hot[i].interp;
++  }
++}
++
++static int ShiroProfByTime(const void *a, const void *b) {
++  unsigned x = *(const unsigned *)a, y = *(const unsigned *)b;
++  u64 p = g_shiro_prof_hot[x].jit + g_shiro_prof_hot[x].interp;
++  u64 q = g_shiro_prof_hot[y].jit + g_shiro_prof_hot[y].interp;
++  return p < q ? 1 : p > q ? -1 : 0;
++}
++
++static int ShiroProfByCount(const void *a, const void *b) {
++  unsigned x = *(const unsigned *)a, y = *(const unsigned *)b;
++  u64 p = g_shiro_prof_hot[x].n, q = g_shiro_prof_hot[y].n;
++  return p < q ? 1 : p > q ? -1 : 0;
++}
++
++static int ShiroProfByOp(const void *a, const void *b) {
++  long p = g_shiro_prof_op[*(const int *)a], q = g_shiro_prof_op[*(const int *)b];
++  return p < q ? 1 : p > q ? -1 : 0;
++}
++
++// the per-thread table and the hot addresses and opcodes, appended to b
++static int ShiroProfDumpMore(char *b, int n, int cap, double now) {
++  static unsigned idx[SHIRO_PROF_HOT];
++  static int ops[4096];
++  long samples = 0, blocks = 0, interp = 0;
++  int i, k, nthr = MIN(atomic_load(&g_shiro_prof_nthr), 64);
++  n += snprintf(b + n, cap - n, "\nthread       run ms  GIL wait ms   syscall ms (futex ms)   blocks run  insns interpreted\n");
++  for (i = 0; i < nthr; ++i) {
++    struct ShiroProfThr *t = &g_shiro_prof_thr[i];
++    double run = t->run + (t->since ? now - t->since : 0);
++    blocks += t->blocks, interp += t->interp;
++    n += snprintf(b + n, cap - n, "%6d %12.0f %12.0f %12.0f %10.0f %12ld %18ld\n", t->tid, run, t->gilwait,
++                  t->sys - t->futex, t->futex, t->blocks, t->interp);
++  }
++  for (i = 0; i < SHIRO_PROF_HOT; ++i) idx[i] = i, samples += g_shiro_prof_hot[i].jit + g_shiro_prof_hot[i].interp;
++  n += snprintf(b + n, cap - n, "total: %ld compiled blocks run, %ld instructions interpreted, %ld 1-ms samples\n",
++                blocks, interp, samples);
++  qsort(idx, SHIRO_PROF_HOT, sizeof(idx[0]), ShiroProfByTime);
++  n += snprintf(b + n, cap - n, "\nwhere the time goes (samples at a compiled block's entry or an interpreted instruction)\n"
++                                 "address               samples  in jit  interpreted\n");
++  for (i = 0; i < 40 && cap - n > 200; ++i) {
++    k = idx[i];
++    if (!g_shiro_prof_hot[k].jit && !g_shiro_prof_hot[k].interp) break;
++    n += snprintf(b + n, cap - n, "%#18" PRIx64 " %9u %7u %12" PRIu64 "\n", g_shiro_prof_hot[k].ip,
++                  g_shiro_prof_hot[k].jit + g_shiro_prof_hot[k].interp, g_shiro_prof_hot[k].jit, g_shiro_prof_hot[k].n);
++  }
++  qsort(idx, SHIRO_PROF_HOT, sizeof(idx[0]), ShiroProfByCount);
++  n += snprintf(b + n, cap - n, "\nmost interpreted addresses\naddress            instructions  opcode\n");
++  for (i = 0; i < 40 && cap - n > 200; ++i) {
++    k = idx[i];
++    if (!g_shiro_prof_hot[k].n) break;
++    n += snprintf(b + n, cap - n, "%#18" PRIx64 " %12" PRIu64 "  %s\n", g_shiro_prof_hot[k].ip, g_shiro_prof_hot[k].n,
++                  DescribeMopcode(g_shiro_prof_hot[k].op));
++  }
++  for (i = 0; i < 4096; ++i) ops[i] = i;
++  qsort(ops, 4096, sizeof(ops[0]), ShiroProfByOp);
++  n += snprintf(b + n, cap - n, "\nmost interpreted opcodes\nopcode            instructions\n");
++  for (i = 0; i < 30 && g_shiro_prof_op[ops[i]] && cap - n > 200; ++i) {
++    n += snprintf(b + n, cap - n, "%-16s %13ld\n", DescribeMopcode(ops[i]), g_shiro_prof_op[ops[i]]);
++  }
++  return n;
++}
+ 
+ static void ShiroProfInit(void) {
+   const char *e = getenv("SHIRO_BLINK_PROFILE");
+@@ -1001,7 +1149,7 @@ void ShiroProfJit(double ms) {
+ 
+ static void ShiroProfDump(struct Machine *m, const char *why) {
+   char *b;
+-  int n = 0, i, k, fd, order[512], cap = 32768;
++  int n = 0, i, k, fd, order[512], cap = 65536;
+   double now = emscripten_get_now(), sys = 0;
+   if (!(b = (char *)malloc(cap))) return;
+   LOCK(&g_shiro_prof_lock);
+@@ -1021,6 +1169,7 @@ static void ShiroProfDump(struct Machine *m, const char *why) {
+                   g_shiro_prof_sys[k].ms, g_shiro_prof_sys[k].max);
+   }
+   UNLOCK(&g_shiro_prof_lock);
++  n = ShiroProfDumpMore(b, n, cap, now);
+   g_shiro_prof = false;  // our own calls aren't counted
+   fd = ShiroCall(m, 257, A12(-100, (int)strlen(g_shiro_prof_path), 01 | 0100 | 01000, 0644),
+                  g_shiro_prof_path, strlen(g_shiro_prof_path), 0, false, false);
+@@ -1040,21 +1189,34 @@ void ShiroProfSys(struct Machine *m, int nr, double ms, u64 a) {
+   g_shiro_prof_sys[nr].ms += ms;
+   if (ms > g_shiro_prof_sys[nr].max) g_shiro_prof_sys[nr].max = ms;
+   UNLOCK(&g_shiro_prof_lock);
++  {
++    struct ShiroProfThr *t = ShiroProfThr();
++    t->sys += ms;
++    if (nr == 0x0CA) t->futex += ms;
++  }
+   now = emscripten_get_now();
+-  if (nr == 0x0E7 || nr == 0x03C) {
+-    ShiroProfDump(m, "exit");
+-  } else if (now - g_shiro_prof_last > 5000) {
++  if (now - g_shiro_prof_last > 5000) {
+     g_shiro_prof_last = now;
+     ShiroProfDump(m, "running");
+   }
+ }
+ 
+ // before a syscall: the first read of stdin is when the program is ready
+-// for input (a TUI's prompt)
+-void ShiroProfBefore(struct Machine *m, int nr, u64 a) {
+-  if (g_shiro_prof && !g_shiro_prof_stdin && (nr == 0x000 || nr == 0x013) && a == 0) {
++// for input (a TUI's prompt); a TUI sets the terminal up (TCSETS*) and an
++// event loop adds stdin to its epoll set just before
++void ShiroProfBefore(struct Machine *m, int nr, u64 a, u64 b, u64 c) {
++  if (!g_shiro_prof) return;
++  if (nr == 0x0E7) {  // exit_group doesn't come back to ShiroProfSys
++    ShiroProfDump(m, "exit");
++  } else if (!g_shiro_prof_stdin && (nr == 0x000 || nr == 0x013) && a == 0) {
+     g_shiro_prof_stdin = true;
+     ShiroProfDump(m, "first read of stdin");
++  } else if (!g_shiro_prof_tty && nr == 0x010 && a == 0 && (b == 0x5402 || b == 0x5403 || b == 0x5404)) {
++    g_shiro_prof_tty = true;
++    ShiroProfDump(m, "first terminal setup of stdin (TCSETS)");
++  } else if (!g_shiro_prof_epoll && nr == 0x0E9 && b == 1 && c == 0) {
++    g_shiro_prof_epoll = true;
++    ShiroProfDump(m, "stdin added to an epoll set");
+   }
+ }
+ 
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 14f84f4..e1d13a6 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -67,6 +67,7 @@
+ #include "blink/loader.h"
+ #include "blink/log.h"
+ #include "blink/machine.h"
++#include "blink/rde.h"
+ #include "blink/macros.h"
+ #include "blink/map.h"
+ #include "blink/ndelay.h"
+@@ -5995,11 +5996,11 @@ void OpSyscall(P) {
+ #ifdef __EMSCRIPTEN__
+   int shnr = ax & 0xfff;
+   extern bool g_shiro_prof;
+-  void ShiroProfBefore(struct Machine *, int, u64);
++  void ShiroProfBefore(struct Machine *, int, u64, u64, u64);
+   void ShiroProfSys(struct Machine *, int, double, u64);
+   double prof_t0 = 0;
+   if (g_shiro_prof) {
+-    ShiroProfBefore(m, shnr, di);
++    ShiroProfBefore(m, shnr, di, si, dx);
+     prof_t0 = emscripten_get_now();
+   }
+ #endif
+-- 
+2.43.0
+
