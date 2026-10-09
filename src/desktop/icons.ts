@@ -27,6 +27,10 @@ export const ICONS: Record<string, string> = {
   about: tile('about', '#8a7dff', '#4b3bd6',
     `<path d="M11 45h6V25a5 5 0 0 1 5-5h20a5 5 0 0 1 5 5v20h6" fill="none" stroke="#fff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>` +
     `<path d="M25 30l5 4-5 4" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="33" y="36" width="7" height="3" rx="1.5" fill="#fff"/>`),
+  browser: tile('browser', '#5ec8ff', '#1f6fe0',
+    `<circle cx="32" cy="32" r="17" fill="none" stroke="#fff" stroke-width="3.5"/>` +
+    `<ellipse cx="32" cy="32" rx="7.5" ry="17" fill="none" stroke="#fff" stroke-width="3"/>` +
+    `<path d="M15.5 26h33M15.5 38h33" stroke="#fff" stroke-width="3" stroke-linecap="round"/>`),
   vim: tile('vim', '#2fb46a', '#0d6436', mono('vi', 24, '#ffffff', 41)),
   htop: tile('htop', '#2a2f3b', '#0f1218',
     `<rect x="13" y="19" width="30" height="5" rx="2.5" fill="#5be08e"/>` +

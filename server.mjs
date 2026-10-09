@@ -1226,12 +1226,100 @@ export function createTcpRelay(config, { lookup, log = console.log, verifySignin
   };
 }
 
+// --- Browser app: browse origins (docs/BROWSER.md) ---
+// Each site the desktop's Browser app shows lives on its own origin, one DNS
+// label per real origin (src/browser/origin-map.ts): https://{key}.<domain>.
+// Those hosts serve only three scripts and a bootstrap page that installs the
+// origin's service worker; all content comes from the app's broker in the
+// user's page. They never serve the app, /api, /tcp or anything else.
+//   SHIRO_BROWSE_ORIGIN      template, e.g. https://{key}.tabcomputer.com
+//                            (needs wildcard DNS and a wildcard certificate)
+//   SHIRO_BROWSE_APP_ORIGIN  the app's origin (default: the template without "{key}.")
+//   SHIRO_BROWSE=0           off. Unset template: on for localhost only (http://{key}.localhost:PORT).
+export function browseConfigFor(hostHeader, env = process.env) {
+  if (env.SHIRO_BROWSE === '0') return null;
+  let template = env.SHIRO_BROWSE_ORIGIN || '';
+  if (!template) {
+    const m = /^(?:[a-z0-9-]+\.)?localhost(:\d+)?$/i.exec(String(hostHeader || ''));
+    if (!m) return null;
+    template = `http://{key}.localhost${m[1] || ''}`;
+  }
+  template = template.toLowerCase().replace(/\/+$/, '');
+  const tm = /^(https?):\/\/\{key\}\.([a-z0-9.-]+(?::\d+)?)$/.exec(template);
+  if (!tm) return null;
+  return {
+    template,
+    scheme: tm[1],
+    suffix: tm[2],                       // host[:port] after "{key}."
+    app: (env.SHIRO_BROWSE_APP_ORIGIN || `${tm[1]}://${tm[2]}`).toLowerCase(),
+  };
+}
+
+/** The browse key when `hostHeader` is a browse host of `cfg`, else null. */
+export function browseKeyOf(hostHeader, cfg) {
+  if (!cfg || !hostHeader) return null;
+  const host = String(hostHeader).toLowerCase();
+  if (!host.endsWith('.' + cfg.suffix)) return null;
+  const key = host.slice(0, -cfg.suffix.length - 1);
+  // Keys are one label with at least one dash (a dot of the real host): never "www" or "api"
+  return /^[a-z0-9-]{1,63}$/.test(key) && key.includes('-') && !key.startsWith('-') && !key.endsWith('-') ? key : null;
+}
+
+function browseHeaders(cfg) {
+  const browseAny = `${cfg.scheme}://*.${cfg.suffix}`;
+  return {
+    'cross-origin-embedder-policy': 'credentialless',
+    'cross-origin-resource-policy': 'cross-origin',
+    'origin-agent-cluster': '?1',
+    'x-content-type-options': 'nosniff',
+    'referrer-policy': 'no-referrer',
+    'content-security-policy': `default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; frame-ancestors ${cfg.app} ${browseAny}`,
+  };
+}
+
+const BROWSE_SCRIPTS = new Set(['sw.js', 'boot.js', 'client.js']);
+
+async function handleBrowseHost(req, res, cfg) {
+  const pathname = new URL(req.url, 'http://localhost').pathname;
+  const headers = browseHeaders(cfg);
+  if (pathname.startsWith('/__tc/')) {
+    const name = pathname.slice('/__tc/'.length);
+    if (!BROWSE_SCRIPTS.has(name)) { res.writeHead(404, headers); return res.end(); }
+    try {
+      const data = await readFile(join(STATIC_DIR, 'browse', name));
+      res.writeHead(200, {
+        ...headers,
+        'content-type': 'application/javascript; charset=utf-8',
+        'cache-control': 'no-cache',
+        ...(name === 'sw.js' ? { 'service-worker-allowed': '/' } : {}),
+      });
+      return res.end(data);
+    } catch {
+      res.writeHead(404, headers);
+      return res.end();
+    }
+  }
+  if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'POST') { res.writeHead(405, headers); return res.end(); }
+  const esc = (s) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title></title>`
+    + `<script src="/__tc/boot.js" data-app="${esc(cfg.app)}"></script></head><body></body></html>`;
+  res.writeHead(200, { ...headers, 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(req.method === 'HEAD' ? undefined : html);
+}
+
 // --- HTTP server ---
 const TCP_RELAY_CONFIG = tcpRelayConfigFromEnv();
 const tcpRelay = TCP_RELAY_CONFIG.enabled ? createTcpRelay(TCP_RELAY_CONFIG) : null;
 
 const server = createServer(async (req, res) => {
   const pathname = new URL(req.url, 'http://localhost').pathname;
+
+  const browse = browseConfigFor(req.headers.host);
+  if (browseKeyOf(req.headers.host, browse)) return handleBrowseHost(req, res, browse);
+  if (pathname === '/browse/config.json') {
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    return res.end(JSON.stringify(browse ? { origin: browse.template, app: browse.app } : { origin: null }));
+  }
 
   if (pathname === '/tcp/token' && tcpRelay) {
     return tcpRelay.handleToken(req, res);
@@ -1293,6 +1381,7 @@ const CHANNEL_PATH = /^\/channel\/[a-f0-9]{1,64}$/;
 const wss = new WebSocketServer({ noServer: true });
 server.on('upgrade', (req, socket, head) => {
   const pathname = new URL(req.url, 'http://localhost').pathname;
+  if (browseKeyOf(req.headers.host, browseConfigFor(req.headers.host))) return rejectUpgrade(socket, 404, 'Not found');
   if (CHANNEL_PATH.test(pathname)) {
     return wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
   }
