@@ -149,5 +149,9 @@ Debian's.
 - `open(dir, O_TMPFILE)` fails (EISDIR); programs that try it fall back to a
   named temporary file.
 - One guest thread runs at a time (Blink's GIL); apt and dpkg are
-  interpreted/JIT-compiled x86. `apt-get update` takes about 2 minutes
-  (parsing trixie's 56 MB index), installing a small package about a minute.
+  interpreted/JIT-compiled x86. `apt-get update` takes about 45 s
+  (BENCHMARKS.md "Real workloads": 43 s), installing a small package about a minute.
+- dpkg-deb's `.xz` decompression occasionally crashes or reports corrupt data
+  under Blink (X86_ENGINES.md item 57); rerunning the install gets past it.
+- How Debian packages coexist with `pkg`'s prebuilt ones (who owns `/usr/bin/NAME`,
+  switching back and forth): README.md, "How prebuilt, Debian and built-in commands coexist".
