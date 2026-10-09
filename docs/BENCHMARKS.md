@@ -192,12 +192,14 @@ is download + unpack + triggers:
 | xterm (Xaw, pty) | 9.3 MB | 2.1 s | 2.5–2.7 s | 1.6–1.9 s |
 | GPicView (GTK 2) | 26.8 MB | 4.8–7.6 s | 6.9–9.7 s | 6.7 s |
 | FeatherPad (Qt 5) | 35.0 MB | 6.1–7.8 s | 10.5–16 s | 8.9–14.7 s |
+| L3afpad (GTK 3) | 33.1 MB | 10.3–12.2 s | 12.9 s | — |
+| Ristretto (GTK 3) | 35.1 MB | 10.9 s | 14.4–15.5 s | 13.1 s |
 
 Reinstalling from the browser's Cache Storage (by sha256, no network): xeyes
 1.4 s, xterm 1.7 s, GPicView 7.2 s, FeatherPad 7.0–8.2 s — unpacking (JS xz)
-and writing files dominates. Start-up is Blink loading ~70 shared libraries
-and toolkit init, so a warm start is barely faster than the first. GTK 3
-(l3afpad) stalls in Chromium after mapping (Blink; reported to perf-blink).
+and writing files dominates. Start-up is Blink loading ~70–100 shared
+libraries and toolkit init, so a warm start is barely faster than the first.
+GTK 3 needed Blink patch 0029 (it spun in cairo/pixman SSE compares).
 
 ### unix/desktop — the desktop shell (menu bar, dock, windows) on the boot path
 

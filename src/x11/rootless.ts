@@ -115,7 +115,7 @@ export class Rootless {
       }
     }
     const cw = this.host.createCanvasWindow({
-      title: this.title(w) || 'X11', x, y, width: w.width, height: w.height, decorated, override: w.overrideRedirect,
+      title: this.title(w) || (this.transientFor(w) ? this.title(this.transientFor(w)!) : '') || this.wmClass(w) || 'X11', x, y, width: w.width, height: w.height, decorated, override: w.overrideRedirect,
       transientFor: this.transientFor(w) ? this.tops.get(this.transientFor(w)!)?.cw ?? null : null,
       minWidth: hints.minW || undefined, minHeight: hints.minH || undefined,
       resizable: !(hints.maxW && hints.maxW === hints.minW && hints.maxH === hints.minH),

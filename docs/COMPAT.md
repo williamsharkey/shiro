@@ -299,7 +299,8 @@ of an installed app → first frame, in Chromium.
 | xterm | 379 | gui (9.3 MB) | works | Shiro's shell in xterm's pty, typing, output, core fonts; 2.5–2.7 s | no XKB (core keymap), UTF-8 locale falls back to C (Xlib has no C.UTF-8 entry) |
 | FeatherPad | 1.3.5 (Qt 5.15.8) | gui (35 MB of an 84 MB closure) | works | menus, toolbar icons, typing text; 10.5–16 s | Qt warns about missing XKB; no GLX (Mesa never downloaded) |
 | GPicView | 0.2.5 (GTK 2.24.33) | gui (26.8 MB) | works | opens a PNG at 512×512; 6.9–9.7 s | some stock toolbar icons missing |
-| L3afpad | 0.8.18.1.11 (GTK 3.24.38) | gui (33.1 MB) | stalls in Chromium | renders under Node (Blink in worker threads): Adwaita theme, menu bar, text view, first frame ~9 s | in Chromium the guest spins after mapping its window (Blink, reported to perf-blink) |
-| Mousepad, Ristretto | GTK 3 | gui (45 / 35 MB) | not checked | — | GTK 3 as above |
-| LXImage-Qt | Qt 5 | gui (38 MB) | not checked | — | — |
-| GIMP, Inkscape | 2.10 / 1.2 | — | not packaged | — | GTK 3/2 apps with 139 / 94 MB closures; after GTK 3 runs in the browser |
+| L3afpad | 0.8.18.1.11 (GTK 3.24.38) | gui (33.1 MB of a 51 MB closure) | works | Adwaita theme, menus, typing text; 12.9 s | needed Blink patch 0029 (SSE compares) |
+| Mousepad | 0.5.10 (GTK 3, Xfce) | gui (45.1 MB) | works | editor window and menus; 32 s | slow start: waits on D-Bus / xfconf, which aren't there |
+| Ristretto | 0.12.4 (GTK 3, Xfce) | gui (35.1 MB) | works | opens a PNG; 14–15.5 s | no thumbnails (tumbler over D-Bus) |
+| LXImage-Qt | 1.2.0 (Qt 5) | gui (38.1 MB) | exits | — | without a D-Bus session bus its single-instance check fails and it quits (status 0) |
+| GIMP, Inkscape | 2.10 / 1.2 | — | not packaged | — | GTK apps with 139 / 94 MB closures; next to try |

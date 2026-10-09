@@ -42,7 +42,7 @@ APPS = {
     'mousepad': (['mousepad'], ['/usr/bin/mousepad'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'],
                  ['libglib2.0-bin', 'shared-mime-info'], 'Xfce GTK3 text editor', 'gtk3'),
     'ristretto': (['ristretto'], ['/usr/bin/ristretto'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'],
-                  ['libglib2.0-bin', 'shared-mime-info'], 'Xfce GTK3 image viewer', 'gtk3'),
+                  ['libglib2.0-bin', 'shared-mime-info', 'libmagic-mgc'], 'Xfce GTK3 image viewer', 'gtk3'),
     'gpicview': (['gpicview'], ['/usr/bin/gpicview'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'],
                  ['shared-mime-info'], 'LXDE image viewer (GTK)', 'gtk2'),
     'featherpad': (['featherpad'], ['/usr/bin/featherpad'], ['usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so',

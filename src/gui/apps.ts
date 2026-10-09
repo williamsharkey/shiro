@@ -232,12 +232,12 @@ export function appEnv(extra: Record<string, string> = {}): Record<string, strin
 }
 
 /**
- * Blink's wasm JIT stalls GTK startup in about 2 of 3 runs under Node
- * (reported to the perf-blink session); the interpreter is reliable there.
- * Qt and plain Xlib apps run fine with the JIT.
+ * Per-toolkit environment. Empty since Blink patch 0029 (SSE compares): GTK 3
+ * spun after mapping its window before it, with and without the JIT.
  */
 export function toolkitEnv(app: GuiApp): Record<string, string> {
-  return app.toolkit.startsWith('gtk') ? { BLINK_WJIT: '0' } : {};
+  void app;
+  return {};
 }
 
 // ── install & launch ──

@@ -696,10 +696,10 @@
     "libcolord2",
     "libudev1",
     "liblcms2-2",
-    "gtk-update-icon-cache",
-    "libmagic-mgc"
+    "gtk-update-icon-cache"
    ],
    "packages": [
+    "libmagic-mgc",
     "shared-mime-info",
     "zlib1g",
     "libc6",
@@ -797,7 +797,7 @@
     "libbz2-1.0",
     "libexif12"
    ],
-   "size": 34825388,
+   "size": 35130276,
    "toolkit": "gtk3"
   },
   "xcalc": {
@@ -1470,6 +1470,12 @@
    "sha256": "f96d8876b53ec89d76a992bc199679b818cf518225a768954d9451fb556a4eb7",
    "size": 205732,
    "version": "5.4.1-1+deb12u1"
+  },
+  "libmagic-mgc": {
+   "filename": "pool/main/f/file/libmagic-mgc_5.44-3_amd64.deb",
+   "sha256": "bad01673ba5dfb9b5db4f3ae6a71f18d492cb6801eab45ad3c7d483c0a1f6ad2",
+   "size": 304888,
+   "version": "1:5.44-3"
   },
   "libmagic1": {
    "filename": "pool/main/f/file/libmagic1_5.44-3_amd64.deb",
