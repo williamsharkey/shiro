@@ -584,16 +584,16 @@ async function handleSignaling(req, res, pathname) {
 // CORS headers. Pool files never change under a name, so they are cached on
 // disk here and in the browser (immutable). A file a point release removed from
 // the mirror comes from snapshot.debian.org instead. The page checks sha256.
-const DEBIAN_MIRROR = process.env.SHIRO_DEBIAN_MIRROR || 'https://deb.debian.org/debian/';
+const GUI_DEB_UPSTREAM = process.env.SHIRO_DEBIAN_MIRROR || 'https://deb.debian.org/debian/';
 const DEBIAN_SNAPSHOT = process.env.SHIRO_DEBIAN_SNAPSHOT || 'https://snapshot.debian.org/archive/debian/20260712T000000Z/';
 const DEBIAN_CACHE = process.env.SHIRO_DEB_CACHE || join(tmpdir(), 'shiro-debs');
-const DEBIAN_PATH = /^pool\/(main|contrib|non-free|non-free-firmware)\/[a-z0-9]{1,4}\/[a-z0-9][a-z0-9.+-]*\/[A-Za-z0-9.+~_%-]+\.deb$/;
-const debianInflight = new Map();
+const GUI_DEBIAN_PATH = /^pool\/(main|contrib|non-free|non-free-firmware)\/[a-z0-9]{1,4}\/[a-z0-9][a-z0-9.+-]*\/[A-Za-z0-9.+~_%-]+\.deb$/;
+const GUI_debianInflight = new Map();
 
 async function handleDebian(req, res, rel) {
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
   rel = decodeURIComponent(rel);
-  if (!DEBIAN_PATH.test(rel) || rel.includes('..')) { res.writeHead(403); return res.end('not a Debian pool file'); }
+  if (!GUI_DEBIAN_PATH.test(rel) || rel.includes('..')) { res.writeHead(403); return res.end('not a Debian pool file'); }
   const file = join(DEBIAN_CACHE, rel.replace(/\//g, '_'));
   const send = (buf) => {
     res.writeHead(200, { 'content-type': 'application/vnd.debian.binary-package', 'content-length': buf.length,
@@ -601,10 +601,10 @@ async function handleDebian(req, res, rel) {
     res.end(req.method === 'HEAD' ? undefined : buf);
   };
   try { return send(await readFile(file)); } catch { /* not cached yet */ }
-  let p = debianInflight.get(rel);
+  let p = GUI_debianInflight.get(rel);
   if (!p) {
     p = (async () => {
-      for (const base of [DEBIAN_MIRROR, DEBIAN_SNAPSHOT]) {
+      for (const base of [GUI_DEB_UPSTREAM, DEBIAN_SNAPSHOT]) {
         const r = await upstreamFetch(base + rel).catch(() => null);
         if (r && r.ok) {
           const buf = Buffer.from(await r.arrayBuffer());
@@ -614,8 +614,8 @@ async function handleDebian(req, res, rel) {
         }
       }
       return null;
-    })().finally(() => debianInflight.delete(rel));
-    debianInflight.set(rel, p);
+    })().finally(() => GUI_debianInflight.delete(rel));
+    GUI_debianInflight.set(rel, p);
   }
   const buf = await p;
   if (!buf) { res.writeHead(404); return res.end('not found on the Debian mirror or snapshot'); }
@@ -1237,7 +1237,7 @@ const server = createServer(async (req, res) => {
   if (pathname.startsWith('/api/')) {
     return handleProxy(req, res, pathname.slice(5));
   }
-  if (pathname.startsWith('/debian/')) {
+  if (pathname.startsWith('/debian/pool/')) {
     return handleDebian(req, res, pathname.slice('/debian/'.length));
   }
   // Git CORS proxy: /git-proxy/github.com/... or /git-proxy/https://github.com/...
