@@ -172,7 +172,9 @@ export function analyze(rounds, { alpha, minEffect }) {
     if (constant(m.base) && constant(m.new)) {
       row.exact = true;
       row.delta = nMed - bMed;
-      row.status = row.delta === 0 ? 'same' : (higher ? row.delta < 0 : row.delta > 0) ? 'regressed' : 'improved';
+      row.shiftPct = bMed === 0 ? (row.delta === 0 ? 0 : Infinity) : ((higher ? -row.delta : row.delta) / Math.abs(bMed)) * 100;
+      // A real but small exact change (1 KiB more code) is reported, not failed on
+      row.status = row.delta === 0 ? 'same' : Math.abs(row.shiftPct) < minEffect ? 'changed' : row.shiftPct > 0 ? 'regressed' : 'improved';
       rows.push(row);
       continue;
     }
@@ -192,14 +194,14 @@ export function analyze(rounds, { alpha, minEffect }) {
 }
 
 function report(rows, a, sides, log) {
-  const order = { regressed: 0, inconsistent: 1, improved: 2, new: 3, gone: 3, same: 4, 'n/a': 5 };
+  const order = { regressed: 0, inconsistent: 1, improved: 2, changed: 3, new: 3, gone: 3, same: 4, 'n/a': 5 };
   rows.sort((x, y) => order[x.status] - order[y.status] || x.metric.localeCompare(y.metric));
   log(`\n[ab] ${sides.base.label} → ${sides.new.label}; ${a.rounds} rounds × ${a.runs} runs, alpha ${a.alpha}, min effect ${a.minEffect}%`);
   log('     shift = Hodges–Lehmann estimate, + is worse; rounds = direction of new vs base per round');
   for (const r of rows) {
     if (r.status === 'same' && !process.env.AB_ALL) continue;
     const head = `${r.status.padEnd(12)} ${r.metric.padEnd(48)} ${fmt(r.base).padStart(8)} → ${fmt(r.new).padStart(8)} ${(r.unit || '').padEnd(6)}`;
-    if (r.exact) log(`${head} exact (Δ ${fmt(r.delta)})`);
+    if (r.exact) log(`${head} exact (Δ ${fmt(r.delta)}, ${(r.shiftPct >= 0 ? '+' : '') + fmt(r.shiftPct)}%)`);
     else if (r.p != null) log(`${head} shift ${(r.shiftPct >= 0 ? '+' : '') + fmt(r.shiftPct)}%  p=${r.p.toPrecision(2)}  rounds ${r.rounds}  n=${r.nBase}/${r.nNew}`);
     else log(head);
   }

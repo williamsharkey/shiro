@@ -832,6 +832,48 @@ regression (`--suites shell,wasm --only 'shell.loop_1000|wasm.startup|wasm.peak_
 p = 0.60, rounds `++-`; `startup.lua` 7.6 → 6.6 ms, `startup.sqlite3`
 9.8 → 8.6 ms (both p > 0.01, split rounds).
 
+### Cold boot to first prompt: where the time goes (investigation, no product change)
+
+Integration 045feaa (desktop UI, isolated, this container; cold first prompt
+~255–275 ms here). Timeline from a CPU profile plus `performance.mark`s in
+`main()`, in ms from navigation:
+
+| step | ms |
+|---|---:|
+| entry `index-*.js` requested (HTML parse and the harness's request routing) | 79 |
+| entry downloaded | 104 |
+| `main()` starts: entry compile and top-level evaluation (27 ms, of which xterm's module wrapper is 14.5 ms) | 177 |
+| `fs.init` (IndexedDB open) | 178–189 |
+| desktop built | 197–205 |
+| `new ShiroTerminal`: xterm `open()`, whose first forced layouts are `_measure` 42 ms and Viewport `_innerRefresh` 25 ms in the profile | 205–260 |
+| `terminal.start()`, first prompt in the buffer | 261–300 |
+
+Moving the Debian rootfs boot / PATH shims, X display :0 and the Blink
+loader behind the first prompt (they are fire-and-forget imports that load
+at 194–211 ms) made no measurable difference:
+`ab.mjs HEAD --suites boot`, 4 rounds × 5 runs: cold first prompt
+270.8 → 275.5 ms, p = 0.97, so it was not committed. Loading
+`pkg-index.json` as text instead of JSON saves only a ~1 ms
+`JSON.parse` (Vite already emits large JSON as `JSON.parse`) and adds
+22 KiB, also not committed. The remaining levers are the entry's size
+(compile) and the cost of the desktop's first layout, which xterm forces.
+
+### unix/perf-fs-shell 6 — npm, upload/download/shiro, hc, remote, cw and the template palette load on first use
+
+Entry chunk 1405 → 1291 KB. `ab.mjs HEAD --suites boot`, 6 rounds × 5 runs,
+isolated, against integration 045feaa:
+
+| metric | base | new | |
+|---|---:|---:|---|
+| boot.cold.transfer | 1576 KiB | 1464 KiB | −7.1% (exact) |
+| boot.mem.uasm | 6.83 MiB | 6.51 MiB | −4.7%, p = 3e-11, all rounds |
+| boot.mem.js_heap | 3.9 MiB | 3.8 MiB | −2.6%, p = 7e-12 (under the 3% bar) |
+| boot.cold.first_prompt | 270.6 ms | 262.0 ms | −3.6%, p = 0.15: not significant |
+| boot.settled.requests | 12 | 13 | the split-out chunk fetched once used |
+
+The remote-session auto-reconnect reads its localStorage key directly and
+loads `commands/remote` only when there is a session to resume.
+
 ## Results
 
 <!-- bench:table:begin -->
