@@ -73,6 +73,8 @@ import { spiritCmd } from './commands/spirit';
 import { processTable } from './process-table';
 import { createPathShims } from './path-shims';
 import { getKernel } from './kernel/kernel';
+import { startDisplay } from './x11/display';
+import { registerGuiApps } from './gui/desktop-apps';
 import { installNet } from './kernel/net';
 import { attachKernelTty } from './kernel/pty';
 import { iframeServer } from './iframe-server';
@@ -469,7 +471,7 @@ async function main() {
   // X11 display :0 (src/x11, docs/GUI.md): `Xshiro :0` listens on /tmp/.X11-unix/X0 now;
   // the server and its fonts load on the first client, windows open on the desktop
   shell.env['DISPLAY'] ??= ':0';
-  void import('./x11/display').then(m => m.startDisplay(kernel, 0)).catch(e => console.warn('[Xshiro]', e));
+  void startDisplay(kernel, 0).catch(e => console.warn('[Xshiro]', e));
 
   // Populate API keys from localStorage so `claude` CLI picks them up
   const storedAnthropicKey = localStorage.getItem('shiro_anthropic_key') || localStorage.getItem('shiro_api_key');
@@ -516,7 +518,7 @@ async function main() {
   shell.setTerminal(terminal);
   desktop?.attachMainTerminal(terminal);
   // Debian GUI apps (xterm, GTK, Qt) in the dock, installed on first click (src/gui/apps.ts)
-  if (desktop) void import('./gui/desktop-apps').then(m => m.registerGuiApps(desktop.wm, fs, kernel)).catch(e => console.warn('[gui]', e));
+  if (desktop) registerGuiApps(desktop.wm, fs, kernel);
   performance.mark('shiro:terminal:ready');
 
   // Listen for font size changes from parent (seed snippet)

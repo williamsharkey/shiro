@@ -278,3 +278,28 @@ bash scripts/pkgbuild/x86/publish.sh vim 9.2.0000   # -> public/pkg/vim/9.2.0000
 ncurses-based programs are linked against a static ncurses 6.5 with
 `xterm-256color`, `xterm`, `screen*`, `tmux*`, `linux`, `vt100`, `vt220` and
 `dumb` compiled in, so they work without a terminfo database.
+
+## Linux GUI apps (unix/gui)
+
+Unmodified Debian bookworm amd64 programs in Blink, drawing through Xshiro,
+the X11 server in the page, into desktop windows ([GUI.md](GUI.md)). Route
+**gui** = `gui APP` / the dock: the app's Debian packages are fetched on first
+use (sha256-checked, cached by hash), then the ELF runs as a kernel process
+with `DISPLAY=:0`. Smoke tests: `x11.test.ts` (protocol, and a raw-protocol
+x86-64 client over the kernel's AF_UNIX socket), `gui-apps.test.ts`
+(install + launch); browser runs with `scripts/gui/shoot.mjs` (headless
+Chromium, screenshots in `docs/screenshots/gui-*.png`). Times: first launch
+of an installed app → first frame, in Chromium.
+
+| Software | Version | Route | Status | Tested | Known issues |
+| --- | --- | --- | --- | --- | --- |
+| xeyes | x11-apps 7.7+9 | gui (7.5 MB) | works | shaped window, pupils follow the pointer; first frame 0.9–1.3 s, warm 0.5 s | — |
+| xclock | x11-apps 7.7+9 | gui (8.9 MB) | works | analog clock with RENDER antialiasing; 2.6–2.8 s | — |
+| xcalc, xedit | x11-apps 7.7+9 | gui | not checked | — | — |
+| xterm | 379 | gui (9.3 MB) | works | Shiro's shell in xterm's pty, typing, output, core fonts; 2.5–2.7 s | no XKB (core keymap), UTF-8 locale falls back to C (Xlib has no C.UTF-8 entry) |
+| FeatherPad | 1.3.5 (Qt 5.15.8) | gui (35 MB of an 84 MB closure) | works | menus, toolbar icons, typing text; 10.5–16 s | Qt warns about missing XKB; no GLX (Mesa never downloaded) |
+| GPicView | 0.2.5 (GTK 2.24.33) | gui (26.8 MB) | works | opens a PNG at 512×512; 6.9–9.7 s | some stock toolbar icons missing |
+| L3afpad | 0.8.18.1.11 (GTK 3.24.38) | gui (33.1 MB) | stalls in Chromium | renders under Node (Blink in worker threads): Adwaita theme, menu bar, text view, first frame ~9 s | in Chromium the guest spins after mapping its window (Blink, reported to perf-blink) |
+| Mousepad, Ristretto | GTK 3 | gui (45 / 35 MB) | not checked | — | GTK 3 as above |
+| LXImage-Qt | Qt 5 | gui (38 MB) | not checked | — | — |
+| GIMP, Inkscape | 2.10 / 1.2 | — | not packaged | — | GTK 3/2 apps with 139 / 94 MB closures; after GTK 3 runs in the browser |

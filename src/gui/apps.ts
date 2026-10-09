@@ -21,8 +21,11 @@ export interface GuiApp {
   description: string; toolkit: string; bin: string; packages: string[];
   size: number; closureSize: number; dropped: string[];
 }
+/** A file a postinst would generate, built by gen-apps.py (public/gui/overlay/SHA256), applied when `when` is installed. */
+export interface Overlay { path: string; sha256: string; size: number; when: string }
 export interface AppsManifest {
   suite: string; arch: string; mirror: string; snapshot: string;
+  overlays?: Overlay[];
   packages: Record<string, DebPackage>;
   apps: Record<string, GuiApp>;
 }
@@ -109,7 +112,13 @@ async function openCache(): Promise<Cache | null> {
 
 /** A .deb by content hash: Cache Storage first, else the server's /debian/ route. */
 async function getDeb(p: DebPackage, cache: Cache | null): Promise<{ data: Uint8Array; cached: boolean }> {
-  const key = new URL(`debian-sha256/${p.sha256}`, baseUrl()).href;
+  return getBlob(p.sha256, p.size, `debian/${p.filename}`, cache, fetchOverride ? () => fetchOverride!(p) : null);
+}
+
+/** Bytes by sha256: Cache Storage, else `url` (or `fetcher`), verified and cached. */
+async function getBlob(sha256: string, size: number, url: string, cache: Cache | null, fetcher: (() => Promise<Uint8Array>) | null): Promise<{ data: Uint8Array; cached: boolean }> {
+  const p = { sha256, size, filename: url };
+  const key = new URL(`sha256/${p.sha256}`, baseUrl()).href;
   if (cache) {
     const hit = await cache.match(key).catch(() => undefined);
     if (hit) {
@@ -118,9 +127,9 @@ async function getDeb(p: DebPackage, cache: Cache | null): Promise<{ data: Uint8
     }
   }
   let data: Uint8Array;
-  if (fetchOverride) data = await fetchOverride(p);
+  if (fetcher) data = await fetcher();
   else {
-    const r = await fetch(new URL(`debian/${p.filename}`, baseUrl()).href);
+    const r = await fetch(new URL(url, baseUrl()).href);
     if (!r.ok) throw new Error(`${p.filename}: HTTP ${r.status}`);
     data = new Uint8Array(await r.arrayBuffer());
   }
@@ -191,7 +200,6 @@ async function unpack(fs: FileSystem, entries: TarEntry[], ownBins: Set<string>)
 const TRIGGERS: { when: string; argv: string[] }[] = [
   { when: '/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders', argv: ['/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders', '--update-cache'] },
   { when: '/usr/bin/glib-compile-schemas', argv: ['/usr/bin/glib-compile-schemas', '/usr/share/glib-2.0/schemas'] },
-  { when: '/usr/bin/update-mime-database', argv: ['/usr/bin/update-mime-database', '/usr/share/mime'] },
 ];
 
 async function runTriggers(fs: FileSystem, kernel: Kernel, log: (s: string) => void): Promise<void> {
@@ -288,6 +296,12 @@ async function doInstall(fs: FileSystem, kernel: Kernel, name: string, onProgres
   }
   res.ms.fetch = fetchWait;
   void tFetch0;
+  for (const o of m.overlays ?? []) {
+    if (!app.packages.includes(o.when) || !want.includes(o.when)) continue;
+    const { data } = await getBlob(o.sha256, o.size, `gui/overlay/${o.sha256}`, cache, null);
+    await fs.mkdir(o.path.slice(0, o.path.lastIndexOf('/')), { recursive: true }).catch(() => {});
+    await fs.writeFile(o.path, data);
+  }
   const tt = Date.now();
   report('triggers');
   if (want.length) await runTriggers(fs, kernel, log);

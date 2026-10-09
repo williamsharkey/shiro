@@ -165,7 +165,23 @@ def main():
             d = db[n]
             packages[n] = {'version': d['Version'], 'filename': d['Filename'], 'sha256': d['SHA256'], 'size': int(d['Size'])}
         print(f"{app:12s} keep {len(keep):3d} pkgs {apps[app]['size']/1e6:6.1f} MB (closure {len(names)} / {apps[app]['closureSize']/1e6:.1f} MB); dropped: {' '.join(dropped)}", file=sys.stderr)
-    json.dump({'suite': SUITE, 'arch': 'amd64', 'mirror': 'https://deb.debian.org/debian/',
+    # Overlays: files a postinst would generate, built here once (architecture independent).
+    # GLib's content-type sniffing (gdk-pixbuf picks image loaders by it) needs mime.cache;
+    # update-mime-database itself would need libxml2 + ICU (10 MB) in the browser.
+    overlays = []
+    mime_app = next((a for a in apps if 'shared-mime-info' in apps[a]['packages']), None)
+    if mime_app:
+        src = os.path.join(work, mime_app, 'usr/share/mime')
+        tmp = os.path.join(work, '_mime')
+        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.copytree(src, tmp)
+        subprocess.run(['update-mime-database', tmp], check=True)
+        data = open(os.path.join(tmp, 'mime.cache'), 'rb').read()
+        h = hashlib.sha256(data).hexdigest()
+        os.makedirs(os.path.join(os.path.dirname(out), 'overlay'), exist_ok=True)
+        open(os.path.join(os.path.dirname(out), 'overlay', h), 'wb').write(data)
+        overlays.append({'path': '/usr/share/mime/mime.cache', 'sha256': h, 'size': len(data), 'when': 'shared-mime-info'})
+    json.dump({'suite': SUITE, 'overlays': overlays, 'arch': 'amd64', 'mirror': 'https://deb.debian.org/debian/',
                'snapshot': 'https://snapshot.debian.org/archive/debian/20260712T000000Z/',
                'packages': packages, 'apps': apps}, open(out, 'w'), indent=1, sort_keys=True)
 

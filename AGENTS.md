@@ -20,6 +20,7 @@ Do not treat the dashboard or wrappers as the product. The product is the browse
 - `src/pkg-manager.ts`: the package manager (`pkg`/`apt`, see "Packages"); `src/wasi-packages.ts` is the older single-binary API on top of its index.
 - `src/x86-engine/*` + `public/engines/blink/` + `vendor/blink/`: x86-64 Linux ELF in Blink (wasm), as kernel processes; `src/x86/*` is the fallback interpreter when the page isn't cross-origin isolated. See `docs/X86_ENGINES.md`.
 - `src/kernel/*`: Unix kernel core (process table, fd tables, pipes, syscall dispatch, SAB syscall channel for Worker guests). Contract: `docs/KERNEL_ABI.md`; roadmap: `docs/UNIX_COMPAT.md`. `window.__shiro.kernel`; kernel processes show in `ps`.
+- `src/x11/*` + `src/gui/*`: Linux GUI apps (docs/GUI.md): Xshiro, an X11 server in the page (a kernel process on `/tmp/.X11-unix/X0`), rootless windows on the desktop's surface API, Debian GUI apps installed on first use (`gui`, `public/gui/apps.json`).
 - `src/commands/seed.ts`, `src/commands/hc.ts`, `src/seed-runtime-context.ts`: seeded sessions, host-page access, runtime orientation.
 - `src/claude-config.ts`, `src/node-compat/preload.ts`, `src/node-compat/process.ts`: Claude bootstrap, auth persistence, startup defaults.
 - `src/desktop/*`: the Unix edition's desktop (menu bar, dock, window manager `wm.ts`, Terminal with tabs, lazy Files/Settings/Activity/About). `src/ui-mode.ts` picks it: every host but shiro.computer boots the desktop; `?ui=terminal|desktop` or `desktop classic` switch. API and `/dom`: [docs/DESKTOP.md](docs/DESKTOP.md).
@@ -190,6 +191,14 @@ Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` ha
 - The desktop is a separate chunk that `main()` starts importing before IndexedDB opens (the terminal UI never loads it); apps under `src/desktop/apps/` are further chunks `import()`ed on launch. Keep `src/desktop` out of static imports from the entry; measure both UIs (`BENCH_PATH='/?ui=terminal'`). Fonts (`public/fonts`, OFL) are injected by the desktop only.
 - `/dom` (`src/dom-fs.ts`) is a FileSystem virtual provider (`fs.addVirtualProvider`, `mountPoint`) plus kernel devices for `/dom/events/<type>`; `cat` follows those live at a terminal.
 - Network sign-in: call `requireNetworkSignIn()` (`src/net-signin.ts`) before outbound network that needs a signed-in user; never for same-origin requests. The relay token fetch does; `SHIRO_TCP_REQUIRE_SIGNIN=1` makes server.mjs demand a GitHub token.
+
+## Linux GUI Apps (X11)
+
+- `Xshiro :0` (`src/x11/display.ts`) starts at boot and only listens; `src/x11/session.ts` builds the server (`server.ts`, `render.ts`, fonts) on the first client. `DISPLAY=:0` is in the shell env. `xserver` shows clients and windows; `window.__shiroX` is `{server, rootless}`.
+- Rootless: each X toplevel is a desktop `surface` window (`src/gui/desktop-host.ts`, scale 1, no auto-resize) or a stand-in floating window in the classic UI (`standin-host.ts`). Windows' app id is the WM_CLASS instance, so dock entries (`src/gui/desktop-apps.ts`) find them.
+- `gui APP` installs from `public/gui/apps.json` (regenerate with `scripts/gui/gen-apps.py`; it needs the Debian Packages index, network, dpkg-deb, readelf and the host's update-mime-database): packages by sha256 through the server's `/debian/` route, Cache Storage, unpack in the page, triggers in Blink, overlays from `public/gui/overlay/`. GTK apps launch with `BLINK_WJIT=0` (`toolkitEnv`): GTK 3 stalls after mapping in Chromium (Blink, with perf-blink).
+- Debug a client without the browser: `tests/tests/shiro-vitest/gui-probe.test.ts` (`GUI_PROBE_ROOT` = a rootfs from `scripts/gui/debfetch.py`) or `scripts/gui/xdev.ts` (the server on a real Unix socket for native clients). Browser numbers and screenshots: `scripts/gui/shoot.mjs`.
+- Server code reads requests with `Reader` and writes with `Writer` in the client's byte order; throw `XError(code, value)` for protocol errors. Drawing goes through `Painter` (raster.ts) so clips, raster ops and damage stay right; never write `Pix.data` without calling `damage`.
 
 ## Gotchas
 

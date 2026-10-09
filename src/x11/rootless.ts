@@ -101,7 +101,7 @@ export class Rootless {
     const t: Top = { win: w, cw: null, img: null, dirty: null, frame: 0, hints, cleanup: [] };
     this.tops.set(w, t);
     const decorated = !this.undecorated(w);
-    let x = w.x, y = w.y;
+    let x: number | undefined = w.x, y: number | undefined = w.y;
     if (decorated) {
       const userPos = (hints.flags & 1) || ((hints.flags & 4) && (x || y));
       const transient = this.transientFor(w);
@@ -109,10 +109,10 @@ export class Rootless {
         x = Math.round(transient.x + (transient.width - w.width) / 2);
         y = Math.round(transient.y + (transient.height - w.height) / 3);
       } else if (!userPos) {
-        const p = this.host.placeWindow?.(w.width, w.height) ?? { x: 80, y: 80 };
-        x = p.x; y = p.y;
+        // the host's placement (centered, cascading); position() reports it below
+        const p = this.host.placeWindow?.(w.width, w.height);
+        x = p?.x; y = p?.y;
       }
-      if (x !== w.x || y !== w.y) this.server.hostMoved(w, x, y);
     }
     const cw = this.host.createCanvasWindow({
       title: this.title(w) || 'X11', x, y, width: w.width, height: w.height, decorated, override: w.overrideRedirect,

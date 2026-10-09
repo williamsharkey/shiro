@@ -7,15 +7,15 @@ import type { DesktopAPI, DesktopWindow } from '../desktop/wm';
 import type { FileSystem } from '../filesystem';
 import type { Kernel } from '../kernel/kernel';
 
-/** id, name, in the dock, icon glyph */
+/** id, name, in the dock (only apps checked in Chromium; GTK 3 waits on Blink), icon glyph */
 const APPS: [string, string, boolean, string][] = [
   ['xterm', 'XTerm', true, 'X'],
-  ['l3afpad', 'L3afpad', true, '✎'],
-  ['ristretto', 'Ristretto', true, '▣'],
+  ['l3afpad', 'L3afpad', false, '✎'],
+  ['ristretto', 'Ristretto', false, '▣'],
   ['featherpad', 'FeatherPad', true, '✐'],
   ['lximage-qt', 'LXImage-Qt', false, '▤'],
   ['mousepad', 'Mousepad', false, '✎'],
-  ['gpicview', 'GPicView', false, '▣'],
+  ['gpicview', 'GPicView', true, '▣'],
   ['xeyes', 'xeyes', true, '◉'],
   ['xclock', 'xclock', false, '◷'],
   ['xcalc', 'xcalc', false, '±'],

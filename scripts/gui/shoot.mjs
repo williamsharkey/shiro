@@ -19,6 +19,8 @@ const finalShot = opt('--shot', '');
 const keep = flag('--keep');
 const jsonOut = opt('--json', '/tmp/gui-timings.json');
 const noWarm = flag('--no-warm');
+const at = {};
+for (let t = opt('--at', null); t; t = opt('--at', null)) { const [a, xy] = t.split('='); at[a] = xy.split(',').map(Number); }
 const types = {};
 for (let t = opt('--type', null); t; t = opt('--type', null)) { const i = t.indexOf('='); types[t.slice(0, i)] = t.slice(i + 1); }
 // APP or APP:arg1,arg2 (arguments for the app)
@@ -111,7 +113,14 @@ for (const app of apps) {
   }
   if (!keep) await closeApp(app);
 }
-if (finalShot) await page.screenshot({ path: `${out}/${finalShot}.png` });
+if (finalShot) {
+  // --at APP=x,y places windows (frame, work-area coordinates) for the final shot, in argument order
+  for (const [app, [x, y]] of Object.entries(at)) {
+    await page.evaluate(([app, x, y]) => { const w = window.__shiro.desktop.windows().filter((w) => w.appId === app).pop(); if (w) { w.move(x, y); w.focus(); } }, [app, x, y]);
+  }
+  await page.waitForTimeout(1500);
+  await page.screenshot({ path: `${out}/${finalShot}.png` });
+}
 writeFileSync(jsonOut, JSON.stringify(results, null, 1));
 console.log(JSON.stringify(results, null, 1));
 await browser.close();

@@ -1048,6 +1048,14 @@
  },
  "arch": "amd64",
  "mirror": "https://deb.debian.org/debian/",
+ "overlays": [
+  {
+   "path": "/usr/share/mime/mime.cache",
+   "sha256": "7952cd327a94f4ab744dfbf861fd68b71712d8ef3d9d8d2b74639bfb020a3f6b",
+   "size": 147932,
+   "when": "shared-mime-info"
+  }
+ ],
  "packages": {
   "adwaita-icon-theme": {
    "filename": "pool/main/a/adwaita-icon-theme/adwaita-icon-theme_43-1_all.deb",
