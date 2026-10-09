@@ -4,6 +4,8 @@
 //
 //   direct  the host browser loading the site in a real tab (the ceiling)
 //   tab     tabcomputer's Browser app: browse origins + broker + TLS in the page
+//   tab-server  the same, with the server-side fetch (local comparison only:
+//           the server must run with SHIRO_BROWSE_SERVER_FETCH=1; never in production)
 //
 //   npm run build
 //   SHIRO_TCP_RELAY=1 SHIRO_TCP_ORIGINS=http://localhost:5299 PORT=5299 STATIC_DIR=$PWD/dist node server.mjs &
@@ -148,7 +150,7 @@ async function directDriver(browser) {
   };
 }
 
-async function tabDriver(browser) {
+async function tabDriver(browser, transport = 'relay') {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const page = await ctx.newPage();
   page.on('pageerror', (e) => { if (process.env.WEB_SCORE_DEBUG) console.log('[app pageerror]', e.message); });
@@ -164,8 +166,17 @@ async function tabDriver(browser) {
       db.close();
     }, pem);
   }
+  await page.evaluate(async (transport) => {
+    const r = indexedDB.open('tabcomputer-browser', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv');
+    const db = await new Promise((res) => { r.onsuccess = () => res(r.result); });
+    await new Promise((res) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(transport, 'transport'); t.oncomplete = res; });
+    db.close();
+  }, transport);
   await page.evaluate(() => window.__shiro.desktop.openApp('browser', {}));
   await page.waitForFunction(() => window.__shiroBrowser?.engine, null, { timeout: 30000 });
+  const got = await page.evaluate(() => window.__shiroBrowser.engine.transport);
+  if (got !== transport) throw new Error(`transport ${transport} unavailable (server needs SHIRO_BROWSE_SERVER_FETCH=1)`);
   await page.evaluate(() => { const w = window.__shiro.desktop.focused(); w?.maximize(); });
   const active = () => page.evaluate(() => { const t = window.__shiroBrowser.window.active; return t && { url: t.url, bytes: t.bytes, requests: t.requests, fallback: t.fallback, title: t.title }; });
   const frame = async () => {
@@ -173,7 +184,7 @@ async function tabDriver(browser) {
     return el ? el.contentFrame() : null;
   };
   return {
-    name: 'tab', page,
+    name: transport === 'server' ? 'tab-server' : 'tab', page,
     async open(url) {
       const t0 = Date.now();
       await page.evaluate(() => { const w = window.__shiroBrowser.window; for (const t of w.tabs.slice(0, -1)) w.closeTab(t); });
@@ -412,7 +423,7 @@ const browser = await chromium.launch({ executablePath: exe, args: ['--no-sandbo
 const results = { date: new Date().toISOString(), app: APP, chromium: browser.version(), modes: {} };
 const sites = SITES.filter((s) => !ONLY || ONLY.split(',').includes(s.id));
 for (const mode of MODES) {
-  const make = mode === 'direct' ? directDriver : tabDriver;
+  const make = mode === 'direct' ? directDriver : mode === 'tab-server' ? (b) => tabDriver(b, 'server') : tabDriver;
   let d = await make(browser);
   const out = results.modes[mode] = { sites: [], speedometer: null, wpt: [] };
   if (!SKIP_SITES) {

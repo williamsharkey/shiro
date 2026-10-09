@@ -12,7 +12,7 @@ import { OriginMap, templateFromBrowseOrigin } from './origin-map';
 import type { BrokerReply, FetchMsg } from './protocol';
 
 const sw = self as any;
-const APP = new URL(sw.location.href).searchParams.get('app') || '';
+const APPS = new URL(sw.location.href).searchParams.get('apps') || '';
 const template = templateFromBrowseOrigin(sw.location.origin);
 const map = template ? new OriginMap(template) : null;
 const NAV = '__tc_nav';
@@ -102,7 +102,7 @@ const DOC_HEADERS = { 'cross-origin-embedder-policy': 'credentialless', 'cross-o
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 function shell(token: string): Response {
   const html = `<!doctype html><html><head><meta charset="utf-8"><title></title>`
-    + `<script src="/__tc/boot.js" data-app="${esc(APP)}" data-token="${esc(token)}"></script></head><body></body></html>`;
+    + `<script src="/__tc/boot.js" data-apps="${esc(APPS)}" data-token="${esc(token)}"></script></head><body></body></html>`;
   return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', ...DOC_HEADERS } });
 }
 
@@ -166,7 +166,7 @@ sw.addEventListener('fetch', (e: any) => {
       return shell(tok);
     }
     const st = await portFor(e.clientId);
-    if (!st) return new Response('tabcomputer browser: no connection to the app', { status: 503 });
+    if (!st) return new Response('Browser app: no connection to the app', { status: 503 });
     const msg = await requestMsg(req, map.toReal(url.href), false);
     return toResponse(await rpc(st, msg, msg.body ? [msg.body] : []));
   })());

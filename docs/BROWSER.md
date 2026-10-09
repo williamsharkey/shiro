@@ -29,7 +29,7 @@ How well it works is measured in [WEB_SCORE.md](WEB_SCORE.md)
  │   history      │  (keep-alive pool)            TCP socket │   (ciphertext only)
  │   vault        │                                          │
  │  ┌─────────────┼───── MessagePort per document ─────────┐ │
- │  │ iframe  https://en-wikipedia-org.tabcomputer.com/wiki/…│ │  first visit: bootstrap page + /__tc/{sw,boot,client}.js
+ │  │ iframe https://en-wikipedia-org.web.tabcomputer.com/…  │ │  first visit: bootstrap page + /__tc/{sw,boot,client}.js
  │  │   service worker (/__tc/sw.js): every request → port   │ │
  │  │   page runtime (/__tc/client.js): cookies, WebSocket,  │ │
  │  │   navigations, frames, passkey detection, autofill     │ │
@@ -43,11 +43,21 @@ Every real origin gets its own **browse origin**: a single DNS label that
 encodes scheme, host and port (`src/browser/origin-map.ts`), substituted into a
 template.
 
-| real origin | browse origin (template `https://{key}.tabcomputer.com`) |
+| real origin | browse origin (template `https://{key}.web.tabcomputer.com`) |
 |---|---|
-| `https://en.wikipedia.org` | `https://en-wikipedia-org.tabcomputer.com` |
-| `https://a-b.example.com` | `https://a--b-example-com.tabcomputer.com` |
-| `http://example.com:8080` | `https://example-com---h8080.tabcomputer.com` |
+| `https://en.wikipedia.org` | `https://en-wikipedia-org.web.tabcomputer.com` |
+| `https://a-b.example.com` | `https://a--b-example-com.web.tabcomputer.com` |
+| `http://example.com:8080` | `https://example-com---h8080.web.tabcomputer.com` |
+
+Browse origins live in their own zone, `web.`, because first-level
+subdomains are users' own instances (music.tabcomputer.com and the like;
+owner decision). Every instance shares that zone. So a browse host can't name
+*the* app it belongs to: it lists the allowed parents (`https://tabcomputer.com`,
+`https://*.tabcomputer.com`) in `frame-ancestors`, and each browse document
+takes its app from the top of `location.ancestorOrigins`, which the browser
+fills in and pages can't forge, checked against that list
+(`parentAppOrigin`). The tab iframes therefore carry no
+`referrerpolicy=no-referrer`, since that would mask the entry.
 
 The encoding: `.`→`-`, `-`→`--`, and metadata after `---`. It is reversible and
 needs no table, so the service worker, the page runtime and the broker all map
@@ -143,9 +153,10 @@ The broker speaks HTTP/1.1 (`http1.ts`) over TLS 1.3 done in the page
 - No HTTP/2 yet. Sites work over HTTP/1.1, but only with 6 parallel
   connections per origin.
 
-The alternative, the server fetching for the page, would see every page and
-password in plaintext. It is not built. It is a question for the owner
-(below), and the default would stay TLS in the page either way.
+The alternative is the server fetching for the page, which would see every
+page and password in plaintext. It exists only as a local comparison
+(`server-fetch.ts`, `SHIRO_BROWSE_SERVER_FETCH=1`, the scoreboard's
+`tab-server` column) and is never on in production.
 
 ### What the broker changes
 
@@ -309,7 +320,8 @@ the web.
 | Password theft by a page | The vault is on the app origin and encrypted at rest. Fill happens only on a click, only for the exact origin, and only into the top document's origin. | A page that is already malicious on its own origin can read what's typed or filled into it, as in any browser. |
 | A network observer | TLS end to end from the page. The relay WebSocket is itself `wss:`. | — |
 | The server sees traffic | It only relays ciphertext: SNI and IPs are visible, not content. | The relay operator sees which sites are visited (SNI), as an ISP would. |
-| The server sees decrypted traffic (a fetch-through-server design) | Not built. | Owner decision. |
+| The server sees decrypted traffic (a fetch-through-server design) | Only with `SHIRO_BROWSE_SERVER_FETCH=1`, for local measurement; never in production (owner decision). | — |
+| One instance's Browser reads another's site storage (music.tabcomputer.com vs art.tabcomputer.com) | Cookies and passwords live in each instance's own broker. | Browse-origin storage (a site's `localStorage`, IndexedDB, and our service worker) is partitioned by top-level *site*, and every instance is the same site, so instances share it. A fix would put an instance tag in the key (`www-example-com---i…`). |
 | Cookie tossing from browse origins onto `.tabcomputer.com` | The page runtime's `document.cookie` never writes host cookies. | A page can still set a real cookie on `Domain=tabcomputer.com` through a pristine `Document.prototype`. The desktop and server use no cookies today, so that must stay true, or a separate domain must be used. |
 | Untrusted TLS code | subtls verifies chains, names and validity, and the tests check that a bad chain and a name mismatch are refused. | subtls is "not intended for production" and unaudited. Replacing it (rustls/WASM) comes before shipping. |
 | Proxy abuse (using tabcomputer as an open proxy) | The same relay policy and limits as `curl`. Optional GitHub sign-in (`SHIRO_TCP_REQUIRE_SIGNIN`). | Browsing raises connect rates; limits need tuning, not removing. |
@@ -337,32 +349,38 @@ the web.
 
 ## Deploying
 
-- `SHIRO_BROWSE_ORIGIN=https://{key}.tabcomputer.com` (or another domain),
-  a wildcard DNS record, and a wildcard certificate (Let's Encrypt DNS-01).
-  `SHIRO_BROWSE_APP_ORIGIN` if the app isn't at the template minus `{key}.`.
-  Unset, browse origins exist only on localhost (`http://{key}.localhost:PORT`,
-  which Chromium resolves itself), and the app says pages can only open in
-  real tabs. `SHIRO_BROWSE=0` turns it all off.
-- The relay must be on (`SHIRO_TCP_RELAY=1`), with the app's origin in
+- Browse origins default to `https://{key}.web.<brand domain>` on the brand
+  domain and its instances, and to `http://{key}.localhost:PORT` on localhost
+  (Chromium resolves `*.localhost` itself). This needs a wildcard DNS record
+  and a certificate for `*.web.tabcomputer.com` (DNS-01). `SHIRO_BROWSE_ORIGIN`
+  overrides the template, `SHIRO_BROWSE_APP_ORIGINS` the allowed parents, and
+  `SHIRO_BROWSE=0` turns it off. Elsewhere (no template) the app says pages
+  can only open in real tabs.
+- The relay must be on (`SHIRO_TCP_RELAY=1`), with the app's origins in
   `SHIRO_TCP_ORIGINS`.
-- nginx: proxy the wildcard server block to node like the main one. No
+- nginx: proxy `*.web.tabcomputer.com` to node like the main server block. No
   WebSocket is needed on browse hosts.
+- `SHIRO_BROWSE_SERVER_FETCH=1` adds `POST /browse/fetch`, where the server
+  makes the request and sees plaintext. It exists **for local measurement
+  only** (the scoreboard's `tab-server` column) and must never be set in a
+  production config. Even with it on, the app uses it only when its own
+  `transport` setting asks.
 
-## Decisions for the owner
+## Decisions (owner, 2026-10-09)
 
-1. **Domain for browse origins.** (A) Subdomains of tabcomputer.com:
-   same-site, so they keep working when the user blocks third-party storage
-   (a service worker in a third-party frame is blocked then), but they share
-   a renderer process with the desktop. (B) A separate domain (e.g.
-   `*.tabsite.net`): process isolation from the desktop, but blocking
-   third-party storage breaks the Browser. Recommendation: A, keeping the
-   desktop cookie-free.
-2. **A server-side fetch transport**, where the server decrypts traffic. It
-   would cut round trips and lift subtls's limits, at the cost of the server
-   seeing everything. Recommendation: no, or opt-in per site only.
-3. **Relay limits for browsing.** 60 connects/min and 16 concurrent per IP
-   are tight for news sites. Options: higher limits for signed-in users, or
+1. **Domain**: subdomains of tabcomputer.com (same-site, so they survive
+   third-party storage blocking), in their own zone `*.web.tabcomputer.com` so
+   they never collide with users' instances. Residual risks: one renderer
+   process shared with the desktop, and storage shared between instances
+   (threat model).
+2. **Server-side decrypting fetch: local measurement only**, behind
+   `SHIRO_BROWSE_SERVER_FETCH=1`, never in production. TLS in the page over
+   `/tcp` is the product path.
+3. Open: **relay limits for browsing.** 60 connects/min and 16 concurrent per
+   IP are tight for news sites. Options: higher limits for signed-in users, or
    multiplexing (Wisp-like) so one WebSocket carries many TCP streams.
+4. User-facing strings stay brand-neutral ("the Browser app"), so the move to
+   the tabcomputer repo is a rename.
 
 ## Next steps
 

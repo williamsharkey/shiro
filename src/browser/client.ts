@@ -162,7 +162,7 @@ import type { BrokerToClient, ClientMsg } from './protocol';
   // Our service worker owns this origin's scope: a site's own one would replace it
   const swc = navigator.serviceWorker as any;
   if (swc) {
-    swc.register = () => Promise.reject(new DOMException('Service workers are not available in tabcomputer\'s browser.', 'SecurityError'));
+    swc.register = () => Promise.reject(new DOMException('Service workers are not available in the Browser app.', 'SecurityError'));
     swc.getRegistrations = () => Promise.resolve([]);
     swc.getRegistration = () => Promise.resolve(undefined);
   }
@@ -196,7 +196,7 @@ import type { BrokerToClient, ClientMsg } from './protocol';
         }
         if (opts?.publicKey) {
           send({ type: 'fallback', reason: 'webauthn', url: map.toReal(location.href) });
-          return Promise.reject(new DOMException('Passkeys need a real tab: tabcomputer offered to open one.', 'NotAllowedError'));
+          return Promise.reject(new DOMException('Passkeys need a real browser tab; the Browser app offers to open one.', 'NotAllowedError'));
         }
         return orig(opts);
       };

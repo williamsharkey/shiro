@@ -59,11 +59,12 @@ class Engine {
   tabs = new Set<Tab>();
   error = '';
   vault = new Vault();
+  transport: 'relay' | 'server' = 'relay';
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   static async create(kernel: Kernel): Promise<Engine> {
     const e = new Engine();
-    let cfg: { origin: string | null; app?: string } = { origin: null };
+    let cfg: { origin: string | null; app?: string; serverFetch?: boolean } = { origin: null };
     try { cfg = await (await fetch('browse/config.json', { cache: 'no-store' })).json(); } catch { /* old server */ }
     if (!cfg.origin) { e.error = 'This server has no browse origins (SHIRO_BROWSE_ORIGIN), so pages can only open in real tabs.'; return e; }
     e.map = new OriginMap(cfg.origin);
@@ -75,7 +76,11 @@ class Engine {
     await e.loadRoots();
     await e.vault.load();
     const stack = netStackOf(kernel) ?? netStack;
-    e.broker = new Broker({ map: e.map, app: e.app, dial: kernelDialer(stack), jar: e.jar, tabs: () => [...e.tabs] });
+    // Local measurement only: the server offers its decrypting fetch only with SHIRO_BROWSE_SERVER_FETCH=1
+    const serverFetch = cfg.serverFetch && (await kvGet<string>('transport').catch(() => undefined)) === 'server';
+    const fetcher = serverFetch ? new (await import('../../browser/server-fetch')).ServerFetcher() : undefined;
+    e.transport = serverFetch ? 'server' : 'relay';
+    e.broker = new Broker({ map: e.map, app: e.app, dial: kernelDialer(stack), jar: e.jar, tabs: () => [...e.tabs], fetcher });
     e.broker.start();
     return e;
   }
@@ -171,7 +176,8 @@ class Tab implements BrokerTab {
       // origin is never the desktop's, so this does not give it the desktop. No allow-top-navigation.
       f.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-pointer-lock allow-presentation');
       f.setAttribute('allow', 'fullscreen; autoplay; clipboard-write; encrypted-media; picture-in-picture');
-      f.setAttribute('referrerpolicy', 'no-referrer');
+      // No referrerpolicy=no-referrer here: it would mask the desktop in the frame's location.ancestorOrigins,
+      // which browse documents use to find the app (browse hosts send Referrer-Policy: no-referrer themselves)
       this.iframe = f;
       f.classList.toggle('sd-active', this.ui.active === this);
       this.ui.view.append(f);

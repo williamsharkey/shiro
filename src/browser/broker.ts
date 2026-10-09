@@ -9,7 +9,7 @@ import { OriginMap } from './origin-map';
 import { CookieJar, type RequestContext } from './cookies';
 import { siteOf } from './psl';
 import { HeaderList, headerGet } from './http1';
-import { NetFetcher, decodeBody, supportsBrotli, type Dialer } from './netfetch';
+import { NetFetcher, decodeBody, supportsBrotli, type Dialer, type Fetcher } from './netfetch';
 import { framingAllowed, rewriteCsp, rewriteHtml, sniffCharset } from './rewrite';
 import { TlsError, tlsConnect } from './tls';
 import { WsClient } from './websocket';
@@ -58,6 +58,8 @@ export interface BrokerOptions {
   dial: Dialer;
   jar: CookieJar;
   tabs: () => BrokerTab[];
+  /** Another transport (the server-side fetch used for local comparisons). */
+  fetcher?: Fetcher;
   /** Sites whose sign-in can't work proxied: navigations there get the fallback offer. */
   realTabOnly?: (url: URL) => string | null;
 }
@@ -128,7 +130,7 @@ function refererFor(referrer: string, target: URL, policy: string): string | nul
 }
 
 export class Broker {
-  readonly fetcher: NetFetcher;
+  readonly fetcher: Fetcher;
   private docs = new Map<Window, DocCtx>();
   private sockets = new Map<string, WsClient>();
   private listener = (e: MessageEvent) => this.onWindowMessage(e);
@@ -136,7 +138,7 @@ export class Broker {
   stats = { navigations: 0, requests: 0, errors: 0 };
 
   constructor(private o: BrokerOptions) {
-    this.fetcher = new NetFetcher({ dial: o.dial });
+    this.fetcher = o.fetcher ?? new NetFetcher({ dial: o.dial });
   }
 
   start() { addEventListener('message', this.listener); }
@@ -304,7 +306,7 @@ export class Broker {
     return names.every((n) => allowed.includes(n) || (allowed.includes('*') && !creds && n !== 'authorization'));
   }
 
-  private async respond(ctx: DocCtx, msg: FetchMsg, res: Awaited<ReturnType<NetFetcher['fetch']>>, finalUrl: URL, redirected: boolean, cors: boolean): Promise<BrokerReply> {
+  private async respond(ctx: DocCtx, msg: FetchMsg, res: Awaited<ReturnType<Fetcher['fetch']>>, finalUrl: URL, redirected: boolean, cors: boolean): Promise<BrokerReply> {
     const { body: decoded, decoded: wasDecoded } = decodeBody(res.body, headerGet(res.headers, 'content-encoding'));
     const headers: HeaderList = res.headers.filter(([k]) => {
       const n = k.toLowerCase();

@@ -3,10 +3,11 @@
 // origin's service worker and reloads. With one (the SW's navigation shell)
 // it asks the app for a port, lets the SW perform the navigation through it,
 // and replaces itself with the result.
-import { OriginMap, templateFromBrowseOrigin } from './origin-map';
+import { OriginMap, parentAppOrigin, templateFromBrowseOrigin } from './origin-map';
 
 const script = document.currentScript as HTMLScriptElement;
-const APP = script.dataset.app || '';
+const APPS = (script.dataset.apps || '').split(/\s+/).filter(Boolean);
+const APP = parentAppOrigin(APPS) || '';
 const token = script.dataset.token || '';
 const template = templateFromBrowseOrigin(location.origin);
 const map = template ? new OriginMap(template) : null;
@@ -41,10 +42,10 @@ function askApp(): Promise<MessagePort | null> {
 }
 
 async function install() {
-  if (!('serviceWorker' in navigator)) { show('This browser has no service workers, so tabcomputer\'s browser cannot show this page.'); return; }
-  if (window.top === window) { show('This address belongs to the Browser app on tabcomputer. Open it from there.'); return; }
+  if (!('serviceWorker' in navigator)) { show('This browser has no service workers, so the Browser app cannot show this page.'); return; }
+  if (window.top === window || !APP) { show('This address belongs to the Browser app. Open it from there.'); return; }
   try {
-    await navigator.serviceWorker.register(`/__tc/sw.js?app=${encodeURIComponent(APP)}`, { scope: '/' });
+    await navigator.serviceWorker.register(`/__tc/sw.js?apps=${encodeURIComponent(APPS.join(' '))}`, { scope: '/' });
   } catch (e) {
     show(`Could not start this page's service worker (${(e as Error).message}). Third-party storage may be blocked.`, map?.toReal(location.href));
     window.top?.postMessage({ tc: 'fallback', reason: 'no-service-worker', url: map?.toReal(location.href) }, APP);
@@ -60,7 +61,7 @@ async function navigate() {
   const sw = navigator.serviceWorker.controller;
   if (!sw) { location.reload(); return; }
   const port = await askApp();
-  if (!port) { show('This address belongs to the Browser app on tabcomputer. Open it from there.'); return; }
+  if (!port) { show('This address belongs to the Browser app. Open it from there.'); return; }
   navigator.serviceWorker.addEventListener('message', (e) => {
     const d = e.data;
     if (d?.tc === 'nav-go') location.replace(d.url);

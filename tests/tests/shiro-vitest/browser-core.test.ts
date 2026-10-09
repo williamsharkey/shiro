@@ -253,3 +253,18 @@ describe('websocket', () => {
     expect(encodeFrame(2, new Uint8Array(70000))[1]).toBe(0x80 | 127);
   });
 });
+
+describe('app origin of a browse document', () => {
+  it('takes the top of location.ancestorOrigins when the server lists it', async () => {
+    const { originMatches, parentAppOrigin } = await import('@shiro/browser/origin-map');
+    const pats = ['https://tabcomputer.com', 'https://*.tabcomputer.com'];
+    expect(originMatches('https://music.tabcomputer.com', pats)).toBe(true);
+    expect(originMatches('https://tabcomputer.com.evil.example', pats)).toBe(false);
+    expect(originMatches('https://.tabcomputer.com', pats)).toBe(false);
+    const loc = (anc: string[]) => ({ ancestorOrigins: Object.assign(anc.slice(), { contains: () => false, item: (i: number) => anc[i] }) }) as unknown as Location;
+    expect(parentAppOrigin(pats, loc(['https://www-x-com.web.tabcomputer.com', 'https://music.tabcomputer.com']))).toBe('https://music.tabcomputer.com');
+    expect(parentAppOrigin(pats, loc(['https://evil.example']))).toBeNull();
+    expect(parentAppOrigin(pats, loc(['https://www-x-com.web.tabcomputer.com']))).toBeNull(); // a browse origin is never the app
+    expect(parentAppOrigin(['http://localhost:5299'], {} as Location)).toBe('http://localhost:5299');
+  });
+});

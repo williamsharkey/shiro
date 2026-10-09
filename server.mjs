@@ -14,6 +14,8 @@ import { pathToFileURL } from 'node:url';
 import { realpathSync, readFileSync } from 'node:fs';
 import net from 'node:net';
 import dns from 'node:dns/promises';
+import https from 'node:https';
+import http from 'node:http';
 
 const PORT = process.env.PORT || 3000;
 const STATIC_DIR = process.env.STATIC_DIR || '/opt/shiro/public';
@@ -1228,31 +1230,47 @@ export function createTcpRelay(config, { lookup, log = console.log, verifySignin
 
 // --- Browser app: browse origins (docs/BROWSER.md) ---
 // Each site the desktop's Browser app shows lives on its own origin, one DNS
-// label per real origin (src/browser/origin-map.ts): https://{key}.<domain>.
+// label per real origin (src/browser/origin-map.ts): https://{key}.web.<domain>.
 // Those hosts serve only three scripts and a bootstrap page that installs the
 // origin's service worker; all content comes from the app's broker in the
 // user's page. They never serve the app, /api, /tcp or anything else.
-//   SHIRO_BROWSE_ORIGIN      template, e.g. https://{key}.tabcomputer.com
-//                            (needs wildcard DNS and a wildcard certificate)
-//   SHIRO_BROWSE_APP_ORIGIN  the app's origin (default: the template without "{key}.")
-//   SHIRO_BROWSE=0           off. Unset template: on for localhost only (http://{key}.localhost:PORT).
-export function browseConfigFor(hostHeader, env = process.env) {
+//   SHIRO_BROWSE_ORIGIN       template; default https://{key}.web.<brand domain> on the brand
+//                             domain and its instances (music.<domain>, …), http://{key}.localhost:PORT
+//                             on localhost, else off. Needs wildcard DNS and a *.web.<domain> certificate.
+//   SHIRO_BROWSE_APP_ORIGINS  origins (with *. wildcards) whose Browser may use them; default the
+//                             brand domain and its subdomains, or http://localhost:PORT
+//   SHIRO_BROWSE=0            off
+export function browseConfigFor(hostHeader, env = process.env, brand = BRAND) {
   if (env.SHIRO_BROWSE === '0') return null;
+  const host = String(hostHeader || '').toLowerCase();
   let template = env.SHIRO_BROWSE_ORIGIN || '';
+  let apps = envList(env.SHIRO_BROWSE_APP_ORIGINS);
   if (!template) {
-    const m = /^(?:[a-z0-9-]+\.)?localhost(:\d+)?$/i.exec(String(hostHeader || ''));
-    if (!m) return null;
-    template = `http://{key}.localhost${m[1] || ''}`;
+    const local = /^(?:[a-z0-9-]+\.)*localhost(:\d+)?$/.exec(host);
+    const domain = String(brand?.domain || '').toLowerCase();
+    if (local) {
+      template = `http://{key}.localhost${local[1] || ''}`;
+      apps ||= [`http://localhost${local[1] || ''}`];
+    } else if (domain && (host === domain || host.endsWith('.' + domain))) {
+      template = `https://{key}.web.${domain}`;
+      apps ||= [`https://${domain}`, `https://*.${domain}`];
+    } else return null;
   }
   template = template.toLowerCase().replace(/\/+$/, '');
   const tm = /^(https?):\/\/\{key\}\.([a-z0-9.-]+(?::\d+)?)$/.exec(template);
   if (!tm) return null;
+  apps ||= [`${tm[1]}://${tm[2]}`];
   return {
     template,
     scheme: tm[1],
     suffix: tm[2],                       // host[:port] after "{key}."
-    app: (env.SHIRO_BROWSE_APP_ORIGIN || `${tm[1]}://${tm[2]}`).toLowerCase(),
+    apps: apps.map((a) => a.toLowerCase()),
   };
+}
+
+/** The app origin a request to the app host comes from (for /browse/config.json). */
+function appOriginOf(req, cfg) {
+  return `${cfg.scheme}://${String(req.headers.host || '').toLowerCase()}`;
 }
 
 /** The browse key when `hostHeader` is a browse host of `cfg`, else null. */
@@ -1273,7 +1291,7 @@ function browseHeaders(cfg) {
     'origin-agent-cluster': '?1',
     'x-content-type-options': 'nosniff',
     'referrer-policy': 'no-referrer',
-    'content-security-policy': `default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; frame-ancestors ${cfg.app} ${browseAny}`,
+    'content-security-policy': `default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; frame-ancestors ${cfg.apps.join(' ')} ${browseAny}`,
   };
 }
 
@@ -1302,9 +1320,54 @@ async function handleBrowseHost(req, res, cfg) {
   if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'POST') { res.writeHead(405, headers); return res.end(); }
   const esc = (s) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
   const html = `<!doctype html><html><head><meta charset="utf-8"><title></title>`
-    + `<script src="/__tc/boot.js" data-app="${esc(cfg.app)}"></script></head><body></body></html>`;
+    + `<script src="/__tc/boot.js" data-apps="${esc(cfg.apps.join(' '))}"></script></head><body></body></html>`;
   res.writeHead(200, { ...headers, 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
   res.end(req.method === 'HEAD' ? undefined : html);
+}
+
+// --- Browser app: server-side fetch, for local measurement only ---
+// The product path is TLS in the page over /tcp (the server only sees
+// ciphertext). This transport makes the *server* do the request, so it sees
+// plaintext: it exists only to compare the two on the scoreboard, is off unless
+// SHIRO_BROWSE_SERVER_FETCH=1, and must never be set in production (owner
+// decision, docs/BROWSER.md). Same address policy as the relay.
+const BROWSE_SERVER_FETCH = process.env.SHIRO_BROWSE_SERVER_FETCH === '1';
+const browseAgents = { 'https:': new https.Agent({ keepAlive: true, maxSockets: 6 }), 'http:': new http.Agent({ keepAlive: true, maxSockets: 6 }) };
+
+async function handleBrowseFetch(req, res) {
+  const fail = (status, msg) => { res.writeHead(status, { 'content-type': 'text/plain' }); res.end(msg); };
+  const browse = browseConfigFor(req.headers.host);
+  const origin = req.headers.origin;
+  if (req.method !== 'POST' || !browse || (origin && origin !== `${browse.scheme}://${String(req.headers.host).toLowerCase()}`)) return fail(403, 'forbidden');
+  let target, method, headers;
+  try {
+    target = new URL(String(req.headers['x-tc-url']));
+    method = String(req.headers['x-tc-method'] || 'GET').toUpperCase();
+    headers = JSON.parse(decodeURIComponent(String(req.headers['x-tc-headers'] || '%5B%5D')));
+  } catch { return fail(400, 'bad request'); }
+  if (!/^https?:$/.test(target.protocol) || !/^[A-Z]+$/.test(method)) return fail(400, 'bad request');
+  const host = target.hostname.replace(/^\[|\]$/g, '');
+  let addrs;
+  try { addrs = net.isIP(host) ? [{ address: host }] : await dns.lookup(host, { all: true, verbatim: true }); } catch { return fail(502, 'ENOTFOUND'); }
+  const usable = addrs.filter((a) => !isBlockedAddress(a.address, { allow: cidrBlockList(envList(process.env.SHIRO_TCP_ALLOW_CIDRS) || []), deny: cidrBlockList([]) }));
+  if (!usable.length) return fail(403, 'address blocked by relay policy');
+  const port = Number(target.port) || (target.protocol === 'https:' ? 443 : 80);
+  if (!(envList(process.env.SHIRO_TCP_PORTS) || TCP_DEFAULT_PORTS).map(Number).includes(port)) return fail(403, 'port blocked');
+  const flat = {};
+  for (const [k, v] of headers) { const n = String(k).toLowerCase(); if (n !== 'host' && n !== 'connection' && n !== 'content-length' && n !== 'transfer-encoding') flat[k] = flat[k] ? `${flat[k]}, ${v}` : String(v); }
+  const mod = target.protocol === 'https:' ? https : http;
+  const up = mod.request({
+    host: usable[0].address, port, method, path: target.pathname + target.search, servername: net.isIP(host) ? undefined : host,
+    headers: { ...flat, host: target.host }, agent: browseAgents[target.protocol], timeout: 30000,
+  }, (r) => {
+    const pairs = [];
+    for (let i = 0; i < r.rawHeaders.length; i += 2) pairs.push([r.rawHeaders[i], r.rawHeaders[i + 1]]);
+    res.writeHead(200, { 'content-type': 'application/octet-stream', 'x-tc-status': String(r.statusCode), 'x-tc-status-text': encodeURIComponent(r.statusMessage || ''), 'x-tc-headers': encodeURIComponent(JSON.stringify(pairs)) });
+    r.pipe(res);
+  });
+  up.on('timeout', () => up.destroy(new Error('timeout')));
+  up.on('error', (e) => { if (!res.headersSent) fail(502, e.code || 'EIO'); else res.destroy(); });
+  req.pipe(up);
 }
 
 // --- HTTP server ---
@@ -1318,7 +1381,10 @@ const server = createServer(async (req, res) => {
   if (browseKeyOf(req.headers.host, browse)) return handleBrowseHost(req, res, browse);
   if (pathname === '/browse/config.json') {
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-    return res.end(JSON.stringify(browse ? { origin: browse.template, app: browse.app } : { origin: null }));
+    return res.end(JSON.stringify(browse ? { origin: browse.template, app: appOriginOf(req, browse), ...(BROWSE_SERVER_FETCH ? { serverFetch: true } : {}) } : { origin: null }));
+  }
+  if (pathname === '/browse/fetch' && BROWSE_SERVER_FETCH) {
+    return handleBrowseFetch(req, res);
   }
 
   if (pathname === '/tcp/token' && tcpRelay) {

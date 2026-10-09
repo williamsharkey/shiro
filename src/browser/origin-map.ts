@@ -122,3 +122,31 @@ export function templateFromBrowseOrigin(origin: string): string | null {
 export function appOriginFor(template: string): string {
   return template.replace('{key}.', '');
 }
+
+/** Whether `origin` matches one of `patterns` (exact origins, or `scheme://*.domain` for its subdomains). */
+export function originMatches(origin: string, patterns: string[]): boolean {
+  const o = origin.toLowerCase();
+  return patterns.some((p) => {
+    const q = p.toLowerCase();
+    const star = q.indexOf('://*.');
+    if (star < 0) return q === o;
+    const scheme = q.slice(0, star + 3), suffix = q.slice(star + 4);
+    return o.startsWith(scheme) && o.endsWith(suffix) && !o.slice(scheme.length, -suffix.length).includes('/') && o.length > scheme.length + suffix.length;
+  });
+}
+
+/**
+ * The app (desktop) origin showing this browse-origin document: the top of the
+ * frame tree (location.ancestorOrigins, which the page can't forge), if the
+ * server lists it. Several instances (example.com, music.example.com) share
+ * one browse zone, so the server can't name a single one.
+ */
+export function parentAppOrigin(patterns: string[], loc: Location = location): string | null {
+  const anc = (loc as Location & { ancestorOrigins?: DOMStringList }).ancestorOrigins;
+  if (anc && anc.length) {
+    const top = anc[anc.length - 1];
+    return originMatches(top, patterns) && !templateFromBrowseOrigin(top) ? top : null;
+  }
+  // No ancestorOrigins (Firefox): only an exact single origin will do
+  return patterns.length === 1 && !patterns[0].includes('*') ? patterns[0] : null;
+}

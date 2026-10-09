@@ -39,7 +39,14 @@ export function supportsBrotli(): boolean {
   try { new DecompressionStream('brotli' as CompressionFormat); return true; } catch { return false; }
 }
 
-export class NetFetcher {
+/** What the broker needs from a transport (NetFetcher here; ServerFetcher for local comparisons). */
+export interface Fetcher {
+  fetch(req: NetRequest): Promise<NetResponse>;
+  closeAll(): void;
+  stats: { connects: number; reused: number; requests: number; bytes: number };
+}
+
+export class NetFetcher implements Fetcher {
   private idle = new Map<string, Conn[]>();
   private active = new Map<string, number>();
   private waiters = new Map<string, (() => void)[]>();

@@ -67,6 +67,16 @@ describe('browse hosts', () => {
     expect((await get('/__tc/../index.html', host())).body).not.toContain('APP SHELL');
     expect((await get('/__tc/other.js', host())).status).toBe(404);
   });
+  it('puts the brand domain\'s browse origins in their own zone, shared by every instance', async () => {
+    const cfg = JSON.parse((await get('/browse/config.json', 'music.tabcomputer.com')).body);
+    expect(cfg).toEqual({ origin: 'https://{key}.web.tabcomputer.com', app: 'https://music.tabcomputer.com' });
+    const boot = await get('/wiki', 'en-wikipedia-org.web.tabcomputer.com');
+    expect(boot.body).toContain('data-apps="https://tabcomputer.com https://*.tabcomputer.com"');
+    expect(boot.headers['content-security-policy']).toContain('frame-ancestors https://tabcomputer.com https://*.tabcomputer.com https://*.web.tabcomputer.com');
+    // a first-level subdomain is a user instance, never a browse origin
+    expect((await get('/', 'www-example-com.tabcomputer.com')).body).toContain('APP SHELL');
+    expect(JSON.parse((await get('/browse/config.json', 'elsewhere.example')).body)).toEqual({ origin: null });
+  });
   it('treats keyless hosts as the app', async () => {
     expect((await get('/', `localhost:${port}`)).body).toContain('APP SHELL');
     expect((await get('/', `www.localhost:${port}`)).body).toContain('APP SHELL'); // no dash: not a key
