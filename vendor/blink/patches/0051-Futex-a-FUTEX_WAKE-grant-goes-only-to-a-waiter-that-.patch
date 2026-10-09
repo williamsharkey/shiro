@@ -1,0 +1,111 @@
+From 7a74069313c5ce05514ad8030423ce0da16f5c32 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 13:39:38 +0000
+Subject: [PATCH 51/51] Futex: a FUTEX_WAKE grant goes only to a waiter that
+ was already waiting
+
+A wake left a grant that the next waiter to look took. A thread or
+process that wakes its peer and then waits on the same word at once
+(LTP's TST_CHECKPOINT_WAKE_AND_WAIT: the value never changes) could take
+its own grant: it returned at once and the peer it woke timed out
+(fork04, waitpid13: tst_checkpoint_wait ETIMEDOUT). Waiters now take a
+ticket; a wake makes the tickets issued so far eligible, and grants left
+when every eligible waiter is gone are dropped.
+---
+ blink/bus.h     |  5 +++++
+ blink/syscall.c | 23 ++++++++++++++++++-----
+ 2 files changed, 23 insertions(+), 5 deletions(-)
+
+diff --git a/blink/bus.h b/blink/bus.h
+index 5a30435..de3f7a2 100644
+--- a/blink/bus.h
++++ b/blink/bus.h
+@@ -19,6 +19,11 @@ struct Futex {
+   i64 addr;
+   int waiters;
+   int wakeups;  // FUTEX_WAKE grants not yet taken by a waiter
++  // a grant goes only to a waiter that was waiting at the FUTEX_WAKE:
++  // tickets below `eligible` (`old` of them still waiting) may take one
++  u32 tickets;
++  u32 eligible;
++  int old;
+   struct Dll elem;
+   pthread_cond_t_ cond;
+   pthread_mutex_t_ lock;
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 6db6538..7514d87 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -349,6 +349,8 @@ static int SysFutexWake(struct Machine *m, i64 uaddr, u32 count) {
+     THR_LOGF("pid=%d tid=%d is waking %d of %d waiters at address %#" PRIx64,
+              m->system->pid, m->tid, rc, f->waiters, uaddr);
+     f->wakeups += rc;
++    f->eligible = f->tickets;
++    f->old = f->waiters;
+     unassert(!pthread_cond_broadcast(&f->cond));
+     UNLOCK(&f->lock);
+   } else {
+@@ -663,6 +665,9 @@ static struct Futex *NewFutex(i64 addr) {
+   f = FUTEX_CONTAINER(e);
+   f->waiters = 1;
+   f->wakeups = 0;
++  f->tickets = 1;  // the creator's is 0
++  f->eligible = 0;
++  f->old = 0;
+   f->addr = addr;
+   return f;
+ }
+@@ -720,6 +725,8 @@ static int SysFutexWait(struct Machine *m,  //
+   clockid_t clk = CLOCK_MONOTONIC;
+   struct timespec now, tick, timeout, deadline, cnow, cend;
+   int sleeping;
++  u32 ticket;
++  bool picked = false;
+   now = tick = GetTime();
+   if (timeout_addr) {
+     if (!(gtimeout = (const struct timespec_linux *)SchlepR(
+@@ -751,9 +758,11 @@ static int SysFutexWait(struct Machine *m,  //
+     UNLOCK(&g_bus->futexes.lock);
+     return eagain();
+   }
++  ticket = 0;
+   if ((f = FindFutex(m, (i64)(uintptr_t)mem))) {
+     LOCK(&f->lock);
+     ++f->waiters;
++    ticket = f->tickets++;
+     UNLOCK(&f->lock);
+   }
+   if (!f) {
+@@ -782,8 +791,9 @@ static int SysFutexWait(struct Machine *m,  //
+       break;
+     }
+     LOCK(&f->lock);
+-    if (f->wakeups > 0) {
++    if (f->wakeups > 0 && (i32)(ticket - f->eligible) < 0) {
+       --f->wakeups;  // a FUTEX_WAKE picked us
++      picked = true;
+       rc = 0;
+     } else if (Load32(mem) != expect) {
+       rc = 0;  // changed (polling stands in for a wake we couldn't see)
+@@ -805,11 +815,14 @@ static int SysFutexWait(struct Machine *m,  //
+   if (sleeping) ShiroSleeping(m, -1);
+   LOCK(&g_bus->futexes.lock);
+   LOCK(&f->lock);
+-  if (rc == ETIMEDOUT && f->wakeups > 0) {
+-    --f->wakeups;  // woken just as the wait ran out: count it as a wake
+-    rc = 0;
++  if ((i32)(ticket - f->eligible) < 0) {
++    if (rc == ETIMEDOUT && f->wakeups > 0 && !picked) {
++      --f->wakeups;  // woken just as the wait ran out: count it as a wake
++      rc = 0;
++    }
++    --f->old;
+   }
+-  if (f->wakeups > f->waiters - 1) f->wakeups = f->waiters - 1;
++  if (f->wakeups > f->old) f->wakeups = f->old;  // grants for waiters gone
+   if (!--f->waiters) {
+     dll_remove(&g_bus->futexes.active, &f->elem);
+     UNLOCK(&f->lock);
+-- 
+2.43.0
+

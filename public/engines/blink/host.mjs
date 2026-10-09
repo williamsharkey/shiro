@@ -531,10 +531,24 @@ async function run(msg) {
   }));
   const chunk = pool.length ? pool[0].data.length : 0;
   const waiting = [];
+  // Every channel busy (threads or same-instance fork children blocked in
+  // the kernel: epoll_wait, a pipe read): ask the page for another one
+  // rather than queue behind them, up to its cap ('blink-grow' → 'blink-channel')
+  let growing = false;
   const acquire = () => new Promise((resolve) => {
     const ch = pool.find((c) => !c.busy);
-    if (ch) { ch.busy = true; resolve(ch); } else waiting.push(resolve);
+    if (ch) { ch.busy = true; resolve(ch); return; }
+    waiting.push(resolve);
+    if (!growing && pool.length) { growing = true; post({ type: 'blink-grow' }); }
   });
+  const addChannel = (sab) => {
+    growing = false;
+    if (!sab) return; // at the cap: the waiters queue for a free channel
+    const ch = { i32: new Int32Array(sab, 0, CH_DATA / 4), data: new Uint8Array(sab, CH_DATA), busy: true, done: null };
+    pool.push(ch);
+    release(ch);
+    if (waiting.length && !growing) { growing = true; post({ type: 'blink-grow' }); }
+  };
   const release = (ch) => {
     const next = waiting.shift();
     if (next) next(ch); else ch.busy = false;
@@ -583,6 +597,8 @@ async function run(msg) {
       ch.done = null;
       if (debug) console.error(`[blink] ${debugPid} ksys ${ch.i32[CH_SYSNO]}(${Array.from(ch.i32.subarray(CH_ARGS + 1, CH_ARGS + 4)).join(',')}) = ${r}`);
       done?.({ r, hi, sig });
+    } else if (m.type === 'blink-channel') {
+      addChannel(m.sab);
     } else if (m.type === 'blink-signal' && !exiting) {
       // The kernel signalled us: any syscall reply carries the signal word.
       if (m.pid) void call(SYS.getpid, [], m.pid, new Uint8Array(0), 0);

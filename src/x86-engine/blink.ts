@@ -102,8 +102,13 @@ function ensureNet(kernel: Kernel): void {
   if (table && !table.has(41 /* SYS_socket */)) installNet(kernel);
 }
 
-/** Channels per Blink process for the guest's own syscalls (host.mjs `pool`), and their data area. */
+/**
+ * Channels per Blink process for the guest's own syscalls (host.mjs `pool`)
+ * at the start and at most (host.mjs asks for more while all are busy), and
+ * their data area.
+ */
 const POOL_CHANNELS = 6;
+const POOL_MAX = 64;
 const POOL_DATA = 1 << 20;
 
 /**
@@ -203,6 +208,12 @@ function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: SharedA
     if (m?.type === 'blink-sys') {
       const sab = pool[m.ch];
       if (sab) void servePoolChannel(kernel, proc, sab, m.as | 0, busy).then((ok) => { if (ok) w.postMessage({ type: 'blink-done', ch: m.ch }); });
+    } else if (m?.type === 'blink-grow') {
+      // every channel is busy (blocked calls): one more, shared by this
+      // process's workers like the rest (indices match host.mjs's order)
+      const sab = pool.length < POOL_MAX ? createChannelBuffer(POOL_DATA) : null;
+      if (sab) pool.push(sab);
+      w.postMessage({ type: 'blink-channel', sab });
     } else if (m?.type === 'blink-fork') {
       // fork(): the child (made by SYS_shiro_vfork) runs the snapshot in its own worker
       const child = kernel.procs.get(m.pid);
