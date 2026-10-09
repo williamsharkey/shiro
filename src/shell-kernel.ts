@@ -159,7 +159,7 @@ export interface KernelRunOptions {
    * The shell's own fds 3-9 (exec 3>file, exec 4>&1, exec 5<in), which every
    * program inherits: a file to append to, a stream to write to, or input text.
    */
-  inheritFds?: { fd: number; path?: string; write?: (s: string) => void; content?: string }[];
+  inheritFds?: { fd: number; path?: string; file?: OpenFile; write?: (s: string) => void; content?: string }[];
 }
 
 export interface KernelRunResult {
@@ -232,7 +232,9 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
   // fds 3-9 of the shell, the same open files for every stage
   const extra: Record<number, OpenFile> = {};
   for (const f of opts.inheritFds ?? []) {
-    if (f.path !== undefined) {
+    if (f.file) {
+      extra[f.fd] = f.file;
+    } else if (f.path !== undefined) {
       const o = await openOut({ path: f.path, append: true });
       if (typeof o !== 'string') extra[f.fd] = o;
     } else if (f.write) {

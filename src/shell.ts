@@ -1329,7 +1329,7 @@ export class Shell {
   /** Fd n is being replaced or closed: close a named pipe end this shell opened for it */
   private dropFd(n: number, keep?: OutFd): void {
     const e = this.userFds.get(n);
-    if (e && 'fifo' in e && e.fifo && e.owner === this && e !== keep) void e.fifo.close();
+    if (e && 'fifo' in e && e.fifo && e.owner === this && e !== keep) fifo.dropHeld(e.fifo);
   }
 
   /** exec with only redirections: update the shell's fd tables */
@@ -1353,7 +1353,7 @@ export class Shell {
       pending.push((async () => {
         if (await fifo.isFifo(this, path)) {
           // A named pipe: open its write end now (it waits for a reader), as exec does
-          this.userFds.set(fd, { path, fifo: await fifo.openFifoEnd(this, path, 'w'), owner: this });
+          this.userFds.set(fd, { path, fifo: await fifo.openHeldFifoEnd(this, path, 'w'), owner: this });
         } else if (truncate) await this.fs.writeFile(path, '');
         else await this.fs.appendFile(path, '');
       })());
@@ -1403,11 +1403,13 @@ export class Shell {
 
   /** The shell's fds 3-9 as programs it starts inherit them (runKernelPipeline inheritFds) */
   private inheritableFds(writeStdout: (s: string) => void, writeStderr: (s: string) => void) {
-    const out: { fd: number; path?: string; write?: (s: string) => void; content?: string }[] = [];
+    const out: { fd: number; path?: string; file?: OpenFile; write?: (s: string) => void; content?: string }[] = [];
     for (let n = 3; n <= 9; n++) {
       const e = this.userFds.get(n);
       const inp = this.fileDescriptors.get(n);
-      if (e && 'path' in e) out.push({ fd: n, path: e.path });
+      // (a named pipe's open end itself: opening the path again would be another writer)
+      if (e && 'path' in e && e.fifo) out.push({ fd: n, file: e.fifo });
+      else if (e && 'path' in e) out.push({ fd: n, path: e.path });
       else if (e && 'writer' in e) out.push({ fd: n, write: e.writer });
       else if (e && 'dup' in e) out.push({ fd: n, write: this.fdBase ? this.fdBase[e.dup] : e.dup === 1 ? writeStdout : writeStderr });
       else if (inp) out.push({ fd: n, content: inp.content.slice(inp.offset) });
@@ -6109,10 +6111,22 @@ export class Shell {
 
   /** A subshell has finished with `code`: its EXIT trap runs now (an `exit` in it already ran it) */
   async finishSubshell(code: number, writeStdout: (s: string) => void, writeStderr: (s: string) => void): Promise<number> {
-    if (!this.traps.has('EXIT')) return code;
-    this.lastExitCode = code;
-    this.env['?'] = String(code);
-    return (await this.runExitTrap(writeStdout, writeStderr)) ?? code;
+    if (this.traps.has('EXIT')) {
+      this.lastExitCode = code;
+      this.env['?'] = String(code);
+      code = (await this.runExitTrap(writeStdout, writeStderr)) ?? code;
+    }
+    this.closeOwnFds();
+    return code;
+  }
+
+  /** This shell is done: close the named pipe ends it opened (exec 3>fifo), so their readers see EOF */
+  closeOwnFds(): void {
+    for (const n of [...this.userFds.keys()]) {
+      this.dropFd(n);
+      const e = this.userFds.get(n);
+      if (e && 'fifo' in e && e.owner === this) this.userFds.delete(n);
+    }
   }
 
   private async inSubshell(fn: (sub: Shell) => Promise<number>): Promise<number> {
@@ -7822,6 +7836,7 @@ export class Shell {
     this.env['?'] = String(exitCode);
     const trapExit = await this.runExitTrap(writeStdout, writeStderr, terminal);
     if (trapExit !== undefined) { exitCode = trapExit; this.env['?'] = String(exitCode); }
+    this.closeOwnFds();
     this.endProcess();
     return exitCode;
   }

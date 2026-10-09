@@ -297,7 +297,8 @@
     },
     {
      "i": 29,
-     "name": "<> for read/write named pipes"
+     "name": "<> for read/write named pipes",
+     "timeout": true
     },
     {
      "i": 40,
@@ -453,16 +454,12 @@
    ]
   },
   "builtin-bracket": {
-   "pass": 46,
+   "pass": 47,
    "total": 50,
    "failures": [
     {
      "i": 27,
      "name": "-k for sticky bit"
-    },
-    {
-     "i": 35,
-     "name": "test -p named pipe"
     },
     {
      "i": 41,
