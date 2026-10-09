@@ -81,6 +81,13 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     expect((await run(shell, '/usr/bin/ln /tmp/linksrc /tmp/linkdst && /usr/bin/cat /tmp/linkdst')).output).toContain('hello');
   }, 60000);
 
+  it('keeps English man pages of packages installed later (dpkg path-include)', async () => {
+    const cfg = await fs.readFile('/etc/dpkg/dpkg.cfg.d/90shiro-slim', 'utf8') as string;
+    expect(cfg).toMatch(/path-exclude \/usr\/share\/man\/\*\npath-include \/usr\/share\/man\/man\[1-9\]\*\/\*\n/);
+    expect(cfg).toContain('path-exclude /usr/share/doc/*');
+    expect(await fs.exists('/etc/apt/apt.conf.d/91shiro-engine')).toBe(false);
+  });
+
   it("bash's PATH search finds builtins and Debian's programs (no phantom /usr/local/sbin/NAME)", async () => {
     // id: Debian's file in /usr/bin; tail: diverted to Shiro's (no file); /usr/local/sbin comes first
     const r = await run(shell, `sudo /usr/bin/bash -c 'type -p id tail; id -u; printf "a\\nb\\n" | tail -1'`);

@@ -303,4 +303,17 @@ export const DEBIAN_ENV: Record<string, string> = {};
  */
 export async function writeEngineWorkarounds(fs: FileSystem): Promise<void> {
   await fs.unlink('/etc/apt/apt.conf.d/91shiro-engine').catch(() => {});
+  await keepManPages(fs);
+}
+
+/**
+ * Packages installed from now on keep their English man pages (`man` is no
+ * use without them); translations stay out. Images built before this had
+ * all of /usr/share/man excluded (scripts/debian/build-rootfs.sh).
+ */
+export async function keepManPages(fs: FileSystem): Promise<void> {
+  const p = '/etc/dpkg/dpkg.cfg.d/90shiro-slim';
+  const text = await fs.readFile(p, 'utf8').catch(() => null);
+  if (typeof text !== 'string' || text.includes('path-include /usr/share/man/')) return;
+  await fs.writeFile(p, text.replace('path-exclude /usr/share/man/*\n', 'path-exclude /usr/share/man/*\npath-include /usr/share/man/man[1-9]*/*\n'));
 }
