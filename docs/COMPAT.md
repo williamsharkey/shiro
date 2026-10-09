@@ -343,13 +343,20 @@ SSE4.1/4.2 (patch 0040) the **musl build runs**: `--version` in 2.1 s and
 `-p` reaches the Anthropic API. The glibc build still crashes in Bun's
 startup. Before patch 0040 both died of SIGILL on `pinsrq`.
 
-`claude --native ARGS` (or `CLAUDE_NATIVE=1 claude ARGS`) runs the native
-binary at `$CLAUDE_NATIVE_PATH`, default `~/.local/bin/claude`, through the
-shell's ELF path (Blink, with the terminal's pty); plain `claude` still runs
-the pinned npm build. Shiro doesn't download it: downloads.claude.ai and
-Alpine's CDN send no CORS headers, so fetching them would need a server
-proxy (an owner decision). Put the linux-x64-musl build there and musl's
-loader at `/lib/ld-musl-x86_64.so.1`; without a binary it says so.
+Experimental opt-in (plain `claude` still runs the pinned npm build):
+
+- `claude install --native [VERSION]` (`src/commands/claude-native.ts`)
+  downloads from inside the guest with the `curl` package (x86-64, its own
+  TLS over the kernel's TCP relay, so CORS doesn't apply and nothing goes
+  through a Shiro proxy route): the linux-x64-musl build, checked against
+  the release manifest's sha256, to `$CLAUDE_NATIVE_PATH` (default
+  `~/.local/bin/claude`), and musl's loader from Debian's `musl` package
+  (pinned sha256; snapshot.debian.org fallback) as
+  `/lib/ld-musl-x86_64.so.1`. In Chromium: 170 s for 238 MB.
+- `claude --native ARGS` (or `CLAUDE_NATIVE=1 claude ARGS`) runs it through
+  the shell's ELF path (Blink, with the terminal's pty). In Chromium:
+  `--version` 2.7 s; `-p "say hi"` to the API's answer 139 s, 105 s with
+  `BUN_JSC_useJIT=0`.
 
 What the official native installer (`claude.ai/install.sh`) installs, as of
 2.1.295 (`downloads.claude.ai/claude-code-releases/<version>/<platform>/claude`,
