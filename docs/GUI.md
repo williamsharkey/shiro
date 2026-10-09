@@ -225,9 +225,40 @@ Where the time went, and what changed:
 
 `window-host.ts` is the interface rootless windows need (shaped like the
 desktop's Surface: `present`, normalized input, configure). `desktop-host.ts`
-implements it with `createWindow({content: {kind: 'surface', scale: 1,
-autoResize: false}})`; one X pixel is one CSS px. `standin-host.ts` is a
-self-contained floating-window host for the classic full-page terminal UI.
+implements it with `createWindow({content: {kind: 'surface', scale,
+autoResize: false}})`. `standin-host.ts` is a self-contained floating-window
+host for the classic full-page terminal UI.
+
+### HiDPI: one X pixel is one device pixel
+
+Xshiro's screen is in **device pixels**: `displayScale()`
+(`src/gui/display-scale.ts`) is `devicePixelRatio` when the display starts
+(rounded to quarters, at least 1). Both hosts convert to CSS px at their
+boundary (sizes, positions, drags ÷ scale), and each window's canvas is
+exactly buffer ÷ scale CSS px, so the browser never resamples it: no
+stretching even when the desktop makes a window bigger than the client
+drew (xterm snapping to whole cells used to stretch its 466 px buffer
+over a 484 px window, blurring text even at 1×), and `image-rendering:
+pixelated` at whole-number scales. Clients are told the real resolution:
+
+- the screen's size in mm and `Xft.dpi` = 96 × scale, `Xcursor.size`
+  24 × scale (cursors become CSS `image-set(… Nx)` cursors);
+- GTK: `GDK_SCALE` = ⌊scale⌋ with `GDK_DPI_SCALE` = 1/⌊scale⌋ (GTK scales
+  widgets by whole numbers only; fonts follow Xft.dpi); Qt:
+  `QT_SCALE_FACTOR` = scale, `QT_FONT_DPI=96`. Set for apps the installer
+  starts and exported into the shell's environment;
+- xterm switches from bitmap `fixed` (which can't scale) to DejaVu Sans
+  Mono 9 pt above 96 dpi (`XTerm*faceName` in RESOURCE_MANAGER).
+
+Plain Xlib/Xaw apps with fixed pixel sizes (xeyes, xclock, xcalc) come out
+at their pixel size, i.e. smaller on a 2× screen, but sharp. The scale is
+read once, when the display starts: changing the browser zoom afterwards
+needs a reload.
+
+![Before/after at 2×](screenshots/gui-hidpi-2x.png)
+
+(`gui-hidpi-2x.png`, `gui-hidpi-3x.png`: xterm and L3afpad in Chromium at
+deviceScaleFactor 2 and 3, before and after.)
 
 ### Packages: content addressed, streamed on first use
 
@@ -320,8 +351,9 @@ self-contained floating-window host for the classic full-page terminal UI.
    XInputExtension 2 (core input only: no smooth scrolling or touch),
    RANDR (one fixed screen = the work area when the server starts), XFIXES,
    DAMAGE, Composite, GLX.
-5. **HiDPI**: surfaces run at scale 1; a device-pixel screen plus
-   `Xft.dpi = 96 × devicePixelRatio` would make text sharp.
+5. **HiDPI** follow-ups: rescale when devicePixelRatio changes (browser
+   zoom, a window moved to another monitor) via RANDR + XSETTINGS; scale
+   fixed-size Xaw apps.
 6. **Per-file laziness**: packages are fetched whole, before start; a kernel
    open hook (unix/kernel) would let files materialize on first open.
 7. **Wayland** (wl_shm) once Blink can share mappings with the page.

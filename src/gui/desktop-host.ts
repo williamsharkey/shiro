@@ -1,12 +1,16 @@
 /**
  * Window host on the desktop shell (unix/desktop, docs/DESKTOP.md): each X
  * toplevel is a desktop window with `content: {kind: 'surface'}`, so it gets
- * the desktop's frame, dock entry, focus, tiling and shortcuts. Surfaces run
- * at scale 1 (one X pixel per CSS px) without auto-resize: the X client
- * redraws at the new size and rootless.ts sets the buffer.
+ * the desktop's frame, dock entry, focus, tiling and shortcuts. X pixels are
+ * device pixels (display-scale.ts): a surface's buffer is the X window and
+ * its canvas is exactly buffer ÷ scale CSS px, never stretched (when the
+ * desktop makes the window bigger than the client's size, e.g. a terminal
+ * snapping to whole cells, the rest is background). No auto-resize: the X
+ * client redraws at the new size and rootless.ts sets the buffer.
  */
 import type { DesktopAPI, DesktopWindow, Surface, WindowOptions } from '../desktop/wm';
 import type { CanvasWindow, CanvasWindowEvents, CanvasWindowOptions, GuiInputEvent, WindowHost } from './window-host';
+import { displayScale } from './display-scale';
 
 /** Height of the desktop's title bar (docs/DESKTOP.md: "the title bar adds 38 px"). */
 const TITLE_H = 38;
@@ -14,7 +18,8 @@ const TITLE_H = 38;
 export function createDesktopHost(d: DesktopAPI): WindowHost {
   return {
     name: 'desktop',
-    desktopSize: () => { const g = d.workArea(); return { width: Math.round(g.width), height: Math.round(g.height) }; },
+    scale: displayScale(),
+    desktopSize: () => { const g = d.workArea(), s = displayScale(); return { width: Math.round(g.width * s), height: Math.round(g.height * s) }; },
     createCanvasWindow: (opts) => new DesktopCanvasWindow(d, opts),
   };
 }
@@ -26,24 +31,26 @@ class DesktopCanvasWindow implements CanvasWindow {
   private ctx: CanvasRenderingContext2D | null = null;
   private decorated: boolean;
   private closing = false;
+  private readonly scale = displayScale();
 
   constructor(d: DesktopAPI, opts: CanvasWindowOptions) {
     this.decorated = opts.decorated;
+    const s = this.scale;
     const parent = opts.transientFor instanceof DesktopCanvasWindow ? opts.transientFor.win.id : undefined;
     const options: WindowOptions = {
       title: opts.title,
       appId: opts.appId || 'x11',
-      width: opts.width,
-      height: opts.height,
-      x: opts.x,
-      y: opts.y === undefined ? undefined : opts.decorated ? opts.y - TITLE_H : opts.y,
-      content: { kind: 'surface', scale: 1, autoResize: false, bufferWidth: opts.width, bufferHeight: opts.height },
+      width: opts.width / s,
+      height: opts.height / s,
+      x: opts.x === undefined ? undefined : opts.x / s,
+      y: opts.y === undefined ? undefined : opts.y / s - (opts.decorated ? TITLE_H : 0),
+      content: { kind: 'surface', scale: s, autoResize: false, bufferWidth: opts.width, bufferHeight: opts.height },
       override: !!opts.override,
       decorations: opts.decorated || opts.override ? 'server' : 'none',
       transientFor: parent,
       resizable: opts.resizable !== false,
-      minWidth: opts.minWidth,
-      minHeight: opts.minHeight,
+      minWidth: opts.minWidth === undefined ? undefined : opts.minWidth / s,
+      minHeight: opts.minHeight === undefined ? undefined : opts.minHeight / s,
       focus: !opts.override,
       onClose: () => {
         if (this.closing) return true;
@@ -53,6 +60,9 @@ class DesktopCanvasWindow implements CanvasWindow {
     };
     this.win = d.createWindow(options);
     this.surface = this.win.surface!;
+    // whole device pixels: no smoothing even where a size rounds
+    if (Number.isInteger(s)) this.surface.canvas.style.imageRendering = 'pixelated';
+    this.fitCanvas();
     this.surface.onConfigure((w, h) => this.emit('resize', w, h));
     this.win.on('move', () => { const p = this.position(); this.emit('move', p.x, p.y); });
     this.win.on('focus', () => this.emit('focus'));
@@ -69,9 +79,16 @@ class DesktopCanvasWindow implements CanvasWindow {
 
   onInput(cb: (e: GuiInputEvent) => void): void { this.surface.onInput(cb as never); }
 
+  /** The canvas shows the buffer 1:1 on the screen: buffer ÷ scale CSS px, top left */
+  private fitCanvas(): void {
+    const c = this.surface.canvas;
+    c.style.width = `${c.width / this.scale}px`;
+    c.style.height = `${c.height / this.scale}px`;
+  }
+
   position(): { x: number; y: number } {
-    const g = this.win.geometry();
-    return { x: Math.round(g.x), y: Math.round(g.y + (this.decorated ? TITLE_H : 0)) };
+    const g = this.win.geometry(), s = this.scale;
+    return { x: Math.round(g.x * s), y: Math.round((g.y + (this.decorated ? TITLE_H : 0)) * s) };
   }
 
   setGeometry(g: { x?: number; y?: number; width?: number; height?: number }, fromUser = false): void {
@@ -79,12 +96,13 @@ class DesktopCanvasWindow implements CanvasWindow {
       const w = g.width ?? this.surface.width, h = g.height ?? this.surface.height;
       if (w !== this.surface.width || h !== this.surface.height || !fromUser) {
         this.surface.setBufferSize(w, h, !fromUser && this.win.state === 'normal');
+        this.fitCanvas();
       }
     }
     if (g.x !== undefined || g.y !== undefined) {
       const p = this.position();
       const x = g.x ?? p.x, y = g.y ?? p.y;
-      if (x !== p.x || y !== p.y) this.win.move(x, this.decorated ? y - TITLE_H : y);
+      if (x !== p.x || y !== p.y) this.win.move(x / this.scale, y / this.scale - (this.decorated ? TITLE_H : 0));
     }
   }
 

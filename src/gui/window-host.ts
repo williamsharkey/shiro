@@ -85,8 +85,11 @@ export interface CanvasWindow {
 
 export interface WindowHost {
   readonly name: string;
+  /** Device pixels per CSS px (displayScale()); X pixels are device pixels. Default 1. */
+  readonly scale?: number;
   createCanvasWindow(opts: CanvasWindowOptions): CanvasWindow;
   /** The desktop area windows live in (the X root window size), CSS px. */
+  /** In X (device) pixels: CSS size × displayScale(). */
   desktopSize(): { width: number; height: number };
   /** Where a new window of this size should go (cascade/center). */
   placeWindow?(width: number, height: number): { x: number; y: number };

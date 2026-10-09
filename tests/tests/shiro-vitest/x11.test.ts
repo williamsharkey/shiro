@@ -130,6 +130,19 @@ describe('X11 protocol', () => {
     expect(r.u8()).toBe(1);
   });
 
+  it('reports the display scale as DPI: Xft.dpi, an outline font for xterm, toolkit scale variables', async () => {
+    const at = (dpi: number) => new TextDecoder().decode(new XServer({ dpi }).root.props.get(23 /* RESOURCE_MANAGER */)!.data);
+    expect(at(96)).toContain('Xft.dpi:\t96\n');
+    expect(at(96)).not.toContain('faceName');
+    expect(at(192)).toContain('Xft.dpi:\t192\n');
+    expect(at(192)).toContain('Xcursor.size:\t48\n');
+    expect(at(192)).toContain('XTerm*faceName:\tDejaVu Sans Mono\n');
+    const { toolkitScaleEnv } = await import('@shiro/gui/display-scale');
+    expect(toolkitScaleEnv(1)).toEqual({});
+    expect(toolkitScaleEnv(2)).toMatchObject({ GDK_SCALE: '2', GDK_DPI_SCALE: '0.5', QT_SCALE_FACTOR: '2', QT_FONT_DPI: '96' });
+    expect(toolkitScaleEnv(1.5)).toMatchObject({ GDK_SCALE: '1', QT_SCALE_FACTOR: '1.5' });
+  });
+
   it('maps a window, sends Expose, draws, and composes the pixels', async () => {
     const { c, tops } = await newServer();
     const wid = c.id(1), gc = c.id(2);

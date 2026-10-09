@@ -42,6 +42,7 @@ export class Rootless {
   onFocusIn: (() => void) | null = null;
 
   constructor(readonly server: XServer, readonly host: WindowHost) {
+    cursorScale = host.scale ?? 1;
     server.hooks = {
       topMapped: (w) => this.mapped(w),
       topUnmapped: (w) => this.unmapped(w),
@@ -379,6 +380,8 @@ function hasAtom(data: Uint8Array, atom: number): boolean {
 }
 
 const cursorUrls = new WeakMap<XCursor, string>();
+/** Device pixels per CSS px of the host (Rootless sets it from the host). */
+let cursorScale = 1;
 
 function cursorCss(c: XCursor | null): string {
   if (!c) return 'default';
@@ -390,7 +393,11 @@ function cursorCss(c: XCursor | null): string {
     const ctx = cv.getContext('2d');
     if (ctx) {
       ctx.putImageData(new ImageData(new Uint8ClampedArray(c.image.rgba), c.image.width, c.image.height), 0, 0);
-      url = `url(${cv.toDataURL()}) ${c.image.xhot} ${c.image.yhot}, ${c.css || 'default'}`;
+      // X pixels are device pixels: at scale s the image is s× a CSS cursor (hotspot in CSS px)
+      const s = cursorScale;
+      url = s === 1
+        ? `url(${cv.toDataURL()}) ${c.image.xhot} ${c.image.yhot}, ${c.css || 'default'}`
+        : `image-set(url(${cv.toDataURL()}) ${s}x) ${Math.round(c.image.xhot / s)} ${Math.round(c.image.yhot / s)}, ${c.css || 'default'}`;
       cursorUrls.set(c, url);
     }
   }

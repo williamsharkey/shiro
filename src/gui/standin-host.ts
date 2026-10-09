@@ -3,8 +3,10 @@
  * is no desktop: floating DOM windows with a title bar, a traffic-light
  * close button, drag to move and a corner grip to resize, holding a canvas.
  * Implements src/gui/window-host.ts; on the desktop, desktop-host.ts is used.
+ * Geometry is in X (device) pixels, shown at ÷ displayScale() CSS px.
  */
 import { inputEvent, type CanvasWindow, type CanvasWindowEvents, type CanvasWindowOptions, type GuiInputEvent, type WindowHost } from './window-host';
+import { displayScale } from './display-scale';
 
 const TITLE_H = 28;
 let zTop = 100000;
@@ -13,18 +15,21 @@ let cascade = 0;
 export function createStandinHost(root: HTMLElement = document.body): WindowHost {
   return {
     name: 'standin',
-    desktopSize: () => ({ width: Math.max(640, window.innerWidth), height: Math.max(480, window.innerHeight) }),
+    scale: displayScale(),
+    desktopSize: () => { const s = displayScale(); return { width: Math.round(Math.max(640, window.innerWidth) * s), height: Math.round(Math.max(480, window.innerHeight) * s) }; },
     placeWindow: createStandinPlacement,
     createCanvasWindow: (opts) => new StandinWindow(root, opts),
   };
 }
 
+/** A cascaded spot for a window of this X size, in X pixels. */
 function createStandinPlacement(width: number, height: number): { x: number; y: number } {
-  const vw = window.innerWidth, vh = window.innerHeight;
+  const s = displayScale();
+  const vw = window.innerWidth, vh = window.innerHeight, w = width / s, h = height / s;
   const step = (cascade++ % 8) * 28;
   return {
-    x: Math.max(8, Math.min(vw - width - 8, Math.round((vw - width) / 2) - 120 + step)),
-    y: Math.max(TITLE_H + 8, Math.min(vh - height - 8, Math.round((vh - height) / 3) + step)),
+    x: Math.round(Math.max(8, Math.min(vw - w - 8, Math.round((vw - w) / 2) - 120 + step)) * s),
+    y: Math.round(Math.max(TITLE_H + 8, Math.min(vh - h - 8, Math.round((vh - h) / 3) + step)) * s),
   };
 }
 
@@ -39,6 +44,7 @@ class StandinWindow implements CanvasWindow {
   private y: number;
   private w: number;
   private h: number;
+  private readonly s = displayScale();
 
   constructor(root: HTMLElement, private opts: CanvasWindowOptions) {
     this.w = opts.width; this.h = opts.height;
@@ -81,7 +87,8 @@ class StandinWindow implements CanvasWindow {
     const c = document.createElement('canvas');
     c.width = opts.width; c.height = opts.height;
     c.tabIndex = 0;
-    c.style.cssText = `display:block;width:${opts.width}px;height:${opts.height}px;outline:none;touch-action:none`;
+    c.style.cssText = `display:block;width:${opts.width / this.s}px;height:${opts.height / this.s}px;outline:none;touch-action:none`;
+    if (Number.isInteger(this.s)) c.style.imageRendering = 'pixelated';
     this.canvas = c;
     f.append(c);
     if (opts.decorated && opts.resizable !== false) this.addResizeGrip(f);
@@ -128,9 +135,9 @@ class StandinWindow implements CanvasWindow {
 
   private place(): void {
     const S = this.frame.style;
-    S.left = `${this.x}px`;
-    S.top = `${this.y - (this.opts.decorated ? TITLE_H : 0)}px`;
-    S.width = `${this.w}px`;
+    S.left = `${this.x / this.s}px`;
+    S.top = `${this.y / this.s - (this.opts.decorated ? TITLE_H : 0)}px`;
+    S.width = `${this.w / this.s}px`;
   }
 
   private dragMove(bar: HTMLElement): void {
@@ -140,8 +147,8 @@ class StandinWindow implements CanvasWindow {
       const sx = e.clientX, sy = e.clientY, ox = this.x, oy = this.y;
       bar.setPointerCapture(e.pointerId);
       const move = (ev: PointerEvent) => {
-        this.x = Math.round(ox + ev.clientX - sx);
-        this.y = Math.max(TITLE_H, Math.round(oy + ev.clientY - sy));
+        this.x = Math.round(ox + (ev.clientX - sx) * this.s);
+        this.y = Math.max(Math.round(TITLE_H * this.s), Math.round(oy + (ev.clientY - sy) * this.s));
         this.place();
       };
       const up = () => {
@@ -163,8 +170,8 @@ class StandinWindow implements CanvasWindow {
       g.setPointerCapture(e.pointerId);
       const o = this.opts;
       const move = (ev: PointerEvent) => {
-        const w = Math.max(o.minWidth ?? 32, Math.round(ow + ev.clientX - sx));
-        const h = Math.max(o.minHeight ?? 24, Math.round(oh + ev.clientY - sy));
+        const w = Math.max(o.minWidth ?? 32, Math.round(ow + (ev.clientX - sx) * this.s));
+        const h = Math.max(o.minHeight ?? 24, Math.round(oh + (ev.clientY - sy) * this.s));
         if (w !== this.w || h !== this.h) this.emit('resize', w, h);
       };
       const up = () => { g.removeEventListener('pointermove', move); g.removeEventListener('pointerup', up); };
@@ -203,8 +210,8 @@ class StandinWindow implements CanvasWindow {
       this.w = g.width ?? this.w; this.h = g.height ?? this.h;
       if (this.canvas.width !== this.w) this.canvas.width = this.w;
       if (this.canvas.height !== this.h) this.canvas.height = this.h;
-      this.canvas.style.width = `${this.w}px`;
-      this.canvas.style.height = `${this.h}px`;
+      this.canvas.style.width = `${this.w / this.s}px`;
+      this.canvas.style.height = `${this.h / this.s}px`;
     }
     this.place();
   }

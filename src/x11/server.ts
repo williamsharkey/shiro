@@ -218,9 +218,13 @@ export class XServer {
   debugErrors = false;
   trace: ((c: Client, opcode: number, data: number, len: number) => void) | null = null;
 
-  constructor(opts: { width?: number; height?: number } = {}) {
+  /** Dots per inch the screen reports (mm size, Xft.dpi): 96 × the display's device pixel ratio */
+  readonly dpi: number;
+
+  constructor(opts: { width?: number; height?: number; dpi?: number } = {}) {
     this.width = opts.width ?? SERVER_DEFAULTS.width;
     this.height = opts.height ?? SERVER_DEFAULTS.height;
+    this.dpi = opts.dpi ?? 96;
     P.PREDEFINED_ATOMS.forEach((n, i) => this.atomIds.set(n, i + 1));
     this.root = new XWindow(ROOT_ID, null, 0, 0, this.width, this.height, 0, P.InputOutput, 24, VISUAL_24, null);
     this.root.mapped = true;
@@ -230,7 +234,9 @@ export class XServer {
     this.resources.set(COLORMAP_ID, { kind: 'colormap', owner: null, free() {}, value: { visual: VISUAL_24 } });
     this.resources.set(CMAP_32, { kind: 'colormap', owner: null, free() {}, value: { visual: VISUAL_32 } });
     // What a desktop session's xrdb would load: toolkits take their DPI and font rendering from it
-    const rdb = 'Xft.dpi:\t96\nXft.antialias:\t1\nXft.hinting:\t1\nXft.hintstyle:\thintslight\nXft.rgba:\tnone\nXcursor.size:\t24\n';
+    const rdb = `Xft.dpi:\t${this.dpi}\nXft.antialias:\t1\nXft.hinting:\t1\nXft.hintstyle:\thintslight\nXft.rgba:\tnone\nXcursor.size:\t${Math.round(24 * this.dpi / 96)}\n` +
+      // Above 96 dpi xterm's bitmap fonts would be tiny: an outline font sized in points follows Xft.dpi
+      (this.dpi > 96 ? 'XTerm*faceName:\tDejaVu Sans Mono\nXTerm*faceSize:\t9\n' : '');
     this.root.props.set(23 /* RESOURCE_MANAGER */, { type: P.ATOM_STRING, format: 8, data: new TextEncoder().encode(rdb) });
     this.addExtension('BIG-REQUESTS', 0, 0, (c, minor) => {
       if (minor !== 0) throw new XError(P.BadRequest);
@@ -365,7 +371,7 @@ export class XServer {
     for (const [d, bpp, pad] of formats) w.u8(d).u8(bpp).u8(pad).zero(5);
     // screen
     w.u32(ROOT_ID).u32(COLORMAP_ID).u32(0xffffff).u32(0).u32(this.root.allEventMasks());
-    w.u16(this.width).u16(this.height).u16(Math.round(this.width * 25.4 / 96)).u16(Math.round(this.height * 25.4 / 96));
+    w.u16(this.width).u16(this.height).u16(Math.round(this.width * 25.4 / this.dpi)).u16(Math.round(this.height * 25.4 / this.dpi));
     w.u16(1).u16(1).u32(VISUAL_24).u8(0).u8(0).u8(24);
     const depths: [number, number[]][] = [[24, [VISUAL_24]], [1, []], [8, []], [16, []], [32, [VISUAL_32]]];
     w.u8(depths.length);
