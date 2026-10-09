@@ -12,7 +12,9 @@
     "bench:quick": "node bench/run.mjs --quick",
     "bench:compare": "node bench/compare.mjs",
     "deploy": "bash deploy.sh",
-    "conformance": "(sh scripts/conformance/fetch.sh || echo \"conformance: could not fetch external suites; they will be skipped\") && cd tests && npx vitest run --config vitest.conformance.config.ts; node ../scripts/conformance/report.mjs"
+    "conformance": "(sh scripts/conformance/fetch.sh || echo \"conformance: could not fetch external suites; they will be skipped\") && cd tests && npx vitest run --config vitest.conformance.config.ts; node ../scripts/conformance/report.mjs",
+    "debian-score": "node scripts/debian/score.mjs",
+    "debian-rootfs": "bash scripts/debian/build-rootfs.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",

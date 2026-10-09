@@ -5,7 +5,7 @@
  */
 
 import { createServer } from 'node:http';
-import { readFile, writeFile, stat, readdir, unlink, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, stat, readdir, unlink, mkdir, rename } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { randomBytes, createHmac, timingSafeEqual } from 'node:crypto';
@@ -335,12 +335,110 @@ async function handleStatic(req, res) {
     // the app in iframes and need nothing from SharedArrayBuffer.
     const isAppShell = filePath === join(STATIC_DIR, 'index.html');
     const isolation = isAppShell || ext === '.js' || ext === '.mjs' ? isolationHeaders() : {};
-    res.writeHead(200, { 'content-type': MIME[ext] || 'application/octet-stream', ...staticHeaders, ...isolation });
+    // The streamed Debian rootfs's chunks are content-addressed (named by sha256)
+    const immutable = pathname.startsWith('/debian/chunks/') ? { 'cache-control': 'public, max-age=31536000, immutable' } : {};
+    res.writeHead(200, { 'content-type': MIME[ext] || 'application/octet-stream', ...staticHeaders, ...isolation, ...immutable });
     res.end(data);
   } catch {
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', ...staticHeaders });
     res.end('Not found');
   }
+}
+
+// --- Debian package mirror (docs/DEBIAN.md "Package mirror") ---
+// apt inside the page fetches http://HOST/PATH as /debian/mirror/HOST/PATH
+// (src/debian/apt-method.ts), so it needs no TCP relay. Only the hosts in
+// SHIRO_DEBIAN_MIRRORS are served ("host=https://upstream,host2=..."; by
+// default deb.debian.org and security.debian.org from their own CDNs), and
+// only archive paths (dists/, pool/). apt verifies everything against the
+// signed InRelease, so the mirror needs no trust. Files under pool/ and
+// by-hash/ are immutable and kept in SHIRO_DEBIAN_CACHE (when set) forever;
+// other index files for SHIRO_DEBIAN_INDEX_TTL seconds (default 600).
+function debianMirrorConfig() {
+  const upstreams = new Map([['deb.debian.org', 'https://deb.debian.org'], ['security.debian.org', 'https://security.debian.org']]);
+  if (process.env.SHIRO_DEBIAN_MIRRORS) {
+    upstreams.clear();
+    for (const part of process.env.SHIRO_DEBIAN_MIRRORS.split(',')) {
+      const i = part.indexOf('=');
+      if (i > 0) upstreams.set(part.slice(0, i).trim(), part.slice(i + 1).trim().replace(/\/+$/, ''));
+    }
+  }
+  return {
+    upstreams,
+    cacheDir: process.env.SHIRO_DEBIAN_CACHE || '',
+    indexTtl: Number(process.env.SHIRO_DEBIAN_INDEX_TTL || 600) * 1000,
+  };
+}
+const DEBIAN_MIRROR = debianMirrorConfig();
+const DEBIAN_PATH = /^\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._+~%-]+)*\/(?:dists|pool)\/[A-Za-z0-9._+~%/-]+$/;
+const debianInflight = new Map();
+
+async function debianFetch(upstreamUrl, cacheFile, immutable) {
+  if (cacheFile) {
+    try {
+      const st = await stat(cacheFile);
+      if (immutable || Date.now() - st.mtimeMs < DEBIAN_MIRROR.indexTtl) {
+        return { status: 200, body: await readFile(cacheFile), lastModified: await readFile(cacheFile + '.lm', 'utf8').catch(() => '') };
+      }
+    } catch { /* not cached */ }
+  }
+  let r;
+  try {
+    r = await fetch(upstreamUrl, { redirect: 'follow' });
+  } catch (e) {
+    // Upstream down: a stale index beats none
+    if (cacheFile) {
+      try { return { status: 200, body: await readFile(cacheFile), lastModified: '' }; } catch {}
+    }
+    return { status: 502, body: Buffer.from(`upstream: ${e.message}\n`) };
+  }
+  if (!r.ok) return { status: r.status, body: Buffer.from(`upstream: ${r.status} ${r.statusText}\n`) };
+  const body = Buffer.from(await r.arrayBuffer());
+  const lastModified = r.headers.get('last-modified') || '';
+  if (cacheFile) {
+    try {
+      await mkdir(cacheFile.slice(0, cacheFile.lastIndexOf('/')), { recursive: true });
+      const tmp = `${cacheFile}.${process.pid}.${randomBytes(4).toString('hex')}`;
+      await writeFile(tmp, body);
+      await writeFile(cacheFile + '.lm', lastModified);
+      await rename(tmp, cacheFile);
+    } catch (e) { console.warn('[debian-mirror] cache write failed:', e.message); }
+  }
+  return { status: 200, body, lastModified };
+}
+
+async function handleDebianMirror(req, res, rest) {
+  const slash = rest.indexOf('/');
+  const host = slash > 0 ? rest.slice(0, slash) : '';
+  const path = slash > 0 ? rest.slice(slash) : '';
+  const upstream = DEBIAN_MIRROR.upstreams.get(host);
+  if (!upstream || !DEBIAN_PATH.test(path) || path.includes('..') || (req.method !== 'GET' && req.method !== 'HEAD')) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    return res.end('not a mirrored Debian archive path\n');
+  }
+  const immutable = path.includes('/pool/') || path.includes('/by-hash/');
+  const cacheFile = DEBIAN_MIRROR.cacheDir ? join(DEBIAN_MIRROR.cacheDir, host, path) : '';
+  const key = upstream + path;
+  let p = debianInflight.get(key);
+  if (!p) {
+    p = debianFetch(upstream + path, cacheFile, immutable).finally(() => debianInflight.delete(key));
+    debianInflight.set(key, p);
+  }
+  const r = await p;
+  const headers = {
+    'content-type': r.status === 200 ? 'application/octet-stream' : 'text/plain; charset=utf-8',
+    'cache-control': r.status === 200 && immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
+    'cross-origin-resource-policy': 'same-origin',
+  };
+  if (r.lastModified) headers['last-modified'] = r.lastModified;
+  const ims = req.headers['if-modified-since'];
+  if (r.status === 200 && ims && r.lastModified && Date.parse(ims) >= Date.parse(r.lastModified)) {
+    res.writeHead(304, headers);
+    return res.end();
+  }
+  headers['content-length'] = r.body.length;
+  res.writeHead(r.status, headers);
+  res.end(req.method === 'HEAD' ? undefined : r.body);
 }
 
 // --- WebRTC signaling ---
@@ -1040,6 +1138,9 @@ const server = createServer(async (req, res) => {
   }
   if (pathname === '/oauth/callback') {
     return handleOAuthCallback(req, res);
+  }
+  if (pathname.startsWith('/debian/mirror/')) {
+    return handleDebianMirror(req, res, pathname.slice('/debian/mirror/'.length));
   }
   if (pathname === '/health') {
     res.writeHead(200);

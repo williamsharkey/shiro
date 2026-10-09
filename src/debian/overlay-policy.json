@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "programs": {
+    "/usr/lib/apt/methods/http": {
+      "default": "shiro",
+      "command": "shiro-apt-method",
+      "stub": true,
+      "why": "Browsers can't open TCP connections: Shiro's transport fetches from the page's same-origin mirror. apt still verifies the signed InRelease and every hash."
+    }
+  }
+}

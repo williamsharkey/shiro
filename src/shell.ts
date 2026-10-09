@@ -14,7 +14,7 @@ import type { ShiroTerminal } from './terminal';
 import type { KernelStdio } from './shell-stdio';
 import type { OpenFile } from './kernel/fd';
 import { getCompiledModule } from './wasi-packages';
-import { builtinIndex, findEntry, packageStatus, packageShadows, loadPackageShadows, packageOfPath, runPackageBinary, PKG_BIN_DIR } from './pkg-manager';
+import { builtinIndex, findEntry, packageStatus, packageShadows, pkgOwnShadows, loadPackageShadows, packageOfPath, runPackageBinary, PKG_BIN_DIR } from './pkg-manager';
 
 // Lazy-load the WASI runtime (~960 lines) only when WASM execution is needed
 let _wasiRuntime: typeof import('./wasi-runtime') | null = null;
@@ -396,6 +396,8 @@ export function quoteArgsForShell(args: string[]): string {
 
 export class Shell {
   fs: FileSystem;
+  /** User id kernel processes started by this shell run as (`sudo` sets 0); undefined = the parent's (1000). */
+  uid?: number;
   cwd: string = '/home/user';
   env: Record<string, string> = {};
   history: string[] = [];
@@ -608,6 +610,7 @@ export class Shell {
     child.completionSpecs = new Map(this.completionSpecs);
     child.inheritedReturn = this.canReturn();
     child.kernelHost = this.kernelHost;
+    child.uid = this.uid;
     return child;
   }
 
@@ -3264,7 +3267,7 @@ export class Shell {
           }
         } else {
           // Try to find executable in PATH
-          const executable = pkgShadowed
+          const executable = pkgShadowed && pkgOwnShadows(this.fs).has(effectiveCmdName)
             ? `${PKG_BIN_DIR}/${effectiveCmdName}`
             : await this.findExecutableInPath(effectiveCmdName);
           if (executable) {
