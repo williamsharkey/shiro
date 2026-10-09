@@ -94,6 +94,8 @@ const unameBin = join(out, 'uname');
 const haveUname = tryBuild('gcc', ['-static', '-O1', '-o', unameBin, 'uname.c']);
 const cpuclockBin = join(out, 'cpuclock');
 const haveCpuclock = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', cpuclockBin, 'cpuclock.c']);
+const niceBin = join(out, 'nice');
+const haveNice = tryBuild('gcc', ['-static', '-O1', '-o', niceBin, 'nice.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -784,6 +786,13 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('process 1 thread 1 getcpuclockid 0 0 pid-clock 1 thread-clock 1\n' +
       'epoll_wait maxevents 10000: 0\n');
+  }, 60_000);
+
+  // pam_limits (su, runuser) calls setpriority for every session
+  it.skipIf(!haveNice)('getpriority/setpriority keep a nice value per process, inherited on fork', async () => {
+    const { shell } = await setup(readFileSync(niceBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('get 0 errno 0 raw 20 set0 0 set5 0 get 5 child 5 lower-as-user EACCES\n');
   }, 60_000);
 
   // vim's typeahead check blocked for a key when two reads straddled a ms tick
