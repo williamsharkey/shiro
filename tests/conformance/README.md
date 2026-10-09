@@ -21,8 +21,9 @@ normal `npm run test:shiro` keeps them fixed.
 - Cases: `oils/spec/*.test.sh`, a vendored POSIX/bash subset of
   [oils-for-unix](https://github.com/oils-for-unix/oils) `spec/`
   (see `oils/README.md`, Apache-2.0).
-- Each case runs in a fresh `Shell` (shared filesystem) as `sh CASE.sh` in an
-  empty directory, with `$TMP`, `$SH` (= `sh`) and `$REPO_ROOT` set like the
+- Each case runs in a fresh `Shell` (shared filesystem) as `bash CASE.sh` in an
+  empty directory (the cases are judged against bash; run as `sh`, Shiro follows
+  POSIX where bash and sh differ), with `$TMP`, `$SH` (= `bash`) and `$REPO_ROOT` set like the
   oils harness. The oils helpers `argv.py`, `printenv.py` and
   `stdout_stderr.py` are test-only builtins.
 - Judged against **bash**: stdout and exit status must match the case's

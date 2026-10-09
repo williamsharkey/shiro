@@ -88,13 +88,13 @@ for (const file of files) {
       const script = `/spec-cases/${file}-${i}.sh`;
       await fs.writeFile(script, code);
       const sh = new base.constructor(fs, commands);
-      Object.assign(sh.env, { TMP: tmp, SH: 'sh', REPO_ROOT: '/oils', HOME: tmp, PWD: tmp });
+      Object.assign(sh.env, { TMP: tmp, SH: 'bash', REPO_ROOT: '/oils', HOME: tmp, PWD: tmp });
       sh.cwd = tmp;
       let stdout = '';
       let timedOut = false;
       let timer;
       const status = await Promise.race([
-        sh.execute(`sh ${script}`, (s) => { stdout += s; }, () => {}, false, undefined, true).catch(() => -1),
+        sh.execute(`bash ${script}`, (s) => { stdout += s; }, () => {}, false, undefined, true).catch(() => -1),
         new Promise((res) => { timer = setTimeout(() => { timedOut = true; sh.abortController?.abort(); res(-2); }, timeout); }),
       ]);
       clearTimeout(timer);
