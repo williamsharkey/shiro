@@ -58,6 +58,10 @@ export const KNOWN_ISSUES: { issue: string; workaround?: string }[] = [
     issue: "Images can't be pasted into Claude Code: `xclip` and `xsel` here are text only.",
     workaround: 'Save the image to a file and give its path.',
   },
+  {
+    issue: "In Debian mode, dpkg-deb's `.xz` decompression sometimes crashes or reports corrupt data under the x86-64 emulator, so `apt install` stops with a dpkg error.",
+    workaround: 'Run the install again.',
+  },
 ];
 
 function knownIssues(): string {
@@ -124,8 +128,7 @@ ${bootSection(ctx, name)}
 - Real Debian: \`debian install\` streams in Debian 13, then \`sudo apt update\` (about
   45 s) and \`sudo apt install -y NAME\` (Debian's own apt and dpkg, x86-64 in the
   emulator: about a minute for a small package, python3 about 4 minutes). 496 of
-  popcon's top 500 packages pass a smoke test. If dpkg fails while decompressing a
-  package (an open emulator bug), run the install again.
+  popcon's top 500 packages pass a smoke test.
 - Prebuilt: \`pkg install NAME\` installs one of ${name}'s 72 prebuilt programs
   (WebAssembly or static x86-64: vim, htop, git, python3, jq, curl, make, clang,
   go, ...) in about a second, and they start faster than Debian's. \`pkg available\`
