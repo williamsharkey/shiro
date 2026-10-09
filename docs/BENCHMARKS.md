@@ -1627,6 +1627,22 @@ Tried and dropped:
   went 39 → 74 s and python3 171 → 212 s. `sync()` waited on the bigger
   batches, and more besides.
 
+**Durability.** Because close no longer waits for IndexedDB, the page
+lifecycle flush (`visibilitychange` → hidden, `pagehide`, `freeze`) first
+writes back the kernel's open-file buffers (`FileSystem.addWriteBackHook`,
+`writeBackAll`), then commits strictly (`FileSystem.flushAll`, bounded at
+5 s). These await the same before reloading or navigating:
+- Restart, Hard Restart and Classic Terminal (desktop menu);
+- Settings' classic switch;
+- `desktop <mode>`.
+
+Test: `storage-quota.test.ts` (an open fd's unsaved write and a pending
+commit reach a second FileSystem after `flushAll`). Quick A/B for this push:
+- 97 metrics the same; boot +1–2 KiB;
+- `boot.settled.time` +5.3%;
+- `wasm.tree_create` +16%. It is one sample per run and moved −25..+38%
+  across today's runs.
+
 Left:
 - **Rename amplification:** storing content under an inode key rather than
   the path would make a rename rewrite only the small path record (an
