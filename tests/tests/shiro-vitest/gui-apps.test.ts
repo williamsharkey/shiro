@@ -27,7 +27,28 @@ function build(): Record<string, Uint8Array> | null {
       execFileSync('dpkg-deb', ['-Zxz', '--root-owner-group', '--build', root, join(work, `${name}.deb`)], { stdio: 'pipe' });
       return new Uint8Array(readFileSync(join(work, `${name}.deb`)));
     };
+    // stands in for glib-compile-schemas: records that it ran, and its argument
+    writeFileSync(join(work, 'marker.c'), '#include <fcntl.h>\n#include <string.h>\n#include <unistd.h>\nint main(int c, char **v) { int fd = open("/tmp/trigger-ran", O_WRONLY | O_CREAT | O_TRUNC, 0644); write(fd, v[1], strlen(v[1])); return 0; }\n');
+    execFileSync('gcc', ['-static', '-O1', '-o', join(work, 'marker'), join(work, 'marker.c')], { stdio: 'pipe' });
     return {
+      'schemademo': mk('schemademo', (r) => {
+        mkdirSync(join(r, 'usr/share/glib-2.0/schemas'), { recursive: true });
+        writeFileSync(join(r, 'usr/share/glib-2.0/schemas/org.demo.gschema.xml'), '<schemalist/>');
+        mkdirSync(join(r, 'usr/bin'), { recursive: true });
+        writeFileSync(join(r, 'usr/bin/glib-compile-schemas'), readFileSync(join(work, 'marker')));
+        chmodSync(join(r, 'usr/bin/glib-compile-schemas'), 0o755);
+      }),
+      // gdk-pixbuf: its own loaders come with a prebuilt loaders.cache (an overlay); another package's loader runs the trigger
+      'libgdk-pixbuf-2.0-0': mk('libgdk-pixbuf-2.0-0', (r) => {
+        mkdirSync(join(r, 'usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders'), { recursive: true });
+        writeFileSync(join(r, 'usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader-png.so'), 'loader');
+        writeFileSync(join(r, 'usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders'), readFileSync(join(work, 'marker')));
+        chmodSync(join(r, 'usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders'), 0o755);
+      }),
+      'loaderdemo': mk('loaderdemo', (r) => {
+        mkdirSync(join(r, 'usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders'), { recursive: true });
+        writeFileSync(join(r, 'usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader-demo.so'), 'loader');
+      }),
       'libdemo1': mk('libdemo1', (r) => {
         mkdirSync(join(r, 'usr/lib/x86_64-linux-gnu'), { recursive: true });
         writeFileSync(join(r, 'usr/lib/x86_64-linux-gnu/libdemo.so.1.0'), 'not really a library');
@@ -55,7 +76,12 @@ describe.skipIf(!debs)('GUI apps from .deb packages', () => {
     manifest = {
       suite: 'test', arch: 'amd64', mirror: '', snapshot: '',
       packages: Object.fromEntries(Object.entries(debs!).map(([n, b]) => [n, { version: '1.0', filename: `pool/main/x/${n}/${n}_1.0_amd64.deb`, sha256: sha(b), size: b.length }])),
-      apps: { xdemo: { description: 'demo', toolkit: 'x11', bin: '/usr/bin/xdemo', packages: ['libdemo1', 'xdemo'], size: 0, closureSize: 0, dropped: [] } },
+      apps: {
+        xdemo: { description: 'demo', toolkit: 'x11', bin: '/usr/bin/xdemo', packages: ['libdemo1', 'xdemo'], size: 0, closureSize: 0, dropped: [] },
+        schemas: { description: 'demo', toolkit: 'gtk3', bin: '/usr/bin/glib-compile-schemas', packages: ['schemademo'], size: 0, closureSize: 0, dropped: [] },
+        pixbuf: { description: 'demo', toolkit: 'gtk3', bin: '/usr/bin/true', packages: ['libgdk-pixbuf-2.0-0'], size: 0, closureSize: 0, dropped: [] },
+        loader: { description: 'demo', toolkit: 'gtk3', bin: '/usr/bin/true', packages: ['libgdk-pixbuf-2.0-0', 'loaderdemo'], size: 0, closureSize: 0, dropped: [] },
+      },
     };
     const { configureGuiApps } = await import('@shiro/gui/apps');
     configureGuiApps({ manifest, fetchDeb: async (p) => debs![p.filename.split('/')[3]] });
@@ -104,6 +130,46 @@ describe.skipIf(!debs)('GUI apps from .deb packages', () => {
     expect(await app.exited).toBe(0);
     display.stop();
   }, 120_000);
+
+  it('runs a trigger only when a package puts files in its directory', async () => {
+    const { fs } = await createTestShell();
+    const { Kernel } = await import('@shiro/kernel/kernel');
+    const { registerBlinkLoader } = await import('@shiro/x86-engine/blink');
+    const { installApp } = await import('@shiro/gui/apps');
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    registerBlinkLoader(kernel);
+    await installApp(fs, kernel, 'schemas');
+    expect(await fs.readFile('/tmp/trigger-ran', 'utf8')).toBe('/usr/share/glib-2.0/schemas');
+    await fs.unlink('/tmp/trigger-ran');
+    await fs.rm('/var/lib/shiro-gui/status.json').catch(() => {}); // test shells share one filesystem
+    const r = await installApp(fs, kernel, 'xdemo');
+    expect(r.skipped).toBe(0);
+    expect(await fs.exists('/tmp/trigger-ran')).toBe(false);
+    // gdk-pixbuf's own loaders: covered by the overlay
+    await installApp(fs, kernel, 'pixbuf');
+    expect(await fs.exists('/tmp/trigger-ran')).toBe(false);
+    await installApp(fs, kernel, 'loader');
+    expect(await fs.readFile('/tmp/trigger-ran', 'utf8')).toBe('--update-cache');
+  }, 120_000);
+
+  it('shares one install between callers and reports what is left to download', async () => {
+    const { fs } = await createTestShell();
+    const { Kernel } = await import('@shiro/kernel/kernel');
+    const { installApp, pendingDownload, installInProgress } = await import('@shiro/gui/apps');
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    const size = debs!.libdemo1.length + debs!.xdemo.length;
+    await fs.rm('/var/lib/shiro-gui/status.json').catch(() => {}); // test shells share one filesystem
+    expect(await pendingDownload(fs, 'xdemo')).toEqual({ packages: 2, bytes: size });
+    const a: string[] = [], b: string[] = [];
+    const p1 = installApp(fs, kernel, 'xdemo', (p) => a.push(p.phase));
+    const p2 = installApp(fs, kernel, 'xdemo', (p) => b.push(p.phase));
+    expect(installInProgress('xdemo')).toBeDefined();
+    expect(await p1).toBe(await p2);
+    expect(a).toContain('done');
+    expect(b).toContain('done');
+    expect(installInProgress('xdemo')).toBeUndefined();
+    expect(await pendingDownload(fs, 'xdemo')).toEqual({ packages: 0, bytes: 0 });
+  });
 
   it('rejects a package whose sha256 does not match', async () => {
     const { configureGuiApps, installApp } = await import('@shiro/gui/apps');
