@@ -124,7 +124,7 @@ function runAb(cands) {
   const git = (...a) => { try { return execFileSync('git', a, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { return null; } };
   const ref = (env, side) => {
     const sha = env.git?.sha;
-    if (!sha || !git('cat-file', '-e', `${sha}^{commit}`)) return { err: `${side} commit ${env.git?.short ?? '?'} is not in this repository` };
+    if (!sha || git('cat-file', '-e', `${sha}^{commit}`) === null) return { err: `${side} commit ${env.git?.short ?? '?'} is not in this repository` };
     if (env.git.dirty) {
       // Only the working tree can stand for a dirty run, and only if it is that commit
       if (side === 'new' && git('rev-parse', 'HEAD') === sha) return { ref: '.' };
