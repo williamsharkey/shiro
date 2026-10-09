@@ -8,7 +8,7 @@ conformance work started (fc0af54).
 |---|---|---|
 | [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1407/1567 (89.8%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1394/1567 (89.0%)** |
-| [Shell: smoosh POSIX tests](#shell-smoosh-posix-tests) | 111/163 (68.1%) | **150/162 (92.6%)** |
+| [Shell: smoosh POSIX tests](#shell-smoosh-posix-tests) | 111/162 (68.5%) | **150/162 (92.6%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **625/635 (98.4%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **148/320 (46.3%)** |
 | [Syscalls: wasi-testsuite (wasm32-wasip1)](#syscalls-wasi-testsuite-wasm32-wasip1) | — | **71/72 (98.6%)** |
@@ -261,7 +261,7 @@ POSIX sh cases from [smoosh](https://github.com/mgree/smoosh) (tests/shell), jud
 | benchmark | 0/2 | 2/2 | 0 |
 | builtin | 38/59 | 56/59 | 3 |
 | parse | 2/3 | 2/3 | 1 |
-| semantics | 67/92 | 84/91 | 7 |
+| semantics | 67/91 | 84/91 | 7 |
 | sh | 4/7 | 6/7 | 1 |
 
 <details><summary>Failing cases</summary>

@@ -119,7 +119,7 @@
   },
   "semantics": {
    "pass": 67,
-   "total": 92,
+   "total": 91,
    "failures": [
     {
      "name": "semantics.background.pid",
@@ -136,10 +136,6 @@
     {
      "name": "semantics.command-subst.newline",
      "reason": "stdout differs"
-    },
-    {
-     "name": "semantics.command.argv0",
-     "reason": "status 1, want 0"
     },
     {
      "name": "semantics.defun.ec",
