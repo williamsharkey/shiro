@@ -84,7 +84,11 @@ for id in "${IDS[@]}"; do
 
   mount -t proc proc "$ROOT/proc"
   mount --rbind /sys "$ROOT/sys"
+  # One-way: without this, unmounting the chroot's copy (umount -l) propagates
+  # back and unmounts the host's own mounts too (e.g. /sys/fs/cgroup, which systemd needs)
+  mount --make-rslave "$ROOT/sys"
   mount --rbind /dev "$ROOT/dev"
+  mount --make-rslave "$ROOT/dev"
   mount --bind "$WORK/debs" "$ROOT/var/cache/apt/archives"
   cp -L /etc/resolv.conf "$ROOT/etc/resolv.conf.build"
   mv "$ROOT/etc/resolv.conf" "$ROOT/etc/resolv.conf.keep"
