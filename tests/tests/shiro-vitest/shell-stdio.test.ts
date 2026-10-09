@@ -260,3 +260,16 @@ describe('named pipes opened with exec', () => {
     expect(st).toBe(0);
   }, 30_000);
 });
+
+describe('scripts that do nothing do not wait on stdin', () => {
+  // dpkg-preconfigure runs ucf's empty config script with stdin on a pipe it keeps open
+  it('an empty file without #!, `sh FILE` and `sh -c ""` exit without reading a live stdin', async () => {
+    await fs.writeFile('/tmp/empty.cfg', '');
+    await fs.chmod?.('/tmp/empty.cfg', 0o755);
+    for (const argv of [['/tmp/empty.cfg', 'configure', ''], ['sh', '/tmp/empty.cfg'], ['sh', '-c', ''], ['sh', '-c', 'true']]) {
+      const [r] = createPipe(); // the write end is never closed
+      const p = await spawn(argv, { 0: r, 1: new SinkFile(() => {}), 2: new SinkFile(() => {}) });
+      expect(await withTimeout(p.wait(), 5_000)).toBe(0);
+    }
+  }, 30_000);
+});
