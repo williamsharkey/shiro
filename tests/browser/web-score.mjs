@@ -155,7 +155,7 @@ async function tabDriver(browser, transport = 'relay') {
   const page = await ctx.newPage();
   page.on('pageerror', (e) => { if (process.env.WEB_SCORE_DEBUG) console.log('[app pageerror]', e.message); });
   await page.goto(`${APP}/?ui=desktop`);
-  await page.waitForFunction(() => window.__shiro?.desktop, null, { timeout: 90000 });
+  await page.waitForFunction(() => window.__tabcomputer?.desktop, null, { timeout: 90000 });
   if (ROOTS) {
     const pem = readFileSync(ROOTS, 'utf8');
     await page.evaluate(async (pem) => {
@@ -173,11 +173,11 @@ async function tabDriver(browser, transport = 'relay') {
     await new Promise((res) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(transport, 'transport'); t.oncomplete = res; });
     db.close();
   }, transport);
-  await page.evaluate(() => window.__shiro.desktop.openApp('browser', {}));
+  await page.evaluate(() => window.__tabcomputer.desktop.openApp('browser', {}));
   await page.waitForFunction(() => window.__shiroBrowser?.engine, null, { timeout: 30000 });
   const got = await page.evaluate(() => window.__shiroBrowser.engine.transport);
   if (got !== transport) throw new Error(`transport ${transport} unavailable (server needs SHIRO_BROWSE_SERVER_FETCH=1)`);
-  await page.evaluate(() => { const w = window.__shiro.desktop.focused(); w?.maximize(); });
+  await page.evaluate(() => { const w = window.__tabcomputer.desktop.focused(); w?.maximize(); });
   const active = () => page.evaluate(() => { const t = window.__shiroBrowser.window.active; return t && { url: t.url, bytes: t.bytes, requests: t.requests, fallback: t.fallback, title: t.title }; });
   const frame = async () => {
     const el = await page.$('.sd-br-view iframe.sd-active');
