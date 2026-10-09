@@ -758,6 +758,14 @@ try { process.exit(3); } catch (e) { console.log('caught', e.message); }`);
     expect(Date.now() - start).toBeLessThan(20_000);
   }, 60_000);
 
+  it("a script's timers end with it (an interval left by process.exit() doesn't keep the next script alive)", async () => {
+    await fs.writeFile('/home/user/m/iv.js', `setInterval(() => { setTimeout(() => {}, 200); }, 20); setTimeout(() => process.exit(0), 50);`);
+    expect((await sh(shell, 'cd /home/user/m && node iv.js; echo rc=$?')).out).toBe('rc=0\n');
+    const start = Date.now();
+    expect(await node(`setTimeout(() => console.log('next done'), 30);`)).toBe('next done\n');
+    expect(Date.now() - start).toBeLessThan(5_000);
+  }, 60_000);
+
   it('worker_threads: a pool worker gets workerData and answers messages', async () => {
     await fs.writeFile('/home/user/m/w.js', `const { parentPort, workerData, isMainThread } = require('worker_threads');
 parentPort.on('message', (m) => parentPort.postMessage({ sum: m.a + m.b + workerData.base, main: isMainThread }));`);
@@ -828,6 +836,71 @@ const c = require('child_process').spawn('sh', ['-c', 'node c.js'], { stdio: [0,
 console.log(c.stdout === null);
 c.on('close', (code) => console.log('closed', code));`)).toBe('true\nchild done\nclosed 0\n');
     expect(Date.now() - start).toBeLessThan(30_000);
+  }, 60_000);
+
+  it('fs.watch, watchFile and fs.promises.watch see writes from another process (rename vs change)', async () => {
+    await fs.mkdir('/home/user/m/w/sub', { recursive: true });
+    await fs.writeFile('/home/user/m/w/old.txt', 'old');
+    await fs.writeFile('/home/user/m/watch.js', `const fs = require('fs'); const path = require('path');
+const dir = '/home/user/m/w'; const ev = [];
+const w = fs.watch(dir, (type, name) => ev.push('dir ' + type + ' ' + name));
+const r = fs.watch(dir, { recursive: true }, (type, name) => { if (name.startsWith('sub')) ev.push('rec ' + type + ' ' + name); });
+const f = fs.watch(path.join(dir, 'old.txt'), (type, name) => ev.push('file ' + type + ' ' + name + ' ' + fs.readFileSync(path.join(dir, 'old.txt'), 'utf8').trim()));
+fs.watchFile(path.join(dir, 'old.txt'), (curr, prev) => ev.push('stat ' + prev.size + '->' + curr.size));
+(async () => { for await (const e of fs.promises.watch(dir)) { if (e.filename === 'done') break; } ev.push('iter ended'); })();
+setInterval(() => {
+  if (!fs.existsSync(dir + '/done')) return;
+  setTimeout(() => {
+    w.close(); r.close(); f.close(); fs.unwatchFile(path.join(dir, 'old.txt'));
+    console.log([...new Set(ev)].sort().join('\\n'));
+    process.exit(0);
+  }, 300);
+}, 50);
+console.log('watching');`);
+    const watcher = sh(shell, 'cd /home/user/m && node watch.js');
+    await new Promise((r) => setTimeout(r, 1500));
+    // Another process writes: a new file, a change, a subdirectory file, a rename, a delete
+    const other = (shell as any).fork();
+    await sh(other, 'cd /home/user/m/w && echo hi > new.txt && echo more >> old.txt && echo s > sub/deep.txt && mv new.txt moved.txt && rm moved.txt && sleep 0.3 && touch done');
+    const r = await watcher;
+    // (Like Linux: a new file is 'rename' then 'change'; a non-recursive
+    // directory watch doesn't see inside subdirectories)
+    expect(r.out).toBe(`watching
+dir change done
+dir change new.txt
+dir change old.txt
+dir rename done
+dir rename moved.txt
+dir rename new.txt
+file change old.txt oldmore
+iter ended
+rec change sub/deep.txt
+rec rename sub/deep.txt
+stat 3->8
+`);
+  }, 60_000);
+
+  it('node:assert: match, rejects, deep equality and AssertionError like node', async () => {
+    expect(await node(`const assert = require('assert'); const strict = require('node:assert/strict'); const r = [];
+const t = (n, fn) => { try { fn(); r.push(n + ':ok'); } catch (e) { r.push(n + ':' + (e.code || e.name)); } };
+t('match', () => assert.match('abc', /b/)); t('matchFail', () => assert.match('abc', /x/)); t('doesNotMatch', () => assert.doesNotMatch('abc', /b/));
+t('dse', () => assert.deepStrictEqual({ a: [1, { b: new Map([[1, new Set([2])]]) }] }, { a: [1, { b: new Map([[1, new Set([2])]]) }] }));
+t('dseProto', () => assert.deepStrictEqual(Object.create(null), {})); t('deProto', () => assert.deepEqual(Object.create(null), {}));
+t('dseNaN', () => assert.deepStrictEqual([NaN], [NaN])); t('dseZero', () => assert.deepStrictEqual(-0, 0)); t('deLoose', () => assert.deepEqual({ a: 1 }, { a: '1' }));
+t('dseCycle', () => { const a = {}; a.s = a; const b = {}; b.s = b; assert.deepStrictEqual(a, b); });
+t('throwsWrong', () => assert.throws(() => { throw new TypeError('x'); }, RangeError));
+t('throwsObj', () => assert.throws(() => { throw Object.assign(new Error('m'), { code: 'E1' }); }, { code: 'E1', message: /m/ }));
+t('throwsNone', () => assert.throws(() => {})); t('strictMode', () => strict.equal(1, '1')); t('loose', () => assert.equal(1, '1'));
+t('ifError', () => assert.ifError(new Error('e')));
+try { assert.strictEqual(1, 2); } catch (e) { r.push([e.name, e.code, e.actual, e.expected, e.operator, e.generatedMessage, e instanceof assert.AssertionError].join(',')); }
+(async () => {
+  const at = async (n, p) => { try { await p; r.push(n + ':ok'); } catch (e) { r.push(n + ':' + (e.code || e.name)); } };
+  await at('rejects', assert.rejects(Promise.reject(new TypeError('a')), TypeError)); await at('rejectsNone', assert.rejects(Promise.resolve(1)));
+  await at('doesNotReject', assert.doesNotReject(async () => { throw new Error('w'); }));
+  console.log(r.join(' '), assert.strict === strict, require('util').isDeepStrictEqual([1], ['1']));
+})();`)).toBe('match:ok matchFail:ERR_ASSERTION doesNotMatch:ERR_ASSERTION dse:ok dseProto:ERR_ASSERTION deProto:ok dseNaN:ok dseZero:ERR_ASSERTION deLoose:ok dseCycle:ok '
+      + 'throwsWrong:ERR_ASSERTION throwsObj:ok throwsNone:ERR_ASSERTION strictMode:ERR_ASSERTION loose:ok ifError:ERR_ASSERTION '
+      + 'AssertionError,ERR_ASSERTION,1,2,strictEqual,true,true rejects:ok rejectsNone:ERR_ASSERTION doesNotReject:ERR_ASSERTION true false\n');
   }, 60_000);
 
   it('fs streams: binary round trip through pipe, append, events', async () => {
@@ -939,6 +1012,21 @@ lockfileVersion: '9.0'
     r = await sh(shell, `cd /home/user/yq && rm -rf node_modules && ${yarn} install --offline > /dev/null && node app.js`);
     expect(r.out).toBe('true 1.2.3\n');
   }, 300_000);
+
+  it('chokidar 3 reports add, change, unlink and addDir for another process\'s writes', async () => {
+    let r = await sh(shell, 'mkdir -p /home/user/ck/src/lib && cd /home/user/ck && npm init -y > /dev/null && npm install chokidar@3.6.0 > /dev/null; echo $?');
+    expect(r.out).toBe('0\n');
+    await fs.writeFile('/home/user/ck/src/a.js', 'a');
+    await fs.writeFile('/home/user/ck/w.js', `const chokidar = require('chokidar'); const fs = require('fs'); const ev = [];
+const w = chokidar.watch('src', { ignoreInitial: true });
+w.on('all', (e, p) => { ev.push(e + ' ' + p); if (p.endsWith('stop')) setTimeout(() => { w.close().then(() => { console.log([...new Set(ev)].filter((x) => !x.includes('stop')).sort().join('\\n')); process.exit(0); }); }, 300); });
+w.on('ready', () => console.log('ready'));`);
+    const watcher = sh(shell, 'cd /home/user/ck && node w.js');
+    await new Promise((res) => setTimeout(res, 2000));
+    await sh((shell as any).fork(), 'cd /home/user/ck/src && echo b > b.js && echo aa >> a.js && mkdir lib/deep && echo c > lib/c.js && rm b.js && sleep 0.5 && touch stop');
+    r = await watcher;
+    expect(r.out).toBe('ready\nadd src/b.js\nadd src/lib/c.js\naddDir src/lib/deep\nchange src/a.js\nunlink src/b.js\n');
+  }, 180_000);
 
   it('a CLI on commander, chalk, dayjs and uuid', async () => {
     // commander declares `const process = require('node:process')` at top level
