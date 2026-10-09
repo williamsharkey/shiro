@@ -1,0 +1,30 @@
+From e6a5e70cc7fa8122ff736345c6d62a1daf02ea0f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 17:27:52 +0000
+Subject: [PATCH 58/58] clock_nanosleep: EINVAL for a negative or out-of-range
+ timespec
+
+glibc's nanosleep is clock_nanosleep, and patch 0054's path slept on
+{-5, 9999}, {0, 1000000000} and {1, -100} instead (LTP nanosleep04).
+---
+ blink/syscall.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/blink/syscall.c b/blink/syscall.c
+index d736670..cc2f587 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -4306,6 +4306,10 @@ static int SysClockNanosleep(struct Machine *m, int clock, int flags,
+   }
+   req.tv_sec = Read64(gtimespec.sec);
+   req.tv_nsec = Read64(gtimespec.nsec);
++  // as Linux's timespec64_valid (glibc's nanosleep is clock_nanosleep)
++  if (req.tv_sec < 0 || req.tv_nsec < 0 || req.tv_nsec >= 1000000000) {
++    return einval();
++  }
+ #ifdef __EMSCRIPTEN__
+   // in slices, as SysNanosleep: signals interrupt it (with rem for a
+   // relative sleep), and so does the process ending; the sleeping mark's
+-- 
+2.43.0
+

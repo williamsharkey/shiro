@@ -717,7 +717,7 @@ describe('Blink engine: CPU and syscall fixes', () => {
   it.skipIf(!haveSleepintr)('signals end sleeps with the time left; exit with parked threads', async () => {
     const { shell } = await setup(readFileSync(sleepintrBin));
     const r = await run(shell, './prog');
-    expect(r.output.replace(/\r\n/g, '\n')).toBe('nanosleep eintr 1 early 1 rem>3s 1\nclock_nanosleep eintr 1 early 1 rem>3s 1\n' +
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('invalid timespec EINVAL 6/6\nnanosleep eintr 1 early 1 rem>3s 1\nclock_nanosleep eintr 1 early 1 rem>3s 1\n' +
       'threads parked: exit 7 within 3s 1\n');
   }, 60_000);
 
