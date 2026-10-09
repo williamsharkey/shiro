@@ -1,4 +1,5 @@
 import { createZlibModule } from './zlib';
+import { createAssertModule } from './assert';
 import type { CommandContext } from '../../commands/index';
 
 export interface MiscDeps {
@@ -198,7 +199,7 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
           return out;
         },
         builtinModules: [
-          'assert', 'async_hooks', 'buffer', 'child_process', 'constants', 'crypto',
+          'assert', 'assert/strict', 'async_hooks', 'buffer', 'child_process', 'constants', 'crypto',
           'diagnostics_channel', 'dns', 'dns/promises', 'events', 'fs', 'fs/promises', 'http', 'https',
           'module', 'net', 'os', 'path', 'perf_hooks', 'process', 'querystring',
           'readline', 'stream', 'stream/consumers', 'stream/promises', 'string_decoder', 'timers', 'timers/promises', 'tls',
@@ -557,20 +558,11 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
     };
 
     case 'assert':
-    case 'node:assert': {
-      const assert: any = (value: any, msg?: string) => { if (!value) throw new Error(msg || 'Assertion failed'); };
-      assert.ok = assert;
-      assert.equal = (a: any, b: any, msg?: string) => { if (a != b) throw new Error(msg || `${a} != ${b}`); };
-      assert.strictEqual = (a: any, b: any, msg?: string) => { if (a !== b) throw new Error(msg || `${a} !== ${b}`); };
-      assert.deepEqual = assert.deepStrictEqual = (a: any, b: any, msg?: string) => { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error(msg || 'Deep equal failed'); };
-      assert.notEqual = (a: any, b: any, msg?: string) => { if (a == b) throw new Error(msg || `${a} == ${b}`); };
-      assert.notStrictEqual = (a: any, b: any, msg?: string) => { if (a === b) throw new Error(msg || `${a} === ${b}`); };
-      assert.throws = (fn: Function, msg?: any) => { try { fn(); throw new Error(typeof msg === 'string' ? msg : 'Expected throw'); } catch(e) { /* ok */ } };
-      assert.doesNotThrow = (fn: Function) => { fn(); };
-      assert.fail = (msg?: string) => { throw new Error(msg || 'Assert.fail'); };
-      assert.AssertionError = class extends Error {};
-      return assert;
-    }
+    case 'node:assert':
+      return createAssertModule((v) => getBuiltinModule('util').inspect(v)).assert;
+    case 'assert/strict':
+    case 'node:assert/strict':
+      return getBuiltinModule('assert').strict; // one module: the same AssertionError
 
     case 'console':
     case 'node:console': {

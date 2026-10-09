@@ -196,6 +196,13 @@ export interface AppDescriptor {
   menus?: () => MenuSpec[];
   /** Dock group (a stack that opens on tap) this app belongs to, see registerGroup. */
   group?: string;
+  /**
+   * The app's glyph for the icon sets other than Classic (docs/DESKTOP.md "Icon
+   * sets"): SVG path data on a 24-unit grid, drawn with round strokes. Without
+   * one (and without a built-in glyph) the app gets a monogram. `icon` stays
+   * what Classic shows.
+   */
+  glyph?: string;
 }
 
 /**

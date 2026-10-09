@@ -79,7 +79,7 @@ product needs them different:
 - `getShiroOrigin()` (src/utils/shiro-origin.ts): the API/proxy origin for
   embedded and seeded pages.
 - The relay's default allowed origins in server.mjs (`*.shiro.computer`).
-  Each deployment sets `TABCOMPUTER_TCP_ORIGINS` (or `TABCOMPUTER_TCP_ORIGINS`) in its server.env.
+  Each deployment sets `TABCOMPUTER_TCP_ORIGINS` in its server.env.
 - The HUD's displayed host (src/terminal.ts) shows `*.shiro.computer`
   subdomains specially. That is display, not behavior.
 

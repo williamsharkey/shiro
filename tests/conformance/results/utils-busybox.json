@@ -1,7 +1,7 @@
 {
  "suite": "busybox testsuite",
  "title": "Utilities: busybox testsuite",
- "note": "busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Shiro; only cases the host GNU tools pass are scored.",
+ "note": "busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in tabcomputer; only cases the host GNU tools pass are scored.",
  "files": {
   "awk": {
    "pass": 51,

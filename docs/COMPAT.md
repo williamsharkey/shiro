@@ -132,6 +132,27 @@ Shell and platform fixes these needed (all with tests in the same file):
   `require` resolves a package behind a symlink from its real directory.
 - Node: `child_process.spawn` with inherited stdio (`'inherit'`, `[0,1,2]`)
   writes the child's output to the parent's and has `stdout === null`.
+- Node: `fs.watch` (files, directories, `recursive`), `fs.watchFile` /
+  `unwatchFile` and `fs.promises.watch` work, on the filesystem's change
+  hook, so writes from any process reach them (the shell, other scripts,
+  kernel programs). They were inert, so nodemon, vite HMR, jest --watch and
+  chokidar never saw a change. Events follow Linux: a new file is `rename`
+  then `change`, a removal or either side of a rename is `rename`; a
+  persistent watcher keeps the script alive until `close()`/`unref()`. A
+  script's cached copy of a file follows other processes' writes (a
+  watcher's re-read got the contents from when the script started).
+  chokidar 3 reports add/change/unlink/addDir.
+- Node: a script's timers and intervals end with it. An interval left by a
+  script that called `process.exit()` kept firing in the page, and its
+  `setTimeout`s became the next script's timers, so that script never went
+  idle (10-minute hang).
+- Node: `node:assert` and `node:assert/strict` are complete: `match`,
+  `doesNotMatch`, `rejects`, `doesNotReject`, `ifError`, real deep equality
+  (prototypes, Map/Set, Date/RegExp, typed arrays, cycles, NaN, -0; it
+  compared JSON), `throws` checking classes, RegExps, validation functions
+  and objects (it accepted any throw), and `AssertionError` with `code`,
+  `actual`, `expected`, `operator`, `generatedMessage`. `util.isDeepStrictEqual`
+  uses the same comparison.
 - Node, for yarn: `fs.open` of a missing file to read is ENOENT (yarn took
   a tarball cache it never wrote for a hit and fetched nothing),
   `fs.copyFile` copies what the script sees, as bytes (copies out of its
@@ -499,12 +520,16 @@ no:cacheprovider"`.
 
 ## Claude Code native binary (unix/perf-kernel)
 
-Status (2026-10-09, unix/agent-clis, see "Agent CLIs" below): with Blink's
-SSE4.1/4.2 (patch 0040) the **musl build runs**: `--version` in 2.1 s and
-`-p` reaches the Anthropic API. The glibc build still crashes in Bun's
-startup. Before patch 0040 both died of SIGILL on `pinsrq`.
+Status (2026-10-09, see "Agent CLIs" below): with Blink's SSE4.1/4.2
+(patch 0040) the **musl build runs**: `--version` in 2.1 s and `-p` reaches
+the Anthropic API. The glibc build starts too since Blink patch 0044. Before
+patch 0040 both died of SIGILL on `pinsrq`.
 
-Experimental opt-in (plain `claude` still runs the pinned npm build):
+On the tabcomputer profile the native build is now the default
+(`shims.claude: native`): plain `claude`, `claude install` and
+`claude update` mean native, and `claude --npm` runs the pinned npm build.
+The shiro profile keeps npm as the default, with `--native` as the opt-in
+described here:
 
 - `claude install --native [VERSION]` (`src/commands/claude-native.ts`)
   downloads from inside the guest with the `curl` package (x86-64, its own
@@ -538,8 +563,8 @@ sha256-checked against `manifest.json`):
   `sched_getaffinity`, `posix_spawn*` (with `addchdir`), `mmap`/
   `mprotect`/`madvise` (JSC's JIT and its large virtual reservations).
 
-Where tabcomputer intercepts it today (so `claude` at the prompt never reaches a
-native binary):
+Where tabcomputer intercepted it before `--native` existed (kept as the
+investigation's record; the builtin now runs the native binary as above):
 
 - `src/commands/claude.ts`: the `claude` builtin runs the pinned npm build
   (`CLAUDE_CODE_VERSION`, pure JS) through tabcomputer's `node`, and answers
@@ -555,7 +580,7 @@ native binary):
   `CLAUDE_NATIVE=1` making the builtin exec the native binary when one is
   installed, and `CLAUDE_NATIVE=1` letting `install.sh` through.
 
-To try it (once allowed): put the binary and the five glibc libraries plus
+To try it by hand (before `claude install --native` did this): put the binary and the five glibc libraries plus
 the loader in the VFS (Blink loads the ELF interpreter from SHIROFS), then
 run `claude --version` and `claude -p "say hi"` with a dummy key, with and
 without `BUN_JSC_useJIT=0`.

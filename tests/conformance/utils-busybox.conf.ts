@@ -120,7 +120,7 @@ async function runScripts(): Promise<Record<string, AreaResult>> {
         return 0;
       }
       if (HANGS.includes(name)) {
-        record(name, false, { timeout: true, reason: 'skipped: hangs Shiro' });
+        record(name, false, { timeout: true, reason: 'skipped: hangs tabcomputer' });
         return 0;
       }
       await ctx.fs.writeFile(ctx.fs.resolvePath('input', ctx.cwd), echoNe(input ?? ''));
@@ -222,7 +222,7 @@ describe.skipIf(!existsSync(SUITE))('busybox testsuite (utilities)', () => {
     writeFileSync(join(RESULTS, name), JSON.stringify({
       suite: 'busybox testsuite',
       title: 'Utilities: busybox testsuite',
-      note: 'busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Shiro; only cases the host GNU tools pass are scored.',
+      note: 'busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in tabcomputer; only cases the host GNU tools pass are scored.',
       files: summary,
     }, null, 1) + '\n');
   });

@@ -136,7 +136,7 @@ describe.skipIf(!existsSync(SUITE))('wasi-testsuite (wasm32-wasip1) as Shiro WAS
     writeFileSync(join(RESULTS, outName), JSON.stringify({
       suite: 'wasi-testsuite',
       title: 'Syscalls: wasi-testsuite (wasm32-wasip1)',
-      note: 'WebAssembly/wasi-testsuite prebuilt wasip1 modules (C, Rust, AssemblyScript) run as Shiro WASI processes with their root directory preopened as "/", judged like the suite\'s own runner (exit code, stdout when given). Wasmtime passes all of them.',
+      note: 'WebAssembly/wasi-testsuite prebuilt wasip1 modules (C, Rust, AssemblyScript) run as tabcomputer WASI processes with their root directory preopened as "/", judged like the suite\'s own runner (exit code, stdout when given). Wasmtime passes all of them.',
       files,
     }, null, 1) + '\n');
   }, 1_800_000);

@@ -6,7 +6,8 @@
  */
 
 import type { AppContext } from './index';
-import { appIcon, GLYPHS } from './icons';
+import { GLYPHS } from './icons';
+import { appIconIn, paintPixelTiles } from './iconsets';
 
 type Kind = 'app' | 'recent' | 'command' | 'file' | 'dir' | 'run';
 interface Item { kind: Kind; title: string; detail: string; key: string; icon: string; run: () => void }
@@ -92,6 +93,7 @@ export function toggleSpotlight(ctx: AppContext): void {
   const { wm } = ctx;
   const panel = document.createElement('div');
   panel.className = 'sd-spot';
+  panel.dataset.iconset = ctx.iconSet();
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-label', 'Search');
   panel.innerHTML = `
@@ -121,7 +123,7 @@ export function toggleSpotlight(ctx: AppContext): void {
   const runInTerminal = (command: string) => () => { ctx.openTerminal({ command, cwd: HOME }); };
   const base: Item[] = wm.apps().map(a => ({
     kind: 'app' as Kind, title: a.name, detail: a.id, key: `${a.name} ${a.id}`,
-    icon: a.icon?.trim().startsWith('<') ? a.icon : appIcon(a.id), run: () => { void wm.openApp(a.id); },
+    icon: appIconIn(ctx.iconSet(), a.id, a.name, a.icon, 0, a.glyph), run: () => { void wm.openApp(a.id); },
   }));
   items = base;
 
@@ -165,6 +167,7 @@ export function toggleSpotlight(ctx: AppContext): void {
         <span class="sd-spot-detail">${esc(it.detail)}</span>
         <span class="sd-spot-kind">${KIND_LABEL[it.kind]}</span>
       </div>`).join('');
+    if (panel.dataset.iconset === 'pixel') paintPixelTiles(list, wm.theme(), (id) => wm.app(id)?.name ?? id);
     count.textContent = q ? `${ranked.length - 1} found` : '';
   };
 

@@ -65,6 +65,18 @@ async function runNative(ctx: Parameters<Command['exec']>[0], args: string[]): P
       + '(CLAUDE_NATIVE_PATH picks another path for the linux-x64-musl binary.)\n';
     return 1;
   }
+  // Sign in with the page's panel first: the binary's own flow opens a browser
+  // and waits for a localhost callback, which can't reach the emulator. Both
+  // builds read the credentials the panel writes (~/.claude/.credentials.json).
+  const wantsLogin = args[0] === 'login' || args[0] === '/login';
+  if (typeof window !== 'undefined' && ctx.terminal && (wantsLogin || (needsSession(args) && !(await hasClaudeCredentials(ctx.fs))))) {
+    const write = (s: string) => ctx.terminal!.writeOutput(s.replace(/\n/g, '\r\n'));
+    write('Sign in with the panel that just opened (or choose "Skip for now").\n');
+    const signedIn = await openClaudeSignIn({ fs: ctx.fs, cwd: ctx.cwd });
+    write(signedIn ? '\x1b[32mSigned in.\x1b[0m\n' : 'Sign-in skipped. Run `claude login` to sign in later.\n');
+    try { ctx.terminal?.term?.focus?.(); } catch { /* not an xterm */ }
+    if (wantsLogin) return signedIn ? 0 : 1;
+  }
   // Same settings cleanup as the npm build's start (e.g. drop the "mcp__*"
   // allow rule older Shiro seeded, which current Claude Code warns about)
   try {

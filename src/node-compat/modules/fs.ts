@@ -1,6 +1,7 @@
 import type { CommandContext } from '../../commands/index';
 import { decodeUtf8Strict } from '../preload';
 import { PAGE_SET_TIMEOUT } from '../page-globals';
+import { createWatchApi } from './fs-watch';
 
 export interface FsDeps {
   ctx: CommandContext;
@@ -13,6 +14,8 @@ export interface FsDeps {
   homeDir: string;
   /** Counts a promise as the script's async activity (an fs callback still to come) */
   trackAsync?: <T>(p: Promise<T>) => Promise<T>;
+  /** Registers cleanup for when the script ends (watchers) */
+  atExit?: (fn: () => void) => void;
 }
 
 /** Create a Node.js-style fs error with code, errno, syscall properties */
@@ -258,6 +261,25 @@ export function createFsModule(deps: FsDeps): any {
   // Writes to one path through fds land in order (openSync's truncate used to
   // finish after the first writeSync and empty the file: tsc's output)
   const writeState = writeStateFor(pendingPromises);
+  // Files other processes change: the text cache follows them (it was filled
+  // at start, so a watcher's re-read of a changed file got the old text).
+  // Not while this script's own writes are in flight: the cache is ahead then.
+  if (deps.atExit) {
+    const off = ctx.fs.onChange((event, path, newPath) => {
+      queueMicrotask(() => {
+        if (writeState.inflight.size) return;
+        for (const p of [path, newPath]) {
+          if (!p || !fileCache.has(p)) continue;
+          const now = ctx.fs.readCached(p);
+          if (now === undefined) { if (event === 'delete' || (event === 'rename' && p === path)) { fileCache.delete(p); fileMtimes.delete(p); } continue; }
+          if (now !== fileCache.get(p)) { fileCache.set(p, now); fileMtimes.set(p, Date.now()); }
+        }
+      });
+    });
+    deps.atExit(off);
+  }
+  let watchers: ReturnType<typeof createWatchApi> | undefined;
+  const watchApi = () => watchers ??= createWatchApi({ ctx, fileCache, getBuiltinModule, trackAsync: deps.trackAsync, atExit: deps.atExit });
   const fsDirCached = dirCachedChecker(deps);
   const writeChains = writeState.chains;
   const inflight = { push: writeState.push };
@@ -1207,25 +1229,9 @@ export function createFsModule(deps: FsDeps): any {
         .then((exists: boolean) => cb?.(exists))
         .catch(() => cb?.(false));
     },
-    watch: (filename: string, options?: any, listener?: Function) => {
-      // Return a stub FSWatcher
-      const watcher: any = {
-        close() {},
-        on(_event: string, _fn: Function) { return watcher; },
-        once(_event: string, _fn: Function) { return watcher; },
-        off(_event: string, _fn: Function) { return watcher; },
-        ref() { return watcher; },
-        unref() { return watcher; },
-      };
-      return watcher;
-    },
-    watchFile: (filename: string, options?: any, listener?: Function) => {
-      // No-op — real watching is not supported in browser environment
-      if (typeof options === 'function') listener = options;
-    },
-    unwatchFile: (filename: string, listener?: Function) => {
-      // No-op
-    },
+    watch: (filename: any, options?: any, listener?: Function) => watchApi().watch(filename, options, listener),
+    watchFile: (filename: any, options?: any, listener?: Function) => watchApi().watchFile(filename, options, listener),
+    unwatchFile: (filename: any, listener?: Function) => watchApi().unwatchFile(filename, listener),
     // Async promises API
     promises: {
       link: async (src: string, dst: string) => { fsShim.linkSync(src, dst); },
@@ -1668,7 +1674,7 @@ export function createFsPromisesModule(deps: FsDeps): any {
       handle[(Symbol as any).asyncDispose ?? Symbol.for('Symbol.asyncDispose')] = close;
       return handle;
     },
-    watch: async function*(_p: string, _opts?: any) { /* no-op async generator */ },
+    watch: (p: any, opts?: any) => createWatchApi({ ctx, fileCache, getBuiltinModule, trackAsync: deps.trackAsync, atExit: deps.atExit }).promisesWatch(p, opts),
     constants: { F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1, O_RDONLY: 0, O_WRONLY: 1, O_RDWR: 2, O_CREAT: 64, O_EXCL: 128, O_TRUNC: 512, O_APPEND: 1024, O_NONBLOCK: 2048, S_IFMT: 61440, S_IFREG: 32768, S_IFDIR: 16384, S_IFLNK: 40960 },
   };
 }

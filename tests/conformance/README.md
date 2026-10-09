@@ -112,7 +112,7 @@ a build and a browser); run it before updating the scoreboard.
   [WebAssembly/wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite)
   (Apache-2.0) at a pinned commit of its prebuilt `prod/testsuite-base`
   branch into `tests/conformance/.cache/wasi-testsuite`.
-- Every wasm32-wasip1 module (C, Rust, AssemblyScript) runs as a Shiro WASI
+- Every wasm32-wasip1 module (C, Rust, AssemblyScript) runs as a tabcomputer WASI
   process (`runWasiProgram` → a kernel process in a Node Worker, the path a
   cross-origin isolated page takes; without the Worker factory Node would get
   the legacy runtime) the way the suite's wasmtime adapter runs it: only the

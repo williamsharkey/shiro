@@ -85,3 +85,7 @@ export function activeProfile(): Profile {
 export function setActiveProfile(p: Profile | string | null): void {
   active = typeof p === 'string' ? PROFILES.find((x) => x.id === p) ?? null : p;
 }
+
+/** uname(2)'s release and version (and /proc/version's): Linux 6.1, named for the host */
+export const unameRelease = (hostname = activeProfile().hostname): string => `6.1.0-${hostname}`;
+export const UNAME_VERSION = '#1 SMP PREEMPT_DYNAMIC';
