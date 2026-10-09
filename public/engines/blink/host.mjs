@@ -686,6 +686,15 @@ async function run(msg) {
     M = await createBlink({
       // blink.wasm's content-hashed URL when the page has one (cached for good)
       ...(msg.wasmUrl ? { locateFile: (p, prefix) => (p.endsWith('.wasm') ? msg.wasmUrl : prefix + p) } : {}),
+      // The page's compiled blink.wasm: V8 keeps its optimized code while the
+      // page holds it, rather than dropping it whenever no Blink worker is
+      // left and compiling it again (Liftoff first) for the next process
+      ...(msg.wasmModule ? {
+        instantiateWasm: (imports, receive) => {
+          WebAssembly.instantiate(msg.wasmModule, imports).then((inst) => receive(inst, msg.wasmModule), (e) => fail(String(e), 134));
+          return {};
+        },
+      } : {}),
       shiroKernel: kernel,
       thisProgram: 'blink',
       noInitialRun: true,
