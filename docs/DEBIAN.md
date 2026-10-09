@@ -137,10 +137,6 @@ Debian's.
 - systemd's postinst (systemd-sysusers, pulled in by cron, udev, logrotate)
   fails with "Failed to backup /etc/group: Bad address": Blink's `sendfile`
   rejects a NULL offset (reported to unix/perf-blink).
-- `/etc/apt/apt.conf.d/91shiro-engine` sets `Dpkg::Use-Pty "false"`: in apt
-  runs, the child's `ioctl(TIOCSCTTY)` on its pty is sometimes refused with
-  EPERM. The same sequence (fork, close master, setsid, open slave,
-  TIOCSCTTY) works standalone, with and without a shared mapping.
 - `open(dir, O_TMPFILE)` fails (EISDIR); programs that try it fall back to a
   named temporary file.
 - One guest thread runs at a time (Blink's GIL); apt and dpkg are

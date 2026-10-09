@@ -8,7 +8,9 @@ export const id: Command = {
     const args = ctx.args;
     const { positional, flags } = parseArgs(args);
 
-    const user = positional[0] || ctx.env.USER || "user";
+    // `sudo` runs its command in a shell with uid 0 (Shell.uid)
+    const root = !positional[0] && ctx.shell?.uid === 0;
+    const user = positional[0] || (root ? "root" : ctx.env.USER || "user");
     const showUser = flags.u || flags.user;
     const showGroup = flags.g || flags.group;
     const showGroups = flags.G || flags.groups;
@@ -16,11 +18,11 @@ export const id: Command = {
     const showReal = flags.r || flags.real;
 
     // In browser environment, we use mock values
-    const uid = 1000;
-    const gid = 1000;
-    const groups = [1000];
+    const uid = root ? 0 : 1000;
+    const gid = root ? 0 : 1000;
+    const groups = [gid];
     const userName = user;
-    const groupName = "users";
+    const groupName = root ? "root" : "users";
 
     const output: string[] = [];
 
