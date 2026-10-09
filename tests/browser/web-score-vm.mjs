@@ -99,7 +99,7 @@ for (const app of APPS) {
       last = await shotOf(app);
       const t = (last?.title || '').trim();
       // Both set the window title to the page's once it is parsed (NetSurf: "Title", Dillo: "Dillo: Title")
-      if (t && !/^(netsurf|dillo)$/i.test(t) && !/^about:blank|loading|^dillo:?\s*$/i.test(t)) { loaded = Date.now() - t1; break; }
+      if (t && !/^(netsurf|dillo)$/i.test(t) && !/^about:blank|loading|error occurred|^dillo:?\s*$/i.test(t)) { loaded = Date.now() - t1; break; }
       if (Date.now() - t1 > LIMIT) break;
       await page.waitForTimeout(500);
     }
