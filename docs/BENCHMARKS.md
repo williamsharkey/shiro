@@ -550,6 +550,31 @@ medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
 ≈10 proc/s for its last 11 samples and did not recur in two more; worth
 watching if it shows up on other branches.
 
+### unix/perf-blink 6 — content-hashed engine wasm
+
+`vite-plugin-engines.ts` writes a content-hashed copy of each engine's
+wasm (`engines/blink/blink.<sha12>.wasm`) and `engines/manifest.json`;
+the page resolves blink.wasm through the manifest (host.mjs passes it to
+emscripten's `locateFile`) and server.mjs serves the hashed names with
+`cache-control: public, max-age=31536000, immutable`, so a returning page
+skips revalidation and a new build is a new URL. The plain names stay.
+
+`node bench/ab.mjs <base> <new> --suites x86first --gh` (isolated, 3
+rounds): no measurable change locally (localhost revalidation is nearly
+free). gh visit 1 second run -5.2% (p=0.10), everything else "same":
+
+| metric (isolated) | base | new | shift | verdict |
+|---|---:|---:|---:|---|
+| x86first.gh.visit1.first | 4495 ms | 4384 ms | -2.5% | same |
+| x86first.gh.visit1.second | 4493 ms | 4387 ms | -5.2% | improved (p=0.10) |
+| x86first.gh.visit2.first | 4256 ms | 4447 ms | +4.5% | same |
+| x86first.vim.visit1.first | 2789 ms | 2638 ms | -5.3% | same |
+| x86first.vim.visit2.first | 2787 ms | 2904 ms | +2.2% | same |
+
+Note: on this machine and build gh's first and second runs on a first
+visit are now equal (~4.4 s; the earlier 5.4 s vs 2.2 s gap is gone), so
+there is little first-run penalty left for a JIT-module code cache to win.
+
 ### unix/perf-blink 5 — threads end before the worker is terminated
 
 After a guest exited, Chromium took ~2 s to terminate its worker

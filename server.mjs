@@ -425,8 +425,10 @@ async function handleStatic(req, res) {
       const override = new URL(req.url, 'http://localhost').searchParams.get('profile');
       data = Buffer.from(brandAppShell(data.toString('utf8'), req.headers['host'], profileFor(req.headers['host'], override)?.brand));
     }
-    // The streamed Debian rootfs's chunks are content-addressed (named by sha256)
-    const immutable = pathname.startsWith('/debian/chunks/') ? { 'cache-control': 'public, max-age=31536000, immutable' } : {};
+    // The streamed Debian rootfs's chunks are content-addressed (named by sha256),
+    // and so are the engines' hashed wasm copies (vite-plugin-engines.ts)
+    const immutable = pathname.startsWith('/debian/chunks/') || /^\/engines\/.*\.[0-9a-f]{12}\.wasm$/.test(pathname)
+      ? { 'cache-control': 'public, max-age=31536000, immutable' } : {};
     res.writeHead(200, { 'content-type': MIME[ext] || 'application/octet-stream', ...staticHeaders, ...isolation, ...immutable });
     res.end(data);
   } catch {
