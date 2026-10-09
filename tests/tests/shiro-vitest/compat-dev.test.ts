@@ -178,6 +178,12 @@ describe('shell constructs real scripts use (venv activate, build scripts)', () 
     expect(r.err).toBe('');
   });
 
+  it('/bin/sh and /bin/bash by path take options as sh does (Claude Code runs `$SHELL -c -l CMD`)', async () => {
+    const r = await sh(shell, `/bin/sh -c -l 'echo hi'; /bin/bash -c -l 'echo "$0 $1"' name one; /bin/sh -lc 'echo lc'; /bin/bash -c -e 'false; echo not reached'; echo "e=$?"; /bin/sh -c 'echo "$-"' | grep -c c`);
+    expect(r.err).toBe('');
+    expect(r.out).toBe('hi\nname one\nlc\ne=1\n1\n');
+  });
+
   it('${1:-default} and [ ! a = b ] inside if', async () => {
     const r = await sh(shell, 'f() { echo "${1:-none}"; if [ ! "${1:-}" = "x" ]; then echo notx; fi; }; f; f x');
     expect(r.out).toBe('none\nnotx\nx\n');

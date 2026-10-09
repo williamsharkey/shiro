@@ -106,6 +106,8 @@ export async function startShiroServer({ staticDir, isolated = true, tcpPorts = 
     // Debian package mirror (suites/debian.mjs): served from a disk cache after the first run
     TABCOMPUTER_DEBIAN_CACHE: process.env.TABCOMPUTER_DEBIAN_CACHE || join(ROOT, '.debian-build', 'mirror-cache'),
     TABCOMPUTER_DEBIAN_INDEX_TTL: process.env.TABCOMPUTER_DEBIAN_INDEX_TTL || String(30 * 24 * 3600),
+    // Toolchain layers (suites/toolchains.mjs): scripts/debian/build-layers.sh's output
+    TABCOMPUTER_DEBIAN_LAYERS: process.env.TABCOMPUTER_DEBIAN_LAYERS || join(ROOT, '.toolchain-build', 'layers'),
   };
   const child = spawn(process.execPath, [join(ROOT, 'server.mjs')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   const lines = [];

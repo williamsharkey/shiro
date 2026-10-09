@@ -21,12 +21,13 @@ import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
   RegularFile, DirFile, abortableWait, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
-  shareInodeNumber, forgetInodeNumber, renameLinkName, linkCount,
+  shareInodeNumber, forgetInodeNumber, renameLinkName, linkCount, writeBackAll,
 } from './fd';
 import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
 import type { PtyFile } from './pty';
 import { LockTable, F_RDLCK, F_WRLCK, F_UNLCK } from './locks';
 import { Process } from './process';
+import { SysvShm } from './sysvshm';
 import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending } from './signalfd';
 import { EventFile, TimerFile } from './fd';
@@ -183,15 +184,21 @@ export class Kernel {
   /** The last pid handed out (/proc/stat, /proc/loadavg). */
   lastPid = 0;
   readonly procfs = new ProcFs(this);
+  /** System V shared memory segments (the engine maps them). */
+  readonly shm = new SysvShm();
   /** fcntl record locks (F_SETLK, F_OFD_SETLK) */
   readonly locks = new LockTable();
   private detachTable?: () => void;
   /** How long an unreaped child of init stays a zombie before it is reaped automatically. */
   initReapDelayMs = 30_000;
+  private detachWriteBack?: () => void;
 
   constructor(opts: { fs?: FileSystem; shell?: Shell; allocPid?: () => number; registerWithProcessTable?: boolean } = {}) {
     this.fs = opts.fs ?? opts.shell?.fs;
     this.shell = opts.shell;
+    // Open files' buffered writes reach storage when the page goes away
+    const wfs = this.fs;
+    if (wfs?.addWriteBackHook) this.detachWriteBack = wfs.addWriteBackHook(() => writeBackAll(wfs));
     const alloc = opts.allocPid ?? (() => processTable.allocatePid());
     this.allocPid = () => (this.lastPid = alloc());
     this.init = new Process({
@@ -238,6 +245,8 @@ export class Kernel {
   /** Stop listing this kernel's processes in the page process table (tests). */
   dispose(): void {
     this.detachTable?.();
+    this.detachWriteBack?.();
+    this.detachWriteBack = undefined;
     this.detachTable = undefined;
   }
 
@@ -558,6 +567,7 @@ export class Kernel {
     if (proc.pid === 1 || !proc.beginExit()) return;
     await proc.fds.closeAll();
     this.locks.release(proc.pid);
+    this.shm.detachAll(proc);
     for (const child of this.procs.values()) {
       if (child.ppid === proc.pid) {
         child.ppid = 1;
@@ -1288,6 +1298,8 @@ export class Kernel {
     // Its fds are the process's (KernelStdio, adoptFds), not whatever exec did in the page's shell
     shell.userFds = new Map();
     shell.fileDescriptors = new Map();
+    // A new process: only the page shell's `export -f` functions come along
+    shell.dropUnexportedFunctions();
     proc.onTerminate(() => shell.abortController?.abort());
     return shell;
   }
@@ -1602,6 +1614,10 @@ export class Kernel {
         }
         case A.SYS_geteuid: return proc.uid;
         case A.SYS_getegid: return proc.gid;
+        case A.SYS_shmget: return this.shm.shmget(proc, args[0], (args[1] >>> 0) + (args[2] >>> 0) * 0x100000000, args[3]);
+        case A.SYS_shmctl: return this.shm.shmctl(proc, args[0], args[1], data);
+        case A.SYS_shiro_shmat: return this.shm.attach(proc, args[0], args[1], data);
+        case A.SYS_shiro_shmdt: return this.shm.detach(proc, args[0]);
         case A.SYS_setuid: case A.SYS_setgid: case A.SYS_setreuid: case A.SYS_setregid:
         case A.SYS_setresuid: case A.SYS_setresgid: case A.SYS_getresuid: case A.SYS_getresgid:
         case A.SYS_getgroups: case A.SYS_setgroups: case A.SYS_setfsuid: case A.SYS_setfsgid:
@@ -2403,6 +2419,7 @@ export class Kernel {
     child.uid = parent.uid;
     child.gid = parent.gid;
     copyCredentials(parent, child);
+    this.shm.forked(parent, child);
     child.data.embryo = true;
     child.data.forkParent = parent.pid; // startForkChild: the parent may have exited (and the child been reparented) by then
     this.procs.set(pid, child);
@@ -2477,6 +2494,7 @@ export class Kernel {
     if ((embryo || !inproc) && !runner) return -A.ENOEXEC;
     // The point of no return: exec bookkeeping, as Linux does it
     await proc.fds.closeOnExec();
+    this.shm.detachAll(proc); // exec drops SysV shm attachments
     proc.path = path;
     proc.argv = argv;
     proc.env = env;
@@ -2656,7 +2674,8 @@ function setCredentials(proc: Process, nr: number, args: ArrayLike<number>, data
       const n = args[0] | 0;
       if (n < 0 || n > 65536) return -A.EINVAL;
       if (data.length < n * 4) return -A.EFAULT;
-      proc.groups = Array.from({ length: n }, (_, i) => dv.getUint32(i * 4, true));
+      // Linux keeps them sorted (getgroups lists them in order)
+      proc.groups = Array.from({ length: n }, (_, i) => dv.getUint32(i * 4, true)).sort((a, b) => a - b);
       return 0;
     }
     // setfsuid/setfsgid: the filesystem id is the effective id here; the call returns the old one

@@ -30,6 +30,8 @@ const SHELL_BUILTINS = new Set([
 
 export interface KernelProgram {
   argv: string[];
+  /** The program's path when argv[0] isn't it (`exec -a NAME prog`) */
+  path?: string;
   run: Runner;
   /** A Shiro builtin run through kernel.runBuiltin (not a WASM/x86 program) */
   builtin?: boolean;
@@ -257,7 +259,7 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
     if (i === programs.length - 1) out = lastOut;
     else [nextInput, out] = createPipe();
     const spawn = {
-      path: p.argv[0], argv: p.argv, env: p.env ? { ...p.env, ...env } : env, cwd: opts.cwd,
+      path: p.path ?? p.argv[0], argv: p.argv, env: p.env ? { ...p.env, ...env } : env, cwd: opts.cwd,
       fds: { ...extra, 0: input, 1: out, 2: errOut }, run: p.run,
       // children of a hosted shell stay in its process group, under it
       pgid: host && !shell.options.has('monitor') ? undefined : procs.length ? procs[0].pgid : 0,

@@ -210,12 +210,12 @@ export interface VirtualFSProvider {
 /** /dev virtual provider */
 class DevProvider implements VirtualFSProvider {
   handles(path: string): boolean {
-    return path === '/dev/null' || path === '/dev/zero' || path === '/dev/random' || path === '/dev/urandom' || path === '/dev' || path === '/dev/stdin' || path === '/dev/stdout' || path === '/dev/stderr' || path === '/dev/fd';
+    return path === '/dev/null' || path === '/dev/zero' || path === '/dev/full' || path === '/dev/random' || path === '/dev/urandom' || path === '/dev' || path === '/dev/stdin' || path === '/dev/stdout' || path === '/dev/stderr' || path === '/dev/fd';
   }
   readFile(path: string, encoding?: 'utf8'): string | Uint8Array | null {
     if (path === '/dev/null') return encoding === 'utf8' ? '' : new Uint8Array(0);
     // A page of zeros / random bytes; as text, byte-exact (src/utils/byte-text.ts)
-    if (path === '/dev/zero') return encoding === 'utf8' ? '\0'.repeat(4096) : new Uint8Array(4096);
+    if (path === '/dev/zero' || path === '/dev/full') return encoding === 'utf8' ? '\0'.repeat(4096) : new Uint8Array(4096);
     if (path === '/dev/random' || path === '/dev/urandom') {
       const buf = new Uint8Array(256);
       crypto.getRandomValues(buf);
@@ -230,12 +230,15 @@ class DevProvider implements VirtualFSProvider {
     return null;
   }
   readdir(path: string): string[] | null {
-    if (path === '/dev') return ['null', 'zero', 'random', 'urandom', 'stdin', 'stdout', 'stderr', 'fd'];
+    // shm: a real directory (shm_open's files), the rest synthetic
+    if (path === '/dev') return ['null', 'zero', 'full', 'random', 'urandom', 'stdin', 'stdout', 'stderr', 'fd', 'shm'];
     return null;
   }
   exists(path: string): boolean { return this.handles(path); }
   writeFile(path: string): boolean {
     if (path === '/dev/null') return true; // silently discard
+    // /dev/full: every write fails (`echo hi >/dev/full` exits 1, as on Linux)
+    if (path === '/dev/full') throw fsError('ENOSPC', "ENOSPC: no space left on device, write '/dev/full'");
     return this.handles(path); // other dev files: accept but discard
   }
 }
@@ -588,10 +591,11 @@ export class FileSystem {
     }
 
     // Ensure basic directories exist
-    for (const dir of ['/home', '/tmp', '/home/user', '/etc', '/var', '/var/log']) {
+    for (const dir of ['/home', '/tmp', '/home/user', '/etc', '/var', '/var/log', '/dev', '/dev/shm']) {
       const existing = await this._get(dir);
       if (!existing) {
-        await this._put(this._makeNode(dir, 'dir'));
+        // /dev/shm is a tmpfs on Linux: anyone may create files there (shm_open), sticky
+        await this._put({ ...this._makeNode(dir, 'dir'), ...(dir === '/dev/shm' ? { mode: 0o1777 } : {}) });
       }
     }
     // The account database Unix programs look themselves up in (getpwuid:
@@ -658,6 +662,34 @@ export class FileSystem {
   private _opening: Promise<IDBDatabase> | null = null;
   private _lifecycleInstalled = false;
 
+  private _dirtyBytes = 0;
+  private _inflightBytes = 0;
+  /** Bytes of file content written but not yet committed to IndexedDB (writers slow down past a backlog). */
+  get pendingBytes(): number { return this._dirtyBytes + this._inflightBytes; }
+
+  private _writeBackHooks: Set<() => Promise<void> | void> = new Set();
+
+  /** Register data held outside the FileSystem (the kernel's open files) to write back before a flushAll. */
+  addWriteBackHook(fn: () => Promise<void> | void): () => void {
+    this._writeBackHooks.add(fn);
+    return () => { this._writeBackHooks.delete(fn); };
+  }
+
+  /**
+   * Everything written so far, to IndexedDB: open files' buffers (write-back
+   * hooks), then a strict commit. For the page going away (hidden, pagehide,
+   * freeze) and before a reload; `timeoutMs` bounds the wait.
+   */
+  async flushAll(timeoutMs = 5000): Promise<void> {
+    const work = (async () => {
+      await Promise.all([...this._writeBackHooks].map(async (fn) => { try { await fn(); } catch { /* reported by close/fsync */ } }));
+      if (this.pendingWrites > 0) await this.sync();
+    })();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const limit = new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); });
+    try { await Promise.race([work, limit]); } finally { clearTimeout(timer); }
+  }
+
   /** Writes made but not yet committed to IndexedDB. */
   get pendingWrites(): number { return this._dirty.size + (this._inflight?.size ?? 0); }
 
@@ -667,7 +699,8 @@ export class FileSystem {
     if (this._lifecycleInstalled || typeof window === 'undefined' || typeof document === 'undefined') return;
     if (typeof window.addEventListener !== 'function' || typeof document.addEventListener !== 'function') return;
     this._lifecycleInstalled = true;
-    const flush = () => { if (this.pendingWrites > 0) void this.sync().catch(() => {}); };
+    // Data still in the kernel's open-file buffers first (write-back hooks), then commit
+    const flush = () => { void this.flushAll().catch(() => {}); };
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
     window.addEventListener('pagehide', flush);
     document.addEventListener('freeze', flush);
@@ -738,6 +771,7 @@ export class FileSystem {
 
   /** Queue a put (node) or delete (null) for the next flush. */
   private _queue(path: string, node: FSNode | null): void {
+    this._dirtyBytes += (node?.content?.byteLength ?? 0) - (this._dirty.get(path)?.content?.byteLength ?? 0);
     this._dirty.set(path, node);
     if (this._full) {
       // Retry the failed batch once a burst of deletes has freed something,
@@ -763,6 +797,8 @@ export class FileSystem {
         const batch = this._dirty;
         this._dirty = new Map();
         this._inflight = batch;
+        this._inflightBytes = this._dirtyBytes;
+        this._dirtyBytes = 0;
         try {
           await this._commit(batch, durability);
           this._setFull(false);
@@ -772,6 +808,8 @@ export class FileSystem {
             // stop: the next flush is a retry, after the user frees space
             for (const [p, n] of this._dirty) batch.set(p, n);
             this._dirty = batch;
+            this._dirtyBytes = 0;
+            for (const n of batch.values()) this._dirtyBytes += n?.content?.byteLength ?? 0;
             if (!this._full) console.error('[fs] browser storage is full; writes fail with ENOSPC until space is freed:', e);
             this._setFull(true);
             break;
@@ -782,6 +820,7 @@ export class FileSystem {
           if (!this._flushError) this._flushError = e;
         } finally {
           this._inflight = null;
+          this._inflightBytes = 0;
         }
       }
     };

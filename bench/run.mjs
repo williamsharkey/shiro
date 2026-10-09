@@ -21,7 +21,7 @@ const BENCH = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(BENCH, '..');
 const ALL_SUITES = ['boot', 'shell', 'kernel', 'wasm', 'x86', 'net', 'node', 'hygiene', 'workloads'];
 // Only when asked for (--suites debian): apt runs take minutes
-const OPTIONAL_SUITES = ['debian', 'x86first', 'workloads-slow'];
+const OPTIONAL_SUITES = ['debian', 'x86first', 'workloads-slow', 'toolchains'];
 const NONISOLATED_SUITES = ['boot', 'shell', 'kernel', 'wasm', 'x86', 'hygiene'];
 // --quick: everything isolated, plus the kernel fallback paths (JSPI) not isolated
 const QUICK_NONISOLATED_SUITES = ['kernel'];

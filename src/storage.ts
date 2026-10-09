@@ -16,6 +16,20 @@ export interface StorageInfo {
 
 let requested: Promise<boolean> | null = null;
 
+/** The page's filesystem (main.ts), for flushStorage. */
+let activeFs: { flushAll(timeoutMs?: number): Promise<void> } | null = null;
+export function setActiveFileSystem(fs: typeof activeFs): void { activeFs = fs; }
+
+/** Commit everything written (open files too) before the page reloads or navigates away; bounded. */
+export async function flushStorage(timeoutMs = 5000): Promise<void> {
+  await activeFs?.flushAll(timeoutMs).catch(() => {});
+}
+
+/** location.reload() after flushStorage (Restart, switching the UI). */
+export function reloadAfterFlush(go: () => void = () => location.reload()): void {
+  void flushStorage().then(go, go);
+}
+
 /** Ask once per page load for persistent storage; resolves to whether it is granted. */
 export function requestPersistentStorage(reason: string): Promise<boolean> {
   if (!requested) {
