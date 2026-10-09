@@ -79,6 +79,13 @@ Debian's apt and dpkg run unmodified. What Shiro provides around them:
   apt still verifies InRelease with sqv and every index and .deb hash, so the
   mirror is untrusted. `Acquire::Shiro::Mirror` (apt.conf) or
   `$SHIRO_DEBIAN_MIRROR` point it elsewhere.
+- **Index decompression.** apt's `store` method (it turns each downloaded
+  `Packages.xz` into `Packages` and hashes it) is diverted the same way to
+  `#!/usr/bin/shiro-apt-store` (`src/debian/apt-store.ts`): the xz/gz/bz2/
+  zstd codecs and hashes run in the page. Under the x86 engine the original
+  spent ~33 s of a ~72 s `apt-get update` decoding trixie's 56 MB index.
+  apt checks the result's hashes against the signed Release file as before;
+  `shiro-alternatives --set /usr/lib/apt/methods/store debian` restores it.
 
 ### Package mirror: what the operator hosts
 
