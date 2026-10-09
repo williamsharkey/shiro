@@ -58,23 +58,32 @@ node bench/ab.mjs origin/unix/integration --quick          # integration vs your
   metric definitions are identical. Each round runs base and new back to
   back, alternating which goes first; `--runs` samples per metric per round
   (single-sample metrics such as `wasm.tree_create` get one per round).
-- Per metric it pools the samples of all rounds and reports both medians,
-  the Hodges–Lehmann shift (median of pairwise differences) as a percent of
-  the base median with `+` meaning worse, a two-sided Mann–Whitney U p-value
-  (exact for small samples without ties, normal approximation otherwise),
-  and each round's direction (`+-+`).
-- A metric is **regressed**/**improved** only when p < `--alpha` (0.01), the
-  shift is at least `--min-effect` percent (3), and every round moved the
-  same way. Significant but split rounds print as **inconsistent**;
-  everything else is **same** (`AB_ALL=1` lists those too). Metrics whose
+- Per metric it reports both medians (all rounds pooled), the
+  Hodges–Lehmann shift (median of pairwise differences) as a percent of the
+  base median with `+` meaning worse, a `1 − alpha` confidence interval of
+  the median shift from a **hierarchical bootstrap** (resample rounds, then
+  samples within each chosen round; seeded, so reruns print the same
+  interval), each round's direction (`+-+`), and a pooled Mann–Whitney p for
+  reference.
+- A metric is **regressed**/**improved** only when the bootstrap interval
+  excludes 0, the shift is at least `--min-effect` percent (3), and every
+  round moved the same way. Significant but split rounds print as
+  **inconsistent**; everything else is **same** (`AB_ALL=1` lists those
+  too). The pooled p is not used for the decision: samples within one run
+  share a page and the machine's state at that moment, so pooling them
+  overstates significance (with it, two 3-round runs of the same pair flagged
+  different metrics at p < 0.01). Metrics whose
   samples are all identical on each side (request counts, decoded bytes,
   DOM nodes) are compared exactly: a difference of at least `--min-effect`
   percent is regressed/improved, a smaller one is reported as **changed**.
 - Exit status 1 when anything regressed. The summary goes to
   `bench/.cache/ab/runs/<time>/ab.json` (or `--out`), next to every raw
   per-round result file.
-- A 3-sample metric per side can't reach p < 0.01 (exact minimum 0.1), so
-  use `--rounds 5` or more for one-sample-per-run metrics.
+- Use `--rounds 5` or more: with 3 rounds "every round agrees" happens by
+  chance one time in four, and the bootstrap has few rounds to resample.
+  Shifts under ~10% on the shell/WASM startup metrics are below what the
+  browser runs can resolve; a Node microbenchmark of the code path (vitest
+  with `createTestShell`) is the sharper tool there.
 
 ## How it works
 
