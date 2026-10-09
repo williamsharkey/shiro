@@ -25,7 +25,7 @@ is the second.
 | **neovim** 0.12.5 | `pkg install neovim` | <2 s | 7.3 s / 5.1 s | ✅ | Lua 5.1 runtime, `:help` |
 | **nano** 9.2 | `pkg install nano` | <1 s | 1.0 s | ✅ `^O ^X` | fastest start; the right default for beginners |
 | **emacs** 31.1 (`-nw`) | `pkg install emacs` (26 MB) | ~3 s | 9.0 s / 9.0 s | ✅ `C-x C-s C-x C-c` | python-mode on open; no GUI, TLS or images |
-| **micro** 2.0.14 | `apt install micro` (Debian mode) | ~2 min | see below | see below | |
+| **micro** 2.0.14 | `apt install micro` (Debian mode) | ~2 min | not verified | not verified | first try: the screen never showed micro; the shell got stray characters (see "typeahead"). Retries were blocked by the classic-terminal regression below |
 | **kakoune** 2024.05 | `apt install kakoune` | ~2 min | ~20 s (screenshot at 20 s) | ✅ `i…<Esc>:wq` | works. Keys typed before it started landed in its buffer: see "typeahead" below |
 | **helix** | not in Debian trixie; the static GitHub release could not be fetched from this harness (see "Network" below) | — | — | — | untested |
 
@@ -46,8 +46,8 @@ minutes (download plus dpkg plus triggers, under emulation).
 |---|---|---|
 | git 2.56 (real) | `pkg install git` | ✅ clone over the relay, commit, branch, worktree, merge: see [AGENT-EXPERIMENTS.md](AGENT-EXPERIMENTS.md) |
 | tabcomputer's builtin git (isomorphic-git, "2.47.0 (isomorphic-git/shiro)") | default | ⚠️ enough for clone, commit and push, but it has no `rev-parse`, so **every git UI fails on it**: lazygit died with "git: 'rev-parse' is not a git command", tig said "Not a git repository". In Debian mode `git` is still the builtin until `apt install git` or `pkg install git` |
-| tig 2.5.8 | `apt install tig` | pending, with real git |
-| lazygit 0.50 | `apt install lazygit` (Debian trixie has it) | pending, with real git |
+| tig 2.5.8 | `apt install tig` | installs; on the builtin git it says "Not a git repository". With real git: not verified (blocked by the terminal regression below) |
+| lazygit 0.50 | `apt install lazygit` (Debian trixie has it) | installs and starts (Go, in Blink); on the builtin git it dies with "git: 'rev-parse' is not a git command". With real git: not verified (terminal regression) |
 | gitui | not in Debian trixie; GitHub release untestable here | — |
 | git-gui, gitk (Tk) | `apt install git-gui gitk` | available in trixie; not run |
 
@@ -88,6 +88,13 @@ tabcomputer's node loads N-API addons (or the addons get wasm builds).
 
 ### Things that hurt usability (verified)
 
+- **Classic terminal regression (reported, routed to desktop).** On
+  2026-10-09 around 19:00 UTC, `https://tabcomputer.com/?ui=terminal` at
+  1100×700 rendered `#terminal` 33 px wide (3 columns), shrinking to 25 px
+  (2 columns) by 8 s. This blocked the remaining full-screen TUI checks
+  (micro, tig and lazygit with real git). The desktop Terminal window was
+  fine (98×21).
+
 - **Typeahead is lost or misrouted.** Keys typed while a Debian program was
   starting were partly eaten: after `clear` (Debian's, in Blink), typing
   `micro t.py⏎` reached the shell as `y`, and stray letters showed up in the
@@ -99,7 +106,7 @@ tabcomputer's node loads N-API addons (or the addons get wasm builds).
   install git`)" for subcommands it lacks, instead of git's own "not a git
   command", which reads as a broken repository. Also check whether Debian
   git installed as a dependency really takes over `/usr/bin/git` from the
-  builtin (pending in the rerun).
+  builtin (not checked: the rerun was blocked by the terminal regression).
 - **First apt install is slow**: `apt-get update` takes 50–90 s, and a
   medium package 2–7 min. For the dock, prefer `pkg` builds (seconds) where
   they exist.
@@ -126,7 +133,7 @@ the same mechanism:
 | Code (CodeMirror window) | builtin `code .` | instant | the "GUI editor" that is always there |
 | Geany | `debian install && sudo apt install -y geany`, then `geany &` | minutes to install, 30 s to its window | the real GUI IDE (build/run commands, symbols) |
 | tmux | `pkg install tmux` | seconds | |
-| Git UI | `pkg install git && sudo apt install -y lazygit` (needs Debian mode; real git first) | pending | status/stage/commit/log for humans; see AGENT-EXPERIMENTS.md "better UX" |
+| Git UI | `pkg install git && sudo apt install -y lazygit` (needs Debian mode; real git first) | ~2 min install; not yet verified with real git | status/stage/commit/log for humans; see AGENT-EXPERIMENTS.md "better UX". Verify before shipping |
 
 Show **nano, Vim, Code and Git UI** loose; stack the rest. Keep micro and
 kakoune out until the typeahead issue is fixed and their starts are

@@ -129,8 +129,18 @@ headless Chromium, with 4–5 other tabcomputer pages running on the same
 | Fortran (`gfortran`) | 392 s | 12.6 s | `sum= 5050` |
 | COBOL (`gnucobol4`) | 103 s | 26.7 s | `HELLO FROM COBOL` |
 | Pascal (`fp-compiler`) | 150 s | 12.3 s (fpc reports 10.5 s) | `hello from pascal` |
+| Ada (`gnat`) | 445 s | 59 s | `hello from ada` |
+| Prolog (`swi-prolog-core`) | 129 s | 7.4 s | `grandchild: ann` |
+| Common Lisp (`sbcl`) | 103 s | 1.9 s | `lisp: 5050` |
+| x86-64 asm (`nasm` + `ld`) | 79 s | 5.6 s | `hello from nasm` |
+| OCaml (`ocaml-nox`, `ocamlopt`) | 393 s | 15.8 s | `hello from ocaml` |
+| Haskell (`ghc`) | 584 s | 47 s (`ghc -e` 10 s) | `5050`, since perf-blink patch 0061 |
+| R (`r-base-core`) | 10 min | 18 s (`Rscript` with `lm()`) | coefficients printed |
 
-Other languages in the batch: see [OPPORTUNITIES.md](OPPORTUNITIES.md), "Verified in tabcomputer".
+Every language an agent is likely to be asked for, except Java, runs. The
+cost is the first `apt-get install` (2–10 min each). So for agent use, the
+platform should snapshot a "toolchains" image rather than installing per
+session.
 
 ## Would an agent use "GitHub repos mounted as a desktop smart folder"?
 

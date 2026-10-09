@@ -52,7 +52,7 @@ it as open source or giving schools a clear free licence.
 | Val Town | public by default | cloud (Deno) | HTTP handlers | SQLite | no | no | no | not a general Linux |
 | E2B / Daytona / Modal / Vercel / Cloudflare sandboxes | credits; E2B Pro $150/mo floor | cloud microVMs | yes | yes | yes | no | E2B infra Apache-2.0; Daytona archived | per-second billing, cold starts, all cloud |
 | WebVM (CheerpX) | individuals | browser (x86 JIT) | yes | possible | 32-bit x86 Debian | after load | engine proprietary; orgs incl. academia need a licence ([cheerpx.io](https://cheerpx.io/docs/licensing), re-checked) | "sluggish", networking only via Tailscale |
-| **tabcomputer** | free, no account | browser | **yes: Node (fast shim) and Python (Debian), verified** | Redis from apt works (with `--maxclients 1000`); Postgres blocked on signalfd (§6) | **yes: x86-64 Debian 13, gcc, rust, go** | **yes: files stay in the browser** | (to decide) | emulation is slow for heavy CPU; no inbound ports; outbound needs the relay |
+| **tabcomputer** | free, no account | browser | **yes: Node (fast shim) and Python (Debian), verified** | Redis from apt works; PostgreSQL installs, but cluster creation still fails (§6) | **yes: x86-64 Debian 13, gcc, rust, go** | **yes: files stay in the browser** | (to decide) | emulation is slow for heavy CPU; no inbound ports; outbound needs the relay |
 
 ## 3. Pain points, with what solves them today
 
@@ -88,8 +88,8 @@ it as open source or giving schools a clear free licence.
 2. **Any language's backend**, not only Node: Python (Debian), PHP
    (`pkg install php` / `apt install php-cli`), Ruby, Go (wasip1) and
    Rust (cargo). All are in COMPAT.md.
-3. **Real databases from apt.** Redis works today with one flag;
-   PostgreSQL waits on signalfd (§6).
+3. **Real databases from apt.** Redis works today; PostgreSQL is one
+   fix away (§6).
 4. **Native addons and real binaries.** These are what fail on
    WebContainers. They work here, slowly.
 5. **Outbound TCP without a VPN signup**, through the relay.
@@ -169,10 +169,10 @@ overridden, so they go to the real `localhost` of the user's machine.
 
 | Server | Result (verified) |
 |---|---|
-| **Redis 8.0.2** (`sudo apt install redis-server`, 131 s) | ✅ **with `--maxclients 1000`**: `redis-server --bind 127.0.0.1 --maxclients 1000 &`, then `redis-cli ping` PONG (1.2 s), SET/GET/INCR correct. Without it Redis aborts ("Guru Meditation: aeApiPoll: epoll_wait, Invalid argument"): Blink rejects `epoll_wait` maxevents > 4096 (patch 0011), and Redis asks for maxclients+128. `redis-benchmark` crashes the same way. Before the argv[0] fix, `redis-server` ran as `redis-check-rdb`; the default `bind * -::*` also fails (IPv6 wildcard after IPv4 is EADDRINUSE), hence `--bind 127.0.0.1` |
-| **PostgreSQL 17** (`sudo apt install postgresql`, 12 min) | ❌ **blocked**. `initdb` (run as the normal user) fails in bootstrap with "FATAL: signalfd() failed", as does `postgres`. The package's own cluster creation also fails earlier: "su: cannot open session: Permission denied", "Could not change user id". Until signalfd exists, use the builtin `psql` (PGlite, `src/commands/postgres.ts`) for Postgres lessons |
+| **Redis 8.0.2** (`sudo apt install redis-server`, 131 s) | ✅ on build 8f6b521: `redis-server &` with no flags, then `redis-cli ping` PONG (1.1 s), SET/GET correct, and `redis-benchmark -q -n 1000` runs the whole suite (~550 MSET/s). Fixed along the way: argv[0] through symlinks (redis-server ran as redis-check-rdb) and Blink's epoll_wait cap (Redis crashed at start; until the fix, `--maxclients 1000` worked around it) |
+| **PostgreSQL 17** (`sudo apt install postgresql`, 18 min) | ⚠️ before 8f6b521 it was blocked: "FATAL: signalfd() failed", and `su` couldn't open a PAM session. 8f6b521 adds signalfd, real uid/gid and a working su. On it, the package installs (exit 0) and the `postgres` user exists, but **no cluster is created** (`pg_ctlcluster 17 main start`: "specified cluster '17 main' does not exist"). Under investigation with the debian worker. Meanwhile the builtin `psql` (PGlite, `src/commands/postgres.ts`) covers Postgres lessons |
 | SQLite | ✅ `pkg install sqlite` (COMPAT.md), and Python's `sqlite3` module |
 
-All three are reported to the coordinator. With signalfd, an epoll maxevents
-clamp and working `su`, "a real Postgres and Redis next to your app, in a
-tab, offline" becomes a headline no other in-browser sandbox can claim.
+Once the Postgres cluster step works, "a real Postgres and Redis next to your
+app, in a tab, offline" becomes a headline no other in-browser sandbox can
+claim.

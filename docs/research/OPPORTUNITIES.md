@@ -50,22 +50,22 @@ summarised in the sections below.
 | 4 | **Private binary and firmware inspection** (binwalk, objdump, readelf, strings, xxd) | 3 | 4 | 5 | 60 | a, c | `binwalk` lists a .docx's zip members; `nasm` + `ld` + `objdump -d` work | Dogbolt uploads binaries (2 MB cap); no browser binwalk found; firmware is exactly what shouldn't be uploaded |
 | 5 | **A full-stack sandbox that can't be shut down** (Node or Python server plus client, preview window) | 4 | 4 | 3 | 48 | b | [examples/fullstack-notes](../../examples/fullstack-notes/): Node server and Debian Python server each serve a client in a desktop window, and fetch/XHR work. **No WebSocket/EventSource or file watching yet** | Glitch hosting ended 2025-07-08 ([Glitch blog](https://blog.glitch.com/post/changes-are-coming-to-glitch/)); "What are alternatives to Glitch…" ([HN 2025-06-26](https://news.ycombinator.com/item?id=44383402)); WebContainers is Node-only, closed source, licensed. See [SANDBOXES.md](SANDBOXES.md) |
 | 6 | **Legacy document rescue** (WordPerfect, MS Works, ClarisWorks/MacWrite, CorelDraw, Visio, Keynote/Pages/Numbers) | 2 | 5 | 4 | 40 | c | `wpd2text` and `wpd2html` convert a WordPerfect 5.1 file in 0.7 s; libmwaw, libcdr, libvisio and libetonyek tools install (`mwaw2html`, `cdr2xhtml`, `vsd2xhtml`, `key2text`, `numbers2csv`, `pages2html`) | libmwaw's in-browser converter last updated ~2018; online converters upload, with "so-so" results ([thread](https://www.secretprojects.co.uk/threads/converting-coreldraw-cdr-and-old-adobe-illustrator-ai-files-to-open-formats.51130/)) |
-| 7 | **Full TeX Live, offline** (biber, latexmk, any package; no 10 s limit) | 4 | 3 | 3 | 36 | c | pending: see "Verified in tabcomputer" | Overleaf free compile limit cut to 10 s ([Overleaf, 2025-06-16](https://www.overleaf.com/blog/changes-to-free-compile-timeout)); Git sync is paid; latex.to (CheerpX + Alpine, full TeX Live, [HN 2026-08-03](https://news.ycombinator.com/item?id=49158317)) proves the approach |
+| 7 | **Full TeX Live, offline** (biber, latexmk, any package; no 10 s limit) | 4 | 3 | 3 | 36 | c | `pdflatex` 6.2 s and `latexmk -pdf` 39 s for a one-page paper with amsmath; install of texlive-latex-base and latexmk 33 min (one time) | Overleaf free compile limit cut to 10 s ([Overleaf, 2025-06-16](https://www.overleaf.com/blog/changes-to-free-compile-timeout)); Git sync is paid; latex.to (CheerpX + Alpine, full TeX Live, [HN 2026-08-03](https://news.ycombinator.com/item?id=49158317)) proves the approach |
 | 8 | **Coding agents in a local sandbox** (Claude Code, Codex, Gemini, Grok, aider in the tab) | 4 | 3 | 3 | 36 | b | all reach their APIs ([COMPAT.md](../COMPAT.md#agent-clis-unixagent-clis)); the inner edit-test-commit loop is fast ([AGENT-EXPERIMENTS.md](AGENT-EXPERIMENTS.md)) | E2B Pro has a $150/mo floor; agent sandboxes are all cloud; BrowserCode runs Claude Code and Gemini in-browser but "doesn't yet support native binaries" |
-| 9 | **Real databases for teaching** (`apt install postgresql redis-server`) | 3 | 4 | 2 | 24 | b | Redis 8: works with `--maxclients 1000` (PONG in 1.2 s; SET/GET/INCR); crashes without it (Blink epoll cap). PostgreSQL 17: **blocked** ("signalfd() failed") | WebContainers has no raw TCP, so `pg`/Mongo drivers time out; nothing in-browser runs Redis or MySQL; PGlite is Postgres-only |
-| 10 | **Ebook conversion** (calibre `ebook-convert`: epub↔azw3/mobi/docx) | 3 | 5 | 2 | 30 | c | pending | no wasm calibre exists; online converters upload; Send-to-Kindle dropped MOBI (Dec 2023) |
+| 9 | **Real databases for teaching** (`apt install postgresql redis-server`) | 3 | 4 | 3 | 36 | b | Redis 8: ✅ on 8f6b521 with no flags (PONG 1.1 s, `redis-benchmark` passes). PostgreSQL 17: installs, but no cluster is created yet (signalfd and su fixed in 8f6b521; investigation ongoing) | WebContainers has no raw TCP, so `pg`/Mongo drivers time out; nothing in-browser runs Redis or MySQL; PGlite is Postgres-only |
+| 10 | **Ebook conversion** (calibre `ebook-convert`: epub↔azw3/mobi/docx) | 3 | 5 | 2 | 30 | c | **not verified**: the calibre install (Qt6 and pango, 100+ packages) failed in dpkg once and hung once, so it is untested | no wasm calibre exists; online converters upload; Send-to-Kindle dropped MOBI (Dec 2023) |
 | 11 | **Data wrangling pipelines** (sqlite, jq, csvkit, visidata, miller, awk) | 3 | 2 | 5 | 30 | a | `pkg` sqlite and jq; csvkit and visidata from apt | DuckDB-Wasm, play.jqlang.org and Datasette Lite already serve single tools locally |
 | 12 | **Crypto chores** (gpg, openssl, ssh-keygen, age) | 2 | 3 | 5 | 30 | a | `pkg` gnupg, openssl and openssh (static builds) | "online PGP decrypt" sites ask for private keys |
-| 13 | **Science long tail** (BLAST+, Octave + Forge, R from source, EMBOSS) | 3 | 4 | 2 | 24 | a | pending | webR 0.6 (2026-06) and Pyodide beat emulation on speed; biowasm covers samtools-class tools; JSLinux NumPy matmul measured ~2500× slower ([HN](https://news.ycombinator.com/item?id=47311484)) |
-| 14 | **GIS beyond simple conversion** (full ogr2ogr, SpatiaLite, QGIS) | 3 | 3 | 2 | 18 | a | pending | mapshaper and gdal3.js already do simple conversions locally |
-| 15 | **CAD batch conversion and repair** (admesh, assimp, freecadcmd) | 4 | 3 | 2 | 24 | a | pending | OpenSCAD Playground is excellent; FreeCAD WASM ports (2026) are ~200 MB, Chrome-only |
-| 16 | **OCR to searchable PDF** (ocrmypdf, PDF/A) | 4 | 3 | 1 | 12 | a | pending (Tesseract under emulation will be slow) | browser OCR uses tesseract.js (BentoPDF) without OCRmyPDF's PDF/A |
-| 17 | **Office to PDF** (LibreOffice headless) | 4 | 3 | 1 | 12 | a | pending | ZetaOffice is the only local wasm option (~150 MB+ builds) |
+| 13 | **Science long tail** (BLAST+, Octave + Forge, R from source, EMBOSS) | 3 | 4 | 2 | 24 | a | R: `Rscript` with `lm()` 18 s (install 10 min); BLAST+: `makeblastdb` 3.2 s, `blastn` 4.9 s; Octave install hung (not verified) | webR 0.6 (2026-06) and Pyodide beat emulation on speed; biowasm covers samtools-class tools; JSLinux NumPy matmul measured ~2500× slower ([HN](https://news.ycombinator.com/item?id=47311484)) |
+| 14 | **CAD batch conversion and repair** (admesh, assimp, freecadcmd) | 4 | 3 | 2 | 24 | a | `assimp export tri.stl tri.obj` 0.8 s; admesh runs (0.5 s) but read my one-facet ASCII STL as empty; freecadcmd not tried | OpenSCAD Playground is excellent; FreeCAD WASM ports (2026) are ~200 MB, Chrome-only |
+| 15 | **GIS beyond simple conversion** (full ogr2ogr, SpatiaLite, QGIS) | 3 | 3 | 2 | 18 | a | `ogr2ogr` GeoJSON→GeoPackage→CSV and `ogrinfo` 12.6 s; gdal-bin install 22 min, needing one `--fix-broken` retry | mapshaper and gdal3.js already do simple conversions locally |
+| 16 | **OCR to searchable PDF** (ocrmypdf, PDF/A) | 4 | 3 | 1 | 12 | a | ocrmypdf runs (it refused my 16-bit PNG, a test-file issue); the tesseract install hung, so OCR itself is not verified | browser OCR uses tesseract.js (BentoPDF) without OCRmyPDF's PDF/A |
+| 17 | **Office to PDF** (LibreOffice headless) | 4 | 3 | 1 | 12 | a | **not verified**: libreoffice-writer-nogui installs failed in dpkg twice and hung once (`soffice`: "oosplash: not found") | ZetaOffice is the only local wasm option (~150 MB+ builds) |
 | — | PDF merge/split/rotate/compress | 5 | 1 | 5 | — | a, d | `qpdf` merge+rotate, `pdfinfo`, `pdftotext`, `gs` compress all work | BentoPDF (15.9k★, fully local) and dozens more |
 | — | Pandoc conversions | 3 | 1 | 5 | — | a, d | md→html/docx/epub and docx→md work (Debian's pandoc 3.1.11) | official pandoc.wasm 3.9 at [pandoc.org/app](https://pandoc.org/app/) |
 | — | HEIC→JPG, image compression | 5 | 1 | 4 | — | d | ImageMagick works through `magick` (`convert` needed the argv[0] fix) | dozens of libheif-wasm sites, Squoosh |
 | — | Diagrams (graphviz, PlantUML, mermaid) | 2 | 1 | 4 | — | d | `dot` works with `-Kdot` (plain `dot` needed the argv[0] fix) | viz-js, official `@plantuml/core` TeaVM build, mermaid render locally |
-| — | Video re-encoding | 5 | 2 | 1 | — | d | pending | ffmpeg.wasm, Mediabunny (WebCodecs) are faster than emulation |
+| — | Video re-encoding | 5 | 2 | 1 | — | d | tabcomputer's builtin `ffmpeg` (ffmpeg.wasm, same-origin since compat-tools' fix): wav→mp3 1.3 s, mp4→gif 0.2 s, x264 0.3 s on small clips; Debian's ffmpeg install hung | ffmpeg.wasm, Mediabunny (WebCodecs) are faster than emulation |
 | — | DOS games | 3 | 1 | 2 | — | d | not tried | js-dos v8, archive.org |
 
 ## Top recommendations
@@ -129,8 +129,8 @@ contention; "Run" is the command shown.
 | SBCL | 103 s | `sbcl --script`: 1.9 s | `lisp: 5050` |
 | nasm + binutils | 79 s | assemble + `ld` + run + `objdump -d`: 5.6 s | `hello from nasm`, disassembly |
 | GNAT (Ada) | 445 s | `gnatmake`: 59 s | `hello from ada` (the first attempt failed in dpkg, code 2; a retry worked) |
-| OCaml (`ocaml-nox`) | 393 s | `ocamlopt`: 15.8 s | pending output (the first attempt failed in dpkg, code 2; a retry worked) |
-| GHC | pending | pending | pending |
+| OCaml (`ocaml-nox`) | 393 s | `ocamlopt`: 15.8 s | `hello from ocaml` (the first attempt failed in dpkg, code 2; a retry worked) |
+| GHC 9.6 | 584 s | `ghc -e 'print 1'`: 10.3 s; `ghc -O0 hello.hs`: 47 s | `5050`, on 8f6b521; before patch 0061 nothing compiled (CPU-time clock) |
 
 ### Documents and media
 
@@ -143,7 +143,14 @@ contention; "Run" is the command shown.
 | ImageMagick 7.1.1 | 522 s (with graphviz) | `magick photo.png -resize 50% -quality 80 photo.jpg`: 8.4 s | 600×400 JPEG (`convert` hit the argv[0] bug) |
 | libwpd-tools (+ libmwaw, libcdr, libvisio, libetonyek tools) | — | `wpd2text old.wpd`: 0.67 s | the WordPerfect 5.1 text; `wpd2html` gives styled HTML |
 | binwalk | 530 s | `binwalk doc.docx` | lists the zip members with offsets |
-| ffmpeg, sox, TeX Live, LibreOffice, calibre, ocrmypdf, GDAL, BLAST+, Octave, R, admesh/assimp | pending | pending | pending |
+| TeX Live (`texlive-latex-base latexmk`) | 33 min | `pdflatex`: 6.2 s; `latexmk -pdf`: 39 s | 1-page PDF (37.6 KB) |
+| sox | 117 s (alone) | `sox -n t.wav synth 1 sine 440`: 1.9 s | `soxi -D`: 1.000000 |
+| GDAL (`gdal-bin`) | 22 min (one `--fix-broken` retry) | `ogr2ogr` + `ogrinfo`: 12.6 s | GeoPackage, then CSV with WKT |
+| R (`r-base-core`) | 10 min | `Rscript -e '…lm(dist~speed, data=cars)…'`: 18.4 s | coefficients −17.58, 3.93 |
+| BLAST+ (`ncbi-blast+`), assimp, admesh | 9 min | `makeblastdb` 3.2 s, `blastn` 4.9 s; `assimp export` 0.8 s | run; assimp writes OBJ |
+| Redis 8 (`redis-server`) | 131 s | `redis-cli ping`: 1.1 s | PONG; `redis-benchmark` passes on 8f6b521 (before: needed `--maxclients 1000`) |
+| builtin `ffmpeg` (ffmpeg.wasm) | none | wav→mp3 1.3 s, mp4→gif 0.2 s, x264 0.3 s | small test clips |
+| **Not verified** (install failed in dpkg or hung): LibreOffice, calibre, tesseract/ocrmypdf, Octave, Debian's ffmpeg | | | see "Bugs found" |
 
 ### Bugs found by these workloads
 
@@ -154,14 +161,15 @@ All reported to the coordinator, who routed them to the owning workers. "Fixed" 
 | A program run through a symlink got the target's path as argv[0] | redis-server ran as redis-check-rdb; `dot` asked for engine "libgvc6-config-update"; `convert` printed magick's usage; busybox links broke | **fixed** (958ecd5, conformance; live on tabcomputer.com: redis-server now starts as itself) |
 | `page :PORT` picked a hidden, empty iframe that `serve open` leaves behind | "element not found" in 3 of 4 runs | **fixed** (research; cherry-picked) |
 | A deploy deleted the previous build's lazy chunks | apt's preconfigure import 404'd mid-session; dpkg failed and apt stayed broken | **fixed** (release.sh keeps a week of old assets) |
-| Blink's `epoll_wait` returns EINVAL for maxevents > 4096 (patch 0011, `ShiroEpollWait`) | Redis 8 crashes at start ("aeApiPoll: epoll_wait, Invalid argument"); so does `redis-benchmark` | fixed in perf-blink patch 0061 (deploy pending); until then `redis-server --maxclients 1000` (PONG, SET/GET/INCR work) |
-| No `signalfd(2)` | PostgreSQL 17: "FATAL: signalfd() failed" in initdb and postgres | reported |
+| Blink's `epoll_wait` returns EINVAL for maxevents > 4096 (patch 0011, `ShiroEpollWait`) | Redis 8 crashes at start ("aeApiPoll: epoll_wait, Invalid argument"); so does `redis-benchmark` | **fixed** (perf-blink patch 0061; verified on 8f6b521: no flags needed, `redis-benchmark` passes) |
+| No `signalfd(2)` | PostgreSQL 17: "FATAL: signalfd() failed" in initdb and postgres | fixed in 8f6b521 (signalfd, real uid/gid, su), but on 8f6b521 `apt install postgresql` still creates **no cluster** (`pg_ctlcluster 17 main start`: "does not exist"); cause not yet found, with debian |
 | `su` can't open a PAM session ("su: cannot open session: Permission denied") | postgresql-common can't create the default cluster ("Could not change user id") | cause found by debian: Blink's `setpriority()` returns EPERM even for root, and pam_limits calls it; sent to perf-blink |
-| `clock_gettime(CLOCK_THREAD_CPUTIME_ID)` (or similar) unsupported | GHC 9.6: "getCurrentThreadCPUTime: no supported: Inappropriate ioctl for device"; nothing compiles | fixed in perf-blink patch 0061 (deploy pending) |
+| `clock_gettime(CLOCK_THREAD_CPUTIME_ID)` (or similar) unsupported | GHC 9.6: "getCurrentThreadCPUTime: no supported: Inappropriate ioctl for device"; nothing compiles | **fixed** (patch 0061; verified on 8f6b521: `ghc -e 'print 1'` 10 s, hello compiles in 47 s) |
 | IPv6 wildcard bind after an IPv4 one on the same port is EADDRINUSE | Redis's default `bind * -::*` aborts; `--bind 127.0.0.1` works around it | reported (conformance) |
 | `fs.watch` in tabcomputer's node delivers no events; no `assert.match` | nodemon, vite HMR and `--watch` modes are dead | reported (compat-dev) |
 | builtin `ffmpeg` shim | was a cross-origin Worker (fixed by compat-tools); now a second run on the same input fails: "ArrayBuffer at index 0 is already detached" | first part fixed; second reported |
 | dpkg "returned an error code (1/2)" or "pre-installation script … exit status 1", intermittently (gnat, ocaml-nox, postgresql-17, ghostscript, gdal-bin) | dpkg left interrupted; every later install in that page fails with "Unmet dependencies"; a retry in a fresh page worked each time | code 2: Blink's wasm JIT miscompiling liblzma in dpkg-deb's decompressor, mostly fixed by perf-blink patch 0057. A second signature (`dpkg-deb --control subprocess returned error exit status 1` with an empty message, LibreOffice) was sent to debian. Recovery: `sudo apt --fix-broken install`. The biggest reliability problem for apt users |
+| apt or dpkg **hangs** with no CPU use (`apt-get update` in 2 fresh pages; installs of octave, calibre, ocrmypdf, ffmpeg+sox), seen on 8f6b521 with several pages open; the same steps pass in a page alone | the page needs a reload; nothing tells the user | reported (debian) |
 | `git maintenance run --auto --detach`; builtin `wget -qO-` | 3 background processes at 11–18 s CPU each; wget saved to a file | reported (compat-tools) |
 | Storage quota | in a private window (Playwright's default context) the quota is ~890 MB, and apt hit ENOSPC after 5 packages; a normal profile had 162 GB | apt already deletes .debs after a successful install (debian); a failed run keeps them for the retry, so `sudo apt-get clean` frees them. Suggested: show storage use in Settings |
 
@@ -256,8 +264,8 @@ See [SANDBOXES.md](SANDBOXES.md).
 
 ### 8–17
 
-The remaining rows rest on the research notes linked in the table, plus the
-pending verifications. The "skip" rows: BentoPDF (15.9k★, fully local PDF
+The remaining rows rest on the research notes linked in the table and the
+verified results above. The "skip" rows: BentoPDF (15.9k★, fully local PDF
 tools), the official pandoc.wasm, viz-js/@plantuml/core/mermaid, Squoosh
 and libheif sites, and ffmpeg.wasm/Mediabunny/VERT. Emulated x86 loses to
 native wasm or WebCodecs on CPU-bound media work.
