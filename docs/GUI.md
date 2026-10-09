@@ -172,10 +172,17 @@ self-contained floating-window host for the classic full-page terminal UI.
   (148 KB), without which GIO can't sniff file types and gdk-pixbuf can't
   load PNGs (update-mime-database needs libxml2 + ICU, 10 MB).
 - State: `/var/lib/shiro-gui/status.json` (package versions, apps).
-- unix/debian builds the general route (a lazily streamed Debian rootfs with
-  real apt under Blink); this is the GUI-specific fast path and uses the same
-  identities (Debian package files by hash), so it can be replaced by or fed
-  from apt's cache.
+- **Debian mode** (`debian install`, [DEBIAN.md](DEBIAN.md)): the system is
+  then a dpkg-managed Debian 13 rootfs, so `gui APP` installs with the
+  system's own `sudo apt-get install` (the manifest's `pkg`) instead, and
+  dpkg runs the real triggers. The streamer above is for plain Shiro: it
+  unpacks Debian 12 packages without dpkg, which must not land on a trixie
+  system. Any other X program works the same way in Debian mode:
+  `sudo apt install x11-apps && xeyes &`. Measured in Chromium: `debian
+  install` 0.5 s, then `gui install xeyes` = `apt-get update` + `apt-get
+  install x11-apps` and its dependencies, with dpkg's triggers, in Blink:
+  384 s; trixie's xeyes then maps its window 1.0 s after launch
+  (`docs/screenshots/gui-debian-apt-xeyes.png`).
 
 ## Tests
 

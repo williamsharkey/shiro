@@ -18,7 +18,10 @@ import { untar, gunzip, type TarEntry } from '../pkg-tar';
 
 export interface DebPackage { version: string; filename: string; sha256: string; size: number }
 export interface GuiApp {
-  description: string; toolkit: string; bin: string; packages: string[];
+  description: string; toolkit: string; bin: string;
+  /** The Debian package that provides the app (apt's name for it). */
+  pkg?: string;
+  packages: string[];
   size: number; closureSize: number; dropped: string[];
   /** Paths deleted after unpacking: optional plug-ins whose libraries were left out. */
   remove?: string[];
@@ -97,8 +100,44 @@ async function writeStatus(fs: FileSystem, s: Status): Promise<void> {
 }
 
 export async function isAppInstalled(fs: FileSystem, app: string): Promise<boolean> {
+  if (await debianMode(fs)) {
+    const a = (await guiManifest()).apps[app];
+    return !!a && (await fs.exists(`/var/lib/dpkg/info/${a.pkg ?? app}.list`)) && (await fs.exists(a.bin));
+  }
   const st = await readStatus(fs);
   return st.apps.includes(app);
+}
+
+/**
+ * Debian mode (`debian install`, docs/DEBIAN.md): the system is a Debian
+ * rootfs managed by dpkg, so apps come from its own apt instead of being
+ * unpacked from this manifest (whose bookworm libraries would replace the
+ * system's).
+ */
+export async function debianMode(fs: FileSystem): Promise<boolean> {
+  try { return !!(await (await import('../debian/rootfs')).installedRootfs(fs)); } catch { return false; }
+}
+
+/** Install with the system's apt (Debian mode); `log` gets apt's output lines. */
+async function installWithApt(fs: FileSystem, kernel: Kernel, name: string, app: GuiApp, log: (s: string) => void): Promise<InstallResult> {
+  const t0 = Date.now();
+  const pkg = app.pkg ?? name;
+  const { BufferFile } = await import('../kernel/fd');
+  // `sudo` is Shiro's builtin (uid 0 for apt); a bare name reaches it through the kernel's builtin loader
+  const run = async (cmd: string) => {
+    const out = new BufferFile(null);
+    const argv = cmd.split(' ');
+    const p = kernel.spawn({ path: argv[0], argv, cwd: '/', env: appEnv({ DEBIAN_FRONTEND: 'noninteractive' }), fds: { 0: new BufferFile(''), 1: out, 2: out } });
+    const st = await p.wait();
+    for (const line of out.text().split('\n').filter(Boolean).slice(-6)) log(line);
+    return st;
+  };
+  // lists may be empty right after `debian install`
+  const hasLists = (await fs.readdir('/var/lib/apt/lists').catch(() => [] as string[])).some((f) => f.endsWith('_Packages'));
+  if (!hasLists && await run('sudo apt-get update') !== 0) throw new Error('apt-get update failed');
+  if (await run(`sudo apt-get install -y --no-install-recommends ${pkg}`) !== 0) throw new Error(`apt-get install ${pkg} failed`);
+  const ms = Date.now() - t0;
+  return { app: name, packages: 1, skipped: 0, fetched: 0, cached: 0, bytes: 0, ms: { total: ms, fetch: 0, unpack: ms, triggers: 0 } };
 }
 
 // ── fetching ──
@@ -260,6 +299,7 @@ async function doInstall(fs: FileSystem, kernel: Kernel, name: string, onProgres
   const m = await guiManifest();
   const app = m.apps[name];
   if (!app) throw new Error(`no GUI app named ${name}`);
+  if (await debianMode(fs)) return installWithApt(fs, kernel, name, app, log);
   const status = await readStatus(fs);
   const want = app.packages.filter((n) => status.packages[n] !== m.packages[n].version);
   const totalBytes = want.reduce((a, n) => a + m.packages[n].size, 0);

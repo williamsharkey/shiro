@@ -294,6 +294,7 @@ of an installed app → first frame, in Chromium.
 | Software | Version | Route | Status | Tested | Known issues |
 | --- | --- | --- | --- | --- | --- |
 | xeyes | x11-apps 7.7+9 | gui (7.5 MB) | works | shaped window, pupils follow the pointer; first frame 0.9–1.3 s, warm 0.5 s | — |
+| xeyes (Debian mode) | trixie x11-apps | `debian install`, then `gui xeyes` = real `apt-get install` in Blink | works | apt update + install 384 s; window 1.0 s after launch | apt is slow (interpreted/JIT x86) |
 | xclock | x11-apps 7.7+9 | gui (8.9 MB) | works | analog clock with RENDER antialiasing; 2.6–2.8 s | — |
 | xcalc, xedit | x11-apps 7.7+9 | gui | not checked | — | — |
 | xterm | 379 | gui (9.3 MB) | works | Shiro's shell in xterm's pty, typing, output, core fonts; 2.5–2.7 s | no XKB (core keymap), UTF-8 locale falls back to C (Xlib has no C.UTF-8 entry) |

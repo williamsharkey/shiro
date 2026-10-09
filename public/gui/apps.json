@@ -144,6 +144,7 @@
     "libqt5printsupport5",
     "libhunspell-1.7-0"
    ],
+   "pkg": "featherpad",
    "size": 34898820,
    "toolkit": "qt5"
   },
@@ -398,6 +399,7 @@
     "gimp-data",
     "libgimp2.0"
    ],
+   "pkg": "gimp",
    "remove": [
     "/usr/lib/gimp/2.0/plug-ins/file-aa",
     "/usr/lib/gimp/2.0/plug-ins/file-compressor",
@@ -527,6 +529,7 @@
     "at-spi2-common",
     "libgtk2.0-common"
    ],
+   "pkg": "gpicview",
    "size": 26768896,
    "toolkit": "gtk2"
   },
@@ -649,6 +652,7 @@
     "hicolor-icon-theme",
     "adwaita-icon-theme"
    ],
+   "pkg": "l3afpad",
    "size": 33128408,
    "toolkit": "gtk3"
   },
@@ -802,6 +806,7 @@
     "libmenu-cache3",
     "libexif12"
    ],
+   "pkg": "lximage-qt",
    "size": 36809860,
    "toolkit": "qt5"
   },
@@ -936,6 +941,7 @@
     "hicolor-icon-theme",
     "adwaita-icon-theme"
    ],
+   "pkg": "mousepad",
    "size": 44635224,
    "toolkit": "gtk3"
   },
@@ -1075,6 +1081,7 @@
     "libbz2-1.0",
     "libexif12"
    ],
+   "pkg": "ristretto",
    "size": 35130276,
    "toolkit": "gtk3"
   },
@@ -1125,6 +1132,7 @@
     "libxaw7",
     "libxpm4"
    ],
+   "pkg": "x11-apps",
    "size": 7170056,
    "toolkit": "x11"
   },
@@ -1175,6 +1183,7 @@
     "libxaw7",
     "libxpm4"
    ],
+   "pkg": "x11-apps",
    "size": 8862124,
    "toolkit": "x11"
   },
@@ -1225,6 +1234,7 @@
     "libxaw7",
     "libxpm4"
    ],
+   "pkg": "x11-apps",
    "size": 7170056,
    "toolkit": "x11"
   },
@@ -1275,6 +1285,7 @@
     "libxcb-damage0",
     "libx11-xcb1"
    ],
+   "pkg": "x11-apps",
    "size": 7549296,
    "toolkit": "x11"
   },
@@ -1320,6 +1331,7 @@
     "libtinfo6",
     "xbitmaps"
    ],
+   "pkg": "xterm",
    "size": 9344568,
    "toolkit": "x11"
   }

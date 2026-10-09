@@ -194,7 +194,7 @@ def main():
                 if not ok: remove.append('/' + os.path.dirname(rel) if g.endswith('/*/*') else '/' + rel)
         dropped = [n for n in names if n not in keep]
         apps[app] = {
-            'description': desc, 'toolkit': kind, 'bin': bins[0], 'packages': keep,
+            'description': desc, 'toolkit': kind, 'bin': bins[0], 'pkg': roots[0], 'packages': keep,
             'size': sum(int(db[n]['Size']) for n in keep),
             'closureSize': sum(int(db[n]['Size']) for n in names),
             'dropped': dropped,
