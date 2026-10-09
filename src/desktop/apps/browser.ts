@@ -490,7 +490,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
   shared ??= Engine.create(ctx.kernel);
   const bw = new BrowserWindow(shared);
   const win = bw.build(ctx);
-  void shared.then((engine) => { (window as any).__shiroBrowser = { engine, window: bw, broker: engine.broker }; });
+  void shared.then((engine) => { (window as any).__tabcomputerBrowser = { engine, window: bw, broker: engine.broker }; });
   bw.newTab(typeof args?.url === 'string' ? args.url : '');
   return win;
 }

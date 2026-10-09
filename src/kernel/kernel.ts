@@ -2656,7 +2656,8 @@ function setCredentials(proc: Process, nr: number, args: ArrayLike<number>, data
       const n = args[0] | 0;
       if (n < 0 || n > 65536) return -A.EINVAL;
       if (data.length < n * 4) return -A.EFAULT;
-      proc.groups = Array.from({ length: n }, (_, i) => dv.getUint32(i * 4, true));
+      // Linux keeps them sorted (getgroups lists them in order)
+      proc.groups = Array.from({ length: n }, (_, i) => dv.getUint32(i * 4, true)).sort((a, b) => a - b);
       return 0;
     }
     // setfsuid/setfsgid: the filesystem id is the effective id here; the call returns the old one

@@ -1,9 +1,12 @@
-// fetch() for the Browser app's broker: HTTP/1.1 (http1.ts) over TLS in the
-// page (tls.ts) over raw TCP from a Dialer (the kernel's relay sockets in the
-// app, plain node:net in tests). Keeps idle connections per origin so a page's
-// dozens of requests don't each pay a relay connect and a TLS handshake (the
-// relay also rate-limits connects per client IP: docs/NETWORKING.md).
+// fetch() for the Browser app's broker: HTTP/2 (http2.ts) or HTTP/1.1
+// (http1.ts) over TLS in the page (tls.ts) over raw TCP from a Dialer (the
+// kernel's relay sockets in the app, plain node:net in tests). HTTPS offers
+// h2 and http/1.1 by ALPN, like a browser. An h2 origin gets one shared
+// session; HTTP/1.1 origins keep up to 6 kept-alive connections. Either way a
+// page's dozens of requests don't each pay a relay connect and a TLS
+// handshake (the relay also rate-limits connects per client IP).
 import { ByteStream, HeaderList, HttpResponse, StreamReader, headerGet, readResponse, serializeRequest, writeBody } from './http1';
+import { H2Session } from './http2';
 import { tlsConnect } from './tls';
 
 export type Dialer = (host: string, port: number) => Promise<ByteStream>;
@@ -26,8 +29,10 @@ interface Conn { stream: ByteStream; reader: StreamReader; key: string; uses: nu
 
 export interface NetFetchOptions {
   dial: Dialer;
-  /** Wrap a raw connection in TLS (default tlsConnect). */
-  tls?: (raw: ByteStream, host: string, redial?: () => Promise<ByteStream>) => Promise<ByteStream>;
+  /** Wrap a raw connection in TLS (default tlsConnect); a result with `alpn: 'h2'` gets HTTP/2. */
+  tls?: (raw: ByteStream, host: string, redial?: () => Promise<ByteStream>, alpn?: string[]) => Promise<ByteStream & { alpn?: string | null }>;
+  /** Offer HTTP/2 (default true). */
+  http2?: boolean;
   maxPerOrigin?: number;
   idleMs?: number;
   /** Count bytes per caller (the app shows per-tab download totals). */
@@ -51,13 +56,27 @@ export class NetFetcher implements Fetcher {
   private active = new Map<string, number>();
   private waiters = new Map<string, (() => void)[]>();
   private opts: Required<Omit<NetFetchOptions, 'onBytes'>> & Pick<NetFetchOptions, 'onBytes'>;
-  stats = { connects: 0, reused: 0, requests: 0, bytes: 0 };
+  /** origin → its HTTP/2 session */
+  private h2 = new Map<string, H2Session>();
+  /** origin → the first connection being opened (requests wait to see whether it is h2) */
+  private opening = new Map<string, Promise<void>>();
+  /** origins that answered with HTTP/1.1 */
+  private h1Origins = new Set<string>();
+  stats = { connects: 0, reused: 0, requests: 0, bytes: 0, h2Sessions: 0, h2Streams: 0 };
 
   constructor(opts: NetFetchOptions) {
-    this.opts = { tls: tlsConnect, maxPerOrigin: 6, idleMs: 60_000, ...opts };
+    this.opts = { tls: tlsConnect, maxPerOrigin: 6, idleMs: 60_000, http2: true, ...opts };
   }
 
-  private async acquire(u: URL): Promise<Conn> {
+  /** An idle HTTP/2 session with room for a stream, else null. */
+  private h2For(key: string): H2Session | null {
+    const s = this.h2.get(key);
+    if (s && s.available) return s;
+    if (s && (s.closed || s.goingAway)) this.h2.delete(key);
+    return null;
+  }
+
+  private async acquire(u: URL): Promise<Conn | H2Session> {
     const key = `${u.protocol}//${u.host}`;
     for (;;) {
       const list = this.idle.get(key);
@@ -70,9 +89,22 @@ export class NetFetcher implements Fetcher {
     try {
       const port = Number(u.port) || (u.protocol === 'https:' ? 443 : 80);
       const host = u.hostname.replace(/^\[|\]$/g, '');
-      let stream = await this.opts.dial(host, port);
+      let stream: ByteStream & { alpn?: string | null } = await this.opts.dial(host, port);
       this.stats.connects++;
-      if (u.protocol === 'https:') stream = await this.opts.tls(stream, host, () => this.opts.dial(host, port));
+      if (u.protocol === 'https:') {
+        stream = await this.opts.tls(stream, host, () => this.opts.dial(host, port), this.opts.http2 ? ['h2', 'http/1.1'] : ['http/1.1']);
+      }
+      if (stream.alpn === 'h2') {
+        // Not an HTTP/1.1 slot after all: one shared session for the origin
+        this.release(key);
+        const counted = this.counting(stream, { bytes: 0 } as Conn);
+        const session = new H2Session(counted, u.host);
+        await session.start();
+        this.h2.set(key, session);
+        this.stats.h2Sessions++;
+        return session;
+      }
+      if (u.protocol === 'https:') this.h1Origins.add(key);
       const c = { key, uses: 1, bytes: 0 } as Conn;
       c.stream = this.counting(stream, c);
       c.reader = new StreamReader(c.stream);
@@ -122,8 +154,37 @@ export class NetFetcher implements Fetcher {
     if (u.protocol !== 'https:' && u.protocol !== 'http:') throw new Error(`unsupported scheme ${u.protocol}`);
     this.stats.requests++;
     const replayable = !(req.body instanceof ReadableStream);
+    const key = `${u.protocol}//${u.host}`;
     for (let attempt = 0; ; attempt++) {
-      const c = await this.acquire(u);
+      // HTTP/2: an existing session, or wait for the origin's first connection to say whether it is h2
+      let session = u.protocol === 'https:' ? this.h2For(key) : null;
+      if (!session && u.protocol === 'https:' && this.opts.http2 && !this.h1Origins.has(key)) {
+        const pending = this.opening.get(key);
+        if (pending) { await pending.catch(() => {}); continue; }
+      }
+      let got: Conn | H2Session;
+      if (session) got = session;
+      else {
+        const first = u.protocol === 'https:' && this.opts.http2 && !this.h1Origins.has(key) && !this.h2.has(key);
+        const p = this.acquire(u);
+        if (first) this.opening.set(key, p.then(() => {}, () => {}).finally(() => this.opening.delete(key)));
+        got = await p;
+      }
+      if (got instanceof H2Session) {
+        try {
+          this.stats.h2Streams++;
+          const res = await got.request(req.method, u, req.headers, req.body, req.signal);
+          // Wire bytes for the per-tab counter: the DATA payload plus a rough header size
+          let n = res.headers.reduce((t, [k, v]) => t + k.length + v.length + 2, 0);
+          const body = res.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({ transform: (c, ctl) => { n += c.length; ctl.enqueue(c); } }));
+          return { ...res, body, url: req.url, wireBytes: () => n };
+        } catch (e) {
+          // A GOAWAY before our stream was processed: safe to retry once on a new connection
+          if ((e as { retry?: boolean }).retry && attempt === 0 && replayable) continue;
+          throw e;
+        }
+      }
+      const c = got;
       const reused = c.uses > 1;
       try {
         const headers = req.headers.slice();
@@ -153,6 +214,8 @@ export class NetFetcher implements Fetcher {
   }
 
   closeAll() {
+    for (const s of this.h2.values()) s.close();
+    this.h2.clear();
     for (const list of this.idle.values()) for (const c of list) { clearTimeout(c.idleTimer); c.stream.close(); }
     this.idle.clear(); this.active.clear();
   }

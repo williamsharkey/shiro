@@ -96,6 +96,8 @@ const cpuclockBin = join(out, 'cpuclock');
 const haveCpuclock = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', cpuclockBin, 'cpuclock.c']);
 const niceBin = join(out, 'nice');
 const haveNice = tryBuild('gcc', ['-static', '-O1', '-o', niceBin, 'nice.c']);
+const idsBin = join(out, 'ids');
+const haveIds = 'SYS_setresuid' in Abi && tryBuild('gcc', ['-static', '-O1', '-o', idsBin, 'ids.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -804,6 +806,17 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(niceBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('get 0 errno 0 raw 20 set0 0 set5 0 get 5 child 5 lower-as-user EACCES\n');
+  }, 60_000);
+
+  // su, runuser, PostgreSQL's initdb (the kernel's set*id; skipped on a kernel without them)
+  it.skipIf(!haveIds)('uids and gids are the kernel\'s: real, effective and saved ids, groups', async () => {
+    const { shell } = await setup(readFileSync(idsBin));
+    const r = await run(shell, './prog; sudo ./prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('user 1: setuid(0) -1 EPERM\n' +
+      'root: setgroups 0 getgroups 2 {100,65534} 1\n' +
+      'setresgid 0 setresuid 0: uid 65534 euid 65534 saved 0 gid 65534 egid 65534\n' +
+      'seteuid(0) via saved 0: euid 0 uid 65534\n' +
+      'dropped 0: setuid(0) -1 EPERM\n');
   }, 60_000);
 
   // vim's typeahead check blocked for a key when two reads straddled a ms tick
