@@ -261,6 +261,30 @@ and writing files dominates. Start-up is Blink loading ~70–100 shared
 libraries and toolkit init, so a warm start is barely faster than the first.
 GTK 3 needed Blink patch 0029 (it spun in cairo/pixman SSE compares).
 
+#### First launch, click to window (fresh profile)
+
+`tests/browser/gui-first-launch.mjs`: each app opened like a click
+(`desktop.openApp`) in a fresh browser profile, Chromium 141, 4 vCPUs, local
+server with its .deb cache warm. Before = the installer above (one xz decode
+at a time on the page's thread, triggers in sequence); after = decoding in up
+to 4 workers, largest packages first, triggers only when needed and in
+parallel, icon/loader caches as overlays (docs/GUI.md).
+
+| app | download | install before → after | window before → after | warm window |
+|---|---:|---:|---:|---:|
+| L3afpad | 33 MB | 11.4 → 4.9 s | 20.9 → 12.5 s | 4.9 s |
+| Mousepad | 42 MB | 13.4 → 6.2 s | 33.5 → 24.2 s | 17.1 s |
+| Ristretto | 32 MB | 9.9 → 4.9 s | 21.0 → 14.8 s | 7.0 s |
+| GIMP (main window) | 51 MB | 19 → 6.3 s | 290 → 247 s | 63 s |
+| Inkscape (welcome dialog) | 83 MB | — → 15 s | — → 61 s | — |
+| NetSurf (page rendered) | 57 MB | — | — → 24.7 s | — |
+
+Packages from tabcomputer.com's mirror instead (`--debs`, a real network):
+L3afpad 13.0 s, Ristretto 15.3 s to the window. Boot is unchanged except
+the dock: one "Apps" entry (inline SVG) instead of five GUI app icons; app
+icons (`public/gui/icons/`) load only for installed apps and in the Apps
+window.
+
 ### unix/desktop — the desktop shell (menu bar, dock, windows) on the boot path
 
 The Unix edition boots to the desktop (docs/DESKTOP.md); shiro.computer keeps
