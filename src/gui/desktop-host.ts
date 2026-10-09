@@ -114,6 +114,7 @@ class DesktopCanvasWindow implements CanvasWindow {
   }
 
   setTitle(title: string): void { this.win.setTitle(title); }
+  overlay(): HTMLElement { return this.surface.canvas.parentElement!; }
   show(): void { if (this.win.state === 'minimized') this.win.restore(); }
   hide(): void { /* rootless destroys unmapped windows instead */ }
   activate(): void { this.win.focus(); }

@@ -46,7 +46,9 @@ async function create(display: number): Promise<XSession> {
   const host = headless ? null : opts.host ?? (await getWindowHost());
   const size = host?.desktopSize() ?? { width: opts.width ?? 1280, height: opts.height ?? 800 };
   // the screen is in device pixels: clients get the matching DPI (Xft.dpi, mm size)
-  const server = new XServer({ width: opts.width ?? size.width, height: opts.height ?? size.height, dpi: Math.round(96 * (host?.scale ?? 1)) });
+  const textMode = (await import('./dom-text')).domTextMode();
+  const server = new XServer({ width: opts.width ?? size.width, height: opts.height ?? size.height, dpi: Math.round(96 * (host?.scale ?? 1)), domText: textMode !== 'pixels' });
+  server.domTextRaster = textMode === 'overlay';
   server.log = (s) => console.warn('[Xshiro]', s);
   installRender(server);
   const rootless = host ? new Rootless(server, host) : null;

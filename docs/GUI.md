@@ -221,6 +221,15 @@ Where the time went, and what changed:
   `/tmp/.X11-unix/XN` and on the abstract name libxcb tries first; started at
   boot, ~1 KB. `session.ts` creates the server on the first connection.
 
+### DOM text (experimental)
+
+`xserver text dom|overlay` shows core X text (ImageText/PolyText) as
+positioned `<span>`s over the window instead of (or over) glyph pixels:
+sharp, selectable with Alt + drag, and visible to assistive tech. It works
+for Xlib/Xaw apps (xterm, xcalc, xedit); GTK, Qt and FLTK send text as
+pixels. Design note, measurements and next steps:
+[DOM-RENDERING.md](DOM-RENDERING.md).
+
 ### Window hosts (`src/gui/`)
 
 `window-host.ts` is the interface rootless windows need (shaped like the

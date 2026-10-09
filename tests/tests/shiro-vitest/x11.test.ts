@@ -263,6 +263,32 @@ describe('X11 protocol', () => {
     expect(black).toBeGreaterThan(10);
   });
 
+  it('DOM-text mode reports core text instead of drawing glyphs, and CopyArea moves', async () => {
+    const { server, c, tops } = await newServer();
+    server.domText = true;
+    const runs: { x: number; y: number; text: string; width: number; fg: number; bg: number | null; font: string }[] = [];
+    const copies: unknown[][] = [];
+    server.hooks.text = (_top, run) => runs.push(run);
+    server.hooks.copy = (_top, ...args) => copies.push(args);
+    const wid = c.id(1), gc = c.id(2), fid = c.id(3);
+    createWindow(c, wid, 0, 0, 100, 40, 0);
+    c.send(8, 0, (w) => w.u32(wid));
+    c.send(45, 0, (w) => w.u32(fid).u16(5).u16(0).str('fixed'));
+    c.send(55, 0, (w) => w.u32(gc).u32(wid).u32(0x4 | 0x8 | 0x4000).u32(0x102030).u32(0xffffff).u32(fid));
+    c.send(76, 2, (w) => w.u32(wid).u32(gc).i16(2).i16(15).str('Hi'));                    // ImageText8
+    c.send(74, 0, (w) => w.u32(wid).u32(gc).i16(20).i16(30).u8(3).u8(0).str('abc').u8(0)); // PolyText8
+    c.send(62, 0, (w) => w.u32(wid).u32(wid).u32(gc).i16(0).i16(20).i16(0).i16(5).u16(100).u16(20)); // CopyArea (scroll)
+    c.send(43, 0);
+    await c.reply();
+    expect(runs.map((r) => r.text)).toEqual(['Hi', 'abc']);
+    expect(runs[0]).toMatchObject({ x: 2, y: 15, width: 12, fg: 0x102030, bg: 0xffffff });
+    expect(runs[1]).toMatchObject({ x: 20, y: 30, width: 18, bg: null });
+    expect(runs[0].font).toMatch(/-misc-fixed-medium-r-.*-c-60-/);
+    // no glyph pixels: ImageText painted its (white) background only
+    for (let x = 2; x < 14; x++) for (let y = 4; y < 17; y++) expect(pixelAt(tops[0], x, y)).toBe(0xffffff);
+    expect(copies).toEqual([['begin', 0, 20, 100, 20, 0, 5], ['end', 0, 20, 100, 20, 0, 5]]);
+  });
+
   it('transfers a selection between two clients', async () => {
     const { server, c } = await newServer();
     const c2 = await new TC(server).setup();

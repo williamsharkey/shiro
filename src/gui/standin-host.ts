@@ -45,6 +45,7 @@ class StandinWindow implements CanvasWindow {
   private w: number;
   private h: number;
   private readonly s = displayScale();
+  private wrap: HTMLDivElement;
 
   constructor(root: HTMLElement, private opts: CanvasWindowOptions) {
     this.w = opts.width; this.h = opts.height;
@@ -90,7 +91,11 @@ class StandinWindow implements CanvasWindow {
     c.style.cssText = `display:block;width:${opts.width / this.s}px;height:${opts.height / this.s}px;outline:none;touch-action:none`;
     if (Number.isInteger(this.s)) c.style.imageRendering = 'pixelated';
     this.canvas = c;
-    f.append(c);
+    // positioned, so DOM layers (overlay()) can sit on the canvas
+    this.wrap = document.createElement('div');
+    this.wrap.style.position = 'relative';
+    this.wrap.append(c);
+    f.append(this.wrap);
     if (opts.decorated && opts.resizable !== false) this.addResizeGrip(f);
     if (!opts.override) f.addEventListener('pointerdown', () => this.activate(), true);
     this.wireInput(c);
@@ -225,5 +230,6 @@ class StandinWindow implements CanvasWindow {
     if (document.activeElement !== this.canvas) this.canvas.focus({ preventScroll: true });
   }
   setCursor(css: string): void { this.canvas.style.cursor = css; }
+  overlay(): HTMLElement { return this.wrap; }
   destroy(): void { this.frame.remove(); }
 }

@@ -7,6 +7,7 @@ import { getKernel } from '../kernel/kernel';
  *   xserver [status]        display, process, clients and windows
  *   xserver start [:N]      start display :N (boot starts :0)
  *   xserver stop [:N]       stop listening (connected clients keep running)
+ *   xserver text [pixels|dom|overlay]  core X text as pixels, DOM spans, or both (docs/DOM-RENDERING.md)
  */
 export const xserverCmd: Command = {
   name: 'xserver',
@@ -27,8 +28,21 @@ export const xserverCmd: Command = {
       ctx.stdout += `Xshiro :${n} stopped\n`;
       return 0;
     }
+    if (sub === 'text') {
+      const dt = await import('../x11/dom-text');
+      const mode = ctx.args[1];
+      if (mode !== undefined && mode !== 'dom' && mode !== 'overlay' && mode !== 'pixels') { ctx.stderr += 'usage: xserver text [pixels|dom|overlay]\n'; return 2; }
+      if (mode) dt.setDomTextMode(mode, true);
+      const { peekXSession } = await import('../x11/session');
+      const sess = await peekXSession(0);
+      const m = dt.domTextMode();
+      if (sess) { sess.server.domText = m !== 'pixels'; sess.server.domTextRaster = m === 'overlay'; }
+      const what = { pixels: 'glyph pixels', dom: 'DOM spans', overlay: 'glyph pixels with a transparent DOM text layer' }[m];
+      ctx.stdout += `core X text: ${what}${mode ? ' (text drawn from now on; windows opened from now on for overlay)' : ''}\n`;
+      return 0;
+    }
     if (sub !== 'status' && sub !== 'windows') {
-      ctx.stderr += 'usage: xserver [status|start [:N]|stop [:N]]\n';
+      ctx.stderr += 'usage: xserver [status|start [:N]|stop [:N]|text [pixels|dom|overlay]]\n';
       return 2;
     }
     const h = getDisplay(n);

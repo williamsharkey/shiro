@@ -63,6 +63,8 @@ export interface CanvasWindowEvents {
 
 export interface CanvasWindow {
   setTitle(title: string): void;
+  /** An element over the canvas (same origin) for DOM layers: DOM-text mode's spans. */
+  overlay?(): HTMLElement;
   /**
    * The app moved/resized its window (X ConfigureWindow); the frame follows.
    * `fromUser`: the size answers the user's own resize (only the buffer changes).
