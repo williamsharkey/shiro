@@ -79,6 +79,18 @@ app, `/api`, `/tcp` or anything else there (`handleBrowseHost` in server.mjs).
 Its headers are COEP credentialless, CORP cross-origin, `Origin-Agent-Cluster`,
 and `frame-ancestors` limited to the app and browse origins.
 
+**Cross-origin isolation.** The desktop is cross-origin isolated (COEP
+credentialless), so a cross-origin iframe loads only if its document sends
+COEP and CORP or the iframe carries the `credentialless` attribute. Browse
+origins send both headers themselves: the server for the bootstrap, the SW's
+shell, and the broker for every proxied document. So the tab iframes don't
+need the attribute, and must not use it. A credentialless iframe gets a new,
+ephemeral storage partition for each top-level page load, which would throw
+away the origin's service worker registration and the site's own
+`localStorage`/IndexedDB. The desktop doesn't delegate `cross-origin-isolated`
+to the frames, so proxied pages get no SharedArrayBuffer or high-resolution
+timers from it.
+
 From then on the service worker answers every request. It owns nothing
 itself: it forwards each request over a `MessagePort` to the broker, and
 **the app binds each port to one document**:
