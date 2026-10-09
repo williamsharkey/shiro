@@ -224,4 +224,20 @@ describe('kernel syscalls found by LTP', () => {
       expect(await call(A.SYS_epoll_ctl, [ep, A.EPOLL_CTL_ADD, fd, A.EPOLLIN, 0, 0])).toBe(-A.EPERM);
     }
   });
+
+  it('poll02/select02/pselect01: a timeout never ends early (sub-millisecond select timeouts too)', async () => {
+    const [r] = await pipe();
+    const pfd = new Uint8Array(8);
+    new DataView(pfd.buffer).setInt32(0, r, true);
+    new DataView(pfd.buffer).setInt16(4, A.POLLIN, true);
+    for (let i = 0; i < 10; i++) {
+      const t0 = performance.now();
+      expect(await kernel.syscall(proc, A.SYS_poll, [1, 3], pfd)).toBe(0);
+      expect(performance.now() - t0).toBeGreaterThanOrEqual(3);
+      const t1 = performance.now();
+      // select(0, …, {0 s, 1500 µs}): no fds, just the timeout
+      expect(await kernel.syscall(proc, A.SYS_select, [0, 0, 0, 1500], new Uint8Array(64))).toBe(0);
+      expect(performance.now() - t1).toBeGreaterThanOrEqual(1.5);
+    }
+  });
 });

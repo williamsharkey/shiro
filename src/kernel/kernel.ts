@@ -2178,7 +2178,7 @@ export class Kernel {
     if (setBytes * 3 > data.length) return -A.EINVAL;
     const present = args[1];
     const tvSec = args[2];
-    const timeoutMs = tvSec < 0 ? -1 : tvSec * 1000 + Math.floor(nr === A.SYS_pselect6 ? args[3] / 1e6 : args[3] / 1000);
+    const timeoutMs = tvSec < 0 ? -1 : tvSec * 1000 + (nr === A.SYS_pselect6 ? args[3] / 1e6 : args[3] / 1000); // fractional: never wake early
     const bit = (set: number, fd: number) => (data[set * setBytes + (fd >> 3)] >> (fd & 7)) & 1;
     const want: { fd: number; r: boolean; w: boolean; x: boolean; file: OpenFile }[] = [];
     for (let fd = 0; fd < nfds; fd++) {
