@@ -42,7 +42,9 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
   const win = wm.createWindow({ appId: 'settings', title: 'Settings', width: 680, height: 470, minWidth: 380, content: { kind: 'dom', element: root } });
   let cleanup: (() => void) | null = null;
 
+  let current: PaneId = 'appearance';
   function show(id: PaneId): void {
+    current = id;
     cleanup?.();
     cleanup = null;
     panel.onclick = null;
@@ -179,7 +181,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
   }
 
   win.on('close', () => cleanup?.());
-  (win as { content?: unknown }).content = { navigate: (a: Record<string, unknown>) => { if (typeof a.pane === 'string' && PANES.some(p => p.id === a.pane)) show(a.pane as PaneId); } };
+  (win as { content?: unknown }).content = { navigate: (a: Record<string, unknown>) => { if (typeof a.pane === 'string' && PANES.some(p => p.id === a.pane)) show(a.pane as PaneId); }, pane: () => current };
   const first = typeof args?.pane === 'string' && PANES.some(p => p.id === args.pane) ? args.pane as PaneId : 'appearance';
   show(first);
   return win;

@@ -193,6 +193,11 @@ export class TerminalView {
     return this.tabs.map(t => t.term).filter((t): t is ShiroTerminal => !!t);
   }
 
+  /** Working directory of the active tab's shell (session restore) */
+  cwd(): string | undefined {
+    return this.active?.shell?.cwd;
+  }
+
   activeTerminal(): ShiroTerminal | null {
     return this.active?.term ?? null;
   }

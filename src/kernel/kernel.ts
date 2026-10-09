@@ -1888,8 +1888,12 @@ export class Kernel {
           let target: string;
           const proct = p.startsWith('/proc/') ? this.procfs.readlink(proc, p) : undefined;
           if (typeof proct === 'number') return proct;
-          if (proct !== undefined) target = proct;
-          else if (this.isDevicePath(p)) return -A.EINVAL; // a device node or /dev, /dev/pts: not links
+          if (proct !== undefined) {
+            target = proct;
+            // /proc/<pid>/exe is the resolved path, as on Linux (ld.so's $ORIGIN;
+            // a venv's bin/python is a symlink). procfs only resolves from the cache.
+            if (/^\/proc\/[^/]+\/exe$/.test(p) && target.startsWith('/')) target = await fs().realpath(target).catch(() => target);
+          } else if (this.isDevicePath(p)) return -A.EINVAL; // a device node or /dev, /dev/pts: not links
           else try { target = await fs().readlink(p); } catch (e) { return A.errnoFromError(e, A.EINVAL); }
           const b = enc.encode(target);
           const n = Math.min(b.length, bufsiz >>> 0 || data.length, data.length);

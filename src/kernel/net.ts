@@ -33,7 +33,7 @@ import {
   TCP_NODELAY, TCP_KEEPIDLE, TCP_KEEPINTVL, TCP_KEEPCNT, IPV6_V6ONLY, FIONREAD, FIONBIO, SYS_socket,
   SYS_connect, SYS_accept, SYS_sendto, SYS_recvfrom, SYS_shutdown, SYS_bind, SYS_listen, SYS_getsockname,
   SYS_getpeername, SYS_socketpair, SYS_setsockopt, SYS_getsockopt, SYS_accept4, SOCKET_SYSCALLS,
-  SOCKADDR_ROOM, SIGPIPE, ENOENT, SO_PEERCRED, SCM_RIGHTS, MSG_CTRUNC, MSG_CMSG_CLOEXEC, SYS_sendmsg,
+  SOCKADDR_ROOM, SIGPIPE, ENOENT, SO_PEERCRED, SCM_RIGHTS, MSG_CTRUNC, MSG_TRUNC, MSG_CMSG_CLOEXEC, SYS_sendmsg,
   SYS_recvmsg, SOCKADDR_UN_MAX, ENAMETOOLONG, decodeText,
 } from './abi';
 
@@ -139,6 +139,21 @@ export function ipFamily(addr: string): 0 | 4 | 6 {
 
 export function isLoopback(addr: string): boolean {
   return /^127\./.test(addr) || addr === '::1' || addr === '0.0.0.0' || addr === '::' || /^::ffff:127\./i.test(addr);
+}
+
+/**
+ * The page's own address for talking to `remote`: loopback for loopback,
+ * else 10.0.2.15, as IPv4-mapped (::ffff:10.0.2.15) toward an IPv4-mapped
+ * peer and fd00::15 toward IPv6. glibc's getaddrinfo sorts its answers by
+ * connect()ing a UDP socket to each and asserts that an IPv6 socket sent to
+ * a mapped address reports a mapped source ("::" aborted every AF_UNSPEC
+ * lookup with two families of answers).
+ */
+export function localAddressFor(remote: SockAddr): string {
+  const a = remote.address;
+  if (isLoopback(a) && a !== '0.0.0.0' && a !== '::') return /^::ffff:/i.test(a) ? '::ffff:127.0.0.1' : a.includes(':') ? '::1' : '127.0.0.1';
+  if (remote.family !== AF_INET6) return '10.0.2.15';
+  return /^::ffff:/i.test(a) ? '::ffff:10.0.2.15' : 'fd00::15';
 }
 
 /** Expand an IPv6 address to 8 16-bit groups (handles :: and an embedded IPv4 tail). */
@@ -384,6 +399,8 @@ export class KSocket implements OpenFile {
   /** AF_UNIX datagrams: who sent each one (a bound sender's address), and the last one read (recvfrom) */
   private rxFrom = new Map<Uint8Array, SockAddr>();
   lastFrom: SockAddr | null = null;
+  /** DGRAM/SEQPACKET: the whole length of the last message read (MSG_TRUNC) */
+  lastMsgLen = 0;
   private rxLen = 0;
   private rxEof = false;
   private rdShut = false;
@@ -447,7 +464,9 @@ export class KSocket implements OpenFile {
       if (this.rxLen > 0 && got < buf.length) {
         const before = fdsOut?.length ?? 0;
         got += this.take(buf.subarray(got), (msgFlags & MSG_PEEK) !== 0, fdsOut);
-        if (!(msgFlags & MSG_WAITALL) || got === buf.length || (msgFlags & MSG_PEEK) || this.messages) return got;
+        // One message per receive; MSG_TRUNC returns its whole length, as Linux does
+        if (this.messages) return msgFlags & MSG_TRUNC ? this.lastMsgLen : got;
+        if (!(msgFlags & MSG_WAITALL) || got === buf.length || (msgFlags & MSG_PEEK)) return got;
         if ((fdsOut?.length ?? 0) > before) return got; // descriptions end a message
         continue;
       }
@@ -472,6 +491,7 @@ export class KSocket implements OpenFile {
       const k = Math.min(chunk.length, out.length);
       out.set(chunk.subarray(0, k));
       this.lastFrom = this.rxFrom.get(chunk) ?? null;
+      this.lastMsgLen = chunk.length;
       if (peek) return k;
       this.rxFrom.delete(chunk);
       const fds = this.rxFds.get(chunk);
@@ -657,7 +677,7 @@ export class KSocket implements OpenFile {
       ({ peer, info }) => {
         if (this.state !== 'connecting') { peer.close(); return 0; }
         const remote = remoteOf(info);
-        const local = this.local ?? { family: remote.family, address: remote.family === AF_INET6 ? 'fd00::15' : '10.0.2.15', port: stack.ephemeral() };
+        const local = this.local ?? { family: remote.family, address: localAddressFor(remote), port: stack.ephemeral() };
         this._attach(peer, local, remote);
         return 0;
       },
@@ -808,7 +828,14 @@ export class KDatagramSocket implements OpenFile {
     return this.remote ? this.sendto(buf, 0, this.remote) : Promise.resolve(-EDESTADDRREQ);
   }
 
-  connect(addr: SockAddr): number { this.remote = { ...addr }; return 0; }
+  connect(addr: SockAddr): number {
+    this.remote = { ...addr };
+    // A connected datagram socket has a source address (getsockname)
+    if (!this.local || this.local.address === '::' || this.local.address === '0.0.0.0') {
+      this.local = { family: this.domain, address: localAddressFor({ ...addr, family: this.domain }), port: this.local?.port || this.stack.ephemeral() };
+    }
+    return 0;
+  }
   bind(addr: SockAddr): number {
     if (this.local) return -EINVAL;
     this.local = { ...addr, port: addr.port || this.stack.ephemeral() };
@@ -1019,6 +1046,8 @@ export class NetStack {
 
   /** socketpair(2): two connected stream sockets (AF_UNIX-like; they report AF_UNIX). */
   socketpair(type = SOCK_STREAM): [KSocket, KSocket] | number {
+    // SOCK_SEQPACKET: Rust's std::process::Command makes one for every spawn
+    // (cargo couldn't start rustc, nor rustc its linker: EOPNOTSUPP)
     const base = type & 0xf;
     if (base !== SOCK_STREAM && base !== SOCK_DGRAM && base !== SOCK_SEQPACKET) return -EOPNOTSUPP;
     const flags = type & SOCK_NONBLOCK ? O_NONBLOCK : 0;
@@ -1542,9 +1571,11 @@ export async function netSyscall(
       const fds: OpenFile[] = [];
       const n = await s.recv(data.subarray(0, len), args[2], sig, fds);
       if (n < 0) return n;
-      const peer = s.getpeername();
+      const peer = s.domain === AF_UNIX && s.type === SOCK_DGRAM ? s.lastFrom ?? { family: AF_UNIX, address: '', port: 0 } : s.getpeername();
       if (typeof peer !== 'number') addrOut(peer, len, SOCKADDR_ROOM);
       const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+      // A message longer than the buffer: the rest was dropped (MSG_TRUNC in msg_flags)
+      if (s.type !== SOCK_STREAM && s.lastMsgLen > Math.min(n, len)) dv.setUint32(meta + 4, MSG_TRUNC, true);
       if (fds.length) {
         // As many as fit the caller's control buffer; the rest are closed (MSG_CTRUNC)
         const fit = Math.max(0, Math.min(fds.length, Math.floor((cap - 16) / 4)));
@@ -1563,7 +1594,7 @@ export async function netSyscall(
           dv.setInt32(ctrl + 12, SCM_RIGHTS, true);
           dv.setUint32(meta, Math.min(cap, (16 + k * 4 + 7) & ~7), true);
         }
-        if (k < fds.length) dv.setUint32(meta + 4, MSG_CTRUNC, true);
+        if (k < fds.length) dv.setUint32(meta + 4, dv.getUint32(meta + 4, true) | MSG_CTRUNC, true);
       }
       return n;
     }

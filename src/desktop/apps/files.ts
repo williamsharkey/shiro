@@ -210,7 +210,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
     refresh = setTimeout(() => { refresh = null; void go(cwd, false); }, 250);
   });
   win.on('close', off);
-  (win as { content?: unknown }).content = { navigate: (a: Record<string, unknown>) => { if (typeof a.path === 'string') void go(a.path); } };
+  (win as { content?: unknown }).content = { navigate: (a: Record<string, unknown>) => { if (typeof a.path === 'string') void go(a.path); }, path: () => cwd };
   void go(start, false);
   return win;
 }
