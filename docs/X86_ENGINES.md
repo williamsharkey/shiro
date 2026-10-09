@@ -360,8 +360,11 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    so ssh-agent survives its daemonizing fork; `RLIMIT_STACK` reads 8 MiB).
 25. `mlock`/`munlock`/`mlockall`/`munlockall` succeed (wasm memory is never
    paged out; gnupg locks its secure memory).
+26. Under Shiro `uname` takes the kernel's host and domain names (Blink's
+   kernel version and machine otherwise; emscripten's nodename was
+   "emscripten", which tmux showed).
 
-Patches 13, 15–21 and 24–25 come from unix/compat-tools (15 also from
+Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.
 
 Native Blink's own exit path (`KillOtherThreads`) still hangs after
