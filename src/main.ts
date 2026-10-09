@@ -746,7 +746,8 @@ async function main() {
   initFaviconUpdater(terminal.term);
 
   // Initialize dynamic title (shows recent commands)
-  initTitle();
+  // The desktop titles the tab with the product name (src/brand.json)
+  if (!desktop) initTitle();
 
   // Auto-reconnect remote session if one was active before page reload
   // Skip only if become mode is actually active (not just config in localStorage)

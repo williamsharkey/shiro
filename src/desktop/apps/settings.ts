@@ -8,6 +8,7 @@ import type { DesktopWindow } from '../wm';
 import { GLYPHS } from '../icons';
 import { networkCredential, networkStatus, onNetworkStatus } from '../../net-signin';
 import { openSignIn, probeRelay, signedInAccount, signOut, statusText } from '../network';
+import { BRAND } from '../../brand';
 import buildNumber from '../../../build-number.txt?raw';
 
 const PANES = [
@@ -117,7 +118,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
   function about(): void {
     panel.onclick = null;
     panel.innerHTML = `
-      <h2>unix.computer</h2><p class="sd-muted">A Unix-like computer that runs in a browser tab: a kernel with processes, pipes, ptys and signals; WASI/WASIX and x86-64 Linux programs; a package manager.</p>
+      <h2>${esc(BRAND.name)}</h2><p class="sd-muted">A Unix-like computer that runs in a browser tab: a kernel with processes, pipes, ptys and signals; WASI/WASIX and x86-64 Linux programs; a package manager.</p>
       <h3>This computer</h3>
       <div class="sd-card">
         <div class="sd-row"><span class="sd-grow">Build</span>#${esc(buildNumber.trim())}</div>

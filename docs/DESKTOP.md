@@ -23,6 +23,14 @@ All changes are additive. Nothing below renames or removes an earlier name.
   `DesktopWindow`, `Surface`, content kinds `dom`, `iframe`, `terminal`,
   `surface`, apps, desktop events, `/dom`, `requireNetworkSignIn`.
 
+## Name
+
+The Unix edition is **tabcomputer** (tabcomputer.com). The name, domain, tagline
+and description live in `src/brand.json` only: the desktop reads it (`src/brand.ts`:
+tab title, wallpaper wordmark, welcome banner, About), and `server.mjs`
+(`brandAppShell`) gives the shared `index.html` that title plus description and
+Open Graph tags for every host except shiro.computer, since link previews don't run JS.
+
 ## Choosing the UI
 
 `uiMode()` (src/ui-mode.ts):
@@ -33,7 +41,7 @@ All changes are additive. Nothing below renames or removes an earlier name.
 | `?demo=1`, embedded in another page (seeds), app ("become") mode | terminal |
 | saved `shiro-ui` | that one |
 | host `shiro.computer` or `*.shiro.computer` | terminal |
-| anything else (unix.computer, localhost) | desktop |
+| anything else (tabcomputer.com, localhost) | desktop |
 
 From a shell: `desktop` switches to the desktop and `desktop classic` switches
 back. System menu → Classic Terminal does the same. Both modes keep
