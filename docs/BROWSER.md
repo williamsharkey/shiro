@@ -8,6 +8,8 @@ us is make a request as another site. So the spike's real work is a network
 and origin layer that lets an iframe on our domain show
 `https://en.wikipedia.org/` as if it were there.
 
+![Wikipedia in the Browser app](screenshots/browser-wikipedia.png)
+
 How well it works is measured in [WEB_SCORE.md](WEB_SCORE.md)
 (`tests/browser/web-score.mjs`), as DEBIAN_SCORE.md does for Debian.
 

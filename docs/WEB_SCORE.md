@@ -65,6 +65,33 @@ page; it shows up as part of the desktop's heap.
   16 concurrent) a news site alone exhausts them; see BROWSER.md, "Decisions".
 
 
+## NetSurf and Dillo in the VM
+
+The same machine's other way to browse: Debian's NetSurf 3.10 (GTK 3) and
+Dillo 3.0.5 (FLTK), x86-64 binaries in Blink, X11 on the desktop, and OpenSSL
+in the guest over the relay (docs/GUI.md). Run with
+`node tests/browser/web-score-vm.mjs`. Loaded means the window's title became
+the page's; rendered means the window shows more than a blank or error page.
+Neither browser runs JavaScript, so interactivity isn't measured. The guest
+connects by IP address (its own resolver), which this sandbox's proxy
+refuses, so this ran on a relay with direct egress and the sandbox CA in the
+guest's store.
+
+| site | NetSurf | Dillo | Browser app (TLS in the page) |
+|---|---:|---:|---:|
+| example.com | ✓ 24.4 s | ✓ 7.1 s | – (not in the list) |
+| en.wikipedia.org/wiki/Web_browser | ✗ (window gone: crashed) | ✓ 11.8 s | ✓ 1.1 s (Main_Page) |
+| news.ycombinator.com | ✓ 24.4 s | ✓ 6.2 s | ✓ 1.4 s |
+| www.debian.org | ✓ 46.4 s | ✓ 9.3 s | – |
+| www.google.com | ✓ 30.6 s | ✓ 5.1 s | ✓ 1.1 s |
+| github.com | ✓ 80.4 s | ✓ 12.4 s | ✓ 2.1 s |
+| developer.mozilla.org | ✓ 48.1 s | ✓ 10.9 s | ✓ 0.6 s |
+| www.w3schools.com | ✓ 55.7 s | ✓ 11.8 s | ✓ 2.1 s |
+
+So the VM's browsers reach most static pages, at 5 to 80 seconds a page and
+without JavaScript, layout of the modern web, or video. The Browser app shows
+the same pages in 1 to 2 seconds, with everything the host browser can do.
+
 ## Reading the results
 
 Summary of the 2026-10-09 run: the Browser app **loads 50 of 52 pages**
