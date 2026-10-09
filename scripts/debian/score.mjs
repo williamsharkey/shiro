@@ -49,6 +49,7 @@ const CATEGORIES = [
   ['engine-crash', /blink: aborted|terminating due to SIG|Segmentation fault|Illegal instruction|Bus error|core dumped|returned error exit status 1[34]\d\b|SIGSEGV|SIGILL|SIGBUS/],
   ['kernel-netlink', /Unable to initialize Netlink socket|Cannot open netlink socket/],
   ['missing-syscall', /Function not implemented|ENOSYS|missing syscall|Operation not supported/],
+  ['storage-full', /unable to fsync .*Input\/output error|QuotaExceededError/],
   ['download', /Failed to fetch|Hash Sum mismatch|Could not connect to the package mirror/],
   ['dependencies', /unmet dependencies|Unable to correct problems|held broken packages/],
   ['maintainer-script', /installed (?:\S+ )?(?:package )?(?:post-installation|pre-installation|pre-removal|post-removal) script subprocess returned error|subprocess .* returned error exit status/],
@@ -303,6 +304,16 @@ async function main() {
         try {
           // A dpkg left half-configured by an earlier failure fails everything after it
           // ("dpkg was interrupted": its journal, /var/lib/dpkg/updates, isn't empty)
+          // A headless context's storage quota is far below a real profile's: start over before it fills
+          // (dpkg's fsync of a full IndexedDB is EIO)
+          if (m) {
+            const st = await m.page.evaluate(() => navigator.storage.estimate()).catch(() => null);
+            if (st && st.quota && st.usage / st.quota > 0.6) {
+              log(`storage ${Math.round(st.usage / 2 ** 20)} of ${Math.round(st.quota / 2 ** 20)} MiB; new machine`);
+              await m.context.close().catch(() => {});
+              m = null;
+            }
+          }
           if (m && (await m.run('dpkg --audit 2>&1; ls -A /var/lib/dpkg/updates 2>/dev/null')).out.trim()) {
             log('dpkg --audit reports problems (or dpkg was interrupted); new machine');
             await m.context.close().catch(() => {});
@@ -375,6 +386,7 @@ function report() {
 const CAT_MEANING = {
   'blink-lchown': "Blink's lchown follows symlinks, so dpkg can't set the owner of a symlink whose target isn't unpacked yet (reported to unix/perf-blink)",
   'not-in-trixie': 'popcon counts every release and architecture; no such amd64 package in trixie',
+  'storage-full': "the browser's storage quota ran out mid-install (the scoreboard's headless profile has a small one)",
   'kernel-netlink': "the program needs an AF_NETLINK socket (nft, and iproute2 beyond -V); Shiro's kernel has none",
   'engine-crash': 'a program died of a signal in Blink (an unimplemented instruction or an emulation bug)',
   'missing-syscall': 'a system call Shiro or Blink does not implement',
