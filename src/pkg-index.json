@@ -3206,8 +3206,8 @@
     {
      "path": "bin/tmux",
      "url": "/pkg/tmux/3.8/tmux.gz",
-     "sha256": "b91c97c91627d47bafdab346c32cc6ba2a74529f783bc4b6b9e02fb99147a06c",
-     "size": 608839,
+     "sha256": "57b50154bbd77f1a50e95b1e9199fe82c0f360a6959a6dcbd9d5d1a39af98cc7",
+     "size": 608892,
      "unpack": "gzip"
     },
     {

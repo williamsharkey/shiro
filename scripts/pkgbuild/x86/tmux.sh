@@ -6,6 +6,10 @@ SRC=$(unpack "$(fetch https://github.com/tmux/tmux/releases/download/$VERSION/tm
 setup_musl
 deps_ncurses
 deps_libevent
+# Format expansion (the status line, window names) gives up after 100 ms and
+# leaves the rest of the line blank; emulated, a busy page can take longer
+sed -i 's/^#define FORMAT_TIME_LIMIT 100$/#define FORMAT_TIME_LIMIT 2000/' "$SRC/format.c"
+grep -q '^#define FORMAT_TIME_LIMIT 2000$' "$SRC/format.c"
 export PKG_CONFIG_PATH="$SYSROOT/lib/pkgconfig" PKG_CONFIG_LIBDIR="$SYSROOT/lib/pkgconfig"
 configure_make "$SRC" --enable-static --disable-utf8proc \
   CPPFLAGS="-I$SYSROOT/include -I$SYSROOT/include/ncursesw" LDFLAGS="-L$SYSROOT/lib -static" \

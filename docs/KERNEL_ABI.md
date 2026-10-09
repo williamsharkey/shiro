@@ -101,6 +101,10 @@ All changes so far are additive; nothing below renames or removes an earlier nam
   - `sh` as a kernel process with no script on a terminal (or `-i`) runs
     an interactive read-eval loop (`Shell.exited` marks `exit`).
   - `link(2)` copies report the source's inode number.
+  - `Kernel.startForkChild(parent, pid, run)` starts a fork child by who
+    forked it (`data.forkParent`), not its ppid: a parent that exits right
+    after fork() (daemon()) reparented the child to init first, which then
+    never started (tmux's server, now and then).
   - `SYS_uname` (63) writes a `struct utsname` whose nodename is
     `Kernel.hostname` ("shiro"); Blink takes the host and domain names
     from it. Constant `UTSNAME_FIELD`.
