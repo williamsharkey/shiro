@@ -1,0 +1,7 @@
+body { font: 15px system-ui, sans-serif; max-width: 32rem; margin: 2rem auto; padding: 0 1rem; color: #1d2433; background: #fafafa; }
+form { display: flex; gap: .5rem; }
+form input { flex: 1; padding: .4rem; }
+li { display: flex; gap: .5rem; align-items: center; padding: .3rem 0; }
+li.done span { text-decoration: line-through; color: #889; }
+li button { margin-left: auto; }
+#status { color: #667; font-size: 13px; }

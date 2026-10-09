@@ -151,6 +151,10 @@ The egress policy is the security boundary; everything else limits abuse.
   and the rightmost entry is used, i.e. the address nginx saw.
 - **Logging.** One line per connect, refusal and close: client IP, target
   host/IP:port, byte counts, duration, close reason. Never payloads.
+- **Upstream proxy** (`TABCOMPUTER_TCP_UPSTREAM_PROXY=http://host:port`, off by
+  default): dial through an HTTP CONNECT proxy, for hosts whose egress only
+  allows proxied traffic. The address policy still vets what the name resolves
+  to; the proxy then dials the name itself.
 - **Token secret.** Random per process unless `TABCOMPUTER_TCP_SECRET` is set (set
   it if several server processes sit behind one balancer).
 
@@ -236,6 +240,14 @@ token requests and asks `requireNetworkSignIn()` (src/net-signin.ts) once on a
 receives that token. See docs/DESKTOP.md, "Network sign-in".
 
 ## Checking it from a tab
+
+When a connection fails, curl and git only say they couldn't connect.
+`dmesg` (the kernel log, src/kernel/klog.ts) says why: e.g.
+`net: relay refused connect to github.com:443: sign-in required (token 401)`,
+`... handshake refused (close 1006) after token refresh`, `... no relay
+configured`, or the relay's own `op:error` code (`EACCES (address blocked by
+relay policy)`). Identical lines are rate-limited.
+
 
 `doctor` (src/commands/doctor.ts) requests a relay token (this site's
 `/tcp/token`, or the token URL of the user's own relay) and connects a kernel

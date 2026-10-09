@@ -111,6 +111,8 @@ const ssecmpBin = join(out, 'ssecmp');
 const haveSsecmp = tryBuild('gcc', ['-static', '-O1', '-o', ssecmpBin, 'ssecmp.c', '-lm']);
 const brkmapBin = join(out, 'brkmap');
 const haveBrkmap = tryBuild('gcc', ['-static', '-O1', '-o', brkmapBin, 'brkmap.c']);
+const rawepollBin = join(out, 'rawepoll');
+const haveRawepoll = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', rawepollBin, 'rawepoll.c']);
 const bigfileBin = join(out, 'bigfile');
 const haveBigfile = tryBuild('gcc', ['-static', '-O1', '-o', bigfileBin, 'bigfile.c']);
 const getgroupsBin = join(out, 'getgroups');
@@ -119,6 +121,9 @@ const fionbioBin = join(out, 'fionbio');
 const haveFionbio = tryBuild('gcc', ['-static', '-O1', '-o', fionbioBin, 'fionbio.c']);
 const fuzzBin = join(out, 'jitfuzz');
 const haveFuzz = tryBuild('gcc', ['-static', '-O1', '-o', fuzzBin, 'jitfuzz.c']);
+
+const argv0Bin = join(out, 'argv0');
+const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
 async function setup(bin: Uint8Array) {
   const { fs, shell } = await createTestShell();
@@ -505,6 +510,45 @@ describe.skipIf(!haveTty)('Blink engine: interactive program on a kernel pty', (
     expect(await done).toEqual({ type: 'exited', status: 0 });
   }, 120_000);
 
+  // Bun's and libuv's input loop (native Claude Code): raw, O_NONBLOCK stdin
+  // waited on with epoll, SIGWINCH through a self-pipe
+  it.skipIf(!haveRawepoll).each(['', 'threads', 'offmain', 'reopen'])('raw non-blocking epoll reads of the tty see keys; a resize wakes it with the new size (%s)', async (mode) => {
+    const { fs } = await setup(readFileSync(rawepollBin));
+    const { Kernel } = await import('@shiro/kernel/kernel');
+    const { TtySession, attachKernelTty } = await import('@shiro/kernel/pty');
+    const { JobControl } = await import('@shiro/kernel/signals');
+    const { blinkRunner } = await import('@shiro/x86-engine/blink');
+    const kernel = new Kernel({ fs, registerWithProcessTable: false });
+    const jc = new JobControl();
+    attachKernelTty(kernel, jc);
+    const tty = new TtySession({ jc });
+    let screen = '';
+    tty.pty.onOutput((b: Uint8Array) => { screen += new TextDecoder().decode(b); });
+    tty.resize(30, 90);
+    const until = async (re: RegExp, ms = 30_000) => {
+      const t0 = Date.now();
+      while (!re.test(screen)) {
+        if (Date.now() - t0 > ms) throw new Error(`timed out waiting for ${re}; screen: ${JSON.stringify(screen)}`);
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    };
+    const p = tty.spawnJob(kernel, { path: '/home/user/work/prog', argv: mode ? ['prog', mode] : ['prog'], cwd: '/home/user/work', run: blinkRunner('/home/user/work/prog') });
+    const done = tty.foreground({ pgid: p.pgid });
+    await until(/ready/);
+    expect(screen).toContain('size 30x90');
+    await new Promise((r) => setTimeout(r, 200)); // blocked in epoll_wait
+    tty.pty.input('a');
+    await until(/key 97/);
+    await new Promise((r) => setTimeout(r, 200));
+    tty.pty.input('bc');
+    await until(/key 99/);
+    tty.resize(41, 132);
+    await until(/winch 41x132/);
+    tty.pty.input('q');
+    await until(/bye/);
+    expect(await done).toEqual({ type: 'exited', status: 0 });
+  }, 120_000);
+
   it('Ctrl-C ends a C program blocked reading the tty (no handler)', async () => {
     const { fs } = await setup(readFileSync(join(FIX, 'hello-musl')));
     const { Kernel } = await import('@shiro/kernel/kernel');
@@ -531,6 +575,20 @@ describe.skipIf(!haveTty)('Blink engine: interactive program on a kernel pty', (
 });
 
 // Blink patch 0011: the guest's fds and processes are the kernel's.
+// Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
+// (busybox picks its applet by it; Debian's redis-server -> redis-check-rdb)
+describe('argv[0] through a symlink', () => {
+  for (const engine of ['blink', 'x86']) {
+    it.skipIf(!haveArgv0)(`is the link's name, not the target's (${engine})`, async () => {
+      const { shell } = await setup(readFileSync(argv0Bin));
+      const env = engine === 'x86' ? 'TABCOMPUTER_X86_ENGINE=x86 ' : '';
+      // (and through a hard link: dpkg links graphviz's libgvc6-config-update to dot, which picks its layout by argv[0])
+      const r = await run(shell, `ln -sf prog echo2; mkdir -p bin; ln -sf ../prog bin/redis-server; rm -f dot; ln prog dot; ${env}./echo2; ${env}./prog; PATH=$PWD/bin:$PATH ${env}redis-server; ${env}./dot`);
+      expect(r.output.replace(/\r\n/g, '\n')).toBe('argv0=./echo2\nargv0=./prog\nargv0=redis-server\nargv0=./dot\n');
+    }, 60_000);
+  }
+});
+
 describe('Blink engine: kernel processes (fork, exec, pipes)', () => {
   it('fork+exec+wait, posix_spawn over a pipe, popen and system through /bin/sh', async () => {
     const { shell } = await setup(readFileSync(join(FIX, 'proc-musl')));

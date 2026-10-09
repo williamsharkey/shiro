@@ -212,6 +212,12 @@ export function loadElf(
     [0,  0n],                           // AT_NULL (terminator)
   ];
 
+  // Pad so that RSP, pointing at argc once the vector below is written, is
+  // 16-aligned (Linux ABI); aligning after writing argc left RSP below it, and
+  // a program saw argc 0 and no argv[0] whenever the strings' length was off
+  const vectorBytes = BigInt((1 + argv.length + 1 + envp.length + 1 + auxv.length * 2) * 8);
+  sp = ((sp - vectorBytes) & ~0xFn) + vectorBytes;
+
   // Write auxv in reverse so they appear in order on the stack
   for (let i = auxv.length - 1; i >= 0; i--) {
     sp -= 16n;
@@ -235,12 +241,9 @@ export function loadElf(
     mem.write64(sp, argAddrs[i]);
   }
 
-  // Write argc
+  // Write argc (RSP is 16-aligned here: see the padding above)
   sp -= 8n;
   mem.write64(sp, BigInt(argv.length));
-
-  // Align RSP to 16 bytes (Linux ABI requirement before _start)
-  sp &= ~0xFn;
 
   // Set CPU state
   cpu.rip = info.entryPoint;

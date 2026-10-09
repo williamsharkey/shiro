@@ -1,0 +1,10 @@
+{
+  "mode": "seed-blob",
+  "injected": true,
+  "hcOuterAvailable": true,
+  "sameOriginParentAccess": true,
+  "hostUrl": "https://example.com/feed",
+  "hostOrigin": "https://example.com",
+  "hostTitle": "Example",
+  "createdAt": "2026-03-19T10:00:00.000Z"
+}

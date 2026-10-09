@@ -85,7 +85,9 @@ export async function resolveKernelProgram(
     // Blink (wasm) when the page can run it, else the src/x86 interpreter
     const { chooseElfRunner } = await import('./x86-engine');
     const { x86Runner } = await import('./x86/kernel-runner');
-    return { argv: [path, ...args], run: await chooseElfRunner(path, shell.env, () => x86Runner(bytes, path)) };
+    // argv[0] is the name as typed (a symlink's, not its target's: busybox applets,
+    // Debian's redis-server -> redis-check-rdb); the runner loads the resolved `path`
+    return { argv: [name, ...args], run: await chooseElfRunner(path, shell.env, () => x86Runner(bytes, name)) };
   }
   if (bytes[0] !== 0x23 /* # */) return null;
   const firstLine = dec.decode(bytes.subarray(0, Math.min(bytes.length, 256))).split('\n')[0];

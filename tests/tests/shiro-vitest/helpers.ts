@@ -44,6 +44,7 @@ import { topCmd } from '@shiro/commands/top';
 import { manCmd } from '@shiro/commands/man';
 import { systemctlCmd } from '@shiro/commands/systemctl';
 import { crontabCmd, journalctlCmd } from '@shiro/commands/cron';
+import { dmesgCmd } from '@shiro/commands/dmesg';
 import { sshCmd } from '@shiro/commands/ssh';
 import { scpCmd } from '@shiro/commands/scp';
 import { sudoCmd } from '@shiro/commands/sudo';
@@ -120,6 +121,7 @@ export async function createTestShell(): Promise<{ fs: FileSystem; shell: Shell 
   commands.register(systemctlCmd);
   commands.register(crontabCmd);
   commands.register(journalctlCmd);
+  commands.register(dmesgCmd);
   commands.register(sshCmd);
   commands.register(scpCmd);
   commands.registerAll([sudoCmd, debianCmd, shiroAlternativesCmd, shiroAptMethodCmd]);

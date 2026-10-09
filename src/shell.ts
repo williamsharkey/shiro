@@ -525,6 +525,12 @@ export class Shell {
   fs: FileSystem;
   /** User id kernel processes started by this shell run as (`sudo` sets 0); undefined = the parent's (1000). */
   uid?: number;
+  /**
+   * Boot work that decides what names mean (Debian mode's overlay, which
+   * makes `python3` Debian's once installed): commands wait for it, so one
+   * typed right after load doesn't run the builtin.
+   */
+  bootGate?: Promise<unknown>;
   cwd: string = '/home/user';
   env: Record<string, string> = {};
   history: string[] = [];
@@ -886,6 +892,7 @@ export class Shell {
     child.inheritedReturn = this.canReturn();
     child.kernelHost = this.kernelHost;
     child.uid = this.uid;
+    child.bootGate = this.bootGate;
     return child;
   }
 
@@ -1024,6 +1031,7 @@ export class Shell {
     // loop or if body) runs on the terminal of the call around it; a builtin
     // calling back with its own sink collects the output like $(...), kernel
     // programs included (their stdout doesn't go to the screen)
+    if (this.bootGate) { await this.bootGate; this.bootGate = undefined; }
     if (terminalOverride === undefined) {
       terminalOverride = this.inCommand > 0
         ? (this.terminal ? capturingStdout(this.terminal) : undefined)
@@ -1175,8 +1183,10 @@ export class Shell {
     if (!done() && SHELL_KEYWORDS.has(name)) out.push({ kind: 'keyword' });
     if (!done() && name in this.functions) out.push({ kind: 'function' });
     if (!done() && SHELL_BUILTIN_NAMES.has(name)) out.push({ kind: 'builtin' });
-    // Shiro's own commands come before files on PATH (an installed package doesn't shadow them)
-    if (!done() && !name.includes('/') && this.commands.get(name) && !SHELL_BUILTIN_NAMES.has(name)) out.push({ kind: 'registered' });
+    // Shiro's own commands come before files on PATH, unless a program shadows
+    // them as it does when run (pkg install, or Debian mode's /usr/bin/NAME)
+    if (!done() && !name.includes('/') && this.commands.get(name) && !SHELL_BUILTIN_NAMES.has(name) &&
+      !(this.pkgShadowBypass !== name && packageShadows(this.fs).has(name))) out.push({ kind: 'registered' });
     if (!done()) {
       const path = await this.findExecutableInPath(name).catch(() => null);
       if (path) out.push({ kind: 'file', path });
@@ -3798,7 +3808,7 @@ export class Shell {
               const toCtxErr = (t: string) => { ctx.stderr += t.replace(/\r\n/g, '\n'); };
               exitCode = await this.executeScript(executable, cmdArgs, ctx,
                 outRedirected || i !== pipeline.length - 1 ? toCtxOut : writeStdout,
-                outRedirected ? toCtxErr : stderrWriter);
+                outRedirected ? toCtxErr : stderrWriter, effectiveCmdName);
             } catch (e: any) {
               ctx.stderr += e.message + '\n';
               exitCode = 1;
@@ -7584,6 +7594,8 @@ export class Shell {
     ctx: CommandContext,
     writeStdout: (s: string) => void,
     writeStderr: (s: string) => void,
+    /** argv[0] as the caller gave it (the command word); a symlink is followed for the binary only, as on Linux */
+    argv0: string = filePath,
   ): Promise<number> {
     // Only a shell script reads the shell's live fd 0 as it goes; anything else gets it as ctx.stdin
     const fillStdin = async () => {
@@ -7643,7 +7655,7 @@ export class Shell {
     if (content.charCodeAt(0) === 0x00 && content.charCodeAt(1) === 0x61 &&
         content.charCodeAt(2) === 0x73 && content.charCodeAt(3) === 0x6d) {
       await fillStdin();
-      return this.executeWasmBinary(resolvedPath, args, ctx, writeStdout, writeStderr);
+      return this.executeWasmBinary(resolvedPath, args, ctx, writeStdout, writeStderr, argv0);
     }
 
     // Check for #!wasi-pkg stub — load from package cache
@@ -7696,7 +7708,7 @@ export class Shell {
       return runElf(resolvedPath, args, {
         fs: this.fs, cwd: this.cwd, args, env: this.env, shell: this,
         stdin: ctx.stdin || '', writeStdout: writeStdout, writeStderr: writeStderr,
-      });
+      }, undefined, argv0);
     }
 
     // Reject other binary files (Mach-O, etc.) that can't be interpreted
@@ -7807,13 +7819,15 @@ export class Shell {
     ctx: CommandContext,
     writeStdout: (s: string) => void,
     writeStderr: (s: string) => void,
+    argv0: string = filePath,
   ): Promise<number> {
     try {
       const data = await this.fs.readFile(filePath) as Uint8Array;
       const image = new Uint8Array(data);
       const wasmModule = await WebAssembly.compile(image);
 
-      const programName = filePath.split('/').pop() || filePath;
+      // (the name the program was run by, not a symlink's target: multi-call binaries pick their applet by it)
+      const programName = argv0.split('/').pop() || argv0;
       const { runWasiProgram } = await import('./wasi/run-command');
       return await runWasiProgram(ctx, {
         module: wasmModule, image, argv: [programName, ...args], cwd: this.cwd, env: { ...this.env },

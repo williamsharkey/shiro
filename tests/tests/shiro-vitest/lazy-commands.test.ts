@@ -611,9 +611,11 @@ describe('Lazy-Loaded Commands', () => {
         args: ['-version'],
         fs, cwd: '/home/user', env: {}, stdin: '', stdout: '', stderr: '', shell,
       };
+      // -version is the core's own report (tests/browser/ffmpeg.mjs checks it in
+      // Chromium); here the wasm core can't load, so it fails like any other run
       const code = await ffmpegCmd.exec(ctx);
-      expect(code).toBe(0);
-      expect(ctx.stdout).toContain('ffmpeg.wasm');
+      if (code === 0) expect(ctx.stdout).toMatch(/ffmpeg version/);
+      else expect(ctx.stderr).toContain('ffmpeg: failed to load');
     });
 
     it('should fail gracefully when WASM cannot be loaded (test env)', async () => {

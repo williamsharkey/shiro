@@ -26,23 +26,41 @@ export function rewriteCsp(value: string, o: { nonce: string; realOrigin: string
       const name = parts[0].toLowerCase();
       if (['frame-ancestors', 'report-uri', 'report-to', 'sandbox', 'require-trusted-types-for', 'trusted-types'].includes(name)) continue;
       let srcs = parts.slice(1);
-      if (FETCH_DIRECTIVES.has(name) && srcs.some((s) => s.toLowerCase() === "'self'")) srcs.push(o.realOrigin);
+      if (FETCH_DIRECTIVES.has(name)) {
+        const lower = srcs.map((x) => x.toLowerCase());
+        // 'self' is now the browse origin: it must also name the real one, and a list naming the
+        // real origin must also allow 'self' (relative URLs resolve on the browse origin)
+        if (lower.includes("'self'")) srcs.push(o.realOrigin);
+        else if (!lower.includes("'none'") && !lower.includes('*') && sourceMatches(lower.filter((x) => !x.startsWith("'")), o.realOrigin, '')) srcs.push("'self'");
+      }
       if (name === 'script-src' || name === 'script-src-elem') {
         hasScript = true;
-        if (!srcs.some((s) => s.toLowerCase() === "'none'")) srcs.push(`'nonce-${o.nonce}'`);
-        else srcs = [`'nonce-${o.nonce}'`];
+        srcs = allowRuntime(srcs, o.nonce);
       }
       if (name === 'default-src') defaultIdx = dirs.length;
       dirs.push([name, ...srcs].join(' '));
     }
     // default-src covers scripts when script-src is absent: add the nonce there
     if (!hasScript && defaultIdx >= 0) {
-      const d = dirs[defaultIdx];
-      dirs[defaultIdx] = /'none'/i.test(d) ? `default-src 'nonce-${o.nonce}'` : `${d} 'nonce-${o.nonce}'`;
+      dirs[defaultIdx] = ['default-src', ...allowRuntime(dirs[defaultIdx].split(' ').slice(1), o.nonce)].join(' ');
     }
     if (dirs.length) out.push(dirs.join('; '));
   }
   return out.length ? out.join(', ') : null;
+}
+
+/**
+ * Let the runtime's <script> run under a script source list. A nonce disables
+ * 'unsafe-inline', so a list that relies on 'unsafe-inline' (and has no nonce,
+ * hash or 'strict-dynamic' of its own) gets 'self' instead: the runtime is
+ * served from the browse origin.
+ */
+function allowRuntime(srcs: string[], nonce: string): string[] {
+  const lower = srcs.map((x) => x.toLowerCase());
+  if (lower.includes("'none'")) return [`'nonce-${nonce}'`];
+  const usesNonces = lower.some((x) => x.startsWith("'nonce-") || /^'sha(256|384|512)-/.test(x) || x === "'strict-dynamic'");
+  if (lower.includes("'unsafe-inline'") && !usesNonces) return lower.includes("'self'") ? srcs : [...srcs, "'self'"];
+  return [...srcs, `'nonce-${nonce}'`];
 }
 
 /** <meta charset> / http-equiv content-type in the first bytes of a document. */

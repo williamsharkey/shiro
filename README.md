@@ -48,9 +48,10 @@ signed in, a panel opens with a button for the sign-in page and a box for the co
 you. Credentials persist in the tab's storage. `claude-window` runs it in a new window, and
 `claude login` signs in again.
 
-The default is `@anthropic-ai/claude-code@2.1.112`, the last pure-JavaScript release. It runs on
-tabcomputer's Node.js runtime. `claude --native` (and `claude install --native`) runs Anthropic's
-current native binary under the x86 engine instead.
+Plain `claude` runs Anthropic's current native build in the x86-64 engine; `claude install`
+downloads it (about 240 MB) and `claude update` fetches a newer one. `claude --npm` (and
+`claude install --npm`) runs the pinned pure-JavaScript release, `@anthropic-ai/claude-code@2.1.112`,
+on tabcomputer's Node.js runtime instead: no download, and faster to start.
 
 An outer Claude Code can drive a tab over WebRTC: run `remote start` here, then connect with
 the `shiro-mcp` package ([shiro-mcp/](shiro-mcp/)).

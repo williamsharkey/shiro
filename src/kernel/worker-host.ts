@@ -54,6 +54,7 @@ export function workerRunner(createWorker: (proc: Process) => GuestWorker, opts:
     worker.onError(err => {
       if (proc.exiting) return;
       const msg = (err as Error)?.message ?? String(err);
+      kernel.reportFatal(proc, msg);
       void kernel.writeAll(proc, 2, new TextEncoder().encode(`${proc.comm}: ${msg}\n`)).finally(() => resolve(1));
     });
     worker.onExit?.(code => resolve(code));
@@ -124,6 +125,7 @@ export function attachThread(
     if (done || proc.exiting) return;
     // An uncaught error in any thread takes the process down, as a crash would
     const msg = (err as Error)?.message ?? String(err);
+    kernel.reportFatal(proc, `thread ${tid}: ${msg}`);
     void kernel.writeAll(proc, 2, new TextEncoder().encode(`${proc.comm}[${tid}]: ${msg}\n`))
       .finally(() => kernel.exit(proc, W_EXITCODE(1)));
   });

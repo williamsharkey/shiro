@@ -125,10 +125,14 @@ for (const c of CASES) {
   await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 60, everyNthFrame: 1 });
   t0 = Date.now();
   await page.goto(url, { waitUntil: 'load' });
-  await page.waitForFunction(() => window.__reflow?.first && window.__shiro?.terminal, null, { timeout: 60_000 });
+  await page.waitForFunction(() => window.__reflow?.first && window.__tabcomputer?.terminal, null, { timeout: 60_000 });
   await page.waitForTimeout(SETTLE_MS);
   await cdp.send('Page.stopScreencast').catch(() => {});
   const r = await page.evaluate(() => window.__reflow);
+  // The page itself is never faded (a class on <html> once matched the traffic lights' .sd-light)
+  const faded = await page.evaluate(() => [document.documentElement, document.body, document.getElementById('shiro-desktop')]
+    .filter(e => e && getComputedStyle(e).opacity !== '1').map(e => e.tagName + (e.id ? '#' + e.id : '')));
+  if (faded.length) problems.push(`not opaque: ${faded.join(', ')}`);
   if (r.cls > 0) problems.push(`layout shift ${r.cls.toFixed(4)}: ${JSON.stringify(r.shifts)}`);
   const moved = diff(r.first, r.last);
   if (moved.length) problems.push(`moved after the first visible frame (${r.firstAt} ms):\n      ${moved.join('\n      ')}`);

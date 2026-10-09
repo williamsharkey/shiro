@@ -15,7 +15,7 @@ import {
 } from '@shiro/kernel/net';
 import { MSG_PEEK, MSG_TRUNC } from '@shiro/kernel/abi';
 
-interface Ports { echoPort: number; firehosePort: number; relayA: number; relayB: number; relayC: number; relayD: number; relayE: number; mainPort: number; origin: string }
+interface Ports { echoPort: number; firehosePort: number; relayA: number; relayB: number; relayC: number; relayD: number; relayE: number; relayF: number; proxyLogPort: number; mainPort: number; origin: string }
 
 let harness: ChildProcess;
 let P: Ports;
@@ -97,6 +97,21 @@ describe('kernel sockets over the TCP relay', () => {
     expect(dec.decode(data)).toBe('hello, relay\n');
     expect(end).toBe(0);
     await s.close();
+  });
+
+  it('dials through an upstream CONNECT proxy, after the address policy', async () => {
+    const s = stream(stackFor(P.relayF));
+    expect(await s.connectHost('public.test', P.echoPort)).toBe(0);
+    expect(await s.write(enc.encode('via proxy\n'))).toBe(10);
+    s.shutdown(SHUT_WR);
+    expect(dec.decode((await readAll(s)).data)).toBe('via proxy\n');
+    await s.close();
+    // a name resolving to a private address never reaches the proxy; a proxy refusal is a refusal
+    expect(await stream(stackFor(P.relayF)).connectHost('rebind.test', P.echoPort)).toBeLessThan(0);
+    expect(await stream(stackFor(P.relayF)).connectHost('denied.test', P.echoPort)).toBeLessThan(0);
+    const seen: string[] = await (await fetch(`http://127.0.0.1:${P.proxyLogPort}/`)).json();
+    expect(seen.some((l) => l.startsWith('CONNECT public.test:'))).toBe(true);
+    expect(seen.some((l) => l.includes('rebind.test'))).toBe(false);
   });
 
   it('server.mjs itself (env-configured) relays 1 MiB both ways with flow control', async () => {
@@ -636,6 +651,62 @@ describe('node net module over kernel sockets', () => {
     for await (const c of (client.end('echo me'), client)) chunks.push(dec.decode(c as Uint8Array));
     expect(chunks.join('')).toBe('echo me');
     await new Promise<void>((r) => server.close(() => r()));
+  });
+});
+
+describe('relay failures reach the kernel log (dmesg)', () => {
+  const lines = async () => (await import('@shiro/kernel/klog')).klog.all().map((r) => r.text);
+  const connectFails = async (stack: NetStack, address: string, port: number) => {
+    const s = stream(stack);
+    const r = await s.connect(v4(address, port));
+    await s.close();
+    return r;
+  };
+
+  it('a token refused for the page origin', async () => {
+    expect(await connectFails(stackFor(P.relayA, 'https://evil.example'), '127.0.0.1', P.echoPort)).toBe(-ENETUNREACH);
+    expect(await lines()).toContain(`net: relay refused connect to 127.0.0.1:${P.echoPort}: this page's origin is not allowed (token 403)`);
+  });
+
+  it('a relay that needs sign-in', async () => {
+    expect(await connectFails(stackFor(P.relayD, P.origin, { credentials: false }), '127.0.0.1', P.echoPort)).toBe(-ENETUNREACH);
+    expect(await lines()).toContain(`net: relay refused connect to 127.0.0.1:${P.echoPort}: sign-in required (token 401)`);
+  });
+
+  it('a refused WebSocket handshake, with and without a token refresh', async () => {
+    // No token at all: the relay refuses the upgrade (401), which the WebSocket API can't show
+    expect(await connectFails(stackFor(P.relayA, P.origin, { tokenUrl: null }), '127.0.0.1', P.echoPort)).toBe(-ENETUNREACH);
+    expect((await lines()).some((l) => l.startsWith(`net: relay refused connect to 127.0.0.1:${P.echoPort}: handshake refused`) && !l.includes('refresh'))).toBe(true);
+    // A token from another relay: refused, refreshed, refused again
+    const cross = stackFor(P.relayA, P.origin, { relayUrl: `ws://127.0.0.1:${P.relayE}/tcp` });
+    expect(await connectFails(cross, '127.0.0.1', P.echoPort + 0)).toBe(-ENETUNREACH);
+    expect((await lines()).some((l) => /^net: relay refused connect to 127\.0\.0\.1:\d+: handshake refused( \(close \d+[^)]*\))? after token refresh$/.test(l))).toBe(true);
+  });
+
+  it("the relay's own op:error replies", async () => {
+    expect(await connectFails(stackFor(P.relayB), '10.0.0.1', 80)).toBe(-EACCES);
+    expect((await lines()).some((l) => l.startsWith('net: relay refused connect to 10.0.0.1:80: EACCES'))).toBe(true);
+  });
+
+  it('no relay configured', async () => {
+    const stack = new NetStack();
+    stack.configure({ relayUrl: null, tokenUrl: null, dohUrl: null, portHost: null });
+    expect(await connectFails(stack, '93.184.215.14', 443)).toBe(-ENETUNREACH);
+    expect(await lines()).toContain('net: relay refused connect to 93.184.215.14:443: no relay configured');
+  });
+
+  it('a retry loop does not flood the log', async () => {
+    const stack = stackFor(P.relayA, 'https://evil.example');
+    for (let i = 0; i < 20; i++) await connectFails(stack, '127.0.0.1', 9);
+    expect((await lines()).filter((l) => l === "net: relay refused connect to 127.0.0.1:9: this page's origin is not allowed (token 403)").length).toBe(5);
+  });
+
+  it('dmesg shows the reason', async () => {
+    const { createTestShell } = await import('./helpers');
+    const { shell } = await createTestShell();
+    let out = '';
+    await shell.execute('dmesg', (t) => { out += t; });
+    expect(out).toMatch(/\] net: relay refused connect to 127\.0\.0\.1:\d+: this page's origin is not allowed \(token 403\)/);
   });
 });
 
