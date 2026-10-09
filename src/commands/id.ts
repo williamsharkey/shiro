@@ -17,12 +17,20 @@ export const id: Command = {
     const showName = flags.n || flags.name;
     const showReal = flags.r || flags.real;
 
-    // In browser environment, we use mock values
-    const uid = root ? 0 : 1000;
-    const gid = root ? 0 : 1000;
-    const groups = [gid];
+    // From /etc/passwd and /etc/group, like getpwnam/getgrouplist
+    const { passwdEntries, userGroups } = await import('./base-utils');
+    const pw = (await passwdEntries(ctx)).find((p) => p.name === user);
+    if (positional[0] && !pw) {
+      ctx.stderr += `id: '${positional[0]}': no such user\n`;
+      return 1;
+    }
+    const grs = (await userGroups(ctx, user)) ?? [];
+    const uid = pw?.uid ?? (root ? 0 : 1000);
+    const gid = pw?.gid ?? (root ? 0 : 1000);
+    const groups = grs.length ? grs.map((g) => g.gid) : [gid];
     const userName = user;
-    const groupName = root ? "root" : "users";
+    const groupName = grs[0]?.name ?? (root ? "root" : "user");
+    const groupNames = grs.length ? grs.map((g) => g.name) : [groupName];
 
     const output: string[] = [];
 
@@ -40,13 +48,13 @@ export const id: Command = {
       }
     } else if (showGroups) {
       if (showName) {
-        output.push(groupName);
+        output.push(groupNames.join(" "));
       } else {
         output.push(groups.join(" "));
       }
     } else {
       // Default: show all
-      const groupsStr = groups.map(g => `${g}(${groupName})`).join(",");
+      const groupsStr = groups.map((g, k) => `${g}(${groupNames[k]})`).join(",");
       output.push(`uid=${uid}(${userName}) gid=${gid}(${groupName}) groups=${groupsStr}`);
     }
 
