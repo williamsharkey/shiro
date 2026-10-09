@@ -6,7 +6,7 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1314/1567 (83.9%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1322/1567 (84.4%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1275/1567 (81.4%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **608/635 (95.7%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **0/320 (0.0%)** |
@@ -37,8 +37,8 @@ How each suite runs, and what is and isn't scored, is described in
 | command-sub | 0/28 | 20/28 | 8 |
 | here-doc | 0/32 | 29/32 | 3 |
 | redirect | 3/39 | 32/39 | 7 |
-| if_ | 0/5 | 4/5 | 1 |
-| loop | 1/28 | 22/28 | 6 |
+| if_ | 0/5 | 5/5 | 0 |
+| loop | 1/28 | 26/28 | 2 |
 | case_ | 0/13 | 12/13 | 1 |
 | sh-func | 0/11 | 11/11 | 0 |
 | func-parsing | 1/12 | 6/12 | 6 |
@@ -48,7 +48,7 @@ How each suite runs, and what is and isn't scored, is described in
 | builtin-eval-source | 0/23 | 19/23 | 4 |
 | builtin-getopts | 0/30 | 26/30 | 4 |
 | builtin-trap | 0/33 | 26/33 | 7 |
-| builtin-bracket | 0/50 | 44/50 | 6 |
+| builtin-bracket | 0/50 | 46/50 | 4 |
 | builtin-cd | 3/28 | 26/28 | 2 |
 | builtin-special | 1/12 | 7/12 | 5 |
 | builtin-type | 0/6 | 3/6 | 3 |
@@ -64,7 +64,7 @@ How each suite runs, and what is and isn't scored, is described in
 | tilde | 0/14 | 9/14 | 5 |
 | glob | 0/23 | 18/23 | 5 |
 | pipeline | 0/25 | 20/25 | 5 |
-| exit-status | 0/11 | 7/11 | 4 |
+| exit-status | 0/11 | 8/11 | 3 |
 | errexit | 0/35 | 29/35 | 6 |
 | subshell | 0/2 | 2/2 | 0 |
 | command_ | 2/16 | 8/16 | 8 |
@@ -98,8 +98,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **command-sub**: Backtick 2; Nested backticks; Making keyword out of command sub should NOT work; Command sub with here doc; Escaped quote in [[ ]]; Quoting \ within ``; Quoting \ within `` within double quotes; Syntax errors with double quotes within backticks
 - **here-doc**: Here doc with bad comsub delimiter; Here doc with line continuation, then pipe.  Syntax error.; Function def and execution with here doc
 - **redirect**: Named file descriptor; \>&word redirects stdout and stderr when word is not a number or -; 1\>&2- to move file descriptor; 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; xtrace not affected by redirects
-- **if_**: if break corner case
-- **loop**: while in pipe with subshell; continue at top level; continue in subshell; continue in subshell aborts with errexit; bad arg to break; top-level break/continue/return (without strict_control_flow)
+- **loop**: while in pipe with subshell; bad arg to break
 - **case_**: case \n bug regression
 - **func-parsing**: Hard case, function with } token in it; = in function name; Function name with $; Function name with command sub; Function name with !; Break after ) is OK.
 - **builtin-echo**: echo builtin should disallow typed args - literal; echo builtin should disallow typed args - variable
@@ -107,7 +106,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **builtin-eval-source**: eval usage; eval YSH block with 'break continue return error'; Source with syntax error; Eval with syntax error
 - **builtin-getopts**: getopts with invalid variable name; OPTIND; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
 - **builtin-trap**: exit 1 when trap code string is invalid; trap EXIT calling exit; trap EXIT with PARSE error and explicit exit; exit codes for traps are isolated; traps are cleared in subshell (started with &); trap USR1, sleep, SIGINT: non-interactively; Remove trap with an unsigned integer
-- **builtin-bracket**: -a as unary operator (alias of -e); -k for sticky bit; test -p named pipe; test -o for options; -ef; test -c
+- **builtin-bracket**: -k for sticky bit; test -p named pipe; -ef; test -c
 - **builtin-cd**: pwd in symlinked dir on shell initialization; Survey of getcwd() syscall
 - **builtin-special**: Prefix assignments persist after special builtins, like : (set -o posix); Prefix assignments persist after readonly, but NOT exported (set -o posix); Prefix binding for exec is a special case (versus e.g. readonly); bash 'type' gets confused - says 'function', but runs builtin; command, builtin - both can be redefined, not special (regression)
 - **builtin-type**: type -\> alias external; type of relative path; more special builtins
@@ -122,7 +121,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **tilde**: ${undef:-~}; ${x//~/~root}; a[x]=foo:~ has tilde expansion; x=${undef-~:~}; temp assignment x=~ env
 - **glob**: Glob of unescaped [[] and []]; Glob of negated unescaped [[] and []]; \ in unquoted substitutions does not match a backslash; \ in unquoted substitutions escapes globchars; shopt -u globskipdots shows . and ..
 - **pipeline**: PIPESTATUS is set on simple commands; \|&; ! is not a command; Evaluation of argv[0] in pipeline occurs in child; SIGPIPE causes pipeline to die (regression for issue #295)
-- **exit-status**: subshell OverflowError https://github.com/oilshell/oil/issues/996; If subshell false -- exit code is propagated in a weird way (strict_argv prevents); Exit code when command sub evaluates to empty str, e.g. `false` (#2416); More test cases with empty argv
+- **exit-status**: If subshell false -- exit code is propagated in a weird way (strict_argv prevents); Exit code when command sub evaluates to empty str, e.g. `false` (#2416); More test cases with empty argv
 - **errexit**: More && \|\|; set errexit while it's ignored in a subshell (moot with strict_errexit); errexit double guard; pipeline process respects errexit; simple command / assign - redir failure DOES respect errexit; bash atoms [[ (( - redir failure checked
 - **command_**: Command block; Permission denied; filling $PATH cache, then insert the same command earlier in cache; filling $PATH cache, then deleting command; Non-executable on $PATH; hash without args prints the cache; hash with args; Executing command with same name as directory in PATH (#2429)
 - **posix**: Empty for loop without in.  Do can be on the same line I guess.; Empty action for case is syntax error; Bare semi-colon not allowed; Command substitution in default

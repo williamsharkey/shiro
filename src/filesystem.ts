@@ -61,6 +61,11 @@ export interface FSNode {
   ctime: number;
   size: number;
   symlinkTarget?: string;
+  /** Access time when set apart from mtime (utimensat); absent = follows mtime. */
+  atime?: number;
+  /** Nanoseconds past atime/mtime (0-999999), when set with nanosecond precision. */
+  atimeNs?: number;
+  mtimeNs?: number;
 }
 
 export interface StatResult {
@@ -69,6 +74,11 @@ export interface StatResult {
   size: number;
   mtime: Date;
   ctime: Date;
+  /** Access time (equal to mtime unless set apart with utimes). */
+  atimeMs?: number;
+  /** Nanoseconds past mtime/atime (0-999999). */
+  mtimeNs?: number;
+  atimeNs?: number;
   isFile(): boolean;
   isDirectory(): boolean;
   isSymbolicLink(): boolean;
@@ -77,17 +87,20 @@ export interface StatResult {
 function makeStat(node: FSNode): StatResult {
   const mtime = new Date(node.mtime);
   const ctime = new Date(node.ctime);
+  const atime = node.atime === undefined ? mtime : new Date(node.atime);
   return {
     type: node.type,
     mode: node.mode,
     size: node.size,
     mtime,
     ctime,
-    atime: mtime,
+    atime,
     birthtime: ctime,
     mtimeMs: mtime.getTime(),
     ctimeMs: ctime.getTime(),
-    atimeMs: mtime.getTime(),
+    atimeMs: atime.getTime(),
+    mtimeNs: node.mtimeNs ?? 0,
+    atimeNs: node.atime === undefined ? node.mtimeNs ?? 0 : node.atimeNs ?? 0,
     birthtimeMs: ctime.getTime(),
     dev: 0,
     ino: 0,
@@ -964,7 +977,11 @@ export class FileSystem {
     return data;
   }
 
-  async writeFile(path: string, data: Uint8Array | string, options?: { mode?: number }): Promise<void> {
+  async writeFile(path: string, data: Uint8Array | string, options?: {
+    mode?: number;
+    /** Modification (and access) time to record instead of now (the kernel writing back an open file). */
+    times?: { mtime: number; mtimeNs?: number; atime?: number; atimeNs?: number };
+  }): Promise<void> {
     for (const vp of this.virtualProviders) {
       if (vp.writeFile(path, data)) return;
     }
@@ -988,9 +1005,10 @@ export class FileSystem {
       type: 'file',
       content,
       mode: options?.mode ?? existing?.mode ?? 0o644,
-      mtime: now,
+      mtime: options?.times?.mtime ?? now,
       ctime: existing?.ctime ?? now,
       size: content.length,
+      ...(options?.times ? { mtimeNs: options.times.mtimeNs || undefined, atime: options.times.atime, atimeNs: options.times.atimeNs || undefined } : {}),
     });
     this._emitChange('write', path);
   }
@@ -1163,7 +1181,7 @@ export class FileSystem {
       // Prevent renaming a file over a directory
       const existing = await this._get(newPath);
       if (existing?.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, rename '${newPath}'`);
-      await this._put({ ...node, path: newPath, mtime: Date.now() });
+      await this._put({ ...node, path: newPath, mtime: Date.now(), mtimeNs: undefined });
       await this._delete(oldPath);
     }
     this._emitChange('rename', oldPath, newPath);
@@ -1175,11 +1193,18 @@ export class FileSystem {
     await this._put({ ...node, mode });
   }
 
-  /** Set modification time (utimensat). There is no separate atime; it follows mtime. */
-  async utimes(path: string, _atimeMs: number, mtimeMs: number): Promise<void> {
+  /**
+   * Set access and modification times (utimensat) of `path` itself (a
+   * symlink is not followed). `ns`: nanoseconds past each millisecond time.
+   * An atime equal to the mtime isn't stored: atime then follows mtime.
+   */
+  async utimes(path: string, atimeMs: number, mtimeMs: number, ns?: { atime?: number; mtime?: number }): Promise<void> {
     const node = await this._get(path);
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, utime '${path}'`);
-    await this._put({ ...node, mtime: mtimeMs });
+    const mtimeNs = ns?.mtime || undefined;
+    const atimeNs = ns?.atime || undefined;
+    const sameA = atimeMs === mtimeMs && atimeNs === mtimeNs;
+    await this._put({ ...node, mtime: mtimeMs, mtimeNs, atime: sameA ? undefined : atimeMs, atimeNs: sameA ? undefined : atimeNs });
   }
 
   // isomorphic-git compatibility: symlink support

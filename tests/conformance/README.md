@@ -96,8 +96,13 @@ a build and a browser); run it before updating the scoreboard.
   (Apache-2.0) at a pinned commit of its prebuilt `prod/testsuite-base`
   branch into `tests/conformance/.cache/wasi-testsuite`.
 - Every wasm32-wasip1 module (C, Rust, AssemblyScript) runs as a Shiro WASI
-  process (`runWasiProgram`, through the kernel) the way the suite's wasmtime
-  adapter runs it: only the test's args and env, a fresh copy of its `root`
-  directory preopened as `/` (a `/` mount, see `openPreopens`), judged on the
+  process (`runWasiProgram` → a kernel process in a Node Worker, the path a
+  cross-origin isolated page takes; without the Worker factory Node would get
+  the legacy runtime) the way the suite's wasmtime adapter runs it: only the
+  test's args and env, a fresh copy of its `root` directory preopened as `/`
+  (a `/` mount, see `openPreopens`) and nothing else (`bare`), judged on the
   exit code and, when given, stdout. Wasmtime passes all of them on Linux, so
-  all are scored. `WASI_ONLY=name,rust` narrows a run.
+  all are scored. `WASI_ONLY=name,rust` narrows a run; `WASI_LEGACY=1` runs
+  the old in-page runtime (`src/wasi-runtime.ts`) instead, unscored.
+- Known failure: `path_link` needs real hard links (same inode, shared data,
+  nlink 2); the FileSystem has none, so `link()` copies.

@@ -436,17 +436,12 @@
    ]
   },
   "if_": {
-   "pass": 4,
+   "pass": 5,
    "total": 5,
-   "failures": [
-    {
-     "i": 4,
-     "name": "if break corner case"
-    }
-   ]
+   "failures": []
   },
   "loop": {
-   "pass": 22,
+   "pass": 26,
    "total": 28,
    "failures": [
     {
@@ -454,24 +449,8 @@
      "name": "while in pipe with subshell"
     },
     {
-     "i": 13,
-     "name": "continue at top level"
-    },
-    {
-     "i": 14,
-     "name": "continue in subshell"
-    },
-    {
-     "i": 15,
-     "name": "continue in subshell aborts with errexit"
-    },
-    {
      "i": 16,
      "name": "bad arg to break"
-    },
-    {
-     "i": 23,
-     "name": "top-level break/continue/return (without strict_control_flow)"
     }
    ]
   },
@@ -648,13 +627,9 @@
    ]
   },
   "builtin-bracket": {
-   "pass": 44,
+   "pass": 46,
    "total": 50,
    "failures": [
-    {
-     "i": 3,
-     "name": "-a as unary operator (alias of -e)"
-    },
     {
      "i": 27,
      "name": "-k for sticky bit"
@@ -662,10 +637,6 @@
     {
      "i": 35,
      "name": "test -p named pipe"
-    },
-    {
-     "i": 39,
-     "name": "test -o for options"
     },
     {
      "i": 41,
@@ -1051,13 +1022,9 @@
    ]
   },
   "exit-status": {
-   "pass": 7,
+   "pass": 8,
    "total": 11,
    "failures": [
-    {
-     "i": 2,
-     "name": "subshell OverflowError https://github.com/oilshell/oil/issues/996"
-    },
     {
      "i": 8,
      "name": "If subshell false -- exit code is propagated in a weird way (strict_argv prevents)"

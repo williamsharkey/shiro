@@ -245,6 +245,9 @@ export const O_NOCTTY = 0o400;
 export const O_TRUNC = 0o1000;
 export const O_APPEND = 0o2000;
 export const O_NONBLOCK = 0o4000;
+export const O_DSYNC = 0o10000;
+/** O_SYNC is __O_SYNC | O_DSYNC on Linux. */
+export const O_SYNC = 0o4010000;
 export const O_DIRECTORY = 0o200000;
 export const O_NOFOLLOW = 0o400000;
 export const O_CLOEXEC = 0o2000000;
@@ -513,6 +516,9 @@ export interface KStat {
   atimeMs: number;
   mtimeMs: number;
   ctimeMs: number;
+  /** Nanoseconds past atimeMs/mtimeMs (0-999999), for times set with utimensat. */
+  atimeNs?: number;
+  mtimeNs?: number;
 }
 
 /** Size of the Linux x86-64 `struct stat` that encodeStat/decodeStat use. */
@@ -540,18 +546,20 @@ export function encodeStat(st: KStat, out: Uint8Array): void {
   setU64(dv, 48, st.size);
   setU64(dv, 56, st.blksize);
   setU64(dv, 64, st.blocks);
-  const ts = (off: number, ms: number) => {
-    setU64(dv, off, Math.floor(ms / 1000));
-    setU64(dv, off + 8, Math.floor((ms % 1000) * 1e6));
+  const ts = (off: number, ms: number, ns = 0) => {
+    const sec = Math.floor(ms / 1000);
+    setU64(dv, off, sec);
+    setU64(dv, off + 8, Math.floor((ms - sec * 1000) * 1e6) + ns);
   };
-  ts(72, st.atimeMs);
-  ts(88, st.mtimeMs);
+  ts(72, st.atimeMs, st.atimeNs);
+  ts(88, st.mtimeMs, st.mtimeNs);
   ts(104, st.ctimeMs);
 }
 
 export function decodeStat(buf: Uint8Array): KStat {
   const dv = new DataView(buf.buffer, buf.byteOffset, STAT_SIZE);
   const ts = (off: number) => getU64(dv, off) * 1000 + Math.floor(getU64(dv, off + 8) / 1e6);
+  const ns = (off: number) => getU64(dv, off + 8) % 1e6;
   return {
     dev: getU64(dv, 0),
     ino: getU64(dv, 8),
@@ -566,6 +574,8 @@ export function decodeStat(buf: Uint8Array): KStat {
     atimeMs: ts(72),
     mtimeMs: ts(88),
     ctimeMs: ts(104),
+    ...(ns(72) ? { atimeNs: ns(72) } : {}),
+    ...(ns(88) ? { mtimeNs: ns(88) } : {}),
   };
 }
 

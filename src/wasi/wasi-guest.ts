@@ -27,15 +27,26 @@
 import * as A from '../kernel/abi';
 import {
   SysReply, SysRequest, filetypeFromDtype, filetypeFromMode, wasiErrno, writeFilestat,
-  FT_CHAR, WASI_EBADF, WASI_ECHILD, WASI_EINVAL, WASI_ENOSYS, WASI_ENOTSUP, WASI_EOVERFLOW, WASI_ENOTTY,
+  FT_CHAR, FT_DIR, FT_SOCK_STREAM, WASI_EBADF, WASI_ECHILD, WASI_EINVAL, WASI_ENOSYS, WASI_ENOTSUP, WASI_EOVERFLOW, WASI_ENOTTY,
+  WASI_EISDIR, WASI_ENAMETOOLONG, WASI_ENOTCAPABLE, WASI_ENOTSOCK,
   SYS_wasix_exec, SYS_wasix_resolve, SYS_wasix_signal, WASIX_SIG_CATCH, WASIX_SIG_DEFAULT, WASIX_SIG_IGNORED,
 } from './abi';
 import { Asyncify, hashCapture, type StackCapture } from './asyncify';
 import type { DynCalls } from './dyncall';
 
-const RIGHT_FD_READ = 1n << 1n, RIGHT_FD_SEEK = 1n << 2n, RIGHT_FD_TELL = 1n << 5n,
-  RIGHT_FD_WRITE = 1n << 6n, RIGHT_FD_READDIR = 1n << 14n;
-const ALL_RIGHTS = (1n << 30n) - 1n;
+const R = (...bits: number[]) => bits.reduce((m, b) => m | (1n << BigInt(b)), 0n);
+const RIGHT_FD_READ = R(1), RIGHT_FD_SEEK = R(2), RIGHT_FD_TELL = R(5), RIGHT_FD_WRITE = R(6), RIGHT_FD_READDIR = R(14);
+/**
+ * Rights fd_fdstat_get reports, as Wasmtime does (rights can't be changed:
+ * fd_fdstat_set_rights is ENOTSUP). Files: fd_datasync, read, seek,
+ * fdstat_set_flags, sync, tell, write, advise, allocate, filestat_get,
+ * filestat_set_size, filestat_set_times, poll_fd_readwrite (read/write as the
+ * access mode allows). Directories: the path_* rights but
+ * path_filestat_set_size, fd_readdir, fd_filestat_get/set_times.
+ */
+const FILE_RIGHTS = R(0, 1, 2, 3, 4, 5, 6, 7, 8, 21, 22, 23, 27);
+const DIR_RIGHTS = R(9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 23, 24, 25, 26);
+const SOCK_RIGHTS = R(28, 29);
 
 type Sys<T = number> = Generator<SysRequest, T, SysReply>;
 
@@ -136,9 +147,22 @@ export class WasiGuest {
   private inSignal = 0;
   /** A signal whose default action is to ignore it ran during the last syscall: restart that call. */
   private restartCall = false;
+  /** Whether an fd is a directory (fd_seek refuses those), learned on first use. */
+  private fdIsDir = new Map<number, boolean>();
+  /**
+   * The guest's "/" is a directory other than Shiro's root (a '/' mount):
+   * WASI's capability rules then hold, so paths can't leave the directory
+   * fd they are relative to (no absolute paths, no ".." above it, no
+   * absolute symlink targets). With Shiro's root as "/", every directory fd
+   * is inside it anyway, and POSIX programs (openat(fd, "..")) keep working.
+   */
+  private confined: boolean;
+  /** The module imports WASIX (wasix_32v1): Wasmer's semantics where they differ from preview1's. */
+  wasix = false;
 
   constructor(readonly opts: GuestOptions) {
     for (const p of opts.preopens) { this.preopens.set(p.fd, p.name); this.fdPaths.set(p.fd, p.path); }
+    this.confined = !opts.preopens.some(p => p.name === '/' && p.path === '/');
     this.argBytes = opts.args.map(a => enc.encode(a + '\0'));
     this.envBytes = Object.entries(opts.env).map(([k, v]) => enc.encode(`${k}=${v}\0`));
   }
@@ -178,6 +202,11 @@ export class WasiGuest {
       const p = v.getUint32(iovs + i * 8, true);
       d.data.set(m.subarray(p, p + len), total);
       total += len;
+    }
+    if (total === 0) {
+      // Nothing to write, but a bad fd is still an error
+      const r = d.call(A.SYS_fcntl, fd, A.F_GETFD);
+      if (r < 0) return wasiErrno(r);
     }
     let done = 0;
     while (done < total) {
@@ -271,6 +300,8 @@ export class WasiGuest {
   }
   /** utimensat for WASI fst_flags (ATIM=1, ATIM_NOW=2, MTIM=4, MTIM_NOW=8); empty path = the fd itself. */
   private *utimens(dirfd: number, path: string, atim: bigint, mtim: bigint, fst: number, flags: number): Sys {
+    // A time can't be both given and "now"; no other bits exist
+    if ((fst & 3) === 3 || (fst & 12) === 12 || fst & ~15) return WASI_EINVAL;
     const p = enc.encode(path);
     const data = new Uint8Array(p.length + 32);
     data.set(p);
@@ -312,6 +343,44 @@ export class WasiGuest {
     return normalize(base + '/' + path);
   }
 
+  /** A path a confined guest may use relative to a directory fd (see `confined`). */
+  private allowed(path: string): boolean {
+    if (!this.confined) return true;
+    if (path.startsWith('/')) return false;
+    let depth = 0;
+    for (const part of path.split('/')) {
+      if (part === '..') { if (--depth < 0) return false; } else if (part && part !== '.') depth++;
+    }
+    return true;
+  }
+
+  /** `fd` now names a new description (or none): drop what was learned about the old one. */
+  private forget(fd: number): void {
+    this.fdIsDir.delete(fd);
+    this.dirCache.delete(fd);
+  }
+
+  /** fd is a directory (fstat once per fd), or -errno. */
+  private *isDir(fd: number): Sys<boolean | number> {
+    const known = this.fdIsDir.get(fd);
+    if (known !== undefined) return known;
+    const st = yield* this.fstat(fd);
+    if (typeof st === 'number') return st;
+    const dir = (st.mode & A.S_IFMT) === A.S_IFDIR;
+    this.fdIsDir.set(fd, dir);
+    return dir;
+  }
+
+  /** WASI fdflags → O_* status flags. */
+  private static oflagsFromFdflags(fdflags: number): number {
+    let fl = 0;
+    if (fdflags & 1) fl |= A.O_APPEND;
+    if (fdflags & 2) fl |= A.O_DSYNC;
+    if (fdflags & 4) fl |= A.O_NONBLOCK;
+    if (fdflags & (8 | 16)) fl |= A.O_SYNC; // RSYNC is O_SYNC on Linux
+    return fl;
+  }
+
   // ── import table ──────────────────────────────────────────────────
 
   /** Import implementations: module → name → function returning a value or a Sys generator. */
@@ -344,29 +413,57 @@ export class WasiGuest {
         fd_prestat_dir_name: (fd: number, ptr: number, len: number) => {
           const name = this.preopens.get(fd);
           if (name === undefined) return WASI_EBADF;
-          this.u8().set(enc.encode(name).subarray(0, len), ptr);
+          const b = enc.encode(name);
+          if (len < b.length) return WASI_ENAMETOOLONG;
+          this.u8().set(b, ptr);
           return 0;
         },
-        fd_fdstat_set_rights: () => 0,
-        fd_advise: () => 0,
-        fd_allocate: () => 0,
+        // Rights are fixed (as in Wasmtime): an fd's rights can't be dropped
+        fd_fdstat_set_rights: g(function* (this: WasiGuest, fd: number) {
+          const r = yield* this.call(A.SYS_fcntl, fd, A.F_GETFD, 0);
+          return r < 0 ? wasiErrno(r) : WASI_ENOTSUP;
+        }),
+        fd_advise: g(function* (this: WasiGuest, fd: number, _off: bigint, _len: bigint, advice: number) {
+          const st = yield* this.fstat(fd);
+          if (typeof st === 'number') return wasiErrno(st);
+          return advice > 5 ? WASI_EINVAL : 0;
+        }),
+        // posix_fallocate: the file grows to offset+len when shorter
+        fd_allocate: g(function* (this: WasiGuest, fd: number, off: bigint, len: bigint) {
+          const st = yield* this.fstat(fd);
+          if (typeof st === 'number') return wasiErrno(st);
+          if ((st.mode & A.S_IFMT) === A.S_IFDIR) return WASI_EBADF;
+          if ((st.mode & A.S_IFMT) !== A.S_IFREG) return wasiErrno(-A.ENODEV);
+          const end = off + len;
+          if (end <= BigInt(st.size)) return 0;
+          if (end > BigInt(Number.MAX_SAFE_INTEGER)) return wasiErrno(-A.EFBIG);
+          return wasiErrno(yield* this.call(A.SYS_ftruncate, fd, Number(end & 0xffffffffn), Number(end >> 32n)));
+        }),
         fd_filestat_set_times: g(function* (this: WasiGuest, fd: number, atim: bigint, mtim: bigint, fst: number) {
           return yield* this.utimens(fd, '', atim, mtim, fst, 0);
         }),
         path_filestat_set_times: g(function* (this: WasiGuest, fd: number, flags: number, p: number, l: number, atim: bigint, mtim: bigint, fst: number) {
-          return yield* this.utimens(fd, this.str(p, l), atim, mtim, fst, flags & 1 ? 0 : A.AT_SYMLINK_NOFOLLOW);
+          const path = this.str(p, l);
+          if (!this.allowed(path)) return WASI_ENOTCAPABLE;
+          return yield* this.utimens(fd, path, atim, mtim, fst, flags & 1 ? 0 : A.AT_SYMLINK_NOFOLLOW);
         }),
         path_link: g(function* (this: WasiGuest, ofd: number, oflags: number, op: number, ol: number, nfd: number, np: number, nl: number) {
-          const [data, a, b] = this.twoPaths(this.str(op, ol), this.str(np, nl));
+          const from = this.str(op, ol), to = this.str(np, nl);
+          if (!this.allowed(from) || !this.allowed(to)) return WASI_ENOTCAPABLE;
+          const [data, a, b] = this.twoPaths(from, to);
           return wasiErrno((yield* this.sys(A.SYS_linkat, [ofd, a, nfd, b, oflags & 1 ? A.AT_SYMLINK_FOLLOW : 0], data)).ret);
         }),
         path_symlink: g(function* (this: WasiGuest, op: number, ol: number, fd: number, np: number, nl: number) {
-          const [data, a, b] = this.twoPaths(this.str(op, ol), this.str(np, nl));
+          const target = this.str(op, ol), path = this.str(np, nl);
+          // An absolute target would resolve outside a confined guest's root
+          if (!this.allowed(path) || (this.confined && target.startsWith('/'))) return WASI_ENOTCAPABLE;
+          const [data, a, b] = this.twoPaths(target, path);
           return wasiErrno((yield* this.sys(A.SYS_symlinkat, [a, fd, b], data)).ret);
         }),
         sock_accept: g(function* (this: WasiGuest, fd: number, flags: number, ret: number) {
           const r = yield* this.sys(A.SYS_accept4, [fd, flags & 4 ? A.O_NONBLOCK : 0], undefined, A.SOCKADDR_ROOM);
           if (r.ret < 0) return wasiErrno(r.ret);
+          this.forget(r.ret);
           this.view().setUint32(ret, r.ret, true);
           return 0;
         }),
@@ -375,7 +472,11 @@ export class WasiGuest {
         sock_shutdown: g(function* (this: WasiGuest, fd: number, how: number) {
           // WASI sdflags RD=1, WR=2 → SHUT_RD=0, SHUT_WR=1, SHUT_RDWR=2
           if (!(how & 3)) return WASI_EINVAL;
-          return wasiErrno(yield* this.call(A.SYS_shutdown, fd, (how & 3) - 1));
+          const r = yield* this.call(A.SYS_shutdown, fd, (how & 3) - 1);
+          if (r !== -A.ENOSYS) return wasiErrno(r);
+          // No socket layer in this kernel: nothing open here is a socket
+          const st = yield* this.fstat(fd);
+          return typeof st === 'number' ? wasiErrno(st) : WASI_ENOTSOCK;
         }),
         fd_write: (fd: number, iovs: number, n: number, nw: number) =>
           (this.direct && !this.inSignal ? this.fastWrite(fd, iovs, n, nw) : undefined) ?? this.fd_write(fd, iovs, n, nw),
@@ -388,9 +489,8 @@ export class WasiGuest {
         fd_close: g(this.fd_close),
         fd_fdstat_get: g(this.fd_fdstat_get),
         fd_fdstat_set_flags: g(function* (this: WasiGuest, fd: number, flags: number) {
-          let fl = 0;
-          if (flags & 1) fl |= A.O_APPEND;
-          if (flags & 4) fl |= A.O_NONBLOCK;
+          // F_SETFL changes O_APPEND and O_NONBLOCK; the sync flags stay as opened
+          const fl = WasiGuest.oflagsFromFdflags(flags) & (A.O_APPEND | A.O_NONBLOCK);
           return wasiErrno(yield* this.call(A.SYS_fcntl, fd, A.F_SETFL, fl));
         }),
         fd_filestat_get: g(function* (this: WasiGuest, fd: number, ptr: number) {
@@ -408,16 +508,21 @@ export class WasiGuest {
         fd_renumber: g(this.fd_renumber),
         path_open: g(this.path_open),
         path_create_directory: g(function* (this: WasiGuest, fd: number, p: number, l: number) {
-          return wasiErrno((yield* this.atCall(A.SYS_mkdirat, fd, this.str(p, l), [0o777])).ret);
+          const path = this.str(p, l);
+          if (!this.allowed(path)) return WASI_ENOTCAPABLE;
+          return wasiErrno((yield* this.atCall(A.SYS_mkdirat, fd, path, [0o777])).ret);
         }),
         path_filestat_get: g(function* (this: WasiGuest, fd: number, flags: number, p: number, l: number, buf: number) {
-          const r = yield* this.atCall(A.SYS_newfstatat, fd, this.str(p, l), [flags & 1 ? 0 : A.AT_SYMLINK_NOFOLLOW], A.STAT_SIZE);
+          const path = this.str(p, l);
+          if (!this.allowed(path)) return WASI_ENOTCAPABLE;
+          const r = yield* this.atCall(A.SYS_newfstatat, fd, path, [flags & 1 ? 0 : A.AT_SYMLINK_NOFOLLOW], A.STAT_SIZE);
           if (r.ret < 0) return wasiErrno(r.ret);
           writeFilestat(A.decodeStat(r.data), this.view(), buf);
           return 0;
         }),
         path_readlink: g(function* (this: WasiGuest, fd: number, p: number, l: number, buf: number, bufLen: number, used: number) {
           const rel = this.str(p, l);
+          if (!this.allowed(rel)) return WASI_ENOTCAPABLE;
           // /proc/self/exe names this program (LLVM's getMainExecutable reads it)
           if (this.opts.exe && this.resolve(fd, rel) === '/proc/self/exe') {
             const b = enc.encode(this.opts.exe).subarray(0, bufLen);
@@ -432,13 +537,19 @@ export class WasiGuest {
           return 0;
         }),
         path_remove_directory: g(function* (this: WasiGuest, fd: number, p: number, l: number) {
-          return wasiErrno((yield* this.atCall(A.SYS_unlinkat, fd, this.str(p, l), [A.AT_REMOVEDIR])).ret);
+          const path = this.str(p, l);
+          if (!this.allowed(path)) return WASI_ENOTCAPABLE;
+          return wasiErrno((yield* this.atCall(A.SYS_unlinkat, fd, path, [A.AT_REMOVEDIR])).ret);
         }),
         path_unlink_file: g(function* (this: WasiGuest, fd: number, p: number, l: number) {
-          return wasiErrno((yield* this.atCall(A.SYS_unlinkat, fd, this.str(p, l), [0])).ret);
+          const path = this.str(p, l);
+          if (!this.allowed(path)) return WASI_ENOTCAPABLE;
+          return wasiErrno((yield* this.atCall(A.SYS_unlinkat, fd, path, [0])).ret);
         }),
         path_rename: g(function* (this: WasiGuest, fd: number, op: number, ol: number, nfd: number, np: number, nl: number) {
-          const [data, a, b] = this.twoPaths(this.str(op, ol), this.str(np, nl));
+          const from = this.str(op, ol), to = this.str(np, nl);
+          if (!this.allowed(from) || !this.allowed(to)) return WASI_ENOTCAPABLE;
+          const [data, a, b] = this.twoPaths(from, to);
           return wasiErrno((yield* this.sys(A.SYS_renameat, [fd, a, nfd, b], data)).ret);
         }),
         poll_oneoff: g(this.poll_oneoff),
@@ -479,6 +590,8 @@ export class WasiGuest {
           const r = yield* this.sys(A.SYS_pipe2, [0], undefined, 8);
           if (r.ret < 0) return wasiErrno(r.ret);
           const v = new DataView(r.data.buffer, r.data.byteOffset, 8);
+          this.forget(v.getInt32(0, true));
+          this.forget(v.getInt32(4, true));
           const m = this.view();
           m.setUint32(rp, v.getInt32(0, true), true);
           m.setUint32(wp, v.getInt32(4, true), true);
@@ -487,6 +600,7 @@ export class WasiGuest {
         fd_dup: g(function* (this: WasiGuest, fd: number, ret: number) {
           const r = yield* this.call(A.SYS_dup, fd);
           if (r < 0) return wasiErrno(r);
+          this.forget(r);
           const p = this.fdPaths.get(fd);
           if (p !== undefined) this.fdPaths.set(r, p);
           this.view().setUint32(ret, r, true);
@@ -546,6 +660,7 @@ export class WasiGuest {
         fd_dup2: g(function* (this: WasiGuest, fd: number, min: number, cloexec: number, ret: number) {
           const r = yield* this.call(A.SYS_fcntl, fd, cloexec ? A.F_DUPFD_CLOEXEC : A.F_DUPFD, min);
           if (r < 0) return wasiErrno(r);
+          this.forget(r);
           const p = this.fdPaths.get(fd);
           if (p !== undefined) this.fdPaths.set(r, p);
           this.view().setUint32(ret, r, true);
@@ -583,6 +698,7 @@ export class WasiGuest {
           if (domain < 0) return wasiErrno(-A.EAFNOSUPPORT);
           const r = yield* this.call(A.SYS_socket, domain, type === 2 ? A.SOCK_DGRAM : A.SOCK_STREAM, proto);
           if (r < 0) return wasiErrno(r);
+          this.forget(r);
           this.view().setUint32(fdPtr, r, true);
           return 0;
         }),
@@ -592,6 +708,7 @@ export class WasiGuest {
         sock_accept_v2: g(function* (this: WasiGuest, fd: number, fdflags: number, fdPtr: number, addr: number) {
           const r = yield* this.sys(A.SYS_accept4, [fd, fdflags & 4 ? A.O_NONBLOCK : 0], undefined, A.SOCKADDR_ROOM);
           if (r.ret < 0) return wasiErrno(r.ret);
+          this.forget(r.ret);
           this.writeWasiAddr(addr, r.data.slice(0, A.SOCKADDR_ROOM));
           this.view().setUint32(fdPtr, r.ret, true);
           return 0;
@@ -1010,6 +1127,10 @@ export class WasiGuest {
   private *fd_write(fd: number, iovs: number, n: number, nwritten: number): Sys {
     const data = this.gather(this.iovs(iovs, n));
     if (this.inSignal) yield* this.defaultSignalAction(fd, data);
+    if (!data.length) {
+      const r = yield* this.call(A.SYS_fcntl, fd, A.F_GETFD, 0);
+      if (r < 0) return wasiErrno(r);
+    }
     const done = yield* this.writeAll(fd, data);
     if (done < 0) return wasiErrno(done);
     this.view().setUint32(nwritten, done, true);
@@ -1085,6 +1206,10 @@ export class WasiGuest {
   }
 
   private *fd_seek(fd: number, offset: bigint, whence: number, ptr: number): Sys {
+    // Directories have no seek position in WASI (fd_readdir takes cookies)
+    const dir = yield* this.isDir(fd);
+    if (typeof dir === 'number') return wasiErrno(dir);
+    if (dir) return WASI_EISDIR;
     const off = BigInt.asIntN(64, offset);
     const r = yield* this.call(A.SYS_lseek, fd, Number(BigInt.asUintN(32, off)) | 0, Number(off >> 32n), whence);
     if (r < 0) return wasiErrno(r);
@@ -1094,7 +1219,7 @@ export class WasiGuest {
 
   private *fd_close(fd: number): Sys {
     const r = yield* this.call(A.SYS_close, fd);
-    if (r >= 0) { this.preopens.delete(fd); this.fdPaths.delete(fd); this.dirCache.delete(fd); }
+    if (r >= 0) { this.preopens.delete(fd); this.fdPaths.delete(fd); this.forget(fd); }
     return wasiErrno(r);
   }
 
@@ -1103,16 +1228,28 @@ export class WasiGuest {
     if (typeof st === 'number') return wasiErrno(st);
     const fl = yield* this.call(A.SYS_fcntl, fd, A.F_GETFL, 0);
     const filetype = filetypeFromMode(st.mode);
+    this.fdIsDir.set(fd, filetype === FT_DIR);
     let flags = 0;
-    let rights = ALL_RIGHTS;
-    // wasi-libc's isatty(): a character device without seek/tell rights
-    if (filetype === FT_CHAR) rights &= ~(RIGHT_FD_SEEK | RIGHT_FD_TELL);
+    let rights: bigint, inheriting = 0n;
+    if (filetype === FT_DIR) {
+      rights = DIR_RIGHTS;
+      inheriting = DIR_RIGHTS | FILE_RIGHTS;
+    } else {
+      rights = FILE_RIGHTS;
+      // wasi-libc's isatty(): a character device without seek/tell rights
+      if (filetype === FT_CHAR) rights &= ~(RIGHT_FD_SEEK | RIGHT_FD_TELL);
+      if (filetype === FT_SOCK_STREAM) rights |= SOCK_RIGHTS;
+      if (fl >= 0) {
+        const acc = fl & A.O_ACCMODE;
+        if (acc === A.O_RDONLY) rights &= ~RIGHT_FD_WRITE;
+        if (acc === A.O_WRONLY) rights &= ~RIGHT_FD_READ;
+      }
+    }
     if (fl >= 0) {
       if (fl & A.O_APPEND) flags |= 1;
       if (fl & A.O_NONBLOCK) flags |= 4;
-      const acc = fl & A.O_ACCMODE;
-      if (acc === A.O_RDONLY) rights &= ~RIGHT_FD_WRITE;
-      if (acc === A.O_WRONLY) rights &= ~(RIGHT_FD_READ | RIGHT_FD_READDIR);
+      if ((fl & A.O_SYNC) === A.O_SYNC) flags |= 16;
+      else if (fl & A.O_DSYNC) flags |= 2;
     }
     const v = this.view();
     v.setUint8(ptr, filetype);
@@ -1120,7 +1257,7 @@ export class WasiGuest {
     v.setUint16(ptr + 2, flags, true);
     v.setUint32(ptr + 4, 0, true);
     v.setBigUint64(ptr + 8, rights, true);
-    v.setBigUint64(ptr + 16, ALL_RIGHTS, true);
+    v.setBigUint64(ptr + 16, inheriting, true);
     return 0;
   }
 
@@ -1168,6 +1305,12 @@ export class WasiGuest {
   }
 
   private *fd_renumber(from: number, to: number): Sys {
+    // Both must be open in preview1; WASIX (Wasmer) also renumbers to a closed fd (dash's dup2 does)
+    for (const fd of this.wasix ? [from] : [from, to]) {
+      const ok = yield* this.call(A.SYS_fcntl, fd, A.F_GETFD, 0);
+      if (ok < 0) return wasiErrno(ok);
+    }
+    if (from === to) return 0;
     const r = yield* this.call(A.SYS_dup2, from, to);
     if (r < 0) return wasiErrno(r);
     yield* this.call(A.SYS_close, from);
@@ -1176,35 +1319,40 @@ export class WasiGuest {
       m.delete(to);
       if (v !== undefined) { m.delete(from); m.set(to, v); }
     }
-    this.dirCache.delete(from);
-    this.dirCache.delete(to);
+    const dir = this.fdIsDir.get(from);
+    this.forget(from);
+    this.forget(to);
+    if (dir !== undefined) this.fdIsDir.set(to, dir);
     return 0;
   }
 
   // ── path_open ─────────────────────────────────────────────────────
 
-  private *path_open(dirfd: number, _dirflags: number, p: number, l: number, oflags: number,
+  private *path_open(dirfd: number, dirflags: number, p: number, l: number, oflags: number,
     rightsBase: bigint, _rightsInh: bigint, fdflags: number, fdPtr: number): Sys {
     const rel = this.str(p, l);
+    if (!this.allowed(rel)) return WASI_ENOTCAPABLE;
     const read = (rightsBase & (RIGHT_FD_READ | RIGHT_FD_READDIR)) !== 0n;
     const write = (rightsBase & RIGHT_FD_WRITE) !== 0n;
     let flags = write ? (read ? A.O_RDWR : A.O_WRONLY) : A.O_RDONLY;
     if (oflags & 1) flags |= A.O_CREAT;
-    if (oflags & 2) flags = (flags & ~A.O_ACCMODE) | A.O_DIRECTORY;
+    if (oflags & 2) flags |= A.O_DIRECTORY; // with write rights: EISDIR, as for open(2)
     if (oflags & 4) flags |= A.O_EXCL;
     if (oflags & 8) flags |= A.O_TRUNC;
-    if (fdflags & 1) flags |= A.O_APPEND;
-    if (fdflags & 4) flags |= A.O_NONBLOCK;
+    flags |= WasiGuest.oflagsFromFdflags(fdflags);
+    // Without lookupflags.symlink_follow a symlink in the last component isn't followed
+    if (!(dirflags & 1)) flags |= A.O_NOFOLLOW;
     const b = enc.encode(rel);
     let fd = (yield* this.sys(A.SYS_openat, [dirfd, b.length, flags, 0o666], b)).ret;
     // Programs that ask for every right (read+write) also open directories that way
-    if (fd === -A.EISDIR && !(flags & (A.O_CREAT | A.O_TRUNC))) {
-      fd = (yield* this.sys(A.SYS_openat, [dirfd, b.length, A.O_RDONLY | A.O_DIRECTORY, 0], b)).ret;
+    if (fd === -A.EISDIR && !(flags & (A.O_CREAT | A.O_TRUNC | A.O_DIRECTORY))) {
+      fd = (yield* this.sys(A.SYS_openat, [dirfd, b.length, A.O_RDONLY | A.O_DIRECTORY | (flags & A.O_NOFOLLOW), 0], b)).ret;
     }
     if (fd < 0) return wasiErrno(fd);
+    this.forget(fd);
     const abs = this.resolve(dirfd, rel);
     if (typeof abs === 'string') this.fdPaths.set(fd, abs);
-    this.dirCache.delete(fd);
+    if (flags & A.O_DIRECTORY) this.fdIsDir.set(fd, true);
     this.view().setUint32(fdPtr, fd, true);
     return 0;
   }
@@ -1592,6 +1740,7 @@ export function buildImports(
 ): WebAssembly.Imports {
   const impls = guest.functions();
   const imports: Record<string, Record<string, any>> = {};
+  guest.wasix = WebAssembly.Module.imports(module).some(i => i.module === 'wasix_32v1');
   const W = WebAssembly as any;
   for (const imp of WebAssembly.Module.imports(module)) {
     const ns = (imports[imp.module] ??= {});

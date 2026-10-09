@@ -2,22 +2,30 @@
  * Syscall conformance for WASM guests: the WebAssembly/wasi-testsuite
  * wasm32-wasip1 tests (prebuilt C, Rust and AssemblyScript modules, fetched
  * by scripts/conformance/fetch.sh into .cache/wasi-testsuite) run as Shiro
- * WASI processes (src/wasi, through the kernel), the way the suite's
- * wasmtime adapter runs them: the test's args and env only, its `root`
- * directory (a fresh copy) preopened as "/", and the exit code (and stdout,
- * when given) compared. Wasmtime passes all of them on Linux, so all are
- * scored. Results: results/syscalls-wasi.json.
+ * WASI processes (src/wasi, kernel processes on Worker threads, as on a
+ * cross-origin isolated page), the way the suite's wasmtime adapter runs
+ * them: the test's args and env only, its `root` directory (a fresh copy)
+ * preopened as "/" and nothing else preopened, and the exit code (and
+ * stdout, when given) compared. Wasmtime passes all of them on Linux, so all
+ * are scored. Results: results/syscalls-wasi.json. WASI_LEGACY=1 runs the old
+ * in-page runtime instead (results/syscalls-wasi-legacy.partial.json, not
+ * scored).
  */
-import { describe, it } from 'vitest';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { describe, it, beforeAll, afterAll } from 'vitest';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, mkdtempSync, rmSync } from 'node:fs';
 import { join, resolve, basename } from 'node:path';
+import { Worker } from 'node:worker_threads';
+import { build } from 'esbuild';
 import { createTestShell } from '../tests/shiro-vitest/helpers';
 import { runWasiProgram } from '@shiro/wasi/run-command';
+import { setGuestWorkerFactory, forceWasmProcessMode } from '@shiro/wasi/host';
 
 const SUITE = resolve(__dirname, '.cache/wasi-testsuite/tests');
 const RESULTS = resolve(__dirname, 'results');
 const TIMEOUT = 30_000;
 const only = process.env.WASI_ONLY ? process.env.WASI_ONLY.split(',') : null;
+/** WASI_LEGACY=1: the old in-page runtime (src/wasi-runtime.ts) instead of kernel processes. */
+const legacy = !!process.env.WASI_LEGACY;
 
 type Spec = { args?: string[]; env?: Record<string, string>; root?: string; exit_code?: number; stdout?: string };
 type Failure = { name: string; reason?: string; timeout?: boolean };
@@ -33,6 +41,38 @@ async function copyTree(fs: any, from: string, to: string) {
 }
 
 describe.skipIf(!existsSync(SUITE))('wasi-testsuite (wasm32-wasip1) as Shiro WASI processes', () => {
+  // Node has neither Worker nor JSPI, so without this runWasiProgram would
+  // fall back to the legacy runtime: give it Worker threads (the browser's
+  // SharedArrayBuffer path) like kernel-wasi.test.ts does.
+  let tmp = '';
+  beforeAll(async () => {
+    if (legacy) return;
+    tmp = mkdtempSync(join(process.env.TMPDIR || '/tmp', 'shiro-wasi-conf-'));
+    writeFileSync(join(tmp, 'entry.ts'), `
+      import { parentPort } from 'node:worker_threads';
+      import { guestMain } from ${JSON.stringify(resolve(__dirname, '../../src/wasi/guest-worker.ts'))};
+      const port: any = { postMessage: (m: unknown) => parentPort!.postMessage(m), onmessage: null };
+      parentPort!.on('message', (data) => port.onmessage && port.onmessage({ data }));
+      guestMain(port);
+    `);
+    await build({ entryPoints: [join(tmp, 'entry.ts')], bundle: true, platform: 'node', format: 'esm', outfile: join(tmp, 'guest.mjs'), logLevel: 'error' });
+    setGuestWorkerFactory(() => {
+      const w = new Worker(join(tmp, 'guest.mjs'));
+      return {
+        postMessage: (m) => w.postMessage(m),
+        terminate: () => w.terminate(),
+        onMessage: (cb) => { w.on('message', cb); },
+        onError: (cb) => { w.on('error', cb); },
+      };
+    });
+    forceWasmProcessMode('sab');
+  }, 120_000);
+  afterAll(() => {
+    if (legacy) return;
+    forceWasmProcessMode(null);
+    setGuestWorkerFactory(null);
+    rmSync(tmp, { recursive: true, force: true });
+  });
   it('runs', async () => {
     const { fs, shell } = await createTestShell();
     let spec: Spec = {};
@@ -46,7 +86,9 @@ describe.skipIf(!existsSync(SUITE))('wasi-testsuite (wasm32-wasip1) as Shiro WAS
         const module = await WebAssembly.compile(image);
         const env = { ...(spec.env ?? {}) };
         return runWasiProgram(ctx, {
-          module, image, argv: [basename(file), ...(spec.args ?? [])], cwd: root, env, mounts: { '/': root },
+          // Like the suite's wasmtime adapter: `--dir ROOT::/` only when the test has a root
+          module, image, argv: [basename(file), ...(spec.args ?? [])], cwd: root, env,
+          mounts: spec.root ? { '/': root } : {}, bare: true,
         });
       },
     } as any);
@@ -89,7 +131,8 @@ describe.skipIf(!existsSync(SUITE))('wasi-testsuite (wasm32-wasip1) as Shiro WAS
       }
     }
     mkdirSync(RESULTS, { recursive: true });
-    const outName = only ? 'syscalls-wasi.partial.json' : 'syscalls-wasi.json';
+    // (a legacy run isn't scored: it is named like a partial one)
+    const outName = legacy ? 'syscalls-wasi-legacy.partial.json' : only ? 'syscalls-wasi.partial.json' : 'syscalls-wasi.json';
     writeFileSync(join(RESULTS, outName), JSON.stringify({
       suite: 'wasi-testsuite',
       title: 'Syscalls: wasi-testsuite (wasm32-wasip1)',
