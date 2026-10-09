@@ -1,0 +1,50 @@
+From 9403e410fe8950f14f2b7252a611aee478f13918 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 18:02:39 +0000
+Subject: [PATCH 59/59] Shiro: uname takes the kernel's release and version too
+
+Node's os.release() (native Claude Code) said 4.5.0-blink-1.1.0; the
+Shiro kernel's is 6.1.0-<hostname>, #1 SMP ... Blink keeps sysname and
+machine (x86_64); a kernel without them leaves Blink's.
+---
+ blink/shiro.inc | 20 ++++++++++++--------
+ 1 file changed, 12 insertions(+), 8 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index c94430e..29983be 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -2044,18 +2044,22 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+   }
+   switch (nr) {
+     case 0x03F:                                                       // uname
+-      // Blink's answer (the kernel version glibc checks, x86_64) with the
+-      // Shiro kernel's host and domain names (emscripten's are "emscripten")
++      // Blink's answer (sysname, machine x86_64) with the Shiro kernel's
++      // host and domain names (emscripten's are "emscripten"), and its
++      // release and version when it has them (Node's os.release())
+       {
+         struct utsname_linux k;
+         r = 0;
+-        if (SysUname(m, a) == -1 ||
+-            (ShiroCall(m, 63, A12(0), &k, 0, sizeof(k), false, false) == 0 &&
+-             (CopyToUserWrite(m, a + offsetof(struct utsname_linux, nodename),
+-                              k.nodename, sizeof(k.nodename)) == -1 ||
+-              CopyToUserWrite(m, a + offsetof(struct utsname_linux, domainname),
+-                              k.domainname, sizeof(k.domainname)) == -1))) {
++        if (SysUname(m, a) == -1) {
+           r = -EFAULT_LINUX;
++        } else if (ShiroCall(m, 63, A12(0), &k, 0, sizeof(k), false, false) == 0) {
++#define SHIRO_UTS(f) \
++          (CopyToUserWrite(m, a + offsetof(struct utsname_linux, f), k.f, sizeof(k.f)) == -1)
++          if (SHIRO_UTS(nodename) || SHIRO_UTS(domainname) ||
++              (k.release[0] && SHIRO_UTS(release)) || (k.version[0] && SHIRO_UTS(version))) {
++            r = -EFAULT_LINUX;
++          }
++#undef SHIRO_UTS
+         }
+       }
+       break;
+-- 
+2.43.0
+
