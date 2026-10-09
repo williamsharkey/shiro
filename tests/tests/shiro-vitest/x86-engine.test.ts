@@ -45,6 +45,8 @@ const forkSharedBin = join(out, 'forkshared');
 const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
 const mremapBin = join(out, 'mremap');
 const haveMremap = tryBuild('gcc', ['-static', '-O1', '-o', mremapBin, 'mremap.c']);
+const brkmapBin = join(out, 'brkmap');
+const haveBrkmap = tryBuild('gcc', ['-static', '-O1', '-o', brkmapBin, 'brkmap.c']);
 const getgroupsBin = join(out, 'getgroups');
 const haveGetgroups = tryBuild('gcc', ['-static', '-O1', '-o', getgroupsBin, 'getgroups.c']);
 const fionbioBin = join(out, 'fionbio');
@@ -444,6 +446,15 @@ describe('Blink engine: CPU and syscall fixes', () => {
     expect(r.output.replace(/\r\n/g, '\n')).toBe(
       'no MAYMOVE: Cannot allocate memory\nmoved=1 first=7 mid=7 last=9\nold range free=1\n' +
       'shrunk same=1 tail free=1 last=7\nfixed at=1 first=7\nreadonly moved=1 byte=42\n');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // apt's cache was mmapped at the break and malloc's brk overwrote it
+  it.skipIf(!haveBrkmap)('brk never grows over a mapping; mmap(0) leaves the heap room', async () => {
+    const { shell } = await setup(readFileSync(brkmapBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'mmap(0) clear of the break: 1\nmapping intact: 1\nsbrk over a mapping refused: 1, mapping kept: 1\n');
     expect(r.exitCode).toBe(0);
   }, 60_000);
 
