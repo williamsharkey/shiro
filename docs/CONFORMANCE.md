@@ -6,7 +6,7 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1412/1567 (90.1%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1413/1567 (90.2%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1412/1567 (90.1%)** |
 | [Shell: smoosh POSIX tests](#shell-smoosh-posix-tests) | 111/162 (68.5%) | **159/162 (98.1%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **625/635 (98.4%)** |
@@ -39,7 +39,7 @@ How each suite runs, and what is and isn't scored, is described in
 | here-doc | 0/32 | 29/32 | 3 |
 | redirect | 3/39 | 35/39 | 4 |
 | if_ | 0/5 | 5/5 | 0 |
-| loop | 1/28 | 26/28 | 2 |
+| loop | 1/28 | 27/28 | 1 |
 | case_ | 0/13 | 12/13 | 1 |
 | sh-func | 0/11 | 11/11 | 0 |
 | func-parsing | 1/12 | 9/12 | 3 |
@@ -97,7 +97,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **command-sub**: Making keyword out of command sub should NOT work; Syntax errors with double quotes within backticks
 - **here-doc**: Here doc with bad comsub delimiter; Here doc with line continuation, then pipe.  Syntax error.; Function def and execution with here doc
 - **redirect**: 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes (hang/timeout); xtrace not affected by redirects
-- **loop**: while in pipe with subshell; bad arg to break
+- **loop**: bad arg to break
 - **case_**: case \n bug regression
 - **func-parsing**: = in function name; Function name with $; Function name with command sub
 - **builtin-echo**: echo builtin should disallow typed args - literal; echo builtin should disallow typed args - variable

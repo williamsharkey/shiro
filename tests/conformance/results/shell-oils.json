@@ -312,13 +312,9 @@
    "failures": []
   },
   "loop": {
-   "pass": 26,
+   "pass": 27,
    "total": 28,
    "failures": [
-    {
-     "i": 11,
-     "name": "while in pipe with subshell"
-    },
     {
      "i": 16,
      "name": "bad arg to break"

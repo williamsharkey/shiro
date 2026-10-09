@@ -1169,3 +1169,52 @@ export function attachKernelTty(kernel: Kernel, jc: JobControl = jobControl): vo
   });
   for (const p of livePtys) p.registerDevice(kernel);
 }
+
+/**
+ * Job control for a shell that is itself a kernel process on a pty (`sh` in
+ * a screen or tmux window, `sh -i`): what TtySession does for the page's
+ * terminal, on the shell's controlling pty, with the shell's process as the
+ * leader. Its jobs are its children, each in a process group of its own that
+ * gets the terminal while it runs; Ctrl-Z stops it and the shell takes the
+ * terminal (and its tty modes) back.
+ */
+export class ProcessTty {
+  shellTermios: Termios;
+
+  constructor(readonly proc: Process, readonly pty: Pty, readonly jc: JobControl = jobControl) {
+    this.shellTermios = cloneTermios(pty.termios);
+  }
+
+  get jobInForeground(): boolean {
+    return this.pty.fgPgrp !== 0 && this.pty.fgPgrp !== this.proc.pgid;
+  }
+
+  openSlave(): PtyFile {
+    return this.pty.openSlave(O_RDWR | O_NOCTTY);
+  }
+
+  spawnJob(kernel: Kernel, opts: Omit<SpawnOptions, 'parent' | 'setsid'>): Process {
+    let fds = opts.fds;
+    if (!fds) {
+      const slave = this.openSlave();
+      fds = { 0: slave, 1: slave, 2: slave };
+    }
+    return kernel.spawn({ ...opts, fds, parent: this.proc, pgid: opts.pgid ?? 0 });
+  }
+
+  async foreground(job: TtyJob, cont = false): Promise<JobResult> {
+    this.shellTermios = cloneTermios(this.pty.termios);
+    if (job.termios) this.pty.setTermios(job.termios);
+    this.pty.setForeground(job.pgid);
+    if (cont) this.jc.kill(-job.pgid, SIGCONT);
+    const r = await this.jc.waitJob(job.pgid, job.pids);
+    this.pty.setForeground(this.proc.pgid);
+    if (r.type === 'stopped') {
+      job.termios = cloneTermios(this.pty.termios);
+      this.pty.setTermios(this.shellTermios);
+    } else if (!WIFEXITED(r.status)) {
+      this.pty.setTermios(this.shellTermios);
+    }
+    return r;
+  }
+}

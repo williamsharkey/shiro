@@ -267,3 +267,10 @@ describe('named pipes opened with exec', () => {
     expect(r.out).toBe('via3\nsub\nown\n');
   });
 });
+
+describe('read in a pipeline inside a script', () => {
+  it('`cmd | read` reads the pipe, not the stdin the script was given', async () => {
+    const r = await script('echo | read\necho status=$?\nshopt -s lastpipe\necho hi | read line\necho "line=$line"\n');
+    expect(r.out).toBe('status=0\nline=hi\n');
+  });
+});

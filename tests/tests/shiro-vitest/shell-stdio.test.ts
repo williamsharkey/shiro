@@ -273,3 +273,20 @@ describe('scripts that do nothing do not wait on stdin', () => {
     }
   }, 30_000);
 });
+
+describe('background kernel programs in a kernel-run sh', () => {
+  it('prog & is a kernel process: $! is its pid, its stdin is /dev/null, no [N] line', async () => {
+    const r = await run(['sh', '-c', 'readloop & p=$!; wait $p; echo "st $? $([ -n "$p" ] && [ "$p" -lt 40000 ] && echo kpid)"'], 'never read\n');
+    expect(r.out).toBe('lines: 0\nst 0 kpid\n');
+  });
+
+  it('set -m: its own process group; kill -STOP shows in jobs -l; kill ends it', async () => {
+    const [rd, wr] = createPipe(); // a live stdin that never ends: the job keeps reading it
+    let out = '';
+    const p = await spawn(['sh', '-c', 'set -m; readloop & p=$!; read a b c d e f < /proc/$p/stat; [ "$e" = "$p" ] && [ "$e" != $$ ] && echo own-group; kill -STOP $p; sleep 0.1; jobs -l; kill -CONT $p; kill $p; wait $p; echo "st $?"'],
+      { 0: rd, 1: new SinkFile((t) => { out += t; }), 2: new SinkFile((t) => { out += t; }) });
+    expect(await withTimeout(p.wait(), 10_000)).toBe(0);
+    void wr.close();
+    expect(out).toMatch(/^\[1\] \d+\nown-group\n\[1\]\+ \d+ Stopped\s+readloop\nst 143\n$/);
+  });
+});

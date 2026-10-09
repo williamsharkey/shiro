@@ -258,7 +258,7 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
       path: p.argv[0], argv: p.argv, env: p.env ? { ...p.env, ...env } : env, cwd: opts.cwd,
       fds: { ...extra, 0: input, 1: out, 2: errOut }, run: p.run,
       // children of a hosted shell stay in its process group, under it
-      pgid: host ? undefined : procs.length ? procs[0].pgid : 0,
+      pgid: host && !shell.options.has('monitor') ? undefined : procs.length ? procs[0].pgid : 0,
       parent: host ?? undefined,
       uid: shell.uid,
     };
@@ -270,7 +270,8 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
 
   const pgid = procs[0].pgid;
   const pids = procs.map((p) => p.pid);
-  const termWrite = (s: string) => (opts.terminal ? opts.terminal.writeOutput(s) : opts.writeStdout(s));
+  // (straight to xterm, which doesn't turn \n into \r\n: `[1]+ Stopped` must end its line)
+  const termWrite = (s: string) => (opts.terminal ? opts.terminal.writeOutput(s.replace(/\r?\n/g, '\r\n')) : opts.writeStdout(s));
 
   if (opts.background) {
     const code = await runKernelJob(shell, { command: opts.command, pgid, pids, background: true, tty, write: termWrite });
