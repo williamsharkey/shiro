@@ -130,6 +130,16 @@ describe('kernel sockets over the TCP relay', () => {
     await s.close();
   });
 
+  it('FIONBIO is accepted on stream and datagram sockets (CPython setblocking(False))', async () => {
+    const stack = stackFor(P.relayA);
+    const on = new Uint8Array([1, 0, 0, 0]);
+    const s = stack.socket(AF_INET, SOCK_STREAM) as KSocket;
+    expect(await s.ioctl(0x5421, on)).toBe(0);
+    const d = stack.socket(AF_INET, SOCK_DGRAM) as KDatagramSocket;
+    expect(await d.ioctl(0x5421, on)).toBe(0);
+    await s.close(); await d.close();
+  });
+
   it('closes a connection that exceeds the per-connection byte cap', async () => {
     const s = stream(stackFor(P.relayA));
     expect(await s.connect(v4('127.0.0.1', P.firehosePort))).toBe(0);
@@ -291,6 +301,16 @@ describe('kernel sockets over the TCP relay', () => {
 });
 
 describe('kernel loopback and listening sockets', () => {
+  it('accepts FIONBIO on stream and datagram sockets (Python settimeout), ENOTTY for unknown ioctls', async () => {
+    const stack = stackFor(P.relayA);
+    const on = new Uint8Array([1, 0, 0, 0]);
+    const t = stream(stack);
+    expect(await t.ioctl(0x5421, on)).toBe(0);
+    expect(await t.ioctl(0x5401 /* TCGETS */, new Uint8Array(60))).toBe(-25);
+    const u = stack.socket(AF_INET, SOCK_DGRAM) as KDatagramSocket;
+    expect(await u.ioctl(0x5421, on)).toBe(0);
+  });
+
   function localStack(portHost: PortHost | null = null) {
     const s = new NetStack();
     s.configure({ relayUrl: null, tokenUrl: null, dohUrl: null, portHost });

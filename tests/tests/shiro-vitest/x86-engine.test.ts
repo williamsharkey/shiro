@@ -69,6 +69,16 @@ const forkSharedBin = join(out, 'forkshared');
 const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
 const mremapBin = join(out, 'mremap');
 const haveMremap = tryBuild('gcc', ['-static', '-O1', '-o', mremapBin, 'mremap.c']);
+const popmemBin = join(out, 'popmem');
+const havePopmem = tryBuild('gcc', ['-static', '-O1', '-o', popmemBin, 'popmem.c']);
+const segvBin = join(out, 'segv');
+const haveSegv = tryBuild('gcc', ['-static', '-O1', '-o', segvBin, 'segv.c']);
+const timerfdBin = join(out, 'timerfd');
+const haveTimerfd = tryBuild('gcc', ['-static', '-O1', '-o', timerfdBin, 'timerfd.c']);
+const mapsBin = join(out, 'maps');
+const haveMaps = tryBuild('gcc', ['-static', '-O1', '-o', mapsBin, 'maps.c']);
+const mmsgBin = join(out, 'mmsg');
+const haveMmsg = tryBuild('gcc', ['-static', '-O1', '-o', mmsgBin, 'mmsg.c']);
 const sendfileBin = join(out, 'sendfile');
 const haveSendfile = tryBuild('gcc', ['-static', '-O1', '-o', sendfileBin, 'sendfile.c']);
 const stropsBin = join(out, 'strops');
@@ -87,6 +97,8 @@ const ssecmpBin = join(out, 'ssecmp');
 const haveSsecmp = tryBuild('gcc', ['-static', '-O1', '-o', ssecmpBin, 'ssecmp.c', '-lm']);
 const brkmapBin = join(out, 'brkmap');
 const haveBrkmap = tryBuild('gcc', ['-static', '-O1', '-o', brkmapBin, 'brkmap.c']);
+const bigfileBin = join(out, 'bigfile');
+const haveBigfile = tryBuild('gcc', ['-static', '-O1', '-o', bigfileBin, 'bigfile.c']);
 const getgroupsBin = join(out, 'getgroups');
 const haveGetgroups = tryBuild('gcc', ['-static', '-O1', '-o', getgroupsBin, 'getgroups.c']);
 const fionbioBin = join(out, 'fionbio');
@@ -225,10 +237,12 @@ describe.skipIf(!haveFork)('Blink engine: fork', () => {
   }, 60_000);
 });
 
-// BLINK_SAME_INSTANCE_FORK=1 (patch 0031): the child is a System in the
-// parent's Blink instance, sharing MAP_SHARED pages and running alongside
+// Same-instance fork (patch 0031, the default since 0048; =1 spelled out
+// here, =0 the opt-out): the child is a System in the parent's Blink
+// instance, sharing MAP_SHARED pages and running alongside
 describe.skipIf(!haveFork || !haveForkShared || !haveShfutex || !haveOrphan || !haveAlarmfork)('Blink engine: same-instance fork', () => {
   const sif = 'BLINK_SAME_INSTANCE_FORK=1 ./prog';
+  const old = 'BLINK_SAME_INSTANCE_FORK=0 ./prog';  // the opt-out: a worker per child
   it('copies private memory; pipes, exec and nested forks work', async () => {
     const { shell } = await setup(readFileSync(forkBin));
     expect((await run(shell, `${sif} copy`)).output).toContain('parent sees 1 p parent status 7');
@@ -259,22 +273,22 @@ describe.skipIf(!haveFork || !haveForkShared || !haveShfutex || !haveOrphan || !
       'round 0: child exit 10, its threads stopped 1\nround 1: child exit 11, its threads stopped 1\n');
   }, 60_000);
 
-  it('keeps alarms per process (here and with the default fork)', async () => {
+  it('keeps alarms per process (here and with the opt-out fork)', async () => {
     const { shell } = await setup(readFileSync(alarmforkBin));
     const want = "first alarm 0, child ok 1, parent's alarm still set 1";
     expect((await run(shell, sif)).output).toContain(want);
-    expect((await run(shell, './prog')).output).toContain(want);
+    expect((await run(shell, old)).output).toContain(want);
   }, 60_000);
 
   // LTP futex_wait07
-  it.skipIf(!haveFutexintr)('a caught signal interrupts a futex wait (here and with the default fork)', async () => {
+  it.skipIf(!haveFutexintr)('a caught signal interrupts a futex wait (here and with the opt-out fork)', async () => {
     const { shell } = await setup(readFileSync(futexintrBin));
     const want = 'main tid is pid 1\nalarm: Interrupted system call\nchild tid is pid 1\nchild state S\nkill: Interrupted system call\nchild exit 0\n';
     expect((await run(shell, sif)).output.replace(/\r\n/g, '\n')).toBe(want);
     expect((await run(shell, `${sif} nested`)).output.replace(/\r\n/g, '\n')).toBe(want);
-    // the default fork runs a child sharing memory on the parent's thread:
+    // the opt-out fork runs a child sharing memory on the parent's thread:
     // the parent can't signal it before it's done
-    const r = (await run(shell, './prog')).output.replace(/\r\n/g, '\n');
+    const r = (await run(shell, old)).output.replace(/\r\n/g, '\n');
     expect(r).toMatch(/^main tid is pid 1\nalarm: Interrupted system call\nchild tid is pid 1\n/);
     expect(r).toContain('child exit 0\n');
   }, 60_000);
@@ -420,6 +434,18 @@ describe.skipIf(!haveTcp)('Blink engine: real TCP through the kernel relay', () 
     expect(r.exitCode).toBe(0);
   }, 120_000);
 
+  // glibc's resolver sends its A and AAAA queries with sendmmsg (pip, apt)
+  it.skipIf(!haveMmsg)('sendmmsg/recvmmsg on a kernel UDP socket (DNS over DoH)', async () => {
+    const { shell } = await setup(readFileSync(mmsgBin));
+    const r = await run(shell, './prog');
+    const out = r.output.replace(/\r\n/g, '\n');
+    expect(out).toContain('sendmmsg=2 lens 27 27');
+    expect(out).toContain('answer 0x11 rcode 0 answers 1 len>12 1');
+    expect(out).toContain('answer 0x22 rcode 3 answers 0 len>12 1');
+    expect(out).toContain('got 2 ids 3');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
   it('resolves a name over UDP 53 (kernel DoH) and dials it', async () => {
     const { shell } = await setup(readFileSync(tcpBin));
     const r = await run(shell, `./prog echo.test:${ports.echoPort}`);
@@ -544,6 +570,25 @@ describe('Blink engine: CPU and syscall fixes', () => {
     expect(r.exitCode).toBe(0);
   }, 60_000);
 
+  // SHIROFS reads and maps big files through pread instead of loading them whole
+  it.skipIf(!haveBigfile)('reads, maps and writes a 3 MiB file (pread, SEEK_END, private/shared mmap, sequential read)', async () => {
+    const { fs, shell } = await setup(readFileSync(bigfileBin));
+    const size = 3 * 1048576 + 77;
+    const big = new Uint8Array(size);
+    for (let i = 0; i < size; i++) big[i] = (i * 7 + (i >> 12)) & 255;
+    await fs.writeFile('/home/user/work/big.bin', big);
+    await fs.writeFile('/home/user/work/trunc.bin', new Uint8Array(2_000_000).fill(0x71));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'size 3145805\npread 16 1225\ntail 10 6623\nprivate 2258754268\nshared 238244316\nread 3145805 4238872649\n');
+    expect(r.exitCode).toBe(0);
+    const after = await fs.readFile('/home/user/work/big.bin') as Uint8Array;
+    expect(after.length).toBe(size);
+    expect(new TextDecoder().decode(after.subarray(size - 4))).toBe('WXYZ');
+    expect(Buffer.compare(after.subarray(0, size - 4), big.subarray(0, size - 4))).toBe(0);
+    expect((await fs.readFile('/home/user/work/trunc.bin') as Uint8Array).length).toBe(1);
+  }, 60_000);
+
   // LTP futex_wake02, futex_wait_bitset01
   it.skipIf(!haveFutexwake)('FUTEX_WAKE wakes at most count waiters; bitset timeouts end by their own clock', async () => {
     const { shell } = await setup(readFileSync(futexwakeBin));
@@ -582,6 +627,40 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(bitscanBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe(NATIVE_BITSCAN);
+  }, 60_000);
+
+  // V8's builtins (Debian's nodejs crashed on every script): pop 0x88(%rsp)
+  it.skipIf(!havePopmem)('pop to memory addressed through rsp uses the popped rsp', async () => {
+    const { shell } = await setup(readFileSync(popmemBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'pop 8(%rsp): rsp at s+16, s[1..3] = 0x11 0x22 0x11\npop (%rsp): s[2..3] = 0x55 0x55\npopw 2(%rsp): w[6..7] = 0x1234 0x7777\n');
+  }, 60_000);
+
+  it.skipIf(!haveSegv)('SHIRO_BLINK_CRASH=1 reports a fatal signal on stderr', async () => {
+    const { shell } = await setup(readFileSync(segvBin));
+    const quiet = await run(shell, './prog; echo status=$?');
+    expect(quiet.output).not.toContain('blink:');
+    expect(quiet.output).toContain('status=139');
+    const r = await run(shell, 'SHIRO_BLINK_CRASH=1 ./prog; echo status=$?');
+    expect(r.output).toMatch(/blink: pid \d+ tid \d+: SIGSEGV .* fault address 0x8/);
+    expect(r.output).toMatch(/blink: rax [0-9a-f]{16}/);
+    expect(r.output).toContain('status=139');
+  }, 60_000);
+
+  // uSockets' us_create_timer (Bun: opencode)
+  it.skipIf(!haveTimerfd)('timerfd: relative, interval and absolute timers, poll and epoll', async () => {
+    const { shell } = await setup(readFileSync(timerfdBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('create 1\nunarmed read EAGAIN 1\nsettime 1\ngettime armed 1 interval 1\npoll 1 after>=45ms 1\nread 1 count>=1 1\ninterval count>=3 1\ndisarmed 1\nabs epoll 1 after>=20ms 1 read 1 1\npast expires 1\nbad nsec EINVAL 1\n');
+  }, 60_000);
+
+  // glibc's pthread_getattr_np reads the main stack from here (glibc Bun: Claude Code, opencode)
+  it.skipIf(!haveMaps)('/proc/self/maps lists the guest mappings', async () => {
+    const { shell } = await setup(readFileSync(mapsBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'lines>4 1 well-formed 1 stack 2 text-x 1 mprotect-split 1 getattr 0 inside 1\n');
   }, 60_000);
 
   // systemd's copy_bytes (sysusers backing up /etc/group): sendfile(out, in, NULL, n)

@@ -27,8 +27,8 @@ Status, numbers and the package scoreboard: [DEBIAN_SCORE.md](DEBIAN_SCORE.md),
 2. Shiro's customization: deb822 sources for trixie, trixie-updates and
    trixie-security (the real archive URLs), apt defaults
    (`/etc/apt/apt.conf.d/90shiro`: no translations, no recommends, downloads
-   as root), Docker-slim style `path-exclude`s for docs, man pages and
-   locales, `force-unsafe-io`, the `user` account (uid 1000, as the kernel
+   as root), Docker-slim style `path-exclude`s for docs, translated man
+   pages and locales (English man pages are kept), `force-unsafe-io`, the `user` account (uid 1000, as the kernel
    runs everything) and the hostname.
 3. Reproducibility: file times clamped to `SOURCE_DATE_EPOCH`, logs, caches,
    machine-id and apt lists removed.
@@ -79,6 +79,13 @@ Debian's apt and dpkg run unmodified. What Shiro provides around them:
   apt still verifies InRelease with sqv and every index and .deb hash, so the
   mirror is untrusted. `Acquire::Shiro::Mirror` (apt.conf) or
   `$SHIRO_DEBIAN_MIRROR` point it elsewhere.
+- **Index decompression.** apt's `store` method (it turns each downloaded
+  `Packages.xz` into `Packages` and hashes it) is diverted the same way to
+  `#!/usr/bin/shiro-apt-store` (`src/debian/apt-store.ts`): the xz/gz/bz2/
+  zstd codecs and hashes run in the page. Under the x86 engine the original
+  spent ~33 s of a ~72 s `apt-get update` decoding trixie's 56 MB index.
+  apt checks the result's hashes against the signed Release file as before;
+  `shiro-alternatives --set /usr/lib/apt/methods/store debian` restores it.
 
 ### Package mirror: what the operator hosts
 

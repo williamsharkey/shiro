@@ -1,0 +1,35 @@
+From b9cefeffeed576375eb95c478ad5481220e78079 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 12:04:18 +0000
+Subject: [PATCH 48/48] Shiro: same-instance fork is the default;
+ BLINK_SAME_INSTANCE_FORK=0 opts out
+
+---
+ blink/shiro.inc | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 4bffa6e..bdfdd7d 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -1596,7 +1596,7 @@ struct ShiroSharedMap {
+ };
+ static pthread_mutex_t_ g_shiro_maps_lock = PTHREAD_MUTEX_INITIALIZER_;
+ 
+-// ── same-instance fork (BLINK_SAME_INSTANCE_FORK) ────────────────────────
++// ── same-instance fork (the default; BLINK_SAME_INSTANCE_FORK=0 opts out) ─
+ //
+ // The child is a new System with its own guest thread in this Blink
+ // instance (the same wasm memory): private pages are copied, and the pages
+@@ -1607,7 +1607,7 @@ static pthread_mutex_t_ g_shiro_maps_lock = PTHREAD_MUTEX_INITIALIZER_;
+ static bool ShiroSameInstanceFork(void) {
+   static int on = -1;
+   const char *e;
+-  if (on < 0) on = (e = getenv("BLINK_SAME_INSTANCE_FORK")) && *e && strcmp(e, "0");
++  if (on < 0) on = !(e = getenv("BLINK_SAME_INSTANCE_FORK")) || strcmp(e, "0");
+   return on;
+ }
+ 
+-- 
+2.43.0
+

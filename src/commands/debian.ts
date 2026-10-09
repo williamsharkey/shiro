@@ -30,6 +30,7 @@ export const debianCmd: Command = {
       if (already && !rest.includes('--force')) {
         // Make sure this shell is in Debian mode (loader, shadows, env) all the same
         rootfs.attachRootfsLoader(ctx.fs, { [already.id]: already.base });
+        await rootfs.writeEngineWorkarounds(ctx.fs);
         await enableDebianMode(ctx);
         out(`Debian ${already.version} is already installed (${already.id}); --force reinstalls the base files.`);
         return 0;
@@ -143,6 +144,38 @@ export const shiroAlternativesCmd: Command = {
       ctx.stderr += `shiro-alternatives: ${e?.message ?? e}\n`;
       return 1;
     }
+  },
+};
+
+/** dpkg-preconfigure that skips the work under DEBIAN_FRONTEND=noninteractive (src/debian/preconfigure.ts). */
+export const shiroPreconfigureCmd: Command = {
+  name: 'shiro-dpkg-preconfigure',
+  description: 'dpkg-preconfigure, a no-op under DEBIAN_FRONTEND=noninteractive',
+  // Run from Shiro's shell (the stub's interpreter as a builtin): args are [script, ...its args]
+  async exec(ctx) {
+    const [script = '/usr/sbin/dpkg-preconfigure', ...args] = ctx.args;
+    if (ctx.env.DEBIAN_FRONTEND === 'noninteractive') return 0;
+    const q = (a: string) => `'${a.replace(/'/g, `'\\''`)}'`;
+    return ctx.shell.fork().executeWithStdin([script + '.debian', ...args].map(q).join(' '), ctx.stdin,
+      (t) => { ctx.stdout += t; }, (t) => { ctx.stderr += t; });
+  },
+  async program(proc, kernel) {
+    const { preconfigureProgram } = await import('../debian/preconfigure');
+    return preconfigureProgram(proc, kernel);
+  },
+};
+
+/** apt's `store` method (decompress + hash downloaded indexes) run natively (src/debian/apt-store.ts). */
+export const shiroAptStoreCmd: Command = {
+  name: 'shiro-apt-store',
+  description: "apt's store method (index decompression), run natively",
+  async exec(ctx) {
+    ctx.stderr += 'shiro-apt-store: apt runs this as /usr/lib/apt/methods/store; it speaks apt\'s method protocol on stdin/stdout\n';
+    return 100;
+  },
+  async program(proc, kernel) {
+    const { aptStoreProgram } = await import('../debian/apt-store');
+    return aptStoreProgram(proc, kernel);
   },
 };
 

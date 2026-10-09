@@ -1,0 +1,30 @@
+From 761ee2851dbc860ba4425af047893daa368d96df Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 11:52:40 +0000
+Subject: [PATCH 47/47] pop to memory: the address is computed after the pop
+ moves the stack pointer
+
+---
+ blink/stack.c | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/blink/stack.c b/blink/stack.c
+index 19bde1b..acd60de 100644
+--- a/blink/stack.c
++++ b/blink/stack.c
+@@ -306,6 +306,11 @@ void OpPushEvq(P) {
+ }
+ 
+ void OpPopEvq(P) {
++  u64 v;
+   unsigned osz = kStackOsz[Osz(rde)][Mode(rde)];
+-  WriteMemWord(GetModrmRegisterWordPointerWrite(A, osz), rde, osz, Pop(A, 0));
++  // the destination's address is computed after the pop moves the stack
++  // pointer (pop 0x88(%rsp) in V8's builtins); as two arguments of one
++  // call, the order of the two was up to the compiler
++  v = Pop(A, 0);
++  WriteMemWord(GetModrmRegisterWordPointerWrite(A, osz), rde, osz, v);
+ }
+-- 
+2.43.0
+

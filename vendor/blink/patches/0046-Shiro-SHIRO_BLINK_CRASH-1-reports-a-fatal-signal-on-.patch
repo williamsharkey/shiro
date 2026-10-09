@@ -1,0 +1,263 @@
+From f8604639ff044401b03b7c2a1e053d6c0d4135b2 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 11:52:40 +0000
+Subject: [PATCH 46/47] Shiro: SHIRO_BLINK_CRASH=1 reports a fatal signal on
+ the guest's stderr; =2 adds the last instructions, the deliveries and
+ SHIRO_BLINK_PROBE
+
+---
+ blink/blink.c   |   2 +
+ blink/machine.c |  15 +++++++
+ blink/machine.h |   9 ++++
+ blink/shiro.inc | 115 ++++++++++++++++++++++++++++++++++++++++++++++++
+ blink/signal.c  |  12 +++++
+ blink/throw.c   |   7 +++
+ 6 files changed, 160 insertions(+)
+
+diff --git a/blink/blink.c b/blink/blink.c
+index cc95b37..d64bfa1 100644
+--- a/blink/blink.c
++++ b/blink/blink.c
+@@ -166,9 +166,11 @@ void TerminateSignal(struct Machine *m, int sig, int code) {
+   // Reaping threads hangs here (see SysExitGroup); let the embedder end
+   // the process with the signal (Module.shiroKill), else exit 128+sig.
+   if (IsSignalSerious(sig)) {
++    void ShiroCrashReport(struct Machine *, int, int);
+     ERRF("terminating due to %s (rip=%#" PRIx64 " code=%d faultaddr=%#" PRIx64 ")",
+          DescribeSignal(sig), m->ip, code, m->faultaddr);
+     PrintDiagnostics(m);
++    ShiroCrashReport(m, sig, code);
+   }
+   MAIN_THREAD_ASYNC_EM_ASM({
+     if (Module['shiroKill']) Module['shiroKill']($0);
+diff --git a/blink/machine.c b/blink/machine.c
+index 78ca4b4..006bb74 100644
+--- a/blink/machine.c
++++ b/blink/machine.c
+@@ -2177,6 +2177,17 @@ static bool CanJit(struct Machine *m) {
+   return !IsJitDisabled(&m->system->jit);
+ }
+ 
++// SHIRO_BLINK_CRASH=2: the last 64 instructions the interpreter ran, for
++// the crash report (shiro.inc; run with BLINK_WJIT=0 to see them all)
++bool g_shiro_trace;
++u64 g_shiro_ring[1024];
++unsigned g_shiro_ringi;
++u64 g_shiro_ring0[1024], g_shiro_fault0;
++unsigned g_shiro_ring0i;
++u64 g_shiro_delivered[8][3];
++int g_shiro_ndelivered;
++u64 g_shiro_probes[8];
++
+ void JitlessDispatch(P) {
+   ASM_LOGF("decoding [%s] at address %" PRIx64, DescribeOp(m, GetPc(m)),
+            GetPc(m));
+@@ -2333,6 +2344,10 @@ void Actor(struct Machine *mm) {
+       // compiled code is entered at branch targets (where wjhot is set)
+       if (!m->wjhot || !WjExecute(m)) {
+         u64 ip = m->ip;
++        if (UNLIKELY(g_shiro_trace)) {
++          g_shiro_ring[g_shiro_ringi++ & 1023] = ip;
++          if (g_shiro_probes[0]) ShiroProbe(m, ip);
++        }
+         ExecuteInstruction(m);
+         m->wjhot = g_wj_enabled && m->ip - ip != m->xedd->length;
+       }
+diff --git a/blink/machine.h b/blink/machine.h
+index 7602c6d..f252b62 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -663,6 +663,15 @@ void OpRet(P);
+ void OpRetf(P);
+ void OpRetIw(P);
+ void OpSsePclmulqdq(P);
++extern bool g_shiro_trace;
++extern u64 g_shiro_ring[1024];
++extern unsigned g_shiro_ringi;
++extern u64 g_shiro_ring0[1024], g_shiro_fault0;
++extern unsigned g_shiro_ring0i;
++extern u64 g_shiro_delivered[8][3];
++extern int g_shiro_ndelivered;
++extern u64 g_shiro_probes[8];
++void ShiroProbe(struct Machine *, u64);
+ void OpSsePblendvb(P);
+ void OpSseBlendvps(P);
+ void OpSseBlendvpd(P);
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 4144f33..4bffa6e 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -43,7 +43,16 @@ EMSCRIPTEN_KEEPALIVE void blink_shiro_enable(int pid, int chunk, u32 ign_lo,
+ 
+ void ShiroInitSystem(struct System *s, bool first) {
+   int sig;
++  const char *e;
+   if (!g_shiro_pid) return;
++  g_shiro_trace = (e = getenv("SHIRO_BLINK_CRASH")) && !strcmp(e, "2");
++  if (g_shiro_trace && (e = getenv("SHIRO_BLINK_PROBE"))) {  // addr,addr,...
++    int k;
++    for (k = 0; k < 8 && *e; ++k) {
++      g_shiro_probes[k] = strtoull(e, (char **)&e, 0);
++      if (*e == ',') ++e;
++    }
++  }
+   s->pid = g_shiro_pid;
+   if (!first) return;
+   for (sig = 1; sig <= 64; ++sig) {
+@@ -783,6 +792,112 @@ static i64 ShiroMsg(struct Machine *m, bool send, int fd, i64 msg, int flags) {
+   return r;
+ }
+ 
++// SHIRO_BLINK_CRASH=2 with SHIRO_BLINK_PROBE=addr,...: each time the
++// interpreter reaches one of them, the registers and the words around rsp
++// and rbp go to the guest's stderr (debugging aid)
++void ShiroProbe(struct Machine *m, u64 ip) {
++  char b[1024];
++  int n = 0, k;
++  u8 *p;
++  for (k = 0; k < 8 && g_shiro_probes[k]; ++k) {
++    if (g_shiro_probes[k] == ip) break;
++  }
++  if (k == 8 || !g_shiro_probes[k]) return;
++  n += snprintf(b + n, sizeof(b) - n, "probe %#" PRIx64 ": rsp %#" PRIx64 " rbp %#" PRIx64 " r15 %#" PRIx64 " rax %#" PRIx64 " rcx %#" PRIx64 " rsi %#" PRIx64 "\n",
++                ip, Read64(m->sp), Read64(m->bp), Read64(m->r15), Read64(m->ax), Read64(m->cx), Read64(m->si));
++  if ((p = LookupAddress(m, Read64(m->sp)))) {
++    n += snprintf(b + n, sizeof(b) - n, "  [rsp] %#" PRIx64 " %#" PRIx64 " %#" PRIx64 " %#" PRIx64 "\n", Read64(p), Read64(p + 8), Read64(p + 16), Read64(p + 24));
++  }
++  if ((p = LookupAddress(m, Read64(m->bp)))) {
++    n += snprintf(b + n, sizeof(b) - n, "  [rbp] %#" PRIx64 " %#" PRIx64 "\n", Read64(p), Read64(p + 8));
++  }
++  ShiroCall(m, 1, A12(2, n), b, n, 0, false, false);
++}
++
++// With SHIRO_BLINK_CRASH=1 in the guest's environment, a fatal signal's
++// details go to the guest's stderr (through the kernel, so nothing is lost
++// when the worker ends): the faulting instruction, where it is mapped
++// (file + offset, for objdump), the registers and Blink's backtrace.
++void ShiroCrashReport(struct Machine *m, int sig, int code) {
++  static const char kRegs[16][4] = {"rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
++                                    "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"};
++  char *b;
++  const char *e;
++  struct FileMap *fm;
++  u8 *code8;
++  int n = 0, i, cap = 262144;
++  if (!g_shiro_pid || !(e = getenv("SHIRO_BLINK_CRASH")) || (*e != '1' && *e != '2')) return;
++  if (!(b = (char *)malloc(cap))) return;
++  n += snprintf(b + n, cap - n, "blink: pid %d tid %d: %s (si_code %d) at rip %#" PRIx64 ", fault address %#" PRIx64 "\n",
++                m->system->pid, m->tid, DescribeSignal(sig), code, m->ip, m->faultaddr);
++  if ((fm = GetFileMap(m->system, m->ip))) {
++    n += snprintf(b + n, cap - n, "blink: rip is %s+%#" PRIx64 "\n", fm->path,
++                  (fm->offset > 0 ? fm->offset : 0) + (m->ip - fm->virt));
++  }
++  if ((code8 = LookupAddress(m, m->ip))) {
++    n += snprintf(b + n, cap - n, "blink: code");
++    for (i = 0; i < 16 && ((m->ip + i) & 4095) >= (m->ip & 4095); ++i) n += snprintf(b + n, cap - n, " %02x", code8[i]);
++    n += snprintf(b + n, cap - n, "\n");
++  }
++  {  // the call that got here: the bytes before the return address at [rsp]
++    u8 *sp = LookupAddress(m, Read64(m->sp)), *ret;
++    i64 ra = sp ? (i64)Read64(sp) : 0;
++    if (ra > 32 && (ret = LookupAddress(m, ra - 32)) && ((ra - 32) & 4095) <= 4096 - 40) {
++      n += snprintf(b + n, cap - n, "blink: [rsp] = %#" PRIx64, ra);
++      if ((fm = GetFileMap(m->system, ra))) {
++        n += snprintf(b + n, cap - n, " (%s+%#" PRIx64 ")", fm->path,
++                      (fm->offset > 0 ? fm->offset : 0) + (ra - fm->virt));
++      }
++      n += snprintf(b + n, cap - n, ", 32 bytes before and 8 after:");
++      for (i = 0; i < 40; ++i) n += snprintf(b + n, cap - n, "%s%02x", i == 32 ? " | " : " ", ret[i]);
++      n += snprintf(b + n, cap - n, "\n");
++    }
++  }
++  for (i = 0; i < 16; ++i) {
++    n += snprintf(b + n, cap - n, "%s%3s %016" PRIx64, i % 4 ? "  " : "blink: ", kRegs[i], Read64(m->weg[i]));
++    if (i % 4 == 3) n += snprintf(b + n, cap - n, "\n");
++  }
++  for (i = 0; i < g_shiro_ndelivered; ++i) {
++    n += snprintf(b + n, cap - n, "blink: delivered %s at rip %#" PRIx64 " (fault address %#" PRIx64 ")\n",
++                  DescribeSignal(g_shiro_delivered[i][0]), g_shiro_delivered[i][1], g_shiro_delivered[i][2]);
++  }
++  if (g_shiro_trace && g_shiro_fault0) {
++    n += snprintf(b + n, cap - n, "blink: before the first fault or signal (address %#" PRIx64 ")\n", g_shiro_fault0);
++    for (i = 0; i < 1024 && n < cap - 300; ++i) {
++      u64 ip = g_shiro_ring0[(g_shiro_ring0i + i) & 1023];
++      int j;
++      if (!ip) continue;
++      n += snprintf(b + n, cap - n, "blink:   %#" PRIx64 " :", ip);
++      if ((code8 = LookupAddress(m, ip))) {
++        for (j = 0; j < 15 && ((ip + j) & 4095) >= (ip & 4095); ++j) n += snprintf(b + n, cap - n, " %02x", code8[j]);
++      }
++      n += snprintf(b + n, cap - n, "\n");
++    }
++  }
++  if (g_shiro_trace) {
++    n += snprintf(b + n, cap - n, "blink: last instructions (oldest first)\n");
++    for (i = 1024 - 64; i < 1024 && n < cap - 300; ++i) {
++      u64 ip = g_shiro_ring[(g_shiro_ringi + i) & 1023];
++      if (!ip) continue;
++      n += snprintf(b + n, cap - n, "blink:   %#" PRIx64, ip);
++      if ((fm = GetFileMap(m->system, ip))) {
++        n += snprintf(b + n, cap - n, " %s+%#" PRIx64, fm->path, (fm->offset > 0 ? fm->offset : 0) + (ip - fm->virt));
++      }
++      if (i >= 1024 - 12 && (code8 = LookupAddress(m, ip))) {
++        int j;
++        n += snprintf(b + n, cap - n, " :");
++        for (j = 0; j < 15 && ((ip + j) & 4095) >= (ip & 4095); ++j) n += snprintf(b + n, cap - n, " %02x", code8[j]);
++      }
++      n += snprintf(b + n, cap - n, "\n");
++    }
++  }
++  n += snprintf(b + n, cap - n, "blink: fs %#" PRIx64 " flags %#x\nblink: backtrace\n%s\n",
++                (u64)m->fs.base, (unsigned)m->flags, GetBacktrace(m));
++  if (n > cap - 1) n = cap - 1;
++  ShiroCall(m, 1, A12(2, n), b, n, 0, false, false);
++  free(b);
++}
++
+ // timerfd_settime (flags >= 0) and timerfd_gettime (flags < 0): the
+ // kernel keeps the timer in milliseconds (f64; see SYS_timerfd_create in
+ // src/kernel/abi.ts) and reads absolute times on the timer's own clock
+diff --git a/blink/signal.c b/blink/signal.c
+index 4fe7ab3..109532f 100644
+--- a/blink/signal.c
++++ b/blink/signal.c
+@@ -65,6 +65,18 @@ void DeliverSignal(struct Machine *m, int sig, int code) {
+   u64 sp;
+   struct SignalFrame sf;
+   if (IsMakingPath(g_machine)) AbandonPath(g_machine);
++#ifdef __EMSCRIPTEN__
++  if (g_shiro_trace && g_shiro_ndelivered < 8) {  // for the crash report
++    g_shiro_delivered[g_shiro_ndelivered][0] = sig;
++    g_shiro_delivered[g_shiro_ndelivered][1] = m->ip;
++    g_shiro_delivered[g_shiro_ndelivered][2] = m->faultaddr;
++    if (!g_shiro_ndelivered++ && !g_shiro_fault0) {
++      memcpy(g_shiro_ring0, g_shiro_ring, sizeof(g_shiro_ring0));
++      g_shiro_ring0i = g_shiro_ringi;
++      g_shiro_fault0 = m->faultaddr ? m->faultaddr : 1;
++    }
++  }
++#endif
+   memset(&sf, 0, sizeof(sf));
+   // capture the current state of the machine
+   Write32(sf.si.signo, sig);
+diff --git a/blink/throw.c b/blink/throw.c
+index a2f8a88..c9aa620 100644
+--- a/blink/throw.c
++++ b/blink/throw.c
+@@ -127,6 +127,13 @@ void ThrowProtectionFault(struct Machine *m) {
+ }
+ 
+ void ThrowSegmentationFault(struct Machine *m, i64 va) {
++#ifdef __EMSCRIPTEN__
++  if (g_shiro_trace && !g_shiro_fault0) {  // the first fault's history
++    memcpy(g_shiro_ring0, g_shiro_ring, sizeof(g_shiro_ring0));
++    g_shiro_ring0i = g_shiro_ringi;
++    g_shiro_fault0 = va ? va : 1;
++  }
++#endif
+   RestoreIp(m);
+   m->faultaddr = va;
+   HaltMachine(m, kMachineSegmentationFault);
+-- 
+2.43.0
+

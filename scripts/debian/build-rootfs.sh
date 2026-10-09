@@ -117,6 +117,7 @@ cat > "$ROOT/etc/dpkg/dpkg.cfg.d/90shiro-slim" <<'EOF'
 path-exclude /usr/share/doc/*
 path-include /usr/share/doc/*/copyright
 path-exclude /usr/share/man/*
+path-include /usr/share/man/man[1-9]*/*
 path-exclude /usr/share/info/*
 path-exclude /usr/share/locale/*
 path-include /usr/share/locale/locale.alias

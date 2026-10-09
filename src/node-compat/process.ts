@@ -54,6 +54,13 @@ export function createFakeProcess(
     }
   }
 
+  // Gemini CLI relaunches itself in a child node to raise V8's heap limit;
+  // scripts here share the page's heap, and the child_process shim can't give
+  // the child the terminal, so it runs in-process.
+  if (scriptPath?.includes('/@google/gemini-cli/') && !('GEMINI_CLI_NO_RELAUNCH' in processEnv)) {
+    processEnv.GEMINI_CLI_NO_RELAUNCH = 'true';
+  }
+
   const fp: any = {
     env: processEnv,
     cwd: () => ctx.shell.cwd,

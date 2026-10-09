@@ -31,7 +31,7 @@ export class Harness {
         '--no-sandbox',
         // measureUserAgentSpecificMemory resolves on the next GC otherwise (up to 20 s)
         '--enable-blink-features=ForceEagerMeasureMemory',
-        '--js-flags=--expose-gc',
+        `--js-flags=--expose-gc${process.env.BENCH_JS_FLAGS ? ' ' + process.env.BENCH_JS_FLAGS : ''}`,
       ],
     });
     this.browserCdp = await this.browser.newBrowserCDPSession();

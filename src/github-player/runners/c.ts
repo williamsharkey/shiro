@@ -79,5 +79,6 @@ async function exec(ctx: RunContext, cmd: string): Promise<number> {
     cmd,
     (out: string) => ctx.terminal.term.write(out.replace(/\n/g, '\r\n')),
     (err: string) => ctx.terminal.term.write(`\x1b[31m${err.replace(/\n/g, '\r\n')}\x1b[0m`),
+    false, ctx.terminal, // programs run on the terminal (an execute() without one collects their output)
   );
 }

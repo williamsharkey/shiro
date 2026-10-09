@@ -296,6 +296,10 @@ class ProcProvider implements VirtualFSProvider {
     '/proc/filesystems': () => 'nodev\tshirofs\n',
     '/proc/sys/kernel/pid_max': () => '4194304\n',
     '/proc/sys/fs/pipe-max-size': () => '1048576\n',
+    '/proc/sys/fs/pipe-user-pages-soft': () => '16384\n',
+    '/proc/sys/fs/pipe-user-pages-hard': () => '0\n',
+    '/proc/sys/kernel/tainted': () => '0\n',
+    '/proc/sys/kernel/core_pattern': () => 'core\n',
     '/proc/mounts': () => 'shirofs / shirofs rw 0 0\n',
     '/proc/self/status': () => [
       'Name:\tshiro',

@@ -7,6 +7,18 @@
       "stub": true,
       "why": "Browsers can't open TCP connections: Shiro's transport fetches from the page's same-origin mirror. apt still verifies the signed InRelease and every hash."
     },
+    "/usr/lib/apt/methods/store": {
+      "default": "shiro",
+      "command": "shiro-apt-store",
+      "stub": true,
+      "why": "apt decompresses every downloaded index through this method; under the x86 engine xz-decoding trixie's 56 MB Packages took ~33 s of `apt-get update`. Shiro's runs the same codecs and hashes natively; apt still checks the result against the signed Release file."
+    },
+    "/usr/sbin/dpkg-preconfigure": {
+      "default": "shiro",
+      "command": "shiro-dpkg-preconfigure",
+      "stub": true,
+      "why": "apt-utils' 70debconf hook runs this before every dpkg run; under DEBIAN_FRONTEND=noninteractive it has nothing to ask but cost ~20 s per install under the x86 engine (Perl, debconf, apt-extracttemplates). Shiro's drains apt's list and exits 0 then (templates load at configure time through the confmodule, as without apt-utils) and runs Debian's script, kept as dpkg-preconfigure.debian, for any other frontend."
+    },
     "/usr/bin/base64": {
       "default": "shiro",
       "command": "base64",
