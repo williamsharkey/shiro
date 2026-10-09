@@ -32,7 +32,7 @@ const live = () => page.evaluate(async () => {
   });
 });
 async function report(label) {
-  await page.evaluate(() => window.__shiro.fs.sync());
+  await page.evaluate(() => window.__tabcomputer.fs.sync());
   const u = await page.evaluate(() => navigator.storage.estimate().then((e) => e.usage));
   const l = await live();
   console.log(`${label.padEnd(28)} usage ${MiB(u).padStart(7)} MiB  live ${MiB(l.sum).padStart(7)} MiB (${l.n} nodes)  disk ${MiB(+disk()).padStart(7)} MiB`);
