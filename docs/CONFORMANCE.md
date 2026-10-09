@@ -8,6 +8,7 @@ conformance work started (fc0af54).
 |---|---|---|
 | [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1393/1567 (88.9%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1394/1567 (89.0%)** |
+| [Shell: smoosh POSIX tests](#shell-smoosh-posix-tests) | 111/163 (68.1%) | **111/163 (68.1%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **625/635 (98.4%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **148/320 (46.3%)** |
 | [Syscalls: wasi-testsuite (wasm32-wasip1)](#syscalls-wasi-testsuite-wasm32-wasip1) | — | **71/72 (98.6%)** |
@@ -248,6 +249,28 @@ The same cases as above, run by scripts/conformance/browser-oils.mjs through the
 - **regex**: Unquoted { is a regex parse error; make a lisp example
 - **background**: wait -n with arguments - arguments are respected; wait with invalid arg; Wait for job and PIPESTATUS - cat; YSH wait --all; YSH wait --verbose; Signal message for killed background job
 - **sh-options**: noclobber on \<\>
+
+</details>
+
+## Shell: smoosh POSIX tests
+
+POSIX sh cases from [smoosh](https://github.com/mgree/smoosh) (tests/shell), judged on stdout and exit status; scored where host dash or bash --posix passes. "Before" is unix/integration c14344d.
+
+| Area | Before | Now | Failing |
+|---|---|---|---|
+| benchmark | 0/2 | 0/2 | 2 |
+| builtin | 38/59 | 38/59 | 21 |
+| parse | 2/3 | 2/3 | 1 |
+| semantics | 67/92 | 67/92 | 25 |
+| sh | 4/7 | 4/7 | 3 |
+
+<details><summary>Failing cases</summary>
+
+- **benchmark**: benchmark.fact5 — status 2, want 0; benchmark.while — status 2, want 0
+- **builtin**: builtin.command.exec — stdout differs; builtin.exec.modernish.mkfifo.loop — stdout differs; builtin.exec.true — status 1, want 0; builtin.export — stdout differs; builtin.export.override — stdout differs; builtin.export.unset — status 1, want 0; builtin.hash.nonposix — status 1, want 0; builtin.jobs — status 5, want 0; builtin.kill.signame — status 1, want 0; builtin.kill0 — status 1, want 0; builtin.readonly.assign.interactive — stdout differs; builtin.readonly.assign.noninteractive — status 0, want 1; builtin.source.nonexistent.earlyexit — status 0, want 1; builtin.special.redir.error — status 0, want 1; builtin.trap.chained — status 1, want 0; builtin.trap.exit3 — status 1, want 0; builtin.trap.false — status 1, want 0; builtin.trap.nested — stdout differs; builtin.trap.redirect — stdout differs; builtin.trap.subshell.false — status 1, want 0; builtin.trap.supershell — stdout differs
+- **parse**: parse.eval.error — status 1, want 0
+- **semantics**: semantics.background.pid — status 1, want 0; semantics.background.pipe.pid — status 1, want 0; semantics.case.ec — status 2, want 0; semantics.command-subst.newline — stdout differs; semantics.command.argv0 — status 1, want 0; semantics.defun.ec — stdout differs; semantics.dot.glob — stdout differs; semantics.escaping.backslash.modernish — status 1, want 0; semantics.escaping.quote — status 1, want 0; semantics.evalorder.fun — status 1, want 0; semantics.for.readonly — status 1, want 0; semantics.kill.traps — status 1, want 0; semantics.pattern.bracket.quoted — stdout differs; semantics.pattern.hyphen — stdout differs; semantics.pattern.modernish — status 1, want 0; semantics.pattern.rightbracket — stdout differs; semantics.quote.backslash — stdout differs; semantics.redir.close — status 0, want 1; semantics.special.assign.visible.nonposix — stdout differs; semantics.subshell.break — status 127, want 0; semantics.tilde.quoted — stdout differs; semantics.traps.async — status 1, want 0; semantics.var.dashu — status 1, want 0; semantics.var.star.format — stdout differs; semantics.wait.alreadydead (hang/timeout)
+- **sh**: sh.env.ppid — status 1, want 0; sh.monitor.bg — status 3, want 0; sh.set.ifs — stdout differs
 
 </details>
 
