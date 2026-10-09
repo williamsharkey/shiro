@@ -129,3 +129,24 @@ describe('claude login', () => {
     expect(loginArgs(['-p', 'hi'])).toEqual(['-p', 'hi']);
   });
 });
+
+describe('the native build version', () => {
+  it('reads Claude Code\'s own VERSION constant from the binary, and records it', async () => {
+    const { versionInBinary, nativeClaudeVersion, recordNativeVersion } = await import('@shiro/commands/claude-native');
+    const enc = new TextEncoder();
+    const bin = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, ...enc.encode('xxVERSION:"9.9.9" junk ...README_URL:"https://x",VERSION:"2.1.295",FEEDBACK')]);
+    expect(versionInBinary(bin)).toBe('2.1.295');
+    expect(versionInBinary(enc.encode('no version here'))).toBe(null);
+    const { fs } = await createTestShell();
+    await fs.mkdir('/home/user/.local/bin', { recursive: true });
+    await fs.writeFile('/home/user/.local/bin/claude', bin, { mode: 0o755 });
+    expect(await nativeClaudeVersion(fs, '/home/user/.local/bin/claude', bin)).toBe('2.1.295');
+    // recorded: no bytes needed the next time
+    expect(await nativeClaudeVersion(fs, '/home/user/.local/bin/claude')).toBe('2.1.295');
+    await recordNativeVersion(fs, '/home/user/.local/bin/claude', '2.1.300');
+    expect(await nativeClaudeVersion(fs, '/home/user/.local/bin/claude')).toBe('2.1.300');
+    // a replaced binary isn't trusted to the record
+    await fs.writeFile('/home/user/.local/bin/claude', new Uint8Array([1, 2, 3]), { mode: 0o755 });
+    expect(await nativeClaudeVersion(fs, '/home/user/.local/bin/claude')).toBe(null);
+  });
+});

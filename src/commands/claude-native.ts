@@ -35,6 +35,55 @@ const quote = (a: string) => `'${a.replace(/'/g, `'\\''`)}'`;
 // Proxy and CA settings given to `claude install` reach the curl it runs
 const PASS_ENV = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'NO_PROXY', 'no_proxy', 'CURL_CA_BUNDLE', 'SSL_CERT_FILE', 'SSL_CERT_DIR'];
 
+/** Versions of installed native binaries, by path (with size and mtime, so a replaced file isn't trusted). */
+const VERSIONS_FILE = '/var/lib/tabcomputer/claude-native.json';
+type VersionRecord = Record<string, { version: string; size: number; mtime: number }>;
+
+async function readVersions(fs: CommandContext['fs']): Promise<VersionRecord> {
+  try { return JSON.parse(await fs.readFile(VERSIONS_FILE, 'utf8') as string) ?? {}; } catch { return {}; }
+}
+
+/** Remember the version of the binary at `path` (claude install writes it). */
+export async function recordNativeVersion(fs: CommandContext['fs'], path: string, version: string): Promise<void> {
+  try {
+    const st = await fs.stat(path);
+    const all = await readVersions(fs);
+    all[path] = { version, size: st.size, mtime: st.mtime.getTime() };
+    await fs.mkdir('/var/lib/tabcomputer', { recursive: true });
+    await fs.writeFile(VERSIONS_FILE, JSON.stringify(all, null, 2) + '\n');
+  } catch { /* only a cache */ }
+}
+
+/** The bundle's own `,VERSION:"x.y.z"` (Claude Code's build constants), from the binary's bytes. */
+export function versionInBinary(bin: Uint8Array): string | null {
+  const pat = new TextEncoder().encode(',VERSION:"');
+  for (let i = bin.indexOf(pat[0]); i >= 0; i = bin.indexOf(pat[0], i + 1)) {
+    let j = 1;
+    while (j < pat.length && bin[i + j] === pat[j]) j++;
+    if (j < pat.length) continue;
+    let v = '';
+    for (let k = i + j; k < i + j + 32 && bin[k] !== 0x22; k++) v += String.fromCharCode(bin[k]);
+    if (/^\d+\.\d+\.\d+/.test(v)) return v;
+  }
+  return null;
+}
+
+/**
+ * The installed native build's version: from the record `claude install`
+ * keeps, else read once from the binary (`bin`, when the caller has it) and
+ * recorded. null when neither works.
+ */
+export async function nativeClaudeVersion(fs: CommandContext['fs'], path: string, bin?: Uint8Array): Promise<string | null> {
+  try {
+    const st = await fs.stat(path);
+    const rec = (await readVersions(fs))[path];
+    if (rec && rec.size === st.size && rec.mtime === st.mtime.getTime()) return rec.version;
+  } catch { return null; }
+  const v = bin ? versionInBinary(bin) : null;
+  if (v) await recordNativeVersion(fs, path, v);
+  return v;
+}
+
 export async function installNativeClaude(ctx: CommandContext, target: string, version?: string, muslDeb = MUSL_DEB): Promise<number> {
   const say = (s: string) => {
     if (ctx.terminal) ctx.terminal.writeOutput(s.replace(/\n/g, '\r\n'));
@@ -98,6 +147,7 @@ export async function installNativeClaude(ctx: CommandContext, target: string, v
   }
   await ctx.fs.writeFile(target, bin, { mode: 0o755 });
   await ctx.fs.unlink(tmp).catch(() => {});
+  await recordNativeVersion(ctx.fs, target, version);
 
   if (!(await ctx.fs.exists(MUSL_LOADER).catch(() => false))) {
     say('  musl loader (Debian musl 1.2.5)\n');
