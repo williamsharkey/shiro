@@ -159,6 +159,32 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### unix/desktop 3 — the terminal's first layout: system font lookups
+
+perf-fs-shell's cold-boot profile showed `new ShiroTerminal` dominated by
+xterm's first forced layout. A trace of that layout (`devtools.timeline` +
+`fonts` categories, from `shiro:terminal:start` to `shiro:terminal:ready`)
+shows it is not box layout: 17 `FontCache::GetFontPlatformData` calls, 12 of
+them blocking `MatchFamilyName` IPCs to the browser's font service, for every
+family in the desktop's font stacks that isn't installed (`ui-sans-serif`,
+`Cascadia Code`, `Menlo`, `Consolas`, `ui-monospace`, …), about 1 ms each. The
+terminal UI's first layout does 5. Containment (`contain: strict` on the
+window/pane), hiding the wallpaper, title bar or wordmark, and dropping the
+`@font-face` rules changed nothing measurable.
+
+Change: the font stacks are the web font plus its generic family
+(`'Inter', sans-serif`, `"JetBrains Mono", monospace`, in the CSS, xterm and
+the icon glyphs), and the wallpaper wordmark joins the page with the menu bar
+and dock, after the terminal exists. First layout: 12 → 7 font lookups, ~14 →
+~10 ms (4 traced boots each; the terminal UI's is ~4 ms).
+
+`node bench/ab.mjs origin/unix/integration --quick --suites boot --rounds 5`
+(79594fd vs this): no significant change end to end — cold first prompt
+213 → 202 ms (p = 0.97), warm 130 → 114 ms (−10%, lower in all 5 rounds,
+p = 0.15), first command and long tasks unchanged. A 3-round run of the same
+pair showed cold first prompt +9.5% (p = 0.09) and first command +3 ms
+(p = 0.003); the 5-round run didn't reproduce either, so both are read as noise.
+
 ### unix/desktop 2 — fewer requests and DOM nodes at first prompt
 
 Integration 1d9582a counted 15 boot requests and 414 DOM nodes (68dbbbc: 10

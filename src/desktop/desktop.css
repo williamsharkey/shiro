@@ -5,8 +5,10 @@ body.sd-active { background: #0b0e18; }
 body.sd-active #shiro-layout { display: none; }
 
 .sd-desktop {
-  --sd-font: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --sd-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace;
+  /* Web font + generic family only: every missing family in a stack is a blocking
+     system font lookup during layout (~1 ms each on Linux, measured on the boot path) */
+  --sd-font: 'Inter', sans-serif;
+  --sd-mono: 'JetBrains Mono', monospace;
   --sd-menubar-h: 30px;
   --sd-dock-h: 68px;
   --sd-dock-gap: 8px;

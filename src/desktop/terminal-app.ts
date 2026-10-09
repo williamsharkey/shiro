@@ -44,7 +44,8 @@ export function terminalTheme(theme: 'light' | 'dark') {
   return theme === 'light' ? LIGHT : DARK;
 }
 
-const MONO = '"JetBrains Mono", ui-monospace, "Cascadia Code", Menlo, Consolas, monospace';
+// Web font + generic only: each missing family costs a blocking font lookup in xterm's first measure
+const MONO = '"JetBrains Mono", monospace';
 
 /** Live views, for theming and for adopting the parked main terminal */
 const views = new Set<TerminalView>();

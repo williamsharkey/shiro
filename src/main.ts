@@ -529,6 +529,7 @@ async function main() {
   installDomFs(fs, kernel, () => desktop?.wm ?? null);
 
   // Create terminal
+  performance.mark('shiro:terminal:start');
   const terminal = new ShiroTerminal(container, shell);
 
   // Connect terminal to shell for interactive commands (vi, etc.)
