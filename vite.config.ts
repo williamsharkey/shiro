@@ -56,6 +56,8 @@ export default defineConfig({
   },
   optimizeDeps: {
     include: ['isomorphic-git', 'http-cache-semantics'],
+    // its worker is new URL('./worker.js', import.meta.url): pre-bundling would lose the file
+    exclude: ['@ffmpeg/ffmpeg'],
   },
   test: {
     setupFiles: ['./test/setup.ts'],
