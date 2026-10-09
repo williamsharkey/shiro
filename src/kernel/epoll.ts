@@ -12,7 +12,7 @@ import {
   EPOLL_CTL_ADD, EPOLL_CTL_DEL, EPOLL_CTL_MOD, EPOLLET, EPOLLONESHOT, EPOLLERR, EPOLLHUP, EPOLLEXCLUSIVE,
   EPOLL_EVENT_SIZE, POLLIN, S_IFCHR,
 } from './abi';
-import { type OpenFile, type OpenFileKind, ReadyListeners, refCount } from './fd';
+import { type OpenFile, type OpenFileKind, ReadyListeners, refCount, DevNull, DevZero } from './fd';
 
 /**
  * One setTimeout for every pending poll/epoll/select deadline. A wait that
@@ -26,6 +26,32 @@ let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
 let deadlineAt = Infinity;
 let cancelled = 0;
 
+/** Run `cb` on a following turn of the event loop (sooner than setTimeout's whole milliseconds) */
+const setImmediateFn = (globalThis as { setImmediate?: (cb: () => void) => unknown }).setImmediate;
+const nextTurn: (cb: () => void) => void = setImmediateFn ? (cb) => { setImmediateFn(cb); } : (() => {
+  const ch = new MessageChannel();
+  const queue: (() => void)[] = [];
+  ch.port1.onmessage = () => queue.shift()?.();
+  return (cb: () => void) => { queue.push(cb); ch.port2.postMessage(0); };
+})();
+
+function fireDue(): void {
+  deadlineTimer = null;
+  deadlineAt = Infinity;
+  const now = performance.now();
+  while (deadlines.length && (deadlines[0].dead || deadlines[0].at <= now)) {
+    const d = deadlines.shift()!;
+    if (!d.dead) { d.dead = true; d.fire(); }
+  }
+  armDeadlines();
+}
+
+/**
+ * Deadlines are on performance.now() (Date.now()'s whole milliseconds let a
+ * wait end up to 1 ms early). setTimeout runs to 1.5-4 ms before the first
+ * one, then event-loop turns take it the rest of the way, so a wait ends
+ * neither early nor a millisecond late (LTP's timer tests check both).
+ */
 function armDeadlines(): void {
   while (deadlines.length && deadlines[0].dead) deadlines.shift();
   const next = deadlines[0]?.at ?? Infinity;
@@ -34,22 +60,17 @@ function armDeadlines(): void {
   deadlineTimer = null;
   deadlineAt = next;
   if (next === Infinity) return;
-  deadlineTimer = setTimeout(() => {
-    deadlineTimer = null;
-    deadlineAt = Infinity;
-    const now = Date.now();
-    while (deadlines.length && (deadlines[0].dead || deadlines[0].at <= now)) {
-      const d = deadlines.shift()!;
-      if (!d.dead) { d.dead = true; d.fire(); }
-    }
-    armDeadlines();
-  }, Math.max(0, next - Date.now()));
+  const left = next - performance.now();
+  // (setTimeout runs later the longer it is set for: stop short by 1.5-4 ms)
+  const margin = Math.min(4, Math.max(1.5, left * 0.05));
+  if (left <= margin + 0.5) { nextTurn(() => { if (deadlineAt === next && !deadlineTimer) fireDue(); }); return; }
+  deadlineTimer = setTimeout(fireDue, Math.floor(left - margin));
   (deadlineTimer as any)?.unref?.();
 }
 
 /** Call `fire` after `ms`; returns a cancel function. */
 function addDeadline(ms: number, fire: () => void): () => void {
-  const d: Deadline = { at: Date.now() + ms, fire, dead: false };
+  const d: Deadline = { at: performance.now() + ms, fire, dead: false };
   let i = deadlines.length;
   while (i > 0 && deadlines[i - 1].at > d.at) i--;
   deadlines.splice(i, 0, d);
@@ -132,7 +153,8 @@ export class EpollFile implements OpenFile {
   /** epoll_ctl. `fd` is the caller's fd for `file` (reported back and used as the key, with the description). */
   ctl(op: number, fd: number, file: OpenFile, events: number, dataLo: number, dataHi: number): number {
     if (file === this) return -EINVAL;
-    if (file.kind === 'file' || file.kind === 'dir') return -EPERM;
+    // Files, directories and devices without a poll method (/dev/null, /dev/zero) can't be watched
+    if (file.kind === 'file' || file.kind === 'dir' || file instanceof DevNull || file instanceof DevZero) return -EPERM;
     if (file instanceof EpollFile && file.watches(this)) return -ELOOP;
     // At most 5 epolls deep, like Linux (EP_MAX_NESTS)
     if (op === EPOLL_CTL_ADD && file instanceof EpollFile && file.depth() >= 5) return -EINVAL;
