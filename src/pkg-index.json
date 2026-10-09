@@ -3170,6 +3170,83 @@
    ]
   },
   {
+   "name": "lazygit",
+   "version": "0.55.1",
+   "description": "Terminal UI for git commands (upstream static Go build)",
+   "license": "MIT",
+   "source": "https://github.com/jesseduffield/lazygit/releases/download/v0.55.1/lazygit_0.55.1_linux_x86_64.tar.gz",
+   "homepage": "https://github.com/jesseduffield/lazygit",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/lazygit.sh",
+   "section": "vcs",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/lazygit",
+     "url": "/pkg/lazygit/0.55.1/lazygit.gz",
+     "sha256": "e3c2cd7d4f6d7ce67675e779efc423e9d199f4670c975867372b456460e73d13",
+     "size": 7761135,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "lazygit": {
+     "file": "bin/lazygit"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "tig",
+   "version": "2.5.12",
+   "description": "Text-mode interface for git (static x86-64 build)",
+   "license": "GPL-2.0-or-later",
+   "source": "https://github.com/jonas/tig/releases/download/tig-2.5.12/tig-2.5.12.tar.gz",
+   "homepage": "https://jonas.github.io/tig/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/tig.sh",
+   "section": "vcs",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/tig",
+     "url": "/pkg/tig/2.5.12/tig.gz",
+     "sha256": "85e44d47114cd1c7d12236fc811ec42981e62f8411f40a8c4669bfe79bb7870f",
+     "size": 468023,
+     "unpack": "gzip"
+    },
+    {
+     "path": "etc",
+     "url": "/pkg/tig/2.5.12/etc.tar.gz",
+     "sha256": "86dd13a59404fd17abb27b8fdf633204f54867b8b390eff9b5a979097761b2f0",
+     "size": 5956,
+     "unpack": "tar.gz"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/tig/2.5.12/share.tar.gz",
+     "sha256": "685f8c70263f7a60afeb6849c52253f0bd1c21ab6fba38a3150ad1c4886acb1f",
+     "size": 17603,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "tig": {
+     "file": "bin/tig"
+    }
+   },
+   "links": {
+    "/etc/tigrc": "etc/tigrc",
+    "/usr/share/man/man1/tig.1": "share/man/man1/tig.1",
+    "/usr/share/man/man5/tigrc.5": "share/man/man5/tigrc.5"
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
    "name": "yq",
    "version": "4.52.1",
    "description": "YAML, JSON, XML and TOML processor (mikefarah/yq, upstream static Go build)",
