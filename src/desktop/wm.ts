@@ -17,7 +17,11 @@
 
 export const DESKTOP_API_VERSION = 1;
 
-export type WindowState = 'normal' | 'minimized' | 'maximized' | 'snapped-left' | 'snapped-right' | 'closed';
+export type WindowState = 'normal' | 'minimized' | 'maximized' | 'snapped-left' | 'snapped-right'
+  | 'snapped-top-left' | 'snapped-top-right' | 'snapped-bottom-left' | 'snapped-bottom-right' | 'closed';
+
+/** Where `snap()` puts a window: a half or a quarter of the work area */
+export type SnapSide = 'left' | 'right' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 
 export interface Geometry { x: number; y: number; width: number; height: number }
 
@@ -109,7 +113,7 @@ export interface DesktopWindow {
   maximize(): void;
   /** Toggle maximized (the green light). */
   zoom(): void;
-  snap(side: 'left' | 'right'): void;
+  snap(side: SnapSide): void;
   /** Close (runs onClose first unless `force`). Returns false when vetoed. */
   close(force?: boolean): boolean;
   /** Start an interactive move from a pointerdown (client-side decorations). */
@@ -465,6 +469,12 @@ export class WindowManager implements DesktopAPI {
     if (state === 'maximized') return { x: gap, y: gap, width: w, height: h };
     if (state === 'snapped-left') return { x: gap, y: gap, width: Math.floor((w - gap) / 2), height: h };
     if (state === 'snapped-right') { const half = Math.floor((w - gap) / 2); return { x: gap * 2 + half, y: gap, width: w - gap - half, height: h }; }
+    const q = /^snapped-(top|bottom)-(left|right)$/.exec(state);
+    if (q) {
+      const hw = Math.floor((w - gap) / 2), hh = Math.floor((h - gap) / 2);
+      const right = q[2] === 'right', bottom = q[1] === 'bottom';
+      return { x: right ? gap * 2 + hw : gap, y: bottom ? gap * 2 + hh : gap, width: right ? w - gap - hw : hw, height: bottom ? h - gap - hh : hh };
+    }
     return null;
   }
 
@@ -724,9 +734,9 @@ class WindowImpl implements DesktopWindow {
     this.withTransition(() => this.state === 'maximized' ? this.setState('normal') : this.setState('maximized'));
   }
 
-  snap(side: 'left' | 'right'): void {
+  snap(side: SnapSide): void {
     if (this.options.resizable === false || this.wm.compact) return;
-    this.withTransition(() => this.setState(side === 'left' ? 'snapped-left' : 'snapped-right'));
+    this.withTransition(() => this.setState(`snapped-${side}` as WindowState));
   }
 
   private withTransition(fn: () => void): void {
@@ -804,7 +814,7 @@ class WindowImpl implements DesktopWindow {
       this.applyGeometry();
       if (this.options.resizable !== false && !this.options.override) {
         const px = e.clientX - wa.x, py = e.clientY - wa.y;
-        snapTo = py <= SNAP_MARGIN - 2 ? 'maximized' : px <= SNAP_MARGIN ? 'snapped-left' : px >= wa.width - SNAP_MARGIN ? 'snapped-right' : null;
+        snapTo = snapZone(px, py, wa.width, wa.height);
         this.wm.showSnapPreview(snapTo ? this.wm.stateGeometry(snapTo) : null);
       }
     }, () => {
@@ -858,6 +868,25 @@ class WindowImpl implements DesktopWindow {
     for (const cb of this.listeners.get(ev) ?? []) { try { cb(this); } catch (e) { console.error('[desktop]', e); } }
     if (ev === 'title' || ev === 'move' || ev === 'resize') this.wm.emit('window-changed', this);
   }
+}
+
+/**
+ * The snap a drag released at (px, py) in the work area asks for: an edge
+ * near a corner is that quarter, the left/right edge a half, the top edge
+ * maximizes. null: no snap.
+ */
+export function snapZone(px: number, py: number, w: number, h: number): WindowState | null {
+  const C = 64; // corner zone along each edge
+  const left = px <= SNAP_MARGIN, right = px >= w - SNAP_MARGIN, top = py <= SNAP_MARGIN - 2, bottom = py >= h - SNAP_MARGIN;
+  const nearTop = py < C, nearBottom = py > h - C, nearLeft = px < C, nearRight = px > w - C;
+  if ((left && nearTop) || (top && nearLeft)) return 'snapped-top-left';
+  if ((right && nearTop) || (top && nearRight)) return 'snapped-top-right';
+  if ((left && nearBottom) || (bottom && nearLeft)) return 'snapped-bottom-left';
+  if ((right && nearBottom) || (bottom && nearRight)) return 'snapped-bottom-right';
+  if (top) return 'maximized';
+  if (left) return 'snapped-left';
+  if (right) return 'snapped-right';
+  return null;
 }
 
 /** Follow a pointer until release, even when the element under it changes. */
@@ -1018,6 +1047,12 @@ class SurfaceImpl implements Surface {
 /** Keys the desktop keeps for itself (Alt+Shift+…, Alt+`): see docs/DESKTOP.md. */
 export function isDesktopShortcut(e: KeyboardEvent): boolean {
   if (e.altKey && e.code === 'Backquote' && !e.ctrlKey && !e.metaKey) return true;
+  // Cmd+N / Cmd+W / Cmd+` / Cmd+Space (when the browser passes them on: installed app, fullscreen)
+  if (e.metaKey && !e.ctrlKey && !e.altKey && ['KeyN', 'KeyW', 'Backquote', 'Space'].includes(e.code)) return true;
+  // Ctrl+Space: the launcher (Ctrl+@ still sends NUL to the terminal)
+  if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && e.code === 'Space') return true;
+  // Ctrl+Alt+U/I/J/K: quarters
+  if (e.ctrlKey && e.altKey && !e.metaKey && !e.shiftKey && ['KeyU', 'KeyI', 'KeyJ', 'KeyK'].includes(e.code)) return true;
   return e.altKey && e.shiftKey && !e.ctrlKey && !e.metaKey &&
-    ['Enter', 'KeyW', 'KeyM', 'KeyT', 'KeyF', 'Comma', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.code);
+    ['Space', 'Enter', 'KeyW', 'KeyM', 'KeyT', 'KeyF', 'Comma', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.code);
 }
