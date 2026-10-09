@@ -133,7 +133,13 @@ const fdRef = (n: number) => FD_REF + n;
 const fdOfRef = (target: string): number | null => (target.startsWith(FD_REF) ? Number(target.slice(1)) : null);
 
 /** An output fd of the shell: a file, or a copy of the shell's own stdout/stderr */
-type OutFd = { path: string } | { dup: 1 | 2 };
+/**
+ * An output fd of the shell: a file, a copy of the shell's own stdout/stderr
+ * (`dup`, relative to this shell), or a stream it inherited (`writer`: what a
+ * `dup` of the parent's pointed at when this shell was forked, so
+ * `exec 3>&1 >/dev/null; sh -c 'echo x >&3'` reaches the parent's stdout).
+ */
+type OutFd = { path: string } | { dup: 1 | 2 } | { writer: (s: string) => void };
 
 export interface BackgroundJob {
   id: number;
@@ -828,7 +834,10 @@ export class Shell {
     child.kernelStdio = this.kernelStdio;
     child.kernelStdinLive = this.kernelStdinLive;
     child.heredocs = this.heredocs;
-    child.userFds = new Map(this.userFds);
+    // A dup of this shell's stdout/stderr is that stream itself in the child
+    // (whose own stdout may be redirected): keep the writer, not the reference
+    const base = this.fdBase;
+    child.userFds = new Map([...this.userFds].map(([n, e]) => [n, base && 'dup' in e ? { writer: base[e.dup] } : e]));
     child.fileDescriptors = new Map(this.fileDescriptors);
     child.cwd = this.cwd;
     child.env = { ...this.env };
@@ -1010,7 +1019,7 @@ export class Shell {
       const route = (n: 1 | 2) => {
         const target = () => {
           const e = this.userFds.get(n);
-          return !e ? (n === 1 ? base1 : base2) : 'dup' in e ? (e.dup === 1 ? base1 : base2) : null;
+          return !e ? (n === 1 ? base1 : base2) : 'dup' in e ? (e.dup === 1 ? base1 : base2) : 'writer' in e ? e.writer : null;
         };
         const w = (s: string) => {
           const t = target();
@@ -1030,11 +1039,14 @@ export class Shell {
       };
       this.fdRouting = true;
       this.flushFdWrites = flush;
+      const outerBase = this.fdBase;
+      this.fdBase = { 1: base1, 2: base2 };
       try {
         return await this.execute(line, route(1), route(2), remote, terminalOverride, skipHistory);
       } finally {
         this.fdRouting = false;
         this.flushFdWrites = null;
+        this.fdBase = outerBase;
         await flush();
       }
     }
@@ -1297,6 +1309,8 @@ export class Shell {
 
   /** Output fds opened by exec (1 and 2 too, after `exec >file`) */
   userFds = new Map<number, OutFd>();
+  /** While execute() routes output: the writers a `dup` entry means (this shell's own stdout/stderr) */
+  private fdBase: { 1: (s: string) => void; 2: (s: string) => void } | null = null;
 
   /** Where output to fd n goes: a file, or the shell's stdout/stderr; null if not open */
   resolveOutFd(n: number): OutFd | null {
@@ -1369,12 +1383,33 @@ export class Shell {
   /** File writes started by exec redirections (truncation), awaited before the next write */
   private pendingFdOps: Promise<void> = Promise.resolve();
 
+  /** The shell's fds 3-9 as programs it starts inherit them (runKernelPipeline inheritFds) */
+  private inheritableFds(writeStdout: (s: string) => void, writeStderr: (s: string) => void) {
+    const out: { fd: number; path?: string; write?: (s: string) => void; content?: string }[] = [];
+    for (let n = 3; n <= 9; n++) {
+      const e = this.userFds.get(n);
+      const inp = this.fileDescriptors.get(n);
+      if (e && 'path' in e) out.push({ fd: n, path: e.path });
+      else if (e && 'writer' in e) out.push({ fd: n, write: e.writer });
+      else if (e && 'dup' in e) out.push({ fd: n, write: this.fdBase ? this.fdBase[e.dup] : e.dup === 1 ? writeStdout : writeStderr });
+      else if (inp) out.push({ fd: n, content: inp.content.slice(inp.offset) });
+    }
+    return out;
+  }
+
   /** Write command output to fd n's target */
   private async writeToFd(n: number, text: string, writeStdout: (s: string) => void, writeStderr: (s: string) => void): Promise<boolean> {
     const e = this.resolveOutFd(n);
     if (!e) return false;
     if ('dup' in e) {
-      (e.dup === 1 ? writeStdout : writeStderr)(text.replace(/\r?\n/g, '\r\n'));
+      // A copy of the shell's own stdout/stderr, even if fd 1/2 now go elsewhere (exec 3>&1 >/dev/null)
+      // (fd 1/2 with no exec entry are just the current stdout/stderr: a pipe, a capture)
+      const w = this.userFds.has(n) && this.fdBase ? this.fdBase[e.dup] : e.dup === 1 ? writeStdout : writeStderr;
+      w(text.replace(/\r?\n/g, '\r\n'));
+      return true;
+    }
+    if ('writer' in e) {
+      e.writer(text.replace(/\r?\n/g, '\r\n'));
       return true;
     }
     await this.pendingFdOps;
@@ -7304,6 +7339,7 @@ export class Shell {
       command: pipeline.slice(i, last + 1).map(x => x.trim()).join(' | '),
       cwd: this.cwd,
       env: this.exportedEnv(),
+      inheritFds: this.inheritableFds(writeStdout, writeStderr),
     });
     return { lastIndex: last, redirects: lastRedirects, ...r, stdout: ctx.stdout + r.stdout, stderr: ctx.stderr + r.stderr };
   }
