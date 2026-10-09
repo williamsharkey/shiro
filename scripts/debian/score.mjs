@@ -39,6 +39,7 @@ const wanted = (ONLY ? popcon.filter((p) => ONLY.includes(p.name)) : popcon.slic
 
 // ── Failure categories (first match wins) ────────────────────────────────
 const CATEGORIES = [
+  ['blink-lchown', /error setting ownership of symlink/],
   ['not-in-trixie', /Unable to locate package|has no installation candidate|is not available, but is referred to/],
   ['timeout', /^SCORE-TIMEOUT/m],
   ['engine-crash', /terminating due to SIG|Segmentation fault|Illegal instruction|Bus error|core dumped|returned error exit status 1[34]\d\b|SIGSEGV|SIGILL|SIGBUS/],
@@ -52,7 +53,7 @@ function categorize(text) {
   for (const [cat, re] of CATEGORIES) if (re.test(text)) return cat;
   return 'other';
 }
-const firstError = (text) => (text.split('\n').find((l) => /^(E:|dpkg: error|.*(error|Error|ERROR|failed|not found|No such file))/.test(l)) || text.trim().split('\n').pop() || '').slice(0, 160);
+const firstError = (text) => (text.split('\n').find((l) => /^ (error|unable|cannot|trying to overwrite)/.test(l))?.trim() || text.split('\n').find((l) => /^(E:|dpkg: error|.*(error|Error|ERROR|failed|not found|No such file))/.test(l)) || text.trim().split('\n').pop() || '').slice(0, 160);
 
 // ── Archive facts: which popcon names exist in trixie amd64 ─────────────
 async function archivePackages(base) {
@@ -248,6 +249,12 @@ async function main() {
         const batch = queue.slice(next, next + BATCH);
         next += batch.length;
         try {
+          // A dpkg left half-configured by an earlier failure fails everything after it
+          if (m && (await m.run('dpkg --audit 2>&1')).out.trim()) {
+            log('dpkg --audit reports problems; new machine');
+            await m.context.close().catch(() => {});
+            m = null;
+          }
           m ??= await newMachine(browser, base, log);
           const broken = await scoreBatch(m, batch, (r) => {
             results[r.name] = r;
@@ -316,6 +323,7 @@ function report() {
 }
 
 const CAT_MEANING = {
+  'blink-lchown': "Blink's lchown follows symlinks, so dpkg can't set the owner of a symlink whose target isn't unpacked yet (reported to unix/perf-blink)",
   'not-in-trixie': 'popcon counts every release and architecture; no such amd64 package in trixie',
   'engine-crash': 'a program died of a signal in Blink (an unimplemented instruction or an emulation bug)',
   'missing-syscall': 'a system call Shiro or Blink does not implement',
