@@ -41,6 +41,8 @@ const jitBin = join(out, 'jit');
 const haveJit = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', jitBin, 'jit.c']);
 const forkBin = join(out, 'forkcopy');
 const haveFork = tryBuild('gcc', ['-static', '-O1', '-o', forkBin, 'forkcopy.c']);
+const forkSharedBin = join(out, 'forkshared');
+const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
 const fionbioBin = join(out, 'fionbio');
 const haveFionbio = tryBuild('gcc', ['-static', '-O1', '-o', fionbioBin, 'fionbio.c']);
 const fuzzBin = join(out, 'jitfuzz');
@@ -165,6 +167,14 @@ describe.skipIf(!haveFork)('Blink engine: fork', () => {
     const { shell } = await setup(readFileSync(forkBin));
     const r = await run(shell, './prog nested');
     expect(r.output).toContain('nested status 44 counter 1');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // LTP keeps its results and checkpoint futexes in MAP_SHARED pages
+  it.skipIf(!haveForkShared)('MAP_SHARED memory stays shared with the child; unmapped, fork copies again', async () => {
+    const { shell } = await setup(readFileSync(forkSharedBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('anon shared 42\nfile shared 7\nprivate after unmap 100\n');
     expect(r.exitCode).toBe(0);
   }, 60_000);
 });
