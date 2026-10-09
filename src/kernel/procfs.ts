@@ -221,7 +221,7 @@ export class ProcFs {
       case 'statm': return { type: 'file', text: () => '0 0 0 0 0 0 0\n' };
       case 'status': return { type: 'file', text: () => this.pidStatus(p) };
       case 'io': return { type: 'file', text: () => 'rchar: 0\nwchar: 0\nsyscr: 0\nsyscw: 0\nread_bytes: 0\nwrite_bytes: 0\ncancelled_write_bytes: 0\n' };
-      case 'mounts': return { type: 'file', text: () => 'shirofs / shirofs rw 0 0\nproc /proc proc rw 0 0\n' };
+      case 'mounts': return { type: 'file', text: () => 'rootfs / rootfs rw 0 0\nproc /proc proc rw 0 0\n' };
     }
     return undefined;
   }
@@ -301,9 +301,14 @@ export class ProcFs {
     return lines.join('\n') + '\n';
   }
 
+  /** Running processes: the load average (it doesn't decay) */
+  running(): number {
+    return this.live().filter((p) => this.stateLetter(p) === 'R').length;
+  }
+
   private loadavgText(): string {
     const procs = this.live();
-    const running = procs.filter((p) => this.stateLetter(p) === 'R').length;
+    const running = this.running();
     const l = running.toFixed(2);
     return `${l} ${l} ${l} ${Math.max(1, running)}/${procs.length} ${this.kernel.lastPid}\n`;
   }

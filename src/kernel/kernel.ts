@@ -32,6 +32,7 @@ import { EpollFile, waitReady } from './epoll';
 import { SignalFile, notifySignalPending } from './signalfd';
 import { EventFile, TimerFile } from './fd';
 import { activeProfile, unameRelease, UNAME_VERSION } from '../profile';
+import { memoryInfo } from '../utils/sysinfo';
 
 /** Runs a process to completion; resolves with its exit code (or nothing if it exited through the kernel). */
 export type Runner = (proc: Process, kernel: Kernel) => Promise<number | void>;
@@ -2139,6 +2140,20 @@ export class Kernel {
           const open = type === SYSLOG_ACTION_READ_ALL || type === SYSLOG_ACTION_SIZE_BUFFER || type === SYSLOG_ACTION_SIZE_UNREAD || type <= 1;
           if (!open && proc.uid !== 0) return -A.EPERM;
           return await klog.syslogAction(type, data, args[1] | 0, sig);
+        }
+        case A.SYS_sysinfo: { // → struct sysinfo: the memory free and /proc/meminfo report (src/utils/sysinfo.ts)
+          if (data.length < A.SYSINFO_SIZE) return -A.EFAULT;
+          const v = new DataView(data.buffer, data.byteOffset, A.SYSINFO_SIZE);
+          data.fill(0, 0, A.SYSINFO_SIZE);
+          const mem = memoryInfo();
+          const load = BigInt(Math.round(this.procfs.running() * 65536));
+          v.setBigInt64(0, BigInt(Math.floor((Date.now() - bootMs) / 1000)), true); // uptime
+          for (let i = 0; i < 3; i++) v.setBigUint64(8 + i * 8, load, true); // loads[3], 1<<16 fixed point
+          v.setBigUint64(32, BigInt(mem.total), true); // totalram
+          v.setBigUint64(40, BigInt(mem.free), true); // freeram
+          v.setUint16(80, Math.min(0xffff, this.procs.size), true); // procs
+          v.setUint32(104, 1, true); // mem_unit
+          return 0;
         }
         case A.SYS_uname: { // → struct utsname (engines that report their own machine take the names from here)
           if (data.length < A.UTSNAME_FIELD * 6) return -A.EFAULT;
