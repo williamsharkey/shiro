@@ -1335,7 +1335,7 @@ const isDirectRun = isMainModule(process.argv[1]);
 
 if (isDirectRun) {
   server.listen(PORT, () => {
-    console.log(`Shiro server listening on :${PORT}`);
+    console.log(`Shiro server listening on :${server.address().port}`); // the real one when PORT=0
     if (tcpRelay) console.log(`[tcp] relay enabled at /tcp, ports ${TCP_RELAY_CONFIG.ports.join(',')}, origins ${TCP_RELAY_CONFIG.allowedOrigins.join(',')}`);
   });
 }
