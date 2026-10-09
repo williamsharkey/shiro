@@ -168,6 +168,16 @@ describe('shell constructs real scripts use (venv activate, build scripts)', () 
     expect((await sh(shell, '/tmp/fn-script')).out).toBe('5\n');
   });
 
+  it('a script run by path honours redirects and pipes (yarn is a sh launcher)', async () => {
+    await script(fs, '/tmp/two-streams', '#!/bin/sh\necho there\necho oops >&2\n');
+    let r = await sh(shell, '/tmp/two-streams > /dev/null');
+    expect(r.out).toBe('');
+    expect(r.err).toBe('oops\n');
+    r = await sh(shell, '/tmp/two-streams 2>/dev/null | tr a-z A-Z; /tmp/two-streams > /tmp/both 2>&1; /tmp/two-streams >> /tmp/both 2>/dev/null; cat /tmp/both');
+    expect(r.out).toBe('THERE\nthere\noops\nthere\n');
+    expect(r.err).toBe('');
+  });
+
   it('${1:-default} and [ ! a = b ] inside if', async () => {
     const r = await sh(shell, 'f() { echo "${1:-none}"; if [ ! "${1:-}" = "x" ]; then echo notx; fi; }; f; f x');
     expect(r.out).toBe('none\nnotx\nx\n');
