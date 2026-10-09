@@ -40,6 +40,7 @@ Commands:
         ctx.stderr = `error: API returned ${status}: ${data?.message || ''}\n`;
         return 1;
       }
+      if (flags['json']) { ctx.stdout = JSON.stringify(data ?? []) + '\n'; return 0; }
       if (!data || data.length === 0) {
         ctx.stdout = 'No releases found\n';
         return 0;
@@ -106,6 +107,7 @@ Commands:
         ctx.stderr = `error: API returned ${status}: ${data?.message || ''}\n`;
         return 1;
       }
+      if (flags['json']) { ctx.stdout = JSON.stringify(data) + '\n'; return 0; }
       ctx.stdout = `${data.tag_name}  ${data.name || ''}\n`;
       ctx.stdout += `Author: ${data.author?.login || 'unknown'}\n`;
       ctx.stdout += `Published: ${timeAgo(data.published_at || data.created_at)}\n`;
