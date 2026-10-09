@@ -21,7 +21,9 @@
 import type { FileSystem } from './filesystem';
 import type { CommandContext } from './commands/index';
 import { isWebc, parseWebc, type WebcPackage } from './webc';
-import { readTarball, type TarEntry } from './utils/tar';
+import type { TarEntry } from './utils/tar';
+// utils/tar (~65 KB with its codecs) loads with the first package that needs it
+const readTarball = (bytes: Uint8Array) => import('./utils/tar').then(m => m.readTarball(bytes));
 import builtinIndexJson from './pkg-index.json';
 import { untar, gunzip, type TarEntry as PkgTarEntry } from './pkg-tar';
 

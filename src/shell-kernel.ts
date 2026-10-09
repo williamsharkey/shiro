@@ -147,6 +147,12 @@ export interface KernelRunOptions {
   background?: boolean;
   cwd: string;
   env: Record<string, string>;
+  /**
+   * Files to use as the first stage's stdin and the last stage's stdout and
+   * stderr instead (the fds of a shell running as a kernel process,
+   * shell-stdio.ts); a missing one falls back to the options above.
+   */
+  fds?: { 0?: OpenFile; 1?: OpenFile; 2?: OpenFile };
 }
 
 export interface KernelRunResult {
@@ -180,7 +186,9 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
   const slave = tty ? tty.openSlave() : null;
   // A shell running as a kernel process hands its own fds down
   const host = !tty && shell.kernelHost && shell.kernelHost.kernel === kernel && !shell.kernelHost.proc.exiting ? shell.kernelHost.proc : null;
-  const hostFd = (fd: number) => host?.fds.get(fd);
+  // (A shell with kernelStdio decides per command which of them apply: opts.fds)
+  const fds = opts.fds;
+  const hostFd = (fd: number) => (fds ? fds[fd as 0 | 1 | 2] : host?.fds.get(fd));
   const openOut = async (to: { path: string; append: boolean }): Promise<OpenFile | string> => {
     const { Process } = await import('./kernel/process');
     const probe = new Process({ pid: -1, ppid: 1, path: 'sh', argv: ['sh'], env: opts.env, cwd: opts.cwd });

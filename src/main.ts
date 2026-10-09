@@ -21,7 +21,8 @@ import { grepCmd } from './commands/grep';
 import { sedCmd } from './commands/sed';
 import { fetchCmd, curlCmd } from './commands/fetch';
 import { globCmd } from './commands/glob';
-import { jsEvalCmd, nodeCmd } from './commands/jseval';
+import { jsEvalCmd } from './commands/jseval/js-eval-cmd';
+import './node-compat/page-globals'; // before anything can patch fetch/timers; node-compat loads lazily
 import { npmCmd } from './commands/npm';
 import { npxCmd } from './commands/npx';
 import { viCmd } from './commands/vi';
@@ -246,7 +247,9 @@ async function main() {
   registerCommand(commands, curlCmd, 'src/commands/fetch.ts');
   registerCommand(commands, globCmd, 'src/commands/glob.ts');
   registerCommand(commands, jsEvalCmd, 'src/commands/jseval.ts');
-  registerCommand(commands, nodeCmd, 'src/commands/jseval.ts');
+  // Lazy: node-compat (~150 KB) loads with the first node script
+  registerCommand(commands, lazyCommand('node', 'Execute JavaScript files (browser JS VM)',
+    () => import('./commands/jseval/node-cmd').then(m => m.nodeCmd)), 'src/commands/jseval.ts');
   registerCommand(commands, npmCmd, 'src/commands/npm.ts');
   registerCommand(commands, npxCmd, 'src/commands/npx.ts');
   registerCommand(commands, lazyCommand('build', 'Bundle TypeScript/JavaScript using esbuild-wasm',

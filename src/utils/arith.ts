@@ -39,6 +39,8 @@ export function parseArithNumber(text: string): bigint {
   m = /^(\d+)#([0-9A-Za-z@_]+)$/.exec(s);
   if (m) {
     const base = Number(m[1]);
+    // (the base is decimal: 02#… is no number)
+    if (m[1].length > 1 && m[1][0] === '0') throw new ArithError(`${s}: invalid number (error token is "${s}")`);
     if (base < 2 || base > 64) throw new ArithError(`${s}: invalid arithmetic base`);
     let v = 0n;
     for (const c of m[2]) {

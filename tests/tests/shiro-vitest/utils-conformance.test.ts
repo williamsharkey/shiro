@@ -122,4 +122,9 @@ describe('utilities conformance regressions', () => {
     expect(r.out).toBe('b1946ac92492d2347c6235b4d2611184  -\nd41d8cd98f00b204e9800998ecf8427e  -\n55ca6286e3e4f4fba5d0448333fa99fc5a404a73  ck.txt\n'
       + 'ck.txt: OK\nck.txt: FAILED\nst=1\nMD5 (ck.txt) = 91fc14ad02afd60985bb8165bda320a6\n');
   });
+
+  it('grep -r skips symlinks met while recursing, -R and named symlinks are followed', async () => {
+    const r = await sh('cd /tmp; mkdir -p gr/foo; echo bar > gr/foo/file; ln -s foo gr/symfoo; grep -r . gr; grep -r . gr/symfoo; grep -R . gr | sort');
+    expect(r.out).toBe('gr/foo/file:bar\ngr/symfoo/file:bar\ngr/foo/file:bar\ngr/symfoo/file:bar\n');
+  });
 });

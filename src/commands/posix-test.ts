@@ -18,7 +18,9 @@ export const test: Command = {
         if (!m || typeof ctx.shell?.getVar !== 'function') return false;
         try { return ctx.shell.getVar(m[1], m[2]) !== undefined; } catch { return false; }
       };
-      return (await new TestEval(ctx.args, ctx.fs, ctx.cwd, isSet).run()) ? 0 : 1;
+      // -o OPTION: is the shell option set
+      const optSet = (n: string) => !!ctx.shell?.options?.has?.(n);
+      return (await new TestEval(ctx.args, ctx.fs, ctx.cwd, isSet, optSet).run()) ? 0 : 1;
     } catch (e: unknown) {
       ctx.stderr += `test: ${e instanceof Error ? e.message : e}\n`;
       return 2;
@@ -32,7 +34,8 @@ const BINARY = new Set(['=', '==', '!=', '<', '>', '-eq', '-ne', '-lt', '-le', '
 export class TestEval {
   private pos = 0;
   constructor(private args: string[], private fs: FileSystem, private cwd: string,
-    private isSet: (name: string) => boolean = () => false) {}
+    private isSet: (name: string) => boolean = () => false,
+    private optSet: (name: string) => boolean = () => false) {}
 
   async run(): Promise<boolean> {
     const a = this.args;
@@ -41,18 +44,21 @@ export class TestEval {
       case 1: return a[0] !== '';
       case 2:
         if (a[0] === '!') return a[1] === '';
+        // -a FILE (old spelling of -e) and -o OPTION only as unary operators here
+        if (a[0] === '-a') return this.unary('-e', a[1]);
+        if (a[0] === '-o') return this.optSet(a[1]);
         if (UNARY.has(a[0])) return this.unary(a[0], a[1]);
         throw new Error(`${a[0]}: unary operator expected`);
       case 3:
         if (BINARY.has(a[1])) return this.binary(a[0], a[1], a[2]);
-        if (a[0] === '!') return !(await new TestEval(a.slice(1), this.fs, this.cwd, this.isSet).run());
+        if (a[0] === '!') return !(await new TestEval(a.slice(1), this.fs, this.cwd, this.isSet, this.optSet).run());
         if (a[0] === '(' && a[2] === ')') return a[1] !== '';
         if (a[1] === '-a') return a[0] !== '' && a[2] !== '';
         if (a[1] === '-o') return a[0] !== '' || a[2] !== '';
         throw new Error(`${a[1]}: binary operator expected`);
       case 4:
-        if (a[0] === '!') return !(await new TestEval(a.slice(1), this.fs, this.cwd, this.isSet).run());
-        if (a[0] === '(' && a[3] === ')') return new TestEval(a.slice(1, 3), this.fs, this.cwd, this.isSet).run();
+        if (a[0] === '!') return !(await new TestEval(a.slice(1), this.fs, this.cwd, this.isSet, this.optSet).run());
+        if (a[0] === '(' && a[3] === ')') return new TestEval(a.slice(1, 3), this.fs, this.cwd, this.isSet, this.optSet).run();
     }
     const v = await this.or();
     if (this.pos < a.length) throw new Error(`${a[this.pos]}: unexpected argument`);

@@ -1,18 +1,18 @@
-From 236484644ceeede12a64f0c69351da924257faee Mon Sep 17 00:00:00 2001
+From adc42d99d0770a7a2d8579a5f70772216b91cc34 Mon Sep 17 00:00:00 2001
 From: shiro <build@shiro>
 Date: Fri, 9 Oct 2026 01:14:27 +0000
-Subject: [PATCH] emscripten: Shiro uname takes the kernel's host and domain
- names
+Subject: [PATCH 26/26] emscripten: Shiro uname takes the kernel's host and
+ domain names
 
 ---
  blink/shiro.inc | 16 ++++++++++++++++
  1 file changed, 16 insertions(+)
 
 diff --git a/blink/shiro.inc b/blink/shiro.inc
-index 7033d10..1891aef 100644
+index 70b1ef3..3b79547 100644
 --- a/blink/shiro.inc
 +++ b/blink/shiro.inc
-@@ -1287,6 +1287,22 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+@@ -1314,6 +1314,22 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
      }
    }
    switch (nr) {

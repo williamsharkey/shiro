@@ -29,6 +29,8 @@ export interface RunWasiOptions {
   mounts?: Record<string, string>;
   /** The program's own path, when not argv[0] found on PATH (see wasmRunner) */
   exe?: string;
+  /** Preopen only `mounts` and `preopens`, not the default "/" and "." (see wasmRunner) */
+  bare?: boolean;
 }
 
 const kernels = new WeakMap<FileSystem, Kernel>();
@@ -62,7 +64,7 @@ export async function runWasiProgram(ctx: CommandContext, opts: RunWasiOptions):
   // A terminal with a pty session: run as a foreground job on its tty (job control, termios, SIGWINCH)
   if (toTerminal && term!.tty && ctx.shell) {
     const { runKernelPipeline } = await import('../shell-kernel');
-    const r = await runKernelPipeline(ctx.shell, [{ argv: opts.argv, run: wasmRunner(opts.module, opts.image, opts.preopens, opts.mounts, opts.exe) }], {
+    const r = await runKernelPipeline(ctx.shell, [{ argv: opts.argv, run: wasmRunner(opts.module, opts.image, opts.preopens, opts.mounts, opts.exe, opts.bare) }], {
       stdin: ctx.stdin ? ctx.stdin : undefined,
       captureStdout: false,
       captureStderr: false,
@@ -100,7 +102,7 @@ export async function runWasiProgram(ctx: CommandContext, opts: RunWasiOptions):
   }
 
   // Its own process group, so ^C reaches it and everything it spawns
-  const proc = kernel.spawn({ path: opts.argv[0], argv: opts.argv, env, cwd, fds, pgid: 0, run: wasmRunner(opts.module, opts.image, opts.preopens, opts.mounts, opts.exe) });
+  const proc = kernel.spawn({ path: opts.argv[0], argv: opts.argv, env, cwd, fds, pgid: 0, run: wasmRunner(opts.module, opts.image, opts.preopens, opts.mounts, opts.exe, opts.bare) });
   pgid = proc.pgid;
   const abort = (ctx.shell as any)?.abortController as AbortController | null | undefined;
   const onAbort = () => { kernel.kill(-pgid, A.SIGINT); };
@@ -125,7 +127,7 @@ async function runLegacy(ctx: CommandContext, opts: RunWasiOptions, cwd: string,
     stdoutIsTTY: ctx.stdoutIsTTY !== false,
     onStdout: (text) => { ctx.stdout += text; },
     onStderr: (text) => { ctx.stderr += text; },
-    preopens: { '/': '/', '.': cwd },
+    preopens: { '/': opts.mounts?.['/'] ?? '/', '.': cwd },
   });
   try {
     await wasi.preloadTree(cwd, 3, 100);

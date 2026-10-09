@@ -10,13 +10,15 @@
 import { addProcInfoSource, type FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
+import { KernelStdio, execLazyStdin } from '../shell-stdio';
 import { ProcFs, bootMs } from './procfs';
 import { processTable, type ShiroProcess } from '../process-table';
 import { packageShadows, packageArgsForPath, PKG_BIN_DIR } from '../pkg-manager';
 import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
-  RegularFile, DirFile, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, flushInode, openInodeInfo, shareInodeNumber, forgetInodeNumber,
+  RegularFile, DirFile, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, flushInode, inodeStat, hasOpenInodes,
+  shareInodeNumber, forgetInodeNumber,
 } from './fd';
 import { createPipe } from './pipe';
 import { Process } from './process';
@@ -93,6 +95,8 @@ const enc = new TextEncoder();
 const SHELL_PROGRAMS = new Set(['echo', 'printf', 'test', '[', 'true', 'false', 'pwd', 'kill']);
 
 function normalize(path: string): string {
+  // Already normal (absolute, no empty, . or .. segments, no trailing slash): most paths
+  if (path.charCodeAt(0) === 47 && !/\/\/|\/\.\.?(?:\/|$)|.\/$/.test(path)) return path;
   const stack: string[] = [];
   for (const part of path.split('/')) {
     if (part === '' || part === '.') continue;
@@ -100,6 +104,11 @@ function normalize(path: string): string {
     else stack.push(part);
   }
   return '/' + stack.join('/');
+}
+
+/** A path whose last component is followed by '/': it must name a directory (path_resolution(7)). */
+function trailingSlash(path: string): boolean {
+  return path.length > 1 && path.endsWith('/') && !/^\/+$/.test(path);
 }
 
 /** Single-quote a word for the shell. */
@@ -254,7 +263,11 @@ export class Kernel {
     const base = path.slice(path.lastIndexOf('/') + 1);
     const inBin = !path.includes('/') || /^\/(usr\/)?(local\/)?s?bin\//.test(path);
     const cmd = inBin ? shell.commands.get(base) : undefined;
-    if (cmd && (base === 'sh' || base === 'bash')) return proc => this.runShellProcess(proc);
+    if (cmd && (base === 'sh' || base === 'bash')) {
+      // `sh -c 'prog args'`: exec prog in this process; anything else is a script
+      const direct = await this.shellCommandDirect(_proc);
+      return direct ?? (proc => this.runShellProcess(proc));
+    }
     // An installed package's command replaces the builtin, as at the prompt
     // (a bin-dir path can name a builtin's PATH shim, or nothing on disk)
     const pkgBin = `${PKG_BIN_DIR}/${base}`;
@@ -275,9 +288,8 @@ export class Kernel {
   /**
    * `sh -c 'prog args'` naming a program (not a builtin), with nothing for
    * the shell to do but start it: run the program in this process, as a
-   * real shell execs its last command. Builtins see stdin only at EOF and
-   * write their output when they return, so a program talking to its parent
-   * over pipes (git clone and git-upload-pack) can't go through one.
+   * real shell execs its last command (one process instead of two). Other
+   * scripts run in a shell that uses this process's fds (src/shell-stdio.ts).
    */
   private async shellCommandDirect(probe: Process): Promise<Runner | null> {
     const a = probe.argv;
@@ -592,22 +604,39 @@ export class Kernel {
     const fs = this.fs;
     if (!fs) return -A.ENOSYS;
     const statusFlags = flags & ~(A.O_CREAT | A.O_EXCL | A.O_TRUNC | A.O_CLOEXEC | A.O_NOCTTY | A.O_DIRECTORY | A.O_NOFOLLOW);
+    // "name/" must be a directory (a symlink to one is followed even with O_NOFOLLOW)
+    const mustBeDir = trailingSlash(path) || !!(flags & A.O_DIRECTORY);
     try {
+      let lst: Awaited<ReturnType<FileSystem['lstat']>> | null = null;
+      try { lst = await fs.lstat(p); } catch { lst = null; }
+      if (lst?.isSymbolicLink() && (flags & A.O_NOFOLLOW) && !trailingSlash(path)) return -A.ELOOP;
       let st: Awaited<ReturnType<FileSystem['stat']>> | null = null;
-      try { st = await fs.stat(p); } catch { st = null; }
+      if (lst) {
+        try { st = lst.isSymbolicLink() ? await fs.stat(p) : lst; } catch (e) {
+          const err = A.errnoFromError(e, A.ENOENT);
+          if (err !== -A.ENOENT) return err; // ELOOP
+        }
+      }
+      let target = p;
       if (!st) {
         if (!(flags & A.O_CREAT)) return -A.ENOENT;
+        if (trailingSlash(path)) return -A.EISDIR;
         if (flags & A.O_DIRECTORY) return -A.EINVAL;
-        await fs.writeFile(p, new Uint8Array(0), { mode: mode & ~proc.umask & 0o7777 });
+        if (lst) {
+          // A dangling symlink: O_EXCL refuses it, otherwise its target is created
+          if (flags & A.O_EXCL) return -A.EEXIST;
+          target = await fs.realpath(p);
+        }
+        await fs.writeFile(target, new Uint8Array(0), { mode: mode & ~proc.umask & 0o7777 });
       } else {
         if ((flags & A.O_CREAT) && (flags & A.O_EXCL)) return -A.EEXIST;
         if (st.isDirectory()) {
           if (canWrite(flags)) return -A.EISDIR;
           return new DirFile(fs, p, statusFlags);
         }
-        if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
+        if (mustBeDir) return -A.ENOTDIR;
       }
-      const real = await fs.realpath(p);
+      const real = await fs.realpath(target);
       const file = new RegularFile(await openInode(fs, real), statusFlags);
       if ((flags & A.O_TRUNC) && canWrite(flags)) await file.truncate(0);
       return file;
@@ -630,7 +659,7 @@ export class Kernel {
    */
   openSync(proc: Process, path: string, flags: number, dirfd = A.AT_FDCWD): OpenFile | number | undefined {
     const fs = this.fs;
-    if (!fs || flags & (A.O_CREAT | A.O_TRUNC)) return undefined;
+    if (!fs || flags & (A.O_CREAT | A.O_TRUNC | A.O_NOFOLLOW) || trailingSlash(path)) return undefined;
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
     if (this.devices.has(p) || /^\/(?:dev|proc)\//.test(p)) return undefined;
@@ -647,7 +676,7 @@ export class Kernel {
   /** statPath from memory, encoded into `data`: 0, -errno, or undefined (use statPath). */
   private statPathSyncInto(proc: Process, path: string, follow: boolean, dirfd: number, data: Uint8Array): number | undefined {
     const fs = this.fs;
-    if (!fs) return undefined;
+    if (!fs || trailingSlash(path)) return undefined;
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
     if (this.devices.has(p) || p === '/proc' || p.startsWith('/proc/') || this.socketPaths?.has(p)) return undefined;
@@ -655,16 +684,24 @@ export class Kernel {
     if (hit === undefined) return undefined;
     if (hit === null) return -A.ENOENT;
     const n = hit.node;
+    const open = n.type === 'file' ? inodeStat(fs, hit.path) : undefined;
+    if (open) { A.encodeStat({ ...open, ino: inodeNumber(p) }, data); return 0; }
     const type = n.type === 'dir' ? A.S_IFDIR : n.type === 'symlink' ? A.S_IFLNK : A.S_IFREG;
     A.encodeStat({
       dev: 1, ino: inodeNumber(p), mode: type | (n.mode & 0o7777), nlink: n.type === 'dir' ? 2 : 1,
       uid: 1000, gid: 1000, rdev: 0, size: n.size, blksize: 4096, blocks: Math.ceil(n.size / 512),
-      atimeMs: n.mtime, mtimeMs: n.mtime, ctimeMs: n.ctime,
+      atimeMs: n.atime ?? n.mtime, mtimeMs: n.mtime, ctimeMs: n.ctime,
+      atimeNs: n.atime === undefined ? n.mtimeNs : n.atimeNs, mtimeNs: n.mtimeNs,
     }, data);
     return 0;
   }
 
   async statPath(proc: Process, path: string, follow = true, dirfd = A.AT_FDCWD): Promise<A.KStat | number> {
+    // "name/": the directory it names (following a symlink), or ENOTDIR
+    if (trailingSlash(path)) {
+      const st = await this.statPath(proc, path.replace(/\/+$/, ''), true, dirfd);
+      return typeof st !== 'number' && (st.mode & A.S_IFMT) !== A.S_IFDIR ? -A.ENOTDIR : st;
+    }
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
     const dev = this.devices.get(p);
@@ -686,16 +723,17 @@ export class Kernel {
     try {
       const st = follow ? await fs.stat(p) : await fs.lstat(p);
       let type = st.isDirectory() ? A.S_IFDIR : st.isSymbolicLink() ? A.S_IFLNK : A.S_IFREG;
-      // The same file through a symlink is the same inode; an open file may have unflushed writes
+      // The same file through a symlink is the same inode
       const real = follow && type !== A.S_IFDIR ? await fs.realpath(p).catch(() => p) : p;
       if (type === A.S_IFREG && this.socketPaths?.has(real)) type = A.S_IFSOCK;
-      const open = type === A.S_IFREG ? openInodeInfo(fs, real) : undefined;
-      const size = open?.size ?? st.size;
-      const mtimeMs = open?.mtimeMs ?? st.mtime.getTime();
+      // A file open here: its size and times as the open descriptions see them
+      const open = type === A.S_IFREG && hasOpenInodes(fs) ? inodeStat(fs, real) : undefined;
+      if (open) return { ...open, ino: inodeNumber(real) };
       return {
         dev: 1, ino: inodeNumber(real), mode: type | (st.mode & 0o7777), nlink: st.isDirectory() ? 2 : 1,
-        uid: 1000, gid: 1000, rdev: 0, size, blksize: 4096, blocks: Math.ceil(size / 512),
-        atimeMs: mtimeMs, mtimeMs, ctimeMs: st.ctime.getTime(),
+        uid: 1000, gid: 1000, rdev: 0, size: st.size, blksize: 4096, blocks: Math.ceil(st.size / 512),
+        atimeMs: st.atimeMs ?? st.mtime.getTime(), mtimeMs: st.mtime.getTime(), ctimeMs: st.ctime.getTime(),
+        atimeNs: st.atimeNs, mtimeNs: st.mtimeNs,
       };
     } catch (e) {
       return A.errnoFromError(e);
@@ -739,28 +777,41 @@ export class Kernel {
   /**
    * Run a Shiro builtin as this process: fd 0 (when it is a pipe, file or
    * in-memory stream) becomes `ctx.stdin`, and `ctx.stdout`/`ctx.stderr`
-   * go to fds 1 and 2 when the command returns.
+   * go to fds 1 and 2 when the command returns. The shells (sh, bash, dash)
+   * use the fds themselves instead (src/shell-stdio.ts): stdin is read when
+   * a command in the script needs it, output is written as it is produced.
+   * fd 0 is read only if the command looks at ctx.stdin (execLazyStdin):
+   * `echo`, `mkdir`... leave it for the next reader.
    */
   async runBuiltin(proc: Process, cmd: Command): Promise<number> {
     const shell = this.forkShell(proc);
+    let stdio: KernelStdio | undefined;
+    if (SHELL_NAMES.has(cmd.name) || SHELL_NAMES.has(proc.argv[0]?.slice(proc.argv[0].lastIndexOf('/') + 1))) {
+      stdio = new KernelStdio(this, proc);
+      shell.kernelStdio = stdio;
+      shell.kernelStdinLive = true;
+    }
+    const lazy = !stdio;
     const ctx: CommandContext = {
       args: proc.argv.slice(1),
       fs: this.fs ?? shell.fs,
       cwd: proc.cwd,
       env: shell.env,
-      stdin: await this.stdinText(proc),
+      stdin: '',
       stdout: '',
       stderr: '',
       shell,
       stdoutIsTTY: proc.fds.get(1)?.kind === 'pty',
+      ...(stdio ? { liveStdin: true, streamStdout: stdio.out, streamStderr: stdio.err } : {}),
     };
     let code: number;
     try {
-      code = await cmd.exec(ctx);
+      code = lazy ? await execLazyStdin(cmd, ctx, () => this.stdinText(proc)) : await cmd.exec(ctx);
     } catch (e: any) {
       ctx.stderr += (e?.message ?? String(e)) + '\n';
       code = 1;
     }
+    if (stdio) await stdio.flush();
     if (proc.exiting) return code;
     if (ctx.stdout) await this.writeAll(proc, 1, enc.encode(ctx.stdout));
     if (ctx.stderr && !proc.exiting) await this.writeAll(proc, 2, enc.encode(ctx.stderr));
@@ -773,9 +824,10 @@ export class Kernel {
    * `sh`/`bash` as a kernel process (a program's system(), popen(), `sh -c
    * CMD`, `#!/bin/sh` scripts): the forked shell is the process
    * (`shell.kernelHost`), so programs it runs get its real fds and the tty.
-   * Builtins write to fd 1/2 as they go. Stdin is read up front only for a
-   * script on stdin or one that starts with a builtin (which takes its
-   * input as a string); a program at the start reads fd 0 itself.
+   * A script uses the process's fds as its stdio (`shell.kernelStdio`,
+   * src/shell-stdio.ts): builtins write to fd 1/2 as they go, `read` takes
+   * one record from fd 0, other builtins read fd 0 only if they need it, and
+   * programs get the fds themselves.
    */
   private async runShellProcess(proc: Process): Promise<number> {
     const shell = this.forkShell(proc);
@@ -783,7 +835,7 @@ export class Kernel {
     const args = proc.argv.slice(1);
     let i = 0;
     while (i < args.length && /^-[a-zA-Z]+$/.test(args[i]) && args[i] !== '-c') i++; // -e, -x, -l ...
-    let script: string;
+    let script: string | undefined;
     let positional: string[] = [];
     // No script and a terminal (or -i): an interactive shell (a tmux pane, screen window, `sh` from a program)
     if (args[i] !== '-c' && (args.slice(0, i).includes('-i') || (i >= args.length && proc.fds.get(0)?.kind === 'pty'))) {
@@ -803,31 +855,29 @@ export class Kernel {
         return 127;
       }
       positional = args.slice(i);
-    } else {
-      script = await this.stdinText(proc);
     }
+    const stdio = new KernelStdio(this, proc);
+    shell.kernelStdio = stdio;
+    // A script read from stdin has none left
+    let live = true;
+    if (script === undefined) {
+      script = await stdio.readAll();
+      live = false;
+    }
+    shell.kernelStdinLive = live;
     if (script.startsWith('#!')) script = script.slice(script.indexOf('\n') + 1);
-    const first = script.trim().split(/[\s;|&]/)[0] ?? '';
-    const { packageShadows } = await import('../pkg-manager');
-    const builtinFirst = (!!shell.commands.get(first) && !packageShadows(shell.fs).has(first)) || SHELL_PROGRAMS.has(first) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(first) ||
-      ['cd', 'read', 'while', 'if', 'for', 'case', 'until', 'exec', 'set', 'export', 'eval', '.', 'source', '{', '('].includes(first);
-    const stdin = args[i] === '-c' && builtinFirst ? await this.stdinText(proc) : '';
-    let chain = Promise.resolve();
-    const out = (fd: number) => (s: string) => {
-      chain = chain.then(async () => { if (!proc.exiting) await this.writeAll(proc, fd, enc.encode(s.replace(/\r\n/g, '\n'))); });
-    };
     if (positional.length) shell.env['0'] = positional[0];
     let code: number;
     if (script.includes('\n')) {
       // Multi-line: compound statements accumulate across lines
-      code = await shell.executeShellScript(script, positional.slice(1), { stdin } as CommandContext, out(1), out(2));
+      code = await shell.executeShellScript(script, positional.slice(1), { stdin: '', liveStdin: live } as CommandContext, stdio.out, stdio.err);
     } else {
       positional.slice(1).forEach((v, k) => { shell.env[String(k + 1)] = v; });
       shell.env['#'] = String(Math.max(0, positional.length - 1));
       shell.env['@'] = positional.slice(1).join(' ');
-      code = await shell.executeWithStdin(script, stdin, out(1), out(2));
+      code = await shell.execute(script, stdio.out, stdio.err, false, undefined, true);
     }
-    await chain;
+    await stdio.flush();
     return code;
   }
 
@@ -886,13 +936,12 @@ export class Kernel {
   private async runViaShell(proc: Process, name = proc.path): Promise<number> {
     const shell = this.forkShell(proc);
     const line = proc.argv.length ? [name, ...proc.argv.slice(1)].map(shellQuote).join(' ') : shellQuote(name);
-    const stdin = await this.stdinText(proc);
-    let chain = Promise.resolve();
-    const out = (fd: number) => (s: string) => {
-      chain = chain.then(async () => { if (!proc.exiting) await this.writeAll(proc, fd, enc.encode(s.replace(/\r\n/g, '\n'))); });
-    };
-    const code = await shell.executeWithStdin(line, stdin, out(1), out(2));
-    await chain;
+    // The shell uses this process's fds as its stdio (src/shell-stdio.ts)
+    const stdio = new KernelStdio(this, proc);
+    shell.kernelStdio = stdio;
+    shell.kernelStdinLive = true;
+    const code = await shell.execute(line, stdio.out, stdio.err, false, undefined, true);
+    await stdio.flush();
     return code;
   }
 
@@ -1011,18 +1060,17 @@ export class Kernel {
     return f.tryWrite && (args[1] >>> 0) <= A.PIPE_BUF ? f : undefined;
   }
 
-  async syscall(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
+  syscall(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
     // Time inside syscalls is time the process isn't computing (/proc CPU estimate)
     const t0 = Date.now();
     proc.syscalls++;
     // While in a syscall the process counts as sleeping (S in /proc/PID/stat)
     proc.inSyscall++;
-    try {
-      return await this.syscallImpl(proc, nr, args, data);
-    } finally {
-      proc.inSyscall--;
-      proc.kernelMs += Date.now() - t0;
-    }
+    const done = () => { proc.inSyscall--; proc.kernelMs += Date.now() - t0; };
+    // The caller awaits the call itself: the bookkeeping adds no await hop to it
+    const p = this.syscallImpl(proc, nr, args, data);
+    p.then(done, done);
+    return p;
   }
 
   private async syscallImpl(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
@@ -1071,7 +1119,7 @@ export class Kernel {
           if (off < 0) return -A.EINVAL;
           const buf = data.subarray(0, Math.min(args[1] >>> 0, data.length));
           const fn = nr === A.SYS_pread64 ? f.pread : f.pwrite;
-          if (!fn) return -A.ESPIPE;
+          if (!fn) return f.kind === 'dir' ? (nr === A.SYS_pread64 ? -A.EISDIR : -A.EBADF) : -A.ESPIPE;
           return await fn.call(f, buf, off);
         }
         case A.SYS_open:
@@ -1396,8 +1444,22 @@ export class Kernel {
           if (typeof from === 'number') return from;
           if (typeof to === 'number') return to;
           if (flags & ~A.RENAME_NOREPLACE) return -A.EINVAL;
-          if ((flags & A.RENAME_NOREPLACE) && (await fs().exists(to))) return -A.EEXIST;
-          if (!(await fs().exists(from))) return -A.ENOENT;
+          const src = await this.statPath(proc, from, false);
+          if (typeof src === 'number') return src;
+          const srcDir = (src.mode & A.S_IFMT) === A.S_IFDIR;
+          // "name/" on either side only names a directory
+          if (!srcDir && (trailingSlash(str(0, ol)) || trailingSlash(str(ol, nl)))) return -A.ENOTDIR;
+          if (from === to) return 0;
+          if (srcDir && to.startsWith(from === '/' ? '/' : from + '/')) return -A.EINVAL;
+          const dst = await this.statPath(proc, to, false);
+          if (typeof dst !== 'number') {
+            if (flags & A.RENAME_NOREPLACE) return -A.EEXIST;
+            const dstDir = (dst.mode & A.S_IFMT) === A.S_IFDIR;
+            if (srcDir && !dstDir) return -A.ENOTDIR;
+            if (!srcDir && dstDir) return -A.EISDIR;
+            // A directory replaces only an empty one
+            if (dstDir) await fs().rmdir(to);
+          }
           // Open files follow the rename (their buffered data must not land at the old path)
           const moved = await renameInodes(fs(), from, to);
           await fs().rename(from, to);
@@ -1430,6 +1492,11 @@ export class Kernel {
           const isDir = (st.mode & A.S_IFMT) === A.S_IFDIR;
           if (!rmdir && isDir) return -A.EISDIR;
           if (rmdir && !isDir) return -A.ENOTDIR;
+          // unlink("name/"): a directory (through a symlink too) is EISDIR, anything else ENOTDIR
+          if (!rmdir && trailingSlash(str(0, len))) {
+            const t = await this.statPath(proc, p, true);
+            return typeof t !== 'number' && (t.mode & A.S_IFMT) === A.S_IFDIR ? -A.EISDIR : -A.ENOTDIR;
+          }
           if (isDir) await fs().rmdir(p);
           else { await unlinkInode(fs(), p); await fs().unlink(p); forgetInodeNumber(p); this.socketPaths?.delete(p); }
           return 0;
@@ -1438,9 +1505,11 @@ export class Kernel {
         case A.SYS_symlinkat: {
           const [tl, dirfd, ll] = nr === A.SYS_symlink ? [args[0], A.AT_FDCWD, args[1]] : [args[0], args[1], args[2]];
           const target = str(0, tl);
+          if (!target) return -A.ENOENT;
           const p = at(dirfd, tl, ll);
           if (typeof p === 'number') return p;
           if (await fs().exists(p)) return -A.EEXIST;
+          if (trailingSlash(str(tl, ll))) return -A.ENOENT;
           await fs().symlink(target, p);
           return 0;
         }
@@ -1450,14 +1519,17 @@ export class Kernel {
           // EPERM, as Linux filesystems without them answer: programs fall back
           // to copying (git clone of a local repo, cp -l), whereas a copy that
           // claimed to be a link broke git's "same inode" check.
-          const [od, ol, nd, nl] = nr === A.SYS_link ? [A.AT_FDCWD, args[0], A.AT_FDCWD, args[1]] : [args[0], args[1], args[2], args[3]];
+          const [od, ol, nd, nl, lflags] = nr === A.SYS_link
+            ? [A.AT_FDCWD, args[0], A.AT_FDCWD, args[1], 0] : [args[0], args[1], args[2], args[3], args[4]];
+          if (lflags & ~(A.AT_SYMLINK_FOLLOW | A.AT_EMPTY_PATH)) return -A.EINVAL;
           const from = at(od, 0, ol);
           const to = at(nd, ol, nl);
           if (typeof from === 'number') return from;
           if (typeof to === 'number') return to;
-          const st = await this.statPath(proc, from, false);
+          const st = await this.statPath(proc, str(0, ol), !!(lflags & A.AT_SYMLINK_FOLLOW), od);
           if (typeof st === 'number') return st;
           if (await fs().exists(to)) return -A.EEXIST;
+          if (trailingSlash(str(ol, nl))) return -A.ENOENT;
           return -A.EPERM;
         }
         case A.SYS_readlink:
@@ -1505,24 +1577,29 @@ export class Kernel {
             p = f.path;
           } else p = at(args[0], 0, args[1]);
           if (typeof p === 'number') return p;
-          const st = await this.statPath(proc, p, !(args[2] & A.AT_SYMLINK_NOFOLLOW));
+          const follow = !(args[2] & A.AT_SYMLINK_NOFOLLOW);
+          // An open file's times are its inode's until written back
+          if (follow) await flushInode(fs(), await fs().realpath(p).catch(() => p));
+          const st = await this.statPath(proc, p, follow);
           if (typeof st === 'number') return st;
           const now = Date.now();
-          let atime = now, mtime = now;
+          let atime = { ms: now, ns: 0 }, mtime = { ms: now, ns: 0 };
           if (args[3]) {
             const dv = new DataView(data.buffer, data.byteOffset + args[1], 32);
-            const ts = (o: number, cur: number) => {
+            const ts = (o: number, ms: number, ns = 0) => {
               const nsec = dv.getUint32(o + 8, true);
-              if (nsec === A.UTIME_NOW) return now;
-              if (nsec === A.UTIME_OMIT) return cur;
-              return i64(dv.getUint32(o, true), dv.getUint32(o + 4, true)) * 1000 + Math.floor(nsec / 1e6);
+              if (nsec === A.UTIME_NOW) return { ms: now, ns: 0 };
+              if (nsec === A.UTIME_OMIT) return { ms, ns };
+              if (nsec >= 1e9 || dv.getUint32(o + 12, true)) return null;
+              return { ms: i64(dv.getUint32(o, true), dv.getUint32(o + 4, true)) * 1000 + Math.floor(nsec / 1e6), ns: nsec % 1e6 };
             };
-            atime = ts(0, st.atimeMs);
-            mtime = ts(16, st.mtimeMs);
+            const a = ts(0, st.atimeMs, st.atimeNs), m = ts(16, st.mtimeMs, st.mtimeNs);
+            if (!a || !m) return -A.EINVAL;
+            atime = a; mtime = m;
           }
-          const real = await fs().realpath(p);
-          await flushInode(fs(), real);
-          await fs().utimes(real, atime, mtime);
+          const target = follow ? await fs().realpath(p) : p;
+          await setInodeTimes(fs(), target, { atimeMs: atime.ms, atimeNs: atime.ns, mtimeMs: mtime.ms, mtimeNs: mtime.ns });
+          await fs().utimes(target, atime.ms, mtime.ms, { atime: atime.ns, mtime: mtime.ns });
           return 0;
         }
         case A.SYS_umask: {

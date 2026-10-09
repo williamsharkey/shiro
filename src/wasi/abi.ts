@@ -30,7 +30,8 @@ export function wasiErrno(ret: number): number {
 
 // WASI errno values used directly
 export const WASI_ESUCCESS = 0, WASI_EBADF = 8, WASI_ECHILD = 12, WASI_EINVAL = 28,
-  WASI_ENOSYS = 52, WASI_ENOTSUP = 58, WASI_EOVERFLOW = 61, WASI_ENOTTY = 59;
+  WASI_ENOSYS = 52, WASI_ENOTSUP = 58, WASI_EOVERFLOW = 61, WASI_ENOTTY = 59,
+  WASI_EISDIR = 31, WASI_ENAMETOOLONG = 37, WASI_ENOTCAPABLE = 76, WASI_ENOTSOCK = 57;
 
 /** WASI filetypes. */
 export const FT_UNKNOWN = 0, FT_BLOCK = 1, FT_CHAR = 2, FT_DIR = 3, FT_REG = 4,
@@ -59,15 +60,15 @@ export function filetypeFromDtype(t: number): number {
 
 /** WASI `filestat` (64 bytes) from a kernel struct stat. */
 export function writeFilestat(st: A.KStat, view: DataView, ptr: number): void {
-  const ns = (ms: number) => BigInt(Math.max(0, Math.floor(ms))) * 1_000_000n;
+  const ns = (ms: number, extra = 0) => BigInt(Math.max(0, Math.floor(ms))) * 1_000_000n + BigInt(extra);
   view.setBigUint64(ptr, BigInt(st.dev), true);
   view.setBigUint64(ptr + 8, BigInt(st.ino), true);
   view.setUint8(ptr + 16, filetypeFromMode(st.mode));
   for (let i = 17; i < 24; i++) view.setUint8(ptr + i, 0);
   view.setBigUint64(ptr + 24, BigInt(st.nlink), true);
   view.setBigUint64(ptr + 32, BigInt(Math.max(0, st.size)), true);
-  view.setBigUint64(ptr + 40, ns(st.atimeMs), true);
-  view.setBigUint64(ptr + 48, ns(st.mtimeMs), true);
+  view.setBigUint64(ptr + 40, ns(st.atimeMs, st.atimeNs), true);
+  view.setBigUint64(ptr + 48, ns(st.mtimeMs, st.mtimeNs), true);
   view.setBigUint64(ptr + 56, ns(st.ctimeMs), true);
 }
 

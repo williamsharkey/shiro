@@ -61,6 +61,11 @@ export interface FSNode {
   ctime: number;
   size: number;
   symlinkTarget?: string;
+  /** Access time when set apart from mtime (utimensat); absent = follows mtime. */
+  atime?: number;
+  /** Nanoseconds past atime/mtime (0-999999), when set with nanosecond precision. */
+  atimeNs?: number;
+  mtimeNs?: number;
 }
 
 export interface StatResult {
@@ -69,6 +74,11 @@ export interface StatResult {
   size: number;
   mtime: Date;
   ctime: Date;
+  /** Access time (equal to mtime unless set apart with utimes). */
+  atimeMs?: number;
+  /** Nanoseconds past mtime/atime (0-999999). */
+  mtimeNs?: number;
+  atimeNs?: number;
   isFile(): boolean;
   isDirectory(): boolean;
   isSymbolicLink(): boolean;
@@ -77,17 +87,20 @@ export interface StatResult {
 function makeStat(node: FSNode): StatResult {
   const mtime = new Date(node.mtime);
   const ctime = new Date(node.ctime);
+  const atime = node.atime === undefined ? mtime : new Date(node.atime);
   return {
     type: node.type,
     mode: node.mode,
     size: node.size,
     mtime,
     ctime,
-    atime: mtime,
+    atime,
     birthtime: ctime,
     mtimeMs: mtime.getTime(),
     ctimeMs: ctime.getTime(),
-    atimeMs: mtime.getTime(),
+    atimeMs: atime.getTime(),
+    mtimeNs: node.mtimeNs ?? 0,
+    atimeNs: node.atime === undefined ? node.mtimeNs ?? 0 : node.atimeNs ?? 0,
     birthtimeMs: ctime.getTime(),
     dev: 0,
     ino: 0,
@@ -681,6 +694,11 @@ export class FileSystem {
    * the walk; the rest is appended unchanged (ENOENT comes later).
    */
   private async _canon(path: string, followLast: boolean, hops = { n: 0 }): Promise<string> {
+    // Usually every component is in memory: walk it without an await per component
+    if (hops.n === 0) {
+      const fast = this._canonCached(path, followLast, { n: 0 });
+      if (fast !== undefined) return fast;
+    }
     const parts = path.split('/').filter(Boolean);
     let cur = '';
     for (let i = 0; i < parts.length; i++) {
@@ -701,9 +719,35 @@ export class FileSystem {
     return cur || '/';
   }
 
+  /** _canon from memory alone; undefined when a component needs IndexedDB (or on a loop, which _canon reports). */
+  private _canonCached(path: string, followLast: boolean, hops: { n: number }): string | undefined {
+    const parts = path.split('/').filter(Boolean);
+    let cur = '';
+    for (let i = 0; i < parts.length; i++) {
+      const next = `${cur}/${parts[i]}`;
+      if (parts[i] === '.' || parts[i] === '..') {
+        cur = this.resolvePath(next, '/');
+        continue;
+      }
+      if (i === parts.length - 1 && !followLast) return next;
+      const node = this._getCached(next);
+      if (node === undefined) return undefined;
+      if (!node) return next + (i < parts.length - 1 ? '/' + parts.slice(i + 1).join('/') : '');
+      if (node.type !== 'symlink') { cur = next; continue; }
+      if (++hops.n > 40) return undefined;
+      const target = node.symlinkTarget || new TextDecoder().decode(node.content!);
+      const c = this._canonCached(target.startsWith('/') ? target : this.resolvePath(target, cur || '/'), true, hops);
+      if (c === undefined) return undefined;
+      cur = c === '/' ? '' : c;
+    }
+    return cur || '/';
+  }
+
   /** _get from memory: the node, null when it surely doesn't exist, undefined when only IndexedDB knows. */
   private _getCached(path: string): FSNode | null | undefined {
-    if (this.cache.has(path)) return this.cache.get(path) ?? null;
+    const hit = this.cache.get(path); // one lookup: misses (cached as undefined) are the rare case
+    if (hit) return hit;
+    if (this.cache.has(path)) return null;
     if (this._allKeys && !this._allKeys.has(path)) return null;
     return undefined;
   }
@@ -716,6 +760,39 @@ export class FileSystem {
    */
   lookupCached(path: string, follow = true): { path: string; node: FSNode } | null | undefined {
     for (const vp of this.virtualProviders) if (vp.handles(path)) return undefined;
+    // Fast path: the parent directory's canonical path is memoized, so only the
+    // last component needs a lookup (rg, find and ls stat thousands of names
+    // in a few directories)
+    const slash = path.lastIndexOf('/');
+    const name = path.slice(slash + 1);
+    if (slash >= 0 && name && name !== '.' && name !== '..') {
+      const dir = slash === 0 ? '/' : path.slice(0, slash);
+      let cdir = this._canonDirs.get(dir);
+      if (cdir === undefined) {
+        const d = this._lookupWalk(dir, true);
+        if (d && d.node.type === 'dir') {
+          if (this._canonDirs.size > 20000) this._canonDirs.clear();
+          this._canonDirs.set(dir, cdir = d.path);
+        }
+      }
+      if (cdir !== undefined) {
+        const full = cdir === '/' ? '/' + name : cdir + '/' + name;
+        const node = this._getCached(full);
+        if (!node) return node;
+        if (node.type !== 'symlink' || !follow) return { path: full, node };
+      }
+    }
+    return this._lookupWalk(path, follow);
+  }
+
+  /**
+   * Canonical paths of directories lookupCached walked (as given → real).
+   * Cleared whenever a symlink is written or anything is deleted or renamed,
+   * the only changes that can move a directory's canonical path.
+   */
+  private _canonDirs = new Map<string, string>();
+
+  private _lookupWalk(path: string, follow: boolean): { path: string; node: FSNode } | null | undefined {
     // Symlinks in directory components are followed, as _canon does
     const parts = path.split('/').filter(Boolean);
     let cur = '';
@@ -783,12 +860,14 @@ export class FileSystem {
 
   /** Synchronous part of a put: cache + key index now, IndexedDB on the next flush. */
   private _putNow(node: FSNode): void {
+    if (node.type === 'symlink' || this.cache.get(node.path)?.type === 'symlink') this._canonDirs.clear();
     this.cache.set(node.path, node);
     this._noteKey(node.path, true);
     this._queue(node.path, node);
   }
 
   private _deleteNow(path: string): void {
+    this._canonDirs.clear();
     // Remember the miss: IndexedDB still has the node until the flush commits
     this.cache.set(path, undefined);
     this._noteKey(path, false);
@@ -920,6 +999,7 @@ export class FileSystem {
   /** Clear the in-memory cache (useful after external DB modifications) */
   clearCache(): void {
     this.cache.clear();
+    this._canonDirs.clear();
     this._allKeys = null;
     this._allKeysArr = null;
     this._children = null;
@@ -978,7 +1058,9 @@ export class FileSystem {
     for (const vp of this.virtualProviders) {
       if (vp.handles(path)) { const s = vp.stat(path); if (s) return s; }
     }
-    const node = await this._get(await this._canon(path, true));
+    const c = this._canonCached(path, true, { n: 0 });
+    const known = c === undefined ? undefined : this._getCached(c);
+    const node = known !== undefined ? known : await this._get(await this._canon(path, true));
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, stat '${path}'`);
     return makeStat(node);
   }
@@ -987,7 +1069,9 @@ export class FileSystem {
     for (const vp of this.virtualProviders) {
       if (vp.handles(path)) { const s = vp.stat(path); if (s) return s; }
     }
-    const node = await this._get(await this._canon(path, false));
+    const c = this._canonCached(path, false, { n: 0 });
+    const known = c === undefined ? undefined : this._getCached(c);
+    const node = known !== undefined ? known : await this._get(await this._canon(path, false));
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, lstat '${path}'`);
     return makeStat(node);
   }
@@ -1018,7 +1102,11 @@ export class FileSystem {
     return data;
   }
 
-  async writeFile(path: string, data: Uint8Array | string, options?: { mode?: number }): Promise<void> {
+  async writeFile(path: string, data: Uint8Array | string, options?: {
+    mode?: number;
+    /** Modification (and access) time to record instead of now (the kernel writing back an open file). */
+    times?: { mtime: number; mtimeNs?: number; atime?: number; atimeNs?: number };
+  }): Promise<void> {
     for (const vp of this.virtualProviders) {
       if (vp.writeFile(path, data)) return;
     }
@@ -1043,9 +1131,10 @@ export class FileSystem {
       type: 'file',
       content,
       mode: options?.mode ?? existing?.mode ?? 0o644,
-      mtime: now,
+      mtime: options?.times?.mtime ?? now,
       ctime: existing?.ctime ?? now,
       size: content.length,
+      ...(options?.times ? { mtimeNs: options.times.mtimeNs || undefined, atime: options.times.atime, atimeNs: options.times.atimeNs || undefined } : {}),
     });
     this._emitChange('write', path);
   }
@@ -1156,6 +1245,7 @@ export class FileSystem {
     const cached = this.cache.get(path);
     const done = cached ? this._unlinkNode(path, cached) : this.unlink(path);
     this.cache.set(path, undefined);
+    this._canonDirs.clear();
     this._noteKey(path, false);
     return done;
   }
@@ -1244,12 +1334,19 @@ export class FileSystem {
     await this._put({ ...node, mode });
   }
 
-  /** Set modification time (utimensat). There is no separate atime; it follows mtime. */
-  async utimes(path: string, _atimeMs: number, mtimeMs: number): Promise<void> {
-    path = await this._canon(path, true);
+  /**
+   * Set access and modification times (utimensat) of `path` itself (a
+   * symlink is not followed). `ns`: nanoseconds past each millisecond time.
+   * An atime equal to the mtime isn't stored: atime then follows mtime.
+   */
+  async utimes(path: string, atimeMs: number, mtimeMs: number, ns?: { atime?: number; mtime?: number }): Promise<void> {
+    path = await this._canon(path, false);
     const node = await this._get(path);
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, utime '${path}'`);
-    await this._put({ ...node, mtime: mtimeMs });
+    const mtimeNs = ns?.mtime || undefined;
+    const atimeNs = ns?.atime || undefined;
+    const sameA = atimeMs === mtimeMs && atimeNs === mtimeNs;
+    await this._put({ ...node, mtime: mtimeMs, mtimeNs, atime: sameA ? undefined : atimeMs, atimeNs: sameA ? undefined : atimeNs });
   }
 
   // isomorphic-git compatibility: symlink support
