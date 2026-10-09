@@ -1,0 +1,154 @@
+From 3aa1c1788fab6f00f5068f2e428835932372767e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 06:30:36 +0000
+Subject: [PATCH 34/34] Futexes keyed by host address; a same-instance child's
+ threads end with it; Shiro stat with a NULL buffer is EFAULT
+
+Blink's futex table was keyed by guest address, so with same-instance fork
+(0031) two processes' private futexes at the same address (they have the
+same layout after fork) woke each other's waiters; it's keyed by the host
+address of the word now, which processes sharing a page (MAP_SHARED) also
+meet at.
+
+A same-instance child's exit, fatal signal or exec, and a parent exiting
+while children run, now mark the process's other threads killed; each
+ends at its next instruction or blocking wait (CheckForSignals). They used
+to keep running.
+
+Under Shiro, stat/fstat/lstat/newfstatat with a NULL buffer returned 0
+(ShiroStatAt reads st == 0 as "just check it exists"); it's EFAULT once
+the file is found, as on Linux (LTP fstat03).
+---
+ blink/shiro.inc | 30 +++++++++++++++++++++++++++---
+ blink/syscall.c | 16 +++++++++++++---
+ 2 files changed, 40 insertions(+), 6 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 8144384..57a9961 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -1342,6 +1342,23 @@ EMSCRIPTEN_KEEPALIVE void blink_shiro_signal_pid(int pid, int sig) {
+   UNLOCK(&g_shiro_kids_lock);
+ }
+ 
++// The process is ending in this thread: its other threads notice at their
++// next instruction or blocking wait (CheckForSignals: SysExit) and go too.
++// (Waiting for them, as KillOtherThreads does, hangs under emscripten.)
++static void ShiroKillSiblings(struct Machine *self) {
++  struct Dll *e;
++  struct Machine *o;
++  struct System *s = self->system;
++  LOCK(&s->machines_lock);
++  for (e = dll_first(s->machines); e; e = dll_next(s->machines, e)) {
++    if ((o = MACHINE_CONTAINER(e)) != self) {
++      atomic_store_explicit(&o->killed, true, memory_order_release);
++      atomic_store_explicit(&o->attention, true, memory_order_release);
++    }
++  }
++  UNLOCK(&s->machines_lock);
++}
++
+ // exit_group of the instance's own process while hosted children run: the
+ // kernel ends the process, this thread goes, and the worker stays until
+ // the last child is done (the page keeps it)
+@@ -1353,6 +1370,7 @@ bool ShiroParentExitWithKids(struct Machine *m, int rc) {
+   if (!n || ShiroIsInstanceChild(m)) return false;
+   KS(m, 231, A12(rc & 255));
+   ShiroDropSystem();
++  ShiroKillSiblings(m);
+   ClearChildTid(m);
+   FreeMachine(m);
+   GilRelease();
+@@ -1466,6 +1484,7 @@ static i64 ShiroForkSame(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
+ 
+ _Noreturn static void ShiroInstanceChildVanish(struct Machine *m) {
+   ShiroDropKid(m->system);
++  ShiroKillSiblings(m);
+   FreeMachine(m);
+   GilRelease();
+   pthread_exit(0);
+@@ -1476,6 +1495,7 @@ _Noreturn static void ShiroInstanceChildVanish(struct Machine *m) {
+ _Noreturn void ShiroInstanceChildExit(struct Machine *m, int rc) {
+   KS(m, 231, A12(rc & 255));
+   ShiroDropKid(m->system);
++  ShiroKillSiblings(m);
+   ClearChildTid(m);
+   FreeMachine(m);
+   GilRelease();
+@@ -1488,6 +1508,7 @@ _Noreturn void ShiroInstanceChildKilled(struct Machine *m, int sig) {
+   ShiroCall(m, 13, A12(sig, 0), act, sizeof(act), 0, false, false);
+   KS(m, 62, A12(m->system->pid, sig));
+   ShiroDropKid(m->system);
++  ShiroKillSiblings(m);
+   ClearChildTid(m);
+   FreeMachine(m);
+   GilRelease();
+@@ -1637,15 +1658,18 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     case 0x101: r = ShiroAtCall(m, 257, ShiroDirfd(a), b, c, d); break;    // openat
+     case 0x003: r = KS(m, 3, A12(a)); break;                          // close
+     case 0x1B4: r = KS(m, 436, A12(a, b, c)); break;                  // close_range
+-    case 0x004: r = ShiroStatAt(m, -100, a, b, 0, 0); break;          // stat
+-    case 0x006: r = ShiroStatAt(m, -100, a, b, 0x100, 0); break;      // lstat
+-    case 0x005: r = ShiroStatAt(m, a, 0, b, 0x1000, 0); break;        // fstat
++    // (a NULL buffer is EFAULT once the file is found, as on Linux; for
++    // ShiroStatAt, st == 0 means "just check it exists")
++    case 0x004: r = ShiroStatAt(m, -100, a, b, 0, 0); if (!r && !b) r = -EFAULT_LINUX; break;          // stat
++    case 0x006: r = ShiroStatAt(m, -100, a, b, 0x100, 0); if (!r && !b) r = -EFAULT_LINUX; break;      // lstat
++    case 0x005: r = ShiroStatAt(m, a, 0, b, 0x1000, 0); if (!r && !b) r = -EFAULT_LINUX; break;        // fstat
+     case 0x106:                                                       // newfstatat
+       if (b && !(d & 0x1000)) {
+         char *s = LoadStr(m, b);
+         if (s && !*s) { r = -ENOENT_LINUX; break; }
+       }
+       r = ShiroStatAt(m, a, b, c, d & (0x100 | 0x1000), 0);
++      if (!r && !c) r = -EFAULT_LINUX;
+       break;
+     case 0x14C: r = ShiroStatx(m, a, b, c, e); break;                // statx
+     case 0x089: case 0x08A: r = ShiroStatfs(m, b); break;            // statfs, fstatfs
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 19c1f16..d0cab65 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -323,12 +323,22 @@ static struct Futex *FindFutex(struct Machine *m, i64 addr) {
+   return 0;
+ }
+ 
++// Futexes are keyed by the host address of the word: processes that share
++// a page (same-instance fork) meet there, and the same guest address in
++// two processes' private memory doesn't collide.
++static i64 FutexKey(struct Machine *m, i64 uaddr) {
++  u8 *mem = LookupAddress(m, uaddr);
++  return mem ? (i64)(uintptr_t)mem : uaddr;
++}
++
+ static int SysFutexWake(struct Machine *m, i64 uaddr, u32 count) {
+   int rc;
+   struct Futex *f;
++  i64 key;
+   if (!count) return 0;
++  key = FutexKey(m, uaddr);
+   LOCK(&g_bus->futexes.lock);
+-  if ((f = FindFutex(m, uaddr))) {
++  if ((f = FindFutex(m, key))) {
+     LOCK(&f->lock);
+   }
+   UNLOCK(&g_bus->futexes.lock);
+@@ -729,13 +739,13 @@ static int SysFutexWait(struct Machine *m,  //
+     UNLOCK(&g_bus->futexes.lock);
+     return eagain();
+   }
+-  if ((f = FindFutex(m, uaddr))) {
++  if ((f = FindFutex(m, (i64)(uintptr_t)mem))) {
+     LOCK(&f->lock);
+     ++f->waiters;
+     UNLOCK(&f->lock);
+   }
+   if (!f) {
+-    if ((f = NewFutex(uaddr))) {
++    if ((f = NewFutex((i64)(uintptr_t)mem))) {
+       dll_make_first(&g_bus->futexes.active, &f->elem);
+     } else {
+       UNLOCK(&g_bus->futexes.lock);
+-- 
+2.43.0
+

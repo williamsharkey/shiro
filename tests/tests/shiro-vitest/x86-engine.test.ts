@@ -41,6 +41,12 @@ const jitBin = join(out, 'jit');
 const haveJit = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', jitBin, 'jit.c']);
 const forkBin = join(out, 'forkcopy');
 const haveFork = tryBuild('gcc', ['-static', '-O1', '-o', forkBin, 'forkcopy.c']);
+const mtchildBin = join(out, 'mtchild');
+const haveMtchild = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', mtchildBin, 'mtchild.c']);
+const statnullBin = join(out, 'statnull');
+const haveStatnull = tryBuild('gcc', ['-static', '-O1', '-o', statnullBin, 'statnull.c']);
+const futexwakeBin = join(out, 'futexwake');
+const haveFutexwake = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', futexwakeBin, 'futexwake.c']);
 const shfutexBin = join(out, 'shfutex');
 const haveShfutex = tryBuild('gcc', ['-static', '-O1', '-o', shfutexBin, 'shfutex.c']);
 const orphanBin = join(out, 'orphan');
@@ -223,6 +229,12 @@ describe.skipIf(!haveFork || !haveForkShared || !haveShfutex || !haveOrphan || !
     await run(shell, `${sif} x`);
     await run(shell, 'sleep 1');
     expect((await run(shell, 'cat /tmp/orphan.out')).output).toContain('child outlived parent');
+  }, 60_000);
+
+  it.skipIf(!haveMtchild)("ends a child's other threads with it", async () => {
+    const { shell } = await setup(readFileSync(mtchildBin));
+    expect((await run(shell, sif)).output.replace(/\r\n/g, '\n')).toBe(
+      'round 0: child exit 10, its threads stopped 1\nround 1: child exit 11, its threads stopped 1\n');
   }, 60_000);
 
   it('keeps alarms per process (here and with the default fork)', async () => {
@@ -495,6 +507,25 @@ describe('Blink engine: CPU and syscall fixes', () => {
       'no MAYMOVE: Cannot allocate memory\nmoved=1 first=7 mid=7 last=9\nold range free=1\n' +
       'shrunk same=1 tail free=1 last=7\nfixed at=1 first=7\nreadonly moved=1 byte=42\n');
     expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // LTP futex_wake02, futex_wait_bitset01
+  it.skipIf(!haveFutexwake)('FUTEX_WAKE wakes at most count waiters; bitset timeouts end by their own clock', async () => {
+    const { shell } = await setup(readFileSync(futexwakeBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'wake(2)=2 woken=2\nwake(1)=1 woken=3\nwake(100)=3 woken=6\nwake(none)=0\n' +
+      'monotonic bitset wait=-1 timedout=1 early=0\nrealtime bitset wait=-1 timedout=1 early=0\n');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // LTP fstat03
+  it.skipIf(!haveStatnull)('the stat family with a NULL buffer is EFAULT once the file is found', async () => {
+    const { shell } = await setup(readFileSync(statnullBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'fstat(fd, NULL)=-1 Bad address\nfstat(-1, NULL)=-1 Bad file descriptor\nstat(file, NULL)=-1 Bad address\n' +
+      'stat(missing, NULL)=-1 No such file or directory\nlstat(file, NULL)=-1 Bad address\nnewfstatat(file, NULL)=-1 Bad address\n');
   }, 60_000);
 
   // perl's $0 = ... (Debian's addgroup); libcap's cap_get_proc (ping)
