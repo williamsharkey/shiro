@@ -10,8 +10,54 @@ export interface CryptoDeps {
   FakeBuffer: any;
 }
 
+import { sha512sync, sha384sync, md5sync, hmacSync } from '../../utils/hashes';
+
 export function createCryptoModule(deps: CryptoDeps): any {
-  const { sha256sync, sha1sync, fnvHash, FakeBuffer } = deps;
+  const { sha256sync, sha1sync, FakeBuffer } = deps;
+  // Synchronous digests and their block sizes (for HMAC)
+  const HASHES: Record<string, [(d: Uint8Array) => Uint8Array, number]> = {
+    sha1: [sha1sync, 64], sha256: [sha256sync, 64], sha384: [sha384sync, 128], sha512: [sha512sync, 128], md5: [md5sync, 64],
+  };
+  const hashFor = (algo: string) => {
+    const h = HASHES[String(algo).toLowerCase().replace(/^sha-/, 'sha')];
+    if (!h) throw Object.assign(new Error(`Digest method not supported: ${algo}`), { code: 'ERR_CRYPTO_INVALID_DIGEST' });
+    return h;
+  };
+  const toBytes = (d: string | Uint8Array, encoding?: string): Uint8Array => {
+    if (typeof d !== 'string') return d instanceof Uint8Array ? d : new Uint8Array(d as any);
+    if (encoding === 'hex') {
+      const hex = d.replace(/[^0-9a-fA-F]/g, '');
+      const bytes = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+      return bytes;
+    }
+    if (encoding === 'base64' || encoding === 'base64url') return new Uint8Array(FakeBuffer.from(d, encoding));
+    if (encoding === 'latin1' || encoding === 'binary') return Uint8Array.from(d, (c) => c.charCodeAt(0) & 255);
+    return new TextEncoder().encode(d);
+  };
+  const encodeDigest = (result: Uint8Array, enc?: string): any => {
+    if (enc === 'hex') return Array.from(result).map(b => b.toString(16).padStart(2, '0')).join('');
+    if (enc === 'base64' || enc === 'base64url') { let s = ''; for (let i = 0; i < result.length; i++) s += String.fromCharCode(result[i]); const b64 = btoa(s); return enc === 'base64url' ? b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') : b64; }
+    if (enc === 'latin1' || enc === 'binary') return String.fromCharCode(...result);
+    Object.setPrototypeOf(result, FakeBuffer.prototype);
+    return result;
+  };
+  /** A Hash/Hmac object: update/digest, and copy() for Hash. */
+  const digester = (compute: (all: Uint8Array) => Uint8Array) => {
+    const chunks: Uint8Array[] = [];
+    const obj: any = {
+      update: (d: string | Uint8Array, encoding?: string) => { chunks.push(toBytes(d, encoding)); return obj; },
+      digest: (enc?: string) => {
+        const total = chunks.reduce((n, c) => n + c.length, 0);
+        const all = new Uint8Array(total);
+        let off = 0;
+        for (const c of chunks) { all.set(c, off); off += c.length; }
+        return encodeDigest(compute(all), enc);
+      },
+      copy: () => { const c = digester(compute); for (const x of chunks) c.update(x); return c; },
+    };
+    return obj;
+  };
 
   return {
     randomBytes: (n: number, cb?: Function) => {
@@ -21,49 +67,13 @@ export function createCryptoModule(deps: CryptoDeps): any {
       if (cb) { setTimeout(() => cb(null, bytes), 0); return; }
       return bytes;
     },
-    createHash: (algo: string) => {
-      const chunks: Uint8Array[] = [];
-      const hashObj: any = {
-        update: (d: string | Uint8Array, encoding?: string) => {
-          if (typeof d === 'string') {
-            if (encoding === 'hex') {
-              const hex = d.replace(/[^0-9a-fA-F]/g, '');
-              const bytes = new Uint8Array(hex.length / 2);
-              for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
-              chunks.push(bytes);
-            } else {
-              chunks.push(new TextEncoder().encode(d));
-            }
-          } else {
-            chunks.push(d instanceof Uint8Array ? d : new Uint8Array(d));
-          }
-          return hashObj;
-        },
-        digest: (enc?: string) => {
-          const total = chunks.reduce((n, c) => n + c.length, 0);
-          const all = new Uint8Array(total);
-          let off = 0;
-          for (const c of chunks) { all.set(c, off); off += c.length; }
-          // Real SHA-256 (synchronous implementation for PKCE etc.)
-          const result = (algo === 'sha256' || algo === 'sha-256') ? sha256sync(all)
-            : algo === 'sha1' || algo === 'sha-1' ? sha1sync(all)
-            : fnvHash(all, algo === 'md5' ? 16 : 32);
-          if (enc === 'hex') return Array.from(result).map(b => b.toString(16).padStart(2, '0')).join('');
-          if (enc === 'base64' || enc === 'base64url') { let s = ''; for (let i = 0; i < result.length; i++) s += String.fromCharCode(result[i]); const b64 = btoa(s); return enc === 'base64url' ? b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') : b64; }
-          Object.setPrototypeOf(result, FakeBuffer.prototype);
-          return result;
-        },
-      };
-      return hashObj;
-    },
+    createHash: (algo: string) => { const [h] = hashFor(algo); return digester(h); },
     createHmac: (algo: string, key: string | Uint8Array) => {
-      // Simple HMAC shim — same as createHash but XOR key into data
-      const mod = createCryptoModule(deps);
-      const hash = mod.createHash(algo);
-      const keyBytes = typeof key === 'string' ? new TextEncoder().encode(key) : key;
-      hash.update(keyBytes);
-      return hash;
+      const [h, block] = hashFor(algo);
+      const k = toBytes(typeof key === 'object' && key && 'export' in (key as any) ? (key as any).export() : key);
+      return digester((all) => hmacSync(h, block, k, all));
     },
+    hash: (algo: string, data: string | Uint8Array, enc = 'hex') => encodeDigest(hashFor(algo)[0](toBytes(data)), enc),
     randomUUID: () => crypto.randomUUID(),
     randomFillSync: (buf: Uint8Array) => { crypto.getRandomValues(buf); return buf; },
     timingSafeEqual: (a: Uint8Array, b: Uint8Array) => {
@@ -72,7 +82,7 @@ export function createCryptoModule(deps: CryptoDeps): any {
       for (let i = 0; i < a.length; i++) result |= a[i] ^ b[i];
       return result === 0;
     },
-    getHashes: () => ['sha1', 'sha256', 'sha384', 'sha512', 'md5'],
+    getHashes: () => Object.keys(HASHES),
     getCiphers: () => ['aes-256-cbc', 'aes-128-cbc', 'aes-256-gcm'],
     createPrivateKey: (key: any) => ({ type: 'private', export: () => key }),
     createPublicKey: (key: any) => ({ type: 'public', export: () => key }),

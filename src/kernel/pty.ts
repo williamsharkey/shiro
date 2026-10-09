@@ -310,10 +310,26 @@ export class Pty {
     this.sid = p.sid;
     this.fgPgrp = p.pgid;
     controllingTtys.set(p.sid, this);
+    // The session leader's exit gives the tty up (Linux disassociate_ctty): apt
+    // runs each dpkg in a new session on the same pty, and its TIOCSCTTY failed
+    this.unwatchLeader?.();
+    this.unwatchLeader = this.jc.subscribe((ev) => {
+      if (ev.type === 'exited' && ev.pid === this.sid) this.leaderExited();
+    });
+  }
+
+  private unwatchLeader?: () => void;
+
+  private leaderExited(): void {
+    const pgrp = this.fgPgrp;
+    this.release();
+    if (pgrp) this.jc.kill(-pgrp, SIGHUP); // what's left of the foreground group
   }
 
   release(): void {
     if (this.sid && controllingTtys.get(this.sid) === this) controllingTtys.delete(this.sid);
+    this.unwatchLeader?.();
+    this.unwatchLeader = undefined;
     this.sid = 0;
     this.fgPgrp = 0;
   }

@@ -25,9 +25,13 @@ export async function preloadDir(
     const entries = await ctx.fs.readdir(dir);
     for (const name of entries) {
       if (name === '.git') continue;
-      if (name === 'node_modules' && depth > 0) continue;
+      // pnpm's virtual store keeps each package in .pnpm/x@1/node_modules/x,
+      // beside symlinks to its dependencies (loaded where they really are)
+      const inPnpmStore = dir.includes('/node_modules/.pnpm');
+      if (name === 'node_modules' && depth > 0 && !inPnpmStore) continue;
       const fp = dir + '/' + name;
       try {
+        if (inPnpmStore && (await ctx.fs.lstat(fp)).isSymbolicLink()) continue;
         const st = await ctx.fs.stat(fp);
         if (st.isDirectory()) {
           fileMtimes.set(fp, st.mtime?.getTime?.() || Date.now());
@@ -246,6 +250,7 @@ export async function preloadEnvironment(
     try {
       const entries = await ctx.fs.readdir(nmDir);
       for (const name of entries) {
+        if (name.startsWith('.') && name !== '.pnpm') continue; // .bin, .modules.yaml, .package-lock.json
         await preloadDir(ctx, fileCache, fileMtimes, nmDir + '/' + name, 0, 10);
       }
     } catch { /* no node_modules at this level */ }

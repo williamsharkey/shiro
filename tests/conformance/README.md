@@ -21,11 +21,10 @@ normal `npm run test:shiro` keeps them fixed.
 - Cases: `oils/spec/*.test.sh`, a vendored POSIX/bash subset of
   [oils-for-unix](https://github.com/oils-for-unix/oils) `spec/`
   (see `oils/README.md`, Apache-2.0).
-- Each case runs in a fresh `Shell` (shared filesystem) as `bash CASE.sh` in
-  an empty directory, with `$TMP`, `$SH` (= `bash`) and `$REPO_ROOT` set like
-  the oils harness. (Bash, since the judge is bash: as `sh`, Shiro follows
-  POSIX where bash's own mode differs, e.g. a readonly assignment or a failed
-  `.` ends the script.) The oils helpers `argv.py`, `printenv.py` and
+- Each case runs in a fresh `Shell` (shared filesystem) as `bash CASE.sh` in an
+  empty directory (the cases are judged against bash; run as `sh`, Shiro follows
+  POSIX where bash and sh differ), with `$TMP`, `$SH` (= `bash`) and `$REPO_ROOT` set like the
+  oils harness. The oils helpers `argv.py`, `printenv.py` and
   `stdout_stderr.py` are test-only builtins.
 - Judged against **bash**: stdout and exit status must match the case's
   default expectation or its `OK`/`BUG`/`N-I bash` variant. stderr is not
@@ -93,7 +92,7 @@ normal `npm run test:shiro` keeps them fixed.
   `results/detail/syscalls-blink.jsonl` and its output saved under
   `results/detail/ltp/`; `LTP_RESUME=1` continues a run that died,
   `LTP_RESUME=1 LTP_RERUN_FAILED=1` runs only the previous failures again,
-  `LTP_ONLY=read,write01` narrows a run. `ltp/hangs.json` lists tests that
+  `LTP_ONLY=read,write01` narrows a run, `LTP_ENV=BLINK_SAME_INSTANCE_FORK=1` adds to the tests' environment. `ltp/hangs.json` lists tests that
   crash the test worker; they count as failures.
 
 ## Shell in Chromium (`scripts/conformance/browser-oils.mjs`)

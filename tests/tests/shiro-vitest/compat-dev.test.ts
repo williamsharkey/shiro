@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Worker } from 'node:worker_threads';
-import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync, appendFileSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { build } from 'esbuild';
 import { createTestShell } from './helpers';
@@ -166,6 +166,16 @@ describe('shell constructs real scripts use (venv activate, build scripts)', () 
     expect((await sh(shell, '. /tmp/fns.sh; greet bob; greet')).out).toBe('hi bob\nhi nobody\n');
     await script(fs, '/tmp/fn-script', '#!/bin/sh\nadd() {\n  echo $(( $1 + $2 ))\n}\nadd 2 3\n');
     expect((await sh(shell, '/tmp/fn-script')).out).toBe('5\n');
+  });
+
+  it('a script run by path honours redirects and pipes (yarn is a sh launcher)', async () => {
+    await script(fs, '/tmp/two-streams', '#!/bin/sh\necho there\necho oops >&2\n');
+    let r = await sh(shell, '/tmp/two-streams > /dev/null');
+    expect(r.out).toBe('');
+    expect(r.err).toBe('oops\n');
+    r = await sh(shell, '/tmp/two-streams 2>/dev/null | tr a-z A-Z; /tmp/two-streams > /tmp/both 2>&1; /tmp/two-streams >> /tmp/both 2>/dev/null; cat /tmp/both');
+    expect(r.out).toBe('THERE\nthere\noops\nthere\n');
+    expect(r.err).toBe('');
   });
 
   it('${1:-default} and [ ! a = b ] inside if', async () => {
@@ -748,6 +758,78 @@ try { process.exit(3); } catch (e) { console.log('caught', e.message); }`);
     expect(Date.now() - start).toBeLessThan(20_000);
   }, 60_000);
 
+  it('worker_threads: a pool worker gets workerData and answers messages', async () => {
+    await fs.writeFile('/home/user/m/w.js', `const { parentPort, workerData, isMainThread } = require('worker_threads');
+parentPort.on('message', (m) => parentPort.postMessage({ sum: m.a + m.b + workerData.base, main: isMainThread }));`);
+    expect(await node(`const { Worker, isMainThread } = require('worker_threads');
+const w = new Worker(require('path').join(__dirname, 'w.js'), { workerData: { base: 100 } });
+w.on('online', () => console.log('online', isMainThread));
+w.on('message', (m) => { console.log('reply', m.sum, m.main); w.terminate(); });
+w.on('exit', (c) => console.log('exit', c));
+w.postMessage({ a: 1, b: 2 });`)).toBe('online true\nreply 103 false\nexit 0\n');
+  }, 60_000);
+
+  it('fs: a sync mkdir then write is stored; directory renames wait for the writes into them', async () => {
+    expect(await node(`const fs = require('fs');
+fs.mkdirSync('/home/user/m/d1/sub', { recursive: true }); fs.writeFileSync('/home/user/m/d1/sub/a.txt', 'A');
+fs.mkdirSync('/home/user/m/stage', { recursive: true }); fs.writeFileSync('/home/user/m/src.txt', 'S');
+fs.copyFileSync('/home/user/m/src.txt', '/home/user/m/stage/b.txt'); fs.writeFileSync('/home/user/m/stage/c.txt', 'C');
+fs.renameSync('/home/user/m/stage', '/home/user/m/pkg');
+console.log(fs.readdirSync('/home/user/m/pkg').join(','), fs.existsSync('/home/user/m/stage'));`)).toBe('b.txt,c.txt false\n');
+    const r = await sh(shell, 'cd /home/user/m && cat d1/sub/a.txt pkg/b.txt pkg/c.txt; ls stage 2>/dev/null || echo " gone"');
+    expect(r.out).toBe('ASC gone\n');
+  }, 60_000);
+
+  it('fs: write-file-atomic\'s sequence (fs.write of a string, fsync, close, chmod, rename) lands the file', async () => {
+    expect(await node(`const fs = require('fs'); const { promisify } = require('util');
+(async () => {
+  const fd = await promisify(fs.open)('/home/user/m/x.tmp', 'w');
+  console.log('wrote', await promisify(fs.write)(fd, 'héllo\\n', 0, 'utf8'));
+  await promisify(fs.fsync)(fd); await promisify(fs.close)(fd);
+  await promisify(fs.chmod)('/home/user/m/x.tmp', 0o755);
+  await promisify(fs.rename)('/home/user/m/x.tmp', '/home/user/m/x');
+  console.log(await promisify(fs.unlink)('/home/user/m/x.tmp').catch((e) => e.code));
+})();`)).toBe('wrote 7\nENOENT\n');
+    const r = await sh(shell, 'cd /home/user/m && cat x && ls -l x');
+    expect(r.out).toMatch(/^héllo\n-rwxr-xr-x /);
+  }, 60_000);
+
+  it('fs: symlinks keep relative targets; readdir dirents, realpath and lstat see them', async () => {
+    expect(await node(`const fs = require('fs');
+fs.mkdirSync('/home/user/m/real/pkg', { recursive: true }); fs.writeFileSync('/home/user/m/real/pkg/i.js', 'module.exports = 42');
+fs.mkdirSync('/home/user/m/nm', { recursive: true });
+fs.symlink('../real/pkg', '/home/user/m/nm/pkg', 'dir', async (e) => {
+  console.log(e, fs.readlinkSync('/home/user/m/nm/pkg'));
+  const d = fs.readdirSync('/home/user/m/nm', { withFileTypes: true })[0];
+  console.log(d.name, d.isSymbolicLink(), d.isFile(), d.isDirectory());
+  console.log(await fs.promises.realpath('/home/user/m/nm/pkg'), fs.realpathSync('/home/user/m/nm/pkg'));
+  console.log(await fs.promises.realpath('/home/user/m/none').catch((e) => e.code));
+});`)).toBe('null ../real/pkg\npkg true false false\n/home/user/m/real/pkg /home/user/m/real/pkg\nENOENT\n');
+  }, 60_000);
+
+  it('zlib, crypto hashes and Buffer views match node', async () => {
+    expect(await node(`const zlib = require('zlib'); const crypto = require('crypto');
+const gz = zlib.gzipSync('hello hello hello');
+console.log(zlib.gunzipSync(gz).toString(), zlib.inflateSync(zlib.deflateSync(Buffer.from('abc'))).toString(), zlib.unzipSync(gz).length, zlib.crc32('hello'));
+const chunks = []; const g = zlib.createGunzip(); g.on('data', (c) => chunks.push(c)); g.on('end', () => console.log('stream', Buffer.concat(chunks).toString()));
+g.write(gz.subarray(0, 5)); g.end(gz.subarray(5));
+console.log(crypto.createHash('sha512').update('abc').digest('hex').slice(0, 16), crypto.createHash('md5').update('abc').digest('hex'),
+  crypto.createHmac('sha256', 'k').update('d').digest('base64'), crypto.createHash('sha384').update('').digest('hex').slice(0, 8));
+const sab = new SharedArrayBuffer(4); new Uint8Array(sab)[1] = 7;
+const b = Buffer.from(sab, 1, 2); console.log(b[0], b.length, Buffer.from('abcdef').subarray(1, 3).toString(), Buffer.from('hi', 'utf16le').length);`))
+      .toBe('hello hello hello abc 17 907060870\nddaf35a193617aba 900150983cd24fb0d6963f7d28e17f72 ' + '5+ohw7y2Ok2jrXhQMWjTa9ygvmIjgupgoQj61OSWZnk=' + ' 38b060a7\n7 2 bc 4\nstream hello hello hello\n');
+  }, 60_000);
+
+  it('a node child of a node script exits when it is done (activity is per script)', async () => {
+    await fs.writeFile('/home/user/m/c.js', `require('fs').promises.readFile('/home/user/m/c.js').then(() => console.log('child done'));`);
+    const start = Date.now();
+    expect(await node(`require('fs').promises.readFile(__filename).then(() => {});
+const c = require('child_process').spawn('sh', ['-c', 'node c.js'], { stdio: [0, 1, 2] });
+console.log(c.stdout === null);
+c.on('close', (code) => console.log('closed', code));`)).toBe('true\nchild done\nclosed 0\n');
+    expect(Date.now() - start).toBeLessThan(30_000);
+  }, 60_000);
+
   it('fs streams: binary round trip through pipe, append, events', async () => {
     expect(await node(`const fs = require('fs'); const { pipeline, Transform } = require('stream');
 const bin = Buffer.from([0, 255, 128, 10, 200, 1]);
@@ -789,6 +871,71 @@ describe('node: real npm packages', () => {
     await fs.mkdir('/home/user/app/test', { recursive: true });
     const r = await sh(shell, 'cd /home/user/app && npm init -y > /dev/null && npm install commander@12.1.0 chalk@4.1.2 dayjs@1.11.13 uuid@10.0.0 mocha@10.8.2 typescript@5.6.3 prettier@3.3.3');
     expect(r.exitCode).toBe(0);
+  }, 300_000);
+
+  it('pnpm: add into the virtual store, require through its symlinks, run scripts, exec bins', async () => {
+    let r = await sh(shell, 'mkdir -p /home/user/pn && cd /home/user/pn && npm init -y > /dev/null && npm install pnpm@9.12.3 > /dev/null; echo $?');
+    expect(r.out).toBe('0\n');
+    await fs.mkdir('/home/user/pq', { recursive: true });
+    await fs.writeFile('/home/user/pq/package.json', JSON.stringify({ name: 'pq', version: '1.0.0', scripts: { go: 'node app.js', v: 'semver 1.2.3 -r ^1' } }));
+    await fs.writeFile('/home/user/pq/app.js', `const isOdd = require('is-odd'); const semver = require('semver');
+console.log(isOdd(3), isOdd(4), semver.satisfies('1.2.3', '^1'), require.resolve('is-odd'));`);
+    const pnpm = '/home/user/pn/node_modules/.bin/pnpm';
+    r = await sh(shell, `cd /home/user/pq && ${pnpm} add is-odd@3.0.1 semver@7.6.3`);
+    expect(r.exitCode).toBe(0);
+    expect(plain(r.out)).toMatch(/\+ is-odd 3\.0\.1/);
+    // package.json, the lockfile and .modules.yaml land (write-file-atomic: open, write, rename)
+    expect(JSON.parse(await fs.readFile('/home/user/pq/package.json', 'utf8') as string).dependencies).toEqual({ 'is-odd': '3.0.1', semver: '7.6.3' });
+    r = await sh(shell, 'cd /home/user/pq && readlink node_modules/is-odd node_modules/.pnpm/is-odd@3.0.1/node_modules/is-number && ls -a node_modules node_modules/.pnpm/is-odd@3.0.1/node_modules/is-odd && head -1 pnpm-lock.yaml');
+    expect(r.out).toBe(`.pnpm/is-odd@3.0.1/node_modules/is-odd
+../../is-number@6.0.0/node_modules/is-number
+node_modules:
+.
+..
+.bin
+.modules.yaml
+.pnpm
+is-odd
+semver
+
+node_modules/.pnpm/is-odd@3.0.1/node_modules/is-odd:
+.
+..
+LICENSE
+README.md
+index.js
+package.json
+lockfileVersion: '9.0'
+`);
+    // node resolves from the real path, as node does (is-odd finds is-number beside it)
+    r = await sh(shell, `cd /home/user/pq && ${pnpm} run go`);
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toContain('true false true /home/user/pq/node_modules/.pnpm/is-odd@3.0.1/node_modules/is-odd/index.js\n');
+    r = await sh(shell, `cd /home/user/pq && ${pnpm} run v && ${pnpm} exec semver -i minor 1.2.3 && node_modules/.bin/semver 2.0.0 -r '>1'`);
+    expect(r.exitCode).toBe(0);
+    expect(r.out).toMatch(/> semver 1\.2\.3 -r \^1\n\n1\.2\.3\n1\.3\.0\n2\.0\.0\n$/);
+    // A reinstall from the store, offline
+    r = await sh(shell, `cd /home/user/pq && rm -rf node_modules && ${pnpm} install --offline > /dev/null && node app.js`);
+    expect(r.out).toContain('true false true');
+  }, 300_000);
+
+  it('yarn 1: add from the registry, lockfile, run, bins, offline reinstall from its cache', async () => {
+    let r = await sh(shell, 'mkdir -p /home/user/yn && cd /home/user/yn && npm init -y > /dev/null && npm install yarn@1.22.22 > /dev/null; echo $?');
+    expect(r.out).toBe('0\n');
+    await fs.mkdir('/home/user/yq', { recursive: true });
+    await fs.writeFile('/home/user/yq/package.json', JSON.stringify({ name: 'yq', version: '1.0.0', license: 'MIT', scripts: { go: 'node app.js' } }));
+    await fs.writeFile('/home/user/yq/app.js', `console.log(require('is-odd')(3), require('semver').valid('1.2.3'));`);
+    const yarn = '/home/user/yn/node_modules/.bin/yarn';
+    r = await sh(shell, `cd /home/user/yq && ${yarn} add is-odd@3.0.1 semver@7.6.3`);
+    expect(r.exitCode).toBe(0);
+    expect(plain(r.out)).toMatch(/success Saved 3 new dependencies/);
+    r = await sh(shell, 'cd /home/user/yq && ls node_modules node_modules/.bin && grep -c resolved yarn.lock && wc -c < node_modules/is-odd/index.js');
+    expect(r.out).toMatch(/^node_modules:\nis-number\nis-odd\nsemver\n\nnode_modules\/.bin:\nsemver\n3\n\s*\d{3,}\n$/);
+    r = await sh(shell, `cd /home/user/yq && ${yarn} run go && node_modules/.bin/semver -i major 1.2.3`);
+    expect(r.exitCode).toBe(0);
+    expect(plain(r.out)).toMatch(/\$ node app\.js\ntrue 1\.2\.3\n(.|\n)*2\.0\.0\n$/);
+    r = await sh(shell, `cd /home/user/yq && rm -rf node_modules && ${yarn} install --offline > /dev/null && node app.js`);
+    expect(r.out).toBe('true 1.2.3\n');
   }, 300_000);
 
   it('a CLI on commander, chalk, dayjs and uuid', async () => {

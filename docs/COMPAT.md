@@ -28,7 +28,9 @@ built app in headless Chromium, cross-origin isolated.
 | Ninja | 1.12.1 | pkg `ninja` (`ninja.sh`: static x86-64) run in Blink | works | a C program built with clang through rules with depfiles, no-op rebuilds, header changes rebuilding dependents, failed commands reported with clang's diagnostics | — |
 | CMake, CTest | 3.31.9 | pkg `cmake` (`x86/cmake.sh`: static x86-64 musl, no OpenSSL) run in Blink | works with the llvm package's clang | a C project with a static library, `check_include_file`, `configure_file`: compiler detection (Clang 21.1.4), build through the Ninja and Makefile generators, `ctest` | configure takes ~10 s (each compiler check is a clang run); no https `file(DOWNLOAD)`; no ccmake/cmake-gui |
 | venv | Shiro | `python3 -m venv` | works | `pyvenv.cfg`, `bin/python` symlinks, `bin/pip`, `activate`/`deactivate`; `sys.prefix` is the venv and pip installs into it (vitest and Chromium) | `--copies` ignored (always symlinks) |
-| Node.js npm CLIs and libraries | Shiro's node (`node`, `npm`, `npx`) | builtin | works | commander + chalk + dayjs + uuid CLI, mocha 10 (pass and fail exit codes), tsc 5.6 (compile and type errors), prettier 3.3 (files, stdin, `--check "src/**/*.js"`, `--write`), ES modules binding `module`/`require`/`process`; vitest and Chromium | TypeScript 7 (`typescript@7`) is a native Go binary; native addons (`.node`) don't load; yarn 1 runs and resolves packages but can't fetch them yet (its `request` download over the fetch-backed http shim, then zlib and tar streams); axios needs `window.location` (fine in the browser, not under vitest) |
+| Node.js npm CLIs and libraries | Shiro's node (`node`, `npm`, `npx`) | builtin | works | commander + chalk + dayjs + uuid CLI, mocha 10 (pass and fail exit codes), tsc 5.6 (compile and type errors), prettier 3.3 (files, stdin, `--check "src/**/*.js"`, `--write`), ES modules binding `module`/`require`/`process`; vitest and Chromium | TypeScript 7 (`typescript@7`) is a native Go binary; native addons (`.node`) don't load; axios needs `window.location` (fine in the browser, not under vitest) |
+| pnpm | 9.12.3 | npm package under Shiro's node (`npm install pnpm`) | works | `pnpm add` from the registry into the content-addressable store and `node_modules/.pnpm` virtual store (symlinks), `require` through those symlinks (resolving from the real path, as node does), `pnpm install --offline` from the store, `pnpm run` (a `node` script and a shell one), `pnpm exec`, `node_modules/.bin` shims; vitest and Chromium (`add` of 3 packages ≈5 s, `run` ≈2.4 s) | no `pnpm dlx`/`pnpm env` tested; workers run in the same thread (no parallel speed-up) |
+| yarn 1 | 1.22.22 | npm package under Shiro's node (`npm install yarn`) | works | `yarn add` from the registry (tarballs through `request` over the fetch-backed http shim, gunzip, tar), `yarn.lock`, `yarn run`, `node_modules/.bin`, `yarn install --offline` from its cache; vitest and Chromium (`add` of 2 packages ≈2 s) | yarn 2+ (berry) not tried |
 | Lua (lua, luac) | 5.4.7 | pkg `lua` (`lua.sh`) | works | `#!/usr/bin/env lua` script reading stdin with argv, patterns, coroutines, `table.sort`; `luac -p` syntax errors with locations | no `os.execute`/`io.popen`; the REPL needs blocking stdin |
 | SQLite shell | 3.50.4 | pkg `sqlite` (`sqlite.sh`) | works | a database file reused across runs, JSON functions, FTS5, SQL and dot-commands on stdin (`.mode csv`) | single-threaded, no WAL or loadable extensions; interactive mode needs blocking stdin |
 
@@ -39,10 +41,55 @@ Not available (yet), and why:
 | Rust (rustc, cargo) | — | no maintained WASI build of rustc to pin; the Linux toolchain is dynamically linked against librustc_driver and LLVM (~250 MB unpacked) |
 | Java (JVM) | — | a JDK image is ~200 MB and HotSpot needs its JIT (mprotect RWX code) for usable speed; Blink would interpret the interpreter |
 | Deno, Bun | — | single ~100 MB binaries around V8 / JavaScriptCore JITs; Shiro's own `node` covers the npm use case |
-| yarn 1 | npm package under Shiro's node | runs and resolves; tarball fetch needs `request` over a real http stack, zlib and tar streams (see the Node row) |
 | PHP | — | owned by unix/wasix (WASIX build in `pkg`) |
 
 Shell and platform fixes these needed (all with tests in the same file):
+
+- Node, for pnpm: `require.resolve` (with `paths`), `require.resolve.paths`,
+  `require.cache`, `require.main`, `module.createRequire` from a file,
+  `Module._nodeModulePaths`/`_resolveFilename`; `MODULE_NOT_FOUND` codes;
+  `global` in the entry module; `worker_threads.Worker` runs the worker
+  script in the same thread with its own module cache (`workerData`,
+  `parentPort`, structured-clone messages); `zlib` is real (pako: gzip,
+  deflate, raw, unzip, streams, crc32; it was a pass-through, so gzipped
+  tarballs read as tar); `crypto` has real sha384/sha512/md5 and HMAC (sha512
+  was faked, so integrity checks failed); `Buffer.from(ArrayBuffer |
+  SharedArrayBuffer, offset, length)` is a view, `subarray` stays a Buffer,
+  utf16le; `process.emitWarning`; legacy `url.resolve`; `http.Agent` is an
+  EventEmitter and responses are Readable streams; more `util.types`.
+- Node fs: callbacks run asynchronously, as in node (touch registered its
+  listener after starting the call); `fs.write(fd, string, position,
+  encoding, cb)` called back (write-file-atomic never finished, leaving
+  `package.json` and `.modules.yaml` as empty temp files); `symlink` keeps
+  relative targets; `mkdirSync` reaches the filesystem's cache at once (a
+  `writeFileSync` right after found no parent and was dropped); renames
+  (including directories: pnpm stages a package in `name_tmp_PID`) wait for
+  the writes still in flight, which the drain loop had taken out of
+  `pendingPromises`; `copyFileSync` copies bytes; `readdir` dirents report
+  symlinks (pnpm skipped its symlinked packages when linking `.bin`);
+  `realpath` follows symlinks and reports ENOENT; `chmod` is kept.
+- Node: the preloader reads pnpm's `.pnpm/*/node_modules` packages, and
+  `require` resolves a package behind a symlink from its real directory.
+- Node: `child_process.spawn` with inherited stdio (`'inherit'`, `[0,1,2]`)
+  writes the child's output to the parent's and has `stdout === null`.
+- Node, for yarn: `fs.open` of a missing file to read is ENOENT (yarn took
+  a tarball cache it never wrote for a hit and fetched nothing),
+  `fs.copyFile` copies what the script sees, as bytes (copies out of its
+  cache came out empty), `Buffer.from(s, 'base64')` is lenient like node's
+  (integrity strings), `os.networkInterfaces()` has an external interface
+  (none read as offline), and an http body still arriving counts as the
+  script's activity (downloads ended with the script).
+- Shell: a script run by path (`./x.sh`, yarn's `sh` launcher) wrote
+  straight to the terminal, ignoring its redirects and pipes
+  (`./x.sh > /dev/null`, `./x.sh | tr`); its output now goes through them
+  like a builtin's. (This showed `base64 -d` adding a newline of its own;
+  it no longer does.)
+- Node: idle-exit activity is counted per script. It was page-wide, so a
+  parent waiting on a child `node` (pnpm run → node app.js) kept the child
+  from ever looking idle, and each waited on the other for the 10-minute
+  cap. The cap on a script's async phase is 10 minutes (was 10 s, which
+  killed pnpm during its retry back-off).
+
 
 - Shebangs: `#!/usr/bin/env NAME` (with `-S` and `VAR=value`) and absolute
   interpreters run any builtin, installed package or script on PATH; an
@@ -302,6 +349,23 @@ sha256-checked against `manifest.json`):
   `signalfd`, `inotify_init1`, `splice`, `sendfile`, `prctl`,
   `sched_getaffinity`, `posix_spawn*` (with `addchdir`), `mmap`/
   `mprotect`/`madvise` (JSC's JIT and its large virtual reservations).
+
+Where Shiro intercepts it today (so `claude` at the prompt never reaches a
+native binary):
+
+- `src/commands/claude.ts`: the `claude` builtin runs the pinned npm build
+  (`CLAUDE_CODE_VERSION`, pure JS) through Shiro's `node`, and answers
+  `claude install|update|upgrade` with a "pinned" message. Builtins win over
+  PATH lookup, so a binary at `~/.local/bin/claude` is not reached by name.
+- `src/commands/fetch.ts`: `curl`/`fetch` of `claude.ai/install.sh` returns
+  a stand-in script that runs `npm install -g` of that package instead of
+  the real installer.
+- To run the native ELF deliberately today, invoke it by absolute or
+  relative path (`/home/user/.local/bin/claude`, `./claude`): a path that
+  is not under `/bin`, `/usr/bin` or `/usr/local/bin` goes to the ELF loader
+  (Blink), not to the builtin. Proposed opt-in: `claude --native` or
+  `CLAUDE_NATIVE=1` making the builtin exec the native binary when one is
+  installed, and `CLAUDE_NATIVE=1` letting `install.sh` through.
 
 To try it (once allowed): put the binary and the five glibc libraries plus
 the loader in the VFS (Blink loads the ELF interpreter from SHIROFS), then

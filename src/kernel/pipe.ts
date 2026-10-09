@@ -27,6 +27,10 @@ export class Pipe {
   private readWaiters = new Set<() => void>();
   private writeWaiters = new Set<() => void>();
   readonly listeners = new ReadyListeners();
+  /** Named pipes: opens waiting for the other side to open (see Kernel.openFifo). */
+  readonly openWaiters = new Set<() => void>();
+  /** Named pipes: called when the last end closes (the kernel forgets the pipe). */
+  onIdle?: () => void;
 
   constructor(readonly capacity = PIPE_CAPACITY) {
     this.buf = new Uint8Array(capacity);
@@ -117,13 +121,20 @@ export class Pipe {
     return done;
   }
 
+  /** An end was opened: wake opens waiting for it. */
+  noteOpen() {
+    for (const w of [...this.openWaiters]) w();
+  }
+
   closeReader() {
     this.readers--;
     this.wakeWriters();
+    if (this.readers === 0 && this.writers === 0) this.onIdle?.();
   }
   closeWriter() {
     this.writers--;
     this.wakeReaders();
+    if (this.readers === 0 && this.writers === 0) this.onIdle?.();
   }
 
   stat(): KStat {
@@ -142,6 +153,7 @@ export class PipeEnd implements OpenFile {
   constructor(readonly pipe: Pipe, readonly end: 'r' | 'w', public flags: number) {
     if (end === 'r') pipe.readers++;
     else pipe.writers++;
+    pipe.noteOpen();
   }
 
   read(buf: Uint8Array, signal?: AbortSignal): Promise<number> {
@@ -206,4 +218,28 @@ export class PipeEnd implements OpenFile {
 export function createPipe(flags = 0, capacity = PIPE_CAPACITY): [PipeEnd, PipeEnd] {
   const p = new Pipe(capacity);
   return [new PipeEnd(p, 'r', O_RDONLY | (flags & O_NONBLOCK)), new PipeEnd(p, 'w', O_WRONLY | (flags & O_NONBLOCK))];
+}
+
+/** A named pipe opened O_RDWR: a read end and a write end in one description (never blocks on open, as on Linux). */
+export class FifoRdWr implements OpenFile {
+  kind: OpenFileKind = 'pipe';
+  private r: PipeEnd;
+  private w: PipeEnd;
+  constructor(readonly pipe: Pipe, public flags: number) {
+    this.r = new PipeEnd(pipe, 'r', flags & O_NONBLOCK);
+    this.w = new PipeEnd(pipe, 'w', flags & O_NONBLOCK);
+  }
+  private syncFlags() { this.r.flags = this.w.flags = this.flags & O_NONBLOCK; }
+  read(buf: Uint8Array, signal?: AbortSignal): Promise<number> { this.syncFlags(); return this.r.read(buf, signal); }
+  write(buf: Uint8Array, signal?: AbortSignal): Promise<number> { this.syncFlags(); return this.w.write(buf, signal); }
+  tryRead(buf: Uint8Array): number | undefined { return this.r.tryRead(buf); }
+  tryWrite(buf: Uint8Array): number | undefined { return this.w.tryWrite(buf); }
+  poll(events: number): number { return this.r.poll(events) | this.w.poll(events); }
+  onReady(cb: () => void): () => void { return this.pipe.listeners.add(cb); }
+  seek(): number { return -ESPIPE; }
+  ioctl(req: number, arg: Uint8Array): Promise<number> { return this.r.ioctl(req, arg); }
+  async stat(): Promise<KStat> { return this.pipe.stat(); }
+  statSync(): KStat { return this.pipe.stat(); }
+  async close(): Promise<void> { this.closeSync(); }
+  closeSync(): boolean { this.r.closeSync(); this.w.closeSync(); return true; }
 }

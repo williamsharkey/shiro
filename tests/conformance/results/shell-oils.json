@@ -489,13 +489,9 @@
    ]
   },
   "builtin-special": {
-   "pass": 7,
+   "pass": 8,
    "total": 12,
    "failures": [
-    {
-     "i": 1,
-     "name": "Prefix assignments persist after special builtins, like : (set -o posix)"
-    },
     {
      "i": 2,
      "name": "Prefix assignments persist after readonly, but NOT exported (set -o posix)"
@@ -587,13 +583,9 @@
    ]
   },
   "assign": {
-   "pass": 38,
+   "pass": 39,
    "total": 43,
    "failures": [
-    {
-     "i": 2,
-     "name": "Env binding can use preceding bindings, but not subsequent ones"
-    },
     {
      "i": 10,
      "name": "Trying to run keyword 'for'"
@@ -776,7 +768,7 @@
    "failures": []
   },
   "command_": {
-   "pass": 8,
+   "pass": 10,
    "total": 16,
    "failures": [
     {
@@ -802,14 +794,6 @@
     {
      "i": 12,
      "name": "hash without args prints the cache"
-    },
-    {
-     "i": 13,
-     "name": "hash with args"
-    },
-    {
-     "i": 15,
-     "name": "Executing command with same name as directory in PATH (#2429)"
     }
    ]
   },

@@ -1,0 +1,94 @@
+From 427181c657231a56dee3e404648f23737f36b139 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 08:13:58 +0000
+Subject: [PATCH 37/37] prctl: PR_SET/GET_KEEPCAPS, PDEATHSIG, DUMPABLE,
+ CHILD_SUBREAPER, NO_NEW_PRIVS, CAP_AMBIENT, CAPBSET_DROP under emscripten
+
+---
+ blink/machine.h |  2 ++
+ blink/syscall.c | 45 +++++++++++++++++++++++++++++++++++++++------
+ 2 files changed, 41 insertions(+), 6 deletions(-)
+
+diff --git a/blink/machine.h b/blink/machine.h
+index 239e41d..1291359 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -350,6 +350,8 @@ struct MachineTlb {
+ struct Machine {               //
+   u64 ip;                      // instruction pointer
+   char comm[16];               // prctl(PR_SET_NAME), "" = the program's name
++  u8 keepcaps, nonewprivs;     // prctl flags (recorded; not enforced)
++  u8 subreaper, pdeathsig;
+   u8 oplen;                    // length of operation
+   struct XedMachineMode mode;  // [dup] XED_MACHINE_MODE_REAL etc.
+   bool threaded;               // must use synchronization
+diff --git a/blink/syscall.c b/blink/syscall.c
+index bfae779..dd1d7d8 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -1102,23 +1102,56 @@ static int SysPrctl(struct Machine *m, int op, i64 arg2, i64 arg3, i64 arg4,
+       return CopyToUserWrite(m, arg2, name, 16);
+     case 23:  // PR_CAPBSET_READ: every capability Linux 6 knows is in the set
+       return arg2 >= 0 && arg2 <= 40 ? 1 : einval();
++    // recorded and reported back, not enforced (iputils' ping sets KEEPCAPS)
++    case 1:  // PR_SET_PDEATHSIG
++      if (!(0 <= arg2 && arg2 <= 64)) return einval();
++      m->pdeathsig = arg2;
++      return 0;
++    case 2:  // PR_GET_PDEATHSIG
++      Write32((u8 *)name, m->pdeathsig);
++      return CopyToUserWrite(m, arg2, name, 4);
++    case 3:  // PR_GET_DUMPABLE
++      return 1;
++    case 4:  // PR_SET_DUMPABLE
++      return arg2 == 0 || arg2 == 1 ? 0 : einval();
++    case 7:  // PR_GET_KEEPCAPS
++      return m->keepcaps;
++    case 8:  // PR_SET_KEEPCAPS
++      if (arg2 != 0 && arg2 != 1) return einval();
++      m->keepcaps = arg2;
++      return 0;
++    case 36:  // PR_SET_CHILD_SUBREAPER
++      m->subreaper = !!arg2;
++      return 0;
++    case 37:  // PR_GET_CHILD_SUBREAPER
++      Write32((u8 *)name, m->subreaper);
++      return CopyToUserWrite(m, arg2, name, 4);
++    case 39:  // PR_GET_NO_NEW_PRIVS
++      return m->nonewprivs;
++    case 47:  // PR_CAP_AMBIENT: none raised; raising, lowering, clearing accepted
++      if (arg2 == 1) return arg3 >= 0 && arg3 <= 40 ? 0 : einval();
++      return arg2 >= 2 && arg2 <= 4 ? 0 : einval();
+     case PR_GET_TSC_LINUX:
+       return SysPrctlGetTsc(m, arg2);
+     case PR_SET_TSC_LINUX:
+       return SysPrctlSetTsc(m, arg2);
+-#ifdef PR_CAPBSET_DROP
++#if defined(PR_CAPBSET_DROP) && !defined(__EMSCRIPTEN__)
+     case PR_CAPBSET_DROP_LINUX:
+       return prctl(PR_CAPBSET_DROP, arg2, arg3, arg4, arg5);
+ #else
+-    case PR_CAPBSET_DROP_LINUX:
+-      return einval();
++    case PR_CAPBSET_DROP_LINUX:  // nothing to drop: accepted for known caps
++      return arg2 >= 0 && arg2 <= 40 ? 0 : einval();
+ #endif
+-#ifdef PR_SET_NO_NEW_PRIVS
++#if defined(PR_SET_NO_NEW_PRIVS) && !defined(__EMSCRIPTEN__)
+     case PR_SET_NO_NEW_PRIVS_LINUX:
+-      return prctl(PR_SET_NO_NEW_PRIVS, arg2, arg3, arg4, arg5);
++      if (prctl(PR_SET_NO_NEW_PRIVS, arg2, arg3, arg4, arg5) == -1) return -1;
++      m->nonewprivs = 1;
++      return 0;
+ #else
+     case PR_SET_NO_NEW_PRIVS_LINUX:
+-      return einval();
++      if (arg2 != 1 || arg3 || arg4 || arg5) return einval();
++      m->nonewprivs = 1;
++      return 0;
+ #endif
+     case PR_GET_SECCOMP_LINUX:
+     case PR_SET_SECCOMP_LINUX:
+-- 
+2.43.0
+
