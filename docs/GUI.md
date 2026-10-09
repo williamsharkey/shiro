@@ -158,9 +158,10 @@ self-contained floating-window host for the classic full-page terminal UI.
 - Each package is identified by the sha256 of its `.deb` from the signed
   index. `src/gui/apps.ts` looks it up in the browser's Cache Storage under
   that hash (shared by all apps, kept across filesystem resets), else fetches
-  `GET /debian/pool/...` (server.mjs proxies the mirror, which sends no CORS
-  headers; it caches on disk and falls back to snapshot.debian.org when a
-  point release removed the file), verifies the hash, and unpacks it in the
+  `GET /debian/pool/...` (server.mjs's Debian mirror, shared with apt in
+  Debian mode: see [DEBIAN.md](DEBIAN.md), "Package mirror"; it caches on
+  disk and falls back to snapshot.debian.org when a point release removed
+  the file), verifies the hash, and unpacks it in the
   page (ar, then data.tar.xz/zst/gz with Shiro's JS codecs). Docs, man pages
   and translations are skipped; files a library package would put over
   Shiro's own commands in `/usr/bin` are skipped too.
