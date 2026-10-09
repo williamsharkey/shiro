@@ -345,7 +345,7 @@ class ProcProvider implements VirtualFSProvider {
       case 'environ': return { text: Object.entries(info.environ ?? {}).map(([k, v]) => `${k}=${v}\0`).join('') };
       case 'statm': return { text: '0 0 0 0 0 0 0\n' };
       case 'io': return { text: 'rchar: 0\nwchar: 0\nsyscr: 0\nsyscw: 0\nread_bytes: 0\nwrite_bytes: 0\ncancelled_write_bytes: 0\n' };
-      case 'mounts': return { text: 'shirofs / shirofs rw 0 0\nproc /proc proc rw 0 0\n' };
+      case 'mounts': return { text: 'rootfs / rootfs rw 0 0\nproc /proc proc rw 0 0\n' };
       case 'limits': return { text: 'Limit                     Soft Limit           Hard Limit           Units     \n' +
         'Max open files            1024                 4096                 files     \n' };
     }
@@ -383,14 +383,14 @@ class ProcProvider implements VirtualFSProvider {
     },
     '/proc/loadavg': () => '0.00 0.00 0.00 1/1 1\n',
     '/proc/stat': () => 'cpu  0 0 0 0 0 0 0 0 0 0\n',
-    '/proc/filesystems': () => 'nodev\tshirofs\n',
+    '/proc/filesystems': () => 'nodev\trootfs\n',
     '/proc/sys/kernel/pid_max': () => '4194304\n',
     '/proc/sys/fs/pipe-max-size': () => '1048576\n',
     '/proc/sys/fs/pipe-user-pages-soft': () => '16384\n',
     '/proc/sys/fs/pipe-user-pages-hard': () => '0\n',
     '/proc/sys/kernel/tainted': () => '0\n',
     '/proc/sys/kernel/core_pattern': () => 'core\n',
-    '/proc/mounts': () => 'shirofs / shirofs rw 0 0\n',
+    '/proc/mounts': () => 'rootfs / rootfs rw 0 0\n',
   };
 
   private dirs = ['/proc', '/proc/sys', '/proc/sys/kernel', '/proc/sys/fs'];

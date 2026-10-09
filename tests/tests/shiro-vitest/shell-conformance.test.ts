@@ -750,7 +750,7 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('Linux tabcomputer 6.1.0-tabcomputer #1 SMP PREEMPT_DYNAMIC x86_64 GNU/Linux\n' +
       'Linux 6.1.0-tabcomputer x86_64\n6.1.0-tabcomputer x86_64\nunknown\nGNU/Linux\n' +
-      'release-matches\nfree-matches\nshirofs / 1\n' +
+      'release-matches\nfree-matches\nrootfs / 1\n' +
       "uname: invalid option -- 'x'\nTry 'uname --help' for more information.\n1\n");
   });
 

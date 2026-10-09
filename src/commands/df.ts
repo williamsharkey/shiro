@@ -12,7 +12,7 @@ export const df: Command = {
     const pct = size ? `${Math.ceil((used / size) * 100)}%` : '-';
 
     if (flags.i) {
-      ctx.stdout += "Filesystem      Inodes  IUsed   IFree IUse% Mounted on\nshirofs              0      0       0     - /\n";
+      ctx.stdout += "Filesystem      Inodes  IUsed   IFree IUse% Mounted on\nrootfs               0      0       0     - /\n";
       return 0;
     }
     if (flags.h) {
@@ -23,12 +23,12 @@ export const df: Command = {
         return i === 0 ? String(n) : (n < 10 ? (Math.ceil(n * 10) / 10).toFixed(1) : String(Math.ceil(n))) + units[i];
       };
       ctx.stdout += 'Filesystem      Size  Used Avail Use% Mounted on\n'
-        + `shirofs ${human(size).padStart(13)} ${human(used).padStart(5)} ${human(avail).padStart(5)} ${pct.padStart(4)} /\n`;
+        + `rootfs ${human(size).padStart(14)} ${human(used).padStart(5)} ${human(avail).padStart(5)} ${pct.padStart(4)} /\n`;
       return 0;
     }
     const kb = (n: number) => String(Math.floor(n / 1024));
     ctx.stdout += 'Filesystem     1K-blocks      Used  Available Use% Mounted on\n'
-      + `shirofs ${kb(size).padStart(17)} ${kb(used).padStart(9)} ${kb(avail).padStart(10)} ${pct.padStart(4)} /\n`;
+      + `rootfs ${kb(size).padStart(18)} ${kb(used).padStart(9)} ${kb(avail).padStart(10)} ${pct.padStart(4)} /\n`;
     return 0;
   },
 };
