@@ -592,6 +592,11 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    being delivered, dropped or fatal. For PostgreSQL (initdb, its latch).
    Tests: `fixtures/x86/ids.c` (needs the kernel's `SYS_setresuid`),
    `fixtures/x86/signalfd.c`.
+64. `SHIRO_BLINK_PROFILE=<file>` writes where a guest's time goes: the wall
+   time, the JIT's compile time and count, and per syscall number its
+   count, total and longest time (with its kernel call and waits), every
+   5 s and at the first read of stdin (a TUI's prompt is up). Debugging
+   aid, for profiling programs where they run.
 
 The guest's kernel calls go over a pool of channels (`src/x86-engine/blink.ts`
 → `public/engines/blink/host.mjs`). It starts at 6, and host.mjs asks the

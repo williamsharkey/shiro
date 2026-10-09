@@ -1,0 +1,180 @@
+From dbcc00ad7bb4b1c94e261af7143e37651f1101b0 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 19:48:37 +0000
+Subject: [PATCH 64/64] Shiro: SHIRO_BLINK_PROFILE=<file>: where a guest's time
+ goes
+
+Wall time, the JIT's compile time and count, and per syscall number its
+count, total and longest time (a syscall's includes its kernel call and
+any wait), written to <file> every 5 s, at the first read of stdin (a
+TUI's prompt is up) and at exit. For profiling native Claude Code's
+startup where its binary runs (debugging aid).
+---
+ blink/shiro.inc | 90 +++++++++++++++++++++++++++++++++++++++++++++++++
+ blink/syscall.c |  9 +++++
+ blink/wjit.c    |  8 ++++-
+ 3 files changed, 106 insertions(+), 1 deletion(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index fbaa384..ee242b0 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -44,12 +44,15 @@ EMSCRIPTEN_KEEPALIVE void blink_shiro_enable(int pid, int chunk, u32 ign_lo,
+   g_shiro_ignored = (u64)ign_hi << 32 | ign_lo;
+ }
+ 
++static void ShiroProfInit(void);
++
+ void ShiroInitSystem(struct System *s, bool first) {
+   int sig;
+   const char *e;
+   if (!g_shiro_pid) return;
+   g_shiro_trace = (e = getenv("SHIRO_BLINK_CRASH")) && !strcmp(e, "2");
+   g_shiro_mmlog = (e = getenv("SHIRO_BLINK_MMLOG")) ? atoi(e) : 0;
++  if (first) ShiroProfInit();
+   if (g_shiro_trace && (e = getenv("SHIRO_BLINK_PROBE"))) {  // addr,addr,...
+     int k;
+     for (k = 0; k < 8 && *e; ++k) {
+@@ -834,6 +837,93 @@ static i64 ShiroMsg(struct Machine *m, bool send, int fd, i64 msg, int flags) {
+   return r;
+ }
+ 
++// SHIRO_BLINK_PROFILE=<file>: where a guest's time goes (debugging aid).
++// The file gets the wall time since the start, the JIT's compile time and
++// count, and per syscall number its count, total and longest time (a
++// syscall's time includes its kernel call and any wait in it). Rewritten
++// every 5 s, at the first read of stdin and at exit.
++bool g_shiro_prof;
++static char g_shiro_prof_path[256];
++static double g_shiro_prof_t0, g_shiro_prof_last, g_shiro_prof_jit;
++static long g_shiro_prof_jitn;
++static struct { long n; double ms, max; } g_shiro_prof_sys[512];
++static pthread_mutex_t_ g_shiro_prof_lock = PTHREAD_MUTEX_INITIALIZER_;
++static bool g_shiro_prof_stdin;
++
++static void ShiroProfInit(void) {
++  const char *e = getenv("SHIRO_BLINK_PROFILE");
++  if (!e || !*e || strlen(e) >= sizeof(g_shiro_prof_path)) return;
++  strcpy(g_shiro_prof_path, e);
++  g_shiro_prof_t0 = g_shiro_prof_last = emscripten_get_now();
++  g_shiro_prof = true;
++}
++
++void ShiroProfJit(double ms) {
++  if (!g_shiro_prof) return;
++  LOCK(&g_shiro_prof_lock);
++  g_shiro_prof_jit += ms, ++g_shiro_prof_jitn;
++  UNLOCK(&g_shiro_prof_lock);
++}
++
++static void ShiroProfDump(struct Machine *m, const char *why) {
++  char *b;
++  int n = 0, i, k, fd, order[512], cap = 32768;
++  double now = emscripten_get_now(), sys = 0;
++  if (!(b = (char *)malloc(cap))) return;
++  LOCK(&g_shiro_prof_lock);
++  for (i = 0; i < 512; ++i) order[i] = i, sys += g_shiro_prof_sys[i].ms;
++  for (i = 1; i < 512; ++i) {  // by total time
++    for (k = i; k > 0 && g_shiro_prof_sys[order[k]].ms > g_shiro_prof_sys[order[k - 1]].ms; --k) {
++      int t = order[k]; order[k] = order[k - 1]; order[k - 1] = t;
++    }
++  }
++  n += snprintf(b + n, cap - n, "pid %d (%s) wall %.0f ms: jit %.0f ms in %ld compiles, syscalls %.0f ms, rest (running guest code) %.0f ms\n",
++                m->system->pid, why, now - g_shiro_prof_t0, g_shiro_prof_jit, g_shiro_prof_jitn, sys,
++                now - g_shiro_prof_t0 - g_shiro_prof_jit - sys);
++  n += snprintf(b + n, cap - n, "syscall      count   total ms     max ms\n");
++  for (i = 0; i < 40 && g_shiro_prof_sys[order[i]].n; ++i) {
++    k = order[i];
++    n += snprintf(b + n, cap - n, "%7d %10ld %10.1f %10.1f\n", k, g_shiro_prof_sys[k].n,
++                  g_shiro_prof_sys[k].ms, g_shiro_prof_sys[k].max);
++  }
++  UNLOCK(&g_shiro_prof_lock);
++  g_shiro_prof = false;  // our own calls aren't counted
++  fd = ShiroCall(m, 257, A12(-100, (int)strlen(g_shiro_prof_path), 01 | 0100 | 01000, 0644),
++                 g_shiro_prof_path, strlen(g_shiro_prof_path), 0, false, false);
++  if (fd >= 0) {
++    ShiroCall(m, 1, A12(fd, n), b, n, 0, false, false);
++    KS(m, 3, A12(fd));
++  }
++  g_shiro_prof = true;
++  free(b);
++}
++
++void ShiroProfSys(struct Machine *m, int nr, double ms, u64 a) {
++  double now;
++  if (!g_shiro_prof || nr < 0 || nr >= 512) return;
++  LOCK(&g_shiro_prof_lock);
++  ++g_shiro_prof_sys[nr].n;
++  g_shiro_prof_sys[nr].ms += ms;
++  if (ms > g_shiro_prof_sys[nr].max) g_shiro_prof_sys[nr].max = ms;
++  UNLOCK(&g_shiro_prof_lock);
++  now = emscripten_get_now();
++  if (nr == 0x0E7 || nr == 0x03C) {
++    ShiroProfDump(m, "exit");
++  } else if (now - g_shiro_prof_last > 5000) {
++    g_shiro_prof_last = now;
++    ShiroProfDump(m, "running");
++  }
++}
++
++// before a syscall: the first read of stdin is when the program is ready
++// for input (a TUI's prompt)
++void ShiroProfBefore(struct Machine *m, int nr, u64 a) {
++  if (g_shiro_prof && !g_shiro_prof_stdin && (nr == 0x000 || nr == 0x013) && a == 0) {
++    g_shiro_prof_stdin = true;
++    ShiroProfDump(m, "first read of stdin");
++  }
++}
++
+ // SHIRO_BLINK_MMLOG=1: each mmap, munmap, mprotect, mremap and madvise
+ // with its result goes to the guest's stderr (debugging aid)
+ static void ShiroMmLog(struct Machine *m, int nr, u64 a, u64 b, u64 c, u64 d) {
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 5994ad4..14f84f4 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -5994,6 +5994,14 @@ void OpSyscall(P) {
+   r9 = Get64(m->r9);
+ #ifdef __EMSCRIPTEN__
+   int shnr = ax & 0xfff;
++  extern bool g_shiro_prof;
++  void ShiroProfBefore(struct Machine *, int, u64);
++  void ShiroProfSys(struct Machine *, int, double, u64);
++  double prof_t0 = 0;
++  if (g_shiro_prof) {
++    ShiroProfBefore(m, shnr, di);
++    prof_t0 = emscripten_get_now();
++  }
+ #endif
+   // Restore the lock state we entered with: a syscall nested in a signal
+   // handler (rt_sigreturn) must not leave an outer blocking wait holding it.
+@@ -6260,6 +6268,7 @@ void OpSyscall(P) {
+ #ifdef __EMSCRIPTEN__
+ ShiroDone:
+   if (g_shiro_mmlog) ShiroMmLog(m, shnr, di, si, dx, r0);
++  if (prof_t0) ShiroProfSys(m, shnr, emscripten_get_now() - prof_t0, di);
+   // a changed signal mask takes effect in the kernel at once (an unblocked
+   // signal it held is delivered now, not at the next kernel call)
+   if (shnr == 0x00E || shnr == 0x00F || shnr == 0x082) ShiroSyncMask(m);
+diff --git a/blink/wjit.c b/blink/wjit.c
+index 3b63002..7e0579c 100644
+--- a/blink/wjit.c
++++ b/blink/wjit.c
+@@ -3591,7 +3591,13 @@ bool WjExecute(struct Machine *m) {
+     e->fn = -1;
+     return false;
+   }
+-  fn = Compile(m, m->ip);
++  {
++    extern bool g_shiro_prof;
++    void ShiroProfJit(double);
++    double t = g_shiro_prof ? emscripten_get_now() : 0;
++    fn = Compile(m, m->ip);
++    if (t) ShiroProfJit(emscripten_get_now() - t);
++  }
+   // Compile() may have grown the table
+   e = Find(m->ip);
+   e->fn = fn;
+-- 
+2.43.0
+
