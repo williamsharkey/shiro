@@ -463,6 +463,11 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    position (it read `*NULL`: EFAULT); systemd-sysusers' backup of
    `/etc/group` failed with it, and with that the postinst of systemd,
    cron, udev and logrotate. Test: `fixtures/x86/sendfile.c`.
+43. Under Shiro `sendmmsg`/`recvmmsg` go to the kernel as one
+   `sendmsg`/`recvmsg` per message (Blink's own failed with EBADF on kernel
+   sockets, and glibc's resolver, which sends its A and AAAA queries with
+   `sendmmsg`, gave up: pip couldn't resolve PyPI). Test:
+   `fixtures/x86/mmsg.c` (two DNS queries over the kernel's DoH).
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.
