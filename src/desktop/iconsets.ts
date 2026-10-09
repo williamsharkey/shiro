@@ -43,14 +43,16 @@ export const ICON_SETS: IconSet[] = [
 ];
 
 export const DEFAULT_ICON_SET: IconSetId = 'drafting';
-export const ICON_SET_KEY = 'shiro-desktop-iconset';
+export const ICON_SET_KEY = 'tabcomputer-desktop-iconset';
+/** Where the choice was kept before the rename (read once, as a fallback) */
+const OLD_ICON_SET_KEY = 'shiro-desktop-iconset';
 
 export function iconSet(id: string | null | undefined): IconSet {
   return ICON_SETS.find(s => s.id === id) ?? ICON_SETS[0];
 }
 
 export function savedIconSet(): IconSetId {
-  try { return iconSet(localStorage.getItem(ICON_SET_KEY)).id; } catch { return DEFAULT_ICON_SET; }
+  try { return iconSet(localStorage.getItem(ICON_SET_KEY) ?? localStorage.getItem(OLD_ICON_SET_KEY)).id; } catch { return DEFAULT_ICON_SET; }
 }
 
 export function saveIconSet(id: IconSetId): void {

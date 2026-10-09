@@ -220,6 +220,13 @@ describe('kernel programs on the terminal pty', () => {
     // a function body and a loop inside the collected command collect too
     r = await sh('f() { for i in 1; do hello; done; }; capt f');
     expect(r.out).toBe('got [Hello, world!|] 0\n');
+    // the node runtime too (its stdout isn't the terminal's then)
+    await sh("echo 'console.log(\"from js\")' > /tmp/j.js");
+    r = await sh('capt node /tmp/j.js');
+    expect(r.out).toBe('got [from js|] 0\n');
+    r = await sh('X=$(node -e "process.stdout.write(\'sub\')"); echo "[$X]"');
+    expect(r.out).toContain('[sub]');
+    expect(term.screen()).not.toContain('from js');
     expect(term.screen()).not.toContain('Hello');
     expect(term.screen()).not.toContain('line 1');
     // at the prompt the same programs still write to the terminal

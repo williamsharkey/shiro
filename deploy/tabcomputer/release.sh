@@ -22,5 +22,6 @@ echo "$sha" > "$rel/DEPLOYED_SHA"
 echo "$sha" > "$rel/public/deployed.txt"
 ln -sfn "$rel" "$root/current.new" && mv -T "$root/current.new" "$root/current"
 systemctl restart tabcomputer
+bash deploy/tabcomputer/tls-install.sh "$src" || true
 ls -1dt "$root"/releases/* | tail -n +4 | xargs -r rm -rf
 echo "deployed $sha"

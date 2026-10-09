@@ -51,6 +51,11 @@ export function prepareFixtures({ cacheDir, publishDir, netcache, log, withGh = 
   for (const [name, build] of tries) {
     try { if (build()) out[name] = join(fx, name); } catch (e) { log?.(`[fixtures] ${name}: ${String(e.stderr || e.message).slice(0, 300)}`); }
   }
+  // Native Claude Code (workloads-slow): used when cached, never downloaded here
+  for (const name of ['claude-native', 'ld-musl-x86_64.so.1']) {
+    const p = join(fx, name);
+    if (existsSync(p)) out[name] = p;
+  }
   for (const [name, path] of Object.entries(out)) {
     if (existsSync(path)) copyFileSync(path, join(publishDir, name));
     else delete out[name];

@@ -133,6 +133,16 @@ the tab is older than the server's deploy. `dmesg` shows the kernel log, includi
 relay refused a connection. `doctor` never prints tokens, so you can paste its output
 into an issue at [github.com/williamsharkey/tabcomputer/issues](https://github.com/williamsharkey/tabcomputer/issues).
 
+`doctor --agents` tests what agent CLIs (Claude Code, Codex) need, in a scratch
+directory under `/tmp/doctor-UID`: `mkdir -p` with mode 0700, an `O_EXCL` temp
+file renamed over a target, `stat`/`lstat`/`fstat` agreeing, `realpath`, and a
+child `sh -c 'echo hi'` writing to a file. Each step is OK or FAIL with the errno.
+It runs them twice, as a static x86-64 binary under Blink
+(`scripts/agent-probe/agentprobe.c`, the syscalls the native Claude binary makes)
+and through the Node runtime (what the npm build uses), so you can see which layer
+breaks. It also runs the native `claude --version` if that is installed. Plain
+`doctor` shows a one-line summary.
+
 ## Development
 
 ```bash

@@ -410,6 +410,37 @@ body.sd-active #shiro-layout { display: none; }
 .sd-status-line { font-size: 12px; color: var(--sd-text-2); margin-top: 8px; min-height: 16px; }
 .sd-status-line.ok { color: #2fb457; } .sd-status-line.err { color: #ff5a52; }
 
+/* Accounts (accounts.ts): Settings → Accounts and the menu bar popover */
+.sd-btn.sd-danger { background: #e5484d; border-color: transparent; color: #fff; }
+.sd-acct-row { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 0; }
+.sd-acct-row + .sd-acct-row, .sd-acct-confirm + .sd-acct-row { border-top: 1px solid var(--sd-sep); }
+.sd-acct-ico { width: 28px; height: 28px; border-radius: 7px; }
+.sd-acct-ico svg { width: 17px; height: 17px; }
+.sd-acct-text { display: flex; flex-direction: column; min-width: 0; }
+.sd-acct-state { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sd-acct-row .sd-btn { flex: none; white-space: nowrap; }
+.sd-acct-confirm {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; padding: 8px 10px;
+  border-radius: 8px; background: color-mix(in srgb, #e5484d 10%, transparent); border: 1px solid color-mix(in srgb, #e5484d 30%, transparent);
+}
+.sd-pop-net { padding-bottom: 6px; }
+.sd-pop-h { padding: 8px 0 2px; border-top: 1px solid var(--sd-sep); font-weight: 600; }
+.sd-pop-accounts .sd-acct-row { min-height: 38px; padding: 4px 0; }
+.sd-pop-accounts .sd-acct-ico { width: 24px; height: 24px; border-radius: 6px; }
+.sd-pop-accounts .sd-btn { height: 24px; padding: 0 10px; font-size: 12px; }
+.sd-pop-accounts .sd-acct-confirm { font-size: 12px; }
+/* The Claude sign-in sheet */
+.sd-sheet-icon.sd-claude-icon { background: none; }
+.sd-sheet-icon.sd-claude-icon .sd-acct-ico { width: 40px; height: 40px; border-radius: 11px; }
+.sd-sheet-icon.sd-claude-icon .sd-acct-ico svg { width: 24px; height: 24px; }
+.sd-steps { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.sd-steps li { display: flex; align-items: center; gap: 10px; }
+.sd-step-n { width: 20px; height: 20px; flex: none; display: grid; place-items: center; border-radius: 50%; background: var(--sd-accent); color: #fff; font-size: 11px; font-weight: 700; }
+.sd-steps a.sd-btn { text-decoration: none; white-space: nowrap; flex: none; }
+.sd-steps a.sd-btn[aria-disabled='true'] { opacity: .5; pointer-events: none; }
+.sd-code-form { display: flex; gap: 8px; margin: 8px 0 0 30px; }
+.sd-code-form .sd-input { flex: 1; min-width: 0; font-family: var(--sd-mono); }
+
 .sd-popover {
   position: fixed; z-index: 100002; width: 280px; padding: 12px;
   background: var(--sd-material-strong); color: var(--sd-text); border: 1px solid var(--sd-window-border);

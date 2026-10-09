@@ -14,12 +14,14 @@ import { NetCache } from './lib/netcache.mjs';
 import { startShiroServer, startTcpTestServer, hostAddress } from './lib/servers.mjs';
 import { prepareFixtures, prepareGh } from './lib/fixtures.mjs';
 import { writeReport } from './report.mjs';
+import { machineFor } from './lib/machine.mjs';
+import { startGitDaemon } from './lib/gitserver.mjs';
 
 const BENCH = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(BENCH, '..');
-const ALL_SUITES = ['boot', 'shell', 'kernel', 'wasm', 'x86', 'net', 'node', 'hygiene'];
+const ALL_SUITES = ['boot', 'shell', 'kernel', 'wasm', 'x86', 'net', 'node', 'hygiene', 'workloads'];
 // Only when asked for (--suites debian): apt runs take minutes
-const OPTIONAL_SUITES = ['debian', 'x86first'];
+const OPTIONAL_SUITES = ['debian', 'x86first', 'workloads-slow'];
 const NONISOLATED_SUITES = ['boot', 'shell', 'kernel', 'wasm', 'x86', 'hygiene'];
 // --quick: everything isolated, plus the kernel fallback paths (JSPI) not isolated
 const QUICK_NONISOLATED_SUITES = ['kernel'];
@@ -70,6 +72,7 @@ function environment(args, chromiumVersion) {
   };
 }
 
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.src) SRC = resolve(args.src);
@@ -92,19 +95,22 @@ async function main() {
 
   const hostAddr = hostAddress();
   const tcp = await startTcpTestServer('0.0.0.0');
+  // git:// server for workloads-slow's clone over the relay
+  const gitd = suites.includes('workloads-slow') ? await startGitDaemon({ cacheDir, log }) : null;
   const netcache = new NetCache(join(cacheDir, 'net'), { offline: args.offline, log });
   const results = [];
   let chromiumVersion = null;
   for (const mode of args.modes) {
     const server = await startShiroServer({
       staticDir: dist, isolated: mode === 'isolated',
-      tcpPorts: Object.values(tcp.ports), allowCidrs: hostAddr ? [`${hostAddr}/32`] : [],
+      tcpPorts: [...Object.values(tcp.ports), ...(gitd ? [gitd.port] : [])], allowCidrs: hostAddr ? [`${hostAddr}/32`] : [],
       log: process.env.BENCH_SERVER_LOG ? (l) => log(`[server] ${l}`) : null,
     });
     const h = new Harness({
       mode, origin: server.origin, netcache, runs: args.runs, quick: args.quick, log, results,
       testServer: { host: hostAddr, ports: tcp.ports }, hostAddr, only: args.only,
     });
+    h.gitServer = gitd ? { host: hostAddr, port: gitd.port, repo: gitd.repo } : null;
     h.fixtures = fixtures;
     await h.launch();
     chromiumVersion ??= h.browser.version();
@@ -115,8 +121,9 @@ async function main() {
         const mod = await import(`./suites/${s}.mjs`);
         const ts = Date.now();
         log(`[bench] ── ${s}`);
+        h.suite = s;
         try {
-          if (s !== 'boot') await ensureWorkPage(h);
+          if (s !== 'boot' && !mod.ownPages) await ensureWorkPage(h);
           await mod.run(h);
         } catch (e) {
           log(`[bench] suite ${s} failed: ${e.stack || e}`);
@@ -135,8 +142,10 @@ async function main() {
     }
   }
   await tcp.close();
+  await gitd?.close();
 
   const env = environment(args, chromiumVersion);
+  env.machine = machineFor(env);
   env.durationSec = Math.round((Date.now() - t0) / 1000);
   env.netcache = netcache.stats;
   const out = { format: 1, env, results };

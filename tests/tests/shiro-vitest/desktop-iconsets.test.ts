@@ -20,7 +20,7 @@ if (!(globalThis as any).localStorage) {
 const src = (p: string) => readFileSync(new URL(`../../../src/${p}`, import.meta.url), 'utf8');
 
 describe('icon sets', () => {
-  beforeEach(() => localStorage.removeItem(ICON_SET_KEY));
+  beforeEach(() => { localStorage.removeItem(ICON_SET_KEY); localStorage.removeItem('shiro-desktop-iconset'); });
 
   it('defaults to Drafting and lists the 12 studies plus Classic', () => {
     expect(DEFAULT_ICON_SET).toBe('drafting');
@@ -39,6 +39,11 @@ describe('icon sets', () => {
     localStorage.setItem(ICON_SET_KEY, 'nonsense');
     expect(savedIconSet()).toBe('drafting');
     expect(iconSet('glass').kind).toBe('live');
+    // a choice saved before the rename still counts
+    localStorage.removeItem(ICON_SET_KEY);
+    localStorage.setItem('shiro-desktop-iconset', 'paper');
+    expect(savedIconSet()).toBe('paper');
+    localStorage.removeItem('shiro-desktop-iconset');
   });
 
   it('every app in the dock and launcher has a glyph', () => {

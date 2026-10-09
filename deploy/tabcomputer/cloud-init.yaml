@@ -144,6 +144,11 @@ runcmd:
   - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   - apt-get install -y nodejs
   - mkdir -p /opt/tabcomputer/releases /opt/tabcomputer/seeds
+  # This droplet's key for the encrypted wildcard certificate (tls-install.sh);
+  # its certificate is public at /_deploy/tls-recipient.crt
+  - mkdir -p /etc/tabcomputer /var/www/tabdeploy && chmod 700 /etc/tabcomputer
+  - openssl req -x509 -newkey rsa:3072 -nodes -days 3650 -subj /CN=tabcomputer-droplet -keyout /etc/tabcomputer/tls-recipient.key -out /var/www/tabdeploy/tls-recipient.crt
+  - chmod 600 /etc/tabcomputer/tls-recipient.key
   - cd /opt/tabcomputer && echo '{"private":true,"type":"module"}' > package.json && npm install --no-audit --no-fund ws undici
   - rm -f /etc/nginx/sites-enabled/default
   - ln -sf /etc/nginx/sites-available/tabcomputer /etc/nginx/sites-enabled/tabcomputer
