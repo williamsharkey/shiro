@@ -83,6 +83,8 @@ export const SYS_epoll_wait = 232;
 export const SYS_epoll_ctl = 233;
 export const SYS_tgkill = 234;
 export const SYS_mkdirat = 258;
+export const SYS_mknod = 133;
+export const SYS_mknodat = 259;
 export const SYS_newfstatat = 262;
 export const SYS_unlinkat = 263;
 export const SYS_renameat = 264;
@@ -100,6 +102,19 @@ export const SYS_geteuid = 107;
 export const SYS_getegid = 108;
 export const SYS_eventfd = 284;
 export const SYS_eventfd2 = 290;
+/**
+ * timerfd_create(clockid, flags). Engines that keep their own clocks pass
+ * times as milliseconds (f64) in the data area instead of struct itimerspec:
+ * timerfd_settime(fd, flags) takes [value, interval, realtime now, monotonic
+ * now] (value absolute with TFD_TIMER_ABSTIME, read on the timer's clock
+ * through the "now" the engine gives) and returns the old [value, interval];
+ * timerfd_gettime(fd) returns [value, interval]. Reads give the u64 count of
+ * expirations since the last read.
+ */
+export const SYS_timerfd_create = 283;
+export const SYS_timerfd_settime = 286;
+export const SYS_timerfd_gettime = 287;
+export const TFD_TIMER_ABSTIME = 1;
 export const SYS_close_range = 436;
 export const EFD_SEMAPHORE = 1;
 

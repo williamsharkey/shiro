@@ -98,6 +98,24 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     await fs.writeFile('/tmp/linksrc', 'hello');
     expect((await run(shell, '/usr/bin/ln /tmp/linksrc /tmp/linkdst && /usr/bin/cat /tmp/linkdst')).output).toContain('hello');
   }, 60000);
+
+  it("bash's PATH search finds builtins and Debian's programs (no phantom /usr/local/sbin/NAME)", async () => {
+    // id: Debian's file in /usr/bin; tail: diverted to Shiro's (no file); /usr/local/sbin comes first
+    const r = await run(shell, `sudo /usr/bin/bash -c 'type -p id tail; id -u; printf "a\\nb\\n" | tail -1'`);
+    expect(r.output).not.toContain('/usr/local/');
+    expect(r.output).toMatch(/^0$/m);
+    expect(r.output).toMatch(/^b$/m);
+  }, 60000);
+
+  it('runs an executable without #! under /bin/sh, as execvp does (an empty debconf config)', async () => {
+    await fs.writeFile('/tmp/empty.cfg', '', { mode: 0o755 });
+    await fs.writeFile('/tmp/nosb.cfg', 'echo "nosb $1 [$2]"\n', { mode: 0o755 });
+    // debconf's open2: the child's stdin is a pipe the parent keeps open while it reads
+    const perl = `/usr/bin/perl -e 'use IPC::Open2; for my $f ("/tmp/empty.cfg", "/tmp/nosb.cfg") { my $p = open2(my $o, my $i, $f, "configure", ""); my @l = <$o>; waitpid $p, 0; print "$f: @l status=$?\\n" }'`;
+    const r = await run(shell, `/usr/bin/timeout 60 ${perl}`);
+    expect(r.output).toContain('/tmp/empty.cfg:  status=0');
+    expect(r.output).toContain('/tmp/nosb.cfg: nosb configure []');
+  }, 120000);
 });
 
 const net = process.env.SHIRO_DEBIAN_NET === '1';

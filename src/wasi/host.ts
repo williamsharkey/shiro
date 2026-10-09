@@ -209,7 +209,9 @@ function installWasiSyscalls(kernel: Kernel): void {
   kernel.registerSyscalls([A.SYS_stat, A.SYS_lstat, A.SYS_newfstatat, A.SYS_access, A.SYS_faccessat], Object.assign(binCommandStat, { passSync: binCommandPasses }));
 }
 
-const BIN_DIR = /^\/(?:usr\/)?(?:local\/)?s?bin\/([^/]+)$/;
+// The paths SYS_shiro_execve runs a Shiro command by (not /usr/local/...: a
+// PATH search must move on from there to a real file a package installed)
+const BIN_DIR = /^\/(?:usr\/)?s?bin\/([^/]+)$/;
 
 /**
  * The Shiro command a missing /bin/NAME path stands for, if any. Not one an
@@ -254,6 +256,11 @@ async function binCommandStat(proc: Process, nr: number, args: ArrayLike<number>
   const name = binCommandOf(kernel, p);
   if (name === null) return undefined;
   if ((await kernel.statPath(proc, p as string, false)) !== -A.ENOENT) return undefined;
+  // A real /bin/NAME or /usr/bin/NAME (Debian's cat) is what execve runs: a
+  // stat of /usr/sbin/cat claiming a file would stop bash's PATH search there
+  for (const real of [`/bin/${m[1]}`, `/usr/bin/${m[1]}`]) {
+    if (real !== p && typeof (await kernel.statPath(proc, real)) !== 'number') return undefined;
+  }
   if (nr === A.SYS_access || nr === A.SYS_faccessat) return 0;
   const now = Date.now();
   A.encodeStat({

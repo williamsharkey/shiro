@@ -626,7 +626,7 @@ export function inodeStat(fs: FileSystem, path: string): KStat | undefined {
 
 function inodeKStat(ino: Inode): KStat {
   return {
-    dev: 1, ino: inodeNumber(ino.path), mode: S_IFREG | (ino.mode & 0o7777), nlink: 1, uid: 1000, gid: 1000, rdev: 0,
+    dev: 1, ino: inodeNumber(ino.path), mode: S_IFREG | (ino.mode & 0o7777), nlink: linkCount(ino.path), uid: 1000, gid: 1000, rdev: 0,
     size: ino.size, blksize: 4096, blocks: Math.ceil(ino.size / 512),
     atimeMs: ino.atimeMs ?? ino.mtimeMs, mtimeMs: ino.mtimeMs, ctimeMs: ino.ctimeMs,
     atimeNs: ino.atimeMs === null ? ino.mtimeNs : ino.atimeNs, mtimeNs: ino.mtimeNs,
@@ -675,10 +675,30 @@ export function inodeNumber(path: string): number {
  * is removed or replaced gets a fresh number.
  */
 export function shareInodeNumber(from: string, to: string): void {
-  inoNumbers.set(to, inodeNumber(from));
+  const n = inodeNumber(from);
+  forgetInodeNumber(to);
+  inoNumbers.set(to, n);
+  let names = linkNames.get(n);
+  if (!names) { names = new Set([from]); linkNames.set(n, names); }
+  names.add(to);
 }
 export function forgetInodeNumber(path: string): void {
+  const n = inoNumbers.get(path);
   inoNumbers.delete(path);
+  const names = n === undefined ? undefined : linkNames.get(n);
+  if (names) { names.delete(path); if (names.size < 2) linkNames.delete(n!); }
+}
+
+/** The names link() gave one inode number (only numbers with two or more). */
+const linkNames = new Map<number, Set<string>>();
+
+/**
+ * st_nlink of a regular file: how many names link() gave it (shadow's
+ * lock, link(group.PID, group.lock), checks that the count went to 2).
+ */
+export function linkCount(path: string): number {
+  const n = inoNumbers.get(path);
+  return (n === undefined ? undefined : linkNames.get(n)?.size) ?? 1;
 }
 
 export class RegularFile implements OpenFile {
@@ -847,6 +867,90 @@ export class DirFile implements OpenFile {
   }
   async close(): Promise<void> {}
   closeSync(): boolean { return true; }
+}
+
+// ── timerfd ──────────────────────────────────────────────────────────────────
+
+/**
+ * timerfd(2): readable once the timer expires; a read returns how many times
+ * it expired since the last read (an interval timer keeps counting). Times
+ * are kept on the kernel's own clock (performance.now() ms); the syscall
+ * converts what the guest asked for.
+ */
+export class TimerFile implements OpenFile {
+  kind: OpenFileKind = 'dev';
+  private deadline = 0;  // 0: disarmed
+  private interval = 0;
+  private expired = 0n;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private listeners = new ReadyListeners();
+  private waiters = new Set<() => void>();
+  constructor(public readonly clockid: number, public flags: number) {}
+  private static now(): number { return performance.now(); }
+  /** Moves expirations up to now into `expired`, re-arms or disarms. */
+  private advance(now = TimerFile.now()): void {
+    if (!this.deadline || now < this.deadline) return;
+    if (this.interval > 0) {
+      const n = Math.floor((now - this.deadline) / this.interval) + 1;
+      this.expired += BigInt(n);
+      this.deadline += n * this.interval;
+    } else {
+      this.expired += 1n;
+      this.deadline = 0;
+    }
+  }
+  private schedule(): void {
+    if (this.timer !== undefined) clearTimeout(this.timer);
+    this.timer = undefined;
+    if (!this.deadline) return;
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      this.advance();
+      if (this.expired > 0n) {
+        for (const w of [...this.waiters]) w();
+        this.listeners.fire();
+      }
+      this.schedule();
+    }, Math.max(0, this.deadline - TimerFile.now()));
+  }
+  /** Arms (value > 0, ms from now) or disarms (value 0); returns the old [value, interval]. */
+  set(value: number, interval: number): [number, number] {
+    const old = this.get();
+    this.expired = 0n;
+    this.interval = value > 0 ? Math.max(0, interval) : 0;
+    this.deadline = value > 0 ? TimerFile.now() + value : 0;
+    this.schedule();
+    return old;
+  }
+  /** Time to the next expiration (0: disarmed) and the interval, in ms. */
+  get(): [number, number] {
+    this.advance();
+    return [this.deadline ? Math.max(this.deadline - TimerFile.now(), 1e-6) : 0, this.interval];
+  }
+  async read(buf: Uint8Array, signal?: AbortSignal): Promise<number> {
+    if (buf.length < 8) return -EINVAL;
+    for (;;) {
+      this.advance();
+      if (this.expired > 0n) break;
+      if (this.flags & O_NONBLOCK) return -EAGAIN;
+      if (!(await abortableWait(this.waiters, signal))) return -EINTR;
+    }
+    new DataView(buf.buffer, buf.byteOffset, 8).setBigUint64(0, this.expired, true);
+    this.expired = 0n;
+    return 8;
+  }
+  async write(): Promise<number> { return -EINVAL; }
+  poll(events: number): number {
+    this.advance();
+    return (this.expired > 0n ? POLLIN : 0) & events;
+  }
+  onReady(cb: () => void): () => void { return this.listeners.add(cb); }
+  async stat(): Promise<KStat> { return charDevStat(0); }
+  async close(): Promise<void> {
+    if (this.timer !== undefined) clearTimeout(this.timer);
+    this.timer = undefined;
+    for (const w of [...this.waiters]) w();
+  }
 }
 
 // ── eventfd ──────────────────────────────────────────────────────────────────

@@ -1,4 +1,5 @@
 import { stripComments } from './shell-comments';
+import * as fifo from './shell-fifo';
 import { groupStatements, trimCommand } from './shell-statements';
 import { printfFormat } from './utils/printf';
 import { evalArith, ArithError, type ArithEnv } from './utils/arith';
@@ -138,8 +139,10 @@ const fdOfRef = (target: string): number | null => (target.startsWith(FD_REF) ? 
  * (`dup`, relative to this shell), or a stream it inherited (`writer`: what a
  * `dup` of the parent's pointed at when this shell was forked, so
  * `exec 3>&1 >/dev/null; sh -c 'echo x >&3'` reaches the parent's stdout).
+ * `fifo`: a named pipe's write end this shell opened (exec N>fifo); `owner`
+ * closes it when the entry goes.
  */
-type OutFd = { path: string } | { dup: 1 | 2 } | { writer: (s: string) => void };
+type OutFd = { path: string; fifo?: import('./kernel/fd').OpenFile; owner?: Shell } | { dup: 1 | 2 } | { writer: (s: string) => void };
 
 export interface BackgroundJob {
   id: number;
@@ -300,6 +303,9 @@ function installHistoryFlush(): void {
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
   }
 }
+
+/** Cheap pre-check for expandPrefixAssignments: starts with NAME= and has another NAME= later (a superset: false hits just take the full pass) */
+const ORDERED_PREFIX_RE = /^\s*[A-Za-z_][A-Za-z0-9_]*\+?=[\s\S]*\s[A-Za-z_][A-Za-z0-9_]*\+?=/;
 
 class BreakSignal { constructor(public levels: number = 1) {} }
 /** Sentinel thrown by `continue [N]` inside loops */
@@ -555,6 +561,12 @@ export class Shell {
   exportedUnset = new Set<string>();
   /** When this shell process started (performance.now()), for `times` */
   startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  /**
+   * An interactive shell running as a kernel process on a pty: job control on
+   * that pty (its jobs get their own process groups and the terminal; Ctrl-Z
+   * stops them), and where job messages go.
+   */
+  kernelTty?: { tty: import('./kernel/pty').ProcessTty; writeOutput: (s: string) => void };
   /** A fork of another shell (a subshell, or a new shell process) */
   isSubshell = false;
   /** In a subshell: the traps of the shell it was forked from, for a plain `trap` */
@@ -1258,7 +1270,9 @@ export class Shell {
     // `< <(cmd)`: the output of cmd
     const ps = /^<\(([\s\S]+)\)$/.exec(target);
     if (ps) return this.procSubOutput(ps[1], () => {});
-    const data = await this.fs.readFile(this.fs.resolvePath(target, this.cwd), 'utf8');
+    const path = this.fs.resolvePath(target, this.cwd);
+    if (await fifo.isFifo(this, path)) return fifo.readFifo(this, path);
+    const data = await this.fs.readFile(path, 'utf8');
     return typeof data === 'string' ? data : new TextDecoder().decode(data as any);
   }
 
@@ -1321,6 +1335,12 @@ export class Shell {
     return null;
   }
 
+  /** Fd n is being replaced or closed: close a named pipe end this shell opened for it */
+  private dropFd(n: number, keep?: OutFd): void {
+    const e = this.userFds.get(n);
+    if (e && 'fifo' in e && e.fifo && e.owner === this && e !== keep) fifo.dropHeld(e.fifo);
+  }
+
   /** exec with only redirections: update the shell's fd tables */
   private async applyExecRedirects(redirects: Redirect[]): Promise<string | null> {
     if (this.flushFdWrites) await this.flushFdWrites();
@@ -1330,15 +1350,22 @@ export class Shell {
       if (ref !== null) {
         const e = this.resolveOutFd(ref);
         if (!e) return `${ref}: Bad file descriptor`;
-        this.userFds.set(fd, e);
+        this.dropFd(fd, e);
+        this.userFds.set(fd, 'fifo' in e ? { ...e, owner: undefined } : e);
         return null;
       }
       if (target === '/dev/stdout') { this.userFds.set(fd, this.resolveOutFd(1)!); return null; }
       if (target === '/dev/stderr') { this.userFds.set(fd, this.resolveOutFd(2)!); return null; }
       const path = this.fs.resolvePath(target, this.cwd);
-      if (truncate) pending.push(this.fs.writeFile(path, ''));
-      else pending.push(this.fs.appendFile(path, ''));
+      this.dropFd(fd);
       this.userFds.set(fd, { path });
+      pending.push((async () => {
+        if (await fifo.isFifo(this, path)) {
+          // A named pipe: open its write end now (it waits for a reader), as exec does
+          this.userFds.set(fd, { path, fifo: await fifo.openHeldFifoEnd(this, path, 'w'), owner: this });
+        } else if (truncate) await this.fs.writeFile(path, '');
+        else await this.fs.appendFile(path, '');
+      })());
       return null;
     };
     for (const r of redirects) {
@@ -1359,11 +1386,11 @@ export class Shell {
           else {
             const e = this.resolveOutFd(to);
             if (!e) err = `${to}: Bad file descriptor`;
-            else this.userFds.set(r.fd!, e);
+            else { this.dropFd(r.fd!, e); this.userFds.set(r.fd!, 'fifo' in e ? { ...e, owner: undefined } : e); }
           }
           break;
         }
-        case '>&-': this.userFds.delete(r.fd!); this.fileDescriptors.delete(r.fd!); break;
+        case '>&-': this.dropFd(r.fd!); this.userFds.delete(r.fd!); this.fileDescriptors.delete(r.fd!); break;
         case '<':
           if (fdOfRef(r.target) === null) {
             pending.push(this.readInputRedirect(r.target).then((content) => { this.fileDescriptors.set(0, { content, offset: 0 }); }));
@@ -1385,11 +1412,13 @@ export class Shell {
 
   /** The shell's fds 3-9 as programs it starts inherit them (runKernelPipeline inheritFds) */
   private inheritableFds(writeStdout: (s: string) => void, writeStderr: (s: string) => void) {
-    const out: { fd: number; path?: string; write?: (s: string) => void; content?: string }[] = [];
+    const out: { fd: number; path?: string; file?: OpenFile; write?: (s: string) => void; content?: string }[] = [];
     for (let n = 3; n <= 9; n++) {
       const e = this.userFds.get(n);
       const inp = this.fileDescriptors.get(n);
-      if (e && 'path' in e) out.push({ fd: n, path: e.path });
+      // (a named pipe's open end itself: opening the path again would be another writer)
+      if (e && 'path' in e && e.fifo) out.push({ fd: n, file: e.fifo });
+      else if (e && 'path' in e) out.push({ fd: n, path: e.path });
       else if (e && 'writer' in e) out.push({ fd: n, write: e.writer });
       else if (e && 'dup' in e) out.push({ fd: n, write: this.fdBase ? this.fdBase[e.dup] : e.dup === 1 ? writeStdout : writeStderr });
       else if (inp) out.push({ fd: n, content: inp.content.slice(inp.offset) });
@@ -1413,6 +1442,10 @@ export class Shell {
       return true;
     }
     await this.pendingFdOps;
+    if (e.fifo) {
+      if (text) await fifo.writeOpenFifo(e.fifo, text.replace(/\r\n/g, '\n'));
+      return true;
+    }
     if (text) await this.fs.appendFile(e.path, text.replace(/\r\n/g, '\n'));
     return true;
   }
@@ -1649,6 +1682,21 @@ export class Shell {
         continue;
       }
 
+      // time [-p] PIPELINE: times the whole pipeline (( … ), { …; }, a | b) and
+      // reports on stderr after it (a bare `time` is the builtin below)
+      const timed = /^time(\s+-p)?\s+(?=\S)/.exec(trimmedCmd);
+      if (timed && !this.disabledBuiltins.has('time')) {
+        const start = performance.now();
+        exitCode = await this.execute(trimmedCmd.slice(timed[0].length), writeStdout, stderrWriter, false, terminalOverride, true);
+        const elapsed = (performance.now() - start) / 1000;
+        stderrWriter(timed[1]
+          ? `real ${elapsed.toFixed(2)}\r\nuser 0.00\r\nsys 0.00\r\n`
+          : `\r\nreal\t${Math.floor(elapsed / 60)}m${(elapsed % 60).toFixed(3)}s\r\nuser\t0m0.000s\r\nsys\t0m0.000s\r\n`);
+        this.lastExitCode = exitCode;
+        this.env['?'] = String(exitCode);
+        continue;
+      }
+
       // ! PIPELINE: run it and negate its status (! ( … ), ! { …; }, ! a | b)
       if (/^!\s+\S/.test(trimmedCmd) && !/^!\s+\[\[/.test(trimmedCmd)) {
         exitCode = await this.execute(trimmedCmd.replace(/^!\s+/, ''), writeStdout, stderrWriter, false, terminalOverride, true);
@@ -1694,7 +1742,10 @@ export class Shell {
           pipeline.push(keepRaw(seg) ? seg.trim() : await this.expandWords(seg, stderrWriter));
         }
       } else {
-        const ordered = rawSegments.length === 1 ? await this.expandPrefixAssignments(compound.command, stderrWriter) : null;
+        // Only `a=1 b=$a cmd` (two or more leading assignments, one expanding) needs the ordered pass;
+        // checking that first keeps a tokenizer pass and an await off every other command
+        const ordered = rawSegments.length === 1 && ORDERED_PREFIX_RE.test(compound.command) && /[$`]/.test(compound.command)
+          ? await this.expandPrefixAssignments(compound.command, stderrWriter) : null;
         pipeline = this.parsePipeline(ordered ?? await this.expandWords(quoteAssignmentValues(compound.command), stderrWriter));
       }
 
@@ -2292,7 +2343,8 @@ export class Shell {
             }
           }
           // An explicit redirect doesn't consume the enclosing loop's piped stdin
-          const hasPipeStdin = redirectInput === undefined && '__PIPE_STDIN' in this.env;
+          // (nor does `cmd | read`: the pipe from the stage before is its stdin)
+          const hasPipeStdin = redirectInput === undefined && i === 0 && '__PIPE_STDIN' in this.env;
           // read -u N with N opened on this command (read -u 3 3<file)
           const fdOpen = readFd >= 0 ? redirects.find(r => r.type === 'open' && r.mode === '<' && r.fd === readFd) : undefined;
           if (fdOpen) {
@@ -3874,7 +3926,8 @@ export class Shell {
   /** Write a redirect's file; a failure (a directory, a bad path) is reported and fails the command */
   private async redirectWrite(path: string, shown: string, text: string, append: boolean, writeStderr: (s: string) => void): Promise<void> {
     try {
-      if (append) await this.fs.appendFile(path, text);
+      if (await fifo.isFifo(this, path)) await fifo.writeFifo(this, path, text);
+      else if (append) await this.fs.appendFile(path, text);
       else await this.fs.writeFile(path, text);
     } catch (e: any) {
       const msg = e?.code === 'EISDIR' || /EISDIR/.test(e?.message ?? '') ? 'Is a directory'
@@ -3888,7 +3941,7 @@ export class Shell {
   private async clobberOk(redir: Redirect, path: string, writeStderr: (s: string) => void): Promise<boolean> {
     if (redir.force || !this.options.has('noclobber')) return true;
     const st = await this.fs.stat(path).catch(() => null);
-    if (st && !st.isDirectory() && st.isFile()) {
+    if (st && !st.isDirectory() && st.isFile() && !st.isFIFO?.()) {
       writeStderr(`shiro: ${redir.target}: cannot overwrite existing file\r\n`);
       this.redirectFailed = true;
       return false;
@@ -5988,6 +6041,7 @@ export class Shell {
     writeStdout: (s: string) => void, writeStderr?: (s: string) => void,
   ): Promise<number> {
     this.injectedStdin = stdin;
+    this.env['__PIPE_STDIN'] = stdin; // read takes it record by record, in any statement
     this.kernelStdinLive = false;
     return this.execute(line, writeStdout, writeStderr, false, undefined, true);
   }
@@ -6096,10 +6150,22 @@ export class Shell {
 
   /** A subshell has finished with `code`: its EXIT trap runs now (an `exit` in it already ran it) */
   async finishSubshell(code: number, writeStdout: (s: string) => void, writeStderr: (s: string) => void): Promise<number> {
-    if (!this.traps.has('EXIT')) return code;
-    this.lastExitCode = code;
-    this.env['?'] = String(code);
-    return (await this.runExitTrap(writeStdout, writeStderr)) ?? code;
+    if (this.traps.has('EXIT')) {
+      this.lastExitCode = code;
+      this.env['?'] = String(code);
+      code = (await this.runExitTrap(writeStdout, writeStderr)) ?? code;
+    }
+    this.closeOwnFds();
+    return code;
+  }
+
+  /** This shell is done: close the named pipe ends it opened (exec 3>fifo), so their readers see EOF */
+  closeOwnFds(): void {
+    for (const n of [...this.userFds.keys()]) {
+      this.dropFd(n);
+      const e = this.userFds.get(n);
+      if (e && 'fifo' in e && e.owner === this) this.userFds.delete(n);
+    }
   }
 
   private async inSubshell(fn: (sub: Shell) => Promise<number>): Promise<number> {
@@ -6157,6 +6223,7 @@ export class Shell {
     }
     const restoreFds = () => {
       for (const [n, s] of fdSaved) {
+        this.dropFd(n, s.out);
         if (s.inp === undefined) this.fileDescriptors.delete(n); else this.fileDescriptors.set(n, s.inp);
         if (s.out === undefined) this.userFds.delete(n); else this.userFds.set(n, s.out);
       }
@@ -7344,7 +7411,8 @@ export class Shell {
       captureStderr,
       writeStdout: crlf(writeStdout),
       writeStderr: crlf(writeStderr),
-      terminal: ks ? undefined : terminal,
+      // (a shell on its own pty does job control there; one on pipes uses its fds)
+      terminal: this.kernelTty ?? (ks ? undefined : terminal),
       fds,
       command: pipeline.slice(i, last + 1).map(x => x.trim()).join(' | '),
       cwd: this.cwd,
@@ -7360,7 +7428,13 @@ export class Shell {
    * when the pipeline has anything else, so the in-page background path runs it.
    */
   private async launchKernelBackground(command: string, writeStdout: (s: string) => void, term: any): Promise<boolean> {
-    if (!term?.tty || /[;&]|\|\||\$\(|`/.test(command)) return false;
+    // A shell that is a kernel process: on its pty (an interactive sh in a
+    // screen window), or on its own fds when its output goes there (a script)
+    const ks = this.kernelStdio;
+    if (this.kernelTty) term = this.kernelTty;
+    else if (ks) term = undefined;
+    const onFds = !term && !!ks && writesTo(writeStdout, ks.out);
+    if ((!term?.tty && !onFds) || /[;&]|\|\||\$\(|`/.test(command)) return false;
     const { mayBeKernelProgram, resolveKernelProgram, runKernelPipeline } = _shellKernel ?? await loadShellKernel();
     const segments = this.parsePipeline(await this.expandWords(command, () => {}));
     const programs = [];
@@ -7376,9 +7450,16 @@ export class Shell {
       programs.push(prog);
     }
     if (programs.length === 0) return false;
+    if (onFds) await ks!.flush();
+    // Without job control a background job's stdin is /dev/null (POSIX 2.9.3.1); a script prints no [N] pid
+    const quiet = onFds && !this.options.has('monitor') && !this.interactiveFlag;
     await runKernelPipeline(this, programs, {
-      captureStdout: false, captureStderr: false, writeStdout, writeStderr: writeStdout,
+      captureStdout: false, captureStderr: false,
+      writeStdout: quiet ? () => {} : writeStdout, writeStderr: quiet ? () => {} : writeStdout,
+      stdin: onFds && !this.options.has('monitor') ? '' : undefined,
+      fds: onFds ? { 0: ks!.file(0), 1: ks!.file(1), 2: ks!.file(2) } : undefined,
       terminal: term, command, background: true, cwd: this.cwd, env: this.exportedEnv(),
+      inheritFds: onFds ? this.inheritableFds(writeStdout, writeStdout) : undefined,
     });
     const job = [...this.backgroundJobs.values()].pop();
     if (job?.pids?.length) this.env['!'] = String(job.pids[job.pids.length - 1]);
@@ -7500,12 +7581,14 @@ export class Shell {
       const m = /^#!\s*(\S+)(?:\s+(?:-S\s+)?(\S+))?/.exec(content);
       const base = (p?: string) => p?.slice(p.lastIndexOf('/') + 1) ?? '';
       const interp = m ? (base(m[1]) === 'env' ? base(m[2]) : base(m[1])) : '';
-      if (!((interp === 'sh' || interp === 'bash') && !packageShadows(this.fs).has(interp))) await fillStdin();
+      // No #! line: a shell script (the default below) unless it turns out to be WASM or JavaScript
+      if (m && !((interp === 'sh' || interp === 'bash') && !packageShadows(this.fs).has(interp))) await fillStdin();
     }
 
     // Check if this is a WASM binary — run through WASI runtime
     if (content.charCodeAt(0) === 0x00 && content.charCodeAt(1) === 0x61 &&
         content.charCodeAt(2) === 0x73 && content.charCodeAt(3) === 0x6d) {
+      await fillStdin();
       return this.executeWasmBinary(resolvedPath, args, ctx, writeStdout, writeStderr);
     }
 
@@ -7554,6 +7637,7 @@ export class Shell {
     if (content.charCodeAt(0) === 0x7f && content.charCodeAt(1) === 0x45 /* E */ &&
         content.charCodeAt(2) === 0x4c /* L */ && content.charCodeAt(3) === 0x46 /* F */) {
       // Blink (wasm) when the page can run it, else the built-in src/x86.
+      await fillStdin();
       const { runElf } = await import('./x86-engine');
       return runElf(resolvedPath, args, {
         fs: this.fs, cwd: this.cwd, args, env: this.env, shell: this,
@@ -7598,6 +7682,7 @@ export class Shell {
         (trimmedContent.endsWith('.js') || trimmedContent.endsWith('.mjs') || trimmedContent.endsWith('.ts'))) {
       try {
         const targetContent = await this.fs.readFile(trimmedContent, 'utf8') as string;
+        await fillStdin();
         return this.executeNodeScript(trimmedContent, targetContent, args, ctx, writeStdout, writeStderr);
       } catch (e: any) {
         // Target doesn't exist, fall through
@@ -7610,6 +7695,7 @@ export class Shell {
         content.trimStart().startsWith('import ') ||
         content.trimStart().startsWith('var ') ||
         content.trimStart().startsWith('let ')) {
+      await fillStdin();
       return this.executeNodeScript(resolvedPath, content, args, ctx, writeStdout, writeStderr);
     }
 
@@ -7754,6 +7840,9 @@ export class Shell {
   /** Stdin for the next command this shell runs (`… | sh -c CMD`) */
   setInjectedStdin(stdin: string): void {
     this.injectedStdin = stdin;
+    // `read` in any statement takes it record by record (a script's first
+    // statement isn't always the one that reads: `exec 3>&1; read x`)
+    this.env['__PIPE_STDIN'] = stdin;
     this.kernelStdinLive = false;
   }
 
@@ -7808,6 +7897,7 @@ export class Shell {
     this.env['?'] = String(exitCode);
     const trapExit = await this.runExitTrap(writeStdout, writeStderr, terminal);
     if (trapExit !== undefined) { exitCode = trapExit; this.env['?'] = String(exitCode); }
+    this.closeOwnFds();
     this.endProcess();
     return exitCode;
   }
