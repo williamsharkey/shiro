@@ -274,11 +274,14 @@ export class Kernel {
     let head: string;
     try {
       const st = await fs.stat(abs);
-      if (st.type !== 'file' || st.size < 3) return null;
+      if (st.type !== 'file') return null;
       const raw = await fs.readFile(abs);
       const bytes = typeof raw === 'string' ? enc.encode(raw.slice(0, 256)) : raw.subarray(0, 256);
-      if (bytes[0] !== 0x23 || bytes[1] !== 0x21) return null;
-      head = A.decodeText(bytes);
+      if (bytes[0] === 0x7f && bytes[1] === 0x45 && bytes[2] === 0x4c && bytes[3] === 0x46) return null;
+      // No #! line (an empty file too): ENOEXEC, on which execvp, posix_spawnp,
+      // perl and the shells run the file with /bin/sh. debconf runs a
+      // package's empty config this way, with its stdin a pipe left open.
+      head = bytes[0] === 0x23 && bytes[1] === 0x21 ? A.decodeText(bytes) : '#!/bin/sh';
     } catch {
       return null;
     }
