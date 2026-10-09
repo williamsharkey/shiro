@@ -644,6 +644,16 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    go once the kernel has destroyed it. Processes in other Blink instances
    (a separate worker) can't share a segment. Test: fixtures/x86/sysvshm.c
    (with POSIX shm across fork).
+70. `sysinfo(2)` is the kernel's: uptime, loads, and the same memory totals
+   `free` and /proc/meminfo report. A kernel without it gets Blink's own
+   answer. SHIRO_BLINK_PROFILE's address table has 2^17 slots, and addresses
+   that find none are counted apart; they used to be lumped into slot 0,
+   which made one address look like 95% of the time. An engine abort's
+   report (the guest's stderr and dmesg, "blink: aborted …") ends with the
+   last lines of Blink's own stderr, so an assertion names its file and line.
+   `vendor/blink/blink.symbols` (wasm function index → name, from
+   `--emit-symbol-map`) comes with each build, for naming `wasm-function[N]`
+   frames in a stack.
 
 The page compiles blink.wasm once and gives the `WebAssembly.Module` to every
 Blink worker (src/x86-engine/blink.ts `blinkWasmModule`, host.mjs

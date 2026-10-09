@@ -47,6 +47,10 @@ emcc -O2 o//blink/blink.o o//blink/blink.a -lm -pthread \
   -sPTHREAD_POOL_SIZE=4 -sSTACK_SIZE=1MB -sALLOW_TABLE_GROWTH \
   -sEXPORTED_RUNTIME_METHODS=callMain,FS,ENV,HEAPU8 -sEXPORTED_FUNCTIONS=_main,_malloc \
   --js-library "$HERE/shiro-net.js" --js-library "$HERE/shiro-kernel.js" \
+  --emit-symbol-map \
   -fno-builtin-exit 2> >(grep -v 'Wpthreads-mem-growth' >&2)
+# wasm function index -> name, for engine stacks ("wasm-function[979]");
+# kept with the sources, not served
+mv "$OUT/blink.mjs.symbols" "$HERE/blink.symbols" 2>/dev/null || mv "$OUT"/*.symbols "$HERE/blink.symbols"
 
 ls -la "$OUT"

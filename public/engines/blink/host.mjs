@@ -535,7 +535,9 @@ async function run(msg) {
   progPath = msg.path || '';
   i32 = new Int32Array(msg.sab, 0, CH_DATA / 4);
   data = new Uint8Array(msg.sab, CH_DATA);
+  const errTail = [];
   const fail = (text, code) => {
+    if (errTail.length) text = `${text}\n${errTail.join('\n')}`;
     // The page logs it to the kernel log (dmesg): an engine abort or out of memory
     if (!exiting) post({ type: 'blink-abort', text: String(text) });
     if (!exiting) writeFd(2, enc.encode(`blink: ${text}\n`));
@@ -699,7 +701,9 @@ async function run(msg) {
       thisProgram: 'blink',
       noInitialRun: true,
       print: () => {},
-      printErr: (s) => { if (msg.debug) console.error(s); },
+      // Blink's own messages: logged with TABCOMPUTER_BLINK_DEBUG=1, and the
+      // last few go with an abort's report (an assertion's file:line)
+      printErr: (s) => { errTail.push(String(s)); if (errTail.length > 12) errTail.shift(); if (msg.debug) console.error(s); },
       // Blink calls shiroExit on this thread as soon as the guest exits;
       // onExit only fires if emscripten's own teardown completes.
       shiroExit: (code) => exitGuest(code),
