@@ -852,11 +852,15 @@ export class KDatagramSocket implements OpenFile {
     return this.remote ? this.sendto(buf, 0, this.remote) : Promise.resolve(-EDESTADDRREQ);
   }
 
+  /** The source address came from a connect's route (a later connect picks again), not a bind */
+  private routedLocal = false;
+
   connect(addr: SockAddr): number {
     this.remote = { ...addr };
-    // A connected datagram socket has a source address (getsockname)
-    if (!this.local || this.local.address === '::' || this.local.address === '0.0.0.0') {
+    // A connected datagram socket has a source address (getsockname), the route's for each connect
+    if (!this.local || this.routedLocal || this.local.address === '::' || this.local.address === '0.0.0.0') {
       this.local = { family: this.domain, address: localAddressFor({ ...addr, family: this.domain }), port: this.local?.port || this.stack.ephemeral() };
+      this.routedLocal = true;
     }
     return 0;
   }
