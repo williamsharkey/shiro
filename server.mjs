@@ -11,6 +11,7 @@ import { join, extname } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { randomBytes, createHmac, createHash, timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import { realpathSync, readFileSync } from 'node:fs';
 import net from 'node:net';
 import dns from 'node:dns/promises';
 
@@ -299,6 +300,40 @@ function handleOAuthCallback(req, res) {
   res.end(html);
 }
 
+// --- Branding of the app shell ---
+// The Unix edition (desktop UI: every host but shiro.computer, src/ui-mode.ts)
+// is "tabcomputer": src/brand.json names it. Link previews don't run JS, so the
+// shared index.html gets its title and meta tags here. The file is read from
+// src/ next to this script (a checkout) or from STATIC_DIR (the build copies it
+// into dist/; tabcomputer.com's releases carry only dist/ and server.mjs).
+// Without it nothing changes.
+const BRAND = (() => {
+  for (const at of [new URL('./src/brand.json', import.meta.url), join(STATIC_DIR, 'brand.json')]) {
+    try { return JSON.parse(readFileSync(at, 'utf8')); } catch {}
+  }
+  return null;
+})();
+
+/** index.html with the brand's title and meta tags, for hosts that get the desktop. */
+export function brandAppShell(html, host, brand = BRAND) {
+  const hostname = String(host || '').split(':')[0].toLowerCase();
+  if (!brand || hostname === 'shiro.computer' || hostname.endsWith('.shiro.computer')) return html;
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  const url = `https://${brand.domain}/`;
+  const tags = [
+    `<meta name="description" content="${esc(brand.description)}" />`,
+    `<meta property="og:title" content="${esc(brand.name)}" />`,
+    `<meta property="og:description" content="${esc(brand.description)}" />`,
+    `<meta property="og:url" content="${esc(url)}" />`,
+    `<meta property="og:type" content="website" />`,
+    `<meta property="og:site_name" content="${esc(brand.name)}" />`,
+    `<meta name="twitter:card" content="summary" />`,
+    `<meta name="application-name" content="${esc(brand.name)}" />`,
+    `<meta name="apple-mobile-web-app-title" content="${esc(brand.name)}" />`,
+  ].join('\n  ');
+  return html.replace(/<title>[^<]*<\/title>/, `<title>${esc(brand.name)}</title>\n  ${tags}`);
+}
+
 // --- Static file server ---
 async function handleStatic(req, res) {
   let pathname = new URL(req.url, 'http://localhost').pathname;
@@ -328,7 +363,7 @@ async function handleStatic(req, res) {
   }
 
   try {
-    const data = await readFile(filePath);
+    let data = await readFile(filePath);
     const ext = extname(filePath);
     // Isolation headers go on the app shell (index.html, also the SPA fallback for
     // /s/:id) and on scripts, which a same-origin Worker needs to start inside an
@@ -336,12 +371,111 @@ async function handleStatic(req, res) {
     // the app in iframes and need nothing from SharedArrayBuffer.
     const isAppShell = filePath === join(STATIC_DIR, 'index.html');
     const isolation = isAppShell || ext === '.js' || ext === '.mjs' ? isolationHeaders() : {};
-    res.writeHead(200, { 'content-type': MIME[ext] || 'application/octet-stream', ...staticHeaders, ...isolation });
+    if (isAppShell) data = Buffer.from(brandAppShell(data.toString('utf8'), req.headers['host']));
+    // The streamed Debian rootfs's chunks are content-addressed (named by sha256)
+    const immutable = pathname.startsWith('/debian/chunks/') ? { 'cache-control': 'public, max-age=31536000, immutable' } : {};
+    res.writeHead(200, { 'content-type': MIME[ext] || 'application/octet-stream', ...staticHeaders, ...isolation, ...immutable });
     res.end(data);
   } catch {
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', ...staticHeaders });
     res.end('Not found');
   }
+}
+
+// --- Debian package mirror (docs/DEBIAN.md "Package mirror") ---
+// apt inside the page fetches http://HOST/PATH as /debian/mirror/HOST/PATH
+// (src/debian/apt-method.ts), so it needs no TCP relay. Only the hosts in
+// SHIRO_DEBIAN_MIRRORS are served ("host=https://upstream,host2=..."; by
+// default deb.debian.org and security.debian.org from their own CDNs), and
+// only archive paths (dists/, pool/). apt verifies everything against the
+// signed InRelease, so the mirror needs no trust. Files under pool/ and
+// by-hash/ are immutable and kept in SHIRO_DEBIAN_CACHE (when set) forever;
+// other index files for SHIRO_DEBIAN_INDEX_TTL seconds (default 600).
+function debianMirrorConfig() {
+  const upstreams = new Map([['deb.debian.org', 'https://deb.debian.org'], ['security.debian.org', 'https://security.debian.org']]);
+  if (process.env.SHIRO_DEBIAN_MIRRORS) {
+    upstreams.clear();
+    for (const part of process.env.SHIRO_DEBIAN_MIRRORS.split(',')) {
+      const i = part.indexOf('=');
+      if (i > 0) upstreams.set(part.slice(0, i).trim(), part.slice(i + 1).trim().replace(/\/+$/, ''));
+    }
+  }
+  return {
+    upstreams,
+    cacheDir: process.env.SHIRO_DEBIAN_CACHE || '',
+    indexTtl: Number(process.env.SHIRO_DEBIAN_INDEX_TTL || 600) * 1000,
+  };
+}
+const DEBIAN_MIRROR = debianMirrorConfig();
+const DEBIAN_PATH = /^\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._+~%-]+)*\/(?:dists|pool)\/[A-Za-z0-9._+~%/-]+$/;
+const debianInflight = new Map();
+
+async function debianFetch(upstreamUrl, cacheFile, immutable) {
+  if (cacheFile) {
+    try {
+      const st = await stat(cacheFile);
+      if (immutable || Date.now() - st.mtimeMs < DEBIAN_MIRROR.indexTtl) {
+        return { status: 200, body: await readFile(cacheFile), lastModified: await readFile(cacheFile + '.lm', 'utf8').catch(() => '') };
+      }
+    } catch { /* not cached */ }
+  }
+  let r;
+  try {
+    r = await fetch(upstreamUrl, { redirect: 'follow' });
+  } catch (e) {
+    // Upstream down: a stale index beats none
+    if (cacheFile) {
+      try { return { status: 200, body: await readFile(cacheFile), lastModified: '' }; } catch {}
+    }
+    return { status: 502, body: Buffer.from(`upstream: ${e.message}\n`) };
+  }
+  if (!r.ok) return { status: r.status, body: Buffer.from(`upstream: ${r.status} ${r.statusText}\n`) };
+  const body = Buffer.from(await r.arrayBuffer());
+  const lastModified = r.headers.get('last-modified') || '';
+  if (cacheFile) {
+    try {
+      await mkdir(cacheFile.slice(0, cacheFile.lastIndexOf('/')), { recursive: true });
+      const tmp = `${cacheFile}.${process.pid}.${randomBytes(4).toString('hex')}`;
+      await writeFile(tmp, body);
+      await writeFile(cacheFile + '.lm', lastModified);
+      await rename(tmp, cacheFile);
+    } catch (e) { console.warn('[debian-mirror] cache write failed:', e.message); }
+  }
+  return { status: 200, body, lastModified };
+}
+
+async function handleDebianMirror(req, res, rest) {
+  const slash = rest.indexOf('/');
+  const host = slash > 0 ? rest.slice(0, slash) : '';
+  const path = slash > 0 ? rest.slice(slash) : '';
+  const upstream = DEBIAN_MIRROR.upstreams.get(host);
+  if (!upstream || !DEBIAN_PATH.test(path) || path.includes('..') || (req.method !== 'GET' && req.method !== 'HEAD')) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    return res.end('not a mirrored Debian archive path\n');
+  }
+  const immutable = path.includes('/pool/') || path.includes('/by-hash/');
+  const cacheFile = DEBIAN_MIRROR.cacheDir ? join(DEBIAN_MIRROR.cacheDir, host, path) : '';
+  const key = upstream + path;
+  let p = debianInflight.get(key);
+  if (!p) {
+    p = debianFetch(upstream + path, cacheFile, immutable).finally(() => debianInflight.delete(key));
+    debianInflight.set(key, p);
+  }
+  const r = await p;
+  const headers = {
+    'content-type': r.status === 200 ? 'application/octet-stream' : 'text/plain; charset=utf-8',
+    'cache-control': r.status === 200 && immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
+    'cross-origin-resource-policy': 'same-origin',
+  };
+  if (r.lastModified) headers['last-modified'] = r.lastModified;
+  const ims = req.headers['if-modified-since'];
+  if (r.status === 200 && ims && r.lastModified && Date.parse(ims) >= Date.parse(r.lastModified)) {
+    res.writeHead(304, headers);
+    return res.end();
+  }
+  headers['content-length'] = r.body.length;
+  res.writeHead(r.status, headers);
+  res.end(req.method === 'HEAD' ? undefined : r.body);
 }
 
 // --- WebRTC signaling ---
@@ -450,16 +584,16 @@ async function handleSignaling(req, res, pathname) {
 // CORS headers. Pool files never change under a name, so they are cached on
 // disk here and in the browser (immutable). A file a point release removed from
 // the mirror comes from snapshot.debian.org instead. The page checks sha256.
-const DEBIAN_MIRROR = process.env.SHIRO_DEBIAN_MIRROR || 'https://deb.debian.org/debian/';
+const GUI_DEB_UPSTREAM = process.env.SHIRO_DEBIAN_MIRROR || 'https://deb.debian.org/debian/';
 const DEBIAN_SNAPSHOT = process.env.SHIRO_DEBIAN_SNAPSHOT || 'https://snapshot.debian.org/archive/debian/20260712T000000Z/';
 const DEBIAN_CACHE = process.env.SHIRO_DEB_CACHE || join(tmpdir(), 'shiro-debs');
-const DEBIAN_PATH = /^pool\/(main|contrib|non-free|non-free-firmware)\/[a-z0-9]{1,4}\/[a-z0-9][a-z0-9.+-]*\/[A-Za-z0-9.+~_%-]+\.deb$/;
-const debianInflight = new Map();
+const GUI_DEBIAN_PATH = /^pool\/(main|contrib|non-free|non-free-firmware)\/[a-z0-9]{1,4}\/[a-z0-9][a-z0-9.+-]*\/[A-Za-z0-9.+~_%-]+\.deb$/;
+const GUI_debianInflight = new Map();
 
 async function handleDebian(req, res, rel) {
   if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
   rel = decodeURIComponent(rel);
-  if (!DEBIAN_PATH.test(rel) || rel.includes('..')) { res.writeHead(403); return res.end('not a Debian pool file'); }
+  if (!GUI_DEBIAN_PATH.test(rel) || rel.includes('..')) { res.writeHead(403); return res.end('not a Debian pool file'); }
   const file = join(DEBIAN_CACHE, rel.replace(/\//g, '_'));
   const send = (buf) => {
     res.writeHead(200, { 'content-type': 'application/vnd.debian.binary-package', 'content-length': buf.length,
@@ -467,10 +601,10 @@ async function handleDebian(req, res, rel) {
     res.end(req.method === 'HEAD' ? undefined : buf);
   };
   try { return send(await readFile(file)); } catch { /* not cached yet */ }
-  let p = debianInflight.get(rel);
+  let p = GUI_debianInflight.get(rel);
   if (!p) {
     p = (async () => {
-      for (const base of [DEBIAN_MIRROR, DEBIAN_SNAPSHOT]) {
+      for (const base of [GUI_DEB_UPSTREAM, DEBIAN_SNAPSHOT]) {
         const r = await upstreamFetch(base + rel).catch(() => null);
         if (r && r.ok) {
           const buf = Buffer.from(await r.arrayBuffer());
@@ -480,13 +614,30 @@ async function handleDebian(req, res, rel) {
         }
       }
       return null;
-    })().finally(() => debianInflight.delete(rel));
-    debianInflight.set(rel, p);
+    })().finally(() => GUI_debianInflight.delete(rel));
+    GUI_debianInflight.set(rel, p);
   }
   const buf = await p;
   if (!buf) { res.writeHead(404); return res.end('not found on the Debian mirror or snapshot'); }
   console.log(`[debian] ${rel} ${buf.length} bytes`);
   return send(buf);
+}
+
+/**
+ * Why the git proxy won't fetch `url`, or '' if it may: only http(s) on the
+ * default ports, and only hosts whose every address is public (not loopback,
+ * private, link-local or cloud metadata; same list as the TCP relay).
+ */
+export async function gitProxyRefusal(url, lookup = (host) => dns.lookup(host, { all: true, verbatim: true })) {
+  let u;
+  try { u = new URL(url); } catch { return 'bad url'; }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return 'only http(s)';
+  if (u.port && u.port !== '80' && u.port !== '443') return 'port not allowed';
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  let addrs;
+  try { addrs = net.isIP(host) ? [{ address: host }] : await lookup(host); } catch { return 'host not found'; }
+  if (!addrs.length || addrs.some((a) => isBlockedAddress(a.address))) return 'address not allowed';
+  return '';
 }
 
 async function handleGitProxy(req, res, targetUrl) {
@@ -508,16 +659,31 @@ async function handleGitProxy(req, res, targetUrl) {
   for (const [k, v] of Object.entries(req.headers)) {
     if (!SKIP_REQUEST_HEADERS.has(k.toLowerCase())) headers[k] = v;
   }
-  headers['host'] = new URL(targetUrl).host;
   if (body.length) headers['content-length'] = String(body.length);
 
   try {
-    const upstream = await fetch(targetUrl, {
-      method: req.method,
-      headers,
-      body: body.length ? body : undefined,
-      duplex: 'half',
-    });
+    // Redirects are followed here, each hop re-checked, so a public URL can't
+    // bounce the server to a private one.
+    let url = targetUrl;
+    let upstream;
+    for (let hop = 0; ; hop++) {
+      const refusal = await gitProxyRefusal(url);
+      if (refusal) {
+        res.writeHead(403, { 'content-type': 'application/json', ...cors });
+        return res.end(JSON.stringify({ error: refusal }));
+      }
+      headers['host'] = new URL(url).host;
+      upstream = await fetch(url, {
+        method: req.method,
+        headers,
+        body: body.length ? body : undefined,
+        duplex: 'half',
+        redirect: 'manual',
+      });
+      const next = upstream.headers.get('location');
+      if (upstream.status < 300 || upstream.status > 399 || !next || hop >= 5) break;
+      url = new URL(next, url).href;
+    }
 
     const respHeaders = { ...cors };
     for (const [k, v] of upstream.headers) {
@@ -1103,7 +1269,7 @@ const server = createServer(async (req, res) => {
   if (pathname.startsWith('/api/')) {
     return handleProxy(req, res, pathname.slice(5));
   }
-  if (pathname.startsWith('/debian/')) {
+  if (pathname.startsWith('/debian/pool/')) {
     return handleDebian(req, res, pathname.slice('/debian/'.length));
   }
   // Git CORS proxy: /git-proxy/github.com/... or /git-proxy/https://github.com/...
@@ -1121,6 +1287,9 @@ const server = createServer(async (req, res) => {
   }
   if (pathname === '/oauth/callback') {
     return handleOAuthCallback(req, res);
+  }
+  if (pathname.startsWith('/debian/mirror/')) {
+    return handleDebianMirror(req, res, pathname.slice('/debian/mirror/'.length));
   }
   if (pathname === '/health') {
     res.writeHead(200);
@@ -1190,7 +1359,13 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-const isDirectRun = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+// import.meta.url is the resolved path, so resolve argv[1] too: tabcomputer.com
+// starts this through a `current -> releases/<sha>` symlink.
+function isMainModule(arg) {
+  if (!arg) return false;
+  try { return import.meta.url === pathToFileURL(realpathSync(arg)).href; } catch { return false; }
+}
+const isDirectRun = isMainModule(process.argv[1]);
 
 if (isDirectRun) {
   server.listen(PORT, () => {

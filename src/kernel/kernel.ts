@@ -13,7 +13,7 @@ import type { Command, CommandContext } from '../commands/index';
 import { KernelStdio, execLazyStdin } from '../shell-stdio';
 import { ProcFs, bootMs } from './procfs';
 import { processTable, type ShiroProcess } from '../process-table';
-import { packageShadows, packageArgsForPath, PKG_BIN_DIR } from '../pkg-manager';
+import { packageShadows, pkgOwnShadows, packageArgsForPath, PKG_BIN_DIR } from '../pkg-manager';
 import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
@@ -80,6 +80,8 @@ export interface SpawnOptions {
   setsid?: boolean;
   /** Run this instead of resolving `path` through the loaders. */
   run?: Runner;
+  /** User id of the child (`sudo`: 0). Default: the parent's. */
+  uid?: number;
 }
 
 export interface WaitResult {
@@ -164,6 +166,7 @@ export class Kernel {
     this.registerDevice('/dev/random', (_p, f) => new DevRandom(f, '/dev/random'));
     this.registerDevice('/dev/tty', p => p.ctty ?? -A.ENXIO);
     this.addLoader((path, proc, k) => k.builtinLoader(path, proc));
+    this.addLoader((path, proc, k) => k.shebangLoader(path, proc));
     if (opts.registerWithProcessTable !== false) {
       this.detachTable = processTable.attachSource({
         list: () => [...this.procs.values()].filter(p => p.pid !== 1).map(p => this.view(p)),
@@ -257,6 +260,57 @@ export class Kernel {
     };
   }
 
+  /**
+   * `#!INTERP [ARG]` scripts whose interpreter is a real program (an ELF,
+   * like Debian's /bin/sh → dash) or a Shiro kernel program (Command.program),
+   * as Linux runs them: argv becomes [INTERP, ARG?, script, args...]. Other
+   * interpreters (Shiro's own sh, node, python builtins) are left to the
+   * builtin loader, which runs the script through the shell.
+   */
+  private async shebangLoader(path: string, proc: Process): Promise<Runner | null> {
+    const fs = this.fs;
+    if (!fs || !path.includes('/')) return null;
+    const abs = path.startsWith('/') ? path : fs.resolvePath(path, proc.cwd);
+    let head: string;
+    try {
+      const st = await fs.stat(abs);
+      if (st.type !== 'file' || st.size < 3) return null;
+      const raw = await fs.readFile(abs);
+      const bytes = typeof raw === 'string' ? enc.encode(raw.slice(0, 256)) : raw.subarray(0, 256);
+      if (bytes[0] !== 0x23 || bytes[1] !== 0x21) return null;
+      head = A.decodeText(bytes);
+    } catch {
+      return null;
+    }
+    const line = head.slice(2).split('\n')[0].replace(/\r$/, '').trim();
+    const m = /^(\S+)(?:\s+(.*))?$/.exec(line);
+    if (!m || m[1] === abs || m[1] === path) return null;
+    const interp = m[1];
+    const arg = m[2]?.trim();
+    let native = false;
+    const ist = await this.statPath(proc, interp);
+    if (typeof ist !== 'number') {
+      if ((ist.mode & A.S_IFMT) !== A.S_IFREG) return null;
+      try {
+        const raw = await fs.readFile(await fs.realpath(interp));
+        native = typeof raw !== 'string' && raw.length >= 4 && raw[0] === 0x7f && raw[1] === 0x45 && raw[2] === 0x4c && raw[3] === 0x46;
+      } catch { return null; }
+    } else if (ist === -A.ENOENT && /^\/(usr\/)?(local\/)?s?bin\/[^/]+$/.test(interp)) {
+      native = !!this.shell?.commands.get(interp.slice(interp.lastIndexOf('/') + 1))?.program;
+    }
+    if (!native) return null;
+    return async (p, k) => {
+      const depth = (p.data.shebangDepth as number | undefined) ?? 0;
+      if (depth > 4) return 126;
+      p.data.shebangDepth = depth + 1;
+      p.argv = [interp, ...(arg ? [arg] : []), path, ...p.argv.slice(1)];
+      p.path = interp;
+      const run = await k.findProgram(interp, p);
+      if (!run) return 127;
+      return run(p, k);
+    };
+  }
+
   private async builtinLoader(path: string, _proc: Process): Promise<Runner | null> {
     const shell = this.shell;
     if (!shell) return null;
@@ -271,11 +325,16 @@ export class Kernel {
     // An installed package's command replaces the builtin, as at the prompt
     // (a bin-dir path can name a builtin's PATH shim, or nothing on disk)
     const pkgBin = `${PKG_BIN_DIR}/${base}`;
-    if (cmd && this.fs && path !== pkgBin && packageShadows(this.fs).has(base)) return this.findProgram(pkgBin, _proc);
+    if (cmd && this.fs && path !== pkgBin && packageShadows(this.fs).has(base)) {
+      // pkg's programs are /usr/bin links; Debian's can be anywhere on PATH (/usr/sbin)
+      const real = pkgOwnShadows(this.fs).has(base) ? pkgBin : await shell.findExecutableInPath(base);
+      if (real && real !== path) return this.findProgram(real, _proc);
+    }
     if (cmd && SHELL_NAMES.has(base)) {
       const direct = await this.shellCommandDirect(_proc);
       if (direct) return direct;
     }
+    if (cmd?.program) return cmd.program;
     if (cmd) return proc => this.runBuiltin(proc, cmd);
     // Shell builtins that are also programs (/bin/echo, /usr/bin/test, ...)
     if (inBin && SHELL_PROGRAMS.has(base)) return proc => this.runViaShell(proc, base);
@@ -347,6 +406,9 @@ export class Kernel {
       umask: parent.umask,
     });
     if (opts.setsid) { proc.sid = pid; proc.pgid = pid; }
+    proc.uid = opts.uid ?? parent.uid;
+    // sudo's root gets root's group too; dropping back to the user gets the user's
+    proc.gid = opts.uid === undefined ? parent.gid : opts.uid === 0 ? 0 : 1000;
     proc.ctty = opts.setsid ? undefined : parent.ctty;
     if (opts.inheritSignals) {
       // Across exec caught signals reset to default; ignored stay ignored; the mask carries over
@@ -386,6 +448,53 @@ export class Kernel {
       code = 1;
     }
     if (!proc.exiting) await this.exit(proc, A.W_EXITCODE(typeof code === 'number' ? code : 0));
+  }
+
+  /** ITIMER_REAL of `proc`: milliseconds left and the reload interval. */
+  realTimer(proc: Process): { value: number; interval: number } {
+    const t = proc.data.realTimer as { deadline: number; interval: number } | undefined;
+    if (!t) return { value: 0, interval: 0 };
+    return { value: Math.max(0, t.deadline - Date.now()), interval: t.interval };
+  }
+
+  /**
+   * setitimer(ITIMER_REAL)/alarm: SIGALRM to `proc` in `valueMs` (0 disarms),
+   * then every `intervalMs`. Returns the old setting. Not inherited by fork
+   * children; kept across exec (it lives on the process).
+   */
+  setRealTimer(proc: Process, valueMs: number, intervalMs: number): { value: number; interval: number } {
+    const old = this.realTimer(proc);
+    const t = proc.data.realTimer as { handle?: ReturnType<typeof setTimeout>; deadline: number; interval: number } | undefined;
+    if (t?.handle) clearTimeout(t.handle);
+    if (!(valueMs > 0)) {
+      delete proc.data.realTimer;
+      return old;
+    }
+    const timer: { handle?: ReturnType<typeof setTimeout>; deadline: number; interval: number } = { deadline: Date.now() + valueMs, interval: intervalMs > 0 ? intervalMs : 0 };
+    const arm = (ms: number) => {
+      timer.handle = setTimeout(() => {
+        if (proc.exiting || proc.data.realTimer !== timer) return;
+        if (timer.interval > 0) {
+          timer.deadline = Date.now() + timer.interval;
+          arm(timer.interval);
+        } else {
+          delete proc.data.realTimer;
+        }
+        this.deliver(proc, A.SIGALRM);
+      }, Math.max(0, ms));
+      (timer.handle as any)?.unref?.();
+    };
+    proc.data.realTimer = timer;
+    if (!proc.data.realTimerCleanup) {
+      proc.data.realTimerCleanup = true;
+      proc.onTerminate(() => {
+        const cur = proc.data.realTimer as { handle?: ReturnType<typeof setTimeout> } | undefined;
+        if (cur?.handle) clearTimeout(cur.handle);
+        delete proc.data.realTimer;
+      });
+    }
+    arm(valueMs);
+    return old;
   }
 
   /** Terminate `proc` with a wait status: close its fds, reparent its children, notify its parent. */
@@ -669,7 +778,7 @@ export class Kernel {
     const statusFlags = flags & ~(A.O_CREAT | A.O_EXCL | A.O_TRUNC | A.O_CLOEXEC | A.O_NOCTTY | A.O_DIRECTORY | A.O_NOFOLLOW);
     if (hit.node.type === 'dir') return canWrite(flags) ? -A.EISDIR : new DirFile(fs, p, statusFlags);
     if (flags & A.O_DIRECTORY) return -A.ENOTDIR;
-    if (hit.node.type !== 'file') return undefined;
+    if (hit.node.type !== 'file' || hit.node.lazy) return undefined; // lazy: open() fetches it
     return new RegularFile(openInodeSync(fs, hit.path, hit.node), statusFlags);
   }
 
@@ -685,10 +794,11 @@ export class Kernel {
     if (hit === null) return -A.ENOENT;
     const n = hit.node;
     const open = n.type === 'file' ? inodeStat(fs, hit.path) : undefined;
-    if (open) { A.encodeStat({ ...open, ino: inodeNumber(p) }, data); return 0; }
+    // The inode belongs to the resolved path: /bin and /usr/bin (a link to it) are one directory
+    if (open) { A.encodeStat({ ...open, ino: inodeNumber(hit.path) }, data); return 0; }
     const type = n.type === 'dir' ? A.S_IFDIR : n.type === 'symlink' ? A.S_IFLNK : A.S_IFREG;
     A.encodeStat({
-      dev: 1, ino: inodeNumber(p), mode: type | (n.mode & 0o7777), nlink: n.type === 'dir' ? 2 : 1,
+      dev: 1, ino: inodeNumber(hit.path), mode: type | (n.mode & 0o7777), nlink: n.type === 'dir' ? 2 : 1,
       uid: 1000, gid: 1000, rdev: 0, size: n.size, blksize: 4096, blocks: Math.ceil(n.size / 512),
       atimeMs: n.atime ?? n.mtime, mtimeMs: n.mtime, ctimeMs: n.ctime,
       atimeNs: n.atime === undefined ? n.mtimeNs : n.atimeNs, mtimeNs: n.mtimeNs,
@@ -723,8 +833,10 @@ export class Kernel {
     try {
       const st = follow ? await fs.stat(p) : await fs.lstat(p);
       let type = st.isDirectory() ? A.S_IFDIR : st.isSymbolicLink() ? A.S_IFLNK : A.S_IFREG;
-      // The same file through a symlink is the same inode
-      const real = follow && type !== A.S_IFDIR ? await fs.realpath(p).catch(() => p) : p;
+      // The same file or directory through a symlink is the same inode (/bin is /usr/bin)
+      const slash = p.lastIndexOf('/');
+      const real = follow ? await fs.realpath(p).catch(() => p)
+        : slash > 0 ? (await fs.realpath(p.slice(0, slash)).catch(() => p.slice(0, slash))).replace(/\/$/, '') + p.slice(slash) : p;
       if (type === A.S_IFREG && this.socketPaths?.has(real)) type = A.S_IFSOCK;
       // A file open here: its size and times as the open descriptions see them
       const open = type === A.S_IFREG && hasOpenInodes(fs) ? inodeStat(fs, real) : undefined;
@@ -951,6 +1063,7 @@ export class Kernel {
     const shell = base.fork();
     shell.cwd = proc.cwd;
     shell.env = { ...proc.env, PWD: proc.cwd };
+    shell.uid = proc.uid;
     proc.onTerminate(() => shell.abortController?.abort());
     return shell;
   }
@@ -1271,6 +1384,28 @@ export class Kernel {
           return this.vfork(proc).pid;
         case A.SYS_shiro_execve:
           return await this.sysExecve(proc, JSON.parse(str(0, args[0])), data);
+        case A.SYS_alarm: {
+          // seconds left on the old alarm, rounded like Linux
+          const old = this.setRealTimer(proc, (args[0] >>> 0) * 1000, 0);
+          return old.value > 0 ? Math.max(1, Math.round(old.value / 1000)) : 0;
+        }
+        case A.SYS_getitimer:
+        case A.SYS_setitimer: {
+          // ITIMER_REAL only (the engine keeps the CPU-time timers); struct
+          // itimerval in data: interval then value, each {i64 sec, i64 usec}
+          if (args[0] !== 0) return -A.EINVAL;
+          const dv = new DataView(data.buffer, data.byteOffset, 32);
+          const ms = (o: number) => Number(dv.getBigInt64(o, true)) * 1000 + Number(dv.getBigInt64(o + 8, true)) / 1000;
+          const put = (o: number, v: number) => {
+            const us = Math.max(0, Math.round(v * 1000));
+            dv.setBigInt64(o, BigInt(Math.floor(us / 1e6)), true);
+            dv.setBigInt64(o + 8, BigInt(us % 1e6), true);
+          };
+          const old = nr === A.SYS_setitimer ? this.setRealTimer(proc, ms(16), ms(0)) : this.realTimer(proc);
+          put(0, old.interval);
+          put(16, old.value);
+          return 0;
+        }
         case A.SYS_getpid: return proc.pid;
         case A.SYS_gettid: return proc.pid;
         case A.SYS_getppid: return proc.ppid;
@@ -1515,10 +1650,11 @@ export class Kernel {
         }
         case A.SYS_link:
         case A.SYS_linkat: {
-          // The filesystem has no hard links (no inodes shared between names).
-          // EPERM, as Linux filesystems without them answer: programs fall back
-          // to copying (git clone of a local repo, cp -l), whereas a copy that
-          // claimed to be a link broke git's "same inode" check.
+          // The filesystem has no hard links (no inodes shared between names):
+          // link() makes a copy that reports its source's inode number, as a
+          // hard link would (git's local clone checks that). dpkg needs link()
+          // to succeed for its backups (status-old, FILE.dpkg-tmp before
+          // replacing FILE); a copy has the content those need.
           const [od, ol, nd, nl, lflags] = nr === A.SYS_link
             ? [A.AT_FDCWD, args[0], A.AT_FDCWD, args[1], 0] : [args[0], args[1], args[2], args[3], args[4]];
           if (lflags & ~(A.AT_SYMLINK_FOLLOW | A.AT_EMPTY_PATH)) return -A.EINVAL;
@@ -1526,11 +1662,28 @@ export class Kernel {
           const to = at(nd, ol, nl);
           if (typeof from === 'number') return from;
           if (typeof to === 'number') return to;
-          const st = await this.statPath(proc, str(0, ol), !!(lflags & A.AT_SYMLINK_FOLLOW), od);
+          const follow = !!(lflags & A.AT_SYMLINK_FOLLOW);
+          const st = await this.statPath(proc, str(0, ol), follow, od);
           if (typeof st === 'number') return st;
           if (await fs().exists(to)) return -A.EEXIST;
           if (trailingSlash(str(ol, nl))) return -A.ENOENT;
-          return -A.EPERM;
+          const type = st.mode & A.S_IFMT;
+          if (type === A.S_IFDIR) return -A.EPERM;
+          try {
+            const src = follow ? await fs().realpath(from) : from;
+            if (type === A.S_IFLNK) {
+              await fs().symlink(await fs().readlink(src), to);
+            } else {
+              await flushInode(fs(), src);
+              const raw = await fs().readFile(src);
+              const bytes = typeof raw === 'string' ? enc.encode(raw) : raw.slice();
+              await fs().writeFile(to, bytes, { mode: st.mode & 0o7777, times: { mtime: st.mtimeMs, mtimeNs: st.mtimeNs } });
+            }
+            shareInodeNumber(src, to);
+          } catch (e) {
+            return A.errnoFromError(e);
+          }
+          return 0;
         }
         case A.SYS_readlink:
         case A.SYS_readlinkat: {

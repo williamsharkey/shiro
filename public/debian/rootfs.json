@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "id": "deded532eafdc1691b6ef53f76e53844",
+  "distro": "debian",
+  "suite": "trixie",
+  "version": "13.7",
+  "snapshot": "20261001T000000Z",
+  "arch": "amd64",
+  "index": "index-deded532eafdc1691b6ef53f76e53844.json.gz",
+  "entries": 3751,
+  "packages": 80,
+  "files": 2847,
+  "bytes": 83696539,
+  "chunks": 99,
+  "chunkBytes": 31031136
+}

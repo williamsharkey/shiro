@@ -185,3 +185,22 @@ describe('uiMode', () => {
     expect(uiMode(loc('?demo=1', 'unix.computer'), false)).toBe('terminal');
   });
 });
+
+describe('brand (src/brand.json)', () => {
+  it('server.mjs titles the app shell and adds meta tags, except on shiro.computer', async () => {
+    const { execFileSync } = await import('node:child_process');
+    // Plain Node (vitest's polyfilled modules can't load server.mjs)
+    const server = new URL('../../../server.mjs', import.meta.url).href;
+    const out = execFileSync('node', ['--input-type=module', '-e',
+      `const m = await import(${JSON.stringify(server)}); const h = '<head><title>shiro</title></head>';
+       console.log(JSON.stringify([m.brandAppShell(h, 'tabcomputer.com'), m.brandAppShell(h, 'localhost:5173'), m.brandAppShell(h, 'shiro.computer'), m.brandAppShell(h, 'x.shiro.computer')])); process.exit(0);`,
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const [tab, local, shiro, sub] = JSON.parse(out.trim().split('\n').pop()!);
+    expect(tab).toContain('<title>tabcomputer</title>');
+    expect(tab).toContain('<meta property="og:url" content="https://tabcomputer.com/" />');
+    expect(tab).toMatch(/<meta name="description" content="[^"]+"/);
+    expect(local).toContain('<title>tabcomputer</title>');
+    expect(shiro).toBe('<head><title>shiro</title></head>');
+    expect(sub).toBe('<head><title>shiro</title></head>');
+  });
+});

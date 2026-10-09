@@ -3,6 +3,7 @@
 import type { AppContext } from '../index';
 import type { DesktopWindow } from '../wm';
 import { ICONS } from '../icons';
+import { BRAND } from '../../brand';
 import buildNumber from '../../../build-number.txt?raw';
 
 export function open(ctx: AppContext): DesktopWindow {
@@ -14,7 +15,7 @@ export function open(ctx: AppContext): DesktopWindow {
   const isolated = !!(globalThis as any).crossOriginIsolated;
   root.innerHTML = `
     <div style="width:84px;height:84px">${ICONS.about}</div>
-    <h2 style="font-size:22px;font-weight:700;margin-top:10px;letter-spacing:-.01em">unix.computer</h2>
+    <h2 style="font-size:22px;font-weight:700;margin-top:10px;letter-spacing:-.01em">${BRAND.name}</h2>
     <div class="sd-muted sd-small">Build #${buildNumber.trim()} · Shiro kernel</div>
     <div class="sd-card sd-small" style="margin-top:16px;text-align:left;min-width:280px">
       <div class="sd-row"><span class="sd-grow sd-muted">Processes</span><span data-k="procs">${kernel.procs.size}</span></div>

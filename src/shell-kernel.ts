@@ -236,6 +236,7 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
       // children of a hosted shell stay in its process group, under it
       pgid: host ? undefined : procs.length ? procs[0].pgid : 0,
       parent: host ?? undefined,
+      uid: shell.uid,
     };
     procs.push(tty ? tty.spawnJob(kernel, spawn) : kernel.spawn(spawn));
     if (nextInput) input = nextInput;

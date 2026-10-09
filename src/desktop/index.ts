@@ -17,6 +17,7 @@ import { WindowManager, isDesktopShortcut, type AppDescriptor, type DesktopWindo
 import { ICONS, GLYPHS, appIcon } from './icons';
 import { TerminalView, takeParkedMain, hasParkedMain, applyTerminalTheme, useMonoFont, allTerminalViews, terminalTheme, TERMINAL_FONT } from './terminal-app';
 import { initNetwork } from './network';
+import { BRAND } from '../brand';
 
 export interface DesktopDeps {
   fs: FileSystem;
@@ -86,7 +87,8 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   const root = el('div', 'sd-desktop');
   root.id = 'shiro-desktop';
   root.append(el('div', 'sd-wallpaper'));
-  const wordmark = el('div', 'sd-wordmark', 'unix.computer');
+  const wordmark = el('div', 'sd-wordmark', BRAND.name);
+  document.title = BRAND.name;
   root.append(wordmark);
 
   // ── Menu bar ──
@@ -506,6 +508,6 @@ function drawWelcome(t: ShiroTerminal): void {
   const link = (text: string, cmd = text) => `\x1b]8;;shiro://cmd/${encodeURIComponent(cmd)}\x07\x1b[38;5;117m${text}\x1b[0m\x1b]8;;\x07`;
   const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
   const narrow = t.term.cols < 72;
-  t.term.write(`\x1b[1munix.computer\x1b[0m ${dim(narrow ? '— Unix in a browser tab.' : '— a Unix-like computer in your browser tab. Real shell, real packages.')}\r\n`);
-  t.term.write(`${dim('try:')} ${link('apt install cowsay', 'apt install cowsay && cowsay hello from unix.computer')} ${dim('·')} ${link('htop', 'apt install htop && htop')} ${dim('·')} ${link('python3')} ${dim('·')} ${link('ls /dom')} ${dim('·')} ${link('help')}\r\n\r\n`);
+  t.term.write(`\x1b[1m${BRAND.domain}\x1b[0m ${dim(narrow ? '— Unix in a browser tab.' : `— ${BRAND.tagline}. Real shell, real packages.`)}\r\n`);
+  t.term.write(`${dim('try:')} ${link('apt install cowsay', `apt install cowsay && cowsay hello from ${BRAND.domain}`)} ${dim('·')} ${link('htop', 'apt install htop && htop')} ${dim('·')} ${link('python3')} ${dim('·')} ${link('ls /dom')} ${dim('·')} ${link('help')}\r\n\r\n`);
 }

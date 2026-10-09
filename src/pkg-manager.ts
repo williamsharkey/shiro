@@ -689,7 +689,23 @@ function shadowsOf(status: Record<string, InstalledPkg>): Set<string> {
  * the status file (the shell starts that when it's created), then kept
  * current by install and remove.
  */
+/**
+ * Names whose program file replaces the builtin for other reasons: Debian
+ * mode's programs in /usr/bin, /usr/sbin, ... (src/debian/overlay.ts).
+ */
+export const extraShadows = new WeakMap<FileSystem, Set<string>>();
+
+/** Commands an installed package (or, in Debian mode, a program file) provides in place of a builtin. */
 export function packageShadows(fs: FileSystem): Set<string> {
+  const own = shadowSets.get(fs);
+  const extra = extraShadows.get(fs);
+  if (!extra?.size) return own || new Set();
+  if (!own?.size) return extra;
+  return new Set([...own, ...extra]);
+}
+
+/** packageShadows from `pkg install` alone: those programs are /usr/bin/NAME links into /usr/lib/pkg. */
+export function pkgOwnShadows(fs: FileSystem): Set<string> {
   return shadowSets.get(fs) || new Set();
 }
 

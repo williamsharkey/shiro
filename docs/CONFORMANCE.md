@@ -9,7 +9,7 @@ conformance work started (fc0af54).
 | [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1393/1567 (88.9%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1394/1567 (89.0%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **625/635 (98.4%)** |
-| [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **172/320 (53.8%)** |
+| [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **148/320 (46.3%)** |
 | [Syscalls: wasi-testsuite (wasm32-wasip1)](#syscalls-wasi-testsuite-wasm32-wasip1) | — | **71/72 (98.6%)** |
 
 How each suite runs, and what is and isn't scored, is described in
@@ -353,15 +353,15 @@ Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel
 | Area | Before | Now | Failing |
 |---|---|---|---|
 | accept | — | 1/3 | 2 |
-| alarm | — | 2/5 | 3 |
+| alarm | — | 0/5 | 5 |
 | bind | — | 2/4 | 2 |
 | chdir | — | 1/2 | 1 |
-| chmod | — | 2/2 | 0 |
+| chmod | — | 1/2 | 1 |
 | clock_gettime | — | 0/1 | 1 |
 | clock_nanosleep | — | 2/3 | 1 |
-| clone | — | 6/8 | 2 |
+| clone | — | 7/8 | 1 |
 | close | — | 2/2 | 0 |
-| connect | — | 1/2 | 1 |
+| connect | — | 0/2 | 2 |
 | creat | — | 2/3 | 1 |
 | dup | — | 4/7 | 3 |
 | dup2 | — | 6/7 | 1 |
@@ -369,43 +369,43 @@ Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel
 | epoll_create | — | 3/3 | 0 |
 | epoll_create1 | — | 2/2 | 0 |
 | epoll_ctl | — | 4/7 | 3 |
-| epoll_wait | — | 7/15 | 8 |
+| epoll_wait | — | 5/15 | 10 |
 | execve | — | 0/2 | 2 |
 | faccessat | — | 2/2 | 0 |
 | fchdir | — | 2/2 | 0 |
 | fchmod | — | 0/1 | 1 |
 | fcntl | — | 16/36 | 20 |
-| fork | — | 6/9 | 3 |
-| fstat | — | 2/4 | 2 |
+| fork | — | 5/9 | 4 |
+| fstat | — | 0/4 | 4 |
 | ftruncate | — | 4/4 | 0 |
-| futex | — | 5/18 | 13 |
+| futex | — | 4/18 | 14 |
 | getcwd | — | 2/4 | 2 |
 | getpid | — | 1/1 | 0 |
-| getppid | — | 1/2 | 1 |
+| getppid | — | 2/2 | 0 |
 | getrlimit | — | 2/3 | 1 |
 | gettimeofday | — | 1/2 | 1 |
-| kill | — | 4/4 | 0 |
+| kill | — | 1/4 | 3 |
 | link | — | 0/2 | 2 |
-| lseek | — | 2/4 | 2 |
+| lseek | — | 1/4 | 3 |
 | lstat | — | 2/4 | 2 |
 | nanosleep | — | 2/3 | 1 |
 | open | — | 6/8 | 2 |
 | openat | — | 1/1 | 0 |
 | pause | — | 0/2 | 2 |
-| pipe | — | 7/12 | 5 |
+| pipe | — | 4/12 | 8 |
 | pipe2 | — | 1/2 | 1 |
 | poll | — | 3/4 | 1 |
 | ppoll | — | 0/1 | 1 |
-| pread | — | 4/4 | 0 |
-| pselect | — | 4/6 | 2 |
-| pwrite | — | 6/8 | 2 |
-| read | — | 1/4 | 3 |
+| pread | — | 2/4 | 2 |
+| pselect | — | 3/6 | 3 |
+| pwrite | — | 5/8 | 3 |
+| read | — | 3/4 | 1 |
 | readv | — | 1/2 | 1 |
 | rmdir | — | 1/1 | 0 |
 | select | — | 1/4 | 3 |
-| sendfile | — | 0/16 | 16 |
+| sendfile | — | 1/16 | 15 |
 | setrlimit | — | 1/2 | 1 |
-| signal | — | 5/5 | 0 |
+| signal | — | 3/5 | 2 |
 | socket | — | 1/2 | 1 |
 | socketpair | — | 1/2 | 1 |
 | stat | — | 2/2 | 0 |
@@ -417,66 +417,69 @@ Static x86-64 LTP syscall tests (scripts/conformance/build-ltp.sh) run as kernel
 | unlink | — | 0/2 | 2 |
 | unlinkat | — | 0/1 | 1 |
 | vfork | — | 1/2 | 1 |
-| wait4 | — | 2/3 | 1 |
-| waitid | — | 6/11 | 5 |
+| wait4 | — | 1/3 | 2 |
+| waitid | — | 2/11 | 9 |
 | waitpid | — | 1/11 | 10 |
-| write | — | 5/6 | 1 |
+| write | — | 4/6 | 2 |
 | writev | — | 1/2 | 1 |
 
 <details><summary>Failing cases</summary>
 
 - **accept**: accept02 — accept02.c:116: TBROK: ioctl(3,SIOCGIFINDEX,...) failed: ENOTTY (25); accept03 — accept03.c:46: TFAIL: accept() on O_PATH file expected EBADF: ENOTSOCK (88)
-- **alarm**: alarm02 — alarm02.c:36: TFAIL: alarm(0) retval 0 != 2147483647: SUCCESS (0); alarm05 — alarm05.c:30: TFAIL: alarms_fired (0) != 1 (1); alarm07 — alarm07.c:34: TFAIL: alarm_cnt (0) != 1 (1)
+- **alarm**: alarm02 — alarm02.c:34: TFAIL: alarm(2147483647) invalid retval 30: SUCCESS (0); alarm03 — alarm03.c:20: TFAIL: alarm(100) invalid retval 30: SUCCESS (0); alarm05 — alarm05.c:26: TFAIL: alarm(10) invalid retval 32: SUCCESS (0); alarm06 — alarm06.c:30: TFAIL: alarm(2) invalid retval 34: SUCCESS (0); alarm07 — alarm07.c:24: TFAIL: alarm(1) invalid retval 34: SUCCESS (0)
 - **bind**: bind01 — bind01.c:72: TFAIL: UNIX-domain of current directory expected EAFNOSUPPORT: EADDRNOTAVAIL (99); bind05 — passed 0 failed 0 broken 0
 - **chdir**: chdir04 — chdir04.c:27: TFAIL: chdir() expected ENAMETOOLONG: ENOENT (2)
+- **chmod**: chmod01 — no summary
 - **clock_gettime**: clock_gettime04 — clock_gettime04.c:161: TFAIL: CLOCK_REALTIME: Time travelled backwards (0): -64 ns
-- **clock_nanosleep**: clock_nanosleep01 — clock_nanosleep01.c:195: TFAIL: The clock_nanosleep() haven't updated timespec or it's not valid: SUCCESS (0)
-- **clone**: clone03 — clone03.c:36: TFAIL: pid(0) retval 155 != 0: SUCCESS (0); clone08 — clone08.c:85: TBROK: CLONE_PARENT clone() failed: EINVAL (22)
-- **connect**: connect03 — passed 0 failed 0 broken 0
+- **clock_nanosleep**: clock_nanosleep01 — no summary
+- **clone**: clone08 (hang/timeout) — no summary
+- **connect**: connect01 (hang/timeout) — no summary; connect03 — passed 0 failed 0 broken 0
 - **creat**: creat05 — creat05.c:55: TBROK: creat(creat05_1020,0666) failed: EMFILE (24)
 - **dup**: dup03 — dup03.c:36: TBROK: dup(3) failed: EMFILE (24); dup05 — dup05.c:26: TBROK: mkfifo(dupfile, 0777) failed: EPERM (1); dup06 — dup06.c:58: TFAIL: Not enough files duped
 - **dup2**: dup205 — dup205.c:53: TFAIL: Not enough files duped
 - **dup3**: dup3_02 — dup3_02.c:39: TFAIL: dup3(3, 5, -1) expected EINVAL: EBADF (9)
 - **epoll_ctl**: epoll_ctl02 — epoll_ctl02.c:85: TFAIL: epoll_ctl(...) if events is NULL succeeded; epoll_ctl04 — epoll_ctl04.c:61: TFAIL: epoll_ctl(..., EPOLL_CTL_ADD, ...) with number of nesting is 5 succeeded; epoll_ctl06 — epoll_ctl06.c:69: TFAIL: epoll_ctl() on O_PATH file expected EBADF: EPERM (1)
-- **epoll_wait**: epoll_wait02 — tst_timer_test.c:314: TFAIL: epoll_wait() slept for too long; epoll_wait03 — epoll_wait03.c:63: TFAIL: epoll_wait() events has no write permissions invalid retval 1: SUCCESS (0); epoll_wait05 — epoll_wait05.c:58: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); epoll_wait06 — epoll_wait06.c:78: TFAIL: write() failed invalid retval 4096: SUCCESS (0); epoll_wait08 (hang/timeout) — no summary; epoll_wait14 — epoll_wait14.c:99: TFAIL: fd 0 reported 18 times, expected 4; epoll_wait15 — epoll_wait15.c:80: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); epoll_wait16 — epoll_wait16.c:93: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)
+- **epoll_wait**: epoll_wait02 — tst_timer_test.c:292: TFAIL: epoll_wait() woken up early 276 times range: [999,407]; epoll_wait03 — epoll_wait03.c:63: TFAIL: epoll_wait() events has no write permissions invalid retval 1: SUCCESS (0); epoll_wait05 — epoll_wait05.c:41: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110); epoll_wait06 — epoll_wait06.c:78: TFAIL: write() failed invalid retval 4096: SUCCESS (0); epoll_wait08 (hang/timeout) — no summary; epoll_wait11 (hang/timeout) — no summary; epoll_wait12 (hang/timeout) — no summary; epoll_wait14 — epoll_wait14.c:99: TFAIL: fd 0 reported 18 times, expected 4; epoll_wait15 — epoll_wait15.c:52: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110); epoll_wait16 (hang/timeout) — no summary
 - **execve**: execve01 — tst_test.c:211: TBROK: Invalid shared memory region (bad magic); execve06 — tst_test.c:211: TBROK: Invalid shared memory region (bad magic)
 - **fchmod**: fchmod01 — fchmod01.c:37: TFAIL: testfile: Incorrect modes 0644, Expected 0000
-- **fcntl**: fcntl13 — fcntl13.c:45: TFAIL: fcntl(1, F_SETLK, flock) succeeded; fcntl13_64 — fcntl13.c:45: TFAIL: fcntl(1, F_SETLK, flock) succeeded; fcntl14 (hang/timeout) — no summary; fcntl14_64 (hang/timeout) — no summary; fcntl15 — fcntl15.c:88: TFAIL: Succeeded to lock already locked region one; fcntl15_64 — fcntl15.c:88: TFAIL: Succeeded to lock already locked region one; fcntl27 — fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22); fcntl27_64 — fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22); fcntl30 — fcntl30.c:27: TFAIL: Expect: new pipe size (65536) >= requested size (1048576); fcntl30_64 — fcntl30.c:27: TFAIL: Expect: new pipe size (65536) >= requested size (1048576); fcntl34 — fcntl34.c:99: TBROK: Short read(3,0x4fffffffe880,4096) returned only 0; fcntl34_64 — fcntl34.c:99: TBROK: Short read(3,0x4fffffffe870,4096) returned only 0; fcntl37 — passed 0 failed 0 broken 0; fcntl37_64 — passed 0 failed 0 broken 0; fcntl38 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl38_64 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl39 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl39_64 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl40 (hang/timeout) — skipped: hangs Shiro; fcntl40_64 — passed 0 failed 0 broken 0
-- **fork**: fork04 — fork04.c:63: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); fork14 — passed 0 failed 0 broken 0; fork_procs (hang/timeout) — no summary
-- **fstat**: fstat02 — fstat02.c:48: TBROK: link(test_file,link_test_file) failed: EPERM (1); fstat02_64 — fstat02.c:48: TBROK: link(test_file,link_test_file) failed: EPERM (1)
-- **futex**: futex_cmp_requeue01 (hang/timeout) — no summary; futex_cmp_requeue02 — futex_cmp_requeue02.c:60: TFAIL: futex_cmp_requeue() failed unexpectedly, expected EAGAIN/EWOULDBLOCK: EINVAL (22); futex_cmp_requeue03 — futex_cmp_requeue03.c:71: TFAIL: uaddr unmapped expected EFAULT: EINVAL (22); futex_wait02 (hang/timeout) — no summary; futex_wait05 (hang/timeout) — skipped: hangs Shiro; futex_wait07 — passed 0 failed 0 broken 0; futex_wait_bitset01 — futex_wait_bitset01.c:76: TFAIL: futex_wait_bitset() woken up prematurely 99467us, expected 100010us; futex_waitv01 — passed 0 failed 0 broken 0; futex_waitv02 — passed 0 failed 0 broken 0; futex_waitv03 — passed 0 failed 0 broken 0; futex_wake02 (hang/timeout) — no summary; futex_wake03 (hang/timeout) — skipped: hangs Shiro; futex_wake05 (hang/timeout) — no summary
-- **getcwd**: getcwd03 — getcwd03.c:58: TFAIL: getcwd() got mismatched working directories (/tmp/ltp/getcwd03/LTP_gethNxXhU/getcwd1.122, /tmp/ltp/getcwd03/LTP_gethNxXhU/getcwd2.122); getcwd04 (hang/timeout) — no summary
-- **getppid**: getppid02 — getppid02.c:36: TFAIL: *child_pid (0) != pid (232)
+- **fcntl**: fcntl13 — fcntl13.c:45: TFAIL: fcntl(1, F_SETLK, flock) succeeded; fcntl13_64 — fcntl13.c:45: TFAIL: fcntl(1, F_SETLK, flock) succeeded; fcntl14 — fcntl14.c:74: TFAIL: flock.l_pid (0) != parent_pid (334); fcntl14_64 — fcntl14.c:74: TFAIL: flock.l_pid (0) != parent_pid (339); fcntl15 — fcntl15.c:88: TFAIL: Succeeded to lock already locked region one; fcntl15_64 — fcntl15.c:88: TFAIL: Succeeded to lock already locked region one; fcntl27 — fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22); fcntl27_64 — fcntl27.c:37: TFAIL: fcntl(fd, F_SETLEASE, F_RDLCK) expected EAGAIN/EWOULDBLOCK: EINVAL (22); fcntl30 — fcntl30.c:27: TFAIL: Expect: new pipe size (65536) >= requested size (1048576); fcntl30_64 — fcntl30.c:27: TFAIL: Expect: new pipe size (65536) >= requested size (1048576); fcntl34 — fcntl34.c:99: TBROK: Short read(3,0x4fffffffe880,4096) returned only 0; fcntl34_64 — fcntl34.c:99: TBROK: Short read(3,0x4fffffffe870,4096) returned only 0; fcntl37 — passed 0 failed 0 broken 0; fcntl37_64 — passed 0 failed 0 broken 0; fcntl38 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl38_64 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl39 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl39_64 — tst_kconfig.c:289: TBROK: Cannot parse kernel .config; fcntl40 (hang/timeout) — skipped: hangs Shiro; fcntl40_64 — passed 0 failed 0 broken 0
+- **fork**: fork04 — fork04.c:37: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110); fork08 (hang/timeout) — no summary; fork09 — no summary; fork14 — passed 0 failed 0 broken 0
+- **fstat**: fstat02 — fstat02.c:48: TBROK: link(test_file,link_test_file) failed: EPERM (1); fstat02_64 — fstat02.c:48: TBROK: link(test_file,link_test_file) failed: EPERM (1); fstat03 — fstat03.c:56: TFAIL: fstat() returned 0, expected -1; fstat03_64 — fstat03.c:56: TFAIL: fstat() returned 0, expected -1
+- **futex**: futex_cmp_requeue01 (hang/timeout) — no summary; futex_cmp_requeue02 — futex_cmp_requeue02.c:60: TFAIL: futex_cmp_requeue() failed unexpectedly, expected EAGAIN/EWOULDBLOCK: EINVAL (22); futex_cmp_requeue03 — futex_cmp_requeue03.c:71: TFAIL: uaddr unmapped expected EFAULT: EINVAL (22); futex_wait02 (hang/timeout) — no summary; futex_wait03 (hang/timeout) — no summary; futex_wait05 (hang/timeout) — skipped: hangs Shiro; futex_wait07 (hang/timeout) — no summary; futex_wait_bitset01 — futex_wait_bitset01.c:76: TFAIL: futex_wait_bitset() woken up prematurely 100000us, expected 100010us; futex_waitv01 — passed 0 failed 0 broken 0; futex_waitv02 — passed 0 failed 0 broken 0; futex_waitv03 — passed 0 failed 0 broken 0; futex_wake02 (hang/timeout) — no summary; futex_wake03 (hang/timeout) — skipped: hangs Shiro; futex_wake05 — futex_wake05.c:67: TFAIL: uaddr unmapped succeeded
+- **getcwd**: getcwd03 — getcwd03.c:58: TFAIL: getcwd() got mismatched working directories (/tmp/ltp/getcwd03/LTP_getpl7vMj/getcwd1.1634, /tmp/ltp/getcwd03/LTP_getpl7vMj/getcwd2.1634); getcwd04 (hang/timeout) — no summary
 - **getrlimit**: getrlimit02 — getrlimit02.c:36: TFAIL: getrlimit() with invalid resource type succeeded
 - **gettimeofday**: gettimeofday02 (hang/timeout) — no summary
-- **link**: link02 — link02.c:24: TFAIL: link(OLDPATH, NEWPATH) failed: EPERM (1); link05 — link05.c:30: TFAIL: 1: link(lkfile_290, lkfile_290_1) failed: EPERM (1)
-- **lseek**: lseek02 — lseek02.c:76: TBROK: mkfifo(tfifo1, 0777) failed: EPERM (1); lseek11 — passed 0 failed 0 broken 0
+- **kill**: kill06 (hang/timeout) — no summary; kill08 (hang/timeout) — no summary; kill11 (hang/timeout) — no summary
+- **link**: link02 — link02.c:24: TFAIL: link(OLDPATH, NEWPATH) failed: EPERM (1); link05 — link05.c:30: TFAIL: 1: link(lkfile_1771, lkfile_1771_1) failed: EPERM (1)
+- **lseek**: lseek02 — lseek02.c:76: TBROK: mkfifo(tfifo1, 0777) failed: EPERM (1); lseek07 (hang/timeout) — no summary; lseek11 — passed 0 failed 0 broken 0
 - **lstat**: lstat02 — lstat02.c:66: TFAIL: lstat() returned 0, expected -1: SUCCESS (0); lstat02_64 — lstat02.c:66: TFAIL: lstat() returned 0, expected -1: SUCCESS (0)
 - **nanosleep**: nanosleep02 — nanosleep02.c:46: TFAIL: nanosleep was not interrupted, returned 0, expected -1
 - **open**: open06 — open06.c:20: TBROK: mkfifo(tmpfile, 0644) failed: EPERM (1); open13 — open13.c:76: TFAIL: read() on original FD succeeded
-- **pause**: pause01 — pause01.c:36: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); pause02 — pause02.c:32: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)
-- **pipe**: pipe02 — pipe02.c:30: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); pipe06 — pipe06.c:29: TBROK: pipe({1022,1023}) failed: EMFILE (24); pipe07 — pipe07.c:76: TFAIL: exp_num_pipes (4092) != num_pipe_fds (1020); pipe13 — pipe13.c:77: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); pipe15 — pipe15.c:53: TBROK: Failed to open FILE '/proc/sys/fs/pipe-user-pages-soft' for reading: ENOENT (2)
-- **pipe2**: pipe2_04 — pipe2_04.c:82: TFAIL: Pipe size (65536) must be page size (4096)
-- **poll**: poll02 — tst_timer_test.c:314: TFAIL: poll() slept for too long
+- **pause**: pause01 — pause01.c:21: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110); pause02 — pause02.c:16: TBROK: tst_checkpoint_wake(0, 1, 10000) failed: ETIMEDOUT (110)
+- **pipe**: pipe02 — pipe02.c:30: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); pipe06 — pipe06.c:29: TBROK: pipe({1022,1023}) failed: EMFILE (24); pipe07 — pipe07.c:76: TFAIL: exp_num_pipes (4092) != num_pipe_fds (1020); pipe08 — pipe08.c:35: TFAIL: sigpipe_cnt (0) != 1 (1); pipe10 — pipe10.c:33: TBROK: close(-1) failed: EBADF (9); pipe11 (hang/timeout) — no summary; pipe13 (hang/timeout) — no summary; pipe15 — pipe15.c:53: TBROK: Failed to open FILE '/proc/sys/fs/pipe-user-pages-soft' for reading: ENOENT (2)
+- **pipe2**: pipe2_04 (hang/timeout) — no summary
+- **poll**: poll02 (hang/timeout) — no summary
 - **ppoll**: ppoll01 — ppoll01.c:288: TFAIL: ret: 0, exp: -1, ret_errno: SUCCESS (0), exp_errno: EINTR (4)
-- **pselect**: pselect01 — tst_timer_test.c:314: TFAIL: pselect() slept for too long; pselect01_64 — tst_timer_test.c:314: TFAIL: pselect() slept for too long
-- **pwrite**: pwrite01_64 (hang/timeout) — no summary; pwrite04 (hang/timeout) — no summary
-- **read**: read02 (hang/timeout) — no summary; read03 — read03.c:32: TBROK: mknod() failed: EPERM (1); read04 (hang/timeout) — no summary
-- **readv**: readv02 (hang/timeout) — no summary
-- **select**: select01 — select01.c:106: TBROK: mkfifo(tmpfile2, 0666) failed: EPERM (1); select02 (hang/timeout) — no summary; select04 (hang/timeout) — no summary
-- **sendfile**: sendfile02 (hang/timeout) — no summary; sendfile02_64 (hang/timeout) — skipped: hangs Shiro; sendfile03 — sendfile03.c:51: TFAIL: sendfile(..) with out_fd=-1 expected EBADF: EFAULT (14); sendfile03_64 — sendfile03.c:51: TFAIL: sendfile(..) with out_fd=-1 expected EBADF: EFAULT (14); sendfile04 — sendfile04.c:60: TFAIL: sendfile(..) with pass_mapped_buffer, protection=1 succeeded; sendfile04_64 — sendfile04.c:60: TFAIL: sendfile(..) with pass_mapped_buffer, protection=1 succeeded; sendfile05 — sendfile05.c:39: TFAIL: sendfile(out, in, &offset, ..) with offset=-1 succeeded; sendfile05_64 — sendfile05.c:39: TFAIL: sendfile(out, in, &offset, ..) with offset=-1 succeeded; sendfile06 — sendfile06.c:50: TFAIL: sendfile() failed to return expected value, expected: 26, got: -1; sendfile06_64 — sendfile06.c:50: TFAIL: sendfile() failed to return expected value, expected: 26, got: -1; sendfile07 — passed 0 failed 0 broken 0; sendfile07_64 — passed 0 failed 0 broken 0; sendfile08 — sendfile08.c:34: TBROK: sendfile() failed: EFAULT (14); sendfile08_64 — sendfile08.c:34: TBROK: sendfile() failed: EFAULT (14); sendfile09 — passed 0 failed 0 broken 0; sendfile09_64 — passed 0 failed 0 broken 0
-- **setrlimit**: setrlimit06 — setrlimit06.c:81: TFAIL: setrlimit(RLIMIT_CPU) failed: EPERM (1)
+- **pread**: pread01 (hang/timeout) — no summary; pread02_64 (hang/timeout) — no summary
+- **pselect**: pselect01 — tst_timer_test.c:292: TFAIL: pselect() woken up early 5 times range: [970,676]; pselect01_64 — tst_timer_test.c:292: TFAIL: pselect() woken up early 8 times range: [990,610]; pselect02 (hang/timeout) — no summary
+- **pwrite**: pwrite02_64 (hang/timeout) — no summary; pwrite03 (hang/timeout) — no summary; pwrite04 (hang/timeout) — skipped: hangs Shiro
+- **read**: read03 — read03.c:32: TBROK: mknod() failed: EPERM (1)
+- **readv**: readv02 — readv02.c:72: TFAIL: readv(3, 0x5371c0, 1) succeeded
+- **select**: select01 — select01.c:106: TBROK: mkfifo(tmpfile2, 0666) failed: EPERM (1); select02 — tst_timer_test.c:292: TFAIL: select() woken up early 1 times range: [1425,1425]; select03 — no summary
+- **sendfile**: sendfile02_64 (hang/timeout) — skipped: hangs Shiro; sendfile03 — sendfile03.c:51: TFAIL: sendfile(..) with out_fd=-1 expected EBADF: EFAULT (14); sendfile03_64 — sendfile03.c:51: TFAIL: sendfile(..) with out_fd=-1 expected EBADF: EFAULT (14); sendfile04 — sendfile04.c:60: TFAIL: sendfile(..) with pass_mapped_buffer, protection=1 succeeded; sendfile04_64 — sendfile04.c:60: TFAIL: sendfile(..) with pass_mapped_buffer, protection=1 succeeded; sendfile05 — sendfile05.c:39: TFAIL: sendfile(out, in, &offset, ..) with offset=-1 succeeded; sendfile05_64 — sendfile05.c:39: TFAIL: sendfile(out, in, &offset, ..) with offset=-1 succeeded; sendfile06 — sendfile06.c:50: TFAIL: sendfile() failed to return expected value, expected: 26, got: -1; sendfile06_64 — sendfile06.c:50: TFAIL: sendfile() failed to return expected value, expected: 26, got: -1; sendfile07 — passed 0 failed 0 broken 0; sendfile07_64 — passed 0 failed 0 broken 0; sendfile08 — sendfile08.c:34: TBROK: sendfile() failed: EFAULT (14); sendfile08_64 — sendfile08.c:34: TBROK: sendfile() failed: EFAULT (14); sendfile09 — passed 0 failed 0 broken 0; sendfile09_64 — passed 0 failed 0 broken 0
+- **setrlimit**: setrlimit06 (hang/timeout) — no summary
+- **signal**: signal01 (hang/timeout) — no summary; signal05 — signal05.c:42: TFAIL: siglist[n] (1) != sig_pass (0)
 - **socket**: socket01 — socket01.c:67: TFAIL: expected EINVAL(22): EPROTONOSUPPORT (93)
 - **socketpair**: socketpair01 — socketpair01.c:73: TFAIL: expected EINVAL(22): EOPNOTSUPP (95)
 - **uname**: uname04 — uname04.c:72: TBROK: persona(131072) failed: ENOSYS (38)
-- **unlink**: unlink05 — unlink05.c:29: TBROK: mkfifo(tfifo_178, 0777) failed: EPERM (1); unlink07 — unlink07.c:44: TFAIL: path contains a regular file expected ENOTDIR: ENOENT (2)
+- **unlink**: unlink05 — unlink05.c:29: TBROK: mkfifo(tfifo_222, 0777) failed: EPERM (1); unlink07 — unlink07.c:44: TFAIL: path contains a regular file expected ENOTDIR: ENOENT (2)
 - **unlinkat**: unlinkat01 — unlinkat01.c:80: TFAIL: unlinkat() failed: ENOTDIR (20)
-- **vfork**: vfork02 — vfork02.c:26: TFAIL: sigismember(&signal, SIGUSR1) (1) != 0 (0)
-- **wait4**: wait403 — tst_taint.c:43: TBROK: Failed to open FILE '/proc/sys/kernel/tainted' for reading: ENOENT (2)
-- **waitid**: waitid02 — waitid02.c:19: TFAIL: waitid(P_ALL, 0, infop, WNOHANG) expected EINVAL: ECHILD (10); waitid04 — waitid04.c:24: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); waitid07 — waitid07.c:24: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); waitid08 — waitid08.c:24: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); waitid10 — waitid10.c:51: TBROK: Failed to open FILE '/proc/sys/kernel/core_pattern' for reading: ENOENT (2)
-- **waitpid**: waitpid01 — waitpid01.c:80: TBROK: setrlimit(4,0x4ffffffff930) failed: EPERM (1); waitpid04 — waitpid04.c:30: TFAIL: waipid(-1, NULL, 0xffffffff) expected EINVAL: ECHILD (10); waitpid06 (hang/timeout) — skipped: hangs Shiro; waitpid07 — waitpid_common.h:57: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); waitpid08 — waitpid_common.h:57: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); waitpid09 — waitpid09.c:43: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); waitpid10 — waitpid_common.h:57: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); waitpid11 — waitpid_common.h:57: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); waitpid12 — waitpid_common.h:57: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110); waitpid13 — waitpid_common.h:57: TBROK: tst_checkpoint_wait(0, 10000) failed: ETIMEDOUT (110)
-- **write**: write04 — write04.c:40: TBROK: mknod() failed: EPERM (1)
-- **writev**: writev01 — writev01.c:124: TFAIL: invalid iov_len, expected: -1 (EINVAL), got: 127 (SUCCESS)
+- **vfork**: vfork02 — vfork02.c:61: TBROK: SIGUSR1 is not on hold
+- **wait4**: wait401 (hang/timeout) — no summary; wait403 — tst_taint.c:43: TBROK: Failed to open FILE '/proc/sys/kernel/tainted' for reading: ENOENT (2)
+- **waitid**: waitid01 — no summary; waitid02 — waitid02.c:19: TFAIL: waitid(P_ALL, 0, infop, WNOHANG) expected EINVAL: ECHILD (10); waitid04 — no summary; waitid05 — no summary; waitid06 — no summary; waitid07 (hang/timeout) — no summary; waitid08 (hang/timeout) — no summary; waitid10 — waitid10.c:51: TBROK: Failed to open FILE '/proc/sys/kernel/core_pattern' for reading: ENOENT (2); waitid11 (hang/timeout) — no summary
+- **waitpid**: waitpid01 — waitpid01.c:114: TFAIL: WIFSIGNALED() not set in status (exited with 0); waitpid04 — waitpid04.c:30: TFAIL: waipid(-1, NULL, 0xffffffff) expected EINVAL: ECHILD (10); waitpid06 (hang/timeout) — skipped: hangs Shiro; waitpid07 (hang/timeout) — skipped: hangs Shiro; waitpid08 (hang/timeout) — no summary; waitpid09 (hang/timeout) — no summary; waitpid10 (hang/timeout) — no summary; waitpid11 (hang/timeout) — no summary; waitpid12 (hang/timeout) — no summary; waitpid13 (hang/timeout) — no summary
+- **write**: write04 — write04.c:40: TBROK: mknod() failed: EPERM (1); write05 — write05.c:65: TFAIL: sigpipe_cnt = 0
+- **writev**: writev01 (hang/timeout) — no summary
 
 </details>
 

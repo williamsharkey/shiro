@@ -103,6 +103,9 @@ export async function startShiroServer({ staticDir, isolated = true, tcpPorts = 
     SHIRO_TCP_BYTE_BURST: String(1024 ** 3),
     SHIRO_TCP_CONNECTS_PER_MIN: '100000',
     SHIRO_TCP_MAX_CONNS_PER_IP: '512',
+    // Debian package mirror (suites/debian.mjs): served from a disk cache after the first run
+    SHIRO_DEBIAN_CACHE: process.env.SHIRO_DEBIAN_CACHE || join(ROOT, '.debian-build', 'mirror-cache'),
+    SHIRO_DEBIAN_INDEX_TTL: process.env.SHIRO_DEBIAN_INDEX_TTL || String(30 * 24 * 3600),
   };
   const child = spawn(process.execPath, [join(ROOT, 'server.mjs')], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   const lines = [];

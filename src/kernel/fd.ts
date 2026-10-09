@@ -496,7 +496,12 @@ class Inode {
       this.flushTimer = null;
       const now = Date.now();
       const quiet = now - this.lastWrite;
-      if (this.dirty && quiet < FLUSH_DELAY_MS && now - this.dirtySince < FLUSH_MAX_DELAY_MS) this.armFlush(FLUSH_DELAY_MS - quiet);
+      // Each write-back copies the whole file: a big file being written (apt
+      // unpacking a 56 MB index) waits longer, or the copies grow quadratically
+      const mb = this.size / (1 << 20);
+      const pause = Math.max(FLUSH_DELAY_MS, mb * 20);
+      const most = Math.max(FLUSH_MAX_DELAY_MS, mb * 500);
+      if (this.dirty && quiet < pause && now - this.dirtySince < most) this.armFlush(pause - quiet);
       else void this.flush();
     }, ms);
   }

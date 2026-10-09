@@ -77,6 +77,8 @@ import { startDisplay } from './x11/display';
 import { registerGuiApps } from './gui/desktop-apps';
 import { installNet } from './kernel/net';
 import { attachKernelTty } from './kernel/pty';
+import { sudoCmd } from './commands/sudo';
+import { shiroAptMethodCmd } from './commands/debian';
 import { iframeServer } from './iframe-server';
 import { unixCommands } from './commands/unix';
 import { ShiroTerminal } from './terminal';
@@ -395,6 +397,12 @@ async function main() {
     () => import('./commands/pkg').then(m => m.aptCmd)), 'src/commands/pkg.ts');
   registerCommand(commands, lazyCommand('apt-get', 'Package manager (same as pkg)',
     () => import('./commands/pkg').then(m => m.aptGetCmd)), 'src/commands/pkg.ts');
+  registerCommand(commands, lazyCommand('debian', 'Install and manage the streamed Debian system',
+    () => import('./commands/debian').then(m => m.debianCmd)), 'src/commands/debian.ts');
+  registerCommand(commands, lazyCommand('shiro-alternatives', "Choose Shiro's or Debian's implementation of a program",
+    () => import('./commands/debian').then(m => m.shiroAlternativesCmd)), 'src/commands/debian.ts');
+  registerCommand(commands, shiroAptMethodCmd, 'src/commands/debian.ts');
+  registerCommand(commands, sudoCmd, 'src/commands/sudo.ts');
   registerCommand(commands, lazyCommand('xpkg', 'Binary (x86-64) package manager',
     () => import('./commands/xpkg').then(m => m.xpkgCmd)), 'src/commands/xpkg.ts');
 
@@ -456,7 +464,17 @@ async function main() {
   // Create PATH shims for builtins so programs can discover them via `which`, `execFile`, etc.
   // This is how an OS advertises its commands — the PATH mechanism, not the builtin registry.
   // PATH shims for builtins, /bin/sh, /usr/bin/env (src/path-shims.ts)
-  void createPathShims(fs).catch(() => {});
+  // In Debian mode (docs/DEBIAN.md) the streamed rootfs's files load on first
+  // read, Debian's programs on PATH replace builtins of the same name, and
+  // the builtin shims are left out (they'd shadow /usr/bin).
+  void import('./debian/rootfs').then(async (m) => {
+    const st = await m.bootRootfs(fs);
+    if (!st) return createPathShims(fs);
+    const ov = await import('./debian/overlay');
+    await ov.enableDebianShadows(fs, (n) => !!commands.get(n));
+    for (const [k, v] of Object.entries(m.DEBIAN_ENV)) shell.env[k] ??= v;
+    console.log(`[shiro] Debian ${st.version} (${st.suite}) rootfs ${st.id}`);
+  }).catch((e) => { console.warn('[shiro] Debian boot failed:', e); void createPathShims(fs).catch(() => {}); });
 
   // Create shell
   const shell = new Shell(fs, commands);
@@ -758,7 +776,8 @@ async function main() {
   initFaviconUpdater(terminal.term);
 
   // Initialize dynamic title (shows recent commands)
-  initTitle();
+  // The desktop titles the tab with the product name (src/brand.json)
+  if (!desktop) initTitle();
 
   // Auto-reconnect remote session if one was active before page reload
   // Skip only if become mode is actually active (not just config in localStorage)
