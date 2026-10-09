@@ -433,6 +433,13 @@ describe('kernel processes', () => {
     const viaLink = kernel.spawn({ path: '/tmp/venv/bin/python', argv: ['python'], cwd: '/tmp', run: () => new Promise<number>(() => {}) });
     expect(await readlink(`/proc/${viaLink.pid}/exe`)).toBe('/tmp/real/bin/python3.12');
     kernel.kill(viaLink.pid, A.SIGKILL);
+    // started by name or relative path: still absolute (glibc's _dl_get_origin asserts it)
+    await fs.mkdir('/tmp/pbin', { recursive: true }); await fs.writeFile('/tmp/pbin/named', 'x');
+    const byName = kernel.spawn({ path: 'named', argv: ['named'], cwd: '/tmp', env: { PATH: '/nope:/tmp/pbin' }, run: () => new Promise<number>(() => {}) });
+    expect(await readlink(`/proc/${byName.pid}/exe`)).toBe('/tmp/pbin/named');
+    const byRel = kernel.spawn({ path: 'pbin/named', argv: ['named'], cwd: '/tmp', run: () => new Promise<number>(() => {}) });
+    expect(await readlink(`/proc/${byRel.pid}/exe`)).toBe('/tmp/pbin/named');
+    kernel.kill(byName.pid, A.SIGKILL); kernel.kill(byRel.pid, A.SIGKILL);
 
     const stat = (await cat(`/proc/${proc.pid}/stat`)) as string;
     const fields = stat.trim().split(' ');
