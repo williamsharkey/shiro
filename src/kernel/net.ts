@@ -34,7 +34,7 @@ import {
   SYS_connect, SYS_accept, SYS_sendto, SYS_recvfrom, SYS_shutdown, SYS_bind, SYS_listen, SYS_getsockname,
   SYS_getpeername, SYS_socketpair, SYS_setsockopt, SYS_getsockopt, SYS_accept4, SOCKET_SYSCALLS,
   SOCKADDR_ROOM, SIGPIPE, ENOENT, SO_PEERCRED, SCM_RIGHTS, MSG_CTRUNC, MSG_CMSG_CLOEXEC, SYS_sendmsg,
-  SYS_recvmsg, SOCKADDR_UN_MAX, ENAMETOOLONG, decodeText,
+  SYS_recvmsg, SOCKADDR_UN_MAX, ENAMETOOLONG, decodeText, SOCK_SEQPACKET,
 } from './abi';
 
 // Socket constants live in abi.ts (the shared ABI); re-exported for net.ts users.
@@ -139,6 +139,21 @@ export function ipFamily(addr: string): 0 | 4 | 6 {
 
 export function isLoopback(addr: string): boolean {
   return /^127\./.test(addr) || addr === '::1' || addr === '0.0.0.0' || addr === '::' || /^::ffff:127\./i.test(addr);
+}
+
+/**
+ * The page's own address for talking to `remote`: loopback for loopback,
+ * else 10.0.2.15, as IPv4-mapped (::ffff:10.0.2.15) toward an IPv4-mapped
+ * peer and fd00::15 toward IPv6. glibc's getaddrinfo sorts its answers by
+ * connect()ing a UDP socket to each and asserts that an IPv6 socket sent to
+ * a mapped address reports a mapped source ("::" aborted every AF_UNSPEC
+ * lookup with two families of answers).
+ */
+export function localAddressFor(remote: SockAddr): string {
+  const a = remote.address;
+  if (isLoopback(a) && a !== '0.0.0.0' && a !== '::') return /^::ffff:/i.test(a) ? '::ffff:127.0.0.1' : a.includes(':') ? '::1' : '127.0.0.1';
+  if (remote.family !== AF_INET6) return '10.0.2.15';
+  return /^::ffff:/i.test(a) ? '::ffff:10.0.2.15' : 'fd00::15';
 }
 
 /** Expand an IPv6 address to 8 16-bit groups (handles :: and an embedded IPv4 tail). */
@@ -355,7 +370,8 @@ const sockStat = (ino: number): KStat => {
 
 export class KSocket implements OpenFile {
   readonly kind = 'socket' as const;
-  readonly type = SOCK_STREAM;
+  /** SOCK_STREAM, or SOCK_SEQPACKET (AF_UNIX socketpair: records kept whole) */
+  type: number = SOCK_STREAM;
   flags: number;
   state: StreamState = 'unbound';
   local: SockAddr | null = null;
@@ -428,7 +444,7 @@ export class KSocket implements OpenFile {
       if (this.rxLen > 0 && got < buf.length) {
         const before = fdsOut?.length ?? 0;
         got += this.take(buf.subarray(got), (msgFlags & MSG_PEEK) !== 0, fdsOut);
-        if (!(msgFlags & MSG_WAITALL) || got === buf.length || (msgFlags & MSG_PEEK)) return got;
+        if (this.type === SOCK_SEQPACKET || !(msgFlags & MSG_WAITALL) || got === buf.length || (msgFlags & MSG_PEEK)) return got;
         if ((fdsOut?.length ?? 0) > before) return got; // descriptions end a message
         continue;
       }
@@ -447,6 +463,7 @@ export class KSocket implements OpenFile {
   }
 
   private take(out: Uint8Array, peek: boolean, fdsOut?: OpenFile[]): number {
+    if (this.type === SOCK_SEQPACKET) return this.takeRecord(out, peek, fdsOut);
     let n = 0;
     let i = 0;
     while (n < out.length && i < this.rx.length) {
@@ -466,6 +483,24 @@ export class KSocket implements OpenFile {
       if (fds) break;
     }
     if (!peek) { this.rxLen -= n; this.peer?.consumed(n); }
+    return n;
+  }
+
+  /** SOCK_SEQPACKET: one record per receive; what doesn't fit is dropped (MSG_TRUNC). */
+  private takeRecord(out: Uint8Array, peek: boolean, fdsOut?: OpenFile[]): number {
+    const rec = this.rx[0];
+    if (!rec) return 0;
+    const n = Math.min(rec.length, out.length);
+    out.set(rec.subarray(0, n));
+    if (peek) return n;
+    this.rx.shift();
+    const fds = this.rxFds.get(rec);
+    if (fds) {
+      this.rxFds.delete(rec);
+      if (fdsOut) fdsOut.push(...fds); else for (const f of fds) void release(f);
+    }
+    this.rxLen -= rec.length;
+    this.peer?.consumed(rec.length);
     return n;
   }
 
@@ -500,7 +535,8 @@ export class KSocket implements OpenFile {
         continue;
       }
       // Blocking sockets take the whole buffer (like Linux); nonblocking take what fits.
-      const n = dontwait ? Math.min(room, buf.length) : buf.length;
+      // A record (SOCK_SEQPACKET) goes whole.
+      const n = dontwait && this.type !== SOCK_SEQPACKET ? Math.min(room, buf.length) : buf.length;
       this.peer.send(buf.subarray(0, n), fds);
       return n;
     }
@@ -618,7 +654,7 @@ export class KSocket implements OpenFile {
       ({ peer, info }) => {
         if (this.state !== 'connecting') { peer.close(); return 0; }
         const remote = remoteOf(info);
-        const local = this.local ?? { family: remote.family, address: remote.family === AF_INET6 ? 'fd00::15' : '10.0.2.15', port: stack.ephemeral() };
+        const local = this.local ?? { family: remote.family, address: localAddressFor(remote), port: stack.ephemeral() };
         this._attach(peer, local, remote);
         return 0;
       },
@@ -712,7 +748,7 @@ export class KSocket implements OpenFile {
     if (level === SOL_SOCKET) {
       switch (name) {
         case SO_ERROR: return this.takeError();
-        case SO_TYPE: return SOCK_STREAM;
+        case SO_TYPE: return this.type;
         case SO_DOMAIN: return this.domain;
         case SO_PROTOCOL: return this.domain === AF_UNIX ? 0 : IPPROTO_TCP;
         // the peer's pid (the ucred's uid/gid are every process's: one user)
@@ -768,7 +804,14 @@ export class KDatagramSocket implements OpenFile {
     return this.remote ? this.sendto(buf, 0, this.remote) : Promise.resolve(-EDESTADDRREQ);
   }
 
-  connect(addr: SockAddr): number { this.remote = { ...addr }; return 0; }
+  connect(addr: SockAddr): number {
+    this.remote = { ...addr };
+    // A connected datagram socket has a source address (getsockname)
+    if (!this.local || this.local.address === '::' || this.local.address === '0.0.0.0') {
+      this.local = { family: this.domain, address: localAddressFor({ ...addr, family: this.domain }), port: this.local?.port || this.stack.ephemeral() };
+    }
+    return 0;
+  }
   bind(addr: SockAddr): number {
     if (this.local) return -EINVAL;
     this.local = { ...addr, port: addr.port || this.stack.ephemeral() };
@@ -977,10 +1020,14 @@ export class NetStack {
 
   /** socketpair(2): two connected stream sockets (AF_UNIX-like; they report AF_UNIX). */
   socketpair(type = SOCK_STREAM): [KSocket, KSocket] | number {
-    if ((type & 0xf) !== SOCK_STREAM) return -EOPNOTSUPP;
+    // SOCK_SEQPACKET too: Rust's std::process::Command makes one for every
+    // spawn (cargo couldn't start rustc, nor rustc its linker: EOPNOTSUPP)
+    const base = type & 0xf;
+    if (base !== SOCK_STREAM && base !== SOCK_SEQPACKET) return -EOPNOTSUPP;
     const flags = type & SOCK_NONBLOCK ? O_NONBLOCK : 0;
     const a = new KSocket(this, AF_UNIX, 0, flags);
     const b = new KSocket(this, AF_UNIX, 0, flags);
+    a.type = b.type = base;
     const addr = { family: AF_UNIX, address: '', port: 0 };
     a._attach(new LoopbackPeer(a, b), addr, addr);
     b._attach(new LoopbackPeer(b, a), addr, addr);
