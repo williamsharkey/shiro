@@ -104,6 +104,8 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     expect(cfg).toMatch(/path-exclude \/usr\/share\/man\/\*\npath-include \/usr\/share\/man\/man\[1-9\]\*\/\*\n/);
     expect(cfg).toContain('path-exclude /usr/share/doc/*');
     expect(await fs.exists('/etc/apt/apt.conf.d/91shiro-engine')).toBe(false);
+    // Maintainer scripts don't start services (invoke-rc.d asks policy-rc.d)
+    expect((await run(shell, '/usr/sbin/policy-rc.d ssh start; echo "rc=$?"')).output).toContain('rc=101');
   });
 
   it("bash's PATH search finds builtins and Debian's programs (no phantom /usr/local/sbin/NAME)", async () => {
