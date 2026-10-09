@@ -484,9 +484,9 @@ async function main() {
   // In Debian mode (docs/DEBIAN.md) the streamed rootfs's files load on first
   // read, Debian's programs on PATH replace builtins of the same name, and
   // the builtin shims are left out (they'd shadow /usr/bin).
-  void import('./debian/rootfs').then(async (m) => {
+  const debianBoot = import('./debian/rootfs').then(async (m) => {
     const st = await m.bootRootfs(fs);
-    if (!st) return createPathShims(fs);
+    if (!st) { void createPathShims(fs).catch(() => {}); return; } // no Debian: nothing for commands to wait for
     const ov = await import('./debian/overlay');
     await ov.enableDebianShadows(fs, (n) => !!commands.get(n));
     for (const [k, v] of Object.entries(m.DEBIAN_ENV)) shell.env[k] ??= v;
@@ -495,6 +495,8 @@ async function main() {
 
   // Create shell
   const shell = new Shell(fs, commands);
+  // Commands wait for Debian mode's overlay (Debian's python3, not the builtin, once installed)
+  shell.bootGate = debianBoot;
   // Kernel processes (worker guests, spawned builtins) run against this fs and fork this shell
   const kernel = getKernel();
   kernel.attach(fs, shell);

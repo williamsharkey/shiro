@@ -524,6 +524,12 @@ export class Shell {
   fs: FileSystem;
   /** User id kernel processes started by this shell run as (`sudo` sets 0); undefined = the parent's (1000). */
   uid?: number;
+  /**
+   * Boot work that decides what names mean (Debian mode's overlay, which
+   * makes `python3` Debian's once installed): commands wait for it, so one
+   * typed right after load doesn't run the builtin.
+   */
+  bootGate?: Promise<unknown>;
   cwd: string = '/home/user';
   env: Record<string, string> = {};
   history: string[] = [];
@@ -885,6 +891,7 @@ export class Shell {
     child.inheritedReturn = this.canReturn();
     child.kernelHost = this.kernelHost;
     child.uid = this.uid;
+    child.bootGate = this.bootGate;
     return child;
   }
 
@@ -1023,6 +1030,7 @@ export class Shell {
     // loop or if body) runs on the terminal of the call around it; a builtin
     // calling back with its own sink collects the output like $(...), kernel
     // programs included (their stdout doesn't go to the screen)
+    if (this.bootGate) { await this.bootGate; this.bootGate = undefined; }
     if (terminalOverride === undefined) {
       terminalOverride = this.inCommand > 0
         ? (this.terminal ? capturingStdout(this.terminal) : undefined)
@@ -1174,8 +1182,10 @@ export class Shell {
     if (!done() && SHELL_KEYWORDS.has(name)) out.push({ kind: 'keyword' });
     if (!done() && name in this.functions) out.push({ kind: 'function' });
     if (!done() && SHELL_BUILTIN_NAMES.has(name)) out.push({ kind: 'builtin' });
-    // Shiro's own commands come before files on PATH (an installed package doesn't shadow them)
-    if (!done() && !name.includes('/') && this.commands.get(name) && !SHELL_BUILTIN_NAMES.has(name)) out.push({ kind: 'registered' });
+    // Shiro's own commands come before files on PATH, unless a program shadows
+    // them as it does when run (pkg install, or Debian mode's /usr/bin/NAME)
+    if (!done() && !name.includes('/') && this.commands.get(name) && !SHELL_BUILTIN_NAMES.has(name) &&
+      !(this.pkgShadowBypass !== name && packageShadows(this.fs).has(name))) out.push({ kind: 'registered' });
     if (!done()) {
       const path = await this.findExecutableInPath(name).catch(() => null);
       if (path) out.push({ kind: 'file', path });

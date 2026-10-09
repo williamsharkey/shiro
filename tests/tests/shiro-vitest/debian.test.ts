@@ -108,6 +108,25 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     expect((await run(shell, '/usr/sbin/policy-rc.d ssh start; echo "rc=$?"')).output).toContain('rc=101');
   });
 
+  it("a Debian program replaces the builtin of its name, for type too; commands wait for the boot gate", async () => {
+    expect(shell.commands.get('jq')).toBeTruthy();
+    await fs.writeFile('/usr/bin/jq', '#!/bin/sh\necho debian-jq\n', { mode: 0o755 });
+    await new Promise((r) => setTimeout(r, 50)); // the overlay hears the write
+    expect((await run(shell, 'type jq')).output).toContain('/usr/bin/jq');
+    expect((await run(shell, 'jq')).output).toContain('debian-jq');
+    await fs.unlink('/usr/bin/jq');
+    // A command typed before the overlay is up waits for it (python3 right after load)
+    let release!: () => void;
+    const order: string[] = [];
+    shell.bootGate = new Promise<void>((r) => { release = r; }).then(() => { order.push('boot'); });
+    const pending = run(shell, 'echo cmd').then((r) => { order.push('cmd'); return r; });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(order).toEqual([]);
+    release();
+    expect((await pending).output).toContain('cmd');
+    expect(order).toEqual(['boot', 'cmd']);
+  }, 60000);
+
   it("bash's PATH search finds builtins and Debian's programs (no phantom /usr/local/sbin/NAME)", async () => {
     // id: Debian's file in /usr/bin; tail: diverted to Shiro's (no file); /usr/local/sbin comes first
     const r = await run(shell, `sudo /usr/bin/bash -c 'type -p id tail; id -u; printf "a\\nb\\n" | tail -1'`);
