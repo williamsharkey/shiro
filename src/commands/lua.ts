@@ -91,7 +91,7 @@ export const luaCmd: Command = {
 
     if (args.length === 0 && !ctx.stdin) {
       ctx.stdout = [
-        'Lua 5.4 (Shiro)',
+        'Lua 5.4 (tabcomputer)',
         '',
         'Usage:',
         '  lua script.lua              Run a Lua script',

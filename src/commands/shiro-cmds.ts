@@ -6,6 +6,7 @@
  */
 import { Command } from './index';
 import { getAssociation } from '../file-associations';
+import { activeProfile } from '../profile';
 
 export const rmCmd: Command = {
   name: 'rm',
@@ -293,19 +294,20 @@ export const unameCmd: Command = {
     const hasR = flags.includes('r');
     const hasV = flags.includes('v');
 
+    const { name, hostname } = activeProfile();
     if (hasAll) {
-      ctx.stdout = 'Shiro shiro 0.1.0 Shiro/WASM browser wasm\n';
+      ctx.stdout = `${name} ${hostname} 0.1.0 ${name}/WASM browser wasm\n`;
       return 0;
     }
 
     const parts: string[] = [];
-    if (hasS) parts.push('Shiro');
-    if (hasN) parts.push('shiro');
+    if (hasS) parts.push(name);
+    if (hasN) parts.push(hostname);
     if (hasR) parts.push('0.1.0');
-    if (hasV) parts.push('Shiro/WASM');
+    if (hasV) parts.push(`${name}/WASM`);
     if (hasM) parts.push('wasm');
 
-    ctx.stdout = (parts.length > 0 ? parts.join(' ') : 'Shiro') + '\n';
+    ctx.stdout = (parts.length > 0 ? parts.join(' ') : name) + '\n';
     return 0;
   },
 };

@@ -14,6 +14,7 @@ import {
 import { KNetlinkSocket } from '../kernel/netlink';
 import { retain, release, type OpenFile } from '../kernel/fd';
 import { EpollFile } from '../kernel/epoll';
+import { activeProfile } from '../profile';
 
 // Linux error codes (negated — syscalls return -ERRNO)
 const ENOENT = 2;
@@ -626,7 +627,8 @@ export class LinuxSyscalls {
 
   private sysUname(buf: bigint): bigint {
     // struct utsname: 5 fields × 65 bytes each
-    const fields = ['Linux', 'shiro', '6.1.0-shiro', '#1 SMP', 'x86_64'];
+    const host = activeProfile().hostname;
+    const fields = ['Linux', host, `6.1.0-${host}`, '#1 SMP', 'x86_64'];
     for (let i = 0; i < fields.length; i++) {
       this.mem.writeString(buf + BigInt(i * 65), fields[i]);
     }
@@ -1294,7 +1296,7 @@ export class LinuxSyscalls {
     // Use fetch() to make the actual HTTP request
     const response = await fetch(url, {
       method,
-      headers: { 'User-Agent': 'Shiro-x86/1.0' },
+      headers: { 'User-Agent': 'tabcomputer-x86/1.0' },
     });
 
     // Build HTTP response

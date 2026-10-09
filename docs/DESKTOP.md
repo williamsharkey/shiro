@@ -1,7 +1,7 @@
 # Desktop, window manager API, and /dom
 
 The Unix edition boots to a desktop: a menu bar, a dock, and windows. The
-Terminal (the real Shiro terminal on a pty) opens front and center. The
+Terminal (the real tabcomputer terminal on a pty) opens front and center. The
 classic full-page terminal of shiro.computer is still there behind a flag.
 
 - Code: `src/desktop/` (window manager `wm.ts`, shell `index.ts`, Terminal
@@ -36,10 +36,12 @@ All changes are additive. Nothing below renames or removes an earlier name.
 ## Name
 
 The Unix edition is **tabcomputer** (tabcomputer.com). The name, domain, tagline
-and description live in `src/brand.json` only: the desktop reads it (`src/brand.ts`:
-tab title, wallpaper wordmark, welcome banner, About), and `server.mjs`
-(`brandAppShell`) gives the shared `index.html` that title plus description and
-Open Graph tags for every host except shiro.computer, since link previews don't run JS.
+and description are the tabcomputer profile's `brand`
+(`profiles/tabcomputer/profile.json`, [PROFILES.md](PROFILES.md)): the desktop
+reads it (`src/brand.ts`: tab title, wallpaper wordmark, welcome banner, About),
+and `server.mjs` (`brandAppShell`) gives the shared `index.html` that title plus
+description and Open Graph tags for every host whose profile has a brand (not
+shiro.computer), since link previews don't run JS.
 
 ## Choosing the UI
 
@@ -47,15 +49,15 @@ Open Graph tags for every host except shiro.computer, since link previews don't 
 
 | condition | UI |
 |---|---|
-| `?ui=desktop` / `?ui=terminal` | that one, remembered in localStorage `shiro-ui` |
+| `?ui=desktop` / `?ui=terminal` | that one, remembered in localStorage `tabcomputer-ui` |
 | `?demo=1`, embedded in another page (seeds), app ("become") mode | terminal |
-| saved `shiro-ui` | that one |
+| saved `tabcomputer-ui` | that one |
 | host `shiro.computer` or `*.shiro.computer` | terminal |
 | anything else (tabcomputer.com, localhost) | desktop |
 
 From a shell: `desktop` switches to the desktop and `desktop classic` switches
 back. System menu → Classic Terminal does the same. Both modes keep
-`window.__shiro.terminal`. On the desktop, that terminal is the first
+`window.__tabcomputer.terminal`. On the desktop, that terminal is the first
 Terminal window's first tab. Closing that tab parks the terminal (it is not
 destroyed), and the next Terminal window adopts it again.
 
@@ -65,12 +67,17 @@ destroyed), and the next Terminal window adopts it again.
   title bar. Drag it to the left or right edge to tile it, or to the top edge
   to maximize. Double-click the title bar to zoom. Drag any edge or corner to
   resize.
-- **The dock** shows Terminal, Files, Settings and Activity, then terminal
+- **The dock** shows Terminal, Files, Browser, Settings and Activity, then terminal
   programs: Vim, htop and Python, plus Neovim, Emacs, nano, tmux, Lua and
   SQLite once they are installed. A program that is not installed has a ↓
   badge; clicking it runs `apt install NAME && NAME` in a new Terminal
   window. A dot under an icon marks a running app. Right-click an icon to
   list its windows, open a new window, or close it.
+- **Browser** (docs/BROWSER.md): tabs, address bar, back/forward/reload,
+  history, bookmarks and saved passwords, showing real sites on per-site
+  browse origins with TLS done in the page. "Open in real tab" (and a banner
+  for passkeys, Google sign-in and TLS 1.2-only sites) hands a page to the
+  host browser. `desktop open browser` / `openApp('browser', { url })`.
 - **Keyboard.** The browser keeps Ctrl/Cmd+N, T and W for itself, so desktop
   shortcuts use Alt+Shift. Terminal programs rarely use that combination.
 
@@ -100,19 +107,19 @@ destroyed), and the next Terminal window adopts it again.
 - **Layout after a reload** (`session.ts`): Terminal (its working
   directory), Files (its folder), Settings (its pane), Activity and About
   windows come back where they were, maximized/snapped/minimized as they
-  were (localStorage `shiro-desktop-session`). The main terminal gets its
+  were (localStorage `tabcomputer-desktop-session`). The main terminal gets its
   geometry at boot; the others reopen once the page is idle. Program windows
   (Vim, htop, X11 apps) are not reopened: that would run them again.
 - **First visit**: three short cards in the corner (what this is, real Linux
   programs and `debian install`, where files live), shown once per browser
-  (localStorage `shiro-desktop-tour`); Help → Welcome Tour shows them again.
+  (localStorage `tabcomputer-desktop-tour`); Help → Welcome Tour shows them again.
 - **About This Computer** lists measured status with the document that
   records each number (`STATUS` in `apps/about.ts`: keep it in step with
   DEBIAN_SCORE.md and X86_ENGINES.md), and what is real, emulated and absent.
 
 - **Themes**: light, dark, or match the system (View menu, the sun/moon icon
   in the menu bar, or Settings → Appearance). Saved in localStorage
-  `shiro-desktop-theme`. Terminals switch palettes with the theme.
+  `tabcomputer-desktop-theme`. Terminals switch palettes with the theme.
 - **Motion**: every animation and transition turns off under
   `prefers-reduced-motion: reduce`.
 - **Phone width** (≤ 640 px): every window fills the work area. Menus collapse
@@ -129,7 +136,7 @@ destroyed), and the next Terminal window adopts it again.
   apply to the next letter typed on the phone's keyboard. The keyboard button
   in the menu bar turns the bar on or off; Settings → Appearance → Extra keys
   picks Off, Auto (hidden while the phone's keyboard is open) or Always
-  (localStorage `shiro-keybar`). The classic UI keeps `src/mobile-input.ts`.
+  (localStorage `tabcomputer-keybar`). The classic UI keeps `src/mobile-input.ts`.
 - **Dock stacks**: when the dock would not fit (phones), Settings and
   Activity share a System stack and Vim, Python and installed programs a
   Programs stack; Terminal, Files and htop stay loose. Debian GUI apps stack
@@ -138,9 +145,37 @@ destroyed), and the next Terminal window adopts it again.
   `public/fonts/`, SIL OFL, license files next to them). Only the desktop
   loads them.
 
+## Loading: one draw
+
+The first frame of the desktop is its final layout; nothing in the menu bar,
+dock or windows moves afterwards unless the user acts.
+
+- `bootDesktop` builds the desktop hidden (`.sd-booting`: `visibility:
+  hidden`, transitions and animations off). The page shows its background
+  and, on branded profiles, the boot mark (server.mjs inlines the brand's
+  SVG favicon as `#boot-mark`; light or dark from the system's scheme).
+- It appears in one frame once everything that would change the layout has
+  settled: the Inter and JetBrains Mono fonts (preloaded by main.ts as soon
+  as the desktop is chosen; `font-display: block`; if the terminal was
+  measured before JetBrains Mono arrived it is re-measured first), the
+  installed packages (dock badges, optional programs), the Debian GUI apps
+  (`registerGuiApps` resolves once installed apps are registered), the phone
+  layer (`mobile.ts`) and last session's windows (opened without their
+  animation; the main terminal keeps focus). Anything that takes longer than
+  1.5 s (`REVEAL_CAP_MS`) no longer holds it up.
+- `Desktop.holdReveal(promise)` adds a wait (main.ts uses it for the GUI
+  apps). The mark `shiro:desktop:revealed` records when it appeared.
+- Dock hover magnifies with `transform` only: each icon keeps its slot, so
+  neighbours never move.
+- `tests/browser/no-reflow.mjs` checks it in Chromium at desktop and iPhone
+  sizes, light and dark: cumulative layout shift 0, every menu bar, dock and
+  window element's rect the same from the first visible frame to the
+  settled page, and no neighbour moving while each dock icon is hovered.
+  `--shots` writes screencast strips (docs/screenshots/load-frames-*.png).
+
 ## Window manager API
 
-The page exposes it as `window.__shiro.desktop` and `globalThis.__shiroDesktop`.
+The page exposes it as `window.__tabcomputer.desktop` and `globalThis.__shiroDesktop`.
 Code in this repo can call `getDesktop()` from `src/desktop/wm.ts` instead.
 Both are `null` or `undefined` in the classic UI. The types live in `wm.ts`.
 
@@ -258,7 +293,7 @@ Mapping notes:
 A canvas client takes about 15 lines:
 
 ```js
-const d = window.__shiro.desktop;
+const d = window.__tabcomputer.desktop;
 const w = d.createWindow({ title: 'xeyes', appId: 'x11', width: 300, height: 200, content: { kind: 'surface' } });
 const ctx = w.surface.canvas.getContext('2d');
 const draw = (mx = 0, my = 0) => { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w.surface.width, w.surface.height);
@@ -302,7 +337,7 @@ if (!token) return -ENETUNREACH;   // the user said "Not now"
 
 - **With a saved sign-in**, the hook resolves at once and later visits
   connect silently. The saved sign-in is the GitHub token in localStorage
-  `shiro_github_token`, the same one `gh auth login` saves.
+  `tabcomputer_github_token`, the same one `gh auth login` saves.
 - **Without one**, the desktop shows a non-blocking sheet under the menu bar:
   "Connect to the internet — Sign in with GitHub", plus a small "Other ways to
   connect" link (a placeholder for now). Sign-in uses GitHub's device flow
@@ -318,7 +353,7 @@ Today the hook has one caller: the TCP relay token request (`relayToken` in
 `src/kernel/net.ts`). That request sends `Authorization: Bearer <token>` when
 a sign-in is saved, and asks the hook when the server answers 401.
 
-The server enforces sign-in only when `SHIRO_TCP_REQUIRE_SIGNIN=1` is set.
+The server enforces sign-in only when `TABCOMPUTER_TCP_REQUIRE_SIGNIN=1` is set.
 `POST /tcp/token` then needs a GitHub token that `api.github.com/user`
 accepts (checks are cached for 10 minutes); without one it answers
 `401 {"error":"signin_required","provider":"github"}`. When the variable is
@@ -327,10 +362,10 @@ unset, nothing changes.
 **Use my own connection.** Settings → Network → Connection switches the
 kernel's sockets from this site's relay to one the user runs: a `ws(s)://`
 relay URL and, if that relay issues tokens, its token URL (any relay speaking
-docs/NETWORKING.md's protocol; `SHIRO_TCP_RELAY=1 node server.mjs` with this
-site in `SHIRO_TCP_ORIGINS`). **Test** checks the relay (the token request,
+docs/NETWORKING.md's protocol; `TABCOMPUTER_TCP_RELAY=1 node server.mjs` with this
+site in `TABCOMPUTER_TCP_ORIGINS`). **Test** checks the relay (the token request,
 then a WebSocket open) before it is saved. The choice lives in localStorage
-`shiro_relay` (`ownRelay`/`setOwnRelay`/`relayNetConfig` in net-signin.ts), and
+`tabcomputer_relay` (`ownRelay`/`setOwnRelay`/`relayNetConfig` in net-signin.ts), and
 the desktop applies it with `netStackOf(kernel).configure(...)` at boot and on
 change. A user's relay gets `credentials: false` (a NetConfig field, default
 true): the saved GitHub token is never sent to it, and a 401 from it doesn't

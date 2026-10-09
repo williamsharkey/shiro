@@ -100,7 +100,7 @@ function buildSnippet(url: string, ndjson: string, storage: string, stats: SeedS
 
   return `${header}
 (function(){
-  if(document.getElementById('shiro-seed')){console.log('Shiro already seeded');return}
+  if(document.getElementById('shiro-seed')){console.log('tabcomputer already seeded');return}
   var host=document.createElement('div');host.id='shiro-seed';
   var root=host.attachShadow?host.attachShadow({mode:'open'}):host;
   var w=document.createElement('div');
@@ -146,7 +146,7 @@ function buildSnippet(url: string, ndjson: string, storage: string, stats: SeedS
   tb.appendChild(dots);tb.appendChild(title);tb.appendChild(zoomWrap);
   var iframe=document.createElement('iframe');iframe.src='${url}';
   var is=iframe.style;is.border='none';is.width='100%';is.flex='1';is.display='block';is.pointerEvents='auto';is.background='#0a0a1a';
-  iframe.tabIndex=0;iframe.title='Shiro';
+  iframe.tabIndex=0;iframe.title='tabcomputer';
   iframe.allow='clipboard-read; clipboard-write; cross-origin-isolated';
   var rh=document.createElement('div');var rs=rh.style;
   rs.position='absolute';rs.bottom='0';rs.right='0';rs.width='16px';rs.height='16px';
@@ -371,7 +371,7 @@ function buildBlobSnippet(compressedHtmlB64: string, compressedFsB64: string, co
   // Note: base64 strings are safe in single-quoted JS (no ', \, or newlines)
   return `${header}
 (async function(){
-  if(document.getElementById('shiro-seed')){console.log('Shiro already seeded');return}
+  if(document.getElementById('shiro-seed')){console.log('tabcomputer already seeded');return}
   async function _dc(b){var a=atob(b),u=new Uint8Array(a.length),i=0;for(;i<a.length;)u[i]=a.charCodeAt(i++);var s=new DecompressionStream('gzip'),w=s.writable.getWriter();w.write(u);w.close();var r=s.readable.getReader(),c=[],v;while(!(v=await r.read()).done)c.push(v.value);var t=0,x;for(x of c)t+=x.length;var o=new Uint8Array(t),p=0;for(x of c){o.set(x,p);p+=x.length}return new TextDecoder().decode(o)}
   var html=await _dc('${compressedHtmlB64}');
   var blob=new Blob([html],{type:'text/html'});
@@ -422,7 +422,7 @@ function buildBlobSnippet(compressedHtmlB64: string, compressedFsB64: string, co
   tb.appendChild(dots);tb.appendChild(title);tb.appendChild(zoomWrap);
   var iframe=document.createElement('iframe');iframe.src=blobUrl;
   var is=iframe.style;is.border='none';is.width='100%';is.flex='1';is.display='block';is.pointerEvents='auto';is.background='#0a0a1a';
-  iframe.tabIndex=0;iframe.title='Shiro';
+  iframe.tabIndex=0;iframe.title='tabcomputer';
   iframe.allow='clipboard-read; clipboard-write; cross-origin-isolated';
   var rh=document.createElement('div');var rs=rh.style;
   rs.position='absolute';rs.bottom='0';rs.right='0';rs.width='16px';rs.height='16px';
@@ -515,7 +515,7 @@ function buildBlobSnippet(compressedHtmlB64: string, compressedFsB64: string, co
 
 export const seedCmd: Command = {
   name: 'seed',
-  description: 'Export Shiro state (seed [blob|gif|html|share] [subdomain])',
+  description: 'Export tabcomputer state (seed [blob|gif|html|share] [subdomain])',
 
   async exec(ctx: CommandContext): Promise<number> {
     // ─── seed gif ────────────────────────────────────────
@@ -641,7 +641,7 @@ export const seedCmd: Command = {
 
       // Build output with stats
       let output = '\n';
-      output += `  Shiro ${isBlob ? 'Blob ' : ''}Seed v${SHIRO_VERSION}\n`;
+      output += `  tabcomputer ${isBlob ? 'Blob ' : ''}Seed v${SHIRO_VERSION}\n`;
       output += `  ${'─'.repeat(30)}\n`;
       if (isBlob) {
         output += `  Mode:        self-contained blob (CSP-safe)\n`;
@@ -745,7 +745,7 @@ async function execSeedGif(ctx: CommandContext): Promise<number> {
     const compressed = await gzipCompress(new TextEncoder().encode(seedEnvelope));
 
     // Capture terminal and add overlay
-    const term = (window as any).__shiro?.terminal?.term;
+    const term = (window as any).__tabcomputer?.terminal?.term;
     if (!term) {
       ctx.stderr = 'seed gif: terminal not available\n';
       return 1;
@@ -757,9 +757,9 @@ async function execSeedGif(ctx: CommandContext): Promise<number> {
     ctx.stdout += 'Encoding GIF...\n';
     const gifBytes = encodeGIF(canvas, compressed);
 
-    // Store on __shiro for demo/drag access
-    if (typeof window !== 'undefined' && (window as any).__shiro) {
-      (window as any).__shiro.lastSeedGif = gifBytes;
+    // Store on __tabcomputer for demo/drag access
+    if (typeof window !== 'undefined' && (window as any).__tabcomputer) {
+      (window as any).__tabcomputer.lastSeedGif = gifBytes;
     }
 
     // Download
@@ -774,7 +774,7 @@ async function execSeedGif(ctx: CommandContext): Promise<number> {
     // Stats output
     const imageApprox = gifBytes.length - compressed.length;
     let output = '\n';
-    output += `  Shiro GIF Seed v${SHIRO_VERSION}\n`;
+    output += `  tabcomputer GIF Seed v${SHIRO_VERSION}\n`;
     output += `  ${'─'.repeat(30)}\n`;
     output += `  Files:       ${stats.files}\n`;
     output += `  Directories: ${stats.dirs}\n`;
@@ -826,7 +826,7 @@ function showDraggableGif(gifBytes: Uint8Array, filename: string) {
   img.style.cssText = 'width:120px;height:auto;border-radius:4px;pointer-events:none';
 
   const label = document.createElement('span');
-  label.textContent = '\u2b06 Drag to another Shiro tab';
+  label.textContent = '\u2b06 Drag to another tabcomputer tab';
   label.style.cssText = 'font-size:10px;color:#51cf66;font-family:system-ui;font-weight:600';
 
   const closeBtn = document.createElement('button');
@@ -902,7 +902,7 @@ async function execSeedShare(ctx: CommandContext): Promise<number> {
     } catch {}
 
     let output = '\n';
-    output += `  Shiro Shared Seed v${SHIRO_VERSION}\n`;
+    output += `  tabcomputer Shared Seed v${SHIRO_VERSION}\n`;
     output += `  ${'─'.repeat(30)}\n`;
     output += `  Files:       ${stats.files}\n`;
     output += `  Directories: ${stats.dirs}\n`;
@@ -917,7 +917,7 @@ async function execSeedShare(ctx: CommandContext): Promise<number> {
       output += `\n  Warning: This shared seed contains your API keys!\n`;
     }
 
-    output += `\n  URL copied to clipboard. Share it to give anyone a Shiro instance with your files.\n`;
+    output += `\n  URL copied to clipboard. Share it to give anyone a tabcomputer instance with your files.\n`;
     output += `  Link expires after 60 days of no visits.\n\n`;
     ctx.stdout = output;
     return 0;
@@ -963,9 +963,9 @@ async function execSeedHtml(ctx: CommandContext): Promise<number> {
   }
   var attempts=0;
   var timer=setInterval(async function(){
-    if(window.__shiro||attempts++>50){
+    if(window.__tabcomputer||attempts++>50){
       clearInterval(timer);
-      if(window.__shiro){
+      if(window.__tabcomputer){
         window.postMessage({
           type:'shiro-seed-v2',
           ndjson:await _dc('${compressedFsB64}'),
@@ -986,7 +986,7 @@ async function execSeedHtml(ctx: CommandContext): Promise<number> {
     triggerDownload(fullHtml, 'text/html', filename);
 
     let output = '\n';
-    output += `  Shiro HTML Seed v${SHIRO_VERSION}\n`;
+    output += `  tabcomputer HTML Seed v${SHIRO_VERSION}\n`;
     output += `  ${'─'.repeat(30)}\n`;
     output += `  Files:       ${stats.files}\n`;
     output += `  Directories: ${stats.dirs}\n`;

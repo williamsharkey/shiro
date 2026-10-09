@@ -39,7 +39,7 @@ export const sudoCmd: Command = {
         ctx.stdout += 'usage: sudo [-u user] [-E] [-H] [-i|-s] [--] command [arg ...]\n';
         return 0;
       }
-      if (a === '-V' || a === '--version') { ctx.stdout += 'Sudo version 1.9 (Shiro)\n'; return 0; }
+      if (a === '-V' || a === '--version') { ctx.stdout += 'Sudo version 1.9 (tabcomputer)\n'; return 0; }
       if (/^-[nHSbAP]+$/.test(a)) continue; // non-interactive, set-home, stdin password, ...
       if (a === '-g' || a === '-C' || a === '-p' || a === '-r' || a === '-t' || a === '-D' || a === '-h') { i++; continue; }
       ctx.stderr += `sudo: invalid option -- '${a.replace(/^-+/, '')}'\n`;

@@ -113,6 +113,11 @@ EOF
 # Like Docker's debian:slim: keep docs, man pages and translations out of
 # the image and out of later installs (dpkg still lists them; see dpkg(1)
 # --path-exclude).
+# Packages don't start services (invoke-rc.d, deb-systemd-invoke), as in
+# Debian's chroots and containers; src/debian/rootfs.ts writes it too.
+printf '#!/bin/sh\n# Written by Shiro: packages do not start services; see docs/DEBIAN.md\nexit 101\n' > "$ROOT/usr/sbin/policy-rc.d"
+chmod 755 "$ROOT/usr/sbin/policy-rc.d"
+
 cat > "$ROOT/etc/dpkg/dpkg.cfg.d/90shiro-slim" <<'EOF'
 path-exclude /usr/share/doc/*
 path-include /usr/share/doc/*/copyright

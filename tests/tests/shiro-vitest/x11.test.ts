@@ -130,6 +130,19 @@ describe('X11 protocol', () => {
     expect(r.u8()).toBe(1);
   });
 
+  it('reports the display scale as DPI: Xft.dpi, an outline font for xterm, toolkit scale variables', async () => {
+    const at = (dpi: number) => new TextDecoder().decode(new XServer({ dpi }).root.props.get(23 /* RESOURCE_MANAGER */)!.data);
+    expect(at(96)).toContain('Xft.dpi:\t96\n');
+    expect(at(96)).not.toContain('faceName');
+    expect(at(192)).toContain('Xft.dpi:\t192\n');
+    expect(at(192)).toContain('Xcursor.size:\t48\n');
+    expect(at(192)).toContain('XTerm*faceName:\tDejaVu Sans Mono\n');
+    const { toolkitScaleEnv } = await import('@shiro/gui/display-scale');
+    expect(toolkitScaleEnv(1)).toEqual({});
+    expect(toolkitScaleEnv(2)).toMatchObject({ GDK_SCALE: '2', GDK_DPI_SCALE: '0.5', QT_SCALE_FACTOR: '2', QT_FONT_DPI: '96' });
+    expect(toolkitScaleEnv(1.5)).toMatchObject({ GDK_SCALE: '1', QT_SCALE_FACTOR: '1.5' });
+  });
+
   it('maps a window, sends Expose, draws, and composes the pixels', async () => {
     const { c, tops } = await newServer();
     const wid = c.id(1), gc = c.id(2);
@@ -248,6 +261,53 @@ describe('X11 protocol', () => {
     let black = 0;
     for (let x = 2; x < 14; x++) for (let y = 4; y < 17; y++) if (pixelAt(tops[0], x, y) === 0) black++;
     expect(black).toBeGreaterThan(10);
+  });
+
+  it('DOM-text mode reports core text instead of drawing glyphs, and CopyArea moves', async () => {
+    const { server, c, tops } = await newServer();
+    server.domText = true;
+    const runs: { x: number; y: number; text: string; width: number; fg: number; bg: number | null; font: string }[] = [];
+    const copies: unknown[][] = [];
+    server.hooks.text = (_top, run) => runs.push(run);
+    server.hooks.copy = (_top, ...args) => copies.push(args.slice(0, 7));
+    const wid = c.id(1), gc = c.id(2), fid = c.id(3);
+    createWindow(c, wid, 0, 0, 100, 40, 0);
+    c.send(8, 0, (w) => w.u32(wid));
+    c.send(45, 0, (w) => w.u32(fid).u16(5).u16(0).str('fixed'));
+    c.send(55, 0, (w) => w.u32(gc).u32(wid).u32(0x4 | 0x8 | 0x4000).u32(0x102030).u32(0xffffff).u32(fid));
+    c.send(76, 2, (w) => w.u32(wid).u32(gc).i16(2).i16(15).str('Hi'));                    // ImageText8
+    c.send(74, 0, (w) => w.u32(wid).u32(gc).i16(20).i16(30).u8(3).u8(0).str('abc').u8(0)); // PolyText8
+    c.send(62, 0, (w) => w.u32(wid).u32(wid).u32(gc).i16(0).i16(20).i16(0).i16(5).u16(100).u16(20)); // CopyArea (scroll)
+    c.send(43, 0);
+    await c.reply();
+    expect(runs.map((r) => r.text)).toEqual(['Hi', 'abc']);
+    expect(runs[0]).toMatchObject({ x: 2, y: 15, width: 12, fg: 0x102030, bg: 0xffffff });
+    expect(runs[1]).toMatchObject({ x: 20, y: 30, width: 18, bg: null });
+    expect(runs[0].font).toMatch(/-misc-fixed-medium-r-.*-c-60-/);
+    // no glyph pixels: ImageText painted its (white) background only
+    for (let x = 2; x < 14; x++) for (let y = 4; y < 17; y++) expect(pixelAt(tops[0], x, y)).toBe(0xffffff);
+    expect(copies).toEqual([['begin', 0, 20, 100, 20, 0, 5], ['end', 0, 20, 100, 20, 0, 5]]);
+  });
+
+  it('takes text runs from GTK apps (_SHIRO_TEXT) as overlay text instead of a property', async () => {
+    const { server, c } = await newServer();
+    server.domText = true;
+    const runs: { x: number; y: number; text: string; width: number; overlay?: boolean }[] = [];
+    server.hooks.text = (_top, run) => runs.push(run);
+    const top = c.id(1), child = c.id(2);
+    createWindow(c, top, 0, 0, 200, 100, 0);
+    c.send(1, 0, (q) => q.u32(child).u32(top).i16(10).i16(20).u16(100).u16(50).u16(0).u16(1).u32(0).u32(0));
+    c.send(8, 0, (w) => w.u32(child));
+    c.send(8, 0, (w) => w.u32(top));
+    c.send(16, 0, (w) => w.u16(11).u16(0).str('_SHIRO_TEXT'));
+    const prop = (await c.reply()).skip(8).u32();
+    const lines = '3 15 60 11 3 1a2b3c\tHello, GTK\nbad line\n4 30 0 11 3 000000\tzero width\n';
+    const data = new TextEncoder().encode(lines);
+    c.send(18, 2, (w) => w.u32(child).u32(prop).u32(31).u8(8).zero(3).u32(data.length).bytes(data).zero((4 - data.length % 4) % 4));
+    c.send(20, 0, (w) => w.u32(child).u32(prop).u32(0).u32(0).u32(1000)); // GetProperty: nothing kept
+    const r = await c.reply();
+    expect(r.skip(1).u8()).toBe(0); // format 0: no such property
+    expect(runs).toEqual([{ x: 13, y: 35, width: 60, ascent: 11, descent: 3, text: 'Hello, GTK', font: 'pango', fg: 0x1a2b3c, bg: null, overlay: true, win: child }]);
   });
 
   it('transfers a selection between two clients', async () => {

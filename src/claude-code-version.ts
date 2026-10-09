@@ -89,9 +89,9 @@ const CAPABILITY_PATCHES: Array<[string, string]> = [
   ['async function i$6(){if(vy8)return vy8.default;if(v$())try{let _=await Promise.resolve().then(() => (_y8(),Ky8)),z=_.sharp||_.default;return vy8={default:z},z}catch{console.warn("Native image processor not available, falling back to sharp")}let q=await Promise.resolve().then(() => K6(Bm1(),1)),K=tU_(q);return vy8={default:K},K}',
    'async function i$6(){if(vy8)return vy8.default;let K=d6("sharp");return vy8={default:K},K}'],
   // The welcome card still announced the Opus 4.7 launch
-  ['title:"Opus 4.7 is here"', 'title:"Claude Code in Shiro"'],
-  ['"Welcome to Opus 4.7 xhigh!"', '"Running in your browser on Shiro"'],
-  ['pdK="Welcome to Opus 4.7 xhigh! · /effort', 'pdK="Running in your browser on Shiro · /effort'],
+  ['title:"Opus 4.7 is here"', 'title:"Claude Code in tabcomputer"'],
+  ['"Welcome to Opus 4.7 xhigh!"', '"Running in your browser on tabcomputer"'],
+  ['pdK="Welcome to Opus 4.7 xhigh! · /effort', 'pdK="Running in your browser on tabcomputer · /effort'],
 ];
 
 /**

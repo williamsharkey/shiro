@@ -14,11 +14,11 @@
  * `needsSignIn(url)` is false for them.
  *
  * The credential is the GitHub token `gh auth login` already saves
- * (localStorage `shiro_github_token`, src/github-auth.ts).
+ * (localStorage `tabcomputer_github_token`, src/github-auth.ts).
  */
 
 /** Same key as GITHUB_TOKEN_KEY in github-auth.ts (not imported: that module is lazy) */
-const GITHUB_TOKEN_KEY = 'shiro_github_token';
+const GITHUB_TOKEN_KEY = 'tabcomputer_github_token';
 
 export interface NetworkNeed {
   /** Where the program wants to go (shown to the user) */
@@ -109,7 +109,7 @@ export interface OwnRelay {
   tokenUrl?: string;
 }
 
-const RELAY_KEY = 'shiro_relay';
+const RELAY_KEY = 'tabcomputer_relay';
 const relayListeners = new Set<(r: OwnRelay | null) => void>();
 
 /** The user's own relay, or null for this site's. */

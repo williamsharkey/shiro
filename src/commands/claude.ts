@@ -22,6 +22,7 @@ import {
   isClaudeCodeInstalled,
 } from '../claude-code-version';
 import { hasClaudeCredentials, openClaudeSignIn } from '../claude-signin';
+import { activeProfile } from '../profile';
 
 // Flags that make Claude print something and exit instead of starting a session
 const INFO_FLAGS = new Set(['-v', '--version', '-h', '--help']);
@@ -78,7 +79,11 @@ export const claudeCmd: Command = {
   description: 'Run Claude Code (installed and signed in automatically)',
   async exec(ctx) {
     const args = [...ctx.args];
-    if (args[0] === '--native' || ctx.env.CLAUDE_NATIVE === '1') {
+    // --native, CLAUDE_NATIVE=1, or a profile whose `claude` is the native build
+    // (CLAUDE_NATIVE=0 or --npm then picks the npm build)
+    const npm = args[0] === '--npm' || ctx.env.CLAUDE_NATIVE === '0';
+    if (args[0] === '--npm') args.shift();
+    if (!npm && (args[0] === '--native' || ctx.env.CLAUDE_NATIVE === '1' || activeProfile().shims.claude === 'native')) {
       if (args[0] === '--native') args.shift();
       return runNative(ctx, args);
     }
@@ -93,7 +98,7 @@ export const claudeCmd: Command = {
       return installNativeClaude(ctx, nativeClaudePath(ctx.env), version);
     }
     if (args[0] === 'update' || args[0] === 'upgrade' || args[0] === 'install') {
-      ctx.stdout += `Claude Code in Shiro is pinned to ${CLAUDE_CODE_VERSION}, the last release that ships as JavaScript\n`
+      ctx.stdout += `Claude Code in tabcomputer is pinned to ${CLAUDE_CODE_VERSION}, the last release that ships as JavaScript\n`
         + `(later releases are native binaries). It reports itself as ${CLAUDE_CODE_REPORTED_VERSION} so current models work.\n`
         + 'The native build can run in the x86-64 emulator (experimental, slow): claude install --native, then claude --native.\n';
       return 0;

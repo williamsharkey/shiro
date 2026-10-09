@@ -179,7 +179,7 @@ describe('vim', () => {
   it('follows a resize (SIGWINCH) and survives Ctrl-Z / fg', async () => {
     await install('vim');
     const term = fakeTerminal(24, 80);
-    const { done } = onTerminal((process.env.VDEBUG ? 'SHIRO_BLINK_DEBUG=1 ' : '') + 'vim -u NONE', term);
+    const { done } = onTerminal((process.env.VDEBUG ? 'TABCOMPUTER_BLINK_DEBUG=1 ' : '') + 'vim -u NONE', term);
     await until(() => term.screen.includes('~'), 'empty buffer');
     term.tty.resize(30, 100);
     term.clear();
@@ -375,6 +375,8 @@ describe('git', () => {
       return r.out;
     };
     expect(await g('git --version')).toBe('git version 2.56.0\n');
+    // No detached `git maintenance run --auto` after commits: it burned CPU in the background
+    expect(await g('git config --show-origin --get maintenance.auto; git config --get gc.auto')).toBe('file:/etc/gitconfig\tfalse\n0\n');
     await g('git config --global user.name "Shiro Tester" && git config --global user.email t@shiro.computer && git config --global init.defaultBranch main');
     await g('mkdir repo && cd repo && git init -q && echo one > a.txt && git add a.txt && git commit -qm first');
     await sh('cd /home/user/w/repo');
@@ -581,18 +583,18 @@ describe('tmux', () => {
     // Interactive: the status line, a shell in the pane, a split, detach with C-b d
     const { term, done } = onTerminal('tmux new-session -s main');
     await until(() => term.screen.includes('[main]'), 'the status line');
-    await until(() => term.screen.includes('user@shiro:~/w$'), 'the pane shell prompt');
+    await until(() => term.screen.includes('user@tabcomputer:~/w$'), 'the pane shell prompt');
     term.type('echo pane-$((6*7))\r');
     await until(() => term.screen.includes('pane-42'), 'command output in the pane');
     term.type('\x02%'); // C-b %: split left/right
-    await until(() => (term.screen.match(/user@shiro:~\/w\$/g) ?? []).length >= 3, 'a second pane');
+    await until(() => (term.screen.match(/user@tabcomputer:~\/w\$/g) ?? []).length >= 3, 'a second pane');
     term.type('\x02d');
     expect(await done).toBe(0);
     expect(term.screen).toContain('[detached (from session main)]');
     // Scripted: the server kept running
     expect((await sh("tmux list-panes -t main -F '#{pane_index}'")).out).toBe('0\n1\n');
     // uname's nodename is the kernel's hostname (Blink patch 0026), not emscripten's
-    expect((await sh("tmux display -p -t main '#{host}'")).out).toBe('shiro\n');
+    expect((await sh("tmux display -p -t main '#{host}'")).out).toBe('tabcomputer\n');
     await sh("tmux send-keys -t main.0 'echo scripted > /home/user/w/from-tmux.txt' Enter");
     for (let i = 0; i < 200 && !(await fs.exists('/home/user/w/from-tmux.txt')); i++) await new Promise((r) => setTimeout(r, 50));
     expect(await fs.readFile('/home/user/w/from-tmux.txt', 'utf8')).toBe('scripted\n');
@@ -612,11 +614,11 @@ describe('screen', () => {
     await install('screen');
     expect((await sh('screen -v')).out).toMatch(/^Screen version 5\.0\.2 /);
     const { term, done } = onTerminal('screen -S work');
-    await until(() => term.screen.includes('user@shiro:~/w$'), 'the window shell prompt');
+    await until(() => term.screen.includes('user@tabcomputer:~/w$'), 'the window shell prompt');
     term.type('echo window-$((6*7))\r');
     await until(() => term.screen.includes('window-42'), 'command output');
     term.type('\x01c'); // C-a c: a second window
-    await until(() => (term.screen.match(/user@shiro:~\/w\$/g) ?? []).length >= 3, 'a second window');
+    await until(() => (term.screen.match(/user@tabcomputer:~\/w\$/g) ?? []).length >= 3, 'a second window');
     term.type('\x01d');
     expect(await done).toBe(0);
     expect(term.screen).toMatch(/\[detached from \d+\.work\]/);
@@ -625,7 +627,7 @@ describe('screen', () => {
     for (let i = 0; i < 200 && !(await fs.exists('/home/user/w/from-screen.txt')); i++) await new Promise((r) => setTimeout(r, 50));
     expect(await fs.readFile('/home/user/w/from-screen.txt', 'utf8')).toBe('stuffed\n');
     const again = onTerminal('screen -r work');
-    await until(() => again.term.screen.includes('user@shiro:~/w$'), 'the re-attached session');
+    await until(() => again.term.screen.includes('user@tabcomputer:~/w$'), 'the re-attached session');
     expect((await sh('screen -S work -X quit')).exitCode).toBe(0);
     await again.done;
     expect(again.term.screen).toContain('[screen is terminating]');
@@ -852,7 +854,7 @@ describe('emacs', () => {
     expect(await fs.readFile('/home/user/w/b.txt', 'utf8')).toBe('one\ntwo\n'); // text-mode requires a final newline
     term.clear();
     term.type('\x1bxshell\r');
-    await until(() => term.screen.includes('user@shiro'), 'a shell prompt in *shell*');
+    await until(() => term.screen.includes('user@tabcomputer'), 'a shell prompt in *shell*');
     term.type('echo sh-$((6*7))\r');
     await until(() => term.screen.includes('sh-42'), 'command output in *shell*');
     term.type('exit\r');

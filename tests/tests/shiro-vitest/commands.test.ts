@@ -389,14 +389,14 @@ describe('Commands', () => {
       expect(output.replace(/\r/g, '').trim()).toBe('user');
     });
 
-    it('hostname returns shiro', async () => {
+    it('hostname returns the profile hostname', async () => {
       const { output } = await run(shell, 'hostname');
-      expect(output.replace(/\r/g, '').trim()).toBe('shiro');
+      expect(output.replace(/\r/g, '').trim()).toBe('tabcomputer');
     });
 
-    it('uname returns Shiro', async () => {
+    it('uname returns the product name', async () => {
       const { output } = await run(shell, 'uname');
-      expect(output.replace(/\r/g, '').trim()).toBe('Shiro');
+      expect(output.replace(/\r/g, '').trim()).toBe('tabcomputer');
     });
 
     it('date returns a date string', async () => {

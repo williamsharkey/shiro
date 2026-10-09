@@ -60,7 +60,7 @@ function toWasmPackage(entry: PkgEntry): WasmPackage {
 
 // ── IndexedDB cache ──────────────────────────────────────────────────
 
-const PKG_CACHE_DB = 'shiro-pkg-cache';
+const PKG_CACHE_DB = 'tabcomputer-pkg-cache';
 const PKG_CACHE_STORE = 'packages';
 const PKG_META_STORE = 'metadata';
 const PKG_DB_VERSION = 1;

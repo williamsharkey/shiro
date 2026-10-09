@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Shiro Documentation</title>
-  <meta name="description" content="Documentation for Shiro — a browser-native Unix environment with shell, git, npm, node, C compiler, SQLite, Python, and Claude Code.">
+  <title>tabcomputer Documentation</title>
+  <meta name="description" content="Documentation for tabcomputer — a browser-native Unix environment with shell, git, npm, node, C compiler, SQLite, Python, and Claude Code.">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -255,8 +255,8 @@
   <div class="layout">
     <aside class="sidebar">
       <div class="sidebar-header">
-        <a href="/about">Shiro</a>
-        <a class="back" href="/">&larr; Open Shiro</a>
+        <a href="/about">tabcomputer</a>
+        <a class="back" href="/">&larr; Open tabcomputer</a>
       </div>
       <nav>
         <span class="section-label">Getting Started</span>
@@ -287,11 +287,11 @@
     <main class="content">
       <!-- ===== Quick Start ===== -->
       <h1 id="quick-start">Quick Start</h1>
-      <p>Open <a href="/">shiro.computer</a> and start typing. The terminal is a full Unix shell with 220+ commands, persistent files, WASM runtimes, and Spirit AI.</p>
+      <p>Open <a href="/">tabcomputer.com</a> and start typing. The terminal is a full Unix shell with 220+ commands, persistent files, WASM runtimes, and Spirit AI.</p>
 
       <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Create files and directories</span>
 mkdir -p ~/project/src
-echo 'Hello from Shiro' > ~/project/README.md
+echo 'Hello from tabcomputer' > ~/project/README.md
 
 <span class="c"># List and search</span>
 ls -la ~/project
@@ -307,7 +307,7 @@ cat ~/project/README.md</pre></div>
 
       <!-- ===== Filesystem ===== -->
       <h2 id="filesystem">Filesystem</h2>
-      <p>Shiro has an IndexedDB-backed POSIX filesystem. Files persist across sessions. The root is <code>/</code> with standard directories.</p>
+      <p>tabcomputer has an IndexedDB-backed POSIX filesystem. Files persist across sessions. The root is <code>/</code> with standard directories.</p>
 
       <h3>Key Paths</h3>
       <table>
@@ -361,7 +361,7 @@ command-that-fails 2> errors.txt</pre></div>
 
       <h3>Variables</h3>
       <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Set and use variables</span>
-NAME="Shiro"
+NAME="tabcomputer"
 echo "Welcome to $NAME"
 echo "Home is ${HOME}"
 
@@ -522,10 +522,10 @@ git pull && git push</pre></div>
 
       <!-- ===== Claude Code ===== -->
       <h2 id="claude-code">Claude Code</h2>
-      <p>The real <code>@anthropic-ai/claude-code</code> CLI runs inside Shiro's Node.js runtime. It can read, write, edit, and search files in the virtual filesystem.</p>
+      <p>The real <code>@anthropic-ai/claude-code</code> CLI runs inside tabcomputer's Node.js runtime. It can read, write, edit, and search files in the virtual filesystem.</p>
 
       <h3>Setup</h3>
-      <p>Claude Code is installed in the background when Shiro first boots. Run <code>claude</code>: if you aren't signed in, a panel opens with a button for the sign-in page and a box for the code it gives you. Credentials persist in IndexedDB, and <code>claude login</code> or <code>setup</code> signs in again.</p>
+      <p>Claude Code is installed in the background when tabcomputer first boots. Run <code>claude</code>: if you aren't signed in, a panel opens with a button for the sign-in page and a box for the code it gives you. Credentials persist in IndexedDB, and <code>claude login</code> or <code>setup</code> signs in again.</p>
 
       <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Sign in again / switch accounts</span>
 claude login
@@ -554,12 +554,12 @@ claude-window</pre></div>
       <ul>
         <li>Tree-sitter WASM doesn't load (syntax highlighting disabled)</li>
         <li>The default <code>claude</code> is the pinned JavaScript build; Claude Code's own native binary runs too, slowly (below)</li>
-        <li>Claude's bundled ripgrep is shimmed to Shiro's <code>rg</code></li>
-        <li>API calls route through a CORS proxy on shiro.computer</li>
+        <li>Claude's bundled ripgrep is shimmed to tabcomputer's <code>rg</code></li>
+        <li>API calls route through a CORS proxy on tabcomputer.com</li>
       </ul>
 
       <h3>Native build (experimental)</h3>
-      <p>Anthropic's native Claude Code binary runs in Shiro's x86-64 emulator. It is about 2 minutes per request today, so the JavaScript build stays the default.</p>
+      <p>Anthropic's native Claude Code binary runs in tabcomputer's x86-64 emulator. It is about 2 minutes per request today, so the JavaScript build stays the default.</p>
       <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># Download it (238 MB, checked against the release's sha256) and musl's loader</span>
 claude install --native
 
@@ -569,7 +569,7 @@ claude --native -p "say hi"</pre></div>
 
       <!-- ===== Other coding agents ===== -->
       <h2 id="agent-clis">Other Coding Agents</h2>
-      <p>Other AI coding CLIs run here too: Linux x86-64 binaries in the emulator, Node.js ones on Shiro's <code>node</code>. Their requests go out through the server's network relay, so they need a server that has one (tabcomputer.com does). Sign in or set the vendor's API key as you would on Linux.</p>
+      <p>Other AI coding CLIs run here too: Linux x86-64 binaries in the emulator, Node.js ones on tabcomputer's <code>node</code>. Their requests go out through the server's network relay, so they need a server that has one (tabcomputer.com does). Sign in or set the vendor's API key as you would on Linux.</p>
       <table>
         <tr><th>Tool</th><th>Install</th><th>Status</th><th>Speed</th></tr>
         <tr><td>OpenAI Codex</td><td><code>curl -fsSLO</code> the <code>codex-x86_64-unknown-linux-musl.tar.gz</code> release, then <code>tar xzf</code> it</td><td>Works: <code>codex exec "..."</code> reaches the API</td><td>About 1 minute per request</td></tr>
@@ -583,7 +583,7 @@ claude --native -p "say hi"</pre></div>
 
       <!-- ===== Editors & Viewers ===== -->
       <h2 id="editors">Editors &amp; Viewers</h2>
-      <p>Shiro includes rich code editors and file viewers. The <code>open</code> command uses file associations to pick the right tool automatically.</p>
+      <p>tabcomputer includes rich code editors and file viewers. The <code>open</code> command uses file associations to pick the right tool automatically.</p>
 
       <h3>Code Editors</h3>
       <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre><span class="c"># CodeMirror editor (lightweight)</span>
@@ -679,9 +679,9 @@ unbecome             <span class="c"># return to terminal</span></pre></div>
 
       <!-- ===== Remote Control ===== -->
       <h2 id="remote">Remote Control</h2>
-      <p>An outer Claude Code instance can control Shiro remotely via MCP tools over WebRTC. Peer-to-peer with no data going through the server after signaling.</p>
+      <p>An outer Claude Code instance can control tabcomputer remotely via MCP tools over WebRTC. Peer-to-peer with no data going through the server after signaling.</p>
 
-      <h3>In Shiro (browser)</h3>
+      <h3>In tabcomputer (browser)</h3>
       <div class="code-block"><button class="copy-btn" onclick="copyBlock(this)">Copy</button><pre>remote start     <span class="c"># Generate connection code</span>
 remote status    <span class="c"># Check connection</span>
 remote stop      <span class="c"># End session</span></pre></div>
@@ -697,7 +697,7 @@ remote stop      <span class="c"># End session</span></pre></div>
 
       <!-- ===== Node.js Compatibility ===== -->
       <h2 id="node-compat">Node.js Compatibility</h2>
-      <p>Shiro shims ~50 Node.js modules to run in the browser. Most are functional for common use cases. Some are stubs that satisfy import checks without full behavior.</p>
+      <p>tabcomputer shims ~50 Node.js modules to run in the browser. Most are functional for common use cases. Some are stubs that satisfy import checks without full behavior.</p>
 
       <table>
         <tr><th>Module</th><th>Status</th><th>Notes</th></tr>
@@ -766,17 +766,17 @@ remote stop      <span class="c"># End session</span></pre></div>
       <h3>AI</h3>
       <p><code>spirit</code> <code>claude</code> <code>claude-window</code> <code>pbcopy</code> <code>cv</code></p>
 
-      <h3>Shiro-specific</h3>
+      <h3>tabcomputer-specific</h3>
       <p><code>setup</code> <code>seed</code> <code>image</code> <code>spawn</code> <code>hud</code> <code>js-eval</code></p>
     </main>
     <footer style="padding:24px 0;margin-top:40px;border-top:1px solid #1a1a2e;text-align:center;font-size:0.85rem;color:#555;">
-      <a href="/" style="color:#888;">Try Shiro</a>
+      <a href="/" style="color:#888;">Try tabcomputer</a>
       <span style="margin:0 8px;color:#333;">·</span>
       <a href="/about" style="color:#888;">About</a>
       <span style="margin:0 8px;color:#333;">·</span>
       <a href="/vision" style="color:#888;">Vision</a>
       <span style="margin:0 8px;color:#333;">·</span>
-      <a href="https://github.com/williamsharkey/shiro" style="color:#888;">GitHub</a>
+      <a href="https://github.com/williamsharkey/tabcomputer" style="color:#888;">GitHub</a>
     </footer>
   </div>
 

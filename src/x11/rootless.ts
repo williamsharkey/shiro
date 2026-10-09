@@ -7,7 +7,8 @@
  * manager would do them.
  */
 import { appIdAliases, pidAppIds } from './app-ids';
-import type { XServer, XWindow, XCursor } from './server';
+import { TextLayer } from './dom-text';
+import type { XServer, XWindow, XCursor, TextRun } from './server';
 import type { CanvasWindow, GuiInputEvent, WindowHost } from '../gui/window-host';
 import { composeTop } from './compose';
 import { isModifierCode, keysymForChar } from './keymap';
@@ -22,6 +23,10 @@ interface Top {
   frame: number;
   hints: SizeHints;
   cleanup: (() => void)[];
+  /** DOM-text mode's spans over the canvas */
+  text?: TextLayer;
+  /** runs the app reported, added on the next frame */
+  pendingText?: TextRun[];
 }
 
 interface SizeHints {
@@ -42,17 +47,46 @@ export class Rootless {
   onFocusIn: (() => void) | null = null;
 
   constructor(readonly server: XServer, readonly host: WindowHost) {
+    cursorScale = host.scale ?? 1;
     server.hooks = {
       topMapped: (w) => this.mapped(w),
       topUnmapped: (w) => this.unmapped(w),
       topDestroyed: (w) => this.destroyed(w),
       topConfigured: (w) => this.configured(w),
       topProperty: (w, atom) => this.property(w, atom),
-      damage: (w, x, y, ww, hh) => this.damage(w, { x, y, w: ww, h: hh }),
+      damage: (w, x, y, ww, hh, src) => {
+        const layer = this.tops.get(w)?.text;
+        // drawing on a window covers its own text and its ancestors', not its children's (X clips those out)
+        if (layer) layer.damage({ x, y, w: ww, h: hh }, src ? (id) => { for (let s: XWindow | null = src; s; s = s.parent) if (s.id === id) return true; return false; } : undefined);
+        this.damage(w, { x, y, w: ww, h: hh });
+      },
+      text: (w, run) => {
+        const layer = this.textLayer(w);
+        if (!layer) return;
+        if (!run.overlay) { layer.add(run); return; }
+        // Reported by the app itself (libshiro-text-hook.so), possibly before the pixels it goes with
+        // (GTK 2 copies a frame to the window after its paint ends): add it after that damage
+        const t = this.tops.get(w)!;
+        (t.pendingText ??= []).push(run);
+        if (t.pendingText.length === 1) raf(() => { const runs = t.pendingText ?? []; t.pendingText = []; for (const r of runs) t.text?.add(r); });
+      },
+      copy: (w, phase, sx, sy, ww, hh, dx, dy, win) => {
+        const l = this.tops.get(w)?.text;
+        if (l) { if (phase === 'begin') l.copyBegin(sx, sy, ww, hh, dx, dy, win.id); else l.copyEnd(); }
+      },
       cursor: (w, c) => this.tops.get(w)?.cw?.setCursor(cursorCss(c)),
       bell: () => { /* no audio bell; a desktop could flash */ },
     };
   }
+
+  private textLayer(w: XWindow): TextLayer | undefined {
+    const t = this.tops.get(w);
+    if (!t?.cw?.overlay || typeof document === 'undefined') return undefined;
+    return t.text ??= new TextLayer(t.cw.overlay(), this.host.scale ?? 1, this.server.domTextRaster);
+  }
+
+  /** DOM-text mode: the text a toplevel shows as DOM, top to bottom (tests, `xserver text`). */
+  domText(w: XWindow): string | null { return this.tops.get(w)?.text?.text() ?? null; }
 
   /** Toplevels currently shown, for status (`xserver` command) and tests. */
   windows(): { id: number; title: string; x: number; y: number; width: number; height: number; mapped: boolean }[] {
@@ -144,6 +178,7 @@ export class Rootless {
     const t = this.tops.get(w);
     if (!t) return;
     for (const f of t.cleanup) f();
+    t.text?.destroy();
     t.cw?.destroy();
     this.tops.delete(w);
   }
@@ -180,6 +215,7 @@ export class Rootless {
     const t = this.tops.get(w);
     if (!t) return;
     for (const f of t.cleanup) f();
+    t.text?.destroy();
     t.cw?.destroy();
     this.tops.delete(w);
   }
@@ -379,6 +415,8 @@ function hasAtom(data: Uint8Array, atom: number): boolean {
 }
 
 const cursorUrls = new WeakMap<XCursor, string>();
+/** Device pixels per CSS px of the host (Rootless sets it from the host). */
+let cursorScale = 1;
 
 function cursorCss(c: XCursor | null): string {
   if (!c) return 'default';
@@ -390,7 +428,11 @@ function cursorCss(c: XCursor | null): string {
     const ctx = cv.getContext('2d');
     if (ctx) {
       ctx.putImageData(new ImageData(new Uint8ClampedArray(c.image.rgba), c.image.width, c.image.height), 0, 0);
-      url = `url(${cv.toDataURL()}) ${c.image.xhot} ${c.image.yhot}, ${c.css || 'default'}`;
+      // X pixels are device pixels: at scale s the image is s× a CSS cursor (hotspot in CSS px)
+      const s = cursorScale;
+      url = s === 1
+        ? `url(${cv.toDataURL()}) ${c.image.xhot} ${c.image.yhot}, ${c.css || 'default'}`
+        : `image-set(url(${cv.toDataURL()}) ${s}x) ${Math.round(c.image.xhot / s)} ${Math.round(c.image.yhot / s)}, ${c.css || 'default'}`;
       cursorUrls.set(c, url);
     }
   }

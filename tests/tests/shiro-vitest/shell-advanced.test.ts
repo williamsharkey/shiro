@@ -3138,7 +3138,7 @@ describe('Shell Advanced', () => {
       const { output, exitCode } = await run(shell, 'cat /proc/cpuinfo');
       expect(exitCode).toBe(0);
       expect(output).toContain('processor');
-      expect(output).toContain('Shiro Virtual CPU');
+      expect(output).toContain('tabcomputer Virtual CPU');
     });
 
     it('ls /proc lists proc entries', async () => {

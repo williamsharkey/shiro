@@ -40,7 +40,8 @@ const APPS_ICON = `<span class="sd-tile" style="--t1:#5b8cff;--t2:#7a4dff"><svg 
   [0, 1, 2].flatMap((r) => [0, 1, 2].map((c) => `<rect x="${15 + c * 12.5}" y="${15 + r * 12.5}" width="9" height="9" rx="2.6" fill="#fff" fill-opacity="${r === 1 && c === 1 ? 1 : 0.86}"/>`)).join('') +
   `</svg></span>`;
 
-export function registerGuiApps(wm: DesktopAPI, fs: FileSystem, kernel: Kernel): void {
+/** Registers the apps; resolves once the installed ones are in the dock */
+export function registerGuiApps(wm: DesktopAPI, fs: FileSystem, kernel: Kernel): Promise<void> {
   const icons = APPS.map(([, , icon], i) => icon.includes('/') ? icon : glyphIcon(icon, (i * 47) % 360));
   const register = (installed: Set<string>) => APPS.forEach(([id, name], i) => {
     wm.registerApp({
@@ -62,9 +63,9 @@ export function registerGuiApps(wm: DesktopAPI, fs: FileSystem, kernel: Kernel):
     launch: async () => (await import('./apps-sheet')).openAppsSheet(wm, fs, kernel, sheet, () => void refresh()),
   });
   register(new Set());
-  void refresh();
   // installs from the shell (`gui install`) too
   fs.onChange((_ev, path) => { if (path === '/var/lib/shiro-gui/status.json') void refresh(); });
+  return refresh();
 }
 
 async function launch(wm: DesktopAPI, fs: FileSystem, kernel: Kernel, id: string, name: string, installed: () => void): Promise<DesktopWindow | null> {

@@ -28,12 +28,27 @@ export interface ServerHooks {
   topDestroyed?(w: XWindow): void;
   topConfigured?(w: XWindow): void;
   topProperty?(w: XWindow, atom: string): void;
-  /** pixels of a viewable window changed: rect in that toplevel's coordinates */
-  damage?(top: XWindow, x: number, y: number, w: number, h: number): void;
+  /** pixels of a viewable window changed: rect in that toplevel's coordinates; `src` drew them (none: structure changed) */
+  damage?(top: XWindow, x: number, y: number, w: number, h: number, src?: XWindow): void;
   cursor?(top: XWindow, cursor: XCursor | null): void;
+  /** DOM-text mode: a run of core text drawn on a viewable window (not rasterized), in toplevel coordinates */
+  text?(top: XWindow, run: TextRun): void;
+  /** DOM-text mode: CopyArea within one toplevel, before ('begin') and after ('end') its pixels move */
+  copy?(top: XWindow, phase: 'begin' | 'end', sx: number, sy: number, w: number, h: number, dx: number, dy: number, win: XWindow): void;
   bell?(): void;
   /** a client took ownership of a selection (CLIPBOARD/PRIMARY) */
   selectionOwned?(selection: string, owner: XWindow | null): void;
+}
+
+/** Core text (ImageText/PolyText) as DOM-text mode reports it: x, y is the baseline's left end */
+export interface TextRun {
+  x: number; y: number; width: number; ascent: number; descent: number; text: string;
+  /** XLFD, or 'pango' for text a client rasterized itself */
+  font: string; fg: number; bg: number | null;
+  /** the glyphs are pixels already: show the span transparent */
+  overlay?: boolean;
+  /** the window it was drawn on */
+  win?: number;
 }
 
 export interface XCursor { id: number; css: string; image?: { width: number; height: number; rgba: Uint8ClampedArray; xhot: number; yhot: number } }
@@ -42,7 +57,7 @@ export interface Property { type: number; format: number; data: Uint8Array }
 
 const ROOT_ID = 0x100, COLORMAP_ID = 0x20, VISUAL_24 = 0x21, VISUAL_32 = 0x22, CMAP_32 = 0x23;
 const CLIENT_SHIFT = 21, RESOURCE_MASK = (1 << CLIENT_SHIFT) - 1;
-const VENDOR = 'Shiro in-page X server';
+const VENDOR = 'tabcomputer in-page X server';
 const RELEASE = 12101011;
 export const SERVER_DEFAULTS = { width: 1600, height: 1000 };
 
@@ -214,13 +229,26 @@ export class XServer {
   fontPath: string[] = ['built-ins'];
   /** clients waiting while another holds GrabServer (not enforced: single page) */
   log: ((s: string) => void) | null = null;
+  /**
+   * DOM-text mode (docs/DOM-RENDERING.md): core text drawn on windows is
+   * reported through hooks.text instead of rasterized (ImageText still paints
+   * its background), and CopyArea within a window through hooks.copy.
+   */
+  domText = false;
+  /** With domText: rasterize the glyphs too (the spans become a transparent overlay for selection and a11y). */
+  domTextRaster = false;
   /** Debugging: called for every request (opcode, data byte = minor for extensions). */
   debugErrors = false;
   trace: ((c: Client, opcode: number, data: number, len: number) => void) | null = null;
 
-  constructor(opts: { width?: number; height?: number } = {}) {
+  /** Dots per inch the screen reports (mm size, Xft.dpi): 96 × the display's device pixel ratio */
+  readonly dpi: number;
+
+  constructor(opts: { width?: number; height?: number; dpi?: number; domText?: boolean } = {}) {
     this.width = opts.width ?? SERVER_DEFAULTS.width;
     this.height = opts.height ?? SERVER_DEFAULTS.height;
+    this.dpi = opts.dpi ?? 96;
+    this.domText = !!opts.domText;
     P.PREDEFINED_ATOMS.forEach((n, i) => this.atomIds.set(n, i + 1));
     this.root = new XWindow(ROOT_ID, null, 0, 0, this.width, this.height, 0, P.InputOutput, 24, VISUAL_24, null);
     this.root.mapped = true;
@@ -230,7 +258,10 @@ export class XServer {
     this.resources.set(COLORMAP_ID, { kind: 'colormap', owner: null, free() {}, value: { visual: VISUAL_24 } });
     this.resources.set(CMAP_32, { kind: 'colormap', owner: null, free() {}, value: { visual: VISUAL_32 } });
     // What a desktop session's xrdb would load: toolkits take their DPI and font rendering from it
-    const rdb = 'Xft.dpi:\t96\nXft.antialias:\t1\nXft.hinting:\t1\nXft.hintstyle:\thintslight\nXft.rgba:\tnone\nXcursor.size:\t24\n';
+    const rdb = `Xft.dpi:\t${this.dpi}\nXft.antialias:\t1\nXft.hinting:\t1\nXft.hintstyle:\thintslight\nXft.rgba:\tnone\nXcursor.size:\t${Math.round(24 * this.dpi / 96)}\n` +
+      // Above 96 dpi xterm's bitmap fonts would be tiny: an outline font sized in points follows Xft.dpi
+      // (in DOM-text mode core text is sharp at any scale: xterm keeps its core fonts)
+      (this.dpi > 96 && !this.domText ? 'XTerm*faceName:\tDejaVu Sans Mono\nXTerm*faceSize:\t9\n' : '');
     this.root.props.set(23 /* RESOURCE_MANAGER */, { type: P.ATOM_STRING, format: 8, data: new TextEncoder().encode(rdb) });
     this.addExtension('BIG-REQUESTS', 0, 0, (c, minor) => {
       if (minor !== 0) throw new XError(P.BadRequest);
@@ -365,7 +396,7 @@ export class XServer {
     for (const [d, bpp, pad] of formats) w.u8(d).u8(bpp).u8(pad).zero(5);
     // screen
     w.u32(ROOT_ID).u32(COLORMAP_ID).u32(0xffffff).u32(0).u32(this.root.allEventMasks());
-    w.u16(this.width).u16(this.height).u16(Math.round(this.width * 25.4 / 96)).u16(Math.round(this.height * 25.4 / 96));
+    w.u16(this.width).u16(this.height).u16(Math.round(this.width * 25.4 / this.dpi)).u16(Math.round(this.height * 25.4 / this.dpi));
     w.u16(1).u16(1).u32(VISUAL_24).u8(0).u8(0).u8(24);
     const depths: [number, number[]][] = [[24, [VISUAL_24]], [1, []], [8, []], [16, []], [32, [VISUAL_32]]];
     w.u8(depths.length);
@@ -483,7 +514,7 @@ export class XServer {
     const top = w.top();
     if (!top || !w.viewable()) return;
     const [ox, oy] = w.topOrigin();
-    this.hooks.damage?.(top, ox + x, oy + y, ww, hh);
+    this.hooks.damage?.(top, ox + x, oy + y, ww, hh, w);
   }
 
   /** Damage a whole window subtree (structure changed). */
@@ -706,12 +737,15 @@ export class XServer {
       case 73: return this.getImage(c, data, r);
       case 74: case 75: return this.polyText(op === 75, r);
       case 76: case 77: {
-        const { p, done } = this.painter(r);
+        const { p, d, done } = this.painter(r);
         const x = r.i16(), y = r.i16();
         const codes: number[] = [];
         for (let i = 0; i < data; i++) codes.push(op === 77 ? (r.u8() << 8) | r.u8() : r.u8());
-        if (p.gc.font) p.text(p.gc.font, codes, x, y, true);
-        done(); return;
+        const dom = this.domText && !!d.win;
+        const end = p.gc.font ? p.text(p.gc.font, codes, x, y, true, !dom || this.domTextRaster) : x;
+        done();
+        if (dom && p.gc.font) this.textRun(d.win!, p.gc, p.gc.font, codes, x, y, end - x, true);
+        return;
       }
       case 78: { const mid = r.u32(); const w = this.win(r.u32()); const vis = r.u32(); this.addResource(c, mid, 'colormap', { visual: vis || w.visual }); return; }
       case 79: { const id = r.u32(); if (id !== COLORMAP_ID && id !== CMAP_32) this.freeResource(id, 'colormap', P.BadColor); return; }
@@ -1163,6 +1197,8 @@ export class XServer {
     const bytes = n * (format / 8);
     let data: Uint8Array = r.bytes(bytes).slice();
     if (!c.le && format > 8) data = swapUnits(data, format / 8); // store little-endian
+    // DOM-text mode: what a GTK app drew as text (libshiro-text-hook.so), not a property to keep
+    if (this.atomName(prop) === '_SHIRO_TEXT') { if (format === 8) this.clientText(w, data); return; }
     const old = w.props.get(prop);
     if (mode !== 0 && old) {
       if (old.type !== type || old.format !== format) throw new XError(P.BadMatch, 0);
@@ -1705,6 +1741,10 @@ export class XServer {
     const s = src.pix;
     // clip the source rectangle to the source bounds
     const sr = intersect({ x: sx, y: sy, w, h }, { x: 0, y: 0, w: s.width, h: s.height });
+    const dom = this.domText && src.pix === dst.pix && dst.win && dst.win.viewable() ? dst.win : null;
+    const top = dom?.top();
+    let o: [number, number] = [0, 0];
+    if (dom && top && sr) { o = dom.topOrigin(); this.hooks.copy?.(top, 'begin', o[0] + sr.x, o[1] + sr.y, sr.w, sr.h, o[0] + dx + (sr.x - sx), o[1] + dy + (sr.y - sy), dom); }
     if (sr) {
       const p = new Painter(dst.pix, gc);
       const ox = dx + (sr.x - sx), oy = dy + (sr.y - sy);
@@ -1714,6 +1754,7 @@ export class XServer {
         p.copyRows(ox, oy, sr.w, sr.h, tmp, sr.w, 0);
       } else p.copyRows(ox, oy, sr.w, sr.h, s.data, s.width, sr.y * s.width + sr.x);
       p.finish();
+      if (dom && top) this.hooks.copy?.(top, 'end', o[0] + sr.x, o[1] + sr.y, sr.w, sr.h, o[0] + ox, o[1] + oy, dom);
     }
     if (gc.graphicsExposures) this.noExposure(c, dst, 62);
   }
@@ -1791,7 +1832,9 @@ export class XServer {
   }
 
   private polyText(wide: boolean, r: Reader): void {
-    const { p, done } = this.painter(r);
+    const { p, d, done } = this.painter(r);
+    const dom = this.domText && !!d.win;
+    const runs: [XFont, number[], number, number][] = [];
     let x = r.i16();
     const y = r.i16();
     while (r.left >= 2) {
@@ -1807,9 +1850,39 @@ export class XServer {
       const codes: number[] = [];
       for (let i = 0; i < n; i++) codes.push(wide ? (r.u8() << 8) | r.u8() : r.u8());
       x += delta;
-      if (p.gc.font) x = p.text(p.gc.font, codes, x, y, false);
+      if (!p.gc.font) continue;
+      const x0 = x;
+      x = p.text(p.gc.font, codes, x, y, false, !dom || this.domTextRaster);
+      if (dom) runs.push([p.gc.font, codes, x0, x - x0]);
     }
     done();
+    // after the damage of the glyphs drawn (overlay mode), or it would remove these runs' spans
+    for (const [font, codes, x0, width] of runs) this.textRun(d.win!, p.gc, font, codes, x0, y, width, false);
+  }
+
+  /** Runs from libshiro-text-hook.so: "x baseline width ascent descent rrggbb\ttext" lines, window coordinates */
+  private clientText(w: XWindow, data: Uint8Array): void {
+    const top = w.top();
+    if (!this.domText || !top || !w.viewable() || !this.hooks.text) return;
+    const [ox, oy] = w.topOrigin();
+    for (const line of new TextDecoder().decode(data).split('\n')) {
+      const tab = line.indexOf('\t');
+      if (tab < 0) continue;
+      const [x, y, width, ascent, descent] = line.slice(0, tab - 7).split(' ').map(Number);
+      const fg = parseInt(line.slice(tab - 6, tab), 16);
+      if (![x, y, width, ascent, descent, fg].every(Number.isFinite) || width <= 0) continue;
+      // the client drew these glyphs itself: the span is only ever a transparent layer over them
+      this.hooks.text(top, { x: ox + x, y: oy + y, width, ascent, descent, text: line.slice(tab + 1), font: 'pango', fg, bg: null, overlay: true, win: w.id });
+    }
+  }
+
+  private textRun(w: XWindow, gc: { fg: number; bg: number }, font: XFont, codes: number[], x: number, y: number, width: number, image: boolean): void {
+    const top = w.top();
+    if (!top || !w.viewable() || !this.hooks.text) return;
+    const [ox, oy] = w.topOrigin();
+    // 8-bit fonts here are ISO 8859-1 and 16-bit ones ISO 10646: both map code → code point
+    const text = String.fromCharCode(...codes);
+    this.hooks.text(top, { x: ox + x, y: oy + y, width, ascent: font.ascent, descent: font.descent, text, font: font.name, fg: gc.fg, bg: image ? gc.bg : null, win: w.id });
   }
 
   // ── fonts ──

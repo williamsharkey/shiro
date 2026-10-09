@@ -1,20 +1,22 @@
 /**
  * Settings: Appearance (theme), Network (connection status, Sign in with
- * GitHub, other ways to connect), and About.
+ * GitHub, other ways to connect), Storage (browser quota, persistence), and About.
  */
 
 import { keybarMode, setKeybarMode, type KeybarMode } from '../mobile';
 import type { AppContext } from '../index';
 import type { DesktopWindow } from '../wm';
-import { GLYPHS } from '../icons';
+import { GLYPHS, ICONS } from '../icons';
 import { networkCredential, networkStatus, onNetworkStatus, ownRelay, setOwnRelay } from '../../net-signin';
 import { openSignIn, probeRelay, signedInAccount, signOut, statusText, testOwnRelay } from '../network';
 import { BRAND } from '../../brand';
 import buildNumber from '../../../build-number.txt?raw';
+import { formatBytes, storageInfo } from '../../storage';
 
 const PANES = [
   { id: 'appearance', label: 'Appearance', glyph: GLYPHS.sun },
   { id: 'network', label: 'Network', glyph: GLYPHS.net },
+  { id: 'storage', label: 'Storage', glyph: GLYPHS.folder },
   { id: 'about', label: 'About', glyph: GLYPHS.file },
 ] as const;
 type PaneId = typeof PANES[number]['id'];
@@ -53,6 +55,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
     win.setTitle(`Settings — ${PANES.find(p => p.id === id)!.label}`);
     if (id === 'appearance') appearance();
     else if (id === 'network') network();
+    else if (id === 'storage') storage();
     else about();
   }
 
@@ -71,7 +74,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
         <div class="sd-seg" role="radiogroup" aria-label="Extra keys">
           <button data-keybar="off" role="radio">Off</button><button data-keybar="auto" role="radio">Auto</button><button data-keybar="pinned" role="radio">Always</button>
         </div></div></div>` : ''}
-      <div class="sd-card"><div class="sd-row"><span class="sd-grow">Classic full-page terminal<div class="sd-small sd-muted">The terminal-first layout of shiro.computer. Come back with <code>?ui=desktop</code>.</div></span>
+      <div class="sd-card"><div class="sd-row"><span class="sd-grow">Classic full-page terminal<div class="sd-small sd-muted">The terminal-first layout, without the desktop. Come back with <code>?ui=desktop</code>.</div></span>
         <button class="sd-btn" data-act="classic">Switch</button></div></div>
       <h3>Motion</h3>
       <div class="sd-card sd-small sd-muted">Animations follow your system's "reduce motion" setting${matchMedia('(prefers-reduced-motion: reduce)').matches ? ' (reduced now)' : ''}.</div>`;
@@ -89,7 +92,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
       b.addEventListener('click', () => { setKeybarMode(b.dataset.keybar as KeybarMode); appearance(); });
     }
     panel.querySelector('[data-act=classic]')!.addEventListener('click', () => {
-      try { localStorage.setItem('shiro-ui', 'terminal'); } catch {}
+      try { localStorage.setItem('tabcomputer-ui', 'terminal'); } catch {}
       location.href = location.pathname + '?ui=terminal';
     });
   }
@@ -128,7 +131,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
             <input id="sd-relay-token" class="sd-input" type="url" spellcheck="false" placeholder="https://relay.example.com/tcp/token" value="${esc(draft.tokenUrl)}">
             <div class="sd-row" style="gap:8px;border:0;padding:4px 0 0"><span class="sd-grow sd-small ${relayCls === 'err' ? '' : 'sd-muted'}" style="${relayCls === 'err' ? 'color:#ff5a52' : relayCls === 'ok' ? 'color:#2fb457' : ''}">${esc(relayMsg)}</span>
               <button class="sd-btn" data-act="test">Test</button><button class="sd-btn sd-primary" data-act="save">${own ? 'Update' : 'Use this relay'}</button></div>
-            <div class="sd-small sd-muted">Any relay speaking Shiro's protocol works — <code>SHIRO_TCP_RELAY=1 node server.mjs</code> from the repository, with this site in <code>SHIRO_TCP_ORIGINS</code>. Your GitHub sign-in is never sent to it.</div>
+            <div class="sd-small sd-muted">Any relay speaking tabcomputer's protocol works — <code>TABCOMPUTER_TCP_RELAY=1 node server.mjs</code> from the repository, with this site in <code>TABCOMPUTER_TCP_ORIGINS</code>. Your GitHub sign-in is never sent to it.</div>
           </div>` : ''}
         </div>
         <h3>Account</h3>
@@ -174,9 +177,37 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
     void signedInAccount().then(a => { account = a; readDraft(); render(); });
   }
 
+  function storage(): void {
+    panel.innerHTML = `
+      <h2>Storage</h2><p class="sd-muted">Files live in this browser's storage for the site (IndexedDB). The browser sets the quota; persistent storage keeps it from clearing them when the disk runs low.</p>
+      <div class="sd-card">
+        <div class="sd-row"><span class="sd-grow">Used</span><span data-k="usage">…</span></div>
+        <div class="sd-row"><span class="sd-grow">Quota</span><span data-k="quota">…</span></div>
+        <div class="sd-row"><span class="sd-grow">Persistent</span><span data-k="persisted">…</span></div>
+        <div class="sd-row"><span class="sd-grow">Status</span><span data-k="state">…</span></div>
+      </div>
+      <div class="sd-row" style="margin-top:14px;gap:8px"><button class="sd-btn" data-act="persist" hidden>Keep my files (persistent storage)</button></div>
+      <p class="sd-small sd-muted">To free space: <code>sudo apt clean</code> drops downloaded packages; <code>du -sh /*</code> shows what is large.</p>`;
+    const set = (k: string, v: string) => { const n = panel.querySelector(`[data-k=${k}]`); if (n) n.textContent = v; };
+    const btn = panel.querySelector<HTMLButtonElement>('[data-act=persist]')!;
+    const refresh = () => void storageInfo().then((s) => {
+      set('usage', s.usage === null ? 'unknown' : formatBytes(s.usage) + (s.quota ? ` (${((s.usage / s.quota) * 100).toFixed(s.usage / s.quota < 0.1 ? 1 : 0)}%)` : ''));
+      set('quota', s.quota === null ? 'unknown' : formatBytes(s.quota));
+      set('persisted', s.persisted === null ? 'not supported' : s.persisted ? 'Yes' : 'No');
+      set('state', ctx.fs.storageFull ? 'Full: writes fail until files are deleted' : `OK${ctx.fs.pendingWrites ? `, ${ctx.fs.pendingWrites} writes pending` : ''}`);
+      btn.hidden = s.persisted !== false;
+    });
+    btn.addEventListener('click', () => void navigator.storage?.persist?.().catch(() => false).then(refresh));
+    const off = ctx.fs.onStorageFull(refresh);
+    const timer = setInterval(refresh, 5000);
+    cleanup = () => { off(); clearInterval(timer); };
+    refresh();
+  }
+
   function about(): void {
     panel.onclick = null;
     panel.innerHTML = `
+      <div class="sd-brand-mark" style="width:44px;margin-bottom:8px">${ICONS.logo}</div>
       <h2>${esc(BRAND.name)}</h2><p class="sd-muted">A Unix-like computer that runs in a browser tab: a kernel with processes, pipes, ptys and signals; WASI/WASIX and x86-64 Linux programs; a package manager.</p>
       <h3>This computer</h3>
       <div class="sd-card">

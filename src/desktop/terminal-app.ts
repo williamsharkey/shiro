@@ -1,7 +1,7 @@
 /**
  * Terminal windows: the real Shiro terminal (ShiroTerminal + Shell, each with
  * its own pty) in desktop windows, with tabs. The page's main terminal
- * (`window.__shiro.terminal`) lives in the first window; closing it parks the
+ * (`window.__tabcomputer.terminal`) lives in the first window; closing it parks the
  * terminal instead of destroying it, and the next Terminal window adopts it.
  */
 
@@ -10,6 +10,7 @@ import { ShiroTerminal } from '../terminal';
 import { setActiveTerminal } from '../active-terminal';
 import type { DesktopWindow, WindowManager } from './wm';
 import { GLYPHS } from './icons';
+import { activeProfile } from '../profile';
 
 export interface TerminalDeps {
   makeShell: () => Shell;
@@ -182,7 +183,7 @@ export class TerminalView {
       const home = shell.env['HOME'] || '/home/user';
       const cwd = shell.cwd;
       const shown = cwd === home ? '~' : cwd.startsWith(home + '/') ? '~' + cwd.slice(home.length) : cwd;
-      title = `${shell.env['USER'] || 'user'}@shiro: ${shown}`;
+      title = `${shell.env['USER'] || 'user'}@${activeProfile().hostname}: ${shown}`;
     }
     const label = tab.tabEl.querySelector('.sd-tab-title');
     if (label && label.textContent !== title) label.textContent = title;
@@ -248,7 +249,7 @@ export function applyTerminalTheme(theme: 'light' | 'dark', extra: ShiroTerminal
 }
 
 /** Use the bundled mono font once it has loaded (xterm measures glyphs when the family changes). */
-export function useMonoFont(terms: () => ShiroTerminal[]): void {
+export function useMonoFont(terms: () => ShiroTerminal[]): Promise<void> {
   const apply = () => {
     for (const t of terms()) {
       // xterm re-measures only when the family string changes
@@ -256,8 +257,8 @@ export function useMonoFont(terms: () => ShiroTerminal[]): void {
       try { t.fitAddon.fit(); } catch {}
     }
   };
-  if (!document.fonts?.load) { apply(); return; }
-  document.fonts.load('14px "JetBrains Mono"').then(apply, apply);
+  if (!document.fonts?.load) { apply(); return Promise.resolve(); }
+  return document.fonts.load('14px "JetBrains Mono"').then(apply, apply);
 }
 
 export { MONO as TERMINAL_FONT };

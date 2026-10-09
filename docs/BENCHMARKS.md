@@ -1,6 +1,6 @@
 # Benchmarks
 
-Speed and memory baseline for Shiro, measured by the harness in [`bench/`](../bench/README.md)
+Speed and memory baseline for tabcomputer, measured by the harness in [`bench/`](../bench/README.md)
 (`npm run bench`; `npm run bench:quick` in ~2.5 min). Every number is a median
 and nearest-rank p90 of the samples in the linked results file; compare two
 runs with `node bench/compare.mjs base.json new.json` (flags >10% regressions).
@@ -9,7 +9,7 @@ How to read it:
 
 - **isolated** is the production configuration (COOP/COEP from `server.mjs`):
   WASM processes run in Workers over the SAB syscall channel, x86 in Blink.
-  **not isolated** (`SHIRO_ISOLATION=0`) measures the fallbacks: WASM on the
+  **not isolated** (`TABCOMPUTER_ISOLATION=0`) measures the fallbacks: WASM on the
   main thread with JSPI, x86 in the `src/x86` interpreter, no WASIX packages.
 - Shell metrics call `shell.execute` directly (no terminal rendering);
   kernel metrics spawn processes with `kernel.spawn` and real kernel pipes
@@ -159,6 +159,26 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### unix/desktop 5 — one draw at load
+
+The desktop is built hidden and appears in one frame once fonts, the dock's
+contents (installed packages, Debian GUI apps), the phone layer and the
+session are in place (docs/DESKTOP.md "Loading"). The fonts are preloaded as
+soon as main.ts picks the desktop, and the GUI app registration moved from
+idle time to boot, behind the reveal. `tests/browser/no-reflow.mjs`: CLS 0
+and no element moving after the first visible frame, desktop and iPhone,
+light and dark (before: CLS 0.0017, the window, menu bar items and all dock
+icons moved; hovering an icon moved every other one). The first visible
+desktop frame came at 270–290 ms after navigation in those runs (local
+server).
+
+`node bench/ab.mjs origin/unix/integration --quick --suites boot --rounds 4`
+(6619ea3 vs this): no timing metric changed; transfer +1 KiB, DOM nodes
+352 → 346, renderer RSS 242 → 217 MiB (−10%, all 4 rounds; the base lacks
+this branch's phone and otter commits as well, and the cause wasn't traced).
+The bench's first-prompt metric reads the terminal, not the screen, so it
+doesn't see the reveal; `shiro:desktop:revealed` marks that.
+
 ### unix/desktop 4 — phones: key bar, visual viewport, dock stacks
 
 The touch layer (`src/desktop/mobile.ts`: extra-keys bar, `visualViewport`
@@ -170,6 +190,12 @@ desktop chunk.
 `node bench/ab.mjs origin/unix/integration --quick --suites boot --rounds 4`
 (0fa56a5 vs this, desktop page, desktop pointer): no timing metric changed;
 boot transfer 1548 → 1554 KiB (+6 KiB, +0.4%), DOM nodes 329 → 330.
+
+Again after the otter logo (integration c4d0e2a vs this; the inline boot
+mark comes from server.mjs, so the bench page doesn't carry it): timings
+unchanged, transfer +1 KiB, DOM nodes 342 → 334 and renderer RSS −5%
+(240 → 229 MiB, lower in all 4 rounds). The base lacks this branch's phone
+commit too; which change moved nodes and RSS was not traced.
 
 ### unix/desktop 3 — the terminal's first layout: system font lookups
 
@@ -439,7 +465,7 @@ waiters woken, kernel calls in flight answered EINTR by host.mjs, sleeps in
 
 ### unix/perf-blink 4 — page-straddling instructions, rep movs/stos by page
 
-Profiling Vim's startup (~2.2 s in Shiro against 41 ms native) found the
+Profiling Vim's startup (~2.2 s in tabcomputer against 41 ms native) found the
 wasm JIT refusing instructions that cross a 4 KB page: the region before
 one ended there and the interpreter ran up to the next taken branch, every
 time (218k times in one hot Vim function). Patch 0041 decodes such an
@@ -1166,7 +1192,7 @@ busybox) green.
 
 Where apt's time goes in Chromium (integration ecd719e, per-process timeline
 from temporary kernel instrumentation; the main thread is >90% idle, so the
-cost is CPU inside the x86 engine, not Shiro's kernel or IndexedDB):
+cost is CPU inside the x86 engine, not tabcomputer's kernel or IndexedDB):
 
 | `apt-get update` (72 s) | s |
 |---|---:|
@@ -1189,7 +1215,7 @@ help. Asking apt for uncompressed indexes doesn't work either
 
 Change: `/usr/lib/apt/methods/store` is diverted (overlay policy, like the
 http method) to `shiro-apt-store` (`src/debian/apt-store.ts`), which speaks
-apt's method protocol and decodes with Shiro's xz/gz/bz2/zstd codecs and
+apt's method protocol and decodes with tabcomputer's xz/gz/bz2/zstd codecs and
 `crypto.subtle` hashes in the page; apt still checks size and hashes against
 the signed Release. Lists are byte-identical. `apt-store.test.ts` covers
 the protocol (gz, xz, plain, GzipIndexes-style copy, missing file).
@@ -1204,7 +1230,7 @@ the protocol (gz, xz, plain, GzipIndexes-style copy, missing file).
 | debian.apt.install.jq | 60.2 s | 52.9 s |
 | debian.apt.install.python3-minimal | 161.3 s | 152.8 s |
 
-The rest is not Shiro-side I/O: the package cache build and dependency
+The rest is not tabcomputer-side I/O: the package cache build and dependency
 resolution are apt's own CPU under Blink (perf-blink), and `dpkg-preconfigure`
 (20 s per install, a no-op under `DEBIAN_FRONTEND=noninteractive`) is a
 Debian-config decision proposed to the debian workstream.
@@ -1233,6 +1259,136 @@ store method too):
 | debian.apt.install.hello | 58.7 s | 48.7 s | 26.6 s (2.2×) |
 | debian.apt.install.jq | 60.2 s | 52.9 s | 32.6 s (1.8×) |
 | debian.apt.install.python3-minimal | 161.3 s | 152.8 s | 141.5 s |
+
+### unix/perf-fs-shell 10 — storage reliability: quota, persistence, crash safety
+
+**Quota.** A QuotaExceededError used to be logged while the failed batch was
+dropped: the session kept files the disk never got, and a later commit could
+land on top of the gap. Debian's scoreboard saw this as dpkg's "unable to
+fsync updated status: Input/output error". Now the batch stays queued, with
+newer writes over it. One transaction means none of it is on disk; the disk
+stays at the last good commit. While storage is full:
+- writes that need space (new nodes, growing files) fail at once with
+  `ENOSPC: no space left on device (browser storage is full)`;
+- shrinking writes, chmod, rename and deletes still go through;
+- a burst of deletes retries the queued batch together with them;
+- `sync()`, `flushed()`, fsync(2) and close(2) report ENOSPC; the fd is
+  released and no inode is left in the table.
+
+The terminal and the desktop say storage is full, and say so again when it
+recovers. Settings → Storage shows usage, quota, persistence (with a button)
+and the full state.
+
+**Persistence.** `navigator.storage.persist()` is no longer called on every
+boot, which meant a Firefox prompt on every load. It is now called on
+`debian install`, on the first 64 MiB written in a page load, or on boot
+when 64 MiB is already stored (src/storage.ts).
+
+**Crash safety and footprint.** Measured with `bench/crash-check.mjs`
+(fresh headless profile, local mirror cache, so "fetched" is the bytes the
+page loaded). Footprint:
+
+| step | time | fetched | storage after |
+|---|---:|---:|---:|
+| boot (fresh profile) | | 1.5 MiB | 0.0 MiB |
+| `debian install` | 0.3 s | 0.5 MiB | 1.2 MiB |
+| first `/usr/bin/bash -c true` | 0.7 s | 2.7 MiB | 6.2 MiB |
+| `sudo apt-get update` | 29–42 s | 37.8 MiB | 178 MiB |
+| `apt-get install -y tree` | 28.8 s | 3.5 MiB | 209 MiB |
+| `apt-get install -y bc` | 43.6 s¹ | 4.8 MiB | 244 MiB |
+
+¹ The full test suite was running at the same time.
+
+Crash results:
+- **During `apt-get install -y jq`:** the renderer was killed (CDP
+  `Page.crash`) at 4, 12 and 25 s, then booted again in the same profile.
+  After each crash `dpkg --audit` was clean, `apt-get check` passed, and
+  reinstalling gave a working `jq-1.7`.
+- **During a 200 MB write:** a file synced before the crash was intact. The
+  big file was absent (nothing written back yet), and the FS was writable.
+- **Out of storage:** a persistent profile on a 120 MB tmpfs gives a 72 MiB
+  quota. Chromium doesn't enforce `Storage.overrideQuotaForOrigin` on
+  IndexedDB: 63 MB went into a 30 MiB override. Writing 8 MiB files filled
+  it at 64 MiB:
+  - `dd` and `sync` reported ENOSPC, and `echo x > new` failed;
+  - after `rm` the queued writes committed;
+  - after a reload, the files written before and after were intact.
+
+Tests: `storage-quota.test.ts` (ENOSPC, the batch kept, recovery after a
+delete, a second instance reading only committed data, close and fsync
+returning -ENOSPC).
+
+**Benchmark.** `bench/ab.mjs origin/unix/perf-fs-shell HEAD --quick --rounds 3`:
+- 82 metrics the same;
+- boot bundle +3 KiB (+0.19%: src/storage.ts and the full-state code);
+- `kernel.spawn_wait.builtin` and `wasm.tree_create` improved (noise-level);
+- `net.tcp_download` was flagged +9% at the edge of its CI. Re-run over 5
+  rounds it went 64.3 → 70.0 MB/s, "same", per-round direction `++--+`.
+
+Not fixed here:
+- **head/tail on binary data.** The builtins work on strings, so
+  `head -c N /dev/urandom` writes about 1.5·N bytes (bytes ≥ 0x80 come out
+  UTF-8 encoded).
+- **Storage gap.** The debian session sees about 659 MiB after
+  update plus one batch in long-lived profiles, versus 178 MiB here. That
+  points at rewritten files (apt's pkgcache.bin and srcpkgcache.bin, about
+  89 MB per rewrite) still occupying LevelDB until it compacts.
+
+### unix/perf-fs-shell 11 — binary data through string stdio; the real Debian footprint
+
+**Byte-exact text.** Builtins exchange data as strings. File contents,
+builtin stdin and stdout used to decode with a plain TextDecoder, which turns
+each byte that isn't valid UTF-8 into U+FFFD (3 bytes when written back):
+- `cat bin > copy` turned 1000 bytes into 1976;
+- `cat | tee`, `dd … > f` and `wc -c` were wrong the same way;
+- `head -c N /dev/urandom` wrote about 1.5·N bytes.
+
+src/utils/byte-text.ts decodes invalid bytes to lone surrogates
+U+DC80–U+DCFF and encodes them back (Python's surrogateescape). Valid UTF-8
+is unchanged and keeps the native fast paths (one fatal TextDecoder; one
+`isWellFormed()` scan before TextEncoder). It is used by:
+- FileSystem text read and write;
+- builtin stdio, both as a kernel process and in a kernel shell script.
+
+`head`/`tail -c`, `cut -b` and `wc -c` count bytes of the data.
+gzip/bzip2/tar output and `/dev/urandom` as text are byte-exact, so
+`gzip -c f > f.gz` writes the real archive (`unmangle()` stays for files
+written before this). od, sum and the archivers read both forms: the older
+latin1 byte strings (`printf '\xff'`, `xxd -r`) and byte-exact text.
+
+Not covered:
+- **`\r\n` in kernel shell scripts:** builtin output written from a kernel
+  shell script still has `\r\n` folded to `\n`.
+- **Latin1 producers:** `printf '\xff' > f` still writes C3 BF, as before.
+
+Tests: `byte-text.test.ts` (codec round trips, every command above, a builtin
+as a kernel process, gzip/tar via `>`) and an `apt-store` case.
+`bench/ab.mjs origin/unix/perf-fs-shell HEAD --quick --rounds 3`: 86 metrics
+the same, boot bundle +1 KiB.
+
+**Debian footprint on a real profile.** Headless incognito contexts, used by
+bench/run.mjs, crash-check and the debian scoreboard, keep IndexedDB in
+memory and over-report. From there it looked like 178 MiB after `apt-get
+update` and +30 MiB per install, and the scoreboard saw ~659 MiB.
+`bench/footprint.mjs` measures a persistent on-disk profile, as users have.
+Chrome compresses the values on disk. Rewriting pkgcache.bin leaves no
+garbage: idling and reloading changed nothing.
+
+| after | storage usage | live FS bytes | IndexedDB on disk |
+|---|---:|---:|---:|
+| `debian install` | 3.3 MiB | 0.0 MiB | 2.9 MiB |
+| `apt-get update` (28 s) | 95.5 MiB | 164 MiB | 82.6 MiB |
+| + tree, bc, jq (26–31 s each) | 118.8 MiB | 183 MiB | 97.9 MiB |
+
+Three files are 139 MB of the 183 MB live: the trixie Packages list (54 MB),
+pkgcache.bin and srcpkgcache.bin (42.5 MB each). Options measured:
+- **Drop srcpkgcache.bin** (`Dir::Cache::srcpkgcache ""`): 68.6 MiB instead
+  of 118.8, but installs take +14 s and `apt-cache policy` goes 1.8 → 19.8 s
+  (pkgcache is rebuilt from the lists). Not worth it.
+- **`Acquire::GzipIndexes`:** apt asks the store method for `.lz4` lists. It
+  used to write the plain list under that name, and `apt-get update` failed.
+  It now refuses cleanly. Keeping lists compressed would need an lz4 encoder
+  in the store method, for about −40 MiB; not done.
 
 ## Results
 
@@ -1323,11 +1479,11 @@ Environment: 4× Intel(R) Xeon(R) Processor @ 2.10GHz, 15.7 GiB, Linux 6.18.44-f
 | `wasm.tree_create` | 4506 | 4506 | ms | 1 | 10000 files × ~160 B in 100 dirs via fs.writeFile (IndexedDB), one sample |
 | `wasm.ripgrep.tree` | 3239 | 3519 | ms | 5 | `rg -l NEEDLE` over 10000 files (1000 match) |
 | `wasm.peak_rss.ripgrep_tree` | 18.74 | 47.89 | MiB | 5 | renderer RSS peak during the search |
-| `wasm.builtin_grep_r.tree` | 171.9 | 176.9 | ms | 5 | reference: Shiro's builtin `grep -rl` over the same 10000 files |
-| `wasm.cpu_loop.shiro` | 372.1 | 390.1 | ms | 5 | kbench cpu 200M as a Shiro process (guest clock) |
+| `wasm.builtin_grep_r.tree` | 171.9 | 176.9 | ms | 5 | reference: tabcomputer's builtin `grep -rl` over the same 10000 files |
+| `wasm.cpu_loop.shiro` | 372.1 | 390.1 | ms | 5 | kbench cpu 200M as a tabcomputer process (guest clock) |
 | `wasm.cpu_loop.node` | 375 | 386.9 | ms | 5 | same .wasm instantiated in Node (V8), same loop |
 | `wasm.cpu_loop.native` | 382.2 | 386.4 | ms | 5 | same C loop, gcc -O2, native |
-| `wasm.cpu_loop.ratio_vs_node` | 0.992 | 0.992 | x | 1 | Shiro / Node median |
+| `wasm.cpu_loop.ratio_vs_node` | 0.992 | 0.992 | x | 1 | tabcomputer / Node median |
 
 | x86 metric | median | p90 | unit | n | notes |
 |---|---:|---:|---|---:|---|
@@ -1343,7 +1499,7 @@ Environment: 4× Intel(R) Xeon(R) Processor @ 2.10GHz, 15.7 GiB, Linux 6.18.44-f
 | `x86.blink.peak_rss.go_nethttp` | 30.89 | 31.23 | MiB | 5 | renderer RSS peak above the pre-run level |
 | `x86.blink.gh_version` | 17826 | 17972 | ms | 5 | `./gh --version` wall time at the prompt; first run 18087 ms |
 | `x86.blink.peak_rss.gh_version` | 157.3 | 160.8 | MiB | 5 | renderer RSS peak above the pre-run level |
-| `x86.x86.hello_musl` | 14.63 | 25.18 | ms | 5 | `SHIRO_X86_ENGINE=x86 ./hello-musl` wall time at the prompt; first run 31 ms |
+| `x86.x86.hello_musl` | 14.63 | 25.18 | ms | 5 | `TABCOMPUTER_X86_ENGINE=x86 ./hello-musl` wall time at the prompt; first run 31 ms |
 | `x86.x86.peak_rss.hello_musl` | 2.379 | 4.602 | MiB | 5 | renderer RSS peak above the pre-run level |
 | `x86.x86.hello_glibc` | — | — | ms | 0 | failed: exit 1: shiro: /home/user/x/hello-glibc: Unknown two-byte opcode: 0F 62 at 0x4031a3 |
 | `x86.x86.go_hello` | — | — | ms | 0 | failed: exit 2: fatal error: float64nan |
@@ -1468,11 +1624,11 @@ Environment: 4× Intel(R) Xeon(R) Processor @ 2.10GHz, 15.7 GiB, Linux 6.18.44-f
 | `wasm.sqlite.insert_10k_file` | 40.4 | 59.2 | ms | 5 | 10k INSERTs in one transaction + LIKE scan, database file in /tmp (kernel file I/O) |
 | `wasm.tree_create` | 4160 | 4160 | ms | 1 | 10000 files × ~160 B in 100 dirs via fs.writeFile (IndexedDB), one sample |
 | `wasm.ripgrep.tree` | — | — | ms | 0 | WASIX: needs threads (SharedArrayBuffer) |
-| `wasm.builtin_grep_r.tree` | 165.8 | 252.6 | ms | 5 | reference: Shiro's builtin `grep -rl` over the same 10000 files |
-| `wasm.cpu_loop.shiro` | 380 | 383.9 | ms | 5 | kbench cpu 200M as a Shiro process (guest clock) |
+| `wasm.builtin_grep_r.tree` | 165.8 | 252.6 | ms | 5 | reference: tabcomputer's builtin `grep -rl` over the same 10000 files |
+| `wasm.cpu_loop.shiro` | 380 | 383.9 | ms | 5 | kbench cpu 200M as a tabcomputer process (guest clock) |
 | `wasm.cpu_loop.node` | 371.6 | 376.5 | ms | 5 | same .wasm instantiated in Node (V8), same loop |
 | `wasm.cpu_loop.native` | 363.3 | 371.8 | ms | 5 | same C loop, gcc -O2, native |
-| `wasm.cpu_loop.ratio_vs_node` | 1.023 | 1.023 | x | 1 | Shiro / Node median |
+| `wasm.cpu_loop.ratio_vs_node` | 1.023 | 1.023 | x | 1 | tabcomputer / Node median |
 
 | x86 metric | median | p90 | unit | n | notes |
 |---|---:|---:|---|---:|---|

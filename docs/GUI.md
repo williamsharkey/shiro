@@ -1,6 +1,6 @@
 # Linux GUI apps (X11)
 
-Unmodified Linux GUI programs run in Shiro and show up as ordinary desktop
+Unmodified Linux GUI programs run in tabcomputer and show up as ordinary desktop
 windows: an X11 server written in TypeScript runs in the page (`Xshiro :0`,
 a kernel process), x86-64 Debian binaries run in Blink and connect to it over
 the kernel's AF_UNIX socket `/tmp/.X11-unix/X0`, and each top-level X window
@@ -52,7 +52,7 @@ reset, e.g.).
 |---|---|---:|---:|---:|---:|---:|---|
 | xeyes | Xlib/Xt, SHAPE | 7.5 MB (25 pkgs) | 1.9–2.0 s | 1.4–1.5 s | 0.9–1.3 s | 0.5 s | works (shaped window, follows the pointer) |
 | xclock | Xaw, RENDER | 8.9 MB | 0.2–0.5 s¹ | 1.7 s | 2.6–2.8 s | 1.4 s | works (antialiased hands via RENDER) |
-| xterm | Xaw, core fonts, pty | 9.3 MB (33 pkgs) | 2.1 s | 1.7 s | 2.5–2.7 s | 1.6–1.9 s | works: Shiro's shell in its pty, typing |
+| xterm | Xaw, core fonts, pty | 9.3 MB (33 pkgs) | 2.1 s | 1.7 s | 2.5–2.7 s | 1.6–1.9 s | works: tabcomputer's shell in its pty, typing |
 | l3afpad | GTK 3.24 | 33.1 MB (81 pkgs; closure 51 MB) | 10.3–12.2 s | 11.9 s | 12.9 s | — | works (Adwaita, menus, typing) |
 | mousepad | GTK 3.24 (Xfce) | 44.6 MB (86 pkgs) | 5.6 s¹ | 14.5 s | 32 s | 25.6 s | works; slow start (it waits on D-Bus/xfconf first) |
 | ristretto | GTK 3.24 (Xfce) | 35.1 MB (97 pkgs) | 10.9 s | 11.5–12.5 s | 14.4–15.5 s | 13.1 s | works (opens a PNG; no thumbnails without tumbler) |
@@ -98,13 +98,13 @@ From a fresh profile in Chromium, opened like a click:
 - **Dillo 3.0.5** (FLTK): 9 MB, installed in 1.4 s, window in 4.1 s
   (`gui-dillo.png`).
 
-**Both browsers load real pages** over Shiro's networking:
+**Both browsers load real pages** over tabcomputer's networking:
 `gui netsurf https://www.debian.org/` renders Debian's home page with its
 images and CSS ("Done (26.2s)", `gui-netsurf-web.png`); Dillo shows
 https://example.com/ (`gui-dillo-web.png`). The path, from a kernel trace:
 glibc's resolver finds no `/etc/resolv.conf` and asks 127.0.0.1:53, which
 the kernel's datagram socket answers with DNS-over-HTTPS; TCP goes through
-the server's WebSocket relay (`SHIRO_TCP_RELAY=1`, on at tabcomputer.com).
+the server's WebSocket relay (`TABCOMPUTER_TCP_RELAY=1`, on at tabcomputer.com).
 TLS needs the CA bundle `update-ca-certificates` would build: it ships as an
 overlay (`/etc/ssl/certs/ca-certificates.crt`), plus a tar overlay with its
 hashed-name links for OpenSSL users that only look up `/etc/ssl/certs/HASH.0`
@@ -221,13 +221,55 @@ Where the time went, and what changed:
   `/tmp/.X11-unix/XN` and on the abstract name libxcb tries first; started at
   boot, ~1 KB. `session.ts` creates the server on the first connection.
 
+### DOM text (experimental)
+
+`xserver text dom|overlay` shows core X text (ImageText/PolyText) as
+positioned `<span>`s over the window instead of (or over) glyph pixels:
+sharp, selectable with Alt + drag, and visible to assistive tech. It works
+for Xlib/Xaw apps (xterm, xcalc, xedit). GTK, Qt and FLTK send text as
+pixels; GTK 2/3 apps report theirs through `libshiro-text-hook.so`
+(preloaded in these modes) as a transparent overlay, so L3afpad's and
+Mousepad's text is selectable and accessible with no visual change. Design
+note, measurements and next steps: [DOM-RENDERING.md](DOM-RENDERING.md).
+
 ### Window hosts (`src/gui/`)
 
 `window-host.ts` is the interface rootless windows need (shaped like the
 desktop's Surface: `present`, normalized input, configure). `desktop-host.ts`
-implements it with `createWindow({content: {kind: 'surface', scale: 1,
-autoResize: false}})`; one X pixel is one CSS px. `standin-host.ts` is a
-self-contained floating-window host for the classic full-page terminal UI.
+implements it with `createWindow({content: {kind: 'surface', scale,
+autoResize: false}})`. `standin-host.ts` is a self-contained floating-window
+host for the classic full-page terminal UI.
+
+### HiDPI: one X pixel is one device pixel
+
+Xshiro's screen is in **device pixels**: `displayScale()`
+(`src/gui/display-scale.ts`) is `devicePixelRatio` when the display starts
+(rounded to quarters, at least 1). Both hosts convert to CSS px at their
+boundary (sizes, positions, drags ÷ scale), and each window's canvas is
+exactly buffer ÷ scale CSS px, so the browser never resamples it: no
+stretching even when the desktop makes a window bigger than the client
+drew (xterm snapping to whole cells used to stretch its 466 px buffer
+over a 484 px window, blurring text even at 1×), and `image-rendering:
+pixelated` at whole-number scales. Clients are told the real resolution:
+
+- the screen's size in mm and `Xft.dpi` = 96 × scale, `Xcursor.size`
+  24 × scale (cursors become CSS `image-set(… Nx)` cursors);
+- GTK: `GDK_SCALE` = ⌊scale⌋ with `GDK_DPI_SCALE` = 1/⌊scale⌋ (GTK scales
+  widgets by whole numbers only; fonts follow Xft.dpi); Qt:
+  `QT_SCALE_FACTOR` = scale, `QT_FONT_DPI=96`. Set for apps the installer
+  starts and exported into the shell's environment;
+- xterm switches from bitmap `fixed` (which can't scale) to DejaVu Sans
+  Mono 9 pt above 96 dpi (`XTerm*faceName` in RESOURCE_MANAGER).
+
+Plain Xlib/Xaw apps with fixed pixel sizes (xeyes, xclock, xcalc) come out
+at their pixel size, i.e. smaller on a 2× screen, but sharp. The scale is
+read once, when the display starts: changing the browser zoom afterwards
+needs a reload.
+
+![Before/after at 2×](screenshots/gui-hidpi-2x.png)
+
+(`gui-hidpi-2x.png`, `gui-hidpi-3x.png`: xterm and L3afpad in Chromium at
+deviceScaleFactor 2 and 3, before and after.)
 
 ### Packages: content addressed, streamed on first use
 
@@ -250,9 +292,9 @@ self-contained floating-window host for the classic full-page terminal UI.
   Debian mode: see [DEBIAN.md](DEBIAN.md), "Package mirror"; it caches on
   disk and falls back to snapshot.debian.org when a point release removed
   the file), verifies the hash, and unpacks it in the
-  page (ar, then data.tar.xz/zst/gz with Shiro's JS codecs). Docs, man pages
+  page (ar, then data.tar.xz/zst/gz with tabcomputer's JS codecs). Docs, man pages
   and translations are skipped; files a library package would put over
-  Shiro's own commands in `/usr/bin` are skipped too.
+  tabcomputer's own commands in `/usr/bin` are skipped too.
 - Then the postinst work dpkg triggers would do runs in Blink:
   `gdk-pixbuf-query-loaders --update-cache`, `glib-compile-schemas`.
   Each runs only when a package just unpacked put files in its directory.
@@ -270,7 +312,7 @@ self-contained floating-window host for the classic full-page terminal UI.
 - **Debian mode** (`debian install`, [DEBIAN.md](DEBIAN.md)): the system is
   then a dpkg-managed Debian 13 rootfs, so `gui APP` installs with the
   system's own `sudo apt-get install` (the manifest's `pkg`) instead, and
-  dpkg runs the real triggers. The streamer above is for plain Shiro: it
+  dpkg runs the real triggers. The streamer above is for plain tabcomputer: it
   unpacks Debian 12 packages without dpkg, which must not land on a trixie
   system. Any other X program works the same way in Debian mode:
   `sudo apt install x11-apps && xeyes &`. Measured in Chromium: `debian
@@ -320,8 +362,9 @@ self-contained floating-window host for the classic full-page terminal UI.
    XInputExtension 2 (core input only: no smooth scrolling or touch),
    RANDR (one fixed screen = the work area when the server starts), XFIXES,
    DAMAGE, Composite, GLX.
-5. **HiDPI**: surfaces run at scale 1; a device-pixel screen plus
-   `Xft.dpi = 96 × devicePixelRatio` would make text sharp.
+5. **HiDPI** follow-ups: rescale when devicePixelRatio changes (browser
+   zoom, a window moved to another monitor) via RANDR + XSETTINGS; scale
+   fixed-size Xaw apps.
 6. **Per-file laziness**: packages are fetched whole, before start; a kernel
    open hook (unix/kernel) would let files materialize on first open.
 7. **Wayland** (wl_shm) once Blink can share mappings with the page.

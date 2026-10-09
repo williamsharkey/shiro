@@ -1,0 +1,31 @@
+{
+  "id": "tabcomputer",
+  "name": "tabcomputer",
+  "hostname": "tabcomputer",
+  "description": "The Unix edition: the desktop UI, the TCP relay on, Debian and native programs to the fore.",
+  "hosts": [
+    "tabcomputer.com",
+    "*.tabcomputer.com"
+  ],
+  "default": true,
+  "ui": "desktop",
+  "brand": {
+    "name": "tabcomputer",
+    "domain": "tabcomputer.com",
+    "tagline": "a Unix-like computer in your browser tab",
+    "description": "A Unix-like computer that runs in a browser tab: a real shell, processes, pipes and ptys, and packages you can install — vim, htop, python, git.",
+    "favicon": "/tabcomputer-favicon.svg"
+  },
+  "banner": "desktop",
+  "preinstall": [
+    "claude-code"
+  ],
+  "shims": {
+    "claude": "npm",
+    "claudeInstallSh": true,
+    "tabSsh": true,
+    "binCommandStat": true,
+    "debianOverlay": true,
+    "python": "pyodide"
+  }
+}

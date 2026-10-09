@@ -9,7 +9,7 @@ const require = createRequire(import.meta.url);
 let chromium;
 try { ({ chromium } = require('playwright')); } catch { ({ chromium } = require('/opt/node-tools/node_modules/playwright')); }
 
-// --upload LOCAL_DIR=SHIRO_DIR copies a local tree into Shiro's filesystem first
+// --upload LOCAL_DIR=TABCOMPUTER_DIR copies a local tree into Shiro's filesystem first
 const argv = process.argv.slice(2);
 const uploads = [];
 for (let i = argv.indexOf('--upload'); i >= 0; i = argv.indexOf('--upload')) { uploads.push(argv[i + 1].split('=')); argv.splice(i, 2); }
@@ -23,7 +23,7 @@ const page = await (await browser.newContext({ ignoreHTTPSErrors: !!proxy })).ne
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 if (process.env.SHOW_CONSOLE) page.on('console', (m) => console.log('[console]', m.text().slice(0, 400)));
 await page.goto(url);
-await page.waitForFunction(() => window.__shiro && window.__shiro.shell, null, { timeout: 90000 });
+await page.waitForFunction(() => window.__tabcomputer && window.__tabcomputer.shell, null, { timeout: 90000 });
 console.log('crossOriginIsolated =', await page.evaluate(() => crossOriginIsolated));
 const { readdirSync, readFileSync, statSync } = await import('node:fs');
 for (const [local, remote] of uploads) {
@@ -33,8 +33,8 @@ for (const [local, remote] of uploads) {
   for (let i = 0; i < files.length; i += 200) {
     await page.evaluate(async (batch) => {
       for (const [path, b64, mode] of batch) {
-        await window.__shiro.fs.mkdir(path.slice(0, path.lastIndexOf('/')), { recursive: true }).catch(() => {});
-        await window.__shiro.fs.writeFile(path, Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)), { mode: mode & 0o777 });
+        await window.__tabcomputer.fs.mkdir(path.slice(0, path.lastIndexOf('/')), { recursive: true }).catch(() => {});
+        await window.__tabcomputer.fs.writeFile(path, Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)), { mode: mode & 0o777 });
       }
     }, files.slice(i, i + 200));
   }
@@ -46,7 +46,7 @@ for (const cmd of cmds) {
     let out = '';
     const t0 = performance.now();
     // A terminal-less fork (kept across commands), so kernel jobs' output is captured, not drawn on the tty
-    const sh = window.__checkShell ??= Object.assign(window.__shiro.shell.fork(), { terminal: null });
+    const sh = window.__checkShell ??= Object.assign(window.__tabcomputer.shell.fork(), { terminal: null });
     const code = await sh.execute(cmd, (s) => { out += s; }, (s) => { out += s; });
     return { code, out, ms: Math.round(performance.now() - t0) };
   }, cmd);

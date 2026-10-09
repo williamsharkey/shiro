@@ -117,7 +117,7 @@ export async function signedInAccount(): Promise<string | null> {
 }
 
 export function signOut(): void {
-  try { localStorage.removeItem('shiro_github_token'); } catch {}
+  try { localStorage.removeItem('tabcomputer_github_token'); } catch {}
   setNetworkStatus(navigator.onLine ? 'online' : 'offline');
 }
 

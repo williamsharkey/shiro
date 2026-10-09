@@ -3,14 +3,16 @@
  * shiro.computer's full-page terminal.
  *
  * `?ui=desktop` / `?ui=terminal` choose and remember (localStorage
- * `shiro-ui`). Without a choice: shiro.computer and its subdomains keep the
- * terminal; embedded pages (seeds), `?demo=1` and app ("become") mode always
- * use it; every other host (tabcomputer.com, localhost) gets the desktop.
+ * `tabcomputer-ui`). Embedded pages (seeds), `?demo=1` and app ("become") mode
+ * always use the terminal. Otherwise the product profile decides
+ * (src/profile.ts): shiro.computer and its subdomains get the terminal, every
+ * other host (tabcomputer.com, localhost) the desktop.
  */
+import { selectProfile } from './profile';
 
 export type UiMode = 'desktop' | 'terminal';
 
-export const UI_MODE_KEY = 'shiro-ui';
+export const UI_MODE_KEY = 'tabcomputer-ui';
 
 export function uiMode(loc: Pick<Location, 'search' | 'hostname'> = location, embedded = window.parent !== window): UiMode {
   const q = new URLSearchParams(loc.search);
@@ -20,11 +22,10 @@ export function uiMode(loc: Pick<Location, 'search' | 'hostname'> = location, em
     return asked;
   }
   if (q.get('demo') === '1' || embedded) return 'terminal';
-  try { if (localStorage.getItem('shiro-become')) return 'terminal'; } catch {}
+  try { if (localStorage.getItem('tabcomputer-become')) return 'terminal'; } catch {}
   try {
     const saved = localStorage.getItem(UI_MODE_KEY);
     if (saved === 'desktop' || saved === 'terminal') return saved;
   } catch {}
-  const h = loc.hostname;
-  return h === 'shiro.computer' || h.endsWith('.shiro.computer') ? 'terminal' : 'desktop';
+  return selectProfile(loc).ui;
 }

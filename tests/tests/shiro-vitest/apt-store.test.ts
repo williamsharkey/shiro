@@ -69,4 +69,14 @@ describe('shiro-apt-store (apt store method)', () => {
     expect(new Uint8Array(await fs.readFile('/tmp/lists/d_Packages.gz') as Uint8Array)).toEqual(gz);
     expect(out).toMatch(/400 URI Failure\nURI: store:\/tmp\/lists\/partial\/missing\.xz\nMessage: /);
   });
+
+  it('refuses a destination in a format it cannot write (.lz4) instead of storing plain data under that name', async () => {
+    const fs = new FileSystem();
+    await fs.init();
+    await fs.mkdir('/tmp/lists/partial', { recursive: true });
+    await fs.writeFile('/tmp/lists/partial/e_Packages.gz', new Uint8Array(gzipSync(text)));
+    const out = await runStore(fs, acquire('/tmp/lists/partial/e_Packages.gz', '/tmp/lists/e_Packages.lz4'));
+    expect(out).toMatch(/400 URI Failure\n.*\nMessage: shiro-apt-store: compressing to \/tmp\/lists\/e_Packages\.lz4 is not supported/);
+    expect(await fs.exists('/tmp/lists/e_Packages.lz4')).toBe(false);
+  });
 });

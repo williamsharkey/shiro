@@ -66,7 +66,7 @@ function defaultAssetBase(): string {
     const nodeFs = p.getBuiltinModule('fs');
     const nodePath = p.getBuiltinModule('path');
     const nodeUrl = p.getBuiltinModule('url');
-    const candidates = [p.env.SHIRO_BLINK_ASSETS, 'public/engines/blink', '../public/engines/blink'].filter(Boolean);
+    const candidates = [p.env?.TABCOMPUTER_BLINK_ASSETS, 'public/engines/blink', '../public/engines/blink'].filter(Boolean);
     for (const c of candidates) {
       const dir = nodePath.resolve(p.cwd(), c);
       if (nodeFs.existsSync(nodePath.join(dir, 'host.mjs'))) return nodeUrl.pathToFileURL(dir).href + '/';
@@ -133,8 +133,8 @@ export function blinkRunner(path: string, restore?: ArrayBuffer): Runner {
       wireWorker(p, w, kernel, pool);
       return w;
     }, {
-      // SHIRO_BLINK_DEBUG=1: the worker logs kernel syscalls and Blink's own messages to the console
-      startData: { path, moduleUrl: defaultAssetBase() + 'blink.mjs', mounts, pool, restore, debug: proc.env.SHIRO_BLINK_DEBUG === '1' },
+      // TABCOMPUTER_BLINK_DEBUG=1: the worker logs kernel syscalls and Blink's own messages to the console
+      startData: { path, moduleUrl: defaultAssetBase() + 'blink.mjs', mounts, pool, restore, debug: proc.env?.TABCOMPUTER_BLINK_DEBUG === '1' },
     });
     return runner(proc, kernel);
   };

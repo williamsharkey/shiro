@@ -24,7 +24,7 @@ const LIMIT = Number(process.env.TUI_LIMIT_MS || 60_000);
 if (shots) mkdirSync(shots, { recursive: true });
 
 const screenOf = (page) => page.evaluate(() => {
-  const t = window.__shiro?.terminal?.term;
+  const t = window.__tabcomputer?.terminal?.term;
   if (!t) return '';
   const b = t.buffer.active;
   const rows = [];
@@ -32,8 +32,8 @@ const screenOf = (page) => page.evaluate(() => {
   return rows.join('\n');
 });
 const termInfo = (page) => page.evaluate(() => {
-  const t = window.__shiro.terminal.term;
-  const pty = window.__shiro.terminal.tty.pty;
+  const t = window.__tabcomputer.terminal.term;
+  const pty = window.__tabcomputer.terminal.tty.pty;
   return { rows: t.rows, cols: t.cols, buffer: t.buffer.active.type, cursorX: t.buffer.active.cursorX, cursorY: t.buffer.active.cursorY, pty: { ...pty.winsize }, modes: { ...t.modes } };
 });
 
@@ -69,7 +69,7 @@ const vimQuit = async (page) => {
 };
 /** Pixel position of cell (col, row), 0-based, in the page */
 const cellXY = (page, col, row) => page.evaluate(([c, r]) => {
-  const t = window.__shiro.terminal.term;
+  const t = window.__tabcomputer.terminal.term;
   const screen = t.element.querySelector('.xterm-screen').getBoundingClientRect();
   // (the screen element can be wider than cols × cell width)
   const cell = t._core._renderService.dimensions.css.cell;
@@ -78,8 +78,8 @@ const cellXY = (page, col, row) => page.evaluate(([c, r]) => {
 /** Resize the terminal: its desktop window's client area (the classic UI: the page) */
 const resizeTo = async (page, width, height) => {
   const desk = await page.evaluate(([w, h]) => {
-    const d = window.__shiro.desktop;
-    const el = window.__shiro.terminal.term.element;
+    const d = window.__tabcomputer.desktop;
+    const el = window.__tabcomputer.terminal.term.element;
     const win = d?.windows().find((x) => x.body.contains(el));
     if (!win) return false;
     win.resize(w, h);
@@ -140,7 +140,7 @@ const CASES = [
     await until(page, (s) => /^1$/m.test(s), 'vim with the file');
     await vimEx(page, 'set mouse=a ttymouse=sgr', /ttymouse=sgr/);
     const [x, y] = await cellXY(page, 0, 9); // row 10
-    await page.evaluate(() => { const p = window.__shiro.terminal.tty.pty; window.__in = []; const i = p.input.bind(p); p.input = (t) => { window.__in.push(typeof t === 'string' ? t : String.fromCharCode(...t)); return i(t); }; });
+    await page.evaluate(() => { const p = window.__tabcomputer.terminal.tty.pty; window.__in = []; const i = p.input.bind(p); p.input = (t) => { window.__in.push(typeof t === 'string' ? t : String.fromCharCode(...t)); return i(t); }; });
     await page.mouse.click(x, y);
     await page.waitForTimeout(300);
     await vimEx(page, 'echo "line=" . line(".")', /line=10/, 'vim cursor on line 10 after a click')
@@ -171,7 +171,7 @@ const CASES = [
     await until(page, vimUp, 'vim');
     await typeKeys(page, 'i');
     await page.waitForTimeout(300);
-    await page.evaluate(() => window.__shiro.terminal.term.paste('    a\n    b\n    c\n'));
+    await page.evaluate(() => window.__tabcomputer.terminal.term.paste('    a\n    b\n    c\n'));
     await page.waitForTimeout(500);
     await vimEx(page, 'w', /written/);
     await vimQuit(page);
@@ -182,7 +182,7 @@ const CASES = [
   { name: 'colors: 256 and truecolor reach the terminal', run: async (page) => {
     await sh(page, "printf '\\033[38;5;196mR256\\033[0m \\033[38;2;10;200;30mTRUE\\033[0m\\n'", /R256 TRUE/);
     const cells = await page.evaluate(() => {
-      const t = window.__shiro.terminal.term;
+      const t = window.__tabcomputer.terminal.term;
       const b = t.buffer.active;
       for (let y = b.length - 1; y >= 0; y--) {
         const line = b.getLine(y);
@@ -200,7 +200,7 @@ const CASES = [
     await run(page, "printf '漢字😀|\\n'");
     await until(page, (s) => /^漢字😀\|$/m.test(s) && promptBack(s), 'the line');
     const w = await page.evaluate(() => {
-      const t = window.__shiro.terminal.term;
+      const t = window.__tabcomputer.terminal.term;
       const b = t.buffer.active;
       for (let y = b.length - 1; y >= 0; y--) {
         const line = b.getLine(y);

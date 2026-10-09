@@ -29,6 +29,7 @@ import { packageShadows } from '../pkg-manager';
 import { createWorkerPool, type WorkerPool } from './worker-pool';
 import { dylinkLayout, readDylink } from './dylink';
 import { readFuncSigs, type FuncSigs } from './dyncall';
+import { activeProfile } from '../profile';
 
 // ── Workers and mode ─────────────────────────────────────────────────
 
@@ -206,7 +207,10 @@ function installWasiSyscalls(kernel: Kernel): void {
     data.set(text);
     return text.length;
   });
-  kernel.registerSyscalls([A.SYS_stat, A.SYS_lstat, A.SYS_newfstatat, A.SYS_access, A.SYS_faccessat], Object.assign(binCommandStat, { passSync: binCommandPasses }));
+  // Shiro builtins stat as executables in /bin, /usr/bin (the profile's binCommandStat shim)
+  if (activeProfile().shims.binCommandStat) {
+    kernel.registerSyscalls([A.SYS_stat, A.SYS_lstat, A.SYS_newfstatat, A.SYS_access, A.SYS_faccessat], Object.assign(binCommandStat, { passSync: binCommandPasses }));
+  }
 }
 
 // The paths SYS_shiro_execve runs a Shiro command by (not /usr/local/...: a

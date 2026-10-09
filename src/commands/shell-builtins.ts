@@ -96,9 +96,9 @@ export const cdCmd: Command = {
 
 // Map of env vars to localStorage keys for persistence across sessions
 const PERSIST_ENV: Record<string, string> = {
-  ANTHROPIC_API_KEY: 'shiro_anthropic_key',
-  OPENAI_API_KEY: 'shiro_openai_key',
-  GOOGLE_API_KEY: 'shiro_google_key',
+  ANTHROPIC_API_KEY: 'tabcomputer_anthropic_key',
+  OPENAI_API_KEY: 'tabcomputer_openai_key',
+  GOOGLE_API_KEY: 'tabcomputer_google_key',
 };
 
 export const exportCmd: Command = {
@@ -120,8 +120,8 @@ export const exportCmd: Command = {
   },
 };
 
-const GETTING_STARTED = `Shiro: a Unix-like environment in your browser tab. Files persist in this
-site's storage; use a subdomain (e.g. music.shiro.computer) for a separate workspace.
+const GETTING_STARTED = `tabcomputer: a computer that lives in your browser tab. Files persist in this
+site's storage, in this browser.
 
 Claude Code
   claude                 run Claude Code here (installs itself; sign-in panel if needed)
@@ -152,7 +152,7 @@ Something wrong?
 Try: claude "make a small page that plays a drum loop, then serve it"
 
 help --all lists every command; help NAME describes one.
-Source and docs: https://github.com/williamsharkey/shiro
+Source and docs: https://github.com/williamsharkey/tabcomputer
 `;
 
 export const helpCmd: Command = {
@@ -170,7 +170,7 @@ export const helpCmd: Command = {
       ctx.stdout = GETTING_STARTED;
       return 0;
     }
-    ctx.stdout = 'shiro - available commands:\n\n';
+    ctx.stdout = 'tabcomputer - available commands:\n\n';
     const cmds = ctx.shell.commands.list();
     const nameCol = 10;
     for (const cmd of cmds.sort((a, b) => a.name.localeCompare(b.name))) {

@@ -57,8 +57,16 @@ export interface Desktop {
   wm: WindowManager;
   /** Hand over the main terminal once main.ts has created it in terminalEl */
   attachMainTerminal(term: ShiroTerminal): void;
+  /**
+   * Keep the desktop hidden until `p` settles (at most REVEAL_CAP_MS after
+   * attach): the first frame shows the final layout. No-op once revealed.
+   */
+  holdReveal(p: Promise<unknown>): void;
   ctx: AppContext;
 }
+
+/** The longest the desktop stays hidden waiting for fonts, the dock's contents and the session */
+const REVEAL_CAP_MS = 1500;
 
 /** Programs shown in the dock as terminal apps (installed or one click from it) */
 const FEATURED_PACKAGES: { pkg: string; cmd: string; name: string }[] = [
@@ -90,8 +98,8 @@ function injectFonts(): void {
   const style = el('style');
   style.id = 'sd-fonts';
   style.textContent = `
-@font-face { font-family: 'Inter'; font-style: normal; font-weight: 100 900; font-display: swap; src: url('/fonts/inter-latin-wght.woff2') format('woff2'); }
-@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 100 800; font-display: swap; src: url('/fonts/jetbrains-mono-latin-wght.woff2') format('woff2'); }`;
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 100 900; font-display: block; src: url('/fonts/inter-latin-wght.woff2') format('woff2'); }
+@font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 100 800; font-display: block; src: url('/fonts/jetbrains-mono-latin-wght.woff2') format('woff2'); }`;
   document.head.appendChild(style);
 }
 
@@ -108,8 +116,13 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   const meta = document.querySelector('meta[name="theme-color"]');
   const statusBarMeta = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
 
-  const root = el('div', 'sd-desktop');
+  const root = el('div', 'sd-desktop sd-booting');
   root.id = 'shiro-desktop';
+  // Until the reveal: the dock's contents, fonts and the session settle out of sight
+  const holds: Promise<unknown>[] = [];
+  let revealed = false;
+  const hold = (p: Promise<unknown>) => { if (!revealed) holds.push(p.catch(() => {})); };
+  const fontsAtBoot = typeof document.fonts?.check === 'function' && document.fonts.check('14px "JetBrains Mono"');
   root.append(el('div', 'sd-wallpaper'));
   const wordmark = el('div', 'sd-wordmark', BRAND.name);
   document.title = BRAND.name;
@@ -224,6 +237,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     { id: 'terminal', name: 'Terminal', icon: ICONS.terminal, order: 0, launch: (args) => openTerminal(args as { command?: string; cwd?: string }) },
     { id: 'files', name: 'Files', icon: ICONS.files, order: 1, launch: lazy(() => import('./apps/files')) },
     { id: 'settings', name: 'Settings', icon: ICONS.settings, order: 2, group: 'system', launch: focusOrLaunch('settings', lazy(() => import('./apps/settings'))) },
+    { id: 'browser', name: 'Browser', icon: ICONS.browser, order: 4, launch: focusOrLaunch('browser', lazy(() => import('./apps/browser'))) },
     { id: 'activity', name: 'Activity', icon: ICONS.activity, order: 3, group: 'system', launch: focusOrLaunch('activity', lazy(() => import('./apps/activity'))) },
     { id: 'about', name: 'About This Computer', icon: ICONS.about, order: 90, dock: false, launch: focusOrLaunch('about', lazy(() => import('./apps/about'))) },
   ];
@@ -251,7 +265,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     registerPackages();
   };
   registerPackages();
-  void refreshInstalled();
+  hold(refreshInstalled());
   deps.fs.onChange((_ev, path) => { if (path === PKG_STATUS) void refreshInstalled(); });
 
   // ── Dock rendering ──
@@ -393,7 +407,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     const keysBtn = el('button', 'sd-mb-item sd-mb-status sd-mb-keys', GLYPHS.keyboard);
     keysBtn.title = 'Extra keys';
     menubar.insertBefore(keysBtn, searchBtn);
-    void import('./mobile').then((m) => {
+    hold(import('./mobile').then((m) => {
       const paint = (mode: string) => {
         keysBtn.classList.toggle('sd-on', mode !== 'off');
         keysBtn.setAttribute('aria-pressed', String(mode !== 'off'));
@@ -409,7 +423,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
       m.onKeybarMode(paint);
       paint(m.keybarMode());
       m.initMobile(ctx, layout);
-    });
+    }));
   }
 
   // ── Menu bar behaviour ──
@@ -427,7 +441,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     { label: 'Settings…', shortcut: 'Alt+Shift+,', action: () => void wm.openApp('settings') },
     { label: 'Activity', action: () => void wm.openApp('activity') },
     'separator',
-    { label: 'Classic Terminal', action: () => { try { localStorage.setItem('shiro-ui', 'terminal'); } catch {} location.reload(); } },
+    { label: 'Classic Terminal', action: () => { try { localStorage.setItem('tabcomputer-ui', 'terminal'); } catch {} location.reload(); } },
     { label: 'Restart', action: () => location.reload() },
   ] });
   const termView = (): TerminalView | null => {
@@ -472,7 +486,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
       { label: 'Welcome Tour', action: () => showTour(ctx) },
       { label: 'Getting Started', action: () => openTerminal({ command: 'help' }) },
       { label: 'Keyboard Shortcuts', action: () => showToast(root, SHORTCUTS_HTML, 9000) },
-      { label: 'Desktop & /dom docs', action: () => window.open('https://github.com/williamsharkey/shiro/blob/main/docs/DESKTOP.md', '_blank', 'noopener') },
+      { label: 'Desktop & /dom docs', action: () => window.open('https://github.com/williamsharkey/tabcomputer/blob/main/docs/DESKTOP.md', '_blank', 'noopener') },
     ] };
     return [file, edit, view, windowMenu, ...(focusedApp()?.menus?.() ?? []), help];
   };
@@ -570,6 +584,8 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     themeBtn.setAttribute('aria-label', themeBtn.title);
     // The browser chrome and status bar match the (solid, on phones) menu bar
     meta?.setAttribute('content', t === 'dark' ? THEME_COLOR.dark : THEME_COLOR.light);
+    // The page behind the desktop (seen before it appears) matches too
+    document.documentElement.classList.toggle('sd-light', t === 'light');
     statusBarMeta?.setAttribute('content', t === 'dark' ? 'black-translucent' : 'default');
     applyTerminalTheme(t, mainTerm ? [mainTerm] : []);
   };
@@ -616,6 +632,10 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   const openSpotlight = () => { void import('./spotlight').then(m => m.toggleSpotlight(ctx)); };
   searchBtn.addEventListener('click', (e) => { e.stopPropagation(); openSpotlight(); });
 
+  deps.fs.onStorageFull((full) => {
+    if (full) showToast(root, '<b>Storage is full</b><div class="sd-small">The browser refused to save more. Delete files (or apt clean) to free space; Settings → Storage shows usage.</div>', 12000);
+  });
+
   return {
     wm,
     ctx,
@@ -624,19 +644,43 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
       mainTerm = term;
       term.banner = (t) => drawWelcome(t);
       first.view.attachMain(term);
-      // After boot settles: the swap re-measures every terminal (a forced layout)
-      const idle = (window as any).requestIdleCallback ?? ((f: () => void) => setTimeout(f, 200));
-      idle(() => useMonoFont(() => [...new Set([term, ...allTerminalViews().flatMap(v => v.terminals())])]), { timeout: 1500 });
-      // Focusing forces a layout of the whole desktop: do it with the first frame
-      requestAnimationFrame(() => term.term.focus());
-      // Last time's other windows, then keep the session saved; a first visit gets the tour
-      idle(() => {
-        void restoreSession(wm, session, openTerminal).finally(() => {
-          trackSession(wm);
-          setTimeout(() => maybeShowTour(ctx), 1200);
-        });
-      }, { timeout: 2000 });
+      // One draw: the desktop stays hidden (the page's boot mark shows) until
+      // the fonts, the dock's contents, the phone layer and last session's
+      // windows are in place, then appears in a single frame. Nothing moves after.
+      const terms = () => [...new Set([term, ...allTerminalViews().flatMap(v => v.terminals())])];
+      if (document.fonts?.load) {
+        hold(Promise.all([document.fonts.load('13px Inter'), document.fonts.load('14px "JetBrains Mono"')])
+          // xterm measured the fallback if the font arrived after it was created
+          .then(() => fontsAtBoot ? undefined : useMonoFont(terms)));
+      }
+      hold(restoreSession(wm, session, openTerminal).finally(() => {
+        // The main terminal keeps focus (and the menu bar its app name)
+        first.win.focus();
+        trackSession(wm);
+      }));
+      const reveal = () => {
+        if (revealed) return;
+        revealed = true;
+        // Windows opened while hidden appear in place, without their open animation
+        for (const w of root.querySelectorAll('.sd-opening')) w.classList.remove('sd-opening');
+        void root.offsetHeight; // settle those styles while transitions are still off
+        root.classList.remove('sd-booting');
+        document.getElementById('boot-mark')?.remove();
+        term.term.focus();
+        performance.mark('shiro:desktop:revealed');
+        // A first visit gets the tour
+        setTimeout(() => maybeShowTour(ctx), 1200);
+      };
+      const cap = new Promise<void>(r => setTimeout(r, REVEAL_CAP_MS));
+      // holds can add holds (a restored window loading its app): wait until they stop growing
+      const settle = async (): Promise<void> => {
+        const n = holds.length;
+        await Promise.all(holds);
+        if (holds.length !== n) return settle();
+      };
+      void Promise.race([settle(), cap]).then(() => requestAnimationFrame(reveal));
     },
+    holdReveal: hold,
   };
 }
 

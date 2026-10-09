@@ -34,7 +34,7 @@ export const scpCmd: Command = {
 
     if (args.length < 2 || args[0] === '--help' || args[0] === '-h') {
       ctx.stdout += 'Usage: scp <source> <destination>\n';
-      ctx.stdout += '\nCopy files to/from a remote Shiro instance.\n';
+      ctx.stdout += '\nCopy files to/from a remote tabcomputer instance.\n';
       ctx.stdout += 'Remote paths use code:path notation.\n';
       ctx.stdout += '\nExamples:\n';
       ctx.stdout += '  scp file.txt fluffy-cloud:~/file.txt     Upload\n';

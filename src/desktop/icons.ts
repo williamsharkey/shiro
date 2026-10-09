@@ -11,6 +11,9 @@ const tile = (_id: string, from: string, to: string, inner: string) =>
 const mono = (text: string, size: number, color: string, y = 40) =>
   `<text x="32" y="${y}" text-anchor="middle" font-family="'JetBrains Mono',monospace" font-weight="700" font-size="${size}" fill="${color}">${text}</text>`;
 
+/** The otter (the tabcomputer mark): paths in a 30x24 box, drawn in currentColor */
+export const OTTER = `<path d="M1.5 19.5h3.5V11.5a7 7 0 0 1 7-7h6a7 7 0 0 1 7 7v8h3.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="11" cy="11.6" r="1.25" fill="currentColor"/><circle cx="19" cy="11.6" r="1.25" fill="currentColor"/><ellipse cx="15" cy="14" rx="1.5" ry="1" fill="currentColor"/><path d="M13.6 15.6q.7.8 1.4 0q.7.8 1.4 0" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M11.6 14.6l-3 .4M11.6 16l-2.8 1M18.4 14.6l3 .4M18.4 16l2.8 1" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>`;
+
 export const ICONS: Record<string, string> = {
   terminal: tile('term', '#3a3f4f', '#12141b',
     `<path d="M17 23l10 9-10 9" fill="none" stroke="#7ef0c1" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>` +
@@ -24,9 +27,11 @@ export const ICONS: Record<string, string> = {
     `<circle cx="32" cy="32" r="11" fill="#eef1f6"/><circle cx="32" cy="32" r="5" fill="#6c7586"/>`),
   activity: tile('act', '#28313f', '#0d1117',
     `<path d="M10 36h10l5-12 7 22 6-16 4 6h12" fill="none" stroke="#59f0a8" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>`),
-  about: tile('about', '#8a7dff', '#4b3bd6',
-    `<path d="M11 45h6V25a5 5 0 0 1 5-5h20a5 5 0 0 1 5 5v20h6" fill="none" stroke="#fff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>` +
-    `<path d="M25 30l5 4-5 4" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/><rect x="33" y="36" width="7" height="3" rx="1.5" fill="#fff"/>`),
+  about: tile('about', '#8a7dff', '#4b3bd6', `<g color="#fff" transform="translate(11 15) scale(1.4)">${OTTER}</g>`),
+  browser: tile('browser', '#5ec8ff', '#1f6fe0',
+    `<circle cx="32" cy="32" r="17" fill="none" stroke="#fff" stroke-width="3.5"/>` +
+    `<ellipse cx="32" cy="32" rx="7.5" ry="17" fill="none" stroke="#fff" stroke-width="3"/>` +
+    `<path d="M15.5 26h33M15.5 38h33" stroke="#fff" stroke-width="3" stroke-linecap="round"/>`),
   vim: tile('vim', '#2fb46a', '#0d6436', mono('vi', 24, '#ffffff', 41)),
   htop: tile('htop', '#2a2f3b', '#0f1218',
     `<rect x="13" y="19" width="30" height="5" rx="2.5" fill="#5be08e"/>` +
@@ -43,8 +48,8 @@ export const ICONS: Record<string, string> = {
     `<path d="M32 17v30M32 32h18" stroke="#7ef0c1" stroke-width="3"/>`),
   package: tile('pkg', '#f2b45c', '#c26a1c',
     `<path d="M32 14l16 8v20l-16 8-16-8V22z" fill="#fff4e0"/><path d="M16 22l16 8 16-8M32 30v20" fill="none" stroke="#d9893a" stroke-width="2.5"/>`),
-  // A browser tab with a prompt in it: tabcomputer
-  logo: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M1.5 19.5h3V8a3 3 0 0 1 3-3h9a3 3 0 0 1 3 3v11.5h3" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 10.5l2.6 2.2L9 14.9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><rect x="13" y="14" width="3.4" height="1.9" rx=".9" fill="currentColor"/></svg>`,
+  // The otter: a rounded tab with eyes, nose and whiskers (owner's pick, docs/BRAND.md)
+  logo: `<svg viewBox="0 0 30 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${OTTER}</svg>`,
 };
 
 /** 16px status glyphs (currentColor) */

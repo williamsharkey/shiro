@@ -76,7 +76,7 @@ export const termcastCmd: Command = {
         const resolvedPath = ctx.fs.resolvePath(filename, ctx.cwd);
 
         // Get terminal dimensions from xterm if available
-        const terminal = (window as any).__shiro?.terminal;
+        const terminal = (window as any).__tabcomputer?.terminal;
         const width = terminal?.cols || 120;
         const height = terminal?.rows || 30;
 
@@ -116,7 +116,7 @@ export const termcastCmd: Command = {
         }
 
         // Restore original terminal write
-        const terminal = (window as any).__shiro?.terminal;
+        const terminal = (window as any).__tabcomputer?.terminal;
         if (terminal && window.__termcastOriginalWrite) {
           terminal.write = window.__termcastOriginalWrite;
           window.__termcastOriginalWrite = undefined;
@@ -128,7 +128,7 @@ export const termcastCmd: Command = {
           width: session.width,
           height: session.height,
           timestamp: Math.floor(session.startTime / 1000),
-          title: `Shiro Terminal Recording`,
+          title: `tabcomputer Terminal Recording`,
           env: {
             SHELL: '/bin/sh',
             TERM: 'xterm-256color',

@@ -35,6 +35,8 @@ export const debianCmd: Command = {
         out(`Debian ${already.version} is already installed (${already.id}); --force reinstalls the base files.`);
         return 0;
       }
+      // Debian grows to hundreds of MB (apt lists, packages): keep it from eviction
+      void import('../storage').then(m => m.requestPersistentStorage('debian install'));
       const bi = rest.indexOf('--base');
       const base = bi >= 0 ? rest[bi + 1] : undefined;
       const r = await rootfs.installRootfs(ctx.fs, { base, progress: (m) => out(m) });
@@ -85,17 +87,17 @@ export const debianCmd: Command = {
 };
 
 export const shiroAlternativesCmd: Command = {
-  name: 'shiro-alternatives',
-  description: "Choose Shiro's or Debian's implementation of a program",
+  name: 'tabcomputer-alternatives',
+  description: "Choose tabcomputer's or Debian's implementation of a program",
   async exec(ctx) {
     const ov = await import('../debian/overlay');
     const a = ctx.args;
     const out = (s: string) => { ctx.stdout += s + '\n'; };
     const describe = (st: Awaited<ReturnType<typeof ov.programState>>) => {
       const name = st.path;
-      const who = st.current === 'shiro' ? `shiro (${st.policy?.command ?? name.slice(name.lastIndexOf('/') + 1)})` : 'debian';
+      const who = st.current === 'shiro' ? `tabcomputer (${st.policy?.command ?? name.slice(name.lastIndexOf('/') + 1)})` : 'debian';
       const mode = st.manual ? 'manual' : 'auto';
-      const dflt = st.policy ? `, default ${st.policy.default}` : '';
+      const dflt = st.policy ? `, default ${st.policy.default === 'shiro' ? 'tabcomputer' : st.policy.default}` : '';
       const inst = st.debianInstalled ? '' : ' [Debian package not installed]';
       return `${name}\t${who}\t(${mode}${dflt})${inst}`;
     };
@@ -118,9 +120,9 @@ export const shiroAlternativesCmd: Command = {
       }
       if (a[0] === '--set') {
         const p = ov.overlayPath(a[1] ?? '');
-        const side = a[2];
-        if (!p || (side !== 'shiro' && side !== 'debian')) throw new Error('usage: --set NAME shiro|debian');
-        if (side === 'shiro' && !ov.POLICY[p] && !ctx.shell.commands.get(p.slice(p.lastIndexOf('/') + 1))) throw new Error(`Shiro has no ${p.slice(p.lastIndexOf('/') + 1)}`);
+        const side = a[2] === 'tabcomputer' ? 'shiro' : a[2]; // 'shiro' is the old name, still accepted
+        if (!p || (side !== 'shiro' && side !== 'debian')) throw new Error('usage: --set NAME tabcomputer|debian');
+        if (side === 'shiro' && !ov.POLICY[p] && !ctx.shell.commands.get(p.slice(p.lastIndexOf('/') + 1))) throw new Error(`tabcomputer has no ${p.slice(p.lastIndexOf('/') + 1)}`);
         out(await ov.setSide(ctx.fs, p, side, { manual: true }));
         return 0;
       }
@@ -138,10 +140,10 @@ export const shiroAlternativesCmd: Command = {
         out(changed.length ? changed.join('\n') : `${p}: ${ov.POLICY[p].default} (auto)`);
         return 0;
       }
-      ctx.stderr += 'usage: shiro-alternatives --list | --display NAME | --set NAME shiro|debian | --auto NAME|all\n';
+      ctx.stderr += 'usage: tabcomputer-alternatives --list | --display NAME | --set NAME tabcomputer|debian | --auto NAME|all\n';
       return 2;
     } catch (e: any) {
-      ctx.stderr += `shiro-alternatives: ${e?.message ?? e}\n`;
+      ctx.stderr += `tabcomputer-alternatives: ${e?.message ?? e}\n`;
       return 1;
     }
   },

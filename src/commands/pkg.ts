@@ -163,7 +163,7 @@ async function cmdInfo(ctx: CommandContext, args: string[]): Promise<number> {
     `License:     ${p.license}`,
     `Source:      ${p.source}`,
     ...(p.homepage ? [`Homepage:    ${p.homepage}`] : []),
-    `Origin:      ${p.origin === 'shiro' ? `built by Shiro (${p.recipe})` : 'Wasmer registry'}`,
+    `Origin:      ${p.origin === 'shiro' ? `built by tabcomputer (${p.recipe})` : 'Wasmer registry'}`,
     `ABI:         ${p.abi}`,
     `Download:    ${formatSize(downloadSize(p))}`,
     `Commands:    ${Object.keys(p.bin).join(', ')}`,
