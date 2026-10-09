@@ -306,6 +306,12 @@ composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
 
+### unix/shell-stdio 5 — execute() with a sink collects kernel programs' output
+
+`node bench/ab.mjs HEAD~1 HEAD --suites shell,kernel --quick` (e00d371 →
+ede6ae6, 3 rounds × 5 runs, alpha 0.01): all 24 metrics unchanged (the
+terminal resolution added to every execute() costs nothing measurable).
+
 ### unix/shell-stdio 4 — job control in a kernel sh; kernel background jobs
 
 `node bench/ab.mjs HEAD~1 HEAD --suites shell,kernel --quick` (e03bde3 →
