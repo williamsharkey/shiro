@@ -451,6 +451,7 @@ async function run(msg) {
     if (next) next(ch); else ch.busy = false;
   };
   // One request on `ch`; the page serves it and posts 'blink-done'.
+  const hosted = new Set();  // kernel pids of same-instance fork children
   const issue = (ch, nr, args, as) => new Promise((resolve) => {
     for (let i = 0; i < CH_NARGS; i++) ch.i32[CH_ARGS + i] = args[i] ?? 0;
     ch.i32[CH_SYSNO] = nr;
@@ -468,9 +469,12 @@ async function run(msg) {
       const out = outCap ? ch.data.slice(0, Math.min(outCap, ch.data.length)) : null;
       // A signal for the guest rode on the reply: queue it, then rt_sigreturn
       while (res.sig) {
-        if (debug) console.error(`[blink] ${debugPid} signal ${res.sig}`);
-        blinkModule?._blink_shiro_signal?.(res.sig);
-        res = { ...res, sig: (await issue(ch, SYS.rt_sigreturn, [], 0)).sig };
+        if (debug) console.error(`[blink] ${debugPid} signal ${res.sig}${as ? ' for ' + as : ''}`);
+        // a hosted child's signal goes to its own System (vfork children,
+        // which have none, run on ours)
+        if (as && hosted.has(as)) blinkModule?._blink_shiro_signal_pid?.(as, res.sig);
+        else blinkModule?._blink_shiro_signal?.(res.sig);
+        res = { ...res, sig: (await issue(ch, SYS.rt_sigreturn, [], as)).sig };
       }
       return { r: res.r, hi: res.hi, out };
     } finally {
@@ -491,7 +495,11 @@ async function run(msg) {
       done?.({ r, hi, sig });
     } else if (m.type === 'blink-signal' && !exiting) {
       // The kernel signalled us: any syscall reply carries the signal word.
-      sys(SYS.getpid);
+      if (m.pid) void call(SYS.getpid, [], m.pid, new Uint8Array(0), 0);
+      else sys(SYS.getpid);
+    } else if (m.type === 'blink-reap') {
+      // a hosted child's process ended in the kernel (killed): end its System
+      if (hosted.delete(m.pid)) blinkModule?._blink_shiro_signal_pid?.(m.pid, 9);
     }
   });
   const sigaction = (sig, handler) => {
@@ -514,6 +522,11 @@ async function run(msg) {
   const kernel = {
     sys,
     call,
+    // same-instance fork: this worker runs kernel process `pid` too
+    hosted(pid) {
+      hosted.add(pid);
+      port.postMessage({ type: 'blink-hosted', pid });
+    },
     // fork(): the page starts the snapshot as the kernel's child `pid`
     fork(pid, bytes) {
       port.postMessage({ type: 'blink-fork', pid, snapshot: bytes.buffer }, [bytes.buffer]);

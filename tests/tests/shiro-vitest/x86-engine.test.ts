@@ -41,10 +41,18 @@ const jitBin = join(out, 'jit');
 const haveJit = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', jitBin, 'jit.c']);
 const forkBin = join(out, 'forkcopy');
 const haveFork = tryBuild('gcc', ['-static', '-O1', '-o', forkBin, 'forkcopy.c']);
+const shfutexBin = join(out, 'shfutex');
+const haveShfutex = tryBuild('gcc', ['-static', '-O1', '-o', shfutexBin, 'shfutex.c']);
+const orphanBin = join(out, 'orphan');
+const haveOrphan = tryBuild('gcc', ['-static', '-O1', '-o', orphanBin, 'orphan.c']);
+const alarmforkBin = join(out, 'alarmfork');
+const haveAlarmfork = tryBuild('gcc', ['-static', '-O1', '-o', alarmforkBin, 'alarmfork.c']);
 const forkSharedBin = join(out, 'forkshared');
 const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
 const mremapBin = join(out, 'mremap');
 const haveMremap = tryBuild('gcc', ['-static', '-O1', '-o', mremapBin, 'mremap.c']);
+const prctlcapBin = join(out, 'prctlcap');
+const havePrctlcap = tryBuild('gcc', ['-static', '-O1', '-o', prctlcapBin, 'prctlcap.c']);
 const lchownBin = join(out, 'lchown');
 const haveLchown = tryBuild('gcc', ['-static', '-O1', '-o', lchownBin, 'lchown.c']);
 const ssecmpBin = join(out, 'ssecmp');
@@ -186,6 +194,42 @@ describe.skipIf(!haveFork)('Blink engine: fork', () => {
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('anon shared 42\nfile shared 7\nprivate after unmap 100\n');
     expect(r.exitCode).toBe(0);
+  }, 60_000);
+});
+
+// BLINK_SAME_INSTANCE_FORK=1 (patch 0031): the child is a System in the
+// parent's Blink instance, sharing MAP_SHARED pages and running alongside
+describe.skipIf(!haveFork || !haveForkShared || !haveShfutex || !haveOrphan || !haveAlarmfork)('Blink engine: same-instance fork', () => {
+  const sif = 'BLINK_SAME_INSTANCE_FORK=1 ./prog';
+  it('copies private memory; pipes, exec and nested forks work', async () => {
+    const { shell } = await setup(readFileSync(forkBin));
+    expect((await run(shell, `${sif} copy`)).output).toContain('parent sees 1 p parent status 7');
+    expect((await run(shell, `${sif} pipe`)).output).toContain('pipe got: from-exec');
+    expect((await run(shell, `${sif} nested`)).output).toContain('nested status 44 counter 1');
+  }, 60_000);
+
+  it('shares MAP_SHARED memory and its futexes with a child running alongside', async () => {
+    const { shell } = await setup(readFileSync(forkSharedBin));
+    expect((await run(shell, sif)).output.replace(/\r\n/g, '\n')).toBe('anon shared 42\nfile shared 7\nprivate after unmap 100\n');
+    const f = await setup(readFileSync(shfutexBin));
+    expect((await run(f.shell, sif)).output).toContain('futex across fork: child wrote 2, exit 3');
+  }, 60_000);
+
+  it('kills children, and a child outlives its parent', async () => {
+    const { shell } = await setup(readFileSync(orphanBin));
+    expect((await run(shell, sif)).output.replace(/\r\n/g, '\n')).toBe(
+      'killed spinning child: signaled=1 sig=9\nSIGTERM to pausing child: signaled=1 sig=15\n');
+    await run(shell, 'rm -f /tmp/orphan.out');
+    await run(shell, `${sif} x`);
+    await run(shell, 'sleep 1');
+    expect((await run(shell, 'cat /tmp/orphan.out')).output).toContain('child outlived parent');
+  }, 60_000);
+
+  it('keeps alarms per process (here and with the default fork)', async () => {
+    const { shell } = await setup(readFileSync(alarmforkBin));
+    const want = "first alarm 0, child ok 1, parent's alarm still set 1";
+    expect((await run(shell, sif)).output).toContain(want);
+    expect((await run(shell, './prog')).output).toContain(want);
   }, 60_000);
 });
 
@@ -450,6 +494,17 @@ describe('Blink engine: CPU and syscall fixes', () => {
     expect(r.output.replace(/\r\n/g, '\n')).toBe(
       'no MAYMOVE: Cannot allocate memory\nmoved=1 first=7 mid=7 last=9\nold range free=1\n' +
       'shrunk same=1 tail free=1 last=7\nfixed at=1 first=7\nreadonly moved=1 byte=42\n');
+    expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // perl's $0 = ... (Debian's addgroup); libcap's cap_get_proc (ping)
+  it.skipIf(!havePrctlcap)('prctl PR_SET_NAME/PR_GET_NAME/PR_CAPBSET_READ, capget/capset', async () => {
+    const { shell } = await setup(readFileSync(prctlcapBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'default name prog\nset 0 name renamed-thread-\ncapbset_read(0)=1 capbset_read(40)=1\n' +
+      'capbset_read(64)=-1 Invalid argument\ncapget(version 0)=0 , version 0x20080522\n' +
+      'capget=0 full=0\ncapset=0\n');
     expect(r.exitCode).toBe(0);
   }, 60_000);
 
