@@ -249,7 +249,7 @@ export function applyTerminalTheme(theme: 'light' | 'dark', extra: ShiroTerminal
 }
 
 /** Use the bundled mono font once it has loaded (xterm measures glyphs when the family changes). */
-export function useMonoFont(terms: () => ShiroTerminal[]): void {
+export function useMonoFont(terms: () => ShiroTerminal[]): Promise<void> {
   const apply = () => {
     for (const t of terms()) {
       // xterm re-measures only when the family string changes
@@ -257,8 +257,8 @@ export function useMonoFont(terms: () => ShiroTerminal[]): void {
       try { t.fitAddon.fit(); } catch {}
     }
   };
-  if (!document.fonts?.load) { apply(); return; }
-  document.fonts.load('14px "JetBrains Mono"').then(apply, apply);
+  if (!document.fonts?.load) { apply(); return Promise.resolve(); }
+  return document.fonts.load('14px "JetBrains Mono"').then(apply, apply);
 }
 
 export { MONO as TERMINAL_FONT };

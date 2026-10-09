@@ -2,7 +2,11 @@
    body.sd-active, so the classic terminal UI is untouched. */
 
 body.sd-active { background: #0b0e18; }
+html.sd-light, html.sd-light body.sd-active { background: #eef0ff; }
 body.sd-active #shiro-layout { display: none; }
+/* Built out of sight, shown in one frame once complete (index.ts reveal) */
+.sd-desktop.sd-booting { visibility: hidden; }
+.sd-booting *, .sd-booting *::before, .sd-booting *::after { transition: none !important; animation: none !important; }
 
 .sd-desktop {
   /* Web font + generic family only: every missing family in a stack is a blocking
@@ -132,7 +136,7 @@ body.sd-active #shiro-layout { display: none; }
 }
 .sd-dock-item {
   position: relative; width: 50px; height: 50px; flex: 0 0 auto; padding: 0; border: 0; background: none; cursor: default;
-  transition: transform .22s var(--sd-ease), margin .22s var(--sd-ease); transform-origin: 50% 100%;
+  transition: transform .22s var(--sd-ease); transform-origin: 50% 100%;
 }
 .sd-tile {
   position: relative; display: block; width: 90.6%; height: 90.6%; margin: 4.7%; border-radius: 24%;
@@ -143,7 +147,7 @@ body.sd-active #shiro-layout { display: none; }
 .sd-tile svg { position: relative; display: block; width: 100%; height: 100%; }
 .sd-dock-item img { width: 100%; height: 100%; display: block; filter: drop-shadow(0 3px 6px rgba(0, 0, 0, .3)); }
 .sd-dock-item > svg { width: 100%; height: 100%; display: block; filter: drop-shadow(0 3px 6px rgba(0, 0, 0, .3)); }
-.sd-dock-item:hover { transform: translateY(-6px) scale(1.14); margin: 0 4px; }
+.sd-dock-item:hover { transform: translateY(-6px) scale(1.14); } /* transform only: the slot keeps its width */
 .sd-dock-item:active { filter: brightness(.82); }
 .sd-dock-item:focus-visible { outline: 2px solid var(--sd-accent); outline-offset: 3px; border-radius: 14px; }
 .sd-dock-item.sd-launching { animation: sd-bounce .7s var(--sd-ease) 2; }
@@ -444,7 +448,7 @@ body.sd-active #shiro-layout { display: none; }
 .sd-compact .sd-mb-menus, .sd-compact .sd-wordmark { display: none; }
 .sd-compact .sd-dock { overflow-x: auto; scrollbar-width: none; justify-content: flex-start; padding: 6px 8px; border-radius: 18px; }
 .sd-compact .sd-dock-item { width: 44px; height: 44px; }
-.sd-compact .sd-dock-item:hover { transform: none; margin: 0; }
+.sd-compact .sd-dock-item:hover { transform: none; }
 .sd-compact .sd-dock-tip { display: none; }
 .sd-compact .sd-win { border-radius: 12px; }
 .sd-compact .sd-sidebar { flex-basis: 112px; padding: 8px 4px; }

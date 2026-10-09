@@ -16,6 +16,11 @@
     #boot-mark svg { width: 72px; height: auto; }
     @keyframes boot-in { from { opacity: 0; } }
     @media (prefers-reduced-motion: reduce) { #boot-mark { animation: none; } }
+    /* A branded (desktop) page loads on the light desktop's color for light-mode systems */
+    @media (prefers-color-scheme: light) {
+      html:has(#boot-mark), html:has(#boot-mark) body { background: #eef0ff; }
+      #boot-mark { color: rgba(29, 27, 38, .38); }
+    }
     #shiro-layout {
       width: 100%;
       height: 100%;
