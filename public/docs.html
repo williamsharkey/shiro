@@ -577,7 +577,7 @@ claude --native -p "say hi"</pre></div>
         <tr><td>Grok Build (xAI)</td><td>Download <code>https://x.ai/cli/grok-&lt;version&gt;-linux-x86_64</code></td><td>Works: <code>grok -p "..."</code> reaches the API</td><td>About 2.5 minutes per request</td></tr>
         <tr><td>Antigravity CLI (<code>agy</code>)</td><td>From its release manifest (<code>antigravity.google/cli/install.sh</code> shows how)</td><td><code>agy --version</code> works; sign-in not tested</td><td>11 s to start</td></tr>
         <tr><td>opencode</td><td><code>npm install -g opencode-ai</code></td><td>Not yet: crashes at startup in the emulator</td><td>&mdash;</td></tr>
-        <tr><td>aider</td><td>Debian mode: <code>debian install</code>, <code>pkg install curl</code>, then aider's installer: <code>curl -LsSf https://aider.chat/install.sh | sh</code> (Python 3.12 through uv; Debian's 3.13 can't install aider's pinned numpy)</td><td>Not yet: installs (about 10 minutes), doesn't start yet</td><td>&mdash;</td></tr>
+        <tr><td>aider</td><td>Debian mode: <code>debian install</code>, <code>pkg install curl</code>, then aider's installer: <code>curl -LsSf https://aider.chat/install.sh | sh</code> (Python 3.12 through uv; Debian's 3.13 can't install aider's pinned numpy)</td><td>Works once the Blink update lands (/proc/self/exe): <code>aider --message "..."</code> reaches the API</td><td>Install about 10 minutes; first start about 6 minutes; about 12 minutes per request</td></tr>
       </table>
       <p>Times are from headless Chromium on a desktop-class machine. The native programs are CPU-bound in the emulator; first runs are slower while code warms up.</p>
 
