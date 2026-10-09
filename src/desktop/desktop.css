@@ -329,6 +329,11 @@ body.sd-active #shiro-layout { display: none; }
 .sd-row { display: flex; align-items: center; gap: 10px; min-height: 30px; }
 .sd-row + .sd-row { border-top: 1px solid var(--sd-sep); }
 .sd-row .sd-grow { flex: 1; }
+.sd-input {
+  height: 30px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--sd-window-border); background: var(--sd-field);
+  color: var(--sd-text); font: 13px var(--sd-mono); outline: none; user-select: text; -webkit-user-select: text;
+}
+.sd-input:focus { border-color: var(--sd-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sd-accent) 25%, transparent); }
 .sd-seg { display: inline-flex; padding: 2px; border-radius: 8px; background: var(--sd-field); border: 1px solid var(--sd-sep); }
 .sd-seg button { height: 24px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; color: var(--sd-text); font: inherit; cursor: default; }
 .sd-seg button.sd-active { background: var(--sd-window); box-shadow: 0 1px 3px rgba(0, 0, 0, .2); }

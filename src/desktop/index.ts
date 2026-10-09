@@ -446,7 +446,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   paintTheme();
 
   // ── Network ──
-  initNetwork(wm, deps.fs, netBtn);
+  initNetwork(wm, deps.fs, netBtn, deps.kernel);
 
   // ── Keyboard shortcuts (capture: before xterm sees them) ──
   window.addEventListener('keydown', (e) => {
