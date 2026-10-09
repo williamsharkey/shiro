@@ -9,8 +9,10 @@
 
 import {
   networkCredential, networkStatus, onNetworkStatus, setNetworkSignInHandler, setNetworkStatus,
-  resetNetworkDecline, type NetworkNeed, type NetworkStatus,
+  resetNetworkDecline, ownRelay, onOwnRelayChange, relayNetConfig, type NetworkNeed, type NetworkStatus,
 } from '../net-signin';
+import { netStackOf } from '../kernel/net';
+import type { Kernel } from '../kernel/kernel';
 import type { FileSystem } from '../filesystem';
 import type { WindowManager } from './wm';
 import { GLYPHS } from './icons';
@@ -19,11 +21,17 @@ const GLOBE = `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="1
 
 let root: HTMLElement;
 let fsRef: FileSystem;
+let wmRef: WindowManager;
 let current: { el: HTMLElement; done: (tok: string | null) => void; promise: Promise<string | null> } | null = null;
 
-export function initNetwork(wm: WindowManager, fs: FileSystem, button: HTMLElement): void {
+export function initNetwork(wm: WindowManager, fs: FileSystem, button: HTMLElement, kernel?: Kernel): void {
   root = wm.root;
   fsRef = fs;
+  wmRef = wm;
+  // "Use my own connection" (Settings → Network) points the kernel's sockets at the user's relay
+  const applyRelay = () => { if (kernel) netStackOf(kernel)?.configure(relayNetConfig()); };
+  applyRelay();
+  onOwnRelayChange(() => { applyRelay(); setNetworkStatus(navigator.onLine ? 'online' : 'offline'); });
   setNetworkSignInHandler((need) => showSignInSheet(need));
   const initial: NetworkStatus = !navigator.onLine ? 'offline' : networkCredential() ? 'signed-in' : 'online';
   setNetworkStatus(initial);
@@ -51,9 +59,39 @@ export function statusText(s: NetworkStatus): string {
   }
 }
 
+/**
+ * Check a relay of the user's own: fetch a token if it has a token URL, then
+ * open (and close) a WebSocket. Resolves to null when reachable, else why not.
+ */
+export async function testOwnRelay(url: string, tokenUrl?: string, timeoutMs = 6000): Promise<string | null> {
+  let token: string | null = null;
+  if (tokenUrl) {
+    try {
+      const r = await fetch(tokenUrl, { method: 'POST' });
+      if (!r.ok) return `token request answered ${r.status}`;
+      token = (await r.json())?.token ?? null;
+    } catch (e) { return `token request failed (${(e as Error)?.message ?? e}; is this site allowed by its CORS/origin list?)`; }
+  }
+  return new Promise((resolve) => {
+    let ws: WebSocket;
+    try { ws = new WebSocket(token ? `${url}${url.includes('?') ? '&' : '?'}t=${encodeURIComponent(token)}` : url); }
+    catch (e) { resolve(`bad URL: ${(e as Error)?.message ?? e}`); return; }
+    const timer = setTimeout(() => { try { ws.close(); } catch {} resolve('no answer within 6 s'); }, timeoutMs);
+    ws.onopen = () => { clearTimeout(timer); ws.close(); resolve(null); };
+    ws.onerror = () => { clearTimeout(timer); resolve('the relay refused the connection (wrong URL, not running, or this site is not in its allowed origins)'); };
+  });
+}
+
 /** Ask the relay whether it would let this browser connect: updates the status. */
 export async function probeRelay(): Promise<NetworkStatus> {
   if (!navigator.onLine) { setNetworkStatus('offline'); return 'offline'; }
+  const own = ownRelay();
+  if (own) {
+    const err = await testOwnRelay(own.url, own.tokenUrl);
+    const s: NetworkStatus = err ? 'unavailable' : 'online';
+    setNetworkStatus(s);
+    return s;
+  }
   const cred = networkCredential();
   try {
     const res = await fetch('/tcp/token', { method: 'POST', credentials: 'same-origin', ...(cred ? { headers: { Authorization: `Bearer ${cred}` } } : {}) });
@@ -131,8 +169,10 @@ function showSignInSheet(need: NetworkNeed, manual = false): Promise<string | nu
         <button class="sd-btn sd-primary" data-act="github" type="button">Sign in with GitHub</button>
       </div>
       <div class="sd-other sd-small sd-muted" hidden style="margin-top:10px">
-        More ways are coming: your own relay, or a key from a provider you trust.
-        Downloads from this site (like <code>apt install</code>) never need a sign-in.
+        Use your own connection: point this computer at a TCP relay you run
+        (<button class="sd-link" data-act="own" type="button">set it up in Settings</button>);
+        your GitHub sign-in is never sent to it. Downloads from this site
+        (like <code>apt install</code>) never need a sign-in.
       </div>`;
     sheet.querySelector<HTMLElement>('[data-act=github]')!.focus();
   };
@@ -141,6 +181,7 @@ function showSignInSheet(need: NetworkNeed, manual = false): Promise<string | nu
     if (act === 'later' || act === 'cancel') done(null);
     else if (act === 'other') { const o = sheet.querySelector<HTMLElement>('.sd-other'); if (o) o.hidden = !o.hidden; }
     else if (act === 'github' || act === 'retry') void deviceFlow();
+    else if (act === 'own') { done(null); void wmRef?.openApp('settings', { pane: 'network' }); }
   });
   sheet.addEventListener('keydown', (e) => { if (e.key === 'Escape') done(null); });
 

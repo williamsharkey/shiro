@@ -1,0 +1,55 @@
+{
+ "suite": "smoosh",
+ "title": "Shell: smoosh POSIX tests",
+ "note": "POSIX sh cases from [smoosh](https://github.com/mgree/smoosh) (tests/shell), judged on stdout and exit status; scored where host dash or bash --posix passes. \"Before\" is unix/integration c14344d.",
+ "files": {
+  "benchmark": {
+   "pass": 2,
+   "total": 2,
+   "failures": []
+  },
+  "builtin": {
+   "pass": 57,
+   "total": 59,
+   "failures": [
+    {
+     "name": "builtin.exec.modernish.mkfifo.loop",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "builtin.readonly.assign.interactive",
+     "reason": "stdout differs"
+    }
+   ]
+  },
+  "parse": {
+   "pass": 3,
+   "total": 3,
+   "failures": []
+  },
+  "semantics": {
+   "pass": 89,
+   "total": 91,
+   "failures": [
+    {
+     "name": "semantics.dot.glob",
+     "reason": "stdout differs"
+    },
+    {
+     "name": "semantics.evalorder.fun",
+     "reason": "status 1, want 0"
+    }
+   ]
+  },
+  "sh": {
+   "pass": 6,
+   "total": 7,
+   "failures": [
+    {
+     "name": "sh.monitor.bg",
+     "reason": "status 3, want 0"
+    }
+   ]
+  }
+ }
+}

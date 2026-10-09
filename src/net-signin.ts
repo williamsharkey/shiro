@@ -98,3 +98,56 @@ export function onNetworkStatus(cb: (s: NetworkStatus) => void): () => void {
 
 // Other bundles (seeded pages, worker hosts) reach it without importing
 (globalThis as any).__shiroRequireNetwork = requireNetworkSignIn;
+
+// ── "Use my own connection" ──────────────────────────────────────────
+
+/** A relay the user chose instead of this site's (Settings → Network). */
+export interface OwnRelay {
+  /** ws:// or wss:// URL of a TCP relay speaking docs/NETWORKING.md's protocol */
+  url: string;
+  /** POST endpoint returning {token, expires}, if that relay wants one */
+  tokenUrl?: string;
+}
+
+const RELAY_KEY = 'shiro_relay';
+const relayListeners = new Set<(r: OwnRelay | null) => void>();
+
+/** The user's own relay, or null for this site's. */
+export function ownRelay(): OwnRelay | null {
+  try {
+    const r = JSON.parse(localStorage.getItem(RELAY_KEY) || 'null');
+    return r && typeof r.url === 'string' && /^wss?:\/\//.test(r.url) ? { url: r.url, ...(r.tokenUrl ? { tokenUrl: String(r.tokenUrl) } : {}) } : null;
+  } catch { return null; }
+}
+
+/** Choose a relay (null = this site's). Throws on a URL that isn't ws(s)://. */
+export function setOwnRelay(r: OwnRelay | null): void {
+  if (r) {
+    if (!/^wss?:\/\/[^/\s]+/.test(r.url)) throw new Error('The relay URL must start with ws:// or wss://');
+    if (r.tokenUrl && !/^https?:\/\/[^/\s]+/.test(r.tokenUrl)) throw new Error('The token URL must start with http:// or https://');
+  }
+  try {
+    if (r) localStorage.setItem(RELAY_KEY, JSON.stringify(r)); else localStorage.removeItem(RELAY_KEY);
+  } catch {}
+  for (const cb of relayListeners) { try { cb(r); } catch {} }
+}
+
+export function onOwnRelayChange(cb: (r: OwnRelay | null) => void): () => void {
+  relayListeners.add(cb);
+  return () => { relayListeners.delete(cb); };
+}
+
+/**
+ * NetStack settings for the current choice: the user's relay (no token unless
+ * they gave a URL, and never their GitHub sign-in), or this site's /tcp.
+ */
+export function relayNetConfig(loc: Pick<Location, 'protocol' | 'host'> = location): { relayUrl: string | null; tokenUrl: string | null; credentials: boolean } {
+  const own = ownRelay();
+  if (own) return { relayUrl: own.url, tokenUrl: own.tokenUrl ?? null, credentials: false };
+  const web = (loc.protocol === 'https:' || loc.protocol === 'http:') && !!loc.host;
+  return {
+    relayUrl: web ? `${loc.protocol === 'https:' ? 'wss' : 'ws'}://${loc.host}/tcp` : null,
+    tokenUrl: web ? `${loc.protocol}//${loc.host}/tcp/token` : null,
+    credentials: true,
+  };
+}

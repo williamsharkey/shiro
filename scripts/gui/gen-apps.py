@@ -42,9 +42,12 @@ APPS = {
     'mousepad': (['mousepad'], ['/usr/bin/mousepad'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'],
                  ['libglib2.0-bin', 'shared-mime-info'], 'Xfce GTK3 text editor', 'gtk3'),
     'ristretto': (['ristretto'], ['/usr/bin/ristretto'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'],
-                  ['libglib2.0-bin', 'shared-mime-info'], 'Xfce GTK3 image viewer', 'gtk3'),
+                  ['libglib2.0-bin', 'shared-mime-info', 'libmagic-mgc'], 'Xfce GTK3 image viewer', 'gtk3'),
     'gpicview': (['gpicview'], ['/usr/bin/gpicview'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so'],
                  ['shared-mime-info'], 'LXDE image viewer (GTK)', 'gtk2'),
+    'gimp': (['gimp'], ['/usr/bin/gimp-2.10'], ['usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/*.so',
+             'usr/lib/x86_64-linux-gnu/babl-0.1/*.so', 'usr/lib/gimp/2.0/modules/*.so'],
+             ['shared-mime-info', 'libglib2.0-bin'], 'GNU Image Manipulation Program (GTK 2)', 'gtk2'),
     'featherpad': (['featherpad'], ['/usr/bin/featherpad'], ['usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so',
                    'usr/lib/x86_64-linux-gnu/qt5/plugins/imageformats/*.so'], [], 'Qt5 text editor', 'qt5'),
     'lximage-qt': (['lximage-qt'], ['/usr/bin/lximage-qt'], ['usr/lib/x86_64-linux-gnu/qt5/plugins/platforms/libqxcb.so',
@@ -53,6 +56,10 @@ APPS = {
 
 # Kept whenever they are in the closure: glibc dlopens libgcc_s; fontconfig needs /etc/fonts.
 ALWAYS = {'libgcc-s1', 'fontconfig-config'}
+
+# Plug-ins kept only when the startup set already has their libraries; the
+# others are deleted at install (GIMP queries every plug-in on first start).
+OPTIONAL = {'gimp': ['usr/lib/gimp/2.0/plug-ins/*/*', 'usr/lib/x86_64-linux-gnu/gegl-0.4/*.so']}
 
 LIBDIRS = ['lib/x86_64-linux-gnu', 'usr/lib/x86_64-linux-gnu', 'lib', 'usr/lib', 'lib64']
 
@@ -152,20 +159,69 @@ def main():
                     cand = os.path.join(d, lib)
                     if os.path.lexists(os.path.join(root, cand)):
                         todo.append(cand); break
-        data = [n for n in names if db[n].get('Architecture') == 'all']
-        keep = [n for n in names if n in need or n in data or n in roots or n in extra or n in ALWAYS]
+        # Data packages (Architecture: all) only when a kept package depends on them
+        core = {n for n in names if n in need or n in roots or n in extra or n in ALWAYS}
+        def deps(n):
+            for f in ('Pre-Depends', 'Depends'):
+                for alt in db[n].get(f, '').split(','):
+                    alt = alt.strip()
+                    if alt:
+                        d = alt.split('|')[0].strip().split(' ')[0].split(':')[0]
+                        yield d if d in db else prov.get(d, d)
+        data, todo3 = set(), list(core)
+        while todo3:
+            for d in deps(todo3.pop()):
+                if d in names and d not in core and d not in data and db[d].get('Architecture') == 'all':
+                    data.add(d); todo3.append(d)
+        keep = [n for n in names if n in core or n in data]
+        remove = []
+        for g in OPTIONAL.get(app, []):
+            for path in sorted(glob.glob(os.path.join(root, g))):
+                rel = os.path.relpath(path, root)
+                if not os.path.isfile(path) or os.path.islink(path): continue
+                ok, seen2, todo2 = True, set(), [rel]
+                while todo2 and ok:
+                    f = todo2.pop()
+                    if f in seen2: continue
+                    seen2.add(f)
+                    real = os.path.realpath(os.path.join(root, f))
+                    o = owner.get(os.path.relpath(real, root)) or owner.get(f)
+                    if o and o not in keep: ok = False; break
+                    for lib in needed(real):
+                        hit = next((os.path.join(d, lib) for d in LIBDIRS if os.path.lexists(os.path.join(root, d, lib))), None)
+                        if hit is None: ok = False; break
+                        todo2.append(hit)
+                if not ok: remove.append('/' + os.path.dirname(rel) if g.endswith('/*/*') else '/' + rel)
         dropped = [n for n in names if n not in keep]
         apps[app] = {
-            'description': desc, 'toolkit': kind, 'bin': bins[0], 'packages': keep,
+            'description': desc, 'toolkit': kind, 'bin': bins[0], 'pkg': roots[0], 'packages': keep,
             'size': sum(int(db[n]['Size']) for n in keep),
             'closureSize': sum(int(db[n]['Size']) for n in names),
             'dropped': dropped,
+            **({'remove': sorted(set(remove))} if remove else {}),
         }
         for n in keep:
             d = db[n]
             packages[n] = {'version': d['Version'], 'filename': d['Filename'], 'sha256': d['SHA256'], 'size': int(d['Size'])}
+        if remove: print(f"{app}: {len(set(remove))} optional plug-ins removed (their libraries are not in the startup set)", file=sys.stderr)
         print(f"{app:12s} keep {len(keep):3d} pkgs {apps[app]['size']/1e6:6.1f} MB (closure {len(names)} / {apps[app]['closureSize']/1e6:.1f} MB); dropped: {' '.join(dropped)}", file=sys.stderr)
-    json.dump({'suite': SUITE, 'arch': 'amd64', 'mirror': 'https://deb.debian.org/debian/',
+    # Overlays: files a postinst would generate, built here once (architecture independent).
+    # GLib's content-type sniffing (gdk-pixbuf picks image loaders by it) needs mime.cache;
+    # update-mime-database itself would need libxml2 + ICU (10 MB) in the browser.
+    overlays = []
+    mime_app = next((a for a in apps if 'shared-mime-info' in apps[a]['packages']), None)
+    if mime_app:
+        src = os.path.join(work, mime_app, 'usr/share/mime')
+        tmp = os.path.join(work, '_mime')
+        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.copytree(src, tmp)
+        subprocess.run(['update-mime-database', tmp], check=True)
+        data = open(os.path.join(tmp, 'mime.cache'), 'rb').read()
+        h = hashlib.sha256(data).hexdigest()
+        os.makedirs(os.path.join(os.path.dirname(out), 'overlay'), exist_ok=True)
+        open(os.path.join(os.path.dirname(out), 'overlay', h), 'wb').write(data)
+        overlays.append({'path': '/usr/share/mime/mime.cache', 'sha256': h, 'size': len(data), 'when': 'shared-mime-info'})
+    json.dump({'suite': SUITE, 'overlays': overlays, 'arch': 'amd64', 'mirror': 'https://deb.debian.org/debian/',
                'snapshot': 'https://snapshot.debian.org/archive/debian/20260712T000000Z/',
                'packages': packages, 'apps': apps}, open(out, 'w'), indent=1, sort_keys=True)
 

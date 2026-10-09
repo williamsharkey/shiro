@@ -93,6 +93,8 @@ export interface PkgBin {
    * name typed), as CPython needs to find a venv's pyvenv.cfg.
    */
   argv0?: 'path';
+  /** Environment defaults (the user's own values win) */
+  env?: Record<string, string>;
 }
 
 export interface PkgEntry {
@@ -780,7 +782,7 @@ export async function runPackageBinary(binPath: string, argv0: string, args: str
   if (mode !== 'none' && entry?.abi !== 'wasi_unstable') {
     const { runWasiProgram } = await import('./wasi/run-command');
     return runWasiProgram(ctx, {
-      module: mod, image: bytes, argv, cwd: ctx.cwd, env: { ...ctx.env },
+      module: mod, image: bytes, argv, cwd: ctx.cwd, env: { ...bin?.env, ...ctx.env },
       preopens: await topLevelDirs(ctx.fs, entry), mounts: entry && name ? entryMounts(entry, name) : undefined,
       exe: bin?.self ? `${PKG_BIN_DIR}/${bin.self}` : undefined,
     });
@@ -796,7 +798,7 @@ export async function runPackageBinary(binPath: string, argv0: string, args: str
  */
 export async function packageKernelProgram(
   fs: FileSystem, binPath: string, argv0: string, args: string[], invokedPath?: string,
-): Promise<{ argv: string[]; run: import('./kernel/kernel').Runner } | null> {
+): Promise<{ argv: string[]; run: import('./kernel/kernel').Runner; env?: Record<string, string> } | null> {
   const name = packageOfPath(binPath);
   const entry = name ? (await readStatus(fs))[name]?.entry : undefined;
   if (!entry || entry.abi === 'wasi_unstable') return null;
@@ -809,7 +811,7 @@ export async function packageKernelProgram(
   if (bin?.argv0 === 'path' && invokedPath) argv0 = invokedPath;
   if (entry.abi === 'x86_64-linux') {
     const { blinkRunner } = await import('./x86-engine/blink');
-    return { argv: [argv0, ...(bin?.args || []), ...args], run: blinkRunner(binPath) };
+    return { argv: [argv0, ...(bin?.args || []), ...args], run: blinkRunner(binPath), env: bin?.env };
   }
   const bytes = await fs.readFile(binPath) as Uint8Array;
   let mod = moduleCache.get(binPath);
@@ -822,6 +824,7 @@ export async function packageKernelProgram(
     argv: [argv0, ...(bin?.args || []), ...args],
     run: wasmRunner(mod, new Uint8Array(bytes), await topLevelDirs(fs, entry), name ? entryMounts(entry, name) : undefined,
       bin?.self ? `${PKG_BIN_DIR}/${bin.self}` : undefined),
+    env: bin?.env,
   };
 }
 

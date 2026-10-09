@@ -34,9 +34,9 @@ export interface GuiInputEvent {
 
 export interface CanvasWindowOptions {
   title: string;
-  /** Content-area origin in desktop coordinates. */
-  x: number;
-  y: number;
+  /** Content-area origin in desktop coordinates; omitted: the host places it (center, cascade). */
+  x?: number;
+  y?: number;
   width: number;
   height: number;
   /** false: no frame or title bar (X override-redirect menus, tooltips) */

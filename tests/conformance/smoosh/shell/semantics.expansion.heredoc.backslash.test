@@ -1,0 +1,7 @@
+cat <<EOF
+an escaped \\[bracket]
+should \\ work just fine
+EOF
+cat <<EOF
+exit \$?
+EOF

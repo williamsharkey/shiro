@@ -4,6 +4,16 @@
 
 All changes so far are additive; nothing below renames or removes an earlier name.
 
+- **2026-10-09 (unix/gui)** — behavior fix, additive.
+  - `/dev/tty` (registered by `attachKernelTty`) also resolves to the pty a
+    session leader acquired after spawn, by opening its slave without
+    `O_NOCTTY` or with `TIOCSCTTY` (`controllingTtys`), not only to
+    `proc.ctty` from `spawn`. xterm's child (setsid, open the slave, open
+    `/dev/tty`) failed with ENXIO.
+  - New user of AF_UNIX: `Xshiro :N` (src/x11/display.ts) listens in the
+    kernel's NetStack on `/tmp/.X11-unix/XN` and `\0/tmp/.X11-unix/XN`
+    as a kernel process.
+
 - **2026-10-09 (unix/desktop)** (additive)
   - `FileSystem.addVirtualProvider(vp)`; `VirtualFSProvider.mountPoint`
     names a top-level directory `ls /` shows. `makeStat` is exported.

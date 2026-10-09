@@ -1,0 +1,13 @@
+set -e
+
+for c in '"' '#' '%' '&' "'" '(' ')' '*' '+' ',' '-' '.' '/' ':' \
+    	 ';' '<' '=' '>' '?' '@' '[' ']' '^' '_' '{' '|' '}' '~' ' '
+do
+        cat >script <<EOF
+        x=\`printf '%s' \\$c\`; printf '%s\\n' "\$x"
+EOF
+        echo "$c"
+        $TEST_SHELL script >out
+        [ $? -eq 0 ] && [ "$c" = "$(cat out)" ]
+done
+echo done
