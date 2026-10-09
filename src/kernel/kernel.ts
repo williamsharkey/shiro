@@ -13,7 +13,7 @@ import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
 import { KernelStdio, execLazyStdin } from '../shell-stdio';
 import { parseShellArgs } from '../shell-args';
-import { ProcFs, bootMs } from './procfs';
+import { ProcFs, bootMs, fdTarget } from './procfs';
 import { klog, KmsgFile, LOG_ERR, LOG_INFO, SYSLOG_ACTION_READ_ALL, SYSLOG_ACTION_SIZE_BUFFER, SYSLOG_ACTION_SIZE_UNREAD } from './klog';
 import { processTable, type ShiroProcess } from '../process-table';
 import { packageShadows, pkgOwnShadows, packageArgsForPath, PKG_BIN_DIR } from '../pkg-manager';
@@ -208,11 +208,19 @@ export class Kernel {
     });
     this.procs.set(1, this.init);
     // /proc/PID/stat and status for kernel processes
-    addProcInfoSource((pid) => {
-      const p = this.procs.get(pid);
-      if (!p || pid === 1) return undefined;
-      const state = p.state === 'zombie' ? 'Z' : p.state === 'stopped' ? 'T' : p.sleeping() ? 'S' : 'R';
-      return { pid, ppid: p.ppid, pgid: p.pgid, sid: p.sid, comm: p.comm, state, cmdline: p.argv };
+    addProcInfoSource({
+      get: (pid) => {
+        const p = this.procs.get(pid);
+        if (!p) return undefined;
+        const state = p.state === 'zombie' ? 'Z' : p.state === 'stopped' ? 'T' : p.sleeping() ? 'S' : 'R';
+        return {
+          pid, ppid: p.ppid, pgid: p.pgid, sid: p.sid, comm: p.comm, state, cmdline: p.argv,
+          cwd: p.cwd, environ: p.env, exe: typeof p.data.exe === 'string' ? p.data.exe : p.path,
+          fds: p.fds.entries().map(([fd, f]) => [fd, fdTarget(f)] as [number, string]),
+          startMs: p.startTime, uid: p.uid, gid: p.gid,
+        };
+      },
+      list: () => [...this.procs.keys()],
     });
     this.registerDevice('/dev/null', (_p, f) => new DevNull(f));
     this.registerDevice('/dev/zero', (_p, f) => new DevZero(f));
@@ -773,6 +781,7 @@ export class Kernel {
       promise: p.wait().then(A.shellExitCode),
       kill: () => { this.kill(p.pid, A.SIGKILL); },
       abortController: null,
+      zombie: p.state === 'zombie',
     };
   }
 
@@ -2133,7 +2142,7 @@ export class Kernel {
         }
         case A.SYS_uname: { // → struct utsname (engines that report their own machine take the names from here)
           if (data.length < A.UTSNAME_FIELD * 6) return -A.EFAULT;
-          const fields = ['Linux', this.hostname, unameRelease(this.hostname), UNAME_VERSION, 'wasm32', '(none)'];
+          const fields = ['Linux', this.hostname, unameRelease(this.hostname), UNAME_VERSION, 'x86_64', '(none)'];
           data.fill(0, 0, A.UTSNAME_FIELD * 6);
           fields.forEach((f, i) => data.set(enc.encode(f).subarray(0, A.UTSNAME_FIELD - 1), i * A.UTSNAME_FIELD));
           return 0;
