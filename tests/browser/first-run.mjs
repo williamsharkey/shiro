@@ -4,6 +4,10 @@
 // fresh profile, clicks the real link or dock icon, and waits on the
 // rendered terminal.
 //
+// The terminal UI (shiro.computer, `?ui=terminal`, `?profile=shiro`; the
+// shiro profile, docs/PROFILES.md) has no dock or welcome links: there the
+// cases click the HUD's `help` link and type the same programs at the prompt.
+//
 //   npm run build && PORT=5299 STATIC_DIR=$PWD/dist node server.mjs &
 //   node tests/browser/first-run.mjs [URL] [--only NAME] [--shots DIR]
 //
@@ -85,7 +89,45 @@ const snap = (page, name) => shots ? page.screenshot({ path: `${shots}/${name}.p
 const typeKeys = async (page, s) => { for (const ch of s) await page.keyboard.type(ch, { delay: 20 }); };
 const promptBack = (s) => /\$\s*$/.test(s.trimEnd());
 
-const CASES = [
+/** Type a command at the main terminal's prompt. */
+async function typeCommand(page, cmd) {
+  await page.evaluate(() => window.__shiro.terminal.term.focus());
+  await typeKeys(page, cmd + '\r');
+}
+
+const TERMINAL_CASES = [
+  { name: 'terminal: help link', run: async (page) => {
+    await clickBannerLink(page, 'help');
+    await until(page, (s) => s.split('\n').filter(Boolean).length > 8 && promptBack(s), 'the help text');
+  } },
+  { name: 'terminal: apt install cowsay', run: async (page) => {
+    await typeCommand(page, 'apt install cowsay && cowsay hello from shiro');
+    await until(page, (s) => s.includes('< hello from') && promptBack(s), 'cowsay\'s speech bubble');
+  } },
+  { name: 'terminal: htop', run: async (page) => {
+    await typeCommand(page, 'apt install htop && htop');
+    await until(page, (s) => /Load average/.test(s) && /F10Quit/.test(s), 'htop\'s meters');
+    await snap(page, 'terminal-htop-running');
+    await page.keyboard.press('q');
+    await until(page, (s) => !s.includes('F10Quit') && promptBack(s), 'the prompt after q');
+  } },
+  { name: 'terminal: python3', run: async (page) => {
+    await typeCommand(page, 'python3');
+    await until(page, (s) => /^>>> ?$/m.test(s), 'the Python prompt');
+    await typeKeys(page, 'print(6*7)\r');
+    await until(page, (s) => /^42$/m.test(s), 'print(6*7)');
+    await typeKeys(page, 'exit()\r');
+    await until(page, (s) => promptBack(s), 'the shell prompt after exit()');
+  } },
+  { name: 'terminal: ls /dom', run: async (page) => {
+    await typeCommand(page, 'ls /dom');
+    await until(page, (s) => /ls \/dom\n[^\n]*\S/.test(s) && promptBack(s), 'a listing of /dom');
+    const s = await screenOf(page);
+    if (/No such file|cannot access|not found/i.test(s)) throw new Error(`ls /dom failed:\n${s}`);
+  } },
+];
+
+const DESKTOP_CASES = [
   { name: 'apt install cowsay', run: async (page) => {
     await clickBannerLink(page, 'apt install cowsay');
     await until(page, (s) => s.includes('< hello from') && promptBack(s), 'cowsay\'s speech bubble');
@@ -154,6 +196,12 @@ const CASES = [
   } },
 ];
 
+const target = new URL(url);
+const terminalUi = target.searchParams.get('ui') === 'terminal'
+  || (target.searchParams.get('profile') === 'shiro' && target.searchParams.get('ui') !== 'desktop')
+  || /(^|\.)shiro\.computer$/.test(target.hostname) && target.searchParams.get('ui') !== 'desktop';
+const CASES = terminalUi ? TERMINAL_CASES : DESKTOP_CASES;
+
 // Containers that reach the internet through a proxy (the live site): the browser uses it too
 const proxy = /^https:/.test(url) && process.env.HTTPS_PROXY ? process.env.HTTPS_PROXY.replace(/^\w+:\/\//, '').replace(/\/$/, '') : '';
 const browser = await chromium.launch({ executablePath: exe, args: ['--no-sandbox', ...(proxy ? [`--proxy-server=${proxy}`] : [])] });
@@ -167,8 +215,13 @@ for (const c of CASES) {
   const t0 = Date.now();
   try {
     await page.goto(url);
-    await page.waitForFunction(() => window.__shiro?.terminal?.term && window.__shiro.desktop, null, { timeout: 60_000 });
-    await until(page, (s) => s.includes('try:') && promptBack(s), 'the welcome banner and prompt', 30_000);
+    if (terminalUi) {
+      await page.waitForFunction(() => window.__shiro?.terminal?.term && window.__shiro.uiMode === 'terminal', null, { timeout: 60_000 });
+      await until(page, (s) => /help/.test(s) && promptBack(s), 'the HUD and prompt', 30_000);
+    } else {
+      await page.waitForFunction(() => window.__shiro?.terminal?.term && window.__shiro.desktop, null, { timeout: 60_000 });
+      await until(page, (s) => s.includes('try:') && promptBack(s), 'the welcome banner and prompt', 30_000);
+    }
     // The desktop switches the terminal to its own font when it has loaded (cells change size)
     await page.waitForFunction(() => /JetBrains/.test(window.__shiro.terminal.term.options.fontFamily ?? ''), null, { timeout: 10_000 }).catch(() => {});
     await page.waitForTimeout(300);

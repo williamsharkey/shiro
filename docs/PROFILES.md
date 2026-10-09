@@ -39,6 +39,12 @@ value forgets it. `?ui=` still overrides the profile's UI mode on its own.
 | `shims.debianOverlay` | Debian mode diverts hot programs to Shiro builtins by default (`src/debian/overlay-policy.json`); off, Debian's own stay | on | on |
 | `shims.python` | `pyodide`: `python`/`python3`/`pip` are the Pyodide builtins until a package shadows them; `package`: only `pkg`/`apt` python3 | pyodide | pyodide |
 
+Checks per product: the full suite runs as the default profile (`tabcomputer`;
+`setActiveProfile` switches it, `profiles.test.ts` turns each shim off), and
+`tests/browser/first-run.mjs` runs against both UIs: the desktop (default URL)
+and the terminal (`?ui=terminal` or `?profile=shiro`), where it clicks the
+HUD's `help` link and types the programs at the prompt.
+
 Both profiles turn every shim on today. That is what the code did before
 profiles: none of these were per host. A product changes behavior by editing
 its `profile.json`, not code.
