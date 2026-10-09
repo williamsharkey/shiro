@@ -111,6 +111,38 @@ What stands out:
 - Boot is fine: the desktop is revealed at 255 ms cold and 231 ms warm,
   with 216 MiB renderer RSS once it's up.
 
+## Toolchain layers
+
+`toolchain install ID` (docs/DEBIAN.md "Toolchain layers") against apt for
+the same packages. Measured with `bench/suites/toolchains.mjs` (`node
+bench/run.mjs --suites toolchains`, isolated page, headless Chromium) on
+machine `e57125c23b92`, 2026-10-09, branch unix/toolchains. Layers are
+served by server.mjs from `.toolchain-build/layers`. apt's packages came
+from the mirror's disk cache. Each sample starts from a fresh profile:
+`debian install`, then `toolchain install ID`, then the first real use.
+Layer rows are medians of 2 samples; apt rows are 1 sample.
+
+| set | first use | layer: install | layer: first use | layer: fresh profile → working | apt: fresh profile → working |
+|---|---|---:|---:|---:|---:|
+| `c` | `gcc hello.c && ./a.out` | 1.3 s | 7.2 s | **8.9 s** | > 60 min (timed out unpacking package 100 of 115) |
+| `python` | `python3 -c 'import json; ...'` | 0.9 s | 5.3 s | **6.6 s** | **17.8 min** (+1.5 GiB renderer RSS peak) |
+| `tex` | `pdflatex` on a one-line article | 1.5 s | 5.1 s | **7.0 s** | 33 min (README, earlier run) |
+| `classic` | `gfortran h.f90 && ./hf` | 0.9 s | 9.2 s | **10.5 s** | not measured |
+| `node` | `/usr/bin/node -e` | 6.8 s | 17.0 s | **24.3 s** | not measured |
+| `java` | `javac Hello.java && java Hello` | installs | JVM aborts | — | — |
+
+- First use is the programs' own start-up in Blink plus fetching their
+  chunks. Warm runs are 15–20 % faster (gcc 5.9 s, python 4.5 s, pdflatex
+  4.1 s, gfortran 7.1 s, node 14.5 s).
+- Renderer RSS peaks above the pre-run level: install +0 to +160 MiB (node,
+  383 packages). First use +138 MiB (pdflatex) to +596 MiB (node). Browser
+  storage after the first use is 26–107 MiB; apt's python3 set left 412 MiB.
+- The apt `c` run overlapped with other browser checks on the machine for
+  part of its hour. Even so, it was still unpacking when it timed out.
+- `java`: the layer installs and dpkg is consistent, but HotSpot falls back
+  to the legacy vsyscall `getcpu` page when glibc's `sched_getcpu()` fails
+  (Blink has no getcpu syscall) and gets SIGSEGV. That needs an engine fix.
+
 ## Hotspots (ranked by expected payoff)
 
 Measured while recording the baseline; the profiles come from
