@@ -574,6 +574,12 @@ export function openInodeSync(fs: FileSystem, path: string, node: {
   return ino;
 }
 
+/** Write back every open file of `fs` holding data not yet in it (the page going away: FileSystem.flushAll). */
+export async function writeBackAll(fs: FileSystem): Promise<void> {
+  const table = inodeTables.get(fs);
+  if (table) await Promise.all([...table.values()].filter((ino) => ino.dirty).map((ino) => ino.flush()));
+}
+
 /** closeInode when nothing needs to be written back; false = use closeInode. */
 function closeInodeSync(ino: Inode): boolean {
   if (ino.dirty || ino.busy) return false;

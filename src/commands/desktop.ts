@@ -1,5 +1,6 @@
 import type { Command } from './index';
 import { UI_MODE_KEY } from '../ui-mode';
+import { reloadAfterFlush } from '../storage';
 
 /**
  * desktop                 switch this page to the desktop (reloads)
@@ -15,7 +16,7 @@ export const desktopCmd: Command = {
     const [sub, ...rest] = ctx.args;
     const reload = (mode: string) => {
       try { localStorage.setItem(UI_MODE_KEY, mode); } catch {}
-      setTimeout(() => location.reload(), 50);
+      setTimeout(() => reloadAfterFlush(), 50);
     };
     if (!sub) {
       if (d) { ctx.stdout += 'This page is already the desktop. Try: desktop open files, desktop windows, desktop classic\n'; return 0; }

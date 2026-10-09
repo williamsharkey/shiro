@@ -114,3 +114,24 @@ describe('FileSystem when browser storage is full', () => {
     kernel.kill(proc.pid, A.SIGKILL);
   });
 });
+
+describe('FileSystem.flushAll (the page going away, Restart)', () => {
+  it("commits an open file's buffered writes and everything pending", async () => {
+    const { shell, fs } = await createTestShell();
+    const kernel = new Kernel({ shell, fs });
+    const proc = kernel.spawn({ path: 'w', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
+    const data = new Uint8Array(4096);
+    const n = new TextEncoder().encodeInto('/tmp/open-file', data).written!;
+    const fd = await kernel.syscall(proc, A.SYS_openat, [A.AT_FDCWD, n, A.O_WRONLY | A.O_CREAT, 0o644], data);
+    data.set(new TextEncoder().encode('unsaved'));
+    expect(await kernel.syscall(proc, A.SYS_write, [fd, 7], data)).toBe(7);
+    await fs.writeFile('/tmp/closed-file', 'closed');
+    await fs.flushAll();
+    expect(fs.pendingWrites).toBe(0);
+    const other = new FileSystem();
+    await other.init();
+    expect(await other.readFile('/tmp/open-file', 'utf8')).toBe('unsaved');
+    expect(await other.readFile('/tmp/closed-file', 'utf8')).toBe('closed');
+    kernel.kill(proc.pid, A.SIGKILL);
+  });
+});

@@ -14,7 +14,7 @@ import { networkCredential, networkStatus, onNetworkStatus, ownRelay, setOwnRela
 import { openSignIn, probeRelay, signedInAccount, signOut, statusText, testOwnRelay } from '../network';
 import { BRAND } from '../../brand';
 import buildNumber from '../../../build-number.txt?raw';
-import { formatBytes, storageInfo } from '../../storage';
+import { formatBytes, reloadAfterFlush, storageInfo } from '../../storage';
 
 /** A pane's sidebar icon: a white glyph (24-unit, iconsets.ts) on a colored rounded square */
 const paneIcon = (d: string, color: string) =>
@@ -131,7 +131,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
     }
     panel.querySelector('[data-act=classic]')!.addEventListener('click', () => {
       try { localStorage.setItem('tabcomputer-ui', 'terminal'); } catch {}
-      location.href = location.pathname + '?ui=terminal';
+      reloadAfterFlush(() => { location.href = location.pathname + '?ui=terminal'; });
     });
   }
 

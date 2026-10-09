@@ -24,6 +24,7 @@ import { loadSession, place, restoreSession, trackSession } from './session';
 import { maybeShowTour, showTour } from './tour';
 import { BRAND } from '../brand';
 import { setClaudeSignInUI } from '../claude-signin-ui';
+import { flushStorage, reloadAfterFlush } from '../storage';
 
 export interface DesktopDeps {
   fs: FileSystem;
@@ -530,8 +531,8 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     { label: 'Settings…', shortcut: 'Alt+Shift+,', action: () => void wm.openApp('settings') },
     { label: 'Activity', action: () => void wm.openApp('activity') },
     'separator',
-    { label: 'Classic Terminal', action: () => { try { localStorage.setItem('tabcomputer-ui', 'terminal'); } catch {} location.reload(); } },
-    { label: 'Restart', action: () => location.reload() },
+    { label: 'Classic Terminal', action: () => { try { localStorage.setItem('tabcomputer-ui', 'terminal'); } catch {} reloadAfterFlush(); } },
+    { label: 'Restart', action: () => reloadAfterFlush() },
     { label: 'Hard Restart', action: () => void hardRestart() },
   ] });
   const termView = (): TerminalView | null => {
@@ -819,7 +820,8 @@ function drawWelcome(t: ShiroTerminal): void {
  * (Cache Storage) are untouched.
  */
 export async function hardRestart(): Promise<void> {
-  try { await fetch(location.href, { cache: 'reload' }); } catch { /* offline: reload anyway */ }
+  // Files written so far reach storage first (close doesn't wait for IndexedDB)
+  await Promise.all([flushStorage(), fetch(location.href, { cache: 'reload' }).catch(() => { /* offline: reload anyway */ })]);
   const url = new URL(location.href);
   url.searchParams.set('reload', Date.now().toString(36));
   location.replace(url.toString());
