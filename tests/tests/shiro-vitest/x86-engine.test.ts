@@ -75,6 +75,14 @@ const segvBin = join(out, 'segv');
 const haveSegv = tryBuild('gcc', ['-static', '-O1', '-o', segvBin, 'segv.c']);
 const timerfdBin = join(out, 'timerfd');
 const haveTimerfd = tryBuild('gcc', ['-static', '-O1', '-o', timerfdBin, 'timerfd.c']);
+const sleepstateBin = join(out, 'sleepstate');
+const haveSleepstate = tryBuild('gcc', ['-static', '-O1', '-o', sleepstateBin, 'sleepstate.c']);
+const blockedkidsBin = join(out, 'blockedkids');
+const haveBlockedkids = tryBuild('gcc', ['-static', '-O1', '-o', blockedkidsBin, 'blockedkids.c']);
+const pingpongBin = join(out, 'futexpingpong');
+const havePingpong = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', pingpongBin, 'futexpingpong.c']);
+const realtimeBin = join(out, 'realtime');
+const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
 const haveMaps = tryBuild('gcc', ['-static', '-O1', '-o', mapsBin, 'maps.c']);
 const mmsgBin = join(out, 'mmsg');
@@ -653,6 +661,35 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const { shell } = await setup(readFileSync(timerfdBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('create 1\nunarmed read EAGAIN 1\nsettime 1\ngettime armed 1 interval 1\npoll 1 after>=45ms 1\nread 1 count>=1 1\ninterval count>=3 1\ndisarmed 1\nabs epoll 1 after>=20ms 1 read 1 1\npast expires 1\nbad nsec EINVAL 1\n');
+  }, 60_000);
+
+  // LTP's TST_PROCESS_STATE_WAIT(pid, 'S') before signalling a child (pause01, signal01)
+  it.skipIf(!haveSleepstate)('a child in pause(), nanosleep or a read shows as sleeping in /proc', async () => {
+    const { shell } = await setup(readFileSync(sleepstateBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('pause S\nnanosleep S\nclock_nanosleep S\nread S\n');
+  }, 60_000);
+
+  // epoll_wait15/16: children blocked in the kernel held every kernel channel
+  it.skipIf(!haveBlockedkids)('more blocked fork children than kernel channels: the parent still runs', async () => {
+    const { shell } = await setup(readFileSync(blockedkidsBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('woken 12/12\n');
+  }, 60_000);
+
+  // LTP checkpoints (fork04, waitpid13): wake the peer, then wait on the same word
+  it.skipIf(!havePingpong)('futex wake-then-wait ping-pong: a wake goes to the waiter, not the waker', async () => {
+    const { shell } = await setup(readFileSync(pingpongBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('fork: parent bad 0 child bad 0\nthreads: main bad 0 thread bad 0\n');
+  }, 120_000);
+
+  // vim's typeahead check blocked for a key when two reads straddled a ms tick
+  it.skipIf(!haveRealtime)('CLOCK_REALTIME and gettimeofday have sub-ms resolution', async () => {
+    const { shell } = await setup(readFileSync(realtimeBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'valid 1 subms clock_gettime 1 gettimeofday 1 backwards 0 near time() 1 1\n');
   }, 60_000);
 
   // glibc's pthread_getattr_np reads the main stack from here (glibc Bun: Claude Code, opencode)

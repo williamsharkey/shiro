@@ -295,7 +295,7 @@ EIO (the browser's `TextDecoder` refuses the shared syscall buffer).
 | bc, dc | 1.08.2 (GNU) | pkg (Blink) | works | `bc -l` 20 digits of π, bignums, `dc` | |
 | tar | 1.35 (GNU) | pkg (Blink) | works | `czf` (gzip run as a child through `/bin/sh`), `tzf`, `xzf -C` | |
 | gzip, gunzip, zcat | 1.15 (GNU) | pkg (Blink) | works | `-k`, `-c`, `-d`, `-t`, binary output redirected to a file | |
-| vim | 9.2.0000 | pkg (Blink) | works | edit + `:wq`; syntax colours from the runtime; `:help`; resize (SIGWINCH) updates `&columns`/`&lines`; Ctrl-Z stops it, `fg` resumes; `vim -es` scripting | Startup with `filetype`/`syntax` is slow (seconds): Blink interprets x86 at ~1/120 native speed. No POSIX timers (`timer_create`), so no `'redrawtime'` timeout |
+| vim | 9.2.0000-1 | pkg (Blink) | works | edit + `:wq`; syntax colours from the runtime; `:help`; resize (SIGWINCH) updates `&columns`/`&lines`; Ctrl-Z stops it, `fg` resumes; `vim -es` scripting | Startup with `filetype`/`syntax` is slow (seconds): Blink interprets x86 at ~1/120 native speed. No POSIX timers (`timer_create`), so no `'redrawtime'` timeout. Patched (`-1`): `inchar_loop()` could wait forever with a typed key unhandled (a negative wait after a 0 ms poll), see [docs/upstream](upstream/vim-inchar-negative-wait.md) |
 | nvim (Neovim) | 0.12.5 (PUC Lua 5.1) | pkg (Blink) | works | headless `:s` + `:wq`, Lua (`vim.inspect`), treesitter parsing and `:help` highlighting, editing on the tty, a shell in `:terminal` (pty) | built with PUC Lua instead of LuaJIT (its JIT would be translated twice); the bundled parsers (c, lua, vim, vimdoc, query, markdown) are linked into the static binary, so `parser/*.so` from plugins can't load; no translations |
 | emacs (-nw), emacsclient, etags | 31.1 (GNU) | pkg (Blink; ncurses 6.5) | works | batch Lisp, the portable dump, `org`; editing and C-x C-s on the tty, `M-x shell` (pty) | terminal only: no GUI, TLS (`--with-gnutls=no`), images, native compilation or tree-sitter; byte-compiled Lisp without sources (`find-function` shows no source); no Japanese input-method dictionary |
 | tmux | 3.8 | pkg (Blink; libevent 2.1, ncurses 6.5) | works | `new-session` on the tty: status line, a shell in the pane, `C-b %` split, `C-b d` detach; `list-panes`, `send-keys` into a detached session; re-attach on a bigger terminal (the status line comes back without a key press); `#{host}` is the kernel hostname; `kill-session`; in Chromium too | Slow to draw (emulated). Built with a 2 s format-expansion budget (upstream 100 ms cut the status line short when emulation was slow). The `tmux` builtin is replaced while the package is installed |
@@ -466,12 +466,36 @@ Building and publishing one of these packages:
 ```bash
 export PKG_WORK=$PWD/.pkgbuild          # downloads, toolchain, build trees
 bash scripts/pkgbuild/x86/vim.sh        # -> $PKG_WORK/out/vim/{bin,share}
-bash scripts/pkgbuild/x86/publish.sh vim 9.2.0000   # -> public/pkg/vim/9.2.0000/*.gz, prints index entries
+bash scripts/pkgbuild/x86/publish.sh vim 9.2.0000-1 # -> public/pkg/vim/9.2.0000-1/*.gz, prints index entries
 ```
 
 ncurses-based programs are linked against a static ncurses 6.5 with
 `xterm-256color`, `xterm`, `screen*`, `tmux*`, `linux`, `vt100`, `vt220` and
 `dumb` compiled in, so they work without a terminfo database.
+
+### Developer workflows
+
+`tests/browser/dev-workflows.mjs [URL]`: each workflow from a fresh browser
+profile, typed into the terminal of the built desktop in Chromium, every step
+timed (2026-10-09, local build; GitHub, npm and PyPI reached through the
+container's proxy).
+
+| Workflow | Repository | Status | Time | Steps (time) | Notes |
+| --- | --- | --- | --- | --- | --- |
+| git clone, edit, commit, log | octocat/Hello-World | works | 4 s | clone 1.4 s, config, commit 0.9 s, `git log`, `git status` | over the server's git proxy; on tabcomputer.com every clone failed on 2026-10-09 (the proxy's POST got "fetch failed" on the live host; reported) |
+| `npm install && npm test` | jshttp/mime-types | works | 22 s | clone 1.3 s, `npm install` 14.9 s (mocha, eslint, nyc and their dependencies), `npm test` 4.8 s (mocha) | lukeed/kleur fails: its tests load through the `esm` package, which patches Node's module internals |
+| venv, `pip install pytest requests`, `pytest` | benjaminp/six | works | 16 s | clone 1.3 s, `python3 -m venv` + activate 1.0 s (installs the CPython package first), pip 5.1 s, `pytest` 4.8 s: 181 passed | 2 tests deselected: `test_getoutput` needs subprocess, the `HTTPSHandler` move needs ssl (WASI CPython has neither); dbader/schedule can't run (`time.tzset`) |
+| `make test` | zserge/jsmn | works | 12 s | `pkg install make llvm` 4.4 s, clone 2.8 s, `make test` 4.0 s (four builds with clang and runs) | programs are wasm32-wasi |
+| `ssh -T git@github.com` | — | not verified | — | `pkg install openssh` 1.9 s | needs the server's TCP relay: tabcomputer.com issues a relay token but refused the WebSocket from this container (the token is bound to the client IP, and the container's egress proxy uses another one); the local server can't reach port 22 |
+
+Fixed for these: git found its repository only in the current directory
+(a subdirectory or a failed clone's leftover directory gave a JS TypeError),
+and a failed clone left its directory behind; `require('./package')` didn't
+try `.json`; `python3 -m venv` without the CPython package ran Pyodide, which
+took `venv` for a script; pytest needs `dup()` (output capture,
+faulthandler) and `umask()` (its cache), which WASI lacks, so the CPython
+package sets `PYTEST_ADDOPTS="--capture=sys -p no:faulthandler -p
+no:cacheprovider"`.
 
 ## Claude Code native binary (unix/perf-kernel)
 
@@ -628,5 +652,5 @@ of an installed app → first frame, in Chromium.
 | LXImage-Qt | 1.2.0 (Qt 5) | gui (36.8 MB) | exits | — | without a D-Bus session bus its single-instance check fails and it quits (status 0) |
 | GIMP | 2.10.34 (GTK 2) | gui (53.2 MB of a 141 MB closure) | works (slow) | main window, menus; install 6.3 s, splash 36 s, main window 247 s on first start, 63 s later | first start queries ~100 plug-ins one Blink process each; 22 plug-ins whose libraries are left out (PDF, HEIF, help browser...) are removed; no MIDI/ALSA, no D-Bus |
 | Inkscape | 1.2.2 (GTK 3, gtkmm) | gui (83 MB of a 95 MB closure) | works (slow) | fresh profile: install 15 s, welcome dialog 61 s after the click, main window ~60 s after closing it; ellipse tool draws on the canvas (`gui-inkscape.png`) | no Python extensions (python3 not shipped), no spell checking; first start is long |
-| NetSurf | 3.10 (GTK 3) | gui (56.6 MB; most shared with other GTK 3 apps) | works (local pages) | welcome page rendered 24.7 s after the click from a fresh profile (`gui-netsurf.png`) | web pages from the network don't load yet: no connection reaches the TCP relay (name resolution in the guest, not yet investigated) |
-| Dillo | 3.0.5 (FLTK 1.3) | gui (9.2 MB) | works (local pages) | install 1.4 s, window 4.1 s (`gui-dillo.png`) | same network gap; no HTTPS (libssl left out of the startup set) |
+| NetSurf | 3.10 (GTK 3) | gui (56.6 MB; most shared with other GTK 3 apps) | works | welcome page 24.7 s after the click from a fresh profile; https://www.debian.org/ with images and CSS in 26 s (`gui-netsurf-web.png`) | needs the TCP relay (on at tabcomputer.com); no JavaScript (NetSurf's own limit) |
+| Dillo | 3.0.5 (FLTK 1.3) | gui (11.4 MB) | works | install 1.4 s, window 4.1 s; http and https pages (`gui-dillo-web.png`) | needs the TCP relay; no CSS layout beyond Dillo's own |

@@ -45,7 +45,19 @@ export const gitCmd: Command = {
     }
 
     const fs = ctx.fs.toIsomorphicGitFS();
-    const dir = workDir;
+    // The repository is the nearest directory up from here with a .git, as for git
+    let dir = workDir;
+    if (!['init', 'clone', 'config'].includes(subcommand)) {
+      let root: string | null = workDir;
+      while (root && !(await ctx.fs.exists(root === '/' ? '/.git' : `${root}/.git`))) {
+        root = root === '/' ? null : root.slice(0, root.lastIndexOf('/')) || '/';
+      }
+      if (!root) {
+        ctx.stderr = 'fatal: not a git repository (or any of the parent directories): .git\n';
+        return 128;
+      }
+      dir = root;
+    }
 
     try {
       switch (subcommand) {
@@ -76,13 +88,13 @@ export const gitCmd: Command = {
         case 'add': {
           const paths = ctx.args.slice(1);
           if (paths.length === 0 || paths.includes('.')) {
-            const allFiles = await listAllFiles(ctx.fs, dir, dir);
+            const allFiles = await listAllFiles(ctx.fs, workDir, dir);
             for (const filepath of allFiles) {
               await git.add({ fs, dir, filepath });
             }
           } else {
             for (const filepath of paths) {
-              await git.add({ fs, dir, filepath });
+              await git.add({ fs, dir, filepath: ctx.fs.resolvePath(filepath, workDir).slice(dir === '/' ? 1 : dir.length + 1) });
             }
           }
           break;
@@ -508,14 +520,19 @@ export const gitCmd: Command = {
           const targetDir = cloneTarget
             ? ctx.fs.resolvePath(cloneTarget, ctx.cwd)
             : ctx.fs.resolvePath(repoName, ctx.cwd);
+          // As git: only into a new or empty directory, and a failed clone leaves nothing behind
+          const existed = await ctx.fs.exists(targetDir);
+          if (existed && (await ctx.fs.readdir(targetDir).catch(() => [])).length) {
+            ctx.stderr = `fatal: destination path '${cloneTarget || repoName}' already exists and is not an empty directory.\n`;
+            return 128;
+          }
           await ctx.fs.mkdir(targetDir, { recursive: true });
           const gitDir = ctx.fs.resolvePath('.git', targetDir);
-          try {
-            await ctx.fs.mkdir(gitDir, { recursive: true });
-          } catch (e) {
-            // Ignore if already exists
-          }
-          ctx.stdout = `Cloning into '${cloneTarget || repoName}'...\n`;
+          await ctx.fs.mkdir(gitDir, { recursive: true });
+          const undo = async () => {
+            await ctx.fs.rm(existed ? gitDir : targetDir, { recursive: true }).catch(() => {});
+          };
+          ctx.stderr = `Cloning into '${cloneTarget || repoName}'...\n`;
 
           const corsProxy = ctx.env['GIT_CORS_PROXY'] || `${getShiroOrigin()}/git-proxy`;
           const token = ctx.env['GITHUB_TOKEN'] || (typeof localStorage !== 'undefined' ? localStorage.getItem('shiro_github_token') || '' : '');
@@ -532,11 +549,12 @@ export const gitCmd: Command = {
                 ...githubAuth(token, url),
               }),
               new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error('clone timed out after 60s')), 60000)
+                setTimeout(() => reject(new Error('clone timed out after 300s')), 300000)
               ),
             ]);
           } catch (cloneErr: any) {
-            ctx.stderr = `fatal: ${cloneErr.message || cloneErr}\n`;
+            await undo();
+            ctx.stderr += `fatal: ${cloneErr.message || cloneErr}\n`;
             const httpStatus = cloneErr?.data?.statusCode;
             if ((httpStatus === 401 || httpStatus === 403 || httpStatus === 404) && /github\.com/.test(url)) {
               ctx.stderr += token
@@ -552,7 +570,7 @@ export const gitCmd: Command = {
             await git.checkout({ fs, dir: targetDir, ref: branch, force: true });
           } catch { /* checkout best-effort */ }
 
-          ctx.stdout += `done.\n`;
+          ctx.stderr += `done.\n`;
           break;
         }
 

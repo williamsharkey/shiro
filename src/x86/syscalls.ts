@@ -11,6 +11,7 @@ import {
   AF_UNIX, O_NONBLOCK, POLLIN, POLLOUT, POLLNVAL, SOL_SOCKET, SO_RCVTIMEO, SO_SNDTIMEO, SO_LINGER, FIONREAD,
   ENOTSOCK, EOPNOTSUPP, EAFNOSUPPORT as NET_EAFNOSUPPORT,
 } from '../kernel/net';
+import { KNetlinkSocket } from '../kernel/netlink';
 import { retain, release, type OpenFile } from '../kernel/fd';
 import { EpollFile } from '../kernel/epoll';
 
@@ -947,6 +948,7 @@ export class LinuxSyscalls {
   private sysSocket(domain: bigint, type: bigint, protocol: bigint): bigint {
     const sock = this.net.socket(Number(domain), Number(type), Number(protocol));
     if (typeof sock === 'number') return BigInt(sock);
+    if (sock instanceof KNetlinkSocket) { void sock.close(); return -97n; } // EAFNOSUPPORT: netlink is Blink's (netSyscall)
     return this.allocSock(sock);
   }
 

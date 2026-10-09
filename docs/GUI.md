@@ -98,7 +98,21 @@ From a fresh profile in Chromium, opened like a click:
 - **Dillo 3.0.5** (FLTK): 9 MB, installed in 1.4 s, window in 4.1 s
   (`gui-dillo.png`).
 
-The two browsers don't load pages from the network yet (next steps).
+**Both browsers load real pages** over Shiro's networking:
+`gui netsurf https://www.debian.org/` renders Debian's home page with its
+images and CSS ("Done (26.2s)", `gui-netsurf-web.png`); Dillo shows
+https://example.com/ (`gui-dillo-web.png`). The path, from a kernel trace:
+glibc's resolver finds no `/etc/resolv.conf` and asks 127.0.0.1:53, which
+the kernel's datagram socket answers with DNS-over-HTTPS; TCP goes through
+the server's WebSocket relay (`SHIRO_TCP_RELAY=1`, on at tabcomputer.com).
+TLS needs the CA bundle `update-ca-certificates` would build: it ships as an
+overlay (`/etc/ssl/certs/ca-certificates.crt`), plus a tar overlay with its
+hashed-name links for OpenSSL users that only look up `/etc/ssl/certs/HASH.0`
+(Dillo's https plug-in, now in its startup set with libssl3), and apps get
+`SSL_CERT_FILE` pointing at the bundle. (The screenshots come from a sandbox
+whose egress re-signs TLS: there its CA was added to the guest's store for
+the test, and the browser used the sandbox's HTTP proxy for DoH. Without
+the CA, NetSurf rightly shows "Privacy error".)
 
 ### First launch: click to window
 
@@ -248,7 +262,8 @@ self-contained floating-window host for the classic full-page terminal UI.
   `/usr/share/mime/mime.cache` (148 KB), without which GIO can't sniff file
   types and gdk-pixbuf can't load PNGs (update-mime-database needs libxml2 +
   ICU, 10 MB); Adwaita's `icon-theme.cache`; and gdk-pixbuf's
-  `loaders.cache` (made in Blink, kept in `scripts/gui/overlays/`).
+  `loaders.cache` (made in Blink, kept in `scripts/gui/overlays/`); the CA
+  bundle and its hashed links (a `tar` overlay, unpacked like a package).
 - The .debs are decoded in workers (`src/gui/deb.ts`), largest first, while
   more download; files are written in that order on the page's thread.
 - State: `/var/lib/shiro-gui/status.json` (package versions, apps).
@@ -314,6 +329,4 @@ self-contained floating-window host for the classic full-page terminal UI.
    drop to its second-start time with plug-in caches (`pluginrc`) shipped
    as an overlay, which needs the unpacker to keep the packages' file times
    (GIMP compares them).
-9. **Web browsers** (NetSurf, Dillo) render local pages but don't fetch from
-   the network yet: no connection reaches the server's TCP relay
-   (`SHIRO_TCP_RELAY=1`); name resolution in the guest is the first suspect.
+
