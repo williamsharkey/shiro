@@ -23,7 +23,7 @@ import {
 import { createPipe } from './pipe';
 import { Process } from './process';
 import { EpollFile, waitReady } from './epoll';
-import { EventFile } from './fd';
+import { EventFile, TimerFile } from './fd';
 
 /** Runs a process to completion; resolves with its exit code (or nothing if it exited through the kernel). */
 export type Runner = (proc: Process, kernel: Kernel) => Promise<number | void>;
@@ -1368,6 +1368,39 @@ export class Kernel {
           const flags = nr === A.SYS_eventfd2 ? args[1] : 0;
           if (flags & ~(A.O_NONBLOCK | A.O_CLOEXEC | A.EFD_SEMAPHORE)) return -A.EINVAL;
           return fds.alloc(new EventFile(args[0], A.O_RDWR | (flags & A.O_NONBLOCK), !!(flags & A.EFD_SEMAPHORE)), 0, !!(flags & A.O_CLOEXEC));
+        }
+        case A.SYS_timerfd_create: {
+          const clock = args[0], flags = args[1];
+          if (![0, 1, 7, 8, 9].includes(clock)) return -A.EINVAL;  // REALTIME, MONOTONIC, BOOTTIME (+_ALARM)
+          if (flags & ~(A.O_NONBLOCK | A.O_CLOEXEC)) return -A.EINVAL;
+          return fds.alloc(new TimerFile(clock, A.O_RDONLY | (flags & A.O_NONBLOCK)), 0, !!(flags & A.O_CLOEXEC));
+        }
+        case A.SYS_timerfd_settime:
+        case A.SYS_timerfd_gettime: {
+          const f = fds.get(args[0]);
+          if (!f) return -A.EBADF;
+          if (!(f instanceof TimerFile)) return -A.EINVAL;
+          if (data.length < 32) return -A.EFAULT;
+          const dv = new DataView(data.buffer, data.byteOffset, 32);
+          if (nr === A.SYS_timerfd_gettime) {
+            const [v, i] = f.get();
+            dv.setFloat64(0, v, true);
+            dv.setFloat64(8, i, true);
+            return 0;
+          }
+          if (args[1] & ~A.TFD_TIMER_ABSTIME) return -A.EINVAL;
+          let value = dv.getFloat64(0, true);
+          const interval = dv.getFloat64(8, true);
+          if (!(value >= 0) || !(interval >= 0)) return -A.EINVAL;
+          if (value > 0 && args[1] & A.TFD_TIMER_ABSTIME) {
+            // absolute on the timer's clock; at or before now expires at once
+            const now = dv.getFloat64(f.clockid === 0 || f.clockid === 8 ? 16 : 24, true);
+            value = Math.max(value - now, 1e-6);
+          }
+          const [ov, oi] = f.set(value, interval);
+          dv.setFloat64(0, ov, true);
+          dv.setFloat64(8, oi, true);
+          return 0;
         }
         case A.SYS_close_range: {
           const first = args[0] >>> 0;
