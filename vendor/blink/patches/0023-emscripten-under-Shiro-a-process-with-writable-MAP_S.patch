@@ -1,0 +1,173 @@
+From bb5fdf144bb0f0a477bfcf3ad5521b05ff471ffe Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 00:03:01 +0000
+Subject: [PATCH 23/23] emscripten: under Shiro a process with writable
+ MAP_SHARED memory forks the old way; munmap of a shared file mapping doesn't
+ hang
+
+A real fork (patch 0014) gives the child a copy of every page in another
+worker, so parent and child stopped sharing MAP_SHARED memory: LTP keeps
+its results and checkpoint futexes there and went from 146/320 to 0.
+Separate wasm memories can't share pages, so while a writable MAP_SHARED
+mapping (anonymous, or a kernel file) is mapped, fork and clone without
+CLONE_VM run the child on the calling thread and memory until it execs or
+exits, as before patch 0014. System remembers the anonymous mappings'
+ranges (32, then a sticky flag); kernel file mappings are the existing
+write-back list.
+
+munmap of a writable MAP_SHARED kernel file hung: the write-back's
+CopyFromUser took page locks that last until the syscall returns, and the
+munmap waited for them. It copies without page locks now.
+---
+ blink/machine.h |  7 +++++++
+ blink/shiro.inc | 43 +++++++++++++++++++++++++++++++++++++++----
+ blink/syscall.c | 29 +++++++++++++++++++++++++++++
+ 3 files changed, 75 insertions(+), 4 deletions(-)
+
+diff --git a/blink/machine.h b/blink/machine.h
+index 45a0efb..ecb1c90 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -321,6 +321,13 @@ struct System {
+   void (*onromwriteattempt)(struct Machine *, u8 *);
+   int (*exec)(char *, char *, char **, char **);
+   void (*redraw)(bool);
++#ifdef __EMSCRIPTEN__
++  // writable MAP_SHARED mappings made so far, for Shiro's fork: their pages
++  // can't stay shared with a child in another worker (shiro.inc)
++  i64 shared[32][2];
++  int nshared;
++  bool manyshared;
++#endif
+ };
+ 
+ // Default segment selector values in non-metal mode, per Linux 5.9
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 7033d10..70b1ef3 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -1031,6 +1031,27 @@ static void ShiroWalkTable(struct ShiroWalk *w, u64 entry, int level, i64 base)
+ // JS (host.mjs): hand the snapshot to the page, which starts it as `pid`
+ extern int shiro_fork_start(int pid, const void *snap, size_t len);
+ 
++// Whether a writable MAP_SHARED mapping is still mapped. A forked child in
++// another worker gets a copy of every page, so parent and child would stop
++// sharing those (LTP's result page, futexes in shared memory); such a
++// process forks the old way instead: the child runs on this thread and
++// memory until it execs or exits.
++struct ShiroSharedMap;
++static struct ShiroSharedMap *g_shiro_maps;  // writable MAP_SHARED kernel files
++
++static bool ShiroHasSharedMemory(struct System *s) {
++  bool res;
++  int i;
++  if (g_shiro_maps) return true;
++  LOCK(&s->mmap_lock);
++  res = s->manyshared;
++  for (i = 0; !res && i < s->nshared; ++i) {
++    res = !IsFullyUnmapped(s, s->shared[i][0], s->shared[i][1]);
++  }
++  UNLOCK(&s->mmap_lock);
++  return res;
++}
++
+ static i64 ShiroForkReal(struct Machine *m, u64 flags, i64 stack, i64 ctid) {
+   struct ShiroBuf b = {0};
+   struct ShiroForkHeader h;
+@@ -1190,17 +1211,23 @@ struct ShiroSharedMap {
+   i64 addr, size, off;
+   int fd;  // a kernel dup of the mapped fd
+ };
+-static struct ShiroSharedMap *g_shiro_maps;
+ static pthread_mutex_t_ g_shiro_maps_lock = PTHREAD_MUTEX_INITIALIZER_;
+ 
+ static void ShiroWriteBack(struct Machine *m, struct ShiroSharedMap *s, i64 addr,
+                            i64 size) {
+   u8 *buf = (u8 *)malloc(g_shiro_chunk);
+   i64 lo = MAX(addr, s->addr), hi = MIN(addr + size, s->addr + s->size), o;
++  bool insyscall = m->insyscall;
++  int rc;
+   for (o = lo; buf && o < hi; o += g_shiro_chunk) {
+     int n = MIN(hi - o, (i64)g_shiro_chunk);
+     i64 at = s->off + (o - s->addr);
+-    if (CopyFromUser(m, buf, o, n) == -1) break;
++    // without page locks: a syscall's locks last until it returns, and the
++    // munmap this is part of waits for the pages' locks to drain
++    m->insyscall = false;
++    rc = CopyFromUser(m, buf, o, n);
++    m->insyscall = insyscall;
++    if (rc == -1) break;
+     ShiroCall(m, 18, A12(s->fd, n, (int)at, (int)(at >> 32)), buf, n, 0, false, false);
+   }
+   free(buf);
+@@ -1525,11 +1552,19 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     case 0x074: case 0x07A: case 0x07B:                               // set*id, setgroups, setfs*id
+       r = 0;
+       break;
+-    case 0x039: r = ShiroForkReal(m, 0, 0, 0); break;                    // fork
++    case 0x039:                                                       // fork
++      r = ShiroHasSharedMemory(m->system) ? ShiroVfork(m, 0, true) : ShiroForkReal(m, 0, 0, 0);
++      break;
+     case 0x03A: r = ShiroVfork(m, 0, false); break;                   // vfork
+     case 0x038:                                                       // clone
+       if (!IsForkOrVfork(a)) return false;                           // threads stay Blink's
+-      r = a & CLONE_VFORK_LINUX ? ShiroVfork(m, b, false) : ShiroForkReal(m, a, b, d);
++      if (a & CLONE_VFORK_LINUX) {
++        r = ShiroVfork(m, b, false);
++      } else if (ShiroHasSharedMemory(m->system)) {
++        r = ShiroVfork(m, b, true);
++      } else {
++        r = ShiroForkReal(m, a, b, d);
++      }
+       break;
+     case 0x03B: r = ShiroExecve(m, a, b, c); break;                   // execve
+     case 0x00D: {                                                     // rt_sigaction
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 0bd8a25..e64df75 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -1300,12 +1300,41 @@ Finished:
+   return virt;
+ }
+ 
++#ifdef __EMSCRIPTEN__
++// remembers a writable MAP_SHARED mapping (see ShiroHasSharedMemory)
++static void NoteSharedMapping(struct System *s, i64 virt, i64 size) {
++  int i, j;
++  if (s->nshared == ARRAYLEN(s->shared)) {
++    for (i = j = 0; i < s->nshared; ++i) {
++      if (!IsFullyUnmapped(s, s->shared[i][0], s->shared[i][1])) {
++        s->shared[j][0] = s->shared[i][0];
++        s->shared[j][1] = s->shared[i][1];
++        ++j;
++      }
++    }
++    s->nshared = j;
++  }
++  if (s->nshared < ARRAYLEN(s->shared)) {
++    s->shared[s->nshared][0] = virt;
++    s->shared[s->nshared][1] = size;
++    ++s->nshared;
++  } else {
++    s->manyshared = true;
++  }
++}
++#endif
++
+ static i64 SysMmap(struct Machine *m, i64 virt, u64 size, int prot, int flags,
+                    int fildes, i64 offset) {
+   i64 res;
+   BEGIN_NO_PAGE_FAULTS;
+   LOCK(&m->system->mmap_lock);
+   res = SysMmapImpl(m, virt, size, prot, flags, fildes, offset);
++#ifdef __EMSCRIPTEN__
++  if (res != -1 && (flags & MAP_SHARED_LINUX) && (prot & PROT_WRITE_LINUX)) {
++    NoteSharedMapping(m->system, res, ROUNDUP(size, 4096));
++  }
++#endif
+   unassert(CheckMemoryInvariants(m->system));
+   UNLOCK(&m->system->mmap_lock);
+   END_NO_PAGE_FAULTS;
+-- 
+2.43.0
+

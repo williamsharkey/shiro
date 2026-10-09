@@ -565,6 +565,109 @@ Not a hot path; a kernel quick run after the merge is in line with round 3
 (isolated: syscall_rtt.sab 5.8 µs, pipe_throughput_512b 87 MB/s,
 file_write 173 MB/s, spawn_wait.wasm 1.07 ms).
 
+### unix/perf-kernel, round 5: pool spare cap under load
+
+`kernel-wasi.test.ts` "reuses guest Workers" failed under full-suite load
+(4 Workers started where ≤ 3 are allowed): a spawn that came while the
+previous process's Worker was still unwinding (its `wasi-idle` not yet
+received) started a new Worker, and so could the pre-start timer. Returning
+Workers now count as available: a spawn that finds none idle waits for one
+(at most 250 ms, then starts a new one), and no spare is pre-started while
+one is on its way back. Under 4 busy CPU-burning processes the test failed
+1 of 4 runs before and passed 12 of 12 after; the full suite passed 3 times.
+
+A/B, 3 runs each (isolated): `spawn_wait.wasm` 1.45 → 1.57 ms (noise),
+`spawn_throughput.wasm` (10 in flight) **349 → 831 proc/s**: taking a
+returning Worker is faster than starting one. RSS over 500 spawns stays
+231–234 MiB with 2 Workers.
+
+### unix/perf-kernel, round 6: after compat-tools' kernel additions
+
+Merged unix/integration c5603db (compat-tools: procfs, AF_UNIX sockets,
+syscall time accounting, symlinks followed in every path component). Its
+quick run vs bd9fd87 showed `wasm.ripgrep.tree` 124 → 166 ms and slower
+kernel paths. Profile of rg after the merge: `_getCached` + `lookupCached`
++ the kernel's `normalize` ≈ 20 ms per run. Every lookup now walked each
+path component, building and hashing a string per step. Also,
+`kernel.syscall` gained an `async` wrapper (one more await per call).
+
+- `FileSystem.lookupCached` memoizes each directory's canonical path, so a
+  lookup costs one map hit plus the last component. The memo is cleared when
+  a symlink is written or anything is deleted or renamed (the only changes
+  that can move a canonical path), and a test covers retargeting a symlinked
+  directory.
+- The kernel's `normalize` returns already-normal paths as they are.
+- `kernel.syscall` keeps the accounting (`inSyscall`, `kernelMs`) but
+  returns the inner promise, so the bookkeeping adds no hop.
+- The pool fix from round 5 (not in c5603db) brings `workers_left` back to 2.
+
+Interleaved A/B against c5603db built here, 3 runs each (medians of all
+samples): `wasm.ripgrep.tree` 263 → 231 ms, `syscall_inpage` 1.20 → 0.96 µs
+(isolated) and 1.02 → 0.92 µs (non-isolated), `epoll_wakeup` 56 → 50 µs,
+`file_read` 1678 → 2102 MB/s, `pipe_throughput` 753 → 1137 MB/s,
+`spawn_throughput.wasm` 345 → 745 proc/s (round 5). rg in one page, 12 runs,
+median of the last 8: base 206 and 163 ms, this branch 159 and 154 ms.
+Mixed within noise: `pipe_throughput_512b` 109 → 81 MB/s (base runs
+84–125, new 72–107), non-isolated `file_write` 148 → 121 MB/s (base 145–160,
+new 107–160).
+
+`perf-kernel-r6-quick.json` was recorded while the container was slow
+(untouched metrics: `shell.loop_1000` +92%, x86 +50%, boot +40% against
+c5603db's file), so its absolute numbers are not comparable with the
+committed integration runs. Use the A/B above.
+### unix/perf-fs-shell 5 — boot bundle and ls after the c5603db merges
+
+Base: `bench/results/integration-c5603db-quick-local.json` (origin/unix/integration
+483306b, recorded on this machine) → `perf-fs-shell-5-quick.json`. On the
+coordinator's host `integration-bd9fd87 → c5603db` had grown the boot transfer
+1390 → 1658 KiB and `shell.ls_la_1000` 2.6 → 3.8 ms.
+
+- Boot bundle (source-map attribution of the entry chunk, 1.67 MB): the new
+  `utils/tar.ts` (65 KiB, eager through `pkg-manager.ts`), the awk rewrite
+  (~58 KiB over six files), larger `find`, `date`, `od`, `patch`, `tar`, and
+  node-compat (~150 KiB, eager through the `node` command). These now load on
+  first use: `awk date find od patch tar` are `lazyCommand`s in
+  `commands/unix.ts`, `pkg-manager` imports `readTarball` dynamically, and
+  `node` is lazy in `main.ts`. node-compat captured the page's
+  `fetch`/timers at module load; that capture moved to
+  `node-compat/page-globals.ts`, imported eagerly, so a late first load
+  (after `serve` patched `fetch`) still gets the originals. Entry chunk
+  1.67 → 1.34 MB.
+- `ls -la` on 1000 files: profiled in Node, the time was in the filesystem,
+  not ls: `_canon` (symlink-aware path walk, new in conformance) awaited a
+  `_get` per path component. It now walks the in-memory cache synchronously
+  and only falls back to the async walk when a component needs IndexedDB
+  (same results); `stat`/`lstat` answer from memory the same way;
+  `_getCached` does one Map lookup instead of two. ls sorts with a cached
+  `Intl.Collator().compare` (same order as `localeCompare()` with default
+  arguments). ls output is unchanged: the conformance suite gives identical
+  results on base and new.
+- The faster `stat` made `kernel.spawn_throughput.builtin` drop ~20%
+  (isolated): the WASM loader (`wasi/host.ts` `findWasm`) probes six PATH
+  candidates per spawn with `stat`, and an ENOENT thrown synchronously deep
+  in the spawn call chain costs more than one thrown after an await. Paths
+  known to be missing (`fs.lookupCached` → null) are skipped without
+  `stat`.
+
+| metric (isolated unless noted) | base | new |
+|---|---:|---:|
+| boot.cold.transfer | 1659 KiB | 1336 KiB (−19.5%) |
+| boot.cold.first_prompt | 162.7 ms | 144.3 ms |
+| boot.warm.first_prompt | 86.8 ms | 75.8 ms |
+| boot.mem.uasm | 6.99 MiB | 6.27 MiB |
+| claude.version | 1010 ms | 704 ms |
+| shell.ls_la_1000 | 2.96 ms | 2.47 / 3.00 ms (two full runs; 3×7-run re-runs base 2.9–3.3, new 3.0–3.1) |
+| kernel.spawn_throughput.builtin (nonisolated, 3 re-runs) | 11.2–16.1k/s | 18.5–21.3k/s |
+| ls -la 1000 files, Node microbench | 2.0–2.2 ms | 1.7 ms |
+
+`ls_la_1000` on this machine was already ~3 ms on the base, so most of the
+2.6 → 3.8 ms reported from the other host is not reproducible here; the
+remaining in-page cost is the shell plus 1000 `lstat`s. Flagged by compare
+and re-run 3× alternating (7 runs each): `kernel.pipe_throughput*`,
+`kernel.syscall_inpage`, `kernel.spawn_throughput.*` (isolated),
+`shell.pipeline_seq_grep_wc`, `wasm.startup.*`: overlapping ranges, noise.
+`boot.settled.time` 6.3 s on the other host is 3.9 s here on both.
+
 ## Results
 
 <!-- bench:table:begin -->

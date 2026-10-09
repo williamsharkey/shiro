@@ -1,0 +1,87 @@
+diff --git a/cmake.deps/cmake/BuildLuv.cmake b/cmake.deps/cmake/BuildLuv.cmake
+index 2e07f9e..8883b7d 100644
+--- a/cmake.deps/cmake/BuildLuv.cmake
++++ b/cmake.deps/cmake/BuildLuv.cmake
+@@ -3,7 +3,7 @@ set(LUV_CMAKE_ARGS
+   -D LUA_COMPAT53_DIR=${DEPS_BUILD_DIR}/src/lua_compat53
+   -D WITH_SHARED_LIBUV=ON
+   -D BUILD_STATIC_LIBS=ON
+-  -D BUILD_MODULE=OFF)
++  -D BUILD_MODULE=OFF -D LUA_MATH_LIBRARY=/opt/tc/x86_64-linux-musl-cross/x86_64-linux-musl/lib/libm.a)
+ 
+ list(APPEND LUV_CMAKE_ARGS -D WITH_LUA_ENGINE=${LUA_ENGINE})
+ 
+diff --git a/src/nvim/CMakeLists.txt b/src/nvim/CMakeLists.txt
+index c87ceb2..d1741bf 100644
+--- a/src/nvim/CMakeLists.txt
++++ b/src/nvim/CMakeLists.txt
+@@ -391,6 +391,14 @@ file(GLOB EXTERNAL_HEADERS CONFIGURE_DEPENDS ../xdiff/*.h ../mpack/*.h ../cjson/
+ 
+ file(GLOB NLUA0_SOURCES CONFIGURE_DEPENDS ../mpack/*.c)
+ 
++# A static archive of tree-sitter parsers to link into nvim (for builds that
++# cannot dlopen parser/*.so); see static_parsers in lua/treesitter.c
++set(NVIM_STATIC_PARSERS_LIB "" CACHE FILEPATH "Static library of the bundled tree-sitter parsers")
++if(NVIM_STATIC_PARSERS_LIB)
++  target_compile_definitions(nvim_bin PRIVATE NVIM_STATIC_PARSERS)
++  target_link_libraries(nvim_bin PRIVATE ${NVIM_STATIC_PARSERS_LIB})
++endif()
++
+ if(PREFER_LUA)
+   # luajit not used, use a vendored copy of the bit module
+   list(APPEND EXTERNAL_SOURCES ${PROJECT_SOURCE_DIR}/src/bit.c)
+diff --git a/src/nvim/lua/treesitter.c b/src/nvim/lua/treesitter.c
+index 310f3c4..6c354d1 100644
+--- a/src/nvim/lua/treesitter.c
++++ b/src/nvim/lua/treesitter.c
+@@ -71,9 +71,50 @@ static TSWasmStore *ts_wasmstore;
+ 
+ // TSLanguage
+ 
++#ifdef NVIM_STATIC_PARSERS
++// The bundled parsers linked into a static nvim (which cannot dlopen
++// parser/*.so): known languages without a runtime file to load.
++static void add_static_parser(const char *lang_name)
++{
++  // (declared here: the declarations generator exports file-scope prototypes)
++  extern const TSLanguage *tree_sitter_c(void);
++  extern const TSLanguage *tree_sitter_lua(void);
++  extern const TSLanguage *tree_sitter_vim(void);
++  extern const TSLanguage *tree_sitter_vimdoc(void);
++  extern const TSLanguage *tree_sitter_query(void);
++  extern const TSLanguage *tree_sitter_markdown(void);
++  extern const TSLanguage *tree_sitter_markdown_inline(void);
++  static const struct {
++    const char *name;
++    const TSLanguage *(*fn)(void);
++  } static_parsers[] = {
++    { "c", tree_sitter_c },
++    { "lua", tree_sitter_lua },
++    { "vim", tree_sitter_vim },
++    { "vimdoc", tree_sitter_vimdoc },
++    { "query", tree_sitter_query },
++    { "markdown", tree_sitter_markdown },
++    { "markdown_inline", tree_sitter_markdown_inline },
++  };
++
++  if (map_has(cstr_t, &langs, lang_name)) {
++    return;
++  }
++  for (size_t i = 0; i < ARRAY_SIZE(static_parsers); i++) {
++    if (strequal(static_parsers[i].name, lang_name)) {
++      pmap_put(cstr_t)(&langs, xstrdup(lang_name), (TSLanguage *)static_parsers[i].fn());
++      return;
++    }
++  }
++}
++#endif
++
+ static int tslua_has_language(lua_State *L)
+ {
+   const char *lang_name = luaL_checkstring(L, 1);
++#ifdef NVIM_STATIC_PARSERS
++  add_static_parser(lang_name);
++#endif
+   lua_pushboolean(L, map_has(cstr_t, &langs, lang_name));
+   return 1;
+ }

@@ -9,3 +9,6 @@ setup_musl
 make -C "$SRC" -f unix/Makefile unzips CC="$CC" LF2="$LDFLAGS" \
   CF="$CFLAGS -I. -DUNIX -DLARGE_FILE_SUPPORT -DUNICODE_SUPPORT -DUNICODE_WCHAR -DUTF8_MAYBE_NATIVE -DNO_LCHMOD -DDATE_FORMAT=DF_YMD -DNOMEMCPY -DIZ_HAVE_UXUIDGID -DNO_WORKING_ISPRINT" >"$SRC/make.log" 2>&1
 install_bin "$SRC/unzip" unzip/bin/unzip
+
+# Manual pages (man, from pkg install mandoc)
+install_man unzip "$SRC/man/unzip.1" "$SRC/man/zipinfo.1"

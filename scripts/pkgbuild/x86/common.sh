@@ -198,3 +198,26 @@ install_prebuilt() {
   if file "$dst" 2>/dev/null | grep -q dynamic; then echo "$dst is not static" >&2; exit 1; fi
   sha256sum "$dst"
 }
+
+# install_man PKG SRC[:NAME]...: manual pages into $PKG_OUT/PKG/share/man/manN/
+# (N from NAME's suffix; NAME defaults to SRC's file name). publish.sh links
+# every one into /usr/share/man, where man (pkg install mandoc) finds it.
+install_man() {
+  local pkg=$1 spec src name sec
+  shift
+  for spec in "$@"; do
+    src=${spec%%:*}
+    name=$(basename "${spec#*:}")
+    [ "$spec" = "$src" ] && name=$(basename "$src")
+    sec=${name##*.}
+    mkdir -p "$PKG_OUT/$pkg/share/man/man$sec"
+    cp "$src" "$PKG_OUT/$pkg/share/man/man$sec/$name"
+  done
+}
+
+# man_alias PKG NAME.N TARGET.M: NAME's page is TARGET's (a .so request)
+man_alias() {
+  local sec=${2##*.} tsec=${3##*.}
+  mkdir -p "$PKG_OUT/$1/share/man/man$sec"
+  echo ".so man$tsec/$3" >"$PKG_OUT/$1/share/man/man$sec/$2"
+}

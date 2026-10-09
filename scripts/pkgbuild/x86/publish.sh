@@ -5,7 +5,8 @@
 # directory (libexec/, share/, etc/, ...) as one reproducible .tar.gz, which
 # keeps symlinks and modes.
 # Prints the index "files" entries for src/pkg-index.json; with --index, also
-# writes them into the package's entry there (which must exist).
+# writes them into the package's entry there (which must exist), with a
+# /usr/share/man link for every manual page in share/man.
 set -euo pipefail
 UPDATE_INDEX=
 if [ "${1:-}" = --index ]; then UPDATE_INDEX=1; shift; fi
@@ -40,15 +41,20 @@ for dir in $(find . -mindepth 1 -maxdepth 1 -type d | sed 's|^\./||' | sort); do
 done
 exec >&3
 cat "$ENTRIES"
+PAGES=$( [ -d share/man ] && find share/man -type f | sort || true)
 if [ -n "$UPDATE_INDEX" ]; then
   node -e '
     const fs = require("fs");
-    const [file, name, version, entries] = process.argv.slice(1);
+    const [file, name, version, entries, pages] = process.argv.slice(1);
     const idx = JSON.parse(fs.readFileSync(file, "utf8"));
     const p = idx.packages.find((x) => x.name === name);
     if (!p) { console.error(`no package ${name} in ${file}`); process.exit(1); }
     p.version = version;
     p.files = fs.readFileSync(entries, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    // every manual page in share/man is linked into /usr/share/man
+    const links = Object.fromEntries(Object.entries(p.links ?? {}).filter(([k]) => !k.startsWith("/usr/share/man/")));
+    for (const m of pages.split("\n").filter(Boolean)) links["/usr/" + m] = m;
+    if (Object.keys(links).length) p.links = links; else delete p.links;
     fs.writeFileSync(file, JSON.stringify(idx, null, 1) + "\n");
-  ' "$REPO/src/pkg-index.json" "$NAME" "$VERSION" "$ENTRIES"
+  ' "$REPO/src/pkg-index.json" "$NAME" "$VERSION" "$ENTRIES" "$PAGES"
 fi

@@ -1917,6 +1917,13 @@
      "sha256": "ea971f97bc3bd0b2bb2f8c82f7cc2b3abf0555cfcbd20d79c4ef7b4068084517",
      "size": 15593,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/less/710/share.tar.gz",
+     "sha256": "ec1be6b299afb6b0b7e3bd336b994aef6bbb2414bc519aa717e87c6f13dc9815",
+     "size": 35362,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -1929,7 +1936,11 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/less.1": "share/man/man1/less.1",
+    "/usr/share/man/man1/lessecho.1": "share/man/man1/lessecho.1"
+   }
   },
   {
    "name": "vim",
@@ -1953,8 +1964,8 @@
     {
      "path": "share",
      "url": "/pkg/vim/9.2.0000/share.tar.gz",
-     "sha256": "bf2cca9af6d5ee6d2885894609bf6c588d91245313cf6c7aaba98997d2f6aaf7",
-     "size": 7122314,
+     "sha256": "90ebb4a74e90927a370d29fbf7604ec8e6434f584bf4281540e57d6e5d54b272",
+     "size": 7129534,
      "unpack": "tar.gz"
     }
    ],
@@ -1976,7 +1987,133 @@
     }
    },
    "links": {
-    "/usr/share/vim": "share/vim"
+    "/usr/share/vim": "share/vim",
+    "/usr/share/man/man1/ex.1": "share/man/man1/ex.1",
+    "/usr/share/man/man1/vi.1": "share/man/man1/vi.1",
+    "/usr/share/man/man1/view.1": "share/man/man1/view.1",
+    "/usr/share/man/man1/vim.1": "share/man/man1/vim.1",
+    "/usr/share/man/man1/vimdiff.1": "share/man/man1/vimdiff.1"
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "neovim",
+   "version": "0.12.5",
+   "description": "Neovim: hyperextensible Vim-based text editor (PUC Lua 5.1, runtime with :help; static x86-64 build)",
+   "license": "Apache-2.0 AND Vim",
+   "source": "https://github.com/neovim/neovim/tree/v0.12.5",
+   "homepage": "https://neovim.io/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/neovim.sh",
+   "section": "editors",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/nvim",
+     "url": "/pkg/neovim/0.12.5/nvim.gz",
+     "sha256": "062a88f3df7d3460d6a3cc9b4cd506ed61862d998abac1dea5b76d74d3343bba",
+     "size": 3340787,
+     "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/neovim/0.12.5/share.tar.gz",
+     "sha256": "24e8945b884e66c901fe7f0a06384fc60771da0b1797804f3923f87e383069be",
+     "size": 5733354,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "nvim": {
+     "file": "bin/nvim"
+    }
+   },
+   "links": {
+    "/usr/share/nvim": "share/nvim",
+    "/usr/share/man/man1/nvim.1": "share/man/man1/nvim.1"
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "emacs",
+   "version": "31.1",
+   "description": "GNU Emacs for the terminal (emacs -nw; byte-compiled Lisp, no GUI/TLS/images; static x86-64 build)",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/emacs/emacs-31.1.tar.xz",
+   "homepage": "https://www.gnu.org/software/emacs/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/emacs.sh",
+   "section": "editors",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/ebrowse",
+     "url": "/pkg/emacs/31.1/ebrowse.gz",
+     "sha256": "89ee53ebbd62852db41ec35575ac20355c9e54360f8983c238cb734aa0199265",
+     "size": 33061,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/emacs",
+     "url": "/pkg/emacs/31.1/emacs.gz",
+     "sha256": "b77e28b3f38e95913a0936f079e83ec607fa4548e8dc1c3c0ee4cae1095cdc0a",
+     "size": 981208,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/emacsclient",
+     "url": "/pkg/emacs/31.1/emacsclient.gz",
+     "sha256": "48508cbeb347f748b1006e0911a8c461fac9546690322c94f4879b415c340be3",
+     "size": 35889,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/etags",
+     "url": "/pkg/emacs/31.1/etags.gz",
+     "sha256": "f71c78473d34803c4f710402f6a642372bf7c0176431db097c4cc4303c9011b2",
+     "size": 92629,
+     "unpack": "gzip"
+    },
+    {
+     "path": "libexec",
+     "url": "/pkg/emacs/31.1/libexec.tar.gz",
+     "sha256": "118f2259d3ab11942341bc88fa5b13de32b02b5caa1509ca7ea0cf166a8950b9",
+     "size": 3068074,
+     "unpack": "tar.gz"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/emacs/31.1/share.tar.gz",
+     "sha256": "29541a91c56e22639a6b9afec5f2c152a3b00158a51699b3a02dcbfcd1bdbb81",
+     "size": 21917114,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "emacs": {
+     "file": "bin/emacs"
+    },
+    "emacsclient": {
+     "file": "bin/emacsclient"
+    },
+    "etags": {
+     "file": "bin/etags"
+    },
+    "ebrowse": {
+     "file": "bin/ebrowse"
+    }
+   },
+   "links": {
+    "/usr/share/emacs": "share/emacs",
+    "/usr/libexec/emacs": "libexec/emacs",
+    "/usr/share/man/man1/ebrowse.1": "share/man/man1/ebrowse.1",
+    "/usr/share/man/man1/emacs.1": "share/man/man1/emacs.1",
+    "/usr/share/man/man1/emacsclient.1": "share/man/man1/emacsclient.1",
+    "/usr/share/man/man1/etags.1": "share/man/man1/etags.1"
    },
    "needs": [
     "x86"
@@ -2011,8 +2148,8 @@
     {
      "path": "share",
      "url": "/pkg/nano/9.2/share.tar.gz",
-     "sha256": "403cc279ddbe1caf6ad4b8b80c78540d7392c1c43ba9d74a1110dc9d20200823",
-     "size": 18974,
+     "sha256": "3c2ee04dc38ec45d806be6c44e14025f97c09e71058b6ded0b3a4a1d4b7af317",
+     "size": 37767,
      "unpack": "tar.gz"
     }
    ],
@@ -2023,7 +2160,9 @@
    },
    "links": {
     "/etc/nanorc": "etc/nanorc",
-    "/usr/share/nano": "share/nano"
+    "/usr/share/nano": "share/nano",
+    "/usr/share/man/man1/nano.1": "share/man/man1/nano.1",
+    "/usr/share/man/man5/nanorc.5": "share/man/man5/nanorc.5"
    },
    "needs": [
     "x86"
@@ -2068,6 +2207,13 @@
      "sha256": "4e6088c78a73c5ede591bbac05f22daf93c9d15298edea4ca2e418a49dd007df",
      "size": 41217,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/diffutils/3.12/share.tar.gz",
+     "sha256": "057b2e4ccd80ce7c72856e7f0a6033234f4e9fd7e2bffded0a83d73e6ab943f0",
+     "size": 4060,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -2086,7 +2232,13 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/cmp.1": "share/man/man1/cmp.1",
+    "/usr/share/man/man1/diff.1": "share/man/man1/diff.1",
+    "/usr/share/man/man1/diff3.1": "share/man/man1/diff3.1",
+    "/usr/share/man/man1/sdiff.1": "share/man/man1/sdiff.1"
+   }
   },
   {
    "name": "patch",
@@ -2106,6 +2258,13 @@
      "sha256": "3873d3488e4376312b38aa340691cec6e618fbbedabb923d662673e5fbec51b2",
      "size": 88181,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/patch/2.8/share.tar.gz",
+     "sha256": "9301882e428ca8f976566eaa738a61f159201e7b4eb0902aca6ee8a5aee2b078",
+     "size": 11556,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -2115,7 +2274,10 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/patch.1": "share/man/man1/patch.1"
+   }
   },
   {
    "name": "gawk",
@@ -2135,6 +2297,13 @@
      "sha256": "ad88f41ffa7af3aafe6735e66b6de57fdcbab1c69da8e573b15f2f43e0e7675e",
      "size": 353632,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/gawk/5.4.1/share.tar.gz",
+     "sha256": "7609c800c5977565c712e5a719309733131d46b8c3e601eb34e3b8313c274544",
+     "size": 20299,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -2147,7 +2316,11 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/awk.1": "share/man/man1/awk.1",
+    "/usr/share/man/man1/gawk.1": "share/man/man1/gawk.1"
+   }
   },
   {
    "name": "sed",
@@ -2167,6 +2340,13 @@
      "sha256": "e195bc1b7f02ca27958418e579d507a6a3675f392b3ea677b95aadb925bc703a",
      "size": 101327,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/sed/4.10/share.tar.gz",
+     "sha256": "5a37a25964c907e0f0366a796629cb3ff2f5a3bff691bbfb1ac2da43288c1a09",
+     "size": 4261,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -2176,7 +2356,10 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/sed.1": "share/man/man1/sed.1"
+   }
   },
   {
    "name": "grep",
@@ -2196,6 +2379,13 @@
      "sha256": "768e12b30ec7be5fd0b31bf8dc1ee8435186860a65643038680ccd7306813c89",
      "size": 116331,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/grep/3.12/share.tar.gz",
+     "sha256": "3bcad41f31e1ff8a5113ac26afba5af23c637efb529904d42c4872881f53336d",
+     "size": 11157,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -2217,7 +2407,12 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/egrep.1": "share/man/man1/egrep.1",
+    "/usr/share/man/man1/fgrep.1": "share/man/man1/fgrep.1",
+    "/usr/share/man/man1/grep.1": "share/man/man1/grep.1"
+   }
   },
   {
    "name": "findutils",
@@ -2244,6 +2439,13 @@
      "sha256": "f447533891daf3918aad5d1b1dfb99f93d0e9e991d5be96c246913182690e8a0",
      "size": 49997,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/findutils/4.11.0/share.tar.gz",
+     "sha256": "b849210a917fb2eb390473e1926a6999472d7368f66974c71781580e1bd9d720",
+     "size": 33276,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -2256,7 +2458,11 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/find.1": "share/man/man1/find.1",
+    "/usr/share/man/man1/xargs.1": "share/man/man1/xargs.1"
+   }
   },
   {
    "name": "bc",
@@ -2283,6 +2489,13 @@
      "sha256": "b0519a87584254973864f87f60dfcbbd3aa697c8191383f461854083e049ed61",
      "size": 37755,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/bc/1.08.2/share.tar.gz",
+     "sha256": "4e66cecc9edde4147a35b8d872a3100a5b3d77885a0280b2a744ec9a6928f796",
+     "size": 17416,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -2295,7 +2508,11 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/bc.1": "share/man/man1/bc.1",
+    "/usr/share/man/man1/dc.1": "share/man/man1/dc.1"
+   }
   },
   {
    "name": "tar",
@@ -2315,6 +2532,13 @@
      "sha256": "379da183d7628c118703ac2dd7c571659162e8ea8fb4e754e8b03985339a26ff",
      "size": 370541,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/tar/1.35/share.tar.gz",
+     "sha256": "f563a033af26a67015d498cc9c78dd518f55269bfcb49bf722c027bbdd1bbce3",
+     "size": 13676,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -2324,7 +2548,10 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/tar.1": "share/man/man1/tar.1"
+   }
   },
   {
    "name": "gzip",
@@ -2344,6 +2571,13 @@
      "sha256": "c3d005f06a02a5e6ef70e2d12062a0ab7fb39f6dd534ee238b1f185b67f32a32",
      "size": 71669,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/gzip/1.15/share.tar.gz",
+     "sha256": "960662ab58598784f9c4cae2f585991feb264f227adaa5f1673d457fe52134d4",
+     "size": 6685,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -2365,7 +2599,12 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/gunzip.1": "share/man/man1/gunzip.1",
+    "/usr/share/man/man1/gzip.1": "share/man/man1/gzip.1",
+    "/usr/share/man/man1/zcat.1": "share/man/man1/zcat.1"
+   }
   },
   {
    "name": "tree",
@@ -2385,6 +2624,13 @@
      "sha256": "b772a8cfd49be5fc82b125cad674eb511734e0333dd5ede31f17fad1a3a940db",
      "size": 57337,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/tree/2.2.1/share.tar.gz",
+     "sha256": "504cef07362f092c1340403daf999a11e1d0abc4307c8877a8f9d01d6e5d7797",
+     "size": 6583,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -2394,7 +2640,10 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/tree.1": "share/man/man1/tree.1"
+   }
   },
   {
    "name": "file",
@@ -2418,8 +2667,8 @@
     {
      "path": "share",
      "url": "/pkg/file/5.46/share.tar.gz",
-     "sha256": "6d26f7f641ef9c5e576683f60642f83ed7a1200163943d7d3db44156f95de54f",
-     "size": 445125,
+     "sha256": "eb8cb858d26f9f43b83dfacbe1b02efbdcec91c865bc551bc6dfd97a37a1ae5e",
+     "size": 454092,
      "unpack": "tar.gz"
     }
    ],
@@ -2429,7 +2678,8 @@
     }
    },
    "links": {
-    "/usr/share/misc/magic.mgc": "share/misc/magic.mgc"
+    "/usr/share/misc/magic.mgc": "share/misc/magic.mgc",
+    "/usr/share/man/man1/file.1": "share/man/man1/file.1"
    },
    "needs": [
     "x86"
@@ -2453,6 +2703,13 @@
      "sha256": "23fdc6815cc494d030733d69a4f3f001bc3b7588f7f70743e36dc3a8c86572a1",
      "size": 129108,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/xz/5.8.1/share.tar.gz",
+     "sha256": "5531d09e11034e3016dab8fa9aaaf9f8ef80fe52042775d5336e4e38fa74dff5",
+     "size": 24336,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -2480,7 +2737,13 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/lzma.1": "share/man/man1/lzma.1",
+    "/usr/share/man/man1/unxz.1": "share/man/man1/unxz.1",
+    "/usr/share/man/man1/xz.1": "share/man/man1/xz.1",
+    "/usr/share/man/man1/xzcat.1": "share/man/man1/xzcat.1"
+   }
   },
   {
    "name": "zstd",
@@ -2500,6 +2763,13 @@
      "sha256": "7e2563c9206ea6fc179fabff89fce258fe76f309b65bf04622ecc55c62627122",
      "size": 289114,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/zstd/1.5.7/share.tar.gz",
+     "sha256": "3d1b3061c220364987e37dbacbfad037377319d9e26c34f1bd8451dd14d3e639",
+     "size": 11792,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -2521,7 +2791,12 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/unzstd.1": "share/man/man1/unzstd.1",
+    "/usr/share/man/man1/zstd.1": "share/man/man1/zstd.1",
+    "/usr/share/man/man1/zstdcat.1": "share/man/man1/zstdcat.1"
+   }
   },
   {
    "name": "zip",
@@ -2541,6 +2816,13 @@
      "sha256": "99ce8c822a667dfc774dd1ec594cf7c5a4a0e0ed97a43b1ed72d6887b2fdf7aa",
      "size": 109429,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/zip/3.0/share.tar.gz",
+     "sha256": "a6df2faa778f92cb1e7a51fb60269c78e14759e4ab8d2549a018f8c06d70fbac",
+     "size": 28649,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -2550,7 +2832,10 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/zip.1": "share/man/man1/zip.1"
+   }
   },
   {
    "name": "unzip",
@@ -2570,6 +2855,13 @@
      "sha256": "8ece210ad1eaafb29617a5bafdb9401c37e75b924ff7ee758565c7c5b49be58e",
      "size": 82772,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/unzip/6.0/share.tar.gz",
+     "sha256": "1645fe83511b043acb9e092d40e24e4426b791b4788bfda1dcc73c89fbd7f06e",
+     "size": 26017,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -2582,7 +2874,11 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/unzip.1": "share/man/man1/unzip.1",
+    "/usr/share/man/man1/zipinfo.1": "share/man/man1/zipinfo.1"
+   }
   },
   {
    "name": "ca-certificates",
@@ -2767,6 +3063,13 @@
      "sha256": "0385d29cbb9fb58e6e4cbc0faf89c69b4d5fab21bcd7af9ad08a4f6b74fabeef",
      "size": 1706074,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/fd/10.3.0/share.tar.gz",
+     "sha256": "83f537df46a3ae689964ed163fe1af78eecfb26b6851adfe329e6d9d5833fb85",
+     "size": 6753,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -2776,7 +3079,10 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/fd.1": "share/man/man1/fd.1"
+   }
   },
   {
    "name": "bat",
@@ -2796,6 +3102,13 @@
      "sha256": "05b6f2e29abe08b019b34c37e53ff19577b8469f50af28f6568ecb7723725bd7",
      "size": 3518050,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/bat/0.26.1/share.tar.gz",
+     "sha256": "05b196d8182a546165a1e8dd9d7b1fa2e9a3c6d90e95d20cf34d906440069f7d",
+     "size": 5328,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -2805,7 +3118,10 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/bat.1": "share/man/man1/bat.1"
+   }
   },
   {
    "name": "fzf",
@@ -2854,6 +3170,13 @@
      "sha256": "f699fd3c9da635b055ae0e0043b9850e006b68660a98feb592809d58098e21e6",
      "size": 5374164,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/yq/4.52.1/share.tar.gz",
+     "sha256": "9aaee36c01db1523d69cab8ec622e3977e6d657d939bcdf451539ea0066d618d",
+     "size": 46729,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -2863,7 +3186,10 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/yq.1": "share/man/man1/yq.1"
+   }
   },
   {
    "name": "tmux",
@@ -2883,6 +3209,13 @@
      "sha256": "b91c97c91627d47bafdab346c32cc6ba2a74529f783bc4b6b9e02fb99147a06c",
      "size": 608839,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/tmux/3.8/share.tar.gz",
+     "sha256": "56a9b5aab7aa86ec12e641527ce62717800b54be08124cbfc48961d363ea889c",
+     "size": 61933,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -2892,7 +3225,10 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/tmux.1": "share/man/man1/tmux.1"
+   }
   },
   {
    "name": "screen",
@@ -2912,6 +3248,13 @@
      "sha256": "49a143f2af8da4145644c169cc09f7ba4d9cb36952226a0ed72457ac1d6b259d",
      "size": 263344,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/screen/5.0.2/share.tar.gz",
+     "sha256": "0d257ba60f4b2e5fee07f98842447f7b4f1873b977b6d7ba8b45d2edde671529",
+     "size": 56060,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -2921,7 +3264,10 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/screen.1": "share/man/man1/screen.1"
+   }
   },
   {
    "name": "htop",
@@ -2941,6 +3287,13 @@
      "sha256": "f3d4ff1b8f2b283162979e808606be17ddf3d93ac5fec37afde36bd81353270d",
      "size": 256209,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/htop/3.5.3/share.tar.gz",
+     "sha256": "c6bb18cf052d465a5719f48a1a1a9be31e76a8e6b93c644da11d410195d937bc",
+     "size": 10058,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -2950,7 +3303,10 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/htop.1": "share/man/man1/htop.1"
+   }
   },
   {
    "name": "procps",
@@ -3026,6 +3382,13 @@
      "sha256": "cf03e9a7c2fae99e84447548d81090187b9bc6e0ab5a675ef5063f2936f65e12",
      "size": 149858,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/procps/4.0.7/share.tar.gz",
+     "sha256": "958840ceff0bcfa61e7d2a631b7fdfe78930b9de74b786a5a5dbef7b3fbcd69f",
+     "size": 61627,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -3062,7 +3425,19 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/free.1": "share/man/man1/free.1",
+    "/usr/share/man/man1/pgrep.1": "share/man/man1/pgrep.1",
+    "/usr/share/man/man1/pidof.1": "share/man/man1/pidof.1",
+    "/usr/share/man/man1/pkill.1": "share/man/man1/pkill.1",
+    "/usr/share/man/man1/ps.1": "share/man/man1/ps.1",
+    "/usr/share/man/man1/top.1": "share/man/man1/top.1",
+    "/usr/share/man/man1/uptime.1": "share/man/man1/uptime.1",
+    "/usr/share/man/man1/w.1": "share/man/man1/w.1",
+    "/usr/share/man/man1/watch.1": "share/man/man1/watch.1",
+    "/usr/share/man/man8/vmstat.8": "share/man/man8/vmstat.8"
+   }
   },
   {
    "name": "wget",
@@ -3085,6 +3460,13 @@
      "sha256": "d59f17b701adc44a1e05dcfcc005d4f0c98ebbfa06bc1303403bb8f24534d0d0",
      "size": 2188313,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/wget/1.25.0/share.tar.gz",
+     "sha256": "04f1f5be68d244b985e739d1daf43534e705f67346b7c28787a1267ff18c323f",
+     "size": 36192,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -3094,7 +3476,10 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/wget.1": "share/man/man1/wget.1"
+   }
   },
   {
    "name": "rsync",
@@ -3114,6 +3499,13 @@
      "sha256": "6c19c0911a980cfa696a96fd60b2b6b8b59a0075ae02cbf77340f7fccbe05332",
      "size": 426549,
      "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/rsync/3.5.1/share.tar.gz",
+     "sha256": "678cda45f485c90acb187313103266437decade538cdc186e8577f02fbd7fe69",
+     "size": 102818,
+     "unpack": "tar.gz"
     }
    ],
    "bin": {
@@ -3123,7 +3515,11 @@
    },
    "needs": [
     "x86"
-   ]
+   ],
+   "links": {
+    "/usr/share/man/man1/rsync.1": "share/man/man1/rsync.1",
+    "/usr/share/man/man5/rsyncd.conf.5": "share/man/man5/rsyncd.conf.5"
+   }
   },
   {
    "name": "mandoc",
@@ -3182,6 +3578,246 @@
     "/usr/share/man/man7/roff.7": "share/man/man7/roff.7",
     "/usr/share/man/man7/tbl.7": "share/man/man7/tbl.7",
     "/usr/share/man/man8/makewhatis.8": "share/man/man8/makewhatis.8"
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
+   "name": "openssh",
+   "version": "10.6p1",
+   "description": "OpenSSH client: ssh, scp, sftp, ssh-keygen, ssh-agent, ssh-add, ssh-keyscan (OpenSSL 3.5; static x86-64 build)",
+   "license": "BSD-2-Clause AND BSD-3-Clause AND ISC",
+   "source": "https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.6p1.tar.gz",
+   "homepage": "https://www.openssh.com/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/openssh.sh",
+   "section": "net",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/scp",
+     "url": "/pkg/openssh/10.6p1/scp.gz",
+     "sha256": "c6232671bc78791a5b0a509890db88f61c4d605894c826b65d65ba1ca40bcd4f",
+     "size": 140104,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/sftp",
+     "url": "/pkg/openssh/10.6p1/sftp.gz",
+     "sha256": "3f37ad9650f712f8d90c45dd6b1ff99321bdf65cad0b8308cbb1b6bae4e43533",
+     "size": 136148,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/ssh",
+     "url": "/pkg/openssh/10.6p1/ssh.gz",
+     "sha256": "43155574c27911ebd9d8e434494ae45125c0a00af41a9bc6f3a5bf842c873fce",
+     "size": 1881452,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/ssh-add",
+     "url": "/pkg/openssh/10.6p1/ssh-add.gz",
+     "sha256": "2f0267a54c6468f1ab417e9fffa9449c2a865e946c85f29bd61adbc3ef4cb28a",
+     "size": 1651562,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/ssh-agent",
+     "url": "/pkg/openssh/10.6p1/ssh-agent.gz",
+     "sha256": "f2a0dee8e317f3f9796f16024dd5e2a073d96d1aaae325d5dbedd6d31325daf0",
+     "size": 1642193,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/ssh-keygen",
+     "url": "/pkg/openssh/10.6p1/ssh-keygen.gz",
+     "sha256": "438253e4b86eca653cf271d85050bd15e640b1cd361e460640aaa7000b695bdb",
+     "size": 1695535,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/ssh-keyscan",
+     "url": "/pkg/openssh/10.6p1/ssh-keyscan.gz",
+     "sha256": "c5280bd6d4379d3141a84d28a85cbb19845417ca4962cc8b39894db28bf5750f",
+     "size": 1716817,
+     "unpack": "gzip"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/openssh/10.6p1/share.tar.gz",
+     "sha256": "9a324d8fcf9a0d1a78a270e59fc21d5d544e3849200488f9f41389d1619eab70",
+     "size": 60509,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "ssh": {
+     "file": "bin/ssh"
+    },
+    "scp": {
+     "file": "bin/scp"
+    },
+    "sftp": {
+     "file": "bin/sftp"
+    },
+    "ssh-keygen": {
+     "file": "bin/ssh-keygen"
+    },
+    "ssh-agent": {
+     "file": "bin/ssh-agent"
+    },
+    "ssh-add": {
+     "file": "bin/ssh-add"
+    },
+    "ssh-keyscan": {
+     "file": "bin/ssh-keyscan"
+    }
+   },
+   "needs": [
+    "x86"
+   ],
+   "links": {
+    "/usr/share/man/man1/scp.1": "share/man/man1/scp.1",
+    "/usr/share/man/man1/sftp.1": "share/man/man1/sftp.1",
+    "/usr/share/man/man1/ssh-add.1": "share/man/man1/ssh-add.1",
+    "/usr/share/man/man1/ssh-agent.1": "share/man/man1/ssh-agent.1",
+    "/usr/share/man/man1/ssh-keygen.1": "share/man/man1/ssh-keygen.1",
+    "/usr/share/man/man1/ssh-keyscan.1": "share/man/man1/ssh-keyscan.1",
+    "/usr/share/man/man1/ssh.1": "share/man/man1/ssh.1",
+    "/usr/share/man/man5/ssh_config.5": "share/man/man5/ssh_config.5"
+   }
+  },
+  {
+   "name": "gnupg",
+   "version": "2.5.24",
+   "description": "GnuPG: gpg, gpgv, gpg-agent, gpgsm, gpgtar, gpgconf and pinentry (curses, tty); no keyserver access (static x86-64 build)",
+   "license": "GPL-3.0-or-later AND LGPL-2.1-or-later",
+   "source": "https://www.gnupg.org/ftp/gcrypt/gnupg/gnupg-2.5.24.tar.bz2",
+   "homepage": "https://gnupg.org/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/gnupg.sh",
+   "section": "utils",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/gpg",
+     "url": "/pkg/gnupg/2.5.24/gpg.gz",
+     "sha256": "18998be7a89c4fa18242ec6153905550c225b76795de471c39c56d4803aaf2b9",
+     "size": 1161012,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/gpg-agent",
+     "url": "/pkg/gnupg/2.5.24/gpg-agent.gz",
+     "sha256": "21d26898ff2d9302defab215a7ed8107d0c956b5b5d9ecf1aa6fb4f5a7366ef9",
+     "size": 835610,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/gpg-card",
+     "url": "/pkg/gnupg/2.5.24/gpg-card.gz",
+     "sha256": "1ed59ffcd6898a2259f8e9d1037b38d39c4a9c3a4f9102695962c08c9f4599f8",
+     "size": 758252,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/gpg-connect-agent",
+     "url": "/pkg/gnupg/2.5.24/gpg-connect-agent.gz",
+     "sha256": "977da17e20ae06d3e9875c9e1a61647b97417824f15c417811b0eb2aa14bb99a",
+     "size": 711828,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/gpgconf",
+     "url": "/pkg/gnupg/2.5.24/gpgconf.gz",
+     "sha256": "9f803be7115c792244d40dd15f599d6ae412e59a12cb6ab07d8e381ac820fc77",
+     "size": 704991,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/gpgsm",
+     "url": "/pkg/gnupg/2.5.24/gpgsm.gz",
+     "sha256": "66fe4c3b3d9a42d8e615afe94441d8937e144e86ad6bafa80e02b71020b4d067",
+     "size": 971911,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/gpgtar",
+     "url": "/pkg/gnupg/2.5.24/gpgtar.gz",
+     "sha256": "18139a907f50c4d5d3ec9257e84e5b7e60df11211fcf394b7bc20fba29877b31",
+     "size": 692808,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/gpgv",
+     "url": "/pkg/gnupg/2.5.24/gpgv.gz",
+     "sha256": "80b0c9d1ded3e1736b8e9c7cad2f695f8180bfe91ad11d8e4fffc3c582714615",
+     "size": 919412,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/pinentry-curses",
+     "url": "/pkg/gnupg/2.5.24/pinentry-curses.gz",
+     "sha256": "e59381be3630517fe8feb8a29d12ad94ddc2a15e0676339c1475d053299d51e0",
+     "size": 366014,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/pinentry-tty",
+     "url": "/pkg/gnupg/2.5.24/pinentry-tty.gz",
+     "sha256": "12ec2a3ecda2b9272dbded907d4e7f38ffef5fcb314acb27092eccfe866ea0ed",
+     "size": 123503,
+     "unpack": "gzip"
+    },
+    {
+     "path": "libexec",
+     "url": "/pkg/gnupg/2.5.24/libexec.tar.gz",
+     "sha256": "e68afc0490606358ae4862caf3a18df42425952a2b5759afee0d5556fca611e1",
+     "size": 2104075,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "gpg": {
+     "file": "bin/gpg"
+    },
+    "gpgv": {
+     "file": "bin/gpgv"
+    },
+    "gpg-agent": {
+     "file": "bin/gpg-agent"
+    },
+    "gpgconf": {
+     "file": "bin/gpgconf"
+    },
+    "gpg-connect-agent": {
+     "file": "bin/gpg-connect-agent"
+    },
+    "gpgsm": {
+     "file": "bin/gpgsm"
+    },
+    "gpgtar": {
+     "file": "bin/gpgtar"
+    },
+    "gpg-card": {
+     "file": "bin/gpg-card"
+    },
+    "pinentry-curses": {
+     "file": "bin/pinentry-curses"
+    },
+    "pinentry-tty": {
+     "file": "bin/pinentry-tty"
+    },
+    "pinentry": {
+     "file": "bin/pinentry-curses"
+    }
+   },
+   "links": {
+    "/usr/libexec/gpg-protect-tool": "libexec/gpg-protect-tool",
+    "/usr/libexec/gpg-preset-passphrase": "libexec/gpg-preset-passphrase",
+    "/usr/libexec/gpg-check-pattern": "libexec/gpg-check-pattern"
    },
    "needs": [
     "x86"

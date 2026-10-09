@@ -94,6 +94,8 @@ const enc = new TextEncoder();
 const SHELL_PROGRAMS = new Set(['echo', 'printf', 'test', '[', 'true', 'false', 'pwd', 'kill']);
 
 function normalize(path: string): string {
+  // Already normal (absolute, no empty, . or .. segments, no trailing slash): most paths
+  if (path.charCodeAt(0) === 47 && !/\/\/|\/\.\.?(?:\/|$)|.\/$/.test(path)) return path;
   const stack: string[] = [];
   for (const part of path.split('/')) {
     if (part === '' || part === '.') continue;
@@ -119,6 +121,8 @@ export class Kernel {
   socketPaths?: Set<string>;
   /** The page's shell: builtins run in forks of it. */
   shell?: Shell;
+  /** uname(2) nodename (the prompt's \h). */
+  hostname = 'shiro';
   readonly procs = new Map<number, Process>();
   readonly init: Process;
   private loaders: Loader[] = [];
@@ -1041,18 +1045,17 @@ export class Kernel {
     return f.tryWrite && (args[1] >>> 0) <= A.PIPE_BUF ? f : undefined;
   }
 
-  async syscall(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
+  syscall(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
     // Time inside syscalls is time the process isn't computing (/proc CPU estimate)
     const t0 = Date.now();
     proc.syscalls++;
     // While in a syscall the process counts as sleeping (S in /proc/PID/stat)
     proc.inSyscall++;
-    try {
-      return await this.syscallImpl(proc, nr, args, data);
-    } finally {
-      proc.inSyscall--;
-      proc.kernelMs += Date.now() - t0;
-    }
+    const done = () => { proc.inSyscall--; proc.kernelMs += Date.now() - t0; };
+    // The caller awaits the call itself: the bookkeeping adds no await hop to it
+    const p = this.syscallImpl(proc, nr, args, data);
+    p.then(done, done);
+    return p;
   }
 
   private async syscallImpl(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array): Promise<number> {
@@ -1598,6 +1601,13 @@ export class Kernel {
           const dv = new DataView(data.buffer, data.byteOffset, 16);
           dv.setBigInt64(0, BigInt(Math.floor(ms / 1000)), true);
           dv.setBigInt64(8, BigInt(Math.floor((ms % 1000) * 1e6)), true);
+          return 0;
+        }
+        case A.SYS_uname: { // → struct utsname (engines that report their own machine take the names from here)
+          if (data.length < A.UTSNAME_FIELD * 6) return -A.EFAULT;
+          const fields = ['Linux', this.hostname, '6.1.0-shiro', '#1 Shiro', 'wasm32', '(none)'];
+          data.fill(0, 0, A.UTSNAME_FIELD * 6);
+          fields.forEach((f, i) => data.set(enc.encode(f).subarray(0, A.UTSNAME_FIELD - 1), i * A.UTSNAME_FIELD));
           return 0;
         }
         case A.SYS_getdents64:

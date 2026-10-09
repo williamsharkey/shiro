@@ -8,3 +8,6 @@ tar xJf "$DEB" -C "$SRC"
 setup_musl
 make -C "$SRC" -f unix/Makefile generic CC="$CC" LFLAGS1="$LDFLAGS" CFLAGS_NOOPT="-I. -DUNIX $CFLAGS -DLARGE_FILE_SUPPORT -DUNICODE_SUPPORT" >"$SRC/make.log" 2>&1
 install_bin "$SRC/zip" zip/bin/zip
+
+# Manual pages (man, from pkg install mandoc)
+install_man zip "$SRC/man/zip.1"

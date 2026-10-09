@@ -5,3 +5,6 @@ SRC=$(gnu_src patch 2.8 f87cee69eec2b4fcbf60a396b030ad6aa3415f192aa5f7ee84cad5e1
 setup_musl
 configure_make "$SRC"
 install_bin "$SRC/src/patch" patch/bin/patch
+
+# Manual pages (man, from pkg install mandoc)
+install_man patch "$SRC/patch.man:patch.1"

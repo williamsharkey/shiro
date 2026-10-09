@@ -6,3 +6,6 @@ setup_musl
 configure_make "$SRC"
 install_bin "$SRC/find/find" findutils/bin/find
 install_bin "$SRC/xargs/xargs" findutils/bin/xargs
+
+# Manual pages (man, from pkg install mandoc)
+install_man findutils "$SRC/find/find.1" "$SRC/xargs/xargs.1"

@@ -591,12 +591,15 @@ describe('tmux', () => {
     expect(term.screen).toContain('[detached (from session main)]');
     // Scripted: the server kept running
     expect((await sh("tmux list-panes -t main -F '#{pane_index}'")).out).toBe('0\n1\n');
+    // uname's nodename is the kernel's hostname (Blink patch 0025), not emscripten's
+    expect((await sh("tmux display -p -t main '#{host}'")).out).toBe('shiro\n');
     await sh("tmux send-keys -t main.0 'echo scripted > /home/user/w/from-tmux.txt' Enter");
     for (let i = 0; i < 200 && !(await fs.exists('/home/user/w/from-tmux.txt')); i++) await new Promise((r) => setTimeout(r, 50));
     expect(await fs.readFile('/home/user/w/from-tmux.txt', 'utf8')).toBe('scripted\n');
     // Re-attach on a new terminal; ending the session from outside detaches it
     const again = onTerminal('tmux attach -t main', fakeTerminal(30, 100));
     await until(() => again.term.screen.includes('pane-42') && again.term.screen.includes('scripted'), 'the re-attached session');
+    await until(() => again.term.screen.includes('[main]'), 'the status line, without a key press');
     expect((await sh('tmux kill-session -t main')).exitCode).toBe(0);
     expect(await again.done).toBe(0);
     expect(again.term.screen).toContain('[exited]');
@@ -722,5 +725,139 @@ describe('man (mandoc)', () => {
     expect((await sh('apropos mandoc 2>&1; echo rc=$?')).out).toMatch(/rc=[1-9]\n$/); // no database yet
     expect((await sh('makewhatis /usr/share/man && whatis mandoc')).out).toMatch(/^mandoc\(1\) - format manual pages\n/m);
     expect((await sh('apropos -s 7 roff')).out).toMatch(/roff\(7\) - roff language reference/);
+    // other packages bring their pages; aliases are .so redirects
+    await install('xz', 'procps');
+    expect((await sh('man -w xz vmstat')).out).toBe('/usr/share/man/man1/xz.1\n/usr/share/man/man8/vmstat.8\n');
+    expect((await sh('MANWIDTH=70 man -T ascii xzcat')).out.replace(/.\x08/g, '')).toMatch(/^XZ\(1\) +XZ Utils +XZ\(1\)\n/);
+    expect((await sh('makewhatis /usr/share/man && whatis ps')).out).toMatch(/^ps\(1\) - report a snapshot of the current processes/m);
+  }, 180_000);
+});
+
+describe('openssh (client)', () => {
+  it('makes and reads keys, prints its config, and reaches a server (banner exchange)', async () => {
+    await install('openssh');
+    expect((await sh('ssh -V 2>&1')).out).toMatch(/^OpenSSH_10\.6p1, OpenSSL 3\.5\.9 /);
+    await fs.mkdir('/home/user/.ssh', { recursive: true });
+    expect((await sh("ssh-keygen -q -t ed25519 -N '' -C t@shiro -f /home/user/.ssh/id_ed25519; echo rc=$?")).out).toBe('rc=0\n');
+    // the private key is 0600 (ssh-keygen's umask 077 reaches the kernel); ls shows it
+    expect((await sh('ls -l /home/user/.ssh/id_ed25519')).out).toMatch(/^-rw------- /);
+    expect((await sh('ssh-keygen -l -f /home/user/.ssh/id_ed25519.pub')).out).toMatch(/^256 SHA256:[A-Za-z0-9+/]{43} t@shiro \(ED25519\)\n$/);
+    const pub = await fs.readFile('/home/user/.ssh/id_ed25519.pub', 'utf8');
+    expect((await sh('ssh-keygen -y -f /home/user/.ssh/id_ed25519')).out.trim()).toBe((pub as string).trim());
+    // ssh-agent daemonizes (fork, setsid, setrlimit(RLIMIT_CORE)) on an AF_UNIX socket; ssh-add talks to it
+    expect((await sh('ssh-agent -s > /tmp/agent.env; cat /tmp/agent.env')).out).toMatch(/^SSH_AUTH_SOCK=\S+; export SSH_AUTH_SOCK;\nSSH_AGENT_PID=\d+; export SSH_AGENT_PID;\necho Agent pid \d+;\n$/);
+    const agent = await sh('. /tmp/agent.env >/dev/null; ssh-add /home/user/.ssh/id_ed25519 2>&1; ssh-add -l; ssh-agent -k >/dev/null; echo rc=$?');
+    expect(agent.out).toMatch(/^Identity added: \/home\/user\/\.ssh\/id_ed25519 \(t@shiro\)\n256 SHA256:\S+ t@shiro \(ED25519\)\nrc=0\n$/);
+    expect((await sh('ssh -G -p 2200 bob@example.com | grep -E "^(hostname|port|user) "')).out).toBe('user bob\nhostname example.com\nport 2200\n');
+    // a server on a kernel socket: ssh sends its identification and reads the server's
+    const { netStack } = await import('@shiro/kernel/net');
+    const { AF_INET, SOCK_STREAM } = await import('@shiro/kernel/abi');
+    const l = netStack.socket(AF_INET, SOCK_STREAM, 0) as any;
+    expect(l.bind({ family: AF_INET, address: '127.0.0.1', port: 18022 })).toBe(0);
+    expect(l.listen(1)).toBe(0);
+    const server = (async () => {
+      const c = await l.accept();
+      await c.write(new TextEncoder().encode('SSH-2.0-ShiroTest\r\n'));
+      const buf = new Uint8Array(256);
+      const n = await c.read(buf);
+      await c.close();
+      return new TextDecoder().decode(buf.subarray(0, n));
+    })();
+    const r = await sh('ssh -o BatchMode=yes -o StrictHostKeyChecking=no -p 18022 127.0.0.1 true 2>&1; echo rc=$?');
+    expect(await server).toMatch(/^SSH-2\.0-OpenSSH_10\.6\r\n/);
+    expect(r.out).toMatch(/rc=255\n$/);
+    await l.close();
+    expect((await sh('ssh -o ConnectTimeout=3 -p 18023 127.0.0.1 true 2>&1')).out).toMatch(/Connection refused/);
+  }, 180_000);
+});
+
+describe('gnupg', () => {
+  it('makes a key, signs, verifies, encrypts and decrypts; asks for the passphrase with pinentry on the tty', async () => {
+    await install('gnupg');
+    expect((await sh('gpg --version')).out).toMatch(/^gpg \(GnuPG\) 2\.5\.24\nlibgcrypt 1\.12\.4\n/);
+    const batch = 'gpg -q --batch --pinentry-mode loopback --passphrase pw';
+    // no "insecure memory" warning: mlock succeeds (Blink patch 0024)
+    expect((await sh(`${batch} --quick-gen-key 'Test User <t@shiro>' default default never 2>&1 | grep -c insecure`)).out).toBe('0\n');
+    expect((await sh("gpg -k --with-colons t@shiro | cut -d: -f1,4,12 | grep -E '^(pub|sub)'")).out).toBe('pub:22:scESC\nsub:18:e\n');
+    await fs.writeFile('/home/user/w/m.txt', 'hello gpg\n');
+    expect((await sh(`${batch} --armor --detach-sign m.txt; gpg --verify m.txt.asc m.txt 2>&1`)).out).toMatch(/Good signature from "Test User <t@shiro>" \[ultimate\]/);
+    expect((await sh('gpg --export t@shiro > pub.gpg; gpgv --keyring ./pub.gpg m.txt.asc m.txt 2>&1; echo rc=$?')).out).toMatch(/Good signature[^]*rc=0\n$/);
+    await fs.writeFile('/home/user/w/m.txt', 'hello gpg, changed\n');
+    expect((await sh('gpg --verify m.txt.asc m.txt 2>&1; echo rc=$?')).out).toMatch(/BAD signature[^]*rc=1\n$/);
+    expect((await sh('gpg -q --batch -r t@shiro --armor -e -o m.gpg m.txt; head -1 m.gpg')).out).toBe('-----BEGIN PGP MESSAGE-----\n');
+    expect((await sh(`${batch} -d m.gpg`)).out).toBe('hello gpg, changed\n');
+    expect((await sh('gpg -q --batch --passphrase s3 -c -o s.gpg m.txt && gpg -q --batch --passphrase s3 -d s.gpg')).out).toBe('hello gpg, changed\n');
+    expect((await sh("gpg-connect-agent 'getinfo version' /bye")).out).toBe('D 2.5.24\nOK\n');
+    // The agent forgets the passphrase; decrypting on the terminal runs pinentry-curses there
+    expect((await sh('gpgconf --reload gpg-agent; echo rc=$?')).out).toBe('rc=0\n');
+    const { term, done } = onTerminal('gpg -q -d m.gpg');
+    await until(() => term.screen.includes('Passphrase:'), 'the pinentry dialog');
+    term.type('pw\r');
+    expect(await done).toBe(0);
+    expect(term.screen).toContain('hello gpg, changed');
+    expect((await sh('gpgconf --kill gpg-agent; echo rc=$?')).out).toBe('rc=0\n');
+  }, 180_000);
+});
+
+describe('neovim', () => {
+  it('runs headless Lua and treesitter (parsers linked in)', async () => {
+    await install('neovim');
+    expect((await sh('nvim --version')).out).toMatch(/^NVIM v0\.12\.5\n[^]*Lua 5\.1\n/);
+    await fs.writeFile('/home/user/w/n.txt', 'hello\nworld\n');
+    expect((await sh("nvim --headless -c '%s/world/there/' -c wq n.txt >/dev/null 2>&1; cat n.txt")).out).toBe('hello\nthere\n');
+    const ts = 'lua local p=vim.treesitter.get_string_parser("local x = 1","lua"); io.stdout:write(p:parse()[1]:root():sexpr().."\\n")';
+    expect((await sh(`nvim --headless -c '${ts}' -c q`)).out).toMatch(/^\(chunk local_declaration: \(variable_declaration/);
+    const help = 'lua io.stdout:write(vim.bo.filetype.." "..tostring(vim.treesitter.highlighter.active[vim.api.nvim_get_current_buf()] ~= nil).."\\n")';
+    expect((await sh(`nvim --headless -c help -c '${help}' -c qa 2>&1`)).out).toBe('help true\n');
+  }, 180_000);
+
+  it('edits a file on the tty, and runs a shell in :terminal', async () => {
+    await install('neovim');
+    await fs.writeFile('/home/user/w/a.txt', 'one\ntwo\n');
+    const { term, done } = onTerminal('nvim a.txt');
+    await until(() => term.screen.includes('two'), 'the file on screen');
+    term.type('Gothree\x1b');
+    await until(() => term.screen.includes('three'), 'inserted text');
+    term.clear();
+    term.type(':terminal\r');
+    await until(() => term.screen.includes('$'), 'the shell prompt in :terminal');
+    term.type('iecho term-$((6*7))\r');
+    await until(() => term.screen.includes('term-42'), 'command output in :terminal');
+    term.clear();
+    term.type('exit\r'); // a :terminal shell that exits 0 closes its buffer: back to a.txt
+    await until(() => term.screen.includes('a.txt [+]'), 'the edited buffer again');
+    term.type(':wq\r');
+    expect(await done).toBe(0);
+    expect(await fs.readFile('/home/user/w/a.txt', 'utf8')).toBe('one\ntwo\nthree\n');
+  }, 180_000);
+});
+
+describe('emacs', () => {
+  it('evaluates Lisp in batch mode (dump, byte-compiled Lisp, org)', async () => {
+    await install('emacs');
+    expect((await sh('emacs --version')).out).toMatch(/^GNU Emacs 31\.1\n/);
+    expect((await sh(`emacs --batch --eval '(princ (format "%s %d\\n" emacs-version (+ 40 2)))'`)).out).toBe('31.1 42\n');
+    await fs.writeFile('/home/user/w/e.txt', 'hello\n');
+    expect((await sh(`emacs --batch e.txt --eval '(progn (goto-char (point-max)) (insert "more\\n") (save-buffer))' 2>&1; cat e.txt`)).out).toMatch(/hello\nmore\n$/);
+    expect((await sh(`emacs --batch --eval '(progn (require (quote org)) (princ (org-version)))' 2>/dev/null`)).out).toMatch(/^\d+\.\d+/);
+  }, 180_000);
+
+  it('edits and saves a file with emacs -nw on the tty, and runs M-x shell', async () => {
+    await install('emacs');
+    await fs.writeFile('/home/user/w/b.txt', 'one\n');
+    const { term, done } = onTerminal('emacs -nw b.txt');
+    await until(() => term.screen.includes('b.txt') && term.screen.includes('one'), 'the file in its buffer');
+    term.type('\x1b>two\x18\x13'); // M-> two C-x C-s
+    await until(() => term.screen.includes('Wrote '), 'the save message');
+    expect(await fs.readFile('/home/user/w/b.txt', 'utf8')).toBe('one\ntwo\n'); // text-mode requires a final newline
+    term.clear();
+    term.type('\x1bxshell\r');
+    await until(() => term.screen.includes('user@shiro'), 'a shell prompt in *shell*');
+    term.type('echo sh-$((6*7))\r');
+    await until(() => term.screen.includes('sh-42'), 'command output in *shell*');
+    term.type('exit\r');
+    await until(() => term.screen.includes('finished'), 'the shell process finishing');
+    term.type('\x18\x03'); // C-x C-c
+    expect(await done).toBe(0);
   }, 180_000);
 });

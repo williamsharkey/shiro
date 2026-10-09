@@ -8,3 +8,6 @@ deps_ncurses
 configure_make "$SRC" --enable-static --enable-unicode --disable-sensors --disable-capabilities --disable-hwloc --disable-delayacct \
   CPPFLAGS="-I$SYSROOT/include -I$SYSROOT/include/ncursesw" LDFLAGS="-L$SYSROOT/lib -static -no-pie" LIBS="-lncursesw"
 install_bin "$SRC/htop" htop/bin/htop
+
+# Manual pages (man, from pkg install mandoc)
+install_man htop "$SRC/htop.1"

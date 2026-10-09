@@ -33,7 +33,7 @@ import {
   SYS_connect, SYS_accept, SYS_sendto, SYS_recvfrom, SYS_shutdown, SYS_bind, SYS_listen, SYS_getsockname,
   SYS_getpeername, SYS_socketpair, SYS_setsockopt, SYS_getsockopt, SYS_accept4, SOCKET_SYSCALLS,
   SOCKADDR_ROOM, SIGPIPE, ENOENT, SO_PEERCRED, SCM_RIGHTS, MSG_CTRUNC, MSG_CMSG_CLOEXEC, SYS_sendmsg,
-  SYS_recvmsg, SOCKADDR_UN_MAX, ENAMETOOLONG,
+  SYS_recvmsg, SOCKADDR_UN_MAX, ENAMETOOLONG, decodeText,
 } from './abi';
 
 // Socket constants live in abi.ts (the shared ABI); re-exported for net.ts users.
@@ -213,7 +213,8 @@ export function decodeSockaddr(b: Uint8Array): SockAddr | number {
     // abstract: every byte up to the length given; a path: up to its NUL
     const end = path[0] === 0 ? path.length : (path.indexOf(0) < 0 ? path.length : path.indexOf(0));
     if (path[0] !== 0 && end === path.length && b.length > SOCKADDR_UN_MAX) return -ENAMETOOLONG;
-    return { family, address: new TextDecoder().decode(path.subarray(0, end)), port: 0 };
+    // (decodeText: in a browser the syscall buffer is shared, which TextDecoder refuses)
+    return { family, address: decodeText(path.subarray(0, end)), port: 0 };
   }
   return -EAFNOSUPPORT;
 }

@@ -329,8 +329,9 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    parent and a child that never exec'd broke it (perl's `fork; open
    STDOUT, ">&W"; exec`, IPC::Open3 and `prove` got no output). vfork and
    `CLONE_VFORK` keep running the child on the calling thread. Only the
-   calling thread exists in the child; a `MAP_SHARED` file mapping becomes
-   a private copy. Tests: `fixtures/x86/fork.c` (fork-musl) and
+   calling thread exists in the child. Separate wasm memories can't share
+   pages, so a process that has a writable `MAP_SHARED` mapping (anonymous
+   or a file) forks the old way instead (patch 23). Tests: `fixtures/x86/fork.c` (fork-musl) and
    `forkcopy.c` in `x86-engine.test.ts`, the perl cases in
    `compat-dev.test.ts`.
 15. File mmap of a kernel fd no longer takes `mmap_lock` twice (it
@@ -348,8 +349,22 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    the 32-bit one-operand `imul` zero-extends `%rdx` (it stored the
    sign-extended high half in all 64 bits); a 4096-entry decoded-instruction
    cache (was 512).
+23. While a writable `MAP_SHARED` mapping is mapped, fork runs the child on
+   the parent's thread and memory until it execs or exits (the pre-14
+   behavior), so the memory stays shared: LTP keeps its results and
+   checkpoint futexes there and scored 0/320 under the real fork. `munmap`
+   of a writable shared kernel-file mapping no longer hangs (its write-back
+   took page locks that the `munmap` then waited for). Test:
+   `fixtures/x86/forkshared.c`.
+24. Blink keeps every resource limit (`setrlimit(RLIMIT_CORE, 0)` succeeds,
+   so ssh-agent survives its daemonizing fork; `RLIMIT_STACK` reads 8 MiB).
+25. `mlock`/`munlock`/`mlockall`/`munlockall` succeed (wasm memory is never
+   paged out; gnupg locks its secure memory).
+26. Under Shiro `uname` takes the kernel's host and domain names (Blink's
+   kernel version and machine otherwise; emscripten's nodename was
+   "emscripten", which tmux showed).
 
-Patches 13, 15–19 and 20–21 come from unix/compat-tools (15 also from
+Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.
 
 Native Blink's own exit path (`KillOtherThreads`) still hangs after

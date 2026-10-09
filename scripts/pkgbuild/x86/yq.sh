@@ -7,3 +7,6 @@ rm -rf "$PKG_WORK/build/yq-$VERSION" "$PKG_OUT/yq"
 mkdir -p "$PKG_WORK/build/yq-$VERSION"
 tar xzf "$TGZ" -C "$PKG_WORK/build/yq-$VERSION"
 install_prebuilt "$PKG_WORK/build/yq-$VERSION/yq_linux_amd64" yq/bin/yq
+
+# Manual pages (man, from pkg install mandoc)
+install_man yq "$PKG_WORK/build/yq-$VERSION/yq.1"
