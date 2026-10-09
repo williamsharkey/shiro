@@ -230,7 +230,7 @@ export class ProcFs {
   private stateLetter(p: Process): string {
     if (p.state === 'zombie') return 'Z';
     if (p.state === 'stopped') return 'T';
-    return p.inSyscall > 0 || !p.syscalls ? 'S' : 'R';
+    return p.sleeping() || !p.syscalls ? 'S' : 'R';
   }
 
   private ttyOf(p: Process): { nr: number; tpgid: number } {

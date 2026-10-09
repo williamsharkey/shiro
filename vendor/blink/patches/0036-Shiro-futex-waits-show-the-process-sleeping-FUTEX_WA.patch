@@ -1,0 +1,119 @@
+From ccc10fe205bf09e999e12c2c15ef20c8a8ad4763 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 07:39:35 +0000
+Subject: [PATCH 36/36] Shiro: futex waits show the process sleeping;
+ FUTEX_WAKE on an unmapped address is EFAULT; the main thread's tid is the pid
+
+---
+ blink/blink.c   |  1 +
+ blink/shiro.inc | 11 ++++++++++-
+ blink/syscall.c | 11 +++++++++++
+ 3 files changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/blink/blink.c b/blink/blink.c
+index b8ab011..cc95b37 100644
+--- a/blink/blink.c
++++ b/blink/blink.c
+@@ -283,6 +283,7 @@ static int Exec(char *execfn, char *prog, char **argv, char **envp) {
+ #ifdef __EMSCRIPTEN__
+   g_shiro_system = m->system;
+   ShiroInitSystem(m->system, !old);
++  m->tid = m->system->pid;  // the main thread's tid is the (kernel's) pid
+ #endif
+   if (!old) {
+     // this is the first time a program is being loaded
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 57a9961..f165308 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -118,6 +118,14 @@ static i64 KS(struct Machine *m, int nr, const int a[12]) {
+   return ShiroCall(m, nr, a, 0, 0, 0, false, false);
+ }
+ 
++// A blocking wait Blink does itself (a futex) in the process's main thread:
++// the kernel shows the process sleeping meanwhile, as during its syscalls
++// (LTP waits for state S in /proc/PID/stat before signalling a child).
++static void ShiroSleeping(struct Machine *m, int delta) {
++  if (!g_shiro_pid || (!t_vfork && m->tid != m->system->pid)) return;
++  KS(m, 1012, A12(delta));
++}
++
+ // A path argument copied to `buf + off`; returns its length or -errno.
+ static int ShiroPath(struct Machine *m, i64 addr, char *buf, int off) {
+   char *s;
+@@ -1421,7 +1429,7 @@ static void *ShiroChildMain(void *arg) {
+   free(arg);
+   unassert((g_machine = m = NewMachine(NewSystem(XED_MACHINE_MODE_LONG), 0)));
+   m->system->exec = c.exec;
+-  m->system->pid = c.pid;
++  m->tid = m->system->pid = c.pid;
+   m->thread = pthread_self();
+   GilAcquire();  // (the parent holds it until fork returns)
+   ShiroAddKid(m->system);
+@@ -1602,6 +1610,7 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     // The vfork child: its own pid, signal table and exit
+     switch (nr) {
+       case 0x027:  // getpid
++      case 0x0BA:  // gettid (it runs on the parent's main thread)
+         *res = t_vfork->pid;
+         return true;
+       case 0x00D:  // rt_sigaction
+diff --git a/blink/syscall.c b/blink/syscall.c
+index d4b01e2..bfae779 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -335,6 +335,7 @@ static int SysFutexWake(struct Machine *m, i64 uaddr, u32 count) {
+   int rc;
+   struct Futex *f;
+   i64 key;
++  if (!LookupAddress(m, uaddr)) return -1;  // EFAULT, as Linux's futex key
+   if (!count) return 0;
+   key = FutexKey(m, uaddr);
+   LOCK(&g_bus->futexes.lock);
+@@ -695,6 +696,12 @@ static int LoadTimespecRW(struct Machine *m, i64 addr, struct timespec *ts) {
+   return LoadTimespec(m, addr, ts, PAGE_U | PAGE_RW, PAGE_U | PAGE_RW);
+ }
+ 
++#ifdef __EMSCRIPTEN__
++static void ShiroSleeping(struct Machine *, int);
++#else
++#define ShiroSleeping(m, n) (void)0
++#endif
++
+ static int SysFutexWait(struct Machine *m,  //
+                         i64 uaddr,          //
+                         i32 op,             //
+@@ -712,6 +719,7 @@ static int SysFutexWait(struct Machine *m,  //
+   // those can be coarser than what the guest reads and end it early
+   clockid_t clk = CLOCK_MONOTONIC;
+   struct timespec now, tick, timeout, deadline, cnow, cend;
++  int sleeping;
+   now = tick = GetTime();
+   if (timeout_addr) {
+     if (!(gtimeout = (const struct timespec_linux *)SchlepR(
+@@ -759,6 +767,7 @@ static int SysFutexWait(struct Machine *m,  //
+   UNLOCK(&g_bus->futexes.lock);
+   THR_LOGF("pid=%d tid=%d is waiting at address %#" PRIx64, m->system->pid,
+            m->tid, uaddr);
++  sleeping = 0;  // told the embedder we're blocked (S in /proc) after a tick
+   do {
+     if (m->killed) {
+       rc = EAGAIN;
+@@ -786,12 +795,14 @@ static int SysFutexWait(struct Machine *m,  //
+       else THR_LOGF("futex wait timed out");
+     }
+     UNLOCK(&f->lock);
++    if (rc == ETIMEDOUT && !sleeping) ShiroSleeping(m, (sleeping = 1));
+     if (rc == ETIMEDOUT && timeout_addr) {
+       unassert(!clock_gettime(clk, &cnow));
+       // past the realtime deadline but not the guest's: poll again shortly
+       if (CompareTime(tick, deadline) >= 0) deadline = AddTime(tick, FromMilliseconds(1));
+     }
+   } while (rc == ETIMEDOUT && CompareTime(cnow, cend) < 0);
++  if (sleeping) ShiroSleeping(m, -1);
+   LOCK(&g_bus->futexes.lock);
+   LOCK(&f->lock);
+   if (rc == ETIMEDOUT && f->wakeups > 0) {
+-- 
+2.43.0
+

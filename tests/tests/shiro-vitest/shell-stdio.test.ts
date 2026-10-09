@@ -72,7 +72,7 @@ beforeAll(async () => {
   ({ fs, shell } = await createTestShell());
   await fs.mkdir('/usr/local/bin', { recursive: true });
   await fs.mkdir('/tmp', { recursive: true });
-  for (const p of ['ping', 'readloop', 'upper']) {
+  for (const p of ['ping', 'readloop', 'upper', 'fdwrite']) {
     await fs.writeFile(`/usr/local/bin/${p}`, new Uint8Array(readFileSync(path.join(fixtures, `${p}.wasm`))));
   }
   kernel = kernelForContext({ fs, shell } as unknown as CommandContext);
@@ -179,4 +179,97 @@ describe('sh as a kernel process uses its fds', () => {
     const r = await run(['/usr/local/bin/s.sh'], '1\nrest\n');
     expect(r.out).toBe('got 1\nREST\n');
   });
+});
+
+describe('fds 3-9 are inherited as they are', () => {
+  it('a shell run by the kernel writes to its inherited fd 3, and so do programs it starts', async () => {
+    let three = '';
+    let out = '';
+    const p = await spawn(['sh', '-c', 'echo a >&3; fdwrite 3 b; echo out'], {
+      0: new BufferFile('', O_RDONLY), 1: new SinkFile((t) => { out += t; }), 2: new SinkFile(() => {}),
+      3: new SinkFile((t) => { three += t; }),
+    });
+    await withTimeout(p.wait(), 20_000);
+    expect(three).toBe('a\nb\n');
+    expect(out).toBe('out\n');
+  });
+
+  it('exec 3>file and exec 4>&1 1>/dev/null reach programs the shell starts', async () => {
+    let out = '';
+    const st = await shell.execute('exec 3>/tmp/fd3.txt; fdwrite 3 c; fdwrite 3 d; cat /tmp/fd3.txt; exec 4>&1 1>/dev/null; fdwrite 4 e; echo hidden; exec 1>&4 3>&- 4>&-',
+      (t) => { out += t; }, () => {});
+    expect(out.replace(/\r\n/g, '\n')).toBe('c\nd\ne\n');
+    expect(st).toBe(0);
+  });
+});
+
+describe('the debconf confmodule protocol through a kernel-run sh', () => {
+  it('exec 3>&1 1>&2, then commands on fd 3 and replies read from stdin', async () => {
+    // What /usr/share/debconf/confmodule does; the frontend (here: this test)
+    // reads commands from the script's fd 3 and answers on its stdin
+    const script = [
+      'exec 3>&1',
+      'exec 1>&2',
+      '_db_cmd () { printf "%s\\n" "$*" >&3; read -r line; RET="${line#[! \t][ \t]}"; return ${line%%[ \t]*}; }',
+      'db_get () { _db_cmd "GET $@"; }',
+      'db_input () { _db_cmd "INPUT $@"; }',
+      'db_get adduser/homedir-permission; echo "stderr: $RET"',
+      'db_input low adduser/x || true',
+      'printf "%s\\n" "result $RET" >&3',
+    ].join('\n');
+    const [toShR, toShW] = createPipe();
+    const [fromShR, fromShW] = createPipe();
+    let err = '';
+    const sh = await spawn(['sh', '-c', script], { 0: toShR, 1: fromShW, 2: new SinkFile((t) => { err += t; }) });
+    const enc = new TextEncoder();
+    const dec = new TextDecoder();
+    const buf = new Uint8Array(256);
+    const commands: string[] = [];
+    let pending = '';
+    const readLine = async (): Promise<string | null> => {
+      for (;;) {
+        const nl = pending.indexOf('\n');
+        if (nl >= 0) { const l = pending.slice(0, nl); pending = pending.slice(nl + 1); return l; }
+        const n = await fromShR.read(buf);
+        if (n <= 0) return null;
+        pending += dec.decode(buf.subarray(0, n));
+      }
+    };
+    const frontend = (async () => {
+      for (let l = await readLine(); l !== null; l = await readLine()) {
+        commands.push(l);
+        if (l.startsWith('GET')) await toShW.write(enc.encode('0 true\n'));
+        else if (l.startsWith('INPUT')) await toShW.write(enc.encode('30 question skipped\n'));
+      }
+    })();
+    await withTimeout(sh.wait(), 20_000);
+    await toShW.close();
+    await withTimeout(frontend, 5_000);
+    expect(commands).toEqual(['GET adduser/homedir-permission', 'INPUT low adduser/x', 'result 30 question skipped']);
+    expect(err).toBe('stderr: true\n');
+  }, 30_000);
+});
+
+describe('named pipes opened with exec', () => {
+  it('exec 3>fifo in a background subshell: a child sh and a kernel program write through it; the reader sees EOF', async () => {
+    let out = '';
+    const st = await withTimeout(shell.execute(
+      "mkdir -p /tmp/fifo3 && cd /tmp/fifo3 && mkfifo p\n(exec 3>p; sh -c 'echo x >&3'; fdwrite 3 kern; echo y >&3) &\ncat < p",
+      (t) => { out += t; }, () => {}), 20_000);
+    expect(out.replace(/\r\n/g, '\n').replace(/^\[\d+\] \d+\n/gm, '')).toBe('x\nkern\ny\n');
+    expect(st).toBe(0);
+  }, 30_000);
+});
+
+describe('scripts that do nothing do not wait on stdin', () => {
+  // dpkg-preconfigure runs ucf's empty config script with stdin on a pipe it keeps open
+  it('an empty file without #!, `sh FILE` and `sh -c ""` exit without reading a live stdin', async () => {
+    await fs.writeFile('/tmp/empty.cfg', '');
+    await fs.chmod?.('/tmp/empty.cfg', 0o755);
+    for (const argv of [['/tmp/empty.cfg', 'configure', ''], ['sh', '/tmp/empty.cfg'], ['sh', '-c', ''], ['sh', '-c', 'true']]) {
+      const [r] = createPipe(); // the write end is never closed
+      const p = await spawn(argv, { 0: r, 1: new SinkFile(() => {}), 2: new SinkFile(() => {}) });
+      expect(await withTimeout(p.wait(), 5_000)).toBe(0);
+    }
+  }, 30_000);
 });

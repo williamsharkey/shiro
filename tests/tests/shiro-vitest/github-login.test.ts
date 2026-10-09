@@ -95,13 +95,13 @@ describe('Claude-style shell spawns', () => {
 
 describe('github-login proxy route', () => {
   let server: ChildProcess;
-  const port = 3900 + Math.floor(Math.random() * 90);
   afterAll(() => server?.kill());
 
   it('only forwards POSTs to the two device-flow endpoints', async () => {
     const serverPath = decodeURIComponent(new URL('../../../server.mjs', import.meta.url).pathname);
-    server = spawn('node', [serverPath], { env: { ...process.env, PORT: String(port), STATIC_DIR: '/nonexistent' } });
-    await new Promise<void>((resolve) => server.stdout!.on('data', (d) => { if (String(d).includes('listening')) resolve(); }));
+    // PORT=0: a free port, read back from the server's log
+    server = spawn('node', [serverPath], { env: { ...process.env, PORT: '0', STATIC_DIR: '/nonexistent' } });
+    const port = await new Promise<number>((resolve) => server.stdout!.on('data', (d) => { const m = /listening on :(\d+)/.exec(String(d)); if (m) resolve(Number(m[1])); }));
     const base = `http://127.0.0.1:${port}/api/github-login`;
     expect((await fetch(`${base}/login/device/code`)).status).toBe(403);           // wrong method
     expect((await fetch(`${base}/settings/profile`, { method: 'POST' })).status).toBe(403);

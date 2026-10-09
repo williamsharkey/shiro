@@ -1,0 +1,31 @@
+From f4f6246b03bc70de5ea537b6ab832a14b5c9a5f9 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 08:21:59 +0000
+Subject: [PATCH 38/38] Shiro: mknod and mknodat go to the kernel (FIFOs);
+ EPERM where it has no mknodat
+
+---
+ blink/shiro.inc | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index f165308..ae9066a 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -1862,7 +1862,12 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     }
+     case 0x146: r = -ENOSYS_LINUX; break;                             // copy_file_range
+     case 0x13F: r = -ENOSYS_LINUX; break;                             // memfd_create
+-    case 0x085: case 0x103: r = -EPERM_LINUX; break;                  // mknod(at)
++    case 0x085:  // mknod: FIFOs and regular files (the kernel refuses devices)
++    case 0x103:  // mknodat
++      r = nr == 0x085 ? ShiroAtCall(m, 259, AT_FDCWD_LINUX, a, b, c)
++                      : ShiroAtCall(m, 259, a, b, c, d);
++      if (r == -ENOSYS_LINUX) r = -EPERM_LINUX;  // a kernel without them
++      break;
+     case 0x0FD: case 0x0FE: case 0x0FF: case 0x126: r = -ENOSYS_LINUX; break;  // inotify
+     case 0x11B: case 0x11D: case 0x11E: case 0x11F: r = -ENOSYS_LINUX; break;  // timerfd, fallocate...
+     case 0x1B2: case 0x1A8: r = -ENOSYS_LINUX; break;                 // pidfd_open, pidfd_send_signal
+-- 
+2.43.0
+

@@ -468,6 +468,25 @@ describe('kernel processes', () => {
     kernel.kill(other.pid, A.SIGKILL);
   });
 
+  it("exec of a script without #! runs it as a shell script on the live stdin (debconf's config scripts)", async () => {
+    const { SinkFile } = await import('@shiro/wasi/stdio');
+    const run = async (content: string, input?: string) => {
+      await fs.writeFile('/tmp/noshebang', content);
+      await fs.chmod('/tmp/noshebang', 0o755);
+      const [r, w] = createPipe(); // the writer stays open, as debconf's frontend keeps it
+      let out = '';
+      const sink = new SinkFile((t: string) => { out += t; });
+      const p = kernel.spawn({ path: '/tmp/noshebang', argv: ['/tmp/noshebang'], cwd: '/tmp', fds: { 0: r, 1: sink, 2: sink } });
+      if (input) await w.write(new TextEncoder().encode(input));
+      const status = await Promise.race([p.wait(), new Promise((res) => setTimeout(() => res('hung'), 5000))]);
+      await w.close();
+      return { status, out };
+    };
+    expect(await run('')).toEqual({ status: 0, out: '' }); // an empty one ends at once (Linux: ENOEXEC, then sh)
+    expect(await run('echo hi\n')).toEqual({ status: 0, out: 'hi\n' });
+    expect(await run('read x; echo got:$x\n', 'line\n')).toEqual({ status: 0, out: 'got:line\n' });
+  });
+
   it('uname(2) reports the kernel hostname', async () => {
     const proc = kernel.spawn({ path: 'un', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
     const data = new Uint8Array(4096).fill(0xff);
@@ -608,6 +627,83 @@ describe('kernel processes', () => {
     expect(await fs.readdir('/tmp/kidx/sub')).toEqual(['three']);
     await fs.rmdir('/tmp/kidx/sub').catch(async () => { await fs.unlink('/tmp/kidx/sub/three'); await fs.rmdir('/tmp/kidx/sub'); });
     expect(await fs.readdir('/tmp/kidx')).toEqual([]);
+  });
+
+  it('named pipes: mknod, blocking open both ways, O_NONBLOCK, many writers, EOF, stat', async () => {
+    await fs.mkdir('/tmp/kfifo', { recursive: true });
+    const proc = kernel.spawn({ path: 'holder', cwd: '/tmp/kfifo', run: () => new Promise<number>(() => {}) });
+    const data = new Uint8Array(4096);
+    const put = (s: string) => { const b = bytes(s); data.set(b); return b.length; };
+    expect(await kernel.syscall(proc, A.SYS_mknodat, [A.AT_FDCWD, put('f'), A.S_IFIFO | 0o640], data)).toBe(0);
+    expect(await kernel.syscall(proc, A.SYS_mknodat, [A.AT_FDCWD, put('f'), A.S_IFIFO | 0o640], data)).toBe(-A.EEXIST);
+    expect(await kernel.syscall(proc, A.SYS_mknodat, [A.AT_FDCWD, put('dev'), A.S_IFCHR | 0o640, 0], data)).toBe(-A.EPERM);
+    expect(await kernel.syscall(proc, A.SYS_newfstatat, [A.AT_FDCWD, put('f'), 0], data)).toBe(0);
+    expect(A.decodeStat(data).mode).toBe(A.S_IFIFO | 0o640);
+    expect((await fs.stat('/tmp/kfifo/f')).isFIFO()).toBe(true);
+
+    // A writer with O_NONBLOCK and no reader: ENXIO; a reader with O_NONBLOCK opens at once
+    expect(await kernel.open(proc, 'f', A.O_WRONLY | A.O_NONBLOCK)).toBe(-A.ENXIO);
+    const nbr = await kernel.open(proc, 'f', A.O_RDONLY | A.O_NONBLOCK) as OpenFile;
+    expect(nbr.kind).toBe('pipe');
+    expect(await nbr.read(new Uint8Array(4))).toBe(0); // no writer: EOF
+    await nbr.close();
+
+    // A blocking reader waits for a writer, and the writer's open completes it
+    let readerOpen = false;
+    const rP = kernel.open(proc, 'f', A.O_RDONLY).then(f => { readerOpen = true; return f as OpenFile; });
+    await new Promise(res => setTimeout(res, 20));
+    expect(readerOpen).toBe(false);
+    const w1 = await kernel.open(proc, 'f', A.O_WRONLY) as OpenFile;
+    const r = await rP;
+    const w2 = await kernel.open(proc, 'f', A.O_WRONLY) as OpenFile; // a second writer
+    expect(await w1.write(bytes('one '))).toBe(4);
+    expect(await w2.write(bytes('two'))).toBe(3);
+    await w1.close();
+    expect(await readStr(r)).toBe('one two');
+    let got: number | null = null;
+    const pending = r.read(new Uint8Array(8)).then(n => { got = n; });
+    await new Promise(res => setTimeout(res, 20));
+    expect(got).toBeNull(); // w2 still open: the read waits
+    await w2.close();
+    await pending;
+    expect(got).toBe(0); // EOF once the last writer closed
+    expect((await r.stat()).mode & A.S_IFMT).toBe(A.S_IFIFO);
+    await r.close();
+
+    // A blocking writer waits for a reader; O_RDWR never blocks
+    let writerOpen = false;
+    const wP = kernel.open(proc, 'f', A.O_WRONLY).then(f => { writerOpen = true; return f as OpenFile; });
+    await new Promise(res => setTimeout(res, 20));
+    expect(writerOpen).toBe(false);
+    const rw = await kernel.open(proc, 'f', A.O_RDWR) as OpenFile;
+    const w = await wP;
+    await w.write(bytes('x'));
+    expect(await readStr(rw)).toBe('x');
+    await w.close();
+    await rw.close();
+    // A signal ends a blocked open with EINTR
+    const blocked = kernel.open(proc, 'f', A.O_RDONLY);
+    await new Promise(res => setTimeout(res, 10));
+    proc.interruptSyscalls();
+    expect(await blocked).toBe(-A.EINTR);
+    kernel.kill(proc.pid, A.SIGKILL);
+  });
+
+  it('named pipes in shell redirections: mkfifo, > fifo, < fifo, exec N>fifo in a background subshell', async () => {
+    await fs.mkdir('/tmp/sfifo', { recursive: true });
+    let out = '';
+    const code = await shell.execute([
+      'cd /tmp/sfifo', 'mkfifo p', 'test -p p && echo is-fifo', 'mkfifo p || echo exists',
+      'echo through > p &', 'cat < p',
+      '( echo hello >&8 ) 8>p &', 'command exec 8<p', 'read -r line <&8; echo "read [$line]"',
+    ].join('\n'), s => { out += s; }, s => { out += s; });
+    expect(code).toBe(0);
+    const text = out.replace(/\r\n/g, '\n').replace(/^\[\d+\] \d+\n/gm, '');
+    expect(text).toContain('is-fifo\n');
+    expect(text).toContain("mkfifo: cannot create fifo 'p': File exists\nexists\n");
+    expect(text).toContain('through\n');
+    expect(text).toContain('read [hello]\n');
+    expect((await fs.stat('/tmp/sfifo/p')).isFIFO()).toBe(true); // redirects didn't replace it with a file
   });
 
   it('syscall dispatch: pipe2/dup2/fcntl/getdents in-page', async () => {

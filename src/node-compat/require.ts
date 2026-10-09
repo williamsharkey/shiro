@@ -87,22 +87,22 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
     return undefined;
   }
 
-  function _requireModule(modPath: string, fromDir: string): any {
+  function _requireModule(modPath: string, fromDir: string, resolveOnly = false): any {
     // Check for Express shim — return the factory function itself
     // (users do: const express = require('express'); const app = express();)
-    if (modPath === 'express') {
+    if (modPath === 'express' && !resolveOnly) {
       return createExpressShim;
     }
 
     // Check for better-sqlite3 shim
-    if (modPath === 'better-sqlite3') {
+    if (modPath === 'better-sqlite3' && !resolveOnly) {
       return createSqliteShim();
     }
 
     // Check built-in modules first
     const builtin = getBuiltinModule(modPath);
     if (builtin !== null) {
-      return builtin;
+      return resolveOnly ? modPath : builtin;
     }
 
     let resolved = modPath;
@@ -130,7 +130,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
                   const found = tryResolveExtensions(resolved);
                   if (found) resolved = found;
                 }
-                if (moduleCache.has(resolved)) { lastResolved = resolved; return moduleCache.get(resolved)!.exports; }
+                if (!resolveOnly && moduleCache.has(resolved)) { lastResolved = resolved; return moduleCache.get(resolved)!.exports; }
                 break;
               }
             }
@@ -159,6 +159,10 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
       let found = false;
       while (searchDir) {
         let pkgDir = `${searchDir}/node_modules/${pkgName}`;
+        // A package behind a symlink (pnpm: node_modules/x -> .pnpm/x@1/node_modules/x)
+        // loads from its real path, as in node, so its dependencies resolve beside it
+        const realPkgDir = ctx.fs.realpathCached?.(pkgDir);
+        if (realPkgDir && realPkgDir !== pkgDir && fileCache.has(`${realPkgDir}/package.json`)) pkgDir = realPkgDir;
         let pkgPath = `${pkgDir}/package.json`;
 
         // Handle npm GitHub tarball extraction which creates nested structure
@@ -366,6 +370,12 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
       }
     }
 
+    if (resolveOnly) {
+      if (fileCache.has(resolved) || moduleCache.has(resolved)) return resolved;
+      const err: any = new Error(`Cannot find module '${modPath}'`);
+      err.code = 'MODULE_NOT_FOUND';
+      throw err;
+    }
     if (moduleCache.has(resolved)) { lastResolved = resolved; return moduleCache.get(resolved)!.exports; }
 
     const content = fileCache.get(resolved);
@@ -377,7 +387,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
       const hint = nearby.length ? `\nSimilar files in cache: ${nearby.join(', ')}` : '';
       const isNpmPkg = !modPath.startsWith('.') && !modPath.startsWith('/');
       const npmHint = isNpmPkg ? `\nTry: npm install ${modPath.split('/')[0]}` : '';
-      throw new Error(`Cannot find module '${modPath}' (resolved: ${resolved})${hint}${npmHint}`);
+      throw Object.assign(new Error(`Cannot find module '${modPath}' (resolved: ${resolved})${hint}${npmHint}`), { code: 'MODULE_NOT_FOUND', requireStack: [] });
     }
 
     if (resolved.endsWith('.json')) {
@@ -387,10 +397,10 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
       return exp;
     }
 
-    const mod = { exports: {} as any };
+    const mod: any = { exports: {} as any, id: resolved, filename: resolved, loaded: false, children: [] };
     moduleCache.set(resolved, mod);
     const modDir = resolved.substring(0, resolved.lastIndexOf('/')) || ctx.cwd;
-    const nestedRequire = (p: string) => requireModule(p, modDir);
+    const nestedRequire = makeRequire(modDir, mod);
 
     try {
       // Transform TypeScript/JSX/ESM syntax to CommonJS
@@ -456,7 +466,8 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
       // from require) ends the script; it is not a load failure
       if (err instanceof ProcessExitError || (err as any)?._isProcessExit) throw err;
       const errMsg = err instanceof Error ? err.message : String(err);
-      const enhancedErr = new Error(`Error loading module '${resolved}': ${errMsg}`);
+      const enhancedErr: any = new Error(`Error loading module '${resolved}': ${errMsg}`);
+      if ((err as any)?.code) enhancedErr.code = (err as any).code;
       if (err instanceof Error && err.stack) {
         enhancedErr.stack = `Error loading module '${resolved}':\n${err.stack}`;
       }
@@ -466,6 +477,49 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
     lastResolved = resolved;
     return mod.exports;
   }
+
+  /**
+   * A module's `require`, with Node's properties: resolve (and
+   * resolve.paths: the node_modules directories searched, null for a
+   * builtin), cache and main.
+   */
+  function makeRequire(fromDir: string, mod?: any): any {
+    const req: any = (p: string) => requireModule(p, fromDir);
+    req.resolve = (request: string, opts?: { paths?: string[] }) => {
+      const dirs = opts?.paths?.length ? opts.paths : [fromDir];
+      let last: any;
+      for (const d of dirs) {
+        try { return _requireModule(request, ctx.fs.resolvePath(d, ctx.cwd), true); } catch (e) { last = e; }
+      }
+      throw last;
+    };
+    req.resolve.paths = (request: string) => {
+      if (getBuiltinModule(request) !== null) return null;
+      const out: string[] = [];
+      for (let d = fromDir; ; d = d.substring(0, d.lastIndexOf('/')) || '/') {
+        if (!d.endsWith('/node_modules')) out.push(`${d === '/' ? '' : d}/node_modules`);
+        if (d === '/') break;
+      }
+      return out;
+    };
+    req.cache = new Proxy({}, {
+      get: (_t, k) => typeof k === 'string' && moduleCache.has(k) ? moduleCache.get(k) : undefined,
+      has: (_t, k) => typeof k === 'string' && moduleCache.has(k),
+      deleteProperty: (_t, k) => { if (typeof k === 'string') moduleCache.delete(k); return true; },
+      ownKeys: () => [...moduleCache.keys()],
+      getOwnPropertyDescriptor: (_t, k) => typeof k === 'string' && moduleCache.has(k)
+        ? { value: moduleCache.get(k), enumerable: true, configurable: true } : undefined,
+    });
+    req.main = mainModule;
+    if (mod) {
+      mod.require = req;
+      mod.paths ??= req.resolve.paths('x');
+    }
+    return req;
+  }
+  let mainModule: any;
+  (requireModule as any).makeRequire = makeRequire;
+  (requireModule as any).setMain = (m: any) => { mainModule = m; };
 
   return Object.assign(requireModule, { ready: requireReady });
 }

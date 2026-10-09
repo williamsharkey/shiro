@@ -241,3 +241,29 @@ describe('assignment order, fds of compounds, eval, hash', () => {
     expect(r.out).toBe('1\n0\n');
   });
 });
+
+describe('fd copies made by exec', () => {
+  it('exec 3>&1 >/dev/null: fd 3 is still the old stdout, in this shell and in children', async () => {
+    const r = await script([
+      'exec 3>&1 1>/dev/null 2>/dev/null',
+      'echo hidden',
+      "sh -c 'echo via3 >&3'",
+      '( echo sub3 >&3 )',
+      'x=$(echo cap >&3); echo "[$x]" >&3',
+      'echo p >&3 | cat',
+    ].join('\n'));
+    expect(r.out).toBe('via3\nsub3\ncap\n[]\np\n');
+  });
+
+  it('exec 2>&1 >/dev/null: fd 2 is the old stdout; a plain >&1 follows the pipe', async () => {
+    const r = await script('echo a >&1 | tr a b\nexec 2>&1 1>/dev/null; echo viaerr >&2; echo gone\n');
+    expect(r.out).toBe('b\nviaerr\n');
+  });
+});
+
+describe('named pipes opened with exec', () => {
+  it('a subshell closes the fifo ends it opened; children write through the same end', async () => {
+    const r = await script("mkdir /tmp/ff && cd /tmp/ff && mkfifo p\n(exec 4>p; exec 3>&4; sh -c 'echo via3 >&3'; (echo sub >&3); echo own >&4) &\ncat < p\n");
+    expect(r.out).toBe('via3\nsub\nown\n');
+  });
+});

@@ -72,6 +72,11 @@ export interface FSNode {
    * read fetches it through the registered lazy loader and stores it.
    */
   lazy?: LazyRef;
+  /**
+   * A special file: 'fifo' is a named pipe (mkfifo). It is stored like an
+   * empty regular file; the kernel attaches opens of it to a pipe.
+   */
+  special?: 'fifo';
 }
 
 /** Where a lazy file's bytes are: `len` bytes at `off` in chunk `chunk` of source `src`. */
@@ -94,6 +99,8 @@ export interface StatResult {
   isFile(): boolean;
   isDirectory(): boolean;
   isSymbolicLink(): boolean;
+  /** A named pipe (FSNode.special === 'fifo'). */
+  isFIFO(): boolean;
 }
 
 export function makeStat(node: FSNode): StatResult {
@@ -127,7 +134,7 @@ export function makeStat(node: FSNode): StatResult {
     isSymbolicLink() { return node.type === 'symlink'; },
     isBlockDevice() { return false; },
     isCharacterDevice() { return false; },
-    isFIFO() { return false; },
+    isFIFO() { return node.special === 'fifo'; },
     isSocket() { return false; },
   } as any;
 }
@@ -1023,6 +1030,11 @@ export class FileSystem {
     return node.content;
   }
 
+  /** Synchronous realpath from the in-memory cache; undefined when that needs IndexedDB. */
+  realpathCached(path: string): string | undefined {
+    return this._canonCached(path, true, { n: 0 });
+  }
+
   /** Synchronous readlink from the in-memory cache: the target for a cached
    *  symlink, null for any other cached node, undefined if not cached. */
   readlinkCached(path: string): string | null | undefined {
@@ -1217,6 +1229,20 @@ export class FileSystem {
     await this.writeFile(target, combined);
   }
 
+  /** Create a named pipe (mkfifo(3)). EEXIST if `path` exists; the parent must exist. */
+  async mkfifo(path: string, mode = 0o644): Promise<void> {
+    if (await this._get(path)) throw fsError('EEXIST', `EEXIST: file already exists, mkfifo '${path}'`);
+    const parent = path.substring(0, path.lastIndexOf('/')) || '/';
+    const dir = await this._get(parent);
+    if (!dir) throw fsError('ENOENT', `ENOENT: no such file or directory, mkfifo '${path}'`);
+    if (dir.type !== 'dir') throw fsError('ENOTDIR', `ENOTDIR: not a directory, mkfifo '${path}'`);
+    const node = this._makeNode(path, 'file');
+    node.special = 'fifo';
+    node.mode = mode & 0o7777;
+    await this._put(node);
+    this._emitChange('write', path);
+  }
+
   async mkdir(path: string, options?: { recursive?: boolean }): Promise<void> {
     if (options?.recursive) {
       const parts = path.split('/').filter(Boolean);
@@ -1245,6 +1271,44 @@ export class FileSystem {
 
     await this._put(this._makeNode(path, 'dir'));
     this._emitChange('mkdir', path);
+  }
+
+  /**
+   * mkdir() whose effect on the in-memory cache is immediate when every
+   * component is in memory, for synchronous callers (node's fs.mkdirSync then
+   * writeFileSync: the write's parent check ran before the async mkdir landed,
+   * and the file was lost). Falls back to mkdir() otherwise.
+   */
+  mkdirNow(path: string, options?: { recursive?: boolean }): Promise<void> {
+    if (this.virtualProviders.some((vp) => vp.handles(path))) return this.mkdir(path, options);
+    const parts = path.split('/').filter(Boolean);
+    const made: string[] = [];
+    let current = '';
+    for (let i = 0; i < parts.length; i++) {
+      const last = i === parts.length - 1;
+      if (!options?.recursive && !last) {
+        current = current + '/' + parts[i];
+        continue;
+      }
+      const canon = this._canonCached(current + '/' + parts[i], true, { n: 0 });
+      if (canon === undefined) return this.mkdir(path, options);
+      const existing = this._getCached(canon);
+      if (existing === undefined) return this.mkdir(path, options);
+      if (existing) {
+        if (existing.type !== 'dir') return Promise.reject(fsError('ENOTDIR', `ENOTDIR: not a directory '${canon}'`));
+        if (last && !options?.recursive) return Promise.reject(fsError('EEXIST', `EEXIST: file already exists, mkdir '${canon}'`));
+      } else {
+        const parentPath = canon.substring(0, canon.lastIndexOf('/')) || '/';
+        const parent = this._getCached(parentPath);
+        if (parent === undefined && !made.includes(parentPath)) return this.mkdir(path, options);
+        if (!parent && !made.includes(parentPath)) return Promise.reject(fsError('ENOENT', `ENOENT: no such file or directory, mkdir '${path}'`));
+        this._putNow(this._makeNode(canon, 'dir'));
+        made.push(canon);
+      }
+      current = canon === '/' ? '' : canon;
+    }
+    for (const d of made) this._emitChange('mkdir', d);
+    return Promise.resolve();
   }
 
   async readdir(path: string): Promise<string[]> {

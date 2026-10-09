@@ -1,3 +1,4 @@
+import { createZlibModule } from './zlib';
 import type { CommandContext } from '../../commands/index';
 
 export interface MiscDeps {
@@ -9,6 +10,8 @@ export interface MiscDeps {
   fileCache: Map<string, string>;
   moduleCache: Map<string, { exports: any }>;
   requireModule: (id: string, fromDir: string) => any;
+  /** Runs a worker_threads Worker's script in its own module context on this thread. */
+  startWorker?: (filename: string, options: any, worker: any) => void;
 }
 
 export function createMiscModule(name: string, deps: MiscDeps): any | null {
@@ -95,44 +98,7 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
     };
 
     case 'zlib':
-    case 'node:zlib': {
-      // Stub zlib using DecompressionStream/CompressionStream when possible
-      const passthrough = (data: any, cb?: Function) => {
-        if (cb) cb(null, data);
-        return data;
-      };
-      return {
-        createGunzip: () => ({ pipe: (d: any) => d, on: () => {}, once: () => {}, end: () => {} }),
-        createGzip: () => ({ pipe: (d: any) => d, on: () => {}, once: () => {}, end: () => {} }),
-        createDeflate: () => ({ pipe: (d: any) => d, on: () => {}, once: () => {}, end: () => {} }),
-        createInflate: () => ({ pipe: (d: any) => d, on: () => {}, once: () => {}, end: () => {} }),
-        gzip: passthrough,
-        gunzip: passthrough,
-        deflate: passthrough,
-        inflate: passthrough,
-        gzipSync: (data: any) => data,
-        gunzipSync: (data: any) => data,
-        deflateSync: (data: any) => data,
-        inflateSync: (data: any) => data,
-        brotliCompressSync: (data: any) => data,
-        brotliDecompressSync: (data: any) => data,
-        createInflateRaw: () => ({ pipe: (d: any) => d, on: () => {}, once: () => {}, end: () => {} }),
-        createDeflateRaw: () => ({ pipe: (d: any) => d, on: () => {}, once: () => {}, end: () => {} }),
-        createBrotliCompress: () => ({ pipe: (d: any) => d, on: () => {}, once: () => {}, end: () => {} }),
-        createBrotliDecompress: () => ({ pipe: (d: any) => d, on: () => {}, once: () => {}, end: () => {} }),
-        deflateRawSync: (data: any) => data,
-        inflateRawSync: (data: any) => data,
-        Z_DEFAULT_WINDOWBITS: 15,
-        Z_NO_FLUSH: 0,
-        Z_PARTIAL_FLUSH: 1,
-        constants: {
-          Z_NO_COMPRESSION: 0, Z_BEST_SPEED: 1, Z_BEST_COMPRESSION: 9,
-          Z_DEFAULT_COMPRESSION: -1, Z_SYNC_FLUSH: 2, Z_FULL_FLUSH: 3,
-          Z_NO_FLUSH: 0, Z_PARTIAL_FLUSH: 1, Z_DEFAULT_WINDOWBITS: 15,
-          BROTLI_OPERATION_PROCESS: 0, BROTLI_OPERATION_FLUSH: 1, BROTLI_OPERATION_FINISH: 2,
-        },
-      };
-    }
+    case 'node:zlib': return createZlibModule(getBuiltinModule);
 
     case 'dns':
     case 'node:dns':
@@ -207,26 +173,29 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
     case 'node:module': {
       // Provide createRequire that delegates to our require system
       const modExport: any = {
-        createRequire: (_url: string) => {
-          // Return a require function that uses our module resolution
-          const fakeReq: any = (id: string) => requireModule(id, ctx.cwd);
-          fakeReq.resolve = (id: string) => {
-            // Simple resolve: check builtins first, then file paths
-            if (getBuiltinModule(id) || getBuiltinModule('node:' + id)) return id;
-            // Try to find the file in cache
-            const tryPaths = [
-              id,
-              id + '.js',
-              id + '/index.js',
-            ];
-            for (const p of tryPaths) {
-              if (fileCache.has(p)) return p;
-            }
-            return id;
-          };
-          fakeReq.resolve.paths = () => [ctx.cwd + '/node_modules', '/usr/local/lib/node_modules'];
+        // A real require for the file (a path or file: URL), resolving from its directory
+        createRequire: (from: any) => {
+          let f = String(from instanceof URL ? from.href : from);
+          if (f.startsWith('file://')) f = decodeURIComponent(f.slice(7));
+          const dir = f.endsWith('/') ? f.slice(0, -1) || '/' : f.substring(0, f.lastIndexOf('/')) || '/';
+          const mk = (requireModule as any).makeRequire;
+          if (mk) return mk(dir);
+          const fakeReq: any = (id: string) => requireModule(id, dir);
+          fakeReq.resolve = (id: string) => id;
           fakeReq.cache = moduleCache;
           return fakeReq;
+        },
+        // The node_modules directories searched from a directory (pnpm's bin linking)
+        _nodeModulePaths: (from: string) => {
+          const out: string[] = [];
+          let d = String(from).replace(/\/+$/, '') || '/';
+          for (;;) {
+            const base = d.slice(d.lastIndexOf('/') + 1);
+            if (base !== 'node_modules') out.push(`${d === '/' ? '' : d}/node_modules`);
+            if (d === '/' || !d) break;
+            d = d.substring(0, d.lastIndexOf('/')) || '/';
+          }
+          return out;
         },
         builtinModules: [
           'assert', 'async_hooks', 'buffer', 'child_process', 'constants', 'crypto',
@@ -239,7 +208,13 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
           const clean = name.startsWith('node:') ? name.slice(5) : name;
           return modExport.builtinModules.includes(clean);
         },
-        _resolveFilename: (request: string) => request,
+        _resolveFilename: (request: string, parent?: any) => {
+          const mk = (requireModule as any).makeRequire;
+          if (!mk) return request;
+          const f = parent?.filename || parent?.id;
+          const dir = typeof f === 'string' && f.startsWith('/') ? f.substring(0, f.lastIndexOf('/')) || '/' : ctx.cwd;
+          return mk(dir).resolve(request);
+        },
         _cache: moduleCache,
         Module: class Module {
           id: string;
@@ -338,12 +313,20 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
         }
       }
 
+      let nextThreadId = 1;
       class Worker {
-        threadId = 1;
+        threadId = nextThreadId++;
         resourceLimits = {};
-        constructor(_filename: string | URL, _options?: any) {
+        _toWorker?: (value: any) => void;
+        _terminate?: () => void;
+        _exited = false;
+        constructor(filename: string | URL, options?: any) {
           makeEmitter(this);
-          // Only emit error if someone is listening; always emit exit(1) for graceful degradation
+          if (deps.startWorker && !options?.eval) {
+            deps.startWorker(String(filename), options ?? {}, this);
+            return;
+          }
+          // No way to run it: only emit error if someone is listening; exit(1) for graceful degradation
           setTimeout(() => {
             if ((this as any).listenerCount('error') > 0) {
               (this as any).emit('error', new Error('Worker threads not supported in browser'));
@@ -351,9 +334,10 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
             (this as any).emit('exit', 1);
           }, 0);
         }
-        postMessage(_value: any, _transferList?: any[]) {}
+        postMessage(value: any, _transferList?: any[]) { this._toWorker?.(value); }
         terminate(): Promise<number> {
-          (this as any).emit('exit', 0);
+          this._terminate?.();
+          if (!this._exited) { this._exited = true; (this as any).emit('exit', 0); }
           return Promise.resolve(0);
         }
         ref() { return this; }
@@ -385,6 +369,7 @@ export function createMiscModule(name: string, deps: MiscDeps): any | null {
         isMainThread: true,
         parentPort: null,
         workerData: null,
+        _makeEmitter: makeEmitter,
         threadId: 0,
         resourceLimits: {},
         SHARE_ENV: Symbol('SHARE_ENV'),

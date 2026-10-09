@@ -1,0 +1,154 @@
+From 59fde5a94d8c13501d4d6a47ad517c196190f109 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 08:39:32 +0000
+Subject: [PATCH 39/39] BSF/BSR with a zero source leave the destination
+ unchanged (interpreter, path JIT, wasm JIT)
+
+---
+ blink/machine.c | 52 +++++++++++++++++++++++++++++++++++++++----------
+ blink/wjit.c    | 24 ++++++++++++++++++++---
+ 2 files changed, 63 insertions(+), 13 deletions(-)
+
+diff --git a/blink/machine.c b/blink/machine.c
+index d64cbfe..3f36824 100644
+--- a/blink/machine.c
++++ b/blink/machine.c
+@@ -1062,10 +1062,6 @@ static u64 AluLzcnt32(u64 x, struct Machine *m) {
+ static u64 AluLzcnt16(u64 x, struct Machine *m) {
+   return AluLzcnt(x, m, 16);
+ }
+-static u64 AluBsf(u64 x, struct Machine *m) {
+-  m->flags = SetFlag(m->flags, FLAGS_ZF, !x);
+-  return x ? bsf(x) : 0;
+-}
+ 
+ static u64 AluTzcnt(u64 x, struct Machine *m, int bits) {
+   u64 r = x ? bits - 1 - bsr(x) : bits;  // lzcnt (the names are swapped)
+@@ -1082,10 +1078,6 @@ static u64 AluTzcnt32(u64 x, struct Machine *m) {
+ static u64 AluTzcnt16(u64 x, struct Machine *m) {
+   return AluTzcnt(x, m, 16);
+ }
+-static u64 AluBsr(u64 x, struct Machine *m) {
+-  m->flags = SetFlag(m->flags, FLAGS_ZF, !x);
+-  return x ? bsr(x) : 0;
+-}
+ 
+ static void Bitscan(P, u64 op(u64, struct Machine *)) {
+   WriteRegister(
+@@ -1102,6 +1094,44 @@ static void Bitscan(P, u64 op(u64, struct Machine *)) {
+   }
+ }
+ 
++// bsf/bsr: a zero source leaves the destination (all 64 bits) unchanged,
++// as hardware does; LLVM's ctlz/cttz rely on it. `old` is the destination
++// register; a 16-bit index replaces only its low 16 bits.
++#define BITSCAN_KEEP(NAME, SCAN, MERGE)                     \
++  static u64 NAME(u64 x, struct Machine *m, u64 old) {      \
++    m->flags = SetFlag(m->flags, FLAGS_ZF, !x);             \
++    if (!x) return old;                                     \
++    return MERGE ? (old & ~(u64)0xffff) | SCAN(x) : SCAN(x); \
++  }
++BITSCAN_KEEP(AluBsfKeep, bsf, 0)
++BITSCAN_KEEP(AluBsrKeep, bsr, 0)
++BITSCAN_KEEP(AluBsfKeep16, bsf, 1)
++BITSCAN_KEEP(AluBsrKeep16, bsr, 1)
++
++static void BitscanKeep(P, bool rev) {
++  u64 x = ReadMemory(rde, GetModrmRegisterWordPointerReadOszRexw(A));
++  u64 (*op)(u64, struct Machine *, u64);
++  if (Osz(rde) && !Rexw(rde)) {
++    op = rev ? AluBsrKeep16 : AluBsfKeep16;
++  } else {
++    op = rev ? AluBsrKeep : AluBsfKeep;
++  }
++  m->flags = SetFlag(m->flags, FLAGS_ZF, !x);
++  if (x) WriteRegister(rde, RegRexrReg(m, rde), rev ? bsr(x) : bsf(x));
++  if (IsMakingPath(m)) {
++    Jitter(A,
++           "wB"      // res0 = GetRegOrMem[force16+bit](RexbRm)
++           "r0s1="   // sav1 = res0
++           "z3A"     // res0 = GetReg[force64bit](RexrReg)
++           "r0a2="   // arg2 = res0 (old destination)
++           "s0a1="   // arg1 = sav0 (machine)
++           "s1a0="   // arg0 = sav1 (source)
++           "c"       // call function (op)
++           "r0z3C",  // PutReg[force64bit](RexrReg, res0)
++           op);
++  }
++}
++
+ static void OpBsf(P) {
+   u64 (*op)(u64, struct Machine *);
+   if (Rep(rde) == 3) {
+@@ -1113,7 +1143,8 @@ static void OpBsf(P) {
+       op = AluLzcnt16;
+     }
+   } else {
+-    op = AluBsf;
++    BitscanKeep(A, false);
++    return;
+   }
+   Bitscan(A, op);
+ }
+@@ -1129,7 +1160,8 @@ static void OpBsr(P) {
+       op = AluTzcnt16;
+     }
+   } else {
+-    op = AluBsr;
++    BitscanKeep(A, true);
++    return;
+   }
+   Bitscan(A, op);
+ }
+diff --git a/blink/wjit.c b/blink/wjit.c
+index d80151d..90a91db 100644
+--- a/blink/wjit.c
++++ b/blink/wjit.c
+@@ -2564,7 +2564,8 @@ static void TranslateBt(struct Cg *g, struct Ins *in) {
+ }
+ 
+ // bsf/bsr, and tzcnt/lzcnt with an F3 prefix (Blink's flags: ZF for
+-// bsf/bsr, which write 0 for a zero source; CF and ZF for tzcnt/lzcnt)
++// bsf/bsr, which leave the destination alone for a zero source; CF and ZF
++// for tzcnt/lzcnt)
+ static void TranslateBitscan(struct Cg *g, struct Ins *in) {
+   u64 rde = in->rde;
+   int w = Width(rde);
+@@ -2587,7 +2588,20 @@ static void TranslateBitscan(struct Cg *g, struct Ins *in) {
+       Get(g, L_X);
+       Op(g, W_I64_CTZ);
+     }
+-    I64(g, cnt ? w * 8 : 0);
++    if (!cnt) {
++      // bsf/bsr: a zero source leaves all 64 bits of the destination as
++      // they were (LLVM's ctlz relies on it); a 16-bit index keeps the rest
++      UseReg(g, RexrReg(rde));
++      if (w == 2) {
++        Get(g, L_R(RexrReg(rde)));
++        I64(g, ~(u64)0xffff);
++        Op(g, W_I64_AND);
++        Op(g, W_I64_OR);
++      }
++      Get(g, L_R(RexrReg(rde)));
++    } else {
++      I64(g, w * 8);
++    }
+     Get(g, L_X);
+     Op(g, W_I64_EQZ);
+     Op(g, W_I32_EQZ);
+@@ -2614,7 +2628,11 @@ static void TranslateBitscan(struct Cg *g, struct Ins *in) {
+     Set(g, L_F);
+   }
+   Get(g, L_Z);
+-  PutRegField(g, in, w);
++  if (cnt) {
++    PutRegField(g, in, w);
++  } else {
++    PutReg(g, RexrReg(rde), 8);
++  }
+ }
+ 
+ static void Push64(struct Cg *g, struct Ins *in) {
+-- 
+2.43.0
+

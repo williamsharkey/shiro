@@ -1,0 +1,835 @@
+From e87142be52b6da77512a991140c3e8e21513e91f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 08:59:40 +0000
+Subject: [PATCH 40/40] SSE4.1 and SSE4.2 (legacy encodings), crc32 r/m16;
+ CPUID advertises them
+
+---
+ blink/cpuid.c   |   4 +-
+ blink/crc32.c   |   4 +-
+ blink/machine.c |  50 ++++
+ blink/machine.h |  50 ++++
+ blink/sse4.c    | 659 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 5 files changed, 763 insertions(+), 4 deletions(-)
+ create mode 100644 blink/sse4.c
+
+diff --git a/blink/cpuid.c b/blink/cpuid.c
+index 597c7c6..9281cca 100644
+--- a/blink/cpuid.c
++++ b/blink/cpuid.c
+@@ -146,8 +146,8 @@ void OpCpuid(P) {
+       dx |= 1 << 24;   // fxsave
+       dx |= 1 << 25;   // sse
+       dx |= 1 << 26;   // sse2
+-      cx |= 0 << 19;   // sse4.1
+-      cx |= 0 << 20;   // sse4.2
++      cx |= 1 << 19;   // sse4.1
++      cx |= 1 << 20;   // sse4.2
+ #ifndef DISABLE_X87
+       dx |= 1 << 0;  // fpu
+ #endif
+diff --git a/blink/crc32.c b/blink/crc32.c
+index 83661d5..c72a978 100644
+--- a/blink/crc32.c
++++ b/blink/crc32.c
+@@ -68,8 +68,8 @@ static void OpCrc32(P) {
+ void Op2f01(P) {
+   if (!Rep(rde) && !Osz(rde)) {
+     OpUdImpl(m);  // TODO: movbe
+-  } else if (Rep(rde) == 2 && !Osz(rde)) {
+-    OpCrc32(A);
++  } else if (Rep(rde) == 2) {
++    OpCrc32(A);  // 66 F2 0F 38 F1: crc32 r32, r/m16
+   } else {
+     OpUdImpl(m);
+   }
+diff --git a/blink/machine.c b/blink/machine.c
+index 3f36824..78ca4b4 100644
+--- a/blink/machine.c
++++ b/blink/machine.c
+@@ -2117,6 +2117,56 @@ nexgen32e_f GetOp(long op) {
+       XLAT(0x30f, OpSsePalignr);
+       XLAT(0x344, OpSsePclmulqdq);
+       XLAT(0x3f0, OpRorx);
++      XLAT(0x210, OpSsePblendvb);
++      XLAT(0x214, OpSseBlendvps);
++      XLAT(0x215, OpSseBlendvpd);
++      XLAT(0x217, OpSsePtest);
++      XLAT(0x220, OpSsePmovsxbw);
++      XLAT(0x221, OpSsePmovsxbd);
++      XLAT(0x222, OpSsePmovsxbq);
++      XLAT(0x223, OpSsePmovsxwd);
++      XLAT(0x224, OpSsePmovsxwq);
++      XLAT(0x225, OpSsePmovsxdq);
++      XLAT(0x228, OpSsePmuldq);
++      XLAT(0x229, OpSsePcmpeqq);
++      XLAT(0x22b, OpSsePackusdw);
++      XLAT(0x230, OpSsePmovzxbw);
++      XLAT(0x231, OpSsePmovzxbd);
++      XLAT(0x232, OpSsePmovzxbq);
++      XLAT(0x233, OpSsePmovzxwd);
++      XLAT(0x234, OpSsePmovzxwq);
++      XLAT(0x235, OpSsePmovzxdq);
++      XLAT(0x237, OpSsePcmpgtq);
++      XLAT(0x238, OpSsePminsb);
++      XLAT(0x239, OpSsePminsd);
++      XLAT(0x23a, OpSsePminuw);
++      XLAT(0x23b, OpSsePminud);
++      XLAT(0x23c, OpSsePmaxsb);
++      XLAT(0x23d, OpSsePmaxsd);
++      XLAT(0x23e, OpSsePmaxuw);
++      XLAT(0x23f, OpSsePmaxud);
++      XLAT(0x241, OpSsePhminposuw);
++      XLAT(0x308, OpSseRoundps);
++      XLAT(0x309, OpSseRoundpd);
++      XLAT(0x30a, OpSseRoundss);
++      XLAT(0x30b, OpSseRoundsd);
++      XLAT(0x30c, OpSseBlendps);
++      XLAT(0x30d, OpSseBlendpd);
++      XLAT(0x30e, OpSsePblendw);
++      XLAT(0x314, OpSsePextrb);
++      XLAT(0x315, OpSsePextrw);
++      XLAT(0x316, OpSsePextrdq);
++      XLAT(0x317, OpSseExtractps);
++      XLAT(0x320, OpSsePinsrb);
++      XLAT(0x321, OpSseInsertps);
++      XLAT(0x322, OpSsePinsrdq);
++      XLAT(0x340, OpSseDpps);
++      XLAT(0x341, OpSseDppd);
++      XLAT(0x342, OpSseMpsadbw);
++      XLAT(0x360, OpSsePcmpestrm);
++      XLAT(0x361, OpSsePcmpestri);
++      XLAT(0x362, OpSsePcmpistrm);
++      XLAT(0x363, OpSsePcmpistri);
+       default:
+         return OpUd;
+     }
+diff --git a/blink/machine.h b/blink/machine.h
+index 1291359..7602c6d 100644
+--- a/blink/machine.h
++++ b/blink/machine.h
+@@ -663,6 +663,56 @@ void OpRet(P);
+ void OpRetf(P);
+ void OpRetIw(P);
+ void OpSsePclmulqdq(P);
++void OpSsePblendvb(P);
++void OpSseBlendvps(P);
++void OpSseBlendvpd(P);
++void OpSsePtest(P);
++void OpSsePmovsxbw(P);
++void OpSsePmovsxbd(P);
++void OpSsePmovsxbq(P);
++void OpSsePmovsxwd(P);
++void OpSsePmovsxwq(P);
++void OpSsePmovsxdq(P);
++void OpSsePmuldq(P);
++void OpSsePcmpeqq(P);
++void OpSsePackusdw(P);
++void OpSsePmovzxbw(P);
++void OpSsePmovzxbd(P);
++void OpSsePmovzxbq(P);
++void OpSsePmovzxwd(P);
++void OpSsePmovzxwq(P);
++void OpSsePmovzxdq(P);
++void OpSsePcmpgtq(P);
++void OpSsePminsb(P);
++void OpSsePminsd(P);
++void OpSsePminuw(P);
++void OpSsePminud(P);
++void OpSsePmaxsb(P);
++void OpSsePmaxsd(P);
++void OpSsePmaxuw(P);
++void OpSsePmaxud(P);
++void OpSsePhminposuw(P);
++void OpSseRoundps(P);
++void OpSseRoundpd(P);
++void OpSseRoundss(P);
++void OpSseRoundsd(P);
++void OpSseBlendps(P);
++void OpSseBlendpd(P);
++void OpSsePblendw(P);
++void OpSsePextrb(P);
++void OpSsePextrw(P);
++void OpSsePextrdq(P);
++void OpSseExtractps(P);
++void OpSsePinsrb(P);
++void OpSseInsertps(P);
++void OpSsePinsrdq(P);
++void OpSseDpps(P);
++void OpSseDppd(P);
++void OpSseMpsadbw(P);
++void OpSsePcmpestrm(P);
++void OpSsePcmpestri(P);
++void OpSsePcmpistrm(P);
++void OpSsePcmpistri(P);
+ void OpXaddEbGb(P);
+ void OpXaddEvqpGvqp(P);
+ void OpXchgGbEb(P);
+diff --git a/blink/sse4.c b/blink/sse4.c
+new file mode 100644
+index 0000000..1366977
+--- /dev/null
++++ b/blink/sse4.c
+@@ -0,0 +1,659 @@
++/*-*- mode:c;indent-tabs-mode:nil;c-basic-offset:2;tab-width:8;coding:utf-8 -*-│
++│ vi: set et ft=c ts=2 sts=2 sw=2 fenc=utf-8                               :vi │
++╞══════════════════════════════════════════════════════════════════════════════╡
++│ Permission to use, copy, modify, and/or distribute this software for         │
++│ any purpose with or without fee is hereby granted, provided that the         │
++│ above copyright notice and this permission notice appear in all copies.      │
++│                                                                              │
++│ THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL                │
++│ WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED                │
++│ WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE             │
++│ AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL         │
++│ DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR        │
++│ PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER               │
++│ TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR             │
++│ PERFORMANCE OF THIS SOFTWARE.                                                │
++╚─────────────────────────────────────────────────────────────────────────────*/
++// SSE4.1 and SSE4.2 (the legacy 66 0F 38 xx and 66 0F 3A xx encodings).
++// Operands are read and written through Read/Write helpers, so this is
++// byte order independent; m128 operands must be aligned as usual, except
++// for the string compares, and the narrow ones (pmovsx/zx, pinsr/pextr,
++// insertps, roundss/sd) may be unaligned.
++#include <math.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "blink/bitscan.h"
++#include "blink/endian.h"
++#include "blink/flags.h"
++#include "blink/macros.h"
++#include "blink/machine.h"
++#include "blink/modrm.h"
++#include "blink/rde.h"
++
++#define B(p, i)  ((p)[i])
++#define SB(p, i) ((i8)(p)[i])
++#define W(p, i)  Read16((p) + 2 * (i))
++#define SW(p, i) ((i16)Read16((p) + 2 * (i)))
++#define D(p, i)  Read32((p) + 4 * (i))
++#define SD(p, i) ((i32)Read32((p) + 4 * (i)))
++#define Q(p, i)  Read64((p) + 8 * (i))
++#define SQ(p, i) ((i64)Read64((p) + 8 * (i)))
++
++static float F(const u8 *p, int i) {
++  u32 u = D(p, i);
++  float f;
++  memcpy(&f, &u, 4);
++  return f;
++}
++static double G(const u8 *p, int i) {
++  u64 u = Q(p, i);
++  double f;
++  memcpy(&f, &u, 8);
++  return f;
++}
++static void PutF(u8 *p, int i, float f) {
++  u32 u;
++  memcpy(&u, &f, 4);
++  Write32(p + 4 * i, u);
++}
++static void PutG(u8 *p, int i, double f) {
++  u64 u;
++  memcpy(&u, &f, 8);
++  Write64(p + 8 * i, u);
++}
++
++// the destination xmm register (ModRM reg)
++static u8 *Dst(P) {
++  return XmmRexrReg(m, rde);
++}
++
++// an n-byte source that may be unaligned: xmm register or memory
++static const u8 *Src(P, size_t n) {
++  if (IsModrmRegister(rde)) return XmmRexbRm(m, rde);
++  return ComputeReserveAddressRead(A, n);
++}
++
++// legacy SSE instructions without the 66 prefix (no MMX forms here)
++#define NEED_OSZ        \
++  if (!Osz(rde)) {      \
++    OpUdImpl(m);        \
++    return;             \
++  }
++
++////////////////////////////////////////////////////////////////////////////////
++// 66 0F 38
++
++static void Blendv(P, int size) {
++  u8 r[16], *x = Dst(A);
++  const u8 *y = GetXmmAddress(A), *k = m->xmm[0];
++  int i;
++  for (i = 0; i < 16; ++i) {
++    r[i] = (k[(i | (size - 1))] & 0x80) ? y[i] : x[i];
++  }
++  memcpy(x, r, 16);
++}
++void OpSsePblendvb(P) {
++  NEED_OSZ;
++  Blendv(A, 1);
++}
++void OpSseBlendvps(P) {
++  NEED_OSZ;
++  Blendv(A, 4);
++}
++void OpSseBlendvpd(P) {
++  NEED_OSZ;
++  Blendv(A, 8);
++}
++
++void OpSsePtest(P) {
++  const u8 *x, *y;
++  NEED_OSZ;
++  x = Dst(A);
++  y = GetXmmAddress(A);
++  m->flags = SetFlag(m->flags, FLAGS_ZF, !((Q(x, 0) & Q(y, 0)) |  //
++                                           (Q(x, 1) & Q(y, 1))));
++  m->flags = SetFlag(m->flags, FLAGS_CF, !((~Q(x, 0) & Q(y, 0)) |  //
++                                           (~Q(x, 1) & Q(y, 1))));
++  m->flags = SetFlag(m->flags, FLAGS_OF, false);
++  m->flags = SetFlag(m->flags, FLAGS_SF, false);
++  m->flags = SetFlag(m->flags, FLAGS_AF, false);
++  m->flags = SetFlag(m->flags, FLAGS_PF, false);
++}
++
++// pmovsx/pmovzx: `n` elements of `from` bytes widened to `to` bytes
++static void Pmovx(P, int from, int to, bool sign) {
++  u8 r[16];
++  const u8 *y;
++  int i, n = 16 / to;
++  i64 v;
++  NEED_OSZ;
++  y = Src(A, n * from);
++  for (i = 0; i < n; ++i) {
++    switch (from) {
++      case 1:
++        v = sign ? SB(y, i) : B(y, i);
++        break;
++      case 2:
++        v = sign ? SW(y, i) : W(y, i);
++        break;
++      default:
++        v = sign ? (i64)SD(y, i) : (i64)D(y, i);
++        break;
++    }
++    switch (to) {
++      case 2:
++        Write16(r + 2 * i, v);
++        break;
++      case 4:
++        Write32(r + 4 * i, v);
++        break;
++      default:
++        Write64(r + 8 * i, v);
++        break;
++    }
++  }
++  memcpy(Dst(A), r, 16);
++}
++void OpSsePmovsxbw(P) {
++  Pmovx(A, 1, 2, true);
++}
++void OpSsePmovsxbd(P) {
++  Pmovx(A, 1, 4, true);
++}
++void OpSsePmovsxbq(P) {
++  Pmovx(A, 1, 8, true);
++}
++void OpSsePmovsxwd(P) {
++  Pmovx(A, 2, 4, true);
++}
++void OpSsePmovsxwq(P) {
++  Pmovx(A, 2, 8, true);
++}
++void OpSsePmovsxdq(P) {
++  Pmovx(A, 4, 8, true);
++}
++void OpSsePmovzxbw(P) {
++  Pmovx(A, 1, 2, false);
++}
++void OpSsePmovzxbd(P) {
++  Pmovx(A, 1, 4, false);
++}
++void OpSsePmovzxbq(P) {
++  Pmovx(A, 1, 8, false);
++}
++void OpSsePmovzxwd(P) {
++  Pmovx(A, 2, 4, false);
++}
++void OpSsePmovzxwq(P) {
++  Pmovx(A, 2, 8, false);
++}
++void OpSsePmovzxdq(P) {
++  Pmovx(A, 4, 8, false);
++}
++
++void OpSsePmuldq(P) {
++  u8 *x;
++  const u8 *y;
++  NEED_OSZ;
++  x = Dst(A);
++  y = GetXmmAddress(A);
++  i64 a = (i64)SD(x, 0) * SD(y, 0);
++  i64 b = (i64)SD(x, 2) * SD(y, 2);
++  Write64(x, a);
++  Write64(x + 8, b);
++}
++
++void OpSsePcmpeqq(P) {
++  u8 *x;
++  const u8 *y;
++  NEED_OSZ;
++  x = Dst(A);
++  y = GetXmmAddress(A);
++  Write64(x, Q(x, 0) == Q(y, 0) ? -1 : 0);
++  Write64(x + 8, Q(x, 1) == Q(y, 1) ? -1 : 0);
++}
++
++void OpSsePcmpgtq(P) {
++  u8 *x;
++  const u8 *y;
++  NEED_OSZ;
++  x = Dst(A);
++  y = GetXmmAddress(A);
++  Write64(x, SQ(x, 0) > SQ(y, 0) ? -1 : 0);
++  Write64(x + 8, SQ(x, 1) > SQ(y, 1) ? -1 : 0);
++}
++
++void OpSsePackusdw(P) {
++  u8 r[16], *x;
++  const u8 *y;
++  int i;
++  i32 v;
++  NEED_OSZ;
++  x = Dst(A);
++  y = GetXmmAddress(A);
++  for (i = 0; i < 8; ++i) {
++    v = i < 4 ? SD(x, i) : SD(y, i - 4);
++    Write16(r + 2 * i, v < 0 ? 0 : v > 65535 ? 65535 : v);
++  }
++  memcpy(x, r, 16);
++}
++
++// pmin/pmax: MAX 0 for min, 1 for max
++#define MINMAX(NAME, N, GET, PUT, MAX)       \
++  void NAME(P) {                             \
++    u8 *x;                                   \
++    const u8 *y;                             \
++    int i;                                   \
++    NEED_OSZ;                                \
++    x = Dst(A);                              \
++    y = GetXmmAddress(A);                    \
++    for (i = 0; i < N; ++i) {                \
++      if (MAX ? GET(y, i) > GET(x, i)        \
++              : GET(y, i) < GET(x, i)) {     \
++        PUT;                                 \
++      }                                      \
++    }                                        \
++  }
++MINMAX(OpSsePminsb, 16, SB, x[i] = y[i], 0)
++MINMAX(OpSsePmaxsb, 16, SB, x[i] = y[i], 1)
++MINMAX(OpSsePminuw, 8, W, Write16(x + 2 * i, W(y, i)), 0)
++MINMAX(OpSsePmaxuw, 8, W, Write16(x + 2 * i, W(y, i)), 1)
++MINMAX(OpSsePminsd, 4, SD, Write32(x + 4 * i, D(y, i)), 0)
++MINMAX(OpSsePmaxsd, 4, SD, Write32(x + 4 * i, D(y, i)), 1)
++MINMAX(OpSsePminud, 4, D, Write32(x + 4 * i, D(y, i)), 0)
++MINMAX(OpSsePmaxud, 4, D, Write32(x + 4 * i, D(y, i)), 1)
++
++void OpSsePhminposuw(P) {
++  u8 r[16] = {0};
++  const u8 *y;
++  int i, k = 0;
++  NEED_OSZ;
++  y = GetXmmAddress(A);
++  for (i = 1; i < 8; ++i) {
++    if (W(y, i) < W(y, k)) k = i;
++  }
++  Write16(r, W(y, k));
++  Write16(r + 2, k);
++  memcpy(Dst(A), r, 16);
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// 66 0F 3A
++
++// imm8[2] picks MXCSR.RC, else imm8[1:0]: nearest even, down, up, truncate
++static int RoundingMode(struct Machine *m, int imm) {
++  return imm & 4 ? (m->mxcsr >> 13) & 3 : imm & 3;
++}
++static double RoundEven(double x) {
++  double r = round(x);
++  if (fabs(x - trunc(x)) == 0.5) r = 2.0 * round(x / 2.0);
++  return r;
++}
++static float RoundEvenf(float x) {
++  float r = roundf(x);
++  if (fabsf(x - truncf(x)) == 0.5f) r = 2.0f * roundf(x / 2.0f);
++  return r;
++}
++static double RoundG(double x, int mode) {
++  switch (mode) {
++    case 0:
++      return RoundEven(x);
++    case 1:
++      return floor(x);
++    case 2:
++      return ceil(x);
++    default:
++      return trunc(x);
++  }
++}
++static float RoundF(float x, int mode) {
++  switch (mode) {
++    case 0:
++      return RoundEvenf(x);
++    case 1:
++      return floorf(x);
++    case 2:
++      return ceilf(x);
++    default:
++      return truncf(x);
++  }
++}
++
++void OpSseRoundps(P) {
++  u8 r[16];
++  const u8 *y;
++  int i, mode;
++  NEED_OSZ;
++  y = GetXmmAddress(A);
++  mode = RoundingMode(m, uimm0);
++  for (i = 0; i < 4; ++i) PutF(r, i, RoundF(F(y, i), mode));
++  memcpy(Dst(A), r, 16);
++}
++void OpSseRoundpd(P) {
++  u8 r[16];
++  const u8 *y;
++  int i, mode;
++  NEED_OSZ;
++  y = GetXmmAddress(A);
++  mode = RoundingMode(m, uimm0);
++  for (i = 0; i < 2; ++i) PutG(r, i, RoundG(G(y, i), mode));
++  memcpy(Dst(A), r, 16);
++}
++void OpSseRoundss(P) {
++  NEED_OSZ;
++  PutF(Dst(A), 0, RoundF(F(Src(A, 4), 0), RoundingMode(m, uimm0)));
++}
++void OpSseRoundsd(P) {
++  NEED_OSZ;
++  PutG(Dst(A), 0, RoundG(G(Src(A, 8), 0), RoundingMode(m, uimm0)));
++}
++
++static void Blend(P, int size) {
++  u8 *x;
++  const u8 *y;
++  int i;
++  x = Dst(A);
++  y = GetXmmAddress(A);
++  for (i = 0; i < 16 / size; ++i) {
++    if (uimm0 & (1 << i)) memcpy(x + i * size, y + i * size, size);
++  }
++}
++void OpSseBlendps(P) {
++  NEED_OSZ;
++  Blend(A, 4);
++}
++void OpSseBlendpd(P) {
++  NEED_OSZ;
++  Blend(A, 8);
++}
++void OpSsePblendw(P) {
++  NEED_OSZ;
++  Blend(A, 2);
++}
++
++// pextrb/pextrw/pextrd/pextrq/extractps: to a general register (zero
++// extended to 64 bits) or to memory
++static void Extract(P, u64 v, int size) {
++  if (IsModrmRegister(rde)) {
++    Put64(RegRexbRm(m, rde), v);
++  } else {
++    u8 *p = ComputeReserveAddressWrite(A, size);
++    switch (size) {
++      case 1:
++        *p = v;
++        break;
++      case 2:
++        Write16(p, v);
++        break;
++      case 4:
++        Write32(p, v);
++        break;
++      default:
++        Write64(p, v);
++        break;
++    }
++  }
++}
++void OpSsePextrb(P) {
++  NEED_OSZ;
++  Extract(A, B(Dst(A), uimm0 & 15), 1);
++}
++void OpSsePextrw(P) {
++  NEED_OSZ;
++  Extract(A, W(Dst(A), uimm0 & 7), 2);
++}
++void OpSsePextrdq(P) {
++  NEED_OSZ;
++  if (Rexw(rde)) {
++    Extract(A, Q(Dst(A), uimm0 & 1), 8);
++  } else {
++    Extract(A, D(Dst(A), uimm0 & 3), 4);
++  }
++}
++void OpSseExtractps(P) {
++  NEED_OSZ;
++  Extract(A, D(Dst(A), uimm0 & 3), 4);
++}
++
++// pinsrb/pinsrd/pinsrq: from a general register or memory
++static const u8 *InsertSource(P, int size) {
++  if (IsModrmRegister(rde)) return RegRexbRm(m, rde);
++  return ComputeReserveAddressRead(A, size);
++}
++void OpSsePinsrb(P) {
++  NEED_OSZ;
++  Dst(A)[uimm0 & 15] = *InsertSource(A, 1);
++}
++void OpSsePinsrdq(P) {
++  NEED_OSZ;
++  if (Rexw(rde)) {
++    Write64(Dst(A) + 8 * (uimm0 & 1), Read64(InsertSource(A, 8)));
++  } else {
++    Write32(Dst(A) + 4 * (uimm0 & 3), Read32(InsertSource(A, 4)));
++  }
++}
++
++void OpSseInsertps(P) {
++  u8 *x;
++  u32 v;
++  int i;
++  NEED_OSZ;
++  x = Dst(A);
++  if (IsModrmRegister(rde)) {
++    v = D(XmmRexbRm(m, rde), (uimm0 >> 6) & 3);
++  } else {
++    v = Read32(ComputeReserveAddressRead(A, 4));
++  }
++  Write32(x + 4 * ((uimm0 >> 4) & 3), v);
++  for (i = 0; i < 4; ++i) {
++    if (uimm0 & (1 << i)) Write32(x + 4 * i, 0);
++  }
++}
++
++// dot products: the selected products are summed pairwise, as hardware does
++void OpSseDpps(P) {
++  u8 *x;
++  const u8 *y;
++  float t[4], s;
++  int i;
++  NEED_OSZ;
++  x = Dst(A);
++  y = GetXmmAddress(A);
++  for (i = 0; i < 4; ++i) {
++    t[i] = (uimm0 & (0x10 << i)) ? F(x, i) * F(y, i) : +0.f;
++  }
++  s = (t[0] + t[1]) + (t[2] + t[3]);
++  for (i = 0; i < 4; ++i) PutF(x, i, (uimm0 & (1 << i)) ? s : +0.f);
++}
++void OpSseDppd(P) {
++  u8 *x;
++  const u8 *y;
++  double t[2], s;
++  int i;
++  NEED_OSZ;
++  x = Dst(A);
++  y = GetXmmAddress(A);
++  for (i = 0; i < 2; ++i) {
++    t[i] = (uimm0 & (0x10 << i)) ? G(x, i) * G(y, i) : +0.;
++  }
++  s = t[0] + t[1];
++  for (i = 0; i < 2; ++i) PutG(x, i, (uimm0 & (1 << i)) ? s : +0.);
++}
++
++void OpSseMpsadbw(P) {
++  u8 r[16], *x;
++  const u8 *y;
++  int i, j, a, b, sum;
++  NEED_OSZ;
++  x = Dst(A);
++  y = GetXmmAddress(A);
++  a = (uimm0 & 4) ? 4 : 0;
++  b = (uimm0 & 3) * 4;
++  for (i = 0; i < 8; ++i) {
++    for (sum = j = 0; j < 4; ++j) {
++      sum += abs((int)x[a + i + j] - (int)y[b + j]);
++    }
++    Write16(r + 2 * i, sum);
++  }
++  memcpy(x, r, 16);
++}
++
++////////////////////////////////////////////////////////////////////////////////
++// SSE4.2 string compares: pcmpestri, pcmpestrm, pcmpistri, pcmpistrm
++
++// element i of a string operand in the format imm8[1:0] selects
++static int StrElem(const u8 *p, int imm, int i) {
++  switch (imm & 3) {
++    case 0:
++      return B(p, i);
++    case 1:
++      return W(p, i);
++    case 2:
++      return SB(p, i);
++    default:
++      return SW(p, i);
++  }
++}
++
++// explicit length from rax/rdx (eax/edx without REX.W), saturated
++static int ExplicitLength(P, u8 *reg, int upper) {
++  i64 v = Rexw(rde) ? (i64)Read64(reg) : (i32)Read32(reg);
++  if (v > upper || v < -upper) return upper;
++  return v < 0 ? -v : v;
++}
++
++// implicit length: up to the first zero element
++static int ImplicitLength(const u8 *p, int imm, int upper) {
++  int n = 0;
++  while (n < upper && StrElem(p, imm, n)) ++n;
++  return n;
++}
++
++// the comparison (Intel SDM "PCMPESTRI"; the structure follows QEMU): a is
++// the register operand, b the r/m one; returns IntRes2 and sets the flags
++static unsigned PcmpStr(struct Machine *m, const u8 *a, const u8 *b, int imm,
++                        int la, int lb) {
++  unsigned res = 0;
++  int i, j, v, upper = imm & 1 ? 7 : 15;
++  int va = la - 1, vb = lb - 1;  // last valid index
++  switch ((imm >> 2) & 3) {
++    case 0:  // equal any
++      for (j = vb; j >= 0; --j) {
++        res <<= 1;
++        v = StrElem(b, imm, j);
++        for (i = va; i >= 0; --i) res |= v == StrElem(a, imm, i);
++      }
++      break;
++    case 1:  // ranges
++      for (j = vb; j >= 0; --j) {
++        res <<= 1;
++        v = StrElem(b, imm, j);
++        for (i = ((va - 1) | 1); i >= 0; i -= 2) {
++          res |= StrElem(a, imm, i) >= v && StrElem(a, imm, i - 1) <= v;
++        }
++      }
++      break;
++    case 2:  // equal each
++      res = (1u << (upper - MAX(va, vb))) - 1;
++      res <<= MAX(va, vb) - MIN(va, vb);
++      for (i = MIN(va, vb); i >= 0; --i) {
++        res <<= 1;
++        res |= StrElem(b, imm, i) == StrElem(a, imm, i);
++      }
++      break;
++    default:  // equal ordered
++      if (va == -1) {
++        res = (2u << upper) - 1;
++        break;
++      }
++      for (j = vb == upper ? vb : vb - va; j >= 0; --j) {
++        res <<= 1;
++        v = 1;
++        for (i = MIN(vb - j, va); i >= 0; --i) {
++          v &= StrElem(b, imm, i + j) == StrElem(a, imm, i);
++        }
++        res |= v;
++      }
++      break;
++  }
++  switch ((imm >> 4) & 3) {
++    case 1:  // negative polarity
++      res ^= (2u << upper) - 1;
++      break;
++    case 3:  // masked negative: only the valid elements of b
++      res ^= (1u << (vb + 1)) - 1;
++      break;
++    default:
++      break;
++  }
++  res &= (2u << upper) - 1;
++  m->flags = SetFlag(m->flags, FLAGS_CF, res != 0);
++  m->flags = SetFlag(m->flags, FLAGS_ZF, vb < upper);
++  m->flags = SetFlag(m->flags, FLAGS_SF, va < upper);
++  m->flags = SetFlag(m->flags, FLAGS_OF, res & 1);
++  m->flags = SetFlag(m->flags, FLAGS_AF, false);
++  m->flags = SetFlag(m->flags, FLAGS_PF, false);
++  return res;
++}
++
++static void PcmpStrIndex(P, unsigned res) {
++  int upper = uimm0 & 1 ? 8 : 16;
++  u32 index;
++  if (!res) {
++    index = upper;
++  } else if (uimm0 & 0x40) {
++    index = bsr(res);  // most significant
++  } else {
++    index = bsf(res);  // least significant
++  }
++  Put64(m->cx, index);
++}
++
++static void PcmpStrMask(P, unsigned res) {
++  u8 r[16] = {0};
++  int i, n = uimm0 & 1 ? 8 : 16;
++  if (uimm0 & 0x40) {
++    for (i = 0; i < n; ++i) {
++      if (res & (1u << i)) {
++        if (n == 8) {
++          Write16(r + 2 * i, 0xffff);
++        } else {
++          r[i] = 0xff;
++        }
++      }
++    }
++  } else {
++    Write16(r, res);
++  }
++  memcpy(m->xmm[0], r, 16);
++}
++
++static unsigned Pcmpestr(P) {
++  const u8 *a = Dst(A), *b = GetModrmRegisterXmmPointerRead16(A);
++  int upper = uimm0 & 1 ? 8 : 16;
++  return PcmpStr(m, a, b, uimm0, ExplicitLength(A, m->ax, upper),
++                 ExplicitLength(A, m->dx, upper));
++}
++static unsigned Pcmpistr(P) {
++  const u8 *a = Dst(A), *b = GetModrmRegisterXmmPointerRead16(A);
++  int upper = uimm0 & 1 ? 8 : 16;
++  return PcmpStr(m, a, b, uimm0, ImplicitLength(a, uimm0, upper),
++                 ImplicitLength(b, uimm0, upper));
++}
++void OpSsePcmpestrm(P) {
++  NEED_OSZ;
++  PcmpStrMask(A, Pcmpestr(A));
++}
++void OpSsePcmpestri(P) {
++  NEED_OSZ;
++  PcmpStrIndex(A, Pcmpestr(A));
++}
++void OpSsePcmpistrm(P) {
++  NEED_OSZ;
++  PcmpStrMask(A, Pcmpistr(A));
++}
++void OpSsePcmpistri(P) {
++  NEED_OSZ;
++  PcmpStrIndex(A, Pcmpistr(A));
++}
+-- 
+2.43.0
+

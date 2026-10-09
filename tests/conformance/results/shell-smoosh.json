@@ -9,18 +9,9 @@
    "failures": []
   },
   "builtin": {
-   "pass": 57,
+   "pass": 59,
    "total": 59,
-   "failures": [
-    {
-     "name": "builtin.exec.modernish.mkfifo.loop",
-     "reason": "stdout differs"
-    },
-    {
-     "name": "builtin.readonly.assign.interactive",
-     "reason": "stdout differs"
-    }
-   ]
+   "failures": []
   },
   "parse": {
    "pass": 3,

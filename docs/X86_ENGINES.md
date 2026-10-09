@@ -415,6 +415,38 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    own clock for `FUTEX_WAIT_BITSET`, not by the condition variable's
    coarser realtime ticks (LTP futex_wait_bitset01 saw it end early).
    Test: `fixtures/x86/futexwake.c`.
+36. Under Shiro a futex wait in a process's main thread shows the process
+   sleeping (S in `/proc/PID/stat`) after its first polling tick, through
+   `SYS_shiro_sleeping` (LTP waits for S before signalling a child:
+   futex_wait03, futex_wait07); `FUTEX_WAKE` on an unmapped address is
+   EFAULT; the main thread's tid is the kernel's pid, in a vfork-style
+   child too (it was Blink's own). Kernel side: a syscall shows S once it
+   has lasted 2 ms (a quick `sigaction` is R, as on Linux) and a fork child
+   counts as running from the start. Test: `fixtures/x86/futexintr.c`.
+37. More `prctl`: `PR_SET/GET_KEEPCAPS` (iputils' ping died with EINVAL),
+   `PDEATHSIG`, `DUMPABLE`, `CHILD_SUBREAPER`, `NO_NEW_PRIVS` and
+   `CAP_AMBIENT` are recorded and reported back, not enforced;
+   `PR_CAPBSET_DROP` is accepted under emscripten. Test:
+   `fixtures/x86/prctlcap.c`.
+38. Under Shiro `mknod`/`mknodat` go to the kernel's `mknodat`, which
+   makes FIFOs (and regular files) and refuses devices; with a kernel
+   that has no `mknodat` they stay EPERM. Test: `fixtures/x86/mkfifo.c`
+   (runs once the kernel defines `SYS_mknodat`).
+39. `bsf`/`bsr` with a zero source leave the destination unchanged, all 64
+   bits at every operand size, as hardware does (Blink wrote 0); LLVM's
+   `ctlz`/`cttz` rely on it (`mov $127,%r8; bsr %rax,%r8; xor $63,%r8`),
+   so Rust's `0u64.leading_zeros()` was 63 and xAI's grok CLI panicked.
+   Interpreter, Blink's path JIT and the wasm JIT. Test:
+   `fixtures/x86/bitscan.c` (native output).
+40. SSE4.1 and SSE4.2 (legacy encodings, `blink/sse4.c`): blendv*,
+   ptest, pmovsx/zx, pmuldq, pcmpeqq/gtq, packusdw, pmin/pmax*,
+   phminposuw, round*, blend*, pinsr*/pextr*, insertps/extractps,
+   dpps/dppd, mpsadbw, pcmpestri/estrm/istri/istrm, and crc32's r/m16
+   form; CPUID advertises SSE4.1/4.2 (x86-64-v2 with popcnt and cx16).
+   Bun (Claude Code's native build, opencode) and `GOAMD64=v2` Go need
+   them. They run in the interpreter (the wasm JIT calls them). Tests:
+   `fixtures/x86/sse4.c` (random operands, every immediate; hashes equal
+   to native), a `GOAMD64=v2` Go program.
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.

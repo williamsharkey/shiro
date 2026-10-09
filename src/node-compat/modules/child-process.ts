@@ -6,10 +6,21 @@ export interface ChildProcessDeps {
   fileMtimes: Map<string, number>;
   pendingPromises: Promise<any>[];
   FakeBuffer: any;
+  /** The parent's process: inherited stdio writes to its stdout/stderr */
+  getProcess?: () => any;
 }
 
 export function createChildProcessModule(deps: ChildProcessDeps): any {
   const { ctx, fileCache, fileMtimes, pendingPromises, FakeBuffer } = deps;
+  /** Whether spawn's stdio[i] is the parent's own stream ('inherit', the fd number, or process.stdout/stderr). */
+  const inherits = (stdio: any, i: number): boolean => {
+    if (stdio === 'inherit') return true;
+    if (!Array.isArray(stdio)) return false;
+    const s = stdio[i];
+    if (s === 'inherit' || s === i) return true;
+    const proc = deps.getProcess?.();
+    return !!proc && s != null && s === (i === 1 ? proc.stdout : i === 2 ? proc.stderr : proc.stdin);
+  };
 
   // Synchronous fast-path responses for version/detection checks.
   // spawnSync/execSync/execFileSync are async under the hood but some callers
@@ -442,10 +453,14 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
         const s1 = opts.stdio[1];
         const s2 = opts.stdio[2];
         if (s1 && typeof s1 === 'object' && typeof s1.fd === 'number') stdioOutFd = s1.fd;
-        else if (typeof s1 === 'number') stdioOutFd = s1;
+        else if (typeof s1 === 'number' && s1 > 2) stdioOutFd = s1;
         if (s2 && typeof s2 === 'object' && typeof s2.fd === 'number') stdioErrFd = s2.fd;
-        else if (typeof s2 === 'number') stdioErrFd = s2;
+        else if (typeof s2 === 'number' && s2 > 2) stdioErrFd = s2;
       }
+      // Inherited stdout/stderr (pnpm's lifecycle scripts: stdio [0, 1, 2]) go to
+      // the parent's, and the child has no stream for them (null, as in node)
+      const inheritOut = inherits(opts?.stdio, 1) && stdioOutFd === null;
+      const inheritErr = inherits(opts?.stdio, 2) && stdioErrFd === null;
       // Capture fd→path mapping NOW (before async exec) because closeSync may delete
       // the fd entry before the spawn promise resolves
       const fds = (globalThis as any).__shiroFds || {};
@@ -521,6 +536,8 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
         ref: () => child,
         unref: () => child,
       };
+      if (inheritOut) child.stdout = null;
+      if (inheritErr) child.stderr = null;
       // Make child thenable so `await child` works like execa — Claude Code's Bash tool
       // does `await child` which resolves immediately if there's no .then() method,
       // causing it to read the output file before spawn has completed.
@@ -557,6 +574,9 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
           pendingPromises.push(flush);
           writePromises.push(flush);
         }
+        const proc = deps.getProcess?.();
+        if (inheritOut && r.stdout) proc?.stdout?.write(r.stdout);
+        if (inheritErr && r.stderr) proc?.stderr?.write(r.stderr);
         return Promise.all(writePromises).then(() => {
           if (r.stdout) (stdoutEvents['data'] || []).forEach(fn => fn(FakeBuffer.from(r.stdout)));
           (stdoutEvents['end'] || []).forEach(fn => fn());

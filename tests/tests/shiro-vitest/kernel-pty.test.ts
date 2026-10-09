@@ -184,6 +184,25 @@ describe('kernel pty: ioctls', () => {
   });
 });
 
+describe('kernel pty: a session leader that exits gives up its controlling tty', () => {
+  it("the next session can take it with TIOCSCTTY (apt runs each dpkg on one pty); the foreground group gets SIGHUP", async () => {
+    const jc = new JobControl();
+    const { pty, slave } = openpty({ jc });
+    const first = createSignalTarget({ jc });
+    expect(await slave.ioctl(TIOCSCTTY, new Uint8Array(4), first)).toBe(0);
+    const member = createSignalTarget({ jc, ppid: first.pid, pgid: first.pid, sid: first.sid });
+    let hup = 0;
+    member.signals.handle(SIGHUP, () => { hup++; });
+    first.finish(0);
+    expect(pty.sid).toBe(0);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(hup).toBe(1);
+    const next = createSignalTarget({ jc });
+    expect(await slave.ioctl(TIOCSCTTY, new Uint8Array(4), next)).toBe(0);
+    expect(pty.sid).toBe(next.sid);
+  });
+});
+
 describe('kernel pty: packet mode and the controlling tty (screen)', () => {
   it('TIOCPKT: master reads start with a TIOCPKT_DATA byte', async () => {
     const { master, slave } = openpty({ jc: new JobControl() });

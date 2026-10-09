@@ -144,6 +144,14 @@ export function createFakeProcess(
       }
       return true;
     },
+    emitWarning: (warning: any, type?: any, code?: any) => {
+      const opts = typeof type === 'object' && type ? type : { type, code };
+      const name = warning instanceof Error ? warning.name : (opts.type || 'Warning');
+      const msg = warning instanceof Error ? warning.message : String(warning);
+      if (name === 'DeprecationWarning' && (fp as any).noDeprecation) return;
+      try { (processEvents['warning'] || []).forEach(fn => fn(Object.assign(new Error(msg), { name, code: opts.code }))); } catch (_) {}
+      stderrBuf.push(`(node:${fp.pid}) ${opts.code ? `[${opts.code}] ` : ''}${name}: ${msg}\n`);
+    },
     title: 'node',
     connected: false,
     channel: undefined,

@@ -13,6 +13,12 @@ import { tmpdir } from 'node:os';
 import type { Server } from 'node:http';
 import { join, resolve } from 'node:path';
 import { createTestShell, run } from './helpers';
+import * as Abi from '@shiro/kernel/abi';
+
+// fixtures/x86/sse4.c on an x86-64 host (Intel)
+const NATIVE_SSE4 = 'blendv     e4abc65e766ee19d\nptest      7ba00a6efd7a4874\npmovx      b625e06221fbec95\nint        9681ac88d1b48510\nround      15342966be7d2f10\nblend      1772b0668d5f0605\ninsext     1ed641595d55738e\ninsertps   07a824bc4eee852a\ndp         b92c2b618267d645\nmpsadbw    732e9d86324c3735\ncrc32      ed946d3299e3b67d\npcmpestr   f9d8e2fd9893018c\npcmpistr   97a98d5fb234df8d\npcmpstr64  1141d2a07ff9295d\npinsrq 1\npcmpestri 5\ncrc32 0x1900b8ca\n';
+// fixtures/x86/bitscan.c on an x86-64 host
+const NATIVE_BITSCAN = 'bsf  zero64   reg dst=0x1122334455667788 zf=1\nbsf  zero64   mem dst=0x1122334455667788 zf=1\nbsr  zero64   reg dst=0x1122334455667788 zf=1\nbsr  zero64   mem dst=0x1122334455667788 zf=1\nbsf  val64    reg dst=0x8 zf=0\nbsf  val64    mem dst=0x8 zf=0\nbsr  val64    reg dst=0x34 zf=0\nbsr  val64    mem dst=0x34 zf=0\nbsf  zero32   reg dst=0x1122334455667788 zf=1\nbsf  zero32   mem dst=0x1122334455667788 zf=1\nbsr  zero32   reg dst=0x1122334455667788 zf=1\nbsr  zero32   mem dst=0x1122334455667788 zf=1\nbsf  val32    reg dst=0x8 zf=0\nbsf  val32    mem dst=0x8 zf=0\nbsr  val32    reg dst=0x14 zf=0\nbsr  val32    mem dst=0x14 zf=0\nbsf  zero16   reg dst=0x1122334455667788 zf=1\nbsf  zero16   mem dst=0x1122334455667788 zf=1\nbsr  zero16   reg dst=0x1122334455667788 zf=1\nbsr  zero16   mem dst=0x1122334455667788 zf=1\nbsf  val16    reg dst=0x1122334455660004 zf=0\nbsf  val16    mem dst=0x1122334455660004 zf=0\nbsr  val16    reg dst=0x1122334455660008 zf=0\nbsr  val16    mem dst=0x1122334455660008 zf=0\nclz64(0)=64 clz64(1)=63 clz64(1<<40)=23\nloop sum=5953906\n';
 
 const FIX = resolve(__dirname, 'fixtures/x86');
 
@@ -31,6 +37,8 @@ const httpBin = join(out, 'nethttp');
 const glibcBin = join(out, 'hello-glibc');
 const goExe = existsSync('/usr/local/go/bin/go') ? '/usr/local/go/bin/go' : 'go';
 const haveGo = tryBuild(goExe, ['build', '-ldflags=-s', '-o', goBin, 'hello.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
+const goV2Bin = join(out, 'hello-go-v2');
+const haveGoV2 = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', goV2Bin, 'hello.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOAMD64: 'v2', GOCACHE: join(out, 'gocache') });
 const haveHttp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', httpBin, 'nethttp.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
 const tcpBin = join(out, 'tcpecho');
 const haveTcp = haveGo && tryBuild(goExe, ['build', '-ldflags=-s', '-o', tcpBin, 'tcpecho.go'], { CGO_ENABLED: '0', GOOS: 'linux', GOARCH: 'amd64', GOCACHE: join(out, 'gocache') });
@@ -51,12 +59,20 @@ const shfutexBin = join(out, 'shfutex');
 const haveShfutex = tryBuild('gcc', ['-static', '-O1', '-o', shfutexBin, 'shfutex.c']);
 const orphanBin = join(out, 'orphan');
 const haveOrphan = tryBuild('gcc', ['-static', '-O1', '-o', orphanBin, 'orphan.c']);
+const futexintrBin = join(out, 'futexintr');
+const haveFutexintr = tryBuild('gcc', ['-static', '-O1', '-o', futexintrBin, 'futexintr.c']);
 const alarmforkBin = join(out, 'alarmfork');
 const haveAlarmfork = tryBuild('gcc', ['-static', '-O1', '-o', alarmforkBin, 'alarmfork.c']);
 const forkSharedBin = join(out, 'forkshared');
 const haveForkShared = tryBuild('gcc', ['-static', '-O1', '-o', forkSharedBin, 'forkshared.c']);
 const mremapBin = join(out, 'mremap');
 const haveMremap = tryBuild('gcc', ['-static', '-O1', '-o', mremapBin, 'mremap.c']);
+const sse4Bin = join(out, 'sse4');
+const haveSse4 = tryBuild('gcc', ['-static', '-O1', '-msse4.2', '-o', sse4Bin, 'sse4.c']);
+const bitscanBin = join(out, 'bitscan');
+const haveBitscan = tryBuild('gcc', ['-static', '-O1', '-o', bitscanBin, 'bitscan.c']);
+const mkfifoBin = join(out, 'mkfifo');
+const haveMkfifo = tryBuild('gcc', ['-static', '-O1', '-o', mkfifoBin, 'mkfifo.c']);
 const prctlcapBin = join(out, 'prctlcap');
 const havePrctlcap = tryBuild('gcc', ['-static', '-O1', '-o', prctlcapBin, 'prctlcap.c']);
 const lchownBin = join(out, 'lchown');
@@ -242,6 +258,19 @@ describe.skipIf(!haveFork || !haveForkShared || !haveShfutex || !haveOrphan || !
     const want = "first alarm 0, child ok 1, parent's alarm still set 1";
     expect((await run(shell, sif)).output).toContain(want);
     expect((await run(shell, './prog')).output).toContain(want);
+  }, 60_000);
+
+  // LTP futex_wait07
+  it.skipIf(!haveFutexintr)('a caught signal interrupts a futex wait (here and with the default fork)', async () => {
+    const { shell } = await setup(readFileSync(futexintrBin));
+    const want = 'main tid is pid 1\nalarm: Interrupted system call\nchild tid is pid 1\nchild state S\nkill: Interrupted system call\nchild exit 0\n';
+    expect((await run(shell, sif)).output.replace(/\r\n/g, '\n')).toBe(want);
+    expect((await run(shell, `${sif} nested`)).output.replace(/\r\n/g, '\n')).toBe(want);
+    // the default fork runs a child sharing memory on the parent's thread:
+    // the parent can't signal it before it's done
+    const r = (await run(shell, './prog')).output.replace(/\r\n/g, '\n');
+    expect(r).toMatch(/^main tid is pid 1\nalarm: Interrupted system call\nchild tid is pid 1\n/);
+    expect(r).toContain('child exit 0\n');
   }, 60_000);
 });
 
@@ -519,6 +548,38 @@ describe('Blink engine: CPU and syscall fixes', () => {
     expect(r.exitCode).toBe(0);
   }, 60_000);
 
+  // x86-64-v2: Bun (Claude Code's native build, opencode), GOAMD64=v2 Go
+  it.skipIf(!haveSse4)('SSE4.1 and SSE4.2 match native', async () => {
+    const { shell } = await setup(readFileSync(sse4Bin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(NATIVE_SSE4);
+    expect(r.exitCode).toBe(0);
+  }, 120_000);
+
+  it.skipIf(!haveGoV2)('runs Go built for x86-64-v2 (GOAMD64=v2)', async () => {
+    const { shell } = await setup(readFileSync(goV2Bin));
+    const r = await run(shell, './prog a b');
+    expect(r.output).toContain('args: [a b]');
+    expect(r.output).toContain('goroutines=344015.127');
+    expect(r.exitCode).toBe(0);
+  }, 120_000);
+
+  // Rust's leading_zeros (LLVM: mov $127,%r8; bsr %rax,%r8): xAI's grok CLI
+  it.skipIf(!haveBitscan)('bsf/bsr with a zero source leave the destination unchanged', async () => {
+    const { shell } = await setup(readFileSync(bitscanBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(NATIVE_BITSCAN);
+  }, 60_000);
+
+  // mkfifo for shell-stdio; needs the kernel's FIFOs (mknodat, unix/perf-kernel)
+  it.skipIf(!haveMkfifo || !('SYS_mknodat' in Abi))('mkfifo and mknod(at) create kernel FIFOs; devices are EPERM', async () => {
+    const { shell } = await setup(readFileSync(mkfifoBin));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'mkfifo=0  fifo=1\nmknod=0  fifo=1\nmknodat=0  fifo=1\n' +
+      'chardev=-1 Operation not permitted\nagain=-1 File exists\n');
+  }, 60_000);
+
   // LTP fstat03
   it.skipIf(!haveStatnull)('the stat family with a NULL buffer is EFAULT once the file is found', async () => {
     const { shell } = await setup(readFileSync(statnullBin));
@@ -528,14 +589,16 @@ describe('Blink engine: CPU and syscall fixes', () => {
       'stat(missing, NULL)=-1 No such file or directory\nlstat(file, NULL)=-1 Bad address\nnewfstatat(file, NULL)=-1 Bad address\n');
   }, 60_000);
 
-  // perl's $0 = ... (Debian's addgroup); libcap's cap_get_proc (ping)
+  // perl's $0 = ... (Debian's addgroup); libcap's cap_get_proc and iputils' PR_SET_KEEPCAPS (ping)
   it.skipIf(!havePrctlcap)('prctl PR_SET_NAME/PR_GET_NAME/PR_CAPBSET_READ, capget/capset', async () => {
     const { shell } = await setup(readFileSync(prctlcapBin));
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe(
       'default name prog\nset 0 name renamed-thread-\ncapbset_read(0)=1 capbset_read(40)=1\n' +
       'capbset_read(64)=-1 Invalid argument\ncapget(version 0)=0 , version 0x20080522\n' +
-      'capget=0 full=0\ncapset=0\n');
+      'capget=0 full=0\ncapset=0\n' +
+      'keepcaps 0 set=0 now 1, set(2)=-1 Invalid argument\npdeathsig set=0 now 15\ndumpable 1 set=0\n' +
+      'subreaper set=0 now 1\nno_new_privs 0 set=0 now 1\nambient is_set=0\n');
     expect(r.exitCode).toBe(0);
   }, 60_000);
 

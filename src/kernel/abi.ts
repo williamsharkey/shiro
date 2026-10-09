@@ -83,6 +83,8 @@ export const SYS_epoll_wait = 232;
 export const SYS_epoll_ctl = 233;
 export const SYS_tgkill = 234;
 export const SYS_mkdirat = 258;
+export const SYS_mknod = 133;
+export const SYS_mknodat = 259;
 export const SYS_newfstatat = 262;
 export const SYS_unlinkat = 263;
 export const SYS_renameat = 264;
@@ -150,6 +152,11 @@ export const SYS_shiro_vfork = 1010;
  * stopped and the new program runs in the same process.
  */
 export const SYS_shiro_execve = 1011;
+/**
+ * Shiro: args[0] = +1 / -1 around a blocking wait an engine does without the
+ * kernel (Blink's futex waits): the process shows as sleeping (S) meanwhile.
+ */
+export const SYS_shiro_sleeping = 1012;
 
 // ── errno (Linux) ──────────────────────────────────────────────────────────
 export const EPERM = 1;

@@ -155,6 +155,11 @@ export interface KernelRunOptions {
    * shell-stdio.ts); a missing one falls back to the options above.
    */
   fds?: { 0?: OpenFile; 1?: OpenFile; 2?: OpenFile };
+  /**
+   * The shell's own fds 3-9 (exec 3>file, exec 4>&1, exec 5<in), which every
+   * program inherits: a file to append to, a stream to write to, or input text.
+   */
+  inheritFds?: { fd: number; path?: string; file?: OpenFile; write?: (s: string) => void; content?: string }[];
 }
 
 export interface KernelRunResult {
@@ -216,12 +221,29 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
     ? new SinkFile((t) => { stderr += t; })
     : slave ?? hostFd(2) ?? new SinkFile((t) => opts.writeStderr(t)));
 
-  const env = { ...opts.env };
+  // The shell's internal variables (__PIPE_STDIN: piped input being read) aren't the program's
+  const env = Object.fromEntries(Object.entries(opts.env).filter(([k]) => !k.startsWith('__')));
   if (tty) {
     env.TERM ??= 'xterm-256color';
     // Programs ask the tty for its size; stale exported values would override it
     delete env.COLUMNS;
     delete env.LINES;
+  }
+
+  // fds 3-9 of the shell, the same open files for every stage
+  const extra: Record<number, OpenFile> = {};
+  for (const f of opts.inheritFds ?? []) {
+    if (f.file) {
+      extra[f.fd] = f.file;
+    } else if (f.path !== undefined) {
+      const o = await openOut({ path: f.path, append: true });
+      if (typeof o !== 'string') extra[f.fd] = o;
+    } else if (f.write) {
+      const w = f.write;
+      extra[f.fd] = new SinkFile((t) => w(t.replace(/\r?\n/g, '\r\n')));
+    } else if (f.content !== undefined) {
+      extra[f.fd] = new BufferFile(f.content, A.O_RDONLY);
+    }
   }
 
   const procs: Process[] = [];
@@ -234,7 +256,7 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
     else [nextInput, out] = createPipe();
     const spawn = {
       path: p.argv[0], argv: p.argv, env: p.env ? { ...p.env, ...env } : env, cwd: opts.cwd,
-      fds: { 0: input, 1: out, 2: errOut }, run: p.run,
+      fds: { ...extra, 0: input, 1: out, 2: errOut }, run: p.run,
       // children of a hosted shell stay in its process group, under it
       pgid: host ? undefined : procs.length ? procs[0].pgid : 0,
       parent: host ?? undefined,
