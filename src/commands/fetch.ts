@@ -12,6 +12,7 @@ export const fetchCmd: Command = {
     let headersOnly = false;
     let showHeaders = false;
     let outputFile = '';
+    let remoteName = false;
     let silent = false;
     let showErrors = false;
     let failOnError = false;
@@ -37,8 +38,10 @@ export const fetchCmd: Command = {
         headersOnly = true;
       } else if (arg === '-i' || arg === '--include') {
         showHeaders = true;
-      } else if (arg === '-o' && ctx.args[i + 1]) {
+      } else if ((arg === '-o' || arg === '--output') && ctx.args[i + 1]) {
         outputFile = ctx.args[++i];
+      } else if (arg === '-O' || arg === '--remote-name') {
+        remoteName = true;
       } else if (arg === '-s' || arg === '--silent') {
         silent = true;
       } else if (arg === '-S' || arg === '--show-error') {
@@ -61,6 +64,8 @@ export const fetchCmd: Command = {
           else if (flag === 'L') followRedirects = true;
           else if (flag === 'i') showHeaders = true;
           else if (flag === 'I') headersOnly = true;
+          else if (flag === 'O') remoteName = true;
+          else if (flag === 'o' && ctx.args[i + 1]) outputFile = ctx.args[++i];
         }
       } else if (!arg.startsWith('-')) {
         url = arg;
@@ -83,6 +88,8 @@ export const fetchCmd: Command = {
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       url = 'https://' + url;
     }
+    // -O: save under the URL's last path segment
+    if (remoteName && !outputFile) outputFile = decodeURIComponent(new URL(url).pathname.split('/').pop() || '') || 'index.html';
 
     // Intercept claude.ai/install.sh to return a script that runs npm install
     if (url.replace(/^https?:\/\//, '').replace(/\/$/, '') === 'claude.ai/install.sh'
@@ -184,19 +191,27 @@ export const fetchCmd: Command = {
         output += '\n';
       }
 
+      if (outputFile) {
+        // The file gets the body's bytes as they came (a binary installer
+        // must not go through a string), with nothing added
+        const resolved = ctx.fs.resolvePath(outputFile, ctx.cwd);
+        const head = new TextEncoder().encode(output);
+        const bytes = headersOnly ? new Uint8Array(0) : new Uint8Array(await response.arrayBuffer());
+        const data = new Uint8Array(head.length + bytes.length);
+        data.set(head, 0);
+        data.set(bytes, head.length);
+        await ctx.fs.writeFile(resolved, data);
+        ctx.stdout = '';
+        return response.ok ? 0 : 1;
+      }
+
       if (!headersOnly) {
         const text = await response.text();
         output += text;
         if (!text.endsWith('\n')) output += '\n';
       }
 
-      if (outputFile) {
-        const resolved = ctx.fs.resolvePath(outputFile, ctx.cwd);
-        await ctx.fs.writeFile(resolved, output);
-        ctx.stdout = '';
-      } else {
-        ctx.stdout = output;
-      }
+      ctx.stdout = output;
 
       return response.ok ? 0 : 1;
     } catch (e: any) {

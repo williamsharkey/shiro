@@ -18,7 +18,7 @@ import { createFileCache } from './file-cache';
 import { preloadEnvironment } from './preload';
 import { isClaudeCodeScript, patchClaudeCodeSource } from '../claude-code-version';
 import { createAutoStubFactory } from './auto-stub';
-import { createRequireFunction, wrapModuleBody, esmNamespace } from './require';
+import { createRequireFunction, compileAsyncModule, esmNamespace } from './require';
 import { createExpressFactory } from './shims/express';
 import { createSqliteShim } from './shims/sqlite';
 import { createPathModule } from './modules/path';
@@ -247,11 +247,10 @@ export async function executeNodeScript(
     }
 
     const wrappedCode = printResult ? `return (${transformedCode})` : transformedCode;
-    const fn = new AsyncFunction(
+    const fn = compileAsyncModule(AsyncFunction, [
       'console', 'process', 'require', 'Buffer', '__filename', '__dirname', 'shiro', '__import_meta', 'module', 'exports', '__dynamic_import',
-      '__shiro_module', '__shiro_require',
-      wrapModuleBody(wrappedCode, true)
-    );
+      '__shiro_module', '__shiro_require', '__shiro_require_ready',
+    ], wrappedCode);
 
     // Fake import.meta for ES modules
     const entryFilename = scriptPath || ctx.cwd + '/repl.js';
@@ -282,7 +281,7 @@ export async function executeNodeScript(
       if (/^(?:https?|data|blob):/.test(moduleName)) return import(/* @vite-ignore */ moduleName);
       if (moduleName.startsWith('file://')) moduleName = decodeURIComponent(moduleName.slice(7));
       try {
-        return esmNamespace(requireModule(moduleName, entryDirname));
+        return esmNamespace(await requireModule.ready(moduleName, entryDirname, entryFilename));
       } catch (e: any) {
         const msg = e?.message || String(e);
         throw new Error(`Failed to dynamically import '${moduleName}': ${msg}`);
@@ -301,6 +300,7 @@ export async function executeNodeScript(
       ['https://api.anthropic.com/', '/api/anthropic/'],
       ['https://platform.claude.com/', '/api/platform/'],
       ['https://mcp-proxy.anthropic.com/', '/api/mcp-proxy/'],
+      ['https://generativelanguage.googleapis.com/', '/api/gemini/'],
     ];
     const rewriteUrl = (u: string): string => {
       for (const [prefix, proxy] of corsProxyMap) {
@@ -311,6 +311,8 @@ export async function executeNodeScript(
     const blockedUrls = [
       'datadoghq.com', 'sentry.io', '/api/event_logging',
       'claude_code_first_token_date', 'claude_code_grove',
+      // Gemini CLI's Clearcut telemetry (its CORS only allows play.google.com)
+      'play.googleapis.com/log',
     ];
     const isBlocked = (u: string) => blockedUrls.some(b => u.includes(b));
 
@@ -509,11 +511,22 @@ export async function executeNodeScript(
     const SCRIPT_TIMEOUT = code.length > 500_000 ? 60_000 : 15_000;
     let scriptTimedOut = false;
     const runStart = performance.now();
+    // It only ends a script that has gone idle: an entry whose top-level await
+    // runs the whole program (Gemini CLI's `await run()`) keeps going while
+    // requests, fs work or timers are in flight or output is still coming.
     const timeoutPromise = new Promise<never>((_, reject) => {
-      _st.scriptTimeoutId = setTimeout(() => {
+      let outSeen = stdoutBuf.length + stderrBuf.length;
+      const check = () => {
+        const out = stdoutBuf.length + stderrBuf.length;
+        if (activity.pending > 0 || _activeTimers > 0 || pendingPromises.length > 0 || out !== outSeen) {
+          outSeen = out;
+          _st.scriptTimeoutId = setTimeout(check, SCRIPT_TIMEOUT);
+          return;
+        }
         scriptTimedOut = true;
         reject(new ProcessExitError(124));
-      }, SCRIPT_TIMEOUT);
+      };
+      _st.scriptTimeoutId = setTimeout(check, SCRIPT_TIMEOUT);
     });
 
     try {
@@ -523,7 +536,8 @@ export async function executeNodeScript(
           shell: ctx.shell,
           env: ctx.env,
           cwd: ctx.cwd,
-        }, fakeImportMeta, fakeModule, fakeExports, dynamicImport, fakeModule, entryRequire),
+        }, fakeImportMeta, fakeModule, fakeExports, dynamicImport, fakeModule, entryRequire,
+        (p: string) => requireModule.ready(p, entryDirname, entryFilename)),
         timeoutPromise,
       ]);
     } catch (e: any) {
@@ -570,8 +584,20 @@ export async function executeNodeScript(
     // Deferred exit wait
     if (_st.isInteractiveMode || !(_st.exitCalled || scriptTimedOut)) {
       const DEFERRED_TIMEOUT = _st.isInteractiveMode ? 86400000 : code.length > 500000 ? 300000 : 10000;
+      // Like the script timeout: it fires on a script that has gone idle, not
+      // on one still waiting on the network (a CLI's model request)
       const deferredTimeout = new Promise<never>((_, reject) => {
-        _baseST(() => reject(new ProcessExitError(124)), DEFERRED_TIMEOUT); // untracked: not script activity
+        let outSeen = stdoutBuf.length + stderrBuf.length;
+        const check = () => {
+          const out = stdoutBuf.length + stderrBuf.length;
+          if (!_st.isInteractiveMode && (activity.pending > 0 || out !== outSeen)) {
+            outSeen = out;
+            _baseST(check, DEFERRED_TIMEOUT);
+            return;
+          }
+          reject(new ProcessExitError(124));
+        };
+        _baseST(check, DEFERRED_TIMEOUT); // untracked: not script activity
       });
       let freshExitPromise = deferredExitPromise;
       if (_st.exitCalled && _st.isInteractiveMode) {

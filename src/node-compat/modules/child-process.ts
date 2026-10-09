@@ -170,7 +170,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
   };
   // execAsync is the underlying impl — returns a Promise
   // Shell natively handles setopt (no-op), eval (builtin), >| (clobber), /dev/null (virtual file)
-  const execAsync = async (cmd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
+  const execAsync = async (cmd: string, env?: Record<string, unknown>): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
     let normalized = stripShellPrefix(cmd);
     // Strip leading shell flags (-l, -i, -e) that leak through from spawn args
     normalized = normalized.replace(/^(-[a-zA-Z]+\s+)+/, '');
@@ -223,7 +223,14 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
     // tsc, vitest) saw a TTY and painted straight over Claude's UI instead of
     // returning output to its Bash tool. The fork also keeps `cd`/`export` from
     // leaking into the interactive shell.
-    const exitCode = await ctx.shell.fork().execute(normalized, (s) => { stdout += s; }, (s) => { stderr += s; }, false, undefined, true);
+    const sh = ctx.shell.fork();
+    // spawn(…, { env }): the child sees that environment (Gemini CLI relaunches
+    // itself with { ...process.env, GEMINI_CLI_NO_RELAUNCH: 'true' })
+    if (env) {
+      sh.env = {};
+      for (const [k, v] of Object.entries(env)) if (v !== undefined && v !== null) sh.env[k] = String(v);
+    }
+    const exitCode = await sh.execute(normalized, (s) => { stdout += s; }, (s) => { stderr += s; }, false, undefined, true);
 
     // Refresh fileCache from Shiro FS cache — shell commands may have created,
     // modified, or deleted files that fileCache still has stale entries for.
@@ -526,7 +533,7 @@ export function createChildProcessModule(deps: ChildProcessDeps): any {
       const cmdPromise = isClipboardCmd
         ? new Promise<{ stdout: string; stderr: string; exitCode: number }>(resolve =>
             setTimeout(() => resolve({ stdout: '', stderr: '', exitCode: 0 }), 0))
-        : execAsync(fullCmd);
+        : execAsync(fullCmd, opts?.env);
       const p = cmdPromise.then(r => {
         const writePromises: Promise<any>[] = [];
         // Write output to stdio file paths FIRST (before emitting events, because
