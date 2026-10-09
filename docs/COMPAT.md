@@ -28,7 +28,9 @@ built app in headless Chromium, cross-origin isolated.
 | Ninja | 1.12.1 | pkg `ninja` (`ninja.sh`: static x86-64) run in Blink | works | a C program built with clang through rules with depfiles, no-op rebuilds, header changes rebuilding dependents, failed commands reported with clang's diagnostics | — |
 | CMake, CTest | 3.31.9 | pkg `cmake` (`x86/cmake.sh`: static x86-64 musl, no OpenSSL) run in Blink | works with the llvm package's clang | a C project with a static library, `check_include_file`, `configure_file`: compiler detection (Clang 21.1.4), build through the Ninja and Makefile generators, `ctest` | configure takes ~10 s (each compiler check is a clang run); no https `file(DOWNLOAD)`; no ccmake/cmake-gui |
 | venv | Shiro | `python3 -m venv` | works | `pyvenv.cfg`, `bin/python` symlinks, `bin/pip`, `activate`/`deactivate`; `sys.prefix` is the venv and pip installs into it (vitest and Chromium) | `--copies` ignored (always symlinks) |
-| Node.js npm CLIs and libraries | Shiro's node (`node`, `npm`, `npx`) | builtin | works | commander + chalk + dayjs + uuid CLI, mocha 10 (pass and fail exit codes), tsc 5.6 (compile and type errors), prettier 3.3 (files, stdin, `--check "src/**/*.js"`, `--write`), ES modules binding `module`/`require`/`process`; vitest and Chromium | TypeScript 7 (`typescript@7`) is a native Go binary; native addons (`.node`) don't load; yarn 1 runs and resolves packages but can't fetch them yet (its `request` download over the fetch-backed http shim, then zlib and tar streams); axios needs `window.location` (fine in the browser, not under vitest) |
+| Node.js npm CLIs and libraries | Shiro's node (`node`, `npm`, `npx`) | builtin | works | commander + chalk + dayjs + uuid CLI, mocha 10 (pass and fail exit codes), tsc 5.6 (compile and type errors), prettier 3.3 (files, stdin, `--check "src/**/*.js"`, `--write`), ES modules binding `module`/`require`/`process`; vitest and Chromium | TypeScript 7 (`typescript@7`) is a native Go binary; native addons (`.node`) don't load; axios needs `window.location` (fine in the browser, not under vitest) |
+| pnpm | 9.12.3 | npm package under Shiro's node (`npm install pnpm`) | works | `pnpm add` from the registry into the content-addressable store and `node_modules/.pnpm` virtual store (symlinks), `require` through those symlinks (resolving from the real path, as node does), `pnpm install --offline` from the store, `pnpm run` (a `node` script and a shell one), `pnpm exec`, `node_modules/.bin` shims; vitest and Chromium (`add` of 3 packages ≈5 s, `run` ≈2.4 s) | no `pnpm dlx`/`pnpm env` tested; workers run in the same thread (no parallel speed-up) |
+| yarn 1 | 1.22.22 | npm package under Shiro's node (`npm install yarn`) | works | `yarn add` from the registry (tarballs through `request` over the fetch-backed http shim, gunzip, tar), `yarn.lock`, `yarn run`, `node_modules/.bin`, `yarn install --offline` from its cache; vitest and Chromium (`add` of 2 packages ≈2 s) | yarn 2+ (berry) not tried |
 | Lua (lua, luac) | 5.4.7 | pkg `lua` (`lua.sh`) | works | `#!/usr/bin/env lua` script reading stdin with argv, patterns, coroutines, `table.sort`; `luac -p` syntax errors with locations | no `os.execute`/`io.popen`; the REPL needs blocking stdin |
 | SQLite shell | 3.50.4 | pkg `sqlite` (`sqlite.sh`) | works | a database file reused across runs, JSON functions, FTS5, SQL and dot-commands on stdin (`.mode csv`) | single-threaded, no WAL or loadable extensions; interactive mode needs blocking stdin |
 
@@ -39,10 +41,55 @@ Not available (yet), and why:
 | Rust (rustc, cargo) | — | no maintained WASI build of rustc to pin; the Linux toolchain is dynamically linked against librustc_driver and LLVM (~250 MB unpacked) |
 | Java (JVM) | — | a JDK image is ~200 MB and HotSpot needs its JIT (mprotect RWX code) for usable speed; Blink would interpret the interpreter |
 | Deno, Bun | — | single ~100 MB binaries around V8 / JavaScriptCore JITs; Shiro's own `node` covers the npm use case |
-| yarn 1 | npm package under Shiro's node | runs and resolves; tarball fetch needs `request` over a real http stack, zlib and tar streams (see the Node row) |
 | PHP | — | owned by unix/wasix (WASIX build in `pkg`) |
 
 Shell and platform fixes these needed (all with tests in the same file):
+
+- Node, for pnpm: `require.resolve` (with `paths`), `require.resolve.paths`,
+  `require.cache`, `require.main`, `module.createRequire` from a file,
+  `Module._nodeModulePaths`/`_resolveFilename`; `MODULE_NOT_FOUND` codes;
+  `global` in the entry module; `worker_threads.Worker` runs the worker
+  script in the same thread with its own module cache (`workerData`,
+  `parentPort`, structured-clone messages); `zlib` is real (pako: gzip,
+  deflate, raw, unzip, streams, crc32; it was a pass-through, so gzipped
+  tarballs read as tar); `crypto` has real sha384/sha512/md5 and HMAC (sha512
+  was faked, so integrity checks failed); `Buffer.from(ArrayBuffer |
+  SharedArrayBuffer, offset, length)` is a view, `subarray` stays a Buffer,
+  utf16le; `process.emitWarning`; legacy `url.resolve`; `http.Agent` is an
+  EventEmitter and responses are Readable streams; more `util.types`.
+- Node fs: callbacks run asynchronously, as in node (touch registered its
+  listener after starting the call); `fs.write(fd, string, position,
+  encoding, cb)` called back (write-file-atomic never finished, leaving
+  `package.json` and `.modules.yaml` as empty temp files); `symlink` keeps
+  relative targets; `mkdirSync` reaches the filesystem's cache at once (a
+  `writeFileSync` right after found no parent and was dropped); renames
+  (including directories: pnpm stages a package in `name_tmp_PID`) wait for
+  the writes still in flight, which the drain loop had taken out of
+  `pendingPromises`; `copyFileSync` copies bytes; `readdir` dirents report
+  symlinks (pnpm skipped its symlinked packages when linking `.bin`);
+  `realpath` follows symlinks and reports ENOENT; `chmod` is kept.
+- Node: the preloader reads pnpm's `.pnpm/*/node_modules` packages, and
+  `require` resolves a package behind a symlink from its real directory.
+- Node: `child_process.spawn` with inherited stdio (`'inherit'`, `[0,1,2]`)
+  writes the child's output to the parent's and has `stdout === null`.
+- Node, for yarn: `fs.open` of a missing file to read is ENOENT (yarn took
+  a tarball cache it never wrote for a hit and fetched nothing),
+  `fs.copyFile` copies what the script sees, as bytes (copies out of its
+  cache came out empty), `Buffer.from(s, 'base64')` is lenient like node's
+  (integrity strings), `os.networkInterfaces()` has an external interface
+  (none read as offline), and an http body still arriving counts as the
+  script's activity (downloads ended with the script).
+- Shell: a script run by path (`./x.sh`, yarn's `sh` launcher) wrote
+  straight to the terminal, ignoring its redirects and pipes
+  (`./x.sh > /dev/null`, `./x.sh | tr`); its output now goes through them
+  like a builtin's. (This showed `base64 -d` adding a newline of its own;
+  it no longer does.)
+- Node: idle-exit activity is counted per script. It was page-wide, so a
+  parent waiting on a child `node` (pnpm run → node app.js) kept the child
+  from ever looking idle, and each waited on the other for the 10-minute
+  cap. The cap on a script's async phase is 10 minutes (was 10 s, which
+  killed pnpm during its retry back-off).
+
 
 - Shebangs: `#!/usr/bin/env NAME` (with `-S` and `VAR=value`) and absolute
   interpreters run any builtin, installed package or script on PATH; an
@@ -242,7 +289,17 @@ Shiro changes these programs needed (tests in `x86-engine.test.ts`,
 - `sh` run as a program on a terminal with no script (a tmux pane, or `-i`)
   is interactive: a `PS1` prompt (default `\u@\h:\w\$ `), a line read from
   the tty in canonical mode, Ctrl-C/Ctrl-Z/Ctrl-\ left to its foreground
-  children, `exit` or EOF to end.
+  children, `exit` or EOF to end. It does job control on its pty
+  (`ProcessTty` in `src/kernel/pty.ts`): each job gets a process group and
+  the terminal (tcsetpgrp) while it runs, Ctrl-Z stops it and gives the
+  terminal and the shell's tty modes back, and `jobs`/`fg`/`bg`/`kill %N`/
+  `wait` (128+signal for a stopped job) work on it: vim and htop under Ctrl-Z
+  and `fg` in a screen window (`tests/browser/job-control.mjs`).
+  `$$`/`$PPID`/`$0` are the process's. In a kernel sh script, `prog &` is a
+  kernel process (`$!` its pid, stdin `/dev/null`); with `set -m` it gets its
+  own process group, so `kill -STOP`, `jobs` and `bg` act on it. In-page
+  builtins and functions in the background stay promises: they can be
+  aborted, not stopped.
 - A kernel `/proc` (`src/kernel/procfs.ts`): `/proc/self`, `/proc/PID/`
   (`stat`, `status`, `cmdline`, `comm`, `environ`, `cwd`, `exe`, `fd/N`,
   `task`), and `/proc/stat`, `/proc/loadavg`, `/proc/uptime` from the process
@@ -281,8 +338,18 @@ ncurses-based programs are linked against a static ncurses 6.5 with
 
 ## Claude Code native binary (unix/perf-kernel)
 
-Status: **not run yet** (static analysis only; running the downloaded
-binary under Blink needs the user's go-ahead in this environment).
+Status (2026-10-09, unix/agent-clis, see "Agent CLIs" below): with Blink's
+SSE4.1/4.2 (patch 0040) the **musl build runs**: `--version` in 2.1 s and
+`-p` reaches the Anthropic API. The glibc build still crashes in Bun's
+startup. Before patch 0040 both died of SIGILL on `pinsrq`.
+
+`claude --native ARGS` (or `CLAUDE_NATIVE=1 claude ARGS`) runs the native
+binary at `$CLAUDE_NATIVE_PATH`, default `~/.local/bin/claude`, through the
+shell's ELF path (Blink, with the terminal's pty); plain `claude` still runs
+the pinned npm build. Shiro doesn't download it: downloads.claude.ai and
+Alpine's CDN send no CORS headers, so fetching them would need a server
+proxy (an owner decision). Put the linux-x64-musl build there and musl's
+loader at `/lib/ld-musl-x86_64.so.1`; without a binary it says so.
 
 What the official native installer (`claude.ai/install.sh`) installs, as of
 2.1.295 (`downloads.claude.ai/claude-code-releases/<version>/<platform>/claude`,
@@ -303,10 +370,91 @@ sha256-checked against `manifest.json`):
   `sched_getaffinity`, `posix_spawn*` (with `addchdir`), `mmap`/
   `mprotect`/`madvise` (JSC's JIT and its large virtual reservations).
 
+Where Shiro intercepts it today (so `claude` at the prompt never reaches a
+native binary):
+
+- `src/commands/claude.ts`: the `claude` builtin runs the pinned npm build
+  (`CLAUDE_CODE_VERSION`, pure JS) through Shiro's `node`, and answers
+  `claude install|update|upgrade` with a "pinned" message. Builtins win over
+  PATH lookup, so a binary at `~/.local/bin/claude` is not reached by name.
+- `src/commands/fetch.ts`: `curl`/`fetch` of `claude.ai/install.sh` returns
+  a stand-in script that runs `npm install -g` of that package instead of
+  the real installer.
+- To run the native ELF deliberately today, invoke it by absolute or
+  relative path (`/home/user/.local/bin/claude`, `./claude`): a path that
+  is not under `/bin`, `/usr/bin` or `/usr/local/bin` goes to the ELF loader
+  (Blink), not to the builtin. Proposed opt-in: `claude --native` or
+  `CLAUDE_NATIVE=1` making the builtin exec the native binary when one is
+  installed, and `CLAUDE_NATIVE=1` letting `install.sh` through.
+
 To try it (once allowed): put the binary and the five glibc libraries plus
 the loader in the VFS (Blink loads the ELF interpreter from SHIROFS), then
 run `claude --version` and `claude -p "say hi"` with a dummy key, with and
 without `BUN_JSC_useJIT=0`.
+
+## Agent CLIs (unix/agent-clis)
+
+Popular AI coding-agent CLIs, run as Shiro would run them: native x86-64
+ELF builds in Blink as kernel processes, Node builds on Shiro's `node`. Run
+2026-10-09 with dummy API keys for the other vendors (a 401/400 from the
+vendor's API proves the network path).
+
+| Tool | Version | Kind | Install | `--version` | Network | Timings | Blockers |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Claude Code (native) | 2.1.295 | ELF, Bun 1.4.3 single-file exe; glibc (256 MB) and musl (250 MB) builds, dynamic | `claude.ai/install.sh` (Shiro substitutes the npm install; fetch the binary from `downloads.claude.ai/claude-code-releases/<v>/linux-x64-musl/claude`, plus `/lib/ld-musl-x86_64.so.1`) | **musl: yes** (2.1 s); glibc: no | **musl: yes**: `-p "say hi"` reaches the Anthropic API through the kernel relay ("Invalid API key" for a dummy key) | musl `-p` to the API error: 118 s with the JIT, 108 s with `BUN_JSC_useJIT=0` (Node probe) | glibc build: Bun aborts at startup because glibc's `pthread_getattr_np` finds the main stack through `/proc/self/maps`, which Shiro doesn't provide (only Blink knows the guest's mappings; with a stand-in maps file it runs in native Blink). Bun also needs `/dev/urandom` (the kernel has it). Sent to perf-blink. Live-token test not run: `CLAUDE_CODE_OAUTH_TOKEN` is not in this container's environment. |
+| OpenAI Codex | 0.162.0 | ELF, Rust, static-pie musl (294 MB) | GitHub release `codex-x86_64-unknown-linux-musl.tar.gz` (`npm i -g @openai/codex` wraps the same binary) | **yes** | **yes**: `codex exec` reaches `wss://api.openai.com/v1/responses` and `https://…/responses` through the kernel's TCP relay, 401 | Chromium: `--version` 4.8 s, `exec` until the 401s end 59 s (it retries), renderer peak ~2.0 GB; Node probe: 7.9 s / 69 s | none for the request path. It warns about missing bubblewrap (its Linux sandbox) and `/proc/self/exe`; use `--sandbox danger-full-access` for tool calls in Shiro. |
+| Grok Build (xAI) | 1.0.50 | ELF, Rust, static-pie (183 MB) | `x.ai/cli/install.sh` → `x.ai/cli/grok-<v>-linux-x86_64` | **yes** | **yes** (Blink patch 0039): `grok -p` reaches `api.x.ai`, 400 for a bad key | Chromium: `--version` 1.8 s; Node probe: `--version` 5.1 s, `-p` to the API error 148 s | Before patch 0039 Blink's BSF/BSR wrote 0 to the destination for a zero source and `-p` panicked ("Span not found"). |
+| Antigravity CLI (`agy`, Google) | 1.3.2 | ELF, Go (`GOAMD64` v2, boringcrypto) + cgo/Rust, glibc dynamic (211 MB) | `antigravity.google/cli/install.sh` → manifest → `cli_linux_x64.tar.gz` (sha512) | **yes** (Blink patch 0040), 11 s | not tried (needs a Google sign-in) | — | Before patch 0040 it exited with "compiled with sse4.1 enabled, but this feature is not available". |
+| opencode | 1.18.35 | ELF, Bun 1.3.14 (baseline build), glibc dynamic (185 MB); a musl build needs libstdc++/libgcc_s | `npm i -g opencode-ai` (picks `opencode-linux-x64[-baseline\|-musl]`) | **no** | not reached | — | Same `/proc/self/maps` gap as the glibc Claude build (`Segmentation fault at address 0xBBADBEEF`, JSC's `CRASH()`); past it, native Blink lacks `timerfd_create` (`us_create_timer: returned null: 38`). |
+| Gemini CLI | 0.63.0 | Node (esbuild code-split ESM chunks with top-level await) | `npm i -g @google/gemini-cli` (1.5–2.6 s) | **yes** | **yes**: `gemini --skip-trust -p` reaches `generativelanguage.googleapis.com` through `/api/gemini/`, 400 "API key not valid" | `--version` 9.9 s, `-p` to the error 24 s (Chromium) | Fixed here (below). Left: a "Failed to release project registry lock" warning from proper-lockfile (harmless). |
+| Grok CLI (community, `@vibe-kit/grok-cli`) | 0.0.34 | Node | `npm i -g @vibe-kit/grok-cli` | not run | — | — | Superseded by xAI's own Grok Build (above); not tested. |
+| aider | 0.86.2 | Python | `pip install aider-chat` | not run | — | — | Pins ~80 packages, many native (numpy, scipy, pydantic-core, tiktoken, orjson, aiohttp, tree-sitter): out of reach of the WASI CPython's pure-Python `pip`. The plausible route is Debian mode (glibc CPython and manylinux wheels in Blink), not tried. |
+
+What was fixed in Shiro for these (tests: `agent-clis.test.ts`):
+
+- **Top-level await across modules**: an ES module whose body awaits runs
+  as an async function, so `require()` handed importers its exports before
+  its `export { … }` ran (`gemini` failed with `getScriptArgs is not a
+  function`). Static imports in async modules and `import()` now wait for
+  the imported module's body (`requireModule.ready`, `compileAsyncModule` in
+  `src/node-compat/require.ts`), skipping a wait that would close a cycle.
+- **Live bindings for esbuild chunks** (`src/commands/jseval/esm-live.ts`):
+  esbuild's split chunks export variables that lazy `__esm` initializers
+  assign later; importers read them through the exporter's namespace
+  (`ValueType` → `__shiro_live3.ValueType`) and exports are getters. Only
+  for modules that import esbuild's runtime helpers from a sibling chunk.
+- `node:dns/promises`; `fs.utimes`/`utimesSync`/`promises.utimes` set the
+  mtime (they were no-ops), and `stat` keeps the mtime it reports for a
+  path it hadn't seen written (it was `Date.now()` on every call, which
+  proper-lockfile took as a compromised lock).
+- `child_process.spawn(…, { env })` passes `env` to the child.
+- Gemini CLI relaunches itself under a child `node` only to raise V8's heap
+  limit; Shiro sets `GEMINI_CLI_NO_RELAUNCH=true` for it (export it empty
+  to override).
+- The node runner's 15 s/60 s script timeout and the 10 s wait after the
+  entry returns now end only an idle script (no fetch, fs work, timers or
+  new output); Gemini's entry awaits the whole run, and a model request
+  outlasted them (exit 124).
+- `server.mjs` proxies `/api/gemini/` to `generativelanguage.googleapis.com`
+  (its preflights reject Gemini CLI's headers); its Clearcut telemetry
+  (`play.googleapis.com/log`) is dropped like Claude's.
+- `curl -o FILE` (and the new `-O`, `--output`, `-fsSLo`) writes the
+  response bytes unchanged; it used to decode them as text and append a
+  newline, so a downloaded binary came out 58% larger and corrupt.
+
+How to reproduce the native runs: `tests/tests/shiro-vitest/agent-cli-probe.test.ts`
+(skipped unless `AGENT_PROBE_ROOT` is set) loads host directories into the
+test FS (the binary under `/opt/…`, plus `/lib64/ld-linux-x86-64.so.2`,
+`libc`, `libm`, `libpthread`, `libdl`, `librt`, `libresolv` and a CA
+bundle), runs one command line in Blink as a kernel process and prints wall
+time, peak RSS of the Node process (it includes the in-memory FS holding the
+binary, so ~1.5–3.8 GB here), failing kernel syscalls and the output.
+`AGENT_PROBE_RELAY_PORTS` starts `server.mjs`'s TCP relay in a child process
+so the guest can reach an HTTPS proxy (`HTTPS_PROXY=http://127.0.0.1:PORT`).
+Failing syscalls seen were all expected ones (ENOENT from `openat`/
+`newfstatat`, EINVAL from `readlink`, EEXIST from `mkdir`, EINPROGRESS from
+`connect`, EAGAIN, ENOTTY); Blink itself reports `rseq` (334) missing, which
+glibc tolerates.
 
 ## Linux GUI apps (unix/gui)
 

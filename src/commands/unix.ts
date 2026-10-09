@@ -86,6 +86,7 @@ import { test } from './posix-test';
 import { time } from './time';
 import { timeout } from './timeout';
 import { touch } from './touch';
+import { mkfifo } from './mkfifo';
 import { tr } from './tr';
 import { kill, trap } from './trap';
 import { true as trueCmd, colon } from './true';
@@ -136,7 +137,7 @@ export const unixCommands: Command[] = [
   ls, make, md5sum, mkdir, mv, nl, nohup, od, paste, patch, pkgConfig, pr,
   printenv, printf, processSubstitution, pwd, read, readlink, realpath, returnCmd,
   seq, set, sha256sum, sha1sumCmd, sha384sumCmd, sha512sumCmd, shift, shrine, sleep, sort, stat, strings, tail, tar, tee,
-  test, time, timeout, touch, tr, trap, trueCmd, colon, tsort, type, ulimit, umask,
+  test, time, timeout, touch, mkfifo, tr, trap, trueCmd, colon, tsort, type, ulimit, umask,
   unalias, unexpand, uniq, uptime, watch, wc, which, whoami, xargs, yes,
   revCmd, tacCmd, shufCmd, cmpCmd, ddCmd, xxdCmd, dcCmd, splitCmd,
   factorCmd, cksumCmd, sumCmd, base32Cmd, numfmtCmd, csplitCmd,

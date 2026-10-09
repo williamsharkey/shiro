@@ -16,6 +16,9 @@ import type { GuestWorker } from '@shiro/kernel/worker-host';
 import { setGuestWorkerFactory, forceWasmProcessMode } from '@shiro/wasi/host';
 import { TtySession } from '@shiro/kernel/pty';
 import { jobsCmd, fgCmd, bgCmd, waitCmd } from '@shiro/commands/jobs';
+import { Process } from '@shiro/kernel/process';
+import { kernelForContext } from '@shiro/wasi/run-command';
+import type { CommandContext } from '@shiro/commands/index';
 
 const here = __dirname;
 const fixtures = path.join(here, 'fixtures', 'wasi');
@@ -228,4 +231,48 @@ describe('kernel programs on the terminal pty', () => {
     expect((await sh('kill %1')).exitCode).toBe(0);
     await until(() => shell.backgroundJobs.get(1)?.status !== 'stopped');
   });
+});
+
+describe('job control in a kernel sh on a pty (a screen or tmux window)', () => {
+  it('Ctrl-Z stops its job, not the shell; jobs, wait, bg and fg', async () => {
+    const shell = await setupShell();
+    const kernel = kernelForContext({ fs: shell.fs, shell } as unknown as CommandContext);
+    const tty = new TtySession();
+    let screen = '';
+    tty.pty.onOutput((b) => { screen += new TextDecoder().decode(b); });
+    const env = { ...shell.env, PATH: '/usr/local/bin:/usr/bin:/bin', PS1: 'K$ ' };
+    const argv = ['sh'];
+    const run = await kernel.findProgram('sh', new Process({ pid: -1, ppid: 1, path: 'sh', argv, env, cwd: '/tmp' }));
+    const sh = tty.spawnJob(kernel, { path: 'sh', argv, env, cwd: '/tmp', run: run! });
+    tty.pty.setForeground(sh.pgid);
+    const prompts = () => screen.split('K$ ').length - 1;
+    const type = async (line: string) => { const n = prompts(); tty.pty.input(line + '\r'); await until(() => prompts() > n); };
+    await until(() => prompts() === 1);
+
+    tty.pty.input('readloop\r');
+    await until(() => tty.pty.fgPgrp !== sh.pgid); // the job has the terminal
+    tty.pty.input('a\r');
+    await until(() => screen.includes('got: a'));
+    tty.pty.input('\x1a');
+    await until(() => prompts() === 2);
+    expect(sh.alive).toBe(true);
+    expect(tty.pty.fgPgrp).toBe(sh.pgid);
+    expect(screen).toMatch(/\[1\]\+\s+Stopped\s+readloop\r\n/);
+    await type('jobs -l');
+    expect(screen).toMatch(/\[1\]\+\s+\d+\s+Stopped\s+readloop/);
+    await type('wait %1; echo "wait $?"');
+    expect(screen).toContain('wait 148');
+    // bg: it reads the tty from the background, so the tty stops it again (SIGTTIN)
+    await type('bg');
+    expect(screen).toContain('[1]+ readloop &');
+    tty.pty.input('fg\r');
+    await until(() => tty.pty.fgPgrp !== sh.pgid);
+    tty.pty.input('b\r\x04');
+    await until(() => screen.includes('got: b') && prompts() >= 6);
+    expect(tty.pty.fgPgrp).toBe(sh.pgid);
+    await type('echo "fg $?"; jobs; echo end');
+    expect(screen).toMatch(/fg 2\r\nend/);
+    tty.pty.input('exit\r');
+    expect(await sh.wait()).toBe(0);
+  }, 30_000);
 });

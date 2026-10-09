@@ -1,3 +1,4 @@
+import { isEsbuildChunk, liveEsbuildChunk } from './esm-live';
 // ES module ↔ CommonJS transform utilities (pure string transforms, no side effects)
 
 // ── TypeScript type stripping ──────────────────────────────────────────────
@@ -991,6 +992,8 @@ export function rewriteFunctionImport(src: string): string {
 
 export function transformESModules(src: string): string {
   src = rewriteFunctionImport(src);
+  // esbuild code-split chunks need live import bindings (see esm-live.ts)
+  if (isEsbuildChunk(src)) src = liveEsbuildChunk(stripShebang(src));
   // Fast path for large bundled files (>500KB)
   if (src.length > 500000) {
     const cached = bundleCache.get(src);

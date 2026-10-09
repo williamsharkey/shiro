@@ -22,6 +22,155 @@ function fsError(code: string, message: string, syscall?: string, path?: string)
   return err;
 }
 
+/**
+ * A path's mtime as stat reports it. Paths the shim hasn't seen written
+ * (directories, files from shell commands) get the time of their first stat,
+ * kept, so stat agrees with itself: proper-lockfile (Gemini CLI) compares a
+ * lock directory's mtime across stats and took a changing one as a
+ * compromised lock.
+ */
+export function stableMtime(fileMtimes: Map<string, number>, path: string): number {
+  let t = fileMtimes.get(path);
+  if (!t) { t = Date.now(); fileMtimes.set(path, t); }
+  return t;
+}
+
+/** fs time arguments (seconds, Date, numeric string) as milliseconds. */
+function timeMs(t: any): number {
+  if (t instanceof Date) return t.getTime();
+  if (typeof t === 'string' && t.trim() !== '' && !isNaN(Number(t))) return Number(t) * 1000;
+  if (typeof t === 'number' || typeof t === 'bigint') return Number(t) * 1000;
+  return Date.now();
+}
+
+/**
+ * Per-process write bookkeeping, shared by fs and fs/promises (keyed by the
+ * process's pendingPromises array): per-path write chains, and every write
+ * still in flight. The drain loop empties pendingPromises as it awaits it, so
+ * that array alone can't tell a rename what hasn't landed yet.
+ */
+interface WriteState { chains: Map<string, Promise<void>>; inflight: Set<Promise<any>>; push: (p: Promise<any>) => number; gone: Set<string> }
+const writeStates = new WeakMap<Promise<any>[], WriteState>();
+function writeStateFor(pending: Promise<any>[]): WriteState {
+  let st = writeStates.get(pending);
+  if (!st) {
+    const inflight = new Set<Promise<any>>();
+    st = {
+      chains: new Map(),
+      gone: new Set(),
+      inflight,
+      push: (p: Promise<any>) => {
+        inflight.add(p);
+        p.then(() => inflight.delete(p), () => inflight.delete(p));
+        return pending.push(p);
+      },
+    };
+    writeStates.set(pending, st);
+  }
+  return st;
+}
+
+/**
+ * Rename once the writes in flight have landed (write-file-atomic writes
+ * through an fd, then renames at once; pnpm fills a staging directory, then
+ * renames it into place). Renaming first moved a half-written or missing tree
+ * and left the temp file behind.
+ */
+async function renameAfterWrites(deps: FsDeps, oldRes: string, newRes: string): Promise<void> {
+  const st = writeStateFor(deps.pendingPromises);
+  await Promise.allSettled([...st.inflight]);
+  const { fileCache, fileMtimes, ctx } = deps;
+  moveCachedTree(fileCache, fileMtimes, oldRes, newRes);
+  const op = ctx.fs.rename(oldRes, newRes);
+  const done = op.then(() => {}, () => {});
+  st.chains.set(newRes, done);
+  st.chains.set(oldRes, done);
+  st.push(done);
+  await op;
+}
+
+/**
+ * Whether the filesystem's own cache holds a directory there, for the shims'
+ * fallbacks. A directory renameSync moved away is gone already, though the
+ * stored rename waits for the writes into it.
+ */
+function dirCachedChecker(deps: FsDeps): (p: string) => boolean {
+  const { gone } = writeStateFor(deps.pendingPromises);
+  return (p: string) => {
+    for (const g of gone) if (p === g || p.startsWith(g + '/')) return false;
+    return !!(deps.ctx.fs.isDirCached?.(p) || deps.ctx.fs.readdirCached(p) !== undefined);
+  };
+}
+
+/** Move a path and everything under it in the text cache. */
+function moveCachedTree(fileCache: Map<string, string>, fileMtimes: Map<string, number>, oldRes: string, newRes: string): boolean {
+  const prefix = oldRes + '/';
+  let moved = false;
+  for (const k of [...fileCache.keys()]) {
+    if (k !== oldRes && !k.startsWith(prefix)) continue;
+    const nk = newRes + k.slice(oldRes.length);
+    fileCache.set(nk, fileCache.get(k)!);
+    fileCache.delete(k);
+    const m = fileMtimes.get(k);
+    fileMtimes.delete(k);
+    fileMtimes.set(nk, k === oldRes ? Date.now() : m ?? Date.now());
+    moved = true;
+  }
+  return moved;
+}
+
+/**
+ * A readdir withFileTypes entry. Symlinks are reported as such (lstat
+ * semantics, as in node): pnpm's node_modules/x links read as plain files, so
+ * it skipped them when linking node_modules/.bin.
+ */
+function makeDirent(ctx: CommandContext, parent: string, name: string, isDir: boolean): any {
+  const link = typeof ctx.fs.readlinkCached === 'function' ? ctx.fs.readlinkCached(parent + '/' + name) : undefined;
+  const isLink = typeof link === 'string';
+  return {
+    name, parentPath: parent, path: parent,
+    isFile: () => !isLink && !isDir,
+    isDirectory: () => !isLink && isDir,
+    isSymbolicLink: () => isLink,
+    isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false,
+  };
+}
+
+/**
+ * realpath: symlinks followed, ENOENT for a missing path (it answered every
+ * path as itself). Files this script wrote whose writes are still in flight
+ * count as there.
+ */
+async function realpathAsync(deps: FsDeps, p: string): Promise<string> {
+  const { ctx, fileCache } = deps;
+  const resolved = ctx.fs.resolvePath(String(p), ctx.cwd);
+  try {
+    const real = await ctx.fs.realpath(resolved);
+    if (await ctx.fs.exists(real)) return real;
+  } catch { /* below */ }
+  {
+    if (fileCache.has(resolved) || fileCache.has(resolved + '/.') || [...fileCache.keys()].some((k) => k.startsWith(resolved + '/'))) {
+      return ctx.fs.realpathCached?.(resolved) ?? resolved;
+    }
+    throw fsError('ENOENT', `ENOENT: no such file or directory, realpath '${p}'`, 'realpath', String(p));
+  }
+}
+
+/** chmod once the writes in flight have landed (the file may not be stored yet). */
+async function chmodAfterWrites(deps: FsDeps, resolved: string, mode: any): Promise<void> {
+  await Promise.allSettled([...writeStateFor(deps.pendingPromises).inflight]);
+  try {
+    await deps.ctx.fs.chmod(resolved, parseMode(mode));
+  } catch (e) {
+    if (!deps.fileCache.has(resolved)) throw e;
+  }
+}
+
+/** A mode as a number ('755' and 0o755 alike). */
+function parseMode(mode: any): number {
+  return typeof mode === 'string' ? parseInt(mode, 8) : Number(mode) & 0o7777;
+}
+
 function createRemovalHelpers(
   ctx: CommandContext,
   fileCache: Map<string, string>,
@@ -78,7 +227,7 @@ function createRemovalHelpers(
    * the text cache and returns the string for the caller's usual path; binary
    * is written through the byte cache and returns null.
    */
-  const storeData = (resolved: string, data: any, pending?: Promise<any>[]): string | null => {
+  const storeData = (resolved: string, data: any, pending?: { push: (p: Promise<any>) => unknown }): string | null => {
     const bytes = toBytes(data);
     if (!bytes) return typeof data === 'string' ? data : String(data);
     const text = decodeUtf8Strict(bytes);
@@ -105,11 +254,14 @@ export function createFsModule(deps: FsDeps): any {
 
   // Writes to one path through fds land in order (openSync's truncate used to
   // finish after the first writeSync and empty the file: tsc's output)
-  const writeChains = new Map<string, Promise<void>>();
+  const writeState = writeStateFor(pendingPromises);
+  const fsDirCached = dirCachedChecker(deps);
+  const writeChains = writeState.chains;
+  const inflight = { push: writeState.push };
   const queueWrite = (path: string, op: () => Promise<unknown>): Promise<void> => {
     const next = (writeChains.get(path) ?? Promise.resolve()).then(op).then(() => {}, () => {});
     writeChains.set(path, next);
-    pendingPromises.push(next);
+    inflight.push(next);
     return next;
   };
   const materializeOpenFile = (resolved: string) => {
@@ -157,14 +309,14 @@ export function createFsModule(deps: FsDeps): any {
       tickSyncOps();
       if (typeof p === 'number') { fsShim.writeSync(p, data); return; }
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      const strData = storeData(resolved, data, pendingPromises);
+      const strData = storeData(resolved, data, inflight);
       if (strData === null) return; // binary: written through the byte cache
       fileCache.set(resolved, strData);
       fileMtimes.set(resolved, Date.now());
       // Skip IDB write for .tmp files — they're transient atomic-write intermediaries.
       // The data reaches IDB via renameSync which writes to the final path.
       if (!resolved.includes('.tmp.')) {
-        pendingPromises.push(ctx.fs.writeFile(resolved, strData).catch(() => {}));
+        inflight.push(ctx.fs.writeFile(resolved, strData).catch(() => {}));
       }
       // localStorage WAL for critical config files (survives page close before IndexedDB flushes)
       // Skip .tmp files — they'll be WAL'd when renamed to their final name
@@ -183,7 +335,7 @@ export function createFsModule(deps: FsDeps): any {
       // Fallback: check Shiro FS cache for files created by shell commands
       if (ctx.fs.readCached(resolved) !== undefined) return true;
       // Fallback: check Shiro FS cache for directories
-      if ((ctx.fs.isDirCached?.(resolved) || ctx.fs.readdirCached(resolved) !== undefined)) return true;
+      if (fsDirCached(resolved)) return true;
       return false;
     },
     statSync: (p: string, opts?: any) => {
@@ -199,14 +351,14 @@ export function createFsModule(deps: FsDeps): any {
       }
       let isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
       // Fallback: check Shiro FS cache for directories
-      if (!isDir && (ctx.fs.isDirCached?.(resolved) || ctx.fs.readdirCached(resolved) !== undefined)) {
+      if (!isDir && fsDirCached(resolved)) {
         isDir = true;
       }
       if (!isFile && !isDir) {
         if (opts?.throwIfNoEntry === false) return undefined;
         throw fsError('ENOENT', `ENOENT: no such file or directory, stat '${p}'`, 'stat', p);
       }
-      const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+      const mtime = new Date(stableMtime(fileMtimes, resolved));
       const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
       return {
         isFile: () => isFile,
@@ -249,7 +401,7 @@ export function createFsModule(deps: FsDeps): any {
           if (!dirSet.has(name)) {
             const childPath = resolved === '/' ? '/' + name : resolved + '/' + name;
             // If it has sub-entries in FS cache, it's a directory
-            if ((ctx.fs.isDirCached?.(childPath) || ctx.fs.readdirCached(childPath) !== undefined)) {
+            if (fsDirCached(childPath)) {
               dirSet.add(name);
             }
             // Also check fileCache for directory sentinel
@@ -291,16 +443,7 @@ export function createFsModule(deps: FsDeps): any {
       }
       const sorted = [...entries].sort();
       if (opts?.withFileTypes) {
-        return sorted.map(name => ({
-          name,
-          isFile: () => !dirSet.has(name),
-          isDirectory: () => dirSet.has(name),
-          isSymbolicLink: () => false,
-          isBlockDevice: () => false,
-          isCharacterDevice: () => false,
-          isFIFO: () => false,
-          isSocket: () => false,
-        }));
+        return sorted.map(name => makeDirent(ctx, resolved, name, dirSet.has(name)));
       }
       return sorted;
     },
@@ -319,7 +462,9 @@ export function createFsModule(deps: FsDeps): any {
       } else {
         fileCache.set(resolved + '/.', '');
       }
-      pendingPromises.push(ctx.fs.mkdir(resolved, opts).catch(() => {}));
+      // The directory exists for the filesystem now when its parent is in memory
+      // (a write right after it found no parent and was dropped)
+      inflight.push((ctx.fs.mkdirNow ? ctx.fs.mkdirNow(resolved, opts) : ctx.fs.mkdir(resolved, opts)).catch(() => {}));
     },
     unlinkSync: (p: string) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
@@ -327,7 +472,7 @@ export function createFsModule(deps: FsDeps): any {
       fileMtimes.delete(resolved);
       // readdirSync/existsSync also consult the filesystem's cache; drop it there now,
       // not when the async delete lands, or the file keeps being listed
-      pendingPromises.push(ctx.fs.unlinkNow(resolved).catch(() => {}));
+      inflight.push(ctx.fs.unlinkNow(resolved).catch(() => {}));
     },
     // No hard links in Shiro's filesystem: link() copies, which is what callers
     // (atomic-write helpers, lockfiles) need from it
@@ -346,14 +491,36 @@ export function createFsModule(deps: FsDeps): any {
       const cached = fileCache.get(srcRes);
       if (cached !== undefined) {
         fileCache.set(dstRes, cached);
-        pendingPromises.push(ctx.fs.writeFile(dstRes, cached).catch(() => {}));
-      } else {
-        pendingPromises.push(ctx.fs.readFile(srcRes, 'utf8').then((data: any) => ctx.fs.writeFile(dstRes, data)).catch(() => {}));
+        fileMtimes.set(dstRes, Date.now());
+        queueWrite(dstRes, () => ctx.fs.writeFile(dstRes, cached));
+        return;
       }
+      const bytes = ctx.fs.readBytesCached(srcRes);
+      if (bytes) {
+        if (storeData(dstRes, bytes, inflight) === null) return; // binary: written through the byte cache
+        const text = decodeUtf8Strict(bytes)!;
+        fileCache.set(dstRes, text);
+        fileMtimes.set(dstRes, Date.now());
+        queueWrite(dstRes, () => ctx.fs.writeFile(dstRes, text));
+        return;
+      }
+      // Not in memory: copy the bytes once the writes in flight (the source's
+      // among them) have landed
+      const waitFor = [...writeState.inflight];
+      queueWrite(dstRes, () => Promise.allSettled(waitFor).then(() => ctx.fs.readFile(srcRes)).then((data: any) => ctx.fs.writeFile(dstRes, data)));
     },
     renameSync: (oldP: string, newP: string) => {
       const oldRes = ctx.fs.resolvePath(oldP, ctx.cwd);
       const newRes = ctx.fs.resolvePath(newP, ctx.cwd);
+      // A directory (pnpm stages a package in name_tmp_PID, then renames it):
+      // move the cached tree now, and the stored one once the writes into it
+      // have landed (renaming first moved a half-written or missing tree)
+      if (fsDirCached(oldRes) || [...fileCache.keys()].some((k) => k.startsWith(oldRes + '/'))) {
+        moveCachedTree(fileCache, fileMtimes, oldRes, newRes); // sync readers see the move now
+        writeState.gone.add(oldRes);
+        inflight.push(renameAfterWrites(deps, oldRes, newRes).catch(() => {}).finally(() => writeState.gone.delete(oldRes)));
+        return;
+      }
       // Update fileCache: move content from old path to new path
       const content = fileCache.get(oldRes);
       if (content !== undefined) {
@@ -363,7 +530,7 @@ export function createFsModule(deps: FsDeps): any {
         fileMtimes.delete(oldRes);
         // Write directly to new path — avoids race where IDB write for
         // the source hasn't completed yet (atomic write pattern: write .tmp → rename)
-        pendingPromises.push(
+        inflight.push(
           ctx.fs.writeFile(newRes, content)
             .then(() => ctx.fs.unlink(oldRes).catch(() => {}))
             .catch(() => {})
@@ -381,8 +548,8 @@ export function createFsModule(deps: FsDeps): any {
         if (cachedBytes && decodeUtf8Strict(cachedBytes) === null) {
           // Binary: move the bytes as they are
           fileMtimes.set(newRes, Date.now());
-          pendingPromises.push(ctx.fs.writeNow(newRes, cachedBytes).catch(() => {}));
-          pendingPromises.push(ctx.fs.unlinkNow(oldRes).catch(() => {})); // gone for sync readers now
+          inflight.push(ctx.fs.writeNow(newRes, cachedBytes).catch(() => {}));
+          inflight.push(ctx.fs.unlinkNow(oldRes).catch(() => {})); // gone for sync readers now
           return;
         }
         const fsCached = ctx.fs.readCached(oldRes);
@@ -390,7 +557,7 @@ export function createFsModule(deps: FsDeps): any {
           fileCache.set(newRes, fsCached);
           fileMtimes.set(newRes, Date.now());
         }
-        pendingPromises.push(ctx.fs.rename(oldRes, newRes).catch(() => {}));
+        inflight.push(ctx.fs.rename(oldRes, newRes).catch(() => {}));
       }
     },
     realpathSync: (p: string) => {
@@ -399,8 +566,13 @@ export function createFsModule(deps: FsDeps): any {
       // Verify path exists (file or directory)
       const isFile = fileCache.has(resolved);
       const isDir = [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
-      if (!isFile && !isDir) throw fsError('ENOENT', `ENOENT: no such file or directory, realpath '${p}'`, 'realpath', p);
-      return resolved;
+      // Symlinks resolve (pnpm's node_modules/x -> .pnpm/x@1/node_modules/x)
+      const real = ctx.fs.realpathCached?.(resolved);
+      if (!isFile && !isDir) {
+        if (real && real !== resolved && (fileCache.has(real) || ctx.fs.isDirCached?.(real) || ctx.fs.readBytesCached(real) !== undefined)) return real;
+        throw fsError('ENOENT', `ENOENT: no such file or directory, realpath '${p}'`, 'realpath', p);
+      }
+      return real ?? resolved;
     },
     accessSync: (p: string) => {
       tickSyncOps();
@@ -418,7 +590,7 @@ export function createFsModule(deps: FsDeps): any {
         if (opts?.throwIfNoEntry === false) return undefined;
         throw fsError('ENOENT', `ENOENT: no such file or directory, lstat '${p}'`, 'lstat', p);
       }
-      const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+      const mtime = new Date(stableMtime(fileMtimes, resolved));
       const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
       return {
         isFile: () => isFile,
@@ -436,7 +608,11 @@ export function createFsModule(deps: FsDeps): any {
         mode: isFile ? 0o100644 : 0o40755,
       };
     },
-    chmodSync: () => {},
+    // Modes are kept (pnpm and cmd-shim make their bin shims executable)
+    chmodSync: (p: string, mode: any) => {
+      const resolved = ctx.fs.resolvePath(String(p), ctx.cwd);
+      inflight.push(chmodAfterWrites(deps, resolved, mode).catch(() => {}));
+    },
     chownSync: () => {},
     fstatSync: (fd: number) => {
       if (fd === 0 || fd === 1 || fd === 2) {
@@ -484,7 +660,7 @@ export function createFsModule(deps: FsDeps): any {
         const parentDir = resolved.substring(0, resolved.lastIndexOf('/'));
         if (parentDir && !fileCache.has(parentDir + '/.')) {
           fileCache.set(parentDir + '/.', '');
-          pendingPromises.push(ctx.fs.mkdir(parentDir, { recursive: true }).catch(() => {}));
+          inflight.push(ctx.fs.mkdir(parentDir, { recursive: true }).catch(() => {}));
         }
         materializeOpenFile(resolved);
       }
@@ -496,7 +672,7 @@ export function createFsModule(deps: FsDeps): any {
         const bytes = toBytes(data);
         const prior = currentBytes(fdInfo.path);
         if ((bytes && decodeUtf8Strict(bytes) === null) || (prior && !fileCache.has(fdInfo.path) && decodeUtf8Strict(prior) === null)) {
-          storeData(fdInfo.path, concatBytes(prior, bytes ?? new TextEncoder().encode(String(data))), pendingPromises);
+          storeData(fdInfo.path, concatBytes(prior, bytes ?? new TextEncoder().encode(String(data))), inflight);
           return bytes ? bytes.length : String(data).length;
         }
         const existing = fileCache.get(fdInfo.path) || '';
@@ -524,7 +700,11 @@ export function createFsModule(deps: FsDeps): any {
     },
     fsyncSync: () => {},
     fdatasyncSync: () => {},
-    utimesSync: () => {},
+    utimesSync: (p: string, atime: any, mtime: any) => {
+      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      fileMtimes.set(resolved, timeMs(mtime));
+      pendingPromises.push(ctx.fs.utimes(resolved, timeMs(atime), timeMs(mtime)).catch(() => {}));
+    },
     rmSync: (p: string, opts?: any) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       removePathFromCaches(resolved, !!opts?.recursive);
@@ -540,20 +720,22 @@ export function createFsModule(deps: FsDeps): any {
       const bytes = toBytes(data);
       const prior = fileCache.has(resolved) ? undefined : ctx.fs.readBytesCached(resolved);
       if ((bytes && decodeUtf8Strict(bytes) === null) || (prior && decodeUtf8Strict(prior) === null)) {
-        storeData(resolved, concatBytes(currentBytes(resolved), bytes ?? new TextEncoder().encode(String(data))), pendingPromises);
+        storeData(resolved, concatBytes(currentBytes(resolved), bytes ?? new TextEncoder().encode(String(data))), inflight);
         return;
       }
       const existing = fileCache.get(resolved) ?? ctx.fs.readCached(resolved) ?? '';
       const str = typeof data === 'string' ? data : new TextDecoder().decode(bytes!);
       fileCache.set(resolved, existing + str);
-      pendingPromises.push(ctx.fs.writeFile(resolved, existing + str).catch(() => {}));
+      inflight.push(ctx.fs.writeFile(resolved, existing + str).catch(() => {}));
     },
     symlinkSync: (target: string, path: string) => {
       const resolved = ctx.fs.resolvePath(path, ctx.cwd);
-      const targetResolved = ctx.fs.resolvePath(target, ctx.cwd);
-      // Symlinks in VFS: just copy the target reference
+      const dir = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
+      const targetResolved = ctx.fs.resolvePath(target, dir);
+      // A real link (target as given), plus the target's text for sync readers
       const content = fileCache.get(targetResolved);
       if (content !== undefined) fileCache.set(resolved, content);
+      queueWrite(resolved, () => ctx.fs.symlink(String(target), resolved));
     },
     // Real streams over the file's bytes (yarn pipes downloaded tarballs into
     // createWriteStream; chunks used to be decoded as text)
@@ -667,7 +849,7 @@ export function createFsModule(deps: FsDeps): any {
       // Update fileCache so subsequent sync reads see the new data
       fileCache.set(resolved, strData);
       fileMtimes.set(resolved, Date.now());
-      pendingPromises.push(ctx.fs.writeFile(resolved, strData).catch(() => {}));
+      inflight.push(ctx.fs.writeFile(resolved, strData).catch(() => {}));
       queueMicrotask(() => callback?.(null));
     },
     stat: (p: string, optsOrCb?: any, cb?: any) => {
@@ -675,9 +857,9 @@ export function createFsModule(deps: FsDeps): any {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       // Check fileCache first (matches statSync behavior) — avoids IDB round-trip
       const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
-      const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || (ctx.fs.isDirCached?.(resolved) || ctx.fs.readdirCached(resolved) !== undefined);
+      const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || fsDirCached(resolved);
       if (isFile || isDir) {
-        const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+        const mtime = new Date(stableMtime(fileMtimes, resolved));
         const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
         queueMicrotask(() => callback?.(null, {
           isFile: () => isFile && !isDir, isDirectory: () => isDir,
@@ -698,9 +880,9 @@ export function createFsModule(deps: FsDeps): any {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       // Check fileCache first (same as stat — no real symlinks in Shiro)
       const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
-      const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || (ctx.fs.isDirCached?.(resolved) || ctx.fs.readdirCached(resolved) !== undefined);
+      const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || fsDirCached(resolved);
       if (isFile || isDir) {
-        const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+        const mtime = new Date(stableMtime(fileMtimes, resolved));
         const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
         queueMicrotask(() => callback?.(null, {
           isFile: () => isFile && !isDir, isDirectory: () => isDir,
@@ -775,8 +957,8 @@ export function createFsModule(deps: FsDeps): any {
         if (opts?.withFileTypes) {
           const dirents = entries.map(name => {
             const childPath = resolved + '/' + name;
-            const childIsDir = cacheDirSet.has(name) || fileCache.has(childPath + '/.') || (ctx.fs.isDirCached?.(childPath) || ctx.fs.readdirCached(childPath) !== undefined);
-            return { name, isFile: () => !childIsDir, isDirectory: () => childIsDir, isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false };
+            const childIsDir = cacheDirSet.has(name) || fileCache.has(childPath + '/.') || fsDirCached(childPath);
+            return makeDirent(ctx, resolved, name, childIsDir);
           });
           queueMicrotask(() => callback?.(null, dirents));
         } else {
@@ -790,8 +972,8 @@ export function createFsModule(deps: FsDeps): any {
             const dirents = [];
             for (const name of entries) {
               try {
-                const st = await ctx.fs.stat(resolved + '/' + name);
-                dirents.push({ name, isFile: () => st.isFile(), isDirectory: () => st.isDirectory(), isSymbolicLink: () => st.isSymbolicLink?.() || false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false });
+                const st = await ctx.fs.lstat(resolved + '/' + name);
+                dirents.push({ name, parentPath: resolved, path: resolved, isFile: () => st.isFile(), isDirectory: () => st.isDirectory(), isSymbolicLink: () => st.isSymbolicLink?.() || false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false });
               } catch { dirents.push({ name, isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false }); }
             }
             callback?.(null, dirents);
@@ -824,9 +1006,11 @@ export function createFsModule(deps: FsDeps): any {
         .catch((e: any) => callback?.(e));
     },
     rename: (oldP: string, newP: string, cb?: any) => {
-      ctx.fs.rename(ctx.fs.resolvePath(oldP, ctx.cwd), ctx.fs.resolvePath(newP, ctx.cwd))
-        .then(() => cb?.(null))
-        .catch((e: any) => cb?.(e));
+      const oldRes = ctx.fs.resolvePath(oldP, ctx.cwd);
+      const newRes = ctx.fs.resolvePath(newP, ctx.cwd);
+      // Writes still in flight for the source land first (write-file-atomic:
+      // write through an fd, then rename at once)
+      renameAfterWrites(deps, oldRes, newRes).then(() => cb?.(null), (e: any) => cb?.(e));
     },
     access: (p: string, modeOrCb?: any, cb?: any) => {
       const callback = typeof modeOrCb === 'function' ? modeOrCb : cb;
@@ -834,11 +1018,15 @@ export function createFsModule(deps: FsDeps): any {
         .then((exists: boolean) => exists ? callback?.(null) : callback?.(fsError('ENOENT', `ENOENT: no such file or directory, access '${p}'`, 'access', p)))
         .catch((e: any) => callback?.(e));
     },
-    chmod: (_p: string, _m: any, cb?: any) => { cb?.(null); },
+    chmod: (p: string, mode: any, cb?: any) => {
+      const resolved = ctx.fs.resolvePath(String(p), ctx.cwd);
+      chmodAfterWrites(deps, resolved, mode).then(() => cb?.(null), (e: any) => cb?.(e));
+    },
     chown: (_p: string, _u: any, _g: any, cb?: any) => { cb?.(null); },
     symlink: (target: string, path: string, typeOrCb?: any, cb?: any) => {
       const callback = typeof typeOrCb === 'function' ? typeOrCb : cb;
-      ctx.fs.symlink(ctx.fs.resolvePath(target, ctx.cwd), ctx.fs.resolvePath(path, ctx.cwd))
+      // the target is stored as given: a relative one resolves against the link's directory
+      ctx.fs.symlink(String(target), ctx.fs.resolvePath(path, ctx.cwd))
         .then(() => callback?.(null))
         .catch((e: any) => callback?.(e));
     },
@@ -879,15 +1067,25 @@ export function createFsModule(deps: FsDeps): any {
       } else {
         f = flags || 'r';
       }
-      (globalThis as any).__shiroFds[fd] = { path: resolved, flags: f, offset: 0 };
-      if (f.includes('w') || f.includes('a')) {
-        if (f.includes('w') || !fileCache.has(resolved)) {
-          fileCache.set(resolved, '');
+      // Opening a missing file to read is ENOENT (it opened anything: yarn
+      // took a tarball cache it never wrote for a hit and fetched nothing)
+      const readOnly = !(f.includes('w') || f.includes('a') || f.includes('+')) && !(typeof flags === 'number' && (flags & 64));
+      const known = fileCache.has(resolved) || ctx.fs.readBytesCached(resolved) !== undefined || fileCache.has(resolved + '/.') || fsDirCached(resolved);
+      (known || !readOnly ? Promise.resolve(true) : ctx.fs.exists(resolved)).then((exists: boolean) => {
+        if (!exists) {
+          callback?.(fsError('ENOENT', `ENOENT: no such file or directory, open '${p}'`, 'open', String(p)));
+          return;
         }
-        fileMtimes.set(resolved, Date.now());
-        materializeOpenFile(resolved);
-      }
-      callback?.(null, fd);
+        (globalThis as any).__shiroFds[fd] = { path: resolved, flags: f, offset: 0 };
+        if (f.includes('w') || f.includes('a')) {
+          if (f.includes('w') || !fileCache.has(resolved)) {
+            fileCache.set(resolved, '');
+          }
+          fileMtimes.set(resolved, Date.now());
+          materializeOpenFile(resolved);
+        }
+        callback?.(null, fd);
+      }, (e: any) => callback?.(e));
     },
     read: (fd: number, buf: any, off: number, len: number, pos: any, cb?: any) => {
       const fdInfo = (globalThis as any).__shiroFds?.[fd];
@@ -902,27 +1100,44 @@ export function createFsModule(deps: FsDeps): any {
       fdInfo.offset = p2 + n;
       cb?.(null, n, buf);
     },
-    write: (fd: number, buf: any, off: number, len: number, pos: any, cb?: any) => {
-      const fdInfo = (globalThis as any).__shiroFds?.[fd];
-      if (fdInfo) {
-        const existing = fileCache.get(fdInfo.path) || '';
-        const str = typeof buf === 'string' ? buf : new TextDecoder().decode(buf instanceof Uint8Array ? buf.slice(off, off + len) : buf);
-        const newContent = existing + str;
-        fileCache.set(fdInfo.path, newContent);
-        fileMtimes.set(fdInfo.path, Date.now());
-        pendingPromises.push(ctx.fs.writeFile(fdInfo.path, newContent).catch(() => {}));
+    // write(fd, buffer[, offset[, length[, position]]], cb), write(fd, buffer, options, cb)
+    // and write(fd, string[, position[, encoding]], cb): the callback is the last
+    // function (the string form used to drop it: write-file-atomic never finished)
+    write: (fd: number, buf: any, ...rest: any[]) => {
+      const cbIdx = rest.findIndex((a) => typeof a === 'function');
+      const cb = cbIdx >= 0 ? rest[cbIdx] : undefined;
+      const args = cbIdx >= 0 ? rest.slice(0, cbIdx) : rest;
+      let data: any;
+      if (typeof buf === 'string') {
+        const enc = typeof args[1] === 'string' ? args[1] : undefined;
+        data = enc && enc !== 'utf8' && enc !== 'utf-8' ? FakeBuffer.from(buf, enc) : buf;
+      } else {
+        const bytes = toBytes(buf) ?? new Uint8Array(0);
+        const o = args[0] && typeof args[0] === 'object' ? args[0] : { offset: args[0], length: args[1] };
+        const off = o.offset ?? 0;
+        data = bytes.subarray(off, off + (o.length ?? bytes.length - off));
       }
-      cb?.(null, len, buf);
+      let n: number;
+      try { fsShim.writeSync(fd, data); n = typeof data === 'string' ? new TextEncoder().encode(data).length : data.length; }
+      catch (e) { cb?.(e); return; }
+      cb?.(null, n, buf);
     },
     link: (src: string, dst: string, cb?: any) => {
       try { fsShim.linkSync(src, dst); cb?.(null); } catch (e) { cb?.(e); }
     },
+    // Through copyFileSync, which copies what this script sees (the cache
+    // ahead of storage) as bytes: reading storage copied files whose writes
+    // were still in flight as empty (yarn's copy out of its cache)
     copyFile: (src: string, dst: string, flagsOrCb?: any, cb?: any) => {
       const callback = typeof flagsOrCb === 'function' ? flagsOrCb : cb;
-      ctx.fs.readFile(ctx.fs.resolvePath(src, ctx.cwd), 'utf8')
-        .then((data: any) => ctx.fs.writeFile(ctx.fs.resolvePath(dst, ctx.cwd), data))
-        .then(() => callback?.(null))
-        .catch((e: any) => callback?.(e));
+      const srcRes = ctx.fs.resolvePath(String(src), ctx.cwd);
+      const dstRes = ctx.fs.resolvePath(String(dst), ctx.cwd);
+      const known = fileCache.has(srcRes) || ctx.fs.readBytesCached(srcRes) !== undefined;
+      (known ? Promise.resolve(true) : Promise.allSettled([...writeState.inflight]).then(() => ctx.fs.exists(srcRes))).then((exists: boolean) => {
+        if (!exists) { callback?.(fsError('ENOENT', `ENOENT: no such file or directory, copyfile '${src}' -> '${dst}'`, 'copyfile', String(src))); return; }
+        fsShim.copyFileSync(src, dst);
+        Promise.allSettled([writeChains.get(dstRes)]).then(() => callback?.(null));
+      }, (e: any) => callback?.(e));
     },
     appendFile: (p: string, data: any, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
@@ -938,7 +1153,11 @@ export function createFsModule(deps: FsDeps): any {
         .then(() => callback?.(null))
         .catch((e: any) => callback?.(e));
     },
-    utimes: (_p: string, _a: any, _m: any, cb?: any) => { cb?.(null); },
+    utimes: (p: string, atime: any, mtime: any, cb?: any) => {
+      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      fileMtimes.set(resolved, timeMs(mtime));
+      ctx.fs.utimes(resolved, timeMs(atime), timeMs(mtime)).then(() => cb?.(null), (e: any) => cb?.(e));
+    },
     futimes: (_fd: number, _a: any, _m: any, cb?: any) => { cb?.(null); },
     fstat: (fd: number, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
@@ -958,7 +1177,7 @@ export function createFsModule(deps: FsDeps): any {
         const existing = fileCache.get(fdInfo.path) || '';
         const truncated = existing.slice(0, len);
         fileCache.set(fdInfo.path, truncated);
-        pendingPromises.push(ctx.fs.writeFile(fdInfo.path, truncated).catch(() => {}));
+        inflight.push(ctx.fs.writeFile(fdInfo.path, truncated).catch(() => {}));
       }
       callback?.(null);
     },
@@ -1082,8 +1301,8 @@ export function createFsModule(deps: FsDeps): any {
         if (opts?.withFileTypes) {
           return entries.map(name => {
             const childPath = resolved + '/' + name;
-            const childIsDir = cacheDirSet.has(name) || fileCache.has(childPath + '/.') || [...fileCache.keys()].some(k => k.startsWith(childPath + '/')) || (ctx.fs.isDirCached?.(childPath) || ctx.fs.readdirCached(childPath) !== undefined);
-            return { name, isFile: () => !childIsDir, isDirectory: () => childIsDir, isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false };
+            const childIsDir = cacheDirSet.has(name) || fileCache.has(childPath + '/.') || [...fileCache.keys()].some(k => k.startsWith(childPath + '/')) || fsDirCached(childPath);
+            return makeDirent(ctx, resolved, name, childIsDir);
           });
         }
         return entries;
@@ -1091,9 +1310,9 @@ export function createFsModule(deps: FsDeps): any {
       stat: async (p: string) => {
         const resolved = ctx.fs.resolvePath(p, ctx.cwd);
         const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
-        const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || (ctx.fs.isDirCached?.(resolved) || ctx.fs.readdirCached(resolved) !== undefined);
+        const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || fsDirCached(resolved);
         if (isFile || isDir) {
-          const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+          const mtime = new Date(stableMtime(fileMtimes, resolved));
           const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
           return { isFile: () => isFile && !isDir, isDirectory: () => isDir, isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false, size, mtime, ctime: mtime, atime: mtime, birthtime: mtime, mtimeMs: mtime.getTime(), ctimeMs: mtime.getTime(), atimeMs: mtime.getTime(), birthtimeMs: mtime.getTime(), dev: 0, ino: 0, nlink: 1, uid: 1000, gid: 1000, rdev: 0, blksize: 4096, blocks: Math.ceil(size / 512), mode: isDir ? 0o40755 : 0o100644 };
         }
@@ -1107,7 +1326,7 @@ export function createFsModule(deps: FsDeps): any {
       },
       access: async (p: string) => {
         const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-        if (fileCache.has(resolved) || fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readCached(resolved) !== undefined || (ctx.fs.isDirCached?.(resolved) || ctx.fs.readdirCached(resolved) !== undefined)) return;
+        if (fileCache.has(resolved) || fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readCached(resolved) !== undefined || fsDirCached(resolved)) return;
         const exists = await ctx.fs.exists(resolved);
         if (!exists) throw fsError('ENOENT', `ENOENT: no such file or directory, access '${p}'`, 'access', p);
       },
@@ -1116,14 +1335,9 @@ export function createFsModule(deps: FsDeps): any {
   // realpath and realpath.native need special handling (function with properties)
   const realpathFn: any = (p: string, optsOrCb?: any, cb?: any) => {
     const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
-    const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-    callback?.(null, resolved);
+    realpathAsync(deps, p).then((r) => callback?.(null, r), (e) => callback?.(e));
   };
-  realpathFn.native = (p: string, optsOrCb?: any, cb?: any) => {
-    const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
-    const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-    callback?.(null, resolved);
-  };
+  realpathFn.native = realpathFn;
   fsShim.realpath = realpathFn;
   // Also add realpathSync.native
   const origRealpathSync = fsShim.realpathSync;
@@ -1131,11 +1345,31 @@ export function createFsModule(deps: FsDeps): any {
   // fs.promises is fs/promises: the calls above, plus the rest of that
   // module (lstat, realpath, opendir... which prettier's file walk needs)
   fsShim.promises = { ...createFsPromisesModule(deps), ...fsShim.promises };
+  // Callbacks always run later, as in Node: code that registers its listener
+  // after starting the call (touch: fs.open in a constructor, .on('done')
+  // after it) missed callbacks the shim made synchronously
+  for (const k of Object.keys(fsShim)) {
+    const f = fsShim[k];
+    if (typeof f !== 'function' || k.endsWith('Sync') || /^[A-Z]/.test(k) || NOT_CALLBACK_API.has(k)) continue;
+    const wrapped: any = function (this: any, ...args: any[]) {
+      const last = args.length - 1;
+      if (last >= 0 && typeof args[last] === 'function') {
+        const cb = args[last];
+        args[last] = (...r: any[]) => queueMicrotask(() => cb(...r));
+      }
+      return f.apply(this, args);
+    };
+    Object.assign(wrapped, f);
+    fsShim[k] = wrapped;
+  }
   return fsShim;
 }
 
+const NOT_CALLBACK_API = new Set(['createReadStream', 'createWriteStream', 'watch', 'watchFile', 'unwatchFile', 'openAsBlob']);
+
 export function createFsPromisesModule(deps: FsDeps): any {
   const { ctx, fileCache, fileMtimes, FakeBuffer, homeDir, getBuiltinModule } = deps;
+  const fsDirCached = dirCachedChecker(deps);
   const { removePathFromCaches, toBytes, currentBytes, storeData, concatBytes } = createRemovalHelpers(ctx, fileCache, fileMtimes);
 
   // Async fs promises API
@@ -1226,8 +1460,8 @@ export function createFsPromisesModule(deps: FsDeps): any {
       if (opts?.withFileTypes) {
         const dirents = entries.map(name => {
           const childPath = resolved + '/' + name;
-          const childIsDir = cacheDirSet.has(name) || fileCache.has(childPath + '/.') || [...fileCache.keys()].some(k => k.startsWith(childPath + '/')) || (ctx.fs.isDirCached?.(childPath) || ctx.fs.readdirCached(childPath) !== undefined);
-          return { name, isFile: () => !childIsDir, isDirectory: () => childIsDir, isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false, parentPath: resolved, path: resolved };
+          const childIsDir = cacheDirSet.has(name) || fileCache.has(childPath + '/.') || [...fileCache.keys()].some(k => k.startsWith(childPath + '/')) || fsDirCached(childPath);
+          return makeDirent(ctx, resolved, name, childIsDir);
         });
         return dirents;
       }
@@ -1237,9 +1471,9 @@ export function createFsPromisesModule(deps: FsDeps): any {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       // Check fileCache first (matches statSync behavior)
       const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
-      const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || (ctx.fs.isDirCached?.(resolved) || ctx.fs.readdirCached(resolved) !== undefined);
+      const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || fsDirCached(resolved);
       if (isFile || isDir) {
-        const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+        const mtime = new Date(stableMtime(fileMtimes, resolved));
         const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
         return {
           isFile: () => isFile && !isDir, isDirectory: () => isDir,
@@ -1269,7 +1503,7 @@ export function createFsPromisesModule(deps: FsDeps): any {
     access: async (p: string) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       // Check fileCache/dirs before going to IDB
-      if (fileCache.has(resolved) || fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readCached(resolved) !== undefined || (ctx.fs.isDirCached?.(resolved) || ctx.fs.readdirCached(resolved) !== undefined)) return;
+      if (fileCache.has(resolved) || fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || ctx.fs.readCached(resolved) !== undefined || fsDirCached(resolved)) return;
       const exists = await ctx.fs.exists(resolved);
       if (!exists) throw fsError('ENOENT', `ENOENT: no such file or directory, access '${p}'`, 'access', p);
     },
@@ -1277,9 +1511,9 @@ export function createFsPromisesModule(deps: FsDeps): any {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       // Check fileCache first (same as stat)
       const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
-      const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || (ctx.fs.isDirCached?.(resolved) || ctx.fs.readdirCached(resolved) !== undefined);
+      const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || fsDirCached(resolved);
       if (isFile || isDir) {
-        const mtime = new Date(fileMtimes.get(resolved) || Date.now());
+        const mtime = new Date(stableMtime(fileMtimes, resolved));
         const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
         return {
           isFile: () => isFile && !isDir, isDirectory: () => isDir,
@@ -1292,19 +1526,14 @@ export function createFsPromisesModule(deps: FsDeps): any {
       }
       return await ctx.fs.stat(resolved);
     },
-    chmod: async () => {},
+    chmod: async (p: string, mode: any) => {
+      const resolved = ctx.fs.resolvePath(String(p), ctx.cwd);
+      await chmodAfterWrites(deps, resolved, mode);
+    },
     rename: async (oldP: string, newP: string) => {
       const oldRes = ctx.fs.resolvePath(oldP, ctx.cwd);
       const newRes = ctx.fs.resolvePath(newP, ctx.cwd);
-      // Update fileCache so subsequent sync reads see the moved content
-      const content = fileCache.get(oldRes);
-      if (content !== undefined) {
-        fileCache.set(newRes, content);
-        fileCache.delete(oldRes);
-        fileMtimes.set(newRes, Date.now());
-        fileMtimes.delete(oldRes);
-      }
-      await ctx.fs.rename(oldRes, newRes);
+      await renameAfterWrites(deps, oldRes, newRes); // writes in flight land first
     },
     link: async (src: string, dst: string) => {
       const exists = await ctx.fs.exists(ctx.fs.resolvePath(dst, ctx.cwd));
@@ -1316,11 +1545,10 @@ export function createFsPromisesModule(deps: FsDeps): any {
       const data = await ctx.fs.readFile(ctx.fs.resolvePath(src, ctx.cwd));
       await ctx.fs.writeFile(ctx.fs.resolvePath(dst, ctx.cwd), data);
     },
-    copyFile: async (src: string, dst: string) => {
-      const data = await ctx.fs.readFile(ctx.fs.resolvePath(src, ctx.cwd));
-      const content = typeof data === 'string' ? data : new TextDecoder().decode(data);
-      await ctx.fs.writeFile(ctx.fs.resolvePath(dst, ctx.cwd), content);
-    },
+    // fs.copyFile's (bytes, not text decoded: binary files came out mangled)
+    copyFile: (src: string, dst: string) => new Promise<void>((resolve, reject) => {
+      getBuiltinModule('fs').copyFile(src, dst, (e: any) => e ? reject(e) : resolve());
+    }),
     appendFile: async (p: string, data: any) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       let existing: Uint8Array = new Uint8Array(0);
@@ -1335,21 +1563,23 @@ export function createFsPromisesModule(deps: FsDeps): any {
       await ctx.fs.writeFile(resolved, text);
     },
     symlink: async (target: string, path: string) => {
-      await ctx.fs.symlink(ctx.fs.resolvePath(target, ctx.cwd), ctx.fs.resolvePath(path, ctx.cwd));
+      await ctx.fs.symlink(String(target), ctx.fs.resolvePath(path, ctx.cwd));
     },
     readlink: async (p: string) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       return await ctx.fs.readlink(resolved);
     },
-    realpath: async (p: string) => {
-      return ctx.fs.resolvePath(p, ctx.cwd);
-    },
+    realpath: async (p: string) => realpathAsync(deps, p),
     rmdir: async (p: string) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       fileCache.delete(resolved + '/.');
       await ctx.fs.rmdir(resolved);
     },
-    utimes: async () => {},
+    utimes: async (p: string, atime: any, mtime: any) => {
+      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      fileMtimes.set(resolved, timeMs(mtime));
+      await ctx.fs.utimes(resolved, timeMs(atime), timeMs(mtime));
+    },
     mkdtemp: async (prefix: string) => {
       const dir = `${prefix}${Math.random().toString(36).slice(2)}`;
       await ctx.fs.mkdir(dir, { recursive: true });

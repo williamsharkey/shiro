@@ -53,7 +53,8 @@ export const base64: Command = {
         }
       }
 
-      ctx.stdout += result + (result ? "\n" : "");
+      // Decoded data is written as it is (no newline of its own, like GNU)
+      ctx.stdout += decode ? result : result + (result ? "\n" : "");
       return 0;
     } catch (e: unknown) {
       ctx.stderr += `base64: ${e instanceof Error ? e.message : e}\n`;

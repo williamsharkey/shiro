@@ -13,6 +13,8 @@ export interface HttpDeps {
   };
   fakeConsole: { log: (...args: any[]) => void; warn: (...args: any[]) => void };
   getBuiltinModule: (name: string) => any;
+  /** Counts a promise as the script's async activity (keeps it from idling out) */
+  trackAsync?: <T>(p: Promise<T>) => Promise<T>;
 }
 
 export function createHttpModule(deps: HttpDeps): any {
@@ -235,14 +237,16 @@ function _createHttpOrHttpsModule(deps: HttpDeps, isHttps: boolean): any {
   }
 
   // Agent — used as base class by AWS SDK, gRPC, etc.
-  class Agent {
+  // An EventEmitter, as in Node (agentkeepalive and pnpm's agents subclass it and listen)
+  const AgentBase: any = getBuiltinModule('events');
+  class Agent extends AgentBase {
     maxSockets = Infinity;
     maxFreeSockets = 256;
     options: any = {};
     requests: any = {};
     sockets: any = {};
     freeSockets: any = {};
-    constructor(opts?: any) { if (opts) this.options = opts; }
+    constructor(opts?: any) { super(); if (opts) this.options = opts; }
     destroy() {}
     createConnection(opts: any, cb: Function) { cb(null, new (getBuiltinModule('net') as any).Socket()); }
   }
@@ -317,37 +321,44 @@ function _createHttpOrHttpsModule(deps: HttpDeps, isHttps: boolean): any {
       globalThis.fetch(url, fetchOpts).then(async (resp) => {
         clearTimeout(timeoutId);
         // Build IncomingMessage-like response
+        // The browser already decoded the body: no content-encoding (node-fetch
+        // would gunzip it again) and no length of the encoded body
         const resHeaders: Record<string, string> = {};
-        resp.headers.forEach((v, k) => { resHeaders[k] = v; });
+        const rawHeaders: string[] = [];
+        resp.headers.forEach((v, k) => {
+          if (k === 'content-encoding' || k === 'content-length') return;
+          resHeaders[k] = v;
+          rawHeaders.push(k, v);
+        });
         const body = resp.body;
 
-        const res: any = new IncomingMessage();
+        // A real Readable, so pipeline/pipe/async iteration work (node-fetch)
+        const { Readable } = getBuiltinModule('stream');
+        const B = getBuiltinModule('buffer').Buffer;
+        const res: any = new Readable({ read() {} });
         res.statusCode = resp.status;
         res.statusMessage = resp.statusText;
         res.headers = resHeaders;
+        res.rawHeaders = rawHeaders;
+        res.trailers = {};
+        res.rawTrailers = [];
         res.httpVersion = '1.1';
+        res.httpVersionMajor = 1;
+        res.httpVersionMinor = 1;
+        res.complete = false;
+        res.req = this;
+        res.url = '';
+        res.method = null;
         // The browser did TLS (and checked the certificate): request/yarn
         // refuse an https response whose socket isn't authorized
         const secure = protocol === 'https:';
         res.socket = res.connection = {
           authorized: secure, encrypted: secure, authorizationError: null, remoteAddress: host,
           setTimeout() { return this; }, setNoDelay() { return this; }, setKeepAlive() { return this; },
-          on() { return this; }, once() { return this; }, removeListener() { return this; }, destroy() {}, ref() {}, unref() {},
+          on() { return this; }, once() { return this; }, off() { return this; }, removeListener() { return this; },
+          prependListener() { return this; }, destroy() {}, ref() {}, unref() {},
         };
-
-        const resEvents: Record<string, Function[]> = {};
-        res.on = (ev: string, fn: Function) => { (resEvents[ev] ??= []).push(fn); return res; };
-        res.once = (ev: string, fn: Function) => { return res.on(ev, fn); };
-        res.removeListener = (ev: string, fn: Function) => { resEvents[ev] = (resEvents[ev] || []).filter(f => f !== fn); return res; };
-        res.removeAllListeners = (ev?: string) => { if (ev) delete resEvents[ev]; else Object.keys(resEvents).forEach(k => delete resEvents[k]); return res; };
-        res.pipe = (dest: any) => {
-          res.on('data', (chunk: any) => dest.write(chunk));
-          res.on('end', () => { if (dest.end) dest.end(); });
-          return dest;
-        };
-        res.resume = () => res;
-        res.destroy = () => res;
-        res.setEncoding = (_enc: string) => res;
+        res.setTimeout = (_ms: number, cb?: Function) => { if (cb) res.once('timeout', cb); return res; };
 
         // Emit response callback
         this.emit('response', res);
@@ -359,19 +370,19 @@ function _createHttpOrHttpsModule(deps: HttpDeps, isHttps: boolean): any {
             while (true) {
               const { done, value } = await reader.read();
               if (done) break;
-              (resEvents['data'] || []).forEach(fn => fn(value));
+              if (res.destroyed) { reader.cancel().catch(() => {}); return; }
+              res.push(B.from(value));
             }
-            (resEvents['end'] || []).forEach(fn => fn());
-            (resEvents['close'] || []).forEach(fn => fn());
+            res.complete = true;
+            res.push(null);
           };
-          pump().catch(err => {
-            (resEvents['error'] || []).forEach(fn => fn(err));
-          });
+          // A body still arriving is activity: yarn's tarball downloads ended
+          // with the script, which had looked idle once the headers came
+          const pumped = pump().catch(err => { res.destroy(err); });
+          deps.trackAsync?.(pumped);
         } else {
-          queueMicrotask(() => {
-            (resEvents['end'] || []).forEach(fn => fn());
-            (resEvents['close'] || []).forEach(fn => fn());
-          });
+          res.complete = true;
+          res.push(null);
         }
       }).catch(err => {
         clearTimeout(timeoutId);

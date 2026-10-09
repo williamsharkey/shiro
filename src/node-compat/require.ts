@@ -24,10 +24,49 @@ export interface RequireDeps {
   createAutoStub: (modPath: string, target: any) => any;
 }
 
-export function createRequireFunction(deps: RequireDeps): (modPath: string, fromDir: string) => any {
+/**
+ * require() plus `ready`: the same load, awaiting the body of a module that
+ * runs asynchronously (top-level await) before handing back its exports.
+ */
+export interface RequireFunction {
+  (modPath: string, fromDir: string): any;
+  ready(modPath: string, fromDir: string, importer?: string): Promise<any>;
+}
+
+export function createRequireFunction(deps: RequireDeps): RequireFunction {
   const { ctx, fileCache, fileMtimes, moduleCache, pendingPromises, processEvents,
     getBuiltinModule, fakeConsole, fakeProcess, FakeBuffer,
     createExpressShim, createSqliteShim, createAutoStub } = deps;
+
+  // Modules whose body is still running (top-level await), by path, and which
+  // module each importer is waiting on (to spot cycles)
+  const pendingEval = new Map<string, Promise<unknown>>();
+  const waitsOn = new Map<string, string>();
+  // The file the last _requireModule call loaded or found in the cache
+  let lastResolved = '';
+
+  /**
+   * An ES module with top-level await runs as an async function, so require()
+   * returns its exports before its `export { … }` assignments run. Static
+   * imports in async modules and import() wait for the body instead, as ESM
+   * evaluation does (Gemini CLI's chunks all start with an await). A wait
+   * that would close a cycle back to the importer is skipped.
+   */
+  async function requireReady(modPath: string, fromDir: string, importer?: string): Promise<any> {
+    lastResolved = '';
+    const exp = requireModule(modPath, fromDir);
+    const path = lastResolved;
+    const running = path ? pendingEval.get(path) : undefined;
+    if (!running) return exp;
+    for (let at: string | undefined = path; at; at = waitsOn.get(at)) if (at === importer) return exp;
+    if (importer) waitsOn.set(importer, path);
+    try {
+      await running;
+    } finally {
+      if (importer) waitsOn.delete(importer);
+    }
+    return moduleCache.get(path)?.exports ?? exp;
+  }
 
   function requireModule(modPath: string, fromDir: string): any {
     const result = _requireModule(modPath, fromDir);
@@ -48,22 +87,22 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
     return undefined;
   }
 
-  function _requireModule(modPath: string, fromDir: string): any {
+  function _requireModule(modPath: string, fromDir: string, resolveOnly = false): any {
     // Check for Express shim — return the factory function itself
     // (users do: const express = require('express'); const app = express();)
-    if (modPath === 'express') {
+    if (modPath === 'express' && !resolveOnly) {
       return createExpressShim;
     }
 
     // Check for better-sqlite3 shim
-    if (modPath === 'better-sqlite3') {
+    if (modPath === 'better-sqlite3' && !resolveOnly) {
       return createSqliteShim();
     }
 
     // Check built-in modules first
     const builtin = getBuiltinModule(modPath);
     if (builtin !== null) {
-      return builtin;
+      return resolveOnly ? modPath : builtin;
     }
 
     let resolved = modPath;
@@ -91,7 +130,7 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
                   const found = tryResolveExtensions(resolved);
                   if (found) resolved = found;
                 }
-                if (moduleCache.has(resolved)) return moduleCache.get(resolved)!.exports;
+                if (!resolveOnly && moduleCache.has(resolved)) { lastResolved = resolved; return moduleCache.get(resolved)!.exports; }
                 break;
               }
             }
@@ -120,6 +159,10 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
       let found = false;
       while (searchDir) {
         let pkgDir = `${searchDir}/node_modules/${pkgName}`;
+        // A package behind a symlink (pnpm: node_modules/x -> .pnpm/x@1/node_modules/x)
+        // loads from its real path, as in node, so its dependencies resolve beside it
+        const realPkgDir = ctx.fs.realpathCached?.(pkgDir);
+        if (realPkgDir && realPkgDir !== pkgDir && fileCache.has(`${realPkgDir}/package.json`)) pkgDir = realPkgDir;
         let pkgPath = `${pkgDir}/package.json`;
 
         // Handle npm GitHub tarball extraction which creates nested structure
@@ -327,7 +370,13 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
       }
     }
 
-    if (moduleCache.has(resolved)) return moduleCache.get(resolved)!.exports;
+    if (resolveOnly) {
+      if (fileCache.has(resolved) || moduleCache.has(resolved)) return resolved;
+      const err: any = new Error(`Cannot find module '${modPath}'`);
+      err.code = 'MODULE_NOT_FOUND';
+      throw err;
+    }
+    if (moduleCache.has(resolved)) { lastResolved = resolved; return moduleCache.get(resolved)!.exports; }
 
     const content = fileCache.get(resolved);
     if (content === undefined) {
@@ -338,19 +387,20 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
       const hint = nearby.length ? `\nSimilar files in cache: ${nearby.join(', ')}` : '';
       const isNpmPkg = !modPath.startsWith('.') && !modPath.startsWith('/');
       const npmHint = isNpmPkg ? `\nTry: npm install ${modPath.split('/')[0]}` : '';
-      throw new Error(`Cannot find module '${modPath}' (resolved: ${resolved})${hint}${npmHint}`);
+      throw Object.assign(new Error(`Cannot find module '${modPath}' (resolved: ${resolved})${hint}${npmHint}`), { code: 'MODULE_NOT_FOUND', requireStack: [] });
     }
 
     if (resolved.endsWith('.json')) {
       const exp = JSON.parse(content);
       moduleCache.set(resolved, { exports: exp });
+      lastResolved = resolved;
       return exp;
     }
 
-    const mod = { exports: {} as any };
+    const mod: any = { exports: {} as any, id: resolved, filename: resolved, loaded: false, children: [] };
     moduleCache.set(resolved, mod);
     const modDir = resolved.substring(0, resolved.lastIndexOf('/')) || ctx.cwd;
-    const nestedRequire = (p: string) => requireModule(p, modDir);
+    const nestedRequire = makeRequire(modDir, mod);
 
     try {
       // Transform TypeScript/JSX/ESM syntax to CommonJS
@@ -371,17 +421,17 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
       const fnParams = [
         'module', 'exports', 'require', '__filename', '__dirname',
         'console', 'process', 'global', 'Buffer', '__import_meta',
-        '__shiro_module', '__shiro_require', '__dynamic_import',
+        '__shiro_module', '__shiro_require', '__dynamic_import', '__shiro_require_ready',
       ];
       const dynamicImport = async (specifier: unknown) => {
         let spec = String(specifier);
         if (/^(?:https?|data|blob):/.test(spec)) return import(/* @vite-ignore */ spec);
         if (spec.startsWith('file://')) spec = decodeURIComponent(spec.slice(7));
-        return esmNamespace(nestedRequire(spec));
+        return esmNamespace(await requireReady(spec, modDir, resolved));
       };
       const fnArgs = [mod, mod.exports, nestedRequire, resolved, modDir,
         fakeConsole, fakeProcess, globalThis, FakeBuffer, modImportMeta,
-        mod, nestedRequire, dynamicImport];
+        mod, nestedRequire, dynamicImport, (p: string) => requireReady(p, modDir, resolved)];
 
       // Try synchronous execution first — most npm packages don't use top-level await.
       // This ensures module.exports is populated before require() returns,
@@ -393,8 +443,10 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
         // SyntaxError from top-level `await` -> fall back to AsyncFunction
         if (syncErr instanceof SyntaxError && /\bawait\b/.test(transformedContent)) {
           const AsyncFn = Object.getPrototypeOf(async function(){}).constructor;
-          const wrapped = new AsyncFn(...fnParams, wrapModuleBody(transformedContent, true));
+          const wrapped = compileAsyncModule(AsyncFn, fnParams, transformedContent);
           const execPromise = wrapped.apply(mod.exports, fnArgs);
+          pendingEval.set(resolved, execPromise);
+          execPromise.then(() => pendingEval.delete(resolved), () => pendingEval.delete(resolved));
           pendingPromises.push(execPromise.catch((e: any) => {
             if (!(e instanceof ProcessExitError)) {
               console.error(`Error in module ${resolved}:`, e.message, e.stack?.slice(0, 300));
@@ -414,17 +466,82 @@ export function createRequireFunction(deps: RequireDeps): (modPath: string, from
       // from require) ends the script; it is not a load failure
       if (err instanceof ProcessExitError || (err as any)?._isProcessExit) throw err;
       const errMsg = err instanceof Error ? err.message : String(err);
-      const enhancedErr = new Error(`Error loading module '${resolved}': ${errMsg}`);
+      const enhancedErr: any = new Error(`Error loading module '${resolved}': ${errMsg}`);
+      if ((err as any)?.code) enhancedErr.code = (err as any).code;
       if (err instanceof Error && err.stack) {
         enhancedErr.stack = `Error loading module '${resolved}':\n${err.stack}`;
       }
       throw enhancedErr;
     }
 
+    lastResolved = resolved;
     return mod.exports;
   }
 
-  return requireModule;
+  /**
+   * A module's `require`, with Node's properties: resolve (and
+   * resolve.paths: the node_modules directories searched, null for a
+   * builtin), cache and main.
+   */
+  function makeRequire(fromDir: string, mod?: any): any {
+    const req: any = (p: string) => requireModule(p, fromDir);
+    req.resolve = (request: string, opts?: { paths?: string[] }) => {
+      const dirs = opts?.paths?.length ? opts.paths : [fromDir];
+      let last: any;
+      for (const d of dirs) {
+        try { return _requireModule(request, ctx.fs.resolvePath(d, ctx.cwd), true); } catch (e) { last = e; }
+      }
+      throw last;
+    };
+    req.resolve.paths = (request: string) => {
+      if (getBuiltinModule(request) !== null) return null;
+      const out: string[] = [];
+      for (let d = fromDir; ; d = d.substring(0, d.lastIndexOf('/')) || '/') {
+        if (!d.endsWith('/node_modules')) out.push(`${d === '/' ? '' : d}/node_modules`);
+        if (d === '/') break;
+      }
+      return out;
+    };
+    req.cache = new Proxy({}, {
+      get: (_t, k) => typeof k === 'string' && moduleCache.has(k) ? moduleCache.get(k) : undefined,
+      has: (_t, k) => typeof k === 'string' && moduleCache.has(k),
+      deleteProperty: (_t, k) => { if (typeof k === 'string') moduleCache.delete(k); return true; },
+      ownKeys: () => [...moduleCache.keys()],
+      getOwnPropertyDescriptor: (_t, k) => typeof k === 'string' && moduleCache.has(k)
+        ? { value: moduleCache.get(k), enumerable: true, configurable: true } : undefined,
+    });
+    req.main = mainModule;
+    if (mod) {
+      mod.require = req;
+      mod.paths ??= req.resolve.paths('x');
+    }
+    return req;
+  }
+  let mainModule: any;
+  (requireModule as any).makeRequire = makeRequire;
+  (requireModule as any).setMain = (m: any) => { mainModule = m; };
+
+  return Object.assign(requireModule, { ready: requireReady });
+}
+
+/**
+ * Static imports of files (relative or absolute specifiers) in an async
+ * module body wait for the module they import (`requireReady`);
+ * transformESModules writes them as `__shiro_require("./m")`. Builtins and
+ * packages are left synchronous, so a bundle that only imports those (Claude
+ * Code's cli.js) runs as before. Falls back to the plain body if the rewrite
+ * doesn't compile (a generated call inside a non-async function).
+ */
+export function compileAsyncModule(AsyncFn: any, params: string[], body: string): (...a: any[]) => Promise<any> {
+  const awaited = body.replace(/__shiro_require\((['"])((?:\.\.?)?\/[^'"\n]*)\1\)/g, '(await __shiro_require_ready($1$2$1))');
+  if (awaited !== body) {
+    try {
+      return new AsyncFn(...params, wrapModuleBody(awaited, true));
+    } catch (e) {
+      if (!(e instanceof SyntaxError)) throw e;
+    }
+  }
+  return new AsyncFn(...params, wrapModuleBody(body, true));
 }
 
 /**

@@ -97,6 +97,8 @@ const ssecmpBin = join(out, 'ssecmp');
 const haveSsecmp = tryBuild('gcc', ['-static', '-O1', '-o', ssecmpBin, 'ssecmp.c', '-lm']);
 const brkmapBin = join(out, 'brkmap');
 const haveBrkmap = tryBuild('gcc', ['-static', '-O1', '-o', brkmapBin, 'brkmap.c']);
+const bigfileBin = join(out, 'bigfile');
+const haveBigfile = tryBuild('gcc', ['-static', '-O1', '-o', bigfileBin, 'bigfile.c']);
 const getgroupsBin = join(out, 'getgroups');
 const haveGetgroups = tryBuild('gcc', ['-static', '-O1', '-o', getgroupsBin, 'getgroups.c']);
 const fionbioBin = join(out, 'fionbio');
@@ -564,6 +566,25 @@ describe('Blink engine: CPU and syscall fixes', () => {
       'no MAYMOVE: Cannot allocate memory\nmoved=1 first=7 mid=7 last=9\nold range free=1\n' +
       'shrunk same=1 tail free=1 last=7\nfixed at=1 first=7\nreadonly moved=1 byte=42\n');
     expect(r.exitCode).toBe(0);
+  }, 60_000);
+
+  // SHIROFS reads and maps big files through pread instead of loading them whole
+  it.skipIf(!haveBigfile)('reads, maps and writes a 3 MiB file (pread, SEEK_END, private/shared mmap, sequential read)', async () => {
+    const { fs, shell } = await setup(readFileSync(bigfileBin));
+    const size = 3 * 1048576 + 77;
+    const big = new Uint8Array(size);
+    for (let i = 0; i < size; i++) big[i] = (i * 7 + (i >> 12)) & 255;
+    await fs.writeFile('/home/user/work/big.bin', big);
+    await fs.writeFile('/home/user/work/trunc.bin', new Uint8Array(2_000_000).fill(0x71));
+    const r = await run(shell, './prog');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe(
+      'size 3145805\npread 16 1225\ntail 10 6623\nprivate 2258754268\nshared 238244316\nread 3145805 4238872649\n');
+    expect(r.exitCode).toBe(0);
+    const after = await fs.readFile('/home/user/work/big.bin') as Uint8Array;
+    expect(after.length).toBe(size);
+    expect(new TextDecoder().decode(after.subarray(size - 4))).toBe('WXYZ');
+    expect(Buffer.compare(after.subarray(0, size - 4), big.subarray(0, size - 4))).toBe(0);
+    expect((await fs.readFile('/home/user/work/trunc.bin') as Uint8Array).length).toBe(1);
   }, 60_000);
 
   // LTP futex_wake02, futex_wait_bitset01

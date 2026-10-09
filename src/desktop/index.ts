@@ -94,7 +94,6 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   root.append(el('div', 'sd-wallpaper'));
   const wordmark = el('div', 'sd-wordmark', BRAND.name);
   document.title = BRAND.name;
-  root.append(wordmark);
 
   // ── Menu bar ──
   const menubar = el('div', 'sd-menubar');
@@ -447,7 +446,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   paintTheme();
 
   // ── Network ──
-  initNetwork(wm, deps.fs, netBtn);
+  initNetwork(wm, deps.fs, netBtn, deps.kernel);
 
   // ── Keyboard shortcuts (capture: before xterm sees them) ──
   window.addEventListener('keydown', (e) => {
@@ -477,7 +476,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     wm,
     ctx,
     attachMainTerminal(term: ShiroTerminal) {
-      root.append(menubar, dockWrap);
+      root.append(wordmark, menubar, dockWrap);
       mainTerm = term;
       term.banner = (t) => drawWelcome(t);
       first.view.attachMain(term);

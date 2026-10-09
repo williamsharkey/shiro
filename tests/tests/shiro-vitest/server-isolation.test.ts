@@ -3,21 +3,21 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 
-// Plain paths and a random port: the test config polyfills node:url/os/net
+// Plain paths and a port from the server's log: the test config polyfills node:url/os/net
 const serverPath = decodeURIComponent(new URL('../../../server.mjs', import.meta.url).pathname);
 
 // Cross-origin isolation headers from server.mjs (see src/utils/isolation.ts).
 // The server runs as a real `node server.mjs` child, once with the default
 // (isolation on) and once with SHIRO_ISOLATION=0.
 async function startServer(env: Record<string, string>): Promise<{ proc: ChildProcess; base: string }> {
-  const port = 4000 + Math.floor(Math.random() * 1000);
+  // PORT=0: the kernel picks a free port (a random one could be taken by another server test)
   const proc = spawn(process.execPath, [serverPath], {
-    env: { ...process.env, ...env, PORT: String(port) },
+    env: { ...process.env, ...env, PORT: '0' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  await new Promise<void>((resolve, reject) => {
+  const port = await new Promise<number>((resolve, reject) => {
     proc.once('exit', (code) => reject(new Error(`server exited (${code})`)));
-    proc.stdout!.on('data', (d) => { if (String(d).includes('listening')) resolve(); });
+    proc.stdout!.on('data', (d) => { const m = /listening on :(\d+)/.exec(String(d)); if (m) resolve(Number(m[1])); });
   });
   return { proc, base: `http://127.0.0.1:${port}` };
 }

@@ -23,17 +23,13 @@ import { fetchCmd, curlCmd } from './commands/fetch';
 import { globCmd } from './commands/glob';
 import { jsEvalCmd } from './commands/jseval/js-eval-cmd';
 import './node-compat/page-globals'; // before anything can patch fetch/timers; node-compat loads lazily
-import { npmCmd } from './commands/npm';
 import { npxCmd } from './commands/npx';
 import { viCmd } from './commands/vi';
-import { uploadCmd, downloadCmd, shiroConfigCmd } from './commands/upload';
 import { sourceCmd, dotCmd } from './commands/source';
 import { jobsCmd, fgCmd, bgCmd, waitCmd } from './commands/jobs';
-import { hcCmd } from './commands/hc';
 import { testCmd } from './commands/test';
 import { serveCmd, serversCmd } from './commands/serve';
 import { clipReportCmd } from './commands/clip-report';
-import { remoteCmd, getPersistedRemoteCode, startRemoteWithCode } from './commands/remote';
 import { hudCmd } from './commands/hud';
 import { faviconCmd } from './commands/favicon';
 import { historyCmd } from './commands/history';
@@ -44,7 +40,6 @@ import { scCmd, claudeWindowCmd } from './commands/sc';
 import { claudeCmd } from './commands/claude';
 import { pbcopyCmd, xclipCmd, wlCopyCmd } from './commands/pbcopy';
 import { ensureClaudeCodeInstalled } from './claude-code-version';
-import { cwCmd } from './commands/cw';
 import { setupCmd } from './commands/setup';
 import { psCmd, killCmd } from './commands/ps';
 import { htmlCmd, imgCmd } from './commands/html';
@@ -262,23 +257,29 @@ async function main() {
   // Lazy: node-compat (~150 KB) loads with the first node script
   registerCommand(commands, lazyCommand('node', 'Execute JavaScript files (browser JS VM)',
     () => import('./commands/jseval/node-cmd').then(m => m.nodeCmd)), 'src/commands/jseval.ts');
-  registerCommand(commands, npmCmd, 'src/commands/npm.ts');
+  // Lazy (out of the boot bundle): npm, upload/download/shiro, hc, remote, cw
+  registerCommand(commands, lazyCommand('npm', 'Browser-native package manager for Node.js packages',
+    () => import('./commands/npm').then(m => m.npmCmd)), 'src/commands/npm.ts');
   registerCommand(commands, npxCmd, 'src/commands/npx.ts');
   registerCommand(commands, lazyCommand('build', 'Bundle TypeScript/JavaScript using esbuild-wasm',
     () => import('./commands/build').then(m => m.buildCmd)), 'src/commands/build.ts');
   registerCommand(commands, viCmd, 'src/commands/vi.ts');
   registerCommand(commands, lazyCommand('nano', 'Simple text editor (Ctrl+O save, Ctrl+X exit)',
     () => import('./commands/nano').then(m => m.nanoCmd)), 'src/commands/nano.ts');
-  registerCommand(commands, uploadCmd, 'src/commands/upload.ts');
-  registerCommand(commands, downloadCmd, 'src/commands/upload.ts');
-  registerCommand(commands, shiroConfigCmd, 'src/commands/upload.ts');
+  registerCommand(commands, lazyCommand('upload', 'Upload files from host machine into virtual filesystem',
+    () => import('./commands/upload').then(m => m.uploadCmd)), 'src/commands/upload.ts');
+  registerCommand(commands, lazyCommand('download', 'Download files from virtual filesystem to host machine',
+    () => import('./commands/upload').then(m => m.downloadCmd)), 'src/commands/upload.ts');
+  registerCommand(commands, lazyCommand('shiro', 'Shiro OS configuration',
+    () => import('./commands/upload').then(m => m.shiroConfigCmd)), 'src/commands/upload.ts');
   registerCommand(commands, sourceCmd, 'src/commands/source.ts');
   registerCommand(commands, dotCmd, 'src/commands/source.ts');
   registerCommand(commands, jobsCmd, 'src/commands/jobs.ts');
   registerCommand(commands, fgCmd, 'src/commands/jobs.ts');
   registerCommand(commands, bgCmd, 'src/commands/jobs.ts');
   registerCommand(commands, waitCmd, 'src/commands/jobs.ts');
-  registerCommand(commands, hcCmd, 'src/commands/hc.ts');
+  registerCommand(commands, lazyCommand('hc', 'Hypercompact - token-efficient DOM navigation',
+    () => import('./commands/hc').then(m => m.hcCmd)), 'src/commands/hc.ts');
   registerCommand(commands, testCmd, 'src/commands/test.ts');
   registerCommand(commands, lazyCommand('reload', 'Hot-reload modules from virtual filesystem',
     () => import('./commands/reload').then(m => m.reloadCmd)), 'src/commands/reload.ts');
@@ -291,7 +292,8 @@ async function main() {
   registerCommand(commands, clipReportCmd, 'src/commands/clip-report.ts');
   registerCommand(commands, lazyCommand('seed', 'Export Shiro state (seed [blob|gif|html] [subdomain])',
     () => import('./commands/seed').then(m => m.seedCmd)), 'src/commands/seed.ts');
-  registerCommand(commands, remoteCmd, 'src/commands/remote.ts');
+  registerCommand(commands, lazyCommand('remote', 'Start/stop remote development session for external Claude Code access',
+    () => import('./commands/remote').then(m => m.remoteCmd)), 'src/commands/remote.ts');
   registerCommand(commands, hudCmd, 'src/commands/hud.ts');
   registerCommand(commands, faviconCmd, 'src/commands/favicon.ts');
   registerCommand(commands, historyCmd, 'src/commands/history.ts');
@@ -308,7 +310,8 @@ async function main() {
   registerCommand(commands, wlCopyCmd, 'src/commands/pbcopy.ts');
   registerCommand(commands, claudeWindowCmd, 'src/commands/sc.ts');
   registerCommand(commands, scCmd, 'src/commands/sc.ts');
-  registerCommand(commands, cwCmd, 'src/commands/cw.ts');
+  registerCommand(commands, lazyCommand('cw', 'Spawn Claude Code in a web-rendered window',
+    () => import('./commands/cw').then(m => m.cwCmd)), 'src/commands/cw.ts');
   registerCommand(commands, setupCmd, 'src/commands/setup.ts');
   registerCommand(commands, psCmd, 'src/commands/ps.ts');
   registerCommand(commands, killCmd, 'src/commands/ps.ts');
@@ -529,6 +532,7 @@ async function main() {
   installDomFs(fs, kernel, () => desktop?.wm ?? null);
 
   // Create terminal
+  performance.mark('shiro:terminal:start');
   const terminal = new ShiroTerminal(container, shell);
 
   // Connect terminal to shell for interactive commands (vi, etc.)
@@ -785,9 +789,10 @@ async function main() {
   // Auto-reconnect remote session if one was active before page reload
   // Skip only if become mode is actually active (not just config in localStorage)
   if (!document.body.classList.contains('become-active')) {
-    const persistedCode = getPersistedRemoteCode();
+    // getPersistedRemoteCode() without loading commands/remote unless there is one
+    const persistedCode = localStorage.getItem('shiro-remote-code');
     if (persistedCode) {
-      startRemoteWithCode(persistedCode, terminal);
+      void import('./commands/remote').then(m => m.startRemoteWithCode(persistedCode, terminal));
     }
   }
 

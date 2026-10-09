@@ -4,7 +4,7 @@
  * Extracted from node-cmd.ts exec() body.
  */
 
-import { activity, trackAsync, trackModule } from './activity';
+import { createActivity } from './activity';
 import type { CommandContext } from '../commands/index';
 import { iframeServer } from '../iframe-server';
 import { sha256sync, sha1sync, fnvHash } from '../commands/jseval/crypto';
@@ -18,7 +18,7 @@ import { createFileCache } from './file-cache';
 import { preloadEnvironment } from './preload';
 import { isClaudeCodeScript, patchClaudeCodeSource } from '../claude-code-version';
 import { createAutoStubFactory } from './auto-stub';
-import { createRequireFunction, wrapModuleBody, esmNamespace } from './require';
+import { createRequireFunction, compileAsyncModule, esmNamespace } from './require';
 import { createExpressFactory } from './shims/express';
 import { createSqliteShim } from './shims/sqlite';
 import { createPathModule } from './modules/path';
@@ -104,6 +104,8 @@ export async function executeNodeScript(
   const _baseST = PAGE_SET_TIMEOUT;
   const _baseCT = PAGE_CLEAR_TIMEOUT;
 
+  const { activity, trackAsync, trackModule } = createActivity();
+
   // Shared mutable state
   const _st: SharedState = {
     exitCode: 0,
@@ -178,7 +180,7 @@ export async function executeNodeScript(
         case 'fs/promises':
         case 'node:fs/promises': return trackModule(createFsPromisesModule({ ctx, fileCache, fileMtimes, pendingPromises, tickSyncOps, FakeBuffer, getBuiltinModule, homeDir }));
         case 'child_process':
-        case 'node:child_process': return createChildProcessModule({ ctx, fileCache, fileMtimes, pendingPromises, FakeBuffer });
+        case 'node:child_process': return createChildProcessModule({ ctx, fileCache, fileMtimes, pendingPromises, FakeBuffer, getProcess: () => fakeProcess });
         case 'os':
         case 'node:os': return createOsModule(ctx);
         case 'util':
@@ -196,9 +198,9 @@ export async function executeNodeScript(
         case 'crypto':
         case 'node:crypto': return createCryptoModule({ sha256sync, sha1sync, fnvHash, FakeBuffer });
         case 'http':
-        case 'node:http': return createHttpModule({ ctx, iframeServer, fakeConsole, getBuiltinModule });
+        case 'node:http': return createHttpModule({ ctx, iframeServer, fakeConsole, getBuiltinModule, trackAsync });
         case 'https':
-        case 'node:https': return createHttpsModule({ ctx, iframeServer, fakeConsole, getBuiltinModule });
+        case 'node:https': return createHttpsModule({ ctx, iframeServer, fakeConsole, getBuiltinModule, trackAsync });
         case 'net':
         case 'node:net': return createNetModule({ Buffer: FakeBuffer });
         case 'tls':
@@ -208,7 +210,7 @@ export async function executeNodeScript(
         default: {
           const appShim = createAppShim(name, { ctx, fileCache, fakeProcess, FakeBuffer });
           if (appShim !== null) return appShim;
-          return createMiscModule(name, { ctx, FakeBuffer, fakeProcess, fakeConsole, getBuiltinModule, fileCache, moduleCache, requireModule });
+          return createMiscModule(name, { ctx, FakeBuffer, fakeProcess, fakeConsole, getBuiltinModule, fileCache, moduleCache, requireModule, startWorker });
         }
       }
     }
@@ -230,6 +232,45 @@ export async function executeNodeScript(
 
     const fakeRequire = (moduleName: string) => requireModule(moduleName, ctx.cwd);
 
+    /**
+     * worker_threads on this thread: the worker's script runs in its own
+     * module cache, with a worker_threads whose parentPort talks to the
+     * Worker object (messages structured-cloned, delivered as tasks). Enough
+     * for pools that hand a worker jobs by message (pnpm's store workers).
+     */
+    function startWorker(filename: string, options: any, worker: any): void {
+      const file = filename.startsWith('file://') ? decodeURIComponent(new URL(filename).pathname) : ctx.fs.resolvePath(filename, ctx.cwd);
+      const mainWT = getBuiltinModule('worker_threads');
+      const parentPort: any = mainWT._makeEmitter({});
+      let alive = true;
+      const clone = (v: any) => { try { return structuredClone(v); } catch { return v; } };
+      parentPort.postMessage = (v: any) => { const c = clone(v); _baseST(() => { if (!worker._exited) worker.emit('message', c); }, 0); };
+      parentPort.start = () => {};
+      parentPort.close = () => { alive = false; };
+      parentPort.ref = parentPort.unref = () => parentPort;
+      worker._toWorker = (v: any) => { const c = clone(v); _baseST(() => { if (alive) parentPort.emit('message', c); }, 0); };
+      worker._terminate = () => { alive = false; parentPort.removeAllListeners(); };
+      const workerWT = { ...mainWT, isMainThread: false, parentPort, workerData: clone(options.workerData), threadId: worker.threadId };
+      const workerBuiltin = (name: string) => (name === 'worker_threads' || name === 'node:worker_threads') ? workerWT : getBuiltinModule(name);
+      const workerRequire = createRequireFunction({
+        ctx, fileCache, fileMtimes, moduleCache: new Map(), pendingPromises, processEvents,
+        getBuiltinModule: workerBuiltin, fakeConsole, fakeProcess, FakeBuffer,
+        createExpressShim: expressFactory,
+        createSqliteShim: () => createSqliteShim({ ctx }),
+        createAutoStub,
+      });
+      _baseST(() => {
+        try {
+          workerRequire(file, file.substring(0, file.lastIndexOf('/')) || '/');
+          worker.emit('online');
+        } catch (e: any) {
+          if (worker.listenerCount('error')) worker.emit('error', e);
+          else stderrBuf.push(`Worker ${file}: ${e?.message ?? e}\n`);
+          if (!worker._exited) { worker._exited = true; worker.emit('exit', 1); }
+        }
+      }, 0);
+    }
+
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
     // Transform TypeScript/JSX/ESM syntax for execution
     let transformedCode = isClaudeCodeScript(scriptPath) ? patchClaudeCodeSource(code) : code;
@@ -247,11 +288,10 @@ export async function executeNodeScript(
     }
 
     const wrappedCode = printResult ? `return (${transformedCode})` : transformedCode;
-    const fn = new AsyncFunction(
+    const fn = compileAsyncModule(AsyncFunction, [
       'console', 'process', 'require', 'Buffer', '__filename', '__dirname', 'shiro', '__import_meta', 'module', 'exports', '__dynamic_import',
-      '__shiro_module', '__shiro_require',
-      wrapModuleBody(wrappedCode, true)
-    );
+      '__shiro_module', '__shiro_require', 'global', '__shiro_require_ready',
+    ], wrappedCode);
 
     // Fake import.meta for ES modules
     const entryFilename = scriptPath || ctx.cwd + '/repl.js';
@@ -273,7 +313,9 @@ export async function executeNodeScript(
     const fakeExports = fakeModule.exports;
 
     // Create require function for the entry script
-    const entryRequire = (moduleName: string) => requireModule(moduleName, entryDirname);
+    Object.assign(fakeModule, { id: '.', filename: entryFilename, loaded: false, children: [] });
+    (requireModule as any).setMain(fakeModule);
+    const entryRequire = (requireModule as any).makeRequire(entryDirname, fakeModule);
 
     // Dynamic import() shim
     const dynamicImport = async (specifier: unknown) => {
@@ -282,7 +324,7 @@ export async function executeNodeScript(
       if (/^(?:https?|data|blob):/.test(moduleName)) return import(/* @vite-ignore */ moduleName);
       if (moduleName.startsWith('file://')) moduleName = decodeURIComponent(moduleName.slice(7));
       try {
-        return esmNamespace(requireModule(moduleName, entryDirname));
+        return esmNamespace(await requireModule.ready(moduleName, entryDirname, entryFilename));
       } catch (e: any) {
         const msg = e?.message || String(e);
         throw new Error(`Failed to dynamically import '${moduleName}': ${msg}`);
@@ -301,6 +343,7 @@ export async function executeNodeScript(
       ['https://api.anthropic.com/', '/api/anthropic/'],
       ['https://platform.claude.com/', '/api/platform/'],
       ['https://mcp-proxy.anthropic.com/', '/api/mcp-proxy/'],
+      ['https://generativelanguage.googleapis.com/', '/api/gemini/'],
     ];
     const rewriteUrl = (u: string): string => {
       for (const [prefix, proxy] of corsProxyMap) {
@@ -311,6 +354,8 @@ export async function executeNodeScript(
     const blockedUrls = [
       'datadoghq.com', 'sentry.io', '/api/event_logging',
       'claude_code_first_token_date', 'claude_code_grove',
+      // Gemini CLI's Clearcut telemetry (its CORS only allows play.google.com)
+      'play.googleapis.com/log',
     ];
     const isBlocked = (u: string) => blockedUrls.some(b => u.includes(b));
 
@@ -509,11 +554,22 @@ export async function executeNodeScript(
     const SCRIPT_TIMEOUT = code.length > 500_000 ? 60_000 : 15_000;
     let scriptTimedOut = false;
     const runStart = performance.now();
+    // It only ends a script that has gone idle: an entry whose top-level await
+    // runs the whole program (Gemini CLI's `await run()`) keeps going while
+    // requests, fs work or timers are in flight or output is still coming.
     const timeoutPromise = new Promise<never>((_, reject) => {
-      _st.scriptTimeoutId = setTimeout(() => {
+      let outSeen = stdoutBuf.length + stderrBuf.length;
+      const check = () => {
+        const out = stdoutBuf.length + stderrBuf.length;
+        if (activity.pending > 0 || _activeTimers > 0 || pendingPromises.length > 0 || out !== outSeen) {
+          outSeen = out;
+          _st.scriptTimeoutId = setTimeout(check, SCRIPT_TIMEOUT);
+          return;
+        }
         scriptTimedOut = true;
         reject(new ProcessExitError(124));
-      }, SCRIPT_TIMEOUT);
+      };
+      _st.scriptTimeoutId = setTimeout(check, SCRIPT_TIMEOUT);
     });
 
     try {
@@ -523,7 +579,8 @@ export async function executeNodeScript(
           shell: ctx.shell,
           env: ctx.env,
           cwd: ctx.cwd,
-        }, fakeImportMeta, fakeModule, fakeExports, dynamicImport, fakeModule, entryRequire),
+        }, fakeImportMeta, fakeModule, fakeExports, dynamicImport, fakeModule, entryRequire, globalThis,
+        (p: string) => requireModule.ready(p, entryDirname, entryFilename)),
         timeoutPromise,
       ]);
     } catch (e: any) {
@@ -569,9 +626,24 @@ export async function executeNodeScript(
 
     // Deferred exit wait
     if (_st.isInteractiveMode || !(_st.exitCalled || scriptTimedOut)) {
-      const DEFERRED_TIMEOUT = _st.isInteractiveMode ? 86400000 : code.length > 500000 ? 300000 : 10000;
+      // A cap on the async phase only; a script that has gone quiet ends sooner
+      // (idleExit). 10 s killed package managers mid-install (pnpm's 10 s
+      // retry back-off, slow registries), so busy scripts get 10 minutes.
+      const DEFERRED_TIMEOUT = _st.isInteractiveMode ? 86400000 : 600000;
+      // Like the script timeout, it fires on a script that has gone idle, not
+      // on one still waiting on the network (a CLI's model request)
       const deferredTimeout = new Promise<never>((_, reject) => {
-        _baseST(() => reject(new ProcessExitError(124)), DEFERRED_TIMEOUT); // untracked: not script activity
+        let outSeen = stdoutBuf.length + stderrBuf.length;
+        const check = () => {
+          const out = stdoutBuf.length + stderrBuf.length;
+          if (!_st.isInteractiveMode && (activity.pending > 0 || out !== outSeen)) {
+            outSeen = out;
+            _baseST(check, DEFERRED_TIMEOUT);
+            return;
+          }
+          reject(new ProcessExitError(124));
+        };
+        _baseST(check, DEFERRED_TIMEOUT); // untracked: not script activity
       });
       let freshExitPromise = deferredExitPromise;
       if (_st.exitCalled && _st.isInteractiveMode) {

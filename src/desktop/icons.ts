@@ -9,7 +9,7 @@ const tile = (_id: string, from: string, to: string, inner: string) =>
   `<span class="sd-tile" style="--t1:${from};--t2:${to}"><svg viewBox="3 3 58 58" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">${inner}</svg></span>`;
 
 const mono = (text: string, size: number, color: string, y = 40) =>
-  `<text x="32" y="${y}" text-anchor="middle" font-family="'JetBrains Mono',ui-monospace,monospace" font-weight="700" font-size="${size}" fill="${color}">${text}</text>`;
+  `<text x="32" y="${y}" text-anchor="middle" font-family="'JetBrains Mono',monospace" font-weight="700" font-size="${size}" fill="${color}">${text}</text>`;
 
 export const ICONS: Record<string, string> = {
   terminal: tile('term', '#3a3f4f', '#12141b',
