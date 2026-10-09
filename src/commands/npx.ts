@@ -87,17 +87,35 @@ export const npxCmd: Command = {
       return runBin(cmdLine);
     }
 
-    // Install the package first
-    ctx.stdout += `Installing ${installSpec}...\n`;
-    const installCode = await run(`npm install ${installSpec}`);
-    if (installCode !== 0) {
-      ctx.stderr += `npx: npm install failed with exit code ${installCode}\n`;
-      return installCode;
+    // Install it into npx's cache (~/.npm/_npx/<spec>), as npm does, not the project
+    const pkgName = installSpec.startsWith('@') ? '@' + installSpec.slice(1).split('@')[0] : installSpec.split('@')[0];
+    const home = ctx.env?.HOME || '/home/user';
+    const cacheDir = `${home}/.npm/_npx/${installSpec.replace(/[^A-Za-z0-9._-]/g, '_')}`;
+    let pkgJson: any = null;
+    const readPkg = async () => {
+      try { return JSON.parse(await ctx.fs.readFile(`${cacheDir}/node_modules/${pkgName}/package.json`, 'utf8') as string); } catch { return null; }
+    };
+    // A tag (latest, next) is looked up again each time; a pinned version is reused
+    const pinned = /@\d+\.\d+\.\d+$/.test(installSpec);
+    if (pinned) pkgJson = await readPkg();
+    if (!pkgJson) {
+      await ctx.fs.mkdir(cacheDir, { recursive: true });
+      try { await ctx.fs.stat(`${cacheDir}/package.json`); } catch { await ctx.fs.writeFile(`${cacheDir}/package.json`, '{}\n'); }
+      const installCode = await run(`(cd ${quoteArgsForShell([cacheDir])} && npm install ${quoteArgsForShell([installSpec])} > /dev/null)`);
+      pkgJson = await readPkg();
+      if (installCode !== 0 || !pkgJson) {
+        ctx.stderr += `npx: could not install ${installSpec}\n`;
+        return installCode || 1;
+      }
     }
-
-    // Now execute the binary
-    const cmdLine = buildCmdLine(binName, passthrough);
-    return runBin(cmdLine);
+    // The bin named like the package, else its only bin
+    const bins: Record<string, string> = typeof pkgJson.bin === 'string' ? { [binName]: pkgJson.bin } : (pkgJson.bin ?? {});
+    const chosen = bins[binName] !== undefined ? binName : Object.keys(bins).length === 1 ? Object.keys(bins)[0] : null;
+    if (!chosen) {
+      ctx.stderr += `npx: ${pkgName} has no bin named ${binName}\n`;
+      return 1;
+    }
+    return runBin(buildCmdLine(`${cacheDir}/node_modules/.bin/${chosen}`, passthrough));
   },
 };
 

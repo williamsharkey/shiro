@@ -19,6 +19,8 @@ export interface RequireDeps {
   fakeConsole: any;
   fakeProcess: any;
   FakeBuffer: any;
+  /** The process's own global object (process-global.ts): modules' globalThis and global */
+  processGlobal?: any;
   createExpressShim: () => any;
   createSqliteShim: () => any;
   createAutoStub: (modPath: string, target: any) => any;
@@ -424,7 +426,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
       const fnParams = [
         'module', 'exports', 'require', '__filename', '__dirname',
         'console', 'process', 'global', 'Buffer', '__import_meta',
-        '__shiro_module', '__shiro_require', '__dynamic_import', '__shiro_require_ready',
+        '__shiro_module', '__shiro_require', '__dynamic_import', '__shiro_require_ready', 'globalThis',
       ];
       const dynamicImport = async (specifier: unknown) => {
         let spec = String(specifier);
@@ -433,8 +435,8 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
         return esmNamespace(await requireReady(spec, modDir, resolved));
       };
       const fnArgs = [mod, mod.exports, nestedRequire, resolved, modDir,
-        fakeConsole, fakeProcess, globalThis, FakeBuffer, modImportMeta,
-        mod, nestedRequire, dynamicImport, (p: string) => requireReady(p, modDir, resolved)];
+        fakeConsole, fakeProcess, deps.processGlobal ?? globalThis, FakeBuffer, modImportMeta,
+        mod, nestedRequire, dynamicImport, (p: string) => requireReady(p, modDir, resolved), deps.processGlobal ?? globalThis];
 
       // Try synchronous execution first — most npm packages don't use top-level await.
       // This ensures module.exports is populated before require() returns,

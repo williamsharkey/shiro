@@ -728,6 +728,30 @@ describe('node-compat modules real packages rely on', () => {
     expect(r.out).toBe('c=1\n');
   }, 60_000);
 
+  it("a process's globalThis: process and Buffer on it; replacing a page global stays the process's", async () => {
+    await fs.writeFile('/home/user/m/g-mod.js', `globalThis.sharedByModules = 'yes'; module.exports = () => globalThis.fromEntry;`);
+    expect(await node(`const read = require('./g-mod');
+globalThis.fromEntry = 'entry';
+// a new global is also a bare identifier (mocha's global.describe, then describe())
+const out = [globalThis.process === process, global.process === process, globalThis.Buffer === Buffer, global === globalThis, read(), sharedByModules];
+delete globalThis.sharedByModules;
+const page = globalThis.crypto;
+globalThis.crypto = { getRandomValues: (b) => b.fill(7) };
+out.push(globalThis.crypto.getRandomValues(new Uint8Array(1))[0]);
+Object.defineProperty(globalThis, 'performance', { writable: true, configurable: true });
+out.push(typeof globalThis.performance.now);
+globalThis.performance = { now: () => 42 };
+out.push(globalThis.performance.now());
+out.push(typeof globalThis.setTimeout(() => {}, 0) !== 'undefined', typeof atob === 'function' && globalThis.atob('aGk='));
+delete globalThis.fromEntry;
+out.push(globalThis.fromEntry, 'fromEntry' in globalThis);
+console.log(JSON.stringify(out));`)).toBe('[true,true,true,true,"entry","yes",7,"function",42,true,"hi",null,false]\n');
+    // The page's own crypto and performance, and a next script, never saw those
+    expect(typeof (globalThis as any).crypto?.subtle).toBe('object');
+    expect(await node(`console.log(typeof globalThis.crypto.subtle, typeof globalThis.performance.timeOrigin, typeof globalThis.sharedByModules, typeof globalThis.fromEntry)`))
+      .toBe('object number undefined undefined\n');
+  }, 60_000);
+
   it('path follows Node (relative paths stay relative)', async () => {
     expect(await node(`const p = require('path');
 console.log(JSON.stringify([p.dirname('a'), p.dirname('/a'), p.dirname('a/b/'), p.join('a', '../b', './c'), p.join(''), p.normalize('./x/../y/'),
@@ -1551,4 +1575,96 @@ net.createServer((sock) => {
     await sh(shell, 'cd /home/user/live && node raw.js');
     expect(await wsTalk(4805, '/', (m, send) => { if (m === '') send('ping'); }, 1)).toEqual(['kernel:ping']);
   }, 60_000);
+});
+
+import { buildTree, binDirOf, type PackageMetadata } from '@shiro/commands/npm-tree';
+import { initializerPackage } from '@shiro/commands/npm';
+
+describe('npm install: the node_modules tree (npm-tree.ts)', () => {
+  /** A registry of name → { version → deps/extra fields } */
+  const registry = (spec: Record<string, Record<string, any>>) => async (name: string): Promise<PackageMetadata> => {
+    const vs = spec[name];
+    if (!vs) throw new Error(`Package '${name}' not found`);
+    const versions: Record<string, any> = {};
+    for (const [v, extra] of Object.entries(vs)) versions[v] = { name, version: v, dist: { tarball: `https://r/${name}-${v}.tgz` }, ...extra };
+    const latest = Object.keys(vs).pop()!;
+    return { name, 'dist-tags': { latest, ...(vs.__tags as any ?? {}) }, versions };
+  };
+  const layout = (nodes: { dir: string; version: string; source: string }[]) =>
+    Object.fromEntries(nodes.map((n) => [n.dir, n.source === n.dir.split('node_modules/').pop() ? n.version : `${n.source}@${n.version}`]));
+
+  it('hoists what it can and nests a conflicting version under the package that needs it', async () => {
+    const t = await buildTree([{ name: 'a', range: '^1.0.0' }, { name: 'b', range: '^1.0.0' }, { name: 'c', range: '^2.0.0' }], registry({
+      a: { '1.0.0': { dependencies: { c: '^1.0.0', d: '^1.0.0' } } },
+      b: { '1.0.0': { dependencies: { d: '^1.1.0' } } },
+      c: { '1.0.0': {}, '2.0.0': {} },
+      d: { '1.0.0': {}, '1.2.0': {} },
+    }));
+    expect(layout(t.nodes)).toEqual({
+      'node_modules/a': '1.0.0', 'node_modules/b': '1.0.0', 'node_modules/c': '2.0.0',
+      'node_modules/a/node_modules/c': '1.0.0', 'node_modules/d': '1.2.0',
+    });
+    expect(binDirOf(t.nodes.find((n) => n.dir === 'node_modules/a/node_modules/c')!)).toBe('node_modules/a/node_modules/.bin');
+  });
+
+  it("doesn't hide a version another package already uses", async () => {
+    // x@1 is hoisted for p; q's x@2 can't go at the top, and r (under q) already uses the top x@1
+    const t = await buildTree([{ name: 'p', range: '1' }, { name: 'q', range: '1' }], registry({
+      p: { '1.0.0': { dependencies: { x: '1' } } },
+      q: { '1.0.0': { dependencies: { r: '1', s: '1' } } },
+      r: { '1.0.0': { dependencies: { x: '1' } } },
+      s: { '1.0.0': { dependencies: { x: '2' } } },
+      x: { '1.0.0': {}, '2.0.0': {} },
+    }));
+    const l = layout(t.nodes);
+    expect(l['node_modules/x']).toBe('1.0.0');
+    expect(l['node_modules/s/node_modules/x']).toBe('2.0.0');
+  });
+
+  it('installs peers, leaves out native builds but takes wasm32 ones, and the WebAssembly esbuild and rollup', async () => {
+    const t = await buildTree([{ name: 'vite', range: '^5.0.0' }, { name: 'plugin', range: '1' }], registry({
+      vite: { '5.4.10': { dependencies: { esbuild: '^0.21.3', rollup: '^4.20.0' }, optionalDependencies: { fsevents: '~2.3.3', '@x/binding-linux-x64-gnu': '1', '@x/binding-wasm32-wasi': '1' } } },
+      '@x/binding-linux-x64-gnu': { '1.0.0': { os: ['linux'], cpu: ['x64'] } },
+      '@x/binding-wasm32-wasi': { '1.0.0': { cpu: ['wasm32'] } },
+      'esbuild-wasm': { '0.21.5': { bin: { esbuild: 'bin/esbuild' } } },
+      '@rollup/wasm-node': { '4.24.0': { dependencies: { '@types/estree': '1.0.6' }, bin: { rollup: 'dist/bin/rollup' } } },
+      '@types/estree': { '1.0.6': {} },
+      fsevents: { '2.3.3': { os: ['darwin'] } },
+      plugin: { '1.0.0': { peerDependencies: { vite: '^5.0.0', missing: '*' }, peerDependenciesMeta: { missing: { optional: true } } } },
+    }));
+    expect(layout(t.nodes)).toEqual({
+      'node_modules/vite': '5.4.10', 'node_modules/plugin': '1.0.0',
+      'node_modules/esbuild': 'esbuild-wasm@0.21.5', 'node_modules/rollup': '@rollup/wasm-node@4.24.0',
+      'node_modules/@types/estree': '1.0.6', 'node_modules/@x/binding-wasm32-wasi': '1.0.0',
+    });
+    expect(t.skipped.sort()).toEqual(['@x/binding-linux-x64-gnu@1.0.0', 'fsevents@2.3.3']);
+    expect(t.warnings).toEqual([]);
+  });
+
+  it('follows npm: aliases and dist-tags; npm create names the create- package', async () => {
+    const t = await buildTree([{ name: 'old', range: 'npm:new@^2' }, { name: 'tagged', range: 'next' }], registry({
+      new: { '2.1.0': {} },
+      tagged: { '1.0.0': {}, '2.0.0-beta.1': {}, __tags: { next: '2.0.0-beta.1' } as any },
+    }));
+    expect(layout(t.nodes)).toEqual({ 'node_modules/old': 'new@2.1.0', 'node_modules/tagged': '2.0.0-beta.1' });
+    expect(['vite@latest', 'vite', '@vue', '@vue@3', '@scope/app@1.2.0'].map(initializerPackage))
+      .toEqual(['create-vite@latest', 'create-vite', '@vue/create', '@vue/create@3', '@scope/create-app@1.2.0']);
+  });
+});
+
+import { transformESModules } from '@shiro/commands/jseval/module-transform';
+
+describe('ES module transform: minified imports, and import text in strings left alone', () => {
+  it('rewrites import{a as b}from"x", import t from"y", import i,{s as a}from"z", and keeps template text', () => {
+    const src = 'import{createRequire as e}from"node:module";import t from"node:fs";import i,{styleText as a}from"node:util";import"./side.js";'
+      + 'const tpl=`import react from \'@vitejs/plugin-react\'\nexport default defineConfig({})`;export{tpl as x,e};export default 1;';
+    const out = transformESModules(src);
+    expect(out).toContain('const {createRequire: e} = __shiro_require("node:module");');
+    expect(out).toContain('const t = __shiro_require("node:fs");');
+    expect(out).toContain('const i = __shiro_require("node:util"); const {styleText: a} = __shiro_require("node:util");');
+    expect(out).toContain('__shiro_require("./side.js");');
+    expect(out).toContain("`import react from '@vitejs/plugin-react'\nexport default defineConfig({})`");
+    expect(out).toContain('__shiro_module.exports.x = tpl; __shiro_module.exports.e = e;');
+    expect(out).toContain('__shiro_module.exports = 1;');
+  });
 });
