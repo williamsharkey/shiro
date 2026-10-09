@@ -415,6 +415,19 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    own clock for `FUTEX_WAIT_BITSET`, not by the condition variable's
    coarser realtime ticks (LTP futex_wait_bitset01 saw it end early).
    Test: `fixtures/x86/futexwake.c`.
+36. Under Shiro a futex wait in a process's main thread shows the process
+   sleeping (S in `/proc/PID/stat`) after its first polling tick, through
+   `SYS_shiro_sleeping` (LTP waits for S before signalling a child:
+   futex_wait03, futex_wait07); `FUTEX_WAKE` on an unmapped address is
+   EFAULT; the main thread's tid is the kernel's pid, in a vfork-style
+   child too (it was Blink's own). Kernel side: a syscall shows S once it
+   has lasted 2 ms (a quick `sigaction` is R, as on Linux) and a fork child
+   counts as running from the start. Test: `fixtures/x86/futexintr.c`.
+37. More `prctl`: `PR_SET/GET_KEEPCAPS` (iputils' ping died with EINVAL),
+   `PDEATHSIG`, `DUMPABLE`, `CHILD_SUBREAPER`, `NO_NEW_PRIVS` and
+   `CAP_AMBIENT` are recorded and reported back, not enforced;
+   `PR_CAPBSET_DROP` is accepted under emscripten. Test:
+   `fixtures/x86/prctlcap.c`.
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.

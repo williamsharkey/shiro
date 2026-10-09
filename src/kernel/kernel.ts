@@ -156,7 +156,7 @@ export class Kernel {
     addProcInfoSource((pid) => {
       const p = this.procs.get(pid);
       if (!p || pid === 1) return undefined;
-      const state = p.state === 'zombie' ? 'Z' : p.state === 'stopped' ? 'T' : p.inSyscall > 0 ? 'S' : 'R';
+      const state = p.state === 'zombie' ? 'Z' : p.state === 'stopped' ? 'T' : p.sleeping() ? 'S' : 'R';
       return { pid, ppid: p.ppid, pgid: p.pgid, sid: p.sid, comm: p.comm, state, cmdline: p.argv };
     });
     this.registerDevice('/dev/null', (_p, f) => new DevNull(f));
@@ -1178,7 +1178,7 @@ export class Kernel {
     const t0 = Date.now();
     proc.syscalls++;
     // While in a syscall the process counts as sleeping (S in /proc/PID/stat)
-    proc.inSyscall++;
+    if (proc.inSyscall++ === 0) proc.syscallSince = t0;
     const done = () => { proc.inSyscall--; proc.kernelMs += Date.now() - t0; };
     // The caller awaits the call itself: the bookkeeping adds no await hop to it
     const p = this.syscallImpl(proc, nr, args, data);
@@ -1380,8 +1380,12 @@ export class Kernel {
           }
           return 0;
         }
-        case A.SYS_shiro_vfork:
-          return this.vfork(proc).pid;
+        case A.SYS_shiro_vfork: {
+          // the child is running code (its engine's), not idle like a builtin that makes no syscalls
+          const child = this.vfork(proc);
+          child.syscalls = 1;
+          return child.pid;
+        }
         case A.SYS_shiro_execve:
           return await this.sysExecve(proc, JSON.parse(str(0, args[0])), data);
         case A.SYS_alarm: {
@@ -1800,6 +1804,9 @@ export class Kernel {
           return await this.getdents(proc, args[0], data.subarray(0, Math.min(args[1] >>> 0, data.length)));
         case A.SYS_spawn:
           return await this.sysSpawn(proc, JSON.parse(str(0, args[0])));
+        case A.SYS_shiro_sleeping:
+          proc.engineSleeps = Math.max(0, proc.engineSleeps + (args[0] | 0));
+          return 0;
         case A.SYS_getenv: {
           const b = enc.encode(JSON.stringify({ argv: proc.argv, env: proc.env, cwd: proc.cwd, pid: proc.pid }));
           if (b.length > data.length) return -A.E2BIG;
