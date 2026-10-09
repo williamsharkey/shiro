@@ -159,6 +159,36 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### unix/desktop — the desktop shell (menu bar, dock, windows) on the boot path
+
+The Unix edition boots to the desktop (docs/DESKTOP.md). The bench loads `/` on
+localhost, so its boot numbers are now the desktop's. Only the window manager,
+menu bar, dock and Terminal are in the entry chunk; Files, Settings, Activity
+and About are separate chunks (`files-*.js`, `settings-*.js`, …). Quick suite,
+`--suites boot`, base db9f698 (the worktree of the branch point) vs. the
+desktop, runs alternated on the same machine; medians pooled over runs:
+
+| metric | base | desktop | change |
+|---|---:|---:|---:|
+| boot.cold.first_prompt | 198 ms | 190 ms | noise (base 181–226, desktop 176–227) |
+| boot.warm.first_prompt (first sample of each run dropped) | 94 ms | 109 ms | +15 ms; in-page `shiro:terminal:ready` mark: 81 vs 83–94 ms |
+| boot.cold.transfer | 1370 KiB | 1547 KiB | +177 KiB: Inter + JetBrains Mono woff2 (88 KiB, `font-display: swap`, not render-blocking) and the desktop code |
+| boot.cold.requests | 5 | 10 | +2 fonts, +3 `data:` SVGs (traffic-light glyphs) that CDP counts |
+| boot.mem.js_heap | 3.72 MiB | 3.83 MiB | +3% |
+| boot.mem.renderer_rss | 207.5 MiB | 231 MiB | +11%: composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts, each a few MiB |
+| boot.mem.dom_nodes | 258 | 353 | menu bar, dock, window frame |
+
+What it took to get first prompt back to par (a first version cost +30 ms):
+`Intl.DateTimeFormat` for the clock (≈9 ms, now formatted by hand); reading
+layout in `workArea()` before the terminal existed (forced the first style and
+layout pass, now computed from the CSS sizes); re-theming the main terminal
+after creation (`ShiroTerminal.optionOverrides` gives the theme and font at
+construction); the mono-font swap re-measure (≈9 ms of xterm `_measure`, now
+on idle); and `term.focus()` forcing layout of the whole desktop (now on the
+first animation frame). The menu bar and dock are appended right after the
+main terminal is created, so xterm's first measurement lays out only the window.
+Marks `shiro:desktop:start`, `shiro:desktop:end` and `shiro:terminal:ready` time the desktop's part.
+
 ### unix/shell-stdio — a shell run as a kernel process uses its fds
 
 `sh -c SCRIPT` spawned by a program (and scripts run through `runViaShell`)

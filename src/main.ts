@@ -481,9 +481,11 @@ async function main() {
   // first window before the terminal is created, so it measures its real size.
   const mode = uiMode();
   const container = document.getElementById('terminal')!;
+  performance.mark('shiro:desktop:start');
   const desktop: Desktop | null = mode === 'desktop'
     ? bootDesktop({ fs, shell, kernel, makeShell, terminalEl: container })
     : null;
+  performance.mark('shiro:desktop:end');
   // /dom: the live page as files (docs/DESKTOP.md)
   installDomFs(fs, kernel, () => desktop?.wm ?? null);
 
@@ -493,6 +495,7 @@ async function main() {
   // Connect terminal to shell for interactive commands (vi, etc.)
   shell.setTerminal(terminal);
   desktop?.attachMainTerminal(terminal);
+  performance.mark('shiro:terminal:ready');
 
   // Listen for font size changes from parent (seed snippet)
   window.addEventListener('message', (e) => {

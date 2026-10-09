@@ -4,6 +4,16 @@
 
 All changes so far are additive; nothing below renames or removes an earlier name.
 
+- **2026-10-09 (unix/desktop)** (additive)
+  - `FileSystem.addVirtualProvider(vp)`; `VirtualFSProvider.mountPoint`
+    names a top-level directory `ls /` shows. `makeStat` is exported.
+    `/dom` (src/dom-fs.ts) uses both; kernel `open` reaches it through the
+    FileSystem as for `/proc` files, and `/dom/events/<type>` are registered
+    devices (`kernel.registerDevice`) whose reads block until an event.
+  - `NetStack` relay token request sends `Authorization: Bearer <GitHub
+    token>` when one is saved and, on 401, calls `requireNetworkSignIn()`
+    (src/net-signin.ts) once and retries. See docs/DESKTOP.md.
+
 - **2026-10-08 (unix/shell-stdio)** — behavior of builtins run as kernel processes.
   - `runBuiltin` no longer reads fd 0 to EOF before the command runs:
     `ctx.stdin` is read the first time the command looks at it
