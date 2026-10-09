@@ -197,7 +197,7 @@ function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: SharedA
     } else if (m?.type === 'blink-fork') {
       // fork(): the child (made by SYS_shiro_vfork) runs the snapshot in its own worker
       const child = kernel.procs.get(m.pid);
-      if (child && child.ppid === proc.pid) kernel.startEmbryo(child, blinkRunner(child.path, m.snapshot));
+      if (child) kernel.startForkChild(proc, m.pid, blinkRunner(child.path, m.snapshot));
     } else if (m?.type === 'blink-watch') watch(m.fd);
     else if (m?.type === 'blink-unwatch') { subs.get(m.fd)?.(); subs.delete(m.fd); }
   });
