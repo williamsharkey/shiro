@@ -34,7 +34,7 @@ export const nodeCmd: Command = {
         printResult = true;
       } else if (ctx.args[i] === '--version' || ctx.args[i] === '-v') {
         // The version the runtime reports (process.version), as node prints it
-        ctx.stdout += 'v20.0.0\n';
+        ctx.stdout += 'v22.12.0\n';
         return 0;
       } else if (ctx.args[i] === '--help' || ctx.args[i] === '-h') {
         ctx.stdout += 'Usage: node [options] [script.js] [arguments]\n';

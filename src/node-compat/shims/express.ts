@@ -62,11 +62,12 @@ export function createExpressFactory(deps: ExpressDeps): any {
         let responseBody = '';
         let ended = false;
 
-        // Parse body if JSON
-        let parsedBody = vReq.body;
+        // Parse body if JSON (a preview's fetch can send bytes)
+        const bodyText = vReq.body instanceof Uint8Array ? new TextDecoder().decode(vReq.body) : vReq.body;
+        let parsedBody: any = bodyText;
         try {
-          if (vReq.headers?.['content-type']?.includes('application/json') && vReq.body) {
-            parsedBody = JSON.parse(vReq.body);
+          if (vReq.headers?.['content-type']?.includes('application/json') && bodyText) {
+            parsedBody = JSON.parse(bodyText);
           }
         } catch {}
 
@@ -81,7 +82,7 @@ export function createExpressFactory(deps: ExpressDeps): any {
           params: {},
           get(name: string) { return (vReq.headers || {})[name.toLowerCase()]; },
           on(event: string, handler: Function) {
-            if (event === 'data' && vReq.body) setTimeout(() => handler(vReq.body), 0);
+            if (event === 'data' && vReq.body) setTimeout(() => handler(bodyText), 0);
             if (event === 'end') setTimeout(() => handler(), 0);
             return this;
           },
