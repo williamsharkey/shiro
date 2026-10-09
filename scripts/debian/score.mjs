@@ -153,7 +153,7 @@ async function smoke(m, pkg) {
   for (const bin of bins.slice(0, 3)) {
     for (const flagArg of ['--version', '--help', '-V', '-h']) {
       const r = await m.run(`timeout 120 ${bin} ${flagArg} </dev/null 2>&1`, 180);
-      const crashed = /terminating due to SIG|Segmentation fault|Illegal instruction|SCORE-TIMEOUT/.test(r.out) || r.code >= 128 || r.code === 124;
+      const crashed = /terminating due to SIG|Segmentation fault|Illegal instruction|SCORE-TIMEOUT/.test(r.out) || (r.code >= 128 && r.code < 255) || r.code === 124; // 255: exit(-1), an ordinary error (ip --version)
       tried.push(`${bin} ${flagArg}: exit ${r.code}`);
       if (r.code === 0 && r.out.trim()) return { ok: true, how: `${bin} ${flagArg}${who(bin)}`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
       // Tools without --version print their usage and exit 1 or 2: it ran, which is what we check
