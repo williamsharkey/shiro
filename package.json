@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && node -e \"require('fs').copyFileSync('src/brand.json','dist/brand.json')\"",
     "preview": "vite preview",
     "test": "cd tests && npx vitest run --config vitest.config.ts",
     "bench": "node bench/run.mjs",
