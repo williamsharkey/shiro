@@ -328,9 +328,13 @@ ncurses-based programs are linked against a static ncurses 6.5 with
 
 ## Claude Code native binary (unix/perf-kernel)
 
-Status: **blocked in Blink** (run 2026-10-09 by unix/agent-clis, see
-"Agent CLIs" below): both builds load (ld.so maps the five libraries) and
-then die of SIGILL on `pinsrq`, the first SSE4.1 instruction Bun runs.
+Status (2026-10-09, unix/agent-clis, see "Agent CLIs" below): with Blink's
+SSE4.1/4.2 (patch 0040) the **musl build runs**: `--version` in 2.1 s and
+`-p` reaches the Anthropic API. The glibc build still crashes in Bun's
+startup. Before patch 0040 both died of SIGILL on `pinsrq`. `claude
+--native` is not wired up: the binary and musl's loader are on hosts
+without CORS, so the page would need server-side proxying (an owner
+decision).
 
 What the official native installer (`claude.ai/install.sh`) installs, as of
 2.1.295 (`downloads.claude.ai/claude-code-releases/<version>/<platform>/claude`,
@@ -382,11 +386,11 @@ vendor's API proves the network path).
 
 | Tool | Version | Kind | Install | `--version` | Network | Timings | Blockers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Claude Code (native) | 2.1.295 | ELF, Bun single-file exe, glibc (256 MB) and musl (250 MB) builds, dynamic | `claude.ai/install.sh` (Shiro substitutes the npm install; fetch the binary directly from `downloads.claude.ai/claude-code-releases/<v>/linux-x64/claude`) | **no**: SIGILL | not reached | SIGILL after ~9 s (Node probe) | Blink lacks SSE4.1/4.2: Bun's x64 code is compiled for them (nehalem baseline) and doesn't check CPUID. Sent to perf-blink. `BUN_JSC_useJIT=0` doesn't matter (dies before JSC starts). |
+| Claude Code (native) | 2.1.295 | ELF, Bun 1.4.3 single-file exe; glibc (256 MB) and musl (250 MB) builds, dynamic | `claude.ai/install.sh` (Shiro substitutes the npm install; fetch the binary from `downloads.claude.ai/claude-code-releases/<v>/linux-x64-musl/claude`, plus `/lib/ld-musl-x86_64.so.1`) | **musl: yes** (2.1 s); glibc: no | **musl: yes**: `-p "say hi"` reaches the Anthropic API through the kernel relay ("Invalid API key" for a dummy key) | musl `-p` to the API error: 118 s with the JIT, 108 s with `BUN_JSC_useJIT=0` (Node probe) | glibc build: Bun aborts during startup (JSC `CRASH()`/abort, in native Blink too; the musl build of the same version runs). Live-token test not run: `CLAUDE_CODE_OAUTH_TOKEN` is not in this container's environment. |
 | OpenAI Codex | 0.162.0 | ELF, Rust, static-pie musl (294 MB) | GitHub release `codex-x86_64-unknown-linux-musl.tar.gz` (`npm i -g @openai/codex` wraps the same binary) | **yes** | **yes**: `codex exec` reaches `wss://api.openai.com/v1/responses` and `https://…/responses` through the kernel's TCP relay, 401 | Chromium: `--version` 4.8 s, `exec` until the 401s end 59 s (it retries), renderer peak ~2.0 GB; Node probe: 7.9 s / 69 s | none for the request path. It warns about missing bubblewrap (its Linux sandbox) and `/proc/self/exe`; use `--sandbox danger-full-access` for tool calls in Shiro. |
-| Grok Build (xAI) | 1.0.50 | ELF, Rust, static-pie (183 MB) | `x.ai/cli/install.sh` → `x.ai/cli/grok-<v>-linux-x86_64` | **yes** | **no** without a Blink fix: `-p` panics ("Span not found") before sending | Chromium: `--version` 1.8 s, `-p` panics after 2.3 s; Node probe: 5.1 s | Blink's BSF/BSR write 0 to the destination for a zero source (hardware leaves it unchanged; LLVM relies on that for `leading_zeros`), so `sharded_slab` loses its first page and tracing loses spans. Sent to perf-blink; with a local fix `grok -p` reaches `api.x.ai` (400 for a bad key, native Blink -j, 47 s). |
-| Antigravity CLI (`agy`, Google) | 1.3.2 | ELF, Go (`GOAMD64` with SSE4.1, boringcrypto) + cgo/Rust, glibc dynamic (211 MB) | `antigravity.google/cli/install.sh` → manifest → `cli_linux_x64.tar.gz` (sha512) | **no** | not reached | exits at once | "This binary was compiled with sse4.1 enabled, but this feature is not available on this processor": same SSE4.1 gap. |
-| opencode | 1.18.35 | ELF, Bun (baseline build), glibc dynamic (185 MB) | `npm i -g opencode-ai` (picks `opencode-linux-x64[-baseline\|-musl]`) | **no**: SIGILL | not reached | — | Same `pinsrq` SIGILL as Claude Code (Bun's "baseline" target still needs SSE4.2). |
+| Grok Build (xAI) | 1.0.50 | ELF, Rust, static-pie (183 MB) | `x.ai/cli/install.sh` → `x.ai/cli/grok-<v>-linux-x86_64` | **yes** | **yes** (Blink patch 0039): `grok -p` reaches `api.x.ai`, 400 for a bad key | Chromium: `--version` 1.8 s; Node probe: `--version` 5.1 s, `-p` to the API error 148 s | Before patch 0039 Blink's BSF/BSR wrote 0 to the destination for a zero source and `-p` panicked ("Span not found"). |
+| Antigravity CLI (`agy`, Google) | 1.3.2 | ELF, Go (`GOAMD64` v2, boringcrypto) + cgo/Rust, glibc dynamic (211 MB) | `antigravity.google/cli/install.sh` → manifest → `cli_linux_x64.tar.gz` (sha512) | **yes** (Blink patch 0040), 11 s | not tried (needs a Google sign-in) | — | Before patch 0040 it exited with "compiled with sse4.1 enabled, but this feature is not available". |
+| opencode | 1.18.35 | ELF, Bun 1.3.14 (baseline build), glibc dynamic (185 MB); a musl build needs libstdc++/libgcc_s | `npm i -g opencode-ai` (picks `opencode-linux-x64[-baseline\|-musl]`) | **no** | not reached | — | Same as the glibc Claude build: Bun crashes at startup (`Segmentation fault at address 0xBBADBEEF`, JSC's `CRASH()`), with and without `BUN_JSC_useJIT=0`. |
 | Gemini CLI | 0.63.0 | Node (esbuild code-split ESM chunks with top-level await) | `npm i -g @google/gemini-cli` (1.5–2.6 s) | **yes** | **yes**: `gemini --skip-trust -p` reaches `generativelanguage.googleapis.com` through `/api/gemini/`, 400 "API key not valid" | `--version` 9.9 s, `-p` to the error 24 s (Chromium) | Fixed here (below). Left: a "Failed to release project registry lock" warning from proper-lockfile (harmless). |
 | Grok CLI (community, `@vibe-kit/grok-cli`) | 0.0.34 | Node | `npm i -g @vibe-kit/grok-cli` | not run | — | — | Superseded by xAI's own Grok Build (above); not tested. |
 | aider | 0.86.2 | Python | `pip install aider-chat` | not run | — | — | Pins ~80 packages, many native (numpy, scipy, pydantic-core, tiktoken, orjson, aiohttp, tree-sitter): out of reach of the WASI CPython's pure-Python `pip`. The plausible route is Debian mode (glibc CPython and manylinux wheels in Blink), not tried. |
