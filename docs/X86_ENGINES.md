@@ -568,6 +568,9 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    (`6.1.0-<hostname>`, `#1 SMP ...`; Node's `os.release()` said
    `4.5.0-blink-1.1.0`), keeping Blink's `sysname` and `machine`. Test:
    `fixtures/x86/uname.c`.
+60. `syslog(2)` (klogctl) goes to the kernel's log, `SYS_syslog`: the read
+   actions copy its text out (util-linux `dmesg -S`). From the unix/kernel
+   session (their 0055, 9c3f7a1). Test: `debian.test.ts` dmesg.
 
 The guest's kernel calls go over a pool of channels (`src/x86-engine/blink.ts`
 → `public/engines/blink/host.mjs`). It starts at 6, and host.mjs asks the
