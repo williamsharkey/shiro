@@ -81,6 +81,8 @@ const blockedkidsBin = join(out, 'blockedkids');
 const haveBlockedkids = tryBuild('gcc', ['-static', '-O1', '-o', blockedkidsBin, 'blockedkids.c']);
 const pingpongBin = join(out, 'futexpingpong');
 const havePingpong = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', pingpongBin, 'futexpingpong.c']);
+const sockaddrsBin = join(out, 'sockaddrs');
+const haveSockaddrs = tryBuild('gcc', ['-static', '-O1', '-o', sockaddrsBin, 'sockaddrs.c']);
 const realtimeBin = join(out, 'realtime');
 const haveRealtime = tryBuild('gcc', ['-static', '-O1', '-o', realtimeBin, 'realtime.c']);
 const mapsBin = join(out, 'maps');
@@ -683,6 +685,14 @@ describe('Blink engine: CPU and syscall fixes', () => {
     const r = await run(shell, './prog');
     expect(r.output.replace(/\r\n/g, '\n')).toBe('fork: parent bad 0 child bad 0\nthreads: main bad 0 thread bad 0\n');
   }, 120_000);
+
+  // LTP bind04 (abstract names), nft/getifaddrs (netlink), uv venvs ($ORIGIN), go link (fallocate)
+  it.skipIf(!haveSockaddrs)('socket address lengths, /proc/self/exe through a symlink, fallocate', async () => {
+    const { shell } = await setup(readFileSync(sockaddrsBin));
+    const r = await run(shell, 'ln -s prog link; ./link');
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('abstract bound 1 len 110 connect 1\nnetlink len 12 family 16\n' +
+      'exe /home/user/work/prog\nfallocate -1 EOPNOTSUPP\n');
+  }, 60_000);
 
   // vim's typeahead check blocked for a key when two reads straddled a ms tick
   it.skipIf(!haveRealtime)('CLOCK_REALTIME and gettimeofday have sub-ms resolution', async () => {
