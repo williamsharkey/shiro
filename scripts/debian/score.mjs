@@ -46,7 +46,8 @@ const CATEGORIES = [
   ['blink-lchown', /error setting ownership of symlink/],
   ['not-in-trixie', /Unable to locate package|has no installation candidate|is not available, but is referred to/],
   ['timeout', /^SCORE-TIMEOUT/m],
-  ['engine-crash', /terminating due to SIG|Segmentation fault|Illegal instruction|Bus error|core dumped|returned error exit status 1[34]\d\b|SIGSEGV|SIGILL|SIGBUS/],
+  ['engine-crash', /blink: aborted|terminating due to SIG|Segmentation fault|Illegal instruction|Bus error|core dumped|returned error exit status 1[34]\d\b|SIGSEGV|SIGILL|SIGBUS/],
+  ['kernel-netlink', /Unable to initialize Netlink socket|Cannot open netlink socket/],
   ['missing-syscall', /Function not implemented|ENOSYS|missing syscall|Operation not supported/],
   ['download', /Failed to fetch|Hash Sum mismatch|Could not connect to the package mirror/],
   ['dependencies', /unmet dependencies|Unable to correct problems|held broken packages/],
@@ -143,6 +144,7 @@ async function smoke(m, pkg) {
   // The program named like the package first, then the rest
   bins.sort((a, b) => (b.endsWith('/' + pkg) ? 1 : 0) - (a.endsWith('/' + pkg) ? 1 : 0));
   const tried = [];
+  let lastOut = '';
   let ran; // a run that loaded and exited normally without printing a version or usage
   let undeclared; // a perl program needing a module no installed package has (dh_bash-completion: debhelper)
   // Shells have no --version (dash): run a command instead
@@ -156,6 +158,7 @@ async function smoke(m, pkg) {
       const r = await m.run(`timeout 120 ${bin} ${flagArg} </dev/null 2>&1`, 180);
       const crashed = /terminating due to SIG|Segmentation fault|Illegal instruction|SCORE-TIMEOUT/.test(r.out) || (r.code >= 128 && r.code < 255) || r.code === 124; // 255: exit(-1), an ordinary error (ip --version)
       tried.push(`${bin} ${flagArg}: exit ${r.code}`);
+      lastOut = r.out;
       if (r.code === 0 && r.out.trim()) return { ok: true, how: `${bin} ${flagArg}${who(bin)}`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
       // Tools without --version print their usage and exit 1 or 2: it ran, which is what we check
       const broken = /error while loading shared libraries|Exec format error|cannot execute|not found|Can't locate|No such file/i.test(r.out);
@@ -169,7 +172,10 @@ async function smoke(m, pkg) {
   }
   if (ran) return { ok: true, how: `${ran.bin} ${ran.flagArg} (ran, exit ${ran.r.code}${ran.r.out.trim() ? '' : ', no output'})`, ms: ran.r.ms, sample: ran.r.out.trim().split('\n')[0].slice(0, 100) };
   if (undeclared) return { ok: true, how: `installed; ${undeclared.bin} needs ${undeclared.mod}, which no dependency provides (as on Debian)`, ms: 0 };
-  if (bins.length) return { ok: false, how: tried.join('; '), category: 'smoke-failed', error: tried[0] };
+  if (bins.length) {
+    const cat = categorize(lastOut);
+    return { ok: false, how: tried.join('; '), category: cat === 'other' ? 'smoke-failed' : cat, error: cat === 'other' ? tried[0] : firstError(lastOut) };
+  }
   // Public libraries first; a private one (systemd/libsystemd-core) finds its
   // siblings through its programs' RUNPATH, so give ld.so its directory
   const libs = list.filter((f) => /^\/usr\/lib\/x86_64-linux-gnu\/(?:[\w.+-]+\/)?[^/]+\.so(\.\d+)*$/.test(f))
@@ -363,6 +369,7 @@ function report() {
 const CAT_MEANING = {
   'blink-lchown': "Blink's lchown follows symlinks, so dpkg can't set the owner of a symlink whose target isn't unpacked yet (reported to unix/perf-blink)",
   'not-in-trixie': 'popcon counts every release and architecture; no such amd64 package in trixie',
+  'kernel-netlink': "the program needs an AF_NETLINK socket (nft, and iproute2 beyond -V); Shiro's kernel has none",
   'engine-crash': 'a program died of a signal in Blink (an unimplemented instruction or an emulation bug)',
   'missing-syscall': 'a system call Shiro or Blink does not implement',
   'maintainer-script': "a package's postinst/preinst failed",
