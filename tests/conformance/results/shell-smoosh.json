@@ -74,7 +74,7 @@
    ]
   },
   "semantics": {
-   "pass": 72,
+   "pass": 77,
    "total": 92,
    "failures": [
     {
@@ -114,24 +114,8 @@
      "reason": "status 1, want 0"
     },
     {
-     "name": "semantics.pattern.bracket.quoted",
-     "reason": "stdout differs"
-    },
-    {
-     "name": "semantics.pattern.hyphen",
-     "reason": "stdout differs"
-    },
-    {
      "name": "semantics.pattern.modernish",
      "reason": "status 1, want 0"
-    },
-    {
-     "name": "semantics.pattern.rightbracket",
-     "reason": "stdout differs"
-    },
-    {
-     "name": "semantics.quote.backslash",
-     "reason": "stdout differs"
     },
     {
      "name": "semantics.redir.close",
@@ -146,30 +130,22 @@
      "reason": "status 127, want 0"
     },
     {
-     "name": "semantics.tilde.quoted",
-     "reason": "stdout differs"
-    },
-    {
      "name": "semantics.var.dashu",
      "reason": "status 1, want 0"
     },
     {
-     "name": "semantics.var.star.format",
-     "reason": "stdout differs"
+     "name": "semantics.var.format.tilde",
+     "reason": "status 1, want 0"
     }
    ]
   },
   "sh": {
-   "pass": 5,
+   "pass": 6,
    "total": 7,
    "failures": [
     {
      "name": "sh.monitor.bg",
      "reason": "status 3, want 0"
-    },
-    {
-     "name": "sh.set.ifs",
-     "reason": "stdout differs"
     }
    ]
   }

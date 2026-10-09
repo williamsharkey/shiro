@@ -567,7 +567,7 @@
    ]
   },
   "dbracket": {
-   "pass": 44,
+   "pass": 45,
    "total": 49,
    "failures": [
     {
@@ -581,10 +581,6 @@
     {
      "i": 23,
      "name": "[[ with env prefix doesn't work"
-    },
-    {
-     "i": 44,
-     "name": "tilde expansion with =~ (confusing)"
     },
     {
      "i": 45,
@@ -723,17 +719,9 @@
    ]
   },
   "glob": {
-   "pass": 18,
+   "pass": 20,
    "total": 23,
    "failures": [
-    {
-     "i": 26,
-     "name": "Glob of unescaped [[] and []]"
-    },
-    {
-     "i": 27,
-     "name": "Glob of negated unescaped [[] and []]"
-    },
     {
      "i": 32,
      "name": "\\ in unquoted substitutions does not match a backslash"

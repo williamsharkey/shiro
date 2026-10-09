@@ -62,7 +62,7 @@ function hasUnquotedGlob(word: string, extglob: boolean): boolean {
     const c = word[i];
     if (c === '\x01') { i++; continue; }
     if (c === '*' || c === '?') return true;
-    if (c === '[' && word.indexOf(']', i + 2) > i) return true;
+    if (c === '[' && bracketToRegex(word, i)) return true;
     if (extglob && '+@!'.includes(c) && word[i + 1] === '(') return true;
   }
   return false;
@@ -72,6 +72,40 @@ const POSIX_CLASSES: Record<string, string> = {
   alpha: 'a-zA-Z', digit: '0-9', alnum: '0-9a-zA-Z', upper: 'A-Z', lower: 'a-z', space: '\\s',
   blank: ' \\t', punct: '!-\\/:-@\\[-`{-~', xdigit: '0-9A-Fa-f', print: ' -~', graph: '!-~', cntrl: '\\x00-\\x1f',
 };
+
+/** A character for inside a RegExp class */
+const classChar = (c: string) => c.replace(/[\\\]\[^-]/g, '\\$&');
+
+/**
+ * The POSIX bracket expression at s[i] ('[') as a RegExp class, or null when
+ * it has no closing ']' (then '[' is literal). `!` or `^` first negates; a
+ * `]` first (or after `!`) is literal; [:class:], [.c.] and [=c=]; a quoted (\x01-marked)
+ * or backslashed character is literal, including '-' and ']'.
+ */
+function bracketToRegex(s: string, i: number, caretCloses = false): { re: string; end: number } | null {
+  let j = i + 1;
+  let neg = false;
+  if (s[j] === '!' || s[j] === '^') { neg = true; j++; }
+  let body = '';
+  // (bash's own matcher, caretCloses: after `^` a `]` closes the class even first)
+  for (let first = !(caretCloses && s[j - 1] === '^'); j < s.length; j++, first = false) {
+    const c = s[j];
+    if (c === ']' && !first) return { re: (neg ? '[^' : '[') + body + ']', end: j };
+    if ((c === '\x01' || c === '\\') && j + 1 < s.length) { body += classChar(s[++j]); continue; }
+    if (c === '[' && (s[j + 1] === ':' || s[j + 1] === '.' || s[j + 1] === '=')) {
+      const kind = s[j + 1];
+      const close = s.indexOf(kind + ']', j + 2);
+      if (close > j + 1) {
+        const name = s.slice(j + 2, close);
+        body += kind === ':' ? (POSIX_CLASSES[name] ?? '') : classChar(name);
+        j = close + 1;
+        continue;
+      }
+    }
+    body += c === '-' ? '-' : classChar(c);
+  }
+  return null;
+}
 
 /** Redirect target naming an open shell fd (`>&3`, `<&6`) rather than a file */
 const FD_REF = '\uE020';
@@ -637,6 +671,9 @@ export class Shell {
     // Only exported variables reach a new process
     for (const n of this.localVars) delete this.env[n];
     this.localVars.clear();
+    // A shell starts with the default IFS, whatever its environment says (POSIX 2.5.3)
+    this.env.IFS = ' \t\n';
+    this.localVars.add('IFS');
     this.parentPid = ppid;
     this.shellPid = pid;
     shellsByPid.set(pid, new WeakRef(this));
@@ -3924,7 +3961,7 @@ export class Shell {
           // Inside "…" the word of ${x-word} is double-quoted too: its own " only
           // group, ' is literal, \ escapes $ ` " \ } (and the value stays one field)
           const dqOp = inDouble ? /^([A-Za-z_][A-Za-z0-9_]*|[0-9]+|[#?$!-])(:?)([-=+?])([\s\S]*)$/.exec(inner) : null;
-          if (dqOp && dqOp[4].includes('"') || dqOp && /'|\\\}/.test(dqOp[4])) {
+          if (dqOp && /["'$`]|\\\}/.test(dqOp[4])) {
             const [, name, colon, op, operand] = dqOp!;
             const val = this.getVar(name);
             const use = (val === undefined || (colon !== '' && val === '')) !== (op === '+');
@@ -4022,18 +4059,19 @@ export class Shell {
         if ((i === 0 || /[\s=]/.test(before) || afterColon) && isAssignContext) {
           // ~+ expands to $PWD, ~- expands to $OLDPWD
           if (after === '+' && (/[\/\s;|&>]/.test(line[i + 2] || '') || i + 2 >= line.length)) {
-            result += this.env['PWD'] || this.cwd;
+            result += `"${protectExpansion(this.env['PWD'] || this.cwd)}"`;
             i += 2;
             continue;
           }
           if (after === '-' && (/[\/\s;|&>]/.test(line[i + 2] || '') || i + 2 >= line.length)) {
-            result += this.env['OLDPWD'] || this.cwd;
+            result += `"${protectExpansion(this.env['OLDPWD'] || this.cwd)}"`;
             i += 2;
             continue;
           }
           if (/[\/\s;|&>]/.test(after) || i + 1 >= line.length || (after === ':' && (afterColon || before === '='))) {
             const home = this.env['HOME'] ?? '/home/user';
-            result += splitFields(home, ''); // a tilde expansion is one field
+            // One field, not globbed (as if quoted)
+            result += `"${protectExpansion(home)}"`;
             i++;
             continue;
           }
@@ -4609,26 +4647,15 @@ export class Shell {
           continue;
         }
       }
+      // A quoted character (marked by the caller) is literal
+      if (ch === '\x01' && i + 1 < pattern.length) { result += pattern[++i].replace(/[.*+?^${}()|[\]\\/]/g, '\\$&'); continue; }
       if (ch === '*') { result += '.*'; continue; }
       if (ch === '?') { result += '.'; continue; }
       if (ch === '[') {
-        // Character class: pass through until ]
-        let j = i + 1;
-        const neg = pattern[j] === '!' || pattern[j] === '^';
-        if (neg) j++;
-        let body = '';
-        // A ] first in the class is literal (bash: not after ^)
-        if (pattern[j] === ']' && pattern[j - 1] !== '^') { body += '\\]'; j++; }
-        while (j < pattern.length && pattern[j] !== ']') {
-          const pc = /^\[:(\w+):\]/.exec(pattern.slice(j));
-          if (pc) { body += POSIX_CLASSES[pc[1]] ?? ''; j += pc[0].length; continue; }
-          if (pattern[j] === '\\' && j + 1 < pattern.length) { body += '\\' + pattern[j + 1]; j += 2; continue; }
-          body += pattern[j] === '[' || pattern[j] === '^' ? '\\' + pattern[j] : pattern[j];
-          j++;
-        }
-        if (j >= pattern.length) { result += '\\['; continue; } // no closing ]: a literal [
-        result += (neg ? '[^' : '[') + body + ']';
-        i = j;
+        const b = bracketToRegex(pattern, i, true);
+        if (!b) { result += '\\['; continue; } // no closing ]: a literal [
+        result += b.re;
+        i = b.end;
         continue;
       }
       // \x matches x literally
@@ -4777,6 +4804,7 @@ export class Shell {
         }
         if (ch === ')' && parenDepth > 0) {
           parenDepth--;
+          cmdPos = true; // after a subshell or a `( pattern )`: a command or keyword
           current += ch; i++; continue;
         }
 
@@ -5012,7 +5040,7 @@ export class Shell {
           if (next === '$' || next === '"' || next === '\\' || next === '`') {
             current += next;
           } else if (next === '*' || next === '?' || next === '[') {
-            current += '\x01' + next; // sentinel: quoted glob char (or < >, not a redirect)
+            current += '\\\x01' + next; // the backslash stays; the glob char is quoted (sentinel)
           } else {
             current += '\\' + next; // keep backslash literally
           }
@@ -5431,14 +5459,8 @@ export class Shell {
       if (c === '*') { out += '[^/]*'; continue; }
       if (c === '?') { out += '[^/]'; continue; }
       if (c === '[') {
-        const end = seg.indexOf(']', i + (seg[i + 1] === ']' || (seg[i + 1] === '!' && seg[i + 2] === ']') ? 3 : 2));
-        if (end > i) {
-          let body = unmark(seg.slice(i + 1, end));
-          if (body.startsWith('!')) body = '^' + body.slice(1);
-          out += '[' + body.replace(/\\/g, '\\\\').replace(/\[:(\w+):\]/g, (_m, k) => POSIX_CLASSES[k] ?? '') + ']';
-          i = end;
-          continue;
-        }
+        const b = bracketToRegex(seg, i);
+        if (b) { out += b.re; i = b.end; continue; }
       }
       out += c.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
     }
@@ -6858,7 +6880,9 @@ export class Shell {
       let matched = fallthrough;
       for (const p of matched ? [] : patterns) {
         const parts = await this.caseParts(p);
-        const re = new RegExp('^' + parts.map((x) => (x.literal ? x.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : this.globToRegex(x.text))).join('') + '$', 's');
+        // Quoted characters are marked literal, so a bracket can span them (*["$t"]*)
+        const marked = parts.map((x) => (x.literal ? x.text.replace(/[\s\S]/g, '\x01$&') : x.text)).join('');
+        const re = new RegExp('^' + this.globToRegex(marked) + '$', 's');
         if (re.test(word)) { matched = true; break; }
       }
       if (!matched) continue;
@@ -7498,7 +7522,8 @@ export function splitTopLevelPipes(cmd: string): string[] {
       if (e > 0) { current += cmd.slice(i, e); i = e; cmdPos = false; continue; }
     }
     if (ch === '(') { paren++; current += ch; i++; cmdPos = true; continue; }
-    if (ch === ')') { if (paren > 0) paren--; current += ch; i++; cmdPos = false; continue; }
+    // After `)` (a subshell, or a case pattern) a command or keyword can start
+    if (ch === ')') { if (paren > 0) paren--; current += ch; i++; cmdPos = true; continue; }
     if (ch === '|' && cmd[i + 1] === '|') { current += '||'; i += 2; cmdPos = true; continue; }
     if (ch === '|' && cmd[i - 1] !== '>') {
       if (paren === 0 && brace === 0 && blocks.length === 0) { parts.push(current); current = ''; }
@@ -7689,9 +7714,9 @@ function compoundEnd(cmd: string): number {
     if (ch === '(') { paren++; i++; cmdPos = true; continue; }
     if (ch === ')') {
       if (paren > 0) paren--;
-      // `name()` is followed by a function body: a compound command can start
-      const emptyParens = cmd.slice(0, i).trimEnd().endsWith('(');
-      i++; cmdPos = emptyParens;
+      // A command or keyword can follow: a function body after `name()`, a case
+      // pattern's commands, `fi` after `(list)`
+      i++; cmdPos = true;
       if (subshell && paren === 0 && blocks.length === 0) return i;
       continue;
     }

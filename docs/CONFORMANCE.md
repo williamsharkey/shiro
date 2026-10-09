@@ -6,9 +6,9 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1394/1567 (89.0%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1397/1567 (89.2%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1394/1567 (89.0%)** |
-| [Shell: smoosh POSIX tests](#shell-smoosh-posix-tests) | 111/163 (68.1%) | **128/163 (78.5%)** |
+| [Shell: smoosh POSIX tests](#shell-smoosh-posix-tests) | 111/163 (68.1%) | **134/163 (82.2%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **625/635 (98.4%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **148/320 (46.3%)** |
 | [Syscalls: wasi-testsuite (wasm32-wasip1)](#syscalls-wasi-testsuite-wasm32-wasip1) | — | **71/72 (98.6%)** |
@@ -54,7 +54,7 @@ How each suite runs, and what is and isn't scored, is described in
 | builtin-special | 1/12 | 7/12 | 5 |
 | builtin-type | 0/6 | 3/6 | 3 |
 | builtin-vars | 0/38 | 32/38 | 6 |
-| dbracket | 1/49 | 44/49 | 5 |
+| dbracket | 1/49 | 45/49 | 4 |
 | dparen | 0/14 | 13/14 | 1 |
 | assign | 2/43 | 38/43 | 5 |
 | append | 1/20 | 20/20 | 0 |
@@ -63,7 +63,7 @@ How each suite runs, and what is and isn't scored, is described in
 | array-assoc | 0/38 | 35/38 | 3 |
 | brace-expansion | 0/55 | 51/55 | 4 |
 | tilde | 0/14 | 9/14 | 5 |
-| glob | 0/23 | 18/23 | 5 |
+| glob | 0/23 | 20/23 | 3 |
 | pipeline | 0/25 | 20/25 | 5 |
 | exit-status | 0/11 | 8/11 | 3 |
 | errexit | 0/35 | 34/35 | 1 |
@@ -110,14 +110,14 @@ How each suite runs, and what is and isn't scored, is described in
 - **builtin-special**: Prefix assignments persist after special builtins, like : (set -o posix); Prefix assignments persist after readonly, but NOT exported (set -o posix); Prefix binding for exec is a special case (versus e.g. readonly); bash 'type' gets confused - says 'function', but runs builtin; command, builtin - both can be redefined, not special (regression)
 - **builtin-type**: type -\> alias external; type of relative path; more special builtins
 - **builtin-vars**: Export sets a global variable that persists after export -n; Export a local that shadows a global; Unset exported variable, then define it again.  It's NOT still exported.; Exporting a parent func variable (dynamic scope); Make an existing local variable readonly; local after readonly
-- **dbracket**: [[ regex syntax error; [[ at runtime doesn't work; [[ with env prefix doesn't work; tilde expansion with =~ (confusing); [[ ]] with redirect
+- **dbracket**: [[ regex syntax error; [[ at runtime doesn't work; [[ with env prefix doesn't work; [[ ]] with redirect
 - **dparen**: (( )) with redirect
 - **assign**: Env binding can use preceding bindings, but not subsequent ones; Trying to run keyword 'for'; Test above without 'local' (which is not POSIX); aliased assignment doesn't split; "declare -a arr" and "readonly -a a" creates an empty array (OSH)
 - **array**: space before ( in array initialization; array with invalid token; a+=() modifies existing instance of BashArray
 - **array-assoc**: unset -v and assoc array; nameref and assoc array; bash bug: (( A["$key"] = 1 )) doesn't work
 - **brace-expansion**: expansion on RHS of assignment; no expansion with RHS assignment; Two kinds of tilde expansion; Mixed case char expansion is invalid
 - **tilde**: ${undef:-~}; ${x//~/~root}; a[x]=foo:~ has tilde expansion; x=${undef-~:~}; temp assignment x=~ env
-- **glob**: Glob of unescaped [[] and []]; Glob of negated unescaped [[] and []]; \ in unquoted substitutions does not match a backslash; \ in unquoted substitutions escapes globchars; shopt -u globskipdots shows . and ..
+- **glob**: \ in unquoted substitutions does not match a backslash; \ in unquoted substitutions escapes globchars; shopt -u globskipdots shows . and ..
 - **pipeline**: PIPESTATUS is set on simple commands; \|&; ! is not a command; Evaluation of argv[0] in pipeline occurs in child; SIGPIPE causes pipeline to die (regression for issue #295)
 - **exit-status**: If subshell false -- exit code is propagated in a weird way (strict_argv prevents); Exit code when command sub evaluates to empty str, e.g. `false` (#2416); More test cases with empty argv
 - **errexit**: pipeline process respects errexit
@@ -261,16 +261,16 @@ POSIX sh cases from [smoosh](https://github.com/mgree/smoosh) (tests/shell), jud
 | benchmark | 0/2 | 0/2 | 2 |
 | builtin | 38/59 | 49/59 | 10 |
 | parse | 2/3 | 2/3 | 1 |
-| semantics | 67/92 | 72/92 | 20 |
-| sh | 4/7 | 5/7 | 2 |
+| semantics | 67/92 | 77/92 | 15 |
+| sh | 4/7 | 6/7 | 1 |
 
 <details><summary>Failing cases</summary>
 
 - **benchmark**: benchmark.fact5 — status 2, want 0; benchmark.while — status 2, want 0
 - **builtin**: builtin.command.exec — stdout differs; builtin.exec.modernish.mkfifo.loop — stdout differs; builtin.exec.true — status 1, want 0; builtin.hash.nonposix — status 1, want 0; builtin.readonly.assign.interactive — status 1, want 0; builtin.source.nonexistent.earlyexit — status 0, want 1; builtin.special.redir.error — status 0, want 1; builtin.trap.nested — stdout differs; builtin.trap.redirect — stdout differs; builtin.trap.supershell — stdout differs
 - **parse**: parse.eval.error — status 1, want 0
-- **semantics**: semantics.background.pipe.pid — status 1, want 0; semantics.case.ec — status 2, want 0; semantics.command-subst.newline — stdout differs; semantics.command.argv0 — status 1, want 0; semantics.defun.ec — stdout differs; semantics.dot.glob — stdout differs; semantics.escaping.backslash.modernish — status 1, want 0; semantics.escaping.quote — status 1, want 0; semantics.evalorder.fun — status 1, want 0; semantics.pattern.bracket.quoted — stdout differs; semantics.pattern.hyphen — stdout differs; semantics.pattern.modernish — status 1, want 0; semantics.pattern.rightbracket — stdout differs; semantics.quote.backslash — stdout differs; semantics.redir.close — status 0, want 1; semantics.special.assign.visible.nonposix — stdout differs; semantics.subshell.break — status 127, want 0; semantics.tilde.quoted — stdout differs; semantics.var.dashu — status 1, want 0; semantics.var.star.format — stdout differs
-- **sh**: sh.monitor.bg — status 3, want 0; sh.set.ifs — stdout differs
+- **semantics**: semantics.background.pipe.pid — status 1, want 0; semantics.case.ec — status 2, want 0; semantics.command-subst.newline — stdout differs; semantics.command.argv0 — status 1, want 0; semantics.defun.ec — stdout differs; semantics.dot.glob — stdout differs; semantics.escaping.backslash.modernish — status 1, want 0; semantics.escaping.quote — status 1, want 0; semantics.evalorder.fun — status 1, want 0; semantics.pattern.modernish — status 1, want 0; semantics.redir.close — status 0, want 1; semantics.special.assign.visible.nonposix — stdout differs; semantics.subshell.break — status 127, want 0; semantics.var.dashu — status 1, want 0; semantics.var.format.tilde — status 1, want 0
+- **sh**: sh.monitor.bg — status 3, want 0
 
 </details>
 

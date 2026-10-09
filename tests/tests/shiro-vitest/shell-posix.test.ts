@@ -109,3 +109,37 @@ describe('exported and unexported variables', () => {
     expect(out.replace(/\r\n/g, '\n')).toBe('still b\n');
   });
 });
+
+describe('patterns, quoting and expansions', () => {
+  it('bracket expressions: ] first, [!]…], classes, [.c.] and [=c=] in globs and case', async () => {
+    const r = await script([
+      'mkdir /tmp/g && cd /tmp/g && touch file- filea file]',
+      'echo file[]x] file[!]x-] file[[:alpha:]] file[[.-.]] file[[=-=]] file[-123]',
+      't=\'ab]cd\'',
+      'case c in ( *["${t}"]* ) case e in ( *[!"${t}"]* ) echo inner;; esac ;; ( * ) echo outer ;; esac',
+      'case \'"\' in ( *["${t}"]* ) echo QUOTED ;; ( * ) echo UNQUOTED ;; esac',
+    ].join('\n'));
+    expect(r.err).toBe('');
+    expect(r.out).toBe('file] filea filea file- file- file-\ninner\nUNQUOTED\n');
+  });
+
+  it('a backslash in double quotes stays before * ? [', async () => {
+    const r = await script('echo "\\[]" "\\*" "\\?" "\\$" "\\a"\n');
+    expect(r.out).toBe('\\[] \\* \\? $ \\a\n');
+  });
+
+  it('~ expands to one field that is not globbed', async () => {
+    const r = await script('mkdir /tmp/h && cd /tmp/h && touch a1 a2\nHOME="weird    times"; printf "%s\\n" ~\nHOME=\'a*\'; printf "%s\\n" ~\n');
+    expect(r.out).toBe('weird    times\na*\n');
+  });
+
+  it('"${v=$*}" joins with the first IFS character and keeps the words intact', async () => {
+    const r = await script('set -- a "s p  aces" b\nIFS=":"\nprintf "<%s>\\n" "${v=$*}"\nunset v IFS\nprintf "<%s>\\n" "${v=$*}"\n');
+    expect(r.out).toBe('<a:s p  aces:b>\n<a s p  aces b>\n');
+  });
+
+  it('a new shell starts with the default IFS', async () => {
+    const r = await script('export IFS=123\nsh -c \'printf "[%s]" "$IFS"\'\n');
+    expect(r.out).toBe('[ \t\n]');
+  });
+});
