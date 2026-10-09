@@ -297,6 +297,25 @@ describe('kernel syscalls found by LTP', () => {
     off();
   });
 
+  it('paths below /proc/self/fd/N (and /dev/fd/N) name entries of that open directory', async () => {
+    await fs.mkdir('/tmp/kc/pinned', { recursive: true });
+    const dfd = await open('/tmp/kc/pinned', A.O_PATH | A.O_DIRECTORY | A.O_NOFOLLOW);
+    expect(dfd).toBeGreaterThanOrEqual(0);
+    const via = `/proc/self/fd/${dfd}`;
+    expect(await call(A.SYS_mkdir, [L(`${via}/sub`), 0o700], `${via}/sub`)).toBe(0);
+    expect((await fs.stat('/tmp/kc/pinned/sub')).isDirectory()).toBe(true);
+    const f = await open(`/dev/fd/${dfd}/sub/new.tmp`, A.O_WRONLY | A.O_CREAT | A.O_EXCL);
+    expect(f).toBeGreaterThanOrEqual(0);
+    await kernel.syscall(proc, A.SYS_close, [f], new Uint8Array(8));
+    const from = `${via}/sub/new.tmp`, to = `/proc/${proc.pid}/fd/${dfd}/sub/new.txt`;
+    expect(await call(A.SYS_rename, [L(from), L(to)], from, to)).toBe(0);
+    expect(await fs.exists('/tmp/kc/pinned/sub/new.txt')).toBe(true);
+    expect(await call(A.SYS_stat, [L('/proc/self/fd/999/x')], '/proc/self/fd/999/x')).toBe(-A.ENOENT);
+    const file = await open('file', A.O_RDONLY);
+    expect(await call(A.SYS_stat, [L(`/proc/self/fd/${file}/x`)], `/proc/self/fd/${file}/x`)).toBe(-A.ENOTDIR);
+    for (const fd of [dfd, file]) await kernel.syscall(proc, A.SYS_close, [fd], new Uint8Array(8));
+  });
+
   it('epoll_wait: a full events array rotates, so every ready fd gets reported (no starvation)', async () => {
     const ep = await call(A.SYS_epoll_create1, [0]);
     const reads: number[] = [];

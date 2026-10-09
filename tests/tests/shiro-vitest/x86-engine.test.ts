@@ -53,6 +53,11 @@ const forkBin = join(out, 'forkcopy');
 const haveFork = tryBuild('gcc', ['-static', '-O1', '-o', forkBin, 'forkcopy.c']);
 const mtchildBin = join(out, 'mtchild');
 const haveMtchild = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', mtchildBin, 'mtchild.c']);
+const fsidentBin = join(out, 'fsident');
+const haveFsident = tryBuild('gcc', ['-static', '-O1', '-pthread', '-o', fsidentBin, 'fsident.c']);
+// musl's libc (native Claude Code's) resolves paths and stats files its own way
+const fsidentMuslBin = join(out, 'fsident-musl');
+const haveFsidentMusl = tryBuild('musl-gcc', ['-static', '-O1', '-o', fsidentMuslBin, 'fsident.c']);
 const statnullBin = join(out, 'statnull');
 const haveStatnull = tryBuild('gcc', ['-static', '-O1', '-o', statnullBin, 'statnull.c']);
 const futexwakeBin = join(out, 'futexwake');
@@ -779,6 +784,37 @@ describe('Blink engine: CPU and syscall fixes', () => {
   }, 60_000);
 
   // LTP fstat03
+  // Claude Code's atomic writes and its task-output swap check (docs/COMPAT.md "Agent CLIs")
+  it.each([['glibc', fsidentBin, haveFsident, ''], ['musl', fsidentMuslBin, haveFsidentMusl, ''], ['glibc-thread', fsidentBin, haveFsident, '--thread '], ['musl-thread', fsidentMuslBin, haveFsidentMusl, '--thread ']] as const)(
+    'O_CREAT|O_EXCL, mkdir -p + openat(dirfd), O_PATH dirs, one dev/ino from stat, lstat, fstat and statx (%s)', async (_libc, bin, have, flag) => {
+      if (!have) return;
+      const { shell } = await setup(readFileSync(bin));
+      const r = await run(shell, `./prog ${flag}/tmp/claude-1000/-home-user-${_libc}`);
+      expect(r.output.replace(/\r\n/g, '\n')).toBe('fsident: ok\n');
+      expect(r.exitCode).toBe(0);
+    }, 60_000);
+
+  it.skipIf(!haveFsident)('a path has one dev:ino in every process (the kernel\'s), whatever order they look it up in', async () => {
+    const { shell, fs } = await setup(readFileSync(fsidentBin));
+    await fs.mkdir('/tmp/inod/sub', { recursive: true });
+    await fs.writeFile('/tmp/inod/f', 'x');
+    const paths = ['/tmp/inod', '/tmp/inod/f', '/tmp/inod/sub', '/home/user/work', '/tmp'];
+    const ids = async (ps: string[]) => (await run(shell, `./prog --ino ${ps.join(' ')}`)).output.trim().split(/\r?\n/);
+    const a = await ids(paths);
+    const b = (await ids([...paths].reverse())).reverse();
+    expect(b).toEqual(a);
+    expect(new Set(a).size).toBe(paths.length);
+    // what the kernel (and WASM programs) report
+    const { kernelForContext } = await import('@shiro/wasi/run-command');
+    const kernel = kernelForContext({ fs, shell } as any);
+    const proc = { pid: 1, cwd: '/', uid: 1000 } as any;
+    for (const [i, p] of paths.entries()) {
+      const st = await kernel.statPath(proc, p, false);
+      expect(typeof st).not.toBe('number');
+      expect(a[i]).toBe(`${(st as any).dev}:${(st as any).ino}`);
+    }
+  }, 60_000);
+
   it.skipIf(!haveStatnull)('the stat family with a NULL buffer is EFAULT once the file is found', async () => {
     const { shell } = await setup(readFileSync(statnullBin));
     const r = await run(shell, './prog');
