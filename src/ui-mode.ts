@@ -5,7 +5,7 @@
  * `?ui=desktop` / `?ui=terminal` choose and remember (localStorage
  * `shiro-ui`). Without a choice: shiro.computer and its subdomains keep the
  * terminal; embedded pages (seeds), `?demo=1` and app ("become") mode always
- * use it; every other host (unix.computer, localhost) gets the desktop.
+ * use it; every other host (tabcomputer.com, localhost) gets the desktop.
  */
 
 export type UiMode = 'desktop' | 'terminal';
