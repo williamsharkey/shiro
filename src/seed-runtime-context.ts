@@ -1,5 +1,3 @@
-import type { FileSystem } from './filesystem';
-
 export type ShiroRuntimeMode = 'standalone' | 'seed' | 'seed-blob';
 
 export interface ShiroRuntimeContext {
@@ -14,10 +12,6 @@ export interface ShiroRuntimeContext {
 }
 
 export const SHIRO_RUNTIME_CONTEXT_SESSION_KEY = 'tabcomputer_runtime_context_v1';
-export const SHIRO_RUNTIME_CONTEXT_MD_PATH = '/home/user/NEO.md';
-export const SHIRO_RUNTIME_CONTEXT_JSON_PATH = '/home/user/.shiro-context.json';
-
-type RuntimeContextFS = Pick<FileSystem, 'mkdir' | 'writeFile'>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -60,58 +54,4 @@ export function parseRuntimeContext(raw: string | null | undefined): ShiroRuntim
   } catch {
     return defaultRuntimeContext();
   }
-}
-
-export function buildNeoMd(context: ShiroRuntimeContext): string {
-  if (!context.injected) {
-    return `# NEO.md
-
-This file describes the runtime context for this tabcomputer boot. What the
-machine can do, and how to report a bug: \`/home/user/AGENTS.md\`.
-
-- Mode: standalone (tabcomputer is its own page, not injected into another)
-- Host page DOM bridge: unavailable
-- \`hc live\` inspects tabcomputer's own DOM
-- \`hc outer\` is not expected to work in this boot
-`;
-  }
-
-  const modeLabel = context.mode === 'seed-blob' ? 'seed blob injection' : 'seed injection';
-  const sameOrigin = context.sameOriginParentAccess ? 'yes' : 'no';
-  const hostUrl = context.hostUrl || '(unknown)';
-  const hostOrigin = context.hostOrigin || '(unknown)';
-  const hostTitle = context.hostTitle || '(untitled)';
-
-  return `# NEO.md
-
-This tabcomputer instance was spawned from a host page. What the machine can
-do, and how to report a bug: \`/home/user/AGENTS.md\`.
-
-- Mode: ${modeLabel}
-- Host page: ${hostUrl}
-- Host origin: ${hostOrigin}
-- Host title: ${hostTitle}
-- Host DOM bridge: available via \`hc outer\`
-- Same-origin parent DOM access: ${sameOrigin}
-
-Start with:
-
-1. Run \`hc outer\`
-2. Then use \`hc s\`, \`hc look\`, \`hc q <selector>\`, \`hc @0\`
-
-Notes:
-
-- \`hc live\` inspects tabcomputer's own DOM, not the host page
-- Prefer \`hc outer\` for host-page inspection even in blob mode
-- Machine-readable details are in \`${SHIRO_RUNTIME_CONTEXT_JSON_PATH}\`
-`;
-}
-
-export async function writeRuntimeContextFiles(
-  fs: RuntimeContextFS,
-  context: ShiroRuntimeContext,
-): Promise<void> {
-  await fs.mkdir('/home/user', { recursive: true });
-  await fs.writeFile(SHIRO_RUNTIME_CONTEXT_MD_PATH, buildNeoMd(context));
-  await fs.writeFile(SHIRO_RUNTIME_CONTEXT_JSON_PATH, JSON.stringify(context, null, 2));
 }

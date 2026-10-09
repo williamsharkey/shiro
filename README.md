@@ -74,7 +74,7 @@ Not here: hardware devices, kernel modules, and any access to your own machine.
   and whatever Debian packages ([docs/COMPAT.md](docs/COMPAT.md)).
 - **Web servers in the tab.** `serve DIR` serves a folder in a preview window; programs that
   `listen()` are reachable the same way; `page :PORT click #id` drives the page.
-- **Media.** `ffmpeg` is ffmpeg.wasm, downloaded (about 25 MB) on first use.
+- **Media.** `ffmpeg` is ffmpeg.wasm, served by tabcomputer itself; its ~31 MB core loads the first time it runs.
 
 ## Claude Code and other agents
 

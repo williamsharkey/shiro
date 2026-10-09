@@ -29,7 +29,7 @@ Page (everything under `src/` is the engine; products are profiles):
 - `src/x11/*` + `src/gui/*`: the X11 server in the page (`Xshiro :0`), rootless windows, Debian GUI apps (`gui`, `public/gui/apps.json`). [docs/GUI.md](docs/GUI.md), [docs/DOM-RENDERING.md](docs/DOM-RENDERING.md).
 - `src/desktop/*`: the desktop (window manager `wm.ts`, shell `index.ts`, Terminal `terminal-app.ts`, `network.ts`, `session.ts`, `spotlight.ts`, `tour.ts`, `mobile.ts`; lazy apps in `apps/`: About, Activity, Browser, Files, Settings). `src/ui-mode.ts` picks desktop or terminal. [docs/DESKTOP.md](docs/DESKTOP.md).
 - `src/browser/*` + `src/desktop/apps/browser.ts`: the Browser app spike. [docs/BROWSER.md](docs/BROWSER.md).
-- `src/claude-md-seed.ts`, `src/seed-runtime-context.ts`: the agent context seeded into `/home/user` (below). `src/commands/seed.ts`, `src/commands/hc.ts`: seeded sessions and host-page access.
+- `src/agent-docs.ts`: the `~/AGENTS.md` seeded for agents running inside the tab (below); `src/seed-runtime-context.ts` parses the boot context. `src/commands/seed.ts`, `src/commands/hc.ts`: seeded sessions and host-page access.
 - `src/claude-config.ts`, `src/claude-signin.ts`, `src/claude-auth.ts`, `src/claude-code-version.ts`: Claude Code bootstrap, sign-in and the pinned npm version.
 
 Server and tooling:
@@ -104,8 +104,8 @@ export const myCmd: Command = {
 
 ## Agent Context Inside The Tab
 
-- Boot seeds `/home/user/AGENTS.md` (`AGENTS_MD` in `src/claude-md-seed.ts`): what the machine is, how to install software, what doesn't work yet, where tabcomputer's source is (not on the machine), `doctor`, and how to report a bug. Keep it compact and true: when you change what works, update it. `/home/user/CLAUDE.md` only points to it.
-- `/home/user/NEO.md` and `/home/user/.shiro-context.json` (`src/seed-runtime-context.ts`) describe this boot: standalone, or injected into a host page by `seed`/`seed blob`. With host-page access, the agent learns it from `NEO.md` and usually starts with `hc outer`.
+- Every boot seeds `~/AGENTS.md` for agents on the machine (`src/agent-docs.ts`): what the machine is, what works and what doesn't, `doctor`, where the source lives (not checked out), and this boot's context (an injected `seed` boot says to start with `hc outer`). `~/CLAUDE.md` is `@AGENTS.md`, so Claude Code imports it directly.
+- Seeding never overwrites a file the user edited: `/var/lib/tabcomputer/seeded.json` holds the hash of what was written, and older installs are recognized by the exact texts earlier builds seeded. The retired `~/NEO.md` and `~/.shiro-context.json` are removed the same way. Keep the text accurate when behavior changes; it is what an agent here believes about the machine.
 
 ## Claude Code In tabcomputer
 
@@ -206,7 +206,7 @@ Performance: `npm run bench:quick` (~2.5 min) before and after a performance cha
 Use focused vitest runs while iterating, then the full suite before pushing. For changes touching seed/Claude/bootstrap paths, relevant files usually include:
 
 - `tests/tests/shiro-vitest/seed.test.ts`
-- `tests/tests/shiro-vitest/seed-runtime-context.test.ts`
+- `tests/tests/shiro-vitest/agent-docs.test.ts`
 - `tests/tests/shiro-vitest/claude-bootstrap.test.ts`
 - `tests/tests/shiro-vitest/node-runtime.test.ts`
 - `tests/tests/shiro-vitest/new-features.test.ts`
