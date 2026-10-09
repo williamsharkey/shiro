@@ -577,7 +577,7 @@ claude --native -p "say hi"</pre></div>
         <tr><td>Grok Build (xAI)</td><td>Download <code>https://x.ai/cli/grok-&lt;version&gt;-linux-x86_64</code></td><td>Works: <code>grok -p "..."</code> reaches the API</td><td>About 2.5 minutes per request</td></tr>
         <tr><td>Antigravity CLI (<code>agy</code>)</td><td>From its release manifest (<code>antigravity.google/cli/install.sh</code> shows how)</td><td><code>agy --version</code> works; sign-in not tested</td><td>11 s to start</td></tr>
         <tr><td>opencode</td><td><code>npm install -g opencode-ai</code></td><td>Not yet: crashes at startup in the emulator</td><td>&mdash;</td></tr>
-        <tr><td>aider</td><td>Debian mode: <code>debian install</code>, <code>sudo apt install -y python3 python3-pip</code>, <code>pip3 install --break-system-packages aider-chat</code></td><td>AIDER_STATUS</td><td>AIDER_SPEED</td></tr>
+        <tr><td>aider</td><td>Debian mode: <code>debian install</code>, <code>sudo apt install -y python3 python3-pip</code>, <code>pip3 install --break-system-packages aider-chat</code></td><td>Being verified: Python 3.13 installs (about 9 minutes for apt)</td><td>&mdash;</td></tr>
       </table>
       <p>Times are from headless Chromium on a desktop-class machine. The native programs are CPU-bound in the emulator; first runs are slower while code warms up.</p>
 
