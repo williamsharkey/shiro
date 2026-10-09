@@ -588,6 +588,23 @@ async function handleSignaling(req, res, pathname) {
 }
 
 // --- Git CORS proxy (for isomorphic-git clone) ---
+/**
+ * Why the git proxy won't fetch `url`, or '' if it may: only http(s) on the
+ * default ports, and only hosts whose every address is public (not loopback,
+ * private, link-local or cloud metadata; same list as the TCP relay).
+ */
+export async function gitProxyRefusal(url, lookup = (host) => dns.lookup(host, { all: true, verbatim: true })) {
+  let u;
+  try { u = new URL(url); } catch { return 'bad url'; }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return 'only http(s)';
+  if (u.port && u.port !== '80' && u.port !== '443') return 'port not allowed';
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  let addrs;
+  try { addrs = net.isIP(host) ? [{ address: host }] : await lookup(host); } catch { return 'host not found'; }
+  if (!addrs.length || addrs.some((a) => isBlockedAddress(a.address))) return 'address not allowed';
+  return '';
+}
+
 async function handleGitProxy(req, res, targetUrl) {
   const origin = req.headers['origin'];
   const cors = corsHeaders(origin, req.headers['access-control-request-headers']);
@@ -607,16 +624,31 @@ async function handleGitProxy(req, res, targetUrl) {
   for (const [k, v] of Object.entries(req.headers)) {
     if (!SKIP_REQUEST_HEADERS.has(k.toLowerCase())) headers[k] = v;
   }
-  headers['host'] = new URL(targetUrl).host;
   if (body.length) headers['content-length'] = String(body.length);
 
   try {
-    const upstream = await fetch(targetUrl, {
-      method: req.method,
-      headers,
-      body: body.length ? body : undefined,
-      duplex: 'half',
-    });
+    // Redirects are followed here, each hop re-checked, so a public URL can't
+    // bounce the server to a private one.
+    let url = targetUrl;
+    let upstream;
+    for (let hop = 0; ; hop++) {
+      const refusal = await gitProxyRefusal(url);
+      if (refusal) {
+        res.writeHead(403, { 'content-type': 'application/json', ...cors });
+        return res.end(JSON.stringify({ error: refusal }));
+      }
+      headers['host'] = new URL(url).host;
+      upstream = await fetch(url, {
+        method: req.method,
+        headers,
+        body: body.length ? body : undefined,
+        duplex: 'half',
+        redirect: 'manual',
+      });
+      const next = upstream.headers.get('location');
+      if (upstream.status < 300 || upstream.status > 399 || !next || hop >= 5) break;
+      url = new URL(next, url).href;
+    }
 
     const respHeaders = { ...cors };
     for (const [k, v] of upstream.headers) {
