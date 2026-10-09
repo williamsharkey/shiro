@@ -145,6 +145,10 @@ Everyday
   serve DIR              serve a folder in a preview window
   finder                 file manager
 
+Something wrong?
+  doctor                 check this tab (deploy, browser, network, sign-ins, storage):
+                         paste its output into a bug report (also: tabinfo)
+
 Try: claude "make a small page that plays a drum loop, then serve it"
 
 help --all lists every command; help NAME describes one.

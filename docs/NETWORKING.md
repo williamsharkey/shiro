@@ -232,3 +232,8 @@ token requests and asks `requireNetworkSignIn()` (src/net-signin.ts) once on a
 ("Use my own connection") is configured with `credentials: false`, so it never
 receives that token. See docs/DESKTOP.md, "Network sign-in".
 
+## Checking it from a tab
+
+`doctor` (src/commands/doctor.ts) requests a relay token (this site's
+`/tcp/token`, or the token URL of the user's own relay) and connects a kernel
+socket to example.com:443, printing each result and its latency.
