@@ -240,4 +240,46 @@ describe('kernel syscalls found by LTP', () => {
       expect(performance.now() - t1).toBeGreaterThanOrEqual(1.5);
     }
   });
+
+  it('socket01/socketpair01/bind04/connect03: AF_UNIX SOCK_DGRAM keeps message boundaries; named datagram sockets; EPROTOTYPE', async () => {
+    const stack = new NetStack();
+    stack.configure({ relayUrl: null, tokenUrl: null, dohUrl: null, portHost: null });
+    const off = installNet(kernel, stack);
+    const sv = new Uint8Array(8);
+    expect(await kernel.syscall(proc, A.SYS_socketpair, [A.AF_UNIX, A.SOCK_DGRAM, 0], sv)).toBe(0);
+    const [a, b] = [new DataView(sv.buffer).getInt32(0, true), new DataView(sv.buffer).getInt32(4, true)];
+    expect(await kernel.syscall(proc, A.SYS_write, [a, 3], enc.encode('abc'))).toBe(3);
+    expect(await kernel.syscall(proc, A.SYS_write, [a, 4], enc.encode('defg'))).toBe(4);
+    const buf = new Uint8Array(16);
+    expect(await kernel.syscall(proc, A.SYS_read, [b, 2], buf)).toBe(2); // "ab"; the "c" is dropped
+    expect(await kernel.syscall(proc, A.SYS_read, [b, 16], buf)).toBe(4);
+    expect(new TextDecoder().decode(buf.subarray(0, 4))).toBe('defg');
+    // A named datagram socket: sendto it, or connect and write; a stream socket can't connect to it
+    const s = await call(A.SYS_socket, [A.AF_UNIX, A.SOCK_DGRAM, 0]);
+    const sun = new Uint8Array(110);
+    sun[0] = A.AF_UNIX;
+    sun.set(enc.encode('/tmp/kc/dg'), 2);
+    expect(await kernel.syscall(proc, A.SYS_bind, [s, 110], sun)).toBe(0);
+    expect(await call(A.SYS_listen, [s, 1])).toBe(-A.EOPNOTSUPP);
+    const c = await call(A.SYS_socket, [A.AF_UNIX, A.SOCK_DGRAM, 0]);
+    const csun = new Uint8Array(110);
+    csun[0] = A.AF_UNIX;
+    csun.set(enc.encode('/tmp/kc/dg2'), 2);
+    expect(await kernel.syscall(proc, A.SYS_bind, [c, 110], csun)).toBe(0);
+    const msg = new Uint8Array(2 + 110);
+    msg.set(enc.encode('hi'));
+    msg.set(sun, 2);
+    expect(await kernel.syscall(proc, A.SYS_sendto, [c, 2, 0, 110], msg)).toBe(2);
+    expect(await kernel.syscall(proc, A.SYS_connect, [c, 110], sun)).toBe(0);
+    expect(await kernel.syscall(proc, A.SYS_write, [c, 3], enc.encode('bye'))).toBe(3);
+    // recvfrom names the (bound) sender, so a reply can go back (bind05)
+    const rf = new Uint8Array(16 + 128);
+    expect(await kernel.syscall(proc, A.SYS_recvfrom, [s, 16, 0], rf)).toBe(2);
+    expect(new TextDecoder().decode(rf.subarray(18, 29))).toBe('/tmp/kc/dg2');
+    expect(await kernel.syscall(proc, A.SYS_read, [s, 16], buf)).toBe(3);
+    const st = await call(A.SYS_socket, [A.AF_UNIX, A.SOCK_STREAM, 0]);
+    expect(await kernel.syscall(proc, A.SYS_connect, [st, 110], sun)).toBe(-A.EPROTOTYPE);
+    for (const fd of [a, b, s, c, st]) await call(A.SYS_close, [fd]);
+    off();
+  });
 });
