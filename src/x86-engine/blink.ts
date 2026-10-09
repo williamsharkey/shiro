@@ -201,8 +201,9 @@ async function servePoolChannel(kernel: Kernel, proc: Process, sab: SharedArrayB
  * readiness change posts one coalesced `blink-ready`, so a guest parked in
  * poll()/epoll wakes at once. Signals the kernel delivers to the process
  * (the worker installs handlers for them) are posted as `blink-signal`.
+ * (Exported for tests.)
  */
-function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: SharedArrayBuffer[]): void {
+export function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: SharedArrayBuffer[]): void {
   const busy = new Set<SharedArrayBuffer>();
   const direct: KernelChannel[] = [];
   // Same-instance fork children (Blink): kernel processes this worker runs
@@ -212,7 +213,29 @@ function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: SharedA
   // them when this worker ends (an exec's new worker brings its own) or the process does
   const stopDirect = () => { for (const ch of direct) ch.stop(); direct.length = 0; };
   const end = w.terminate.bind(w);
-  const terminate = () => { stopDirect(); return end(); };
+  // Fork children this engine never got to start (it aborted mid-fork, or
+  // between vfork and exec) can't run any more; they would hold the parent's
+  // fds open for good (apt waited forever on dpkg's --status-fd pipe), so they
+  // die as killed. A blink-fork already queued is handled first.
+  const sweep = () => setTimeout(() => {
+    for (const c of kernel.procs.values()) {
+      if (c.data.embryo && c.data.forkParent === proc.pid && !c.exiting) void kernel.exit(c, SIGKILL);
+    }
+  }, 1000);
+  const terminate = () => { stopDirect(); end(); sweep(); };
+  // The engine crashed (an abort or a wasm trap ends the whole instance): the
+  // children it hosted died with it.
+  let crashed = false;
+  const crash = () => {
+    if (crashed) return;
+    crashed = true;
+    for (const pid of [...hosted]) {
+      const c = kernel.procs.get(pid);
+      if (c && !c.exiting) void kernel.exit(c, SIGKILL);
+    }
+    sweep();
+  };
+  w.onError(() => crash());
   let ownGone = false;
   w.terminate = () => {
     ownGone = true;
@@ -276,6 +299,7 @@ function wireWorker(proc: Process, w: GuestWorker, kernel: Kernel, pool: SharedA
       });
     } else if (m?.type === 'blink-abort') {
       kernel.reportFatal(proc, `blink ${String(m.text)}`);
+      crash();
     } else if (m?.type === 'blink-watch') watch(m.fd);
     else if (m?.type === 'blink-unwatch') { subs.get(m.fd)?.(); subs.delete(m.fd); }
   });

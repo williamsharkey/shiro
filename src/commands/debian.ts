@@ -181,8 +181,17 @@ export const shiroAptCmd: Command = {
   async exec(ctx) {
     const [script = '/usr/bin/apt-get', ...args] = ctx.args;
     const q = (a: string) => `'${a.replace(/'/g, `'\\''`)}'`;
-    return ctx.shell.fork().executeWithStdin([script + '.debian', ...args].map(q).join(' '), ctx.stdin,
-      (t) => { ctx.stdout += t; }, (t) => { ctx.stderr += t; });
+    const out = (t: string) => { if (ctx.streamStdout) ctx.streamStdout(t); else ctx.stdout += t; };
+    const err = (t: string) => { if (ctx.streamStderr) ctx.streamStderr(t); else ctx.stderr += t; };
+    const { aptGuard } = await import('../debian/apt-guard');
+    return aptGuard({
+      script, args, uid: ctx.shell.uid ?? 1000, fs: ctx.fs as any,
+      // argv[0] can't be set from the shell; apt and apt-get don't look at it
+      // the caller's stdin goes to apt itself, not to the recovery runs
+      run: (path, argv) => ctx.shell.fork().executeWithStdin([path, ...argv.slice(1)].map(q).join(' '),
+        path === script + '.debian' ? ctx.stdin : '', out, err),
+      say: err,
+    });
   },
   async program(proc, kernel) {
     const { aptGuardProgram } = await import('../debian/apt-guard');
