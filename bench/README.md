@@ -68,7 +68,8 @@ node bench/ab.mjs origin/unix/integration --quick          # integration vs your
   same way. Significant but split rounds print as **inconsistent**;
   everything else is **same** (`AB_ALL=1` lists those too). Metrics whose
   samples are all identical on each side (request counts, decoded bytes,
-  DOM nodes) are compared exactly: any difference is reported.
+  DOM nodes) are compared exactly: a difference of at least `--min-effect`
+  percent is regressed/improved, a smaller one is reported as **changed**.
 - Exit status 1 when anything regressed. The summary goes to
   `bench/.cache/ab/runs/<time>/ab.json` (or `--out`), next to every raw
   per-round result file.
