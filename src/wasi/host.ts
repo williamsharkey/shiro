@@ -25,6 +25,7 @@ import {
 import type { WasiGuestMessage, WasiStartMessage, WasixForkState } from './guest-worker';
 import { ProcExit, WasiGuest, buildImports, type Preopen } from './wasi-guest';
 import { findMemoryImport } from './wasm-imports';
+import { packageShadows } from '../pkg-manager';
 import { createWorkerPool, type WorkerPool } from './worker-pool';
 import { dylinkLayout, readDylink } from './dylink';
 import { readFuncSigs, type FuncSigs } from './dyncall';
@@ -210,6 +211,19 @@ function installWasiSyscalls(kernel: Kernel): void {
 
 const BIN_DIR = /^\/(?:usr\/)?(?:local\/)?s?bin\/([^/]+)$/;
 
+/**
+ * The Shiro command a missing /bin/NAME path stands for, if any. Not one an
+ * installed program replaces (Debian's gcc, cc, make, or a pkg's): a PATH
+ * search must go on to that program's file. GNU make took the made-up
+ * /usr/local/bin/cc for its compiler, and the exec failed.
+ */
+function binCommandOf(kernel: Kernel, p: string | number): string | null {
+  const m = typeof p === 'string' ? BIN_DIR.exec(p) : null;
+  if (!m || !kernel.shell?.commands.get(m[1])) return null;
+  if (kernel.fs && packageShadows(kernel.fs).has(m[1])) return null;
+  return m[1];
+}
+
 /** binCommandStat will pass the call on: it isn't about a Shiro command's /bin path (kernel.syscallSync may answer it). */
 function binCommandPasses(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array, kernel: Kernel): boolean {
   const at = nr === A.SYS_newfstatat || nr === A.SYS_faccessat;
@@ -218,8 +232,7 @@ function binCommandPasses(proc: Process, nr: number, args: ArrayLike<number>, da
   const len = at ? args[1] : args[0];
   if (len <= 0 || len > data.length) return true;
   const p = kernel.resolvePath(proc, A.decodeText(data.subarray(0, len)), at ? args[0] : A.AT_FDCWD);
-  const m = typeof p === 'string' ? BIN_DIR.exec(p) : null;
-  return !m || !kernel.shell?.commands.get(m[1]);
+  return binCommandOf(kernel, p) === null;
 }
 
 /**
@@ -238,13 +251,13 @@ async function binCommandStat(proc: Process, nr: number, args: ArrayLike<number>
   const len = at ? args[1] : args[0];
   if (len <= 0 || len > data.length) return undefined;
   const p = kernel.resolvePath(proc, A.decodeText(data.subarray(0, len)), at ? args[0] : A.AT_FDCWD);
-  const m = typeof p === 'string' ? BIN_DIR.exec(p) : null;
-  if (!m || !kernel.shell?.commands.get(m[1])) return undefined;
+  const name = binCommandOf(kernel, p);
+  if (name === null) return undefined;
   if ((await kernel.statPath(proc, p as string, false)) !== -A.ENOENT) return undefined;
   if (nr === A.SYS_access || nr === A.SYS_faccessat) return 0;
   const now = Date.now();
   A.encodeStat({
-    dev: 1, ino: 0x5000000 + m[1].length * 7919 + m[1].charCodeAt(0), mode: A.S_IFREG | 0o755, nlink: 1, uid: 0, gid: 0, rdev: 0,
+    dev: 1, ino: 0x5000000 + name.length * 7919 + name.charCodeAt(0), mode: A.S_IFREG | 0o755, nlink: 1, uid: 0, gid: 0, rdev: 0,
     size: 0, blksize: 4096, blocks: 0, atimeMs: now, mtimeMs: now, ctimeMs: now,
   }, data);
   return 0;

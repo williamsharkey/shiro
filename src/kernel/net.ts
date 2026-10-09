@@ -539,6 +539,9 @@ export class KSocket implements OpenFile {
       new DataView(arg.buffer, arg.byteOffset, 4).setInt32(0, this.rxLen, true);
       return 0;
     }
+    // O_NONBLOCK is set on the description by the kernel's ioctl; EINVAL here
+    // failed CPython's socket.setblocking(False) (pip, urllib3 with a timeout)
+    if (req === FIONBIO) return 0;
     return -EINVAL;
   }
 
@@ -837,6 +840,7 @@ export class KDatagramSocket implements OpenFile {
       new DataView(arg.buffer, arg.byteOffset, 4).setInt32(0, this.rx[0]?.data.length ?? 0, true);
       return 0;
     }
+    if (req === FIONBIO) return 0; // the kernel set O_NONBLOCK on the description
     return -EINVAL;
   }
   async stat(): Promise<KStat> { return sockStat(this.ino); }

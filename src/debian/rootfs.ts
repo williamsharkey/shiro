@@ -306,4 +306,13 @@ export async function writeEngineWorkarounds(fs: FileSystem): Promise<void> {
     'Dpkg::Use-Pty "false";',
     '',
   ].join('\n'));
+  // glibc asks for A and AAAA at once with sendmmsg(), which Blink fails with
+  // EBADF on a kernel socket (getaddrinfo(AF_UNSPEC): "Temporary failure in
+  // name resolution", so pip couldn't reach PyPI); one query at a time works
+  try {
+    const conf = await fs.readFile('/etc/resolv.conf', 'utf8') as string;
+    if (!/^options .*single-request/m.test(conf)) {
+      await fs.writeFile('/etc/resolv.conf', `${conf.replace(/\n?$/, '\n')}options single-request\n`);
+    }
+  } catch { /* no resolv.conf: nothing to tune */ }
 }

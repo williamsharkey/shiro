@@ -43,6 +43,32 @@ Not available (yet), and why:
 | Deno, Bun | — | single ~100 MB binaries around V8 / JavaScriptCore JITs; Shiro's own `node` covers the npm use case |
 | PHP | — | owned by unix/wasix (WASIX build in `pkg`) |
 
+### Developer story on Debian packages (`apt`)
+
+Real Debian 13 packages in Debian mode ([DEBIAN.md](DEBIAN.md)), in headless
+Chromium against the built app (`server.mjs` with its package mirror and, for
+pip, `SHIRO_TCP_RELAY=1`). One page, one session; times are wall clock from
+the page (`apt-get update` ≈2m20s first).
+
+| Step | Result | Time | Notes |
+| --- | --- | --- | --- |
+| `sudo apt-get install -y build-essential` | pass | 5m50s–7m10s | gcc 14.2, g++, make 4.4.1, libc6-dev, dpkg-dev |
+| `gcc -O0 -o hello hello.c && ./hello` | pass | 10.7s compile+link | the x86-64 binary runs in Blink |
+| `make hello` (`$(CC)` = `cc`) | pass (after fix) | 10.9s | failed at first: Shiro's commands look like files in the bin directories to a PATH search, so make took a made-up `/usr/local/bin/cc` for its compiler; now an installed program replaces that (below) |
+| `sudo apt-get install -y python3-pip` | pass | 9m00s–10m05s | pip 25.1.1, Python 3.13.5; `python3` at the prompt is then Debian's |
+| `pip3 install --user --break-system-packages six` + import | pass (after fixes) | 1m30s install, 2.8s import | needs the TCP relay. Fixed on the way: socket `ioctl(FIONBIO)` was EINVAL (CPython's `setblocking(False)`), and glibc's parallel A+AAAA lookup fails in Blink (`sendmmsg` → EBADF, sent to perf-blink), so `debian install` sets `options single-request`. In this sandbox pip also needed `--cert` for its TLS-intercepting egress proxy, which a normal deployment doesn't have |
+| `sudo apt-get install -y nodejs` | installs | 2m25s | Debian's node 20.19.2 |
+| node: which wins | Debian's | — | in Debian mode a program file on PATH replaces the builtin of that name, so `node` is `/usr/bin/node` once nodejs is installed; `builtin node` still runs Shiro's (v20 shim, 0.2s) |
+| `/usr/bin/node -e 1` | **fail** (Blink) | ~9s to SIGSEGV | `--version` works; any script segfaults, also `--jitless --single-threaded`; repro sent to perf-blink (V8 sees BMI2 without BMI1/SSE4.1). Until then `builtin node` runs Shiro's |
+| `sudo apt-get install -y golang-go` | installs | 5m05s–10m40s | go1.24.4 linux/amd64 |
+| `go run hello.go` | **fail** (Blink) | 35m to the link step | the compile of `fmt` and its std dependencies under Blink finishes (into GOCACHE, kept for later runs), then cmd/link stops: "mapping output file failed: function not implemented" (Blink answers `fallocate` with ENOSYS; Go tolerates only EOPNOTSUPP; sent to perf-blink). Shiro's own `pkg install go` (wasip1 toolchain) builds and runs Go programs |
+
+Shiro-side fixes from this (tests in `debian.test.ts`, `kernel-net.test.ts`):
+`binCommandStat` (src/wasi/host.ts) no longer makes up a `/bin/NAME` file for
+a builtin that an installed program replaces; Debian shadows count a program
+symlink whose target isn't unpacked yet (dpkg unpacks `gcc -> gcc-14` first);
+sockets accept `FIONBIO`; resolv.conf gets `single-request`.
+
 Shell and platform fixes these needed (all with tests in the same file):
 
 - Node, for pnpm: `require.resolve` (with `paths`), `require.resolve.paths`,
@@ -88,7 +114,9 @@ Shell and platform fixes these needed (all with tests in the same file):
   parent waiting on a child `node` (pnpm run → node app.js) kept the child
   from ever looking idle, and each waited on the other for the 10-minute
   cap. The cap on a script's async phase is 10 minutes (was 10 s, which
-  killed pnpm during its retry back-off).
+  killed pnpm during its retry back-off). An fs callback still to come
+  counts as activity too (for up to 30 s), as fs.promises calls did: under
+  load the 150 ms idle window could fall between two of pnpm's calls.
 
 
 - Shebangs: `#!/usr/bin/env NAME` (with `-S` and `VAR=value`) and absolute

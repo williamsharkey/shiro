@@ -1,5 +1,6 @@
 import type { CommandContext } from '../../commands/index';
 import { decodeUtf8Strict } from '../preload';
+import { PAGE_SET_TIMEOUT } from '../page-globals';
 
 export interface FsDeps {
   ctx: CommandContext;
@@ -10,6 +11,8 @@ export interface FsDeps {
   FakeBuffer: any;
   getBuiltinModule: (name: string) => any;
   homeDir: string;
+  /** Counts a promise as the script's async activity (an fs callback still to come) */
+  trackAsync?: <T>(p: Promise<T>) => Promise<T>;
 }
 
 /** Create a Node.js-style fs error with code, errno, syscall properties */
@@ -1326,7 +1329,12 @@ export function createFsModule(deps: FsDeps): any {
       const last = args.length - 1;
       if (last >= 0 && typeof args[last] === 'function') {
         const cb = args[last];
-        args[last] = (...r: any[]) => queueMicrotask(() => cb(...r));
+        // A callback still to come is activity (as fs.promises calls are): a
+        // busy page could stretch the gap between two calls past idle-exit.
+        // Bounded, so a call that never answers can't hold the script open.
+        let settle!: () => void;
+        deps.trackAsync?.(new Promise<void>((r) => { settle = r; PAGE_SET_TIMEOUT(r, 30_000); }));
+        args[last] = (...r: any[]) => queueMicrotask(() => { settle(); cb(...r); });
       }
       return f.apply(this, args);
     };

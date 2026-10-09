@@ -192,6 +192,11 @@ export function debianShadows(fs: FileSystem): Set<string> {
 async function hasProgramFile(fs: FileSystem, name: string): Promise<boolean> {
   for (const dir of BIN_DIRS) {
     try {
+      // A symlink counts as it is: dpkg unpacks /usr/bin/gcc -> gcc-14 before
+      // gcc-14, so following it then found nothing, gcc stayed Shiro's, and
+      // make's execvp("gcc") ran Shiro's compiler from /usr/local/bin/gcc
+      const l = await fs.lstat(`${dir}/${name}`);
+      if (l.type === 'symlink') return true;
       const st = await fs.stat(`${dir}/${name}`);
       if (st.type === 'file') return true;
     } catch { /* not here */ }
