@@ -13,6 +13,7 @@ import {
 import { getShiroOrigin } from '../utils/shiro-origin';
 import { activeProfile } from '../profile';
 import { gitPlumbing } from './git-plumbing';
+import { splitShortOptions, unknownOption, realGit, PREFER_REAL } from './git-route';
 import { GLOBAL_GITCONFIG, parseGitConfig, formatGitConfig } from './git-config';
 
 // --- Main command ---
@@ -22,6 +23,7 @@ export const gitCmd: Command = {
   description: 'Version control system',
   async exec(ctx: CommandContext) {
     // Global options before the subcommand (git -C /path -c k=v --no-pager subcmd ...)
+    const argv = ctx.args, cwd0 = ctx.cwd; // as given, for the real git
     let workDir = ctx.cwd;
     const configOverrides: [string, string][] = [];
     let ai = 0;
@@ -54,9 +56,38 @@ export const gitCmd: Command = {
       return 0;
     }
 
+    if (ctx.args.includes('--help') || (ctx.args.length === 2 && ctx.args[1] === '-h')) {
+      ctx.stdout = `usage: git ${subcommand} [<options>] [<args>]\n\n(the built-in git; \`pkg install git\` for the full git and its manual)\n`;
+      return 0;
+    }
+    // What the built-in doesn't know (a subcommand, an option) is the real git's; combined short options split first
+    ctx.args = [subcommand, ...splitShortOptions(subcommand, ctx.args.slice(1))];
+    const unknown = unknownOption(subcommand, ctx.args.slice(1));
+    if (unknown !== null || PREFER_REAL.has(subcommand)) {
+      const code = await realGit(ctx, argv, cwd0);
+      if (code !== null) return code;
+      const full = '(the built-in git; `pkg install git` has the full git, which needs the x86 engine)\n';
+      if (unknown === subcommand) {
+        ctx.stderr = `git: '${unknown}' is not a git command. See 'git --help'.\n${full}`;
+        return 1;
+      }
+      if (unknown?.includes(' ')) {
+        ctx.stderr = `error: unknown subcommand: \`${unknown.split(' ')[1]}'\nusage: git ${subcommand} ...\n${full}`;
+        return 129;
+      }
+      if (unknown !== null) {
+        ctx.stderr = (unknown.startsWith('--') ? `error: unknown option \`${unknown.slice(2)}'\n` : `error: unknown switch \`${unknown.slice(1)}'\n`)
+          + `usage: git ${subcommand} [<options>]\n${full}`;
+        return 129;
+      }
+    }
+
     const fs = ctx.fs.toIsomorphicGitFS();
     // The repository is the nearest directory up from here with a .git, as for git
     let dir = workDir;
+    if (subcommand === 'ls-remote' && /[:@]/.test(ctx.args.find((a, i) => i > 0 && !a.startsWith('-')) ?? '')) {
+      return lsRemote(ctx, fs, workDir, null);
+    }
     if (!['init', 'clone', 'config'].includes(subcommand)) {
       let root: string | null = workDir;
       while (root && !(await ctx.fs.exists(root === '/' ? '/.git' : `${root}/.git`))) {
@@ -603,10 +634,13 @@ export const gitCmd: Command = {
           let url = '';
           let cloneTarget = '';
           let cloneDepth = 1;
+          let cloneBranch: string | undefined;
           for (let i = 0; i < cloneArgs.length; i++) {
             const a = cloneArgs[i];
             if (a === '--depth' && i + 1 < cloneArgs.length) { cloneDepth = parseInt(cloneArgs[++i], 10) || 1; continue; }
-            if (a === '--branch' || a === '-b') { i++; continue; }
+            if (a.startsWith('--depth=')) { cloneDepth = parseInt(a.slice(8), 10) || 1; continue; }
+            if (a === '--branch' || a === '-b') { cloneBranch = cloneArgs[++i]; continue; }
+            if (a.startsWith('--branch=')) { cloneBranch = a.slice(9); continue; }
             if (a === '--single-branch' || a === '--no-tags' || a === '--quiet' || a === '-q') continue;
             if (a.startsWith('-')) continue;
             if (!url) { url = a; } else if (!cloneTarget) { cloneTarget = a; }
@@ -642,6 +676,7 @@ export const gitCmd: Command = {
                 corsProxy,
                 singleBranch: true,
                 depth: cloneDepth,
+                ...(cloneBranch ? { ref: cloneBranch } : {}),
                 onProgress: async () => {
                   await new Promise(resolve => setTimeout(resolve, 0));
                 },
@@ -737,12 +772,18 @@ export const gitCmd: Command = {
               fs, http, dir,
               remote,
               ref: currentBranch,
+              force: ctx.args.includes('-f') || ctx.args.includes('--force'),
               corsProxy,
               ...githubAuth(token, pushUrl),
               onMessage: (msg: string) => { ctx.stdout += msg; },
             });
             if (result.ok) {
               ctx.stdout += `done.\n`;
+              if (ctx.args.includes('-u') || ctx.args.includes('--set-upstream')) {
+                await git.setConfig({ fs, dir, path: `branch.${currentBranch}.remote`, value: remote });
+                await git.setConfig({ fs, dir, path: `branch.${currentBranch}.merge`, value: `refs/heads/${currentBranch}` });
+                ctx.stdout += `branch '${currentBranch}' set up to track '${remote}/${currentBranch}'.\n`;
+              }
             } else {
               ctx.stderr = `error: push failed\n`;
               if (result.refs) {
@@ -775,6 +816,10 @@ export const gitCmd: Command = {
             ? (await git.listRemotes({ fs, dir })).map(r => r.remote)
             : [remote];
           for (const r of remotes) {
+            if (!(await remoteUrl(fs, dir, r))) {
+              ctx.stderr += `fatal: '${r}' does not appear to be a git repository\nfatal: Could not read from remote repository.\n`;
+              return 128;
+            }
             if (!quiet) ctx.stderr += `Fetching ${r}\n`;
             await git.fetch({
               fs, http, dir,
@@ -806,24 +851,48 @@ export const gitCmd: Command = {
         }
 
         case 'merge': {
-          const theirs = ctx.args[1];
+          let noFF = false, ffOnly = false, quiet = false, message: string | undefined;
+          const names: string[] = [];
+          for (let i = 1; i < ctx.args.length; i++) {
+            const a = ctx.args[i];
+            if (a === '--no-ff') noFF = true;
+            else if (a === '--ff') noFF = false;
+            else if (a === '--ff-only') ffOnly = true;
+            else if (a === '-q' || a === '--quiet') quiet = true;
+            else if (a === '-m' || a === '--message') message = ctx.args[++i];
+            else if (a.startsWith('--message=')) message = a.slice(10);
+            else if (!a.startsWith('-')) names.push(a);
+          }
+          const theirs = names[0];
           if (!theirs) {
-            ctx.stderr = 'usage: git merge <branch>\n';
-            return 1;
+            ctx.stderr = 'fatal: No remote for the current branch.\n';
+            return 128;
           }
-          const mergeResult = await git.merge({
-            fs, dir,
-            ours: await git.currentBranch({ fs, dir }) || 'main',
-            theirs,
-            author: await resolveAuthor(ctx, fs, dir),
-          });
-          if (mergeResult.alreadyMerged) {
-            ctx.stdout = 'Already up to date.\n';
-          } else if (mergeResult.fastForward) {
-            ctx.stdout = `Fast-forward merge to ${mergeResult.oid?.slice(0, 7)}\n`;
-          } else {
-            ctx.stdout = `Merge made by the 'recursive' strategy. ${mergeResult.oid?.slice(0, 7)}\n`;
+          const ours = await git.currentBranch({ fs, dir }) || 'main';
+          const before = await git.resolveRef({ fs, dir, ref: 'HEAD' });
+          let mergeResult;
+          try {
+            mergeResult = await git.merge({
+              fs, dir, ours, theirs,
+              fastForward: !noFF,
+              fastForwardOnly: ffOnly,
+              message: message ?? `Merge branch '${theirs}'`,
+              author: await resolveAuthor(ctx, fs, dir),
+            });
+          } catch (e: any) {
+            if (e.code === 'MergeConflictError' || e.code === 'MergeNotSupportedError') {
+              ctx.stderr = `CONFLICT (content): Merge conflict in ${(e.data?.filepaths ?? []).join(', ') || 'the work tree'}\nAutomatic merge failed; nothing was changed (the built-in git; \`pkg install git\` merges with conflict markers).\n`;
+              return 1;
+            }
+            if (e.code === 'FastForwardError') { ctx.stderr = 'fatal: Not possible to fast-forward, aborting.\n'; return 128; }
+            throw e;
           }
+          // the merge moved the branch; the work tree and index follow
+          if (!mergeResult.alreadyMerged) await git.checkout({ fs, dir, ref: ours });
+          if (quiet) break;
+          if (mergeResult.alreadyMerged) ctx.stdout = 'Already up to date.\n';
+          else if (mergeResult.fastForward) ctx.stdout = `Updating ${before.slice(0, 7)}..${mergeResult.oid?.slice(0, 7)}\nFast-forward\n`;
+          else ctx.stdout = `Merge made by the 'ort' strategy.\n`;
           break;
         }
 
@@ -933,7 +1002,8 @@ export const gitCmd: Command = {
             ctx.stderr = `fatal: no rebase in progress\n`;
             return 1;
           }
-          const target = ctx.args[1];
+          const rebaseQuiet = ctx.args.includes('-q') || ctx.args.includes('--quiet');
+          const target = ctx.args.slice(1).find(a => !a.startsWith('-'));
           if (!target) { ctx.stderr = 'usage: git rebase <branch>\n'; return 1; }
           let targetOid: string;
           try {
@@ -997,9 +1067,12 @@ export const gitCmd: Command = {
             }
             await git.commit({ fs, dir, message: entry.commit.message, author: entry.commit.author });
           }
-          ctx.stdout = `Successfully rebased and updated refs/heads/${currentBranch}.\n`;
+          if (!rebaseQuiet) ctx.stdout = `Successfully rebased and updated refs/heads/${currentBranch}.\n`;
           return 0;
         }
+
+        case 'ls-remote':
+          return lsRemote(ctx, fs, dir, dir);
 
         case 'reflog': {
           // isomorphic-git has no reflog; show current HEAD as single entry
@@ -1136,6 +1209,36 @@ export function githubAuth(token: string, url: string | undefined): Record<strin
     onAuth: () => ({ username: 'x-access-token', password: token }),
     onAuthFailure: () => ({ cancel: true }),
   };
+}
+
+/** `git ls-remote [--heads|--tags] URL|REMOTE [patterns]` */
+async function lsRemote(ctx: CommandContext, fs: any, cwd: string, dir: string | null): Promise<number> {
+  const pos = ctx.args.slice(1).filter(a => !a.startsWith('-'));
+  const target = pos[0] ?? 'origin';
+  const url = dir && !/[:@]/.test(target) ? await remoteUrl(fs, dir, target) : target;
+  if (!url) { ctx.stderr = `fatal: '${target}' does not appear to be a git repository\n`; return 128; }
+  const { token, corsProxy } = parseRemoteArgs(ctx);
+  void cwd;
+  const heads = ctx.args.includes('--heads') || ctx.args.includes('-h') || ctx.args.includes('--branches');
+  const tags = ctx.args.includes('--tags') || ctx.args.includes('-t');
+  let refs: { ref: string; oid: string; target?: string; peeled?: string }[];
+  try {
+    refs = await git.listServerRefs({ http, url, corsProxy, symrefs: true, peelTags: true, ...githubAuth(token, url) });
+  } catch (e: any) {
+    ctx.stderr = `fatal: unable to access '${url}': ${e.message}\n`;
+    return 128;
+  }
+  const pats = pos.slice(1);
+  let out = '';
+  for (const r of refs) {
+    if (heads && !r.ref.startsWith('refs/heads/')) continue;
+    if (tags && !r.ref.startsWith('refs/tags/')) continue;
+    if (pats.length && !pats.some(p => r.ref === p || r.ref.endsWith('/' + p))) continue;
+    out += `${r.oid}\t${r.ref}\n`;
+    if (r.peeled) out += `${r.peeled}\t${r.ref}^{}\n`;
+  }
+  if (!ctx.args.includes('-q') && !ctx.args.includes('--quiet')) ctx.stdout += out;
+  return 0;
 }
 
 async function remoteUrl(fs: any, dir: string, remote: string): Promise<string | undefined> {
