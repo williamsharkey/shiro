@@ -8,6 +8,7 @@
  * Data is handled as bytes; the transfer summary goes to stderr like GNU's.
  */
 
+import { decodeBytes, encodeText } from '../utils/byte-text';
 import type { Command, CommandContext } from './index';
 
 class DdError extends Error {}
@@ -40,15 +41,8 @@ function humanBytes(n: number, base: number): string {
   return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[u]}`;
 }
 
-function bytesToText(b: Uint8Array): string {
-  try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(b);
-  } catch {
-    let s = '';
-    for (let i = 0; i < b.length; i += 8192) s += String.fromCharCode(...b.subarray(i, i + 8192));
-    return s;
-  }
-}
+/** Byte-exact text for stdout (src/utils/byte-text.ts) */
+const bytesToText = decodeBytes;
 
 async function readSource(ctx: CommandContext, path: string, need: number): Promise<Uint8Array> {
   if (path === '/dev/zero') return new Uint8Array(need);
@@ -58,7 +52,7 @@ async function readSource(ctx: CommandContext, path: string, need: number): Prom
     return out;
   }
   if (path === '/dev/null') return new Uint8Array(0);
-  if (path === '/dev/stdin' || path === '-') return new TextEncoder().encode(ctx.stdin || '');
+  if (path === '/dev/stdin' || path === '-') return encodeText(ctx.stdin || '');
   const abs = ctx.fs.resolvePath(path, ctx.cwd);
   let st: any = null;
   try { st = await ctx.fs.stat(abs); } catch {}
@@ -66,7 +60,7 @@ async function readSource(ctx: CommandContext, path: string, need: number): Prom
   if (st.isDirectory()) throw new DdError(`error reading '${path}': Is a directory`);
   if (!(st.mode & 0o400) && st.isFile?.()) throw new DdError(`failed to open '${path}': Permission denied`);
   const d = await ctx.fs.readFile(abs);
-  return typeof d === 'string' ? new TextEncoder().encode(d) : d;
+  return typeof d === 'string' ? encodeText(d) : d;
 }
 
 export const ddCmd: Command = {
@@ -122,7 +116,7 @@ export const ddCmd: Command = {
       // Input bytes
       let input: Uint8Array;
       if (ifPath === null) {
-        input = new TextEncoder().encode(ctx.stdin || '');
+        input = encodeText(ctx.stdin || '');
       } else {
         const want = countBytes >= 0 ? skipBytes + countBytes : (ifPath === '/dev/zero' || /random$/.test(ifPath) ? -1 : 0);
         if (want < 0) throw new DdError(`${ifPath}: reading an endless device needs count=`);
@@ -173,7 +167,7 @@ export const ddCmd: Command = {
         if (!est && conv.has('nocreat')) throw new DdError(`failed to open '${ofPath}': No such file or directory`);
         if (est) {
           const d = await ctx.fs.readFile(abs);
-          existing = typeof d === 'string' ? new TextEncoder().encode(d) : d;
+          existing = typeof d === 'string' ? encodeText(d) : d;
         }
         let result: Uint8Array;
         if (oflag.has('append')) {

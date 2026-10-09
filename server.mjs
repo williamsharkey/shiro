@@ -11,9 +11,11 @@ import { join, extname } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { randomBytes, createHmac, createHash, timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import { realpathSync, readFileSync } from 'node:fs';
+import { realpathSync, readFileSync, readdirSync } from 'node:fs';
 import net from 'node:net';
 import dns from 'node:dns/promises';
+import https from 'node:https';
+import http from 'node:http';
 
 const PORT = process.env.PORT || 3000;
 const STATIC_DIR = process.env.STATIC_DIR || '/opt/shiro/public';
@@ -306,24 +308,45 @@ function handleOAuthCallback(req, res) {
   res.end(html);
 }
 
-// --- Branding of the app shell ---
-// The Unix edition (desktop UI: every host but shiro.computer, src/ui-mode.ts)
-// is "tabcomputer": src/brand.json names it. Link previews don't run JS, so the
-// shared index.html gets its title and meta tags here. The file is read from
-// src/ next to this script (a checkout) or from STATIC_DIR (the build copies it
-// into dist/; tabcomputer.com's releases carry only dist/ and server.mjs).
-// Without it nothing changes.
-const BRAND = (() => {
-  for (const at of [new URL('./src/brand.json', import.meta.url), join(STATIC_DIR, 'brand.json')]) {
-    try { return JSON.parse(readFileSync(at, 'utf8')); } catch {}
-  }
-  return null;
+// --- Product profiles (docs/PROFILES.md) ---
+// profiles/<id>/profile.json says which hosts a product serves and its brand;
+// the page reads the same files (src/profile.ts). Read from profiles/ next to
+// this script (a checkout) or STATIC_DIR/profiles.json (the build writes it;
+// releases carry only dist/ and server.mjs). Without either, nothing is branded.
+const PROFILES = (() => {
+  try {
+    const dir = new URL('./profiles/', import.meta.url);
+    const found = readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .flatMap((d) => { try { return [JSON.parse(readFileSync(new URL(`${d.name}/profile.json`, dir), 'utf8'))]; } catch { return []; } });
+    if (found.length) return found;
+  } catch {}
+  try { return JSON.parse(readFileSync(join(STATIC_DIR, 'profiles.json'), 'utf8')); } catch {}
+  return [];
 })();
 
-/** index.html with the brand's title and meta tags, for hosts that get the desktop. */
-export function brandAppShell(html, host, brand = BRAND) {
-  const hostname = String(host || '').split(':')[0].toLowerCase();
-  if (!brand || hostname === 'shiro.computer' || hostname.endsWith('.shiro.computer')) return html;
+// The same choice as profiles/select.mjs (not imported: a release has no
+// profiles/ directory); desktop-wm.test.ts checks the two agree.
+function hostMatches(pattern, hostname) {
+  const h = String(hostname || '').toLowerCase().replace(/\.$/, '');
+  const p = String(pattern).toLowerCase();
+  return p.startsWith('*.') ? h.endsWith(p.slice(1)) : h === p;
+}
+export function profileFor(host, override, profiles = PROFILES) {
+  const hostname = String(host || '').split(':')[0];
+  if (override) { const named = profiles.find((p) => p.id === override); if (named) return named; }
+  return profiles.find((p) => (p.hosts || []).some((pat) => hostMatches(pat, hostname)))
+    ?? profiles.find((p) => p.default) ?? profiles[0] ?? null;
+}
+
+// --- Branding of the app shell ---
+// Link previews don't run JS, so the shared index.html gets the profile's
+// title and meta tags here. A profile without a brand (shiro.computer) keeps
+// the page's own.
+
+/** index.html with the brand's title and meta tags, for the profile serving `host`. */
+export function brandAppShell(html, host, brand = profileFor(host)?.brand) {
+  if (!brand) return html;
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
   const url = `https://${brand.domain}/`;
   const tags = [
@@ -337,7 +360,9 @@ export function brandAppShell(html, host, brand = BRAND) {
     `<meta name="application-name" content="${esc(brand.name)}" />`,
     `<meta name="apple-mobile-web-app-title" content="${esc(brand.name)}" />`,
   ].join('\n  ');
-  return html.replace(/<title>[^<]*<\/title>/, `<title>${esc(brand.name)}</title>\n  ${tags}`);
+  let out = html.replace(/<title>[^<]*<\/title>/, `<title>${esc(brand.name)}</title>\n  ${tags}`);
+  if (brand.favicon) out = out.replace(/href="\/favicon\.svg"/, `href="${esc(brand.favicon)}"`);
+  return out;
 }
 
 // --- Static file server ---
@@ -377,7 +402,10 @@ async function handleStatic(req, res) {
     // the app in iframes and need nothing from SharedArrayBuffer.
     const isAppShell = filePath === join(STATIC_DIR, 'index.html');
     const isolation = isAppShell || ext === '.js' || ext === '.mjs' ? isolationHeaders() : {};
-    if (isAppShell) data = Buffer.from(brandAppShell(data.toString('utf8'), req.headers['host']));
+    if (isAppShell) {
+      const override = new URL(req.url, 'http://localhost').searchParams.get('profile');
+      data = Buffer.from(brandAppShell(data.toString('utf8'), req.headers['host'], profileFor(req.headers['host'], override)?.brand));
+    }
     // The streamed Debian rootfs's chunks are content-addressed (named by sha256)
     const immutable = pathname.startsWith('/debian/chunks/') ? { 'cache-control': 'public, max-age=31536000, immutable' } : {};
     res.writeHead(200, { 'content-type': MIME[ext] || 'application/octet-stream', ...staticHeaders, ...isolation, ...immutable });
@@ -1226,12 +1254,164 @@ export function createTcpRelay(config, { lookup, log = console.log, verifySignin
   };
 }
 
+// --- Browser app: browse origins (docs/BROWSER.md) ---
+// Each site the desktop's Browser app shows lives on its own origin, one DNS
+// label per real origin (src/browser/origin-map.ts): https://{key}.web.<domain>.
+// Those hosts serve only three scripts and a bootstrap page that installs the
+// origin's service worker; all content comes from the app's broker in the
+// user's page. They never serve the app, /api, /tcp or anything else.
+//   SHIRO_BROWSE_ORIGIN       template; default https://{key}.web.<brand domain> on the brand
+//                             domain and its instances (music.<domain>, …), http://{key}.localhost:PORT
+//                             on localhost, else off. Needs wildcard DNS and a *.web.<domain> certificate.
+//   SHIRO_BROWSE_APP_ORIGINS  origins (with *. wildcards) whose Browser may use them; default the
+//                             brand domain and its subdomains, or http://localhost:PORT
+//   SHIRO_BROWSE=0            off
+export function browseConfigFor(hostHeader, env = process.env, brand = profileFor(hostHeader)?.brand) {
+  if (env.SHIRO_BROWSE === '0') return null;
+  const host = String(hostHeader || '').toLowerCase();
+  let template = env.SHIRO_BROWSE_ORIGIN || '';
+  let apps = envList(env.SHIRO_BROWSE_APP_ORIGINS);
+  if (!template) {
+    const local = /^(?:[a-z0-9-]+\.)*localhost(:\d+)?$/.exec(host);
+    const domain = String(brand?.domain || '').toLowerCase();
+    if (local) {
+      template = `http://{key}.localhost${local[1] || ''}`;
+      apps ||= [`http://localhost${local[1] || ''}`];
+    } else if (domain && (host === domain || host.endsWith('.' + domain))) {
+      template = `https://{key}.web.${domain}`;
+      apps ||= [`https://${domain}`, `https://*.${domain}`];
+    } else return null;
+  }
+  template = template.toLowerCase().replace(/\/+$/, '');
+  const tm = /^(https?):\/\/\{key\}\.([a-z0-9.-]+(?::\d+)?)$/.exec(template);
+  if (!tm) return null;
+  apps ||= [`${tm[1]}://${tm[2]}`];
+  return {
+    template,
+    scheme: tm[1],
+    suffix: tm[2],                       // host[:port] after "{key}."
+    apps: apps.map((a) => a.toLowerCase()),
+  };
+}
+
+/** The app origin a request to the app host comes from (for /browse/config.json). */
+function appOriginOf(req, cfg) {
+  return `${cfg.scheme}://${String(req.headers.host || '').toLowerCase()}`;
+}
+
+/** The browse key when `hostHeader` is a browse host of `cfg`, else null. */
+export function browseKeyOf(hostHeader, cfg) {
+  if (!cfg || !hostHeader) return null;
+  const host = String(hostHeader).toLowerCase();
+  if (!host.endsWith('.' + cfg.suffix)) return null;
+  const key = host.slice(0, -cfg.suffix.length - 1);
+  // Keys are one label with at least one dash (a dot of the real host): never "www" or "api"
+  return /^[a-z0-9-]{1,63}$/.test(key) && key.includes('-') && !key.startsWith('-') && !key.endsWith('-') ? key : null;
+}
+
+function browseHeaders(cfg) {
+  const browseAny = `${cfg.scheme}://*.${cfg.suffix}`;
+  return {
+    'cross-origin-embedder-policy': 'credentialless',
+    'cross-origin-resource-policy': 'cross-origin',
+    'origin-agent-cluster': '?1',
+    'x-content-type-options': 'nosniff',
+    'referrer-policy': 'no-referrer',
+    'content-security-policy': `default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; frame-ancestors ${cfg.apps.join(' ')} ${browseAny}`,
+  };
+}
+
+const BROWSE_SCRIPTS = new Set(['sw.js', 'boot.js', 'client.js']);
+
+async function handleBrowseHost(req, res, cfg) {
+  const pathname = new URL(req.url, 'http://localhost').pathname;
+  const headers = browseHeaders(cfg);
+  if (pathname.startsWith('/__tc/')) {
+    const name = pathname.slice('/__tc/'.length);
+    if (!BROWSE_SCRIPTS.has(name)) { res.writeHead(404, headers); return res.end(); }
+    try {
+      const data = await readFile(join(STATIC_DIR, 'browse', name));
+      res.writeHead(200, {
+        ...headers,
+        'content-type': 'application/javascript; charset=utf-8',
+        'cache-control': 'no-cache',
+        ...(name === 'sw.js' ? { 'service-worker-allowed': '/' } : {}),
+      });
+      return res.end(data);
+    } catch {
+      res.writeHead(404, headers);
+      return res.end();
+    }
+  }
+  if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'POST') { res.writeHead(405, headers); return res.end(); }
+  const esc = (s) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title></title>`
+    + `<script src="/__tc/boot.js" data-apps="${esc(cfg.apps.join(' '))}"></script></head><body></body></html>`;
+  res.writeHead(200, { ...headers, 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(req.method === 'HEAD' ? undefined : html);
+}
+
+// --- Browser app: server-side fetch, for local measurement only ---
+// The product path is TLS in the page over /tcp (the server only sees
+// ciphertext). This transport makes the *server* do the request, so it sees
+// plaintext: it exists only to compare the two on the scoreboard, is off unless
+// SHIRO_BROWSE_SERVER_FETCH=1, and must never be set in production (owner
+// decision, docs/BROWSER.md). Same address policy as the relay.
+const BROWSE_SERVER_FETCH = process.env.SHIRO_BROWSE_SERVER_FETCH === '1';
+const browseAgents = { 'https:': new https.Agent({ keepAlive: true, maxSockets: 6 }), 'http:': new http.Agent({ keepAlive: true, maxSockets: 6 }) };
+
+async function handleBrowseFetch(req, res) {
+  const fail = (status, msg) => { res.writeHead(status, { 'content-type': 'text/plain' }); res.end(msg); };
+  const browse = browseConfigFor(req.headers.host);
+  const origin = req.headers.origin;
+  if (req.method !== 'POST' || !browse || (origin && origin !== `${browse.scheme}://${String(req.headers.host).toLowerCase()}`)) return fail(403, 'forbidden');
+  let target, method, headers;
+  try {
+    target = new URL(String(req.headers['x-tc-url']));
+    method = String(req.headers['x-tc-method'] || 'GET').toUpperCase();
+    headers = JSON.parse(decodeURIComponent(String(req.headers['x-tc-headers'] || '%5B%5D')));
+  } catch { return fail(400, 'bad request'); }
+  if (!/^https?:$/.test(target.protocol) || !/^[A-Z]+$/.test(method)) return fail(400, 'bad request');
+  const host = target.hostname.replace(/^\[|\]$/g, '');
+  let addrs;
+  try { addrs = net.isIP(host) ? [{ address: host }] : await dns.lookup(host, { all: true, verbatim: true }); } catch { return fail(502, 'ENOTFOUND'); }
+  const usable = addrs.filter((a) => !isBlockedAddress(a.address, { allow: cidrBlockList(envList(process.env.SHIRO_TCP_ALLOW_CIDRS) || []), deny: cidrBlockList([]) }));
+  if (!usable.length) return fail(403, 'address blocked by relay policy');
+  const port = Number(target.port) || (target.protocol === 'https:' ? 443 : 80);
+  if (!(envList(process.env.SHIRO_TCP_PORTS) || TCP_DEFAULT_PORTS).map(Number).includes(port)) return fail(403, 'port blocked');
+  const flat = {};
+  for (const [k, v] of headers) { const n = String(k).toLowerCase(); if (n !== 'host' && n !== 'connection' && n !== 'content-length' && n !== 'transfer-encoding') flat[k] = flat[k] ? `${flat[k]}, ${v}` : String(v); }
+  const mod = target.protocol === 'https:' ? https : http;
+  const up = mod.request({
+    host: usable[0].address, port, method, path: target.pathname + target.search, servername: net.isIP(host) ? undefined : host,
+    headers: { ...flat, host: target.host }, agent: browseAgents[target.protocol], timeout: 30000,
+  }, (r) => {
+    const pairs = [];
+    for (let i = 0; i < r.rawHeaders.length; i += 2) pairs.push([r.rawHeaders[i], r.rawHeaders[i + 1]]);
+    res.writeHead(200, { 'content-type': 'application/octet-stream', 'x-tc-status': String(r.statusCode), 'x-tc-status-text': encodeURIComponent(r.statusMessage || ''), 'x-tc-headers': encodeURIComponent(JSON.stringify(pairs)) });
+    r.pipe(res);
+  });
+  up.on('timeout', () => up.destroy(new Error('timeout')));
+  up.on('error', (e) => { if (!res.headersSent) fail(502, e.code || 'EIO'); else res.destroy(); });
+  req.pipe(up);
+}
+
 // --- HTTP server ---
 const TCP_RELAY_CONFIG = tcpRelayConfigFromEnv();
 const tcpRelay = TCP_RELAY_CONFIG.enabled ? createTcpRelay(TCP_RELAY_CONFIG) : null;
 
 const server = createServer(async (req, res) => {
   const pathname = new URL(req.url, 'http://localhost').pathname;
+
+  const browse = browseConfigFor(req.headers.host);
+  if (browseKeyOf(req.headers.host, browse)) return handleBrowseHost(req, res, browse);
+  if (pathname === '/browse/config.json') {
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+    return res.end(JSON.stringify(browse ? { origin: browse.template, app: appOriginOf(req, browse), ...(BROWSE_SERVER_FETCH ? { serverFetch: true } : {}) } : { origin: null }));
+  }
+  if (pathname === '/browse/fetch' && BROWSE_SERVER_FETCH) {
+    return handleBrowseFetch(req, res);
+  }
 
   if (pathname === '/tcp/token' && tcpRelay) {
     return tcpRelay.handleToken(req, res);
@@ -1293,6 +1473,7 @@ const CHANNEL_PATH = /^\/channel\/[a-f0-9]{1,64}$/;
 const wss = new WebSocketServer({ noServer: true });
 server.on('upgrade', (req, socket, head) => {
   const pathname = new URL(req.url, 'http://localhost').pathname;
+  if (browseKeyOf(req.headers.host, browseConfigFor(req.headers.host))) return rejectUpgrade(socket, 404, 'Not found');
   if (CHANNEL_PATH.test(pathname)) {
     return wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
   }

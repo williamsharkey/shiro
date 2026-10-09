@@ -36,10 +36,12 @@ All changes are additive. Nothing below renames or removes an earlier name.
 ## Name
 
 The Unix edition is **tabcomputer** (tabcomputer.com). The name, domain, tagline
-and description live in `src/brand.json` only: the desktop reads it (`src/brand.ts`:
-tab title, wallpaper wordmark, welcome banner, About), and `server.mjs`
-(`brandAppShell`) gives the shared `index.html` that title plus description and
-Open Graph tags for every host except shiro.computer, since link previews don't run JS.
+and description are the tabcomputer profile's `brand`
+(`profiles/tabcomputer/profile.json`, [PROFILES.md](PROFILES.md)): the desktop
+reads it (`src/brand.ts`: tab title, wallpaper wordmark, welcome banner, About),
+and `server.mjs` (`brandAppShell`) gives the shared `index.html` that title plus
+description and Open Graph tags for every host whose profile has a brand (not
+shiro.computer), since link previews don't run JS.
 
 ## Choosing the UI
 
@@ -65,12 +67,17 @@ destroyed), and the next Terminal window adopts it again.
   title bar. Drag it to the left or right edge to tile it, or to the top edge
   to maximize. Double-click the title bar to zoom. Drag any edge or corner to
   resize.
-- **The dock** shows Terminal, Files, Settings and Activity, then terminal
+- **The dock** shows Terminal, Files, Browser, Settings and Activity, then terminal
   programs: Vim, htop and Python, plus Neovim, Emacs, nano, tmux, Lua and
   SQLite once they are installed. A program that is not installed has a ↓
   badge; clicking it runs `apt install NAME && NAME` in a new Terminal
   window. A dot under an icon marks a running app. Right-click an icon to
   list its windows, open a new window, or close it.
+- **Browser** (docs/BROWSER.md): tabs, address bar, back/forward/reload,
+  history, bookmarks and saved passwords, showing real sites on per-site
+  browse origins with TLS done in the page. "Open in real tab" (and a banner
+  for passkeys, Google sign-in and TLS 1.2-only sites) hands a page to the
+  host browser. `desktop open browser` / `openApp('browser', { url })`.
 - **Keyboard.** The browser keeps Ctrl/Cmd+N, T and W for itself, so desktop
   shortcuts use Alt+Shift. Terminal programs rarely use that combination.
 

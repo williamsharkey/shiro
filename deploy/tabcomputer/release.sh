@@ -11,7 +11,7 @@ rel=$root/releases/$sha
 rm -rf "$rel"; mkdir -p "$rel/public"
 rsync -a dist/ "$rel/public/"
 cp server.mjs "$rel/server.mjs"
-cp deploy/tabcomputer/server.env "$rel/server.env"
+cp profiles/tabcomputer/server.env "$rel/server.env"
 echo "$sha" > "$rel/DEPLOYED_SHA"
 echo "$sha" > "$rel/public/deployed.txt"
 ln -sfn "$rel" "$root/current.new" && mv -T "$root/current.new" "$root/current"
