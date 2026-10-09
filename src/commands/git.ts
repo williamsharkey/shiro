@@ -12,6 +12,7 @@ import {
 } from './git-utils';
 import { getShiroOrigin } from '../utils/shiro-origin';
 import { activeProfile } from '../profile';
+import { gitPlumbing } from './git-plumbing';
 import { GLOBAL_GITCONFIG, parseGitConfig, formatGitConfig } from './git-config';
 
 // --- Main command ---
@@ -20,19 +21,27 @@ export const gitCmd: Command = {
   name: 'git',
   description: 'Version control system',
   async exec(ctx: CommandContext) {
-    // Parse -C <dir> flag before subcommand (git -C /path subcmd ...)
-    const filteredArgs: string[] = [];
+    // Global options before the subcommand (git -C /path -c k=v --no-pager subcmd ...)
     let workDir = ctx.cwd;
-    for (let ai = 0; ai < ctx.args.length; ai++) {
-      if (ctx.args[ai] === '-C' && ai + 1 < ctx.args.length) {
-        workDir = ctx.fs.resolvePath(ctx.args[ai + 1], workDir);
-        ai++; // skip the path arg
-      } else {
-        filteredArgs.push(ctx.args[ai]);
-      }
+    const configOverrides: [string, string][] = [];
+    let ai = 0;
+    for (; ai < ctx.args.length; ai++) {
+      const a = ctx.args[ai];
+      if (a === '-C' && ai + 1 < ctx.args.length) {
+        workDir = ctx.fs.resolvePath(ctx.args[++ai], workDir);
+      } else if (a === '-c' && ai + 1 < ctx.args.length) {
+        const kv = ctx.args[++ai], eq = kv.indexOf('=');
+        configOverrides.push(eq < 0 ? [kv, 'true'] : [kv.slice(0, eq), kv.slice(eq + 1)]);
+      } else if (a.startsWith('--git-dir=') || a.startsWith('--work-tree=')) {
+        const v = ctx.fs.resolvePath(a.slice(a.indexOf('=') + 1), workDir);
+        workDir = a.startsWith('--git-dir=') ? (v.endsWith('/.git') ? v.slice(0, -5) || '/' : v) : v;
+      } else if (['--no-pager', '-P', '--paginate', '-p', '--no-optional-locks', '--literal-pathspecs',
+        '--no-replace-objects', '--glob-pathspecs', '--noglob-pathspecs', '--icase-pathspecs', '--bare'].includes(a)) {
+        // nothing to do: no pager, no locks to skip
+      } else break;
     }
     // Mutate ctx in-place so stdout/stderr propagate back
-    ctx.args = filteredArgs;
+    ctx.args = ctx.args.slice(ai);
     ctx.cwd = workDir;
     const subcommand = ctx.args[0];
 
@@ -61,9 +70,11 @@ export const gitCmd: Command = {
     }
 
     try {
+      const handled = await gitPlumbing(ctx, fs, dir, workDir);
+      if (handled !== null) return handled;
       switch (subcommand) {
         case 'config':
-          return gitConfigCommand(ctx, fs, dir);
+          return gitConfigCommand(ctx, fs, dir, configOverrides);
 
         case 'init': {
           let targetDir = dir;
@@ -87,15 +98,40 @@ export const gitCmd: Command = {
         }
 
         case 'add': {
-          const paths = ctx.args.slice(1);
-          if (paths.length === 0 || paths.includes('.')) {
-            const allFiles = await listAllFiles(ctx.fs, workDir, dir);
-            for (const filepath of allFiles) {
-              await git.add({ fs, dir, filepath });
+          let update = false, force = false, dashdash = false;
+          const paths: string[] = [];
+          for (const a of ctx.args.slice(1)) {
+            if (dashdash || !a.startsWith('-')) paths.push(a);
+            else if (a === '--') dashdash = true;
+            else if (a === '-u' || a === '--update') update = true;
+            else if (a === '-f' || a === '--force') force = true;
+            // -A/--all, -v, -N, ...: the defaults here
+          }
+          const rel = (paths.length ? paths : ['.']).map(p => {
+            const abs = ctx.fs.resolvePath(p, workDir);
+            return abs === dir ? '.' : abs.slice(dir === '/' ? 1 : dir.length + 1);
+          });
+          const under = (f: string) => rel.some(r => r === '.' || f === r || f.startsWith(r + '/'));
+          const seen = new Set<string>();
+          const matrix = await git.statusMatrix({ fs, dir, ...(rel.includes('.') ? {} : { filepaths: rel }) });
+          for (const [filepath, head, work, stage] of matrix) {
+            if (!under(filepath)) continue;
+            seen.add(filepath);
+            if (work === 0) {
+              if (head || stage) await git.remove({ fs, dir, filepath });
+              continue;
             }
-          } else {
-            for (const filepath of paths) {
-              await git.add({ fs, dir, filepath: ctx.fs.resolvePath(filepath, workDir).slice(dir === '/' ? 1 : dir.length + 1) });
+            if (update && head === 0 && stage === 0) continue; // -u: tracked files only
+            if ((work === 1 && stage === 1) || (work === 2 && stage === 2)) continue;
+            await git.add({ fs, dir, filepath, force });
+          }
+          for (let i = 0; i < rel.length; i++) {
+            if (rel[i] === '.' || [...seen].some(f => f === rel[i] || f.startsWith(rel[i] + '/'))) continue;
+            // ignored (git add -f), or nothing there
+            if (force && await ctx.fs.exists(dir === '/' ? '/' + rel[i] : `${dir}/${rel[i]}`)) { await git.add({ fs, dir, filepath: rel[i], force: true }); continue; }
+            if (!(await ctx.fs.exists(dir === '/' ? '/' + rel[i] : `${dir}/${rel[i]}`))) {
+              ctx.stderr += `fatal: pathspec '${paths[i]}' did not match any files\n`;
+              return 128;
             }
           }
           break;
@@ -105,12 +141,36 @@ export const gitCmd: Command = {
           let message = '';
           let amend = false;
           let allowEmpty = false;
+          let all = false, quiet = false;
+          const messages: string[] = [];
           for (let i = 1; i < ctx.args.length; i++) {
-            if ((ctx.args[i] === '-m' || ctx.args[i] === '--message') && ctx.args[i + 1]) {
-              message = ctx.args[++i];
+            const a = ctx.args[i];
+            if (a === '-m' || a === '--message' || a === '-F' || a === '--file') {
+              const v = ctx.args[++i] ?? '';
+              messages.push(a === '-F' || a === '--file' ? (v === '-' ? ctx.stdin : await ctx.fs.readFile(ctx.fs.resolvePath(v, workDir), 'utf8') as string) : v);
+            } else if (a.startsWith('--message=')) messages.push(a.slice(10));
+            else if (a === '--amend') amend = true;
+            else if (a === '--allow-empty') allowEmpty = true;
+            else if (a === '--all') all = true;
+            else if (a === '--quiet') quiet = true;
+            else if (/^-[aqnsvem]+$/.test(a) || /^-[aqnsv]*m.+$/.test(a)) {
+              // bundled short options: -am msg, -qam msg, -mmsg
+              for (let j = 1; j < a.length; j++) {
+                const c = a[j];
+                if (c === 'a') all = true;
+                else if (c === 'q') quiet = true;
+                else if (c === 'm') { messages.push(j + 1 < a.length ? a.slice(j + 1) : ctx.args[++i] ?? ''); break; }
+              }
             }
-            if (ctx.args[i] === '--amend') amend = true;
-            if (ctx.args[i] === '--allow-empty') allowEmpty = true;
+          }
+          message = messages.map(m => m.replace(/\n+$/, '')).join('\n\n');
+          if (all) {
+            // -a: stage what changed in tracked files, as git does
+            for (const [filepath, head, work, stage] of await git.statusMatrix({ fs, dir })) {
+              if (head === 0 && stage === 0) continue;
+              if (work === 0) await git.remove({ fs, dir, filepath });
+              else if (work !== stage || (head === 1 && work === 2)) await git.add({ fs, dir, filepath });
+            }
           }
 
           const author = await resolveAuthor(ctx, fs, dir);
@@ -126,7 +186,7 @@ export const gitCmd: Command = {
               await git.writeRef({ fs, dir, ref: `refs/heads/${currentBranch}`, value: headCommit.parent[0], force: true });
             }
             const sha = await git.commit({ fs, dir, message, author });
-            ctx.stdout = `[${currentBranch} ${sha.slice(0, 7)}] ${message.split('\n')[0].trim()}\n`;
+            if (!quiet) ctx.stdout = `[${currentBranch} ${sha.slice(0, 7)}] ${message.split('\n')[0].trim()}\n`;
             break;
           }
 
@@ -139,7 +199,7 @@ export const gitCmd: Command = {
             ...(allowEmpty ? { allowEmpty: true } : {}),
           });
           const branch = await git.currentBranch({ fs, dir }) || 'main';
-          ctx.stdout = `[${branch} ${sha.slice(0, 7)}] ${message}\n`;
+          if (!quiet) ctx.stdout = `[${branch} ${sha.slice(0, 7)}] ${message.split('\n')[0]}\n`;
           break;
         }
 
@@ -468,35 +528,73 @@ export const gitCmd: Command = {
           break;
         }
 
-        case 'checkout': {
-          const target = ctx.args[1];
-          if (!target) {
+        case 'checkout':
+        case 'switch': {
+          let newBranch = '', force = false, quiet = false, sawDashDash = false;
+          const rest: string[] = [];
+          for (let i = 1; i < ctx.args.length; i++) {
+            const a = ctx.args[i];
+            if (sawDashDash) rest.push(a);
+            else if (a === '--') sawDashDash = true;
+            else if (a === '-b' || a === '-B' || a === '-c' || a === '-C') { newBranch = ctx.args[++i] ?? ''; force = force || a === '-B' || a === '-C'; if (!newBranch) { ctx.stderr = `error: switch \`${a[1]}' requires a value\n`; return 129; } }
+            else if (a === '-q' || a === '--quiet') quiet = true;
+            else if (a === '-f' || a === '--force') force = true;
+            else if (a === '--no-track' || a === '--track' || a === '-t' || a === '--recurse-submodules' || a === '--no-recurse-submodules' || a === '--progress' || a === '--no-progress' || a === '--detach' || a === '-d') {}
+            else rest.push(a);
+          }
+          const say = (m: string) => { if (!quiet) ctx.stderr += m; };
+          if (newBranch) {
+            const start = rest[0] ? await resolveRevision(fs, dir, rest[0]) : undefined;
+            await git.branch({ fs, dir, ref: newBranch, object: start, checkout: false, force });
+            await git.checkout({ fs, dir, ref: newBranch });
+            say(`Switched to a new branch '${newBranch}'\n`);
+            break;
+          }
+          if (!rest.length) {
             ctx.stderr = 'error: must specify branch or path\n';
             return 1;
           }
-          if (target === '-b') {
-            const newBranch = ctx.args[2];
-            if (!newBranch) {
-              ctx.stderr = 'error: must specify new branch name\n';
-              return 1;
+          const branches = await git.listBranches({ fs, dir });
+          const target = rest[0];
+          if (!sawDashDash && rest.length === 1 && branches.includes(target)) {
+            await git.checkout({ fs, dir, ref: target, force });
+            say(`Switched to branch '${target}'\n`);
+            break;
+          }
+          if (!sawDashDash && rest.length === 1 && subcommand === 'checkout') {
+            // a commit (detached HEAD) or a remote branch of that name
+            const remoteRef = (await git.listBranches({ fs, dir, remote: 'origin' }).catch(() => [] as string[])).includes(target);
+            if (remoteRef) {
+              await git.branch({ fs, dir, ref: target, object: `refs/remotes/origin/${target}`, checkout: false });
+              await git.setConfig({ fs, dir, path: `branch.${target}.remote`, value: 'origin' });
+              await git.setConfig({ fs, dir, path: `branch.${target}.merge`, value: `refs/heads/${target}` });
+              await git.checkout({ fs, dir, ref: target, force });
+              say(`branch '${target}' set up to track 'origin/${target}'.\nSwitched to a new branch '${target}'\n`);
+              break;
             }
-            await git.branch({ fs, dir, ref: newBranch, checkout: true });
-            ctx.stdout = `Switched to a new branch '${newBranch}'\n`;
-          } else {
-            const branches = await git.listBranches({ fs, dir });
-            if (branches.includes(target)) {
-              await git.checkout({ fs, dir, ref: target });
-              ctx.stdout = `Switched to branch '${target}'\n`;
-            } else {
-              const filepath = target === '--' ? ctx.args[2] : target;
-              if (!filepath) {
-                ctx.stderr = `error: pathspec '${target}' did not match any branch or file\n`;
-                return 1;
-              }
-              await git.checkout({ fs, dir, ref: 'HEAD', filepaths: [filepath], force: true });
-              ctx.stdout = `Updated 1 path from HEAD\n`;
+            let oid: string | null = null;
+            try { oid = await resolveRevision(fs, dir, target); } catch {}
+            if (oid) {
+              await git.checkout({ fs, dir, ref: oid, force });
+              say(`HEAD is now at ${oid.slice(0, 7)}\n`);
+              break;
             }
           }
+          if (subcommand === 'switch') { ctx.stderr = `fatal: invalid reference: ${target}\n`; return 128; }
+          // paths: from the index's HEAD, or from a commit (checkout REV -- paths)
+          let ref = 'HEAD', paths = rest;
+          if (sawDashDash && ctx.args.indexOf('--') > 1 && rest.length > 0) {
+            const before = ctx.args.slice(1, ctx.args.indexOf('--')).filter(a => !a.startsWith('-'));
+            if (before.length) ref = before[0];
+          }
+          if (sawDashDash) paths = ctx.args.slice(ctx.args.indexOf('--') + 1);
+          const rel = paths.map(p => {
+            const abs = ctx.fs.resolvePath(p, workDir);
+            return abs === dir ? '.' : abs.slice(dir === '/' ? 1 : dir.length + 1);
+          });
+          if (!rel.length) { ctx.stderr = 'error: must specify branch or path\n'; return 1; }
+          await git.checkout({ fs, dir, ref, filepaths: rel, force: true, noUpdateHead: true });
+          say(`Updated ${rel.length} path${rel.length === 1 ? '' : 's'} from ${ref === 'HEAD' ? 'the index' : ref}\n`);
           break;
         }
 
@@ -671,14 +769,22 @@ export const gitCmd: Command = {
 
         case 'fetch': {
           const { remote, token, corsProxy } = parseRemoteArgs(ctx);
-          ctx.stdout = `Fetching from ${remote}...\n`;
-          await git.fetch({
-            fs, http, dir,
-            remote,
-            corsProxy,
-            ...githubAuth(token, await remoteUrl(fs, dir, remote)),
-          });
-          ctx.stdout += `done.\n`;
+          const quiet = ctx.args.includes('-q') || ctx.args.includes('--quiet');
+          // --all: every remote (none is fine: nothing to do)
+          const remotes = ctx.args.includes('--all')
+            ? (await git.listRemotes({ fs, dir })).map(r => r.remote)
+            : [remote];
+          for (const r of remotes) {
+            if (!quiet) ctx.stderr += `Fetching ${r}\n`;
+            await git.fetch({
+              fs, http, dir,
+              remote: r,
+              corsProxy,
+              prune: ctx.args.includes('--prune') || ctx.args.includes('-p'),
+              tags: ctx.args.includes('--tags') || ctx.args.includes('-t'),
+              ...githubAuth(token, await remoteUrl(fs, dir, r)),
+            });
+          }
           break;
         }
 
@@ -931,41 +1037,89 @@ async function resolveAuthor(ctx: CommandContext, fs: any, dir: string): Promise
   };
 }
 
-async function gitConfigCommand(ctx: CommandContext, fs: any, dir: string): Promise<number> {
+async function gitConfigCommand(ctx: CommandContext, fs: any, dir: string, overrides: [string, string][] = []): Promise<number> {
   const args = ctx.args.slice(1);
-  const global = args.includes('--global');
-  const list = args.includes('--list') || args.includes('-l');
-  const unset = args.includes('--unset');
-  const positional = args.filter(a => !a.startsWith('-'));
-  const [key, value] = [positional[0]?.toLowerCase(), positional.slice(1).join(' ')];
-  const inRepo = await ctx.fs.exists(dir + '/.git');
-
-  if (list) {
-    const values = { ...(await readGlobalConfig(ctx)) };
+  let global = false, system = false, local = false, list = false, unset = false, nul = false, nameOnly = false;
+  let mode = '' as 'get' | 'get-all' | 'get-regexp' | '', type = '', dflt: string | undefined;
+  const positional: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--global') global = true;
+    else if (a === '--system') system = true;
+    else if (a === '--local') local = true;
+    else if (a === '--list' || a === '-l') list = true;
+    else if (a === '--unset' || a === '--unset-all') unset = true;
+    else if (a === '-z' || a === '--null') nul = true;
+    else if (a === '--name-only') nameOnly = true;
+    else if (a === '--get' || a === '--get-all' || a === '--get-regexp') mode = a.slice(2) as typeof mode;
+    else if (a === '--bool' || a === '--int' || a === '--path') type = a.slice(2);
+    else if (a.startsWith('--type=')) type = a.slice(7);
+    else if (a === '--type') type = args[++i] ?? '';
+    else if (a.startsWith('--default=')) dflt = a.slice(10);
+    else if (a === '--default') dflt = args[++i];
+    else if (a === '--includes' || a === '--no-includes' || a === '--show-origin' || a === '--show-scope' || a === '--add' || a === '--replace-all') {}
+    else if (a === '-f' || a === '--file' || a === '--blob') i++;
+    else positional.push(a);
+  }
+  // --list and the get forms read the repository's config from a subdirectory too
+  let root: string | null = dir;
+  while (root && !(await ctx.fs.exists(root === '/' ? '/.git' : `${root}/.git`))) {
+    root = root === '/' ? null : root.slice(0, root.lastIndexOf('/')) || '/';
+  }
+  const inRepo = root !== null;
+  if (root) dir = root;
+  const readAll = async (): Promise<Record<string, string>> => {
+    const values: Record<string, string> = {};
+    if (!global && !local) {
+      try { Object.assign(values, parseGitConfig(await ctx.fs.readFile('/etc/gitconfig', 'utf8') as string)); } catch {}
+    }
+    if (system) return values;
+    if (!local) Object.assign(values, await readGlobalConfig(ctx));
     if (!global && inRepo) {
       try { Object.assign(values, parseGitConfig(await ctx.fs.readFile(dir + '/.git/config', 'utf8') as string)); } catch {}
     }
-    ctx.stdout = Object.entries(values).map(([k, v]) => `${k}=${v}`).join('\n') + (Object.keys(values).length ? '\n' : '');
+    if (!global && !local) for (const [k, v] of overrides) values[k.toLowerCase()] = v;
+    return values;
+  };
+  const typed = (v: string) => {
+    if (type === 'bool') return /^(true|yes|on|1|)$/i.test(v) ? 'true' : 'false';
+    if (type === 'int') { const m = v.match(/^(-?\d+)([kmg]?)$/i); return m ? String(+m[1] * ({ '': 1, k: 1024, m: 1048576, g: 1073741824 } as any)[m[2].toLowerCase()]) : v; }
+    if (type === 'path' && v.startsWith('~/')) return (ctx.env['HOME'] || '/home/user') + v.slice(1);
+    return v;
+  };
+  const end = nul ? '\0' : '\n';
+  const pair = (k: string, v: string) => nameOnly ? k + end : nul ? `${k}\n${typed(v)}\0` : mode === 'get-regexp' ? `${k} ${typed(v)}\n` : `${k}=${typed(v)}\n`;
+
+  if (list) {
+    ctx.stdout = Object.entries(await readAll()).map(([k, v]) => pair(k, v)).join('');
     return 0;
   }
+  if (mode === 'get-regexp') {
+    let re: RegExp;
+    try { re = new RegExp(positional[0] ?? '.', 'i'); } catch { ctx.stderr = `error: invalid key pattern: ${positional[0]}\n`; return 6; }
+    const hits = Object.entries(await readAll()).filter(([k]) => re.test(k));
+    ctx.stdout = hits.map(([k, v]) => pair(k, v)).join('');
+    return hits.length ? 0 : 1;
+  }
+  const key = positional[0]?.toLowerCase();
+  const value = positional.slice(1).join(' ');
   if (!key) { ctx.stderr = 'usage: git config [--global] <name> [<value>] | --list | --unset <name>\n'; return 1; }
+  if (mode || (!value && !unset)) {
+    const v = (await readAll())[key] ?? dflt;
+    if (v === undefined) return 1;
+    ctx.stdout = typed(v) + end;
+    return 0;
+  }
 
   if (global || !inRepo) {
-    if (!global && !inRepo && (value || unset)) { ctx.stderr = 'fatal: not in a git directory\n'; return 128; }
+    if (!global && !inRepo) { ctx.stderr = 'fatal: not in a git directory\n'; return 128; }
     const values = await readGlobalConfig(ctx);
-    if (unset) { delete values[key]; await ctx.fs.writeFile(GLOBAL_GITCONFIG, formatGitConfig(values)); return 0; }
-    if (value) { values[key] = value; await ctx.fs.writeFile(GLOBAL_GITCONFIG, formatGitConfig(values)); return 0; }
-    if (values[key] === undefined) return 1;
-    ctx.stdout = values[key] + '\n';
+    if (unset) { if (values[key] === undefined) return 5; delete values[key]; }
+    else values[key] = value;
+    await ctx.fs.writeFile(GLOBAL_GITCONFIG, formatGitConfig(values));
     return 0;
   }
-  if (unset) { await git.setConfig({ fs, dir, path: key, value: undefined }); return 0; }
-  if (value) { await git.setConfig({ fs, dir, path: key, value }); return 0; }
-  let current: any;
-  try { current = await git.getConfig({ fs, dir, path: key }); } catch {}
-  if (current === undefined) current = (await readGlobalConfig(ctx))[key];
-  if (current === undefined) return 1;
-  ctx.stdout = current + '\n';
+  await git.setConfig({ fs, dir, path: key, value: unset ? undefined : value });
   return 0;
 }
 
@@ -1007,18 +1161,4 @@ function parseRemoteArgs(ctx: CommandContext): { remote: string; ref: string; to
   return { remote, ref, token, corsProxy };
 }
 
-async function listAllFiles(fs: any, dir: string, base: string): Promise<string[]> {
-  const entries = await fs.readdir(dir);
-  const files: string[] = [];
-  for (const entry of entries) {
-    if (entry === '.git') continue;
-    const fullPath = dir === '/' ? '/' + entry : dir + '/' + entry;
-    const stat = await fs.stat(fullPath);
-    if (stat.isDirectory()) {
-      files.push(...await listAllFiles(fs, fullPath, base));
-    } else {
-      files.push(fullPath.slice(base.length + 1));
-    }
-  }
-  return files;
-}
+
