@@ -10,6 +10,7 @@ import { join, extname } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { randomBytes, createHmac, createHash, timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import { realpathSync } from 'node:fs';
 import net from 'node:net';
 import dns from 'node:dns/promises';
 
@@ -1142,7 +1143,13 @@ wss.on('connection', (ws, req) => {
   });
 });
 
-const isDirectRun = !!process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+// import.meta.url is the resolved path, so resolve argv[1] too: tabcomputer.com
+// starts this through a `current -> releases/<sha>` symlink.
+function isMainModule(arg) {
+  if (!arg) return false;
+  try { return import.meta.url === pathToFileURL(realpathSync(arg)).href; } catch { return false; }
+}
+const isDirectRun = isMainModule(process.argv[1]);
 
 if (isDirectRun) {
   server.listen(PORT, () => {
