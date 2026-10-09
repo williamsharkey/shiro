@@ -1067,6 +1067,14 @@
   "passed": 30,
   "skipped": 0
  },
+ "signalfd01": {
+  "passed": 7,
+  "skipped": 0
+ },
+ "signalfd02": {
+  "passed": 3,
+  "skipped": 0
+ },
  "socket01": {
   "passed": 9,
   "skipped": 0

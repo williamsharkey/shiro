@@ -27,6 +27,7 @@ import type { PtyFile } from './pty';
 import { LockTable, F_RDLCK, F_WRLCK, F_UNLCK } from './locks';
 import { Process } from './process';
 import { EpollFile, waitReady } from './epoll';
+import { SignalFile, notifySignalPending } from './signalfd';
 import { EventFile, TimerFile } from './fd';
 import { activeProfile, unameRelease, UNAME_VERSION } from '../profile';
 
@@ -683,9 +684,10 @@ export class Kernel {
     if (sig === A.SIGCONT) { proc.markContinued(); this.notify(); }
     if (proc.signalHook?.(proc, sig)) return;
     const disp = proc.dispositions.get(sig) ?? 'default';
+    // A blocked signal stays pending even when ignored (signalfd reads it; setSigmask drops it if still ignored)
+    if (proc.sigmask.has(sig)) { proc.deferredSignals.add(sig); notifySignalPending(proc); return; }
     if (disp === 'ignore') return;
     if (disp === 'default' && A.defaultSignalAction(sig) === 'ignore') return;
-    if (proc.sigmask.has(sig)) { proc.deferredSignals.add(sig); return; }
     if (typeof disp === 'number') {
       // A guest handler: flag it for the guest and interrupt blocking syscalls (EINTR)
       proc.pendingSignals.add(sig);
@@ -1426,6 +1428,8 @@ export class Kernel {
         case A.SYS_read: {
           const f = file(args[0]);
           if (!f) return -A.EBADF;
+          // a signalfd reads the reading process's signals
+          if (f instanceof SignalFile) return await f.readAs(proc, data.subarray(0, Math.min(args[1] >>> 0, data.length)), sig);
           return await f.read(data.subarray(0, Math.min(args[1] >>> 0, data.length)), sig);
         }
         case A.SYS_write: {
@@ -1583,6 +1587,23 @@ export class Kernel {
           const flags = nr === A.SYS_eventfd2 ? args[1] : 0;
           if (flags & ~(A.O_NONBLOCK | A.O_CLOEXEC | A.EFD_SEMAPHORE)) return -A.EINVAL;
           return fds.alloc(new EventFile(args[0], A.O_RDWR | (flags & A.O_NONBLOCK), !!(flags & A.EFD_SEMAPHORE)), 0, !!(flags & A.O_CLOEXEC));
+        }
+        case A.SYS_signalfd:
+        case A.SYS_signalfd4: {
+          // fd (-1: a new one), sizeof(sigset_t) (8), flags; data = the sigset
+          const flags = nr === A.SYS_signalfd4 ? args[2] : 0;
+          if (flags & ~(A.SFD_NONBLOCK | A.SFD_CLOEXEC)) return -A.EINVAL;
+          if (args[1] !== 8) return -A.EINVAL;
+          const dv = new DataView(data.buffer, data.byteOffset, 8);
+          const mask = A.sigsetFromWords(dv.getUint32(0, true), dv.getUint32(4, true));
+          if ((args[0] | 0) !== -1) {
+            const f = file(args[0]);
+            if (!f) return -A.EBADF;
+            if (!(f instanceof SignalFile)) return -A.EINVAL;
+            f.setMask(mask);
+            return args[0];
+          }
+          return fds.alloc(new SignalFile(proc, mask, flags & A.SFD_NONBLOCK), 0, !!(flags & A.SFD_CLOEXEC));
         }
         case A.SYS_timerfd_create: {
           const clock = args[0], flags = args[1];

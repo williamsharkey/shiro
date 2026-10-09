@@ -114,6 +114,11 @@ export const SYS_eventfd2 = 290;
  * expirations since the last read.
  */
 export const SYS_timerfd_create = 283;
+export const SYS_signalfd = 282;
+export const SYS_signalfd4 = 289;
+/** signalfd4 flags (the O_ ones) */
+export const SFD_CLOEXEC = 0o2000000;
+export const SFD_NONBLOCK = 0o4000;
 export const SYS_timerfd_settime = 286;
 export const SYS_timerfd_gettime = 287;
 export const TFD_TIMER_ABSTIME = 1;
