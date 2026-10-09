@@ -4,6 +4,17 @@
 
 All changes so far are additive; nothing below renames or removes an earlier name.
 
+- **2026-10-09 (unix/perf-kernel)** — behavior fix, additive.
+  - A path below `/proc/self/fd/N`, `/proc/PID/fd/N` or `/dev/fd/N` names
+    an entry of the directory open as fd N (ENOTDIR if it isn't a
+    directory, ENOENT if no such fd), as through Linux's fd link. Native
+    Claude Code pins a directory with an `O_PATH` fd and then mkdirs, opens
+    (`O_CREAT|O_EXCL`) and renames through `/proc/self/fd/N/NAME`: its Bash
+    tool's task output and every Write failed.
+  - uname's release and version are `6.1.0-HOSTNAME` and
+    `#1 SMP PREEMPT_DYNAMIC` (`unameRelease`, `UNAME_VERSION` in
+    src/profile.ts), and `/proc/version` says the same.
+
 - **2026-10-09 (unix/kernel)** — kernel log, additive.
   - `src/kernel/klog.ts`: the kernel ring buffer (64 KiB or 1000 records;
     the oldest go). Records carry seq, µs since boot (procfs `bootMs`, the
@@ -176,7 +187,7 @@ All changes so far are additive; nothing below renames or removes an earlier nam
     after fork() (daemon()) reparented the child to init first, which then
     never started (tmux's server, now and then).
   - `SYS_uname` (63) writes a `struct utsname` whose nodename is
-    `Kernel.hostname` ("shiro"); Blink takes the host and domain names
+    `Kernel.hostname` ("shiro" then; now the profile's `hostname`, "tabcomputer"); Blink takes the host and domain names
     from it. Constant `UTSNAME_FIELD`.
   - `TtySession.onJobForeground`: called when a job takes the terminal; the
     page's terminals hand it the keys typed while the command was starting.

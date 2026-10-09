@@ -1,45 +1,85 @@
 # AGENTS.md
 
-Canonical agent instructions live here. [CLAUDE.md](CLAUDE.md) is a compatibility shim and should only point back to this file.
+Instructions for coding agents (and people) working on this repository. [CLAUDE.md](CLAUDE.md) only points here. The docs index is [docs/README.md](docs/README.md).
 
-## Mission
+## What tabcomputer is
 
-tabcomputer is a browser-native Unix-like development environment. Prioritize changes that make it feel more like a real machine in the browser: shell, filesystem, Node/npm, editors, build tools, networking, WASI/x86, and first-class AI tooling.
+tabcomputer is a computer that lives in a browser tab: a desktop with windows and a dock, a Unix kernel written in TypeScript for the page, and real Linux programs. WebAssembly (WASI/WASIX) programs and unmodified x86-64 ELF binaries (Debian's own, in the Blink emulator compiled to wasm) run as kernel processes; guest sockets reach the internet through a WebSocket-to-TCP relay in `server.mjs`. Production is https://tabcomputer.com.
 
-Do not treat the dashboard or wrappers as the product. The product is the browser OS itself.
+Prioritize changes that make it behave more like a real machine: kernel, shell, filesystem, packages and Debian, networking, the x86 engine, GUI apps, the desktop, and coding agents running inside it.
 
-Naming: always write "tabcomputer", one word, all lowercase (also at the start of a sentence). Descriptive phrases such as "a computer that lives in your tab" are fine. The engine still serves shiro.computer as the `shiro` profile, and many internal names still say shiro (`ShiroTerminal`, `shell.ts`, `__shiroDesktop`). docs/PROFILES.md ("The rename") lists what was renamed and what is still internal, and why.
+**Naming.** Always write "tabcomputer": one word, all lowercase, also at the start of a sentence. Every user-facing string says tabcomputer. The project grew out of Shiro (shiro.computer), which survives as the terminal-first `shiro` profile; many internal names still say shiro and may stay (see "Profiles and internal names" below).
 
-## Architecture Snapshot
+## Architecture map
 
-- `src/main.ts`: boot, filesystem init, command registration, seeded runtime hydration.
-- `src/filesystem.ts`: IndexedDB-backed POSIX-like filesystem.
-- `src/shell.ts`: bash-like parser/executor, pipes, redirects, jobs, functions, arrays, traps.
-- `src/terminal.ts`: xterm integration and input handling.
-- `src/commands/*`: one command per file or small group.
-- `src/node-compat/*`: Node.js runtime shims used by `node` and Claude Code.
-- `src/wasi/*`: WASM programs as kernel processes (see "WASM Processes" below). `src/wasi-runtime.ts` is the old in-page runtime, kept as the fallback.
-- `src/pkg-manager.ts`: the package manager (`pkg`/`apt`, see "Packages"); `src/wasi-packages.ts` is the older single-binary API on top of its index.
-- `src/x86-engine/*` + `public/engines/blink/` + `vendor/blink/`: x86-64 Linux ELF in Blink (wasm), as kernel processes; `src/x86/*` is the fallback interpreter when the page isn't cross-origin isolated. See `docs/X86_ENGINES.md`.
-- `src/kernel/*`: Unix kernel core (process table, fd tables, pipes, syscall dispatch, SAB syscall channel for Worker guests). Contract: `docs/KERNEL_ABI.md`; roadmap: `docs/UNIX_COMPAT.md`. `window.__tabcomputer.kernel`; kernel processes show in `ps`.
+Page (everything under `src/` is the engine; products are profiles):
+
+- `src/main.ts`: boot, filesystem init, command registration, the profile's preinstall, seeded runtime hydration.
+- `src/profile.ts` + `profiles/<id>/profile.json`: product profiles. Code asks `activeProfile()`, never the hostname. [docs/PROFILES.md](docs/PROFILES.md).
+- `src/kernel/*`: the Unix kernel: process table (`process.ts`), fd tables (`fd.ts`), pipes, ptys (`pty.ts`), signals and job control (`signals.ts`), epoll, file locks, `/proc` (`procfs.ts`), sockets (`net.ts`, `netlink.ts`), the SharedArrayBuffer syscall channel for Worker guests (`channel.ts`, `worker-host.ts`). Contract: [docs/KERNEL_ABI.md](docs/KERNEL_ABI.md). `window.__tabcomputer.kernel`; kernel processes show in `ps`.
 - Kernel log (`src/kernel/klog.ts`): `dmesg` (builtin; Debian's util-linux dmesg replaces it in Debian mode and reads the same log through `/dev/kmsg`), `/dev/kmsg`, `syslog(2)`. Engines and subsystems log with `klog.log`/`klog.logRatelimited` (`net: ...`, `traps: comm[pid] ...`); relay refusals (token, handshake, `op:error`, no relay) land there, so check `dmesg` when curl/git only say "Could not connect".
-- `src/x11/*` + `src/gui/*`: Linux GUI apps (docs/GUI.md): Xshiro, an X11 server in the page (a kernel process on `/tmp/.X11-unix/X0`), rootless windows on the desktop's surface API, Debian GUI apps installed on first use (`gui`, `public/gui/apps.json`).
-- `src/commands/seed.ts`, `src/commands/hc.ts`, `src/seed-runtime-context.ts`: seeded sessions, host-page access, runtime orientation.
-- `src/claude-config.ts`, `src/node-compat/preload.ts`, `src/node-compat/process.ts`: Claude bootstrap, auth persistence, startup defaults.
-- `profiles/<id>/profile.json` + `src/profile.ts`: product profiles (shiro.computer = `shiro`, tabcomputer.com and every other host = `tabcomputer`; `?profile=` overrides): UI mode, brand, banner, preinstalled packages, server env, and which tabcomputer shims are on (npm `claude`, install.sh interception, tab-to-tab `ssh`, `/bin` stats for builtins, the Debian overlay, Pyodide python). Code asks `activeProfile()`, never the hostname. Engine vs product boundary: [docs/PROFILES.md](docs/PROFILES.md).
-- `src/desktop/*`: the Unix edition's desktop (menu bar, dock, window manager `wm.ts`, Terminal with tabs, lazy Files/Settings/Activity/About). `src/ui-mode.ts` picks it: every host but shiro.computer boots the desktop; `?ui=terminal|desktop` or `desktop classic` switch. API and `/dom`: [docs/DESKTOP.md](docs/DESKTOP.md).
-- `server.mjs`: static hosting, API proxying, OAuth callback, signaling, relay, and the opt-in WebSocket-to-TCP relay (`/tcp`, `TABCOMPUTER_TCP_RELAY=1`).
-- `src/browser/*` + `src/desktop/apps/browser.ts`: the desktop's Browser app (docs/BROWSER.md, scoreboard docs/WEB_SCORE.md): iframe tabs on per-origin browse origins (`https://{key}.<domain>`, `TABCOMPUTER_BROWSE_ORIGIN`), a service worker per origin forwarding to a broker in the desktop page, which fetches with HTTP/1.1 over TLS in the page (subtls) over the relay.
-- `src/kernel/net.ts`: kernel sockets over that relay (x86 socket syscalls and node `net` use them); see `docs/NETWORKING.md` for the protocol, security model, and nginx config.
+- `src/filesystem.ts`: the IndexedDB-backed POSIX-like filesystem (lazy placeholders for Debian, virtual providers such as `/dom`).
+- `src/shell.ts` + `src/shell-*.ts`: the bash-compatible shell. `src/shell-kernel.ts` runs WASM/ELF pipeline stages as kernel processes.
+- `src/terminal.ts` (xterm.js, the classic HUD banner), `src/window-terminal.ts`, `src/panes.ts`.
+- `src/commands/*`: builtins, one command per file or small group (`doctor.ts`, `claude.ts`, `claude-native.ts`, `debian.ts`, `gui.ts`, `serve.ts`, `page.ts`, `remote.ts`, `pkg.ts`, `gh*.ts`, `git*.ts`, ...).
+- `src/node-compat/*`: the Node.js runtime used by `node`, npm packages and the npm build of Claude Code.
+- `src/wasi/*`: WASM programs as kernel processes (WASI preview1, WASIX fork/exec/signals/sockets, dynamic linking). `src/wasi-runtime.ts` is the old in-page runtime, kept as the fallback.
+- `src/x86-engine/*` + `public/engines/blink/` + `vendor/blink/` (`build.sh`, `patches/`, `shiro-kernel.js`, `shiro-net.js`): x86-64 Linux ELF in Blink as kernel processes. `src/x86/*` is the fallback interpreter when the page isn't cross-origin isolated. [docs/X86_ENGINES.md](docs/X86_ENGINES.md).
+- `src/pkg-manager.ts`, `src/pkg-index.json`, `src/commands/pkg.ts`: `pkg`/`apt` before Debian mode. Recipes in `scripts/pkgbuild/` (`x86/` for static x86-64 builds). [docs/PACKAGES.md](docs/PACKAGES.md).
+- `src/debian/*`: Debian mode (`rootfs.ts` streams the root filesystem, `overlay.ts` + `overlay-policy.json` decide builtin vs Debian, `apt-method.ts`, `apt-store.ts`, `preconfigure.ts`). Image built by `scripts/debian/`. [docs/DEBIAN.md](docs/DEBIAN.md).
+- `src/x11/*` + `src/gui/*`: the X11 server in the page (`Xshiro :0`), rootless windows, Debian GUI apps (`gui`, `public/gui/apps.json`). [docs/GUI.md](docs/GUI.md), [docs/DOM-RENDERING.md](docs/DOM-RENDERING.md).
+- `src/desktop/*`: the desktop (window manager `wm.ts`, shell `index.ts`, Terminal `terminal-app.ts`, `network.ts`, `session.ts`, `spotlight.ts`, `tour.ts`, `mobile.ts`; lazy apps in `apps/`: About, Activity, Browser, Files, Settings). `src/ui-mode.ts` picks desktop or terminal. [docs/DESKTOP.md](docs/DESKTOP.md).
+- `src/browser/*` + `src/desktop/apps/browser.ts`: the Browser app spike. [docs/BROWSER.md](docs/BROWSER.md).
+- `src/agent-docs.ts`: the `~/AGENTS.md` seeded for agents running inside the tab (below); `src/seed-runtime-context.ts` parses the boot context. `src/commands/seed.ts`, `src/commands/hc.ts`: seeded sessions and host-page access.
+- `src/claude-config.ts`, `src/claude-signin.ts`, `src/claude-auth.ts`, `src/claude-code-version.ts`: Claude Code bootstrap, sign-in and the pinned npm version.
 
-## Working Style
+Server and tooling:
 
-- Prefer small, direct fixes over speculative rewrites.
-- Read the surrounding code before editing. tabcomputer has a lot of compatibility shims and edge cases.
-- Use `rg` / `rg --files` for search.
-- Use `apply_patch` for file edits.
-- Do not revert unrelated work in a dirty tree.
-- Do not hard-code counts, build numbers, or implementation inventories unless you just verified them.
+- `server.mjs`: static hosting with COOP/COEP, API proxies, OAuth callback, git proxy, Debian mirror (`/debian/`), browse origins, and the TCP relay (`/tcp`). [docs/NETWORKING.md](docs/NETWORKING.md).
+- `deploy/tabcomputer/`: the droplet (cloud-init, `release.sh`). `profiles/tabcomputer/server.env` is its server environment.
+- `tests/`: the vitest suite (`tests/tests/shiro-vitest/`), conformance suites (`tests/conformance/`), browser scripts (`tests/browser/`).
+- `scripts/browser-check.mjs`, `scripts/browser-tui.mjs`: drive a built app in headless Chromium.
+- `bench/`: the benchmark harness ([bench/README.md](bench/README.md), results in [docs/BENCHMARKS.md](docs/BENCHMARKS.md)).
+- `shiro-mcp/`: an MCP server that lets an outside agent drive a tab over WebRTC (`remote start`).
+
+## Build and test
+
+```bash
+npm install                     # once; also `cd tests && npm install` for the suite
+npx tsc --noEmit -p .           # typecheck
+npm run build                   # tsc + vite build to dist/, profiles, browse bundle
+npm test                        # the vitest suite: cd tests && npx vitest run
+cd tests && npx vitest run tests/shiro-vitest/kernel-net.test.ts   # one file while iterating
+PORT=5299 STATIC_DIR=$PWD/dist node server.mjs                     # serve a build
+```
+
+- Browser checks (need a build and a running server; they use the pre-installed Chromium at `/opt/pw-browsers`, never `playwright install`): `tests/browser/first-run.mjs` (first impressions, desktop and `?ui=terminal`), `tests/browser/dev-workflows.mjs` (git, npm, venv + pytest, make, ssh), `tests/browser/no-reflow.mjs` (one draw at load), `tests/browser/gui-first-launch.mjs`, `tests/browser/job-control.mjs`, `tests/browser/vim-keys.mjs`, `tests/browser/web-score.mjs`. `scripts/browser-check.mjs URL 'cmd' ...` runs any commands.
+- Scoreboards: `npm run conformance` (docs/CONFORMANCE.md), `npm run debian-score` (docs/DEBIAN_SCORE.md), `npm run bench:quick` before and after a performance change.
+- CI (`.github/workflows/ci.yml`, pull requests to main) runs `npm test`, `npx tsc --noEmit` and `npm run build`.
+
+## Branches and integration
+
+- Work happens on `unix/<area>` branches of williamsharkey/shiro (unix/desktop, unix/debian, unix/gui, unix/conformance, unix/agent-clis, unix/perf-blink, ...). Each merges `origin/unix/integration` into itself before it is merged back.
+- `unix/integration` is the trunk. It is mirrored to the `main` branch of williamsharkey/tabcomputer.
+- Merge, don't rebase, shared branches. Merge `origin/unix/integration` again right before pushing.
+- Shipping: push a commit to the `deploy` branch of the tabcomputer repo (deploy/tabcomputer/README.md). Bump `build-number.txt` with `node increment-build.js` in the commit you ship. shiro.computer is deployed from the Shiro repository.
+
+## Profiles and internal names
+
+- `profiles/tabcomputer` (tabcomputer.com and every host no profile claims, so localhost) boots the desktop, runs native Claude Code by default and turns the relay on. `profiles/shiro` (shiro.computer) is the full-page terminal with the HUD banner and the npm Claude Code. `?profile=ID` overrides the host. [docs/PROFILES.md](docs/PROFILES.md) lists every field.
+- A product changes behavior by editing its `profile.json`, not by checking the hostname.
+- User-facing text (messages, `help`, man pages, banners, About, docs) says tabcomputer. Text shown under both profiles is plain text that says tabcomputer; identity (prompt hostname, `uname -n`) comes from the profile's `name` and `hostname`.
+- Internal names may stay, and should not be renamed piecemeal (it conflicts with every branch in flight): `SHIRO_BLINK_*` and other names compiled into wasm, `_SHIRO_TEXT`, `Xshiro`, `libshiro-text-hook.so`, `shiro-apt-method`/`shiro-apt-store`/`/var/lib/shiro/` inside installed Debian systems, `__shiro…` page globals other than `window.__tabcomputer`, `shiro://cmd/` links, `ShiroTerminal`, `shiro-cmds.ts`, `tests/tests/shiro-vitest/`, the `shiro-mcp` package, and infrastructure URLs on shiro.computer (`DEFAULT_MIRROR`, `/bins`, signaling, the GitHub OAuth app). PROFILES.md "The rename" has the full list and the reasons.
+- Environment variables are `TABCOMPUTER_*` (only the Blink build knobs `SHIRO_BLINK_*` and `SHIRO_LLVM_WASM` keep the old prefix).
+
+## Conventions
+
+- Prefer small, direct fixes over speculative rewrites. Read the surrounding code first: there are many compatibility shims and edge cases.
+- Use `rg` / `rg --files` for search. Don't revert unrelated work in a dirty tree.
+- Comments and docs: plain, specific, short sentences. Say what is true now; record history in the scoreboards and BENCHMARKS.md, not in instructions.
+- Numbers in docs come with the doc or tool that measured them. Don't hard-code counts, build numbers or inventories you haven't just verified. The About app's `STATUS` (`src/desktop/apps/about.ts`) quotes DEBIAN_SCORE.md and CONFORMANCE.md: update it with them.
+- Never put secrets, tokens or credentials in files, logs or `doctor` output.
+- Keep `AGENTS.md` the single source; `CLAUDE.md` stays a pointer.
 
 ## Commands
 
@@ -63,15 +103,16 @@ export const myCmd: Command = {
 };
 ```
 
-## Seeded Sessions And Inner Claude
+## Agent Context Inside The Tab
 
 - Every boot seeds `~/AGENTS.md` for agents on the machine (`src/agent-docs.ts`): what the machine is, what works and what doesn't, `doctor`, where the source lives (not checked out), and this boot's context (an injected `seed` boot says to start with `hc outer`). `~/CLAUDE.md` is `@AGENTS.md`, so Claude Code imports it directly.
 - Seeding never overwrites a file the user edited: `/var/lib/tabcomputer/seeded.json` holds the hash of what was written, and older installs are recognized by the exact texts earlier builds seeded. The retired `~/NEO.md` and `~/.shiro-context.json` are removed the same way. Keep the text accurate when behavior changes; it is what an agent here believes about the machine.
 
 ## Claude Code In tabcomputer
 
-- `claude` is a tabcomputer builtin (`src/commands/claude.ts`) wrapping the npm CLI: it installs the pinned build if needed, opens the sign-in panel (`src/claude-signin.ts`) when there are no credentials, and adds `--dangerously-skip-permissions` for sessions. `claude-window` (old name `sc`) runs it in a new window.
-- Experimental: `claude install --native` downloads the linux-x64-musl build (sha256 from the release manifest) and musl's loader with the guest's `curl` package over the TCP relay (`claude-native.ts`); `claude --native` / `CLAUDE_NATIVE=1` run it (`$CLAUDE_NATIVE_PATH`, default `~/.local/bin/claude`) in Blink, ~2 min per request. The tabcomputer profile makes it the default (`shims.claude: native`): plain `claude` and `claude install` mean native there, and `--npm` picks the npm build.
+- `claude` is a builtin (`src/commands/claude.ts`) that runs one of two builds. The profile's `shims.claude` picks the default: `native` on tabcomputer, `npm` on shiro. `--npm`/`--native` (also after `install`) or `CLAUDE_NATIVE=0/1` pick the other.
+- Native: `claude install` (`claude-native.ts`) downloads the linux-x64-musl build (sha256 from the release manifest) and musl's loader with the guest's `curl` package over the TCP relay, to `$CLAUDE_NATIVE_PATH` (default `~/.local/bin/claude`); `claude update` fetches a newer one. Plain `claude` runs it in Blink with `BUN_JSC_useJIT=0` (faster there): about 85–105 s per `-p` request (docs/COMPAT.md). A missing binary prints how to install it or use `--npm`.
+- npm: the pinned JS build on tabcomputer's node. It installs itself if needed, opens the sign-in panel (`src/claude-signin.ts`) when there are no credentials, and adds `--dangerously-skip-permissions` for sessions. `claude-window` (old name `sc`) runs it in a new window. Both profiles preinstall it in the background at boot (`preinstall: claude-code`).
 - The npm package is pinned to 2.1.112, the last pure-JS release (`src/claude-code-version.ts`). Boot installs it in the background from the npm tarball. At load time `execution.ts` rewrites its inlined `VERSION` constant to `CLAUDE_CODE_REPORTED_VERSION`, because the API gates newer models (e.g. `claude-opus-5-5`, the default `ANTHROPIC_MODEL`) on the version in the billing header.
 - The same load-time rewrite teaches 2.1.112 about newer models (`CAPABILITY_PATCHES`): Opus/Sonnet 5+ get adaptive thinking, effort control including xhigh, and the xhigh launch default, like Opus 4.7. Without it the pinned build sent fixed-budget thinking, no effort, and defaulted subscriptions to medium effort. Opus 5.5 delivers thinking as one chunk at the end, so the token counter stalls during long thinking; that is the API, not a hang.
 - Also patched: interactive sessions use the in-memory `TodoWrite` list instead of the file-backed task tools (`TaskCreate`…), whose proper-lockfile locking hung in tabcomputer; `CLAUDE_CODE_ENABLE_TASKS=1` restores them. Callback and promise `fs.rmdir` now remove directories (they used `unlink`, so lock directories never released).
@@ -99,7 +140,6 @@ export const myCmd: Command = {
 - Spawns like Claude's `zsh -c -l <cmd>`: flags after `-c` are skipped (`extractShellArgs`), otherwise a cwd prefix turned `-l` into a command.
 - `git config` supports get/set/`--list`/`--unset`, local and `--global` (`~/.gitconfig`). Commit authors come from repo config, then `~/.gitconfig`, then `GIT_AUTHOR_*`.
 - `gh` (`src/commands/gh*.ts`) follows the real CLI's flags where implemented: `auth` (status/login/logout/token/setup-git), `repo` (view `--json`, list, create `--source --push`, clone, delete `--yes`), `api` (`-q/--jq`, `-f/-F`, `-X/--method`), `pr`, `issue`, `release`, `workflow`, `run`, `label`, `search`.
-- Known gaps: git only works from the repository root (no upward `.git` discovery), and `git log --oneline` prints full messages.
 
 ## WASM Processes
 
@@ -160,18 +200,11 @@ export const myCmd: Command = {
 - `FileSystem.writeFile` copies a Uint8Array that is a view of a larger buffer (IndexedDB clones the whole buffer otherwise).
 - Builds: `vite-plugin-inline.ts` makes the inline entry script `import "./assets/index-….js"` instead of inlining its code; inlining made two instances of every module in the entry chunk (lazy chunks import the file), with separate state.
 
-## Build, Test, Deploy
-
-```bash
-npx tsc --noEmit
-cd tests && npm run test:shiro
-npm run build
-npm run deploy
-```
+## Performance, Deploy, Isolation
 
 Performance: `npm run bench:quick` (~2.5 min) before and after a performance change, `node bench/compare.mjs old.json new.json` to diff; the baseline, the ranked hotspot list and bugs found are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md), the harness in [bench/README.md](bench/README.md). It drives the pre-installed Chromium (`/opt/pw-browsers/chromium`); never run `playwright install`.
 
-Use focused vitest runs while iterating, then run the smallest meaningful verification set before deploy. For changes touching seed/Claude/bootstrap paths, relevant files usually include:
+Use focused vitest runs while iterating, then the full suite before pushing. For changes touching seed/Claude/bootstrap paths, relevant files usually include:
 
 - `tests/tests/shiro-vitest/seed.test.ts`
 - `tests/tests/shiro-vitest/agent-docs.test.ts`
@@ -199,7 +232,7 @@ Production is `https://tabcomputer.com` on its own DigitalOcean droplet, set up 
 - Shell job control for kernel jobs: `runKernelJob` in `src/commands/jobs.ts`; Ctrl-Z puts the job in `backgroundJobs` as `stopped`, and `fg`/`bg`/`jobs`/`kill %N`/`wait` signal and wait on its process group. A kernel sh on a pty (screen, tmux, `sh -i`) does the same through `Shell.kernelTty` (`ProcessTty`, src/kernel/pty.ts). Plain in-page `&` jobs are promises that can only be aborted.
 - `kill` is one implementation (`src/commands/trap.ts`, re-exported by `ps.ts`) with bash's options; `stty` reads and sets the terminal's pty (a per-shell detached pty when there is no terminal); `tput lines/cols` use the pty size, overridden by `LINES`/`COLUMNS`.
 
-## Desktop (Unix edition)
+## Desktop
 
 - The window manager API (`window.__tabcomputer.desktop`, `src/desktop/wm.ts`) is a contract with unix/gui (X11/Wayland windows as `surface` content): keep it additive and log changes in docs/DESKTOP.md.
 - `#terminal` moves into the first Terminal window before `ShiroTerminal` is created, so `window.__tabcomputer.terminal` is the same in both UIs (scripts and the bench rely on it). Closing that tab parks it in `#sd-parking`; the next Terminal window adopts it. Panes (`initPanes`) are classic-only.
@@ -224,7 +257,7 @@ Production is `https://tabcomputer.com` on its own DigitalOcean droplet, set up 
 - `vite-plugin-inline.ts` inlines the entry CSS into index.html but must keep the `.css` file: lazy chunks preload it, and the 404 made every such `import()` (WASM processes, the kernel shell) reject in production builds.
 - Blink engine: rebuild `public/engines/blink/blink.{mjs,wasm}` with `vendor/blink/build.sh` after changing `vendor/blink/patches/` or `shiro-net.js`; don't hand-edit the generated files. `host.mjs` is hand-written. Browsers refuse `TextDecoder.decode()` on SharedArrayBuffer views (Node doesn't), so decode a `.slice()` of channel data.
 
-- `child_process` is shimmed. There is no real process tree.
+- Node's `child_process` is a shim: it runs commands in forked shells inside the page. Kernel processes (WASM, x86) are real entries in the kernel's process table; builtins and node scripts mostly are not.
 - Most filesystem work is async under the hood even when sync APIs are emulated.
 - `FileSystem` reopens IndexedDB when the browser closes the connection (`onclose`/`onversionchange`, or an `InvalidStateError` from `transaction()`), retrying the request once. Writes resolve on transaction commit, and `fs.pendingWrites` makes `beforeunload` warn before leaving mid-write.
 - Background-task-heavy or highly concurrent agent flows can stall in the browser runtime.
@@ -233,7 +266,7 @@ Production is `https://tabcomputer.com` on its own DigitalOcean droplet, set up 
 - A loop, `if`, `case`, or subshell can head a pipeline (`for …; done | tail -1`): `splitTopLevelPipes` finds the pipe after the closing keyword and `runHeadedPipeline` feeds the head's output to the rest. Redirections after `done`/`fi`/`esac` (`< in`, `> out`, `2>&1`) are applied by `splitCompoundRedirects`. `printf` (except `-v`) is the regular command, so redirects and pipes apply; `ctx.stdoutIsTTY` is false for piped/redirected commands (`ls` then prints one name per line).
 - Node scripts end like node on an empty event loop: after the synchronous part, the runner waits until nothing tracked is in flight (`fetch`, `fs.promises`, timers; see `node-compat/activity.ts`) and output has been quiet for 60–150 ms, with the old 10 s ceiling as a fallback. Missing Node APIs come from `auto-stub.ts`, which logs `[AutoStub] called missing …` the first time; a stubbed callback API never calls back, so check the console for these when something hangs.
 - ES modules with top-level await run as async functions; static imports in async modules and `import()` wait for the imported module's body (`requireModule.ready`, `compileAsyncModule` in `node-compat/require.ts`). esbuild code-split chunks (they import `__esm`/`__export`… from a sibling) get live import bindings and getter exports (`src/commands/jseval/esm-live.ts`); Gemini CLI depends on both. The node runner's script timeouts end only idle scripts (nothing in flight, no new output).
-- Agent CLIs scoreboard (Codex, Grok Build, Gemini CLI, native Claude Code, agy, opencode): docs/COMPAT.md "Agent CLIs"; `agent-cli-probe.test.ts` runs a native one in Blink under Node. Claude Code native runs as the musl build (glibc Bun builds still crash at startup); `curl -o` writes bytes unchanged.
+- Agent CLIs scoreboard (Codex, Grok Build, Gemini CLI, native Claude Code, agy, opencode): docs/COMPAT.md "Agent CLIs"; `agent-cli-probe.test.ts` runs a native one in Blink under Node. `claude install` installs the musl build of native Claude Code (the glibc build also starts since Blink patch 0044, but needs glibc in the VFS); `curl -o` writes bytes unchanged.
 - `require('sharp')` is a browser-backed implementation (`shims/browser-sharp.ts`: createImageBitmap + canvas, real metadata/resize/JPEG/PNG/WebP). Claude Code's image loader is patched to use it; its bundled native/sharp path stalled image Reads.
 - Builtins and shell functions write straight to the writers passed to `execute()`. When a segment feeds a pipe or has output redirects, the pipeline loop swaps in capture writers (`startCapture`) and, once the builtin `continue`s, runs the captured text through the same `applyOutputRedirects` as regular commands (`flushCapture`). Functions, `eval`, `sh -c`, aliases, `exec`, `builtin`, and `time` get the segment's stdin through `injectedStdin` (the next `execute()`'s first command; `executeWithStdin` is the public form), and functions/brace groups also set `__PIPE_STDIN` so `read` inside them consumes it line by line.
 - A shell that runs as a kernel process (`sh -c` spawned by a program, scripts via `runViaShell`) has `kernelStdio` (`src/shell-stdio.ts`): its fds are its stdio. `liveStdin()` says whether a segment reads fd 0 (no pipe, here-doc, `<`, injected string or `__PIPE_STDIN`); then `read` takes one record from fd 0, `mapfile` reads it all, registered commands go through `execLazyStdin` (ctx.stdin read on first use, the command re-run), and kernel programs get the fds (`runKernelPipeline` `fds`) when the writers reach fd 1/2 (`writesTo` sees through `exec >` routing). Anything that hands a fork a string stdin must clear the fork's `kernelStdinLive` (`executeWithStdin`/`setInjectedStdin` do).

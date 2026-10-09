@@ -163,7 +163,7 @@ The egress policy is the security boundary; everything else limits abuse.
 The relay is off unless `TABCOMPUTER_TCP_RELAY=1`. When off, `/tcp` and
 `/tcp/token` return 404 and kernel sockets report `ENETUNREACH`.
 
-systemd (`/etc/systemd/system/shiro.service`):
+systemd (`/etc/systemd/system/tabcomputer.service`; tabcomputer.com reads `profiles/tabcomputer/server.env` instead):
 
 ```ini
 [Service]
@@ -225,9 +225,7 @@ into them, loopback listen/accept, and the iframeServer HTTP bridge.
 
 ## Not done yet
 
-- `SIGPIPE` in the x86 emulator (it has no signal delivery; sends return `-EPIPE`).
-- AF_UNIX datagram and seqpacket sockets.
-- UDP beyond DNS.
+- UDP to the internet beyond DNS (port 53 is answered over DoH; other ports are `ENETUNREACH`).
 - `net.connect` to a port served by `http.createServer` (that server is not a
   kernel socket).
 
