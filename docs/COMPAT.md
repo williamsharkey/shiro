@@ -142,6 +142,30 @@ Shell and platform fixes these needed (all with tests in the same file):
   script's cached copy of a file follows other processes' writes (a
   watcher's re-read got the contents from when the script started).
   chokidar 3 reports add/change/unlink/addDir.
+- Node, dev servers: a preview window (`serve open PORT`, split views) reaches
+  the in-tab server it shows over WebSocket, EventSource and streamed
+  fetch/XHR. The preview page's `WebSocket`, `EventSource`, `fetch` and
+  `XMLHttpRequest` go to the in-tab servers for local URLs (relative,
+  `localhost`, `127.0.0.1`, no host); the WebSocket is a raw connection to the
+  port (`iframeServer.connect`) with the page doing RFC 6455, so the server end
+  is whatever node or a guest program has there. `http.createServer` is
+  node-like: 'request' and 'upgrade' events, `IncomingMessage` a Readable,
+  `ServerResponse` with `statusCode`/`setHeader`/`getHeaders`/byte bodies, and
+  `text/event-stream` (or `flushHeaders()`) responses stream each write. A
+  kernel listener (`net.createServer`, a guest program) takes the raw
+  connection too. Checked in vitest and Chromium: the `ws` package (an
+  'upgrade' echo), Socket.IO 4.8 from the preview (polling, then the upgrade to
+  WebSocket, events both ways), SSE events as they are written, and a
+  live-reload loop (edit a file in the shell → `fs.watch` → a `ws` push → the
+  preview re-renders). `ws` takes its node build (its browser build only
+  throws); `Buffer.indexOf` finds strings and Buffers; `Buffer[Symbol.species]`
+  is `Buffer`. Not yet: the vite dev server. Its native esbuild and Rollup
+  aren't installed (optional platform packages), and with their WebAssembly
+  builds swapped in, esbuild's Go runtime runs as a child node in the page's
+  realm and takes over page globals (`performance`, `TextEncoder`, `crypto`:
+  assignment to `crypto` is now ignored, but esbuild redefines it), and
+  `import('vite')` picks its CJS build, which looks for `package.json` at the
+  page's URL.
 - Node: a script's timers and intervals end with it. An interval left by a
   script that called `process.exit()` kept firing in the page, and its
   `setTimeout`s became the next script's timers, so that script never went

@@ -191,7 +191,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
                 const subpathKey = `./${subpath}`;
                 const exp = pkg.exports[subpathKey];
                 if (exp) {
-                  const target = exportTarget(exp);
+                  const target = exportTarget(exp, nodeBuild(pkg));
                   if (target) {
                     subpathResolved = `${pkgDir}/${target.replace(/^\.\//, '')}`;
                   }
@@ -203,7 +203,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
                       const regex = new RegExp(`^${pattern}$`);
                       const match = subpath.match(regex);
                       if (match) {
-                        const target = exportTarget(value);
+                        const target = exportTarget(value, nodeBuild(pkg));
                         if (target) {
                           subpathResolved = `${pkgDir}/${target.replace(/^\.\//, '').replace('*', match[1])}`;
                           break;
@@ -241,9 +241,9 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
                   main = exp;
                 } else if (exp['.']) {
                   const dotExport = exp['.'];
-                  main = exportTarget(dotExport);
+                  main = exportTarget(dotExport, nodeBuild(pkg));
                 } else {
-                  main = exportTarget(exp);
+                  main = exportTarget(exp, nodeBuild(pkg));
                 }
               }
 
@@ -312,7 +312,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
               if (pkg.exports) {
                 const exp = pkg.exports;
                 if (typeof exp === 'string') main = exp;
-                else main = exportTarget(exp['.'] ?? exp);
+                else main = exportTarget(exp['.'] ?? exp, nodeBuild(pkg));
               }
               if (!main) main = pkg.main || pkg.module || 'index.js';
               if (typeof main !== 'string') main = 'index.js';
@@ -349,7 +349,7 @@ export function createRequireFunction(deps: RequireDeps): RequireFunction {
               if (pkg.exports) {
                 const exp = pkg.exports;
                 if (typeof exp === 'string') main = exp;
-                else main = exportTarget(exp['.'] ?? exp);
+                else main = exportTarget(exp['.'] ?? exp, nodeBuild(pkg));
               }
               if (!main) main = pkg.main || pkg.module || 'index.js';
               if (typeof main !== 'string') main = 'index.js';
@@ -565,21 +565,30 @@ export function wrapModuleBody(body: string, isAsync: boolean): string {
  * stack); require before import because the import entry is often an ESM
  * wrapper around the CommonJS one (commander).
  */
-export function exportTarget(v: unknown): string | undefined {
+export function exportTarget(v: unknown, nodeBuild = false): string | undefined {
   if (typeof v === 'string') return v;
   if (Array.isArray(v)) {
-    for (const x of v) { const t = exportTarget(x); if (t) return t; }
+    for (const x of v) { const t = exportTarget(x, nodeBuild); if (t) return t; }
     return undefined;
   }
   if (!v || typeof v !== 'object') return undefined;
   const o = v as Record<string, unknown>;
   for (const c of ['browser', 'require', 'node', 'default', 'import']) {
-    if (o[c] === undefined) continue;
-    const t = exportTarget(o[c]);
+    if (o[c] === undefined || (nodeBuild && c === 'browser')) continue;
+    const t = exportTarget(o[c], nodeBuild);
     if (t) return t;
   }
   return undefined;
 }
+
+/**
+ * Packages whose browser build is only a stub that throws ("ws does not work
+ * in the browser"): they take their node build, which runs on tabcomputer's
+ * node (ws's server attaches to http.createServer's 'upgrade'; engine.io,
+ * under Socket.IO, requires it).
+ */
+export const NODE_BUILD_PACKAGES = new Set(['ws']);
+const nodeBuild = (pkg: { name?: unknown }) => typeof pkg?.name === 'string' && NODE_BUILD_PACKAGES.has(pkg.name);
 
 /**
  * What import() of a module gives, from its CommonJS exports: a namespace

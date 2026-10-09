@@ -385,10 +385,12 @@ export async function executeNodeScript(
               method: init?.method || 'GET',
               headers: (init?.headers && typeof init.headers === 'object' && !Array.isArray(init.headers))
                 ? init.headers as Record<string, string> : {},
-              body: typeof init?.body === 'string' ? init.body : null,
+              body: typeof init?.body === 'string' ? init.body
+                : init?.body instanceof Uint8Array ? init.body as any
+                : init?.body instanceof ArrayBuffer ? new Uint8Array(init.body) as any : null,
             }).then(vResp => new Response(
-              typeof vResp.body === 'string' ? vResp.body
-                : vResp.body instanceof Uint8Array ? new TextDecoder().decode(vResp.body)
+              // bytes stay bytes; a stream (server-sent events) is read as it comes
+              typeof vResp.body === 'string' || vResp.body instanceof Uint8Array || vResp.body instanceof ReadableStream ? vResp.body as BodyInit
                 : JSON.stringify(vResp.body ?? ''),
               { status: vResp.status || 200, statusText: vResp.statusText || 'OK', headers: vResp.headers || {} },
             ));
@@ -482,9 +484,9 @@ export async function executeNodeScript(
             if (isLocalhost) {
               const { port, path, method } = (this as any)._localhost;
               iframeServer.fetch(port, path, { method, body: typeof body === 'string' ? body : null })
-                .then(vResp => {
+                .then(async vResp => {
                   const text = typeof vResp.body === 'string' ? vResp.body
-                    : vResp.body instanceof Uint8Array ? new TextDecoder().decode(vResp.body)
+                    : vResp.body instanceof Uint8Array || vResp.body instanceof ReadableStream ? await new Response(vResp.body as BodyInit).text()
                     : JSON.stringify(vResp.body ?? '');
                   respondWith(vResp.status || 200, vResp.statusText || 'OK', text);
                 })

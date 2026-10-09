@@ -132,7 +132,7 @@ export const fetchCmd: Command = {
           }
           if (!headersOnly) {
             const text = typeof vResp.body === 'string' ? vResp.body
-              : vResp.body instanceof Uint8Array ? new TextDecoder().decode(vResp.body)
+              : vResp.body instanceof Uint8Array || vResp.body instanceof ReadableStream ? await new Response(vResp.body as BodyInit).text()
               : JSON.stringify(vResp.body);
             output += text;
             if (!text.endsWith('\n')) output += '\n';
