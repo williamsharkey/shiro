@@ -19,6 +19,7 @@ const finalShot = opt('--shot', '');
 const keep = flag('--keep');
 const jsonOut = opt('--json', '/tmp/gui-timings.json');
 const noWarm = flag('--no-warm');
+const waitMs = +opt('--timeout', '300') * 1000;
 const at = {};
 for (let t = opt('--at', null); t; t = opt('--at', null)) { const [a, xy] = t.split('='); at[a] = xy.split(',').map(Number); }
 const types = {};
@@ -62,7 +63,7 @@ async function launch(app) {
 }
 
 async function waitApp(app, t0) {
-  const mapped = await page.waitForFunction((app) => window.__shiro.desktop.windows().some((w) => w.appId === app && w.surface), app, { timeout: 300000, polling: 100 }).then(() => Date.now() - t0);
+  const mapped = await page.waitForFunction((app) => window.__shiro.desktop.windows().some((w) => w.appId === app && w.surface), app, { timeout: waitMs, polling: 100 }).then(() => Date.now() - t0);
   const drawn = await page.waitForFunction((app) => {
     const w = window.__shiro.desktop.windows().find((w) => w.appId === app && w.surface);
     if (!w) return false;
@@ -74,7 +75,7 @@ async function waitApp(app, t0) {
       if (first === null) first = v; else if (v !== first) return true;
     }
     return false;
-  }, app, { timeout: 300000, polling: 200 }).then(() => Date.now() - t0);
+  }, app, { timeout: waitMs, polling: 200 }).then(() => Date.now() - t0);
   return { mapped, drawn };
 }
 

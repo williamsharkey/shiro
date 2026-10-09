@@ -44,11 +44,12 @@ reset, e.g.).
 | xclock | Xaw, RENDER | 8.9 MB | 0.2–0.5 s¹ | 1.7 s | 2.6–2.8 s | 1.4 s | works (antialiased hands via RENDER) |
 | xterm | Xaw, core fonts, pty | 9.3 MB (33 pkgs) | 2.1 s | 1.7 s | 2.5–2.7 s | 1.6–1.9 s | works: Shiro's shell in its pty, typing |
 | l3afpad | GTK 3.24 | 33.1 MB (81 pkgs; closure 51 MB) | 10.3–12.2 s | 11.9 s | 12.9 s | — | works (Adwaita, menus, typing) |
-| mousepad | GTK 3.24 (Xfce) | 45.1 MB (90 pkgs) | 5.6 s¹ | 14.5 s | 32 s | 25.6 s | works; slow start (it waits on D-Bus/xfconf first) |
+| mousepad | GTK 3.24 (Xfce) | 44.6 MB (86 pkgs) | 5.6 s¹ | 14.5 s | 32 s | 25.6 s | works; slow start (it waits on D-Bus/xfconf first) |
 | ristretto | GTK 3.24 (Xfce) | 35.1 MB (97 pkgs) | 10.9 s | 11.5–12.5 s | 14.4–15.5 s | 13.1 s | works (opens a PNG; no thumbnails without tumbler) |
 | gpicview | GTK 2.24 | 26.8 MB (64 pkgs) | 4.8–7.6 s | 7.2–7.6 s | 6.9–9.7 s | 6.7 s | works (opens a PNG) |
 | featherpad | Qt 5.15 (xcb) | 35.0 MB (73 pkgs; closure 84 MB) | 6.1–7.8 s | 7.0–8.2 s | 10.5–16 s | 8.9–14.7 s | works (menus, icons, editing) |
-| lximage-qt | Qt 5.15 | 38.1 MB | 7.4–8.7 s | — | — | — | exits: no D-Bus session bus, so its single-instance check thinks another copy runs |
+| GIMP 2.10 | GTK 2.24, GEGL | 53.2 MB (83 pkgs; closure 141 MB) | 18.3–19.2 s | 21.8 s | 290 s³ | 84 s³ | works: main window, menus (stretch app) |
+| lximage-qt | Qt 5.15 | 36.8 MB | 7.4–8.7 s | — | — | — | exits: no D-Bus session bus, so its single-instance check thinks another copy runs |
 
 Ranges are the runs of this session (the 4-vCPU container was busy to
 different degrees). "Warm" is close + start again in the same page: it is
@@ -57,6 +58,10 @@ relocating ~70–100 shared libraries and running toolkit init, not
 downloading.
 
 ¹ sharing most packages with an app installed just before.
+³ to the main window. The first start queries all ~100 plug-ins (each one a
+Blink process) and writes GIMP's caches to `~/.config/GIMP`; later starts
+read them. Plug-ins whose libraries aren't in the startup set (22 of them:
+PDF, HEIF, WebKit help, ...) are removed at install so GIMP doesn't try them.
 
 GTK 3 stalled in Chromium (and in ~2 of 3 Node runs with the JIT) right
 after mapping its first window until Blink patch 0029 (SSE compares wrote
@@ -141,9 +146,12 @@ self-contained floating-window host for the classic full-page terminal UI.
 - `public/gui/apps.json` is generated offline by `scripts/gui/gen-apps.py`
   from Debian's Packages index: for each app, the dependency closure is
   unpacked and reduced to what the app needs to *start*: the ELF `DT_NEEDED`
-  closure of its binaries and of the toolkit plugins it always loads (Qt's
-  xcb platform plugin, gdk-pixbuf loaders), plus architecture-independent
-  data packages (themes, icons, fonts, schemas). Libraries reached only by
+  closure of its binaries and of the plugins it always loads (Qt's xcb
+  platform plugin, gdk-pixbuf loaders, babl), plus the
+  architecture-independent data packages (themes, icons, fonts, schemas)
+  that a kept package depends on. Optional plug-ins (GIMP's plug-ins, GEGL
+  ops) are kept when their libraries are already in that set, otherwise
+  the manifest lists them under `remove` and the installer deletes them. Libraries reached only by
   `dlopen` of optional modules — Mesa and LLVM through libglvnd (Qt asks for
   GLX, which Xshiro doesn't offer), CUPS print backends, Kerberos, ICU via
   libxml2 — are never downloaded. That halves Qt (84 → 35 MB).
@@ -211,5 +219,6 @@ self-contained floating-window host for the classic full-page terminal UI.
 6. **Per-file laziness**: packages are fetched whole, before start; a kernel
    open hook (unix/kernel) would let files materialize on first open.
 7. **Wayland** (wl_shm) once Blink can share mappings with the page.
-8. Stretch apps: GIMP (139 MB closure) and Inkscape (94 MB) are GTK apps and
-   the next to package and try.
+8. Stretch apps: GIMP runs (slow first start, see above). Inkscape (GTK 3,
+   94 MB closure) is next; GIMP's first start would drop to its second-start
+   time with plug-in caches (`pluginrc`) shipped as an overlay.

@@ -20,6 +20,8 @@ export interface DebPackage { version: string; filename: string; sha256: string;
 export interface GuiApp {
   description: string; toolkit: string; bin: string; packages: string[];
   size: number; closureSize: number; dropped: string[];
+  /** Paths deleted after unpacking: optional plug-ins whose libraries were left out. */
+  remove?: string[];
 }
 /** A file a postinst would generate, built by gen-apps.py (public/gui/overlay/SHA256), applied when `when` is installed. */
 export interface Overlay { path: string; sha256: string; size: number; when: string }
@@ -296,6 +298,7 @@ async function doInstall(fs: FileSystem, kernel: Kernel, name: string, onProgres
   }
   res.ms.fetch = fetchWait;
   void tFetch0;
+  for (const path of app.remove ?? []) await fs.rm(path, { recursive: true }).catch(() => {});
   for (const o of m.overlays ?? []) {
     if (!app.packages.includes(o.when) || !want.includes(o.when)) continue;
     const { data } = await getBlob(o.sha256, o.size, `gui/overlay/${o.sha256}`, cache, null);

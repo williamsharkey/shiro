@@ -160,7 +160,8 @@ export class Rootless {
     if (!p) return undefined;
     // the instance name (argv[0] of most apps: "xterm", "l3afpad") is the desktop app id
     const parts = new TextDecoder('latin1').decode(p.data).split('\0');
-    return (parts[0] || parts[1] || '').toLowerCase() || undefined;
+    // ... without a version suffix ("gimp-2.10" → "gimp")
+    return (parts[0] || parts[1] || '').toLowerCase().replace(/-\d+(\.\d+)*$/, '') || undefined;
   }
 
   private destroyed(w: XWindow): void {

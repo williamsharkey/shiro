@@ -194,6 +194,7 @@ is download + unpack + triggers:
 | FeatherPad (Qt 5) | 35.0 MB | 6.1–7.8 s | 10.5–16 s | 8.9–14.7 s |
 | L3afpad (GTK 3) | 33.1 MB | 10.3–12.2 s | 12.9 s | — |
 | Ristretto (GTK 3) | 35.1 MB | 10.9 s | 14.4–15.5 s | 13.1 s |
+| GIMP 2.10 (GTK 2) | 53.2 MB | 19 s | 290 s (main window) | 84 s |
 
 Reinstalling from the browser's Cache Storage (by sha256, no network): xeyes
 1.4 s, xterm 1.7 s, GPicView 7.2 s, FeatherPad 7.0–8.2 s — unpacking (JS xz)

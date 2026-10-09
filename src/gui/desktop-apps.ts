@@ -16,6 +16,7 @@ const APPS: [string, string, boolean, string][] = [
   ['lximage-qt', 'LXImage-Qt', false, '▤'],
   ['mousepad', 'Mousepad', false, '✎'],
   ['gpicview', 'GPicView', true, '▣'],
+  ['gimp', 'GIMP', false, 'G'],
   ['xeyes', 'xeyes', true, '◉'],
   ['xclock', 'xclock', false, '◷'],
   ['xcalc', 'xcalc', false, '±'],
