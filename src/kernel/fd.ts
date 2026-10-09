@@ -638,6 +638,12 @@ export async function flushInode(fs: FileSystem, path: string): Promise<void> {
   await inodeTables.get(fs)?.get(path)?.flush();
 }
 
+/** chmod of `path`: an open inode reports (inodeStat) the new mode. */
+export function setInodeMode(fs: FileSystem, path: string, mode: number): void {
+  const ino = inodeTables.get(fs)?.get(path);
+  if (ino) ino.mode = (ino.mode & ~0o7777) | (mode & 0o7777);
+}
+
 /**
  * utimensat on `path`: an open inode writes back what it holds first (so a
  * later write-back doesn't stamp the current time over the new times) and

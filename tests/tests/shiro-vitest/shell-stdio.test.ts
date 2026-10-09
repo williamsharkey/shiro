@@ -72,7 +72,7 @@ beforeAll(async () => {
   ({ fs, shell } = await createTestShell());
   await fs.mkdir('/usr/local/bin', { recursive: true });
   await fs.mkdir('/tmp', { recursive: true });
-  for (const p of ['ping', 'readloop', 'upper']) {
+  for (const p of ['ping', 'readloop', 'upper', 'fdwrite']) {
     await fs.writeFile(`/usr/local/bin/${p}`, new Uint8Array(readFileSync(path.join(fixtures, `${p}.wasm`))));
   }
   kernel = kernelForContext({ fs, shell } as unknown as CommandContext);
@@ -178,5 +178,27 @@ describe('sh as a kernel process uses its fds', () => {
     await fs.chmod?.('/usr/local/bin/s.sh', 0o755);
     const r = await run(['/usr/local/bin/s.sh'], '1\nrest\n');
     expect(r.out).toBe('got 1\nREST\n');
+  });
+});
+
+describe('fds 3-9 are inherited as they are', () => {
+  it('a shell run by the kernel writes to its inherited fd 3, and so do programs it starts', async () => {
+    let three = '';
+    let out = '';
+    const p = await spawn(['sh', '-c', 'echo a >&3; fdwrite 3 b; echo out'], {
+      0: new BufferFile('', O_RDONLY), 1: new SinkFile((t) => { out += t; }), 2: new SinkFile(() => {}),
+      3: new SinkFile((t) => { three += t; }),
+    });
+    await withTimeout(p.wait(), 20_000);
+    expect(three).toBe('a\nb\n');
+    expect(out).toBe('out\n');
+  });
+
+  it('exec 3>file and exec 4>&1 1>/dev/null reach programs the shell starts', async () => {
+    let out = '';
+    const st = await shell.execute('exec 3>/tmp/fd3.txt; fdwrite 3 c; fdwrite 3 d; cat /tmp/fd3.txt; exec 4>&1 1>/dev/null; fdwrite 4 e; echo hidden',
+      (t) => { out += t; }, () => {});
+    expect(out.replace(/\r\n/g, '\n')).toBe('c\nd\ne\n');
+    expect(st).toBe(0);
   });
 });

@@ -373,17 +373,18 @@ class VarLogProvider implements VirtualFSProvider {
     return '';
   }
 
-  // Only the two files: /var/log itself is a real directory (dpkg and apt
-  // write their logs there), which readdir merges these names into.
+  // Only syslog: /var/log itself is a real directory (dpkg and apt write
+  // their logs there, systemd makes /var/log/journal), which readdir merges
+  // this name into.
   handles(path: string): boolean {
-    return path === '/var/log/syslog' || path === '/var/log/journal';
+    return path === '/var/log/syslog';
   }
   readFile(path: string, encoding?: 'utf8'): string | Uint8Array | null {
     const content = this.getSyslog();
     return encoding === 'utf8' ? content : new TextEncoder().encode(content);
   }
   stat(path: string): StatResult | null {
-    if (path === '/var/log/syslog' || path === '/var/log/journal') {
+    if (path === '/var/log/syslog') {
       return makeStat({ path, type: 'file', content: new Uint8Array(0), mode: 0o644, mtime: Date.now(), ctime: 0, size: 0 });
     }
     return null;
@@ -1308,7 +1309,7 @@ export class FileSystem {
     const entries: string[] = [...await this._childNames(path)];
 
     // The virtual log files live in the real /var/log
-    if (path === '/var/log') for (const n of ['syslog', 'journal']) if (!entries.includes(n)) entries.push(n);
+    if (path === '/var/log' && !entries.includes('syslog')) entries.push('syslog');
 
     // For root directory, add virtual top-level dirs
     if (path === '/') {

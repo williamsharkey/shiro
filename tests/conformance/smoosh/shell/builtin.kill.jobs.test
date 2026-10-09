@@ -1,0 +1,27 @@
+sleep 5 & pid1=$!
+sleep 6 & pid2=$!
+start=$(date "+%s")
+sleep 1
+kill %1 %2 && exit 3
+kill $pid1 $pid2
+wait
+stop=$(date "+%s")
+elapsed=$((stop - start))
+echo $stop - $start = $elapsed
+[ $((elapsed)) -lt 3 ] || exit 1
+
+echo setting -m
+set -m
+echo sleeping
+jobs -l
+sleep 5 & pid1=$!
+sleep 6 & pid2=$!
+start=$(date "+%s")
+sleep 1
+jobs -l
+kill %1 %2
+wait
+stop=$(date "+%s")
+elapsed=$((stop - start))
+echo $stop - $start = $elapsed
+[ $((elapsed)) -lt 3 ] || exit 2

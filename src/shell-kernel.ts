@@ -33,6 +33,8 @@ export interface KernelProgram {
   run: Runner;
   /** A Shiro builtin run through kernel.runBuiltin (not a WASM/x86 program) */
   builtin?: boolean;
+  /** Environment defaults from the package (the job's own values win) */
+  env?: Record<string, string>;
 }
 
 const dec = new TextDecoder();
@@ -153,6 +155,11 @@ export interface KernelRunOptions {
    * shell-stdio.ts); a missing one falls back to the options above.
    */
   fds?: { 0?: OpenFile; 1?: OpenFile; 2?: OpenFile };
+  /**
+   * The shell's own fds 3-9 (exec 3>file, exec 4>&1, exec 5<in), which every
+   * program inherits: a file to append to, a stream to write to, or input text.
+   */
+  inheritFds?: { fd: number; path?: string; write?: (s: string) => void; content?: string }[];
 }
 
 export interface KernelRunResult {
@@ -222,6 +229,20 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
     delete env.LINES;
   }
 
+  // fds 3-9 of the shell, the same open files for every stage
+  const extra: Record<number, OpenFile> = {};
+  for (const f of opts.inheritFds ?? []) {
+    if (f.path !== undefined) {
+      const o = await openOut({ path: f.path, append: true });
+      if (typeof o !== 'string') extra[f.fd] = o;
+    } else if (f.write) {
+      const w = f.write;
+      extra[f.fd] = new SinkFile((t) => w(t.replace(/\r?\n/g, '\r\n')));
+    } else if (f.content !== undefined) {
+      extra[f.fd] = new BufferFile(f.content, A.O_RDONLY);
+    }
+  }
+
   const procs: Process[] = [];
   let input = stdin0;
   for (let i = 0; i < programs.length; i++) {
@@ -231,8 +252,8 @@ export async function runKernelPipeline(shell: Shell, programs: KernelProgram[],
     if (i === programs.length - 1) out = lastOut;
     else [nextInput, out] = createPipe();
     const spawn = {
-      path: p.argv[0], argv: p.argv, env, cwd: opts.cwd,
-      fds: { 0: input, 1: out, 2: errOut }, run: p.run,
+      path: p.argv[0], argv: p.argv, env: p.env ? { ...p.env, ...env } : env, cwd: opts.cwd,
+      fds: { ...extra, 0: input, 1: out, 2: errOut }, run: p.run,
       // children of a hosted shell stay in its process group, under it
       pgid: host ? undefined : procs.length ? procs[0].pgid : 0,
       parent: host ?? undefined,

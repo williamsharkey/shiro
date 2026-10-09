@@ -159,6 +159,108 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### unix/desktop 3 — the terminal's first layout: system font lookups
+
+perf-fs-shell's cold-boot profile showed `new ShiroTerminal` dominated by
+xterm's first forced layout. A trace of that layout (`devtools.timeline` +
+`fonts` categories, from `shiro:terminal:start` to `shiro:terminal:ready`)
+shows it is not box layout: 17 `FontCache::GetFontPlatformData` calls, 12 of
+them blocking `MatchFamilyName` IPCs to the browser's font service, for every
+family in the desktop's font stacks that isn't installed (`ui-sans-serif`,
+`Cascadia Code`, `Menlo`, `Consolas`, `ui-monospace`, …), about 1 ms each. The
+terminal UI's first layout does 5. Containment (`contain: strict` on the
+window/pane), hiding the wallpaper, title bar or wordmark, and dropping the
+`@font-face` rules changed nothing measurable.
+
+Change: the font stacks are the web font plus its generic family
+(`'Inter', sans-serif`, `"JetBrains Mono", monospace`, in the CSS, xterm and
+the icon glyphs), and the wallpaper wordmark joins the page with the menu bar
+and dock, after the terminal exists. First layout: 12 → 7 font lookups, ~14 →
+~10 ms (4 traced boots each; the terminal UI's is ~4 ms).
+
+`node bench/ab.mjs origin/unix/integration --quick --suites boot --rounds 5`
+(79594fd vs this): no significant change end to end — cold first prompt
+213 → 202 ms (p = 0.97), warm 130 → 114 ms (−10%, lower in all 5 rounds,
+p = 0.15), first command and long tasks unchanged. A 3-round run of the same
+pair showed cold first prompt +9.5% (p = 0.09) and first command +3 ms
+(p = 0.003); the 5-round run didn't reproduce either, so both are read as noise.
+
+### unix/desktop 2 — fewer requests and DOM nodes at first prompt
+
+Integration 1d9582a counted 15 boot requests and 414 DOM nodes (68dbbbc: 10
+and 353). What the page loaded before the first prompt, by source:
+
+- desktop: the chunk's CSS file (since the chunk split), 3 `data:` SVGs (the
+  traffic-light glyphs), and icon tiles built from SVG gradients (106 of the
+  dock's 132 nodes were `<defs>`, gradients, stops and frame rects);
+- unix/gui: `gui/desktop-apps` (dock icons for Debian GUI apps), `x11/display`;
+- unix/debian: `debian/rootfs`.
+
+Changes: the desktop CSS is inlined into its chunk (`?inline`, injected at
+boot); the traffic-light glyphs are text; a tile's gradient, shine and border
+are CSS (`.sd-tile`) so the SVG holds only the glyph; the GUI apps register on
+idle (`requestIdleCallback`) instead of before the first prompt. `x11/display`
+and `debian/rootfs` are unchanged (the X socket and the Debian PATH set-up
+belong at boot).
+
+Quick suite `--suites boot`, integration c14344d vs. this change, two rounds
+alternated on one machine, medians of 6:
+
+| metric | before | after |
+|---|---:|---:|
+| boot.cold.requests (until TTI) | 15 | 11 |
+| boot.settled.requests | 16 | 12 |
+| boot.mem.dom_nodes (at TTI) | 414 | 349 |
+| boot.cold.first_prompt | 210 ms | 212 ms |
+| boot.warm.first_prompt | 158 ms | 122 ms |
+| boot.cold.transfer | 1575 KiB | 1574 KiB |
+| boot.mem.renderer_rss | 232 MiB | 229 MiB |
+
+At the first prompt itself (CDP, before idle work): 14 → 9 requests and 241 →
+177 DOM nodes; the bench's TTI is a second later and includes the GUI apps.
+### unix/gui — X11 server in the page, Debian GUI apps on first use
+
+New: `Xshiro :0` (a kernel process listening on `/tmp/.X11-unix/X0`, ~1 KB in
+the main bundle; the server, RENDER and fonts are a 180 KB gzip chunk loaded
+on the first X client), dock entries for four GUI apps, and `gui`
+(docs/GUI.md). Boot cost, `--quick --suites boot --runs 5 --modes isolated`,
+base 4970079 (unix/integration) vs. this branch, two rounds alternated on one
+machine, medians of all samples:
+
+| metric | base | unix/gui |
+|---|---:|---:|
+| boot.cold.first_prompt | 305 ms | 307 ms |
+| boot.warm.first_prompt | 199 ms | 163 ms (noise) |
+| boot.cold.long_tasks | 2 | 2 |
+| boot.cold.requests | 12 | 12 |
+| boot.cold.transfer | 1550 KiB | 1554 KiB |
+| boot.mem.js_heap | 3.8 MiB | 3.9 MiB |
+| boot.mem.renderer_rss | 230 MiB | 231 MiB |
+| boot.mem.dom_nodes | 355 | 387 (+4 dock icons) |
+
+The first version loaded the display listener and the dock list as two lazy
+chunks: +2 requests on every boot. Both are static imports now.
+
+GUI apps in headless Chromium (`scripts/gui/shoot.mjs`, local server with
+network to deb.debian.org), from `gui APP` to the first drawn frame; install
+is download + unpack + triggers:
+
+| app | download | install | first frame | warm start |
+|---|---:|---:|---:|---:|
+| xeyes (Xt, SHAPE) | 7.5 MB | 1.9 s | 0.9–1.3 s | 0.5 s |
+| xterm (Xaw, pty) | 9.3 MB | 2.1 s | 2.5–2.7 s | 1.6–1.9 s |
+| GPicView (GTK 2) | 26.8 MB | 4.8–7.6 s | 6.9–9.7 s | 6.7 s |
+| FeatherPad (Qt 5) | 35.0 MB | 6.1–7.8 s | 10.5–16 s | 8.9–14.7 s |
+| L3afpad (GTK 3) | 33.1 MB | 10.3–12.2 s | 12.9 s | — |
+| Ristretto (GTK 3) | 35.1 MB | 10.9 s | 14.4–15.5 s | 13.1 s |
+| GIMP 2.10 (GTK 2) | 53.2 MB | 19 s | 290 s (main window) | 84 s |
+
+Reinstalling from the browser's Cache Storage (by sha256, no network): xeyes
+1.4 s, xterm 1.7 s, GPicView 7.2 s, FeatherPad 7.0–8.2 s — unpacking (JS xz)
+and writing files dominates. Start-up is Blink loading ~70–100 shared
+libraries and toolkit init, so a warm start is barely faster than the first.
+GTK 3 needed Blink patch 0029 (it spun in cairo/pixman SSE compares).
+
 ### unix/desktop — the desktop shell (menu bar, dock, windows) on the boot path
 
 The Unix edition boots to the desktop (docs/DESKTOP.md); shiro.computer keeps
@@ -203,6 +305,36 @@ three `data:` SVGs (traffic-light glyphs) that CDP counts. The +22 MiB RSS is
 composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
+
+### unix/shell-stdio 3 — fd copies keep their stream; programs inherit fds 3-9
+
+`node bench/ab.mjs origin/unix/integration HEAD --suites shell,kernel --quick`
+(b8834c7 → 501fe88, 3 rounds × 5 runs, alpha 0.01): no regression. 22
+metrics unchanged; shell.echo improved (0.12 → 0.074 ms, every round);
+shell.redirect_append_100 moved −29% but not in every round (inconsistent).
+
+### unix/shell-stdio 2 — POSIX shell fixes (smoosh suite)
+
+Signals to the shell, $$/$PPID/$!, exported vs unexported variables,
+subshell EXIT traps, set -u, bracket expressions and the other fixes found by
+the smoosh POSIX suite (docs/CONFORMANCE.md). Quick shell suite, isolated,
+base unix/integration c14344d vs. 3107d0c, three runs of each alternating
+(medians per run, ms):
+
+| metric | base | new |
+|---|---|---|
+| shell.true | 0.075 / 0.080 / 0.080 | 0.068 / 0.090 / 0.072 |
+| shell.cmd_subst | 0.268 / 0.205 / 0.170 | 0.205 / 0.194 / 0.223 |
+| shell.loop_1000 | 86.7 / 96.3 / 93.7 | 110.2 / 86.7 / 98.2 |
+| shell.for_seq_1000 | 36.5 / 35.8 / 39.1 | 36.3 / 38.6 / 38.2 |
+| shell.pipeline_seq_grep_wc | 31.7 / 33.4 / 38.1 | 54.3 / 41.3 / 38.0 |
+| shell.redirect_append_100 | 6.26 / 6.46 / 7.65 | 6.92 / 7.41 / 7.42 |
+
+compare.mjs flagged loop_1000, pipeline_seq_grep_wc and redirect_append_100
+on the first pair; the runs overlap after that. A CPU profile of
+pipeline_seq_grep_wc on both builds has the same top functions (seq's number
+formatting, wc's count, grep), none of them changed here, so the difference
+is taken as noise. Worth re-measuring on a quieter host.
 
 ### unix/shell-stdio — a shell run as a kernel process uses its fds
 
@@ -743,6 +875,60 @@ and re-run 3× alternating (7 runs each): `kernel.pipe_throughput*`,
 `kernel.syscall_inpage`, `kernel.spawn_throughput.*` (isolated),
 `shell.pipeline_seq_grep_wc`, `wasm.startup.*`: overlapping ranges, noise.
 `boot.settled.time` 6.3 s on the other host is 3.9 s here on both.
+
+### A/B tooling: `bench/ab.mjs` (no product change)
+
+`node bench/ab.mjs <base> [<new>]` builds each ref once in its own worktree,
+interleaves base/new runs over several rounds and flags a metric only when a
+Mann–Whitney test, a minimum shift and every round's direction agree (see
+bench/README.md "A/B"). First use: the suspected 68dbbbc → 1d9582a
+regression (`--suites shell,wasm --only 'shell.loop_1000|wasm.startup|wasm.peak_rss'`,
+3 rounds × 7 runs, isolated). All 15 metrics: **same**. `peak_rss.quickjs_ng`
+2.06 → 1.74 MiB, p = 0.90, rounds `-+-`; `shell.loop_1000` 95 → 99 ms,
+p = 0.60, rounds `++-`; `startup.lua` 7.6 → 6.6 ms, `startup.sqlite3`
+9.8 → 8.6 ms (both p > 0.01, split rounds).
+
+### Cold boot to first prompt: where the time goes (investigation, no product change)
+
+Integration 045feaa (desktop UI, isolated, this container; cold first prompt
+~255–275 ms here). Timeline from a CPU profile plus `performance.mark`s in
+`main()`, in ms from navigation:
+
+| step | ms |
+|---|---:|
+| entry `index-*.js` requested (HTML parse and the harness's request routing) | 79 |
+| entry downloaded | 104 |
+| `main()` starts: entry compile and top-level evaluation (27 ms, of which xterm's module wrapper is 14.5 ms) | 177 |
+| `fs.init` (IndexedDB open) | 178–189 |
+| desktop built | 197–205 |
+| `new ShiroTerminal`: xterm `open()`, whose first forced layouts are `_measure` 42 ms and Viewport `_innerRefresh` 25 ms in the profile | 205–260 |
+| `terminal.start()`, first prompt in the buffer | 261–300 |
+
+Moving the Debian rootfs boot / PATH shims, X display :0 and the Blink
+loader behind the first prompt (they are fire-and-forget imports that load
+at 194–211 ms) made no measurable difference:
+`ab.mjs HEAD --suites boot`, 4 rounds × 5 runs: cold first prompt
+270.8 → 275.5 ms, p = 0.97, so it was not committed. Loading
+`pkg-index.json` as text instead of JSON saves only a ~1 ms
+`JSON.parse` (Vite already emits large JSON as `JSON.parse`) and adds
+22 KiB, also not committed. The remaining levers are the entry's size
+(compile) and the cost of the desktop's first layout, which xterm forces.
+
+### unix/perf-fs-shell 6 — npm, upload/download/shiro, hc, remote, cw and the template palette load on first use
+
+Entry chunk 1405 → 1291 KB. `ab.mjs HEAD --suites boot`, 6 rounds × 5 runs,
+isolated, against integration 045feaa:
+
+| metric | base | new | |
+|---|---:|---:|---|
+| boot.cold.transfer | 1576 KiB | 1464 KiB | −7.1% (exact) |
+| boot.mem.uasm | 6.83 MiB | 6.51 MiB | −4.7%, p = 3e-11, all rounds |
+| boot.mem.js_heap | 3.9 MiB | 3.8 MiB | −2.6%, p = 7e-12 (under the 3% bar) |
+| boot.cold.first_prompt | 270.6 ms | 262.0 ms | −3.6%, p = 0.15: not significant |
+| boot.settled.requests | 12 | 13 | the split-out chunk fetched once used |
+
+The remote-session auto-reconnect reads its localStorage key directly and
+loads `commands/remote` only when there is a session to resume.
 
 ## Results
 

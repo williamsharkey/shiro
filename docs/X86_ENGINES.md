@@ -382,6 +382,52 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    symlink (dpkg lchowns NAME.dpkg-new links before their targets exist),
    and `fchownat` fails for a missing path. Ownership isn't kept; they
    check existence. Test: `fixtures/x86/lchown.c`.
+31. Same-instance fork, behind `BLINK_SAME_INSTANCE_FORK=1`: the fork child
+   is a new System with its own guest thread in the parent's Blink instance
+   (same wasm memory). Private pages are copied; pages of writable
+   `MAP_SHARED` mappings move onto host pages both processes map
+   (refcounted, PTE bit `PAGE_GROW`), so shared memory and its futexes work
+   across fork while parent and child run concurrently. The child's kernel
+   calls carry its pid; the page routes its signals by pid, turns its
+   kernel termination into a SIGKILL of its System, and keeps the worker
+   until the last process in it ends (a parent may exit first); its exec
+   starts the program in a worker of its own. LTP's fork-sensitive tests
+   (the ones the 0023 fallback broke): 22 of 24 pass with the flag, 1 of
+   24 without. Limits: a multi-threaded child's other threads aren't
+   reaped at its exit. Tests: `x86-engine.test.ts` "same-instance fork".
+32. `alarm` and `setitimer(ITIMER_REAL)` are per process in the kernel (Blink
+   used the host's one timer, shared by every process in an instance), so
+   a child's alarm is its own and SIGALRM interrupts blocking calls like
+   any signal. Test: `fixtures/x86/alarmfork.c`.
+33. `prctl` `PR_SET_NAME`/`PR_GET_NAME` (per thread; perl's `$0 = ...` died
+   with EINVAL) and `PR_CAPBSET_READ`; under Shiro `capget` reports every
+   capability for uid 0 and none otherwise (Linux's version handshake), and
+   `capset` accepts (libcap's `cap_get_proc` failed with ENOSYS). Test:
+   `fixtures/x86/prctlcap.c`.
+34. Futexes are keyed by host address, so a same-instance fork child and
+   its parent meet on a `MAP_SHARED` futex; a same-instance child's extra
+   threads end with it (`exit_group`, a kill); under Shiro `stat` and
+   friends with a NULL buffer are EFAULT once the file is found (LTP
+   fstat03). Tests: `fixtures/x86/shfutex.c`, `mtchild.c`, `statnull.c`.
+35. `FUTEX_WAKE` wakes at most `count` waiters and returns how many (it
+   woke every waiter and returned the waiter count; LTP futex_wake02), and
+   a timed futex wait ends by the guest's clock, the absolute timeout's
+   own clock for `FUTEX_WAIT_BITSET`, not by the condition variable's
+   coarser realtime ticks (LTP futex_wait_bitset01 saw it end early).
+   Test: `fixtures/x86/futexwake.c`.
+36. Under Shiro a futex wait in a process's main thread shows the process
+   sleeping (S in `/proc/PID/stat`) after its first polling tick, through
+   `SYS_shiro_sleeping` (LTP waits for S before signalling a child:
+   futex_wait03, futex_wait07); `FUTEX_WAKE` on an unmapped address is
+   EFAULT; the main thread's tid is the kernel's pid, in a vfork-style
+   child too (it was Blink's own). Kernel side: a syscall shows S once it
+   has lasted 2 ms (a quick `sigaction` is R, as on Linux) and a fork child
+   counts as running from the start. Test: `fixtures/x86/futexintr.c`.
+37. More `prctl`: `PR_SET/GET_KEEPCAPS` (iputils' ping died with EINVAL),
+   `PDEATHSIG`, `DUMPABLE`, `CHILD_SUBREAPER`, `NO_NEW_PRIVS` and
+   `CAP_AMBIENT` are recorded and reported back, not enforced;
+   `PR_CAPBSET_DROP` is accepted under emscripten. Test:
+   `fixtures/x86/prctlcap.c`.
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.

@@ -25,6 +25,22 @@ export class KernelStdio {
   readonly out = (s: string): void => this.write(1, s);
   readonly err = (s: string): void => this.write(2, s);
 
+  /** A writer for fd n of the process, in order with out/err */
+  writerFor(fd: number): (s: string) => void {
+    return (s) => this.write(fd, s);
+  }
+
+  /**
+   * The process's other inherited output fds (3-9) become the shell's own, so
+   * `echo x >&3` in the script, and programs it starts, reach them.
+   */
+  adoptFds(shell: { userFds: Map<number, unknown> }): void {
+    for (let n = 3; n <= 9; n++) {
+      const f = this.proc.fds.get(n);
+      if (f && f.kind !== 'dir' && !shell.userFds.has(n)) shell.userFds.set(n, { writer: this.writerFor(n) });
+    }
+  }
+
   private write(fd: number, s: string): void {
     if (!s) return;
     const bytes = enc.encode(s.replace(/\r\n/g, '\n'));

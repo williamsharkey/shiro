@@ -17,7 +17,7 @@ import { packageShadows, pkgOwnShadows, packageArgsForPath, PKG_BIN_DIR } from '
 import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
-  RegularFile, DirFile, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, flushInode, inodeStat, hasOpenInodes,
+  RegularFile, DirFile, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
   shareInodeNumber, forgetInodeNumber,
 } from './fd';
 import { createPipe } from './pipe';
@@ -156,7 +156,7 @@ export class Kernel {
     addProcInfoSource((pid) => {
       const p = this.procs.get(pid);
       if (!p || pid === 1) return undefined;
-      const state = p.state === 'zombie' ? 'Z' : p.state === 'stopped' ? 'T' : p.inSyscall > 0 ? 'S' : 'R';
+      const state = p.state === 'zombie' ? 'Z' : p.state === 'stopped' ? 'T' : p.sleeping() ? 'S' : 'R';
       return { pid, ppid: p.ppid, pgid: p.pgid, sid: p.sid, comm: p.comm, state, cmdline: p.argv };
     });
     this.registerDevice('/dev/null', (_p, f) => new DevNull(f));
@@ -448,6 +448,53 @@ export class Kernel {
       code = 1;
     }
     if (!proc.exiting) await this.exit(proc, A.W_EXITCODE(typeof code === 'number' ? code : 0));
+  }
+
+  /** ITIMER_REAL of `proc`: milliseconds left and the reload interval. */
+  realTimer(proc: Process): { value: number; interval: number } {
+    const t = proc.data.realTimer as { deadline: number; interval: number } | undefined;
+    if (!t) return { value: 0, interval: 0 };
+    return { value: Math.max(0, t.deadline - Date.now()), interval: t.interval };
+  }
+
+  /**
+   * setitimer(ITIMER_REAL)/alarm: SIGALRM to `proc` in `valueMs` (0 disarms),
+   * then every `intervalMs`. Returns the old setting. Not inherited by fork
+   * children; kept across exec (it lives on the process).
+   */
+  setRealTimer(proc: Process, valueMs: number, intervalMs: number): { value: number; interval: number } {
+    const old = this.realTimer(proc);
+    const t = proc.data.realTimer as { handle?: ReturnType<typeof setTimeout>; deadline: number; interval: number } | undefined;
+    if (t?.handle) clearTimeout(t.handle);
+    if (!(valueMs > 0)) {
+      delete proc.data.realTimer;
+      return old;
+    }
+    const timer: { handle?: ReturnType<typeof setTimeout>; deadline: number; interval: number } = { deadline: Date.now() + valueMs, interval: intervalMs > 0 ? intervalMs : 0 };
+    const arm = (ms: number) => {
+      timer.handle = setTimeout(() => {
+        if (proc.exiting || proc.data.realTimer !== timer) return;
+        if (timer.interval > 0) {
+          timer.deadline = Date.now() + timer.interval;
+          arm(timer.interval);
+        } else {
+          delete proc.data.realTimer;
+        }
+        this.deliver(proc, A.SIGALRM);
+      }, Math.max(0, ms));
+      (timer.handle as any)?.unref?.();
+    };
+    proc.data.realTimer = timer;
+    if (!proc.data.realTimerCleanup) {
+      proc.data.realTimerCleanup = true;
+      proc.onTerminate(() => {
+        const cur = proc.data.realTimer as { handle?: ReturnType<typeof setTimeout> } | undefined;
+        if (cur?.handle) clearTimeout(cur.handle);
+        delete proc.data.realTimer;
+      });
+    }
+    arm(valueMs);
+    return old;
   }
 
   /** Terminate `proc` with a wait status: close its fds, reparent its children, notify its parent. */
@@ -854,6 +901,7 @@ export class Kernel {
     if (SHELL_NAMES.has(cmd.name) || SHELL_NAMES.has(proc.argv[0]?.slice(proc.argv[0].lastIndexOf('/') + 1))) {
       stdio = new KernelStdio(this, proc);
       shell.kernelStdio = stdio;
+      stdio.adoptFds(shell);
       shell.kernelStdinLive = true;
     }
     const lazy = !stdio;
@@ -923,6 +971,7 @@ export class Kernel {
     }
     const stdio = new KernelStdio(this, proc);
     shell.kernelStdio = stdio;
+    stdio.adoptFds(shell);
     // A script read from stdin has none left
     let live = true;
     if (script === undefined) {
@@ -1004,6 +1053,7 @@ export class Kernel {
     // The shell uses this process's fds as its stdio (src/shell-stdio.ts)
     const stdio = new KernelStdio(this, proc);
     shell.kernelStdio = stdio;
+    stdio.adoptFds(shell);
     shell.kernelStdinLive = true;
     const code = await shell.execute(line, stdio.out, stdio.err, false, undefined, true);
     await stdio.flush();
@@ -1131,7 +1181,7 @@ export class Kernel {
     const t0 = Date.now();
     proc.syscalls++;
     // While in a syscall the process counts as sleeping (S in /proc/PID/stat)
-    proc.inSyscall++;
+    if (proc.inSyscall++ === 0) proc.syscallSince = t0;
     const done = () => { proc.inSyscall--; proc.kernelMs += Date.now() - t0; };
     // The caller awaits the call itself: the bookkeeping adds no await hop to it
     const p = this.syscallImpl(proc, nr, args, data);
@@ -1333,10 +1383,36 @@ export class Kernel {
           }
           return 0;
         }
-        case A.SYS_shiro_vfork:
-          return this.vfork(proc).pid;
+        case A.SYS_shiro_vfork: {
+          // the child is running code (its engine's), not idle like a builtin that makes no syscalls
+          const child = this.vfork(proc);
+          child.syscalls = 1;
+          return child.pid;
+        }
         case A.SYS_shiro_execve:
           return await this.sysExecve(proc, JSON.parse(str(0, args[0])), data);
+        case A.SYS_alarm: {
+          // seconds left on the old alarm, rounded like Linux
+          const old = this.setRealTimer(proc, (args[0] >>> 0) * 1000, 0);
+          return old.value > 0 ? Math.max(1, Math.round(old.value / 1000)) : 0;
+        }
+        case A.SYS_getitimer:
+        case A.SYS_setitimer: {
+          // ITIMER_REAL only (the engine keeps the CPU-time timers); struct
+          // itimerval in data: interval then value, each {i64 sec, i64 usec}
+          if (args[0] !== 0) return -A.EINVAL;
+          const dv = new DataView(data.buffer, data.byteOffset, 32);
+          const ms = (o: number) => Number(dv.getBigInt64(o, true)) * 1000 + Number(dv.getBigInt64(o + 8, true)) / 1000;
+          const put = (o: number, v: number) => {
+            const us = Math.max(0, Math.round(v * 1000));
+            dv.setBigInt64(o, BigInt(Math.floor(us / 1e6)), true);
+            dv.setBigInt64(o + 8, BigInt(us % 1e6), true);
+          };
+          const old = nr === A.SYS_setitimer ? this.setRealTimer(proc, ms(16), ms(0)) : this.realTimer(proc);
+          put(0, old.interval);
+          put(16, old.value);
+          return 0;
+        }
         case A.SYS_getpid: return proc.pid;
         case A.SYS_gettid: return proc.pid;
         case A.SYS_getppid: return proc.ppid;
@@ -1644,11 +1720,29 @@ export class Kernel {
             p = f.path;
             mode = args[1];
           } else if (nr === A.SYS_chmod) { p = at(A.AT_FDCWD, 0, args[0]); mode = args[1]; }
-          else { p = at(args[0], 0, args[1]); mode = args[2]; }
+          else if (args[1] === 0 && args[0] >= 0) {
+            // fchmodat2(fd, "", mode, AT_EMPTY_PATH) (Blink passes it without
+            // the flags): systemd's fchmod_opath on an O_PATH descriptor
+            const f = file(args[0]);
+            if (!f) return -A.EBADF;
+            if (!f.path) return -A.EINVAL;
+            p = f.path;
+            mode = args[2];
+          } else { p = at(args[0], 0, args[1]); mode = args[2]; }
           if (typeof p === 'number') return p;
-          const real = await fs().realpath(p);
+          // chmod("/proc/self/fd/N"): the file the descriptor has open (glibc's
+          // and systemd's fallback for O_PATH descriptors)
+          let path: string = p;
+          for (let hops = 0; hops < 8 && (path.startsWith('/proc/') || path.startsWith('/dev/fd/')); hops++) {
+            const fdm = /^\/dev\/fd\/(\d+)$/.exec(path);
+            const link: string | undefined = fdm ? proc.fds.get(Number(fdm[1]))?.path : this.procfs.linkTarget(proc, path);
+            if (!link || link === path) break;
+            path = link;
+          }
+          const real = await fs().realpath(path);
           await flushInode(fs(), real);
           await fs().chmod(real, mode & 0o7777);
+          setInodeMode(fs(), real, mode);
           return 0;
         }
         case A.SYS_utimensat: {
@@ -1713,6 +1807,9 @@ export class Kernel {
           return await this.getdents(proc, args[0], data.subarray(0, Math.min(args[1] >>> 0, data.length)));
         case A.SYS_spawn:
           return await this.sysSpawn(proc, JSON.parse(str(0, args[0])));
+        case A.SYS_shiro_sleeping:
+          proc.engineSleeps = Math.max(0, proc.engineSleeps + (args[0] | 0));
+          return 0;
         case A.SYS_getenv: {
           const b = enc.encode(JSON.stringify({ argv: proc.argv, env: proc.env, cwd: proc.cwd, pid: proc.pid }));
           if (b.length > data.length) return -A.E2BIG;

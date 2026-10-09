@@ -37,6 +37,18 @@ export class Process {
   state: ProcessState = 'running';
   /** Syscalls in progress (a blocked one makes the process "sleeping") */
   inSyscall = 0;
+  /** When the syscalls in progress began (inSyscall went from 0 to 1). */
+  syscallSince = 0;
+  /** Blocking waits the engine does itself (SYS_shiro_sleeping); they count as sleeping too. */
+  engineSleeps = 0;
+  /**
+   * Sleeping (S in /proc) rather than running: in a syscall that has lasted
+   * a moment (a quick one like sigaction is running, as on Linux; LTP signals
+   * a child once it sees S) or in a wait the engine does itself.
+   */
+  sleeping(now = Date.now()): boolean {
+    return (this.inSyscall > 0 && now - this.syscallSince >= 2) || this.engineSleeps > 0;
+  }
   /** Linux wait status once the process has exited. */
   exitStatus?: number;
   /** A stop/continue the parent has not collected with waitpid(WUNTRACED/WCONTINUED). */

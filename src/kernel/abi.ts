@@ -22,6 +22,9 @@ export const SYS_pipe = 22;
 export const SYS_dup = 32;
 export const SYS_dup2 = 33;
 export const SYS_nanosleep = 35;
+export const SYS_getitimer = 36;
+export const SYS_alarm = 37;
+export const SYS_setitimer = 38;
 export const SYS_getpid = 39;
 export const SYS_exit = 60;
 export const SYS_wait4 = 61;
@@ -147,6 +150,11 @@ export const SYS_shiro_vfork = 1010;
  * stopped and the new program runs in the same process.
  */
 export const SYS_shiro_execve = 1011;
+/**
+ * Shiro: args[0] = +1 / -1 around a blocking wait an engine does without the
+ * kernel (Blink's futex waits): the process shows as sleeping (S) meanwhile.
+ */
+export const SYS_shiro_sleeping = 1012;
 
 // ── errno (Linux) ──────────────────────────────────────────────────────────
 export const EPERM = 1;
