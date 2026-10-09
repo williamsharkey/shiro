@@ -159,6 +159,40 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### unix/desktop 2 — fewer requests and DOM nodes at first prompt
+
+Integration 1d9582a counted 15 boot requests and 414 DOM nodes (68dbbbc: 10
+and 353). What the page loaded before the first prompt, by source:
+
+- desktop: the chunk's CSS file (since the chunk split), 3 `data:` SVGs (the
+  traffic-light glyphs), and icon tiles built from SVG gradients (106 of the
+  dock's 132 nodes were `<defs>`, gradients, stops and frame rects);
+- unix/gui: `gui/desktop-apps` (dock icons for Debian GUI apps), `x11/display`;
+- unix/debian: `debian/rootfs`.
+
+Changes: the desktop CSS is inlined into its chunk (`?inline`, injected at
+boot); the traffic-light glyphs are text; a tile's gradient, shine and border
+are CSS (`.sd-tile`) so the SVG holds only the glyph; the GUI apps register on
+idle (`requestIdleCallback`) instead of before the first prompt. `x11/display`
+and `debian/rootfs` are unchanged (the X socket and the Debian PATH set-up
+belong at boot).
+
+Quick suite `--suites boot`, integration c14344d vs. this change, two rounds
+alternated on one machine, medians of 6:
+
+| metric | before | after |
+|---|---:|---:|
+| boot.cold.requests (until TTI) | 15 | 11 |
+| boot.settled.requests | 16 | 12 |
+| boot.mem.dom_nodes (at TTI) | 414 | 349 |
+| boot.cold.first_prompt | 210 ms | 212 ms |
+| boot.warm.first_prompt | 158 ms | 122 ms |
+| boot.cold.transfer | 1575 KiB | 1574 KiB |
+| boot.mem.renderer_rss | 232 MiB | 229 MiB |
+
+At the first prompt itself (CDP, before idle work): 14 → 9 requests and 241 →
+177 DOM nodes; the bench's TTI is a second later and includes the GUI apps.
+
 ### unix/desktop — the desktop shell (menu bar, dock, windows) on the boot path
 
 The Unix edition boots to the desktop (docs/DESKTOP.md); shiro.computer keeps

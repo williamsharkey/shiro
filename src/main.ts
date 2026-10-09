@@ -534,7 +534,11 @@ async function main() {
   shell.setTerminal(terminal);
   desktop?.attachMainTerminal(terminal);
   // Debian GUI apps (xterm, GTK, Qt) in the dock, installed on first click (src/gui/apps.ts)
-  if (desktop) void import('./gui/desktop-apps').then(m => m.registerGuiApps(desktop.wm, fs, kernel)).catch(e => console.warn('[gui]', e));
+  // Registered once the page is idle: their dock icons aren't needed for the first prompt
+  if (desktop) {
+    const idle = (window as any).requestIdleCallback ?? ((f: () => void) => setTimeout(f, 300));
+    idle(() => void import('./gui/desktop-apps').then(m => m.registerGuiApps(desktop!.wm, fs, kernel)).catch(e => console.warn('[gui]', e)), { timeout: 2000 });
+  }
   performance.mark('shiro:terminal:ready');
 
   // Listen for font size changes from parent (seed snippet)

@@ -1,0 +1,44 @@
+From 3b75c33f48629401da66eb319de58aa731fef62e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 06:02:02 +0000
+Subject: [PATCH 32/32] emscripten: Shiro alarm and setitimer(ITIMER_REAL) are
+ per process, in the kernel
+
+Blink armed the host's one ITIMER_REAL, which every process in this
+instance shares (same-instance fork children, the vfork child running on
+the parent's thread): a child's alarm(0) returned the parent's 30 s (LTP
+alarm03/06) and its SIGALRM went to the parent. alarm, getitimer and
+setitimer for ITIMER_REAL now go to the kernel, which keeps a timer per
+process (cleared for fork children, kept across exec) and delivers
+SIGALRM like any other signal, interrupting blocking calls.
+ITIMER_VIRTUAL and ITIMER_PROF stay Blink's.
+---
+ blink/shiro.inc | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index 63179df..bf48546 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -1853,6 +1853,18 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+           (c && CopyToUserWrite(m, c, id, 4) == -1)) r = -EFAULT_LINUX;
+       break;
+     }
++    // ITIMER_REAL and alarm live in the kernel, per process (Blink's used
++    // the host's one timer, shared by every process in this instance)
++    case 0x025: r = KS(m, 37, A12((int)a)); break;                   // alarm
++    case 0x024: case 0x026: {                                         // getitimer, setitimer
++      u8 it[32] = {0};
++      i64 out = nr == 0x024 ? b : c;
++      if ((int)a != 0) return false;  // ITIMER_VIRTUAL/PROF stay Blink's
++      if (nr == 0x026 && b && CopyFromUser(m, it, b, 32) == -1) { r = -EFAULT_LINUX; break; }
++      r = ShiroCall(m, nr == 0x024 ? 36 : 38, A12(0), it, nr == 0x026 ? 32 : 0, 32, false, false);
++      if (r >= 0 && out && CopyToUserWrite(m, out, it, 32) == -1) r = -EFAULT_LINUX;
++      break;
++    }
+     case 0x073: {                                                     // getgroups
+       // one supplementary group: the process's gid (the kernel's)
+       u8 g[4];
+-- 
+2.43.0
+

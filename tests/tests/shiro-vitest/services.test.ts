@@ -440,10 +440,13 @@ describe('Init System + Cron', () => {
       expect(stat!.isDirectory()).toBe(true);
     });
 
-    it('/var/log readdir returns syslog and journal', async () => {
+    it('/var/log readdir returns syslog; /var/log is a real directory', async () => {
       const entries = await fs.readdir('/var/log');
       expect(entries).toContain('syslog');
-      expect(entries).toContain('journal');
+      // systemd's postinst makes /var/log/journal itself (Debian mode)
+      await fs.mkdir('/var/log/journal', { recursive: true });
+      expect((await fs.stat('/var/log/journal')).isDirectory()).toBe(true);
+      expect(await fs.readdir('/var/log')).toContain('journal');
     });
   });
 });

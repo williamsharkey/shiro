@@ -30,6 +30,13 @@ var ShiroKernelLibrary = {
 
   // fork(): hand the process snapshot (blink/shiro.inc) to the page, which
   // starts it in a new worker as `pid`
+  // same-instance fork: tell the page this worker now hosts kernel process `pid`
+  shiro_hosted__proxy: 'sync',
+  shiro_hosted: (pid) => {
+    var K = Module['shiroKernel'];
+    if (K && K.hosted) K.hosted(pid);
+  },
+
   shiro_fork_start__proxy: 'sync',
   shiro_fork_start: (pid, ptr, len) => {
     var K = Module['shiroKernel'];
