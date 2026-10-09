@@ -1559,6 +1559,27 @@ export class FileSystem {
   }
 
   // isomorphic-git compatibility: symlink support
+  /**
+   * symlink() whose effect on the in-memory cache is immediate when the
+   * parent is in memory, for synchronous callers (node's fs.symlinkSync then
+   * lstatSync/readlinkSync/realpathSync). Falls back to symlink() otherwise.
+   */
+  symlinkNow(target: string, path: string): Promise<void> {
+    const canon = this._canonCached(path, false, { n: 0 });
+    if (canon === undefined) return this.symlink(target, path);
+    const existing = this._getCached(canon);
+    if (existing === undefined) return this.symlink(target, path);
+    if (existing) return Promise.reject(fsError('EEXIST', `EEXIST: file already exists, symlink '${target}' -> '${path}'`));
+    const parentPath = canon.substring(0, canon.lastIndexOf('/')) || '/';
+    const parent = this._getCached(parentPath);
+    if (parent === undefined) return this.symlink(target, path);
+    if (!parent || parent.type !== 'dir') return Promise.reject(fsError('ENOENT', `ENOENT: no such file or directory, symlink '${target}' -> '${path}'`));
+    const now = Date.now();
+    this._putNow({ path: canon, type: 'symlink', content: new TextEncoder().encode(target), mode: 0o120000, mtime: now, ctime: now, size: target.length, symlinkTarget: target } as FSNode);
+    this._emitChange('write', canon);
+    return Promise.resolve();
+  }
+
   async symlink(target: string, path: string): Promise<void> {
     path = await this._canon(path, false);
     const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';

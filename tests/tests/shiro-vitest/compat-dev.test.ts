@@ -933,6 +933,119 @@ import('dual').then(ns => console.log(ns.default.kind, ns.kind));
 const dyn = new Function('m', 'return import(m)'); dyn('./node_modules/dual/n.js').then(ns => console.log(ns.default));`))
       .toBe('cjs browser\ncjs cjs\nnode\n');
   }, 60_000);
+
+  // Expected values are real node 22's (cases ported from node's
+  // test/parallel/test-fs-open-flags, test-fs-write-file*, test-fs-lstat* and test-fs-realpath*)
+  const fsCase = `const fs = require('fs'); const path = require('path'); const C = fs.constants;
+const D = '/home/user/m/fsf'; fs.rmSync(D, { recursive: true, force: true }); fs.mkdirSync(D, { recursive: true });
+const j = (n) => path.join(D, n); const r = [];
+const t = (name, fn) => { try { r.push(name + '=' + fn()); } catch (e) { r.push(name + '=' + e.code); } };
+const perm = (n) => (fs.statSync(j(n)).mode & 0o777).toString(8);`;
+
+  it('fs open flags: O_CREAT without a write bit creates, wx/O_EXCL is EEXIST, a missing file without O_CREAT is ENOENT', async () => {
+    expect(await node(`${fsCase}
+t('creat', () => { fs.closeSync(fs.openSync(j('c1'), C.O_CREAT)); return fs.existsSync(j('c1')); });
+t('creatExcl', () => { const fd = fs.openSync(j('c2'), C.O_CREAT | C.O_EXCL | C.O_WRONLY); fs.writeSync(fd, 'x'); fs.closeSync(fd); return fs.readFileSync(j('c2'), 'utf8'); });
+fs.writeFileSync(j('e'), 'keep');
+t('wx', () => fs.openSync(j('e'), 'wx')); t('wxs', () => fs.openSync(j('e'), 'wx+'));
+t('excl', () => fs.openSync(j('e'), C.O_CREAT | C.O_EXCL | C.O_RDWR));
+t('ax', () => fs.openSync(j('e'), 'ax'));
+t('kept', () => fs.readFileSync(j('e'), 'utf8'));
+t('r', () => fs.openSync(j('nope'), 'r')); t('rplus', () => fs.openSync(j('nope'), 'r+')); t('rdwr', () => fs.openSync(j('nope'), C.O_RDWR));
+t('a', () => { fs.closeSync(fs.openSync(j('a1'), 'a')); return fs.existsSync(j('a1')); });
+t('rplusKeeps', () => { const fd = fs.openSync(j('e'), 'r+'); fs.closeSync(fd); return fs.readFileSync(j('e'), 'utf8'); });
+t('trunc', () => { fs.closeSync(fs.openSync(j('e'), C.O_WRONLY | C.O_TRUNC)); return JSON.stringify(fs.readFileSync(j('e'), 'utf8')); });
+t('openMode', () => { fs.closeSync(fs.openSync(j('om'), 'w', 0o600)); return perm('om'); });
+fs.open(j('c1'), 'wx', (e) => { r.push('cbwx=' + (e && e.code));
+  fs.open(j('nope'), (e2) => { r.push('cbr=' + (e2 && e2.code));
+    fs.promises.open(j('c1'), 'wx').then(() => r.push('pwx=opened'), (e3) => r.push('pwx=' + e3.code)).then(() => console.log(r.join(' ')));
+  });
+});`)).toBe('creat=true creatExcl=x wx=EEXIST wxs=EEXIST excl=EEXIST ax=EEXIST kept=keep r=ENOENT rplus=ENOENT rdwr=ENOENT a=true rplusKeeps=keep trunc="" openMode=600 cbwx=EEXIST cbr=ENOENT pwx=EEXIST\n');
+  }, 60_000);
+
+  it('fs writeFile options: flag, mode and encoding (sync, callback and promise)', async () => {
+    expect(await node(`${fsCase}
+fs.writeFileSync(j('w'), 'one');
+t('flagA', () => { fs.writeFileSync(j('w'), 'two', { flag: 'a' }); return fs.readFileSync(j('w'), 'utf8'); });
+t('wx', () => fs.writeFileSync(j('w'), 'no', { flag: 'wx' })); t('kept', () => fs.readFileSync(j('w'), 'utf8'));
+t('mode', () => { fs.writeFileSync(j('m'), 'x', { mode: 0o600 }); return perm('m'); });
+t('modeStr', () => { fs.writeFileSync(j('ms'), 'x', { mode: '0640' }); return perm('ms'); });
+t('modeUmask', () => { fs.writeFileSync(j('mu'), 'x', { mode: 0o777 }); return perm('mu'); });
+t('modeKeepsExisting', () => { fs.writeFileSync(j('m'), 'y', { mode: 0o644 }); return perm('m'); });
+t('hex', () => { fs.writeFileSync(j('h'), '6869', 'hex'); return fs.readFileSync(j('h'), 'utf8'); });
+t('base64', () => { fs.writeFileSync(j('b'), 'aGk=', { encoding: 'base64' }); return fs.readFileSync(j('b'), 'utf8'); });
+t('latin1', () => { fs.writeFileSync(j('l'), '\\u00e9', 'latin1'); return fs.statSync(j('l')).size; });
+t('append', () => { fs.appendFileSync(j('w'), '3'); return fs.readFileSync(j('w'), 'utf8'); });
+t('appendMode', () => { fs.appendFileSync(j('am'), 'x', { mode: 0o640 }); return perm('am'); });
+t('appendAx', () => fs.appendFileSync(j('am'), 'x', { flag: 'ax' }));
+t('noParent', () => fs.writeFileSync(j('no/such/file'), 'x'));
+t('fd', () => { const fd = fs.openSync(j('fd'), 'w'); fs.writeFileSync(fd, 'via fd'); fs.closeSync(fd); return fs.readFileSync(j('fd'), 'utf8'); });
+fs.writeFile(j('w'), 'Z', { flag: 'a' }, (e) => { r.push('cbFlagA=' + (e ? e.code : fs.readFileSync(j('w'), 'utf8')));
+  fs.writeFile(j('cm'), 'x', { mode: 0o600 }, () => { r.push('cbMode=' + perm('cm'));
+    fs.appendFile(j('w'), 'Q', (e2) => { r.push('cbAppend=' + (e2 ? e2.code : fs.readFileSync(j('w'), 'utf8')));
+      fs.writeFile(j('w'), 'no', { flag: 'wx' }, (e3) => { r.push('cbWx=' + (e3 && e3.code));
+        (async () => {
+          await fs.promises.writeFile(j('w'), 'P', { flag: 'a' }); r.push('pFlagA=' + await fs.promises.readFile(j('w'), 'utf8'));
+          await fs.promises.writeFile(j('w'), 'no', 'wx').catch(() => {});
+          await fs.promises.writeFile(j('w'), 'no', { flag: 'wx' }).then(() => r.push('pWx=wrote'), (e4) => r.push('pWx=' + e4.code));
+          await fs.promises.appendFile(j('pa'), 'x', { mode: 0o600 }); r.push('pAppendMode=' + perm('pa'));
+          await fs.promises.writeFile(j('ph'), '6869', 'hex'); r.push('pHex=' + fs.readFileSync(j('ph'), 'utf8'));
+          const h = await fs.promises.open(j('fh'), 'w'); await h.writeFile('handle'); await h.close(); r.push('handle=' + fs.readFileSync(j('fh'), 'utf8'));
+          console.log(r.join(' '));
+        })();
+      });
+    });
+  });
+});`)).toBe('flagA=onetwo wx=EEXIST kept=onetwo mode=600 modeStr=640 modeUmask=755 modeKeepsExisting=600 hex=hi base64=hi latin1=1 append=onetwo3 appendMode=640 appendAx=EEXIST noParent=ENOENT fd=via fd ' +
+      'cbFlagA=onetwo3Z cbMode=600 cbAppend=onetwo3ZQ cbWx=EEXIST pFlagA=onetwo3ZQP pWx=EEXIST pAppendMode=600 pHex=hi handle=handle\n');
+    // the modes reach the filesystem once the script is done
+    expect((await sh(shell, 'stat -c %a /home/user/m/fsf/m /home/user/m/fsf/am')).out).toBe('600\n640\n');
+  }, 60_000);
+
+  it('fs lstat and realpath see symlinks; ino and dev are stable', async () => {
+    expect(await node(`${fsCase}
+fs.writeFileSync(j('f'), 'data'); fs.mkdirSync(j('dir')); fs.writeFileSync(j('dir/in'), 'x');
+fs.symlinkSync('f', j('L')); fs.symlinkSync(j('dir'), j('DL')); fs.symlinkSync('gone', j('dangling'));
+t('lstatLink', () => fs.lstatSync(j('L')).isSymbolicLink() + '/' + fs.lstatSync(j('L')).isFile());
+t('lstatMode', () => (fs.lstatSync(j('L')).mode & C.S_IFMT) === C.S_IFLNK);
+t('lstatSize', () => fs.lstatSync(j('L')).size);
+t('statLink', () => fs.statSync(j('L')).isSymbolicLink() + '/' + fs.statSync(j('L')).isFile() + '/' + fs.statSync(j('L')).size);
+t('lstatFile', () => fs.lstatSync(j('f')).isSymbolicLink());
+t('lstatDir', () => fs.lstatSync(j('dir')).isDirectory());
+t('lstatDirLink', () => fs.lstatSync(j('DL')).isSymbolicLink() + '/' + fs.statSync(j('DL')).isDirectory());
+t('lstatDangling', () => fs.lstatSync(j('dangling')).isSymbolicLink());
+t('statDangling', () => fs.statSync(j('dangling')));
+t('lstatMissing', () => fs.lstatSync(j('nope')));
+t('noThrow', () => fs.lstatSync(j('nope'), { throwIfNoEntry: false }));
+t('direntLink', () => fs.readdirSync(D, { withFileTypes: true }).find((d) => d.name === 'L').isSymbolicLink());
+t('existsSymlink', () => fs.symlinkSync('f', j('L')));
+t('realLink', () => path.relative(D, fs.realpathSync(j('L'))));
+t('realThroughDir', () => path.relative(D, fs.realpathSync(j('DL/in'))));
+t('realDot', () => fs.realpathSync(D + '/./dir/../f') === fs.realpathSync(j('f')));
+t('realDangling', () => fs.realpathSync(j('dangling')));
+t('realMissing', () => fs.realpathSync(j('later')));
+t('realLater', () => { const before = fs.existsSync(j('later')); fs.writeFileSync(j('later'), 'x'); return before + '/' + (fs.realpathSync(j('later')) === j('later')) + '/' + (fs.realpathSync(j('later')) === fs.realpathSync(j('later'))); });
+t('realLaterViaLink', () => { fs.writeFileSync(j('DL/later'), 'y'); return path.relative(D, fs.realpathSync(j('DL/later'))); });
+const s1 = fs.statSync(j('f')), s2 = fs.statSync(j('f'));
+t('inoStable', () => s1.ino === s2.ino && s1.dev === s2.dev && s1.ino > 0);
+t('inoAfterWrite', () => { fs.writeFileSync(j('f'), 'more'); return fs.statSync(j('f')).ino === s1.ino; });
+t('inoDistinct', () => fs.statSync(j('dir')).ino !== s1.ino && fs.statSync(j('dir/in')).ino !== s1.ino);
+t('inoViaLink', () => fs.statSync(j('L')).ino === s1.ino && fs.lstatSync(j('L')).ino !== s1.ino);
+(async () => {
+  r.push('pLstat=' + (await fs.promises.lstat(j('L'))).isSymbolicLink() + '/' + (await fs.promises.stat(j('L'))).isFile());
+  r.push('pIno=' + ((await fs.promises.stat(j('L'))).ino === s1.ino));
+  r.push('pReal=' + path.relative(D, await fs.promises.realpath(j('DL/in'))));
+  await fs.promises.realpath(j('nope2')).catch((e) => r.push('pRealMissing=' + e.code));
+  await fs.promises.symlink('f', j('L')).catch((e) => r.push('pSymlinkExists=' + e.code));
+  await fs.promises.lstat(j('nope')).catch((e) => r.push('pLstatMissing=' + e.code));
+  fs.lstat(j('L'), (e, st) => { r.push('cbLstat=' + st.isSymbolicLink());
+    fs.stat(j('L'), (e2, st2) => { r.push('cbStat=' + st2.isFile() + '/' + (st2.ino === s1.ino)); console.log(r.join(' ')); });
+  });
+})();`)).toBe('lstatLink=true/false lstatMode=true lstatSize=1 statLink=false/true/4 lstatFile=false lstatDir=true lstatDirLink=true/true lstatDangling=true ' +
+      'statDangling=ENOENT lstatMissing=ENOENT noThrow=undefined direntLink=true existsSymlink=EEXIST realLink=f realThroughDir=dir/in realDot=true realDangling=ENOENT ' +
+      'realMissing=ENOENT realLater=false/true/true realLaterViaLink=dir/later inoStable=true inoAfterWrite=true inoDistinct=true inoViaLink=true ' +
+      'pLstat=true/true pIno=true pReal=dir/in pRealMissing=ENOENT pSymlinkExists=EEXIST pLstatMissing=ENOENT cbLstat=true cbStat=true/true\n');
+  }, 60_000);
 });
 
 describe('node: real npm packages', () => {
