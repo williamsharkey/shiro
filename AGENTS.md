@@ -70,7 +70,7 @@ PORT=5299 STATIC_DIR=$PWD/dist node server.mjs                     # serve a bui
 - A product changes behavior by editing its `profile.json`, not by checking the hostname.
 - User-facing text (messages, `help`, man pages, banners, About, docs) says tabcomputer. Text shown under both profiles is plain text that says tabcomputer; identity (prompt hostname, `uname -n`) comes from the profile's `name` and `hostname`.
 - Internal names may stay, and should not be renamed piecemeal (it conflicts with every branch in flight): `SHIRO_BLINK_*` and other names compiled into wasm, `_SHIRO_TEXT`, `Xshiro`, `libshiro-text-hook.so`, `shiro-apt-method`/`shiro-apt-store`/`/var/lib/shiro/` inside installed Debian systems, `__shiro…` page globals other than `window.__tabcomputer`, `shiro://cmd/` links, `ShiroTerminal`, `shiro-cmds.ts`, `tests/tests/shiro-vitest/`, the `shiro-mcp` package, and infrastructure URLs on shiro.computer (`DEFAULT_MIRROR`, `/bins`, signaling, the GitHub OAuth app). PROFILES.md "The rename" has the full list and the reasons.
-- Environment variables are `TABCOMPUTER_*`. A few server variables still have `SHIRO_` names in code (`SHIRO_BROWSE*`, and `SHIRO_TCP_ALLOW_CIDRS`/`SHIRO_TCP_PORTS` in the browse server-fetch path); docs name them as the code reads them.
+- Environment variables are `TABCOMPUTER_*` (only the Blink build knobs `SHIRO_BLINK_*` and `SHIRO_LLVM_WASM` keep the old prefix).
 
 ## Conventions
 
