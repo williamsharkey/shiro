@@ -76,6 +76,7 @@ write_files:
       Description=Deploy deploy/tabcomputer if it moved
       [Service]
       Type=oneshot
+      Environment=HOME=/root
       ExecStart=/usr/local/bin/tabcomputer-deploy
       TimeoutStartSec=1800
 
