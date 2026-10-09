@@ -418,7 +418,7 @@ export class Broker {
     const port = Number(url.port) || (secure ? 443 : 80);
     try {
       let s = await this.o.dial(url.hostname, port);
-      if (secure) s = await tlsConnect(s, url.hostname);
+      if (secure) s = await tlsConnect(s, url.hostname, () => this.o.dial(url.hostname, port));
       const httpUrl = new URL(url.href.replace(/^ws/, 'http'));
       const rctx: RequestContext = { partition: ctx.partition, initiatorSite: siteOf(ctx.realOrigin), topLevelNavigation: false, method: 'GET' };
       const headers: HeaderList = [['Origin', ctx.realOrigin], ['User-Agent', navigator.userAgent], ['Pragma', 'no-cache'], ['Cache-Control', 'no-cache']];

@@ -254,3 +254,6 @@ export declare class WebSocketReadQueue extends ReadQueue {
 
 // (upstream re-exports hextreme here; the bundled index.js has its own copy and nothing here needs it)
 
+
+/** [tabcomputer patch 5] Chain, name, validity and key-usage checks; true when the chain reaches a trusted root. */
+export declare function verifyCerts(host: string, certs: Cert[], rootCertsDatabase: RootCertsDatabase, requireServerTlsExtKeyUsage?: boolean, requireDigitalSigKeyUsage?: boolean): Promise<boolean>;

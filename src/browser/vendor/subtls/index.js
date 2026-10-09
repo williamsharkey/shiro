@@ -1,7 +1,7 @@
 // subtls 0.5.0 (https://github.com/jawj/subtls, MIT, see LICENSE), vendored for the Browser app with
 // patches marked "[tabcomputer patch N]": (1) optional ChangeCipherSpec, (2) more CertificateVerify
 // schemes (ECDSA P-384, RSA-PSS SHA-384/512), (3) keyCertSign (not digitalSignature) for CAs,
-// (4) keyUsage bits read in RFC 5280 order.
+// (4) keyUsage bits read in RFC 5280 order, (5) verifyCerts exported.
 var __defProp = Object.defineProperty;
 var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true,
 writable: true, value }) : obj[key] = value;
@@ -2729,5 +2729,6 @@ export {
   startTls,
   toBase64,
   toHex,
-  u8FromHex
+  u8FromHex,
+  verifyCerts // [tabcomputer patch 5] for the TLS 1.2 client (src/browser/tls12.ts)
 };

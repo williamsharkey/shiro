@@ -6,6 +6,7 @@
 // the scoreboard adds its sandbox egress CA the same way).
 import { LazyReadFunctionReadQueue, startTls, TrustedCert } from './vendor/subtls/index.js';
 import type { ByteStream } from './http1';
+import { tls12Connect } from './tls12';
 
 type RootDb = Awaited<ReturnType<typeof TrustedCert.databaseFromPEM>>;
 
@@ -27,8 +28,39 @@ export class TlsError extends Error {
   constructor(message: string, readonly code: 'tls-handshake' | 'tls-cert' | 'tls-version') { super(message); }
 }
 
-/** Wrap a connected stream in TLS 1.3 for `host`; resolves once the handshake verified the server. */
-export async function tlsConnect(raw: ByteStream, host: string): Promise<ByteStream> {
+/** Hosts that refused TLS 1.3 (for this page's lifetime): they go straight to TLS 1.2. */
+const tls12Hosts = new Set<string>();
+
+/**
+ * TLS for `host` over `raw`: 1.3 (subtls) first; when the server refuses it and
+ * `redial` can open a fresh connection, 1.2 (tls12.ts), remembered per host.
+ */
+export async function tlsConnect(raw: ByteStream, host: string, redial?: () => Promise<ByteStream>): Promise<ByteStream> {
+  if (redial && tls12Hosts.has(host)) return tls12(raw, host);
+  try {
+    return await tls13Connect(raw, host);
+  } catch (e) {
+    // Any 1.3 failure that isn't about the certificate (no 1.3, a HelloRetryRequest subtls can't do, an
+    // odd extension) retries as 1.2; a certificate failure never does. An attacker who can drop packets
+    // could force the retry too; it still lands on ECDHE + AEAD + extended master secret.
+    if (!(e instanceof TlsError) || e.code === 'tls-cert' || !redial) throw e;
+    const s = await tls12(await redial(), host);
+    tls12Hosts.add(host);
+    return s;
+  }
+}
+
+async function tls12(raw: ByteStream, host: string): Promise<ByteStream> {
+  try {
+    return await tls12Connect(raw, host, await roots());
+  } catch (e) {
+    raw.close();
+    const msg = String((e as Error)?.message ?? e);
+    throw new TlsError(`TLS 1.2 with ${host} failed: ${msg}`, /certificate|chain|signature|trusted/i.test(msg) ? 'tls-cert' : 'tls-version');
+  }
+}
+
+async function tls13Connect(raw: ByteStream, host: string): Promise<ByteStream> {
   const db = await roots();
   let received = 0;
   const q = new LazyReadFunctionReadQueue(async () => { const d = await raw.read(); received += d?.length ?? 0; return d; });

@@ -147,11 +147,20 @@ The broker speaks HTTP/1.1 (`http1.ts`) over TLS 1.3 done in the page
      so it refused most real CA chains and passed some by accident.
 
   Patches 3 and 4 came from the scoreboard's real certificate chains. Its
-  remaining limits are still the spike's biggest known gap: TLS 1.3 only,
-  P-256 key share, AES-128-GCM, and no chain building. A TLS 1.2-only site (Hacker
-  News was one when subtls was written) fails with `tls-version`, and the app
-  offers a real tab. Hardening path: rustls compiled to WASM, built by us
-  (Apache/MIT); epoxy-tls, which does exactly this, is AGPL.
+  remaining limits are a P-256 key share only (no HelloRetryRequest),
+  AES-128-GCM only, and no chain building.
+- **TLS 1.2** (`tls12.ts`, ours): when a 1.3 handshake fails for any reason
+  other than the certificate, the broker redials with a TLS 1.2 ClientHello
+  and remembers the host. That covers TLS 1.2-only servers (Craigslist,
+  weather.com's image CDN, ad hosts) and 1.3 servers that want X25519.
+  - It is deliberately narrow: ECDHE (P-256/P-384) with AES-GCM only, the
+    extended master secret required, and no RSA key exchange, CBC,
+    renegotiation, resumption or client certificates. Certificates get the
+    same chain checks as 1.3.
+  - There is no RFC 8446 downgrade-sentinel check: the 1.2 hello doesn't offer
+    1.3, so every 1.3-capable server sets the sentinel. An attacker who forces
+    the fallback still only gets ECDHE + AEAD + EMS. Hardening path: rustls compiled to WASM, built by us
+  (Apache/MIT), replacing both; epoxy-tls, which does exactly this, is AGPL.
 - Connections are pooled per origin (6, idle 60 s, `netfetch.ts`). That
   matters twice over: every new connection costs a relay WebSocket and a TLS
   handshake, and the relay rate-limits connects per client IP (60/min by
@@ -258,7 +267,7 @@ There's a button in the toolbar, and a banner when a page can't work here:
 |---|---|
 | `webauthn` | the runtime: a non-conditional passkey request (passkeys are bound to the real origin) |
 | `google-signin` | the broker: a navigation to `accounts.google.com` (Google refuses unknown embedders) |
-| `tls` | a TLS 1.2-only server |
+| `tls` | a server neither TLS client can talk to (e.g. CBC-only TLS 1.2, or SSL-era servers) |
 | `unproxyable` | an origin with no browse origin (long host, IPv6 literal, non-http scheme) |
 | `no-service-worker` | the bootstrap page couldn't register its SW (third-party storage blocked) |
 
