@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Worker } from 'node:worker_threads';
-import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, writeFileSync, rmSync, mkdirSync, appendFileSync } from 'node:fs';
 import path from 'node:path';
 import { build } from 'esbuild';
 import { createTestShell } from './helpers';
@@ -17,6 +17,7 @@ import type { GuestWorker } from '@shiro/kernel/worker-host';
 import { setGuestWorkerFactory, forceWasmProcessMode } from '@shiro/wasi/host';
 import { readTarball } from '@shiro/utils/tar';
 import { createPathShims } from '@shiro/path-shims';
+import { simpleCommandWords } from '@shiro/kernel/kernel';
 
 const here = __dirname;
 const REPO = path.resolve(here, '../../..');
@@ -681,6 +682,7 @@ describe('perl (x86-64 in Blink)', () => {
     r = await sh(shell, 'cd /home/user/pt && prove t/basic.t');
     expect(r.out).toMatch(/All tests successful/);
   }, 300_000);
+
 });
 
 describe('node-compat modules real packages rely on', () => {
@@ -922,4 +924,112 @@ print(table.concat(out, " "), _VERSION)
     expect(r.err).toBe('');
     expect(r.out).toBe('shiro runs sqlite\n1,"x y"\n');
   }, 120_000);
+});
+
+describe('ninja and cmake (x86-64 in Blink) with clang', () => {
+  let shell: Shell;
+  let fs: FileSystem;
+  beforeAll(async () => {
+    ({ fs, shell } = await createTestShell());
+    await bootFiles(fs);
+    const r = await sh(shell, 'pkg install llvm ninja make cmake');
+    expect(r.err).toBe('');
+    expect(r.exitCode).toBe(0);
+  }, 300_000);
+
+  it('ninja builds a C program with clang, incrementally, with depfiles', async () => {
+    await fs.mkdir('/home/user/nj', { recursive: true });
+    await fs.writeFile('/home/user/nj/build.ninja', [
+      'cflags = -O2', 'rule cc', '  command = clang $cflags -MD -MF $out.d -c $in -o $out', '  depfile = $out.d', '  deps = gcc', '  description = CC $out',
+      'rule link', '  command = clang $in -o $out', '  description = LINK $out',
+      'build main.o: cc main.c', 'build util.o: cc util.c', 'build app: link main.o util.o', 'default app', ''].join('\n'));
+    await fs.writeFile('/home/user/nj/util.h', '#define GREETING "hello"\nint twice(int);\n');
+    await fs.writeFile('/home/user/nj/util.c', '#include "util.h"\nint twice(int x) { return 2 * x; }\n');
+    await fs.writeFile('/home/user/nj/main.c', '#include <stdio.h>\n#include "util.h"\nint main(void) { printf("%s %d\\n", GREETING, twice(21)); return 0; }\n');
+    let r = await sh(shell, 'cd /home/user/nj && ninja && ./app');
+    expect(r.err).toBe('');
+    expect(r.out).toMatch(/\[3\/3\] LINK app\nhello 42\n$/);
+    r = await sh(shell, 'cd /home/user/nj && ninja');
+    expect(r.out).toBe('ninja: no work to do.\n');
+    // the header is a dependency through the depfile: both objects rebuild
+    await fs.writeFile('/home/user/nj/util.h', '#define GREETING "hi"\nint twice(int);\n');
+    r = await sh(shell, 'cd /home/user/nj && ninja && ./app');
+    expect(r.out).toMatch(/\[3\/3\] LINK app\nhi 42\n$/);
+    await fs.writeFile('/home/user/nj/util.c', 'int twice(int x) { return 2 * x }\n');
+    r = await sh(shell, 'cd /home/user/nj && ninja');
+    expect(r.exitCode).not.toBe(0);
+    expect(r.out).toContain('FAILED: util.o');
+    expect(r.out).toMatch(/util\.c:1:32: error: expected ';' after return statement/);
+  }, 300_000);
+
+  it('cmake configures with clang and builds through ninja and make; ctest runs the tests', async () => {
+    await fs.mkdir('/home/user/cm', { recursive: true });
+    await fs.writeFile('/home/user/cm/CMakeLists.txt', [
+      'cmake_minimum_required(VERSION 3.20)', 'project(hello C)', 'include(CheckIncludeFile)',
+      'check_include_file(stdint.h HAVE_STDINT_H)', 'configure_file(config.h.in config.h)',
+      'add_library(util STATIC util.c)', 'add_executable(app main.c)', 'target_include_directories(app PRIVATE ${CMAKE_CURRENT_BINARY_DIR})',
+      'target_link_libraries(app util)', 'enable_testing()', 'add_test(NAME runs COMMAND app)',
+      'set_tests_properties(runs PROPERTIES PASS_REGULAR_EXPRESSION "twice 42")', ''].join('\n'));
+    await fs.writeFile('/home/user/cm/config.h.in', '#cmakedefine HAVE_STDINT_H 1\n');
+    await fs.writeFile('/home/user/cm/util.c', 'int twice(int x) { return 2 * x; }\n');
+    await fs.writeFile('/home/user/cm/main.c', '#include <stdio.h>\n#include "config.h"\nint twice(int);\nint main(void) {\n#ifdef HAVE_STDINT_H\n  printf("twice %d\\n", twice(21));\n#endif\n  return 0;\n}\n');
+    let r = await sh(shell, 'cd /home/user/cm && cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang');
+    expect(r.err).toBe('');
+    expect(r.out).toContain('-- The C compiler identification is Clang 21.1.4\n');
+    expect(r.out).toContain('-- Looking for stdint.h - found\n');
+    expect(r.out).toContain('-- Build files have been written to: /home/user/cm/build\n');
+    r = await sh(shell, 'cd /home/user/cm && cmake --build build && ./build/app && cd build && ctest 2>&1 | grep "tests passed"');
+    expect(r.err).toBe('');
+    expect(r.out).toMatch(/\[4\/4\] Linking C executable app\ntwice 42\n100% tests passed, 0 tests failed out of 1\n$/);
+    r = await sh(shell, 'cd /home/user/cm && cmake -S . -B mk -DCMAKE_C_COMPILER=clang > /dev/null && cmake --build mk 2>&1 | tail -1 && ./mk/app');
+    expect(r.out).toBe('[100%] Built target app\ntwice 42\n');
+  }, 1_800_000);
+});
+
+describe('git (upstream, x86-64 in Blink)', () => {
+  it('sh -c runs a simple command directly (the words it needs no shell for)', () => {
+    expect(simpleCommandWords("git-upload-pack '/home/user/r/.git'")).toEqual(['git-upload-pack', '/home/user/r/.git']);
+    expect(simpleCommandWords('exec prog "a b" c')).toEqual(['prog', 'a b', 'c']);
+    for (const s of ['a | b', 'a > f', 'echo $HOME', 'a; b', 'ls *.c', 'a && b', "x 'open"]) expect(simpleCommandWords(s)).toBeNull();
+  });
+
+  let shell: Shell;
+  let fs: FileSystem;
+  const g = (cmd: string) => sh(shell, `export GIT_PAGER=cat GIT_EDITOR=true GIT_AUTHOR_DATE=2025-01-01T00:00:00Z GIT_COMMITTER_DATE=2025-01-01T00:00:00Z; ${cmd}`);
+  beforeAll(async () => {
+    ({ fs, shell } = await createTestShell());
+    await bootFiles(fs);
+    const r = await sh(shell, 'pkg install git');
+    expect(r.exitCode).toBe(0);
+    await sh(shell, 'git config --global user.name Shiro && git config --global user.email shiro@example.com && git config --global init.defaultBranch main');
+  }, 300_000);
+
+  it('replaces the built-in git; commit, branch, merge, rebase, stash', async () => {
+    let r = await g('git --version');
+    expect(r.out).toBe('git version 2.47.1\n');
+    r = await g('mkdir -p /home/user/r && cd /home/user/r && git init -q && printf "a\\nb\\nc\\n" > f.txt && git add . && git commit -qm init && git checkout -qb feat && sed -i s/c/C/ f.txt && git commit -qam feat && git checkout -q main && sed -i s/a/A/ f.txt && git commit -qam main && git merge -q feat -m merge && cat f.txt && git log --oneline --graph | wc -l');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('Auto-merging f.txt\nA\nb\nC\n6\n');
+    r = await g('cd /home/user/r && git checkout -qb topic HEAD~2 && echo z > z.txt && git add z.txt && git commit -qm z && git rebase -q main && git log --format=%s | head -3 && ls -1');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('z\nmerge\nmain\nf.txt\nz.txt\n');
+    r = await g('cd /home/user/r && echo dirty >> f.txt && git stash -q && git status --short && git stash pop -q && git diff --stat');
+    expect(r.out).toBe(' f.txt | 1 +\n 1 file changed, 1 insertion(+)\n');
+  }, 300_000);
+
+
+  it('blame, tags, a pre-commit hook, clone and push (upload-pack/receive-pack over pipes)', async () => {
+    let r = await g('cd /home/user/r && git checkout -q main && git checkout -q -- . && git tag v1.0 && git describe --tags && git blame -s f.txt | sed "s/^[^ ]* //"');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('v1.0\n1) A\n2) b\n3) C\n');
+    await fs.writeFile('/home/user/r/.git/hooks/pre-commit', '#!/bin/sh\nif git diff --cached | grep -q TODO; then echo "no TODOs" >&2; exit 1; fi\n');
+    await fs.chmod?.('/home/user/r/.git/hooks/pre-commit', 0o755);
+    r = await g('cd /home/user/r && echo TODO >> f.txt && git commit -qam todo; echo rc=$?; git checkout -q -- f.txt');
+    expect(r.err).toContain('no TODOs');
+    expect(r.out).toBe('rc=1\n');
+    // clone runs `sh -c git-upload-pack ...` and talks to it both ways
+    r = await g('cd /tmp && git clone -q file:///home/user/r r2 && cd r2 && git log --oneline | wc -l && echo n > n.txt && git add n.txt && git commit -qm n && git push -q origin HEAD:refs/heads/from-clone && cd /home/user/r && git log --format=%s -1 from-clone');
+    expect(r.err).toBe('');
+    expect(r.out).toBe('4\nn\n');
+  }, 300_000);
 });
