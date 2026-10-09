@@ -150,6 +150,11 @@ export const SYS_shiro_vfork = 1010;
  * stopped and the new program runs in the same process.
  */
 export const SYS_shiro_execve = 1011;
+/**
+ * Shiro: args[0] = +1 / -1 around a blocking wait an engine does without the
+ * kernel (Blink's futex waits): the process shows as sleeping (S) meanwhile.
+ */
+export const SYS_shiro_sleeping = 1012;
 
 // ── errno (Linux) ──────────────────────────────────────────────────────────
 export const EPERM = 1;

@@ -51,6 +51,8 @@ const shfutexBin = join(out, 'shfutex');
 const haveShfutex = tryBuild('gcc', ['-static', '-O1', '-o', shfutexBin, 'shfutex.c']);
 const orphanBin = join(out, 'orphan');
 const haveOrphan = tryBuild('gcc', ['-static', '-O1', '-o', orphanBin, 'orphan.c']);
+const futexintrBin = join(out, 'futexintr');
+const haveFutexintr = tryBuild('gcc', ['-static', '-O1', '-o', futexintrBin, 'futexintr.c']);
 const alarmforkBin = join(out, 'alarmfork');
 const haveAlarmfork = tryBuild('gcc', ['-static', '-O1', '-o', alarmforkBin, 'alarmfork.c']);
 const forkSharedBin = join(out, 'forkshared');
@@ -242,6 +244,19 @@ describe.skipIf(!haveFork || !haveForkShared || !haveShfutex || !haveOrphan || !
     const want = "first alarm 0, child ok 1, parent's alarm still set 1";
     expect((await run(shell, sif)).output).toContain(want);
     expect((await run(shell, './prog')).output).toContain(want);
+  }, 60_000);
+
+  // LTP futex_wait07
+  it.skipIf(!haveFutexintr)('a caught signal interrupts a futex wait (here and with the default fork)', async () => {
+    const { shell } = await setup(readFileSync(futexintrBin));
+    const want = 'main tid is pid 1\nalarm: Interrupted system call\nchild tid is pid 1\nchild state S\nkill: Interrupted system call\nchild exit 0\n';
+    expect((await run(shell, sif)).output.replace(/\r\n/g, '\n')).toBe(want);
+    expect((await run(shell, `${sif} nested`)).output.replace(/\r\n/g, '\n')).toBe(want);
+    // the default fork runs a child sharing memory on the parent's thread:
+    // the parent can't signal it before it's done
+    const r = (await run(shell, './prog')).output.replace(/\r\n/g, '\n');
+    expect(r).toMatch(/^main tid is pid 1\nalarm: Interrupted system call\nchild tid is pid 1\n/);
+    expect(r).toContain('child exit 0\n');
   }, 60_000);
 });
 
