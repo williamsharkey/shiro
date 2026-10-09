@@ -48,6 +48,22 @@ function bootSection(ctx: ShiroRuntimeContext, name: string): string {
   ].join('\n');
 }
 
+/**
+ * Known problems an agent here should plan around, rendered into AGENTS.md.
+ * Facts about this build only: remove an entry in the change that fixes it.
+ * Live state (what is installed, signed in, reachable) is `doctor`'s job.
+ */
+export const KNOWN_ISSUES: { issue: string; workaround?: string }[] = [
+  {
+    issue: "Images can't be pasted into Claude Code: `xclip` and `xsel` here are text only.",
+    workaround: 'Save the image to a file and give its path.',
+  },
+];
+
+function knownIssues(): string {
+  return KNOWN_ISSUES.map((k) => `- ${k.issue}${k.workaround ? ` ${k.workaround}` : ''}`).join('\n');
+}
+
 /** ~/AGENTS.md for this boot. */
 export function buildAgentsMd(ctx: ShiroRuntimeContext): string {
   const p = activeProfile();
@@ -72,6 +88,17 @@ this page; there is no VM or server-side machine behind it.
 ## This boot
 
 ${bootSection(ctx, name)}
+
+## Orient yourself
+
+- \`doctor\` prints this tab's state, one OK/WARN/FAIL line per subsystem.
+  \`doctor --agents\` checks, step by step, what agent CLIs need from both
+  runtimes.
+- \`echo $TABCOMPUTER_CLAUDE_BUILD $TABCOMPUTER_CLAUDE_VERSION\` tells you which
+  Claude Code you are, when ${name}'s \`claude\` started you. \`native\` is Anthropic's
+  binary in the x86-64 emulator: about 2 minutes per request. \`npm\` is the pinned
+  pure-JavaScript build on ${name}'s Node runtime: much faster.
+- Read "Known issues" below before working around something that fails.
 
 ## The machine
 
@@ -138,6 +165,10 @@ ${bootSection(ctx, name)}
 ${name} is open source: ${source}. The source is not checked out on this
 machine; \`git clone --depth 1 ${source}\` if you need to read it. Its docs/
 folder has the details and the measured scoreboards.
+
+## Known issues
+
+${knownIssues()}
 
 ## Claude Code here
 
