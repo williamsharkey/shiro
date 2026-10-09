@@ -116,6 +116,14 @@ Status per app also in [COMPAT.md](COMPAT.md#linux-gui-apps-unixgui).
   wheel (40 px per click → buttons 4/5/6/7) and keys come in as normalized
   input events. The window's app id is the `WM_CLASS` instance, so dock
   icons find their windows.
+- `clipboard.ts`: CLIPBOARD ↔ browser clipboard, through an X client inside
+  the server (`internalClient`). An app that copies takes CLIPBOARD; the
+  bridge converts it to UTF8_STRING and calls `navigator.clipboard
+  .writeText`. When the browser clipboard may hold something new (a copy
+  elsewhere in the page, or the tab regains focus), the next X window to
+  get focus finds the bridge owning CLIPBOARD, and pastes are answered from
+  `readText()` (TARGETS, UTF8_STRING, STRING, TEXT, text/plain).
+  Screenshot: `gui-clipboard.png` (copied in L3afpad, pasted from the page).
 - `display.ts`: `Xshiro :N`, a kernel process (it shows in `ps`) listening on
   `/tmp/.X11-unix/XN` and on the abstract name libxcb tries first; started at
   boot, ~1 KB. `session.ts` creates the server on the first connection.
@@ -166,7 +174,8 @@ self-contained floating-window host for the classic full-page terminal UI.
 - `tests/tests/shiro-vitest/x11.test.ts`: protocol (setup, windows, Expose,
   drawing and composition, PutImage/GetImage/CopyArea, properties, input
   events with implicit grabs, resize with bit gravity, core fonts, selections,
-  SHAPE, RENDER fills/glyphs/trapezoids, key mapping), and the kernel path:
+  SHAPE, RENDER fills/glyphs/trapezoids, key mapping, the clipboard bridge
+  both ways), and the kernel path:
   a static x86-64 client (`fixtures/x86/xclient.c`, raw protocol) in Blink
   connects to `Xshiro :0`, draws, gets a button press and resizes itself.
 - `gui-apps.test.ts`: `.deb` parsing, install (hash check, symlinks, skipped
@@ -190,9 +199,8 @@ self-contained floating-window host for the classic full-page terminal UI.
    ~10 s, GTK 2 ~15 s. Snapshotting a started process, caching JIT output
    across runs, and WASM builds of the toolkits (Qt for WebAssembly has an
    xcb-less platform; GTK's Broadway) are the levers.
-3. **Clipboard**: X selections work between X clients; bridging CLIPBOARD
-   and PRIMARY to the browser clipboard is next (the server already has
-   `hostOwnSelection`).
+3. **PRIMARY** (select, middle-click paste) works between X apps only; the
+   browser has no primary selection to bridge it to.
 4. **Extensions not yet offered**: MIT-SHM (Blink can't share guest memory
    with the page yet), XKEYBOARD (toolkits fall back to the core keymap),
    XInputExtension 2 (core input only: no smooth scrolling or touch),

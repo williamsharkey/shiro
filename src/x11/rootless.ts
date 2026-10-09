@@ -37,6 +37,8 @@ export class Rootless {
   /** Keys held down, so a blur can release them. */
   private held = new Set<number>();
   onTitle: ((w: XWindow, title: string) => void) | null = null;
+  /** An X toplevel got keyboard focus (the clipboard bridge offers the browser clipboard). */
+  onFocusIn: (() => void) | null = null;
 
   constructor(readonly server: XServer, readonly host: WindowHost) {
     server.hooks = {
@@ -246,6 +248,7 @@ export class Rootless {
 
   private focusIn(w: XWindow): void {
     if (!w.mapped || w.destroyed) return;
+    this.onFocusIn?.();
     this.server.raiseTop(w);
     const hints = this.server.prop(w, 'WM_HINTS');
     let input = true;
