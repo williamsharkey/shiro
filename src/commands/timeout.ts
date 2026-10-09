@@ -50,15 +50,26 @@ export const timeout: Command = {
     }
 
     const child = ctx.shell.fork();
+    // The child's own abort (the timeout's), chained to the shell's (Ctrl-C):
+    // aborting it must not abort the shell that runs timeout
+    const own = new AbortController();
+    const outer = ctx.shell.abortController ?? child.inheritedAbort;
+    if (outer?.signal.aborted) own.abort();
+    else outer?.signal.addEventListener('abort', () => own.abort(), { once: true });
+    child.inheritedAbort = own;
     // Piped or redirected: programs keep the tty for input, their stdout comes back here
     if (ctx.terminal) child.setTerminal((ctx.stdoutIsTTY === false ? capturingStdout(ctx.terminal) : ctx.terminal) as any);
     child.cwd = ctx.cwd;
     let out = '';
     let err = '';
-    const run = child.executeWithStdin(
-      quoteArgsForShell(command), ctx.stdin || '',
-      (s) => { out += s; }, (s) => { err += s; },
-    );
+    // A shell running as a kernel process (an agent's `sh -c`) gives COMMAND its
+    // live fd 0: reading ctx.stdin would wait for that pipe to close first
+    const live = !!ctx.liveStdin && !!ctx.shell.kernelStdio;
+    const sink = (s: string) => { out += s; };
+    const errSink = (s: string) => { err += s; };
+    const run = live
+      ? child.execute(quoteArgsForShell(command), ctx.streamStdout ?? sink, ctx.streamStderr ?? errSink, false, undefined, true)
+      : child.executeWithStdin(quoteArgsForShell(command), ctx.stdin || '', sink, errSink);
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     const expired = duration === 0 ? null : new Promise<'timeout'>((resolve) => {
@@ -72,7 +83,7 @@ export const timeout: Command = {
       ctx.stderr += err.replace(/\r\n/g, '\n');
     };
     if (result === 'timeout') {
-      child.abortController?.abort();
+      own.abort();
       flush();
       if (verbose) ctx.stderr += `timeout: sending signal ${signal} to command '${command[0]}'\n`;
       if (preserveStatus) return signal.replace(/^SIG/, '').toUpperCase() === 'KILL' ? 137 : 143;
