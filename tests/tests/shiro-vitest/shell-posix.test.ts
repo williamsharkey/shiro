@@ -260,3 +260,10 @@ describe('fd copies made by exec', () => {
     expect(r.out).toBe('b\nviaerr\n');
   });
 });
+
+describe('named pipes opened with exec', () => {
+  it('a subshell closes the fifo ends it opened; children write through the same end', async () => {
+    const r = await script("mkdir /tmp/ff && cd /tmp/ff && mkfifo p\n(exec 4>p; exec 3>&4; sh -c 'echo via3 >&3'; (echo sub >&3); echo own >&4) &\ncat < p\n");
+    expect(r.out).toBe('via3\nsub\nown\n');
+  });
+});

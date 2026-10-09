@@ -6,9 +6,9 @@ conformance work started (fc0af54).
 
 | Suite | Before | Now |
 |---|---|---|
-| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1411/1567 (90.0%)** |
+| [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1412/1567 (90.1%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1412/1567 (90.1%)** |
-| [Shell: smoosh POSIX tests](#shell-smoosh-posix-tests) | 111/162 (68.5%) | **158/162 (97.5%)** |
+| [Shell: smoosh POSIX tests](#shell-smoosh-posix-tests) | 111/162 (68.5%) | **159/162 (98.1%)** |
 | [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **625/635 (98.4%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **148/320 (46.3%)** |
 | [Syscalls: wasi-testsuite (wasm32-wasip1)](#syscalls-wasi-testsuite-wasm32-wasip1) | — | **71/72 (98.6%)** |
@@ -49,7 +49,7 @@ How each suite runs, and what is and isn't scored, is described in
 | builtin-eval-source | 0/23 | 20/23 | 3 |
 | builtin-getopts | 0/30 | 26/30 | 4 |
 | builtin-trap | 0/33 | 31/33 | 2 |
-| builtin-bracket | 0/50 | 46/50 | 4 |
+| builtin-bracket | 0/50 | 47/50 | 3 |
 | builtin-cd | 3/28 | 26/28 | 2 |
 | builtin-special | 1/12 | 8/12 | 4 |
 | builtin-type | 0/6 | 4/6 | 2 |
@@ -96,7 +96,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **vars-special**: $PATH is set if unset at startup; Vars set interactively only: $HISTFILE; Some vars are set, even without startup file, or env: PATH, PWD; $LINENO is the current line, not line of function call; $LINENO in other for loops; $_ with assignments, arrays, etc.
 - **command-sub**: Making keyword out of command sub should NOT work; Syntax errors with double quotes within backticks
 - **here-doc**: Here doc with bad comsub delimiter; Here doc with line continuation, then pipe.  Syntax error.; Function def and execution with here doc
-- **redirect**: 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes; xtrace not affected by redirects
+- **redirect**: 1\>&2- (Bash bug: fail to restore closed fd); \<\> for read/write; \<\> for read/write named pipes (hang/timeout); xtrace not affected by redirects
 - **loop**: while in pipe with subshell; bad arg to break
 - **case_**: case \n bug regression
 - **func-parsing**: = in function name; Function name with $; Function name with command sub
@@ -105,7 +105,7 @@ How each suite runs, and what is and isn't scored, is described in
 - **builtin-eval-source**: eval usage; Source with syntax error; Eval with syntax error
 - **builtin-getopts**: getopts with invalid variable name; OPTIND; OPTIND after multiple getopts with same spec; OPTIND after multiple getopts with different spec
 - **builtin-trap**: exit 1 when trap code string is invalid; trap USR1, sleep, SIGINT: non-interactively
-- **builtin-bracket**: -k for sticky bit; test -p named pipe; -ef; test -c
+- **builtin-bracket**: -k for sticky bit; -ef; test -c
 - **builtin-cd**: pwd in symlinked dir on shell initialization; Survey of getcwd() syscall
 - **builtin-special**: Prefix assignments persist after readonly, but NOT exported (set -o posix); Prefix binding for exec is a special case (versus e.g. readonly); bash 'type' gets confused - says 'function', but runs builtin; command, builtin - both can be redefined, not special (regression)
 - **builtin-type**: type -\> alias external; type of relative path
@@ -259,14 +259,13 @@ POSIX sh cases from [smoosh](https://github.com/mgree/smoosh) (tests/shell), jud
 | Area | Before | Now | Failing |
 |---|---|---|---|
 | benchmark | 0/2 | 2/2 | 0 |
-| builtin | 38/59 | 58/59 | 1 |
+| builtin | 38/59 | 59/59 | 0 |
 | parse | 2/3 | 3/3 | 0 |
 | semantics | 67/91 | 89/91 | 2 |
 | sh | 4/7 | 6/7 | 1 |
 
 <details><summary>Failing cases</summary>
 
-- **builtin**: builtin.exec.modernish.mkfifo.loop — stdout differs
 - **semantics**: semantics.dot.glob — stdout differs; semantics.evalorder.fun — status 1, want 0
 - **sh**: sh.monitor.bg — status 3, want 0
 

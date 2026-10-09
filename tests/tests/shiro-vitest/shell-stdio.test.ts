@@ -196,7 +196,7 @@ describe('fds 3-9 are inherited as they are', () => {
 
   it('exec 3>file and exec 4>&1 1>/dev/null reach programs the shell starts', async () => {
     let out = '';
-    const st = await shell.execute('exec 3>/tmp/fd3.txt; fdwrite 3 c; fdwrite 3 d; cat /tmp/fd3.txt; exec 4>&1 1>/dev/null; fdwrite 4 e; echo hidden',
+    const st = await shell.execute('exec 3>/tmp/fd3.txt; fdwrite 3 c; fdwrite 3 d; cat /tmp/fd3.txt; exec 4>&1 1>/dev/null; fdwrite 4 e; echo hidden; exec 1>&4 3>&- 4>&-',
       (t) => { out += t; }, () => {});
     expect(out.replace(/\r\n/g, '\n')).toBe('c\nd\ne\n');
     expect(st).toBe(0);
@@ -247,5 +247,16 @@ describe('the debconf confmodule protocol through a kernel-run sh', () => {
     await withTimeout(frontend, 5_000);
     expect(commands).toEqual(['GET adduser/homedir-permission', 'INPUT low adduser/x', 'result 30 question skipped']);
     expect(err).toBe('stderr: true\n');
+  }, 30_000);
+});
+
+describe('named pipes opened with exec', () => {
+  it('exec 3>fifo in a background subshell: a child sh and a kernel program write through it; the reader sees EOF', async () => {
+    let out = '';
+    const st = await withTimeout(shell.execute(
+      "mkdir -p /tmp/fifo3 && cd /tmp/fifo3 && mkfifo p\n(exec 3>p; sh -c 'echo x >&3'; fdwrite 3 kern; echo y >&3) &\ncat < p",
+      (t) => { out += t; }, () => {}), 20_000);
+    expect(out.replace(/\r\n/g, '\n').replace(/^\[\d+\] \d+\n/gm, '')).toBe('x\nkern\ny\n');
+    expect(st).toBe(0);
   }, 30_000);
 });
