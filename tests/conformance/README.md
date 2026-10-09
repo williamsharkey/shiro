@@ -75,7 +75,7 @@ normal `npm run test:shiro` keeps them fixed.
   `results/detail/syscalls-blink.jsonl` and its output saved under
   `results/detail/ltp/`; `LTP_RESUME=1` continues a run that died,
   `LTP_RESUME=1 LTP_RERUN_FAILED=1` runs only the previous failures again,
-  `LTP_ONLY=read,write01` narrows a run. `ltp/hangs.json` lists tests that
+  `LTP_ONLY=read,write01` narrows a run, `LTP_ENV=BLINK_SAME_INSTANCE_FORK=1` adds to the tests' environment. `ltp/hangs.json` lists tests that
   crash the test worker; they count as failures.
 
 ## Shell in Chromium (`scripts/conformance/browser-oils.mjs`)

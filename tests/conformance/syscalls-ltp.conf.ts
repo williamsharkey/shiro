@@ -73,6 +73,8 @@ async function runAll(): Promise<{ files: Record<string, AreaResult>; detail: Re
     const shell = new Shell(fs, base.commands);
     shell.cwd = dir;
     Object.assign(shell.env, { PWD: dir, TMPDIR: dir, PATH: `/ltp/bin:${shell.env.PATH}`, LTP_COLORIZE_OUTPUT: '0' });
+    // LTP_ENV=NAME=VALUE,…: extra environment for the tests (BLINK_SAME_INSTANCE_FORK=1)
+    if (process.env.LTP_ENV) Object.assign(shell.env, Object.fromEntries(process.env.LTP_ENV.split(',').map((kv) => [kv.slice(0, kv.indexOf('=')), kv.slice(kv.indexOf('=') + 1)])));
     let out = '';
     let finished = false;
     const run = shell.execute(`/ltp/bin/${name}`, (s) => { out += s; }, (s) => { out += s; }, false, undefined, true)
