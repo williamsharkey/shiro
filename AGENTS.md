@@ -128,6 +128,14 @@ export const myCmd: Command = {
 - x86-64 packages (`abi: x86_64-linux`, recipes in `scripts/pkgbuild/x86/`) are static musl builds run in Blink; [docs/COMPAT.md](docs/COMPAT.md) is the scoreboard of popular tools (less, vim, ...) with a smoke test each in `compat-tools.test.ts`.
 - Packages that need kernel features (`needs`: wasix, processes, threads, sockets, ...) stay gated until the WASM process mode (`src/wasi/host.ts`) or `globalThis.__shiroKernel.features` provides them.
 
+## Debian Mode
+
+- `debian install` streams Debian 13 trixie in (docs/DEBIAN.md): `public/debian/` is built by `scripts/debian/build-rootfs.sh` (debootstrap minbase from a pinned snapshot.debian.org timestamp, run as root) and `pack-rootfs.mjs` (content-addressed gzip chunks grouped by package + a path index). Installing writes every path as a placeholder (`FSNode.lazy`); the first read fetches the chunk (sha256-checked, Cache API) and stores the bytes in IndexedDB. Boot re-attaches the loader from `/var/lib/shiro/rootfs.json` (`src/debian/rootfs.ts`).
+- Debian's binaries (dynamic glibc) run in Blink. `sudo` sets kernel uid/gid 0 for its children (`SpawnOptions.uid`, `Shell.uid`). The kernel runs `#!` scripts whose interpreter is an ELF or a `Command.program` itself (`shebangLoader`), so maintainer scripts run under Debian's dash. `link()` copies and reports the source's inode (dpkg's backups need it).
+- apt's http method is diverted to `http.debian`; its place holds `#!/usr/bin/shiro-apt-method`, a kernel program (`Command.program`, `src/debian/apt-method.ts`) fetching `http://HOST/PATH` as `/debian/mirror/HOST/PATH` from `server.mjs` (`SHIRO_DEBIAN_MIRRORS` allowlist, `SHIRO_DEBIAN_CACHE`).
+- Overlay (`src/debian/overlay.ts`): dpkg local diversions are the policy (diverted to `PATH.debian` = Shiro's). `shiro-alternatives --list|--set NAME shiro|debian|--auto`. Defaults in `src/debian/overlay-policy.json`; only programs whose cases in `debian-overlay.test.ts` match Debian's may default to Shiro. In Debian mode a program file in `/usr/{local/,}{s,}bin` replaces a builtin of the same name (`debianShadows` → `packageShadows`); `builtin NAME` still reaches Shiro's.
+- Scoreboard: `npm run debian-score -- --top 100` (scripts/debian/score.mjs, headless Chromium) → docs/DEBIAN_SCORE.md. Bench: `node bench/run.mjs --suites debian --modes isolated`. Tests: `debian.test.ts` (apt end to end with `SHIRO_DEBIAN_NET=1`).
+
 ## Languages And Toolchains
 
 - Scoreboard and per-entry tests: [docs/COMPAT.md](docs/COMPAT.md), `tests/tests/shiro-vitest/compat-dev.test.ts`.

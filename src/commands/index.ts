@@ -43,6 +43,12 @@ export interface Command {
   name: string;
   description: string;
   exec(ctx: CommandContext): Promise<number>;
+  /**
+   * Run as a kernel process with direct access to its fds, instead of
+   * exec() with string stdio (programs that talk a protocol over pipes, like
+   * apt's transport methods). Used when the kernel starts the command.
+   */
+  program?: (proc: import('../kernel/process').Process, kernel: import('../kernel/kernel').Kernel) => Promise<number>;
 }
 
 export class CommandRegistry {
