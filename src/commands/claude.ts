@@ -60,6 +60,12 @@ async function runNative(ctx: Parameters<Command['exec']>[0], args: string[]): P
       + '(CLAUDE_NATIVE_PATH picks another path). Without --native, claude runs the npm build.\n';
     return 1;
   }
+  // Same settings cleanup as the npm build's start (e.g. drop the "mcp__*"
+  // allow rule older Shiro seeded, which current Claude Code warns about)
+  try {
+    const { ensureClaudeBootstrap } = await import('../claude-config');
+    await ensureClaudeBootstrap(ctx.fs, { homeDir: ctx.env.HOME || '/home/user' });
+  } catch { /* settings are Claude's own business; never block the run */ }
   // JSC's JIT costs more than it saves under Blink: -p took 85 s without it
   // and 107 s with it (musl build, docs/COMPAT.md). Export BUN_JSC_useJIT=1 to keep it.
   const jit = ctx.env.BUN_JSC_useJIT === undefined ? 'BUN_JSC_useJIT=0 ' : '';

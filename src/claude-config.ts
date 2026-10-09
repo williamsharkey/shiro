@@ -14,7 +14,6 @@ export const DEFAULT_CLAUDE_PERMISSIONS = {
     'WebSearch',
     'Glob',
     'Grep',
-    'mcp__*',
   ],
   deny: [],
 };
@@ -68,6 +67,14 @@ export async function ensureClaudeBootstrap(
 
   if (!isRecord(settings.permissions)) {
     settings.permissions = DEFAULT_CLAUDE_PERMISSIONS;
+    settingsChanged = true;
+  }
+
+  // Older Shiro seeded "mcp__*", which current Claude Code rejects in allow
+  // rules (a Settings Warning on every start); drop it from existing files
+  const allow = (settings.permissions as JsonRecord).allow;
+  if (Array.isArray(allow) && allow.includes('mcp__*')) {
+    (settings.permissions as JsonRecord).allow = allow.filter((r: unknown) => r !== 'mcp__*');
     settingsChanged = true;
   }
 
