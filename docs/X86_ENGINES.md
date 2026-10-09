@@ -388,7 +388,8 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    symlink (dpkg lchowns NAME.dpkg-new links before their targets exist),
    and `fchownat` fails for a missing path. Ownership isn't kept; they
    check existence. Test: `fixtures/x86/lchown.c`.
-31. Same-instance fork, behind `BLINK_SAME_INSTANCE_FORK=1`: the fork child
+31. Same-instance fork (the default since patch 48; `BLINK_SAME_INSTANCE_FORK=0`
+   opts out): the fork child
    is a new System with its own guest thread in the parent's Blink instance
    (same wasm memory). Private pages are copied; pages of writable
    `MAP_SHARED` mappings move onto host pages both processes map
@@ -494,6 +495,11 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    the compiler) and wrote 8 bytes low, over a return address: Debian's
    `nodejs` crashed on any script (found with patch 46). Test:
    `fixtures/x86/popmem.c` (native output).
+48. Same-instance fork is on by default (`BLINK_SAME_INSTANCE_FORK=0` gives
+   the old fork: a new worker from a snapshot, or a vfork-style child on
+   the parent's thread while writable `MAP_SHARED` memory is mapped).
+   LTP's syscalls with it on: 197/320 against 155/320 (unix/conformance's
+   A/B, no new failures or hangs).
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.
