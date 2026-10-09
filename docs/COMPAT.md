@@ -153,6 +153,17 @@ Shell and platform fixes these needed (all with tests in the same file):
   and objects (it accepted any throw), and `AssertionError` with `code`,
   `actual`, `expected`, `operator`, `generatedMessage`. `util.isDeepStrictEqual`
   uses the same comparison.
+- Node: `fs` open flags, write options and symlinks follow node (cases
+  ported from node's test-fs-open-flags, test-fs-write-file*, test-fs-lstat*
+  and test-fs-realpath*, checked against node 22). `O_CREAT` without a write
+  bit creates the file (an atomic write's temp file was never made); `wx`,
+  `ax` and `O_EXCL` on an existing file are EEXIST (it was truncated); a
+  missing file without `O_CREAT` is ENOENT. `writeFile`, `appendFile` and
+  `fs.promises` take `flag`, `mode` (umask applied) and `encoding` (they were
+  ignored); `mkdir`'s `mode` applies to each directory it creates (it made
+  755). `lstat` reports symlinks (`isSymbolicLink()` was always false),
+  `stat` and `realpath` follow them, `symlink` onto an existing path is
+  EEXIST, and `ino`/`dev` are stable per file and shared through a link.
 - Node, for yarn: `fs.open` of a missing file to read is ENOENT (yarn took
   a tarball cache it never wrote for a hit and fetched nothing),
   `fs.copyFile` copies what the script sees, as bytes (copies out of its

@@ -14,7 +14,7 @@ crt=/var/www/tabdeploy/tls-recipient.crt
 dest=/etc/tabcomputer/tls
 [ -f "$bundle" ] && [ -f "$key" ] || { echo "tls: no bundle or no recipient key; skipped"; exit 0; }
 want=$(sha256sum "$bundle" | cut -d' ' -f1)
-[ "$want" != "$(cat $dest/BUNDLE_SHA 2>/dev/null)" ] || exit 0
+if [ "$want" = "$(cat $dest/BUNDLE_SHA 2>/dev/null)" ] && [ -e /etc/nginx/sites-enabled/tabcomputer-wild ]; then exit 0; fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 if ! openssl cms -decrypt -binary -inform PEM -in "$bundle" -inkey "$key" -recip "$crt" | tar -x -C "$tmp"; then
@@ -36,9 +36,8 @@ server {
   return 301 https://$host$request_uri;
 }
 server {
-  listen 443 ssl;
-  listen [::]:443 ssl;
-  http2 on;
+  listen 443 ssl http2;
+  listen [::]:443 ssl http2;
   server_name *.tabcomputer.com;
   ssl_certificate /etc/tabcomputer/tls/fullchain.pem;
   ssl_certificate_key /etc/tabcomputer/tls/privkey.pem;

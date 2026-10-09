@@ -28,6 +28,49 @@ function fsError(code: string, message: string, syscall?: string, path?: string)
   return err;
 }
 
+/** open(2) flags, from node's string form or the O_* bits. */
+export interface OpenFlags { read: boolean; write: boolean; create: boolean; excl: boolean; trunc: boolean; append: boolean }
+export function parseOpenFlags(flags: any): OpenFlags {
+  if (typeof flags === 'number') {
+    const acc = flags & 3; // O_RDONLY 0, O_WRONLY 1, O_RDWR 2
+    return { read: acc !== 1, write: acc !== 0, create: !!(flags & 64), excl: !!(flags & 128), trunc: !!(flags & 512), append: !!(flags & 1024) };
+  }
+  const f = String(flags ?? 'r').replace(/s/g, '');
+  const plus = f.includes('+');
+  switch (f[0]) {
+    case 'w': return { read: plus, write: true, create: true, excl: f.includes('x'), trunc: true, append: false };
+    case 'a': return { read: plus, write: true, create: true, excl: f.includes('x'), trunc: false, append: true };
+    default: return { read: true, write: plus, create: false, excl: false, trunc: false, append: false };
+  }
+}
+
+/** A stable inode number for a canonical path (the same file through a link is the same inode). */
+export function inodeOf(path: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < path.length; i++) { h ^= path.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0) || 1;
+}
+
+/** A node fs.Stats-like object. */
+export function makeStats(o: { type: 'file' | 'dir' | 'symlink'; size: number; mtimeMs: number; mode: number; ino: number }): any {
+  const t = new Date(o.mtimeMs);
+  const fmt = o.type === 'dir' ? 0o40000 : o.type === 'symlink' ? 0o120000 : 0o100000;
+  return {
+    isFile: () => o.type === 'file', isDirectory: () => o.type === 'dir', isSymbolicLink: () => o.type === 'symlink',
+    isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false,
+    dev: 1, ino: o.ino, mode: fmt | (o.mode & 0o7777), nlink: o.type === 'dir' ? 2 : 1, uid: 1000, gid: 1000, rdev: 0,
+    size: o.size, blksize: 4096, blocks: Math.ceil(o.size / 512),
+    atime: t, mtime: t, ctime: t, birthtime: t,
+    atimeMs: o.mtimeMs, mtimeMs: o.mtimeMs, ctimeMs: o.mtimeMs, birthtimeMs: o.mtimeMs,
+  };
+}
+
+/** writeFile/appendFile options: a string is the encoding. */
+export function writeOptions(opts: any, defFlag: string): { encoding?: string; flag: string; mode?: number } {
+  if (typeof opts === 'string') return { encoding: opts, flag: defFlag };
+  return { encoding: opts?.encoding ?? undefined, flag: opts?.flag ?? defFlag, mode: opts?.mode === undefined ? undefined : (typeof opts.mode === 'string' ? parseInt(opts.mode, 8) : opts.mode) };
+}
+
 /**
  * A path's mtime as stat reports it. Paths the shim hasn't seen written
  * (directories, files from shell commands) get the time of their first stat,
@@ -55,7 +98,11 @@ function timeMs(t: any): number {
  * still in flight. The drain loop empties pendingPromises as it awaits it, so
  * that array alone can't tell a rename what hasn't landed yet.
  */
-interface WriteState { chains: Map<string, Promise<void>>; inflight: Set<Promise<any>>; push: (p: Promise<any>) => number; gone: Set<string> }
+interface WriteState {
+  chains: Map<string, Promise<void>>; inflight: Set<Promise<any>>; push: (p: Promise<any>) => number; gone: Set<string>;
+  /** Modes set at creation that the filesystem hasn't stored yet */
+  modes: Map<string, number>;
+}
 const writeStates = new WeakMap<Promise<any>[], WriteState>();
 function writeStateFor(pending: Promise<any>[]): WriteState {
   let st = writeStates.get(pending);
@@ -64,6 +111,7 @@ function writeStateFor(pending: Promise<any>[]): WriteState {
     st = {
       chains: new Map(),
       gone: new Set(),
+      modes: new Map(),
       inflight,
       push: (p: Promise<any>) => {
         inflight.add(p);
@@ -281,6 +329,84 @@ export function createFsModule(deps: FsDeps): any {
   let watchers: ReturnType<typeof createWatchApi> | undefined;
   const watchApi = () => watchers ??= createWatchApi({ ctx, fileCache, getBuiltinModule, trackAsync: deps.trackAsync, atExit: deps.atExit });
   const fsDirCached = dirCachedChecker(deps);
+  /** `p` with every symlink followed: the file a read, write or stat reaches */
+  const real = (p: any): string => {
+    const r = ctx.fs.resolvePath(String(p instanceof URL ? decodeURIComponent(p.pathname) : p), ctx.cwd);
+    return ctx.fs.realpathCached?.(r) ?? r;
+  };
+  /** `p` with its directories' symlinks followed but not its last component (lstat, readlink, symlink) */
+  const realParent = (p: any): string => {
+    const r = ctx.fs.resolvePath(String(p instanceof URL ? decodeURIComponent(p.pathname) : p), ctx.cwd);
+    const slash = r.lastIndexOf('/');
+    if (slash <= 0) return r;
+    const dir = ctx.fs.realpathCached?.(r.slice(0, slash)) ?? r.slice(0, slash);
+    return (dir === '/' ? '' : dir) + r.slice(slash);
+  };
+  /** Whether `r` (canonical) exists as this script sees it: undefined when only storage knows */
+  const existsNow = (r: string): boolean | undefined => {
+    if (fileCache.has(r) || fileCache.has(r + '/.') || ctx.fs.readBytesCached(r) !== undefined || fsDirCached(r)) return true;
+    if ([...fileCache.keys()].some((k) => k.startsWith(r + '/'))) return true;
+    const hit = ctx.fs.lookupCached?.(r);
+    if (hit === null) return false;
+    return hit ? true : undefined;
+  };
+  const pendingModes = writeState.modes;
+  /** Stats of canonical `r` from memory: null when it doesn't exist, undefined when only storage knows */
+  const statNow = (r: string): any => {
+    const isFile = fileCache.has(r) || ctx.fs.readBytesCached(r) !== undefined;
+    const isDir = !isFile && (fileCache.has(r + '/.') || fsDirCached(r) || [...fileCache.keys()].some((k) => k.startsWith(r + '/')));
+    if (!isFile && !isDir) {
+      const hit = ctx.fs.lookupCached?.(r);
+      if (hit === null) return null;
+      if (hit === undefined) return undefined;
+      if (hit.node.type !== 'file' && hit.node.type !== 'dir') return undefined;
+      return makeStats({ type: hit.node.type, size: hit.node.size ?? 0, mtimeMs: hit.node.mtime, mode: hit.node.mode ?? 0o644, ino: inodeOf(hit.path) });
+    }
+    const node = ctx.fs.lookupCached?.(r)?.node;
+    const mode = pendingModes.get(r) ?? node?.mode ?? (isDir ? 0o755 : 0o644);
+    return makeStats({ type: isDir ? 'dir' : 'file', size: isFile ? (currentBytes(r)?.length ?? 0) : 0, mtimeMs: stableMtime(fileMtimes, r), mode, ino: inodeOf(r) });
+  };
+  /** lstat from memory (a symlink itself, else the file): null / undefined as statNow */
+  const lstatNow = (p: any): any => {
+    const r = realParent(p);
+    const link = ctx.fs.readlinkCached?.(r);
+    if (typeof link === 'string') {
+      const node = ctx.fs.lookupCached?.(r, false)?.node;
+      return makeStats({ type: 'symlink', size: new TextEncoder().encode(link).length, mtimeMs: node?.mtime ?? Date.now(), mode: 0o777, ino: inodeOf(r) });
+    }
+    return statNow(r);
+  };
+  /** A node Stats from the filesystem's own stat (what memory couldn't answer) */
+  const fromFsStat = (st: any, r: string, link = false): any => makeStats({
+    type: link && st.isSymbolicLink?.() ? 'symlink' : st.isDirectory?.() ? 'dir' : 'file',
+    size: st.size ?? 0, mtimeMs: st.mtimeMs ?? st.mtime?.getTime?.() ?? Date.now(), mode: st.mode ?? 0o644, ino: inodeOf(r),
+  });
+  const statAsync = async (p: any, link: boolean): Promise<any> => {
+    const r = link ? realParent(p) : real(p);
+    const now = link ? lstatNow(p) : statNow(r);
+    if (now) return now;
+    if (now === null) throw fsError('ENOENT', `ENOENT: no such file or directory, ${link ? 'lstat' : 'stat'} '${p}'`, link ? 'lstat' : 'stat', String(p));
+    try {
+      const st = link ? await ctx.fs.lstat(r) : await ctx.fs.stat(r);
+      return fromFsStat(st, link ? r : (await ctx.fs.realpath(r).catch(() => r)), link);
+    } catch {
+      throw fsError('ENOENT', `ENOENT: no such file or directory, ${link ? 'lstat' : 'stat'} '${p}'`, link ? 'lstat' : 'stat', String(p));
+    }
+  };
+  /** Data for writeFile/appendFile: a string in a non-UTF-8 encoding becomes its bytes */
+  const encodeData = (data: any, encoding?: string): any => {
+    if (typeof data === 'string' && encoding && !/^utf-?8$/i.test(encoding)) return FakeBuffer.from(data, encoding);
+    if (data !== null && typeof data === 'object' && !ArrayBuffer.isView(data) && !(data instanceof ArrayBuffer) && typeof data.toString === 'function' && data.toString !== Object.prototype.toString) return String(data);
+    return data;
+  };
+  /** A mode given at creation: kept for stat now, stored once the writes land */
+  const applyMode = (r: string, mode: number | undefined) => {
+    if (mode === undefined) return;
+    const m = mode & 0o7777 & ~0o022; // the process umask
+    pendingModes.set(r, m);
+    // A microtask on, so the write the caller queues next lands before the chmod
+    queueMicrotask(() => inflight.push(chmodAfterWrites(deps, r, m).catch(() => {}).finally(() => { if (pendingModes.get(r) === m) pendingModes.delete(r); })));
+  };
   const writeChains = writeState.chains;
   const inflight = { push: writeState.push };
   const queueWrite = (path: string, op: () => Promise<unknown>): Promise<void> => {
@@ -298,11 +424,73 @@ export function createFsModule(deps: FsDeps): any {
     });
   };
 
+  /** mkdir's `mode` for each directory the call creates (the filesystem's mkdir takes none) */
+  const mkdirModes = (resolved: string, opts: any): (() => void) => {
+    const m = typeof opts === 'object' ? opts?.mode : opts; // mkdir(p, mode) or mkdir(p, { mode })
+    const mode = m === undefined || m === null ? undefined : typeof m === 'string' ? parseInt(m, 8) : Number(m);
+    if (mode === undefined) return () => {};
+    const made: string[] = [];
+    if (opts?.recursive) {
+      for (let cur = resolved; cur && cur !== '/' && !existsNow(cur); cur = cur.slice(0, cur.lastIndexOf('/'))) made.push(cur);
+    } else if (!existsNow(resolved)) made.push(resolved);
+    return () => { for (const d of made) applyMode(d, mode); };
+  };
+  /**
+   * Before an async open or write of `p` with `flags`: what only storage knows
+   * about it, settled (EEXIST for an exclusive create, ENOENT for a missing
+   * file without O_CREAT, and its text loaded when it is kept), so the sync
+   * shim's checks and caching hold.
+   */
+  const settleExisting = async (p: any, flags: any, syscall = 'open') => {
+    const r = real(p);
+    if (existsNow(r) !== undefined) return;
+    const fl = parseOpenFlags(flags);
+    const there = await ctx.fs.exists(r);
+    if (!there && !fl.create) throw fsError('ENOENT', `ENOENT: no such file or directory, ${syscall} '${p}'`, syscall, String(p));
+    if (there && fl.create && fl.excl) throw fsError('EEXIST', `EEXIST: file already exists, ${syscall} '${p}'`, syscall, String(p));
+    if (there && !fl.trunc && !fileCache.has(r)) {
+      const d = await ctx.fs.readFile(r).catch(() => undefined);
+      const text = d === undefined ? null : typeof d === 'string' ? d : decodeUtf8Strict(d);
+      if (text !== null && !fileCache.has(r)) fileCache.set(r, text);
+    }
+  };
+  /** writeFile/appendFile for the callback and promise APIs: the sync shim, then the write landing */
+  const writeFileAsync = async (p: any, data: any, opts: any, append: boolean) => {
+    if (p && typeof p === 'object' && typeof p.fd === 'number') p = p.fd; // a FileHandle
+    if (typeof p !== 'number') await settleExisting(p, writeOptions(opts, append ? 'a' : 'w').flag);
+    if (append) fsShim.appendFileSync(p, data, opts); else fsShim.writeFileSync(p, data, opts);
+    const path = typeof p === 'number' ? (globalThis as any).__shiroFds?.[p]?.path : real(p);
+    if (path) await Promise.allSettled([writeChains.get(path)]);
+  };
+  const openAsync = async (p: any, flags: any, mode?: any): Promise<number> => {
+    await settleExisting(p, flags ?? 'r');
+    return fsShim.openSync(p, flags ?? 'r', mode);
+  };
+  const mkdirAsync = async (p: any, opts: any) => {
+    const resolved = ctx.fs.resolvePath(String(p), ctx.cwd);
+    const setModes = mkdirModes(resolved, opts);
+    await ctx.fs.mkdir(resolved, typeof opts === 'object' ? opts : undefined);
+    setModes();
+  };
+  const symlinkAsync = async (target: any, path: any) => {
+    const r = realParent(path);
+    if (existsNow(r) === undefined && typeof ctx.fs.readlinkCached?.(r) !== 'string' && await ctx.fs.lstat(r).then(() => true, () => false)) {
+      throw fsError('EEXIST', `EEXIST: file already exists, symlink '${target}' -> '${path}'`, 'symlink', String(path));
+    }
+    fsShim.symlinkSync(target, path);
+    await Promise.allSettled([...writeState.inflight]);
+  };
+
   // Synchronous shims that use cached data or throw
   const fsShim: any = {
     readFileSync: (p: string, opts?: any) => {
       tickSyncOps();
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      if (typeof p === 'number') {
+        const fdPath = (globalThis as any).__shiroFds?.[p]?.path;
+        if (!fdPath) throw fsError('EBADF', 'EBADF: bad file descriptor, read', 'read');
+        return fsShim.readFileSync(fdPath, opts);
+      }
+      const resolved = real(p);
       let cached = fileCache.get(resolved) ?? fileCache.get(resolved + '.js');
       // Fallback: check Shiro's FS in-memory cache for files created by
       // shell commands (git clone, echo, sed) that bypass nodeCmd's fileCache
@@ -330,18 +518,25 @@ export function createFsModule(deps: FsDeps): any {
       if (!encoding) return FakeBuffer.from(cached);
       return cached;
     },
-    writeFileSync: (p: string | number, data: string | Uint8Array) => {
+    writeFileSync: (p: string | number, data: string | Uint8Array, opts?: any) => {
       tickSyncOps();
+      const o = writeOptions(opts, 'w');
+      data = encodeData(data, o.encoding);
       if (typeof p === 'number') { fsShim.writeSync(p, data); return; }
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      const strData = storeData(resolved, data, inflight);
+      const f = parseOpenFlags(o.flag);
+      if (f.append) { fsShim.appendFileSync(p, data, { mode: o.mode, flag: o.flag }); return; }
+      const resolved = real(p);
+      const existed = existsNow(resolved);
+      if (f.excl && existed) throw fsError('EEXIST', `EEXIST: file already exists, open '${p}'`, 'open', String(p));
+      if (!existed) applyMode(resolved, o.mode);
+      const strData = storeData(resolved, data, { push: (w) => queueWrite(resolved, () => w) });
       if (strData === null) return; // binary: written through the byte cache
       fileCache.set(resolved, strData);
       fileMtimes.set(resolved, Date.now());
       // Skip IDB write for .tmp files — they're transient atomic-write intermediaries.
       // The data reaches IDB via renameSync which writes to the final path.
       if (!resolved.includes('.tmp.')) {
-        inflight.push(ctx.fs.writeFile(resolved, strData).catch(() => {}));
+        queueWrite(resolved, () => ctx.fs.writeFile(resolved, strData));
       }
       // localStorage WAL for critical config files (survives page close before IndexedDB flushes)
       // Skip .tmp files — they'll be WAL'd when renamed to their final name
@@ -351,7 +546,8 @@ export function createFsModule(deps: FsDeps): any {
     },
     existsSync: (p: string) => {
       tickSyncOps();
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      if (typeof p !== 'string' && !(p as any instanceof URL) && !ArrayBuffer.isView(p)) return false;
+      const resolved = real(p);
       if (fileCache.has(resolved) || fileCache.has(resolved + '.js') || fileCache.has(resolved + '/index.js')) return true;
       // Check for directory sentinel (from mkdirSync)
       if (fileCache.has(resolved + '/.')) return true;
@@ -365,41 +561,19 @@ export function createFsModule(deps: FsDeps): any {
     },
     statSync: (p: string, opts?: any) => {
       tickSyncOps();
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      let isFile = fileCache.has(resolved);
-      // Fallback: check Shiro FS cache for files created by shell commands
-      const cachedBytes = isFile ? undefined : ctx.fs.readBytesCached(resolved);
-      if (cachedBytes !== undefined) {
-        isFile = true;
-        const text = decodeUtf8Strict(cachedBytes);
-        if (text !== null) fileCache.set(resolved, text); // promote text only; binary stays as bytes
+      const resolved = real(p);
+      // Text of a file other processes wrote: promoted to the cache (binary stays bytes)
+      if (!fileCache.has(resolved)) {
+        const bytes = ctx.fs.readBytesCached(resolved);
+        const text = bytes === undefined ? null : decodeUtf8Strict(bytes);
+        if (text !== null) fileCache.set(resolved, text);
       }
-      let isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
-      // Fallback: check Shiro FS cache for directories
-      if (!isDir && fsDirCached(resolved)) {
-        isDir = true;
-      }
-      if (!isFile && !isDir) {
+      const st = statNow(resolved);
+      if (!st) {
         if (opts?.throwIfNoEntry === false) return undefined;
-        throw fsError('ENOENT', `ENOENT: no such file or directory, stat '${p}'`, 'stat', p);
+        throw fsError('ENOENT', `ENOENT: no such file or directory, stat '${p}'`, 'stat', String(p));
       }
-      const mtime = new Date(stableMtime(fileMtimes, resolved));
-      const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
-      return {
-        isFile: () => isFile,
-        isDirectory: () => isDir && !isFile,
-        isSymbolicLink: () => false,
-        isBlockDevice: () => false,
-        isCharacterDevice: () => false,
-        isFIFO: () => false,
-        isSocket: () => false,
-        size,
-        mtime, ctime: mtime, atime: mtime, birthtime: mtime,
-        mtimeMs: mtime.getTime(), ctimeMs: mtime.getTime(), atimeMs: mtime.getTime(), birthtimeMs: mtime.getTime(),
-        dev: 0, ino: 0, nlink: 1, uid: 1000, gid: 1000, rdev: 0,
-        blksize: 4096, blocks: Math.ceil(size / 512),
-        mode: isFile ? 0o100644 : 0o40755,
-      };
+      return st;
     },
     readdirSync: (p: string, opts?: any) => {
       tickSyncOps();
@@ -474,6 +648,7 @@ export function createFsModule(deps: FsDeps): any {
     },
     mkdirSync: (p: string, opts?: any) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const setModes = mkdirModes(resolved, opts);
       // Mark directory in fileCache so existsSync/statSync can find it
       // Use a sentinel value to distinguish from files
       if (opts?.recursive) {
@@ -490,6 +665,7 @@ export function createFsModule(deps: FsDeps): any {
       // The directory exists for the filesystem now when its parent is in memory
       // (a write right after it found no parent and was dropped)
       inflight.push((ctx.fs.mkdirNow ? ctx.fs.mkdirNow(resolved, opts) : ctx.fs.mkdir(resolved, opts)).catch(() => {}));
+      setModes();
     },
     unlinkSync: (p: string) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
@@ -587,51 +763,24 @@ export function createFsModule(deps: FsDeps): any {
     },
     realpathSync: (p: string) => {
       tickSyncOps();
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      // Verify path exists (file or directory)
-      const isFile = fileCache.has(resolved);
-      const isDir = [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
-      // Symlinks resolve (pnpm's node_modules/x -> .pnpm/x@1/node_modules/x)
-      const real = ctx.fs.realpathCached?.(resolved);
-      if (!isFile && !isDir) {
-        if (real && real !== resolved && (fileCache.has(real) || ctx.fs.isDirCached?.(real) || ctx.fs.readBytesCached(real) !== undefined)) return real;
-        throw fsError('ENOENT', `ENOENT: no such file or directory, realpath '${p}'`, 'realpath', p);
+      const r = real(p);
+      if (existsNow(r) === false || (existsNow(r) === undefined && ctx.fs.realpathCached?.(r) === undefined)) {
+        throw fsError('ENOENT', `ENOENT: no such file or directory, realpath '${p}'`, 'realpath', String(p));
       }
-      return real ?? resolved;
+      return r;
     },
     accessSync: (p: string) => {
       tickSyncOps();
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      const isFile = fileCache.has(resolved);
-      const isDir = [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
-      if (!isFile && !isDir) throw fsError('ENOENT', `ENOENT: no such file or directory, access '${p}'`, 'access', p);
+      if (existsNow(real(p)) === false) throw fsError('ENOENT', `ENOENT: no such file or directory, access '${p}'`, 'access', String(p));
     },
     lstatSync: (p: string, opts?: any) => {
       tickSyncOps();
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      const isFile = fileCache.has(resolved);
-      const isDir = [...fileCache.keys()].some(k => k.startsWith(resolved + '/'));
-      if (!isFile && !isDir) {
+      const st = lstatNow(p);
+      if (!st) {
         if (opts?.throwIfNoEntry === false) return undefined;
-        throw fsError('ENOENT', `ENOENT: no such file or directory, lstat '${p}'`, 'lstat', p);
+        throw fsError('ENOENT', `ENOENT: no such file or directory, lstat '${p}'`, 'lstat', String(p));
       }
-      const mtime = new Date(stableMtime(fileMtimes, resolved));
-      const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
-      return {
-        isFile: () => isFile,
-        isDirectory: () => isDir && !isFile,
-        isSymbolicLink: () => false,
-        isBlockDevice: () => false,
-        isCharacterDevice: () => false,
-        isFIFO: () => false,
-        isSocket: () => false,
-        size,
-        mtime, ctime: mtime, atime: mtime, birthtime: mtime,
-        mtimeMs: mtime.getTime(), ctimeMs: mtime.getTime(), atimeMs: mtime.getTime(), birthtimeMs: mtime.getTime(),
-        dev: 0, ino: 0, nlink: 1, uid: 1000, gid: 1000, rdev: 0,
-        blksize: 4096, blocks: Math.ceil(size / 512),
-        mode: isFile ? 0o100644 : 0o40755,
-      };
+      return st;
     },
     // Modes are kept (pnpm and cmd-shim make their bin shims executable)
     chmodSync: (p: string, mode: any) => {
@@ -658,27 +807,21 @@ export function createFsModule(deps: FsDeps): any {
       return fsShim.statSync(entry.path);
     },
     // File descriptor based sync operations (minimal stubs for CLI compatibility)
-    openSync: (p: string, flags?: string | number) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+    openSync: (p: string, flags?: string | number, mode?: any) => {
+      const resolved = real(p);
+      const fl = parseOpenFlags(flags);
+      const exists = existsNow(resolved);
+      // O_CREAT|O_EXCL ('wx') on an existing file, or a missing file without O_CREAT, fail
+      if (fl.create && fl.excl && exists) throw fsError('EEXIST', `EEXIST: file already exists, open '${p}'`, 'open', String(p));
+      if (!fl.create && exists === false) throw fsError('ENOENT', `ENOENT: no such file or directory, open '${p}'`, 'open', String(p));
       const fd = 100 + Math.floor(Math.random() * 9900);
-      // Store mapping for writeSync/readSync/closeSync
+      // Store mapping for writeSync/readSync/closeSync ('w' truncated, 'a' appends, 'r' reads)
       (globalThis as any).__shiroFds = (globalThis as any).__shiroFds || {};
-      // Normalize flags: numeric (O_WRONLY=1, O_RDWR=2, O_CREAT=64, O_TRUNC=512, O_APPEND=1024)
-      // to string 'r'/'w'/'a' for compatibility
-      let f: string;
-      if (typeof flags === 'number') {
-        const isWrite = (flags & 1) || (flags & 2); // O_WRONLY | O_RDWR
-        const isAppend = flags & 1024; // O_APPEND
-        const isTrunc = flags & 512; // O_TRUNC
-        f = isAppend ? 'a' : isWrite ? 'w' : 'r';
-      } else {
-        f = flags || 'r';
-      }
+      const f = fl.append ? 'a' : fl.write ? (fl.trunc ? 'w' : 'r+') : 'r';
       (globalThis as any).__shiroFds[fd] = { path: resolved, flags: f, offset: 0 };
-      // Create/truncate file for write modes, create empty for append
-      if (f.includes('w') || f.includes('a')) {
-        if (f.includes('w') || !fileCache.has(resolved)) {
-          fileCache.set(resolved, ''); // truncate for 'w', create for 'a' if missing
+      if (fl.trunc || (fl.create && !exists)) {
+        if (fl.trunc || !fileCache.has(resolved)) {
+          fileCache.set(resolved, ''); // truncate, or create a missing file
         }
         fileMtimes.set(resolved, Date.now());
         // Ensure parent dirs exist in fileCache
@@ -687,6 +830,7 @@ export function createFsModule(deps: FsDeps): any {
           fileCache.set(parentDir + '/.', '');
           inflight.push(ctx.fs.mkdir(parentDir, { recursive: true }).catch(() => {}));
         }
+        if (!exists) applyMode(resolved, typeof mode === 'string' ? parseInt(mode, 8) : mode);
         materializeOpenFile(resolved);
       }
       return fd;
@@ -738,10 +882,15 @@ export function createFsModule(deps: FsDeps): any {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       ctx.fs.rmdir(resolved).catch(() => {});
     },
-    appendFileSync: (p: string | number, data: string | Uint8Array) => {
+    appendFileSync: (p: string | number, data: string | Uint8Array, opts?: any) => {
+      const o = writeOptions(opts, 'a');
+      data = encodeData(data, o.encoding);
       // Node accepts an fd from openSync here (Claude's session log does this)
       if (typeof p === 'number') { fsShim.writeSync(p, data); return; }
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
+      const resolved = real(p);
+      const existed = existsNow(resolved);
+      if (parseOpenFlags(o.flag).excl && existed) throw fsError('EEXIST', `EEXIST: file already exists, open '${p}'`, 'open', String(p));
+      if (!existed) applyMode(resolved, o.mode);
       const bytes = toBytes(data);
       const prior = fileCache.has(resolved) ? undefined : ctx.fs.readBytesCached(resolved);
       if ((bytes && decodeUtf8Strict(bytes) === null) || (prior && decodeUtf8Strict(prior) === null)) {
@@ -750,17 +899,20 @@ export function createFsModule(deps: FsDeps): any {
       }
       const existing = fileCache.get(resolved) ?? ctx.fs.readCached(resolved) ?? '';
       const str = typeof data === 'string' ? data : new TextDecoder().decode(bytes!);
-      fileCache.set(resolved, existing + str);
-      inflight.push(ctx.fs.writeFile(resolved, existing + str).catch(() => {}));
+      const next = existing + str;
+      fileCache.set(resolved, next);
+      fileMtimes.set(resolved, Date.now());
+      queueWrite(resolved, () => ctx.fs.writeFile(resolved, next));
     },
+    // A real link, in the filesystem's cache at once (lstatSync, readlinkSync
+    // and realpathSync see it); reads through it follow it
     symlinkSync: (target: string, path: string) => {
-      const resolved = ctx.fs.resolvePath(path, ctx.cwd);
-      const dir = resolved.substring(0, resolved.lastIndexOf('/')) || '/';
-      const targetResolved = ctx.fs.resolvePath(target, dir);
-      // A real link (target as given), plus the target's text for sync readers
-      const content = fileCache.get(targetResolved);
-      if (content !== undefined) fileCache.set(resolved, content);
-      queueWrite(resolved, () => ctx.fs.symlink(String(target), resolved));
+      const r = realParent(path);
+      if (existsNow(r) || typeof ctx.fs.readlinkCached?.(r) === 'string') {
+        throw fsError('EEXIST', `EEXIST: file already exists, symlink '${target}' -> '${path}'`, 'symlink', String(path));
+      }
+      const op = ctx.fs.symlinkNow ? ctx.fs.symlinkNow(String(target), r) : ctx.fs.symlink(String(target), r);
+      inflight.push(op.catch(() => {}));
     },
     // Real streams over the file's bytes (yarn pipes downloaded tarballs into
     // createWriteStream; chunks used to be decoded as text)
@@ -867,61 +1019,17 @@ export function createFsModule(deps: FsDeps): any {
         .then((data: any) => callback?.(null, data))
         .catch((e: any) => callback?.(e));
     },
-    writeFile: (p: string, data: any, optsOrCb?: any, cb?: any) => {
+    writeFile: (p: any, data: any, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      const strData = typeof data === 'string' ? data : new TextDecoder().decode(data);
-      // Update fileCache so subsequent sync reads see the new data
-      fileCache.set(resolved, strData);
-      fileMtimes.set(resolved, Date.now());
-      inflight.push(ctx.fs.writeFile(resolved, strData).catch(() => {}));
-      queueMicrotask(() => callback?.(null));
+      writeFileAsync(p, data, typeof optsOrCb === 'function' ? undefined : optsOrCb, false).then(() => callback?.(null), (e) => callback?.(e));
     },
-    stat: (p: string, optsOrCb?: any, cb?: any) => {
+    stat: (p: any, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      // Check fileCache first (matches statSync behavior) — avoids IDB round-trip
-      const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
-      const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || fsDirCached(resolved);
-      if (isFile || isDir) {
-        const mtime = new Date(stableMtime(fileMtimes, resolved));
-        const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
-        queueMicrotask(() => callback?.(null, {
-          isFile: () => isFile && !isDir, isDirectory: () => isDir,
-          isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false,
-          size, mtime, ctime: mtime, atime: mtime, birthtime: mtime,
-          mtimeMs: mtime.getTime(), ctimeMs: mtime.getTime(), atimeMs: mtime.getTime(), birthtimeMs: mtime.getTime(),
-          dev: 0, ino: 0, nlink: 1, uid: 1000, gid: 1000, rdev: 0, blksize: 4096, blocks: Math.ceil(size / 512),
-          mode: (isDir) ? 0o40755 : 0o100644,
-        }));
-        return;
-      }
-      ctx.fs.stat(resolved)
-        .then((s: any) => callback?.(null, s))
-        .catch((e: any) => callback?.(e));
+      statAsync(p, false).then((s) => callback?.(null, s), (e) => callback?.(e));
     },
-    lstat: (p: string, optsOrCb?: any, cb?: any) => {
+    lstat: (p: any, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      // Check fileCache first (same as stat — no real symlinks in Shiro)
-      const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
-      const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || fsDirCached(resolved);
-      if (isFile || isDir) {
-        const mtime = new Date(stableMtime(fileMtimes, resolved));
-        const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
-        queueMicrotask(() => callback?.(null, {
-          isFile: () => isFile && !isDir, isDirectory: () => isDir,
-          isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false,
-          size, mtime, ctime: mtime, atime: mtime, birthtime: mtime,
-          mtimeMs: mtime.getTime(), ctimeMs: mtime.getTime(), atimeMs: mtime.getTime(), birthtimeMs: mtime.getTime(),
-          dev: 0, ino: 0, nlink: 1, uid: 1000, gid: 1000, rdev: 0, blksize: 4096, blocks: Math.ceil(size / 512),
-          mode: (isDir) ? 0o40755 : 0o100644,
-        }));
-        return;
-      }
-      ctx.fs.stat(resolved)
-        .then((s: any) => callback?.(null, s))
-        .catch((e: any) => callback?.(e));
+      statAsync(p, true).then((s) => callback?.(null, s), (e) => callback?.(e));
     },
     readdir: (p: string, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
@@ -1008,9 +1116,7 @@ export function createFsModule(deps: FsDeps): any {
     },
     mkdir: (p: string, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
-      ctx.fs.mkdir(ctx.fs.resolvePath(p, ctx.cwd), typeof optsOrCb === 'object' ? optsOrCb : undefined)
-        .then(() => callback?.(null))
-        .catch((e: any) => callback?.(e));
+      mkdirAsync(p, typeof optsOrCb === 'function' ? undefined : optsOrCb).then(() => callback?.(null), (e: any) => callback?.(e));
     },
     unlink: (p: string, cb?: any) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
@@ -1051,9 +1157,7 @@ export function createFsModule(deps: FsDeps): any {
     symlink: (target: string, path: string, typeOrCb?: any, cb?: any) => {
       const callback = typeof typeOrCb === 'function' ? typeOrCb : cb;
       // the target is stored as given: a relative one resolves against the link's directory
-      ctx.fs.symlink(String(target), ctx.fs.resolvePath(path, ctx.cwd))
-        .then(() => callback?.(null))
-        .catch((e: any) => callback?.(e));
+      symlinkAsync(target, path).then(() => callback?.(null), (e: any) => callback?.(e));
     },
     readlink: (p: string, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
@@ -1079,38 +1183,10 @@ export function createFsModule(deps: FsDeps): any {
       throw err;
     },
     close: (_fd: number, cb?: any) => { cb?.(null); },
-    open: (p: string, flags: any, modeOrCb?: any, cb?: any) => {
-      const callback = typeof modeOrCb === 'function' ? modeOrCb : cb;
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      const fd = 100 + Math.floor(Math.random() * 9900);
-      (globalThis as any).__shiroFds = (globalThis as any).__shiroFds || {};
-      let f: string;
-      if (typeof flags === 'number') {
-        const isWrite = (flags & 1) || (flags & 2);
-        const isAppend = flags & 1024;
-        f = isAppend ? 'a' : isWrite ? 'w' : 'r';
-      } else {
-        f = flags || 'r';
-      }
-      // Opening a missing file to read is ENOENT (it opened anything: yarn
-      // took a tarball cache it never wrote for a hit and fetched nothing)
-      const readOnly = !(f.includes('w') || f.includes('a') || f.includes('+')) && !(typeof flags === 'number' && (flags & 64));
-      const known = fileCache.has(resolved) || ctx.fs.readBytesCached(resolved) !== undefined || fileCache.has(resolved + '/.') || fsDirCached(resolved);
-      (known || !readOnly ? Promise.resolve(true) : ctx.fs.exists(resolved)).then((exists: boolean) => {
-        if (!exists) {
-          callback?.(fsError('ENOENT', `ENOENT: no such file or directory, open '${p}'`, 'open', String(p)));
-          return;
-        }
-        (globalThis as any).__shiroFds[fd] = { path: resolved, flags: f, offset: 0 };
-        if (f.includes('w') || f.includes('a')) {
-          if (f.includes('w') || !fileCache.has(resolved)) {
-            fileCache.set(resolved, '');
-          }
-          fileMtimes.set(resolved, Date.now());
-          materializeOpenFile(resolved);
-        }
-        callback?.(null, fd);
-      }, (e: any) => callback?.(e));
+    open: (p: any, flags: any, modeOrCb?: any, cb?: any) => {
+      const callback = [flags, modeOrCb, cb].find((f) => typeof f === 'function');
+      if (typeof flags === 'function') flags = 'r';
+      openAsync(p, flags, typeof modeOrCb === 'function' ? undefined : modeOrCb).then((fd) => callback?.(null, fd), (e: any) => callback?.(e));
     },
     read: (fd: number, buf: any, off: number, len: number, pos: any, cb?: any) => {
       const fdInfo = (globalThis as any).__shiroFds?.[fd];
@@ -1164,13 +1240,9 @@ export function createFsModule(deps: FsDeps): any {
         Promise.allSettled([writeChains.get(dstRes)]).then(() => callback?.(null));
       }, (e: any) => callback?.(e));
     },
-    appendFile: (p: string, data: any, optsOrCb?: any, cb?: any) => {
+    appendFile: (p: any, data: any, optsOrCb?: any, cb?: any) => {
       const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      ctx.fs.readFile(resolved, 'utf8').catch(() => '')
-        .then((existing: any) => ctx.fs.writeFile(resolved, (existing || '') + data))
-        .then(() => callback?.(null))
-        .catch((e: any) => callback?.(e));
+      writeFileAsync(p, data, typeof optsOrCb === 'function' ? undefined : optsOrCb, true).then(() => callback?.(null), (e) => callback?.(e));
     },
     truncate: (p: string, lenOrCb?: any, cb?: any) => {
       const callback = typeof lenOrCb === 'function' ? lenOrCb : cb;
@@ -1251,15 +1323,6 @@ export function createFsModule(deps: FsDeps): any {
         if (encoding) return typeof data === 'string' ? data : new TextDecoder().decode(data);
         return FakeBuffer.from(data);
       },
-      writeFile: async (p: string, data: any) => {
-        const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-        const pending: Promise<any>[] = [];
-        const content = storeData(resolved, data, pending);
-        if (content === null) { await Promise.all(pending); return; }
-        fileCache.set(resolved, content); // Keep fileCache in sync for readFileSync/renameSync
-        fileMtimes.set(resolved, Date.now());
-        await ctx.fs.writeFile(resolved, content);
-      },
       readdir: async (p: string, opts?: any) => {
         const resolved = ctx.fs.resolvePath(p, ctx.cwd);
         // Merge fileCache + Shiro FS cache + IDB entries
@@ -1316,18 +1379,6 @@ export function createFsModule(deps: FsDeps): any {
         }
         return entries;
       },
-      stat: async (p: string) => {
-        const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-        const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
-        const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || fsDirCached(resolved);
-        if (isFile || isDir) {
-          const mtime = new Date(stableMtime(fileMtimes, resolved));
-          const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
-          return { isFile: () => isFile && !isDir, isDirectory: () => isDir, isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false, size, mtime, ctime: mtime, atime: mtime, birthtime: mtime, mtimeMs: mtime.getTime(), ctimeMs: mtime.getTime(), atimeMs: mtime.getTime(), birthtimeMs: mtime.getTime(), dev: 0, ino: 0, nlink: 1, uid: 1000, gid: 1000, rdev: 0, blksize: 4096, blocks: Math.ceil(size / 512), mode: isDir ? 0o40755 : 0o100644 };
-        }
-        return ctx.fs.stat(resolved);
-      },
-      mkdir: async (p: string, opts?: any) => ctx.fs.mkdir(ctx.fs.resolvePath(p, ctx.cwd), opts),
       unlink: async (p: string) => { const r = ctx.fs.resolvePath(p, ctx.cwd); fileCache.delete(r); fileMtimes.delete(r); return ctx.fs.unlink(r); },
       rm: async (p: string, opts?: any) => {
         const resolved = ctx.fs.resolvePath(p, ctx.cwd);
@@ -1341,6 +1392,7 @@ export function createFsModule(deps: FsDeps): any {
       },
     },
   };
+  Object.defineProperty(fsShim, ASYNC, { value: { writeFile: writeFileAsync, stat: statAsync, open: openAsync, symlink: symlinkAsync, mkdir: mkdirAsync } });
   // realpath and realpath.native need special handling (function with properties)
   const realpathFn: any = (p: string, optsOrCb?: any, cb?: any) => {
     const callback = typeof optsOrCb === 'function' ? optsOrCb : cb;
@@ -1379,6 +1431,9 @@ export function createFsModule(deps: FsDeps): any {
   return fsShim;
 }
 
+/** The fs module's async internals, which fs/promises shares (one write and mode state per script) */
+const ASYNC = Symbol('shiro.fs.async');
+
 const NOT_CALLBACK_API = new Set(['createReadStream', 'createWriteStream', 'watch', 'watchFile', 'unwatchFile', 'openAsBlob']);
 
 export function createFsPromisesModule(deps: FsDeps): any {
@@ -1386,6 +1441,8 @@ export function createFsPromisesModule(deps: FsDeps): any {
   const fsDirCached = dirCachedChecker(deps);
   const { removePathFromCaches, toBytes, currentBytes, storeData, concatBytes } = createRemovalHelpers(ctx, fileCache, fileMtimes);
 
+  /** The fs module's async internals: its write chains, pending modes and flag checks */
+  const shared = () => getBuiltinModule('fs')[ASYNC];
   // Async fs promises API
   return {
     readFile: async (p: string | number, opts?: any) => {
@@ -1405,18 +1462,7 @@ export function createFsPromisesModule(deps: FsDeps): any {
       }
       return typeof data === 'string' ? FakeBuffer.from(data) : FakeBuffer.from(data);
     },
-    writeFile: async (p: string, data: any) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      const pending: Promise<any>[] = [];
-      const content = storeData(resolved, data, pending);
-      if (content === null) { await Promise.all(pending); return; }
-      fileCache.set(resolved, content); // Keep fileCache in sync for readFileSync
-      await ctx.fs.writeFile(resolved, content);
-      // localStorage WAL for critical config files
-      if (resolved.startsWith(homeDir + '/.claude') || resolved === homeDir + '/.claude.json') {
-        try { localStorage.setItem('wal:' + resolved, content); } catch {}
-      }
-    },
+    writeFile: (p: any, data: any, opts?: any) => shared().writeFile(p, data, opts, false),
     readdir: async (p: string, opts?: any) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       // Check fileCache first (matches readdirSync)
@@ -1481,29 +1527,8 @@ export function createFsPromisesModule(deps: FsDeps): any {
       }
       return entries;
     },
-    stat: async (p: string) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      // Check fileCache first (matches statSync behavior)
-      const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
-      const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || fsDirCached(resolved);
-      if (isFile || isDir) {
-        const mtime = new Date(stableMtime(fileMtimes, resolved));
-        const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
-        return {
-          isFile: () => isFile && !isDir, isDirectory: () => isDir,
-          isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false,
-          size, mtime, ctime: mtime, atime: mtime, birthtime: mtime,
-          mtimeMs: mtime.getTime(), ctimeMs: mtime.getTime(), atimeMs: mtime.getTime(), birthtimeMs: mtime.getTime(),
-          dev: 0, ino: 0, nlink: 1, uid: 1000, gid: 1000, rdev: 0, blksize: 4096, blocks: Math.ceil(size / 512),
-          mode: isDir ? 0o40755 : 0o100644,
-        };
-      }
-      return await ctx.fs.stat(resolved);
-    },
-    mkdir: async (p: string, opts?: any) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      await ctx.fs.mkdir(resolved, opts);
-    },
+    stat: (p: any) => shared().stat(p, false),
+    mkdir: (p: any, opts?: any) => shared().mkdir(p, opts),
     unlink: async (p: string) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       fileCache.delete(resolved);
@@ -1521,25 +1546,7 @@ export function createFsPromisesModule(deps: FsDeps): any {
       const exists = await ctx.fs.exists(resolved);
       if (!exists) throw fsError('ENOENT', `ENOENT: no such file or directory, access '${p}'`, 'access', p);
     },
-    lstat: async (p: string) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      // Check fileCache first (same as stat)
-      const isFile = fileCache.has(resolved) || ctx.fs.readCached(resolved) !== undefined;
-      const isDir = fileCache.has(resolved + '/.') || [...fileCache.keys()].some(k => k.startsWith(resolved + '/')) || fsDirCached(resolved);
-      if (isFile || isDir) {
-        const mtime = new Date(stableMtime(fileMtimes, resolved));
-        const size = isFile ? (currentBytes(resolved)?.length ?? 0) : 0; // bytes, not UTF-16 units
-        return {
-          isFile: () => isFile && !isDir, isDirectory: () => isDir,
-          isSymbolicLink: () => false, isBlockDevice: () => false, isCharacterDevice: () => false, isFIFO: () => false, isSocket: () => false,
-          size, mtime, ctime: mtime, atime: mtime, birthtime: mtime,
-          mtimeMs: mtime.getTime(), ctimeMs: mtime.getTime(), atimeMs: mtime.getTime(), birthtimeMs: mtime.getTime(),
-          dev: 0, ino: 0, nlink: 1, uid: 1000, gid: 1000, rdev: 0, blksize: 4096, blocks: Math.ceil(size / 512),
-          mode: isDir ? 0o40755 : 0o100644,
-        };
-      }
-      return await ctx.fs.stat(resolved);
-    },
+    lstat: (p: any) => shared().stat(p, true),
     chmod: async (p: string, mode: any) => {
       const resolved = ctx.fs.resolvePath(String(p), ctx.cwd);
       await chmodAfterWrites(deps, resolved, mode);
@@ -1563,22 +1570,8 @@ export function createFsPromisesModule(deps: FsDeps): any {
     copyFile: (src: string, dst: string) => new Promise<void>((resolve, reject) => {
       getBuiltinModule('fs').copyFile(src, dst, (e: any) => e ? reject(e) : resolve());
     }),
-    appendFile: async (p: string, data: any) => {
-      const resolved = ctx.fs.resolvePath(p, ctx.cwd);
-      let existing: Uint8Array = new Uint8Array(0);
-      const cachedText = fileCache.get(resolved);
-      if (cachedText !== undefined) existing = new TextEncoder().encode(cachedText);
-      else { try { const d = await ctx.fs.readFile(resolved); existing = typeof d === 'string' ? new TextEncoder().encode(d) : d; } catch {} }
-      const add = toBytes(data) ?? new TextEncoder().encode(String(data));
-      const pending: Promise<any>[] = [];
-      const text = storeData(resolved, concatBytes(existing, add), pending);
-      if (text === null) { await Promise.all(pending); return; }
-      fileCache.set(resolved, text);
-      await ctx.fs.writeFile(resolved, text);
-    },
-    symlink: async (target: string, path: string) => {
-      await ctx.fs.symlink(String(target), ctx.fs.resolvePath(path, ctx.cwd));
-    },
+    appendFile: (p: any, data: any, opts?: any) => shared().writeFile(p, data, opts, true),
+    symlink: (target: any, path: any) => shared().symlink(target, path),
     readlink: async (p: string) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       return await ctx.fs.readlink(resolved);
@@ -1599,13 +1592,13 @@ export function createFsPromisesModule(deps: FsDeps): any {
       await ctx.fs.mkdir(dir, { recursive: true });
       return dir;
     },
-    open: async (p: string, flags?: any) => {
+    open: async (p: string, flags?: any, mode?: any) => {
       const resolved = ctx.fs.resolvePath(p, ctx.cwd);
       // Register a real fd: Claude's Bash tool opens its output file here and
       // passes handle.fd as spawn stdio. With the old fd 0, spawn couldn't map
       // it to the file, so every command's output was dropped.
       const syncFs = getBuiltinModule('fs');
-      const fd: number = syncFs.openSync(p, flags ?? 'r');
+      const fd: number = await shared().open(p, flags ?? 'r', mode);
       // Current bytes: the in-memory copy is ahead of IndexedDB while a
       // spawned command is still writing its output file.
       const currentBytes = async (): Promise<Uint8Array> => {
@@ -1644,28 +1637,9 @@ export function createFsPromisesModule(deps: FsDeps): any {
           }
           return ctx.fs.readFile(resolved, encoding || 'utf8');
         },
-        writeFile: async (data: any) => {
-          const pending: Promise<any>[] = [];
-          const content = storeData(resolved, data, pending);
-          if (content === null) { await Promise.all(pending); return; }
-          fileCache.set(resolved, content); // Keep fileCache in sync for readFileSync/renameSync
-          await ctx.fs.writeFile(resolved, content);
-        },
+        writeFile: (data: any, opts?: any) => shared().writeFile(p, data, opts, false),
         close,
-        stat: async () => {
-          let st: any;
-          try {
-            st = await ctx.fs.stat(resolved);
-          } catch (e) {
-            if (!fileCache.has(resolved)) throw e;
-            // Written to memory but not flushed to IndexedDB yet
-            const now = new Date();
-            st = { isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false,
-              mode: 0o100644, mtime: now, ctime: now, atime: now, birthtime: now, mtimeMs: now.getTime() };
-          }
-          if (fileCache.has(resolved)) st.size = (await currentBytes()).length;
-          return st;
-        },
+        stat: () => shared().stat(p, false),
         chmod: async () => {},
         sync: async () => {},
         datasync: async () => {},
