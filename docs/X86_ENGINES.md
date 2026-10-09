@@ -580,6 +580,18 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    inherited on fork; raw `getpriority` is 20 − nice; only root lowers
    it, `EACCES` otherwise). emscripten's stubs said `-ENODEV`/`EPERM`, so
    pam_limits failed every `su`/`runuser` session. Test: `fixtures/x86/nice.c`.
+63. uids and gids are the kernel's: `set*id`, `setgroups`, `setfs*id`,
+   `getresuid/gid`, `getgroups`, `geteuid/getegid` go to it (real,
+   effective and saved ids and groups per process) instead of Blink
+   answering success with real = effective; a kernel without them
+   (`ENOSYS`) gets the old answers, and root checks use the effective uid.
+   `signalfd`/`signalfd4` go to the kernel, which now learns the process's
+   signal mask (the main thread's: before a kernel call when it changed,
+   right after `rt_sigprocmask`/`rt_sigreturn`/`rt_sigsuspend`, and around
+   sigsuspend's wait), so a blocked signal is held for signalfd instead of
+   being delivered, dropped or fatal. For PostgreSQL (initdb, its latch).
+   Tests: `fixtures/x86/ids.c` (needs the kernel's `SYS_setresuid`),
+   `fixtures/x86/signalfd.c`.
 
 The guest's kernel calls go over a pool of channels (`src/x86-engine/blink.ts`
 → `public/engines/blink/host.mjs`). It starts at 6, and host.mjs asks the
