@@ -60,6 +60,9 @@ const rawTimer = (t: any) => (t && typeof t === 'object' && TIMER_RAW in t) ? t[
 const IDLE_EXIT_MS = 150;
 /** ...and for a script that never started tracked async work */
 const IDLE_EXIT_SYNC_MS = 60;
+/** ...and as many quiet turns of the 20 ms idle poll (see idleExit) */
+const IDLE_EXIT_POLLS = 8;
+const IDLE_EXIT_SYNC_POLLS = 3;
 
 /**
  * Execute a Node.js script in Shiro's browser-based JS VM.
@@ -263,7 +266,7 @@ export async function executeNodeScript(
         createSqliteShim: () => createSqliteShim({ ctx }),
         createAutoStub,
       });
-      _baseST(() => {
+      deliver(() => {
         try {
           workerRequire(file, file.substring(0, file.lastIndexOf('/')) || '/');
           worker.emit('online');
@@ -272,7 +275,7 @@ export async function executeNodeScript(
           else stderrBuf.push(`Worker ${file}: ${e?.message ?? e}\n`);
           if (!worker._exited) { worker._exited = true; worker.emit('exit', 1); }
         }
-      }, 0);
+      });
     }
 
     const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
@@ -663,6 +666,10 @@ export async function executeNodeScript(
       const idleExit = _st.isInteractiveMode ? new Promise<number>(() => {}) : new Promise<number>((resolve) => {
         let outSeen = stdoutBuf.length + stderrBuf.length;
         let quietSince = performance.now();
+        // Quiet turns of this poll, besides quiet time: a busy page stretches
+        // time, not the order of queued tasks, so work hopping through tasks
+        // nothing tracks still gets its turns before the script is called done
+        let quietPolls = 0;
         const poll = () => {
           if (waitOver) return;
           const now = performance.now();
@@ -673,11 +680,13 @@ export async function executeNodeScript(
           if (out !== outSeen || activity.pending > 0 || (_activeTimers > 0 && !timersOutlasted)) {
             outSeen = out;
             quietSince = now;
-          }
-          if (activity.last > quietSince) quietSince = activity.last;
+            quietPolls = 0;
+          } else quietPolls++;
+          if (activity.last > quietSince) { quietSince = activity.last; quietPolls = 0; }
           // Only sync work so far: exit sooner; after async work, allow a longer lull
-          const window = activity.last > runStart ? IDLE_EXIT_MS : IDLE_EXIT_SYNC_MS;
-          if (now - quietSince >= window) resolve(_st.exitCode);
+          const async = activity.last > runStart;
+          const window = async ? IDLE_EXIT_MS : IDLE_EXIT_SYNC_MS;
+          if (now - quietSince >= window && quietPolls >= (async ? IDLE_EXIT_POLLS : IDLE_EXIT_SYNC_POLLS)) resolve(_st.exitCode);
           else _baseST(poll, 20);
         };
         _baseST(poll, 20);
