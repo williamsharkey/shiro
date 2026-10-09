@@ -1006,7 +1006,7 @@ describe('git (upstream, x86-64 in Blink)', () => {
 
   it('replaces the built-in git; commit, branch, merge, rebase, stash', async () => {
     let r = await g('git --version');
-    expect(r.out).toBe('git version 2.47.1\n');
+    expect(r.out).toBe('git version 2.56.0\n');
     r = await g('mkdir -p /home/user/r && cd /home/user/r && git init -q && printf "a\\nb\\nc\\n" > f.txt && git add . && git commit -qm init && git checkout -qb feat && sed -i s/c/C/ f.txt && git commit -qam feat && git checkout -q main && sed -i s/a/A/ f.txt && git commit -qam main && git merge -q feat -m merge && cat f.txt && git log --oneline --graph | wc -l');
     expect(r.err).toBe('');
     expect(r.out).toBe('Auto-merging f.txt\nA\nb\nC\n6\n');

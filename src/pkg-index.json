@@ -1046,60 +1046,6 @@
    "notes": "An x86-64 Linux binary in Blink: needs a cross-origin isolated page. Interpreted, so starting is ~1 s and big modules (POSIX) take seconds to load. No XS module loading (all core XS is built in); no pods (perldoc)."
   },
   {
-   "name": "git",
-   "version": "2.47.1",
-   "description": "Git (static x86-64 build run in the Blink engine); replaces Shiro's built-in git",
-   "license": "GPL-2.0-only",
-   "source": "https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.47.1.tar.gz",
-   "homepage": "https://git-scm.com/",
-   "origin": "shiro",
-   "recipe": "scripts/pkgbuild/git.sh",
-   "section": "vcs",
-   "abi": "x86_64-linux",
-   "files": [
-    {
-     "path": "bin",
-     "tar": {
-      "unpack": true,
-      "dir": "bin"
-     },
-     "url": "/pkg/git/2.47.1/git-2.47.1-x86_64.tar.gz",
-     "sha256": "33d6a8f13809135c1703687c8180169306bf0e941892474234fefdc16b122f19",
-     "size": 5149573
-    },
-    {
-     "path": "libexec",
-     "tar": {
-      "unpack": true,
-      "dir": "libexec"
-     },
-     "url": "/pkg/git/2.47.1/git-2.47.1-x86_64.tar.gz",
-     "sha256": "33d6a8f13809135c1703687c8180169306bf0e941892474234fefdc16b122f19",
-     "size": 5149573
-    },
-    {
-     "path": "share",
-     "tar": {
-      "unpack": true,
-      "dir": "share"
-     },
-     "url": "/pkg/git/2.47.1/git-2.47.1-x86_64.tar.gz",
-     "sha256": "33d6a8f13809135c1703687c8180169306bf0e941892474234fefdc16b122f19",
-     "size": 5149573
-    }
-   ],
-   "bin": {
-    "git": {
-     "file": "bin/git"
-    }
-   },
-   "needs": [
-    "threads",
-    "processes"
-   ],
-   "notes": "Upstream git in Blink (needs a cross-origin isolated page): local workflows as on Linux (merge, rebase, stash, blame, bisect, worktrees, clone from a path, hooks). No http(s) remotes (built without curl): uninstall it to get Shiro's built-in git back for GitHub clone/push."
-  },
-  {
    "name": "ninja",
    "version": "1.12.1",
    "description": "Ninja build system (static x86-64 build run in the Blink engine)",
