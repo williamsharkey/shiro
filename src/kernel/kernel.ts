@@ -22,6 +22,7 @@ import {
 } from './fd';
 import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
 import type { PtyFile } from './pty';
+import { LockTable, F_RDLCK, F_WRLCK, F_UNLCK } from './locks';
 import { Process } from './process';
 import { EpollFile, waitReady } from './epoll';
 import { EventFile, TimerFile } from './fd';
@@ -114,6 +115,36 @@ function trailingSlash(path: string): boolean {
   return path.length > 1 && path.endsWith('/') && !/^\/+$/.test(path);
 }
 
+const fileKeys = new WeakMap<object, number>();
+let nextFileKey = 1;
+/** A stable id for an open file description without a path (record locks on pipes, sockets) */
+function fileKey(f: object): number {
+  let k = fileKeys.get(f);
+  if (!k) { k = nextFileKey++; fileKeys.set(f, k); }
+  return k;
+}
+
+/** Syscalls an O_PATH fd fails with EBADF, by the argument holding the fd */
+const OPATH_FD_ARG: Record<number, number> = {
+  0: 0, 1: 0, 16: 0, 17: 0, 18: 0, 19: 0, 20: 0, 74: 0, 75: 0, 77: 0, 91: 0, 93: 0, // read write ioctl pread pwrite readv writev fsync fdatasync ftruncate fchmod fchown
+  190: 0, 193: 0, 196: 0, 199: 0, 217: 0, 285: 0, 233: 2, // f*xattr getdents64 fallocate epoll_ctl
+};
+
+/** An O_PATH description over `f`: same file and stat, no I/O */
+function pathOnlyFile(f: OpenFile): OpenFile {
+  const ebadf = () => -A.EBADF;
+  return new Proxy(f, {
+    get(t, k) {
+      if (k === 'flags') return (t.flags & ~3) | A.O_PATH;
+      if (k === 'read' || k === 'write' || k === 'pread' || k === 'pwrite' || k === 'ioctl') return async () => -A.EBADF;
+      if (k === 'tryRead' || k === 'tryWrite') return ebadf;
+      const v = Reflect.get(t, k, t);
+      return typeof v === 'function' ? v.bind(t) : v;
+    },
+    set(t, k, v) { return Reflect.set(t, k, v, t); },
+  });
+}
+
 /** Single-quote a word for the shell. */
 function shellQuote(s: string): string {
   return /^[A-Za-z0-9_@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
@@ -147,6 +178,8 @@ export class Kernel {
   /** The last pid handed out (/proc/stat, /proc/loadavg). */
   lastPid = 0;
   readonly procfs = new ProcFs(this);
+  /** fcntl record locks (F_SETLK, F_OFD_SETLK) */
+  readonly locks = new LockTable();
   private detachTable?: () => void;
   /** How long an unreaped child of init stays a zombie before it is reaped automatically. */
   initReapDelayMs = 30_000;
@@ -485,8 +518,10 @@ export class Kernel {
     }
     const timer: { handle?: ReturnType<typeof setTimeout>; deadline: number; interval: number } = { deadline: Date.now() + valueMs, interval: intervalMs > 0 ? intervalMs : 0 };
     const arm = (ms: number) => {
+      // setTimeout holds at most 2^31-1 ms (~24.8 days); a longer alarm waits in steps
       timer.handle = setTimeout(() => {
         if (proc.exiting || proc.data.realTimer !== timer) return;
+        if (timer.deadline - Date.now() > 0 && ms > 0x7fffffff) { arm(timer.deadline - Date.now()); return; }
         if (timer.interval > 0) {
           timer.deadline = Date.now() + timer.interval;
           arm(timer.interval);
@@ -494,7 +529,7 @@ export class Kernel {
           delete proc.data.realTimer;
         }
         this.deliver(proc, A.SIGALRM);
-      }, Math.max(0, ms));
+      }, Math.min(0x7fffffff, Math.max(0, ms)));
       (timer.handle as any)?.unref?.();
     };
     proc.data.realTimer = timer;
@@ -514,6 +549,7 @@ export class Kernel {
   async exit(proc: Process, status: number): Promise<void> {
     if (proc.pid === 1 || !proc.beginExit()) return;
     await proc.fds.closeAll();
+    this.locks.release(proc.pid);
     for (const child of this.procs.values()) {
       if (child.ppid === proc.pid) {
         child.ppid = 1;
@@ -695,6 +731,8 @@ export class Kernel {
   /** Absolute path for `path` relative to `dirfd` (AT_FDCWD = cwd), or -errno. */
   resolvePath(proc: Process, path: string, dirfd = A.AT_FDCWD): string | number {
     if (path === '') return -A.ENOENT;
+    // PATH_MAX 4096 with its NUL, NAME_MAX 255 per component
+    if (path.length >= 4096 || path.split('/').some((c) => c.length > 255)) return -A.ENAMETOOLONG;
     if (path.startsWith('/')) return normalize(path);
     let base = proc.cwd;
     if (dirfd !== A.AT_FDCWD) {
@@ -708,6 +746,11 @@ export class Kernel {
 
   /** open(2) without the fd: returns the new OpenFile or -errno. */
   async open(proc: Process, path: string, flags: number, mode = 0o666, dirfd = A.AT_FDCWD): Promise<OpenFile | number> {
+    // O_PATH: a descriptor that only names the file (fstat, fchdir, *at, dup, close)
+    if (flags & A.O_PATH) {
+      const f = await this.open(proc, path, (flags & (A.O_NOFOLLOW | A.O_DIRECTORY)) | A.O_RDONLY, mode, dirfd);
+      return typeof f === 'number' ? f : pathOnlyFile(f);
+    }
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
     const fdm = /^\/(?:dev\/fd|proc\/self\/fd)\/(\d+)$/.exec(p) ?? (/^\/dev\/(stdin|stdout|stderr)$/.exec(p));
@@ -764,7 +807,7 @@ export class Kernel {
       if ((flags & A.O_TRUNC) && canWrite(flags)) await file.truncate(0);
       return file;
     } catch (e) {
-      return A.errnoFromError(e);
+      return this.pathErrno(p, A.errnoFromError(e));
     }
   }
 
@@ -819,7 +862,7 @@ export class Kernel {
    */
   openSync(proc: Process, path: string, flags: number, dirfd = A.AT_FDCWD): OpenFile | number | undefined {
     const fs = this.fs;
-    if (!fs || flags & (A.O_CREAT | A.O_TRUNC | A.O_NOFOLLOW) || trailingSlash(path)) return undefined;
+    if (!fs || flags & (A.O_CREAT | A.O_TRUNC | A.O_NOFOLLOW | A.O_PATH) || trailingSlash(path)) return undefined;
     const p = this.resolvePath(proc, path, dirfd);
     if (typeof p === 'number') return p;
     if (this.devices.has(p) || /^\/(?:dev|proc)\//.test(p)) return undefined;
@@ -855,6 +898,20 @@ export class Kernel {
       atimeNs: n.atime === undefined ? n.mtimeNs : n.atimeNs, mtimeNs: n.mtimeNs,
     }), data);
     return 0;
+  }
+
+  /** -ENOENT for `p` is -ENOTDIR when a leading component is an existing non-directory (path_resolution(7)) */
+  private async pathErrno(p: string, errno: number): Promise<number> {
+    if (errno !== -A.ENOENT || !this.fs) return errno;
+    const parts = p.split('/').filter(Boolean);
+    let cur = '';
+    for (let k = 0; k < parts.length - 1; k++) {
+      cur += '/' + parts[k];
+      const st = await this.fs.stat(cur).catch(() => null);
+      if (!st) return errno;
+      if (!st.isDirectory()) return -A.ENOTDIR;
+    }
+    return errno;
   }
 
   async statPath(proc: Process, path: string, follow = true, dirfd = A.AT_FDCWD): Promise<A.KStat | number> {
@@ -899,7 +956,7 @@ export class Kernel {
         atimeNs: st.atimeNs, mtimeNs: st.mtimeNs,
       };
     } catch (e) {
-      return A.errnoFromError(e);
+      return this.pathErrno(p, A.errnoFromError(e));
     }
   }
 
@@ -1171,7 +1228,12 @@ export class Kernel {
     const hs = this.syscallTable.get(nr);
     if (hs) for (const h of hs) if (!h.passSync?.(proc, nr, args, data, this)) return undefined;
     switch (nr) {
-      case A.SYS_close: return proc.fds.closeSync(args[0]);
+      case A.SYS_close: {
+        const f = proc.fds.get(args[0]);
+        const r = proc.fds.closeSync(args[0]);
+        if (f && r === 0) this.releaseLocks(proc, f);
+        return r;
+      }
       case A.SYS_open:
       case A.SYS_openat: {
         const [dirfd, len, flags] = nr === A.SYS_open ? [A.AT_FDCWD, args[0], args[1]] : [args[0], args[1], args[2]];
@@ -1271,6 +1333,10 @@ export class Kernel {
       return this.fs;
     };
 
+    // An O_PATH descriptor can't be read, written or changed through
+    const pathFd = OPATH_FD_ARG[nr];
+    if (pathFd !== undefined && ((file(args[pathFd])?.flags ?? 0) & A.O_PATH)) return -A.EBADF;
+
     try {
       const handlers = this.syscallTable.get(nr);
       if (handlers) {
@@ -1312,8 +1378,12 @@ export class Kernel {
           if (fd < 0 && refCount(f) === 0) await f.close();
           return fd;
         }
-        case A.SYS_close:
-          return await fds.close(args[0]);
+        case A.SYS_close: {
+          const f = file(args[0]);
+          const r = await fds.close(args[0]);
+          if (f && r === 0) this.releaseLocks(proc, f);
+          return r;
+        }
         case A.SYS_stat:
         case A.SYS_lstat:
         case A.SYS_fstat:
@@ -1412,7 +1482,7 @@ export class Kernel {
           if (!fds.has(args[0])) return -A.EBADF;
           return await fds.dup2(args[0], args[1]);
         case A.SYS_dup3:
-          if (args[0] === args[1]) return -A.EINVAL;
+          if (args[0] === args[1] || (args[2] & ~A.O_CLOEXEC)) return -A.EINVAL;
           return await fds.dup2(args[0], args[1], !!(args[2] & A.O_CLOEXEC));
         case A.SYS_nanosleep: {
           const ms = args[0] * 1000 + Math.floor(args[1] / 1e6);
@@ -1546,6 +1616,8 @@ export class Kernel {
           await this.exit(proc, A.W_EXITCODE(args[0]));
           return 0;
         case A.SYS_wait4: {
+          // WNOHANG, WUNTRACED, WCONTINUED, WNOWAIT (waitid comes through here), __WNOTHREAD/__WALL/__WCLONE
+          if ((args[1] >>> 0) & ~(A.WNOHANG | A.WUNTRACED | A.WCONTINUED | A.WNOWAIT | 0xe0000000)) return -A.EINVAL;
           const r = await this.waitpid(args[0], args[1], proc, sig);
           if (r.pid > 0) new DataView(data.buffer, data.byteOffset, 4).setInt32(0, r.status, true);
           return r.pid;
@@ -1628,7 +1700,7 @@ export class Kernel {
           return 0;
         }
         case A.SYS_fcntl:
-          return this.fcntl(proc, args[0], args[1], args[2]);
+          return this.fcntl(proc, args[0], args[1], args[2], data);
         case A.SYS_fsync: {
           const f = file(args[0]);
           if (!f) return -A.EBADF;
@@ -1669,6 +1741,8 @@ export class Kernel {
           const st = await this.statPath(proc, p);
           if (typeof st === 'number') return st;
           if ((st.mode & A.S_IFMT) !== A.S_IFDIR) return -A.ENOTDIR;
+          // The cwd is the physical directory: getcwd after chdir through a symlink names the target
+          p = await fs().realpath(p).catch(() => p as string);
           proc.cwd = p;
           proc.env.PWD = p;
           return 0;
@@ -1811,8 +1885,12 @@ export class Kernel {
           let target: string;
           const proct = p.startsWith('/proc/') ? this.procfs.readlink(proc, p) : undefined;
           if (typeof proct === 'number') return proct;
-          if (proct !== undefined) target = proct;
-          else if (this.isDevicePath(p)) return -A.EINVAL; // a device node or /dev, /dev/pts: not links
+          if (proct !== undefined) {
+            target = proct;
+            // /proc/<pid>/exe is the resolved path, as on Linux (ld.so's $ORIGIN;
+            // a venv's bin/python is a symlink). procfs only resolves from the cache.
+            if (/^\/proc\/[^/]+\/exe$/.test(p) && target.startsWith('/')) target = await fs().realpath(target).catch(() => target);
+          } else if (this.isDevicePath(p)) return -A.EINVAL; // a device node or /dev, /dev/pts: not links
           else try { target = await fs().readlink(p); } catch (e) { return A.errnoFromError(e, A.EINVAL); }
           const b = enc.encode(target);
           const n = Math.min(b.length, bufsiz >>> 0 || data.length, data.length);
@@ -1987,11 +2065,56 @@ export class Kernel {
     }
   }
 
-  private fcntl(proc: Process, fd: number, cmd: number, arg: number): number | Promise<number> {
+  /** Closing any fd for a file drops the process's POSIX locks on it; the last close of a description, its OFD locks */
+  private releaseLocks(proc: Process, f: OpenFile): void {
+    if (f.path) this.locks.release(proc.pid, f.path);
+    if (refCount(f) === 0) this.locks.release(f);
+  }
+
+  /** fcntl record locks; `data` holds the struct flock (l_type, l_whence, l_start, l_len, l_pid) */
+  private async recordLock(proc: Process, f: OpenFile, cmd: number, data?: Uint8Array): Promise<number> {
+    if (!data || data.length < A.FLOCK_SIZE) return -A.EFAULT;
+    const dv = new DataView(data.buffer, data.byteOffset, A.FLOCK_SIZE);
+    const type = dv.getInt16(0, true), whence = dv.getInt16(2, true);
+    const start = Number(dv.getBigInt64(8, true)), len = Number(dv.getBigInt64(16, true));
+    if (type !== F_RDLCK && type !== F_WRLCK && type !== F_UNLCK) return -A.EINVAL;
+    const ofd = cmd === A.F_OFD_GETLK || cmd === A.F_OFD_SETLK || cmd === A.F_OFD_SETLKW;
+    if (ofd && dv.getInt32(24, true) !== 0) return -A.EINVAL;
+    const set = cmd !== A.F_GETLK && cmd !== A.F_OFD_GETLK;
+    const acc = f.flags & A.O_ACCMODE;
+    if (set && ((type === F_RDLCK && acc === A.O_WRONLY) || (type === F_WRLCK && acc === A.O_RDONLY))) return -A.EBADF;
+    let base = 0;
+    if (whence === A.SEEK_CUR) base = f.seek?.(0, A.SEEK_CUR) ?? 0;
+    else if (whence === A.SEEK_END) base = (await f.stat()).size;
+    else if (whence !== A.SEEK_SET) return -A.EINVAL;
+    let lo = base + start, hi = len > 0 ? lo + len : len === 0 ? Infinity : lo;
+    if (len < 0) lo += len;
+    if (lo < 0) return -A.EINVAL;
+    const path = f.path ?? `anon:${proc.pid}:${fileKey(f)}`;
+    const owner = ofd ? f : proc.pid;
+    if (!set) {
+      const l = this.locks.get(path, owner, type, lo, hi);
+      dv.setInt16(0, l ? l.type : F_UNLCK, true);
+      if (l) {
+        dv.setInt16(2, A.SEEK_SET, true);
+        dv.setBigInt64(8, BigInt(l.start), true);
+        dv.setBigInt64(16, BigInt(l.end === Infinity ? 0 : l.end - l.start), true);
+        dv.setInt32(24, l.pid, true);
+      }
+      return 0;
+    }
+    const wait = cmd === A.F_SETLKW || cmd === A.F_OFD_SETLKW;
+    return this.locks.set(path, owner, ofd ? -1 : proc.pid, type, lo, hi, wait, proc.syscallSignal);
+  }
+
+  private fcntl(proc: Process, fd: number, cmd: number, arg: number, data?: Uint8Array): number | Promise<number> {
     const fds = proc.fds;
     const f = fds.get(fd);
     if (!f) return -A.EBADF;
     switch (cmd) {
+      case A.F_GETLK: case A.F_SETLK: case A.F_SETLKW:
+      case A.F_OFD_GETLK: case A.F_OFD_SETLK: case A.F_OFD_SETLKW:
+        return this.recordLock(proc, f, cmd, data);
       case A.F_DUPFD: return fds.dup(fd, arg);
       case A.F_DUPFD_CLOEXEC: return fds.dup(fd, arg, true);
       case A.F_GETFD: return fds.getCloexec(fd) ? A.FD_CLOEXEC : 0;
@@ -2001,6 +2124,15 @@ export class Kernel {
         const mask = A.O_NONBLOCK | A.O_APPEND;
         f.flags = (f.flags & ~mask) | (arg & mask);
         return 0;
+      }
+      case A.F_GETPIPE_SZ:
+      case A.F_SETPIPE_SZ: {
+        if (!(f instanceof PipeEnd)) return -A.EBADF;
+        if (cmd === A.F_GETPIPE_SZ) return f.pipe.capacity;
+        const size = arg | 0;
+        if (size < 0) return -A.EINVAL;
+        if (size > A.PIPE_MAX_SIZE) return -A.EPERM;
+        return f.pipe.resize(size);
       }
       default: return -A.EINVAL;
     }

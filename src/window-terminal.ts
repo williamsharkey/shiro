@@ -6,6 +6,7 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { installOsc52 } from './utils/osc52';
+import { useUnicode11 } from './utils/term-unicode';
 import type { TerminalLike } from './commands/index';
 import { bufferToString } from './utils/copy-utils';
 import { setActiveTerminal } from './active-terminal';
@@ -35,6 +36,7 @@ export class WindowTerminal implements TerminalLike {
   constructor(container: HTMLDivElement) {
     this.container = container;
     this.term = new Terminal({
+      allowProposedApi: true, // term.unicode (useUnicode11)
       theme: {
         background: '#1a1a2e',
         foreground: '#e0e0e0',
@@ -82,6 +84,7 @@ export class WindowTerminal implements TerminalLike {
     this.fitAddon = new FitAddon();
     this.term.loadAddon(this.fitAddon);
     installOsc52(this.term);
+    useUnicode11(this.term);
     this.term.open(container);
 
     // Initial fit after a frame so the container has layout
@@ -102,19 +105,29 @@ export class WindowTerminal implements TerminalLike {
 
     // Route input
     this.term.onData((data) => this.handleInput(data));
+    // X10-encoded mouse reports (mode 1000 without 1006: htop, mc) come as
+    // bytes, not text; a kernel job reads them raw from the pty
+    this.term.onBinary((data: string) => {
+      if (this.tty.jobInForeground) this.tty.pty.input(Uint8Array.from(data, (c) => c.charCodeAt(0) & 0xff));
+      else void this.handleInput(data);
+    });
 
     // Register as active terminal on focus (for mobile toolbar routing)
     this.term.textarea?.addEventListener('focus', () => {
       setActiveTerminal(this);
     });
 
-    // ResizeObserver to refit on window resize/drag
-    this.resizeObserver = new ResizeObserver(() => {
+    // Every size change reaches the pty (SIGWINCH to the foreground job),
+    // including the first fit above, which runs after the TtySession exists
+    this.term.onResize(({ cols, rows }) => {
       if (this.disposed) return;
-      this.fitAddon.fit();
-      const { rows, cols } = this.getSize();
       this.tty.resize(rows, cols);
       for (const cb of this.resizeCallbacks) cb(cols, rows);
+    });
+
+    // ResizeObserver to refit on window resize/drag
+    this.resizeObserver = new ResizeObserver(() => {
+      if (!this.disposed) this.fitAddon.fit();
     });
     this.resizeObserver.observe(container);
   }

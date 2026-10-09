@@ -11,6 +11,27 @@ Blink engine.
 
 ## Languages and toolchains (unix/compat-dev)
 
+**Scoreboard** (each target as a user would reach it; details in the tables below):
+
+| Target | Route | Result |
+| --- | --- | --- |
+| python3, venv | `pkg install python3` (CPython 3.13.7 WASI) | works |
+| pip | builtin (PyPI over fetch) / Debian `python3-pip` | works for pure-Python wheels / works with the TCP relay |
+| node, npm, npx | builtin | works (commander, mocha, tsc 5, prettier) |
+| pnpm 9 | `npm install pnpm` | works (add, store, symlinks, run, exec, bins) |
+| yarn 1 | `npm install yarn` | works (add, lockfile, run, bins, offline) |
+| ruby, gem, rake | `pkg install ruby` (ruby.wasm 3.4.1) | works (no sockets) |
+| perl | `pkg install perl` (x86-64 in Blink) | works |
+| lua | `pkg install lua` | works |
+| go | `pkg install go` (wasip1) / Debian `golang-go` | builds and runs / fails: link step (Blink `fallocate`, reported) |
+| clang, make, ninja, cmake | `pkg install llvm make ninja cmake` | works (zlib's own build, CMake → Ninja/Make, CTest) |
+| gcc, make (Debian) | `apt install build-essential` | works: hello.c with gcc and through make |
+| node (Debian) | `apt install nodejs` | fails until perf-blink e74504e lands (Blink `pop m64` bug, fixed there); `builtin node` runs Shiro's |
+| sqlite | `pkg install sqlite` | works |
+| git | `pkg install git` (x86-64 in Blink) | works for local workflows, file:// clone/push |
+| php | — | owned by unix/wasix |
+| rust, java, deno, bun | — | not available (see "Not available") |
+
 Smoke tests: `tests/tests/shiro-vitest/compat-dev.test.ts` (kernel processes
 in Node worker threads). Browser checks: `scripts/browser-check.mjs` against a
 built app in headless Chromium, cross-origin isolated.
@@ -42,6 +63,32 @@ Not available (yet), and why:
 | Java (JVM) | — | a JDK image is ~200 MB and HotSpot needs its JIT (mprotect RWX code) for usable speed; Blink would interpret the interpreter |
 | Deno, Bun | — | single ~100 MB binaries around V8 / JavaScriptCore JITs; Shiro's own `node` covers the npm use case |
 | PHP | — | owned by unix/wasix (WASIX build in `pkg`) |
+
+### Developer story on Debian packages (`apt`)
+
+Real Debian 13 packages in Debian mode ([DEBIAN.md](DEBIAN.md)), in headless
+Chromium against the built app (`server.mjs` with its package mirror and, for
+pip, `SHIRO_TCP_RELAY=1`). One page, one session; times are wall clock from
+the page (`apt-get update` ≈2m20s first).
+
+| Step | Result | Time | Notes |
+| --- | --- | --- | --- |
+| `sudo apt-get install -y build-essential` | pass | 5m50s–7m10s | gcc 14.2, g++, make 4.4.1, libc6-dev, dpkg-dev |
+| `gcc -O0 -o hello hello.c && ./hello` | pass | 10.7s compile+link | the x86-64 binary runs in Blink |
+| `make hello` (`$(CC)` = `cc`) | pass (after fix) | 10.9s | failed at first: Shiro's commands look like files in the bin directories to a PATH search, so make took a made-up `/usr/local/bin/cc` for its compiler; now an installed program replaces that (below) |
+| `sudo apt-get install -y python3-pip` | pass | 9m00s–10m05s | pip 25.1.1, Python 3.13.5; `python3` at the prompt is then Debian's |
+| `pip3 install --user --break-system-packages six` + import | pass (after fixes) | 1m30s install, 2.8s import | needs the TCP relay. Fixed on the way: socket `ioctl(FIONBIO)` was EINVAL (CPython's `setblocking(False)`), and glibc's parallel A+AAAA lookup fails in Blink (`sendmmsg` → EBADF, sent to perf-blink), so `debian install` sets `options single-request`. In this sandbox pip also needed `--cert` for its TLS-intercepting egress proxy, which a normal deployment doesn't have |
+| `sudo apt-get install -y nodejs` | installs | 2m25s | Debian's node 20.19.2 |
+| node: which wins | Debian's | — | in Debian mode a program file on PATH replaces the builtin of that name, so `node` is `/usr/bin/node` once nodejs is installed; `builtin node` still runs Shiro's (v20 shim, 0.2s) |
+| `/usr/bin/node -e 1` | **fail** (Blink) | ~9s to SIGSEGV | `--version` works; any script segfaults, also `--jitless --single-threaded`; cause: Blink computed `pop m64`'s `rsp`-relative destination before the pop (V8's CEntry return address overwritten); fixed on unix/perf-blink e74504e (patches 0046–0047, `node -e` ≈11 s per run), not yet in integration. Until it lands `builtin node` runs Shiro's |
+| `sudo apt-get install -y golang-go` | installs | 5m05s–10m40s | go1.24.4 linux/amd64 |
+| `go run hello.go` | **fail** (Blink) | 35m to the link step | the compile of `fmt` and its std dependencies under Blink finishes (into GOCACHE, kept for later runs), then cmd/link stops: "mapping output file failed: function not implemented" (Blink answers `fallocate` with ENOSYS; Go tolerates only EOPNOTSUPP; sent to perf-blink). Shiro's own `pkg install go` (wasip1 toolchain) builds and runs Go programs |
+
+Shiro-side fixes from this (tests in `debian.test.ts`, `kernel-net.test.ts`):
+`binCommandStat` (src/wasi/host.ts) no longer makes up a `/bin/NAME` file for
+a builtin that an installed program replaces; Debian shadows count a program
+symlink whose target isn't unpacked yet (dpkg unpacks `gcc -> gcc-14` first);
+sockets accept `FIONBIO`; resolv.conf gets `single-request`.
 
 Shell and platform fixes these needed (all with tests in the same file):
 
@@ -88,7 +135,12 @@ Shell and platform fixes these needed (all with tests in the same file):
   parent waiting on a child `node` (pnpm run → node app.js) kept the child
   from ever looking idle, and each waited on the other for the 10-minute
   cap. The cap on a script's async phase is 10 minutes (was 10 s, which
-  killed pnpm during its retry back-off).
+  killed pnpm during its retry back-off). An fs callback still to come
+  counts as activity too (for up to 30 s), as fs.promises calls did: under
+  load the 150 ms idle window could fall between two of pnpm's calls. So
+  does a worker_threads message, from post to handler: pnpm `unref()`s its
+  import workers, and under CPU load the hop outlasted the idle window and
+  pnpm exited (status 0) mid-install, with no root symlinks.
 
 
 - Shebangs: `#!/usr/bin/env NAME` (with `-S` and `VAR=value`) and absolute
@@ -193,6 +245,19 @@ Most packages here are static x86-64 builds, from `scripts/pkgbuild/x86/`
 releases (pinned sha256), installed with `pkg install` and run in Blink, so
 they need a cross-origin isolated page (`"needs": ["x86"]`). Rows marked
 WASI/WASIX are WASM packages run as kernel processes in workers.
+
+Terminal fidelity in the real app (`tests/browser/tui.mjs`, Chromium, the
+desktop terminal):
+
+| Feature | Status |
+| --- | --- |
+| `TERM=xterm-256color`, `COLORTERM=truecolor`; terminfo | ncurses programs use the entries compiled into them (no terminfo database is installed); vim reports 256 colors; `tput colors/cols/lines` |
+| Resize | every xterm size change (window drag, refit, font) reaches the pty: SIGWINCH and a redraw in vim, htop, less, tmux and screen windows; `stty size`/`tput` in a kernel sh read the pty |
+| Alternate screen | vim, less, htop restore the shell's screen |
+| Mouse | SGR (1006) reports reach vim (`set mouse=a`); X10 (1000) reports reach programs too (xterm sends them as binary). htop's clicks don't work: under Blink its ncurses enables only 1000 and misparses the reports (natively the same binary uses 1006); a Blink issue |
+| Bracketed paste | vim gets pasted text literally (no autoindent cascade) |
+| 256-color, truecolor | passed through to xterm |
+| Unicode width | xterm uses Unicode 11 widths (`@xterm/addon-unicode11`), as programs' wcwidth does: CJK and emoji take two cells |
 
 Browser checks: `scripts/browser-tui.mjs` drives the built app in headless
 Chromium (cross-origin isolated) through xterm.js's own keyboard input and
@@ -467,14 +532,14 @@ vendor's API proves the network path).
 
 | Tool | Version | Kind | Install | `--version` | Network | Timings | Blockers |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Claude Code (native) | 2.1.295 | ELF, Bun 1.4.3 single-file exe; glibc (256 MB) and musl (250 MB) builds, dynamic | `claude.ai/install.sh` (Shiro substitutes the npm install; fetch the binary from `downloads.claude.ai/claude-code-releases/<v>/linux-x64-musl/claude`, plus `/lib/ld-musl-x86_64.so.1`) | **yes**: musl 2.1 s, glibc 2.2 s (since Blink 0044) | **musl: yes**: `-p "say hi"` reaches the Anthropic API through the kernel relay ("Invalid API key" for a dummy key) | musl `-p` to the API error: 118 s with the JIT, 108 s with `BUN_JSC_useJIT=0` (Node probe) | glibc build: works since Blink patch 0044 (`--version` 2.2 s): glibc's `pthread_getattr_np` finds the main stack through `/proc/self/maps`, which Blink now answers from the guest's page table. `claude install --native` still installs the musl build (smaller, no glibc in the VFS needed). Live-token test not run: `CLAUDE_CODE_OAUTH_TOKEN` is not in this container's environment. |
+| Claude Code (native) | 2.1.295 | ELF, Bun 1.4.3 single-file exe; glibc (256 MB) and musl (250 MB) builds, dynamic | `claude.ai/install.sh` (Shiro substitutes the npm install; fetch the binary from `downloads.claude.ai/claude-code-releases/<v>/linux-x64-musl/claude`, plus `/lib/ld-musl-x86_64.so.1`) | **yes**: musl 2.1 s, glibc 2.2 s (since Blink 0044) | **musl: yes**: `-p "say hi"` reaches the Anthropic API through the kernel relay ("Invalid API key" for a dummy key) | `-p` to the API error (Node probe, same session): musl 107 s with JSC's JIT, 85 s with `BUN_JSC_useJIT=0`; glibc 170 s / 146 s. So `claude install --native` installs musl, and `claude --native` sets `BUN_JSC_useJIT=0` unless it is already set | glibc build: works since Blink patch 0044 (`--version` 2.2 s): glibc's `pthread_getattr_np` finds the main stack through `/proc/self/maps`, which Blink now answers from the guest's page table. `claude install --native` still installs the musl build (smaller, no glibc in the VFS needed). Live-token test not run: `CLAUDE_CODE_OAUTH_TOKEN` is not in this container's environment. |
 | OpenAI Codex | 0.162.0 | ELF, Rust, static-pie musl (294 MB) | GitHub release `codex-x86_64-unknown-linux-musl.tar.gz` (`npm i -g @openai/codex` wraps the same binary) | **yes** | **yes**: `codex exec` reaches `wss://api.openai.com/v1/responses` and `https://…/responses` through the kernel's TCP relay, 401 | Chromium: `--version` 4.8 s, `exec` until the 401s end 59 s (it retries), renderer peak ~2.0 GB; Node probe: 7.9 s / 69 s | none for the request path. It warns about missing bubblewrap (its Linux sandbox) and `/proc/self/exe`; use `--sandbox danger-full-access` for tool calls in Shiro. |
 | Grok Build (xAI) | 1.0.50 | ELF, Rust, static-pie (183 MB) | `x.ai/cli/install.sh` → `x.ai/cli/grok-<v>-linux-x86_64` | **yes** | **yes** (Blink patch 0039): `grok -p` reaches `api.x.ai`, 400 for a bad key | Chromium: `--version` 1.8 s; Node probe: `--version` 5.1 s, `-p` to the API error 148 s | Before patch 0039 Blink's BSF/BSR wrote 0 to the destination for a zero source and `-p` panicked ("Span not found"). |
 | Antigravity CLI (`agy`, Google) | 1.3.2 | ELF, Go (`GOAMD64` v2, boringcrypto) + cgo/Rust, glibc dynamic (211 MB) | `antigravity.google/cli/install.sh` → manifest → `cli_linux_x64.tar.gz` (sha512) | **yes** (Blink patch 0040), 11 s | not tried (needs a Google sign-in) | — | Before patch 0040 it exited with "compiled with sse4.1 enabled, but this feature is not available". |
 | opencode | 1.18.35 | ELF, Bun 1.3.14 (baseline build), glibc dynamic (185 MB); a musl build needs libstdc++/libgcc_s | `npm i -g opencode-ai` (picks `opencode-linux-x64[-baseline\|-musl]`) | **no** | not reached | — | Past `/proc/self/maps` (patch 0044) and timerfd (0045) it still dies of SIGTRAP (WebKit `CRASH()`, an `int3`) in wasm Blink right after installing its signal-30 handler; native Blink `-j` gets further. Sent to perf-blink. |
 | Gemini CLI | 0.63.0 | Node (esbuild code-split ESM chunks with top-level await) | `npm i -g @google/gemini-cli` (1.5–2.6 s) | **yes** | **yes**: `gemini --skip-trust -p` reaches `generativelanguage.googleapis.com` through `/api/gemini/`, 400 "API key not valid" | `--version` 9.9 s, `-p` to the error 24 s (Chromium) | Fixed here (below). Left: a "Failed to release project registry lock" warning from proper-lockfile (harmless). |
 | Grok CLI (community, `@vibe-kit/grok-cli`) | 0.0.34 | Node | `npm i -g @vibe-kit/grok-cli` | not run | — | — | Superseded by xAI's own Grok Build (above); not tested. |
-| aider | 0.86.2 | Python | `pip install aider-chat` | not run | — | — | Pins ~80 packages, many native (numpy, scipy, pydantic-core, tiktoken, orjson, aiohttp, tree-sitter): out of reach of the WASI CPython's pure-Python `pip`. The plausible route is Debian mode (glibc CPython and manylinux wheels in Blink), not tried. |
+| aider | 0.86.2 | Python | Debian mode: `debian install`, `pkg install curl`, then `curl -LsSf https://aider.chat/install.sh \| sh` (uv + python-build-standalone 3.12). Debian's `pip3 install aider-chat` can't work on trixie anywhere: Python 3.13 has no wheel for its pinned numpy 1.26.4 | not yet | — | install 9.5 min in Chromium (108 wheels, 121 MB) | Fixed here: socket `ioctl(FIONBIO)` (Python's `settimeout`; every pip connection failed with EINVAL) and `/proc/<pid>/exe` as a resolved path. Left: Blink answers `/proc/self/exe` itself with the unresolved path, so ld.so's `$ORIGIN` for the venv's symlinked python misses libpython (sent to perf-blink). |
 
 What was fixed in Shiro for these (tests: `agent-clis.test.ts`):
 
@@ -530,8 +595,9 @@ the X11 server in the page, into desktop windows ([GUI.md](GUI.md)). Route
 use (sha256-checked, cached by hash), then the ELF runs as a kernel process
 with `DISPLAY=:0`. Smoke tests: `x11.test.ts` (protocol, and a raw-protocol
 x86-64 client over the kernel's AF_UNIX socket), `gui-apps.test.ts`
-(install + launch); browser runs with `scripts/gui/shoot.mjs` (headless
-Chromium, screenshots in `docs/screenshots/gui-*.png`). Times: first launch
+(install + launch); browser runs with `scripts/gui/shoot.mjs` and
+`tests/browser/gui-first-launch.mjs` (headless Chromium, screenshots in
+`docs/screenshots/gui-*.png`). Times: first launch
 of an installed app → first frame, in Chromium.
 
 | Software | Version | Route | Status | Tested | Known issues |
@@ -543,9 +609,11 @@ of an installed app → first frame, in Chromium.
 | xterm | 379 | gui (9.3 MB) | works | Shiro's shell in xterm's pty, typing, output, core fonts; 2.5–2.7 s | no XKB (core keymap), UTF-8 locale falls back to C (Xlib has no C.UTF-8 entry) |
 | FeatherPad | 1.3.5 (Qt 5.15.8) | gui (35 MB of an 84 MB closure) | works | menus, toolbar icons, typing text; 10.5–16 s | Qt warns about missing XKB; no GLX (Mesa never downloaded) |
 | GPicView | 0.2.5 (GTK 2.24.33) | gui (26.8 MB) | works | opens a PNG at 512×512; 6.9–9.7 s | some stock toolbar icons missing |
-| L3afpad | 0.8.18.1.11 (GTK 3.24.38) | gui (33.1 MB of a 51 MB closure) | works | Adwaita theme, menus, typing text; 12.9 s | needed Blink patch 0029 (SSE compares) |
-| Mousepad | 0.5.10 (GTK 3, Xfce) | gui (44.6 MB) | works | editor window and menus; 32 s | slow start: waits on D-Bus / xfconf, which aren't there |
-| Ristretto | 0.12.4 (GTK 3, Xfce) | gui (35.1 MB) | works | opens a PNG; 14–15.5 s | no thumbnails (tumbler over D-Bus) |
+| L3afpad | 0.8.18.1.11 (GTK 3.24.38) | gui (33.1 MB of a 51 MB closure) | works | Adwaita theme, menus, typing text; click to window 12.5 s from a fresh profile (install 4.9 s), warm 4.9 s | needed Blink patch 0029 (SSE compares) |
+| Mousepad | 0.5.10 (GTK 3, Xfce) | gui (44.6 MB) | works | editor window and menus; click to window 24.2 s (install 6.2 s), warm 17 s | slow start: syscall-free guest compute (GtkSourceView), reported to perf-blink |
+| Ristretto | 0.12.4 (GTK 3, Xfce) | gui (35.1 MB) | works | opens a PNG; click to window 14.8 s (install 4.9 s), warm 7.0 s | no thumbnails (tumbler over D-Bus) |
 | LXImage-Qt | 1.2.0 (Qt 5) | gui (36.8 MB) | exits | — | without a D-Bus session bus its single-instance check fails and it quits (status 0) |
-| GIMP | 2.10.34 (GTK 2) | gui (53.2 MB of a 141 MB closure) | works (slow) | main window, menus; first start 290 s, later starts 84 s | first start queries ~100 plug-ins one Blink process each; 22 plug-ins whose libraries are left out (PDF, HEIF, help browser...) are removed; no MIDI/ALSA, no D-Bus |
-| Inkscape | 1.2 (GTK 3) | — | not packaged | — | 94 MB closure; next to try |
+| GIMP | 2.10.34 (GTK 2) | gui (53.2 MB of a 141 MB closure) | works (slow) | main window, menus; install 6.3 s, splash 36 s, main window 247 s on first start, 63 s later | first start queries ~100 plug-ins one Blink process each; 22 plug-ins whose libraries are left out (PDF, HEIF, help browser...) are removed; no MIDI/ALSA, no D-Bus |
+| Inkscape | 1.2.2 (GTK 3, gtkmm) | gui (83 MB of a 95 MB closure) | works (slow) | fresh profile: install 15 s, welcome dialog 61 s after the click, main window ~60 s after closing it; ellipse tool draws on the canvas (`gui-inkscape.png`) | no Python extensions (python3 not shipped), no spell checking; first start is long |
+| NetSurf | 3.10 (GTK 3) | gui (56.6 MB; most shared with other GTK 3 apps) | works (local pages) | welcome page rendered 24.7 s after the click from a fresh profile (`gui-netsurf.png`) | web pages from the network don't load yet: no connection reaches the TCP relay (name resolution in the guest, not yet investigated) |
+| Dillo | 3.0.5 (FLTK 1.3) | gui (9.2 MB) | works (local pages) | install 1.4 s, window 4.1 s (`gui-dillo.png`) | same network gap; no HTTPS (libssl left out of the startup set) |

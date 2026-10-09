@@ -9,7 +9,7 @@
 
 import {
   type KStat, EEXIST, ENOENT, EINVAL, EPERM, EINTR, ELOOP,
-  EPOLL_CTL_ADD, EPOLL_CTL_DEL, EPOLL_CTL_MOD, EPOLLET, EPOLLONESHOT, EPOLLERR, EPOLLHUP,
+  EPOLL_CTL_ADD, EPOLL_CTL_DEL, EPOLL_CTL_MOD, EPOLLET, EPOLLONESHOT, EPOLLERR, EPOLLHUP, EPOLLEXCLUSIVE,
   EPOLL_EVENT_SIZE, POLLIN, S_IFCHR,
 } from './abi';
 import { type OpenFile, type OpenFileKind, ReadyListeners, refCount } from './fd';
@@ -113,12 +113,19 @@ interface Interest {
 
 export interface EpollEvent { events: number; dataLo: number; dataHi: number }
 
+/** EPOLLEXCLUSIVE: the bits it may be combined with (EPOLLIN/OUT/RDNORM/RDBAND/WRNORM/WRBAND, ERR, HUP, WAKEUP, ET) */
+const EXCLUSIVE_OK = 0x1 | 0x4 | 0x40 | 0x80 | 0x100 | 0x200 | EPOLLERR | EPOLLHUP | (1 << 29) | EPOLLET | EPOLLEXCLUSIVE;
+/** Files whose current readiness event an EPOLLEXCLUSIVE waiter already took (cleared after the event) */
+const exclusiveTaken = new Set<OpenFile>();
+
 export class EpollFile implements OpenFile {
   kind: OpenFileKind = 'epoll';
   path = 'anon_inode:[eventpoll]';
   private interest = new Map<OpenFile, Map<number, Interest>>();
   private listeners = new ReadyListeners();
   private closed = false;
+  /** epoll_wait calls blocked on this epoll */
+  private waiting = 0;
 
   constructor(public flags = 0) {}
 
@@ -127,8 +134,12 @@ export class EpollFile implements OpenFile {
     if (file === this) return -EINVAL;
     if (file.kind === 'file' || file.kind === 'dir') return -EPERM;
     if (file instanceof EpollFile && file.watches(this)) return -ELOOP;
+    // At most 5 epolls deep, like Linux (EP_MAX_NESTS)
+    if (op === EPOLL_CTL_ADD && file instanceof EpollFile && file.depth() >= 5) return -EINVAL;
     const byFd = this.interest.get(file);
     const cur = byFd?.get(fd);
+    if (op === EPOLL_CTL_MOD && cur && ((events | cur.events) & EPOLLEXCLUSIVE)) return -EINVAL;
+    if (op === EPOLL_CTL_ADD && (events & EPOLLEXCLUSIVE) && (file instanceof EpollFile || (events & ~EXCLUSIVE_OK))) return -EINVAL;
     switch (op) {
       case EPOLL_CTL_ADD: {
         if (cur) return -EEXIST;
@@ -136,7 +147,19 @@ export class EpollFile implements OpenFile {
           fd, file, events, dataLo, dataHi, armed: true, disabled: false,
           off: () => {},
         };
-        entry.off = file.onReady(() => { entry.armed = true; this.listeners.fire(); });
+        entry.off = file.onReady(() => {
+          // EPOLLEXCLUSIVE: one readiness event wakes the first exclusive entry with a blocked
+          // waiter and skips the rest (entries without a waiter are still queued, like Linux)
+          if (entry.events & EPOLLEXCLUSIVE) {
+            if (exclusiveTaken.has(file)) return;
+            if (this.waiting > 0) {
+              exclusiveTaken.add(file);
+              queueMicrotask(() => exclusiveTaken.delete(file));
+            }
+          }
+          entry.armed = true;
+          this.listeners.fire();
+        });
         const m = byFd ?? new Map<number, Interest>();
         m.set(fd, entry);
         this.interest.set(file, m);
@@ -168,6 +191,14 @@ export class EpollFile implements OpenFile {
     if (m && m.size === 0) this.interest.delete(e.file);
   }
 
+  /** Epolls in the deepest chain below and including this one */
+  depth(level = 0): number {
+    if (level > 8) return level;
+    let d = 0;
+    for (const f of this.interest.keys()) if (f instanceof EpollFile) d = Math.max(d, f.depth(level + 1));
+    return d + 1;
+  }
+
   /** Does this epoll (transitively) watch `ep`? Guards against loops. */
   watches(ep: EpollFile, depth = 0): boolean {
     if (depth > 5) return true;
@@ -180,6 +211,17 @@ export class EpollFile implements OpenFile {
 
   /** Collect up to `max` ready events, applying ET/ONESHOT bookkeeping when `consume`. */
   collect(max: number, consume = true): EpollEvent[] {
+    const reported: OpenFile[] = [];
+    const out = this.scanReady(max, consume, reported);
+    // Reported entries go to the back, so a full events array doesn't starve the rest (like Linux's ready list)
+    for (const f of reported) {
+      const m = this.interest.get(f);
+      if (m) { this.interest.delete(f); this.interest.set(f, m); }
+    }
+    return out;
+  }
+
+  private scanReady(max: number, consume: boolean, reported: OpenFile[]): EpollEvent[] {
     const out: EpollEvent[] = [];
     for (const [file, m] of [...this.interest]) {
       if (refCount(file) === 0) { for (const e of [...m.values()]) this.drop(e); continue; }
@@ -188,11 +230,16 @@ export class EpollFile implements OpenFile {
         if (e.disabled) continue;
         if ((e.events & EPOLLET) && !e.armed) continue;
         const ready = file.poll(e.events & 0xffff) & ((e.events & 0xffff) | EPOLLERR | EPOLLHUP);
-        if (!ready) continue;
+        if (!ready) {
+          // EPOLLET: only a later readiness change reports it (ADD arms the entry, but an unready one waits)
+          if (consume && (e.events & EPOLLET)) e.armed = false;
+          continue;
+        }
         out.push({ events: ready, dataLo: e.dataLo, dataHi: e.dataHi });
         if (consume) {
           if (e.events & EPOLLET) e.armed = false;
           if (e.events & EPOLLONESHOT) e.disabled = true;
+          reported.push(file);
         }
       }
     }
@@ -205,7 +252,9 @@ export class EpollFile implements OpenFile {
     max = Math.min(max, Math.floor(out.length / EPOLL_EVENT_SIZE));
     if (max <= 0) return -EINVAL;
     let got: EpollEvent[] = [];
-    const n = await waitReady([this], () => { got = this.collect(max); return got.length; }, timeoutMs, signal);
+    this.waiting++;
+    const n = await waitReady([this], () => { got = this.collect(max); return got.length; }, timeoutMs, signal)
+      .finally(() => { this.waiting--; });
     if (n < 0) return n;
     const dv = new DataView(out.buffer, out.byteOffset, got.length * EPOLL_EVENT_SIZE);
     got.forEach((e, i) => {

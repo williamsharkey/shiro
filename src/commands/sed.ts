@@ -348,13 +348,14 @@ export const sedCmd: Command = {
     const files: string[] = [];
     const args = ctx.args;
     let scriptGiven = false;
+    // Operands, sorted out after the options: as GNU getopt permutes, a -e
+    // after the file (`sed -i FILE -e 's/a/b/'`, dh_installnss) still makes
+    // every operand a file
+    const operands: string[] = [];
     for (let i = 0; i < args.length; i++) {
       const a = args[i];
-      if (a === '--') { files.push(...args.slice(i + 1)); break; }
-      if (!a.startsWith('-') || a === '-') {
-        if (!scriptGiven) { scripts.push(a); scriptGiven = true; } else files.push(a);
-        continue;
-      }
+      if (a === '--') { operands.push(...args.slice(i + 1)); break; }
+      if (!a.startsWith('-') || a === '-') { operands.push(a); continue; }
       if (a.startsWith('--')) {
         const [name, val] = a.includes('=') ? [a.slice(0, a.indexOf('=')), a.slice(a.indexOf('=') + 1)] : [a, null];
         if (name === '--quiet' || name === '--silent') quiet = true;
@@ -395,6 +396,8 @@ export const sedCmd: Command = {
         } else { ctx.stderr += `sed: invalid option -- '${ch}'\n`; return 1; }
       }
     }
+    if (!scriptGiven && operands.length) scripts.push(operands.shift()!);
+    files.push(...operands);
     if (!scripts.length) { ctx.stderr += 'Usage: sed [OPTION]... {script-only-if-no-other-script} [input-file]...\n'; return 1; }
 
     let parsed: ReturnType<typeof parseScript>;

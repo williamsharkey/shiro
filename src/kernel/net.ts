@@ -22,7 +22,7 @@ import type { KStat } from './abi';
 import { retain, release, type FdTable, type OpenFile } from './fd';
 import type { Kernel } from './kernel';
 import {
-  EPERM, EINTR, EIO, EBADF, EAGAIN, EACCES, EFAULT, EINVAL, EPIPE, ETIMEDOUT, EPROTO, ENOTSOCK, EDESTADDRREQ,
+  EPERM, EINTR, EIO, EBADF, EAGAIN, EACCES, EFAULT, EINVAL, ENOTTY, EPIPE, ETIMEDOUT, EPROTO, ENOTSOCK, EDESTADDRREQ,
   EMSGSIZE, ENOPROTOOPT, EPROTONOSUPPORT, EOPNOTSUPP, EAFNOSUPPORT, EADDRINUSE, EADDRNOTAVAIL, ENETDOWN,
   ENETUNREACH, ECONNABORTED, ECONNRESET, ENOBUFS, EISCONN, ENOTCONN, ECONNREFUSED, EHOSTUNREACH, EALREADY,
   EINPROGRESS, O_NONBLOCK, POLLIN, POLLPRI, POLLOUT, POLLERR, POLLHUP, POLLNVAL, POLLRDHUP, S_IFSOCK,
@@ -539,7 +539,10 @@ export class KSocket implements OpenFile {
       new DataView(arg.buffer, arg.byteOffset, 4).setInt32(0, this.rxLen, true);
       return 0;
     }
-    return -EINVAL;
+    // O_NONBLOCK is set on the description by the kernel's ioctl; EINVAL here
+    // failed CPython's socket.setblocking(False) (pip, urllib3 with a timeout)
+    if (req === FIONBIO) return 0;
+    return -ENOTTY;
   }
 
   async stat(): Promise<KStat> { return sockStat(this.ino); }
@@ -837,7 +840,8 @@ export class KDatagramSocket implements OpenFile {
       new DataView(arg.buffer, arg.byteOffset, 4).setInt32(0, this.rx[0]?.data.length ?? 0, true);
       return 0;
     }
-    return -EINVAL;
+    if (req === FIONBIO) return 0; // the kernel set O_NONBLOCK on the description
+    return -ENOTTY;
   }
   async stat(): Promise<KStat> { return sockStat(this.ino); }
   async close(): Promise<void> { this.closed = true; this.rx = []; this.q.notify(); }
@@ -952,6 +956,8 @@ export class NetStack {
   socket(domain: number, type: number, protocol = 0): KSocket | KDatagramSocket | number {
     const base = type & 0xf;
     const flags = type & SOCK_NONBLOCK ? O_NONBLOCK : 0;
+    // A type outside SOCK_STREAM..SOCK_PACKET (or unknown flag bits) is EINVAL, like Linux
+    if (base < 1 || base > 10 || (type & ~(0xf | SOCK_NONBLOCK | SOCK_CLOEXEC))) return -EINVAL;
     if (domain === AF_UNIX) {
       if (base !== SOCK_STREAM) return -EPROTONOSUPPORT; // no AF_UNIX datagrams yet
       if (protocol !== 0) return -EPROTONOSUPPORT;
@@ -1300,7 +1306,15 @@ export async function netSyscall(
       return install(s, (args[1] & SOCK_CLOEXEC) !== 0);
     }
     case SYS_socketpair: { // domain, type → int32 sv[2]
-      if (args[0] !== AF_UNIX) return args[0] === AF_INET || args[0] === AF_INET6 ? -EOPNOTSUPP : -EAFNOSUPPORT;
+      if (args[0] !== AF_UNIX) {
+        // Linux creates the socket first (bad type, protocol or domain fail there), then the family says no
+        const s = stack.socket(args[0], args[1], args[2]);
+        if (typeof s === 'number') return s;
+        await s.close();
+        return -EOPNOTSUPP;
+      }
+      const base = args[1] & 0xf;
+      if (base < 1 || base > 10 || (args[1] & ~(0xf | SOCK_NONBLOCK | SOCK_CLOEXEC))) return -EINVAL;
       const pair = stack.socketpair(args[1]);
       if (typeof pair === 'number') return pair;
       for (const p of pair) p.ownerPid = p.peerPid = proc.pid ?? 0;
@@ -1322,6 +1336,7 @@ export async function netSyscall(
         if (sa.family !== AF_UNIX) return -EINVAL;
         return nr === SYS_bind ? stack.bindUnix(s, sa, unix ?? noUnix) : stack.connectUnix(s, sa, unix ?? noUnix);
       }
+      if (sa.family === AF_UNIX) return -EAFNOSUPPORT; // an AF_UNIX address on an inet socket
       if (nr === SYS_bind) return s.bind(sa);
       return s instanceof KSocket ? s.connect(sa, sig) : s.connect(sa);
     }
