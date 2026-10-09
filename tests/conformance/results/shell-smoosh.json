@@ -18,7 +18,7 @@
    ]
   },
   "builtin": {
-   "pass": 45,
+   "pass": 49,
    "total": 59,
    "failures": [
     {
@@ -34,28 +34,12 @@
      "reason": "status 1, want 0"
     },
     {
-     "name": "builtin.export",
-     "reason": "stdout differs"
-    },
-    {
-     "name": "builtin.export.override",
-     "reason": "stdout differs"
-    },
-    {
-     "name": "builtin.export.unset",
-     "reason": "status 1, want 0"
-    },
-    {
      "name": "builtin.hash.nonposix",
      "reason": "status 1, want 0"
     },
     {
      "name": "builtin.readonly.assign.interactive",
-     "reason": "stdout differs"
-    },
-    {
-     "name": "builtin.readonly.assign.noninteractive",
-     "reason": "status 0, want 1"
+     "reason": "status 1, want 0"
     },
     {
      "name": "builtin.source.nonexistent.earlyexit",
@@ -90,7 +74,7 @@
    ]
   },
   "semantics": {
-   "pass": 71,
+   "pass": 72,
    "total": 92,
    "failures": [
     {
@@ -127,10 +111,6 @@
     },
     {
      "name": "semantics.evalorder.fun",
-     "reason": "status 1, want 0"
-    },
-    {
-     "name": "semantics.for.readonly",
      "reason": "status 1, want 0"
     },
     {

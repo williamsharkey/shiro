@@ -442,6 +442,16 @@ export class Shell {
    */
   execPid?: number;
   execPpid?: number;
+  /**
+   * Variables created by assignment and never exported: a new shell process
+   * (startProcess) and kernel programs don't get them. Everything else in
+   * env (what the shell started with, `export`ed names) is exported.
+   */
+  localVars = new Set<string>();
+  /** Started as `sh`: POSIX-style output where bash's sh mode differs (export -p) */
+  invokedAsSh = false;
+  /** `export NAME` before NAME has a value */
+  exportedUnset = new Set<string>();
   /** Signals sent to this shell (kill $$), handled before its next command */
   private pendingSignals: number[] = [];
   /** The logical working directory cd set (symlinks kept), which pwd prints; null: use cwd */
@@ -624,9 +634,32 @@ export class Shell {
    * with endProcess() when it finishes.
    */
   startProcess(pid = this.bashPid, ppid = this.forkParentPid): void {
+    // Only exported variables reach a new process
+    for (const n of this.localVars) delete this.env[n];
+    this.localVars.clear();
     this.parentPid = ppid;
     this.shellPid = pid;
     shellsByPid.set(pid, new WeakRef(this));
+  }
+
+  /**
+   * Assigning to a readonly variable ends a non-interactive POSIX shell
+   * (2.8.1; dash, bash --posix); bash itself goes on. As `sh` we exit.
+   */
+  readonlyAssignFailed(): void {
+    if (this.scriptShell && (this.invokedAsSh || this.options.has('posix'))) {
+      this.lastExitCode = 1;
+      this.env['?'] = '1';
+      throw new ExitSignal(1);
+    }
+  }
+
+  /** The environment a program started from this shell gets: env minus unexported variables */
+  exportedEnv(): Record<string, string> {
+    if (!this.localVars.size) return this.env;
+    const e = { ...this.env };
+    for (const n of this.localVars) delete e[n];
+    return e;
   }
 
   endProcess(): void {
@@ -680,6 +713,9 @@ export class Shell {
     child.forkParentPid = this.bashPid;
     child.shellPid = this.shellPid;
     child.parentPid = this.parentPid;
+    child.localVars = new Set(this.localVars);
+    child.invokedAsSh = this.invokedAsSh;
+    child.exportedUnset = new Set(this.exportedUnset);
     child.arrays = new Map(Array.from(this.arrays.entries()).map(([k, v]) => [k, copyArray(v)]));
     child.assocArrays = new Map(Array.from(this.assocArrays.entries()).map(([k, v]) => [k, new Map(v)]));
     // A subshell starts with the traps reset, except ignored ones (trap '' SIG)
@@ -1472,6 +1508,8 @@ export class Shell {
       const pipeExitCodes: number[] = [];
       // Env from `NAME=value cmd` prefixes, restored once the pipeline finishes
       const prefixEnvSaved = new Map<string, string | undefined>();
+      // ...and which of them were unexported (the prefix exports them to the command)
+      const prefixWasLocal = new Set<string>();
       // Output of a builtin/function/loop that must be piped on or redirected
       let capture: { out: string; err: string; redirects: Redirect[]; isLast: boolean } | null = null;
       const flushCapture = async () => {
@@ -1510,6 +1548,7 @@ export class Shell {
           for (const [key, value, append] of envPrefix.assignments) {
             if (!prefixEnvSaved.has(key)) {
               prefixEnvSaved.set(key, Object.prototype.hasOwnProperty.call(this.env, key) ? this.env[key] : undefined);
+              if (this.localVars.delete(key)) prefixWasLocal.add(key);
             }
             this.env[key] = append ? (this.getVar(key) ?? '') + value : value;
           }
@@ -1784,18 +1823,18 @@ export class Shell {
             this.lastExitCode = exitCode;
             this.env['?'] = String(exitCode);
             lastOutput = '';
+            this.readonlyAssignFailed();
             continue;
           }
-          if (this.arrays.has(key) || this.assocArrays.has(key)) this.setVar(key, val);
-          else this.env[key] = val;
+          this.setVar(key, val);
           // An assignment-only command's status is that of its last $(...)
           exitCode = this.substStatus ?? 0;
           // `a=1 b=2` assigns both
           for (const extra of cmdArgs) {
             const em = extra.match(/^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/);
             if (!em) break;
-            if (this.readonlyVars.has(em[1])) { stderrWriter(`${em[1]}: readonly variable\r\n`); exitCode = 1; continue; }
-            this.env[em[1]] = em[2];
+            if (this.readonlyVars.has(em[1])) { stderrWriter(`${em[1]}: readonly variable\r\n`); exitCode = 1; this.readonlyAssignFailed(); continue; }
+            this.setVar(em[1], em[2]);
           }
           // Persist API keys to localStorage
           const persistKeys: Record<string, string> = {
@@ -2677,6 +2716,8 @@ export class Shell {
                 const saved = k >= 0 && k < this.localVarStack.length - 1 ? this.localVarStack[k].get(name)! : null;
                 const isVar = name in this.env || this.arrays.has(name) || this.assocArrays.has(name);
                 delete this.env[name];
+                this.localVars.delete(name);
+                this.exportedUnset.delete(name);
                 this.namerefs.delete(name);
                 this.arrays.delete(name);
                 this.assocArrays.delete(name);
@@ -2735,21 +2776,34 @@ export class Shell {
         if (!_builtinDisabled && effectiveCmdName === 'export') {
           exitCode = 0;
           if (cmdArgs.length === 0 || (cmdArgs.length === 1 && cmdArgs[0] === '-p')) {
-            const lines = Object.entries(this.env)
-              .filter(([k]) => !k.match(/^[0-9?#@*!_$]$/))
-              .map(([k, v]) => `declare -x ${k}="${v}"`)
+            // `export NAME="v"` in POSIX mode (sh), bash's `declare -x` otherwise
+            const kw = this.invokedAsSh || this.options.has('posix') ? 'export' : 'declare -x';
+            const names = Object.keys(this.env)
+              .filter((k) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(k) && !k.startsWith('__') && !this.localVars.has(k))
+              .concat([...this.exportedUnset].filter((k) => !(k in this.env)))
               .sort();
-            for (const l of lines) writeStdout(l + '\r\n');
+            for (const k of names) {
+              const v = this.env[k];
+              writeStdout(v === undefined ? `${kw} ${k}\r\n` : `${kw} ${k}="${v.replace(/(["\\$`])/g, '\\$1')}"\r\n`);
+            }
           } else {
+            const unexport = cmdArgs.includes('-n');
             for (const arg of cmdArgs) {
               if (arg === '-p' || arg === '-n') continue;
               const eqIdx = arg.indexOf('=');
+              const name = eqIdx !== -1 ? arg.slice(0, eqIdx) : arg;
               if (eqIdx !== -1) {
-                const name = arg.slice(0, eqIdx);
-                const val = arg.slice(eqIdx + 1);
-                this.env[name] = val;
+                const err = this.setVar(name, arg.slice(eqIdx + 1));
+                if (err) {
+                  stderrWriter(`shiro: export: ${err}\r\n`);
+                  exitCode = 1;
+                  this.readonlyAssignFailed();
+                  continue;
+                }
               }
-              // In browser shell, all variables are effectively exported
+              if (unexport) { if (name in this.env) this.localVars.add(name); this.exportedUnset.delete(name); continue; }
+              this.localVars.delete(name);
+              if (!(name in this.env)) this.exportedUnset.add(name);
             }
           }
           this.lastExitCode = exitCode;
@@ -3425,6 +3479,7 @@ export class Shell {
       for (const [key, value] of prefixEnvSaved) {
         if (value === undefined) delete this.env[key];
         else this.env[key] = value;
+        if (prefixWasLocal.has(key) && value !== undefined) this.localVars.add(key);
       }
 
       if (this.redirectFailed) { exitCode = 1; this.redirectFailed = false; }
@@ -5524,7 +5579,11 @@ export class Shell {
     if (sub === undefined) {
       if (assoc) assoc.set('0', value);
       else if (this.arrays.has(name)) this.arrays.get(name)![0] = value;
-      else this.env[name] = value;
+      else {
+        // A new variable is not exported (unless `export NAME` came first)
+        if (!(name in this.env) && !this.exportedUnset.delete(name)) this.localVars.add(name);
+        this.env[name] = value;
+      }
       return null;
     }
     if (assoc) { assoc.set(this.assocKey(sub), value); return null; }
@@ -6277,7 +6336,12 @@ export class Shell {
       : this.getPositionalArgs();
     let status = 0;
     for (const item of items) {
-      this.env[varName] = item;
+      const err = this.setVar(varName, item);
+      if (err) {
+        writeStderr(`shiro: ${err}\r\n`);
+        this.readonlyAssignFailed();
+        return 1;
+      }
       try {
         if (parsed.body.trim()) status = await this.execute(parsed.body, writeStdout, writeStderr, false, undefined, true);
       } catch (e) {
@@ -6913,7 +6977,7 @@ export class Shell {
       fds,
       command: pipeline.slice(i, last + 1).map(x => x.trim()).join(' | '),
       cwd: this.cwd,
-      env: this.env,
+      env: this.exportedEnv(),
     });
     return { lastIndex: last, redirects: lastRedirects, ...r, stdout: ctx.stdout + r.stdout, stderr: ctx.stderr + r.stderr };
   }
@@ -6942,7 +7006,7 @@ export class Shell {
     if (programs.length === 0) return false;
     await runKernelPipeline(this, programs, {
       captureStdout: false, captureStderr: false, writeStdout, writeStderr: writeStdout,
-      terminal: term, command, background: true, cwd: this.cwd, env: this.env,
+      terminal: term, command, background: true, cwd: this.cwd, env: this.exportedEnv(),
     });
     const job = [...this.backgroundJobs.values()].pop();
     if (job?.pids?.length) this.env['!'] = String(job.pids[job.pids.length - 1]);

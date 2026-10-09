@@ -73,3 +73,39 @@ describe('background jobs', () => {
     expect(r.out).toBe('done\nstatus 0\n');
   });
 });
+
+describe('exported and unexported variables', () => {
+  it('a new shell gets only exported variables; NAME=v cmd exports for that command', async () => {
+    const r = await script([
+      'echo \'echo ${var-unset}\' > /tmp/scr',
+      'var=hi; sh /tmp/scr',
+      'var=here sh /tmp/scr',
+      'sh /tmp/scr',
+      'export var; sh /tmp/scr',
+      'export -n var; sh /tmp/scr',
+      'unset var; var=again; sh /tmp/scr',
+    ].join('\n'));
+    expect(r.out).toBe('unset\nhere\nunset\nhi\nunset\nunset\n');
+  });
+
+  it('export NAME without a value is listed by export -p; sh prints POSIX form', async () => {
+    const r = await script('unset x; export x; export -p | grep "x$"; y=1; export -p | grep -c "^export y" ; true\n');
+    expect(r.out).toBe('export x\n0\n');
+  });
+
+  it('as sh, assigning to a readonly variable ends the script (for loops too)', async () => {
+    let r = await script('readonly a=b\nexport a=c\necho unreached\n');
+    expect(r.out).toBe('');
+    expect(r.status).toBe(1);
+    r = await script('(for x in a b c; do echo $x; readonly x; done); echo "status $?"\n');
+    expect(r.out).toBe('a\nstatus 1\n');
+  });
+
+  it('bash keeps going after a readonly assignment error', async () => {
+    const { fs, shell } = await createTestShell();
+    await fs.writeFile('/tmp/b.sh', 'readonly a=b\na=c\necho "still $a"\n');
+    let out = '';
+    await shell.execute('bash /tmp/b.sh', (s) => { out += s; }, () => {});
+    expect(out.replace(/\r\n/g, '\n')).toBe('still b\n');
+  });
+});

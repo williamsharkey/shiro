@@ -537,7 +537,7 @@
    ]
   },
   "builtin-vars": {
-   "pass": 33,
+   "pass": 32,
    "total": 38,
    "failures": [
     {
@@ -555,6 +555,10 @@
     {
      "i": 10,
      "name": "Exporting a parent func variable (dynamic scope)"
+    },
+    {
+     "i": 16,
+     "name": "Make an existing local variable readonly"
     },
     {
      "i": 38,
