@@ -159,8 +159,14 @@ The broker speaks HTTP/1.1 (`http1.ts`) over TLS 1.3 done in the page
     same chain checks as 1.3.
   - There is no RFC 8446 downgrade-sentinel check: the 1.2 hello doesn't offer
     1.3, so every 1.3-capable server sets the sentinel. An attacker who forces
-    the fallback still only gets ECDHE + AEAD + EMS. Hardening path: rustls compiled to WASM, built by us
-  (Apache/MIT), replacing both; epoxy-tls, which does exactly this, is AGPL.
+    the fallback still only gets ECDHE + AEAD + EMS.
+- Hardening path: rustls compiled to WASM, built by us (Apache/MIT), to
+  replace both. epoxy-tls, which does exactly this, is AGPL.
+- **TLS fingerprint**: neither ClientHello looks like Chrome's (no GREASE,
+  no ALPN/h2, few suites), so bot defenses that fingerprint TLS block us
+  where the direct tab gets through (Reddit: "blocked by network security").
+  A Chrome-shaped ClientHello needs X25519, ALPN and ideally HTTP/2: rustls
+  again.
 - Connections are pooled per origin (6, idle 60 s, `netfetch.ts`). That
   matters twice over: every new connection costs a relay WebSocket and a TLS
   handshake, and the relay rate-limits connects per client IP (60/min by
