@@ -126,7 +126,13 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     await new Promise((r) => setTimeout(r, 50)); // the overlay hears the write
     expect((await run(shell, 'type jq')).output).toContain('/usr/bin/jq');
     expect((await run(shell, 'jq')).output).toContain('debian-jq');
-    await fs.unlink('/usr/bin/jq');
+    // Removed (apt remove: dpkg unlinks it through the kernel): the builtin again
+    expect((await run(shell, 'sudo /usr/bin/rm /usr/bin/jq; echo rm=$?')).output).toContain('rm=0');
+    await new Promise((r) => setTimeout(r, 50));
+    const after = await run(shell, 'echo \'{"a":1}\' | jq .a');
+    expect(after.output).not.toContain('ENOENT');
+    expect(after.output.trim()).toBe('1');
+    expect((await run(shell, 'type jq')).output).not.toContain('/usr/bin/jq');
     // A command typed before the overlay is up waits for it (python3 right after load)
     let release!: () => void;
     const order: string[] = [];

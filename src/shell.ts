@@ -3767,9 +3767,11 @@ export class Shell {
         }
         // A package installed with `pkg install` provides the real program in
         // place of a builtin of the same name (lua, sqlite3, jq, ...)
-        const pkgShadowed = !_builtinDisabled && this.pkgShadowBypass !== effectiveCmdName &&
+        let pkgShadowed = !_builtinDisabled && this.pkgShadowBypass !== effectiveCmdName &&
           !!this.commands.get(effectiveCmdName) &&
           packageShadows(this.fs).has(effectiveCmdName);
+        // A Debian program that is gone (apt remove) no longer shadows the builtin
+        if (pkgShadowed && !pkgOwnShadows(this.fs).has(effectiveCmdName) && !(await this.findExecutableInPath(effectiveCmdName))) pkgShadowed = false;
         // /bin/NAME, /usr/bin/NAME, …: Shiro's NAME when no such file exists (the kernel stats them the same way)
         const binPath = /^\/(?:usr\/)?(?:local\/)?s?bin\/([^/]+)$/.exec(effectiveCmdName);
         const cmd = pkgShadowed ? undefined : this.commands.get(effectiveCmdName)
