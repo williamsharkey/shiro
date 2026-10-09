@@ -513,7 +513,7 @@ function writeMarkdown(file, res) {
   for (const id of ids) {
     const rows = modes.map((m) => sites(m).find((x) => x.id === id) || {});
     const any = rows.find((r) => r.url) || {};
-    const last = rows[rows.length - 1];
+    const last = rows[modes.indexOf('tab')] ?? rows[rows.length - 1]; // notes explain the Browser app's column
     const note = [last.fallback ? `fallback: ${last.fallback}` : '', last.error || '', last.renderWhy ? 'render: ' + last.renderWhy : '', last.interactiveWhy ? 'interactive: ' + last.interactiveWhy : '']
       .filter(Boolean).join('; ').replace(/\|/g, '/').slice(0, 140);
     lines.push(`| [${id}](${any.url}) | ${any.kind ?? ''} | ${rows.map((r) => `${mark(r.loads)} ${mark(r.renders)} ${mark(r.interactive)}`).join(' | ')} | ${rows.map((r) => (r.loadMs && r.loads ? `${(r.loadMs / 1000).toFixed(1)} s` : '–')).join(' | ')} | ${rows.map((r) => mb(r.bytes)).join(' | ')} | ${note} |`);
