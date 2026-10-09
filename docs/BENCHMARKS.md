@@ -516,6 +516,22 @@ Not a hot path; a kernel quick run after the merge is in line with round 3
 (isolated: syscall_rtt.sab 5.8 µs, pipe_throughput_512b 87 MB/s,
 file_write 173 MB/s, spawn_wait.wasm 1.07 ms).
 
+### unix/perf-kernel, round 5: pool spare cap under load
+
+`kernel-wasi.test.ts` "reuses guest Workers" failed under full-suite load
+(4 Workers started where ≤ 3 are allowed): a spawn that came while the
+previous process's Worker was still unwinding (its `wasi-idle` not yet
+received) started a new Worker, and so could the pre-start timer. Returning
+Workers now count as available: a spawn that finds none idle waits for one
+(at most 250 ms, then starts a new one), and no spare is pre-started while
+one is on its way back. Under 4 busy CPU-burning processes the test failed
+1 of 4 runs before and passed 12 of 12 after; the full suite passed 3 times.
+
+A/B, 3 runs each (isolated): `spawn_wait.wasm` 1.45 → 1.57 ms (noise),
+`spawn_throughput.wasm` (10 in flight) **349 → 831 proc/s**: taking a
+returning Worker is faster than starting one. RSS over 500 spawns stays
+231–234 MiB with 2 Workers.
+
 ## Results
 
 <!-- bench:table:begin -->
