@@ -599,6 +599,7 @@ describe('tmux', () => {
     // Re-attach on a new terminal; ending the session from outside detaches it
     const again = onTerminal('tmux attach -t main', fakeTerminal(30, 100));
     await until(() => again.term.screen.includes('pane-42') && again.term.screen.includes('scripted'), 'the re-attached session');
+    await until(() => again.term.screen.includes('[main]'), 'the status line, without a key press');
     expect((await sh('tmux kill-session -t main')).exitCode).toBe(0);
     expect(await again.done).toBe(0);
     expect(again.term.screen).toContain('[exited]');
