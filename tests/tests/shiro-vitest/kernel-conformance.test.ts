@@ -282,4 +282,22 @@ describe('kernel syscalls found by LTP', () => {
     for (const fd of [a, b, s, c, st]) await call(A.SYS_close, [fd]);
     off();
   });
+
+  it('epoll_wait: a full events array rotates, so every ready fd gets reported (no starvation)', async () => {
+    const ep = await call(A.SYS_epoll_create1, [0]);
+    const reads: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const [r, w] = await pipe();
+      await kernel.syscall(proc, A.SYS_write, [w, 1], new Uint8Array([1]));
+      expect(await call(A.SYS_epoll_ctl, [ep, A.EPOLL_CTL_ADD, r, A.EPOLLIN, i, 0])).toBe(0);
+      reads.push(r);
+    }
+    const ev = new Uint8Array(A.EPOLL_EVENT_SIZE);
+    const seen: number[] = [];
+    for (let k = 0; k < 3; k++) {
+      expect(await kernel.syscall(proc, A.SYS_epoll_wait, [ep, 1, 0], ev)).toBe(1);
+      seen.push(new DataView(ev.buffer).getUint32(4, true));
+    }
+    expect(seen.sort()).toEqual([0, 1, 2]);
+  });
 });
