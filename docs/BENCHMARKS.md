@@ -1296,6 +1296,62 @@ Not fixed here:
   points at rewritten files (apt's pkgcache.bin and srcpkgcache.bin, about
   89 MB per rewrite) still occupying LevelDB until it compacts.
 
+### unix/perf-fs-shell 11 — binary data through string stdio; the real Debian footprint
+
+**Byte-exact text.** Builtins exchange data as strings. File contents,
+builtin stdin and stdout used to decode with a plain TextDecoder, which turns
+each byte that isn't valid UTF-8 into U+FFFD (3 bytes when written back):
+- `cat bin > copy` turned 1000 bytes into 1976;
+- `cat | tee`, `dd … > f` and `wc -c` were wrong the same way;
+- `head -c N /dev/urandom` wrote about 1.5·N bytes.
+
+src/utils/byte-text.ts decodes invalid bytes to lone surrogates
+U+DC80–U+DCFF and encodes them back (Python's surrogateescape). Valid UTF-8
+is unchanged and keeps the native fast paths (one fatal TextDecoder; one
+`isWellFormed()` scan before TextEncoder). It is used by:
+- FileSystem text read and write;
+- builtin stdio, both as a kernel process and in a kernel shell script.
+
+`head`/`tail -c`, `cut -b` and `wc -c` count bytes of the data.
+gzip/bzip2/tar output and `/dev/urandom` as text are byte-exact, so
+`gzip -c f > f.gz` writes the real archive (`unmangle()` stays for files
+written before this). od, sum and the archivers read both forms: the older
+latin1 byte strings (`printf '\xff'`, `xxd -r`) and byte-exact text.
+
+Not covered:
+- **`\r\n` in kernel shell scripts:** builtin output written from a kernel
+  shell script still has `\r\n` folded to `\n`.
+- **Latin1 producers:** `printf '\xff' > f` still writes C3 BF, as before.
+
+Tests: `byte-text.test.ts` (codec round trips, every command above, a builtin
+as a kernel process, gzip/tar via `>`) and an `apt-store` case.
+`bench/ab.mjs origin/unix/perf-fs-shell HEAD --quick --rounds 3`: 86 metrics
+the same, boot bundle +1 KiB.
+
+**Debian footprint on a real profile.** Headless incognito contexts, used by
+bench/run.mjs, crash-check and the debian scoreboard, keep IndexedDB in
+memory and over-report. From there it looked like 178 MiB after `apt-get
+update` and +30 MiB per install, and the scoreboard saw ~659 MiB.
+`bench/footprint.mjs` measures a persistent on-disk profile, as users have.
+Chrome compresses the values on disk. Rewriting pkgcache.bin leaves no
+garbage: idling and reloading changed nothing.
+
+| after | storage usage | live FS bytes | IndexedDB on disk |
+|---|---:|---:|---:|
+| `debian install` | 3.3 MiB | 0.0 MiB | 2.9 MiB |
+| `apt-get update` (28 s) | 95.5 MiB | 164 MiB | 82.6 MiB |
+| + tree, bc, jq (26–31 s each) | 118.8 MiB | 183 MiB | 97.9 MiB |
+
+Three files are 139 MB of the 183 MB live: the trixie Packages list (54 MB),
+pkgcache.bin and srcpkgcache.bin (42.5 MB each). Options measured:
+- **Drop srcpkgcache.bin** (`Dir::Cache::srcpkgcache ""`): 68.6 MiB instead
+  of 118.8, but installs take +14 s and `apt-cache policy` goes 1.8 → 19.8 s
+  (pkgcache is rebuilt from the lists). Not worth it.
+- **`Acquire::GzipIndexes`:** apt asks the store method for `.lz4` lists. It
+  used to write the plain list under that name, and `apt-get update` failed.
+  It now refuses cleanly. Keeping lists compressed would need an lz4 encoder
+  in the store method, for about −40 MiB; not done.
+
 ## Results
 
 <!-- bench:table:begin -->
