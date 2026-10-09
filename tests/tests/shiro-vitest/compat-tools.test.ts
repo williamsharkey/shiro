@@ -823,3 +823,33 @@ describe('neovim', () => {
     expect(await fs.readFile('/home/user/w/a.txt', 'utf8')).toBe('one\ntwo\nthree\n');
   }, 180_000);
 });
+
+describe('emacs', () => {
+  it('evaluates Lisp in batch mode (dump, byte-compiled Lisp, org)', async () => {
+    await install('emacs');
+    expect((await sh('emacs --version')).out).toMatch(/^GNU Emacs 31\.1\n/);
+    expect((await sh(`emacs --batch --eval '(princ (format "%s %d\\n" emacs-version (+ 40 2)))'`)).out).toBe('31.1 42\n');
+    await fs.writeFile('/home/user/w/e.txt', 'hello\n');
+    expect((await sh(`emacs --batch e.txt --eval '(progn (goto-char (point-max)) (insert "more\\n") (save-buffer))' 2>&1; cat e.txt`)).out).toMatch(/hello\nmore\n$/);
+    expect((await sh(`emacs --batch --eval '(progn (require (quote org)) (princ (org-version)))' 2>/dev/null`)).out).toMatch(/^\d+\.\d+/);
+  }, 180_000);
+
+  it('edits and saves a file with emacs -nw on the tty, and runs M-x shell', async () => {
+    await install('emacs');
+    await fs.writeFile('/home/user/w/b.txt', 'one\n');
+    const { term, done } = onTerminal('emacs -nw b.txt');
+    await until(() => term.screen.includes('b.txt') && term.screen.includes('one'), 'the file in its buffer');
+    term.type('\x1b>two\x18\x13'); // M-> two C-x C-s
+    await until(() => term.screen.includes('Wrote '), 'the save message');
+    expect(await fs.readFile('/home/user/w/b.txt', 'utf8')).toBe('one\ntwo\n'); // text-mode requires a final newline
+    term.clear();
+    term.type('\x1bxshell\r');
+    await until(() => term.screen.includes('user@shiro'), 'a shell prompt in *shell*');
+    term.type('echo sh-$((6*7))\r');
+    await until(() => term.screen.includes('sh-42'), 'command output in *shell*');
+    term.type('exit\r');
+    await until(() => term.screen.includes('finished'), 'the shell process finishing');
+    term.type('\x18\x03'); // C-x C-c
+    expect(await done).toBe(0);
+  }, 180_000);
+});

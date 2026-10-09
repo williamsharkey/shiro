@@ -2022,6 +2022,83 @@
    ]
   },
   {
+   "name": "emacs",
+   "version": "31.1",
+   "description": "GNU Emacs for the terminal (emacs -nw; byte-compiled Lisp, no GUI/TLS/images; static x86-64 build)",
+   "license": "GPL-3.0-or-later",
+   "source": "https://ftp.gnu.org/gnu/emacs/emacs-31.1.tar.xz",
+   "homepage": "https://www.gnu.org/software/emacs/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/emacs.sh",
+   "section": "editors",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/ebrowse",
+     "url": "/pkg/emacs/31.1/ebrowse.gz",
+     "sha256": "89ee53ebbd62852db41ec35575ac20355c9e54360f8983c238cb734aa0199265",
+     "size": 33061,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/emacs",
+     "url": "/pkg/emacs/31.1/emacs.gz",
+     "sha256": "b77e28b3f38e95913a0936f079e83ec607fa4548e8dc1c3c0ee4cae1095cdc0a",
+     "size": 981208,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/emacsclient",
+     "url": "/pkg/emacs/31.1/emacsclient.gz",
+     "sha256": "48508cbeb347f748b1006e0911a8c461fac9546690322c94f4879b415c340be3",
+     "size": 35889,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/etags",
+     "url": "/pkg/emacs/31.1/etags.gz",
+     "sha256": "f71c78473d34803c4f710402f6a642372bf7c0176431db097c4cc4303c9011b2",
+     "size": 92629,
+     "unpack": "gzip"
+    },
+    {
+     "path": "libexec",
+     "url": "/pkg/emacs/31.1/libexec.tar.gz",
+     "sha256": "118f2259d3ab11942341bc88fa5b13de32b02b5caa1509ca7ea0cf166a8950b9",
+     "size": 3068074,
+     "unpack": "tar.gz"
+    },
+    {
+     "path": "share",
+     "url": "/pkg/emacs/31.1/share.tar.gz",
+     "sha256": "7c68e586ac75db276df97dd18b84b476c01239e6d71c26eba8fc8be90e47fb11",
+     "size": 21903313,
+     "unpack": "tar.gz"
+    }
+   ],
+   "bin": {
+    "emacs": {
+     "file": "bin/emacs"
+    },
+    "emacsclient": {
+     "file": "bin/emacsclient"
+    },
+    "etags": {
+     "file": "bin/etags"
+    },
+    "ebrowse": {
+     "file": "bin/ebrowse"
+    }
+   },
+   "links": {
+    "/usr/share/emacs": "share/emacs",
+    "/usr/libexec/emacs": "libexec/emacs"
+   },
+   "needs": [
+    "x86"
+   ]
+  },
+  {
    "name": "nano",
    "version": "9.2",
    "description": "GNU nano text editor (syntax highlighting; static x86-64 build)",
