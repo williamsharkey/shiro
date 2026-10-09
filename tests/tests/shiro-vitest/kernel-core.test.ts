@@ -468,6 +468,25 @@ describe('kernel processes', () => {
     kernel.kill(other.pid, A.SIGKILL);
   });
 
+  it("exec of a script without #! runs it as a shell script on the live stdin (debconf's config scripts)", async () => {
+    const { SinkFile } = await import('@shiro/wasi/stdio');
+    const run = async (content: string, input?: string) => {
+      await fs.writeFile('/tmp/noshebang', content);
+      await fs.chmod('/tmp/noshebang', 0o755);
+      const [r, w] = createPipe(); // the writer stays open, as debconf's frontend keeps it
+      let out = '';
+      const sink = new SinkFile((t: string) => { out += t; });
+      const p = kernel.spawn({ path: '/tmp/noshebang', argv: ['/tmp/noshebang'], cwd: '/tmp', fds: { 0: r, 1: sink, 2: sink } });
+      if (input) await w.write(new TextEncoder().encode(input));
+      const status = await Promise.race([p.wait(), new Promise((res) => setTimeout(() => res('hung'), 5000))]);
+      await w.close();
+      return { status, out };
+    };
+    expect(await run('')).toEqual({ status: 0, out: '' }); // an empty one ends at once (Linux: ENOEXEC, then sh)
+    expect(await run('echo hi\n')).toEqual({ status: 0, out: 'hi\n' });
+    expect(await run('read x; echo got:$x\n', 'line\n')).toEqual({ status: 0, out: 'got:line\n' });
+  });
+
   it('uname(2) reports the kernel hostname', async () => {
     const proc = kernel.spawn({ path: 'un', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
     const data = new Uint8Array(4096).fill(0xff);
