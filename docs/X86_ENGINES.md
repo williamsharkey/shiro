@@ -597,6 +597,37 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    count, total and longest time (with its kernel call and waits), every
    5 s and at the first read of stdin (a TUI's prompt is up). Debugging
    aid, for profiling programs where they run.
+65. Direct channels (opt-in, `TABCOMPUTER_BLINK_DIRECT=1`): host.mjs puts
+   four kernel channels in Blink's own wasm memory, and the page serves
+   them by watching their state words
+   (`KernelChannel.watch`, the way WASI guests' channels are served).
+   A guest thread's own calls go straight to the kernel with no message
+   through host.mjs either way: getppid's round trip in Node falls from
+   ~110 µs to ~10 µs. Calls for a vfork child (`as` ≠ 0), and calls made
+   while all four channels are busy, still go through the pool. A thread
+   waiting on a direct channel while Blink holds a signal for it asks the
+   page (`blink-kick`) to interrupt the process's blocking calls: the
+   signal can reach the kernel just before the call does, with nothing in
+   progress for it to interrupt (cmake hung in `epoll_wait` that way).
+   Off by default: the page then holds the worker's wasm memory, so (we
+   think) a finished process gives it back only at the page's next GC. In Chromium
+   that is +10–17 MiB peak RSS for vim and Go's net/http, against 11–17%
+   less time (docs/BENCHMARKS.md, perf-blink 7).
+66. `SHIRO_BLINK_PROFILE` also writes:
+   - per thread: time holding the GIL (running), time waiting for it, time
+     in syscalls and in futex, compiled blocks entered and instructions
+     interpreted;
+   - a 1-ms sample of where the GIL holder is (a compiled block's entry or
+     an interpreted instruction);
+   - the most interpreted addresses and opcodes.
+   The prompt label also fires on TCSETS of fd 0 and on `epoll_ctl(ADD, 0)`.
+67. `getcpu(2)` reports CPU 0, node 0. An instruction fetch from the unmapped
+   legacy vsyscall page (`0xffffffffff600000`) reads stubs that make the
+   gettimeofday, time and getcpu syscalls, as Linux emulates them (HotSpot
+   calls the page's getcpu when `sched_getcpu` fails). CPUID leaf 1 reports
+   family 6, model 0x5e (OpenCV reads the family before the feature bits).
+   An ELF whose name ends in `.bin` loads as an ELF, not a flat binary
+   (LibreOffice's `soffice.bin`).
 
 The guest's kernel calls go over a pool of channels (`src/x86-engine/blink.ts`
 → `public/engines/blink/host.mjs`). It starts at 6, and host.mjs asks the

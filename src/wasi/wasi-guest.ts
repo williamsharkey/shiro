@@ -1245,8 +1245,12 @@ export class WasiGuest {
       inheriting = DIR_RIGHTS | FILE_RIGHTS;
     } else {
       rights = FILE_RIGHTS;
-      // wasi-libc's isatty(): a character device without seek/tell rights
-      if (filetype === FT_CHAR) rights &= ~(RIGHT_FD_SEEK | RIGHT_FD_TELL);
+      // wasi-libc's isatty(): a character device without seek/tell rights. Only
+      // terminals (TCGETS works) qualify: /dev/null is no tty (`python3 - < /dev/null`)
+      if (filetype === FT_CHAR) {
+        const t = yield* this.sys(A.SYS_ioctl, [fd, A.TCGETS, TERMIOS_SIZE], new Uint8Array(TERMIOS_SIZE), TERMIOS_SIZE);
+        if (t.ret === 0) rights &= ~(RIGHT_FD_SEEK | RIGHT_FD_TELL);
+      }
       if (filetype === FT_SOCK_STREAM) rights |= SOCK_RIGHTS;
       if (fl >= 0) {
         const acc = fl & A.O_ACCMODE;

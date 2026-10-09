@@ -21,7 +21,7 @@ import * as A from './abi';
 import {
   type OpenFile, FdTable, BufferFile, DevNull, DevZero, DevRandom, DevFull,
   RegularFile, DirFile, abortableWait, openInode, openInodeSync, inodeNumber, canWrite, refCount, renameInodes, unlinkInode, setInodeTimes, setInodeMode, flushInode, inodeStat, hasOpenInodes,
-  shareInodeNumber, forgetInodeNumber, renameLinkName, linkCount,
+  shareInodeNumber, forgetInodeNumber, renameLinkName, linkCount, writeBackAll,
 } from './fd';
 import { createPipe, Pipe, PipeEnd, FifoRdWr } from './pipe';
 import type { PtyFile } from './pty';
@@ -191,10 +191,14 @@ export class Kernel {
   private detachTable?: () => void;
   /** How long an unreaped child of init stays a zombie before it is reaped automatically. */
   initReapDelayMs = 30_000;
+  private detachWriteBack?: () => void;
 
   constructor(opts: { fs?: FileSystem; shell?: Shell; allocPid?: () => number; registerWithProcessTable?: boolean } = {}) {
     this.fs = opts.fs ?? opts.shell?.fs;
     this.shell = opts.shell;
+    // Open files' buffered writes reach storage when the page goes away
+    const wfs = this.fs;
+    if (wfs?.addWriteBackHook) this.detachWriteBack = wfs.addWriteBackHook(() => writeBackAll(wfs));
     const alloc = opts.allocPid ?? (() => processTable.allocatePid());
     this.allocPid = () => (this.lastPid = alloc());
     this.init = new Process({
@@ -241,6 +245,8 @@ export class Kernel {
   /** Stop listing this kernel's processes in the page process table (tests). */
   dispose(): void {
     this.detachTable?.();
+    this.detachWriteBack?.();
+    this.detachWriteBack = undefined;
     this.detachTable = undefined;
   }
 
@@ -1292,6 +1298,8 @@ export class Kernel {
     // Its fds are the process's (KernelStdio, adoptFds), not whatever exec did in the page's shell
     shell.userFds = new Map();
     shell.fileDescriptors = new Map();
+    // A new process: only the page shell's `export -f` functions come along
+    shell.dropUnexportedFunctions();
     proc.onTerminate(() => shell.abortController?.abort());
     return shell;
   }

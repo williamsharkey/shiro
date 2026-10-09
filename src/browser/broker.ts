@@ -11,6 +11,7 @@ import { siteOf } from './psl';
 import { HeaderList, headerGet } from './http1';
 import { NetFetcher, decodeBody, supportsBrotli, type Dialer, type Fetcher } from './netfetch';
 import { framingAllowed, rewriteCsp, rewriteHtml, sniffCharset } from './rewrite';
+import { rewriteJs } from './jsrewrite';
 import { TlsError, tlsConnect } from './tls';
 import { WsClient } from './websocket';
 import type { BrokerReply, BrokerToClient, ClientMsg, FetchMsg } from './protocol';
@@ -90,6 +91,48 @@ const latin1Encode = (s: string): Uint8Array => {
   for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i) & 0xff;
   return out;
 };
+/** Script loads whose bodies get the location rewrite (jsrewrite.ts). Worklets have no location. */
+const SCRIPT_DEST = new Set<string>(['script', 'worker', 'sharedworker']);
+const WORKER_DEST = new Set<string>(['worker', 'sharedworker']);
+const JS_CT = /^\s*$|javascript|ecmascript|^\s*text\/jscript/i;
+
+/** Does `bytes` match an integrity attribute? The strongest algorithm listed decides (as in browsers). */
+export async function sriMatches(bytes: Uint8Array, integrity: string): Promise<boolean> {
+  const algs: Record<string, string> = { sha256: 'SHA-256', sha384: 'SHA-384', sha512: 'SHA-512' };
+  const items = integrity.split(/\s+/).map((t) => /^(sha256|sha384|sha512)-([A-Za-z0-9+/=_-]+)/.exec(t)).filter(Boolean) as RegExpExecArray[];
+  if (!items.length) return true; // nothing we understand: browsers ignore it too
+  const best = ['sha512', 'sha384', 'sha256'].find((a) => items.some((m) => m[1] === a))!;
+  const digest = new Uint8Array(await crypto.subtle.digest(algs[best], bytes as Uint8Array<ArrayBuffer>));
+  let bin = '';
+  for (const b of digest) bin += String.fromCharCode(b);
+  const b64 = btoa(bin);
+  const norm = (x: string) => x.replace(/-/g, '+').replace(/_/g, '/').replace(/=+$/, '');
+  return items.some((m) => m[1] === best && norm(m[2]) === norm(b64));
+}
+
+/** Rewritten scripts by URL and content: pages load the same bundles again and again. */
+class ScriptCache {
+  private m = new Map<string, string>();
+  private size = 0;
+  constructor(private max = 32 << 20) {}
+  key(url: string, text: string): string {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
+    return `${url}\n${text.length}\n${(h >>> 0).toString(36)}`;
+  }
+  get(k: string): string | undefined {
+    const v = this.m.get(k);
+    if (v !== undefined) { this.m.delete(k); this.m.set(k, v); }
+    return v;
+  }
+  set(k: string, v: string) {
+    if (v.length > this.max / 4) return;
+    this.m.set(k, v);
+    this.size += v.length;
+    for (const [old, ov] of this.m) { if (this.size <= this.max) break; this.m.delete(old); this.size -= ov.length; }
+  }
+}
+
 const escAttr = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 function randomToken(n = 16): string {
@@ -135,6 +178,9 @@ export class Broker {
   private sockets = new Map<string, WsClient>();
   private listener = (e: MessageEvent) => this.onWindowMessage(e);
   private br = supportsBrotli();
+  /** Integrity hashes taken out of pages (rewriteHtmlScripts), by real URL. */
+  private sri = new Map<string, string>();
+  private scripts = new ScriptCache();
   stats = { navigations: 0, requests: 0, errors: 0 };
 
   constructor(private o: BrokerOptions) {
@@ -261,7 +307,8 @@ export class Broker {
       }
       h.push(['Sec-Fetch-Site', secFetchSite(initiator, url)], ['Sec-Fetch-Mode', msg.navigation ? 'navigate' : msg.mode],
         ['Sec-Fetch-Dest', msg.navigation ? (ctx.nested ? 'iframe' : 'document') : (msg.destination || 'empty')]);
-      if (msg.navigation) h.push(['Upgrade-Insecure-Requests', '1']);
+      // Once: the page's request often has it already, and a duplicate makes some servers (PayPal's) hang
+      if (msg.navigation && !has('upgrade-insecure-requests')) h.push(['Upgrade-Insecure-Requests', '1']);
       if (cors || (method !== 'GET' && method !== 'HEAD')) h.push(['Origin', initiator ?? 'null']);
       const ref = refererFor(msg.referrer, url, msg.referrerPolicy);
       if (ref) h.push(['Referer', ref]);
@@ -348,7 +395,10 @@ export class Broker {
         const nonce = randomToken(12);
         const docCookie = this.o.jar.documentCookie(finalUrl, topPartition(ctx, finalUrl));
         const tag = `<script src="/__tc/client.js" nonce="${nonce}" data-app="${escAttr(this.o.app)}" data-cookie="${escAttr(docCookie)}"></script>`;
-        const html = rewriteHtml(text, { map: this.o.map, baseUrl: finalUrl.href, scriptTag: tag });
+        const html = rewriteHtml(text, {
+          map: this.o.map, baseUrl: finalUrl.href, scriptTag: tag, nonce,
+          onSri: (u, integrity) => { if (this.sri.size > 4096) this.sri.clear(); this.sri.set(u, integrity); },
+        });
         const csp = res.headers.filter(([k]) => k.toLowerCase() === 'content-security-policy').map(([, v]) => rewriteCsp(v, { nonce, realOrigin: ctx.realOrigin })).filter(Boolean) as string[];
         for (const c of csp) headers.push(['Content-Security-Policy', c]);
         if (!/charset=/i.test(ct)) {
@@ -364,8 +414,50 @@ export class Broker {
       }
       ctx.url = finalUrl.href;
       if (!ctx.nested) { tab.partition = siteOf(finalUrl); tab.onUrl(finalUrl.href); }
+    } else if (SCRIPT_DEST.has(msg.destination) && !msg.integrity && res.status >= 200 && res.status < 300 && JS_CT.test(headerGet(res.headers, 'content-type') ?? '')) {
+      const out = await this.rewriteScript(msg, finalUrl, new Uint8Array(await new Response(bodyOut as ReadableStream).arrayBuffer()), headers);
+      if (typeof out === 'string') return { type: 'error', id: msg.id, message: out };
+      bodyOut = out.buffer as ArrayBuffer;
+    } else if (!msg.navigation && (this.sri.has(finalUrl.href) || this.sri.has(msg.url))) {
+      // A stylesheet or preload whose integrity attribute we took out of its page
+      const bytes = new Uint8Array(await new Response(bodyOut as ReadableStream).arrayBuffer());
+      if (!(await sriMatches(bytes, (this.sri.get(finalUrl.href) ?? this.sri.get(msg.url))!))) {
+        return { type: 'error', id: msg.id, message: `${finalUrl.href} does not match the integrity hash its page gave` };
+      }
+      bodyOut = bytes.buffer as ArrayBuffer;
     }
     return { type: 'response', id: msg.id, status: res.status, statusText: res.statusText, headers, body: bodyOut, url: finalUrl.href, redirected };
+  }
+
+  /**
+   * A script's body for its browse origin: integrity the page declared is
+   * checked on the original bytes, then `location` and friends are rewritten
+   * (jsrewrite.ts). Returns the body to send, or an error message.
+   */
+  private async rewriteScript(msg: FetchMsg, finalUrl: URL, bytes: Uint8Array, headers: HeaderList): Promise<Uint8Array | string> {
+    const integrity = this.sri.get(finalUrl.href) ?? this.sri.get(msg.url);
+    if (integrity && !(await sriMatches(bytes, integrity))) return `${finalUrl.href} does not match the integrity hash its page gave`;
+    const ct = headerGet(headers, 'content-type') ?? '';
+    const charset = /charset\s*=\s*"?([\w-]+)/i.exec(ct)?.[1] ?? 'utf-8';
+    let text: string;
+    try { text = new TextDecoder(charset, { fatal: true }).decode(bytes); } catch { return bytes; } // unknown encoding: leave it alone
+    const worker = WORKER_DEST.has(msg.destination);
+    const key = this.scripts.key(`${msg.destination} ${finalUrl.href}`, text);
+    let code = this.scripts.get(key);
+    if (code === undefined) {
+      const r = rewriteJs(text);
+      code = r.code;
+      // A worker has no page runtime: it loads the shim first
+      if (r.changed && worker) code = code.slice(0, r.preludeAt) + (r.module ? 'import "/__tc/shim.js";' : 'importScripts("/__tc/shim.js");') + code.slice(r.preludeAt);
+      this.scripts.set(key, code);
+    }
+    if (code === text) return bytes;
+    for (let i = headers.length - 1; i >= 0; i--) {
+      const n = headers[i][0].toLowerCase();
+      if (n === 'content-length' || n === 'content-type') headers.splice(i, 1);
+    }
+    headers.push(['Content-Type', 'text/javascript; charset=utf-8']);
+    return new TextEncoder().encode(code);
   }
 
   private async onClientMessage(ctx: DocCtx, port: MessagePort, m: ClientMsg) {

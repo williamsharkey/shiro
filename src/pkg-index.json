@@ -379,8 +379,8 @@
   },
   {
    "name": "python3",
-   "version": "3.13.7",
-   "description": "CPython 3.13 interpreter built for WASI (stdlib, zlib, sqlite3); pip and venv are provided by Shiro",
+   "version": "3.13.7-1",
+   "description": "CPython 3.13 interpreter built for WASI (stdlib, zlib, sqlite3, OpenSSL 3.5: ssl/hashlib); pip and venv are provided by Shiro",
    "license": "PSF-2.0",
    "source": "https://www.python.org/ftp/python/3.13.7/Python-3.13.7.tar.xz",
    "homepage": "https://www.python.org/",
@@ -391,33 +391,33 @@
    "files": [
     {
      "path": "bin/python3.wasm",
-     "url": "/pkg/python3/3.13.7/python3.wasm",
-     "sha256": "b8312e9b437b2a329b4f2a32b9aaf9cd11de64ac774e6be66b121689402f0102",
-     "size": 8217192
+     "url": "/pkg/python3/3.13.7-1/python3.wasm",
+     "sha256": "e5301cd3379330cd16c2d9d685b7100e3d43b9b503110c23b6e5468a07fe62b0",
+     "size": 11101761
     },
     {
      "path": "lib/python3.13/lib-dynload/.keep",
-     "url": "/pkg/python3/3.13.7/.keep",
+     "url": "/pkg/python3/3.13.7-1/.keep",
      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
      "size": 0
     },
     {
      "path": "lib/python3.13/os.py",
-     "url": "/pkg/python3/3.13.7/os.py",
+     "url": "/pkg/python3/3.13.7-1/os.py",
      "sha256": "5e640713e89023372f493054ccedb7512ee27eb3ea6461677bc8c27c640d0605",
      "size": 41627
     },
     {
      "path": "lib/python3.13/site-packages/README.txt",
-     "url": "/pkg/python3/3.13.7/README.txt",
+     "url": "/pkg/python3/3.13.7-1/README.txt",
      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
      "size": 0
     },
     {
      "path": "lib/python313.zip",
-     "url": "/pkg/python3/3.13.7/python313.zip",
-     "sha256": "fad1ebdb6e82fc3c62a44c52aeeba435221d0d006d35cc019fbadd96d916ded2",
-     "size": 4321968
+     "url": "/pkg/python3/3.13.7-1/python313.zip",
+     "sha256": "6421349b4cb9f3fe3d710311d67b3d17a6bd79a7457ebf421d4b1b79a511a20a",
+     "size": 4323612
     }
    ],
    "bin": {
@@ -439,9 +439,14 @@
     }
    },
    "wants": [
-    "blocking-stdin"
+    "blocking-stdin",
+    "processes",
+    "sockets"
    ],
-   "notes": "pip installs pure-Python wheels from PyPI (no native extensions, no sdists yet); python -m venv works. No subprocess, sockets or ssl (WASI preview1); the REPL needs blocking stdin. The REPL is the basic one (PYTHON_BASIC_REPL=1): the new one needs termios, which WASI lacks. pytest runs with --capture=sys -p no:faulthandler -p no:cacheprovider (PYTEST_ADDOPTS): its fd capture and faulthandler need dup(), its cache os.umask(), which WASI lacks."
+   "notes": "pip installs pure-Python wheels from PyPI (no native extensions, no sdists yet); python -m venv works. subprocess runs programs through os.posix_spawn (no preexec_fn or uid/gid changes); sockets, getaddrinfo and ssl (OpenSSL 3.5, CA bundle at /etc/ssl/cert.pem from ca-certificates) go through the kernel's sockets and the TCP relay, so urllib fetches http:// and https:// URLs. The REPL needs blocking stdin, and is the basic one (PYTHON_BASIC_REPL=1): the new one needs termios, which WASI lacks. pytest runs with --capture=sys -p no:faulthandler -p no:cacheprovider (PYTEST_ADDOPTS).",
+   "deps": [
+    "ca-certificates"
+   ]
   },
   {
    "name": "make",
@@ -2912,10 +2917,7 @@
    "links": {
     "/etc/ssl/certs/ca-certificates.crt": "etc/ssl/certs/ca-certificates.crt",
     "/etc/ssl/cert.pem": "etc/ssl/certs/ca-certificates.crt"
-   },
-   "needs": [
-    "x86"
-   ]
+   }
   },
   {
    "name": "openssl",

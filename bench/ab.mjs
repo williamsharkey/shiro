@@ -80,7 +80,10 @@ function runOnce(side, a, out, log) {
   const r = spawnSync(process.execPath, args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 << 20 });
   if (r.status !== 0) throw new Error(`bench run for ${side.label} failed:\n${(r.stdout + r.stderr).slice(-2000)}`);
   log(`[ab]   ${side.label}: ${((Date.now() - t0) / 1000).toFixed(0)} s`);
-  return JSON.parse(readFileSync(out, 'utf8'));
+  const res = JSON.parse(readFileSync(out, 'utf8'));
+  const failed = res.results.filter((x) => x.error && /\.suite$/.test(x.name));
+  for (const f of failed) log(`[ab]   WARNING ${side.label}: ${f.name} ${f.notes}`);
+  return res;
 }
 
 // ── statistics ───────────────────────────────────────────────────────

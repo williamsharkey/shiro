@@ -2,7 +2,8 @@
  * Settings, laid out like a system settings app: a searchable sidebar of
  * grouped panes, the pane on the right. Appearance (theme, extra keys), Dock &
  * Icons (the icon set picker, iconsets.ts), Network (connection status, Sign in
- * with GitHub, other ways to connect), Storage (browser quota, persistence), About.
+ * with GitHub, other ways to connect), Toolchains (prebuilt Debian compilers and
+ * runtimes, `toolchain install`), Storage (browser quota, persistence), About.
  */
 
 import { keybarMode, setKeybarMode, type KeybarMode } from '../mobile';
@@ -14,7 +15,7 @@ import { networkCredential, networkStatus, onNetworkStatus, ownRelay, setOwnRela
 import { openSignIn, probeRelay, signedInAccount, signOut, statusText, testOwnRelay } from '../network';
 import { BRAND } from '../../brand';
 import buildNumber from '../../../build-number.txt?raw';
-import { formatBytes, storageInfo } from '../../storage';
+import { formatBytes, reloadAfterFlush, storageInfo } from '../../storage';
 
 /** A pane's sidebar icon: a white glyph (24-unit, iconsets.ts) on a colored rounded square */
 const paneIcon = (d: string, color: string) =>
@@ -24,6 +25,7 @@ const SUN_D = 'M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 1 0 0-7zM12 3v2M12 19v2M3 12h
 const DISK_D = 'M4 7.5h16v9H4zM7.5 12h.01M16.5 12h-4';
 const INFO_D = 'M12 3a9 9 0 1 0 0 18 9 9 0 1 0 0-18zM12 11v5.5M12 7.8h.01';
 
+const CODE_D = 'M8.5 7L3.5 12l5 5M15.5 7l5 5-5 5M13.5 5l-3 14';
 const PERSON_D = 'M12 4a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 1 0 0-7.2zM5 20c.8-3.8 3.6-6 7-6s6.2 2.2 7 6';
 
 /** Panes in sidebar groups; `words` widen the search */
@@ -32,6 +34,7 @@ const PANES = [
   { id: 'appearance', label: 'Appearance', group: 1, icon: paneIcon(SUN_D, '#2b2b30'), words: 'theme light dark mode system keys keyboard motion classic terminal' },
   { id: 'dock', label: 'Dock & Icons', group: 1, icon: paneIcon(DOCK_D, '#5b4fd6'), words: 'icon icons set theme drafting classic pearl glass foil vaporwave aurora clay swiss brutalist risograph one-bit pixel paper' },
   { id: 'network', label: 'Network', group: 2, icon: paneIcon(glyphFor('browser')!, '#1f9d8b'), words: 'internet relay github sign in account connection tcp' },
+  { id: 'toolchains', label: 'Toolchains', group: 2, icon: paneIcon(CODE_D, '#e07a1f'), words: 'install compiler gcc c c++ python node java latex tex fortran cobol pascal ada debian apt programming languages' },
   { id: 'storage', label: 'Storage', group: 2, icon: paneIcon(DISK_D, '#8e8e93'), words: 'disk quota space persistent indexeddb files' },
   { id: 'about', label: 'About', group: 3, icon: paneIcon(INFO_D, '#8e8e93'), words: 'version build processor' },
 ] as const;
@@ -93,6 +96,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
     else if (id === 'appearance') appearance();
     else if (id === 'dock') dockPane();
     else if (id === 'network') network();
+    else if (id === 'toolchains') toolchains();
     else if (id === 'storage') storage();
     else about();
   }
@@ -131,7 +135,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
     }
     panel.querySelector('[data-act=classic]')!.addEventListener('click', () => {
       try { localStorage.setItem('tabcomputer-ui', 'terminal'); } catch {}
-      location.href = location.pathname + '?ui=terminal';
+      reloadAfterFlush(() => { location.href = location.pathname + '?ui=terminal'; });
     });
   }
 
@@ -268,6 +272,30 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
       }
     };
     void signedInAccount().then(a => { account = a; readDraft(); render(); });
+  }
+
+  function toolchains(): void {
+    panel.innerHTML = `
+      <h2>Toolchains</h2><p class="sd-muted">Debian's compilers and runtimes, prebuilt: installing one takes seconds, and its programs download the first time they run. They are ordinary Debian packages, so <code>apt</code> keeps working on top.</p>
+      <div class="sd-card sd-tc-list"><div class="sd-row sd-muted">Loading…</div></div>
+      <p class="sd-small sd-muted">Install opens a Terminal running <code>toolchain install NAME</code>. <code>toolchain list</code> shows the same list.</p>`;
+    const list = panel.querySelector<HTMLElement>('.sd-tc-list')!;
+    let alive = true;
+    const render = () => void import('../../commands/toolchain').then(m => m.listToolchains(ctx.fs)).then((sets) => {
+      if (!alive) return;
+      list.innerHTML = sets.map(t => `
+        <div class="sd-row" style="gap:10px">
+          <span class="sd-grow"><b>${esc(t.title)}</b><br><span class="sd-small sd-muted">${esc(t.description)}${t.prebuilt ? ` · ${formatBytes(t.size)}` : ' · installs with apt (minutes)'}${t.note ? `<br>${esc(t.note)}` : ''}</span></span>
+          ${t.installed ? '<span class="sd-muted">Installed</span>' : `<button class="sd-btn" data-tc="${esc(t.id)}">Install</button>`}
+        </div>`).join('');
+    }).catch((e) => { if (alive) list.innerHTML = `<div class="sd-row sd-muted">${esc(String(e?.message ?? e))}</div>`; });
+    panel.onclick = (e) => {
+      const id = (e.target as HTMLElement).closest<HTMLElement>('[data-tc]')?.dataset.tc;
+      if (id) ctx.openTerminal({ command: `toolchain install ${id} --check`, title: 'Install toolchain' });
+    };
+    const timer = setInterval(render, 4000);
+    cleanup = () => { alive = false; clearInterval(timer); };
+    render();
   }
 
   function storage(): void {

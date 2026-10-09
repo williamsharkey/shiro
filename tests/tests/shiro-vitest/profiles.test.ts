@@ -84,7 +84,7 @@ describe('profile selection', () => {
 
   it('tests run as the default profile, with every shim on', () => {
     expect(activeProfile().id).toBe('tabcomputer');
-    expect(Object.values(activeProfile().shims)).toEqual(['native', true, true, true, true, 'pyodide']);
+    expect(Object.values(activeProfile().shims)).toEqual(['native', true, true, true, true, 'cpython']);
   });
 });
 
