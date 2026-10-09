@@ -71,13 +71,14 @@ const relayE = await mount({ ports: [echoPort], allowCidrs: ['127.0.0.1/32'], to
 
 // F: through an HTTP CONNECT proxy (TABCOMPUTER_TCP_UPSTREAM_PROXY) that dials the echo server
 const proxyLog = [];
-const proxyPort = await listen(net.createServer((c) => {
+// allowHalfOpen on both legs: the client's FIN must not close the reply direction early
+const proxyPort = await listen(net.createServer({ allowHalfOpen: true }, (c) => {
   c.on('error', () => {});
   c.once('data', (d) => {
     const line = d.toString('latin1').split('\r\n')[0];
     proxyLog.push(line);
     if (!line.startsWith(`CONNECT public.test:${echoPort} `)) { c.end('HTTP/1.1 403 Forbidden\r\n\r\n'); return; }
-    const up = net.connect(echoPort, '127.0.0.1', () => { c.write('HTTP/1.1 200 Connection Established\r\n\r\n'); c.pipe(up); up.pipe(c); });
+    const up = net.connect({ port: echoPort, host: '127.0.0.1', allowHalfOpen: true }, () => { c.write('HTTP/1.1 200 Connection Established\r\n\r\n'); c.pipe(up); up.pipe(c); });
     up.on('error', () => c.destroy());
   });
 }));
