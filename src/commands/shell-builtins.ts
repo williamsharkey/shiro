@@ -96,9 +96,9 @@ export const cdCmd: Command = {
 
 // Map of env vars to localStorage keys for persistence across sessions
 const PERSIST_ENV: Record<string, string> = {
-  ANTHROPIC_API_KEY: 'shiro_anthropic_key',
-  OPENAI_API_KEY: 'shiro_openai_key',
-  GOOGLE_API_KEY: 'shiro_google_key',
+  ANTHROPIC_API_KEY: 'tabcomputer_anthropic_key',
+  OPENAI_API_KEY: 'tabcomputer_openai_key',
+  GOOGLE_API_KEY: 'tabcomputer_google_key',
 };
 
 export const exportCmd: Command = {

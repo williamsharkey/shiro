@@ -427,7 +427,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     { label: 'Settings…', shortcut: 'Alt+Shift+,', action: () => void wm.openApp('settings') },
     { label: 'Activity', action: () => void wm.openApp('activity') },
     'separator',
-    { label: 'Classic Terminal', action: () => { try { localStorage.setItem('shiro-ui', 'terminal'); } catch {} location.reload(); } },
+    { label: 'Classic Terminal', action: () => { try { localStorage.setItem('tabcomputer-ui', 'terminal'); } catch {} location.reload(); } },
     { label: 'Restart', action: () => location.reload() },
   ] });
   const termView = (): TerminalView | null => {

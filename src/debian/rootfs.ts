@@ -12,6 +12,7 @@
  * FileSystem like any other file. A warm boot needs no network at all.
  */
 import type { FileSystem, FSNode, LazyRef } from '../filesystem';
+import { envVar } from '../env-alias';
 
 export interface RootfsManifest {
   format: number;
@@ -49,7 +50,7 @@ const isNode = () => typeof nodeProcess()?.getBuiltinModule === 'function';
 
 /** Where the app serves the rootfs (public/debian → /debian/). */
 export function defaultRootfsBase(): string {
-  const env = nodeProcess()?.env?.SHIRO_DEBIAN_ROOTFS;
+  const env = envVar(nodeProcess()?.env, 'DEBIAN_ROOTFS');
   if (env) return env.endsWith('/') ? env : env + '/';
   if (isNode()) {
     const p = nodeProcess();

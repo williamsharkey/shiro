@@ -293,7 +293,7 @@ export class WindowManager implements DesktopAPI {
     this.snapPreview.className = 'sd-snap-preview';
     this.layer.appendChild(this.snapPreview);
     let pref: string | null = null;
-    try { pref = localStorage.getItem('shiro-desktop-theme'); } catch {}
+    try { pref = localStorage.getItem('tabcomputer-desktop-theme'); } catch {}
     this.themePref = pref === 'light' || pref === 'dark' ? pref : 'system';
     this.applyTheme();
     if (typeof matchMedia === 'function') {
@@ -402,7 +402,7 @@ export class WindowManager implements DesktopAPI {
 
   setTheme(pref: 'light' | 'dark' | 'system'): void {
     this.themePref = pref;
-    try { localStorage.setItem('shiro-desktop-theme', pref); } catch {}
+    try { localStorage.setItem('tabcomputer-desktop-theme', pref); } catch {}
     this.applyTheme();
   }
 

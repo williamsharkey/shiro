@@ -535,7 +535,7 @@ export const gitCmd: Command = {
           ctx.stderr = `Cloning into '${cloneTarget || repoName}'...\n`;
 
           const corsProxy = ctx.env['GIT_CORS_PROXY'] || `${getShiroOrigin()}/git-proxy`;
-          const token = ctx.env['GITHUB_TOKEN'] || (typeof localStorage !== 'undefined' ? localStorage.getItem('shiro_github_token') || '' : '');
+          const token = ctx.env['GITHUB_TOKEN'] || (typeof localStorage !== 'undefined' ? localStorage.getItem('tabcomputer_github_token') || '' : '');
           try {
             await Promise.race([
               git.clone({
@@ -1000,7 +1000,7 @@ function parseRemoteArgs(ctx: CommandContext): { remote: string; ref: string; to
   if (positional.length >= 2) ref = positional[1];
 
   const token = ctx.env['GITHUB_TOKEN']
-    || (typeof localStorage !== 'undefined' ? localStorage.getItem('shiro_github_token') || '' : '');
+    || (typeof localStorage !== 'undefined' ? localStorage.getItem('tabcomputer_github_token') || '' : '');
   const corsProxy = ctx.env['GIT_CORS_PROXY'] || `${getShiroOrigin()}/git-proxy`;
 
   return { remote, ref, token, corsProxy };

@@ -1,3 +1,5 @@
+import { fileSystemDbName } from './legacy-storage';
+
 function globPatternToRegex(pattern: string, base: string, caseInsensitive?: boolean): RegExp {
   // Resolve the pattern relative to base
   let fullPattern: string;
@@ -48,7 +50,6 @@ function globPatternToRegex(pattern: string, base: string, caseInsensitive?: boo
   return new RegExp(regex, caseInsensitive ? 'i' : undefined);
 }
 
-const DB_NAME = 'shiro-fs';
 const DB_VERSION = 1;
 const STORE_NAME = 'files';
 
@@ -629,10 +630,14 @@ export class FileSystem {
     document.addEventListener('freeze', flush);
   }
 
+  /** The database name, decided once per page (shared by every FileSystem). */
+  private static _dbName: Promise<string> | null = null;
+
   private _openDb(): Promise<IDBDatabase> {
     if (this._opening) return this._opening;
-    this._opening = new Promise<IDBDatabase>((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, DB_VERSION);
+    // tabcomputer-fs; the first time, files under the old name move into it (legacy-storage.ts)
+    this._opening = (FileSystem._dbName ??= fileSystemDbName()).then((name) => new Promise<IDBDatabase>((resolve, reject) => {
+      const req = indexedDB.open(name, DB_VERSION);
       req.onupgradeneeded = () => {
         const db = req.result;
         if (!db.objectStoreNames.contains(STORE_NAME)) {
@@ -651,7 +656,7 @@ export class FileSystem {
       };
       req.onerror = () => reject(req.error);
       req.onblocked = () => console.warn('[fs] IndexedDB open blocked by another connection');
-    }).finally(() => { this._opening = null; });
+    })).finally(() => { this._opening = null; });
     return this._opening;
   }
 

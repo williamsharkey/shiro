@@ -6,7 +6,7 @@ import { Command, CommandContext } from './index';
 import { getActiveServers, injectIframeScripts } from './serve';
 import { iframeServer } from '../iframe-server';
 
-const STORAGE_KEY = 'shiro-become';
+const STORAGE_KEY = 'tabcomputer-become';
 
 export interface BecomeConfig {
   directory: string;

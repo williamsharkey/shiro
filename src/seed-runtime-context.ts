@@ -13,7 +13,7 @@ export interface ShiroRuntimeContext {
   createdAt: string;
 }
 
-export const SHIRO_RUNTIME_CONTEXT_SESSION_KEY = 'shiro_runtime_context_v1';
+export const SHIRO_RUNTIME_CONTEXT_SESSION_KEY = 'tabcomputer_runtime_context_v1';
 export const SHIRO_RUNTIME_CONTEXT_MD_PATH = '/home/user/NEO.md';
 export const SHIRO_RUNTIME_CONTEXT_JSON_PATH = '/home/user/.shiro-context.json';
 

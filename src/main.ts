@@ -1,3 +1,5 @@
+// Legacy shiro-… storage keys copied to their tabcomputer-… names, before anything reads them
+import './boot-migrate';
 // Console capture - must be first before any other code runs (bounded ring buffer)
 import { queryConsole, clearConsoleLog } from './console-log';
 
@@ -508,13 +510,13 @@ async function main() {
   void startDisplay(kernel, 0).catch(e => console.warn('[Xshiro]', e));
 
   // Populate API keys from localStorage so `claude` CLI picks them up
-  const storedAnthropicKey = localStorage.getItem('shiro_anthropic_key') || localStorage.getItem('shiro_api_key');
+  const storedAnthropicKey = localStorage.getItem('tabcomputer_anthropic_key') || localStorage.getItem('tabcomputer_api_key');
   if (storedAnthropicKey) shell.env['ANTHROPIC_API_KEY'] = storedAnthropicKey;
-  const storedOpenaiKey = localStorage.getItem('shiro_openai_key');
+  const storedOpenaiKey = localStorage.getItem('tabcomputer_openai_key');
   if (storedOpenaiKey) shell.env['OPENAI_API_KEY'] = storedOpenaiKey;
-  const storedGoogleKey = localStorage.getItem('shiro_google_key');
+  const storedGoogleKey = localStorage.getItem('tabcomputer_google_key');
   if (storedGoogleKey) shell.env['GOOGLE_API_KEY'] = storedGoogleKey;
-  const storedGithubToken = localStorage.getItem('shiro_github_token');
+  const storedGithubToken = localStorage.getItem('tabcomputer_github_token');
   if (storedGithubToken) shell.env['GITHUB_TOKEN'] = storedGithubToken;
 
   // Extra terminals (panes, desktop windows) get fresh shells with this one's env and cwd
@@ -599,6 +601,8 @@ async function main() {
     closeSplit: closeSplitView, // Close split pane from browser console
     lastSeedGif: null as Uint8Array | null, // Last generated seed GIF bytes (for demos/drag)
   };
+  // tabcomputer's name for the same page API (window.__shiro stays: scripts, the bench and the engine use it)
+  (window as any).__tabcomputer = (window as any).__shiro;
 
   // OAuth callback bridge: receive auth codes from /oauth/callback popup
   const onOAuthCallback = (event: MessageEvent) => {
@@ -674,7 +678,7 @@ async function main() {
 
     // ?unbecome escape hatch — clear become config and show terminal
     if (params.has('unbecome')) {
-      localStorage.removeItem('shiro-become');
+      localStorage.removeItem('tabcomputer-become');
       document.body.classList.remove('become-active');
       history.replaceState({}, '', '/');
     } else if (pathname === '/' + becomeConfig.slug) {
@@ -689,7 +693,7 @@ async function main() {
         }
       if (startResult !== 0) {
         // Server failed to start — clear become config and show terminal
-        localStorage.removeItem('shiro-become');
+        localStorage.removeItem('tabcomputer-become');
         document.body.classList.remove('become-active');
         console.warn('[shiro] Become mode: server failed to start, falling back to terminal');
       }
@@ -812,7 +816,7 @@ async function main() {
   // Skip only if become mode is actually active (not just config in localStorage)
   if (!document.body.classList.contains('become-active')) {
     // getPersistedRemoteCode() without loading commands/remote unless there is one
-    const persistedCode = localStorage.getItem('shiro-remote-code');
+    const persistedCode = localStorage.getItem('tabcomputer-remote-code');
     if (persistedCode) {
       void import('./commands/remote').then(m => m.startRemoteWithCode(persistedCode, terminal));
     }

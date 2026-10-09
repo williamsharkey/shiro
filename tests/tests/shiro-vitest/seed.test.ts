@@ -772,7 +772,7 @@ describe('seed — API key detection', () => {
   });
 
   it('should warn when API keys are detected in localStorage', async () => {
-    localStorage.setItem('shiro_api_key', 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+    localStorage.setItem('tabcomputer_api_key', 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAA');
     const { output } = await run(shell, 'seed');
     expect(output).toContain('API keys detected');
   });

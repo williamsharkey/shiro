@@ -174,7 +174,7 @@ describe('seed share — upload state and get shareable URL', () => {
   });
 
   it('should warn when API keys are detected', async () => {
-    localStorage.setItem('shiro_api_key', 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+    localStorage.setItem('tabcomputer_api_key', 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAA');
     const { output } = await run(shell, 'seed share');
     expect(output).toContain('API keys detected');
   });

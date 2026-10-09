@@ -326,7 +326,7 @@ describe('kernel sockets over the TCP relay', () => {
     const store = new Map<string, string>();
     (globalThis as any).localStorage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); }, removeItem: (k: string) => { store.delete(k); } };
     try {
-      store.set('shiro_github_token', 'good-token');
+      store.set('tabcomputer_github_token', 'good-token');
       const s2 = stream(stackFor(P.relayD));
       expect(await s2.connect(v4('127.0.0.1', P.echoPort))).toBe(0);
       await s2.write(enc.encode('hi'));

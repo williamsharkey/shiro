@@ -26,6 +26,7 @@ import type { TarEntry } from './utils/tar';
 const readTarball = (bytes: Uint8Array) => import('./utils/tar').then(m => m.readTarball(bytes));
 import builtinIndexJson from './pkg-index.json';
 import { untar, gunzip, type TarEntry as PkgTarEntry } from './pkg-tar';
+import { envVar } from './env-alias';
 
 // ── Index format ─────────────────────────────────────────────────────
 
@@ -340,7 +341,7 @@ export async function sha256Hex(bytes: Uint8Array): Promise<string> {
 export function resolveUrl(url: string, env?: Record<string, string>): string {
   if (/^https?:\/\//.test(url)) return url;
   const origin = typeof location !== 'undefined' ? location.origin : undefined;
-  const mirror = env?.SHIRO_PKG_MIRROR || (origin && /^https?:\/\//.test(origin) ? origin : DEFAULT_MIRROR);
+  const mirror = envVar(env, 'PKG_MIRROR') || (origin && /^https?:\/\//.test(origin) ? origin : DEFAULT_MIRROR);
   return mirror.replace(/\/$/, '') + url;
 }
 
@@ -755,7 +756,7 @@ export async function runPackageBinary(binPath: string, argv0: string, args: str
 
   if (entry) {
     const missing = missingFeatures(entry);
-    if (missing.length && ctx.env.SHIRO_PKG_FORCE !== '1') {
+    if (missing.length && envVar(ctx.env, 'PKG_FORCE') !== '1') {
       ctx.stderr += `${argv0}: needs kernel support Shiro doesn't have yet: ${missing.join(', ')}\n`;
       return 126;
     }

@@ -1088,7 +1088,7 @@ function makeRow(
   `;
 
   // Check for progress
-  const progressKey = 'shiro-template-progress-';
+  const progressKey = 'tabcomputer-template-progress-';
   // We'll check for any completed checkpoints later
 
   row.appendChild(iconEl);

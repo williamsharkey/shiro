@@ -31,7 +31,7 @@ function withShims(shims: Partial<Profile['shims']>): Profile {
   return p;
 }
 
-beforeEach(() => { localStorage.removeItem(PROFILE_KEY); localStorage.removeItem('shiro-ui'); });
+beforeEach(() => { localStorage.removeItem(PROFILE_KEY); localStorage.removeItem('tabcomputer-ui'); });
 afterEach(() => { setActiveProfile(null); vi.unstubAllGlobals(); });
 
 describe('profile selection', () => {

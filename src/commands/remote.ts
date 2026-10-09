@@ -4,7 +4,7 @@ import { createRemotePanel, type RemotePanel, type LogType } from '../remote-pan
 import { getShiroOrigin } from '../utils/shiro-origin';
 
 // LocalStorage key for persisting remote session code across page reloads
-const REMOTE_CODE_KEY = 'shiro-remote-code';
+const REMOTE_CODE_KEY = 'tabcomputer-remote-code';
 
 // Word lists for generating memorable codes
 // ~200 adjectives × ~200 nouns × 64^4 syllables = ~46 bits of entropy

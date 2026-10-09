@@ -15,6 +15,7 @@
 import type { Kernel } from '../kernel/kernel';
 import type { Process } from '../kernel/process';
 import { md5Hex } from '../commands/checksum';
+import { envVar } from '../env-alias';
 
 const enc = new TextEncoder();
 
@@ -87,7 +88,7 @@ function pageBase(): string {
 
 /** The mirror's base URL from apt's configuration, the environment, or the default. */
 export function mirrorBase(config: Map<string, string>, env: Record<string, string>): string {
-  const configured = config.get('acquire::shiro::mirror') || env.SHIRO_DEBIAN_MIRROR || (globalThis as any).process?.env?.SHIRO_DEBIAN_MIRROR || '/debian/mirror/';
+  const configured = config.get('acquire::shiro::mirror') || envVar(env, 'DEBIAN_MIRROR') || envVar((globalThis as any).process?.env, 'DEBIAN_MIRROR') || '/debian/mirror/';
   return new URL(configured, pageBase()).href;
 }
 

@@ -7,7 +7,7 @@
  * the hostname.
  *
  * Chosen by host (profiles/select.mjs, shared with server.mjs). `?profile=ID`
- * picks one and remembers it (localStorage `shiro-profile`); `?profile=` with
+ * picks one and remembers it (localStorage `tabcomputer-profile`); `?profile=` with
  * no value forgets it.
  */
 import { pickProfile } from '../profiles/select.mjs';
@@ -50,7 +50,7 @@ export interface Profile {
 
 export const PROFILES: readonly Profile[] = [shiro as Profile, tabcomputer as Profile];
 
-export const PROFILE_KEY = 'shiro-profile';
+export const PROFILE_KEY = 'tabcomputer-profile';
 
 /** The profile for `loc` (default: this page), honoring and remembering ?profile=. */
 export function selectProfile(loc: Pick<Location, 'search' | 'hostname'> | null = typeof location !== 'undefined' ? location : null): Profile {

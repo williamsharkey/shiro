@@ -16,11 +16,12 @@
 
 import type { X86Context } from '../x86/runtime';
 import type { Runner } from '../kernel/kernel';
+import { envVar } from '../env-alias';
 
 export type X86EngineName = 'blink' | 'x86';
 
 export async function chooseX86Engine(env: Record<string, string> = {}): Promise<X86EngineName> {
-  const forced = env.SHIRO_X86_ENGINE;
+  const forced = envVar(env, 'X86_ENGINE');
   if (forced === 'x86') return 'x86';
   const { blinkSupported } = await import('./blink');
   if (blinkSupported()) return 'blink';

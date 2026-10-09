@@ -92,7 +92,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
       b.addEventListener('click', () => { setKeybarMode(b.dataset.keybar as KeybarMode); appearance(); });
     }
     panel.querySelector('[data-act=classic]')!.addEventListener('click', () => {
-      try { localStorage.setItem('shiro-ui', 'terminal'); } catch {}
+      try { localStorage.setItem('tabcomputer-ui', 'terminal'); } catch {}
       location.href = location.pathname + '?ui=terminal';
     });
   }

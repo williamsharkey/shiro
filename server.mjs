@@ -11,12 +11,26 @@ import { join, extname } from 'node:path';
 import { WebSocketServer } from 'ws';
 import { randomBytes, createHmac, createHash, timingSafeEqual } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import { realpathSync, readFileSync, readdirSync } from 'node:fs';
+import { realpathSync, readFileSync, readdirSync, existsSync } from 'node:fs';
 import net from 'node:net';
 import dns from 'node:dns/promises';
 
+// Settings were SHIRO_…; tabcomputer's names are TABCOMPUTER_…. Both work:
+// each TABCOMPUTER_X is copied to SHIRO_X (the name the code reads) unless
+// SHIRO_X is set too, in which case the new name still wins.
+export function aliasEnv(env = process.env) {
+  for (const [k, v] of Object.entries(env)) {
+    if (k.startsWith('TABCOMPUTER_') && v !== undefined) env['SHIRO_' + k.slice('TABCOMPUTER_'.length)] = v;
+  }
+  return env;
+}
+aliasEnv();
+
 const PORT = process.env.PORT || 3000;
-const STATIC_DIR = process.env.STATIC_DIR || '/opt/shiro/public';
+// Default directories under /opt/tabcomputer; a host set up before the rename
+// (/opt/shiro) keeps working. STATIC_DIR/SEED_DIR override both.
+const optDir = (sub) => existsSync(`/opt/tabcomputer/${sub}`) || !existsSync(`/opt/shiro/${sub}`) ? `/opt/tabcomputer/${sub}` : `/opt/shiro/${sub}`;
+const STATIC_DIR = process.env.STATIC_DIR || optDir('public');
 
 // --- Cross-origin isolation ---
 // COOP same-origin + COEP credentialless make the app page crossOriginIsolated,
@@ -707,7 +721,7 @@ async function handleGitProxy(req, res, targetUrl) {
 }
 
 // --- Seed sharing ---
-const SEED_DIR = process.env.SEED_DIR || '/opt/shiro/seeds';
+const SEED_DIR = process.env.SEED_DIR || optDir('seeds');
 const SEED_MAX_SIZE = 512 * 1024; // 512KB max per seed (gzipped)
 const SEED_RATE_LIMIT = 200; // per IP per month
 
