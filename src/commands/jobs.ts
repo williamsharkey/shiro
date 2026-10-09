@@ -3,7 +3,7 @@ import type { Shell, BackgroundJob } from '../shell';
 import {
   jobControl, shellStatus, signalName, WIFEXITED, WTERMSIG, SIGCONT, SIGINT, SIGPIPE,
 } from '../kernel/signals';
-import type { TtySession, TtyJob, JobResult } from '../kernel/pty';
+import type { TtySession, TtyJob, JobResult, ProcessTty } from '../kernel/pty';
 
 /** Resolve %N, %%, %+, %-, %string, %?string (or a bare job number) to a job. */
 export function resolveJobSpec(shell: Shell, spec: string | undefined): [number, BackgroundJob] | undefined {
@@ -31,8 +31,9 @@ function currentJobId(shell: Shell): number | undefined {
   return pick.length ? pick[pick.length - 1][0] : undefined;
 }
 
-function terminalTty(ctx: { terminal?: { tty?: TtySession } }): TtySession | undefined {
-  return ctx.terminal?.tty;
+/** The tty jobs take over: the page terminal's, or the pty of a shell running as a kernel process */
+function terminalTty(ctx: { terminal?: { tty?: TtySession }; shell?: { kernelTty?: { tty: ProcessTty } } }): TtySession | ProcessTty | undefined {
+  return ctx.terminal?.tty ?? ctx.shell?.kernelTty?.tty;
 }
 
 /** Text bash prints when a foreground job dies from a signal */
@@ -168,10 +169,7 @@ export const jobsCmd: Command = {
     const runningOnly = ctx.args.includes('-r');
     const stoppedOnly = ctx.args.includes('-s');
 
-    if (shell.backgroundJobs.size === 0) {
-      if (!pOnly) ctx.stdout = 'No background jobs.\n';
-      return 0;
-    }
+    if (shell.backgroundJobs.size === 0) return 0; // bash prints nothing
 
     const current = currentJobId(shell);
     const ids = [...shell.backgroundJobs.keys()];
@@ -228,7 +226,8 @@ export const fgCmd: Command = {
 
     if (job.pgid) {
       // Kernel job: hand it the terminal and SIGCONT it
-      const write = (s: string) => { if (ctx.terminal) ctx.terminal.writeOutput(s); else ctx.stdout += s; };
+      const term = ctx.terminal ?? ctx.shell.kernelTty;
+      const write = (s: string) => { if (term) term.writeOutput(s.replace(/\r?\n/g, '\r\n')); else ctx.stdout += s; };
       write(`${job.command}\n`);
       job.status = 'running';
       const tty = terminalTty(ctx);
@@ -308,9 +307,9 @@ export const waitCmd: Command = {
       return result.code;
     }
 
-    if (ctx.args.length > 0) {
+    if (ctx.args.some((a) => a !== '-f')) {
       // Wait for specific job(s) or pids
-      for (const arg of ctx.args) {
+      for (const arg of ctx.args.filter((a) => a !== '-f')) {
         let entry: [number, BackgroundJob] | undefined;
         if (arg.startsWith('%')) entry = resolveJobSpec(shell, arg);
         else {
@@ -329,6 +328,22 @@ export const waitCmd: Command = {
           continue;
         }
         const [jobId, job] = entry;
+        // With job control (a terminal, or set -m), wait also returns when a
+        // kernel job stops: 128 + the stop signal, the job stays (bash; -f waits for its end)
+        if (job.pgid && (ctx.terminal || shell.kernelTty || shell.options.has('monitor')) && !ctx.args.includes('-f')) {
+          await new Promise((r) => setTimeout(r, 0)); // a kill %N just before: let its SIGCONT land
+          if (job.status === 'stopped') { lastExitCode = 128 + 20; continue; }
+          const members = (job.pids ?? []).concat(job.pgid);
+          let unsub = () => {};
+          const stopped = new Promise<number>((res) => {
+            unsub = jobControl.subscribe((ev) => { if (ev.type === 'stopped' && members.includes(ev.pid)) res(128 + ev.sig); });
+          });
+          const r = await Promise.race([job.promise.then((c) => ({ c, done: true })), stopped.then((c) => ({ c, done: false }))]);
+          unsub();
+          lastExitCode = r.c;
+          if (r.done) shell.backgroundJobs.delete(jobId);
+          continue;
+        }
         lastExitCode = await job.promise;
         shell.backgroundJobs.delete(jobId);
       }

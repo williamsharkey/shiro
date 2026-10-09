@@ -558,6 +558,12 @@ export class Shell {
   exportedUnset = new Set<string>();
   /** When this shell process started (performance.now()), for `times` */
   startTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  /**
+   * An interactive shell running as a kernel process on a pty: job control on
+   * that pty (its jobs get their own process groups and the terminal; Ctrl-Z
+   * stops them), and where job messages go.
+   */
+  kernelTty?: { tty: import('./kernel/pty').ProcessTty; writeOutput: (s: string) => void };
   /** A fork of another shell (a subshell, or a new shell process) */
   isSubshell = false;
   /** In a subshell: the traps of the shell it was forked from, for a plain `trap` */
@@ -2316,7 +2322,8 @@ export class Shell {
             }
           }
           // An explicit redirect doesn't consume the enclosing loop's piped stdin
-          const hasPipeStdin = redirectInput === undefined && '__PIPE_STDIN' in this.env;
+          // (nor does `cmd | read`: the pipe from the stage before is its stdin)
+          const hasPipeStdin = redirectInput === undefined && i === 0 && '__PIPE_STDIN' in this.env;
           // read -u N with N opened on this command (read -u 3 3<file)
           const fdOpen = readFd >= 0 ? redirects.find(r => r.type === 'open' && r.mode === '<' && r.fd === readFd) : undefined;
           if (fdOpen) {
@@ -7383,7 +7390,8 @@ export class Shell {
       captureStderr,
       writeStdout: crlf(writeStdout),
       writeStderr: crlf(writeStderr),
-      terminal: ks ? undefined : terminal,
+      // (a shell on its own pty does job control there; one on pipes uses its fds)
+      terminal: this.kernelTty ?? (ks ? undefined : terminal),
       fds,
       command: pipeline.slice(i, last + 1).map(x => x.trim()).join(' | '),
       cwd: this.cwd,
@@ -7399,7 +7407,13 @@ export class Shell {
    * when the pipeline has anything else, so the in-page background path runs it.
    */
   private async launchKernelBackground(command: string, writeStdout: (s: string) => void, term: any): Promise<boolean> {
-    if (!term?.tty || /[;&]|\|\||\$\(|`/.test(command)) return false;
+    // A shell that is a kernel process: on its pty (an interactive sh in a
+    // screen window), or on its own fds when its output goes there (a script)
+    const ks = this.kernelStdio;
+    if (this.kernelTty) term = this.kernelTty;
+    else if (ks) term = undefined;
+    const onFds = !term && !!ks && writesTo(writeStdout, ks.out);
+    if ((!term?.tty && !onFds) || /[;&]|\|\||\$\(|`/.test(command)) return false;
     const { mayBeKernelProgram, resolveKernelProgram, runKernelPipeline } = _shellKernel ?? await loadShellKernel();
     const segments = this.parsePipeline(await this.expandWords(command, () => {}));
     const programs = [];
@@ -7415,9 +7429,16 @@ export class Shell {
       programs.push(prog);
     }
     if (programs.length === 0) return false;
+    if (onFds) await ks!.flush();
+    // Without job control a background job's stdin is /dev/null (POSIX 2.9.3.1); a script prints no [N] pid
+    const quiet = onFds && !this.options.has('monitor') && !this.interactiveFlag;
     await runKernelPipeline(this, programs, {
-      captureStdout: false, captureStderr: false, writeStdout, writeStderr: writeStdout,
+      captureStdout: false, captureStderr: false,
+      writeStdout: quiet ? () => {} : writeStdout, writeStderr: quiet ? () => {} : writeStdout,
+      stdin: onFds && !this.options.has('monitor') ? '' : undefined,
+      fds: onFds ? { 0: ks!.file(0), 1: ks!.file(1), 2: ks!.file(2) } : undefined,
       terminal: term, command, background: true, cwd: this.cwd, env: this.exportedEnv(),
+      inheritFds: onFds ? this.inheritableFds(writeStdout, writeStdout) : undefined,
     });
     const job = [...this.backgroundJobs.values()].pop();
     if (job?.pids?.length) this.env['!'] = String(job.pids[job.pids.length - 1]);
