@@ -438,6 +438,15 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    so Rust's `0u64.leading_zeros()` was 63 and xAI's grok CLI panicked.
    Interpreter, Blink's path JIT and the wasm JIT. Test:
    `fixtures/x86/bitscan.c` (native output).
+40. SSE4.1 and SSE4.2 (legacy encodings, `blink/sse4.c`): blendv*,
+   ptest, pmovsx/zx, pmuldq, pcmpeqq/gtq, packusdw, pmin/pmax*,
+   phminposuw, round*, blend*, pinsr*/pextr*, insertps/extractps,
+   dpps/dppd, mpsadbw, pcmpestri/estrm/istri/istrm, and crc32's r/m16
+   form; CPUID advertises SSE4.1/4.2 (x86-64-v2 with popcnt and cx16).
+   Bun (Claude Code's native build, opencode) and `GOAMD64=v2` Go need
+   them. They run in the interpreter (the wasm JIT calls them). Tests:
+   `fixtures/x86/sse4.c` (random operands, every immediate; hashes equal
+   to native), a `GOAMD64=v2` Go program.
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.
