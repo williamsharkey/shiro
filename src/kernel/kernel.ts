@@ -1706,7 +1706,7 @@ export class Kernel {
         case A.SYS_fsync: {
           const f = file(args[0]);
           if (!f) return -A.EBADF;
-          await f.sync?.();
+          try { await f.sync?.(); } catch (e) { return A.errnoFromError(e); }
           return 0;
         }
         case A.SYS_ftruncate: {

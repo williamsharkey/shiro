@@ -98,6 +98,7 @@ import {
 } from './seed-runtime-context';
 import { getShiroOrigin } from './utils/shiro-origin';
 import { logIsolationStatus } from './utils/isolation';
+import { requestPersistentStorage, storageInfo } from './storage';
 
 /**
  * Register a command in both the CommandRegistry (for execution) and
@@ -108,6 +109,9 @@ function registerCommand(commands: CommandRegistry, cmd: Command, sourcePath?: s
   registry.register(`commands/${cmd.name}`, cmd, sourcePath);
 }
 
+/** Ask for persistent storage once this much is stored (src/storage.ts). */
+const PERSIST_AFTER_BYTES = 64 << 20;
+
 async function main() {
   console.log(`[shiro] Starting... (build #${buildNumber.trim()})`);
   logIsolationStatus();
@@ -117,14 +121,13 @@ async function main() {
   const mode = uiMode();
   const desktopModule = mode === 'desktop' ? import('./desktop/index') : null;
 
-  // Request persistent storage so browser never evicts IndexedDB data (credentials, etc.)
-  navigator.storage?.persist?.().then(granted => {
-    if (granted) console.log('[shiro] Persistent storage granted');
-  }).catch(() => {});
-
   // Initialize filesystem
   const fs = new FileSystem();
   await fs.init();
+  // Persistent storage (no eviction under storage pressure) once the machine
+  // holds a lot: Firefox asks the user, so not for a page that stores little
+  fs.onBigWrite(PERSIST_AFTER_BYTES, () => void requestPersistentStorage('large write'));
+  void storageInfo().then(s => { if ((s.usage ?? 0) >= PERSIST_AFTER_BYTES) void requestPersistentStorage('stored data'); });
   const runtimeContext = (() => {
     if (window.parent === window) return defaultRuntimeContext();
     try {
@@ -539,6 +542,11 @@ async function main() {
 
   // Connect terminal to shell for interactive commands (vi, etc.)
   shell.setTerminal(terminal);
+  fs.onStorageFull((full) => {
+    terminal.term.writeln(full
+      ? '\r\n\x1b[31mshiro: browser storage is full: writes fail with "No space left on device" until files are deleted (apt clean, rm).\x1b[0m'
+      : '\r\n\x1b[32mshiro: storage is no longer full; pending writes are saved.\x1b[0m');
+  });
   desktop?.attachMainTerminal(terminal);
   // Debian GUI apps (xterm, GTK, Qt) in the dock, installed on first click (src/gui/apps.ts)
   // Registered once the page is idle: their dock icons aren't needed for the first prompt

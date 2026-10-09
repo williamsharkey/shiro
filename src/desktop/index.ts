@@ -498,6 +498,10 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   const openSpotlight = () => { void import('./spotlight').then(m => m.toggleSpotlight(ctx)); };
   searchBtn.addEventListener('click', (e) => { e.stopPropagation(); openSpotlight(); });
 
+  deps.fs.onStorageFull((full) => {
+    if (full) showToast(root, '<b>Storage is full</b><div class="sd-small">The browser refused to save more. Delete files (or apt clean) to free space; Settings → Storage shows usage.</div>', 12000);
+  });
+
   return {
     wm,
     ctx,
