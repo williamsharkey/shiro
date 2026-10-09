@@ -123,6 +123,15 @@ async function main() {
   const profile = activeProfile();
   const mode = uiMode();
   const desktopModule = mode === 'desktop' ? import('./desktop/index') : null;
+  // Its fonts download alongside (the desktop appears once they have: one draw)
+  if (desktopModule) {
+    for (const f of ['inter-latin-wght', 'jetbrains-mono-latin-wght']) {
+      const l = document.createElement('link');
+      l.rel = 'preload'; l.as = 'font'; l.type = 'font/woff2'; l.crossOrigin = 'anonymous';
+      l.href = `/fonts/${f}.woff2`;
+      document.head.appendChild(l);
+    }
+  }
 
   // Initialize filesystem
   const fs = new FileSystem();
@@ -551,7 +560,8 @@ async function main() {
   // Create terminal
   performance.mark('shiro:terminal:start');
   const terminal = new ShiroTerminal(container, shell);
-  document.getElementById('boot-mark')?.remove();
+  // The desktop removes the boot mark when it appears (one draw)
+  if (!desktop) document.getElementById('boot-mark')?.remove();
 
   // Connect terminal to shell for interactive commands (vi, etc.)
   shell.setTerminal(terminal);
@@ -563,11 +573,10 @@ async function main() {
   desktop?.attachMainTerminal(terminal);
   // The profile's banner: the desktop sets its compact welcome; 'hud' keeps the full one
   if (profile.banner === 'hud') terminal.banner = undefined;
-  // Debian GUI apps (xterm, GTK, Qt) in the dock, installed on first click (src/gui/apps.ts)
-  // Registered once the page is idle: their dock icons aren't needed for the first prompt
+  // Debian GUI apps (xterm, GTK, Qt) in the dock, installed on first click (src/gui/apps.ts).
+  // The desktop appears with them in place (holdReveal): the dock never fills in late
   if (desktop) {
-    const idle = (window as any).requestIdleCallback ?? ((f: () => void) => setTimeout(f, 300));
-    idle(() => void import('./gui/desktop-apps').then(m => m.registerGuiApps(desktop!.wm, fs, kernel)).catch(e => console.warn('[gui]', e)), { timeout: 2000 });
+    desktop.holdReveal(import('./gui/desktop-apps').then(m => m.registerGuiApps(desktop!.wm, fs, kernel)).catch(e => console.warn('[gui]', e)));
   }
   performance.mark('shiro:terminal:ready');
 

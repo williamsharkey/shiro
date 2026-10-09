@@ -159,6 +159,26 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### unix/desktop 5 — one draw at load
+
+The desktop is built hidden and appears in one frame once fonts, the dock's
+contents (installed packages, Debian GUI apps), the phone layer and the
+session are in place (docs/DESKTOP.md "Loading"). The fonts are preloaded as
+soon as main.ts picks the desktop, and the GUI app registration moved from
+idle time to boot, behind the reveal. `tests/browser/no-reflow.mjs`: CLS 0
+and no element moving after the first visible frame, desktop and iPhone,
+light and dark (before: CLS 0.0017, the window, menu bar items and all dock
+icons moved; hovering an icon moved every other one). The first visible
+desktop frame came at 270–290 ms after navigation in those runs (local
+server).
+
+`node bench/ab.mjs origin/unix/integration --quick --suites boot --rounds 4`
+(6619ea3 vs this): no timing metric changed; transfer +1 KiB, DOM nodes
+352 → 346, renderer RSS 242 → 217 MiB (−10%, all 4 rounds; the base lacks
+this branch's phone and otter commits as well, and the cause wasn't traced).
+The bench's first-prompt metric reads the terminal, not the screen, so it
+doesn't see the reveal; `shiro:desktop:revealed` marks that.
+
 ### unix/desktop 4 — phones: key bar, visual viewport, dock stacks
 
 The touch layer (`src/desktop/mobile.ts`: extra-keys bar, `visualViewport`

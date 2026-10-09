@@ -145,6 +145,34 @@ destroyed), and the next Terminal window adopts it again.
   `public/fonts/`, SIL OFL, license files next to them). Only the desktop
   loads them.
 
+## Loading: one draw
+
+The first frame of the desktop is its final layout; nothing in the menu bar,
+dock or windows moves afterwards unless the user acts.
+
+- `bootDesktop` builds the desktop hidden (`.sd-booting`: `visibility:
+  hidden`, transitions and animations off). The page shows its background
+  and, on branded profiles, the boot mark (server.mjs inlines the brand's
+  SVG favicon as `#boot-mark`; light or dark from the system's scheme).
+- It appears in one frame once everything that would change the layout has
+  settled: the Inter and JetBrains Mono fonts (preloaded by main.ts as soon
+  as the desktop is chosen; `font-display: block`; if the terminal was
+  measured before JetBrains Mono arrived it is re-measured first), the
+  installed packages (dock badges, optional programs), the Debian GUI apps
+  (`registerGuiApps` resolves once installed apps are registered), the phone
+  layer (`mobile.ts`) and last session's windows (opened without their
+  animation; the main terminal keeps focus). Anything that takes longer than
+  1.5 s (`REVEAL_CAP_MS`) no longer holds it up.
+- `Desktop.holdReveal(promise)` adds a wait (main.ts uses it for the GUI
+  apps). The mark `shiro:desktop:revealed` records when it appeared.
+- Dock hover magnifies with `transform` only: each icon keeps its slot, so
+  neighbours never move.
+- `tests/browser/no-reflow.mjs` checks it in Chromium at desktop and iPhone
+  sizes, light and dark: cumulative layout shift 0, every menu bar, dock and
+  window element's rect the same from the first visible frame to the
+  settled page, and no neighbour moving while each dock icon is hovered.
+  `--shots` writes screencast strips (docs/screenshots/load-frames-*.png).
+
 ## Window manager API
 
 The page exposes it as `window.__shiro.desktop` and `globalThis.__shiroDesktop`.
