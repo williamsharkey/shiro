@@ -18,7 +18,7 @@ describe('seed runtime context', () => {
     shell = env.shell;
     fs = env.fs;
     shell.commands.register(hcCmd);
-    delete (window as any).__shiro;
+    delete (window as any).__tabcomputer;
   });
 
   it('buildNeoMd tells seeded Claude instances to start with hc outer', () => {
@@ -62,7 +62,7 @@ describe('seed runtime context', () => {
   });
 
   it('hc suggests hc outer when runtime context says a host bridge is available', async () => {
-    (window as any).__shiro = {
+    (window as any).__tabcomputer = {
       runtimeContext: {
         hcOuterAvailable: true,
       },

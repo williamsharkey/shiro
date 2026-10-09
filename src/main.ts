@@ -1,5 +1,4 @@
 // Legacy shiro-… storage keys copied to their tabcomputer-… names, before anything reads them
-import './boot-migrate';
 // Console capture - must be first before any other code runs (bounded ring buffer)
 import { queryConsole, clearConsoleLog } from './console-log';
 
@@ -587,7 +586,7 @@ async function main() {
   });
 
   // Expose global for test automation and programmatic access
-  (window as any).__shiro = {
+  (window as any).__tabcomputer = {
     fs,
     shell,
     terminal,
@@ -605,8 +604,6 @@ async function main() {
     closeSplit: closeSplitView, // Close split pane from browser console
     lastSeedGif: null as Uint8Array | null, // Last generated seed GIF bytes (for demos/drag)
   };
-  // tabcomputer's name for the same page API (window.__shiro stays: scripts, the bench and the engine use it)
-  (window as any).__tabcomputer = (window as any).__shiro;
 
   // OAuth callback bridge: receive auth codes from /oauth/callback popup
   const onOAuthCallback = (event: MessageEvent) => {

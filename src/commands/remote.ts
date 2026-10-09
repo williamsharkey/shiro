@@ -107,7 +107,7 @@ interface RemoteSession {
 declare global {
   interface Window {
     __shiroRemoteSession?: RemoteSession;
-    __shiro?: any;
+    __tabcomputer?: any;
   }
 }
 
@@ -116,7 +116,7 @@ declare global {
  * Shares the same filesystem and commands as the main shell.
  */
 function createShadowShell(): Shell {
-  const { fs, commands } = window.__shiro;
+  const { fs, commands } = window.__tabcomputer;
   return new Shell(fs, commands);
 }
 
@@ -130,7 +130,7 @@ function logActivity(session: RemoteSession, type: LogType, message: string) {
   } else {
     session.activityBuffer.push({ type, message });
     // Notify HUD of activity
-    const terminal = (window as any).__shiro?.terminal;
+    const terminal = (window as any).__tabcomputer?.terminal;
     terminal?.updateHudRemoteActivity?.(true);
   }
 }
@@ -164,7 +164,7 @@ export function openRemotePanel(): void {
   session.activityBuffer = [];
 
   // Reset HUD activity dot
-  const terminal = (window as any).__shiro?.terminal;
+  const terminal = (window as any).__tabcomputer?.terminal;
   terminal?.updateHudRemoteActivity?.(false);
 
   // Wire panel input → data channel
@@ -244,7 +244,7 @@ async function handleRemoteCommand(session: RemoteSession, message: string): Pro
       }
 
       case 'read': {
-        const fs = window.__shiro?.fs;
+        const fs = window.__tabcomputer?.fs;
         if (!fs) {
           return JSON.stringify({ type: 'error', error: 'Filesystem not available', requestId });
         }
@@ -255,7 +255,7 @@ async function handleRemoteCommand(session: RemoteSession, message: string): Pro
       }
 
       case 'write': {
-        const fs = window.__shiro?.fs;
+        const fs = window.__tabcomputer?.fs;
         if (!fs) {
           return JSON.stringify({ type: 'error', error: 'Filesystem not available', requestId });
         }
@@ -266,7 +266,7 @@ async function handleRemoteCommand(session: RemoteSession, message: string): Pro
       }
 
       case 'list': {
-        const fs = window.__shiro?.fs;
+        const fs = window.__tabcomputer?.fs;
         if (!fs) {
           return JSON.stringify({ type: 'error', error: 'Filesystem not available', requestId });
         }

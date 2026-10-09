@@ -146,7 +146,7 @@ function installClipboardMock() {
   });
 }
 
-// ─── __shiro Mock (for seed gif terminal access) ─────────────
+// ─── __tabcomputer Mock (for seed gif terminal access) ─────────────
 
 function installShiroMock() {
   const mockBuffer = {
@@ -159,7 +159,7 @@ function installShiroMock() {
       }),
     }),
   };
-  (window as any).__shiro = {
+  (window as any).__tabcomputer = {
     terminal: {
       term: {
         cols: 40, rows: 10,
@@ -264,7 +264,7 @@ describe('seed gif — GIF export + import roundtrip', () => {
   afterEach(() => {
     teardownDownloadCapture();
     localStorage.clear();
-    delete (window as any).__shiro;
+    delete (window as any).__tabcomputer;
   });
 
   it('should download a GIF with embedded seed data', async () => {

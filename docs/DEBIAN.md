@@ -50,7 +50,7 @@ node (`FSNode.lazy`: mode, size, symlink target, no bytes) in one batch, so
 the whole tree is visible at once: `ls`, `stat`, PATH lookups and dpkg's
 database all work immediately. The first read of a file (`readFile`, or the
 kernel opening it for a program) fetches its chunk, checks the sha256, keeps
-the compressed chunk in the Cache API (`shiro-debian-chunks-v1`) and stores
+the compressed chunk in the Cache API (`tabcomputer-debian-chunks-v1`) and stores
 the file's bytes in IndexedDB like any other file. A warm boot needs no
 network: everything read before is a normal file, and boot only reads
 `/var/lib/shiro/rootfs.json` to re-attach the lazy loader. Conflicts with

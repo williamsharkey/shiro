@@ -23,7 +23,6 @@ import { BufferFile, DevNull } from '../kernel/fd';
 import { type KStat, S_IFIFO, shellExitCode, SIGKILL, CH_DATA, CH_STATE, CH_SYSNO, CH_ARGS, CH_NARGS, CH_RESULT, CH_SIGNAL, STATE_REQUEST, STATE_REPLY, ESRCH } from '../kernel/abi';
 import { createChannelBuffer } from '../kernel/channel';
 import type { Process } from '../kernel/process';
-import { envVar } from '../env-alias';
 
 export interface BlinkRunOptions {
   fs: FileSystem;
@@ -67,7 +66,7 @@ function defaultAssetBase(): string {
     const nodeFs = p.getBuiltinModule('fs');
     const nodePath = p.getBuiltinModule('path');
     const nodeUrl = p.getBuiltinModule('url');
-    const candidates = [envVar(p.env, 'BLINK_ASSETS'), 'public/engines/blink', '../public/engines/blink'].filter(Boolean);
+    const candidates = [p.env?.TABCOMPUTER_BLINK_ASSETS, 'public/engines/blink', '../public/engines/blink'].filter(Boolean);
     for (const c of candidates) {
       const dir = nodePath.resolve(p.cwd(), c);
       if (nodeFs.existsSync(nodePath.join(dir, 'host.mjs'))) return nodeUrl.pathToFileURL(dir).href + '/';
@@ -134,8 +133,8 @@ export function blinkRunner(path: string, restore?: ArrayBuffer): Runner {
       wireWorker(p, w, kernel, pool);
       return w;
     }, {
-      // SHIRO_BLINK_DEBUG=1: the worker logs kernel syscalls and Blink's own messages to the console
-      startData: { path, moduleUrl: defaultAssetBase() + 'blink.mjs', mounts, pool, restore, debug: envVar(proc.env, 'BLINK_DEBUG') === '1' },
+      // TABCOMPUTER_BLINK_DEBUG=1: the worker logs kernel syscalls and Blink's own messages to the console
+      startData: { path, moduleUrl: defaultAssetBase() + 'blink.mjs', mounts, pool, restore, debug: proc.env?.TABCOMPUTER_BLINK_DEBUG === '1' },
     });
     return runner(proc, kernel);
   };

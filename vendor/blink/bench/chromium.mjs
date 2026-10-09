@@ -23,23 +23,23 @@ const page = await browser.newPage();
 page.on('console', (m) => { const t = m.text(); if (/blink|error/i.test(t) && !/sys [01][(]/.test(t) && !/favicon/.test(t)) console.log('[console]', t.slice(0, 300)); });
 page.on('pageerror', (e) => console.log('[pageerror]', e.message));
 await page.goto(url);
-await page.waitForFunction(() => window.__shiro && window.__shiro.shell, null, { timeout: 60000 });
+await page.waitForFunction(() => window.__tabcomputer && window.__tabcomputer.shell, null, { timeout: 60000 });
 console.log('crossOriginIsolated =', await page.evaluate(() => crossOriginIsolated));
 for (const [name, path] of Object.entries(bins)) {
   if (!existsSync(path)) continue;
   const b64 = readFileSync(path).toString('base64');
   await page.evaluate(async ([name, b64]) => {
     const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-    await window.__shiro.fs.mkdir('/home/user/x', { recursive: true }).catch(() => {});
-    await window.__shiro.fs.writeFile('/home/user/x/' + name, bytes, { mode: 0o755 });
+    await window.__tabcomputer.fs.mkdir('/home/user/x', { recursive: true }).catch(() => {});
+    await window.__tabcomputer.fs.writeFile('/home/user/x/' + name, bytes, { mode: 0o755 });
   }, [name, b64]);
 }
-await page.evaluate(() => window.__shiro.fs.writeFile('/home/user/x/input.txt', 'hi from browser\n'));
+await page.evaluate(() => window.__tabcomputer.fs.writeFile('/home/user/x/input.txt', 'hi from browser\n'));
 for (const cmd of cmds) {
   const r = await page.evaluate(async (cmd) => {
     let out = '';
     const t0 = performance.now();
-    const code = await window.__shiro.shell.execute('cd /home/user/x && ' + cmd, (s) => { out += s; }, (s) => { out += s; });
+    const code = await window.__tabcomputer.shell.execute('cd /home/user/x && ' + cmd, (s) => { out += s; }, (s) => { out += s; });
     return { code, out, ms: Math.round(performance.now() - t0) };
   }, cmd);
   console.log(`=== ${cmd}  exit=${r.code}  ${r.ms}ms\n${r.out.trim().split('\n').slice(0, 8).join('\n')}`);

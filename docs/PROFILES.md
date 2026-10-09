@@ -79,7 +79,7 @@ product needs them different:
 - `getShiroOrigin()` (src/utils/shiro-origin.ts): the API/proxy origin for
   embedded and seeded pages.
 - The relay's default allowed origins in server.mjs (`*.shiro.computer`).
-  Each deployment sets `TABCOMPUTER_TCP_ORIGINS` (or `SHIRO_TCP_ORIGINS`) in its server.env.
+  Each deployment sets `TABCOMPUTER_TCP_ORIGINS` (or `TABCOMPUTER_TCP_ORIGINS`) in its server.env.
 - The HUD's displayed host (src/terminal.ts) shows `*.shiro.computer`
   subdomains specially. That is display, not behavior.
 
@@ -92,7 +92,7 @@ The boundary above is meant to make a split mechanical:
    it takes a profile object at boot (`setActiveProfile`) and a profile list at
    server start (`profileFor(host, override, profiles)` already takes one).
 2. **A product as a thin app**: its `profile.json`, `server.env`, deploy
-   scripts (`deploy/tabcomputer/`, `deploy.sh`), its brand assets, and an entry
+   scripts (`deploy/tabcomputer/`; shiro.computer's `deploy.sh` is in its repo), its brand assets, and an entry
    that imports the engine, calls `setActiveProfile(profile)` and boots.
 3. **What has to move with it**: `public/*.html` marketing pages (renamed to tabcomputer; shiro.computer's own copies are in its repo),
    `deploy/` (tabcomputer's), and the tests that pin a product's look
@@ -122,38 +122,37 @@ New command names, with the old ones kept: `tabcomputer` (API keys,
 `shiro-alternatives`; `--set NAME tabcomputer|debian`, and `shiro` is still
 accepted as the side).
 
-**Renamed with a migration (user data).** `src/legacy-storage.ts`, tested by
-`legacy-storage.test.ts`:
+**Renamed outright, no migration (a hard cut).** tabcomputer.com had only test
+data, so nothing is carried over from the old names:
 
-| Old | New | How |
-| --- | --- | --- |
-| localStorage/sessionStorage `shiro-*`, `shiro_*` (`shiro_github_token`, `shiro-ui`, `shiro-desktop-session`, `shiro-profile`, …) | `tabcomputer-*`, `tabcomputer_*` | copied at boot (`src/boot-migrate.ts`, the first import in main.ts) when the new key doesn't exist. Old keys stay, so a tab still on an old build keeps working. Runs every boot and never overwrites. |
-| IndexedDB `shiro-fs` (the filesystem) | `tabcomputer-fs` | copied once under a Web Lock, record count checked, then `shiro-fs` is deleted. If the copy fails (quota), the partial copy is dropped and the page keeps using `shiro-fs`. |
-| `window.__shiro` | `window.__tabcomputer` | the same object under both names |
-| `SHIRO_*` environment variables | `TABCOMPUTER_*` | the new name wins and the old one still works: `aliasEnv()` in server.mjs, `envVar()` (src/env-alias.ts) in the page, and the test setup |
-| `/opt/shiro` on a host | `/opt/tabcomputer` | server.mjs uses `/opt/shiro` when only it exists |
+| Old | New |
+| --- | --- |
+| localStorage/sessionStorage `shiro-*`, `shiro_*` (`shiro_github_token`, `shiro-ui`, `shiro-desktop-session`, `shiro-profile`, …) | `tabcomputer-*`, `tabcomputer_*` |
+| IndexedDB `shiro-fs` (the filesystem), `shiro-x86-cache`, `shiro-wasm-cache`, `shiro-pkg-cache`, `shiro-cc-cache` | `tabcomputer-fs`, `tabcomputer-x86-cache`, … |
+| Cache Storage `shiro-debian-chunks-v1`, `shiro-debs-v1` | `tabcomputer-debian-chunks-v1`, `tabcomputer-debs-v1` |
+| `window.__shiro`, `globalThis.__shiroKernel` | `window.__tabcomputer`, `globalThis.__tabcomputerKernel` |
+| `SHIRO_*` environment variables (server, page, tests, scripts, bench) | `TABCOMPUTER_*` |
+| `/opt/shiro` on a host | `/opt/tabcomputer` |
 
 **Left as they are, and why:**
 
-- Re-downloadable caches. These are the IndexedDB `shiro-x86-cache`, `shiro-wasm-cache`, `shiro-pkg-cache` and
-  `shiro-cc-cache`, and the Cache Storage `shiro-debian-chunks-v1` and `shiro-debs-v1`. Renaming
-  them would only force a re-download and leave the old copies taking quota.
 - Names inside users' installed Debian systems. These are `/var/lib/shiro/*` (`alternatives.json`,
   `rootfs.json`) and the kernel programs `shiro-apt-method`, `shiro-apt-store` and
   `shiro-dpkg-preconfigure`, which installed files name in `#!` lines. Renaming them needs a
   rootfs migration.
-- Names compiled into the Blink build, such as the `SHIRO_BLINK_CRASH` and `SHIRO_BLINK_PROBE` guest variables
-  and `shiro-net.js`. They change with the next `vendor/blink/build.sh`.
-  `TABCOMPUTER_BLINK_STRACE` and `TABCOMPUTER_BLINK_DEBUG` already work.
+- Names compiled into wasm builds: Blink's `SHIRO_BLINK_CRASH` and `SHIRO_BLINK_PROBE`
+  guest variables (`vendor/blink/patches`, `shiro-net.js`, `shiro-kernel.js`), and
+  `SHIRO_LLVM_WASM` in the clang driver. They change with the next
+  `vendor/blink/build.sh` or LLVM package build.
 - Wire and page-internal names: postMessage types, BroadcastChannel names
   (`shiro-oauth-callback`), DOM ids and CSS classes (`#shiro-panes`),
-  `__shiroKernel`, and the `shiro://cmd/` terminal links. Seeded and embedded pages and
-  older tabs talk to each other with them.
-- The `shiro-mcp` npm package and its `SHIRO_SIGNALING_URL`, which is published separately.
+  the other `__shiro…` page globals (`__shiroDesktop`, `__shiroNet`, …), and the
+  `shiro://cmd/` terminal links.
+- The `shiro-mcp` package name (it now reads `TABCOMPUTER_SIGNALING_URL`).
 - Infrastructure URLs on shiro.computer: `DEFAULT_MIRROR`, `/bins`, the
   WebRTC signaling server and the GitHub OAuth app. They are real services, which
   tabcomputer.com mirrors where it serves them itself.
-- Engine internals: class and file names (`ShiroTerminal`, `shell.ts`,
+- Engine internals: TS constants such as `SHIRO_VERSION`, class and file names (`ShiroTerminal`, `shell.ts`,
   `shiro-cmds.ts`, `shiro-origin.ts`), the `src/kernel` API, the
   `tests/tests/shiro-vitest/` directory and the `@shiro/` import alias. They are
   invisible to users. Renaming them is churn that conflicts with every

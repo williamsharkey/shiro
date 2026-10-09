@@ -1,11 +1,6 @@
 import 'fake-indexeddb/auto';
 import { parseHTML } from 'linkedom';
 
-// TABCOMPUTER_* test switches (e.g. TABCOMPUTER_DEBIAN_NET=1) are the new names of SHIRO_* ones
-for (const [k, v] of Object.entries(process.env)) {
-  if (k.startsWith('TABCOMPUTER_') && v !== undefined) process.env['SHIRO_' + k.slice('TABCOMPUTER_'.length)] = v;
-}
-
 // Suppress known unhandled rejections from CLI force-exit patterns running in shim.
 // CLI's _J6() does: process.exit → catch → process.kill → catch → throw "unreachable"
 // Both throws are caught by try/catch, so "unreachable" always fires in a deferred async

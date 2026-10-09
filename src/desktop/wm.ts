@@ -4,7 +4,7 @@
  * from the display server on unix/gui). Contract: docs/DESKTOP.md. Keep it
  * additive: new options and methods are fine, renames and removals are not.
  *
- * The page reaches it as `window.__shiro.desktop` (also
+ * The page reaches it as `window.__tabcomputer.desktop` (also
  * `globalThis.__shiroDesktop`), or by importing `getDesktop()`.
  *
  * Content kinds a window can hold:

@@ -1,7 +1,7 @@
 /**
  * Terminal windows: the real Shiro terminal (ShiroTerminal + Shell, each with
  * its own pty) in desktop windows, with tabs. The page's main terminal
- * (`window.__shiro.terminal`) lives in the first window; closing it parks the
+ * (`window.__tabcomputer.terminal`) lives in the first window; closing it parks the
  * terminal instead of destroying it, and the next Terminal window adopts it.
  */
 

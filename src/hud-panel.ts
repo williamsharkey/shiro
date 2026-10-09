@@ -279,7 +279,7 @@ export function createHudPanel(shell: Shell): HudPanel {
  * the pattern used by shiro:// link handlers in terminal.ts.
  */
 function runInTerminal(shell: Shell, cmd: string) {
-  const term = (window as any).__shiro?.terminal as any;
+  const term = (window as any).__tabcomputer?.terminal as any;
   if (!term?.term) return;
   term.term.writeln('');
   shell.execute(

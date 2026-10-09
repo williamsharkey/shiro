@@ -86,15 +86,14 @@ npm test                               # the vitest suite
 The page runs as a *profile*, which sets its UI, branding and defaults. tabcomputer is the default
 profile. The engine also serves shiro.computer, the terminal-first edition, as the `shiro`
 profile ([docs/PROFILES.md](docs/PROFILES.md)). Server options are `TABCOMPUTER_*` environment
-variables. The older `SHIRO_*` names still work.
+variables.
 
 Contributors and coding agents: start with [AGENTS.md](AGENTS.md).
 
 ## History
 
 tabcomputer grew out of [Shiro](https://shiro.computer), a browser Unix shell, and keeps its
-full history. Data saved under Shiro's names (the `shiro-fs` database, `shiro-*` settings)
-moves to tabcomputer's names on first boot.
+full history.
 
 ## License
 

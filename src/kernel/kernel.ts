@@ -2447,9 +2447,9 @@ let singleton: Kernel | undefined;
 /** The page's kernel (created on first use; main.ts attaches the filesystem and shell). */
 export function getKernel(): Kernel {
   const w = typeof window !== 'undefined' ? (window as any) : undefined;
-  if (w?.__shiroKernel) return w.__shiroKernel;
+  if (w?.__tabcomputerKernel) return w.__tabcomputerKernel;
   if (!singleton) singleton = new Kernel();
-  if (w) w.__shiroKernel = singleton;
+  if (w) w.__tabcomputerKernel = singleton;
   return singleton;
 }
 

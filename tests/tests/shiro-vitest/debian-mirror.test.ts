@@ -32,8 +32,8 @@ beforeAll(async () => {
     cwd: ROOT, stdio: 'ignore',
     env: {
       ...process.env, PORT: String(PORT), STATIC_DIR: resolve(ROOT, 'public'),
-      SHIRO_DEBIAN_MIRRORS: `deb.debian.org=${up}`, SHIRO_DEBIAN_SNAPSHOT: `${up}/snap/`,
-      SHIRO_DEBIAN_CACHE: mkdtempSync(join(tmpdir(), 'shiro-mirror-test-')),
+      TABCOMPUTER_DEBIAN_MIRRORS: `deb.debian.org=${up}`, TABCOMPUTER_DEBIAN_SNAPSHOT: `${up}/snap/`,
+      TABCOMPUTER_DEBIAN_CACHE: mkdtempSync(join(tmpdir(), 'shiro-mirror-test-')),
     },
   });
   for (let i = 0; i < 100; i++) {

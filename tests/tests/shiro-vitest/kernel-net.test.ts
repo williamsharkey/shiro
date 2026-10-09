@@ -3,7 +3,7 @@
  *
  * A harness process (fixtures/tcp-relay-harness.mjs) runs a TCP echo server,
  * relays built from server.mjs's createTcpRelay, and server.mjs itself with
- * SHIRO_TCP_RELAY=1. The kernel side runs here with Node's WebSocket/fetch.
+ * TABCOMPUTER_TCP_RELAY=1. The kernel side runs here with Node's WebSocket/fetch.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';

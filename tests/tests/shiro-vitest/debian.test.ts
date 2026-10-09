@@ -3,7 +3,7 @@
  * Debian's own dynamically linked programs in Blink, the overlay, sudo.
  *
  * The apt end-to-end case needs the network (the mirror route of server.mjs
- * proxies deb.debian.org) and a few minutes: SHIRO_DEBIAN_NET=1 enables it.
+ * proxies deb.debian.org) and a few minutes: TABCOMPUTER_DEBIAN_NET=1 enables it.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { existsSync } from 'node:fs';
@@ -125,23 +125,23 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
   }, 120000);
 });
 
-const net = process.env.SHIRO_DEBIAN_NET === '1';
+const net = process.env.TABCOMPUTER_DEBIAN_NET === '1';
 
-describe.skipIf(!haveRootfs || !net)('Debian apt end to end (SHIRO_DEBIAN_NET=1)', () => {
+describe.skipIf(!haveRootfs || !net)('Debian apt end to end (TABCOMPUTER_DEBIAN_NET=1)', () => {
   let srv: ChildProcess;
   const PORT = 5393;
   beforeAll(async () => {
     srv = spawn('node', ['server.mjs'], {
       cwd: ROOT, stdio: 'ignore',
-      env: { ...process.env, PORT: String(PORT), STATIC_DIR: resolve(ROOT, 'public'), SHIRO_DEBIAN_CACHE: resolve(ROOT, '.debian-build/mirror-cache') },
+      env: { ...process.env, PORT: String(PORT), STATIC_DIR: resolve(ROOT, 'public'), TABCOMPUTER_DEBIAN_CACHE: resolve(ROOT, '.debian-build/mirror-cache') },
     });
     for (let i = 0; i < 50; i++) {
       try { if ((await fetch(`http://127.0.0.1:${PORT}/health`)).ok) break; } catch { /* starting */ }
       await new Promise((r) => setTimeout(r, 200));
     }
-    process.env.SHIRO_DEBIAN_MIRROR = `http://127.0.0.1:${PORT}/debian/mirror/`;
+    process.env.TABCOMPUTER_DEBIAN_MIRROR = `http://127.0.0.1:${PORT}/debian/mirror/`;
   });
-  afterAll(() => { srv?.kill(); delete process.env.SHIRO_DEBIAN_MIRROR; });
+  afterAll(() => { srv?.kill(); delete process.env.TABCOMPUTER_DEBIAN_MIRROR; });
 
   it('sudo apt update && sudo apt install hello jq', async () => {
     const { shell } = await createTestShell();

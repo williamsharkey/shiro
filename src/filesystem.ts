@@ -1,4 +1,3 @@
-import { fileSystemDbName } from './legacy-storage';
 import { activeProfile } from './profile';
 
 function globPatternToRegex(pattern: string, base: string, caseInsensitive?: boolean): RegExp {
@@ -51,6 +50,7 @@ function globPatternToRegex(pattern: string, base: string, caseInsensitive?: boo
   return new RegExp(regex, caseInsensitive ? 'i' : undefined);
 }
 
+const DB_NAME = 'tabcomputer-fs';
 const DB_VERSION = 1;
 const STORE_NAME = 'files';
 
@@ -422,13 +422,6 @@ function baseEtcFiles(): Record<string, string> {
   };
 }
 
-/** These files as the build before the rename made them: still untouched, they are rewritten. */
-const LEGACY_ETC_FILES: Record<string, string> = {
-  '/etc/passwd': 'root:x:0:0:root:/root:/bin/sh\nuser:x:1000:1000:tabcomputer User:/home/user:/bin/sh\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n',
-  '/etc/hostname': 'shiro\n',
-  '/etc/hosts': '127.0.0.1\tlocalhost shiro\n::1\tlocalhost ip6-localhost ip6-loopback\n',
-};
-
 /** Run fn as a macrotask without timer clamping/throttling (MessageChannel),
  *  falling back to setTimeout where there is none. */
 const scheduleMacrotask: (fn: () => void) => void = (() => {
@@ -566,10 +559,7 @@ export class FileSystem {
     // The account database Unix programs look themselves up in (getpwuid:
     // ssh, git, vim's ~ expansion). The kernel runs everything as uid 1000.
     for (const [path, text] of Object.entries(baseEtcFiles())) {
-      const have = await this._get(path);
-      const legacy = LEGACY_ETC_FILES[path];
-      const untouched = have?.content && legacy !== undefined && legacy !== text && new TextDecoder().decode(have.content) === legacy;
-      if (!have || untouched) await this._put(this._makeNode(path, 'file', new TextEncoder().encode(text)));
+      if (!(await this._get(path))) await this._put(this._makeNode(path, 'file', new TextEncoder().encode(text)));
     }
   }
 
@@ -645,14 +635,10 @@ export class FileSystem {
     document.addEventListener('freeze', flush);
   }
 
-  /** The database name, decided once per page (shared by every FileSystem). */
-  private static _dbName: Promise<string> | null = null;
-
   private _openDb(): Promise<IDBDatabase> {
     if (this._opening) return this._opening;
-    // tabcomputer-fs; the first time, files under the old name move into it (legacy-storage.ts)
-    this._opening = (FileSystem._dbName ??= fileSystemDbName()).then((name) => new Promise<IDBDatabase>((resolve, reject) => {
-      const req = indexedDB.open(name, DB_VERSION);
+    this._opening = new Promise<IDBDatabase>((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
       req.onupgradeneeded = () => {
         const db = req.result;
         if (!db.objectStoreNames.contains(STORE_NAME)) {
@@ -671,7 +657,7 @@ export class FileSystem {
       };
       req.onerror = () => reject(req.error);
       req.onblocked = () => console.warn('[fs] IndexedDB open blocked by another connection');
-    })).finally(() => { this._opening = null; });
+    }).finally(() => { this._opening = null; });
     return this._opening;
   }
 

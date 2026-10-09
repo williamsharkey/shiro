@@ -745,7 +745,7 @@ async function execSeedGif(ctx: CommandContext): Promise<number> {
     const compressed = await gzipCompress(new TextEncoder().encode(seedEnvelope));
 
     // Capture terminal and add overlay
-    const term = (window as any).__shiro?.terminal?.term;
+    const term = (window as any).__tabcomputer?.terminal?.term;
     if (!term) {
       ctx.stderr = 'seed gif: terminal not available\n';
       return 1;
@@ -757,9 +757,9 @@ async function execSeedGif(ctx: CommandContext): Promise<number> {
     ctx.stdout += 'Encoding GIF...\n';
     const gifBytes = encodeGIF(canvas, compressed);
 
-    // Store on __shiro for demo/drag access
-    if (typeof window !== 'undefined' && (window as any).__shiro) {
-      (window as any).__shiro.lastSeedGif = gifBytes;
+    // Store on __tabcomputer for demo/drag access
+    if (typeof window !== 'undefined' && (window as any).__tabcomputer) {
+      (window as any).__tabcomputer.lastSeedGif = gifBytes;
     }
 
     // Download
@@ -963,9 +963,9 @@ async function execSeedHtml(ctx: CommandContext): Promise<number> {
   }
   var attempts=0;
   var timer=setInterval(async function(){
-    if(window.__shiro||attempts++>50){
+    if(window.__tabcomputer||attempts++>50){
       clearInterval(timer);
-      if(window.__shiro){
+      if(window.__tabcomputer){
         window.postMessage({
           type:'shiro-seed-v2',
           ndjson:await _dc('${compressedFsB64}'),

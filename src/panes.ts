@@ -9,7 +9,7 @@
  * extra pane's prompt closes it. The layout (not the content) is saved in
  * localStorage and rebuilt on reload with fresh shells.
  *
- * The first pane is always #terminal, the main terminal (window.__shiro.terminal).
+ * The first pane is always #terminal, the main terminal (window.__tabcomputer.terminal).
  */
 
 import { ShiroTerminal } from './terminal';

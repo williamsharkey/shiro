@@ -22,7 +22,7 @@ const LIMIT = Number(process.env.JOB_LIMIT_MS || 90_000);
 if (shots) mkdirSync(shots, { recursive: true });
 
 const screenOf = (page) => page.evaluate(() => {
-  const t = window.__shiro?.terminal?.term;
+  const t = window.__tabcomputer?.terminal?.term;
   if (!t) return '';
   const b = t.buffer.active;
   const rows = [];

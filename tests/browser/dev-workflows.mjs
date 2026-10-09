@@ -28,7 +28,7 @@ if (shots) mkdirSync(shots, { recursive: true });
 
 /** The main terminal's whole buffer (scrollback included), as text rows. */
 const bufferOf = (page) => page.evaluate(() => {
-  const t = window.__shiro.terminal.term;
+  const t = window.__tabcomputer.terminal.term;
   const b = t.buffer.active;
   const rows = [];
   for (let y = 0; y < b.length; y++) rows.push(b.getLine(y)?.translateToString(true) ?? '');
@@ -44,7 +44,7 @@ let marks = 0;
 async function step(page, cmd, expect = null) {
   const mark = `@@step${++marks}`;
   const t0 = Date.now();
-  await page.evaluate(() => window.__shiro.terminal.term.focus());
+  await page.evaluate(() => window.__tabcomputer.terminal.term.focus());
   await page.keyboard.type(`${cmd}; echo "${mark} $?"\r`, { delay: 2 });
   const re = new RegExp(`^${mark} (\\d+)$`, 'm');
   for (;;) {
@@ -114,7 +114,7 @@ for (const c of CASES) {
   console.log(`${c.name}`);
   try {
     await page.goto(url);
-    await page.waitForFunction(() => window.__shiro?.terminal?.term && window.__shiro?.kernel, null, { timeout: 90_000 });
+    await page.waitForFunction(() => window.__tabcomputer?.terminal?.term && window.__tabcomputer?.kernel, null, { timeout: 90_000 });
     // the prompt is up
     for (let i = 0; i < 300 && !/\$ ?$/m.test(await bufferOf(page)); i++) await page.waitForTimeout(100);
     await page.waitForTimeout(500);

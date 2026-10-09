@@ -22,7 +22,7 @@ let esbuildInitialized = false;
 let initPromise: Promise<void> | null = null;
 
 const ESBUILD_WASM_URL = 'https://unpkg.com/esbuild-wasm@0.27.2/esbuild.wasm';
-const WASM_CACHE_DB = 'shiro-wasm-cache';
+const WASM_CACHE_DB = 'tabcomputer-wasm-cache';
 const WASM_CACHE_STORE = 'wasm-binaries';
 const WASM_CACHE_KEY = 'esbuild-0.27.2';
 

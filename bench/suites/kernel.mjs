@@ -87,7 +87,7 @@ export async function run(h) {
   });
   await h.try('kernel.spawn_throughput', 'proc/s', async () => {
     const r = await h.eval(async ([n, kb]) => {
-      const B = window.__bench, k = window.__shiro.kernel, out = { builtin: [], wasm: [] };
+      const B = window.__bench, k = window.__tabcomputer.kernel, out = { builtin: [], wasm: [] };
       const nul = await B.devnull();
       for (const [kind, argv, count] of [['builtin', ['true'], 100], ['wasm', [kb, 'nop'], 30]]) {
         for (let i = 0; i < n; i++) {
@@ -146,12 +146,12 @@ export async function run(h) {
     const r = await h.eval(async (n) => window.__bench.echoLatency(n * 10), n);
     h.sample('kernel.pty_echo.line_editor', r.parsed, 'ms', { notes: 'xterm input → shell line editor echo → parsed into the terminal buffer (prompt, no kernel job)' });
     h.sample('kernel.pty_echo.line_editor_frame', r.frame, 'ms', { notes: 'same, until the next rendered frame' });
-    await h.eval(() => window.__shiro.terminal.term.input('\x15', true)); // ^U clears the line
+    await h.eval(() => window.__tabcomputer.terminal.term.input('\x15', true)); // ^U clears the line
   });
 
   await h.try('kernel.pty_echo.kernel', 'ms', async () => {
     const r = await h.eval(async (n) => {
-      const term = window.__shiro.terminal;
+      const term = window.__tabcomputer.terminal;
       const t = term.term;
       t.input('/home/user/b/kbench.wasm read\r', true);
       const t0 = performance.now();

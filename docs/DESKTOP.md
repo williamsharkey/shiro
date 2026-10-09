@@ -57,7 +57,7 @@ shiro.computer), since link previews don't run JS.
 
 From a shell: `desktop` switches to the desktop and `desktop classic` switches
 back. System menu → Classic Terminal does the same. Both modes keep
-`window.__shiro.terminal`. On the desktop, that terminal is the first
+`window.__tabcomputer.terminal`. On the desktop, that terminal is the first
 Terminal window's first tab. Closing that tab parks the terminal (it is not
 destroyed), and the next Terminal window adopts it again.
 
@@ -142,7 +142,7 @@ destroyed), and the next Terminal window adopts it again.
 
 ## Window manager API
 
-The page exposes it as `window.__shiro.desktop` and `globalThis.__shiroDesktop`.
+The page exposes it as `window.__tabcomputer.desktop` and `globalThis.__shiroDesktop`.
 Code in this repo can call `getDesktop()` from `src/desktop/wm.ts` instead.
 Both are `null` or `undefined` in the classic UI. The types live in `wm.ts`.
 
@@ -260,7 +260,7 @@ Mapping notes:
 A canvas client takes about 15 lines:
 
 ```js
-const d = window.__shiro.desktop;
+const d = window.__tabcomputer.desktop;
 const w = d.createWindow({ title: 'xeyes', appId: 'x11', width: 300, height: 200, content: { kind: 'surface' } });
 const ctx = w.surface.canvas.getContext('2d');
 const draw = (mx = 0, my = 0) => { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w.surface.width, w.surface.height);

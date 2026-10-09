@@ -7,7 +7,7 @@
 //
 // Results are cached per package and version in .debian-build/score/results.json,
 // so a rerun only does what is new or asked for; .debs and indexes are cached
-// by the mirror (SHIRO_DEBIAN_CACHE=.debian-build/mirror-cache). Uses the
+// by the mirror (TABCOMPUTER_DEBIAN_CACHE=.debian-build/mirror-cache). Uses the
 // pre-installed Chromium (/opt/pw-browsers/chromium); never `playwright install`.
 import { createRequire } from 'node:module';
 import { spawn, execFileSync } from 'node:child_process';
@@ -84,7 +84,7 @@ function startServer() {
   }
   const srv = spawn('node', ['server.mjs'], {
     cwd: ROOT, stdio: ['ignore', 'ignore', 'inherit'],
-    env: { ...process.env, PORT: String(PORT), STATIC_DIR: join(ROOT, 'dist'), SHIRO_DEBIAN_CACHE: process.env.SHIRO_DEBIAN_CACHE || join(ROOT, '.debian-build/mirror-cache') },
+    env: { ...process.env, PORT: String(PORT), STATIC_DIR: join(ROOT, 'dist'), TABCOMPUTER_DEBIAN_CACHE: process.env.TABCOMPUTER_DEBIAN_CACHE || join(ROOT, '.debian-build/mirror-cache') },
   });
   return srv;
 }
@@ -107,7 +107,7 @@ async function newMachine(browser, base, log) {
   const page = await context.newPage();
   page.on('pageerror', (e) => log(`[pageerror] ${e.message}`));
   await page.goto(base + '/');
-  await page.waitForFunction(() => window.__shiro && window.__shiro.shell, null, { timeout: 120000 });
+  await page.waitForFunction(() => window.__tabcomputer && window.__tabcomputer.shell, null, { timeout: 120000 });
   const run = async (cmd, timeoutS = 600) => page.evaluate(async ({ cmd, timeoutS, extraEnv }) => {
     let out = '';
     const t0 = performance.now();
@@ -115,7 +115,7 @@ async function newMachine(browser, base, log) {
     // `out`, so a command that times out still leaves its log (sudo, a
     // builtin, hands its output over only when it returns)
     const sh = window.__scoreShell ??= (() => {
-      const f = Object.assign(window.__shiro.shell.fork(), { terminal: null, uid: 0 });
+      const f = Object.assign(window.__tabcomputer.shell.fork(), { terminal: null, uid: 0 });
       Object.assign(f.env, { USER: 'root', LOGNAME: 'root', HOME: '/root', DEBIAN_FRONTEND: 'noninteractive' }, extraEnv);
       return f;
     })();

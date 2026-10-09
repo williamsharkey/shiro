@@ -105,7 +105,7 @@ threads and wasix-stack;
 can add features with:
 
 ```js
-globalThis.__shiroKernel = { features: ['sockets'] };
+globalThis.__tabcomputerKernel = { features: ['sockets'] };
 ```
 
 ## Packages

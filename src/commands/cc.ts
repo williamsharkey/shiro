@@ -16,7 +16,7 @@ import { Command, CommandContext } from './index';
 
 const WCCFILES_URL = '/wccfiles.zip';
 const FALLBACK_URL = 'https://tyfkda.github.io/xcc/wccfiles.zip';
-const CACHE_DB = 'shiro-cc-cache';
+const CACHE_DB = 'tabcomputer-cc-cache';
 const CACHE_STORE = 'binaries';
 const CACHE_KEY = 'wccfiles-v1';
 const CC_PATH = '/usr/bin/cc';

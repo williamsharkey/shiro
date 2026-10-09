@@ -661,7 +661,7 @@
 
   function getShiro() {
     const f = document.getElementById('shiro-live');
-    return f?.contentWindow?.__shiro;
+    return f?.contentWindow?.__tabcomputer;
   }
 
   async function waitForShiro(timeout = 20000) {
@@ -912,7 +912,7 @@
       // keys step — send raw keystrokes to terminal
       if (step.keys != null) {
         const iframe = document.getElementById('shiro-live');
-        const shiroTerm = iframe?.contentWindow?.__shiro?.terminal;
+        const shiroTerm = iframe?.contentWindow?.__tabcomputer?.terminal;
         if (shiroTerm) {
           if (step.typeSpeed) {
             // Animated typing (one char at a time)
@@ -1341,8 +1341,8 @@
         try { getShiro().unbecome(); } catch {}
         try {
           const iframe = document.getElementById('shiro-live');
-          if (iframe && iframe.contentWindow && iframe.contentWindow.__shiro) {
-            iframe.contentWindow.__shiro.unbecome();
+          if (iframe && iframe.contentWindow && iframe.contentWindow.__tabcomputer) {
+            iframe.contentWindow.__tabcomputer.unbecome();
           }
         } catch {}
       })()
@@ -1419,8 +1419,8 @@
       }
       this.playBtn.classList.remove('loading');
 
-      this.leftShiro = leftIframe.contentWindow.__shiro;
-      this.rightShiro = rightIframe.contentWindow.__shiro;
+      this.leftShiro = leftIframe.contentWindow.__tabcomputer;
+      this.rightShiro = rightIframe.contentWindow.__tabcomputer;
 
       // Inject scrollbar styles
       for (const iframe of [leftIframe, rightIframe]) {
@@ -1462,7 +1462,7 @@
       const start = Date.now();
       while (Date.now() - start < timeout) {
         try {
-          const s = iframe.contentWindow?.__shiro;
+          const s = iframe.contentWindow?.__tabcomputer;
           if (s?.shell?.execute && s?.terminal?.term) return;
         } catch {}
         await sleep(200);
@@ -1499,7 +1499,7 @@
           await sleep(200);
         }
         const iframe = this._getIframe(target);
-        const shiroTerm = iframe?.contentWindow?.__shiro?.terminal;
+        const shiroTerm = iframe?.contentWindow?.__tabcomputer?.terminal;
         if (shiroTerm) {
           if (step.typeSpeed) {
             for (let i = 0; i < step.keys.length; i++) {
@@ -1560,7 +1560,7 @@
     async _animateDrag(drag) {
       // Get GIF bytes from left iframe
       const leftIframe = this._getIframe('left');
-      const gifBytes = leftIframe?.contentWindow?.__shiro?.lastSeedGif;
+      const gifBytes = leftIframe?.contentWindow?.__tabcomputer?.lastSeedGif;
       if (!gifBytes) {
         console.warn('seed demo: no lastSeedGif available');
         return;
@@ -1621,9 +1621,9 @@
       // Copy files directly from left fs to right fs (avoids page reload)
       const rightIframe = this._getIframe('right');
       try {
-        const leftFs = leftIframe.contentWindow.__shiro.fs;
-        const rightFs = rightIframe.contentWindow.__shiro.fs;
-        const rightTerm = rightIframe.contentWindow.__shiro.terminal.term;
+        const leftFs = leftIframe.contentWindow.__tabcomputer.fs;
+        const rightFs = rightIframe.contentWindow.__tabcomputer.fs;
+        const rightTerm = rightIframe.contentWindow.__tabcomputer.terminal.term;
 
         rightTerm.write('\r\n\x1b[92mRestoring from seed...\x1b[0m\r\n');
 

@@ -58,7 +58,7 @@ export const KEY_ROWS: Key[][] = [
 ];
 
 function inject(data: string): void {
-  (getActiveTerminal() ?? (globalThis as any).__shiro?.terminal)?.injectInput?.(data);
+  (getActiveTerminal() ?? (globalThis as any).__tabcomputer?.terminal)?.injectInput?.(data);
 }
 
 /** A control character for a letter (Ctrl+C → \x03); other characters unchanged. */

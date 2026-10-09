@@ -65,7 +65,7 @@ export interface InstallResult {
 }
 
 const STATUS = '/var/lib/shiro-gui/status.json';
-const CACHE_NAME = 'shiro-debs-v1';
+const CACHE_NAME = 'tabcomputer-debs-v1';
 /** Paths not worth unpacking in a browser. */
 const SKIP_PATH = /^\/usr\/share\/(doc|man|info|lintian|bug|locale|gtk-doc|help)\//;
 const BIN_DIRS = /^\/(usr\/)?s?bin\//;

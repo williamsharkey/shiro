@@ -6,7 +6,7 @@ import { Command, CommandContext } from './index';
  */
 
 function getRuntimeContext(): { hcOuterAvailable?: boolean } | null {
-  return (window as any).__shiro?.runtimeContext || null;
+  return (window as any).__tabcomputer?.runtimeContext || null;
 }
 
 class HCSession {

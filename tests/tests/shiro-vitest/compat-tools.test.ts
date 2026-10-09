@@ -179,7 +179,7 @@ describe('vim', () => {
   it('follows a resize (SIGWINCH) and survives Ctrl-Z / fg', async () => {
     await install('vim');
     const term = fakeTerminal(24, 80);
-    const { done } = onTerminal((process.env.VDEBUG ? 'SHIRO_BLINK_DEBUG=1 ' : '') + 'vim -u NONE', term);
+    const { done } = onTerminal((process.env.VDEBUG ? 'TABCOMPUTER_BLINK_DEBUG=1 ' : '') + 'vim -u NONE', term);
     await until(() => term.screen.includes('~'), 'empty buffer');
     term.tty.resize(30, 100);
     term.clear();
