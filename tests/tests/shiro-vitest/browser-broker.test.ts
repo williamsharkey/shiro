@@ -111,7 +111,8 @@ describe('broker', () => {
       'https://site.example/old': { status: 301, headers: [['Location', '/new']] },
       'https://site.example/new': { body: 'here' },
     });
-    const nav = await t.broker.fetch(t.ctx() as any, t.msg({ url: 'https://site.example/old', navigation: true }));
+    // navigations reach the SW with redirect: 'manual'; they must still come back as browse redirects
+    const nav = await t.broker.fetch(t.ctx() as any, t.msg({ url: 'https://site.example/old', navigation: true, redirect: 'manual' }));
     expect(nav).toMatchObject({ type: 'redirect', location: 'https://site.example/new' });
     const sub = await t.broker.fetch(t.ctx() as any, t.msg({ url: 'https://site.example/old' }));
     expect(sub).toMatchObject({ type: 'response', url: 'https://site.example/new', redirected: true });

@@ -22,6 +22,7 @@ Naming: always write "tabcomputer", one word, all lowercase (also at the start o
 - `src/pkg-manager.ts`: the package manager (`pkg`/`apt`, see "Packages"); `src/wasi-packages.ts` is the older single-binary API on top of its index.
 - `src/x86-engine/*` + `public/engines/blink/` + `vendor/blink/`: x86-64 Linux ELF in Blink (wasm), as kernel processes; `src/x86/*` is the fallback interpreter when the page isn't cross-origin isolated. See `docs/X86_ENGINES.md`.
 - `src/kernel/*`: Unix kernel core (process table, fd tables, pipes, syscall dispatch, SAB syscall channel for Worker guests). Contract: `docs/KERNEL_ABI.md`; roadmap: `docs/UNIX_COMPAT.md`. `window.__tabcomputer.kernel`; kernel processes show in `ps`.
+- Kernel log (`src/kernel/klog.ts`): `dmesg` (builtin; Debian's util-linux dmesg replaces it in Debian mode and reads the same log through `/dev/kmsg`), `/dev/kmsg`, `syslog(2)`. Engines and subsystems log with `klog.log`/`klog.logRatelimited` (`net: ...`, `traps: comm[pid] ...`); relay refusals (token, handshake, `op:error`, no relay) land there, so check `dmesg` when curl/git only say "Could not connect".
 - `src/x11/*` + `src/gui/*`: Linux GUI apps (docs/GUI.md): Xshiro, an X11 server in the page (a kernel process on `/tmp/.X11-unix/X0`), rootless windows on the desktop's surface API, Debian GUI apps installed on first use (`gui`, `public/gui/apps.json`).
 - `src/commands/seed.ts`, `src/commands/hc.ts`, `src/seed-runtime-context.ts`: seeded sessions, host-page access, runtime orientation.
 - `src/claude-config.ts`, `src/node-compat/preload.ts`, `src/node-compat/process.ts`: Claude bootstrap, auth persistence, startup defaults.
@@ -64,15 +65,13 @@ export const myCmd: Command = {
 
 ## Seeded Sessions And Inner Claude
 
-- Seeded boots write runtime context to `/home/user/NEO.md` and `/home/user/.shiro-context.json`.
-- If a seeded session has host-page access, inner Claude should learn that from `NEO.md` and usually start with `hc outer`.
-- Keep seeded agent guidance compact and current in `src/claude-md-seed.ts`.
-- `CLAUDE.md` is still written for compatibility, but it should only redirect to `AGENTS.md` plus `NEO.md`.
+- Every boot seeds `~/AGENTS.md` for agents on the machine (`src/agent-docs.ts`): what the machine is, what works and what doesn't, `doctor`, where the source lives (not checked out), and this boot's context (an injected `seed` boot says to start with `hc outer`). `~/CLAUDE.md` is `@AGENTS.md`, so Claude Code imports it directly.
+- Seeding never overwrites a file the user edited: `/var/lib/tabcomputer/seeded.json` holds the hash of what was written, and older installs are recognized by the exact texts earlier builds seeded. The retired `~/NEO.md` and `~/.shiro-context.json` are removed the same way. Keep the text accurate when behavior changes; it is what an agent here believes about the machine.
 
 ## Claude Code In tabcomputer
 
 - `claude` is a tabcomputer builtin (`src/commands/claude.ts`) wrapping the npm CLI: it installs the pinned build if needed, opens the sign-in panel (`src/claude-signin.ts`) when there are no credentials, and adds `--dangerously-skip-permissions` for sessions. `claude-window` (old name `sc`) runs it in a new window.
-- Experimental: `claude install --native` downloads the linux-x64-musl build (sha256 from the release manifest) and musl's loader with the guest's `curl` package over the TCP relay (`claude-native.ts`); `claude --native` / `CLAUDE_NATIVE=1` run it (`$CLAUDE_NATIVE_PATH`, default `~/.local/bin/claude`) in Blink, ~2 min per request. Default unchanged.
+- Experimental: `claude install --native` downloads the linux-x64-musl build (sha256 from the release manifest) and musl's loader with the guest's `curl` package over the TCP relay (`claude-native.ts`); `claude --native` / `CLAUDE_NATIVE=1` run it (`$CLAUDE_NATIVE_PATH`, default `~/.local/bin/claude`) in Blink, ~2 min per request. The tabcomputer profile makes it the default (`shims.claude: native`): plain `claude` and `claude install` mean native there, and `--npm` picks the npm build.
 - The npm package is pinned to 2.1.112, the last pure-JS release (`src/claude-code-version.ts`). Boot installs it in the background from the npm tarball. At load time `execution.ts` rewrites its inlined `VERSION` constant to `CLAUDE_CODE_REPORTED_VERSION`, because the API gates newer models (e.g. `claude-opus-5-5`, the default `ANTHROPIC_MODEL`) on the version in the billing header.
 - The same load-time rewrite teaches 2.1.112 about newer models (`CAPABILITY_PATCHES`): Opus/Sonnet 5+ get adaptive thinking, effort control including xhigh, and the xhigh launch default, like Opus 4.7. Without it the pinned build sent fixed-budget thinking, no effort, and defaulted subscriptions to medium effort. Opus 5.5 delivers thinking as one chunk at the end, so the token counter stalls during long thinking; that is the API, not a hang.
 - Also patched: interactive sessions use the in-memory `TodoWrite` list instead of the file-backed task tools (`TaskCreate`…), whose proper-lockfile locking hung in tabcomputer; `CLAUDE_CODE_ENABLE_TASKS=1` restores them. Callback and promise `fs.rmdir` now remove directories (they used `unlink`, so lock directories never released).
@@ -153,6 +152,7 @@ export const myCmd: Command = {
 - `scripts/browser-tui.mjs URL 'run:pkg install vim' 'type:vim x\r' 'wait:x' 'type::q\r' 'shot:/tmp/v.png'` drives full-screen programs on the real terminal (xterm.js keyboard input, waits on the rendered screen, screenshots); a `wait:` can match the echoed command line, so wait for something only the program draws.
 - `tests/browser/first-run.mjs [URL] [--only NAME] [--shots DIR]` is the first-impression check (the terminal UI too: `?ui=terminal`, `?profile=shiro` or a shiro.computer URL types the programs at the prompt). For the desktop: from a fresh profile per case it clicks every welcome-banner suggestion and dock app (and zooms a window running htop) and waits on the rendered terminal; it works against https://tabcomputer.com through `$HTTPS_PROXY` too.
 - `tests/browser/dev-workflows.mjs [URL] [--only NAME]` runs real developer workflows from a fresh profile each, typed into the terminal: git clone/commit over the git proxy, `npm install && npm test`, a venv with `pip install pytest requests` and `pytest`, `make test` on a C project, `ssh -T git@github.com` (needs the server's TCP relay). It times every step; external hosts go through `$HTTPS_PROXY`.
+- `tests/browser/ffmpeg.mjs [URL]` checks the ffmpeg shim in Chromium: its worker and ~31 MB core come from the page's own origin, only once ffmpeg runs; `ffmpeg -version` and a small transcode (a lavfi test clip to mp4, then gif).
 - `pkg install make llvm` gives GNU make and clang 21 (wasm32-wasip1). Programs built with wasi-sdk get processes from `scripts/pkgbuild/compat/wasi-proc.c` (posix_spawn/waitpid/pipe/dup2/exec*/system/popen over the guest's WASIX `proc_spawn3`/`proc_join`/`fd_pipe`/`fd_dup`; `setup_proc` in `common.sh`, headers in `compat/include/`). It syncs wasi-libc's cwd with the kernel's at startup. WASI LLVM can't spawn, so `compat/clang-driver.c` runs `clang -###` and then each step as `yowasp-llvm TOOL ...`.
 - `pkg install go` is Go 1.24.7 running on wasip1 (`scripts/pkgbuild/go.sh` + `go/wasip1-processes.patch`; one tarball the index unpacks into bin/, pkg/, src/, cache/). `GOROOT/go.env` sets GOTOOLCHAIN=local, GOPROXY=off, GOFLAGS=-p=4 and GOCACHE=/usr/lib/pkg/go/cache, which ships common std packages compiled natively by the same patched toolchain (release tool IDs match, so the wasm go command hits them). The guest's spawn treats a close of fd 0xffffffff as "inherit only the dup2'd fds".
 - Package ABI `x86_64-linux` (perl): static ELF programs under /usr/lib/pkg run in Blink through the shell's ELF path (`executeScript` only sends WASM to `runPackageBinary`); `needs: [threads, processes]` (Blink needs SharedArrayBuffer). Boot's PATH shims live in `src/path-shims.ts` (`createPathShims`), shared with tests.
@@ -174,7 +174,7 @@ Performance: `npm run bench:quick` (~2.5 min) before and after a performance cha
 Use focused vitest runs while iterating, then run the smallest meaningful verification set before deploy. For changes touching seed/Claude/bootstrap paths, relevant files usually include:
 
 - `tests/tests/shiro-vitest/seed.test.ts`
-- `tests/tests/shiro-vitest/seed-runtime-context.test.ts`
+- `tests/tests/shiro-vitest/agent-docs.test.ts`
 - `tests/tests/shiro-vitest/claude-bootstrap.test.ts`
 - `tests/tests/shiro-vitest/node-runtime.test.ts`
 - `tests/tests/shiro-vitest/new-features.test.ts`

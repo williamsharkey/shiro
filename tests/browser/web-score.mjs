@@ -5,10 +5,10 @@
 //   direct  the host browser loading the site in a real tab (the ceiling)
 //   tab     tabcomputer's Browser app: browse origins + broker + TLS in the page
 //   tab-server  the same, with the server-side fetch (local comparison only:
-//           the server must run with SHIRO_BROWSE_SERVER_FETCH=1; never in production)
+//           the server must run with TABCOMPUTER_BROWSE_SERVER_FETCH=1; never in production)
 //
 //   npm run build
-//   SHIRO_TCP_RELAY=1 SHIRO_TCP_ORIGINS=http://localhost:5299 PORT=5299 STATIC_DIR=$PWD/dist node server.mjs &
+//   TABCOMPUTER_TCP_RELAY=1 TABCOMPUTER_TCP_ORIGINS=http://localhost:5299 PORT=5299 STATIC_DIR=$PWD/dist node server.mjs &
 //   node tests/browser/web-score.mjs [--app http://localhost:5299] [--modes direct,tab]
 //        [--only id,id] [--skip-sites] [--speedometer] [--wpt] [--json out.json] [--md docs/WEB_SCORE.md]
 //        [--extra-roots /root/.ccr/ca-bundle.crt]
@@ -117,6 +117,7 @@ async function until(fn, ms, step = 250) {
 
 async function directDriver(browser) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 }, ignoreHTTPSErrors: false });
+  if (WPT) await ctx.addInitScript(WPT_HOOK);
   let page = await ctx.newPage();
   let bytes = 0, requests = 0;
   const watch = (p) => p.on('requestfinished', async (r) => { requests++; try { const s = await r.sizes(); bytes += s.responseBodySize + s.responseHeadersSize; } catch { /* gone */ } });
@@ -152,10 +153,11 @@ async function directDriver(browser) {
 
 async function tabDriver(browser, transport = 'relay') {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  if (WPT) await ctx.addInitScript(WPT_HOOK);
   const page = await ctx.newPage();
   page.on('pageerror', (e) => { if (process.env.WEB_SCORE_DEBUG) console.log('[app pageerror]', e.message); });
   await page.goto(`${APP}/?ui=desktop`);
-  await page.waitForFunction(() => window.__shiro?.desktop, null, { timeout: 90000 });
+  await page.waitForFunction(() => window.__tabcomputer?.desktop, null, { timeout: 90000 });
   if (ROOTS) {
     const pem = readFileSync(ROOTS, 'utf8');
     await page.evaluate(async (pem) => {
@@ -173,11 +175,11 @@ async function tabDriver(browser, transport = 'relay') {
     await new Promise((res) => { const t = db.transaction('kv', 'readwrite'); t.objectStore('kv').put(transport, 'transport'); t.oncomplete = res; });
     db.close();
   }, transport);
-  await page.evaluate(() => window.__shiro.desktop.openApp('browser', {}));
+  await page.evaluate(() => window.__tabcomputer.desktop.openApp('browser', {}));
   await page.waitForFunction(() => window.__shiroBrowser?.engine, null, { timeout: 30000 });
   const got = await page.evaluate(() => window.__shiroBrowser.engine.transport);
-  if (got !== transport) throw new Error(`transport ${transport} unavailable (server needs SHIRO_BROWSE_SERVER_FETCH=1)`);
-  await page.evaluate(() => { const w = window.__shiro.desktop.focused(); w?.maximize(); });
+  if (got !== transport) throw new Error(`transport ${transport} unavailable (server needs TABCOMPUTER_BROWSE_SERVER_FETCH=1)`);
+  await page.evaluate(() => { const w = window.__tabcomputer.desktop.focused(); w?.maximize(); });
   const active = () => page.evaluate(() => { const t = window.__shiroBrowser.window.active; return t && { url: t.url, bytes: t.bytes, requests: t.requests, fallback: t.fallback, title: t.title }; });
   const frame = async () => {
     const el = await page.$('.sd-br-view iframe.sd-active');
@@ -390,32 +392,50 @@ async function speedometer(d) {
 // ── Web Platform Tests (wpt.live) for the interception layer ─────────────────
 export const WPT_TESTS = [
   '/fetch/api/basic/request-headers.any.html',
+  '/fetch/api/basic/accept-header.any.html',
+  '/fetch/api/basic/response-url.sub.any.html',
   '/fetch/api/redirect/redirect-count.any.html',
+  '/fetch/api/redirect/redirect-mode.any.html',
   '/fetch/api/cors/cors-basic.any.html',
-  '/fetch/content-encoding/gzip-body.any.html',
+  '/fetch/api/cors/cors-preflight.any.html',
+  '/fetch/api/credentials/cookies.any.html',
+  '/fetch/content-encoding/gzip/gzip-body.any.html',
   '/fetch/range/general.any.html',
   '/xhr/send-redirect.htm',
   '/cookies/attributes/path.html',
-  '/html/browsers/history/the-location-interface/location-origin.html',
-  '/websockets/Create-valid-url.any.html',
+  '/cookies/samesite/fetch.https.html',
+  '/html/browsers/history/the-location-interface/location_hostname.html',
 ];
 
 async function wpt(d, path) {
   const load = await d.open('https://wpt.live' + path);
   if (!load.ok) return { path, ok: false, error: load.error };
+  // testharness.js keeps its results in window.tests; read them, not the rendered summary
   const res = await until(async () => {
     const f = await d.frame();
     return f?.evaluate(() => {
-      const s = document.querySelector('#summary') || document.querySelector('#results');
-      const txt = document.body.innerText;
-      const m = /Found (\d+) tests?/.exec(txt);
-      if (!m) return null;
-      const count = (k) => { const r = new RegExp(`(\\d+)\\s+${k}`).exec(s?.innerText || txt); return r ? Number(r[1]) : 0; };
-      return { total: Number(m[1]), pass: count('Pass'), fail: count('Fail'), timeout: count('Timeout'), notrun: count('Not Run') };
+      if (window.__wptResult) return window.__wptResult;
+      // Fallback: the rendered results table (status cells carry pass/fail classes)
+      if (!document.querySelector('#summary')) return null;
+      const cells = Array.from(document.querySelectorAll('#results tbody tr td:first-child'));
+      const n = (c) => cells.filter((x) => x.className.includes(c)).length;
+      return { total: cells.length, pass: n('pass'), fail: n('fail'), timeout: n('timeout'), notrun: n('notrun') };
     });
-  }, 60000, 1000);
-  return res ? { path, ok: true, ...res } : { path, ok: false, error: 'no harness summary' };
+  }, 90000, 1000);
+  return res ? { path, ok: true, ...res } : { path, ok: false, error: 'harness did not complete in 90 s' };
 }
+
+/** testharness.js keeps results private: catch add_completion_callback as it is exposed. */
+const WPT_HOOK = `(() => {
+  let v;
+  try {
+    Object.defineProperty(self, 'add_completion_callback', { configurable: true, get() { return v; }, set(fn) {
+      v = fn;
+      try { fn((tests) => { const n = (s) => tests.filter((t) => t.status === s).length;
+        self.__wptResult = { total: tests.length, pass: n(0), fail: n(1), timeout: n(2), notrun: n(3) }; }); } catch {}
+    } });
+  } catch {}
+})();`;
 
 // ── main ─────────────────────────────────────────────────────────────────────
 if (FROM_JSON) { writeMarkdown(MD_OUT || 'docs/WEB_SCORE.md', JSON.parse(readFileSync(FROM_JSON, 'utf8'))); process.exit(0); }

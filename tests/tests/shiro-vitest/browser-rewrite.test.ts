@@ -15,6 +15,15 @@ describe('CSP', () => {
     expect(rewriteCsp("default-src 'self'; script-src 'self' 'nonce-abc' 'strict-dynamic'; img-src *; frame-ancestors 'none'; report-uri /r", o))
       .toBe("default-src 'self' https://www.example.com; script-src 'self' 'nonce-abc' 'strict-dynamic' https://www.example.com 'nonce-N'; img-src *");
   });
+  it("allows 'self' where the policy names the real origin", () => {
+    expect(rewriteCsp('font-src https://www.example.com; img-src *.example.com data:; media-src https://cdn.other', o))
+      .toBe("font-src https://www.example.com 'self'; img-src *.example.com data: 'self'; media-src https://cdn.other");
+  });
+  it("never adds a nonce that would switch off a policy's 'unsafe-inline'", () => {
+    expect(rewriteCsp("script-src 'unsafe-inline' https://www.example.com", o)).toBe("script-src 'unsafe-inline' https://www.example.com 'self'");
+    expect(rewriteCsp("script-src 'unsafe-inline' 'nonce-x'", o)).toBe("script-src 'unsafe-inline' 'nonce-x' 'nonce-N'");
+    expect(rewriteCsp("default-src 'self' 'unsafe-inline'", o)).toBe("default-src 'self' 'unsafe-inline' https://www.example.com");
+  });
   it('puts the nonce in default-src when there is no script-src', () => {
     expect(rewriteCsp("default-src https://cdn.example", o)).toBe("default-src https://cdn.example 'nonce-N'");
     expect(rewriteCsp("default-src 'none'", o)).toBe("default-src 'nonce-N'");

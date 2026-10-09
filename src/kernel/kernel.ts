@@ -13,6 +13,7 @@ import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
 import { KernelStdio, execLazyStdin } from '../shell-stdio';
 import { ProcFs, bootMs } from './procfs';
+import { klog, KmsgFile, LOG_ERR, LOG_INFO, SYSLOG_ACTION_READ_ALL, SYSLOG_ACTION_SIZE_BUFFER, SYSLOG_ACTION_SIZE_UNREAD } from './klog';
 import { processTable, type ShiroProcess } from '../process-table';
 import { packageShadows, pkgOwnShadows, packageArgsForPath, PKG_BIN_DIR } from '../pkg-manager';
 import * as A from './abi';
@@ -210,6 +211,7 @@ export class Kernel {
     this.registerDevice('/dev/urandom', (_p, f) => new DevRandom(f, '/dev/urandom'));
     this.registerDevice('/dev/random', (_p, f) => new DevRandom(f, '/dev/random'));
     this.registerDevice('/dev/tty', p => p.ctty ?? -A.ENXIO);
+    this.registerDevice('/dev/kmsg', (_p, f) => new KmsgFile(klog, f));
     this.addLoader((path, proc, k) => k.builtinLoader(path, proc));
     this.addLoader((path, proc, k) => k.shebangLoader(path, proc));
     if (opts.registerWithProcessTable !== false) {
@@ -559,10 +561,41 @@ export class Kernel {
       }
     }
     proc.markExited(status);
+    this.logTrap(proc, status);
     const parent = this.procs.get(proc.ppid);
     if (parent && parent.pid !== 1) this.deliver(parent, A.SIGCHLD);
     if (proc.ppid === 1) this.scheduleInitReap(proc);
     this.notify();
+  }
+
+  /**
+   * A process killed by a fault signal (a guest's SIGSEGV from Blink, a wasm
+   * trap mapped to one) gets a kernel log line, as Linux's show_signal_msg
+   * and traps do. `proc.data.trapReason` (set by the engine) says more.
+   */
+  private logTrap(proc: Process, status: number): void {
+    if (!A.WIFSIGNALED(status) || proc.data.trapLogged) return;
+    const sig = A.WTERMSIG(status);
+    const what: Record<number, string> = {
+      [A.SIGSEGV]: 'segfault', [A.SIGBUS]: 'bus error', [A.SIGILL]: 'invalid opcode', [A.SIGFPE]: 'divide error',
+    };
+    if (!what[sig]) return;
+    const reason = typeof proc.data.trapReason === 'string' ? ` (${proc.data.trapReason})` : '';
+    klog.log(LOG_INFO, `traps: ${proc.comm}[${proc.pid}] ${what[sig]}${reason}, killed by SIG${A.SIGNAL_NAMES[sig]}`);
+  }
+
+  /**
+   * Log why a guest engine ended `proc` abnormally (worker error, wasm trap,
+   * engine abort). Out-of-memory errors are logged like the OOM killer's.
+   */
+  reportFatal(proc: Process, message: string): void {
+    if (proc.data.trapLogged) return;
+    proc.data.trapLogged = true;
+    if (/out of memory|\boom\b|cannot enlarge memory|maximum memory|memory\.grow|allocation failed|array buffer allocation/i.test(message)) {
+      klog.log(LOG_ERR, `Out of memory: Killed process ${proc.pid} (${proc.comm}): ${message}`);
+    } else {
+      klog.log(LOG_INFO, `traps: ${proc.comm}[${proc.pid}] ${message}`);
+    }
   }
 
   private scheduleInitReap(proc: Process): void {
@@ -2031,6 +2064,13 @@ export class Kernel {
           dv.setBigInt64(0, BigInt(Math.floor(ms / 1000)), true);
           dv.setBigInt64(8, BigInt(Math.floor((ms % 1000) * 1e6)), true);
           return 0;
+        }
+        case A.SYS_syslog: {
+          // Reading the whole log and its size is open to everyone (dmesg_restrict=0); the rest needs root
+          const type = args[0];
+          const open = type === SYSLOG_ACTION_READ_ALL || type === SYSLOG_ACTION_SIZE_BUFFER || type === SYSLOG_ACTION_SIZE_UNREAD || type <= 1;
+          if (!open && proc.uid !== 0) return -A.EPERM;
+          return await klog.syslogAction(type, data, args[1] | 0, sig);
         }
         case A.SYS_uname: { // → struct utsname (engines that report their own machine take the names from here)
           if (data.length < A.UTSNAME_FIELD * 6) return -A.EFAULT;

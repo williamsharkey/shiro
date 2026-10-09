@@ -125,6 +125,9 @@ const haveFionbio = tryBuild('gcc', ['-static', '-O1', '-o', fionbioBin, 'fionbi
 const fuzzBin = join(out, 'jitfuzz');
 const haveFuzz = tryBuild('gcc', ['-static', '-O1', '-o', fuzzBin, 'jitfuzz.c']);
 
+const argv0Bin = join(out, 'argv0');
+const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
+
 async function setup(bin: Uint8Array) {
   const { fs, shell } = await createTestShell();
   await fs.mkdir('/home/user/work', { recursive: true });
@@ -575,6 +578,20 @@ describe.skipIf(!haveTty)('Blink engine: interactive program on a kernel pty', (
 });
 
 // Blink patch 0011: the guest's fds and processes are the kernel's.
+// Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
+// (busybox picks its applet by it; Debian's redis-server -> redis-check-rdb)
+describe('argv[0] through a symlink', () => {
+  for (const engine of ['blink', 'x86']) {
+    it.skipIf(!haveArgv0)(`is the link's name, not the target's (${engine})`, async () => {
+      const { shell } = await setup(readFileSync(argv0Bin));
+      const env = engine === 'x86' ? 'TABCOMPUTER_X86_ENGINE=x86 ' : '';
+      // (and through a hard link: dpkg links graphviz's libgvc6-config-update to dot, which picks its layout by argv[0])
+      const r = await run(shell, `ln -sf prog echo2; mkdir -p bin; ln -sf ../prog bin/redis-server; rm -f dot; ln prog dot; ${env}./echo2; ${env}./prog; PATH=$PWD/bin:$PATH ${env}redis-server; ${env}./dot`);
+      expect(r.output.replace(/\r\n/g, '\n')).toBe('argv0=./echo2\nargv0=./prog\nargv0=redis-server\nargv0=./dot\n');
+    }, 60_000);
+  }
+});
+
 describe('Blink engine: kernel processes (fork, exec, pipes)', () => {
   it('fork+exec+wait, posix_spawn over a pipe, popen and system through /bin/sh', async () => {
     const { shell } = await setup(readFileSync(join(FIX, 'proc-musl')));
@@ -746,7 +763,7 @@ describe('Blink engine: CPU and syscall fixes', () => {
   it.skipIf(!haveSleepintr)('signals end sleeps with the time left; exit with parked threads', async () => {
     const { shell } = await setup(readFileSync(sleepintrBin));
     const r = await run(shell, './prog');
-    expect(r.output.replace(/\r\n/g, '\n')).toBe('nanosleep eintr 1 early 1 rem>3s 1\nclock_nanosleep eintr 1 early 1 rem>3s 1\n' +
+    expect(r.output.replace(/\r\n/g, '\n')).toBe('invalid timespec EINVAL 6/6\nnanosleep eintr 1 early 1 rem>3s 1\nclock_nanosleep eintr 1 early 1 rem>3s 1\n' +
       'threads parked: exit 7 within 3s 1\n');
   }, 60_000);
 

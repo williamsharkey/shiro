@@ -3,6 +3,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 import { inlineAssets } from './vite-plugin-inline';
+import { execSync } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,8 +18,14 @@ const isolationHeaders: Record<string, string> = process.env.TABCOMPUTER_ISOLATI
   'Cross-Origin-Embedder-Policy': 'credentialless',
 };
 
+// The commit this build came from, so `doctor` can tell a tab opened before a
+// deploy from the current one ('' outside a git checkout)
+let buildSha = '';
+try { buildSha = execSync('git rev-parse HEAD', { cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch { /* no git */ }
+
 export default defineConfig({
   base,
+  define: { __BUILD_SHA__: JSON.stringify(buildSha) },
   plugins: [
     nodePolyfills({
       // Enable Buffer polyfill for isomorphic-git
@@ -33,6 +40,10 @@ export default defineConfig({
     target: 'es2022',
     rollupOptions: {
       external: [],
+      output: {
+        // three.js (the Liquid glass icon set, src/desktop/iconset-glass.ts) is its own chunk
+        manualChunks: (id) => (id.includes('/node_modules/three/') ? 'three' : undefined),
+      },
     },
   },
   // module workers (src/gui/deb-worker.ts) that import code-split chunks
@@ -49,6 +60,8 @@ export default defineConfig({
   },
   optimizeDeps: {
     include: ['isomorphic-git', 'http-cache-semantics'],
+    // its worker is new URL('./worker.js', import.meta.url): pre-bundling would lose the file
+    exclude: ['@ffmpeg/ffmpeg'],
   },
   test: {
     setupFiles: ['./test/setup.ts'],

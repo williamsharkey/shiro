@@ -527,6 +527,7 @@ function runWorkers(
     w.onMessage((m) => { if (m !== SYS_MESSAGE) onGuestMessage(m, false); });
     w.onError((err) => {
       if (proc.exiting) return;
+      kernel.reportFatal(proc, String((err as Error)?.message ?? err));
       void kernel.writeAll(proc, 2, new TextEncoder().encode(`${proc.comm}: ${(err as Error)?.message ?? err}\n`))
         .finally(() => kernel.exit(proc, A.W_TERMSIG(A.SIGABRT)));
     });
@@ -572,6 +573,7 @@ async function runJspi(kernel: Kernel, proc: Process, module: WebAssembly.Module
   } catch (e) {
     if (e instanceof ProcExit || proc.exiting) return;
     const msg = e instanceof Error ? e.message : String(e);
+    kernel.reportFatal(proc, `wasm trap: ${msg}`);
     await kernel.writeAll(proc, 2, new TextEncoder().encode(`wasm trap: ${msg}\n`));
     await kernel.exit(proc, A.W_TERMSIG(A.SIGABRT));
   }

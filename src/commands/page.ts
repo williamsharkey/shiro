@@ -34,11 +34,17 @@ function findIframe(port?: number): HTMLIFrameElement | null {
     }
   }
 
-  // Find all server window iframes
-  const all = Array.from(document.querySelectorAll('[data-virtual-port]')) as HTMLIFrameElement[];
+  // Find all server window iframes. On the desktop, `serve open` leaves a
+  // hidden, empty iframe tagged with the same port before the window's own,
+  // so prefer the ones that are rendered.
+  const tagged = Array.from(document.querySelectorAll('[data-virtual-port]')) as HTMLIFrameElement[];
+  const shown = tagged.filter(el => typeof el.getClientRects === 'function' && el.getClientRects().length > 0);
+  const all = shown.length ? shown : tagged;
 
   if (port) {
-    return all.find(el => parseInt(el.getAttribute('data-virtual-port')!, 10) === port) || null;
+    const matches = (list: HTMLIFrameElement[]) => list.filter(el => parseInt(el.getAttribute('data-virtual-port')!, 10) === port);
+    const m = matches(shown);
+    return (m.length ? m : matches(tagged)).pop() || null;
   }
 
   if (all.length === 1) return all[0];

@@ -926,6 +926,9 @@ export function tcpRelayConfigFromEnv(env = process.env) {
     requireSignin: env.TABCOMPUTER_TCP_REQUIRE_SIGNIN === '1',
     trustProxy: env.TABCOMPUTER_TRUST_PROXY || 'loopback', // 'loopback' | 'always' | 'never'
     tokenTtlMs: envInt(env.TABCOMPUTER_TCP_TOKEN_TTL_MS, 10 * 60_000),
+    // Tie each token to the IP that fetched it. Clients whose outgoing IP changes per
+    // connection (proxy pools, iCloud Private Relay, dual-stack) fail with it on.
+    tokenBindIp: env.TABCOMPUTER_TCP_TOKEN_BIND_IP !== '0',
     maxConns: envInt(env.TABCOMPUTER_TCP_MAX_CONNS, 512),
     maxConnsPerIp: envInt(env.TABCOMPUTER_TCP_MAX_CONNS_PER_IP, 16),
     connectsPerMinute: envInt(env.TABCOMPUTER_TCP_CONNECTS_PER_MIN, 60),
@@ -938,6 +941,8 @@ export function tcpRelayConfigFromEnv(env = process.env) {
     idleTimeoutMs: envInt(env.TABCOMPUTER_TCP_IDLE_TIMEOUT_MS, 5 * 60_000),
     maxLifetimeMs: envInt(env.TABCOMPUTER_TCP_MAX_LIFETIME_MS, 4 * 60 * 60_000),
     window: envInt(env.TABCOMPUTER_TCP_WINDOW, 512 * 1024),
+    // http://host:port of an HTTP CONNECT proxy to dial through (egress that only allows proxied traffic)
+    upstreamProxy: env.TABCOMPUTER_TCP_UPSTREAM_PROXY || '',
   };
 }
 
@@ -1035,7 +1040,7 @@ export function createTcpRelay(config, { lookup, log = console.log, verifySignin
   };
 
   const verify = verifySignin || githubSigninVerifier();
-  const sign = (exp, ip) => createHmac('sha256', secret).update(`shiro-tcp.${exp}.${ip}`).digest('base64url');
+  const sign = (exp, ip) => createHmac('sha256', secret).update(`shiro-tcp.${exp}.${cfg.tokenBindIp ? ip : '*'}`).digest('base64url');
   const issueToken = (ip) => {
     const exp = Date.now() + cfg.tokenTtlMs;
     return { token: `${exp}.${sign(exp, ip)}`, expires: exp };
@@ -1048,7 +1053,7 @@ export function createTcpRelay(config, { lookup, log = console.log, verifySignin
     return want.length === got.length && timingSafeEqual(want, got);
   };
 
-  /** POST /tcp/token from an allowed Origin → { token, expires } bound to the caller's IP. */
+  /** POST /tcp/token from an allowed Origin → { token, expires }, bound to the caller's IP unless tokenBindIp is off. */
   function handleToken(req, res) {
     const origin = req.headers['origin'];
     const ok = originAllowed(origin, cfg.allowedOrigins);
@@ -1200,25 +1205,53 @@ export function createTcpRelay(config, { lookup, log = console.log, verifySignin
       target = `${host === address ? '' : host + '→'}${address}:${port}`;
       log(`[tcp] #${id} ${ip} connect ${target}`);
       phase = 'connecting';
-      // Connect to the vetted IP literal: no second lookup, so no rebinding window.
-      // allowHalfOpen: the peer's FIN must not end our side; the client decides with {"op":"shutdown"}
-      tcp = net.connect({ host: address, port, timeout: cfg.connectTimeoutMs, allowHalfOpen: true });
-      tcp.setNoDelay(true);
-      tcp.once('timeout', () => { if (phase === 'connecting') fail('ETIMEDOUT', 'connect timeout'); });
-      tcp.once('connect', () => {
-        tcp.setTimeout(0);
-        if (isBlockedAddress(tcp.remoteAddress, { allow, deny })) return fail('EACCES', 'address blocked by relay policy');
-        phase = 'open';
-        touch();
-        send({ op: 'connected', remoteAddress: tcp.remoteAddress, remotePort: tcp.remotePort, family: net.isIP(tcp.remoteAddress) });
-      });
-      tcp.on('data', (chunk) => {
+      const forward = (chunk) => {
         down += chunk.length;
         inflight += chunk.length;
         if (!account(chunk.length)) return;
         ws.send(chunk, { binary: true });
         updateFlow();
-      });
+      };
+      const opened = (remoteAddress, remotePort) => {
+        phase = 'open';
+        touch();
+        send({ op: 'connected', remoteAddress, remotePort, family: net.isIP(remoteAddress) });
+      };
+      if (cfg.upstreamProxy) {
+        // Through an HTTP CONNECT proxy (egress that only allows proxied traffic). The address
+        // policy above already vetted what the name resolves to; the proxy dials the name.
+        const proxy = new URL(cfg.upstreamProxy);
+        tcp = net.connect({ host: proxy.hostname, port: Number(proxy.port) || 80, timeout: cfg.connectTimeoutMs, allowHalfOpen: true });
+        tcp.setNoDelay(true);
+        tcp.once('timeout', () => { if (phase === 'connecting') fail('ETIMEDOUT', 'connect timeout'); });
+        tcp.once('connect', () => tcp.write(`CONNECT ${net.isIP(host) === 6 ? `[${host}]` : host}:${port} HTTP/1.1\r\nHost: ${host}:${port}\r\n\r\n`));
+        let head = Buffer.alloc(0);
+        const onHead = (chunk) => {
+          head = Buffer.concat([head, chunk]);
+          const end = head.indexOf('\r\n\r\n');
+          if (end < 0) { if (head.length > 16384) fail('EPROTO', 'proxy reply too long'); return; }
+          tcp.off('data', onHead);
+          const status = Number(/^HTTP\/1\.[01] (\d{3})/.exec(head.subarray(0, end).toString('latin1'))?.[1]);
+          if (status !== 200) return fail(status === 403 || status === 407 ? 'EACCES' : 'ECONNREFUSED', `proxy answered ${status || '?'}`);
+          tcp.setTimeout(0);
+          opened(address, port);
+          tcp.on('data', forward);
+          if (head.length > end + 4) forward(head.subarray(end + 4));
+        };
+        tcp.on('data', onHead);
+      } else {
+        // Connect to the vetted IP literal: no second lookup, so no rebinding window.
+        // allowHalfOpen: the peer's FIN must not end our side; the client decides with {"op":"shutdown"}
+        tcp = net.connect({ host: address, port, timeout: cfg.connectTimeoutMs, allowHalfOpen: true });
+        tcp.setNoDelay(true);
+        tcp.once('timeout', () => { if (phase === 'connecting') fail('ETIMEDOUT', 'connect timeout'); });
+        tcp.once('connect', () => {
+          tcp.setTimeout(0);
+          if (isBlockedAddress(tcp.remoteAddress, { allow, deny })) return fail('EACCES', 'address blocked by relay policy');
+          opened(tcp.remoteAddress, tcp.remotePort);
+        });
+        tcp.on('data', forward);
+      }
       tcp.on('drain', () => { tcpWriteBlocked = false; updateFlow(); });
       tcp.on('end', () => send({ op: 'eof' }));
       tcp.on('error', (err) => { reason ||= err.code || 'error'; send({ op: 'error', code: err.code || 'EIO', message: 'socket error' }); });
@@ -1279,17 +1312,17 @@ export function createTcpRelay(config, { lookup, log = console.log, verifySignin
 // Those hosts serve only three scripts and a bootstrap page that installs the
 // origin's service worker; all content comes from the app's broker in the
 // user's page. They never serve the app, /api, /tcp or anything else.
-//   SHIRO_BROWSE_ORIGIN       template; default https://{key}.web.<brand domain> on the brand
+//   TABCOMPUTER_BROWSE_ORIGIN       template; default https://{key}.web.<brand domain> on the brand
 //                             domain and its instances (music.<domain>, …), http://{key}.localhost:PORT
 //                             on localhost, else off. Needs wildcard DNS and a *.web.<domain> certificate.
-//   SHIRO_BROWSE_APP_ORIGINS  origins (with *. wildcards) whose Browser may use them; default the
+//   TABCOMPUTER_BROWSE_APP_ORIGINS  origins (with *. wildcards) whose Browser may use them; default the
 //                             brand domain and its subdomains, or http://localhost:PORT
-//   SHIRO_BROWSE=0            off
+//   TABCOMPUTER_BROWSE=0            off
 export function browseConfigFor(hostHeader, env = process.env, brand = profileFor(hostHeader)?.brand) {
-  if (env.SHIRO_BROWSE === '0') return null;
+  if (env.TABCOMPUTER_BROWSE === '0') return null;
   const host = String(hostHeader || '').toLowerCase();
-  let template = env.SHIRO_BROWSE_ORIGIN || '';
-  let apps = envList(env.SHIRO_BROWSE_APP_ORIGINS);
+  let template = env.TABCOMPUTER_BROWSE_ORIGIN || '';
+  let apps = envList(env.TABCOMPUTER_BROWSE_APP_ORIGINS);
   if (!template) {
     const local = /^(?:[a-z0-9-]+\.)*localhost(:\d+)?$/.exec(host);
     const domain = String(brand?.domain || '').toLowerCase();
@@ -1374,9 +1407,9 @@ async function handleBrowseHost(req, res, cfg) {
 // The product path is TLS in the page over /tcp (the server only sees
 // ciphertext). This transport makes the *server* do the request, so it sees
 // plaintext: it exists only to compare the two on the scoreboard, is off unless
-// SHIRO_BROWSE_SERVER_FETCH=1, and must never be set in production (owner
+// TABCOMPUTER_BROWSE_SERVER_FETCH=1, and must never be set in production (owner
 // decision, docs/BROWSER.md). Same address policy as the relay.
-const BROWSE_SERVER_FETCH = process.env.SHIRO_BROWSE_SERVER_FETCH === '1';
+const BROWSE_SERVER_FETCH = process.env.TABCOMPUTER_BROWSE_SERVER_FETCH === '1';
 const browseAgents = { 'https:': new https.Agent({ keepAlive: true, maxSockets: 6 }), 'http:': new http.Agent({ keepAlive: true, maxSockets: 6 }) };
 
 async function handleBrowseFetch(req, res) {
@@ -1394,10 +1427,10 @@ async function handleBrowseFetch(req, res) {
   const host = target.hostname.replace(/^\[|\]$/g, '');
   let addrs;
   try { addrs = net.isIP(host) ? [{ address: host }] : await dns.lookup(host, { all: true, verbatim: true }); } catch { return fail(502, 'ENOTFOUND'); }
-  const usable = addrs.filter((a) => !isBlockedAddress(a.address, { allow: cidrBlockList(envList(process.env.SHIRO_TCP_ALLOW_CIDRS) || []), deny: cidrBlockList([]) }));
+  const usable = addrs.filter((a) => !isBlockedAddress(a.address, { allow: cidrBlockList(envList(process.env.TABCOMPUTER_TCP_ALLOW_CIDRS) || []), deny: cidrBlockList([]) }));
   if (!usable.length) return fail(403, 'address blocked by relay policy');
   const port = Number(target.port) || (target.protocol === 'https:' ? 443 : 80);
-  if (!(envList(process.env.SHIRO_TCP_PORTS) || TCP_DEFAULT_PORTS).map(Number).includes(port)) return fail(403, 'port blocked');
+  if (!(envList(process.env.TABCOMPUTER_TCP_PORTS) || TCP_DEFAULT_PORTS).map(Number).includes(port)) return fail(403, 'port blocked');
   const flat = {};
   for (const [k, v] of headers) { const n = String(k).toLowerCase(); if (n !== 'host' && n !== 'connection' && n !== 'content-length' && n !== 'transfer-encoding') flat[k] = flat[k] ? `${flat[k]}, ${v}` : String(v); }
   const mod = target.protocol === 'https:' ? https : http;

@@ -21,6 +21,7 @@ import { networkCredential, requireNetworkSignIn, setNetworkStatus } from '../ne
 import type { KStat } from './abi';
 import { retain, release, type FdTable, type OpenFile } from './fd';
 import type { Kernel } from './kernel';
+import { klog, LOG_WARNING } from './klog';
 import { AF_NETLINK, KNetlinkSocket, netlinkSocket } from './netlink';
 import {
   EPERM, EINTR, EIO, EBADF, EAGAIN, EACCES, EFAULT, EINVAL, ENOTTY, EPIPE, ETIMEDOUT, EPROTO, ENOTSOCK, EDESTADDRREQ,
@@ -239,6 +240,8 @@ export function decodeSockaddr(b: Uint8Array): SockAddr | number {
     }
     return { family, port: dv.getUint16(2, false), address: formatIpv6(g) };
   }
+  // AF_UNSPEC: connect() with it disconnects a datagram socket
+  if (family === 0) return { family, address: '', port: 0 };
   if (family === AF_NETLINK) {
     if (b.length < 12) return -EINVAL;
     return { family, address: '', port: dv.getUint32(4, true) };
@@ -626,7 +629,8 @@ export class KSocket implements OpenFile {
       if (this.domain === AF_UNIX) {
         if (this.stack.unixListeners.get(this.unixKey!) === this) this.stack.unixListeners.delete(this.unixKey!);
       } else {
-        this.stack.listeners.delete(this.local!.port);
+        const rest = (this.stack.listeners.get(this.local!.port) ?? []).filter((l) => l !== this);
+        if (rest.length) this.stack.listeners.set(this.local!.port, rest); else this.stack.listeners.delete(this.local!.port);
       }
       for (const s of this.backlog.splice(0)) await s.close();
     }
@@ -673,7 +677,7 @@ export class KSocket implements OpenFile {
   private async finishConnect(host: string, port: number, remoteOf: (info?: RelayConnected) => SockAddr, signal?: AbortSignal): Promise<number> {
     const stack = this.stack;
     // Loopback: only sockets listening in this kernel
-    const listener = isLoopback(host) ? stack.listeners.get(port) : undefined;
+    const listener = isLoopback(host) ? stack.listenerFor(port, host) : undefined;
     if (isLoopback(host) && !listener && !stack.config.relayLoopback) return -ECONNREFUSED;
     if (listener) {
       const local = this.local ?? stack.autobindAddr(this.domain === AF_INET6 && host.includes(':') ? AF_INET6 : AF_INET, this, host);
@@ -684,7 +688,10 @@ export class KSocket implements OpenFile {
       this._attach(new LoopbackPeer(this, server), local, remoteOf());
       return 0;
     }
-    if (!stack.config.relayUrl) return -ENETUNREACH;
+    if (!stack.config.relayUrl) {
+      stack.relayLog({ op: 'connect', host, port }, 'no relay configured');
+      return -ENETUNREACH;
+    }
     this.state = 'connecting';
     const p = RelayPeer.open(stack, this, host, port).then(
       ({ peer, info }) => {
@@ -718,7 +725,7 @@ export class KSocket implements OpenFile {
     if (!isLoopback(addr.address) && addr.address !== '10.0.2.15') return -EADDRNOTAVAIL;
     let port = addr.port;
     if (port === 0) port = this.stack.ephemeral();
-    else if (!this.stack.claimPort(port, this, this.getOpt(SOL_SOCKET, SO_REUSEADDR) !== 0)) return -EADDRINUSE;
+    else if (!this.stack.claimPort(port, this, this.getOpt(SOL_SOCKET, SO_REUSEADDR) !== 0, { family: addr.family, address: addr.address, v6only: this.v6only })) return -EADDRINUSE;
     this.local = { family: addr.family, address: addr.address, port };
     if (this.state === 'unbound') this.state = 'bound';
     return 0;
@@ -738,10 +745,11 @@ export class KSocket implements OpenFile {
     if (!this.local) {
       this.local = this.stack.autobindAddr(this.domain, this, this.domain === AF_INET6 ? '::' : '0.0.0.0');
     }
-    if (this.stack.listeners.has(this.local.port)) return -EADDRINUSE;
+    const others = this.stack.listeners.get(this.local.port) ?? [];
+    if (others.some((l) => portsOverlap(l.portUse(), this.portUse()))) return -EADDRINUSE;
     this.backlogMax = Math.max(1, Math.min(backlog || 1, 4096));
     this.state = 'listening';
-    this.stack.listeners.set(this.local.port, this);
+    this.stack.listeners.set(this.local.port, [...others, this]);
     this.unpublish = this.stack.publish(this);
     return 0;
   }
@@ -780,6 +788,10 @@ export class KSocket implements OpenFile {
   }
 
   private getOpt(level: number, name: number) { return this.opts.get(`${level}:${name}`) ?? 0; }
+  /** IPV6_V6ONLY: an AF_INET6 socket that takes no IPv4 */
+  get v6only(): boolean { return this.domain === AF_INET6 && this.getOpt(IPPROTO_IPV6, IPV6_V6ONLY) !== 0; }
+  /** @internal What this socket's port binding covers */
+  portUse(): PortUse { return { family: this.local?.family ?? this.domain, address: this.local?.address ?? (this.domain === AF_INET6 ? '::' : '0.0.0.0'), v6only: this.v6only }; }
 
   getsockopt(level: number, name: number): number {
     if (level === SOL_SOCKET) {
@@ -852,6 +864,24 @@ export class KDatagramSocket implements OpenFile {
   bind(addr: SockAddr): number {
     if (this.local) return -EINVAL;
     this.local = { ...addr, port: addr.port || this.stack.ephemeral() };
+    this.boundAddr = addr.address !== '::' && addr.address !== '0.0.0.0';
+    this.boundPort = addr.port !== 0;
+    return 0;
+  }
+
+  /** bind() named the address / the port (a disconnect keeps them) */
+  private boundAddr = false;
+  private boundPort = false;
+
+  /**
+   * connect(AF_UNSPEC): no peer any more. A source address the route chose
+   * goes back to the wildcard, and a port nobody bound is released, as in
+   * Linux's __udp_disconnect.
+   */
+  disconnect(): number {
+    this.remote = null;
+    if (this.local && !this.boundAddr && !this.boundPort) this.local = null;
+    else if (this.local && !this.boundAddr) this.local = { ...this.local, address: this.domain === AF_INET6 ? '::' : '0.0.0.0' };
     return 0;
   }
 
@@ -1017,10 +1047,35 @@ export function parseHttpResponse(raw: Uint8Array, eof: boolean, method = 'GET')
 
 // ── Stack ──
 
+/** Who holds a TCP port: a v4 and a v6-only socket can share one */
+interface PortUse { family: number; address: string; v6only: boolean }
+
+/** The IPv4 addresses `u` takes: '*' for all of them, one address, or none (v6-only, or a non-mapped v6 address) */
+function v4Part(u: PortUse): string | null {
+  if (u.family === AF_INET) return u.address === '0.0.0.0' ? '*' : u.address;
+  if (u.v6only) return null;
+  if (u.address === '::') return '*';
+  const m = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(u.address);
+  return m ? (m[1] === '0.0.0.0' ? '*' : m[1]) : null;
+}
+function v6Part(u: PortUse): string | null {
+  if (u.family !== AF_INET6 || /^::ffff:/i.test(u.address)) return null;
+  return u.address === '::' ? '*' : u.address.toLowerCase();
+}
+/**
+ * Do two bindings of one port overlap? As Linux with bindv6only=0: a v4
+ * socket takes IPv4, a v6 socket IPv6 and (unless IPV6_V6ONLY) IPv4 too, a
+ * wildcard all of its family. Redis binds 0.0.0.0:6379 then [::]:6379 v6-only.
+ */
+function portsOverlap(a: PortUse, b: PortUse): boolean {
+  const meets = (x: string | null, y: string | null) => x !== null && y !== null && (x === '*' || y === '*' || x === y);
+  return meets(v4Part(a), v4Part(b)) || meets(v6Part(a), v6Part(b));
+}
+
 export class NetStack {
   config: NetConfig = defaultConfig();
-  /** port → listening socket */
-  readonly listeners = new Map<number, KSocket>();
+  /** port → listening sockets (a v4 and a v6-only one can share a port) */
+  readonly listeners = new Map<number, KSocket[]>();
   /** AF_UNIX: resolved path (or "\0name") → listening socket */
   readonly unixListeners = new Map<string, KSocket>();
   /** AF_UNIX: bound abstract names (paths are files in the filesystem) */
@@ -1029,7 +1084,7 @@ export class NetStack {
   readonly unixDgram = new Map<string, KSocket>();
   /** AF_UNIX: resolved paths of socket files made by bind() (they stat as sockets) */
   readonly unixPaths = new Set<string>();
-  private bound = new Map<number, KSocket>();
+  private bound = new Map<number, { s: KSocket; use: PortUse }[]>();
   private nextEphemeral = 32768;
   nextIno = 1;
   private token: { token: string; expires: number } | null = null;
@@ -1184,19 +1239,31 @@ export class NetStack {
 
   /** @internal */ autobindAddr(family: number, s: KSocket, address: string): SockAddr {
     const port = this.ephemeral();
-    this.bound.set(port, s);
+    this.bound.set(port, [{ s, use: { family, address, v6only: s.v6only } }]);
     return { family, address, port };
   }
 
-  /** @internal */ claimPort(port: number, s: KSocket, reuse: boolean): boolean {
-    const holder = this.bound.get(port);
-    if (holder && holder !== s && !(reuse && holder.state !== 'listening')) return false;
-    this.bound.set(port, s);
+  /** @internal Take `port` for `s` bound to `use`; false if an overlapping binding holds it (EADDRINUSE). */
+  claimPort(port: number, s: KSocket, reuse: boolean, use: PortUse): boolean {
+    const holders = (this.bound.get(port) ?? []).filter((h) => h.s !== s);
+    for (const h of holders) {
+      if (portsOverlap(h.use, use) && !(reuse && h.s.state !== 'listening')) return false;
+    }
+    this.bound.set(port, [...holders, { s, use }]);
     return true;
   }
 
   /** @internal */ releasePort(port: number, s: KSocket): void {
-    if (this.bound.get(port) === s) this.bound.delete(port);
+    const rest = (this.bound.get(port) ?? []).filter((h) => h.s !== s);
+    if (rest.length) this.bound.set(port, rest); else this.bound.delete(port);
+  }
+
+  /** @internal The listener on `port` that takes a connection to `host` (one of the port's, if none binds that address) */
+  listenerFor(port: number, host: string): KSocket | undefined {
+    const ls = this.listeners.get(port);
+    if (!ls?.length) return undefined;
+    const to: PortUse = { family: host.includes(':') ? AF_INET6 : AF_INET, address: host, v6only: false };
+    return ls.find((l) => portsOverlap(l.portUse(), to)) ?? ls.find((l) => !(l.v6only && to.family === AF_INET));
   }
 
   private async portHost(): Promise<PortHost | null> {
@@ -1249,6 +1316,18 @@ export class NetStack {
 
   // ── relay plumbing ──
 
+  /**
+   * One kernel log line (dmesg) about the relay, rate-limited so a retry loop
+   * can't flood the buffer. curl and git only say "Could not connect"; this
+   * says why (no relay, token refused, handshake refused, relay error).
+   */
+  relayLog(request: object, why: string): void {
+    const r = request as { op?: string; host?: string; port?: number };
+    const target = r.host ? `${r.host}${r.port !== undefined ? ':' + r.port : ''}` : '';
+    const what = `${r.op ?? 'request'}${target ? (r.op === 'resolve' ? ' of ' : ' to ') + target : ''}`;
+    klog.logRatelimited(LOG_WARNING, `net: relay refused ${what}: ${why}`);
+  }
+
   private async relayToken(): Promise<string | null> {
     const { tokenUrl } = this.config;
     if (!tokenUrl) return null;
@@ -1260,14 +1339,27 @@ export class NetStack {
       ...(cred ? { headers: { Authorization: `Bearer ${cred}` } } : {}),
     });
     const own = this.config.credentials;
-    let res = await post(own ? networkCredential() : null);
+    const fetchToken = async (cred: string | null) => {
+      try { return await post(cred); } catch (e) {
+        throw new Error(`token request failed: ${(e as Error)?.message ?? e}`);
+      }
+    };
+    let res = await fetchToken(own ? networkCredential() : null);
+    let signedIn = false;
     if (res.status === 401 && own) {
       // The relay wants a signed-in user: ask once (src/net-signin.ts), then retry
       const cred = await requireNetworkSignIn({ reason: 'A program wants to connect to the internet' });
-      if (!cred) { setNetworkStatus('needs-sign-in'); throw new Error('token 401: sign-in required'); }
-      res = await post(cred);
+      if (!cred) { setNetworkStatus('needs-sign-in'); throw new Error('sign-in required (token 401)'); }
+      res = await fetchToken(cred);
+      signedIn = true;
     }
-    if (!res.ok) throw new Error(`token ${res.status}`);
+    if (!res.ok) {
+      const why = res.status === 401 ? (signedIn ? 'sign-in not accepted (token 401)' : 'sign-in required (token 401)')
+        : res.status === 403 ? 'this page\'s origin is not allowed (token 403)'
+        : res.status === 404 ? 'no relay at this server (token 404)'
+        : `token request failed (${res.status})`;
+      throw new Error(why);
+    }
     setNetworkStatus(own && networkCredential() ? 'signed-in' : 'online');
     this.token = await res.json();
     return this.token!.token;
@@ -1279,9 +1371,9 @@ export class NetStack {
    */
   openRelay<T>(request: object, onMsg: (ws: WebSocket, msg: Record<string, unknown>, settle: (v: T) => void) => boolean): Promise<T> {
     const { relayUrl } = this.config;
-    if (!relayUrl) return Promise.reject(ENETUNREACH);
+    if (!relayUrl) { this.relayLog(request, 'no relay configured'); return Promise.reject(ENETUNREACH); }
     const WS = this.config.WebSocket ?? (globalThis as any).WebSocket;
-    if (!WS) return Promise.reject(ENETUNREACH);
+    if (!WS) { this.relayLog(request, 'no WebSocket in this context'); return Promise.reject(ENETUNREACH); }
     const attempt = (retry: boolean): Promise<T> => this.relayToken().then((token) => new Promise<T>((resolve, reject) => {
       const url = token ? `${relayUrl}${relayUrl.includes('?') ? '&' : '?'}t=${encodeURIComponent(token)}` : relayUrl;
       const ws: WebSocket = new WS(url);
@@ -1295,23 +1387,32 @@ export class NetStack {
         let msg: Record<string, unknown>;
         try { msg = JSON.parse(ev.data); } catch { return; }
         if (msg.op === 'error') {
+          if (!settled) this.relayLog(request, `${String(msg.code ?? 'error')}${msg.message ? ` (${String(msg.message)})` : ''}`);
           done(() => reject(ERRNO_BY_NAME[String(msg.code)] ?? EIO));
           try { ws.close(); } catch { /* closing */ }
           return;
         }
         if (onMsg(ws, msg, (v) => done(() => resolve(v)))) settled = true;
       };
-      const failed = () => {
+      const failed = (ev?: { code?: number; reason?: string }) => {
         if (settled) return;
         settled = true;
         // A refused handshake (expired token, relay off, limits) fails before open: refresh the token once
-        if (!opened && retry && this.config.tokenUrl) { this.token = null; attempt(false).then(resolve, reject); }
-        else reject(opened ? ECONNRESET : ENETUNREACH);
+        if (!opened && retry && this.config.tokenUrl) { this.token = null; attempt(false).then(resolve, reject); return; }
+        // Browsers don't expose the HTTP status of a refused handshake; give the close code when there is one
+        const code = ev && typeof ev.code === 'number' ? ` (close ${ev.code}${ev.reason ? ` ${ev.reason}` : ''})` : '';
+        if (opened) this.relayLog(request, `relay closed the connection before replying${code}`);
+        else this.relayLog(request, `handshake refused${code}${this.config.tokenUrl ? ' after token refresh' : ''}`);
+        reject(opened ? ECONNRESET : ENETUNREACH);
       };
-      // Browsers fire error then close; Node's WebSocket only fires error for a refused handshake
-      ws.onerror = () => { if (!opened) failed(); };
-      ws.onclose = failed;
-    }), () => Promise.reject(ENETUNREACH));
+      // Browsers fire error then close; Node's WebSocket only fires error for a refused handshake.
+      // Let a close that follows the error at once supply its code.
+      ws.onerror = () => { if (!opened) setTimeout(() => failed(), 0); };
+      ws.onclose = (ev: CloseEvent) => failed(ev);
+    }), (e) => {
+      this.relayLog(request, (e as Error)?.message ?? String(e));
+      return Promise.reject(ENETUNREACH);
+    });
     return attempt(true);
   }
 
@@ -1478,7 +1579,8 @@ export async function netSyscall(
         return nr === SYS_bind ? stack.bindUnix(s, sa, unix ?? noUnix) : stack.connectUnix(s, sa, unix ?? noUnix);
       }
       if (sa.family === AF_UNIX) return -EAFNOSUPPORT; // an AF_UNIX address on an inet socket
-      if (nr === SYS_bind) return s.bind(sa);
+      if (nr === SYS_bind) return sa.family === 0 ? -EAFNOSUPPORT : s.bind(sa);
+      if (sa.family === 0) return s instanceof KDatagramSocket ? s.disconnect() : -EAFNOSUPPORT;
       return s instanceof KSocket ? s.connect(sa, sig) : s.connect(sa);
     }
     case SYS_listen: { // fd, backlog

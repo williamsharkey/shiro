@@ -92,12 +92,11 @@ import type { Desktop } from './desktop/index';
 import { installDomFs } from './dom-fs';
 import { desktopCmd } from './commands/desktop';
 import buildNumber from '../build-number.txt?raw';
-import { AGENTS_MD, CLAUDE_MD } from './claude-md-seed';
+import { seedAgentDocs } from './agent-docs';
 import {
   defaultRuntimeContext,
   parseRuntimeContext,
   SHIRO_RUNTIME_CONTEXT_SESSION_KEY,
-  writeRuntimeContextFiles,
 } from './seed-runtime-context';
 import { getShiroOrigin } from './utils/shiro-origin';
 import { logIsolationStatus } from './utils/isolation';
@@ -149,13 +148,11 @@ async function main() {
       return defaultRuntimeContext();
     }
   })();
-  // Seed agent instructions for internal Claude Code (always update to latest version)
+  // ~/AGENTS.md and ~/CLAUDE.md for coding agents (src/agent-docs.ts): kept
+  // current, except where the user edited them
   try {
-    await fs.mkdir('/home/user', { recursive: true });
-    await fs.writeFile('/home/user/AGENTS.md', AGENTS_MD);
-    await fs.writeFile('/home/user/CLAUDE.md', CLAUDE_MD);
-    await writeRuntimeContextFiles(fs, runtimeContext);
-  } catch {}
+    for (const line of await seedAgentDocs(fs, runtimeContext)) console.log(`[agent-docs] ${line}`);
+  } catch (e) { console.warn('[agent-docs]', e); }
   console.log('[tabcomputer] Filesystem initialized');
 
   // Initialize file associations (extension → command mappings for `open`)
@@ -474,6 +471,8 @@ async function main() {
     () => import('./commands/cron').then(m => m.crontabCmd)), 'src/commands/cron.ts');
   registerCommand(commands, lazyCommand('journalctl', 'Query the journal',
     () => import('./commands/cron').then(m => m.journalctlCmd)), 'src/commands/cron.ts');
+  registerCommand(commands, lazyCommand('dmesg', 'Print or control the kernel ring buffer',
+    () => import('./commands/dmesg').then(m => m.dmesgCmd)), 'src/commands/dmesg.ts');
   registerCommand(commands, lazyCommand('ssh', 'Connect to remote tabcomputer via WebRTC',
     () => import('./commands/ssh').then(m => m.sshCmd)), 'src/commands/ssh.ts');
   registerCommand(commands, lazyCommand('doctor', 'Check this tab (deploy, browser, engine, network, sign-ins, storage) for a bug report',
@@ -498,9 +497,9 @@ async function main() {
   // In Debian mode (docs/DEBIAN.md) the streamed rootfs's files load on first
   // read, Debian's programs on PATH replace builtins of the same name, and
   // the builtin shims are left out (they'd shadow /usr/bin).
-  void import('./debian/rootfs').then(async (m) => {
+  const debianBoot = import('./debian/rootfs').then(async (m) => {
     const st = await m.bootRootfs(fs);
-    if (!st) return createPathShims(fs);
+    if (!st) { void createPathShims(fs).catch(() => {}); return; } // no Debian: nothing for commands to wait for
     const ov = await import('./debian/overlay');
     await ov.enableDebianShadows(fs, (n) => !!commands.get(n));
     for (const [k, v] of Object.entries(m.DEBIAN_ENV)) shell.env[k] ??= v;
@@ -509,6 +508,8 @@ async function main() {
 
   // Create shell
   const shell = new Shell(fs, commands);
+  // Commands wait for Debian mode's overlay (Debian's python3, not the builtin, once installed)
+  shell.bootGate = debianBoot;
   // Kernel processes (worker guests, spawned builtins) run against this fs and fork this shell
   const kernel = getKernel();
   kernel.attach(fs, shell);

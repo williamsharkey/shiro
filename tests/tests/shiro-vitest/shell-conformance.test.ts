@@ -712,4 +712,14 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('s1=1\ns2=1\ns3=3 hi\nunexported\n');
   });
+
+  it('a wasm program run through a symlink gets the link\'s name as argv[0] (multi-call binaries)', async () => {
+    const { readFileSync } = await import('node:fs');
+    const wasm = new Uint8Array(readFileSync(new URL('./fixtures/wasi/argv0.wasm', import.meta.url)));
+    const r = await script('ln -s /tmp/a0/prog.wasm /tmp/a0/echo2; /tmp/a0/echo2; /tmp/a0/prog.wasm\n', async (fs) => {
+      await fs.mkdir('/tmp/a0', { recursive: true });
+      await fs.writeFile('/tmp/a0/prog.wasm', wasm, { mode: 0o755 });
+    });
+    expect(r.out).toBe('argv0=echo2\nargv0=prog.wasm\n');
+  });
 });

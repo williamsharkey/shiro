@@ -27,7 +27,7 @@ interface Conn { stream: ByteStream; reader: StreamReader; key: string; uses: nu
 export interface NetFetchOptions {
   dial: Dialer;
   /** Wrap a raw connection in TLS (default tlsConnect). */
-  tls?: (raw: ByteStream, host: string) => Promise<ByteStream>;
+  tls?: (raw: ByteStream, host: string, redial?: () => Promise<ByteStream>) => Promise<ByteStream>;
   maxPerOrigin?: number;
   idleMs?: number;
   /** Count bytes per caller (the app shows per-tab download totals). */
@@ -72,7 +72,7 @@ export class NetFetcher implements Fetcher {
       const host = u.hostname.replace(/^\[|\]$/g, '');
       let stream = await this.opts.dial(host, port);
       this.stats.connects++;
-      if (u.protocol === 'https:') stream = await this.opts.tls(stream, host);
+      if (u.protocol === 'https:') stream = await this.opts.tls(stream, host, () => this.opts.dial(host, port));
       const c = { key, uses: 1, bytes: 0 } as Conn;
       c.stream = this.counting(stream, c);
       c.reader = new StreamReader(c.stream);

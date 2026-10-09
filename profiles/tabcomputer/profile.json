@@ -21,7 +21,7 @@
     "claude-code"
   ],
   "shims": {
-    "claude": "npm",
+    "claude": "native",
     "claudeInstallSh": true,
     "tabSsh": true,
     "binCommandStat": true,

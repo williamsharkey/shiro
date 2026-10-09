@@ -85,6 +85,18 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     await fs.unlink('/usr/bin/curl-8');
   });
 
+  it("Debian's util-linux dmesg reads the kernel log through /dev/kmsg", async () => {
+    const { klog, LOG_WARNING } = await import('@shiro/kernel/klog');
+    klog.log(LOG_WARNING, 'net: relay refused connect to github.com:443: debian-dmesg-test');
+    // In Debian mode Debian's dmesg replaces the builtin (no overlay policy for it)
+    const r = await run(shell, 'dmesg');
+    expect(r.output).toMatch(/^\[ *\d+\.\d{6}\] net: relay refused connect to github\.com:443: debian-dmesg-test$/m);
+    const x = await run(shell, '/usr/bin/dmesg -x --level=warn');
+    expect(x.output).toMatch(/^kern  :warn  : \[ *\d+\.\d{6}\] net: relay refused connect to github\.com:443: debian-dmesg-test$/m);
+    // dmesg -S (syslog(2)) needs Blink patch 0055 (forward syslog to the kernel); until blink.wasm is
+    // rebuilt with it, Blink answers ENOSYS. The kernel side is covered in kernel-klog.test.ts.
+  }, 120000);
+
   it('sudo runs kernel programs as uid 0', async () => {
     expect((await run(shell, '/usr/bin/id -u')).output.trim()).toBe('1000');
     expect((await run(shell, 'sudo /usr/bin/id -u')).output.trim()).toBe('0');
@@ -107,6 +119,25 @@ describe.skipIf(!haveRootfs)('Debian rootfs', () => {
     // Maintainer scripts don't start services (invoke-rc.d asks policy-rc.d)
     expect((await run(shell, '/usr/sbin/policy-rc.d ssh start; echo "rc=$?"')).output).toContain('rc=101');
   });
+
+  it("a Debian program replaces the builtin of its name, for type too; commands wait for the boot gate", async () => {
+    expect(shell.commands.get('jq')).toBeTruthy();
+    await fs.writeFile('/usr/bin/jq', '#!/bin/sh\necho debian-jq\n', { mode: 0o755 });
+    await new Promise((r) => setTimeout(r, 50)); // the overlay hears the write
+    expect((await run(shell, 'type jq')).output).toContain('/usr/bin/jq');
+    expect((await run(shell, 'jq')).output).toContain('debian-jq');
+    await fs.unlink('/usr/bin/jq');
+    // A command typed before the overlay is up waits for it (python3 right after load)
+    let release!: () => void;
+    const order: string[] = [];
+    shell.bootGate = new Promise<void>((r) => { release = r; }).then(() => { order.push('boot'); });
+    const pending = run(shell, 'echo cmd').then((r) => { order.push('cmd'); return r; });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(order).toEqual([]);
+    release();
+    expect((await pending).output).toContain('cmd');
+    expect(order).toEqual(['boot', 'cmd']);
+  }, 60000);
 
   it("bash's PATH search finds builtins and Debian's programs (no phantom /usr/local/sbin/NAME)", async () => {
     // id: Debian's file in /usr/bin; tail: diverted to Shiro's (no file); /usr/local/sbin comes first

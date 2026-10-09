@@ -91,7 +91,10 @@ gather/scatter around sendto/recvfrom.
 ## Relay protocol (`/tcp`)
 
 1. `POST /tcp/token` from an allowed Origin → `{ "token": "...", "expires": ms }`.
-   The token is an HMAC over the expiry and the client IP.
+   The token is an HMAC over the expiry and the client IP
+   (`TABCOMPUTER_TCP_TOKEN_BIND_IP=0` leaves the IP out, as tabcomputer.com does:
+   proxy pools, iCloud Private Relay and dual-stack clients change IP between
+   the token request and each connection).
 2. WebSocket `GET /tcp?t=<token>` (Origin must be allowed).
 3. First frame, text JSON:
    - `{"op":"connect","host":"example.com","port":443}` →
@@ -131,7 +134,7 @@ The egress policy is the security boundary; everything else limits abuse.
 - **Caller checks.** Origin must match `TABCOMPUTER_TCP_ORIGINS` (default
   `https://shiro.computer,https://*.shiro.computer`), on both the token request
   and the WebSocket handshake, and the token must be valid, unexpired and
-  issued to the same client IP. This keeps other websites' pages out; it does
+  issued to the same client IP (unless binding is off). This keeps other websites' pages out; it does
   not stop a non-browser client that fakes an Origin, which is why the egress
   policy and limits are what actually bound the relay.
 - **Limits** (env, defaults): concurrent connections per IP
@@ -148,6 +151,10 @@ The egress policy is the security boundary; everything else limits abuse.
   and the rightmost entry is used, i.e. the address nginx saw.
 - **Logging.** One line per connect, refusal and close: client IP, target
   host/IP:port, byte counts, duration, close reason. Never payloads.
+- **Upstream proxy** (`TABCOMPUTER_TCP_UPSTREAM_PROXY=http://host:port`, off by
+  default): dial through an HTTP CONNECT proxy, for hosts whose egress only
+  allows proxied traffic. The address policy still vets what the name resolves
+  to; the proxy then dials the name itself.
 - **Token secret.** Random per process unless `TABCOMPUTER_TCP_SECRET` is set (set
   it if several server processes sit behind one balancer).
 
@@ -233,6 +240,14 @@ token requests and asks `requireNetworkSignIn()` (src/net-signin.ts) once on a
 receives that token. See docs/DESKTOP.md, "Network sign-in".
 
 ## Checking it from a tab
+
+When a connection fails, curl and git only say they couldn't connect.
+`dmesg` (the kernel log, src/kernel/klog.ts) says why: e.g.
+`net: relay refused connect to github.com:443: sign-in required (token 401)`,
+`... handshake refused (close 1006) after token refresh`, `... no relay
+configured`, or the relay's own `op:error` code (`EACCES (address blocked by
+relay policy)`). Identical lines are rate-limited.
+
 
 `doctor` (src/commands/doctor.ts) requests a relay token (this site's
 `/tcp/token`, or the token URL of the user's own relay) and connects a kernel
