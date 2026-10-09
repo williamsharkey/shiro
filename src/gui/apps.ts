@@ -14,7 +14,9 @@
  */
 import type { FileSystem } from '../filesystem';
 import type { Kernel } from '../kernel/kernel';
-import { untar, gunzip, type TarEntry } from '../pkg-tar';
+import type { TarEntry } from '../pkg-tar';
+import { debEntriesOffThread } from './deb';
+export { arMembers, debEntries } from './deb';
 
 export interface DebPackage { version: string; filename: string; sha256: string; size: number }
 export interface GuiApp {
@@ -23,6 +25,8 @@ export interface GuiApp {
   pkg?: string;
   packages: string[];
   size: number; closureSize: number; dropped: string[];
+  /** Its icon, relative to the page (public/gui/icons/). */
+  icon?: string;
   /** Paths deleted after unpacking: optional plug-ins whose libraries were left out. */
   remove?: string[];
 }
@@ -53,6 +57,7 @@ export interface InstallResult {
   fetched: number;
   cached: number;
   bytes: number;
+  /** fetch: waiting for downloaded and decoded packages; unpack: writing their files */
   ms: { total: number; fetch: number; unpack: number; triggers: number };
 }
 
@@ -182,38 +187,6 @@ async function getBlob(sha256: string, size: number, url: string, cache: Cache |
 
 // ── unpacking ──
 
-/** Members of an ar archive (.deb). */
-export function arMembers(b: Uint8Array): Map<string, Uint8Array> {
-  const out = new Map<string, Uint8Array>();
-  if (new TextDecoder().decode(b.subarray(0, 8)) !== '!<arch>\n') throw new Error('not a .deb (ar) file');
-  let off = 8;
-  const dec = new TextDecoder();
-  while (off + 60 <= b.length) {
-    const name = dec.decode(b.subarray(off, off + 16)).trim().replace(/\/$/, '');
-    const size = parseInt(dec.decode(b.subarray(off + 48, off + 58)).trim(), 10);
-    off += 60;
-    out.set(name, b.subarray(off, off + size));
-    off += size + (size & 1);
-  }
-  return out;
-}
-
-/** The data.tar entries of a .deb. */
-export async function debEntries(deb: Uint8Array): Promise<TarEntry[]> {
-  const m = arMembers(deb);
-  for (const [name, data] of m) {
-    if (!name.startsWith('data.tar')) continue;
-    let tar: Uint8Array;
-    if (name.endsWith('.xz')) tar = (await import('../commands/compress/xz-codec')).xzDecompressDetailed(data).data;
-    else if (name.endsWith('.zst')) tar = (await import('../commands/compress/zstd-codec')).zstdDecodeAll(data);
-    else if (name.endsWith('.gz')) tar = await gunzip(data);
-    else if (name === 'data.tar') tar = data;
-    else throw new Error(`unsupported ${name}`);
-    return untar(tar);
-  }
-  throw new Error('.deb has no data.tar');
-}
-
 async function unpack(fs: FileSystem, entries: TarEntry[], ownBins: Set<string>): Promise<number> {
   let files = 0;
   for (const e of entries) {
@@ -237,21 +210,41 @@ async function unpack(fs: FileSystem, entries: TarEntry[], ownBins: Set<string>)
 
 // ── triggers ──
 
-/** postinst-like steps, by the file whose presence enables them. */
-const TRIGGERS: { when: string; argv: string[] }[] = [
-  { when: '/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders', argv: ['/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders', '--update-cache'] },
-  { when: '/usr/bin/glib-compile-schemas', argv: ['/usr/bin/glib-compile-schemas', '/usr/share/glib-2.0/schemas'] },
+/**
+ * postinst-like steps: `argv` runs when a package just unpacked put files in
+ * `dir`, unless all of them are `covered` (packages whose result ships as an
+ * overlay: gen-apps.py).
+ */
+const TRIGGERS: { dir: string; argv: string[]; covered?: string[] }[] = [
+  {
+    dir: '/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/',
+    argv: ['/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders', '--update-cache'],
+    covered: ['libgdk-pixbuf-2.0-0'],
+  },
+  { dir: '/usr/share/glib-2.0/schemas/', argv: ['/usr/bin/glib-compile-schemas', '/usr/share/glib-2.0/schemas'] },
 ];
 
-async function runTriggers(fs: FileSystem, kernel: Kernel, log: (s: string) => void): Promise<void> {
+/** The triggers a package's files set off. */
+function triggersOf(pkg: string, entries: TarEntry[]): Set<number> {
+  const out = new Set<number>();
+  TRIGGERS.forEach((t, i) => {
+    if (t.covered?.includes(pkg)) return;
+    if (entries.some((e) => e.type !== 'dir' && ('/' + e.path.replace(/^\.?\/+/, '')).startsWith(t.dir))) out.add(i);
+  });
+  return out;
+}
+
+async function runTriggers(fs: FileSystem, kernel: Kernel, which: Set<number>, log: (s: string) => void): Promise<void> {
   for (const d of ['/var/cache/fontconfig', '/tmp/.X11-unix', '/tmp/runtime-user', '/home/user/.cache']) await fs.mkdir(d, { recursive: true }).catch(() => {});
   await fs.chmod('/tmp/runtime-user', 0o700).catch(() => {});
-  for (const t of TRIGGERS) {
-    if (!(await fs.exists(t.when).catch(() => false))) continue;
+  // independent of each other: each is its own Blink worker
+  await Promise.all([...which].map(async (i) => {
+    const t = TRIGGERS[i];
+    if (!(await fs.exists(t.argv[0]).catch(() => false))) return;
     const t0 = Date.now();
     const status = await runQuiet(kernel, t.argv, {});
     log(`trigger ${t.argv[0].split('/').pop()}: status ${status >> 8} in ${Date.now() - t0} ms`);
-  }
+  }));
 }
 
 async function runQuiet(kernel: Kernel, argv: string[], env: Record<string, string>): Promise<number> {
@@ -284,14 +277,41 @@ export function toolkitEnv(app: GuiApp): Record<string, string> {
 // ── install & launch ──
 
 const installing = new Map<string, Promise<InstallResult>>();
+const watchers = new Map<string, Set<(p: InstallProgress) => void>>();
 
+/** Install `name` (or join the install in progress); `onProgress` hears it either way. */
 export function installApp(fs: FileSystem, kernel: Kernel, name: string, onProgress?: (p: InstallProgress) => void, log: (s: string) => void = () => {}): Promise<InstallResult> {
+  const off = onProgress ? watchInstall(name, onProgress) : () => {};
   let p = installing.get(name);
   if (!p) {
-    p = doInstall(fs, kernel, name, onProgress, log).finally(() => installing.delete(name));
+    const notify = (pr: InstallProgress) => { for (const cb of watchers.get(name) ?? []) cb(pr); };
+    p = doInstall(fs, kernel, name, notify, log).finally(() => installing.delete(name));
     installing.set(name, p);
   }
-  return p;
+  return p.finally(off);
+}
+
+/** Progress of `name`'s installs (from any caller); returns unsubscribe. */
+export function watchInstall(name: string, cb: (p: InstallProgress) => void): () => void {
+  let set = watchers.get(name);
+  if (!set) watchers.set(name, set = new Set());
+  set.add(cb);
+  return () => { set.delete(cb); };
+}
+
+/** The install of `name` in progress, if any. */
+export function installInProgress(name: string): Promise<InstallResult> | undefined {
+  return installing.get(name);
+}
+
+/** What installing `name` would download now: packages not yet installed, and their size. */
+export async function pendingDownload(fs: FileSystem, name: string): Promise<{ packages: number; bytes: number }> {
+  const m = await guiManifest();
+  const app = m.apps[name];
+  if (!app) return { packages: 0, bytes: 0 };
+  const status = await readStatus(fs);
+  const want = app.packages.filter((n) => status.packages[n] !== m.packages[n].version);
+  return { packages: want.length, bytes: want.reduce((a, n) => a + m.packages[n].size, 0) };
 }
 
 async function doInstall(fs: FileSystem, kernel: Kernel, name: string, onProgress: ((p: InstallProgress) => void) | undefined, log: (s: string) => void): Promise<InstallResult> {
@@ -301,58 +321,59 @@ async function doInstall(fs: FileSystem, kernel: Kernel, name: string, onProgres
   if (!app) throw new Error(`no GUI app named ${name}`);
   if (await debianMode(fs)) return installWithApt(fs, kernel, name, app, log);
   const status = await readStatus(fs);
-  const want = app.packages.filter((n) => status.packages[n] !== m.packages[n].version);
+  // largest first: decoding (xz in JavaScript) is the long pole, so the big ones start at once
+  const want = app.packages.filter((n) => status.packages[n] !== m.packages[n].version).sort((a, b) => m.packages[b].size - m.packages[a].size);
   const totalBytes = want.reduce((a, n) => a + m.packages[n].size, 0);
   const res: InstallResult = { app: name, packages: app.packages.length, skipped: app.packages.length - want.length, fetched: 0, cached: 0, bytes: 0, ms: { total: 0, fetch: 0, unpack: 0, triggers: 0 } };
   const cache = await openCache();
   const ownBins = new Set([app.bin]);
+  const triggers = new Set<number>();
   let done = 0;
   const report = (phase: InstallProgress['phase'], pkg?: string) => onProgress?.({ phase, pkg, done, total: want.length, bytes: res.bytes, totalBytes });
-  // Fetch with a few requests in flight; unpack in package order as they arrive
-  const fetches = new Map<string, Promise<{ data: Uint8Array; cached: boolean }>>();
+  // Fetch with a few requests in flight and decode each .deb (workers) as it
+  // arrives; write the files in that order
+  const ready = new Map<string, Promise<{ entries: TarEntry[]; size: number; cached: boolean }>>();
   let next = 0;
-  const tFetch0 = Date.now();
   const startMore = () => {
-    while (next < want.length && fetches.size - done < 6) {
+    while (next < want.length && ready.size < 16) {
       const n = want[next++];
-      fetches.set(n, getDeb(m.packages[n], cache));
+      ready.set(n, getDeb(m.packages[n], cache).then(async ({ data, cached }) => ({ size: data.length, cached, entries: await debEntriesOffThread(data) })));
     }
   };
   startMore();
-  let fetchWait = 0;
+  const overlays = (m.overlays ?? []).filter((o) => want.includes(o.when)).map((o) => [o, getBlob(o.sha256, o.size, `gui/overlay/${o.sha256}`, cache, null)] as const);
+  for (const [, blob] of overlays) blob.catch(() => {}); // awaited after the packages
   for (const n of want) {
     const tw = Date.now();
-    const { data, cached } = await fetches.get(n)!;
-    fetchWait += Date.now() - tw;
-    if (cached) res.cached++; else { res.fetched++; res.bytes += data.length; }
+    const { entries, size, cached } = await ready.get(n)!;
+    res.ms.fetch += Date.now() - tw;
+    if (cached) res.cached++; else { res.fetched++; res.bytes += size; }
+    ready.delete(n);
+    startMore();
     report('fetch', n);
     const tu = Date.now();
-    const entries = await debEntries(data);
     await unpack(fs, entries, ownBins);
+    for (const i of triggersOf(n, entries)) triggers.add(i);
     res.ms.unpack += Date.now() - tu;
     status.packages[n] = m.packages[n].version;
     done++;
-    fetches.delete(n);
-    startMore();
     report('unpack', n);
   }
-  res.ms.fetch = fetchWait;
-  void tFetch0;
   for (const path of app.remove ?? []) await fs.rm(path, { recursive: true }).catch(() => {});
-  for (const o of m.overlays ?? []) {
-    if (!app.packages.includes(o.when) || !want.includes(o.when)) continue;
-    const { data } = await getBlob(o.sha256, o.size, `gui/overlay/${o.sha256}`, cache, null);
+  for (const [o, blob] of overlays) {
+    const { data } = await blob;
     await fs.mkdir(o.path.slice(0, o.path.lastIndexOf('/')), { recursive: true }).catch(() => {});
     await fs.writeFile(o.path, data);
   }
   const tt = Date.now();
   report('triggers');
-  if (want.length) await runTriggers(fs, kernel, log);
+  await runTriggers(fs, kernel, triggers, log);
   res.ms.triggers = Date.now() - tt;
   if (!status.apps.includes(name)) status.apps.push(name);
   await writeStatus(fs, status);
   res.ms.total = Date.now() - t0;
   report('done');
+  (globalThis as { __guiInstall?: InstallResult }).__guiInstall = res;
   return res;
 }
 
@@ -364,12 +385,17 @@ export async function launchApp(kernel: Kernel, name: string, args: string[] = [
   const app = m.apps[name];
   if (!app) throw new Error(`no GUI app named ${name}`);
   const { BufferFile } = await import('../kernel/fd');
+  // its windows belong to this app on the desktop, whatever their WM_CLASS
+  const instance = app.bin.split('/').pop()!.toLowerCase().replace(/-\d+(\.\d+)*$/, '');
+  const ids = await import('../x11/app-ids');
+  if (instance !== name) ids.appIdAliases.set(instance, name);
   const out = new BufferFile(null);
   const p = kernel.spawn({
     path: app.bin, argv: [app.bin.split('/').pop()!, ...args], cwd: '/home/user',
     env: appEnv({ ...toolkitEnv(app), ...env }), fds: { 0: new BufferFile(''), 1: out, 2: out },
   });
-  const launched = { pid: p.pid, exited: p.wait(), output: () => out.text() };
+  ids.pidAppIds.set(p.pid, name);
+  const launched = { pid: p.pid, exited: p.wait().finally(() => ids.pidAppIds.delete(p.pid)), output: () => out.text() };
   (globalThis as { __guiLast?: LaunchedApp }).__guiLast = launched;
   return launched;
 }
