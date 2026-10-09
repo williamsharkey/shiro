@@ -82,7 +82,20 @@ export function createUtilModule(): any {
       isStringObject: (v: any) => typeof v === 'object' && v instanceof String,
       isNumberObject: (v: any) => typeof v === 'object' && v instanceof Number,
       isBooleanObject: (v: any) => typeof v === 'object' && v instanceof Boolean,
-      isSymbolObject: (v: any) => typeof v === 'object' && Object.prototype.toString.call(v) === '[object Symbol]',
+      isBigIntObject: (v: any) => typeof v === 'object' && v !== null && Object.prototype.toString.call(v) === '[object BigInt]',
+      isSymbolObject: (v: any) => typeof v === 'object' && v !== null && Object.prototype.toString.call(v) === '[object Symbol]',
+      isBoxedPrimitive: (v: any) => typeof v === 'object' && v !== null && (v instanceof String || v instanceof Number || v instanceof Boolean
+        || ['[object BigInt]', '[object Symbol]'].includes(Object.prototype.toString.call(v))),
+      isArrayBufferView: (v: any) => ArrayBuffer.isView(v),
+      isArgumentsObject: (v: any) => Object.prototype.toString.call(v) === '[object Arguments]',
+      isGeneratorObject: (v: any) => Object.prototype.toString.call(v) === '[object Generator]',
+      isMapIterator: (v: any) => Object.prototype.toString.call(v) === '[object Map Iterator]',
+      isSetIterator: (v: any) => Object.prototype.toString.call(v) === '[object Set Iterator]',
+      isModuleNamespaceObject: (v: any) => Object.prototype.toString.call(v) === '[object Module]',
+      isWeakRef: (v: any) => typeof WeakRef !== 'undefined' && v instanceof WeakRef,
+      isExternal: (_v: any) => false,
+      isKeyObject: (_v: any) => false,
+      isUint8ClampedArray: (v: any) => v instanceof Uint8ClampedArray,
     },
     deprecate: (fn: Function, _msg: string) => fn, // Return function unchanged, skip warning
     inherits: (ctor: any, superCtor: any) => {

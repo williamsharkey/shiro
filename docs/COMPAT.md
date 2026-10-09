@@ -29,6 +29,7 @@ built app in headless Chromium, cross-origin isolated.
 | CMake, CTest | 3.31.9 | pkg `cmake` (`x86/cmake.sh`: static x86-64 musl, no OpenSSL) run in Blink | works with the llvm package's clang | a C project with a static library, `check_include_file`, `configure_file`: compiler detection (Clang 21.1.4), build through the Ninja and Makefile generators, `ctest` | configure takes ~10 s (each compiler check is a clang run); no https `file(DOWNLOAD)`; no ccmake/cmake-gui |
 | venv | Shiro | `python3 -m venv` | works | `pyvenv.cfg`, `bin/python` symlinks, `bin/pip`, `activate`/`deactivate`; `sys.prefix` is the venv and pip installs into it (vitest and Chromium) | `--copies` ignored (always symlinks) |
 | Node.js npm CLIs and libraries | Shiro's node (`node`, `npm`, `npx`) | builtin | works | commander + chalk + dayjs + uuid CLI, mocha 10 (pass and fail exit codes), tsc 5.6 (compile and type errors), prettier 3.3 (files, stdin, `--check "src/**/*.js"`, `--write`), ES modules binding `module`/`require`/`process`; vitest and Chromium | TypeScript 7 (`typescript@7`) is a native Go binary; native addons (`.node`) don't load; yarn 1 runs and resolves packages but can't fetch them yet (its `request` download over the fetch-backed http shim, then zlib and tar streams); axios needs `window.location` (fine in the browser, not under vitest) |
+| pnpm | 9.12.3 | npm package under Shiro's node (`npm install pnpm`) | works | `pnpm add` from the registry into the content-addressable store and `node_modules/.pnpm` virtual store (symlinks), `require` through those symlinks (resolving from the real path, as node does), `pnpm install --offline` from the store, `pnpm run` (a `node` script and a shell one), `pnpm exec`, `node_modules/.bin` shims; vitest and Chromium (`add` of 3 packages ≈5 s, `run` ≈2.4 s) | no `pnpm dlx`/`pnpm env` tested; workers run in the same thread (no parallel speed-up) |
 | Lua (lua, luac) | 5.4.7 | pkg `lua` (`lua.sh`) | works | `#!/usr/bin/env lua` script reading stdin with argv, patterns, coroutines, `table.sort`; `luac -p` syntax errors with locations | no `os.execute`/`io.popen`; the REPL needs blocking stdin |
 | SQLite shell | 3.50.4 | pkg `sqlite` (`sqlite.sh`) | works | a database file reused across runs, JSON functions, FTS5, SQL and dot-commands on stdin (`.mode csv`) | single-threaded, no WAL or loadable extensions; interactive mode needs blocking stdin |
 
@@ -43,6 +44,40 @@ Not available (yet), and why:
 | PHP | — | owned by unix/wasix (WASIX build in `pkg`) |
 
 Shell and platform fixes these needed (all with tests in the same file):
+
+- Node, for pnpm: `require.resolve` (with `paths`), `require.resolve.paths`,
+  `require.cache`, `require.main`, `module.createRequire` from a file,
+  `Module._nodeModulePaths`/`_resolveFilename`; `MODULE_NOT_FOUND` codes;
+  `global` in the entry module; `worker_threads.Worker` runs the worker
+  script in the same thread with its own module cache (`workerData`,
+  `parentPort`, structured-clone messages); `zlib` is real (pako: gzip,
+  deflate, raw, unzip, streams, crc32; it was a pass-through, so gzipped
+  tarballs read as tar); `crypto` has real sha384/sha512/md5 and HMAC (sha512
+  was faked, so integrity checks failed); `Buffer.from(ArrayBuffer |
+  SharedArrayBuffer, offset, length)` is a view, `subarray` stays a Buffer,
+  utf16le; `process.emitWarning`; legacy `url.resolve`; `http.Agent` is an
+  EventEmitter and responses are Readable streams; more `util.types`.
+- Node fs: callbacks run asynchronously, as in node (touch registered its
+  listener after starting the call); `fs.write(fd, string, position,
+  encoding, cb)` called back (write-file-atomic never finished, leaving
+  `package.json` and `.modules.yaml` as empty temp files); `symlink` keeps
+  relative targets; `mkdirSync` reaches the filesystem's cache at once (a
+  `writeFileSync` right after found no parent and was dropped); renames
+  (including directories: pnpm stages a package in `name_tmp_PID`) wait for
+  the writes still in flight, which the drain loop had taken out of
+  `pendingPromises`; `copyFileSync` copies bytes; `readdir` dirents report
+  symlinks (pnpm skipped its symlinked packages when linking `.bin`);
+  `realpath` follows symlinks and reports ENOENT; `chmod` is kept.
+- Node: the preloader reads pnpm's `.pnpm/*/node_modules` packages, and
+  `require` resolves a package behind a symlink from its real directory.
+- Node: `child_process.spawn` with inherited stdio (`'inherit'`, `[0,1,2]`)
+  writes the child's output to the parent's and has `stdout === null`.
+- Node: idle-exit activity is counted per script. It was page-wide, so a
+  parent waiting on a child `node` (pnpm run → node app.js) kept the child
+  from ever looking idle, and each waited on the other for the 10-minute
+  cap. The cap on a script's async phase is 10 minutes (was 10 s, which
+  killed pnpm during its retry back-off).
+
 
 - Shebangs: `#!/usr/bin/env NAME` (with `-S` and `VAR=value`) and absolute
   interpreters run any builtin, installed package or script on PATH; an

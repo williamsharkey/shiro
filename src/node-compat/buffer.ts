@@ -85,6 +85,14 @@ export function createFakeBuffer(): any {
   FakeBuffer.prototype.writeUInt8 = function(value: number, offset: number) { this[offset] = value & 0xff; return offset + 1; };
   FakeBuffer.prototype.writeUInt16BE = function(value: number, offset: number) { this[offset] = (value >> 8) & 0xff; this[offset+1] = value & 0xff; return offset + 2; };
   FakeBuffer.prototype.writeUInt32BE = function(value: number, offset: number) { this[offset] = (value >> 24) & 0xff; this[offset+1] = (value >> 16) & 0xff; this[offset+2] = (value >> 8) & 0xff; this[offset+3] = value & 0xff; return offset + 4; };
+  // Buffers of a buffer are Buffers (FakeBuffer has no Symbol.species, so
+  // Uint8Array's subarray made plain arrays: toString() gave "48,48,...")
+  const u8subarray = Uint8Array.prototype.subarray;
+  FakeBuffer.prototype.subarray = function(start?: number, end?: number) {
+    const sub = u8subarray.call(this, start, end);
+    Object.setPrototypeOf(sub, FakeBuffer.prototype);
+    return sub;
+  };
   FakeBuffer.prototype.slice = function(start?: number, end?: number) {
     const sliced = this.subarray(start, end);
     Object.setPrototypeOf(sliced, FakeBuffer.prototype);
@@ -93,11 +101,31 @@ export function createFakeBuffer(): any {
   FakeBuffer.prototype.toJSON = function() {
     return { type: 'Buffer', data: Array.from(this) };
   };
-  FakeBuffer.from = (input: any, encoding?: string): any => {
+  FakeBuffer.from = (input: any, encoding?: any, length?: number): any => {
     let bytes: Uint8Array;
+    // Buffer.from(arrayBuffer[, byteOffset[, length]]): a view on the same memory
+    if (input instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && input instanceof SharedArrayBuffer)) {
+      const off = Number(encoding) || 0;
+      bytes = new Uint8Array(input, off, length ?? input.byteLength - off);
+      Object.setPrototypeOf(bytes, FakeBuffer.prototype);
+      return bytes;
+    }
+    if (input && typeof input === 'object' && input.type === 'Buffer' && Array.isArray(input.data)) input = input.data;
+    if (typeof input === 'string' && (encoding === 'utf16le' || encoding === 'ucs2' || encoding === 'ucs-2' || encoding === 'utf-16le')) {
+      bytes = new Uint8Array(input.length * 2);
+      for (let i = 0; i < input.length; i++) { const c = input.charCodeAt(i); bytes[i * 2] = c & 255; bytes[i * 2 + 1] = c >> 8; }
+      Object.setPrototypeOf(bytes, FakeBuffer.prototype);
+      return bytes;
+    }
     if (typeof input === 'string') {
       if (encoding === 'base64' || encoding === 'base64url') {
-        const binary = atob(encoding === 'base64url' ? input.replace(/-/g, '+').replace(/_/g, '/') : input);
+        // Lenient, like node: url-safe or standard alphabet, whitespace and
+        // other characters skipped, padding optional, stops at the first '='
+        let b64 = input.replace(/-/g, '+').replace(/_/g, '/').replace(/[^A-Za-z0-9+/=]/g, '');
+        const eq = b64.indexOf('=');
+        if (eq >= 0) b64 = b64.slice(0, eq);
+        if (b64.length % 4 === 1) b64 = b64.slice(0, -1);
+        const binary = atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4));
         bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
       } else if (encoding === 'hex') {
@@ -112,8 +140,10 @@ export function createFakeBuffer(): any {
       }
     } else if (input instanceof Uint8Array) {
       bytes = new Uint8Array(input);
-    } else if (Array.isArray(input)) {
-      bytes = new Uint8Array(input);
+    } else if (Array.isArray(input) || ArrayBuffer.isView(input)) {
+      bytes = new Uint8Array(input as any);
+    } else if (input && typeof input === 'object' && typeof input.length === 'number') {
+      bytes = Uint8Array.from(input as ArrayLike<number>);
     } else {
       bytes = new Uint8Array(0);
     }
