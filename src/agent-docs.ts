@@ -55,10 +55,6 @@ function bootSection(ctx: ShiroRuntimeContext, name: string): string {
  */
 export const KNOWN_ISSUES: { issue: string; workaround?: string }[] = [
   {
-    issue: "Native Claude Code's Bash tool fails with `command not found: -l`: the guest's `sh -c -l CMD` is misparsed.",
-    workaround: '`claude --npm` (the npm build) runs commands normally.',
-  },
-  {
     issue: "Images can't be pasted into Claude Code: `xclip` and `xsel` here are text only.",
     workaround: 'Save the image to a file and give its path.',
   },
