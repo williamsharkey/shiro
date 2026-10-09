@@ -137,7 +137,10 @@ Shell and platform fixes these needed (all with tests in the same file):
   cap. The cap on a script's async phase is 10 minutes (was 10 s, which
   killed pnpm during its retry back-off). An fs callback still to come
   counts as activity too (for up to 30 s), as fs.promises calls did: under
-  load the 150 ms idle window could fall between two of pnpm's calls.
+  load the 150 ms idle window could fall between two of pnpm's calls. So
+  does a worker_threads message, from post to handler: pnpm `unref()`s its
+  import workers, and under CPU load the hop outlasted the idle window and
+  pnpm exited (status 0) mid-install, with no root symlinks.
 
 
 - Shebangs: `#!/usr/bin/env NAME` (with `-S` and `VAR=value`) and absolute
