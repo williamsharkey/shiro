@@ -81,6 +81,9 @@ All changes so far are additive; nothing below renames or removes an earlier nam
   - `sh` as a kernel process with no script on a terminal (or `-i`) runs
     an interactive read-eval loop (`Shell.exited` marks `exit`).
   - `link(2)` copies report the source's inode number.
+  - Closing one reference to a regular file (or exiting) writes its data
+    back to the FileSystem even while another process — a forked child —
+    still holds the description.
 
 - **2026-10-08 (unix/compat-tools)**
   - **New syscalls:** `SYS_shiro_vfork` (1010) creates a child process with

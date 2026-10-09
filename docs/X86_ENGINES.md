@@ -323,8 +323,11 @@ target), ~770 regions compiled ≈0.35 s.
    signals the embedder queues); Shiro `TIOCPKT`/`TIOCGPKT`.
 21. Shiro `clock_gettime(CLOCK_BOOTTIME)` comes from the kernel (procps'
    uptime and start times line up with `/proc`).
+22. Blink keeps every resource limit itself (the browser host has none):
+   `setrlimit(RLIMIT_CORE, 0)` succeeds — ssh-agent quit after forking
+   without it — and `RLIMIT_STACK` reads 8 MiB.
 
-Patches 13 and 15–21 come from unix/compat-tools (15 also from
+Patches 13 and 15–22 come from unix/compat-tools (15 also from
 unix/conformance); unix/integration keeps the series.
 
 Native Blink's own exit path (`KillOtherThreads`) still hangs after

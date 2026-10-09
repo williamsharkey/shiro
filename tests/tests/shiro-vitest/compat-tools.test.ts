@@ -724,3 +724,41 @@ describe('man (mandoc)', () => {
     expect((await sh('apropos -s 7 roff')).out).toMatch(/roff\(7\) - roff language reference/);
   }, 180_000);
 });
+
+describe('openssh (client)', () => {
+  it('makes and reads keys, prints its config, and reaches a server (banner exchange)', async () => {
+    await install('openssh');
+    expect((await sh('ssh -V 2>&1')).out).toMatch(/^OpenSSH_10\.6p1, OpenSSL 3\.5\.9 /);
+    await fs.mkdir('/home/user/.ssh', { recursive: true });
+    expect((await sh("ssh-keygen -q -t ed25519 -N '' -C t@shiro -f /home/user/.ssh/id_ed25519; echo rc=$?")).out).toBe('rc=0\n');
+    // the private key is 0600 (ssh-keygen's umask 077 reaches the kernel); ls shows it
+    expect((await sh('ls -l /home/user/.ssh/id_ed25519')).out).toMatch(/^-rw------- /);
+    expect((await sh('ssh-keygen -l -f /home/user/.ssh/id_ed25519.pub')).out).toMatch(/^256 SHA256:[A-Za-z0-9+/]{43} t@shiro \(ED25519\)\n$/);
+    const pub = await fs.readFile('/home/user/.ssh/id_ed25519.pub', 'utf8');
+    expect((await sh('ssh-keygen -y -f /home/user/.ssh/id_ed25519')).out.trim()).toBe((pub as string).trim());
+    // ssh-agent daemonizes (fork, setsid, setrlimit(RLIMIT_CORE)) on an AF_UNIX socket; ssh-add talks to it
+    expect((await sh('ssh-agent -s > /tmp/agent.env; cat /tmp/agent.env')).out).toMatch(/^SSH_AUTH_SOCK=\S+; export SSH_AUTH_SOCK;\nSSH_AGENT_PID=\d+; export SSH_AGENT_PID;\necho Agent pid \d+;\n$/);
+    const agent = await sh('. /tmp/agent.env >/dev/null; ssh-add /home/user/.ssh/id_ed25519 2>&1; ssh-add -l; ssh-agent -k >/dev/null; echo rc=$?');
+    expect(agent.out).toMatch(/^Identity added: \/home\/user\/\.ssh\/id_ed25519 \(t@shiro\)\n256 SHA256:\S+ t@shiro \(ED25519\)\nrc=0\n$/);
+    expect((await sh('ssh -G -p 2200 bob@example.com | grep -E "^(hostname|port|user) "')).out).toBe('user bob\nhostname example.com\nport 2200\n');
+    // a server on a kernel socket: ssh sends its identification and reads the server's
+    const { netStack } = await import('@shiro/kernel/net');
+    const { AF_INET, SOCK_STREAM } = await import('@shiro/kernel/abi');
+    const l = netStack.socket(AF_INET, SOCK_STREAM, 0) as any;
+    expect(l.bind({ family: AF_INET, address: '127.0.0.1', port: 18022 })).toBe(0);
+    expect(l.listen(1)).toBe(0);
+    const server = (async () => {
+      const c = await l.accept();
+      await c.write(new TextEncoder().encode('SSH-2.0-ShiroTest\r\n'));
+      const buf = new Uint8Array(256);
+      const n = await c.read(buf);
+      await c.close();
+      return new TextDecoder().decode(buf.subarray(0, n));
+    })();
+    const r = await sh('ssh -o BatchMode=yes -o StrictHostKeyChecking=no -p 18022 127.0.0.1 true 2>&1; echo rc=$?');
+    expect(await server).toMatch(/^SSH-2\.0-OpenSSH_10\.6\r\n/);
+    expect(r.out).toMatch(/rc=255\n$/);
+    await l.close();
+    expect((await sh('ssh -o ConnectTimeout=3 -p 18023 127.0.0.1 true 2>&1')).out).toMatch(/Connection refused/);
+  }, 180_000);
+});

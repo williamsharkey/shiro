@@ -134,6 +134,7 @@ export async function readdirEntries(fs: FileSystem, path: string): Promise<DirE
       type: stat.isSymbolicLink() ? 'symlink' : stat.isDirectory() ? 'dir' : 'file',
       size: stat.size,
       mtime: stat.mtime.getTime(),
+      mode: stat.isSymbolicLink() ? 0o777 : stat.mode & 0o7777,
     };
     if (stat.isSymbolicLink()) {
       try { entry.target = await fs.readlink(childPath); } catch {}

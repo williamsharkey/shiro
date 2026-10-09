@@ -3105,6 +3105,95 @@
    "needs": [
     "x86"
    ]
+  },
+  {
+   "name": "openssh",
+   "version": "10.6p1",
+   "description": "OpenSSH client: ssh, scp, sftp, ssh-keygen, ssh-agent, ssh-add, ssh-keyscan (OpenSSL 3.5; static x86-64 build)",
+   "license": "BSD-2-Clause AND BSD-3-Clause AND ISC",
+   "source": "https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.6p1.tar.gz",
+   "homepage": "https://www.openssh.com/",
+   "origin": "shiro",
+   "recipe": "scripts/pkgbuild/x86/openssh.sh",
+   "section": "net",
+   "abi": "x86_64-linux",
+   "files": [
+    {
+     "path": "bin/scp",
+     "url": "/pkg/openssh/10.6p1/scp.gz",
+     "sha256": "c6232671bc78791a5b0a509890db88f61c4d605894c826b65d65ba1ca40bcd4f",
+     "size": 140104,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/sftp",
+     "url": "/pkg/openssh/10.6p1/sftp.gz",
+     "sha256": "3f37ad9650f712f8d90c45dd6b1ff99321bdf65cad0b8308cbb1b6bae4e43533",
+     "size": 136148,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/ssh",
+     "url": "/pkg/openssh/10.6p1/ssh.gz",
+     "sha256": "43155574c27911ebd9d8e434494ae45125c0a00af41a9bc6f3a5bf842c873fce",
+     "size": 1881452,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/ssh-add",
+     "url": "/pkg/openssh/10.6p1/ssh-add.gz",
+     "sha256": "2f0267a54c6468f1ab417e9fffa9449c2a865e946c85f29bd61adbc3ef4cb28a",
+     "size": 1651562,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/ssh-agent",
+     "url": "/pkg/openssh/10.6p1/ssh-agent.gz",
+     "sha256": "f2a0dee8e317f3f9796f16024dd5e2a073d96d1aaae325d5dbedd6d31325daf0",
+     "size": 1642193,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/ssh-keygen",
+     "url": "/pkg/openssh/10.6p1/ssh-keygen.gz",
+     "sha256": "438253e4b86eca653cf271d85050bd15e640b1cd361e460640aaa7000b695bdb",
+     "size": 1695535,
+     "unpack": "gzip"
+    },
+    {
+     "path": "bin/ssh-keyscan",
+     "url": "/pkg/openssh/10.6p1/ssh-keyscan.gz",
+     "sha256": "c5280bd6d4379d3141a84d28a85cbb19845417ca4962cc8b39894db28bf5750f",
+     "size": 1716817,
+     "unpack": "gzip"
+    }
+   ],
+   "bin": {
+    "ssh": {
+     "file": "bin/ssh"
+    },
+    "scp": {
+     "file": "bin/scp"
+    },
+    "sftp": {
+     "file": "bin/sftp"
+    },
+    "ssh-keygen": {
+     "file": "bin/ssh-keygen"
+    },
+    "ssh-agent": {
+     "file": "bin/ssh-agent"
+    },
+    "ssh-add": {
+     "file": "bin/ssh-add"
+    },
+    "ssh-keyscan": {
+     "file": "bin/ssh-keyscan"
+    }
+   },
+   "needs": [
+    "x86"
+   ]
   }
  ]
 }

@@ -1,0 +1,44 @@
+From 2d55ca5c15b8f203e9210a20e63bc579a260b0a9 Mon Sep 17 00:00:00 2001
+From: shiro <build@shiro>
+Date: Thu, 8 Oct 2026 23:57:57 +0000
+Subject: [PATCH] emscripten: Blink keeps every resource limit
+ (setrlimit(RLIMIT_CORE, 0) succeeds; RLIMIT_STACK reads 8 MiB)
+
+---
+ blink/memorymalloc.c | 3 +++
+ blink/syscall.c      | 5 +++++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/blink/memorymalloc.c b/blink/memorymalloc.c
+index 57923da..444ae3b 100644
+--- a/blink/memorymalloc.c
++++ b/blink/memorymalloc.c
+@@ -328,6 +328,9 @@ struct System *NewSystem(struct XedMachineMode mode) {
+     Write64(s->rlim[i].cur, RLIM_INFINITY_LINUX);
+     Write64(s->rlim[i].max, RLIM_INFINITY_LINUX);
+   }
++#ifdef __EMSCRIPTEN__
++  Write64(s->rlim[RLIMIT_STACK_LINUX].cur, 8 * 1024 * 1024);  // Linux default
++#endif
+   s->pid = getpid();
+   return s;
+ }
+diff --git a/blink/syscall.c b/blink/syscall.c
+index 0bd8a25..2d5a978 100644
+--- a/blink/syscall.c
++++ b/blink/syscall.c
+@@ -3699,6 +3699,11 @@ static int SysGetrusage(struct Machine *m, i32 resource, i64 rusageaddr) {
+ }
+ 
+ static bool IsSupportedResourceLimit(int resource) {
++#ifdef __EMSCRIPTEN__
++  // the browser host has no resource limits: Blink keeps all of them, so
++  // setrlimit(RLIMIT_CORE, 0) and friends succeed and read back
++  return resource >= 0 && resource < RLIM_NLIMITS_LINUX;
++#endif
+   return resource == RLIMIT_AS_LINUX ||    //
+          resource == RLIMIT_DATA_LINUX ||  //
+          resource == RLIMIT_NOFILE_LINUX;
+-- 
+2.43.0
+
