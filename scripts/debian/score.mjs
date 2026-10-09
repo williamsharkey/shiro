@@ -135,11 +135,14 @@ async function smoke(m, pkg) {
       const crashed = /terminating due to SIG|Segmentation fault|Illegal instruction|SCORE-TIMEOUT/.test(r.out) || r.code >= 128 || r.code === 124;
       tried.push(`${bin} ${flagArg}: exit ${r.code}`);
       if (r.code === 0 && r.out.trim()) return { ok: true, how: `${bin} ${flagArg}`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
+      // Tools without --version print their usage and exit 1 or 2: it ran, which is what we check
+      const broken = /error while loading shared libraries|Exec format error|cannot execute|not found|Can't locate|No such file/i.test(r.out);
+      if (r.code > 0 && r.code < 126 && !broken && /usage|version|options|--help/i.test(r.out)) return { ok: true, how: `${bin} ${flagArg} (usage, exit ${r.code})`, ms: r.ms, sample: r.out.trim().split('\n')[0].slice(0, 100) };
       if (crashed) return { ok: false, how: `${bin} ${flagArg}`, category: r.code === 124 ? 'timeout' : 'engine-crash', error: firstError(r.out) || `exit ${r.code}` };
     }
   }
   if (bins.length) return { ok: false, how: tried.join('; '), category: 'smoke-failed', error: tried[0] };
-  const libs = list.filter((f) => /^\/usr\/lib\/x86_64-linux-gnu\/[^/]+\.so(\.\d+)+$/.test(f));
+  const libs = list.filter((f) => /^\/usr\/lib\/x86_64-linux-gnu\/(?:[\w.+-]+\/)?[^/]+\.so(\.\d+)*$/.test(f));
   if (libs.length) {
     const r = await m.run(`/lib64/ld-linux-x86-64.so.2 --list ${libs[0]} 2>&1`, 180);
     return r.code === 0 ? { ok: true, how: `ld.so --list ${libs[0]}`, ms: r.ms }

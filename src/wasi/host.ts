@@ -214,6 +214,7 @@ const BIN_DIR = /^\/(?:usr\/)?(?:local\/)?s?bin\/([^/]+)$/;
 function binCommandPasses(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array, kernel: Kernel): boolean {
   const at = nr === A.SYS_newfstatat || nr === A.SYS_faccessat;
   if (nr === A.SYS_newfstatat && args[1] === 0) return true;
+  if (nr === A.SYS_lstat || (nr === A.SYS_newfstatat && args[2] & A.AT_SYMLINK_NOFOLLOW)) return true;
   const len = at ? args[1] : args[0];
   if (len <= 0 || len > data.length) return true;
   const p = kernel.resolvePath(proc, A.decodeText(data.subarray(0, len)), at ? args[0] : A.AT_FDCWD);
@@ -231,6 +232,9 @@ function binCommandPasses(proc: Process, nr: number, args: ArrayLike<number>, da
 async function binCommandStat(proc: Process, nr: number, args: ArrayLike<number>, data: Uint8Array, kernel: Kernel): Promise<number | undefined> {
   const at = nr === A.SYS_newfstatat || nr === A.SYS_faccessat;
   if (nr === A.SYS_newfstatat && args[1] === 0) return undefined; // fstat of the dirfd itself
+  // Only what a PATH search asks (stat, access): lstat sees that no file is
+  // there, so dpkg doesn't take a builtin's name for a file to back up
+  if (nr === A.SYS_lstat || (nr === A.SYS_newfstatat && args[2] & A.AT_SYMLINK_NOFOLLOW)) return undefined;
   const len = at ? args[1] : args[0];
   if (len <= 0 || len > data.length) return undefined;
   const p = kernel.resolvePath(proc, A.decodeText(data.subarray(0, len)), at ? args[0] : A.AT_FDCWD);
