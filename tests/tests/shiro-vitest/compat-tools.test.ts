@@ -768,7 +768,7 @@ describe('gnupg', () => {
     await install('gnupg');
     expect((await sh('gpg --version')).out).toMatch(/^gpg \(GnuPG\) 2\.5\.24\nlibgcrypt 1\.12\.4\n/);
     const batch = 'gpg -q --batch --pinentry-mode loopback --passphrase pw';
-    // no "insecure memory" warning: mlock succeeds (Blink patch 0023)
+    // no "insecure memory" warning: mlock succeeds (Blink patch 0024)
     expect((await sh(`${batch} --quick-gen-key 'Test User <t@shiro>' default default never 2>&1 | grep -c insecure`)).out).toBe('0\n');
     expect((await sh("gpg -k --with-colons t@shiro | cut -d: -f1,4,12 | grep -E '^(pub|sub)'")).out).toBe('pub:22:scESC\nsub:18:e\n');
     await fs.writeFile('/home/user/w/m.txt', 'hello gpg\n');

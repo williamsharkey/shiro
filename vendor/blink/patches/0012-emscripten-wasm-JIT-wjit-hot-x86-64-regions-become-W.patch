@@ -1,7 +1,7 @@
-From 6847b828cf93a54dd10fffd0eb570be20db65aff Mon Sep 17 00:00:00 2001
+From db99a7fce751c683530393e0b358ef601a7cfad7 Mon Sep 17 00:00:00 2001
 From: shiro <build@shiro>
 Date: Thu, 8 Oct 2026 04:49:59 +0000
-Subject: [PATCH 12/19] emscripten: wasm JIT (wjit): hot x86-64 regions become
+Subject: [PATCH 12/20] emscripten: wasm JIT (wjit): hot x86-64 regions become
  WebAssembly functions
 
 Hot regions (basic blocks reachable through direct branches from a hot
@@ -18,9 +18,9 @@ or reprotecting such a page invalidates every thread's regions.
  blink/machine.h      |    4 +
  blink/memorymalloc.c |    3 +
  blink/reset.c        |    1 +
- blink/wjit.c         | 3019 ++++++++++++++++++++++++++++++++++++++++++
+ blink/wjit.c         | 3585 ++++++++++++++++++++++++++++++++++++++++++
  blink/wjit.h         |   35 +
- 7 files changed, 3074 insertions(+)
+ 7 files changed, 3640 insertions(+)
  create mode 100644 blink/wjit.c
  create mode 100644 blink/wjit.h
 
@@ -123,10 +123,10 @@ index 77dac9b..04112e3 100644
  }
 diff --git a/blink/wjit.c b/blink/wjit.c
 new file mode 100644
-index 0000000..a38ca97
+index 0000000..d80151d
 --- /dev/null
 +++ b/blink/wjit.c
-@@ -0,0 +1,3019 @@
+@@ -0,0 +1,3585 @@
 +/*-*- mode:c;indent-tabs-mode:nil;c-basic-offset:2;tab-width:8;coding:utf-8 -*-│
 +│ vi: set et ft=c ts=2 sts=2 sw=2 fenc=utf-8                               :vi │
 +╞══════════════════════════════════════════════════════════════════════════════╡
@@ -214,6 +214,7 @@ index 0000000..a38ca97
 +
 +// statistics
 +static long g_wj_callops[0x400];
++static i64 g_wj_dyncalls[0x400];  // BLINK_WJIT_DEBUG=2: fallbacks executed
 +static _Thread_local long t_runs;
 +static _Thread_local int t_depth, t_slice;
 +static _Thread_local bool t_unwind;
@@ -336,7 +337,12 @@ index 0000000..a38ca97
 +  W_I64_ADD = 0x7c,
 +  W_I64_SUB = 0x7d,
 +  W_I64_MUL = 0x7e,
++  W_I64_CLZ = 0x79,
++  W_I64_CTZ = 0x7a,
 +  W_I64_DIV_S = 0x7f,
++  W_I64_DIV_U = 0x80,
++  W_I64_REM_S = 0x81,
++  W_I64_REM_U = 0x82,
 +  W_I64_AND = 0x83,
 +  W_I64_OR = 0x84,
 +  W_I64_XOR = 0x85,
@@ -466,6 +472,7 @@ index 0000000..a38ca97
 +  int live;  // flags live after this instruction
 +  int cck;   // for flag producers: kind; for consumers: kind fused with
 +  int ccw;   // width in bytes of the producer
++  bool exits;  // may leave the region before it's done (memory, slow path)
 +};
 +
 +#define kMaxImports 255
@@ -1138,7 +1145,8 @@ index 0000000..a38ca97
 +// updates the live flags of F from CX, CY, CZ (zero-extended, w bytes) for
 +// a producer of the given kind; `sub` selects subtraction for CC_SUB-like
 +// math (cmp/sub/dec/neg)
-+enum { F_ADD, F_SUB, F_LOGIC, F_INC, F_DEC, F_SHL, F_SHR, F_SAR };
++// F_ADC and F_SBB take the carry-in (i32 0/1) in L_E
++enum { F_ADD, F_SUB, F_LOGIC, F_INC, F_DEC, F_SHL, F_SHR, F_SAR, F_ADC, F_SBB };
 +
 +static void ComputeFlags(struct Cg *g, int kind, int w, int live) {
 +  u32 clear = 0;
@@ -1199,6 +1207,28 @@ index 0000000..a38ca97
 +        Op(g, W_I64_LT_U);
 +        Op(g, W_I32_OR);
 +        break;
++      case F_ADC:  // c ? z <= y : z < y
++        Get(g, L_CZ);
++        Get(g, L_CY);
++        Op(g, W_I64_LE_U);
++        Get(g, L_CZ);
++        Get(g, L_CY);
++        Op(g, W_I64_LT_U);
++        Get(g, L_E);
++        Op(g, W_SELECT);
++        Op(g, W_I32_OR);
++        break;
++      case F_SBB:  // c ? x <= y : x < y
++        Get(g, L_CX);
++        Get(g, L_CY);
++        Op(g, W_I64_LE_U);
++        Get(g, L_CX);
++        Get(g, L_CY);
++        Op(g, W_I64_LT_U);
++        Get(g, L_E);
++        Op(g, W_SELECT);
++        Op(g, W_I32_OR);
++        break;
 +      case F_SHL:  // (x >> (w*8 - y)) & 1
 +        Get(g, L_CX);
 +        I64(g, w * 8);
@@ -1231,6 +1261,8 @@ index 0000000..a38ca97
 +    switch (kind) {
 +      case F_ADD:
 +      case F_SUB:
++      case F_ADC:
++      case F_SBB:
 +        Get(g, L_CX);
 +        Get(g, L_CY);
 +        Op(g, W_I64_XOR);
@@ -1269,6 +1301,7 @@ index 0000000..a38ca97
 +  if (live & OF) {
 +    switch (kind) {
 +      case F_ADD:  // ((z ^ x) & (z ^ y)) msb
++      case F_ADC:
 +        Get(g, L_CZ);
 +        Get(g, L_CX);
 +        Op(g, W_I64_XOR);
@@ -1279,6 +1312,7 @@ index 0000000..a38ca97
 +        Msb(g, w);
 +        break;
 +      case F_SUB:  // ((x ^ y) & (z ^ x)) msb
++      case F_SBB:
 +        Get(g, L_CX);
 +        Get(g, L_CY);
 +        Op(g, W_I64_XOR);
@@ -1534,21 +1568,25 @@ index 0000000..a38ca97
 +////////////////////////////////////////////////////////////////////////////////
 +// instruction analysis
 +
-+// ALU op number (0 add, 1 or, 4 and, 5 sub, 6 xor, 7 cmp) to producer info
-+static bool AluOk(int aop) {
-+  return aop != 2 && aop != 3;  // adc, sbb go through Blink
-+}
-+
++// ALU op number (0 add, 1 or, 2 adc, 3 sbb, 4 and, 5 sub, 6 xor, 7 cmp) to
++// producer info; adc and sbb read CF and aren't fused
 +static int AluCck(int aop) {
 +  switch (aop) {
 +    case 0:
 +      return CC_ADD;
++    case 2:
++    case 3:
++      return CC_NONE;
 +    case 5:
 +    case 7:
 +      return CC_SUB;
 +    default:
 +      return CC_LOGIC;
 +  }
++}
++
++static int AluReads(int aop) {
++  return aop == 2 || aop == 3 ? CF : 0;
 +}
 +
 +static int ShiftKind(int reg) {
@@ -1585,11 +1623,8 @@ index 0000000..a38ca97
 +  }
 +  if (op < 0x40 && (op & 7) <= 5) {
 +    int aop = op >> 3;
-+    if (!AluOk(aop)) goto Call;
-+    if ((op & 7) == 1 || (op & 7) == 3 || (op & 7) == 5) {
-+      if (w == 2) goto Call;
-+    }
 +    in->fw = kAllFlags;
++    in->fr = AluReads(aop);
 +    in->cck = AluCck(aop);
 +    in->ccw = (op & 1) ? w : 1;
 +    return;
@@ -1599,9 +1634,8 @@ index 0000000..a38ca97
 +    case 0x081:
 +    case 0x082:
 +    case 0x083:
-+      if (!AluOk(ModrmReg(rde))) goto Call;
-+      if (op != 0x080 && op != 0x082 && w == 2) goto Call;
 +      in->fw = kAllFlags;
++      in->fr = AluReads(ModrmReg(rde));
 +      in->cck = AluCck(ModrmReg(rde));
 +      in->ccw = (op == 0x080 || op == 0x082) ? 1 : w;
 +      return;
@@ -1609,19 +1643,34 @@ index 0000000..a38ca97
 +    case 0x085:
 +    case 0x0A8:
 +    case 0x0A9:
-+      if ((op & 1) && w == 2) goto Call;
 +      in->fw = kAllFlags;
 +      in->cck = CC_LOGIC;
 +      in->ccw = (op & 1) ? w : 1;
 +      return;
 +    case 0x0F6:
 +    case 0x0F7:
-+      if (ModrmReg(rde) > 1) goto Call;  // only test
-+      if ((op & 1) && w == 2) goto Call;
-+      in->fw = kAllFlags;
-+      in->cck = CC_LOGIC;
-+      in->ccw = (op & 1) ? w : 1;
-+      return;
++      switch (ModrmReg(rde)) {
++        case 0:
++        case 1:  // test
++          in->fw = kAllFlags;
++          in->cck = CC_LOGIC;
++          in->ccw = (op & 1) ? w : 1;
++          return;
++        case 2:  // not
++          return;
++        case 3:  // neg
++          in->fw = kAllFlags;
++          in->cck = CC_SUB;
++          in->ccw = (op & 1) ? w : 1;
++          return;
++        case 4:  // mul
++        case 5:  // imul
++          in->fw = CF | OF;
++          return;
++        default:  // div, idiv
++          if (op == 0x0F6 || w == 2) goto Call;
++          return;
++      }
 +    case 0x0FE:
 +    case 0x0FF:
 +      if (ModrmReg(rde) > 1) {
@@ -1631,7 +1680,6 @@ index 0000000..a38ca97
 +        }
 +        goto Call;
 +      }
-+      if (op == 0x0FF && w == 2) goto Call;
 +      in->fw = PF | AF | ZF | SF | OF;
 +      in->cck = CC_INCDEC;
 +      in->ccw = op == 0x0FE ? 1 : w;
@@ -1666,7 +1714,6 @@ index 0000000..a38ca97
 +    case 0x08B:
 +    case 0x0C7:
 +      if (op == 0x0C7 && ModrmReg(rde)) goto Call;
-+      if (w == 2) goto Call;
 +      return;
 +    case 0x08D:
 +      if (w == 2 || IsModrmRegister(rde)) goto Call;
@@ -1679,7 +1726,6 @@ index 0000000..a38ca97
 +    case 0x0BD:
 +    case 0x0BE:
 +    case 0x0BF:
-+      if (w == 2) goto Call;
 +      return;
 +    case 0x090:
 +      if (RexbSrm(rde)) goto Call;  // xchg %r8,%rax
@@ -1745,6 +1791,21 @@ index 0000000..a38ca97
 +    case 0x1EF:  // pxor xmm (register form)
 +      if (!Osz(rde) || !IsModrmRegister(rde)) goto Call;
 +      return;
++    case 0x1A3:  // bt Ev,Gv
++    case 0x1AB:  // bts
++    case 0x1B3:  // btr
++    case 0x1BB:  // btc
++      in->fw = CF;
++      return;
++    case 0x1BA:  // bt/bts/btr/btc Ev,Ib
++      if (ModrmReg(rde) < 4) goto Call;
++      in->fw = CF;
++      return;
++    case 0x1BC:  // bsf, tzcnt
++    case 0x1BD:  // bsr, lzcnt
++      if (Rep(rde) == 2) goto Call;
++      in->fw = Rep(rde) == 3 ? CF | ZF : ZF;
++      return;
 +    case 0x157:  // xorps/xorpd (register form)
 +      if (Rep(rde) || !IsModrmRegister(rde)) goto Call;
 +      return;
@@ -1754,7 +1815,6 @@ index 0000000..a38ca97
 +        return;
 +      }
 +      if (0x140 <= op && op <= 0x14F) {  // cmov
-+        if (w == 2) goto Call;
 +        in->fr = CondFlags(op & 15);
 +        return;
 +      }
@@ -1773,9 +1833,13 @@ index 0000000..a38ca97
 +// category of an inlined instruction, for BLINK_WJIT_OFF bisection
 +static int Category(int op, u64 rde) {
 +  if (op < 0x40 || (0x080 <= op && op <= 0x083)) return 0;
++  if ((op == 0x0F6 || op == 0x0F7) && ModrmReg(rde) > 1) return 18;
 +  if (op == 0x084 || op == 0x085 || op == 0x0A8 || op == 0x0A9 ||
 +      op == 0x0F6 || op == 0x0F7)
 +    return 1;
++  if (op == 0x1A3 || op == 0x1AB || op == 0x1B3 || op == 0x1BB || op == 0x1BA)
++    return 19;
++  if (op == 0x1BC || op == 0x1BD) return 20;
 +  if (op == 0x0FE || op == 0x0FF) return ModrmReg(rde) < 2 ? 2 : 7;
 +  if (op == 0x0C0 || op == 0x0C1 || op == 0x0D0 || op == 0x0D1 ||
 +      op == 0x0D3)
@@ -1792,6 +1856,17 @@ index 0000000..a38ca97
 +  if (0x190 <= op && op <= 0x19F) return 13;
 +  if (op >= 0x110) return 17;  // sse
 +  return 4;  // moves, nops
++}
++
++// An inlined instruction that can exit to the interpreter part way (a
++// memory operand that faults or crosses a page, div's slow path) needs the
++// flags in F: a fused consumer's producer leaves them in locals only.
++static bool MayExit(struct Ins *in, bool modrm) {
++  int op = Mopcode(in->rde);
++  if (0x050 <= op && op <= 0x05F) return true;
++  if ((op == 0x0F6 || op == 0x0F7) && ModrmReg(in->rde) >= 6) return true;
++  if (op == 0x08D || op == 0x11F) return false;
++  return modrm && !IsModrmRegister(in->rde);
 +}
 +
 +static bool IsFlagConsumer(int op) {
@@ -1913,7 +1988,7 @@ index 0000000..a38ca97
 +        continue;
 +      }
 +      if (IsFlagConsumer(op)) {
-+        if (cck != CC_NONE && CanFuse(cck, op & 15) &&
++        if (cck != CC_NONE && !in->exits && CanFuse(cck, op & 15) &&
 +            !(g_wj_off & (1 << 14))) {
 +          in->cck = cck;
 +          in->ccw = ccw;
@@ -1930,6 +2005,8 @@ index 0000000..a38ca97
 +        } else {
 +          cck = CC_NONE;
 +        }
++      } else if (in->exits || op == 0x0C0 || op == 0x0C1) {
++        cck = CC_NONE;  // (a shift by 0 still uses the producer's locals)
 +      }
 +    }
 +  }
@@ -1964,18 +2041,31 @@ index 0000000..a38ca97
 +
 +// x = CX, y = CY: computes CZ = x op y (masked) and the flags
 +static void Alu(struct Cg *g, struct Ins *in, int aop, int w) {
-+  static const u8 kOps[8] = {W_I64_ADD, W_I64_OR,  0,         0,
++  static const u8 kOps[8] = {W_I64_ADD, W_I64_OR,  W_I64_ADD, W_I64_SUB,
 +                             W_I64_AND, W_I64_SUB, W_I64_XOR, W_I64_SUB};
++  static const u8 kKind[8] = {F_ADD, F_LOGIC, F_ADC, F_SBB,
++                              F_LOGIC, F_SUB, F_LOGIC, F_SUB};
++  if (aop == 2 || aop == 3) {  // adc, sbb: carry-in in L_E
++    g->flags = true;
++    Get(g, L_F);
++    I32(g, CF);
++    Op(g, W_I32_AND);
++    Set(g, L_E);
++  }
 +  Get(g, L_CX);
 +  Get(g, L_CY);
 +  Op(g, kOps[aop]);
-+  if (w != 8 && (aop == 0 || aop == 5 || aop == 7)) {
++  if (aop == 2 || aop == 3) {
++    Get(g, L_E);
++    Op(g, W_I64_EXTEND_I32_U);
++    Op(g, kOps[aop]);
++  }
++  if (w != 8 && kKind[aop] != F_LOGIC) {
 +    I64(g, Mask(w));
 +    Op(g, W_I64_AND);
 +  }
 +  Set(g, L_CZ);
-+  LiveFlags(g, in, aop == 0 ? F_ADD : (aop == 5 || aop == 7) ? F_SUB : F_LOGIC,
-+            w);
++  LiveFlags(g, in, kKind[aop], w);
 +}
 +
 +static void TranslateAlu(struct Cg *g, struct Ins *in) {
@@ -2221,6 +2311,441 @@ index 0000000..a38ca97
 +  PutRegField(g, in, w);
 +}
 +
++static void CallOp(struct Cg *, struct Ins *);
++
++// F = F with CF and OF set to the i32 0/1 on the stack
++static void SetCfOf(struct Cg *g) {
++  g->flags = true;
++  Set(g, L_E);
++  Get(g, L_F);
++  I32(g, ~(CF | OF));
++  Op(g, W_I32_AND);
++  Get(g, L_E);
++  Op(g, W_I32_OR);
++  Get(g, L_E);
++  I32(g, FLAGS_OF);
++  Op(g, W_I32_SHL);
++  Op(g, W_I32_OR);
++  Set(g, L_F);
++}
++
++// L_T:L_Z = L_X * L_Y (128-bit product, unsigned or signed)
++static void Mul128(struct Cg *g, bool sgn) {
++  // ll, lh, hl partial products of the 32-bit halves
++  Get(g, L_X);
++  I64(g, 0xffffffff);
++  Op(g, W_I64_AND);
++  Get(g, L_Y);
++  I64(g, 0xffffffff);
++  Op(g, W_I64_AND);
++  Op(g, W_I64_MUL);
++  Set(g, L_CX);
++  Get(g, L_X);
++  I64(g, 0xffffffff);
++  Op(g, W_I64_AND);
++  Get(g, L_Y);
++  I64(g, 32);
++  Op(g, W_I64_SHR_U);
++  Op(g, W_I64_MUL);
++  Set(g, L_CY);
++  Get(g, L_X);
++  I64(g, 32);
++  Op(g, W_I64_SHR_U);
++  Get(g, L_Y);
++  I64(g, 0xffffffff);
++  Op(g, W_I64_AND);
++  Op(g, W_I64_MUL);
++  Set(g, L_CZ);
++  // mid = (ll >> 32) + (lh & M) + (hl & M), into L_CX
++  Get(g, L_CX);
++  I64(g, 32);
++  Op(g, W_I64_SHR_U);
++  Get(g, L_CY);
++  I64(g, 0xffffffff);
++  Op(g, W_I64_AND);
++  Op(g, W_I64_ADD);
++  Get(g, L_CZ);
++  I64(g, 0xffffffff);
++  Op(g, W_I64_AND);
++  Op(g, W_I64_ADD);
++  Set(g, L_CX);
++  // hi = hh + (lh >> 32) + (hl >> 32) + (mid >> 32)
++  Get(g, L_X);
++  I64(g, 32);
++  Op(g, W_I64_SHR_U);
++  Get(g, L_Y);
++  I64(g, 32);
++  Op(g, W_I64_SHR_U);
++  Op(g, W_I64_MUL);
++  Get(g, L_CY);
++  I64(g, 32);
++  Op(g, W_I64_SHR_U);
++  Op(g, W_I64_ADD);
++  Get(g, L_CZ);
++  I64(g, 32);
++  Op(g, W_I64_SHR_U);
++  Op(g, W_I64_ADD);
++  Get(g, L_CX);
++  I64(g, 32);
++  Op(g, W_I64_SHR_U);
++  Op(g, W_I64_ADD);
++  if (sgn) {
++    // hi -= (x < 0 ? y : 0) + (y < 0 ? x : 0)
++    Get(g, L_X);
++    I64(g, 63);
++    Op(g, W_I64_SHR_S);
++    Get(g, L_Y);
++    Op(g, W_I64_AND);
++    Op(g, W_I64_SUB);
++    Get(g, L_Y);
++    I64(g, 63);
++    Op(g, W_I64_SHR_S);
++    Get(g, L_X);
++    Op(g, W_I64_AND);
++    Op(g, W_I64_SUB);
++  }
++  Set(g, L_T);
++  Get(g, L_X);
++  Get(g, L_Y);
++  Op(g, W_I64_MUL);
++  Set(g, L_Z);
++}
++
++// mul/imul with one operand: rDX:rAX = rAX * Ev
++static void TranslateMul(struct Cg *g, struct Ins *in, int w, bool sgn) {
++  int live = in->live & (CF | OF);
++  GetRm(g, in, w);
++  if (sgn) SignExtend(g, w);
++  Set(g, L_X);
++  UseReg(g, 0);
++  GetReg(g, 0, w);
++  if (sgn) SignExtend(g, w);
++  Set(g, L_Y);
++  if (w == 8) {
++    Mul128(g, sgn);
++    if (live) {
++      Get(g, L_T);
++      if (sgn) {
++        Get(g, L_Z);
++        I64(g, 63);
++        Op(g, W_I64_SHR_S);
++      } else {
++        I64(g, 0);
++      }
++      Op(g, W_I64_NE);
++      SetCfOf(g);
++    }
++    UseReg(g, 2);
++    Get(g, L_Z);
++    PutReg(g, 0, 8);
++    Get(g, L_T);
++    PutReg(g, 2, 8);
++    return;
++  }
++  // the product fits in 64 bits
++  Get(g, L_X);
++  Get(g, L_Y);
++  Op(g, W_I64_MUL);
++  Set(g, L_Z);
++  if (live) {
++    Get(g, L_Z);
++    if (sgn) {
++      Get(g, L_Z);
++      SignExtend(g, w);
++    } else {
++      Get(g, L_Z);
++      I64(g, Mask(w));
++      Op(g, W_I64_AND);
++    }
++    Op(g, W_I64_NE);
++    SetCfOf(g);
++  }
++  if (w == 1) {  // ax = al * Eb
++    Get(g, L_Z);
++    PutReg(g, 0, 2);
++    return;
++  }
++  UseReg(g, 2);
++  Get(g, L_Z);
++  I64(g, w * 8);
++  Op(g, W_I64_SHR_U);
++  PutReg(g, 2, w);
++  Get(g, L_Z);
++  PutReg(g, 0, w);
++}
++
++// div/idiv Ev (32 and 64 bit): the cases that raise #DE, and a 128-bit
++// dividend, go through Blink's handler
++static void TranslateDiv(struct Cg *g, struct Ins *in, int w, bool sgn) {
++  GetRm(g, in, w);
++  Set(g, L_X);
++  UseReg(g, 0);
++  UseReg(g, 2);
++  if (w == 8) {
++    // bad = !x || rdx != (sgn ? rax >> 63 : 0) || (sgn && rax == MIN && x == -1)
++    Get(g, L_X);
++    Op(g, W_I64_EQZ);
++    Get(g, L_R(2));
++    if (sgn) {
++      Get(g, L_R(0));
++      I64(g, 63);
++      Op(g, W_I64_SHR_S);
++    } else {
++      I64(g, 0);
++    }
++    Op(g, W_I64_NE);
++    Op(g, W_I32_OR);
++    if (sgn) {
++      Get(g, L_R(0));
++      I64(g, INT64_MIN);
++      Op(g, W_I64_EQ);
++      Get(g, L_X);
++      I64(g, -1);
++      Op(g, W_I64_EQ);
++      Op(g, W_I32_AND);
++      Op(g, W_I32_OR);
++    }
++    If(g, T_VOID);
++    CallOp(g, in);
++    Else(g);
++    Get(g, L_R(0));
++    Get(g, L_X);
++    Op(g, sgn ? W_I64_DIV_S : W_I64_DIV_U);
++    Set(g, L_Z);
++    Get(g, L_R(0));
++    Get(g, L_X);
++    Op(g, sgn ? W_I64_REM_S : W_I64_REM_U);
++    PutReg(g, 2, 8);
++    Get(g, L_Z);
++    PutReg(g, 0, 8);
++    End(g);
++    return;
++  }
++  // y = edx:eax
++  Get(g, L_R(2));
++  I64(g, 32);
++  Op(g, W_I64_SHL);
++  Get(g, L_R(0));
++  I64(g, 0xffffffff);
++  Op(g, W_I64_AND);
++  Op(g, W_I64_OR);
++  Set(g, L_Y);
++  if (!sgn) {
++    // bad = !x || edx >= x (the quotient doesn't fit)
++    Get(g, L_X);
++    Op(g, W_I64_EQZ);
++    Get(g, L_R(2));
++    I64(g, 0xffffffff);
++    Op(g, W_I64_AND);
++    Get(g, L_X);
++    Op(g, W_I64_GE_U);
++    Op(g, W_I32_OR);
++  } else {
++    Get(g, L_X);
++    SignExtend(g, 4);
++    Set(g, L_X);
++    // e = !x || y == MIN (as Blink checks); then z = y / (e ? 1 : x)
++    Get(g, L_X);
++    Op(g, W_I64_EQZ);
++    Get(g, L_Y);
++    I64(g, INT64_MIN);
++    Op(g, W_I64_EQ);
++    Op(g, W_I32_OR);
++    Set(g, L_E);
++    Get(g, L_Y);
++    I64(g, 1);
++    Get(g, L_X);
++    Get(g, L_E);
++    Op(g, W_SELECT);
++    Op(g, W_I64_DIV_S);
++    Set(g, L_Z);
++    // bad = e || z doesn't fit in 32 bits
++    Get(g, L_E);
++    Get(g, L_Z);
++    Get(g, L_Z);
++    SignExtend(g, 4);
++    Op(g, W_I64_NE);
++    Op(g, W_I32_OR);
++  }
++  If(g, T_VOID);
++  CallOp(g, in);
++  Else(g);
++  if (!sgn) {
++    Get(g, L_Y);
++    Get(g, L_X);
++    Op(g, W_I64_DIV_U);
++    Set(g, L_Z);
++  }
++  Get(g, L_Y);
++  Get(g, L_X);
++  Op(g, sgn ? W_I64_REM_S : W_I64_REM_U);
++  PutReg(g, 2, 4);
++  Get(g, L_Z);
++  PutReg(g, 0, 4);
++  End(g);
++}
++
++// F6/F7 /2../7: not, neg, mul, imul, div, idiv
++static void TranslateGrp3(struct Cg *g, struct Ins *in) {
++  u64 rde = in->rde;
++  int w = Mopcode(rde) == 0x0F6 ? 1 : Width(rde);
++  switch (ModrmReg(rde)) {
++    case 2:  // not (no flags; L_CX..L_CZ may hold a fused producer)
++      GetRmForUpdate(g, in, w);
++      I64(g, -1);
++      Op(g, W_I64_XOR);
++      PutRm(g, in, w, true);
++      return;
++    case 3:  // neg: the flags of 0 - x
++      GetRmForUpdate(g, in, w);
++      Set(g, L_CY);
++      I64(g, 0);
++      Set(g, L_CX);
++      I64(g, 0);
++      Get(g, L_CY);
++      Op(g, W_I64_SUB);
++      if (w != 8) {
++        I64(g, Mask(w));
++        Op(g, W_I64_AND);
++      }
++      Set(g, L_CZ);
++      LiveFlags(g, in, F_SUB, w);
++      Get(g, L_CZ);
++      PutRm(g, in, w, true);
++      return;
++    case 4:
++    case 5:
++      TranslateMul(g, in, w, ModrmReg(rde) == 5);
++      return;
++    default:
++      TranslateDiv(g, in, w, ModrmReg(rde) == 7);
++      return;
++  }
++}
++
++// bt/bts/btr/btc: 0F A3/AB/B3/BB Ev,Gv and 0F BA /4../7 Ev,Ib
++static void TranslateBt(struct Cg *g, struct Ins *in) {
++  u64 rde = in->rde;
++  int op = Mopcode(rde);
++  int w = Width(rde);
++  int kind = op == 0x1BA ? ModrmReg(rde) - 4 : (op >> 3) & 3;  // 0 bt .. 3 btc
++  bool mem = !IsModrmRegister(rde);
++  // bit number into L_Y
++  if (op == 0x1BA) {
++    I64(g, in->uimm0 & (w * 8 - 1));
++  } else {
++    GetRegField(g, in, w);
++    I64(g, w * 8 - 1);
++    Op(g, W_I64_AND);
++  }
++  Set(g, L_Y);
++  if (mem) {
++    Ea(g, in, true);
++    if (op != 0x1BA) {
++      // a register bit offset can address outside the operand
++      Get(g, L_EA);
++      GetRegField(g, in, w);
++      SignExtend(g, w);
++      I64(g, 3);
++      Op(g, W_I64_SHR_S);
++      I64(g, -w);
++      Op(g, W_I64_AND);
++      Op(g, W_I64_ADD);
++      Set(g, L_EA);
++    }
++    if (kind) {
++      Resolve(g, in, w, true);
++      LoadHw(g, w);
++    } else {
++      LoadEa(g, in, w);
++    }
++  } else {
++    GetRm(g, in, w);
++  }
++  Set(g, L_X);
++  if (in->live & CF) {
++    g->flags = true;
++    Get(g, L_F);
++    I32(g, ~CF);
++    Op(g, W_I32_AND);
++    Get(g, L_X);
++    Get(g, L_Y);
++    Op(g, W_I64_SHR_U);
++    Op(g, W_I32_WRAP_I64);
++    I32(g, 1);
++    Op(g, W_I32_AND);
++    Op(g, W_I32_OR);
++    Set(g, L_F);
++  }
++  if (!kind) return;
++  Get(g, L_X);
++  I64(g, 1);
++  Get(g, L_Y);
++  Op(g, W_I64_SHL);
++  if (kind == 2) {
++    I64(g, -1);
++    Op(g, W_I64_XOR);
++    Op(g, W_I64_AND);
++  } else {
++    Op(g, kind == 1 ? W_I64_OR : W_I64_XOR);
++  }
++  PutRm(g, in, w, true);
++}
++
++// bsf/bsr, and tzcnt/lzcnt with an F3 prefix (Blink's flags: ZF for
++// bsf/bsr, which write 0 for a zero source; CF and ZF for tzcnt/lzcnt)
++static void TranslateBitscan(struct Cg *g, struct Ins *in) {
++  u64 rde = in->rde;
++  int w = Width(rde);
++  bool rev = Mopcode(rde) == 0x1BD;
++  bool cnt = Rep(rde) == 3;
++  GetRm(g, in, w);
++  Set(g, L_X);
++  if (cnt && rev) {  // lzcnt = clz(x) - (64 - bits), which is bits for 0
++    Get(g, L_X);
++    Op(g, W_I64_CLZ);
++    I64(g, 64 - w * 8);
++    Op(g, W_I64_SUB);
++  } else {
++    if (rev) {
++      I64(g, 63);
++      Get(g, L_X);
++      Op(g, W_I64_CLZ);
++      Op(g, W_I64_SUB);
++    } else {
++      Get(g, L_X);
++      Op(g, W_I64_CTZ);
++    }
++    I64(g, cnt ? w * 8 : 0);
++    Get(g, L_X);
++    Op(g, W_I64_EQZ);
++    Op(g, W_I32_EQZ);
++    Op(g, W_SELECT);  // x ? scan : default
++  }
++  Set(g, L_Z);
++  if (in->live & (CF | ZF)) {
++    g->flags = true;
++    Get(g, L_F);
++    I32(g, cnt ? ~(CF | ZF) : ~ZF);
++    Op(g, W_I32_AND);
++    if (cnt) {
++      Get(g, L_X);
++      Op(g, W_I64_EQZ);
++      Op(g, W_I32_OR);
++      Get(g, L_Z);
++    } else {
++      Get(g, L_X);
++    }
++    Op(g, W_I64_EQZ);
++    I32(g, FLAGS_ZF);
++    Op(g, W_I32_SHL);
++    Op(g, W_I32_OR);
++    Set(g, L_F);
++  }
++  Get(g, L_Z);
++  PutRegField(g, in, w);
++}
++
 +static void Push64(struct Cg *g, struct Ins *in) {
 +  // value in L_T; [rsp - 8] = value; rsp -= 8
 +  UseReg(g, 4);
@@ -2252,6 +2777,15 @@ index 0000000..a38ca97
 +static void CallOp(struct Cg *g, struct Ins *in) {
 +  i64 next = in->pc + in->len;
 +  if (g->stat) ++g_wj_callops[Mopcode(in->rde) & 0x3ff];
++  if (g_wj_debug > 1) {
++    i64 *c = &g_wj_dyncalls[Mopcode(in->rde) & 0x3ff];
++    I32(g, (i32)(uintptr_t)c);
++    I32(g, (i32)(uintptr_t)c);
++    Mem(g, W_I64_LOAD, 3, 0);
++    I64(g, 1);
++    Op(g, W_I64_ADD);
++    Mem(g, W_I64_STORE, 3, 0);
++  }
 +  Flush(g);
 +  StoreIp(g, next);
 +  StoreOplen(g, in->len);
@@ -2393,9 +2927,26 @@ index 0000000..a38ca97
 +    case 0x085:
 +    case 0x0A8:
 +    case 0x0A9:
++      TranslateTest(g, in);
++      return;
 +    case 0x0F6:
 +    case 0x0F7:
-+      TranslateTest(g, in);
++      if (ModrmReg(rde) < 2) {
++        TranslateTest(g, in);
++      } else {
++        TranslateGrp3(g, in);
++      }
++      return;
++    case 0x1A3:
++    case 0x1AB:
++    case 0x1B3:
++    case 0x1BB:
++    case 0x1BA:
++      TranslateBt(g, in);
++      return;
++    case 0x1BC:
++    case 0x1BD:
++      TranslateBitscan(g, in);
 +      return;
 +    case 0x0FE:
 +    case 0x0FF:
@@ -2643,6 +3194,7 @@ index 0000000..a38ca97
 +    in->len = x.length;
 +    pc += x.length;
 +    Analyze(in);
++    in->exits = MayExit(in, x.op.has_modrm);
 +    if (in->how == HOW_INLINE &&
 +        (g_wj_off & (1 << Category(Mopcode(in->rde), in->rde)))) {
 +      in->how = ClassifyOp(in->rde) == kOpBranching ? HOW_CALL_BRANCH : HOW_CALL;
@@ -2936,6 +3488,20 @@ index 0000000..a38ca97
 +  for (i = 0; i < 0x400; ++i) {
 +    if (g_wj_callops[i] < 0) g_wj_callops[i] = -g_wj_callops[i];
 +  }
++  if (g_wj_debug > 1) {
++    for (j = 0; j < 16; ++j) {
++      for (best = 0, i = 1; i < 0x400; ++i) {
++        if (g_wj_dyncalls[i] > g_wj_dyncalls[best]) best = i;
++      }
++      if (g_wj_dyncalls[best] <= 0) break;
++      fprintf(stderr, "  executed fallback %#x x%lld\n", best,
++              (long long)g_wj_dyncalls[best]);
++      g_wj_dyncalls[best] = -g_wj_dyncalls[best];
++    }
++    for (i = 0; i < 0x400; ++i) {
++      if (g_wj_dyncalls[i] < 0) g_wj_dyncalls[i] = -g_wj_dyncalls[i];
++    }
++  }
 +}
 +
 +// compiles the region around `pc` and registers each of its blocks;
@@ -2969,7 +3535,7 @@ index 0000000..a38ca97
 +    }
 +    ++g_wj_blocks;
 +  }
-+  if (g_wj_debug > 1) {
++  if (g_wj_debug > 2) {
 +    fprintf(stderr, "wjit: %#llx %d blocks %d insns -> %d (%ld bytes)\n",
 +            (long long)pc, g->nblk, g->n, fn, g->b.n);
 +  }

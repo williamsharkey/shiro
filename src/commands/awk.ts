@@ -1,798 +1,191 @@
+import type { Command, CommandContext } from './index';
+import { Parser } from './awk/parser';
+import { AwkSyntaxError, unescapeString } from './awk/lexer';
+import { compileProgram } from './awk/compile';
+import { Runtime, SN, ExitSig, AwkFatal, NEXT, NEXTFILE } from './awk/runtime';
 
-import type { Command } from './index';
-import { parseArgs, readInput } from './flags';
+const USAGE = 'Usage: awk [POSIX or GNU style options] -f progfile [--] file ...\n' +
+  'Usage: awk [POSIX or GNU style options] [--] \'program\' file ...\n';
 
-// Signal classes for control flow
-/** next and exit unwind the action; `output` keeps what it printed before them. */
-class AwkNext { output: string | null = null; }
-class AwkExit { output: string | null = null; constructor(public code: number) {} }
+interface Options {
+  fs?: string;
+  assigns: string[];
+  progFiles: string[];
+  sources: string[];
+  operands: string[];
+}
+
+function parseOptions(args: string[]): Options | string {
+  const o: Options = { assigns: [], progFiles: [], sources: [], operands: [] };
+  let i = 0;
+  const value = (a: string, short: string): string | null => {
+    if (a.length > short.length) return a.slice(short.length);
+    if (i + 1 >= args.length) return null;
+    return args[++i];
+  };
+  for (; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--') { i++; break; }
+    if (a === '-' || !a.startsWith('-')) break;
+    if (a.startsWith('--')) {
+      const [name, val] = a.includes('=') ? [a.slice(2, a.indexOf('=')), a.slice(a.indexOf('=') + 1)] : [a.slice(2), undefined];
+      const v = () => (val !== undefined ? val : i + 1 < args.length ? args[++i] : null);
+      switch (name) {
+        case 'field-separator': { const x = v(); if (x === null) return 'option requires an argument -- F'; o.fs = x; break; }
+        case 'assign': { const x = v(); if (x === null) return 'option requires an argument -- v'; o.assigns.push(x); break; }
+        case 'file': { const x = v(); if (x === null) return 'option requires an argument -- f'; o.progFiles.push(x); o.sources.push('\0file:' + x); break; }
+        case 'source': { const x = v(); if (x === null) return 'option requires an argument -- e'; o.sources.push(x); break; }
+        case 'version': return '\0version';
+        case 'help': case 'usage': return '\0usage';
+        default: break; // --posix, --traditional, --lint, ...: accepted, no effect
+      }
+      continue;
+    }
+    const c = a[1];
+    if (c === 'F') { const x = value(a, '-F'); if (x === null) return 'option requires an argument -- F'; o.fs = x; continue; }
+    if (c === 'v') { const x = value(a, '-v'); if (x === null) return 'option requires an argument -- v'; o.assigns.push(x); continue; }
+    if (c === 'f') { const x = value(a, '-f'); if (x === null) return 'option requires an argument -- f'; o.progFiles.push(x); o.sources.push('\0file:' + x); continue; }
+    if (c === 'e') { const x = value(a, '-e'); if (x === null) return 'option requires an argument -- e'; o.sources.push(x); continue; }
+    if (c === 'W') { value(a, '-W'); continue; }
+    if (c === 'V') return '\0version';
+    // other gawk flags (-b -c -P -n -S -s -r ...) are accepted and ignored
+  }
+  o.operands = args.slice(i);
+  return o;
+}
 
 export const awk: Command = {
-  name: "awk",
-  description: "Pattern scanning and processing language",
-  async exec(ctx) {
-    // -f progfile (repeatable): the program comes from files, and every
-    // operand is an input file. `#!/usr/bin/awk -f` scripts depend on it.
-    const args: string[] = [];
-    const progFiles: string[] = [];
-    for (let i = 0; i < ctx.args.length; i++) {
-      const a = ctx.args[i];
-      if (a === '--') { args.push(...ctx.args.slice(i)); break; }
-      if (a === '-f' && i + 1 < ctx.args.length) progFiles.push(ctx.args[++i]);
-      else if (a.startsWith('-f') && a.length > 2 && !a.startsWith('-f=')) progFiles.push(a.slice(2));
-      else args.push(a);
+  name: 'awk',
+  description: 'Pattern scanning and processing language',
+  async exec(ctx: CommandContext) {
+    const opts = parseOptions(ctx.args);
+    if (typeof opts === 'string') {
+      if (opts === '\0version') { ctx.stdout += 'awk (Shiro) 1.0, POSIX awk with gawk extensions\n'; return 0; }
+      if (opts === '\0usage') { ctx.stdout += USAGE; return 0; }
+      ctx.stderr += `awk: ${opts}\n${USAGE}`;
+      return 2;
     }
-    const { values, positional, flags } = parseArgs(args, ["F", "v"]);
 
-    let fileProgram: string | undefined;
-    if (progFiles.length) {
+    let stdinUsedForProgram = false;
+    let src = '';
+    let srcName = 'cmd. line';
+    if (opts.sources.length) {
       const parts: string[] = [];
-      for (const f of progFiles) {
+      for (const s of opts.sources) {
+        if (!s.startsWith('\0file:')) { parts.push(s); continue; }
+        const f = s.slice(6);
+        if (f === '-' || f === '/dev/stdin') {
+          parts.push(ctx.stdin);
+          stdinUsedForProgram = true;
+          srcName = '-';
+          continue;
+        }
         try {
-          parts.push(await ctx.fs.readFile(ctx.fs.resolvePath(f, ctx.cwd), 'utf8') as string);
+          const data = await ctx.fs.readFile(ctx.fs.resolvePath(f, ctx.cwd), 'utf8');
+          parts.push(typeof data === 'string' ? data : new TextDecoder().decode(data));
+          srcName = f;
         } catch {
-          ctx.stderr += `awk: can't open file ${f}\n`;
+          ctx.stderr += `awk: fatal: can't open source file \`${f}' for reading: No such file or directory\n`;
           return 2;
         }
       }
-      // drop a #! line and full-line comments, which the evaluator doesn't parse
-      fileProgram = parts.join('\n').split('\n').filter(l => !/^\s*#/.test(l)).join('\n');
-    }
-
-    if (fileProgram === undefined && positional.length === 0) {
-      ctx.stderr += "awk: missing program\n";
-      return 1;
-    }
-
-    const program = fileProgram ?? positional[0];
-    const files = fileProgram !== undefined ? positional : positional.slice(1);
-
-    const awkCtx: AwkContext = {
-      FS: values.F || " ",
-      OFS: " ",
-      RS: "\n",
-      ORS: "\n",
-      NR: 0,
-      NF: 0,
-      FILENAME: files[0] || "-",
-      variables: {},
-      arrays: {},
-    };
-
-    // User variables (-v var=value)
-    if (values.v) {
-      const parts = values.v.split("=");
-      if (parts.length === 2) {
-        awkCtx.variables[parts[0]] = parts[1];
+      src = parts.join('\n');
+    } else {
+      if (opts.operands.length === 0) {
+        ctx.stderr += USAGE;
+        return 2;
       }
+      src = opts.operands.shift()!;
     }
 
+    let compiled;
     try {
-      const { content } = await readInput(files, ctx.stdin, ctx.fs, ctx.cwd, ctx.fs.resolvePath);
-      const lines = content.endsWith("\n") ? content.slice(0, -1).split("\n") : content.split("\n");
-      const output: string[] = [];
-
-      const blocks = parseBlocks(program);
-
-      let exitCode = 0;
-      let exited = false;
-      const run = (action: string, fields: string[]) => {
-        const r = executeBlock(action, fields, awkCtx);
-        if (r !== null) output.push(r);
-      };
-      const onExit = (e: unknown) => {
-        if (!(e instanceof AwkExit)) throw e;
-        if (e.output !== null) output.push(e.output);
-        exitCode = e.code;
-        exited = true;
-      };
-
-      // Execute BEGIN block (exit there skips the input, not END)
-      if (blocks.begin) {
-        try { run(blocks.begin, []); } catch (e) { onExit(e); }
+      const prog = new Parser(src).parseProgram();
+      compiled = compileProgram(prog);
+    } catch (e) {
+      if (e instanceof AwkSyntaxError) {
+        ctx.stderr += `awk: ${srcName}:${e.line || 1}: ${e.message}\n`;
+        return 1;
       }
-
-      // Process each line
-      try {
-        for (const line of exited ? [] : lines) {
-          awkCtx.NR++;
-          const fieldSepRegex = typeof awkCtx.FS === "string" && awkCtx.FS !== " "
-            ? new RegExp(awkCtx.FS.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-            : /\s+/;
-          const fields = awkCtx.FS === " "
-            ? line.split(fieldSepRegex).filter(f => f !== "")
-            : line.split(fieldSepRegex);
-          awkCtx.NF = fields.length;
-
-          // Process all pattern-action pairs
-          try {
-            for (const rule of blocks.rules) {
-              let shouldProcess = true;
-              if (rule.pattern) {
-                if (rule.pattern.startsWith('/') && rule.pattern.endsWith('/')) {
-                  const pat = rule.pattern.slice(1, -1);
-                  try { shouldProcess = new RegExp(pat).test(line); } catch { shouldProcess = false; }
-                } else {
-                  // Expression pattern
-                  shouldProcess = evalCondition(rule.pattern, fields, awkCtx);
-                }
-              }
-              if (shouldProcess) run(rule.action, fields);
-            }
-          } catch (e) {
-            if (e instanceof AwkNext) {
-              if (e.output !== null) output.push(e.output);
-              continue;
-            }
-            throw e;
-          }
-        }
-      } catch (e) {
-        onExit(e);
-      }
-
-      // Execute END block (an exit there ends it)
-      if (blocks.end) {
-        try { run(blocks.end, []); } catch (e) { onExit(e); }
-      }
-
-      ctx.stdout += output.join("\n") + (output.length > 0 ? "\n" : "");
-      return exitCode;
-    } catch (e: unknown) {
-      ctx.stderr += `awk: ${e instanceof Error ? e.message : e}\n`;
-      return 1;
+      throw e;
     }
+
+    const rt = new Runtime(ctx, stdinUsedForProgram ? '' : ctx.stdin);
+    const out = ctx;
+    let factory: (...a: unknown[]) => { begin: () => Promise<void>; main: () => Promise<void>; end: () => Promise<void>; hasMain: boolean; hasEnd: boolean };
+    try {
+      factory = new Function('rt', 'h', 'SNc', 'NEXT', 'NEXTFILE', 'ExitSig', compiled.source) as typeof factory;
+    } catch (e) {
+      ctx.stderr += `awk: internal error: ${e instanceof Error ? e.message : e}\n`;
+      return 2;
+    }
+    const P = factory(rt, rt.h, SN, NEXT, NEXTFILE, ExitSig);
+
+    rt.ARGV.set('0', 'awk');
+    opts.operands.forEach((a, i) => rt.ARGV.set(String(i + 1), new SN(a)));
+    rt.ARGC = opts.operands.length + 1;
+    for (const [k, v] of Object.entries(ctx.env)) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) rt.ENVIRON.set(k, new SN(String(v)));
+    }
+
+    let code = 0;
+    const finish = () => rt.closeAll();
+    try {
+      if (opts.fs !== undefined) rt.FS = unescapeString(opts.fs);
+      for (const a of opts.assigns) {
+        const m = /^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/.exec(a);
+        if (!m) { ctx.stderr += `awk: fatal: \`${a}' is not a legal variable name\n`; return 2; }
+        rt.assignVar(m[1], rt.cmdlineValue(m[2]));
+      }
+      let exited = false;
+      try {
+        await P.begin();
+      } catch (e) {
+        if (!(e instanceof ExitSig)) throw e;
+        exited = true;
+        if (e.code !== undefined) code = Math.trunc(e.code) & 0xff;
+      }
+      if (!exited && (P.hasMain || P.hasEnd)) {
+        try {
+          for (;;) {
+            const r = await rt.nextMainRecord();
+            if (r === null) break;
+            rt.setRecord(r);
+            try {
+              await P.main();
+            } catch (e) {
+              if (e === NEXT) continue;
+              if (e === NEXTFILE) { rt.skipFile(); continue; }
+              throw e;
+            }
+          }
+        } catch (e) {
+          if (!(e instanceof ExitSig)) throw e;
+          if (e.code !== undefined) code = Math.trunc(e.code) & 0xff;
+        }
+      }
+      try {
+        await P.end();
+      } catch (e) {
+        if (!(e instanceof ExitSig)) throw e;
+        if (e.code !== undefined) code = Math.trunc(e.code) & 0xff;
+      }
+    } catch (e) {
+      if (e instanceof AwkFatal) {
+        out.stderr += `awk: cmd. line:1: ${e.kind}: ${e.message}\n`;
+        await finish().catch(() => {});
+        return e.status;
+      }
+      if (e === NEXT || e === NEXTFILE) {
+        out.stderr += `awk: cmd. line:1: fatal: \`next' used in BEGIN or END action\n`;
+        await finish().catch(() => {});
+        return 2;
+      }
+      await finish().catch(() => {});
+      out.stderr += `awk: ${e instanceof Error ? e.message : String(e)}\n`;
+      return 2;
+    }
+    await finish();
+    return code;
   },
 };
-
-interface AwkContext {
-  FS: string;
-  OFS: string;
-  RS: string;
-  ORS: string;
-  NR: number;
-  NF: number;
-  FILENAME: string;
-  variables: Record<string, string>;
-  arrays: Record<string, Record<string, string>>;
-}
-
-interface AwkRule {
-  pattern: string | null;
-  action: string;
-}
-
-interface AwkBlocks {
-  begin?: string;
-  end?: string;
-  rules: AwkRule[];
-}
-
-function parseBlocks(program: string): AwkBlocks {
-  const result: AwkBlocks = { rules: [] };
-  let i = 0;
-  const p = program.trim();
-
-  while (i < p.length) {
-    while (i < p.length && /\s/.test(p[i])) i++;
-    if (i >= p.length) break;
-
-    // Check for BEGIN
-    if (p.startsWith("BEGIN", i) && (i + 5 >= p.length || /[\s{]/.test(p[i + 5]))) {
-      i += 5;
-      while (i < p.length && /\s/.test(p[i])) i++;
-      if (p[i] === '{') {
-        const body = extractBlock(p, i);
-        result.begin = body.content;
-        i = body.end;
-        continue;
-      }
-    }
-
-    // Check for END
-    if (p.startsWith("END", i) && (i + 3 >= p.length || /[\s{]/.test(p[i + 3]))) {
-      i += 3;
-      while (i < p.length && /\s/.test(p[i])) i++;
-      if (p[i] === '{') {
-        const body = extractBlock(p, i);
-        result.end = body.content;
-        i = body.end;
-        continue;
-      }
-    }
-
-    // Check for /pattern/ { action } or condition { action } or just { action }
-    let pattern: string | null = null;
-
-    if (p[i] === '/') {
-      const endSlash = p.indexOf('/', i + 1);
-      if (endSlash > i) {
-        pattern = p.slice(i, endSlash + 1);
-        i = endSlash + 1;
-        while (i < p.length && /\s/.test(p[i])) i++;
-      }
-    } else if (p[i] !== '{') {
-      // Condition expression (e.g. $1 > 5)
-      let condStart = i;
-      while (i < p.length && p[i] !== '{') i++;
-      pattern = p.slice(condStart, i).trim();
-      if (!pattern) pattern = null;
-    }
-
-    if (p[i] === '{') {
-      const body = extractBlock(p, i);
-      result.rules.push({ pattern, action: body.content });
-      i = body.end;
-      continue;
-    }
-
-    // If we have just a pattern with no block at all, treat the whole program as action
-    if (i >= p.length && result.rules.length === 0 && !result.begin && !result.end) {
-      result.rules.push({ pattern: null, action: p });
-      break;
-    }
-
-    i++;
-  }
-
-  // If no blocks were found, treat entire program as action
-  if (result.rules.length === 0 && !result.begin && !result.end) {
-    result.rules.push({ pattern: null, action: p });
-  }
-
-  return result;
-}
-
-function extractBlock(str: string, start: number): { content: string; end: number } {
-  let depth = 0;
-  let i = start;
-  let inStr = false;
-  let strCh = '';
-  while (i < str.length) {
-    if (inStr) {
-      if (str[i] === strCh && str[i - 1] !== '\\') inStr = false;
-      i++;
-      continue;
-    }
-    if (str[i] === '"' || str[i] === "'") { inStr = true; strCh = str[i]; }
-    if (str[i] === '{') depth++;
-    else if (str[i] === '}') {
-      depth--;
-      if (depth === 0) return { content: str.slice(start + 1, i), end: i + 1 };
-    }
-    i++;
-  }
-  return { content: str.slice(start + 1), end: str.length };
-}
-
-function resolveFieldRefs(ref: string, fields: string[]): string {
-  return ref.replace(/\$(\d+)/g, (_, n) => fields[parseInt(n) - 1] || "");
-}
-
-function resolveVar(name: string, ctx: AwkContext): number {
-  const arrMatch = name.match(/^(\w+)\[(.+)\]$/);
-  if (arrMatch) {
-    const [, arrName, key] = arrMatch;
-    return parseFloat(ctx.arrays[arrName]?.[key]) || 0;
-  }
-  return parseFloat(ctx.variables[name]) || 0;
-}
-
-function getVarStr(name: string, ctx: AwkContext): string {
-  const arrMatch = name.match(/^(\w+)\[(.+)\]$/);
-  if (arrMatch) {
-    const [, arrName, key] = arrMatch;
-    return ctx.arrays[arrName]?.[key] ?? "";
-  }
-  return ctx.variables[name] ?? "";
-}
-
-function setVar(name: string, value: string, ctx: AwkContext): void {
-  const arrMatch = name.match(/^(\w+)\[(.+)\]$/);
-  if (arrMatch) {
-    const [, arrName, key] = arrMatch;
-    if (!ctx.arrays[arrName]) ctx.arrays[arrName] = {};
-    ctx.arrays[arrName][key] = value;
-  } else {
-    ctx.variables[name] = value;
-  }
-}
-
-function evalCondition(cond: string, fields: string[], ctx: AwkContext): boolean {
-  const c = cond.trim();
-
-  // Check for (key in array) — membership test
-  const inMatch = c.match(/^\(?\s*(\S+)\s+in\s+(\w+)\s*\)?$/);
-  if (inMatch) {
-    const key = substituteVariables(inMatch[1], fields, ctx);
-    return ctx.arrays[inMatch[2]]?.[key] !== undefined;
-  }
-
-  // Comparison operators
-  const compMatch = c.match(/^(.+?)\s*(==|!=|>=|<=|>|<|~|!~)\s*(.+)$/);
-  if (compMatch) {
-    let left = substituteVariables(compMatch[1].trim(), fields, ctx);
-    left = evaluateExpr(left);
-    let right = substituteVariables(compMatch[3].trim(), fields, ctx);
-    right = evaluateExpr(right);
-    const op = compMatch[2];
-    const lNum = parseFloat(left);
-    const rNum = parseFloat(right);
-    const bothNum = !isNaN(lNum) && !isNaN(rNum) && left.trim() !== '' && right.trim() !== '';
-
-    switch (op) {
-      case '==': return bothNum ? lNum === rNum : left === right;
-      case '!=': return bothNum ? lNum !== rNum : left !== right;
-      case '>': return bothNum ? lNum > rNum : left > right;
-      case '<': return bothNum ? lNum < rNum : left < right;
-      case '>=': return bothNum ? lNum >= rNum : left >= right;
-      case '<=': return bothNum ? lNum <= rNum : left <= right;
-      case '~': try { return new RegExp(right.replace(/^\/|\/$/g, '')).test(left); } catch { return false; }
-      case '!~': try { return !new RegExp(right.replace(/^\/|\/$/g, '')).test(left); } catch { return true; }
-    }
-  }
-
-  // Regex match: /pattern/
-  if (c.startsWith('/') && c.endsWith('/')) {
-    try { return new RegExp(c.slice(1, -1)).test(fields.join(ctx.OFS)); } catch { return false; }
-  }
-
-  // Truthy check
-  const val = substituteVariables(c, fields, ctx);
-  const num = parseFloat(val);
-  if (!isNaN(num)) return num !== 0;
-  return val !== '' && val !== '0';
-}
-
-function executeBlock(action: string, fields: string[], ctx: AwkContext): string | null {
-  let code = action.trim();
-  code = processStringFunctions(code, fields, ctx);
-  const statements = splitStatements(code);
-  let printResult: string | null = null;
-
-  try {
-    for (const rawStmt of statements) {
-      const stmt = rawStmt.trim();
-      if (!stmt) continue;
-      const r = execStatement(stmt, fields, ctx);
-      if (r !== null) printResult = printResult !== null ? printResult + "\n" + r : r;
-    }
-  } catch (e) {
-    if ((e instanceof AwkExit || e instanceof AwkNext) && printResult !== null) {
-      e.output = e.output !== null ? printResult + "\n" + e.output : printResult;
-    }
-    throw e;
-  }
-
-  return printResult;
-}
-
-function splitStatements(code: string): string[] {
-  const result: string[] = [];
-  let current = "";
-  let depth = 0;
-  let inStr = false;
-  let strCh = "";
-
-  for (let i = 0; i < code.length; i++) {
-    const ch = code[i];
-    if (inStr) {
-      current += ch;
-      if (ch === strCh && code[i - 1] !== '\\') inStr = false;
-      continue;
-    }
-    if (ch === '"' || ch === "'") { inStr = true; strCh = ch; current += ch; continue; }
-    if (ch === '(' || ch === '{') { depth++; current += ch; continue; }
-    if (ch === ')' || ch === '}') { depth--; current += ch; continue; }
-    if (ch === ';' && depth === 0) { result.push(current); current = ""; continue; }
-    current += ch;
-  }
-  if (current.trim()) result.push(current);
-  return result;
-}
-
-function execStatement(stmt: string, fields: string[], ctx: AwkContext): string | null {
-  const s = stmt.trim();
-  if (!s) return null;
-
-  // Handle next
-  if (s === 'next') throw new AwkNext();
-
-  // Handle exit
-  const exitMatch = s.match(/^exit\s*(\d*)$/);
-  if (exitMatch) throw new AwkExit(parseInt(exitMatch[1] || '0', 10));
-
-  // Handle delete array[key]
-  const deleteMatch = s.match(/^delete\s+(\w+)\[([^\]]+)\]$/);
-  if (deleteMatch) {
-    const [, arrName, key] = deleteMatch;
-    const resolvedKey = substituteVariables(key, fields, ctx);
-    if (ctx.arrays[arrName]) delete ctx.arrays[arrName][resolvedKey];
-    return null;
-  }
-
-  // Handle if/else
-  if (s.startsWith('if')) {
-    return execIfElse(s, fields, ctx);
-  }
-
-  // Handle while(cond) { ... }
-  const whileMatch = s.match(/^while\s*\((.+?)\)\s*\{([\s\S]*)\}$/);
-  if (whileMatch) {
-    const [, cond, body] = whileMatch;
-    let result: string | null = null;
-    let safety = 10000;
-    while (evalCondition(cond, fields, ctx) && safety-- > 0) {
-      const r = executeBlock(body, fields, ctx);
-      if (r !== null) result = result !== null ? result + "\n" + r : r;
-    }
-    return result;
-  }
-
-  // Handle C-style for(init; cond; incr) { ... }
-  const forMatch = s.match(/^for\s*\(\s*([^;]*)\s*;\s*([^;]*)\s*;\s*([^)]*)\s*\)\s*\{([\s\S]*)\}$/);
-  if (forMatch) {
-    const [, init, cond, incr, body] = forMatch;
-    if (init.trim()) execStatement(init.trim(), fields, ctx);
-    let result: string | null = null;
-    let safety = 10000;
-    while (evalCondition(cond.trim(), fields, ctx) && safety-- > 0) {
-      const r = executeBlock(body, fields, ctx);
-      if (r !== null) result = result !== null ? result + "\n" + r : r;
-      if (incr.trim()) execStatement(incr.trim(), fields, ctx);
-    }
-    return result;
-  }
-
-  // Handle for(k in arr) { ... } or for(k in arr) stmt
-  const forInMatch = s.match(/^for\s*\(\s*(\w+)\s+in\s+(\w+)\s*\)\s*(.+)$/);
-  if (forInMatch) {
-    const [, iterVar, arrName, body] = forInMatch;
-    const arr = ctx.arrays[arrName];
-    if (!arr) return null;
-    let result: string | null = null;
-    for (const key of Object.keys(arr)) {
-      ctx.variables[iterVar] = key;
-      const r = execStatement(body, fields, ctx);
-      if (r !== null) result = result !== null ? result + "\n" + r : r;
-    }
-    return result;
-  }
-
-  // Handle printf statement
-  if (s.startsWith("printf")) {
-    const printfMatch = s.match(/printf\s+(.+)/);
-    if (printfMatch) return formatPrintf(printfMatch[1], fields, ctx);
-    return null;
-  }
-
-  // Handle print statement
-  if (s.startsWith("print")) {
-    const printExpr = s.substring(5).trim();
-
-    if (!printExpr || printExpr === "") {
-      return fields.join(ctx.OFS);
-    } else if (printExpr.includes(",")) {
-      const parts = smartSplit(printExpr, ',');
-      const outputs = parts.map(part => {
-        let p = part.trim();
-        // Strip string literal quotes before substitution
-        if ((p.startsWith('"') && p.endsWith('"')) || (p.startsWith("'") && p.endsWith("'"))) {
-          return p.slice(1, -1).replace(/\\n/g, '\n').replace(/\\t/g, '\t');
-        }
-        let output = substituteVariables(p, fields, ctx);
-        output = evaluateExpr(output);
-        return output.replace(/^["'](.*)["']$/, "$1");
-      });
-      return outputs.join(ctx.OFS);
-    } else {
-      let p = printExpr;
-      // Strip string literal quotes
-      if ((p.startsWith('"') && p.endsWith('"')) || (p.startsWith("'") && p.endsWith("'"))) {
-        return p.slice(1, -1).replace(/\\n/g, '\n').replace(/\\t/g, '\t');
-      }
-      let output = substituteVariables(p, fields, ctx);
-      output = evaluateExpr(output);
-      output = output.replace(/^["'](.*)["']$/, "$1");
-      output = output.replace(/\s+/g, " ").trim();
-      return output;
-    }
-  }
-
-  // Handle increment/decrement
-  const incrMatch = s.match(/^(\w+(?:\[[^\]]+\])?)(\+\+|--)$/);
-  if (incrMatch) {
-    const [, ref, op] = incrMatch;
-    const resolved = resolveFieldRefs(ref, fields);
-    const current = resolveVar(resolved, ctx);
-    setVar(resolved, String(op === "++" ? current + 1 : current - 1), ctx);
-    return null;
-  }
-
-  // Handle assignment
-  const assignMatch = s.match(/^(\w+(?:\[[^\]]+\])?)\s*([\+\-\*\/]?)=\s*(.+)$/);
-  if (assignMatch) {
-    const [, ref, op, exprStr] = assignMatch;
-    const resolved = resolveFieldRefs(ref, fields);
-    let value = substituteVariables(exprStr, fields, ctx);
-    value = evaluateExpr(value);
-
-    if (op) {
-      const numVal = parseFloat(value) || 0;
-      const current = resolveVar(resolved, ctx);
-      switch (op) {
-        case "+": setVar(resolved, String(current + numVal), ctx); break;
-        case "-": setVar(resolved, String(current - numVal), ctx); break;
-        case "*": setVar(resolved, String(current * numVal), ctx); break;
-        case "/": setVar(resolved, String(current / numVal), ctx); break;
-      }
-    } else {
-      // Plain assignment — could be string or number
-      const stripped = value.replace(/^["'](.*)["']$/, '$1');
-      setVar(resolved, stripped, ctx);
-    }
-    return null;
-  }
-
-  return null;
-}
-
-function execIfElse(s: string, fields: string[], ctx: AwkContext): string | null {
-  // Parse: if (cond) { body } else if (cond) { body } else { body }
-  // Also: if (cond) stmt; else stmt
-  const ifMatch = s.match(/^if\s*\((.+?)\)\s*\{([\s\S]*?)\}(?:\s*else\s+if\s*\((.+?)\)\s*\{([\s\S]*?)\})*(?:\s*else\s*\{([\s\S]*?)\})?$/);
-  if (ifMatch) {
-    if (evalCondition(ifMatch[1], fields, ctx)) {
-      return executeBlock(ifMatch[2], fields, ctx);
-    }
-    // Check else-if chains
-    const rest = s.slice(ifMatch[0].indexOf('}') + 1).trim();
-    if (rest.startsWith('else if')) {
-      return execIfElse(rest.slice(5).trim(), fields, ctx);
-    }
-    if (ifMatch[5] !== undefined) {
-      return executeBlock(ifMatch[5], fields, ctx);
-    }
-    return null;
-  }
-
-  // Simpler form: if (cond) stmt
-  const simpleIf = s.match(/^if\s*\((.+?)\)\s+(.+?)(?:\s+else\s+(.+))?$/);
-  if (simpleIf) {
-    if (evalCondition(simpleIf[1], fields, ctx)) {
-      // Handle braced body
-      const body = simpleIf[2].trim();
-      if (body.startsWith('{') && body.endsWith('}')) {
-        return executeBlock(body.slice(1, -1), fields, ctx);
-      }
-      return execStatement(body, fields, ctx);
-    } else if (simpleIf[3]) {
-      const elseBody = simpleIf[3].trim();
-      if (elseBody.startsWith('{') && elseBody.endsWith('}')) {
-        return executeBlock(elseBody.slice(1, -1), fields, ctx);
-      }
-      return execStatement(elseBody, fields, ctx);
-    }
-    return null;
-  }
-
-  return null;
-}
-
-function smartSplit(str: string, delimiter: string): string[] {
-  const result: string[] = [];
-  let current = '';
-  let depth = 0;
-  let inStr = false;
-  let strCh = '';
-  for (let i = 0; i < str.length; i++) {
-    const ch = str[i];
-    if (inStr) { current += ch; if (ch === strCh && str[i - 1] !== '\\') inStr = false; continue; }
-    if (ch === '"' || ch === "'") { inStr = true; strCh = ch; current += ch; continue; }
-    if (ch === '(' || ch === '[') { depth++; current += ch; continue; }
-    if (ch === ')' || ch === ']') { depth--; current += ch; continue; }
-    if (ch === delimiter && depth === 0) { result.push(current); current = ''; continue; }
-    current += ch;
-  }
-  if (current) result.push(current);
-  return result;
-}
-
-function substituteVariables(str: string, fields: string[], ctx: AwkContext): string {
-  let output = str;
-
-  // Handle string concatenation with spaces (e.g. "foo" " " "bar")
-  // and sprintf
-  const sprintfMatch = output.match(/sprintf\s*\((.+)\)/);
-  if (sprintfMatch) {
-    const result = formatPrintf(sprintfMatch[1], fields, ctx);
-    output = output.replace(/sprintf\s*\(.+\)/, result || '');
-  }
-
-  // Ternary operator: cond ? val1 : val2
-  const ternMatch = output.match(/^(.+?)\s*\?\s*(.+?)\s*:\s*(.+)$/);
-  if (ternMatch) {
-    const cond = evalCondition(ternMatch[1].trim(), fields, ctx);
-    const branch = cond ? ternMatch[2].trim() : ternMatch[3].trim();
-    return substituteVariables(branch, fields, ctx);
-  }
-
-  output = output.replace(/\$0/g, fields.join(ctx.OFS));
-  output = output.replace(/\$NF/g, fields[fields.length - 1] || "");
-
-  // Indirect field references: $var where var is a variable
-  output = output.replace(/\$(\w+)/g, (match, name) => {
-    const num = parseInt(name, 10);
-    if (!isNaN(num)) {
-      // Direct: $1, $2, etc.
-      return fields[num - 1] || "";
-    }
-    // Indirect: $var → resolve var to number, then get that field
-    const varVal = ctx.variables[name];
-    if (varVal !== undefined) {
-      const idx = parseInt(varVal, 10);
-      if (!isNaN(idx) && idx > 0) return fields[idx - 1] || "";
-      if (idx === 0) return fields.join(ctx.OFS);
-    }
-    return match;
-  });
-
-  output = output.replace(/\bNR\b/g, String(ctx.NR));
-  output = output.replace(/\bNF\b/g, String(ctx.NF));
-  output = output.replace(/\bFS\b/g, ctx.FS);
-  output = output.replace(/\bOFS\b/g, ctx.OFS);
-  output = output.replace(/\bRS\b/g, ctx.RS);
-  output = output.replace(/\bORS\b/g, ctx.ORS);
-  output = output.replace(/\bFILENAME\b/g, ctx.FILENAME);
-
-  // Replace array references
-  output = output.replace(/(\w+)\[([^\]]+)\]/g, (_, arrName, key) => {
-    const resolvedKey = substituteVariables(key, fields, ctx);
-    return ctx.arrays[arrName]?.[resolvedKey] ?? "0";
-  });
-
-  for (const [key, value] of Object.entries(ctx.variables)) {
-    output = output.replace(new RegExp(`\\b${key}\\b`, "g"), value);
-  }
-
-  return output;
-}
-
-function evaluateExpr(str: string): string {
-  // Handle string concatenation
-  const strParts = str.match(/^"([^"]*)"(?:\s+"([^"]*)")*$/);
-  if (strParts) {
-    return '"' + str.replace(/"\s*"/g, '') + '"';
-  }
-
-  const arithmeticPattern = /^([\d.]+)\s*([\+\-\*\/%])\s*([\d.]+)$/;
-  const match = str.match(arithmeticPattern);
-  if (match) {
-    const left = parseFloat(match[1]);
-    const op = match[2];
-    const right = parseFloat(match[3]);
-    let result: number;
-    switch (op) {
-      case "+": result = left + right; break;
-      case "-": result = left - right; break;
-      case "*": result = left * right; break;
-      case "/": result = left / right; break;
-      case "%": result = left % right; break;
-      default: return str;
-    }
-    return String(result);
-  }
-  return str;
-}
-
-function formatPrintf(expr: string, fields: string[], ctx: AwkContext): string {
-  const parts: string[] = smartSplit(expr, ',');
-  if (parts.length === 0) return "";
-
-  let format = parts[0].trim().replace(/^["'](.*)["']$/, "$1");
-  const args: string[] = [];
-  for (let i = 1; i < parts.length; i++) {
-    let arg = substituteVariables(parts[i].trim(), fields, ctx);
-    arg = evaluateExpr(arg);
-    args.push(arg);
-  }
-
-  let output = format;
-  let argIdx = 0;
-
-  output = output.replace(/%(-)?(\d+)?(?:\.(\d+))?([sdifgex%])/g, (match, leftAlign, width, precision, type) => {
-    if (type === "%") return "%";
-    if (argIdx >= args.length) return match;
-    const arg = args[argIdx++];
-
-    let formatted: string;
-    switch (type) {
-      case "s": formatted = arg; break;
-      case "d": case "i": formatted = String(parseInt(arg) || 0); break;
-      case "f": {
-        const num = parseFloat(arg) || 0;
-        formatted = precision ? num.toFixed(parseInt(precision)) : String(num);
-        break;
-      }
-      case "g": case "e": case "x": formatted = arg; break;
-      default: formatted = arg;
-    }
-
-    if (width) {
-      const w = parseInt(width);
-      formatted = leftAlign ? formatted.padEnd(w, " ") : formatted.padStart(w, " ");
-    }
-    return formatted;
-  });
-
-  output = output.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\r/g, "\r").replace(/\\\\/g, "\\");
-  if (output.endsWith("\n")) output = output.slice(0, -1);
-  return output;
-}
-
-function processStringFunctions(code: string, fields: string[], ctx: AwkContext): string {
-  let result = code;
-
-  result = result.replace(/length\s*\(\s*([^)]*)\s*\)/g, (_, arg) => {
-    const str = arg ? substituteVariables(arg, fields, ctx) : fields.join(ctx.OFS);
-    return String(str.length);
-  });
-
-  result = result.replace(/substr\s*\(\s*([^,)]+)\s*,\s*([^,)]+)(?:\s*,\s*([^)]+))?\s*\)/g, (_, str, start, len) => {
-    const s = substituteVariables(str.trim(), fields, ctx);
-    const startIdx = parseInt(substituteVariables(start.trim(), fields, ctx)) - 1;
-    const length = len ? parseInt(substituteVariables(len.trim(), fields, ctx)) : undefined;
-    return length ? s.slice(startIdx, startIdx + length) : s.slice(startIdx);
-  });
-
-  result = result.replace(/index\s*\(\s*([^,)]+)\s*,\s*([^)]+)\s*\)/g, (_, str, substr) => {
-    const s = substituteVariables(str.trim(), fields, ctx);
-    const t = substituteVariables(substr.trim(), fields, ctx).replace(/^["'](.*)["']$/, "$1");
-    const idx = s.indexOf(t);
-    return String(idx === -1 ? 0 : idx + 1);
-  });
-
-  result = result.replace(/tolower\s*\(\s*([^)]*)\s*\)/g, (_, arg) => {
-    return substituteVariables(arg, fields, ctx).toLowerCase();
-  });
-
-  result = result.replace(/toupper\s*\(\s*([^)]*)\s*\)/g, (_, arg) => {
-    return substituteVariables(arg, fields, ctx).toUpperCase();
-  });
-
-  result = result.replace(/split\s*\(\s*([^,)]+)\s*,\s*([^,)]+)(?:\s*,\s*([^)]+))?\s*\)/g, (_, str, arr, sep) => {
-    const s = substituteVariables(str.trim(), fields, ctx);
-    const arrName = arr.trim();
-    const separator = sep ? substituteVariables(sep.trim(), fields, ctx).replace(/^["'](.*)["']$/, "$1") : ctx.FS;
-    const parts = s.split(new RegExp(separator));
-    // Store split results in array
-    if (!ctx.arrays[arrName]) ctx.arrays[arrName] = {};
-    parts.forEach((p, i) => { ctx.arrays[arrName][String(i + 1)] = p; });
-    return String(parts.length);
-  });
-
-  result = result.replace(/gsub\s*\(\s*([^,)]+)\s*,\s*([^,)]+)(?:\s*,\s*([^)]+))?\s*\)/g, (_, pattern, repl, target) => {
-    const pat = substituteVariables(pattern.trim(), fields, ctx).replace(/^["'](.*)["']$/, "$1");
-    const replacement = substituteVariables(repl.trim(), fields, ctx).replace(/^["'](.*)["']$/, "$1");
-    const tgt = target ? substituteVariables(target.trim(), fields, ctx) : fields[0] || "";
-    try { return tgt.replace(new RegExp(pat, "g"), replacement); } catch { return tgt; }
-  });
-
-  result = result.replace(/sub\s*\(\s*([^,)]+)\s*,\s*([^,)]+)(?:\s*,\s*([^)]+))?\s*\)/g, (_, pattern, repl, target) => {
-    const pat = substituteVariables(pattern.trim(), fields, ctx).replace(/^["'](.*)["']$/, "$1");
-    const replacement = substituteVariables(repl.trim(), fields, ctx).replace(/^["'](.*)["']$/, "$1");
-    const tgt = target ? substituteVariables(target.trim(), fields, ctx) : fields[0] || "";
-    try { return tgt.replace(new RegExp(pat), replacement); } catch { return tgt; }
-  });
-
-  result = result.replace(/match\s*\(\s*([^,)]+)\s*,\s*([^)]+)\s*\)/g, (_, str, pattern) => {
-    const s = substituteVariables(str.trim(), fields, ctx);
-    const pat = substituteVariables(pattern.trim(), fields, ctx).replace(/^["'](.*)["']$/, "$1");
-    try {
-      const m = s.match(new RegExp(pat));
-      return m ? String(m.index! + 1) : "0";
-    } catch { return "0"; }
-  });
-
-  return result;
-}

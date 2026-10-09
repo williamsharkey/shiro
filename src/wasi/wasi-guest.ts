@@ -335,7 +335,16 @@ export class WasiGuest {
         sched_yield: () => 0,
         fd_prestat_get: (fd: number, ptr: number) => {
           const name = this.preopens.get(fd);
-          if (name === undefined) return WASI_EBADF;
+          if (name === undefined) {
+            // An inherited fd below the preopens (a forked program's pipe at
+            // fd 3): libc scans fds from 3 up to the first EBADF, so answer
+            // "not a directory preopen" and let it go on to the preopens
+            if (fd >= 3 && fd < Math.max(0, ...this.preopens.keys())) {
+              this.view().setUint8(ptr, 1);
+              return 0;
+            }
+            return WASI_EBADF;
+          }
           const v = this.view();
           v.setUint8(ptr, 0);
           v.setUint32(ptr + 4, enc.encode(name).length, true);

@@ -1,7 +1,7 @@
-From e1add834f8b759cf0424767ee0ead5dbeb941bf8 Mon Sep 17 00:00:00 2001
+From acc538b0cf8cb9909125ac0a7bdbe2eba0d55e0a Mon Sep 17 00:00:00 2001
 From: Shiro <shiro@localhost>
 Date: Thu, 8 Oct 2026 21:03:06 +0000
-Subject: [PATCH 19/19] emscripten: Shiro sendmsg/recvmsg pass control data
+Subject: [PATCH 19/20] emscripten: Shiro sendmsg/recvmsg pass control data
  (SCM_RIGHTS), sockaddr_un lengths, SO_PEERCRED
 
 ---

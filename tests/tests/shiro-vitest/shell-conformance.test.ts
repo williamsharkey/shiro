@@ -382,4 +382,100 @@ describe('shell conformance regressions', () => {
     ].join('\n'));
     expect(r.out).toBe('a\nst=0 ps=3 4 0\npf=2\nx=1\nflags\nhello\nquoted-not-alias\n');
   });
+
+  it('cd -L/-P/-/--/CDPATH with symlinks, pwd ignores $PWD assignment, shopt -p/-q/-o, source ARGS', async () => {
+    const r = await script([
+      "cd /tmp && rm -rf cdt && mkdir -p cdt/real/sub && cd cdt && ln -s real link",
+      "cd link/sub && pwd && pwd -P && cd .. && pwd && cd - && echo \"old=$OLDPWD\"",
+      "PWD=foo; pwd; cd BAD/.. 2>/dev/null; echo st=$?",
+      "CDPATH=/tmp/cdt cd real && cd -- /tmp && pwd",
+      "shopt -s nullglob; shopt -p nullglob; shopt -q extglob || echo noext; shopt -po errexit; shopt -u nullglob",
+      "printf 'echo \"args: $*\"\\n' > /tmp/s.sh; set -- outer; source /tmp/s.sh a b; echo \"after: $*\"; eval -- 'echo ev'",
+    ].join('\n'));
+    expect(r.out).toBe('/tmp/cdt/link/sub\n/tmp/cdt/real/sub\n/tmp/cdt/link\n/tmp/cdt/link/sub\nold=/tmp/cdt/link\n/tmp/cdt/link/sub\nst=1\n' +
+      '/tmp/cdt/real\n/tmp\nshopt -s nullglob\nnoext\nset +o errexit\nargs: a b\nafter: outer\nev\n');
+  });
+
+  it('loop statuses and set -e, break in a condition, $_, relative PATH entries, OSTYPE', async () => {
+    const r = await script([
+      "set -e; for x in 1 2; do test $x = 1 && echo \"one\"; done || echo \"loop-st=$?\"",
+      "{ test no = yes && echo hi; }; echo \"group-st=$?\"; set +e",
+      "while break; do echo x; done; echo after-break",
+      "i=0; until [ $i -ge 2 ]; do i=$((i+1)); done; echo \"until=$i\"",
+      "echo hi world; echo \"$_\"; : 'foo'\"bar\"; echo $_",
+      "cd /tmp && rm -rf pp && mkdir -p pp/bin && printf 'echo mycmd-ran\\n' > pp/bin/mycmd && chmod +x pp/bin/mycmd && PATH=\"pp/bin:$PATH\" mycmd",
+      "case $OSTYPE in linux*) echo has-ostype;; esac",
+    ].join('\n'));
+    expect(r.out).toBe('one\nloop-st=1\ngroup-st=1\nafter-break\nuntil=2\nhi world\nworld\nfoobar\nmycmd-ran\nhas-ostype\n');
+  });
+
+  it('function body on the next line; a \x01 byte survives command substitution', async () => {
+    const r = await script([
+      'testcase()',
+      '{',
+      '  echo "in $1"',
+      '}',
+      'testcase x',
+      'v=$(printf "\\001\\002A"); printf %s "$v" | od -An -tx1',
+      'e=()',
+      'echo "empty=${#e[@]}"',
+    ].join('\n'));
+    expect(r.out).toBe('in x\n 01 02 41\nempty=0\n');
+  });
+
+  it('brace expansion: leading }, {x} literal, char ranges with steps, step sign ignored', async () => {
+    const r = await script('echo }_{a,b} {x}_{a,b} -{a..e..2}- -{e..a..-2}- {a..a..2}- {1..8..-3} {5..1..2}');
+    expect(r.out).toBe('}_a }_b {x}_a {x}_b -a- -c- -e- -e- -c- -a- a- 1 4 7 5 3 1\n');
+  });
+
+  it('${!ref-word} indirection with operators and array refs, ${@-word}, exec {fd}>file', async () => {
+    const r = await script([
+      "r=a; a=5; echo \"${!r-none} ${!r:+set}\"; arr=(x y); r2=\"arr[1]\"; echo \"${!r2}\"; unset nope; r3=nope; echo \"${!r3-dflt}\"",
+      "set --; echo \"[${@-empty}] [${*:+plus}]\"; set -- a; echo \"[${@:+plus}]\"",
+      "cd /tmp && exec {myfd}>nf.txt && echo hi >&$myfd && exec {myfd}>&- && cat nf.txt",
+    ].join('\n'));
+    expect(r.out).toBe('5 set\ny\ndflt\n[empty] []\n[plus]\nhi\n');
+  });
+
+  it('quoted < > are words, redirect-only commands create files, redirections apply in order, builtins in pipelines are subshells', async () => {
+    const r = await script([
+      "cd /tmp && rm -rf rz && mkdir rz && cd rz",
+      "echo a \\< b '<' \">\"",
+      "> made.txt; >> app.txt; ls",
+      "ls /nonexist 2>&1 >/dev/null | wc -l",
+      "{ echo out; echo err >&2; } > both.txt 2>&1; cat both.txt",
+      "mkdir -p sub; echo | cd sub; echo | x=5; echo \"${PWD##*/} x=${x-unset}\"",
+    ].join('\n'));
+    expect(r.out).toBe('a < b < >\napp.txt\nmade.txt\n1\nout\nerr\nrz x=unset\n');
+  });
+
+  it('type and command -v/-V classify keywords, aliases, functions, builtins and files', async () => {
+    const r = await script([
+      'type while cd; type -t while cd f; f(){ :; }; type -t f; command -v cd; command -V cd',
+      'alias ll="ls -l"; type ll; type -t ll; type nosuch 2>/dev/null; echo st=$?',
+    ].join('\n'));
+    expect(r.out).toBe("while is a shell keyword\ncd is a shell builtin\nkeyword\nbuiltin\nfunction\ncd\ncd is a shell builtin\nll is aliased to `ls -l'\nalias\nst=1\n");
+  });
+
+  it('function bodies that are any compound command (subshell, loop, with a here-doc); ~ after : in assignments', async () => {
+    const r = await script([
+      "f() ( echo sub; exit 3 )",
+      "f; echo st=$?",
+      "fun() { cat; } <<EOF",
+      "heredoc body",
+      "EOF",
+      "fun",
+      "g() for i in 1 2; do echo $i; done",
+      "g",
+      "function h { echo h; }",
+      "h",
+      "k() { echo \"a;b\"; }; k",
+      "HOME=/home/bar",
+      "x=foo:~; echo $x",
+      "y=~:~/a; echo $y",
+      "echo a:~",
+      "P=/bin:~/bin:~; echo $P",
+    ].join('\n'));
+    expect(r.out).toBe('sub\nst=3\nheredoc body\n1\n2\nh\na;b\nfoo:/home/bar\n/home/bar:/home/bar/a\na:~\n/bin:/home/bar/bin:/home/bar\n');
+  });
 });

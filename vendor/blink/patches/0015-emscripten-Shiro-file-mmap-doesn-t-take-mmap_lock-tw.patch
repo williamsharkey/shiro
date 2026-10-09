@@ -1,7 +1,7 @@
-From 62e0bb41f25b8257bfdfba479f7b2ca7d22cc71d Mon Sep 17 00:00:00 2001
+From 929f2fd74a25ef9ae00b773b20d372a88157d540 Mon Sep 17 00:00:00 2001
 From: Shiro <shiro@localhost>
 Date: Thu, 8 Oct 2026 04:56:59 +0000
-Subject: [PATCH 15/19] emscripten: Shiro file mmap doesn't take mmap_lock
+Subject: [PATCH 15/20] emscripten: Shiro file mmap doesn't take mmap_lock
  twice (deadlock mapping a kernel fd)
 
 ---

@@ -23,11 +23,24 @@ built app in headless Chromium, cross-origin isolated.
 | clang / clang++ / wasm-ld / llvm-ar, nm, objdump... | LLVM 21.1.4 | pkg `llvm`: YoWASP's LLVM for WASI (npm `@yowasp/clang`, preview1 multi-call binary + wasi-libc sysroot, taken from the tarball by sha256) and a driver built here (`compat/clang-driver.c`) | works, targets wasm32-wasip1 | compile + link + run C; `cc -c`, static libraries, `-L/-l`, compile errors with locations; **zlib 1.3.1 built with its own Makefile passes its test suite** (vitest and Chromium: 13 s for the library, `example` and `minigzip`) | each driver step is a separate kernel process (the 72 MB module is compiled once and cached); no native target, no C++ exceptions/threads |
 | Go (go, gofmt, compile, link, asm, vet) | 1.24.7 | pkg `go` (`go.sh`: upstream source + `go/wasip1-processes.patch`, cross-built to wasip1; GOROOT with std sources and a prebuilt std build cache, 44 MB) | works, builds GOOS=wasip1 | `go version/env`, `gofmt`, `go build` of a two-package module, `go vet`, `go run`, `go test`; the built program spawns commands with `os/exec`; Chromium: install 8.7 s, first build of a small program seconds (std from the shipped cache), net/http-sized programs ~2 min the first time | no network for the go command (`GOPROXY=off`: vendor modules or use `replace`); std packages outside the shipped cache compile on first use |
 | Ruby (ruby, irb, gem, rake, bundle) | 3.4.1 | pkg `ruby` (`ruby.sh`: the official ruby.wasm wasip1 "full" CLI build, repacked; stdlib mounted at its /usr/local prefix) | works | `-e` with json/set/digest/time, `#!/usr/bin/env ruby` scripts with argv/stdin/files, minitest, rake with task dependencies, `gem list`, `gem build` + `gem install --local` + require | no sockets (`gem install` from rubygems.org, net/http connections fail; a `socket.rb` stub lets them load), no threads (minitest runs serially: `MT_CPU=0`), irb needs blocking stdin |
-| Perl | 5.40.0 | pkg `perl` (`perl.sh`: static x86-64 glibc build, all core XS linked in, `NO_LOCALE`) run in Blink — new package ABI `x86_64-linux` | works | `-e` with List::Util/Data::Dumper/POSIX, `#!/usr/bin/env perl` scripts with stdin/argv/files/regexes, backticks, `system()`, `open "-\|"`, Test::More (TAP) | interpreted: ~1 s start, POSIX loads in seconds; Blink's `fork()` is vfork-like (the child shares the parent's memory until `exec`), so IPC::Open3 / `prove` / fork-without-exec don't work; no XS loading, no pods |
+| Perl | 5.40.0 | pkg `perl` (`perl.sh`: static x86-64 glibc build, all core XS linked in, `NO_LOCALE`) run in Blink — new package ABI `x86_64-linux` | works | `-e` with List::Util/Data::Dumper/POSIX, `#!/usr/bin/env perl` scripts with stdin/argv/files/regexes, backticks, `system()`, `open "-\|"`, Test::More (TAP), `prove t`, IPC::Open3, fork without exec (since Blink's real fork) | interpreted: ~1 s start, POSIX loads in seconds; no XS loading, no pods |
+| Git | 2.47.1 | pkg `git` (`git.sh`: static x86-64 glibc build, no curl) run in Blink; replaces Shiro's built-in (isomorphic-git) `git` while installed | works for local workflows | init/add/commit with combined flags, branch, merge, rebase, stash, blame, tags/describe, a pre-commit hook, `git clone file://` and `git push` (upload-pack/receive-pack over pipes) | no http(s) remotes (uninstall it for Shiro's built-in GitHub clone/push); `git clone /path` stops at "hardlink different from source" (the kernel's `link()` copies; use `file://` or `--no-hardlinks`) |
+| Ninja | 1.12.1 | pkg `ninja` (`ninja.sh`: static x86-64) run in Blink | works | a C program built with clang through rules with depfiles, no-op rebuilds, header changes rebuilding dependents, failed commands reported with clang's diagnostics | — |
+| CMake, CTest | 3.31.9 | pkg `cmake` (`x86/cmake.sh`: static x86-64 musl, no OpenSSL) run in Blink | works with the llvm package's clang | a C project with a static library, `check_include_file`, `configure_file`: compiler detection (Clang 21.1.4), build through the Ninja and Makefile generators, `ctest` | configure takes ~10 s (each compiler check is a clang run); no https `file(DOWNLOAD)`; no ccmake/cmake-gui |
 | venv | Shiro | `python3 -m venv` | works | `pyvenv.cfg`, `bin/python` symlinks, `bin/pip`, `activate`/`deactivate`; `sys.prefix` is the venv and pip installs into it (vitest and Chromium) | `--copies` ignored (always symlinks) |
 | Node.js npm CLIs and libraries | Shiro's node (`node`, `npm`, `npx`) | builtin | works | commander + chalk + dayjs + uuid CLI, mocha 10 (pass and fail exit codes), tsc 5.6 (compile and type errors), prettier 3.3 (files, stdin, `--check "src/**/*.js"`, `--write`), ES modules binding `module`/`require`/`process`; vitest and Chromium | TypeScript 7 (`typescript@7`) is a native Go binary; native addons (`.node`) don't load; yarn 1 runs and resolves packages but can't fetch them yet (its `request` download over the fetch-backed http shim, then zlib and tar streams); axios needs `window.location` (fine in the browser, not under vitest) |
 | Lua (lua, luac) | 5.4.7 | pkg `lua` (`lua.sh`) | works | `#!/usr/bin/env lua` script reading stdin with argv, patterns, coroutines, `table.sort`; `luac -p` syntax errors with locations | no `os.execute`/`io.popen`; the REPL needs blocking stdin |
 | SQLite shell | 3.50.4 | pkg `sqlite` (`sqlite.sh`) | works | a database file reused across runs, JSON functions, FTS5, SQL and dot-commands on stdin (`.mode csv`) | single-threaded, no WAL or loadable extensions; interactive mode needs blocking stdin |
+
+Not available (yet), and why:
+
+| Software | Tried | Blocker |
+| --- | --- | --- |
+| Rust (rustc, cargo) | — | no maintained WASI build of rustc to pin; the Linux toolchain is dynamically linked against librustc_driver and LLVM (~250 MB unpacked) |
+| Java (JVM) | — | a JDK image is ~200 MB and HotSpot needs its JIT (mprotect RWX code) for usable speed; Blink would interpret the interpreter |
+| Deno, Bun | — | single ~100 MB binaries around V8 / JavaScriptCore JITs; Shiro's own `node` covers the npm use case |
+| yarn 1 | npm package under Shiro's node | runs and resolves; tarball fetch needs `request` over a real http stack, zlib and tar streams (see the Node row) |
+| PHP | — | owned by unix/wasix (WASIX build in `pkg`) |
 
 Shell and platform fixes these needed (all with tests in the same file):
 
@@ -94,12 +107,28 @@ Shell and platform fixes these needed (all with tests in the same file):
   `createWriteStream` are real streams over bytes (binary was decoded as
   text).
 
+- `sh -c 'prog args'` naming a program (not a builtin) runs the program in
+  that process, as a real shell execs its last command: builtins see stdin
+  only at EOF and write their output when they return, so a program talking
+  to its parent over pipes couldn't run through `sh -c` (git clone and
+  `git-upload-pack`).
+
+- WASM programs started by a forked x86 program (cmake, ninja) inherit its
+  fds, so fd 3 can be a pipe; wasi-libc finds its preopens by scanning from
+  fd 3 to the first EBADF, found none, and every absolute path failed (clang
+  under cmake: "no such file or directory"). Fds below the last preopen now
+  answer as non-directory preopens. (The crash cmake hit earlier was the
+  kernel's FIONBIO on /dev/null, fixed on unix/perf-blink.)
+
 Known issues found along the way (not fixed here):
 
 - WASIX programs (bash, dash from unix/wasix) pass `exec` arguments as one
   newline-separated string (`proc_exec3`), so an argument containing a
   newline arrives split. Autoconf-style `configure` scripts that hand sed a
   multi-line script break that way; Shiro's own shell can't run them either.
+- A static glibc CMake faults in its malloc start-up in Blink (upstream too);
+  the package is built against musl.
+
 
 ## CLI tools, editors and TUIs (unix/compat-tools)
 

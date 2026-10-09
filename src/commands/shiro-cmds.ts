@@ -33,51 +33,250 @@ export const rmCmd: Command = {
   },
 };
 
+/**
+ * ln — GNU coreutils-compatible: -s -f -n -T -t -v -r -b -i -L -P.
+ * The filesystem has no hard links: a "hard link" is a copy of the file
+ * (as node's fs.link() and the kernel's link syscall also do).
+ */
 export const lnCmd: Command = {
   name: 'ln',
   description: 'Create links between files',
   async exec(ctx) {
-    let symbolic = false;
-    let force = false;
-    const args: string[] = [];
-    for (const arg of ctx.args) {
-      if (arg.startsWith('-') && arg !== '--') {
-        for (const ch of arg.slice(1)) {
-          if (ch === 's') symbolic = true;
-          else if (ch === 'f') force = true;
+    const args = ctx.args;
+    let symbolic = false, force = false, noDeref = false, noTargetDir = false, verbose = false;
+    let relative = false, backup = false, interactive = false, logical = false;
+    let suffix = '~';
+    let targetDir: string | null = null;
+    const operands: string[] = [];
+    const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+    const usage = (msg: string) => { ctx.stderr += `ln: ${msg}\nTry 'ln --help' for more information.\n`; return 1; };
+    let opts = true;
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (!opts || a === '-' || !a.startsWith('-')) { operands.push(a); continue; }
+      if (a === '--') { opts = false; continue; }
+      if (a.startsWith('--')) {
+        const eq = a.indexOf('=');
+        const name = eq >= 0 ? a.slice(2, eq) : a.slice(2);
+        const val = eq >= 0 ? a.slice(eq + 1) : undefined;
+        switch (name) {
+          case 'symbolic': symbolic = true; break;
+          case 'force': force = true; break;
+          case 'no-dereference': noDeref = true; break;
+          case 'no-target-directory': noTargetDir = true; break;
+          case 'target-directory': targetDir = val ?? args[++i] ?? null; if (targetDir === null) return usage(`option '--target-directory' requires an argument`); break;
+          case 'verbose': verbose = true; break;
+          case 'relative': relative = true; break;
+          case 'backup': backup = true; break;
+          case 'suffix': suffix = val ?? args[++i] ?? '~'; backup = true; break;
+          case 'interactive': interactive = true; break;
+          case 'logical': logical = true; break;
+          case 'physical': logical = false; break;
+          default: return usage(`unrecognized option '${a}'`);
         }
+        continue;
+      }
+      for (let j = 1; j < a.length; j++) {
+        const c = a[j];
+        switch (c) {
+          case 's': symbolic = true; break;
+          case 'f': force = true; interactive = false; break;
+          case 'i': interactive = true; force = false; break;
+          case 'n': noDeref = true; break;
+          case 'T': noTargetDir = true; break;
+          case 'v': verbose = true; break;
+          case 'r': relative = true; break;
+          case 'b': backup = true; break;
+          case 'L': logical = true; break;
+          case 'P': logical = false; break;
+          case 'd': case 'F': break;
+          case 'S': case 't': {
+            const v = a.slice(j + 1) || args[++i];
+            if (v === undefined) return usage(`option requires an argument -- '${c}'`);
+            if (c === 't') targetDir = v; else { suffix = v; backup = true; }
+            j = a.length;
+            break;
+          }
+          default: return usage(`invalid option -- '${c}'`);
+        }
+      }
+    }
+    if (relative && !symbolic) return usage('cannot do --relative without --symbolic');
+    const fs = ctx.fs;
+    const lst = async (p: string) => { try { return await fs.lstat(p); } catch { return null; } };
+    const stt = async (p: string) => { try { return await fs.stat(p); } catch { return null; } };
+    const baseName = (p: string) => { const s = p.replace(/\/+$/, ''); return s === '' ? '/' : s.slice(s.lastIndexOf('/') + 1); };
+    const join = (d: string, n: string) => (d.endsWith('/') ? d + n : `${d}/${n}`);
+
+    let pairs: [string, string][];
+    if (targetDir !== null) {
+      if (noTargetDir) return usage('cannot combine --target-directory and --no-target-directory');
+      const st = await stt(fs.resolvePath(targetDir, ctx.cwd));
+      if (!st || !st.isDirectory()) { ctx.stderr += `ln: target directory ${q(targetDir)}: ${st ? 'Not a directory' : 'No such file or directory'}\n`; return 1; }
+      if (!operands.length) return usage('missing file operand');
+      pairs = operands.map((s) => [s, join(targetDir!, baseName(s))]);
+    } else {
+      if (!operands.length) return usage('missing file operand');
+      if (operands.length === 1) {
+        pairs = [[operands[0], join('.', baseName(operands[0]))]];
       } else {
-        args.push(arg);
+        const dest = operands[operands.length - 1];
+        const srcs = operands.slice(0, -1);
+        const dAbs = fs.resolvePath(dest, ctx.cwd);
+        const dl = await lst(dAbs);
+        // -n: a symlink to a directory is treated as a file
+        const dIsDir = !noTargetDir && !!dl && (dl.isDirectory() || (!noDeref && dl.isSymbolicLink() && !!(await stt(dAbs))?.isDirectory()));
+        if (noTargetDir && srcs.length > 1) return usage(`extra operand ${q(operands[2])}`);
+        if (srcs.length > 1 && !dIsDir) {
+          ctx.stderr += dl ? `ln: target ${q(dest)} is not a directory\n` : `ln: target ${q(dest)}: No such file or directory\n`;
+          return 1;
+        }
+        pairs = srcs.map((s) => [s, dIsDir ? join(dest, baseName(s)) : dest]);
       }
     }
-    if (args.length < 2) {
-      ctx.stderr = 'ln: missing file operand\n';
-      return 1;
-    }
-    if (!symbolic) {
-      ctx.stderr = 'ln: hard links not supported, use -s for symbolic\n';
-      return 1;
-    }
-    const target = args[0];
-    const linkPath = ctx.fs.resolvePath(args[1], ctx.cwd);
-    try {
-      if (force) {
-        try { await ctx.fs.unlink(linkPath); } catch {}
+
+    let status = 0;
+    let stdinPos = 0;
+    for (const [src, dst] of pairs) {
+      const dstAbs = fs.resolvePath(dst, ctx.cwd);
+      const srcAbs = fs.resolvePath(src, ctx.cwd);
+      let srcSt: any = null;
+      if (!symbolic) {
+        srcSt = logical ? await stt(srcAbs) : await lst(srcAbs);
+        if (!srcSt) { ctx.stderr += `ln: failed to access ${q(src)}: No such file or directory\n`; status = 1; continue; }
+        if (srcSt.isDirectory()) { ctx.stderr += `ln: ${src}: hard link not allowed for directory\n`; status = 1; continue; }
       }
-      await ctx.fs.symlink(target, linkPath);
-      return 0;
-    } catch (e: any) {
-      ctx.stderr = `ln: ${e.message}\n`;
-      return 1;
+      const existing = await lst(dstAbs);
+      if (existing) {
+        if (!symbolic && (force || interactive || backup)) {
+          const a = await fs.realpath(srcAbs).catch(() => srcAbs);
+          const b = await fs.realpath(dstAbs).catch(() => dstAbs);
+          if (a === b && !existing.isSymbolicLink()) {
+            ctx.stderr += `ln: ${q(src)} and ${q(dst)} are the same file\n`; status = 1; continue;
+          }
+        }
+        if (interactive) {
+          ctx.stderr += `ln: replace ${q(dst)}? `;
+          const rest = (ctx.stdin || '').slice(stdinPos);
+          const nl = rest.indexOf('\n');
+          const ans = nl < 0 ? rest : rest.slice(0, nl);
+          stdinPos += nl < 0 ? rest.length : nl + 1;
+          if (!/^\s*[yY]/.test(ans)) continue;
+        } else if (!force && !backup) {
+          ctx.stderr += `ln: failed to create ${symbolic ? 'symbolic' : 'hard'} link ${q(dst)}: File exists\n`;
+          status = 1;
+          continue;
+        }
+        if (existing.isDirectory()) {
+          ctx.stderr += `ln: ${q(dst)}: cannot overwrite directory\n`;
+          status = 1;
+          continue;
+        }
+        try {
+          if (backup) await fs.rename(dstAbs, dstAbs + suffix);
+          else await fs.unlink(dstAbs);
+        } catch (e: any) {
+          ctx.stderr += `ln: cannot remove ${q(dst)}: ${e.message}\n`; status = 1; continue;
+        }
+      }
+      const parent = dstAbs.slice(0, dstAbs.lastIndexOf('/')) || '/';
+      const pst = await stt(parent);
+      if (!pst || !pst.isDirectory()) {
+        ctx.stderr += `ln: failed to create ${symbolic ? 'symbolic' : 'hard'} link ${q(dst)}: ${pst ? 'Not a directory' : 'No such file or directory'}\n`;
+        status = 1;
+        continue;
+      }
+      try {
+        if (symbolic) {
+          let target = src;
+          if (relative) {
+            // path from the link's directory to the target
+            const from = (await fs.realpath(parent).catch(() => parent)).split('/').filter(Boolean);
+            const tAbs = srcAbs.split('/').filter(Boolean);
+            let k = 0;
+            while (k < from.length && k < tAbs.length && from[k] === tAbs[k]) k++;
+            target = [...from.slice(k).map(() => '..'), ...tAbs.slice(k)].join('/') || '.';
+          }
+          await fs.symlink(target, dstAbs);
+          if (verbose) ctx.stdout += `${q(dst)} -> ${q(target)}\n`;
+        } else {
+          if (srcSt.isSymbolicLink()) {
+            await fs.symlink(await fs.readlink(srcAbs), dstAbs);
+          } else {
+            const data = await fs.readFile(srcAbs);
+            await fs.writeFile(dstAbs, data, { mode: srcSt.mode & 0o7777 });
+            await fs.utimes(dstAbs, srcSt.mtime.getTime(), srcSt.mtime.getTime()).catch(() => {});
+          }
+          if (verbose) ctx.stdout += `${q(dst)} => ${q(src)}\n`;
+        }
+      } catch (e: any) {
+        ctx.stderr += `ln: failed to create ${symbolic ? 'symbolic' : 'hard'} link ${q(dst)}: ${e.message}\n`;
+        status = 1;
+      }
     }
+    return status;
   },
 };
 
+/**
+ * hostname (net-tools style): the name, -s short, -f/--fqdn, -d domain,
+ * -i/-I addresses, -a aliases, -y NIS domain. Setting it needs root.
+ */
 export const hostnameCmd: Command = {
   name: 'hostname',
   description: 'Show system hostname',
   async exec(ctx) {
-    ctx.stdout = 'shiro\n';
+    let name = 'shiro';
+    try {
+      const t = (await ctx.fs.readFile('/etc/hostname', 'utf8') as string).trim();
+      if (t) name = t.split(/\s+/)[0];
+    } catch {}
+    let mode = 'name';
+    const operands: string[] = [];
+    for (const a of ctx.args) {
+      if (a === '--') continue;
+      if (a.startsWith('--')) {
+        const map: Record<string, string> = {
+          '--short': 's', '--fqdn': 'f', '--long': 'f', '--domain': 'd', '--ip-address': 'i',
+          '--all-ip-addresses': 'I', '--alias': 'a', '--all-fqdns': 'A', '--yp': 'y', '--nis': 'y',
+          '--file': 'F', '--boot': 'b', '--version': 'V', '--help': 'h',
+        };
+        if (!map[a]) { ctx.stderr += `hostname: unrecognized option '${a}'\n`; return 255; }
+        mode = map[a];
+        continue;
+      }
+      if (a.startsWith('-') && a.length > 1) {
+        for (const c of a.slice(1)) {
+          if (!'sfdiIaAyFbVh'.includes(c)) { ctx.stderr += `hostname: invalid option -- '${c}'\n`; return 255; }
+          mode = c;
+        }
+        continue;
+      }
+      operands.push(a);
+    }
+    const short = name.split('.')[0];
+    const domain = name.includes('.') ? name.slice(name.indexOf('.') + 1) : '';
+    switch (mode) {
+      case 'V': ctx.stdout += 'hostname 3.23\n'; return 0;
+      case 'h': ctx.stdout += 'Usage: hostname [-a|-A|-d|-f|-i|-I|-s|-y]       display formatted name\n'; return 0;
+      case 'F': case 'b':
+        ctx.stderr += 'hostname: you must be root to change the host name\n';
+        return 1;
+    }
+    if (operands.length) {
+      ctx.stderr += 'hostname: you must be root to change the host name\n';
+      return 1;
+    }
+    switch (mode) {
+      case 's': ctx.stdout += short + '\n'; break;
+      case 'f': case 'A': ctx.stdout += name + (mode === 'A' ? ' ' : '') + '\n'; break;
+      case 'd': ctx.stdout += domain + '\n'; break;
+      case 'i': ctx.stdout += '127.0.0.1\n'; break;
+      case 'I': ctx.stdout += '127.0.0.1 \n'; break;
+      case 'a': ctx.stdout += '\n'; break;
+      case 'y': ctx.stderr += 'hostname: Local domain name not set\n'; return 1;
+      default: ctx.stdout += name + '\n';
+    }
     return 0;
   },
 };
@@ -413,6 +612,8 @@ export const shiroCmds: Command[] = [
   hostnameCmd, unameCmd,
   whichCmd, typeCmd,
   rmdirCmd, revCmd,
-  cutCmd, shasumCmd, sha256sumCmd,
+  // cut: src/commands/cut.ts (GNU-compatible) is the registered one
+  // sha256sum: src/commands/checksum.ts (registered from unix.ts)
+  shasumCmd,
   openCmd, { name: 'xdg-open', description: 'Open a URL in the browser', exec: (ctx) => openCmd.exec(ctx) },
 ];

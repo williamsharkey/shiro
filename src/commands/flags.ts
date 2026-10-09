@@ -161,3 +161,42 @@ export async function statEntry(fs: FileSystem, path: string): Promise<StatEntry
   }
   return result;
 }
+
+/**
+ * Read FILE operands the coreutils way: `-` (and no operands) is stdin, and
+ * a file that can't be read is reported as `CMD: FILE: No such file or
+ * directory` while the others are still read (status 1).
+ */
+export async function readOperands(
+  ctx: { stdin: string; stderr: string; cwd: string; fs: { readFile(path: string, encoding?: string): Promise<string | Uint8Array>; resolvePath(path: string, cwd: string): string } },
+  cmd: string,
+  files: string[],
+): Promise<{ content: string; status: number }> {
+  if (files.length === 0) files = ['-'];
+  let content = '';
+  let status = 0;
+  let stdinUsed = false;
+  for (const f of files) {
+    if (f === '-') {
+      if (!stdinUsed) content += ctx.stdin;
+      stdinUsed = true;
+      continue;
+    }
+    try {
+      content += await ctx.fs.readFile(ctx.fs.resolvePath(f, ctx.cwd), 'utf8') as string;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      ctx.stderr += `${cmd}: ${f}: ${/EISDIR|directory/i.test(msg) && !/ENOENT/.test(msg) ? 'Is a directory' : 'No such file or directory'}\n`;
+      status = 1;
+    }
+  }
+  return { content, status };
+}
+
+/** Split text into lines; a final newline doesn't start another (empty) line */
+export function splitLines(content: string, sep = '\n'): string[] {
+  if (content === '') return [];
+  const lines = content.split(sep);
+  if (content.endsWith(sep)) lines.pop();
+  return lines;
+}

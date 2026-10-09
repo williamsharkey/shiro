@@ -456,24 +456,6 @@ describe('kernel processes', () => {
     kernel.kill(proc.pid, A.SIGKILL);
   });
 
-  it('link(2) copies the file but reports the source inode number (git local clone checks it)', async () => {
-    const proc = kernel.spawn({ path: 'ln', cwd: '/tmp', fds: {}, run: () => new Promise<number>(() => {}) });
-    const data = new Uint8Array(4096);
-    const two = (a: string, b: string) => { const x = new TextEncoder().encode(a); data.set(x); data.set(new TextEncoder().encode(b), x.length); return [x.length, b.length]; };
-    const ino = async (p: string) => ((await (kernel as any).statPath(proc, p, false)) as { ino: number }).ino;
-    await fs.writeFile('/tmp/lsrc', 'content');
-    expect(await kernel.syscall(proc, A.SYS_link, two('/tmp/lsrc', '/tmp/ldst'), data)).toBe(0);
-    expect(await fs.readFile('/tmp/ldst', 'utf8')).toBe('content');
-    expect(await ino('/tmp/ldst')).toBe(await ino('/tmp/lsrc'));
-    expect(await kernel.syscall(proc, A.SYS_link, two('/tmp/lsrc', '/tmp/ldst'), data)).toBe(-A.EEXIST);
-    // a removed and recreated path is a new inode
-    const n = new TextEncoder().encode('/tmp/ldst'); data.set(n);
-    expect(await kernel.syscall(proc, A.SYS_unlink, [n.length], data)).toBe(0);
-    await fs.writeFile('/tmp/ldst', 'other');
-    expect(await ino('/tmp/ldst')).not.toBe(await ino('/tmp/lsrc'));
-    kernel.kill(proc.pid, A.SIGKILL);
-  });
-
   it('a burst of file writes is stored once it pauses, not after every write', async () => {
     const proc = kernel.spawn({ path: 'holder', cwd: '/tmp', run: () => new Promise<number>(() => {}) });
     const f = (await kernel.open(proc, 'kburst.bin', A.O_CREAT | A.O_WRONLY | A.O_TRUNC)) as OpenFile;
@@ -656,6 +638,23 @@ describe('kernel processes', () => {
     const proc = kernel.spawn({ path: 'io', fds: { 0: dev }, run: () => new Promise<number>(() => {}) });
     expect(await kernel.syscall(proc, A.SYS_ioctl, [0, A.TCGETS, 0], new Uint8Array(64))).toBe(0);
     expect(caller).toBe(proc);
+    kernel.kill(proc.pid, A.SIGKILL);
+  });
+
+  it('FIONBIO sets O_NONBLOCK on any fd, even one whose ioctl only knows tty requests', async () => {
+    // libuv (cmake's process spawns) makes every fd non-blocking with FIONBIO;
+    // /dev/null answered ENOTTY and cmake died on the error path
+    const dev: OpenFile = Object.assign(new DevNull(), { ioctl: async () => -A.ENOTTY });
+    const [r] = createPipe();
+    const proc = kernel.spawn({ path: 'nb', fds: { 0: dev, 3: r }, run: () => new Promise<number>(() => {}) });
+    const on = new Uint8Array(4); new DataView(on.buffer).setInt32(0, 1, true);
+    for (const fd of [0, 3]) {
+      expect(await kernel.syscall(proc, A.SYS_ioctl, [fd, A.FIONBIO, 4], on.slice())).toBe(0);
+      expect((await kernel.syscall(proc, A.SYS_fcntl, [fd, A.F_GETFL, 0], new Uint8Array(0))) & A.O_NONBLOCK).toBe(A.O_NONBLOCK);
+      expect(await kernel.syscall(proc, A.SYS_ioctl, [fd, A.FIONBIO, 4], new Uint8Array(4))).toBe(0);
+      expect((await kernel.syscall(proc, A.SYS_fcntl, [fd, A.F_GETFL, 0], new Uint8Array(0))) & A.O_NONBLOCK).toBe(0);
+    }
+    expect(await kernel.syscall(proc, A.SYS_ioctl, [0, A.TCGETS, 0], new Uint8Array(64))).toBe(-A.ENOTTY);
     kernel.kill(proc.pid, A.SIGKILL);
   });
 
@@ -859,7 +858,7 @@ describe('worker guests over the SAB channel', () => {
       mkdirat: 0, pread: '3AB6', posAfterPread: 0, size: 10, mode: 0o600 & ~0o022,
       symlink: 0, readlink: 'sub/f.txt', isLink: true, rename: 0, noreplace: -A.EEXIST,
       utime: 0, mtime: 1_000_000_000_000, rmdirNotEmpty: -A.ENOTEMPTY, unlinkDir: -A.EISDIR, unlink: 0,
-      link: 0, linked: '0123AB6789',
+      link: -A.EPERM, linkExists: -A.EEXIST, linked: -A.ENOENT,
     });
   }, 20000);
 

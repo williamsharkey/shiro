@@ -152,11 +152,12 @@ class DevProvider implements VirtualFSProvider {
   }
   readFile(path: string, encoding?: 'utf8'): string | Uint8Array | null {
     if (path === '/dev/null') return encoding === 'utf8' ? '' : new Uint8Array(0);
-    if (path === '/dev/zero') return new Uint8Array(4096); // return a page of zeros
+    // A page of zeros / random bytes; as text, one char per byte (Latin-1, like other binary shell strings)
+    if (path === '/dev/zero') return encoding === 'utf8' ? '\0'.repeat(4096) : new Uint8Array(4096);
     if (path === '/dev/random' || path === '/dev/urandom') {
       const buf = new Uint8Array(256);
       crypto.getRandomValues(buf);
-      return buf;
+      return encoding === 'utf8' ? String.fromCharCode(...buf) : buf;
     }
     if (path === '/dev') return null; // directory
     return encoding === 'utf8' ? '' : new Uint8Array(0);
@@ -177,9 +178,54 @@ class DevProvider implements VirtualFSProvider {
   }
 }
 
+/** A process as /proc/PID shows it */
+export interface ProcInfo {
+  pid: number; ppid: number; pgid: number; sid: number; comm: string;
+  /** R running, S sleeping (in a syscall), T stopped, Z zombie */
+  state: 'R' | 'S' | 'T' | 'Z';
+  cmdline: string[];
+}
+const procInfoSources: ((pid: number) => ProcInfo | undefined)[] = [];
+/** Let /proc/PID describe processes from a process table (the kernel registers one) */
+export function addProcInfoSource(fn: (pid: number) => ProcInfo | undefined): void {
+  procInfoSources.push(fn);
+}
+function procInfo(pid: number): ProcInfo | undefined {
+  for (const fn of procInfoSources) { const i = fn(pid); if (i) return i; }
+  return undefined;
+}
+const PROC_PID_RE = /^\/proc\/(\d+)(?:\/(stat|status|cmdline|comm))?$/;
+
 /** /proc virtual provider — dynamic system info from Shiro */
 class ProcProvider implements VirtualFSProvider {
   private startTime = Date.now();
+
+  /** /proc/PID/FILE contents, or null if there is no such process or file */
+  private pidFile(path: string): string | null | 'dir' {
+    const m = PROC_PID_RE.exec(path);
+    if (!m) return null;
+    const info = procInfo(Number(m[1]));
+    if (!info) return null;
+    switch (m[2]) {
+      case undefined: return 'dir';
+      case 'stat': {
+        // pid (comm) state ppid pgrp session tty_nr tpgid flags … (52 fields)
+        const rest = Array(45).fill('0');
+        rest[0] = '-1'; // tpgid
+        rest[12] = '20'; // priority
+        rest[14] = '1'; // num_threads
+        return `${info.pid} (${info.comm}) ${info.state} ${info.ppid} ${info.pgid} ${info.sid} 0 ${rest.join(' ')}\n`;
+      }
+      case 'status': {
+        const names: Record<string, string> = { R: 'R (running)', S: 'S (sleeping)', T: 'T (stopped)', Z: 'Z (zombie)' };
+        return [`Name:\t${info.comm}`, `State:\t${names[info.state]}`, `Tgid:\t${info.pid}`, `Pid:\t${info.pid}`,
+          `PPid:\t${info.ppid}`, 'Uid:\t1000\t1000\t1000\t1000', 'Gid:\t1000\t1000\t1000\t1000', 'Threads:\t1'].join('\n') + '\n';
+      }
+      case 'cmdline': return info.cmdline.map((a) => a + '\0').join('');
+      case 'comm': return info.comm + '\n';
+    }
+    return null;
+  }
 
   private entries: Record<string, () => string> = {
     '/proc/uptime': () => {
@@ -214,6 +260,8 @@ class ProcProvider implements VirtualFSProvider {
     '/proc/loadavg': () => '0.00 0.00 0.00 1/1 1\n',
     '/proc/stat': () => 'cpu  0 0 0 0 0 0 0 0 0 0\n',
     '/proc/filesystems': () => 'nodev\tshirofs\n',
+    '/proc/sys/kernel/pid_max': () => '4194304\n',
+    '/proc/sys/fs/pipe-max-size': () => '1048576\n',
     '/proc/mounts': () => 'shirofs / shirofs rw 0 0\n',
     '/proc/self/status': () => [
       'Name:\tshiro',
@@ -228,21 +276,27 @@ class ProcProvider implements VirtualFSProvider {
     '/proc/self/exe': () => '/usr/bin/shiro',
   };
 
-  private dirs = ['/proc', '/proc/self'];
+  private dirs = ['/proc', '/proc/self', '/proc/sys', '/proc/sys/kernel', '/proc/sys/fs'];
 
   handles(path: string): boolean {
-    return path === '/proc' || path === '/proc/self' || path.startsWith('/proc/') && (path in this.entries || this.dirs.includes(path));
+    return path === '/proc' || path === '/proc/self' || path.startsWith('/proc/')
+      && (path in this.entries || this.dirs.includes(path) || this.pidFile(path) !== null);
   }
 
   readFile(path: string, encoding?: 'utf8'): string | Uint8Array | null {
     if (this.dirs.includes(path)) return null;
+    const pf = this.pidFile(path);
+    if (pf === 'dir') return null;
     const gen = this.entries[path];
-    if (!gen) return null;
-    const content = gen();
+    if (!gen && pf === null) return null;
+    const content = pf ?? gen();
     return encoding === 'utf8' ? content : new TextEncoder().encode(content);
   }
 
   stat(path: string): StatResult | null {
+    const pf = this.pidFile(path);
+    if (pf === 'dir') return makeStat({ path, type: 'dir', content: null, mode: 0o555, mtime: Date.now(), ctime: this.startTime, size: 0 });
+    if (pf !== null) return makeStat({ path, type: 'file', content: new TextEncoder().encode(pf), mode: 0o444, mtime: Date.now(), ctime: this.startTime, size: pf.length });
     if (this.dirs.includes(path)) return makeStat({ path, type: 'dir', content: null, mode: 0o555, mtime: Date.now(), ctime: this.startTime, size: 0 });
     if (path in this.entries) {
       const content = this.entries[path]();

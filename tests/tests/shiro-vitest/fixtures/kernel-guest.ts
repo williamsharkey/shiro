@@ -137,9 +137,8 @@ function main(sys: GuestSys, argv: string[]): number {
       out.unlinkDir = sys.unlinkat(dfd, 'sub', 0);
       out.unlink = sys.unlinkat(dfd, 'link', 0);
       out.link = sys.linkat(dfd, 'g.txt', dfd, 'h.txt');
-      const h = sys.openat(dfd, 'h.txt', A.O_RDONLY);
-      const hb = sys.readAll(h);
-      out.linked = typeof hb === 'number' ? hb : dec.decode(hb);
+      out.linkExists = sys.linkat(dfd, 'g.txt', dfd, 'g.txt');
+      out.linked = sys.fstatat(dfd, 'h.txt') as number;
       sys.write(1, JSON.stringify(out) + '\n');
       return 0;
     }

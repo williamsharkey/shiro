@@ -1,7 +1,7 @@
-From c386b53a4169862744ae510b62ff0401980a299a Mon Sep 17 00:00:00 2001
+From 5695f0b27115c29e261352abf886c6a21ab36e76 Mon Sep 17 00:00:00 2001
 From: shiro <build@shiro>
 Date: Thu, 8 Oct 2026 03:49:21 +0000
-Subject: [PATCH 13/19] emscripten: under Shiro a stop signal's default action
+Subject: [PATCH 13/20] emscripten: under Shiro a stop signal's default action
  stops the process
 
 TerminateSignal() hands SIGSTOP/SIGTSTP/SIGTTIN/SIGTTOU to the kernel

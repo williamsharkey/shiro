@@ -7,7 +7,7 @@
  * `top` see kernel processes.
  */
 
-import type { FileSystem } from '../filesystem';
+import { addProcInfoSource, type FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
 import type { Command, CommandContext } from '../commands/index';
 import { ProcFs, bootMs } from './procfs';
@@ -139,6 +139,13 @@ export class Kernel {
       cwd: opts.shell?.cwd ?? '/',
     });
     this.procs.set(1, this.init);
+    // /proc/PID/stat and status for kernel processes
+    addProcInfoSource((pid) => {
+      const p = this.procs.get(pid);
+      if (!p || pid === 1) return undefined;
+      const state = p.state === 'zombie' ? 'Z' : p.state === 'stopped' ? 'T' : p.inSyscall > 0 ? 'S' : 'R';
+      return { pid, ppid: p.ppid, pgid: p.pgid, sid: p.sid, comm: p.comm, state, cmdline: p.argv };
+    });
     this.registerDevice('/dev/null', (_p, f) => new DevNull(f));
     this.registerDevice('/dev/zero', (_p, f) => new DevZero(f));
     this.registerDevice('/dev/full', (_p, f) => new DevFull(f));
@@ -250,6 +257,10 @@ export class Kernel {
     // (a bin-dir path can name a builtin's PATH shim, or nothing on disk)
     const pkgBin = `${PKG_BIN_DIR}/${base}`;
     if (cmd && this.fs && path !== pkgBin && packageShadows(this.fs).has(base)) return this.findProgram(pkgBin, _proc);
+    if (cmd && SHELL_NAMES.has(base)) {
+      const direct = await this.shellCommandDirect(_proc);
+      if (direct) return direct;
+    }
     if (cmd) return proc => this.runBuiltin(proc, cmd);
     // Shell builtins that are also programs (/bin/echo, /usr/bin/test, ...)
     if (inBin && SHELL_PROGRAMS.has(base)) return proc => this.runViaShell(proc, base);
@@ -257,6 +268,43 @@ export class Kernel {
     const found = path.includes('/') ? ((await this.fs?.exists(path)) ? path : null) : await shell.findExecutableInPath(path);
     if (found) return proc => this.runViaShell(proc);
     return null;
+  }
+
+  /**
+   * `sh -c 'prog args'` naming a program (not a builtin), with nothing for
+   * the shell to do but start it: run the program in this process, as a
+   * real shell execs its last command. Builtins see stdin only at EOF and
+   * write their output when they return, so a program talking to its parent
+   * over pipes (git clone and git-upload-pack) can't go through one.
+   */
+  private async shellCommandDirect(probe: Process): Promise<Runner | null> {
+    const a = probe.argv;
+    if (a.length < 3 || a[1] !== '-c') return null;
+    const words = simpleCommandWords(a[2]);
+    if (!words || !words.length || words[0].includes('=')) return null;
+    const name = words[0];
+    let path: string | null = null;
+    if (name.includes('/')) {
+      const p = this.resolvePath(probe, name);
+      if (typeof p === 'string' && (await this.fs?.exists(p))) path = p;
+    } else if (this.fs && this.shell?.commands.get(name) && packageShadows(this.fs).has(name)) {
+      path = `${PKG_BIN_DIR}/${name}`; // an installed package replaces the builtin
+    } else if (!this.shell?.commands.get(name)) {
+      for (const dir of (probe.env.PATH ?? '/usr/local/bin:/usr/bin:/bin').split(':')) {
+        if (!dir) continue;
+        const p = `${dir.replace(/\/$/, '')}/${name}`;
+        if (await this.fs?.exists(p)) { path = p; break; }
+      }
+    }
+    if (!path) return null;
+    const next = new Process({ pid: -1, ppid: probe.ppid, path, argv: words, env: probe.env, cwd: probe.cwd });
+    const runner = await this.findProgram(path, next);
+    if (!runner) return null;
+    return (proc, k) => {
+      proc.path = path!;
+      proc.argv = words;
+      return runner(proc, k);
+    };
   }
 
   // ── Process lifecycle ─────────────────────────────────────────────────────
@@ -965,6 +1013,7 @@ export class Kernel {
     // Time inside syscalls is time the process isn't computing (/proc CPU estimate)
     const t0 = Date.now();
     proc.syscalls++;
+    // While in a syscall the process counts as sleeping (S in /proc/PID/stat)
     proc.inSyscall++;
     try {
       return await this.syscallImpl(proc, nr, args, data);
@@ -1100,9 +1149,15 @@ export class Kernel {
           const arg = data.subarray(0, Math.min(args[2] >>> 0, data.length));
           if (req === A.FIOCLEX || req === A.FIONCLEX) return fds.setCloexec(args[0], req === A.FIOCLEX);
           if (req === A.FIONBIO && arg.length >= 4) {
+            // O_NONBLOCK is the open file's flag, so this works on any fd. A
+            // file's own ioctl may also look at it (sockets), but one that
+            // doesn't know it (/dev/null, pipes, files) mustn't fail it:
+            // libuv sets every fd non-blocking this way (cmake's spawns).
             const on = new DataView(arg.buffer, arg.byteOffset, 4).getInt32(0, true) !== 0;
             f.flags = on ? f.flags | A.O_NONBLOCK : f.flags & ~A.O_NONBLOCK;
-            return 0; // any file (Rust's Command::output() sets its pipes non-blocking this way)
+            if (!f.ioctl) return 0;
+            const r = await f.ioctl(req, arg, sig);
+            return r === -A.ENOTTY ? 0 : r;
           }
           if (!f.ioctl) return -A.ENOTTY;
           return await f.ioctl(req, arg, sig);
@@ -1389,8 +1444,10 @@ export class Kernel {
         }
         case A.SYS_link:
         case A.SYS_linkat: {
-          // The filesystem has no hard links: link() makes an independent copy
-          // (with the source's inode number, see shareInodeNumber).
+          // The filesystem has no hard links (no inodes shared between names).
+          // EPERM, as Linux filesystems without them answer: programs fall back
+          // to copying (git clone of a local repo, cp -l), whereas a copy that
+          // claimed to be a link broke git's "same inode" check.
           const [od, ol, nd, nl] = nr === A.SYS_link ? [A.AT_FDCWD, args[0], A.AT_FDCWD, args[1]] : [args[0], args[1], args[2], args[3]];
           const from = at(od, 0, ol);
           const to = at(nd, ol, nl);
@@ -1398,11 +1455,8 @@ export class Kernel {
           if (typeof to === 'number') return to;
           const st = await this.statPath(proc, from, false);
           if (typeof st === 'number') return st;
-          if ((st.mode & A.S_IFMT) === A.S_IFDIR) return -A.EPERM;
           if (await fs().exists(to)) return -A.EEXIST;
-          await fs().writeFile(to, (await fs().readFile(from)) as Uint8Array, { mode: st.mode & 0o7777 });
-          shareInodeNumber(await fs().realpath(from), to);
-          return 0;
+          return -A.EPERM;
         }
         case A.SYS_readlink:
         case A.SYS_readlinkat: {
@@ -1847,3 +1901,32 @@ export function getKernel(): Kernel {
   if (w) w.__shiroKernel = singleton;
   return singleton;
 }
+
+const SHELL_NAMES = new Set(['sh', 'bash', 'dash']);
+
+/** The words of a shell command that needs no shell: plain words and quoted
+ *  strings without expansions, redirections or operators (`exec` dropped). */
+export function simpleCommandWords(script: string): string[] | null {
+  const words: string[] = [];
+  let i = 0;
+  const s = script.trim();
+  if (/[\n;&|<>()$`\\*?[\]{}~#!]/.test(s)) return null;
+  while (i < s.length) {
+    while (s[i] === ' ' || s[i] === '\t') i++;
+    if (i >= s.length) break;
+    let w = '';
+    while (i < s.length && s[i] !== ' ' && s[i] !== '\t') {
+      const c = s[i];
+      if (c === "'" || c === '"') {
+        const end = s.indexOf(c, i + 1);
+        if (end < 0) return null;
+        w += s.slice(i + 1, end);
+        i = end + 1;
+      } else { w += c; i++; }
+    }
+    words.push(w);
+  }
+  if (words[0] === 'exec') words.shift();
+  return words;
+}
+
