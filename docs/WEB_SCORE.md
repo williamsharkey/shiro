@@ -58,8 +58,8 @@ page; it shows up as part of the desktop's heap.
   those sites to the environment rather than to the Browser.
 - **The relay ran with raised limits** (`SHIRO_TCP_CONNECTS_PER_MIN=3000`,
   `SHIRO_TCP_MAX_CONNS_PER_IP=256`). With the production defaults (60/min,
-  16 concurrent) a news site alone exhausts them; see BROWSER.md, "Decisions
-  for the owner".
+  16 concurrent) a news site alone exhausts them; see BROWSER.md, "Decisions".
+
 
 ## Results
 
