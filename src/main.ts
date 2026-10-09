@@ -551,6 +551,7 @@ async function main() {
   // Create terminal
   performance.mark('shiro:terminal:start');
   const terminal = new ShiroTerminal(container, shell);
+  document.getElementById('boot-mark')?.remove();
 
   // Connect terminal to shell for interactive commands (vi, etc.)
   shell.setTerminal(terminal);

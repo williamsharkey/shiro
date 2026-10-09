@@ -6,7 +6,7 @@
 import { keybarMode, setKeybarMode, type KeybarMode } from '../mobile';
 import type { AppContext } from '../index';
 import type { DesktopWindow } from '../wm';
-import { GLYPHS } from '../icons';
+import { GLYPHS, ICONS } from '../icons';
 import { networkCredential, networkStatus, onNetworkStatus, ownRelay, setOwnRelay } from '../../net-signin';
 import { openSignIn, probeRelay, signedInAccount, signOut, statusText, testOwnRelay } from '../network';
 import { BRAND } from '../../brand';
@@ -207,6 +207,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
   function about(): void {
     panel.onclick = null;
     panel.innerHTML = `
+      <div class="sd-brand-mark" style="width:44px;margin-bottom:8px">${ICONS.logo}</div>
       <h2>${esc(BRAND.name)}</h2><p class="sd-muted">A Unix-like computer that runs in a browser tab: a kernel with processes, pipes, ptys and signals; WASI/WASIX and x86-64 Linux programs; a package manager.</p>
       <h3>This computer</h3>
       <div class="sd-card">
