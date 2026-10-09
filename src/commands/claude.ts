@@ -60,7 +60,10 @@ async function runNative(ctx: Parameters<Command['exec']>[0], args: string[]): P
       + '(CLAUDE_NATIVE_PATH picks another path). Without --native, claude runs the npm build.\n';
     return 1;
   }
-  const line = [path, ...args].map(quote).join(' ');
+  // JSC's JIT costs more than it saves under Blink: -p took 85 s without it
+  // and 107 s with it (musl build, docs/COMPAT.md). Export BUN_JSC_useJIT=1 to keep it.
+  const jit = ctx.env.BUN_JSC_useJIT === undefined ? 'BUN_JSC_useJIT=0 ' : '';
+  const line = jit + [path, ...args].map(quote).join(' ');
   return ctx.shell.execute(line, (s) => { ctx.stdout += s.replace(/\r\n/g, '\n'); }, (s) => { ctx.stderr += s.replace(/\r\n/g, '\n'); }, false, ctx.terminal, true);
 }
 
