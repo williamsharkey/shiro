@@ -1448,6 +1448,16 @@ export class WasiGuest {
   *trap(e: unknown): Sys<never> {
     const msg = e instanceof Error ? e.message : String(e);
     yield* this.writeAll(2, enc.encode(`wasm trap: ${msg}\n`));
+    // And to the kernel log (dmesg), like a Linux trap message
+    const kmsg = enc.encode('/dev/kmsg');
+    const fd = (yield* this.sys(A.SYS_openat, [A.AT_FDCWD, kmsg.length, A.O_WRONLY | A.O_CLOEXEC, 0], kmsg)).ret;
+    if (fd >= 0) {
+      const pid = yield* this.call(A.SYS_getpid);
+      const name = (this.opts.args[0] ?? 'wasm').split('/').pop();
+      const line = enc.encode(`<4>traps: ${name}[${pid}] wasm trap: ${msg}`);
+      yield* this.sys(A.SYS_write, [fd, line.length], line);
+      yield* this.call(A.SYS_close, fd);
+    }
     return yield* this.exitBySignal(A.SIGABRT);
   }
 

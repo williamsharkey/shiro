@@ -474,6 +474,8 @@ async function main() {
     () => import('./commands/cron').then(m => m.crontabCmd)), 'src/commands/cron.ts');
   registerCommand(commands, lazyCommand('journalctl', 'Query the journal',
     () => import('./commands/cron').then(m => m.journalctlCmd)), 'src/commands/cron.ts');
+  registerCommand(commands, lazyCommand('dmesg', 'Print or control the kernel ring buffer',
+    () => import('./commands/dmesg').then(m => m.dmesgCmd)), 'src/commands/dmesg.ts');
   registerCommand(commands, lazyCommand('ssh', 'Connect to remote tabcomputer via WebRTC',
     () => import('./commands/ssh').then(m => m.sshCmd)), 'src/commands/ssh.ts');
   registerCommand(commands, lazyCommand('doctor', 'Check this tab (deploy, browser, engine, network, sign-ins, storage) for a bug report',
