@@ -14,9 +14,11 @@ async function kernelOf(shell: Shell) {
   return { kernel, proc: kernel.init };
 }
 
-/** Is `path` (absolute) a named pipe? */
-export async function isFifo(shell: Shell, path: string): Promise<boolean> {
-  try { return !!(await shell.fs.stat(path)).isFIFO?.(); } catch { return false; }
+/** Is `path` (absolute) a named pipe? Answered from memory when the FileSystem can (every redirect asks). */
+export function isFifo(shell: Shell, path: string): boolean | Promise<boolean> {
+  const hit = shell.fs.lookupCached(path);
+  if (hit !== undefined) return hit?.node.special === 'fifo';
+  return shell.fs.stat(path).then(st => !!st.isFIFO?.(), () => false);
 }
 
 /** Open a named pipe like open(2): blocks until the other side opens. */

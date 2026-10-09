@@ -923,6 +923,17 @@ isolated, against integration 045feaa:
 The remote-session auto-reconnect reads its localStorage key directly and
 loads `commands/remote` only when there is a session to resume.
 
+### unix/perf-kernel, round 7: named pipes (cost check)
+
+Named pipes added a FIFO check to every shell file redirection. The first
+version did an async `stat` plus a dynamic import per redirect:
+`shell.redirect_append_100` went 7.2 → 16.4 ms in an A/B against the commit
+before. The check now answers from `FileSystem.lookupCached` (async stat
+only on a cache miss) with a static import. A/B, 3 runs each against the
+commit before: no shell metric is outside noise (`redirect_append_100`
+within 8%; `pipeline_seq_grep_wc` 41 → 32 ms and `ls_la_1000` 4.0 → 4.8 ms
+have overlapping runs).
+
 ## Results
 
 <!-- bench:table:begin -->

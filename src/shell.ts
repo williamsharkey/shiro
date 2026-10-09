@@ -1,4 +1,5 @@
 import { stripComments } from './shell-comments';
+import * as fifo from './shell-fifo';
 import { groupStatements, trimCommand } from './shell-statements';
 import { printfFormat } from './utils/printf';
 import { evalArith, ArithError, type ArithEnv } from './utils/arith';
@@ -1248,7 +1249,6 @@ export class Shell {
     const ps = /^<\(([\s\S]+)\)$/.exec(target);
     if (ps) return this.procSubOutput(ps[1], () => {});
     const path = this.fs.resolvePath(target, this.cwd);
-    const fifo = await import('./shell-fifo');
     if (await fifo.isFifo(this, path)) return fifo.readFifo(this, path);
     const data = await this.fs.readFile(path, 'utf8');
     return typeof data === 'string' ? data : new TextDecoder().decode(data as any);
@@ -1336,7 +1336,6 @@ export class Shell {
       this.dropFd(fd);
       this.userFds.set(fd, { path });
       pending.push((async () => {
-        const fifo = await import('./shell-fifo');
         if (await fifo.isFifo(this, path)) {
           // A named pipe: open its write end now (it waits for a reader), as exec does
           this.userFds.set(fd, { path, fifo: await fifo.openFifoEnd(this, path, 'w'), owner: this });
@@ -1397,7 +1396,7 @@ export class Shell {
     }
     await this.pendingFdOps;
     if (e.fifo) {
-      if (text) await (await import('./shell-fifo')).writeOpenFifo(e.fifo, text.replace(/\r\n/g, '\n'));
+      if (text) await fifo.writeOpenFifo(e.fifo, text.replace(/\r\n/g, '\n'));
       return true;
     }
     if (text) await this.fs.appendFile(e.path, text.replace(/\r\n/g, '\n'));
@@ -3851,7 +3850,6 @@ export class Shell {
   /** Write a redirect's file; a failure (a directory, a bad path) is reported and fails the command */
   private async redirectWrite(path: string, shown: string, text: string, append: boolean, writeStderr: (s: string) => void): Promise<void> {
     try {
-      const fifo = await import('./shell-fifo');
       if (await fifo.isFifo(this, path)) await fifo.writeFifo(this, path, text);
       else if (append) await this.fs.appendFile(path, text);
       else await this.fs.writeFile(path, text);
