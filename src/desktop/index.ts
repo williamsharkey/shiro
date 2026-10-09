@@ -11,11 +11,11 @@
 import './desktop.css';
 import type { FileSystem } from '../filesystem';
 import type { Shell } from '../shell';
-import type { ShiroTerminal } from '../terminal';
+import { ShiroTerminal } from '../terminal';
 import type { Kernel } from '../kernel/kernel';
 import { WindowManager, isDesktopShortcut, type AppDescriptor, type DesktopWindow, type MenuSpec, type MenuItem, type Geometry } from './wm';
 import { ICONS, GLYPHS, appIcon } from './icons';
-import { TerminalView, takeParkedMain, applyTerminalTheme, useMonoFont, allTerminalViews, terminalTheme, TERMINAL_FONT } from './terminal-app';
+import { TerminalView, takeParkedMain, hasParkedMain, applyTerminalTheme, useMonoFont, allTerminalViews, terminalTheme, TERMINAL_FONT } from './terminal-app';
 import { initNetwork } from './network';
 
 export interface DesktopDeps {
@@ -33,7 +33,7 @@ export interface AppContext {
   fs: FileSystem;
   shell: Shell;
   kernel: Kernel;
-  openTerminal: (opts?: { command?: string; cwd?: string; title?: string }) => DesktopWindow | null;
+  openTerminal: (opts?: { command?: string; cwd?: string; title?: string; appId?: string }) => DesktopWindow | null;
 }
 
 export interface Desktop {
@@ -101,25 +101,30 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   const netBtn = el('button', 'sd-mb-item sd-mb-status');
   const clock = el('div', 'sd-mb-item sd-mb-clock');
   menubar.append(logoBtn, appBtn, menusEl, spacer, themeBtn, netBtn, clock);
-  root.append(menubar);
 
   // ── Dock ──
   const dockWrap = el('div', 'sd-dock-wrap');
   const dock = el('nav', 'sd-dock');
   dock.setAttribute('aria-label', 'Dock');
   dockWrap.append(dock);
-  root.append(dockWrap);
+  // The menu bar and dock join the page right after the main terminal is created
+  // (attachMainTerminal): xterm's first measurement then lays out only the window
 
   // The page's terminal-first layout stays in the DOM (hidden): #terminal moves into a window
   document.body.appendChild(root);
 
+  // From the CSS sizes (--sd-menubar-h, --sd-dock-h, --sd-dock-gap), not layout reads:
+  // measuring here would force a full style and layout pass before the terminal exists
+  const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
   const workArea = (): Geometry => {
-    const top = menubar.offsetHeight || 30;
-    const vkeys = document.getElementById('shiro-vkeys');
-    const vk = vkeys && getComputedStyle(vkeys).display !== 'none' ? vkeys.offsetHeight : 0;
+    const compact = window.innerWidth <= 640;
+    const top = compact ? 34 : 30;
+    // The touch toolbar (mobile-input.ts) sits at the very bottom; the dock goes above it
+    const vkeys = coarse ? document.getElementById('shiro-vkeys') : null;
+    const vk = vkeys ? vkeys.offsetHeight : 0;
     dockWrap.style.bottom = vk ? `${vk + 6}px` : '';
-    const dockTop = dock.getBoundingClientRect().top || (window.innerHeight - 80);
-    const bottom = Math.max(top + 120, Math.min(window.innerHeight - vk, dockTop - 8));
+    const dockSpace = (compact ? 58 + 6 : 68 + 8) + (vk ? vk + 6 - (compact ? 6 : 8) : 0) + 8;
+    const bottom = Math.max(top + 120, window.innerHeight - dockSpace);
     return { x: 0, y: top, width: window.innerWidth, height: bottom - top };
   };
   const wm = new WindowManager(root, { workArea });
@@ -131,23 +136,30 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   let mainTerm: ShiroTerminal | null = null;
   wm.registerContentKind('terminal', (win, content, body) => {
     const view = new TerminalView(win, wm, termDeps, body);
-    const c = content as { command?: string; cwd?: string; adoptMain?: boolean };
+    const c = content as { command?: string; cwd?: string; adoptMain?: boolean; title?: string };
+    if (c.title) view.fixedTitle = c.title;
     const parked = c.adoptMain ? takeParkedMain() : null;
     if (parked) view.adoptMain(parked.pane, parked.term);
     else view.newTab({ command: c.command, cwd: c.cwd });
     return view;
   });
 
-  const openTerminal = (opts: { command?: string; cwd?: string; title?: string } = {}): DesktopWindow => {
+  const openTerminal = (opts: { command?: string; cwd?: string; title?: string; appId?: string } = {}): DesktopWindow => {
     const wa = wm.workArea();
     const width = Math.min(820, Math.max(320, wa.width - 80));
     const height = Math.min(500, Math.max(200, wa.height - 120));
+    const adoptMain = !opts.command && !opts.cwd;
     return wm.createWindow({
-      appId: 'terminal', title: opts.title ?? 'Terminal', width, height,
-      content: { kind: 'terminal', command: opts.command, cwd: opts.cwd, adoptMain: !opts.command && !opts.cwd },
+      // The window holding the main terminal is /dom/windows/terminal (when that id is free)
+      ...(adoptMain && hasParkedMain() ? { id: 'terminal' } : {}),
+      appId: opts.appId ?? 'terminal', title: opts.title ?? 'Terminal', width, height,
+      content: { kind: 'terminal', command: opts.command, cwd: opts.cwd, adoptMain, title: opts.title },
     });
   };
   const ctx: AppContext = { wm, fs: deps.fs, shell: deps.shell, kernel: deps.kernel, openTerminal };
+
+  // Terminals start in the desktop's palette and font (no re-theme, re-measure later)
+  ShiroTerminal.optionOverrides = { theme: terminalTheme(wm.theme()), fontFamily: TERMINAL_FONT };
 
   // The first window: the main terminal, front and center
   const first = (() => {
@@ -190,7 +202,7 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     list.forEach((p, i) => wm.registerApp({
       id: p.pkg, name: p.name, icon: appIcon(p.pkg), order: 20 + i,
       launch: () => openTerminal({
-        title: p.name,
+        title: p.name, appId: p.pkg,
         command: installed.has(p.pkg) ? p.cmd : `apt install ${p.pkg} && clear && ${p.cmd}`,
       }),
     }));
@@ -401,12 +413,18 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
   }, true);
 
   // ── Clock ──
-  const fmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-  const fmtShort = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
-  const tick = () => { clock.textContent = (wm.compact ? fmtShort : fmt).format(new Date()); };
+  // Formatted by hand: creating Intl formatters costs ~10 ms on the boot path
+  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const tick = () => {
+    const d = new Date();
+    const h = d.getHours(), m = String(d.getMinutes()).padStart(2, '0');
+    const time = `${h % 12 || 12}:${m} ${h < 12 ? 'AM' : 'PM'}`;
+    clock.textContent = wm.compact ? time : `${DAYS[d.getDay()]} ${MONTHS[d.getMonth()]} ${d.getDate()}  ${time}`;
+  };
   tick();
   setTimeout(() => { tick(); setInterval(tick, 60_000); }, 60_000 - (Date.now() % 60_000));
-  clock.title = new Intl.DateTimeFormat(undefined, { dateStyle: 'full' }).format(new Date());
+  clock.addEventListener('pointerenter', () => { clock.title = new Date().toLocaleDateString(undefined, { dateStyle: 'full' }); }, { once: true });
 
   // ── Theme ──
   const paintTheme = () => {
@@ -452,13 +470,15 @@ export function bootDesktop(deps: DesktopDeps): Desktop {
     wm,
     ctx,
     attachMainTerminal(term: ShiroTerminal) {
+      root.append(menubar, dockWrap);
       mainTerm = term;
-      term.term.options.theme = terminalTheme(wm.theme());
       term.banner = (t) => drawWelcome(t);
       first.view.attachMain(term);
-      useMonoFont(() => [...new Set([term, ...allTerminalViews().flatMap(v => v.terminals())])]);
-      term.term.focus();
-      void TERMINAL_FONT;
+      // After boot settles: the swap re-measures every terminal (a forced layout)
+      const idle = (window as any).requestIdleCallback ?? ((f: () => void) => setTimeout(f, 200));
+      idle(() => useMonoFont(() => [...new Set([term, ...allTerminalViews().flatMap(v => v.terminals())])]), { timeout: 1500 });
+      // Focusing forces a layout of the whole desktop: do it with the first frame
+      requestAnimationFrame(() => term.term.focus());
     },
   };
 }

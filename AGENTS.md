@@ -22,6 +22,7 @@ Do not treat the dashboard or wrappers as the product. The product is the browse
 - `src/kernel/*`: Unix kernel core (process table, fd tables, pipes, syscall dispatch, SAB syscall channel for Worker guests). Contract: `docs/KERNEL_ABI.md`; roadmap: `docs/UNIX_COMPAT.md`. `window.__shiro.kernel`; kernel processes show in `ps`.
 - `src/commands/seed.ts`, `src/commands/hc.ts`, `src/seed-runtime-context.ts`: seeded sessions, host-page access, runtime orientation.
 - `src/claude-config.ts`, `src/node-compat/preload.ts`, `src/node-compat/process.ts`: Claude bootstrap, auth persistence, startup defaults.
+- `src/desktop/*`: the Unix edition's desktop (menu bar, dock, window manager `wm.ts`, Terminal with tabs, lazy Files/Settings/Activity/About). `src/ui-mode.ts` picks it: every host but shiro.computer boots the desktop; `?ui=terminal|desktop` or `desktop classic` switch. API and `/dom`: [docs/DESKTOP.md](docs/DESKTOP.md).
 - `server.mjs`: static hosting, API proxying, OAuth callback, signaling, relay, and the opt-in WebSocket-to-TCP relay (`/tcp`, `SHIRO_TCP_RELAY=1`).
 - `src/kernel/net.ts`: kernel sockets over that relay (x86 socket syscalls and node `net` use them); see `docs/NETWORKING.md` for the protocol, security model, and nginx config.
 
@@ -188,6 +189,15 @@ Production is `https://shiro.computer` on a DigitalOcean droplet. `deploy.sh` ha
 - Programs typed at the prompt that are WASM (`NAME.wasm` on PATH, `#!wasi-pkg` stubs) or x86-64 ELF (`#!x86-pkg` stubs, ELF files) run as kernel processes (`src/shell-kernel.ts`, called from the pipeline loop's `tryKernelRun`): consecutive such segments are spawned together joined by kernel pipes, in one process group under the terminal's pty session (`tty.spawnJob`), and waited for with `runKernelJob`. Filter builtins piped to or from them (cat, grep, tr, wc, sed, ... — `PIPE_FILTERS`) join the same job as kernel processes through `kernel.runBuiltin`, over real pipes; other builtin segments feed the run and read its output as strings. `prog &` (all kernel stages) is a real background job; in-page `&` jobs get the terminal without its `tty` so nothing inside them takes the foreground. WASM needs `wasmProcessMode() !== 'none'` (SAB+Worker or JSPI), otherwise the old in-page runtime runs it; x86 always runs as a kernel process (`src/x86/kernel-runner.ts`: blocking stdin on fd 0, stop at syscalls, killed via an AbortSignal, yields every 1M instructions).
 - Shell job control for kernel jobs: `runKernelJob` in `src/commands/jobs.ts`; Ctrl-Z puts the job in `backgroundJobs` as `stopped`, and `fg`/`bg`/`jobs`/`kill %N`/`wait` signal and wait on its process group. Plain in-page `&` jobs are promises that can only be aborted.
 - `kill` is one implementation (`src/commands/trap.ts`, re-exported by `ps.ts`) with bash's options; `stty` reads and sets the terminal's pty (a per-shell detached pty when there is no terminal); `tput lines/cols` use the pty size, overridden by `LINES`/`COLUMNS`.
+
+## Desktop (Unix edition)
+
+- The window manager API (`window.__shiro.desktop`, `src/desktop/wm.ts`) is a contract with unix/gui (X11/Wayland windows as `surface` content): keep it additive and log changes in docs/DESKTOP.md.
+- `#terminal` moves into the first Terminal window before `ShiroTerminal` is created, so `window.__shiro.terminal` is the same in both UIs (scripts and the bench rely on it). Closing that tab parks it in `#sd-parking`; the next Terminal window adopts it. Panes (`initPanes`) are classic-only.
+- Desktop shortcuts are Alt+Shift+… and Alt+\` (`isDesktopShortcut`), caught in the capture phase before xterm. Don't take plain Alt keys: readline uses them.
+- The desktop is a separate chunk that `main()` starts importing before IndexedDB opens (the terminal UI never loads it); apps under `src/desktop/apps/` are further chunks `import()`ed on launch. Keep `src/desktop` out of static imports from the entry; measure both UIs (`BENCH_PATH='/?ui=terminal'`). Fonts (`public/fonts`, OFL) are injected by the desktop only.
+- `/dom` (`src/dom-fs.ts`) is a FileSystem virtual provider (`fs.addVirtualProvider`, `mountPoint`) plus kernel devices for `/dom/events/<type>`; `cat` follows those live at a terminal.
+- Network sign-in: call `requireNetworkSignIn()` (`src/net-signin.ts`) before outbound network that needs a signed-in user; never for same-origin requests. The relay token fetch does; `SHIRO_TCP_REQUIRE_SIGNIN=1` makes server.mjs demand a GitHub token.
 
 ## Gotchas
 

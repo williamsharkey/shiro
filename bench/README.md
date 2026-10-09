@@ -21,7 +21,7 @@ Options for `node bench/run.mjs`:
 | `--offline` | never fetch; external requests must be in `bench/.cache/net` |
 | `--out file` | results path; `--docs` / `--no-docs` force the docs table on/off |
 
-Env: `BENCH_VERBOSE=1` (time per metric), `BENCH_CONSOLE=1` (page console),
+Env: `BENCH_PATH=/?ui=terminal` (page to boot, default `/`: on localhost that is the desktop), `BENCH_VERBOSE=1` (time per metric), `BENCH_CONSOLE=1` (page console),
 `BENCH_SERVER_LOG=1` (server.mjs output), `BENCH_PROFILE=<regex>` (CDP CPU
 profile of matching metrics: top self-time functions are logged and the
 `.cpuprofile` lands in `bench/.cache/profiles/`, open it in DevTools).

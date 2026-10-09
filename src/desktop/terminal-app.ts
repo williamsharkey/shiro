@@ -58,6 +58,8 @@ export class TerminalView {
   private stack: HTMLElement;
   private tabs: Tab[] = [];
   private active: Tab | null = null;
+  /** Title to show instead of user@host: cwd (a program's window: "Vim") */
+  fixedTitle = '';
 
   constructor(private win: DesktopWindow, private wm: WindowManager, private deps: TerminalDeps, body: HTMLElement) {
     views.add(this);
@@ -107,8 +109,6 @@ export class TerminalView {
     this.select(tab);
     const term = new ShiroTerminal(pane, shell);
     shell.setTerminal(term);
-    term.term.options.theme = terminalTheme(this.wm.theme());
-    term.term.options.fontFamily = MONO;
     tab.term = term;
     this.wireTerm(tab, term);
     term.startPane();
@@ -176,7 +176,7 @@ export class TerminalView {
   /** Window title: a program's OSC title, else user@host: cwd */
   private updateTitle(tab: Tab): void {
     const shell = tab.shell;
-    let title = tab.osc;
+    let title = tab.osc || this.fixedTitle;
     if (!title && shell) {
       const home = shell.env['HOME'] || '/home/user';
       const cwd = shell.cwd;
@@ -217,6 +217,10 @@ function park(tab: Tab): void {
   parkedMain = { pane: tab.pane, term: tab.term };
 }
 
+export function hasParkedMain(): boolean {
+  return !!parkedMain;
+}
+
 /** Take the parked main terminal, if it's waiting for a window. */
 export function takeParkedMain(): { pane: HTMLElement; term: ShiroTerminal | null } | null {
   const p = parkedMain;
@@ -241,7 +245,8 @@ export function applyTerminalTheme(theme: 'light' | 'dark', extra: ShiroTerminal
 export function useMonoFont(terms: () => ShiroTerminal[]): void {
   const apply = () => {
     for (const t of terms()) {
-      t.term.options.fontFamily = MONO;
+      // xterm re-measures only when the family string changes
+      t.term.options.fontFamily = t.term.options.fontFamily === MONO ? MONO + ', monospace' : MONO;
       try { t.fitAddon.fit(); } catch {}
     }
   };

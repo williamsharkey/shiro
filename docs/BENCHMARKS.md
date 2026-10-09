@@ -159,6 +159,51 @@ untouched kernel metrics differ by up to 2× against it). Kernel/net/x86
 metrics swing ±25% between identical runs here, so a flag on them was re-run
 3× alternating base/new before being called noise.
 
+### unix/desktop — the desktop shell (menu bar, dock, windows) on the boot path
+
+The Unix edition boots to the desktop (docs/DESKTOP.md); shiro.computer keeps
+the full-page terminal. The bench loads `/` on localhost, which is the desktop;
+`BENCH_PATH='/?ui=terminal'` boots the terminal UI instead.
+
+The integration run of the first push (`integration-68dbbbc-quick.json`) showed
+cold first prompt 198 → 249 ms, 2 long tasks and +13% transfer, and the terminal
+UI carried the desktop's code and CSS. Since then:
+
+- **The desktop is its own chunk** (`import('./desktop/index')` at the top of
+  `main()`: 53 KB JS + 22 KB CSS, fetched while IndexedDB opens). The terminal
+  UI loads none of it; Files, Settings, Activity and About are further chunks
+  loaded on launch.
+- **Boot-path work removed:** the clock no longer builds `Intl.DateTimeFormat`s
+  (≈9 ms); `workArea()` uses the CSS sizes instead of reading layout (it forced the
+  first style+layout pass before the terminal existed); the main terminal gets
+  its theme and font at construction (`ShiroTerminal.optionOverrides`) instead
+  of a re-theme; the mono-font swap re-measure (≈9 ms of xterm `_measure`) runs
+  on idle; `term.focus()` (forced layout of the whole desktop) waits for the
+  first frame; the menu bar and dock join the page after the main terminal is
+  created. Marks `shiro:desktop:start`, `shiro:desktop:end`, `shiro:terminal:ready`.
+
+Quick suite, `--suites boot`, base db9f698 (before the desktop) vs. this branch
+in both UIs, two rounds alternated base/desktop/terminal on one machine; medians
+of the 6 samples per metric:
+
+| metric | base | desktop | terminal UI |
+|---|---:|---:|---:|
+| boot.cold.first_prompt | 192 ms | 209 ms (+9%) | 196 ms |
+| boot.warm.first_prompt | 99 ms | 109 ms (+10%) | 97 ms |
+| boot.cold.long_tasks | 1 | 0 | 1 |
+| boot.cold.requests | 5 | 12 | 5 |
+| boot.cold.transfer | 1370 KiB | 1550 KiB | 1389 KiB |
+| boot.mem.js_heap | 3.7 MiB | 3.8 MiB | 3.7 MiB |
+| boot.mem.renderer_rss | 206 MiB | 228 MiB | 206 MiB |
+| boot.mem.dom_nodes | 258 | 355 | 258 |
+
+Desktop requests: the desktop chunk and its CSS, Inter and JetBrains Mono
+(woff2, latin, 88 KiB together, `font-display: swap`, not render-blocking), and
+three `data:` SVGs (traffic-light glyphs) that CDP counts. The +22 MiB RSS is
+composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
+a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
+other integration changes since db9f698, not desktop code.
+
 ### unix/shell-stdio — a shell run as a kernel process uses its fds
 
 `sh -c SCRIPT` spawned by a program (and scripts run through `runViaShell`)
