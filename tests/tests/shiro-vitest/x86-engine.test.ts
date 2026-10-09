@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, onTestFinished, beforeAll, afterAll } from 'vitest';
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import type { Server } from 'node:http';
 import { join, resolve } from 'node:path';
@@ -129,6 +129,10 @@ const haveFionbio = tryBuild('gcc', ['-static', '-O1', '-o', fionbioBin, 'fionbi
 const fuzzBin = join(out, 'jitfuzz');
 const haveFuzz = tryBuild('gcc', ['-static', '-O1', '-o', fuzzBin, 'jitfuzz.c']);
 
+// signalfd needs Blink to forward signalfd/signalfd4 and the signal mask to the kernel (a patch named for it)
+const signalfdBin = join(out, 'signalfd');
+const blinkForwardsSignalfd = readdirSync(resolve(__dirname, '../../../vendor/blink/patches')).some((f) => /signalfd/i.test(f));
+const haveSignalfd = blinkForwardsSignalfd && tryBuild('gcc', ['-static', '-O1', '-o', signalfdBin, 'signalfd.c']);
 const argv0Bin = join(out, 'argv0');
 const haveArgv0 = tryBuild('gcc', ['-static', '-nostdlib', '-fno-builtin', '-Os', '-fno-pie', '-no-pie', '-o', argv0Bin, 'argv0.c']);
 
@@ -582,6 +586,13 @@ describe.skipIf(!haveTty)('Blink engine: interactive program on a kernel pty', (
 });
 
 // Blink patch 0011: the guest's fds and processes are the kernel's.
+// PostgreSQL 17's latch: blocked SIGUSR1 and SIGURG (ignored by default) read from a signalfd
+it.skipIf(!haveSignalfd)('signalfd reads blocked signals; poll sees it readable', async () => {
+  const { shell } = await setup(readFileSync(signalfdBin));
+  const r = await run(shell, './prog');
+  expect(r.output.replace(/\r\n/g, '\n')).toBe('empty 1 poll 1 read 256 signo 10 23 pid-ok 1 again-empty 1\n');
+}, 60_000);
+
 // Linux keeps argv[0] as the caller gave it; only the binary is found through the symlink
 // (busybox picks its applet by it; Debian's redis-server -> redis-check-rdb)
 describe('argv[0] through a symlink', () => {
