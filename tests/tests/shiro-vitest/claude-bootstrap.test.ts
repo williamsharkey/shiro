@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { CommandContext } from '@shiro/commands/index';
 import type { FileSystem } from '@shiro/filesystem';
 import type { Shell } from '@shiro/shell';
-import { DEFAULT_CLAUDE_PERMISSIONS } from '@shiro/claude-config';
+import { DEFAULT_CLAUDE_PERMISSIONS, ensureClaudeBootstrap } from '@shiro/claude-config';
 import { preloadEnvironment } from '@shiro/node-compat/preload';
 import { createTestShell } from './helpers';
 
@@ -32,6 +32,18 @@ describe('Claude bootstrap config', () => {
     await fs.mkdir('/work/demo/claude-code', { recursive: true });
     await fs.writeFile(claudeScriptPath, '// test cli');
     shell.cwd = '/work/demo';
+  });
+
+  it('seeds no "mcp__*" allow rule and removes one older Shiro wrote', async () => {
+    expect(DEFAULT_CLAUDE_PERMISSIONS.allow).not.toContain('mcp__*');
+    await fs.mkdir('/home/mcp-migrate/.claude', { recursive: true });
+    await fs.writeFile('/home/mcp-migrate/.claude/settings.json', JSON.stringify({
+      permissions: { allow: ['Bash', 'mcp__*', 'mcp__github__*'], deny: [] }, theme: 'dark',
+    }));
+    await ensureClaudeBootstrap(fs, { homeDir: '/home/mcp-migrate' });
+    const settings = JSON.parse(await fs.readFile('/home/mcp-migrate/.claude/settings.json', 'utf8') as string);
+    expect(settings.permissions.allow).toEqual(['Bash', 'mcp__github__*']);
+    expect(settings.theme).toBe('dark');
   });
 
   it('seeds trust, onboarding, and bypass settings before Claude Code starts', async () => {

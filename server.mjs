@@ -75,7 +75,10 @@ const PROXY_ALLOWED_PATHS = {
 };
 
 const SKIP_REQUEST_HEADERS = new Set([
+  // hop-by-hop: fetch rejects upgrade/expect (UND_ERR_INVALID_ARG/NOT_SUPPORTED),
+  // and nginx adds Upgrade for the /tcp WebSocket, which broke git-proxy POSTs
   'host', 'connection', 'keep-alive', 'transfer-encoding', 'accept-encoding',
+  'upgrade', 'expect', 'te', 'trailer', 'proxy-connection', 'proxy-authorization',
   'origin', 'referer', 'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site',
   'sec-fetch-user', 'anthropic-dangerous-direct-browser-access',
   'user-agent',  // Browser UA causes API to reject OAuth tokens
@@ -674,7 +677,8 @@ async function handleGitProxy(req, res, targetUrl) {
     }
   } catch (err) {
     res.writeHead(502, { 'content-type': 'application/json', ...cors });
-    res.end(JSON.stringify({ error: err.message }));
+    console.warn('[git-proxy]', targetUrl, err.message, err.cause || '');
+    res.end(JSON.stringify({ error: err.message, cause: err.cause ? [err.cause.code, err.cause.message].filter(Boolean).join(': ') || String(err.cause) : undefined }));
   }
 }
 

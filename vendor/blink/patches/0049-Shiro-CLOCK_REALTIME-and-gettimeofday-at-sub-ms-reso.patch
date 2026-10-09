@@ -1,0 +1,101 @@
+From 2a554cd5f37435334cbdaa15ffd1015b5f71d8ff Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 12:51:16 +0000
+Subject: [PATCH 49/49] Shiro: CLOCK_REALTIME and gettimeofday at sub-ms
+ resolution
+
+emscripten reads CLOCK_REALTIME from Date.now(), whole milliseconds: two
+reads microseconds apart differ by 1 ms when they straddle a tick. vim's
+typeahead check (inchar_loop with wtime 0) computes its wait as
+0 - elapsed() = -1 then, and a negative wait blocks until the next key,
+with the typed key not yet acted on (the vim stall, ~1 run in 30).
+Serve both from performance.now() anchored to Date.now() per thread.
+
+SHIRO_BLINK_PROBE now prints all 16 registers.
+---
+ blink/shiro.inc | 48 +++++++++++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 45 insertions(+), 3 deletions(-)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index bdfdd7d..a04093c 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -803,8 +803,9 @@ void ShiroProbe(struct Machine *m, u64 ip) {
+     if (g_shiro_probes[k] == ip) break;
+   }
+   if (k == 8 || !g_shiro_probes[k]) return;
+-  n += snprintf(b + n, sizeof(b) - n, "probe %#" PRIx64 ": rsp %#" PRIx64 " rbp %#" PRIx64 " r15 %#" PRIx64 " rax %#" PRIx64 " rcx %#" PRIx64 " rsi %#" PRIx64 "\n",
+-                ip, Read64(m->sp), Read64(m->bp), Read64(m->r15), Read64(m->ax), Read64(m->cx), Read64(m->si));
++  n += snprintf(b + n, sizeof(b) - n, "probe %#" PRIx64 ":", ip);
++  for (k = 0; k < 16; ++k) n += snprintf(b + n, sizeof(b) - n, " r%d %#" PRIx64, k, Read64(m->weg[k]));
++  n += snprintf(b + n, sizeof(b) - n, "\n");
+   if ((p = LookupAddress(m, Read64(m->sp)))) {
+     n += snprintf(b + n, sizeof(b) - n, "  [rsp] %#" PRIx64 " %#" PRIx64 " %#" PRIx64 " %#" PRIx64 "\n", Read64(p), Read64(p + 8), Read64(p + 16), Read64(p + 24));
+   }
+@@ -913,6 +914,26 @@ static double ShiroGetF64(const u8 *p) {
+   memcpy(&x, &u, 8);
+   return x;
+ }
++// CLOCK_REALTIME in ms since the epoch at performance.now()'s resolution.
++// emscripten reads it from Date.now(), whole ms: two reads microseconds
++// apart then differ by 1 ms when they straddle a tick, and vim's typeahead
++// check (inchar_loop with wtime 0) computes its wait as 0 - elapsed = -1,
++// i.e. blocks until the next key with the typed one not yet acted on.
++// Anchored to Date.now() per thread, re-anchored if the two drift 2 ms
++// apart (performance.now() doesn't follow wall-clock adjustments).
++double emscripten_date_now(void);  // <emscripten/html5.h>
++
++static double ShiroRealtime(void) {
++  static _Thread_local double off;
++  static _Thread_local bool anchored;
++  double p = emscripten_get_now(), d = emscripten_date_now();
++  if (!anchored || p + off - d >= 2 || d - (p + off) >= 2) {
++    off = d - p;
++    anchored = true;
++  }
++  return p + off;
++}
++
+ static void ShiroPutTimespecMs(u8 *p, double ms) {
+   i64 ns = (i64)(ms * 1e6 + 0.999);  // rounded up: armed stays nonzero
+   Write64(p, ns / 1000000000);
+@@ -1949,7 +1970,16 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+       break;
+     case 0x0E4:                                                       // clock_gettime
+       // CLOCK_BOOTTIME counts from the kernel's boot (procps' uptime and
+-      // process start times, like /proc); the other clocks stay local
++      // process start times, like /proc); CLOCK_REALTIME gets sub-ms
++      // resolution (ShiroRealtime); the other clocks stay local
++      if (a == 0) {
++        u8 ts[16];
++        double t = ShiroRealtime();
++        Write64(ts, (i64)(t / 1000));
++        Write64(ts + 8, (i64)((t - (i64)(t / 1000) * 1000.) * 1e6));
++        r = b && CopyToUserWrite(m, b, ts, 16) == -1 ? -EFAULT_LINUX : 0;
++        break;
++      }
+       if (a != 7) return false;
+       {
+         u8 ts[16];
+@@ -1957,6 +1987,18 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+         if (r >= 0 && b && CopyToUserWrite(m, b, ts, 16) == -1) r = -EFAULT_LINUX;
+       }
+       break;
++    case 0x060: {                                                     // gettimeofday
++      u8 tv[16];
++      double t = ShiroRealtime();
++      Write64(tv, (i64)(t / 1000));
++      Write64(tv + 8, (i64)((t - (i64)(t / 1000) * 1000.) * 1e3));
++      r = a && CopyToUserWrite(m, a, tv, 16) == -1 ? -EFAULT_LINUX : 0;
++      if (!r && b) {
++        memset(tv, 0, 8);  // struct timezone: UTC, no DST
++        if (CopyToUserWrite(m, b, tv, 8) == -1) r = -EFAULT_LINUX;
++      }
++      break;
++    }
+     case 0x000: r = ShiroRead(m, a, b, c); break;
+     case 0x001: r = ShiroWrite(m, a, b, c); break;
+     case 0x011: r = ShiroPread(m, 17, a, b, c, d); break;
+-- 
+2.43.0
+

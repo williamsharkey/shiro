@@ -26,11 +26,14 @@ Blink engine.
 | go | `pkg install go` (wasip1) / Debian `golang-go` | builds and runs / fails: link step (Blink `fallocate`, reported) |
 | clang, make, ninja, cmake | `pkg install llvm make ninja cmake` | works (zlib's own build, CMake → Ninja/Make, CTest) |
 | gcc, make (Debian) | `apt install build-essential` | works: hello.c with gcc and through make |
-| node (Debian) | `apt install nodejs` | fails until perf-blink e74504e lands (Blink `pop m64` bug, fixed there); `builtin node` runs Shiro's |
+| node (Debian) | `apt install nodejs` | works (Blink patch 0047), 22–26 s per script; `builtin node` runs Shiro's |
 | sqlite | `pkg install sqlite` | works |
 | git | `pkg install git` (x86-64 in Blink) | works for local workflows, file:// clone/push |
 | php | — | owned by unix/wasix |
-| rust, java, deno, bun | — | not available (see "Not available") |
+| rustc, cargo (Debian) | `apt install cargo` | works: cargo new, build, run |
+| ruby (Debian) | `apt install ruby` | works (3.3.8) |
+| php (Debian) | `apt install php-cli` | works (8.4.26) |
+| java, deno, bun | — | not available (see "Not available") |
 
 Smoke tests: `tests/tests/shiro-vitest/compat-dev.test.ts` (kernel processes
 in Node worker threads). Browser checks: `scripts/browser-check.mjs` against a
@@ -59,7 +62,7 @@ Not available (yet), and why:
 
 | Software | Tried | Blocker |
 | --- | --- | --- |
-| Rust (rustc, cargo) | — | no maintained WASI build of rustc to pin; the Linux toolchain is dynamically linked against librustc_driver and LLVM (~250 MB unpacked) |
+| Rust (rustc, cargo) as a pkg | — | no maintained WASI build of rustc to pin; use Debian's (`apt install cargo`, above) |
 | Java (JVM) | — | a JDK image is ~200 MB and HotSpot needs its JIT (mprotect RWX code) for usable speed; Blink would interpret the interpreter |
 | Deno, Bun | — | single ~100 MB binaries around V8 / JavaScriptCore JITs; Shiro's own `node` covers the npm use case |
 | PHP | — | owned by unix/wasix (WASIX build in `pkg`) |
@@ -77,18 +80,28 @@ the page (`apt-get update` ≈2m20s first).
 | `gcc -O0 -o hello hello.c && ./hello` | pass | 10.7s compile+link | the x86-64 binary runs in Blink |
 | `make hello` (`$(CC)` = `cc`) | pass (after fix) | 10.9s | failed at first: Shiro's commands look like files in the bin directories to a PATH search, so make took a made-up `/usr/local/bin/cc` for its compiler; now an installed program replaces that (below) |
 | `sudo apt-get install -y python3-pip` | pass | 9m00s–10m05s | pip 25.1.1, Python 3.13.5; `python3` at the prompt is then Debian's |
-| `pip3 install --user --break-system-packages six` + import | pass (after fixes) | 1m30s install, 2.8s import | needs the TCP relay. Fixed on the way: socket `ioctl(FIONBIO)` was EINVAL (CPython's `setblocking(False)`), and glibc's parallel A+AAAA lookup fails in Blink (`sendmmsg` → EBADF, sent to perf-blink), so `debian install` sets `options single-request`. In this sandbox pip also needed `--cert` for its TLS-intercepting egress proxy, which a normal deployment doesn't have |
+| `pip3 install --user --break-system-packages six` + import | pass (after fixes) | 1m30s install, 2.8s import | needs the TCP relay. Fixed on the way: socket `ioctl(FIONBIO)` was EINVAL (CPython's `setblocking(False)`); glibc's parallel A+AAAA lookup failed in Blink (`sendmmsg` → EBADF, fixed by perf-blink in patch 0043), then its address sort aborted on a connected UDP socket with no source address (fixed in the kernel). In this sandbox pip also needed `--cert` for its TLS-intercepting egress proxy, which a normal deployment doesn't have |
 | `sudo apt-get install -y nodejs` | installs | 2m25s | Debian's node 20.19.2 |
-| node: which wins | Debian's | — | in Debian mode a program file on PATH replaces the builtin of that name, so `node` is `/usr/bin/node` once nodejs is installed; `builtin node` still runs Shiro's (v20 shim, 0.2s) |
-| `/usr/bin/node -e 1` | **fail** (Blink) | ~9s to SIGSEGV | `--version` works; any script segfaults, also `--jitless --single-threaded`; cause: Blink computed `pop m64`'s `rsp`-relative destination before the pop (V8's CEntry return address overwritten); fixed on unix/perf-blink e74504e (patches 0046–0047, `node -e` ≈11 s per run), not yet in integration. Until it lands `builtin node` runs Shiro's |
+| node: which wins | Debian's | — | in Debian mode a program file on PATH replaces the builtin of that name, so `node` is `/usr/bin/node` once nodejs is installed (22–26 s per script under emulation); `builtin node` still runs Shiro's (0.2 s) |
+| `node -e` / `node script.js` (Debian's node) | pass | 22–26s per run | crashed in Blink until patch 0047 (`pop m64` addressed relative to the old `rsp`, overwriting V8's CEntry return address); JS, `require`, `os` and fs work, slowly (emulated V8) |
 | `sudo apt-get install -y golang-go` | installs | 5m05s–10m40s | go1.24.4 linux/amd64 |
 | `go run hello.go` | **fail** (Blink) | 35m to the link step | the compile of `fmt` and its std dependencies under Blink finishes (into GOCACHE, kept for later runs), then cmd/link stops: "mapping output file failed: function not implemented" (Blink answers `fallocate` with ENOSYS; Go tolerates only EOPNOTSUPP; sent to perf-blink). Shiro's own `pkg install go` (wasip1 toolchain) builds and runs Go programs |
+| `sudo apt-get install -y cargo` | installs | 9m35s | cargo 1.85.1, rustc 1.85.1 |
+| `cargo new hello_rs && cargo build && cargo run` | pass (after fix) | `new` 2.3s, `build` 54s, `run` 1.9s | failed at first: Rust's `std::process::Command` makes an AF_UNIX `SOCK_SEQPACKET` socketpair for every spawn, which the kernel refused (EOPNOTSUPP), so cargo couldn't start rustc nor rustc its linker |
+| `sudo apt-get install -y ruby` | installs | 2m43s | ruby 3.3.8 (`ruby` is `/usr/bin/ruby`) |
+| `ruby -e 'require "json"; …'` | pass | 17.6s | |
+| `sudo apt-get install -y php-cli` | installs | 26m46s | PHP 8.4.26 (slowest install of the set; not profiled) |
+| `php -r 'echo json_encode(…);'` | pass | 2.2s | |
 
 Shiro-side fixes from this (tests in `debian.test.ts`, `kernel-net.test.ts`):
 `binCommandStat` (src/wasi/host.ts) no longer makes up a `/bin/NAME` file for
 a builtin that an installed program replaces; Debian shadows count a program
 symlink whose target isn't unpacked yet (dpkg unpacks `gcc -> gcc-14` first);
-sockets accept `FIONBIO`; resolv.conf gets `single-request`.
+sockets accept `FIONBIO`; a connected UDP socket reports a source address
+in the peer's family (`::ffff:10.0.2.15` toward a mapped peer: glibc's
+getaddrinfo sort asserts on it); AF_UNIX `SOCK_SEQPACKET` socketpairs keep
+records whole (Rust's `Command`). The interim `options single-request` in
+resolv.conf is gone again (removed from earlier installs).
 
 Shell and platform fixes these needed (all with tests in the same file):
 
@@ -407,9 +420,12 @@ The install column is the whole `apt-get install` (download, unpack,
 maintainer scripts, triggers) in Blink: about a minute even for jq, most
 of it apt's dependency resolution and dpkg-preconfigure (perf-fs-shell's
 profile: 14 s and 20 s for `hello`), which unix/perf-fs-shell is cutting.
-Debian's builds of the TUIs (tmux, nano, htop, ncdu, fzf, emacs -nw) have
-only had these non-interactive checks; Shiro's own `pkg` builds of them,
-in the table above, are the ones verified on the pty in Chromium.
+In Chromium (the built desktop, `debian install`, `sudo apt-get install`,
+2026-10-09) Debian's TUIs work on the pty: htop (meters, `q`), nano (type,
+`^O` save, `^X`), tmux (a command, `C-b %` split, `exit`), ncdu (scan of
+`/etc`, `q`), fzf (filtering a pipe). There `sudo apt-get … | tail -2` used
+to print all of apt's output on the terminal (sudo gave its programs the
+tty for stdout); fixed. emacs -nw from Debian has only had the batch check.
 
 | Tool (package) | Version | Status | Install | Smoke test | Notes |
 | --- | --- | --- | --- | --- | --- |
