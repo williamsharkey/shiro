@@ -289,7 +289,17 @@ Shiro changes these programs needed (tests in `x86-engine.test.ts`,
 - `sh` run as a program on a terminal with no script (a tmux pane, or `-i`)
   is interactive: a `PS1` prompt (default `\u@\h:\w\$ `), a line read from
   the tty in canonical mode, Ctrl-C/Ctrl-Z/Ctrl-\ left to its foreground
-  children, `exit` or EOF to end.
+  children, `exit` or EOF to end. It does job control on its pty
+  (`ProcessTty` in `src/kernel/pty.ts`): each job gets a process group and
+  the terminal (tcsetpgrp) while it runs, Ctrl-Z stops it and gives the
+  terminal and the shell's tty modes back, and `jobs`/`fg`/`bg`/`kill %N`/
+  `wait` (128+signal for a stopped job) work on it: vim and htop under Ctrl-Z
+  and `fg` in a screen window (`tests/browser/job-control.mjs`).
+  `$$`/`$PPID`/`$0` are the process's. In a kernel sh script, `prog &` is a
+  kernel process (`$!` its pid, stdin `/dev/null`); with `set -m` it gets its
+  own process group, so `kill -STOP`, `jobs` and `bg` act on it. In-page
+  builtins and functions in the background stay promises: they can be
+  aborted, not stopped.
 - A kernel `/proc` (`src/kernel/procfs.ts`): `/proc/self`, `/proc/PID/`
   (`stat`, `status`, `cmdline`, `comm`, `environ`, `cwd`, `exe`, `fd/N`,
   `task`), and `/proc/stat`, `/proc/loadavg`, `/proc/uptime` from the process

@@ -626,7 +626,7 @@ export function inodeStat(fs: FileSystem, path: string): KStat | undefined {
 
 function inodeKStat(ino: Inode): KStat {
   return {
-    dev: 1, ino: inodeNumber(ino.path), mode: S_IFREG | (ino.mode & 0o7777), nlink: 1, uid: 1000, gid: 1000, rdev: 0,
+    dev: 1, ino: inodeNumber(ino.path), mode: S_IFREG | (ino.mode & 0o7777), nlink: linkCount(ino.path), uid: 1000, gid: 1000, rdev: 0,
     size: ino.size, blksize: 4096, blocks: Math.ceil(ino.size / 512),
     atimeMs: ino.atimeMs ?? ino.mtimeMs, mtimeMs: ino.mtimeMs, ctimeMs: ino.ctimeMs,
     atimeNs: ino.atimeMs === null ? ino.mtimeNs : ino.atimeNs, mtimeNs: ino.mtimeNs,
@@ -675,10 +675,30 @@ export function inodeNumber(path: string): number {
  * is removed or replaced gets a fresh number.
  */
 export function shareInodeNumber(from: string, to: string): void {
-  inoNumbers.set(to, inodeNumber(from));
+  const n = inodeNumber(from);
+  forgetInodeNumber(to);
+  inoNumbers.set(to, n);
+  let names = linkNames.get(n);
+  if (!names) { names = new Set([from]); linkNames.set(n, names); }
+  names.add(to);
 }
 export function forgetInodeNumber(path: string): void {
+  const n = inoNumbers.get(path);
   inoNumbers.delete(path);
+  const names = n === undefined ? undefined : linkNames.get(n);
+  if (names) { names.delete(path); if (names.size < 2) linkNames.delete(n!); }
+}
+
+/** The names link() gave one inode number (only numbers with two or more). */
+const linkNames = new Map<number, Set<string>>();
+
+/**
+ * st_nlink of a regular file: how many names link() gave it (shadow's
+ * lock, link(group.PID, group.lock), checks that the count went to 2).
+ */
+export function linkCount(path: string): number {
+  const n = inoNumbers.get(path);
+  return (n === undefined ? undefined : linkNames.get(n)?.size) ?? 1;
 }
 
 export class RegularFile implements OpenFile {

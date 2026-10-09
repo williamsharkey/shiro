@@ -66,6 +66,12 @@ Worker), in Chromium on a cross-origin isolated page, three runs each. The
 | `gh --version`, GitHub CLI 2.62 (59 MB static Go): first run in the page | 5.0 s | 26.7 s | — | 71–79 ms | — |
 | same, later runs (V8 reuses the compiled regions) | 2.5 s | 26.6 s | 20.3–20.9 s | | |
 | same, Node (`run.mjs`-style host, no kernel), wall / peak RSS | 3.2–3.6 s / 374 MB | 28.5 s / 278 MB | 32.7 s / 999 MB | | |
+| Vim 9.2 (static) opening a C file: `vim --not-a-term -c qa x.c`, later runs (defaults.vim: filetype, syntax) | 1.51 s (1.66 s before patch 0041) | ~3.0 s | — | 41 ms | — |
+
+The Vim row is from `bench/ab.mjs` on 2026-10-09 (medians of 15 runs;
+the interpreter-only figure is compat-tools' Chromium measurement with
+`BLINK_WJIT=0`); the first Vim run after a page load still pays about
+1 s more while V8 tiers up the new JIT modules.
 
 The JIT column was re-measured on 2026-10-08 after the third JIT round
 (mul/div/bit ops inline, a larger decode cache; the previous build, run back
@@ -447,6 +453,21 @@ decoded on most visits; 4096 entries (patch 0022, 160 KB per thread) cut
    them. They run in the interpreter (the wasm JIT calls them). Tests:
    `fixtures/x86/sse4.c` (random operands, every immediate; hashes equal
    to native), a `GOAMD64=v2` Go program.
+41. The wasm JIT compiles instructions that straddle a 4 KB page when
+   both pages are read-only code (it ended the region before one and the
+   interpreter ran up to the next taken branch, every time: 218k times in
+   one Vim function); `rep movs`/`rep stos` of words, dwords and qwords
+   (musl's memcpy and memset) go a page at a time going up. Test:
+   `fixtures/x86/strops.c` (native output).
+42. Under Shiro `sendfile` with a NULL offset reads at the input's file
+   position (it read `*NULL`: EFAULT); systemd-sysusers' backup of
+   `/etc/group` failed with it, and with that the postinst of systemd,
+   cron, udev and logrotate. Test: `fixtures/x86/sendfile.c`.
+43. Under Shiro `sendmmsg`/`recvmmsg` go to the kernel as one
+   `sendmsg`/`recvmsg` per message (Blink's own failed with EBADF on kernel
+   sockets, and glibc's resolver, which sends its A and AAAA queries with
+   `sendmmsg`, gave up: pip couldn't resolve PyPI). Test:
+   `fixtures/x86/mmsg.c` (two DNS queries over the kernel's DoH).
 
 Patches 13, 15–21 and 24–26 come from unix/compat-tools (15 also from
 unix/conformance); this branch is where the series is kept now.

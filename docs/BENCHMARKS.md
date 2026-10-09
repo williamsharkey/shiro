@@ -306,6 +306,13 @@ composited layers (blurred menu bar and dock, full-screen wallpaper) and fonts,
 a few MiB each. The terminal UI's +19 KiB is /dom, the sign-in hook and the
 other integration changes since db9f698, not desktop code.
 
+### unix/shell-stdio 4 — job control in a kernel sh; kernel background jobs
+
+`node bench/ab.mjs HEAD~1 HEAD --suites shell,kernel --quick` (e03bde3 →
+3acd170, 3 rounds × 5 runs, alpha 0.01): no regression. 23 metrics
+unchanged; kernel.spawn_wait.wasm moved +28% but not in every round
+(inconsistent; the change doesn't touch WASM spawning).
+
 ### unix/shell-stdio 3 — fd copies keep their stream; programs inherit fds 3-9
 
 `node bench/ab.mjs origin/unix/integration HEAD --suites shell,kernel --quick`
@@ -366,6 +373,30 @@ proc/s within one run); two further 15-run passes on the new code gave
 medians 1240 and 1215 proc/s, base 1200. One of those passes stalled at
 ≈10 proc/s for its last 11 samples and did not recur in two more; worth
 watching if it shows up on other branches.
+
+### unix/perf-blink 4 — page-straddling instructions, rep movs/stos by page
+
+Profiling Vim's startup (~2.2 s in Shiro against 41 ms native) found the
+wasm JIT refusing instructions that cross a 4 KB page: the region before
+one ended there and the interpreter ran up to the next taken branch, every
+time (218k times in one hot Vim function). Patch 0041 decodes such an
+instruction from both pages when both are read-only code, and runs
+`rep movs`/`rep stos` of words, dwords and qwords (musl's memcpy and
+memset) a page at a time instead of an element (and a page lookup) at a
+time. New metric `x86.blink.vim_startup` (`vim --not-a-term -c qa x.c`,
+static Vim 9.2 from `public/pkg`).
+
+`node bench/ab.mjs 956abe1 e4c26e0 --suites x86 --only
+'vim_startup|gh_version|go_hello|hello_glibc' --gh --rounds 3 --runs 5`
+(isolated, medians of 15 runs, alpha 0.01):
+
+| metric (isolated) | base 956abe1 | new e4c26e0 | shift | p | verdict |
+|---|---:|---:|---:|---:|---|
+| x86.blink.vim_startup | 1659 ms | 1514 ms | -9.8% | 0.0014 | improved (all 3 rounds) |
+| x86.blink.gh_version | 2277 ms | 2132 ms | -2.6% | 0.49 | same |
+| x86.blink.go_hello | 168.1 ms | 166.2 ms | -0.2% | 1 | same |
+| x86.blink.hello_glibc | 119.4 ms | 111.5 ms | -5.2% | 0.41 | same |
+| x86.blink.peak_rss.gh_version | 159.1 MiB | 160.3 MiB | -0.9% | 0.59 | same |
 
 ### unix/perf-blink 3 — mul/div/bit ops inline, decode cache, a fusion fix
 

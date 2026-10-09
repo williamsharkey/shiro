@@ -1,0 +1,55 @@
+From a68ee72dc57083bf315f8808f9ddcd9b2733cb9a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 9 Oct 2026 10:28:59 +0000
+Subject: [PATCH 43/43] Shiro: sendmmsg and recvmmsg go to the kernel, one
+ sendmsg/recvmsg per message (glibc's resolver)
+
+---
+ blink/shiro.inc | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/blink/shiro.inc b/blink/shiro.inc
+index e282cc5..432e2f1 100644
+--- a/blink/shiro.inc
++++ b/blink/shiro.inc
+@@ -664,6 +664,28 @@ static i64 ShiroMsg(struct Machine *m, bool send, int fd, i64 msg, int flags) {
+   return r;
+ }
+ 
++// sendmmsg/recvmmsg: one ShiroMsg per struct mmsghdr (the msghdr, then
++// msg_len; 64 bytes). Once a message went through, an error stops the run
++// and the count is returned, as on Linux; MSG_WAITFORONE makes the receives
++// after the first one non-blocking. (recvmmsg's timeout isn't used.)
++static i64 ShiroMmsg(struct Machine *m, bool send, int fd, i64 vec, u32 vlen,
++                     int flags) {
++  u32 i;
++  i64 r;
++  u8 len[4];
++  if (vlen > 1024) vlen = 1024;
++  for (i = 0; i < vlen; ++i) {
++    r = ShiroMsg(m, send, fd, vec + i * 64, flags & ~MSG_WAITFORONE_LINUX);
++    if (r < 0) return i ? i : r;
++    Write32(len, r);
++    if (CopyToUserWrite(m, vec + i * 64 + 56, len, 4) == -1) {
++      return i ? i : -EFAULT_LINUX;
++    }
++    if (!send && (flags & MSG_WAITFORONE_LINUX)) flags |= MSG_DONTWAIT_LINUX;
++  }
++  return vlen;
++}
++
+ static i64 ShiroSetsockopt(struct Machine *m, int fd, int level, int name,
+                            i64 val, u32 len) {
+   u8 b[16];
+@@ -1826,6 +1848,8 @@ static bool ShiroSyscall(struct Machine *m, int nr, u64 a, u64 b, u64 c,
+     case 0x02D: r = ShiroRecvfrom(m, a, b, c, d, e, f); break;        // recvfrom
+     case 0x02E: r = ShiroMsg(m, true, a, b, c); break;                // sendmsg
+     case 0x02F: r = ShiroMsg(m, false, a, b, c); break;               // recvmsg
++    case 0x133: r = ShiroMmsg(m, true, a, b, c, d); break;            // sendmmsg
++    case 0x12B: r = ShiroMmsg(m, false, a, b, c, d); break;           // recvmmsg
+     case 0x030: r = KS(m, 48, A12(a, b)); break;                      // shutdown
+     case 0x036: r = ShiroSetsockopt(m, a, b, c, d, e); break;
+     case 0x037: r = ShiroGetsockopt(m, a, b, c, d, e); break;
+-- 
+2.43.0
+
