@@ -3,6 +3,7 @@
  * GitHub, other ways to connect), and About.
  */
 
+import { keybarMode, setKeybarMode, type KeybarMode } from '../mobile';
 import type { AppContext } from '../index';
 import type { DesktopWindow } from '../wm';
 import { GLYPHS } from '../icons';
@@ -57,6 +58,7 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
 
   function appearance(): void {
     const pref = wm.themePreference();
+    const touch = matchMedia('(pointer: coarse)').matches;
     panel.innerHTML = `
       <h2>Appearance</h2><p class="sd-muted">Light, dark, or follow your system.</p>
       <h3>Theme</h3>
@@ -65,6 +67,10 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
           <button data-theme="light" role="radio">Light</button><button data-theme="dark" role="radio">Dark</button><button data-theme="system" role="radio">System</button>
         </div></div></div>
       <h3>Interface</h3>
+      ${touch ? `<div class="sd-card" style="margin-bottom:10px"><div class="sd-row"><span class="sd-grow">Extra keys<div class="sd-small sd-muted">Esc, Tab, Ctrl, arrows… above the dock. Auto hides them while the keyboard is open.</div></span>
+        <div class="sd-seg" role="radiogroup" aria-label="Extra keys">
+          <button data-keybar="off" role="radio">Off</button><button data-keybar="auto" role="radio">Auto</button><button data-keybar="pinned" role="radio">Always</button>
+        </div></div></div>` : ''}
       <div class="sd-card"><div class="sd-row"><span class="sd-grow">Classic full-page terminal<div class="sd-small sd-muted">The terminal-first layout of shiro.computer. Come back with <code>?ui=desktop</code>.</div></span>
         <button class="sd-btn" data-act="classic">Switch</button></div></div>
       <h3>Motion</h3>
@@ -74,6 +80,13 @@ export function open(ctx: AppContext, args?: Record<string, unknown>): DesktopWi
       b.classList.toggle('sd-active', on);
       b.setAttribute('aria-checked', String(on));
       b.addEventListener('click', () => { wm.setTheme(b.dataset.theme as 'light' | 'dark' | 'system'); appearance(); });
+    }
+    const kb = keybarMode();
+    for (const b of panel.querySelectorAll<HTMLButtonElement>('[data-keybar]')) {
+      const on = b.dataset.keybar === kb;
+      b.classList.toggle('sd-active', on);
+      b.setAttribute('aria-checked', String(on));
+      b.addEventListener('click', () => { setKeybarMode(b.dataset.keybar as KeybarMode); appearance(); });
     }
     panel.querySelector('[data-act=classic]')!.addEventListener('click', () => {
       try { localStorage.setItem('shiro-ui', 'terminal'); } catch {}

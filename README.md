@@ -118,6 +118,24 @@ gh repo create my-project --private --source . --push
 
 `gh auth login --with-token` still accepts a token on stdin, `gh auth refresh -s delete_repo` adds a scope, and `gh auth logout` removes the token. Use a subdomain (for example `music.shiro.computer`) to keep a project's storage, including its token, separate.
 
+### ssh
+
+The builtin `ssh CODE` is Shiro's tab-to-tab ssh (a code from `remote start`
+in another tab, over WebRTC). OpenSSH usage (`ssh -T git@github.com`,
+`ssh user@host`, a dotted host name) runs OpenSSH when it is installed
+(`pkg install openssh`, or Debian's `openssh-client`); without it, `ssh`
+says how to install it instead of trying to reach a tab.
+
+## Something wrong?
+
+`doctor` (or `tabinfo`) checks the tab and prints one OK/WARN/FAIL line each
+for: the build and deploy, cross-origin isolation and the browser, the x86
+engine (Blink build, same-instance fork), the internet relay (token request
+and a TCP connection to example.com:443 through the kernel), the network,
+GitHub and Claude sign-ins, Debian, storage (usage, quota, persisted) and the
+kernel (processes, JS heap). It never prints tokens: paste its output into a
+bug report.
+
 ## Node.js Compatibility
 
 ~50 shimmed Node.js modules. Core modules (fs, path, buffer, events, process, crypto, os, url, util, child_process) are fully functional. See the [full compatibility table](https://shiro.computer/docs#node-compat).

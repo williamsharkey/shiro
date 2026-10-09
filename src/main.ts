@@ -453,6 +453,10 @@ async function main() {
     () => import('./commands/cron').then(m => m.journalctlCmd)), 'src/commands/cron.ts');
   registerCommand(commands, lazyCommand('ssh', 'Connect to remote Shiro via WebRTC',
     () => import('./commands/ssh').then(m => m.sshCmd)), 'src/commands/ssh.ts');
+  registerCommand(commands, lazyCommand('doctor', 'Check this tab (deploy, browser, engine, network, sign-ins, storage) for a bug report',
+    () => import('./commands/doctor').then(m => m.doctorCmd)), 'src/commands/doctor.ts');
+  registerCommand(commands, lazyCommand('tabinfo', 'Same as doctor',
+    () => import('./commands/doctor').then(m => m.tabinfoCmd)), 'src/commands/doctor.ts');
   registerCommand(commands, lazyCommand('scp', 'Copy files over WebRTC',
     () => import('./commands/scp').then(m => m.scpCmd)), 'src/commands/scp.ts');
 
@@ -778,8 +782,8 @@ async function main() {
   // Initialize drag-and-drop seed GIF import
   initDropHandler(terminal, fs);
 
-  // Initialize mobile virtual keys and voice input
-  initMobileInput(terminal);
+  // Initialize mobile virtual keys and voice input (the desktop has its own: src/desktop/mobile.ts)
+  if (!desktop) initMobileInput(terminal);
 
   // Initialize dynamic favicon (32x32 minimap of terminal content)
   initFaviconUpdater(terminal.term);

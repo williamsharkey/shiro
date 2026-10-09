@@ -130,7 +130,8 @@ async function newMachine(browser, base, log) {
   const inst = await run('debian install');
   if (inst.code) throw new Error('debian install failed: ' + inst.out);
   const upd = await run('apt-get update', 1800);
-  log(`machine ready: install ${inst.ms} ms, apt-get update ${upd.ms} ms (exit ${upd.code})`);
+  const st = await page.evaluate(() => navigator.storage.estimate()).catch(() => null);
+  log(`machine ready: install ${inst.ms} ms, apt-get update ${upd.ms} ms (exit ${upd.code}), storage ${st ? Math.round(st.usage / 2 ** 20) : '?'} MiB`);
   if (upd.code) throw new Error('apt-get update failed: ' + upd.out.slice(-2000));
   return { context, page, run, bootMs: Date.now() - t0, updateMs: upd.ms };
 }
@@ -308,7 +309,7 @@ async function main() {
           // (dpkg's fsync of a full IndexedDB is EIO)
           if (m) {
             const st = await m.page.evaluate(() => navigator.storage.estimate()).catch(() => null);
-            if (st && st.quota && st.usage / st.quota > 0.6) {
+            if (st && st.quota && st.usage / st.quota > 0.8) {
               log(`storage ${Math.round(st.usage / 2 ** 20)} of ${Math.round(st.quota / 2 ** 20)} MiB; new machine`);
               await m.context.close().catch(() => {});
               m = null;
