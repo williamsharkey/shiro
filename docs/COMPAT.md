@@ -278,3 +278,32 @@ bash scripts/pkgbuild/x86/publish.sh vim 9.2.0000   # -> public/pkg/vim/9.2.0000
 ncurses-based programs are linked against a static ncurses 6.5 with
 `xterm-256color`, `xterm`, `screen*`, `tmux*`, `linux`, `vt100`, `vt220` and
 `dumb` compiled in, so they work without a terminfo database.
+
+## Claude Code native binary (unix/perf-kernel)
+
+Status: **not run yet** (static analysis only; running the downloaded
+binary under Blink needs the user's go-ahead in this environment).
+
+What the official native installer (`claude.ai/install.sh`) installs, as of
+2.1.295 (`downloads.claude.ai/claude-code-releases/<version>/<platform>/claude`,
+sha256-checked against `manifest.json`):
+
+- A **Bun single-file executable**: Bun's runtime (`.text` 60 MB, JSC
+  included) plus the app in a `.bun` section (160 MB). linux-x64 is
+  256 MB, linux-x64-musl 250 MB; both are **dynamically linked** (glibc
+  2.26+: `libc`, `libm`, `libpthread`, `libdl`, `librt` and
+  `/lib64/ld-linux-x86-64.so.2`; or musl's `/lib/ld-musl-x86_64.so.1`).
+- Mapped image: R 23 MB + RX 60 MB + RW 161 MB, a 12.5 MB main stack
+  (`PT_GNU_STACK`), TLS 22 KB. That is ~250 MB of guest memory before JSC
+  starts, inside Blink's 4 GB wasm memory.
+- Imports that matter for Blink and the kernel: raw `syscall()` (Bun's
+  io_uring/futex/memfd/statx calls go through it, so the set is only
+  visible at run time), `epoll_create1`/`epoll_pwait`, `eventfd`,
+  `signalfd`, `inotify_init1`, `splice`, `sendfile`, `prctl`,
+  `sched_getaffinity`, `posix_spawn*` (with `addchdir`), `mmap`/
+  `mprotect`/`madvise` (JSC's JIT and its large virtual reservations).
+
+To try it (once allowed): put the binary and the five glibc libraries plus
+the loader in the VFS (Blink loads the ELF interpreter from SHIROFS), then
+run `claude --version` and `claude -p "say hi"` with a dummy key, with and
+without `BUN_JSC_useJIT=0`.
