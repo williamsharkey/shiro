@@ -269,7 +269,8 @@ export class ProcFs {
     return [
       `Name:\t${p.comm.slice(0, 15)}`, `Umask:\t${p.umask.toString(8).padStart(4, '0')}`, `State:\t${names[st]}`,
       `Tgid:\t${p.pid}`, 'Ngid:\t0', `Pid:\t${p.pid}`, `PPid:\t${p.ppid}`, 'TracerPid:\t0',
-      'Uid:\t1000\t1000\t1000\t1000', 'Gid:\t1000\t1000\t1000\t1000', `FDSize:\t${Math.max(64, p.fds.size)}`, 'Groups:\t1000',
+      `Uid:\t${p.ruid ?? p.uid}\t${p.uid}\t${p.suid ?? p.uid}\t${p.uid}`, `Gid:\t${p.rgid ?? p.gid}\t${p.gid}\t${p.sgid ?? p.gid}\t${p.gid}`,
+      `FDSize:\t${Math.max(64, p.fds.size)}`, `Groups:\t${(p.groups ?? [p.gid]).join(' ')}`,
       'VmPeak:\t       0 kB', 'VmSize:\t       0 kB', 'VmRSS:\t       0 kB', `Threads:\t${1 + p.tids.size}`,
       `SigPnd:\t${hex(0n)}`, `ShdPnd:\t${hex(pending)}`, `SigBlk:\t${hex(blocked)}`, `SigIgn:\t${hex(ignored)}`, `SigCgt:\t${hex(caught)}`,
       `Cpus_allowed_list:\t0-${this.ncpu() - 1}`, 'voluntary_ctxt_switches:\t0', 'nonvoluntary_ctxt_switches:\t0',

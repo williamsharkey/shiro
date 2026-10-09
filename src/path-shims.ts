@@ -25,8 +25,32 @@ export const SHIM_COMMANDS = [
   'kill', 'ps', 'rmdir', 'install', 'cmp', 'patch', 'less', 'more', 'file', 'tree', 'bc',
 ];
 
-export async function installPathShims(fs: FileSystem, commands: { get(name: string): unknown } | null = null): Promise<void> {
+/**
+ * Builtins programs look for on PATH in Debian mode too (Debian's minimal
+ * system has none of them): the browser opener and the clipboard tools that
+ * native Claude Code runs. Their file's `#!` names no real interpreter, so
+ * the kernel runs the builtin of that name (kernel.ts builtinLoader) and
+ * Debian's sh is never involved; Debian's install leaves them in place.
+ */
+export const ALWAYS_SHIMS = ['xdg-open', 'sensible-browser', 'xclip', 'xsel', 'pbcopy', 'pbpaste', 'wl-copy'];
+/** The `#!` of those files: no such program, so the kernel and the shell run the builtin the file is named after. */
+export const BUILTIN_SHIM_INTERP = '/usr/libexec/tabcomputer/builtin';
+const alwaysShim = (cmd: string) => `#!${BUILTIN_SHIM_INTERP}\n# The kernel runs tabcomputer's builtin ${cmd} for this path; the file lets PATH searches find it.\n`;
+
+export async function installAlwaysShims(fs: FileSystem): Promise<void> {
   await fs.mkdir('/usr/local/bin', { recursive: true });
+  for (const cmd of ALWAYS_SHIMS) {
+    const p = `/usr/local/bin/${cmd}`;
+    const text = await fs.readFile(p, 'utf8').catch(() => null);
+    // Not over a program someone put there (only an older shim of ours)
+    if (text === null || (typeof text === 'string' && (text === alwaysShim(cmd) || text === `#!/bin/sh\n${cmd} "$@"\n`))) {
+      if (text !== alwaysShim(cmd)) await fs.writeFile(p, alwaysShim(cmd), { mode: 0o755 });
+    }
+  }
+}
+
+export async function installPathShims(fs: FileSystem, commands: { get(name: string): unknown } | null = null): Promise<void> {
+  await installAlwaysShims(fs);
   for (const cmd of SHIM_COMMANDS) {
     if (commands && !commands.get(cmd)) continue;
     const shimPath = `/usr/local/bin/${cmd}`;
