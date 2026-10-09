@@ -30,6 +30,10 @@ export interface GuiApp {
   icon?: string;
   /** Paths deleted after unpacking: optional plug-ins whose libraries were left out. */
   remove?: string[];
+  /** [link, target] symlinks a postinst would make (update-alternatives: BLAS, LAPACK). */
+  links?: [string, string][];
+  /** Settings written into the user's home (relative path: contents) before a launch, when not there yet */
+  home?: Record<string, string>;
 }
 /**
  * A file a postinst would generate, built by gen-apps.py (public/gui/overlay/SHA256), applied when `when` is
@@ -223,7 +227,7 @@ const TRIGGERS: { dir: string; argv: string[]; covered?: string[] }[] = [
   {
     dir: '/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/',
     argv: ['/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders', '--update-cache'],
-    covered: ['libgdk-pixbuf-2.0-0'],
+    covered: ['libgdk-pixbuf-2.0-0', 'librsvg2-common'],
   },
   { dir: '/usr/share/glib-2.0/schemas/', argv: ['/usr/bin/glib-compile-schemas', '/usr/share/glib-2.0/schemas'] },
 ];
@@ -239,7 +243,8 @@ function triggersOf(pkg: string, entries: TarEntry[]): Set<number> {
 }
 
 async function runTriggers(fs: FileSystem, kernel: Kernel, which: Set<number>, log: (s: string) => void): Promise<void> {
-  for (const d of ['/var/cache/fontconfig', '/tmp/.X11-unix', '/tmp/runtime-user', '/home/user/.cache']) await fs.mkdir(d, { recursive: true }).catch(() => {});
+  // (XDG base directories: apps that mkdir only their own subdirectory need them, like galculator)
+  for (const d of ['/var/cache/fontconfig', '/tmp/.X11-unix', '/tmp/runtime-user', '/home/user/.cache', '/home/user/.config', '/home/user/.local/share']) await fs.mkdir(d, { recursive: true }).catch(() => {});
   await fs.chmod('/tmp/runtime-user', 0o700).catch(() => {});
   // independent of each other: each is its own Blink worker
   await Promise.all([...which].map(async (i) => {
@@ -367,6 +372,9 @@ async function doInstall(fs: FileSystem, kernel: Kernel, name: string, onProgres
     report('unpack', n);
   }
   for (const path of app.remove ?? []) await fs.rm(path, { recursive: true }).catch(() => {});
+  for (const [link, target] of app.links ?? []) {
+    if (!(await fs.exists(link).catch(() => false))) await fs.symlink(target, link).catch(() => {});
+  }
   for (const [o, blob] of overlays) {
     const { data } = await blob;
     if (o.tar) { await unpack(fs, untar(data), ownBins); continue; }
@@ -391,6 +399,17 @@ const TEXT_HOOK = '/usr/lib/shiro/libshiro-text-hook.so';
  * DOM-text mode (docs/DOM-RENDERING.md): GTK apps load libshiro-text-hook.so,
  * which tells Xshiro the text they draw (scripts/gui/text-hook/).
  */
+async function writeHomeDefaults(kernel: Kernel, files: Record<string, string>): Promise<void> {
+  const fs = kernel.fs as FileSystem | undefined;
+  if (!fs) return;
+  for (const [rel, text] of Object.entries(files)) {
+    const path = `/home/user/${rel}`;
+    if (await fs.exists(path).catch(() => true)) continue;
+    await fs.mkdir(path.slice(0, path.lastIndexOf('/')), { recursive: true }).catch(() => {});
+    await fs.writeFile(path, text).catch(() => {});
+  }
+}
+
 async function textHookEnv(kernel: Kernel, app: GuiApp): Promise<Record<string, string>> {
   if (!app.toolkit.startsWith('gtk') || !kernel.fs) return {};
   if ((await import('../x11/dom-text')).domTextMode() === 'pixels') return {};
@@ -421,6 +440,7 @@ export async function launchApp(kernel: Kernel, name: string, args: string[] = [
   const instance = app.bin.split('/').pop()!.toLowerCase().replace(/-\d+(\.\d+)*$/, '');
   const ids = await import('../x11/app-ids');
   if (instance !== name) ids.appIdAliases.set(instance, name);
+  if (app.home) await writeHomeDefaults(kernel, app.home);
   const out = new BufferFile(null);
   const p = kernel.spawn({
     path: app.bin, argv: [app.bin.split('/').pop()!, ...args], cwd: '/home/user',
