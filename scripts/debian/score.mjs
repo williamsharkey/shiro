@@ -139,7 +139,13 @@ async function smoke(m, pkg) {
   const list = (await m.run(`dpkg -L ${pkg} 2>/dev/null`)).out.split('\n').filter(Boolean);
   const diverted = (await m.run(`dpkg-divert --list 2>/dev/null`)).out;
   // A diverted program (the overlay's Shiro default) runs by its path as Shiro's: test that side
-  const bins = list.filter((f) => /^\/(?:usr\/)?s?bin\/[^/]+$/.test(f));
+  let bins = list.filter((f) => /^\/(?:usr\/)?s?bin\/[^/]+$/.test(f));
+  // Programs only: /usr/bin/X11 is a symlink to its own directory (x11-common)
+  if (bins.length) {
+    const files = (await m.run(`for f in ${bins.map((b) => `'${b}'`).join(' ')}; do [ -f "$f" ] && echo "$f"; done`)).out.split('\n').filter(Boolean);
+    const diverted0 = bins.filter((b) => diverted.includes(`of ${b} `));
+    bins = bins.filter((b) => files.includes(b) || diverted0.includes(b));
+  }
   const who = (bin) => (diverted.includes(`of ${bin} `) ? ' [Shiro\'s]' : '');
   // The program named like the package first, then the rest
   bins.sort((a, b) => (b.endsWith('/' + pkg) ? 1 : 0) - (a.endsWith('/' + pkg) ? 1 : 0));
