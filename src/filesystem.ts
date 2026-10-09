@@ -1314,6 +1314,13 @@ export class FileSystem {
     return !!node;
   }
 
+  /**
+   * How readFile/writeFile reach a named pipe (set by the shell: the
+   * kernel's pipe, with its blocking open and EOF). Without it a FIFO reads
+   * as empty.
+   */
+  fifoIO?: { read(path: string): Promise<Uint8Array>; write(path: string, data: Uint8Array | string): Promise<void> };
+
   async readFile(path: string, encoding?: 'utf8'): Promise<Uint8Array | string> {
     for (const vp of this.virtualProviders) {
       if (vp.handles(path)) {
@@ -1325,6 +1332,10 @@ export class FileSystem {
     let node = await this._get(await this._canon(path, true));
     if (!node) throw fsError('ENOENT', `ENOENT: no such file or directory, open '${path}'`);
     if (node.type === 'dir') throw fsError('EISDIR', `EISDIR: illegal operation on a directory, read '${path}'`);
+    if (node.special === 'fifo' && this.fifoIO) {
+      const bytes = await this.fifoIO.read(node.path);
+      return encoding === 'utf8' ? decodeBytes(bytes) : bytes;
+    }
     if (node.lazy) node = await this._materialize(node);
     const data = node.content || new Uint8Array(0);
     // Byte-exact: invalid UTF-8 survives a round trip through the string (src/utils/byte-text.ts)
@@ -1341,6 +1352,7 @@ export class FileSystem {
       if (vp.writeFile(path, data)) return;
     }
     path = await this._canon(path, true);
+    if (this.fifoIO && !options?.times && (await this._get(path))?.special === 'fifo') return this.fifoIO.write(path, data);
     const parentPath = path.substring(0, path.lastIndexOf('/')) || '/';
     const parent = await this._get(parentPath);
     if (!parent) throw fsError('ENOENT', `ENOENT: no such file or directory, open '${path}'`);
