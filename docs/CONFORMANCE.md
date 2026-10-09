@@ -8,7 +8,7 @@ conformance work started (fc0af54).
 |---|---|---|
 | [Shell: oils spec tests](#shell-oils-spec-tests) | 57/1567 (3.6%) | **1393/1567 (88.9%)** |
 | [Shell: oils spec tests in Chromium](#shell-oils-spec-tests-in-chromium) | — | **1275/1567 (81.4%)** |
-| [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **612/635 (96.4%)** |
+| [Utilities: busybox testsuite](#utilities-busybox-testsuite) | 147/635 (23.1%) | **625/635 (98.4%)** |
 | [Syscalls: LTP under Blink (x86-64)](#syscalls-ltp-under-blink-x86-64) | — | **172/320 (53.8%)** |
 | [Syscalls: wasi-testsuite (wasm32-wasip1)](#syscalls-wasi-testsuite-wasm32-wasip1) | — | **71/72 (98.6%)** |
 
@@ -306,14 +306,14 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 | patch | 0/6 | 6/6 | 0 |
 | printf | 0/20 | 20/20 | 0 |
 | pwd (old-style) | 1/1 | 1/1 | 0 |
-| readlink | 0/6 | 5/6 | 1 |
+| readlink | 0/6 | 6/6 | 0 |
 | realpath | 0/10 | 10/10 | 0 |
 | rev | 0/3 | 3/3 | 0 |
 | rm (old-style) | 1/1 | 1/1 | 0 |
-| rmdir (old-style) | 1/1 | 0/1 | 1 |
+| rmdir (old-style) | 1/1 | 1/1 | 0 |
 | sed | 0/93 | 92/93 | 1 |
 | seq | 0/24 | 24/24 | 0 |
-| sha1sum | 0/1 | 0/1 | 1 |
+| sha1sum | 0/1 | 1/1 | 0 |
 | sha256sum | 0/0 | 0/0 | 0 |
 | sha512sum | 0/0 | 0/0 | 0 |
 | sort | 0/25 | 25/25 | 0 |
@@ -329,7 +329,7 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 | tr | 0/5 | 5/5 | 0 |
 | tr (old-style) | 5/5 | 5/5 | 0 |
 | true (old-style) | 2/2 | 2/2 | 0 |
-| tsort | 0/20 | 10/20 | 10 |
+| tsort | 0/20 | 20/20 | 0 |
 | unexpand | 0/17 | 17/17 | 0 |
 | uniq | 0/14 | 12/14 | 2 |
 | uuencode | 0/0 | 0/0 | 0 |
@@ -346,12 +346,8 @@ busybox `testsuite/` (pinned, fetched by scripts/conformance/fetch.sh) run in Sh
 - **echo (old-style)**: echo-prints-slash_41
 - **false (old-style)**: false-is-silent
 - **mv (old-style)**: mv-preserves-hard-links
-- **readlink**: readlink -f on an invalid link
-- **rmdir (old-style)**: rmdir-removes-parent-directories
 - **sed**: sed subst+write
-- **sha1sum**: sha1sum: one-space separated input for -c
 - **tar**: tar --overwrite
-- **tsort**: tsort empty2; tsort singleton; tsort simple; tsort 2singleton; tsort medium; tsort std.example; tsort prefixes; tsort odd; tsort odd2; tsort cycle
 - **uniq**: uniq input outfile (two files); uniq (stdin) outfile
 
 </details>
